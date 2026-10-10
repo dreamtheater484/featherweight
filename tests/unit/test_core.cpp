@@ -170,6 +170,21 @@ TEST(Layout_FacingCoverAlone) {
   CHECK_EQ(FacingRowStart(3, false), 2);
 }
 
+TEST(Layout_FacingPairsFromFirstPage) {
+  LayoutInput in;
+  in.pages = Letter(5);
+  in.mode = ViewMode::Facing;
+  in.coverAlone = false;
+  in.scale = 1.0;
+  in.viewportW = 2000;
+  Layout L = ComputeLayout(in);
+  CHECK_EQ(L.rows.size(), 3u);  // [0 1] [2 3] [4]
+  CHECK(L.boxes[0].Right() < 1000 && L.boxes[1].x > 1000);  // page 1 left, page 2 right
+  CHECK_EQ(L.rowOfPage[1], 0);
+  CHECK(L.boxes[4].Right() < 1000);  // odd last page on the left
+  CHECK_EQ(FacingRowStart(3, false), 2);
+}
+
 TEST(Layout_SingleModeRowsShareY) {
   LayoutInput in;
   in.pages = Letter(3);

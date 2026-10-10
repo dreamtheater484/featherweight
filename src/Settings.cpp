@@ -44,7 +44,8 @@ void Settings::Load() {
   std::wstring t = ini_.Get(kGeneral, L"Theme", L"system");
   theme = t == L"light" ? ThemeSetting::Light : t == L"dark" ? ThemeSetting::Dark : ThemeSetting::System;
   invert = ini_.GetBool(kGeneral, L"InvertPages", false);
-  coverAlone = ini_.GetBool(kGeneral, L"CoverPageAlone", true);
+  coverAlone = ini_.GetBool(kGeneral, L"TwoPageCoverAlone", false);
+  ini_.Remove(kGeneral, L"CoverPageAlone");  // pre-0.9.2 name, which stored the old book-style default
   highlightFields = ini_.GetBool(kGeneral, L"HighlightFields", true);
   autoUpdate = ini_.GetBool(kGeneral, L"UpdateAutomatically", true);
   lastUpdateCheck = ini_.GetInt64(kGeneral, L"LastUpdateCheck", 0);
@@ -85,7 +86,7 @@ bool Settings::Save() {
   ini_.Set(kGeneral, L"Theme",
            theme == ThemeSetting::Light ? L"light" : theme == ThemeSetting::Dark ? L"dark" : L"system");
   ini_.SetBool(kGeneral, L"InvertPages", invert);
-  ini_.SetBool(kGeneral, L"CoverPageAlone", coverAlone);
+  ini_.SetBool(kGeneral, L"TwoPageCoverAlone", coverAlone);
   ini_.SetBool(kGeneral, L"HighlightFields", highlightFields);
   ini_.SetBool(kGeneral, L"UpdateAutomatically", autoUpdate);
   ini_.SetInt(kGeneral, L"LastUpdateCheck", lastUpdateCheck);

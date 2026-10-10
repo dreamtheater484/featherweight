@@ -38,7 +38,7 @@ class Settings {
 
   ThemeSetting theme = ThemeSetting::System;
   bool invert = false;
-  bool coverAlone = true;
+  bool coverAlone = false;  // two-page view: first page on its own, like a book cover
   bool highlightFields = true;
   bool autoUpdate = true;
   int64_t lastUpdateCheck = 0;

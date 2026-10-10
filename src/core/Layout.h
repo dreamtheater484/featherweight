@@ -34,7 +34,7 @@ struct LayoutInput {
   std::vector<PageSizePt> pages;
   int rotation = 0;  // view rotation, quarter turns clockwise
   ViewMode mode = ViewMode::Continuous;
-  bool coverAlone = true;  // facing mode: first page on its own, on the right
+  bool coverAlone = false;  // facing mode: first page on its own, on the right
   double scale = 1.0;      // device pixels per point
   int viewportW = 0;       // device pixels
   int margin = 16;         // around the content, device pixels
@@ -61,7 +61,7 @@ struct FitInput {
   const std::vector<PageSizePt>* pages = nullptr;
   int rotation = 0;
   ViewMode mode = ViewMode::Continuous;
-  bool coverAlone = true;
+  bool coverAlone = false;
   int refPage = 0;  // the page (row) that should fit
   int viewportW = 0, viewportH = 0;
   int margin = 16, gap = 12;
