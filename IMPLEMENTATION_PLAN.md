@@ -2,7 +2,7 @@
 
 Featherweight is a small, fast, free PDF reader for Windows. It reads, fills in forms, saves and prints, and does nothing else. No bloat, no subscriptions, no cloud.
 
-- **Status:** approved 2026-10-10. Phases 0–7 built, phase 8 partly done (see [Progress](#12-progress)).
+- **Status:** approved 2026-10-10. Phases 0–8 done; phase 9 (hands-on polish) next (see [Progress](#12-progress)).
 - **Target:** version 1.0, built and released in one go (no separate v1/v2 releases)
 - **Repository:** https://github.com/dreamtheater484/featherweight (public)
 - **License:** MIT
@@ -443,7 +443,7 @@ Everything ships together as 1.0. Each phase ends with something that runs.
 | 5. Text | ✅ Done | Selection, word select, copy, find panel with live results (floating panel instead of a bar, so the page doesn't jump) |
 | 6. Printing | ✅ Done | Print dialog with "Page sizing" tab. A flattened copy is printed, so form values come out as vector text. |
 | 7. Reading modes | ✅ Done | Night reading (GPU color matrix, instant toggle), full screen with reveal-on-hover toolbar, presentation |
-| 8. Install, updates and release | 🟡 Partly | Updater tested against the GitHub API. Installer script, release script, notices and README written. **To do:** install Inno Setup and build the installer, then a real `v0.9.0` → `v0.9.1` self-update test. |
+| 8. Install, updates and release | ✅ Done | Installer (10.3 MB) tested with silent install and uninstall: files, Start menu, registration, clean removal. Portable zip tested. Published `v0.9.0` and `v0.9.1`; a 0.9.0 copy updated itself to 0.9.1 in 1.5 s (unchanged `pdfium.dll` skipped) and cleaned up on the next start. |
 | 9. Polish and 1.0 | ⏳ Next | Hands-on pass on a real desktop (title bar, Snap Layouts, DPI changes, printing to a real printer) using `docs/TEST_CHECKLIST.md` |
 
 **Snapshot mode for testing:** `Featherweight.exe --snapshot out.png [--size 1280x800] [--theme dark] [--invert] [--script "cmd:find;type:fox"] file.pdf` renders off-screen and exits. CI uses it as a smoke test.
