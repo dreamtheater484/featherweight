@@ -40,8 +40,9 @@ Featherweight is a small, fast, free PDF reader for Windows. It reads, fills in 
 - Filled-in form values are printed
 - PDFs that forbid printing are respected, with a clear message
 
-**Text**
+**Text, highlights and notes**
 - Select and copy text
+- Highlight selected text, and add notes anywhere on a page (added in 0.9.3). Notes show a preview card on hover and amber markers along the right edge (0.9.4).
 - Search (Ctrl+F) with all matches highlighted, next/previous, match count, match-case option
 
 **Window and appearance**
@@ -61,7 +62,7 @@ Featherweight is a small, fast, free PDF reader for Windows. It reads, fills in 
 
 ### Not included
 
-- Digital signatures, editing page content, annotations
+- Digital signatures, editing page content, annotation tools beyond simple highlights and notes
 - Bookmark/outline sidebar, page thumbnails
 - Telemetry, accounts, cloud, background services
 - Full XFA support (XFA forms get PDFium's basic support only, see §11)
@@ -444,6 +445,7 @@ Everything ships together as 1.0. Each phase ends with something that runs.
 | 6. Printing | ✅ Done | Print dialog with "Page sizing" tab. A flattened copy is printed, so form values come out as vector text. |
 | 7. Reading modes | ✅ Done | Night reading (GPU color matrix, instant toggle), full screen with reveal-on-hover toolbar, presentation |
 | 8. Install, updates and release | ✅ Done | Installer (10.3 MB) tested with silent install and uninstall: files, Start menu, registration, clean removal. Portable zip tested. Published `v0.9.0` and `v0.9.1`; a 0.9.0 copy updated itself to 0.9.1 in 1.5 s (unchanged `pdfium.dll` skipped) and cleaned up on the next start. |
+| After the plan | ✅ 0.9.2–0.9.4 | Two-page view pairs pages 1–2 by default; Save as arrow and in the close question; highlights and notes with preview cards, markers and a modern icon; winget submission ([microsoft/winget-pkgs#450079](https://github.com/microsoft/winget-pkgs/pull/450079)); `tests/visual-checks.ps1`. |
 | 9. Polish and 1.0 | ⏳ Next | Hands-on pass on a real desktop (title bar, Snap Layouts, DPI changes, printing to a real printer) using `docs/TEST_CHECKLIST.md` |
 
 **Snapshot mode for testing:** `Featherweight.exe --snapshot out.png [--size 1280x800] [--theme dark] [--invert] [--script "cmd:find;type:fox"] file.pdf` renders off-screen and exits. CI uses it as a smoke test.

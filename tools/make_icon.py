@@ -89,6 +89,8 @@ def main():
     images = [render(s) for s in sizes]
     ico_path = os.path.join(ROOT, "src", "Featherweight.ico")
     images[-1].save(ico_path, format="ICO", sizes=[(s, s) for s in sizes], append_images=images[:-1])
+    # The logo used in the README (transparent background, works on light and dark pages).
+    render(512).resize((256, 256), Image.LANCZOS).save(os.path.join(ROOT, "docs", "logo.png"))
     preview = os.path.join(ROOT, "docs", "icon-preview.png")
     sheet = Image.new("RGBA", (sum(sizes) + 10 * len(sizes), 256), (240, 240, 240, 255))
     x = 0
