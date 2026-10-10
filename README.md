@@ -7,6 +7,12 @@
 Featherweight opens PDFs instantly, fills in and saves forms, prints, and stays out of your way.
 No account, no ads, no telemetry, no background services.
 
+| Fill in forms | Find in document |
+|---|---|
+| ![Filling in a form](docs/screenshots/form.png) | ![Search with highlighted matches](docs/screenshots/search.png) |
+| **Night reading in two-page view** | **Start screen** |
+| ![Dark theme with night reading](docs/screenshots/night.png) | ![Start screen with recent files](docs/screenshots/welcome.png) |
+
 ## Features
 
 - **Read**: single page, continuous or two-page view, smooth zoom (Ctrl+scroll, pinch), rotate, clickable links
