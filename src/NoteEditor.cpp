@@ -73,7 +73,9 @@ void NoteEditor::Open(DocumentView* view, const NoteTarget& note, const std::wst
   delete_.visible = note.index >= 0;
   set_.Reset();
   SetWindowTextW(edit_, ToEditText(text).c_str());
-  SendMessageW(edit_, EM_SETSEL, static_cast<WPARAM>(-1), -1);  // caret at the end
+  int len = GetWindowTextLengthW(edit_);
+  SendMessageW(edit_, EM_SETSEL, len, len);  // cursor at the end, ready to add to the note
+  SendMessageW(edit_, EM_SCROLLCARET, 0, 0);
   ShowWindow(edit_, SW_SHOW);
   SetFocus(edit_);
 }
@@ -150,8 +152,9 @@ void NoteEditor::Draw(Canvas& c) {
   c.SoftShadow(card_, 8 * u, 16 * u, p.popupShadow, 4 * u);
   c.FillRound(card_, 8 * u, p.popupBg);
   c.StrokeRound(card_, 8 * u, p.popupBorder, 1);
-  c.Icon(icon::Comment, RectF(card_.left + 12 * u, card_.top + 10 * u, card_.left + 32 * u, card_.top + 32 * u),
-         p.accentText, 15 * u);
+  D2D1_RECT_F badge = RectF(card_.left + 12 * u, card_.top + 11 * u, card_.left + 32 * u, card_.top + 31 * u);
+  c.FillRound(badge, 5 * u, Rgb(0xFFB900));
+  c.Icon(icon::Comment, badge, Rgb(0x1B1B1B), 11 * u);
   c.Text(note_.index >= 0 ? L"Note" : L"New note",
          RectF(card_.left + 38 * u, card_.top + 8 * u, card_.right - 12 * u, card_.top + 34 * u), p.text, 14 * u,
          DWRITE_FONT_WEIGHT_SEMI_BOLD);

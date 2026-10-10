@@ -341,6 +341,7 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
   }
   banner_.Draw(canvas_);
   notes_.Draw(canvas_);
+  if (snapshot_) DrawChildControlsForSnapshot(dc);
 
   // Drag-and-drop overlay.
   float dv = dropAnim_.V();
@@ -547,7 +548,8 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       break;
     case WM_MOUSEMOVE: {
       int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-      if (!mouseTracked_) {
+      // (Snapshot windows are never visible, so "mouse left" would fire at once and undo every hover.)
+      if (!mouseTracked_ && !snapshot_) {
         TRACKMOUSEEVENT t{sizeof(t), TME_LEAVE, hwnd_, 0};
         TrackMouseEvent(&t);
         mouseTracked_ = true;
@@ -2051,7 +2053,15 @@ void App::RunScript(const std::wstring& script) {
       xy(x, y);
       SendMessageW(hwnd_, WM_MOUSEMOVE, 0, MAKELPARAM(x, y));
     } else if (op == L"type") {
-      for (wchar_t ch : arg) SendMessageW(hwnd_, WM_CHAR, ch, 0);
+      HWND target = notes_.IsOpen() ? notes_.Edit() : hwnd_;
+      for (wchar_t ch : arg) {
+        if (ch == L'|') {  // '|' types a line break
+          SendMessageW(target, WM_KEYDOWN, VK_RETURN, 0);
+          SendMessageW(target, WM_CHAR, L'\r', 0);
+        } else {
+          SendMessageW(target, WM_CHAR, ch, 0);
+        }
+      }
     } else if (op == L"key") {
       int mods = 0;
       UINT vk = 0;
@@ -2076,6 +2086,11 @@ void App::RunScript(const std::wstring& script) {
         else if (part == L"minus") vk = VK_OEM_MINUS;
         else if (part.size() > 1 && part[0] == L'f') vk = VK_F1 + _wtoi(part.c_str() + 1) - 1;
         else if (part.size() == 1) vk = towupper(part[0]);
+      }
+      if (notes_.IsOpen() && (vk == VK_ESCAPE || (vk == VK_RETURN && (mods & kModCtrl)))) {
+        FinishNote(vk == VK_ESCAPE ? NoteEditor::kCancel : NoteEditor::kSave);
+        PumpUntilIdle(500);
+        continue;
       }
       simulatedMods_ = mods;
       OnKeyDown(vk);
@@ -2116,6 +2131,20 @@ void App::RunScript(const std::wstring& script) {
                r.version.c_str(), r.pageUrl.c_str(), r.error.c_str());
     } else if (op == L"highlight") {
       if (DocumentView* v = Active()) v->HighlightSelection();
+    } else if (op == L"dumpedit") {
+      wchar_t buf[512] = {};
+      GetWindowTextW(notes_.Edit(), buf, 512);
+      for (wchar_t* c = buf; *c; ++c) fwprintf(stderr, L"%04x ", static_cast<unsigned>(*c));
+      fwprintf(stderr, L"\n");
+    } else if (op == L"dumpnote") {
+      int x, y, page;
+      xy(x, y);
+      if (DocumentView* v = Active()) {
+        AnnotHit hit = v->AnnotAtPoint(x, y, page);
+        std::wstring t = hit.kind == AnnotHit::Kind::Note ? v->NoteText(NoteTarget{page, hit.index}) : L"(no note)";
+        for (wchar_t ch : t) fwprintf(stderr, L"%04x ", static_cast<unsigned>(ch));
+        fwprintf(stderr, L"\n");
+      }
     } else if (op == L"removeannot") {
       int x, y, page;
       xy(x, y);
@@ -2128,7 +2157,9 @@ void App::RunScript(const std::wstring& script) {
       DocumentView* v = Active();
       NoteTarget note;
       if (v && p.size() >= 2 && v->NewNoteAt(_wtoi(p[0].c_str()), _wtoi(p[1].c_str()), note)) {
-        if (op == L"note") v->SaveNote(note, p.size() > 2 ? p[2] : L"Note");
+        std::wstring text = p.size() > 2 ? p[2] : L"Note";
+        std::replace(text.begin(), text.end(), L'|', L'\r');
+        if (op == L"note") v->SaveNote(note, text);
         else ViewOpenNote(v, note);
       }
     } else if (op == L"recent") {
@@ -2142,6 +2173,36 @@ void App::RunScript(const std::wstring& script) {
     }
     PumpUntilIdle(1500);
   }
+}
+
+void App::DrawChildControlsForSnapshot(ID2D1DeviceContext* dc) {
+  if (!notes_.IsOpen()) return;
+  HWND edit = notes_.Edit();
+  RECT r;
+  GetWindowRect(edit, &r);
+  MapWindowPoints(nullptr, hwnd_, reinterpret_cast<POINT*>(&r), 2);
+  int w = r.right - r.left, h = r.bottom - r.top;
+  if (w <= 0 || h <= 0) return;
+  HDC screen = GetDC(hwnd_);
+  HDC mem = CreateCompatibleDC(screen);
+  HBITMAP bmp = CreateCompatibleBitmap(screen, w, h);
+  HGDIOBJ old = SelectObject(mem, bmp);
+  // Paint the background the way the control would, then let it draw its text into our bitmap.
+  HBRUSH brush = reinterpret_cast<HBRUSH>(SendMessageW(hwnd_, WM_CTLCOLOREDIT, reinterpret_cast<WPARAM>(mem),
+                                                       reinterpret_cast<LPARAM>(edit)));
+  RECT all{0, 0, w, h};
+  FillRect(mem, &all, brush);
+  SendMessageW(edit, WM_PRINT, reinterpret_cast<WPARAM>(mem), PRF_CLIENT | PRF_ERASEBKGND);
+  SelectObject(mem, old);
+  ComPtr<IWICBitmap> wic;
+  ComPtr<ID2D1Bitmap> d2d;
+  if (SUCCEEDED(WIC()->CreateBitmapFromHBITMAP(bmp, nullptr, WICBitmapIgnoreAlpha, &wic)) &&
+      SUCCEEDED(dc->CreateBitmapFromWicBitmap(wic.Get(), &d2d))) {
+    dc->DrawBitmap(d2d.Get(), RectF((float)r.left, (float)r.top, (float)r.right, (float)r.bottom));
+  }
+  DeleteObject(bmp);
+  DeleteDC(mem);
+  ReleaseDC(hwnd_, screen);
 }
 
 int App::RunSnapshot(const AppOptions& opts) {

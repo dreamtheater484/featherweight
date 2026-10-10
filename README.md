@@ -17,7 +17,7 @@ No account, no ads, no telemetry, no background services.
 
 - **Read**: single page, continuous or two-page view, smooth zoom (Ctrl+scroll, pinch), rotate, clickable links
 - **Fill in forms**: text fields, checkboxes, radio buttons, dropdowns and lists, including forms that use JavaScript for formatting and totals. Saves in place (Ctrl+S) or as a new file (Ctrl+Shift+S, or the arrow next to Save).
-- **Highlight and notes**: select text and click **Highlight**, or right-click anywhere to **Add note**. Saved as standard PDF annotations, so other readers show them too.
+- **Highlight and notes**: select text and click **Highlight**, or right-click anywhere to **Add note**. Hover a note to read it, and click to edit. Small amber marks along the right edge show where every note is; click one to jump there. Saved as standard PDF annotations, so other readers show them too.
 - **Print**: the normal Windows print dialog. Filled-in values are printed as sharp text.
 - **Find**: Ctrl+F with every match highlighted
 - **Tabs** for multiple documents. Opening a PDF from Explorer adds a tab to the running window.

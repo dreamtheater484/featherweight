@@ -31,6 +31,14 @@ class DocumentHost {
   virtual void OnFormFocusChanged(int page, bool hasRect, const FS_RECTF& rect) = 0;
 };
 
+// A note on a page, with its position as a fraction of the page (0..1 from the top-left).
+struct NoteInfo {
+  int page = 0;
+  int index = 0;
+  float fx = 0, fy = 0;
+  FS_RECTF rect{};
+};
+
 struct LinkTarget {
   enum class Kind { None, Page, Uri, Blocked };
   Kind kind = Kind::None;
@@ -107,6 +115,8 @@ class Document {
   bool SetNoteText(int page, int index, const std::wstring& text);
   std::wstring NoteText(int page, int index);
   AnnotHit AnnotAt(int page, double x, double y);
+  // All notes on a page. Doesn't trigger any page scripts, so it is safe to call for every page.
+  std::vector<NoteInfo> NotesOnPage(int page);
   bool RemoveAnnot(int page, int index);
 
   int CurrentPageForForm() const;

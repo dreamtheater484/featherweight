@@ -131,6 +131,8 @@ class App : public ViewHost, public DropHost {
   int RunSnapshot(const AppOptions& opts);
   void RunScript(const std::wstring& script);
   void PumpUntilIdle(double maxMs);
+  // Snapshot mode: native child controls paint outside Direct2D, so copy them in.
+  void DrawChildControlsForSnapshot(ID2D1DeviceContext* dc);
 
   HWND hwnd_ = nullptr;
   float ui_ = 1.0f;

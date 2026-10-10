@@ -1,5 +1,6 @@
 #include "Gfx.h"
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <tuple>
@@ -169,5 +170,39 @@ float Canvas::MeasureText(std::wstring_view text, float sizePx, DWRITE_FONT_WEIG
 
 void Canvas::PushClip(const D2D1_RECT_F& r) { dc_->PushAxisAlignedClip(r, D2D1_ANTIALIAS_MODE_ALIASED); }
 void Canvas::PopClip() { dc_->PopAxisAlignedClip(); }
+
+}  // namespace gfx
+
+namespace gfx {
+
+float Canvas::TextWrapped(std::wstring_view text, const D2D1_RECT_F& r, D2D1_COLOR_F c, float sizePx, int maxLines,
+                          bool draw) {
+  if (text.empty()) return 0;
+  static std::map<int, ComPtr<IDWriteTextFormat>> formats;
+  int key = static_cast<int>(std::lround(sizePx * 10));
+  ComPtr<IDWriteTextFormat>& fmt = formats[key];
+  if (!fmt) {
+    DWrite()->CreateTextFormat(UiFont().c_str(), nullptr, DWRITE_FONT_WEIGHT_REGULAR, DWRITE_FONT_STYLE_NORMAL,
+                               DWRITE_FONT_STRETCH_NORMAL, sizePx, L"en-us", &fmt);
+    if (!fmt) return 0;
+    fmt->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+    DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_WORD, 0, 0};
+    ComPtr<IDWriteInlineObject> ellipsis;
+    DWrite()->CreateEllipsisTrimmingSign(fmt.Get(), &ellipsis);
+    fmt->SetTrimming(&trimming, ellipsis.Get());
+  }
+  const float lineH = sizePx * 1.34f;
+  fmt->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, lineH, sizePx * 1.05f);
+  float maxH = lineH * maxLines;
+  ComPtr<IDWriteTextLayout> layout;
+  if (FAILED(DWrite()->CreateTextLayout(text.data(), static_cast<UINT32>(text.size()), fmt.Get(), Width(r), maxH,
+                                        &layout)))
+    return 0;
+  DWRITE_TEXT_METRICS m{};
+  layout->GetMetrics(&m);
+  float h = std::min(m.height, maxH);
+  if (draw && dc_) dc_->DrawTextLayout({r.left, r.top}, layout.Get(), Brush(c), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+  return h;
+}
 
 }  // namespace gfx

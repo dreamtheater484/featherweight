@@ -5,7 +5,7 @@ Run before every release. Test PDFs are in `tests/pdfs/` (regenerate with `pytho
 ## Automated
 
 - [ ] `ctest --test-dir build -C Release` passes
-- [ ] Snapshot renders work: `Featherweight.exe --snapshot out.png tests\pdfs\text.pdf` (also with `--theme dark --invert`)
+- [ ] `powershell -ExecutionPolicy Bypass -File tests\visual-checks.ps1` renders every important state (welcome screen, reading, search, forms, highlights, note hover, markers and editing, password, errors, presentation) to `build\visual\`. Look through all the images.
 
 ## Window and chrome
 

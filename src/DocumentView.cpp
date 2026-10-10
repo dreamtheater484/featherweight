@@ -84,6 +84,9 @@ OpenResult DocumentView::Load(const std::wstring& password, std::wstring& error)
   cache_ = std::make_unique<RenderCache>(*doc_);
   doc_->AttachHost(this, host_.ViewHighlightFields());
   state_ = LoadState::Ready;
+  notesScanned_.assign(doc_->PageCount(), false);
+  notes_.clear();
+  noteScanNext_ = 0;
   Relayout(nullptr);
   return r;
 }
@@ -615,7 +618,10 @@ void DocumentView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   }
 
   DrawOverlays(c, first, last);
+  if (inverted) DrawNoteIconsUninverted(c, first, last);
+  if (!presentation_) DrawNoteMarkers(c);
   if (!presentation_) DrawScrollbars(c);
+  DrawNoteHover(c);
   if (selBar_ && !selection_.Empty() && drag_ != Drag::Select) DrawSelectionBar(c);
   c.PopClip();
 }
@@ -811,7 +817,7 @@ void DocumentView::DrawPasswordCard(Canvas& c) {
 
 bool DocumentView::HasIdleWork() const {
   if (!Ready()) return false;
-  return cache_->HasWork() || (search_.Active() && !search_.Done());
+  return cache_->HasWork() || (search_.Active() && !search_.Done()) || noteScanNext_ < PageCount();
 }
 
 bool DocumentView::IdleWork(ID2D1DeviceContext* dc, double deadlineMs) {
@@ -827,6 +833,7 @@ bool DocumentView::IdleWork(ID2D1DeviceContext* dc, double deadlineMs) {
     host_.ViewStateChanged();
   }
   if (cache_->HasWork() && cache_->Work(dc, deadlineMs)) repaint = true;
+  if (anim::Now() < deadlineMs && ScanNotes(deadlineMs)) repaint = true;
 
   // Unload pages far away from the viewport.
   int first, last;
@@ -893,6 +900,15 @@ void DocumentView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
     drag_ = Drag::Pan;
     return;
   }
+
+  if (!presentation_ && button == 0) {
+    int marker = MarkerAt(x, y);
+    if (marker >= 0) {
+      GoToNote(notes_[marker]);
+      return;
+    }
+  }
+  hoverNote_ = HoverNote{};
 
   if (!presentation_) {
     D2D1_RECT_F vTrack, vThumb, hTrack, hThumb;
@@ -1084,12 +1100,27 @@ void DocumentView::OnMouseMove(int x, int y, UINT mods) {
     host_.ViewInvalidate();
   }
   if (FPDF_FORMHANDLE form = doc_->Form()) {
+    // Only form fields get mouse moves. PDFium would otherwise open its own old-style popups for notes.
     int page = PageAtPoint(x, y);
-    double px, py;
-    if (page >= 0 && ToPagePoint(page, x, y, px, py)) {
+    double px = 0, py = 0;
+    bool overField = page >= 0 && ToPagePoint(page, x, y, px, py) &&
+                     FPDFPage_HasFormFieldAtPoint(form, doc_->Page(page), px, py) >= 0;
+    if (overField) {
       FORM_OnMouseMove(form, doc_->Page(page), mods, px, py);
+      formHoverPage_ = page;
+      AfterFormEvent();
+    } else if (formHoverPage_ >= 0) {
+      // Tell the field the mouse left, at a point where nothing can be.
+      if (FPDF_PAGE p = doc_->PageIfLoaded(formHoverPage_)) FORM_OnMouseMove(form, p, mods, -100000.0, -100000.0);
+      formHoverPage_ = -1;
       AfterFormEvent();
     }
+  }
+  UpdateHoverNote(x, y);
+  int marker = MarkerAt(x, y);
+  if (marker != markerHover_) {
+    markerHover_ = marker;
+    host_.ViewInvalidate();
   }
 }
 
@@ -1136,6 +1167,8 @@ void DocumentView::OnMouseUp(int x, int y, int button, UINT mods) {
 
 void DocumentView::OnMouseLeave() {
   mouseX_ = mouseY_ = -1;
+  hoverNote_ = HoverNote{};
+  markerHover_ = -1;
   selButtons_.OnMouseLeave();
   vScrollHover_.To(0, 200);
   hScrollHover_.To(0, 200);
@@ -1171,6 +1204,7 @@ HCURSOR DocumentView::CursorAt(int x, int y) {
     D2D1_RECT_F bar;
     if (SelectionBarRect(bar) && gfx::Contains(bar, (float)x, (float)y)) return hand;
   }
+  if (MarkerAt(x, y) >= 0) return hand;
   int page = PageAtPoint(x, y);
   double px, py;
   if (page < 0 || !ToPagePoint(page, x, y, px, py)) return arrow;
@@ -1191,6 +1225,7 @@ HCURSOR DocumentView::CursorAt(int x, int y) {
 
 std::wstring DocumentView::TooltipAt(int x, int y) {
   if (!Ready() || drag_ != Drag::None) return {};
+  if (int m = MarkerAt(x, y); m >= 0) return L"Note on page " + std::to_wstring(notes_[m].page + 1);
   if (selBar_) {
     D2D1_RECT_F bar;
     if (SelectionBarRect(bar) && gfx::Contains(bar, (float)x, (float)y))
@@ -1199,14 +1234,7 @@ std::wstring DocumentView::TooltipAt(int x, int y) {
   int page = PageAtPoint(x, y);
   double px, py;
   if (page < 0 || !ToPagePoint(page, x, y, px, py)) return {};
-  AnnotHit hit = doc_->AnnotAt(page, px, py);
-  if (hit.kind == AnnotHit::Kind::Note) {
-    std::wstring text = doc_->NoteText(page, hit.index);
-    if (text.size() > 120) text = text.substr(0, 117) + L"\u2026";
-    for (auto& ch : text)
-      if (ch == L'\r' || ch == L'\n') ch = L' ';
-    return text.empty() ? L"Note (click to open)" : text;
-  }
+  if (doc_->AnnotAt(page, px, py).kind == AnnotHit::Kind::Note) return {};  // shown in the preview card
   LinkTarget t = doc_->LinkAt(page, px, py);
   switch (t.kind) {
     case LinkTarget::Kind::Uri: return t.uri;
@@ -1576,6 +1604,9 @@ void DocumentView::OnFormPageCountChanged() {
   if (!doc_) return;
   doc_->RefreshPageSizes();
   if (cache_) cache_->Clear();
+  notesScanned_.assign(doc_->PageCount(), false);
+  notes_.clear();
+  noteScanNext_ = 0;
   RecomputeScale();
   Relayout(nullptr);
   host_.ViewStateChanged();
@@ -1600,6 +1631,8 @@ void DocumentView::OnFormFocusChanged(int page, bool hasRect, const FS_RECTF& re
 
 void DocumentView::AnnotationsChanged(int page) {
   cache_->InvalidatePage(page);
+  RescanNotes(page);
+  hoverNote_ = HoverNote{};
   lastModified_ = doc_->Modified();
   host_.ViewStateChanged();
   host_.ViewInvalidate();
@@ -1714,4 +1747,198 @@ void DocumentView::DrawSelectionBar(Canvas& c) {
   c.StrokeRound(bar, 8 * ui_, p.popupBorder, 1);
   DrawButton(c, selHighlight_, ui_);
   DrawButton(c, selCopy_, ui_);
+}
+
+// ---------------------------------------------------------------------------
+// Note markers and hover preview
+
+bool DocumentView::ScanNotes(double deadlineMs) {
+  bool found = false;
+  const int n = PageCount();
+  while (noteScanNext_ < n && anim::Now() < deadlineMs) {
+    int p = noteScanNext_++;
+    if (p < static_cast<int>(notesScanned_.size()) && notesScanned_[p]) continue;
+    for (const NoteInfo& info : doc_->NotesOnPage(p)) {
+      notes_.push_back(info);
+      found = true;
+    }
+    if (p < static_cast<int>(notesScanned_.size())) notesScanned_[p] = true;
+  }
+  if (found)
+    std::sort(notes_.begin(), notes_.end(),
+              [](const NoteInfo& a, const NoteInfo& b) { return a.page != b.page ? a.page < b.page : a.fy < b.fy; });
+  return found;
+}
+
+void DocumentView::RescanNotes(int page) {
+  notes_.erase(std::remove_if(notes_.begin(), notes_.end(), [&](const NoteInfo& n) { return n.page == page; }),
+               notes_.end());
+  for (const NoteInfo& info : doc_->NotesOnPage(page)) notes_.push_back(info);
+  std::sort(notes_.begin(), notes_.end(),
+            [](const NoteInfo& a, const NoteInfo& b) { return a.page != b.page ? a.page < b.page : a.fy < b.fy; });
+  if (page < static_cast<int>(notesScanned_.size())) notesScanned_[page] = true;
+}
+
+D2D1_RECT_F DocumentView::MarkerRect(const NoteInfo& n) const {
+  if (n.page < 0 || n.page >= static_cast<int>(layout_.boxes.size())) return {};
+  // Where the note sits vertically, as a fraction of the whole document (view rotation applied).
+  float fx = n.fx, fy = n.fy;
+  switch (rotation_) {
+    case 1: fy = fx; break;
+    case 2: fy = 1 - fy; break;
+    case 3: fy = 1 - fx; break;
+  }
+  double fraction;
+  if (viewMode_ == fw::ViewMode::Single) {
+    fraction = (layout_.rowOfPage[n.page] + fy) / std::max<size_t>(1, layout_.rows.size());
+  } else {
+    const auto& b = layout_.boxes[n.page];
+    fraction = (b.y + fy * b.h) / std::max(1, layout_.height);
+  }
+  const float u = ui_;
+  float top = vp_.top + 4 * u, bottom = vp_.bottom - 4 * u;
+  float y = static_cast<float>(top + fraction * (bottom - top));
+  float right = vp_.right - 9 * u;
+  return gfx::RectF(right - 9 * u, std::round(y - 2 * u), right, std::round(y + 2 * u));
+}
+
+int DocumentView::MarkerAt(int x, int y) const {
+  if (!Ready() || presentation_ || notes_.empty()) return -1;
+  if (x < vp_.right - 20 * ui_ || x >= vp_.right) return -1;
+  int best = -1;
+  float bestD = 7 * ui_;
+  for (int i = 0; i < static_cast<int>(notes_.size()); ++i) {
+    D2D1_RECT_F r = MarkerRect(notes_[i]);
+    float d = std::abs((r.top + r.bottom) / 2 - y);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+void DocumentView::DrawNoteMarkers(Canvas& c) {
+  if (notes_.empty()) return;
+  const Palette& p = theme::P();
+  const D2D1_COLOR_F amber = gfx::Rgb(0xFFB900);
+  for (int i = 0; i < static_cast<int>(notes_.size()); ++i) {
+    D2D1_RECT_F r = MarkerRect(notes_[i]);
+    if (gfx::Width(r) <= 0) continue;
+    if (i == markerHover_) r = gfx::Inflate(r, 2 * ui_, 1 * ui_);
+    c.FillRound(gfx::Inflate(r, 1, 1), 2.5f * ui_, gfx::Alpha(p.docBg, 0.8f));
+    c.FillRound(r, 2 * ui_, i == markerHover_ ? amber : gfx::Alpha(amber, 0.85f));
+  }
+}
+
+void DocumentView::GoToNote(const NoteInfo& n) {
+  ScrollPageRectIntoView(n.page, n.rect, true);
+  hoverNote_ = HoverNote{n.page, n.index, n.rect, doc_->NoteText(n.page, n.index), anim::Now() - 1000};
+  host_.ViewInvalidate();
+}
+
+void DocumentView::UpdateHoverNote(int x, int y) {
+  int page = PageAtPoint(x, y);
+  double px, py;
+  AnnotHit hit;
+  if (page >= 0 && ToPagePoint(page, x, y, px, py)) hit = doc_->AnnotAt(page, px, py);
+  if (hit.kind != AnnotHit::Kind::Note) {
+    if (hoverNote_.page >= 0) {
+      hoverNote_ = HoverNote{};
+      host_.ViewInvalidate();
+    }
+    return;
+  }
+  if (hoverNote_.page == page && hoverNote_.index == hit.index) return;
+  hoverNote_ = HoverNote{page, hit.index, hit.rect, doc_->NoteText(page, hit.index), anim::Now()};
+  anim::KeepAlive(hoverNote_.since + 420);  // the card fades in after a short pause
+  host_.ViewInvalidate();
+}
+
+void DocumentView::DrawNoteHover(Canvas& c) {
+  if (hoverNote_.page < 0 || drag_ != Drag::None) return;
+  const Palette& p = theme::P();
+  const float u = ui_;
+  D2D1_RECT_F iconRect = PageRectToScreen(hoverNote_.page, hoverNote_.rect);
+  if (gfx::Width(iconRect) <= 0) return;
+  // Soft ring around the icon right away.
+  c.StrokeRound(gfx::Inflate(iconRect, 3 * u, 3 * u), 6 * u, gfx::Alpha(p.accent, 0.9f), 2 * u);
+
+  double age = anim::Now() - hoverNote_.since;
+  if (age < 250) return;
+  float alpha = theme::AnimationsEnabled() ? static_cast<float>(std::min(1.0, (age - 250) / 150)) : 1.0f;
+
+  const std::wstring& text = hoverNote_.text.empty() ? std::wstring(L"Empty note") : hoverNote_.text;
+  const float w = 300 * u, pad = 14 * u, textSize = 13.5f * u;
+  D2D1_RECT_F measure = gfx::RectF(0, 0, w - 2 * pad, 1000);
+  float textH = c.TextWrapped(text, measure, p.text, textSize, 10, false);
+  float h = std::ceil(pad + 20 * u + 8 * u + textH + 10 * u + 16 * u + pad);
+  float x = iconRect.right + 10 * u, y = iconRect.top - 4 * u;
+  if (x + w > vp_.right - 16 * u) x = iconRect.left - 10 * u - w;
+  x = std::max(x, vp_.left + 8 * u);
+  y = std::clamp(y, vp_.top + 8 * u, std::max(vp_.top + 8 * u, vp_.bottom - h - 8 * u));
+  D2D1_RECT_F card = gfx::RectF(std::round(x), std::round(y), std::round(x + w), std::round(y + h));
+
+  ID2D1DeviceContext* dc = c.DC();
+  dc->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                      D2D1::IdentityMatrix(), alpha),
+                nullptr);
+  c.SoftShadow(card, 10 * u, 16 * u, p.popupShadow, 4 * u);
+  c.FillRound(card, 10 * u, p.popupBg);
+  c.StrokeRound(card, 10 * u, p.popupBorder, 1);
+  // Header: amber badge with the note glyph, then "Note".
+  float hy = card.top + pad;
+  D2D1_RECT_F badge = gfx::RectF(card.left + pad, hy, card.left + pad + 20 * u, hy + 20 * u);
+  c.FillRound(badge, 5 * u, gfx::Rgb(0xFFB900));
+  c.Icon(icon::Comment, badge, gfx::Rgb(0x1B1B1B), 11 * u);
+  c.Text(L"Note", gfx::RectF(badge.right + 8 * u, hy, card.right - pad, hy + 20 * u), p.textSecondary, 12 * u,
+         DWRITE_FONT_WEIGHT_SEMI_BOLD);
+  float ty = hy + 20 * u + 8 * u;
+  c.TextWrapped(text, gfx::RectF(card.left + pad, ty, card.right - pad, ty + textH + 2),
+                hoverNote_.text.empty() ? p.textSecondary : p.text, textSize, 10);
+  c.Text(L"Click to edit", gfx::RectF(card.left + pad, card.bottom - pad - 16 * u, card.right - pad, card.bottom - pad),
+         p.textSecondary, 11.5f * u);
+  dc->PopLayer();
+  if (alpha < 1) anim::KeepAlive(anim::Now() + 20);
+}
+
+// Night reading inverts the pages, which would turn the amber note icons brown. Redraw them on top in
+// their real colors, using the same shape as the icon stored in the PDF (see NoteAppearance).
+void DocumentView::DrawNoteIconsUninverted(Canvas& c, int first, int last) {
+  ID2D1DeviceContext* dc = c.DC();
+  for (const NoteInfo& n : notes_) {
+    if (n.page < first || n.page > last) continue;
+    D2D1_RECT_F r = PageRectToScreen(n.page, n.rect);
+    float s = gfx::Width(r) / 20.0f;
+    if (s <= 0) continue;
+    const float l = r.left + 1 * s, t = r.top + 1 * s, rr = r.left + 19 * s, b = r.top + 15 * s;
+    ComPtr<ID2D1PathGeometry> geo;
+    gfx::D2D()->CreatePathGeometry(&geo);
+    ComPtr<ID2D1GeometrySink> sink;
+    geo->Open(&sink);
+    const float rad = 4 * s;
+    sink->BeginFigure({l + rad, t}, D2D1_FIGURE_BEGIN_FILLED);
+    sink->AddLine({rr - rad, t});
+    sink->AddArc(D2D1::ArcSegment({rr, t + rad}, {rad, rad}, 0, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+    sink->AddLine({rr, b - rad});
+    sink->AddArc(D2D1::ArcSegment({rr - rad, b}, {rad, rad}, 0, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+    sink->AddLine({l + 8 * s, b});
+    sink->AddLine({l + 3.5f * s, b + 4 * s});  // the speech-bubble tail
+    sink->AddLine({l + 3 * s, b});
+    sink->AddLine({l + rad, b});
+    sink->AddArc(D2D1::ArcSegment({l, b - rad}, {rad, rad}, 0, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+    sink->AddLine({l, t + rad});
+    sink->AddArc(D2D1::ArcSegment({l + rad, t}, {rad, rad}, 0, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink->Close();
+    // Same shape as the inverted icon underneath, so it covers it exactly (the outline hides edge halos).
+    dc->FillGeometry(geo.Get(), c.Brush(gfx::Rgb(0xFFB900)));
+    dc->DrawGeometry(geo.Get(), c.Brush(gfx::Rgb(0xFFB900)), 1.0f);
+    const float lx = l + 3.5f * s;
+    const float widths[3] = {11, 11, 7};
+    for (int i = 0; i < 3; ++i) {
+      float ly = t + (3.4f + 3.4f * i) * s;
+      c.Fill(gfx::RectF(lx, ly, lx + widths[i] * s, ly + 1.6f * s), gfx::Rgb(0xFFFFFF));
+    }
+  }
 }

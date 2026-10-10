@@ -205,6 +205,16 @@ class DocumentView : public DocumentHost {
   void ScrollToMatch(int index);
   void SubmitPassword();
   void AnnotationsChanged(int page);
+  // Notes: hover preview, markers along the right edge.
+  void UpdateHoverNote(int x, int y);
+  void DrawNoteHover(gfx::Canvas& c);
+  void DrawNoteMarkers(gfx::Canvas& c);
+  void DrawNoteIconsUninverted(gfx::Canvas& c, int first, int last);
+  bool ScanNotes(double deadlineMs);
+  void RescanNotes(int page);
+  D2D1_RECT_F MarkerRect(const NoteInfo& n) const;
+  int MarkerAt(int x, int y) const;
+  void GoToNote(const NoteInfo& n);
   void DrawSelectionBar(gfx::Canvas& c);
   bool SelectionBarRect(D2D1_RECT_F& rect);
   float ui_ = 1.0f;
@@ -250,6 +260,17 @@ class DocumentView : public DocumentHost {
   int formCursor_ = 0;
   LinkTarget pendingLink_;
   NoteTarget pendingNote_;
+  struct HoverNote {
+    int page = -1, index = -1;
+    FS_RECTF rect{};
+    std::wstring text;
+    double since = 0;
+  } hoverNote_;
+  std::vector<NoteInfo> notes_;  // every note in the document, for the markers
+  std::vector<bool> notesScanned_;
+  int noteScanNext_ = 0;
+  int formHoverPage_ = -1;
+  int markerHover_ = -1;
   // Small "Highlight / Copy" bar shown next to selected text.
   bool selBar_ = false;
   bool barPressed_ = false;

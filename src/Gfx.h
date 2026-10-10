@@ -67,6 +67,10 @@ class Canvas {
             DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_REGULAR, Align align = Align::Leading);
   void Icon(wchar_t glyph, const D2D1_RECT_F& r, D2D1_COLOR_F c, float sizePx);
   float MeasureText(std::wstring_view text, float sizePx, DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_REGULAR);
+  // Multi-line text that wraps at the rectangle's width and is cut off after `maxLines`.
+  // Returns the height used.
+  float TextWrapped(std::wstring_view text, const D2D1_RECT_F& r, D2D1_COLOR_F c, float sizePx, int maxLines,
+                    bool draw = true);
 
   void PushClip(const D2D1_RECT_F& r);
   void PopClip();

@@ -80,6 +80,27 @@ bool PosixReplace(const std::wstring& source, const std::wstring& target) {
   return ok != FALSE;
 }
 
+// PDF drawing commands for the note icon: a 20 x 20 pt rounded speech bubble with its top-left at (x, y).
+std::wstring NoteAppearance(float x, float y) {
+  const float l = x + 1.0f, r = x + 19.0f, t = y - 1.0f, b = y - 15.0f, rad = 4.0f, k = rad * 0.5523f;
+  wchar_t buf[2048];
+  swprintf_s(buf,
+             L"q 1 0.725 0 rg "
+             L"%.2f %.2f m %.2f %.2f l %.2f %.2f %.2f %.2f %.2f %.2f c %.2f %.2f l %.2f %.2f %.2f %.2f %.2f %.2f c "
+             L"%.2f %.2f l %.2f %.2f %.2f %.2f %.2f %.2f c %.2f %.2f l %.2f %.2f %.2f %.2f %.2f %.2f c h "
+             L"%.2f %.2f m %.2f %.2f l %.2f %.2f l h f "
+             L"1 1 1 rg %.2f %.2f 11 1.6 re f %.2f %.2f 11 1.6 re f %.2f %.2f 7 1.6 re f Q",
+             // rounded rectangle
+             l + rad, b, r - rad, b, r - rad + k, b, r, b + rad - k, r, b + rad, r, t - rad, r, t - rad + k, r - rad + k,
+             t, r - rad, t, l + rad, t, l + rad - k, t, l, t - rad + k, l, t - rad, l, b + rad, l, b + rad - k,
+             l + rad - k, b, l + rad, b,
+             // tail
+             l + 3.0f, b + 0.5f, l + 3.5f, b - 4.0f, l + 8.0f, b + 0.5f,
+             // text lines
+             l + 3.5f, t - 5.0f, l + 3.5f, t - 8.4f, l + 3.5f, t - 11.8f);
+  return buf;
+}
+
 }  // namespace
 
 void Document::InitLibrary() {
@@ -503,9 +524,12 @@ int Document::AddNote(int index, float x, float y, const std::wstring& text) {
   if (!annot) return -1;
   FS_RECTF rect{x, y, x + 20, y - 20};
   FPDFAnnot_SetRect(annot, &rect);
-  FPDFAnnot_SetColor(annot, FPDFANNOT_COLORTYPE_Color, 255, 214, 0, 255);
+  FPDFAnnot_SetColor(annot, FPDFANNOT_COLORTYPE_Color, 255, 185, 0, 255);
   FPDFAnnot_SetFlags(annot, FPDF_ANNOT_FLAG_PRINT | FPDF_ANNOT_FLAG_NOZOOM | FPDF_ANNOT_FLAG_NOROTATE);
   FPDFAnnot_SetStringValue(annot, "Contents", reinterpret_cast<FPDF_WIDESTRING>(text.c_str()));
+  // Our own modern icon (a rounded amber speech bubble), stored in the file so other readers show it too.
+  std::wstring ap = NoteAppearance(x, y);
+  FPDFAnnot_SetAP(annot, FPDF_ANNOT_APPEARANCEMODE_NORMAL, reinterpret_cast<FPDF_WIDESTRING>(ap.c_str()));
   int result = FPDFPage_GetAnnotIndex(page, annot);
   FPDFPage_CloseAnnot(annot);
   modified_ = true;
@@ -580,4 +604,29 @@ bool Document::RemoveAnnot(int index, int annotIndex) {
   bool ok = FPDFPage_RemoveAnnot(page, annotIndex) != 0;
   modified_ = modified_ || ok;
   return ok;
+}
+
+std::vector<NoteInfo> Document::NotesOnPage(int index) {
+  std::vector<NoteInfo> notes;
+  if (index < 0 || index >= PageCount()) return notes;
+  // Use the loaded page if there is one; otherwise load it briefly without running page scripts.
+  FPDF_PAGE page = pages_[index];
+  const bool temporary = page == nullptr;
+  if (temporary) page = FPDF_LoadPage(doc_, index);
+  if (!page) return notes;
+  const int count = FPDFPage_GetAnnotCount(page);
+  for (int i = 0; i < count; ++i) {
+    FPDF_ANNOTATION annot = FPDFPage_GetAnnot(page, i);
+    if (!annot) continue;
+    if (FPDFAnnot_GetSubtype(annot) == FPDF_ANNOT_TEXT) {
+      FS_RECTF r{};
+      FPDFAnnot_GetRect(annot, &r);
+      int dx = 0, dy = 0;
+      FPDF_PageToDevice(page, 0, 0, 10000, 10000, 0, r.left, r.top, &dx, &dy);
+      notes.push_back({index, i, dx / 10000.0f, dy / 10000.0f, r});
+    }
+    FPDFPage_CloseAnnot(annot);
+  }
+  if (temporary) FPDF_ClosePage(page);
+  return notes;
 }
