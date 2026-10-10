@@ -2,10 +2,9 @@
 
 #include <windows.h>
 
-#include <atomic>
+#include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 
 // Checks GitHub Releases for a newer version and, if allowed, swaps in the new files quietly.
 // The new version takes effect the next time Featherweight starts.
@@ -21,21 +20,30 @@ class Updater {
 
   static constexpr UINT kDoneMessage = WM_APP + 20;
 
+  Updater();
   ~Updater();
   // Runs in the background and posts kDoneMessage to `notify` when finished.
   void Start(HWND notify, bool install);
-  bool Busy() const { return busy_; }
+  bool Busy() const;
   Result Get();
+  // Waits (briefly) for a file swap in progress, so quitting never leaves a half-updated install.
+  void WaitForSwap();
 
   // Removes leftovers (*.old) from a previous update. Call at startup.
   static void CleanupOldFiles();
   static bool CanSelfUpdate();
+  // Test hook (snapshot mode only): check a different releases URL.
+  static void SetReleaseUrlForTesting(const std::wstring& url);
 
  private:
-  void Run(HWND notify, bool install);
+  struct Shared {
+    std::mutex mutex;
+    Result result;
+    bool busy = false;
+    bool swapping = false;
+  };
+  static void Run(std::shared_ptr<Shared> shared, HWND notify, bool install);
 
-  std::thread thread_;
-  std::atomic<bool> busy_{false};
-  std::mutex mutex_;
-  Result result_;
+  // Shared with the worker thread, which may outlive this object while a download finishes.
+  std::shared_ptr<Shared> shared_;
 };

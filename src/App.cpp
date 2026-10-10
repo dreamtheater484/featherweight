@@ -61,10 +61,7 @@ void AppendSubmenu(HMENU m, HMENU sub, const std::wstring& text, bool enabled = 
 App::App() = default;
 
 App::~App() {
-  if (dropTarget_) {
-    RevokeDragDrop(hwnd_);
-    dropTarget_->Release();
-  }
+  if (dropTarget_) dropTarget_->Release();
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +188,8 @@ void App::MessageLoop() {
       double next = lastFrame_ + 15 - anim::Now();
       timeout = next > 0 ? static_cast<DWORD>(next) : 0;
     }
+    double hideIn = banner_.MsUntilHide();
+    if (hideIn >= 0) timeout = std::min<DWORD>(timeout, static_cast<DWORD>(hideIn) + 5);
     MsgWaitForMultipleObjectsEx(0, nullptr, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
   }
 }
@@ -689,6 +688,8 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     }
     case WM_DESTROY:
+      if (dropTarget_) RevokeDragDrop(hwnd_);
+      updater_.WaitForSwap();
       PostQuitMessage(0);
       return 0;
   }
@@ -1407,6 +1408,7 @@ DocumentView* App::Active() const {
 
 void App::OpenFiles(const std::vector<std::wstring>& files) {
   int toActivate = -1;
+  std::vector<std::wstring> errors;
   for (const auto& raw : files) {
     std::wstring path = util::FullPath(raw);
     // Already open? Just switch to it.
@@ -1424,7 +1426,7 @@ void App::OpenFiles(const std::vector<std::wstring>& files) {
     std::wstring error;
     OpenResult r = view->Load(L"", error);
     if (r == OpenResult::Failed) {
-      banner_.Show(BannerKind::Error, error, {}, 8000);
+      errors.push_back(error);
       if (!util::FileExists(path)) settings_.RemoveRecent(path);
       continue;
     }
@@ -1435,6 +1437,13 @@ void App::OpenFiles(const std::vector<std::wstring>& files) {
     if (!snapshot_) settings_.AddRecent(path);
     tabs_.push_back(std::move(view));
     toActivate = static_cast<int>(tabs_.size()) - 1;
+  }
+  if (errors.size() == 1) {
+    banner_.Show(BannerKind::Error, errors.front(), {}, 8000);
+  } else if (errors.size() > 1) {
+    banner_.Show(BannerKind::Error,
+                 std::to_wstring(errors.size()) + L" files couldn’t be opened. They may be damaged or not be PDFs.",
+                 {}, 8000);
   }
   if (toActivate >= 0) ActivateTab(toActivate);
   if (!snapshot_) settings_.Save();
@@ -1508,6 +1517,7 @@ std::wstring App::SaveDialog(const std::wstring& suggested) {
 void App::ActivateTab(int index) {
   if (index < 0 || index >= static_cast<int>(tabs_.size())) return;
   if (index != active_ && search_.IsOpen()) CloseSearch();
+  if (index != active_ && Active()) Active()->OnDeactivated();
   active_ = index;
   DocumentView* v = Active();
   FocusBox(v->PasswordBox());
@@ -1665,12 +1675,20 @@ void App::ToggleFullScreen() {
     GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
     fullscreen_ = true;
     toolbarReveal_.Snap(0);
+    if (snapshot_) {  // keep the off-screen size
+      Layout();
+      return;
+    }
     SetWindowLongPtrW(hwnd_, GWL_STYLE, (savedStyle_ & ~WS_OVERLAPPEDWINDOW) | WS_POPUP);
     SetWindowPos(hwnd_, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
                  mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
     banner_.Show(BannerKind::Info, L"Full screen. Press Esc or F11 to exit.", {}, 2500);
   } else {
     fullscreen_ = false;
+    if (snapshot_) {
+      Layout();
+      return;
+    }
     SetWindowLongPtrW(hwnd_, GWL_STYLE, savedStyle_);
     SetWindowPlacement(hwnd_, &savedPlacement_);
     SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0,
@@ -1686,6 +1704,7 @@ void App::SetPresentation(bool on) {
   if (on) {
     if (search_.IsOpen()) CloseSearch();
     FocusBox(nullptr);
+    presentFromFullscreen_ = fullscreen_;
     if (!fullscreen_) ToggleFullScreen();
     presentation_ = true;
     banner_.Hide();
@@ -1697,7 +1716,7 @@ void App::SetPresentation(bool on) {
     presentation_ = false;
     KillTimer(hwnd_, kTimerCursorHide);
     v->SetPresentation(false);
-    if (fullscreen_) ToggleFullScreen();
+    if (fullscreen_ && !presentFromFullscreen_) ToggleFullScreen();
   }
   Layout();
   InvalidateRect(hwnd_, nullptr, FALSE);
@@ -1993,6 +2012,16 @@ void App::RunScript(const std::wstring& script) {
           {L"close", CmdCloseTab}, {L"selectall", CmdSelectAll}, {L"nexttab", CmdNextTab}};
       for (const auto& [name, id] : names)
         if (arg == name) Execute(id);
+    } else if (op == L"updatecheck") {
+      if (!arg.empty()) Updater::SetReleaseUrlForTesting(arg);
+      updater_.Start(hwnd_, false);
+      for (int i = 0; i < 300 && updater_.Busy(); ++i) Sleep(50);
+      Updater::Result r = updater_.Get();
+      fwprintf(stderr, L"updater: status=%d version=%s page=%s error=%s\n", static_cast<int>(r.status),
+               r.version.c_str(), r.pageUrl.c_str(), r.error.c_str());
+    } else if (op == L"recent") {
+      settings_.AddRecent(arg);
+      Layout();
     } else if (op == L"banner") {
       banner_.Show(BannerKind::Info, arg, {{kActUpdate, L"Update", true}, {kActSkip, L"Skip this version"}});
     } else if (op == L"wait") {

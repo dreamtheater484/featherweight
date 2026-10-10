@@ -2,7 +2,7 @@
 
 Featherweight is a small, fast, free PDF reader for Windows. It reads, fills in forms, saves and prints, and does nothing else. No bloat, no subscriptions, no cloud.
 
-- **Status:** approved 2026-10-10, in progress
+- **Status:** approved 2026-10-10. Phases 0–7 built, phase 8 partly done (see [Progress](#12-progress)).
 - **Target:** version 1.0, built and released in one go (no separate v1/v2 releases)
 - **Repository:** https://github.com/dreamtheater484/featherweight (public)
 - **License:** MIT
@@ -426,3 +426,24 @@ Everything ships together as 1.0. Each phase ends with something that runs.
 | 4 | License | **MIT** |
 | 5 | UI guideline | **Polished, beautiful, intuitive, zero friction.** See §2. |
 | 6 | Distribution | **Installer and portable zip**, Windows only for now |
+
+---
+
+## 12. Progress
+
+*Updated 2026-10-10.*
+
+| Phase | State | Notes |
+|---|---|---|
+| 0. Foundation | ✅ Done | CMake, pinned PDFium (V8 + XFA) with hash check, static CRT, manifest, CI build, unit tests (21 passing) |
+| 1. Shell and design system | ✅ Done | Direct2D UI, light/dark palettes from the Windows accent color, tabs in the title bar, Snap Layouts hit-testing, tooltips, welcome screen with recent files |
+| 2. Core viewer | ✅ Done | Tiled progressive rendering, previews while zooming, smooth scrolling, overlay scrollbars, all zoom and view modes, rotation |
+| 3. Documents and tabs | ✅ Done | Single instance, drag-and-drop overlay, recent files, per-file state, shortcuts, page box, links (internal, web, blocked) |
+| 4. Forms and saving | ✅ Done | Typing, Tab across pages, clipboard inside fields, Save / Save As with safe replace. Values verified with a second PDF library. |
+| 5. Text | ✅ Done | Selection, word select, copy, find panel with live results (floating panel instead of a bar, so the page doesn't jump) |
+| 6. Printing | ✅ Done | Print dialog with "Page sizing" tab. A flattened copy is printed, so form values come out as vector text. |
+| 7. Reading modes | ✅ Done | Night reading (GPU color matrix, instant toggle), full screen with reveal-on-hover toolbar, presentation |
+| 8. Install, updates and release | 🟡 Partly | Updater tested against the GitHub API. Installer script, release script, notices and README written. **To do:** install Inno Setup and build the installer, then a real `v0.9.0` → `v0.9.1` self-update test. |
+| 9. Polish and 1.0 | ⏳ Next | Hands-on pass on a real desktop (title bar, Snap Layouts, DPI changes, printing to a real printer) using `docs/TEST_CHECKLIST.md` |
+
+**Snapshot mode for testing:** `Featherweight.exe --snapshot out.png [--size 1280x800] [--theme dark] [--invert] [--script "cmd:find;type:fox"] file.pdf` renders off-screen and exits. CI uses it as a smoke test.

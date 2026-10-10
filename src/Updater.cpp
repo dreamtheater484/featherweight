@@ -4,6 +4,7 @@
 
 #include <map>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 #include "Util.h"
@@ -15,6 +16,7 @@
 namespace {
 
 constexpr wchar_t kLatestUrl[] = L"https://api.github.com/repos/dreamtheater484/featherweight/releases/latest";
+std::wstring g_testUrl;
 const wchar_t* const kFiles[] = {L"Featherweight.exe", L"pdfium.dll"};
 
 // Simple HTTPS GET with redirects. Returns the HTTP status (0 on network failure).
@@ -108,25 +110,42 @@ std::map<std::wstring, std::string> ParseSums(const std::string& text) {
 
 }  // namespace
 
-Updater::~Updater() {
-  if (thread_.joinable()) thread_.join();
-}
+Updater::Updater() : shared_(std::make_shared<Shared>()) {}
+
+Updater::~Updater() { WaitForSwap(); }
 
 void Updater::Start(HWND notify, bool install) {
-  if (busy_) return;
-  if (thread_.joinable()) thread_.join();
-  busy_ = true;
   {
-    std::lock_guard<std::mutex> lock(mutex_);
-    result_ = Result{Status::Checking};
+    std::lock_guard<std::mutex> lock(shared_->mutex);
+    if (shared_->busy) return;
+    shared_->busy = true;
+    shared_->result = Result{Status::Checking};
   }
-  thread_ = std::thread([this, notify, install] { Run(notify, install); });
+  // Detached: if Featherweight closes during a download, the download is simply abandoned.
+  std::thread([s = shared_, notify, install] { Run(s, notify, install); }).detach();
+}
+
+bool Updater::Busy() const {
+  std::lock_guard<std::mutex> lock(shared_->mutex);
+  return shared_->busy;
 }
 
 Updater::Result Updater::Get() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return result_;
+  std::lock_guard<std::mutex> lock(shared_->mutex);
+  return shared_->result;
 }
+
+void Updater::WaitForSwap() {
+  for (int i = 0; i < 500; ++i) {
+    {
+      std::lock_guard<std::mutex> lock(shared_->mutex);
+      if (!shared_->swapping) return;
+    }
+    Sleep(10);
+  }
+}
+
+void Updater::SetReleaseUrlForTesting(const std::wstring& url) { g_testUrl = url; }
 
 bool Updater::CanSelfUpdate() { return util::DirectoryWritable(util::ExeDir()); }
 
@@ -138,19 +157,20 @@ void Updater::CleanupOldFiles() {
   }
 }
 
-void Updater::Run(HWND notify, bool install) {
+void Updater::Run(std::shared_ptr<Shared> shared, HWND notify, bool install) {
   Result r;
   auto finish = [&](Result res) {
     {
-      std::lock_guard<std::mutex> lock(mutex_);
-      result_ = res;
+      std::lock_guard<std::mutex> lock(shared->mutex);
+      shared->result = res;
+      shared->busy = false;
+      shared->swapping = false;
     }
-    busy_ = false;
     PostMessageW(notify, kDoneMessage, 0, 0);
   };
 
   std::string body;
-  int status = HttpGet(kLatestUrl, body, 4u << 20);
+  int status = HttpGet(g_testUrl.empty() ? kLatestUrl : g_testUrl, body, 4u << 20);
   if (status == 404) return finish({Status::UpToDate});  // no releases yet
   if (status != 200) return finish({Status::Failed, L"", L"", L"Couldn’t reach GitHub."});
   auto json = fw::ParseJson(body);
@@ -212,7 +232,11 @@ void Updater::Run(HWND notify, bool install) {
     plan.push_back(p);
   }
 
-  // Swap: running files can be renamed but not overwritten.
+  // Swap: running files can be renamed but not overwritten. This part is short and must not be interrupted.
+  {
+    std::lock_guard<std::mutex> lock(shared->mutex);
+    shared->swapping = true;
+  }
   std::vector<Planned> done;
   bool ok = true;
   for (auto& p : plan) {

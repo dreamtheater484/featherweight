@@ -361,6 +361,12 @@ void RenderCache::Clear() {
   bytes_ = 0;
 }
 
+void RenderCache::DropTiles() {
+  AbortJob();
+  for (const auto& [k, t] : tiles_) bytes_ -= static_cast<size_t>(t.w) * t.h * 4;
+  tiles_.clear();
+}
+
 void RenderCache::ReleaseDeviceResources() { Clear(); }
 
 void RenderCache::Evict() {

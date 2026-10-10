@@ -360,7 +360,7 @@ void DocumentView::ScrollBy(double dx, double dy, bool smooth) {
 }
 
 void DocumentView::GoToPage(int page) {
-  if (!Ready() || PageCount() == 0) return;
+  if (!Ready() || PageCount() == 0 || layout_.rows.empty()) return;
   page = std::clamp(page, 0, PageCount() - 1);
   int row = layout_.rowOfPage[page];
   if (viewMode_ == fw::ViewMode::Single) {
@@ -380,13 +380,13 @@ void DocumentView::GoToPage(int page) {
 }
 
 void DocumentView::NextPage() {
-  if (!Ready()) return;
+  if (!Ready() || layout_.rows.empty()) return;
   int row = layout_.rowOfPage[currentPage_];
   if (row + 1 < static_cast<int>(layout_.rows.size())) GoToPage(layout_.rows[row + 1].first);
 }
 
 void DocumentView::PrevPage() {
-  if (!Ready()) return;
+  if (!Ready() || layout_.rows.empty()) return;
   int row = layout_.rowOfPage[currentPage_];
   if (viewMode_ != fw::ViewMode::Single) {
     // If the current page's top is above the viewport, go to its top first.
@@ -765,7 +765,7 @@ void DocumentView::DrawScrollbars(Canvas& c) {
 void DocumentView::DrawPasswordCard(Canvas& c) {
   const Palette& p = theme::P();
   const float u = ui_;
-  const float w = 360 * u, h = (pwError_.empty() ? 212 : 236) * u;
+  const float w = 360 * u, h = (pwError_.empty() ? 196 : 222) * u;
   float x = std::round((vp_.left + vp_.right) / 2.0f - w / 2), y = std::round((vp_.top + vp_.bottom) / 2.0f - h / 2 - 20 * u);
   D2D1_RECT_F card = RectF(x, y, x + w, y + h);
   c.SoftShadow(card, 8 * u, 16 * u, p.popupShadow, 4 * u);
@@ -787,7 +787,6 @@ void DocumentView::DrawPasswordCard(Canvas& c) {
   pwOpen_.rc = RectF(pwBox_.rc.right + 8 * u, cy, x + w - 24 * u, cy + 32 * u);
   pwBox_.Draw(c, u, pwBox_.focused && static_cast<int>(anim::Now() / 530) % 2 == 0);
   DrawButton(c, pwOpen_, u);
-  if (pwBox_.focused) anim::KeepAlive(anim::Now() + 600);
   if (!pwError_.empty()) {
     cy += 40 * u;
     c.Text(pwError_, RectF(x + 24 * u, cy, x + w - 24 * u, cy + 20 * u), p.error, 12.5f * u);
@@ -829,6 +828,11 @@ bool DocumentView::IdleWork(ID2D1DeviceContext* dc, double deadlineMs) {
   return repaint;
 }
 
+void DocumentView::OnDeactivated() {
+  if (cache_) cache_->DropTiles();
+  drag_ = Drag::None;
+}
+
 void DocumentView::ReleaseDeviceResources() {
   invertFx_.Reset();
   fxDc_ = nullptr;
@@ -855,10 +859,11 @@ void DocumentView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
   if (!Ready()) return;
   downX_ = x;
   downY_ = y;
+  // A click stops any smooth scrolling right where it is.
+  tsx_ = sx_;
+  tsy_ = sy_;
   downSx_ = sx_;
   downSy_ = sy_;
-  sx_ = tsx_;
-  sy_ = tsy_;
 
   if (button == 2) {  // middle button pans
     drag_ = Drag::Pan;
@@ -1217,7 +1222,7 @@ bool DocumentView::FieldKey(UINT vk, UINT mods) {
 }
 
 bool DocumentView::OnKeyDown(UINT vk, UINT mods) {
-  if (!Ready()) return false;
+  if (!Ready() || layout_.rows.empty()) return false;
   if (FieldKey(vk, mods)) return true;
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0;
   const bool fitsH = layout_.width <= VpW();

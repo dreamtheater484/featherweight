@@ -15,7 +15,6 @@ void Banner::Show(BannerKind kind, const std::wstring& text, std::vector<Action>
   visible_ = true;
   show_.To(1, 180);
   hideAt_ = autoHideMs > 0 ? anim::Now() + autoHideMs : 0;
-  if (hideAt_ > 0) anim::KeepAlive(hideAt_ + 200);
 
   buttons_.clear();
   set_ = ButtonSet();
@@ -129,6 +128,11 @@ void Banner::Draw(Canvas& c) {
   if (fade) c.DC()->PopLayer();
 }
 
+double Banner::MsUntilHide() const {
+  if (!visible_ || hideAt_ <= 0) return -1;
+  return std::max(0.0, hideAt_ - anim::Now());
+}
+
 bool Banner::Hit(int x, int y) const { return Visible() && Contains(Card(), (float)x, (float)y); }
 
 bool Banner::OnMouseMove(int x, int y) {
@@ -139,10 +143,7 @@ bool Banner::OnMouseMove(int x, int y) {
 void Banner::OnMouseLeave() {
   hovered_ = false;
   set_.OnMouseLeave();
-  if (hideAt_ > 0) {
-    hideAt_ = std::max(hideAt_, anim::Now() + 1500);
-    anim::KeepAlive(hideAt_ + 200);
-  }
+  if (hideAt_ > 0) hideAt_ = std::max(hideAt_, anim::Now() + 1500);
 }
 
 void Banner::OnMouseDown(int x, int y) { set_.OnMouseDown((float)x, (float)y); }

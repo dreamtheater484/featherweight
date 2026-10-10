@@ -28,7 +28,6 @@ struct AppOptions {
   std::wstring snapshotTheme;  // "light" or "dark"
   bool snapshotInvert = false;
   std::wstring script;         // steps separated by ';' (see App::RunScript)
-  std::wstring settingsPath;   // optional settings file override (snapshot mode)
 };
 
 class App : public ViewHost, public DropHost {
@@ -177,6 +176,7 @@ class App : public ViewHost, public DropHost {
   // Window modes
   bool fullscreen_ = false;
   bool presentation_ = false;
+  bool presentFromFullscreen_ = false;
   WINDOWPLACEMENT savedPlacement_{sizeof(WINDOWPLACEMENT)};
   LONG_PTR savedStyle_ = 0;
   Anim toolbarReveal_;

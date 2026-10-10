@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(Featherweight VERSION 0.1.0 LANGUAGES CXX RC)
+project(Featherweight VERSION 0.9.0 LANGUAGES CXX RC)
 
 if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "Featherweight builds with MSVC for 64-bit Windows only.")
@@ -70,14 +70,4 @@ if(FW_BUILD_TESTS)
   add_test(NAME unit COMMAND fw_tests)
 endif()
 
-# --- Packaging: cmake --build build --config Release --target package_zip ---
-set(FW_DIST_DIR "${CMAKE_BINARY_DIR}/dist")
-add_custom_target(package_zip
-  COMMAND ${CMAKE_COMMAND} -E rm -rf "${FW_DIST_DIR}"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${FW_DIST_DIR}/Featherweight"
-  COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:Featherweight>" "${FW_PDFIUM_DIR}/bin/pdfium.dll"
-          "${CMAKE_SOURCE_DIR}/LICENSE" "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md" "${FW_DIST_DIR}/Featherweight"
-  COMMAND ${CMAKE_COMMAND} -E chdir "${FW_DIST_DIR}" ${CMAKE_COMMAND} -E tar cf
-          "Featherweight-${PROJECT_VERSION}-win-x64.zip" --format=zip Featherweight
-  DEPENDS Featherweight
-  COMMENT "Packaging Featherweight-${PROJECT_VERSION}-win-x64.zip")
+# Packaging (installer, portable zip, checksums) is done by scripts/release.ps1.

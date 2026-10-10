@@ -82,7 +82,7 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarState& s) {
   float x = rc.left + 8 * u;
   place(open_, x, kBtn * u);
   x += (kBtn + kGap) * u;
-  if (s.hasDoc) {
+  if (s.ready) {
     place(save_, x, kBtn * u);
     x += (kBtn + kGap) * u;
     place(print_, x, kBtn * u);

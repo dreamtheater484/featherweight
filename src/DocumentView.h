@@ -63,6 +63,8 @@ class DocumentView : public DocumentHost {
   bool IdleWork(ID2D1DeviceContext* dc, double deadlineMs);
   bool Animating() const;
   void ReleaseDeviceResources();
+  // Called when the tab goes to the background: frees memory that is quick to rebuild.
+  void OnDeactivated();
 
   // ---- Input ----
   void OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick);

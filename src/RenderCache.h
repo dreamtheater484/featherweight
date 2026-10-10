@@ -63,6 +63,8 @@ class RenderCache {
   void InvalidatePage(int page);
   void InvalidateAll();
   void Clear();
+  // Frees the full-resolution tiles but keeps the small previews (used for background tabs).
+  void DropTiles();
   void ReleaseDeviceResources();
   void CancelPage(int page);
   int ActivePage() const { return job_.active ? job_.key.page : -1; }

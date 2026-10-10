@@ -27,6 +27,8 @@ class Banner {
   bool Hit(int x, int y) const;
   // Called regularly; hides the banner when its time is up. Returns true if it changed.
   bool Tick();
+  // Milliseconds until the banner hides itself, or -1 if it stays.
+  double MsUntilHide() const;
 
   bool OnMouseMove(int x, int y);
   void OnMouseLeave();
