@@ -1794,8 +1794,12 @@ void App::StartupNotices() {
   bool firstRun = settings_.lastRunVersion.empty();
   settings_.lastRunVersion = current;
 
-  // Keep "Open with" pointing at this exe if it was moved.
-  if (fileassoc::IsRegistered() && !fileassoc::IsRegisteredAt(exe)) fileassoc::Register(exe);
+  // If Featherweight was registered from a folder that no longer exists (moved or deleted),
+  // point "Open with" at this copy. A registration of another existing copy is left alone.
+  if (fileassoc::IsRegistered() && !fileassoc::IsRegisteredAt(exe)) {
+    std::wstring registered = fileassoc::RegisteredExe();
+    if (registered.empty() || !util::FileExists(registered)) fileassoc::Register(exe);
+  }
 
   if (settings_.IsInstalled()) {
     HKEY key;

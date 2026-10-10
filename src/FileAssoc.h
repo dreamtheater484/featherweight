@@ -12,6 +12,8 @@ void Unregister();
 // True if registered, and the registration points at `exePath`.
 bool IsRegisteredAt(const std::wstring& exePath);
 bool IsRegistered();
+// The exe that the current registration points at (empty if not registered).
+std::wstring RegisteredExe();
 // True if Windows currently opens .pdf files with Featherweight.
 bool IsDefault();
 // Opens Windows Settings on the page where the user confirms Featherweight as the default.

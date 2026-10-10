@@ -82,6 +82,14 @@ bool IsRegistered() {
               .empty();
 }
 
+std::wstring RegisteredExe() {
+  std::wstring cmd =
+      GetString(HKEY_CURRENT_USER, std::wstring(L"Software\\Classes\\") + kProgId + L"\\shell\\open\\command", nullptr);
+  if (cmd.size() < 2 || cmd[0] != L'"') return {};
+  size_t end = cmd.find(L'"', 1);
+  return end == std::wstring::npos ? std::wstring() : cmd.substr(1, end - 1);
+}
+
 bool IsRegisteredAt(const std::wstring& exe) {
   std::wstring cmd =
       GetString(HKEY_CURRENT_USER, std::wstring(L"Software\\Classes\\") + kProgId + L"\\shell\\open\\command", nullptr);
