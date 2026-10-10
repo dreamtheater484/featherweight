@@ -147,6 +147,9 @@ bool App::CreateMainWindow(const AppOptions& opts) {
     RegisterDragDrop(hwnd_, dropTarget_);
   }
 
+  notes_.Create(hwnd_);
+  notes_.onAction = [this](NoteEditor::Action a) { FinishNote(a); };
+
   // Search box: results update as you type.
   TextBox& sb = search_.Box();
   sb.onChange = [this] {
@@ -247,6 +250,7 @@ void App::Paint() {
   RenderFrame(dc_.Get());
   HRESULT hr = target_->EndDraw();
   lastFrame_ = anim::Now();
+  notes_.RepaintEdit();
   if (hr == D2DERR_RECREATE_TARGET) {
     DiscardDeviceResources();
     InvalidateRect(hwnd_, nullptr, FALSE);
@@ -300,6 +304,7 @@ void App::Layout() {
   search_.Layout(doc, ui_);
   banner_.Layout(doc, ui_);
   empty_.Layout(doc, ui_, settings_.recent);
+  notes_.Layout(doc, ui_);
   if (DocumentView* v = Active()) v->SetViewport(doc, ui_);
 }
 
@@ -335,6 +340,7 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
     search_.Draw(canvas_, SearchStatus(), caretOn && focusBox_ == &search_.Box(), none);
   }
   banner_.Draw(canvas_);
+  notes_.Draw(canvas_);
 
   // Drag-and-drop overlay.
   float dv = dropAnim_.V();
@@ -490,6 +496,10 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_ERASEBKGND:
       return 1;
+    case WM_CTLCOLOREDIT:
+      if (reinterpret_cast<HWND>(lp) == notes_.Edit())
+        return reinterpret_cast<LRESULT>(notes_.OnCtlColor(reinterpret_cast<HDC>(wp)));
+      break;
     case WM_SIZE:
       if (wp != SIZE_MINIMIZED) {
         if (target_) target_->Resize(D2D1::SizeU(LOWORD(lp), HIWORD(lp)));
@@ -662,6 +672,7 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       }
       break;
     case WM_CLOSE: {
+      if (notes_.IsOpen()) FinishNote(NoteEditor::kSave);
       for (int i = 0; i < static_cast<int>(tabs_.size()); ++i) {
         if (tabs_[i]->Modified()) {
           ActivateTab(i);
@@ -722,6 +733,7 @@ App::Region App::RegionAt(int x, int y) const {
       return Region::Toolbar;
     }
   }
+  if (notes_.Hit(x, y)) return Region::Note;
   if (search_.Hit(x, y)) return Region::Search;
   if (banner_.Hit(x, y)) return Region::Banner;
   return Region::Doc;
@@ -729,8 +741,10 @@ App::Region App::RegionAt(int x, int y) const {
 
 void App::OnMouseDown(int x, int y, int button, bool dbl) {
   HideTooltip();
-  SetFocus(hwnd_);
   Region r = RegionAt(x, y);
+  // Clicking anywhere outside the note card keeps what was written and closes it.
+  if (notes_.IsOpen() && r != Region::Note) FinishNote(NoteEditor::kSave);
+  if (r != Region::Note) SetFocus(hwnd_);
   capture_ = r;
   SetCapture(hwnd_);
   const bool shift = (Mods() & kModShift) != 0;
@@ -765,6 +779,9 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
       break;
     case Region::Banner:
       if (button == 0) banner_.OnMouseDown(x, y);
+      break;
+    case Region::Note:
+      if (button == 0) notes_.OnMouseDown(x, y);
       break;
     case Region::Doc:
       if (DocumentView* v = Active()) {
@@ -804,6 +821,7 @@ void App::OnMouseMove(int x, int y) {
         break;
       case Region::Title: title_.OnMouseMove(x, y); break;
       case Region::Banner: banner_.OnMouseMove(x, y); break;
+      case Region::Note: notes_.OnMouseMove(x, y); break;
       default: break;
     }
     InvalidateRect(hwnd_, nullptr, FALSE);
@@ -817,6 +835,7 @@ void App::OnMouseMove(int x, int y) {
       case Region::Toolbar: toolbar_.OnMouseLeave(); break;
       case Region::Search: search_.OnMouseLeave(); break;
       case Region::Banner: banner_.OnMouseLeave(); break;
+      case Region::Note: notes_.OnMouseLeave(); break;
       case Region::Doc:
         if (DocumentView* v = Active()) v->OnMouseLeave();
         else empty_.OnMouseLeave();
@@ -832,6 +851,7 @@ void App::OnMouseMove(int x, int y) {
     case Region::Toolbar: changed = toolbar_.OnMouseMove(x, y); break;
     case Region::Search: changed = search_.OnMouseMove(x, y); break;
     case Region::Banner: changed = banner_.OnMouseMove(x, y); break;
+    case Region::Note: changed = notes_.OnMouseMove(x, y); break;
     case Region::Doc:
       if (DocumentView* v = Active()) v->OnMouseMove(x, y, Mods());
       else changed = empty_.OnMouseMove(x, y);
@@ -876,6 +896,12 @@ void App::OnMouseUp(int x, int y, int button) {
       if (id > 0) Execute(CmdBannerAction + id);
       break;
     }
+    case Region::Note:
+      if (button == 0) {
+        NoteEditor::Action a = notes_.OnMouseUp(x, y);
+        if (a != NoteEditor::kNone) FinishNote(a);
+      }
+      break;
     case Region::Doc:
       if (DocumentView* v = Active()) {
         v->OnMouseUp(x, y, button, Mods());
@@ -947,6 +973,7 @@ void App::UpdateTooltip(int x, int y) {
     }
     case Region::Toolbar: text = toolbar_.TooltipAt(x, y); break;
     case Region::Search: text = search_.TooltipAt(x, y); break;
+    case Region::Note: text = notes_.TooltipAt(x, y); break;
     case Region::Doc:
       if (DocumentView* v = Active()) text = v->TooltipAt(x, y);
       else text = empty_.TooltipAt(x, y, settings_.recent);
@@ -1220,7 +1247,23 @@ void App::Execute(int cmd) {
       break;
     case CmdZoomMenu:
     case CmdViewMenu:
+    case CmdSaveMenu:
     case CmdMoreMenu: ShowMenu(cmd); break;
+    case CmdHighlight:
+      if (ready) v->HighlightSelection();
+      break;
+    case CmdAddNote: {
+      NoteTarget note;
+      if (ready && v->NewNoteAt(contextPt_.x, contextPt_.y, note)) ViewOpenNote(v, note);
+      break;
+    }
+    case CmdOpenNote:
+      if (ready && contextAnnot_.kind == AnnotHit::Kind::Note)
+        ViewOpenNote(v, NoteTarget{contextPage_, contextAnnot_.index, contextAnnot_.rect.left, contextAnnot_.rect.top});
+      break;
+    case CmdRemoveAnnot:
+      if (ready && contextAnnot_.kind != AnnotHit::Kind::None) v->RemoveAnnot(contextPage_, contextAnnot_.index);
+      break;
     case CmdViewSingle:
       if (ready) v->SetViewMode(fw::ViewMode::Single);
       break;
@@ -1321,6 +1364,9 @@ void App::ShowMenu(int which) {
     AppendSeparator(m);
     AppendItem(m, CmdRotateLeft, L"Rotate counterclockwise\tCtrl+Shift+−");
     AppendItem(m, CmdRotateRight, L"Rotate clockwise\tCtrl+Shift+=");
+  } else if (which == CmdSaveMenu && ready) {
+    AppendItem(m, CmdSave, L"Save\tCtrl+S", v->Modified());
+    AppendItem(m, CmdSaveAs, L"Save as\u2026\tCtrl+Shift+S");
   } else if (which == CmdMoreMenu) {
     alignRight = true;
     AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
@@ -1355,7 +1401,7 @@ void App::ShowMenu(int which) {
     AppendItem(m, CmdAbout, L"About Featherweight");
   }
   if (GetMenuItemCount(m) > 0) {
-    int cmd = TrackMenu(m, toolbar_.ButtonRect(which), alignRight);
+    int cmd = TrackMenu(m, toolbar_.ButtonRect(which == CmdSaveMenu ? CmdSave : which), alignRight);
     if (cmd) Execute(cmd);
   }
   DestroyMenu(m);
@@ -1372,7 +1418,23 @@ void App::ShowContextMenu(int sx, int sy) {
     AppendSeparator(m);
     AppendItem(m, 4, L"Select all\tCtrl+A");
   } else {
-    AppendItem(m, CmdCopy, L"Copy\tCtrl+C", v->HasSelection());
+    POINT cp{sx, sy};
+    ScreenToClient(hwnd_, &cp);
+    contextPt_ = cp;
+    contextAnnot_ = v->AnnotAtPoint(cp.x, cp.y, contextPage_);
+    if (v->HasSelection()) {
+      AppendItem(m, CmdHighlight, L"Highlight");
+      AppendItem(m, CmdCopy, L"Copy\tCtrl+C");
+    }
+    if (contextAnnot_.kind == AnnotHit::Kind::Highlight) {
+      AppendItem(m, CmdRemoveAnnot, L"Remove highlight");
+    } else if (contextAnnot_.kind == AnnotHit::Kind::Note) {
+      AppendItem(m, CmdOpenNote, L"Open note");
+      AppendItem(m, CmdRemoveAnnot, L"Delete note");
+    } else if (contextPage_ >= 0) {
+      AppendItem(m, CmdAddNote, L"Add note here");
+    }
+    AppendSeparator(m);
     AppendItem(m, CmdSelectAllOnPage, L"Select all text on this page");
     AppendSeparator(m);
     AppendItem(m, CmdZoomIn, L"Zoom in\tCtrl+=");
@@ -1517,6 +1579,7 @@ std::wstring App::SaveDialog(const std::wstring& suggested) {
 void App::ActivateTab(int index) {
   if (index < 0 || index >= static_cast<int>(tabs_.size())) return;
   if (index != active_ && search_.IsOpen()) CloseSearch();
+  if (index != active_ && notes_.IsOpen()) FinishNote(NoteEditor::kSave);
   if (index != active_ && Active()) Active()->OnDeactivated();
   active_ = index;
   DocumentView* v = Active();
@@ -1530,7 +1593,8 @@ void App::ActivateTab(int index) {
 bool App::ConfirmClose(DocumentView* view) {
   if (!view->Modified()) return true;
   std::wstring heading = L"Save changes to “" + view->Title() + L"”?";
-  TASKDIALOG_BUTTON buttons[] = {{IDYES, L"Save"}, {IDNO, L"Don’t save"}};
+  constexpr int kSaveAs = 100;
+  TASKDIALOG_BUTTON buttons[] = {{IDYES, L"Save"}, {kSaveAs, L"Save as\u2026"}, {IDNO, L"Don’t save"}};
   TASKDIALOGCONFIG cfg{sizeof(cfg)};
   cfg.hwndParent = hwnd_;
   cfg.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW | TDF_ALLOW_DIALOG_CANCELLATION;
@@ -1539,21 +1603,22 @@ bool App::ConfirmClose(DocumentView* view) {
   cfg.pszMainInstruction = heading.c_str();
   cfg.pszContent = L"If you don’t save, your changes will be lost.";
   cfg.pButtons = buttons;
-  cfg.cButtons = 2;
+  cfg.cButtons = 3;
   cfg.nDefaultButton = IDYES;
   int pressed = IDCANCEL;
   HideTooltip();
   if (FAILED(TaskDialogIndirect(&cfg, &pressed, nullptr, nullptr))) return false;
   if (pressed == IDNO) return true;
-  if (pressed != IDYES) return false;
+  if (pressed != IDYES && pressed != kSaveAs) return false;
   for (int i = 0; i < static_cast<int>(tabs_.size()); ++i)
     if (tabs_[i].get() == view) ActivateTab(i);
-  return SaveActive(false);
+  return SaveActive(pressed == kSaveAs);
 }
 
 bool App::CloseTab(int index) {
   if (index < 0 || index >= static_cast<int>(tabs_.size())) return false;
   DocumentView* v = tabs_[index].get();
+  if (notes_.IsOpen() && notes_.View() == v) FinishNote(NoteEditor::kSave);
   if (v->Modified()) {
     ActivateTab(index);
     if (!ConfirmClose(v)) return false;
@@ -1756,6 +1821,32 @@ void App::ViewPasswordAccepted(DocumentView* view) {
   else view->ApplyState(FileState{});
   if (focusBox_ == view->PasswordBox() || (focusBox_ && !view->NeedsPassword())) FocusBox(nullptr);
   Layout();
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::ViewOpenNote(DocumentView* view, const NoteTarget& note) {
+  if (notes_.IsOpen()) FinishNote(NoteEditor::kSave);
+  HideTooltip();
+  FocusBox(nullptr);
+  notes_.Open(view, note, view->NoteText(note), view->NoteScreenPos(note));
+  Layout();
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::FinishNote(NoteEditor::Action action) {
+  DocumentView* v = notes_.View();
+  if (!v) return;
+  bool stillOpen = false;
+  for (auto& t : tabs_)
+    if (t.get() == v) stillOpen = true;
+  NoteTarget target = notes_.Target();
+  std::wstring text = notes_.Text();
+  notes_.Close();
+  if (stillOpen) {
+    if (action == NoteEditor::kSave) v->SaveNote(target, text);
+    else if (action == NoteEditor::kDelete) v->SaveNote(target, L"");
+  }
+  SetFocus(hwnd_);
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -2023,6 +2114,23 @@ void App::RunScript(const std::wstring& script) {
       Updater::Result r = updater_.Get();
       fwprintf(stderr, L"updater: status=%d version=%s page=%s error=%s\n", static_cast<int>(r.status),
                r.version.c_str(), r.pageUrl.c_str(), r.error.c_str());
+    } else if (op == L"highlight") {
+      if (DocumentView* v = Active()) v->HighlightSelection();
+    } else if (op == L"removeannot") {
+      int x, y, page;
+      xy(x, y);
+      if (DocumentView* v = Active()) {
+        AnnotHit hit = v->AnnotAtPoint(x, y, page);
+        if (hit.kind != AnnotHit::Kind::None) v->RemoveAnnot(page, hit.index);
+      }
+    } else if (op == L"note" || op == L"opennote") {
+      auto p = fw::Split(arg, L',');
+      DocumentView* v = Active();
+      NoteTarget note;
+      if (v && p.size() >= 2 && v->NewNoteAt(_wtoi(p[0].c_str()), _wtoi(p[1].c_str()), note)) {
+        if (op == L"note") v->SaveNote(note, p.size() > 2 ? p[2] : L"Note");
+        else ViewOpenNote(v, note);
+      }
     } else if (op == L"recent") {
       settings_.AddRecent(arg);
       Layout();

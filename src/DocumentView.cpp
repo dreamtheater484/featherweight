@@ -49,6 +49,18 @@ DocumentView::DocumentView(ViewHost& host, std::wstring path) : host_(host), pat
   pwOpen_.text = L"Open";
   pwOpen_.style = ButtonStyle::Primary;
   pwButtons_.Add(&pwOpen_);
+  selHighlight_.id = 1;
+  selHighlight_.glyph = icon::Highlight;
+  selHighlight_.text = L"Highlight";
+  selHighlight_.glyphSize = 14;
+  selHighlight_.tooltip = L"Highlight the selected text";
+  selCopy_.id = 2;
+  selCopy_.glyph = icon::Copy;
+  selCopy_.text = L"Copy";
+  selCopy_.glyphSize = 14;
+  selCopy_.tooltip = L"Copy (Ctrl+C)";
+  selButtons_.Add(&selHighlight_);
+  selButtons_.Add(&selCopy_);
 }
 
 DocumentView::~DocumentView() {
@@ -604,6 +616,7 @@ void DocumentView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
 
   DrawOverlays(c, first, last);
   if (!presentation_) DrawScrollbars(c);
+  if (selBar_ && !selection_.Empty() && drag_ != Drag::Select) DrawSelectionBar(c);
   c.PopClip();
 }
 
@@ -857,6 +870,17 @@ void DocumentView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
     return;
   }
   if (!Ready()) return;
+  if (selBar_ && button == 0) {
+    D2D1_RECT_F bar;
+    if (SelectionBarRect(bar) && gfx::Contains(bar, (float)x, (float)y)) {
+      selButtons_.OnMouseDown((float)x, (float)y);
+      drag_ = Drag::None;
+      barPressed_ = true;
+      host_.ViewInvalidate();
+      return;
+    }
+  }
+  selBar_ = false;
   downX_ = x;
   downY_ = y;
   // A click stops any smooth scrolling right where it is.
@@ -918,6 +942,15 @@ void DocumentView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
     AfterFormEvent();
   }
 
+  if (onPage && button == 0) {
+    AnnotHit hit = doc_->AnnotAt(page, px, py);
+    if (hit.kind == AnnotHit::Kind::Note) {
+      pendingNote_ = NoteTarget{page, hit.index, hit.rect.left, hit.rect.top};
+      drag_ = Drag::Note;
+      return;
+    }
+  }
+
   if (onPage) {
     LinkTarget link = doc_->LinkAt(page, px, py);
     if (link.kind != LinkTarget::Kind::None) {
@@ -943,6 +976,8 @@ void DocumentView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
           textsel::WordAt(*doc_, page, idx, a, b);
           selection_.Set({page, a}, {page, b});
           drag_ = Drag::None;
+          selBar_ = true;
+          selButtons_.Reset();
         } else if ((mods & kModShift) && !selection_.Empty()) {
           selection_.Set(selection_.anchor, {page, idx});
           drag_ = Drag::Select;
@@ -1009,6 +1044,7 @@ void DocumentView::OnMouseMove(int x, int y, UINT mods) {
       return;
     }
     case Drag::Link:
+    case Drag::Note:
       if (std::abs(x - downX_) + std::abs(y - downY_) > 6 * ui_) drag_ = Drag::Pan;
       return;
     case Drag::Select: {
@@ -1034,6 +1070,7 @@ void DocumentView::OnMouseMove(int x, int y, UINT mods) {
   }
 
   // Hover feedback.
+  if (selBar_ && selButtons_.OnMouseMove((float)x, (float)y)) host_.ViewInvalidate();
   D2D1_RECT_F vTrack, vThumb, hTrack, hThumb;
   ScrollbarRects(vTrack, vThumb, hTrack, hThumb);
   float vh = gfx::Contains(vTrack, (float)x, (float)y) ? 1.f : 0.f;
@@ -1063,6 +1100,18 @@ void DocumentView::OnMouseUp(int x, int y, int button, UINT mods) {
     return;
   }
   if (!Ready()) return;
+  if (barPressed_) {
+    barPressed_ = false;
+    switch (selButtons_.OnMouseUp((float)x, (float)y)) {
+      case 1: HighlightSelection(); break;
+      case 2:
+        Copy();
+        selBar_ = false;
+        break;
+    }
+    host_.ViewInvalidate();
+    return;
+  }
   Drag d = drag_;
   drag_ = Drag::None;
   (void)button;
@@ -1072,16 +1121,22 @@ void DocumentView::OnMouseUp(int x, int y, int button, UINT mods) {
     AfterFormEvent();
   } else if (d == Drag::Link) {
     FollowLink(pendingLink_);
+  } else if (d == Drag::Note) {
+    host_.ViewOpenNote(this, pendingNote_);
   } else if (d == Drag::Select) {
     if (selection_.anchor == selection_.focus && std::abs(x - downX_) + std::abs(y - downY_) < 3) {
       selection_.Clear();  // a plain click on text just clears the selection
-      host_.ViewInvalidate();
+    } else {
+      selBar_ = true;
+      selButtons_.Reset();
     }
+    host_.ViewInvalidate();
   }
 }
 
 void DocumentView::OnMouseLeave() {
   mouseX_ = mouseY_ = -1;
+  selButtons_.OnMouseLeave();
   vScrollHover_.To(0, 200);
   hScrollHover_.To(0, 200);
   if (state_ == LoadState::NeedPassword) pwButtons_.OnMouseLeave();
@@ -1112,9 +1167,14 @@ HCURSOR DocumentView::CursorAt(int x, int y) {
   D2D1_RECT_F vTrack, vThumb, hTrack, hThumb;
   ScrollbarRects(vTrack, vThumb, hTrack, hThumb);
   if (gfx::Contains(vTrack, (float)x, (float)y) || gfx::Contains(hTrack, (float)x, (float)y)) return arrow;
+  if (selBar_) {
+    D2D1_RECT_F bar;
+    if (SelectionBarRect(bar) && gfx::Contains(bar, (float)x, (float)y)) return hand;
+  }
   int page = PageAtPoint(x, y);
   double px, py;
   if (page < 0 || !ToPagePoint(page, x, y, px, py)) return arrow;
+  if (doc_->AnnotAt(page, px, py).kind == AnnotHit::Kind::Note) return hand;
   if (FPDF_FORMHANDLE form = doc_->Form()) {
     if (FPDFPage_HasFormFieldAtPoint(form, doc_->Page(page), px, py) >= 0) {
       return formCursor_ == FXCT_VBEAM ? ibeam : formCursor_ == FXCT_HAND ? hand : arrow;
@@ -1131,9 +1191,22 @@ HCURSOR DocumentView::CursorAt(int x, int y) {
 
 std::wstring DocumentView::TooltipAt(int x, int y) {
   if (!Ready() || drag_ != Drag::None) return {};
+  if (selBar_) {
+    D2D1_RECT_F bar;
+    if (SelectionBarRect(bar) && gfx::Contains(bar, (float)x, (float)y))
+      return gfx::Contains(selHighlight_.rc, (float)x, (float)y) ? selHighlight_.tooltip : selCopy_.tooltip;
+  }
   int page = PageAtPoint(x, y);
   double px, py;
   if (page < 0 || !ToPagePoint(page, x, y, px, py)) return {};
+  AnnotHit hit = doc_->AnnotAt(page, px, py);
+  if (hit.kind == AnnotHit::Kind::Note) {
+    std::wstring text = doc_->NoteText(page, hit.index);
+    if (text.size() > 120) text = text.substr(0, 117) + L"\u2026";
+    for (auto& ch : text)
+      if (ch == L'\r' || ch == L'\n') ch = L' ';
+    return text.empty() ? L"Note (click to open)" : text;
+  }
   LinkTarget t = doc_->LinkAt(page, px, py);
   switch (t.kind) {
     case LinkTarget::Kind::Uri: return t.uri;
@@ -1520,4 +1593,125 @@ void DocumentView::OnFormCaret(int page, bool visible, double l, double t, doubl
 
 void DocumentView::OnFormFocusChanged(int page, bool hasRect, const FS_RECTF& rect) {
   if (hasRect && page >= 0) ScrollPageRectIntoView(page, rect, false);
+}
+
+// ---------------------------------------------------------------------------
+// Highlights and notes
+
+void DocumentView::AnnotationsChanged(int page) {
+  cache_->InvalidatePage(page);
+  lastModified_ = doc_->Modified();
+  host_.ViewStateChanged();
+  host_.ViewInvalidate();
+}
+
+bool DocumentView::HighlightSelection() {
+  if (!Ready() || selection_.Empty()) return false;
+  TextPos a = selection_.Start(), b = selection_.End();
+  bool any = false;
+  for (int p = a.page; p <= b.page; ++p) {
+    std::vector<FS_RECTF> rects = textsel::Rects(*doc_, selection_, p);
+    if (!rects.empty() && doc_->AddHighlight(p, rects)) {
+      AnnotationsChanged(p);
+      any = true;
+    }
+  }
+  selection_.Clear();
+  selBar_ = false;
+  host_.ViewInvalidate();
+  return any;
+}
+
+AnnotHit DocumentView::AnnotAtPoint(int x, int y, int& page) {
+  page = -1;
+  if (!Ready()) return {};
+  int p = PageAtPoint(x, y);
+  double px, py;
+  if (p < 0 || !ToPagePoint(p, x, y, px, py)) return {};
+  page = p;
+  return doc_->AnnotAt(p, px, py);
+}
+
+void DocumentView::RemoveAnnot(int page, int index) {
+  if (Ready() && doc_->RemoveAnnot(page, index)) AnnotationsChanged(page);
+}
+
+bool DocumentView::NewNoteAt(int x, int y, NoteTarget& note) {
+  int p = PageAtPoint(x, y);
+  double px, py;
+  if (!Ready() || p < 0 || !ToPagePoint(p, x, y, px, py)) return false;
+  note = NoteTarget{p, -1, static_cast<float>(px), static_cast<float>(py)};
+  return true;
+}
+
+std::wstring DocumentView::NoteText(const NoteTarget& note) {
+  if (!Ready() || note.index < 0) return {};
+  return doc_->NoteText(note.page, note.index);
+}
+
+void DocumentView::SaveNote(const NoteTarget& note, const std::wstring& text) {
+  if (!Ready() || note.page < 0) return;
+  if (note.index < 0) {
+    if (!text.empty() && doc_->AddNote(note.page, note.x, note.y, text) >= 0) AnnotationsChanged(note.page);
+    return;
+  }
+  if (text.empty()) {
+    RemoveAnnot(note.page, note.index);
+  } else if (text != doc_->NoteText(note.page, note.index) && doc_->SetNoteText(note.page, note.index, text)) {
+    AnnotationsChanged(note.page);
+  }
+}
+
+D2D1_POINT_2F DocumentView::NoteScreenPos(const NoteTarget& note) {
+  if (!Ready() || note.page < 0) return {};
+  FS_RECTF r{note.x, note.y, note.x, note.y};
+  D2D1_RECT_F s = PageRectToScreen(note.page, r);
+  return {s.left, s.top};
+}
+
+bool DocumentView::SelectionBarRect(D2D1_RECT_F& rect) {
+  if (selection_.Empty()) return false;
+  const TextPos end = selection_.End();
+  int first, last;
+  VisiblePages(first, last);
+  if (end.page < first || end.page > last) return false;
+  if (selRectsVersion_ != selection_.version) {
+    selRects_.clear();
+    selRectsVersion_ = selection_.version;
+  }
+  auto it = selRects_.find(end.page);
+  if (it == selRects_.end()) it = selRects_.emplace(end.page, textsel::Rects(*doc_, selection_, end.page)).first;
+  if (it->second.empty()) return false;
+  D2D1_RECT_F lastLine = PageRectToScreen(end.page, it->second.back());
+  const float u = ui_;
+  IDWriteTextFormat* fmt = gfx::Canvas::Format(13 * u, DWRITE_FONT_WEIGHT_REGULAR, false);
+  auto measure = [&](const std::wstring& s) {
+    ComPtr<IDWriteTextLayout> layout;
+    gfx::DWrite()->CreateTextLayout(s.c_str(), static_cast<UINT32>(s.size()), fmt, 1000, 100, &layout);
+    DWRITE_TEXT_METRICS m{};
+    if (layout) layout->GetMetrics(&m);
+    return m.widthIncludingTrailingWhitespace;
+  };
+  float w1 = std::ceil(measure(selHighlight_.text) + 14 * u + 8 * u + 24 * u);
+  float w2 = std::ceil(measure(selCopy_.text) + 14 * u + 8 * u + 24 * u);
+  float w = w1 + w2 + 4 * u * 3, h = 38 * u;
+  float x = std::round(std::min(lastLine.right - w / 2, vp_.right - w - 24 * u));
+  x = std::max(x, vp_.left + 8 * u);
+  float y = std::round(lastLine.bottom + 8 * u);
+  if (y + h > vp_.bottom - 8 * u) y = std::round(lastLine.top - h - 8 * u);
+  rect = gfx::RectF(x, y, x + w, y + h);
+  selHighlight_.rc = gfx::RectF(x + 4 * u, y + 4 * u, x + 4 * u + w1, y + h - 4 * u);
+  selCopy_.rc = gfx::RectF(selHighlight_.rc.right + 4 * u, y + 4 * u, selHighlight_.rc.right + 4 * u + w2, y + h - 4 * u);
+  return true;
+}
+
+void DocumentView::DrawSelectionBar(Canvas& c) {
+  D2D1_RECT_F bar;
+  if (!SelectionBarRect(bar)) return;
+  const Palette& p = theme::P();
+  c.SoftShadow(bar, 8 * ui_, 10 * ui_, p.popupShadow, 3 * ui_);
+  c.FillRound(bar, 8 * ui_, p.popupBg);
+  c.StrokeRound(bar, 8 * ui_, p.popupBorder, 1);
+  DrawButton(c, selHighlight_, ui_);
+  DrawButton(c, selCopy_, ui_);
 }

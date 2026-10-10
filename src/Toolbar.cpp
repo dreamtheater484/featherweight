@@ -20,6 +20,7 @@ Button* Toolbar::Make(int cmd, wchar_t glyph, const wchar_t* tooltip) {
   switch (cmd) {
     case CmdOpen: b = &open_; break;
     case CmdSave: b = &save_; break;
+    case CmdSaveMenu: b = &saveMenu_; break;
     case CmdPrint: b = &print_; break;
     case CmdPrevPage: b = &prev_; break;
     case CmdNextPage: b = &next_; break;
@@ -44,6 +45,7 @@ Button* Toolbar::Make(int cmd, wchar_t glyph, const wchar_t* tooltip) {
 Toolbar::Toolbar() {
   Make(CmdOpen, icon::FolderOpen, L"Open (Ctrl+O)");
   Make(CmdSave, icon::Save, L"Save (Ctrl+S)");
+  Make(CmdSaveMenu, icon::ChevronDown, L"Save as\u2026 (Ctrl+Shift+S)");
   Make(CmdPrint, icon::Print, L"Print (Ctrl+P)");
   Make(CmdPrevPage, icon::ChevronUp, L"Previous page (Page Up)");
   Make(CmdNextPage, icon::ChevronDown, L"Next page (Page Down)");
@@ -59,6 +61,7 @@ Toolbar::Toolbar() {
   zoom_.dropdown = true;
   view_.dropdown = true;
   prev_.glyphSize = next_.glyphSize = 14;
+  saveMenu_.glyphSize = 9;
   pageBox_.digitsOnly = true;
   pageBox_.maxLength = 6;
   pageBox_.align = Align::Center;
@@ -84,7 +87,9 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarState& s) {
   x += (kBtn + kGap) * u;
   if (s.ready) {
     place(save_, x, kBtn * u);
-    x += (kBtn + kGap) * u;
+    x += kBtn * u;
+    place(saveMenu_, x, 18 * u);
+    x += (18 + kGap) * u;
     place(print_, x, kBtn * u);
     x += (kBtn + kGap) * u;
   }

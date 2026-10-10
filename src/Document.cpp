@@ -1,6 +1,7 @@
 #include "Document.h"
 
 #include <fpdf_annot.h>
+#include <fpdf_edit.h>
 #include <fpdf_save.h>
 
 #include <algorithm>
@@ -472,4 +473,111 @@ bool Document::Save(const std::wstring& path, std::wstring& error) {
   path_ = path;
   modified_ = false;
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Highlights and notes
+
+bool Document::AddHighlight(int index, const std::vector<FS_RECTF>& rects) {
+  FPDF_PAGE page = Page(index);
+  if (!page || rects.empty()) return false;
+  FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(page, FPDF_ANNOT_HIGHLIGHT);
+  if (!annot) return false;
+  FPDFAnnot_SetColor(annot, FPDFANNOT_COLORTYPE_Color, 255, 236, 80, 255);  // highlighter yellow
+  FPDFAnnot_SetFlags(annot, FPDF_ANNOT_FLAG_PRINT);
+  FPDFAnnot_SetRect(annot, &rects.front());
+  for (const FS_RECTF& r : rects) {
+    // PDF quad point order: top-left, top-right, bottom-left, bottom-right.
+    FS_QUADPOINTSF q{r.left, r.top, r.right, r.top, r.left, r.bottom, r.right, r.bottom};
+    FPDFAnnot_AppendAttachmentPoints(annot, &q);
+  }
+  FPDFPage_CloseAnnot(annot);
+  modified_ = true;
+  return true;
+}
+
+int Document::AddNote(int index, float x, float y, const std::wstring& text) {
+  FPDF_PAGE page = Page(index);
+  if (!page) return -1;
+  FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(page, FPDF_ANNOT_TEXT);
+  if (!annot) return -1;
+  FS_RECTF rect{x, y, x + 20, y - 20};
+  FPDFAnnot_SetRect(annot, &rect);
+  FPDFAnnot_SetColor(annot, FPDFANNOT_COLORTYPE_Color, 255, 214, 0, 255);
+  FPDFAnnot_SetFlags(annot, FPDF_ANNOT_FLAG_PRINT | FPDF_ANNOT_FLAG_NOZOOM | FPDF_ANNOT_FLAG_NOROTATE);
+  FPDFAnnot_SetStringValue(annot, "Contents", reinterpret_cast<FPDF_WIDESTRING>(text.c_str()));
+  int result = FPDFPage_GetAnnotIndex(page, annot);
+  FPDFPage_CloseAnnot(annot);
+  modified_ = true;
+  return result;
+}
+
+bool Document::SetNoteText(int index, int annotIndex, const std::wstring& text) {
+  FPDF_PAGE page = Page(index);
+  if (!page) return false;
+  FPDF_ANNOTATION annot = FPDFPage_GetAnnot(page, annotIndex);
+  if (!annot) return false;
+  bool ok = FPDFAnnot_SetStringValue(annot, "Contents", reinterpret_cast<FPDF_WIDESTRING>(text.c_str())) != 0;
+  FPDFPage_CloseAnnot(annot);
+  modified_ = modified_ || ok;
+  return ok;
+}
+
+std::wstring Document::NoteText(int index, int annotIndex) {
+  FPDF_PAGE page = Page(index);
+  if (!page) return {};
+  FPDF_ANNOTATION annot = FPDFPage_GetAnnot(page, annotIndex);
+  if (!annot) return {};
+  std::wstring text;
+  unsigned long bytes = FPDFAnnot_GetStringValue(annot, "Contents", nullptr, 0);
+  if (bytes > 2) {
+    text.resize(bytes / 2);
+    FPDFAnnot_GetStringValue(annot, "Contents", reinterpret_cast<FPDF_WCHAR*>(text.data()), bytes);
+    text.resize(wcsnlen(text.c_str(), text.size()));
+  }
+  FPDFPage_CloseAnnot(annot);
+  return text;
+}
+
+AnnotHit Document::AnnotAt(int index, double x, double y) {
+  AnnotHit hit;
+  FPDF_PAGE page = Page(index);
+  if (!page) return hit;
+  auto inside = [&](const FS_RECTF& r) {
+    return x >= std::min(r.left, r.right) && x <= std::max(r.left, r.right) && y >= std::min(r.top, r.bottom) &&
+           y <= std::max(r.top, r.bottom);
+  };
+  // Topmost first.
+  for (int i = FPDFPage_GetAnnotCount(page) - 1; i >= 0 && hit.kind == AnnotHit::Kind::None; --i) {
+    FPDF_ANNOTATION annot = FPDFPage_GetAnnot(page, i);
+    if (!annot) continue;
+    FPDF_ANNOTATION_SUBTYPE type = FPDFAnnot_GetSubtype(annot);
+    FS_RECTF rect{};
+    FPDFAnnot_GetRect(annot, &rect);
+    if (type == FPDF_ANNOT_TEXT && inside(rect)) {
+      hit = {AnnotHit::Kind::Note, i, rect};
+    } else if (type == FPDF_ANNOT_HIGHLIGHT) {
+      size_t quads = FPDFAnnot_CountAttachmentPoints(annot);
+      for (size_t q = 0; q < quads; ++q) {
+        FS_QUADPOINTSF p{};
+        if (!FPDFAnnot_GetAttachmentPoints(annot, q, &p)) continue;
+        FS_RECTF r{std::min({p.x1, p.x2, p.x3, p.x4}), std::max({p.y1, p.y2, p.y3, p.y4}),
+                   std::max({p.x1, p.x2, p.x3, p.x4}), std::min({p.y1, p.y2, p.y3, p.y4})};
+        if (inside(r)) {
+          hit = {AnnotHit::Kind::Highlight, i, rect};
+          break;
+        }
+      }
+    }
+    FPDFPage_CloseAnnot(annot);
+  }
+  return hit;
+}
+
+bool Document::RemoveAnnot(int index, int annotIndex) {
+  FPDF_PAGE page = Page(index);
+  if (!page) return false;
+  bool ok = FPDFPage_RemoveAnnot(page, annotIndex) != 0;
+  modified_ = modified_ || ok;
+  return ok;
 }

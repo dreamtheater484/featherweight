@@ -11,9 +11,11 @@
   The version comes from project(... VERSION x.y.z) in CMakeLists.txt.
   Requires: Visual Studio Build Tools (C++), CMake, Inno Setup 6 (winget install JRSoftware.InnoSetup),
   and for -Publish the GitHub CLI logged in to the repository owner's account.
+  -Winget also needs wingetcreate (winget install Microsoft.WingetCreate).
 #>
 param(
   [switch]$Publish,
+  [switch]$Winget,  # with -Publish: also submit the new version to winget (after the first winget release is accepted)
   [switch]$SkipTests,
   [string]$Notes = ""
 )
@@ -107,3 +109,12 @@ $paths = $assets | ForEach-Object { Join-Path $dist $_ }
 gh release create $tag @paths --title "Featherweight $version" --notes $Notes
 if ($LASTEXITCODE -ne 0) { throw "Creating the GitHub release failed" }
 Write-Host "Released $tag" -ForegroundColor Green
+
+if ($Winget) {
+  Step "Submitting $version to winget"
+  # Opens a pull request on microsoft/winget-pkgs from your GitHub account; Microsoft reviews it automatically.
+  $token = gh auth token
+  $url = "https://github.com/dreamtheater484/featherweight/releases/download/$tag/$setupName"
+  wingetcreate update dreamtheater484.Featherweight --version $version --urls $url --submit --token $token
+  if ($LASTEXITCODE -ne 0) { throw "winget submission failed" }
+}

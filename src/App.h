@@ -10,6 +10,7 @@
 #include "DocumentView.h"
 #include "DropTarget.h"
 #include "EmptyState.h"
+#include "NoteEditor.h"
 #include "Gfx.h"
 #include "SearchPanel.h"
 #include "Settings.h"
@@ -50,6 +51,7 @@ class App : public ViewHost, public DropHost {
   bool ViewCoverAlone() override { return settings_.coverAlone; }
   bool ViewHighlightFields() override { return settings_.highlightFields; }
   void ViewPasswordAccepted(DocumentView* view) override;
+  void ViewOpenNote(DocumentView* view, const NoteTarget& note) override;
 
   // DropHost
   void OnDragEnter(bool acceptable) override;
@@ -57,7 +59,7 @@ class App : public ViewHost, public DropHost {
   void OnDropFiles(const std::vector<std::wstring>& files) override;
 
  private:
-  enum class Region { None, Title, Toolbar, Search, Banner, Doc };
+  enum class Region { None, Title, Toolbar, Search, Banner, Note, Doc };
 
   static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
   LRESULT Handle(UINT msg, WPARAM wp, LPARAM lp);
@@ -110,6 +112,8 @@ class App : public ViewHost, public DropHost {
   void RememberState(DocumentView* view);
   void FocusBox(TextBox* box);
   void OpenSearch();
+  // Saves (or cancels) the note being edited and closes the editor.
+  void FinishNote(NoteEditor::Action action);
   void CloseSearch();
 
   // Window modes
@@ -147,6 +151,10 @@ class App : public ViewHost, public DropHost {
   Banner banner_;
   Tooltip tooltip_;
   EmptyState empty_;
+  NoteEditor notes_;
+  POINT contextPt_{};
+  int contextPage_ = -1;
+  AnnotHit contextAnnot_;
   std::vector<std::unique_ptr<DocumentView>> tabs_;
   int active_ = -1;
 

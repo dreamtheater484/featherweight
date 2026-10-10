@@ -46,7 +46,7 @@ class Toolbar {
   float ui_ = 1;
   std::vector<Button*> all_;
   ButtonSet set_;
-  Button open_, save_, print_, prev_, next_, zoomOut_, zoom_, zoomIn_, view_, rotate_, search_, invert_, full_, more_;
+  Button open_, save_, saveMenu_, print_, prev_, next_, zoomOut_, zoom_, zoomIn_, view_, rotate_, search_, invert_, full_, more_;
   TextBox pageBox_;
   D2D1_RECT_F pageLabel_{};
   std::vector<D2D1_RECT_F> separators_;

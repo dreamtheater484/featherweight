@@ -42,6 +42,9 @@ constexpr wchar_t ScrollMode = 0xECE7;
 constexpr wchar_t Download = 0xE896;
 constexpr wchar_t Link = 0xE71B;
 constexpr wchar_t FontCase = 0xE8D2;  // "Aa" match case
+constexpr wchar_t Highlight = 0xE7E6;
+constexpr wchar_t Comment = 0xE90A;
+constexpr wchar_t Delete = 0xE74D;
 
 // Custom vector icons drawn by DrawButton (private-use code points).
 constexpr wchar_t ViewSingle = 0xF8F0;

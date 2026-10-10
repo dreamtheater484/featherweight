@@ -43,6 +43,14 @@ struct LinkTarget {
 
 enum class OpenResult { Ok, NeedPassword, WrongPassword, Failed };
 
+// A highlight or note found on a page.
+struct AnnotHit {
+  enum class Kind { None, Highlight, Note };
+  Kind kind = Kind::None;
+  int index = -1;   // annotation index on the page (changes when annotations are removed)
+  FS_RECTF rect{};  // page coordinates
+};
+
 struct FormEnv;
 
 // One open PDF. All calls must happen on the UI thread.
@@ -91,6 +99,15 @@ class Document {
   bool FocusedField(int& page) const;
 
   bool Save(const std::wstring& path, std::wstring& error);
+
+  // Highlights and notes, stored as standard PDF annotations so other readers show them too.
+  bool AddHighlight(int page, const std::vector<FS_RECTF>& rects);
+  // Adds a note whose icon's top-left corner is at (x, y). Returns its index, or -1.
+  int AddNote(int page, float x, float y, const std::wstring& text);
+  bool SetNoteText(int page, int index, const std::wstring& text);
+  std::wstring NoteText(int page, int index);
+  AnnotHit AnnotAt(int page, double x, double y);
+  bool RemoveAnnot(int page, int index);
 
   int CurrentPageForForm() const;
   DocumentHost* HostPtr() const { return host_; }

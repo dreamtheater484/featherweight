@@ -52,6 +52,11 @@ enum Cmd : int {
   CmdExit,
   CmdNewTab,
   CmdSearchCase,
+  CmdSaveMenu,
+  CmdHighlight,
+  CmdAddNote,
+  CmdOpenNote,
+  CmdRemoveAnnot,
   CmdZoomPreset = 400,  // + index into fw::ZoomPresets()
   CmdRecent = 500,      // + index into Settings::recent
   CmdBannerAction = 600,

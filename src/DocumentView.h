@@ -26,6 +26,13 @@ constexpr UINT kModAlt = 4;
 
 class DocumentView;
 
+// A note to open or create: index -1 means a new note at (x, y) in page coordinates.
+struct NoteTarget {
+  int page = -1;
+  int index = -1;
+  float x = 0, y = 0;
+};
+
 class ViewHost {
  public:
   virtual ~ViewHost() = default;
@@ -39,6 +46,7 @@ class ViewHost {
   virtual bool ViewCoverAlone() = 0;
   virtual bool ViewHighlightFields() = 0;
   virtual void ViewPasswordAccepted(DocumentView* view) = 0;
+  virtual void ViewOpenNote(DocumentView* view, const NoteTarget& note) = 0;
 };
 
 class DocumentView : public DocumentHost {
@@ -106,6 +114,19 @@ class DocumentView : public DocumentHost {
   void SelectAll();
   void SelectAllOnPage();
 
+  // ---- Highlights and notes ----
+  bool HighlightSelection();
+  // Annotation under a window point, with its page.
+  AnnotHit AnnotAtPoint(int x, int y, int& page);
+  void RemoveAnnot(int page, int index);
+  // A new note at a window point (false if the point is not on a page).
+  bool NewNoteAt(int x, int y, NoteTarget& note);
+  std::wstring NoteText(const NoteTarget& note);
+  // Saves the note's text (creating it if new). Empty text removes the note.
+  void SaveNote(const NoteTarget& note, const std::wstring& text);
+  // Window position of a note's icon (or of the spot where a new note goes).
+  D2D1_POINT_2F NoteScreenPos(const NoteTarget& note);
+
   // ---- Search ----
   void StartSearch(const std::wstring& query, bool matchCase);
   void ClearSearch();
@@ -138,7 +159,7 @@ class DocumentView : public DocumentHost {
 
  private:
   enum class LoadState { Empty, NeedPassword, Ready };
-  enum class Drag { None, Select, Pan, Form, Link, ThumbV, ThumbH };
+  enum class Drag { None, Select, Pan, Form, Link, Note, ThumbV, ThumbH };
   struct Anchor {
     int page = 0;
     double fx = 0, fy = 0;  // position inside the page box, as a fraction
@@ -183,6 +204,9 @@ class DocumentView : public DocumentHost {
   bool FocusFieldOnNextPage(int fromPage, bool backwards);
   void ScrollToMatch(int index);
   void SubmitPassword();
+  void AnnotationsChanged(int page);
+  void DrawSelectionBar(gfx::Canvas& c);
+  bool SelectionBarRect(D2D1_RECT_F& rect);
   float ui_ = 1.0f;
   double dpi_ = 96;
 
@@ -225,6 +249,12 @@ class DocumentView : public DocumentHost {
   int formPage_ = -1;
   int formCursor_ = 0;
   LinkTarget pendingLink_;
+  NoteTarget pendingNote_;
+  // Small "Highlight / Copy" bar shown next to selected text.
+  bool selBar_ = false;
+  bool barPressed_ = false;
+  Button selHighlight_, selCopy_;
+  ButtonSet selButtons_;
   TextSelection selection_;
   std::map<int, std::vector<FS_RECTF>> selRects_;
   int selRectsVersion_ = -1;
