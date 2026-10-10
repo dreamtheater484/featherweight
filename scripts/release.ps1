@@ -113,8 +113,9 @@ Write-Host "Released $tag" -ForegroundColor Green
 if ($Winget) {
   Step "Submitting $version to winget"
   # Opens a pull request on microsoft/winget-pkgs from your GitHub account; Microsoft reviews it automatically.
-  $token = gh auth token
+  $env:WINGET_CREATE_GITHUB_TOKEN = gh auth token  # read by wingetcreate; never printed
   $url = "https://github.com/dreamtheater484/featherweight/releases/download/$tag/$setupName"
-  wingetcreate update dreamtheater484.Featherweight --version $version --urls $url --submit --token $token
+  wingetcreate update dreamtheater484.Featherweight --version $version --urls $url --submit
+  Remove-Item Env:WINGET_CREATE_GITHUB_TOKEN
   if ($LASTEXITCODE -ne 0) { throw "winget submission failed" }
 }
