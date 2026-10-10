@@ -1,0 +1,10 @@
+# Build output
+/build*/
+/out/
+/dist/
+/.vs/
+*.user
+CMakeUserPresets.json
+
+# Downloaded PDFium binaries (fetched by CMake)
+/third_party/pdfium/

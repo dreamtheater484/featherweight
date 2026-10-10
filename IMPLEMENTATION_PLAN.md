@@ -31,6 +31,7 @@ Featherweight is a small, fast, free PDF reader for Windows. It reads, fills in 
 - Text fields (single and multi-line), checkboxes, radio buttons, dropdowns, list boxes
 - Tab / Shift+Tab between fields
 - Fillable fields are subtly highlighted
+- Form JavaScript: automatic formatting (dates, numbers) and calculated fields, plus basic support for XFA forms
 - Save (Ctrl+S), Save As (Ctrl+Shift+S), unsaved-changes prompt when closing
 
 **Printing**
@@ -49,6 +50,10 @@ Featherweight is a small, fast, free PDF reader for Windows. It reads, fills in 
 - Inverted-colors reading mode for pages
 - Full-screen mode (F11) and presentation mode (F5)
 
+**Installing**
+- **Installer:** a one-click install per user, with no admin rights or UAC prompt. It adds a Start menu entry, registers Featherweight for PDFs, and appears in Windows' Installed apps for uninstalling.
+- **Portable zip:** unzip and run from anywhere, including a USB stick. Settings live next to the exe.
+
 **Housekeeping**
 - Remembers the window, and each file's page, zoom, view mode and rotation
 - Keyboard shortcuts for everything
@@ -58,9 +63,9 @@ Featherweight is a small, fast, free PDF reader for Windows. It reads, fills in 
 
 - Digital signatures, editing page content, annotations
 - Bookmark/outline sidebar, page thumbnails
-- Installer: Featherweight is a portable app (unzip and run)
 - Telemetry, accounts, cloud, background services
-- XFA forms, unless the form-JavaScript build is chosen (see §11)
+- Full XFA support (XFA forms get PDFium's basic support only, see §11)
+- Platforms other than Windows (for now)
 
 ---
 
@@ -102,13 +107,15 @@ The bar is **zero friction**. Every interaction should need the fewest possible 
 | UI | Win32 window, with all drawing done in **Direct2D + DirectWrite** | Anti-aliased, sharp at any DPI, smooth scaling. Built into Windows, so it adds no size. |
 | Title bar | Custom: tabs live in the title bar (like Windows Terminal and Notepad), with Windows 11 Snap Layouts kept | More room for the document, modern look |
 | Icons | **Segoe Fluent Icons** font glyphs (Win 11), falling back to **Segoe MDL2 Assets** (Win 10) | Zero bytes of icon assets, sharp at any size, recolored per theme |
-| PDF engine | **PDFium** (Chrome's PDF engine), prebuilt by [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries), currently `chromium/8086` | Very good form-filling support, BSD-style license |
+| PDF engine | **PDFium** (Chrome's PDF engine) with V8 (form JavaScript) and XFA, prebuilt by [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries), currently `chromium/8086` | Very good form-filling support, BSD-style license |
 | PDFium version | Pinned and verified against a SHA-256 hash at build time | Reproducible builds, and engine updates are always deliberate |
 | C runtime | Static (`/MT`) | No Visual C++ Redistributable needed |
-| Build | CMake + MSVC | Local: VS 2019 Build Tools 16.11. CI: GitHub Actions `windows-latest` |
+| Build | CMake + MSVC | Local: VS 2019 Build Tools 16.11. CI: GitHub Actions `windows-latest`, build and unit tests only. |
+| Releases | Built **locally** by `scripts/release.ps1`: builds, tests, packages the installer and zip, computes checksums, and publishes the GitHub Release with `gh` | Packaging doesn't depend on GitHub's build machines |
 | Platform | Windows 10 (1903+) and 11, x64 | x64 builds also run on ARM64 Windows through emulation |
-| Package | Portable zip: `Featherweight.exe` + `pdfium.dll` + licenses | |
-| Settings | `Featherweight.ini` next to the exe if that folder is writable, otherwise `%APPDATA%\Featherweight\` | Truly portable |
+| Packages | **Installer** (`Featherweight-X.Y.Z-Setup.exe`, built with Inno Setup) and **portable zip** (`Featherweight-X.Y.Z-Portable.zip`). Both contain `Featherweight.exe` + `pdfium.dll` + licenses. | Inno Setup is free, small and widely trusted. |
+| Install location | `%LOCALAPPDATA%\Programs\Featherweight` (per user) | No admin rights or UAC prompt needed, and the auto-updater can write there |
+| Settings | Installed: `%APPDATA%\Featherweight\Featherweight.ini`. Portable: `Featherweight.ini` next to the exe (falls back to `%APPDATA%` if that folder is read-only). | The app knows it's installed when its folder matches the install path the installer recorded in `HKCU\Software\Featherweight`. |
 | Updates | GitHub Releases API for `dreamtheater484/featherweight` | Public repo, so no token needed |
 
 ### Ground rule: all PDFium calls run on one thread
@@ -158,7 +165,9 @@ Featherweight/
 │  └─ resource.rc, Featherweight.manifest, Featherweight.ico
 ├─ tests/unit/, tests/pdfs/, tests/make_test_pdfs.py
 ├─ docs/TEST_CHECKLIST.md
-├─ .github/workflows/build.yml, release.yml
+├─ installer/Featherweight.iss  Inno Setup script
+├─ scripts/release.ps1        local build + package + publish
+├─ .github/workflows/build.yml  CI: build and unit tests on every push
 └─ LICENSE, THIRD_PARTY_NOTICES.md, README.md
 ```
 
@@ -304,7 +313,19 @@ When a form field has keyboard focus, keys go to the field first.
 - `[Recent]`: the last 10 files
 - `[State]`: per file (keyed by a hash of the full path) page, zoom, view mode, rotation. Capped at 200 entries, oldest dropped first.
 
+### Installer
+
+The installer is designed to be one click:
+
+1. It opens straight to an **Install** button. There are no license, folder or Start menu pages, and no admin prompt.
+2. It installs the files, adds the Start menu entry, and registers Featherweight as a PDF app by running `Featherweight.exe --register`.
+3. It finishes with Featherweight already open.
+4. Running a newer installer over an existing install upgrades it in place, and settings are kept.
+5. Uninstalling (from Windows Settings → Installed apps) runs `Featherweight.exe --unregister` and removes the files. Settings are kept unless you choose to delete them.
+
 ### Registering as the default PDF app
+
+The installer, and the ⋯ menu in the portable version, use the same registration code:
 
 1. Writes only under `HKCU` (`Software\Classes\Featherweight.PDF`, `.pdf\OpenWithProgids`, `RegisteredApplications` + `Capabilities`), so no admin rights are needed.
 2. Opens Windows' Default apps page for Featherweight, where you confirm with one click. Windows doesn't allow apps to make themselves the default silently.
@@ -317,13 +338,13 @@ When a form field has keyboard focus, keys go to the field first.
 No service, no scheduled task, no separate updater exe, and no prompts.
 
 1. **Check:** on startup, at most once every 24 hours, a worker thread asks the GitHub API for the latest release (WinHTTP + a minimal JSON reader).
-2. **Download:** if a newer version exists, the changed files are downloaded quietly (`Featherweight.exe` and/or `pdfium.dll`, which are separate release assets). Each one is checked against `SHA256SUMS.txt`.
+2. **Download:** if a newer version exists, the changed files are downloaded quietly (`Featherweight.exe` and/or `pdfium.dll`, which are separate release assets). Each one is checked against `SHA256SUMS.txt`. Installed and portable copies update the same way.
 3. **Swap:** the running files are renamed to `*.old` (Windows allows that), and the new files are moved into place. If anything fails, everything is rolled back and the app tries again next day.
-4. **Next start:** the new version runs, deletes the `*.old` files, and shows a small banner, *"Updated to 1.1.0"*, that fades after a few seconds.
+4. **Next start:** the new version runs, deletes the `*.old` files, updates the version shown in Windows' Installed apps (installed copies only), and shows a small banner, *"Updated to 1.1.0"*, that fades after a few seconds.
 5. **Opting out:** "Update automatically" in the ⋯ menu turns this off. The app then shows a one-line banner when an update exists, with an **Update** button.
 6. **Read-only folder** (for example Program Files): the banner offers a link to the download page instead.
 
-**Security note:** the exe isn't code-signed, so Windows SmartScreen warns once when the zip is first downloaded in a browser. Updates fetched by the app itself don't trigger this. The checksums catch damaged downloads but not a compromised GitHub account, so keep two-factor authentication on that account.
+**Security note:** the exe and installer aren't code-signed, so Windows SmartScreen warns once when they're first downloaded in a browser. Updates fetched by the app itself don't trigger this. The checksums catch damaged downloads but not a compromised GitHub account, so keep two-factor authentication on that account.
 
 ---
 
@@ -333,7 +354,7 @@ Everything ships together as 1.0. Each phase ends with something that runs.
 
 | Phase | Work | Done when |
 |---|---|---|
-| **0. Foundation** | CMake, PDFium download and verification, static CRT, manifest (per-monitor DPI v2, UTF-8, Common Controls 6), license files, CI build, unit test harness | An empty window builds locally and in CI. ✅ PDFium sizes measured (see §11). |
+| **0. Foundation** | CMake, PDFium download and verification, static CRT, manifest (per-monitor DPI v2, UTF-8, Common Controls 6), license files, CI build, unit test harness | An empty window builds locally and in CI. ✅ PDFium sizes measured and the JavaScript build chosen (see §11). |
 | **1. Shell and design system** | Direct2D/DirectWrite setup, theme palettes, accent color, custom title bar with tabs and Snap Layouts, toolbar, tooltips, empty state, animation helper | The empty app looks finished in light and dark at 100–200 % scaling. |
 | **2. Core viewer** | Loading (including inline password), layout engine, zoom modes (including Automatic), rotation, smooth scrolling, overlay scrollbars, tiled progressive rendering, cache, page shadows | Large and odd PDFs scroll and zoom smoothly. |
 | **3. Documents and tabs** | Single instance, command line, drag-and-drop with overlay, recent files, per-file state, all shortcuts, page box, zoom box, links | Several documents open in tabs and reopen where you left off. |
@@ -341,7 +362,7 @@ Everything ships together as 1.0. Each phase ends with something that runs.
 | **5. Text** | Selection and copy, search bar, time-sliced search, highlights | Searching 500+ pages stays smooth. Accented and CJK text copies correctly. |
 | **6. Printing** | Print dialog, ranges, copies, fit / actual size, per-page orientation, permissions | Filled forms print correctly on a real printer and on "Microsoft Print to PDF". |
 | **7. Reading modes** | Inverted mode, full screen, presentation | Works on multiple monitors with different scaling. |
-| **8. Updates and release** | Updater, release workflow, default-app registration and first-run offer | A test release (`v0.9.0` → `v0.9.1`) updates itself end to end. |
+| **8. Install, updates and release** | Inno Setup installer, portable zip, updater, local release script, default-app registration and first-run offer | The installer installs and uninstalls cleanly without admin rights. A test release (`v0.9.0` → `v0.9.1`) updates both an installed and a portable copy end to end. |
 | **9. Polish and 1.0** | Full checklist, a friction review of every flow, damaged files, performance budgets, README, `v1.0.0` | Everything in §9 passes. |
 
 ---
@@ -376,7 +397,7 @@ Everything ships together as 1.0. Each phase ends with something that runs.
 | Launch with a typical 10 MB PDF to first page shown | < 500 ms |
 | Memory with one typical document | < 100 MB |
 | `Featherweight.exe` size | < 1.5 MB |
-| Download zip | ≈ 4.5 MB without form JavaScript, ≈ 13.5 MB with it |
+| Download size (installer or zip) | ≈ 13.5 MB, almost all of it PDFium with form JavaScript |
 | Typing in a form field | No visible delay |
 
 ---
@@ -389,7 +410,8 @@ Everything ships together as 1.0. Each phase ends with something that runs.
 | Dark popup menus rely on undocumented APIs | Falls back to light menus if unavailable |
 | Saving over a file another program has open | Temporary file first, and Save As if the swap fails. Your changes are never lost. |
 | PDFium API changes | Version pinned. Updates are deliberate and re-tested against the corpus. |
-| Unsigned exe triggers SmartScreen and antivirus warnings | Documented in the README. Code signing is possible later. |
+| Unsigned exe and installer trigger SmartScreen and antivirus warnings | Documented in the README. Code signing is possible later. |
+| Form JavaScript adds attack surface | Scripts run inside PDFium's own JavaScript engine (as in Chrome). They can't open files or programs, and links they request go through the same http/https/mailto filter. |
 | Local VS 2019 vs CI VS 2022 | Both build through CMake. Code stays within the C++20 subset VS 2019 16.11 supports. |
 
 ---
@@ -398,8 +420,9 @@ Everything ships together as 1.0. Each phase ends with something that runs.
 
 | # | Decision | Outcome |
 |---|---|---|
-| 1 | Form JavaScript (V8) | **Open.** Measured with PDFium `chromium/8086`: without JavaScript, `pdfium.dll` is 7.5 MB (3.9 MB zipped). With JavaScript it's 32 MB (12.8 MB zipped), and it also includes basic **XFA** form support. The build option `FW_WITH_V8` (default OFF) supports both. |
+| 1 | Form JavaScript (V8) | **Included.** Measured with PDFium `chromium/8086`: `pdfium.dll` is 32 MB (12.8 MB zipped) with JavaScript, against 7.5 MB without. It also brings basic **XFA** form support. The build option `FW_WITH_V8` (default ON) can still produce a build without it. |
 | 2 | Clicking links in PDFs | **Yes**, included (only http, https and mailto open externally) |
 | 3 | PDFs that forbid printing | **Respected**, with a clear message |
 | 4 | License | **MIT** |
 | 5 | UI guideline | **Polished, beautiful, intuitive, zero friction.** See §2. |
+| 6 | Distribution | **Installer and portable zip**, Windows only for now |

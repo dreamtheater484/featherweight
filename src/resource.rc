@@ -1,0 +1,46 @@
+#include <winres.h>
+#include "resource.h"
+#include "Version.h"
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+IDI_APP ICON "Featherweight.ico"
+
+IDD_PRINT_OPTIONS DIALOGEX 0, 0, 230, 90
+STYLE DS_SETFONT | DS_SHELLFONT | WS_CHILD | WS_CAPTION
+CAPTION "Page sizing"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+  LTEXT "How should pages fit on the paper?", -1, 10, 10, 210, 10
+  AUTORADIOBUTTON "&Fit to page (recommended)", IDC_PRINT_FIT, 14, 28, 200, 12, WS_GROUP | WS_TABSTOP
+  AUTORADIOBUTTON "&Actual size", IDC_PRINT_ACTUAL, 14, 44, 200, 12
+END
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH, 0
+ PRODUCTVERSION FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH, 0
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName", "Featherweight"
+      VALUE "FileDescription", "Featherweight PDF reader"
+      VALUE "FileVersion", FW_VERSION_STRING
+      VALUE "InternalName", "Featherweight"
+      VALUE "LegalCopyright", "Copyright (c) 2026 Roy Clerx. MIT License."
+      VALUE "OriginalFilename", "Featherweight.exe"
+      VALUE "ProductName", "Featherweight"
+      VALUE "ProductVersion", FW_VERSION_STRING
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
