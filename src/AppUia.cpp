@@ -1,6 +1,6 @@
 // What the window shows UI Automation: the title bar, the toolbar, the document area with the
-// tab's own elements, and the floating find panel, message and note card. Elements act through
-// the same code as clicks do.
+// tab's own elements, the floating find panel, message and note card, and the side panel, status
+// bar and command search. Elements act through the same code as clicks do.
 
 #include "App.h"
 
@@ -71,6 +71,8 @@ void App::DescribeUia(uia::Tree& t) {
     t[k].focus = [this, inTab, f = std::move(t[k].focus)] {
       FocusBox(nullptr);
       if (inTab) toolbar_.Blur();
+      panel_.Blur();
+      status_.Blur();
       f();
       KeyFocusMoved();
     };
@@ -82,6 +84,7 @@ void App::DescribeUia(uia::Tree& t) {
     if (id > 0) Execute(CmdBannerAction + id);
   });
   notes_.Describe(t, 0, [this](NoteEditor::Action a) { FinishNote(a); });
+  DescribeShell(t);
 
   if (v) {
     uia::Node& pane = t[doc];
@@ -90,6 +93,8 @@ void App::DescribeUia(uia::Tree& t) {
     pane.focus = [this, own = std::move(pane.focus)] {
       FocusBox(nullptr);
       toolbar_.Blur();
+      panel_.Blur();
+      status_.Blur();
       SetFocus(hwnd_);
       if (own) own();
       KeyFocusMoved();

@@ -7,10 +7,13 @@
 
 #include "TabContent.h"
 #include "ui/Controls.h"
+#include "ui/SidePanel.h"
+#include "ui/StatusBar.h"
 
 // A tab with every control in it, for trying them by mouse and keyboard and for the visual and
-// UI Automation checks (`--widget-gallery`). Its toolbar holds one of each kind too. Nothing in
-// it reads or writes files.
+// UI Automation checks (`--widget-gallery`). Its toolbar holds one of each kind too, and opens
+// two side panels: Format, made of controls, and Comments, which the gallery draws itself. It has
+// a status bar like an editor's. Nothing in it reads or writes files.
 class WidgetGallery : public TabContent {
  public:
   explicit WidgetGallery(ViewHost& host);
@@ -43,11 +46,14 @@ class WidgetGallery : public TabContent {
   bool HasKeyFocus() const override { return group_.Focused() != nullptr; }
   void SetKeyFocus(bool has) override;
 
-  int ShortcutFor(UINT, UINT) const override { return 0; }
+  int ShortcutFor(UINT vk, UINT mods) const override;
   CommandState QueryCommand(int cmd) override;
+  std::vector<int> Commands() override;
   bool Execute(int cmd) override;
   void BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) override;
   void FillContextMenu(HMENU, int, int) override {}
+  bool HasStatusBar() const override { return true; }
+  void BuildStatusBar(StatusBarModel& m) override;
 
   void StartSearch(const std::wstring&, bool) override {}
   void ClearSearch() override {}
@@ -68,6 +74,56 @@ class WidgetGallery : public TabContent {
   void DescribeUia(uia::Tree& t, int parent) override;
 
  private:
+  // Font and paragraph settings, as controls with labels.
+  class FormatPanel : public PanelContent {
+   public:
+    explicit FormatPanel(WidgetGallery& gallery);
+    std::wstring Title() const override { return L"Format"; }
+    std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
+    void Draw(gfx::Canvas& c) override;
+
+   private:
+    WidgetGallery& g_;
+    float ui_ = 1;
+    std::vector<std::pair<std::wstring, D2D1_RECT_F>> headings_;
+    std::vector<std::pair<std::wstring, Control*>> rows_;  // label, control; nullptr starts a heading
+    Dropdown style_, align_;
+    ComboBox font_, size_;
+    ColorPicker color_;
+    SpinBox before_, after_, spacing_;
+  };
+
+  // A list of comments the gallery draws and handles itself: click or arrows select one.
+  class CommentsPanel : public PanelContent {
+   public:
+    explicit CommentsPanel(WidgetGallery& gallery);
+    std::wstring Title() const override { return L"Comments"; }
+    std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
+    void Draw(gfx::Canvas& c) override;
+    bool TakesFocus() const override { return true; }
+    void SetFocus(bool has, bool byKeyboard) override;
+    bool OnMouseDown(float x, float y, bool dbl) override;
+    bool OnMouseMove(float x, float y) override;
+    void OnMouseLeave() override;
+    bool OnKeyDown(UINT vk, bool ctrl, bool shift) override;
+    void Describe(uia::Tree& t, int parent, const std::function<void()>& takeFocus) override;
+
+   private:
+    struct Comment {
+      std::wstring author, when, text;
+      D2D1_RECT_F rc{};
+    };
+    void Select(int i);
+    int At(float x, float y) const;
+
+    WidgetGallery& g_;
+    float ui_ = 1;
+    D2D1_RECT_F body_{};
+    std::vector<Comment> comments_;
+    int selected_ = 0, hover_ = -1;
+    bool focused_ = false, focusVisible_ = false;
+  };
+
   struct Card {
     std::wstring title, hint;
     D2D1_RECT_F rc{};
@@ -79,6 +135,8 @@ class WidgetGallery : public TabContent {
 
   ViewHost& host_;
   std::wstring path_;
+  FormatPanel format_{*this};
+  CommentsPanel comments_{*this};
   RECT vp_{};
   float ui_ = 1;
   D2D1_RECT_F status_{};
@@ -102,4 +160,5 @@ class WidgetGallery : public TabContent {
   bool tbNoHighlight_ = false;
   double tbAfter_ = 8;
   int tbBullet_ = 0;
+  double zoom_ = 1;  // what the status bar's zoom shows
 };

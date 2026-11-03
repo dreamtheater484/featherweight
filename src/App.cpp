@@ -139,6 +139,7 @@ bool App::CreateMainWindow(const AppOptions& opts) {
   uia_.Attach(hwnd_, [this](uia::Tree& t) { DescribeUia(t); });
   toolbar_.SetWindow(hwnd_);
   toolbar_.onCommand = [this](int cmd) { Execute(cmd); };
+  InitShell();
 
   // Search box: results update as you type.
   TextBox& sb = search_.Box();
@@ -250,13 +251,17 @@ RECT App::DocRect() const {
   RECT rc;
   GetClientRect(hwnd_, &rc);
   int top = TitleHeight() + (fullscreen_ || presentation_ ? 0 : ToolbarHeight());
-  return RECT{0, top, rc.right, rc.bottom};
+  // An editor's status bar and the side panel take the bottom and the right.
+  const int bottom = rc.bottom - (StatusBarShown() ? StatusBarHeight() : 0);
+  const int right = rc.right - (presentation_ ? 0 : panel_.Width(ui_));
+  return RECT{0, top, right, bottom};
 }
 
 ToolbarModel App::CurrentToolbar() {
   ToolbarModel m;
   TabContent* v = Active();
   if (v && v->Ready()) v->BuildToolbar(m, ToolbarContext{settings_.invert, search_.IsOpen(), fullscreen_});
+  NameToolbarItems(m);
   return m;
 }
 
@@ -270,6 +275,7 @@ void App::Layout() {
   int toolTop = titleH;
   if (fullscreen_) toolTop = static_cast<int>(std::lround((toolbarReveal_.V() - 1.0f) * toolH));
   toolbar_.Layout(RECT{0, toolTop, rc.right, toolTop + toolH}, ui_, CurrentToolbar());
+  LayoutShell();
   RECT doc = DocRect();
   search_.Layout(doc, ui_);
   banner_.Layout(doc, ui_);
@@ -311,6 +317,7 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
   }
   banner_.Draw(canvas_);
   notes_.Draw(canvas_);
+  DrawShell();
   if (snapshot_) DrawChildControlsForSnapshot(dc);
 
   // Drag-and-drop overlay.
@@ -345,6 +352,7 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
       title_.Draw(canvas_, tabs, active_, windowActive_, IsZoomed(hwnd_) != FALSE);
     }
     toolbar_.DrawPopup(canvas_);  // an open list of a toolbar control, above everything
+    commands_.Draw(canvas_, focusBox_ == &commands_.Box() && caret::On(caretStart_));
   }
   canvas_.End();
 }
@@ -582,7 +590,8 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       ScreenToClient(hwnd_, &pt);
       UINT keys = GET_KEYSTATE_WPARAM(wp);
       UINT mods = (keys & MK_CONTROL ? kModCtrl : 0) | (keys & MK_SHIFT ? kModShift : 0);
-      if (msg == WM_MOUSEWHEEL && toolbar_.OnWheel(GET_WHEEL_DELTA_WPARAM(wp), pt.x, pt.y)) {
+      if (msg == WM_MOUSEWHEEL && (toolbar_.OnWheel(GET_WHEEL_DELTA_WPARAM(wp), pt.x, pt.y) ||
+                                   ShellWheel(GET_WHEEL_DELTA_WPARAM(wp), pt.x, pt.y))) {
         InvalidateRect(hwnd_, nullptr, FALSE);
         return 0;
       }
@@ -605,7 +614,12 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
         }
         // Alt+Down and Alt+Up open and close the list of a focused dropdown (not in PDF forms).
         TabContent* v = Active();
-        if ((wp == VK_DOWN || wp == VK_UP) && (toolbar_.HasKeyFocus() || (v && !v->AsPdf() && v->HasKeyFocus()))) {
+        if ((wp == VK_DOWN || wp == VK_UP) &&
+            (toolbar_.HasKeyFocus() || panel_.HasKeyFocus() || (v && !v->AsPdf() && v->HasKeyFocus()))) {
+          OnKeyDown(static_cast<UINT>(wp));
+          return 0;
+        }
+        if (wp == 'Q') {  // Alt+Q: command search
           OnKeyDown(static_cast<UINT>(wp));
           return 0;
         }
@@ -616,6 +630,9 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CHAR:
       OnChar(static_cast<wchar_t>(wp));
       return 0;
+    case WM_SYSCHAR:
+      if (wp == L'q' || wp == L'Q') return 0;  // Alt+Q ran a command: no menu, no beep
+      break;
     case WM_TIMER:
       switch (wp) {
         case kTimerTooltip: {
@@ -688,6 +705,7 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       if (!snapshot_) settings_.Save();
       HideTooltip();
       tooltip_.Destroy();
+      panel_.Show(nullptr, false);
       tabs_.clear();
       DestroyWindow(hwnd_);
       return 0;
@@ -718,6 +736,7 @@ App::Region App::RegionAt(int x, int y) const {
   RECT rc;
   GetClientRect(hwnd_, &rc);
   if (x < 0 || y < 0 || x >= rc.right || y >= rc.bottom) return Region::None;
+  if (commands_.Hit(x, y)) return Region::Commands;
   if (!presentation_ && toolbar_.HitPopup(x, y)) return Region::Toolbar;
   const int titleH = TitleHeight();
   if (y < titleH) return Region::Title;
@@ -729,6 +748,7 @@ App::Region App::RegionAt(int x, int y) const {
       return Region::Toolbar;
     }
   }
+  if (Region shell = ShellRegionAt(x, y); shell != Region::None) return shell;
   if (notes_.Hit(x, y)) return Region::Note;
   if (search_.Hit(x, y)) return Region::Search;
   if (banner_.Hit(x, y)) return Region::Banner;
@@ -752,8 +772,10 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
   if (r == Region::Doc && Active() && Active()->PasswordBox() &&
       Contains(Active()->PasswordBox()->rc, (float)x, (float)y))
     clickedBox = Active()->PasswordBox();
+  if (r == Region::Commands) clickedBox = &commands_.Box();  // its results keep the box's keyboard
   if (focusBox_ != clickedBox) FocusBox(clickedBox);
   if (r != Region::Toolbar || clickedBox) toolbar_.Blur();
+  ShellMouseDown(r, x, y, button, dbl, shift);
 
   switch (r) {
     case Region::Title: {
@@ -820,7 +842,7 @@ void App::OnMouseMove(int x, int y) {
       case Region::Title: title_.OnMouseMove(x, y); break;
       case Region::Banner: banner_.OnMouseMove(x, y); break;
       case Region::Note: notes_.OnMouseMove(x, y); break;
-      default: break;
+      default: ShellMouseMove(capture_, x, y); break;
     }
     InvalidateRect(hwnd_, nullptr, FALSE);
     return;
@@ -838,7 +860,7 @@ void App::OnMouseMove(int x, int y) {
         if (TabContent* v = Active()) v->OnMouseLeave();
         else empty_.OnMouseLeave();
         break;
-      default: break;
+      default: ShellMouseLeave(hover_); break;
     }
     hover_ = r;
     InvalidateRect(hwnd_, nullptr, FALSE);
@@ -854,7 +876,7 @@ void App::OnMouseMove(int x, int y) {
       if (TabContent* v = Active()) v->OnMouseMove(x, y, Mods());
       else changed = empty_.OnMouseMove(x, y);
       break;
-    default: break;
+    default: changed = ShellMouseMove(r, x, y); break;
   }
   if (changed) InvalidateRect(hwnd_, nullptr, FALSE);
   UpdateTooltip(x, y);
@@ -914,7 +936,7 @@ void App::OnMouseUp(int x, int y, int button) {
         }
       }
       break;
-    default: break;
+    default: ShellMouseUp(r, x, y, button); break;
   }
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -926,6 +948,8 @@ void App::OnMouseLeave() {
   search_.OnMouseLeave();
   banner_.OnMouseLeave();
   empty_.OnMouseLeave();
+  panel_.OnMouseLeave();
+  status_.OnMouseLeave();
   if (TabContent* v = Active()) v->OnMouseLeave();
   hover_ = Region::None;
   InvalidateRect(hwnd_, nullptr, FALSE);
@@ -954,7 +978,9 @@ bool App::OnSetCursor() {
       if (TabContent* v = Active()) c = v->CursorAt(pt.x, pt.y);
       else if (empty_.OverClickable(pt.x, pt.y)) c = hand;
       break;
-    default: break;
+    default:
+      if (HCURSOR shell = ShellCursor(r, pt.x, pt.y)) c = shell;
+      break;
   }
   SetCursor(c);
   return true;
@@ -976,7 +1002,7 @@ void App::UpdateTooltip(int x, int y) {
       if (TabContent* v = Active()) text = v->TooltipAt(x, y);
       else text = empty_.TooltipAt(x, y, settings_.recent);
       break;
-    default: break;
+    default: text = ShellTooltip(RegionAt(x, y), x, y); break;
   }
   if (text == tipText_) return;
   bool wasVisible = tooltip_.Visible();
@@ -993,8 +1019,13 @@ void App::HideTooltip() {
 }
 
 void App::FocusBox(TextBox* box) {
-  if (box) toolbar_.Blur();
+  if (box) {
+    toolbar_.Blur();
+    panel_.Blur();
+    status_.Blur();
+  }
   if (focusBox_ == box) return;
+  if (focusBox_ == &commands_.Box()) commands_.Close();  // command search closes when its box lets go
   if (focusBox_) {
     focusBox_->Focus(false);
     if (focusBox_ == &toolbar_.PageBox()) Layout();  // restores the current page number
@@ -1019,7 +1050,8 @@ void App::FocusBox(TextBox* box) {
 
 void App::KeyFocusMoved() {
   if (TabContent* v = Active())
-    v->SetKeyFocus(!toolbar_.HasKeyFocus() && (!focusBox_ || focusBox_ == v->PasswordBox()));
+    v->SetKeyFocus(!toolbar_.HasKeyFocus() && !panel_.HasKeyFocus() && !status_.HasKeyFocus() &&
+                   (!focusBox_ || focusBox_ == v->PasswordBox()));
 }
 
 void App::OnKeyDown(UINT vk) {
@@ -1035,6 +1067,9 @@ void App::OnKeyDown(UINT vk) {
     if (int cmd = AppShortcut(vk, mods)) return cmd;
     return v ? v->ShortcutFor(vk, mods) : PdfView::Shortcut(vk, mods);
   };
+
+  // F6, and keys for the side panel or the status bar when they have the keyboard.
+  if (ShellKeyDown(vk, mods)) return;
 
   // A combo box, dropdown or other control on the toolbar has the keyboard.
   if (toolbar_.HasKeyFocus()) {
@@ -1099,6 +1134,10 @@ void App::OnKeyDown(UINT vk) {
       CloseSearch();
       return;
     }
+    if (panel_.IsOpen()) {
+      ClosePanel();
+      return;
+    }
     if (v && v->OnKeyDown(vk, mods)) {
       InvalidateRect(hwnd_, nullptr, FALSE);
       return;
@@ -1109,6 +1148,7 @@ void App::OnKeyDown(UINT vk) {
     return;
   }
   if (v && v->OnKeyDown(vk, mods)) InvalidateRect(hwnd_, nullptr, FALSE);
+  else TabIntoPanel(vk, mods);
 }
 
 void App::OnChar(wchar_t ch) {
@@ -1117,6 +1157,7 @@ void App::OnChar(wchar_t ch) {
     InvalidateRect(hwnd_, nullptr, FALSE);
     return;
   }
+  if (ShellChar(ch)) return;
   if (focusBox_) {
     if (focusBox_->OnChar(ch)) InvalidateRect(hwnd_, nullptr, FALSE);
     return;
@@ -1131,6 +1172,7 @@ void App::OnChar(wchar_t ch) {
 
 int App::AppShortcut(UINT vk, UINT mods) {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0;
+  if ((mods & kModAlt) && !ctrl && vk == 'Q') return CmdCommandSearch;
   if (ctrl) {
     switch (vk) {
       case 'O': return CmdOpen;
@@ -1196,6 +1238,7 @@ void App::Execute(int cmd) {
       if (tabs_.size() > 1) ActivateTab((active_ + static_cast<int>(tabs_.size()) - 1) % static_cast<int>(tabs_.size()));
       break;
     case CmdFind: OpenSearch(); break;
+    case CmdCommandSearch: OpenCommandSearch(); break;
     case CmdFindNext:
     case CmdFindPrev:
       if (!search_.IsOpen() || search_.Box().Text().empty()) OpenSearch();
@@ -1475,6 +1518,7 @@ void App::ActivateTab(int index) {
   if (index < 0 || index >= static_cast<int>(tabs_.size())) return;
   if (index != active_ && search_.IsOpen()) CloseSearch();
   if (index != active_ && notes_.IsOpen()) FinishNote(NoteEditor::kSave);
+  if (index != active_) panel_.Show(nullptr, false);  // its content belongs to the tab
   if (index != active_ && Active()) Active()->OnDeactivated();
   active_ = index;
   TabContent* v = Active();
@@ -1523,6 +1567,7 @@ bool App::CloseTab(int index) {
   if (!snapshot_) settings_.Save();
   if (focusBox_ && focusBox_ == v->PasswordBox()) FocusBox(nullptr);
   if (index == active_ && search_.IsOpen()) CloseSearch();
+  if (index == active_) panel_.Show(nullptr, false);
   tabs_.erase(tabs_.begin() + index);
   if (tabs_.empty()) {
     active_ = -1;
@@ -2160,6 +2205,7 @@ int App::RunSnapshot(const AppOptions& opts) {
       FAILED(frame->WriteSource(image.Get(), nullptr)) || FAILED(frame->Commit()) || FAILED(encoder->Commit())) {
     return 5;
   }
+  panel_.Show(nullptr, false);
   tabs_.clear();
   dc_.Reset();
   gpuTarget_.Reset();

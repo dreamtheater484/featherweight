@@ -73,6 +73,7 @@ class PdfView : public PagedView, public DocumentHost {
 
   int ShortcutFor(UINT vk, UINT mods) const override { return Shortcut(vk, mods); }
   CommandState QueryCommand(int cmd) override;
+  std::vector<int> Commands() override;
   bool Execute(int cmd) override;
   void BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) override;
   void FillContextMenu(HMENU menu, int x, int y) override;

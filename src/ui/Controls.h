@@ -87,6 +87,7 @@ class ControlGroup {
   HWND hwnd = nullptr;   // repainting, the caret and dialogs (More colors…)
   float ui = 1;
   D2D1_RECT_F bounds{};  // open lists stay inside this rectangle
+  bool wrap = true;      // Tab past the last control comes back to the first; otherwise it leaves
 
   // Controls are in Tab order.
   void Add(Control* c);
@@ -115,7 +116,8 @@ class ControlGroup {
   void Focus(Control* c, bool byKeyboard);
   void Blur();
   bool FocusVisible() const { return focusVisible_; }
-  // Moves the keyboard to the next or previous control.
+  // Moves the keyboard to the next or previous control. False when there is none (or, without
+  // `wrap`, when the keyboard is on the last one).
   bool MoveFocus(bool forward);
   Control* Open() const;
   void CloseAll(Control* except = nullptr);

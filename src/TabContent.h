@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "Outcome.h"
 #include "Settings.h"
@@ -19,6 +20,8 @@ constexpr UINT kModAlt = 4;
 class TabContent;
 class PagedView;
 class PdfView;
+class PanelContent;
+struct StatusBarModel;
 struct ToolbarModel;
 namespace uia {
 class Tree;
@@ -36,6 +39,10 @@ class ViewHost {
   virtual void ViewFocusTextBox(TextBox* box) = 0;
   virtual bool ViewInverted() = 0;  // night reading
   virtual void ViewPasswordAccepted(TabContent* view) = 0;
+  // Opens a side panel with the tab's content in place of whatever was open (null closes it).
+  virtual void ViewShowPanel(PanelContent* content) = 0;
+  // The content of the open side panel, or null.
+  virtual PanelContent* ViewShownPanel() = 0;
 };
 
 // The window's own state, for the parts of a tab's toolbar that show it.
@@ -45,9 +52,16 @@ struct ToolbarContext {
   bool fullscreen = false;
 };
 
+// What a command looks like now: the toolbar, menus and command search show it this way.
 struct CommandState {
   bool enabled = false;
   bool checked = false;
+  bool visible = true;    // offered in this kind of tab at all
+  std::wstring label;     // "Rotate clockwise"; empty for commands that have no name of their own
+  std::wstring shortcut;  // "Ctrl+Shift+=", as the tab's keys have it
+
+  // "Rotate clockwise (Ctrl+Shift+=)", as tooltips show a command.
+  std::wstring Tooltip() const { return shortcut.empty() ? label : label + L" (" + shortcut + L")"; }
 };
 
 // The file type Save As offers.
@@ -108,6 +122,9 @@ class TabContent {
   // italic in a document, so each kind has its own keys; the window's own keys come first.
   virtual int ShortcutFor(UINT vk, UINT mods) const = 0;
   virtual CommandState QueryCommand(int cmd) = 0;
+  // The commands command search offers in this kind of tab, besides the window's own. Each has a
+  // label from QueryCommand.
+  virtual std::vector<int> Commands() { return {}; }
   // Runs one of the tab's commands. Returns false for commands it doesn't have.
   virtual bool Execute(int cmd) = 0;
   virtual void BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) = 0;
@@ -115,6 +132,11 @@ class TabContent {
   virtual void FillMenu(int /*which*/, HMENU /*menu*/) {}
   // Fills the right-click menu for a point in the viewport (client coordinates).
   virtual void FillContextMenu(HMENU menu, int x, int y) = 0;
+
+  // ---- Status bar (editors; PDFs have none) ----
+  virtual bool HasStatusBar() const { return false; }
+  // What the status bar shows: page and word counts, the language, the zoom.
+  virtual void BuildStatusBar(StatusBarModel& /*m*/) {}
 
   // ---- Find ----
   virtual void StartSearch(const std::wstring& query, bool matchCase) = 0;

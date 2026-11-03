@@ -1376,6 +1376,43 @@ void PdfView::DrawNoteIconsUninverted(Canvas& c, int first, int last) {
 // ---------------------------------------------------------------------------
 // Keys, commands, toolbar and menus
 
+namespace {
+
+// The reader's commands as command search and the toolbar name them, with the reader's keys.
+struct CommandName {
+  int cmd;
+  const wchar_t* label;
+  const wchar_t* keys;
+};
+
+constexpr CommandName kCommandNames[] = {
+    {CmdGoToPage, L"Go to page", L"Ctrl+G"},
+    {CmdNextPage, L"Next page", L"Page Down"},
+    {CmdPrevPage, L"Previous page", L"Page Up"},
+    {CmdFirstPage, L"First page", L"Home"},
+    {CmdLastPage, L"Last page", L"End"},
+    {CmdZoomIn, L"Zoom in", L"Ctrl+="},
+    {CmdZoomOut, L"Zoom out", L"Ctrl+−"},
+    {CmdZoomAuto, L"Zoom automatically", L"Ctrl+0"},
+    {CmdZoomActual, L"Actual size", L"Ctrl+1"},
+    {CmdZoomFitPage, L"Fit page", L"Ctrl+2"},
+    {CmdZoomFitWidth, L"Fit width", L"Ctrl+3"},
+    {CmdViewSingle, L"Single page", L"Ctrl+6"},
+    {CmdViewContinuous, L"Continuous pages", L"Ctrl+7"},
+    {CmdViewFacing, L"Two pages", L"Ctrl+8"},
+    {CmdToggleCover, L"Show cover page on its own", L""},
+    {CmdRotateRight, L"Rotate clockwise", L"Ctrl+Shift+="},
+    {CmdRotateLeft, L"Rotate counterclockwise", L"Ctrl+Shift+−"},
+    {CmdPresentation, L"Present", L"F5"},
+    {CmdToggleInvert, L"Night reading: dark pages", L"Ctrl+I"},
+    {CmdCopy, L"Copy", L"Ctrl+C"},
+    {CmdSelectAll, L"Select all", L"Ctrl+A"},
+    {CmdSelectAllOnPage, L"Select all text on this page", L""},
+    {CmdHighlight, L"Highlight selected text", L""},
+};
+
+}  // namespace
+
 int PdfView::Shortcut(UINT vk, UINT mods) {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0;
   if ((mods & kModAlt) && !ctrl && (vk == VK_LEFT || vk == VK_RIGHT)) return vk == VK_LEFT ? CmdPrevPage : CmdNextPage;
@@ -1402,11 +1439,30 @@ int PdfView::Shortcut(UINT vk, UINT mods) {
 }
 
 CommandState PdfView::QueryCommand(int cmd) {
+  CommandState s;
   switch (cmd) {
-    case CmdSave: return {Modified(), false};
-    case CmdPrint: return {Ready() && CanPrint(), false};
+    case CmdSave: s = {Modified(), false}; break;
+    case CmdPrint: s = {Ready() && CanPrint(), false}; break;
+    case CmdCopy:
+    case CmdHighlight:
+      s = PagedView::QueryCommand(cmd);
+      s.enabled = s.enabled && (HasSelection() || (cmd == CmdCopy && HasKeyFocus()));
+      break;
+    default: s = PagedView::QueryCommand(cmd); break;
   }
-  return PagedView::QueryCommand(cmd);
+  for (const CommandName& n : kCommandNames) {
+    if (n.cmd == cmd) {
+      s.label = n.label;
+      s.shortcut = n.keys;
+    }
+  }
+  return s;
+}
+
+std::vector<int> PdfView::Commands() {
+  std::vector<int> ids;
+  for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
+  return ids;
 }
 
 bool PdfView::Execute(int cmd) {
@@ -1435,20 +1491,21 @@ bool PdfView::Execute(int cmd) {
 }
 
 void PdfView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
-  auto item = [](int cmd, wchar_t glyph, const wchar_t* tooltip) {
+  // Items without a tooltip are named after their command, with its keys ("Save (Ctrl+S)").
+  auto item = [](int cmd, wchar_t glyph, const wchar_t* tooltip = L"") {
     ToolItem t;
     t.cmd = cmd;
     t.glyph = glyph;
     t.tooltip = tooltip;
     return t;
   };
-  ToolItem save = item(CmdSave, icon::Save, L"Save (Ctrl+S)");
+  ToolItem save = item(CmdSave, icon::Save);
   save.enabled = Modified();
   save.joinNext = true;
   ToolItem saveAs = item(CmdSaveMenu, icon::ChevronDown, L"Save as\u2026 (Ctrl+Shift+S)");
   saveAs.width = 18;
   saveAs.glyphSize = 9;
-  ToolItem print = item(CmdPrint, icon::Print, CanPrint() ? L"Print (Ctrl+P)" : L"This PDF doesn’t allow printing");
+  ToolItem print = item(CmdPrint, icon::Print, CanPrint() ? L"" : L"This PDF doesn’t allow printing");
   print.enabled = CanPrint();
   m.left = {save, saveAs, print};
 
@@ -1466,17 +1523,16 @@ void PdfView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   view.priority = 1;
   ToolItem rotate = item(CmdRotateRight, icon::Rotate, L"Rotate (Ctrl+Shift+=)");
   rotate.priority = 0;
-  ToolItem find = item(CmdFind, icon::Search, L"Find (Ctrl+F)");
+  ToolItem find = item(CmdFind, icon::Search);
   find.checked = ctx.searchOpen;
   find.toggle = true;
   find.priority = 5;
   find.sepBefore = true;
-  ToolItem night = item(CmdToggleInvert, icon::QuietHours, L"Night reading: dark pages (Ctrl+I)");
+  ToolItem night = item(CmdToggleInvert, icon::QuietHours);
   night.checked = ctx.inverted;
   night.toggle = true;
   night.priority = 3;
-  ToolItem full = item(CmdFullScreen, ctx.fullscreen ? icon::BackToWindow : icon::FullScreen,
-                       ctx.fullscreen ? L"Exit full screen (F11)" : L"Full screen (F11)");
+  ToolItem full = item(CmdFullScreen, ctx.fullscreen ? icon::BackToWindow : icon::FullScreen);
   full.priority = 2;
   m.right = {view, rotate, find, night, full};
 }
