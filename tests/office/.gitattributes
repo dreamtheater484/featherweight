@@ -1,0 +1,7 @@
+# Corpus files are compared byte for byte: never convert their line ends.
+*.docx binary
+*.docm binary
+*.xlsx binary
+*.xlsm binary
+*.pptx binary
+*.pptm binary

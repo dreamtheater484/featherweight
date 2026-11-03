@@ -1,0 +1,12 @@
+﻿<?xml version='1.0' encoding='utf-8' standalone='no'?>
+<!-- Custom XML exercises the corners of XML: CRLF line ends, comments, processing
+     instructions, CDATA, character references, single quotes and empty elements. -->
+<?featherweight keep this?>
+<data xmlns='urn:featherweight:custom' xmlns:x='urn:featherweight:extra' version='1'>
+  <entry key='a&amp;b' note='tab	here, line
+break, ref&#9;tab &#10;newline &#13;return'>Text with &lt;markup&gt;, &quot;quotes&quot;, &apos;apostrophes&apos; and a CR&#13;here</entry>
+  <entry key='cdata'><![CDATA[<not markup> & ]] not the end]]></entry>
+  <x:empty></x:empty><x:empty/>
+  <preserved xml:space='preserve'>   spaced   </preserved>
+  <mixed>Some <b>mixed</b> content, <i>kept</i>.</mixed>
+</data>
