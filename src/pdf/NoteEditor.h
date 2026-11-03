@@ -6,6 +6,7 @@
 #include <string>
 
 #include "pdf/PdfView.h"
+#include "ui/Uia.h"
 #include "ui/Widgets.h"
 
 // A small card for writing a note. The text area is a native multi-line edit control,
@@ -35,6 +36,9 @@ class NoteEditor {
   void OnMouseDown(int x, int y);
   Action OnMouseUp(int x, int y);
   std::wstring TooltipAt(int x, int y) const;
+  // UI Automation: the card and its buttons. The text area is a Windows edit control, which
+  // UI Automation already knows.
+  void Describe(uia::Tree& t, int parent, const std::function<void(Action)>& act) const;
 
   // Called for Esc (cancel) and Ctrl+Enter (save) typed in the text area.
   std::function<void(Action)> onAction;

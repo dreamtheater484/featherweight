@@ -43,6 +43,7 @@ class PdfView : public PagedView, public DocumentHost {
 
   // ---- TabContent ----
   TabKind Kind() const override { return TabKind::Pdf; }
+  void DescribeUia(uia::Tree& t, int parent) override;
   PdfView* AsPdf() override { return this; }
   OpenResult Load(const std::wstring& password, std::wstring& error) override;
   bool Ready() const override { return state_ == LoadState::Ready; }

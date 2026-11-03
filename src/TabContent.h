@@ -20,6 +20,9 @@ class TabContent;
 class PagedView;
 class PdfView;
 struct ToolbarModel;
+namespace uia {
+class Tree;
+}
 
 // What every kind of tab needs from the window around it.
 class ViewHost {
@@ -54,7 +57,7 @@ struct SaveFormat {
   const wchar_t* ext;      // e.g. "pdf"
 };
 
-enum class TabKind { Pdf };
+enum class TabKind { Pdf, Gallery };
 
 // One tab: a PDF today, and documents, spreadsheets and presentations later. The window owns the
 // chrome (title bar, toolbar, find panel, banners); the tab owns everything inside its viewport.
@@ -96,6 +99,9 @@ class TabContent {
   virtual bool Dragging() const = 0;
   // Keys go to the tab before the window's shortcuts (a focused form field, text being typed).
   virtual bool HasKeyFocus() const = 0;
+  // The window took the keyboard for its own boxes (find, a toolbar control), or gave it back.
+  // A tab with focusable parts hides or shows its focus.
+  virtual void SetKeyFocus(bool /*has*/) {}
 
   // ---- Commands ----
   // The command a key runs in this kind of tab, or 0. Ctrl+I can mean night reading in a PDF and
@@ -127,6 +133,10 @@ class TabContent {
   virtual PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) = 0;
   virtual FileState State() const = 0;
   virtual void ApplyState(const FileState& s) = 0;
+
+  // ---- Accessibility ----
+  // Adds the tab's own UI Automation elements under `parent`, the pane that holds the tab.
+  virtual void DescribeUia(uia::Tree& /*t*/, int /*parent*/) {}
 
   // ---- What kind of content ----
   // Content shown as pages (page box, zoom, page layout, presenting), or null.

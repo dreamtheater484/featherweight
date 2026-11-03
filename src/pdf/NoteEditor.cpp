@@ -225,3 +225,14 @@ LRESULT CALLBACK NoteEditor::EditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
   if (msg == WM_CHAR && (wp == 27 || (wp == 10 && GetKeyState(VK_CONTROL) < 0) || wp == 1)) return 0;  // no beeps
   return DefSubclassProc(hwnd, msg, wp, lp);
 }
+
+void NoteEditor::Describe(uia::Tree& t, int parent, const std::function<void(Action)>& act) const {
+  if (!IsOpen()) return;
+  int card = t.Add(parent, 7, UIA_PaneControlTypeId, note_.index >= 0 ? L"Note" : L"New note", card_);
+  t[card].layer = 1;
+  for (const Button* b : {&save_, &cancel_, &delete_}) {
+    if (!b->visible) continue;
+    const Action a = static_cast<Action>(b->id);
+    uia::AddButton(t, card, b->id, *b, [act, a] { act(a); });
+  }
+}

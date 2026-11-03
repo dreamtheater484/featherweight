@@ -20,6 +20,7 @@
 #include "ui/Icons.h"
 #include "ui/Menu.h"
 #include "ui/Theme.h"
+#include "ui/WidgetGallery.h"
 
 #pragma comment(lib, "imm32.lib")
 
@@ -58,7 +59,7 @@ int App::Run(const AppOptions& opts) {
   snapshot_ = !opts.snapshotPath.empty();
   settings_.Load();
   ThemeSetting themeSetting = settings_.theme;
-  if (snapshot_) {
+  if (snapshot_ || opts.widgetGallery) {
     settings_ = Settings();  // snapshots never use or change real settings
     if (opts.snapshotTheme == L"dark") themeSetting = ThemeSetting::Dark;
     else if (opts.snapshotTheme == L"light") themeSetting = ThemeSetting::Light;
@@ -71,7 +72,8 @@ int App::Run(const AppOptions& opts) {
   if (snapshot_) return RunSnapshot(opts);
 
   OpenFiles(opts.files);
-  StartupNotices();
+  if (opts.widgetGallery) OpenGallery();
+  else StartupNotices();
   Layout();
   int show = settings_.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
   if (opts.showCommand == SW_SHOWMINIMIZED || opts.showCommand == SW_MINIMIZE ||
@@ -79,7 +81,7 @@ int App::Run(const AppOptions& opts) {
     show = opts.showCommand;
   ShowWindow(hwnd_, show);
   UpdateWindow(hwnd_);
-  MaybeCheckForUpdates(false);
+  if (!opts.widgetGallery) MaybeCheckForUpdates(false);
   MessageLoop();
   return 0;
 }
@@ -131,6 +133,9 @@ bool App::CreateMainWindow(const AppOptions& opts) {
 
   notes_.Create(hwnd_);
   notes_.onAction = [this](NoteEditor::Action a) { FinishNote(a); };
+  uia_.Attach(hwnd_, [this](uia::Tree& t) { DescribeUia(t); });
+  toolbar_.SetWindow(hwnd_);
+  toolbar_.onCommand = [this](int cmd) { Execute(cmd); };
 
   // Search box: results update as you type.
   TextBox& sb = search_.Box();
@@ -344,6 +349,7 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
       for (auto& t : tabs_) tabs.push_back({t->Title(), t->Path(), t->Modified()});
       title_.Draw(canvas_, tabs, active_, windowActive_, IsZoomed(hwnd_) != FALSE);
     }
+    toolbar_.DrawPopup(canvas_);  // an open list of a toolbar control, above everything
   }
   canvas_.End();
 }
@@ -358,7 +364,11 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
     self->hwnd_ = hwnd;
   }
-  if (self) return self->Handle(msg, wp, lp);
+  if (self) {
+    LRESULT result = self->Handle(msg, wp, lp);
+    self->uia_.AfterMessage(msg);  // UI Automation hears about what changed
+    return result;
+  }
   return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
@@ -467,6 +477,12 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_ERASEBKGND:
       return 1;
+    case WM_GETOBJECT:
+      if (LRESULT r = uia_.OnGetObject(wp, lp)) return r;
+      break;
+    case uia::Root::kRunMessage:
+      uia_.RunPosted();
+      return 0;
     case WM_CTLCOLOREDIT:
       if (reinterpret_cast<HWND>(lp) == notes_.Edit())
         return reinterpret_cast<LRESULT>(notes_.OnCtlColor(reinterpret_cast<HDC>(wp)));
@@ -571,6 +587,10 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       ScreenToClient(hwnd_, &pt);
       UINT keys = GET_KEYSTATE_WPARAM(wp);
       UINT mods = (keys & MK_CONTROL ? kModCtrl : 0) | (keys & MK_SHIFT ? kModShift : 0);
+      if (msg == WM_MOUSEWHEEL && toolbar_.OnWheel(GET_WHEEL_DELTA_WPARAM(wp), pt.x, pt.y)) {
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return 0;
+      }
       if (TabContent* v = Active()) {
         v->OnWheel(GET_WHEEL_DELTA_WPARAM(wp), msg == WM_MOUSEHWHEEL, mods, pt.x, pt.y);
         InvalidateRect(hwnd_, nullptr, FALSE);
@@ -586,6 +606,12 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
         if (wp == VK_LEFT || wp == VK_RIGHT) {  // Alt+Left/Right: previous/next page
           if (TabContent* v = Active())
             if (int cmd = v->ShortcutFor(static_cast<UINT>(wp), Mods())) Execute(cmd);
+          return 0;
+        }
+        // Alt+Down and Alt+Up open and close the list of a focused dropdown (not in PDF forms).
+        TabContent* v = Active();
+        if ((wp == VK_DOWN || wp == VK_UP) && (toolbar_.HasKeyFocus() || (v && !v->AsPdf() && v->HasKeyFocus()))) {
+          OnKeyDown(static_cast<UINT>(wp));
           return 0;
         }
         break;  // Alt+F4, Alt+Space etc.
@@ -672,6 +698,7 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     }
     case WM_DESTROY:
+      uia_.Detach();
       if (dropTarget_) RevokeDragDrop(hwnd_);
       updater_.WaitForSwap();
       PostQuitMessage(0);
@@ -696,6 +723,7 @@ App::Region App::RegionAt(int x, int y) const {
   RECT rc;
   GetClientRect(hwnd_, &rc);
   if (x < 0 || y < 0 || x >= rc.right || y >= rc.bottom) return Region::None;
+  if (!presentation_ && toolbar_.HitPopup(x, y)) return Region::Toolbar;
   const int titleH = TitleHeight();
   if (y < titleH) return Region::Title;
   if (!presentation_) {
@@ -730,6 +758,7 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
       Contains(Active()->PasswordBox()->rc, (float)x, (float)y))
     clickedBox = Active()->PasswordBox();
   if (focusBox_ != clickedBox) FocusBox(clickedBox);
+  if (r != Region::Toolbar || clickedBox) toolbar_.Blur();
 
   switch (r) {
     case Region::Title: {
@@ -744,7 +773,7 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
         else if (!clickedBox->Text().empty() && !shift) clickedBox->SelectAll();
         else clickedBox->OnMouseDown((float)x, (float)y, shift, ui_);
       } else if (button == 0) {
-        toolbar_.OnMouseDown(x, y);
+        toolbar_.OnMouseDown(x, y, dbl, shift);
       }
       break;
     case Region::Search:
@@ -767,6 +796,7 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
     default: break;
   }
   if (presentation_) lastMouseMove_ = anim::Now();
+  KeyFocusMoved();
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -920,7 +950,7 @@ bool App::OnSetCursor() {
   Region r = capture_ != Region::None ? capture_ : RegionAt(pt.x, pt.y);
   switch (r) {
     case Region::Toolbar:
-      if (toolbar_.HitPageBox(pt.x, pt.y)) c = ibeam;
+      if (toolbar_.HitPageBox(pt.x, pt.y) || toolbar_.OverText(pt.x, pt.y)) c = ibeam;
       break;
     case Region::Search:
       if (Contains(search_.Box().rc, (float)pt.x, (float)pt.y)) c = ibeam;
@@ -968,6 +998,7 @@ void App::HideTooltip() {
 }
 
 void App::FocusBox(TextBox* box) {
+  if (box) toolbar_.Blur();
   if (focusBox_ == box) return;
   if (focusBox_) {
     focusBox_->Focus(false);
@@ -987,7 +1018,13 @@ void App::FocusBox(TextBox* box) {
   } else {
     KillTimer(hwnd_, kTimerCaret);
   }
+  KeyFocusMoved();
   InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::KeyFocusMoved() {
+  if (TabContent* v = Active())
+    v->SetKeyFocus(!toolbar_.HasKeyFocus() && (!focusBox_ || focusBox_ == v->PasswordBox()));
 }
 
 void App::OnKeyDown(UINT vk) {
@@ -1003,6 +1040,18 @@ void App::OnKeyDown(UINT vk) {
     if (int cmd = AppShortcut(vk, mods)) return cmd;
     return v ? v->ShortcutFor(vk, mods) : PdfView::Shortcut(vk, mods);
   };
+
+  // A combo box, dropdown or other control on the toolbar has the keyboard.
+  if (toolbar_.HasKeyFocus()) {
+    if (int cmd = global(); cmd && !(ctrl && (vk == 'A' || vk == 'C' || vk == 'V' || vk == 'X' || vk == 'Z'))) {
+      Execute(cmd);
+      return;
+    }
+    toolbar_.OnKeyDown(vk, ctrl, shift, (mods & kModAlt) != 0);
+    KeyFocusMoved();
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return;
+  }
 
   if (focusBox_) {
     if (int cmd = global(); cmd && !(ctrl && (vk == 'A' || vk == 'C' || vk == 'V' || vk == 'X' || vk == 'Z'))) {
@@ -1068,6 +1117,11 @@ void App::OnKeyDown(UINT vk) {
 }
 
 void App::OnChar(wchar_t ch) {
+  if (toolbar_.HasKeyFocus()) {
+    toolbar_.OnChar(ch);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return;
+  }
   if (focusBox_) {
     if (focusBox_->OnChar(ch)) InvalidateRect(hwnd_, nullptr, FALSE);
     return;
@@ -1273,7 +1327,9 @@ void App::ShowMenu(int which) {
     v->FillMenu(which, m);  // zoom, page layout
   }
   if (GetMenuItemCount(m) > 0) {
+    openMenu_ = which;
     int cmd = TrackMenu(m, toolbar_.ButtonRect(which == CmdSaveMenu ? CmdSave : which), alignRight);
+    openMenu_ = 0;
     if (cmd) Execute(cmd);
   }
   DestroyMenu(m);
@@ -1428,6 +1484,7 @@ void App::ActivateTab(int index) {
   active_ = index;
   TabContent* v = Active();
   FocusBox(v->PasswordBox());
+  KeyFocusMoved();
   Layout();
   std::wstring title = v->Title() + L" – Featherweight";
   SetWindowTextW(hwnd_, title.c_str());
@@ -2059,7 +2116,9 @@ int App::RunSnapshot(const AppOptions& opts) {
   wicTarget_.As(&dc_);
   if (!dc_) return 4;
 
+  caret::SetSteady(true);
   OpenFiles(opts.files);
+  if (opts.widgetGallery) OpenGallery();
   Layout();
   PumpUntilIdle(5000);
   if (!opts.script.empty()) RunScript(opts.script);

@@ -175,3 +175,29 @@ std::wstring EmptyState::TooltipAt(int x, int y, const std::vector<RecentFile>& 
   if (row >= 0 && row < static_cast<int>(recent.size())) return recent[row].path;
   return {};
 }
+
+void EmptyState::Describe(uia::Tree& t, int parent, const std::vector<RecentFile>& recent,
+                          const std::function<void(Result)>& act) const {
+  uia::AddButton(t, parent, 1, open_, [act] { act({Result::Kind::Open, -1}); });
+  const int rows = static_cast<int>(std::min(rows_.size(), recent.size()));
+  if (rows == 0) return;
+  D2D1_RECT_F all = RectF(rows_.front().left, rows_.front().top, rows_.front().right, rows_[rows - 1].bottom);
+  int list = t.Add(parent, 2, UIA_ListControlTypeId, L"Recent", all);
+  t[list].orientation = OrientationType_Vertical;
+  const int64_t now = util::UnixNow();
+  for (int i = 0; i < rows; ++i) {
+    const RecentFile& f = recent[i];
+    int item = t.Add(list, i, UIA_ListItemControlTypeId, fw::FileNameOf(f.path), rows_[i]);
+    uia::Node& n = t[item];
+    n.help = f.path;
+    n.status = fw::RelativeTime(now - f.lastOpened);
+    n.invoke = [act, i] { act({Result::Kind::OpenRecent, i}); };
+    n.positionInSet = i + 1;
+    n.sizeOfSet = rows;
+    const D2D1_RECT_F& r = rows_[i];
+    float cy = (r.top + r.bottom) / 2, right = r.right - 12 * ui_;
+    int remove = t.Add(item, 1, UIA_ButtonControlTypeId, L"Remove from list",
+                       RectF(right - 28 * ui_, cy - 14 * ui_, right, cy + 14 * ui_));
+    t[remove].invoke = [act, i] { act({Result::Kind::RemoveRecent, i}); };
+  }
+}

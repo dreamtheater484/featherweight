@@ -83,6 +83,7 @@ void Settings::Load() {
 }
 
 bool Settings::Save() {
+  if (path_.empty()) return false;  // never loaded (snapshots, the widget gallery): nowhere to save
   ini_.Set(kGeneral, L"Theme",
            theme == ThemeSetting::Light ? L"light" : theme == ThemeSetting::Dark ? L"dark" : L"system");
   ini_.SetBool(kGeneral, L"InvertPages", invert);

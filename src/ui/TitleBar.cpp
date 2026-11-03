@@ -217,3 +217,34 @@ std::wstring TitleBar::TooltipAt(int x, int y, const std::vector<TabInfo>& tabs)
     default: return {};
   }
 }
+
+void TitleBar::Describe(uia::Tree& t, int parent, const std::wstring& caption, const std::vector<TabInfo>& tabs,
+                        int active, bool maximized, const std::function<void(Part, int)>& act) const {
+  int bar = t.Add(parent, 1, UIA_TitleBarControlTypeId, caption, RectF(rc_));
+  if (!tabs.empty()) {
+    D2D1_RECT_F first = TabRect(0), last = TabRect(static_cast<int>(tabs.size()) - 1);
+    int strip = t.Add(bar, 1, UIA_TabControlTypeId, L"Open files", RectF(first.left, first.top, last.right, first.bottom));
+    t[strip].orientation = OrientationType_Horizontal;
+    t[strip].selectionContainer = true;
+    t[strip].selectionRequired = true;
+    for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
+      int tab = t.Add(strip, i, UIA_TabItemControlTypeId, tabs[i].title, TabRect(i));
+      uia::Node& n = t[tab];
+      n.help = tabs[i].path;
+      if (tabs[i].modified) n.status = L"Modified";
+      n.selectable = true;
+      n.selected = i == active;
+      n.select = [act, i] { act(Part::Tab, i); };
+      n.positionInSet = i + 1;
+      n.sizeOfSet = static_cast<int>(tabs.size());
+      int close = t.Add(tab, 1, UIA_ButtonControlTypeId, L"Close tab", TabCloseRect(i));
+      t[close].accelerator = i == active ? L"Ctrl+W" : L"";
+      t[close].invoke = [act, i] { act(Part::TabClose, i); };
+    }
+  }
+  uia::AddButton(t, bar, 2, newTab_, [act] { act(Part::NewTab, -1); });
+  uia::AddButton(t, bar, 3, min_, [act] { act(Part::Minimize, -1); });
+  int max = uia::AddButton(t, bar, 4, max_, [act] { act(Part::Maximize, -1); });
+  t[max].name = maximized ? L"Restore" : L"Maximize";
+  uia::AddButton(t, bar, 5, close_, [act] { act(Part::Close, -1); });
+}

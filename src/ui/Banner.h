@@ -2,10 +2,12 @@
 
 #include <windows.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "ui/Uia.h"
 #include "ui/Widgets.h"
 
 enum class BannerKind { Info, Success, Warning, Error };
@@ -36,6 +38,9 @@ class Banner {
   void OnMouseDown(int x, int y);
   // Returns the action id that was clicked, -1 for the close button, 0 for nothing.
   int OnMouseUp(int x, int y);
+  // UI Automation: the message (read out when it appears) and its buttons. `act` gets what
+  // OnMouseUp would return for a click.
+  void Describe(uia::Tree& t, int parent, const std::function<void(int)>& act) const;
 
  private:
   D2D1_RECT_F Card() const;

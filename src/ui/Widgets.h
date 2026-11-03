@@ -71,6 +71,7 @@ class TextBox {
   bool error = false;  // red underline
   float fontSize = 13;  // DIPs
   Align align = Align::Leading;
+  float trailingInset = 0;  // DIPs kept clear at the right for buttons drawn over the box
 
   std::function<void()> onChange;
   std::function<void(bool shift)> onEnter;
@@ -81,6 +82,8 @@ class TextBox {
   const std::wstring& Text() const { return text_; }
   void SetText(const std::wstring& t, bool selectAll = false);
   void SelectAll();
+  void SetSelection(int anchor, int caret);
+  bool AtEnd() const { return caret_ == static_cast<int>(text_.size()) && anchor_ == caret_; }
   void Focus(bool f);
 
   void Draw(gfx::Canvas& c, float ui, bool caretVisible);

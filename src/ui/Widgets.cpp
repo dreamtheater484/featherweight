@@ -183,6 +183,12 @@ void TextBox::SelectAll() {
   caret_ = static_cast<int>(text_.size());
 }
 
+void TextBox::SetSelection(int anchor, int caret) {
+  const int len = static_cast<int>(text_.size());
+  anchor_ = std::clamp(anchor, 0, len);
+  caret_ = std::clamp(caret, 0, len);
+}
+
 void TextBox::Focus(bool f) {
   focused = f;
   if (!f) anchor_ = caret_;
@@ -229,7 +235,7 @@ void TextBox::Draw(Canvas& c, float ui, bool caretVisible) {
   c.PopClip();
 
   const float pad = 8 * ui;
-  D2D1_RECT_F inner = RectF(r.left + pad, r.top, r.right - pad, r.bottom - 1);
+  D2D1_RECT_F inner = RectF(r.left + pad, r.top, r.right - pad - trailingInset * ui, r.bottom - 1);
   const float sizePx = fontSize * ui;
   std::wstring d = Display();
   const float innerW = Width(inner);

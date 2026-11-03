@@ -45,6 +45,10 @@ constexpr wchar_t FontCase = 0xE8D2;  // "Aa" match case
 constexpr wchar_t Highlight = 0xE7E6;
 constexpr wchar_t Comment = 0xE90A;
 constexpr wchar_t Delete = 0xE74D;
+constexpr wchar_t Color = 0xE790;  // palette
+constexpr wchar_t FontColor = 0xE8D3;
+constexpr wchar_t Bold = 0xE8DD;
+constexpr wchar_t BulletedList = 0xE8FD;
 
 // Custom vector icons drawn by DrawButton (private-use code points).
 constexpr wchar_t ViewSingle = 0xF8F0;

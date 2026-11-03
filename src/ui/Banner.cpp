@@ -153,3 +153,18 @@ int Banner::OnMouseUp(int x, int y) {
   if (id != 0) Hide();
   return id;
 }
+
+void Banner::Describe(uia::Tree& t, int parent, const std::function<void(int)>& act) const {
+  if (!visible_) return;
+  static const wchar_t* const kKinds[] = {L"Information", L"Done", L"Warning", L"Error"};
+  int pane = t.Add(parent, 4, UIA_PaneControlTypeId, L"Message", Card());
+  t[pane].layer = 1;
+  int text = t.Add(pane, 1, UIA_TextControlTypeId, text_, Card());
+  t[text].live = true;
+  t[text].status = kKinds[static_cast<int>(kind_)];
+  for (const auto& b : buttons_) {
+    const int id = b->id;
+    uia::AddButton(t, pane, 100 + id, *b, [act, id] { act(id); });
+  }
+  uia::AddButton(t, pane, 2, close_, [act] { act(-1); });
+}

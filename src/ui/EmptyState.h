@@ -2,10 +2,12 @@
 
 #include <windows.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "Settings.h"
+#include "ui/Uia.h"
 #include "ui/Widgets.h"
 
 // The start screen: logo, a big "Open PDF" button, a drop hint and recent files.
@@ -25,6 +27,9 @@ class EmptyState {
   Result OnMouseUp(int x, int y);
   bool OverClickable(int x, int y) const;
   std::wstring TooltipAt(int x, int y, const std::vector<RecentFile>& recent) const;
+  // UI Automation: Open and the recent files. `act` gets what OnMouseUp would return for a click.
+  void Describe(uia::Tree& t, int parent, const std::vector<RecentFile>& recent,
+                const std::function<void(Result)>& act) const;
 
  private:
   int RowAt(int x, int y) const;

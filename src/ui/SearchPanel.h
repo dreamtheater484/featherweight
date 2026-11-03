@@ -2,9 +2,11 @@
 
 #include <windows.h>
 
+#include <functional>
 #include <string>
 
 #include "Commands.h"
+#include "ui/Uia.h"
 #include "ui/Widgets.h"
 
 // Floating find panel in the top-right corner of the document area.
@@ -25,6 +27,10 @@ class SearchPanel {
   void OnMouseDrag(int x, int y);
   int OnMouseUp(int x, int y);
   std::wstring TooltipAt(int x, int y) const;
+
+  // UI Automation: the panel and its parts, under `parent`. `run` runs a button's command.
+  void Describe(uia::Tree& t, int parent, const std::wstring& status, const std::function<void(int)>& run,
+                const std::function<void()>& focusBox);
 
   TextBox& Box() { return box_; }
   bool MatchCase() const { return case_.checked; }

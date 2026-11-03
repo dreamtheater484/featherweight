@@ -16,6 +16,7 @@
 #include "ui/Icons.h"
 #include "ui/Menu.h"
 #include "ui/Theme.h"
+#include "ui/Uia.h"
 #include "ui/Toolbar.h"
 
 using namespace gfx;
@@ -1467,15 +1468,32 @@ void PdfView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   rotate.priority = 0;
   ToolItem find = item(CmdFind, icon::Search, L"Find (Ctrl+F)");
   find.checked = ctx.searchOpen;
+  find.toggle = true;
   find.priority = 5;
   find.sepBefore = true;
   ToolItem night = item(CmdToggleInvert, icon::QuietHours, L"Night reading: dark pages (Ctrl+I)");
   night.checked = ctx.inverted;
+  night.toggle = true;
   night.priority = 3;
   ToolItem full = item(CmdFullScreen, ctx.fullscreen ? icon::BackToWindow : icon::FullScreen,
                        ctx.fullscreen ? L"Exit full screen (F11)" : L"Full screen (F11)");
   full.priority = 2;
   m.right = {view, rotate, find, night, full};
+}
+
+void PdfView::DescribeUia(uia::Tree& t, int parent) {
+  if (state_ == LoadState::NeedPassword) {
+    uia::AddTextBox(t, parent, 1, pwBox_, L"Password", [this] { host_.ViewFocusTextBox(&pwBox_); });
+    uia::AddButton(t, parent, 2, pwOpen_, [this] { SubmitPassword(); });
+    return;
+  }
+  if (selBar_ && !selection_.Empty() && drag_ != Drag::Select) {
+    uia::AddButton(t, parent, 3, selHighlight_, [this] {
+      HighlightSelection();
+      host_.ViewInvalidate();
+    });
+    uia::AddButton(t, parent, 4, selCopy_, [this] { Copy(); });
+  }
 }
 
 void PdfView::FillContextMenu(HMENU m, int x, int y) {

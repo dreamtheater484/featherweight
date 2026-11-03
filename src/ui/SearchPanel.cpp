@@ -119,3 +119,22 @@ std::wstring SearchPanel::TooltipAt(int x, int y) const {
     if (Contains(b->rc, (float)x, (float)y)) return b->tooltip;
   return {};
 }
+
+void SearchPanel::Describe(uia::Tree& t, int parent, const std::wstring& status, const std::function<void(int)>& run,
+                           const std::function<void()>& focusBox) {
+  if (!open_) return;
+  int pane = t.Add(parent, CmdFind, UIA_PaneControlTypeId, L"Find", Card());
+  t[pane].layer = 1;
+  uia::AddTextBox(t, pane, 1, box_, box_.placeholder + L" (Ctrl+F)", focusBox);
+  if (!status.empty()) {
+    int s = t.Add(pane, 2, UIA_TextControlTypeId, status, status_);
+    t[s].live = true;
+  }
+  for (Button* b : {&prev_, &next_, &close_}) {
+    const int cmd = b->id;
+    uia::AddButton(t, pane, cmd, *b, [run, cmd] { run(cmd); });
+  }
+  int matchCase = uia::AddButton(t, pane, case_.id, case_, nullptr);
+  t[matchCase].toggle = case_.checked ? ToggleState_On : ToggleState_Off;
+  t[matchCase].doToggle = [run] { run(CmdSearchCase); };
+}

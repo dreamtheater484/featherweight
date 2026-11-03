@@ -20,6 +20,7 @@
 #include "ui/TitleBar.h"
 #include "ui/Toolbar.h"
 #include "ui/Tooltip.h"
+#include "ui/Uia.h"
 
 struct AppOptions {
   std::vector<std::wstring> files;
@@ -31,6 +32,7 @@ struct AppOptions {
   std::wstring snapshotTheme;  // "light" or "dark"
   bool snapshotInvert = false;
   std::wstring script;         // steps separated by ';' (see App::RunScript)
+  bool widgetGallery = false;  // opens the widget gallery (settings are neither read nor saved)
 };
 
 class App : public PdfHost, public DropHost {
@@ -136,6 +138,13 @@ class App : public PdfHost, public DropHost {
   void OnUpdaterDone();
   void ShowAbout();
 
+  // Keyboard focus and UI Automation
+  // The keyboard moved between the window's own boxes and the tab: the tab shows or hides its focus.
+  void KeyFocusMoved();
+  // What UI Automation sees (AppUia.cpp).
+  void DescribeUia(uia::Tree& t);
+  void OpenGallery();
+
   // Snapshot / automation
   int RunSnapshot(const AppOptions& opts);
   void RunScript(const std::wstring& script);
@@ -156,6 +165,8 @@ class App : public PdfHost, public DropHost {
   gfx::Canvas canvas_;
   double lastFrame_ = 0;
 
+  uia::Root uia_;
+  int openMenu_ = 0;  // the toolbar menu being shown
   TitleBar title_;
   Toolbar toolbar_;
   SearchPanel search_;

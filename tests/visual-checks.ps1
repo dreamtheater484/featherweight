@@ -36,13 +36,26 @@ $checks = @(
   @("note-edit-existing", "dark", "", "note:760,210,Existing note|with two lines;click:772,222;type: and more", @("text.pdf")),
   @("password-wrong", "light", "", "type:wrong;key:enter", @("password-secret.pdf")),
   @("damaged-files", "dark", "", "", @("damaged.pdf", "not-a-pdf.pdf")),
-  @("presentation", "light", "", "cmd:present;key:right", @("text.pdf"))
+  @("presentation", "light", "", "cmd:present;key:right", @("text.pdf")),
+  # The widget gallery (--widget-gallery): every control, by mouse and by keyboard, light and dark, 100% and 200%.
+  @("gallery-light", "light", "--widget-gallery", "", @()),
+  @("gallery-dark", "dark", "--widget-gallery", "", @()),
+  @("gallery-light-200", "light", "--widget-gallery --scale 2 --size 2200x1400", "", @()),
+  @("gallery-dark-200", "dark", "--widget-gallery --scale 2 --size 2200x1400", "", @()),
+  @("gallery-dropdown", "light", "--widget-gallery", "click:243,268;move:243,420", @()),
+  @("gallery-dropdown-200", "dark", "--widget-gallery --scale 2 --size 2200x1400", "click:486,536;move:486,760", @()),
+  @("gallery-combo-typing", "dark", "--widget-gallery", "click:560,268;type:Ge;key:alt+down", @()),
+  @("gallery-split-colors", "light", "--widget-gallery", "click:895,268;move:930,330", @()),
+  @("gallery-split-keys", "light", "--widget-gallery", "key:tab;key:tab;key:tab;key:tab;key:tab;key:down", @()),
+  @("gallery-picker-keys", "dark", "--widget-gallery", "key:tab;key:tab;key:tab;key:tab;key:tab;key:tab;key:enter;key:down;key:down;key:right;key:right", @()),
+  @("gallery-spin-list", "light", "--widget-gallery", "click:560,510;key:up;key:up;click:820,541;type:in", @()),
+  @("gallery-toolbar-font", "light", "--widget-gallery", "click:316,64;move:250,200", @())
 )
 
 foreach ($c in $checks) {
   $name, $theme, $extra, $script, $files = $c
   $args = @("--snapshot", (Join-Path $out "$name.png"), "--size", "1100x700", "--theme", $theme)
-  if ($extra) { $args += $extra }
+  if ($extra) { $args += $extra -split ' ' }
   if ($script) { $args += @("--script", $script) }
   foreach ($f in $files) { $args += (Join-Path $pdfs $f) }
   $p = Start-Process -FilePath $Exe -ArgumentList ($args | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -Wait -PassThru -NoNewWindow

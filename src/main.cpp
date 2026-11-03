@@ -58,6 +58,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int showCommand) {
     else if (a == L"--theme") opts.snapshotTheme = next();
     else if (a == L"--invert") opts.snapshotInvert = true;
     else if (a == L"--script") opts.script = next();
+    else if (a == L"--widget-gallery") opts.widgetGallery = true;
     else if (!a.empty() && a[0] != L'-') opts.files.push_back(a);
   }
   LocalFree(argv);
@@ -70,7 +71,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int showCommand) {
 
   const bool snapshot = !opts.snapshotPath.empty();
   HANDLE mutex = nullptr;
-  if (!snapshot) {
+  if (!snapshot && !opts.widgetGallery) {
     mutex = CreateMutexW(nullptr, FALSE, L"Local\\Featherweight-7d1c2f0e-instance");
     if (GetLastError() == ERROR_ALREADY_EXISTS && ForwardToRunningInstance(opts.files)) {
       CloseHandle(mutex);
