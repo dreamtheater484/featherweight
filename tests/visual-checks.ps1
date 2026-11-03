@@ -65,7 +65,25 @@ $checks = @(
   @("gallery-split-keys", "light", "--widget-gallery", "key:tab;key:tab;key:tab;key:tab;key:tab;key:down", @()),
   @("gallery-picker-keys", "dark", "--widget-gallery", "key:tab;key:tab;key:tab;key:tab;key:tab;key:tab;key:enter;key:down;key:down;key:right;key:right", @()),
   @("gallery-spin-list", "light", "--widget-gallery", "click:560,510;key:up;key:up;click:820,541;type:in", @()),
-  @("gallery-toolbar-font", "light", "--widget-gallery", "click:316,64;move:250,200", @())
+  @("gallery-toolbar-font", "light", "--widget-gallery", "click:316,64;move:250,200", @()),
+  # The shell: side panels (Format is controls, Comments is drawn by the tab), the status bar and
+  # command search (Alt+Q), by mouse and by keyboard. Panels need a wider window for three cards.
+  # (Clicks are in client pixels: the client area is 16 pixels narrower than --size.)
+  @("gallery-panel-light", "light", "--widget-gallery --size 1400x800", "click:1282,64;move:1356,114", @()),
+  @("gallery-panel-dark", "dark", "--widget-gallery --size 1400x800", "key:alt+q;type:format;key:enter;key:f6", @()),
+  @("gallery-panel-light-200", "light", "--widget-gallery --scale 2 --size 2800x1600", "click:2580,128;move:2400,800", @()),
+  @("gallery-panel-dark-200", "dark", "--widget-gallery --scale 2 --size 2800x1600", "key:alt+q;type:format;key:enter;key:f6;key:tab;key:alt+down", @()),
+  @("gallery-comments-light", "light", "--widget-gallery --size 1400x800", "click:1320,64;key:f6;key:down", @()),
+  @("gallery-comments-dark-200", "dark", "--widget-gallery --scale 2 --size 2800x1600", "click:2656,128;key:f6;key:end", @()),
+  @("gallery-status-light", "light", "--widget-gallery", "key:f6;key:right;key:right;key:right", @()),
+  @("gallery-status-dark", "dark", "--widget-gallery", "drag:936,678,966,678", @()),
+  @("gallery-status-light-200", "light", "--widget-gallery --scale 2 --size 2200x1400", "key:f6;key:left;key:left", @()),
+  @("gallery-status-dark-200", "dark", "--widget-gallery --scale 2 --size 2200x1400", "click:2028,1364;click:2028,1364", @()),
+  @("gallery-commands-light", "light", "--widget-gallery", "key:alt+q;type:fi", @()),
+  @("gallery-commands-dark", "dark", "--widget-gallery", "key:alt+q;type:theme;key:down", @()),
+  @("gallery-commands-light-200", "light", "--widget-gallery --scale 2 --size 2200x1400", "key:alt+q;type:pa;move:1092,288", @()),
+  @("gallery-commands-dark-200", "dark", "--widget-gallery --scale 2 --size 2200x1400", "key:alt+q;type:fi;key:down;key:down", @()),
+  @("commands-pdf", "light", "", "key:alt+q;type:page", @("text.pdf"))
 )
 
 foreach ($c in $checks) {

@@ -14,9 +14,12 @@
 #include "pdf/NoteEditor.h"
 #include "pdf/PdfView.h"
 #include "ui/Banner.h"
+#include "ui/CommandSearch.h"
 #include "ui/EmptyState.h"
 #include "ui/Gfx.h"
 #include "ui/SearchPanel.h"
+#include "ui/SidePanel.h"
+#include "ui/StatusBar.h"
 #include "ui/SwapChain.h"
 #include "ui/TitleBar.h"
 #include "ui/Toolbar.h"
@@ -61,6 +64,8 @@ class App : public PdfHost, public DropHost {
   bool ViewCoverAlone() override { return settings_.coverAlone; }
   bool ViewHighlightFields() override { return settings_.highlightFields; }
   void ViewPasswordAccepted(TabContent* view) override;
+  void ViewShowPanel(PanelContent* content) override;
+  PanelContent* ViewShownPanel() override { return panel_.Content(); }
   void ViewOpenNote(PdfView* view, const NoteTarget& note) override;
 
   // DropHost
@@ -69,7 +74,9 @@ class App : public PdfHost, public DropHost {
   void OnDropFiles(const std::vector<std::wstring>& files) override;
 
  private:
-  enum class Region { None, Title, Toolbar, Search, Banner, Note, Doc };
+  enum class Region { None, Title, Toolbar, Search, Banner, Note, Doc, Panel, Status, Commands };
+  // Where the keyboard is, for F6 and for going back after the side panel or command search.
+  enum class KeyArea { Doc, Panel, Status };
 
   static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
   LRESULT Handle(UINT msg, WPARAM wp, LPARAM lp);
@@ -155,6 +162,41 @@ class App : public PdfHost, public DropHost {
   void DescribeUia(uia::Tree& t);
   void OpenGallery();
 
+  // The side panel, the status bar and command search (AppShell.cpp)
+  void InitShell();
+  // A command's state and name: the active tab's, with the window's own commands added.
+  CommandState QueryCommand(int cmd);
+  // Toolbar items without a tooltip take their command's name and keys; hidden commands go.
+  void NameToolbarItems(ToolbarModel& m);
+  std::vector<CommandEntry> SearchableCommands();
+  void OpenCommandSearch();
+  // Closes it and gives the keyboard back to where it was.
+  void CloseCommandSearch();
+  void ClosePanel();
+  bool StatusBarShown() const;
+  int StatusBarHeight() const;
+  StatusBarModel CurrentStatusBar();
+  void LayoutShell();
+  void DrawShell();
+  KeyArea CurrentKeyArea() const;
+  // Moves the keyboard to an area (F6, Tab into the panel, Esc back). `resume`: to the control
+  // that had it last. False when it can't go there.
+  bool MoveKeyTo(KeyArea area, bool forward, bool resume);
+  // Keys for the shell: F6, and keys while the panel or the status bar has the keyboard.
+  bool ShellKeyDown(UINT vk, UINT mods);
+  bool ShellChar(wchar_t ch);
+  // Tab that the tab didn't use moves into the side panel.
+  bool TabIntoPanel(UINT vk, UINT mods);
+  Region ShellRegionAt(int x, int y) const;
+  void ShellMouseDown(Region r, int x, int y, int button, bool dbl, bool shift);
+  bool ShellMouseMove(Region r, int x, int y);
+  void ShellMouseUp(Region r, int x, int y, int button);
+  void ShellMouseLeave(Region r);
+  bool ShellWheel(int delta, int x, int y);
+  HCURSOR ShellCursor(Region r, int x, int y) const;
+  std::wstring ShellTooltip(Region r, int x, int y) const;
+  void DescribeShell(uia::Tree& t);
+
   // Snapshot / automation
   int RunSnapshot(const AppOptions& opts);
   void RunScript(const std::wstring& script);
@@ -191,6 +233,11 @@ class App : public PdfHost, public DropHost {
   NoteEditor notes_;
   std::vector<std::unique_ptr<TabContent>> tabs_;
   int active_ = -1;
+  SidePanel panel_;  // shows content that belongs to the active tab
+  StatusBar status_;
+  CommandSearch commands_;
+  KeyArea panelReturn_ = KeyArea::Doc;     // where Esc in the side panel sends the keyboard
+  KeyArea commandsReturn_ = KeyArea::Doc;  // the same for command search
 
   Settings settings_;
   Updater updater_;

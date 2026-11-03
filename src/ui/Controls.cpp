@@ -273,6 +273,7 @@ bool ControlGroup::MoveFocus(bool forward) {
   if (start < 0) start = forward ? -1 : n;
   for (int k = 1; k <= n; ++k) {
     int i = forward ? start + k : start - k;
+    if (!wrap && (i < 0 || i >= n)) return false;
     i = ((i % n) + n) % n;
     Control* c = controls_[i];
     if (c->visible && c->enabled) {
