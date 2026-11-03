@@ -20,7 +20,9 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($KeepAwake) {
   Add-Type -Namespace Fw -Name Power -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);'
-  $null = [Fw.Power]::SetThreadExecutionState(0x80000001)  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED, until the script ends
+  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED (0x80000001), until the script ends. Written in decimal:
+  # Windows PowerShell reads 0x80000001 as a negative Int32.
+  $null = [Fw.Power]::SetThreadExecutionState([uint32]2147483649)
 }
 $office = Join-Path $PSScriptRoot '..\office'
 $seeds = Join-Path $PSScriptRoot 'seeds'
