@@ -1041,15 +1041,15 @@ These run on every build, for every corpus file:
 
 ## 11. Lightweight contract
 
-Small, fast, no bloat and zero friction are the lightweight promise (§1). They're held to the same standard as the compatibility contract (§3): written down as budgets, measured on every build, and a gate for every milestone and release. Budgets marked *proposed* are decision 22.
+Small, fast, no bloat and zero friction are the lightweight promise (§1). They're held to the same standard as the compatibility contract (§3): written down as budgets, measured on every build, and a gate for every milestone and release. The budgets are decision 22.
 
 ### Small
 
 | Budget | Target |
 |---|---|
-| `Featherweight.exe` | < 4 MB at 1.1, < 7 MB at 2.0, < 11 MB at 3.0, < 15 MB at 4.0 (*proposed*, except the last) |
+| `Featherweight.exe` | < 4 MB at 1.1, < 7 MB at 2.0, < 11 MB at 3.0, < 15 MB at 4.0 |
 | Download (installer or zip, with PDFium) | < 25 MB |
-| Memory right after launch, no file open | < 40 MB (*proposed*) |
+| Memory right after launch, no file open | < 40 MB |
 | Memory with a typical document, workbook or deck | < 150 MB |
 | Round-trip store for kept content | < 25 % of the model's own memory |
 
@@ -1072,12 +1072,12 @@ On the typical consumer PC (§10).
 | 100 MB CSV: first screen / fully loaded | < 1 s / < 5 s |
 | 50-slide `.pptx` to first slide | < 500 ms |
 | Scrolling and zooming | Every frame within the display's refresh interval |
-| Switching tabs, opening a menu, the side panel or command search | < 50 ms (*proposed*) |
-| Command search results, after each keystroke | < 16 ms (*proposed*) |
+| Switching tabs, opening a menu, the side panel or command search | < 50 ms |
+| Command search results, after each keystroke | < 16 ms |
 | Keystroke to screen, 300-page document | < 16 ms typical, < 50 ms worst |
 | Recalculation after one edit, 100,000-formula workbook | < 100 ms typical |
 | Slide show frame rate | The display's refresh rate, no dropped frames |
-| Idle, with nothing animating | No CPU use and no timers firing (*proposed*) |
+| Idle, with nothing animating | No CPU use and no timers firing |
 
 ### No bloat
 
@@ -1186,7 +1186,7 @@ On the typical consumer PC (§10).
 | 19 | Test machines | **A typical consumer PC** (4 cores, 8 GB RAM, integrated graphics) for the budgets, and **an Office reference PC with a Microsoft 365 subscription** for reference renders and repair checks. *The Office reference PC is the development PC (decided 2026-11-03). Open: the typical consumer PC, needed before the 1.1 budgets are checked.* |
 | 20 | Rendering | **Direct3D 11 with a flip-model swap chain** in D0, replacing `ID2D1HwndRenderTarget`, so video, smooth transitions and low latency are possible later without rework. *Decided; done in D0.* |
 | 21 | Accessibility | **Keyboard access and the basic UI Automation from D0 only.** No accessibility gates, no Narrator or NVDA passes, no screen-reader models of document, grid or slide content. *Decided (Roy, 2026-11-03).* |
-| 22 | Lightweight budgets | **The lightweight promise is a gate, like never damaging a file** (§1, §11). *Decided (Roy, 2026-11-03).* The new budgets are *proposed*: exe size per release (< 4, 7, 11 and 15 MB at 1.1, 2.0, 3.0 and 4.0), memory after launch < 40 MB, menus, panels and tab switches < 50 ms, command search < 16 ms per keystroke, and no CPU use when idle. |
+| 22 | Lightweight budgets | **The lightweight promise is a gate, like never damaging a file** (§1, §11), with these budgets added to the existing ones: exe size per release (< 4, 7, 11 and 15 MB at 1.1, 2.0, 3.0 and 4.0), memory after launch < 40 MB, menus, panels and tab switches < 50 ms, command search < 16 ms per keystroke, and no CPU use when idle. *Decided (Roy, 2026-11-03).* |
 
 ---
 
