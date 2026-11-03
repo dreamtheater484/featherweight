@@ -122,6 +122,14 @@ TEST(XmlPull_Malformed) {
   CHECK_EQ(CheckCode("<?xml 6ersion=\"1.0\"?><a/>"), C::Damaged);  // found by fuzzing
   CHECK_EQ(CheckCode("<?xml version=\"1.0\"standalone=\"yes\"?><a/>"), C::Damaged);
   CHECK(XmlPull::Check("\xEF\xBB\xBF<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<a/>\n<!--after-->\n").Ok());
+  // Reserved prefixes and namespace names. The first was found by fuzzing: as a kept fragment,
+  // the inner element gained xmlns="s", which then clashed with xmlns:xmlns.
+  CHECK_EQ(CheckCode("<data xmlns='s'><data xmlns:xmlns='a'></data></data>"), C::Damaged);
+  CHECK_EQ(CheckCode("<a xmlns:xml=\"urn:other\"/>"), C::Damaged);
+  CHECK_EQ(CheckCode("<a xmlns:p=\"http://www.w3.org/XML/1998/namespace\"/>"), C::Damaged);
+  CHECK_EQ(CheckCode("<a xmlns=\"http://www.w3.org/XML/1998/namespace\"/>"), C::Damaged);
+  CHECK_EQ(CheckCode("<a xmlns:p=\"http://www.w3.org/2000/xmlns/\"/>"), C::Damaged);
+  CHECK(XmlPull::Check("<a xmlns:xml=\"http://www.w3.org/XML/1998/namespace\" xml:space=\"preserve\"/>").Ok());
 }
 
 TEST(XmlPull_OnlyXmlCharactersInValidUtf8) {
