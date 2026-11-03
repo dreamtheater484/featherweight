@@ -963,7 +963,7 @@ The sizes are rough estimates of new C++ code, about 330,000 lines in total, or 
 
 - **Development PC:** this PC (AMD Ryzen 7 7800X3D, 192 GB RAM, RTX 5090). It's much faster than what most users have, so it catches regressions but doesn't prove the budgets.
 - **Typical consumer PC:** 4 cores, 8 GB RAM, integrated graphics and an SSD, for example an inexpensive laptop from a few years ago. The performance budgets (§11) apply here (decision 19).
-- **Office reference PC:** any PC with a Microsoft 365 subscription (current channel), used to make the reference renders and to check for repair prompts. The subscription is a prerequisite (decision 19).
+- **Office reference PC:** the development PC, which has Microsoft 365 (current channel) (decision 19). It makes the reference renders and checks for repair prompts.
 
 ### Corpus
 
@@ -977,7 +977,7 @@ The sizes are rough estimates of new C++ code, about 330,000 lines in total, or 
   - Weight it toward what consumers actually receive: letters, CVs, reports, forms, invoices, budgets, school assignments and decks.
   - Legacy formats come from public collections such as Govdocs1.
 - **Tags:** files are tagged by the structures they contain, so tests can pick them. Examples: fields, bookmarks, comments, tracked changes, extension-list conditional formats, sparklines, sections, charts, VML, hyphenation, right-to-left text.
-- **Reference renders:** Office exports each corpus file to PDF once on the Office reference PC, with its fonts recorded. The PDFs are stored next to the files and re-exported when Office changes noticeably.
+- **Reference renders:** Office exports each corpus file to PDF once on the Office reference PC, with its fonts recorded (`scripts/reference-renders.ps1`). The PDFs and a manifest are stored beside the corpus, in `tests/office/reference/` for the public corpus, and re-exported when Office changes noticeably.
 
 ### Fidelity metrics
 
@@ -1130,7 +1130,7 @@ On the typical consumer PC (§10).
 | 16 | Code signing | **Before 1.1 if possible, before 2.0 at the latest.** Candidates: SignPath Foundation (free for open-source projects), a Certum open-source certificate, or Microsoft's Trusted Signing, which hasn't always accepted individual developers outside the US and Canada. *Open: check eligibility and cost.* |
 | 17 | Number and formula locale | **Files are stored in Excel's invariant form; formulas are entered with English function names; decimal and list separators and date order follow Windows' regional settings,** as in Excel. New CSV files use the regional list separator. *Proposed; needed before S1.* |
 | 18 | Pivot tables | **Refresh them, and create simple ones, in S4.** For the slightly more advanced user, pivot tables are the most likely advanced request. *Proposed.* |
-| 19 | Test machines | **A typical consumer PC** (4 cores, 8 GB RAM, integrated graphics) for the budgets, and **an Office reference PC with a Microsoft 365 subscription** for reference renders and repair checks. *Open: both needed before D1.* |
+| 19 | Test machines | **A typical consumer PC** (4 cores, 8 GB RAM, integrated graphics) for the budgets, and **an Office reference PC with a Microsoft 365 subscription** for reference renders and repair checks. *The Office reference PC is the development PC (decided 2026-11-03). Open: the typical consumer PC, needed before the 1.1 budgets are checked.* |
 | 20 | Rendering | **Direct3D 11 with a flip-model swap chain** in D0, replacing `ID2D1HwndRenderTarget`, so video, smooth transitions and low latency are possible later without rework. *Decided; done in D0.* |
 
 ---
@@ -1143,8 +1143,8 @@ On the typical consumer PC (§10).
 |---|---|---|
 | PDF reader | ✅ Done | 0.9.4; see the README and git history |
 | Release 1.0 | ⏳ Next | The reader as it is: a hands-on pass with `docs/TEST_CHECKLIST.md`, then tag `v1.0.0` |
-| D0. Host and foundations | 🔄 In progress | On branch `d0/host`. Done: `TabContent`, `PagedView` and the command and toolbar model; `fwpkg`, typed units, `fwtool` and the corpus; rendering on Direct3D 11 with a flip-model swap chain and WARP fallback; `Painter` with the Direct2D backend, and vector printing through `ID2D1PrintControl` (`fwtool print-sample`). In progress: the new widgets with UI Automation. Open: side panel, status bar, command search, start screen and recent files, file associations for every kind, the reference registry framework, reference renders, the 8-hour fuzz runs and fuzzing in CI. Decisions 5, 14 and 19 first. Known: printed group opacity is flattened per shape (see `Painter::BeginGroup`) |
-| D1–D5. Documents | Not started | Before paragraphs can be split: `RoundTripStore::Split` must be told the split point, as `Merge` is, so that fragments inside the node after that point move to the second half (§4.3, fragment ownership). Today only the fragments after the node's end tag move. |
+| D0. Host and foundations | 🔄 In progress | On branch `d0/host`. Done: `TabContent`, `PagedView` and the command and toolbar model, with command labels; `fwpkg`, typed units, `fwtool` and the corpus; Direct3D 11 with a flip-model swap chain and WARP fallback; `Painter` and vector printing through `ID2D1PrintControl`; the widgets, with UI Automation for every element of the window (`tests/uia-checks.ps1`, 176 checks); the side panel, status bar and command search (Alt+Q); the start screen, recent files of every kind, and file associations per kind; the reference registry framework with `fwtool check`; fuzzing in CI (5 targets); reference renders for the public corpus (19 of 20 files: Word calls `edge/escaped-part-names.docx` corrupted). Left for the exit criteria: the 8-hour zip and XML fuzz runs (running), Accessibility Insights FastPass (not installed yet), the manual checklist, and the first CI run on GitHub. Decisions 5 and 14 are still proposed. Known: printed group opacity is flattened per shape (see `Painter::BeginGroup`); `password-wrong.png` can differ by the password box's caret from run to run |
+| D1–D5. Documents | Not started | D1 is next. Its fidelity targets need the private corpus (`FW_CORPUS`, §10) and its reference renders. The `RoundTripStore::Split` prerequisite is done (D0) |
 | S1–S4. Spreadsheets | Not started | |
 | P1–P3. Presentations | Not started | |
 

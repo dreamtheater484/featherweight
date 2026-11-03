@@ -14,6 +14,7 @@ Files for the never-damage tests (plan §10), made by `make_test_office.py`:
   - a nesting bomb, and a DTD with an entity-expansion bomb
   - missing content types, zip encryption, duplicate part names
   - broken XML, a file that isn't a zip, and a truncated file
+- `reference/`: Office's own PDF of every file in `generated/` and `edge/`, plus `manifest.json`: the Office build, page count, the fonts Office drew with, and each source file's hash. These are the reference renders (plan §10) that `fwtool compare` measures Featherweight against. `scripts/reference-renders.ps1` makes them on the Office reference PC; run it again when a file changes or Office changes noticeably.
 - `broken/`: hand-made files that open and save, but that `fwtool check` must reject, each for one consistency rule (plan §4.3, rule 2):
   - a relationship id that doesn't resolve, a duplicate paragraph id, a duplicate slide id
   - a bookmark that starts but doesn't end, a field that begins but doesn't end
