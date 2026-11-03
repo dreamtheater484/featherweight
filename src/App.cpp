@@ -13,13 +13,13 @@
 
 #include "Commands.h"
 #include "FileAssoc.h"
-#include "Icons.h"
-#include "Print.h"
-#include "Theme.h"
 #include "Util.h"
 #include "Version.h"
 #include "core/Strings.h"
 #include "resource.h"
+#include "ui/Icons.h"
+#include "ui/Menu.h"
+#include "ui/Theme.h"
 
 #pragma comment(lib, "imm32.lib")
 
@@ -34,27 +34,9 @@ constexpr UINT_PTR kTimerCursorHide = 4;
 constexpr float kTitleH = 40;
 constexpr float kToolbarH = 48;
 
-std::wstring ZoomLabel(DocumentView* v) {
-  if (!v || !v->Ready()) return L"";
-  return fw::FormatPercent(v->Zoom());
-}
-
-void AppendItem(HMENU m, UINT id, const std::wstring& text, bool enabled = true, bool checked = false,
-                bool radio = false) {
-  MENUITEMINFOW mi{sizeof(mi)};
-  mi.fMask = MIIM_ID | MIIM_STRING | MIIM_STATE | MIIM_FTYPE;
-  mi.fType = MFT_STRING | (radio ? MFT_RADIOCHECK : 0);
-  mi.fState = (enabled ? MFS_ENABLED : MFS_DISABLED) | (checked ? MFS_CHECKED : 0);
-  mi.wID = id;
-  mi.dwTypeData = const_cast<wchar_t*>(text.c_str());
-  InsertMenuItemW(m, GetMenuItemCount(m), TRUE, &mi);
-}
-
-void AppendSeparator(HMENU m) { AppendMenuW(m, MF_SEPARATOR, 0, nullptr); }
-
-void AppendSubmenu(HMENU m, HMENU sub, const std::wstring& text, bool enabled = true) {
-  AppendMenuW(m, MF_POPUP | (enabled ? 0 : MF_GRAYED), reinterpret_cast<UINT_PTR>(sub), text.c_str());
-}
+using menu::AppendItem;
+using menu::AppendSeparator;
+using menu::AppendSubmenu;
 
 }  // namespace
 
@@ -153,7 +135,7 @@ bool App::CreateMainWindow(const AppOptions& opts) {
   // Search box: results update as you type.
   TextBox& sb = search_.Box();
   sb.onChange = [this] {
-    if (DocumentView* v = Active()) v->StartSearch(search_.Box().Text(), search_.MatchCase());
+    if (TabContent* v = Active()) v->StartSearch(search_.Box().Text(), search_.MatchCase());
   };
   sb.onEnter = [this](bool shift) { Execute(shift ? CmdFindPrev : CmdFindNext); };
   sb.onEscape = [this] { CloseSearch(); };
@@ -161,14 +143,14 @@ bool App::CreateMainWindow(const AppOptions& opts) {
   // Page box: type a number and press Enter; Up/Down step through pages.
   TextBox& pb = toolbar_.PageBox();
   pb.onEnter = [this](bool) {
-    DocumentView* v = Active();
+    PagedView* v = ActivePaged();
     int page = 0;
     if (v && fw::ParseInt(toolbar_.PageBox().Text(), page)) v->GoToPage(std::clamp(page, 1, v->PageCount()) - 1);
     FocusBox(nullptr);
   };
   pb.onEscape = [this] { FocusBox(nullptr); };
   pb.onKey = [this](UINT vk, bool) {
-    DocumentView* v = Active();
+    PagedView* v = ActivePaged();
     if (!v || (vk != VK_UP && vk != VK_DOWN)) return false;
     vk == VK_UP ? v->PrevPage() : v->NextPage();
     toolbar_.PageBox().SetText(std::to_wstring(v->CurrentPage() + 1), true);
@@ -203,7 +185,7 @@ bool App::Idle() {
   bool more = false;
   if (anim::Running() && anim::Now() - lastFrame_ >= 14) InvalidateRect(hwnd_, nullptr, FALSE);
   if (banner_.Tick()) InvalidateRect(hwnd_, nullptr, FALSE);
-  DocumentView* v = Active();
+  TabContent* v = Active();
   if (v && v->HasIdleWork() && (dc_ || EnsureTarget())) {
     if (v->IdleWork(dc_.Get(), anim::Now() + 8)) InvalidateRect(hwnd_, nullptr, FALSE);
     more = v->HasIdleWork();
@@ -271,23 +253,11 @@ RECT App::DocRect() const {
   return RECT{0, top, rc.right, rc.bottom};
 }
 
-ToolbarState App::CurrentToolbarState() {
-  ToolbarState s;
-  DocumentView* v = Active();
-  s.hasDoc = v != nullptr;
-  s.ready = v && v->Ready();
-  s.inverted = settings_.invert;
-  s.searchOpen = search_.IsOpen();
-  s.fullscreen = fullscreen_;
-  if (s.ready) {
-    s.modified = v->Modified();
-    s.canPrint = v->CanPrint();
-    s.page = v->CurrentPage();
-    s.pageCount = v->PageCount();
-    s.zoomText = ZoomLabel(v);
-    s.viewMode = v->ViewMode();
-  }
-  return s;
+ToolbarModel App::CurrentToolbar() {
+  ToolbarModel m;
+  TabContent* v = Active();
+  if (v && v->Ready()) v->BuildToolbar(m, ToolbarContext{settings_.invert, search_.IsOpen(), fullscreen_});
+  return m;
 }
 
 void App::Layout() {
@@ -299,17 +269,17 @@ void App::Layout() {
   title_.Layout(RECT{0, 0, rc.right, titleH}, ui_, static_cast<int>(tabs_.size()));
   int toolTop = titleH;
   if (fullscreen_) toolTop = static_cast<int>(std::lround((toolbarReveal_.V() - 1.0f) * toolH));
-  toolbar_.Layout(RECT{0, toolTop, rc.right, toolTop + toolH}, ui_, CurrentToolbarState());
+  toolbar_.Layout(RECT{0, toolTop, rc.right, toolTop + toolH}, ui_, CurrentToolbar());
   RECT doc = DocRect();
   search_.Layout(doc, ui_);
   banner_.Layout(doc, ui_);
   empty_.Layout(doc, ui_, settings_.recent);
   notes_.Layout(doc, ui_);
-  if (DocumentView* v = Active()) v->SetViewport(doc, ui_);
+  if (TabContent* v = Active()) v->SetViewport(doc, ui_);
 }
 
 std::wstring App::SearchStatus() {
-  DocumentView* v = Active();
+  TabContent* v = Active();
   if (!v || search_.Box().Text().empty()) return L"";
   int n = v->SearchCount();
   if (n == 0) return v->SearchDone() ? L"No results" : L"Searching…";
@@ -328,7 +298,7 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
   RECT doc = DocRect();
   bool caretOn = static_cast<int>((anim::Now() - caretStart_) / 530) % 2 == 0;
 
-  DocumentView* v = Active();
+  TabContent* v = Active();
   if (v) {
     v->Draw(canvas_, dc);
   } else {
@@ -366,8 +336,8 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
   // Chrome on top.
   if (!presentation_) {
     if (!fullscreen_ || toolbarReveal_.V() > 0.01f) {
-      ToolbarState ts = CurrentToolbarState();
-      toolbar_.Draw(canvas_, ts, caretOn && focusBox_ == &toolbar_.PageBox());
+      ToolbarModel tm = CurrentToolbar();
+      toolbar_.Draw(canvas_, tm, caretOn && focusBox_ == &toolbar_.PageBox());
     }
     if (!fullscreen_) {
       std::vector<TabInfo> tabs;
@@ -601,7 +571,7 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       ScreenToClient(hwnd_, &pt);
       UINT keys = GET_KEYSTATE_WPARAM(wp);
       UINT mods = (keys & MK_CONTROL ? kModCtrl : 0) | (keys & MK_SHIFT ? kModShift : 0);
-      if (DocumentView* v = Active()) {
+      if (TabContent* v = Active()) {
         v->OnWheel(GET_WHEEL_DELTA_WPARAM(wp), msg == WM_MOUSEHWHEEL, mods, pt.x, pt.y);
         InvalidateRect(hwnd_, nullptr, FALSE);
       }
@@ -614,7 +584,8 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SYSKEYDOWN:
       if (msg == WM_SYSKEYDOWN && wp != VK_F10 && !(wp >= VK_F1 && wp <= VK_F24)) {
         if (wp == VK_LEFT || wp == VK_RIGHT) {  // Alt+Left/Right: previous/next page
-          if (DocumentView* v = Active()) wp == VK_LEFT ? v->PrevPage() : v->NextPage();
+          if (TabContent* v = Active())
+            if (int cmd = v->ShortcutFor(static_cast<UINT>(wp), Mods())) Execute(cmd);
           return 0;
         }
         break;  // Alt+F4, Alt+Space etc.
@@ -786,9 +757,9 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
       if (button == 0) notes_.OnMouseDown(x, y);
       break;
     case Region::Doc:
-      if (DocumentView* v = Active()) {
+      if (TabContent* v = Active()) {
         v->OnMouseDown(x, y, button, Mods(), dbl);
-        if (v->HasFieldFocus() || v->Dragging()) caretStart_ = anim::Now();
+        if (v->HasKeyFocus() || v->Dragging()) caretStart_ = anim::Now();
       } else if (button == 0) {
         empty_.OnMouseDown(x, y);
       }
@@ -811,7 +782,7 @@ void App::OnMouseMove(int x, int y) {
   if (capture_ != Region::None) {
     switch (capture_) {
       case Region::Doc:
-        if (DocumentView* v = Active()) v->OnMouseMove(x, y, Mods());
+        if (TabContent* v = Active()) v->OnMouseMove(x, y, Mods());
         break;
       case Region::Toolbar:
         if (focusBox_ == &toolbar_.PageBox() && GetKeyState(VK_LBUTTON) < 0) toolbar_.PageBox().OnMouseDrag((float)x, (float)y, ui_);
@@ -839,7 +810,7 @@ void App::OnMouseMove(int x, int y) {
       case Region::Banner: banner_.OnMouseLeave(); break;
       case Region::Note: notes_.OnMouseLeave(); break;
       case Region::Doc:
-        if (DocumentView* v = Active()) v->OnMouseLeave();
+        if (TabContent* v = Active()) v->OnMouseLeave();
         else empty_.OnMouseLeave();
         break;
       default: break;
@@ -855,7 +826,7 @@ void App::OnMouseMove(int x, int y) {
     case Region::Banner: changed = banner_.OnMouseMove(x, y); break;
     case Region::Note: changed = notes_.OnMouseMove(x, y); break;
     case Region::Doc:
-      if (DocumentView* v = Active()) v->OnMouseMove(x, y, Mods());
+      if (TabContent* v = Active()) v->OnMouseMove(x, y, Mods());
       else changed = empty_.OnMouseMove(x, y);
       break;
     default: break;
@@ -905,7 +876,7 @@ void App::OnMouseUp(int x, int y, int button) {
       }
       break;
     case Region::Doc:
-      if (DocumentView* v = Active()) {
+      if (TabContent* v = Active()) {
         v->OnMouseUp(x, y, button, Mods());
       } else if (button == 0) {
         EmptyState::Result res = empty_.OnMouseUp(x, y);
@@ -930,7 +901,7 @@ void App::OnMouseLeave() {
   search_.OnMouseLeave();
   banner_.OnMouseLeave();
   empty_.OnMouseLeave();
-  if (DocumentView* v = Active()) v->OnMouseLeave();
+  if (TabContent* v = Active()) v->OnMouseLeave();
   hover_ = Region::None;
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -955,7 +926,7 @@ bool App::OnSetCursor() {
       if (Contains(search_.Box().rc, (float)pt.x, (float)pt.y)) c = ibeam;
       break;
     case Region::Doc:
-      if (DocumentView* v = Active()) c = v->CursorAt(pt.x, pt.y);
+      if (TabContent* v = Active()) c = v->CursorAt(pt.x, pt.y);
       else if (empty_.OverClickable(pt.x, pt.y)) c = hand;
       break;
     default: break;
@@ -977,7 +948,7 @@ void App::UpdateTooltip(int x, int y) {
     case Region::Search: text = search_.TooltipAt(x, y); break;
     case Region::Note: text = notes_.TooltipAt(x, y); break;
     case Region::Doc:
-      if (DocumentView* v = Active()) text = v->TooltipAt(x, y);
+      if (TabContent* v = Active()) text = v->TooltipAt(x, y);
       else text = empty_.TooltipAt(x, y, settings_.recent);
       break;
     default: break;
@@ -1023,44 +994,14 @@ void App::OnKeyDown(UINT vk) {
   HideTooltip();
   const UINT mods = Mods();
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0;
-  DocumentView* v = Active();
+  TabContent* v = Active();
   caretStart_ = anim::Now();
 
-  // Shortcuts that work everywhere, even while typing in a box or a form field.
+  // Shortcuts that work everywhere, even while typing in a box or a form field: the window's own,
+  // then the active tab's (with no tab open, the PDF reader's).
   auto global = [&]() -> int {
-    if (ctrl) {
-      switch (vk) {
-        case 'O': return CmdOpen;
-        case 'S': return shift ? CmdSaveAs : CmdSave;
-        case 'P': return CmdPrint;
-        case 'W':
-        case VK_F4: return CmdCloseTab;
-        case VK_TAB: return shift ? CmdPrevTab : CmdNextTab;
-        case VK_NEXT: return CmdNextTab;
-        case VK_PRIOR: return CmdPrevTab;
-        case 'F': return CmdFind;
-        case 'G': return CmdGoToPage;
-        case 'I': return CmdToggleInvert;
-        case VK_OEM_PLUS:
-        case VK_ADD: return shift ? CmdRotateRight : CmdZoomIn;
-        case VK_OEM_MINUS:
-        case VK_SUBTRACT: return shift ? CmdRotateLeft : CmdZoomOut;
-        case '0':
-        case VK_NUMPAD0: return CmdZoomAuto;
-        case '1': return CmdZoomActual;
-        case '2': return CmdZoomFitPage;
-        case '3': return CmdZoomFitWidth;
-        case '6': return CmdViewSingle;
-        case '7': return CmdViewContinuous;
-        case '8': return CmdViewFacing;
-      }
-    }
-    switch (vk) {
-      case VK_F11: return CmdFullScreen;
-      case VK_F5: return CmdPresentation;
-      case VK_F3: return shift ? CmdFindPrev : CmdFindNext;
-    }
-    return 0;
+    if (int cmd = AppShortcut(vk, mods)) return cmd;
+    return v ? v->ShortcutFor(vk, mods) : PdfView::Shortcut(vk, mods);
   };
 
   if (focusBox_) {
@@ -1080,7 +1021,7 @@ void App::OnKeyDown(UINT vk) {
     return;
   }
 
-  if (v && v->HasFieldFocus()) {
+  if (v && v->HasKeyFocus()) {
     int cmd = global();
     if (cmd) {
       Execute(cmd);
@@ -1131,7 +1072,7 @@ void App::OnChar(wchar_t ch) {
     if (focusBox_->OnChar(ch)) InvalidateRect(hwnd_, nullptr, FALSE);
     return;
   }
-  if (DocumentView* v = Active()) {
+  if (TabContent* v = Active()) {
     if (v->OnChar(ch, Mods())) InvalidateRect(hwnd_, nullptr, FALSE);
   }
 }
@@ -1139,21 +1080,36 @@ void App::OnChar(wchar_t ch) {
 // ---------------------------------------------------------------------------
 // Commands
 
+int App::AppShortcut(UINT vk, UINT mods) {
+  const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0;
+  if (ctrl) {
+    switch (vk) {
+      case 'O': return CmdOpen;
+      case 'S': return shift ? CmdSaveAs : CmdSave;
+      case 'P': return CmdPrint;
+      case 'W':
+      case VK_F4: return CmdCloseTab;
+      case VK_TAB: return shift ? CmdPrevTab : CmdNextTab;
+      case VK_NEXT: return CmdNextTab;
+      case VK_PRIOR: return CmdPrevTab;
+      case 'F': return CmdFind;
+    }
+  }
+  switch (vk) {
+    case VK_F11: return CmdFullScreen;
+    case VK_F3: return shift ? CmdFindPrev : CmdFindNext;
+  }
+  return 0;
+}
+
 void App::Execute(int cmd) {
-  DocumentView* v = Active();
+  TabContent* v = Active();
   const bool ready = v && v->Ready();
   HideTooltip();
 
   if (cmd >= CmdRecent && cmd < CmdRecent + Settings::kMaxRecent) {
     int i = cmd - CmdRecent;
     if (i < static_cast<int>(settings_.recent.size())) OpenFiles({settings_.recent[i].path});
-    return;
-  }
-  if (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + 50) {
-    const auto& presets = fw::ZoomPresets();
-    int i = cmd - CmdZoomPreset;
-    if (ready && i < static_cast<int>(presets.size())) v->SetZoom(presets[i]);
-    InvalidateRect(hwnd_, nullptr, FALSE);
     return;
   }
   if (cmd > CmdBannerAction && cmd < CmdBannerAction + 50) {
@@ -1201,89 +1157,20 @@ void App::Execute(int cmd) {
       search_.ToggleMatchCase();
       if (ready) v->StartSearch(search_.Box().Text(), search_.MatchCase());
       break;
-    case CmdCopy:
-      if (ready) v->Copy();
-      break;
-    case CmdSelectAll:
-      if (ready) v->SelectAll();
-      break;
-    case CmdSelectAllOnPage:
-      if (ready) v->SelectAllOnPage();
-      break;
     case CmdGoToPage:
-      if (ready && !presentation_) {
+      if (ready && v->Paged() && !presentation_) {
         if (fullscreen_) toolbarReveal_.To(1, 160);
         FocusBox(&toolbar_.PageBox());
         toolbar_.PageBox().SelectAll();
       }
       break;
-    case CmdNextPage:
-      if (ready) v->NextPage();
-      break;
-    case CmdPrevPage:
-      if (ready) v->PrevPage();
-      break;
-    case CmdFirstPage:
-      if (ready) v->GoToPage(0);
-      break;
-    case CmdLastPage:
-      if (ready) v->GoToPage(v->PageCount() - 1);
-      break;
-    case CmdZoomIn:
-      if (ready) v->ZoomStep(true);
-      break;
-    case CmdZoomOut:
-      if (ready) v->ZoomStep(false);
-      break;
-    case CmdZoomAuto:
-      if (ready) v->SetZoomMode(fw::ZoomMode::Automatic);
-      break;
-    case CmdZoomActual:
-      if (ready) v->SetZoomMode(fw::ZoomMode::ActualSize);
-      break;
-    case CmdZoomFitPage:
-      if (ready) v->SetZoomMode(fw::ZoomMode::FitPage);
-      break;
-    case CmdZoomFitWidth:
-      if (ready) v->SetZoomMode(fw::ZoomMode::FitWidth);
-      break;
     case CmdZoomMenu:
     case CmdViewMenu:
     case CmdSaveMenu:
     case CmdMoreMenu: ShowMenu(cmd); break;
-    case CmdHighlight:
-      if (ready) v->HighlightSelection();
-      break;
-    case CmdAddNote: {
-      NoteTarget note;
-      if (ready && v->NewNoteAt(contextPt_.x, contextPt_.y, note)) ViewOpenNote(v, note);
-      break;
-    }
-    case CmdOpenNote:
-      if (ready && contextAnnot_.kind == AnnotHit::Kind::Note)
-        ViewOpenNote(v, NoteTarget{contextPage_, contextAnnot_.index, contextAnnot_.rect.left, contextAnnot_.rect.top});
-      break;
-    case CmdRemoveAnnot:
-      if (ready && contextAnnot_.kind != AnnotHit::Kind::None) v->RemoveAnnot(contextPage_, contextAnnot_.index);
-      break;
-    case CmdViewSingle:
-      if (ready) v->SetViewMode(fw::ViewMode::Single);
-      break;
-    case CmdViewContinuous:
-      if (ready) v->SetViewMode(fw::ViewMode::Continuous);
-      break;
-    case CmdViewFacing:
-      if (ready) v->SetViewMode(fw::ViewMode::Facing);
-      break;
     case CmdToggleCover:
       settings_.coverAlone = !settings_.coverAlone;
       for (auto& t : tabs_) t->SettingsChanged();
-      break;
-    case CmdRotateLeft:
-      if (ready) v->Rotate(false);
-      break;
-    case CmdRotateRight:
-      if (ready) v->Rotate(true);
       break;
     case CmdToggleInvert:
       settings_.invert = !settings_.invert;
@@ -1295,7 +1182,7 @@ void App::Execute(int cmd) {
       else ToggleFullScreen();
       break;
     case CmdPresentation:
-      if (ready) SetPresentation(!presentation_);
+      if (ready && v->Paged()) SetPresentation(!presentation_);
       break;
     case CmdThemeSystem: SetTheme(ThemeSetting::System); break;
     case CmdThemeLight: SetTheme(ThemeSetting::Light); break;
@@ -1325,7 +1212,10 @@ void App::Execute(int cmd) {
       Layout();
       break;
     case CmdExit: PostMessageW(hwnd_, WM_CLOSE, 0, 0); break;
-    default: break;
+    default:
+      // Everything else belongs to the tab: pages, zoom, selection, highlights, notes.
+      if (ready) v->Execute(cmd);
+      break;
   }
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -1340,33 +1230,11 @@ int App::TrackMenu(HMENU menu, const D2D1_RECT_F& anchor, bool alignRight) {
 }
 
 void App::ShowMenu(int which) {
-  DocumentView* v = Active();
+  TabContent* v = Active();
   const bool ready = v && v->Ready();
   HMENU m = CreatePopupMenu();
   bool alignRight = false;
-  if (which == CmdZoomMenu && ready) {
-    auto mode = v->ZoomMode();
-    AppendItem(m, CmdZoomAuto, L"Automatic\tCtrl+0", true, mode == fw::ZoomMode::Automatic, true);
-    AppendItem(m, CmdZoomFitWidth, L"Fit width\tCtrl+3", true, mode == fw::ZoomMode::FitWidth, true);
-    AppendItem(m, CmdZoomFitPage, L"Fit page\tCtrl+2", true, mode == fw::ZoomMode::FitPage, true);
-    AppendItem(m, CmdZoomActual, L"Actual size\tCtrl+1", true, mode == fw::ZoomMode::ActualSize, true);
-    AppendSeparator(m);
-    const auto& presets = fw::ZoomPresets();
-    for (int i = 0; i < static_cast<int>(presets.size()); ++i) {
-      bool current = mode == fw::ZoomMode::Custom && std::abs(v->Zoom() - presets[i]) < 0.005;
-      AppendItem(m, CmdZoomPreset + i, fw::FormatPercent(presets[i]), true, current, true);
-    }
-  } else if (which == CmdViewMenu && ready) {
-    auto mode = v->ViewMode();
-    AppendItem(m, CmdViewSingle, L"Single page\tCtrl+6", true, mode == fw::ViewMode::Single, true);
-    AppendItem(m, CmdViewContinuous, L"Continuous\tCtrl+7", true, mode == fw::ViewMode::Continuous, true);
-    AppendItem(m, CmdViewFacing, L"Two pages\tCtrl+8", true, mode == fw::ViewMode::Facing, true);
-    AppendSeparator(m);
-    AppendItem(m, CmdToggleCover, L"Show cover page on its own", mode == fw::ViewMode::Facing, settings_.coverAlone);
-    AppendSeparator(m);
-    AppendItem(m, CmdRotateLeft, L"Rotate counterclockwise\tCtrl+Shift+−");
-    AppendItem(m, CmdRotateRight, L"Rotate clockwise\tCtrl+Shift+=");
-  } else if (which == CmdSaveMenu && ready) {
+  if (which == CmdSaveMenu && ready) {
     AppendItem(m, CmdSave, L"Save\tCtrl+S", v->Modified());
     AppendItem(m, CmdSaveAs, L"Save as\u2026\tCtrl+Shift+S");
   } else if (which == CmdMoreMenu) {
@@ -1401,6 +1269,8 @@ void App::ShowMenu(int which) {
     if (!fileassoc::IsDefault()) AppendItem(m, CmdMakeDefault, L"Make Featherweight the default PDF app");
     AppendSeparator(m);
     AppendItem(m, CmdAbout, L"About Featherweight");
+  } else if (ready) {
+    v->FillMenu(which, m);  // zoom, page layout
   }
   if (GetMenuItemCount(m) > 0) {
     int cmd = TrackMenu(m, toolbar_.ButtonRect(which == CmdSaveMenu ? CmdSave : which), alignRight);
@@ -1410,65 +1280,37 @@ void App::ShowMenu(int which) {
 }
 
 void App::ShowContextMenu(int sx, int sy) {
-  DocumentView* v = Active();
+  TabContent* v = Active();
   if (!v || !v->Ready()) return;
   HMENU m = CreatePopupMenu();
-  if (v->HasFieldFocus()) {
-    AppendItem(m, 1, L"Cut\tCtrl+X");
-    AppendItem(m, 2, L"Copy\tCtrl+C");
-    AppendItem(m, 3, L"Paste\tCtrl+V");
-    AppendSeparator(m);
-    AppendItem(m, 4, L"Select all\tCtrl+A");
-  } else {
-    POINT cp{sx, sy};
-    ScreenToClient(hwnd_, &cp);
-    contextPt_ = cp;
-    contextAnnot_ = v->AnnotAtPoint(cp.x, cp.y, contextPage_);
-    if (v->HasSelection()) {
-      AppendItem(m, CmdHighlight, L"Highlight");
-      AppendItem(m, CmdCopy, L"Copy\tCtrl+C");
-    }
-    if (contextAnnot_.kind == AnnotHit::Kind::Highlight) {
-      AppendItem(m, CmdRemoveAnnot, L"Remove highlight");
-    } else if (contextAnnot_.kind == AnnotHit::Kind::Note) {
-      AppendItem(m, CmdOpenNote, L"Open note");
-      AppendItem(m, CmdRemoveAnnot, L"Delete note");
-    } else if (contextPage_ >= 0) {
-      AppendItem(m, CmdAddNote, L"Add note here");
-    }
-    AppendSeparator(m);
-    AppendItem(m, CmdSelectAllOnPage, L"Select all text on this page");
-    AppendSeparator(m);
-    AppendItem(m, CmdZoomIn, L"Zoom in\tCtrl+=");
-    AppendItem(m, CmdZoomOut, L"Zoom out\tCtrl+−");
-    AppendItem(m, CmdZoomFitWidth, L"Fit width\tCtrl+3");
-    AppendItem(m, CmdZoomFitPage, L"Fit page\tCtrl+2");
-    AppendSeparator(m);
-    AppendItem(m, CmdRotateRight, L"Rotate clockwise\tCtrl+Shift+=");
-    AppendItem(m, CmdRotateLeft, L"Rotate counterclockwise\tCtrl+Shift+−");
-    AppendSeparator(m);
-    AppendItem(m, CmdFind, L"Find…\tCtrl+F");
-    AppendItem(m, CmdPrint, L"Print…\tCtrl+P", v->CanPrint());
-  }
+  POINT cp{sx, sy};
+  ScreenToClient(hwnd_, &cp);
+  v->FillContextMenu(m, cp.x, cp.y);
   theme::ApplyToMenus();
   HideTooltip();
   int cmd = TrackPopupMenuEx(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, sx, sy, hwnd_, nullptr);
   DestroyMenu(m);
-  if (v->HasFieldFocus() && cmd >= 1 && cmd <= 4) {
-    const UINT keys[] = {0, 'X', 'C', 'V', 'A'};
-    v->OnKeyDown(keys[cmd], kModCtrl);
-    InvalidateRect(hwnd_, nullptr, FALSE);
-    return;
-  }
   if (cmd) Execute(cmd);
 }
 
 // ---------------------------------------------------------------------------
 // Documents and tabs
 
-DocumentView* App::Active() const {
+TabContent* App::Active() const {
   return active_ >= 0 && active_ < static_cast<int>(tabs_.size()) ? tabs_[active_].get() : nullptr;
 }
+
+PagedView* App::ActivePaged() const {
+  TabContent* v = Active();
+  return v ? v->Paged() : nullptr;
+}
+
+PdfView* App::ActivePdf() const {
+  TabContent* v = Active();
+  return v ? v->AsPdf() : nullptr;
+}
+
+std::unique_ptr<TabContent> App::CreateTab(const std::wstring& path) { return std::make_unique<PdfView>(*this, path); }
 
 void App::OpenFiles(const std::vector<std::wstring>& files) {
   int toActivate = -1;
@@ -1485,7 +1327,7 @@ void App::OpenFiles(const std::vector<std::wstring>& files) {
       }
     }
     if (found) continue;
-    auto view = std::make_unique<DocumentView>(*this, path);
+    std::unique_ptr<TabContent> view = CreateTab(path);
     view->SetViewport(DocRect(), ui_);
     std::wstring error;
     OpenResult r = view->Load(L"", error);
@@ -1523,7 +1365,7 @@ void App::OpenDialog() {
   DWORD opts = 0;
   dlg->GetOptions(&opts);
   dlg->SetOptions(opts | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
-  if (DocumentView* v = Active()) {
+  if (TabContent* v = Active()) {
     ComPtr<IShellItem> folder;
     if (SUCCEEDED(SHCreateItemFromParsingName(fw::DirOf(v->Path()).c_str(), nullptr, IID_PPV_ARGS(&folder))))
       dlg->SetFolder(folder.Get());
@@ -1546,12 +1388,12 @@ void App::OpenDialog() {
   OpenFiles(files);
 }
 
-std::wstring App::SaveDialog(const std::wstring& suggested) {
+std::wstring App::SaveDialog(const std::wstring& suggested, const SaveFormat& format) {
   ComPtr<IFileSaveDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return {};
-  COMDLG_FILTERSPEC filters[] = {{L"PDF document", L"*.pdf"}};
+  COMDLG_FILTERSPEC filters[] = {{format.name, format.pattern}};
   dlg->SetFileTypes(1, filters);
-  dlg->SetDefaultExtension(L"pdf");
+  dlg->SetDefaultExtension(format.ext);
   dlg->SetFileName(fw::FileNameOf(suggested).c_str());
   ComPtr<IShellItem> folder;
   std::wstring dir = fw::DirOf(suggested);
@@ -1584,7 +1426,7 @@ void App::ActivateTab(int index) {
   if (index != active_ && notes_.IsOpen()) FinishNote(NoteEditor::kSave);
   if (index != active_ && Active()) Active()->OnDeactivated();
   active_ = index;
-  DocumentView* v = Active();
+  TabContent* v = Active();
   FocusBox(v->PasswordBox());
   Layout();
   std::wstring title = v->Title() + L" – Featherweight";
@@ -1592,7 +1434,7 @@ void App::ActivateTab(int index) {
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-bool App::ConfirmClose(DocumentView* view) {
+bool App::ConfirmClose(TabContent* view) {
   if (!view->Modified()) return true;
   std::wstring heading = L"Save changes to “" + view->Title() + L"”?";
   constexpr int kSaveAs = 100;
@@ -1619,7 +1461,7 @@ bool App::ConfirmClose(DocumentView* view) {
 
 bool App::CloseTab(int index) {
   if (index < 0 || index >= static_cast<int>(tabs_.size())) return false;
-  DocumentView* v = tabs_[index].get();
+  TabContent* v = tabs_[index].get();
   if (notes_.IsOpen() && notes_.View() == v) FinishNote(NoteEditor::kSave);
   if (v->Modified()) {
     ActivateTab(index);
@@ -1644,17 +1486,17 @@ bool App::CloseTab(int index) {
   return true;
 }
 
-void App::RememberState(DocumentView* view) {
+void App::RememberState(TabContent* view) {
   if (view && view->Ready() && !snapshot_) settings_.SetState(view->Path(), view->State());
 }
 
 bool App::SaveActive(bool saveAs) {
-  DocumentView* v = Active();
+  TabContent* v = Active();
   if (!v || !v->Ready()) return false;
   if (!saveAs && !v->Modified()) return true;
   std::wstring path = v->Path();
   if (saveAs) {
-    path = SaveDialog(v->Path());
+    path = SaveDialog(v->Path(), v->SaveAsFormat());
     if (path.empty()) return false;
   }
   std::wstring error;
@@ -1672,7 +1514,7 @@ bool App::SaveActive(bool saveAs) {
     banner_.Show(BannerKind::Warning, error + L" Choose another place to save it.");
     InvalidateRect(hwnd_, nullptr, FALSE);
     UpdateWindow(hwnd_);
-    path = SaveDialog(v->Path());
+    path = SaveDialog(v->Path(), v->SaveAsFormat());
     if (!path.empty() && v->Save(path, error)) {
       settings_.AddRecent(v->Path());
       settings_.Save();
@@ -1687,12 +1529,12 @@ bool App::SaveActive(bool saveAs) {
 }
 
 void App::PrintActive() {
-  DocumentView* v = Active();
+  TabContent* v = Active();
   if (!v || !v->Ready()) return;
   std::wstring message;
   HideTooltip();
-  print::Outcome outcome = print::PrintDocument(
-      hwnd_, *v->Doc(), v->CurrentPage(), v->Title(),
+  PrintOutcome outcome = v->Print(
+      hwnd_,
       [this](int done, int total) {
         banner_.Show(BannerKind::Info,
                      L"Printing… page " + std::to_wstring(done + 1) + L" of " + std::to_wstring(total));
@@ -1701,16 +1543,16 @@ void App::PrintActive() {
       },
       message);
   switch (outcome) {
-    case print::Outcome::Printed: banner_.Show(BannerKind::Success, message, {}, 3000); break;
-    case print::Outcome::NotAllowed: banner_.Show(BannerKind::Warning, message, {}, 6000); break;
-    case print::Outcome::Failed: banner_.Show(BannerKind::Error, message); break;
-    case print::Outcome::Cancelled: banner_.Hide(); break;
+    case PrintOutcome::Printed: banner_.Show(BannerKind::Success, message, {}, 3000); break;
+    case PrintOutcome::NotAllowed: banner_.Show(BannerKind::Warning, message, {}, 6000); break;
+    case PrintOutcome::Failed: banner_.Show(BannerKind::Error, message); break;
+    case PrintOutcome::Cancelled: banner_.Hide(); break;
   }
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void App::OpenSearch() {
-  DocumentView* v = Active();
+  TabContent* v = Active();
   if (!v || !v->Ready()) return;
   if (presentation_) return;
   if (!search_.IsOpen()) search_.Open();
@@ -1727,7 +1569,7 @@ void App::OpenSearch() {
 void App::CloseSearch() {
   search_.Close();
   if (focusBox_ == &search_.Box()) FocusBox(nullptr);
-  if (DocumentView* v = Active()) v->ClearSearch();
+  if (TabContent* v = Active()) v->ClearSearch();
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -1766,7 +1608,7 @@ void App::ToggleFullScreen() {
 }
 
 void App::SetPresentation(bool on) {
-  DocumentView* v = Active();
+  PagedView* v = ActivePaged();
   if (on == presentation_ || !v || !v->Ready()) return;
   if (on) {
     if (search_.IsOpen()) CloseSearch();
@@ -1817,7 +1659,7 @@ void App::ViewRequestPrint() { PostMessageW(hwnd_, WM_COMMAND, CmdPrint, 0); }
 
 void App::ViewFocusTextBox(TextBox* box) { FocusBox(box); }
 
-void App::ViewPasswordAccepted(DocumentView* view) {
+void App::ViewPasswordAccepted(TabContent* view) {
   view->SetViewport(DocRect(), ui_);
   if (auto st = settings_.GetState(view->Path())) view->ApplyState(*st);
   else view->ApplyState(FileState{});
@@ -1826,7 +1668,7 @@ void App::ViewPasswordAccepted(DocumentView* view) {
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-void App::ViewOpenNote(DocumentView* view, const NoteTarget& note) {
+void App::ViewOpenNote(PdfView* view, const NoteTarget& note) {
   if (notes_.IsOpen()) FinishNote(NoteEditor::kSave);
   HideTooltip();
   FocusBox(nullptr);
@@ -1836,7 +1678,7 @@ void App::ViewOpenNote(DocumentView* view, const NoteTarget& note) {
 }
 
 void App::FinishNote(NoteEditor::Action action) {
-  DocumentView* v = notes_.View();
+  PdfView* v = notes_.View();
   if (!v) return;
   bool stillOpen = false;
   for (auto& t : tabs_)
@@ -2102,16 +1944,16 @@ void App::RunScript(const std::wstring& script) {
       int delta = p.size() > 0 ? _wtoi(p[0].c_str()) : -120;
       x = p.size() > 1 ? _wtoi(p[1].c_str()) : 400;
       y = p.size() > 2 ? _wtoi(p[2].c_str()) : 400;
-      if (DocumentView* v = Active()) v->OnWheel(delta, false, 0, x, y);
+      if (TabContent* v = Active()) v->OnWheel(delta, false, 0, x, y);
     } else if (op == L"zoom") {
-      if (DocumentView* v = Active()) v->SetZoom(_wtoi(arg.c_str()) / 100.0);
+      if (PagedView* v = ActivePaged()) v->SetZoom(_wtoi(arg.c_str()) / 100.0);
     } else if (op == L"page") {
-      if (DocumentView* v = Active()) v->GoToPage(_wtoi(arg.c_str()) - 1);
+      if (PagedView* v = ActivePaged()) v->GoToPage(_wtoi(arg.c_str()) - 1);
     } else if (op == L"view") {
-      if (DocumentView* v = Active())
+      if (PagedView* v = ActivePaged())
         v->SetViewMode(arg == L"single" ? fw::ViewMode::Single : arg == L"facing" ? fw::ViewMode::Facing : fw::ViewMode::Continuous);
     } else if (op == L"save") {
-      if (DocumentView* v = Active()) {
+      if (TabContent* v = Active()) {
         std::wstring err;
         if (!v->Save(arg, err)) fwprintf(stderr, L"save failed: %s\n", err.c_str());
       }
@@ -2130,7 +1972,7 @@ void App::RunScript(const std::wstring& script) {
       fwprintf(stderr, L"updater: status=%d version=%s page=%s error=%s\n", static_cast<int>(r.status),
                r.version.c_str(), r.pageUrl.c_str(), r.error.c_str());
     } else if (op == L"highlight") {
-      if (DocumentView* v = Active()) v->HighlightSelection();
+      if (PdfView* v = ActivePdf()) v->HighlightSelection();
     } else if (op == L"dumpedit") {
       wchar_t buf[512] = {};
       GetWindowTextW(notes_.Edit(), buf, 512);
@@ -2139,7 +1981,7 @@ void App::RunScript(const std::wstring& script) {
     } else if (op == L"dumpnote") {
       int x, y, page;
       xy(x, y);
-      if (DocumentView* v = Active()) {
+      if (PdfView* v = ActivePdf()) {
         AnnotHit hit = v->AnnotAtPoint(x, y, page);
         std::wstring t = hit.kind == AnnotHit::Kind::Note ? v->NoteText(NoteTarget{page, hit.index}) : L"(no note)";
         for (wchar_t ch : t) fwprintf(stderr, L"%04x ", static_cast<unsigned>(ch));
@@ -2148,13 +1990,13 @@ void App::RunScript(const std::wstring& script) {
     } else if (op == L"removeannot") {
       int x, y, page;
       xy(x, y);
-      if (DocumentView* v = Active()) {
+      if (PdfView* v = ActivePdf()) {
         AnnotHit hit = v->AnnotAtPoint(x, y, page);
         if (hit.kind != AnnotHit::Kind::None) v->RemoveAnnot(page, hit.index);
       }
     } else if (op == L"note" || op == L"opennote") {
       auto p = fw::Split(arg, L',');
-      DocumentView* v = Active();
+      PdfView* v = ActivePdf();
       NoteTarget note;
       if (v && p.size() >= 2 && v->NewNoteAt(_wtoi(p[0].c_str()), _wtoi(p[1].c_str()), note)) {
         std::wstring text = p.size() > 2 ? p[2] : L"Note";

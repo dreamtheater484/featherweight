@@ -36,7 +36,7 @@ target_compile_options(fwcore PRIVATE ${FW_COMPILE_OPTIONS})
 target_compile_definitions(fwcore PUBLIC ${FW_DEFINITIONS})
 
 # --- The app ---
-file(GLOB FW_APP_SOURCES CONFIGURE_DEPENDS src/*.cpp)
+file(GLOB FW_APP_SOURCES CONFIGURE_DEPENDS src/*.cpp src/ui/*.cpp src/pdf/*.cpp)
 add_executable(Featherweight WIN32
   ${FW_APP_SOURCES}
   src/resource.rc

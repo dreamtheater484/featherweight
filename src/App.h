@@ -6,18 +6,20 @@
 #include <string>
 #include <vector>
 
-#include "Banner.h"
-#include "DocumentView.h"
 #include "DropTarget.h"
-#include "EmptyState.h"
-#include "NoteEditor.h"
-#include "Gfx.h"
-#include "SearchPanel.h"
+#include "PagedView.h"
 #include "Settings.h"
-#include "TitleBar.h"
-#include "Toolbar.h"
-#include "Tooltip.h"
+#include "TabContent.h"
 #include "Updater.h"
+#include "pdf/NoteEditor.h"
+#include "pdf/PdfView.h"
+#include "ui/Banner.h"
+#include "ui/EmptyState.h"
+#include "ui/Gfx.h"
+#include "ui/SearchPanel.h"
+#include "ui/TitleBar.h"
+#include "ui/Toolbar.h"
+#include "ui/Tooltip.h"
 
 struct AppOptions {
   std::vector<std::wstring> files;
@@ -31,7 +33,7 @@ struct AppOptions {
   std::wstring script;         // steps separated by ';' (see App::RunScript)
 };
 
-class App : public ViewHost, public DropHost {
+class App : public PdfHost, public DropHost {
  public:
   static constexpr wchar_t kWindowClass[] = L"FeatherweightWindow";
   static constexpr ULONG_PTR kCopyDataOpen = 0x46570001;
@@ -40,7 +42,7 @@ class App : public ViewHost, public DropHost {
   ~App() override;
   int Run(const AppOptions& opts);
 
-  // ViewHost
+  // ViewHost and PdfHost
   void ViewInvalidate() override;
   void ViewStateChanged() override;
   void ViewMessage(BannerKind kind, const std::wstring& text) override;
@@ -50,8 +52,8 @@ class App : public ViewHost, public DropHost {
   bool ViewInverted() override { return settings_.invert; }
   bool ViewCoverAlone() override { return settings_.coverAlone; }
   bool ViewHighlightFields() override { return settings_.highlightFields; }
-  void ViewPasswordAccepted(DocumentView* view) override;
-  void ViewOpenNote(DocumentView* view, const NoteTarget& note) override;
+  void ViewPasswordAccepted(TabContent* view) override;
+  void ViewOpenNote(PdfView* view, const NoteTarget& note) override;
 
   // DropHost
   void OnDragEnter(bool acceptable) override;
@@ -76,7 +78,8 @@ class App : public ViewHost, public DropHost {
   RECT DocRect() const;
   int TitleHeight() const;
   int ToolbarHeight() const;
-  ToolbarState CurrentToolbarState();
+  // The active tab's toolbar, with the window's own state.
+  ToolbarModel CurrentToolbar();
   std::wstring SearchStatus();
 
   // Input
@@ -94,22 +97,28 @@ class App : public ViewHost, public DropHost {
   LRESULT HitTestNC(int screenX, int screenY);
 
   // Commands
+  // Keys that work the same in every kind of tab.
+  static int AppShortcut(UINT vk, UINT mods);
   void Execute(int cmd);
   void ShowMenu(int cmd);
   void ShowContextMenu(int screenX, int screenY);
   int TrackMenu(HMENU menu, const D2D1_RECT_F& anchor, bool alignRight);
 
   // Documents and tabs
-  DocumentView* Active() const;
+  TabContent* Active() const;
+  PagedView* ActivePaged() const;  // the active tab if it shows pages
+  PdfView* ActivePdf() const;
+  // A tab for a file. Every file is a PDF for now; documents, spreadsheets and presentations come later.
+  std::unique_ptr<TabContent> CreateTab(const std::wstring& path);
   void OpenFiles(const std::vector<std::wstring>& files);
   void OpenDialog();
-  std::wstring SaveDialog(const std::wstring& suggested);
+  std::wstring SaveDialog(const std::wstring& suggested, const SaveFormat& format);
   void ActivateTab(int index);
   bool CloseTab(int index);
-  bool ConfirmClose(DocumentView* view);
+  bool ConfirmClose(TabContent* view);
   bool SaveActive(bool saveAs);
   void PrintActive();
-  void RememberState(DocumentView* view);
+  void RememberState(TabContent* view);
   void FocusBox(TextBox* box);
   void OpenSearch();
   // Saves (or cancels) the note being edited and closes the editor.
@@ -154,10 +163,7 @@ class App : public ViewHost, public DropHost {
   Tooltip tooltip_;
   EmptyState empty_;
   NoteEditor notes_;
-  POINT contextPt_{};
-  int contextPage_ = -1;
-  AnnotHit contextAnnot_;
-  std::vector<std::unique_ptr<DocumentView>> tabs_;
+  std::vector<std::unique_ptr<TabContent>> tabs_;
   int active_ = -1;
 
   Settings settings_;

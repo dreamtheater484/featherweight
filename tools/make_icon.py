@@ -1,6 +1,6 @@
 """Generates src/Featherweight.ico (and a preview PNG) for Featherweight.
 
-The feather geometry mirrors src/Logo.cpp so the icon and the in-app logo match.
+The feather geometry mirrors src/ui/Logo.cpp so the icon and the in-app logo match.
 Run:  python tools/make_icon.py
 """
 import math

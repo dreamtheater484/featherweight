@@ -7,9 +7,9 @@
 #include <string>
 #include <vector>
 
-#include "Theme.h"
 #include "core/Ini.h"
 #include "core/Layout.h"
+#include "ui/Theme.h"
 
 struct RecentFile {
   std::wstring path;
