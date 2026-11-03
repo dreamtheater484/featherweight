@@ -75,7 +75,10 @@ if ($Lifecycle) {
     @("form-typing", "light", "", "click:560,285;type:Jane Doe;key:tab;type:jane@example.com", @("form.pdf")),
     # The note's text box is a native child window drawn over the swap chain; its blinking caret is
     # the only expected difference.
-    @("note-edit-existing", "dark", "", "note:760,210,Existing note|with two lines;click:772,222;type: and more", @("text.pdf"))
+    @("note-edit-existing", "dark", "", "note:760,210,Existing note|with two lines;click:772,222;type: and more", @("text.pdf")),
+    # The widgets: an open list over the cards, and a combo box with its caret and autocomplete.
+    @("gallery-dropdown", "light", "--widget-gallery", "click:243,268;move:243,420", @()),
+    @("gallery-combo-typing", "dark", "--widget-gallery", "click:560,268;type:Ge;key:alt+down", @())
   )
 }
 
