@@ -49,7 +49,8 @@ if ($Publish) {
 
 $build = Join-Path $root "build-release"
 Step "Configuring"
-cmake -S . -B $build -DFW_BUILD_TESTS=ON | Out-Host
+# The shipped exe leaves out test-only screens such as the widget gallery (plan §11).
+cmake -S . -B $build -DFW_BUILD_TESTS=ON -DFW_TEST_SCREENS=OFF | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
 Step "Building"
 cmake --build $build --config Release -- /nologo /verbosity:minimal | Out-Host

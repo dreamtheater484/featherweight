@@ -39,12 +39,18 @@ target_compile_definitions(fwcore PUBLIC ${FW_DEFINITIONS})
 
 # --- The app ---
 file(GLOB FW_APP_SOURCES CONFIGURE_DEPENDS src/*.cpp src/ui/*.cpp src/pdf/*.cpp)
+# Test-only screens (the widget gallery) never ship (plan §11): scripts/release.ps1 turns this off.
+option(FW_TEST_SCREENS "Build the widget gallery and other test-only screens into the app" ON)
+if(NOT FW_TEST_SCREENS)
+  list(FILTER FW_APP_SOURCES EXCLUDE REGEX "/src/ui/WidgetGallery\.cpp$")
+endif()
 add_executable(Featherweight WIN32
   ${FW_APP_SOURCES}
   src/resource.rc
   src/Featherweight.manifest
 )
 target_include_directories(Featherweight PRIVATE src "${CMAKE_BINARY_DIR}/generated")
+target_compile_definitions(Featherweight PRIVATE "$<$<BOOL:${FW_TEST_SCREENS}>:FW_TEST_SCREENS=1>")
 target_compile_options(Featherweight PRIVATE ${FW_COMPILE_OPTIONS})
 target_compile_definitions(Featherweight PRIVATE "$<$<BOOL:${FW_WITH_V8}>:FW_WITH_V8=1;PDF_ENABLE_V8;PDF_ENABLE_XFA>")
 target_link_libraries(Featherweight PRIVATE
