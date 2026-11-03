@@ -31,10 +31,10 @@ jobs:
         shell: pwsh
         run: |
           $fwtool = 'build\tools\fwtool\Release\fwtool.exe'
-          & $fwtool roundtrip tests\office\generated tests\office\edge; if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          & $fwtool roundtrip --reserialize-all tests\office\generated tests\office\edge; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $fwtool roundtrip tests\office\generated tests\office\edge tests\office\layout; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $fwtool roundtrip --reserialize-all tests\office\generated tests\office\edge tests\office\layout; if ($LASTEXITCODE) { exit $LASTEXITCODE }
           & $fwtool roundtrip --expect-reject tests\office\malicious; if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          & $fwtool check tests\office\generated tests\office\edge; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $fwtool check tests\office\generated tests\office\edge tests\office\layout; if ($LASTEXITCODE) { exit $LASTEXITCODE }
           & $fwtool check --expect-reject tests\office\broken; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Smoke test (render a PDF off-screen)

@@ -29,6 +29,7 @@ add_library(fwcore STATIC
   src/core/Ini.cpp
   src/core/Json.cpp
   src/core/Layout.cpp
+  src/core/LayoutDump.cpp
   src/core/PageRange.cpp
   src/core/SemVer.cpp
 )
@@ -100,9 +101,9 @@ if(FW_BUILD_TESTS)
   target_link_libraries(fw_tests PRIVATE fwpkg fwdraw windowscodecs ole32)
   # Never-damage tests on the public corpus (plan §10).
   set(_fw_office "${CMAKE_SOURCE_DIR}/tests/office")
-  add_test(NAME office_roundtrip COMMAND fwtool roundtrip "${_fw_office}/generated" "${_fw_office}/edge")
-  add_test(NAME office_reserialize COMMAND fwtool roundtrip --reserialize-all "${_fw_office}/generated" "${_fw_office}/edge")
-  add_test(NAME office_check COMMAND fwtool check "${_fw_office}/generated" "${_fw_office}/edge")
+  add_test(NAME office_roundtrip COMMAND fwtool roundtrip "${_fw_office}/generated" "${_fw_office}/edge" "${_fw_office}/layout")
+  add_test(NAME office_reserialize COMMAND fwtool roundtrip --reserialize-all "${_fw_office}/generated" "${_fw_office}/edge" "${_fw_office}/layout")
+  add_test(NAME office_check COMMAND fwtool check "${_fw_office}/generated" "${_fw_office}/edge" "${_fw_office}/layout")
   add_test(NAME office_check_broken COMMAND fwtool check --expect-reject "${_fw_office}/broken")
   add_test(NAME office_malicious COMMAND fwtool roundtrip --expect-reject "${_fw_office}/malicious")
 endif()
