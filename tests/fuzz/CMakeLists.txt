@@ -4,7 +4,7 @@
 set(FW_FUZZ_ENGINE "libfuzzer" CACHE STRING "Fuzz engine: libfuzzer or replay")
 set_property(CACHE FW_FUZZ_ENGINE PROPERTY STRINGS libfuzzer replay)
 
-set(_fw_fuzz_targets fuzz_zip fuzz_xml)
+set(_fw_fuzz_targets fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula)
 if(FW_FUZZ_ENGINE STREQUAL "libfuzzer")
   # VS 2022 understands /fsanitize=fuzzer. VS 2019 16.9+ ignores it but has the pieces:
   # the coverage flags, and the libFuzzer and sancov runtimes, linked by hand.
@@ -32,9 +32,13 @@ foreach(target ${_fw_fuzz_targets})
   target_compile_options(${target} PRIVATE ${FW_COMPILE_OPTIONS})
 endforeach()
 
-# Replay the corpus and the regression files once (libFuzzer: -runs=0 runs the inputs, no fuzzing).
+# Replay the seeds and the regression files once (libFuzzer: -runs=0 runs the inputs, no fuzzing).
+# run-fuzzers.ps1 lists the same seed folders for the timed runs.
 set(_fw_runs $<$<STREQUAL:${FW_FUZZ_ENGINE},libfuzzer>:-runs=0>)
-add_test(NAME fuzz_zip_replay COMMAND fuzz_zip ${_fw_runs} "${CMAKE_SOURCE_DIR}/tests/office"
-  "${CMAKE_CURRENT_SOURCE_DIR}/regressions/zip")
-add_test(NAME fuzz_xml_replay COMMAND fuzz_xml ${_fw_runs} "${CMAKE_CURRENT_SOURCE_DIR}/seeds/xml"
-  "${CMAKE_CURRENT_SOURCE_DIR}/regressions/xml")
+set(_fw_seeds "${CMAKE_CURRENT_SOURCE_DIR}/seeds")
+set(_fw_regressions "${CMAKE_CURRENT_SOURCE_DIR}/regressions")
+add_test(NAME fuzz_zip_replay COMMAND fuzz_zip ${_fw_runs} "${CMAKE_SOURCE_DIR}/tests/office" "${_fw_regressions}/zip")
+add_test(NAME fuzz_xml_replay COMMAND fuzz_xml ${_fw_runs} "${_fw_seeds}/xml" "${_fw_regressions}/xml")
+add_test(NAME fuzz_opc_replay COMMAND fuzz_opc ${_fw_runs} "${_fw_seeds}/opc" "${_fw_regressions}/opc")
+add_test(NAME fuzz_check_replay COMMAND fuzz_check ${_fw_runs} "${_fw_seeds}/package" "${_fw_regressions}/check")
+add_test(NAME fuzz_formula_replay COMMAND fuzz_formula ${_fw_runs} "${_fw_seeds}/formula" "${_fw_regressions}/formula")

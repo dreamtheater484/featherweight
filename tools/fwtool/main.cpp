@@ -20,8 +20,11 @@ constexpr const char* kUsage =
     "      refused with a plain message (malicious files).\n"
     "  fwtool dump <file>...\n"
     "      Lists parts, relationships and content types.\n"
-    "  fwtool check <file or folder>...\n"
-    "      Checks that every relationship resolves and ids are unique.\n";
+    "  fwtool check [--expect-reject] <file or folder>...\n"
+    "      Checks each file against the reference registry: every reference resolves, ids\n"
+    "      are unique, pairs are complete, and derived data (the calculation chain, chart\n"
+    "      caches) matches its sources. With --expect-reject every file must fail (the\n"
+    "      broken files).\n";
 
 std::vector<std::filesystem::path> CollectSorted(const std::filesystem::path& dir) {
   std::vector<std::filesystem::path> files;

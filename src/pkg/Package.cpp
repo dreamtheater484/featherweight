@@ -201,19 +201,8 @@ std::unique_ptr<Package> Package::Open(std::unique_ptr<Snapshot> snapshot, const
   }
   status = pkg->ReadPart(kContentTypesPart, bytes);
   if (!status.Ok()) return nullptr;
-  XmlDom dom;
-  status = dom.Parse(AsText(bytes), limits, ZipNameOf(kContentTypesPart));
+  status = ParseContentTypes(AsText(bytes), limits, pkg->types_);
   if (!status.Ok()) return nullptr;
-  if (!IsElement(dom.Root(), kContentTypesNs, "Types")) {
-    status = Status::Fail(Status::Code::Damaged, "Part [Content_Types].xml is damaged.");
-    return nullptr;
-  }
-  for (auto child : dom.Root().children()) {
-    if (IsElement(child, kContentTypesNs, "Default"))
-      pkg->types_.defaults.emplace_back(child.attribute("Extension").value(), child.attribute("ContentType").value());
-    else if (IsElement(child, kContentTypesNs, "Override"))
-      pkg->types_.overrides.emplace_back(child.attribute("PartName").value(), child.attribute("ContentType").value());
-  }
   pkg->IndexTypes();
 
   for (const auto& part : pkg->parts_) {
@@ -225,18 +214,29 @@ std::unique_ptr<Package> Package::Open(std::unique_ptr<Snapshot> snapshot, const
   return pkg;
 }
 
-Status Package::ReadRelationships(const Part& part) {
-  std::vector<uint8_t> bytes;
-  Status s = ReadPart(part.name, bytes);
-  if (!s.Ok()) return s;
+Status ParseContentTypes(std::string_view xml, const Limits& limits, ContentTypes& out) {
   XmlDom dom;
-  s = dom.Parse(AsText(bytes), limits_, ZipNameOf(part.name));
+  Status s = dom.Parse(xml, limits, ZipNameOf(kContentTypesPart));
+  if (!s.Ok()) return s;
+  if (!IsElement(dom.Root(), kContentTypesNs, "Types"))
+    return Status::Fail(Status::Code::Damaged, "Part [Content_Types].xml is damaged.");
+  for (auto child : dom.Root().children()) {
+    if (IsElement(child, kContentTypesNs, "Default"))
+      out.defaults.emplace_back(child.attribute("Extension").value(), child.attribute("ContentType").value());
+    else if (IsElement(child, kContentTypesNs, "Override"))
+      out.overrides.emplace_back(child.attribute("PartName").value(), child.attribute("ContentType").value());
+  }
+  return Status{};
+}
+
+Status ParseRelationships(std::string_view xml, std::string_view source, const Limits& limits, std::string_view label,
+                          RelationshipSet& out) {
+  XmlDom dom;
+  Status s = dom.Parse(xml, limits, label);
   if (!s.Ok()) return s;
   if (!IsElement(dom.Root(), kRelationshipsNs, "Relationships"))
-    return Status::Fail(Status::Code::Damaged, "Part " + std::string(ZipNameOf(part.name)) + " is damaged.");
-  RelationshipSet set;
-  set.source = SourceOfRelsPart(part.name);
-  set.relsPart = part.name;
+    return Status::Fail(Status::Code::Damaged, "Part " + std::string(label) + " is damaged.");
+  out.source.assign(source);
   for (auto child : dom.Root().children()) {
     if (!IsElement(child, kRelationshipsNs, "Relationship")) continue;
     Relationship r;
@@ -244,9 +244,20 @@ Status Package::ReadRelationships(const Part& part) {
     r.type = child.attribute("Type").value();
     r.target = child.attribute("Target").value();
     r.external = std::string_view(child.attribute("TargetMode").value()) == "External";
-    if (!r.external) r.targetPart = ResolveTarget(set.source, r.target);
-    set.items.push_back(std::move(r));
+    if (!r.external) r.targetPart = ResolveTarget(out.source, r.target);
+    out.items.push_back(std::move(r));
   }
+  return Status{};
+}
+
+Status Package::ReadRelationships(const Part& part) {
+  std::vector<uint8_t> bytes;
+  Status s = ReadPart(part.name, bytes);
+  if (!s.Ok()) return s;
+  RelationshipSet set;
+  s = ParseRelationships(AsText(bytes), SourceOfRelsPart(part.name), limits_, ZipNameOf(part.name), set);
+  if (!s.Ok()) return s;
+  set.relsPart = part.name;
   relsIndex_.emplace(PartKey(set.source), rels_.size());
   rels_.push_back(std::move(set));
   return Status{};

@@ -14,6 +14,11 @@ Files for the never-damage tests (plan §10), made by `make_test_office.py`:
   - a nesting bomb, and a DTD with an entity-expansion bomb
   - missing content types, zip encryption, duplicate part names
   - broken XML, a file that isn't a zip, and a truncated file
+- `broken/`: hand-made files that open and save, but that `fwtool check` must reject, each for one consistency rule (plan §4.3, rule 2):
+  - a relationship id that doesn't resolve, a duplicate paragraph id, a duplicate slide id
+  - a bookmark that starts but doesn't end, a field that begins but doesn't end
+  - a comment reference without its comment, a formula that names a missing sheet
+  - a stale calculation chain (it names a cell without a formula)
 
 `ctest` runs `fwtool` over all of them:
 
@@ -21,8 +26,11 @@ Files for the never-damage tests (plan §10), made by `make_test_office.py`:
 fwtool roundtrip tests/office/generated tests/office/edge
 fwtool roundtrip --reserialize-all tests/office/generated tests/office/edge
 fwtool check tests/office/generated tests/office/edge
+fwtool check --expect-reject tests/office/broken
 fwtool roundtrip --expect-reject tests/office/malicious
 ```
+
+`fwtool check` applies the reference registry (`src/pkg/References.h`, rules in `ReferenceRules.cpp`): every reference resolves, ids are unique, pairs are complete, and the derived data it can see (the calculation chain, chart caches and embedded workbooks, VML notes) matches its sources. What Office tolerates, such as a missing style, is a warning. It also lists the extensions it doesn't know, near which structural edits will be blocked.
 
 ## Regenerating
 

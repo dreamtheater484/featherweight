@@ -1,9 +1,13 @@
 # fwpkg: the package layer the office engines share (plan §4.1). Headless: no UI, no PDFium.
 add_library(fwpkg STATIC
   Canonical.cpp
+  Check.cpp
+  Derived.cpp
+  Formula.cpp
   Limits.cpp
   Mce.cpp
   Package.cpp
+  ReferenceRules.cpp
   References.cpp
   RoundTrip.cpp
   Snapshot.cpp
