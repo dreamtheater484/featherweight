@@ -497,6 +497,10 @@ XmlPull::Event XmlPull::ParseStartTag() {
     Binding bind;
     bind.prefix = isDefault ? std::string_view() : a.local;
     if (!isDefault && a.value.empty()) return Damaged("a namespace prefix is undeclared");
+    // Reserved prefixes and namespace names (Namespaces in XML 1.0): xmlns is never declared,
+    // xml is bound to its own namespace only, and nothing else is bound to either namespace.
+    if (bind.prefix == "xmlns" || (bind.prefix == "xml") != (a.value == kXmlNamespace) || a.value == kXmlnsNamespace)
+      return Damaged("it misuses a reserved namespace prefix");
     if (a.value.data() >= src_.data() && a.value.data() < src_.data() + src_.size()) {
       bind.uri = a.value;
     } else {
