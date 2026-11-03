@@ -659,18 +659,22 @@ void Root::Attach(HWND hwnd, std::function<void(Tree&)> describe) {
 
 void Root::Detach() {
   if (!root_) return;
-  if (hwnd_) UiaReturnRawElementProvider(hwnd_, 0, 0, nullptr);
-  UiaDisconnectProvider(root_);
+  if (asked_) {
+    if (hwnd_) UiaReturnRawElementProvider(hwnd_, 0, 0, nullptr);
+    UiaDisconnectProvider(root_);
+  }
   state_->root = nullptr;
   root_->Release();
   root_ = nullptr;
   hwnd_ = nullptr;
   seen_.clear();
   haveSeen_ = false;
+  asked_ = false;
 }
 
 LRESULT Root::OnGetObject(WPARAM wp, LPARAM lp) {
   if (!root_ || static_cast<long>(lp) != static_cast<long>(UiaRootObjectId)) return 0;
+  asked_ = true;
   return UiaReturnRawElementProvider(hwnd_, wp, lp, root_);
 }
 
@@ -736,7 +740,7 @@ void Root::Run(std::function<void()> action) {
 }
 
 void Root::Sync() {
-  if (!hwnd_ || building_) return;
+  if (!hwnd_ || building_ || !asked_) return;
   if (!UiaClientsAreListening()) {
     seen_.clear();
     haveSeen_ = false;

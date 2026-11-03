@@ -51,8 +51,9 @@ target_link_libraries(Featherweight PRIVATE
   d2d1 d3d11 dxgi dwrite windowscodecs dxguid dwmapi uxtheme shlwapi shell32 ole32 oleaut32
   comctl32 comdlg32 winhttp bcrypt version advapi32 user32 gdi32 winspool delayimp
 )
-# pdfium.dll is loaded on first use, so the window appears before the engine is loaded.
-target_link_options(Featherweight PRIVATE /DELAYLOAD:pdfium.dll
+# pdfium.dll is loaded on first use, so the window appears before the engine is loaded, and
+# UI Automation's DLL only once a client such as a screen reader asks for the window.
+target_link_options(Featherweight PRIVATE /DELAYLOAD:pdfium.dll /DELAYLOAD:uiautomationcore.dll
   $<$<CONFIG:Release,MinSizeRel>:/OPT:REF /OPT:ICF /LTCG>)
 target_compile_options(Featherweight PRIVATE $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 target_compile_options(fwcore PRIVATE $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)

@@ -149,6 +149,7 @@ class Root {
   void RaiseEvents(const Tree& t);
 
   HWND hwnd_ = nullptr;
+  bool asked_ = false;  // a client has asked for the window; until then UI Automation isn't loaded
   std::function<void(Tree&)> describe_;
   Tree tree_;
   bool stale_ = true;
