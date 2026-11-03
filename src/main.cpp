@@ -58,6 +58,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int showCommand) {
     else if (a == L"--theme") opts.snapshotTheme = next();
     else if (a == L"--invert") opts.snapshotInvert = true;
     else if (a == L"--script") opts.script = next();
+    else if (a == L"--gpu") opts.snapshotGpu = true;
+    else if (a == L"--window") opts.snapshotWindow = true;
+    else if (a == L"--warp") opts.forceWarp = true;
     else if (!a.empty() && a[0] != L'-') opts.files.push_back(a);
   }
   LocalFree(argv);

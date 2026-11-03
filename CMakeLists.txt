@@ -47,7 +47,7 @@ target_compile_options(Featherweight PRIVATE ${FW_COMPILE_OPTIONS})
 target_compile_definitions(Featherweight PRIVATE "$<$<BOOL:${FW_WITH_V8}>:FW_WITH_V8=1;PDF_ENABLE_V8;PDF_ENABLE_XFA>")
 target_link_libraries(Featherweight PRIVATE
   fwcore pdfium
-  d2d1 dwrite windowscodecs dxguid dwmapi uxtheme shlwapi shell32 ole32 oleaut32
+  d2d1 d3d11 dxgi dwrite windowscodecs dxguid dwmapi uxtheme shlwapi shell32 ole32 oleaut32
   comctl32 comdlg32 winhttp bcrypt version advapi32 user32 gdi32 winspool delayimp
 )
 # pdfium.dll is loaded on first use, so the window appears before the engine is loaded.
@@ -75,7 +75,9 @@ endif()
 option(FW_FUZZ "Build the fuzz targets in tests/fuzz (see tests/fuzz/README.md)" OFF)
 include(cmake/FetchDeps.cmake)
 add_subdirectory(src/pkg)
+add_subdirectory(src/draw)
 add_subdirectory(tools/fwtool)
+target_link_libraries(Featherweight PRIVATE fwdraw)
 if(FW_FUZZ)
   enable_testing()
   add_subdirectory(tests/fuzz)
@@ -86,8 +88,9 @@ if(FW_BUILD_TESTS)
     tests/unit/test_zip.cpp
     tests/unit/test_xml.cpp
     tests/unit/test_package.cpp
-    tests/unit/test_roundtrip.cpp)
-  target_link_libraries(fw_tests PRIVATE fwpkg)
+    tests/unit/test_roundtrip.cpp
+    tests/unit/test_draw.cpp)
+  target_link_libraries(fw_tests PRIVATE fwpkg fwdraw windowscodecs ole32)
   # Never-damage tests on the public corpus (plan §10).
   set(_fw_office "${CMAKE_SOURCE_DIR}/tests/office")
   add_test(NAME office_roundtrip COMMAND fwtool roundtrip "${_fw_office}/generated" "${_fw_office}/edge")

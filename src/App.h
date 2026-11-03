@@ -17,6 +17,7 @@
 #include "ui/EmptyState.h"
 #include "ui/Gfx.h"
 #include "ui/SearchPanel.h"
+#include "ui/SwapChain.h"
 #include "ui/TitleBar.h"
 #include "ui/Toolbar.h"
 #include "ui/Tooltip.h"
@@ -30,7 +31,12 @@ struct AppOptions {
   float snapshotScale = 1.0f;
   std::wstring snapshotTheme;  // "light" or "dark"
   bool snapshotInvert = false;
+  // How a snapshot is drawn: Direct2D's software renderer (the default, the same on every PC),
+  // the shared Direct3D device off-screen, or the real window and swap chain captured from the screen.
+  bool snapshotGpu = false;
+  bool snapshotWindow = false;
   std::wstring script;         // steps separated by ';' (see App::RunScript)
+  bool forceWarp = false;      // draw with WARP even when a graphics adapter works
 };
 
 class App : public PdfHost, public DropHost {
@@ -140,6 +146,9 @@ class App : public PdfHost, public DropHost {
   int RunSnapshot(const AppOptions& opts);
   void RunScript(const std::wstring& script);
   void PumpUntilIdle(double maxMs);
+  void DrawSnapshotFrame();
+  // The finished snapshot as an image, read back from wherever it was drawn.
+  ComPtr<IWICBitmapSource> SnapshotImage();
   // Snapshot mode: native child controls paint outside Direct2D, so copy them in.
   void DrawChildControlsForSnapshot(ID2D1DeviceContext* dc);
 
@@ -147,11 +156,13 @@ class App : public PdfHost, public DropHost {
   float ui_ = 1.0f;
   bool windowActive_ = true;
   bool snapshot_ = false;
+  bool snapshotWindow_ = false;
   int simulatedMods_ = -1;
 
-  ComPtr<ID2D1HwndRenderTarget> target_;
+  SwapChain swap_;
   ComPtr<ID2D1RenderTarget> wicTarget_;
   ComPtr<IWICBitmap> wicBitmap_;
+  ComPtr<ID2D1Bitmap1> gpuTarget_;
   ComPtr<ID2D1DeviceContext> dc_;
   gfx::Canvas canvas_;
   double lastFrame_ = 0;

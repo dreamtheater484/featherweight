@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include "Commands.h"
 #include "FileAssoc.h"
@@ -55,7 +56,9 @@ int App::Run(const AppOptions& opts) {
                 MB_ICONERROR);
     return 1;
   }
+  if (opts.forceWarp) gpu::ForceWarp();
   snapshot_ = !opts.snapshotPath.empty();
+  snapshotWindow_ = snapshot_ && opts.snapshotWindow;
   settings_.Load();
   ThemeSetting themeSetting = settings_.theme;
   if (snapshot_) {
@@ -186,7 +189,7 @@ bool App::Idle() {
   if (anim::Running() && anim::Now() - lastFrame_ >= 14) InvalidateRect(hwnd_, nullptr, FALSE);
   if (banner_.Tick()) InvalidateRect(hwnd_, nullptr, FALSE);
   TabContent* v = Active();
-  if (v && v->HasIdleWork() && (dc_ || EnsureTarget())) {
+  if (v && v->HasIdleWork() && EnsureTarget()) {
     if (v->IdleWork(dc_.Get(), anim::Now() + 8)) InvalidateRect(hwnd_, nullptr, FALSE);
     more = v->HasIdleWork();
   }
@@ -197,43 +200,35 @@ bool App::Idle() {
 // Rendering
 
 bool App::EnsureTarget() {
+  // A device lost here or in another window takes everything made with it.
+  if (swap_.DC() && swap_.Generation() != gpu::Generation()) DiscardDeviceResources();
   if (dc_) return true;
-  if (snapshot_) return false;
-  RECT rc;
-  GetClientRect(hwnd_, &rc);
-  D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
-      D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE), 96.f,
-      96.f);
-  D2D1_HWND_RENDER_TARGET_PROPERTIES hp = D2D1::HwndRenderTargetProperties(
-      hwnd_, D2D1::SizeU(std::max(1L, rc.right), std::max(1L, rc.bottom)), D2D1_PRESENT_OPTIONS_IMMEDIATELY);
-  if (FAILED(D2D()->CreateHwndRenderTarget(props, hp, &target_))) return false;
-  target_.As(&dc_);
-  if (!dc_) {
-    target_.Reset();
-    return false;
-  }
+  if (snapshot_ && !snapshotWindow_) return false;
+  if (!swap_.Create(hwnd_)) return false;
+  dc_ = swap_.DC();
   return true;
 }
 
 void App::DiscardDeviceResources() {
   for (auto& t : tabs_) t->ReleaseDeviceResources();
+  canvas_.Release();
   dc_.Reset();
-  target_.Reset();
+  swap_.Reset();
 }
 
 void App::Paint() {
-  if (!EnsureTarget()) return;
+  if (!EnsureTarget() || !swap_.DC()) return;
   RECT rc;
   GetClientRect(hwnd_, &rc);
-  D2D1_SIZE_U size = target_->GetPixelSize();
-  if (size.width != static_cast<UINT32>(rc.right) || size.height != static_cast<UINT32>(rc.bottom))
-    target_->Resize(D2D1::SizeU(std::max(1L, rc.right), std::max(1L, rc.bottom)));
-  target_->BeginDraw();
+  swap_.Resize(static_cast<UINT>(rc.right), static_cast<UINT>(rc.bottom));
+  dc_->BeginDraw();
   RenderFrame(dc_.Get());
-  HRESULT hr = target_->EndDraw();
+  HRESULT hr = dc_->EndDraw();
+  if (SUCCEEDED(hr)) hr = swap_.Present();
   lastFrame_ = anim::Now();
   notes_.RepaintEdit();
-  if (hr == D2DERR_RECREATE_TARGET) {
+  if (gpu::IsDeviceLoss(hr)) {
+    gpu::DeviceLost();
     DiscardDeviceResources();
     InvalidateRect(hwnd_, nullptr, FALSE);
   }
@@ -473,7 +468,7 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       break;
     case WM_SIZE:
       if (wp != SIZE_MINIMIZED) {
-        if (target_) target_->Resize(D2D1::SizeU(LOWORD(lp), HIWORD(lp)));
+        swap_.Resize(LOWORD(lp), HIWORD(lp));
         Layout();
         InvalidateRect(hwnd_, nullptr, FALSE);
         if (inSizeMove_) {
@@ -1835,21 +1830,25 @@ void App::PumpUntilIdle(double maxMs) {
       DispatchMessageW(&msg);
     }
     // Hidden windows get no WM_PAINT; draw a frame so views register what they need.
-    if (dc_) {
-      wicTarget_->BeginDraw();
-      RenderFrame(dc_.Get());
-      wicTarget_->EndDraw();
-    }
+    if (dc_) DrawSnapshotFrame();
     bool more = Idle();
     if (!more && !anim::Running()) {
       // One more frame to pick up anything that just became visible.
-      wicTarget_->BeginDraw();
-      RenderFrame(dc_.Get());
-      wicTarget_->EndDraw();
+      DrawSnapshotFrame();
       if (!Idle() && !anim::Running()) break;
     }
     if (!more) Sleep(5);
   }
+}
+
+void App::DrawSnapshotFrame() {
+  if (snapshotWindow_) {
+    Paint();
+    return;
+  }
+  dc_->BeginDraw();
+  RenderFrame(dc_.Get());
+  dc_->EndDraw();
 }
 
 void App::RunScript(const std::wstring& script) {
@@ -2012,6 +2011,15 @@ void App::RunScript(const std::wstring& script) {
     } else if (op == L"wait") {
       PumpUntilIdle(_wtoi(arg.c_str()));
       continue;
+    } else if (op == L"resize" && snapshotWindow_) {
+      // resize:WxH changes the window's size (only on screen: off-screen targets have a fixed size).
+      auto parts = fw::Split(arg, L'x');
+      if (parts.size() == 2)
+        SetWindowPos(hwnd_, nullptr, 0, 0, _wtoi(parts[0].c_str()), _wtoi(parts[1].c_str()),
+                     SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    } else if (op == L"devicelost") {
+      // As if the graphics driver had been reset: everything made with the device is recreated.
+      gpu::DeviceLost();
     }
     PumpUntilIdle(1500);
   }
@@ -2051,38 +2059,95 @@ int App::RunSnapshot(const AppOptions& opts) {
   RECT rc;
   GetClientRect(hwnd_, &rc);
   UINT w = std::max(1L, rc.right), h = std::max(1L, rc.bottom);
-  if (FAILED(WIC()->CreateBitmap(w, h, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &wicBitmap_))) return 2;
-  D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
-      D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f,
-      96.f);
-  if (FAILED(D2D()->CreateWicBitmapRenderTarget(wicBitmap_.Get(), props, &wicTarget_))) return 3;
-  wicTarget_.As(&dc_);
-  if (!dc_) return 4;
+  if (snapshotWindow_) {
+    // On screen, without taking focus, so the frame goes through the swap chain and the compositor.
+    SetWindowPos(hwnd_, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    if (!EnsureTarget()) return 3;
+  } else if (opts.snapshotGpu) {
+    dc_ = gpu::CreateContext();
+    if (!dc_) return 3;
+    // Opaque, like the window's swap chain.
+    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_TARGET, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE), 96.f, 96.f);
+    if (FAILED(dc_->CreateBitmap(D2D1::SizeU(w, h), nullptr, 0, props, &gpuTarget_))) return 4;
+    dc_->SetTarget(gpuTarget_.Get());
+  } else {
+    if (FAILED(WIC()->CreateBitmap(w, h, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &wicBitmap_))) return 2;
+    D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+        D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f, 96.f);
+    if (FAILED(D2D()->CreateWicBitmapRenderTarget(wicBitmap_.Get(), props, &wicTarget_))) return 3;
+    wicTarget_.As(&dc_);
+    if (!dc_) return 4;
+  }
 
   OpenFiles(opts.files);
   Layout();
   PumpUntilIdle(5000);
   if (!opts.script.empty()) RunScript(opts.script);
   PumpUntilIdle(5000);
-
-  wicTarget_->BeginDraw();
-  RenderFrame(dc_.Get());
-  wicTarget_->EndDraw();
+  DrawSnapshotFrame();
 
   // Encode as PNG.
+  ComPtr<IWICBitmapSource> image = SnapshotImage();
   ComPtr<IWICStream> stream;
   ComPtr<IWICBitmapEncoder> encoder;
   ComPtr<IWICBitmapFrameEncode> frame;
-  if (FAILED(WIC()->CreateStream(&stream)) || FAILED(stream->InitializeFromFilename(opts.snapshotPath.c_str(), GENERIC_WRITE)) ||
+  if (!image || FAILED(WIC()->CreateStream(&stream)) ||
+      FAILED(stream->InitializeFromFilename(opts.snapshotPath.c_str(), GENERIC_WRITE)) ||
       FAILED(WIC()->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) ||
       FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) ||
       FAILED(encoder->CreateNewFrame(&frame, nullptr)) || FAILED(frame->Initialize(nullptr)) ||
-      FAILED(frame->WriteSource(wicBitmap_.Get(), nullptr)) || FAILED(frame->Commit()) || FAILED(encoder->Commit())) {
+      FAILED(frame->WriteSource(image.Get(), nullptr)) || FAILED(frame->Commit()) || FAILED(encoder->Commit())) {
     return 5;
   }
   tabs_.clear();
   dc_.Reset();
+  gpuTarget_.Reset();
   wicTarget_.Reset();
+  swap_.Reset();
   DestroyWindow(hwnd_);
   return 0;
+}
+
+ComPtr<IWICBitmapSource> App::SnapshotImage() {
+  RECT rc;
+  GetClientRect(hwnd_, &rc);
+  UINT w = std::max(1L, rc.right), h = std::max(1L, rc.bottom);
+  ComPtr<IWICBitmap> out;
+  if (wicBitmap_) {
+    out = wicBitmap_;
+  } else if (gpuTarget_) {
+    // Copy the frame to a bitmap the CPU can read.
+    ComPtr<ID2D1Bitmap1> cpu;
+    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE), 96.f, 96.f);
+    D2D1_MAPPED_RECT mapped{};
+    if (FAILED(dc_->CreateBitmap(D2D1::SizeU(w, h), nullptr, 0, props, &cpu)) ||
+        FAILED(cpu->CopyFromBitmap(nullptr, gpuTarget_.Get(), nullptr)) ||
+        FAILED(cpu->Map(D2D1_MAP_OPTIONS_READ, &mapped))) {
+      return nullptr;
+    }
+    std::vector<BYTE> pixels(static_cast<size_t>(w) * h * 4);
+    for (UINT y = 0; y < h; ++y) memcpy(&pixels[static_cast<size_t>(y) * w * 4], mapped.bits + y * mapped.pitch, w * 4);
+    cpu->Unmap();
+    for (size_t i = 3; i < pixels.size(); i += 4) pixels[i] = 0xFF;  // the alpha of an opaque target is undefined
+    WIC()->CreateBitmapFromMemory(w, h, GUID_WICPixelFormat32bppPBGRA, w * 4, static_cast<UINT>(pixels.size()),
+                                  pixels.data(), &out);
+  } else if (snapshotWindow_) {
+    // Let the compositor show the last frame, then ask it for the window's content.
+    DwmFlush();
+    HDC screen = GetDC(hwnd_);
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP bmp = CreateCompatibleBitmap(screen, w, h);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    BOOL ok = PrintWindow(hwnd_, mem, PW_CLIENTONLY | PW_RENDERFULLCONTENT);
+    SelectObject(mem, old);
+    if (ok) WIC()->CreateBitmapFromHBITMAP(bmp, nullptr, WICBitmapIgnoreAlpha, &out);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(hwnd_, screen);
+  }
+  return out;
 }

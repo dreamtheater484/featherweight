@@ -59,6 +59,11 @@ void Canvas::Begin(ID2D1DeviceContext* dc) {
 
 void Canvas::End() {}
 
+void Canvas::Release() {
+  brush_.Reset();
+  dc_ = nullptr;
+}
+
 ID2D1SolidColorBrush* Canvas::Brush(D2D1_COLOR_F c) {
   brush_->SetColor(c);
   return brush_.Get();

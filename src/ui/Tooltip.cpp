@@ -34,7 +34,7 @@ bool Tooltip::Create(HWND owner) {
 }
 
 void Tooltip::Destroy() {
-  target_.Reset();
+  chain_.Reset();
   if (hwnd_) DestroyWindow(hwnd_);
   hwnd_ = nullptr;
 }
@@ -80,26 +80,23 @@ void Tooltip::Hide() {
 void Tooltip::Paint() {
   RECT rc;
   GetClientRect(hwnd_, &rc);
-  if (!target_) {
-    D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties();
-    props.dpiX = props.dpiY = 96;
-    D2D()->CreateHwndRenderTarget(props, D2D1::HwndRenderTargetProperties(hwnd_, D2D1::SizeU(rc.right, rc.bottom)),
-                                  &target_);
-  } else {
-    target_->Resize(D2D1::SizeU(rc.right, rc.bottom));
-  }
-  if (!target_) return;
-  ComPtr<ID2D1DeviceContext> dc;
-  target_.As(&dc);
-  if (!dc) return;
+  if (chain_.DC() && chain_.Generation() != gpu::Generation()) chain_.Reset();
+  if (!chain_.DC() && !chain_.Create(hwnd_)) return;
+  chain_.Resize(static_cast<UINT>(rc.right), static_cast<UINT>(rc.bottom));
+  ID2D1DeviceContext* dc = chain_.DC();
   const Palette& p = theme::P();
   Canvas c;
-  c.Begin(dc.Get());
-  target_->BeginDraw();
-  target_->Clear(p.popupBg);
+  c.Begin(dc);
+  dc->BeginDraw();
+  dc->Clear(p.popupBg);
   c.Stroke(RectF(rc), p.dark ? Rgb(0x484848) : Rgb(0xE0E0E0), 1);
   c.Text(text_, RectF(9 * ui_, 0, rc.right - 6 * ui_, static_cast<float>(rc.bottom)), p.text, 12 * ui_);
-  if (target_->EndDraw() == D2DERR_RECREATE_TARGET) target_.Reset();
+  HRESULT hr = dc->EndDraw();
+  if (SUCCEEDED(hr)) hr = chain_.Present();
+  if (gpu::IsDeviceLoss(hr)) {
+    gpu::DeviceLost();
+    chain_.Reset();
+  }
 }
 
 LRESULT CALLBACK Tooltip::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {

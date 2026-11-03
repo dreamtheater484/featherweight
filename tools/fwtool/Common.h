@@ -13,6 +13,8 @@ struct Options {
   bool reserializeAll = false;  // roundtrip: write every XML part through the DOM
   bool expectReject = false;    // roundtrip: every file must be refused with a plain message
   std::filesystem::path outDir; // roundtrip: keep the saved copies here
+  std::wstring printer;         // print-sample: the printer (default: Microsoft Print to PDF)
+  bool warp = false;            // print-sample: draw with WARP instead of the graphics adapter
   std::vector<std::filesystem::path> inputs;
 };
 
@@ -27,5 +29,6 @@ std::string_view AsText(const std::vector<uint8_t>& bytes);
 int RunRoundtrip(const Options& options);
 int RunDump(const Options& options);
 int RunCheck(const Options& options);
+int RunPrintSample(const Options& options);
 
 }  // namespace fwtool
