@@ -27,6 +27,14 @@ jobs:
       - name: Unit tests
         run: ctest --test-dir build -C Release --output-on-failure
 
+      - name: Round-trip the office corpus (fwtool)
+        shell: pwsh
+        run: |
+          $fwtool = 'build\tools\fwtool\Release\fwtool.exe'
+          & $fwtool roundtrip tests\office\generated tests\office\edge; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $fwtool roundtrip --reserialize-all tests\office\generated tests\office\edge; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $fwtool roundtrip --expect-reject tests\office\malicious; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
       - name: Smoke test (render a PDF off-screen)
         shell: pwsh
         run: |

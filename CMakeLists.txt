@@ -70,4 +70,30 @@ if(FW_BUILD_TESTS)
   add_test(NAME unit COMMAND fw_tests)
 endif()
 
+# --- Office foundations (plan milestone D0): fwpkg, fwtool, corpus tests and fuzz targets ---
+# Headless: no UI, no PDFium. miniz and pugixml are downloaded by cmake/FetchDeps.cmake.
+option(FW_FUZZ "Build the fuzz targets in tests/fuzz (see tests/fuzz/README.md)" OFF)
+include(cmake/FetchDeps.cmake)
+add_subdirectory(src/pkg)
+add_subdirectory(tools/fwtool)
+if(FW_FUZZ)
+  enable_testing()
+  add_subdirectory(tests/fuzz)
+endif()
+if(FW_BUILD_TESTS)
+  target_sources(fw_tests PRIVATE
+    tests/unit/test_units.cpp
+    tests/unit/test_zip.cpp
+    tests/unit/test_xml.cpp
+    tests/unit/test_package.cpp
+    tests/unit/test_roundtrip.cpp)
+  target_link_libraries(fw_tests PRIVATE fwpkg)
+  # Never-damage tests on the public corpus (plan §10).
+  set(_fw_office "${CMAKE_SOURCE_DIR}/tests/office")
+  add_test(NAME office_roundtrip COMMAND fwtool roundtrip "${_fw_office}/generated" "${_fw_office}/edge")
+  add_test(NAME office_reserialize COMMAND fwtool roundtrip --reserialize-all "${_fw_office}/generated" "${_fw_office}/edge")
+  add_test(NAME office_check COMMAND fwtool check "${_fw_office}/generated" "${_fw_office}/edge")
+  add_test(NAME office_malicious COMMAND fwtool roundtrip --expect-reject "${_fw_office}/malicious")
+endif()
+
 # Packaging (installer, portable zip, checksums) is done by scripts/release.ps1.

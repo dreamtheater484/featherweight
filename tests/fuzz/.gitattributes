@@ -1,0 +1,3 @@
+# Fuzz inputs are bytes, not text: never convert their line ends.
+seeds/** binary
+regressions/** binary
