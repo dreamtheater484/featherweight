@@ -18,11 +18,12 @@
   rendered replaces its PDFs and its manifest entries; the other folders' entries are kept. Run it
   again whenever a file or Office changes noticeably.
 
-  The private corpus (-Corpus, usually $env:FW_CORPUS): every Office file in the folder and its
-  subfolders. The PDFs and manifest.json go in <corpus>\reference\, or in -Out, which must be
-  outside the repository too. Files whose hash hasn't changed since the last run keep their PDF,
-  so adding documents only renders the new ones; -Force renders them all again. Nothing in the
-  corpus or the output folder is deleted.
+  The private corpus (-Corpus, usually $env:FW_CORPUS): every Office file in its docx, xlsx and
+  pptx folders, which hold only the files that passed the safety screen (scripts\fetch-corpus.ps1);
+  never its quarantine folder. The PDFs and manifest.json go in <corpus>\reference\, or in -Out,
+  which must be outside the repository too. Files whose hash hasn't changed since the last run
+  keep their PDF, so adding documents only renders the new ones; -Force renders them all again.
+  Nothing in the corpus or the output folder is deleted.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\reference-renders.ps1
@@ -140,7 +141,9 @@ if ($Corpus) {
   New-Item -ItemType Directory -Force $outRoot | Out-Null
   $manifestPath = Join-Path $outRoot "manifest.json"
   if ((Test-Path $manifestPath) -and -not $Force) { $old = @((Get-Content $manifestPath -Raw | ConvertFrom-Json).files) }
-  foreach ($f in Get-ChildItem $corpusRoot -File -Recurse | Sort-Object FullName) {
+  $screened = @("docx", "xlsx", "pptx") | ForEach-Object { Join-Path $corpusRoot $_ } | Where-Object { Test-Path $_ }
+  if (-not $screened) { throw "$corpusRoot has no docx, xlsx or pptx folder (see scripts\fetch-corpus.ps1)." }
+  foreach ($f in $screened | ForEach-Object { Get-ChildItem $_ -File -Recurse } | Sort-Object FullName) {
     if ((Test-Inside $f.FullName $outRoot) -or -not (Get-Kind $f.Extension)) { continue }
     $rel = $f.FullName.Substring($corpusRoot.Length + 1) -replace '\\', '/'
     $jobs += @{ File = $f; Source = $rel; Pdf = "$rel.pdf" }

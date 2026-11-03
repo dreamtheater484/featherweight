@@ -83,29 +83,40 @@ Real documents say much more about layout than generated ones, but they can't be
 - Most should be 1 to 30 pages, and a few over 100 pages, for the opening budgets.
 - Leave out password-protected files.
 
-**How many:** 100 to 200 documents for D1's first measurement, which also sets the targets for Windows-only fonts. The plan aims for at least 1,000 per format by each viewer release. Subfolders by kind (`letters`, `reports`) are worth it: the reports name documents by their path, so problems by kind stand out.
+**How many:** 100 to 200 documents for D1's first measurement, which also sets the targets for Windows-only fonts. The plan aims for at least 1,000 per format by each viewer release. The documents go in subfolders by kind (`docx\letters`, `docx\reports`): the reports name documents by their path, so problems by kind stand out.
+
+**The layout**, which `scripts\fetch-corpus.ps1` builds from `tests\office\real-world.json`:
+
+```
+<FW_CORPUS>\
+  docx\<category>\<id>.docx                 the documents that passed the safety screen
+  reference\docx\<category>\<id>.docx.pdf   Word's PDF of each
+  reference\manifest.json                   as tests\office\reference\manifest.json; sources are
+                                            relative to FW_CORPUS, PDFs to reference\
+  quarantine\                               downloads being screened; never rendered or measured
+```
 
 **How to run it**, in PowerShell on the Office reference PC, with Word installed:
 
-1. Put the documents in a folder outside the repository, for example `D:\FwCorpus`, and name it in `FW_CORPUS`. Terminals opened afterwards see it.
+1. Collect the documents, for example in `D:\Documents\Codex\FeatherweightCorpus`, outside the repository, and name the folder in `FW_CORPUS`. Terminals opened afterwards see it. Documents of your own go in `docx\<category>\` too.
    ```powershell
-   setx FW_CORPUS D:\FwCorpus
+   setx FW_CORPUS D:\Documents\Codex\FeatherweightCorpus
    ```
-2. Make the reference renders. Word exports every document to `$env:FW_CORPUS\reference\`, with a manifest; each document takes a few seconds. Run it again after adding documents: unchanged ones keep their PDF, and `-Force` renders them all again. `-Out` puts the renders elsewhere, also outside the repository. Nothing in the corpus is changed or deleted.
+2. Make the reference renders. Word exports every document in `docx\` (and `xlsx\`, `pptx\`) to `reference\`, with a manifest; each document takes a few seconds. Run it again after adding documents: unchanged ones keep their PDF, and `-Force` renders them all again. `-Out` puts the renders elsewhere, also outside the repository. Nothing in the corpus is changed or deleted.
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\reference-renders.ps1 -Corpus $env:FW_CORPUS
    ```
-3. Check that the measurement reads your documents' PDFs correctly. Every document must pass.
+3. Check that the measurement reads your documents' PDFs correctly. Every document must pass. `fwtool` takes the corpus folder or its `reference` folder.
    ```powershell
-   build\tools\fwtool\Release\fwtool.exe compare --self-test "$env:FW_CORPUS\reference"
+   build\tools\fwtool\Release\fwtool.exe compare --self-test $env:FW_CORPUS
    ```
 4. Once the layout exists, measure the corpus, with the reports next to it:
    ```powershell
-   build\tools\fwtool\Release\fwtool.exe compare "$env:FW_CORPUS\reference" --json "$env:FW_CORPUS\fidelity.json" --report "$env:FW_CORPUS\fidelity.md"
+   build\tools\fwtool\Release\fwtool.exe compare $env:FW_CORPUS --json "$env:FW_CORPUS\fidelity.json" --report "$env:FW_CORPUS\fidelity.md"
    ```
    To look at one document:
    ```powershell
-   build\tools\fwtool\Release\fwtool.exe compare "$env:FW_CORPUS\reference\letters\offer.docx.pdf" "$env:FW_CORPUS\letters\offer.docx"
+   build\tools\fwtool\Release\fwtool.exe compare "$env:FW_CORPUS\reference\docx\letters\offer.docx.pdf" "$env:FW_CORPUS\docx\letters\offer.docx"
    ```
 
 ## Opening budgets
@@ -139,7 +150,6 @@ How `bench` applies the budgets:
 - **Page count:** until the layout counts pages, `bench` uses the count Word last saved (`docProps/app.xml`).
 
 `--budgets` fails when a budget is missed. The numbers that count come from the typical consumer PC. The development PC is several times faster, so there `bench` only shows the trend.
-
 ## Regenerating
 
 Use a venv, never the global Python. From the repository root:

@@ -233,6 +233,11 @@ bool IsWordDocument(std::string_view name) {
 std::optional<ReferenceSet> ReadReferences(const std::filesystem::path& folder, std::string& error) {
   ReferenceSet set;
   set.folder = folder.filename() == L"manifest.json" ? folder.parent_path() : folder;
+  // The private corpus folder itself (FW_CORPUS) has its renders in reference\.
+  std::error_code ec;
+  if (!std::filesystem::exists(set.folder / L"manifest.json", ec) &&
+      std::filesystem::exists(set.folder / L"reference" / L"manifest.json", ec))
+    set.folder /= L"reference";
   std::string text;
   if (!ReadFile(set.folder / L"manifest.json", text)) {
     error = "no manifest.json in " + fw::WideToUtf8(set.folder.wstring());
@@ -244,9 +249,12 @@ std::optional<ReferenceSet> ReadReferences(const std::filesystem::path& folder, 
     error = fw::WideToUtf8((set.folder / L"manifest.json").wstring()) + " isn't a reference manifest";
     return std::nullopt;
   }
-  std::string corpus = manifest->StringOr("corpus");
-  set.corpus = corpus.empty() ? std::filesystem::absolute(set.folder).parent_path()
-                              : std::filesystem::path(fw::Utf8ToWide(corpus));
+  // Sources are relative to the corpus: the one the manifest names, while it's still there, or
+  // the reference folder's parent.
+  std::filesystem::path corpus = fw::Utf8ToWide(manifest->StringOr("corpus"));
+  set.corpus = !corpus.empty() && std::filesystem::is_directory(corpus, ec)
+                   ? corpus
+                   : std::filesystem::absolute(set.folder).parent_path();
   for (const fw::JsonValue& f : files->array) {
     ReferenceEntry e;
     e.source = f.StringOr("source");
