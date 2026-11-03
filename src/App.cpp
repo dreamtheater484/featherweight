@@ -75,8 +75,12 @@ int App::Run(const AppOptions& opts) {
   if (snapshot_) return RunSnapshot(opts);
 
   OpenFiles(opts.files);
-  if (opts.widgetGallery) OpenGallery();
-  else StartupNotices();
+  if (opts.widgetGallery) {
+    OpenGallery();
+    RunScript(opts.script);  // the UI checks' recent files (the gallery's settings are sandboxed)
+  } else {
+    StartupNotices();
+  }
   Layout();
   int show = settings_.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
   if (opts.showCommand == SW_SHOWMINIMIZED || opts.showCommand == SW_MINIMIZE ||
@@ -267,6 +271,7 @@ void App::Layout() {
   const int titleH = TitleHeight();
   const int toolH = ToolbarHeight();
   title_.Layout(RECT{0, 0, rc.right, titleH}, ui_, static_cast<int>(tabs_.size()));
+  title_.SetNewTabMenu(fw::AnyEditorShipped(), openMenu_ == CmdNewTab);
   int toolTop = titleH;
   if (fullscreen_) toolTop = static_cast<int>(std::lround((toolbarReveal_.V() - 1.0f) * toolH));
   toolbar_.Layout(RECT{0, toolTop, rc.right, toolTop + toolH}, ui_, CurrentToolbar());
@@ -871,7 +876,7 @@ void App::OnMouseUp(int x, int y, int button) {
         case TitleBar::Part::Minimize: ShowWindow(hwnd_, SW_MINIMIZE); break;
         case TitleBar::Part::Maximize: ShowWindow(hwnd_, IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE); break;
         case TitleBar::Part::Close: PostMessageW(hwnd_, WM_CLOSE, 0, 0); break;
-        case TitleBar::Part::NewTab: Execute(CmdOpen); break;
+        case TitleBar::Part::NewTab: Execute(CmdNewTab); break;
         case TitleBar::Part::TabClose: CloseTab(a.index); break;
         default: break;
       }
@@ -904,14 +909,7 @@ void App::OnMouseUp(int x, int y, int button) {
       if (TabContent* v = Active()) {
         v->OnMouseUp(x, y, button, Mods());
       } else if (button == 0) {
-        EmptyState::Result res = empty_.OnMouseUp(x, y);
-        if (res.kind == EmptyState::Result::Kind::Open) Execute(CmdOpen);
-        else if (res.kind == EmptyState::Result::Kind::OpenRecent) Execute(CmdRecent + res.index);
-        else if (res.kind == EmptyState::Result::Kind::RemoveRecent && res.index < static_cast<int>(settings_.recent.size())) {
-          settings_.RemoveRecent(settings_.recent[res.index].path);
-          settings_.Save();
-          Layout();
-        }
+        OnStartScreen(empty_.OnMouseUp(x, y));
       }
       break;
     default: break;
@@ -1077,6 +1075,14 @@ void App::OnKeyDown(UINT vk) {
     }
   }
 
+  // The start screen: Tab, the arrows, Enter and Delete.
+  EmptyState::Result start;
+  if (!v && !(mods & (kModCtrl | kModAlt)) && empty_.OnKeyDown(vk, shift, start)) {
+    OnStartScreen(start);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return;
+  }
+
   if (int cmd = global()) {
     Execute(cmd);
     return;
@@ -1161,6 +1167,15 @@ void App::Execute(int cmd) {
     if (i < static_cast<int>(settings_.recent.size())) OpenFiles({settings_.recent[i].path});
     return;
   }
+  if (cmd >= CmdNewFile && cmd < CmdNewFile + fw::kFileKindCount) {
+    // A new document, workbook or presentation comes with that kind's editor; none has shipped yet.
+    return;
+  }
+  if (const int act = cmd - CmdBannerAction; act >= kActMakeDefault && act < kActMakeDefault + fw::kFileKindCount) {
+    MakeDefaultApp(static_cast<fw::FileKind>(act - kActMakeDefault));
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return;
+  }
   if (cmd > CmdBannerAction && cmd < CmdBannerAction + 50) {
     switch (cmd - CmdBannerAction) {
       case kActUpdate:
@@ -1173,7 +1188,6 @@ void App::Execute(int cmd) {
         settings_.skippedVersion = bannerUpdateVersion_;
         settings_.Save();
         break;
-      case kActMakeDefault: Execute(CmdMakeDefault); break;
       case kActSaveAs: SaveActive(true); break;
       default: break;
     }
@@ -1183,6 +1197,11 @@ void App::Execute(int cmd) {
 
   switch (cmd) {
     case CmdOpen: OpenDialog(); break;
+    case CmdNewTab:
+      // The title bar's ＋ offers what the start screen does: New choices once an editor ships, and Open.
+      if (fw::AnyEditorShipped()) ShowMenu(CmdNewTab);
+      else OpenDialog();
+      break;
     case CmdSave: SaveActive(false); break;
     case CmdSaveAs: SaveActive(true); break;
     case CmdPrint: PrintActive(); break;
@@ -1245,15 +1264,7 @@ void App::Execute(int cmd) {
       settings_.Save();
       break;
     case CmdCheckUpdates: MaybeCheckForUpdates(true); break;
-    case CmdMakeDefault:
-      if (fileassoc::Register(util::ExePath())) {
-        fileassoc::OpenDefaultAppsSettings();
-        banner_.Show(BannerKind::Info, L"In the Settings window that just opened, choose Featherweight for .pdf files.",
-                     {}, 9000);
-      } else {
-        banner_.Show(BannerKind::Error, L"Featherweight couldn’t register itself as a PDF app.");
-      }
-      break;
+    case CmdMakeDefault: MakeDefaultApp(fw::FileKind::Pdf); break;
     case CmdAbout: ShowAbout(); break;
     case CmdClearRecent:
       settings_.ClearRecent();
@@ -1283,7 +1294,13 @@ void App::ShowMenu(int which) {
   const bool ready = v && v->Ready();
   HMENU m = CreatePopupMenu();
   bool alignRight = false;
-  if (which == CmdSaveMenu && ready) {
+  if (which == CmdNewTab) {
+    for (const fw::FileKindInfo& k : fw::FileKinds())
+      if (fw::EditorShipped(k.kind))
+        AppendItem(m, CmdNewFile + static_cast<int>(k.kind), L"New " + std::wstring(k.noun));
+    AppendSeparator(m);
+    AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
+  } else if (which == CmdSaveMenu && ready) {
     AppendItem(m, CmdSave, L"Save\tCtrl+S", v->Modified());
     AppendItem(m, CmdSaveAs, L"Save as\u2026\tCtrl+Shift+S");
   } else if (which == CmdMoreMenu) {
@@ -1323,8 +1340,12 @@ void App::ShowMenu(int which) {
   }
   if (GetMenuItemCount(m) > 0) {
     openMenu_ = which;
-    int cmd = TrackMenu(m, toolbar_.ButtonRect(which == CmdSaveMenu ? CmdSave : which), alignRight);
+    title_.SetNewTabMenu(fw::AnyEditorShipped(), which == CmdNewTab);
+    const D2D1_RECT_F anchor =
+        which == CmdNewTab ? title_.NewTabRect() : toolbar_.ButtonRect(which == CmdSaveMenu ? CmdSave : which);
+    int cmd = TrackMenu(m, anchor, alignRight);
     openMenu_ = 0;
+    title_.SetNewTabMenu(fw::AnyEditorShipped(), false);
     if (cmd) Execute(cmd);
   }
   DestroyMenu(m);
@@ -1437,6 +1458,22 @@ void App::OpenDialog() {
     }
   }
   OpenFiles(files);
+}
+
+void App::OnStartScreen(EmptyState::Result res) {
+  switch (res.kind) {
+    case EmptyState::Result::Kind::Open: Execute(CmdOpen); break;
+    case EmptyState::Result::Kind::New: Execute(CmdNewFile + res.index); break;
+    case EmptyState::Result::Kind::OpenRecent: Execute(CmdRecent + res.index); break;
+    case EmptyState::Result::Kind::RemoveRecent:
+      if (res.index < static_cast<int>(settings_.recent.size())) {
+        settings_.RemoveRecent(settings_.recent[res.index].path);
+        settings_.Save();
+        Layout();
+      }
+      break;
+    default: break;
+  }
 }
 
 std::wstring App::SaveDialog(const std::wstring& suggested, const SaveFormat& format) {
@@ -1783,9 +1820,11 @@ void App::StartupNotices() {
 
   // If Featherweight was registered from a folder that no longer exists (moved or deleted),
   // point "Open with" at this copy. A registration of another existing copy is left alone.
+  // A kind whose viewer shipped since this copy was registered is added.
   if (fileassoc::IsRegistered() && !fileassoc::IsRegisteredAt(exe)) {
     std::wstring registered = fileassoc::RegisteredExe();
-    if (registered.empty() || !util::FileExists(registered)) fileassoc::Register(exe);
+    if (registered.empty() || !util::FileExists(registered) || fileassoc::MissesShippedKinds(exe))
+      fileassoc::Register(exe);
   }
 
   if (settings_.IsInstalled()) {
@@ -1800,13 +1839,34 @@ void App::StartupNotices() {
 
   if (updated) {
     banner_.Show(BannerKind::Success, L"Featherweight was updated to " + current, {}, 6000);
-  } else if (!settings_.offeredDefaultApp && !firstRun && !fileassoc::IsDefault()) {
-    // Offered once, on the second start, so the very first impression is just the app.
-    settings_.offeredDefaultApp = true;
-    banner_.Show(BannerKind::Info, L"Open PDFs with Featherweight by default?",
-                 {{kActMakeDefault, L"Make default", true}, {kActNotNow, L"Not now"}});
+  } else if (!firstRun) {
+    // Offered once per kind of file, from the second start on (so the very first impression is
+    // just the app), and one kind per start.
+    for (fw::FileKind kind : fw::ShippedViewers()) {
+      bool& offered = settings_.offeredDefaultApp[static_cast<int>(kind)];
+      if (offered || fileassoc::IsDefault(kind)) continue;
+      offered = true;
+      banner_.Show(BannerKind::Info,
+                   L"Open " + std::wstring(fw::Info(kind).plural) + L" with Featherweight by default?",
+                   {{kActMakeDefault + static_cast<int>(kind), L"Make default", true}, {kActNotNow, L"Not now"}});
+      break;
+    }
   }
   settings_.Save();
+}
+
+void App::MakeDefaultApp(fw::FileKind kind) {
+  const fw::FileKindInfo& k = fw::Info(kind);
+  if (fileassoc::Register(util::ExePath())) {
+    fileassoc::OpenDefaultAppsSettings();
+    banner_.Show(BannerKind::Info,
+                 L"In the Settings window that just opened, choose Featherweight for " + std::wstring(k.extensions[0]) +
+                     L" files.",
+                 {}, 9000);
+  } else {
+    banner_.Show(BannerKind::Error,
+                 L"Featherweight couldn’t register itself as a " + std::wstring(k.noun) + L" app.");
+  }
 }
 
 void App::MaybeCheckForUpdates(bool manual) {
@@ -1886,12 +1946,14 @@ void App::PumpUntilIdle(double maxMs) {
       TranslateMessage(&msg);
       DispatchMessageW(&msg);
     }
-    // Hidden windows get no WM_PAINT; draw a frame so views register what they need.
-    if (dc_) DrawSnapshotFrame();
+    // Hidden windows get no WM_PAINT; draw a frame so views register what they need. (The widget
+    // gallery runs scripts too, in a window that paints itself.)
+    const bool draw = snapshot_ && dc_;
+    if (draw) DrawSnapshotFrame();
     bool more = Idle();
     if (!more && !anim::Running()) {
       // One more frame to pick up anything that just became visible.
-      DrawSnapshotFrame();
+      if (draw) DrawSnapshotFrame();
       if (!Idle() && !anim::Running()) break;
     }
     if (!more) Sleep(5);
@@ -2061,7 +2123,19 @@ void App::RunScript(const std::wstring& script) {
         else ViewOpenNote(v, note);
       }
     } else if (op == L"recent") {
-      settings_.AddRecent(arg);
+      // recent:path or recent:path|seconds ago (kept in order of time).
+      size_t bar = arg.rfind(L'|');
+      settings_.AddRecent(arg.substr(0, bar));
+      if (bar != std::wstring::npos) settings_.recent.front().lastOpened -= _wtoi64(arg.c_str() + bar + 1);
+      std::stable_sort(settings_.recent.begin(), settings_.recent.end(),
+                       [](const RecentFile& a, const RecentFile& b) { return a.lastOpened > b.lastOpened; });
+      Layout();
+    } else if (op == L"editors") {
+      // editors:all or editors:document,workbook shows the New choices as they'll be once those ship.
+      for (const fw::FileKindInfo& k : fw::FileKinds())
+        for (const std::wstring& name : fw::Split(arg, L','))
+          if (name == L"all" || fw::EqualsNoCase(name, k.name) || fw::EqualsNoCase(name, k.noun))
+            fw::SetEditorShippedForTesting(k.kind, true);
       Layout();
     } else if (op == L"banner") {
       banner_.Show(BannerKind::Info, arg, {{kActUpdate, L"Update", true}, {kActSkip, L"Skip this version"}});

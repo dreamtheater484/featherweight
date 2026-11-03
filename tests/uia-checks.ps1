@@ -4,7 +4,9 @@
   Starts the app with the widget gallery and a PDF (settings are neither read nor saved), walks
   the whole element tree of both tabs and checks every element's control type, name, state,
   bounds and patterns, then works each kind of control through its patterns: expand, select,
-  set value, toggle, invoke, scroll and focus. A window shows on screen while it runs.
+  set value, toggle, invoke, scroll and focus. Closing both tabs leads to the start page and its
+  recent files. A second start shows the start page as it will be once the editors ship (the New
+  row and the + menu). A window shows on screen while it runs.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File tests\uia-checks.ps1
@@ -56,6 +58,23 @@ public static class FocusWatch {
   public static void Clear() { lock (seen) seen.Clear(); }
   public static bool Saw(string what) { lock (seen) return seen.Contains(what); }
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hwnd, int msg, IntPtr wp, IntPtr lp);
+  [DllImport("user32.dll")] static extern int GetMenuItemCount(IntPtr menu);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetMenuString(IntPtr menu, uint item, System.Text.StringBuilder text, int max, uint flags);
+  // A Win32 popup menu's items (UI Automation's .NET client doesn't show them); separators are "".
+  public static string[] MenuItems(IntPtr menuWindow) {
+    IntPtr menu = SendMessage(menuWindow, 0x01E1 /* MN_GETHMENU */, IntPtr.Zero, IntPtr.Zero);
+    int n = GetMenuItemCount(menu);
+    var items = new string[Math.Max(n, 0)];
+    for (int i = 0; i < n; i++) {
+      var text = new System.Text.StringBuilder(256);
+      GetMenuString(menu, (uint)i, text, text.Capacity, 0x400 /* MF_BYPOSITION */);
+      items[i] = text.ToString();
+    }
+    return items;
+  }
+  // Closes the open menu, as clicking elsewhere would.
+  public static void CancelMenu(IntPtr owner) { SendMessage(owner, 0x001F /* WM_CANCELMODE */, IntPtr.Zero, IntPtr.Zero); }
 }
 "@
 
@@ -213,7 +232,11 @@ function Check-Tree($items, [string]$label) {
 
 # ---- Run
 
-$p, $win = Start-App @("--widget-gallery", "--theme", "light", (Join-Path $root "tests\pdfs\text.pdf"))
+# Recent files for the start page (recent:path|seconds ago): a document that exists but doesn't open
+# yet, and two files that don't exist.
+$missing = "C:\FeatherweightUiaChecks"
+$recent = "recent:$root\tests\office\generated\simple.docx|7200;recent:$missing\Budget 2026.xlsx|90000;recent:$missing\Kickoff.pptx|1500"
+$p, $win = Start-App @("--widget-gallery", "--theme", "light", "--script", $recent, (Join-Path $root "tests\pdfs\text.pdf"))
 $hwnd = [IntPtr]$win.Current.NativeWindowHandle
 [FocusWatch]::Start($p.Id)
 try {
@@ -421,8 +444,86 @@ try {
   $tree = Get-Tree $win
   Write-Tree $tree "start.txt"
   Check-Tree $tree "start"
+  $start = FindChild $win $CT::Pane "Start"
+  $open = FindChild $start $CT::Button "Open$([char]0x2026)"
+  Check "Open: a focusable button with its shortcut" { $open.Current.IsKeyboardFocusable -and $open.Current.AcceleratorKey -eq "Ctrl+O" -and (PatternNames $open) -contains "Invoke" }
+  Check "no New row while no editor has shipped" { -not (FindChild $start $CT::Group "New") }
+  Check "+ opens a file while no editor has shipped" {
+    $plus = FindChild (FindChild $win $CT::TitleBar $null) $CT::Button "Open a PDF"; (PatternNames $plus) -contains "Invoke" -and (PatternNames $plus) -notcontains "ExpandCollapse"
+  }
+  $list = FindChild $start $CT::List "Recent"
+  $names = { @(FindAll $list $CT::ListItem | ForEach-Object { $_.Current.Name }) -join "|" }
+  $item = { param($n) FindChild $list $CT::ListItem $n }
+  Check "Recent: files of every kind, newest first" { (& $names) -eq "text.pdf|Kickoff.pptx|simple.docx|Budget 2026.xlsx" }
+  Check "Recent: a list with Selection, nothing selected yet" { (PatternNames $list) -contains "Selection" -and @((Pat $list $Selection).Current.GetSelection()).Count -eq 0 }
+  Check "Recent: every file can be selected and opened, and says when it was opened" {
+    @(FindAll $list $CT::ListItem | Where-Object { $n = PatternNames $_; -not ($n -contains "SelectionItem" -and $n -contains "Invoke" -and $_.Current.ItemStatus -and $_.Current.IsKeyboardFocusable) }).Count -eq 0
+  }
+  Check "Recent: Kickoff.pptx was opened 25 minutes ago" { (& $item "Kickoff.pptx").Current.ItemStatus -like "2? minutes ago" }
+  Step "Recent: selecting simple.docx" { (Pat (& $item "simple.docx") $SelItem).Select() } {
+    $sel = @((Pat $list $Selection).Current.GetSelection()); $sel.Count -eq 1 -and $sel[0].Current.Name -eq "simple.docx" -and -not (Pat (& $item "text.pdf") $SelItem).Current.IsSelected
+  }
+  if ([FocusWatch]::GetForegroundWindow() -ne $hwnd) { try { $win.SetFocus() } catch {} ; Start-Sleep -Milliseconds 300 }
+  if ([FocusWatch]::GetForegroundWindow() -eq $hwnd) {
+    Check "focus: the selected file has the keyboard" { (& $item "simple.docx").Current.HasKeyboardFocus }
+    [FocusWatch]::Clear()
+    Step "focus: Open takes the keyboard" { $open.SetFocus() } { $open.Current.HasKeyboardFocus -and -not (& $item "simple.docx").Current.HasKeyboardFocus }
+    Check "focus: a focus event for Open" { [FocusWatch]::Saw("Button 'Open$([char]0x2026)'") }
+    Step "focus: Budget 2026.xlsx takes it, and is selected" { (& $item "Budget 2026.xlsx").SetFocus() } {
+      (& $item "Budget 2026.xlsx").Current.HasKeyboardFocus -and (Pat (& $item "Budget 2026.xlsx") $SelItem).Current.IsSelected
+    }
+    Check "focus: a focus event for Budget 2026.xlsx" { [FocusWatch]::Saw("ListItem 'Budget 2026.xlsx'") }
+    Step "Recent: selecting simple.docx again" { (Pat (& $item "simple.docx") $SelItem).Select() } { (Pat (& $item "simple.docx") $SelItem).Current.IsSelected }
+  } else {
+    "  skip  focus checks: the window couldn't come to the foreground"
+  }
+  Step "Recent: Remove from list takes Kickoff.pptx off" { (Pat (FindChild (& $item "Kickoff.pptx") $CT::Button "Remove from list") $Invoke).Invoke() } {
+    (& $names) -eq "text.pdf|simple.docx|Budget 2026.xlsx"
+  }
+  Check "Recent: the selection stays on simple.docx" { (Pat (& $item "simple.docx") $SelItem).Current.IsSelected }
+  $message = { $m = FindChild $win $CT::Pane "Message"; if ($m) { (FindChild $m $CT::Text $null).Current.Name } }
+  Step "Recent: opening a document shows today's message and keeps it in the list" { (Pat (& $item "simple.docx") $Invoke).Invoke() } {
+    (& $message) -like "*simple.docx* couldn't be opened*isn't a PDF." -and (FindChild $win $CT::Pane "Start") -and (& $names) -eq "text.pdf|simple.docx|Budget 2026.xlsx"
+  }
+  Step "Recent: opening a file that's gone takes it off the list" { (Pat (& $item "Budget 2026.xlsx") $Invoke).Invoke() } {
+    (& $message) -like "*Budget 2026.xlsx* couldn't be opened*" -and (& $names) -eq "text.pdf|simple.docx"
+  }
 } finally {
   [FocusWatch]::Stop()
+  if (-not $p.HasExited) { $p.CloseMainWindow() | Out-Null; if (-not $p.WaitForExit(3000)) { $p.Kill() } }
+}
+
+# ---- Once the editors ship: the New row and the + menu (editors:all shows them as they will be)
+$p, $win = Start-App @("--widget-gallery", "--theme", "dark", "--script", "editors:all")
+try {
+  "Start page with the editors"
+  $titleBar = FindChild $win $CT::TitleBar $null
+  $galleryTab = FindChild (Find $titleBar $CT::Tab "Open files") $CT::TabItem $null
+  Step "closing the gallery shows the start page" { (Pat (FindChild $galleryTab $CT::Button "Close tab") $Invoke).Invoke() } { FindChild $win $CT::Pane "Start" }
+  $tree = Get-Tree $win
+  Write-Tree $tree "start-editors.txt"
+  Check-Tree $tree "start with editors"
+  $new = FindChild (FindChild $win $CT::Pane "Start") $CT::Group "New"
+  Check "New: a tile for each editor" { (@(FindAll $new $CT::Button | ForEach-Object { $_.Current.Name }) -join "|") -eq "Document|Spreadsheet|Presentation" }
+  Check "New: the tiles are focusable buttons" {
+    @(FindAll $new $CT::Button | Where-Object { -not ($_.Current.IsKeyboardFocusable -and (PatternNames $_) -contains "Invoke") }).Count -eq 0
+  }
+  $plus = FindChild $titleBar $CT::Button "New or open a file"
+  Check "+: a menu button" { (PatternNames $plus) -contains "ExpandCollapse" -and (PatternNames $plus) -notcontains "Invoke" -and (State $plus) -eq "Collapsed" }
+  # The menu is a Win32 popup menu: a top-level window of class #32768.
+  $menuCond = [System.Windows.Automation.AndCondition]::new([System.Windows.Automation.Condition[]]@(
+    [System.Windows.Automation.PropertyCondition]::new($AE::ProcessIdProperty, $p.Id),
+    [System.Windows.Automation.PropertyCondition]::new($AE::ClassNameProperty, "#32768")))
+  Step "+: expanding opens the menu" { (Pat $plus $Expand).Expand() } { $AE::RootElement.FindFirst($Scope::Children, $menuCond) -and (State $plus) -eq "Expanded" }
+  $menu = $AE::RootElement.FindFirst($Scope::Children, $menuCond)
+  if ($menu) {
+    $choices = [FocusWatch]::MenuItems([IntPtr]$menu.Current.NativeWindowHandle) -join "|"
+    Check "+ menu: the start screen's choices" { $choices -eq "New document|New spreadsheet|New presentation||Open$([char]0x2026)`tCtrl+O" }
+    Step "+ menu: closes" { [FocusWatch]::CancelMenu([IntPtr]$win.Current.NativeWindowHandle) } {
+      -not $AE::RootElement.FindFirst($Scope::Children, $menuCond) -and (State $plus) -eq "Collapsed"
+    }
+  }
+} finally {
   if (-not $p.HasExited) { $p.CloseMainWindow() | Out-Null; if (-not $p.WaitForExit(3000)) { $p.Kill() } }
 }
 

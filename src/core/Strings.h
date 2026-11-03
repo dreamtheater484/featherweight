@@ -20,6 +20,12 @@ bool EndsWithNoCase(std::wstring_view s, std::wstring_view suffix);
 // Path helpers that accept both '\' and '/'.
 std::wstring FileNameOf(std::wstring_view path);
 std::wstring DirOf(std::wstring_view path);
+// A folder as lists show it: inside `home` (the user's profile) without that part
+// ("Documents\Work"), and anywhere else as it is ("D:\Scans").
+std::wstring ShortFolder(std::wstring_view dir, std::wstring_view home);
+// The folder with `drop` folders after its first replaced by "…": "D:\…\Clients\Acme".
+// The first and the last always stay.
+std::wstring ElideFolder(std::wstring_view folder, int drop);
 
 uint64_t Fnv1a64(std::wstring_view s);
 std::wstring Hex64(uint64_t v);

@@ -25,6 +25,7 @@ set(FW_DEFINITIONS UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x
 # --- Pure logic (no UI, no PDFium): shared by the app and the unit tests ---
 add_library(fwcore STATIC
   src/core/Strings.cpp
+  src/core/FileKinds.cpp
   src/core/Ini.cpp
   src/core/Json.cpp
   src/core/Layout.cpp
@@ -68,6 +69,10 @@ if(FW_BUILD_TESTS)
   target_link_libraries(fw_tests PRIVATE fwcore)
   target_compile_options(fw_tests PRIVATE ${FW_COMPILE_OPTIONS})
   add_test(NAME unit COMMAND fw_tests)
+  # File kinds, settings and file associations: temporary settings files, and registry dry runs only.
+  target_sources(fw_tests PRIVATE tests/unit/test_filekinds.cpp tests/unit/test_settings.cpp
+    tests/unit/test_fileassoc.cpp src/Settings.cpp src/Util.cpp src/FileAssoc.cpp)
+  target_link_libraries(fw_tests PRIVATE bcrypt shell32 ole32 advapi32 user32)
 endif()
 
 # --- Office foundations (plan milestone D0): fwpkg, fwtool, corpus tests and fuzz targets ---
