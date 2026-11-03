@@ -208,7 +208,7 @@ TEST(RoundTrip_SplitKeepsFragmentsWithFirstHalf) {
   second.id = doc.NewId();
   second.runs.push_back(doc.paras[0].runs[1]);
   doc.paras[0].runs.pop_back();
-  doc.store.Split(doc.paras[0].id, second.id);
+  doc.store.Split(doc.paras[0].id, second.id, {second.runs[0].id});
   doc.paras.insert(doc.paras.begin() + 1, second);
 
   CHECK_EQ(doc.store.FragmentsOf(doc.paras[0].id, Slot::Before).size(), size_t{1});
@@ -218,6 +218,55 @@ TEST(RoundTrip_SplitKeepsFragmentsWithFirstHalf) {
   CHECK(out.find("<run>Hello </run><x:inline") != std::string::npos);
   CHECK(out.find("</para><para><run>world</run><!-- a comment --></para><x:between") != std::string::npos);
   CHECK(out.find("x:id=\"p1\"") < out.find("<run>Hello"));  // attributes stay with the first half
+}
+
+TEST(RoundTrip_SplitMovesWhatFollowsTheSplitPoint) {
+  // Inline content after the last run (End, as a merge leaves it) follows the split point.
+  auto split = [](SplitPoint at, bool moveRun) {
+    Doc doc;
+    CHECK(Read(kSample, doc));
+    Para& first = doc.paras[0];
+    doc.store.Add(first.id, {Slot::End, {}, "<x:rangeEnd xmlns:x=\"urn:unknown\"/>", true});
+    Para second;
+    second.id = doc.NewId();
+    if (moveRun) {
+      second.runs.push_back(first.runs[1]);
+      first.runs.pop_back();
+    }
+    doc.store.Split(first.id, second.id, at);
+    doc.paras.insert(doc.paras.begin() + 1, second);
+    return Write(doc);
+  };
+  Doc probe;
+  CHECK(Read(kSample, probe));
+  NodeId world = probe.paras[0].runs[1].id;
+
+  // Between the runs: the range end and the comment follow "world" into the second half.
+  std::string out = split({world}, true);
+  CHECK(out.find("<run>Hello </run><x:inline") != std::string::npos);
+  CHECK(out.find("</para><para><run>world</run><!-- a comment --><x:rangeEnd") != std::string::npos);
+  CHECK(out.find("<x:rangeEnd xmlns:x=\"urn:unknown\"/></para><x:between") != std::string::npos);
+
+  // At the end (Enter after the last run): nothing follows the split point but the end tag.
+  out = split({}, false);
+  CHECK(out.find("<!-- a comment --><x:rangeEnd xmlns:x=\"urn:unknown\"/></para><para/><x:between") != std::string::npos);
+
+  // Inside text the model keeps itself: no child moves, but what follows the text does.
+  RoundTripStore s;
+  s.Add(1, {Slot::Before, {}, "<a/>"});
+  s.Add(1, {Slot::Inside, "{urn:test}props", "<b/>"});
+  s.Add(1, {Slot::End, {}, "<c/>"});
+  s.Add(1, {Slot::After, {}, "<d/>"});
+  s.Split(1, 2, {kNoNode, false});
+  CHECK(s.FragmentsOf(1, Slot::Before).size() == 1 && s.FragmentsAfterChild(1, "{urn:test}props").size() == 1);
+  CHECK(s.FragmentsOf(1, Slot::End).empty() && s.FragmentsOf(1, Slot::After).empty());
+  CHECK(s.FragmentsOf(2, Slot::End).size() == 1 && s.FragmentsOf(2, Slot::End)[0]->xml == "<c/>");
+  CHECK(s.FragmentsOf(2, Slot::After).size() == 1 && s.FragmentsOf(2, Slot::After)[0]->xml == "<d/>");
+
+  // Splitting and merging back restores the order.
+  s.Merge(1, 2);
+  auto end = s.FragmentsOf(1, Slot::End);
+  CHECK(end.size() == 1 && end[0]->xml == "<c/>" && s.FragmentsOf(1, Slot::After).size() == 1);
 }
 
 TEST(RoundTrip_MergeKeepsOrder) {

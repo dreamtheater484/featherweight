@@ -109,6 +109,12 @@ class Package {
   std::unordered_map<std::string, size_t> relsIndex_;  // PartKey of the source -> rels_ index
 };
 
+// The parsers Package::Open uses for a relationships part (of `source`) and for
+// [Content_Types].xml. `label` names the part in messages.
+Status ParseRelationships(std::string_view xml, std::string_view source, const Limits& limits, std::string_view label,
+                          RelationshipSet& out);
+Status ParseContentTypes(std::string_view xml, const Limits& limits, ContentTypes& out);
+
 // "/word/_rels/document.xml.rels" for "/word/document.xml"; "/_rels/.rels" for "/".
 std::string RelsPartFor(std::string_view source);
 // The inverse: the source of a relationship part, or empty when `name` isn't one.

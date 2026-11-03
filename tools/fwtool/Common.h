@@ -11,7 +11,7 @@ namespace fwtool {
 
 struct Options {
   bool reserializeAll = false;  // roundtrip: write every XML part through the DOM
-  bool expectReject = false;    // roundtrip: every file must be refused with a plain message
+  bool expectReject = false;    // roundtrip: every file must be refused; check: every file must fail
   std::filesystem::path outDir; // roundtrip: keep the saved copies here
   std::wstring printer;         // print-sample: the printer (default: Microsoft Print to PDF)
   bool warp = false;            // print-sample: draw with WARP instead of the graphics adapter

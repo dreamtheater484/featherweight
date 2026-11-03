@@ -5,6 +5,8 @@
               namespaces, custom XML, unusual XML and zip layouts
   malicious/  hand-made files that must be refused with a plain message: zip bombs, a nesting
               bomb, a DTD, missing content types, and other damage
+  broken/     hand-made files that open, but that fwtool check must reject: a dangling reference,
+              a duplicate id, an unclosed pair, a stale calculation chain
 
 Requires a venv (not the global Python). From the repository root:
   python -m venv .venv
@@ -51,6 +53,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 GENERATED = os.path.join(ROOT, "generated")
 EDGE = os.path.join(ROOT, "edge")
 MALICIOUS = os.path.join(ROOT, "malicious")
+BROKEN = os.path.join(ROOT, "broken")
 
 FIXED_DATE = datetime(2026, 1, 1, 12, 0, 0)
 ZIP_DATE = (1980, 1, 1, 0, 0, 0)
@@ -728,6 +731,57 @@ def malicious(simple_docx, simple_xlsx, simple_pptx):
     save(MALICIOUS, "truncated.xlsx", simple_xlsx[: len(simple_xlsx) // 2])
 
 
+# ---------- Broken files: valid packages that fwtool check must reject ----------
+
+
+def broken(simple_docx, simple_xlsx, simple_pptx):
+    """Each file opens and saves, but breaks one consistency rule (plan section 4.3, rule 2)."""
+    def docx_with(fragment):
+        return write_zip(edit_part(read_entries(simple_docx), "word/document.xml",
+                                   lambda b: insert_before_sectpr(b.decode("utf-8"), fragment).encode("utf-8")))
+
+    save(BROKEN, "dangling-relationship-id.docx", docx_with(
+        '<w:p><w:hyperlink r:id="rId99"><w:r><w:t>A link to a relationship that isn\'t there</w:t></w:r>'
+        '</w:hyperlink></w:p>'))
+    save(BROKEN, "duplicate-paragraph-id.docx", docx_with(
+        '<w:p w14:paraId="1A2B3C4D" w14:textId="77777777"><w:r><w:t>First</w:t></w:r></w:p>'
+        '<w:p w14:paraId="1A2B3C4D" w14:textId="77777777"><w:r><w:t>Second, same id</w:t></w:r></w:p>'))
+    save(BROKEN, "bookmark-without-end.docx", docx_with(
+        '<w:p><w:bookmarkStart w:id="5" w:name="Lonely"/><w:r><w:t>A bookmark that never ends</w:t></w:r></w:p>'))
+    save(BROKEN, "field-without-end.docx", docx_with(
+        '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText>'
+        '</w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r></w:p>'))
+    save(BROKEN, "missing-comment.docx", docx_with(
+        '<w:p><w:r><w:t>A comment reference without comments</w:t></w:r><w:r><w:commentReference w:id="7"/></w:r></w:p>'))
+
+    # A calculation chain that names a cell without a formula (A1), as an edit that removed a
+    # formula without dropping the chain would leave it.
+    def add_calc_rel(body):
+        rel = ('<Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain" '
+               'Target="calcChain.xml" Id="rIdCalc"/>')
+        return body.decode("utf-8").replace("</Relationships>", rel + "</Relationships>").encode("utf-8")
+
+    def add_calc_type(body):
+        override = ('<Override PartName="/xl/calcChain.xml" '
+                    'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"/>')
+        return body.decode("utf-8").replace("</Types>", override + "</Types>").encode("utf-8")
+
+    chain = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+             '<calcChain xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+             '<c r="D2" i="1"/><c r="D3"/><c r="A1"/></calcChain>')
+    entries = edit_part(read_entries(simple_xlsx), "xl/_rels/workbook.xml.rels", add_calc_rel)
+    entries = edit_part(entries, "[Content_Types].xml", add_calc_type)
+    save(BROKEN, "stale-calc-chain.xlsx", write_zip(entries + [("xl/calcChain.xml", chain.encode("utf-8"))]))
+
+    save(BROKEN, "formula-names-missing-sheet.xlsx", write_zip(edit_part(
+        read_entries(simple_xlsx), "xl/worksheets/sheet1.xml",
+        lambda b: b.replace(b"<f>SUM(B2:B5)</f>", b"<f>SUM(Missing!B2:B5)</f>"))))
+
+    save(BROKEN, "duplicate-slide-id.pptx", write_zip(edit_part(
+        read_entries(simple_pptx), "ppt/presentation.xml",
+        lambda b: b.replace(b'<p:sldId id="257"', b'<p:sldId id="256"'))))
+
+
 def main():
     print("Generated:")
     simple_docx = docx_simple()
@@ -755,6 +809,9 @@ def main():
 
     print("Malicious and damaged:")
     malicious(simple_docx, simple_xlsx, simple_pptx)
+
+    print("Broken (fwtool check must reject):")
+    broken(simple_docx, simple_xlsx, simple_pptx)
 
 
 if __name__ == "__main__":

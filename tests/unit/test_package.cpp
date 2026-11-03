@@ -222,10 +222,10 @@ TEST(References_FindRelationshipIds) {
   auto refs = registry.Find(dom.Root(), RefKind::RelationshipId);
   CHECK_EQ(refs.size(), size_t{3});  // w:id isn't one, and an empty r:link refers to nothing
   CHECK(std::string(refs[0].attr.name()) == "r:id" && std::string(refs[1].attr.name()) == "r:embed");
-  CHECK(registry.Find(dom.Root(), RefKind::BookmarkPair).empty());
-  CHECK(registry.ClassifyExtension("{78C0D931-6437-407d-A8EE-F0AAD7539E65}") == ExtensionClass::Unknown);
-  registry.AddExtension("{78C0D931-6437-407d-A8EE-F0AAD7539E65}", ExtensionClass::Registry);
-  CHECK(registry.ClassifyExtension("{78C0D931-6437-407d-A8EE-F0AAD7539E65}") == ExtensionClass::Registry);
+  CHECK(registry.Find(dom.Root(), RefKind::BookmarkId).empty());
+  CHECK(registry.ClassifyExtension("{F0F0F0F0-0000-4000-8000-000000000001}") == ExtensionClass::Unknown);
+  registry.AddExtension("{F0F0F0F0-0000-4000-8000-000000000001}", ExtensionClass::ReferenceFree);
+  CHECK(registry.ClassifyExtension("{F0F0F0F0-0000-4000-8000-000000000001}") == ExtensionClass::ReferenceFree);
 }
 
 TEST(References_RenameReachesKeptContent) {

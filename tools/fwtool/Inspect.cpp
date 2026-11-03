@@ -1,10 +1,9 @@
 // fwtool dump and fwtool check: what a package contains, and whether its references hold.
 #include <cstdio>
-#include <set>
 
 #include "Common.h"
+#include "pkg/Check.h"
 #include "pkg/References.h"
-#include "pkg/XmlDom.h"
 
 namespace fwtool {
 namespace {
@@ -52,70 +51,15 @@ void DumpFile(const std::filesystem::path& file) {
   std::printf("\n");
 }
 
-struct Report {
-  std::vector<std::string> errors, warnings;
-  size_t relationships = 0, references = 0;
-};
-
-Report CheckFile(const std::filesystem::path& file) {
-  Report rep;
+fw::pkg::CheckReport CheckFile(const std::filesystem::path& file, const fw::pkg::ReferenceRegistry& registry) {
   Status st;
   auto pkg = OpenPackage(file, st);
-  if (pkg) st = pkg->Verify();
-  if (!st.Ok()) {
+  if (!pkg) {
+    fw::pkg::CheckReport rep;
     rep.errors.push_back(st.message);
     return rep;
   }
-
-  // Relationships: unique, non-empty ids; internal targets that exist.
-  if (!pkg->RelationshipsOf("/")) rep.errors.push_back("the package has no relationships (_rels/.rels)");
-  for (const auto& set : pkg->Relationships()) {
-    std::string where = set.relsPart.substr(1);
-    if (set.source != "/" && !pkg->FindPart(set.source))
-      rep.warnings.push_back(where + ": relationships for " + set.source + ", which doesn't exist");
-    std::set<std::string> ids;
-    for (const auto& r : set.items) {
-      ++rep.relationships;
-      if (r.id.empty()) rep.errors.push_back(where + ": a relationship has no id");
-      else if (!ids.insert(r.id).second) rep.errors.push_back(where + ": id " + r.id + " is used twice");
-      if (r.external) continue;
-      if (r.targetPart.empty())
-        rep.errors.push_back(where + ": " + r.id + " has no target");
-      else if (!pkg->FindPart(r.targetPart))
-        rep.errors.push_back(where + ": " + r.id + " points to " + r.targetPart + ", which doesn't exist");
-    }
-  }
-
-  // Content types: every part has one; overrides name parts that exist.
-  for (const auto& part : pkg->Parts()) {
-    if (part.name == fw::pkg::kContentTypesPart) continue;
-    if (pkg->ContentTypeOf(part.name).empty()) rep.errors.push_back(part.name.substr(1) + " has no content type");
-  }
-  for (const auto& [name, type] : pkg->Types().overrides)
-    if (!pkg->FindPart(name)) rep.warnings.push_back("a content type is given for " + name + ", which doesn't exist");
-
-  // References from the registry (for now: relationship ids) resolve in the part's own relationships.
-  auto registry = fw::pkg::ReferenceRegistry::Default();
-  std::vector<uint8_t> bytes;
-  for (const auto& part : pkg->Parts()) {
-    if (part.name == fw::pkg::kContentTypesPart || !fw::pkg::SourceOfRelsPart(part.name).empty() ||
-        !pkg->IsXmlPart(part.name))
-      continue;
-    fw::pkg::XmlDom dom;
-    if (!(st = pkg->ReadPart(part.name, bytes)).Ok() ||
-        !(st = dom.Parse(AsText(bytes), pkg->GetLimits(), part.name.substr(1))).Ok()) {
-      rep.errors.push_back(st.message);
-      continue;
-    }
-    const auto* rels = pkg->RelationshipsOf(part.name);
-    for (const auto& ref : registry.Find(dom.Root(), fw::pkg::RefKind::RelationshipId)) {
-      ++rep.references;
-      if (!rels || !rels->Find(ref.attr.value()))
-        rep.errors.push_back(part.name.substr(1) + ": " + ref.attr.name() + "=\"" + ref.attr.value() +
-                             "\" doesn't match any of its relationships");
-    }
-  }
-  return rep;
+  return fw::pkg::CheckPackage(*pkg, registry);
 }
 
 }  // namespace
@@ -131,14 +75,20 @@ int RunCheck(const Options& options) {
     std::fprintf(stderr, "No Office files found.\n");
     return 1;
   }
+  auto registry = fw::pkg::ReferenceRegistry::Default();
   int failed = 0;
   for (const auto& file : files) {
-    Report rep = CheckFile(file);
-    bool ok = rep.errors.empty();
-    std::printf("%s %s: %zu relationships, %zu references\n", ok ? "[ ok ]" : "[FAIL]", Display(file).c_str(),
-                rep.relationships, rep.references);
+    fw::pkg::CheckReport rep = CheckFile(file, registry);
+    // With --expect-reject, each file must have at least one error (the broken files).
+    bool ok = options.expectReject ? !rep.Ok() : rep.Ok();
+    std::printf("%s %s: %zu relationships, %zu references, %zu ids, %zu pairs, %zu derived values", ok ? "[ ok ]" : "[FAIL]",
+                Display(file).c_str(), rep.relationships, rep.references, rep.ids, rep.pairs, rep.derived);
+    if (rep.embedded) std::printf(", %zu embedded packages", rep.embedded);
+    std::printf("%s\n", options.expectReject && ok ? " (rejected, as expected)" : "");
     for (const auto& e : rep.errors) std::printf("    error: %s\n", e.c_str());
     for (const auto& w : rep.warnings) std::printf("    warning: %s\n", w.c_str());
+    for (const auto& x : rep.unknownExtensions) std::printf("    unknown extension (edits near it are blocked): %s\n", x.c_str());
+    if (options.expectReject && rep.Ok()) std::printf("    expected an error, but the file passed\n");
     if (!ok) ++failed;
   }
   std::printf("\n%zu files, %d failed\n", files.size(), failed);

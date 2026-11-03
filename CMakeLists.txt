@@ -89,6 +89,7 @@ if(FW_BUILD_TESTS)
     tests/unit/test_xml.cpp
     tests/unit/test_package.cpp
     tests/unit/test_roundtrip.cpp
+    tests/unit/test_references.cpp
     tests/unit/test_draw.cpp)
   target_link_libraries(fw_tests PRIVATE fwpkg fwdraw windowscodecs ole32)
   # Never-damage tests on the public corpus (plan §10).
@@ -96,6 +97,7 @@ if(FW_BUILD_TESTS)
   add_test(NAME office_roundtrip COMMAND fwtool roundtrip "${_fw_office}/generated" "${_fw_office}/edge")
   add_test(NAME office_reserialize COMMAND fwtool roundtrip --reserialize-all "${_fw_office}/generated" "${_fw_office}/edge")
   add_test(NAME office_check COMMAND fwtool check "${_fw_office}/generated" "${_fw_office}/edge")
+  add_test(NAME office_check_broken COMMAND fwtool check --expect-reject "${_fw_office}/broken")
   add_test(NAME office_malicious COMMAND fwtool roundtrip --expect-reject "${_fw_office}/malicious")
 endif()
 

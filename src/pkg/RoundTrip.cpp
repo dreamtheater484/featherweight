@@ -131,11 +131,15 @@ void RoundTripStore::ForEachAttrSet(const std::function<void(std::vector<XmlAttr
 
 // ---------- Ownership ----------
 
-void RoundTripStore::Split(NodeId node, NodeId second) {
+void RoundTripStore::Split(NodeId node, NodeId second, SplitPoint at) {
   auto it = fragments_.find(node);
   if (it == fragments_.end()) return;
+  bool endMoves = at.firstMoved != kNoNode || !at.atEnd;
   std::vector<Fragment> keep, move;
-  for (auto& f : it->second) (f.slot == Slot::After ? move : keep).push_back(std::move(f));
+  for (auto& f : it->second) {
+    bool moves = f.slot == Slot::After || (f.slot == Slot::End && endMoves);
+    (moves ? move : keep).push_back(std::move(f));
+  }
   it->second = std::move(keep);
   if (it->second.empty()) fragments_.erase(it);
   if (move.empty()) return;

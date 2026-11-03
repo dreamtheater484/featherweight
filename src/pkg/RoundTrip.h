@@ -42,6 +42,15 @@ struct XmlAttr {
   bool operator==(const XmlAttr&) const = default;
 };
 
+// Where a node is split (RoundTripStore::Split).
+struct SplitPoint {
+  // The first of the node's children that moved to the second half; kNoNode when none did.
+  NodeId firstMoved = kNoNode;
+  // When none did: whether the split is after all of the node's content (Enter at the end of a
+  // paragraph), or inside content the model keeps itself (a run's text).
+  bool atEnd = true;
+};
+
 // The round-trip store (plan §4.3 rule 1): everything a model doesn't understand, kept so its
 // writer can put it back where it was.
 //  - Unknown elements, comments and processing instructions become fragments attached to their
@@ -70,9 +79,14 @@ class RoundTripStore {
   void ForEachAttrSet(const std::function<void(std::vector<XmlAttr>&)>& fn);
 
   // ---- Ownership through structural edits
-  // `node` was split, and `second` is its new second half. Fragments stay with the first half,
-  // except those After it: they follow the node's end tag, which is now the second half's.
-  void Split(NodeId node, NodeId second);
+  // `node` was split at `at`, and `second` is its new second half. Fragments keep their place in
+  // the document:
+  //  - before the split point (Before, and Inside, which sits among the node's fields) stay with
+  //    the first half; those owned by the children go wherever their child went;
+  //  - after it move to the second half: End, unless the split is at the end, and After, which
+  //    follows the node's end tag, now the second half's.
+  // `node` keeps its attributes.
+  void Split(NodeId node, NodeId second, SplitPoint at);
   // `second` was merged into `first`, and `firstMoved` is the first of second's children that
   // moved into `first` (kNoNode if none). Fragments keep their document order:
   //  - inline ones (first's End, all of second's inside ones) go before `firstMoved`, or to
