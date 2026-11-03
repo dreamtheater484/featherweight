@@ -13,13 +13,16 @@ namespace {
 
 constexpr const char* kUsage =
     "Usage:\n"
-    "  fwtool roundtrip [--reserialize-all] [--expect-reject] [--out DIR] <file or folder>...\n"
+    "  fwtool roundtrip [--model] [--reserialize-all] [--expect-reject] [--out DIR] <file or folder>...\n"
     "      Opens and saves each file without edits. Untouched parts must be byte-identical;\n"
     "      with --reserialize-all every XML part is rewritten through the DOM and must equal\n"
     "      the original after canonicalization. With --expect-reject every file must be\n"
-    "      refused with a plain message (malicious files).\n"
-    "  fwtool dump <file>...\n"
-    "      Lists parts, relationships and content types.\n"
+    "      refused with a plain message (malicious files). With --model Word documents are\n"
+    "      read into the document model, which writes back every part it owns; those parts\n"
+    "      must equal the originals after canonicalization, and the saved copy must pass check.\n"
+    "  fwtool dump [--model] <file>...\n"
+    "      Lists parts, relationships and content types; with --model, what the document\n"
+    "      model reads from a Word document (stories, paragraphs, labels, fields).\n"
     "  fwtool check [--expect-reject] <file or folder>...\n"
     "      Checks each file against the reference registry: every reference resolves, ids\n"
     "      are unique, pairs are complete, and derived data (the calculation chain, chart\n"
@@ -89,6 +92,7 @@ int wmain(int argc, wchar_t** argv) {
   for (int i = 2; i < argc; ++i) {
     std::wstring arg = argv[i];
     if (arg == L"--reserialize-all") options.reserializeAll = true;
+    else if (arg == L"--model") options.model = true;
     else if (arg == L"--expect-reject") options.expectReject = true;
     else if (arg == L"--out" && i + 1 < argc) options.outDir = argv[++i];
     else if (arg == L"--printer" && i + 1 < argc) options.printer = argv[++i];

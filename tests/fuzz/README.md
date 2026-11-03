@@ -7,6 +7,7 @@ One target per parser (plan §10). So far:
 - `fuzz_opc`: the relationships and content types parsers, and the part-name helpers. Seeds: `seeds/opc`.
 - `fuzz_check`: `fwtool check`'s path over a package: the reference registry, the consistency checker, the id renewer and the extension query. Seeds: `seeds/package`, corpus files written as text (see below), so the fuzzer can change the XML inside them.
 - `fuzz_formula`: the formula scanner the registry uses (sheet names and cell references), and every other syntax a reference can have. Seeds: `seeds/formula`.
+- `fuzz_docx`: the Word document model (`src/doc`): the reader, what pagination asks of the model (runs, inline items, resolved properties, list labels, fields, tables) and the writer. Seeds: `seeds/docx`, a small hand-written document with every structure the model reads, and `seeds/package`. Inputs are read like `fuzz_check`'s.
 
 `make_seeds.py` makes `seeds/opc`, `seeds/package` and `seeds/formula` from the corpus (standard library only): `python tests/fuzz/make_seeds.py`.
 
@@ -18,6 +19,7 @@ Besides crashes and AddressSanitizer reports, each target aborts when an invaria
 - Saving a package without edits copies every entry byte for byte.
 - Relationships and content types that Featherweight writes read back the same.
 - Renaming references and renewing ids leaves a document that still parses.
+- Every part the document model writes back equals what it read, after canonicalization; runs and inline items stay inside their paragraph's text.
 
 ### Packages as text
 
@@ -39,10 +41,10 @@ cmake -S . -B build-fuzz -DFW_FUZZ=ON
 ```
 
 ```bash
-cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula
+cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx
 ```
 
-`FW_FUZZ` instruments `fwcore`, `fwpkg`, miniz and pugixml with AddressSanitizer and coverage, so keep it out of normal builds.
+`FW_FUZZ` instruments `fwcore`, `fwpkg`, `fwdoc`, miniz and pugixml with AddressSanitizer and coverage, so keep it out of normal builds.
 
 ### Toolchains
 

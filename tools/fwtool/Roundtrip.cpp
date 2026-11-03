@@ -1,11 +1,14 @@
 // fwtool roundtrip: the "open and save, no edits" and "re-serialize all" never-damage tests
-// (plan §10), at the package level.
+// (plan §10), at the package level, and with --model through the document model (plan §6.4 D1).
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <map>
 
 #include "Common.h"
+#include "doc/docx/Docx.h"
 #include "pkg/Canonical.h"
+#include "pkg/Check.h"
 #include "pkg/XmlDom.h"
 
 namespace fwtool {
@@ -36,8 +39,13 @@ struct Result {
 Result RoundtripFile(const std::filesystem::path& file, const Options& options) {
   Result r;
   Status st;
-  auto pkg = OpenPackage(file, st);
-  if (pkg) st = pkg->Verify();
+  auto opened = OpenPackage(file, st);
+  if (opened) st = opened->Verify();
+  // --model: Word documents are read into the model, which then owns the package.
+  std::unique_ptr<fw::doc::Document> doc;
+  if (st.Ok() && options.model && fw::pkg::FormatOf(*opened) == fw::pkg::DocFormat::Word)
+    doc = fw::doc::docx::Read(std::move(opened), st);
+  Package* pkg = doc ? &doc->Package() : opened.get();
   if (options.expectReject) {
     if (st.Ok()) r.Fail("opened, but it should have been refused");
     else r.detail = "refused: " + st.message;
@@ -48,12 +56,31 @@ Result RoundtripFile(const std::filesystem::path& file, const Options& options) 
     return r;
   }
 
-  // Re-serialize all: every XML part through the DOM, compared after canonicalization.
   std::map<std::string, std::string> canonical;  // part name -> canonical original
   std::vector<uint8_t> bytes;
+  // What fwtool check says about the original: through the model, the saved file may have no new errors.
+  std::vector<std::string> knownErrors;
+  if (doc) knownErrors = fw::pkg::CheckPackage(*pkg).errors;
+  // The model writes every part it owns.
+  size_t modelParts = 0, kept = 0;
+  for (uint32_t i = 0; doc && i < doc->Parts().size(); ++i) {
+    const auto& part = doc->Parts()[i];
+    if (!part.writable) {
+      ++kept;
+      continue;
+    }
+    std::string label = part.name.substr(1), out;
+    if (!(st = pkg->ReadPart(part.name, bytes)).Ok()) return r.Fail(st.message);
+    if (!(st = fw::pkg::CanonicalizeXml(AsText(bytes), canonical[part.name], pkg->GetLimits(), label)).Ok())
+      return r.Fail(st.message);
+    if (!(st = fw::doc::docx::WritePart(*doc, i, out)).Ok()) return r.Fail(st.message);
+    pkg->SetPart(part.name, std::vector<uint8_t>(out.begin(), out.end()));
+    ++modelParts;
+  }
+  // Re-serialize all: every other XML part through the DOM, compared after canonicalization.
   for (size_t i = 0; options.reserializeAll && i < pkg->Parts().size(); ++i) {
     std::string name = pkg->Parts()[i].name;
-    if (!pkg->IsXmlPart(name)) continue;
+    if (!pkg->IsXmlPart(name) || canonical.contains(name)) continue;
     std::string label = name.substr(1);
     if (!(st = pkg->ReadPart(name, bytes)).Ok()) return r.Fail(st.message);
     fw::pkg::XmlDom dom;
@@ -104,10 +131,29 @@ Result RoundtripFile(const std::filesystem::path& file, const Options& options) 
     else
       ++copied;
   }
+  // Through the model, the saved file must also stay consistent.
+  if (doc && r.ok) {
+    for (const auto& e : fw::pkg::CheckPackage(*again).errors)
+      if (std::find(knownErrors.begin(), knownErrors.end(), e) == knownErrors.end()) {
+        r.Fail("the saved copy fails fwtool check: " + e);
+        break;
+      }
+  }
   if (r.ok) {
     r.detail = std::to_string(copied) + (copied == 1 ? " part" : " parts") + " byte-identical";
+    if (doc) {
+      r.detail += ", " + std::to_string(modelParts) + " written from the model";
+      if (kept) r.detail += " (" + std::to_string(kept) + " kept as they were)";
+      // Drawings are kept as XML for fwdraw, in the store; the budget (plan §11) is for the rest.
+      size_t model = doc->ModelBytes(), store = doc->Store().BytesUsed(), drawings = 0;
+      for (const auto& d : doc->Drawings())
+        if (!d.displayOnly) drawings += doc->DrawingXml(d).size();
+      store = store > drawings ? store - drawings : 0;
+      r.detail += ", store " + std::to_string(model ? store * 100 / model : 0) + "% of the model";
+      if (!knownErrors.empty()) r.detail += " (" + std::to_string(knownErrors.size()) + " check errors in the original)";
+    }
     if (options.reserializeAll)
-      r.detail += ", " + std::to_string(canonical.size()) + " XML rewritten and equal after canonicalization";
+      r.detail += ", " + std::to_string(canonical.size() - modelParts) + " XML rewritten and equal after canonicalization";
   }
   return r;
 }
