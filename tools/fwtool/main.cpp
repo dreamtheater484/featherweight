@@ -41,7 +41,12 @@ constexpr const char* kUsage =
     "      exactly one line, and an added page changes only the page count.\n"
     "  fwtool bench [--runs N] [--json FILE] [--budgets] <file or folder>...\n"
     "      Times opening each Word document, stage by stage, against the opening budgets\n"
-    "      (plan §11). With --budgets, a missed budget fails.\n";
+    "      (plan §11). With --budgets, a missed budget fails.\n"
+    "  fwtool bench-app [--runs N] [--json FILE] <Featherweight.exe> [<file>...]\n"
+    "      Starts a private copy of Featherweight, alone and with each file, and measures launch\n"
+    "      to window, to the first frame (the start screen or the first page), memory once\n"
+    "      settled, and CPU and wakeups while idle (plan §11). Works with any build, 0.9.4\n"
+    "      included, and never touches the user's settings or a running Featherweight.\n";
 
 std::vector<std::filesystem::path> CollectSorted(const std::filesystem::path& dir) {
   std::vector<std::filesystem::path> files;
@@ -135,6 +140,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"lines") return fwtool::RunLines(options);
   if (command == L"compare") return fwtool::RunCompare(options);
   if (command == L"bench") return fwtool::RunBench(options);
+  if (command == L"bench-app") return fwtool::RunBenchApp(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }

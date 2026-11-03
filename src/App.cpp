@@ -59,16 +59,17 @@ int App::Run(const AppOptions& opts) {
   if (opts.forceWarp) gpu::ForceWarp();
   snapshot_ = !opts.snapshotPath.empty();
   snapshotWindow_ = snapshot_ && opts.snapshotWindow;
-  settings_.Load();
+  sandbox_ = opts.sandbox;
+  if (!sandbox_) settings_.Load();  // never loaded, settings are never saved either
   ThemeSetting themeSetting = settings_.theme;
-  if (snapshot_ || opts.widgetGallery) {
+  if (snapshot_ || opts.widgetGallery || sandbox_) {
     settings_ = Settings();  // snapshots never use or change real settings
     if (opts.snapshotTheme == L"dark") themeSetting = ThemeSetting::Dark;
     else if (opts.snapshotTheme == L"light") themeSetting = ThemeSetting::Light;
     settings_.invert = opts.snapshotInvert;
   }
   theme::Init(themeSetting);
-  if (!snapshot_) Updater::CleanupOldFiles();
+  if (!snapshot_ && !sandbox_) Updater::CleanupOldFiles();
 
   if (!CreateMainWindow(opts)) return 1;
   if (snapshot_) return RunSnapshot(opts);
@@ -77,7 +78,7 @@ int App::Run(const AppOptions& opts) {
   if (opts.widgetGallery) {
     OpenGallery();
     RunScript(opts.script);  // the UI checks' recent files (the gallery's settings are sandboxed)
-  } else {
+  } else if (!sandbox_) {
     StartupNotices();
   }
   Layout();
@@ -87,7 +88,7 @@ int App::Run(const AppOptions& opts) {
     show = opts.showCommand;
   ShowWindow(hwnd_, show);
   UpdateWindow(hwnd_);
-  if (!opts.widgetGallery) MaybeCheckForUpdates(false);
+  if (!opts.widgetGallery && !sandbox_) MaybeCheckForUpdates(false);
   MessageLoop();
   return 0;
 }
@@ -101,7 +102,7 @@ bool App::CreateMainWindow(const AppOptions& opts) {
   wc.hIconSm = static_cast<HICON>(LoadImageW(wc.hInstance, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON,
                                              GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0));
   wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-  wc.lpszClassName = kWindowClass;
+  wc.lpszClassName = sandbox_ ? kSandboxWindowClass : kWindowClass;
   RegisterClassExW(&wc);
 
   // Window position: last used, if it is still on a screen; otherwise a comfortable default.
@@ -124,7 +125,7 @@ bool App::CreateMainWindow(const AppOptions& opts) {
   }
   if (snapshot_) r = RECT{0, 0, opts.snapshotW, opts.snapshotH};
 
-  hwnd_ = CreateWindowExW(0, kWindowClass, L"Featherweight", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, r.left, r.top,
+  hwnd_ = CreateWindowExW(0, wc.lpszClassName, L"Featherweight", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, r.left, r.top,
                           r.right - r.left, r.bottom - r.top, nullptr, nullptr, wc.hInstance, this);
   if (!hwnd_) return false;
   ui_ = snapshot_ ? opts.snapshotScale : util::DpiScale(hwnd_);

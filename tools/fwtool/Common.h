@@ -42,5 +42,6 @@ int RunPrintSample(const Options& options);
 int RunLines(const Options& options);
 int RunCompare(const Options& options);
 int RunBench(const Options& options);
+int RunBenchApp(const Options& options);
 
 }  // namespace fwtool

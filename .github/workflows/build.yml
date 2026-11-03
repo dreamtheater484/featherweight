@@ -1,7 +1,7 @@
 name: build
 
-# Builds and runs the unit tests, and fuzzes each parser for a minute, on every push. Packaging
-# and releases happen locally (scripts/release.ps1), not on GitHub.
+# Builds and runs the unit tests, checks the size budgets, and fuzzes each parser for a minute,
+# on every push. Packaging and releases happen locally (scripts/release.ps1), not on GitHub.
 on:
   push:
   pull_request:
@@ -42,6 +42,32 @@ jobs:
         run: |
           $p = Start-Process -FilePath build\Release\Featherweight.exe -ArgumentList '--snapshot','smoke.png','tests\pdfs\text.pdf' -PassThru -Wait
           if ($p.ExitCode -ne 0 -or -not (Test-Path smoke.png)) { throw "snapshot failed ($($p.ExitCode))" }
+
+      # The lightweight budgets (plan §11, tests/budgets/README.md), on the shipped configuration as
+      # scripts/release.ps1 builds it: growth in size the ledger doesn't explain fails the build.
+      # Timings are tracked, not gated: the runners are too noisy (the development PC gates them).
+      - name: Configure the shipped configuration
+        run: cmake -S . -B build-release -DFW_BUILD_TESTS=OFF -DFW_TEST_SCREENS=OFF
+
+      - name: Build the shipped configuration
+        run: cmake --build build-release --config Release --target Featherweight
+
+      - name: Size against the ledger
+        shell: powershell
+        run: scripts\budgets.ps1 -Build build-release -Json budgets-size.json
+
+      - name: Timings (tracked)
+        continue-on-error: true
+        shell: powershell
+        run: scripts\budgets.ps1 -Build build-release -TrackTimings -Runs 3 -Fwtool build\tools\fwtool\Release\fwtool.exe -Json budgets.json
+
+      - name: Upload the measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: budgets
+          path: budgets*.json
+          if-no-files-found: ignore
 
   fuzz:
     # Short fuzz runs (plan §10, §12): each target for 60 s, seeded from tests/fuzz/seeds and the

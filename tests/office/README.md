@@ -150,6 +150,8 @@ How `bench` applies the budgets:
 - **Page count:** until the layout counts pages, `bench` uses the count Word last saved (`docProps/app.xml`).
 
 `--budgets` fails when a budget is missed. The numbers that count come from the typical consumer PC. The development PC is several times faster, so there `bench` only shows the trend.
+
+`bench` times the engines inside `fwtool`. The whole app, from the launch to the first page on screen, is timed by `fwtool bench-app` and gated by `scripts\budgets.ps1` (`tests/budgets/README.md`). Once the app opens `.docx`, its fixed files join the PDFs there.
 ## Regenerating
 
 Use a venv, never the global Python. From the repository root:
