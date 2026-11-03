@@ -141,6 +141,12 @@ void TitleBar::Draw(Canvas& c, const std::vector<TabInfo>& tabs, int active, boo
   DrawButton(c, close_, u, windowActive);
 }
 
+void TitleBar::SetNewTabMenu(bool menu, bool open) {
+  newTabMenu_ = menu;
+  newTabOpen_ = menu && open;
+  newTab_.tooltip = menu ? L"New or open a file" : L"Open a PDF (Ctrl+O)";
+}
+
 TitleBar::Hit TitleBar::HitTest(int x, int y) const {
   float fx = static_cast<float>(x), fy = static_cast<float>(y);
   if (fy < rc_.top || fy >= rc_.bottom) return {};
@@ -242,7 +248,15 @@ void TitleBar::Describe(uia::Tree& t, int parent, const std::wstring& caption, c
       t[close].invoke = [act, i] { act(Part::TabClose, i); };
     }
   }
-  uia::AddButton(t, bar, 2, newTab_, [act] { act(Part::NewTab, -1); });
+  int newTab = uia::AddButton(t, bar, 2, newTab_, [act] { act(Part::NewTab, -1); });
+  if (newTabMenu_) {
+    // A menu button. The menu is modal, so `act` opens it after the UI Automation call returns.
+    t[newTab].invoke = nullptr;
+    t[newTab].expand = newTabOpen_ ? ExpandCollapseState_Expanded : ExpandCollapseState_Collapsed;
+    t[newTab].doExpand = [act](bool expand) {
+      if (expand) act(Part::NewTab, -1);
+    };
+  }
   uia::AddButton(t, bar, 3, min_, [act] { act(Part::Minimize, -1); });
   int max = uia::AddButton(t, bar, 4, max_, [act] { act(Part::Maximize, -1); });
   t[max].name = maximized ? L"Restore" : L"Maximize";

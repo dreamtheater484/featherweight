@@ -27,7 +27,8 @@ void App::DescribeUia(uia::Tree& t) {
       switch (part) {
         case TitleBar::Part::Tab: ActivateTab(index); break;
         case TitleBar::Part::TabClose: CloseTab(index); break;
-        case TitleBar::Part::NewTab: Execute(CmdOpen); break;
+        // Posted: it opens a dialog or a menu, which can't run inside a UI Automation call.
+        case TitleBar::Part::NewTab: PostMessageW(hwnd_, WM_COMMAND, CmdNewTab, 0); break;
         case TitleBar::Part::Minimize: ShowWindow(hwnd_, SW_MINIMIZE); break;
         case TitleBar::Part::Maximize: ShowWindow(hwnd_, IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE); break;
         case TitleBar::Part::Close: PostMessageW(hwnd_, WM_CLOSE, 0, 0); break;
@@ -49,17 +50,7 @@ void App::DescribeUia(uia::Tree& t) {
   if (v) {
     v->DescribeUia(t, doc);
   } else {
-    empty_.Describe(t, doc, settings_.recent, [this](EmptyState::Result res) {
-      if (res.kind == EmptyState::Result::Kind::Open) {
-        Execute(CmdOpen);
-      } else if (res.kind == EmptyState::Result::Kind::OpenRecent) {
-        Execute(CmdRecent + res.index);
-      } else if (res.kind == EmptyState::Result::Kind::RemoveRecent && res.index < static_cast<int>(settings_.recent.size())) {
-        settings_.RemoveRecent(settings_.recent[res.index].path);
-        settings_.Save();
-        Layout();
-      }
-    });
+    empty_.Describe(t, doc, settings_.recent, [this](EmptyState::Result res) { OnStartScreen(res); });
   }
 
   // Focus moves the way a click moves it: the window's text box (and, for the tab's own

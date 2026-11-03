@@ -23,6 +23,25 @@ TEST(Strings_PathHelpers) {
   CHECK(EndsWithNoCase(L"Report.PDF", L".pdf"));
 }
 
+TEST(Strings_ShortFolder) {
+  const wchar_t* home = L"C:\\Users\\Ana";
+  CHECK(ShortFolder(L"C:\\Users\\Ana\\Documents\\Work", home) == L"Documents\\Work");
+  CHECK(ShortFolder(L"c:\\users\\ana\\Downloads", L"C:\\Users\\Ana\\") == L"Downloads");
+  CHECK(ShortFolder(L"C:\\Users\\Ana", home) == L"Ana");
+  CHECK(ShortFolder(L"C:\\Users\\Anabel\\Documents", home) == L"C:\\Users\\Anabel\\Documents");
+  CHECK(ShortFolder(L"D:\\Scans", home) == L"D:\\Scans");
+  CHECK(ShortFolder(L"D:", home) == L"D:\\");
+  CHECK(ShortFolder(L"\\\\server\\share\\Docs", L"") == L"\\\\server\\share\\Docs");
+}
+
+TEST(Strings_ElideFolder) {
+  CHECK(ElideFolder(L"D:\\Projects\\2026\\Clients\\Acme", 0) == L"D:\\Projects\\2026\\Clients\\Acme");
+  CHECK(ElideFolder(L"D:\\Projects\\2026\\Clients\\Acme", 1) == L"D:\\\u2026\\2026\\Clients\\Acme");
+  CHECK(ElideFolder(L"D:\\Projects\\2026\\Clients\\Acme", 3) == L"D:\\\u2026\\Acme");
+  CHECK(ElideFolder(L"D:\\Projects\\2026\\Clients\\Acme", 9) == L"D:\\\u2026\\Acme");
+  CHECK(ElideFolder(L"Documents\\Work", 1) == L"Documents\\Work");
+}
+
 TEST(Strings_Percent) {
   CHECK(FormatPercent(1.0) == L"100%");
   CHECK(FormatPercent(1.254) == L"125%");

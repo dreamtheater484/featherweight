@@ -62,4 +62,5 @@ enum Cmd : int {
   CmdZoomPreset = 400,  // + index into fw::ZoomPresets()
   CmdRecent = 500,      // + index into Settings::recent
   CmdBannerAction = 600,
+  CmdNewFile = 700,     // + fw::FileKind, once that kind's editor ships
 };

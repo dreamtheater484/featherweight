@@ -16,10 +16,26 @@ $out = Join-Path $root "build\visual"
 New-Item -ItemType Directory -Force $out | Out-Null
 $pdfs = Join-Path $root "tests\pdfs"
 
+# Recent files of every kind, opened from minutes to days ago (recent:path|seconds ago). Folders in
+# the profile show without it, so the images look the same for every user.
+$h = $env:USERPROFILE
+$recent = "recent:$h\Downloads\Lease.pdf|259200;recent:$h\Documents\Budget 2026.xlsx|90000;" +
+  "recent:$h\Documents\Work\Report Q3.docx|7200;recent:D:\Projects\2026\Clients\Acme Corporation\Decks\Kickoff.pptx|1500;" +
+  "recent:C:\Docs\Meeting notes.txt|20"
+
 # name, theme, extra args, script, files
 $checks = @(
-  @("welcome-light", "light", "", "recent:C:\Docs\Annual report.pdf;recent:C:\Docs\Rental agreement.pdf", @()),
-  @("welcome-dark", "dark", "", "", @()),
+  # The start screen. editors:all shows the New row as it will be once the editors ship.
+  @("welcome-light", "light", "", $recent, @()),
+  @("welcome-dark", "dark", "", $recent, @()),
+  @("welcome-empty", "light", "", "", @()),
+  @("welcome-keys-open", "dark", "", "$recent;key:tab", @()),
+  @("welcome-keys-list", "light", "", "$recent;key:tab;key:tab;key:down;key:down", @()),
+  @("welcome-keys-delete", "dark", "", "$recent;key:tab;key:tab;key:down;key:del", @()),
+  @("welcome-new", "light", "", "$recent;editors:all;key:tab;key:tab;key:right", @()),
+  @("welcome-narrow", "light", "--size 480x700", "$recent;editors:all", @()),
+  @("welcome-light-200", "light", "--scale 2 --size 2200x1400", "$recent;key:tab;key:tab", @()),
+  @("welcome-dark-200", "dark", "--scale 2 --size 2200x1400", "$recent;editors:all", @()),
   @("text-light", "light", "", "", @("text.pdf")),
   @("night-reading", "dark", "--invert", "view:facing;cmd:fit-page", @("text.pdf")),
   @("two-pages", "light", "", "view:facing;cmd:fit-page", @("text.pdf")),

@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cwctype>
 
@@ -75,6 +76,28 @@ std::wstring FileNameOf(std::wstring_view path) {
 std::wstring DirOf(std::wstring_view path) {
   size_t pos = path.find_last_of(L"\\/");
   return pos == std::wstring_view::npos ? std::wstring() : std::wstring(path.substr(0, pos));
+}
+
+std::wstring ShortFolder(std::wstring_view dir, std::wstring_view home) {
+  while (!home.empty() && (home.back() == L'\\' || home.back() == L'/')) home.remove_suffix(1);
+  if (!home.empty() && dir.size() >= home.size() && EqualsNoCase(dir.substr(0, home.size()), home)) {
+    if (dir.size() == home.size()) return FileNameOf(home);
+    if (dir[home.size()] == L'\\' || dir[home.size()] == L'/') return std::wstring(dir.substr(home.size() + 1));
+  }
+  if (dir.size() == 2 && dir[1] == L':') return std::wstring(dir) + L"\\";
+  return std::wstring(dir);
+}
+
+std::wstring ElideFolder(std::wstring_view folder, int drop) {
+  std::vector<std::wstring> parts;
+  for (auto& p : Split(folder, L'\\'))
+    for (auto& q : Split(p, L'/')) parts.push_back(q);
+  const int n = static_cast<int>(parts.size());
+  if (drop <= 0 || n < 3) return std::wstring(folder);
+  drop = std::min(drop, n - 2);
+  std::wstring out = parts[0] + L"\\…";
+  for (int i = 1 + drop; i < n; ++i) out += L"\\" + parts[i];
+  return out;
 }
 
 uint64_t Fnv1a64(std::wstring_view s) {

@@ -120,6 +120,8 @@ class App : public PdfHost, public DropHost {
   std::unique_ptr<TabContent> CreateTab(const std::wstring& path);
   void OpenFiles(const std::vector<std::wstring>& files);
   void OpenDialog();
+  // A click, key or UI Automation action on the start screen.
+  void OnStartScreen(EmptyState::Result res);
   std::wstring SaveDialog(const std::wstring& suggested, const SaveFormat& format);
   void ActivateTab(int index);
   bool CloseTab(int index);
@@ -140,6 +142,8 @@ class App : public PdfHost, public DropHost {
 
   // Startup notices and updates
   void StartupNotices();
+  // Registers Featherweight and opens Default apps, where the user picks it for this kind of file.
+  void MakeDefaultApp(fw::FileKind kind);
   void MaybeCheckForUpdates(bool manual);
   void OnUpdaterDone();
   void ShowAbout();
@@ -193,7 +197,8 @@ class App : public PdfHost, public DropHost {
   bool manualUpdateCheck_ = false;
   std::wstring bannerUpdateUrl_;
   std::wstring bannerUpdateVersion_;
-  enum BannerActions { kActUpdate = 1, kActDownload, kActSkip, kActMakeDefault, kActNotNow, kActSaveAs };
+  enum BannerActions { kActUpdate = 1, kActDownload, kActSkip, kActNotNow = 5, kActSaveAs, kActMakeDefault = 20 };
+  // (kActMakeDefault + fw::FileKind: the default-app offer for that kind of file)
 
   // Input state
   Region capture_ = Region::None;
