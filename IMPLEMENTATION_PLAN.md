@@ -183,7 +183,7 @@ All three engines follow the same rules. Getting these right from the start is w
    - Everything else (unknown elements, attributes and namespaces) is kept as XML fragments attached to the nearest known neighbor, along with its position. The writer puts these fragments back in place.
    - Unchanged parts aren't re-serialized at all: the zip writer copies them from the snapshot without decompressing them.
    - **Fragment ownership:** a fragment belongs to one model node.
-     - When the node is split, the fragment stays with the first half.
+     - When the node is split, every fragment keeps its place in the document: fragments before the split point stay with the first half, and fragments after it move to the second half. That includes fragments that follow the node's end tag, which now follow the second half.
      - When nodes merge, their fragments are kept in order.
      - When the node is deleted, its fragments go with it, unless the fragment is one end of a pair, which rule 2 handles.
    - **Repeated attributes:** unknown attributes that repeat on every row or cell, such as `x14ac:dyDescent`, are stored once as an interned set and referenced by id, not as a fragment per element.
@@ -1143,8 +1143,8 @@ On the typical consumer PC (§10).
 |---|---|---|
 | PDF reader | ✅ Done | 0.9.4; see the README and git history |
 | Release 1.0 | ⏳ Next | The reader as it is: a hands-on pass with `docs/TEST_CHECKLIST.md`, then tag `v1.0.0` |
-| D0. Host and foundations | ⏳ Next | Decisions 5, 14, 19 and 20 first |
-| D1–D5. Documents | Not started | |
+| D0. Host and foundations | 🔄 In progress | Done: `TabContent`, `PagedView` and the command and toolbar model (branch `d0/host`); `fwpkg`, typed units, `fwtool` and the corpus (branch `claude/d0-fwpkg-5ee7a4`). Open: the rest of the shell, Direct3D 11, `Painter`, the reference registry framework, reference renders, the 8-hour fuzz runs and fuzzing in CI. Decisions 5, 14, 19 and 20 first |
+| D1–D5. Documents | Not started | Before paragraphs can be split: `RoundTripStore::Split` must be told the split point, as `Merge` is, so that fragments inside the node after that point move to the second half (§4.3, fragment ownership). Today only the fragments after the node's end tag move. |
 | S1–S4. Spreadsheets | Not started | |
 | P1–P3. Presentations | Not started | |
 
