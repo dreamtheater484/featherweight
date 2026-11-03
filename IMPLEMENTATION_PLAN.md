@@ -1131,7 +1131,7 @@ On the typical consumer PC (§10).
 | 17 | Number and formula locale | **Files are stored in Excel's invariant form; formulas are entered with English function names; decimal and list separators and date order follow Windows' regional settings,** as in Excel. New CSV files use the regional list separator. *Proposed; needed before S1.* |
 | 18 | Pivot tables | **Refresh them, and create simple ones, in S4.** For the slightly more advanced user, pivot tables are the most likely advanced request. *Proposed.* |
 | 19 | Test machines | **A typical consumer PC** (4 cores, 8 GB RAM, integrated graphics) for the budgets, and **an Office reference PC with a Microsoft 365 subscription** for reference renders and repair checks. *Open: both needed before D1.* |
-| 20 | Rendering | **Direct3D 11 with a flip-model swap chain** in D0, replacing `ID2D1HwndRenderTarget`, so video, smooth transitions and low latency are possible later without rework. *Proposed.* |
+| 20 | Rendering | **Direct3D 11 with a flip-model swap chain** in D0, replacing `ID2D1HwndRenderTarget`, so video, smooth transitions and low latency are possible later without rework. *Decided; done in D0.* |
 
 ---
 
@@ -1143,7 +1143,7 @@ On the typical consumer PC (§10).
 |---|---|---|
 | PDF reader | ✅ Done | 0.9.4; see the README and git history |
 | Release 1.0 | ⏳ Next | The reader as it is: a hands-on pass with `docs/TEST_CHECKLIST.md`, then tag `v1.0.0` |
-| D0. Host and foundations | 🔄 In progress | Done: `TabContent`, `PagedView` and the command and toolbar model (branch `d0/host`); `fwpkg`, typed units, `fwtool` and the corpus (branch `claude/d0-fwpkg-5ee7a4`). Open: the rest of the shell, Direct3D 11, `Painter`, the reference registry framework, reference renders, the 8-hour fuzz runs and fuzzing in CI. Decisions 5, 14, 19 and 20 first |
+| D0. Host and foundations | 🔄 In progress | On branch `d0/host`. Done: `TabContent`, `PagedView` and the command and toolbar model; `fwpkg`, typed units, `fwtool` and the corpus; rendering on Direct3D 11 with a flip-model swap chain and WARP fallback; `Painter` with the Direct2D backend, and vector printing through `ID2D1PrintControl` (`fwtool print-sample`). In progress: the new widgets with UI Automation. Open: side panel, status bar, command search, start screen and recent files, file associations for every kind, the reference registry framework, reference renders, the 8-hour fuzz runs and fuzzing in CI. Decisions 5, 14 and 19 first. Known: printed group opacity is flattened per shape (see `Painter::BeginGroup`) |
 | D1–D5. Documents | Not started | Before paragraphs can be split: `RoundTripStore::Split` must be told the split point, as `Merge` is, so that fragments inside the node after that point move to the second half (§4.3, fragment ownership). Today only the fragments after the node's end tag move. |
 | S1–S4. Spreadsheets | Not started | |
 | P1–P3. Presentations | Not started | |

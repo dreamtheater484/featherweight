@@ -5,6 +5,7 @@
 #include <string>
 
 #include "ui/Gfx.h"
+#include "ui/SwapChain.h"
 
 // A small themed tooltip window. It never takes focus.
 class Tooltip {
@@ -23,7 +24,7 @@ class Tooltip {
 
   HWND hwnd_ = nullptr;
   HWND owner_ = nullptr;
-  ComPtr<ID2D1HwndRenderTarget> target_;
+  SwapChain chain_;
   std::wstring text_;
   bool visible_ = false;
   float ui_ = 1;

@@ -88,6 +88,8 @@ int wmain(int argc, wchar_t** argv) {
     if (arg == L"--reserialize-all") options.reserializeAll = true;
     else if (arg == L"--expect-reject") options.expectReject = true;
     else if (arg == L"--out" && i + 1 < argc) options.outDir = argv[++i];
+    else if (arg == L"--printer" && i + 1 < argc) options.printer = argv[++i];
+    else if (arg == L"--warp") options.warp = true;
     else if (arg.starts_with(L"--")) {
       std::fprintf(stderr, "Unknown option %s\n\n%s", fw::WideToUtf8(arg).c_str(), fwtool::kUsage);
       return 2;
@@ -100,6 +102,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"roundtrip") return fwtool::RunRoundtrip(options);
   if (command == L"dump") return fwtool::RunDump(options);
   if (command == L"check") return fwtool::RunCheck(options);
+  if (command == L"print-sample") return fwtool::RunPrintSample(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }

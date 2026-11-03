@@ -50,6 +50,8 @@ class Canvas {
  public:
   void Begin(ID2D1DeviceContext* dc);
   void End();
+  // Drops the device context and its brush (the device was lost or replaced).
+  void Release();
   ID2D1DeviceContext* DC() const { return dc_; }
 
   ID2D1SolidColorBrush* Brush(D2D1_COLOR_F c);
