@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <map>
 #include <thread>
 
 #include "Common.h"
@@ -120,27 +121,40 @@ struct SystemThread {
   ULONG contextSwitches, threadState, waitReason;
 };
 
-uint64_t ContextSwitches(DWORD pid) {
+// Each thread's context switches, by thread id.
+std::map<ULONG_PTR, ULONG> ContextSwitches(DWORD pid) {
   using Query = NTSTATUS(NTAPI*)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
   static auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation"));
-  if (!query) return 0;
+  std::map<ULONG_PTR, ULONG> switches;
+  if (!query) return switches;
   std::vector<uint8_t> buf(1 << 20);
   ULONG needed = 0;
   while (query(SystemProcessInformation, buf.data(), static_cast<ULONG>(buf.size()), &needed) < 0) {
-    if (buf.size() > (64u << 20)) return 0;
+    if (buf.size() > (64u << 20)) return switches;
     buf.resize(std::max<size_t>(buf.size() * 2, needed + 65536));
   }
   for (size_t offset = 0;;) {
     auto* p = reinterpret_cast<SYSTEM_PROCESS_INFORMATION*>(buf.data() + offset);
     if (static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(p->UniqueProcessId)) == pid) {
       auto* threads = reinterpret_cast<SystemThread*>(p + 1);
-      uint64_t total = 0;
-      for (ULONG t = 0; t < p->NumberOfThreads; ++t) total += threads[t].contextSwitches;
-      return total;
+      for (ULONG t = 0; t < p->NumberOfThreads; ++t)
+        switches[reinterpret_cast<ULONG_PTR>(threads[t].clientThread)] = threads[t].contextSwitches;
+      return switches;
     }
-    if (!p->NextEntryOffset) return 0;
+    if (!p->NextEntryOffset) return switches;
     offset += p->NextEntryOffset;
   }
+}
+
+// Wakeups between two looks. A thread that ended meanwhile doesn't count: that's Windows retiring
+// an idle worker of its thread pool, not the app doing something. A new thread does.
+uint64_t Wakeups(const std::map<ULONG_PTR, ULONG>& before, const std::map<ULONG_PTR, ULONG>& after) {
+  uint64_t n = 0;
+  for (const auto& [thread, count] : after) {
+    auto it = before.find(thread);
+    n += count - (it == before.end() ? 0 : it->second);
+  }
+  return n;
 }
 
 // ---------- Watching the window ----------
@@ -347,12 +361,12 @@ Run RunOnce(const std::filesystem::path& exe, const std::wstring& version, const
       LASTINPUTINFO before{sizeof(before)}, after{sizeof(after)};
       GetLastInputInfo(&before);
       double cpu = CpuMs(pi.hProcess);
-      uint64_t switches = ContextSwitches(pi.dwProcessId);
+      auto switches = ContextSwitches(pi.dwProcessId);
       Sleep(static_cast<DWORD>(kIdleSeconds * 1000));
       GetLastInputInfo(&after);
       if (after.dwTime != before.dwTime) continue;
       run.idleCpuMs = CpuMs(pi.hProcess) - cpu;
-      run.idleWakeups = static_cast<double>(ContextSwitches(pi.dwProcessId) - switches);
+      run.idleWakeups = static_cast<double>(Wakeups(switches, ContextSwitches(pi.dwProcessId)));
       break;
     }
     PostMessageW(hwnd, WM_CLOSE, 0, 0);
