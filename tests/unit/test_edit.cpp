@@ -565,7 +565,10 @@ TEST(Edit_TablesAndStoriesBoundEdits) {
   Editor ed(*doc);
   auto ps = Main(*doc);
   CHECK(ps.size() == 3);
-  CHECK(!ed.Delete(P(ps[0], 3), P(ps[2], 2)) && !ed.JoinParagraphs(ps[0]) && !ed.JoinParagraphs(ps[1]));
+  // Across the whole table: it goes with the text (tables, D3), in one step; undone for what follows.
+  CHECK(ed.Delete(P(ps[0], 3), P(ps[2], 2)) && Main(*doc).size() == 1 && doc->Para(Main(*doc)[0]).text == u"befter");
+  CHECK(ed.Undo() && Main(*doc).size() == 3);
+  CHECK(!ed.JoinParagraphs(ps[0]) && !ed.JoinParagraphs(ps[1]));
   CHECK(!ed.Delete(P(ps[1], 4), P(ps[2], 0)));
   CHECK(RoundTrips(*doc));
   CHECK(ed.InsertText(P(ps[1], 4), u"s") && ed.SplitParagraph(P(ps[1], 2)));

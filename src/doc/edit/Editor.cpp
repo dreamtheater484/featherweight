@@ -2213,6 +2213,40 @@ Result Editor::Delete(Pos from, Pos to) {
     return r;
   }
   if (s.CutsField(from, to)) return Fail(u"Select the whole field to delete it.");
+  // Whole tables between the ends go first, as Delete table takes them; then the text around them.
+  if (to.para != from.para) {
+    std::vector<uint32_t> tables;  // a paragraph of each table's own first cell
+    for (ElemId e = s.E(doc_.Para(from.para).elem).next; e != kNoElem; e = s.E(e).next) {
+      const uint32_t name = s.NameOf(e);
+      if (RangeMarker(name)) continue;
+      if (name == kP) {
+        if (s.E(e).start >= to.para) break;
+        continue;
+      }
+      uint32_t first = 0, count = 0;
+      std::u16string w;
+      if (name != kTbl || !s.TableParas(e, first, count, w) || first <= from.para || first + count > to.para) break;
+      ElemId tr = s.E(e).first, tc = kNoElem, p = kNoElem;
+      while (tr != kNoElem && s.NameOf(tr) != kTr) tr = s.E(tr).next;
+      for (tc = tr == kNoElem ? kNoElem : s.E(tr).first; tc != kNoElem && s.NameOf(tc) != kTc;) tc = s.E(tc).next;
+      if (tc == kNoElem || (p = s.FirstPara(tc)) == kNoElem) break;
+      tables.push_back(s.E(p).start);
+    }
+    if (!tables.empty()) {
+      BeginGroup(u"Delete");
+      const size_t before = doc_.Paragraphs().size();
+      for (auto it = tables.rbegin(); it != tables.rend(); ++it)
+        if (Result r = DeleteTable(Pos{*it, 0}); !r) {
+          CancelGroup();
+          return r;
+        }
+      to.para = static_cast<uint32_t>(to.para + doc_.Paragraphs().size() - before);
+      Result r = Delete(from, to);
+      if (r) EndGroup();
+      else CancelGroup();
+      return r;
+    }
+  }
   // Across paragraphs: they must follow each other in one place (no table in between).
   std::vector<uint32_t> chain{from.para};
   if (to.para != from.para) {
@@ -2250,15 +2284,11 @@ Result Editor::Delete(Pos from, Pos to) {
 Result Editor::Replace(Pos from, Pos to, std::u16string_view text) {
   if (from == to) return InsertText(from, text);
   if (Compare(to, from) < 0) std::swap(from, to);
-  size_t entries = impl_->undo.size();
   BeginGroup(u"Typing");
   Result r = Delete(from, to);
   if (r) r = InsertText(r.caret, text);
-  EndGroup();
-  if (!r && impl_->undo.size() > entries) {  // the delete went through but the insert didn't
-    Undo();
-    impl_->redo.pop_back();
-  }
+  if (r) EndGroup();
+  else CancelGroup();  // the delete went through but the insert didn't: it goes again
   return r;
 }
 
