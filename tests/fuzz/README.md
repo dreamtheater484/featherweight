@@ -13,6 +13,7 @@ One target per parser (plan §10). So far:
 - `fuzz_picture`: inserting a picture into a Word document (`src/doc/edit/Pictures.cpp`, D3) with the app's picture limits, then changes a hash of the input picks (size, rotation, crop, wrap, place, alt text, reset, a second copy, undo), a save as the app saves, the file read back, and everything undone and redone. Seeds: `seeds/picture`, a tiny picture in each format (and an icon, which is refused).
 - `fuzz_rtf`, `fuzz_html`: pasting from the clipboard (`src/doc/edit/Clip.cpp`): RTF or HTML read, written back in both formats and read again, then pasted into a small document through the editor. Seeds: `tests/clipboard`, what Word, LibreOffice and Chromium put on the clipboard.
 - `fuzz_clip`: copying and pasting within Featherweight: a document's main story copied, written as RTF and as HTML and read back, then pasted over itself. Seeds as `fuzz_docx`'s.
+- `fuzz_sfnt`: Export PDF's font subsetter (`src/draw/Sfnt.cpp`, D4): a font read as the export reads it, subset to glyphs a hash of the input picks, and embedded whole as a CFF font is. A subset must read back with the same glyph count, have right checksums, and subset again to the same bytes. Seeds: `seeds/font` (tiny TrueType, collection and CFF fonts), and locally up to 40 fonts of 256 KB or less from `C:\Windows\Fonts`, which `run-fuzzers.ps1` copies into the work folder (fonts' licences keep them out of the repository).
 
 `make_seeds.py` makes `seeds/opc`, `seeds/package`, `seeds/formula`, `seeds/drawing` and `seeds/picture` from the corpus (standard library only): `python tests/fuzz/make_seeds.py`.
 
@@ -61,7 +62,7 @@ cmake -S . -B build-fuzz -DFW_FUZZ=ON
 ```
 
 ```bash
-cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing fuzz_layout fuzz_picture fuzz_rtf fuzz_html fuzz_clip
+cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing fuzz_layout fuzz_picture fuzz_rtf fuzz_html fuzz_clip fuzz_sfnt
 ```
 
 `FW_FUZZ` instruments `fwcore`, `fwpkg`, `fwdoc`, `fwdraw`, miniz and pugixml with AddressSanitizer and coverage, so keep it out of normal builds.
