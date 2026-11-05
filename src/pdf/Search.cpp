@@ -7,9 +7,10 @@
 #include "pdf/Document.h"
 #include "ui/Anim.h"
 
-void Search::Start(const std::wstring& query, bool matchCase, int fromPage, int pageCount) {
+void Search::Start(const std::wstring& query, bool matchCase, bool wholeWords, int fromPage, int pageCount) {
   query_ = query;
   matchCase_ = matchCase;
+  wholeWords_ = wholeWords;
   pageCount_ = pageCount;
   startPage_ = std::clamp(fromPage, 0, std::max(0, pageCount - 1));
   scanned_ = 0;
@@ -40,7 +41,7 @@ bool Search::Work(Document& doc, double deadlineMs) {
     scannedPages_[page] = true;
     FPDF_TEXTPAGE tp = doc.TextPage(page);
     if (!tp) continue;
-    unsigned long flags = matchCase_ ? FPDF_MATCHCASE : 0;
+    unsigned long flags = (matchCase_ ? FPDF_MATCHCASE : 0) | (wholeWords_ ? FPDF_MATCHWHOLEWORD : 0);
     FPDF_SCHHANDLE h = FPDFText_FindStart(tp, reinterpret_cast<FPDF_WIDESTRING>(query_.c_str()), flags, 0);
     if (!h) continue;
     std::vector<Match> pageMatches;

@@ -87,7 +87,7 @@ class DocView : public PagedView {
   // Spelling or AutoCorrect turned on or off.
   void SettingsChanged() override;
 
-  void StartSearch(const std::wstring& query, bool matchCase) override;
+  void StartSearch(const std::wstring& query, bool matchCase, bool wholeWords) override;
   void ClearSearch() override;
   void SearchStep(bool forward) override;
   int SearchCount() const override { return static_cast<int>(matches_.size()); }
@@ -455,7 +455,7 @@ class DocView : public PagedView {
   std::vector<Match> matches_;
   int current_ = -1;
   std::wstring query_;  // what was searched for, to find again after a replace
-  bool matchCase_ = false;
+  bool matchCase_ = false, wholeWords_ = false;
 
   // Editing: editor_ (declared after doc_) is null for a document shown but not edited (one the
   // model can't write back).

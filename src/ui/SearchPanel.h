@@ -40,6 +40,8 @@ class SearchPanel {
   bool Replacing() const { return open_ && replace_; }
   bool MatchCase() const { return case_.checked; }
   void ToggleMatchCase() { case_.checked = !case_.checked; }
+  bool WholeWords() const { return words_.checked; }
+  void ToggleWholeWords() { words_.checked = !words_.checked; }
   // The card, in client pixels.
   D2D1_RECT_F Card() const;
 
@@ -50,7 +52,7 @@ class SearchPanel {
   RECT area_{};
   float ui_ = 1;
   TextBox box_;
-  Button prev_, next_, case_, close_;
+  Button prev_, next_, case_, words_, close_;
   bool replace_ = false;
   TextBox with_;
   Button one_, all_;

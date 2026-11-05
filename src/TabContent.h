@@ -161,7 +161,8 @@ class TabContent {
   virtual void BuildStatusBar(StatusBarModel& /*m*/) {}
 
   // ---- Find ----
-  virtual void StartSearch(const std::wstring& query, bool matchCase) = 0;
+  // `wholeWords`: only matches with no letter or digit just before or after.
+  virtual void StartSearch(const std::wstring& query, bool matchCase, bool wholeWords) = 0;
   virtual void ClearSearch() = 0;
   virtual void SearchStep(bool forward) = 0;
   virtual int SearchCount() const = 0;

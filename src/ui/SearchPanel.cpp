@@ -19,6 +19,9 @@ SearchPanel::SearchPanel() {
   case_.id = CmdSearchCase;
   case_.glyph = icon::FontCase;
   case_.tooltip = L"Match case";
+  words_.id = CmdSearchWords;
+  words_.text = L"ab";  // underlined in Draw, as other programs show whole words
+  words_.tooltip = L"Whole words";
   close_.id = CmdCloseFind;
   close_.glyph = icon::Cancel;
   close_.glyphSize = 12;
@@ -37,6 +40,7 @@ SearchPanel::SearchPanel() {
   set_.Add(&prev_);
   set_.Add(&next_);
   set_.Add(&case_);
+  set_.Add(&words_);
   set_.Add(&close_);
 }
 
@@ -72,6 +76,8 @@ void SearchPanel::Layout(const RECT& docArea, float ui) {
   float x = c.right - 8 * u - b;
   close_.rc = RectF(x, cy - b / 2, x + b, cy + b / 2);
   x -= b + 6 * u;
+  words_.rc = RectF(x, cy - b / 2, x + b, cy + b / 2);
+  x -= b;
   case_.rc = RectF(x, cy - b / 2, x + b, cy + b / 2);
   x -= b + 2 * u;
   next_.rc = RectF(x, cy - b / 2, x + b, cy + b / 2);
@@ -109,6 +115,14 @@ void SearchPanel::Draw(Canvas& c, const std::wstring& status, bool caretVisible,
   DrawButton(c, prev_, ui_);
   DrawButton(c, next_, ui_);
   DrawButton(c, case_, ui_);
+  DrawButton(c, words_, ui_);
+  {  // "ab" over a bracket: whole words
+    const float u = ui_, mx = (words_.rc.left + words_.rc.right) / 2, y = std::round(words_.rc.bottom - 8 * u) + 0.5f;
+    const D2D1_COLOR_F ink = words_.checked ? p.accentText : p.text;
+    c.Line(mx - 7 * u, y, mx + 7 * u, y, ink, 1 * u);
+    c.Line(mx - 7 * u, y - 3 * u, mx - 7 * u, y, ink, 1 * u);
+    c.Line(mx + 7 * u, y - 3 * u, mx + 7 * u, y, ink, 1 * u);
+  }
   DrawButton(c, close_, ui_);
   if (replace_) {
     one_.enabled = all_.enabled = !noMatches && !box_.Text().empty();
@@ -143,7 +157,7 @@ void SearchPanel::OnMouseDrag(int x, int y) {
 int SearchPanel::OnMouseUp(int x, int y) { return set_.OnMouseUp((float)x, (float)y); }
 
 std::wstring SearchPanel::TooltipAt(int x, int y) const {
-  for (const Button* b : {&prev_, &next_, &case_, &close_, &one_, &all_})
+  for (const Button* b : {&prev_, &next_, &case_, &words_, &close_, &one_, &all_})
     if (b->visible && Contains(b->rc, (float)x, (float)y)) return b->tooltip;
   return {};
 }
@@ -172,4 +186,7 @@ void SearchPanel::Describe(uia::Tree& t, int parent, const std::wstring& status,
   int matchCase = uia::AddButton(t, pane, case_.id, case_, nullptr);
   t[matchCase].toggle = case_.checked ? ToggleState_On : ToggleState_Off;
   t[matchCase].doToggle = [run] { run(CmdSearchCase); };
+  int wholeWords = uia::AddButton(t, pane, words_.id, words_, nullptr);
+  t[wholeWords].toggle = words_.checked ? ToggleState_On : ToggleState_Off;
+  t[wholeWords].doToggle = [run] { run(CmdSearchWords); };
 }

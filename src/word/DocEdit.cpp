@@ -563,7 +563,7 @@ bool DocView::ReplaceCurrent(const std::wstring& with) {
   if (!Apply(editor_->Replace(ToDoc(m.from), ToDoc(m.to), std::u16string(with.begin(), with.end())))) return false;
   // Find again (the text changed) and go on to the next match after the one replaced.
   const TextPos after = focus_;
-  StartSearch(query_, matchCase_);
+  StartSearch(query_, matchCase_, wholeWords_);
   for (size_t i = 0; i < matches_.size(); ++i)
     if (StoryOf(matches_[i].from) == StoryOf(after) && !(matches_[i].from < after)) {
       current_ = static_cast<int>(i);
@@ -590,7 +590,7 @@ int DocView::ReplaceAll(const std::wstring& with) {
     r.caret = ToDoc(all.back().from);
     Apply(r);
   }
-  StartSearch(query_, matchCase_);
+  StartSearch(query_, matchCase_, wholeWords_);
   host_.ViewStateChanged();
   return replaced;
 }

@@ -912,13 +912,13 @@ void PdfView::SelectAllOnPage() {
 // ---------------------------------------------------------------------------
 // Search
 
-void PdfView::StartSearch(const std::wstring& query, bool matchCase) {
+void PdfView::StartSearch(const std::wstring& query, bool matchCase, bool wholeWords) {
   if (!Ready()) return;
   if (query.empty()) {
     ClearSearch();
     return;
   }
-  search_.Start(query, matchCase, currentPage_, PageCount());
+  search_.Start(query, matchCase, wholeWords, currentPage_, PageCount());
   lastSearchCurrent_ = -1;
   host_.ViewInvalidate();
   host_.ViewStateChanged();

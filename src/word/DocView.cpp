@@ -1163,11 +1163,12 @@ void DocView::SelectAll() {
 // ---------------------------------------------------------------------------
 // Find
 
-void DocView::StartSearch(const std::wstring& query, bool matchCase) {
+void DocView::StartSearch(const std::wstring& query, bool matchCase, bool wholeWords) {
   if (!Ready()) return;
   ClearSearch();
   query_ = query;
   matchCase_ = matchCase;
+  wholeWords_ = wholeWords;
   if (navPanel_ && host_.ViewShownPanel() == navPanel_.get()) navPanel_->ShowResults(true);
   if (query.empty()) return;
   auto lower = [](std::wstring s) {
@@ -1188,7 +1189,13 @@ void DocView::StartSearch(const std::wstring& query, bool matchCase) {
       VisibleText(p, t, map);
       if (t.size() < q.size()) continue;
       const std::wstring hay = matchCase ? t : lower(t);
+      // Whole words: no letter, digit or underscore just before or after.
+      auto word = [&](size_t i) { return i < t.size() && (IsCharAlphaNumericW(t[i]) || t[i] == L'_'); };
       for (size_t at = hay.find(q); at != std::wstring::npos; at = hay.find(q, at + q.size())) {
+        if (wholeWords && ((at > 0 && word(at - 1)) || word(at + q.size()))) {
+          at = at + 1 - q.size();  // and on from the next character
+          continue;
+        }
         Match m;
         m.from = {p, map[at]};
         m.to = {p, map[at + q.size() - 1] + 1};

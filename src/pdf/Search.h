@@ -19,7 +19,7 @@ class Search {
     bool hasRects = false;
   };
 
-  void Start(const std::wstring& query, bool matchCase, int fromPage, int pageCount);
+  void Start(const std::wstring& query, bool matchCase, bool wholeWords, int fromPage, int pageCount);
   void Clear();
   bool Active() const { return !query_.empty(); }
   bool Done() const { return scanned_ >= pageCount_; }
@@ -41,7 +41,7 @@ class Search {
 
  private:
   std::wstring query_;
-  bool matchCase_ = false;
+  bool matchCase_ = false, wholeWords_ = false;
   int pageCount_ = 0;
   int startPage_ = 0;
   int scanned_ = 0;
