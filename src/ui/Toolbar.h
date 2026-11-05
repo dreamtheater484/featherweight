@@ -97,6 +97,7 @@ class Toolbar {
   // The keyboard is on one of the tab's controls (after a click, say). Enter and Esc hand it
   // back to the document.
   bool HasKeyFocus() const { return group_.Focused() != nullptr; }
+  void HandBackAfterChoice(Control* open);
   void OnKeyDown(UINT vk, bool ctrl, bool shift, bool alt);
   void OnChar(wchar_t ch) { group_.OnChar(ch); }
   void Blur() { group_.Blur(); }
