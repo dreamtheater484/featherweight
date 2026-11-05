@@ -572,7 +572,10 @@ struct Flow {
     if (!f.pt) {
       f.pt = std::make_unique<ParaText>();
       e.BuildText(item.para, f.fields, *f.pt, true);
-      if (f.pt->empty) {
+      // So is the empty paragraph that only holds a section break: Word gives it no room (it sat
+      // alone on a page, or kept a continuous section's next one a line or its spacing lower).
+      if (f.pt->empty || (EndsSection() && f.pt->inlines.empty() && f.pt->anchors.empty() &&
+                          f.pt->Shown(0, static_cast<uint32_t>(f.pt->text.size()), false).empty())) {
         f.pt.reset();
         ++f.next;
         return Step::Continue;
@@ -644,10 +647,8 @@ struct Flow {
       std::vector<uint32_t> newNotes;
       float noteH = pt.notes.empty() ? 0 : NotesFor(pt, line, &newNotes);
       // A line with nothing but a page break goes on this page even when it's full: Word never
-      // starts a page just for the break. Nor for the empty end of a section that a page break
-      // ends.
-      const bool breakOnly = (line.ending == text::LineEnd::PageBreak || (br.Done() && EndsWithPageBreak())) &&
-                             Blank(pt, line);
+      // starts a page just for the break.
+      const bool breakOnly = line.ending == text::LineEnd::PageBreak && Blank(pt, line);
       const float hang = e.Hang(pt, line, h);
       if (space.top + h - hang > Bottom() - noteH + kEpsilon && !breakOnly && !(f.columnEmpty && placed.empty())) {
         br.Restore(state);
@@ -780,12 +781,9 @@ struct Flow {
     return std::max(start, above[keep]);
   }
 
-  // Whether the current item is the last of a section the next one starts on a new page after.
-  bool EndsWithPageBreak() const {
-    if (f.next + 1 >= f.items.size()) return false;
-    const Item& next = f.items[f.next + 1];
-    return next.section != f.items[f.next].section && Props(next.section).start != SectionStart::Continuous &&
-           Props(next.section).start != SectionStart::NextColumn;
+  // Whether the current item is the last of its section: the paragraph that holds its w:sectPr.
+  bool EndsSection() const {
+    return f.next + 1 < f.items.size() && f.items[f.next + 1].section != f.items[f.next].section;
   }
 
   // A page break inside a paragraph: the rest of it starts the next page.
