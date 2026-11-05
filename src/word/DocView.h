@@ -450,7 +450,8 @@ class DocView : public PagedView {
   struct Change {
     TextPos from, to;
     bool deletion = false;
-    size_t author = 0;  // its color
+    bool barOnly = false;  // formatting or a paragraph mark: only the bar, beside its lines
+    size_t author = 0;     // its color
     std::wstring text;  // "Inserted by Ann", "Deleted by Ann: “old words”"
     bool measured = false;
     Rects rects;                                       // insertions

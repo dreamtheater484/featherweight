@@ -320,7 +320,7 @@ void DocView::CollectAnnotations() {
     }
   }
 
-  // Tracked changes in the text (not formatting changes, which show nothing in Simple Markup).
+  // Tracked changes in the text; formatting and paragraph marks get only their bar.
   std::vector<std::string_view> authors;
   allChanges_ = 0;
   for (uint32_t s = 0; s < doc_->Stories().size(); ++s) {
@@ -328,18 +328,27 @@ void DocView::CollectAnnotations() {
     for (const auto& r : doc_->Revisions(s)) {
       using Kind = fw::doc::RevisionKind;
       ++allChanges_;
-      if (r.kind != Kind::Insertion && r.kind != Kind::Deletion && r.kind != Kind::MoveFrom && r.kind != Kind::MoveTo)
-        continue;
-      if (r.start.para == fw::doc::kNone || r.end.para == fw::doc::kNone) continue;
+      const bool text = r.kind == Kind::Insertion || r.kind == Kind::Deletion || r.kind == Kind::MoveFrom ||
+                        r.kind == Kind::MoveTo;
+      const bool barOnly = r.kind == Kind::RunFormat || r.kind == Kind::ParagraphFormat ||
+                           r.kind == Kind::MarkInsertion || r.kind == Kind::MarkDeletion;
+      if ((!text && !barOnly) || r.start.para == fw::doc::kNone || r.end.para == fw::doc::kNone) continue;
       Change ch;
       ch.from = {r.start.para, r.start.offset};
       ch.to = {r.end.para, r.end.offset};
+      if (barOnly && r.kind != Kind::RunFormat)
+        ch.from = {r.start.para, 0}, ch.to = {r.start.para, static_cast<uint32_t>(doc_->Para(r.start.para).text.size())};
       if (ch.to < ch.from) std::swap(ch.from, ch.to);
-      if (ch.from == ch.to) continue;
+      if (ch.from == ch.to && !barOnly) continue;
+      ch.barOnly = barOnly;
       ch.deletion = r.kind == Kind::Deletion || r.kind == Kind::MoveFrom;
       auto who = std::find(authors.begin(), authors.end(), r.author);
       if (who == authors.end()) who = authors.insert(authors.end(), r.author);
       ch.author = static_cast<size_t>(who - authors.begin());
+      if (barOnly) {
+        changes_.push_back(std::move(ch));
+        continue;
+      }
       std::wstring by = r.author.empty() ? std::wstring() : L" by " + Wide(r.author);
       if (ch.deletion) {
         std::wstring gone;
@@ -621,11 +630,21 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
     };
     for (auto& ch : changes_) {
       if (!ch.measured && done) {
-        if (ch.deletion && !struck) ch.at = pagination_->CaretAt(ch.from);
+        if (ch.deletion && !struck && !ch.barOnly) ch.at = pagination_->CaretAt(ch.from);
         else ch.rects = pagination_->Ranges(ch.from, ch.to);
+        if (ch.barOnly && ch.rects.empty()) ch.at = pagination_->CaretAt(ch.from);  // an empty paragraph
         ch.measured = true;
       }
       const D2D1_COLOR_F color = ChangeColor(ch.author);
+      if (ch.barOnly) {
+        for (const auto& [page, r] : ch.rects)
+          if (static_cast<int>(page) >= first && static_cast<int>(page) <= last && static_cast<int>(page) < pages)
+            bar(static_cast<int>(page), r.top, r.bottom, color);
+        if (ch.at && static_cast<int>(ch.at->page) >= first && static_cast<int>(ch.at->page) <= last &&
+            static_cast<int>(ch.at->page) < pages)
+          bar(static_cast<int>(ch.at->page), ch.at->top, ch.at->bottom, color);
+        continue;
+      }
       if (ch.deletion && struck) {
         for (const auto& [page, r] : ch.rects) {
           const int pg = static_cast<int>(page);
@@ -780,7 +799,8 @@ DocView::Hit DocView::HitAt(int x, int y) {
   for (size_t i = 0; i < comments_.size(); ++i)
     if (!(at < comments_[i].from) && at < comments_[i].to) hit.comment = static_cast<int>(i);
   for (size_t i = 0; i < changes_.size(); ++i)
-    if (!changes_[i].deletion && !(at < changes_[i].from) && at < changes_[i].to) hit.change = static_cast<int>(i);
+    if (!changes_[i].deletion && !changes_[i].barOnly && !(at < changes_[i].from) && at < changes_[i].to)
+      hit.change = static_cast<int>(i);
   return hit;
 }
 
@@ -1089,7 +1109,7 @@ std::wstring DocView::TooltipAt(int x, int y) {
   float px, py;
   if (page >= 0 && ToPagePoint(page, x, y, px, py)) {
     for (const auto& ch : changes_) {
-      if (ch.deletion && ch.at && static_cast<int>(ch.at->page) == page && std::abs(px - ch.at->x) < 3 &&
+      if (ch.deletion && !ch.barOnly && ch.at && static_cast<int>(ch.at->page) == page && std::abs(px - ch.at->x) < 3 &&
           py >= ch.at->top && py < ch.at->bottom)
         return ch.text;
     }
