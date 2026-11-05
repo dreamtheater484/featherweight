@@ -10,6 +10,7 @@ add_library(fwdoc STATIC
   docx/Reader.cpp
   docx/Save.cpp
   docx/Writer.cpp
+  edit/Editor.cpp
 )
 target_include_directories(fwdoc PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(fwdoc PUBLIC fwpkg fwcore)
@@ -31,7 +32,7 @@ target_compile_options(fwdoclayout PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Rele
 # (plan §6.4 D1): read every document into the model, write every part it owns back, and check.
 if(FW_BUILD_TESTS)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_doc.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_docsave.cpp"
-    "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_edit.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp"
     # The document tab's file (D2 "Files"): an app source, tested here with temporary folders.
     "${PROJECT_SOURCE_DIR}/tests/unit/test_docfile.cpp" "${PROJECT_SOURCE_DIR}/src/word/DocFile.cpp")
   target_link_libraries(fw_tests PRIVATE fwdoc fwdoclayout)

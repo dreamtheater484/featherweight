@@ -43,6 +43,9 @@ bool Layout::Continue(double milliseconds) {
 }
 
 bool Layout::Done() const { return impl_->engine.Done(); }
+void Layout::Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added) {
+  impl_->engine.Edited(story, first, removed, added);
+}
 size_t Layout::PageCount() const { return impl_->engine.Pages().size(); }
 const Page& Layout::GetPage(size_t index) const { return impl_->engine.Pages()[index]; }
 uint32_t Layout::Revision() const { return impl_->engine.Revision(); }
