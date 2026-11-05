@@ -28,6 +28,7 @@ struct Options {
   int runs = 5;                     // bench: runs per document
   bool budgets = false;             // bench: fail when a budget is missed
   bool layout = false;              // dump: the pages Featherweight lays out
+  bool edited = false;              // save: as after an edit in every part the model owns
   std::vector<std::filesystem::path> inputs;
 };
 
@@ -40,6 +41,7 @@ std::unique_ptr<fw::pkg::Package> OpenPackage(const std::filesystem::path& file,
 std::string_view AsText(const std::vector<uint8_t>& bytes);
 
 int RunRoundtrip(const Options& options);
+int RunSave(const Options& options);
 void DumpModel(const std::filesystem::path& file);
 int RunDump(const Options& options);
 int RunCheck(const Options& options);

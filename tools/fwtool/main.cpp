@@ -20,6 +20,12 @@ constexpr const char* kUsage =
     "      refused with a plain message (malicious files). With --model Word documents are\n"
     "      read into the document model, which writes back every part it owns; those parts\n"
     "      must equal the originals after canonicalization, and the saved copy must pass check.\n"
+    "  fwtool save [--edited] [--out DIR] <file or folder>...\n"
+    "      Saves each Word document as Featherweight's Save does (the document model's save, then\n"
+    "      safe saving) into DIR (default: a temporary folder, removed afterwards). With no edits\n"
+    "      the saved file must be identical to the original; with --edited every part the model\n"
+    "      owns is rewritten and the document properties updated, as after an edit. Either way the\n"
+    "      saved file must open and have no new fwtool check errors. Prints each save's time.\n"
     "  fwtool dump [--model | --layout [--out DIR]] <file>...\n"
     "      Lists parts, relationships and content types; with --model, what the document\n"
     "      model reads from a Word document (stories, paragraphs, labels, fields); with\n"
@@ -142,6 +148,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--all") options.all = true;
     else if (arg == L"--runs" && i + 1 < argc) options.runs = _wtoi(argv[++i]);
     else if (arg == L"--budgets") options.budgets = true;
+    else if (arg == L"--edited") options.edited = true;
     else if (arg.starts_with(L"--")) {
       std::fprintf(stderr, "Unknown option %s\n\n%s", fw::WideToUtf8(arg).c_str(), fwtool::kUsage);
       return 2;
@@ -153,6 +160,7 @@ int wmain(int argc, wchar_t** argv) {
   }
   if (command == L"roundtrip") return fwtool::RunRoundtrip(options);
   if (command == L"dump") return fwtool::RunDump(options);
+  if (command == L"save") return fwtool::RunSave(options);
   if (command == L"check") return fwtool::RunCheck(options);
   if (command == L"print-sample") return fwtool::RunPrintSample(options);
   if (command == L"render") return fwtool::RunRender(options);
