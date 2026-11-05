@@ -2740,8 +2740,9 @@ struct EditorState {
   // Range markers and other content that a deletion of `gone` (cells, rows or a table) would cut
   // from what's outside it: notes and comments anchored there can't go (refused); a field that
   // runs out of it can't either; the start or end of a range whose other end stays moves to the
-  // start of `heir`, the paragraph that takes the deleted content's place.
-  bool Evacuate(const std::vector<ElemId>& gone, ElemId heir, std::u16string& why) {
+  // start of `heir`, the paragraph that takes the deleted content's place, or with `inPlaceOf`, to
+  // where that element is (so it stays in order with markers between it and the heir).
+  bool Evacuate(const std::vector<ElemId>& gone, ElemId heir, std::u16string& why, ElemId inPlaceOf = kNoElem) {
     static const std::vector<std::pair<uint32_t, uint32_t>> pairs = {
         {Name("bookmarkStart"), Name("bookmarkEnd")},
         {Name("commentRangeStart"), Name("commentRangeEnd")},
@@ -2773,7 +2774,9 @@ struct EditorState {
           ++inside[{static_cast<uint32_t>(k), std::string(Attr(id, kId).value_or(""))}];
         }
       if (E(id).flags & kSharedKids) continue;
+      const size_t at = stack.size();  // its children, in document order when taken
       for (ElemId c = E(id).first; c != kNoElem; c = E(c).next) stack.push_back(c);
+      std::reverse(stack.begin() + static_cast<std::ptrdiff_t>(at), stack.end());
     }
     if (fields != 0) return why = u"A field runs into these cells. Delete the field first.", false;
     std::vector<ElemId> keep;
@@ -2784,12 +2787,15 @@ struct EditorState {
           if (inside[{static_cast<uint32_t>(k), std::string(Attr(m, kId).value_or(""))}] < 2) keep.push_back(m);
     }
     if (keep.empty()) return true;
-    if (heir == kNoElem) return why = u"A bookmark or comment range starts or ends here, so this can't be deleted yet.", false;
-    ElemId after = Child(heir, kPPr);
+    if (heir == kNoElem && inPlaceOf == kNoElem)
+      return why = u"A bookmark or comment range starts or ends here, so this can't be deleted yet.", false;
+    const ElemId parent = inPlaceOf != kNoElem ? E(inPlaceOf).parent : heir;
+    ElemId after = inPlaceOf != kNoElem ? PrevSibling(inPlaceOf) : Child(heir, kPPr);
     for (ElemId m : keep) {
       Unlink(m);
-      LinkAfter(heir, after, m);
+      LinkAfter(parent, after, m);
       after = m;
+      if (inPlaceOf != kNoElem) roots.push_back(m);  // outside the transaction's paragraphs now: it records them
     }
     return true;
   }
@@ -4150,7 +4156,8 @@ Result Editor::DeleteTable(Pos at) {
     s.LinkAfter(parent, tbl, fresh);
     if (heir == kNoElem) heir = fresh;
   }
-  if (!s.Evacuate({tbl}, heir, why)) return s.Abort(why);
+  // A range that starts or ends in it now does where it was: before any markers after it.
+  if (!s.Evacuate({tbl}, heir, why, tbl)) return s.Abort(why);
   s.Unlink(tbl);
   std::vector<ElemId> blocks;
   if (fresh != kNoElem) blocks.push_back(fresh);
