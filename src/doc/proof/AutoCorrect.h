@@ -18,6 +18,10 @@
 // - Hyphens to dashes: "word--word" gives an em dash, "word - word" an en dash.
 // - Correct TWo INitial CApitals; capitalize the first letter of sentences; capitalize the
 //   names of days (English).
+// - Internet addresses with links: a web address (http://, https://, ftp://, www.) or an e-mail
+//   address, ended by a space, a tab or Enter, becomes a link in Word's Hyperlink style. Nothing
+//   else changes inside an address. Punctuation after it stays outside the link. File and
+//   network paths stay text: a click on one would open something on this PC.
 namespace fw::doc::proof {
 
 struct AutoCorrectOptions {
@@ -27,12 +31,15 @@ struct AutoCorrectOptions {
   bool twoInitialCapitals = true;
   bool capitalizeSentences = true;
   bool capitalizeDays = true;
+  bool links = true;
 };
 
-// A correction in one paragraph: [from, to) becomes `text`.
+// A correction in one paragraph: [from, to) becomes `text`, or with a `link`, a link to that
+// address (its text stays).
 struct Correction {
   uint32_t from = 0, to = 0;
   std::u16string text;
+  std::string link;
 };
 
 class AutoCorrect {

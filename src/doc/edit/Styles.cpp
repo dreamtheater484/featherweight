@@ -69,6 +69,9 @@ const Builtin kBuiltins[] = {
     {"Intense Emphasis", "IntenseEmphasis", StyleType::Character, 21, true, "Default Paragraph Font", "", "", "",
      "<w:i/><w:iCs/><w:color w:val=\"4472C4\" w:themeColor=\"accent1\"/>"},
     {"Strong", "Strong", StyleType::Character, 22, true, "Default Paragraph Font", "", "", "", "<w:b/><w:bCs/>"},
+    // What AutoCorrect's links get, as in Word; not a quick style.
+    {"Hyperlink", "Hyperlink", StyleType::Character, 99, false, "Default Paragraph Font", "", "", "",
+     "<w:color w:val=\"0563C1\" w:themeColor=\"hyperlink\"/><w:u w:val=\"single\"/>"},
     {"Quote", "Quote", StyleType::Paragraph, 29, true, "Normal", "Normal", "Quote Char",
      "<w:spacing w:before=\"200\" w:after=\"160\"/><w:ind w:left=\"864\" w:right=\"864\"/><w:jc w:val=\"center\"/>",
      "<w:i/><w:iCs/><w:color w:val=\"404040\" w:themeColor=\"text1\" w:themeTint=\"BF\"/>"},
@@ -198,9 +201,11 @@ std::string AddBuiltin(TreeEdit& ed, const Builtin& b) {
   bool para = b.type == StyleType::Paragraph;
   bool isDefault = (b.id == "Normal" && !doc.DefaultStyle(StyleType::Paragraph)) ||
                    (b.id == "DefaultParagraphFont" && !doc.DefaultStyle(StyleType::Character));
+  // Priority 99 is Word's for styles it shows only once used (Hyperlink): no quick style either.
+  const bool quick = b.id != "DefaultParagraphFont" && b.priority != 99;
   std::string extra = b.id == "DefaultParagraphFont" ? "<w:semiHidden/><w:unhideWhenUsed/>"
-                      : b.priority == 9 && b.id != "Heading1" ? "<w:unhideWhenUsed/>"
-                                                              : "";
+                      : (b.priority == 9 && b.id != "Heading1") || b.priority == 99 ? "<w:unhideWhenUsed/>"
+                                                                                    : "";
   std::string rPr = Props(doc, b.rPr);
   // A linked character style: Word's pair for headings, the title and quotes.
   std::string linkId;
@@ -209,7 +214,7 @@ std::string AddBuiltin(TreeEdit& ed, const Builtin& b) {
   else if (!b.link.empty()) linkId = UniqueId(doc, IdOf(b.link));
   if (linkId == id) linkId = UniqueId(doc, id + "Char");
   std::string xml = StyleXml(para ? "paragraph" : "character", id, b.name, isDefault, false, basedOn == id ? "" : basedOn,
-                             next == id ? "" : next, linkId, b.priority, b.id != "DefaultParagraphFont", extra,
+                             next == id ? "" : next, linkId, b.priority, quick, extra,
                              Props(doc, b.pPr), rPr);
   if (ed.AddXml(root, xml) == kNoElem) return {};
   ed.Reindex();
