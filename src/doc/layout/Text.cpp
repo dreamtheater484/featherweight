@@ -356,7 +356,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
     std::u16string value;
   };
   std::vector<Replace> replaces;
-  if (fieldsCount_[model.story] > 0) {
+  if (FieldsIn(model.story)) {
     for (const Field& f : StoryFields(model.story)) {
       // Legacy check boxes and drop-downs: their result, or at their end when they have none.
       if (f.end.para == para && f.complete && (f.separator.para == para || f.separator.para == kNone)) {

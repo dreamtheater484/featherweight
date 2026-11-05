@@ -238,6 +238,14 @@ Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, 
 
 Engine::~Engine() = default;
 
+bool Engine::FieldsIn(uint32_t story) {
+  while (fieldsCount_.size() < doc_.Stories().size() && fieldsCount_.size() <= story) {
+    const StoryKind k = doc_.Stories()[fieldsCount_.size()].kind;
+    fieldsCount_.push_back(k == StoryKind::Header || k == StoryKind::Footer || k == StoryKind::Main ? 1 : 0);
+  }
+  return story < fieldsCount_.size() && fieldsCount_[story] > 0;
+}
+
 const std::vector<Field>& Engine::StoryFields(uint32_t story) {
   auto it = fieldsCache_.find(story);
   if (it == fieldsCache_.end()) it = fieldsCache_.emplace(story, doc_.Fields(story)).first;
