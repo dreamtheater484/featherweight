@@ -71,9 +71,14 @@ std::array<float, 4> Insets(const std::string& xml) {
 
 void Stack::Offset(float dx, float dy) {
   for (LineBox& l : lines) {
-    l.x += dx;
-    l.top += dy;
-    l.baseline += dy;
+    if (l.turn) {  // vertical text: its frame moves
+      l.turnX += dx;
+      l.turnY += dy;
+    } else {
+      l.x += dx;
+      l.top += dy;
+      l.baseline += dy;
+    }
     if (l.clip.Width() > 0) {
       l.clip.left += dx;
       l.clip.right += dx;

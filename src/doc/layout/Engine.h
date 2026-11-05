@@ -134,6 +134,10 @@ class Engine {
     bool continued = false;  // vMerge continue: drawn as part of the cell above
     float x = 0, width = 0;  // the cell's box, relative to the table's left edge
     float marginTop = 0, marginBottom = 0, marginLeft = 0, marginRight = 0;
+    // Vertical text (w:textDirection btLr, tbRl): quarter turns clockwise (3 runs up, 1 down),
+    // and how long its longest line is, which is its height in the row.
+    uint8_t turn = 0;
+    float turnedLength = 0;
     Stack content;
   };
   struct RowBox {
@@ -161,9 +165,9 @@ class Engine {
   void EmitRow(const TableBox& t, size_t r, float x, float top, float height, const std::vector<float>* cutFrom,
                const std::vector<float>* cutTo, Stack& out, bool firstOnPage, bool lastOnPage, bool spans = true);
   // A cell's content from `from` to `to` (content coordinates), its part starting at `top` in a
-  // table at `x`; `clip` (optional) where its lines may be drawn.
-  static void EmitCell(const CellBox& c, float x, float top, float from, float to, float vshift, const Rect* clip,
-                       Stack& out);
+  // table at `x`, `height` tall; `clip` (optional) where its lines may be drawn.
+  static void EmitCell(const CellBox& c, float x, float top, float height, float from, float to, float vshift,
+                       const Rect* clip, Stack& out);
   // How far a cell's content moves down for its vertical alignment, in `room`.
   static float VShift(const CellBox& c, float room);
 

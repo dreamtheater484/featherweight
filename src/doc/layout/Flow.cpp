@@ -855,7 +855,7 @@ struct Flow {
     }
     // Its lines go where the row's cells to its left end, in reading order.
     const size_t old = f.body.lines.size();
-    Engine::EmitCell(c, x, s.top, s.shown, to, vshift, nullptr, f.body);
+    Engine::EmitCell(c, x, s.top, (bottom >= 0 ? bottom : f.y) - s.top, s.shown, to, vshift, nullptr, f.body);
     const size_t added = f.body.lines.size() - old;
     const size_t at = std::min(s.at, old);
     std::rotate(f.body.lines.begin() + static_cast<std::ptrdiff_t>(at), f.body.lines.begin() + static_cast<std::ptrdiff_t>(old),
@@ -962,7 +962,7 @@ struct Flow {
         h = 0;
         for (size_t i = 0; i < row.cells.size(); ++i) {
           const CellBox& c = row.cells[i];
-          if (c.continued || c.rowSpan > 1) continue;
+          if (c.continued || c.rowSpan > 1 || c.turn) continue;
           h = std::max(h, c.content.height - f.rowCut[i] + c.marginTop + c.marginBottom);
         }
         if (row.props.heightRule == "exact") h = std::max(0.0f, row.height - f.rowCut.front());
@@ -1013,7 +1013,7 @@ struct Flow {
         bool starved = false;
         for (size_t i = 0; i < row.cells.size(); ++i) {
           const CellBox& c = row.cells[i];
-          if (c.continued || c.rowSpan > 1) continue;
+          if (c.continued || c.rowSpan > 1 || c.turn) continue;  // vertical text doesn't split
           float start = f.rowCut.empty() ? 0 : f.rowCut[i];
           float limit = start + room - c.marginTop - c.marginBottom;
           float to = start;

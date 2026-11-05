@@ -320,3 +320,24 @@ TEST(Layout_RowsThatStartPagesOrStayTogether) {
   CHECK(Find(k, u"Heading", &heading) && Find(k, u"kept 0", &k0) && Find(k, u"kept 3", &k3));
   CHECK(heading == 1 && k0 == 1 && k3 == 1);
 }
+
+TEST(Layout_VerticalTextInCells) {
+  // A narrow cell with btLr text: its line runs up the cell, unwrapped, and the row is as tall as
+  // the line is long; a click on it finds its text.
+  Doc d = Make("<w:tbl><w:tblGrid><w:gridCol w:w=\"500\"/><w:gridCol w:w=\"3000\"/></w:tblGrid><w:tr><w:tc><w:tcPr>"
+               "<w:textDirection w:val=\"btLr\"/></w:tcPr>" + P("Turned label text") + "</w:tc><w:tc>" + P("beside") +
+               "</w:tc></w:tr></w:tbl>" + P("after"));
+  REQUIRE(d.layout);
+  const LineBox *turned = Find(d, u"Turned label text"), *after = Find(d, u"after");
+  REQUIRE(turned && after);
+  CHECK_EQ(turned->turn, 3);
+  const float length = turned->line.contentRight - turned->line.contentLeft;
+  CHECK(length > 40);
+  CHECK(after->top > turned->turnY - 1);  // the row reaches down to where the line starts
+  CHECK(after->top - turned->turnY < 20);
+  // The line runs up from (turnX, turnY): its middle is above that point, inside the narrow cell.
+  auto hit = d.layout->HitTest(0, turned->turnX + turned->baseline - 2, turned->turnY - length / 2);
+  CHECK(hit && hit->para == turned->para);
+  auto ranges = d.layout->Ranges({turned->para, 0}, {turned->para, 6});
+  CHECK(ranges.size() == 1 && ranges[0].second.Height() > ranges[0].second.Width());
+}

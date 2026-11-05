@@ -57,25 +57,51 @@ uint32_t ToModel(Engine& e, const LineBox& lb, uint32_t layoutOffset) {
 
 }  // namespace
 
+// A turned line's frame on the page (LineBox::turn).
+static draw::Matrix TurnOf(const LineBox& lb) {
+  return draw::Matrix::Rotate(90.0f * static_cast<float>(lb.turn)) * draw::Matrix::Translate(lb.turnX, lb.turnY);
+}
+
+// A page point in a line's own frame: itself unless the line is turned.
+static draw::Point InFrame(const LineBox& lb, float x, float y) {
+  switch (lb.turn) {
+    case 1: return {y - lb.turnY, lb.turnX - x};
+    case 2: return {lb.turnX - x, lb.turnY - y};
+    case 3: return {lb.turnY - y, x - lb.turnX};
+    default: return {x, y};
+  }
+}
+
+// A rectangle in a line's frame on the page (turned by quarter turns, it stays a rectangle).
+static Rect OnPage(const LineBox& lb, const Rect& r) {
+  if (!lb.turn) return r;
+  const draw::Matrix m = TurnOf(lb);
+  const draw::Point a = m.Apply({r.left, r.top}), b = m.Apply({r.right, r.bottom});
+  return {std::min(a.x, b.x), std::min(a.y, b.y), std::max(a.x, b.x), std::max(a.y, b.y)};
+}
+
 std::optional<TextPos> Layout::HitTest(size_t page, float x, float y) const {
   Engine& e = impl_->engine;
   if (page >= e.Pages().size()) return std::nullopt;
   const Page& p = e.Pages()[page];
   const LineBox* best = nullptr;
   float bestDistance = 1e30f;
+  float bestX = x;
   for (const LineBox& lb : p.lines) {
     if (lb.para == kNone) continue;
-    float dy = y < lb.top ? lb.top - y : y >= lb.top + lb.height ? y - (lb.top + lb.height) : 0;
+    const draw::Point at = InFrame(lb, x, y);
+    float dy = at.y < lb.top ? lb.top - at.y : at.y >= lb.top + lb.height ? at.y - (lb.top + lb.height) : 0;
     float left = lb.x + lb.line.left, right = lb.x + lb.line.right;
-    float dx = x < left ? left - x : x > right ? x - right : 0;
+    float dx = at.x < left ? left - at.x : at.x > right ? at.x - right : 0;
     float d = dy * 4 + dx;  // the line under the point first, then the nearest
     if (d < bestDistance) {
       bestDistance = d;
       best = &lb;
+      bestX = at.x;
     }
   }
   if (!best) return std::nullopt;
-  uint32_t offset = best->line.HitTest(x - best->x);
+  uint32_t offset = best->line.HitTest(bestX - best->x);
   return TextPos{best->para, ToModel(e, *best, offset)};
 }
 
@@ -92,8 +118,12 @@ std::optional<Layout::Caret> Layout::CaretAt(TextPos pos) {
       e.BuildText(lb.para, PageFields(), pt);
       uint32_t at = pt.LayoutOffset(pos.offset);
       bool lastOfPara = lb.line.ending == text::LineEnd::ParagraphEnd;
-      if (at >= lb.line.start && (at < lb.line.end || (at == lb.line.end && lastOfPara)))
-        return Caret{i, lb.x + lb.line.CaretX(at), lb.top, lb.top + lb.height};
+      if (at >= lb.line.start && (at < lb.line.end || (at == lb.line.end && lastOfPara))) {
+        const float cx = lb.x + lb.line.CaretX(at);
+        if (!lb.turn) return Caret{i, cx, lb.top, lb.top + lb.height};
+        const Rect r = OnPage(lb, {cx, lb.top, cx, lb.top + lb.height});
+        return Caret{i, r.left, r.top, r.top};
+      }
     }
   }
 }
@@ -117,7 +147,7 @@ std::vector<std::pair<size_t, Rect>> Layout::Ranges(TextPos from, TextPos to) {
       b = std::min(b, lb.line.end);
       if (a >= b) continue;
       started = true;
-      for (const auto& [l, r] : lb.line.Ranges(a, b)) out.push_back({i, {lb.x + l, lb.top, lb.x + r, lb.top + lb.height}});
+      for (const auto& [l, r] : lb.line.Ranges(a, b)) out.push_back({i, OnPage(lb, {lb.x + l, lb.top, lb.x + r, lb.top + lb.height})});
       if (lb.para == to.para && b < lb.line.end) finished = true;
     }
     if (started && e.Pages()[i].lines.empty()) break;
@@ -195,10 +225,9 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
   for (const Fill& f : p.fills) painter.FillRect({f.rect.left, f.rect.top, f.rect.right, f.rect.bottom}, draw::Brush::Solid(ColorOf(f.color)));
   for (const LineBox& lb : p.lines) {
     const bool clip = lb.clip.Width() > 0;
-    if (clip) {
-      painter.Save();
-      painter.ClipRect({lb.clip.left, lb.clip.top, lb.clip.right, lb.clip.bottom});
-    }
+    if (clip || lb.turn) painter.Save();
+    if (clip) painter.ClipRect({lb.clip.left, lb.clip.top, lb.clip.right, lb.clip.bottom});
+    if (lb.turn) painter.Transform(TurnOf(lb));
     for (const text::GlyphPiece& g : lb.line.pieces) {
       const size_t at = lb.paint + g.run;
       if (at >= p.paints.size()) continue;
@@ -245,7 +274,7 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
         if (rp->doubleStrike) Line(painter, x1, y - t * 2, x2, y - t * 2, t, color);
       }
     }
-    if (clip) painter.Restore();
+    if (clip || lb.turn) painter.Restore();
   }
   for (const Edge& edge : p.edges) StrokeEdge(painter, edge);
   for (const DrawingBox& d : p.drawings)
@@ -294,6 +323,11 @@ LayoutDump Layout::Dump(std::string source) const {
       line.story = lb.story;
       line.x = lb.x + lb.line.contentLeft;
       line.baseline = lb.baseline;
+      if (lb.turn) {  // where the turned line starts on the page
+        const draw::Point at = TurnOf(lb).Apply({static_cast<float>(line.x), static_cast<float>(line.baseline)});
+        line.x = at.x;
+        line.baseline = at.y;
+      }
       line.width = lb.line.contentRight - lb.line.contentLeft;
       float size = 0;
       for (const text::GlyphPiece& g : lb.line.pieces)

@@ -119,8 +119,21 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
         Spacing sp;
         std::vector<Zone> zones;
         cf.zones = &zones;
+        const std::string_view dir = c.props.textDirection;
+        if (dir == "btLr" || dir == "tbRl" || dir == "tbRlV" || dir == "tbLrV") {
+          // Vertical text: its lines run along the row's height, wrapped at the height the row
+          // sets, or not at all; the row is as tall as its longest line (measured on the corpus).
+          c.turn = dir == "btLr" ? 3 : 1;
+          const float spec = Pt(rb.props.height);
+          cf.width = spec > 0 ? std::max(1.0f, spec - c.marginTop - c.marginBottom) : 1584.0f;  // 22 inches
+        }
         StackBlocks(doc_.Blocks(tc), cf, c.content, sp);
         c.content.height += BorderBelow(sp);
+        if (c.turn) {
+          float longest = 0;
+          for (const LineBox& l : c.content.lines) longest = std::max(longest, l.line.contentRight - l.line.contentLeft);
+          c.turnedLength = std::max(1.0f, longest);
+        }
       }
       col += c.span;
       if (!c.continued)
@@ -164,7 +177,8 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
     rb.keepNext = keepAll && anyPara;
     float h = 0;
     for (const CellBox& c : rb.cells)
-      if (!c.continued && c.rowSpan == 1) h = std::max(h, c.content.height + c.marginTop + c.marginBottom);
+      if (!c.continued && c.rowSpan == 1)
+        h = std::max(h, (c.turnedLength > 0 ? c.turnedLength : c.content.height) + c.marginTop + c.marginBottom);
     float spec = Pt(rb.props.height);
     if (rb.props.heightRule == "exact" && spec > 0) h = spec;
     else if (spec > 0) {
@@ -201,18 +215,43 @@ float Engine::VShift(const CellBox& c, float room) {
   return 0;
 }
 
-void Engine::EmitCell(const CellBox& c, float x, float top, float from, float to, float vshift, const Rect* clip,
-                      Stack& out) {
+void Engine::EmitCell(const CellBox& c, float x, float top, float height, float from, float to, float vshift,
+                      const Rect* clip, Stack& out) {
   const Stack& s = c.content;
   uint32_t base = static_cast<uint32_t>(out.paints.size());
+  if (c.turn) {
+    // Vertical text goes whole in the cell's first part, its frame turned about a corner of the
+    // cell's content box: the bottom left when it runs up, the top right when it runs down.
+    if (from > 0.01f) return;
+    out.paints.insert(out.paints.end(), s.paints.begin(), s.paints.end());
+    const float left = x + c.x, right = left + c.width, bottom = top + height;
+    const Rect box{left, top, right, bottom};
+    const float turnX = c.turn == 3 ? left + c.marginLeft : right - c.marginRight;
+    const float turnY = c.turn == 3 ? bottom - c.marginBottom : top + c.marginTop;
+    for (const LineBox& l : s.lines) {
+      LineBox copy = l;
+      copy.turn = c.turn;
+      copy.turnX = turnX;
+      copy.turnY = turnY;
+      copy.clip = clip ? *clip : box;
+      copy.paint += base;
+      out.lines.push_back(std::move(copy));
+    }
+    return;
+  }
   out.paints.insert(out.paints.end(), s.paints.begin(), s.paints.end());
   float dx = x + c.x + c.marginLeft, dy = top + c.marginTop - from + vshift;
   for (const LineBox& l : s.lines) {
     if (l.top < from - 0.01f || l.top >= to - 0.01f) continue;
     LineBox copy = l;
-    copy.x += dx;
-    copy.top += dy;
-    copy.baseline += dy;
+    if (copy.turn) {  // vertical text in a table in this cell: its frame moves
+      copy.turnX += dx;
+      copy.turnY += dy;
+    } else {
+      copy.x += dx;
+      copy.top += dy;
+      copy.baseline += dy;
+    }
     if (copy.clip.Width() > 0) copy.clip = {copy.clip.left + dx, copy.clip.top + dy, copy.clip.right + dx, copy.clip.bottom + dy};
     if (clip) copy.clip = *clip;
     copy.paint += base;
@@ -273,7 +312,8 @@ void Engine::EmitRow(const TableBox& t, size_t r, float x, float top, float heig
       }
       if (!cutFrom && !cutTo) vshift = VShift(c, room);
       const Rect box{left, top, right, bottom};
-      EmitCell(c, x, top, from, to, vshift, row.props.heightRule == "exact" ? &box : nullptr, out);
+      EmitCell(c, x, top, room + c.marginTop + c.marginBottom, from, to, vshift,
+               row.props.heightRule == "exact" ? &box : nullptr, out);
     }
     // Borders: the cell's own, against its neighbor's (the stronger wins; each shared edge once).
     const CellProps& p = owner->props;
