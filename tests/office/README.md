@@ -45,8 +45,9 @@ D2 is done when every corpus file, after scripted random edits and a save, has n
   ```bash
   fwtool torture --replay build/torture/repro/<name>-seed<seed>.txt
   ```
+  The replay writes `<name>-replay.docx` next to the reproducer. A reproducer from another checkout finds its document by the tail of the recorded path, so `tests/office/...` files replay anywhere.
 - **`fwvalidate`** (`tools/validate`, built with `dotnet build`) is the Open XML SDK validator. With `--compare` it reports only the errors a saved copy has that its original doesn't.
-- **`scripts/word-open-check.ps1`** opens each file in Word, hidden and in safe mode, read-only, with macros off, and reports whether Word shows a repair prompt or an error. Word's alerts stay on so that a repair prompt is shown, read and cancelled, never answered. Nothing is ever saved. It needs the Office reference PC.
+- **`scripts/word-open-check.ps1`** opens each file in Word, hidden and in safe mode, read-only, with macros off, and reports whether Word shows a repair prompt or an error. Word's alerts stay on so that a repair prompt is shown, read and cancelled, never answered. Nothing is ever saved. It needs the Office reference PC. A dialog about that PC's Office rather than the file, such as a missing proofing tool ("Word hyphenation feature is not available"), gives the status `notice`, which passes.
 
 `scripts/torture.ps1` runs all three over the corpus (`tests/office` and, when `FW_CORPUS` is set, the private corpus) and writes `summary.md`. When Word complains about a saved copy, it also opens the original: if Word complains about that too, the editor isn't to blame, and the summary says so. CI runs `scripts/torture.ps1 -Ci`: the public corpus, no Word.
 

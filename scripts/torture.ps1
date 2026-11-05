@@ -109,7 +109,7 @@ foreach ($f in $torture.files) {
     done = $f.done
     refused = $f.refused
     failures = @($f.failures | Where-Object { $_ })
-    newValidatorErrors = $(if ($saved -and $newErrors.ContainsKey($saved)) { $newErrors[$saved] } else { @() })
+    newValidatorErrors = @(if ($saved -and $newErrors.ContainsKey($saved)) { $newErrors[$saved] })  # @(): one error stays a list
     word = $wordStatus
     wordDetail = if ($w -and $w.status -ne "ok") { (@($w.dialogs | ForEach-Object { $_.text }) + @($w.error) | Where-Object { $_ }) -join " / " } else { $null }
   }

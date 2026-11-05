@@ -187,7 +187,7 @@ class EditorTarget : public EditTarget {
   Applied Apply(const Edit& e, std::string& why) override {
     namespace ed = fw::doc::edit;
     auto exists = [&](fw::doc::Pos p) { return p.para < doc_->Paragraphs().size() && p.offset <= editor_.ParaLength(p.para); };
-    auto refuse = [&](const char* reason) {
+    auto refuse = [&](const std::string& reason) {
       why = reason;
       return Applied::Refused;
     };
@@ -213,6 +213,8 @@ class EditorTarget : public EditTarget {
         if (!exists(e.at) || !exists(e.to) || editor_.Compare(e.at, e.to) > 0) return refuse("no such range");
         size_t eq = e.format.find('=');
         std::string name = e.format.substr(0, eq), value = eq == std::string::npos ? "" : e.format.substr(eq + 1);
+        bool needsValue = name == "align" || name == "style" || name == "size" || name == "color" || name == "highlight";
+        if (needsValue == value.empty()) return refuse("format " + name + (needsValue ? " needs =value" : " takes no value"));
         ed::PropEdit props;
         if (name == "align") {
           r = editor_.SetParaProps(e.at.para, e.to.para, props.Set("jc", {{"val", value}}));
@@ -561,10 +563,27 @@ class Generator {
 // paragraphs with their style, text, and where the formatting changes (so run splits don't matter).
 std::string Digest(const Document& doc) {
   static const char* kinds[] = {"main", "header", "footer", "footnote", "endnote", "comment", "text box"};
+  // A text box counts while its drawing is still in a story that counts: one whose drawing was
+  // deleted is gone from the file, though the edited model may keep its story.
+  std::vector<bool> live(doc.Stories().size());
+  for (uint32_t s = 0; s < live.size(); ++s) live[s] = doc.Stories()[s].kind != StoryKind::TextBox;
+  for (bool grew = true; grew;) {
+    grew = false;
+    for (uint32_t s = 0; s < live.size(); ++s) {
+      if (!live[s]) continue;
+      for (uint32_t p : doc.StoryParagraphs(s))
+        for (const InlineItem& item : doc.Items(p)) {
+          if (item.kind != ItemKind::Drawing || item.drawing >= doc.Drawings().size()) continue;
+          for (uint32_t box : doc.Drawings()[item.drawing].textBoxes)
+            if (box < live.size() && !live[box]) live[box] = grew = true;
+        }
+    }
+  }
   std::string main;
   std::vector<std::string> stories;
   uint32_t textBoxes = 0;
   for (uint32_t s = 0; s < doc.Stories().size(); ++s) {
+    if (!live[s]) continue;
     const Story& story = doc.Stories()[s];
     std::string out = std::string("[") + kinds[static_cast<int>(story.kind)] + " " +
                       (story.kind == StoryKind::TextBox ? std::to_string(textBoxes++) : story.id) + "]\n";
