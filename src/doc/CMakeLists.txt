@@ -16,6 +16,7 @@ add_library(fwdoc STATIC
   edit/Kept.cpp
   edit/Lists.cpp
   edit/Styles.cpp
+  edit/TableStyles.cpp
   edit/TreeEdit.cpp
 )
 target_include_directories(fwdoc PUBLIC "${PROJECT_SOURCE_DIR}/src")

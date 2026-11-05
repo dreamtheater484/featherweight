@@ -6,6 +6,7 @@
 
 #include "DocTestUtil.h"
 #include "doc/edit/Editor.h"
+#include "doc/edit/TableStyles.h"
 #include "doc/model/Utf.h"
 #include "pkg/Check.h"
 
@@ -647,4 +648,40 @@ TEST(Tables_RefusedShapesChangeNothing) {
     // Typing in its cells still works.
     CHECK(ed.InsertText(a, u"x"));
   }
+}
+
+TEST(Tables_StylesTheDocumentsAndWordsBasics) {
+  Fixture f;
+  f.styles = "<w:style w:type=\"table\" w:default=\"1\" w:styleId=\"TableNormal\"><w:name w:val=\"Normal Table\"/></w:style>"
+             "<w:style w:type=\"table\" w:styleId=\"Mine\"><w:name w:val=\"My Table\"/></w:style>";
+  f.body = Table({{"a", "b"}}) + Para("");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const std::string before = Written(*doc);
+  Editor ed(*doc);
+  auto names = edit::TableStyleNames(*doc);
+  REQUIRE(!names.empty());
+  CHECK_EQ(names.front(), std::string("My Table"));  // the document's own first; its default isn't offered
+  CHECK(std::find(names.begin(), names.end(), "Normal Table") == names.end());
+  CHECK(std::find(names.begin(), names.end(), "Grid Table 4 - Accent 1") != names.end());
+  const Pos a = P(CellPara(*doc, 0, 0), 0);
+  // A basic the document lacks: added to its styles, based on the default table style; one undo step.
+  REQUIRE(edit::ApplyTableStyle(ed, a, "Grid Table 4 - Accent 1"));
+  const Style* added = doc->FindStyle(std::string(doc->ResolvedTable(FirstTable(*doc)).style));
+  REQUIRE(added);
+  CHECK(added->name == "Grid Table 4 - Accent 1" && added->type == StyleType::Table);
+  // Its header row shows: the first row's cells are filled.
+  CHECK_EQ(doc->ResolvedCell(doc->RowCells(doc->TableRows(FirstTable(*doc))[0])[0]).shading.fill.rgb & 0xFFFFFF, 0x4472C4u);
+  CHECK(std::find(edit::TableStyleNames(*doc).begin(), edit::TableStyleNames(*doc).end(), "Grid Table 4 - Accent 1") !=
+        edit::TableStyleNames(*doc).end());
+  // The document's own, by name.
+  REQUIRE(edit::ApplyTableStyle(ed, a, "My Table"));
+  CHECK(doc->ResolvedTable(FirstTable(*doc)).style == "Mine");
+  CHECK(!edit::ApplyTableStyle(ed, a, "No Such Style"));
+  CHECK(!edit::ApplyTableStyle(ed, P(Main(*doc).back(), 0), "Table Grid"));  // not in a table
+  CHECK(ChecksOut(*doc) && GridOk(*doc));
+  CHECK(UndoesAndRedoes(ed, *doc, before));
+  while (ed.CanUndo() && ed.Undo()) {
+  }
+  CHECK(!doc->FindStyle("GridTable4-Accent1"));  // undone: the style went too
 }
