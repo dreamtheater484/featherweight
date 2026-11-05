@@ -572,9 +572,11 @@ struct Flow {
       f.anchorZones = f.zones.size();
       paraTop = f.y + (f.paraLines == 0 ? e.SpaceBefore(p, f.spacing) + e.BorderAbove(p, f.spacing) : 0);
       if (f.columnEmpty && f.spacing.prev == nullptr && f.paraLines == 0) {
-        // Word keeps the space before at the top of a page (measured on the corpus: dropping it at
-        // every page top, or after hard breaks only, matches fewer pages).
-        paraTop = f.y + e.SpaceBefore(p, Spacing()) + e.BorderAbove(p, Spacing());
+        // At the top of a page Word keeps the space before only after a page or section break,
+        // not where the text just flowed on; at the top of a later column it keeps it (measured on
+        // the corpus: dropping it there too, or always keeping it, matches fewer lines).
+        const bool keep = f.hardStart || f.col > 0;
+        paraTop = f.y + (keep ? e.SpaceBefore(p, Spacing()) : 0.0f) + e.BorderAbove(p, Spacing());
       }
       for (uint32_t a : pt.anchors) {
         const Drawing& d = doc.Drawings()[a];
@@ -666,8 +668,6 @@ struct Flow {
       f.spacing.after = e.SpaceAfter(p);
       f.spacing.prev = &p;
       f.spacing.atTop = false;
-      // Space after may hang past the bottom of the page; the next paragraph starts below it.
-      f.y += 0;
       if (!p.keepNext) f.chain.reset();
       f.pt.reset();
       f.breaker.reset();
