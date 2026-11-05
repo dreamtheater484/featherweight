@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <functional>
+#include <iterator>
 #include <map>
+#include <optional>
 #include <pugixml.hpp>
 #include <unordered_map>
 #include <unordered_set>
@@ -728,9 +730,24 @@ struct EditorState {
   // After a direct change, done or undone: the model's indexes are built again, every cache goes,
   // and every paragraph may look different.
   void RefreshAll(const CustomStep& step) {
+    // A step that says which paragraphs it changed leaves the others as they were: they keep their
+    // versions, so what was measured for them stays (a big table's cells, after formatting one).
+    // Past `renumberFrom`, only the list paragraphs may read differently (their numbers).
+    const bool ranged = step.first != kNone && step.count > 0 && step.first + step.count <= d.paras_.size();
+    const uint32_t changedEnd = std::min(step.renumberFrom, step.first + step.count);
+    auto changed = [&](uint32_t i) { return i >= step.first && i < changedEnd; };
+    std::unordered_map<ElemId, uint32_t> kept;
+    if (ranged)
+      for (uint32_t i = 0; i < d.paras_.size(); ++i)
+        if (!changed(i)) kept.emplace(d.paras_[i].elem, d.paras_[i].version);
     d.ResetCaches();
     d.BuildIndexes();
-    for (Paragraph& p : d.paras_) p.version = ++version;
+    for (uint32_t i = 0; i < d.paras_.size(); ++i) {
+      Paragraph& p = d.paras_[i];
+      const bool renumbered = i >= changedEnd && i < step.first + step.count && d.InList(i);
+      const auto it = ranged && !changed(i) && !renumbered ? kept.find(p.elem) : kept.end();
+      p.version = it != kept.end() ? it->second : ++version;
+    }
     Change ch;
     if (step.first != kNone && step.count > 0 && step.first + step.count <= d.paras_.size()) {
       ch.story = d.paras_[step.first].story;
@@ -1186,6 +1203,26 @@ struct EditorState {
     std::string_view v = Node(&t, lock).AttrOr(kVal);
     return v == "sdtContentLocked" || v == (control ? "sdtLocked" : "contentLocked");
   }
+  // A content control that holds one paragraph: a date, a list (drop-down or combo box), plain
+  // text (multiLine allows line breaks, not paragraphs) or a picture. Word can't open one with a
+  // second paragraph in it.
+  bool OneParagraph(ElemId sdt) {
+    static const uint32_t kinds[] = {Name("date"), Name("dropDownList"), Name("comboBox"), Name("text"), Name("picture")};
+    ElemId pr = Child(sdt, kSdtPr);
+    for (ElemId c = pr == kNoElem ? kNoElem : E(pr).first; c != kNoElem; c = E(c).next)
+      if (std::find(std::begin(kinds), std::end(kinds), NameOf(c)) != std::end(kinds)) return true;
+    return false;
+  }
+  // Whether `para` is in such a control: around it, its cell or its row, or (with `o`) inline
+  // around that place in it (finding 22).
+  bool InOneParagraphControl(uint32_t para, std::optional<uint32_t> o) {
+    for (ElemId a = E(d.paras_[para].elem).parent; a != kNoElem; a = E(a).parent)
+      if (NameOf(a) == kSdt && OneParagraph(a)) return true;
+    if (o)
+      for (ElemId id : AllElems(para))
+        if (NameOf(id) == kSdt && E(id).start < *o && *o < E(id).start + E(id).length && OneParagraph(id)) return true;
+    return false;
+  }
   ElemId LockedSdt(ElemId leaf) {
     for (ElemId a : Ancestors(leaf))
       if (NameOf(a) == kSdt && Locked(a, false)) return a;
@@ -1370,6 +1407,10 @@ struct EditorState {
           open.pop_back();
         }
       }
+    }
+    if (InOneParagraphControl(para, o)) {
+      why = u"A date, list, plain-text or picture content control holds one paragraph, so it can't be split.";
+      return false;
     }
     // Text shown from a kept mc:AlternateContent block is written as that block, which stays with
     // the element it's kept beside: a split just before the text goes after it, so the two agree.
@@ -2940,6 +2981,7 @@ Result Editor::InsertTable(Pos at, uint32_t rows, uint32_t cols) {
   if (rows < 1 || cols < 1 || cols > 63 || rows > 1000) return Fail(u"A table has 1 to 63 columns and 1 to 1,000 rows.");
   ElemId p = doc_.Para(at.para).elem;
   if (s.E(p).flags & kDisplayOnly) return Fail(u"A table can't go here.");
+  if (s.InOneParagraphControl(at.para, at.offset)) return Fail(u"A table can't go in a date, list, plain-text or picture content control.");
   const int32_t width = s.AvailableWidth(at.para);
   s.Begin(at.para, 1);
   // Where it goes: before the paragraph at its start (unless a table is just before it), after it
@@ -3028,6 +3070,7 @@ Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
     ElemId pPr = s.Child(doc_.Para(p).elem, kPPr);
     if (pPr != kNoElem && s.Child(pPr, kSectPr) != kNoElem) return Fail(u"Paragraphs with a section break can't go into a table.");
     if (s.E(doc_.Para(p).elem).flags & kDisplayOnly) return Fail(u"These paragraphs can't go into a table.");
+    if (s.InOneParagraphControl(p, std::nullopt)) return Fail(u"A table can't go in a date, list, plain-text or picture content control.");
   }
   const int32_t width = s.AvailableWidth(first);
   ElemId firstElem = doc_.Para(first).elem, parent = s.E(firstElem).parent;
@@ -3141,25 +3184,43 @@ Result Editor::TableToText(Pos at, char16_t separator) {
         if (n != kP && n != kTcPr && !RangeMarker(n)) return Fail(u"A table with tables or content controls in its cells can't become text yet.");
       }
   s.Begin(first, count, {tbl});
-  // Out of the table, in order, before it: then cells of a row are joined.
+  // Out of the table, in order, before it: then cells of a row are joined. Range markers between
+  // rows or cells (a bookmark's end before </w:tbl>) come out in their places too (finding 21).
   ElemId after = s.PrevSibling(tbl);
   std::vector<std::vector<std::pair<ElemId, ElemId>>> rows;  // per row: each cell's first and last paragraph
   std::vector<ElemId> moved;
-  for (const GridRow& row : g.rows) {
+  auto out = [&](ElemId k) {
+    s.Unlink(k);
+    s.LinkAfter(parent, after, k);
+    after = k;
+    moved.push_back(k);
+  };
+  std::vector<ElemId> outer;
+  for (ElemId k = s.E(tbl).first; k != kNoElem; k = s.E(k).next) outer.push_back(k);
+  for (ElemId k : outer) {
+    if (RangeMarker(s.NameOf(k))) {
+      out(k);
+      continue;
+    }
+    if (s.NameOf(k) != kTr) continue;
     rows.emplace_back();
-    for (const GridCell& c : row.cells) {
+    std::vector<ElemId> inner;
+    for (ElemId c = s.E(k).first; c != kNoElem; c = s.E(c).next) inner.push_back(c);
+    for (ElemId c : inner) {
+      if (RangeMarker(s.NameOf(c))) {
+        out(c);
+        continue;
+      }
+      if (s.NameOf(c) != kTc) continue;
       ElemId firstP = kNoElem, lastP = kNoElem;
       std::vector<ElemId> kids;
-      for (ElemId k = s.E(c.tc).first; k != kNoElem; k = s.E(k).next)
-        if (s.NameOf(k) != kTcPr) kids.push_back(k);
-      for (ElemId k : kids) {
-        s.Unlink(k);
-        s.LinkAfter(parent, after, k);
-        after = k;
-        moved.push_back(k);
-        if (s.NameOf(k) == kP) {
-          if (firstP == kNoElem) firstP = k;
-          lastP = k;
+      for (ElemId e = s.E(c).first; e != kNoElem; e = s.E(e).next)
+        if (s.NameOf(e) != kTcPr) kids.push_back(e);
+      for (ElemId e : kids) {
+        out(e);
+        if (s.NameOf(e) == kP) {
+          if (firstP == kNoElem) firstP = e;
+          lastP = e;
         }
       }
       if (firstP != kNoElem) rows.back().emplace_back(firstP, lastP);

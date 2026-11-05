@@ -692,16 +692,16 @@ std::pair<const Style*, uint16_t> CellStyleOf(const Document& doc, Node para) {
   return {TableStyleOf(doc, table), CellConditions(doc, cell, tp)};
 }
 
-// A paragraph's properties; without its own w:pPr when !withDirect (but still in its list, whose
-// level gives it indents).
-ParaProps ResolveParaProps(const Document& doc, uint32_t para, bool withDirect) {
-  Node pn = doc.ParaNode(para);
-  Node direct = pn.Child(kPPr);
-  ParaProps p;
-  const Style* style = ParaStyleOf(doc, pn);
-  auto chain = Chain(doc, style);
-
-  // The list: numId and ilvl from the closest that names them, direct formatting first.
+// The list a paragraph is in: numId and ilvl from the closest that names them, direct formatting
+// first. Empty numId: none.
+struct ParaList {
+  std::string_view numId;
+  int32_t level = 0;
+  Node lvl;
+  bool numDirect = false;  // named in the paragraph's own w:pPr
+};
+ParaList ListOf(const Document& doc, Node direct, const std::vector<const Style*>& chain) {
+  ParaList out;
   std::string_view numId;
   std::optional<int64_t> ilvl;
   bool numDirect = false;
@@ -722,7 +722,6 @@ ParaProps ResolveParaProps(const Document& doc, uint32_t para, bool withDirect) 
         if (Node l = np.Child(Name("ilvl"))) ilvl = l.Int(kVal);
     }
   }
-  Node lvl;
   if (!numId.empty() && numId != "0") {
     if (!ilvl && numStyle) {
       // A style linked to a list level by the level's w:pStyle.
@@ -732,11 +731,31 @@ ParaProps ResolveParaProps(const Document& doc, uint32_t para, bool withDirect) 
       }
     }
     int32_t level = static_cast<int32_t>(std::clamp<int64_t>(ilvl.value_or(0), 0, 8));
-    lvl = doc.NumberingLevel(numId, level);
-    if (lvl) {
-      p.numId = numId;
-      p.ilvl = level;
+    if (Node lvl = doc.NumberingLevel(numId, level)) {
+      out.numId = numId;
+      out.level = level;
+      out.lvl = lvl;
     }
+  }
+  out.numDirect = numDirect;
+  return out;
+}
+
+// A paragraph's properties; without its own w:pPr when !withDirect (but still in its list, whose
+// level gives it indents).
+ParaProps ResolveParaProps(const Document& doc, uint32_t para, bool withDirect) {
+  Node pn = doc.ParaNode(para);
+  Node direct = pn.Child(kPPr);
+  ParaProps p;
+  const Style* style = ParaStyleOf(doc, pn);
+  auto chain = Chain(doc, style);
+
+  const ParaList list = ListOf(doc, direct, chain);
+  const Node lvl = list.lvl;
+  const bool numDirect = list.numDirect;
+  if (lvl) {
+    p.numId = list.numId;
+    p.ilvl = list.level;
   }
 
   if (const Part* styles = doc.FindPart(PartKind::Styles))
@@ -767,6 +786,13 @@ const ParaProps& Document::ResolvedPara(uint32_t para) const {
   c.para[para] = static_cast<uint32_t>(c.paraPool.size());
   c.paraPool.push_back(ResolveParaProps(*this, para, true));
   return c.paraPool.back();
+}
+
+bool Document::InList(uint32_t para) const {
+  const Caches& c = *caches_;
+  if (para < c.para.size() && c.para[para] != kNone) return !c.paraPool[c.para[para]].numId.empty();
+  const Node pn = ParaNode(para);
+  return !ListOf(*this, pn.Child(kPPr), Chain(*this, ParaStyleOf(*this, pn))).numId.empty();
 }
 
 ParaProps Document::StylePara(uint32_t para) const { return ResolveParaProps(*this, para, false); }

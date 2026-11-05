@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <random>
 #include <string>
@@ -15,7 +16,10 @@
 #include "doc/docx/Docx.h"
 #include "doc/edit/Clip.h"
 #include "doc/edit/Editor.h"
+#include "doc/edit/Format.h"
+#include "doc/edit/Lists.h"
 #include "doc/edit/Page.h"
+#include "doc/edit/TreeEdit.h"
 #include "doc/layout/Layout.h"
 #include "text/Fonts.h"
 
@@ -533,6 +537,91 @@ void RandomEdit(edit::Editor& ed, const Document& doc, std::mt19937& rng) {
 
 }  // namespace
 
+TEST(Layout_CellsOnAPage) {
+  // A 2 x 2 table: the first column's two cells merged, a table in the last cell. Every piece of a
+  // cell is there, in its row and grid column, the inner table's after the cell it's in.
+  const std::string inner = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"600\"/>"
+                            "</w:tblGrid><w:tr><w:tc>" + P("In") + "</w:tc></w:tr></w:tbl>";
+  const std::string table =
+      "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1200\"/><w:gridCol w:w=\"1400\"/>"
+      "</w:tblGrid><w:tr><w:tc><w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr>" + P("Merged") + "</w:tc><w:tc>" + P("B") +
+      "</w:tc></w:tr><w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc>" + inner + P("D") + "</w:tc></w:tr></w:tbl>";
+  Doc d = Make(P("Before") + table + P("After") + SmallPage());
+  REQUIRE(d.layout);
+  const std::vector<fw::doc::layout::CellRect> cells = d.layout->Cells(0);
+  REQUIRE(cells.size() == 5);
+  const ElemId tbl = cells[0].tbl;
+  CHECK(cells[0].row == 0 && cells[0].col == 0 && cells[1].row == 0 && cells[1].col == 1);
+  CHECK(cells[2].row == 1 && cells[2].col == 0 && cells[3].row == 1 && cells[3].col == 1);
+  for (size_t i = 0; i < 4; ++i) CHECK(cells[i].tbl == tbl && cells[i].box.Width() > 0 && cells[i].box.bottom > cells[i].box.top);
+  // Rows share their edges; columns line up.
+  CHECK(std::abs(cells[0].box.bottom - cells[2].box.top) < 0.01f && std::abs(cells[1].box.left - cells[3].box.left) < 0.01f);
+  CHECK(std::abs(cells[0].box.right - cells[1].box.left) < 0.01f);
+  // The inner table, inside the cell it's in.
+  const fw::doc::layout::CellRect& in = cells[4];
+  CHECK(in.tbl != tbl && in.row == 0 && in.col == 0);
+  CHECK(in.box.left >= cells[3].box.left && in.box.right <= cells[3].box.right && in.box.top >= cells[3].box.top);
+  CHECK(d.layout->Cells(99).empty());
+}
+
+TEST(Layout_ListsInATableNumberAgainAsFromScratch) {
+  // One numbered list from before a table through its cells: an edit before the table numbers the
+  // cells again, and formatting in a cell measures its row again (the table's other cells are kept,
+  // D3); each laid out again as a fresh layout lays it out.
+  std::string rows;
+  for (int i = 0; i < 10; ++i)
+    rows += "<w:tr><w:tc>" + P("Item " + std::to_string(i)) + "</w:tc><w:tc>" + P(Words(i % 4 + 1)) + "</w:tc></w:tr>";
+  const std::string table = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1500\"/>"
+                            "<w:gridCol w:w=\"1500\"/></w:tblGrid>" + rows + "</w:tbl>";
+  std::string body;
+  for (int i = 0; i < 4; ++i) body += P(Words(i * 3 + 2));
+  body += table;
+  for (int i = 0; i < 4; ++i) body += P(Words(i * 2 + 1));
+  Doc d = Make(body + SmallPage());
+  REQUIRE(d.layout);
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  auto cell = [&](size_t r, size_t c) {
+    Node tbl;
+    for (const Block& b : d.doc->Blocks(d.doc->MainStory()))
+      if (b.kind == BlockKind::Table) tbl = b.node;
+    Node tc = d.doc->RowCells(d.doc->TableRows(tbl)[r])[c];
+    return Pos{d.doc->Blocks(tc).front().para, 0};
+  };
+  auto para = [&](size_t i) { return d.doc->StoryParagraphs(d.doc->MainStory())[i]; };
+  int step = 0;
+  auto check = [&](bool ok, const char* what) {
+    REQUIRE(ok);
+    if (step++ % 2) d.layout->LayOutPages(2);
+    d.layout->LayOutAll();
+    REQUIRE(SameAsFresh(*d.doc, *d.layout, what));
+  };
+  auto tree = [&](const std::function<void(edit::TreeEdit&)>& change) {
+    edit::TreeEdit te(ed);
+    change(te);
+    return true;
+  };
+  check(tree([&](edit::TreeEdit& te) { edit::ToggleList(te, {{para(1), 0}, cell(9, 0)}, edit::ListKind::Number); }),
+        "numbered through the table");
+  const std::optional<ListLabel> before = d.doc->Label(cell(5, 0).para);
+  REQUIRE(before);
+  check(bool(ed.SplitParagraph({para(1), 2})), "Enter in the list before the table");
+  const std::optional<ListLabel> after = d.doc->Label(cell(5, 0).para);
+  REQUIRE(after);
+  CHECK(after->text != before->text);  // numbered again
+  check(tree([&](edit::TreeEdit& te) { edit::ToggleList(te, {{para(0), 0}, {para(0), 0}}, edit::ListKind::Number); }),
+        "a number before the list");
+  check(bool(ed.Undo()), "the number undone");
+  check(tree([&](edit::TreeEdit& te) { edit::ToggleList(te, {cell(3, 0), cell(3, 0)}, edit::ListKind::Bullet); }),
+        "bullets in a cell");
+  check(tree([&](edit::TreeEdit& te) { edit::ToggleRuns(te, {cell(6, 1), {cell(6, 1).para, 3}}, edit::Toggle::Bold); }),
+        "bold in a cell");
+  check(bool(ed.InsertText({cell(7, 1).para, 1}, u" more words in a cell, enough to wrap its line ")), "typing in a cell");
+  check(bool(ed.Undo()) && bool(ed.Undo()) && bool(ed.Undo()), "undone in the cells");
+  check(bool(ed.JoinParagraphs(para(1))), "the list's first items joined");
+  check(bool(ed.Undo()) && bool(ed.Undo()), "all undone");
+}
+
 TEST(Layout_APageSetupChangeLaysOutInIdleTime) {
   // A change of every section's margins: the first pages again at once, and the caret near the end
   // isn't laid out (so painting doesn't lay out the whole document) until the rest is.
@@ -746,4 +835,36 @@ TEST(Layout_TableEditsLayOutAgainAsFromScratch) {
   check(bool(ed.Undo()) && bool(ed.Undo()) && bool(ed.Undo()), "undone");
   check(bool(ed.Redo()), "redone");
   check(bool(ed.DeleteTable(cell(0, 0))), "the table deleted");
+}
+
+TEST(Layout_CellsNumberedAsTheEditorsGrid) {
+  // The Word tab fills selected cells from Layout::Cells, matching the editor's block by row and
+  // grid column (D3): both number them alike. A cell over two columns, a row past gridBefore, a
+  // merged cell whose second piece has its own w:tc.
+  const std::string table =
+      "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1200\"/>"
+      "<w:gridCol w:w=\"1200\"/><w:gridCol w:w=\"1200\"/></w:tblGrid>"
+      "<w:tr><w:tc>" + P("A") + "</w:tc><w:tc><w:tcPr><w:gridSpan w:val=\"2\"/></w:tcPr>" + P("BC") + "</w:tc></w:tr>"
+      "<w:tr><w:trPr><w:gridBefore w:val=\"1\"/></w:trPr><w:tc><w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr>" + P("E") +
+      "</w:tc><w:tc>" + P("F") + "</w:tc></w:tr>"
+      "<w:tr><w:tc>" + P("G") + "</w:tc><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc>" + P("I") + "</w:tc></w:tr></w:tbl>";
+  Doc d = Make(P("Before") + table + P("After") + SmallPage());
+  REQUIRE(d.layout);
+  edit::Editor ed(*d.doc);
+  const std::vector<fw::doc::layout::CellRect> cells = d.layout->Cells(0);
+  const auto infos = ed.TableCells(Pos{1, 0});
+  REQUIRE(infos.size() == 6);
+  for (const auto& info : infos) {
+    size_t found = 0;
+    for (const auto& c : cells)
+      if (c.tc == info.tc.Id())
+        found += c.tbl == info.tbl.Id() && c.row == info.row && c.col == info.col && c.span == info.span;
+    CHECK_EQ(found, 1u);
+  }
+  // The merged cell's second piece: the row below, the same column.
+  const auto e = ed.CellAt(Pos{3, 0});  // "E"
+  REQUIRE(e && e->rows == 2 && e->col == 1);
+  size_t pieces = 0;
+  for (const auto& c : cells) pieces += c.tbl == e->tbl.Id() && c.col == 1 && (c.row == 1 || c.row == 2);
+  CHECK_EQ(pieces, 2u);
 }

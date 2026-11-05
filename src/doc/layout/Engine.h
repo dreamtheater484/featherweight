@@ -182,6 +182,13 @@ class Engine {
   };
   // `reuse`: the table measured before an edit, whose cells that didn't change are kept.
   TableBox MeasureTable(Node tbl, const Frame& frame, const TableBox* reuse = nullptr);
+  // What a cell's measure depends on: its paragraphs and their versions, nested tables' included.
+  uint64_t CellKey(Node tc) const;
+  // Brings `t`, measured before an edit, up to date for a frame this wide: true when it has the same
+  // rows and cells, and the rows whose text changed (or depends on the page, or shows list labels)
+  // were measured again in place; false when the table must be measured anew (D3: an edit before
+  // or in a big table doesn't measure all of it again).
+  bool BringUpToDate(TableBox& t, float frameWidth, LineStory story);
   // After an edit in rows [from, to] of `t` (D2): those rows measured again in place, with their
   // cells that didn't change kept. False when they can't be on their own (merged cells over them,
   // rows added or removed, list labels in other rows that a `structure` edit may number again):

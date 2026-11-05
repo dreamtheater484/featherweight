@@ -1,11 +1,16 @@
+#include <windows.h>
+#include <objbase.h>
+
 #include "TestHarness.h"
 
 #include <string>
+#include <vector>
 
 #include "DocFixture.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/Page.h"
+#include "doc/edit/Pictures.h"
 #include "doc/edit/TreeEdit.h"
 #include "pkg/Check.h"
 
@@ -295,6 +300,41 @@ TEST(Page_BreaksInAParagraphThatEndedASectionOrWasFormatted) {
     if (how != 1) CHECK(edit::SectionParagraphs(*doc, 0).second == r.caret.para);
     CHECK(SaveAndReopen(*doc));
   }
+}
+
+TEST(Page_SectionBreakAfterAPictureKeepsItAndTheTextTypedAfter) {
+  // d1-corpus torture finding 12: a section break in the paragraph after an inserted picture, then
+  // typing in both halves. The edited model keeps the picture, and the text it saves is the text
+  // it shows (the tree edit used to leave the paragraphs stale, as in d2-torture 7-9).
+  CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);  // the picture's PNG copy is made with WIC, as in the app
+  Fixture f;
+  f.body = P("Before the picture") + P("A paragraph to split in two");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  edit::Editor editor(*doc);
+  edit::Pictures pictures(editor);
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"20\"><rect width=\"40\" height=\"20\" fill=\"#36c\"/></svg>";
+  REQUIRE(pictures.Insert({MainParas(*doc)[0], 6}, std::vector<uint8_t>(svg.begin(), svg.end())).ok);
+  auto drawings = [](const Document& d, uint32_t para) {
+    size_t n = 0;
+    for (const InlineItem& it : d.Items(para)) n += it.kind == ItemKind::Drawing ? 1 : 0;
+    return n;
+  };
+  CHECK(drawings(*doc, MainParas(*doc)[0]) == 1);
+  REQUIRE(edit::InsertSectionBreak(editor, {MainParas(*doc)[1], 2}, SectionStart::Continuous));
+  std::vector<uint32_t> ps = MainParas(*doc);
+  REQUIRE(ps.size() == 3);
+  CHECK(drawings(*doc, ps[0]) == 1);
+  REQUIRE(editor.InsertText({ps[1], 1}, u"Featherweight"));
+  REQUIRE(editor.InsertText({ps[2], 3}, u"X"));
+  CHECK(doc->Para(ps[1]).text == u"AFeatherweight " && doc->Para(ps[2]).text == u"parXagraph to split in two");
+  for (uint32_t q : ps) CHECK(RunsCover(*doc, q));
+  auto back = SaveAndReopen(*doc);
+  REQUIRE(back);
+  const std::vector<uint32_t> qs = MainParas(*back);
+  REQUIRE(qs.size() == 3);
+  for (size_t i = 0; i < 3; ++i) CHECK(back->Para(qs[i]).text == doc->Para(ps[i]).text);
+  CHECK(drawings(*back, qs[0]) == 1 && back->Sections().size() == 2);
 }
 
 TEST(Page_HyphenationSettings) {

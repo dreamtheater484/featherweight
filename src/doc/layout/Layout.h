@@ -132,6 +132,15 @@ struct Edge {
   float x1 = 0, y1 = 0, x2 = 0, y2 = 0;
 };
 
+// A table cell's piece on a page, as drawn: a cell split across pages has one on each, and a
+// merged cell (vMerge) one in each row it spans.
+struct CellRect {
+  ElemId tc = kNoElem, tbl = kNoElem;
+  uint32_t row = 0;           // the row's index in its table
+  int32_t col = 0, span = 1;  // the grid columns it covers
+  Rect box;                   // its border box, the row's full height (page points)
+};
+
 struct Page {
   float width = 0, height = 0;  // points; landscape sections already swapped
   uint32_t section = 0;         // index into Document::Sections()
@@ -143,6 +152,7 @@ struct Page {
   std::vector<DrawingBox> drawings;  // behind-text ones first, then by z
   std::vector<LineBox> lines;        // in reading order per story
   std::vector<RunPaint> paints;      // LineBox::paint indexes this
+  std::vector<CellRect> cells;       // table cells, a nested table's after the cell it's in
   TextPos first;                     // the first body text on the page
 };
 
@@ -220,6 +230,9 @@ class Layout {
   std::vector<std::pair<size_t, Rect>> Ranges(TextPos from, TextPos to, size_t page = SIZE_MAX);
   // The page `pos` is on (the first, for a story repeated on many pages, such as a header).
   std::optional<size_t> PageOf(TextPos pos);
+  // The table cells on a page (Page::cells), laying it out first when it isn't yet: for dragging
+  // column borders and row heights, and selecting rows and columns (D3).
+  std::vector<CellRect> Cells(size_t page);
   // Whether CaretAt and Ranges for `pos` answer without laying out more than a page: its main-text
   // paragraph is on a page laid out since the last edit (other stories always are). What's drawn
   // each frame asks first, so a change of the page (D3) lays out in idle time, not in a paint.

@@ -147,8 +147,11 @@ void TreeEdit::Commit() {
       // Its neighbours too: borders and spacing join paragraphs. (A story's paragraphs can have
       // a text box's between them; the layout passes over those.)
       if (first > 0 && doc_.paras_[first - 1].story == story) --first;
-      if (toEnd_) last = std::max(last, doc_.StoryParagraphs(story).back());
-      else if (last + 1 < doc_.paras_.size() && doc_.paras_[last + 1].story == story) ++last;
+      if (last + 1 < doc_.paras_.size() && doc_.paras_[last + 1].story == story) ++last;
+      if (toEnd_ && doc_.StoryParagraphs(story).back() > last) {
+        step->renumberFrom = last + 1;
+        last = doc_.StoryParagraphs(story).back();
+      }
       step->first = first;
       step->count = last - first + 1;
     }
