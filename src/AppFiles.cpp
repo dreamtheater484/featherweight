@@ -101,7 +101,15 @@ void App::RecoverDocuments(bool open) {
     // Saved with Save As, starting where the document was: the original is never replaced unasked.
     std::wstring name = entry.title;
     if (fw::KindOfPath(name) != fw::FileKind::Document) name += L".docx";
-    const std::wstring suggested = entry.originalPath.empty() ? name : entry.originalPath;
+    std::wstring suggested = entry.originalPath;
+    if (suggested.empty()) {  // never saved: the Documents folder, as for a new document
+      PWSTR docs = nullptr;
+      if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &docs))) {
+        suggested = std::wstring(docs) + L"\\";
+        CoTaskMemFree(docs);
+      }
+      suggested += name;
+    }
     auto view = DocView::FromBytes(*this, std::move(bytes), Tagged(name, L"recovered"), suggested, true);
     view->SetViewport(DocRect(), ui_);
     std::wstring error;

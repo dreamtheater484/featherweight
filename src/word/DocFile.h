@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "pkg/OwnerFile.h"
 #include "pkg/Recovery.h"
@@ -61,6 +62,10 @@ class DocFile {
   // Editing calls this for each change, with the index of the model part it changed. The first
   // change writes our owner file, so Word users see the file is in use.
   void Edited(uint32_t part);
+  // The edit session's state after each change, undo or redo (doc::edit::Editor's Modified() and
+  // DirtyParts()): undoing back to what was opened or saved makes the tab clean again, and our
+  // owner file and autosave go. After a save the editor is told MarkSaved().
+  void Changed(bool modified, const std::vector<uint32_t>& parts);
 
   // Saves to `path` (the file itself, or Save As): refused with a plain message when the file
   // changed on disk or another program has it open, so the window offers Save As instead.

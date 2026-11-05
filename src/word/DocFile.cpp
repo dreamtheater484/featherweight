@@ -95,6 +95,18 @@ void DocFile::Edited(uint32_t part) {
     ownerWritten_ = pkg::WriteOwner(path_, Config().user);
 }
 
+void DocFile::Changed(bool modified, const std::vector<uint32_t>& parts) {
+  changed_.insert(parts.begin(), parts.end());
+  ++generation_;
+  if (modified) {
+    if (!dirty_ && !parts.empty()) Edited(parts.front());
+    return;
+  }
+  if (!dirty_ || origin_ == Origin::Copy) return;  // a recovered document stays unsaved
+  dirty_ = false;  // back where it was opened or saved
+  Clean();
+}
+
 bool DocFile::Save(fw::doc::Document& doc, const std::wstring& path, std::wstring& error) {
   const std::wstring target = util::FullPath(path);
   const std::wstring name = fw::FileNameOf(target);

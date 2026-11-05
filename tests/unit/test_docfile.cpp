@@ -187,6 +187,34 @@ TEST(DocFile_AutosaveGoesWithACleanClose) {
   DocFile::RecoverySession().End();
 }
 
+TEST(DocFile_UndoBackToTheSavedStateIsClean) {
+  Folder f;
+  Configure(f);
+  const std::wstring path = f.path + L"\\letter.docx";
+  CHECK(test::WriteFileBytes(path, fw::doc::docx::BlankDocx()));
+  auto doc = Open(path);
+  CHECK(doc);
+  if (!doc) return;
+  DocFile file;
+  file.Opened(path, doc->Package().GetSnapshot().GetStamp());
+  const uint32_t main = MainPart(*doc);
+  file.Changed(true, {main});  // typing
+  CHECK(file.Dirty());
+  CHECK(fw::pkg::ReadOwner(path) == L"Tester");
+  file.Autosave(*doc);
+  CHECK_EQ(f.Count(L"Recovery", L"*.fwr"), 1u);
+  file.Changed(false, {main});  // undone back to the file as opened
+  CHECK(!file.Dirty());
+  CHECK(fw::pkg::ReadOwner(path).empty());
+  CHECK_EQ(f.Count(L"Recovery", L"*.fwr"), 0u);
+  file.Changed(true, {main});  // redone
+  CHECK(file.Dirty());
+  std::wstring error;
+  CHECK(file.Save(*doc, path, error));
+  CHECK(!file.Dirty());
+  DocFile::RecoverySession().End();
+}
+
 TEST(DocFile_NewAndRecoveredDocumentsSuggestAName) {
   const std::string body =
       "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>"
