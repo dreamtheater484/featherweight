@@ -621,8 +621,10 @@ struct Flow {
       std::vector<uint32_t> newNotes;
       float noteH = pt.notes.empty() ? 0 : NotesFor(pt, line, &newNotes);
       // A line with nothing but a page break goes on this page even when it's full: Word never
-      // starts a page just for the break.
-      const bool breakOnly = line.ending == text::LineEnd::PageBreak && Blank(pt, line);
+      // starts a page just for the break. Nor for the empty end of a section that a page break
+      // ends.
+      const bool breakOnly = (line.ending == text::LineEnd::PageBreak || (br.Done() && EndsWithPageBreak())) &&
+                             Blank(pt, line);
       const float hang = e.Hang(pt, line, h);
       if (space.top + h - hang > Bottom() - noteH + kEpsilon && !breakOnly && !(f.columnEmpty && placed.empty())) {
         br.Restore(state);
@@ -725,6 +727,14 @@ struct Flow {
     f.paraLines += static_cast<uint32_t>(kept);
     if (kept > 0) f.chain.reset();
     return NextColumn() ? Step::Continue : Step::PageFull;
+  }
+
+  // Whether the current item is the last of a section the next one starts on a new page after.
+  bool EndsWithPageBreak() const {
+    if (f.next + 1 >= f.items.size()) return false;
+    const Item& next = f.items[f.next + 1];
+    return next.section != f.items[f.next].section && Props(next.section).start != SectionStart::Continuous &&
+           Props(next.section).start != SectionStart::NextColumn;
   }
 
   // A page break inside a paragraph: the rest of it starts the next page.
