@@ -8,6 +8,8 @@
 #include "Commands.h"
 #include "Util.h"
 #include "doc/edit/Clip.h"
+#include "doc/edit/Lists.h"
+#include "doc/edit/TreeEdit.h"
 #include "ui/Anim.h"
 #include "ui/Controls.h"
 #include "ui/Theme.h"
@@ -291,6 +293,15 @@ bool DocView::EditKey(UINT vk, UINT mods) {
         AutoCorrectTyped(u'\v');
       } else if (HasSelection()) {
         TypeText(u"\r");
+      } else if (const fw::doc::ParaProps& pp = doc_->ResolvedPara(focus_.para);
+                 format_ && doc_->Para(focus_.para).text.empty() && !pp.numId.empty() && pp.numId != "0") {
+        // An empty list item: the list ends there, as in Word (the item becomes plain text).
+        const fw::doc::Pos at = ToDoc(focus_);
+        {
+          fw::doc::edit::TreeEdit te(*editor_, at);
+          fw::doc::edit::RemoveList(te, {at, at});
+        }
+        AfterFormat({});
       } else {
         // At a paragraph's end, the new one takes its style's "style for the following paragraph"
         // (w:next: a heading's is Normal), in the same step.
