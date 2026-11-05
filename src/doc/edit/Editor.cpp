@@ -2966,6 +2966,7 @@ Result Editor::InsertTable(Pos at, uint32_t rows, uint32_t cols) {
   if (rows < 1 || cols < 1 || cols > 63 || rows > 1000) return Fail(u"A table has 1 to 63 columns and 1 to 1,000 rows.");
   ElemId p = doc_.Para(at.para).elem;
   if (s.E(p).flags & kDisplayOnly) return Fail(u"A table can't go here.");
+  if (s.InOneParagraphControl(at.para, at.offset)) return Fail(u"A table can't go in a date, list, plain-text or picture content control.");
   const int32_t width = s.AvailableWidth(at.para);
   s.Begin(at.para, 1);
   // Where it goes: before the paragraph at its start (unless a table is just before it), after it
@@ -3054,6 +3055,7 @@ Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
     ElemId pPr = s.Child(doc_.Para(p).elem, kPPr);
     if (pPr != kNoElem && s.Child(pPr, kSectPr) != kNoElem) return Fail(u"Paragraphs with a section break can't go into a table.");
     if (s.E(doc_.Para(p).elem).flags & kDisplayOnly) return Fail(u"These paragraphs can't go into a table.");
+    if (s.InOneParagraphControl(p, std::nullopt)) return Fail(u"A table can't go in a date, list, plain-text or picture content control.");
   }
   const int32_t width = s.AvailableWidth(first);
   ElemId firstElem = doc_.Para(first).elem, parent = s.E(firstElem).parent;
