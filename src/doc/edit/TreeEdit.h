@@ -183,6 +183,15 @@ class TreeEdit {
   bool Editable(ElemId id, std::unordered_map<ElemId, bool>& memo, std::u16string& why) const;
   // Puts back everything the transaction changed (Abort and a refused Commit).
   void Discard();
+  // Formatting with Track Changes on (D4): before the first change to a run's or a paragraph's
+  // properties (the w:rPr of a w:r, the w:pPr of a w:p and its w:rPr, the mark's), a copy of them
+  // as they were; at Commit, a w:rPrChange or w:pPrChange holding it where they differ now and
+  // there is no record yet (the oldest stays). Not for the author's own new text.
+  void TrackBefore(ElemId at);
+  void RecordFormatting();
+  ElemId DetachedCopy(ElemId src, ElemId parent);
+  bool SameElem(ElemId a, ElemId b) const;
+  bool Attached(ElemId id) const;
   // NewStoryPart's copy: whether a story's content can be copied, and the copy of an element and
   // what it holds (new paragraphs join story `story`).
   bool Copyable(ElemId root, std::u16string& why) const;
@@ -200,6 +209,10 @@ class TreeEdit {
   std::vector<StoreOp> store_;
   std::unordered_map<ElemId, size_t> touched_;  // element -> index into before_
   std::unordered_set<ElemId> owned_;            // containers given children of their own (Own)
+  bool tracking_ = false, recording_ = false;
+  std::string trackAuthor_, trackDate_;
+  std::vector<std::pair<ElemId, ElemId>> tracked_;  // properties and their copy (kNoElem: not tracked)
+  size_t copies_ = 0;  // elements made for those copies, linked nowhere unless a record took them
 };
 
 }  // namespace fw::doc::edit

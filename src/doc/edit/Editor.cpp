@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <ctime>
 #include <functional>
 #include <iterator>
 #include <map>
@@ -27,7 +28,9 @@ constexpr uint32_t kHyperlink = Name("hyperlink"), kIns = Name("ins"), kDel = Na
                    kDir = Name("dir"), kBdo = Name("bdo"), kTab = Name("tab"), kBr = Name("br"), kFldChar = Name("fldChar"),
                    kInstrText = Name("instrText"), kXmlSpace = Name("xml:space"), kParaId = Name("w14:paraId"),
                    kTextId = Name("w14:textId"), kRStyle = Name("rStyle"), kLock = Name("lock"), kSdtPr = Name("sdtPr"),
-                   kPPrChange = Name("pPrChange"), kRPrChange = Name("rPrChange"), kProofErr = Name("proofErr");
+                   kPPrChange = Name("pPrChange"), kRPrChange = Name("rPrChange"), kProofErr = Name("proofErr"),
+                   kAuthor = Name("author"), kDate = Name("date"), kDelText = Name("delText"),
+                   kDelInstrText = Name("delInstrText");
 
 // Run items that stand for something Featherweight can't delete on its own yet: deleting them
 // would leave a note or comment without its anchor.
@@ -1682,6 +1685,524 @@ struct EditorState {
     return false;
   }
 
+  // ---------- Tracked changes (D4) ----------
+  // Who changes are recorded as while Track Changes is on, set by each operation that records them.
+  struct Revisor {
+    bool on = false;
+    std::string author, date;
+  };
+  Revisor track;
+
+  static bool IsChange(uint32_t n) { return n == kIns || n == kDel || n == kMoveFrom || n == kMoveTo; }
+  static bool Removal(uint32_t n) { return n == kDel || n == kMoveFrom; }
+  // The innermost w:ins, w:del, w:moveFrom or w:moveTo around an element, below its paragraph.
+  ElemId ChangeAround(ElemId id) {
+    for (ElemId a = E(id).parent; a != kNoElem && NameOf(a) != kP; a = E(a).parent)
+      if (IsChange(NameOf(a))) return a;
+    return kNoElem;
+  }
+  bool ByMe(ElemId change) { return Attr(change, kAuthor).value_or("") == track.author; }
+  // A new change record's id, author and date.
+  void Stamp(ElemId change) {
+    SetAttr(change, kId, NewAnnotationId());
+    SetAttr(change, kAuthor, track.author);
+    SetAttr(change, kDate, track.date);
+  }
+  // Whether `id` hangs in the tree under `root`. (An element taken out keeps its parent field.)
+  bool Attached(ElemId id, ElemId root) {
+    for (ElemId a = id; a != root; a = E(a).parent) {
+      const ElemId parent = E(a).parent;
+      if (parent == kNoElem) return false;
+      bool found = false;
+      for (ElemId c = E(parent).first; c != kNoElem && !found; c = E(c).next) found = c == a;
+      if (!found) return false;
+    }
+    return true;
+  }
+  // Links a property into `parent` where the schema orders it.
+  void LinkInOrder(ElemId parent, ElemId child) {
+    const auto& order = S().Type(TypeOf(parent)).children;
+    auto rank = [&](ElemId e) {
+      auto it = std::find(order.begin(), order.end(), E(e).def);
+      return it == order.end() ? order.size() : static_cast<size_t>(it - order.begin());
+    };
+    const size_t mine = rank(child);
+    ElemId after = kNoElem;
+    for (ElemId c = E(parent).first; c != kNoElem && rank(c) <= mine; c = E(c).next) after = c;
+    LinkAfter(parent, after, child);
+    StoreFragments(FragmentsAfterLink(d.store_, t, after, child));
+  }
+  void DropProp(ElemId c) {
+    StoreFragments(FragmentsBeforeUnlink(d.store_, t, PrevSibling(c), c, E(c).next));
+    Unlink(c);
+  }
+  // A w:rPr or w:pPr left with nothing in it goes (Word writes none).
+  void DropIfEmpty(ElemId c) {
+    if (c == kNoElem || E(c).first != kNoElem || E(c).attrCount != 0 || HasFragments(c)) return;
+    if (E(c).node && d.store_.NodeAttributes(E(c).node) != 0) return;
+    DropProp(c);
+  }
+  // Puts an inline container's children in its place and takes it out.
+  void UnwrapInline(ElemId c) {
+    const ElemId parent = E(c).parent;
+    ElemId after = c, k = E(c).first;
+    E(c).first = kNoElem;
+    while (k != kNoElem) {
+      const ElemId next = E(k).next;
+      LinkAfter(parent, after, k);
+      after = k;
+      k = next;
+    }
+    RemoveElem(c);
+  }
+  // Text under `root` marked deleted (w:t to w:delText, w:instrText to w:delInstrText) or back.
+  void Retext(ElemId root, bool deleted) {
+    std::vector<ElemId> stack{root};
+    while (!stack.empty()) {
+      const ElemId id = stack.back();
+      stack.pop_back();
+      const uint32_t n = NameOf(id);
+      const uint32_t to = deleted ? (n == kT ? kDelText : n == kInstrText ? kDelInstrText : 0)
+                                  : (n == kDelText ? kT : n == kDelInstrText ? kInstrText : 0);
+      if (to != 0 && E(id).parent != kNoElem) {
+        if (const ElemDefId def = S().Child(TypeOf(E(id).parent), to); def != kNoDef) E(id).def = def;
+        continue;
+      }
+      if (Leaf(id) || PropsElem(id)) continue;
+      for (ElemId c = E(id).first; c != kNoElem; c = E(c).next) stack.push_back(c);
+    }
+  }
+  // The paragraph mark's change `name` (w:pPr/w:rPr/w:ins, w:del...) taken out.
+  void RemoveMarkChange(uint32_t para, uint32_t name) {
+    const ElemId pPr = Child(d.paras_[para].elem, kPPr);
+    if (pPr == kNoElem) return;
+    Unshare(pPr);
+    const ElemId rPr = Child(pPr, kRPr);
+    if (rPr == kNoElem) return;
+    Unshare(rPr);
+    if (const ElemId c = Child(rPr, name); c != kNoElem) DropProp(c);
+    DropIfEmpty(rPr);
+    DropIfEmpty(pPr);
+  }
+  // A property container's change record (w:rPrChange, w:pPrChange, w:sectPrChange...) accepted:
+  // it goes; or rejected: the properties it holds come back in place of the ones it can hold.
+  void DecideFormat(ElemId owner, uint32_t name, bool accept) {
+    Unshare(owner);
+    const ElemId change = Child(owner, name);
+    if (change == kNoElem) return;
+    if (!accept) {
+      const ElemId old = E(change).first;  // the record's one child: the properties as they were
+      if (old != kNoElem) {
+        static const uint32_t kKept[] = {kIns, kDel, kMoveFrom, kMoveTo, Name("cellIns"), Name("cellDel"), Name("cellMerge")};
+        for (ElemId c = E(owner).first; c != kNoElem;) {
+          const ElemId next = E(c).next;
+          const uint32_t n = NameOf(c);
+          const bool keep = c == change || std::find(std::begin(kKept), std::end(kKept), n) != std::end(kKept) ||
+                            S().Child(TypeOf(old), n) == kNoDef;
+          if (!keep) DropProp(c);
+          c = next;
+        }
+        for (ElemId k = E(old).first; k != kNoElem; k = E(k).next) {
+          const ElemDefId def = S().Child(TypeOf(owner), NameOf(k));
+          if (def == kNoDef) continue;
+          const ElemId copy = CopyProps(k, owner);
+          E(copy).def = def;
+          LinkInOrder(owner, copy);
+        }
+      }
+    }
+    if (const ElemId c = Child(owner, name); c != kNoElem) DropProp(c);
+    if (NameOf(owner) == kRPr || NameOf(owner) == kPPr) {
+      const ElemId up = E(owner).parent;
+      DropIfEmpty(owner);
+      if (up != kNoElem && NameOf(up) == kPPr) DropIfEmpty(up);
+    }
+  }
+
+  // One decision on a tracked change: what it is and where.
+  struct Decision {
+    enum Kind : uint8_t { Inline, Mark, Format, Row, Cell } kind = Inline;
+    uint32_t para = kNone;  // its paragraph; a table's, row's or cell's first; the story's last
+    ElemId elem = kNoElem;  // Inline: the w:ins...; Format: the container; Row, Cell: w:trPr, w:tcPr
+    uint32_t name = 0;      // Mark, Format, Row, Cell: the change's name
+    uint32_t start = 0, end = 0;  // the text it covers in `para`
+    bool inPara = true;     // inside a paragraph (else a table's or the body's property)
+  };
+  // Every tracked change in a story, in document order. Shared property sets are looked into
+  // through each container that shares them.
+  std::vector<Decision> Decisions(uint32_t story) {
+    static const uint32_t kFormats[] = {kRPrChange, kPPrChange, Name("sectPrChange"), Name("tblPrChange"),
+                                        Name("tblPrExChange"), Name("trPrChange"), Name("tcPrChange"),
+                                        Name("tblGridChange")};
+    std::vector<Decision> out;
+    std::vector<size_t> waiting;  // before their paragraph (a table's properties)
+    uint32_t para = kNone;
+    ElemId paraElem = kNoElem;
+    std::vector<std::pair<ElemId, ElemId>> stack{{d.stories_[story].root, kNoElem}};  // element, parent
+    std::vector<std::pair<ElemId, ElemId>> kids;
+    while (!stack.empty()) {
+      const auto [id, parent] = stack.back();
+      stack.pop_back();
+      if (E(id).flags & kDisplayOnly) continue;
+      const uint32_t n = NameOf(id);
+      if (n == kP) {
+        para = E(id).start;
+        paraElem = id;
+        for (size_t w : waiting) out[w].para = para;
+        waiting.clear();
+      }
+      const uint32_t pn = parent == kNoElem ? 0 : NameOf(parent);
+      // (A shared set's children name another container as their parent: go by the one passed.)
+      const bool inPara = paraElem != kNoElem && (id == paraElem || parent == paraElem ||
+                                                  (parent != kNoElem && Within(parent, paraElem)));
+      Decision x;
+      bool found = true;
+      if (IsChange(n) && pn == kRPr) {
+        x.kind = Decision::Mark;
+        x.name = n;
+        x.start = x.end = static_cast<uint32_t>(d.paras_[para].text.size());
+      } else if ((n == kIns || n == kDel) && pn == Name("trPr")) {
+        x.kind = Decision::Row;
+        x.name = n;
+        x.elem = parent;
+      } else if (n == Name("cellIns") || n == Name("cellDel") || n == Name("cellMerge")) {
+        x.kind = Decision::Cell;
+        x.name = n;
+        x.elem = parent;
+      } else if (IsChange(n) && RoleOf(id) != Role::Text && pn != Name("numPr") && inPara) {
+        x.kind = Decision::Inline;
+        x.elem = id;
+        x.start = E(id).start;
+        x.end = E(id).start + E(id).length;
+      } else if (std::find(std::begin(kFormats), std::end(kFormats), n) != std::end(kFormats)) {
+        x.kind = Decision::Format;
+        x.name = n;
+        x.elem = parent;
+        if (pn == kRPr && parent != kNoElem && E(parent).parent != kNoElem && NameOf(E(parent).parent) == kR) {
+          const ElemId run = E(parent).parent;
+          x.start = E(run).start;
+          x.end = E(run).start + E(run).length;
+        } else if (inPara) {
+          x.end = static_cast<uint32_t>(d.paras_[para].text.size());
+        }
+      } else {
+        found = false;
+      }
+      if (found) {
+        x.inPara = x.kind != Decision::Row && x.kind != Decision::Cell && (x.kind != Decision::Format || inPara);
+        x.para = x.inPara ? para : kNone;
+        if (!x.inPara) waiting.push_back(out.size());
+        out.push_back(x);
+        if (x.kind != Decision::Inline) continue;  // a record holds no more changes
+      }
+      if (Leaf(id)) continue;
+      kids.clear();
+      for (ElemId c = E(id).first; c != kNoElem; c = E(c).next) kids.emplace_back(c, id);
+      stack.insert(stack.end(), kids.rbegin(), kids.rend());
+    }
+    for (size_t w : waiting) out[w].para = para;  // after the last paragraph: the body's w:sectPr
+    std::erase_if(out, [](const Decision& x) { return x.para == kNone; });
+    return out;
+  }
+
+  // Accepts or rejects `items` (one story's, in document order) in the open transaction, the last
+  // first so that the places of the others hold. Rows a decision deletes go into `rows`.
+  bool Decide(const std::vector<Decision>& items, bool accept, std::vector<ElemId>& rows, std::u16string& why) {
+    for (auto it = items.rbegin(); it != items.rend(); ++it) {
+      const Decision& x = *it;
+      switch (x.kind) {
+        case Decision::Inline: {
+          const ElemId c = x.elem, p = d.paras_[x.para].elem;
+          if (!Attached(c, p)) break;  // it went with one around it
+          const bool removal = Removal(NameOf(c));
+          if (accept != removal) {
+            if (removal) Retext(c, false);
+            UnwrapInline(c);
+          } else {
+            const uint32_t s = E(c).start, e = s + E(c).length;
+            if (CutsField(Pos{x.para, s}, Pos{x.para, e})) {
+              why = u"This change holds part of a field. Accept or reject the whole field.";
+              return false;
+            }
+            if (!DeleteIn(x.para, s, e, why)) return false;
+            if (Attached(c, p)) UnwrapInline(c);  // what's left: bookmarks and comment ranges
+          }
+          Reflow(x.para);
+          break;
+        }
+        case Decision::Mark: {
+          const bool removal = Removal(x.name);
+          if (accept != removal || SiblingAfter(x.para) == kNone) {
+            RemoveMarkChange(x.para, x.name);
+            break;
+          }
+          // The mark goes: the paragraph joins the next. An empty one goes with its properties.
+          const bool empty = d.paras_[x.para].text.empty();
+          if (!Join(x.para, why)) return false;
+          if (!empty) RemoveMarkChange(x.para, x.name);
+          break;
+        }
+        case Decision::Format:
+          DecideFormat(x.elem, x.name, accept);
+          break;
+        case Decision::Row: {
+          const bool removal = Removal(x.name);
+          if (accept != removal) {
+            Unshare(x.elem);
+            if (const ElemId c = Child(x.elem, x.name); c != kNoElem) DropProp(c);
+          } else {
+            rows.push_back(E(x.elem).parent);
+          }
+          break;
+        }
+        case Decision::Cell:
+          if ((x.name == Name("cellIns") && accept) || (x.name == Name("cellDel") && !accept)) {
+            Unshare(x.elem);
+            if (const ElemId c = Child(x.elem, x.name); c != kNoElem) DropProp(c);
+            break;
+          }
+          why = u"Featherweight can't accept or reject inserted, deleted or merged cells yet.";
+          return false;
+      }
+    }
+    return true;
+  }
+
+
+  // ---- Recording (Track Changes on)
+  // Inside an insertion the current author made: their own new text, which isn't tracked again.
+  bool OwnInsertion(ElemId id) {
+    const ElemId c = ChangeAround(id);
+    return c != kNoElem && NameOf(c) == kIns && ByMe(c);
+  }
+  // The runs with text in [a, b) of a paragraph, in document order.
+  std::vector<ElemId> RunsIn(uint32_t para, uint32_t a, uint32_t b) {
+    std::vector<ElemId> out, stack{d.paras_[para].elem};
+    while (!stack.empty()) {
+      const ElemId id = stack.back();
+      stack.pop_back();
+      if (E(id).flags & kDisplayOnly) continue;
+      if (NameOf(id) == kR) {
+        const uint32_t s = E(id).start, l = E(id).length;
+        if (l > 0 && s >= a && s + l <= b) out.push_back(id);
+        continue;
+      }
+      if ((id != d.paras_[para].elem && PropsElem(id)) || Leaf(id)) continue;
+      const size_t mark = stack.size();
+      for (ElemId c = E(id).first; c != kNoElem; c = E(c).next) stack.push_back(c);
+      std::reverse(stack.begin() + static_cast<std::ptrdiff_t>(mark), stack.end());
+    }
+    return out;
+  }
+  // Puts `run` into a new change record `name` where it is, or into `last` when the run follows
+  // it directly. Returns the record it went into.
+  ElemId WrapRun(ElemId run, uint32_t name, ElemId last, std::u16string& why) {
+    if (last != kNoElem && E(last).next == run) {
+      Unlink(run);
+      Append(last, run);
+      return last;
+    }
+    const ElemId parent = E(run).parent;
+    const ElemId c = NewElem(parent, name);
+    if (c == kNoElem) {
+      why = u"Changes can't be tracked here.";
+      return kNoElem;
+    }
+    Stamp(c);
+    LinkAfter(parent, PrevSibling(run), c);
+    Unlink(run);
+    Append(c, run);
+    return c;
+  }
+  // The paragraph mark recorded as inserted or deleted (w:pPr/w:rPr/w:ins or w:del). A new mark
+  // has none of the records the one it was copied from had.
+  bool TrackMark(uint32_t para, uint32_t name, std::u16string& why) {
+    const ElemId p = d.paras_[para].elem;
+    ElemId pPr = Child(p, kPPr);
+    if (pPr == kNoElem) pPr = AddInOrder(p, kPPr);
+    ElemId rPr = kNoElem;
+    if (pPr != kNoElem) {
+      Unshare(pPr);
+      rPr = Child(pPr, kRPr);
+      if (rPr == kNoElem) rPr = AddInOrder(pPr, kRPr);
+    }
+    if (rPr == kNoElem) {
+      why = u"Changes can't be tracked here.";
+      return false;
+    }
+    Unshare(rPr);
+    if (name == kIns)
+      for (uint32_t old : {kIns, kDel, kMoveFrom, kMoveTo})
+        if (const ElemId c = Child(rPr, old); c != kNoElem) DropProp(c);
+    const ElemId m = AddInOrder(rPr, name);
+    if (m == kNoElem) {
+      why = u"Changes can't be tracked here.";
+      return false;
+    }
+    Stamp(m);
+    return true;
+  }
+  // Text just inserted in [a, b) of a paragraph recorded as the author's insertion (w:ins): it
+  // joins their insertion around or before it; someone else's insertion is cut around it.
+  bool InsertedRuns(uint32_t para, uint32_t a, uint32_t b, std::u16string& why) {
+    if (a >= b) return true;
+    // Runs cut where the new text ends, except in the author's insertion, which it joined.
+    for (const uint32_t o : {a, b})
+      for (const ElemId id : AllElems(para)) {
+        if (NameOf(id) != kR || (E(id).flags & kDisplayOnly) || OwnInsertion(id)) continue;
+        if (!(E(id).start < o && o < E(id).start + E(id).length)) continue;
+        if (!Cut(id, o, why)) return false;
+        Reflow(para);
+      }
+    ElemId last = kNoElem;
+    for (const ElemId r : RunsIn(para, a, b)) {
+      ElemId c = ChangeAround(r);
+      if (c != kNoElem && (ByMe(c) && NameOf(c) == kIns)) {
+        last = kNoElem;
+        continue;
+      }
+      if (c != kNoElem && !Removal(NameOf(c))) {
+        // Someone else's insertion (or a move): the part with this run becomes ours.
+        const uint32_t rs = E(r).start, re = rs + E(r).length;
+        if (E(c).start < rs) {
+          if (!Cut(c, rs, why)) return false;
+          Reflow(para);
+          c = ChangeAround(r);
+        }
+        if (re < E(c).start + E(c).length) {
+          if (!Cut(c, re, why)) return false;
+          Reflow(para);
+          c = ChangeAround(r);
+        }
+        if (const ElemDefId def = S().Child(TypeOf(E(c).parent), kIns); def != kNoDef) E(c).def = def;
+        Stamp(c);
+        last = kNoElem;
+        continue;
+      }
+      if (c != kNoElem) continue;  // deleted text isn't typed into
+      if ((last = WrapRun(r, kIns, last, why)) == kNoElem) return false;
+    }
+    Reflow(para);
+    return true;
+  }
+  // [a, b) inserted: its text, and the marks of all its paragraphs but the last.
+  bool TrackInserted(Pos a, Pos b, std::u16string& why) {
+    for (uint32_t p = a.para; p <= b.para; ++p) {
+      const uint32_t s = p == a.para ? a.offset : 0, e = p == b.para ? b.offset : static_cast<uint32_t>(d.paras_[p].text.size());
+      if (!InsertedRuns(p, s, e, why)) return false;
+      if (p < b.para && !TrackMark(p, kIns, why)) return false;
+    }
+    return true;
+  }
+  // Text in [a, b) of a paragraph recorded as deleted (w:del, its w:t as w:delText). The author's
+  // own insertions really go, the last first; text already deleted stays as it is.
+  bool DeletedRuns(uint32_t para, uint32_t a, uint32_t b, std::u16string& why) {
+    if (a >= b) return true;
+    for (const LeafAt& l : Leaves(para)) {
+      if (l.length == 0 || l.start + l.length <= a || l.start >= b) continue;
+      if (E(l.id).flags & kDisplayOnly) {
+        why = u"Deleting this drawing isn't possible yet.";
+        return false;
+      }
+      if (LockedSdt(l.id) != kNoElem) {
+        why = u"The text of this content control is locked.";
+        return false;
+      }
+      if (Undeletable(NameOf(l.id))) {
+        const uint32_t n = NameOf(l.id);
+        why = n == Name("commentReference") || n == Name("annotationRef")
+                  ? u"Deleting a comment's mark isn't possible. Delete the comment in the Comments pane."
+                  : u"Deleting a footnote or endnote isn't possible yet. Leave its number in place.";
+        return false;
+      }
+    }
+    if (!CutRunsAt(para, a, why) || !CutRunsAt(para, b, why)) return false;
+    std::vector<ElemId> own, others;
+    for (const ElemId r : RunsIn(para, a, b)) {
+      const ElemId c = ChangeAround(r);
+      if (c != kNoElem && Removal(NameOf(c))) continue;
+      (c != kNoElem && NameOf(c) == kIns && ByMe(c) ? own : others).push_back(r);
+    }
+    ElemId last = kNoElem;
+    for (const ElemId r : others) {
+      Retext(r, true);
+      if ((last = WrapRun(r, kDel, last, why)) == kNoElem) return false;
+    }
+    Reflow(para);
+    for (auto it = own.rbegin(); it != own.rend(); ++it) {
+      const uint32_t s = E(*it).start;
+      if (!DeleteIn(para, s, s + E(*it).length, why)) return false;
+    }
+    return true;
+  }
+  // A paragraph mark deleted: recorded (w:del), unless the author inserted it: then it really
+  // goes and the paragraph joins the next, which keeps that one's mark. `joined` says which.
+  bool DeleteMark(uint32_t para, bool& joined, std::u16string& why) {
+    joined = false;
+    const Node rPr = Node(&t, d.paras_[para].elem).Child(kPPr).Child(kRPr);
+    const Node ins = rPr.Child(kIns);
+    if (rPr.Child(kDel) || rPr.Child(kMoveFrom)) return true;  // deleted already
+    if (!ins || !ByMe(ins.Id())) return TrackMark(para, kDel, why);
+    const uint32_t q = SiblingAfter(para);
+    if (q == kNone) return TrackMark(para, kDel, why);
+    // The joined paragraph keeps this one's properties: with the next one's records in place of its own.
+    if (!d.paras_[para].text.empty()) {
+      const ElemId pPr = Child(d.paras_[para].elem, kPPr);
+      Unshare(pPr);
+      const ElemId mine = Child(pPr, kRPr);
+      Unshare(mine);
+      for (uint32_t old : {kIns, kDel, kMoveFrom, kMoveTo})
+        if (const ElemId c = Child(mine, old); c != kNoElem) DropProp(c);
+      const Node theirs = Node(&t, d.paras_[q].elem).Child(kPPr).Child(kRPr);
+      for (uint32_t keep : {kIns, kDel, kMoveFrom, kMoveTo})
+        if (const Node c = theirs.Child(keep)) {
+          const ElemId copy = CopyProps(c.Id(), mine);
+          LinkInOrder(mine, copy);
+        }
+      DropIfEmpty(mine);
+      DropIfEmpty(pPr);
+    }
+    if (!Join(para, why)) return false;
+    joined = true;
+    return true;
+  }
+  // Before formatting changes them: the properties as they are, kept in a change record
+  // (w:rPrChange, w:pPrChange) unless there is one already, which holds the oldest. Not for the
+  // author's own new text.
+  bool TrackProps(ElemId owner, uint32_t propsName, std::u16string& why) {
+    if (NameOf(owner) == kR ? OwnInsertion(owner) : false) return true;
+    if (NameOf(owner) == kP || (NameOf(owner) == kPPr && E(owner).parent != kNoElem)) {
+      const ElemId p = NameOf(owner) == kP ? owner : E(owner).parent;
+      const Node ins = Node(&t, p).Child(kPPr).Child(kRPr).Child(kIns);
+      if (ins && ByMe(ins.Id())) return true;  // a paragraph the author made
+    }
+    ElemId props = Child(owner, propsName);
+    if (props == kNoElem) props = AddInOrder(owner, propsName);
+    if (props == kNoElem) {
+      why = u"These properties can't be set here.";
+      return false;
+    }
+    Unshare(props);
+    const uint32_t changeName = propsName == kPPr ? kPPrChange : kRPrChange;
+    if (Child(props, changeName) != kNoElem) return true;
+    const ElemId change = NewElem(props, changeName);
+    const ElemId inner = change == kNoElem ? kNoElem : NewElem(change, propsName);
+    if (inner == kNoElem) {
+      why = u"Changes can't be tracked here.";
+      return false;
+    }
+    Stamp(change);
+    Append(change, inner);
+    for (ElemId c = E(props).first; c != kNoElem; c = E(c).next) {
+      const ElemDefId def = S().Child(TypeOf(inner), NameOf(c));
+      if (def == kNoDef) continue;  // a paragraph's w:rPr and w:sectPr, a mark's w:ins and w:del
+      const ElemId k = CopyProps(c, inner, {}, false);
+      E(k).def = def;
+      Append(inner, k);
+    }
+    LinkInOrder(props, change);
+    return true;
+  }
   // ---------- Tables (D3) ----------
   // A table on its grid, read from the tree for each change. Columns are grid columns.
   struct GridCell {
@@ -2332,6 +2853,9 @@ bool XmlSafe(std::string_view s) {
 }
 
 namespace {
+constexpr const char16_t* kUntrackedTable =
+    u"Featherweight can't track changes to a table's rows and columns yet. Turn off Track Changes to make this change.";
+
 Result Fail(std::u16string why) {
   Result r;
   r.ok = false;
@@ -2368,6 +2892,7 @@ Result Editor::InsertText(Pos at, std::u16string_view text) {
     r.caret = at;
     return r;
   }
+  Arm();
   s.Begin(at.para, 1);
   Pos pos = at;
   for (size_t i = 0; i < lines.size(); ++i) {
@@ -2378,6 +2903,7 @@ Result Editor::InsertText(Pos at, std::u16string_view text) {
     if (!s.InsertPlain(pos.para, pos.offset, lines[i], why)) return s.Abort(why);
     pos.offset += static_cast<uint32_t>(lines[i].size());
   }
+  if (s.track.on && !s.TrackInserted(at, pos, why)) return s.Abort(why);
   bool typing = lines.size() == 1;
   s.Commit(false, at, pos, typing ? Kind::Typing : Kind::Other, typing ? u"Typing" : u"Insert");
   s.Notify(listeners_);
@@ -2392,9 +2918,11 @@ Result Editor::InsertDrawing(Pos at, std::string xml, const Drawing& info) {
   if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
   if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
   if (!XmlSafe(xml)) return Fail(u"This picture can't be added.");
+  Arm();
   s.Begin(at.para, 1);
   ElemId item = s.InsertObject(at.para, at.offset, Name("drawing"), std::move(xml), why);
   if (item == kNoElem) return s.Abort(why);
+  if (s.track.on && !s.TrackInserted(at, Pos{at.para, at.offset + 1}, why)) return s.Abort(why);
   s.AddDrawing(info, item, at.para);  // before Commit, which finds where it is
   Pos after{at.para, at.offset + 1};
   s.Commit(false, at, after, Kind::Other, u"Insert picture");
@@ -2417,6 +2945,8 @@ Result Editor::Delete(Pos from, Pos to) {
     return r;
   }
   if (s.CutsField(from, to)) return Fail(u"Select the whole field to delete it.");
+  Arm();
+  if (s.track.on) return DeleteTracked(from, to);
   // Whole tables between the ends go first, as Delete table takes them; then the text around them.
   if (to.para != from.para) {
     std::vector<uint32_t> tables;  // a paragraph of each table's own first cell
@@ -2489,8 +3019,58 @@ Result Editor::Delete(Pos from, Pos to) {
   s.Notify(listeners_);
   AddReferences(kept, from);
   Result r;
-  r.caret = from;
+  r.caret = r.end = from;
   return r;
+}
+
+Result Editor::DeleteTracked(Pos from, Pos to) {
+  EditorState& s = *impl_;
+  std::u16string why;
+  std::vector<uint32_t> chain{from.para};
+  while (chain.back() != to.para) {
+    const uint32_t next = s.SiblingAfter(chain.back());
+    if (next == kNone || next > to.para)
+      return Fail(u"Deleting across a table or a content control while tracking changes isn't possible yet. "
+                  u"Delete its parts separately.");
+    chain.push_back(next);
+  }
+  // Where the deleted text ends afterwards: as far from the paragraph's end, the paragraphs after
+  // it as far from the document's.
+  const uint32_t tail = ParaLength(to.para) - to.offset;
+  const size_t after = doc_.Paragraphs().size() - to.para;
+  // One character still shown (the deleted ones are passed over) continues Backspace and Delete.
+  uint32_t live = 0;
+  if (from.para == to.para)
+    for (const TextRun& t : doc_.Runs(from.para))
+      if (!(t.revision && (t.revision.Is(kDel) || t.revision.Is(kMoveFrom))))
+        live += std::min(t.end, to.offset) > std::max(t.start, from.offset) ? std::min(t.end, to.offset) - std::max(t.start, from.offset) : 0;
+  const bool single = from.para == to.para && live <= 1;
+  s.Begin(from.para, to.para - from.para + 1);
+  for (size_t i = chain.size(); i-- > 0;) {
+    const uint32_t p = chain[i];
+    const uint32_t a = i == 0 ? from.offset : 0, b = i + 1 == chain.size() ? to.offset : ParaLength(p);
+    if (!s.DeletedRuns(p, a, b, why)) return s.Abort(why);
+  }
+  for (size_t i = chain.size() - 1; i-- > 0;) {
+    bool joined = false;
+    if (!s.DeleteMark(chain[i], joined, why)) return s.Abort(why);
+  }
+  Pos end{static_cast<uint32_t>(doc_.Paragraphs().size() - after), 0};
+  end.offset = ParaLength(end.para) - tail;
+  s.Commit(false, to, from, single ? Kind::Deleting : Kind::Other, u"Delete");
+  s.Notify(listeners_);
+  Result r;
+  r.caret = from;
+  r.end = end;
+  return r;
+}
+
+void Editor::Arm() {
+  EditorState::Revisor& t = impl_->track;
+  t.on = !reviewing_ && Tracking();
+  if (!t.on) return;
+  t.author = ChangeAuthor();
+  t.date = ChangeDate();
 }
 
 void Editor::AddReferences(const KeptRefs& kept, Pos at) {
@@ -2507,7 +3087,7 @@ Result Editor::Replace(Pos from, Pos to, std::u16string_view text) {
   if (Compare(to, from) < 0) std::swap(from, to);
   BeginGroup(u"Typing");
   Result r = Delete(from, to);
-  if (r) r = InsertText(r.caret, text);
+  if (r) r = InsertText(r.end.para != kNone ? r.end : r.caret, text);
   if (r) EndGroup();
   else CancelGroup();  // the delete went through but the insert didn't: it goes again
   return r;
@@ -2518,8 +3098,10 @@ Result Editor::SplitParagraph(Pos at) {
   std::u16string why;
   if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
   if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
+  Arm();
   s.Begin(at.para, 1);
   if (!s.Split(at.para, at.offset, why)) return s.Abort(why);
+  if (s.track.on && !s.TrackMark(at.para, kIns, why)) return s.Abort(why);
   Pos caret{at.para + 1, 0};
   s.Commit(false, at, caret, Kind::Other, u"New paragraph");
   s.Notify(listeners_);
@@ -2534,6 +3116,7 @@ Result Editor::JoinParagraphs(uint32_t para) {
   if (!CanEdit(&why) || !s.Editable(para, why)) return Fail(why);
   uint32_t q = s.SiblingAfter(para);
   if (q == kNone) return Fail(u"Paragraphs in different places (a table cell and the text around it) can't be joined.");
+  if (Tracking() && !reviewing_) return Delete(Pos{para, ParaLength(para)}, Pos{q, 0});
   Pos caret{para, ParaLength(para)};
   const KeptRefs kept = KeptReferences(doc_, {para});
   if (kept.sectPr != kNoElem) BeginGroup(u"Delete");
@@ -2561,6 +3144,7 @@ Result Editor::SetRunProps(Pos from, Pos to, const PropEdit& edit) {
   r.caret = to;
   if (from == to) return r;
   uint32_t story = doc_.Para(from.para).story;
+  Arm();
   s.Begin(from.para, to.para - from.para + 1);
   for (uint32_t p = from.para; p <= to.para; ++p) {
     if (doc_.Para(p).story != story || (s.E(doc_.Para(p).elem).flags & kDisplayOnly)) continue;
@@ -2571,6 +3155,7 @@ Result Editor::SetRunProps(Pos from, Pos to, const PropEdit& edit) {
       if (s.NameOf(id) != kR || (s.E(id).flags & kDisplayOnly)) continue;
       uint32_t rs = s.E(id).start, rl = s.E(id).length;
       if (rl == 0 || rs < a || rs + rl > b) continue;
+      if (s.track.on && !s.TrackProps(id, kRPr, why)) return s.Abort(why);
       if (!s.ApplyProps(id, kRPr, edit, why)) return s.Abort(why);
     }
     s.Reflow(p);
@@ -2590,10 +3175,15 @@ Result Editor::SetLink(Pos from, Pos to, std::string_view target) {
   if (!XmlSafe(target)) return Fail(u"A link's address can't hold control characters.");
   const uint32_t para = from.para;
   const ElemId p = doc_.Para(para).elem;
+  Arm();
+  auto ownNew = [&](const TextRun& t) {
+    return s.track.on && t.revision && t.revision.Is(kIns) && t.revision.AttrOr(kAuthor) == s.track.author &&
+           t.revision.Parent().Id() == p && t.run.Parent() == t.revision;
+  };
   for (const TextRun& t : doc_.Runs(para))
     if (t.end > from.offset && t.start < to.offset &&
-        (!t.run || t.hyperlink || t.simpleField || t.contentControl || t.revision || t.fieldDepth > 0 || t.displayOnly ||
-         t.run.Parent().Id() != p))
+        (!t.run || t.hyperlink || t.simpleField || t.contentControl || (t.revision && !ownNew(t)) || t.fieldDepth > 0 ||
+         t.displayOnly || (t.run.Parent().Id() != p && !ownNew(t))))
       return Fail(u"This text can't be made a link.");
   // A web address is a relationship of the part.
   std::string rid;
@@ -2616,6 +3206,14 @@ Result Editor::SetLink(Pos from, Pos to, std::string_view target) {
   }
   s.Begin(para, 1);
   if (!s.CutRunsAt(para, from.offset, why) || !s.CutRunsAt(para, to.offset, why)) return s.Abort(why);
+  // The author's insertions go round the link's text, not across its ends.
+  for (const uint32_t o : {from.offset, to.offset})
+    for (ElemId c = s.E(p).first; c != kNoElem; c = s.E(c).next)
+      if (s.NameOf(c) == kIns && s.E(c).start < o && o < s.E(c).start + s.E(c).length) {
+        if (!s.Cut(c, o, why)) return s.Abort(why);
+        s.Reflow(para);
+        break;
+      }
   // The runs (and range markers among them) in [from, to) go into a new w:hyperlink.
   std::vector<ElemId> inside;
   for (ElemId c = s.E(p).first; c != kNoElem; c = s.E(c).next) {
@@ -2647,12 +3245,14 @@ Result Editor::SetMarkProps(uint32_t first, uint32_t last, const PropEdit& edit)
   std::u16string why;
   if (!CanEdit(&why) || !s.Editable(first, why)) return Fail(why);
   uint32_t story = doc_.Para(first).story;
+  Arm();
   s.Begin(first, last - first + 1);
   for (uint32_t p = first; p <= last; ++p) {
     if (doc_.Para(p).story != story || (s.E(doc_.Para(p).elem).flags & kDisplayOnly)) continue;
     ElemId pPr = s.Child(doc_.Para(p).elem, kPPr);
     if (pPr == kNoElem) pPr = s.AddInOrder(doc_.Para(p).elem, kPPr);
     s.Unshare(pPr);
+    if (s.track.on && !s.TrackProps(pPr, kRPr, why)) return s.Abort(why);
     if (!s.ApplyProps(pPr, kRPr, edit, why)) return s.Abort(why);
     s.Reflow(p);
   }
@@ -2670,9 +3270,11 @@ Result Editor::SetParaProps(uint32_t first, uint32_t last, const PropEdit& edit)
   std::u16string why;
   if (!CanEdit(&why) || !s.Editable(first, why)) return Fail(why);
   uint32_t story = doc_.Para(first).story;
+  Arm();
   s.Begin(first, last - first + 1);
   for (uint32_t p = first; p <= last; ++p) {
     if (doc_.Para(p).story != story || (s.E(doc_.Para(p).elem).flags & kDisplayOnly)) continue;
+    if (s.track.on && !s.TrackProps(doc_.Para(p).elem, kPPr, why)) return s.Abort(why);
     if (!s.ApplyProps(doc_.Para(p).elem, kPPr, edit, why)) return s.Abort(why);
     s.Reflow(p);
   }
@@ -2767,6 +3369,153 @@ std::vector<uint32_t> Editor::DirtyParts() const {
   return out;
 }
 
+
+// ---------- Tracked changes (D4) ----------
+
+bool Editor::Tracking() const {
+  const Part* settings = doc_.FindPart(PartKind::Settings);
+  if (!settings) return false;
+  const Node on = doc_.RootOf(*settings).Child(Name("trackRevisions"));
+  return on && on.On();
+}
+
+Result Editor::SetTracking(bool on) {
+  Result r;
+  if (Tracking() == on) return r;
+  std::u16string why;
+  if (!CanEdit(&why)) return Fail(why);
+  TreeEdit te(*this);
+  const ElemId root = te.EnsurePart(PartKind::Settings);
+  if (root == kNoElem) return Fail(u"Track Changes can't be turned on in this document.");
+  te.Begin(on ? u"Track Changes on" : u"Track Changes off");
+  if (on) te.Child(root, Name("trackRevisions"));
+  else te.Remove(root, Name("trackRevisions"));
+  te.Commit();
+  if (!te.Refused().empty()) return Fail(te.Refused());
+  return r;
+}
+
+std::string Editor::ChangeDate() const {
+  if (!fixedDate_.empty()) return fixedDate_;
+  // Word writes the local time with a Z, and the time in UTC in commentsExtensible.
+  const std::time_t now = std::time(nullptr);
+  std::tm local{};
+  localtime_s(&local, &now);
+  char buf[32];
+  std::snprintf(buf, sizeof buf, "%04d-%02d-%02dT%02d:%02d:%02dZ", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday,
+                local.tm_hour, local.tm_min, local.tm_sec);
+  return buf;
+}
+
+std::string Editor::NewChangeId() { return impl_->NewAnnotationId(); }
+std::string Editor::NewParaId() { return impl_->NewParaId(); }
+
+Result Editor::Review(uint32_t story, const ChangePicker& pick, bool accept, std::u16string name, Pos caret) {
+  EditorState& s = *impl_;
+  std::vector<EditorState::Decision> items;
+  for (const EditorState::Decision& x : s.Decisions(story))
+    if (pick(Pos{x.para, x.start}, Pos{x.para, x.end}, x.inPara)) items.push_back(x);
+  Result r;
+  r.caret = caret;
+  if (items.empty()) return r;
+  uint32_t lo = kNone, hi = 0;
+  std::vector<ElemId> roots;
+  for (const EditorState::Decision& x : items) {
+    lo = std::min(lo, x.para);
+    hi = std::max(hi, x.para);
+    if (!x.inPara) roots.push_back(x.elem);
+  }
+  // A paragraph mark that goes joins the paragraph after it.
+  if (hi + 1 < doc_.Paragraphs().size() && doc_.Para(hi + 1).story == story) ++hi;
+  std::u16string why;
+  if (!s.Editable(lo, why)) return Fail(why);
+  if (name.empty()) name = accept ? (items.size() == 1 ? u"Accept change" : u"Accept changes")
+                                  : (items.size() == 1 ? u"Reject change" : u"Reject changes");
+  BeginGroup(name);
+  s.Begin(lo, hi - lo + 1, roots);
+  std::vector<ElemId> rows;
+  if (!s.Decide(items, accept, rows, why)) {
+    Result failed = s.Abort(why);
+    CancelGroup();
+    return failed;
+  }
+  Pos after = caret;
+  if (after.para >= doc_.Paragraphs().size() || doc_.Para(after.para).story != story) after = Pos{lo, 0};
+  after.offset = std::min(after.offset, ParaLength(after.para));
+  s.Commit(true, caret, after, Kind::Other, name);
+  s.Notify(listeners_);
+  // Rows that go: inserted rows rejected, deleted ones accepted (the last first).
+  for (const ElemId tr : rows) {
+    ElemId tc = kNoElem;
+    for (ElemId c = s.E(tr).first; c != kNoElem && tc == kNoElem; c = s.E(c).next)
+      if (s.NameOf(c) == kTc) tc = c;
+    const ElemId p = tc == kNoElem ? kNoElem : s.FirstPara(tc);
+    if (p == kNoElem) continue;
+    const Pos at{s.E(p).start, 0};
+    const auto block = CellAt(at);
+    reviewing_ = true;
+    Result gone = block && block->tableRows <= 1 ? DeleteTable(at) : DeleteRows(at, at);
+    reviewing_ = false;
+    if (!gone) {
+      CancelGroup();
+      return gone;
+    }
+    after = gone.caret;
+  }
+  EndGroup();
+  r.caret = after;
+  return r;
+}
+
+Result Editor::ReviewChanges(Pos from, Pos to, bool accept) {
+  if (Compare(to, from) < 0) std::swap(from, to);
+  std::u16string why;
+  if (!CanEdit(&why)) return Fail(why);
+  if (from.para >= doc_.Paragraphs().size()) return Fail(u"That place isn't in the document.");
+  const uint32_t story = doc_.Para(from.para).story;
+  if (to.para >= doc_.Paragraphs().size() || doc_.Para(to.para).story != story) to = from;
+  bool any = false;
+  const ChangePicker pick = [&](Pos a, Pos b, bool inPara) {
+    bool in;
+    if (from == to) in = inPara && a.para == from.para && a.offset <= from.offset && from.offset <= b.offset;
+    else if (a == b) in = Compare(from, a) <= 0 && Compare(a, to) < 0;
+    else in = Compare(a, to) < 0 && Compare(from, b) < 0;
+    any = any || in;
+    return in;
+  };
+  Result r = Review(story, pick, accept, {}, from);
+  if (r && !any) return Fail(u"There's no tracked change here.");
+  return r;
+}
+
+Result Editor::ReviewAll(bool accept) {
+  std::u16string why;
+  if (!CanEdit(&why)) return Fail(why);
+  const std::u16string name = accept ? u"Accept all changes" : u"Reject all changes";
+  BeginGroup(name);
+  Pos caret;
+  bool skipped = false;
+  const auto everything = [](Pos, Pos, bool) { return true; };
+  for (uint32_t story = 0; story < doc_.Stories().size(); ++story) {
+    const auto paras = doc_.StoryParagraphs(story);
+    if (paras.empty() || impl_->Decisions(story).empty()) continue;
+    if (!impl_->Editable(paras.front(), why)) {
+      skipped = true;  // a text box: shown, not edited yet
+      continue;
+    }
+    Result r = Review(story, everything, accept, name, Pos{paras.front(), 0});
+    if (!r) {
+      CancelGroup();
+      return r;
+    }
+    if (caret.para == kNone && story == doc_.MainStory()) caret = r.caret;
+  }
+  EndGroup();
+  Result r;
+  r.caret = caret;
+  if (skipped) r.message = u"Changes in text boxes stay as they are: Featherweight doesn't edit text boxes yet.";
+  return r;
+}
 
 // ---------- Tables (D3) ----------
 
@@ -2978,6 +3727,7 @@ std::vector<Editor::CellInfo> Editor::TableCells(Pos at) const {
 // ---- New tables
 
 Result Editor::InsertTable(Pos at, uint32_t rows, uint32_t cols) {
+  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
   EditorState& s = *impl_;
   std::u16string why;
   if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
@@ -3059,6 +3809,7 @@ Result Editor::InsertTable(Pos at, uint32_t rows, uint32_t cols) {
 }
 
 Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
+  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
   EditorState& s = *impl_;
   std::u16string why;
   if (last < first) std::swap(first, last);
@@ -3171,6 +3922,7 @@ Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
 }
 
 Result Editor::TableToText(Pos at, char16_t separator) {
+  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
   EditorState& s = *impl_;
   std::u16string why;
   if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
@@ -3256,6 +4008,7 @@ Result Editor::TableToText(Pos at, char16_t separator) {
 }
 
 Result Editor::DeleteTable(Pos at) {
+  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
   EditorState& s = *impl_;
   std::u16string why;
   if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
@@ -3295,6 +4048,7 @@ Result Editor::DeleteTable(Pos at) {
 // ---- Rows and columns
 
 Result Editor::InsertRows(Pos from, Pos to, bool below) {
+  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
   return EditTable(from, to, below ? u"Insert rows below" : u"Insert rows above", [&](TableOp& o) {
     EditorState& s = o.s;
     const Grid& g = o.g;
@@ -3354,6 +4108,7 @@ Result Editor::InsertRows(Pos from, Pos to, bool below) {
 }
 
 Result Editor::InsertColumns(Pos from, Pos to, bool right) {
+  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
   return EditTable(from, to, right ? u"Insert columns right" : u"Insert columns left", [&](TableOp& o) {
     EditorState& s = o.s;
     const Grid& g = o.g;
@@ -3408,6 +4163,7 @@ Result Editor::InsertColumns(Pos from, Pos to, bool right) {
 }
 
 Result Editor::DeleteRows(Pos from, Pos to) {
+  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
   {
     EditorState& s = *impl_;
     Grid g;
@@ -3436,6 +4192,7 @@ Result Editor::DeleteRows(Pos from, Pos to) {
 }
 
 Result Editor::DeleteColumns(Pos from, Pos to) {
+  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
   {
     EditorState& s = *impl_;
     Grid g;
@@ -3511,6 +4268,23 @@ Result Editor::DeleteColumns(Pos from, Pos to) {
 }
 
 Result Editor::ClearCells(Pos from, Pos to) {
+  if (Tracking() && !reviewing_) {
+    // Tracked: each cell's text is deleted as text, and stays until the deletion is accepted.
+    const auto block = BlockAt(from, to);
+    Result r;
+    r.caret = from;
+    if (!block) return r;
+    BeginGroup(u"Delete");
+    for (auto it = block->cells.rbegin(); it != block->cells.rend(); ++it) {
+      if (it->start == it->end) continue;
+      if (Result d = Delete(it->start, it->end); !d) {
+        CancelGroup();
+        return d;
+      }
+    }
+    EndGroup();
+    return r;
+  }
   return EditTable(from, to, u"Delete", [&](TableOp& o) {
     EditorState& s = o.s;
     for (size_t r = o.bl.row0; r <= o.bl.row1; ++r)
@@ -3535,6 +4309,7 @@ Result Editor::ClearCells(Pos from, Pos to) {
 // ---- Merging and splitting
 
 Result Editor::MergeCells(Pos from, Pos to) {
+  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
   return EditTable(from, to, u"Merge cells", [&](TableOp& o) {
     EditorState& s = o.s;
     const Grid& g = o.g;
@@ -3612,6 +4387,7 @@ Result Editor::MergeCells(Pos from, Pos to) {
 }
 
 Result Editor::SplitCell(Pos at, uint32_t rows, uint32_t cols) {
+  if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
   if (rows < 1 || cols < 1 || rows > 100 || cols > 63) return Fail(u"Split a cell into 1 to 100 rows and 1 to 63 columns.");
   if (rows == 1 && cols == 1) {
     Result r;

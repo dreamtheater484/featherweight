@@ -1,0 +1,393 @@
+#include "TestHarness.h"
+
+#include <cstdio>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "DocTestUtil.h"
+#include "doc/edit/Editor.h"
+#include "doc/edit/Format.h"
+#include "doc/edit/TreeEdit.h"
+#include "doc/model/Utf.h"
+
+using namespace fw::doc;
+using namespace doc_test;
+using edit::Editor;
+
+// Review (milestone D4): tracked changes are accepted and rejected as Word does it, and undo puts
+// back exactly what was there.
+
+namespace {
+
+Pos P(uint32_t para, uint32_t offset) { return Pos{para, offset}; }
+
+std::vector<uint32_t> Main(const Document& doc) { return doc.StoryParagraphs(doc.MainStory()); }
+
+bool BodyIs(const Document& doc, std::string_view body) {
+  return SameXml(Canon(DocumentXml(body)), Canon(MainXml(doc)), "body");
+}
+
+// The model agrees with what it writes: reading the written main part back gives the same
+// paragraphs, with the same items and runs where they were; each w:p knows its index and length.
+bool Consistent(const Document& doc, const Fixture& f) {
+  bool ok = true;
+  for (uint32_t p = 0; p < doc.Paragraphs().size(); ++p) {
+    Node n = doc.ParaNode(p);
+    if (n.Raw().start != p || n.TextLength() != doc.Para(p).text.size()) {
+      std::printf("  paragraph %u: its w:p says %u, length %u (text %zu)\n", p, n.Raw().start, n.TextLength(),
+                  doc.Para(p).text.size());
+      ok = false;
+    }
+  }
+  Fixture g = f;
+  g.body.clear();
+  g.documentXml = MainXml(doc);
+  auto back = LoadOk(g);
+  if (!back) return false;
+  auto a = Main(doc), b = Main(*back);
+  if (a.size() != b.size()) {
+    std::printf("  %zu paragraphs, %zu read back\n", a.size(), b.size());
+    return false;
+  }
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (doc.Para(a[i]).text != back->Para(b[i]).text) {
+      std::printf("  paragraph %zu: text \"%s\", read back \"%s\"\n", i, ToUtf8(doc.Para(a[i]).text).c_str(),
+                  ToUtf8(back->Para(b[i]).text).c_str());
+      ok = false;
+      continue;
+    }
+    auto x = doc.Items(a[i]), y = back->Items(b[i]);
+    bool same = x.size() == y.size();
+    for (size_t k = 0; same && k < x.size(); ++k)
+      same = x[k].kind == y[k].kind && x[k].offset == y[k].offset && x[k].length == y[k].length;
+    auto r = doc.Runs(a[i]), s = back->Runs(b[i]);
+    same = same && r.size() == s.size();
+    for (size_t k = 0; same && k < r.size(); ++k) same = r[k].start == s[k].start && r[k].end == s[k].end;
+    if (!same) {
+      std::printf("  paragraph %zu: items or runs differ from the ones read back\n", i);
+      ok = false;
+    }
+  }
+  return ok;
+}
+
+// A change record's attributes: author A or B, one date.
+std::string By(const char* author, int id) {
+  return " w:id=\"" + std::to_string(id) + "\" w:author=\"" + author + "\" w:date=\"2026-01-01T00:00:00Z\"";
+}
+
+}  // namespace
+
+TEST(Review_InlineChangesAcceptedAndRejected) {
+  Fixture f;
+  f.body = "<w:p><w:r><w:t>a</w:t></w:r><w:ins" + By("A", 1) + "><w:r><w:t>new</w:t></w:r></w:ins><w:del" + By("B", 2) +
+           "><w:r><w:delText>old</w:delText></w:r></w:del><w:r><w:t>z</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  const uint32_t p = Main(*doc)[0];
+  CHECK(ed.ReviewAll(true));
+  CHECK(BodyIs(*doc, "<w:p><w:r><w:t>a</w:t></w:r><w:r><w:t>new</w:t></w:r><w:r><w:t>z</w:t></w:r></w:p>"));
+  CHECK(doc->Para(p).text == u"anewz");
+  CHECK(ed.UndoName() == u"Accept all changes");
+  CHECK(ed.Undo() && RoundTrips(*doc) && doc->Para(p).text == u"anewoldz");
+  CHECK(ed.ReviewAll(false));
+  CHECK(BodyIs(*doc, "<w:p><w:r><w:t>a</w:t></w:r><w:r><w:t>old</w:t></w:r><w:r><w:t>z</w:t></w:r></w:p>"));
+  CHECK(ed.Undo() && RoundTrips(*doc));
+  // The caret in the insertion: that one alone.
+  CHECK(ed.ReviewChanges(P(p, 2), P(p, 2), false));
+  CHECK(BodyIs(*doc, "<w:p><w:r><w:t>a</w:t></w:r><w:del" + By("B", 2) +
+                         "><w:r><w:delText>old</w:delText></w:r></w:del><w:r><w:t>z</w:t></w:r></w:p>"));
+  CHECK(ed.UndoName() == u"Reject change");
+  CHECK(ed.Undo() && RoundTrips(*doc));
+  // A selection over part of each takes both whole.
+  CHECK(ed.ReviewChanges(P(p, 3), P(p, 5), true) && doc->Para(p).text == u"anewz");
+  CHECK(ed.Undo() && RoundTrips(*doc));
+  // Nowhere near one: nothing to do.
+  CHECK(!ed.ReviewChanges(P(p, 0), P(p, 0), true));
+  CHECK(RoundTrips(*doc));
+}
+
+TEST(Review_ChangesInsideChanges) {
+  Fixture f;
+  // A inserted "x", then B deleted it; A inserted "y" and B deleted part of it.
+  f.body = "<w:p><w:ins" + By("A", 1) + "><w:del" + By("B", 2) + "><w:r><w:delText>x</w:delText></w:r></w:del></w:ins>" +
+           "<w:ins" + By("A", 3) + "><w:r><w:t>y</w:t></w:r><w:del" + By("B", 4) +
+           "><w:r><w:delText>z</w:delText></w:r></w:del></w:ins></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  const uint32_t p = Main(*doc)[0];
+  CHECK(ed.ReviewAll(true));
+  CHECK(BodyIs(*doc, "<w:p><w:r><w:t>y</w:t></w:r></w:p>"));
+  CHECK(ed.Undo() && RoundTrips(*doc));
+  // Rejecting both: what A inserted was never there.
+  CHECK(ed.ReviewAll(false));
+  CHECK(BodyIs(*doc, "<w:p/>") && doc->Para(p).text.empty());
+  CHECK(ed.Undo() && RoundTrips(*doc));
+}
+
+TEST(Review_ParagraphMarks) {
+  Fixture f;
+  f.body = "<w:p><w:pPr><w:rPr><w:del" + By("A", 1) + "/></w:rPr></w:pPr><w:r><w:t>one</w:t></w:r></w:p>" +
+           "<w:p><w:pPr><w:jc w:val=\"center\"/><w:rPr><w:ins" + By("A", 2) + "/></w:rPr></w:pPr><w:r><w:t>two</w:t></w:r></w:p>" +
+           "<w:p><w:r><w:t>three</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  // Accepted: the deleted mark goes (its paragraph joins the next), the inserted one stays.
+  CHECK(ed.ReviewAll(true));
+  CHECK(BodyIs(*doc, "<w:p><w:r><w:t>one</w:t></w:r><w:r><w:t>two</w:t></w:r></w:p><w:p><w:r><w:t>three</w:t></w:r></w:p>"));
+  CHECK(Main(*doc).size() == 2);
+  CHECK(ed.Undo() && RoundTrips(*doc) && Main(*doc).size() == 3);
+  // Rejected: the deleted mark stays, the inserted one goes.
+  CHECK(ed.ReviewAll(false));
+  CHECK(BodyIs(*doc, "<w:p><w:r><w:t>one</w:t></w:r></w:p><w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr>"
+                     "<w:r><w:t>two</w:t></w:r><w:r><w:t>three</w:t></w:r></w:p>"));
+  CHECK(ed.Undo() && RoundTrips(*doc));
+  // The caret at the end of a paragraph is at its mark.
+  const uint32_t first = Main(*doc)[0];
+  CHECK(ed.ReviewChanges(P(first, 3), P(first, 3), false));
+  CHECK(doc->Revisions(doc->MainStory()).size() == 1);
+  CHECK(ed.Undo() && RoundTrips(*doc));
+}
+
+TEST(Review_FormattingChanges) {
+  Fixture f;
+  f.body = "<w:p><w:pPr><w:jc w:val=\"center\"/><w:pPrChange" + By("A", 1) +
+           "><w:pPr><w:ind w:left=\"720\"/><w:jc w:val=\"right\"/></w:pPr></w:pPrChange></w:pPr>"
+           "<w:r><w:rPr><w:b/><w:rPrChange" + By("A", 2) + "><w:rPr><w:i/></w:rPr></w:rPrChange></w:rPr><w:t>bold</w:t></w:r>"
+           "<w:r><w:rPr><w:rPrChange" + By("A", 3) + "><w:rPr><w:u w:val=\"single\"/></w:rPr></w:rPrChange></w:rPr>"
+           "<w:t>plain</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  CHECK(ed.ReviewAll(true));
+  CHECK(BodyIs(*doc, "<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r>"
+                     "<w:r><w:t>plain</w:t></w:r></w:p>"));
+  CHECK(ed.Undo() && RoundTrips(*doc));
+  CHECK(ed.ReviewAll(false));
+  CHECK(BodyIs(*doc, "<w:p><w:pPr><w:ind w:left=\"720\"/><w:jc w:val=\"right\"/></w:pPr>"
+                     "<w:r><w:rPr><w:i/></w:rPr><w:t>bold</w:t></w:r>"
+                     "<w:r><w:rPr><w:u w:val=\"single\"/></w:rPr><w:t>plain</w:t></w:r></w:p>"));
+  CHECK(ed.Undo() && RoundTrips(*doc));
+}
+
+TEST(Review_TableRows) {
+  Fixture f;
+  const std::string cell = "<w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>";
+  f.body = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid>"
+           "<w:tr>" + cell + "kept</w:t></w:r></w:p></w:tc></w:tr>"
+           "<w:tr><w:trPr><w:del" + By("A", 1) + "/></w:trPr>" + cell + "gone</w:t></w:r></w:p></w:tc></w:tr>"
+           "<w:tr><w:trPr><w:ins" + By("A", 2) + "/></w:trPr>" + cell + "new</w:t></w:r></w:p></w:tc></w:tr>"
+           "</w:tbl><w:p/>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  auto texts = [&] {
+    std::u16string all;
+    for (uint32_t p : Main(*doc)) all += doc->Para(p).text + u"|";
+    return all;
+  };
+  CHECK(ed.ReviewAll(true));
+  CHECK(texts() == u"kept|new||");
+  CHECK(doc->Revisions(doc->MainStory()).empty());
+  CHECK(ed.UndoName() == u"Accept all changes");
+  CHECK(ed.Undo() && RoundTrips(*doc) && texts() == u"kept|gone|new||");
+  CHECK(ed.ReviewAll(false));
+  CHECK(texts() == u"kept|gone||");
+  CHECK(doc->Revisions(doc->MainStory()).empty());
+  CHECK(ed.Undo() && RoundTrips(*doc));
+}
+
+namespace {
+
+// A document with Track Changes on, edited by Ann at a fixed time.
+struct Tracked {
+  Fixture f;
+  std::unique_ptr<Document> doc;
+  std::unique_ptr<Editor> ed;
+  explicit Tracked(std::string body, std::string settings = "<w:trackRevisions/>") {
+    f.body = std::move(body);
+    f.settings = std::move(settings);
+    doc = LoadOk(f);
+    if (!doc) return;
+    ed = std::make_unique<Editor>(*doc);
+    ed->SetAuthor("Ann");
+    ed->SetFixedDate("2026-11-05T10:00:00Z");
+  }
+};
+
+std::string Ann(int id) { return " w:id=\"" + std::to_string(id) + "\" w:author=\"Ann\" w:date=\"2026-11-05T10:00:00Z\""; }
+
+uint32_t Undos(Editor& ed) {
+  uint32_t n = 0;
+  while (ed.CanUndo() && ed.Undo()) ++n;
+  return n;
+}
+
+}  // namespace
+
+TEST(Review_TypingAndDeletingAreRecorded) {
+  Tracked t("<w:p><w:r><w:t>abc</w:t></w:r></w:p>");
+  CHECK(t.doc && t.ed);
+  if (!t.ed) return;
+  Editor& ed = *t.ed;
+  const Document& doc = *t.doc;
+  const uint32_t p = Main(doc)[0];
+  CHECK(ed.Tracking());
+  CHECK(ed.InsertText(P(p, 1), u"X") && ed.InsertText(P(p, 2), u"Y"));
+  CHECK(BodyIs(doc, "<w:p><w:r><w:t>a</w:t></w:r><w:ins" + Ann(0) + "><w:r><w:t>XY</w:t></w:r></w:ins>"
+                    "<w:r><w:t>bc</w:t></w:r></w:p>"));
+  // Deleting what you typed takes it out; deleting what was there marks it.
+  CHECK(ed.Delete(P(p, 2), P(p, 3)) && doc.Para(p).text == u"aXbc");
+  CHECK(ed.Delete(P(p, 2), P(p, 3)) && doc.Para(p).text == u"aXbc");
+  CHECK(BodyIs(doc, "<w:p><w:r><w:t>a</w:t></w:r><w:ins" + Ann(0) + "><w:r><w:t>X</w:t></w:r></w:ins>"
+                    "<w:del" + Ann(1) + "><w:r><w:delText>b</w:delText></w:r></w:del><w:r><w:t>c</w:t></w:r></w:p>"));
+  // Over text deleted already, only the rest changes.
+  CHECK(ed.Delete(P(p, 1), P(p, 3)) && doc.Para(p).text == u"abc");
+  CHECK(BodyIs(doc, "<w:p><w:r><w:t>a</w:t></w:r><w:del" + Ann(1) +
+                    "><w:r><w:delText>b</w:delText></w:r></w:del><w:r><w:t>c</w:t></w:r></w:p>"));
+  CHECK(Consistent(doc, t.f));
+  CHECK(ed.ReviewAll(true) && doc.Para(p).text == u"ac");
+  Undos(ed);
+  CHECK(RoundTrips(doc));
+}
+
+TEST(Review_TypingOverASelectionGoesAfterTheDeletion) {
+  Tracked t("<w:p><w:r><w:t>abcd</w:t></w:r></w:p>");
+  CHECK(t.ed);
+  if (!t.ed) return;
+  Editor& ed = *t.ed;
+  const uint32_t p = Main(*t.doc)[0];
+  auto r = ed.Replace(P(p, 1), P(p, 3), u"X");
+  CHECK(r && r.caret == P(p, 4));
+  CHECK(BodyIs(*t.doc, "<w:p><w:r><w:t>a</w:t></w:r><w:del" + Ann(0) + "><w:r><w:delText>bc</w:delText></w:r></w:del>"
+                       "<w:ins" + Ann(1) + "><w:r><w:t>X</w:t></w:r></w:ins><w:r><w:t>d</w:t></w:r></w:p>"));
+  CHECK(ed.InsertText(r.caret, u"Y") && t.doc->Para(p).text == u"abcXYd");
+  CHECK(ed.ReviewAll(false) && t.doc->Para(p).text == u"abcd");
+  CHECK(Undos(ed) == 2);  // the review, then the typing
+  CHECK(RoundTrips(*t.doc));
+}
+
+TEST(Review_ParagraphMarksAreRecorded) {
+  Tracked t("<w:p><w:r><w:t>one</w:t></w:r></w:p><w:p><w:r><w:t>two</w:t></w:r></w:p>");
+  CHECK(t.ed);
+  if (!t.ed) return;
+  Editor& ed = *t.ed;
+  const Document& doc = *t.doc;
+  CHECK(ed.Delete(P(0, 3), P(1, 0)) && Main(doc).size() == 2);
+  CHECK(BodyIs(doc, "<w:p><w:pPr><w:rPr><w:del" + Ann(0) + "/></w:rPr></w:pPr><w:r><w:t>one</w:t></w:r></w:p>"
+                    "<w:p><w:r><w:t>two</w:t></w:r></w:p>"));
+  // Enter makes a mark of yours; Backspace takes it out again.
+  CHECK(ed.SplitParagraph(P(1, 1)) && Main(doc).size() == 3);
+  CHECK(BodyIs(doc, "<w:p><w:pPr><w:rPr><w:del" + Ann(0) + "/></w:rPr></w:pPr><w:r><w:t>one</w:t></w:r></w:p>"
+                    "<w:p><w:pPr><w:rPr><w:ins" + Ann(1) + "/></w:rPr></w:pPr><w:r><w:t>t</w:t></w:r></w:p>"
+                    "<w:p><w:r><w:t>wo</w:t></w:r></w:p>"));
+  CHECK(ed.JoinParagraphs(1) && Main(doc).size() == 2);
+  CHECK(BodyIs(doc, "<w:p><w:pPr><w:rPr><w:del" + Ann(0) + "/></w:rPr></w:pPr><w:r><w:t>one</w:t></w:r></w:p>"
+                    "<w:p><w:r><w:t>t</w:t></w:r><w:r><w:t>wo</w:t></w:r></w:p>"));
+  CHECK(Consistent(doc, t.f));
+  CHECK(ed.ReviewAll(true) && Main(doc).size() == 1 && doc.Para(0).text == u"onetwo");
+  Undos(ed);
+  CHECK(RoundTrips(doc));
+}
+
+TEST(Review_SomeoneElsesInsertion) {
+  Tracked t("<w:p><w:ins" + By("B", 7) + "><w:r><w:t>abc</w:t></w:r></w:ins></w:p>");
+  CHECK(t.ed);
+  if (!t.ed) return;
+  Editor& ed = *t.ed;
+  const uint32_t p = Main(*t.doc)[0];
+  CHECK(ed.InsertText(P(p, 1), u"X"));
+  CHECK(ed.Delete(P(p, 3), P(p, 4)));
+  // (B's insertion is cut twice, 8 and 9; the middle becomes Ann's, 10.)
+  CHECK(BodyIs(*t.doc, "<w:p><w:ins" + By("B", 7) + "><w:r><w:t>a</w:t></w:r></w:ins><w:ins" + Ann(10) +
+                       "><w:r><w:t>X</w:t></w:r></w:ins><w:ins" + By("B", 9) + "><w:r><w:t>b</w:t></w:r><w:del" + Ann(11) +
+                       "><w:r><w:delText>c</w:delText></w:r></w:del></w:ins></w:p>"));
+  CHECK(Consistent(*t.doc, t.f));
+  CHECK(ed.ReviewAll(true) && t.doc->Para(p).text == u"aXb");
+  Undos(ed);
+  CHECK(RoundTrips(*t.doc));
+}
+
+TEST(Review_FormattingIsRecorded) {
+  Tracked t("<w:p><w:r><w:t>abc</w:t></w:r></w:p>");
+  CHECK(t.ed);
+  if (!t.ed) return;
+  Editor& ed = *t.ed;
+  const Document& doc = *t.doc;
+  const uint32_t p = Main(doc)[0];
+  CHECK(ed.SetRunProps(P(p, 0), P(p, 2), edit::PropEdit().Set("b")));
+  CHECK(ed.SetParaProps(p, p, edit::PropEdit().Set("jc", {{"val", "center"}})));
+  CHECK(BodyIs(doc, "<w:p><w:pPr><w:jc w:val=\"center\"/><w:pPrChange" + Ann(1) + "><w:pPr/></w:pPrChange></w:pPr>"
+                    "<w:r><w:rPr><w:b/><w:rPrChange" + Ann(0) + "><w:rPr/></w:rPrChange></w:rPr><w:t>ab</w:t></w:r>"
+                    "<w:r><w:t>c</w:t></w:r></w:p>"));
+  // Through the formatting commands too, once: the record keeps the oldest look.
+  {
+    edit::TreeEdit te(ed, P(p, 0));
+    edit::ToggleRuns(te, edit::Range{P(p, 0), P(p, 3)}, edit::Toggle::Italic);
+  }
+  {
+    edit::TreeEdit te(ed, P(p, 0));
+    edit::ToggleRuns(te, edit::Range{P(p, 0), P(p, 3)}, edit::Toggle::Italic);
+  }
+  {
+    edit::TreeEdit te(ed, P(p, 0));
+    edit::ParaFormat f;
+    f.jc = Justification::Center;  // as it is: nothing new to record
+    edit::FormatParagraphs(te, edit::Range{P(p, 0), P(p, 0)}, f);
+  }
+  uint32_t runs = 0, paras = 0;
+  for (const Revision& r : doc.Revisions(doc.MainStory())) {
+    runs += r.kind == RevisionKind::RunFormat;
+    paras += r.kind == RevisionKind::ParagraphFormat;
+  }
+  CHECK(runs == 2 && paras == 1);
+  // Rejected, it's all as it was; your own new text isn't recorded.
+  CHECK(ed.ReviewAll(false));
+  CHECK(BodyIs(doc, "<w:p><w:r><w:t>ab</w:t></w:r><w:r><w:t>c</w:t></w:r></w:p>"));
+  CHECK(ed.InsertText(P(p, 3), u"new") && ed.SetRunProps(P(p, 3), P(p, 6), edit::PropEdit().Set("b")));
+  CHECK(doc.Revisions(doc.MainStory()).size() == 1);
+  Undos(ed);
+  CHECK(RoundTrips(doc));
+}
+
+TEST(Review_TrackChangesOnAndOff) {
+  Fixture f;
+  f.body = "<w:p><w:r><w:t>abc</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  CHECK(!ed.Tracking());
+  CHECK(ed.SetTracking(true) && ed.Tracking() && doc->FindPart(PartKind::Settings));
+  CHECK(ed.InsertText(P(Main(*doc)[0], 3), u"d") && doc->Revisions(doc->MainStory()).size() == 1);
+  CHECK(ed.Undo() && ed.Undo() && !ed.Tracking());
+  CHECK(ed.InsertText(P(Main(*doc)[0], 3), u"d") && doc->Revisions(doc->MainStory()).empty());
+}
+
+TEST(Review_TablesWhileTracking) {
+  const std::string cell = "<w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>";
+  Tracked t("<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"2000\"/>"
+            "<w:gridCol w:w=\"2000\"/></w:tblGrid><w:tr>" + cell + "a</w:t></w:r></w:p></w:tc>" + cell +
+            "b</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>");
+  CHECK(t.ed);
+  if (!t.ed) return;
+  Editor& ed = *t.ed;
+  const auto paras = Main(*t.doc);
+  // Rows and columns can't be recorded yet: refused. Deleting cells' text is recorded.
+  CHECK(!ed.InsertRows(P(paras[0], 0), P(paras[0], 0), true));
+  CHECK(!ed.InsertTable(P(paras[2], 0), 2, 2));
+  CHECK(ed.ClearCells(P(paras[0], 0), P(paras[1], 1)));
+  CHECK(t.doc->Para(paras[0]).text == u"a" && t.doc->Revisions(t.doc->MainStory()).size() == 2);
+  CHECK(ed.ReviewAll(true) && t.doc->Para(paras[0]).text.empty() && t.doc->Para(paras[1]).text.empty());
+  Undos(ed);
+  CHECK(RoundTrips(*t.doc));
+}

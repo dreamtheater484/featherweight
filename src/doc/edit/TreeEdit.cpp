@@ -95,12 +95,21 @@ void TreeEdit::Begin(std::u16string label) {
   before_.clear();
   store_.clear();
   touched_.clear();
+  tracked_.clear();
+  copies_ = 0;
+  tracking_ = editor_.Tracking();
+  if (tracking_) {
+    trackAuthor_ = editor_.ChangeAuthor();
+    trackDate_ = editor_.ChangeDate();
+  }
 }
 
 void TreeEdit::Commit() {
   if (depth_ == 0 || --depth_ > 0) return;
+  RecordFormatting();
   Tree& t = doc_.tree_;
-  if (before_.empty() && store_.empty() && t.elems.size() == elemsAtBegin_) {
+  // (Copies kept for tracked formatting that no record took don't count: nothing changed.)
+  if (before_.empty() && store_.empty() && t.elems.size() == elemsAtBegin_ + copies_) {
     touched_.clear();
     return;
   }
@@ -132,7 +141,7 @@ void TreeEdit::Commit() {
   for (const auto& [id, e] : step->after) {
     const uint32_t p = ParagraphOf(id);
     if (p == kNone) {
-      local = local && InDefinitions(id);
+      local = local && (InDefinitions(id) || !Attached(id));  // or an unused copy, linked nowhere
       continue;
     }
     if (story == kNone) story = doc_.paras_[p].story;
@@ -278,7 +287,151 @@ void TreeEdit::Discard() {
   store_.clear();
   touched_.clear();
   owned_.clear();
+  tracked_.clear();
   if (changed) Reindex();
+}
+
+// ---------- Tracked formatting (D4) ----------
+
+void TreeEdit::TrackBefore(ElemId at) {
+  if (!tracking_ || recording_ || at == kNoElem) return;
+  const Tree& t = doc_.tree_;
+  static constexpr uint32_t kP = names::kP, kR = Name("r"), kRPr = Name("rPr"), kPPr = Name("pPr"), kIns = Name("ins"),
+                            kDel = Name("del"), kMoveFrom = Name("moveFrom"), kMoveTo = Name("moveTo");
+  // The properties `at` is in (or is), unless it's inside a change record.
+  ElemId props = kNoElem;
+  for (ElemId e = at; e != kNoElem && props == kNoElem; e = t.elems[e].parent) {
+    const uint32_t n = NameOfElem(t, e);
+    if (n == Name("rPrChange") || n == Name("pPrChange")) return;
+    const ElemId up = t.elems[e].parent;
+    const uint32_t un = up == kNoElem ? 0 : NameOfElem(t, up);
+    if ((n == kRPr && un == kR) || (n == kPPr && un == kP) ||
+        (n == kRPr && un == kPPr && t.elems[up].parent != kNoElem && NameOfElem(t, t.elems[up].parent) == kP))
+      props = e;
+    else if (n == kP || n == kR || up == kNoElem)
+      return;
+  }
+  if (props == kNoElem) return;
+  for (const auto& [p, copy] : tracked_)
+    if (p == props) return;
+  // The author's own new text or paragraph isn't tracked again.
+  const Node here(&t, props);
+  bool own = false;
+  auto mine = [&](Node c) { return c && c.AttrOr(Name("author")) == trackAuthor_; };
+  if (here.Parent().Is(kR)) {
+    for (Node a = here.Parent().Parent(); a && !a.Is(kP) && !own; a = a.Parent()) {
+      if (a.Is(kIns) || a.Is(kDel) || a.Is(kMoveFrom) || a.Is(kMoveTo)) {
+        own = a.Is(kIns) && mine(a);
+        break;
+      }
+    }
+  } else {
+    const Node p = here.Parent().Is(kP) ? here.Parent() : here.Parent().Parent();
+    own = mine(p.Child(kPPr).Child(kRPr).Child(kIns));
+  }
+  tracked_.emplace_back(props, own ? kNoElem : DetachedCopy(props, kNoElem));
+}
+
+ElemId TreeEdit::DetachedCopy(ElemId src, ElemId parent) {
+  Elem e = E(src);  // a copy: the arena grows below
+  const ElemId first = e.first;
+  const pkg::NodeId from = e.node;
+  e.parent = parent;
+  e.next = kNoElem;
+  e.first = kNoElem;
+  e.flags = static_cast<uint8_t>(e.flags & ~kSharedKids);
+  e.node = NewNode();
+  doc_.tree_.elems.push_back(e);
+  ++copies_;
+  const auto id = static_cast<ElemId>(doc_.tree_.elems.size() - 1);
+  if (RealNode(from))
+    if (pkg::AttrSetId set = doc_.store_.NodeAttributes(from)) doc_.store_.SetNodeAttributes(e.node, set);
+  ElemId tail = kNoElem;
+  for (ElemId c = first; c != kNoElem; c = E(c).next) {
+    const ElemId k = DetachedCopy(c, id);
+    if (tail == kNoElem) E(id).first = k;
+    else E(tail).next = k;
+    tail = k;
+  }
+  return id;
+}
+
+bool TreeEdit::SameElem(ElemId a, ElemId b) const {
+  const Tree& t = doc_.tree_;
+  const Elem &x = t.elems[a], &y = t.elems[b];
+  if (NameOfElem(t, a) != NameOfElem(t, b) || x.attrCount != y.attrCount) return false;
+  for (uint16_t i = 0; i < x.attrCount; ++i) {
+    const AttrVal& p = t.attrs[x.attrs + i];
+    bool found = false;
+    for (uint16_t j = 0; j < y.attrCount && !found; ++j)
+      found = S().Attr(t.attrs[y.attrs + j].def).name == S().Attr(p.def).name && t.attrs[y.attrs + j].value == p.value;
+    if (!found) return false;
+  }
+  ElemId c = x.first, d = y.first;
+  for (; c != kNoElem && d != kNoElem; c = t.elems[c].next, d = t.elems[d].next)
+    if (!SameElem(c, d)) return false;
+  return c == kNoElem && d == kNoElem;
+}
+
+bool TreeEdit::Attached(ElemId id) const {
+  const Tree& t = doc_.tree_;
+  for (int hops = 0; hops < 256; ++hops) {
+    const ElemId up = t.elems[id].parent;
+    if (up == kNoElem) {
+      for (const Part& part : doc_.parts_)
+        if (part.root == id) return true;
+      return false;
+    }
+    bool found = false;
+    for (ElemId c = t.elems[up].first; c != kNoElem && !found; c = t.elems[c].next) found = c == id;
+    if (!found) return false;
+    id = up;
+  }
+  return false;
+}
+
+void TreeEdit::RecordFormatting() {
+  if (tracked_.empty()) return;
+  const Tree& t = doc_.tree_;
+  static constexpr uint32_t kRPr = Name("rPr"), kPPr = Name("pPr");
+  recording_ = true;
+  for (const auto& [props, copy] : tracked_) {
+    if (copy == kNoElem || !Attached(props)) continue;
+    const bool para = NameOfElem(t, props) == kPPr;
+    const uint32_t changeName = para ? Name("pPrChange") : Name("rPrChange");
+    const ElemDefId changeDef = S().Child(TypeOfElem(t, props), changeName);
+    if (changeDef == kNoDef) continue;
+    const ElemDefId innerDef = S().Child(S().Elem(changeDef).type, para ? kPPr : kRPr);
+    if (innerDef == kNoDef) continue;
+    const TypeId inner = S().Elem(innerDef).type;
+    // What the record holds: a paragraph's w:rPr and w:sectPr, and a mark's records, aren't.
+    auto held = [&](ElemId c) { return S().Child(inner, NameOfElem(t, c)) != kNoDef; };
+    bool recorded = false, same = true;
+    std::vector<ElemId> now, was;
+    for (ElemId c = E(props).first; c != kNoElem; c = E(c).next) {
+      recorded = recorded || NameOfElem(t, c) == changeName;
+      if (held(c)) now.push_back(c);
+    }
+    if (recorded) continue;  // the oldest stays
+    for (ElemId c = E(copy).first; c != kNoElem; c = E(c).next)
+      if (held(c)) was.push_back(c);
+    same = now.size() == was.size();
+    for (size_t i = 0; same && i < now.size(); ++i) same = SameElem(now[i], was[i]);
+    if (same) continue;
+    const ElemId change = Child(props, changeName);
+    if (change == kNoElem) continue;
+    SetAttr(change, names::kId, editor_.NewChangeId());
+    SetAttr(change, Name("author"), trackAuthor_);
+    SetAttr(change, Name("date"), trackDate_);
+    const ElemId into = Child(change, para ? kPPr : kRPr);
+    if (into == kNoElem) continue;
+    for (ElemId k : was) {
+      E(k).def = S().Child(inner, NameOfElem(t, k));
+      Append(into, k);
+    }
+  }
+  recording_ = false;
+  tracked_.clear();
 }
 
 Elem& TreeEdit::Touch(ElemId id) {
@@ -446,6 +599,7 @@ ElemId TreeEdit::Insert(ElemId parent, ElemDefId def, ElemId before) {
 
 ElemId TreeEdit::Child(ElemId parent, uint32_t name, bool create) {
   if (parent == kNoElem) return kNoElem;
+  TrackBefore(parent);
   Own(parent);
   for (ElemId c = E(parent).first; c != kNoElem; c = E(c).next)
     if (NameOfElem(doc_.tree_, c) == name) return c;
@@ -467,6 +621,7 @@ ElemId TreeEdit::Path(ElemId parent, std::initializer_list<uint32_t> names, bool
 void TreeEdit::RemoveElement(ElemId elem) {
   ElemId parent = E(elem).parent;
   if (parent == kNoElem) return;
+  TrackBefore(parent);
   ElemId prev = kNoElem;
   for (ElemId c = E(parent).first; c != kNoElem && c != elem; c = E(c).next) prev = c;
   ElemId next = E(elem).next;
@@ -495,11 +650,19 @@ void TreeEdit::Remove(ElemId parent, uint32_t name) {
 
 void TreeEdit::Clear(ElemId container, std::initializer_list<uint32_t> keep) {
   if (container == kNoElem || E(container).first == kNoElem) return;
+  TrackBefore(container);
   Own(container);
+  // Tracked changes are never cleared away: a mark's insertion or deletion, a formatting record.
+  static const uint32_t kRecords[] = {Name("rPrChange"), Name("pPrChange"), Name("ins"), Name("del"), Name("moveFrom"),
+                                      Name("moveTo")};
   std::vector<ElemId> kids;
   for (ElemId c = E(container).first; c != kNoElem; c = E(c).next) kids.push_back(c);
-  for (ElemId c : kids)
-    if (std::find(keep.begin(), keep.end(), NameOfElem(doc_.tree_, c)) == keep.end()) RemoveElement(c);
+  for (ElemId c : kids) {
+    const uint32_t n = NameOfElem(doc_.tree_, c);
+    if (std::find(keep.begin(), keep.end(), n) == keep.end() &&
+        std::find(std::begin(kRecords), std::end(kRecords), n) == std::end(kRecords))
+      RemoveElement(c);
+  }
 }
 
 void TreeEdit::WriteAttrs(ElemId elem, const std::vector<AttrVal>& attrs) {
@@ -512,6 +675,7 @@ void TreeEdit::WriteAttrs(ElemId elem, const std::vector<AttrVal>& attrs) {
 }
 
 void TreeEdit::SetAttr(ElemId elem, uint32_t name, std::string_view value) {
+  TrackBefore(elem);
   Tree& t = doc_.tree_;
   const TypeDef& type = S().Type(TypeOfElem(t, elem));
   AttrDefId def = S().AttrOf(TypeOfElem(t, elem), name);
@@ -534,6 +698,7 @@ void TreeEdit::SetAttr(ElemId elem, uint32_t name, std::string_view value) {
 }
 
 void TreeEdit::RemoveAttr(ElemId elem, uint32_t name) {
+  TrackBefore(elem);
   Tree& t = doc_.tree_;
   AttrDefId def = S().AttrOf(TypeOfElem(t, elem), name);
   const Elem& e = t.elems[elem];
@@ -851,6 +1016,7 @@ ElemId TreeEdit::AddXml(ElemId parent, std::string_view xml, ElemId before) {
 
 ElemId TreeEdit::CopyChild(ElemId src, ElemId parent) {
   if (src == kNoElem || parent == kNoElem) return kNoElem;
+  TrackBefore(parent);
   uint32_t name = NameOfElem(doc_.tree_, src);
   ElemDefId def = S().Child(TypeOfElem(doc_.tree_, parent), name);
   if (def == kNoDef || S().Elem(def).type != TypeOfElem(doc_.tree_, src)) return kNoElem;
