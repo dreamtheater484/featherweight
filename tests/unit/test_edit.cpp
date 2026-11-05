@@ -1539,3 +1539,33 @@ TEST(Edit_CopiesLeaveOutRepeatedProperties) {
                      "<w:p>" + kept + "<w:r><w:rPr><w:b/></w:rPr><w:t>x</w:t></w:r></w:p>"));
   CHECK(Consistent(*doc, f) && UndoSteps(ed) == 3 && MainXml(*doc) == before);
 }
+
+TEST(Edit_ValuesXmlCantHoldAreRefused) {
+  // A property value or link address with a character XML 1.0 can't hold would make the saved
+  // file unreadable (fwpkg's fuzzing): the edit is refused and nothing changes.
+  CHECK(edit::XmlSafe("Calibri") && edit::XmlSafe("\xCE\x95\xCE\xBB \xF0\x9F\x98\x80\t") && edit::XmlSafe(""));
+  CHECK(!edit::XmlSafe(std::string("Cal\x01ibri", 8)) && !edit::XmlSafe(std::string("\0", 1)) && !edit::XmlSafe("\xEF\xBF\xBF") &&
+        !edit::XmlSafe("\xED\xA0\x80") && !edit::XmlSafe("\xC0\xAF") && !edit::XmlSafe("\xE2\x82") && !edit::XmlSafe("\xFF"));
+  Fixture f;
+  f.body = "<w:p><w:r><w:t>Hello</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  const uint32_t p = Main(*doc)[0];
+  auto r = ed.SetRunProps(P(p, 0), P(p, 5), PropEdit().Set("b").Set("rFonts", {{"ascii", "A\x01"}}));
+  CHECK(!r && !r.message.empty());
+  CHECK(!ed.SetParaProps(p, p, PropEdit().Set("pStyle", {{"val", "\x1F"}})));
+  CHECK(!ed.SetMarkProps(p, p, PropEdit().Set("color", {{"val", "\x07"}})));
+  CHECK(!ed.SetLink(P(p, 0), P(p, 5), "https://example.org/\x07"));
+  CHECK(!ed.CanUndo() && !ed.Modified() && MainXml(*doc) == before);
+  // Pasted: a font name with one is left out; the rest of the look comes.
+  auto rtf = edit::FromRtf("{\\rtf1\\ansi{\\fonttbl{\\f0 Bad\\'01Font;}}\\f0\\b bold}");
+  CHECK(rtf && rtf->paras.size() == 1 && rtf->paras[0].runs.size() == 1);
+  if (!rtf || rtf->paras.empty() || rtf->paras[0].runs.empty()) return;
+  CHECK(rtf->paras[0].runs[0].font.find('\x01') != std::string::npos);  // the reader keeps what the file says
+  CHECK(edit::PasteClip(ed, P(p, 5), P(p, 5), *rtf));
+  CHECK(doc->Para(p).text == u"Hellobold" && doc->ResolvedRun(p, doc->Runs(p).back().run).bold);
+  CHECK(MainXml(*doc).find('\x01') == std::string::npos && Consistent(*doc, f) && ChecksOut(*doc));
+}

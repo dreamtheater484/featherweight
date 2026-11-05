@@ -151,4 +151,9 @@ class Editor {
   std::vector<Listener> listeners_;
 };
 
+// True when every character of `utf8` can be written in XML 1.0: valid UTF-8, without control
+// characters (tab, line feed and carriage return aside), lone surrogates, U+FFFE or U+FFFF. A
+// property value or link target with others would make the saved file unreadable.
+bool XmlSafe(std::string_view utf8);
+
 }  // namespace fw::doc::edit
