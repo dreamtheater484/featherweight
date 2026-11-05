@@ -389,6 +389,43 @@ TEST(Pictures_UnusedMediaAfterDelete) {
   (void)kRels;
 }
 
+TEST(Pictures_MovesStayInTheirPart) {
+  // A picture's r:embed is a relationship of its own part: moving it into the notes, or from them
+  // into the main text, is refused (fwtool torture finding 13), and nothing changes.
+  doc_test::Fixture f;
+  f.body = "<w:p><w:r><w:t>Body</w:t></w:r><w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p>";
+  f.footnotes =
+      "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>"
+      "<w:footnote w:id=\"1\"><w:p><w:r><w:footnoteRef/><w:t>Note</w:t></w:r></w:p></w:footnote>";
+  auto doc = doc_test::LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  Pictures pics(ed);
+  const std::vector<uint32_t> body = doc->StoryParagraphs(doc->MainStory());
+  uint32_t note = kNone;
+  for (uint32_t i = 0; i < doc->Paragraphs().size(); ++i)
+    if (doc->Para(i).text.find(u"Note") != std::u16string::npos) note = i;
+  CHECK(!body.empty() && note != kNone);
+  if (body.empty() || note == kNone) return;
+  const std::vector<uint8_t> png = Solid(GUID_ContainerFormatPng, 10, 10);
+  // In the note, then towards the main text.
+  CHECK(pics.Insert(Pos{note, 1}, png).ok);
+  uint32_t d = Shown(*doc);
+  auto r = pics.MoveInline(d, Pos{body[0], 2});
+  CHECK(!r.ok && !r.message.empty());
+  CHECK(doc->Drawings()[d].pos.para == note);
+  // In the main text, then towards the note.
+  CHECK(ed.Undo().ok);
+  CHECK(pics.Insert(Pos{body[0], 0}, png).ok);
+  d = Shown(*doc);
+  r = pics.MoveInline(d, Pos{note, 2});
+  CHECK(!r.ok && doc->Drawings()[d].pos.para == body[0]);
+  // Within its part it moves.
+  CHECK(pics.MoveInline(d, Pos{body[0], 3}).ok);
+  CHECK(SaveAndRead(*doc, ed) != nullptr);
+}
+
 TEST(Pictures_CancelGroupLeavesNoStep) {
   // A change of several steps that fails part way (a move whose delete is refused) takes itself
   // back without an undo or a redo step; groups around it keep what they did before.
