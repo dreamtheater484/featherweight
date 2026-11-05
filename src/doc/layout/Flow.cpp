@@ -34,72 +34,6 @@ struct Column {
 };
 
 
-// The lines of paragraphs laid out again after an edit (D2): a paragraph's text and the lines its
-// breaker made, kept by paragraph version and column width, so the next keystroke breaks only the
-// paragraph that changed (plan §4). Kept for the few pages laid out after each edit.
-struct CachedPara {
-  uint32_t version = 0;
-  float width = 0;
-  std::shared_ptr<ParaText> pt;
-  text::LineBreaker::State start;
-  struct Made {
-    text::LineBreaker::State before, after;
-    float left = 0, right = 0;
-    text::Line line;
-  };
-  std::vector<Made> lines;
-  uint32_t used = 0;  // the edit it was last used after
-};
-
-bool SameState(const text::LineBreaker::State& a, const text::LineBreaker::State& b) {
-  return a.position == b.position && a.line == b.line && a.hyphenated == b.hyphenated && a.done == b.done;
-}
-
-// A paragraph's lines as its LineBreaker makes them: from the cache when they were made before,
-// else from a breaker made when first needed.
-class ParaLines {
- public:
-  ParaLines(text::Fonts& fonts, std::shared_ptr<ParaText> pt, float width, std::shared_ptr<CachedPara> cache)
-      : fonts_(fonts), pt_(std::move(pt)), width_(width), cache_(std::move(cache)) {
-    if (cache_ && !cache_->lines.empty()) {
-      state_ = cache_->start;
-    } else {
-      state_ = Breaker().Save();
-      if (cache_) cache_->start = state_;
-    }
-  }
-  bool Done() const { return state_.done; }
-  text::LineBreaker::State Save() const { return state_; }
-  void Restore(const text::LineBreaker::State& state) { state_ = state; }
-  text::Line Next(float left, float right) {
-    if (cache_)
-      for (const CachedPara::Made& m : cache_->lines)
-        if (SameState(m.before, state_) && m.left == left && m.right == right) {
-          state_ = m.after;
-          return m.line;
-        }
-    text::LineBreaker& b = Breaker();
-    b.Restore(state_);
-    text::Line line = b.Next(left, right);
-    const text::LineBreaker::State after = b.Save();
-    if (cache_) cache_->lines.push_back({state_, after, left, right, line});
-    state_ = after;
-    return line;
-  }
-
- private:
-  text::LineBreaker& Breaker() {
-    if (!breaker_) breaker_ = std::make_unique<text::LineBreaker>(fonts_, pt_->fw, width_);
-    return *breaker_;
-  }
-  text::Fonts& fonts_;
-  std::shared_ptr<ParaText> pt_;
-  float width_;
-  std::shared_ptr<CachedPara> cache_;
-  std::unique_ptr<text::LineBreaker> breaker_;
-  text::LineBreaker::State state_;
-};
-
 }  // namespace
 
 struct Engine::Impl {
@@ -235,27 +169,30 @@ struct Engine::Impl {
   uint32_t edits = 0;
 };
 
+// The first paragraph in a cell, content control or custom XML block.
+static uint32_t FirstPara(const Document& doc, Node container) {
+  for (const Block& b : doc.Blocks(container)) {
+    if (b.kind == BlockKind::Paragraph) return b.para;
+    uint32_t p = kNone;
+    if (b.kind == BlockKind::Table) {
+      for (Node tr : doc.TableRows(b.node)) {
+        for (Node tc : doc.RowCells(tr))
+          if ((p = FirstPara(doc, tc)) != kNone) return p;
+      }
+    } else if ((p = FirstPara(doc, b.node)) != kNone) {
+      return p;
+    }
+  }
+  return kNone;
+}
+
 // The body, flattened: paragraphs and tables in order, with their sections.
 static void FlattenBody(const Document& doc, std::vector<Item>& items) {
   items.clear();
   const std::vector<Section>& sections = doc.Sections();
   uint32_t sec = 0;
   // A table's first paragraph, for its section.
-  std::function<uint32_t(Node)> firstPara = [&](Node container) -> uint32_t {
-    for (const Block& b : doc.Blocks(container)) {
-      if (b.kind == BlockKind::Paragraph) return b.para;
-      uint32_t p = kNone;
-      if (b.kind == BlockKind::Table) {
-        for (Node tr : doc.TableRows(b.node)) {
-          for (Node tc : doc.RowCells(tr))
-            if ((p = firstPara(tc)) != kNone) return p;
-        }
-      } else if ((p = firstPara(b.node)) != kNone) {
-        return p;
-      }
-    }
-    return kNone;
-  };
+  auto firstPara = [&](Node container) { return FirstPara(doc, container); };
   std::function<void(const std::vector<Block>&)> add = [&](const std::vector<Block>& blocks) {
     for (const Block& b : blocks) {
       if (b.kind == BlockKind::ContentControl || b.kind == BlockKind::CustomXml) {
@@ -775,29 +712,13 @@ struct Flow {
     Frame frame = BodyFrame();
     if (!f.pt) {
       // After an edit, paragraphs laid out again before come from the cache.
-      std::shared_ptr<CachedPara> cached;
-      const fw::doc::Paragraph& model = doc.Para(item.para);
-      if (auto it = f.lineCache.find(model.elem); it != f.lineCache.end()) {
-        if (it->second->version == model.version && it->second->width == frame.width && it->second->pt->para == item.para)
-          cached = it->second;
-        else f.lineCache.erase(it);
-      }
+      std::shared_ptr<CachedPara> cached = e.LinesOf(item.para, frame.width, true);
       if (cached) {
-        cached->used = f.edits;
         f.pt = cached->pt;
       } else {
         f.pt = std::make_shared<ParaText>();
         e.BuildText(item.para, f.fields, *f.pt, true);
-        // Not text that depends on the page it's on: page fields and note numbers.
-        if (e.pages_.size() < f.cacheUntil && !f.pt->empty && !f.pt->usesPage && !f.pt->usesPageCount &&
-            f.pt->notes.empty()) {
-          cached = std::make_shared<CachedPara>();
-          cached->version = model.version;
-          cached->width = frame.width;
-          cached->pt = f.pt;
-          cached->used = f.edits;
-          f.lineCache[model.elem] = cached;
-        }
+        cached = e.KeepLines(item.para, frame.width, true, f.pt);
       }
       // A paragraph nothing of which shows takes no room, and nor does an empty one that only
       // holds a section break (Word gives it no line and no spacing).
@@ -1568,6 +1489,7 @@ struct Flow {
     size_t restart = SIZE_MAX;        // the page to lay out again from, if any
     bool rebuild = structure || shift != 0;  // the body's items are flattened again
     size_t itemFrom = 0, itemTo = 0;  // the body items that changed, [itemFrom, itemTo) before the edit
+    size_t tableRow = SIZE_MAX, tableRowLast = SIZE_MAX;  // a change in one table: the rows it's in
     if (kind == StoryKind::Main) {
       itemFrom = ItemOf(first);
       size_t tail = 0;
@@ -1577,16 +1499,58 @@ struct Flow {
       itemTo = f.bodyItems - tail;
       for (size_t i = itemFrom; i < itemTo; ++i)
         if (f.items[i].kind == BlockKind::Paragraph && !changed(f.items[i].para)) rebuild = true;
+      // In a table: the change is in a cell of a row, and pages that only show rows above it, or
+      // of a row split across pages only what's above the change, stay (not when it's in its
+      // repeated header rows, nor with merged cells running on).
+      size_t tableCell = SIZE_MAX;
+      float changeTop = FLT_MAX;  // where the change starts in the cell's content as it was
+      if (itemTo == itemFrom + 1 && f.items[itemFrom].kind == BlockKind::Table) {
+        const Node tbl = f.items[itemFrom].node;
+        const uint32_t lastPara = added ? first + added - 1 : first;
+        size_t r = 0;
+        for (Node tr : doc.TableRows(tbl)) {
+          uint32_t p = kNone;
+          for (Node tc : doc.RowCells(tr))
+            if ((p = FirstPara(doc, tc)) != kNone) break;
+          if (p != kNone && p > lastPara) break;
+          if (p != kNone && p <= first) tableRow = r;
+          if (p != kNone) tableRowLast = r;
+          ++r;
+        }
+        if (tableRow != SIZE_MAX) {
+          size_t i = 0;
+          for (Node tc : doc.RowCells(doc.TableRows(tbl)[tableRow])) {
+            const uint32_t p = FirstPara(doc, tc);
+            if (p != kNone && p > first) break;
+            if (p != kNone) tableCell = i;
+            ++i;
+          }
+          // The table as measured before the edit, kept by the checkpoint at the end of the layout.
+          const TableBox* was = nullptr;
+          for (size_t k = f.checkpoints.size(); k-- > 0 && !was;)
+            if (f.checkpoints[k].table && f.checkpoints[k].table->tbl == tbl) was = f.checkpoints[k].table.get();
+          if (was && tableRow < was->rows.size() && tableCell < was->rows[tableRow].cells.size())
+            for (const LineBox& l : was->rows[tableRow].cells[tableCell].content.lines)
+              if (l.para != kNone && l.para >= first && l.top < changeTop) changeTop = l.top;
+        }
+      }
+      auto touched = [&](const Checkpoint& c) {
+        if (tableRow == SIZE_MAX || c.next != itemFrom || !c.table) return Touched(c, itemFrom);
+        if (c.row > tableRow || !c.spans.empty() || tableRow < c.table->headerRows) return true;
+        if (c.row < tableRow || c.rowCut.empty()) return false;
+        return tableCell >= c.rowCut.size() || c.rowCut[tableCell] + kEpsilon >= changeTop;
+      };
       if (laidOut) {
-        // The first page the change can move: the one before the page where its item begins.
+        // The first page the change can move: the one before the page where its item (or row)
+        // begins.
         size_t k = n;
-        while (k > 0 && Touched(f.checkpoints[k], itemFrom)) --k;
+        while (k > 0 && touched(f.checkpoints[k])) --k;
         if (k < n || f.old.empty()) {
           restart = k > 0 ? k - 1 : 0;
         } else {
           // Not reached yet: it's on an old page, which then isn't taken back as it is.
           size_t q = n;
-          while (q - n < f.old.size() && !Touched(f.old[q - n].after, itemFrom)) ++q;
+          while (q - n < f.old.size() && !touched(f.old[q - n].after)) ++q;
           if (q == n) restart = n > 0 ? n - 1 : 0;
         }
       }
@@ -1665,6 +1629,25 @@ struct Flow {
     // Paragraphs after the change moved by `shift`.
     if (shift != 0) ShiftParagraphs(first, removed, added, kind == StoryKind::Main && rebuild);
 
+    // In the table the flow goes on in, from where it lays out again or (the change not reached
+    // yet) from where it is: the rows changed are measured again, or else the whole table, in what
+    // it was measured in, with the cells that didn't change kept (not after a change that may
+    // number list paragraphs again).
+    Checkpoint* in = restart != SIZE_MAX ? &from : laidOut ? &f.checkpoints.back() : nullptr;
+    if (tableRow != SIZE_MAX && in && in->next == itemFrom && in->table &&
+        !e.MeasureRowsAgain(*in->table, tableRow, tableRowLast, structure)) {
+      const std::shared_ptr<TableBox> stale = in->table;
+      Frame frame;
+      frame.geom = &stale->geom;
+      frame.fields = &stale->fields;
+      frame.width = stale->frameWidth;
+      frame.story = stale->story;
+      auto measured = std::make_shared<TableBox>(e.MeasureTable(stale->tbl, frame, structure ? nullptr : stale.get()));
+      for (Checkpoint& c : f.checkpoints)
+        if (c.table == stale) c.table = measured;  // the pages before show the same rows of it
+      if (f.table == stale) f.table = measured;
+      in->table = measured;
+    }
     if (restart != SIZE_MAX) {
       if (kind == StoryKind::Endnote) f.items.resize(f.bodyItems);
       Restore(from);
@@ -1812,6 +1795,35 @@ struct Flow {
     return true;
   }
 };
+
+std::shared_ptr<CachedPara> Engine::LinesOf(uint32_t para, float width, bool breaks) {
+  Impl& f = *impl_;
+  if (f.lineCache.empty()) return nullptr;
+  const Paragraph& model = doc_.Para(para);
+  auto it = f.lineCache.find(model.elem);
+  if (it == f.lineCache.end()) return nullptr;
+  const std::shared_ptr<CachedPara>& c = it->second;
+  if (c->version != model.version || c->width != width || c->breaks != breaks || c->pt->para != para) {
+    f.lineCache.erase(it);
+    return nullptr;
+  }
+  c->used = f.edits;
+  return c;
+}
+
+std::shared_ptr<CachedPara> Engine::KeepLines(uint32_t para, float width, bool breaks, const std::shared_ptr<ParaText>& pt) {
+  Impl& f = *impl_;
+  // Not text that depends on the page it's on: page fields and note numbers.
+  if (pages_.size() >= f.cacheUntil || pt->empty || pt->usesPage || pt->usesPageCount || !pt->notes.empty()) return nullptr;
+  auto c = std::make_shared<CachedPara>();
+  c->version = doc_.Para(para).version;
+  c->width = width;
+  c->breaks = breaks;
+  c->pt = pt;
+  c->used = f.edits;
+  f.lineCache[doc_.Para(para).elem] = c;
+  return c;
+}
 
 bool Engine::NextPage() {
   Flow flow(*this);

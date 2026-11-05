@@ -1,6 +1,7 @@
 // Tables (Engine.h): the grid Word saved, cell margins, row heights and vertical merges; cell
 // shading and borders, with conflicts between neighboring cells resolved the way Word does.
 #include <algorithm>
+#include <functional>
 #include <numeric>
 
 #include "doc/layout/Engine.h"
@@ -42,10 +43,57 @@ const Border& Stronger(const Border& a, const Border& b) {
 
 }  // namespace
 
-Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
+Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame, const TableBox* reuse) {
   TableBox t;
   t.tbl = tbl;
   t.props = doc_.ResolvedTable(tbl);
+  if (frame.geom) t.geom = *frame.geom;
+  if (frame.fields) t.fields = *frame.fields;
+  t.frameWidth = frame.width;
+  t.story = frame.story;
+  MeasureRows(t, frame, reuse, 0, SIZE_MAX);
+  return t;
+}
+
+bool Engine::MeasureRowsAgain(TableBox& t, size_t from, size_t to, bool structure) {
+  const std::vector<Node> rows = doc_.TableRows(t.tbl);
+  if (from > to || to >= rows.size() || rows.size() != t.rows.size() || (structure && t.labels)) return false;
+  for (size_t r = 0; r < rows.size(); ++r)
+    if (!(rows[r] == t.rows[r].tr)) return false;
+  for (size_t r = from; r <= to; ++r)
+    for (const CellBox& c : t.rows[r].cells)
+      if (c.continued || c.rowSpan > 1) return false;
+  Frame frame;
+  frame.geom = &t.geom;
+  frame.fields = &t.fields;
+  frame.width = t.frameWidth;
+  frame.story = t.story;
+  MeasureRows(t, frame, &t, from, to);
+  return true;
+}
+
+void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse, size_t from, size_t to) {
+  const Node tbl = t.tbl;
+  const bool all = t.rows.empty();
+  // A cell's paragraphs and their versions, nested tables' included.
+  std::function<void(Node, uint64_t&)> key = [&](Node container, uint64_t& h) {
+    for (const Block& b : doc_.Blocks(container)) {
+      if (b.kind == BlockKind::Paragraph) {
+        const Paragraph& p = doc_.Para(b.para);
+        h = (h ^ (static_cast<uint64_t>(p.elem) << 32 | p.version)) * 0x100000001B3ull;
+      } else if (b.kind == BlockKind::Table) {
+        for (Node tr : doc_.TableRows(b.node))
+          for (Node tc : doc_.RowCells(tr)) key(tc, h);
+      } else {
+        key(b.node, h);
+      }
+    }
+  };
+  std::unordered_map<ElemId, const CellBox*> before;
+  if (reuse)
+    for (size_t r = from; r < reuse->rows.size() && r <= to; ++r)
+      for (const CellBox& c : reuse->rows[r].cells)
+        if (!c.continued) before[c.tc.Id()] = &c;
   std::vector<float> grid;
   for (Twips w : doc_.TableGrid(tbl)) grid.push_back(std::max(0.0f, Pt(w)));
   std::vector<Node> rows = doc_.TableRows(tbl);
@@ -83,8 +131,9 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
     default: t.left = indent; break;
   }
 
-  bool leading = true;
-  for (Node tr : rows) {
+  bool leading = from == 0 || t.rows[from - 1].header;  // the rows above are all header rows
+  for (size_t r = from; r < rows.size() && r <= to; ++r) {
+    const Node tr = rows[r];
     RowBox rb;
     rb.tr = tr;
     rb.props = doc_.ResolvedRow(tr);
@@ -127,13 +176,26 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
           const float spec = Pt(rb.props.height);
           cf.width = spec > 0 ? std::max(1.0f, spec - c.marginTop - c.marginBottom) : 1584.0f;  // 22 inches
         }
-        StackBlocks(doc_.Blocks(tc), cf, c.content, sp);
-        c.content.height += BorderBelow(sp);
-        if (c.turn) {
-          float longest = 0;
-          for (const LineBox& l : c.content.lines) longest = std::max(longest, l.line.contentRight - l.line.contentLeft);
-          c.turnedLength = std::max(1.0f, longest);
+        c.key = 0xCBF29CE484222325ull;
+        key(tc, c.key);
+        // A cell measured before whose text didn't change and doesn't depend on its page.
+        auto it = reuse ? before.find(tc.Id()) : before.end();
+        const CellBox* old = it != before.end() ? it->second : nullptr;
+        if (old && old->key == c.key && old->turn == c.turn && old->width == c.width && old->marginLeft == c.marginLeft &&
+            old->marginRight == c.marginRight && !old->content.usesPage && !old->content.usesPageCount &&
+            !old->content.numbersNotes && !old->content.placedOnPage) {
+          c.content = old->content;
+          c.turnedLength = old->turnedLength;
+        } else {
+          StackBlocks(doc_.Blocks(tc), cf, c.content, sp);
+          c.content.height += BorderBelow(sp);
+          if (c.turn) {
+            float longest = 0;
+            for (const LineBox& l : c.content.lines) longest = std::max(longest, l.line.contentRight - l.line.contentLeft);
+            c.turnedLength = std::max(1.0f, longest);
+          }
         }
+        if (c.content.labels) t.labels = true;
       }
       col += c.span;
       if (!c.continued)
@@ -162,8 +224,8 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
         if (v.empty() || v == "nil" || v == "none") return 0;
         return static_cast<float>(ParseInt(b.AttrOr(Name("sz"))).value_or(0)) / 8.0f;
       };
-      const RowBox* above = t.rows.empty() ? nullptr : &t.rows.back();
-      const bool lastRow = tr == rows.back();
+      const RowBox* above = r == 0 ? nullptr : &t.rows[r - 1];
+      const bool lastRow = r + 1 == rows.size();
       for (CellBox& c : rb.cells) {
         if (c.continued) continue;
         float top = own(c.tc, Name("top"));
@@ -187,10 +249,12 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
       h = std::max(h, spec + mv);
     }
     rb.height = rb.props.hidden ? 0 : h;
-    t.rows.push_back(std::move(rb));
+    if (all) t.rows.push_back(std::move(rb));
+    else t.rows[r] = std::move(rb);
   }
-  // A vertically merged cell taller than the rows it spans makes the last of them taller.
-  for (size_t r = 0; r < t.rows.size(); ++r)
+  // A vertically merged cell taller than the rows it spans makes the last of them taller (rows
+  // measured again on their own have none over them).
+  for (size_t r = 0; all && r < t.rows.size(); ++r)
     for (const CellBox& c : t.rows[r].cells) {
       if (c.continued || c.rowSpan <= 1) continue;
       size_t last = std::min(t.rows.size() - 1, r + static_cast<size_t>(c.rowSpan) - 1);
@@ -202,10 +266,10 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
         t.rows[last].grown += need - have;
       }
     }
+  t.headerRows = 0;
   for (const RowBox& r : t.rows)
     if (r.header) ++t.headerRows;
     else break;
-  return t;
 }
 
 float Engine::VShift(const CellBox& c, float room) {
