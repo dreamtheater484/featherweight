@@ -111,6 +111,28 @@ std::u16string DatePicture(std::u16string_view code) {
 
 }  // namespace
 
+// What a legacy check box or drop-down (FORMCHECKBOX, FORMDROPDOWN) shows: its state in w:ffData,
+// whatever result it was saved with, as Word draws them. Empty for other fields.
+std::u16string FormFieldShows(const Field& f) {
+  const std::u16string_view type = f.Type();
+  const bool box = type == u"FORMCHECKBOX";
+  if (!box && type != u"FORMDROPDOWN") return {};
+  const Node ff = f.beginNode.Child(Name("ffData"));
+  if (box) {
+    const Node cb = ff.Child(Name("checkBox"));
+    const Node checked = cb.Child(Name("checked"));
+    return (checked ? checked.On() : cb.Child(Name("default")).On()) ? u"\u2612" : u"\u2610";
+  }
+  const Node dd = ff.Child(Name("ddList"));
+  std::vector<Node> entries;
+  for (Node e : dd.Kids())
+    if (e.Is(Name("listEntry"))) entries.push_back(e);
+  if (entries.empty()) return {};
+  const Node picked = dd.Child(Name("result")) ? dd.Child(Name("result")) : dd.Child(Name("default"));
+  const int64_t i = picked.Int(Name("val")).value_or(0);
+  return ToUtf16(entries[i >= 0 && i < static_cast<int64_t>(entries.size()) ? static_cast<size_t>(i) : 0].AttrOr(Name("val")));
+}
+
 std::u16string DateFieldResult(std::u16string_view code, int64_t now, std::string_view lang) {
   const size_t s = code.find_first_not_of(u' ');
   if (s == std::u16string_view::npos || now == 0) return {};
@@ -331,6 +353,14 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   std::vector<Replace> replaces;
   if (fieldsCount_[model.story] > 0) {
     for (const Field& f : StoryFields(model.story)) {
+      // Legacy check boxes and drop-downs: their result, or at their end when they have none.
+      if (f.end.para == para && f.complete && (f.separator.para == para || f.separator.para == kNone)) {
+        if (std::u16string shows = FormFieldShows(f); !shows.empty()) {
+          const uint32_t from = f.separator.para == para ? f.separator.offset + 1 : f.end.offset;
+          replaces.push_back({from, f.end.offset, std::move(shows)});
+          continue;
+        }
+      }
       if (f.separator.para != para || f.end.para != para || !f.complete) continue;
       PageField kind = PageFieldOf(f.Type());
       if (kind == PageField::None) {
@@ -418,9 +448,12 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
     while (i < run.end) {
       // A computed field result starting here replaces the old one.
       auto rep = std::find_if(replaces.begin(), replaces.end(), [&](const Replace& x) { return x.from == i; });
-      if (rep != replaces.end() && !style->hidden) {
+      // An empty result starts at the field's end character, hidden only as a field character.
+      const text::TextStyle* shown =
+          rep != replaces.end() && style->hidden && run.fieldCode && !Deleted(run.revision) ? styles_.Intern(StyleOf(rp, false)) : style;
+      if (rep != replaces.end() && !shown->hidden) {
         uint32_t to = std::max(rep->to, i);
-        subst(i, to - i, rep->value, style, paint);
+        subst(i, to - i, rep->value, shown, paint);
         visible = true;
         i = to;
         rep->from = UINT32_MAX;

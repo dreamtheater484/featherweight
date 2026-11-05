@@ -235,6 +235,9 @@ class Editor {
   // Typing and deleting a character at a time coalesce into one step while they continue where the
   // last one ended. The view breaks the run when the caret moves on its own or time passes.
   void BreakTyping();
+  // Text inserted at the edge of a check box or drop-down list goes beside it, as typed text does;
+  // while filling one in (Forms.h), it goes in it.
+  void FillingIn(bool on);
 
   // ---- Direct changes (TreeEdit.h). RecordStep adds an applied step to the history, as one undo
   // step or as part of the open group, rebuilds the model's indexes and tells the listeners that

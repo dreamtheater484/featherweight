@@ -175,6 +175,28 @@ TEST(Layout_DateAndTimeFieldsShowTheMoment) {
   CHECK(Find(live, u"5 March 2026") && Find(live, u"14:07") && !Find(live, u"2000"));
 }
 
+TEST(Layout_LegacyCheckBoxesAndDropDownsShowTheirState) {
+  // D4: Word draws FORMCHECKBOX and FORMDROPDOWN from w:ffData, result or not.
+  auto field = [](const std::string& ff, const char* code, const std::string& result) {
+    return "<w:r><w:fldChar w:fldCharType=\"begin\"><w:ffData><w:name w:val=\"F\"/><w:enabled/>" + ff +
+           "</w:ffData></w:fldChar></w:r><w:r><w:instrText xml:space=\"preserve\"> " + code + " </w:instrText></w:r>" + result +
+           "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>";
+  };
+  const std::string sep = "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>";
+  const std::string body =
+      "<w:p><w:r><w:t xml:space=\"preserve\">A </w:t></w:r>" +
+      field("<w:checkBox><w:sizeAuto/><w:default w:val=\"0\"/><w:checked/></w:checkBox>", "FORMCHECKBOX", "") +
+      "<w:r><w:t xml:space=\"preserve\"> B </w:t></w:r>" +
+      field("<w:checkBox><w:sizeAuto/><w:default w:val=\"1\"/><w:checked w:val=\"0\"/></w:checkBox>", "FORMCHECKBOX", sep) +
+      "<w:r><w:t xml:space=\"preserve\"> C </w:t></w:r>" +
+      field("<w:ddList><w:result w:val=\"1\"/><w:listEntry w:val=\"One\"/><w:listEntry w:val=\"Two\"/></w:ddList>", "FORMDROPDOWN",
+            sep + "<w:r><w:t>Stale</w:t></w:r>") +
+      "</w:p>";
+  Doc d = Make(body + SmallPage());
+  REQUIRE(d.layout);
+  CHECK(Find(d, u"A ☒ B ☐ C Two") && !Find(d, u"Stale"));
+}
+
 }  // namespace
 
 TEST(Layout_FillsPagesWithinTheMargins) {

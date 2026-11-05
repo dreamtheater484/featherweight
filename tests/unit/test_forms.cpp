@@ -135,7 +135,16 @@ TEST(Forms_FillingInContentControls) {
   CHECK(Has(MainXml(*doc), "w:hint=\"eastAsia\"/></w:rPr><w:t>\xE2\x98\x92</w:t>"));  // in its own font
   CHECK(edit::SetChecked(editor, control(1), false) && Text(*doc, control(1).content) == u"☐");
   // A drop-down list and a date.
+  // Text typed beside a check box goes outside it, before it as after it.
+  editor.BreakTyping();
+  CHECK(editor.InsertText(control(1).content.to, u"!") && Text(*doc, control(1).content) == u"☐");
+  editor.BreakTyping();
+  CHECK(editor.InsertText(control(1).content.from, u"*") && Text(*doc, control(1).content) == u"☐");
+  CHECK(doc->Para(control(1).content.from.para).text.starts_with(u"*☐! Agree"));
   CHECK(edit::PickItem(editor, control(2), 2) && Text(*doc, control(2).content) == u"Blue" && !control(2).placeholder);
+  // Its first entry, "Choose an item.": the placeholder again.
+  CHECK(edit::PickItem(editor, control(2), 0) && control(2).placeholder && Text(*doc, control(2).content) == u"Choose an item.");
+  CHECK(edit::PickItem(editor, control(2), 1) && Text(*doc, control(2).content) == u"Red");
   CHECK(edit::PickDate(editor, control(3), {2026, 3, 5}));
   CHECK(Text(*doc, control(3).content) == u"5 March 2026" && control(3).date == (DateTime{2026, 3, 5}));
   CHECK(Has(MainXml(*doc), "<w:date w:fullDate=\"2026-03-05T00:00:00Z\">"));
@@ -149,7 +158,7 @@ TEST(Forms_FillingInContentControls) {
   CHECK(edit::ContentControls(*back, back->MainStory())[2].items.size() == 3);
   int steps = 0;
   while (editor.Undo()) ++steps;
-  CHECK(steps == 7 && MainXml(*doc) == original);
+  CHECK(steps == 11 && MainXml(*doc) == original);
 }
 
 TEST(Forms_LegacyFieldsAndProtection) {
