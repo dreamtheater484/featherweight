@@ -118,4 +118,10 @@ enum Cmd : int {
   CmdInsertBox,
   CmdInsertDate,
   CmdInsertTime,
+  CmdSpacing115,
+  CmdBorderBox,
+  CmdBorderBottom,
+  CmdBorderNone,
+  CmdShading,
+  CmdShadingNone,
 };

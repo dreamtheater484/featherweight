@@ -51,6 +51,7 @@ constexpr Named kNames[] = {
     {CmdAlignRight, L"Align right", L"Ctrl+R"},
     {CmdAlignJustify, L"Justify", L"Ctrl+J"},
     {CmdSpacing1, L"Line spacing 1.0", L"Ctrl+1"},
+    {CmdSpacing115, L"Line spacing 1.15", L""},
     {CmdSpacing15, L"Line spacing 1.5", L"Ctrl+5"},
     {CmdSpacing2, L"Line spacing 2.0", L"Ctrl+2"},
     {CmdSpaceBefore, L"Add or remove space before paragraph", L"Ctrl+0"},
@@ -70,6 +71,11 @@ constexpr Named kNames[] = {
     {CmdUpdateStyle, L"Update style to match selection", L""},
     {CmdInsertDate, L"Insert date", L""},
     {CmdInsertTime, L"Insert time", L""},
+    {CmdBorderBox, L"Box border", L""},
+    {CmdBorderBottom, L"Bottom border", L""},
+    {CmdBorderNone, L"No border", L""},
+    {CmdShading, L"Gray shading", L""},
+    {CmdShadingNone, L"No shading", L""},
 };
 
 const Named* NameOf(int cmd) {
@@ -231,7 +237,7 @@ int DocFormat::Shortcut(UINT vk, UINT mods) {
   return 0;
 }
 
-bool DocFormat::Owns(int cmd) { return cmd >= CmdBold && cmd <= CmdInsertTime; }
+bool DocFormat::Owns(int cmd) { return cmd >= CmdBold && cmd <= CmdShadingNone; }
 
 std::vector<int> DocFormat::CommandIds() {
   std::vector<int> ids;
@@ -360,6 +366,7 @@ void DocFormat::Execute(int cmd) {
     case CmdAlignRight: align(Justification::End); return;
     case CmdAlignJustify: align(Justification::Both); return;
     case CmdSpacing1: spacing(240); return;
+    case CmdSpacing115: spacing(276); return;
     case CmdSpacing15: spacing(360); return;
     case CmdSpacing2: spacing(480); return;
     case CmdSpaceBefore:
@@ -369,6 +376,22 @@ void DocFormat::Execute(int cmd) {
         edit::FormatParagraphs(te, t.sel, f);
       });
       return;
+    case CmdBorderBox:
+    case CmdBorderBottom:
+    case CmdBorderNone: {
+      // Single 1/2 pt lines, as Word's Borders button draws them.
+      edit::ParaFormat f;
+      f.borders = cmd == CmdBorderBox ? edit::BorderSides::Outside : cmd == CmdBorderBottom ? edit::BorderSides::Bottom : edit::BorderSides::None;
+      para(f);
+      return;
+    }
+    case CmdShading:
+    case CmdShadingNone: {
+      edit::ParaFormat f;
+      f.shading = cmd == CmdShading ? fw::doc::Color::Rgb(0xD9D9D9) : fw::doc::Color{};  // Word's 15 % gray
+      para(f);
+      return;
+    }
     case CmdBullets: list(edit::ListKind::Bullet); return;
     case CmdNumbering: list(edit::ListKind::Number); return;
     case CmdMultilevel: list(edit::ListKind::Multilevel); return;
@@ -709,12 +732,18 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
   alignBox.width = 52;
   alignBox.priority = 5;
   alignBox.glyph = AlignGlyph(st.jc);
-  alignBox.tooltip = L"Alignment";
+  alignBox.tooltip = L"Paragraph: alignment, line spacing, borders and shading";
   alignBox.enabled = on;
   alignBox.sepBefore = true;
-  alignBox.choices = {L"Align left (Ctrl+L)", L"Center (Ctrl+E)", L"Align right (Ctrl+R)", L"Justify (Ctrl+J)"};
+  static constexpr int kParagraph[] = {CmdAlignLeft,  CmdAlignCenter,  CmdAlignRight, CmdAlignJustify, CmdSpacing1,
+                                       CmdSpacing115, CmdSpacing15,    CmdSpacing2,   CmdBorderBox,    CmdBorderBottom,
+                                       CmdBorderNone, CmdShading,      CmdShadingNone};
+  for (int cmd : kParagraph) {
+    const Named* n = NameOf(cmd);
+    alignBox.choices.push_back(*n->keys ? std::wstring(n->label) + L" (" + n->keys + L")" : std::wstring(n->label));
+  }
   alignBox.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < 4) Execute(CmdAlignLeft + v.index);
+    if (v.index >= 0 && v.index < static_cast<int>(std::size(kParagraph))) Execute(kParagraph[v.index]);
   };
   m.left.push_back(alignBox);
   m.left.push_back(with(toggleButton(CmdBullets, icon::BulletedList), 7));
