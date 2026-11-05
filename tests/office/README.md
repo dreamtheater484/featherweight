@@ -16,6 +16,7 @@ Files for the never-damage tests (plan §10), made by `make_test_office.py`:
   - missing content types, zip encryption, duplicate part names
   - broken XML, a file that isn't a zip, and a truncated file
 - `reference/`: Office's own PDF of every file in `generated/`, `edge/` and `layout/`, plus `manifest.json`: the Office build, page count, the fonts Office drew with, and each source file's hash. These are the reference renders (plan §10) that `fwtool compare` measures Featherweight against. `scripts/reference-renders.ps1` makes them on the Office reference PC; run it again when a file changes or Office changes noticeably. With `-Folders tests\office\layout` it renders one folder and keeps the other folders' entries.
+- `torture/`: Word documents for the editing torture test (D2), made by `make_torture_docs.py` with the standard library only. These are the structures an editor must keep intact that the other folders lack: a table of contents as Word writes it (hyperlinked entries, each with a PAGEREF field), Word's empty `_GoBack` bookmark, fields inside content controls, and a simple field. There are no reference renders for them.
 - `broken/`: hand-made files that open and save, but that `fwtool check` must reject, each for one consistency rule (plan §4.3, rule 2):
   - a relationship id that doesn't resolve, a duplicate paragraph id, a duplicate slide id
   - a bookmark that starts but doesn't end, a field that begins but doesn't end
@@ -32,7 +33,7 @@ fwtool check --expect-reject tests/office/broken
 fwtool roundtrip --expect-reject tests/office/malicious
 ```
 
-`fwtool check` applies the reference registry (`src/pkg/References.h`, rules in `ReferenceRules.cpp`): every reference resolves, ids are unique, pairs are complete, and the derived data it can see (the calculation chain, chart caches and embedded workbooks, VML notes) matches its sources. What Office tolerates, such as a missing style, is a warning. It also lists the extensions it doesn't know, near which structural edits will be blocked.
+`fwtool check` applies the reference registry (`src/pkg/References.h`, rules in `ReferenceRules.cpp`): every reference resolves, ids are unique, pairs are complete, and fields stay where Word needs them. A field may not begin in one hyperlink, custom XML element or simple field and separate or end outside it, nor separate or end inside a content control it didn't begin in: Word refuses or repairs such a file, and the Open XML SDK validator doesn't notice (`Check_FieldsStayInTheirContainers`). Tables likewise: Word refuses a row without cells and repairs a cell without a paragraph or one that ends with a nested table (`Check_WordTablesWordCanOpen`). It also checks that the derived data it can see (the calculation chain, chart caches and embedded workbooks, VML notes) matches its sources. What Office tolerates, such as a missing style, is a warning. It also lists the extensions it doesn't know, near which structural edits will be blocked.
 
 ### Word documents through the model (D1)
 
@@ -53,6 +54,35 @@ build/validate/fwvalidate --saved <copies> <corpus> tests/office/generated tests
 - **Folder entries in the zip**, such as `ppt/`, which aren't parts.
 
 Measured on 2026-11-05: all 108 private corpus documents and the 27 files in `generated`, `edge` and `layout`. Results: round trip 135/135, `fwtool check` on the copies 135/135 (no new warnings), validator 0 new errors (401 in the originals), re-serialize all 135/135.
+
+## Editing torture test (D2)
+
+D2 is done when every corpus file, after scripted random edits and a save, has no new validator errors, passes `fwtool check`, and opens in Word without a repair prompt (plan §6.4). Three tools check that:
+
+- **`fwtool torture`** applies rounds of seeded random edits to each Word document through the editor: typing, deletes and replacements across fields, bookmarks, comments, content controls, tables and tracked changes, paragraph splits and joins, run, paragraph and paragraph-mark formatting, groups of edits undone as one step (as Paste and Replace All make), undo and redo. Then it saves. The saved file must open, pass `fwtool check` with no errors the original didn't have, and read back into the model as the edited document. A failure is shrunk to the fewest edits that still fail it and kept in `<out>/repro/` as a text file of edits, with the file they make. `--replay` applies one again:
+  ```bash
+  fwtool torture --seed 1 --edits 40 --rounds 3 --out build/torture tests/office/generated
+  ```
+  ```bash
+  fwtool torture --replay build/torture/repro/<name>-seed<seed>.txt
+  ```
+  The replay prints the parts the save wrote and writes `<name>-replay.docx` next to the reproducer. When the edited model and the saved file read back differ, it also writes both texts in full (`-replay-edited.txt`, `-replay-readback.txt`). A reproducer from another checkout finds its document by the tail of the recorded path, so `tests/office/...` files replay anywhere.
+
+  On rounds with an odd seed, every edit is also checked for locality: paragraphs outside the ones it's applied to must read the same before and after (those after it moved by the paragraphs it added or removed). That is the `spill` failure. Even seeds skip it, because reading every paragraph first fills the model's caches, and a stale cache is only caught when they start cold.
+- **`fwvalidate`** (above) with `--compare` or `--pairs`: the same comparison for explicit pairs, since the torture test's saved copies aren't named like their originals. `--json` writes the new errors with where they are.
+- **`scripts/word-open-check.ps1`** opens each file in Word, hidden and in safe mode, read-only, with macros off, and reports whether Word shows a repair prompt or an error. Word's alerts stay on so that a repair prompt is shown, read and cancelled, never answered. Nothing is ever saved. It needs the Office reference PC. A dialog about that PC's Office rather than the file, such as a missing proofing tool ("Word hyphenation feature is not available"), gives the status `notice`, which passes.
+
+Each saved copy in `<out>/saved` comes with its edits (`<name>.edits.txt`), so a copy that the validator or Word complains about can be shrunk too. That's slower, since each try replays the edits and asks the judge again, and with Word a try takes about 10 seconds:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\torture-minimize.ps1 build\torture\saved\<name>.edits.txt -Judge Word
+```
+
+`scripts/torture.ps1` runs all three over the corpus (`tests/office` and, when `FW_CORPUS` is set, the private corpus) and writes `summary.md`. When Word complains about a saved copy, it also opens the original: if Word complains about that too, the editor isn't to blame, and the summary says so. CI runs `scripts/torture.ps1 -Ci`: the public corpus, no Word.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\torture.ps1
+```
 
 ## Layout fidelity (D1)
 

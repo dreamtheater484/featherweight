@@ -28,10 +28,14 @@ struct Options {
   int runs = 5;                     // bench: runs per document
   bool budgets = false;             // bench: fail when a budget is missed
   bool typing = false;              // bench: time keystrokes instead of opening
-  int edits = 40;                   // edit-check: random edits per document
-  unsigned seed = 0;                // edit-check: the random edits' seed (0: the document's number)
+  int edits = 40;                   // edit-check: random edits per document; torture: per round
+  // edit-check, torture: the random edits' seed. 0: edit-check uses the document's number, torture
+  // 1 (each of its files and rounds derives its own from it).
+  uint64_t seed = 0;
   bool layout = false;              // dump: the pages Featherweight lays out
   bool edited = false;              // save: as after an edit in every part the model owns
+  uint32_t rounds = 3;              // torture: rounds per document, each from the original
+  bool replay = false;              // torture: the input is a reproducer to replay
   std::vector<std::filesystem::path> inputs;
 };
 
@@ -56,6 +60,7 @@ int RunBench(const Options& options);
 int RunEditCheck(const Options& options);
 int RunBenchApp(const Options& options);
 int RunSpelling(const Options& options);
+int RunTorture(const Options& options);
 // Parses its own options, from argv[2] on.
 int RunWrap(int argc, wchar_t** argv);
 

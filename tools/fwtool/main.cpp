@@ -71,6 +71,20 @@ constexpr const char* kUsage =
     "  fwtool spelling <file or folder>...\n"
     "      Checks each Word document's spelling with Windows' spell checker and counts its words,\n"
     "      as the app does in idle time, and times both (plan §6.2, §11).\n"
+    "  fwtool torture [--seed S] [--edits N] [--rounds R] [--out DIR] [--json FILE] <file or folder>...\n"
+    "      The open, edit and save test (plan §10, D2): R rounds of N seeded random edits per Word\n"
+    "      document through the editor (typing, deletes and replacements across fields, bookmarks,\n"
+    "      comments, content controls, tables and tracked changes, splits, joins, run, paragraph and\n"
+    "      paragraph-mark formatting, groups of edits as one undo step, undo and redo), then\n"
+    "      save: the saved file must open, pass check with no new errors, and read back as the\n"
+    "      edited document. A failure is shrunk to the fewest edits that still fail, kept in\n"
+    "      DIR/repro (default DIR: build/torture). DIR/saved and DIR/pairs.tsv hold a saved copy of\n"
+    "      each document for the validator and Word (scripts/torture.ps1).\n"
+    "  fwtool torture --replay <reproducer.txt> [--out DIR]\n"
+    "      Applies a reproducer's edits again and reports what happens and which parts the save\n"
+    "      wrote. The file it makes goes next to the reproducer as <name>-replay.docx, or into DIR,\n"
+    "      with <name>-replay-edited.txt and -readback.txt when the text differs. Its document is\n"
+    "      found by its recorded path or, from another checkout, by the tail of that path.\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
     "      Word's. Run it without text for its options.\n";
@@ -157,8 +171,10 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--runs" && i + 1 < argc) options.runs = _wtoi(argv[++i]);
     else if (arg == L"--budgets") options.budgets = true;
     else if (arg == L"--typing") options.typing = true;
-    else if (arg == L"--edits" && i + 1 < argc) options.edits = std::max(1, _wtoi(argv[++i]));
-    else if (arg == L"--seed" && i + 1 < argc) options.seed = static_cast<unsigned>(_wtoi(argv[++i]));
+    else if (arg == L"--edits" && i + 1 < argc) options.edits = std::max(0, _wtoi(argv[++i]));
+    else if (arg == L"--seed" && i + 1 < argc) options.seed = _wcstoui64(argv[++i], nullptr, 10);
+    else if (arg == L"--rounds" && i + 1 < argc) options.rounds = static_cast<uint32_t>(std::max(1, _wtoi(argv[++i])));
+    else if (arg == L"--replay") options.replay = true;
     else if (arg == L"--edited") options.edited = true;
     else if (arg.starts_with(L"--")) {
       std::fprintf(stderr, "Unknown option %s\n\n%s", fw::WideToUtf8(arg).c_str(), fwtool::kUsage);
@@ -181,6 +197,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"bench-app") return fwtool::RunBenchApp(options);
   if (command == L"edit-check") return fwtool::RunEditCheck(options);
   if (command == L"spelling") return fwtool::RunSpelling(options);
+  if (command == L"torture") return fwtool::RunTorture(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }

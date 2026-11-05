@@ -384,6 +384,69 @@ TEST(Check_RejectsBrokenWordContent) {
             "drawing object id \"1\" is used twice"));
 }
 
+// A field must begin, separate and end in the same hyperlink, custom XML element or simple field,
+// and not separate or end inside a content control it didn't begin in: Word refuses or repairs
+// such files, and the validator doesn't notice. Each case was opened in Word (D2's torture test,
+// finding 6: a paragraph split inside a table of contents entry's PAGEREF field).
+TEST(Check_FieldsStayInTheirContainers) {
+  const std::string begin = "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText> PAGEREF B \\h </w:instrText></w:r>";
+  const std::string sep = "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>1</w:t></w:r>";
+  const std::string end = "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>";
+  auto link = [](const std::string& inner) { return "<w:hyperlink w:anchor=\"B\">" + inner + "</w:hyperlink>"; };
+  auto sdt = [](const std::string& inner) { return "<w:sdt><w:sdtPr/><w:sdtContent>" + inner + "</w:sdtContent></w:sdt>"; };
+  auto check = [](const std::string& body) {
+    return CheckParts(Word("<w:p><w:bookmarkStart w:id=\"0\" w:name=\"B\"/><w:bookmarkEnd w:id=\"0\"/></w:p>" + body));
+  };
+  // Word opens these.
+  CHECK(check("<w:p>" + link(begin + sep + end) + "</w:p>").Ok());
+  CHECK(check("<w:p>" + begin + sep + "</w:p><w:p>" + end + "</w:p>").Ok());  // a table of contents spans paragraphs
+  CHECK(check("<w:p>" + begin + sep + "</w:p><w:tbl><w:tr><w:tc><w:p>" + end + "</w:p></w:tc></w:tr></w:tbl>").Ok());
+  CHECK(check("<w:p><w:ins w:id=\"7\" w:author=\"A\">" + begin + "</w:ins>" + sep + end + "</w:p>").Ok());
+  CHECK(check("<w:p><w:fldSimple w:instr=\" PAGE \">" + begin + sep + end + "</w:fldSimple></w:p>").Ok());
+  // Word refuses these: "Word experienced an error trying to open the file".
+  CHECK(Has(check("<w:p>" + link(begin) + "</w:p><w:p>" + link(sep + end) + "</w:p>").errors,
+            "a field begins inside a hyperlink but its separator is outside it"));
+  CHECK(Has(check("<w:p>" + link(begin) + sep + end + "</w:p>").errors, "a field begins inside a hyperlink"));
+  CHECK(Has(check("<w:p>" + begin + link(sep + end) + "</w:p>").errors,
+            "a field's separator is inside a hyperlink the field doesn't begin in"));
+  CHECK(Has(check("<w:p>" + link(begin + sep) + link(end) + "</w:p>").errors, "but its end is outside it"));
+  CHECK(Has(check("<w:p><w:customXml w:element=\"e\">" + begin + "</w:customXml>" + sep + end + "</w:p>").errors,
+            "a field begins inside a custom XML element"));
+  CHECK(Has(check("<w:p>" + begin + sep + "</w:p><w:customXml w:element=\"b\"><w:p>" + end + "</w:p></w:customXml>").errors,
+            "a field's end is inside a custom XML element"));
+  CHECK(Has(check("<w:p><w:fldSimple w:instr=\" PAGE \">" + begin + "</w:fldSimple>" + sep + end + "</w:p>").errors,
+            "a field begins inside a simple field"));
+  // Word repairs these: a field that separates or ends inside a content control it didn't begin in.
+  CHECK(Has(check("<w:p>" + begin + sdt(sep + end) + "</w:p>").errors, "is inside a content control the field doesn't begin in"));
+  CHECK(Has(check("<w:p>" + begin + sep + "</w:p>" + sdt("<w:p>" + end + "</w:p>")).errors,
+            "a field's end is inside a content control the field doesn't begin in"));
+  // Leaving a content control Word tolerates: a warning.
+  auto leaving = check("<w:p>" + sdt(begin) + sep + end + "</w:p>");
+  CHECK(leaving.Ok());
+  CHECK(Has(leaving.warnings, "a field begins inside a content control but its separator is outside it"));
+}
+
+// Tables as Word can open them: a row needs a cell, and a cell must end with a paragraph. Word
+// refuses or repairs these, and the validator accepts them (opened in Word, D2's torture test).
+TEST(Check_WordTablesWordCanOpen) {
+  auto check = [](const std::string& rows) { return CheckParts(Word("<w:tbl><w:tblGrid><w:gridCol/></w:tblGrid>" + rows + "</w:tbl><w:p/>")); };
+  auto cell = [](const std::string& inner) { return "<w:tr><w:tc><w:tcPr/>" + inner + "</w:tc></w:tr>"; };
+  // Word opens these.
+  CHECK(check("").Ok());  // a table without rows
+  CHECK(check(cell("<w:p/>")).Ok());
+  CHECK(check(cell("<w:p/><w:bookmarkStart w:id=\"1\" w:name=\"B\"/><w:bookmarkEnd w:id=\"1\"/>")).Ok());
+  CHECK(check(cell("<w:sdt><w:sdtPr/><w:sdtContent><w:p/></w:sdtContent></w:sdt>")).Ok());
+  CHECK(check(cell("<w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p/>")).Ok());
+  CHECK(check("<w:tr><w:sdt><w:sdtPr/><w:sdtContent><w:tc><w:p/></w:tc></w:sdtContent></w:sdt></w:tr>").Ok());
+  // Word refuses or repairs these.
+  CHECK(Has(check("<w:tr></w:tr>").errors, "a table row has no cells"));
+  CHECK(Has(check(cell("")).errors, "a table cell has no paragraph"));
+  CHECK(Has(check(cell("<w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>")).errors,
+            "a table cell ends with a table instead of a paragraph"));
+  CHECK(Has(check(cell("<w:sdt><w:sdtPr/><w:sdtContent><w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl></w:sdtContent></w:sdt>")).errors,
+            "a table cell ends with a table instead of a paragraph"));
+}
+
 TEST(Check_ScopesAlternatesAndWarnings) {
   // A glossary is a document of its own: its paragraph ids may repeat the main document's.
   const std::string glossary =
