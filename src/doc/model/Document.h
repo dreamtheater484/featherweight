@@ -20,7 +20,7 @@ class Reader;
 class Writer;
 }  // namespace docx
 namespace edit {
-class Editor;
+class TreeEdit;
 }  // namespace edit
 
 // The document model (plan §6.3): a headless, read-only view of a Word document, built by the
@@ -430,7 +430,7 @@ class Document {
  private:
   friend class docx::Reader;
   friend class docx::Writer;
-  friend class edit::Editor;
+  friend class edit::TreeEdit;
   Document();
 
   Pos PosOf(Node node) const;  // where an element is: its paragraph and offset

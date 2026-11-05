@@ -1,4 +1,4 @@
-#include "doc/edit/Editor.h"
+#include "doc/edit/TreeEdit.h"
 
 #include <pugixml.hpp>
 
@@ -56,7 +56,7 @@ bool Space(char16_t c) { return c == u' ' || c == u'\t' || c == u'\n' || c == u'
 
 }  // namespace
 
-Editor::Editor(Document& doc) : doc_(doc) {
+TreeEdit::TreeEdit(Document& doc) : doc_(doc) {
   // New elements need node ids the round-trip store hasn't seen.
   pkg::NodeId top = 0;
   for (const Elem& e : doc_.tree_.elems)
@@ -67,7 +67,7 @@ Editor::Editor(Document& doc) : doc_(doc) {
 
 // ---------- Transactions ----------
 
-void Editor::Begin(std::wstring label) {
+void TreeEdit::Begin(std::wstring label) {
   if (depth_++ > 0) return;
   txn_ = Txn{};
   txn_.label = std::move(label);
@@ -76,7 +76,7 @@ void Editor::Begin(std::wstring label) {
   touched_.clear();
 }
 
-void Editor::Commit() {
+void TreeEdit::Commit() {
   if (depth_ == 0 || --depth_ > 0) return;
   Tree& t = doc_.tree_;
   for (const auto& [id, old] : txn_.before) txn_.after.emplace_back(id, t.elems[id]);
@@ -90,7 +90,7 @@ void Editor::Commit() {
   ++version_;
 }
 
-bool Editor::Undo() {
+bool TreeEdit::Undo() {
   if (undo_.empty() || depth_ > 0) return false;
   Txn txn = std::move(undo_.back());
   undo_.pop_back();
@@ -109,7 +109,7 @@ bool Editor::Undo() {
   return true;
 }
 
-bool Editor::Redo() {
+bool TreeEdit::Redo() {
   if (redo_.empty() || depth_ > 0) return false;
   Txn txn = std::move(redo_.back());
   redo_.pop_back();
@@ -130,7 +130,7 @@ bool Editor::Redo() {
   return true;
 }
 
-void Editor::Invalidate(const Txn& txn) {
+void TreeEdit::Invalidate(const Txn& txn) {
   doc_.caches_ = std::make_unique<Document::Caches>();
   doc_.BuildIndexes();
   if (txn.all) {
@@ -141,18 +141,18 @@ void Editor::Invalidate(const Txn& txn) {
   }
 }
 
-void Editor::TouchPara(uint32_t para) {
+void TreeEdit::TouchPara(uint32_t para) {
   if (std::find(txn_.paras.begin(), txn_.paras.end(), para) == txn_.paras.end()) txn_.paras.push_back(para);
 }
 
-void Editor::TouchAll() { txn_.all = true; }
+void TreeEdit::TouchAll() { txn_.all = true; }
 
-void Editor::Reindex() {
+void TreeEdit::Reindex() {
   doc_.caches_ = std::make_unique<Document::Caches>();
   doc_.BuildIndexes();
 }
 
-Elem& Editor::Touch(ElemId id) {
+Elem& TreeEdit::Touch(ElemId id) {
   if (id < txn_.elems && touched_.find(id) == touched_.end()) {
     touched_.emplace(id, txn_.before.size());
     txn_.before.emplace_back(id, doc_.tree_.elems[id]);
@@ -160,7 +160,7 @@ Elem& Editor::Touch(ElemId id) {
   return doc_.tree_.elems[id];
 }
 
-void Editor::StoreSplit(pkg::NodeId node, pkg::NodeId second, pkg::SplitPoint at) {
+void TreeEdit::StoreSplit(pkg::NodeId node, pkg::NodeId second, pkg::SplitPoint at) {
   doc_.store_.Split(node, second, at);
   StoreOp op;
   op.kind = StoreOp::Split;
@@ -170,7 +170,7 @@ void Editor::StoreSplit(pkg::NodeId node, pkg::NodeId second, pkg::SplitPoint at
   txn_.store.push_back(op);
 }
 
-void Editor::StoreSetAttrs(pkg::NodeId node, pkg::AttrSetId set) {
+void TreeEdit::StoreSetAttrs(pkg::NodeId node, pkg::AttrSetId set) {
   StoreOp op;
   op.kind = StoreOp::SetAttrs;
   op.node = node;
@@ -182,7 +182,7 @@ void Editor::StoreSetAttrs(pkg::NodeId node, pkg::AttrSetId set) {
 
 // ---------- Elements ----------
 
-ElemId Editor::Clone(ElemId src, ElemId parent) {
+ElemId TreeEdit::Clone(ElemId src, ElemId parent) {
   Elem copy = E(src);
   copy.parent = parent;
   copy.next = kNoElem;
@@ -196,7 +196,7 @@ ElemId Editor::Clone(ElemId src, ElemId parent) {
   return id;
 }
 
-ElemId Editor::Own(ElemId container) {
+ElemId TreeEdit::Own(ElemId container) {
   if (!(E(container).flags & kSharedKids)) return container;
   std::vector<ElemId> kids;
   for (ElemId k = E(container).first; k != kNoElem; k = E(k).next) kids.push_back(k);
@@ -213,7 +213,7 @@ ElemId Editor::Own(ElemId container) {
   return container;
 }
 
-void Editor::Link(ElemId parent, ElemId child, ElemId before) {
+void TreeEdit::Link(ElemId parent, ElemId child, ElemId before) {
   ElemId prev = kNoElem;
   if (before == kNoElem) {
     const TypeDef& pt = S().Type(TypeOfElem(doc_.tree_, parent));
@@ -237,7 +237,7 @@ void Editor::Link(ElemId parent, ElemId child, ElemId before) {
   E(child).parent = parent;
 }
 
-ElemId Editor::Insert(ElemId parent, ElemDefId def, ElemId before) {
+ElemId TreeEdit::Insert(ElemId parent, ElemDefId def, ElemId before) {
   Elem e;
   e.def = def;
   e.parent = parent;
@@ -248,7 +248,7 @@ ElemId Editor::Insert(ElemId parent, ElemDefId def, ElemId before) {
   return id;
 }
 
-ElemId Editor::Child(ElemId parent, uint32_t name, bool create) {
+ElemId TreeEdit::Child(ElemId parent, uint32_t name, bool create) {
   if (parent == kNoElem) return kNoElem;
   Own(parent);
   for (ElemId c = E(parent).first; c != kNoElem; c = E(c).next)
@@ -259,7 +259,7 @@ ElemId Editor::Child(ElemId parent, uint32_t name, bool create) {
   return Insert(parent, def, kNoElem);
 }
 
-ElemId Editor::Path(ElemId parent, std::initializer_list<uint32_t> names, bool create) {
+ElemId TreeEdit::Path(ElemId parent, std::initializer_list<uint32_t> names, bool create) {
   ElemId e = parent;
   for (uint32_t n : names) {
     e = Child(e, n, create);
@@ -268,7 +268,7 @@ ElemId Editor::Path(ElemId parent, std::initializer_list<uint32_t> names, bool c
   return e;
 }
 
-void Editor::RemoveElement(ElemId elem) {
+void TreeEdit::RemoveElement(ElemId elem) {
   ElemId parent = E(elem).parent;
   if (parent == kNoElem) return;
   ElemId prev = kNoElem;
@@ -282,7 +282,7 @@ void Editor::RemoveElement(ElemId elem) {
   }
 }
 
-void Editor::Remove(ElemId parent, uint32_t name) {
+void TreeEdit::Remove(ElemId parent, uint32_t name) {
   if (parent == kNoElem) return;
   if (!(E(parent).flags & kSharedKids)) {
     bool has = false;
@@ -293,7 +293,7 @@ void Editor::Remove(ElemId parent, uint32_t name) {
   if (c != kNoElem) RemoveElement(c);
 }
 
-void Editor::Clear(ElemId container, std::initializer_list<uint32_t> keep) {
+void TreeEdit::Clear(ElemId container, std::initializer_list<uint32_t> keep) {
   if (container == kNoElem || E(container).first == kNoElem) return;
   Own(container);
   std::vector<ElemId> kids;
@@ -302,7 +302,7 @@ void Editor::Clear(ElemId container, std::initializer_list<uint32_t> keep) {
     if (std::find(keep.begin(), keep.end(), NameOfElem(doc_.tree_, c)) == keep.end()) RemoveElement(c);
 }
 
-void Editor::WriteAttrs(ElemId elem, const std::vector<AttrVal>& attrs) {
+void TreeEdit::WriteAttrs(ElemId elem, const std::vector<AttrVal>& attrs) {
   Tree& t = doc_.tree_;
   auto first = static_cast<uint32_t>(t.attrs.size());
   t.attrs.insert(t.attrs.end(), attrs.begin(), attrs.end());
@@ -311,7 +311,7 @@ void Editor::WriteAttrs(ElemId elem, const std::vector<AttrVal>& attrs) {
   e.attrCount = static_cast<uint16_t>(attrs.size());
 }
 
-void Editor::SetAttr(ElemId elem, uint32_t name, std::string_view value) {
+void TreeEdit::SetAttr(ElemId elem, uint32_t name, std::string_view value) {
   Tree& t = doc_.tree_;
   const TypeDef& type = S().Type(TypeOfElem(t, elem));
   AttrDefId def = S().AttrOf(TypeOfElem(t, elem), name);
@@ -332,7 +332,7 @@ void Editor::SetAttr(ElemId elem, uint32_t name, std::string_view value) {
   WriteAttrs(elem, attrs);
 }
 
-void Editor::RemoveAttr(ElemId elem, uint32_t name) {
+void TreeEdit::RemoveAttr(ElemId elem, uint32_t name) {
   Tree& t = doc_.tree_;
   AttrDefId def = S().AttrOf(TypeOfElem(t, elem), name);
   const Elem& e = t.elems[elem];
@@ -345,7 +345,7 @@ void Editor::RemoveAttr(ElemId elem, uint32_t name) {
 
 // ---------- Runs ----------
 
-bool Editor::SplitRunAt(uint32_t para, uint32_t offset) {
+bool TreeEdit::SplitRunAt(uint32_t para, uint32_t offset) {
   Tree& t = doc_.tree_;
   const Paragraph& p = doc_.paras_[para];
   if (offset == 0 || offset >= p.text.size()) return true;
@@ -460,7 +460,7 @@ bool Known(TypeId parentType, pugi::xml_node n) {
 
 }  // namespace
 
-void Editor::Append(ElemId parent, ElemId child) {
+void TreeEdit::Append(ElemId parent, ElemId child) {
   ElemId prev = kNoElem;
   for (ElemId c = E(parent).first; c != kNoElem; c = E(c).next) prev = c;
   if (prev == kNoElem) Touch(parent).first = child;
@@ -469,7 +469,7 @@ void Editor::Append(ElemId parent, ElemId child) {
   E(child).parent = parent;
 }
 
-ElemId Editor::Build(ElemId parent, const pugi::xml_node& n, ElemId before, bool last) {
+ElemId TreeEdit::Build(ElemId parent, const pugi::xml_node& n, ElemId before, bool last) {
   ElemDefId def = S().Child(TypeOfElem(doc_.tree_, parent), QNameHash(n.name()));
   Elem e;
   e.def = def;
@@ -496,7 +496,7 @@ ElemId Editor::Build(ElemId parent, const pugi::xml_node& n, ElemId before, bool
   return id;
 }
 
-ElemId Editor::AddXml(ElemId parent, std::string_view xml, ElemId before) {
+ElemId TreeEdit::AddXml(ElemId parent, std::string_view xml, ElemId before) {
   std::string wrapped = "<root";
   for (size_t i = 0; i < kNsCount; ++i) {
     auto ns = static_cast<Ns>(i);
@@ -514,7 +514,7 @@ ElemId Editor::AddXml(ElemId parent, std::string_view xml, ElemId before) {
   return Build(parent, n, before, false);
 }
 
-ElemId Editor::CopyChild(ElemId src, ElemId parent) {
+ElemId TreeEdit::CopyChild(ElemId src, ElemId parent) {
   if (src == kNoElem || parent == kNoElem) return kNoElem;
   uint32_t name = NameOfElem(doc_.tree_, src);
   ElemDefId def = S().Child(TypeOfElem(doc_.tree_, parent), name);
@@ -528,7 +528,7 @@ ElemId Editor::CopyChild(ElemId src, ElemId parent) {
 
 // ---------- Parts ----------
 
-ElemId Editor::EnsurePart(PartKind kind) {
+ElemId TreeEdit::EnsurePart(PartKind kind) {
   if (kind != PartKind::Styles && kind != PartKind::Numbering) return kNoElem;
   if (const Part* p = doc_.FindPart(kind)) return p->root;
   const Part* main = doc_.FindPart(PartKind::Document);

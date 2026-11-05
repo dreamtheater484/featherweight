@@ -8,7 +8,7 @@ add_library(fwdoc STATIC
   model/Tree.cpp
   docx/Reader.cpp
   docx/Writer.cpp
-  edit/Editor.cpp
+  edit/TreeEdit.cpp
   edit/Format.cpp
   edit/Lists.cpp
   edit/Styles.cpp

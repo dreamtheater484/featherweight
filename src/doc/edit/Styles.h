@@ -31,7 +31,7 @@ std::string DisplayName(std::string_view name);
 // The id of the style with this name or id (case-insensitive), adding Word's definition of a
 // built-in style when the document lacks it. Inside a transaction, after EnsurePart(Styles).
 // Empty when there is no such style.
-std::string EnsureStyle(Editor& ed, std::string_view nameOrId);
+std::string EnsureStyle(TreeEdit& ed, std::string_view nameOrId);
 
 // Applies a style to the range, as Word does:
 //  - a paragraph style sets every paragraph's w:pStyle and removes its direct paragraph
@@ -40,14 +40,14 @@ std::string EnsureStyle(Editor& ed, std::string_view nameOrId);
 //    a paragraph's text;
 //  - a linked style applied to part of one paragraph's text applies its character style there;
 //  - a character style sets w:rStyle on the text (the default one removes it).
-void ApplyStyle(Editor& ed, Range range, std::string_view nameOrId);
+void ApplyStyle(TreeEdit& ed, Range range, std::string_view nameOrId);
 
 // Changes a style's own definition: every paragraph or run that uses it follows. Properties equal
 // to what the style's basedOn gives are removed from it.
-void ModifyStyle(Editor& ed, std::string_view styleId, const RunFormat& run, const ParaFormat& para);
+void ModifyStyle(TreeEdit& ed, std::string_view styleId, const RunFormat& run, const ParaFormat& para);
 
 // "Update Heading 1 to Match Selection": the direct formatting of the paragraph at the range's start
 // (and of its first character) moves into the paragraph's style, and off the paragraph.
-void UpdateStyleToMatch(Editor& ed, Range range);
+void UpdateStyleToMatch(TreeEdit& ed, Range range);
 
 }  // namespace fw::doc::edit

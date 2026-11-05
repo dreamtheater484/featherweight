@@ -26,11 +26,11 @@ namespace fw::doc::edit {
 //  - Shared property sets (kSharedKids) are copied before they change.
 // Nothing else changes the model. After each commit, undo and redo the document's caches and
 // indexes are rebuilt, and the paragraphs touched get a new version.
-class Editor {
+class TreeEdit {
  public:
-  explicit Editor(Document& doc);
-  Editor(const Editor&) = delete;
-  Editor& operator=(const Editor&) = delete;
+  explicit TreeEdit(Document& doc);
+  TreeEdit(const TreeEdit&) = delete;
+  TreeEdit& operator=(const TreeEdit&) = delete;
 
   const Document& Doc() const { return doc_; }
 

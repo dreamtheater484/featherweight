@@ -119,7 +119,7 @@ std::pair<int64_t, int64_t> NextIds(const Document& doc) {
 }
 
 // Adds a list definition and a w:num for it; returns the numId (empty on failure).
-std::string AddList(Editor& ed, ListKind kind, const AutoList* first = nullptr) {
+std::string AddList(TreeEdit& ed, ListKind kind, const AutoList* first = nullptr) {
   const Document& doc = ed.Doc();
   ElemId root = NumberingRoot(doc);
   if (root == kNoElem) return {};
@@ -165,7 +165,7 @@ bool StyleGivesList(const Document& doc, std::string_view styleId) {
   return false;
 }
 
-void SetNumPr(Editor& ed, uint32_t para, std::string_view numId, int32_t level) {
+void SetNumPr(TreeEdit& ed, uint32_t para, std::string_view numId, int32_t level) {
   ElemId np = ed.Path(ed.Doc().Para(para).elem, {kPPr, kNumPr});
   ed.SetAttr(ed.Child(np, kIlvl), kVal, std::to_string(level));
   ed.SetAttr(ed.Child(np, kNumId), kVal, numId);
@@ -174,7 +174,7 @@ void SetNumPr(Editor& ed, uint32_t para, std::string_view numId, int32_t level) 
 
 // Puts paragraphs into a list: their indents come from the list, and the default style becomes
 // List Paragraph.
-void Join(Editor& ed, const std::vector<uint32_t>& paras, std::string_view numId, int32_t level, std::string_view listStyle) {
+void Join(TreeEdit& ed, const std::vector<uint32_t>& paras, std::string_view numId, int32_t level, std::string_view listStyle) {
   const Document& doc = ed.Doc();
   for (uint32_t p : paras) {
     const ParaProps& pp = doc.ResolvedPara(p);
@@ -206,7 +206,7 @@ uint32_t Previous(const Document& doc, uint32_t para) {
 }
 
 // Moves `para` and the rest of its list to another w:num.
-void Repoint(Editor& ed, uint32_t para, std::string_view numId) {
+void Repoint(TreeEdit& ed, uint32_t para, std::string_view numId) {
   const Document& doc = ed.Doc();
   std::string old(doc.ResolvedPara(para).numId);
   std::vector<std::pair<uint32_t, int32_t>> items{{para, doc.ResolvedPara(para).ilvl}};
@@ -227,7 +227,7 @@ std::optional<ListKind> KindOfList(const Document& doc, std::string_view numId) 
   return ListKind::Number;
 }
 
-void ToggleList(Editor& ed, Range range, ListKind kind) {
+void ToggleList(TreeEdit& ed, Range range, ListKind kind) {
   const Document& doc = ed.Doc();
   std::vector<uint32_t> paras = ParagraphsOf(doc, range);
   if (paras.empty()) return;
@@ -258,7 +258,7 @@ void ToggleList(Editor& ed, Range range, ListKind kind) {
   ed.Commit();
 }
 
-void RemoveList(Editor& ed, Range range) {
+void RemoveList(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
   ed.Begin(L"Remove list");
   for (uint32_t p : ParagraphsOf(doc, range)) {
@@ -280,7 +280,7 @@ void RemoveList(Editor& ed, Range range) {
   ed.Commit();
 }
 
-void RestartNumbering(Editor& ed, uint32_t para) {
+void RestartNumbering(TreeEdit& ed, uint32_t para) {
   const Document& doc = ed.Doc();
   const ParaProps& pp = doc.ResolvedPara(para);
   ElemId root = NumberingRoot(doc);
@@ -305,7 +305,7 @@ void RestartNumbering(Editor& ed, uint32_t para) {
   ed.Commit();
 }
 
-bool ContinueNumbering(Editor& ed, uint32_t para) {
+bool ContinueNumbering(TreeEdit& ed, uint32_t para) {
   const Document& doc = ed.Doc();
   if (!InList(doc.ResolvedPara(para))) return false;
   std::string own(doc.ResolvedPara(para).numId);  // a copy: resolving more paragraphs grows the cache
@@ -385,7 +385,7 @@ std::optional<AutoList> DetectAutoList(std::u16string_view typed) {
   return a;
 }
 
-void StartAutoList(Editor& ed, uint32_t para, const AutoList& list) {
+void StartAutoList(TreeEdit& ed, uint32_t para, const AutoList& list) {
   if (ed.EnsurePart(PartKind::Numbering) == kNoElem || ed.EnsurePart(PartKind::Styles) == kNoElem) return;
   ed.Begin(L"AutoFormat");
   std::string numId = AddList(ed, list.kind == ListKind::Bullet ? ListKind::Bullet : ListKind::Number, &list);

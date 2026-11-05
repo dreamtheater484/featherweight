@@ -54,7 +54,7 @@ std::pair<uint32_t, uint32_t> Span(const Document& doc, Range r, uint32_t para) 
 }
 
 // Sets an on/off property: removed when the styles give the same value, written otherwise.
-void SetOnOff(Editor& ed, ElemId pr, uint32_t name, bool value, bool inherited) {
+void SetOnOff(TreeEdit& ed, ElemId pr, uint32_t name, bool value, bool inherited) {
   if (value == inherited) {
     ed.Remove(pr, name);
     return;
@@ -64,16 +64,16 @@ void SetOnOff(Editor& ed, ElemId pr, uint32_t name, bool value, bool inherited) 
   else ed.SetAttr(e, kVal, "0");
 }
 
-void SetVal(Editor& ed, ElemId pr, uint32_t name, std::string_view value) { ed.SetAttr(ed.Child(pr, name), kVal, value); }
+void SetVal(TreeEdit& ed, ElemId pr, uint32_t name, std::string_view value) { ed.SetAttr(ed.Child(pr, name), kVal, value); }
 
-void SetColor(Editor& ed, ElemId e, uint32_t val, Color c) {
+void SetColor(TreeEdit& ed, ElemId e, uint32_t val, Color c) {
   ed.SetAttr(e, val, c.automatic ? std::string("auto") : Hex6(c.rgb));
   for (uint32_t n : {Name("themeColor"), Name("themeTint"), Name("themeShade")}) ed.RemoveAttr(e, n);
 }
 
 }  // namespace
 
-void WriteRunFormat(Editor& ed, ElemId rPr, const RunFormat& f, const RunProps& inh) {
+void WriteRunFormat(TreeEdit& ed, ElemId rPr, const RunFormat& f, const RunProps& inh) {
   const Document& doc = ed.Doc();
   if (f.font) {
     if (*f.font == inh.fonts.ascii && *f.font == inh.fonts.hAnsi) {
@@ -154,7 +154,7 @@ void WriteRunFormat(Editor& ed, ElemId rPr, const RunFormat& f, const RunProps& 
 namespace {
 
 // One run's (or paragraph mark's) w:rPr after the format, against what its styles give.
-void ApplyRunFormat(Editor& ed, const Document& doc, uint32_t para, ElemId rPr, const RunFormat& f) {
+void ApplyRunFormat(TreeEdit& ed, const Document& doc, uint32_t para, ElemId rPr, const RunFormat& f) {
   if (f.charStyle) {
     if (f.charStyle->empty()) ed.Remove(rPr, kRStyle);
     else SetVal(ed, rPr, kRStyle, *f.charStyle);
@@ -164,7 +164,7 @@ void ApplyRunFormat(Editor& ed, const Document& doc, uint32_t para, ElemId rPr, 
 
 // Calls fn(para, rPr) for every run in the range and every paragraph mark it covers.
 template <class Fn>
-void ForEachRunProps(Editor& ed, Range range, Fn fn) {
+void ForEachRunProps(TreeEdit& ed, Range range, Fn fn) {
   const Document& doc = ed.Doc();
   std::vector<uint32_t> paras = ParagraphsOf(doc, range);
   for (uint32_t p : paras) {
@@ -212,7 +212,7 @@ void ForEachResolved(const Document& doc, Range range, Fn fn) {
   if (!any && !paras.empty()) fn(doc.ResolvedMark(paras.front()));
 }
 
-void SetIndent(Editor& ed, const Document& doc, ElemId pPr, const ParaProps& inh, const ParaFormat& f) {
+void SetIndent(TreeEdit& ed, const Document& doc, ElemId pPr, const ParaProps& inh, const ParaFormat& f) {
   ElemId ind = ed.Child(pPr, kInd);
   Node n(&doc.GetTree(), ind);
   bool strict = Strict(doc);
@@ -239,7 +239,7 @@ void SetIndent(Editor& ed, const Document& doc, ElemId pPr, const ParaProps& inh
   if (Node(&doc.GetTree(), ind).AttrCount() == 0) ed.Remove(pPr, kInd);
 }
 
-void SetSpacing(Editor& ed, const Document& doc, ElemId pPr, const ParaProps& inh, const ParaFormat& f) {
+void SetSpacing(TreeEdit& ed, const Document& doc, ElemId pPr, const ParaProps& inh, const ParaFormat& f) {
   ElemId sp = ed.Child(pPr, kSpacing);
   auto setEdge = [&](std::optional<Twips> v, Twips inherited, bool inheritedAuto, uint32_t name, uint32_t lines, uint32_t autoName) {
     if (!v) return;
@@ -263,7 +263,7 @@ void SetSpacing(Editor& ed, const Document& doc, ElemId pPr, const ParaProps& in
   if (Node(&doc.GetTree(), sp).AttrCount() == 0) ed.Remove(pPr, kSpacing);
 }
 
-void SetBorders(Editor& ed, ElemId pPr, BorderSides sides) {
+void SetBorders(TreeEdit& ed, ElemId pPr, BorderSides sides) {
   ed.Remove(pPr, kPBdr);
   if (sides == BorderSides::None) return;
   ElemId bdr = ed.Child(pPr, kPBdr);
@@ -391,14 +391,14 @@ FormatState StateOf(const Document& doc, Range range) {
   return s;
 }
 
-void FormatRuns(Editor& ed, Range range, const RunFormat& format) {
+void FormatRuns(TreeEdit& ed, Range range, const RunFormat& format) {
   if (!format.Any()) return;
   ed.Begin(L"Format");
   ForEachRunProps(ed, range, [&](uint32_t para, ElemId rPr) { ApplyRunFormat(ed, ed.Doc(), para, rPr, format); });
   ed.Commit();
 }
 
-void FormatParagraphs(Editor& ed, Range range, const ParaFormat& f) {
+void FormatParagraphs(TreeEdit& ed, Range range, const ParaFormat& f) {
   if (!f.Any()) return;
   const Document& doc = ed.Doc();
   ed.Begin(L"Paragraph");
@@ -409,7 +409,7 @@ void FormatParagraphs(Editor& ed, Range range, const ParaFormat& f) {
   ed.Commit();
 }
 
-void WriteParaFormat(Editor& ed, ElemId pPr, const ParaFormat& f, const ParaProps& inh) {
+void WriteParaFormat(TreeEdit& ed, ElemId pPr, const ParaFormat& f, const ParaProps& inh) {
   const Document& doc = ed.Doc();
   {
     if (f.jc) {
@@ -438,7 +438,7 @@ void WriteParaFormat(Editor& ed, ElemId pPr, const ParaFormat& f, const ParaProp
   }
 }
 
-void ToggleRuns(Editor& ed, Range range, Toggle what) {
+void ToggleRuns(TreeEdit& ed, Range range, Toggle what) {
   FormatState s = StateOf(ed.Doc(), range);
   RunFormat f;
   switch (what) {
@@ -471,7 +471,7 @@ HalfPoints NextFontSize(HalfPoints size, bool grow) {
   return HalfPoints(16);
 }
 
-void GrowFont(Editor& ed, Range range, bool grow) {
+void GrowFont(TreeEdit& ed, Range range, bool grow) {
   ed.Begin(grow ? L"Grow font" : L"Shrink font");
   const Document& doc = ed.Doc();
   ForEachRunProps(ed, range, [&](uint32_t para, ElemId rPr) {
@@ -486,13 +486,13 @@ void GrowFont(Editor& ed, Range range, bool grow) {
   ed.Commit();
 }
 
-void ClearRunFormatting(Editor& ed, Range range) {
+void ClearRunFormatting(TreeEdit& ed, Range range) {
   ed.Begin(L"Clear formatting");
   ForEachRunProps(ed, range, [&](uint32_t, ElemId rPr) { ed.Clear(rPr, {kRStyle, kRPrChange}); });
   ed.Commit();
 }
 
-void ClearParaFormatting(Editor& ed, Range range) {
+void ClearParaFormatting(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
   ed.Begin(L"Reset paragraph");
   for (uint32_t p : ParagraphsOf(doc, range)) {
@@ -503,7 +503,7 @@ void ClearParaFormatting(Editor& ed, Range range) {
   ed.Commit();
 }
 
-void ClearAllFormatting(Editor& ed, Range range) {
+void ClearAllFormatting(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
   ed.Begin(L"Clear all formatting");
   ForEachRunProps(ed, range, [&](uint32_t, ElemId rPr) { ed.Clear(rPr, {kRPrChange}); });
@@ -514,7 +514,7 @@ void ClearAllFormatting(Editor& ed, Range range) {
   ed.Commit();
 }
 
-void ShiftIndent(Editor& ed, Range range, bool increase) {
+void ShiftIndent(TreeEdit& ed, Range range, bool increase) {
   const Document& doc = ed.Doc();
   ed.Begin(increase ? L"Increase indent" : L"Decrease indent");
   const int32_t step = std::max<int32_t>(1, doc.Settings().defaultTabStop.Value());

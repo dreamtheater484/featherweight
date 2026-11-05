@@ -24,17 +24,17 @@ std::optional<ListKind> KindOfList(const Document& doc, std::string_view numId);
 // Word's Bullets, Numbering and Multilevel List buttons: the range's paragraphs leave the list
 // when all of them are in one of this kind; otherwise they join the list of that kind just
 // before them, or start a new one. Paragraphs already in a list keep their level.
-void ToggleList(Editor& ed, Range range, ListKind kind);
+void ToggleList(TreeEdit& ed, Range range, ListKind kind);
 
 // The paragraphs leave their list. A list that comes from the paragraph style (numbered
 // headings) is switched off with w:numId 0, as Word does.
-void RemoveList(Editor& ed, Range range);
+void RemoveList(TreeEdit& ed, Range range);
 
 // Restart Numbering: this item and the rest of its list count again from the level's start.
-void RestartNumbering(Editor& ed, uint32_t para);
+void RestartNumbering(TreeEdit& ed, uint32_t para);
 // Continue Numbering: this item and the rest of its list continue the list of the same kind
 // before it. False when there's none.
-bool ContinueNumbering(Editor& ed, uint32_t para);
+bool ContinueNumbering(TreeEdit& ed, uint32_t para);
 
 // AutoFormat As You Type: what "1. ", "a) ", "(i) ", "* ", "- " or "> " typed at the start of a
 // paragraph turns into. `typed` is the paragraph's text up to the caret, ending in the space or
@@ -50,6 +50,6 @@ struct AutoList {
 std::optional<AutoList> DetectAutoList(std::u16string_view typed);
 // Makes the paragraph the first item of a list like that. The typed prefix is deleted by the
 // caller, in the same undo step.
-void StartAutoList(Editor& ed, uint32_t para, const AutoList& list);
+void StartAutoList(TreeEdit& ed, uint32_t para, const AutoList& list);
 
 }  // namespace fw::doc::edit

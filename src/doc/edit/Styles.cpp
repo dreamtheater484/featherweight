@@ -177,7 +177,7 @@ ElemId StylesRoot(const Document& doc) {
 
 // The id a built-in's basedOn or next names in this document: Normal is the default paragraph
 // style, Default Paragraph Font the default character style (left out when there is none).
-std::string Related(Editor& ed, std::string_view name) {
+std::string Related(TreeEdit& ed, std::string_view name) {
   if (name.empty()) return {};
   const Document& doc = ed.Doc();
   if (name == "Normal") {
@@ -189,7 +189,7 @@ std::string Related(Editor& ed, std::string_view name) {
   return EnsureStyle(ed, name);
 }
 
-std::string AddBuiltin(Editor& ed, const Builtin& b) {
+std::string AddBuiltin(TreeEdit& ed, const Builtin& b) {
   const Document& doc = ed.Doc();
   ElemId root = StylesRoot(doc);
   if (root == kNoElem) return {};
@@ -230,12 +230,12 @@ constexpr uint32_t kParaFormatting[] = {Name("keepNext"),       Name("keepLines"
                                         Name("jc"),             Name("outlineLvl")};
 
 // Word shows a style once it's used: semiHidden goes when the style says so.
-void Unhide(Editor& ed, const Style& s) {
+void Unhide(TreeEdit& ed, const Style& s) {
   Node n = s.node;
   if (n.Child(kSemiHidden) && n.Child(kUnhide)) ed.Remove(n.Id(), kSemiHidden);
 }
 
-void ApplyParaStyle(Editor& ed, uint32_t p, const Style& style) {
+void ApplyParaStyle(TreeEdit& ed, uint32_t p, const Style& style) {
   const Document& doc = ed.Doc();
   ElemId pElem = doc.Para(p).elem;
   ElemId pPr = ed.Child(pElem, kPPr);
@@ -307,7 +307,7 @@ std::vector<StyleEntry> GalleryStyles(const Document& doc) {
   return out;
 }
 
-std::string EnsureStyle(Editor& ed, std::string_view nameOrId) {
+std::string EnsureStyle(TreeEdit& ed, std::string_view nameOrId) {
   const Document& doc = ed.Doc();
   if (nameOrId.empty()) return {};
   if (SameName(nameOrId, "Normal"))
@@ -317,7 +317,7 @@ std::string EnsureStyle(Editor& ed, std::string_view nameOrId) {
   return b ? AddBuiltin(ed, *b) : std::string();
 }
 
-void ApplyStyle(Editor& ed, Range range, std::string_view nameOrId) {
+void ApplyStyle(TreeEdit& ed, Range range, std::string_view nameOrId) {
   const Document& doc = ed.Doc();
   if (ed.EnsurePart(PartKind::Styles) == kNoElem) return;
   ed.Begin(L"Style");
@@ -347,7 +347,7 @@ void ApplyStyle(Editor& ed, Range range, std::string_view nameOrId) {
   ed.Commit();
 }
 
-void ModifyStyle(Editor& ed, std::string_view styleId, const RunFormat& run, const ParaFormat& para) {
+void ModifyStyle(TreeEdit& ed, std::string_view styleId, const RunFormat& run, const ParaFormat& para) {
   const Document& doc = ed.Doc();
   const Style* s = doc.FindStyle(styleId);
   if (!s || (s->type != StyleType::Paragraph && s->type != StyleType::Character)) return;
@@ -365,7 +365,7 @@ void ModifyStyle(Editor& ed, std::string_view styleId, const RunFormat& run, con
   ed.Commit();
 }
 
-void UpdateStyleToMatch(Editor& ed, Range range) {
+void UpdateStyleToMatch(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
   std::vector<uint32_t> paras = ParagraphsOf(doc, range);
   if (paras.empty()) return;

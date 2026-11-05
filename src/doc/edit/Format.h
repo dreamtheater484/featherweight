@@ -5,7 +5,7 @@
 #include <string_view>
 #include <vector>
 
-#include "doc/edit/Editor.h"
+#include "doc/edit/TreeEdit.h"
 #include "doc/model/Document.h"
 
 namespace fw::doc::edit {
@@ -82,34 +82,34 @@ FormatState StateOf(const Document& doc, Range range);
 // Applies character formatting to the range's text, and to the paragraph marks the range covers
 // (all but the last paragraph's), so list labels and empty lines follow. With an empty range in an
 // empty paragraph, formats its mark.
-void FormatRuns(Editor& ed, Range range, const RunFormat& format);
-void FormatParagraphs(Editor& ed, Range range, const ParaFormat& format);
+void FormatRuns(TreeEdit& ed, Range range, const RunFormat& format);
+void FormatParagraphs(TreeEdit& ed, Range range, const ParaFormat& format);
 
 // The writers behind FormatRuns and FormatParagraphs, for any w:rPr or w:pPr (a style's too, with
 // what its basedOn chain gives): each property set in `format` is removed when it equals
 // `inherited`, written otherwise. WriteRunFormat leaves w:rStyle alone.
-void WriteRunFormat(Editor& ed, ElemId rPr, const RunFormat& format, const RunProps& inherited);
-void WriteParaFormat(Editor& ed, ElemId pPr, const ParaFormat& format, const ParaProps& inherited);
+void WriteRunFormat(TreeEdit& ed, ElemId rPr, const RunFormat& format, const RunProps& inherited);
+void WriteParaFormat(TreeEdit& ed, ElemId pPr, const ParaFormat& format, const ParaProps& inherited);
 
 // Ctrl+B, Ctrl+I, Ctrl+U and the like: off when the whole range has it, on otherwise.
 enum class Toggle : uint8_t { Bold, Italic, Underline, Strike, Superscript, Subscript };
-void ToggleRuns(Editor& ed, Range range, Toggle what);
+void ToggleRuns(TreeEdit& ed, Range range, Toggle what);
 
 // Ctrl+Shift+> and Ctrl+Shift+<: each run's size to the next one in Word's list (8, 9, 10, 11,
 // 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72, then by 10 to 1638); below 8, by 1 down to 1.
 HalfPoints NextFontSize(HalfPoints size, bool grow);
-void GrowFont(Editor& ed, Range range, bool grow);
+void GrowFont(TreeEdit& ed, Range range, bool grow);
 
 // Ctrl+Space: removes direct character formatting (a character style stays).
-void ClearRunFormatting(Editor& ed, Range range);
+void ClearRunFormatting(TreeEdit& ed, Range range);
 // Ctrl+Q: removes direct paragraph formatting (the style, the list and section breaks stay).
-void ClearParaFormatting(Editor& ed, Range range);
+void ClearParaFormatting(TreeEdit& ed, Range range);
 // Clear All Formatting: both, character styles too, and the paragraphs back to the default style.
-void ClearAllFormatting(Editor& ed, Range range);
+void ClearAllFormatting(TreeEdit& ed, Range range);
 
 // Increase and decrease indent: list paragraphs change level; others move their left indent to the
 // next or previous multiple of half an inch, as Word's buttons do.
-void ShiftIndent(Editor& ed, Range range, bool increase);
+void ShiftIndent(TreeEdit& ed, Range range, bool increase);
 
 // The value Word writes for a justification in this document (left/right in transitional parts,
 // start/end in strict ones).
