@@ -115,6 +115,7 @@ void Stack::Offset(float dx, float dy) {
     e.y2 += dy;
   }
   for (DrawingBox& d : drawings) d.rect = {d.rect.left + dx, d.rect.top + dy, d.rect.right + dx, d.rect.bottom + dy};
+  for (CellRect& c : cells) c.box = {c.box.left + dx, c.box.top + dy, c.box.right + dx, c.box.bottom + dy};
 }
 
 void Stack::Append(Stack&& other, float dx, float dy) {
@@ -128,6 +129,7 @@ void Stack::Append(Stack&& other, float dx, float dy) {
   fills.insert(fills.end(), other.fills.begin(), other.fills.end());
   edges.insert(edges.end(), other.edges.begin(), other.edges.end());
   drawings.insert(drawings.end(), other.drawings.begin(), other.drawings.end());
+  cells.insert(cells.end(), other.cells.begin(), other.cells.end());
   notes.insert(notes.end(), other.notes.begin(), other.notes.end());
   TakeFlags(other);
 }

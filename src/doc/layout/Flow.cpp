@@ -102,7 +102,7 @@ struct Engine::Impl {
     size_t col = 0;
     float y = 0;
     Spacing spacing;
-    size_t lines = 0, paints = 0, fills = 0, edges = 0, drawings = 0, zones = 0, notes = 0;
+    size_t lines = 0, paints = 0, fills = 0, edges = 0, drawings = 0, cells = 0, zones = 0, notes = 0;
     float notesHeight = 0;
     bool columnEmpty = true;
     // Inside the table in progress (its rows kept together): the row it starts at.
@@ -260,7 +260,8 @@ size_t LineBytes(const LineBox& l) {
 
 size_t PageBytes(const Page& p) {
   size_t n = sizeof(Page) + p.paints.capacity() * sizeof(RunPaint) + p.fills.capacity() * sizeof(Fill) +
-             p.edges.capacity() * sizeof(Edge) + p.drawings.capacity() * sizeof(DrawingBox);
+             p.edges.capacity() * sizeof(Edge) + p.drawings.capacity() * sizeof(DrawingBox) +
+             p.cells.capacity() * sizeof(CellRect);
   for (const LineBox& l : p.lines) n += LineBytes(l);
   return n;
 }
@@ -504,6 +505,7 @@ struct Flow {
     p.fills = std::move(f.body.fills);
     p.edges = std::move(f.body.edges);
     p.drawings = std::move(f.body.drawings);
+    p.cells = std::move(f.body.cells);
     std::stable_sort(p.drawings.begin(), p.drawings.end(), [](const DrawingBox& a, const DrawingBox& b) {
       if (a.behindText != b.behindText) return a.behindText;
       if (a.floating != b.floating) return !a.floating;
@@ -652,6 +654,7 @@ struct Flow {
     m.fills = f.body.fills.size();
     m.edges = f.body.edges.size();
     m.drawings = f.body.drawings.size();
+    m.cells = f.body.cells.size();
     m.zones = f.zones.size();
     m.notes = f.notes.size();
     m.notesHeight = f.notesHeight;
@@ -674,6 +677,7 @@ struct Flow {
     f.body.fills.resize(m.fills);
     f.body.edges.resize(m.edges);
     f.body.drawings.resize(m.drawings);
+    f.body.cells.resize(m.cells);
     f.zones.resize(m.zones);
     f.notes.resize(m.notes);
     f.notesHeight = m.notesHeight;

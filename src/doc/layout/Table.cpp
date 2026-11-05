@@ -332,6 +332,10 @@ void Engine::EmitCell(const CellBox& c, float x, float top, float height, float 
       copy.rect = {d.rect.left + dx, d.rect.top + dy, d.rect.right + dx, d.rect.bottom + dy};
       out.drawings.push_back(copy);
     }
+  for (const CellRect& n : s.cells)  // a table in the cell
+    if (n.box.top >= from - 0.01f && n.box.top < to - 0.01f)
+      out.cells.push_back({n.tc, n.tbl, n.row, n.col, n.span,
+                           {n.box.left + dx, n.box.top + dy, n.box.right + dx, n.box.bottom + dy}});
 }
 
 void Engine::EmitRow(const TableBox& t, size_t r, float x, float top, float height, const std::vector<float>* cutFrom,
@@ -362,6 +366,7 @@ void Engine::EmitRow(const TableBox& t, size_t r, float x, float top, float heig
     }
     if (c.props.shading.Present() && !c.props.shading.fill.automatic)
       out.fills.push_back({{left, top, right, bottom}, c.props.shading.fill.rgb});
+    out.cells.push_back({c.tc.Id(), t.tbl.Id(), static_cast<uint32_t>(r), c.col, c.span, {left, top, right, bottom}});
     // Content: a restart cell's lines go in its first row (unless the caller places merged cells'
     // text itself); split rows show their part.
     if (!c.continued && (spans || c.rowSpan <= 1)) {
