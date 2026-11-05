@@ -46,6 +46,9 @@ jobs:
           & $fwtool roundtrip --model --out saved-copies @files; if ($LASTEXITCODE) { exit $LASTEXITCODE }
           dotnet build tools\validate\Validate.csproj -c Release -o build\validate; if ($LASTEXITCODE) { exit $LASTEXITCODE }
           & build\validate\fwvalidate.exe --saved saved-copies @files; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Saved as the app saves after an edit (D2): every part the model owns rewritten, properties updated.
+          & $fwtool save --edited --out saved-edited @files; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & build\validate\fwvalidate.exe --saved saved-edited @files; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Smoke test (render a PDF and a Word document off-screen)
         shell: pwsh
