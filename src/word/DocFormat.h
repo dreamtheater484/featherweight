@@ -6,6 +6,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "TabContent.h"
@@ -46,6 +47,8 @@ class DocFormat {
   void AddToolbar(ToolbarModel& m);
   // Insert ▾'s first item, Picture… (the tab opens its file dialog).
   std::function<void()> insertPicture;
+  // More of Insert ▾, after Picture…: page layout's breaks (DocPage), each its label and action.
+  std::vector<std::pair<std::wstring, std::function<void()>>> insertMore;
 
   // The format painter: its button takes the selection's format, and the next selection made
   // gets it (Esc cancels). Ctrl+Shift+C and Ctrl+Shift+V copy and paste a format the same way.

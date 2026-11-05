@@ -25,6 +25,7 @@
 using namespace fw::doc;
 using fw::Twips;
 using fw::doc::layout::Layout;
+using fw::doc::layout::TextPos;
 using fw::doc::layout::LineBox;
 using fw::doc::layout::Page;
 using fw::doc::layout::SubstituteFamily;
@@ -531,6 +532,34 @@ void RandomEdit(edit::Editor& ed, const Document& doc, std::mt19937& rng) {
 }
 
 }  // namespace
+
+TEST(Layout_APageSetupChangeLaysOutInIdleTime) {
+  // A change of every section's margins: the first pages again at once, and the caret near the end
+  // isn't laid out (so painting doesn't lay out the whole document) until the rest is.
+  std::string body;
+  for (int i = 0; i < 60; ++i) body += P(Words(25));
+  Doc d = Make(body + SmallPage());
+  REQUIRE(d.layout);
+  const size_t pages = d.pages();
+  REQUIRE(pages > 20);
+  const std::vector<uint32_t> paras = d.doc->StoryParagraphs(d.doc->MainStory());
+  const TextPos first{paras.front(), 0}, last{paras.back(), 3};
+  CHECK(d.layout->LaidOut(first) && d.layout->LaidOut(last));
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  edit::PageSetup wider;
+  wider.left = Twips(1600);
+  REQUIRE(edit::SetPageSetup(ed, 0, 0, wider));
+  CHECK(!d.layout->Done() && !d.layout->LaidOut(first) && !d.layout->LaidOut(last));
+  d.layout->LayOutPages(2);
+  CHECK(d.layout->LaidOut(first) && !d.layout->LaidOut(last));
+  CHECK(!d.layout->Done());  // asking laid nothing out
+  CHECK(d.pages() >= pages - 1);  // the old pages are shown meanwhile
+  while (d.layout->Continue(5)) {
+  }
+  CHECK(d.layout->LaidOut(last) && d.pages() > pages);
+  CHECK(SameAsFresh(*d.doc, *d.layout, "page setup"));
+}
 
 TEST(Layout_EditsLayOutAgainAsFromScratch) {
   // Paragraphs of every length, kept-together headings, a table that splits, footnotes and a

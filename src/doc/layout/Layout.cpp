@@ -204,6 +204,18 @@ std::optional<size_t> Layout::PageOf(TextPos pos) {
   return std::nullopt;
 }
 
+bool Layout::LaidOut(TextPos pos) const {
+  const Engine& e = impl_->engine;
+  const Document& d = e.Doc();
+  if (e.Done() || pos.para >= d.Paragraphs().size() || d.Para(pos.para).story != d.MainStory()) return true;
+  // The main text's paragraphs are in reading order: the last one laid out so far says.
+  const std::vector<Page>& pages = e.Pages();
+  for (size_t i = pages.size(); i-- > 0;)
+    for (auto it = pages[i].lines.rbegin(); it != pages[i].lines.rend(); ++it)
+      if (it->para < d.Paragraphs().size() && d.Para(it->para).story == d.MainStory()) return it->para >= pos.para;
+  return false;
+}
+
 namespace {
 
 // The line that holds `pos` (laying out pages up to it): its page and index on the page.

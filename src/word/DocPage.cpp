@@ -1,0 +1,620 @@
+#include "word/DocPage.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <iterator>
+#include <optional>
+
+#include "Commands.h"
+#include "ui/Controls.h"
+#include "ui/Gfx.h"
+#include "ui/Icons.h"
+#include "ui/Theme.h"
+
+using namespace gfx;
+namespace edit = fw::doc::edit;
+using fw::Twips;
+using fw::doc::kNone;
+using fw::doc::Pos;
+using fw::doc::SectionProps;
+using fw::doc::SectionStart;
+
+namespace {
+
+struct Named {
+  int cmd;
+  const wchar_t* label;
+  const wchar_t* keys;
+};
+constexpr Named kNames[] = {
+    {CmdPageSetup, L"Page setup…", L""},
+    {CmdLayoutBox, L"Layout", L""},
+    {CmdPortrait, L"Portrait", L""},
+    {CmdLandscape, L"Landscape", L""},
+    {CmdMarginsNormal, L"Margins: Normal", L""},
+    {CmdMarginsNarrow, L"Margins: Narrow", L""},
+    {CmdMarginsModerate, L"Margins: Moderate", L""},
+    {CmdMarginsWide, L"Margins: Wide", L""},
+    {CmdColumnsOne, L"One column", L""},
+    {CmdColumnsTwo, L"Two columns", L""},
+    {CmdColumnsThree, L"Three columns", L""},
+    {CmdPageBreak, L"Page break", L"Ctrl+Enter"},
+    {CmdColumnBreak, L"Column break", L"Ctrl+Shift+Enter"},
+    {CmdSectionNextPage, L"Section break (next page)", L""},
+    {CmdSectionContinuous, L"Section break (continuous)", L""},
+    {CmdSectionEvenPage, L"Section break (even page)", L""},
+    {CmdSectionOddPage, L"Section break (odd page)", L""},
+    {CmdDeleteSectionBreak, L"Delete section break", L""},
+    {CmdHyphenation, L"Hyphenate automatically", L""},
+};
+
+const Named* NameOf(int cmd) {
+  for (const Named& n : kNames)
+    if (n.cmd == cmd) return &n;
+  return nullptr;
+}
+
+// Word's margin presets, in twips.
+struct MarginPreset {
+  int cmd;
+  const wchar_t* name;
+  int32_t top, bottom, left, right;
+};
+constexpr MarginPreset kMargins[] = {
+    {CmdMarginsNormal, L"Normal", 1440, 1440, 1440, 1440},
+    {CmdMarginsNarrow, L"Narrow", 720, 720, 720, 720},
+    {CmdMarginsModerate, L"Moderate", 1440, 1440, 1080, 1080},
+    {CmdMarginsWide, L"Wide", 1440, 1440, 2880, 2880},
+};
+
+// Paper sizes, standing up, in twips.
+struct Paper {
+  const wchar_t* name;
+  int32_t width, height;
+};
+constexpr Paper kPapers[] = {{L"Letter", 12240, 15840}, {L"Legal", 12240, 20160},  {L"A4", 11906, 16838},
+                             {L"A5", 8391, 11906},      {L"Executive", 10440, 15120}, {L"B5 (JIS)", 10319, 14571}};
+
+constexpr int32_t kLongest = 31680;  // 22 inches, as Word allows
+constexpr float kLabelW = 104, kRowH = 36;
+
+bool Near(int32_t a, int32_t b) { return std::abs(a - b) <= 20; }
+
+// Lengths as the user's region measures them: inches (US) or centimeters.
+bool Metric() {
+  wchar_t v[4] = L"";
+  return GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_IMEASURE, v, 4) > 0 && v[0] == L'0';
+}
+double FromTwips(int32_t twips) { return Metric() ? twips / 566.929 : twips / 1440.0; }
+int32_t ToTwips(double v) { return static_cast<int32_t>(std::lround(Metric() ? v * 566.929 : v * 1440.0)); }
+const wchar_t* Unit() { return Metric() ? L" cm" : L"\""; }
+
+std::wstring Number(double v) {
+  wchar_t b[32];
+  swprintf_s(b, L"%.3g", v);
+  return b;
+}
+
+// "Letter (8.5 × 11")", "A4 (21 × 29.7 cm)".
+std::wstring PaperLabel(const Paper& p) {
+  return std::wstring(p.name) + L" (" + Number(FromTwips(p.width)) + L" × " + Number(FromTwips(p.height)) + Unit() +
+         L")";
+}
+
+int MarginPresetOf(const SectionProps& s) {
+  for (size_t i = 0; i < std::size(kMargins); ++i) {
+    const MarginPreset& m = kMargins[i];
+    if (Near(s.marginTop.Value(), m.top) && Near(s.marginBottom.Value(), m.bottom) && Near(s.marginStart.Value(), m.left) &&
+        Near(s.marginEnd.Value(), m.right))
+      return static_cast<int>(i);
+  }
+  return -1;
+}
+
+bool Landscape(const SectionProps& s) { return s.pageWidth.Value() > s.pageHeight.Value(); }
+
+bool Before(Pos a, Pos b) { return a.para < b.para || (a.para == b.para && a.offset < b.offset); }
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// The Page setup panel
+
+class DocPage::Panel : public PanelContent {
+ public:
+  explicit Panel(DocPage& owner) : p_(owner) {
+    auto drop = [](Dropdown& d, const wchar_t* name, std::vector<std::wstring> items) {
+      d.label = d.tooltip = name;
+      d.items = std::move(items);
+    };
+    auto spin = [](SpinBox& s, const wchar_t* name, double lo, double hi, double step, int decimals, const wchar_t* unit) {
+      s.label = s.tooltip = name;
+      s.minValue = lo;
+      s.maxValue = hi;
+      s.step = step;
+      s.decimals = decimals;
+      s.unit = unit;
+    };
+    const double longest = FromTwips(kLongest), step = Metric() ? 0.1 : 0.05;
+
+    drop(applyTo_, L"Apply to", {L"This section", L"Whole document"});
+    applyTo_.selected = 0;
+    applyTo_.onChange = [this](int) { shown_ = {}; };
+    std::vector<std::wstring> papers;
+    for (const Paper& paper : kPapers) papers.push_back(PaperLabel(paper));
+    papers.push_back(L"Custom size");
+    drop(paper_, L"Paper size", std::move(papers));
+    paper_.onChange = [this](int i) {
+      if (i < 0 || i >= static_cast<int>(std::size(kPapers))) return;
+      const auto [first, last] = Scope();
+      if (first == kNone) return;
+      // As the page lies now.
+      const bool turned = Landscape(p_.Doc().Sections()[first].props);
+      edit::PageSetup s;
+      s.width = Twips(turned ? kPapers[i].height : kPapers[i].width);
+      s.height = Twips(turned ? kPapers[i].width : kPapers[i].height);
+      Page(s);
+    };
+    spin(width_, L"Page width", FromTwips(1440), longest, step, 2, Unit());
+    width_.onChange = [this](double v) {
+      edit::PageSetup s;
+      s.width = Twips(ToTwips(v));
+      Page(s);
+    };
+    spin(height_, L"Page height", FromTwips(1440), longest, step, 2, Unit());
+    height_.onChange = [this](double v) {
+      edit::PageSetup s;
+      s.height = Twips(ToTwips(v));
+      Page(s);
+    };
+    drop(orientation_, L"Orientation", {L"Portrait", L"Landscape"});
+    orientation_.onChange = [this](int i) {
+      edit::PageSetup s;
+      s.landscape = i == 1;
+      Page(s);
+    };
+    drop(start_, L"Section starts", {L"On a new page", L"Continuous", L"On an even page", L"On an odd page"});
+    start_.onChange = [this](int i) {
+      const auto [first, last] = Scope();
+      if (first == kNone || i < 0 || i > 3) return;
+      edit::Editor& ed = p_.editor_;
+      ed.BeginGroup(u"Section start");
+      edit::Result r;
+      for (uint32_t s = first; s <= last && (r = edit::SetSectionStart(ed, s, static_cast<SectionStart>(i))); ++s) {
+      }
+      ed.EndGroup();
+      Done(r);
+    };
+
+    std::vector<std::wstring> presets;
+    for (const MarginPreset& m : kMargins) presets.push_back(m.name);
+    presets.push_back(L"Custom");
+    drop(margins_, L"Margins", std::move(presets));
+    margins_.onChange = [this](int i) {
+      if (i < 0 || i >= static_cast<int>(std::size(kMargins))) return;
+      const MarginPreset& m = kMargins[i];
+      edit::PageSetup s;
+      s.top = Twips(m.top);
+      s.bottom = Twips(m.bottom);
+      s.left = Twips(m.left);
+      s.right = Twips(m.right);
+      Page(s);
+    };
+    auto margin = [&](SpinBox& box, const wchar_t* name, std::optional<Twips> edit::PageSetup::*field) {
+      spin(box, name, 0, longest, step, 2, Unit());
+      box.onChange = [this, field](double v) {
+        edit::PageSetup s;
+        s.*field = Twips(ToTwips(v));
+        Page(s);
+      };
+    };
+    margin(top_, L"Top margin", &edit::PageSetup::top);
+    margin(bottom_, L"Bottom margin", &edit::PageSetup::bottom);
+    margin(left_, L"Left margin", &edit::PageSetup::left);
+    margin(right_, L"Right margin", &edit::PageSetup::right);
+    margin(header_, L"Header from the edge", &edit::PageSetup::header);
+    margin(footer_, L"Footer from the edge", &edit::PageSetup::footer);
+
+    spin(columns_, L"Columns", 1, 12, 1, 0, L"");
+    columns_.onChange = [this](double v) { Columns(static_cast<int>(std::lround(v)), spacing_.value, line_.selected == 1); };
+    spin(spacing_, L"Space between columns", 0, longest, step, 2, Unit());
+    spacing_.onChange = [this](double v) { Columns(static_cast<int>(std::lround(columns_.value)), v, line_.selected == 1); };
+    drop(line_, L"Line between columns", {L"No line", L"Line between"});
+    line_.onChange = [this](int i) { Columns(static_cast<int>(std::lround(columns_.value)), spacing_.value, i == 1); };
+
+    drop(hyphenate_, L"Hyphenate automatically", {L"Off", L"On"});
+    hyphenate_.onChange = [this](int i) {
+      edit::Hyphenation h;
+      h.automatic = i == 1;
+      Done(edit::SetHyphenation(p_.editor_, h));
+    };
+    spin(zone_, L"Hyphenation zone", 0, FromTwips(kLongest), step, 2, Unit());
+    zone_.onChange = [this](double v) {
+      edit::Hyphenation h;
+      h.zone = Twips(ToTwips(v));
+      Done(edit::SetHyphenation(p_.editor_, h));
+    };
+    spin(limit_, L"Consecutive hyphenated lines (0: no limit)", 0, 32767, 1, 0, L"");
+    limit_.onChange = [this](double v) {
+      edit::Hyphenation h;
+      h.limit = static_cast<int32_t>(std::lround(v));
+      Done(edit::SetHyphenation(p_.editor_, h));
+    };
+
+    rows_ = {{L"Page"},
+             {L"Apply to", &applyTo_},
+             {L"Paper", &paper_},
+             {L"Width, height", &width_, &height_},
+             {L"Orientation", &orientation_},
+             {L"Section starts", &start_},
+             {L"Margins"},
+             {L"Preset", &margins_},
+             {L"Top, bottom", &top_, &bottom_},
+             {L"Left, right", &left_, &right_},
+             {L"Header, footer", &header_, &footer_},
+             {L"Columns"},
+             {L"Number, space", &columns_, &spacing_},
+             {L"Line", &line_},
+             {L"Hyphenation (whole document)"},
+             {L"Automatic", &hyphenate_},
+             {L"Zone", &zone_},
+             {L"Limit", &limit_}};
+    int id = 10;
+    for (Row& r : rows_)
+      for (Control* c : {r.a, r.b})
+        if (c) c->id = id++;
+  }
+
+  std::wstring Title() const override { return L"Page setup"; }
+
+  // Opened again: the selection's sections, shown as they are.
+  void Open() {
+    applyTo_.selected = 0;
+    shown_ = {};
+  }
+
+  std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
+    ui_ = ui;
+    const float u = ui;
+    Refresh();
+    headings_.clear();
+    labels_.clear();
+    std::vector<Control*> controls;
+    const float labelX = body.left + 20 * u, cx = body.left + (20 + kLabelW) * u, right = body.right - 20 * u;
+    auto place = [&](Control* c, float left, float r, float y) {
+      c->rc = RectF(std::round(left), std::round(y), std::round(r), std::round(y + 30 * u));
+      controls.push_back(c);
+    };
+    float y = body.top + 4 * u;
+    for (Row& r : rows_) {
+      if (!r.a) {
+        if (!headings_.empty()) y += 6 * u;
+        headings_.push_back({r.label, RectF(labelX, y, right, y + 22 * u)});
+        y += 26 * u;
+        continue;
+      }
+      if (r.b) {
+        const float half = (right - cx - 8 * u) / 2;
+        place(r.a, cx, cx + half, y);
+        place(r.b, cx + half + 8 * u, right, y);
+      } else {
+        const float w = dynamic_cast<SpinBox*>(r.a) ? std::min(right - cx, 120 * u) : right - cx;
+        place(r.a, cx, cx + w, y);
+      }
+      labels_.push_back({r.label, RectF(labelX, y, cx - 8 * u, y + 30 * u)});
+      y += kRowH * u;
+    }
+    return controls;
+  }
+
+  void Draw(Canvas& c) override {
+    const Palette& p = theme::P();
+    const float u = ui_;
+    Refresh();
+    for (const auto& [text, rc] : headings_) c.Text(text, rc, p.text, 13 * u, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    for (const auto& [text, rc] : labels_) c.Text(text, rc, p.textSecondary, 13 * u);
+  }
+
+ private:
+  struct Row {
+    std::wstring label;
+    Control* a = nullptr;  // none: a heading
+    Control* b = nullptr;  // a second control beside the first
+  };
+  // What the controls show: the first section in scope, as of this selection and document.
+  struct Shown {
+    Pos a{kNone, 0}, f{kNone, 0};
+    uint64_t generation = UINT64_MAX;
+    size_t sections = 0;
+    int scope = -1;
+    bool operator==(const Shown&) const = default;
+  };
+
+  std::pair<uint32_t, uint32_t> Scope() const {
+    const auto n = static_cast<uint32_t>(p_.Doc().Sections().size());
+    if (n > 0 && applyTo_.selected == 1) return {0, n - 1};
+    return p_.Sections();
+  }
+
+  void Done(const edit::Result& r) {
+    p_.host_.keep(r);
+    shown_ = {};  // what the document has now, also after a refusal
+  }
+
+  void Page(const edit::PageSetup& s) {
+    const auto [first, last] = Scope();
+    if (first != kNone) Done(edit::SetPageSetup(p_.editor_, first, last, s));
+  }
+
+  void Columns(int count, double space, bool line) {
+    const auto [first, last] = Scope();
+    if (first == kNone) return;
+    edit::ColumnSetup c;
+    c.count = std::clamp(count, 1, 12);
+    c.space = Twips(ToTwips(space));
+    c.line = line;
+    Done(edit::SetColumns(p_.editor_, first, last, c));
+  }
+
+  void Refresh() {
+    const fw::doc::Document& doc = p_.Doc();
+    auto [a, f] = p_.host_.selection();
+    const Shown now{a, f, doc.CacheGeneration(), doc.Sections().size(), applyTo_.selected};
+    if (now == shown_) return;
+    shown_ = now;
+    const auto [first, last] = Scope();
+    const bool can = p_.editor_.CanEdit() && first != kNone;
+    for (Row& r : rows_)
+      for (Control* c : {r.a, r.b})
+        if (c) c->enabled = can;
+    applyTo_.enabled = can && doc.Sections().size() > 1;
+    applyTo_.items[0] = first != last && applyTo_.selected == 0 ? L"Selected sections" : L"This section";
+    if (first == kNone) return;
+    const SectionProps& s = doc.Sections()[first].props;
+    const int32_t w = s.pageWidth.Value(), h = s.pageHeight.Value();
+    paper_.selected = static_cast<int>(std::size(kPapers));
+    for (size_t i = 0; i < std::size(kPapers); ++i)
+      if (Near(std::min(w, h), kPapers[i].width) && Near(std::max(w, h), kPapers[i].height)) paper_.selected = static_cast<int>(i);
+    width_.SetValue(FromTwips(w));
+    height_.SetValue(FromTwips(h));
+    orientation_.selected = Landscape(s) ? 1 : 0;
+    start_.selected = s.start <= SectionStart::OddPage ? static_cast<int>(s.start) : -1;
+    const int preset = MarginPresetOf(s);
+    margins_.selected = preset >= 0 ? preset : static_cast<int>(std::size(kMargins));
+    top_.SetValue(FromTwips(std::abs(s.marginTop.Value())));
+    bottom_.SetValue(FromTwips(std::abs(s.marginBottom.Value())));
+    left_.SetValue(FromTwips(s.marginStart.Value()));
+    right_.SetValue(FromTwips(s.marginEnd.Value()));
+    header_.SetValue(FromTwips(s.headerDistance.Value()));
+    footer_.SetValue(FromTwips(s.footerDistance.Value()));
+    columns_.SetValue(s.columns.count);
+    spacing_.SetValue(FromTwips(s.columns.space.Value()));
+    line_.selected = s.columns.separator ? 1 : 0;
+    const fw::doc::DocSettings& set = doc.Settings();
+    hyphenate_.selected = set.autoHyphenation ? 1 : 0;
+    zone_.SetValue(FromTwips(set.hyphenationZone.Value()));
+    limit_.SetValue(set.consecutiveHyphenLimit);
+    hyphenate_.enabled = zone_.enabled = limit_.enabled = p_.editor_.CanEdit();
+  }
+
+  DocPage& p_;
+  float ui_ = 1;
+  std::vector<Row> rows_;
+  std::vector<std::pair<std::wstring, D2D1_RECT_F>> headings_, labels_;
+  Shown shown_;
+  Dropdown applyTo_, paper_, orientation_, start_, margins_, line_, hyphenate_;
+  SpinBox width_, height_, top_, bottom_, left_, right_, header_, footer_, columns_, spacing_, zone_, limit_;
+};
+
+// ---------------------------------------------------------------------------
+
+DocPage::DocPage(edit::Editor& editor, Host host) : editor_(editor), host_(std::move(host)) {
+  panel_ = std::make_unique<Panel>(*this);
+}
+
+DocPage::~DocPage() = default;
+
+bool DocPage::ShowsIn(const PanelContent* shown) const { return shown && shown == panel_.get(); }
+
+bool DocPage::Owns(int cmd) { return cmd >= CmdPageSetup && cmd <= CmdHyphenation; }
+
+std::vector<int> DocPage::CommandIds() {
+  std::vector<int> ids;
+  for (const Named& n : kNames)
+    if (n.cmd != CmdLayoutBox) ids.push_back(n.cmd);
+  return ids;
+}
+
+int DocPage::Shortcut(UINT vk, UINT mods) {
+  if (vk != VK_RETURN || !(mods & kModCtrl) || (mods & kModAlt)) return 0;
+  return (mods & kModShift) ? CmdColumnBreak : CmdPageBreak;
+}
+
+const std::vector<int>& DocPage::InsertCommands() {
+  static const std::vector<int> ids = {CmdPageBreak,         CmdColumnBreak,    CmdSectionNextPage,
+                                       CmdSectionContinuous, CmdSectionEvenPage, CmdSectionOddPage};
+  return ids;
+}
+
+std::pair<uint32_t, uint32_t> DocPage::Sections() const {
+  const auto n = static_cast<uint32_t>(Doc().Sections().size());
+  if (n == 0) return {kNone, kNone};
+  if (host_.headerSection)
+    if (const uint32_t s = host_.headerSection(); s < n) return {s, s};
+  auto [a, f] = host_.selection();
+  uint32_t x = edit::SectionOf(Doc(), a.para), y = edit::SectionOf(Doc(), f.para);
+  if (x > y) std::swap(x, y);
+  return {x, y};
+}
+
+CommandState DocPage::Query(int cmd) {
+  CommandState s;
+  if (const Named* n = NameOf(cmd)) {
+    s.label = n->label;
+    s.shortcut = n->keys;
+  }
+  const bool can = editor_.CanEdit();
+  const auto [first, last] = Sections();
+  const SectionProps* p = first != kNone ? &Doc().Sections()[first].props : nullptr;
+  // Breaks go into the main text, where the caret is (not in a header or footer).
+  auto inBody = [&] {
+    const Pos f = host_.selection().second;
+    const bool header = host_.headerSection && host_.headerSection() != kNone;
+    return can && !header && f.para < Doc().Paragraphs().size() && Doc().Para(f.para).story == Doc().MainStory();
+  };
+  switch (cmd) {
+    case CmdPortrait:
+    case CmdLandscape:
+      s.enabled = can && p;
+      s.checked = p && Landscape(*p) == (cmd == CmdLandscape);
+      break;
+    case CmdMarginsNormal:
+    case CmdMarginsNarrow:
+    case CmdMarginsModerate:
+    case CmdMarginsWide:
+      s.enabled = can && p;
+      s.checked = p && MarginPresetOf(*p) == cmd - CmdMarginsNormal;
+      break;
+    case CmdColumnsOne:
+    case CmdColumnsTwo:
+    case CmdColumnsThree:
+      s.enabled = can && p;
+      s.checked = p && p->columns.count == cmd - CmdColumnsOne + 1;
+      break;
+    case CmdPageBreak:
+    case CmdColumnBreak:
+    case CmdSectionNextPage:
+    case CmdSectionContinuous:
+    case CmdSectionEvenPage:
+    case CmdSectionOddPage: s.enabled = inBody(); break;
+    case CmdDeleteSectionBreak:
+      s.enabled = inBody() && edit::SectionOf(Doc(), host_.selection().second.para) + 1 < Doc().Sections().size();
+      break;
+    case CmdHyphenation:
+      s.enabled = can;
+      s.checked = Doc().Settings().autoHyphenation;
+      break;
+    default: s.enabled = can; break;  // Page setup, the Layout menu
+  }
+  return s;
+}
+
+void DocPage::Execute(int cmd) {
+  if (!Query(cmd).enabled) return;
+  const auto [first, last] = Sections();
+  switch (cmd) {
+    case CmdPageSetup:
+      panel_->Open();
+      host_.showPanel(panel_.get(), true);
+      return;
+    case CmdPortrait:
+    case CmdLandscape: {
+      edit::PageSetup s;
+      s.landscape = cmd == CmdLandscape;
+      host_.keep(edit::SetPageSetup(editor_, first, last, s));
+      return;
+    }
+    case CmdMarginsNormal:
+    case CmdMarginsNarrow:
+    case CmdMarginsModerate:
+    case CmdMarginsWide: {
+      const MarginPreset& m = kMargins[cmd - CmdMarginsNormal];
+      Margins(m.top, m.bottom, m.left, m.right);
+      return;
+    }
+    case CmdColumnsOne:
+    case CmdColumnsTwo:
+    case CmdColumnsThree: {
+      const fw::doc::Columns& now = Doc().Sections()[first].props.columns;
+      edit::ColumnSetup c;
+      c.count = cmd - CmdColumnsOne + 1;
+      c.space = now.space;
+      c.line = now.separator && c.count > 1;
+      host_.keep(edit::SetColumns(editor_, first, last, c));
+      return;
+    }
+    case CmdPageBreak: Break(false); return;
+    case CmdColumnBreak: Break(true); return;
+    case CmdSectionNextPage: SectionBreak(SectionStart::NextPage); return;
+    case CmdSectionContinuous: SectionBreak(SectionStart::Continuous); return;
+    case CmdSectionEvenPage: SectionBreak(SectionStart::EvenPage); return;
+    case CmdSectionOddPage: SectionBreak(SectionStart::OddPage); return;
+    case CmdDeleteSectionBreak:
+      host_.apply(edit::DeleteSectionBreak(editor_, edit::SectionOf(Doc(), host_.selection().second.para)));
+      return;
+    case CmdHyphenation: {
+      edit::Hyphenation h;
+      h.automatic = !Doc().Settings().autoHyphenation;
+      host_.keep(edit::SetHyphenation(editor_, h));
+      return;
+    }
+    default: return;
+  }
+}
+
+void DocPage::Margins(int32_t top, int32_t bottom, int32_t left, int32_t right) {
+  const auto [first, last] = Sections();
+  edit::PageSetup s;
+  s.top = Twips(top);
+  s.bottom = Twips(bottom);
+  s.left = Twips(left);
+  s.right = Twips(right);
+  host_.keep(edit::SetPageSetup(editor_, first, last, s));
+}
+
+// A break replaces the selection, as typing does; one undo step.
+void DocPage::Break(bool column) {
+  auto [from, to] = host_.selection();
+  if (Before(to, from)) std::swap(from, to);
+  if (from == to) {
+    host_.apply(edit::InsertBreak(editor_, from, column));
+    return;
+  }
+  editor_.BeginGroup(column ? u"Column break" : u"Page break");
+  edit::Result r = editor_.Delete(from, to);
+  const bool deleted = static_cast<bool>(r);
+  if (r) r = edit::InsertBreak(editor_, r.caret, column);
+  editor_.EndGroup();
+  if (deleted && !r) editor_.Undo();  // nothing half done
+  host_.apply(r);
+}
+
+void DocPage::SectionBreak(SectionStart start) {
+  auto [from, to] = host_.selection();
+  if (Before(to, from)) std::swap(from, to);
+  if (from == to) {
+    host_.apply(edit::InsertSectionBreak(editor_, from, start));
+    return;
+  }
+  editor_.BeginGroup(u"Section break");
+  edit::Result r = editor_.Delete(from, to);
+  const bool deleted = static_cast<bool>(r);
+  if (r) r = edit::InsertSectionBreak(editor_, r.caret, start);
+  editor_.EndGroup();
+  if (deleted && !r) editor_.Undo();
+  host_.apply(r);
+}
+
+void DocPage::AddToolbar(ToolbarModel& m) {
+  static constexpr int kMenu[] = {CmdPortrait,   CmdLandscape,  CmdMarginsNormal, CmdMarginsNarrow, CmdMarginsModerate,
+                                  CmdMarginsWide, CmdColumnsOne, CmdColumnsTwo,    CmdColumnsThree,  CmdHyphenation,
+                                  CmdPageSetup};
+  ToolItem t;
+  t.kind = ToolKind::Dropdown;
+  t.cmd = CmdLayoutBox;
+  t.width = 52;
+  t.priority = 2;
+  t.glyph = icon::Page;
+  t.tooltip = L"Layout: orientation, margins, columns and page setup";
+  t.enabled = editor_.CanEdit();
+  t.sepBefore = true;
+  for (int cmd : kMenu) {
+    const CommandState q = Query(cmd);
+    t.choices.push_back(q.checked ? L"✓ " + q.label : q.label);
+  }
+  t.onChange = [this](const ToolValue& v) {
+    if (v.index >= 0 && v.index < static_cast<int>(std::size(kMenu))) Execute(kMenu[v.index]);
+  };
+  m.left.push_back(t);
+}

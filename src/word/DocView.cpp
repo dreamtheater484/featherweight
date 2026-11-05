@@ -156,6 +156,7 @@ std::unique_ptr<DocView> DocView::FromBytes(ViewHost& host, std::vector<uint8_t>
 DocView::~DocView() {
   StopBlinking();
   ClosePanels();
+  if (page_ && page_->ShowsIn(host_.ViewShownPanel())) host_.ViewShowPanel(nullptr);
   linkPanel_.reset();
   bookmarkPanel_.reset();
   pageNumberPanel_.reset();
@@ -252,9 +253,18 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
       host_.ViewStateChanged();
     };
     th.showPanel = [this](PanelContent* p) { host_.ViewShowPanel(p); };
+    DocPage::Host ph;
+    ph.selection = th.selection;
+    ph.apply = [this](const fw::doc::edit::Result& r) { return Apply(r); };
+    ph.keep = [this](const fw::doc::edit::Result& r) { return ApplyPageChange(r); };
+    ph.showPanel = [this](PanelContent* p, bool toggle) { ShowPanel(p, toggle); };
+    ph.headerSection = [this] { return hf_ ? hf_->section : fw::doc::kNone; };
     table_ = std::make_unique<DocTable>(*editor_, std::move(th));
+    page_ = std::make_unique<DocPage>(*editor_, std::move(ph));
     pictures_ = std::make_unique<fw::doc::edit::Pictures>(*editor_);
     format_->insertPicture = [this] { Execute(CmdInsertPicture); };
+    for (int cmd : DocPage::InsertCommands())
+      format_->insertMore.push_back({page_->Query(cmd).Tooltip(), [this, cmd] { Execute(cmd); }});
     const std::vector<uint32_t> main = doc_->StoryParagraphs(doc_->MainStory());
     if (!main.empty()) anchor_ = focus_ = {main.front(), 0};
   }
@@ -624,6 +634,8 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
     }
     fill(m.rects, static_cast<int>(i) == current_ ? p.searchCurrent : p.searchHit, true);
   }
+  // The selection, like the caret, once its pages are laid out again after a change of the page.
+  if (HasSelection() && !pagination_->LaidOut(std::max(anchor_, focus_))) return;
   if (HasSelection() && table_) {
     TextPos a = std::min(anchor_, focus_), b = std::max(anchor_, focus_);
     if (!(cellFrom_ == a) || !(cellTo_ == b) || cellRevision_ != pagination_->Revision()) {
@@ -1408,6 +1420,8 @@ int DocView::ShortcutFor(UINT vk, UINT mods) const {
     if (shift && vk == '8') return CmdShowMarks;
     if (shift && vk == VK_F5 && format_) return CmdBookmark;
   }
+  if (page_)
+    if (int cmd = DocPage::Shortcut(vk, mods)) return cmd;
   return Shortcut(vk, mods);
 }
 
@@ -1415,6 +1429,7 @@ CommandState DocView::QueryCommand(int cmd) {
   if (format_ && DocFormat::Owns(cmd)) return format_->Query(cmd);
   if (auto d3 = QueryD3(cmd)) return *d3;
   if (table_ && DocTable::Owns(cmd)) return table_->Query(cmd);
+  if (page_ && DocPage::Owns(cmd)) return page_->Query(cmd);
   CommandState s;
   if (auto picture = QueryPicture(cmd)) s = *picture;
   switch (cmd) {
@@ -1470,6 +1485,8 @@ std::vector<int> DocView::Commands() {
     if (format_ || cmd == CmdNavigationPane || cmd == CmdShowMarks || cmd == CmdOpenLink) ids.push_back(cmd);
   if (table_)
     for (int cmd : DocTable::CommandIds()) ids.push_back(cmd);
+  if (page_)
+    for (int cmd : DocPage::CommandIds()) ids.push_back(cmd);
   return ids;
 }
 
@@ -1482,6 +1499,10 @@ bool DocView::Execute(int cmd) {
   }
   if (table_ && DocTable::Owns(cmd)) {
     table_->Execute(cmd);
+    return true;
+  }
+  if (page_ && DocPage::Owns(cmd)) {
+    page_->Execute(cmd);
     return true;
   }
   if (ExecuteProof(cmd)) return true;
@@ -1535,6 +1556,7 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
     format_->AddToolbar(m);
     AddD3Toolbar(m);
     table_->AddToolbar(m);
+    page_->AddToolbar(m);
     AddPictureToolbar(m);
   }
   SyncPicturePanel();
