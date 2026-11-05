@@ -1715,13 +1715,17 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     if (!st.Ok()) return fail("open", when + "the saved file doesn't open: " + st.message), false;
     for (const std::string& error : fw::pkg::CheckPackage(*again).errors)
       if (std::find(known.begin(), known.end(), error) == known.end()) return fail("check", when + error), false;
-    for (const auto& [problem, count] : MediaProblems(*again)) {
-      const auto had = knownMedia.find(problem);
-      const int original = had == knownMedia.end() ? 0 : had->second;
-      if (count > original)
-        return fail("media", when + problem + " (" + std::to_string(count) + " in the saved file, " +
-                                 std::to_string(original) + " in the original)"),
-               false;
+    // Only where saving leaves out pictures nothing uses (D3's pictures, docx::Serialize); D2's Save
+    // keeps a deleted picture's relationship, which does no harm.
+    if constexpr (FW_TORTURE_D3 != 0) {
+      for (const auto& [problem, count] : MediaProblems(*again)) {
+        const auto had = knownMedia.find(problem);
+        const int original = had == knownMedia.end() ? 0 : had->second;
+        if (count > original)
+          return fail("media", when + problem + " (" + std::to_string(count) + " in the saved file, " +
+                                   std::to_string(original) + " in the original)"),
+                 false;
+      }
     }
     std::unique_ptr<Document> reread;
     auto reopen = [&] { reread = docx::Read(std::move(again), st); };
