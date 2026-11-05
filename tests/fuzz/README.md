@@ -8,9 +8,10 @@ One target per parser (plan §10). So far:
 - `fuzz_check`: `fwtool check`'s path over a package: the reference registry, the consistency checker, the id renewer and the extension query. Seeds: `seeds/package`, corpus files written as text (see below), so the fuzzer can change the XML inside them.
 - `fuzz_formula`: the formula scanner the registry uses (sheet names and cell references), and every other syntax a reference can have. Seeds: `seeds/formula`.
 - `fuzz_docx`: the Word document model (`src/doc`): the reader, what pagination asks of the model (runs, inline items, resolved properties, list labels, fields, tables) and the writer. Seeds: `seeds/docx`, a small hand-written document with every structure the model reads, and `seeds/package`. Inputs are read like `fuzz_check`'s.
+- `fuzz_drawing`: fwdraw (plan §4.5): DrawingML and VML into the shape model, preset and custom geometry, themes, picture decoding through WIC, metafiles and SVG, and drawing the result into a small software surface. Seeds: `seeds/drawing`, the corpus's drawings and a tiny picture in each format (see below).
 - `fuzz_layout`: pagination (`src/doc/layout`): the document read into the model, laid out a page at a time with the PC's fonts, hit-tested and dumped. Seeds as `fuzz_docx`'s.
 
-`make_seeds.py` makes `seeds/opc`, `seeds/package` and `seeds/formula` from the corpus (standard library only): `python tests/fuzz/make_seeds.py`.
+`make_seeds.py` makes `seeds/opc`, `seeds/package`, `seeds/formula` and `seeds/drawing` from the corpus (standard library only): `python tests/fuzz/make_seeds.py`.
 
 Besides crashes and AddressSanitizer reports, each target aborts when an invariant breaks:
 
@@ -22,6 +23,17 @@ Besides crashes and AddressSanitizer reports, each target aborts when an invaria
 - Renaming references and renewing ids leaves a document that still parses.
 - Every part the document model writes back equals what it read, after canonicalization; runs and inline items stay inside their paragraph's text.
 - Pagination ends, within its page cap; every page has a size, and hit tests and carets land on the page and in the text.
+- A drawing's extent, ink bounds, wrap outline and text boxes are finite, and a decoded picture stays within its limits.
+
+### Drawings
+
+`fuzz_drawing` reads a picture when the input doesn't start with `<`. Otherwise the input is a drawing's XML (`w:drawing`, `wp:inline`, `w:pict`, a VML shape, `p:spTree` or a shape), and lines `@<name>` start sections after it: `@theme` is the theme, any other name a relationship id, whose content is a picture or a part.
+
+```
+<wp:inline xmlns:wp="..." ...>...<a:blip r:embed="rId1"/>...</wp:inline>
+@rId1
+<svg xmlns="http://www.w3.org/2000/svg" ...>...</svg>
+```
 
 ### Packages as text
 
@@ -43,10 +55,10 @@ cmake -S . -B build-fuzz -DFW_FUZZ=ON
 ```
 
 ```bash
-cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx
+cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing
 ```
 
-`FW_FUZZ` instruments `fwcore`, `fwpkg`, `fwdoc`, miniz and pugixml with AddressSanitizer and coverage, so keep it out of normal builds.
+`FW_FUZZ` instruments `fwcore`, `fwpkg`, `fwdoc`, `fwdraw`, miniz and pugixml with AddressSanitizer and coverage, so keep it out of normal builds.
 
 ### Toolchains
 

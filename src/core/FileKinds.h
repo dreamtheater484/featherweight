@@ -20,7 +20,9 @@ struct FileKindInfo {
   const wchar_t* typeName;    // what Explorer calls these files
   const wchar_t* filterName;  // their name in the Open dialog
   std::span<const wchar_t* const> extensions;  // opened by the viewer; the first is the main one
-  std::span<const wchar_t* const> later;       // imported in the app's last milestone (decision 10)
+  // Formats of this kind the viewer doesn't open yet: .rtf and .txt (D2), and the older and other
+  // formats imported in the app's last milestone (decision 10).
+  std::span<const wchar_t* const> later;
   int iconIndex;              // the file icon: its index among the exe's icons (0 is the app icon)
   bool viewer;                // the viewer has shipped
   bool editor;                // the editor has shipped (PDFs are read, not created)
@@ -32,6 +34,8 @@ const FileKindInfo& Info(FileKind kind);
 FileKind KindOfPath(std::wstring_view path);
 
 bool ViewerShipped(FileKind kind);
+// A shipped viewer opens files with this path's extension.
+bool Opens(std::wstring_view path);
 bool EditorShipped(FileKind kind);
 // The kinds Featherweight opens today, in table order.
 std::vector<FileKind> ShippedViewers();

@@ -218,21 +218,6 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
   const Engine& e = impl_->engine;
   if (page >= e.Pages().size()) return;
   const Page& p = e.Pages()[page];
-  auto drawOne = [&](const DrawingBox& d) {
-    if (drawing) drawing(painter, d);
-    else Placeholder(painter, d.rect);
-  };
-  for (const DrawingBox& d : p.drawings)
-    if (d.behindText) drawOne(d);
-  for (const Fill& f : p.fills) painter.FillRect({f.rect.left, f.rect.top, f.rect.right, f.rect.bottom}, draw::Brush::Solid(ColorOf(f.color)));
-  // The text of a text box in front of the text goes right after its own drawing, which would
-  // otherwise cover it.
-  auto inFront = [&](uint32_t d) {
-    if (d == kNone) return false;
-    for (const DrawingBox& box : p.drawings)
-      if (box.drawing == d) return !box.behindText;
-    return false;
-  };
   auto paintLine = [&](const LineBox& lb) {
     const bool clip = lb.clip.Width() > 0;
     if (clip || lb.turn) painter.Save();
@@ -286,15 +271,21 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
     }
     if (clip || lb.turn) painter.Restore();
   };
-  for (const LineBox& lb : p.lines)
-    if (!inFront(lb.drawing)) paintLine(lb);
-  for (const Edge& edge : p.edges) StrokeEdge(painter, edge);
-  for (const DrawingBox& d : p.drawings) {
-    if (d.behindText) continue;
-    drawOne(d);
+  // A text box's lines go on top of its own shape, which is filled.
+  auto drawOne = [&](const DrawingBox& d) {
+    if (drawing) drawing(painter, d);
+    else Placeholder(painter, d.rect);
     for (const LineBox& lb : p.lines)
       if (lb.drawing == d.drawing) paintLine(lb);
-  }
+  };
+  for (const DrawingBox& d : p.drawings)
+    if (d.behindText) drawOne(d);
+  for (const Fill& f : p.fills) painter.FillRect({f.rect.left, f.rect.top, f.rect.right, f.rect.bottom}, draw::Brush::Solid(ColorOf(f.color)));
+  for (const LineBox& lb : p.lines)
+    if (lb.drawing == doc::kNone) paintLine(lb);
+  for (const Edge& edge : p.edges) StrokeEdge(painter, edge);
+  for (const DrawingBox& d : p.drawings)
+    if (!d.behindText) drawOne(d);
 }
 
 // ---- Fonts

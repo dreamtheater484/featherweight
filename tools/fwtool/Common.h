@@ -16,6 +16,8 @@ struct Options {
   std::filesystem::path outDir; // roundtrip: keep the saved copies here
   std::wstring printer;         // print-sample: the printer (default: Microsoft Print to PDF)
   bool warp = false;            // print-sample: draw with WARP instead of the graphics adapter
+  float scale = 2;              // render: pixels per point
+  bool pictures = false;        // render: time decoding each picture
   std::filesystem::path dumps;      // compare: Featherweight's layout dumps, <dumps>/<source>.layout.json
   std::filesystem::path jsonOut;    // compare, bench: the JSON report
   std::filesystem::path reportOut;  // compare: the Markdown report
@@ -42,6 +44,7 @@ void DumpModel(const std::filesystem::path& file);
 int RunDump(const Options& options);
 int RunCheck(const Options& options);
 int RunPrintSample(const Options& options);
+int RunRender(const Options& options);
 int RunLines(const Options& options);
 int RunCompare(const Options& options);
 int RunBench(const Options& options);

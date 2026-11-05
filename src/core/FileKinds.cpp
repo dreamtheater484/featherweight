@@ -6,8 +6,8 @@ namespace fw {
 namespace {
 
 constexpr const wchar_t* kPdf[] = {L".pdf"};
-constexpr const wchar_t* kDocument[] = {L".docx", L".docm", L".dotx", L".dotm", L".rtf", L".txt"};
-constexpr const wchar_t* kDocumentLater[] = {L".doc", L".odt"};
+constexpr const wchar_t* kDocument[] = {L".docx", L".docm", L".dotx", L".dotm"};
+constexpr const wchar_t* kDocumentLater[] = {L".rtf", L".txt", L".doc", L".odt"};  // .rtf and .txt come in D2
 constexpr const wchar_t* kWorkbook[] = {L".xlsx", L".xlsm", L".xltx", L".xltm", L".csv", L".tsv"};
 constexpr const wchar_t* kWorkbookLater[] = {L".xls", L".ods"};
 constexpr const wchar_t* kPresentation[] = {L".pptx", L".pptm", L".potx", L".potm", L".ppsx"};
@@ -18,7 +18,7 @@ const FileKindInfo kKinds[] = {
     {FileKind::Pdf, L"PDF", L"PDF", L"PDFs", L"Featherweight.PDF", L"PDF Document", L"PDF documents", kPdf, {}, 0,
      true, false},
     {FileKind::Document, L"Document", L"document", L"documents", L"Featherweight.Document", L"Document", L"Documents",
-     kDocument, kDocumentLater, 1, false, false},
+     kDocument, kDocumentLater, 1, true, false},
     {FileKind::Workbook, L"Workbook", L"spreadsheet", L"spreadsheets", L"Featherweight.Workbook", L"Spreadsheet",
      L"Spreadsheets", kWorkbook, kWorkbookLater, 2, false, false},
     {FileKind::Presentation, L"Presentation", L"presentation", L"presentations", L"Featherweight.Presentation",
@@ -47,6 +47,15 @@ FileKind KindOfPath(std::wstring_view path) {
 }
 
 bool ViewerShipped(FileKind kind) { return Valid(kind) && Info(kind).viewer; }
+
+bool Opens(std::wstring_view path) {
+  for (const FileKindInfo& k : kKinds) {
+    if (!k.viewer) continue;
+    for (const wchar_t* ext : k.extensions)
+      if (EndsWithNoCase(path, ext)) return true;
+  }
+  return false;
+}
 
 bool EditorShipped(FileKind kind) {
   return Valid(kind) && (Info(kind).editor || g_editorForTesting[static_cast<int>(kind)]);
