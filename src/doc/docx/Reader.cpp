@@ -681,7 +681,11 @@ bool Reader::ReadAttributes(const pkg::XmlPull& pull, ElemId elem, bool capture)
   auto first = static_cast<uint32_t>(doc_.tree_.attrs.size());
   uint16_t count = 0;
   for (const auto& a : pull.Attributes()) {
-    AttrDefId def = a.IsNamespaceDecl() ? kNoDef : s.AttrOf(type, NameOf(NsFromUri(a.nsUri), a.local));
+    const Ns ns = NsFromUri(a.nsUri);
+    AttrDefId def = a.IsNamespaceDecl() ? kNoDef : s.AttrOf(type, NameOf(ns, a.local));
+    // NameOf spells w: and unqualified names alike: one in another namespace than its
+    // definition isn't that attribute, and is kept as it is.
+    if (def != kNoDef && s.Attr(def).ns != ns) def = kNoDef;
     if (def != kNoDef && count < 0xFFFF) {
       doc_.tree_.attrs.push_back(AttrVal{def, doc_.tree_.strings.Intern(a.value)});
       ++count;
@@ -753,8 +757,11 @@ void Reader::InternProperties(const Frame& f) {
 ElemId Reader::KnownChild(const pkg::XmlPull& pull, ElemId parent, ElemId& last, bool displayOnly) {
   const Schema& s = Schema::Get();
   TypeId ptype = s.Elem(E(parent).def).type;
-  ElemDefId def = s.Child(ptype, NameOf(NsFromUri(pull.NamespaceUri()), pull.LocalName()));
-  if (def == kNoDef) return kNoElem;
+  const Ns ns = NsFromUri(pull.NamespaceUri());
+  ElemDefId def = s.Child(ptype, NameOf(ns, pull.LocalName()));
+  // NameOf spells w: and unqualified names alike: an element in another namespace than its
+  // definition (an unprefixed "tmpl" in no namespace) isn't Word's, and is kept as it is.
+  if (def == kNoDef || s.Elem(def).ns != ns) return kNoElem;
   Role role = s.Type(s.Elem(def).type).role;
   bool inPara = curPara_ != kNone;
   bool textual = role == Role::Text || role == Role::Char || role == Role::Object || role == Role::Marker;
@@ -1088,7 +1095,9 @@ Status Reader::ReadPart(const std::string& name, PartKind kind) {
   if (std::string decl = DeclarationFragment(pull.Source()); !decl.empty()) prolog.insert(prolog.begin(), std::move(decl));
 
   const Schema& s = Schema::Get();
-  ElemDefId rootDef = s.Child(s.RootType(), NameOf(NsFromUri(pull.NamespaceUri()), pull.LocalName()));
+  const Ns rootNs = NsFromUri(pull.NamespaceUri());
+  ElemDefId rootDef = s.Child(s.RootType(), NameOf(rootNs, pull.LocalName()));
+  if (rootDef != kNoDef && s.Elem(rootDef).ns != rootNs) rootDef = kNoDef;  // as in KnownChild
   if (rootDef == kNoDef || s.Elem(rootDef).local == "txbxContent") {
     if (kind == PartKind::Document)
       return Status::Fail(Status::Code::Unsupported, "This file isn't a Word document: its main part is something else.");
