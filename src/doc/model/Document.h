@@ -371,6 +371,12 @@ class Document {
   const ParaProps& ResolvedPara(uint32_t para) const;
   const RunProps& ResolvedRun(uint32_t para, Node run) const;
   const RunProps& ResolvedMark(uint32_t para) const;  // the paragraph mark (w:pPr/w:rPr)
+  // The same as Word's Original markup view shows them: with the formatting from before tracked
+  // changes, a w:pPrChange's w:pPr (and the paragraph style it names) and a w:rPrChange's w:rPr.
+  // The resolved ones where nothing was changed.
+  const ParaProps& OriginalPara(uint32_t para) const;
+  const RunProps& OriginalRun(uint32_t para, Node run) const;
+  const RunProps& OriginalMark(uint32_t para) const;
   // What a run in this paragraph with this character style (or none) would be without direct
   // formatting, and what the paragraph would be without its own w:pPr (but still in its list).
   // Formatting compares with these to write only what differs. Not cached.

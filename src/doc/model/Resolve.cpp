@@ -669,12 +669,32 @@ void ApplyPara(const Document& doc, Node pPr, ParaProps& p) {
   }
 }
 
-const Style* ParaStyleOf(const Document& doc, Node para) {
-  std::string_view id = para.Path({kPPr, Name("pStyle")}).AttrOr(kVal);
+constexpr uint32_t kPPrChange = Name("pPrChange"), kRPrChange = Name("rPrChange");
+
+// A paragraph's own w:pPr; `original`: the one it had before a tracked change, its w:pPrChange's
+// (none if that's empty).
+Node DirectPPr(Node para, bool original) {
+  Node p = para.Child(kPPr);
+  if (original)
+    if (Node change = p.Child(kPPrChange)) return change.Child(kPPr);
+  return p;
+}
+
+// Direct run formatting (a run's w:rPr, or a mark's); `original`: before a tracked change.
+Node DirectRPr(Node rPr, bool original) {
+  if (original)
+    if (Node change = rPr.Child(kRPrChange)) return change.Child(kRPr);
+  return rPr;
+}
+
+const Style* ParaStyleIn(const Document& doc, Node pPr) {
+  std::string_view id = pPr.Child(Name("pStyle")).AttrOr(kVal);
   const Style* s = id.empty() ? nullptr : doc.FindStyle(id);
   if (s && s->type != StyleType::Paragraph) s = nullptr;
   return s ? s : doc.DefaultStyle(StyleType::Paragraph);
 }
+
+const Style* ParaStyleOf(const Document& doc, Node para) { return ParaStyleIn(doc, para.Child(kPPr)); }
 
 bool OverrideTableStyleFontSize(const Document& doc) {
   for (Node cs : doc.Settings().compat.Kids())
@@ -742,12 +762,12 @@ ParaList ListOf(const Document& doc, Node direct, const std::vector<const Style*
 }
 
 // A paragraph's properties; without its own w:pPr when !withDirect (but still in its list, whose
-// level gives it indents).
-ParaProps ResolveParaProps(const Document& doc, uint32_t para, bool withDirect) {
+// level gives it indents); `original`: with the w:pPr it had before a tracked change.
+ParaProps ResolveParaProps(const Document& doc, uint32_t para, bool withDirect, bool original = false) {
   Node pn = doc.ParaNode(para);
-  Node direct = pn.Child(kPPr);
+  Node direct = DirectPPr(pn, original);
   ParaProps p;
-  const Style* style = ParaStyleOf(doc, pn);
+  const Style* style = ParaStyleIn(doc, direct);
   auto chain = Chain(doc, style);
 
   const ParaList list = ListOf(doc, direct, chain);
@@ -788,6 +808,16 @@ const ParaProps& Document::ResolvedPara(uint32_t para) const {
   return c.paraPool.back();
 }
 
+const ParaProps& Document::OriginalPara(uint32_t para) const {
+  if (!ParaNode(para).Path({kPPr, kPPrChange})) return ResolvedPara(para);
+  Caches& c = *caches_;
+  if (c.originalPara.size() < paras_.size()) c.originalPara.resize(paras_.size(), kNone);
+  if (c.originalPara[para] != kNone) return c.paraPool[c.originalPara[para]];
+  c.originalPara[para] = static_cast<uint32_t>(c.paraPool.size());
+  c.paraPool.push_back(ResolveParaProps(*this, para, true, true));
+  return c.paraPool.back();
+}
+
 bool Document::InList(uint32_t para) const {
   const Caches& c = *caches_;
   if (para < c.para.size() && c.para[para] != kNone) return !c.paraPool[c.para[para]].numId.empty();
@@ -812,8 +842,9 @@ ParaProps Document::StyleChainPara(std::string_view styleId) const {
 
 namespace {
 
-// Levels 0-2 of a run in this paragraph: document defaults, table style, paragraph style.
-void ParagraphLevels(const Document& doc, Node pn, RunLevels& lv) {
+// Levels 0-2 of a run in this paragraph: document defaults, table style, paragraph style (the one
+// it had before a tracked change when `original`).
+void ParagraphLevels(const Document& doc, Node pn, RunLevels& lv, bool original = false) {
   if (const Part* styles = doc.FindPart(PartKind::Styles))
     ApplyRun(doc, doc.RootOf(*styles).Path({Name("docDefaults"), Name("rPrDefault"), kRPr}), lv.work, lv.toggles[0]);
   auto [tableStyle, conds] = CellStyleOf(doc, pn);
@@ -823,7 +854,7 @@ void ParagraphLevels(const Document& doc, Node pn, RunLevels& lv) {
     ForEachTableStyleLevel(doc, tableStyle, conds, kRPr, [&](Node n) { ApplyRun(doc, n, lv.work, lv.toggles[1]); });
     if (!(lv.work.p.size == before.size)) tableSize = lv.work.p.size;
   }
-  const Style* style = ParaStyleOf(doc, pn);
+  const Style* style = ParaStyleIn(doc, DirectPPr(pn, original));
   for (const Style* s : Chain(doc, style)) ApplyRun(doc, s->node.Child(kRPr), lv.work, lv.toggles[2]);
   // D3: the default style's 11 or 12 pt doesn't override the table style's size.
   if (tableSize && style && style->isDefault && !OverrideTableStyleFontSize(doc)) {
@@ -886,6 +917,45 @@ const RunProps& Document::ResolvedRun(uint32_t para, Node run) const {
   }
   c.run[run.Id()] = index;
   return c.runPool[index];
+}
+
+namespace {
+
+// A run's (or a mark's, `rPr`) properties as they were before tracked changes: its own w:rPrChange,
+// and its paragraph's w:pPrChange (for the paragraph style).
+RunProps OriginalRunProps(const Document& doc, Document::Caches& c, uint32_t para, Node rPr) {
+  RunLevels lv;
+  ParagraphLevels(doc, doc.ParaNode(para), lv, true);
+  Node direct = DirectRPr(rPr, true);
+  CharacterLevel(doc, direct, lv);
+  ApplyRun(doc, direct, lv.work, lv.toggles[4]);
+  FinishRun(doc, c, lv);
+  return lv.work.p;
+}
+
+}  // namespace
+
+const RunProps& Document::OriginalRun(uint32_t para, Node run) const {
+  Node rPr = run.Child(kRPr);
+  if (!rPr.Child(kRPrChange) && !ParaNode(para).Path({kPPr, kPPrChange})) return ResolvedRun(para, run);
+  Caches& c = *caches_;
+  if (auto it = c.originalRun.find(run.Id()); it != c.originalRun.end()) return c.runPool[it->second];
+  const auto index = static_cast<uint32_t>(c.runPool.size());
+  c.runPool.push_back(OriginalRunProps(*this, c, para, rPr));
+  c.originalRun[run.Id()] = index;
+  return c.runPool[index];
+}
+
+const RunProps& Document::OriginalMark(uint32_t para) const {
+  Node pPr = ParaNode(para).Child(kPPr);
+  Node rPr = pPr.Child(kRPr);
+  if (!rPr.Child(kRPrChange) && !pPr.Child(kPPrChange)) return ResolvedMark(para);
+  Caches& c = *caches_;
+  if (c.originalMark.size() < paras_.size()) c.originalMark.resize(paras_.size(), kNone);
+  if (c.originalMark[para] != kNone) return c.runPool[c.originalMark[para]];
+  c.originalMark[para] = static_cast<uint32_t>(c.runPool.size());
+  c.runPool.push_back(OriginalRunProps(*this, c, para, rPr));
+  return c.runPool.back();
 }
 
 const RunProps& Document::ResolvedMark(uint32_t para) const {

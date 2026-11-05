@@ -525,6 +525,53 @@ const RunProps& RunAt(const Document& doc, size_t para, size_t run = 0) {
 
 }  // namespace
 
+TEST(Resolve_D4_OriginalFormattingBeforeTrackedChanges) {
+  // Word's Original view: a w:pPrChange's w:pPr (and the paragraph style it names) and a
+  // w:rPrChange's w:rPr are the formatting from before the change. The resolved properties stay
+  // the new ones.
+  Fixture f;
+  f.styles = Styles("<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:rPr><w:sz w:val=\"32\"/></w:rPr></w:style>");
+  f.numbering = "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/>"
+                "<w:lvlText w:val=\"%1.\"/><w:pPr><w:ind w:left=\"720\" w:hanging=\"360\"/></w:pPr></w:lvl></w:abstractNum>"
+                "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+  f.body = "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr>"
+           "<w:rPr><w:sz w:val=\"40\"/><w:rPrChange w:id=\"1\" w:author=\"A\"><w:rPr/></w:rPrChange></w:rPr>"
+           "<w:pPrChange w:id=\"2\" w:author=\"A\"><w:pPr><w:jc w:val=\"center\"/></w:pPr></w:pPrChange></w:pPr>"
+           "<w:r><w:rPr><w:i/><w:rPrChange w:id=\"3\" w:author=\"A\"><w:rPr><w:u w:val=\"single\"/></w:rPr></w:rPrChange>"
+           "</w:rPr><w:t>a</w:t></w:r><w:r><w:t>b</w:t></w:r></w:p>"
+           "<w:p><w:r><w:rPr><w:i/></w:rPr><w:t>c</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::vector<uint32_t> p = Paras(*doc);
+  CHECK(p.size() == 2);
+  if (p.size() != 2) return;
+  const std::vector<TextRun> runs = doc->Runs(p[0]);
+  CHECK(runs.size() == 2);
+  if (runs.size() != 2) return;
+  // Now: Heading 1, numbered, not centered.
+  const ParaProps& now = doc->ResolvedPara(p[0]);
+  CHECK(now.style == "Heading1" && now.numId == "1" && now.jc != Justification::Center && now.indStart.Value() == 720);
+  // Before: Normal, centered, no list.
+  const ParaProps& was = doc->OriginalPara(p[0]);
+  CHECK(was.style == "Normal" && was.numId.empty() && was.jc == Justification::Center && was.indStart.Value() == 0);
+  // "a": italic and 16 pt now; underlined and 10 pt before (Normal's size).
+  const RunProps& a = doc->ResolvedRun(p[0], runs[0].run);
+  CHECK(a.italic && a.size.Value() == 32 && a.underline == Underline::None);
+  const RunProps& oldA = doc->OriginalRun(p[0], runs[0].run);
+  CHECK(!oldA.italic && oldA.size.Value() == 20 && oldA.underline == Underline::Single);
+  // "b" has no change of its own, but its paragraph's style was Normal.
+  CHECK(doc->ResolvedRun(p[0], runs[1].run).size.Value() == 32 && doc->OriginalRun(p[0], runs[1].run).size.Value() == 20);
+  CHECK(doc->ResolvedMark(p[0]).size.Value() == 40 && doc->OriginalMark(p[0]).size.Value() == 20);
+  // Asked again, the same answers (cached).
+  CHECK(&doc->OriginalRun(p[0], runs[0].run) == &oldA && &doc->OriginalPara(p[0]) == &was);
+  // Nothing changed: the resolved properties themselves.
+  CHECK(&doc->OriginalPara(p[1]) == &doc->ResolvedPara(p[1]));
+  const Node c = doc->Runs(p[1]).at(0).run;
+  CHECK(&doc->OriginalRun(p[1], c) == &doc->ResolvedRun(p[1], c) && doc->OriginalRun(p[1], c).italic);
+  CHECK(&doc->OriginalMark(p[1]) == &doc->ResolvedMark(p[1]));
+}
+
 TEST(Resolve_D1_TogglesResetInParagraphStylesAndToggleInCharacterStyles) {
   Fixture f;
   f.styles = Styles(

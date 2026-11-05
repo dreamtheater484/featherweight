@@ -230,13 +230,13 @@ void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse,
       if (!c.continued)
         for (const Block& b : doc_.Blocks(tc))
           if (b.kind == BlockKind::Paragraph) {
-            if (!doc_.ResolvedPara(b.para).keepNext) keepAll = false;
+            if (!ParaOf(b.para).keepNext) keepAll = false;
             anyPara = true;
           }
       if (rb.cells.empty()) {
         std::vector<Block> blocks = doc_.Blocks(tc);
         rb.breakBefore = !blocks.empty() && blocks.front().kind == BlockKind::Paragraph &&
-                         doc_.ResolvedPara(blocks.front().para).pageBreakBefore;
+                         ParaOf(blocks.front().para).pageBreakBefore;
       }
       rb.cells.push_back(std::move(c));
     }

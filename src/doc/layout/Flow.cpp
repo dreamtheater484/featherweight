@@ -930,7 +930,7 @@ struct Flow {
       else if (l.top >= start - kEpsilon) above.push_back(l.top);
     }
     if (above.empty()) return to;
-    const ParaProps& p = doc.ResolvedPara(para);
+    const ParaProps& p = e.ParaOf(para);
     size_t keep = above.size();
     if (p.keepLines) keep = 0;
     else if (p.widowControl) {
@@ -1888,7 +1888,7 @@ void Engine::Rebase() {
   f.lineCache.clear();  // every paragraph's version changed too
   const size_t n = doc_.Paragraphs().size();
   auto fix = [&](const std::shared_ptr<ParaText>& pt) {
-    if (pt && pt->para < n) pt->props = &doc_.ResolvedPara(pt->para);
+    if (pt && pt->para < n) pt->props = &ParaOf(pt->para);
   };
   fix(f.pt);
   for (auto& c : f.checkpoints) fix(c.pt);

@@ -861,10 +861,12 @@ struct EditorState {
     };
     resize(c.para);
     resize(c.mark);
+    resize(c.originalPara);
+    resize(c.originalMark);
     for (ElemId id : wasIds)
-      if (NameOf(id) == kR) c.run.erase(id);
+      if (NameOf(id) == kR) c.run.erase(id), c.originalRun.erase(id);
     for (ElemId id : nowIds)
-      if (NameOf(id) == kR) c.run.erase(id);
+      if (NameOf(id) == kR) c.run.erase(id), c.originalRun.erase(id);
 
     bool fields = false;
     auto countFields = [](const std::vector<Paragraph>& ps) {

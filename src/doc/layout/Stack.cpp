@@ -413,7 +413,7 @@ void Engine::StackBlocks(const std::vector<Block>& blocks, const Frame& frame, S
 Engine::Placement Engine::PlacementOf(const Block& b) const {
   Placement place;
   auto frameOf = [&](uint32_t para) -> std::optional<FrameProps> {
-    const std::optional<FrameProps>& f = doc_.ResolvedPara(para).frame;
+    const std::optional<FrameProps>& f = ParaOf(para).frame;
     if (!f || f->dropCap == "drop" || f->dropCap == "margin") return std::nullopt;  // drop caps stay in the text
     return f;
   };
