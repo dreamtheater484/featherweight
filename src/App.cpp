@@ -16,11 +16,13 @@
 #include "FileAssoc.h"
 #include "Util.h"
 #include "Version.h"
+#include "core/FileKinds.h"
 #include "core/Strings.h"
 #include "resource.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
 #include "ui/Theme.h"
+#include "word/DocView.h"
 
 #pragma comment(lib, "imm32.lib")
 
@@ -1425,7 +1427,10 @@ PdfView* App::ActivePdf() const {
   return v ? v->AsPdf() : nullptr;
 }
 
-std::unique_ptr<TabContent> App::CreateTab(const std::wstring& path) { return std::make_unique<PdfView>(*this, path); }
+std::unique_ptr<TabContent> App::CreateTab(const std::wstring& path) {
+  if (fw::KindOfPath(path) == fw::FileKind::Document) return std::make_unique<DocView>(*this, path);
+  return std::make_unique<PdfView>(*this, path);
+}
 
 void App::OpenFiles(const std::vector<std::wstring>& files) {
   int toActivate = -1;
@@ -1463,7 +1468,7 @@ void App::OpenFiles(const std::vector<std::wstring>& files) {
     banner_.Show(BannerKind::Error, errors.front(), {}, 8000);
   } else if (errors.size() > 1) {
     banner_.Show(BannerKind::Error,
-                 std::to_wstring(errors.size()) + L" files couldn’t be opened. They may be damaged or not be PDFs.",
+                 std::to_wstring(errors.size()) + L" files couldn’t be opened. They may be damaged.",
                  {}, 8000);
   }
   if (toActivate >= 0) ActivateTab(toActivate);
@@ -1475,8 +1480,20 @@ void App::OpenFiles(const std::vector<std::wstring>& files) {
 void App::OpenDialog() {
   ComPtr<IFileOpenDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return;
-  COMDLG_FILTERSPEC filters[] = {{L"PDF documents", L"*.pdf"}, {L"All files", L"*.*"}};
-  dlg->SetFileTypes(2, filters);
+  // Everything the viewers open first, then each kind on its own.
+  std::wstring all, docs;
+  for (const fw::FileKindInfo& k : fw::FileKinds()) {
+    if (!k.viewer) continue;
+    for (const wchar_t* ext : k.extensions) {
+      all += (all.empty() ? L"*" : L";*") + std::wstring(ext);
+      if (k.kind == fw::FileKind::Document) docs += (docs.empty() ? L"*" : L";*") + std::wstring(ext);
+    }
+  }
+  COMDLG_FILTERSPEC filters[] = {{L"Files Featherweight opens", all.c_str()},
+                                 {L"PDF documents", L"*.pdf"},
+                                 {L"Word documents", docs.c_str()},
+                                 {L"All files", L"*.*"}};
+  dlg->SetFileTypes(4, filters);
   DWORD opts = 0;
   dlg->GetOptions(&opts);
   dlg->SetOptions(opts | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
@@ -1841,14 +1858,14 @@ void App::OnDragLeave() {
 }
 
 void App::OnDropFiles(const std::vector<std::wstring>& files) {
-  std::vector<std::wstring> pdfs;
+  std::vector<std::wstring> opened;
   for (const auto& f : files)
-    if (fw::EndsWithNoCase(f, L".pdf")) pdfs.push_back(f);
-  if (pdfs.empty()) {
-    banner_.Show(BannerKind::Warning, L"Only PDF files can be opened.", {}, 4000);
+    if (fw::Opens(f)) opened.push_back(f);
+  if (opened.empty()) {
+    banner_.Show(BannerKind::Warning, L"Only PDFs and Word documents can be opened.", {}, 4000);
   } else {
     SetForegroundWindow(hwnd_);
-    OpenFiles(pdfs);
+    OpenFiles(opened);
   }
   InvalidateRect(hwnd_, nullptr, FALSE);
 }

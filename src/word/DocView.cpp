@@ -1,0 +1,1048 @@
+#include "word/DocView.h"
+
+#include <commdlg.h>
+
+#include <algorithm>
+#include <cmath>
+#include <map>
+
+#include "Commands.h"
+#include "Util.h"
+#include "core/Strings.h"
+#include "doc/docx/Docx.h"
+#include "draw/D2DPainter.h"
+#include "draw/PrintJob.h"
+#include "pkg/Package.h"
+#include "pkg/Snapshot.h"
+#include "ui/Anim.h"
+#include "ui/Icons.h"
+#include "ui/Menu.h"
+#include "ui/StatusBar.h"
+#include "ui/SwapChain.h"
+#include "ui/Theme.h"
+#include "ui/Toolbar.h"
+
+using namespace gfx;
+namespace layout = fw::doc::layout;
+
+namespace {
+
+D2D1_RECT_F Intersect(const D2D1_RECT_F& a, const D2D1_RECT_F& b) {
+  return {std::max(a.left, b.left), std::max(a.top, b.top), std::min(a.right, b.right), std::min(a.bottom, b.bottom)};
+}
+bool Empty(const D2D1_RECT_F& r) { return r.right <= r.left || r.bottom <= r.top; }
+
+std::wstring Wide(std::string_view s) { return fw::Utf8ToWide(std::string(s)); }
+
+// Night reading, as PDFs have it: brightness inverted, hues kept, into a comfortable range.
+draw::Color Invert(draw::Color c) {
+  const float lo = 0x24 / 255.f, hi = 0xE6 / 255.f, k = hi - lo;
+  const float H[3][3] = {{-0.574f, 1.430f, 0.144f}, {0.426f, 0.430f, 0.144f}, {0.426f, 1.430f, -0.856f}};
+  auto row = [&](int i) { return std::clamp(hi - k * (H[i][0] * c.r + H[i][1] * c.g + H[i][2] * c.b), 0.f, 1.f); };
+  return {row(0), row(1), row(2), c.a};
+}
+
+// A painter that draws through another with every color inverted (pictures stay as they are).
+class InvertingPainter : public draw::Painter {
+ public:
+  explicit InvertingPainter(draw::Painter& inner) : inner_(inner) {}
+  void Save() override { inner_.Save(); }
+  void Restore() override { inner_.Restore(); }
+  void Transform(const draw::Matrix& m) override { inner_.Transform(m); }
+  draw::Matrix CurrentTransform() const override { return inner_.CurrentTransform(); }
+  void ClipRect(const draw::Rect& r) override { inner_.ClipRect(r); }
+  void ClipPath(const draw::Path& p) override { inner_.ClipPath(p); }
+  void BeginGroup(float opacity) override { inner_.BeginGroup(opacity); }
+  void FillPath(const draw::Path& p, const draw::Brush& b) override { inner_.FillPath(p, Map(b)); }
+  void StrokePath(const draw::Path& p, const draw::Pen& pen) override {
+    draw::Pen q = pen;
+    q.brush = Map(pen.brush);
+    inner_.StrokePath(p, q);
+  }
+  void FillRect(const draw::Rect& r, const draw::Brush& b) override { inner_.FillRect(r, Map(b)); }
+  void DrawGlyphs(draw::Point origin, const draw::GlyphRun& run, const draw::Brush& b) override {
+    inner_.DrawGlyphs(origin, run, Map(b));
+  }
+  void DrawBitmap(const draw::Bitmap& bitmap, const draw::Rect& dest, const draw::Rect* src, float opacity) override {
+    inner_.DrawBitmap(bitmap, dest, src, opacity);
+  }
+
+ private:
+  static draw::Brush Map(draw::Brush b) {
+    b.color = Invert(b.color);
+    for (auto& s : b.stops) s.color = Invert(s.color);
+    return b;
+  }
+  draw::Painter& inner_;
+};
+
+// Characters of the model's text that aren't text the reader sees (doc/model/Document.h).
+bool Invisible(char16_t c) {
+  return c == 0x13 || c == 0x14 || c == 0x15 || c == 0x02 || c == 0x03 || c == 0x04 || c == 0x05 || c == 0xFFFC ||
+         c == 0x00AD;
+}
+
+bool WordChar(wchar_t c) { return IsCharAlphaNumericW(c) || c == L'\'' || c == 0x2019 || c == L'_'; }
+
+std::wstring Thousands(size_t n) {
+  std::wstring digits = std::to_wstring(n), out;
+  for (size_t i = 0; i < digits.size(); ++i) {
+    if (i > 0 && (digits.size() - i) % 3 == 0) out += L',';
+    out += digits[i];
+  }
+  return out;
+}
+
+// The first quoted argument of a field code (HYPERLINK "https://..."), and its \l anchor.
+std::wstring HyperlinkFieldTarget(std::u16string_view code) {
+  std::wstring c(code.begin(), code.end());
+  auto quoted = [&](size_t from) -> std::wstring {
+    size_t a = c.find(L'"', from);
+    if (a == std::wstring::npos) return {};
+    size_t b = c.find(L'"', a + 1);
+    return b == std::wstring::npos ? std::wstring() : c.substr(a + 1, b - a - 1);
+  };
+  size_t l = c.find(L"\\l");
+  std::wstring url = quoted(0);
+  if (l != std::wstring::npos && (url.empty() || c.find(L'"') > l)) return L"#" + quoted(l);
+  if (l != std::wstring::npos) {
+    std::wstring anchor = quoted(l);
+    if (!anchor.empty() && url.empty()) return L"#" + anchor;
+  }
+  return url;
+}
+
+// A plain message for a file that isn't a Word document Featherweight can read.
+std::wstring OpenError(const std::wstring& name, const fw::pkg::Status& st) {
+  using Code = fw::pkg::Status::Code;
+  switch (st.code) {
+    case Code::IoError: return name + L" couldn't be opened — the file couldn't be read.";
+    case Code::TooLarge: return name + L" couldn't be opened — it's larger than Featherweight allows for safety.";
+    case Code::Unsupported: return name + L" couldn't be opened — it uses something Featherweight doesn't support yet.";
+    default: return name + L" couldn't be opened — it seems to be damaged or isn't a Word document.";
+  }
+}
+
+}  // namespace
+
+DocView::DocView(ViewHost& host, std::wstring path) : PagedView(host), path_(std::move(path)) {}
+
+DocView::~DocView() {
+  pagination_.reset();
+  fonts_.reset();
+  doc_.reset();
+}
+
+std::wstring DocView::Title() const { return fw::FileNameOf(path_); }
+
+// ---------------------------------------------------------------------------
+// Loading
+
+OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
+  const std::wstring name = Title();
+  // Password-protected Office files aren't zip packages but OLE compound files with the
+  // encrypted package inside.
+  {
+    std::string head;
+    HANDLE f = CreateFileW(path_.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f != INVALID_HANDLE_VALUE) {
+      char buf[8] = {};
+      DWORD got = 0;
+      if (ReadFile(f, buf, sizeof(buf), &got, nullptr)) head.assign(buf, got);
+      CloseHandle(f);
+    }
+    if (head == std::string("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", 8)) {
+      error = name + L" couldn't be opened — it's protected with a password, and Featherweight doesn't open "
+                     L"protected documents yet.";
+      return OpenResult::Failed;
+    }
+  }
+
+  fw::pkg::Status st;
+  fw::pkg::Snapshot::Options options;
+  wchar_t temp[MAX_PATH + 1] = {};
+  if (GetTempPathW(MAX_PATH + 1, temp)) options.recoveryDir = std::wstring(temp) + L"Featherweight";
+  auto snapshot = fw::pkg::Snapshot::Open(path_, options, st);
+  std::unique_ptr<fw::pkg::Package> package =
+      snapshot ? fw::pkg::Package::Open(std::move(snapshot), fw::pkg::Limits::Default(), st) : nullptr;
+  std::unique_ptr<fw::doc::Document> doc = package ? fw::doc::docx::Read(std::move(package), st) : nullptr;
+  if (!doc) {
+    error = OpenError(name, st);
+    return OpenResult::Failed;
+  }
+  doc_ = std::move(doc);
+
+  // Fonts: the document's font table names an alternative for some fonts (w:altName).
+  std::map<std::wstring, std::wstring> alternatives;
+  for (const auto& f : doc_->Fonts())
+    if (!f.name.empty() && !f.altName.empty()) alternatives[fw::ToLower(Wide(f.name))] = Wide(f.altName);
+  fonts_ = std::make_unique<fw::text::Fonts>([alternatives](std::wstring_view family) -> std::wstring {
+    auto it = alternatives.find(fw::ToLower(std::wstring(family)));
+    return it != alternatives.end() ? it->second : std::wstring();
+  });
+  pagination_ = std::make_unique<layout::Layout>(*doc_, *fonts_);
+  pagination_->LayOutPages(1);
+  revision_ = pagination_->Revision();
+  TakeNewPages();
+
+  // Comments, for their highlight and tooltip; hyperlink fields, for clicks.
+  for (const auto& c : doc_->Comments()) {
+    if (c.start.para == fw::doc::kNone) continue;
+    Comment cm;
+    cm.from = {c.start.para, c.start.offset};
+    cm.to = c.end.para != fw::doc::kNone ? TextPos{c.end.para, c.end.offset} : cm.from;
+    if (cm.to < cm.from) std::swap(cm.from, cm.to);
+    std::wstring text;
+    if (c.story != fw::doc::kNone) {
+      for (uint32_t p : doc_->StoryParagraphs(c.story)) {
+        std::wstring t;
+        std::vector<uint32_t> map;
+        VisibleText(p, t, map);
+        if (!text.empty() && !t.empty()) text += L"\n";
+        text += t;
+      }
+    }
+    if (text.size() > 400) text = text.substr(0, 400) + L"…";
+    cm.text = (c.author.empty() ? std::wstring() : Wide(c.author) + L": ") + text;
+    comments_.push_back(std::move(cm));
+  }
+  for (uint32_t s = 0; s < doc_->Stories().size(); ++s) {
+    if (doc_->Stories()[s].kind == fw::doc::StoryKind::Comment) continue;
+    for (const auto& f : doc_->Fields(s)) {
+      if (f.Type() != u"HYPERLINK" || f.separator.para == fw::doc::kNone || f.end.para == fw::doc::kNone) continue;
+      std::wstring target = HyperlinkFieldTarget(f.code);
+      if (!target.empty()) links_.push_back({{f.separator.para, f.separator.offset}, {f.end.para, f.end.offset}, target});
+    }
+  }
+
+  // Words, for the status bar.
+  for (uint32_t p : doc_->StoryParagraphs(doc_->MainStory())) {
+    std::wstring t;
+    std::vector<uint32_t> map;
+    VisibleText(p, t, map);
+    bool in = false;
+    for (wchar_t ch : t) {
+      bool w = !iswspace(ch);
+      if (w && !in) ++words_;
+      in = w;
+    }
+  }
+  Relayout(nullptr);
+  return OpenResult::Ok;
+}
+
+void DocView::VisibleText(uint32_t para, std::wstring& text, std::vector<uint32_t>& map) const {
+  const std::u16string& s = doc_->Para(para).text;
+  for (const auto& run : doc_->Runs(para)) {
+    if (run.fieldCode) continue;
+    if (run.run && doc_->ResolvedRun(para, run.run).vanish) continue;
+    for (uint32_t i = run.start; i < run.end && i < s.size(); ++i) {
+      char16_t c = s[i];
+      if (Invisible(c)) continue;
+      if (c == 0x000B) c = u'\n';
+      else if (c == 0x2011) c = u'-';
+      else if (c == 0x00A0) c = u' ';
+      else if (c == 0x000C || c == 0x000E) continue;
+      text += static_cast<wchar_t>(c);
+      map.push_back(i);
+    }
+  }
+}
+
+bool DocView::TakeNewPages() {
+  const size_t n = pagination_->PageCount();
+  if (n == 0) {
+    // Nothing laid out (an empty document): one empty page of the first section's size.
+    if (!sizes_.empty()) return false;
+    fw::doc::SectionProps props;
+    if (!doc_->Sections().empty()) props = doc_->Sections().front().props;
+    double w = props.pageWidth.Value() / 20.0, h = props.pageHeight.Value() / 20.0;
+    if (props.landscape && w < h) std::swap(w, h);
+    sizes_.push_back({w, h});
+    placeholder_ = true;
+    return true;
+  }
+  if (placeholder_) {
+    sizes_.clear();
+    placeholder_ = false;
+  }
+  if (sizes_.size() >= n) return false;
+  const bool first = sizes_.empty();
+  for (size_t i = sizes_.size(); i < n; ++i) {
+    const layout::Page& p = pagination_->GetPage(i);
+    sizes_.push_back({p.width, p.height});
+  }
+  if (!first && VpW() > 0) {
+    Anchor a = CaptureAnchor(0, 0);
+    RecomputeScale();
+    Relayout(&a);
+  }
+  return true;
+}
+
+void DocView::ShowNotices() {
+  noticesShown_ = true;
+  std::wstring text;
+  const auto& subs = fonts_->Substitutions();
+  if (!subs.empty()) {
+    std::wstring list;
+    for (size_t i = 0; i < subs.size() && i < 3; ++i) {
+      if (i) list += L", ";
+      list += subs[i].requested + L" (shown in " + subs[i].used + L")";
+    }
+    if (subs.size() > 3) list += L" and " + std::to_wstring(subs.size() - 3) + L" more";
+    text = (subs.size() == 1 ? L"A font in this document isn't installed: " : L"Fonts in this document aren't installed: ") +
+           list + L". Lines may break differently than in Word.";
+  }
+  bool equations = false, objects = false;
+  for (const auto& d : doc_->Drawings()) {
+    equations |= d.kind == fw::doc::DrawingKind::Equation;
+    objects |= d.kind == fw::doc::DrawingKind::Object || d.kind == fw::doc::DrawingKind::ContentPart;
+  }
+  std::wstring missing;
+  if (equations) missing = L"Equations";
+  if (objects) missing += missing.empty() ? L"Embedded objects" : L" and embedded objects";
+  if (!missing.empty()) {
+    if (!text.empty()) text += L" ";
+    text += missing + L" aren't shown yet.";
+  }
+  if (!text.empty()) host_.ViewMessage(BannerKind::Info, text);
+}
+
+// ---------------------------------------------------------------------------
+// Coordinates
+
+draw::Matrix DocView::PageToScreen(int page) const {
+  RECT r = PageRect(page);
+  const double w = sizes_[page].w;
+  const float s = static_cast<float>((r.right - r.left) / std::max(1.0, w));
+  return draw::Matrix::Scale(s, s) * draw::Matrix::Translate(static_cast<float>(r.left), static_cast<float>(r.top));
+}
+
+bool DocView::ToPagePoint(int page, int x, int y, float& px, float& py) const {
+  if (page < 0 || page >= static_cast<int>(sizes_.size())) return false;
+  RECT r = PageRect(page);
+  const double s = (r.right - r.left) / std::max(1.0, sizes_[page].w);
+  px = static_cast<float>((x - r.left) / s);
+  py = static_cast<float>((y - r.top) / s);
+  return true;
+}
+
+D2D1_RECT_F DocView::PageRectToScreen(int page, const layout::Rect& rc) const {
+  draw::Matrix m = PageToScreen(page);
+  draw::Point a = m.Apply({rc.left, rc.top}), b = m.Apply({rc.right, rc.bottom});
+  return RectF(std::min(a.x, b.x), std::min(a.y, b.y), std::max(a.x, b.x), std::max(a.y, b.y));
+}
+
+void DocView::OnPresentationChanged(bool on) {
+  if (!on) return;
+  ClearSearch();
+  anchor_ = focus_ = {};
+}
+
+// ---------------------------------------------------------------------------
+// Painting
+
+void DocView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
+  const Palette& p = theme::P();
+  const bool inverted = host_.ViewInverted();
+  D2D1_RECT_F vpr = RectF(vp_);
+  c.PushClip(vpr);
+  c.Fill(vpr, presentation_ ? Rgb(0x000000) : inverted ? p.docBgInverted : p.docBg);
+  if (!Ready()) {
+    c.PopClip();
+    return;
+  }
+  StepScroll();
+  int first, last;
+  VisiblePages(first, last);
+  for (int i = first; i <= last; ++i) DrawPage(c, dc, i, inverted);
+  DrawRanges(c, first, last);
+  if (!presentation_) DrawScrollbars(c);
+  c.PopClip();
+}
+
+void DocView::DrawPage(Canvas& c, ID2D1DeviceContext* dc, int page, bool inverted) {
+  const Palette& p = theme::P();
+  D2D1_RECT_F rf = RectF(PageRect(page));
+  D2D1_RECT_F vis = Intersect(rf, RectF(vp_));
+  if (Empty(vis)) return;
+  if (!presentation_) c.SoftShadow(rf, 1.0f * ui_, 5.0f * ui_, Alpha(p.pageShadow, 0.35f), 1.0f * ui_);
+  c.Fill(rf, inverted ? p.paperInverted : p.paper);
+  if (placeholder_ || page >= static_cast<int>(pagination_->PageCount())) return;
+  c.PushClip(vis);
+  {
+    draw::D2DPainter painter(dc);
+    painter.Transform(PageToScreen(page));
+    if (inverted) {
+      InvertingPainter dark(painter);
+      pagination_->Paint(dark, page);
+    } else {
+      pagination_->Paint(painter, page);
+    }
+  }
+  c.PopClip();
+}
+
+void DocView::DrawRanges(Canvas& c, int first, int last) {
+  const Palette& p = theme::P();
+  const int pages = static_cast<int>(pagination_->PageCount());
+  auto fill = [&](const std::vector<std::pair<size_t, layout::Rect>>& rects, D2D1_COLOR_F color, bool round) {
+    for (const auto& [page, r] : rects) {
+      const int pg = static_cast<int>(page);
+      if (pg < first || pg > last || pg >= pages) continue;
+      D2D1_RECT_F s = PageRectToScreen(pg, r);
+      if (round) c.FillRound(Inflate(s, 1.5f * ui_, 1.0f * ui_), 2 * ui_, color);
+      else c.Fill(s, color);
+    }
+  };
+  // Comments: their text is marked, as Word marks it.
+  if (!presentation_) {
+    for (auto& cm : comments_) {
+      if (!cm.measured) {
+        cm.rects = pagination_->Ranges(cm.from, cm.to);
+        cm.measured = true;
+      }
+      fill(cm.rects, Alpha(Rgb(0xF2C744), 0.30f), false);
+    }
+  }
+  for (size_t i = 0; i < matches_.size(); ++i) {
+    Match& m = matches_[i];
+    if (!m.measured) {
+      m.rects = pagination_->Ranges(m.from, m.to);
+      m.measured = true;
+    }
+    fill(m.rects, static_cast<int>(i) == current_ ? p.searchCurrent : p.searchHit, true);
+  }
+  if (HasSelection()) {
+    TextPos a = std::min(anchor_, focus_), b = std::max(anchor_, focus_);
+    if (!(selFrom_ == a) || !(selTo_ == b) || selRevision_ != pagination_->Revision()) {
+      selRects_ = pagination_->Ranges(a, b);
+      selFrom_ = a;
+      selTo_ = b;
+      selRevision_ = pagination_->Revision();
+    }
+    fill(selRects_, p.selection, false);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Background work
+
+bool DocView::HasIdleWork() const { return Ready() && (!pagination_->Done() || !noticesShown_); }
+
+bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
+  if (!Ready()) return false;
+  bool repaint = false;
+  if (!pagination_->Done()) {
+    double ms = std::clamp(deadlineMs - anim::Now(), 1.0, 12.0);
+    pagination_->Continue(ms);
+    if (TakeNewPages()) {
+      repaint = true;
+      host_.ViewStateChanged();
+    }
+  }
+  if (pagination_->Revision() != revision_) {
+    revision_ = pagination_->Revision();
+    for (auto& m : matches_) m.measured = false;
+    for (auto& cm : comments_) cm.measured = false;
+    repaint = true;
+  }
+  if (!noticesShown_ && pagination_->Done()) ShowNotices();
+  return repaint;
+}
+
+// ---------------------------------------------------------------------------
+// Input
+
+std::optional<DocView::TextPos> DocView::PosAt(int x, int y, bool nearest) const {
+  int page = PageAtPoint(x, y);
+  if (page < 0 && nearest) page = NearestPage(x, y);
+  if (page < 0 || placeholder_ || page >= static_cast<int>(pagination_->PageCount())) return std::nullopt;
+  float px, py;
+  if (!ToPagePoint(page, x, y, px, py)) return std::nullopt;
+  return pagination_->HitTest(page, px, py);
+}
+
+DocView::Hit DocView::HitAt(int x, int y) {
+  Hit hit;
+  auto pos = PosAt(x, y, false);
+  if (!pos) return hit;
+  int page = PageAtPoint(x, y);
+  float px, py;
+  ToPagePoint(page, x, y, px, py);
+  // The character under the point: the one before or after the nearest caret position.
+  std::optional<uint32_t> under;
+  for (uint32_t off : {pos->offset, pos->offset > 0 ? pos->offset - 1 : pos->offset}) {
+    if (off >= doc_->Para(pos->para).text.size()) continue;
+    for (const auto& [pg, r] : pagination_->Ranges({pos->para, off}, {pos->para, off + 1})) {
+      if (static_cast<int>(pg) == page && px >= r.left - 0.5f && px < r.right + 0.5f && py >= r.top && py < r.bottom) {
+        under = off;
+        break;
+      }
+    }
+    if (under) break;
+  }
+  if (!under) return hit;
+  const TextPos at{pos->para, *under};
+  for (const auto& run : doc_->Runs(at.para)) {
+    if (at.offset < run.start || at.offset >= run.end || !run.hyperlink) continue;
+    hit.link = Wide(doc_->HyperlinkTarget(run.hyperlink));
+    break;
+  }
+  if (hit.link.empty()) {
+    for (const auto& l : links_)
+      if (!(at < l.from) && at < l.to) hit.link = l.target;
+  }
+  for (size_t i = 0; i < comments_.size(); ++i)
+    if (!(at < comments_[i].from) && at < comments_[i].to) hit.comment = static_cast<int>(i);
+  return hit;
+}
+
+void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick) {
+  mouseX_ = x;
+  mouseY_ = y;
+  if (!Ready()) return;
+  BeginPress(x, y);
+  if (button == 2) {  // the middle button pans
+    drag_ = Drag::Pan;
+    return;
+  }
+  if (ScrollbarMouseDown(x, y, button)) return;
+  if (button == 1) return;  // a right click keeps the selection for the context menu
+  Hit hit = HitAt(x, y);
+  if (!hit.link.empty() && !(mods & kModShift)) {
+    pendingLink_ = hit.link;
+    drag_ = Drag::Link;
+    return;
+  }
+  if (presentation_) {
+    if (x < (vp_.left + vp_.right) / 2 - VpW() / 4) PrevPage();
+    else NextPage();
+    return;
+  }
+  if (auto pos = PosAt(x, y, false)) {
+    if (doubleClick) {
+      WordAt(*pos, anchor_, focus_);
+      drag_ = Drag::None;
+    } else if ((mods & kModShift) && HasSelection() && StoryOf(*pos) == StoryOf(anchor_)) {
+      focus_ = *pos;
+      drag_ = Drag::Select;
+    } else {
+      anchor_ = focus_ = *pos;
+      drag_ = Drag::Select;
+    }
+    host_.ViewInvalidate();
+    return;
+  }
+  if (HasSelection()) {
+    anchor_ = focus_ = {};
+    host_.ViewInvalidate();
+  }
+  drag_ = Drag::Pan;
+}
+
+void DocView::OnMouseMove(int x, int y, UINT) {
+  mouseX_ = x;
+  mouseY_ = y;
+  if (!Ready()) return;
+  if (ScrollDragMove(x, y)) return;
+  if (drag_ == Drag::Link) {
+    if (std::abs(x - downX_) + std::abs(y - downY_) > 6 * ui_) drag_ = Drag::Pan;
+    return;
+  }
+  if (drag_ == Drag::Select) {
+    if (y < vp_.top) ScrollBy(0, (y - vp_.top) * 0.5, false);
+    else if (y > vp_.bottom) ScrollBy(0, (y - vp_.bottom) * 0.5, false);
+    if (auto pos = PosAt(x, y, true); pos && StoryOf(*pos) == StoryOf(anchor_) && !(*pos == focus_)) {
+      focus_ = *pos;
+      host_.ViewInvalidate();
+    }
+    return;
+  }
+  UpdateScrollbarHover(x, y);
+}
+
+void DocView::OnMouseUp(int x, int y, int, UINT) {
+  if (!Ready()) return;
+  Drag d = drag_;
+  drag_ = Drag::None;
+  if (d == Drag::Link) {
+    FollowLink(pendingLink_);
+  } else if (d == Drag::Select && !HasSelection() && std::abs(x - downX_) + std::abs(y - downY_) < 3) {
+    anchor_ = focus_ = {};  // a plain click just clears the selection
+    host_.ViewInvalidate();
+  }
+}
+
+void DocView::OnMouseLeave() {
+  mouseX_ = mouseY_ = -1;
+  ScrollbarMouseLeave();
+  host_.ViewInvalidate();
+}
+
+bool DocView::OnKeyDown(UINT vk, UINT mods) {
+  if (!Ready() || pagination_->PageCount() == 0) return NavigationKey(vk, mods);
+  if (vk == VK_ESCAPE && HasSelection()) {
+    anchor_ = focus_ = {};
+    host_.ViewInvalidate();
+    return true;
+  }
+  return NavigationKey(vk, mods);
+}
+
+HCURSOR DocView::CursorAt(int x, int y) {
+  static HCURSOR arrow = LoadCursor(nullptr, IDC_ARROW), ibeam = LoadCursor(nullptr, IDC_IBEAM),
+                 hand = LoadCursor(nullptr, IDC_HAND), move = LoadCursor(nullptr, IDC_SIZEALL);
+  if (!Ready()) return arrow;
+  if (drag_ == Drag::Pan) return move;
+  if (drag_ == Drag::Select) return ibeam;
+  if (OverScrollbar(x, y)) return arrow;
+  if (!HitAt(x, y).link.empty()) return hand;
+  if (presentation_) return arrow;
+  return PosAt(x, y, false) ? ibeam : arrow;
+}
+
+std::wstring DocView::TooltipAt(int x, int y) {
+  if (!Ready() || drag_ != Drag::None) return {};
+  Hit hit = HitAt(x, y);
+  if (!hit.link.empty()) {
+    if (hit.link[0] == L'#') return L"Go to “" + hit.link.substr(1) + L"”";
+    return hit.link;
+  }
+  if (hit.comment >= 0) return comments_[hit.comment].text;
+  return {};
+}
+
+void DocView::FollowLink(const std::wstring& link) {
+  if (link.empty()) return;
+  if (link[0] == L'#') {
+    const std::string name = fw::WideToUtf8(link.substr(1));
+    for (const auto& pair : doc_->Pairs()) {
+      if (pair.kind != fw::pkg::RefKind::BookmarkId || pair.openPos.para == fw::doc::kNone) continue;
+      if (pair.open.AttrOr(fw::doc::Name("name")) != name) continue;
+      TextPos at{pair.openPos.para, pair.openPos.offset};
+      ScrollToPos(at, {at.para, at.offset + 1});
+      return;
+    }
+    host_.ViewMessage(BannerKind::Warning, L"The place this link points to isn't in the document.");
+    return;
+  }
+  if (!util::OpenExternalLink(link))
+    host_.ViewMessage(BannerKind::Warning, L"This link was blocked because it doesn’t point to a website.");
+}
+
+// ---------------------------------------------------------------------------
+// Text
+
+void DocView::WordAt(TextPos pos, TextPos& from, TextPos& to) const {
+  std::wstring t;
+  std::vector<uint32_t> map;
+  VisibleText(pos.para, t, map);
+  from = to = pos;
+  if (map.empty()) return;
+  size_t i = std::lower_bound(map.begin(), map.end(), pos.offset) - map.begin();
+  if (i >= map.size()) i = map.size() - 1;
+  if (!WordChar(t[i]) && i > 0 && WordChar(t[i - 1])) --i;
+  size_t a = i, b = i + 1;
+  if (WordChar(t[i])) {
+    while (a > 0 && WordChar(t[a - 1])) --a;
+    while (b < t.size() && WordChar(t[b])) ++b;
+  }
+  while (b < t.size() && t[b] == L' ') ++b;  // with the space after it, as Word selects words
+  from = {pos.para, map[a]};
+  to = {pos.para, b < map.size() ? map[b] : map.back() + 1};
+}
+
+std::wstring DocView::TextOf(TextPos from, TextPos to, size_t limit) const {
+  if (to < from) std::swap(from, to);
+  const uint32_t story = StoryOf(from);
+  std::wstring out;
+  for (uint32_t p = from.para; p <= to.para && p < doc_->Paragraphs().size(); ++p) {
+    if (doc_->Para(p).story != story) continue;
+    std::wstring t;
+    std::vector<uint32_t> map;
+    VisibleText(p, t, map);
+    if (p != from.para) out += L"\r\n";
+    for (size_t i = 0; i < t.size(); ++i) {
+      if (p == from.para && map[i] < from.offset) continue;
+      if (p == to.para && map[i] >= to.offset) break;
+      out += t[i] == L'\n' ? std::wstring(L"\r\n") : std::wstring(1, t[i]);
+    }
+    if (out.size() > limit) return out.substr(0, limit);
+  }
+  return out;
+}
+
+void DocView::Copy() {
+  if (!Ready() || !HasSelection()) return;
+  std::wstring text = TextOf(anchor_, focus_, SIZE_MAX);
+  if (text.empty()) return;
+  util::SetClipboardText(text);
+  host_.ViewMessage(BannerKind::Success, L"Copied");
+}
+
+std::wstring DocView::SelectedText() {
+  if (!Ready() || !HasSelection()) return {};
+  return TextOf(anchor_, focus_, 1000);
+}
+
+void DocView::SelectAll() {
+  if (!Ready()) return;
+  std::vector<uint32_t> paras = doc_->StoryParagraphs(doc_->MainStory());
+  if (paras.empty()) return;
+  anchor_ = {paras.front(), 0};
+  focus_ = {paras.back(), static_cast<uint32_t>(doc_->Para(paras.back()).text.size())};
+  host_.ViewInvalidate();
+}
+
+// ---------------------------------------------------------------------------
+// Find
+
+void DocView::StartSearch(const std::wstring& query, bool matchCase) {
+  if (!Ready()) return;
+  ClearSearch();
+  if (query.empty()) return;
+  auto lower = [](std::wstring s) {
+    if (!s.empty())
+      LCMapStringEx(LOCALE_NAME_USER_DEFAULT, LCMAP_LOWERCASE, s.data(), static_cast<int>(s.size()), s.data(),
+                    static_cast<int>(s.size()), nullptr, nullptr, 0);
+    return s;
+  };
+  const std::wstring q = matchCase ? query : lower(query);
+  // The main text first, then headers, footers, notes and text boxes, as Word searches them.
+  std::vector<uint32_t> stories{doc_->MainStory()};
+  for (uint32_t s = 0; s < doc_->Stories().size(); ++s)
+    if (s != doc_->MainStory() && doc_->Stories()[s].kind != fw::doc::StoryKind::Comment) stories.push_back(s);
+  for (uint32_t story : stories) {
+    for (uint32_t p : doc_->StoryParagraphs(story)) {
+      std::wstring t;
+      std::vector<uint32_t> map;
+      VisibleText(p, t, map);
+      if (t.size() < q.size()) continue;
+      const std::wstring hay = matchCase ? t : lower(t);
+      for (size_t at = hay.find(q); at != std::wstring::npos; at = hay.find(q, at + q.size())) {
+        Match m;
+        m.from = {p, map[at]};
+        m.to = {p, map[at + q.size() - 1] + 1};
+        matches_.push_back(std::move(m));
+      }
+    }
+  }
+  // The first match from the current page on.
+  current_ = matches_.empty() ? -1 : 0;
+  for (size_t i = 0; i < matches_.size(); ++i) {
+    auto page = pagination_->PageOf(matches_[i].from);
+    if (page && static_cast<int>(*page) >= currentPage_) {
+      current_ = static_cast<int>(i);
+      break;
+    }
+    if (!page) break;
+  }
+  TakeNewPages();
+  if (current_ >= 0) ScrollToPos(matches_[current_].from, matches_[current_].to);
+  host_.ViewInvalidate();
+  host_.ViewStateChanged();
+}
+
+void DocView::ClearSearch() {
+  matches_.clear();
+  current_ = -1;
+  host_.ViewInvalidate();
+}
+
+void DocView::SearchStep(bool forward) {
+  if (matches_.empty()) return;
+  const int n = static_cast<int>(matches_.size());
+  current_ = current_ < 0 ? 0 : (current_ + (forward ? 1 : n - 1)) % n;
+  ScrollToPos(matches_[current_].from, matches_[current_].to);
+  host_.ViewStateChanged();
+  host_.ViewInvalidate();
+}
+
+void DocView::ScrollToPos(TextPos from, TextPos to) {
+  auto rects = pagination_->Ranges(from, to);
+  TakeNewPages();
+  if (rects.empty()) {
+    if (auto page = pagination_->PageOf(from)) {
+      TakeNewPages();
+      GoToPage(static_cast<int>(*page));
+    }
+    return;
+  }
+  const int page = static_cast<int>(rects.front().first);
+  if (page >= PageCount()) return;
+  if (viewMode_ == fw::ViewMode::Single && layout_.rowOfPage[page] != singleRow_) {
+    singleRow_ = layout_.rowOfPage[page];
+    sy_ = tsy_ = 0;
+  }
+  ScrollScreenRectIntoView(PageRectToScreen(page, rects.front().second), true);
+}
+
+// ---------------------------------------------------------------------------
+// File
+
+SaveFormat DocView::SaveAsFormat() const {
+  if (fw::EndsWithNoCase(path_, L".docm")) return {L"Word macro-enabled document", L"*.docm", L"docm"};
+  if (fw::EndsWithNoCase(path_, L".dotx")) return {L"Word template", L"*.dotx", L"dotx"};
+  if (fw::EndsWithNoCase(path_, L".dotm")) return {L"Word macro-enabled template", L"*.dotm", L"dotm"};
+  return {L"Word document", L"*.docx", L"docx"};
+}
+
+bool DocView::Save(const std::wstring& path, std::wstring& error) {
+  // The file exactly as it was opened (the snapshot), so a copy never differs from the original.
+  const auto& snapshot = doc_->Package().GetSnapshot();
+  std::string bytes(static_cast<size_t>(snapshot.Size()), '\0');
+  if (!snapshot.ReadAt(0, bytes.data(), bytes.size()) || !util::WriteFileAtomic(path, bytes)) {
+    error = L"The copy couldn't be saved.";
+    return false;
+  }
+  return true;
+}
+
+PrintOutcome DocView::Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) {
+  pagination_->LayOutAll();
+  TakeNewPages();
+  const int pageCount = static_cast<int>(pagination_->PageCount());
+  if (pageCount == 0) {
+    message = L"This document has nothing to print.";
+    return PrintOutcome::Failed;
+  }
+  PRINTPAGERANGE ranges[16] = {};
+  PRINTDLGEXW pd{sizeof(pd)};
+  pd.hwndOwner = owner;
+  pd.Flags = PD_NOSELECTION | PD_USEDEVMODECOPIESANDCOLLATE;
+  pd.nMaxPageRanges = 16;
+  pd.lpPageRanges = ranges;
+  pd.nMinPage = 1;
+  pd.nMaxPage = static_cast<DWORD>(pageCount);
+  pd.nCopies = 1;
+  pd.nStartPage = START_PAGE_GENERAL;
+  HRESULT hr = PrintDlgExW(&pd);
+  auto cleanup = [&]() {
+    if (pd.hDC) DeleteDC(pd.hDC);
+    if (pd.hDevMode) GlobalFree(pd.hDevMode);
+    if (pd.hDevNames) GlobalFree(pd.hDevNames);
+  };
+  if (FAILED(hr) || pd.dwResultAction != PD_RESULT_PRINT || !pd.hDevNames) {
+    cleanup();
+    if (FAILED(hr)) {
+      message = L"The print dialog couldn’t be opened. Is a printer installed?";
+      return PrintOutcome::Failed;
+    }
+    return PrintOutcome::Cancelled;
+  }
+  std::vector<int> toPrint;
+  if (pd.Flags & PD_PAGENUMS) {
+    for (DWORD i = 0; i < pd.nPageRanges; ++i)
+      for (DWORD p = ranges[i].nFromPage; p <= ranges[i].nToPage && p >= 1 && p <= static_cast<DWORD>(pageCount); ++p)
+        toPrint.push_back(static_cast<int>(p) - 1);
+  } else if (pd.Flags & PD_CURRENTPAGE) {
+    toPrint.push_back(std::min(currentPage_, pageCount - 1));
+  } else {
+    for (int i = 0; i < pageCount; ++i) toPrint.push_back(i);
+  }
+  std::wstring printer;
+  if (auto* names = static_cast<DEVNAMES*>(GlobalLock(pd.hDevNames))) {
+    printer = reinterpret_cast<const wchar_t*>(names) + names->wDeviceOffset;
+    GlobalUnlock(pd.hDevNames);
+  }
+  const DEVMODEW* devmode = pd.hDevMode ? static_cast<const DEVMODEW*>(GlobalLock(pd.hDevMode)) : nullptr;
+
+  draw::PrintJob job;
+  hr = job.Start(gpu::D2DDevice(), printer, devmode, Title());
+  int done = 0;
+  for (size_t i = 0; SUCCEEDED(hr) && i < toPrint.size(); ++i) {
+    if (progress) progress(done, static_cast<int>(toPrint.size()));
+    const layout::Page& page = pagination_->GetPage(toPrint[i]);
+    hr = job.AddPage(page.width, page.height, [&](draw::Painter& painter) { pagination_->Paint(painter, toPrint[i]); });
+    if (SUCCEEDED(hr)) ++done;
+  }
+  if (SUCCEEDED(hr)) hr = job.Finish();
+  if (devmode) GlobalUnlock(pd.hDevMode);
+  cleanup();
+  if (FAILED(hr)) {
+    message = L"Printing stopped because the printer reported an error.";
+    return PrintOutcome::Failed;
+  }
+  switch (job.Wait(120000)) {
+    case draw::PrintJob::Outcome::Canceled: message = L"Printing was canceled."; return PrintOutcome::Cancelled;
+    case draw::PrintJob::Outcome::Failed:
+      message = L"Printing stopped because the printer reported an error.";
+      return PrintOutcome::Failed;
+    default: break;
+  }
+  message = done == 1 ? L"Sent 1 page to the printer" : L"Sent " + std::to_wstring(done) + L" pages to the printer";
+  return PrintOutcome::Printed;
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+
+namespace {
+
+struct CommandName {
+  int cmd;
+  const wchar_t* label;
+  const wchar_t* keys;
+};
+
+constexpr CommandName kCommandNames[] = {
+    {CmdGoToPage, L"Go to page", L"Ctrl+G"},
+    {CmdNextPage, L"Next page", L"Page Down"},
+    {CmdPrevPage, L"Previous page", L"Page Up"},
+    {CmdFirstPage, L"First page", L"Ctrl+Home"},
+    {CmdLastPage, L"Last page", L"Ctrl+End"},
+    {CmdZoomIn, L"Zoom in", L"Ctrl+="},
+    {CmdZoomOut, L"Zoom out", L"Ctrl+−"},
+    {CmdZoomAuto, L"Zoom automatically", L"Ctrl+0"},
+    {CmdZoomActual, L"Actual size", L"Ctrl+1"},
+    {CmdZoomFitPage, L"Fit page", L"Ctrl+2"},
+    {CmdZoomFitWidth, L"Fit width", L"Ctrl+3"},
+    {CmdViewSingle, L"Single page", L"Ctrl+6"},
+    {CmdViewContinuous, L"Continuous pages", L"Ctrl+7"},
+    {CmdViewFacing, L"Two pages", L"Ctrl+8"},
+    {CmdPresentation, L"Present", L"F5"},
+    {CmdToggleInvert, L"Night reading: dark pages", L""},
+    {CmdCopy, L"Copy", L"Ctrl+C"},
+    {CmdSelectAll, L"Select all", L"Ctrl+A"},
+};
+
+}  // namespace
+
+int DocView::Shortcut(UINT vk, UINT mods) {
+  const bool ctrl = (mods & kModCtrl) != 0;
+  if ((mods & kModAlt) && !ctrl && (vk == VK_LEFT || vk == VK_RIGHT)) return vk == VK_LEFT ? CmdPrevPage : CmdNextPage;
+  if (ctrl && !(mods & kModShift)) {
+    switch (vk) {
+      case 'G': return CmdGoToPage;
+      case VK_OEM_PLUS:
+      case VK_ADD: return CmdZoomIn;
+      case VK_OEM_MINUS:
+      case VK_SUBTRACT: return CmdZoomOut;
+      case '0':
+      case VK_NUMPAD0: return CmdZoomAuto;
+      case '1': return CmdZoomActual;
+      case '2': return CmdZoomFitPage;
+      case '3': return CmdZoomFitWidth;
+      case '6': return CmdViewSingle;
+      case '7': return CmdViewContinuous;
+      case '8': return CmdViewFacing;
+    }
+  }
+  if (vk == VK_F5) return CmdPresentation;
+  return 0;
+}
+
+CommandState DocView::QueryCommand(int cmd) {
+  CommandState s;
+  switch (cmd) {
+    case CmdSave: s = {false, false}; break;  // read-only until D2; Save as makes a copy
+    case CmdPrint: s = {Ready(), false}; break;
+    case CmdCopy: s = {Ready() && HasSelection(), false}; break;
+    case CmdSelectAll: s = {Ready(), false}; break;
+    case CmdRotateLeft:
+    case CmdRotateRight:
+    case CmdToggleCover:
+    case CmdHighlight:
+    case CmdSelectAllOnPage:
+      s.visible = false;
+      break;
+    default: s = PagedView::QueryCommand(cmd); break;
+  }
+  for (const CommandName& n : kCommandNames) {
+    if (n.cmd == cmd) {
+      s.label = n.label;
+      s.shortcut = n.keys;
+    }
+  }
+  return s;
+}
+
+std::vector<int> DocView::Commands() {
+  std::vector<int> ids;
+  for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
+  return ids;
+}
+
+bool DocView::Execute(int cmd) {
+  switch (cmd) {
+    case CmdCopy: Copy(); return true;
+    case CmdSelectAll: SelectAll(); return true;
+    case CmdRotateLeft:
+    case CmdRotateRight:
+    case CmdToggleCover: return true;  // not for documents
+  }
+  return PagedView::Execute(cmd);
+}
+
+void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
+  auto item = [](int cmd, wchar_t glyph, const wchar_t* tooltip = L"") {
+    ToolItem t;
+    t.cmd = cmd;
+    t.glyph = glyph;
+    t.tooltip = tooltip;
+    return t;
+  };
+  ToolItem save = item(CmdSave, icon::Save, L"Documents are read-only for now; Save as makes a copy");
+  save.enabled = false;
+  save.joinNext = true;
+  ToolItem saveAs = item(CmdSaveMenu, icon::ChevronDown, L"Save a copy as… (Ctrl+Shift+S)");
+  saveAs.width = 18;
+  saveAs.glyphSize = 9;
+  ToolItem print = item(CmdPrint, icon::Print);
+  m.left = {save, saveAs, print};
+
+  m.pager = true;
+  m.page = currentPage_;
+  m.pageCount = PageCount();
+  m.zoomText = fw::FormatPercent(Zoom());
+
+  wchar_t viewGlyph = viewMode_ == fw::ViewMode::Single   ? icon::ViewSingle
+                      : viewMode_ == fw::ViewMode::Facing ? icon::ViewFacing
+                                                          : icon::ViewContinuous;
+  ToolItem view = item(CmdViewMenu, viewGlyph, L"Page layout");
+  view.width = 52;
+  view.dropdown = true;
+  view.priority = 1;
+  ToolItem find = item(CmdFind, icon::Search);
+  find.checked = ctx.searchOpen;
+  find.toggle = true;
+  find.priority = 5;
+  find.sepBefore = true;
+  ToolItem night = item(CmdToggleInvert, icon::QuietHours, L"Night reading: dark pages");
+  night.checked = ctx.inverted;
+  night.toggle = true;
+  night.priority = 3;
+  ToolItem full = item(CmdFullScreen, ctx.fullscreen ? icon::BackToWindow : icon::FullScreen);
+  full.priority = 2;
+  m.right = {view, find, night, full};
+}
+
+void DocView::FillContextMenu(HMENU m, int, int) {
+  using menu::AppendItem;
+  using menu::AppendSeparator;
+  if (HasSelection()) {
+    AppendItem(m, CmdCopy, L"Copy\tCtrl+C");
+    AppendSeparator(m);
+  }
+  AppendItem(m, CmdSelectAll, L"Select all\tCtrl+A");
+  AppendSeparator(m);
+  AppendItem(m, CmdZoomIn, L"Zoom in\tCtrl+=");
+  AppendItem(m, CmdZoomOut, L"Zoom out\tCtrl+−");
+  AppendItem(m, CmdZoomFitWidth, L"Fit width\tCtrl+3");
+  AppendItem(m, CmdZoomFitPage, L"Fit page\tCtrl+2");
+  AppendSeparator(m);
+  AppendItem(m, CmdFind, L"Find…\tCtrl+F");
+  AppendItem(m, CmdPrint, L"Print…\tCtrl+P");
+}
+
+void DocView::BuildStatusBar(StatusBarModel& m) {
+  std::wstring pages = L"Page " + std::to_wstring(currentPage_ + 1) + L" of " + std::to_wstring(PageCount());
+  if (!pagination_->Done()) pages += L"…";
+  m.segments = {pages, Thousands(words_) + (words_ == 1 ? L" word" : L" words")};
+  m.zoom = true;
+  m.zoomValue = Zoom();
+  m.onZoom = [this](double z) { SetZoom(z); };
+}
