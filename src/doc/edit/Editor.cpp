@@ -134,6 +134,7 @@ struct EditorState {
   std::vector<int> dirty;  // by part: undo steps applied that changed it
   int depth = 0;
   Entry group;
+  std::vector<size_t> marks;  // the group's steps at each BeginGroup, innermost last
   bool typingBroken = true;
   // The open transaction.
   bool inTx = false;
@@ -2421,11 +2422,14 @@ void Editor::BeginGroup(std::u16string name) {
     s.group = {};
     s.group.name = std::move(name);
   }
+  s.marks.push_back(s.group.steps.size());
 }
 
 void Editor::EndGroup() {
   EditorState& s = *impl_;
-  if (s.depth == 0 || --s.depth > 0) return;
+  if (s.depth == 0) return;
+  s.marks.pop_back();
+  if (--s.depth > 0) return;
   if (s.group.steps.empty()) return;
   Entry e = std::move(s.group);
   s.group = {};
@@ -2434,6 +2438,23 @@ void Editor::EndGroup() {
   s.Count(e, 1);
   s.undo.push_back(std::move(e));
   s.typingBroken = !typing;
+}
+
+void Editor::CancelGroup() {
+  EditorState& s = *impl_;
+  if (s.depth == 0) return;
+  for (const size_t mark = s.marks.back(); s.group.steps.size() > mark; s.group.steps.pop_back()) {
+    Step& step = s.group.steps.back();
+    if (step.custom) {
+      step.custom->Undo();
+      s.RefreshAll(*step.custom);
+    } else {
+      s.Restore(step.before, step.first, static_cast<uint32_t>(step.after.paras.size()));
+      s.Refresh(step, true);
+    }
+  }
+  s.Notify(listeners_);
+  EndGroup();
 }
 
 void Editor::BreakTyping() { impl_->typingBroken = true; }
@@ -2678,6 +2699,19 @@ std::optional<Editor::CellInfo> Editor::NextCell(Pos at, bool back) const {
     return std::nullopt;
   }
   return Info(s, g, it->first, it->second);
+}
+
+std::vector<Editor::CellInfo> Editor::TableCells(Pos at) const {
+  EditorState& s = *impl_;
+  std::vector<CellInfo> out;
+  if (at.para >= doc_.Paragraphs().size()) return out;
+  ElemId tbl, tr, tc;
+  if (!s.CellOf(at.para, tbl, tr, tc)) return out;
+  Grid g;
+  std::u16string why;
+  if (!s.ReadGrid(tbl, g, why)) return out;
+  for (const auto& [r, i] : ReadingOrder(g)) out.push_back(Info(s, g, r, i));
+  return out;
 }
 
 // ---- New tables

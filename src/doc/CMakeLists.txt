@@ -11,6 +11,7 @@ add_library(fwdoc STATIC
   docx/Save.cpp
   docx/Writer.cpp
   edit/Clip.cpp
+  edit/ClipTable.cpp
   edit/Editor.cpp
   edit/Format.cpp
   edit/Kept.cpp

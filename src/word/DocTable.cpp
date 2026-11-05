@@ -320,7 +320,7 @@ class DocTable::Panel : public PanelContent {
     };
     drop(align_, L"Table alignment", kAlign);
     align_.onChange = [this](int i) {
-      if (auto c = t_.Cell()) t_.Run(t_.editor_.SetTableProps(c->start, edit::PropEdit().Set("jc", {{"val", i == 1 ? "center" : i == 2 ? "right" : "left"}})));
+      if (auto c = t_.Cell()) t_.Keep(t_.editor_.SetTableProps(c->start, edit::PropEdit().Set("jc", {{"val", i == 1 ? "center" : i == 2 ? "right" : "left"}})));
     };
     drop(fit_, L"AutoFit", kFit);
     fit_.onChange = [this](int i) { t_.Execute(i == 0 ? CmdTableFixedWidth : i == 1 ? CmdTableAutoFitContents : CmdTableAutoFitWindow); };
@@ -330,22 +330,22 @@ class DocTable::Panel : public PanelContent {
       edit::PropEdit e;
       if (i == 1) e.Set("tblHeader");
       else e.Remove("tblHeader");
-      t_.Run(t_.editor_.SetRowProps(a, f, e));
+      t_.Keep(t_.editor_.SetRowProps(a, f, e));
     };
     spin(width_, L"Column width", 0.1, 22, 0.1, 2, Unit());
     width_.onChange = [this](double v) {
       auto [a, f] = t_.host_.selection();
-      t_.Run(t_.editor_.SetColumnWidth(a, f, ToTwips(v)));
+      t_.Keep(t_.editor_.SetColumnWidth(a, f, ToTwips(v)));
     };
     spin(height_, L"Row height (0: as the text needs)", 0, 22, 0.1, 2, Unit());
     height_.onChange = [this](double v) {
       auto [a, f] = t_.host_.selection();
-      t_.Run(t_.editor_.SetRowHeight(a, f, ToTwips(v), "atLeast"));
+      t_.Keep(t_.editor_.SetRowHeight(a, f, ToTwips(v), "atLeast"));
     };
     drop(valign_, L"Vertical alignment", kVAlign);
     valign_.onChange = [this](int i) {
       auto [a, f] = t_.host_.selection();
-      t_.Run(t_.editor_.SetCellProps(a, f, edit::PropEdit().Set("vAlign", {{"val", i == 1 ? "center" : i == 2 ? "bottom" : "top"}})));
+      t_.Keep(t_.editor_.SetCellProps(a, f, edit::PropEdit().Set("vAlign", {{"val", i == 1 ? "center" : i == 2 ? "bottom" : "top"}})));
     };
     spin(margins_, L"Cell margins", 0, 2, 0.01, 2, Unit());
     margins_.onChange = [this](double v) {
@@ -353,7 +353,7 @@ class DocTable::Panel : public PanelContent {
       const std::string w = std::to_string(ToTwips(v));
       edit::PropEdit e;
       for (const char* side : {"tcMar/top", "tcMar/left", "tcMar/bottom", "tcMar/right"}) e.Set(side, {{"w", w}, {"type", "dxa"}});
-      t_.Run(t_.editor_.SetCellProps(a, f, e));
+      t_.Keep(t_.editor_.SetCellProps(a, f, e));
     };
     drop(borders_, L"Borders", kBorders);
     borders_.placeholder = L"Choose borders";
@@ -365,7 +365,7 @@ class DocTable::Panel : public PanelContent {
       borders_.selected = -1;
       if (i < 0 || i >= 8) return;
       auto [a, f] = t_.host_.selection();
-      t_.Run(t_.editor_.SetCellBorders(a, f, kWhich[i]));
+      t_.Keep(t_.editor_.SetCellBorders(a, f, kWhich[i]));
     };
     shading_.label = shading_.tooltip = L"Shading";
     shading_.automaticLabel = L"No color";
@@ -381,7 +381,7 @@ class DocTable::Panel : public PanelContent {
                    static_cast<int>(std::lround(c.b * 255)));
         e.Set("shd", {{"val", "clear"}, {"color", "auto"}, {"fill", fw::WideToUtf8(hex)}});
       }
-      t_.Run(t_.editor_.SetCellProps(a, f, e));
+      t_.Keep(t_.editor_.SetCellProps(a, f, e));
     };
     drop(split_, L"Split cells", kSplit);
     split_.placeholder = L"Choose";
@@ -581,10 +581,10 @@ void DocTable::Execute(int cmd) {
     case CmdTableSelectRow: Select(Editor::Extent::Rows); return;
     case CmdTableSelectColumn: Select(Editor::Extent::Columns); return;
     case CmdTableSelectTable: Select(Editor::Extent::Table); return;
-    case CmdTableAutoFitWindow: Run(editor_.AutoFit(f, Editor::Fit::Window)); return;
-    case CmdTableFixedWidth: Run(editor_.AutoFit(f, Editor::Fit::Fixed)); return;
+    case CmdTableAutoFitWindow: Keep(editor_.AutoFit(f, Editor::Fit::Window)); return;
+    case CmdTableFixedWidth: Keep(editor_.AutoFit(f, Editor::Fit::Fixed)); return;
     case CmdTableAutoFitContents:
-      if (auto cell = Cell()) Run(editor_.AutoFit(f, Editor::Fit::Contents, ContentWidths(*cell)));
+      if (auto cell = Cell()) Keep(editor_.AutoFit(f, Editor::Fit::Contents, ContentWidths(*cell)));
       return;
     case CmdTableDistributeColumns: {
       // The block's columns (the whole table when it's one cell) share their width evenly.
@@ -598,14 +598,14 @@ void DocTable::Execute(int cmd) {
       if (c1 < c0) return;
       auto corners = a == f || block->cells.size() <= 1 ? editor_.Grow(f, f, Editor::Extent::Rows) : std::make_optional(std::make_pair(a, f));
       if (!corners) return;
-      Run(editor_.SetColumnWidth(corners->first, corners->second, static_cast<int32_t>(sum / (c1 - c0 + 1))));
+      Keep(editor_.SetColumnWidth(corners->first, corners->second, static_cast<int32_t>(sum / (c1 - c0 + 1))));
       return;
     }
     case CmdTableHeaderRow: {
       edit::PropEdit e;
       if (Query(cmd).checked) e.Remove("tblHeader");
       else e.Set("tblHeader");
-      Run(editor_.SetRowProps(a, f, e));
+      Keep(editor_.SetRowProps(a, f, e));
       return;
     }
   }
@@ -627,7 +627,7 @@ void DocTable::Select(Editor::Extent extent) {
 
 void DocTable::ApplyStyle(const std::string& name) {
   auto [a, f] = host_.selection();
-  Run(edit::ApplyTableStyle(editor_, f, name));
+  Keep(edit::ApplyTableStyle(editor_, f, name));
 }
 
 std::vector<int32_t> DocTable::ContentWidths(const Editor::CellInfo& at) const {
@@ -736,7 +736,8 @@ bool DocTable::ReplaceCells(std::u16string_view text) {
   editor_.BeginGroup(text.empty() ? u"Delete" : u"Typing");
   edit::Result r = editor_.ClearCells(a, f);
   if (r && !text.empty()) r = editor_.InsertText(r.caret, text);
-  editor_.EndGroup();
+  if (r) editor_.EndGroup();
+  else editor_.CancelGroup();
   Run(r);
   return true;
 }

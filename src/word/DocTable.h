@@ -68,6 +68,13 @@ class DocTable {
   const fw::doc::Document& Doc() const { return editor_.Doc(); }
   std::optional<fw::doc::edit::Editor::CellInfo> Cell() const;
   bool Run(const fw::doc::edit::Result& r) { return host_.apply(r); }
+  // A change of properties: the paragraphs stay where they are, and so does the selection.
+  bool Keep(const fw::doc::edit::Result& r) {
+    auto [a, f] = host_.selection();
+    if (!host_.apply(r)) return false;
+    if (!(a == f)) host_.select(a, f);
+    return true;
+  }
   void Insert(uint32_t rows, uint32_t cols);
   void Select(fw::doc::edit::Editor::Extent extent);
   // A table style by name: the document's, or one of Word's basics added to it. One undo step.

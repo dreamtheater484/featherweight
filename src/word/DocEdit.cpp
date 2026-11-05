@@ -139,19 +139,11 @@ void DocView::Cut() {
 
 void DocView::Paste(bool formatted) {
   if (!Editing()) return;
-  if (HasSelection() && table_ && table_->SelectedCells()) {
-    // Cells selected: emptied, then the paste goes into the first, as one step.
-    editor_->BeginGroup(u"Paste");
-    table_->ReplaceCells(u"");
-    if (!HasSelection()) Paste(formatted);
-    editor_->EndGroup();
-    return;
-  }
+  namespace edit = fw::doc::edit;
+  std::optional<edit::Clip> clip;
   if (formatted) {
     // Featherweight's own copies come as HTML; Word's RTF says more than its HTML; then a
     // browser's HTML.
-    namespace edit = fw::doc::edit;
-    std::optional<edit::Clip> clip;
     const std::string html = util::GetClipboardBytes(L"HTML Format");
     if (!html.empty() && edit::IsOwnHtml(html)) clip = edit::FromHtml(html);
     if (!clip || clip->Empty()) {
@@ -159,17 +151,28 @@ void DocView::Paste(bool formatted) {
       if (!rtf.empty()) clip = edit::FromRtf(rtf);
     }
     if ((!clip || clip->Empty()) && !html.empty()) clip = edit::FromHtml(html);
-    if (clip && !clip->Empty()) {
-      Apply(edit::PasteClip(*editor_, SelFrom(), SelTo(), *clip, clipSource_));
-      return;
-    }
+    if (clip && clip->Empty()) clip.reset();
   }
-  std::wstring text = util::GetClipboardText();
-  if (text.empty()) return;
-  const std::u16string t(text.begin(), text.end());
+  std::u16string t;
+  if (!clip) {
+    std::wstring text = util::GetClipboardText();
+    if (text.empty()) return;
+    t.assign(text.begin(), text.end());
+  }
   editor_->BeginGroup(u"Paste");
-  Result r = HasSelection() ? editor_->Replace(SelFrom(), SelTo(), t) : editor_->InsertText(ToDoc(focus_), t);
-  editor_->EndGroup();
+  fw::doc::Pos from = SelFrom(), to = SelTo();
+  Result r;
+  r.caret = from;
+  if (HasSelection() && table_ && table_->SelectedCells()) {
+    // Cells selected: they're emptied, and the paste goes in from the first (a table over the
+    // cells from there).
+    r = editor_->ClearCells(ToDoc(anchor_), ToDoc(focus_));
+    from = to = r.caret;
+  }
+  if (r) r = clip ? edit::PasteClip(*editor_, from, to, *clip, clipSource_)
+                  : from == to ? editor_->InsertText(from, t) : editor_->Replace(from, to, t);
+  if (r) editor_->EndGroup();
+  else editor_->CancelGroup();
   Apply(r);
 }
 

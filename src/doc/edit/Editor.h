@@ -163,6 +163,8 @@ class Editor {
   std::optional<std::pair<Pos, Pos>> Grow(Pos from, Pos to, Extent extent) const;
   // The cell after (or before) the one `at` is in, in reading order; nullopt at either end.
   std::optional<CellInfo> NextCell(Pos at, bool back = false) const;
+  // Every cell of the table `at` is in, in reading order (a merged cell once); empty elsewhere.
+  std::vector<CellInfo> TableCells(Pos at) const;
 
   // A new table of rows x cols at `at`: before the paragraph when `at` is at its start, after it
   // at its end, else between the halves of a split. Its columns share the text width; it takes
@@ -214,6 +216,9 @@ class Editor {
   // Groups nest; the outermost names the step.
   void BeginGroup(std::u16string name);
   void EndGroup();
+  // Ends the innermost group with nothing of it left: what it did since its BeginGroup is undone
+  // (a change that failed half-way). The groups around it keep what they did before.
+  void CancelGroup();
   // Typing and deleting a character at a time coalesce into one step while they continue where the
   // last one ended. The view breaks the run when the caret moves on its own or time passes.
   void BreakTyping();
