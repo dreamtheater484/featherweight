@@ -365,8 +365,8 @@ FormatState StateOf(const Document& doc, Range range) {
 
   bool firstPara = true, bullets = true, numbered = true;
   for (uint32_t p : ParagraphsOf(doc, range)) {
+    std::optional<ListLabel> label = doc.Label(p);  // first: it resolves other paragraphs too
     const ParaProps& pp = doc.ResolvedPara(p);
-    std::optional<ListLabel> label = doc.Label(p);
     bullets &= label && label->bullet;
     numbered &= label && !label->bullet;
     if (firstPara) {

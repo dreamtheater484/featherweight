@@ -5,6 +5,7 @@
 #include "DocFixture.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
+#include "doc/edit/Lists.h"
 #include "doc/edit/Styles.h"
 #include "pkg/Check.h"
 
@@ -508,4 +509,150 @@ TEST(Styles_DocumentsWithoutAStylesPart) {
   auto again = SaveAndReopen(*doc);
   CHECK(again);
   if (again) CHECK(again->ResolvedPara(MainParas(*again)[0]).style == "Title");
+}
+
+// ---------- Lists ----------
+
+namespace {
+
+std::u16string LabelOf(const Document& doc, uint32_t para) {
+  std::optional<ListLabel> l = doc.Label(para);
+  return l ? l->text : u"";
+}
+
+std::string Paras(int n) {
+  std::string body;
+  for (int i = 0; i < n; ++i) body += "<w:p><w:r><w:t>item " + std::to_string(i) + "</w:t></w:r></w:p>";
+  return body;
+}
+
+}  // namespace
+
+TEST(Lists_BulletsInADocumentWithoutNumbering) {
+  Fixture f;
+  f.styles = kWordStyles;
+  f.body = Paras(3);
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  CHECK(!doc->FindPart(PartKind::Numbering));
+  std::string main = MainXml(*doc);
+  auto paras = MainParas(*doc);
+  edit::Editor ed(*doc);
+  edit::ToggleList(ed, {{paras[0], 2}, {paras[1], 2}}, edit::ListKind::Bullet);
+  CHECK(doc->FindPart(PartKind::Numbering));
+  CHECK(doc->Label(paras[0]) && doc->Label(paras[0])->bullet && doc->Label(paras[1]) && doc->Label(paras[1])->bullet);
+  CHECK(!doc->Label(paras[2]));
+  CHECK(doc->ResolvedPara(paras[0]).style == "ListParagraph" && doc->ResolvedPara(paras[0]).indStart.Value() == 720);
+  CHECK(doc->ResolvedPara(paras[0]).firstLine.Value() == -360);
+  CHECK(edit::StateOf(*doc, {{paras[0], 0}, {paras[1], 1}}).bullets);
+  {
+    auto again = SaveAndReopen(*doc);
+    CHECK(again);
+    if (again) CHECK(again->Label(MainParas(*again)[1]) && again->Label(MainParas(*again)[1])->bullet);
+  }
+  // The button again: out of the list, back to Normal.
+  edit::ToggleList(ed, {{paras[0], 2}, {paras[1], 2}}, edit::ListKind::Bullet);
+  CHECK(!doc->Label(paras[0]) && doc->ResolvedPara(paras[0]).style == "Normal");
+  CHECK(ed.Undo() && ed.Undo());
+  CHECK(MainXml(*doc) == main);
+}
+
+TEST(Lists_NumbersCountJoinRestartAndContinue) {
+  Fixture f;
+  f.styles = kWordStyles;
+  f.body = Paras(4);
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  auto p = MainParas(*doc);
+  edit::Editor ed(*doc);
+  edit::ToggleList(ed, {{p[0], 0}, {p[1], 1}}, edit::ListKind::Number);
+  CHECK(LabelOf(*doc, p[0]) == u"1." && LabelOf(*doc, p[1]) == u"2.");
+  edit::ToggleList(ed, {{p[3], 0}, {p[3], 0}}, edit::ListKind::Number);  // after a plain paragraph: a new list
+  CHECK(LabelOf(*doc, p[3]) == u"1.");
+  edit::ToggleList(ed, {{p[2], 0}, {p[2], 0}}, edit::ListKind::Number);  // right after the first list: joins it
+  CHECK(LabelOf(*doc, p[2]) == u"3." && LabelOf(*doc, p[3]) == u"1.");
+  edit::RestartNumbering(ed, p[1]);
+  CHECK(LabelOf(*doc, p[0]) == u"1." && LabelOf(*doc, p[1]) == u"1." && LabelOf(*doc, p[2]) == u"2.");
+  CHECK(edit::ContinueNumbering(ed, p[1]));
+  CHECK(LabelOf(*doc, p[1]) == u"2." && LabelOf(*doc, p[2]) == u"3.");
+  CHECK(!edit::ContinueNumbering(ed, p[0]));  // nothing before it
+  // Tab and Shift+Tab change the level.
+  edit::ShiftIndent(ed, {{p[1], 0}, {p[1], 0}}, true);
+  CHECK(LabelOf(*doc, p[1]) == u"a." && LabelOf(*doc, p[2]) == u"2.");
+  edit::ShiftIndent(ed, {{p[1], 0}, {p[1], 0}}, false);
+  CHECK(LabelOf(*doc, p[1]) == u"2.");
+  // Bullets over numbered items: they change kind, keeping their level.
+  edit::ShiftIndent(ed, {{p[2], 0}, {p[2], 0}}, true);
+  edit::ToggleList(ed, {{p[1], 0}, {p[2], 1}}, edit::ListKind::Bullet);
+  CHECK(doc->Label(p[1]) && doc->Label(p[1])->bullet && doc->Label(p[2]) && doc->Label(p[2])->level == 1);
+  CHECK(SaveAndReopen(*doc) != nullptr);
+  int undone = 0;
+  while (ed.Undo()) ++undone;
+  CHECK(undone == 9 && !doc->Label(p[0]));
+}
+
+TEST(Lists_MultilevelLabels) {
+  Fixture f;
+  f.styles = kWordStyles;
+  f.body = Paras(3);
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  auto p = MainParas(*doc);
+  edit::Editor ed(*doc);
+  edit::ToggleList(ed, {{p[0], 0}, {p[2], 1}}, edit::ListKind::Multilevel);
+  edit::ShiftIndent(ed, {{p[1], 0}, {p[2], 1}}, true);
+  edit::ShiftIndent(ed, {{p[2], 0}, {p[2], 1}}, true);
+  CHECK(LabelOf(*doc, p[0]) == u"1." && LabelOf(*doc, p[1]) == u"1.1." && LabelOf(*doc, p[2]) == u"1.1.1.");
+  CHECK(edit::KindOfList(*doc, doc->ResolvedPara(p[0]).numId) == edit::ListKind::Multilevel);
+}
+
+TEST(Lists_NumberedHeadingsAreSwitchedOff) {
+  Fixture f;
+  f.styles = std::string(kWordStyles) +
+             "<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/><w:basedOn w:val=\"Normal\"/>"
+             "<w:pPr><w:numPr><w:numId w:val=\"1\"/></w:numPr></w:pPr></w:style>";
+  f.numbering = "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/>"
+                "<w:lvlText w:val=\"%1.\"/><w:pStyle w:val=\"Heading1\"/></w:lvl></w:abstractNum>"
+                "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+  f.body = "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>Intro</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  uint32_t p = MainParas(*doc)[0];
+  CHECK(LabelOf(*doc, p) == u"1.");
+  edit::Editor ed(*doc);
+  edit::ToggleList(ed, {{p, 0}, {p, 0}}, edit::ListKind::Number);  // already numbered: the button turns it off
+  CHECK(!doc->Label(p) && doc->ResolvedPara(p).style == "Heading1");
+  CHECK(Has(MainXml(*doc), "<w:numId w:val=\"0\"/>"));
+}
+
+TEST(Lists_AutoFormatAsYouType) {
+  using edit::DetectAutoList;
+  auto one = DetectAutoList(u"1. ");
+  CHECK(one && one->numFmt == "decimal" && one->lvlText == "%1." && one->start == 1 && one->length == 3);
+  auto a = DetectAutoList(u"a) ");
+  CHECK(a && a->numFmt == "lowerLetter" && a->lvlText == "%1)" && a->start == 1);
+  auto iv = DetectAutoList(u"(iv)\t");
+  CHECK(iv && iv->numFmt == "lowerRoman" && iv->lvlText == "(%1)" && iv->start == 4);
+  auto c = DetectAutoList(u"C. ");
+  CHECK(c && c->numFmt == "upperLetter" && c->start == 3);
+  auto twelve = DetectAutoList(u"12) ");
+  CHECK(twelve && twelve->start == 12);
+  auto star = DetectAutoList(u"* ");
+  CHECK(star && star->kind == edit::ListKind::Bullet && star->font == "Symbol");
+  CHECK(!DetectAutoList(u"1.") && !DetectAutoList(u"hello ") && !DetectAutoList(u"1.2. ") && !DetectAutoList(u"(1. "));
+  CHECK(!DetectAutoList(u"ab. "));  // not a Roman numeral
+  Fixture f;
+  f.styles = kWordStyles;
+  f.body = Paras(1);
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  uint32_t p = MainParas(*doc)[0];
+  edit::Editor ed(*doc);
+  edit::StartAutoList(ed, p, *a);
+  CHECK(LabelOf(*doc, p) == u"a)");
 }

@@ -10,6 +10,7 @@ add_library(fwdoc STATIC
   docx/Writer.cpp
   edit/Editor.cpp
   edit/Format.cpp
+  edit/Lists.cpp
   edit/Styles.cpp
 )
 target_include_directories(fwdoc PUBLIC "${PROJECT_SOURCE_DIR}/src")
