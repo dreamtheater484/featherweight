@@ -495,6 +495,7 @@ void DocView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
     DrawRanges(c, first, last);
     DrawCellGuide(c, first, last);
     DrawCaret(c, first, last);
+    DrawTextDrop(c, first, last);
     if (!presentation_) DrawPictureFrame(c, first, last);
     if (!presentation_) DrawScrollbars(c);
   }
@@ -825,6 +826,7 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
     host_.ViewInvalidate();
     return;
   }
+  if (!doubleClick && TextDragDown(x, y, mods, pos)) return;  // pressed on the selection: it may be dragged
   if (pos) {
     const bool triple = !doubleClick && anim::Now() - lastDoubleClick_ < GetDoubleClickTime() &&
                         std::abs(x - lastDoubleX_) + std::abs(y - lastDoubleY_) < 6 * ui_;
@@ -869,7 +871,7 @@ void DocView::OnMouseMove(int x, int y, UINT mods) {
     RulerMouseMove(x, y, mods);
     return;
   }
-  if (CellMouseMove(x, y)) return;
+  if (CellMouseMove(x, y) || TextDragMove(x, y)) return;
   RulerHover(x, y);
   if (PictureMouseMove(x, y, mods)) return;
   if (ScrollDragMove(x, y)) return;
@@ -908,10 +910,10 @@ void DocView::OnMouseMove(int x, int y, UINT mods) {
   UpdateScrollbarHover(x, y);
 }
 
-void DocView::OnMouseUp(int x, int y, int, UINT) {
+void DocView::OnMouseUp(int x, int y, int, UINT mods) {
   if (!Ready()) return;
   if (PictureMouseUp(x, y)) return;
-  if (CellMouseUp()) return;
+  if (CellMouseUp() || TextDragUp(mods)) return;
   Drag d = drag_;
   drag_ = Drag::None;
   lineDrag_ = LineDrag::None;
@@ -938,10 +940,11 @@ void DocView::OnMouseLeave() {
 }
 
 bool DocView::OnKeyDown(UINT vk, UINT mods) {
-  if (vk == VK_ESCAPE && (drag_ == Drag::Ruler || cellDrag_)) {  // the drag stops, and nothing changes
+  if (vk == VK_ESCAPE && (drag_ == Drag::Ruler || cellDrag_ || textDrag_ != TextDrag::None)) {  // the drag stops, and nothing changes
     drag_ = Drag::None;
     rulerDrag_ = {};
     cellDrag_.reset();
+    textDrag_ = TextDrag::None;
     host_.ViewInvalidate();
     return true;
   }
@@ -973,6 +976,7 @@ HCURSOR DocView::CursorAt(int x, int y) {
   if (!Ready()) return arrow;
   if (drag_ == Drag::Ruler || (drag_ == Drag::None && OnRuler(x, y))) return RulerCursor(x, y);
   if (cellDrag_ || lineDrag_ == LineDrag::Columns) return CellCursor(x, y);
+  if (textDrag_ == TextDrag::Moving) return arrow;
   if (drag_ == Drag::Pan) return move;
   if (drag_ == Drag::Select) return lineDrag_ != LineDrag::None ? arrow : ibeam;
   if (OverScrollbar(x, y)) return arrow;
@@ -981,6 +985,7 @@ HCURSOR DocView::CursorAt(int x, int y) {
   if (!HitAt(x, y).link.empty()) return hand;
   if (presentation_) return arrow;
   if (RowMarginAt(x, y) || LineMarginAt(x, y)) return arrow;
+  if (Editing() && OverSelection(x, y)) return arrow;  // it can be dragged
   return PosAt(x, y, false) ? ibeam : arrow;
 }
 

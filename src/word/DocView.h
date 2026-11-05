@@ -65,7 +65,8 @@ class DocView : public PagedView {
   void OnMouseUp(int x, int y, int button, UINT mods) override;
   void OnMouseLeave() override;
   bool Dragging() const override {
-    return PagedView::Dragging() || picDrag_.kind != PictureDrag::None || cellDrag_.has_value();
+    return PagedView::Dragging() || picDrag_.kind != PictureDrag::None || cellDrag_.has_value() ||
+           textDrag_ != TextDrag::None;
   }
   bool OnKeyDown(UINT vk, UINT mods) override;
   bool OnChar(wchar_t ch, UINT mods) override;
@@ -482,6 +483,18 @@ class DocView : public PagedView {
   std::optional<std::pair<TextPos, TextPos>> LineRange(TextPos pos) const;
   // In the left margin beside a line of text (not a table's): that line.
   std::optional<std::pair<TextPos, TextPos>> LineMarginAt(int x, int y) const;
+  // Dragging the selected text (DocEdit.cpp): pressed on the selection, moved, let go elsewhere in
+  // its story, it moves there (with Ctrl, a copy goes), one undo step; a click without moving puts
+  // the caret there. The dropped text stays selected.
+  enum class TextDrag : uint8_t { None, Pending, Moving };
+  TextDrag textDrag_ = TextDrag::None;
+  TextPos dragDown_;               // where it was pressed
+  std::optional<TextPos> dropAt_;  // where it would go now
+  bool OverSelection(int x, int y) const;
+  bool TextDragDown(int x, int y, UINT mods, std::optional<TextPos> pos);
+  bool TextDragMove(int x, int y);
+  bool TextDragUp(UINT mods);
+  void DrawTextDrop(gfx::Canvas& c, int first, int last);
   bool SelectLines(TextPos from, TextPos to);
   // ---- Table cells on the page (DocCells.cpp), from the layout's cell boxes (Layout::Cells): a
   // column border dragged moves its grid line, a row's bottom border sets its height (at least),
