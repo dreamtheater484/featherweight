@@ -164,6 +164,13 @@ uint32_t DocView::PictureAt(int x, int y) const {
     const layout::Rect& r = it->rect;
     if (px < r.left || px >= r.right || py < r.top || py >= r.bottom) continue;
     if (it->drawing >= doc_->Drawings().size() || doc_->Drawings()[it->drawing].pos.para == kNone) continue;
+    if (!doc_->Drawings()[it->drawing].textBoxes.empty()) {
+      // A text box: a click in its text goes to the text; its border selects it.
+      const D2D1_RECT_F s = PageRectToScreen(page, r);
+      const float band = 6 * ui_;
+      if (x > s.left + band && x < s.right - band && y > s.top + band && y < s.bottom - band) return kNone;
+      return it->drawing;
+    }
     if (it->behindText) {
       // Text over a picture behind it wins: the picture is picked where there's no line.
       if (auto pos = pagination_->HitTest(page, px, py))
