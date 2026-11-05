@@ -106,7 +106,10 @@ std::string Writer::QName(Ns ns, std::string_view local) const {
 void Writer::FindEditedBoxes() {
   for (uint32_t i = 0; i < doc_.drawings_.size(); ++i) {
     const Drawing& d = doc_.drawings_[i];
-    if (d.textBoxes.empty() || d.pos.para == kNone || d.part >= doc_.parts_.size() || &doc_.parts_[d.part] != &part_)
+    // Text boxes the editor can't change (TextBoxEditable) stay as the file has them, though a
+    // change to the whole part counts as an edit of each of its stories.
+    if (d.textBoxes.empty() || !d.boxesWritable || d.pos.para == kNone || d.part >= doc_.parts_.size() ||
+        &doc_.parts_[d.part] != &part_)
       continue;
     bool edited = false;
     for (uint32_t s : d.textBoxes) edited = edited || (s < doc_.stories_.size() && doc_.stories_[s].edits > 0);
