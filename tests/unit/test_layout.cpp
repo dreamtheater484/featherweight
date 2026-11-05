@@ -271,3 +271,52 @@ TEST(Layout_HitTestAndCarets) {
   auto ranges = d.layout->Ranges({hello->para, 0}, {hello->para, 5});
   CHECK(ranges.size() == 1 && ranges[0].second.Width() > 0);
 }
+
+TEST(Layout_MergedCellsRunOnAcrossPages) {
+  // A first column merged over twenty rows, holding forty lines: its text continues on the next
+  // page with the rows, never below the text area.
+  std::string merged;
+  for (int i = 0; i < 40; ++i) merged += P("merged " + std::to_string(i));
+  std::string rows;
+  for (int i = 0; i < 20; ++i)
+    rows += "<w:tr><w:tc><w:tcPr>" + std::string(i == 0 ? "<w:vMerge w:val=\"restart\"/>" : "<w:vMerge/>") + "</w:tcPr>" +
+            (i == 0 ? merged : P("")) + "</w:tc><w:tc>" + P("row " + std::to_string(i)) + "</w:tc></w:tr>";
+  Doc d = Make("<w:tbl><w:tblGrid><w:gridCol w:w=\"1500\"/><w:gridCol w:w=\"1500\"/></w:tblGrid>" + rows + "</w:tbl>" + P("after") +
+               SmallPage());
+  REQUIRE(d.layout);
+  CHECK(d.pages() > 1);
+  size_t first = 9, last = 9;
+  CHECK(Find(d, u"merged 0", &first) && Find(d, u"merged 39", &last));
+  CHECK(first == 0 && last > 0);
+  for (size_t p = 0; p < d.pages(); ++p)
+    for (const LineBox& l : d.page(p).lines) CHECK(l.top + l.height <= d.page(p).body.bottom + 0.5f);
+}
+
+TEST(Layout_RowsThatStartPagesOrStayTogether) {
+  // A row whose first paragraph has a page break before starts a page.
+  Doc b = Make(P("before") + "<w:tbl><w:tblGrid><w:gridCol w:w=\"3000\"/></w:tblGrid><w:tr><w:tc>" + P("one") +
+               "</w:tc></w:tr><w:tr><w:tc>" + P("two", "<w:pageBreakBefore/>") + "</w:tc></w:tr></w:tbl>");
+  REQUIRE(b.layout);
+  size_t one = 9, two = 9;
+  CHECK(Find(b, u"one", &one) && Find(b, u"two", &two));
+  CHECK(one == 0 && two == 1);
+  // Rows whose paragraphs keep with the next stay with it, and with the heading kept with them.
+  std::string fill;
+  for (int i = 0; i < 40; ++i) fill += P("filler " + std::to_string(i));
+  Doc probe = Make(fill + SmallPage());
+  REQUIRE(probe.layout);
+  size_t perPage = 0;
+  for (const LineBox& l : probe.page(0).lines)
+    if (l.story == fw::LayoutStory::Body) ++perPage;
+  std::string start;
+  for (size_t i = 0; i + 3 < perPage; ++i) start += P("filler " + std::to_string(i));
+  std::string rows;
+  for (int i = 0; i < 4; ++i)
+    rows += "<w:tr><w:tc>" + P("kept " + std::to_string(i), i < 3 ? "<w:keepNext/>" : "") + "</w:tc></w:tr>";
+  Doc k = Make(start + P("Heading", "<w:keepNext/>") + "<w:tbl><w:tblGrid><w:gridCol w:w=\"3000\"/></w:tblGrid>" + rows +
+               "</w:tbl>" + SmallPage());
+  REQUIRE(k.layout);
+  size_t heading = 9, k0 = 9, k3 = 9;
+  CHECK(Find(k, u"Heading", &heading) && Find(k, u"kept 0", &k0) && Find(k, u"kept 3", &k3));
+  CHECK(heading == 1 && k0 == 1 && k3 == 1);
+}

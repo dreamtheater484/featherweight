@@ -144,6 +144,7 @@ class Engine {
     float grown = 0;  // of the height: what merged cells ending in it added
     bool header = false;
     bool breakBefore = false;  // its first cell starts with a paragraph that has w:pageBreakBefore
+    bool keepNext = false;     // all its paragraphs have w:keepNext: it stays with the next row
   };
   struct TableBox {
     Node tbl;

@@ -91,6 +91,7 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
     rb.header = leading && rb.props.header;
     if (!rb.props.header) leading = false;
     int32_t col = rb.props.gridBefore;
+    bool keepAll = true, anyPara = false;
     for (Node tc : doc_.RowCells(tr)) {
       CellBox c;
       c.tc = tc;
@@ -122,6 +123,12 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
         c.content.height += BorderBelow(sp);
       }
       col += c.span;
+      if (!c.continued)
+        for (const Block& b : doc_.Blocks(tc))
+          if (b.kind == BlockKind::Paragraph) {
+            if (!doc_.ResolvedPara(b.para).keepNext) keepAll = false;
+            anyPara = true;
+          }
       if (rb.cells.empty()) {
         std::vector<Block> blocks = doc_.Blocks(tc);
         rb.breakBefore = !blocks.empty() && blocks.front().kind == BlockKind::Paragraph &&
@@ -154,6 +161,7 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
         if (lastRow) c.marginBottom += own(c.tc, Name("bottom"));
       }
     }
+    rb.keepNext = keepAll && anyPara;
     float h = 0;
     for (const CellBox& c : rb.cells)
       if (!c.continued && c.rowSpan == 1) h = std::max(h, c.content.height + c.marginTop + c.marginBottom);
