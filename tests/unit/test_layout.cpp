@@ -20,6 +20,7 @@ using namespace fw::doc;
 using fw::doc::layout::Layout;
 using fw::doc::layout::LineBox;
 using fw::doc::layout::Page;
+using fw::doc::layout::SubstituteFamily;
 
 namespace {
 
@@ -38,7 +39,8 @@ fw::text::Fonts& Fonts() {
   return fonts;
 }
 
-Doc Make(const std::string& body, const std::string& settings = "", const std::string& footnotes = "", bool all = true) {
+Doc Make(const std::string& body, const std::string& settings = "", const std::string& footnotes = "", bool all = true,
+         const std::string& fonts = "") {
   const std::string wml = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
   const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
   const std::string head = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>";
@@ -53,6 +55,11 @@ Doc Make(const std::string& body, const std::string& settings = "", const std::s
     types += "<Override PartName=\"/word/settings.xml\" ContentType=\"" + wml + "settings+xml\"/>";
     rels += "<Relationship Id=\"rId1\" Type=\"" + rel + "settings\" Target=\"settings.xml\"/>";
     entries.push_back({"word/settings.xml", head + "<w:settings " + kW + ">" + settings + "</w:settings>"});
+  }
+  if (!fonts.empty()) {
+    types += "<Override PartName=\"/word/fontTable.xml\" ContentType=\"" + wml + "fontTable+xml\"/>";
+    rels += "<Relationship Id=\"rId3\" Type=\"" + rel + "fontTable\" Target=\"fontTable.xml\"/>";
+    entries.push_back({"word/fontTable.xml", head + "<w:fonts " + kW + ">" + fonts + "</w:fonts>"});
   }
   if (!footnotes.empty()) {
     types += "<Override PartName=\"/word/footnotes.xml\" ContentType=\"" + wml + "footnotes+xml\"/>";
@@ -355,4 +362,29 @@ TEST(Layout_RangesStopAtTheirEnd) {
   CHECK_EQ(ranges.size(), 1u);
   CHECK(d.layout->PageCount() <= before + 1);
   CHECK(!d.layout->Done());
+}
+
+TEST(Layout_EastAsianFontsGetEastAsianStandIns) {
+  // Missing fonts from the font table: a fixed-pitch Japanese Mincho, a Korean font known by its
+  // Korean name, a Chinese one by its code pages only, and a Latin fixed-pitch one.
+  Doc d = Make(P("text"), "", "", true,
+               "<w:font w:name=\"MS \xE6\x98\x8E\xE6\x9C\x9D\"><w:panose1 w:val=\"02020609040205080304\"/>"
+               "<w:charset w:val=\"80\"/><w:family w:val=\"roman\"/><w:pitch w:val=\"fixed\"/></w:font>"
+               "<w:font w:name=\"Unknown Hangul Font\"><w:charset w:val=\"81\"/><w:pitch w:val=\"variable\"/></w:font>"
+               "<w:font w:name=\"Unknown Song\"><w:panose1 w:val=\"02010600030101010101\"/><w:charset w:val=\"00\"/>"
+               "<w:sig w:usb0=\"00000003\" w:usb1=\"288F0000\" w:usb2=\"00000016\" w:usb3=\"00000000\" w:csb0=\"00040001\" w:csb1=\"00000000\"/></w:font>"
+               "<w:font w:name=\"Unknown Typewriter\"><w:charset w:val=\"00\"/><w:pitch w:val=\"fixed\"/></w:font>");
+  REQUIRE(d.doc);
+  auto in = [](const std::wstring& s, std::initializer_list<const wchar_t*> names) {
+    for (const wchar_t* n : names)
+      if (s == n) return true;
+    return false;
+  };
+  // Every Windows 10 and 11 has one of each script's last stand-ins.
+  const std::wstring mincho = SubstituteFamily(*d.doc, L"MS \x660E\x671D");
+  CHECK(in(mincho, {L"MS Mincho", L"Yu Mincho", L"MS Gothic", L"Yu Gothic"}));
+  CHECK(in(SubstituteFamily(*d.doc, L"Unknown Hangul Font"), {L"Malgun Gothic", L"Gulim", L"Dotum"}));
+  CHECK(in(SubstituteFamily(*d.doc, L"\xBC14\xD0D5"), {L"Batang", L"Malgun Gothic"}));  // not in the table
+  CHECK(in(SubstituteFamily(*d.doc, L"Unknown Song"), {L"SimSun", L"Microsoft YaHei"}));
+  CHECK(SubstituteFamily(*d.doc, L"Unknown Typewriter") == L"Courier New");
 }
