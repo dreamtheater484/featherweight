@@ -1300,6 +1300,29 @@ TEST(Edit_SharedPropertiesChangeOnlyTheirParagraph) {
   CHECK(Consistent(*doc, f) && UndoSteps(ed) == 2 && RoundTrips(*doc));
 }
 
+TEST(Edit_TheFirstOfASharedSetChangesAlone) {
+  // The first paragraph of a shared set holds the children the others share (d2-torture's
+  // alternate-content.docx: a style set on "One" restyled "Two" in the saved file).
+  Fixture f;
+  const std::string same = "<w:pPr><w:pStyle w:val=\"ListNumber\"/><w:rPr><w:b/></w:rPr></w:pPr><w:r><w:rPr><w:i/></w:rPr>";
+  f.body = "<w:p>" + same + "<w:t>One</w:t></w:r></w:p><w:p>" + same + "<w:t>Two</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  const std::string twoStyle(doc->ResolvedPara(ps[1]).style);
+  CHECK(ed.SetParaProps(ps[0], ps[0], PropEdit().Set("pStyle", {{"val", "List2"}})));
+  CHECK(ed.SetRunProps(P(ps[0], 0), P(ps[0], 3), PropEdit().Set("i", {{"val", "0"}})));
+  CHECK(ed.SetMarkProps(ps[0], ps[0], PropEdit().Remove("b")));
+  CHECK(BodyIs(*doc,
+               "<w:p><w:pPr><w:pStyle w:val=\"List2\"/><w:rPr/></w:pPr><w:r><w:rPr><w:i w:val=\"0\"/></w:rPr><w:t>One</w:t></w:r></w:p>"
+               "<w:p>" + same + "<w:t>Two</w:t></w:r></w:p>"));
+  CHECK(doc->ResolvedPara(ps[1]).style == twoStyle && doc->ResolvedRun(ps[1], doc->Runs(ps[1])[0].run).italic);
+  CHECK(Consistent(*doc, f) && UndoSteps(ed) == 3 && MainXml(*doc) == before);
+}
+
 TEST(Edit_CommentsKeepTheirLastParagraphsId) {
   // commentsExtended names a comment by its last paragraph's w14:paraId: joining that paragraph
   // into the one before, or splitting it, keeps the id on the comment's last paragraph.
@@ -1459,3 +1482,4 @@ TEST(Clip_LinksTravel) {
   CHECK(MainXml(*doc).find("javascript") == std::string::npos);
   CHECK(Consistent(*doc, f) && ChecksOut(*doc));
 }
+
