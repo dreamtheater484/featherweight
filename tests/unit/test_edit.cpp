@@ -987,6 +987,15 @@ TEST(Clip_RtfAndHtmlCarryTheLook) {
     }
   }
   CHECK(!edit::FromRtf("not rtf") && !edit::FromHtml("plain text"));
+  // Pasted text is untrusted: nesting a hundred thousand deep costs no more than a little.
+  const std::string deepRtf = "{\\rtf1 a" + std::string(100000, '{') + "x" + std::string(100000, '}') + "b}";
+  auto r = edit::FromRtf(deepRtf);
+  CHECK(r && r->paras.size() == 1 && ClipText(r->paras[0]) == u"ab");
+  std::string deepHtml;
+  for (int i = 0; i < 100000; ++i) deepHtml += "<b>";
+  deepHtml += "x";
+  auto h = edit::FromHtml(deepHtml);
+  CHECK(h && h->paras.size() == 1 && ClipText(h->paras[0]) == u"x");
 }
 
 TEST(Clip_ReadsWordsRtf) {

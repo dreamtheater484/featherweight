@@ -507,6 +507,9 @@ uint32_t CodePageOfCharset(int charset) {
   }
 }
 
+// Nesting the readers follow (RTF groups, HTML elements); deeper is pasted without its formatting.
+constexpr size_t kMaxDepth = 256;
+
 // Builds a clip a character at a time, for both readers.
 struct Builder {
   Clip clip;
@@ -557,6 +560,19 @@ class RtfReader {
     size_t i = 0;
     while (i < s_.size()) {
       const char c = s_[i];
+      // Groups nested deeper than any real document are skipped whole: pasted RTF is untrusted.
+      if (overflow_ > 0) {
+        if (c == '{') ++overflow_;
+        else if (c == '}') --overflow_;
+        else if (c == '\\') ++i;  // \{ and \} aren't groups
+        ++i;
+        continue;
+      }
+      if (c == '{' && stack_.size() >= kMaxDepth) {
+        overflow_ = 1;
+        ++i;
+        continue;
+      }
       if (c == '{') {
         Flush();
         stack_.push_back(st_);
@@ -863,6 +879,7 @@ class RtfReader {
   std::vector<State> stack_;
   std::string bytes_, entry_;
   int skip_ = 0;
+  size_t overflow_ = 0;  // groups open beyond kMaxDepth
   uint32_t codePage_ = 1252;
   int deff_ = 0;
   std::map<int, Font> fonts_;
@@ -1341,7 +1358,8 @@ class HtmlReader {
           break;
         }
     }
-    stack_.push_back(std::move(f));
+    // Pasted HTML is untrusted: elements nested deeper than any real page add no formatting.
+    if (stack_.size() < kMaxDepth) stack_.push_back(std::move(f));
   }
 
   void CloseTo(const std::string& name, std::initializer_list<const char*> stops) {
