@@ -183,7 +183,10 @@ $files = foreach ($p in $Paths) {
   else { Write-Warning "not found: $p" }
 }
 if (-not $files) { throw "Give the documents or folders to check." }
-$tmp = Join-Path ([IO.Path]::GetTempPath()) "fw-word-open-check"
+# One check at a time on this PC: a second one's COM could attach to the first one's Word.
+$mutex = New-Object Threading.Mutex($false, "Global\FeatherweightWordOpenCheck")
+try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] {}  # a check that died still let go
+$tmp = Join-Path ([IO.Path]::GetTempPath()) "fw-word-open-check-$PID"
 New-Item -ItemType Directory -Force $tmp | Out-Null
 $resultPath = Join-Path $tmp "result.json"
 $entries = @()
@@ -245,5 +248,7 @@ if ($Json) {
     files = $entries
   }) ([IO.Path]::GetFullPath($Json))
 }
+$mutex.ReleaseMutex()
+Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 "$($entries.Count - $bad.Count) of $($entries.Count) opened in Word without a prompt or error."
 exit $(if ($bad.Count) { 1 } else { 0 })

@@ -872,6 +872,24 @@ std::string JsonText(std::string_view s) {
 
 // A failure, shrunk and kept: the edits as text (fwtool torture --replay reads them back) and the
 // saved file they make.
+// A list of edits as fwtool torture --replay reads it: where it comes from, then one edit per line.
+void WriteEdits(const fs::path& path, const fs::path& file, uint64_t seed, uint32_t round, const std::string& failure,
+                const std::vector<Edit>& edits, const std::string& count) {
+  std::string sha = "unknown";
+  if (std::ifstream in{file, std::ios::binary}) {
+    std::vector<uint8_t> original(std::istreambuf_iterator<char>(in), {});
+    sha = Hex(fw::pkg::HashBytes(original));
+  }
+  std::ofstream txt(path, std::ios::trunc);
+  txt << "# fwtool torture reproducer: fwtool torture --replay " << fw::WideToUtf8(path.generic_wstring()) << "\n";
+  txt << "file: " << fw::WideToUtf8(fs::absolute(file).generic_wstring()) << "\n";
+  txt << "sha256: " << sha << "\n";
+  txt << "seed: " << seed << "\nround: " << round << "\n";
+  txt << "failure: " << failure << "\n";
+  txt << "edits: " << count << "\n";
+  for (const Edit& e : edits) txt << torture::FormatEdit(e) << "\n";
+}
+
 std::string KeepReproducer(const fs::path& file, uint64_t seed, uint32_t round, const RoundResult& failed,
                            const Settings& set, size_t& kept) {
   const Failure& f = *failed.failure;
@@ -894,20 +912,8 @@ std::string KeepReproducer(const fs::path& file, uint64_t seed, uint32_t round, 
   docxPath += ".docx";
   std::error_code ec;
   fs::create_directories(base.parent_path(), ec);
-  std::vector<uint8_t> original;
-  std::string sha = "unknown";
-  if (std::ifstream in{file, std::ios::binary}) {
-    original.assign(std::istreambuf_iterator<char>(in), {});
-    sha = Hex(fw::pkg::HashBytes(original));
-  }
-  std::ofstream txt(txtPath, std::ios::trunc);
-  txt << "# fwtool torture reproducer: fwtool torture --replay " << fw::WideToUtf8(txtPath.generic_wstring()) << "\n";
-  txt << "file: " << fw::WideToUtf8(fs::absolute(file).generic_wstring()) << "\n";
-  txt << "sha256: " << sha << "\n";
-  txt << "seed: " << seed << "\nround: " << round << "\n";
-  txt << "failure: " << last.failure->category << ": " << last.failure->message << "\n";
-  txt << "edits: " << small.size() << " of " << failed.applied.size() << "\n";
-  for (const Edit& e : small) txt << torture::FormatEdit(e) << "\n";
+  WriteEdits(txtPath, file, seed, round, last.failure->category + ": " + last.failure->message, small,
+             std::to_string(small.size()) + " of " + std::to_string(failed.applied.size()));
   if (!last.saved.empty()) WriteBytes(docxPath, last.saved);
   return fw::WideToUtf8(txtPath.generic_wstring());
 }
@@ -1042,6 +1048,11 @@ int RunTorture(const Options& options) {
       if (!r.saved.empty() && savedPath.empty()) {
         fs::path saved = set.out / "saved" / (SafeName(file) + ".docx");
         WriteBytes(saved, r.saved);
+        // Its edits, so that what the validator or Word finds in it can be replayed and shrunk
+        // (scripts/torture-minimize.ps1). Not a .docx name: Word and the validator take folders.
+        fs::path edits = set.out / "saved" / (SafeName(file) + ".edits.txt");
+        WriteEdits(edits, file, seed, round, r.failure ? r.failure->category + ": " + r.failure->message : "none",
+                   r.applied, std::to_string(r.applied.size()));
         savedPath = fw::WideToUtf8(fs::absolute(saved).generic_wstring());
         pairs << fw::WideToUtf8(fs::absolute(file).generic_wstring()) << "\t" << savedPath << "\n";
       }
