@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -132,15 +133,34 @@ class TreeEdit {
   // copied (pictures, notes, comments, or kept content that refers to something).
   uint32_t NewStoryPart(PartKind kind, uint32_t copyOf, std::string& relId, std::u16string& why);
 
+  // ---- Comments (D4)
+  // A new comment's story (outside a transaction, and not undone): its w:comment, linked nowhere
+  // until LinkComment, with one paragraph (w14:paraId `paraId`) holding the annotation mark, as
+  // Word starts one. Needs the comments part (EnsurePart). The story's index, or kNone.
+  uint32_t NewComment(std::string_view id, std::string_view author, std::string_view initials, std::string_view date,
+                      std::string_view paraId);
+  // Inside a transaction: the comment's w:comment goes into the comments part, last, or out of it.
+  void LinkComment(uint32_t story);
+  void UnlinkComment(uint32_t story);
+  // commentsExtended's entry for the comment whose last paragraph has the w14:paraId `paraId`:
+  // the comment it answers (`parentParaId`, empty for none) and whether it's resolved; or none.
+  // The comments part is written again with its companions (docx::WriteCommentParts).
+  void SetCommentState(std::string_view paraId, std::string_view parentParaId, bool done);
+  void RemoveCommentState(std::string_view paraId);
+  // The comment's state as commentsExtended has it now: false when it has no entry.
+  bool CommentState(std::string_view paraId, std::string& parentParaId, bool& done) const;
+
  private:
   friend struct JournalStep;
   struct StoreOp {
-    enum Kind : uint8_t { Split, SetAttrs, Fragments } kind = Split;
+    enum Kind : uint8_t { Split, SetAttrs, Fragments, CommentsEx } kind = Split;
     pkg::NodeId node = pkg::kNoNode, second = pkg::kNoNode;
     pkg::SplitPoint at;
     pkg::AttrSetId before = 0, after = 0;                        // SetAttrs
     std::vector<pkg::Fragment> fragmentsBefore, fragmentsAfter;  // Fragments
+    std::vector<Document::CommentEx> exBefore, exAfter;          // CommentsEx
   };
+  void ChangeCommentsEx(const std::function<void(std::vector<Document::CommentEx>&)>& change);
   using Saved = std::vector<std::pair<ElemId, Elem>>;
   static void Restore(Document& doc, const Saved& elems);
   static void Replay(Document& doc, const std::vector<StoreOp>& ops, bool undo);

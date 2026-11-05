@@ -191,6 +191,12 @@ Status Serialize(Document& doc, const SaveOptions& options, std::vector<uint8_t>
     package.SetPart(part.name, std::vector<uint8_t>(xml.begin(), xml.end()));
     written.emplace_back(i, &xml);
   }
+  // Comments written: their companions with them.
+  for (const auto& [index, xml] : written)
+    if (doc.Parts()[index].kind == PartKind::Comments) {
+      if (Status st = WriteCommentParts(doc); !st.Ok()) return st;
+      break;
+    }
   if (options.edited) {
     if (std::string core = CorePropertiesPart(package); !core.empty() && package.FindPart(core)) {
       std::vector<uint8_t> bytes;

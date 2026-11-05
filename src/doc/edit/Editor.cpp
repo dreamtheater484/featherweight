@@ -1969,6 +1969,40 @@ struct EditorState {
   }
 
 
+  // ---- Comment marks
+  std::u16string& TextOf(uint32_t para) { return d.paras_[para].text; }
+  // Where a new range mark or run at `o` goes: before the outermost container that starts there
+  // (`before`), or after the outermost one that ends there; at a paragraph's start, after its
+  // w:pPr. The parent and the child it follows (kNoElem: first).
+  std::pair<ElemId, ElemId> PlaceAt(uint32_t para, uint32_t o, bool before) {
+    const ElemId p = d.paras_[para].elem;
+    const std::vector<LeafAt> leaves = Leaves(para);
+    auto outermost = [&](ElemId x, bool starts) {
+      for (;;) {
+        const ElemId up = E(x).parent;
+        if (up == kNoElem || up == p) return x;
+        const bool edge = starts ? E(up).start == o : E(up).start + E(up).length == o;
+        if (!edge && !(E(up).flags & kDisplayOnly)) return x;
+        x = up;
+      }
+    };
+    if (before)
+      for (const LeafAt& l : leaves)
+        if (l.length > 0 && l.start == o) {
+          const ElemId x = outermost(l.id, true);
+          return {E(x).parent, PrevSibling(x)};
+        }
+    const LeafAt* last = nullptr;
+    for (const LeafAt& l : leaves)
+      if (l.length > 0 && l.start + l.length == o) last = &l;
+    if (last) {
+      const ElemId x = outermost(last->id, false);
+      return {E(x).parent, x};
+    }
+    if (o == 0) return {p, Child(p, kPPr)};
+    return {p, LastChild(p)};
+  }
+
   // ---- Recording (Track Changes on)
   // Inside an insertion the current author made: their own new text, which isn't tracked again.
   bool OwnInsertion(ElemId id) {
@@ -3065,9 +3099,95 @@ Result Editor::DeleteTracked(Pos from, Pos to) {
   return r;
 }
 
+Result Editor::InsertCommentMarks(Pos from, Pos to, Pos refAt, std::string_view id) {
+  EditorState& s = *impl_;
+  std::u16string why;
+  if (!CanEdit(&why) || from.para >= doc_.Paragraphs().size() || !s.Editable(from.para, why)) return Fail(why);
+  if (Compare(to, from) < 0 || Compare(refAt, to) < 0 || refAt.para >= doc_.Paragraphs().size() ||
+      doc_.Para(from.para).story != doc_.Para(refAt.para).story || refAt.offset > ParaLength(refAt.para) ||
+      from.offset > ParaLength(from.para) || to.offset > ParaLength(to.para))
+    return Fail(u"A comment can't go there.");
+  s.Begin(from.para, refAt.para - from.para + 1);
+  // Runs end where the marks go.
+  for (const Pos& at : {from, to, refAt})
+    if (!s.CutRunsAt(at.para, at.offset, why)) return s.Abort(why);
+  auto place = [&](std::pair<ElemId, ElemId> at, uint32_t name) {
+    const ElemId m = s.NewElem(at.first, name);
+    if (m != kNoElem) s.LinkAfter(at.first, at.second, m);
+    return m;
+  };
+  const ElemId start = place(s.PlaceAt(from.para, from.offset, true), Name("commentRangeStart"));
+  const ElemId end = start == kNoElem ? kNoElem
+                     : place(from == to ? std::pair{s.E(start).parent, start} : s.PlaceAt(to.para, to.offset, false),
+                             Name("commentRangeEnd"));
+  const ElemId run = end == kNoElem ? kNoElem
+                     : place(refAt == to ? std::pair{s.E(end).parent, end} : s.PlaceAt(refAt.para, refAt.offset, false), kR);
+  const ElemId ref = run == kNoElem ? kNoElem : s.NewElem(run, Name("commentReference"));
+  if (ref == kNoElem) return s.Abort(u"A comment can't go there.");
+  s.SetAttr(start, kId, id);
+  s.SetAttr(end, kId, id);
+  s.SetAttr(ref, kId, id);
+  if (doc_.FindStyle("CommentReference")) {
+    const ElemId rPr = s.NewElem(run, kRPr), style = s.NewElem(rPr, kRStyle);
+    s.SetAttr(style, kVal, "CommentReference");
+    s.Append(rPr, style);
+    s.Append(run, rPr);
+  }
+  s.Append(run, ref);
+  s.E(ref).length = 1;
+  s.TextOf(refAt.para).insert(refAt.offset, 1, u'\x05');
+  s.Reflow(refAt.para);
+  s.Commit(false, from, from, Kind::Other, u"Comment");
+  s.Notify(listeners_);
+  Result r;
+  r.caret = from;
+  return r;
+}
+
+Result Editor::RemoveCommentMarks(std::string_view id) {
+  EditorState& s = *impl_;
+  std::u16string why;
+  if (!CanEdit(&why)) return Fail(why);
+  uint32_t lo = kNone, hi = 0;
+  for (const CommentInfo& c : doc_.Comments()) {
+    if (c.id != id) continue;
+    for (const Pos& at : {c.start, c.end, c.reference})
+      if (at.para != kNone) {
+        lo = std::min(lo, at.para);
+        hi = std::max(hi, at.para);
+      }
+  }
+  Result r;
+  if (lo == kNone) return r;
+  if (doc_.Para(lo).story != doc_.Para(hi).story || !s.Editable(lo, why))
+    return Fail(why.empty() ? u"This comment's marks can't be taken out." : why);
+  r.caret = Pos{lo, 0};
+  s.Begin(lo, hi - lo + 1);
+  static const uint32_t kStart = Name("commentRangeStart"), kEnd = Name("commentRangeEnd"), kRef = Name("commentReference");
+  for (uint32_t p = lo; p <= hi; ++p) {
+    for (const ElemId e : s.AllElems(p)) {
+      const uint32_t n = s.NameOf(e);
+      if ((n != kStart && n != kEnd && n != kRef) || s.Attr(e, kId).value_or("") != id) continue;
+      if (n == kRef) {
+        // Its character goes with it, and its run when nothing else is left in it.
+        const ElemId run = s.E(e).parent;
+        s.TextOf(p).erase(s.E(e).start, 1);
+        s.RemoveElem(e);
+        s.Prune({run}, doc_.Para(p).elem);
+      } else {
+        s.RemoveElem(e);
+      }
+      s.Reflow(p);
+    }
+  }
+  s.Commit(false, r.caret, r.caret, Kind::Other, u"Delete comment");
+  s.Notify(listeners_);
+  return r;
+}
+
 void Editor::Arm() {
   EditorState::Revisor& t = impl_->track;
-  t.on = !reviewing_ && Tracking();
+  t.on = !TrackingPaused() && Tracking();
   if (!t.on) return;
   t.author = ChangeAuthor();
   t.date = ChangeDate();
