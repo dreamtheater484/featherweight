@@ -253,7 +253,16 @@ class EditorTarget : public EditTarget {
     return Applied::Done;
   }
 
-  fw::pkg::Status Save(std::vector<uint8_t>& out) override { return SaveParts(*doc_, editor_.DirtyParts(), out, written); }
+  // As the Word tab saves (DocView::Save): with nothing changed, the file exactly as it was opened.
+  fw::pkg::Status Save(std::vector<uint8_t>& out) override {
+    std::vector<uint32_t> dirty = editor_.DirtyParts();
+    if (!dirty.empty()) return SaveParts(*doc_, dirty, out, written);
+    written.clear();
+    const auto& snapshot = doc_->Package().GetSnapshot();
+    out.resize(static_cast<size_t>(snapshot.Size()));
+    if (!snapshot.ReadAt(0, out.data(), out.size())) return fw::pkg::Status::Fail(fw::pkg::Status::Code::IoError, "the original couldn't be read again");
+    return {};
+  }
 
  private:
   std::unique_ptr<fw::doc::Document> doc_;
