@@ -40,6 +40,9 @@ bool Space(char16_t c) { return c == u' ' || c == u'\t' || c == 0x00A0 || c == 0
 
 void DocView::OnEdited(const fw::doc::edit::Change& c) {
   pagination_->Edited(c);
+  ++editStamp_;
+  // Comments and changes are found again once typing pauses, wherever the edit was.
+  if (allChanges_ > 0 || !comments_.empty() || (editor_ && editor_->Tracking())) annotationsStale_ = true;
   // Positions kept from before: later paragraphs moved; those in the changed ones are found anew.
   const int32_t shift = c.Shift();
   auto move = [&](TextPos& p) {
@@ -589,7 +592,7 @@ std::vector<uint32_t> DocView::Stops(uint32_t para) const {
   std::vector<uint32_t> out;
   for (const auto& run : doc_->Runs(para)) {
     if (run.fieldCode) continue;
-    if (run.revision && (run.revision.Is(fw::doc::Name("del")) || run.revision.Is(fw::doc::Name("moveFrom")))) continue;
+    if (!RevisionShown(run.revision)) continue;
     if (run.run && doc_->ResolvedRun(para, run.run).vanish) continue;
     for (uint32_t i = run.start; i < run.end && i < s.size(); ++i) {
       const char16_t c = s[i];

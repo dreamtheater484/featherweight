@@ -237,6 +237,7 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
   auto editor = std::make_unique<fw::doc::edit::Editor>(*doc_);
   if (editor->CanEdit()) {
     editor_ = std::move(editor);
+    editor_->SetAuthor(ReviewerName());
     editor_->OnChange([this](const fw::doc::edit::Change& c) { OnEdited(c); });
     format_ = std::make_unique<DocFormat>(
         *editor_, [this] { return FormatTarget(); }, [this](const DocFormat::Done& d) { AfterFormat(d); });
@@ -321,10 +322,12 @@ void DocView::CollectAnnotations() {
 
   // Tracked changes in the text (not formatting changes, which show nothing in Simple Markup).
   std::vector<std::string_view> authors;
+  allChanges_ = 0;
   for (uint32_t s = 0; s < doc_->Stories().size(); ++s) {
     if (doc_->Stories()[s].kind == fw::doc::StoryKind::Comment) continue;
     for (const auto& r : doc_->Revisions(s)) {
       using Kind = fw::doc::RevisionKind;
+      ++allChanges_;
       if (r.kind != Kind::Insertion && r.kind != Kind::Deletion && r.kind != Kind::MoveFrom && r.kind != Kind::MoveTo)
         continue;
       if (r.start.para == fw::doc::kNone || r.end.para == fw::doc::kNone) continue;
@@ -363,7 +366,7 @@ void DocView::CollectAnnotations() {
 void DocView::VisibleText(uint32_t para, std::wstring& text, std::vector<uint32_t>& map) const {
   const std::u16string& s = doc_->Para(para).text;
   for (const auto& run : doc_->Runs(para)) {
-    if (run.fieldCode || Deleted(run.revision)) continue;
+    if (run.fieldCode || !RevisionShown(run.revision)) continue;
     if (run.run && doc_->ResolvedRun(para, run.run).vanish) continue;
     for (uint32_t i = run.start; i < run.end && i < s.size(); ++i) {
       char16_t c = s[i];
@@ -594,8 +597,9 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
   // Comments, changes and matches are measured once pagination is done: measuring a range lays
   // out every page up to it, which painting mustn't wait for.
   const bool done = pagination_->Done();
-  // Comments: their text is marked, as Word marks it.
-  if (!presentation_) {
+  // Comments: their text is marked, as Word marks it (not in No markup or Original).
+  const bool markup = !presentation_ && (markup_ == Markup::Simple || markup_ == Markup::All);
+  if (markup) {
     for (auto& cm : comments_) {
       if (!cm.measured && done) {
         cm.rects = pagination_->Ranges(cm.from, cm.to);
@@ -604,9 +608,10 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
       fill(cm.rects, Alpha(Rgb(0xF2C744), 0.30f), false);
     }
   }
-  // Tracked changes: inserted text underlined, a mark where text was deleted, and a bar in the
-  // left margin beside each.
-  if (!presentation_) {
+  // Tracked changes: inserted text underlined, a mark where text was deleted (in All markup, the
+  // deleted text, struck through), and a bar in the left margin beside each.
+  const bool struck = markup_ == Markup::All && MarkupLaidOut();
+  if (markup) {
     const float u = std::max(1.0f, ui_);
     auto bar = [&](int pg, float top, float bottom, D2D1_COLOR_F color) {
       const layout::Page& page = pagination_->GetPage(pg);
@@ -616,11 +621,22 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
     };
     for (auto& ch : changes_) {
       if (!ch.measured && done) {
-        if (ch.deletion) ch.at = pagination_->CaretAt(ch.from);
+        if (ch.deletion && !struck) ch.at = pagination_->CaretAt(ch.from);
         else ch.rects = pagination_->Ranges(ch.from, ch.to);
         ch.measured = true;
       }
       const D2D1_COLOR_F color = ChangeColor(ch.author);
+      if (ch.deletion && struck) {
+        for (const auto& [page, r] : ch.rects) {
+          const int pg = static_cast<int>(page);
+          if (pg < first || pg > last || pg >= pages) continue;
+          D2D1_RECT_F s = PageRectToScreen(pg, r);
+          const float mid = std::round((s.top + s.bottom) / 2);
+          c.Fill(RectF(s.left, mid, s.right, mid + u), color);
+          bar(pg, r.top, r.bottom, color);
+        }
+        continue;
+      }
       if (ch.deletion) {
         if (!ch.at) continue;
         const int pg = static_cast<int>(ch.at->page);
@@ -1501,7 +1517,9 @@ int DocView::ShortcutFor(UINT vk, UINT mods) const {
     if (!shift && vk == 'K' && format_) return CmdInsertLink;
     if (shift && vk == '8') return CmdShowMarks;
     if (shift && vk == VK_F5 && format_) return CmdBookmark;
+    if (shift && vk == 'E' && format_) return CmdTrackChanges;
   }
+  if ((mods & kModCtrl) && (mods & kModAlt) && !(mods & kModShift) && vk == 'M' && format_) return CmdNewComment;
   if (page_)
     if (int cmd = DocPage::Shortcut(vk, mods)) return cmd;
   return Shortcut(vk, mods);
@@ -1510,6 +1528,7 @@ int DocView::ShortcutFor(UINT vk, UINT mods) const {
 CommandState DocView::QueryCommand(int cmd) {
   if (format_ && DocFormat::Owns(cmd)) return format_->Query(cmd);
   if (auto d3 = QueryD3(cmd)) return *d3;
+  if (auto d4 = QueryD4(cmd)) return *d4;
   if (table_ && DocTable::Owns(cmd)) return table_->Query(cmd);
   if (page_ && DocPage::Owns(cmd)) return page_->Query(cmd);
   if (styles_ && DocStyles::Owns(cmd)) return styles_->Query(cmd);
@@ -1570,6 +1589,11 @@ std::vector<int> DocView::Commands() {
                   CmdCloseHeaderFooter, CmdDifferentFirstPage, CmdDifferentOddEven, CmdLinkToPrevious, CmdPageNumber,
                   CmdNavigationPane, CmdShowMarks})
     if (format_ || cmd == CmdNavigationPane || cmd == CmdShowMarks || cmd == CmdOpenLink) ids.push_back(cmd);
+  for (int cmd : {CmdReviewPane, CmdNewComment, CmdTrackChanges, CmdAcceptChange, CmdRejectChange, CmdAcceptAll,
+                  CmdRejectAll, CmdNextChange, CmdPrevChange, CmdMarkupSimple, CmdMarkupAll, CmdMarkupNone,
+                  CmdMarkupOriginal, CmdReviewerName})
+    if (format_ || cmd == CmdReviewPane || cmd == CmdNextChange || cmd == CmdPrevChange || cmd >= CmdMarkupSimple)
+      ids.push_back(cmd);
   if (table_)
     for (int cmd : DocTable::CommandIds()) ids.push_back(cmd);
   if (page_)
@@ -1600,6 +1624,7 @@ bool DocView::Execute(int cmd) {
   }
   if (ExecuteProof(cmd)) return true;
   if (ExecuteD3(cmd)) return true;
+  if (ExecuteD4(cmd)) return true;
   if (ExecutePicture(cmd)) return true;
   switch (cmd) {
     case CmdCopy: Copy(); return true;
@@ -1649,6 +1674,7 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
     m.left.push_back(query(CmdRedo, icon::Redo, 7));
     format_->AddToolbar(m);
     AddD3Toolbar(m);
+    AddD4Toolbar(m);
     table_->AddToolbar(m);
     page_->AddToolbar(m);
     AddPictureToolbar(m);
@@ -1690,6 +1716,7 @@ void DocView::FillContextMenu(HMENU m, int x, int y) {
   }
   FillSpellingMenu(m, x, y);  // a spelling error's suggestions first, as Word has them
   FillD3Menu(m, x, y);        // then the link under the caret
+  FillD4Menu(m);              // the change there, and a new comment
   FillPictureMenu(m);         // and a selected picture's
   if (Editing()) {
     table_->FillContextMenu(m);

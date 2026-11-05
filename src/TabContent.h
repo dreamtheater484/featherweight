@@ -43,6 +43,9 @@ class ViewHost {
   virtual bool ViewSpelling() { return true; }
   virtual bool ViewAutoCorrect() { return true; }
   virtual bool ViewRuler() { return false; }
+  // Word documents: the name changes and comments are made with (empty: Windows'), set in ⋯.
+  virtual std::wstring ViewReviewer() { return {}; }
+  virtual void ViewSetReviewer(const std::wstring& /*name*/) {}
   virtual void ViewPasswordAccepted(TabContent* view) = 0;
   // Opens a side panel with the tab's content in place of whatever was open (null closes it).
   virtual void ViewShowPanel(PanelContent* content) = 0;

@@ -73,6 +73,11 @@ class App : public PdfHost, public DropHost {
   bool ViewSpelling() override { return settings_.spelling; }
   bool ViewAutoCorrect() override { return settings_.autoCorrect; }
   bool ViewRuler() override { return settings_.ruler; }
+  std::wstring ViewReviewer() override { return settings_.reviewer; }
+  void ViewSetReviewer(const std::wstring& name) override {
+    settings_.reviewer = name;
+    settings_.Save();
+  }
   void ViewPasswordAccepted(TabContent* view) override;
   void ViewShowPanel(PanelContent* content) override;
   PanelContent* ViewShownPanel() override { return panel_.Content(); }

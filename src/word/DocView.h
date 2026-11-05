@@ -302,6 +302,30 @@ class DocView : public PagedView {
   std::unique_ptr<BookmarkPanel> bookmarkPanel_;
   std::unique_ptr<PageNumberPanel> pageNumberPanel_;
   std::unique_ptr<NavPanel> navPanel_;
+
+  // ---- Review (D4, DocReview.cpp): comments and tracked changes. The 💬 button opens the Review
+  // pane; Ctrl+Shift+E turns Track Changes on or off; the ⋯ menu has the rest.
+  class ReviewPanel;
+  enum class Markup : uint8_t { Simple, All, None, Original };  // Word's four views of changes
+  bool ExecuteD4(int cmd);
+  std::optional<CommandState> QueryD4(int cmd);
+  void AddD4Toolbar(ToolbarModel& m);
+  void FillD4Menu(HMENU m);
+  // The tracked change after (or before) the caret, selected: in its story, then the next story.
+  bool GoToChange(bool back);
+  // Accepts or rejects the changes the selection touches (the one at the caret), then goes to the next.
+  void ReviewChange(bool accept);
+  // The name changes and comments are made with: the one set in ⋯, else Windows'.
+  std::string ReviewerName() const;
+  // Whether the layout can show deleted text and hide inserted text (All markup and Original).
+  static bool MarkupLaidOut();
+  // Whether a run in this change is shown in the markup chosen (deleted text in All markup and
+  // Original, inserted text not in Original): the caret stops in it, copying takes it.
+  bool RevisionShown(fw::doc::Node revision) const;
+  Markup markup_ = Markup::Simple;
+  std::unique_ptr<ReviewPanel> reviewPanel_;
+  size_t allChanges_ = 0;  // tracked changes of every kind, formatting too (CollectAnnotations)
+  uint32_t editStamp_ = 0;  // counts edits, undos and redos: the Review pane reads them again
   // ---- Rulers (DocRuler.cpp), on demand (the ⋯ menu), as Word's: along the top the caret's page
   // with its margins and columns, and the paragraph's indents and tab stops; down the left its top
   // and bottom margins. Dragging one changes it, one undo step each; a click on the ruler sets a tab
