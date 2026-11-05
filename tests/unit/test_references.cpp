@@ -426,6 +426,27 @@ TEST(Check_FieldsStayInTheirContainers) {
   CHECK(Has(leaving.warnings, "a field begins inside a content control but its separator is outside it"));
 }
 
+// Tables as Word can open them: a row needs a cell, and a cell must end with a paragraph. Word
+// refuses or repairs these, and the validator accepts them (opened in Word, D2's torture test).
+TEST(Check_WordTablesWordCanOpen) {
+  auto check = [](const std::string& rows) { return CheckParts(Word("<w:tbl><w:tblGrid><w:gridCol/></w:tblGrid>" + rows + "</w:tbl><w:p/>")); };
+  auto cell = [](const std::string& inner) { return "<w:tr><w:tc><w:tcPr/>" + inner + "</w:tc></w:tr>"; };
+  // Word opens these.
+  CHECK(check("").Ok());  // a table without rows
+  CHECK(check(cell("<w:p/>")).Ok());
+  CHECK(check(cell("<w:p/><w:bookmarkStart w:id=\"1\" w:name=\"B\"/><w:bookmarkEnd w:id=\"1\"/>")).Ok());
+  CHECK(check(cell("<w:sdt><w:sdtPr/><w:sdtContent><w:p/></w:sdtContent></w:sdt>")).Ok());
+  CHECK(check(cell("<w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p/>")).Ok());
+  CHECK(check("<w:tr><w:sdt><w:sdtPr/><w:sdtContent><w:tc><w:p/></w:tc></w:sdtContent></w:sdt></w:tr>").Ok());
+  // Word refuses or repairs these.
+  CHECK(Has(check("<w:tr></w:tr>").errors, "a table row has no cells"));
+  CHECK(Has(check(cell("")).errors, "a table cell has no paragraph"));
+  CHECK(Has(check(cell("<w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>")).errors,
+            "a table cell ends with a table instead of a paragraph"));
+  CHECK(Has(check(cell("<w:sdt><w:sdtPr/><w:sdtContent><w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl></w:sdtContent></w:sdt>")).errors,
+            "a table cell ends with a table instead of a paragraph"));
+}
+
 TEST(Check_ScopesAlternatesAndWarnings) {
   // A glossary is a document of its own: its paragraph ids may repeat the main document's.
   const std::string glossary =

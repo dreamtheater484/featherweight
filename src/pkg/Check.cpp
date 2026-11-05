@@ -135,6 +135,45 @@ FieldPlace PlaceOf(pugi::xml_node mark) {
   return place;
 }
 
+// Word's tables as Word can open them. Word refuses a row without cells and repairs a cell that
+// has no paragraph or ends with a nested table instead of one; the Open XML SDK validator accepts
+// all three (probed with Word on 2026-11-05, D2's torture test). An empty table is fine.
+bool IsWordElement(pugi::xml_node n, std::string_view local) {
+  if (n.type() != pugi::node_element || LocalNameOf(n) != local) return false;
+  std::string_view ns = NamespaceOf(n);
+  return ns == "http://schemas.openxmlformats.org/wordprocessingml/2006/main" ||
+         ns == "http://purl.oclc.org/ooxml/wordprocessingml/main";
+}
+
+// The last block in a cell (or a block content control's content, or a custom XML element),
+// looking through content controls and custom XML; null when there is none.
+pugi::xml_node LastBlock(pugi::xml_node container) {
+  for (pugi::xml_node c = container.last_child(); c; c = c.previous_sibling()) {
+    if (IsWordElement(c, "p") || IsWordElement(c, "tbl")) return c;
+    pugi::xml_node inner;
+    if (IsWordElement(c, "sdt")) {
+      for (pugi::xml_node k : c.children())
+        if (IsWordElement(k, "sdtContent")) inner = k;
+    } else if (IsWordElement(c, "customXml")) {
+      inner = c;
+    }
+    if (inner)
+      if (pugi::xml_node last = LastBlock(inner)) return last;
+  }
+  return {};
+}
+
+bool HasCell(pugi::xml_node row) {
+  for (pugi::xml_node c : row.children()) {
+    if (IsWordElement(c, "tc")) return true;
+    if (IsWordElement(c, "customXml") && HasCell(c)) return true;
+    if (IsWordElement(c, "sdt"))
+      for (pugi::xml_node k : c.children())
+        if (IsWordElement(k, "sdtContent") && HasCell(k)) return true;
+  }
+  return false;
+}
+
 std::string ContainerName(pugi::xml_node n) {
   std::string_view local = LocalNameOf(n);
   return local == "hyperlink" ? "hyperlink" : local == "customXml" ? "custom XML element" : local == "fldSimple" ? "simple field" : "content control";
@@ -213,6 +252,7 @@ class Checker {
   void CheckRules();
   void CheckAnchor(const FoundRef& ref, const PartDom& part);
   void LoadWorkbook();
+  void CheckWordTables();
   void CheckCalcChain();
   void CheckNotes();
   void CheckCharts();
@@ -250,6 +290,7 @@ void Checker::Run() {
   LoadParts();
   AssignScopes();
   CheckRules();
+  if (format_ == DocFormat::Word) CheckWordTables();
   if (format_ == DocFormat::Excel) {
     LoadWorkbook();
     CheckCalcChain();
@@ -506,6 +547,24 @@ void Checker::CheckRules() {
       auto it = rs.defs.find(ref.scope);
       if (it != rs.defs.end() && it->second.count(ref.key)) ++rep_.references;
       else Issue(ref.lenient, ref.part, ref.desc + " names " + std::string(rule.name) + " " + Quote(ref.value) + ", which doesn't exist");
+    }
+  }
+}
+
+void Checker::CheckWordTables() {
+  for (auto& p : parts_) {
+    std::vector<pugi::xml_node> stack{p->dom.Root()};
+    while (!stack.empty()) {
+      pugi::xml_node n = stack.back();
+      stack.pop_back();
+      if (IsWordElement(n, "tr") && !HasCell(n)) Error(p->name, "a table row has no cells");
+      if (IsWordElement(n, "tc")) {
+        pugi::xml_node last = LastBlock(n);
+        if (!last) Error(p->name, "a table cell has no paragraph");
+        else if (IsWordElement(last, "tbl")) Error(p->name, "a table cell ends with a table instead of a paragraph");
+      }
+      for (pugi::xml_node c = n.last_child(); c; c = c.previous_sibling())
+        if (c.type() == pugi::node_element) stack.push_back(c);
     }
   }
 }
