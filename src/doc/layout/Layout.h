@@ -171,6 +171,12 @@ class Layout {
   // Everything at once.
   void LayOutAll() { LayOutPages(SIZE_MAX); }
   bool Done() const;
+  // The document changed (an edit, its undo or redo): paragraphs [first, first + removed) of
+  // `story` became [first, first + added), and later ones were renumbered. The pages from the one
+  // the change starts on are laid out again, as LayOutPages and Continue ask; once a page starts
+  // where one did before, the rest are the old pages (their paragraph numbers moved), so typing
+  // lays out a page or two however long the document is. Pages before it stay.
+  void Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added);
 
   // ---- Pages
   size_t PageCount() const;  // so far; final once Done()
