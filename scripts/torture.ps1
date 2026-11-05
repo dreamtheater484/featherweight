@@ -12,7 +12,8 @@
   The summary goes to <out>\summary.md and summary.json. The exit code is 1 when anything failed.
 
   -Ci runs the CI subset: the public corpus only, fewer edits, no Word. Without -Paths the full run
-  takes tests\office's Word documents and, when FW_CORPUS is set, the private corpus.
+  takes tests\office's Word documents (generated, edge, layout, and torture: a table of contents and
+  other fields made by tests\office\make_torture_docs.py) and, when FW_CORPUS is set, the private corpus.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\torture.ps1
@@ -43,7 +44,7 @@ if ($Ci) {
 # powershell -File passes "-Paths a,b" as one string.
 $Paths = @($Paths | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 if (-not $Paths) {
-  $Paths = @("tests\office\generated", "tests\office\edge", "tests\office\layout")
+  $Paths = @("tests\office\generated", "tests\office\edge", "tests\office\layout", "tests\office\torture")
   if (-not $Ci -and $env:FW_CORPUS) { $Paths += Join-Path $env:FW_CORPUS "docx" }
 }
 if (-not [IO.Path]::IsPathRooted($Out)) { $Out = Join-Path $root $Out }

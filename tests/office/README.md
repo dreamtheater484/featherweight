@@ -16,6 +16,7 @@ Files for the never-damage tests (plan §10), made by `make_test_office.py`:
   - missing content types, zip encryption, duplicate part names
   - broken XML, a file that isn't a zip, and a truncated file
 - `reference/`: Office's own PDF of every file in `generated/`, `edge/` and `layout/`, plus `manifest.json`: the Office build, page count, the fonts Office drew with, and each source file's hash. These are the reference renders (plan §10) that `fwtool compare` measures Featherweight against. `scripts/reference-renders.ps1` makes them on the Office reference PC; run it again when a file changes or Office changes noticeably. With `-Folders tests\office\layout` it renders one folder and keeps the other folders' entries.
+- `torture/`: Word documents for the editing torture test (D2), made by `make_torture_docs.py` with the standard library only. These are the structures an editor must keep intact that the other folders lack: a table of contents as Word writes it (hyperlinked entries, each with a PAGEREF field), Word's empty `_GoBack` bookmark, fields inside content controls, and a simple field. There are no reference renders for them.
 - `broken/`: hand-made files that open and save, but that `fwtool check` must reject, each for one consistency rule (plan §4.3, rule 2):
   - a relationship id that doesn't resolve, a duplicate paragraph id, a duplicate slide id
   - a bookmark that starts but doesn't end, a field that begins but doesn't end
@@ -32,7 +33,7 @@ fwtool check --expect-reject tests/office/broken
 fwtool roundtrip --expect-reject tests/office/malicious
 ```
 
-`fwtool check` applies the reference registry (`src/pkg/References.h`, rules in `ReferenceRules.cpp`): every reference resolves, ids are unique, pairs are complete, and the derived data it can see (the calculation chain, chart caches and embedded workbooks, VML notes) matches its sources. What Office tolerates, such as a missing style, is a warning. It also lists the extensions it doesn't know, near which structural edits will be blocked.
+`fwtool check` applies the reference registry (`src/pkg/References.h`, rules in `ReferenceRules.cpp`): every reference resolves, ids are unique, pairs are complete, and fields stay where Word needs them. A field may not begin in one hyperlink, custom XML element or simple field and separate or end outside it, nor separate or end inside a content control it didn't begin in: Word refuses or repairs such a file, and the Open XML SDK validator doesn't notice (`Check_FieldsStayInTheirContainers`). It also checks that the derived data it can see (the calculation chain, chart caches and embedded workbooks, VML notes) matches its sources. What Office tolerates, such as a missing style, is a warning. It also lists the extensions it doesn't know, near which structural edits will be blocked.
 
 ### Word documents through the model (D1)
 
