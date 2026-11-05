@@ -11,6 +11,7 @@ namespace fwtool {
 
 struct Options {
   bool reserializeAll = false;  // roundtrip: write every XML part through the DOM
+  bool model = false;           // roundtrip: read Word documents into the model and write its parts from it
   bool expectReject = false;    // roundtrip: every file must be refused; check: every file must fail
   std::filesystem::path outDir; // roundtrip: keep the saved copies here
   std::wstring printer;         // print-sample: the printer (default: Microsoft Print to PDF)
@@ -38,6 +39,7 @@ std::unique_ptr<fw::pkg::Package> OpenPackage(const std::filesystem::path& file,
 std::string_view AsText(const std::vector<uint8_t>& bytes);
 
 int RunRoundtrip(const Options& options);
+void DumpModel(const std::filesystem::path& file);
 int RunDump(const Options& options);
 int RunCheck(const Options& options);
 int RunPrintSample(const Options& options);
@@ -46,5 +48,7 @@ int RunLines(const Options& options);
 int RunCompare(const Options& options);
 int RunBench(const Options& options);
 int RunBenchApp(const Options& options);
+// Parses its own options, from argv[2] on.
+int RunWrap(int argc, wchar_t** argv);
 
 }  // namespace fwtool

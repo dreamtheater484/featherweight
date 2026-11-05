@@ -89,6 +89,8 @@ option(FW_FUZZ "Build the fuzz targets in tests/fuzz (see tests/fuzz/README.md)"
 include(cmake/FetchDeps.cmake)
 add_subdirectory(src/pkg)
 add_subdirectory(src/draw)
+add_subdirectory(src/doc)
+add_subdirectory(src/text)
 add_subdirectory(tools/fwtool)
 target_link_libraries(Featherweight PRIVATE fwdraw)
 if(FW_FUZZ)

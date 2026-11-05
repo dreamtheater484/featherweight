@@ -35,6 +35,7 @@ $all = [ordered]@{
   fuzz_opc     = @{ Seeds = @("$seeds\opc", "$regressions\opc"); MaxLen = 16384 }
   fuzz_check   = @{ Seeds = @("$seeds\package", "$regressions\check"); MaxLen = 65536 }
   fuzz_formula = @{ Seeds = @("$seeds\formula", "$regressions\formula"); MaxLen = 1024 }
+  fuzz_docx    = @{ Seeds = @("$seeds\docx", "$seeds\package", "$regressions\docx"); MaxLen = 65536 }
   # Pictures are big allocations: with ASan's default 256 MB quarantine of freed memory, this
   # target's memory passes 2 GB within an hour. 32 MB keeps it well below while still catching
   # use after free.
