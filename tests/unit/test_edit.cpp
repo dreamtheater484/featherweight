@@ -1513,3 +1513,29 @@ TEST(Edit_TakingAPropertyOutKeepsWhatFollowedIt) {
                "<w:r><w:rPr><w:b/><w14:cntxtAlts/></w:rPr><w:t>two</w:t></w:r></w:p>"));
   CHECK(Consistent(*doc, f) && UndoSteps(ed) == 4 && MainXml(*doc) == before);
 }
+
+TEST(Edit_CopiesLeaveOutRepeatedProperties) {
+  // Some files repeat a property (<w:b/><w:b/>, which the schema doesn't allow). A new paragraph
+  // mark, a new run and a cut run's second half copy it once, so an edit doesn't add an error the
+  // file already has; the originals keep theirs (d2-torture: a split on gouvfr-fiche-action).
+  Fixture f;
+  const std::string same = "<w:pPr><w:rPr><w:b/><w:b/></w:rPr></w:pPr><w:r><w:rPr><w:i/><w:i/><w:sz w:val=\"20\"/></w:rPr>";
+  f.body = "<w:p>" + same + "<w:t>One</w:t></w:r></w:p><w:p>" + same + "<w:t>Two</w:t></w:r></w:p>"
+           "<w:p><w:pPr><w:rPr><w:b/><w:b/></w:rPr></w:pPr></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  CHECK(ed.SplitParagraph(P(ps[1], 1)));  // the second paragraph shares the first's sets
+  CHECK(ed.SplitParagraph(P(ps[0], 1)));
+  ps = Main(*doc);
+  CHECK(ps.size() == 5 && ed.InsertText(P(ps[4], 0), u"x"));  // a run with the mark's properties
+  const std::string kept = "<w:pPr><w:rPr><w:b/><w:b/></w:rPr></w:pPr>", once = "<w:pPr><w:rPr><w:b/></w:rPr></w:pPr>";
+  const std::string twice = "<w:r><w:rPr><w:i/><w:i/><w:sz w:val=\"20\"/></w:rPr>", single = "<w:r><w:rPr><w:i/><w:sz w:val=\"20\"/></w:rPr>";
+  CHECK(BodyIs(*doc, "<w:p>" + once + twice + "<w:t>O</w:t></w:r></w:p><w:p>" + kept + single + "<w:t>ne</w:t></w:r></w:p>"
+                     "<w:p>" + once + twice + "<w:t>T</w:t></w:r></w:p><w:p>" + kept + single + "<w:t>wo</w:t></w:r></w:p>"
+                     "<w:p>" + kept + "<w:r><w:rPr><w:b/></w:rPr><w:t>x</w:t></w:r></w:p>"));
+  CHECK(Consistent(*doc, f) && UndoSteps(ed) == 3 && MainXml(*doc) == before);
+}
