@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <map>
 
 #include "Commands.h"
 #include "Util.h"
@@ -189,14 +188,11 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
   }
   doc_ = std::move(doc);
 
-  // Fonts: the document's font table names an alternative for some fonts (w:altName).
-  std::map<std::wstring, std::wstring> alternatives;
-  for (const auto& f : doc_->Fonts())
-    if (!f.name.empty() && !f.altName.empty()) alternatives[fw::ToLower(Wide(f.name))] = Wide(f.altName);
-  fonts_ = std::make_unique<fw::text::Fonts>([alternatives](std::wstring_view family) -> std::wstring {
-    auto it = alternatives.find(fw::ToLower(std::wstring(family)));
-    return it != alternatives.end() ? it->second : std::wstring();
-  });
+  // Fonts this PC doesn't have: the family Word draws instead, from the document's font table.
+  // The document outlives the fonts (members are destroyed in reverse order).
+  const fw::doc::Document* model = doc_.get();
+  fonts_ = std::make_unique<fw::text::Fonts>(
+      [model](std::wstring_view family) { return layout::SubstituteFamily(*model, family); });
   drawings_.resize(doc_->Drawings().size());
   images_ = std::make_shared<draw::ImageCache>();
   if (const fw::doc::Part* main = doc_->FindPart(fw::doc::PartKind::Document)) {
