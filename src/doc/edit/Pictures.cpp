@@ -934,8 +934,7 @@ Result Pictures::MoveFloating(uint32_t drawing, Emu x, Emu y, std::optional<Pos>
     if (old.para == to.para && old.offset >= to.offset) ++old.offset;
     Result del = editor_.Delete(old, Pos{old.para, old.offset + 1});
     if (!del) {
-      editor_.EndGroup();
-      editor_.Undo();
+      editor_.CancelGroup();
       return del;
     }
   }
@@ -967,8 +966,7 @@ Result Pictures::MoveInline(uint32_t drawing, Pos to) {
     else if (old.para == to.para) --final.offset;  // the old one before it goes
     Result del = editor_.Delete(old, Pos{old.para, old.offset + 1});
     if (!del) {
-      editor_.EndGroup();
-      editor_.Undo();
+      editor_.CancelGroup();
       return del;
     }
   }

@@ -17,6 +17,7 @@
 #include <objbase.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -38,6 +39,12 @@ namespace {
 
 void Check(bool ok) {
   if (!ok) std::abort();
+}
+
+// FW_FUZZ_TRACE=1 prints each change and how it went, for replaying a failure.
+bool Trace() {
+  static const bool on = GetEnvironmentVariableW(L"FW_FUZZ_TRACE", nullptr, 0) > 0;
+  return on;
 }
 
 std::unique_ptr<Document> Open(std::vector<uint8_t> bytes) {
@@ -110,7 +117,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     const std::vector<uint32_t> shown = Shown(*doc);
     Check(!shown.empty());
     const uint32_t d = shown[pick.Next(static_cast<uint32_t>(shown.size()))];
-    switch (pick.Next(9)) {
+    const uint32_t op = pick.Next(9);
+    switch (op) {
       case 0: r = pics.Resize(d, Emu(pick.Next(30000000)), Emu(pick.Next(30000000))); break;
       case 1: r = pics.Rotate(d, pick.Fraction() * 1440 - 720); break;
       case 2:
@@ -133,9 +141,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         break;
     }
     Check(r.ok || !r.message.empty());
+    if (Trace()) std::fprintf(stderr, "op %u on %u: %s, %zu shown\n", op, d, r.ok ? "made" : "refused", Shown(*doc).size());
   }
 
-  // Saved as the app saves, and read back.
+  // What was undone, redone; then saved as the app saves, and read back.
+  while (ed.CanRedo()) Check(ed.Redo().ok);
   const size_t shownNow = Shown(*doc).size();
   docx::SaveOptions o;
   o.changedParts = ed.DirtyParts();

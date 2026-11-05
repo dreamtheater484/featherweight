@@ -141,6 +141,9 @@ class Editor {
   // Groups nest; the outermost names the step.
   void BeginGroup(std::u16string name);
   void EndGroup();
+  // Ends the group BeginGroup opened last, taking back what was done since, newest first, and
+  // leaving no undo or redo step for it: a change made of several that fails part way.
+  void CancelGroup();
   // Typing and deleting a character at a time coalesce into one step while they continue where the
   // last one ended. The view breaks the run when the caret moves on its own or time passes.
   void BreakTyping();

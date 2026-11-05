@@ -389,6 +389,30 @@ TEST(Pictures_UnusedMediaAfterDelete) {
   (void)kRels;
 }
 
+TEST(Pictures_CancelGroupLeavesNoStep) {
+  // A change of several steps that fails part way (a move whose delete is refused) takes itself
+  // back without an undo or a redo step; groups around it keep what they did before.
+  auto doc = Blank();
+  if (!doc) return;
+  Editor ed(*doc);
+  ed.BeginGroup(u"Outer");
+  CHECK(ed.InsertText(Pos{0, 0}, u"kept").ok);
+  ed.BeginGroup(u"Move picture");
+  CHECK(ed.InsertText(Pos{0, 4}, u" gone").ok);
+  CHECK(doc->Para(0).text == u"kept gone");
+  ed.CancelGroup();
+  CHECK(doc->Para(0).text == u"kept");
+  ed.EndGroup();
+  CHECK(ed.CanUndo() && !ed.CanRedo());
+  CHECK(ed.Undo().ok);
+  CHECK(doc->Para(0).text.empty() && !ed.CanUndo());
+  CHECK(ed.Redo().ok && doc->Para(0).text == u"kept");
+  ed.BeginGroup(u"Alone");
+  CHECK(ed.InsertText(Pos{0, 0}, u"x").ok);
+  ed.CancelGroup();
+  CHECK(doc->Para(0).text == u"kept" && ed.UndoName() != u"Alone" && !ed.CanRedo());
+}
+
 TEST(Pictures_ReplacedPictureSharedPartStays) {
   // Two pictures share a part; deleting one keeps the part for the other.
   auto doc = Blank();

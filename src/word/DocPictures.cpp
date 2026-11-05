@@ -460,7 +460,8 @@ bool DocView::PictureMouseUp(int x, int y) {
       editor_->BeginGroup(u"Resize picture");
       edit::Result r = pictures_->Resize(g.drawing, cx, cy);
       if (r && floating && moved) r = pictures_->MoveFloating(g.drawing, emu(g.now.left), emu(g.now.top));
-      editor_->EndGroup();
+      if (r) editor_->EndGroup();
+      else editor_->CancelGroup();  // all of it or none
       ApplyPicture(r);
       return true;
     }
@@ -472,7 +473,8 @@ bool DocView::PictureMouseUp(int x, int y) {
       editor_->BeginGroup(u"Crop picture");
       edit::Result r = pictures_->SetCrop(g.drawing, g.crop);
       if (r && floating && moved) r = pictures_->MoveFloating(g.drawing, emu(g.now.left), emu(g.now.top));
-      editor_->EndGroup();
+      if (r) editor_->EndGroup();
+      else editor_->CancelGroup();  // all of it or none
       ApplyPicture(r);
       return true;
     }
@@ -545,10 +547,9 @@ bool DocView::InsertPictureBytes(const std::vector<uint8_t>& bytes, std::u16stri
   editor_->BeginGroup(u"Insert picture");
   edit::Result r;
   if (replace) r = editor_->Delete(SelFrom(), SelTo());
-  bool deleted = replace && r;
   if (r) r = pictures_->Insert(ToDoc(where), bytes, ColumnWidthAt(where), name);
-  editor_->EndGroup();
-  if (!r && deleted) editor_->Undo();  // the selection comes back
+  if (r) editor_->EndGroup();
+  else editor_->CancelGroup();  // the selection comes back
   return ApplyPicture(r);
 }
 

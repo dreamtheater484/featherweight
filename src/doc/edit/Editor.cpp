@@ -130,6 +130,7 @@ struct EditorState {
   std::vector<int> dirty;  // by part: undo steps applied that changed it
   int depth = 0;
   Entry group;
+  std::vector<size_t> groupMarks;  // group.steps.size() at each open BeginGroup
   bool typingBroken = true;
   // The open transaction.
   bool inTx = false;
@@ -794,15 +795,7 @@ struct EditorState {
     Entry e = std::move(from.back());
     from.pop_back();
     if (undoing) {
-      for (auto it = e.steps.rbegin(); it != e.steps.rend(); ++it) {
-        if (it->custom) {
-          it->custom->Undo();
-          RefreshAll(*it->custom);
-          continue;
-        }
-        Restore(it->before, it->first, static_cast<uint32_t>(it->after.paras.size()));
-        Refresh(*it, true);
-      }
+      for (auto it = e.steps.rbegin(); it != e.steps.rend(); ++it) UndoStep(*it);
     } else {
       for (const Step& s : e.steps) {
         if (s.custom) {
@@ -819,6 +812,16 @@ struct EditorState {
     to.push_back(std::move(e));
     typingBroken = true;
     return r;
+  }
+
+  void UndoStep(Step& s) {
+    if (s.custom) {
+      s.custom->Undo();
+      RefreshAll(*s.custom);
+      return;
+    }
+    Restore(s.before, s.first, static_cast<uint32_t>(s.after.paras.size()));
+    Refresh(s, true);
   }
 
   // ---------- Mutations (inside a transaction; they return false with `why` and may leave a
@@ -1888,11 +1891,25 @@ void Editor::BeginGroup(std::u16string name) {
     s.group = {};
     s.group.name = std::move(name);
   }
+  s.groupMarks.push_back(s.group.steps.size());
+}
+
+void Editor::CancelGroup() {
+  EditorState& s = *impl_;
+  if (s.depth == 0) return;
+  const size_t mark = s.groupMarks.empty() ? 0 : s.groupMarks.back();
+  for (size_t i = s.group.steps.size(); i-- > mark;) s.UndoStep(s.group.steps[i]);
+  s.group.steps.resize(mark);
+  s.typingBroken = true;
+  EndGroup();
+  s.Notify(listeners_);
 }
 
 void Editor::EndGroup() {
   EditorState& s = *impl_;
-  if (s.depth == 0 || --s.depth > 0) return;
+  if (s.depth == 0) return;
+  if (!s.groupMarks.empty()) s.groupMarks.pop_back();
+  if (--s.depth > 0) return;
   if (s.group.steps.empty()) return;
   Entry e = std::move(s.group);
   s.group = {};
