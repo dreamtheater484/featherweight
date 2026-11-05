@@ -1752,12 +1752,16 @@ class Generator {
     e.target = "comment " + id;
   }
 
-  // A footnote or endnote at e.at (refused outside the main text), or one deleted.
+  // A footnote or endnote at e.at (refused outside the main text), or one deleted: one the text
+  // refers to, as a person reaches it (not a separator).
   void Notes(Edit& e) {
     std::vector<std::string> notes;
-    for (const Story& s : doc_.Stories())
-      if ((s.kind == StoryKind::Footnote || s.kind == StoryKind::Endnote) && !s.id.empty())
+    for (uint32_t i = 0; i < doc_.Stories().size(); ++i) {
+      const Story& s = doc_.Stories()[i];
+      if ((s.kind == StoryKind::Footnote || s.kind == StoryKind::Endnote) && !s.id.empty() &&
+          fw::doc::edit::NoteReference(doc_, i))
         notes.push_back(std::string(s.kind == StoryKind::Endnote ? "e:" : "f:") + std::string(s.id));
+    }
     if (notes.empty() || rng_.Percent(60)) {
       e.format = rng_.Percent(70) ? "footnote" : "endnote";
       e.target = "new note";
@@ -2125,16 +2129,16 @@ std::string Digest(const Document& doc) {
   }
   std::string main;
   std::vector<std::string> stories;
-  uint32_t textBoxes = 0;
   for (uint32_t s = 0; s < doc.Stories().size(); ++s) {
     if (!live[s]) continue;
     // A note or comment added and undone (D4) leaves its story in the model without paragraphs;
     // saving leaves it out.
     if (s != doc.MainStory() && doc.StoryParagraphs(s).empty()) continue;
     const Story& story = doc.Stories()[s];
-    // Named so that the same story sorts to the same place on both sides, whatever its text: text
-    // boxes by their order, notes and comments by id, headers and footers by their part.
-    std::string name = story.kind == StoryKind::TextBox ? std::to_string(textBoxes++)
+    // Named so that the same story sorts to the same place on both sides, whatever its text: notes
+    // and comments by id, headers and footers by their part. Text boxes go by their text: a new
+    // shape's story comes last in the edited model but in document order when read (D4).
+    std::string name = story.kind == StoryKind::TextBox ? std::string()
                        : !story.id.empty()             ? story.id
                        : story.part < doc.Parts().size() ? doc.Parts()[story.part].name
                                                          : std::string();
