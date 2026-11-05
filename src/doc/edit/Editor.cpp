@@ -1160,7 +1160,7 @@ struct EditorState {
 
   // Inserts an object (a w:drawing) at `o`, holding `xml` as its content, in the run the text
   // before it is in (or a new one, as typing would make). A w:t it lands in is split.
-  ElemId InsertObject(uint32_t para, uint32_t o, uint32_t name, std::string xml, std::u16string& why) {
+  ElemId InsertObject(uint32_t para, uint32_t o, uint32_t name, std::vector<std::string> pieces, std::u16string& why) {
     Spot spot;
     if (!FindSpot(para, o, spot, why)) return kNoElem;
     ElemId run = spot.run;
@@ -1187,7 +1187,9 @@ struct EditorState {
     E(item).length = 1;
     LinkAfter(run, prev, item);
     d.paras_[para].text.insert(d.paras_[para].text.begin() + o, u'\xFFFC');
-    d.store_.SetFragments(E(item).node, {pkg::Fragment{pkg::Slot::Inside, {}, std::move(xml)}});
+    std::vector<pkg::Fragment> frags;
+    for (std::string& x : pieces) frags.push_back(pkg::Fragment{pkg::Slot::Inside, {}, std::move(x)});
+    d.store_.SetFragments(E(item).node, std::move(frags));
     Reflow(para);
     return item;
   }
@@ -3220,15 +3222,26 @@ Result Editor::InsertText(Pos at, std::u16string_view text) {
   return r;
 }
 
-Result Editor::InsertDrawing(Pos at, std::string xml, const Drawing& info) {
+Result Editor::InsertDrawing(Pos at, std::string xml, const Drawing& info, bool vml) {
   EditorState& s = *impl_;
   std::u16string why;
   if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(at.para, why)) return Fail(why);
   if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
   if (!XmlSafe(xml)) return Fail(u"This picture can't be added.");
   Arm();
+  // A w:pict's elements are kept one fragment each, as the reader keeps them (each declares what it uses).
+  std::vector<std::string> pieces;
+  if (vml) {
+    pkg::XmlDom dom;
+    if (!dom.Parse("<fw>" + xml + "</fw>", doc_.Package().GetLimits()).Ok()) return Fail(u"This drawing can't be added.");
+    for (pugi::xml_node c = dom.Root().first_child(); c; c = c.next_sibling())
+      if (c.type() == pugi::node_element) pieces.push_back(pkg::RoundTripStore::SerializeFragment(c));
+    if (pieces.empty()) return Fail(u"This drawing can't be added.");
+  } else {
+    pieces.push_back(std::move(xml));
+  }
   s.Begin(at.para, 1);
-  ElemId item = s.InsertObject(at.para, at.offset, Name("drawing"), std::move(xml), why);
+  ElemId item = s.InsertObject(at.para, at.offset, Name(vml ? "pict" : "drawing"), std::move(pieces), why);
   if (item == kNoElem) return s.Abort(why);
   if (s.track.on && !s.TrackInserted(at, Pos{at.para, at.offset + 1}, why)) return s.Abort(why);
   s.AddDrawing(info, item, at.para);  // before Commit, which finds where it is

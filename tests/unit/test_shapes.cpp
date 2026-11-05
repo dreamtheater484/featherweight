@@ -3,6 +3,11 @@
 // (the DrawingML choice and the VML fallback); text the file keeps in a way that can't be written
 // back is refused. Every change is one undo step that puts the document back exactly, and the
 // saved file opens with what was left.
+#include <windows.h>
+
+#include <wincodec.h>
+#include <wrl/client.h>
+
 #include <string>
 #include <vector>
 
@@ -15,8 +20,10 @@
 #include "doc/docx/Save.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
+#include "doc/edit/HeaderFooter.h"
 #include "doc/edit/Shapes.h"
 #include "doc/edit/TreeEdit.h"
+#include "doc/edit/Watermark.h"
 #include "pkg/Check.h"
 
 using namespace fw::doc;
@@ -43,6 +50,51 @@ std::vector<uint32_t> Shown(const Document& doc) {
 }
 
 constexpr int64_t kInch = 914400;
+
+// A PNG `w` x `h` pixels of one color, from WIC's built-in encoder.
+std::vector<uint8_t> Png(int w, int h) {
+  using Microsoft::WRL::ComPtr;
+  std::vector<uint32_t> px(static_cast<size_t>(w) * h, 0xFF3366CC);
+  ComPtr<IWICImagingFactory> wic;
+  ComPtr<IWICBitmap> bmp;
+  ComPtr<IStream> stream;
+  ComPtr<IWICBitmapEncoder> enc;
+  ComPtr<IWICBitmapFrameEncode> frame;
+  CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic));
+  wic->CreateBitmapFromMemory(w, h, GUID_WICPixelFormat32bppBGRA, w * 4, static_cast<UINT>(px.size() * 4),
+                              reinterpret_cast<BYTE*>(px.data()), &bmp);
+  CreateStreamOnHGlobal(nullptr, TRUE, &stream);
+  wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &enc);
+  enc->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+  enc->CreateNewFrame(&frame, nullptr);
+  frame->Initialize(nullptr);
+  frame->SetSize(w, h);
+  WICPixelFormatGUID fmt = GUID_WICPixelFormat32bppBGRA;
+  frame->SetPixelFormat(&fmt);
+  frame->WriteSource(bmp.Get(), nullptr);
+  frame->Commit();
+  enc->Commit();
+  STATSTG st{};
+  stream->Stat(&st, STATFLAG_NONAME);
+  std::vector<uint8_t> out(static_cast<size_t>(st.cbSize.QuadPart));
+  LARGE_INTEGER zero{};
+  stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+  ULONG read = 0;
+  stream->Read(out.data(), static_cast<ULONG>(out.size()), &read);
+  return out;
+}
+
+// Every header part's XML, written from the model.
+std::string Headers(const Document& doc) {
+  std::string all;
+  for (uint32_t i = 0; i < doc.Parts().size(); ++i) {
+    if (doc.Parts()[i].kind != PartKind::Header) continue;
+    std::string out;
+    if (docx::WritePart(doc, i, out).Ok()) all += out;
+  }
+  return all;
+}
 
 std::string PartXml(const Document& doc, PartKind kind) {
   for (uint32_t i = 0; i < doc.Parts().size(); ++i) {
@@ -459,4 +511,92 @@ TEST(Shapes_PicturesAndOlderShapesAreNotShapesHere) {
   CHECK(!shapes.SetFill(d, 0xFF0000u).ok);
   // Its text is still edited.
   CHECK(ed.InsertText({BoxPara(*doc), 0}, u"x").ok);
+}
+
+// ---------- Watermarks ----------
+
+TEST(Watermark_TextGoesInEveryHeaderAndComesOff) {
+  auto doc = Blank();  // no header
+  if (!doc) return;
+  Editor ed(*doc);
+  CHECK(edit::FindWatermark(*doc).kind == edit::WatermarkInfo::Kind::None);
+  edit::TextWatermark mark;
+  mark.text = u"CONFIDENTIAL";
+  mark.color = 0xFF0000;
+  CHECK(edit::SetTextWatermark(ed, mark).ok);
+  edit::WatermarkInfo info = edit::FindWatermark(*doc);
+  CHECK(info.kind == edit::WatermarkInfo::Kind::Text && info.text == u"CONFIDENTIAL" && info.diagonal &&
+        info.semitransparent && info.color == 0xFF0000 && info.font == "Calibri");
+  std::string xml = Headers(*doc);
+  CHECK(Count(xml, "id=\"PowerPlusWaterMarkObject") == 1 && Count(xml, "string=\"CONFIDENTIAL\"") == 1 &&
+        Count(xml, "<v:shapetype ") == 1 && Count(xml, "rotation:315") == 1 && Count(xml, "fillcolor=\"#FF0000\"") == 1);
+  auto back = SaveAndRead(*doc, ed);
+  CHECK(back);
+  if (back) CHECK(edit::FindWatermark(*back).text == u"CONFIDENTIAL");
+  // Again: it replaces the one there, one step.
+  mark.text = u"DRAFT";
+  mark.diagonal = false;
+  CHECK(edit::SetTextWatermark(ed, mark).ok);
+  xml = Headers(*doc);
+  CHECK(Count(xml, "PowerPlusWaterMarkObject") == 1 && Count(xml, "string=\"DRAFT\"") == 1 && Count(xml, "rotation") == 0);
+  CHECK(ed.Undo().ok);
+  CHECK(edit::FindWatermark(*doc).text == u"CONFIDENTIAL");
+  CHECK(edit::RemoveWatermark(ed).ok);
+  CHECK(edit::FindWatermark(*doc).kind == edit::WatermarkInfo::Kind::None);
+  CHECK(!edit::RemoveWatermark(ed).ok);
+  CHECK(SaveAndRead(*doc, ed) != nullptr);
+  // All of it undone: no watermark, no header referred to.
+  while (ed.CanUndo()) CHECK(ed.Undo().ok);
+  CHECK(edit::FindWatermark(*doc).kind == edit::WatermarkInfo::Kind::None);
+  std::string saved;
+  auto plain = SaveAndRead(*doc, ed, &saved);
+  CHECK(plain && Count(saved, "headerReference") == 0);
+}
+
+TEST(Watermark_EverySectionAndPageType) {
+  // Two sections, the second with a different first page: the default header (shared) and the
+  // second section's first-page header each get one.
+  Fixture f;
+  f.body = "<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>One</w:t></w:r></w:p><w:p><w:r><w:t>Two</w:t></w:r></w:p>"
+           "<w:sectPr><w:titlePg/></w:sectPr>";
+  auto doc = LoadOk(f);
+  if (!doc) return;
+  Editor ed(*doc);
+  CHECK(edit::SetTextWatermark(ed, {}).ok);
+  size_t marks = 0;
+  for (const Drawing& d : doc->Drawings()) marks += d.pos.para != kNone && d.name.rfind("PowerPlusWaterMarkObject", 0) == 0;
+  CHECK(marks >= 2);
+  auto back = SaveAndRead(*doc, ed);
+  CHECK(back && edit::FindWatermark(*back).text == u"DRAFT");
+  CHECK(ed.Undo().ok);
+  for (const Drawing& d : doc->Drawings()) CHECK(d.pos.para == kNone || d.name.rfind("PowerPlus", 0) != 0);
+}
+
+TEST(Watermark_PictureWashedOut) {
+  auto doc = Blank();
+  if (!doc) return;
+  Editor ed(*doc);
+  CHECK(edit::SetPictureWatermark(ed, Png(40, 20)).ok);
+  edit::WatermarkInfo info = edit::FindWatermark(*doc);
+  CHECK(info.kind == edit::WatermarkInfo::Kind::Picture && info.washout);
+  const std::string xml = Headers(*doc);
+  CHECK(Count(xml, "id=\"WordPictureWatermark") == 1 && Count(xml, "gain=\"19661f\"") == 1 && Count(xml, "<v:imagedata r:id=\"rId") == 1);
+  auto back = SaveAndRead(*doc, ed);  // the package check: the header's relationship reaches the picture
+  CHECK(back);
+  if (back) {
+    CHECK(edit::FindWatermark(*back).kind == edit::WatermarkInfo::Kind::Picture);
+    bool media = false;
+    for (const auto& p : back->Package().Parts()) media = media || p.name.find("/word/media/image") == 0;
+    CHECK(media);
+  }
+  // A text one replaces it; the picture's part isn't saved any more.
+  CHECK(edit::SetTextWatermark(ed, {}).ok);
+  auto again = SaveAndRead(*doc, ed);
+  CHECK(again);
+  if (again) {
+    bool media = false;
+    for (const auto& p : again->Package().Parts()) media = media || p.name.find("/word/media/image") == 0;
+    CHECK(!media);
+  }
+  CHECK(!edit::SetPictureWatermark(ed, std::vector<uint8_t>{'n', 'o', 't'}).ok);
 }
