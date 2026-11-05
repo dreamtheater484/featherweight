@@ -218,6 +218,17 @@ class Engine {
   const Document& doc_;
   text::Fonts& fonts_;
   Options options_;
+  // A paragraph's, a run's and a paragraph mark's properties as this view shows them: in Original
+  // (hideInsertions), the formatting from before tracked changes.
+  const ParaProps& ParaOf(uint32_t para) const {
+    return options_.hideInsertions ? doc_.OriginalPara(para) : doc_.ResolvedPara(para);
+  }
+  const RunProps& RunOf(uint32_t para, Node run) const {
+    return options_.hideInsertions ? doc_.OriginalRun(para, run) : doc_.ResolvedRun(para, run);
+  }
+  const RunProps& MarkOf(uint32_t para) const {
+    return options_.hideInsertions ? doc_.OriginalMark(para) : doc_.ResolvedMark(para);
+  }
   OpenTimings* timings_;
   // The model's caches the paragraph text kept points into (Document::CacheGeneration), and
   // pointing it at the new ones after an edit made them again.

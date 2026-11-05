@@ -168,8 +168,9 @@ struct Options {
   // Word's markup views (D4 review). The defaults are the final text (Simple Markup, No Markup).
   // All Markup and Original: deleted text (w:del, w:moveFrom) laid out as text, and a deleted
   // paragraph mark kept. Original: inserted text (w:ins, w:moveTo) hidden, offsets unchanged, and a
-  // paragraph with an inserted mark and nothing else shown left out, as a deleted one is now. The
-  // view draws the changes' colors and lines itself.
+  // paragraph with an inserted mark and nothing else shown left out, as a deleted one is now; and
+  // the formatting from before tracked changes (w:rPrChange, w:pPrChange, Document::OriginalRun).
+  // The view draws the changes' colors and lines itself.
   bool showDeletions = false;
   bool hideInsertions = false;
 };

@@ -559,8 +559,8 @@ std::vector<std::string> Signature(const Layout& l) {
 }
 
 // Whether `l` is as a layout made from scratch would be; prints where not.
-bool SameAsFresh(const Document& doc, const Layout& l, const char* when) {
-  Layout fresh(doc, Fonts());
+bool SameAsFresh(const Document& doc, const Layout& l, const char* when, const fw::doc::layout::Options& options = {}) {
+  Layout fresh(doc, Fonts(), options);
   fresh.LayOutAll();
   const std::vector<std::string> a = Signature(l), b = Signature(fresh);
   for (size_t p = 0; p < std::max(a.size(), b.size()); ++p) {
@@ -989,6 +989,82 @@ TEST(Layout_EndnotesHaveTheirSeparator) {
   REQUIRE(ed.Undo().ok);
   d.layout->LayOutAll();
   for (size_t p = 0; p < d.pages(); ++p) CHECK_EQ(rules(p), 0u);
+}
+
+TEST(Layout_OriginalViewShowsTheOldFormatting) {
+  // D4 review: Original (hideInsertions) lays out a tracked formatting change with the formatting
+  // from before it, the w:rPrChange's w:rPr and the w:pPrChange's w:pPr; Simple and All Markup
+  // with the new. Here the term's italic, color and size and the paragraph's indent were added;
+  // then a tracked edit makes the last paragraph big, and is undone and rejected.
+  const std::string body =
+      "<w:p><w:pPr><w:ind w:left=\"720\"/><w:pPrChange w:id=\"1\" w:author=\"a\"><w:pPr/></w:pPrChange></w:pPr>"
+      "<w:r><w:t xml:space=\"preserve\">The </w:t></w:r><w:r><w:rPr><w:i/><w:color w:val=\"C00000\"/><w:sz w:val=\"48\"/>"
+      "<w:rPrChange w:id=\"2\" w:author=\"a\"><w:rPr/></w:rPrChange></w:rPr><w:t>term</w:t></w:r>"
+      "<w:r><w:t xml:space=\"preserve\"> clause</w:t></w:r></w:p>" +
+      P("last") + SmallPage();
+  Doc d = Make(body);
+  REQUIRE(d.layout);
+  const std::vector<uint32_t> paras = d.doc->StoryParagraphs(d.doc->MainStory());
+  REQUIRE(paras.size() >= 2u);
+  fw::doc::layout::Options all, original;
+  all.showDeletions = true;
+  original.showDeletions = original.hideInsertions = true;
+  Layout allView(*d.doc, Fonts(), all), originalView(*d.doc, Fonts(), original);
+  allView.LayOutAll();
+  originalView.LayOutAll();
+  struct Look {
+    float start = 0, height = 0, lastHeight = 0;  // the first paragraph's start and line, the last's line
+    bool red = false;                              // the term's color drawn
+  };
+  auto look = [&](Layout& l) {
+    Look k;
+    if (auto c = l.CaretAt({paras[0], 0})) k.start = c->x;
+    const Page& page = l.GetPage(0);
+    for (const LineBox& lb : page.lines) {
+      if (lb.para == paras[0]) k.height = std::max(k.height, lb.height);
+      if (lb.para == paras[1]) k.lastHeight = std::max(k.lastHeight, lb.height);
+    }
+    for (const auto& paint : page.paints) k.red = k.red || paint.color == 0xC00000u;
+    return k;
+  };
+  const Look simple = look(*d.layout), markup = look(allView), was = look(originalView);
+  CHECK_NEAR(simple.start, was.start + 36, 0.5f);
+  CHECK_NEAR(markup.start, simple.start, 0.5f);
+  CHECK(simple.red && markup.red && !was.red);
+  CHECK(simple.height > was.height + 8);
+  CHECK_NEAR(markup.height, simple.height, 0.5f);
+  CHECK_NEAR(simple.lastHeight, was.lastHeight, 0.5f);
+
+  // Formatting tracked now: the views follow it, as from scratch.
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) {
+    d.layout->Edited(c);
+    originalView.Edited(c);
+  });
+  auto same = [&](const char* when) {
+    d.layout->LayOutAll();
+    originalView.LayOutAll();
+    return SameAsFresh(*d.doc, *d.layout, when) && SameAsFresh(*d.doc, originalView, when, original);
+  };
+  REQUIRE(ed.SetTracking(true));
+  REQUIRE(ed.SetRunProps({paras[1], 0}, {paras[1], 4}, edit::PropEdit().Set("sz", {{"val", "48"}})));
+  REQUIRE(same("tracked size"));
+  CHECK(look(*d.layout).lastHeight > look(originalView).lastHeight + 8);
+  CHECK_NEAR(look(originalView).lastHeight, was.lastHeight, 0.5f);
+  REQUIRE(ed.InsertText({paras[0], 6}, u"x"));  // typed into the changed run, tracked
+  REQUIRE(same("typed"));
+  CHECK(!look(originalView).red);
+  REQUIRE(ed.Undo());
+  REQUIRE(ed.Undo());
+  REQUIRE(same("undone"));
+  CHECK_NEAR(look(*d.layout).lastHeight, look(originalView).lastHeight, 0.5f);
+  // All rejected: Original and the final text are the same.
+  REQUIRE(ed.ReviewAll(false));
+  REQUIRE(same("rejected"));
+  const Look final = look(*d.layout), old = look(originalView);
+  CHECK_NEAR(final.start, old.start, 0.5f);
+  CHECK_NEAR(final.height, old.height, 0.5f);
+  CHECK(!final.red && !old.red);
 }
 
 TEST(Layout_TocShowsTheHeadingsPages) {

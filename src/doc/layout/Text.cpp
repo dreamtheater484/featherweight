@@ -308,7 +308,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   out = ParaText();
   out.para = para;
   const Paragraph& model = doc_.Para(para);
-  const ParaProps& props = doc_.ResolvedPara(para);
+  const ParaProps& props = ParaOf(para);
   out.props = &props;
   const std::u16string& t = model.text;
   out.text.reserve(t.size() + 8);
@@ -338,8 +338,10 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   };
 
   // The list label and what follows it.
-  const RunProps& markProps = doc_.ResolvedMark(para);
-  if (std::optional<ListLabel> label = doc_.Label(para)) {
+  const RunProps& markProps = MarkOf(para);
+  std::optional<ListLabel> label = doc_.Label(para);
+  if (options_.hideInsertions && props.numId.empty()) label.reset();  // numbering a tracked change added
+  if (label) {
     std::u16string s = label->text;
     if (label->suffix.empty() || label->suffix == "tab") s += u'\t';
     else if (label->suffix == "space") s += u' ';
@@ -373,7 +375,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
         // In the language of the result's first character.
         std::string_view lang;
         for (const TextRun& r : doc_.Runs(para))
-          if (r.run && r.start <= f.separator.offset + 1 && f.separator.offset + 1 < r.end) lang = doc_.ResolvedRun(para, r.run).lang;
+          if (r.run && r.start <= f.separator.offset + 1 && f.separator.offset + 1 < r.end) lang = RunOf(para, r.run).lang;
         std::u16string value = DateFieldResult(f.code, options_.now, lang);
         if (!value.empty()) replaces.push_back({f.separator.offset + 1, f.end.offset, std::move(value)});
         continue;
@@ -404,7 +406,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   for (uint32_t r = 0; r < runs.size(); ++r) {
     const TextRun& run = runs[r];
     if (run.start < covered) continue;  // overlapping runs don't happen; be safe
-    const RunProps& rp = doc_.ResolvedRun(para, run.run);
+    const RunProps& rp = RunOf(para, run.run);
     bool hidden = run.fieldCode || Gone(run.revision, options_);
     const text::TextStyle* style = styles_.Intern(StyleOf(rp, hidden));
     const text::TextStyle* hiddenStyle = style->hidden ? style : nullptr;
