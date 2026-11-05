@@ -174,6 +174,10 @@ class TabContent {
   // Saves to `path`: the file itself, or another (Save As), which the tab then is.
   virtual bool Save(const std::wstring& path, std::wstring& error) = 0;
   virtual SaveFormat SaveAsFormat() const = 0;
+  // Other types Save As offers (a Word document as RTF or plain text). These save a copy: the tab
+  // stays on its own file, with its changes.
+  virtual std::vector<SaveFormat> CopyFormats() const { return {}; }
+  virtual bool SaveCopy(const std::wstring& /*path*/, size_t /*format*/, std::wstring& /*error*/) { return false; }
   // Where Save As starts: the file, or for a tab without one (a new document) a suggested name.
   virtual std::wstring SuggestedSavePath() const { return Path(); }
   // Editors: unsaved changes go to the recovery folder now and then (the window's timer).

@@ -68,6 +68,9 @@ constexpr const char* kUsage =
     "      over the story, the RTF at its end), and pastes each clipboard sample in --samples at\n"
     "      its start. Every result must save, pass check (when the original does) and undo; with\n"
     "      --out the saved copies go to DIR/html, DIR/rtf and DIR/samples, for fwvalidate.\n"
+    "  fwtool export --out DIR <file or folder>...\n"
+    "      Saves each Word document as RTF and as plain text (UTF-8) in DIR, as the Word tab's\n"
+    "      Save As does, for Word to read back (scripts\\word-open-check.ps1).\n"
     "  fwtool bench-app [--runs N] [--json FILE] <Featherweight.exe> [<file>...]\n"
     "      Starts a private copy of Featherweight, alone and with each file, and measures launch\n"
     "      to window, to the first frame (the start screen or the first page), memory once\n"
@@ -205,6 +208,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"spelling") return fwtool::RunSpelling(options);
   if (command == L"torture") return fwtool::RunTorture(options);
   if (command == L"paste-check") return fwtool::RunPasteCheck(options);
+  if (command == L"export") return fwtool::RunExport(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }

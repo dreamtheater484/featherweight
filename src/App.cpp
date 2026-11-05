@@ -1668,12 +1668,15 @@ void App::OnStartScreen(EmptyState::Result res) {
   }
 }
 
-std::wstring App::SaveDialog(const std::wstring& suggested, const SaveFormat& format) {
+std::wstring App::SaveDialog(const std::wstring& suggested, const SaveFormat& format,
+                             const std::vector<SaveFormat>& copies, size_t* chosen) {
+  if (chosen) *chosen = 0;
   ComPtr<IFileSaveDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return {};
-  COMDLG_FILTERSPEC filters[] = {{format.name, format.pattern}};
-  dlg->SetFileTypes(1, filters);
-  dlg->SetDefaultExtension(format.ext);
+  std::vector<COMDLG_FILTERSPEC> filters{{format.name, format.pattern}};
+  for (const SaveFormat& f : copies) filters.push_back({f.name, f.pattern});
+  dlg->SetFileTypes(static_cast<UINT>(filters.size()), filters.data());
+  dlg->SetDefaultExtension(format.ext);  // and the chosen type's, when another is picked
   dlg->SetFileName(fw::FileNameOf(suggested).c_str());
   ComPtr<IShellItem> folder;
   std::wstring dir = fw::DirOf(suggested);
@@ -1697,7 +1700,22 @@ std::wstring App::SaveDialog(const std::wstring& suggested, const SaveFormat& fo
     result = path;
     CoTaskMemFree(path);
   }
+  UINT type = 1;  // from 1
+  if (chosen && SUCCEEDED(dlg->GetFileTypeIndex(&type)) && type >= 1 && type <= filters.size()) *chosen = type - 1;
   return result;
+}
+
+// Save As to another type (RTF, plain text): a copy, and the tab stays on its own file.
+bool App::SaveCopy(TabContent* view, const std::wstring& path, size_t format) {
+  std::wstring error;
+  if (!view->SaveCopy(path, format, error)) {
+    banner_.Show(BannerKind::Error, error.empty() ? fw::FileNameOf(path) + L" couldn't be saved." : error);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return false;
+  }
+  banner_.Show(BannerKind::Success, L"Saved a copy as " + fw::FileNameOf(path), {}, 2400);
+  InvalidateRect(hwnd_, nullptr, FALSE);
+  return true;
 }
 
 void App::ActivateTab(int index) {
@@ -1785,8 +1803,14 @@ bool App::SaveActive(bool saveAs) {
   std::wstring path = v->Path();
   if (path.empty()) saveAs = true;  // a new or recovered document
   if (saveAs) {
-    path = SaveDialog(v->SuggestedSavePath(), v->SaveAsFormat());
+    const std::vector<SaveFormat> copies = v->CopyFormats();
+    size_t type = 0;
+    path = SaveDialog(v->SuggestedSavePath(), v->SaveAsFormat(), copies, &type);
     if (path.empty()) return false;
+    // A name typed with another type's extension (report.rtf) is that type.
+    for (size_t i = 0; i < copies.size() && type == 0; ++i)
+      if (fw::EndsWithNoCase(path, std::wstring(L".") + copies[i].ext)) type = i + 1;
+    if (type > 0) return SaveCopy(v, path, type - 1);
   }
   std::wstring error;
   if (v->Save(path, error)) {

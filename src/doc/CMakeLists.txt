@@ -14,6 +14,7 @@ add_library(fwdoc STATIC
   edit/Clip.cpp
   edit/ClipTable.cpp
   edit/Editor.cpp
+  edit/Export.cpp
   edit/Format.cpp
   edit/HeaderFooter.cpp
   edit/Inline.cpp
@@ -62,7 +63,7 @@ target_compile_options(fwproof PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,
 if(FW_BUILD_TESTS)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_doc.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_docsave.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_edit.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_clip.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_format.cpp"
-    "${PROJECT_SOURCE_DIR}/tests/unit/test_page.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_page.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_export.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_inline.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_proof.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_tables.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_pictures.cpp"

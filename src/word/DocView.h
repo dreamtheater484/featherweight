@@ -102,6 +102,8 @@ class DocView : public PagedView {
 
   bool Save(const std::wstring& path, std::wstring& error) override;
   SaveFormat SaveAsFormat() const override;
+  std::vector<SaveFormat> CopyFormats() const override;
+  bool SaveCopy(const std::wstring& path, size_t format, std::wstring& error) override;
   std::wstring SuggestedSavePath() const override;
   void Autosave() override;
   FileChange CheckFileOnDisk() override { return Ready() ? static_cast<FileChange>(file_.CheckDisk()) : FileChange::None; }

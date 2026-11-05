@@ -13,6 +13,7 @@
 #include "doc/docx/Blank.h"
 #include "doc/docx/Docx.h"
 #include "doc/edit/Clip.h"
+#include "doc/edit/Export.h"
 #include "draw/D2DPainter.h"
 #include "draw/PrintJob.h"
 #include "pkg/Package.h"
@@ -1277,6 +1278,32 @@ SaveFormat DocView::SaveAsFormat() const {
   if (fw::EndsWithNoCase(path_, L".dotx")) return {L"Word template", L"*.dotx", L"dotx"};
   if (fw::EndsWithNoCase(path_, L".dotm")) return {L"Word macro-enabled template", L"*.dotm", L"dotm"};
   return {L"Word document", L"*.docx", L"docx"};
+}
+
+// Word's other types, as copies (milestone D4).
+std::vector<SaveFormat> DocView::CopyFormats() const {
+  return {{L"Rich Text Format", L"*.rtf", L"rtf"},
+          {L"Plain text (UTF-8)", L"*.txt", L"txt"},
+          {L"Plain text (UTF-16)", L"*.txt", L"txt"}};
+}
+
+bool DocView::SaveCopy(const std::wstring& path, size_t format, std::wstring& error) {
+  if (!doc_ || format > 2) return false;
+  const std::wstring name = fw::FileNameOf(path);
+  // A copy never replaces the document it is a copy of.
+  if (!path_.empty() && fw::EqualsNoCase(util::FullPath(path), util::FullPath(path_))) {
+    error = name + L" is this document's own file. Choose another name for the copy.";
+    return false;
+  }
+  namespace edit = fw::doc::edit;
+  const std::string bytes = format == 0   ? edit::RtfFile(*doc_)
+                            : format == 1 ? edit::TextFile(*doc_, edit::TextEncoding::Utf8)
+                                          : edit::TextFile(*doc_, edit::TextEncoding::Utf16);
+  if (!util::WriteFileAtomic(path, bytes)) {
+    error = name + L" couldn't be saved. It may be open in another program, or the folder can't be written to.";
+    return false;
+  }
+  return true;
 }
 
 bool DocView::Save(const std::wstring& path, std::wstring& error) {

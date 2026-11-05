@@ -552,6 +552,10 @@ void RtfText(std::string& out, std::u16string_view s) {
       out += "\\tab ";
     } else if (c == 0x0B) {
       out += "\\line ";
+    } else if (c == 0x0C) {
+      out += "\\page ";
+    } else if (c == 0x0E) {
+      out += "\\column ";
     } else if (c == 0xA0) {
       out += "\\~";
     } else if (c == 0x2011) {
@@ -566,22 +570,28 @@ void RtfText(std::string& out, std::u16string_view s) {
 
 }  // namespace
 
+int RtfWriter::Font(const std::string& name) {
+  auto it = std::find(fonts_.begin(), fonts_.end(), name);
+  if (it != fonts_.end()) return static_cast<int>(it - fonts_.begin());
+  fonts_.push_back(name);
+  return static_cast<int>(fonts_.size() - 1);
+}
+
+int RtfWriter::Color(uint32_t rgb) {
+  auto it = std::find(colors_.begin(), colors_.end(), rgb);
+  if (it != colors_.end()) return static_cast<int>(it - colors_.begin()) + 1;
+  colors_.push_back(rgb);
+  return static_cast<int>(colors_.size());
+}
+
 std::string ToRtf(const Clip& clip) {
-  std::vector<std::string> fonts;
-  std::vector<uint32_t> colors;
-  auto fontIndex = [&](const std::string& f) {
-    auto it = std::find(fonts.begin(), fonts.end(), f);
-    if (it != fonts.end()) return static_cast<int>(it - fonts.begin());
-    fonts.push_back(f);
-    return static_cast<int>(fonts.size() - 1);
-  };
-  auto colorIndex = [&](uint32_t c) {
-    auto it = std::find(colors.begin(), colors.end(), c);
-    if (it != colors.end()) return static_cast<int>(it - colors.begin()) + 1;
-    colors.push_back(c);
-    return static_cast<int>(colors.size());
-  };
+  RtfWriter writer;
   std::string body;
+  writer.Paragraphs(body, clip);
+  return writer.File(body);
+}
+
+void RtfWriter::Paragraphs(std::string& body, const Clip& clip) {
   for (size_t i = 0; i < clip.paras.size(); ++i) {
     const ClipPara& p = clip.paras[i];
     const ClipPara* next = i + 1 < clip.paras.size() ? &clip.paras[i + 1] : nullptr;
@@ -605,6 +615,7 @@ std::string ToRtf(const Clip& clip) {
     if (p.spaceBefore && *p.spaceBefore) body += "\\sb" + std::to_string(*p.spaceBefore);
     if (p.spaceAfter && *p.spaceAfter) body += "\\sa" + std::to_string(*p.spaceAfter);
     if (p.heading > 0) body += "\\outlinelevel" + std::to_string(p.heading - 1);
+    if (p.pageBreakBefore) body += "\\pagebb";
     body += ' ';
     auto run = [&](const ClipRun& r, std::u16string_view text) {
       if (!r.link.empty()) {
@@ -621,9 +632,10 @@ std::string ToRtf(const Clip& clip) {
         }
         body += std::string("{\\field{\\*\\fldinst HYPERLINK ") + (anchor ? "\\\\l " : "") + "\"" + target + "\"}{\\fldrslt ";
       }
+      if (!r.field.empty()) body += "{\\field{\\*\\fldinst " + r.field + "}{\\fldrslt ";
       body += '{';
       const size_t words = body.size();
-      if (!r.font.empty()) body += "\\f" + std::to_string(fontIndex(r.font));
+      if (!r.font.empty()) body += "\\f" + std::to_string(Font(r.font));
       if (r.halfPoints > 0) body += "\\fs" + std::to_string(r.halfPoints);
       if (r.bold) body += "\\b";
       if (r.italic) body += "\\i";
@@ -631,10 +643,11 @@ std::string ToRtf(const Clip& clip) {
       if (r.strike) body += "\\strike";
       if (r.vertAlign == VertAlign::Superscript) body += "\\super";
       if (r.vertAlign == VertAlign::Subscript) body += "\\sub";
-      if (!Automatic(r.color)) body += "\\cf" + std::to_string(colorIndex(*r.color));
+      if (!Automatic(r.color)) body += "\\cf" + std::to_string(Color(*r.color));
       if (body.size() > words) body += ' ';  // ends the last control word; after "{" it would be text
       RtfText(body, text);
       body += '}';
+      if (!r.field.empty()) body += "}}";
       if (!r.link.empty()) body += "}}";
     };
     if (!p.label.empty()) {
@@ -646,6 +659,10 @@ std::string ToRtf(const Clip& clip) {
     if (p.table && !(next && cliptable::SameCell(p, *next))) body += cliptable::SameRow(p, next ? *next : ClipPara{}) ? "\\cell\r\n" : "\\cell\\row\r\n";
     else if (next) body += "\\par\r\n";
   }
+}
+
+std::string RtfWriter::File(std::string_view body) const {
+  std::vector<std::string> fonts = fonts_;
   if (fonts.empty()) fonts.push_back("Calibri");
   std::string out = "{\\rtf1\\ansi\\ansicpg1252\\deff0\\uc1{\\fonttbl";
   for (size_t i = 0; i < fonts.size(); ++i) {
@@ -656,10 +673,12 @@ std::string ToRtf(const Clip& clip) {
     out += ";}";
   }
   out += "}{\\colortbl;";
-  for (uint32_t c : colors)
+  for (uint32_t c : colors_)
     out += "\\red" + std::to_string((c >> 16) & 0xFF) + "\\green" + std::to_string((c >> 8) & 0xFF) + "\\blue" +
            std::to_string(c & 0xFF) + ";";
-  out += "}\r\n" + body + "}";
+  out += "}\r\n";
+  out += body;
+  out += '}';
   return out;
 }
 
@@ -933,6 +952,11 @@ class RtfReader {
         st_.dest = Dest::Skip;
         return;
       }
+    // A field in a group that is skipped (a header's page number) stays skipped.
+    if ((w == "fldinst" || w == "fldrslt") && !stack_.empty() && stack_.back().dest == Dest::Skip) {
+      st_.dest = Dest::Skip;
+      return;
+    }
     if (w == "fldinst") {
       st_.dest = Dest::FieldCode;
       fieldCode_.clear();

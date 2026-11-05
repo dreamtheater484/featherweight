@@ -59,6 +59,7 @@ int RunCompare(const Options& options);
 int RunBench(const Options& options);
 int RunEditCheck(const Options& options);
 int RunPasteCheck(const Options& options);
+int RunExport(const Options& options);
 int RunBenchApp(const Options& options);
 int RunSpelling(const Options& options);
 int RunTorture(const Options& options);

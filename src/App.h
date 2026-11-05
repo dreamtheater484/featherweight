@@ -142,7 +142,11 @@ class App : public PdfHost, public DropHost {
   void OpenDialog();
   // A click, key or UI Automation action on the start screen.
   void OnStartScreen(EmptyState::Result res);
-  std::wstring SaveDialog(const std::wstring& suggested, const SaveFormat& format);
+  // `copies`: more types to offer after `format`; `chosen` gets the type picked (0 for `format`,
+  // 1 for the first copy type).
+  std::wstring SaveDialog(const std::wstring& suggested, const SaveFormat& format,
+                          const std::vector<SaveFormat>& copies = {}, size_t* chosen = nullptr);
+  bool SaveCopy(TabContent* view, const std::wstring& path, size_t format);
   void ActivateTab(int index);
   bool CloseTab(int index);
   bool ConfirmClose(TabContent* view);
