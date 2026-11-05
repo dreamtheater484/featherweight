@@ -48,6 +48,9 @@ $all = [ordered]@{
   fuzz_rtf     = @{ Seeds = @("$clipboard", "$regressions\rtf"); MaxLen = 65536 }
   fuzz_html    = @{ Seeds = @("$clipboard", "$regressions\html"); MaxLen = 65536 }
   fuzz_clip    = @{ Seeds = @("$seeds\docx", "$seeds\package", "$regressions\clip"); MaxLen = 65536 }
+  # Export PDF's font subsetter (D4): tiny fonts, and locally the small fonts in C:\Windows\Fonts
+  # (copied to the work folder, never committed: their licences don't allow it).
+  fuzz_sfnt    = @{ Seeds = @("$seeds\font", "$regressions\sfnt"); MaxLen = 262144; SystemFonts = $true }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 
@@ -62,6 +65,11 @@ foreach ($name in $Targets) {
   $work = Join-Path $WorkDir $name
   $artifacts = Join-Path $ArtifactDir $name
   New-Item -ItemType Directory -Force $work, $artifacts | Out-Null
+  if ($target.SystemFonts -and (Test-Path "$env:WINDIR\Fonts")) {
+    Get-ChildItem "$env:WINDIR\Fonts" -File -Include *.ttf, *.otf, *.ttc -Recurse -ErrorAction SilentlyContinue |
+      Where-Object { $_.Length -le $target.MaxLen } | Select-Object -First 40 |
+      ForEach-Object { Copy-Item $_.FullName (Join-Path $work $_.Name) -ErrorAction SilentlyContinue }
+  }
   $log = Join-Path $artifacts 'log.txt'
   $arguments = @("-max_total_time=$Seconds", "-max_len=$($target.MaxLen)", '-timeout=25', '-rss_limit_mb=2560',
     '-print_final_stats=1', "-artifact_prefix=$((Resolve-Path $artifacts).Path)\", (Resolve-Path $work).Path) +

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <ctime>
 #include <map>
+#include <optional>
 #include <set>
 #include <string_view>
 #include <unordered_map>
@@ -594,16 +595,19 @@ class PdfPainter : public Painter {
   const std::string& PageOps() const { return levels_.front().ops; }
   const Resources& PageResources() const { return levels_.front().res; }
   void End() {
+    FlushSpaces();
     while (states_.size() > 1) Restore();
   }
 
   void Save() override {
+    last_.face = nullptr;
     State s = states_.back();
     s.group = false;
     states_.push_back(s);
     Out() += "q\n";
   }
   void Restore() override {
+    last_.face = nullptr;
     if (states_.size() <= 1) return;
     const State s = states_.back();
     states_.pop_back();
@@ -627,14 +631,17 @@ class PdfPainter : public Painter {
     Out() += "Q\n";
   }
   void Transform(const Matrix& m) override {
+    last_.face = nullptr;
     states_.back().ctm = m * states_.back().ctm;
     Out() += MatrixOps(m) + "cm\n";
   }
   Matrix CurrentTransform() const override { return states_.back().ctm; }
   void ClipRect(const Rect& r) override {
+    last_.face = nullptr;
     Out() += N(r.left) + " " + N(r.top) + " " + N(r.Width()) + " " + N(r.Height()) + " re W n\n";
   }
   void ClipPath(const Path& p) override {
+    last_.face = nullptr;
     if (p.Empty()) {
       Out() += "0 0 0 0 re W n\n";
       return;
@@ -879,7 +886,118 @@ class PdfPainter : public Painter {
   Matrix flip_;  // page points (y down) to PDF's default space
   std::vector<Level> levels_;
   std::vector<State> states_;
+  // The text object written last, while nothing has been written after it. A run of only spaces
+  // that goes on along its line is added to it: PDFium ignores a text object of only spaces, and
+  // a word after it would run into the one before.
+  struct LastText {
+    IDWriteFontFace* face = nullptr;  // null: none
+    PdfFont* font = nullptr;
+    size_t end = 0;                   // Out()'s size after it
+    float size = 0, y = 0, pen = 0;   // its size, baseline and where its pen ended
+  } last_;
+  bool AppendSpaces(Point origin, const GlyphRun& run, const Brush& b, PdfFont* font);
+  // A run of only spaces that couldn't go into the text object before it (something was drawn
+  // after that, such as an underline): held back to go at the front of the next run's. A space
+  // shows nothing, so it can be the space of either one's font, in either one's color, and it is
+  // kept in the coordinates it came in (`ctm`) while the next run's are set up (a scaled run's).
+  struct Spaces {
+    Matrix ctm;
+    Point origin;
+    Brush brush;
+    IDWriteFontFace* face = nullptr;
+    float emSize = 0;
+    std::vector<uint16_t> indices;
+    std::vector<float> advances;
+    std::u16string text;
+  };
+  std::optional<Spaces> spaces_;
+  void FlushSpaces();
+  void DrawRun(Point origin, const GlyphRun& run, const Brush& b, PdfFont* font);
 };
+
+namespace {
+
+// The glyphs for these spaces in another font, or empty if it has none.
+std::vector<uint16_t> SpaceGlyphs(IDWriteFontFace* face, std::u16string_view spaces) {
+  std::vector<uint16_t> glyphs;
+  for (char16_t c : spaces) {
+    UINT32 points[2] = {c, u' '};
+    UINT16 found[2] = {};
+    if (FAILED(face->GetGlyphIndices(points, 2, found)) || (!found[0] && !found[1])) return {};
+    glyphs.push_back(found[0] ? found[0] : found[1]);
+  }
+  return glyphs;
+}
+
+// Whether a run is only spaces, as a reader needs them between words.
+bool OnlySpaces(const GlyphRun& run, const Brush& b) {
+  if (!run.text || run.textLength != run.count || (run.bidiLevel & 1) || run.sideways || !run.advances ||
+      b.kind != Brush::Kind::Solid)
+    return false;
+  for (uint32_t i = 0; i < run.textLength; ++i) {
+    const char16_t c = run.text[i];
+    if (c != u' ' && c != 0xA0 && !(c >= 0x2000 && c <= 0x200A) && c != 0x202F && c != 0x205F && c != 0x3000) return false;
+    if (run.offsets && (run.offsets[i].advanceOffset != 0 || run.offsets[i].ascenderOffset != 0)) return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+void PdfPainter::FlushSpaces() {
+  if (!spaces_) return;
+  Spaces held = std::move(*spaces_);
+  spaces_.reset();
+  if (PdfFont* font = doc_.FontFor(held.face)) {
+    // In the coordinates they came in.
+    Save();
+    Transform(held.ctm * Inverse(states_.back().ctm));
+    GlyphRun run;
+    run.face = held.face;
+    run.emSize = held.emSize;
+    run.count = static_cast<uint32_t>(held.indices.size());
+    run.indices = held.indices.data();
+    run.advances = held.advances.data();
+    run.text = held.text.data();
+    run.textLength = static_cast<uint32_t>(held.text.size());
+    DrawRun(held.origin, run, held.brush, font);
+    Restore();
+  }
+}
+
+bool PdfPainter::AppendSpaces(Point origin, const GlyphRun& run, const Brush&, PdfFont*) {
+  static constexpr std::string_view kClose = "]TJ\nET\n";
+  if (!last_.face || Out().size() != last_.end || std::abs(origin.y - last_.y) > 0.001f ||
+      !std::string_view(Out()).ends_with(kClose))
+    return false;
+  const std::vector<uint16_t> glyphs = SpaceGlyphs(last_.face, {run.text, run.textLength});
+  std::vector<DWRITE_GLYPH_METRICS> metrics(glyphs.size());
+  if (glyphs.empty() ||
+      FAILED(last_.face->GetDesignGlyphMetrics(glyphs.data(), static_cast<UINT32>(glyphs.size()), metrics.data(), FALSE)))
+    return false;
+  PdfFont* font = last_.font;
+  std::string& o = Out();
+  o.resize(o.size() - kClose.size());
+  float pen = last_.pen, at = origin.x;
+  const float size = last_.size;
+  for (uint32_t i = 0; i < run.count; ++i) {
+    const int width = static_cast<int>(std::lround(metrics[i].advanceWidth * 1000.0 / font->unitsPerEm));
+    font->widths.emplace(glyphs[i], width);
+    font->text.emplace(glyphs[i], std::u16string(1, run.text[i]));
+    const float rounded = std::round((pen - at) * 1000 / size * 10) / 10;
+    if (rounded != 0) o += N(rounded);
+    pen -= rounded * size / 1000;
+    o += "<";
+    Hex4(o, glyphs[i]);
+    o += ">";
+    pen += width * size / 1000;
+    at += run.advances[i];
+  }
+  o += kClose;
+  last_.end = o.size();
+  last_.pen = pen;
+  return true;
+}
 
 void PdfPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* src, float opacity) {
   if (dest.Width() == 0 || dest.Height() == 0 || bitmap.Width() <= 0 || bitmap.Height() <= 0) return;
@@ -903,6 +1021,56 @@ void PdfPainter::DrawGlyphs(Point origin, const GlyphRun& run, const Brush& b) {
   if (!run.face || run.count == 0 || !run.indices) return;
   PdfFont* font = doc_.FontFor(run.face);
   if (!font) return;
+  // Spaces held back go at the front of this run, when it goes on along their line in their font.
+  if (spaces_) {
+    // Where the spaces are in this run's coordinates: both scale and move only.
+    const Matrix& now = states_.back().ctm;
+    auto plain = [](const Matrix& m) { return m.m12 == 0 && m.m21 == 0 && m.m11 > 0 && m.m22 > 0; };
+    Point at{};
+    if (plain(now) && plain(spaces_->ctm)) at = Inverse(now).Apply(spaces_->ctm.Apply(spaces_->origin));
+    std::vector<uint16_t> glyphs;
+    if (plain(now) && plain(spaces_->ctm) && !(run.bidiLevel & 1) && !run.sideways && run.advances && run.text &&
+        std::abs(origin.y - at.y) < 0.01f && origin.x >= at.x && !(glyphs = SpaceGlyphs(run.face, spaces_->text)).empty()) {
+      Spaces held = std::move(*spaces_);
+      spaces_.reset();
+      held.origin = at;
+      for (float& a : held.advances) a *= held.ctm.m11 / now.m11;
+      held.indices = std::move(glyphs);
+      float along = 0;
+      for (size_t i = 0; i + 1 < held.advances.size(); ++i) along += held.advances[i];
+      held.advances.back() = origin.x - held.origin.x - along;  // the last space ends where the run starts
+      held.indices.insert(held.indices.end(), run.indices, run.indices + run.count);
+      held.advances.insert(held.advances.end(), run.advances, run.advances + run.count);
+      held.text.append(run.text, run.textLength);
+      std::vector<DWRITE_GLYPH_OFFSET> offsets;
+      if (run.offsets) {
+        offsets.resize(held.indices.size() - run.count);
+        offsets.insert(offsets.end(), run.offsets, run.offsets + run.count);
+      }
+      GlyphRun joined = run;
+      joined.count = static_cast<uint32_t>(held.indices.size());
+      joined.indices = held.indices.data();
+      joined.advances = held.advances.data();
+      joined.offsets = run.offsets ? offsets.data() : nullptr;
+      joined.text = held.text.data();
+      joined.textLength = static_cast<uint32_t>(held.text.size());
+      DrawRun(held.origin, joined, b, font);
+      return;
+    }
+    FlushSpaces();
+  }
+  if (OnlySpaces(run, b)) {
+    if (AppendSpaces(origin, run, b, font)) return;
+    spaces_ = Spaces{states_.back().ctm, origin, b, run.face, run.emSize,
+                     std::vector<uint16_t>(run.indices, run.indices + run.count),
+                     std::vector<float>(run.advances, run.advances + run.count), std::u16string(run.text, run.textLength)};
+    return;
+  }
+  DrawRun(origin, run, b, font);
+}
+
+void PdfPainter::DrawRun(Point origin, const GlyphRun& run, const Brush& b, PdfFont* font) {
+  last_.face = nullptr;
   const bool rtl = run.bidiLevel & 1;
   if (font->outlines || run.sideways) {
     // The glyphs' outlines; the text goes invisibly on top (below), so it can still be found.
@@ -998,10 +1166,27 @@ void PdfPainter::DrawGlyphs(Point origin, const GlyphRun& run, const Brush& b) {
   if (actual) {
     text += "/Span<</ActualText" + TextString(std::u16string_view(run.text, run.textLength)) + ">>BDC\n";
   }
+  // Letter spacing (w:spacing): the same gap after every glyph goes in Tc, as Word exports it.
+  // As TJ adjustments, readers would take the gaps for spaces between words.
+  float tc = 0;
+  if (!rtl && run.count > 2) {
+    std::vector<float> gaps;
+    for (uint32_t i = 0; i + 1 < run.count; ++i)
+      if (std::abs(at[i + 1].y - at[i].y) < 0.001f) gaps.push_back(at[i + 1].x - at[i].x - widths[i] * size / 1000);
+    if (gaps.size() >= 2) {
+      std::vector<float> sorted = gaps;
+      std::nth_element(sorted.begin(), sorted.begin() + static_cast<ptrdiff_t>(sorted.size() / 2), sorted.end());
+      const float median = sorted[sorted.size() / 2];
+      const auto same = std::count_if(gaps.begin(), gaps.end(), [&](float g) { return std::abs(g - median) < 0.02f; });
+      if (std::abs(median) > 0.05f && static_cast<size_t>(same) * 3 >= gaps.size() * 2) tc = std::round(median * 1000) / 1000;
+    }
+  }
+  float penX = 0, penY = 0;  // where show() left the pen
   auto show = [&](bool bold) {
     std::string& o = Out();
     // The size goes in Tf, where readers look for it; the matrix only places and flips.
     o += "BT\n/" + font->name + " " + N(size) + " Tf\n";
+    if (tc != 0) o += N(tc) + " Tc\n";
     // The render mode is text state, which lasts past ET: set every time.
     if (font->outlines) o += "3 Tr\n";
     else if (bold) o += "2 Tr " + N(size / 48) + " w\n";
@@ -1028,15 +1213,23 @@ void PdfPainter::DrawGlyphs(Point origin, const GlyphRun& run, const Brush& b) {
       tj += "<";
       Hex4(tj, run.indices[i]);
       tj += ">";
-      x += widths[i] * size / 1000;
+      x += widths[i] * size / 1000 + tc;
     }
     if (openTj) o += tj + "]TJ\n";
     o += "ET\n";
+    if (tc != 0) o += "0 Tc\n";  // text state outlasts ET
+    penX = x;
+    penY = y;
+  };
+  // A text object a run of spaces may be added to: plain, left to right, nothing around it.
+  auto remember = [&] {
+    if (!actual && tc == 0 && !rtl) last_ = {run.face, font, Out().size(), size, penY, penX};
   };
   if (font->outlines) {
     Out() += text;
     show(false);
     if (actual) Out() += "EMC\n";
+    remember();
     return;
   }
   if (font->bold && b.kind == Brush::Kind::Solid) {
@@ -1048,6 +1241,7 @@ void PdfPainter::DrawGlyphs(Point origin, const GlyphRun& run, const Brush& b) {
     return;
   }
   Paint(b, false, [&] { Out() += text; show(false); if (actual) Out() += "EMC\n"; }, {});
+  remember();
 }
 
 // ---------------------------------------------------------------------------

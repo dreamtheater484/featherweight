@@ -69,7 +69,7 @@ std::vector<uint8_t> Build(uint32_t version, std::vector<Table> tables) {
     offset += (t.second.size() + 3) & ~size_t{3};
   }
   for (const Table& t : tables) {
-    if (t.first == Tag("head")) head = out.size();
+    if (t.first == Tag("head") && t.second.size() >= 12) head = out.size();
     out.insert(out.end(), t.second.begin(), t.second.end());
     out.resize((out.size() + 3) & ~size_t{3}, 0);
   }
