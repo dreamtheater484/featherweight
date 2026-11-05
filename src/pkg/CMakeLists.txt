@@ -10,6 +10,7 @@ add_library(fwpkg STATIC
   ReferenceRules.cpp
   References.cpp
   RoundTrip.cpp
+  SafeFile.cpp
   Snapshot.cpp
   XmlDom.cpp
   XmlPull.cpp
