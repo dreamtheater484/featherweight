@@ -1564,7 +1564,10 @@ TEST(Edit_ValuesXmlCantHoldAreRefused) {
   auto rtf = edit::FromRtf("{\\rtf1\\ansi{\\fonttbl{\\f0 Bad\\'01Font;}}\\f0\\b bold}");
   CHECK(rtf && rtf->paras.size() == 1 && rtf->paras[0].runs.size() == 1);
   if (!rtf || rtf->paras.empty() || rtf->paras[0].runs.empty()) return;
-  CHECK(rtf->paras[0].runs[0].font.find('\x01') != std::string::npos);  // the reader keeps what the file says
+  // The reader leaves out what XML can't hold (fwpkg's clipboard hardening). A clip from elsewhere
+  // could still have it, and pasting leaves it out too.
+  CHECK(rtf->paras[0].runs[0].font == "BadFont");
+  rtf->paras[0].runs[0].font = std::string("Bad\x01" "Font");
   CHECK(edit::PasteClip(ed, P(p, 5), P(p, 5), *rtf));
   CHECK(doc->Para(p).text == u"Hellobold" && doc->ResolvedRun(p, doc->Runs(p).back().run).bold);
   CHECK(MainXml(*doc).find('\x01') == std::string::npos && Consistent(*doc, f) && ChecksOut(*doc));
