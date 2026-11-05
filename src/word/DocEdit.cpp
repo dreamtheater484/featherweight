@@ -96,15 +96,20 @@ bool DocView::Apply(const Result& r) {
   return true;
 }
 
+// How long a change of the page may lay out before the window shows it.
+constexpr double kPageChangeMs = 30;
+
 bool DocView::ApplyPageChange(const Result& r) {
   SyncFile();
   if (!r) {
     if (!r.message.empty()) host_.ViewMessage(BannerKind::Warning, std::wstring(r.message.begin(), r.message.end()));
     return false;
   }
-  // Every page may move: those on screen now, the rest in idle time (IdleWork), shown as they
-  // were until then. The caret and the selection stay, drawn once their pages are laid out.
-  pagination_->LayOutPages(static_cast<size_t>(std::max(currentPage_, 0)) + 2);
+  // Every page may move: the first ones now, and as many more as a frame allows, the rest in idle
+  // time (IdleWork), shown as they were until then (plan §11: the first page fast, the rest in the
+  // background). The caret and the selection stay, drawn once their pages are laid out.
+  pagination_->LayOutPages(2);
+  pagination_->Continue(kPageChangeMs);
   TakeNewPages();
   caretRevision_ = UINT32_MAX;
   host_.ViewStateChanged();
