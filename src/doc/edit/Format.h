@@ -85,6 +85,12 @@ FormatState StateOf(const Document& doc, Range range);
 void FormatRuns(Editor& ed, Range range, const RunFormat& format);
 void FormatParagraphs(Editor& ed, Range range, const ParaFormat& format);
 
+// The writers behind FormatRuns and FormatParagraphs, for any w:rPr or w:pPr (a style's too, with
+// what its basedOn chain gives): each property set in `format` is removed when it equals
+// `inherited`, written otherwise. WriteRunFormat leaves w:rStyle alone.
+void WriteRunFormat(Editor& ed, ElemId rPr, const RunFormat& format, const RunProps& inherited);
+void WriteParaFormat(Editor& ed, ElemId pPr, const ParaFormat& format, const ParaProps& inherited);
+
 // Ctrl+B, Ctrl+I, Ctrl+U and the like: off when the whole range has it, on otherwise.
 enum class Toggle : uint8_t { Bold, Italic, Underline, Strike, Superscript, Subscript };
 void ToggleRuns(Editor& ed, Range range, Toggle what);

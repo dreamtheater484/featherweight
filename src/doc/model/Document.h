@@ -364,6 +364,10 @@ class Document {
   // Formatting compares with these to write only what differs. Not cached.
   RunProps StyleRun(uint32_t para, std::string_view charStyle = {}) const;
   ParaProps StylePara(uint32_t para) const;
+  // What a style gives on its own: the document defaults, then the style and the ones it's based
+  // on. Empty or unknown: the defaults alone. Modifying a style compares with its basedOn's.
+  RunProps StyleChainRun(std::string_view styleId) const;
+  ParaProps StyleChainPara(std::string_view styleId) const;
   std::optional<ListLabel> Label(uint32_t para) const;
   TableProps ResolvedTable(Node tbl) const;
   RowProps ResolvedRow(Node tr) const;

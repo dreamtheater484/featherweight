@@ -4,7 +4,9 @@
 
 #include <algorithm>
 
+#include "doc/docx/Docx.h"
 #include "doc/model/Internal.h"
+#include "pkg/XmlWriter.h"
 
 namespace fw::doc::edit {
 
@@ -144,6 +146,11 @@ void Editor::TouchPara(uint32_t para) {
 }
 
 void Editor::TouchAll() { txn_.all = true; }
+
+void Editor::Reindex() {
+  doc_.caches_ = std::make_unique<Document::Caches>();
+  doc_.BuildIndexes();
+}
 
 Elem& Editor::Touch(ElemId id) {
   if (id < txn_.elems && touched_.find(id) == touched_.end()) {
@@ -505,6 +512,87 @@ ElemId Editor::AddXml(ElemId parent, std::string_view xml, ElemId before) {
   while (n && n.type() != pugi::node_element) n = n.next_sibling();
   if (!n || !Known(TypeOfElem(doc_.tree_, parent), n)) return kNoElem;
   return Build(parent, n, before, false);
+}
+
+ElemId Editor::CopyChild(ElemId src, ElemId parent) {
+  if (src == kNoElem || parent == kNoElem) return kNoElem;
+  uint32_t name = NameOfElem(doc_.tree_, src);
+  ElemDefId def = S().Child(TypeOfElem(doc_.tree_, parent), name);
+  if (def == kNoDef || S().Elem(def).type != TypeOfElem(doc_.tree_, src)) return kNoElem;
+  if (ElemId old = Child(parent, name, false); old != kNoElem) RemoveElement(old);
+  ElemId copy = Clone(src, parent);
+  E(copy).def = def;
+  Link(parent, copy, kNoElem);
+  return copy;
+}
+
+// ---------- Parts ----------
+
+ElemId Editor::EnsurePart(PartKind kind) {
+  if (kind != PartKind::Styles && kind != PartKind::Numbering) return kNoElem;
+  if (const Part* p = doc_.FindPart(kind)) return p->root;
+  const Part* main = doc_.FindPart(PartKind::Document);
+  if (depth_ > 0 || !main || !doc_.Editable()) return kNoElem;
+  const auto w = static_cast<size_t>(Ns::W), r = static_cast<size_t>(Ns::R);
+  const bool strict = IsStrictUri(main->uri[w]);
+  const std::string local = kind == PartKind::Styles ? "styles" : "numbering";
+  const std::string dir = main->name.substr(0, main->name.rfind('/') + 1);
+  std::string name = dir + local + ".xml";
+  for (int i = 2; doc_.Package().FindPart(name); ++i) name = dir + local + std::to_string(i) + ".xml";
+
+  // The package: a content type and a relationship from the main part.
+  pkg::Package& package = doc_.Package();
+  pkg::ContentTypes types = package.Types();
+  types.overrides.emplace_back(name, "application/vnd.openxmlformats-officedocument.wordprocessingml." + local + "+xml");
+  package.SetContentTypes(std::move(types));
+  pkg::RelationshipSet rels;
+  if (const pkg::RelationshipSet* have = package.RelationshipsOf(main->name)) {
+    rels = *have;
+  } else {
+    rels.source = main->name;
+    rels.relsPart = pkg::RelsPartFor(main->name);
+  }
+  pkg::Relationship rel;
+  for (size_t n = rels.items.size() + 1;; ++n) {
+    rel.id = "rId" + std::to_string(n);
+    if (!rels.Find(rel.id)) break;
+  }
+  rel.type = std::string(strict ? "http://purl.oclc.org/ooxml/officeDocument/relationships/"
+                                : "http://schemas.openxmlformats.org/officeDocument/2006/relationships/") +
+             local;
+  rel.target = name.substr(dir.size());
+  rel.targetPart = name;
+  rels.items.push_back(std::move(rel));
+  package.SetRelationships(std::move(rels));
+
+  // The model: an empty root with the main part's namespaces.
+  Part part;
+  part.name = name;
+  part.kind = kind;
+  part.docNode = NewNode();
+  part.root = doc_.tree_.Add(S().Child(S().RootType(), NameOf(Ns::W, local)), kNoElem);
+  doc_.tree_.elems[part.root].node = NewNode();
+  for (size_t i : {w, r}) {
+    part.prefix[i] = std::string(NsPrefix(static_cast<Ns>(i)));
+    part.uri[i] = main->uri[i].empty() ? std::string(NsUri(static_cast<Ns>(i))) : main->uri[i];
+    part.addDecls.emplace_back(part.prefix[i], part.uri[i]);
+  }
+  part.prefix[static_cast<size_t>(Ns::Xml)] = "xml";
+  pkg::XmlWriter decl;
+  decl.Declaration(true);
+  doc_.store_.Add(doc_.tree_.elems[part.root].node, pkg::Fragment{pkg::Slot::Before, {}, decl.Take()});
+  ElemId root = part.root;
+  doc_.parts_.push_back(std::move(part));
+  std::string xml;
+  if (docx::WritePart(doc_, static_cast<uint32_t>(doc_.parts_.size() - 1), xml).Ok())
+    package.SetPart(name, std::vector<uint8_t>(xml.begin(), xml.end()));
+
+  // Redo would re-add elements where the new root now is.
+  redo_.clear();
+  doc_.caches_ = std::make_unique<Document::Caches>();
+  doc_.BuildIndexes();
+  ++version_;
+  return root;
 }
 
 }  // namespace fw::doc::edit

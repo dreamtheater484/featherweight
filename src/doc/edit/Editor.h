@@ -71,12 +71,23 @@ class Editor {
   // its kind). The XML uses the w: prefix; every element and attribute in it must be known.
   // kNoElem when it isn't.
   ElemId AddXml(ElemId parent, std::string_view xml, ElemId before = kNoElem);
+  // Puts a copy of `src` (a property such as w:jc or w:b, with what it holds) into `parent`, in
+  // place of a child with the same name. kNoElem when `parent` can't hold it.
+  ElemId CopyChild(ElemId src, ElemId parent);
   // Paragraphs whose look the transaction changed (formatting their runs or marks). Changes to
   // styles, numbering or settings touch every paragraph.
   void TouchPara(uint32_t para);
   void TouchAll();
+  // Lets the model's indexes see what the transaction has added so far (a style, a list).
+  void Reindex();
 
   Tree& GetTree() { return doc_.tree_; }
+
+  // The root of the document's styles or numbering part (outside a transaction). A document
+  // without one gets an empty part, with its content type and relationship; that isn't undone
+  // (an empty part says nothing), and redo history ends there. kNoElem for other kinds, or when
+  // the document isn't edited.
+  ElemId EnsurePart(PartKind kind);
 
  private:
   struct StoreOp {

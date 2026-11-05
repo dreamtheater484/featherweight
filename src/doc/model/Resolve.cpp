@@ -771,6 +771,19 @@ const ParaProps& Document::ResolvedPara(uint32_t para) const {
 
 ParaProps Document::StylePara(uint32_t para) const { return ResolveParaProps(*this, para, false); }
 
+ParaProps Document::StyleChainPara(std::string_view styleId) const {
+  ParaProps p;
+  if (const Part* styles = FindPart(PartKind::Styles))
+    ApplyPara(*this, RootOf(*styles).Path({Name("docDefaults"), Name("pPrDefault"), kPPr}), p);
+  const Style* s = styleId.empty() ? nullptr : FindStyle(styleId);
+  if (s && s->type == StyleType::Paragraph) {
+    for (const Style* st : Chain(*this, s)) ApplyPara(*this, st->node.Child(kPPr), p);
+    p.style = s->id;
+  }
+  std::sort(p.tabs.begin(), p.tabs.end(), [](const TabStop& a, const TabStop& b) { return a.pos < b.pos; });
+  return p;
+}
+
 namespace {
 
 // Levels 0-2 of a run in this paragraph: document defaults, table style, paragraph style.
@@ -810,6 +823,20 @@ RunProps Document::StyleRun(uint32_t para, std::string_view charStyle) const {
   RunLevels lv;
   ParagraphLevels(*this, ParaNode(para), lv);
   CharacterStyleLevel(*this, charStyle, lv);
+  FinishRun(*this, *caches_, lv);
+  return lv.work.p;
+}
+
+RunProps Document::StyleChainRun(std::string_view styleId) const {
+  RunLevels lv;
+  if (const Part* styles = FindPart(PartKind::Styles))
+    ApplyRun(*this, RootOf(*styles).Path({Name("docDefaults"), Name("rPrDefault"), kRPr}), lv.work, lv.toggles[0]);
+  const Style* s = styleId.empty() ? nullptr : FindStyle(styleId);
+  if (s && (s->type == StyleType::Paragraph || s->type == StyleType::Character)) {
+    size_t level = s->type == StyleType::Character ? 3 : 2;
+    for (const Style* st : Chain(*this, s)) ApplyRun(*this, st->node.Child(kRPr), lv.work, lv.toggles[level]);
+    if (level == 3) lv.work.p.charStyle = s->id;
+  }
   FinishRun(*this, *caches_, lv);
   return lv.work.p;
 }

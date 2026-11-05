@@ -71,13 +71,10 @@ void SetColor(Editor& ed, ElemId e, uint32_t val, Color c) {
   for (uint32_t n : {Name("themeColor"), Name("themeTint"), Name("themeShade")}) ed.RemoveAttr(e, n);
 }
 
-// One run's (or paragraph mark's) w:rPr after the format, against what its styles give.
-void ApplyRunFormat(Editor& ed, const Document& doc, uint32_t para, ElemId rPr, const RunFormat& f) {
-  if (f.charStyle) {
-    if (f.charStyle->empty()) ed.Remove(rPr, kRStyle);
-    else SetVal(ed, rPr, kRStyle, *f.charStyle);
-  }
-  RunProps inh = doc.StyleRun(para, Node(&doc.GetTree(), rPr).Child(kRStyle).AttrOr(kVal));
+}  // namespace
+
+void WriteRunFormat(Editor& ed, ElemId rPr, const RunFormat& f, const RunProps& inh) {
+  const Document& doc = ed.Doc();
   if (f.font) {
     if (*f.font == inh.fonts.ascii && *f.font == inh.fonts.hAnsi) {
       if (ElemId rf = ed.Child(rPr, kRFonts, false); rf != kNoElem) {
@@ -152,6 +149,17 @@ void ApplyRunFormat(Editor& ed, const Document& doc, uint32_t para, ElemId rPr, 
              *f.vertAlign == VertAlign::Superscript ? "superscript" : *f.vertAlign == VertAlign::Subscript ? "subscript" : "baseline");
     }
   }
+}
+
+namespace {
+
+// One run's (or paragraph mark's) w:rPr after the format, against what its styles give.
+void ApplyRunFormat(Editor& ed, const Document& doc, uint32_t para, ElemId rPr, const RunFormat& f) {
+  if (f.charStyle) {
+    if (f.charStyle->empty()) ed.Remove(rPr, kRStyle);
+    else SetVal(ed, rPr, kRStyle, *f.charStyle);
+  }
+  WriteRunFormat(ed, rPr, f, doc.StyleRun(para, Node(&doc.GetTree(), rPr).Child(kRStyle).AttrOr(kVal)));
 }
 
 // Calls fn(para, rPr) for every run in the range and every paragraph mark it covers.
@@ -395,8 +403,15 @@ void FormatParagraphs(Editor& ed, Range range, const ParaFormat& f) {
   const Document& doc = ed.Doc();
   ed.Begin(L"Paragraph");
   for (uint32_t p : ParagraphsOf(doc, range)) {
-    ParaProps inh = doc.StylePara(p);
-    ElemId pPr = ed.Child(doc.Para(p).elem, kPPr);
+    WriteParaFormat(ed, ed.Child(doc.Para(p).elem, kPPr), f, doc.StylePara(p));
+    ed.TouchPara(p);
+  }
+  ed.Commit();
+}
+
+void WriteParaFormat(Editor& ed, ElemId pPr, const ParaFormat& f, const ParaProps& inh) {
+  const Document& doc = ed.Doc();
+  {
     if (f.jc) {
       if (*f.jc == inh.jc) ed.Remove(pPr, kJc);
       else SetVal(ed, pPr, kJc, JcValue(doc, *f.jc));
@@ -420,9 +435,7 @@ void FormatParagraphs(Editor& ed, Range range, const ParaFormat& f) {
         for (uint32_t n : {Name("themeFill"), Name("themeFillTint"), Name("themeFillShade")}) ed.RemoveAttr(shd, n);
       }
     }
-    ed.TouchPara(p);
   }
-  ed.Commit();
 }
 
 void ToggleRuns(Editor& ed, Range range, Toggle what) {

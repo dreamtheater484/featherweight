@@ -5,6 +5,8 @@
 #include "DocFixture.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
+#include "doc/edit/Styles.h"
+#include "pkg/Check.h"
 
 using namespace fw;
 using namespace fw::doc;
@@ -45,6 +47,20 @@ const char* kBoldStyle =
     "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/>"
     "<w:rPr><w:sz w:val=\"22\"/></w:rPr></w:style>"
     "<w:style w:type=\"paragraph\" w:styleId=\"Strong\"><w:name w:val=\"Strong P\"/><w:basedOn w:val=\"Normal\"/><w:rPr><w:b/></w:rPr></w:style>";
+
+// Saves the document, checks the package as Office would, and opens it again.
+std::unique_ptr<Document> SaveAndReopen(Document& doc) {
+  if (!docx::WriteAllParts(doc).Ok()) return nullptr;
+  fw::pkg::MemorySink sink;
+  if (!doc.Package().Save(sink).Ok()) return nullptr;
+  Status st;
+  auto pkg = test::OpenBytes(std::move(sink.bytes), st);
+  if (!pkg) return nullptr;
+  fw::pkg::CheckReport report = fw::pkg::CheckPackage(*pkg);
+  for (const std::string& e : report.errors) std::printf("  check: %s\n", e.c_str());
+  if (!report.Ok()) return nullptr;
+  return docx::Read(std::move(pkg), st);
+}
 
 }  // namespace
 
@@ -330,4 +346,166 @@ TEST(Edit_StateOfAMixedRange) {
   CHECK(caret.size && caret.size->Value() == 24);
   edit::FormatState start = edit::StateOf(*doc, {{p, 0}, {p, 0}});
   CHECK(start.size && start.size->Value() == 24 && start.bold);
+}
+
+// ---------- Styles ----------
+
+namespace {
+
+const char* kWordStyles =
+    "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/><w:qFormat/>"
+    "<w:rPr><w:sz w:val=\"22\"/></w:rPr></w:style>"
+    "<w:style w:type=\"character\" w:default=\"1\" w:styleId=\"DefaultParagraphFont\"><w:name w:val=\"Default Paragraph Font\"/>"
+    "<w:uiPriority w:val=\"1\"/><w:semiHidden/><w:unhideWhenUsed/></w:style>";
+
+size_t StyleCount(const Document& doc) { return doc.Styles().size(); }
+
+}  // namespace
+
+TEST(Styles_BuiltinsComeWithWordsDefinition) {
+  Fixture f;
+  f.styles = kWordStyles;
+  f.body = "<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>Report</w:t></w:r></w:p>"
+           "<w:p><w:r><w:t>Body text</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  std::string styles = PartXml(*doc, PartKind::Styles), main = MainXml(*doc);
+  uint32_t p = MainParas(*doc)[0];
+  edit::Editor ed(*doc);
+  edit::ApplyStyle(ed, {{p, 2}, {p, 2}}, "Heading 1");
+  CHECK(doc->ResolvedPara(p).style == "Heading1");
+  CHECK(doc->ResolvedPara(p).jc == Justification::Start && doc->ResolvedPara(p).keepNext);  // direct jc gone
+  CHECK(At(*doc, p, 0).size.Value() == 32 && !At(*doc, p, 0).bold);  // bold covered it all: gone
+  CHECK(At(*doc, p, 0).color.rgb == 0x2F5496);
+  const Style* h1 = doc->FindStyle("Heading1");
+  const Style* h1c = doc->FindStyle("Heading1Char");
+  CHECK(h1 && h1c && h1->link != kNone && doc->Styles()[h1->link].id == "Heading1Char" && h1c->type == StyleType::Character);
+  CHECK(h1 && h1->basedOn != kNone && doc->Styles()[h1->basedOn].id == "Normal");
+  CHECK(Has(PartXml(*doc, PartKind::Styles), "<w:name w:val=\"heading 1\"/>"));
+  // Once it's there, it isn't added again.
+  size_t count = StyleCount(*doc);
+  edit::ApplyStyle(ed, {{MainParas(*doc)[1], 0}, {MainParas(*doc)[1], 0}}, "heading 1");
+  CHECK(StyleCount(*doc) == count && doc->ResolvedPara(MainParas(*doc)[1]).style == "Heading1");
+  // Undo takes the styles away again.
+  CHECK(ed.Undo() && ed.Undo());
+  CHECK(PartXml(*doc, PartKind::Styles) == styles && MainXml(*doc) == main);
+  CHECK(!doc->FindStyle("Heading1"));
+  CHECK(ed.Redo());
+  auto again = SaveAndReopen(*doc);
+  CHECK(again);
+  if (again) CHECK(again->ResolvedPara(MainParas(*again)[0]).style == "Heading1");
+}
+
+TEST(Styles_TranslatedIdsAreFoundByName) {
+  Fixture f;
+  f.styles = std::string(kWordStyles) +
+             "<w:style w:type=\"paragraph\" w:styleId=\"Kop1\"><w:name w:val=\"heading 1\"/><w:basedOn w:val=\"Normal\"/>"
+             "<w:uiPriority w:val=\"9\"/><w:qFormat/><w:rPr><w:sz w:val=\"40\"/></w:rPr></w:style>";
+  f.body = "<w:p><w:r><w:t>Inleiding</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  size_t count = StyleCount(*doc);
+  uint32_t p = MainParas(*doc)[0];
+  edit::Editor ed(*doc);
+  edit::ApplyStyle(ed, {{p, 0}, {p, 0}}, "Heading 1");
+  CHECK(doc->ResolvedPara(p).style == "Kop1" && StyleCount(*doc) == count && At(*doc, p, 0).size.Value() == 40);
+  auto gallery = edit::GalleryStyles(*doc);
+  CHECK(gallery.size() > 3 && gallery[0].name == "Normal" && gallery[0].id == "Normal");
+  bool kop = false, noSpacing = false;
+  for (const auto& e : gallery) {
+    kop |= e.id == "Kop1" && e.name == "Heading 1";
+    noSpacing |= e.id.empty() && e.name == "No Spacing";
+  }
+  CHECK(kop && noSpacing);
+}
+
+TEST(Styles_DirectFormattingOverHalfTheParagraphGoes) {
+  Fixture f;
+  f.styles = kWordStyles;
+  f.body = "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">aaaaa </w:t></w:r>"
+           "<w:r><w:rPr><w:i/></w:rPr><w:t>bb</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  uint32_t p = MainParas(*doc)[0];
+  edit::Editor ed(*doc);
+  edit::ApplyStyle(ed, {{p, 0}, {p, 8}}, "Heading 2");
+  CHECK(doc->ResolvedPara(p).style == "Heading2");
+  CHECK(!At(*doc, p, 0).bold && At(*doc, p, 7).italic);
+}
+
+TEST(Styles_LinkedStylesOnPartOfAParagraph) {
+  Fixture f;
+  f.styles = kWordStyles;
+  f.body = "<w:p><w:r><w:t>Some words here</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  uint32_t p = MainParas(*doc)[0];
+  edit::Editor ed(*doc);
+  edit::ApplyStyle(ed, {{p, 5}, {p, 10}}, "Heading 1");
+  CHECK(doc->ResolvedPara(p).style == "Normal");
+  CHECK(At(*doc, p, 5).charStyle == "Heading1Char" && At(*doc, p, 5).size.Value() == 32);
+  CHECK(At(*doc, p, 0).size.Value() == 22 && At(*doc, p, 0).charStyle.empty());
+  edit::ApplyStyle(ed, {{p, 0}, {p, 4}}, "Strong");
+  CHECK(At(*doc, p, 0).bold && At(*doc, p, 0).charStyle == "Strong");
+  edit::ApplyStyle(ed, {{p, 0}, {p, 4}}, "Default Paragraph Font");
+  CHECK(!At(*doc, p, 0).bold && At(*doc, p, 0).charStyle.empty());
+}
+
+TEST(Styles_ModifyAndUpdateToMatch) {
+  Fixture f;
+  f.styles = std::string(kWordStyles) +
+             "<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/><w:basedOn w:val=\"Normal\"/>"
+             "<w:next w:val=\"Normal\"/><w:qFormat/><w:rPr><w:sz w:val=\"32\"/></w:rPr></w:style>";
+  f.body = "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/><w:jc w:val=\"right\"/></w:pPr>"
+           "<w:r><w:rPr><w:color w:val=\"FF0000\"/></w:rPr><w:t>One</w:t></w:r></w:p>"
+           "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>Two</w:t></w:r></w:p>"
+           "<w:p><w:r><w:t>Body</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  auto paras = MainParas(*doc);
+  edit::Editor ed(*doc);
+  // Modify Normal: everything based on it follows.
+  edit::RunFormat r;
+  r.size = HalfPoints(24);
+  r.bold = false;  // what Normal already gives: nothing written
+  edit::ParaFormat pf;
+  pf.spaceAfter = Twips(160);
+  edit::ModifyStyle(ed, "Normal", r, pf);
+  CHECK(At(*doc, paras[2], 0).size.Value() == 24 && doc->ResolvedPara(paras[2]).spaceAfter.Value() == 160);
+  CHECK(At(*doc, paras[1], 0).size.Value() == 32 && doc->ResolvedPara(paras[1]).spaceAfter.Value() == 160);
+  std::string styles = PartXml(*doc, PartKind::Styles);
+  CHECK(Has(styles, "<w:sz w:val=\"24\"/>") && !Has(styles, "<w:b "));
+  // Update Heading 1 to match the first paragraph.
+  edit::UpdateStyleToMatch(ed, {{paras[0], 1}, {paras[0], 1}});
+  for (uint32_t p : {paras[0], paras[1]}) {
+    CHECK(doc->ResolvedPara(p).jc == Justification::End);
+    CHECK(At(*doc, p, 0).color.rgb == 0xFF0000);
+  }
+  std::string main = MainXml(*doc);
+  CHECK(!Has(main, "w:jc") && !Has(main, "FF0000"));
+  CHECK(Has(PartXml(*doc, PartKind::Styles), "FF0000"));
+  CHECK(SaveAndReopen(*doc) != nullptr);
+}
+
+TEST(Styles_DocumentsWithoutAStylesPart) {
+  Fixture f;
+  f.body = "<w:p><w:r><w:t>Title</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  CHECK(!doc->FindPart(PartKind::Styles));
+  uint32_t p = MainParas(*doc)[0];
+  edit::Editor ed(*doc);
+  edit::ApplyStyle(ed, {{p, 0}, {p, 0}}, "Title");
+  CHECK(doc->FindPart(PartKind::Styles));
+  CHECK(doc->ResolvedPara(p).style == "Title" && At(*doc, p, 0).size.Value() == 56);
+  CHECK(doc->DefaultStyle(StyleType::Paragraph) && doc->DefaultStyle(StyleType::Paragraph)->id == "Normal");
+  auto again = SaveAndReopen(*doc);
+  CHECK(again);
+  if (again) CHECK(again->ResolvedPara(MainParas(*again)[0]).style == "Title");
 }
