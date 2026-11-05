@@ -33,15 +33,26 @@ add_library(fwdoclayout STATIC
 target_link_libraries(fwdoclayout PUBLIC fwdoc fwtext fwdraw)
 target_compile_options(fwdoclayout PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
+# fwproof: proofing (plan §6.2, milestone D2): spelling with Windows' spell checker, the language of
+# text, AutoCorrect and word count, on the model and its editor. Headless.
+add_library(fwproof STATIC
+  proof/AutoCorrect.cpp
+  proof/Language.cpp
+  proof/Spelling.cpp
+  proof/WordCount.cpp
+)
+target_link_libraries(fwproof PUBLIC fwdoc fwtext)
+target_compile_options(fwproof PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
+
 # Its unit tests join fw_tests, and the never-damage tests run the corpus through the model
 # (plan §6.4 D1): read every document into the model, write every part it owns back, and check.
 if(FW_BUILD_TESTS)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_doc.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_docsave.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_edit.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_format.cpp"
-    "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_proof.cpp"
     # The document tab's file (D2 "Files"): an app source, tested here with temporary folders.
     "${PROJECT_SOURCE_DIR}/tests/unit/test_docfile.cpp" "${PROJECT_SOURCE_DIR}/src/word/DocFile.cpp")
-  target_link_libraries(fw_tests PRIVATE fwdoc fwdoclayout)
+  target_link_libraries(fw_tests PRIVATE fwdoc fwdoclayout fwproof)
   set(_fw_office "${PROJECT_SOURCE_DIR}/tests/office")
   add_test(NAME office_model_roundtrip COMMAND fwtool roundtrip --model "${_fw_office}/generated" "${_fw_office}/edge"
     "${_fw_office}/layout")

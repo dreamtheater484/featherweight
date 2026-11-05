@@ -56,6 +56,8 @@ void Settings::LoadFrom(const std::wstring& path) {
   coverAlone = ini_.GetBool(kGeneral, L"TwoPageCoverAlone", false);
   ini_.Remove(kGeneral, L"CoverPageAlone");  // pre-0.9.2 name, which stored the old book-style default
   highlightFields = ini_.GetBool(kGeneral, L"HighlightFields", true);
+  spelling = ini_.GetBool(kGeneral, L"CheckSpelling", true);
+  autoCorrect = ini_.GetBool(kGeneral, L"AutoCorrect", true);
   autoUpdate = ini_.GetBool(kGeneral, L"UpdateAutomatically", true);
   lastUpdateCheck = ini_.GetInt64(kGeneral, L"LastUpdateCheck", 0);
   skippedVersion = ini_.Get(kGeneral, L"SkippedVersion");
@@ -99,6 +101,9 @@ bool Settings::Save() {
   ini_.SetBool(kGeneral, L"InvertPages", invert);
   ini_.SetBool(kGeneral, L"TwoPageCoverAlone", coverAlone);
   ini_.SetBool(kGeneral, L"HighlightFields", highlightFields);
+  // Written once turned off (files from before have neither, and stay as they were).
+  if (!spelling || ini_.Has(kGeneral, L"CheckSpelling")) ini_.SetBool(kGeneral, L"CheckSpelling", spelling);
+  if (!autoCorrect || ini_.Has(kGeneral, L"AutoCorrect")) ini_.SetBool(kGeneral, L"AutoCorrect", autoCorrect);
   ini_.SetBool(kGeneral, L"UpdateAutomatically", autoUpdate);
   ini_.SetInt(kGeneral, L"LastUpdateCheck", lastUpdateCheck);
   ini_.Set(kGeneral, L"SkippedVersion", skippedVersion);

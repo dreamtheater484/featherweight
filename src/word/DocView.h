@@ -12,6 +12,8 @@
 #include "doc/layout/Layout.h"
 #include "draw/Drawing.h"
 #include "doc/edit/Editor.h"
+#include "doc/proof/AutoCorrect.h"
+#include "doc/proof/Spelling.h"
 #include "doc/model/Document.h"
 #include "pkg/XmlDom.h"
 #include "text/Fonts.h"
@@ -73,6 +75,8 @@ class DocView : public PagedView {
 
   bool HasStatusBar() const override { return Ready(); }
   void BuildStatusBar(StatusBarModel& m) override;
+  // Spelling or AutoCorrect turned on or off.
+  void SettingsChanged() override;
 
   void StartSearch(const std::wstring& query, bool matchCase) override;
   void ClearSearch() override;
@@ -169,6 +173,26 @@ class DocView : public PagedView {
   // Comments, tracked changes and links, with where they are in the text.
   void CollectAnnotations();
 
+  // ---- Proofing (DocProof.cpp)
+  // Spelling and words in idle time until `deadlineMs`; true when the squiggles or counts changed.
+  bool ProofIdle(double deadlineMs);
+  bool HasProofWork() const;
+  // An edit, undo or redo: the paragraphs it replaced are checked and counted again.
+  void ProofEdited(const fw::doc::edit::Change& change);
+  void DrawSquiggles(gfx::Canvas& c, int first, int last);
+  // The spelling error under (x, y): its suggestions, Ignore all and Add to dictionary, first.
+  void FillSpellingMenu(HMENU m, int x, int y);
+  void FillLanguageMenu(HMENU m);
+  bool ExecuteProof(int cmd);
+  void NextMisspelling();  // F7
+  void ShowWordCount();    // Ctrl+Shift+G
+  void ChooseLanguage();   // the language menu at the mouse
+  void SetLanguage(const std::wstring& tag);
+  // After a character was typed before the caret, or Enter ended `para`: AutoCorrect.
+  void AutoCorrectTyped(char16_t typed);
+  void AutoCorrectBreak(uint32_t para);
+  void ProofStatus(StatusBarModel& m);
+
   // ---- Editing (DocEdit.cpp)
   // Edits, their undo and redo: the layout lays out again, positions kept here move, and the file
   // learns whether the document now differs from the saved one.
@@ -227,8 +251,11 @@ class DocView : public PagedView {
   std::shared_ptr<draw::ImageCache> images_;
   uint32_t revision_ = 0;
   bool noticesShown_ = false;
+  // Words in the main story, for the status bar: counted in idle time by paragraph, and for the
+  // paragraphs an edit replaces as it's made (DocProof.cpp).
   size_t words_ = 0;
-  size_t wordsNext_ = 0;  // the next main-story paragraph to count
+  uint32_t wordsNext_ = 0;           // the next paragraph to count (Document::Paragraphs() order)
+  std::vector<uint32_t> paraWords_;  // the counted paragraphs' words (0 outside the main story)
   bool wordsCounted_ = false;
 
   // Comments, with their ranges and text for the tooltip.
@@ -287,4 +314,35 @@ class DocView : public PagedView {
   std::optional<fw::doc::layout::Layout::Caret> caretBox_;
   double lastDoubleClick_ = -1e9;  // a click right after a double-click selects the paragraph
   int lastDoubleX_ = 0, lastDoubleY_ = 0;
+
+  // Proofing (DocProof.cpp): the pages on screen checked in idle time with Windows' spell
+  // checker; nothing runs once they are.
+  std::unique_ptr<fw::doc::proof::Spelling> spelling_;
+  bool spellingWanted_ = true;  // made on the first idle tick, when the setting is on
+  bool typed_ = false;          // the last thing done was typing, which left the caret at typedAt_:
+  TextPos typedAt_;             // the word there is still being typed, and isn't marked yet
+  uint32_t edits_ = 0;          // edits so far, for what is measured from the text
+  fw::doc::proof::AutoCorrect autoCorrect_;
+  // Squiggles under the errors, measured per page when shown: [x1, x2) at y, page points.
+  struct Squiggle {
+    uint32_t para, from, to;
+    float x1, x2, y;
+  };
+  struct PageSquiggles {
+    uint32_t layout = UINT32_MAX, spelling = 0, edits = 0;
+    std::vector<Squiggle> lines;
+  };
+  std::vector<PageSquiggles> squiggles_;
+  // The error the context menu was opened on, and what it offered.
+  struct MenuError {
+    uint32_t para = 0;
+    fw::doc::proof::Misspelling error;
+    std::wstring word;
+    std::vector<std::wstring> suggestions;
+  };
+  std::optional<MenuError> menuError_;
+  // The selection's words for the status bar, counted when it changes.
+  TextPos selWordsFrom_, selWordsTo_;
+  uint32_t selWordsEdits_ = UINT32_MAX;
+  size_t selWords_ = 0;
 };

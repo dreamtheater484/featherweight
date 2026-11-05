@@ -68,6 +68,9 @@ constexpr const char* kUsage =
     "      to window, to the first frame (the start screen or the first page), memory once\n"
     "      settled, and CPU and wakeups while idle (plan §11). Works with any build, 0.9.4\n"
     "      included, and never touches the user's settings or a running Featherweight.\n"
+    "  fwtool spelling <file or folder>...\n"
+    "      Checks each Word document's spelling with Windows' spell checker and counts its words,\n"
+    "      as the app does in idle time, and times both (plan §6.2, §11).\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
     "      Word's. Run it without text for its options.\n";
@@ -177,6 +180,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"bench") return fwtool::RunBench(options);
   if (command == L"bench-app") return fwtool::RunBenchApp(options);
   if (command == L"edit-check") return fwtool::RunEditCheck(options);
+  if (command == L"spelling") return fwtool::RunSpelling(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }

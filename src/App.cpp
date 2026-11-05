@@ -1405,6 +1405,15 @@ void App::Execute(int cmd) {
       settings_.autoUpdate = !settings_.autoUpdate;
       settings_.Save();
       break;
+    case CmdToggleSpelling:
+      settings_.spelling = !settings_.spelling;
+      settings_.Save();
+      for (auto& t : tabs_) t->SettingsChanged();
+      break;
+    case CmdToggleAutoCorrect:
+      settings_.autoCorrect = !settings_.autoCorrect;
+      settings_.Save();
+      break;
     case CmdCheckUpdates: MaybeCheckForUpdates(true); break;
     case CmdMakeDefault: MakeDefaultApp(fw::FileKind::Pdf); break;
     case CmdAbout: ShowAbout(); break;
@@ -1473,6 +1482,10 @@ void App::ShowMenu(int which) {
     AppendItem(themeMenu, CmdThemeDark, L"Dark", true, settings_.theme == ThemeSetting::Dark, true);
     AppendSubmenu(m, themeMenu, L"App theme");
     AppendItem(m, CmdToggleHighlight, L"Highlight form fields", true, settings_.highlightFields);
+    if (ready && v->Kind() == TabKind::Document) {
+      AppendItem(m, CmdToggleSpelling, L"Check spelling as you type", true, settings_.spelling);
+      AppendItem(m, CmdToggleAutoCorrect, L"AutoCorrect as you type", true, settings_.autoCorrect);
+    }
     AppendSeparator(m);
     if (fw::pkg::backups::Any(DocFile::Config().backups)) AppendItem(m, CmdDeleteBackups, L"Delete backups");
     AppendItem(m, CmdToggleAutoUpdate, L"Update automatically", true, settings_.autoUpdate);
