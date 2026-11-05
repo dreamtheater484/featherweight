@@ -142,13 +142,15 @@ std::vector<std::pair<size_t, Rect>> Layout::Ranges(TextPos from, TextPos to) {
       ParaText pt;
       e.BuildText(lb.para, PageFields(), pt);
       uint32_t a = lb.para == from.para ? pt.LayoutOffset(from.offset) : 0;
-      uint32_t b = lb.para == to.para ? pt.LayoutOffset(to.offset) : UINT32_MAX;
+      const uint32_t end = lb.para == to.para ? pt.LayoutOffset(to.offset) : UINT32_MAX;
+      // The line that holds the end is the last: nothing after it is in the range, even when the
+      // range ends exactly at the line's end.
+      if (lb.para == to.para && end <= lb.line.end) finished = true;
       a = std::max(a, lb.line.start);
-      b = std::min(b, lb.line.end);
+      const uint32_t b = std::min(end, lb.line.end);
       if (a >= b) continue;
       started = true;
       for (const auto& [l, r] : lb.line.Ranges(a, b)) out.push_back({i, OnPage(lb, {lb.x + l, lb.top, lb.x + r, lb.top + lb.height})});
-      if (lb.para == to.para && b < lb.line.end) finished = true;
     }
     if (started && e.Pages()[i].lines.empty()) break;
   }
@@ -223,7 +225,15 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
   for (const DrawingBox& d : p.drawings)
     if (d.behindText) drawOne(d);
   for (const Fill& f : p.fills) painter.FillRect({f.rect.left, f.rect.top, f.rect.right, f.rect.bottom}, draw::Brush::Solid(ColorOf(f.color)));
-  for (const LineBox& lb : p.lines) {
+  // The text of a text box in front of the text goes right after its own drawing, which would
+  // otherwise cover it.
+  auto inFront = [&](uint32_t d) {
+    if (d == kNone) return false;
+    for (const DrawingBox& box : p.drawings)
+      if (box.drawing == d) return !box.behindText;
+    return false;
+  };
+  auto paintLine = [&](const LineBox& lb) {
     const bool clip = lb.clip.Width() > 0;
     if (clip || lb.turn) painter.Save();
     if (clip) painter.ClipRect({lb.clip.left, lb.clip.top, lb.clip.right, lb.clip.bottom});
@@ -275,10 +285,16 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
       }
     }
     if (clip || lb.turn) painter.Restore();
-  }
+  };
+  for (const LineBox& lb : p.lines)
+    if (!inFront(lb.drawing)) paintLine(lb);
   for (const Edge& edge : p.edges) StrokeEdge(painter, edge);
-  for (const DrawingBox& d : p.drawings)
-    if (!d.behindText) drawOne(d);
+  for (const DrawingBox& d : p.drawings) {
+    if (d.behindText) continue;
+    drawOne(d);
+    for (const LineBox& lb : p.lines)
+      if (lb.drawing == d.drawing) paintLine(lb);
+  }
 }
 
 // ---- Fonts
@@ -288,6 +304,12 @@ std::wstring SubstituteFamily(const Document& doc, std::wstring_view family) {
   const std::string name = WideToUtf8(family);
   for (const FontInfo& f : doc.Fonts()) {
     if (f.name != name) continue;
+    // An East Asian font (Shift-JIS, Hangul, GB2312 or Big5, or a name in its own script): no
+    // Latin stand-in, whose spaces and letters would be wrong; fwtext's fallback picks one for the
+    // script.
+    if (f.charset == "80" || f.charset == "81" || f.charset == "86" || f.charset == "88") return {};
+    for (char c : name)
+      if (static_cast<unsigned char>(c) >= 0x80) return {};
     if (f.pitch == "fixed") return L"Courier New";
     // PANOSE: family kind 2 is Latin text; the second digit is the serif style (11-13 sans serif).
     if (f.panose.size() >= 4 && f.panose.substr(0, 2) == "02") {

@@ -38,7 +38,7 @@ fw::text::Fonts& Fonts() {
   return fonts;
 }
 
-Doc Make(const std::string& body, const std::string& settings = "", const std::string& footnotes = "") {
+Doc Make(const std::string& body, const std::string& settings = "", const std::string& footnotes = "", bool all = true) {
   const std::string wml = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
   const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
   const std::string head = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>";
@@ -77,7 +77,7 @@ Doc Make(const std::string& body, const std::string& settings = "", const std::s
     return d;
   }
   d.layout = std::make_unique<Layout>(*d.doc, Fonts());
-  d.layout->LayOutAll();
+  if (all) d.layout->LayOutAll();
   return d;
 }
 
@@ -340,4 +340,19 @@ TEST(Layout_VerticalTextInCells) {
   CHECK(hit && hit->para == turned->para);
   auto ranges = d.layout->Ranges({turned->para, 0}, {turned->para, 6});
   CHECK(ranges.size() == 1 && ranges[0].second.Height() > ranges[0].second.Width());
+}
+
+TEST(Layout_RangesStopAtTheirEnd) {
+  // A range that ends exactly at the end of a line doesn't lay out the rest of the document.
+  std::string body;
+  for (int i = 0; i < 200; ++i) body += P(Words(30));
+  Doc d = Make(body + SmallPage(), "", "", false);
+  REQUIRE(d.layout);
+  d.layout->LayOutPages(1);
+  const size_t before = d.layout->PageCount();
+  const LineBox& first = d.page(0).lines.front();
+  auto ranges = d.layout->Ranges({first.para, 0}, {first.para, first.line.end - first.prefix});
+  CHECK_EQ(ranges.size(), 1u);
+  CHECK(d.layout->PageCount() <= before + 1);
+  CHECK(!d.layout->Done());
 }
