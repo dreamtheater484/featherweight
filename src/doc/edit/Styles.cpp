@@ -317,7 +317,7 @@ std::string EnsureStyle(TreeEdit& ed, std::string_view nameOrId) {
 
 void ApplyStyle(TreeEdit& ed, Range range, std::string_view nameOrId) {
   const Document& doc = ed.Doc();
-  if (ed.EnsurePart(PartKind::Styles) == kNoElem) return;
+  if (!ed.CanChange(ParagraphsOf(doc, range)) || ed.EnsurePart(PartKind::Styles) == kNoElem) return;
   ed.Begin(u"Style");
   std::string id = EnsureStyle(ed, nameOrId);
   const Style* s = id.empty() ? nullptr : doc.FindStyle(id);
