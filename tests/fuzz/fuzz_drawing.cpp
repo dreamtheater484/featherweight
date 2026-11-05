@@ -47,6 +47,7 @@ const ImageLimits& FuzzImageLimits() {
     l.maxDimension = 4096;
     l.maxSourcePixels = 1u << 22;
     l.maxDecodedPixels = 1u << 18;
+    l.maxDecoderBytes = 16u << 20;
     return l;
   }();
   return limits;

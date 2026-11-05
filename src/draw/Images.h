@@ -31,6 +31,11 @@ struct ImageLimits {
   // Pixels kept in memory for one picture (16.7 megapixels, 64 MB). A larger picture is scaled
   // down while it is decoded.
   uint64_t maxDecodedPixels = 1ull << 24;
+  // Memory the decoder needs for the whole picture at once, whatever size it's shown at: a
+  // progressive JPEG's coefficients (2 bytes a sample), an interlaced PNG's rows. Other pictures
+  // decode a strip at a time. This keeps a tiny file that declares a huge picture from taking
+  // gigabytes; an 18-megapixel progressive photo needs about 110 MB.
+  uint64_t maxDecoderBytes = 128ull << 20;
 
   static const ImageLimits& Default();
 };

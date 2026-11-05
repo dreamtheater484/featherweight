@@ -93,6 +93,49 @@ struct Decoder {
   }
 };
 
+// What the decoder holds for the whole picture while decoding it (ImageLimits::maxDecoderBytes),
+// from the header: 0 for pictures it decodes a strip at a time.
+double DecoderBytes(ImageFormat format, const std::vector<uint8_t>& b, uint32_t w, uint32_t h) {
+  if (format == ImageFormat::Png) {
+    // IHDR: bit depth at 24, color type at 25, interlace method at 28.
+    if (b.size() < 29 || b[28] != 1) return 0;
+    const int channels = b[25] == 2 ? 3 : b[25] == 4 ? 2 : b[25] == 6 ? 4 : 1;
+    return static_cast<double>(w) * h * channels * std::max<int>(b[24], 8) / 8;
+  }
+  if (format != ImageFormat::Jpeg) return 0;
+  // A progressive frame (SOF2, 6, 10, 14) keeps every coefficient: 2 bytes for each sample of each
+  // component, at its sampling.
+  for (size_t i = 2; i + 4 <= b.size();) {
+    if (b[i] != 0xFF) return 0;
+    const uint8_t m = b[i + 1];
+    if (m == 0xFF || m == 0x01 || (m >= 0xD0 && m <= 0xD8)) {
+      i += m == 0xFF ? 1 : 2;
+      continue;
+    }
+    if (m == 0xD9 || m == 0xDA) return 0;
+    const size_t length = (b[i + 2] << 8) | b[i + 3];
+    if (m >= 0xC0 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC) {
+      if ((m & 3) != 2 || i + 10 > b.size()) return 0;
+      const size_t components = b[i + 9];
+      if (length < 8 + 3 * components || i + 10 + 3 * components > b.size()) return 0;
+      int hMax = 1, vMax = 1;
+      for (size_t k = 0; k < components; ++k) {
+        hMax = std::max(hMax, b[i + 11 + 3 * k] >> 4);
+        vMax = std::max(vMax, b[i + 11 + 3 * k] & 15);
+      }
+      double bytes = 0;
+      for (size_t k = 0; k < components; ++k) {
+        const int hs = std::max(1, b[i + 11 + 3 * k] >> 4), vs = std::max(1, b[i + 11 + 3 * k] & 15);
+        bytes += (std::ceil(static_cast<double>(w) * hs / hMax / 8) * 8) * (std::ceil(static_cast<double>(h) * vs / vMax / 8) * 8) * 2;
+      }
+      return bytes;
+    }
+    if (length < 2) return 0;
+    i += 2 + length;
+  }
+  return 0;
+}
+
 // The ENHMETAHEADER's frame (in 0.01 mm), as points.
 bool EmfSize(const std::vector<uint8_t>& b, Size& size) {
   if (b.size() < 88 || U32(&b[0]) != 1 || U32(&b[40]) != 0x464D4520) return false;
@@ -369,7 +412,8 @@ std::shared_ptr<Image> Image::Open(std::vector<uint8_t> bytes, const ImageLimits
   if (!dec.Open(img->format_, bytes) || FAILED(dec.frame->GetSize(&w, &h)) || w == 0 || h == 0) {
     return fail("The picture is damaged.");
   }
-  if (w > limits.maxDimension || h > limits.maxDimension || uint64_t{w} * h > limits.maxSourcePixels) {
+  if (w > limits.maxDimension || h > limits.maxDimension || uint64_t{w} * h > limits.maxSourcePixels ||
+      DecoderBytes(img->format_, bytes, w, h) > static_cast<double>(limits.maxDecoderBytes)) {
     return fail("The picture is larger than Featherweight shows.");
   }
   double dpiX = 96, dpiY = 96;

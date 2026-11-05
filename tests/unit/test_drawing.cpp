@@ -50,8 +50,10 @@ struct TestResources : DrawingResources {
   }
 };
 
-// Pixels as 0xAARRGGBB, top-down, encoded by WIC's built-in encoder for `container`.
-std::vector<uint8_t> Encode(const GUID& container, int w, int h, const std::vector<uint32_t>& argb) {
+// Pixels as 0xAARRGGBB, top-down, encoded by WIC's built-in encoder for `container` (PNG
+// interlaced when asked).
+std::vector<uint8_t> Encode(const GUID& container, int w, int h, const std::vector<uint32_t>& argb,
+                            bool interlace = false) {
   ComPtr<IWICImagingFactory> wic;
   ComPtr<IWICBitmap> bmp;
   ComPtr<IStream> stream;
@@ -64,8 +66,18 @@ std::vector<uint8_t> Encode(const GUID& container, int w, int h, const std::vect
   CreateStreamOnHGlobal(nullptr, TRUE, &stream);
   wic->CreateEncoder(container, nullptr, &enc);
   enc->Initialize(stream.Get(), WICBitmapEncoderNoCache);
-  enc->CreateNewFrame(&frame, nullptr);
-  frame->Initialize(nullptr);
+  ComPtr<IPropertyBag2> options;
+  enc->CreateNewFrame(&frame, &options);
+  if (interlace) {
+    PROPBAG2 option{};
+    option.pstrName = const_cast<LPOLESTR>(L"InterlaceOption");
+    VARIANT on;
+    VariantInit(&on);
+    on.vt = VT_BOOL;
+    on.boolVal = VARIANT_TRUE;
+    options->Write(1, &option, &on);
+  }
+  frame->Initialize(options.Get());
   frame->SetSize(w, h);
   WICPixelFormatGUID fmt = GUID_WICPixelFormat32bppBGRA;
   if (container == GUID_ContainerFormatJpeg || container == GUID_ContainerFormatBmp) fmt = GUID_WICPixelFormat24bppBGR;
@@ -282,6 +294,50 @@ TEST(Images_Limits) {
   if (img) {
     std::shared_ptr<const Bitmap> px = img->Pixels();
     CHECK(px && px->Width() == 16 && px->Height() == 8);
+  }
+}
+
+// A progressive JPEG's header (no scan data) that declares w x h pixels, three components at
+// `sampling` (0x11: 4:4:4).
+std::vector<uint8_t> ProgressiveJpegHeader(int w, int h, uint8_t sampling) {
+  std::vector<uint8_t> b = {0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x43, 0x00};
+  b.insert(b.end(), 64, 1);
+  const uint8_t sof[] = {0xFF, 0xC2, 0x00, 0x11, 8, static_cast<uint8_t>(h >> 8), static_cast<uint8_t>(h),
+                         static_cast<uint8_t>(w >> 8), static_cast<uint8_t>(w), 3, 1, sampling, 0, 2, 0x11, 0, 3,
+                         0x11, 0};
+  b.insert(b.end(), std::begin(sof), std::end(sof));
+  const uint8_t dht[] = {0xFF, 0xC4, 0x00, 0x14, 0x00, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  b.insert(b.end(), std::begin(dht), std::end(dht));
+  const uint8_t sos[] = {0xFF, 0xDA, 0x00, 0x0C, 3, 1, 0, 2, 0, 3, 0, 0, 0, 0};
+  b.insert(b.end(), std::begin(sos), std::end(sos));
+  b.insert(b.end(), 16, 0);
+  b.push_back(0xFF);
+  b.push_back(0xD9);
+  return b;
+}
+
+TEST(Images_DecoderMemoryLimit) {
+  // A 144-byte progressive JPEG declaring 16000 x 16000 pixels would make the decoder hold 1.5 GB
+  // of coefficients: refused when opened. The same header at 64 x 64 opens.
+  std::string error;
+  CHECK(Image::Open(ProgressiveJpegHeader(16000, 16000, 0x11), ImageLimits::Default(), &error) == nullptr);
+  CHECK(error.find("larger") != std::string::npos);
+  CHECK(Image::Open(ProgressiveJpegHeader(64, 64, 0x11)) != nullptr);
+  // 4:2:0 needs half as much: 6000 x 6000 at 4:4:4 is 216 MB, at 4:2:0 108 MB.
+  CHECK(Image::Open(ProgressiveJpegHeader(6000, 6000, 0x11)) == nullptr);
+  CHECK(Image::Open(ProgressiveJpegHeader(6000, 6000, 0x22)) != nullptr);
+  // An interlaced PNG is decoded whole; a plain one a strip at a time.
+  std::vector<uint32_t> px(64 * 32, 0xFF00FF00);
+  ImageLimits tight;
+  tight.maxDecoderBytes = 64 * 32 * 4 - 1;
+  CHECK(Image::Open(Encode(GUID_ContainerFormatPng, 64, 32, px, true), tight) == nullptr);
+  CHECK(Image::Open(Encode(GUID_ContainerFormatPng, 64, 32, px, false), tight) != nullptr);
+  tight.maxDecoderBytes = 64 * 32 * 4;
+  std::shared_ptr<Image> img = Image::Open(Encode(GUID_ContainerFormatPng, 64, 32, px, true), tight);
+  CHECK(img != nullptr);
+  if (img) {
+    std::shared_ptr<const Bitmap> bmp = img->Pixels();
+    CHECK(bmp && bmp->Width() == 64 && bmp->Height() == 32);
   }
 }
 
