@@ -436,6 +436,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
             }
           } else if (it && it->kind == ItemKind::PageNumber && !style->hidden) {
             subst(i, 1, fields.page, style, paint);
+            out.usesPage = true;
             visible = true;
           } else {
             emit(std::u16string_view(&t[i], 1), hide(), paint);
