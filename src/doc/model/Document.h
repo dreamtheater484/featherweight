@@ -19,6 +19,9 @@ namespace docx {
 class Reader;
 class Writer;
 }  // namespace docx
+namespace edit {
+struct EditorState;
+}  // namespace edit
 
 // The document model (plan §6.3): a headless, read-only view of a Word document, built by the
 // .docx reader (doc/docx/Docx.h) and written back by its writer.
@@ -418,6 +421,7 @@ class Document {
  private:
   friend class docx::Reader;
   friend class docx::Writer;
+  friend struct edit::EditorState;
   Document();
 
   Pos PosOf(Node node) const;  // where an element is: its paragraph and offset

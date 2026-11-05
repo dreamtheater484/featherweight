@@ -97,6 +97,10 @@ class RoundTripStore {
   // `node` was deleted, and its fragments with it, except the ends of pairs: those move to
   // `survivor` in `slot`, or are returned when there is no survivor.
   std::vector<Fragment> Delete(NodeId node, NodeId survivor = kNoNode, Slot slot = Slot::Before);
+  // Every fragment of a node, all slots in order, and putting such a list back exactly: an
+  // editor's undo saves them before Split, Merge and Delete change them.
+  std::vector<Fragment> FragmentsCopy(NodeId owner) const;
+  void SetFragments(NodeId owner, std::vector<Fragment> fragments);
 
   // ---- Capture, while a reader walks a DOM
   // Attaches every child of `parent` that `known` doesn't recognize to its nearest known
