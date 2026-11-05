@@ -109,6 +109,22 @@ Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, 
   // The body, flattened: paragraphs and tables in order, with their sections.
   const std::vector<Section>& sections = doc.Sections();
   uint32_t sec = 0;
+  // A table's first paragraph, for its section.
+  std::function<uint32_t(Node)> firstPara = [&](Node container) -> uint32_t {
+    for (const Block& b : doc.Blocks(container)) {
+      if (b.kind == BlockKind::Paragraph) return b.para;
+      uint32_t p = kNone;
+      if (b.kind == BlockKind::Table) {
+        for (Node tr : doc.TableRows(b.node)) {
+          for (Node tc : doc.RowCells(tr))
+            if ((p = firstPara(tc)) != kNone) return p;
+        }
+      } else if ((p = firstPara(b.node)) != kNone) {
+        return p;
+      }
+    }
+    return kNone;
+  };
   std::function<void(const std::vector<Block>&)> add = [&](const std::vector<Block>& blocks) {
     for (const Block& b : blocks) {
       if (b.kind == BlockKind::ContentControl || b.kind == BlockKind::CustomXml) {
@@ -119,7 +135,14 @@ Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, 
       it.kind = b.kind;
       it.node = b.node;
       it.para = b.para;
-      uint32_t first = b.kind == BlockKind::Paragraph ? b.para : doc.ParagraphOf(b.node);
+      uint32_t first = kNone;
+      if (b.kind == BlockKind::Paragraph) first = b.para;
+      else
+        for (Node tr : doc.TableRows(b.node)) {
+          for (Node tc : doc.RowCells(tr))
+            if ((first = firstPara(tc)) != kNone) break;
+          if (first != kNone) break;
+        }
       while (sec + 1 < sections.size() && sections[sec].endPara != kNone && first != kNone && first > sections[sec].endPara)
         ++sec;
       it.section = sec;
@@ -729,6 +752,34 @@ struct Flow {
     return NextColumn() ? Step::Continue : Step::PageFull;
   }
 
+  // Where a split row's cell is cut, for widow and orphan control and keep lines together: the
+  // paragraph the cut goes through keeps two lines on each side of it, or all of them together.
+  float KeepTogether(const Stack& s, float start, float to) const {
+    const LineBox* next = nullptr;
+    for (const LineBox& l : s.lines)
+      if (l.top >= to - kEpsilon && (!next || l.top < next->top)) next = &l;
+    if (!next || next->para == kNone) return to;
+    const uint32_t para = next->para;
+    std::vector<float> above;
+    size_t below = 0;
+    for (const LineBox& l : s.lines) {
+      if (l.para != para) continue;
+      if (l.top >= to - kEpsilon) ++below;
+      else if (l.top >= start - kEpsilon) above.push_back(l.top);
+    }
+    if (above.empty()) return to;
+    const ParaProps& p = doc.ResolvedPara(para);
+    size_t keep = above.size();
+    if (p.keepLines) keep = 0;
+    else if (p.widowControl) {
+      if (below == 1) --keep;    // its last line doesn't go on alone
+      if (keep == 1) keep = 0;   // nor does its first stay alone
+    }
+    if (keep == above.size()) return to;
+    std::sort(above.begin(), above.end());
+    return std::max(start, above[keep]);
+  }
+
   // Whether the current item is the last of a section the next one starts on a new page after.
   bool EndsWithPageBreak() const {
     if (f.next + 1 >= f.items.size()) return false;
@@ -812,6 +863,7 @@ struct Flow {
       auto cut = [&]() {
         any = false;
         allDone = true;
+        bool starved = false;
         for (size_t i = 0; i < row.cells.size(); ++i) {
           const CellBox& c = row.cells[i];
           if (c.continued) continue;
@@ -820,13 +872,17 @@ struct Flow {
           float to = start;
           for (const LineBox& l : c.content.lines)
             if (l.top >= start - kEpsilon && l.top + l.height <= limit + kEpsilon) to = std::max(to, l.top + l.height);
+          to = KeepTogether(c.content, start, to);
           cutTo[i] = to;
           if (to > start + kEpsilon) any = true;
           bool rest = false;
           for (const LineBox& l : c.content.lines)
             if (l.top >= to - kEpsilon) rest = true;
           if (rest) allDone = false;
+          if (rest && to <= start + kEpsilon) starved = true;
         }
+        // Word splits a row only where every cell with text left keeps some of it on this page.
+        if (starved) any = false;
       };
       if (!row.props.cantSplit || f.columnEmpty || fresh) {
         cut();
@@ -922,7 +978,9 @@ struct Flow {
       // A new section: on this page (continuous), in the next column, or on a new page.
       if (!f.pt && !f.table && item.section != f.section && !doc.Sections().empty()) {
         const SectionProps& p = Props(item.section);
-        if (p.start == SectionStart::Continuous && !f.pageEmpty) {
+        // A continuous break to another page size or orientation starts a new page all the same.
+        const bool samePage = Pt(p.pageWidth) == f.geom.width && Pt(p.pageHeight) == f.geom.height;
+        if (p.start == SectionStart::Continuous && !f.pageEmpty && samePage) {
           float low = f.y;
           for (size_t k = f.hfLines; k < f.body.lines.size(); ++k) {
             const LineBox& l = f.body.lines[k];
