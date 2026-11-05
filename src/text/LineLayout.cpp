@@ -493,6 +493,13 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
     seg.ascent = m.ascent + rise;
     seg.descent = m.descent - rise;
     seg.lineGap = m.lineGap;
+    if (style.verticalAlign != VerticalAlign::Baseline) {
+      // Superscript and subscript text sizes its line as the run's text would on the baseline, at
+      // its own size: Word doesn't make a line taller for a footnote reference.
+      seg.ascent = bm.ascent + style.baselineShift;
+      seg.descent = bm.descent - style.baselineShift;
+      seg.lineGap = bm.lineGap;
+    }
     ShapePiece(seg, script, sf.locale, connected, style, substituted ? numbers : nullptr);
     auto index = static_cast<int32_t>(segs.size());
     for (uint32_t i = seg.start; i < seg.end; ++i) segOf[i] = index;
