@@ -90,6 +90,9 @@ struct LineBox {
   uint32_t paint = 0;  // first of the paragraph's RunPaints in Page::paints (index + piece.run)
   uint32_t drawing = doc::kNone;  // text boxes: the drawing (Document::Drawings()) it's in
   Rect clip;           // text boxes and exact-height rows: where the line may be drawn; empty: anywhere
+  // What the line shows, in logical order: hidden text left out, a tab as 	, the hyphen of a
+  // hyphenated break added. For copying, find and the layout dump.
+  std::u16string text;
 };
 
 // A drawing on a page: a picture, shape, text box frame, chart or embedded object. fwdraw draws it
