@@ -77,7 +77,9 @@ constexpr Paper kPapers[] = {{L"Letter", 12240, 15840}, {L"Legal", 12240, 20160}
                              {L"A5", 8391, 11906},      {L"Executive", 10440, 15120}, {L"B5 (JIS)", 10319, 14571}};
 
 constexpr int32_t kLongest = 31680;  // 22 inches, as Word allows
-constexpr float kLabelW = 104, kRowH = 36;
+// The panel fits a 700-pixel window without scrolling: 10 rows under 4 headings. Word's margin
+// presets are in the Layout menu.
+constexpr float kLabelW = 92, kRowH = 35, kSide = 16;
 
 bool Near(int32_t a, int32_t b) { return std::abs(a - b) <= 20; }
 
@@ -187,20 +189,6 @@ class DocPage::Panel : public PanelContent {
       Done(r);
     };
 
-    std::vector<std::wstring> presets;
-    for (const MarginPreset& m : kMargins) presets.push_back(m.name);
-    presets.push_back(L"Custom");
-    drop(margins_, L"Margins", std::move(presets));
-    margins_.onChange = [this](int i) {
-      if (i < 0 || i >= static_cast<int>(std::size(kMargins))) return;
-      const MarginPreset& m = kMargins[i];
-      edit::PageSetup s;
-      s.top = Twips(m.top);
-      s.bottom = Twips(m.bottom);
-      s.left = Twips(m.left);
-      s.right = Twips(m.right);
-      Page(s);
-    };
     auto margin = [&](SpinBox& box, const wchar_t* name, std::optional<Twips> edit::PageSetup::*field) {
       spin(box, name, 0, longest, step, 2, Unit());
       box.onChange = [this, field](double v) {
@@ -213,8 +201,6 @@ class DocPage::Panel : public PanelContent {
     margin(bottom_, L"Bottom margin", &edit::PageSetup::bottom);
     margin(left_, L"Left margin", &edit::PageSetup::left);
     margin(right_, L"Right margin", &edit::PageSetup::right);
-    margin(header_, L"Header from the edge", &edit::PageSetup::header);
-    margin(footer_, L"Footer from the edge", &edit::PageSetup::footer);
 
     spin(columns_, L"Columns", 1, 12, 1, 0, L"");
     columns_.onChange = [this](double v) { Columns(static_cast<int>(std::lround(v)), spacing_.value, line_.selected == 1); };
@@ -235,7 +221,7 @@ class DocPage::Panel : public PanelContent {
       h.zone = Twips(ToTwips(v));
       Done(edit::SetHyphenation(p_.editor_, h));
     };
-    spin(limit_, L"Consecutive hyphenated lines (0: no limit)", 0, 32767, 1, 0, L"");
+    spin(limit_, L"Hyphenated lines in a row (0: no limit)", 0, 32767, 1, 0, L"");
     limit_.onChange = [this](double v) {
       edit::Hyphenation h;
       h.limit = static_cast<int32_t>(std::lround(v));
@@ -249,17 +235,14 @@ class DocPage::Panel : public PanelContent {
              {L"Orientation", &orientation_},
              {L"Section starts", &start_},
              {L"Margins"},
-             {L"Preset", &margins_},
              {L"Top, bottom", &top_, &bottom_},
              {L"Left, right", &left_, &right_},
-             {L"Header, footer", &header_, &footer_},
              {L"Columns"},
-             {L"Number, space", &columns_, &spacing_},
+             {L"Count, space", &columns_, &spacing_},
              {L"Line", &line_},
              {L"Hyphenation (whole document)"},
              {L"Automatic", &hyphenate_},
-             {L"Zone", &zone_},
-             {L"Limit", &limit_}};
+             {L"Zone, limit", &zone_, &limit_}};
     int id = 10;
     for (Row& r : rows_)
       for (Control* c : {r.a, r.b})
@@ -281,7 +264,7 @@ class DocPage::Panel : public PanelContent {
     headings_.clear();
     labels_.clear();
     std::vector<Control*> controls;
-    const float labelX = body.left + 20 * u, cx = body.left + (20 + kLabelW) * u, right = body.right - 20 * u;
+    const float labelX = body.left + kSide * u, cx = body.left + (kSide + kLabelW) * u, right = body.right - kSide * u;
     auto place = [&](Control* c, float left, float r, float y) {
       c->rc = RectF(std::round(left), std::round(y), std::round(r), std::round(y + 30 * u));
       controls.push_back(c);
@@ -289,20 +272,20 @@ class DocPage::Panel : public PanelContent {
     float y = body.top + 4 * u;
     for (Row& r : rows_) {
       if (!r.a) {
-        if (!headings_.empty()) y += 6 * u;
+        if (!headings_.empty()) y += 4 * u;
         headings_.push_back({r.label, RectF(labelX, y, right, y + 22 * u)});
-        y += 26 * u;
+        y += 24 * u;
         continue;
       }
       if (r.b) {
-        const float half = (right - cx - 8 * u) / 2;
+        const float half = (right - cx - 6 * u) / 2;
         place(r.a, cx, cx + half, y);
-        place(r.b, cx + half + 8 * u, right, y);
+        place(r.b, cx + half + 6 * u, right, y);
       } else {
         const float w = dynamic_cast<SpinBox*>(r.a) ? std::min(right - cx, 120 * u) : right - cx;
         place(r.a, cx, cx + w, y);
       }
-      labels_.push_back({r.label, RectF(labelX, y, cx - 8 * u, y + 30 * u)});
+      labels_.push_back({r.label, RectF(labelX, y, cx - 6 * u, y + 30 * u)});
       y += kRowH * u;
     }
     return controls;
@@ -380,14 +363,10 @@ class DocPage::Panel : public PanelContent {
     height_.SetValue(FromTwips(h));
     orientation_.selected = Landscape(s) ? 1 : 0;
     start_.selected = s.start <= SectionStart::OddPage ? static_cast<int>(s.start) : -1;
-    const int preset = MarginPresetOf(s);
-    margins_.selected = preset >= 0 ? preset : static_cast<int>(std::size(kMargins));
     top_.SetValue(FromTwips(std::abs(s.marginTop.Value())));
     bottom_.SetValue(FromTwips(std::abs(s.marginBottom.Value())));
     left_.SetValue(FromTwips(s.marginStart.Value()));
     right_.SetValue(FromTwips(s.marginEnd.Value()));
-    header_.SetValue(FromTwips(s.headerDistance.Value()));
-    footer_.SetValue(FromTwips(s.footerDistance.Value()));
     columns_.SetValue(s.columns.count);
     spacing_.SetValue(FromTwips(s.columns.space.Value()));
     line_.selected = s.columns.separator ? 1 : 0;
@@ -403,8 +382,8 @@ class DocPage::Panel : public PanelContent {
   std::vector<Row> rows_;
   std::vector<std::pair<std::wstring, D2D1_RECT_F>> headings_, labels_;
   Shown shown_;
-  Dropdown applyTo_, paper_, orientation_, start_, margins_, line_, hyphenate_;
-  SpinBox width_, height_, top_, bottom_, left_, right_, header_, footer_, columns_, spacing_, zone_, limit_;
+  Dropdown applyTo_, paper_, orientation_, start_, line_, hyphenate_;
+  SpinBox width_, height_, top_, bottom_, left_, right_, columns_, spacing_, zone_, limit_;
 };
 
 // ---------------------------------------------------------------------------
