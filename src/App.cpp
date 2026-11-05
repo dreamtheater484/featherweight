@@ -2166,6 +2166,9 @@ void App::RunScript(const std::wstring& script) {
       GetWindowTextW(notes_.Edit(), buf, 512);
       for (wchar_t* c = buf; *c; ++c) fwprintf(stderr, L"%04x ", static_cast<unsigned>(*c));
       fwprintf(stderr, L"\n");
+    } else if (op == L"dumpselection") {
+      // The selected text, as copying would give it (without touching the clipboard).
+      if (TabContent* v = Active()) fwprintf(stderr, L"selection: [%s]\n", v->SelectedText().c_str());
     } else if (op == L"dumpnote") {
       int x, y, page;
       xy(x, y);

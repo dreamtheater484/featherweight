@@ -328,7 +328,16 @@ bool DocView::TakeNewPages() {
 
 void DocView::ShowNotices() {
   noticesShown_ = true;
+  // Content that isn't drawn comes first: the banner is one line, and a long font list is cut.
   std::wstring text;
+  bool equations = false, ink = false;
+  for (const auto& d : doc_->Drawings()) {
+    equations |= d.kind == fw::doc::DrawingKind::Equation;
+    ink |= d.kind == fw::doc::DrawingKind::ContentPart;
+  }
+  if (equations) text = L"Equations";
+  if (ink) text += text.empty() ? L"Ink drawings" : L" and ink drawings";
+  if (!text.empty()) text += L" aren't shown yet.";
   const auto& subs = fonts_->Substitutions();
   if (!subs.empty()) {
     std::wstring list;
@@ -337,20 +346,9 @@ void DocView::ShowNotices() {
       list += subs[i].requested + L" (shown in " + subs[i].used + L")";
     }
     if (subs.size() > 3) list += L" and " + std::to_wstring(subs.size() - 3) + L" more";
-    text = (subs.size() == 1 ? L"A font in this document isn't installed: " : L"Fonts in this document aren't installed: ") +
-           list + L". Lines may break differently than in Word.";
-  }
-  bool equations = false, ink = false;
-  for (const auto& d : doc_->Drawings()) {
-    equations |= d.kind == fw::doc::DrawingKind::Equation;
-    ink |= d.kind == fw::doc::DrawingKind::ContentPart;
-  }
-  std::wstring missing;
-  if (equations) missing = L"Equations";
-  if (ink) missing += missing.empty() ? L"Ink drawings" : L" and ink drawings";
-  if (!missing.empty()) {
     if (!text.empty()) text += L" ";
-    text += missing + L" aren't shown yet.";
+    text += (subs.size() == 1 ? L"A font in this document isn't installed: " : L"Fonts in this document aren't installed: ") +
+            list + L". Lines may break differently than in Word.";
   }
   if (!text.empty()) host_.ViewMessage(BannerKind::Info, text);
 }
