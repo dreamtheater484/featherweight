@@ -109,6 +109,37 @@ std::string NormalCell(std::string_view ref) {
   return ParseCellRef(ref, col, row) ? CellName(col, row) : std::string();
 }
 
+// Where a field mark (w:fldChar) sits: the containers around it, innermost first. Word refuses a
+// file in which a field begins in a hyperlink, a custom XML element or a simple field and
+// separates or ends outside it (or in another one), and repairs one in which a field separates or
+// ends inside a content control it didn't begin in; leaving a content control it tolerates.
+// Probed with Word on 2026-11-05 (D2's editing torture test); neither the Open XML SDK validator
+// nor the other rules here see it. Tables, smart tags and tracked changes don't matter.
+struct FieldPlace {
+  std::vector<pugi::xml_node> strict;  // w:hyperlink, w:customXml, w:fldSimple
+  std::vector<pugi::xml_node> sdts;    // w:sdt
+  bool reported = false;
+};
+
+FieldPlace PlaceOf(pugi::xml_node mark) {
+  constexpr std::string_view kW = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  constexpr std::string_view kWStrict = "http://purl.oclc.org/ooxml/wordprocessingml/main";
+  FieldPlace place;
+  for (pugi::xml_node n = mark.parent(); n && n.type() == pugi::node_element; n = n.parent()) {
+    std::string_view local = LocalNameOf(n);
+    if (local != "hyperlink" && local != "customXml" && local != "fldSimple" && local != "sdt") continue;
+    std::string_view ns = NamespaceOf(n);
+    if (ns != kW && ns != kWStrict) continue;
+    (local == "sdt" ? place.sdts : place.strict).push_back(n);
+  }
+  return place;
+}
+
+std::string ContainerName(pugi::xml_node n) {
+  std::string_view local = LocalNameOf(n);
+  return local == "hyperlink" ? "hyperlink" : local == "customXml" ? "custom XML element" : local == "fldSimple" ? "simple field" : "content control";
+}
+
 class Checker;
 
 struct Sheet {
@@ -343,6 +374,28 @@ void Checker::CheckRules() {
   for (auto& p : parts_) {
     std::map<size_t, std::map<std::string, PairState>> pairs;  // rule -> key -> state
     std::map<size_t, std::vector<bool>> fields;                 // rule -> open fields (separator seen)
+    std::map<size_t, std::vector<FieldPlace>> places;           // rule -> where each open field begins
+    // A field's separator or end must be where it began (see FieldPlace).
+    auto checkPlace = [&](FieldPlace& begun, pugi::xml_node mark, const char* what, bool lenient) {
+      if (begun.reported) return;
+      FieldPlace here = PlaceOf(mark);
+      auto has = [](const std::vector<pugi::xml_node>& list, pugi::xml_node n) {
+        return std::find(list.begin(), list.end(), n) != list.end();
+      };
+      std::string msg;
+      bool error = true;
+      for (pugi::xml_node n : begun.strict)
+        if (msg.empty() && !has(here.strict, n)) msg = "a field begins inside a " + ContainerName(n) + " but its " + what + " is outside it";
+      for (pugi::xml_node n : here.strict)
+        if (msg.empty() && !has(begun.strict, n)) msg = "a field's " + std::string(what) + " is inside a " + ContainerName(n) + " the field doesn't begin in";
+      for (pugi::xml_node n : here.sdts)
+        if (msg.empty() && !has(begun.sdts, n)) msg = "a field's " + std::string(what) + " is inside a content control the field doesn't begin in";
+      for (pugi::xml_node n : begun.sdts)
+        if (msg.empty() && !has(here.sdts, n)) msg = "a field begins inside a content control but its " + std::string(what) + " is outside it", error = false;
+      if (msg.empty()) return;
+      begun.reported = true;
+      Issue(lenient || !error, p->name, msg);
+    };
     const RelationshipSet* rels = pkg_.RelationshipsOf(p->name);
     for (const auto& ref : reg_.Find(p->dom.Root())) {
       const RefRule& rule = *ref.rule;
@@ -358,17 +411,25 @@ void Checker::CheckRules() {
       if (rule.nested) {
         if (ref.alternate) continue;
         auto& open = fields[ri];
+        auto& where = places[ri];
+        bool field = rule.kind == RefKind::Field;
         if (site.role & kOpens) {
           open.push_back(false);
+          where.push_back(field ? PlaceOf(ref.element) : FieldPlace{});
         } else if (site.role & kInside) {
           if (open.empty()) Issue(lenient, p->name, "a " + std::string(rule.name) + " separator is outside any " + std::string(rule.name));
           else if (open.back()) Issue(lenient, p->name, "a " + std::string(rule.name) + " has two separators");
-          else open.back() = true;
+          else {
+            open.back() = true;
+            if (field) checkPlace(where.back(), ref.element, "separator", lenient);
+          }
         } else if (site.role & kCloses) {
           if (open.empty()) {
             Issue(lenient, p->name, "a " + std::string(rule.name) + " ends but doesn't begin");
           } else {
+            if (field) checkPlace(where.back(), ref.element, "end", lenient);
             open.pop_back();
+            where.pop_back();
             ++rep_.pairs;
           }
         }
