@@ -331,13 +331,20 @@ void ApplyStyle(TreeEdit& ed, Range range, std::string_view nameOrId) {
     if (s->type == StyleType::Character) {
       RunFormat f;
       f.charStyle = s->isDefault ? std::string() : id;
+      ed.Local();
       FormatRuns(ed, range, f);
     } else if (partial && linked && linked->type == StyleType::Character) {
       RunFormat f;
       f.charStyle = std::string(linked->id);
       Unhide(ed, *linked);
+      ed.Local();
       FormatRuns(ed, range, f);
     } else {
+      // These paragraphs' layout changes, and when a list's numbers change, the rest of the story's.
+      auto numbered = [](std::string_view numId) { return !numId.empty() && numId != "0"; };
+      bool lists = numbered(doc.StyleChainPara(id).numId);
+      for (uint32_t p : paras) lists = lists || numbered(doc.ResolvedPara(p).numId);
+      ed.Local(lists);
       Style copy = *s;  // ApplyParaStyle doesn't reindex, but keep it independent of the vector
       for (uint32_t p : paras) ApplyParaStyle(ed, p, copy);
     }

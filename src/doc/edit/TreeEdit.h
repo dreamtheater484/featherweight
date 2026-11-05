@@ -44,11 +44,14 @@ class TreeEdit {
   void Begin(std::u16string label);
   void Commit();
   bool InTransaction() const { return depth_ > 0; }
-  // Says the change only formats the paragraphs it touches (no styles, lists or sections), so only
-  // their pages are laid out again, not the whole document. It counts in the outermost transaction,
-  // and Commit checks that nothing outside paragraphs changed.
-  void Local() {
-    if (depth_ == 1) local_ = true;
+  // Says the change affects the layout of the paragraphs it touches and no others (or, with
+  // `toEnd`, those and the rest of their story: a list's numbers), whatever it adds to the styles
+  // and numbering parts. Only their pages are laid out again, not the whole document. It counts in
+  // the outermost transaction; Commit checks that nothing else changed.
+  void Local(bool toEnd = false) {
+    if (depth_ != 1) return;
+    local_ = true;
+    toEnd_ = toEnd_ || toEnd;
   }
 
   // ---- Primitives (inside a transaction). Element ids stay valid; Node handles too.
@@ -117,12 +120,14 @@ class TreeEdit {
   std::vector<uint32_t> PartsOf(const Saved& elems) const;
   // The paragraph an element is in (its index), or kNone.
   uint32_t ParagraphOf(ElemId id) const;
+  // Whether an element is in the styles or numbering part.
+  bool InDefinitions(ElemId id) const;
 
   Editor& editor_;
   Document& doc_;
   Pos caret_;
   int depth_ = 0;
-  bool local_ = false;
+  bool local_ = false, toEnd_ = false;
   std::u16string label_;
   size_t elemsAtBegin_ = 0;
   Saved before_;

@@ -392,6 +392,7 @@ void DocFormat::Execute(int cmd) {
         const fw::doc::Document& doc = te.Doc();
         const int32_t step = std::max<int32_t>(1, doc.Settings().defaultTabStop.Value());
         te.Begin(cmd == CmdHangingIndent ? u"Hanging indent" : u"Remove hanging indent");
+        te.Local();
         for (uint32_t p : edit::ParagraphsOf(doc, t.sel)) {
           const fw::doc::ParaProps& pp = doc.ResolvedPara(p);
           int32_t start = pp.indStart.Value(), hanging = std::max<int32_t>(0, -pp.firstLine.Value());

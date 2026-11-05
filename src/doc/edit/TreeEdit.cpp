@@ -84,7 +84,7 @@ pkg::NodeId TreeEdit::NewNode() { return editor_.NewNodeId(); }
 void TreeEdit::Begin(std::u16string label) {
   if (depth_++ > 0) return;
   label_ = std::move(label);
-  local_ = false;
+  local_ = toEnd_ = false;
   elemsAtBegin_ = doc_.tree_.elems.size();
   before_.clear();
   store_.clear();
@@ -105,32 +105,41 @@ void TreeEdit::Commit() {
   before_.clear();
   store_.clear();
   // The paragraphs it changed: for the caret, and when it's local, for the layout.
-  uint32_t first = kNone, last = 0;
-  bool inParagraphs = true;
+  uint32_t first = kNone, last = 0, story = kNone;
+  bool local = local_;
   for (const auto& [id, e] : step->after) {
     const uint32_t p = ParagraphOf(id);
     if (p == kNone) {
-      inParagraphs = false;
+      local = local && InDefinitions(id);
       continue;
     }
+    if (story == kNone) story = doc_.paras_[p].story;
+    local = local && doc_.paras_[p].story == story;
     first = std::min(first, p);
     last = std::max(last, p);
   }
   Pos caret = caret_;
   if (first != kNone) {
     if (caret.para == kNone) caret = {first, 0};
-    const uint32_t story = doc_.paras_[first].story;
-    bool oneStory = true;
-    for (uint32_t p = first; p <= last && oneStory; ++p) oneStory = doc_.paras_[p].story == story;
-    if (local_ && inParagraphs && oneStory) {
-      // Its neighbours too: borders and spacing join paragraphs.
+    if (local) {
+      // Its neighbours too: borders and spacing join paragraphs. (A story's paragraphs can have
+      // a text box's between them; the layout passes over those.)
       if (first > 0 && doc_.paras_[first - 1].story == story) --first;
-      if (last + 1 < doc_.paras_.size() && doc_.paras_[last + 1].story == story) ++last;
+      if (toEnd_) last = std::max(last, doc_.StoryParagraphs(story).back());
+      else if (last + 1 < doc_.paras_.size() && doc_.paras_[last + 1].story == story) ++last;
       step->first = first;
       step->count = last - first + 1;
     }
   }
   editor_.RecordStep(std::move(label_), std::move(step), caret);
+}
+
+bool TreeEdit::InDefinitions(ElemId id) const {
+  const Tree& t = doc_.tree_;
+  for (int hops = 0; hops < 256 && t.elems[id].parent != kNoElem; ++hops) id = t.elems[id].parent;
+  for (const Part& part : doc_.parts_)
+    if (part.root == id) return part.kind == PartKind::Styles || part.kind == PartKind::Numbering;
+  return false;
 }
 
 uint32_t TreeEdit::ParagraphOf(ElemId id) const {

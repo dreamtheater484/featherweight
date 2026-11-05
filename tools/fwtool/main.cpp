@@ -59,7 +59,8 @@ constexpr const char* kUsage =
     "      included, and never touches the user's settings or a running Featherweight.\n"
     "  fwtool typing [--budgets] <file or folder>...\n"
     "      Types into each Word document a key at a time (characters, Enter, Backspace) at its\n"
-    "      start, middle and end, and times each keystroke against the typing budget (plan §11).\n"
+    "      start, middle and end, then formats there (bold, centered, Heading 1, bullets, each\n"
+    "      undone), and times each against the typing budget (plan §11).\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
     "      Word's. Run it without text for its options.\n";

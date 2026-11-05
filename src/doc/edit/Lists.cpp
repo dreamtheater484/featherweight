@@ -238,6 +238,7 @@ void ToggleList(TreeEdit& ed, Range range, ListKind kind) {
   }
   if (ed.EnsurePart(PartKind::Numbering) == kNoElem || ed.EnsurePart(PartKind::Styles) == kNoElem) return;
   ed.Begin(kind == ListKind::Bullet ? u"Bullets" : kind == ListKind::Number ? u"Numbering" : u"Multilevel list");
+  ed.Local(true);  // the numbers after it change too
   std::string numId;
   int32_t level = 0;
   // Next to a list of the same kind, the paragraphs join it.
@@ -259,6 +260,7 @@ void ToggleList(TreeEdit& ed, Range range, ListKind kind) {
 void RemoveList(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
   ed.Begin(u"Remove list");
+  ed.Local(true);
   for (uint32_t p : ParagraphsOf(doc, range)) {
     const ParaProps& pp = doc.ResolvedPara(p);
     if (!InList(pp)) continue;
@@ -290,6 +292,7 @@ void RestartNumbering(TreeEdit& ed, uint32_t para) {
   int64_t start = 0;
   if (Node l = doc.NumberingLevel(pp.numId, level)) start = l.Child(kStart).Int(kVal).value_or(0);
   ed.Begin(u"Restart numbering");
+  ed.Local(true);
   std::string id = std::to_string(NextIds(doc).second);
   std::string xml = "<w:num w:numId=\"" + id + "\"><w:abstractNumId w:val=\"" + Escape(absId) + "\"/><w:lvlOverride w:ilvl=\"" +
                     std::to_string(level) + "\"><w:startOverride w:val=\"" + std::to_string(start) + "\"/></w:lvlOverride></w:num>";
@@ -312,6 +315,7 @@ bool ContinueNumbering(TreeEdit& ed, uint32_t para) {
   }
   if (target.empty()) return false;
   ed.Begin(u"Continue numbering");
+  ed.Local(true);
   Repoint(ed, para, target);
   ed.Commit();
   return true;
@@ -382,6 +386,7 @@ std::optional<AutoList> DetectAutoList(std::u16string_view typed) {
 void StartAutoList(TreeEdit& ed, uint32_t para, const AutoList& list) {
   if (ed.EnsurePart(PartKind::Numbering) == kNoElem || ed.EnsurePart(PartKind::Styles) == kNoElem) return;
   ed.Begin(u"AutoFormat");
+  ed.Local(true);
   std::string numId = AddList(ed, list.kind == ListKind::Bullet ? ListKind::Bullet : ListKind::Number, &list);
   if (!numId.empty()) {
     Join(ed, {para}, numId, 0, EnsureStyle(ed, "List Paragraph"));

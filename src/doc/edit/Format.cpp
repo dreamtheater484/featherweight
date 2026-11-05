@@ -509,6 +509,7 @@ void ClearParaFormatting(TreeEdit& ed, Range range) {
 void ClearAllFormatting(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
   ed.Begin(u"Clear all formatting");
+  ed.Local(true);  // its style and list go
   ForEachRunProps(ed, range, [&](uint32_t, ElemId rPr) { ed.Clear(rPr, {kRPrChange}); });
   for (uint32_t p : ParagraphsOf(doc, range)) {
     if (ElemId pPr = ed.Child(doc.Para(p).elem, kPPr, false); pPr != kNoElem) ed.Clear(pPr, {kRPr, kSectPr, kPPrChange});
@@ -519,6 +520,7 @@ void ClearAllFormatting(TreeEdit& ed, Range range) {
 void ShiftIndent(TreeEdit& ed, Range range, bool increase) {
   const Document& doc = ed.Doc();
   ed.Begin(increase ? u"Increase indent" : u"Decrease indent");
+  ed.Local(true);  // a list item's level renumbers the items after it
   const int32_t step = std::max<int32_t>(1, doc.Settings().defaultTabStop.Value());
   for (uint32_t p : ParagraphsOf(doc, range)) {
     const ParaProps& pp = doc.ResolvedPara(p);

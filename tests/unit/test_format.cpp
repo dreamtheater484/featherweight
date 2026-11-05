@@ -706,8 +706,16 @@ TEST(Edit_FormattingLaysOutOnlyItsParagraphs) {
   edit::FormatParagraphs(ed, {{paras[0], 0}, {paras[0], 2}}, center);
   CHECK(seen.size() == 1 && seen[0].first == paras[0] && seen[0].removed == 2 && !seen[0].structure);  // none before
   seen.clear();
+  // A list renumbers what follows it: from the paragraph before to the story's end.
   edit::ToggleList(ed, {{paras[4], 0}, {paras[4], 0}}, edit::ListKind::Number);
-  CHECK(!seen.empty() && seen.back().structure && seen.back().first == 0);
+  CHECK(!seen.empty() && !seen.back().structure && seen.back().first == paras[3] && seen.back().removed == 3);
+  // A style changed changes every paragraph that has it.
+  seen.clear();
+  edit::RunFormat red;
+  red.color = Color::Rgb(0xC00000);
+  edit::ModifyStyle(ed, "Normal", red, {});
+  CHECK(seen.size() == 1 && seen[0].structure && seen[0].first == 0 && seen[0].removed == doc->Paragraphs().size());
+  CHECK(editor.Undo());
   // Undo reports the same, and puts the caret where the change was.
   CHECK(editor.Undo());
   seen.clear();
