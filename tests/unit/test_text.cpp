@@ -242,10 +242,14 @@ TEST(Text_AutomaticHyphenation) {
   // Off by default.
   auto off = Lay(text, s, Chars(s, 12));
   CHECK(Texts(text, off) == (std::vector<std::wstring>{L"the ", L"hyphenation ", L"algorithm"}));
-  // No hyphenation where the line would still end within the zone.
-  f.hyphenation.zone = Advance(s) * 10;
+  // No hyphenation where the line would still end within the zone, counted after the space that
+  // ends it ("the " leaves 8 characters free).
+  f.hyphenation.zone = Advance(s) * 8.5f;
   auto zoned = Lay(text, s, Chars(s, 12), f);
   CHECK(TextOf(text, zoned[0]) == L"the ");
+  f.hyphenation.zone = Advance(s) * 7.5f;
+  auto outside = Lay(text, s, Chars(s, 12), f);
+  CHECK(TextOf(text, outside[0]) == L"the hyphen");
   // At most one hyphenated line in a row.
   f.hyphenation.zone = 0;
   f.hyphenation.consecutiveLimit = 1;
@@ -273,6 +277,38 @@ TEST(Text_DutchHyphenation) {
   std::wstring text = L"de afbreekpatronen";
   auto lines = Lay(text, s, Chars(s, 12), f);
   CHECK(Texts(text, lines) == (std::vector<std::wstring>{L"de afbreek", L"patronen"}));
+}
+
+TEST(Text_HyphenationInsideWebAddresses) {
+  // Word hyphenates the runs of letters in a token with dots and slashes: www.exam-ple.com.
+  TextStyle s = Style();
+  ParagraphFormat f;
+  f.hyphenation.automatic = true;
+  std::wstring text = L"see www.example.com/policies";
+  auto lines = Lay(text, s, Chars(s, 13), f);
+  CHECK(lines.size() >= 2);
+  if (lines.size() < 2) return;
+  CHECK(TextOf(text, lines[0]) == L"see www.exam");
+  CHECK(lines[0].hyphenated);
+  // A word with optional hyphens breaks only there.
+  std::wstring soft = L"see hyphen\x00AD" L"ation";
+  auto manual = Lay(soft, s, Chars(s, 9), f);
+  CHECK(TextOf(soft, manual[0]) == L"see ");
+}
+
+TEST(Text_WordBreakRules) {
+  // Measured in Word: a hyphen breaks after itself even before a digit; a dash never breaks before
+  // itself; a space breaks before "!" (Unicode's rules say otherwise in all three).
+  TextStyle s = Style();
+  std::wstring digits = L"aaaa bb-5 cc";
+  CHECK(Texts(digits, Lay(digits, s, Chars(s, 8))) == (std::vector<std::wstring>{L"aaaa bb-", L"5 cc"}));
+  std::wstring dash = L"aaaa bb\x2014" L"cc";
+  CHECK(Texts(dash, Lay(dash, s, Chars(s, 7))) == (std::vector<std::wstring>{L"aaaa ", L"bb\x2014" L"cc"}));
+  CHECK(Texts(dash, Lay(dash, s, Chars(s, 8))) == (std::vector<std::wstring>{L"aaaa bb\x2014", L"cc"}));
+  std::wstring bang = L"aaaa !bb";
+  CHECK(Texts(bang, Lay(bang, s, Chars(s, 5))) == (std::vector<std::wstring>{L"aaaa ", L"!bb"}));
+  std::wstring stuck = L"aaaa!bbbb";
+  CHECK(Texts(stuck, Lay(stuck, s, Chars(s, 6))) == (std::vector<std::wstring>{L"aaaa!b", L"bbb"}));
 }
 
 // ---- Tabs --------------------------------------------------------------------------------------
@@ -368,6 +404,36 @@ TEST(Text_JustifyLineBreaks) {
   f.expandLineBreaks = false;
   auto kept = Lay(text, s, 100, f);
   CHECK_NEAR(kept[0].contentRight, 5 * Advance(s), 0.01);
+}
+
+TEST(Text_JustifySqueezesSpaces) {
+  // Word keeps a word that overflows by up to a quarter of the line's space width, shrinking the
+  // spaces, when that shrinks them by at most half as much as wrapping would stretch them.
+  TextStyle s = Style();
+  const float a = Advance(s);
+  ParagraphFormat f;
+  f.alignment = Alignment::Justify;
+  const float width = 17 * a;
+  std::wstring one = L"aa aa aa aa aa aab cc";  // over by 1 character, 5 spaces
+  auto squeezed = Lay(one, s, width, f);
+  CHECK(Texts(one, squeezed) == (std::vector<std::wstring>{L"aa aa aa aa aa aab ", L"cc"}));
+  CHECK_NEAR(squeezed[0].contentRight, width, 0.01);
+  CHECK_NEAR(squeezed[0].CaretX(3), 2 * a + a - a / 5, 0.01);  // each space gives a fifth
+  std::wstring two = L"aa aa aa aa aa aabb cc";  // over by 2: more than a quarter of 5 spaces
+  CHECK(Texts(two, Lay(two, s, width, f)) == (std::vector<std::wstring>{L"aa aa aa aa aa ", L"aabb cc"}));
+  std::wstring last = L"aa aa aa aa aa aab";  // the last line isn't justified, so it can't shrink
+  CHECK(Texts(last, Lay(last, s, width, f)) == (std::vector<std::wstring>{L"aa aa aa aa aa ", L"aab"}));
+  ParagraphFormat start;
+  CHECK(Texts(one, Lay(one, s, width, start)) == (std::vector<std::wstring>{L"aa aa aa aa aa ", L"aab cc"}));
+
+  // The first part of a hyphenated word is squeezed in the same way.
+  f.hyphenation.automatic = true;
+  start.hyphenation.automatic = true;
+  std::wstring hyph = L"a a a a a hyphenation cc";
+  auto justified = Lay(hyph, s, 16 * a, f);
+  CHECK(TextOf(hyph, justified[0]) == L"a a a a a hyphen");
+  CHECK(justified[0].hyphenated);
+  CHECK(TextOf(hyph, Lay(hyph, s, 16 * a, start)[0]) == L"a a a a a hy");
 }
 
 TEST(Text_DistributedSpreadsEveryLine) {

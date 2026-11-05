@@ -818,8 +818,10 @@ uint32_t LineBreaker::Impl::Hyphenate(uint32_t segFrom, uint32_t ws, uint32_t we
   // end, would still end within the zone. (Measured in compatibility mode 14.)
   if (afterBreak && h.zone > 0 && limit - (SegmentStart(tab, contentAtWs, beforeDecimal) + contentAtWs) <= h.zone)
     return 0;
+  // A word with optional hyphens breaks only there; they also end the part [ws, we).
+  if ((ws > 0 && kind[ws - 1] == kSoftHyphen) || (we < Size() && kind[we] == kSoftHyphen)) return 0;
   for (uint32_t k = ws; k < we; ++k)
-    if (kind[k] == kSoftHyphen) return 0;  // a word with optional hyphens breaks only there
+    if (kind[k] == kSoftHyphen) return 0;
   std::vector<uint32_t> points;
   for (uint32_t rs = ws; rs < we;) {
     uint32_t re = rs;
