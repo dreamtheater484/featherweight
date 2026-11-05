@@ -57,6 +57,7 @@ struct ToolItem {
   D2D1_COLOR_F color{};
   bool automatic = false;
   std::wstring automaticLabel;     // "Automatic" or "No color"
+  std::vector<NamedColor> theme;   // the theme colors offered; empty for Office's
   D2D1_COLOR_F automaticColor{};   // how "Automatic" looks (transparent for "No color")
   // Custom: the tab's own control, which outlives the toolbar's use of it.
   Control* control = nullptr;

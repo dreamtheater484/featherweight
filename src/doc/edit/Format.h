@@ -25,13 +25,27 @@ struct Range {
   bool Empty() const { return from == to; }
 };
 
+// The theme's fonts, as Word's font box offers them first: "+Headings" (the major font) and "+Body"
+// (the minor one). A run in one follows the theme.
+enum class ThemeFontSlot : uint8_t { Headings, Body };
+
+// A theme color ("accent1", "text1", "background2"...), lighter or darker as Word's palette offers
+// it: w:themeTint or w:themeShade, 00-FF (-1 for none).
+struct ThemeColorRef {
+  std::string name;
+  int tint = -1, shade = -1;
+  bool operator==(const ThemeColorRef&) const = default;
+};
+
 // Character formatting to apply: each field that is set is applied, the others are left alone.
 struct RunFormat {
   std::optional<std::string> font;             // w:rFonts ascii, hAnsi and cs
+  std::optional<ThemeFontSlot> themeFont;      // w:rFonts asciiTheme, hAnsiTheme and cstheme instead
   std::optional<HalfPoints> size;              // w:sz and w:szCs
   std::optional<bool> bold, italic, strike, doubleStrike, caps, smallCaps;
   std::optional<Underline> underline;          // None removes it
   std::optional<Color> color;                  // automatic: the style's color, or "auto"
+  std::optional<ThemeColorRef> themeColor;     // w:color from the theme instead
   std::optional<std::string> highlight;        // a w:highlight name ("yellow"), "none" for none
   std::optional<VertAlign> vertAlign;          // superscript, subscript or baseline
   std::optional<std::string> charStyle;        // a character style id; empty removes w:rStyle

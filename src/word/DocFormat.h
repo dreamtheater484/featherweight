@@ -49,6 +49,8 @@ class DocFormat {
   std::function<void()> insertPicture;
   // More of Insert ▾, after Picture…: page layout's breaks (DocPage), each its label and action.
   std::vector<std::pair<std::wstring, std::function<void()>>> insertMore;
+  // The style box's last items, after the styles: Modify style… and New style… (DocStyles).
+  std::vector<std::pair<std::wstring, std::function<void()>>> styleMore;
 
   // The format painter: its button takes the selection's format, and the next selection made
   // gets it (Esc cancels). Ctrl+Shift+C and Ctrl+Shift+V copy and paste a format the same way.
@@ -65,6 +67,17 @@ class DocFormat {
   // The installed fonts for the font box, read once in idle time (a few milliseconds).
   static bool FontsPending();
   static void ReadFonts();
+  // Those fonts' family names, sorted (empty until read).
+  static const std::vector<std::wstring>& FontNames();
+
+  // The document's theme, as the font box and the color palettes offer it first: its heading and
+  // body fonts ("Calibri Light (Headings)"), and its ten colors (Background 1, Text 1... Accent 6).
+  // Empty when the document has no theme.
+  static std::vector<std::wstring> ThemeFontChoices(const fw::doc::Document& doc);
+  static std::optional<fw::doc::edit::ThemeFontSlot> ThemeFontOf(const fw::doc::Document& doc, const std::wstring& text);
+  static std::vector<NamedColor> ThemeColors(const fw::doc::Document& doc);
+  // A color picked from those colors, their tints or shades, as the theme's (w:themeColor).
+  static std::optional<fw::doc::edit::ThemeColorRef> ThemeColorOf(const fw::doc::Document& doc, D2D1_COLOR_F color);
 
  private:
   enum class Painter : uint8_t { Off, Once };
@@ -106,6 +119,8 @@ class DocFormat {
   std::vector<fw::doc::edit::StyleEntry> gallery_;
   uint32_t galleryVersion_ = UINT32_MAX;
 
+  std::vector<NamedColor> themeColors_;  // the document's, read once (its theme doesn't change)
+  bool themeRead_ = false;
   D2D1_COLOR_F fontColor_{0.753f, 0.0f, 0.0f, 1.0f};  // Word's dark red
   D2D1_COLOR_F highlight_{1.0f, 1.0f, 0.0f, 1.0f};    // yellow
   Painter painter_ = Painter::Off;

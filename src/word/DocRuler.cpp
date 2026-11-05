@@ -11,9 +11,11 @@
 #include <cwchar>
 #include <iterator>
 
+#include "Commands.h"
 #include "core/Strings.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/Page.h"
+#include "ui/Menu.h"
 #include "ui/Theme.h"
 #include "word/DocView.h"
 
@@ -761,7 +763,7 @@ std::wstring DocView::RulerTooltip(int x, int y) {
     case RulerPart::RightIndent: return L"Right indent: " + Length(r.right - o);
     case RulerPart::Tab:
       return std::wstring(TabName(r.tabs[hit.index].align)) + L": " + Length(r.frameL + Pt(r.tabs[hit.index].pos) - o) +
-             L". Drag it off the ruler to remove it.";
+             L". Drag it off the ruler to remove it; right-click for its kind and leader.";
     case RulerPart::MarginLeft: return L"Left margin: " + Length(r.marginL);
     case RulerPart::MarginRight: return L"Right margin: " + Length(r.width - r.marginR);
     case RulerPart::MarginTop: return L"Top margin: " + Length(r.marginT);
@@ -771,6 +773,17 @@ std::wstring DocView::RulerTooltip(int x, int y) {
     case RulerPart::CellEdge: return L"Move table column";
     default: return {};
   }
+}
+
+void DocView::FillRulerMenu(HMENU m, int x, int y) {
+  const RulerInfo r = MeasureRuler();
+  const RulerHit hit = RulerAt(r, x, y);
+  std::optional<TabStop> stop;
+  if (r.paraEdit && hit.part == RulerPart::Tab && hit.index >= 0 && hit.index < static_cast<int>(r.tabs.size()))
+    stop = r.tabs[hit.index];
+  styles_->FillTabMenu(m, stop);
+  menu::AppendSeparator(m);
+  menu::AppendItem(m, CmdRuler, L"Ruler", true, true);
 }
 
 HCURSOR DocView::RulerCursor(int x, int y) {

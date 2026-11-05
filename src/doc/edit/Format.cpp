@@ -88,6 +88,25 @@ void WriteRunFormat(TreeEdit& ed, ElemId rPr, const RunFormat& f, const RunProps
       for (uint32_t n : {Name("asciiTheme"), Name("hAnsiTheme"), Name("cstheme")}) ed.RemoveAttr(rf, n);
     }
   }
+  if (f.themeFont && !f.font) {
+    // Word's references: the Latin font for ASCII and the rest of Latin text, the complex script one.
+    const bool major = *f.themeFont == ThemeFontSlot::Headings;
+    const std::string_view latin = doc.ThemeFont(major ? "majorHAnsi" : "minorHAnsi");
+    if (!latin.empty() && latin == inh.fonts.ascii && latin == inh.fonts.hAnsi) {
+      // The styles give it already (through the theme, as Normal usually does): the run's own goes.
+      if (ElemId rf = ed.Child(rPr, kRFonts, false); rf != kNoElem) {
+        for (uint32_t n : {Name("ascii"), Name("hAnsi"), Name("cs"), Name("asciiTheme"), Name("hAnsiTheme"), Name("cstheme")})
+          ed.RemoveAttr(rf, n);
+        if (Node(&doc.GetTree(), rf).AttrCount() == 0) ed.Remove(rPr, kRFonts);
+      }
+    } else {
+      const ElemId rf = ed.Child(rPr, kRFonts);
+      ed.SetAttr(rf, Name("asciiTheme"), major ? "majorHAnsi" : "minorHAnsi");
+      ed.SetAttr(rf, Name("hAnsiTheme"), major ? "majorHAnsi" : "minorHAnsi");
+      ed.SetAttr(rf, Name("cstheme"), major ? "majorBidi" : "minorBidi");
+      for (uint32_t n : {Name("ascii"), Name("hAnsi"), Name("cs")}) ed.RemoveAttr(rf, n);
+    }
+  }
   if (f.size) {
     if (*f.size == inh.size && *f.size == inh.sizeCs) {
       ed.Remove(rPr, kSz);
@@ -135,6 +154,22 @@ void WriteRunFormat(TreeEdit& ed, ElemId rPr, const RunFormat& f, const RunProps
   if (f.color) {
     if (*f.color == inh.color) ed.Remove(rPr, kColor);
     else SetColor(ed, ed.Child(rPr, kColor), kVal, *f.color);
+  } else if (f.themeColor) {
+    // Word writes the color the theme gives now too, for readers without themes.
+    const ThemeColorRef& t = *f.themeColor;
+    if (const std::optional<uint32_t> rgb = doc.ThemeColor(t.name, t.tint, t.shade)) {
+      const ElemId c = ed.Child(rPr, kColor);
+      ed.SetAttr(c, kVal, Hex6(*rgb));
+      ed.SetAttr(c, Name("themeColor"), t.name);
+      auto byte = [](int v) {
+        static constexpr char kHex[] = "0123456789ABCDEF";
+        return std::string{kHex[(v >> 4) & 15], kHex[v & 15]};
+      };
+      if (t.tint >= 0 && t.tint <= 255) ed.SetAttr(c, Name("themeTint"), byte(t.tint));
+      else ed.RemoveAttr(c, Name("themeTint"));
+      if (t.shade >= 0 && t.shade <= 255 && t.tint < 0) ed.SetAttr(c, Name("themeShade"), byte(t.shade));
+      else ed.RemoveAttr(c, Name("themeShade"));
+    }
   }
   if (f.highlight) {
     bool none = f.highlight->empty() || *f.highlight == "none";
@@ -289,8 +324,8 @@ void SetBorders(TreeEdit& ed, ElemId pPr, BorderSides sides) {
 }  // namespace
 
 bool RunFormat::Any() const {
-  return font || size || bold || italic || strike || doubleStrike || caps || smallCaps || underline || color || highlight ||
-         vertAlign || charStyle;
+  return font || themeFont || size || bold || italic || strike || doubleStrike || caps || smallCaps || underline || color ||
+         themeColor || highlight || vertAlign || charStyle;
 }
 
 bool ParaFormat::Any() const {
@@ -551,7 +586,7 @@ void ChangeTabStops(TreeEdit& ed, Range range, const std::vector<Twips>& remove,
   ed.Begin(u"Tabs");
   ed.Local();
   for (uint32_t p : ParagraphsOf(doc, range)) {
-    std::vector<TabStop> want = doc.ResolvedPara(p).tabs;
+    std::vector<TabStop> had = doc.ResolvedPara(p).tabs, want = had;
     want.erase(std::remove_if(want.begin(), want.end(),
                               [&](const TabStop& t) {
                                 return std::find(remove.begin(), remove.end(), t.pos) != remove.end() ||
@@ -559,6 +594,10 @@ void ChangeTabStops(TreeEdit& ed, Range range, const std::vector<Twips>& remove,
                               }),
                want.end());
     want.insert(want.end(), add.begin(), add.end());
+    // A paragraph whose stops stay as they were isn't written again.
+    std::stable_sort(had.begin(), had.end(), byPos);
+    std::stable_sort(want.begin(), want.end(), byPos);
+    if (want == had) continue;
     // What the paragraph writes: the style's stops it doesn't have cleared, its own as they are.
     const std::vector<TabStop> inherited = doc.StylePara(p).tabs;
     std::vector<TabStop> own;
