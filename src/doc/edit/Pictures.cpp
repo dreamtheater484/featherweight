@@ -200,6 +200,15 @@ struct DrawingStep : CustomStep {
 };
 
 // Package changes: parts added or changed, a relationship set, the content types.
+std::string Lower(std::string s) {
+  for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return s;
+}
+
+// What an insert adds to the package: its media parts, its relationships from the picture's part
+// and its content types. Undo takes away exactly those and redo adds them again, keeping what else
+// changed in the meantime: a new header or footer part gets its relationship and content type
+// outside undo (torture finding 25: putting back whole sets lost them).
 struct PackageStep : CustomStep {
   Document* doc = nullptr;
   struct PartState {
@@ -207,8 +216,14 @@ struct PackageStep : CustomStep {
     std::optional<std::vector<uint8_t>> before, after;  // nothing: no such part
   };
   std::vector<PartState> partStates;
-  std::optional<pkg::RelationshipSet> relsBefore, relsAfter;
-  std::optional<pkg::ContentTypes> typesBefore, typesAfter;
+  std::string relsSource;                    // the picture's part
+  bool relsExisted = true;                   // it had a relationships part before
+  std::vector<pkg::Relationship> relsAdded;  // from relsSource
+  std::vector<std::pair<std::string, std::string>> defaultsAdded, overridesAdded;  // content types
+
+  bool Any() const {
+    return !partStates.empty() || !relsAdded.empty() || !defaultsAdded.empty() || !overridesAdded.empty();
+  }
 
   void Apply(bool undo) {
     pkg::Package& p = doc->Package();
@@ -217,8 +232,39 @@ struct PackageStep : CustomStep {
       if (v) p.SetPart(s.name, *v);
       else p.DeletePart(s.name);
     }
-    if (const auto& r = undo ? relsBefore : relsAfter) p.SetRelationships(*r);
-    if (const auto& t = undo ? typesBefore : typesAfter) p.SetContentTypes(*t);
+    if (!relsAdded.empty()) {
+      pkg::RelationshipSet set;
+      if (const pkg::RelationshipSet* now = p.RelationshipsOf(relsSource)) {
+        set = *now;
+      } else {
+        set.source = relsSource;
+        set.relsPart = pkg::RelsPartFor(relsSource);
+      }
+      std::erase_if(set.items, [&](const pkg::Relationship& r) {
+        return std::any_of(relsAdded.begin(), relsAdded.end(), [&](const pkg::Relationship& a) { return a.id == r.id; });
+      });
+      if (!undo) set.items.insert(set.items.end(), relsAdded.begin(), relsAdded.end());
+      const std::string relsPart = set.relsPart;
+      const bool empty = set.items.empty();
+      p.SetRelationships(std::move(set));
+      if (undo && empty && !relsExisted) p.DeletePart(relsPart);
+    }
+    if (!defaultsAdded.empty() || !overridesAdded.empty()) {
+      pkg::ContentTypes types = p.Types();
+      std::erase_if(types.defaults, [&](const auto& d) {
+        return std::any_of(defaultsAdded.begin(), defaultsAdded.end(),
+                           [&](const auto& a) { return Lower(a.first) == Lower(d.first); });
+      });
+      std::erase_if(types.overrides, [&](const auto& o) {
+        return std::any_of(overridesAdded.begin(), overridesAdded.end(),
+                           [&](const auto& a) { return pkg::PartKey(a.first) == pkg::PartKey(o.first); });
+      });
+      if (!undo) {
+        types.defaults.insert(types.defaults.end(), defaultsAdded.begin(), defaultsAdded.end());
+        types.overrides.insert(types.overrides.end(), overridesAdded.begin(), overridesAdded.end());
+      }
+      p.SetContentTypes(std::move(types));
+    }
   }
   void Undo() override { Apply(true); }
   void Redo() override { Apply(false); }
@@ -559,11 +605,6 @@ struct Placed {
   std::shared_ptr<PackageStep> step;
 };
 
-std::string Lower(std::string s) {
-  for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  return s;
-}
-
 std::string PlaceMedia(Document& doc, const Part& source, const Media& m, PackageStep& step) {
   pkg::Package& package = doc.Package();
   const std::string dir = source.name.substr(0, source.name.rfind('/') + 1);
@@ -599,42 +640,39 @@ std::string PlaceMedia(Document& doc, const Part& source, const Media& m, Packag
     while (taken(n)) ++n;
     partName = dir + "media/image" + std::to_string(n) + "." + m.ext;
     step.partStates.push_back({partName, std::nullopt, m.bytes});
-    // Its content type, by extension when the package has none for it, else for the part.
-    pkg::ContentTypes types = step.typesAfter ? *step.typesAfter : package.Types();
-    std::string_view byExt = types.LookupDefault(partName);
-    if (byExt.empty()) types.defaults.emplace_back(m.ext, m.type);
-    else if (byExt != m.type) types.overrides.emplace_back(partName, m.type);
-    if (byExt != m.type) {
-      if (!step.typesBefore) step.typesBefore = package.Types();
-      step.typesAfter = std::move(types);
-    }
+    // Its content type: by extension when neither the package nor this step has one for it,
+    // else for the part when that one differs.
+    std::string_view byExt = package.Types().LookupDefault(partName);
+    for (const auto& [ext, type] : step.defaultsAdded)
+      if (Lower(ext) == Lower(m.ext)) byExt = type;
+    if (byExt.empty()) step.defaultsAdded.emplace_back(m.ext, m.type);
+    else if (byExt != m.type) step.overridesAdded.emplace_back(partName, m.type);
   }
-  // The relationship from the part the picture is in.
-  pkg::RelationshipSet rels;
-  if (step.relsAfter) rels = *step.relsAfter;
-  else if (const pkg::RelationshipSet* r = package.RelationshipsOf(source.name)) rels = *r;
-  else {
-    rels.source = source.name;
-    rels.relsPart = pkg::RelsPartFor(source.name);
-  }
-  for (const pkg::Relationship& r : rels.items)
-    if (!r.external && r.type == kImageRel && Lower(r.targetPart) == Lower(partName)) return r.id;
+  // The relationship from the part the picture is in: one it already has to that part, or a new one.
+  const pkg::RelationshipSet* rels = package.RelationshipsOf(source.name);
+  if (rels)
+    for (const pkg::Relationship& r : rels->items)
+      if (!r.external && r.type == kImageRel && Lower(r.targetPart) == Lower(partName)) return r.id;
+  for (const pkg::Relationship& r : step.relsAdded)
+    if (Lower(r.targetPart) == Lower(partName)) return r.id;
+  auto taken = [&](const std::string& id) {
+    return (rels && rels->Find(id)) ||
+           std::any_of(step.relsAdded.begin(), step.relsAdded.end(), [&](const pkg::Relationship& r) { return r.id == id; });
+  };
   pkg::Relationship rel;
-  for (size_t n = rels.items.size() + 1;; ++n) {
+  for (size_t n = (rels ? rels->items.size() : 0) + step.relsAdded.size() + 1;; ++n) {
     rel.id = "rId" + std::to_string(n);
-    if (!rels.Find(rel.id)) break;
+    if (!taken(rel.id)) break;
   }
   rel.type = std::string(kImageRel);
   rel.target = partName.substr(0, dir.size()) == dir ? partName.substr(dir.size()) : partName;
   rel.targetPart = partName;
-  std::string id = rel.id;
-  if (!step.relsBefore) {
-    if (const pkg::RelationshipSet* r = package.RelationshipsOf(source.name)) step.relsBefore = *r;
-    else step.relsBefore = rels;  // none before: undone to an empty set
+  if (step.relsAdded.empty()) {
+    step.relsSource = source.name;
+    step.relsExisted = rels != nullptr;
   }
-  rels.items.push_back(std::move(rel));
-  step.relsAfter = std::move(rels);
-  return id;
+  step.relsAdded.push_back(rel);
+  return rel.id;
 }
 
 std::string Escape(std::string_view s) {
@@ -826,7 +864,7 @@ Result Pictures::Insert(Pos at, const std::vector<uint8_t>& bytes, Emu maxWidth,
 
   editor_.BeginGroup(u"Insert picture");
   Result r = editor_.InsertDrawing(at, xml, info);
-  if (r && (step->relsAfter || !step->partStates.empty() || step->typesAfter)) {
+  if (r && step->Any()) {
     step->parts = {storyPart};
     step->first = at.para;
     step->count = 1;
