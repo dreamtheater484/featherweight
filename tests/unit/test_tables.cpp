@@ -367,6 +367,42 @@ TEST(Tables_NewRowsAndColumnsAroundMergedCells) {
   CHECK(ChecksOut(*doc));
 }
 
+TEST(Tables_NewCellsDontTakeASharedSpan) {
+  // d1-corpus's finding 10 (merged-table.docx): a header row after one empty grid column, and body
+  // rows whose first cells share one w:tcPr with a gridSpan of 2. New columns over the body: cells
+  // of one column each, and the header row moves over by as many.
+  const std::string span = "<w:tcPr><w:tcW w:w=\"1564\" w:type=\"dxa\"/><w:gridSpan w:val=\"2\"/></w:tcPr>";
+  auto cell = [](const std::string& pr, const std::string& text) { return "<w:tc>" + pr + Para(text) + "</w:tc>"; };
+  std::string tbl = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid>";
+  for (int w : {10, 1554, 10, 3371, 3000}) tbl += "<w:gridCol w:w=\"" + std::to_string(w) + "\"/>";
+  tbl += "</w:tblGrid><w:tr><w:trPr><w:gridBefore w:val=\"1\"/><w:tblHeader/></w:trPr>" + cell(span, "Issue") +
+         cell("", "Example") + cell("", "Sources") + "</w:tr>";
+  for (const char* name : {"One", "Two", "Three"})
+    tbl += "<w:tr>" + cell(span, name) + cell("<w:tcPr><w:gridSpan w:val=\"2\"/></w:tcPr>", "clause") + cell("", "added") +
+           "</w:tr>";
+  tbl += "</w:tbl>";
+  Fixture f;
+  f.body = Para("Before") + tbl + Para("After");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  REQUIRE(GridOk(*doc));
+  const std::string before = Written(*doc);
+  Editor ed(*doc);
+  // Left of the whole body: five columns.
+  REQUIRE(ed.InsertColumns(P(CellPara(*doc, 1, 0), 0), P(CellPara(*doc, 3, 2), 0), false));
+  Node t = FirstTable(*doc);
+  CHECK_EQ(doc->TableGrid(t).size(), 10u);
+  CHECK_EQ(doc->RowCells(doc->TableRows(t)[1]).size(), 8u);
+  CHECK_EQ(doc->ResolvedCell(doc->RowCells(doc->TableRows(t)[1])[0]).gridSpan, 1);
+  CHECK_EQ(doc->ResolvedRow(doc->TableRows(t)[0]).gridBefore, 6);
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  // Right of a body cell two columns wide: two columns, which the header's first cell spans.
+  REQUIRE(ed.InsertColumns(P(CellPara(*doc, 1, 5), 0), P(CellPara(*doc, 1, 5), 0), true));
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  CHECK(UndoesAndRedoes(ed, *doc, before));
+  CHECK(ChecksOut(*doc));
+}
+
 TEST(Tables_DeleteRowsAndColumns) {
   Fixture f;
   f.body = Table({{"a", "b", "c"}, {"d", "e", "f"}, {"g|<w:gridSpan w:val=\"2\"/>", "i"}}) + Para("after");
