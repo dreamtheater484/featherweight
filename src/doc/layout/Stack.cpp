@@ -284,22 +284,20 @@ void Engine::AddDrawing(uint32_t drawing, const Rect& box, bool floating, const 
   std::array<float, 4> in = Insets(doc_.DrawingXml(d));
   Rect inner{box.left + in[0], box.top + in[1], box.right - in[2], box.bottom - in[3]};
   if (inner.Width() <= 0) return;
-  for (uint32_t story : d.textBoxes) {
-    Frame tf = frame;
-    tf.x = frame.x + inner.left;
-    tf.y = frame.y + inner.top;
-    tf.width = inner.Width();
-    if (frame.story == LineStory::Body || frame.story == LineStory::Cell) tf.story = LineStory::TextBox;
-    tf.zones = nullptr;
-    tf.inCell = false;
-    Stack s = StackStory(story, tf);
-    for (LineBox& l : s.lines) {
-      l.drawing = drawing;
-      l.clip = {0, 0, inner.Width(), std::max(inner.Height(), s.height)};
-    }
-    out.Append(std::move(s), inner.left, inner.top);
-    break;  // one story per box; linked boxes continue in the same story
+  // One story per box; linked boxes continue in the same story.
+  Frame tf = frame;
+  tf.x = frame.x + inner.left;
+  tf.y = frame.y + inner.top;
+  tf.width = inner.Width();
+  if (frame.story == LineStory::Body || frame.story == LineStory::Cell) tf.story = LineStory::TextBox;
+  tf.zones = nullptr;
+  tf.inCell = false;
+  Stack s = StackStory(d.textBoxes.front(), tf);
+  for (LineBox& l : s.lines) {
+    l.drawing = drawing;
+    l.clip = {0, 0, inner.Width(), std::max(inner.Height(), s.height)};
   }
+  out.Append(std::move(s), inner.left, inner.top);
 }
 
 void Engine::AddLine(const ParaText& pt, text::Line&& line, float x, float top, float height, const Frame& frame,
