@@ -262,6 +262,9 @@ class Editor {
   std::vector<uint32_t> DirtyParts() const;
 
  private:
+  // Forms protection (Forms.h): true, with why, when a change of [from, to] is refused; with no
+  // range (formatting, tables, drawings), any change is.
+  bool FormsRefuse(const Pos* from, const Pos* to, std::u16string& why) const;
   void AddReferences(const KeptRefs& kept, Pos at);
 
   Document& doc_;
