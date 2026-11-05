@@ -65,6 +65,7 @@ if(FW_BUILD_TESTS)
     "${PROJECT_SOURCE_DIR}/tests/unit/test_page.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_inline.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_proof.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_tables.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_review.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_pictures.cpp"
     # The document tab's file (D2 "Files"): an app source, tested here with temporary folders.
     "${PROJECT_SOURCE_DIR}/tests/unit/test_docfile.cpp" "${PROJECT_SOURCE_DIR}/src/word/DocFile.cpp")

@@ -146,6 +146,30 @@ class Editor {
   // Refused where the text is already a link, or in a field, a content control or a tracked change.
   Result SetLink(Pos from, Pos to, std::string_view target);
 
+  // ---- Tracked changes (D4, plan §6.2 "Review")
+  // Track Changes is on while the document's settings say so (w:trackRevisions: Word's switch,
+  // saved with the document; turning it on or off is an undo step). Then typing, deleting and
+  // formatting are recorded as w:ins, w:del, w:rPrChange and w:pPrChange by Author(), dated
+  // ChangeDate(), instead of changing the text outright: nothing typed or deleted is lost until a
+  // change is accepted or rejected. Text you inserted yourself and delete again just goes, as in Word.
+  bool Tracking() const;
+  Result SetTracking(bool on);
+  void SetAuthor(std::string utf8) { author_ = std::move(utf8); }
+  const std::string& Author() const { return author_; }
+  // The local time as Word writes it ("2026-11-05T14:30:00Z"); for tests, a fixed one.
+  std::string ChangeDate() const;
+  void SetFixedDate(std::string date) { fixedDate_ = std::move(date); }
+  // Ids for new change records and comments (w:id), and for new paragraphs (w14:paraId).
+  std::string NewChangeId();
+  std::string NewParaId();
+  // Accepts or rejects the tracked changes [from, to] touches, in one story; with from == to, the
+  // ones the caret is in or beside. One undo step. Fails, changing nothing, when there are none or
+  // one can't be decided (part of a field, inserted or deleted cells).
+  Result ReviewChanges(Pos from, Pos to, bool accept);
+  // Every tracked change of the document. Text boxes, which aren't edited yet, keep theirs (the
+  // result's message says so).
+  Result ReviewAll(bool accept);
+
   // ---- Tables (D3, plan §6.2)
   // Cells are named by positions in them: `from` and `to` in two cells of one table name the block
   // of cells between them, grown to hold every merged cell it touches whole, as Word selects
@@ -263,8 +287,13 @@ class Editor {
 
  private:
   void AddReferences(const KeptRefs& kept, Pos at);
+  // Accepts or rejects the changes of `story` that `pick` takes (by the text each covers, and
+  // whether it's in a paragraph rather than a table's or the body's properties).
+  using ChangePicker = std::function<bool(Pos from, Pos to, bool inPara)>;
+  Result Review(uint32_t story, const ChangePicker& pick, bool accept, std::u16string name, Pos caret);
 
   Document& doc_;
+  std::string author_, fixedDate_;
   Result EditTable(Pos from, Pos to, std::u16string name, const std::function<bool(TableOp&)>& op);
 
   std::unique_ptr<EditorState> impl_;
