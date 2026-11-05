@@ -7,6 +7,8 @@
   seeds/drawing/  drawings cut from the corpus, in the format fuzz_drawing reads (the element with
                   its namespaces, then "@<relationship id>" sections with the pictures it uses),
                   and tiny pictures in each format fwdraw decodes
+  seeds/picture/  a tiny picture in each format a picture can be inserted from (fuzz_picture),
+                  and one it refuses
 
 Uses only the standard library. From the repository root:
   python tests/fuzz/make_seeds.py
@@ -195,6 +197,18 @@ def tiny_pictures():
             "rect.emf": emf, "rect.wmf": wmf, "bom.svg": b"\xef\xbb\xbf" + svg}
 
 
+def tiny_jpeg():
+    """A baseline JPEG of one gray pixel: one component, a DC-only scan, one-symbol tables."""
+    def segment(marker, body):
+        return bytes([0xFF, marker]) + struct.pack(">H", len(body) + 2) + body
+    quant = segment(0xDB, bytes([0] + [1] * 64))
+    frame = segment(0xC0, struct.pack(">BHHB", 8, 1, 1, 1) + bytes([1, 0x11, 0]))
+    table = bytes([1] + [0] * 15 + [0])  # one code of one bit, for symbol 0
+    huffman = segment(0xC4, bytes([0x00]) + table) + segment(0xC4, bytes([0x10]) + table)
+    scan = segment(0xDA, bytes([1, 1, 0x00, 0, 63, 0])) + bytes([0x3F])  # DC 0, then end of block
+    return bytes([0xFF, 0xD8]) + quant + frame + huffman + scan + bytes([0xFF, 0xD9])
+
+
 def write(folder, name, data):
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, name), "wb") as f:
@@ -215,8 +229,12 @@ def main():
         stem = source.split("/")[-1].replace(".", "-")
         for i, seed in enumerate(drawing_seeds(os.path.join(OFFICE, source)), start=1):
             write(os.path.join(SEEDS, "drawing"), f"{stem}-{i:03}.xml", seed)
-    for name, data in tiny_pictures().items():
+    pictures = tiny_pictures()
+    for name, data in pictures.items():
         write(os.path.join(SEEDS, "drawing"), name, data)
+    pictures["gray.jpg"] = tiny_jpeg()
+    for name in ("tile.png", "gray.jpg", "one.gif", "two.bmp", "two.tif", "bom.svg", "tile.ico"):
+        write(os.path.join(SEEDS, "picture"), name, pictures[name])
 
 
 if __name__ == "__main__":
