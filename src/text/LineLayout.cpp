@@ -464,15 +464,15 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
   // Font fallback, for characters the font doesn't have.
   std::vector<detail::LocaleRange> locales{{start, end, sf.locale}};
   detail::TextSource source(shape, rtl, locales, nullptr);
-  const DWRITE_FONT_WEIGHT weight = sf.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL;
+  // The base face as DirectWrite names it: "Calibri" at weight 300 for Word's "Calibri Light".
   for (uint32_t pos = start; pos < end;) {
     UINT32 mapped = 0;
     ComPtr<IDWriteFont> font;
     FLOAT scale = 1;
     const Face* face = base;
-    if (FAILED(fonts.Fallback()->MapCharacters(&source, pos, end - pos, fonts.Collection(), family.c_str(), weight,
-                                               sf.italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
-                                               DWRITE_FONT_STRETCH_NORMAL, &mapped, &font, &scale)) ||
+    if (FAILED(fonts.Fallback()->MapCharacters(&source, pos, end - pos, fonts.Collection(), base->Family().c_str(),
+                                               base->Weight(), base->Style(), DWRITE_FONT_STRETCH_NORMAL, &mapped,
+                                               &font, &scale)) ||
         mapped == 0) {
       mapped = end - pos;
       scale = 1;

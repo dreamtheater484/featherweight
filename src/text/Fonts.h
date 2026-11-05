@@ -1,6 +1,6 @@
 #pragma once
 
-#include <dwrite_2.h>
+#include <dwrite_3.h>
 #include <wrl/client.h>
 
 #include <functional>
@@ -35,10 +35,14 @@ struct FontMetrics {
 // One face of an installed family.
 class Face {
  public:
-  Face(Microsoft::WRL::ComPtr<IDWriteFontFace> face, std::wstring family);
+  // `family`, `weight` and `style`: how DirectWrite's font fallback names the face.
+  Face(Microsoft::WRL::ComPtr<IDWriteFontFace> face, std::wstring family,
+       DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE style = DWRITE_FONT_STYLE_NORMAL);
 
   IDWriteFontFace* Get() const { return face_.Get(); }
   const std::wstring& Family() const { return family_; }
+  DWRITE_FONT_WEIGHT Weight() const { return weight_; }
+  DWRITE_FONT_STYLE Style() const { return style_; }
   FontMetrics Metrics(float size) const;
   // The glyph's advance for one character at `size` points, without shaping; 0 if it's missing.
   float Advance(wchar_t c, float size) const;
@@ -46,6 +50,8 @@ class Face {
  private:
   Microsoft::WRL::ComPtr<IDWriteFontFace> face_;
   std::wstring family_;
+  DWRITE_FONT_WEIGHT weight_;
+  DWRITE_FONT_STYLE style_;
   float upem_ = 2048;
   // In design units, from the font's tables (see FontMetrics).
   float ascent_ = 0, descent_ = 0, lineGap_ = 0;
@@ -106,6 +112,12 @@ class Fonts {
   Microsoft::WRL::ComPtr<IDWriteTextAnalyzer1> analyzer_;
   Microsoft::WRL::ComPtr<IDWriteFontFallback> fallback_;
   Microsoft::WRL::ComPtr<IDWriteFontCollection> collection_;
+  // The collection's fonts, for finding families by their Win32 (GDI) names, which documents use:
+  // "Calibri Light" and "Arial Narrow" are a weight and a width of the families DirectWrite lists
+  // as "Calibri" and "Arial". Null where the collection has no font set.
+  Microsoft::WRL::ComPtr<IDWriteFontSet> win32_;
+  bool win32Tried_ = false;
+  Microsoft::WRL::ComPtr<IDWriteFontSet> Win32Family(const std::wstring& family);
   SubstituteFn substitute_;
   std::map<std::wstring, std::wstring, std::less<>> resolved_;  // lower-cased request -> family
   std::map<std::tuple<std::wstring, int, int, int>, std::unique_ptr<Face>> faces_;
