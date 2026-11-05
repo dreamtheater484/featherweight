@@ -60,6 +60,9 @@ class EditTarget {
   virtual fw::pkg::Status Save(std::vector<uint8_t>& out) = 0;
   // After a save that went to the file: undo back to here is clean (DocView::Save).
   virtual void Saved() {}
+  // What a refused edit mustn't change, cheaply: counts of paragraphs, sections and parts, whether
+  // the document is modified and can be undone, and the parts changed.
+  virtual std::string State() const { return {}; }
   std::vector<std::string> written;  // the parts the last Save wrote from the model
 };
 
