@@ -86,6 +86,7 @@ const Builtin kBuiltins[] = {
     {"footer", "Footer", StyleType::Paragraph, 99, false, "Normal", "", "Footer Char",
      "<w:tabs><w:tab w:val=\"center\" w:pos=\"{CENTER}\"/><w:tab w:val=\"right\" w:pos=\"{RIGHT}\"/></w:tabs>"
      "<w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/>", ""},
+    // What links get, from AutoCorrect and Insert link, as in Word.
     {"Hyperlink", "Hyperlink", StyleType::Character, 99, false, "Default Paragraph Font", "", "", "",
      "<w:color w:val=\"0563C1\" w:themeColor=\"hyperlink\"/><w:u w:val=\"single\"/>"},
 };
@@ -215,6 +216,8 @@ std::string AddBuiltin(TreeEdit& ed, const Builtin& b) {
   bool para = b.type == StyleType::Paragraph;
   bool isDefault = (b.id == "Normal" && !doc.DefaultStyle(StyleType::Paragraph)) ||
                    (b.id == "DefaultParagraphFont" && !doc.DefaultStyle(StyleType::Character));
+  // Priority 99 is Word's for styles it shows only once used (Hyperlink): no quick style either.
+  const bool quick = b.id != "DefaultParagraphFont" && b.priority != 99;
   std::string extra = b.id == "DefaultParagraphFont" ? "<w:semiHidden/><w:unhideWhenUsed/>"
                       : (b.priority == 9 && b.id != "Heading1") || b.priority == 99 ? "<w:unhideWhenUsed/>"
                                                                                     : "";
@@ -226,7 +229,7 @@ std::string AddBuiltin(TreeEdit& ed, const Builtin& b) {
   else if (!b.link.empty()) linkId = UniqueId(doc, IdOf(b.link));
   if (linkId == id) linkId = UniqueId(doc, id + "Char");
   std::string xml = StyleXml(para ? "paragraph" : "character", id, b.name, isDefault, false, basedOn == id ? "" : basedOn,
-                             next == id ? "" : next, linkId, b.priority, b.id != "DefaultParagraphFont" && b.priority != 99, extra,
+                             next == id ? "" : next, linkId, b.priority, quick, extra,
                              Props(doc, b.pPr), rPr);
   if (ed.AddXml(root, xml) == kNoElem) return {};
   ed.Reindex();

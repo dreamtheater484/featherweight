@@ -97,8 +97,8 @@ $checks = @(
   # Files (D2): a new document, and an edited one (the tab's dot, Save enabled).
   @("doc-new", "light", "", "new", @()),
   @("doc-edited", "dark", "", "edited", @("..\office\layout\report.docx")),
-  # Proofing (D2): typing with AutoCorrect ("teh", "(c)", "--", capitals), red squiggles, words and language.
-  @("doc-proofing", "light", "", "type:teh quikc brown fox (c) jumps over teh dog -- it said ok,;wait:600", @("..\office\layout\report.docx")),
+  # Proofing (D2): typing with AutoCorrect ("teh", "(c)", "--", capitals, a link), red squiggles, words and language.
+  @("doc-proofing", "light", "", "type:teh quikc brown fox (c) jumps over teh dog -- it said ok, see www.example.com now;wait:600", @("..\office\layout\report.docx")),
   # Pictures (D3): inserted and selected (handles, the picture tools), square wrapping after a
   # drag, cropping, the Picture panel at night.
   @("doc-picture", "light", "", "key:ctrl+home;picture:$root\docs\logo.png", @("..\office\layout\report.docx")),

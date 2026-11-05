@@ -34,8 +34,20 @@ std::string Corrected(std::string_view typedUtf8, const wchar_t* lang = L"en-US"
   std::u16string text = U(typedUtf8);
   AutoCorrect ac;
   const auto fixes = ac.Find(text, static_cast<uint32_t>(text.size()), text.empty() ? 0 : text.back(), lang);
-  for (const Correction& c : fixes) text.replace(c.from, c.to - c.from, c.text);  // right to left
+  for (const Correction& c : fixes)
+    if (c.link.empty()) text.replace(c.from, c.to - c.from, c.text);  // right to left; a link keeps its text
   return ToUtf8(text);
+}
+
+// The link AutoCorrect makes of `typed` text, as "text address", or "" for none. `typed` 0: Enter
+// ended the paragraph after the text.
+std::string Linked(std::string_view typedUtf8, int typed = -1) {
+  const std::u16string text = U(typedUtf8);
+  AutoCorrect ac;
+  const char16_t last = typed >= 0 ? static_cast<char16_t>(typed) : text.empty() ? char16_t(0) : text.back();
+  for (const Correction& c : ac.Find(text, static_cast<uint32_t>(text.size()), last, L"en-US"))
+    if (!c.link.empty()) return ToUtf8(text.substr(c.from, c.to - c.from)) + " " + c.link;
+  return "";
 }
 
 std::string ParaText(const Document& doc, uint32_t para) { return ToUtf8(doc.Para(para).text); }
@@ -92,6 +104,82 @@ TEST(Proof_AutoCorrectCapitals) {
   CHECK_EQ(Corrected("Done. teh "), "Done. The ");  // a replacement starting a sentence
   CHECK_EQ(Corrected("in "), "In ");
   CHECK_EQ(Corrected("Text in the middle "), "Text in the middle ");
+}
+
+TEST(Proof_AutoCorrectFindsAddresses) {
+  CHECK_EQ(Linked("See www.example.com "), "www.example.com http://www.example.com");
+  CHECK_EQ(Linked("https://example.org/a?b=1&c#top "), "https://example.org/a?b=1&c#top https://example.org/a?b=1&c#top");
+  CHECK_EQ(Linked("ftp://files.example.net\t"), "ftp://files.example.net ftp://files.example.net");
+  CHECK_EQ(Linked("Mail jan.de-vries+fw@example.nl "), "jan.de-vries+fw@example.nl mailto:jan.de-vries+fw@example.nl");
+  CHECK_EQ(Linked("mailto:info@example.com "), "mailto:info@example.com mailto:info@example.com");
+  CHECK_EQ(Linked("see www.example.com", 0), "www.example.com http://www.example.com");  // Enter
+  // Punctuation after it stays out; a bracket the address opened stays in.
+  CHECK_EQ(Linked("(see www.example.com). "), "www.example.com http://www.example.com");
+  CHECK_EQ(Linked("\"www.example.com,\" "), "www.example.com http://www.example.com");
+  CHECK_EQ(Linked("https://en.wikipedia.org/wiki/C_(language) "),
+           "https://en.wikipedia.org/wiki/C_(language) https://en.wikipedia.org/wiki/C_(language)");
+  // Not yet: a period may go on into the address. Not addresses, or not web ones.
+  CHECK_EQ(Linked("www.example.com."), "");
+  CHECK_EQ(Linked("file://server/share "), "");
+  CHECK_EQ(Linked("\\\\server\\share "), "");
+  CHECK_EQ(Linked("a@b "), "");
+  CHECK_EQ(Linked("me@example "), "");
+  CHECK_EQ(Linked("e.g. "), "");
+  CHECK_EQ(Linked("version 1.5 "), "");
+  CHECK_EQ(Linked("www. "), "");
+  CHECK_EQ(Linked("http:// "), "");
+  CHECK_EQ(Linked("https://ex\xC3\xA4mple.com "), "");  // not ASCII: left as typed
+  // Nothing else changes inside an address.
+  CHECK_EQ(Corrected("See HTtp://a--b.example.com/teh "), "See HTtp://a--b.example.com/teh ");
+  CHECK_EQ(Corrected("Done. www.example.com "), "Done. www.example.com ");
+  // Off: no link.
+  AutoCorrect off;
+  off.Options().links = false;
+  const std::u16string text = u"www.example.com ";
+  for (const Correction& c : off.Find(text, static_cast<uint32_t>(text.size()), u' ', L"en-US")) CHECK(c.link.empty());
+}
+
+TEST(Proof_AutoCorrectLinkIsOneUndoStep) {
+  Fixture f;
+  f.body = Para(Run("See "));
+  auto doc = LoadOk(f);
+  CHECK(doc != nullptr);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  edit::Editor ed(*doc);
+  AutoCorrect ac;
+  Pos caret = P(0, 4);
+  for (char16_t ch : std::u16string(u"www.example.com ")) {
+    auto r = ed.InsertText(caret, std::u16string(1, ch));
+    CHECK(r.ok);
+    caret = r.caret;
+    if (auto moved = ac.AfterTyping(ed, caret, ch)) caret = *moved;
+  }
+  CHECK_EQ(ParaText(*doc, 0), "See www.example.com ");
+  CHECK(caret == P(0, 20));
+  // A link over the address and not the space after it, in Word's Hyperlink style.
+  auto linkOf = [&doc]() {
+    std::string out;
+    for (const TextRun& t : doc->Runs(0))
+      if (t.hyperlink && t.end > t.start)
+        out += std::to_string(t.start) + "-" + std::to_string(t.end) + " " + doc->HyperlinkTarget(t.hyperlink) + ";";
+    return out;
+  };
+  CHECK_EQ(linkOf(), "4-19 http://www.example.com;");
+  const Style* s = doc->FindStyle("Hyperlink");
+  CHECK(s != nullptr && s->type == StyleType::Character);
+  CHECK(MainXml(*doc).find("<w:rStyle w:val=\"Hyperlink\"/>") != std::string::npos);
+  CHECK(ed.UndoName() == u"AutoCorrect");
+  // One Ctrl+Z: the address as typed, no link.
+  CHECK(ed.Undo().ok);
+  CHECK_EQ(ParaText(*doc, 0), "See www.example.com ");
+  CHECK_EQ(linkOf(), "");
+  CHECK(MainXml(*doc).find("Hyperlink") == std::string::npos);
+  CHECK(ed.Redo().ok);
+  CHECK_EQ(linkOf(), "4-19 http://www.example.com;");
+  // All of it undone: the document as it was.
+  while (ed.CanUndo()) CHECK(ed.Undo().ok);
+  CHECK(MainXml(*doc) == before);
 }
 
 TEST(Proof_AutoCorrectIsItsOwnUndoStep) {
