@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <iterator>
+#include <optional>
 #include <unordered_set>
 
 #include "doc/edit/Kept.h"
@@ -1078,6 +1080,26 @@ struct EditorState {
     std::string_view v = Node(&t, lock).AttrOr(kVal);
     return v == "sdtContentLocked" || v == (control ? "sdtLocked" : "contentLocked");
   }
+  // A content control that holds one paragraph: a date, a list (drop-down or combo box), plain
+  // text (multiLine allows line breaks, not paragraphs) or a picture. Word can't open one with a
+  // second paragraph in it.
+  bool OneParagraph(ElemId sdt) {
+    static const uint32_t kinds[] = {Name("date"), Name("dropDownList"), Name("comboBox"), Name("text"), Name("picture")};
+    ElemId pr = Child(sdt, kSdtPr);
+    for (ElemId c = pr == kNoElem ? kNoElem : E(pr).first; c != kNoElem; c = E(c).next)
+      if (std::find(std::begin(kinds), std::end(kinds), NameOf(c)) != std::end(kinds)) return true;
+    return false;
+  }
+  // Whether `para` is in such a control: around it, its cell or its row, or (with `o`) inline
+  // around that place in it (finding 22).
+  bool InOneParagraphControl(uint32_t para, std::optional<uint32_t> o) {
+    for (ElemId a = E(d.paras_[para].elem).parent; a != kNoElem; a = E(a).parent)
+      if (NameOf(a) == kSdt && OneParagraph(a)) return true;
+    if (o)
+      for (ElemId id : AllElems(para))
+        if (NameOf(id) == kSdt && E(id).start < *o && *o < E(id).start + E(id).length && OneParagraph(id)) return true;
+    return false;
+  }
   ElemId LockedSdt(ElemId leaf) {
     for (ElemId a : Ancestors(leaf))
       if (NameOf(a) == kSdt && Locked(a, false)) return a;
@@ -1262,6 +1284,10 @@ struct EditorState {
           open.pop_back();
         }
       }
+    }
+    if (InOneParagraphControl(para, o)) {
+      why = u"A date, list, plain-text or picture content control holds one paragraph, so it can't be split.";
+      return false;
     }
     // Text shown from a kept mc:AlternateContent block is written as that block, which stays with
     // the element it's kept beside: a split just before the text goes after it, so the two agree.

@@ -1658,3 +1658,43 @@ TEST(Edit_SplitKeepsARangeInOrderAcrossAnEmptyLink) {
   while (ed.CanUndo()) ed.Undo();
   CHECK(MainXml(*doc) == before && RoundTrips(*doc));
 }
+
+TEST(Edit_OneParagraphControlsAreNotSplit) {
+  // d1-corpus finding 22: Word can't open a date, list, plain-text or picture content control with
+  // a second paragraph in it, wherever the control is: around a table cell (as forms have it),
+  // around the paragraph, or inline across the place. A split there, by Enter, typing or paste, is
+  // refused. A rich-text control takes paragraphs, and a split beside an inline control is fine.
+  Fixture f;
+  f.body =
+      "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"3000\"/></w:tblGrid><w:tr>"
+      "<w:sdt><w:sdtPr><w:date><w:dateFormat w:val=\"d-M-yyyy\"/></w:date></w:sdtPr><w:sdtContent>"
+      "<w:tc><w:tcPr><w:tcW w:w=\"3000\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>Select a date</w:t></w:r></w:p></w:tc>"
+      "</w:sdtContent></w:sdt></w:tr></w:tbl>"
+      "<w:sdt><w:sdtPr><w:text w:multiLine=\"1\"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Plain text</w:t></w:r></w:p>"
+      "</w:sdtContent></w:sdt>"
+      "<w:p><w:r><w:t xml:space=\"preserve\">Pick </w:t></w:r><w:sdt><w:sdtPr><w:dropDownList>"
+      "<w:listItem w:displayText=\"One item\" w:value=\"1\"/></w:dropDownList></w:sdtPr><w:sdtContent><w:r><w:t>One item</w:t>"
+      "</w:r></w:sdtContent></w:sdt><w:r><w:t xml:space=\"preserve\"> here</w:t></w:r></w:p>"
+      "<w:sdt><w:sdtPr><w:alias w:val=\"Notes\"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Rich text</w:t></w:r></w:p>"
+      "</w:sdtContent></w:sdt>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  CHECK(ps.size() == 4);
+  if (ps.size() != 4) return;
+  CHECK(!ed.SplitParagraph(P(ps[0], 10)));  // "Select a d|ate", as the corpus form had it
+  CHECK(!ed.SplitParagraph(P(ps[0], 0)));
+  CHECK(!ed.InsertText(P(ps[1], 5), u"one\ntwo"));
+  CHECK(!ed.SplitParagraph(P(ps[2], 9)));  // inside the drop-down
+  CHECK(MainXml(*doc) == before && !ed.CanUndo());
+  // A line break in plain text; splits just before the drop-down and in rich text.
+  CHECK(ed.InsertText(P(ps[1], 5), u" "));
+  CHECK(ed.SplitParagraph(P(ps[2], 5)));
+  CHECK(ed.SplitParagraph(P(Main(*doc)[4], 4)));
+  CHECK(Consistent(*doc, f));
+  while (ed.CanUndo()) ed.Undo();
+  CHECK(MainXml(*doc) == before && RoundTrips(*doc));
+}
