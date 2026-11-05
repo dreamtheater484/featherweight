@@ -1506,6 +1506,24 @@ void App::ShowMenu(int which) {
         AppendItem(m, CmdHyphenation, L"Hyphenate automatically", hyphens.enabled, hyphens.checked);
       }
       AppendItem(m, CmdRuler, L"Ruler", true, settings_.ruler);
+      // Review: Track Changes, the changes one at a time or all at once, the markup shown.
+      HMENU review = CreatePopupMenu();
+      auto add = [&](HMENU menu, int cmd, bool radio = false) {
+        const CommandState s = v->QueryCommand(cmd);
+        if (!s.visible) return;
+        AppendItem(menu, cmd, s.label + (s.shortcut.empty() ? L"" : L"\t" + s.shortcut), s.enabled, s.checked, radio);
+      };
+      add(review, CmdTrackChanges);
+      AppendSeparator(review);
+      for (int cmd : {CmdAcceptChange, CmdRejectChange, CmdAcceptAll, CmdRejectAll, CmdNextChange, CmdPrevChange})
+        add(review, cmd);
+      AppendSeparator(review);
+      for (int cmd : {CmdMarkupSimple, CmdMarkupAll, CmdMarkupNone, CmdMarkupOriginal}) add(review, cmd, true);
+      AppendSeparator(review);
+      add(review, CmdNewComment);
+      add(review, CmdReviewPane);
+      add(review, CmdReviewerName);
+      AppendSubmenu(m, review, L"Review");
     }
     AppendSeparator(m);
     if (fw::pkg::backups::Any(DocFile::Config().backups)) AppendItem(m, CmdDeleteBackups, L"Delete backups");

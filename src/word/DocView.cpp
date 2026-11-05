@@ -240,6 +240,7 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
   auto editor = std::make_unique<fw::doc::edit::Editor>(*doc_);
   if (editor->CanEdit()) {
     editor_ = std::move(editor);
+    editor_->SetAuthor(ReviewerName());
     editor_->OnChange([this](const fw::doc::edit::Change& c) { OnEdited(c); });
     format_ = std::make_unique<DocFormat>(
         *editor_, [this] { return FormatTarget(); }, [this](const DocFormat::Done& d) { AfterFormat(d); });
@@ -334,24 +335,35 @@ void DocView::CollectAnnotations() {
         formShades_.push_back({{f.start.para, f.start.offset}, {f.end.para, f.end.offset}});
     }
 
-  // Tracked changes in the text (not formatting changes, which show nothing in Simple Markup).
+  // Tracked changes in the text; formatting and paragraph marks get only their bar.
   std::vector<std::string_view> authors;
+  allChanges_ = 0;
   for (uint32_t s = 0; s < doc_->Stories().size(); ++s) {
     if (doc_->Stories()[s].kind == fw::doc::StoryKind::Comment) continue;
     for (const auto& r : doc_->Revisions(s)) {
       using Kind = fw::doc::RevisionKind;
-      if (r.kind != Kind::Insertion && r.kind != Kind::Deletion && r.kind != Kind::MoveFrom && r.kind != Kind::MoveTo)
-        continue;
-      if (r.start.para == fw::doc::kNone || r.end.para == fw::doc::kNone) continue;
+      ++allChanges_;
+      const bool text = r.kind == Kind::Insertion || r.kind == Kind::Deletion || r.kind == Kind::MoveFrom ||
+                        r.kind == Kind::MoveTo;
+      const bool barOnly = r.kind == Kind::RunFormat || r.kind == Kind::ParagraphFormat ||
+                           r.kind == Kind::MarkInsertion || r.kind == Kind::MarkDeletion;
+      if ((!text && !barOnly) || r.start.para == fw::doc::kNone || r.end.para == fw::doc::kNone) continue;
       Change ch;
       ch.from = {r.start.para, r.start.offset};
       ch.to = {r.end.para, r.end.offset};
+      if (barOnly && r.kind != Kind::RunFormat)
+        ch.from = {r.start.para, 0}, ch.to = {r.start.para, static_cast<uint32_t>(doc_->Para(r.start.para).text.size())};
       if (ch.to < ch.from) std::swap(ch.from, ch.to);
-      if (ch.from == ch.to) continue;
+      if (ch.from == ch.to && !barOnly) continue;
+      ch.barOnly = barOnly;
       ch.deletion = r.kind == Kind::Deletion || r.kind == Kind::MoveFrom;
       auto who = std::find(authors.begin(), authors.end(), r.author);
       if (who == authors.end()) who = authors.insert(authors.end(), r.author);
       ch.author = static_cast<size_t>(who - authors.begin());
+      if (barOnly) {
+        changes_.push_back(std::move(ch));
+        continue;
+      }
       std::wstring by = r.author.empty() ? std::wstring() : L" by " + Wide(r.author);
       if (ch.deletion) {
         std::wstring gone;
@@ -378,7 +390,7 @@ void DocView::CollectAnnotations() {
 void DocView::VisibleText(uint32_t para, std::wstring& text, std::vector<uint32_t>& map) const {
   const std::u16string& s = doc_->Para(para).text;
   for (const auto& run : doc_->Runs(para)) {
-    if (run.fieldCode || Deleted(run.revision)) continue;
+    if (run.fieldCode || !RevisionShown(run.revision)) continue;
     if (run.run && doc_->ResolvedRun(para, run.run).vanish) continue;
     for (uint32_t i = run.start; i < run.end && i < s.size(); ++i) {
       char16_t c = s[i];
@@ -619,8 +631,9 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
       fill(m.rects, Alpha(Rgb(0x808080), 0.28f), false);
     }
   }
-  // Comments: their text is marked, as Word marks it.
-  if (!presentation_) {
+  // Comments: their text is marked, as Word marks it (not in No markup or Original).
+  const bool markup = !presentation_ && (markup_ == Markup::Simple || markup_ == Markup::All);
+  if (markup) {
     for (auto& cm : comments_) {
       if (!cm.measured && done) {
         cm.rects = pagination_->Ranges(cm.from, cm.to);
@@ -629,9 +642,10 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
       fill(cm.rects, Alpha(Rgb(0xF2C744), 0.30f), false);
     }
   }
-  // Tracked changes: inserted text underlined, a mark where text was deleted, and a bar in the
-  // left margin beside each.
-  if (!presentation_) {
+  // Tracked changes: inserted text underlined, a mark where text was deleted (in All markup, the
+  // deleted text, struck through), and a bar in the left margin beside each.
+  const bool struck = markup_ == Markup::All && MarkupLaidOut();
+  if (markup) {
     const float u = std::max(1.0f, ui_);
     auto bar = [&](int pg, float top, float bottom, D2D1_COLOR_F color) {
       const layout::Page& page = pagination_->GetPage(pg);
@@ -641,11 +655,32 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
     };
     for (auto& ch : changes_) {
       if (!ch.measured && done) {
-        if (ch.deletion) ch.at = pagination_->CaretAt(ch.from);
+        if (ch.deletion && !struck && !ch.barOnly) ch.at = pagination_->CaretAt(ch.from);
         else ch.rects = pagination_->Ranges(ch.from, ch.to);
+        if (ch.barOnly && ch.rects.empty()) ch.at = pagination_->CaretAt(ch.from);  // an empty paragraph
         ch.measured = true;
       }
       const D2D1_COLOR_F color = ChangeColor(ch.author);
+      if (ch.barOnly) {
+        for (const auto& [page, r] : ch.rects)
+          if (static_cast<int>(page) >= first && static_cast<int>(page) <= last && static_cast<int>(page) < pages)
+            bar(static_cast<int>(page), r.top, r.bottom, color);
+        if (ch.at && static_cast<int>(ch.at->page) >= first && static_cast<int>(ch.at->page) <= last &&
+            static_cast<int>(ch.at->page) < pages)
+          bar(static_cast<int>(ch.at->page), ch.at->top, ch.at->bottom, color);
+        continue;
+      }
+      if (ch.deletion && struck) {
+        for (const auto& [page, r] : ch.rects) {
+          const int pg = static_cast<int>(page);
+          if (pg < first || pg > last || pg >= pages) continue;
+          D2D1_RECT_F s = PageRectToScreen(pg, r);
+          const float mid = std::round((s.top + s.bottom) / 2);
+          c.Fill(RectF(s.left, mid, s.right, mid + u), color);
+          bar(pg, r.top, r.bottom, color);
+        }
+        continue;
+      }
       if (ch.deletion) {
         if (!ch.at) continue;
         const int pg = static_cast<int>(ch.at->page);
@@ -790,7 +825,8 @@ DocView::Hit DocView::HitAt(int x, int y) {
   for (size_t i = 0; i < comments_.size(); ++i)
     if (!(at < comments_[i].from) && at < comments_[i].to) hit.comment = static_cast<int>(i);
   for (size_t i = 0; i < changes_.size(); ++i)
-    if (!changes_[i].deletion && !(at < changes_[i].from) && at < changes_[i].to) hit.change = static_cast<int>(i);
+    if (!changes_[i].deletion && !changes_[i].barOnly && !(at < changes_[i].from) && at < changes_[i].to)
+      hit.change = static_cast<int>(i);
   return hit;
 }
 
@@ -1102,7 +1138,7 @@ std::wstring DocView::TooltipAt(int x, int y) {
   float px, py;
   if (page >= 0 && ToPagePoint(page, x, y, px, py)) {
     for (const auto& ch : changes_) {
-      if (ch.deletion && ch.at && static_cast<int>(ch.at->page) == page && std::abs(px - ch.at->x) < 3 &&
+      if (ch.deletion && !ch.barOnly && ch.at && static_cast<int>(ch.at->page) == page && std::abs(px - ch.at->x) < 3 &&
           py >= ch.at->top && py < ch.at->bottom)
         return ch.text;
     }
@@ -1556,7 +1592,9 @@ int DocView::ShortcutFor(UINT vk, UINT mods) const {
     if (!shift && vk == 'K' && format_) return CmdInsertLink;
     if (shift && vk == '8') return CmdShowMarks;
     if (shift && vk == VK_F5 && format_) return CmdBookmark;
+    if (shift && vk == 'E' && format_) return CmdTrackChanges;
   }
+  if ((mods & kModCtrl) && (mods & kModAlt) && !(mods & kModShift) && vk == 'M' && format_) return CmdNewComment;
   if (page_)
     if (int cmd = DocPage::Shortcut(vk, mods)) return cmd;
   return Shortcut(vk, mods);
@@ -1566,6 +1604,7 @@ CommandState DocView::QueryCommand(int cmd) {
   if (format_ && DocFormat::Owns(cmd)) return format_->Query(cmd);
   if (auto d3 = QueryD3(cmd)) return *d3;
   if (auto forms = QueryForms(cmd)) return *forms;
+  if (auto d4 = QueryD4(cmd)) return *d4;
   if (table_ && DocTable::Owns(cmd)) return table_->Query(cmd);
   if (page_ && DocPage::Owns(cmd)) return page_->Query(cmd);
   if (styles_ && DocStyles::Owns(cmd)) return styles_->Query(cmd);
@@ -1626,6 +1665,11 @@ std::vector<int> DocView::Commands() {
                   CmdCloseHeaderFooter, CmdDifferentFirstPage, CmdDifferentOddEven, CmdLinkToPrevious, CmdPageNumber,
                   CmdNavigationPane, CmdShowMarks})
     if (format_ || cmd == CmdNavigationPane || cmd == CmdShowMarks || cmd == CmdOpenLink) ids.push_back(cmd);
+  for (int cmd : {CmdReviewPane, CmdNewComment, CmdTrackChanges, CmdAcceptChange, CmdRejectChange, CmdAcceptAll,
+                  CmdRejectAll, CmdNextChange, CmdPrevChange, CmdMarkupSimple, CmdMarkupAll, CmdMarkupNone,
+                  CmdMarkupOriginal, CmdReviewerName})
+    if (format_ || cmd == CmdReviewPane || cmd == CmdNextChange || cmd == CmdPrevChange || cmd >= CmdMarkupSimple)
+      ids.push_back(cmd);
   if (table_)
     for (int cmd : DocTable::CommandIds()) ids.push_back(cmd);
   if (page_)
@@ -1658,6 +1702,7 @@ bool DocView::Execute(int cmd) {
   }
   if (ExecuteProof(cmd)) return true;
   if (ExecuteD3(cmd)) return true;
+  if (ExecuteD4(cmd)) return true;
   if (ExecutePicture(cmd)) return true;
   if (ExecuteForms(cmd)) return true;
   switch (cmd) {
@@ -1708,6 +1753,7 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
     m.left.push_back(query(CmdRedo, icon::Redo, 7));
     format_->AddToolbar(m);
     AddD3Toolbar(m);
+    AddD4Toolbar(m);
     table_->AddToolbar(m);
     page_->AddToolbar(m);
     AddPictureToolbar(m);
@@ -1749,6 +1795,7 @@ void DocView::FillContextMenu(HMENU m, int x, int y) {
   }
   FillSpellingMenu(m, x, y);  // a spelling error's suggestions first, as Word has them
   FillD3Menu(m, x, y);        // then the link under the caret
+  FillD4Menu(m);              // the change there, and a new comment
   FillPictureMenu(m);         // and a selected picture's
   if (Editing()) {
     table_->FillContextMenu(m);

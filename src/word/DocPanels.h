@@ -111,6 +111,62 @@ class DocView::PageNumberPanel : public PanelContent, DocPanelRows {
   PushButton insert_, apply_;
 };
 
+// A box of text a panel can put the keyboard in (once it's laid out).
+class PanelTextBox : public ComboBox {
+ public:
+  using ComboBox::TakeFocus;
+};
+
+// The Review pane (D4, DocReview.cpp): Track Changes, the markup shown, the tracked changes one at
+// a time, and the comments: a card for each thread, its replies under it. A click on a card picks
+// it and selects its text; the box writes a new comment on the selection, a reply to the picked
+// one, or the picked one's new text (Edit puts it in the box).
+class DocView::ReviewPanel : public PanelContent, DocPanelRows {
+ public:
+  explicit ReviewPanel(DocView& view);
+  std::wstring Title() const override { return L"Review"; }
+  std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
+  void Draw(gfx::Canvas& c) override;
+  bool OnMouseDown(float x, float y, bool dbl) override;
+  bool OnMouseMove(float x, float y) override;
+  void OnMouseLeave() override;
+  bool OnWheel(int delta, float x, float y) override;
+  std::wstring TooltipAt(float x, float y) override;
+  // A new comment on the selection: the keyboard goes to the box.
+  void StartComment();
+  // The name box, for ⋯'s "Your name".
+  void StartName();
+
+ private:
+  struct Card {
+    std::string id;  // the thread's first comment
+    bool done = false;
+    std::vector<std::pair<std::wstring, std::wstring>> lines;  // "Ann Lee · 5 Nov 2026", text: it, then its replies
+    D2D1_RECT_F rc{};
+  };
+  void Refresh();       // the comments and the buttons, as the document has them now
+  void PlaceCards();    // the cards in the list's room, scrolled
+  int CardAt(float x, float y) const;
+  void Pick(int card);  // and select its text in the document
+  void Post();
+  void Reply();
+  void Edit();
+  void Resolve();
+  void Delete();
+  void Done(const fw::doc::edit::Result& r, std::wstring ok);  // after a change: the note, and the cards again
+  DocView& v_;
+  PushButton track_, prev_, next_, accept_, reject_, acceptAll_, rejectAll_, post_, reply_, edit_, resolve_, delete_;
+  Dropdown markup_;
+  PanelTextBox box_, name_;
+  PanelTextBox* focusWanted_ = nullptr;  // the box the keyboard goes to once it's drawn
+  std::vector<Card> cards_;
+  std::string picked_, editing_;  // comment ids: the picked thread's first, and the one the box edits
+  D2D1_RECT_F list_{};
+  float scroll_ = 0, height_ = 0;
+  int hover_ = -1;
+  uint32_t seen_ = UINT32_MAX;  // DocView::editStamp_ when the cards were made
+};
+
 // The navigation pane: the document's headings (the one the caret is under marked, and kept in
 // view), or the search's results. Drawn and handled here, without controls.
 class DocView::NavPanel : public PanelContent {
