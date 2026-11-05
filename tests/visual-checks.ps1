@@ -90,6 +90,10 @@ $checks = @(
   @("doc-search", "light", "", "cmd:find;type:the;wait:400", @("..\office\layout\report.docx")),
   @("doc-selection", "light", "", "drag:200,300,600,360", @("..\office\layout\report.docx")),
   @("doc-commands", "dark", "", "key:alt+q;type:page", @("..\office\layout\footnotes.docx")),
+  # Editing (D2): typing with the caret, typing at night, replacing every match.
+  @("doc-typing", "light", "", "key:ctrl+end;key:enter;type:Typed in Featherweight, with a caret.|And a second paragraph", @("..\office\layout\report.docx")),
+  @("doc-typing-night", "dark", "--invert", "key:ctrl+home;type:Night typing ", @("..\office\layout\report.docx")),
+  @("doc-replace", "light", "", "cmd:replace;type:margin;key:tab;type:MARGIN;cmd:replaceall;wait:300", @("..\office\layout\report.docx")),
   # Printing a document (vector, through Microsoft Print to PDF), then the PDF it made.
   @("doc-print", "light", "", "print:$out\doc-print.pdf", @("..\office\layout\textbox-table.docx")),
   @("doc-printed", "light", "", "view:facing;cmd:fit-page", @("..\..\build\visual\doc-print.pdf"))
