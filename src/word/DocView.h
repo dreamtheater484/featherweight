@@ -149,6 +149,8 @@ class DocView : public PagedView {
   uint32_t revision_ = 0;
   bool noticesShown_ = false;
   size_t words_ = 0;
+  size_t wordsNext_ = 0;  // the next main-story paragraph to count
+  bool wordsCounted_ = false;
 
   // Comments, with their ranges and text for the tooltip.
   struct Comment {

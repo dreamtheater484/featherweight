@@ -277,18 +277,6 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     }
   }
 
-  // Words, for the status bar.
-  for (uint32_t p : doc_->StoryParagraphs(doc_->MainStory())) {
-    std::wstring t;
-    std::vector<uint32_t> map;
-    VisibleText(p, t, map);
-    bool in = false;
-    for (wchar_t ch : t) {
-      bool w = !iswspace(ch);
-      if (w && !in) ++words_;
-      in = w;
-    }
-  }
   Relayout(nullptr);
   return OpenResult::Ok;
 }
@@ -497,10 +485,13 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
       else c.Fill(s, color);
     }
   };
+  // Comments, changes and matches are measured once pagination is done: measuring a range lays
+  // out every page up to it, which painting mustn't wait for.
+  const bool done = pagination_->Done();
   // Comments: their text is marked, as Word marks it.
   if (!presentation_) {
     for (auto& cm : comments_) {
-      if (!cm.measured) {
+      if (!cm.measured && done) {
         cm.rects = pagination_->Ranges(cm.from, cm.to);
         cm.measured = true;
       }
@@ -518,7 +509,7 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
       c.Fill(RectF(s.left, s.top, s.left + u, s.bottom), color);
     };
     for (auto& ch : changes_) {
-      if (!ch.measured) {
+      if (!ch.measured && done) {
         if (ch.deletion) ch.at = pagination_->CaretAt(ch.from);
         else ch.rects = pagination_->Ranges(ch.from, ch.to);
         ch.measured = true;
@@ -545,7 +536,7 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
   }
   for (size_t i = 0; i < matches_.size(); ++i) {
     Match& m = matches_[i];
-    if (!m.measured) {
+    if (!m.measured && (done || static_cast<int>(i) == current_)) {
       m.rects = pagination_->Ranges(m.from, m.to);
       m.measured = true;
     }
@@ -566,7 +557,10 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
 // ---------------------------------------------------------------------------
 // Background work
 
-bool DocView::HasIdleWork() const { return Ready() && (!pagination_->Done() || !noticesShown_); }
+bool DocView::HasIdleWork() const {
+  return Ready() && (!pagination_->Done() || !noticesShown_ || !wordsCounted_ ||
+                     (!placeholder_ && sizes_.size() < pagination_->PageCount()));
+}
 
 bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   if (!Ready()) return false;
@@ -574,10 +568,38 @@ bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   if (!pagination_->Done()) {
     double ms = std::clamp(deadlineMs - anim::Now(), 1.0, 12.0);
     pagination_->Continue(ms);
-    if (TakeNewPages()) {
-      repaint = true;
+    // Done now: the comments, changes and matches can be measured.
+    if (pagination_->Done()) repaint = true;
+  }
+  // Words, for the status bar: counted in idle time, a few milliseconds at a time (a 300-page
+  // document takes about 35 ms).
+  if (!wordsCounted_ && pagination_->Done()) {
+    const auto& paras = doc_->StoryParagraphs(doc_->MainStory());
+    const double until = anim::Now() + 4;
+    std::wstring t;
+    std::vector<uint32_t> map;
+    while (wordsNext_ < paras.size() && anim::Now() < until) {
+      for (size_t n = 0; n < 50 && wordsNext_ < paras.size(); ++n) {
+        t.clear();
+        map.clear();
+        VisibleText(paras[wordsNext_++], t, map);
+        bool in = false;
+        for (wchar_t ch : t) {
+          bool w = !iswspace(ch);
+          if (w && !in) ++words_;
+          in = w;
+        }
+      }
+    }
+    if (wordsNext_ >= paras.size()) {
+      wordsCounted_ = true;
       host_.ViewStateChanged();
     }
+  }
+  // Pages laid out here, or by finding or scrolling to a position (which lays out up to it).
+  if (TakeNewPages()) {
+    repaint = true;
+    host_.ViewStateChanged();
   }
   if (pagination_->Revision() != revision_) {
     revision_ = pagination_->Revision();
@@ -611,7 +633,12 @@ DocView::Hit DocView::HitAt(int x, int y) {
   ToPagePoint(page, x, y, px, py);
   // The character under the point: the one before or after the nearest caret position.
   std::optional<uint32_t> under;
+  // Measuring a character lays out the pages up to it, so while pagination runs (a few seconds at
+  // most) the nearest character will do.
+  const uint32_t size = static_cast<uint32_t>(doc_->Para(pos->para).text.size());
+  if (!pagination_->Done() && size > 0) under = std::min(pos->offset, size - 1);
   for (uint32_t off : {pos->offset, pos->offset > 0 ? pos->offset - 1 : pos->offset}) {
+    if (under) break;
     if (off >= doc_->Para(pos->para).text.size()) continue;
     for (const auto& [pg, r] : pagination_->Ranges({pos->para, off}, {pos->para, off + 1})) {
       if (static_cast<int>(pg) == page && px >= r.left - 0.5f && px < r.right + 0.5f && py >= r.top && py < r.bottom) {
@@ -1219,7 +1246,8 @@ void DocView::FillContextMenu(HMENU m, int, int) {
 void DocView::BuildStatusBar(StatusBarModel& m) {
   std::wstring pages = L"Page " + std::to_wstring(currentPage_ + 1) + L" of " + std::to_wstring(PageCount());
   if (!pagination_->Done()) pages += L"…";
-  m.segments = {pages, Thousands(words_) + (words_ == 1 ? L" word" : L" words")};
+  m.segments = {pages};
+  if (wordsCounted_) m.segments.push_back(Thousands(words_) + (words_ == 1 ? L" word" : L" words"));
   m.zoom = true;
   m.zoomValue = Zoom();
   m.onZoom = [this](double z) { SetZoom(z); };
