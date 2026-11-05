@@ -260,6 +260,7 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     ph.keep = [this](const fw::doc::edit::Result& r, bool caret) { return ApplyPageChange(r, caret); };
     ph.showPanel = [this](PanelContent* p, bool toggle) { ShowPanel(p, toggle); };
     ph.headerSection = [this] { return hf_ ? hf_->section : fw::doc::kNone; };
+    ph.formatted = [this](const std::wstring& refused) { AfterFormat({std::nullopt, refused}); };
     table_ = std::make_unique<DocTable>(*editor_, std::move(th));
     page_ = std::make_unique<DocPage>(*editor_, std::move(ph));
     pictures_ = std::make_unique<fw::doc::edit::Pictures>(*editor_);
@@ -1676,6 +1677,7 @@ void DocView::FillContextMenu(HMENU m, int x, int y) {
     AppendItem(m, CmdPaste, L"Paste\tCtrl+V", QueryCommand(CmdPaste).enabled);
     AppendItem(m, CmdPasteMerge, L"Paste, merging formatting", QueryCommand(CmdPasteMerge).enabled);
     AppendSeparator(m);
+    AppendItem(m, CmdParagraph, L"Paragraph…", QueryCommand(CmdParagraph).enabled);
     HMENU language = CreatePopupMenu();
     FillLanguageMenu(language);
     menu::AppendSubmenu(m, language, L"Language", GetMenuItemCount(language) > 0);

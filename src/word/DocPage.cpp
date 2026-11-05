@@ -7,6 +7,8 @@
 #include <optional>
 
 #include "Commands.h"
+#include "doc/edit/Format.h"
+#include "doc/edit/TreeEdit.h"
 #include "ui/Controls.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
@@ -15,7 +17,9 @@
 using namespace gfx;
 namespace edit = fw::doc::edit;
 using fw::Twips;
+using fw::doc::Justification;
 using fw::doc::kNone;
+using fw::doc::LineRule;
 using fw::doc::Pos;
 using fw::doc::SectionProps;
 using fw::doc::SectionStart;
@@ -49,6 +53,7 @@ constexpr Named kNames[] = {
     {CmdHyphenation, L"Hyphenate automatically", L""},
     {CmdOptionalHyphen, L"Optional hyphen", L"Ctrl+-"},
     {CmdNonBreakingHyphen, L"Non-breaking hyphen", L"Ctrl+Shift+-"},
+    {CmdParagraph, L"Paragraph…", L""},
 };
 
 const Named* NameOf(int cmd) {
@@ -82,6 +87,7 @@ constexpr int32_t kLongest = 31680;  // 22 inches, as Word allows
 // The panel fits a 700-pixel window without scrolling: 10 rows under 4 headings. Word's margin
 // presets are in the Layout menu.
 constexpr float kLabelW = 92, kRowH = 35, kSide = 16;
+constexpr float kParaLabelW = 100;  // "Keep with next"
 
 bool Near(int32_t a, int32_t b) { return std::abs(a - b) <= 20; }
 
@@ -120,14 +126,89 @@ bool Landscape(const SectionProps& s) { return s.pageWidth.Value() > s.pageHeigh
 
 bool Before(Pos a, Pos b) { return a.para < b.para || (a.para == b.para && a.offset < b.offset); }
 
+// A side panel laid out as rows under headings: a label, then one control or two side by side.
+class RowsPanel : public PanelContent {
+ public:
+  std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
+    ui_ = ui;
+    const float u = ui;
+    Refresh();
+    headings_.clear();
+    labels_.clear();
+    std::vector<Control*> controls;
+    const float labelX = body.left + kSide * u, cx = body.left + (kSide + labelW_) * u, right = body.right - kSide * u;
+    auto place = [&](Control* c, float left, float r, float y) {
+      c->rc = RectF(std::round(left), std::round(y), std::round(r), std::round(y + 30 * u));
+      controls.push_back(c);
+    };
+    float y = body.top + 4 * u;
+    for (Row& r : rows_) {
+      if (!r.a) {
+        if (!headings_.empty()) y += 4 * u;
+        headings_.push_back({r.label, RectF(labelX, y, right, y + 22 * u)});
+        y += 24 * u;
+        continue;
+      }
+      if (r.b) {
+        const float half = (right - cx - 6 * u) / 2;
+        place(r.a, cx, cx + half, y);
+        place(r.b, cx + half + 6 * u, right, y);
+      } else {
+        const float w = dynamic_cast<SpinBox*>(r.a) ? std::min(right - cx, 120 * u) : right - cx;
+        place(r.a, cx, cx + w, y);
+      }
+      labels_.push_back({r.label, RectF(labelX, y, cx - 6 * u, y + 30 * u)});
+      y += kRowH * u;
+    }
+    return controls;
+  }
+
+  void Draw(Canvas& c) override {
+    const Palette& p = theme::P();
+    const float u = ui_;
+    Refresh();
+    for (const auto& [text, rc] : headings_) c.Text(text, rc, p.text, 13 * u, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    for (const auto& [text, rc] : labels_) c.Text(text, rc, p.textSecondary, 13 * u);
+  }
+
+ protected:
+  struct Row {
+    std::wstring label;
+    Control* a = nullptr;  // none: a heading
+    Control* b = nullptr;  // a second control beside the first
+  };
+
+  explicit RowsPanel(float labelW) : labelW_(labelW) {}
+  // The controls show the document as it is now (when anything changed since they last did).
+  virtual void Refresh() = 0;
+  // Ids for UI Automation, in order, once the rows are made.
+  void NumberControls() {
+    int id = 10;
+    for (Row& r : rows_)
+      for (Control* c : {r.a, r.b})
+        if (c) c->id = id++;
+  }
+  void EnableAll(bool on) {
+    for (Row& r : rows_)
+      for (Control* c : {r.a, r.b})
+        if (c) c->enabled = on;
+  }
+
+  std::vector<Row> rows_;
+
+ private:
+  float ui_ = 1, labelW_;
+  std::vector<std::pair<std::wstring, D2D1_RECT_F>> headings_, labels_;
+};
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
 // The Page setup panel
 
-class DocPage::Panel : public PanelContent {
+class DocPage::Panel : public RowsPanel {
  public:
-  explicit Panel(DocPage& owner) : p_(owner) {
+  explicit Panel(DocPage& owner) : RowsPanel(kLabelW), p_(owner) {
     auto drop = [](Dropdown& d, const wchar_t* name, std::vector<std::wstring> items) {
       d.label = d.tooltip = name;
       d.items = std::move(items);
@@ -245,10 +326,7 @@ class DocPage::Panel : public PanelContent {
              {L"Hyphenation (whole document)"},
              {L"Automatic", &hyphenate_},
              {L"Zone, limit", &zone_, &limit_}};
-    int id = 10;
-    for (Row& r : rows_)
-      for (Control* c : {r.a, r.b})
-        if (c) c->id = id++;
+    NumberControls();
   }
 
   std::wstring Title() const override { return L"Page setup"; }
@@ -259,54 +337,7 @@ class DocPage::Panel : public PanelContent {
     shown_ = {};
   }
 
-  std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
-    ui_ = ui;
-    const float u = ui;
-    Refresh();
-    headings_.clear();
-    labels_.clear();
-    std::vector<Control*> controls;
-    const float labelX = body.left + kSide * u, cx = body.left + (kSide + kLabelW) * u, right = body.right - kSide * u;
-    auto place = [&](Control* c, float left, float r, float y) {
-      c->rc = RectF(std::round(left), std::round(y), std::round(r), std::round(y + 30 * u));
-      controls.push_back(c);
-    };
-    float y = body.top + 4 * u;
-    for (Row& r : rows_) {
-      if (!r.a) {
-        if (!headings_.empty()) y += 4 * u;
-        headings_.push_back({r.label, RectF(labelX, y, right, y + 22 * u)});
-        y += 24 * u;
-        continue;
-      }
-      if (r.b) {
-        const float half = (right - cx - 6 * u) / 2;
-        place(r.a, cx, cx + half, y);
-        place(r.b, cx + half + 6 * u, right, y);
-      } else {
-        const float w = dynamic_cast<SpinBox*>(r.a) ? std::min(right - cx, 120 * u) : right - cx;
-        place(r.a, cx, cx + w, y);
-      }
-      labels_.push_back({r.label, RectF(labelX, y, cx - 6 * u, y + 30 * u)});
-      y += kRowH * u;
-    }
-    return controls;
-  }
-
-  void Draw(Canvas& c) override {
-    const Palette& p = theme::P();
-    const float u = ui_;
-    Refresh();
-    for (const auto& [text, rc] : headings_) c.Text(text, rc, p.text, 13 * u, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    for (const auto& [text, rc] : labels_) c.Text(text, rc, p.textSecondary, 13 * u);
-  }
-
  private:
-  struct Row {
-    std::wstring label;
-    Control* a = nullptr;  // none: a heading
-    Control* b = nullptr;  // a second control beside the first
-  };
   // What the controls show: the first section in scope, as of this selection and document.
   struct Shown {
     Pos a{kNone, 0}, f{kNone, 0};
@@ -342,7 +373,7 @@ class DocPage::Panel : public PanelContent {
     Done(edit::SetColumns(p_.editor_, first, last, c));
   }
 
-  void Refresh() {
+  void Refresh() override {
     const fw::doc::Document& doc = p_.Doc();
     auto [a, f] = p_.host_.selection();
     const Shown now{a, f, doc.CacheGeneration(), doc.Sections().size(), applyTo_.selected};
@@ -350,9 +381,7 @@ class DocPage::Panel : public PanelContent {
     shown_ = now;
     const auto [first, last] = Scope();
     const bool can = p_.editor_.CanEdit() && first != kNone;
-    for (Row& r : rows_)
-      for (Control* c : {r.a, r.b})
-        if (c) c->enabled = can;
+    EnableAll(can);
     applyTo_.enabled = can && doc.Sections().size() > 1;
     applyTo_.items[0] = first != last && applyTo_.selected == 0 ? L"Selected sections" : L"This section";
     if (first == kNone) return;
@@ -380,25 +409,236 @@ class DocPage::Panel : public PanelContent {
   }
 
   DocPage& p_;
-  float ui_ = 1;
-  std::vector<Row> rows_;
-  std::vector<std::pair<std::wstring, D2D1_RECT_F>> headings_, labels_;
   Shown shown_;
   Dropdown applyTo_, paper_, orientation_, start_, line_, hyphenate_;
   SpinBox width_, height_, top_, bottom_, left_, right_, columns_, spacing_, zone_, limit_;
 };
 
 // ---------------------------------------------------------------------------
+// The Paragraph panel: Word's Paragraph dialog for the selection's paragraphs. Where they differ, a
+// list shows nothing chosen and a box the first one's value.
+
+class DocPage::ParaPanel : public RowsPanel {
+ public:
+  explicit ParaPanel(DocPage& owner) : RowsPanel(kParaLabelW), p_(owner) {
+    auto drop = [](Dropdown& d, const wchar_t* name, std::vector<std::wstring> items) {
+      d.label = d.tooltip = name;
+      d.items = std::move(items);
+    };
+    auto spin = [](SpinBox& s, const wchar_t* name, double lo, double hi, double step, int decimals, const wchar_t* unit) {
+      s.label = s.tooltip = name;
+      s.minValue = lo;
+      s.maxValue = hi;
+      s.step = step;
+      s.decimals = decimals;
+      s.unit = unit;
+    };
+    const double longest = FromTwips(kLongest), step = Metric() ? 0.1 : 0.05;
+
+    drop(align_, L"Alignment", {L"Left", L"Centered", L"Right", L"Justified"});
+    align_.onChange = [this](int i) {
+      if (i < 0 || i >= static_cast<int>(std::size(kAlign))) return;
+      edit::ParaFormat f;
+      f.jc = kAlign[i];
+      Format(f);
+    };
+    spin(left_, L"Left indent", -longest, longest, step, 2, Unit());
+    left_.onChange = [this](double v) {
+      edit::ParaFormat f;
+      f.indStart = Twips(ToTwips(v));
+      Format(f);
+    };
+    spin(right_, L"Right indent", -longest, longest, step, 2, Unit());
+    right_.onChange = [this](double v) {
+      edit::ParaFormat f;
+      f.indEnd = Twips(ToTwips(v));
+      Format(f);
+    };
+    drop(special_, L"First line or hanging indent", {L"None", L"First line", L"Hanging"});
+    special_.onChange = [this](int i) {
+      if (i < 0 || i > 2) return;
+      const int32_t by = by_.value > 0 ? ToTwips(by_.value) : 720;  // Word's half inch
+      edit::ParaFormat f;
+      f.firstLine = Twips(i == 0 ? 0 : i == 1 ? by : -by);
+      Format(f);
+    };
+    spin(by_, L"Indented by", 0, longest, step, 2, Unit());
+    by_.onChange = [this](double v) {
+      const int32_t by = ToTwips(v);
+      edit::ParaFormat f;
+      f.firstLine = Twips(special_.selected == 2 ? -by : by);
+      Format(f);
+    };
+
+    auto space = [&](SpinBox& box, const wchar_t* name, std::optional<Twips> edit::ParaFormat::*field) {
+      spin(box, name, 0, 1584, 6, 1, L" pt");
+      box.onChange = [this, field](double v) {
+        edit::ParaFormat f;
+        f.*field = Twips(static_cast<int32_t>(std::lround(v * 20)));
+        Format(f);
+      };
+    };
+    space(before_, L"Space before", &edit::ParaFormat::spaceBefore);
+    space(after_, L"Space after", &edit::ParaFormat::spaceAfter);
+    drop(rule_, L"Line spacing", {L"Single", L"1.5 lines", L"Double", L"At least", L"Exactly", L"Multiple"});
+    rule_.onChange = [this](int i) {
+      if (i < 0 || i > 5) return;
+      edit::ParaFormat f;
+      f.lineRule = i == 3 ? LineRule::AtLeast : i == 4 ? LineRule::Exact : LineRule::Auto;
+      // Single, 1.5 and double; 12 pt at least or exactly, and 3 lines, as Word starts them.
+      f.line = i <= 2 ? 240 + 120 * i : i <= 4 ? 240 : 720;
+      Format(f);
+    };
+    spin(at_, L"Line spacing at", 0.06, 132, 0.25, 2, L"");  // lines or points: Refresh sets which
+    at_.onChange = [this](double v) {
+      edit::ParaFormat f;
+      f.lineRule = atRule_;
+      f.line = static_cast<int32_t>(std::lround(atRule_ == LineRule::Auto ? v * 240 : v * 20));
+      Format(f);
+    };
+
+    auto onOff = [&](Dropdown& d, const wchar_t* name, std::optional<bool> edit::ParaFormat::*field) {
+      drop(d, name, {L"Off", L"On"});
+      d.onChange = [this, field](int i) {
+        if (i < 0 || i > 1) return;
+        edit::ParaFormat f;
+        f.*field = i == 1;
+        Format(f);
+      };
+    };
+    onOff(widow_, L"Widow/orphan control", &edit::ParaFormat::widowControl);
+    onOff(keepNext_, L"Keep with next", &edit::ParaFormat::keepNext);
+    onOff(keepLines_, L"Keep lines together", &edit::ParaFormat::keepLines);
+    onOff(breakBefore_, L"Page break before", &edit::ParaFormat::pageBreakBefore);
+
+    rows_ = {{L"General"},
+             {L"Alignment", &align_},
+             {L"Indents"},
+             {L"Left, right", &left_, &right_},
+             {L"Special, by", &special_, &by_},
+             {L"Spacing"},
+             {L"Before, after", &before_, &after_},
+             {L"Line, at", &rule_, &at_},
+             {L"Line and page breaks"},
+             {L"Widow control", &widow_},
+             {L"Keep with next", &keepNext_},
+             {L"Keep together", &keepLines_},
+             {L"Page break", &breakBefore_}};
+    NumberControls();
+  }
+
+  std::wstring Title() const override { return L"Paragraph"; }
+  void Open() { shown_ = {}; }
+
+ private:
+  static constexpr Justification kAlign[] = {Justification::Start, Justification::Center, Justification::End,
+                                             Justification::Both};
+  struct Shown {
+    Pos a{kNone, 0}, f{kNone, 0};
+    uint64_t generation = UINT64_MAX;
+    bool operator==(const Shown&) const = default;
+  };
+
+  edit::Range Selection() const {
+    auto [a, f] = p_.host_.selection();
+    if (Before(f, a)) std::swap(a, f);
+    return {a, f};
+  }
+  std::vector<uint32_t> Paragraphs() const {
+    const edit::Range r = Selection();
+    const size_t n = p_.Doc().Paragraphs().size();
+    if (r.from.para >= n || r.to.para >= n) return {};
+    return edit::ParagraphsOf(p_.Doc(), r);
+  }
+
+  void Format(const edit::ParaFormat& f) {
+    if (Paragraphs().empty()) return;
+    std::u16string why;
+    if (p_.editor_.CanEdit(&why)) {
+      const edit::Range r = Selection();
+      edit::TreeEdit te(p_.editor_, r.from);
+      edit::FormatParagraphs(te, r, f);
+      why = te.Refused();
+    }
+    shown_ = {};  // what the paragraphs have now, also after a refusal
+    p_.host_.formatted(std::wstring(why.begin(), why.end()));
+  }
+
+  void Refresh() override {
+    const fw::doc::Document& doc = p_.Doc();
+    auto [a, f] = p_.host_.selection();
+    const Shown now{a, f, doc.CacheGeneration()};
+    if (now == shown_) return;
+    shown_ = now;
+    const std::vector<uint32_t> paras = Paragraphs();
+    EnableAll(p_.editor_.CanEdit() && !paras.empty());
+    if (paras.empty()) return;
+    const fw::doc::ParaProps first = doc.ResolvedPara(paras.front());  // a copy: resolving more may move it
+    // Whether every paragraph has what the first has.
+    auto same = [&](auto get) {
+      for (uint32_t q : paras)
+        if (!(get(doc.ResolvedPara(q)) == get(first))) return false;
+      return true;
+    };
+    auto onOff = [&](Dropdown& d, bool fw::doc::ParaProps::*field) {
+      d.selected = same([field](const fw::doc::ParaProps& p) { return p.*field; }) ? (first.*field ? 1 : 0) : -1;
+    };
+
+    align_.selected = -1;
+    for (size_t i = 0; i < std::size(kAlign); ++i)
+      if (first.jc == kAlign[i]) align_.selected = static_cast<int>(i);
+    if (!same([](const fw::doc::ParaProps& p) { return p.jc; })) align_.selected = -1;
+    left_.SetValue(FromTwips(first.indStart.Value()));
+    right_.SetValue(FromTwips(first.indEnd.Value()));
+    const int32_t fl = first.firstLine.Value();
+    auto kind = [](const fw::doc::ParaProps& p) { return p.firstLine.Value() > 0 ? 1 : p.firstLine.Value() < 0 ? 2 : 0; };
+    special_.selected = same(kind) ? kind(first) : -1;
+    by_.SetValue(FromTwips(std::abs(fl)));
+    before_.SetValue(first.spaceBefore.Value() / 20.0);
+    after_.SetValue(first.spaceAfter.Value() / 20.0);
+
+    // Line spacing: Word's names for 1, 1.5 and 2 lines; the box in lines or in points.
+    int rule = 5;
+    if (first.lineRule == LineRule::AtLeast) rule = 3;
+    else if (first.lineRule == LineRule::Exact) rule = 4;
+    else if (first.line == 240 || first.line == 360 || first.line == 480) rule = (first.line - 240) / 120;
+    rule_.selected = same([](const fw::doc::ParaProps& p) { return std::make_pair(p.lineRule, p.line); }) ? rule : -1;
+    atRule_ = first.lineRule;
+    const bool points = atRule_ != LineRule::Auto;
+    at_.minValue = points ? 0.7 : 0.06;
+    at_.maxValue = points ? 1584 : 132;
+    at_.step = points ? 1 : 0.25;
+    at_.decimals = points ? 1 : 2;
+    at_.unit = points ? L" pt" : L"";
+    at_.SetValue(points ? first.line / 20.0 : first.line / 240.0);
+
+    onOff(widow_, &fw::doc::ParaProps::widowControl);
+    onOff(keepNext_, &fw::doc::ParaProps::keepNext);
+    onOff(keepLines_, &fw::doc::ParaProps::keepLines);
+    onOff(breakBefore_, &fw::doc::ParaProps::pageBreakBefore);
+  }
+
+  DocPage& p_;
+  Shown shown_;
+  LineRule atRule_ = LineRule::Auto;  // what the at box sets: lines (Auto) or points
+  Dropdown align_, special_, rule_, widow_, keepNext_, keepLines_, breakBefore_;
+  SpinBox left_, right_, by_, before_, after_, at_;
+};
+
+// ---------------------------------------------------------------------------
 
 DocPage::DocPage(edit::Editor& editor, Host host) : editor_(editor), host_(std::move(host)) {
   panel_ = std::make_unique<Panel>(*this);
+  paraPanel_ = std::make_unique<ParaPanel>(*this);
 }
 
 DocPage::~DocPage() = default;
 
-bool DocPage::ShowsIn(const PanelContent* shown) const { return shown && shown == panel_.get(); }
+bool DocPage::ShowsIn(const PanelContent* shown) const {
+  return shown && (shown == panel_.get() || shown == paraPanel_.get());
+}
 
-bool DocPage::Owns(int cmd) { return cmd >= CmdPageSetup && cmd <= CmdNonBreakingHyphen; }
+bool DocPage::Owns(int cmd) { return cmd >= CmdPageSetup && cmd <= CmdParagraph; }
 
 std::vector<int> DocPage::CommandIds() {
   std::vector<int> ids;
@@ -493,6 +733,10 @@ void DocPage::Execute(int cmd) {
       panel_->Open();
       host_.showPanel(panel_.get(), true);
       return;
+    case CmdParagraph:
+      paraPanel_->Open();
+      host_.showPanel(paraPanel_.get(), true);
+      return;
     case CmdPortrait:
     case CmdLandscape: {
       edit::PageSetup s;
@@ -573,17 +817,7 @@ void DocPage::Hyphen(bool nonBreaking) {
   const std::u16string text(1, nonBreaking ? char16_t(0x2011) : char16_t(0x00AD));
   auto [from, to] = host_.selection();
   if (Before(to, from)) std::swap(from, to);
-  if (from == to) {
-    host_.apply(editor_.InsertText(from, text));
-    return;
-  }
-  editor_.BeginGroup(nonBreaking ? u"Non-breaking hyphen" : u"Optional hyphen");
-  edit::Result r = editor_.Delete(from, to);
-  const bool deleted = static_cast<bool>(r);
-  if (r) r = editor_.InsertText(r.caret, text);
-  editor_.EndGroup();
-  if (deleted && !r) editor_.Undo();  // nothing half done
-  host_.apply(r);
+  host_.apply(from == to ? editor_.InsertText(from, text) : editor_.Replace(from, to, text));
 }
 
 void DocPage::SectionBreak(SectionStart start) {

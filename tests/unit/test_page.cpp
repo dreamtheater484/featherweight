@@ -304,6 +304,67 @@ TEST(Page_OptionalAndNonBreakingHyphensAreWordsElements) {
   CHECK(MainXml(*doc) == original);
 }
 
+TEST(Page_ParagraphPanelSettingsWriteAndUndo) {
+  // What the Paragraph panel (DocPage) writes over two paragraphs: line spacing at least and
+  // exactly in points and multiple in lines, a hanging indent, spacing in points, and the line and
+  // page breaks. Each is one undo step, and undoing them all gives back the file as it was.
+  Fixture f;
+  f.body = P("One") + P("Two") + P("Three");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const std::string original = MainXml(*doc);
+  edit::Editor editor(*doc);
+  const auto p = MainParas(*doc);
+  const edit::Range both{{p[0], 0}, {p[1], 1}};
+  int steps = 0;
+  auto apply = [&](const edit::ParaFormat& format) {
+    edit::TreeEdit te(editor, both.from);
+    edit::FormatParagraphs(te, both, format);
+    CHECK(te.Refused().empty());
+    ++steps;
+  };
+  edit::ParaFormat atLeast;
+  atLeast.lineRule = LineRule::AtLeast;
+  atLeast.line = 240;
+  apply(atLeast);
+  CHECK(doc->ResolvedPara(p[0]).lineRule == LineRule::AtLeast && doc->ResolvedPara(p[1]).line == 240);
+  edit::ParaFormat exactly;
+  exactly.lineRule = LineRule::Exact;
+  exactly.line = 300;
+  apply(exactly);
+  CHECK(doc->ResolvedPara(p[1]).lineRule == LineRule::Exact);
+  edit::ParaFormat multiple;
+  multiple.lineRule = LineRule::Auto;
+  multiple.line = 720;
+  apply(multiple);
+  edit::ParaFormat hanging;
+  hanging.indStart = Twips(720);
+  hanging.firstLine = Twips(-360);
+  apply(hanging);
+  edit::ParaFormat spacing;
+  spacing.spaceBefore = Twips(360);
+  spacing.spaceAfter = Twips(0);
+  apply(spacing);
+  edit::ParaFormat breaks;
+  breaks.widowControl = false;
+  breaks.keepNext = breaks.keepLines = breaks.pageBreakBefore = true;
+  apply(breaks);
+  for (uint32_t q : {p[0], p[1]}) {
+    const ParaProps& pp = doc->ResolvedPara(q);
+    CHECK(pp.lineRule == LineRule::Auto && pp.line == 720);
+    CHECK(pp.indStart.Value() == 720 && pp.firstLine.Value() == -360);
+    CHECK(pp.spaceBefore.Value() == 360 && pp.spaceAfter.Value() == 0);
+    CHECK(!pp.widowControl && pp.keepNext && pp.keepLines && pp.pageBreakBefore);
+  }
+  const ParaProps& third = doc->ResolvedPara(p[2]);  // outside the selection
+  CHECK(!third.keepNext && !third.pageBreakBefore && third.line == 240);
+  const std::string xml = MainXml(*doc);
+  CHECK(Count(xml, "<w:pageBreakBefore/>") == 2 && Count(xml, "<w:keepLines/>") == 2);
+  CHECK(SaveAndReopen(*doc));
+  for (int i = 0; i < steps; ++i) CHECK(editor.Undo());
+  CHECK(MainXml(*doc) == original);
+}
+
 TEST(Page_BreaksInAParagraphThatEndedASectionOrWasFormatted) {
   // A tree edit in a paragraph's properties (a section break deleted, the paragraph centered) and
   // then a page break in its text: the text after the break is all in the next paragraph, in the
