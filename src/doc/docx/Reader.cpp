@@ -939,6 +939,40 @@ void ReadDrawingFrame(pugi::xml_node frame, Drawing& d) {
   }
 }
 
+void ReadVmlFrame(pugi::xml_node content, Drawing& d) {
+  pugi::xml_node shape;
+  for (auto c : content.children())
+    if (c.type() == pugi::node_element && pkg::NamespaceOf(c) == kV && pkg::LocalNameOf(c) != "shapetype") {
+      shape = c;
+      break;
+    }
+  if (!shape) return;
+  std::string_view style = shape.attribute("style").value();
+  d.anchored = CssValue(style, "position") == "absolute";
+  d.wrap = d.anchored ? WrapType::None : WrapType::Inline;
+  d.cx = CssLength(CssValue(style, "width")).value_or(Emu(0));
+  d.cy = CssLength(CssValue(style, "height")).value_or(Emu(0));
+  d.hOffset = CssLength(CssValue(style, "margin-left"));
+  d.vOffset = CssLength(CssValue(style, "margin-top"));
+  d.hAlign = CssValue(style, "mso-position-horizontal");
+  d.vAlign = CssValue(style, "mso-position-vertical");
+  d.hRelativeFrom = CssValue(style, "mso-position-horizontal-relative");
+  d.vRelativeFrom = CssValue(style, "mso-position-vertical-relative");
+  d.relativeHeight = ParseInt(CssValue(style, "z-index")).value_or(0);
+  d.behindDoc = d.relativeHeight < 0;
+  d.hidden = CssValue(style, "visibility") == "hidden";
+  d.name = shape.attribute("id").value();
+  d.descr = shape.attribute("alt").value();
+  for (auto c : shape.children()) {
+    if (!pkg::IsElement(c, kW10, "wrap")) continue;
+    std::string_view type = c.attribute("type").value();
+    d.wrap = type == "square" ? WrapType::Square : type == "tight" ? WrapType::Tight
+             : type == "through" ? WrapType::Through : type == "topAndBottom" ? WrapType::TopAndBottom
+             : type == "none" ? WrapType::None : d.wrap;
+    d.wrapText = c.attribute("side").value();
+  }
+}
+
 void Reader::ReadDrawing(Frame& f) {
   ElemId elem = f.elem;
   Drawing d;
@@ -960,38 +994,7 @@ void Reader::ReadDrawing(Frame& f) {
     if (frame) ReadDrawingFrame(frame, d);
   } else if (local == "pict" || local == "object") {
     d.kind = local == "pict" ? DrawingKind::Vml : DrawingKind::Object;
-    pugi::xml_node shape;
-    for (auto c : obj.children())
-      if (c.type() == pugi::node_element && pkg::NamespaceOf(c) == kV && pkg::LocalNameOf(c) != "shapetype") {
-        shape = c;
-        break;
-      }
-    if (shape) {
-      std::string_view style = shape.attribute("style").value();
-      d.anchored = CssValue(style, "position") == "absolute";
-      d.wrap = d.anchored ? WrapType::None : WrapType::Inline;
-      d.cx = CssLength(CssValue(style, "width")).value_or(Emu(0));
-      d.cy = CssLength(CssValue(style, "height")).value_or(Emu(0));
-      d.hOffset = CssLength(CssValue(style, "margin-left"));
-      d.vOffset = CssLength(CssValue(style, "margin-top"));
-      d.hAlign = CssValue(style, "mso-position-horizontal");
-      d.vAlign = CssValue(style, "mso-position-vertical");
-      d.hRelativeFrom = CssValue(style, "mso-position-horizontal-relative");
-      d.vRelativeFrom = CssValue(style, "mso-position-vertical-relative");
-      d.relativeHeight = ParseInt(CssValue(style, "z-index")).value_or(0);
-      d.behindDoc = d.relativeHeight < 0;
-      d.hidden = CssValue(style, "visibility") == "hidden";
-      d.name = shape.attribute("id").value();
-      d.descr = shape.attribute("alt").value();
-      for (auto c : shape.children()) {
-        if (!pkg::IsElement(c, kW10, "wrap")) continue;
-        std::string_view type = c.attribute("type").value();
-        d.wrap = type == "square" ? WrapType::Square : type == "tight" ? WrapType::Tight
-                 : type == "through" ? WrapType::Through : type == "topAndBottom" ? WrapType::TopAndBottom
-                 : type == "none" ? WrapType::None : d.wrap;
-        d.wrapText = c.attribute("side").value();
-      }
-    }
+    if (obj) ReadVmlFrame(obj, d);
     if (local == "object") {
       Node n(&doc_.tree_, elem);
       if (auto w = n.Int(Name("dxaOrig")); w && d.cx.Value() == 0) d.cx = Emu(*w * 635);

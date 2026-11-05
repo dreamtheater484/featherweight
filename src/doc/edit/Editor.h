@@ -140,7 +140,9 @@ class Editor {
   // would make it (ReadDrawingFrame); its node, part and position are filled in here. The handle
   // stays in Document::Drawings() when the insert is undone, at no position. Pictures.h makes the
   // XML and adds the picture's part.
-  Result InsertDrawing(Pos at, std::string xml, const Drawing& info);
+  // With `vml`, a w:pict holding `xml` (a VML shape, its v:shapetype before it), as Word writes a
+  // watermark.
+  Result InsertDrawing(Pos at, std::string xml, const Drawing& info, bool vml = false);
   // Inserts a drawing kept as markup (an mc:AlternateContent block, as Word writes shapes and text
   // boxes: `block`, self-contained) at the start of paragraph `para`, in a run of its own. Its
   // character is shown from `info`: display-only, info.kept the block's tag, info.keptXml what's
