@@ -55,3 +55,6 @@ add_test(NAME fuzz_drawing_replay COMMAND fuzz_drawing ${_fw_runs} "${_fw_seeds}
 add_test(NAME fuzz_rtf_replay COMMAND fuzz_rtf ${_fw_runs} "${CMAKE_SOURCE_DIR}/tests/clipboard" "${_fw_regressions}/rtf")
 add_test(NAME fuzz_html_replay COMMAND fuzz_html ${_fw_runs} "${CMAKE_SOURCE_DIR}/tests/clipboard" "${_fw_regressions}/html")
 add_test(NAME fuzz_clip_replay COMMAND fuzz_clip ${_fw_runs} "${_fw_seeds}/docx" "${_fw_seeds}/package" "${_fw_regressions}/clip")
+
+# Every fuzz target, so CI builds new ones without its own list.
+add_custom_target(fuzz_all DEPENDS ${_fw_fuzz_targets})
