@@ -10,6 +10,9 @@ add_library(fwpkg STATIC
   ReferenceRules.cpp
   References.cpp
   RoundTrip.cpp
+  Backups.cpp
+  OwnerFile.cpp
+  Recovery.cpp
   SafeFile.cpp
   Snapshot.cpp
   XmlDom.cpp
@@ -18,5 +21,5 @@ add_library(fwpkg STATIC
   Zip.cpp
 )
 target_include_directories(fwpkg PUBLIC "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(fwpkg PUBLIC fwcore pugixml PRIVATE miniz bcrypt)
+target_link_libraries(fwpkg PUBLIC fwcore pugixml PRIVATE miniz bcrypt crypt32)
 target_compile_options(fwpkg PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
