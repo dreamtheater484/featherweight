@@ -6,7 +6,9 @@ add_library(fwdoc STATIC
   model/Resolve.cpp
   model/Schema.cpp
   model/Tree.cpp
+  docx/Blank.cpp
   docx/Reader.cpp
+  docx/Save.cpp
   docx/Writer.cpp
   edit/Clip.cpp
   edit/Editor.cpp
@@ -34,13 +36,21 @@ target_compile_options(fwdoclayout PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Rele
 # Its unit tests join fw_tests, and the never-damage tests run the corpus through the model
 # (plan §6.4 D1): read every document into the model, write every part it owns back, and check.
 if(FW_BUILD_TESTS)
-  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_doc.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_edit.cpp"
-    "${PROJECT_SOURCE_DIR}/tests/unit/test_format.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp")
+  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_doc.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_docsave.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_edit.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_format.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp"
+    # The document tab's file (D2 "Files"): an app source, tested here with temporary folders.
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_docfile.cpp" "${PROJECT_SOURCE_DIR}/src/word/DocFile.cpp")
   target_link_libraries(fw_tests PRIVATE fwdoc fwdoclayout)
   set(_fw_office "${PROJECT_SOURCE_DIR}/tests/office")
   add_test(NAME office_model_roundtrip COMMAND fwtool roundtrip --model "${_fw_office}/generated" "${_fw_office}/edge"
     "${_fw_office}/layout")
   add_test(NAME office_model_reserialize
     COMMAND fwtool roundtrip --model --reserialize-all "${_fw_office}/generated" "${_fw_office}/edge" "${_fw_office}/layout")
+  # Saving as the app does (D2): with no edits the file is identical; after edits in every part the
+  # model owns, the saved file opens and has no new fwtool check errors.
+  add_test(NAME office_save COMMAND fwtool save "${_fw_office}/generated" "${_fw_office}/edge" "${_fw_office}/layout")
+  add_test(NAME office_save_edited
+    COMMAND fwtool save --edited "${_fw_office}/generated" "${_fw_office}/edge" "${_fw_office}/layout")
   add_test(NAME office_model_malicious COMMAND fwtool roundtrip --model --expect-reject "${_fw_office}/malicious")
 endif()

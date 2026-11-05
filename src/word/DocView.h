@@ -8,12 +8,14 @@
 #include <vector>
 
 #include "PagedView.h"
+#include "doc/edit/Editor.h"
 #include "doc/layout/Layout.h"
 #include "draw/Drawing.h"
 #include "doc/edit/Editor.h"
 #include "doc/model/Document.h"
 #include "pkg/XmlDom.h"
 #include "text/Fonts.h"
+#include "word/DocFile.h"
 #include "word/DocFormat.h"
 
 // A Word document in a tab (plan milestones D1 and D2): the model, laid out page by page by
@@ -21,10 +23,17 @@
 // with selection and copy, find, links, comments and tracked changes shown, and printing. A
 // document Featherweight can write back is edited in place (DocEdit.cpp): the caret, typing,
 // deleting, undo and redo, cut and paste, through fw::doc::edit; formatting through DocFormat.
+// Its file (saving, backups, recovery, changes on disk) is kept by a DocFile.
 class DocView : public PagedView {
  public:
   DocView(ViewHost& host, std::wstring path);
   ~DocView() override;
+  // A new document from the built-in template: "Document <number>".
+  static std::unique_ptr<DocView> NewDocument(ViewHost& host, int number);
+  // A document that isn't its file: a recovered one (`unsaved` changes) or a backup. Save goes to
+  // Save As, starting at `suggested`.
+  static std::unique_ptr<DocView> FromBytes(ViewHost& host, std::vector<uint8_t> bytes, std::wstring title,
+                                            std::wstring suggested, bool unsaved);
 
   // The document viewer's keys.
   static int Shortcut(UINT vk, UINT mods);
@@ -35,7 +44,7 @@ class DocView : public PagedView {
   bool Ready() const override { return pagination_ != nullptr; }
   const std::wstring& Path() const override { return path_; }
   std::wstring Title() const override;
-  bool Modified() const override { return editor_ && editor_->Modified(); }
+  bool Modified() const override { return file_.Dirty(); }
 
   void Draw(gfx::Canvas& c, ID2D1DeviceContext* dc) override;
   bool HasIdleWork() const override;
@@ -76,14 +85,25 @@ class DocView : public PagedView {
   bool ReplaceCurrent(const std::wstring& with) override;
   int ReplaceAll(const std::wstring& with) override;
 
-  // The file with the parts edits changed written anew, the rest as it was; read back before it
-  // replaces anything. Unedited, a copy of the file as it was opened.
   bool Save(const std::wstring& path, std::wstring& error) override;
   SaveFormat SaveAsFormat() const override;
+  std::wstring SuggestedSavePath() const override;
+  void Autosave() override;
+  FileChange CheckFileOnDisk() override { return Ready() ? static_cast<FileChange>(file_.CheckDisk()) : FileChange::None; }
   bool CanPrint() const override { return Ready(); }
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;
   // Every page to Microsoft Print to PDF, into a file, with no dialog (the visual checks' print step).
   PrintOutcome PrintToFile(const std::wstring& path, std::wstring& message);
+
+  // ---- Editing (D2) ----
+  // The document's editor: every change goes through it (transactions, undo and redo). Null until
+  // loaded. Its changes reach the layout, the page list and the file (modified, autosave, Save).
+  fw::doc::edit::Editor* Editor() { return editor_.get(); }
+  // Marks a part edited without the editor (tests).
+  void NoteEdit(uint32_t part);
+  // The UI checks' "edited" step: " (edited)" typed at the end of the first paragraph.
+  void EditForTesting();
+  DocFile& File() { return file_; }
 
   // ---- Text ----
   bool HasSelection() const { return anchor_ != focus_; }
@@ -150,7 +170,8 @@ class DocView : public PagedView {
   void CollectAnnotations();
 
   // ---- Editing (DocEdit.cpp)
-  // Edits, their undo and redo: the layout lays out again, positions kept here move.
+  // Edits, their undo and redo: the layout lays out again, positions kept here move, and the file
+  // learns whether the document now differs from the saved one.
   void OnEdited(const fw::doc::edit::Change& change);
   // After an edit (or a refusal, whose message shows): the caret goes where it says.
   bool Apply(const fw::doc::edit::Result& result);
@@ -182,8 +203,11 @@ class DocView : public PagedView {
   // Tab and Shift+Tab at the start of list items change their level.
   bool ListTab(bool back);
 
-  std::wstring path_;
+  std::wstring path_;            // the file; empty for a new or recovered document
+  DocFile file_;
+  std::vector<uint8_t> bytes_;   // NewDocument, FromBytes: what Load reads instead of a file
   std::unique_ptr<fw::doc::Document> doc_;
+  std::unique_ptr<fw::doc::edit::Editor> editor_;  // after doc_: goes first
   std::unique_ptr<fw::text::Fonts> fonts_;
   std::unique_ptr<fw::doc::layout::Layout> pagination_;
   std::vector<fw::PageSizePt> sizes_;
@@ -248,8 +272,8 @@ class DocView : public PagedView {
   std::wstring query_;  // what was searched for, to find again after a replace
   bool matchCase_ = false;
 
-  // Editing: null for a document shown but not edited (one the model can't write back).
-  std::unique_ptr<fw::doc::edit::Editor> editor_;
+  // Editing: editor_ (declared after doc_) is null for a document shown but not edited (one the
+  // model can't write back).
   std::unique_ptr<DocFormat> format_;  // after the editor: it goes first
   uint64_t clipSource_ = 0;  // names this document in what it copies, to paste lists back into it
   bool keyFocus_ = true;

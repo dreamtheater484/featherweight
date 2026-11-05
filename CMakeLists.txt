@@ -59,8 +59,9 @@ target_link_libraries(Featherweight PRIVATE
   comctl32 comdlg32 winhttp bcrypt version advapi32 user32 gdi32 winspool delayimp
 )
 # pdfium.dll is loaded on first use, so the window appears before the engine is loaded, and
-# UI Automation's DLL only once a client such as a screen reader asks for the window.
-target_link_options(Featherweight PRIVATE /DELAYLOAD:pdfium.dll /DELAYLOAD:uiautomationcore.dll
+# UI Automation's DLL only once a client such as a screen reader asks for the window. crypt32.dll
+# (DPAPI, for recovery autosaves) waits for the first unsaved change.
+target_link_options(Featherweight PRIVATE /DELAYLOAD:pdfium.dll /DELAYLOAD:uiautomationcore.dll /DELAYLOAD:crypt32.dll
   $<$<CONFIG:Release,MinSizeRel>:/OPT:REF /OPT:ICF /LTCG>)
 target_compile_options(Featherweight PRIVATE $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 target_compile_options(fwcore PRIVATE $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
@@ -103,6 +104,8 @@ if(FW_BUILD_TESTS)
     tests/unit/test_zip.cpp
     tests/unit/test_xml.cpp
     tests/unit/test_package.cpp
+    tests/unit/test_safefile.cpp
+    tests/unit/test_filesafety.cpp
     tests/unit/test_roundtrip.cpp
     tests/unit/test_references.cpp
     tests/unit/test_draw.cpp)

@@ -94,6 +94,9 @@ $checks = @(
   @("doc-typing", "light", "", "key:ctrl+end;key:enter;type:Typed in Featherweight, with a caret.|And a second paragraph", @("..\office\layout\report.docx")),
   @("doc-typing-night", "dark", "--invert", "key:ctrl+home;type:Night typing ", @("..\office\layout\report.docx")),
   @("doc-replace", "light", "", "cmd:replace;type:margin;key:tab;type:MARGIN;cmd:replaceall;wait:300", @("..\office\layout\report.docx")),
+  # Files (D2): a new document, and an edited one (the tab's dot, Save enabled).
+  @("doc-new", "light", "", "new", @()),
+  @("doc-edited", "dark", "", "edited", @("..\office\layout\report.docx")),
   # Printing a document (vector, through Microsoft Print to PDF), then the PDF it made.
   @("doc-print", "light", "", "print:$out\doc-print.pdf", @("..\office\layout\textbox-table.docx")),
   @("doc-printed", "light", "", "view:facing;cmd:fit-page", @("..\..\build\visual\doc-print.pdf"))

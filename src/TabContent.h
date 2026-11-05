@@ -74,6 +74,9 @@ struct SaveFormat {
 
 enum class TabKind { Pdf, Document, Gallery };
 
+// What happened to a tab's file on disk since it was opened or saved.
+enum class FileChange { None, Changed, Missing };
+
 // One tab: a PDF today, and documents, spreadsheets and presentations later. The window owns the
 // chrome (title bar, toolbar, find panel, banners); the tab owns everything inside its viewport.
 class TabContent {
@@ -160,8 +163,16 @@ class TabContent {
   virtual std::wstring SelectedText() = 0;
 
   // ---- File ----
+  // Saves to `path`: the file itself, or another (Save As), which the tab then is.
   virtual bool Save(const std::wstring& path, std::wstring& error) = 0;
   virtual SaveFormat SaveAsFormat() const = 0;
+  // Where Save As starts: the file, or for a tab without one (a new document) a suggested name.
+  virtual std::wstring SuggestedSavePath() const { return Path(); }
+  // Editors: unsaved changes go to the recovery folder now and then (the window's timer).
+  virtual void Autosave() {}
+  // Editors: whether the file changed on disk, when the window or the tab is activated. Each
+  // change is reported once.
+  virtual FileChange CheckFileOnDisk() { return FileChange::None; }
   virtual bool CanPrint() const = 0;
   // Shows the print dialog and prints. `progress(done, total)` lets the window repaint between pages.
   virtual PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) = 0;

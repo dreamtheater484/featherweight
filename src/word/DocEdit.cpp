@@ -68,6 +68,10 @@ void DocView::OnEdited(const fw::doc::edit::Change& c) {
   wordsCounted_ = false;  // counted again in idle time
   words_ = 0;
   wordsNext_ = 0;
+  // The file: modified or back to the saved state, and the parts to write.
+  const bool wasModified = file_.Dirty();
+  file_.Changed(editor_->Modified(), editor_->DirtyParts());
+  if (file_.Dirty() != wasModified) host_.ViewStateChanged();
 }
 
 bool DocView::Apply(const Result& r) {
