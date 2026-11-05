@@ -40,6 +40,7 @@ $all = [ordered]@{
   # target's memory passes 2 GB within an hour. 32 MB keeps it well below while still catching
   # use after free.
   fuzz_drawing = @{ Seeds = @("$seeds\drawing", "$regressions\drawing"); MaxLen = 65536; Asan = 'quarantine_size_mb=32' }
+  fuzz_layout  = @{ Seeds = @("$seeds\docx", "$seeds\package", "$regressions\layout"); MaxLen = 65536 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 
