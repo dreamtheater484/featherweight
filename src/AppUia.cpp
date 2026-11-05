@@ -5,14 +5,18 @@
 #include "App.h"
 
 #include "ui/Uia.h"
+#if FW_TEST_SCREENS
 #include "ui/WidgetGallery.h"
+#endif
 
 using namespace gfx;
 
 void App::OpenGallery() {
+#if FW_TEST_SCREENS
   tabs_.push_back(std::make_unique<WidgetGallery>(*this));
   tabs_.back()->SetViewport(DocRect(), ui_);
   ActivateTab(static_cast<int>(tabs_.size()) - 1);
+#endif
 }
 
 void App::DescribeUia(uia::Tree& t) {
