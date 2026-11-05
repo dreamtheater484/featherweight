@@ -28,10 +28,11 @@ void DumpLayout(const std::filesystem::path& document, const std::filesystem::pa
 // fwtool bench --typing: keystrokes at a place in a document, each timed from the edit to the
 // page on screen painted again (plan §11), in ms.
 struct TypingPlace {
-  std::string where;  // "start", "middle", "end"
+  std::string where;  // "start", "middle", "end", "table" (a cell from the middle on)
   std::vector<double> typing, backspace, enter;  // enter: Enter, and Backspace joining again
 };
-// Opens and lays out the document, then types at its start, middle and end through the editor.
+// Opens and lays out the document, then types at its start, middle and end, and in a table, through
+// the editor.
 bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>& places, size_t& pages,
                  std::string& error);
 

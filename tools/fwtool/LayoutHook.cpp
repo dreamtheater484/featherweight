@@ -174,11 +174,12 @@ class PagePainter {
   Microsoft::WRL::ComPtr<ID2D1Bitmap1> target_;
 };
 
-// A body paragraph with some text on or after `page`, to type into.
-uint32_t ParagraphToType(const fw::doc::Document& doc, const fw::doc::layout::Layout& layout, size_t page) {
+// A paragraph of the body (or of a table cell) with some text on or after `page`, to type into.
+uint32_t ParagraphToType(const fw::doc::Document& doc, const fw::doc::layout::Layout& layout, size_t page,
+                         fw::LayoutStory story) {
   for (size_t p = page; p < layout.PageCount(); ++p)
     for (const fw::doc::layout::LineBox& l : layout.GetPage(p).lines)
-      if (l.story == fw::LayoutStory::Body && l.para != fw::doc::kNone && doc.Para(l.para).text.size() >= 20) return l.para;
+      if (l.story == story && l.para != fw::doc::kNone && doc.Para(l.para).text.size() >= 20) return l.para;
   return fw::doc::kNone;
 }
 
@@ -219,11 +220,20 @@ bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>
       }
       return ms;
     };
-    const std::pair<const char*, size_t> where[] = {{"start", 0}, {"middle", pages / 2}, {"end", pages > 2 ? pages - 2 : 0}};
-    for (const auto& [name, page] : where) {
+    struct Where {
+      const char* name;
+      size_t page;
+      fw::LayoutStory story;
+    };
+    const Where where[] = {{"start", 0, fw::LayoutStory::Body},
+                           {"middle", pages / 2, fw::LayoutStory::Body},
+                           {"end", pages > 2 ? pages - 2 : 0, fw::LayoutStory::Body},
+                           {"table", pages / 2, fw::LayoutStory::Cell}};
+    for (const Where& w : where) {
       TypingPlace place;
-      place.where = name;
-      const uint32_t para = ParagraphToType(*doc, layout, page);
+      place.where = w.name;
+      uint32_t para = ParagraphToType(*doc, layout, w.page, w.story);
+      if (para == fw::doc::kNone && w.story == fw::LayoutStory::Cell) para = ParagraphToType(*doc, layout, 0, w.story);
       if (para == fw::doc::kNone) continue;
       fw::doc::Pos caret{para, 10};
       // The page is on screen before the typing starts.

@@ -305,15 +305,57 @@ const std::vector<Field>& Engine::StoryFields(uint32_t story) {
   return it->second;
 }
 
+namespace {
+
+size_t LineBytes(const LineBox& l) {
+  size_t n = sizeof(LineBox) + l.line.caretX_.capacity() * 4 + l.line.advance_.capacity() * 4 + l.line.flags_.capacity() +
+             l.line.objects.capacity() * sizeof(text::InlineObject) + l.text.capacity() * 2;
+  for (const text::GlyphPiece& g : l.line.pieces)
+    n += sizeof(g) + g.glyphs.capacity() * 2 + g.advances.capacity() * 4 + g.offsets.capacity() * sizeof(DWRITE_GLYPH_OFFSET);
+  return n;
+}
+
+size_t PageBytes(const Page& p) {
+  size_t n = sizeof(Page) + p.paints.capacity() * sizeof(RunPaint) + p.fills.capacity() * sizeof(Fill) +
+             p.edges.capacity() * sizeof(Edge) + p.drawings.capacity() * sizeof(DrawingBox);
+  for (const LineBox& l : p.lines) n += LineBytes(l);
+  return n;
+}
+
+size_t TextBytes(const ParaText& pt) {
+  return sizeof(ParaText) + pt.text.capacity() * 2 + pt.runs.capacity() * sizeof(text::TextRun) +
+         pt.paints.capacity() * sizeof(RunPaint);
+}
+
+}  // namespace
+
 size_t Engine::MemoryBytes() const {
+  const Impl& f = *impl_;
   size_t n = sizeof(*this) + sizeof(Impl);
-  for (const Page& p : pages_) {
-    n += sizeof(Page) + p.paints.capacity() * sizeof(RunPaint) + p.fills.capacity() * sizeof(Fill) +
-         p.edges.capacity() * sizeof(Edge) + p.drawings.capacity() * sizeof(DrawingBox);
-    for (const LineBox& l : p.lines) {
-      n += sizeof(LineBox) + l.line.caretX_.capacity() * 4 + l.line.advance_.capacity() * 4 + l.line.flags_.capacity() +
-           l.line.objects.capacity() * sizeof(text::InlineObject);
-      for (const text::GlyphPiece& g : l.line.pieces)
+  for (const Page& p : pages_) n += PageBytes(p);
+  for (const Impl::OldPage& o : f.old) n += PageBytes(o.page);
+  // What the checkpoints keep: the paragraphs and tables in progress at page ends, each once.
+  std::vector<const void*> seen;
+  auto once = [&](const void* p) {
+    if (!p || std::find(seen.begin(), seen.end(), p) != seen.end()) return false;
+    seen.push_back(p);
+    return true;
+  };
+  auto held = [&](const Impl::Checkpoint& c) {
+    n += sizeof(c) + c.rowCut.capacity() * sizeof(float) + c.spans.capacity() * sizeof(Impl::Span);
+    if (once(c.pt.get())) n += TextBytes(*c.pt);
+    if (once(c.table.get()))
+      for (const RowBox& row : c.table->rows)
+        for (const CellBox& cell : row.cells)
+          for (const LineBox& l : cell.content.lines) n += LineBytes(l);
+  };
+  for (const Impl::Checkpoint& c : f.checkpoints) held(c);
+  for (const Impl::OldPage& o : f.old) held(o.after);
+  for (const auto& [elem, cached] : f.lineCache) {
+    if (once(cached->pt.get())) n += TextBytes(*cached->pt);
+    for (const CachedPara::Made& m : cached->lines) {
+      n += sizeof(m) + m.line.caretX_.capacity() * 4 + m.line.advance_.capacity() * 4 + m.line.flags_.capacity();
+      for (const text::GlyphPiece& g : m.line.pieces)
         n += sizeof(g) + g.glyphs.capacity() * 2 + g.advances.capacity() * 4 + g.offsets.capacity() * sizeof(DWRITE_GLYPH_OFFSET);
     }
   }

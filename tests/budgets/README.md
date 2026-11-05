@@ -36,7 +36,7 @@ The timings take about a minute and need the desktop: close Featherweight first,
 | memory | The private working set once settled (Task Manager's Memory column), and the private bytes. |
 | idle | CPU time and thread wakeups in the 3 s after settling. Nothing should run: a timer firing once a second already shows 3 wakeups. |
 
-**Typing:** `fwtool bench --typing` types in the 300-page document through the editor, at its start, middle and end: 44 letters, 10 Backspaces, and an Enter joined again. Each keystroke is timed from the edit to the page on screen painted again on the graphics adapter: the edit, laying out again what it moves on screen, placing the caret, and painting. The rest is laid out again untimed, as in idle time. **typing** is the median of letters and Backspaces; **worst key** is the slowest of all, Enter included.
+**Typing:** `fwtool bench --typing` types in the 300-page document through the editor, at its start, middle and end and in a table cell: 44 letters, 10 Backspaces, and an Enter joined again. Each keystroke is timed from the edit to the page on screen painted again on the graphics adapter: the edit, laying out again what it moves on screen, placing the caret, and painting. The rest is laid out again untimed, as in idle time. **typing** is the median of letters and Backspaces; **worst key** is the slowest of all, Enter included.
 
 **How it stays out of your way:**
 - **A private copy.** It runs a copy of the build in a temporary folder, where settings and recent files stay (portable mode), and deletes the folder afterwards.
