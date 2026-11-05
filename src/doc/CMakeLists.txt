@@ -19,8 +19,9 @@ if(FW_BUILD_TESTS)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_doc.cpp")
   target_link_libraries(fw_tests PRIVATE fwdoc)
   set(_fw_office "${PROJECT_SOURCE_DIR}/tests/office")
-  add_test(NAME office_model_roundtrip COMMAND fwtool roundtrip --model "${_fw_office}/generated" "${_fw_office}/edge")
+  add_test(NAME office_model_roundtrip COMMAND fwtool roundtrip --model "${_fw_office}/generated" "${_fw_office}/edge"
+    "${_fw_office}/layout")
   add_test(NAME office_model_reserialize
-    COMMAND fwtool roundtrip --model --reserialize-all "${_fw_office}/generated" "${_fw_office}/edge")
+    COMMAND fwtool roundtrip --model --reserialize-all "${_fw_office}/generated" "${_fw_office}/edge" "${_fw_office}/layout")
   add_test(NAME office_model_malicious COMMAND fwtool roundtrip --model --expect-reject "${_fw_office}/malicious")
 endif()
