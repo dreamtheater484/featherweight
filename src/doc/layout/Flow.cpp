@@ -536,15 +536,17 @@ struct Flow {
     return b;
   }
 
-  Stack Separator() {
-    const std::vector<std::string_view>& ids = doc.Settings().footnoteSeparators;
+  // The separator note above footnotes (or endnotes): its height, without its text (the line is
+  // drawn as an edge).
+  Stack Separator(bool endnote = false) {
+    const std::vector<std::string_view>& ids = endnote ? doc.Settings().endnoteSeparators : doc.Settings().footnoteSeparators;
     Frame frame;
     frame.geom = &f.geom;
     frame.fields = &f.fields;
-    frame.width = f.noteWidth;
-    frame.story = LineStory::Footnote;
+    frame.width = endnote ? ColumnRight() - ColumnLeft() : f.noteWidth;
+    frame.story = endnote ? LineStory::Endnote : LineStory::Footnote;
     for (std::string_view id : ids) {
-      uint32_t s = doc.NoteStory(StoryKind::Footnote, id);
+      uint32_t s = doc.NoteStory(endnote ? StoryKind::Endnote : StoryKind::Footnote, id);
       if (s == kNone) continue;
       std::string_view type = doc.NodeOf(doc.Stories()[s].root).AttrOr(Name("type"));
       if (type != "separator") continue;
@@ -1249,7 +1251,21 @@ struct Flow {
   // Endnotes, after the body: each note's blocks as flow items.
   void AddEndnotes() {
     f.endnotesAdded = true;
+    const size_t before = f.items.size();
     AddEndnoteItems(f.section == kNone ? 0 : f.section);
+    if (f.items.size() == before) return;
+    // Word's separator above them where they start, after the body's last space: the separator
+    // note's height, a line across its first two inches (as above footnotes).
+    Stack sep = Separator(true);
+    const float y = f.spacing.atTop ? f.y : f.y + f.spacing.after;
+    if (sep.height <= 0 || y + sep.height > Bottom() + kEpsilon) return;
+    const float x = ColumnLeft(), width = ColumnRight() - ColumnLeft();
+    sep.edges.push_back({SeparatorBorder(), 0, sep.height / 2, std::min(144.0f, width), sep.height / 2});
+    const float h = sep.height;
+    f.body.Append(std::move(sep), x, y);
+    f.y = y + h;
+    f.spacing = Spacing();
+    f.spacing.atTop = false;
   }
 
   void AddEndnoteItems(uint32_t sec) {

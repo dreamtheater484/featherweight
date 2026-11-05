@@ -959,6 +959,38 @@ TEST(Layout_NotesInsertedAndDeletedLayOutAsFromScratch) {
   }
 }
 
+TEST(Layout_EndnotesHaveTheirSeparator) {
+  // As in Word, a short line separates the endnotes from the text above them, where they start; a
+  // document without endnotes has none.
+  Doc d = Make(P("First") + P(Words(30)) + SmallPage());
+  REQUIRE(d.layout);
+  auto rules = [&](size_t page) {
+    size_t n = 0;
+    for (const auto& e : d.page(page).edges) n += e.y1 == e.y2 && e.x2 - e.x1 > 20 && e.x2 - e.x1 <= 145 ? 1 : 0;
+    return n;
+  };
+  const size_t pages = d.pages();
+  for (size_t p = 0; p < pages; ++p) CHECK_EQ(rules(p), 0u);
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  const uint32_t first = d.doc->StoryParagraphs(d.doc->MainStory())[0];
+  edit::Result r = edit::InsertNote(ed, {first, 5}, true);
+  REQUIRE(r.ok);
+  REQUIRE(ed.InsertText(r.caret, u"The endnote.").ok);
+  d.layout->LayOutAll();
+  REQUIRE(SameAsFresh(*d.doc, *d.layout, "endnote added"));
+  size_t notePage = 0;
+  const LineBox* note = Find(d, u"The endnote.", &notePage);
+  REQUIRE(note);
+  CHECK_EQ(rules(notePage), 1u);
+  for (const auto& e : d.page(notePage).edges)
+    if (e.y1 == e.y2 && e.x2 - e.x1 > 20 && e.x2 - e.x1 <= 145) CHECK(e.y1 < note->top && e.y1 > note->top - 20);
+  REQUIRE(ed.Undo().ok);
+  REQUIRE(ed.Undo().ok);
+  d.layout->LayOutAll();
+  for (size_t p = 0; p < d.pages(); ++p) CHECK_EQ(rules(p), 0u);
+}
+
 TEST(Layout_TocShowsTheHeadingsPages) {
   // D4: a table of contents inserted at the start shows the page each heading is on once the table
   // is in (it moves them), and lays out as from scratch; updating the numbers after an edit that
