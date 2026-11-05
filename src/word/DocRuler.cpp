@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <map>
 #include <cwchar>
 #include <iterator>
 
@@ -281,7 +280,12 @@ void DocView::MeasureCells(RulerInfo& r, const layout::Page& pg, uint32_t para) 
   if (!cell) return;
   const fw::doc::TableProps table = doc_->ResolvedTable(cell->tbl);
   const float defLeft = MarginPt(table.cellMargins.start, 5.4f), defRight = MarginPt(table.cellMargins.end, 5.4f);
-  std::map<int32_t, RulerInfo::Edge> edges;
+  auto edge = [&](int32_t line) -> RulerInfo::Edge& {  // a grid line's edge, made when first seen
+    for (RulerInfo::Edge& e : r.cells)
+      if (e.line == line) return e;
+    r.cells.push_back({line});
+    return r.cells.back();
+  };
   for (const auto& c : editor_->TableCells(at)) {
     if (c.row > cell->row || cell->row >= c.row + c.rows) continue;
     const layout::LineBox* text = nullptr;
@@ -293,16 +297,14 @@ void DocView::MeasureCells(RulerInfo& r, const layout::Page& pg, uint32_t para) 
     if (!text) continue;
     const fw::doc::CellProps props = doc_->ResolvedCell(c.tc);
     const float left = MarginPt(props.margins.start, defLeft), right = MarginPt(props.margins.end, defRight);
-    RulerInfo::Edge& before = edges[c.col];
-    before.line = c.col;
+    RulerInfo::Edge& before = edge(c.col);
     before.x = text->x - left;
     before.marginAfter = left;
-    RulerInfo::Edge& after = edges[c.col + c.span];
-    after.line = c.col + c.span;
+    RulerInfo::Edge& after = edge(c.col + c.span);  // (before may have moved)
     after.x = text->x + text->line.right + Pt(doc_->ResolvedPara(c.start.para).indEnd) + right;
     after.marginBefore = right;
   }
-  for (const auto& [line, e] : edges) r.cells.push_back(e);
+  std::sort(r.cells.begin(), r.cells.end(), [](const auto& a, const auto& b) { return a.line < b.line; });
 }
 
 DocView::RulerHit DocView::RulerAt(const RulerInfo& r, int xi, int yi) const {
