@@ -937,6 +937,8 @@ void DocView::SelectAll() {
 void DocView::StartSearch(const std::wstring& query, bool matchCase) {
   if (!Ready()) return;
   ClearSearch();
+  query_ = query;
+  matchCase_ = matchCase;
   if (query.empty()) return;
   auto lower = [](std::wstring s) {
     if (!s.empty())

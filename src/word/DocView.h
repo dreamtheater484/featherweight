@@ -70,6 +70,9 @@ class DocView : public PagedView {
   int SearchCurrent() const override { return current_; }
   bool SearchDone() const override { return true; }
   std::wstring SelectedText() override;
+  bool CanReplace() const override { return Editing(); }
+  bool ReplaceCurrent(const std::wstring& with) override;
+  int ReplaceAll(const std::wstring& with) override;
 
   // The file with the parts edits changed written anew, the rest as it was; read back before it
   // replaces anything. Unedited, a copy of the file as it was opened.
@@ -229,6 +232,8 @@ class DocView : public PagedView {
   // Find
   std::vector<Match> matches_;
   int current_ = -1;
+  std::wstring query_;  // what was searched for, to find again after a replace
+  bool matchCase_ = false;
 
   // Editing: null for a document shown but not edited (one the model can't write back).
   std::unique_ptr<fw::doc::edit::Editor> editor_;

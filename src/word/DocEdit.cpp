@@ -424,3 +424,44 @@ DocView::TextPos DocView::StoryEdge(TextPos p, bool end) const {
   if (paras.empty()) return p;
   return end ? TextPos{paras.back(), static_cast<uint32_t>(doc_->Para(paras.back()).text.size())} : TextPos{paras.front(), 0};
 }
+
+// ---------------------------------------------------------------------------
+// Replace
+
+bool DocView::ReplaceCurrent(const std::wstring& with) {
+  if (!Editing() || current_ < 0 || current_ >= static_cast<int>(matches_.size())) return false;
+  const Match m = matches_[current_];
+  if (!Apply(editor_->Replace(ToDoc(m.from), ToDoc(m.to), std::u16string(with.begin(), with.end())))) return false;
+  // Find again (the text changed) and go on to the next match after the one replaced.
+  const TextPos after = focus_;
+  StartSearch(query_, matchCase_);
+  for (size_t i = 0; i < matches_.size(); ++i)
+    if (StoryOf(matches_[i].from) == StoryOf(after) && !(matches_[i].from < after)) {
+      current_ = static_cast<int>(i);
+      ScrollToPos(matches_[i].from, matches_[i].to);
+      break;
+    }
+  host_.ViewStateChanged();
+  return true;
+}
+
+int DocView::ReplaceAll(const std::wstring& with) {
+  if (!Editing() || matches_.empty()) return 0;
+  // From the last to the first, so each match's place holds while the ones after it change.
+  std::vector<Match> all = matches_;
+  std::stable_sort(all.begin(), all.end(), [](const Match& a, const Match& b) { return b.from < a.from; });
+  const std::u16string text(with.begin(), with.end());
+  int replaced = 0;
+  editor_->BeginGroup(u"Replace all");
+  for (const Match& m : all)
+    if (editor_->Replace(ToDoc(m.from), ToDoc(m.to), text)) ++replaced;  // one inside a field's code is left
+  editor_->EndGroup();
+  if (replaced > 0) {
+    fw::doc::edit::Result r;
+    r.caret = ToDoc(all.back().from);
+    Apply(r);
+  }
+  StartSearch(query_, matchCase_);
+  host_.ViewStateChanged();
+  return replaced;
+}

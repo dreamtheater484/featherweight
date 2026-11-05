@@ -154,6 +154,9 @@ bool App::CreateMainWindow(const AppOptions& opts) {
   };
   sb.onEnter = [this](bool shift) { Execute(shift ? CmdFindPrev : CmdFindNext); };
   sb.onEscape = [this] { CloseSearch(); };
+  TextBox& wb = search_.WithBox();
+  wb.onEnter = [this](bool) { Execute(CmdReplaceOne); };
+  wb.onEscape = [this] { CloseSearch(); };
 
   // Page box: type a number and press Enter; Up/Down step through pages.
   TextBox& pb = toolbar_.PageBox();
@@ -285,7 +288,13 @@ void App::Layout() {
   LayoutShell();
   RECT doc = DocRect();
   search_.Layout(doc, ui_);
-  banner_.Layout(doc, ui_);
+  // While the search card is open, banners go beside it rather than over it, when there's room.
+  RECT bannerArea = doc;
+  if (search_.IsOpen()) {
+    const LONG left = static_cast<LONG>(search_.Card().left - 8 * ui_);
+    if (left - doc.left >= static_cast<LONG>(360 * ui_)) bannerArea.right = left;
+  }
+  banner_.Layout(bannerArea, ui_);
   empty_.Layout(doc, ui_, settings_.recent);
   notes_.Layout(doc, ui_);
   if (TabContent* v = Active()) v->SetViewport(doc, ui_);
@@ -320,7 +329,8 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
   }
   if (search_.Visible()) {
     bool none = v && !search_.Box().Text().empty() && v->SearchDone() && v->SearchCount() == 0;
-    search_.Draw(canvas_, SearchStatus(), caretOn && focusBox_ == &search_.Box(), none);
+    search_.Draw(canvas_, SearchStatus(), caretOn && focusBox_ == &search_.Box(), none,
+                 caretOn && focusBox_ == &search_.WithBox());
   }
   banner_.Draw(canvas_);
   notes_.Draw(canvas_);
@@ -776,6 +786,8 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
   TextBox* clickedBox = nullptr;
   if (r == Region::Toolbar && toolbar_.HitPageBox(x, y)) clickedBox = &toolbar_.PageBox();
   if (r == Region::Search && Contains(search_.Box().rc, (float)x, (float)y)) clickedBox = &search_.Box();
+  if (r == Region::Search && search_.Replacing() && Contains(search_.WithBox().rc, (float)x, (float)y))
+    clickedBox = &search_.WithBox();
   if (r == Region::Doc && Active() && Active()->PasswordBox() &&
       Contains(Active()->PasswordBox()->rc, (float)x, (float)y))
     clickedBox = Active()->PasswordBox();
@@ -843,7 +855,8 @@ void App::OnMouseMove(int x, int y) {
         toolbar_.OnMouseMove(x, y);
         break;
       case Region::Search:
-        if (focusBox_ == &search_.Box() && GetKeyState(VK_LBUTTON) < 0) search_.OnMouseDrag(x, y);
+        if ((focusBox_ == &search_.Box() || focusBox_ == &search_.WithBox()) && GetKeyState(VK_LBUTTON) < 0)
+          search_.OnMouseDrag(x, y);
         search_.OnMouseMove(x, y);
         break;
       case Region::Title: title_.OnMouseMove(x, y); break;
@@ -972,7 +985,9 @@ bool App::OnSetCursor() {
       if (toolbar_.HitPageBox(pt.x, pt.y) || toolbar_.OverText(pt.x, pt.y)) c = ibeam;
       break;
     case Region::Search:
-      if (Contains(search_.Box().rc, (float)pt.x, (float)pt.y)) c = ibeam;
+      if (Contains(search_.Box().rc, (float)pt.x, (float)pt.y) ||
+          (search_.Replacing() && Contains(search_.WithBox().rc, (float)pt.x, (float)pt.y)))
+        c = ibeam;
       break;
     case Region::Doc:
       if (TabContent* v = Active()) c = v->CursorAt(pt.x, pt.y);
@@ -1094,7 +1109,11 @@ void App::OnKeyDown(UINT vk) {
       return;
     }
     if (vk == VK_TAB && box == &search_.Box()) {
-      FocusBox(nullptr);
+      FocusBox(search_.Replacing() && !shift ? &search_.WithBox() : nullptr);
+      return;
+    }
+    if (vk == VK_TAB && box == &search_.WithBox()) {
+      FocusBox(shift ? &search_.Box() : nullptr);
       return;
     }
     return;
@@ -1192,6 +1211,7 @@ int App::AppShortcut(UINT vk, UINT mods) {
       case VK_NEXT: return CmdNextTab;
       case VK_PRIOR: return CmdPrevTab;
       case 'F': return CmdFind;
+      case 'H': return CmdReplace;
     }
   }
   switch (vk) {
@@ -1259,6 +1279,31 @@ void App::Execute(int cmd) {
       if (tabs_.size() > 1) ActivateTab((active_ + static_cast<int>(tabs_.size()) - 1) % static_cast<int>(tabs_.size()));
       break;
     case CmdFind: OpenSearch(); break;
+    case CmdReplace:
+      if (ready && v->CanReplace() && !presentation_) {
+        search_.ShowReplace(true);
+        Layout();
+        OpenSearch();
+        if (!search_.Box().Text().empty()) {
+          FocusBox(&search_.WithBox());
+          search_.WithBox().SelectAll();
+        }
+      } else {
+        OpenSearch();
+      }
+      break;
+    case CmdReplaceOne:
+      if (ready && search_.Replacing() && !search_.Box().Text().empty()) v->ReplaceCurrent(search_.WithBox().Text());
+      break;
+    case CmdReplaceAll:
+      if (ready && search_.Replacing() && !search_.Box().Text().empty()) {
+        const int n = v->ReplaceAll(search_.WithBox().Text());
+        banner_.Show(n > 0 ? BannerKind::Success : BannerKind::Info,
+                     n == 0 ? std::wstring(L"Nothing was replaced") : n == 1 ? std::wstring(L"Replaced 1 match")
+                                                                     : L"Replaced " + std::to_wstring(n) + L" matches",
+                     {}, 2500);
+      }
+      break;
     case CmdCommandSearch: OpenCommandSearch(); break;
     case CmdFindNext:
     case CmdFindPrev:
@@ -1706,7 +1751,10 @@ void App::OpenSearch() {
   TabContent* v = Active();
   if (!v || !v->Ready()) return;
   if (presentation_) return;
-  if (!search_.IsOpen()) search_.Open();
+  if (!search_.IsOpen()) {
+    search_.Open();
+    Layout();
+  }
   // Start from the selected text, if any (a short, single line).
   std::wstring selected = fw::Trim(v->SelectedText());
   if (!selected.empty() && selected.size() <= 80 && selected.find_first_of(L"\r\n") == std::wstring::npos)
@@ -1719,7 +1767,9 @@ void App::OpenSearch() {
 
 void App::CloseSearch() {
   search_.Close();
-  if (focusBox_ == &search_.Box()) FocusBox(nullptr);
+  search_.ShowReplace(false);
+  Layout();
+  if (focusBox_ == &search_.Box() || focusBox_ == &search_.WithBox()) FocusBox(nullptr);
   if (TabContent* v = Active()) v->ClearSearch();
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -2149,7 +2199,8 @@ void App::RunScript(const std::wstring& script) {
       static const std::pair<const wchar_t*, int> names[] = {
           {L"find", CmdFind}, {L"next", CmdFindNext}, {L"invert", CmdToggleInvert}, {L"present", CmdPresentation},
           {L"fit-page", CmdZoomFitPage}, {L"fit-width", CmdZoomFitWidth}, {L"rotate", CmdRotateRight},
-          {L"close", CmdCloseTab}, {L"selectall", CmdSelectAll}, {L"nexttab", CmdNextTab}};
+          {L"close", CmdCloseTab}, {L"selectall", CmdSelectAll}, {L"nexttab", CmdNextTab},
+          {L"replace", CmdReplace}, {L"replaceall", CmdReplaceAll}, {L"undo", CmdUndo}};
       for (const auto& [name, id] : names)
         if (arg == name) Execute(id);
     } else if (op == L"updatecheck") {
