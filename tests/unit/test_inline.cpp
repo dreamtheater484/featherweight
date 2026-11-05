@@ -396,7 +396,8 @@ TEST(HeaderFooter_FirstPageOddEvenAndNumbering) {
 
 TEST(HeaderFooter_LinkToPreviousAndUnlink) {
   Fixture f;
-  f.header = "<w:p><w:r><w:t xml:space=\"preserve\">Page </w:t></w:r><w:fldSimple w:instr=\" PAGE \"><w:r><w:t>1</w:t></w:r></w:fldSimple>"
+  f.header = "<w:p w14:paraId=\"401BA2D6\" w14:textId=\"77777777\"><w:r><w:t xml:space=\"preserve\">Page </w:t></w:r>"
+             "<w:fldSimple w:instr=\" PAGE \"><w:r><w:t>1</w:t></w:r></w:fldSimple>"
              "<w:bookmarkStart w:id=\"1\" w:name=\"InHeader\"/><w:bookmarkEnd w:id=\"1\"/></w:p>";
   f.body = "<w:p><w:pPr><w:sectPr><w:headerReference w:type=\"default\" r:id=\"rIdHeader\"/></w:sectPr></w:pPr>"
            "<w:r><w:t>One</w:t></w:r></w:p><w:p><w:r><w:t>Two</w:t></w:r></w:p><w:sectPr/>";
@@ -416,6 +417,8 @@ TEST(HeaderFooter_LinkToPreviousAndUnlink) {
   CHECK(StoryText(*doc, own) == "Page 1");
   const std::string copy = PartNamed(*doc, "/word/header2.xml");
   CHECK(Has(copy, "<w:fldSimple w:instr=\" PAGE \">") && !Has(copy, "bookmark"));
+  // Nor Word's paragraph ids (d3-torture finding 20: an id used twice); the original keeps its own.
+  CHECK(!Has(copy, "w14:paraId") && !Has(copy, "w14:textId") && Has(PartNamed(*doc, "/word/header1.xml"), "w14:paraId=\"401BA2D6\""));
   const uint32_t p = doc->StoryParagraphs(own).front();
   CHECK(editor.InsertText({p, 0}, u"My ").ok && StoryText(*doc, shared) == "Page 1");
   CHECK(SaveAndReopen(*doc) != nullptr);
