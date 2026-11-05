@@ -35,6 +35,8 @@ class DocTable {
     std::function<void(fw::doc::Pos anchor, fw::doc::Pos caret)> select;
     // Opens a side panel (null closes it).
     std::function<void(PanelContent*)> showPanel;
+    // The keyboard back to the page (from the panel, after Insert table).
+    std::function<void()> focusPage;
   };
 
   DocTable(fw::doc::edit::Editor& editor, Host host);

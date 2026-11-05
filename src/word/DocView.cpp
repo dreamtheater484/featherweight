@@ -253,6 +253,7 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
       host_.ViewStateChanged();
     };
     th.showPanel = [this](PanelContent* p) { host_.ViewShowPanel(p); };
+    th.focusPage = [this] { host_.ViewFocusPage(); };
     DocPage::Host ph;
     ph.selection = th.selection;
     ph.apply = [this](const fw::doc::edit::Result& r) { return Apply(r); };
@@ -804,6 +805,26 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
     }
     lineDrag_ = LineDrag::None;
   }
+  // In the margin beside text: the line, and dragging on, more lines; a double-click, the paragraph.
+  if (auto line = !(mods & kModShift) ? LineMarginAt(x, y) : std::nullopt; line) {
+    if (doubleClick) {
+      anchor_ = {line->first.para, 0};
+      focus_ = {line->first.para, static_cast<uint32_t>(doc_->Para(line->first.para).text.size())};
+      drag_ = Drag::None;
+    } else {
+      anchor_ = lineAnchor_ = line->first;
+      focus_ = lineAnchorEnd_ = line->second;
+      lineDrag_ = LineDrag::Lines;
+      drag_ = Drag::Select;
+    }
+    if (Editing()) {
+      goalX_ = -1;
+      editor_->BreakTyping();
+      CaretMoved(false);
+    }
+    host_.ViewInvalidate();
+    return;
+  }
   if (pos) {
     const bool triple = !doubleClick && anim::Now() - lastDoubleClick_ < GetDoubleClickTime() &&
                         std::abs(x - lastDoubleX_) + std::abs(y - lastDoubleY_) < 6 * ui_;
@@ -859,6 +880,19 @@ void DocView::OnMouseMove(int x, int y, UINT mods) {
   if (drag_ == Drag::Select) {
     if (y < vp_.top) ScrollBy(0, (y - vp_.top) * 0.5, false);
     else if (y > vp_.bottom) ScrollBy(0, (y - vp_.bottom) * 0.5, false);
+    if (lineDrag_ == LineDrag::Lines) {  // whole lines, from the first one chosen either way
+      auto pos = PosAt(x, y, true);
+      auto line = pos && StoryOf(*pos) == StoryOf(lineAnchor_) ? LineRange(*pos) : std::nullopt;
+      if (!line) return;
+      const TextPos a = line->first < lineAnchor_ ? lineAnchorEnd_ : lineAnchor_;
+      const TextPos f = line->first < lineAnchor_ ? line->first : line->second;
+      if (!(a == anchor_) || !(f == focus_)) {
+        anchor_ = a;
+        focus_ = f;
+        host_.ViewInvalidate();
+      }
+      return;
+    }
     if (lineDrag_ != LineDrag::None) {
       const TextPos a = anchor_, f = focus_;
       const auto pos = lineDrag_ == LineDrag::Columns ? ColumnTopAt(x, y, lineTbl_) : PosAt(x, y, true);
@@ -946,8 +980,34 @@ HCURSOR DocView::CursorAt(int x, int y) {
   if (HCURSOR c = CellCursor(x, y)) return c;
   if (!HitAt(x, y).link.empty()) return hand;
   if (presentation_) return arrow;
-  if (RowMarginAt(x, y)) return arrow;
+  if (RowMarginAt(x, y) || LineMarginAt(x, y)) return arrow;
   return PosAt(x, y, false) ? ibeam : arrow;
+}
+
+std::optional<std::pair<DocView::TextPos, DocView::TextPos>> DocView::LineRange(TextPos pos) const {
+  auto line = pagination_->LineAt(pos);
+  if (!line) return std::nullopt;
+  // A wrapped line's end is before its last character (where End puts the caret): that's in it too.
+  TextPos end = line->end;
+  if (end.offset < doc_->Para(end.para).text.size()) ++end.offset;
+  return std::make_pair(line->start, end);
+}
+
+std::optional<std::pair<DocView::TextPos, DocView::TextPos>> DocView::LineMarginAt(int x, int y) const {
+  if (placeholder_ || presentation_) return std::nullopt;
+  const int page = PageAtPoint(x, y);
+  float px, py;
+  if (page < 0 || page >= static_cast<int>(pagination_->PageCount()) || !ToPagePoint(page, x, y, px, py))
+    return std::nullopt;
+  // Left of the text area, beside a line: not in a table (RowMarginAt), a text box or a header
+  // that isn't being edited.
+  if (px >= pagination_->GetPage(static_cast<size_t>(page)).body.left - 2) return std::nullopt;
+  auto pos = pagination_->HitTest(static_cast<size_t>(page), px, py, ClickStories());
+  if (!pos || (editor_ && editor_->CellAt({pos->para, pos->offset}))) return std::nullopt;
+  auto line = pagination_->LineAt(*pos);
+  if (!line || line->page != static_cast<size_t>(page) || py < line->box.top || py > line->box.bottom) return std::nullopt;
+  if (doc_->Stories()[doc_->Para(pos->para).story].drawing != fw::doc::kNone) return std::nullopt;
+  return LineRange(*pos);
 }
 
 std::optional<DocView::TextPos> DocView::RowMarginAt(int x, int y) const {

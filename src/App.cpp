@@ -1943,6 +1943,8 @@ void App::ViewRequestPrint() { PostMessageW(hwnd_, WM_COMMAND, CmdPrint, 0); }
 
 void App::ViewFocusTextBox(TextBox* box) { FocusBox(box); }
 
+void App::ViewFocusPage() { MoveKeyTo(KeyArea::Doc, true, true); }
+
 void App::ViewPasswordAccepted(TabContent* view) {
   view->SetViewport(DocRect(), ui_);
   if (auto st = settings_.GetState(view->Path())) view->ApplyState(*st);

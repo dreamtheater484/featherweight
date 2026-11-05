@@ -48,6 +48,9 @@ class ViewHost {
   virtual void ViewShowPanel(PanelContent* content) = 0;
   // The content of the open side panel, or null.
   virtual PanelContent* ViewShownPanel() = 0;
+  // The keyboard back to the page, from the toolbar or a side panel: after a panel's Insert table,
+  // typing goes into the new table.
+  virtual void ViewFocusPage() {}
 };
 
 // The window's own state, for the parts of a tab's toolbar that show it.

@@ -471,12 +471,16 @@ class DocView : public PagedView {
   TextPos cellFrom_, cellTo_;
   uint32_t cellRevision_ = UINT32_MAX;
   std::unique_ptr<fw::doc::edit::Pictures> pictures_;  // with the editor, after it
-  // Rows chosen in the margin beside a table, or columns just above one: the drag goes on by whole
-  // rows or columns from here.
-  enum class LineDrag : uint8_t { None, Rows, Columns };
+  // Rows chosen in the margin beside a table, columns just above one, or lines in the margin beside
+  // text (Word's selection bar): the drag goes on by whole rows, columns or lines from here.
+  enum class LineDrag : uint8_t { None, Rows, Columns, Lines };
   LineDrag lineDrag_ = LineDrag::None;
-  TextPos lineAnchor_;
+  TextPos lineAnchor_, lineAnchorEnd_;  // for lines, the first line's start and end
   std::optional<TextPos> RowMarginAt(int x, int y) const;
+  // A line of text, from its start to the start of the next (its paragraph's end, for the last).
+  std::optional<std::pair<TextPos, TextPos>> LineRange(TextPos pos) const;
+  // In the left margin beside a line of text (not a table's): that line.
+  std::optional<std::pair<TextPos, TextPos>> LineMarginAt(int x, int y) const;
   bool SelectLines(TextPos from, TextPos to);
   // ---- Table cells on the page (DocCells.cpp), from the layout's cell boxes (Layout::Cells): a
   // column border dragged moves its grid line, a row's bottom border sets its height (at least),
