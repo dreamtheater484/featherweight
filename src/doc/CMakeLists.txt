@@ -13,6 +13,14 @@ target_include_directories(fwdoc PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(fwdoc PUBLIC fwpkg fwcore)
 target_compile_options(fwdoc PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
+# fwdoclayout: pagination (plan §6.3 "Layout"), on fwtext's lines. Kept apart from fwdoc so the
+# model, its tools and its fuzz target stay free of DirectWrite.
+add_library(fwdoclayout STATIC
+  layout/Layout.cpp
+)
+target_link_libraries(fwdoclayout PUBLIC fwdoc fwtext fwdraw)
+target_compile_options(fwdoclayout PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
+
 # Its unit tests join fw_tests, and the never-damage tests run the corpus through the model
 # (plan §6.4 D1): read every document into the model, write every part it owns back, and check.
 if(FW_BUILD_TESTS)
