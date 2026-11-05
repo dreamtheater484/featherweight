@@ -19,6 +19,7 @@ add_library(fwdoc STATIC
   edit/Inline.cpp
   edit/Kept.cpp
   edit/Lists.cpp
+  edit/Notes.cpp
   edit/Page.cpp
   edit/Styles.cpp
   edit/TableStyles.cpp
@@ -63,7 +64,7 @@ if(FW_BUILD_TESTS)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_doc.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_docsave.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_edit.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_clip.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_format.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_page.cpp"
-    "${PROJECT_SOURCE_DIR}/tests/unit/test_inline.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_inline.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_notes.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_proof.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_tables.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_pictures.cpp"
     # The document tab's file (D2 "Files"): an app source, tested here with temporary folders.

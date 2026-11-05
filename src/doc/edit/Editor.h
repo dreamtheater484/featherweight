@@ -92,6 +92,10 @@ struct CustomStep {
   // With first: the paragraphs from here to the range's end didn't change, only list numbers in
   // them may have (TreeEdit::Local(true)). kNone: all of the range changed.
   uint32_t renumberFrom = kNone;
+  // Paragraphs the step adds to the model or takes out of it (a note's story, D4), in the order
+  // it does so, each as the Change it is then. Listeners hear of them after the range above;
+  // undoing reverses them, newest first.
+  std::vector<Change> paraChanges;
 };
 
 class Editor {
@@ -121,7 +125,8 @@ class Editor {
   // the formatting of the text before it.
   Result InsertText(Pos at, std::u16string_view text);
   // Deletes [from, to). Both ends in one story; across paragraphs they join. Section breaks in the
-  // marks deleted go: their paragraphs join the section after them, which keeps its headers.
+  // marks deleted go: their paragraphs join the section after them, which keeps its headers. A
+  // footnote's or endnote's reference deleted takes its note with it, in the same undo step (D4).
   Result Delete(Pos from, Pos to);
   // Typing over a selection: deletes it, then inserts.
   Result Replace(Pos from, Pos to, std::u16string_view text);
@@ -141,6 +146,19 @@ class Editor {
   // stays in Document::Drawings() when the insert is undone, at no position. Pictures.h makes the
   // XML and adds the picture's part.
   Result InsertDrawing(Pos at, std::string xml, const Drawing& info);
+  // ---- Fields and notes (D4)
+  // Puts runs at `at` (w:r elements made from XML in the w: namespace, every element and
+  // attribute known where it goes, their w:t and w:instrText text included): between the runs
+  // there, cutting one, with the text before them (in a link that ends at `at`, not one that
+  // starts there). A note's reference, a field's characters. One undo step named `name`.
+  Result InsertRuns(Pos at, std::string_view runsXml, std::u16string name);
+  // Makes [from, to) the result of a new field with instruction `code` (" PAGEREF _Toc1 \h "): a
+  // w:fldChar begin, the code in w:instrText and a separator at `from`, an end at `to`, each in a
+  // run of its own with run properties `rPr` (a w:rPr's XML, or empty). The ends go in the
+  // innermost container that holds both: in one paragraph, inside a link around them; across
+  // paragraphs, in the paragraphs themselves (Word refuses a field split across a link, torture
+  // finding 6). Refused across the edge of another field. One undo step named `name`.
+  Result WrapInField(Pos from, Pos to, std::string_view code, std::string_view rPr, std::u16string name);
   // Makes the text in [from, to), in one paragraph, a hyperlink to `target`: a web address (a
   // relationship of the part, kept if the link is undone, which is harmless) or "#bookmark".
   // Refused where the text is already a link, or in a field, a content control or a tracked change.
