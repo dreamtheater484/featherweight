@@ -44,8 +44,6 @@ class DocFormat {
   void Execute(int cmd);
   // The toolbar's editing groups, after Save and Print.
   void AddToolbar(ToolbarModel& m);
-  // The selection's language as Windows names it ("English (United Kingdom)"), or empty.
-  std::wstring Language();
 
   // The format painter: its button takes the selection's format, and the next selection made
   // gets it (Esc cancels). Ctrl+Shift+C and Ctrl+Shift+V copy and paste a format the same way.

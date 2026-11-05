@@ -6,6 +6,7 @@
 
 #include "doc/docx/Docx.h"
 #include "doc/edit/Editor.h"
+#include "doc/edit/Kept.h"
 #include "doc/model/Internal.h"
 #include "pkg/XmlWriter.h"
 
@@ -22,14 +23,6 @@ TypeId TypeOfElem(const Tree& t, ElemId id) { return S().Elem(t.elems[id].def).t
 size_t Rank(const TypeDef& parent, ElemDefId def) {
   auto it = std::find(parent.children.begin(), parent.children.end(), def);
   return static_cast<size_t>(it - parent.children.begin());
-}
-
-// A properties element (w:rPr, w:pPr...), as the editor's AddInOrder tells them: kept content
-// goes after the properties around it.
-bool PropsElem(const Tree& t, ElemId id) {
-  const uint32_t n = NameOfElem(t, id);
-  return n == names::kPPr || n == names::kRPr || n == Name("sdtPr") || n == Name("sdtEndPr") ||
-         n == Name("smartTagPr") || n == Name("customXmlPr") || (t.elems[id].flags & kSharedKids);
 }
 
 size_t AttrRank(const TypeDef& type, AttrDefId def) {
@@ -93,6 +86,7 @@ void TreeEdit::Begin(std::u16string label) {
   if (depth_++ > 0) return;
   label_ = std::move(label);
   local_ = toEnd_ = false;
+  owned_.clear();
   elemsAtBegin_ = doc_.tree_.elems.size();
   before_.clear();
   store_.clear();
@@ -236,13 +230,23 @@ ElemId TreeEdit::Clone(ElemId src, ElemId parent) {
   copy.node = NewNode();
   doc_.tree_.elems.push_back(copy);
   auto id = static_cast<ElemId>(doc_.tree_.elems.size() - 1);
-  if (from != pkg::kNoNode && from != pkg::kFieldNode)
+  if (from != pkg::kNoNode && from != pkg::kFieldNode) {
     if (pkg::AttrSetId set = doc_.store_.NodeAttributes(from)) StoreSetAttrs(copy.node, set);
+    // Kept content beside it goes with it (the w14 extensions after a w:sz).
+    if (std::vector<pkg::Fragment> kept = doc_.store_.FragmentsCopy(from); !kept.empty())
+      StoreFragments(copy.node, std::move(kept));
+  }
   return id;
 }
 
 ElemId TreeEdit::Own(ElemId container) {
-  if (!(E(container).flags & kSharedKids)) return container;
+  // The reader shares one set of children between identical property containers, flagging every
+  // one but the first, whose children they are (Tree.h, kSharedKids). So any container copies its
+  // children before they change, once a transaction (d2-torture finding 4); the others keep the
+  // originals. One made in this transaction, unflagged, has children of its own.
+  if (E(container).first == kNoElem) return container;
+  if (!(E(container).flags & kSharedKids) && container >= elemsAtBegin_) return container;
+  if (!owned_.insert(container).second) return container;
   std::vector<ElemId> kids;
   for (ElemId k = E(container).first; k != kNoElem; k = E(k).next) kids.push_back(k);
   Touch(container);
@@ -280,40 +284,9 @@ void TreeEdit::Link(ElemId parent, ElemId child, ElemId before) {
     E(prev).next = child;
   }
   E(child).parent = parent;
-  // Kept content stays after the known content around properties, by the editor's rule
-  // (EditorState::AddInOrder): what came first in the parent (a run's mc:AlternateContent, an
-  // extension inside w:rPr) follows a new first property, and what followed the last property
-  // (the w14 extensions that end w:rPr) follows a new last one.
-  const Tree& t = doc_.tree_;
-  if (PropsElem(t, child) || PropsElem(t, parent)) {
-    if (prev == kNoElem) MoveFragments(parent, child, pkg::Slot::After, true, false, true);
-    else if (E(child).next == kNoElem && PropsElem(t, parent)) MoveFragments(prev, child, pkg::Slot::After, true, false);
-  }
-}
-
-// Moves `from`'s kept fragments after it (and before it, with `before`; or with `inside`, those
-// first inside it) to `to`, in `slot`: first among to's fragments when `first`, after them
-// otherwise. Pair ends move only with `before` (the element they were beside goes).
-void TreeEdit::MoveFragments(ElemId from, ElemId to, pkg::Slot slot, bool first, bool before, bool inside) {
-  auto real = [](pkg::NodeId n) { return n != pkg::kNoNode && n != pkg::kFieldNode; };
-  const pkg::NodeId a = E(from).node, b = E(to).node;
-  if (!real(a) || !real(b) || a == b) return;
-  std::vector<pkg::Fragment> stay, move;
-  for (pkg::Fragment& f : doc_.store_.FragmentsCopy(a)) {
-    bool moves = inside ? f.slot == pkg::Slot::Inside && f.afterChild.empty()
-                        : f.slot == pkg::Slot::After || (before && f.slot == pkg::Slot::Before);
-    if (f.pairEnd && !before) moves = false;
-    (moves ? move : stay).push_back(std::move(f));
-  }
-  if (move.empty()) return;
-  for (pkg::Fragment& f : move) {
-    f.slot = slot;
-    f.afterChild.clear();
-  }
-  std::vector<pkg::Fragment> there = doc_.store_.FragmentsCopy(b);
-  there.insert(first ? there.begin() : there.end(), move.begin(), move.end());
-  StoreFragments(a, std::move(stay));
-  StoreFragments(b, std::move(there));
+  // Kept content stays in schema order: after a w:rPr, the w14 extensions that end w:rPr last.
+  for (auto& [node, fragments] : FragmentsAfterLink(doc_.store_, doc_.tree_, prev, child))
+    StoreFragments(node, std::move(fragments));
 }
 
 void TreeEdit::StoreFragments(pkg::NodeId node, std::vector<pkg::Fragment> fragments) {
@@ -371,9 +344,8 @@ void TreeEdit::RemoveElement(ElemId elem) {
   }
   // Kept content beside it stays where it was: after the previous known child, before the next,
   // or first in the parent.
-  if (prev != kNoElem) MoveFragments(elem, prev, pkg::Slot::After, false, true);
-  else if (next != kNoElem) MoveFragments(elem, next, pkg::Slot::Before, true, true);
-  else MoveFragments(elem, parent, pkg::Slot::Inside, true, true);
+  for (auto& [node, fragments] : FragmentsBeforeUnlink(doc_.store_, doc_.tree_, prev, elem, next))
+    StoreFragments(node, std::move(fragments));
 }
 
 void TreeEdit::Remove(ElemId parent, uint32_t name) {

@@ -615,15 +615,6 @@ void DocFormat::InsertDateTime(size_t index) {
   done_(d);
 }
 
-std::wstring DocFormat::Language() {
-  if (!target_().any) return {};
-  std::wstring tag = W(std::string_view(State().lang));
-  if (tag.empty() || !IsValidLocaleName(tag.c_str())) return {};
-  wchar_t name[128] = {};
-  if (!GetLocaleInfoEx(tag.c_str(), LOCALE_SLOCALIZEDDISPLAYNAME, name, 128)) return {};
-  return name;
-}
-
 void DocFormat::AddToolbar(ToolbarModel& m) {
   const bool on = target_().any && Editable();
   const edit::FormatState& st = State();

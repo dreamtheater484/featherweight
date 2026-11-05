@@ -897,6 +897,98 @@ TEST(Edit_KeptExtensionsStayInSchemaOrder) {
   CHECK(editor.Redo() && editor.Redo() && editor.Redo() && MainXml(*doc) == cleared);
 }
 
+TEST(Edit_EditorPropertiesKeepSchemaOrder) {
+  // d2-torture finding 3, through the editor's SetRunProps, SetMarkProps and SetParaProps: a run's
+  // w:rPr comes first, before kept mc:AlternateContent (3a), and w: properties come before the
+  // w14 extensions that end w:rPr, in a run's and in a paragraph mark's (3b). Taking a property
+  // out keeps the extensions that followed it.
+  Fixture f;
+  f.body = "<w:p><w:r><mc:AlternateContent><mc:Choice Requires=\"w16du\"><w:t>alt</w:t></mc:Choice>"
+           "<mc:Fallback><w:t>alt</w:t></mc:Fallback></mc:AlternateContent></w:r><w:r><w:t>end</w:t></w:r></w:p>"
+           "<w:p><w:pPr><w:rPr><w14:ligatures w14:val=\"standard\"/></w:rPr></w:pPr>"
+           "<w:r><w:rPr><w14:ligatures w14:val=\"standard\"/></w:rPr><w:t>liga</w:t></w:r>"
+           "<w:r><w:rPr><w:sz w:val=\"24\"/><w14:cntxtAlts/></w:rPr><w:t>alts</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  auto paras = MainParas(*doc);
+  const std::string original = MainXml(*doc);
+  edit::Editor editor(*doc);
+  auto end = [&](uint32_t p) { return Pos{p, static_cast<uint32_t>(doc->Para(p).text.size())}; };
+  edit::PropEdit red;
+  red.Set("color", {{"val", "C00000"}});
+  CHECK(editor.SetRunProps({paras[0], 0}, end(paras[0]), red));
+  std::string xml = MainXml(*doc);
+  CHECK(xml.find("</mc:AlternateContent><w:rPr") == std::string::npos);
+  CHECK(Has(xml, "<w:r><w:rPr><w:color w:val=\"C00000\"/></w:rPr><mc:AlternateContent"));
+  edit::PropEdit bold;
+  bold.Set("b");
+  CHECK(editor.SetRunProps({paras[1], 0}, end(paras[1]), bold));
+  CHECK(editor.SetMarkProps(paras[1], paras[1], bold));
+  edit::PropEdit center;
+  center.Set("jc", {{"val", "center"}});
+  CHECK(editor.SetParaProps(paras[1], paras[1], center));
+  xml = MainXml(*doc);
+  CHECK(Has(xml, "<w:pPr><w:jc w:val=\"center\"/><w:rPr><w:b/><w14:ligatures"));
+  CHECK(Has(xml, "<w:r><w:rPr><w:b/><w14:ligatures"));
+  CHECK(Has(xml, "<w:rPr><w:b/><w:sz w:val=\"24\"/><w14:cntxtAlts"));
+  // A property after them goes after them too; one taken out leaves them in place.
+  edit::PropEdit lang;
+  lang.Set("lang", {{"val", "en-GB"}}).Remove("sz");
+  CHECK(editor.SetRunProps({paras[1], 4}, end(paras[1]), lang));
+  xml = MainXml(*doc);
+  CHECK(Has(xml, "<w:rPr><w:b/><w:lang w:val=\"en-GB\"/><w14:cntxtAlts"));
+  CHECK(SaveAndReopen(*doc) != nullptr);
+  const std::string last = MainXml(*doc);
+  int undone = 0;
+  while (editor.Undo()) ++undone;
+  CHECK(undone == 5 && MainXml(*doc) == original);
+  while (editor.Redo()) --undone;
+  CHECK(undone == 0 && MainXml(*doc) == last);
+}
+
+TEST(Edit_TheFirstOfASharedSetIsFormattedAlone) {
+  // d2-torture finding 4: the reader shares one set of property children between identical w:pPr
+  // (and w:rPr), the first container owning them. Formatting the first changes it alone, in the
+  // model and in the written part.
+  Fixture f;
+  f.styles = kWordStyles;
+  const std::string one = "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>One</w:t></w:r></w:p>";
+  f.body = one + "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>Two</w:t></w:r></w:p>"
+                 "<w:p><w:r><w:rPr><w:sz w:val=\"24\"/><w14:cntxtAlts/></w:rPr><w:t>Alts</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  auto paras = MainParas(*doc);
+  const std::string original = MainXml(*doc);
+  const std::string two = "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>Two</w:t></w:r></w:p>";
+  CHECK(Has(original, two));
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  edit::ParaFormat center;
+  center.jc = Justification::Center;
+  edit::FormatParagraphs(ed, Whole(*doc, paras[0]), center);
+  edit::ToggleRuns(ed, Whole(*doc, paras[0]), edit::Toggle::Bold);
+  edit::ApplyStyle(ed, Whole(*doc, paras[0]), "heading 1");
+  // Kept content goes with the properties a container copies.
+  edit::ToggleRuns(ed, Whole(*doc, paras[2]), edit::Toggle::Bold);
+  std::string xml = MainXml(*doc);
+  CHECK(Has(xml, two));
+  CHECK(Has(xml, "<w:sz w:val=\"24\"/><w14:cntxtAlts"));
+  CHECK(doc->ResolvedPara(paras[1]).jc != Justification::Center && !At(*doc, paras[1], 0).bold);
+  auto again = SaveAndReopen(*doc);
+  CHECK(again != nullptr);
+  if (again) {
+    auto p2 = MainParas(*again);
+    CHECK(again->ResolvedPara(p2[0]).style == "Heading1");
+    CHECK(again->ResolvedPara(p2[1]).jc != Justification::Center && !At(*again, p2[1], 0).bold &&
+          again->ResolvedPara(p2[1]).style != "Heading1" && At(*again, p2[1], 0).italic);
+  }
+  while (editor.Undo()) {
+  }
+  CHECK(MainXml(*doc) == original);
+}
+
 TEST(Edit_FirstPropertyGoesBeforeKeptExtensions) {
   // A w:rPr that holds only an extension: the first w: property goes before it, as the editor's
   // own property edits put it (d2-torture finding 3b).

@@ -1423,8 +1423,6 @@ void DocView::BuildStatusBar(StatusBarModel& m) {
   if (!pagination_->Done()) pages += L"…";
   m.segments = {pages};
   if (wordsCounted_) m.segments.push_back(Thousands(words_) + (words_ == 1 ? L" word" : L" words"));
-  if (format_)
-    if (std::wstring lang = format_->Language(); !lang.empty()) m.segments.push_back(lang);
   m.zoom = true;
   m.zoomValue = Zoom();
   m.onZoom = [this](double z) { SetZoom(z); };

@@ -53,7 +53,7 @@ constexpr const char* kUsage =
     "      Times opening each Word document, stage by stage, against the opening budgets\n"
     "      (plan §11). With --budgets, a missed budget fails. With --typing, times keystrokes\n"
     "      at the start, middle and end and in a table instead: from the edit to the page painted\n"
-    "      again.\n"
+    "      again. Formatting there (bold, centered, Heading 1, bullets, each undone) counts too.\n"
     "  fwtool edit-check [--edits N] [--seed S] <file or folder>...\n"
     "      Makes N random edits (40) in each Word document through the editor, lays it out again\n"
     "      incrementally after each, and checks every ten that it's what a layout from scratch is.\n"

@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "doc/model/Document.h"
@@ -116,7 +117,6 @@ class TreeEdit {
   void StoreSplit(pkg::NodeId node, pkg::NodeId second, pkg::SplitPoint at);
   void StoreSetAttrs(pkg::NodeId node, pkg::AttrSetId set);
   void StoreFragments(pkg::NodeId node, std::vector<pkg::Fragment> fragments);
-  void MoveFragments(ElemId from, ElemId to, pkg::Slot slot, bool first, bool before, bool inside = false);
   std::vector<uint32_t> PartsOf(const Saved& elems) const;
   // The paragraph an element is in (its index), or kNone.
   uint32_t ParagraphOf(ElemId id) const;
@@ -133,6 +133,7 @@ class TreeEdit {
   Saved before_;
   std::vector<StoreOp> store_;
   std::unordered_map<ElemId, size_t> touched_;  // element -> index into before_
+  std::unordered_set<ElemId> owned_;            // containers given children of their own (Own)
 };
 
 }  // namespace fw::doc::edit
