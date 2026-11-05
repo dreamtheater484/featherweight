@@ -9,6 +9,7 @@
 #include "DocFixture.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
+#include "doc/edit/HeaderFooter.h"
 #include "doc/edit/Page.h"
 #include "doc/edit/Pictures.h"
 #include "doc/edit/TreeEdit.h"
@@ -453,6 +454,38 @@ TEST(Page_SectionBreakAfterAPictureKeepsItAndTheTextTypedAfter) {
   REQUIRE(qs.size() == 3);
   for (size_t i = 0; i < 3; ++i) CHECK(back->Para(qs[i]).text == doc->Para(ps[i]).text);
   CHECK(drawings(*back, qs[0]) == 1 && back->Sections().size() == 2);
+}
+
+TEST(Page_NewSettingsGoBeforeTheOnesTheModelDoesntRead) {
+  // A thesis template's settings (d1-corpus torture finding 27): automatic hyphenation and different
+  // odd and even pages go right after w:defaultTabStop, before the drawing grid the model doesn't
+  // read, where CT_Settings has them.
+  Fixture f;
+  f.settings = "<w:zoom w:percent=\"100\"/><w:proofState w:spelling=\"clean\" w:grammar=\"clean\"/>"
+               "<w:defaultTabStop w:val=\"720\"/><w:drawingGridHorizontalSpacing w:val=\"120\"/>"
+               "<w:displayHorizontalDrawingGridEvery w:val=\"2\"/><w:characterSpacingControl w:val=\"doNotCompress\"/>"
+               "<w:compat/><w:docVars><w:docVar w:name=\"Kind\" w:val=\"Thesis\"/></w:docVars>"
+               "<w:rsids><w:rsidRoot w:val=\"00A1B2C3\"/><w:rsid w:val=\"00A1B2C3\"/></w:rsids>";
+  f.body = P("Text");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const std::string original = PartXml(*doc, PartKind::Settings);
+  edit::Editor editor(*doc);
+  edit::Hyphenation h;
+  h.automatic = true;
+  h.limit = 2;
+  REQUIRE(edit::SetHyphenation(editor, h));
+  REQUIRE(edit::SetDifferentOddEven(editor, true));
+  const std::string xml = PartXml(*doc, PartKind::Settings);
+  const size_t tab = xml.find("<w:defaultTabStop"), hyphens = xml.find("<w:autoHyphenation"),
+               limit = xml.find("<w:consecutiveHyphenLimit"), odd = xml.find("<w:evenAndOddHeaders"),
+               grid = xml.find("<w:drawingGridHorizontalSpacing"), spacing = xml.find("<w:characterSpacingControl");
+  CHECK(tab < hyphens && hyphens < limit && limit < odd && odd < grid && grid < spacing);
+  // What the model doesn't read is written as it was (no namespace declared again in each rsid).
+  CHECK(Has(xml, "<w:proofState w:spelling=\"clean\" w:grammar=\"clean\"/>") && Has(xml, "<w:rsid w:val=\"00A1B2C3\"/>"));
+  CHECK(Has(xml, "<w:docVars><w:docVar w:name=\"Kind\" w:val=\"Thesis\"/></w:docVars>"));
+  CHECK(SaveAndReopen(*doc));
+  CHECK(editor.Undo() && editor.Undo() && PartXml(*doc, PartKind::Settings) == original);
 }
 
 TEST(Page_HyphenationSettings) {
