@@ -255,7 +255,14 @@ class EditorTarget : public EditTarget {
 
   Applied ApplyOne(const Edit& e, std::string& why) {
     namespace ed = fw::doc::edit;
-    auto exists = [&](fw::doc::Pos p) { return p.para < doc_->Paragraphs().size() && p.offset <= editor_.ParaLength(p.para); };
+    // A place a person can put the caret: in the paragraph, and not between the halves of a
+    // surrogate pair (an emoji), which no selection can split.
+    auto exists = [&](fw::doc::Pos p) {
+      if (p.para >= doc_->Paragraphs().size() || p.offset > editor_.ParaLength(p.para)) return false;
+      const std::u16string& text = doc_->Para(p.para).text;
+      return !(p.offset > 0 && p.offset < text.size() && text[p.offset - 1] >= 0xD800 && text[p.offset - 1] <= 0xDBFF &&
+               text[p.offset] >= 0xDC00 && text[p.offset] <= 0xDFFF);
+    };
     auto refuse = [&](const std::string& reason) {
       why = reason;
       return Applied::Refused;
@@ -1541,9 +1548,9 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     if (DWORD crash = Guarded(tables)) return fail("crash", when + CrashText(crash) + " reading the saved file's tables"), false;
     for (const auto& [problem, count] : grid) {
       const auto had = knownGrid.find(problem);
-      const int before = had == knownGrid.end() ? 0 : had->second;
-      if (count > before)
-        return fail("grid", when + problem + " (" + std::to_string(count) + " in the saved file, " + std::to_string(before) +
+      const int original = had == knownGrid.end() ? 0 : had->second;
+      if (count > original)
+        return fail("grid", when + problem + " (" + std::to_string(count) + " in the saved file, " + std::to_string(original) +
                                 " in the original)"),
                false;
     }
