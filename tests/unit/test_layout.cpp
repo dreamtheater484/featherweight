@@ -500,9 +500,14 @@ TEST(Layout_EditsLayOutAgainAsFromScratch) {
     return "<w:p><w:r><w:t xml:space=\"preserve\">Noted </w:t></w:r><w:r><w:footnoteReference w:id=\"" +
            std::to_string(id) + "\"/></w:r><w:r><w:t xml:space=\"preserve\"> " + Words(12) + "</w:t></w:r></w:p>";
   };
+  // A table with a repeated header row and a table in one of its cells.
+  const std::string inner = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"700\"/>"
+                            "</w:tblGrid><w:tr><w:tc>" + P(Words(5)) + "</w:tc></w:tr></w:tbl>";
   std::string rows;
   for (int i = 0; i < 8; ++i)
-    rows += "<w:tr><w:tc>" + P("Cell " + std::to_string(i) + " " + Words(i * 3)) + "</w:tc><w:tc>" + P(Words(4)) + "</w:tc></w:tr>";
+    rows += std::string("<w:tr>") + (i == 0 ? "<w:trPr><w:tblHeader/></w:trPr>" : "") + "<w:tc>" +
+            P("Cell " + std::to_string(i) + " " + Words(i * 3)) + "</w:tc><w:tc>" + (i == 4 ? inner : "") + P(Words(4)) +
+            "</w:tc></w:tr>";
   const std::string table = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1500\"/>"
                             "<w:gridCol w:w=\"1500\"/></w:tblGrid>" + rows + "</w:tbl>";
   // Merged cells running on across rows, and a header showing the page and the page count.
