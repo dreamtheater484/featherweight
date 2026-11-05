@@ -63,6 +63,13 @@ constexpr const char* kUsage =
     "  fwtool edit-check [--edits N] [--seed S] <file or folder>...\n"
     "      Makes N random edits (40) in each Word document through the editor, lays it out again\n"
     "      incrementally after each, and checks every ten that it's what a layout from scratch is.\n"
+    "  fwtool pdf-check [--scale N] [--out DIR] <file or folder>...\n"
+    "      Export PDF (D4): lays out each Word document, draws its pages on the screen's renderer\n"
+    "      and into a PDF, then checks the PDF's structure strictly, reads it back with PDFium\n"
+    "      (pages, text, lines) and compares PDFium's pages with the screen's. --out keeps the PDFs.\n"
+    "  fwtool pdf-check --pngs DIR <exported.pdf>\n"
+    "      The same for a PDF the app exported (script ops exportpdf: and pagepngs:), against the\n"
+    "      pages in DIR; lists its links, bookmarks, title and author.\n"
     "  fwtool paste-check [--samples DIR] [--out DIR] <file or folder>...\n"
     "      Copies each Word document's main story as RTF and HTML and pastes it back (the HTML\n"
     "      over the story, the RTF at its end), and pastes each clipboard sample in --samples at\n"
@@ -182,6 +189,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--replay") options.replay = true;
     else if (arg == L"--edited") options.edited = true;
     else if (arg == L"--samples" && i + 1 < argc) options.samples = argv[++i];
+    else if (arg == L"--pngs" && i + 1 < argc) options.pngs = argv[++i];
     else if (arg.starts_with(L"--")) {
       std::fprintf(stderr, "Unknown option %s\n\n%s", fw::WideToUtf8(arg).c_str(), fwtool::kUsage);
       return 2;
@@ -205,6 +213,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"spelling") return fwtool::RunSpelling(options);
   if (command == L"torture") return fwtool::RunTorture(options);
   if (command == L"paste-check") return fwtool::RunPasteCheck(options);
+  if (command == L"pdf-check") return fwtool::RunPdfCheck(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }
