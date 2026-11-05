@@ -85,6 +85,12 @@
 #else
 #define FW_TORTURE_D4 0
 #endif
+#if FW_TORTURE_D4 && __has_include("doc/edit/Toc.h")
+#include "doc/edit/Toc.h"
+#define FW_TORTURE_TOC 1
+#else
+#define FW_TORTURE_TOC 0
+#endif
 #if __has_include("word/DocStyles.h")
 #define FW_TORTURE_THEME 1
 #else
@@ -1013,6 +1019,26 @@ class EditorTarget : public EditTarget {
         return refuse("unknown shape change");
       }
     }
+#if FW_TORTURE_TOC
+    // Tables of contents. Pages are made up from paragraph numbers, as no layout runs here:
+    // "toc" inserts one at e.at with page = para / 30 + 1; "tocpages" and "tocupdate" bring the
+    // one at e.at (else the first) up to date with page = para / 25 + 1, the pages moved.
+    else if (name == "toc" || name == "tocpages" || name == "tocupdate") {
+      const ed::PageText inserted = [](uint32_t para) { return ToUtf16(std::to_string(para / 30 + 1)); };
+      const ed::PageText moved = [](uint32_t para) { return ToUtf16(std::to_string(para / 25 + 1)); };
+      if (name == "toc") {
+        r = ed::InsertToc(editor_, e.at, inserted);
+      } else {
+        std::optional<ed::TocInfo> toc = ed::TocAt(*doc_, e.at);
+        if (!toc) {
+          const std::vector<ed::TocInfo> all = ed::TablesOfContents(*doc_);
+          if (all.empty()) return refuse("no table of contents");
+          toc = all.front();
+        }
+        r = name == "tocpages" ? ed::UpdateTocPages(editor_, *toc, moved) : ed::UpdateToc(editor_, *toc, moved);
+      }
+    }
+#endif
     // Watermarks: "watermark=text" (DRAFT), "=<other text>", "=picture" or "=none".
     else if (name == "watermark") {
       if (value == "none") {
@@ -1659,13 +1685,35 @@ class Generator {
     e.at = RandomPos(RandomPara());
     e.to = e.at;
     const uint32_t roll = rng_.Below(100);
-    if (roll < 30) Forms(e);
-    else if (roll < 47) Comments(e);
-    else if (roll < 59) Notes(e);
-    else if (roll < 77) Review(e);
-    else if (roll < 93) Shape(e);
+    if (roll < 27) Forms(e);
+    else if (roll < 43) Comments(e);
+    else if (roll < 55) Notes(e);
+    else if (roll < 71) Review(e);
+    else if (roll < 86) Shape(e);
+#if FW_TORTURE_TOC
+    else if (roll < 94) Toc(e);
+#endif
     else Watermark(e);
   }
+
+#if FW_TORTURE_TOC
+  // A table of contents inserted (at a paragraph's start, or splitting it), or one that's there
+  // brought up to date: its pages, or the whole table from the headings there are now.
+  void Toc(Edit& e) {
+    const std::vector<fw::doc::edit::TocInfo> tocs = fw::doc::edit::TablesOfContents(doc_);
+    if (tocs.empty() || rng_.Percent(35)) {
+      if (rng_.Percent(60)) e.at.offset = 0;
+      e.to = e.at;
+      e.format = "toc";
+      e.target = "new table of contents";
+      return;
+    }
+    const fw::doc::edit::TocInfo& toc = rng_.Pick(tocs);
+    if (Known(toc.begin)) e.at = e.to = toc.begin;
+    e.format = rng_.Percent(50) ? "tocpages" : "tocupdate";
+    e.target = "table of contents";
+  }
+#endif
 
   // Content controls and legacy form fields filled in as their kind is (text typed over, boxes
   // ticked, items and dates picked), a new control, or Tab to the next one.
