@@ -27,6 +27,8 @@ struct Options {
   bool all = false;                 // compare (one document): list every difference
   int runs = 5;                     // bench: runs per document
   bool budgets = false;             // bench: fail when a budget is missed
+  bool typing = false;              // bench: time keystrokes instead of opening
+  int edits = 40;                   // edit-check: random edits per document
   bool layout = false;              // dump: the pages Featherweight lays out
   std::vector<std::filesystem::path> inputs;
 };
@@ -48,6 +50,7 @@ int RunRender(const Options& options);
 int RunLines(const Options& options);
 int RunCompare(const Options& options);
 int RunBench(const Options& options);
+int RunEditCheck(const Options& options);
 int RunBenchApp(const Options& options);
 // Parses its own options, from argv[2] on.
 int RunWrap(int argc, wchar_t** argv);

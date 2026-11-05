@@ -2,13 +2,18 @@
 // with fwdoclayout (src/doc/layout/Layout.h), marking each stage in OpenTimings.
 #include "LayoutHook.h"
 
+#include <chrono>
 #include <cstdio>
 #include <functional>
 #include <memory>
+#include <random>
 
 #include "core/Strings.h"
 #include "doc/docx/Docx.h"
+#include "doc/edit/Editor.h"
 #include "doc/layout/Layout.h"
+#include "draw/D2DDevice.h"
+#include "draw/D2DPainter.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "text/Fonts.h"
@@ -30,9 +35,9 @@ fw::text::Fonts& SharedFonts() {
   return fonts;
 }
 
-// Opens a document as the app does and lays out every page, then hands the layout to `use`.
-bool OpenAndLayOut(const std::filesystem::path& document, fw::OpenTimings* timings, std::string& error,
-                   const std::function<void(const fw::doc::layout::Layout&)>& use) {
+// Reads a document into the model as the app does.
+std::unique_ptr<fw::doc::Document> OpenModel(const std::filesystem::path& document, fw::OpenTimings* timings,
+                                             std::string& error) {
   fw::pkg::Status status;
   fw::pkg::Snapshot::Options options;
   std::error_code ec;
@@ -40,21 +45,29 @@ bool OpenAndLayOut(const std::filesystem::path& document, fw::OpenTimings* timin
   auto snapshot = fw::pkg::Snapshot::Open(document.wstring(), options, status);
   if (!snapshot) {
     error = status.message.empty() ? "can't read the file" : status.message;
-    return false;
+    return nullptr;
   }
   if (timings) timings->Mark(fw::OpenTimings::Read);
   auto package = fw::pkg::Package::Open(std::move(snapshot), fw::pkg::Limits::Default(), status);
   if (!package) {
     error = status.message.empty() ? "can't open the package" : status.message;
-    return false;
+    return nullptr;
   }
   if (timings) timings->Mark(fw::OpenTimings::Package);
   auto doc = fw::doc::docx::Read(std::move(package), status);
   if (!doc) {
     error = status.message.empty() ? "can't read the document" : status.message;
-    return false;
+    return nullptr;
   }
   if (timings) timings->Mark(fw::OpenTimings::Model);
+  return doc;
+}
+
+// Opens a document as the app does and lays out every page, then hands the layout to `use`.
+bool OpenAndLayOut(const std::filesystem::path& document, fw::OpenTimings* timings, std::string& error,
+                   const std::function<void(const fw::doc::layout::Layout&)>& use) {
+  std::unique_ptr<fw::doc::Document> doc = OpenModel(document, timings, error);
+  if (!doc) return false;
   g_document = doc.get();
   fw::text::Fonts& fonts = SharedFonts();
   fonts.ClearSubstitutions();
@@ -108,6 +121,230 @@ void DumpLayout(const std::filesystem::path& document, const std::filesystem::pa
     }
   });
   if (!ok) std::fprintf(stderr, "%s: %s\n", fw::WideToUtf8(document.wstring()).c_str(), error.c_str());
+}
+
+
+// ---- fwtool bench --typing
+
+namespace {
+
+double Since(std::chrono::steady_clock::time_point t) {
+  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
+}
+
+// Paints pages on the graphics adapter, as the document tab does, at 100 % on a 96 dpi screen.
+class PagePainter {
+ public:
+  bool Init() {
+    D2D1_FACTORY_OPTIONS opts{};
+    if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory1), &opts,
+                                 reinterpret_cast<void**>(factory_.GetAddressOf()))))
+      return false;
+    if (FAILED(draw::CreateD2DDevice(factory_.Get(), false, d3d_, d2d_)) &&
+        FAILED(draw::CreateD2DDevice(factory_.Get(), true, d3d_, d2d_)))
+      return false;
+    return SUCCEEDED(d2d_->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &dc_));
+  }
+  void Paint(const fw::doc::layout::Layout& layout, size_t page) {
+    const fw::doc::layout::Page& p = layout.GetPage(page);
+    const float scale = 96.0f / 72.0f;
+    const D2D1_SIZE_U size{static_cast<UINT32>(p.width * scale + 1), static_cast<UINT32>(p.height * scale + 1)};
+    if (!target_ || target_->GetPixelSize().width != size.width || target_->GetPixelSize().height != size.height) {
+      target_.Reset();
+      const D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+          D2D1_BITMAP_OPTIONS_TARGET, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+      if (FAILED(dc_->CreateBitmap(size, nullptr, 0, props, &target_))) return;
+      dc_->SetTarget(target_.Get());
+    }
+    dc_->BeginDraw();
+    dc_->Clear(D2D1::ColorF(1, 1, 1, 1));
+    {
+      draw::D2DPainter painter(dc_.Get());
+      painter.Transform(draw::Matrix::Scale(scale, scale));
+      layout.Paint(painter, page);
+    }
+    dc_->EndDraw();
+  }
+
+ private:
+  Microsoft::WRL::ComPtr<ID2D1Factory1> factory_;
+  Microsoft::WRL::ComPtr<ID3D11Device> d3d_;
+  Microsoft::WRL::ComPtr<ID2D1Device> d2d_;
+  Microsoft::WRL::ComPtr<ID2D1DeviceContext> dc_;
+  Microsoft::WRL::ComPtr<ID2D1Bitmap1> target_;
+};
+
+// A body paragraph with some text on or after `page`, to type into.
+uint32_t ParagraphToType(const fw::doc::Document& doc, const fw::doc::layout::Layout& layout, size_t page) {
+  for (size_t p = page; p < layout.PageCount(); ++p)
+    for (const fw::doc::layout::LineBox& l : layout.GetPage(p).lines)
+      if (l.story == fw::LayoutStory::Body && l.para != fw::doc::kNone && doc.Para(l.para).text.size() >= 20) return l.para;
+  return fw::doc::kNone;
+}
+
+}  // namespace
+
+bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>& places, size_t& pages,
+                 std::string& error) {
+  std::unique_ptr<fw::doc::Document> doc = OpenModel(document, nullptr, error);
+  if (!doc) return false;
+  PagePainter painter;
+  if (!painter.Init()) {
+    error = "can't paint: no Direct2D device";
+    return false;
+  }
+  g_document = doc.get();
+  fw::text::Fonts& fonts = SharedFonts();
+  fonts.ClearSubstitutions();
+  {
+    fw::doc::layout::Layout layout(*doc, fonts);
+    layout.LayOutAll();
+    pages = layout.PageCount();
+    fw::doc::edit::Editor editor(*doc);
+    editor.OnChange([&](const fw::doc::edit::Change& c) { layout.Edited(c); });
+    // Each keystroke as the document tab handles it: the edit, the pages on screen laid out again
+    // (the caret's and the next), the caret placed, the caret's page painted. Then the rest is
+    // laid out again in idle time, untimed.
+    auto key = [&](fw::doc::Pos& caret, const std::function<fw::doc::edit::Result()>& edit) {
+      const auto start = std::chrono::steady_clock::now();
+      fw::doc::edit::Result r = edit();
+      if (!r) return -1.0;
+      caret = r.caret;
+      const auto at = layout.CaretAt({caret.para, caret.offset});
+      const size_t page = at ? at->page : 0;
+      layout.LayOutPages(page + 2);
+      painter.Paint(layout, page);
+      const double ms = Since(start);
+      while (layout.Continue(50)) {
+      }
+      return ms;
+    };
+    const std::pair<const char*, size_t> where[] = {{"start", 0}, {"middle", pages / 2}, {"end", pages > 2 ? pages - 2 : 0}};
+    for (const auto& [name, page] : where) {
+      TypingPlace place;
+      place.where = name;
+      const uint32_t para = ParagraphToType(*doc, layout, page);
+      if (para == fw::doc::kNone) continue;
+      fw::doc::Pos caret{para, 10};
+      // The page is on screen before the typing starts.
+      if (const auto at = layout.CaretAt({caret.para, caret.offset})) painter.Paint(layout, at->page);
+      for (char16_t c : std::u16string_view(u"the quick brown fox jumps over the lazy dog ")) {
+        const double ms = key(caret, [&] { return editor.InsertText(caret, std::u16string(1, c)); });
+        if (ms >= 0) place.typing.push_back(ms);
+      }
+      for (int i = 0; i < 10; ++i) {
+        const double ms = key(caret, [&] { return editor.Delete({caret.para, caret.offset - 1}, caret); });
+        if (ms >= 0) place.backspace.push_back(ms);
+      }
+      // Enter, then Backspace joining the paragraphs again.
+      double ms = key(caret, [&] { return editor.SplitParagraph(caret); });
+      if (ms >= 0) place.enter.push_back(ms);
+      ms = key(caret, [&] { return editor.JoinParagraphs(editor.PrevPara(caret.para)); });
+      if (ms >= 0) place.enter.push_back(ms);
+      places.push_back(std::move(place));
+    }
+  }
+  g_document = nullptr;
+  return true;
+}
+
+
+// ---- fwtool edit-check
+
+namespace {
+
+// The layout dump, one line of text per line of the document: what's compared.
+std::vector<std::string> DumpLines(const fw::doc::layout::Layout& layout) {
+  std::vector<std::string> lines;
+  const std::string json = fw::WriteLayoutDump(layout.Dump("check"));
+  size_t at = 0;
+  while (at < json.size()) {
+    size_t end = json.find('\n', at);
+    if (end == std::string::npos) end = json.size();
+    lines.push_back(json.substr(at, end - at));
+    at = end + 1;
+  }
+  return lines;
+}
+
+// A random edit of the kind typing makes, mostly in the body.
+void RandomEdit(fw::doc::edit::Editor& ed, const fw::doc::Document& doc, std::mt19937& rng) {
+  const bool body = rng() % 8 != 0;
+  std::vector<uint32_t> paras;
+  for (uint32_t p = 0; p < doc.Paragraphs().size(); ++p)
+    if ((doc.Para(p).story == doc.MainStory()) == body) paras.push_back(p);
+  if (paras.empty()) return;
+  const uint32_t para = paras[rng() % paras.size()];
+  const auto len = static_cast<uint32_t>(doc.Para(para).text.size());
+  const fw::doc::Pos at{para, len ? static_cast<uint32_t>(rng() % (len + 1)) : 0};
+  static const char16_t* const kTexts[] = {u"x", u" ", u"word ", u"a few more words to wrap ",
+                                           u"a long run of text, long enough to take a line or two by itself and push "
+                                           u"what follows down the page, and then some more of it "};
+  switch (rng() % 10) {
+    case 0: case 1: case 2: case 3: ed.InsertText(at, kTexts[rng() % 5]); break;
+    case 4: case 5: {
+      const uint32_t to = std::min(len, at.offset + 1 + static_cast<uint32_t>(rng() % 60));
+      if (to > at.offset) ed.Delete(at, {para, to});
+      break;
+    }
+    case 6: ed.SplitParagraph(at); break;
+    case 7: ed.JoinParagraphs(para); break;
+    case 8: ed.InsertText(at, u"\r"); break;
+    default: {
+      fw::doc::edit::PropEdit p;
+      if (rng() % 2) p.Set("keepNext");
+      else p.Remove("keepNext");
+      ed.SetParaProps(para, para, p);
+      break;
+    }
+  }
+}
+
+}  // namespace
+
+bool CheckEdits(const std::filesystem::path& document, int edits, unsigned seed, EditCheck& result, std::string& error) {
+  std::unique_ptr<fw::doc::Document> doc = OpenModel(document, nullptr, error);
+  if (!doc) return false;
+  g_document = doc.get();
+  fw::text::Fonts& fonts = SharedFonts();
+  fonts.ClearSubstitutions();
+  {
+    fw::doc::layout::Layout layout(*doc, fonts);
+    layout.LayOutAll();
+    fw::doc::edit::Editor editor(*doc);
+    if (!editor.CanEdit()) {
+      g_document = nullptr;
+      result.skipped = true;
+      return true;
+    }
+    int changes = 0;
+    editor.OnChange([&](const fw::doc::edit::Change& c) {
+      layout.Edited(c);
+      ++changes;
+    });
+    std::mt19937 rng(seed);
+    for (int i = 0; i < edits && result.mismatch.empty(); ++i) {
+      RandomEdit(editor, *doc, rng);
+      // Laid out a bit at a time, as a view does: the pages on screen, then idle time.
+      if (rng() % 2) layout.LayOutPages(1 + rng() % 8);
+      else layout.Continue(1);
+      if (i % 10 != 9 && i + 1 != edits) continue;
+      layout.LayOutAll();
+      fw::doc::layout::Layout fresh(*doc, fonts);
+      fresh.LayOutAll();
+      ++result.checks;
+      const std::vector<std::string> a = DumpLines(layout), b = DumpLines(fresh);
+      if (a == b && layout.PageCount() == fresh.PageCount()) continue;
+      size_t k = 0;
+      while (k < a.size() && k < b.size() && a[k] == b[k]) ++k;
+      result.mismatch = "after edit " + std::to_string(i + 1) + ": " + std::to_string(layout.PageCount()) + " pages, from scratch " +
+                        std::to_string(fresh.PageCount()) + "; first difference:\n      " + (k < a.size() ? a[k] : "(end)") +
+                        "\n    from scratch:\n      " + (k < b.size() ? b[k] : "(end)");
+    }
+    result.edits = changes;
+  }
+  g_document = nullptr;
+  return true;
 }
 
 }  // namespace fwtool

@@ -33,6 +33,73 @@ struct Column {
   float left = 0, right = 0;
 };
 
+
+// The lines of paragraphs laid out again after an edit (D2): a paragraph's text and the lines its
+// breaker made, kept by paragraph version and column width, so the next keystroke breaks only the
+// paragraph that changed (plan §4). Kept for the few pages laid out after each edit.
+struct CachedPara {
+  uint32_t version = 0;
+  float width = 0;
+  std::shared_ptr<ParaText> pt;
+  text::LineBreaker::State start;
+  struct Made {
+    text::LineBreaker::State before, after;
+    float left = 0, right = 0;
+    text::Line line;
+  };
+  std::vector<Made> lines;
+  uint32_t used = 0;  // the edit it was last used after
+};
+
+bool SameState(const text::LineBreaker::State& a, const text::LineBreaker::State& b) {
+  return a.position == b.position && a.line == b.line && a.hyphenated == b.hyphenated && a.done == b.done;
+}
+
+// A paragraph's lines as its LineBreaker makes them: from the cache when they were made before,
+// else from a breaker made when first needed.
+class ParaLines {
+ public:
+  ParaLines(text::Fonts& fonts, std::shared_ptr<ParaText> pt, float width, std::shared_ptr<CachedPara> cache)
+      : fonts_(fonts), pt_(std::move(pt)), width_(width), cache_(std::move(cache)) {
+    if (cache_ && !cache_->lines.empty()) {
+      state_ = cache_->start;
+    } else {
+      state_ = Breaker().Save();
+      if (cache_) cache_->start = state_;
+    }
+  }
+  bool Done() const { return state_.done; }
+  text::LineBreaker::State Save() const { return state_; }
+  void Restore(const text::LineBreaker::State& state) { state_ = state; }
+  text::Line Next(float left, float right) {
+    if (cache_)
+      for (const CachedPara::Made& m : cache_->lines)
+        if (SameState(m.before, state_) && m.left == left && m.right == right) {
+          state_ = m.after;
+          return m.line;
+        }
+    text::LineBreaker& b = Breaker();
+    b.Restore(state_);
+    text::Line line = b.Next(left, right);
+    const text::LineBreaker::State after = b.Save();
+    if (cache_) cache_->lines.push_back({state_, after, left, right, line});
+    state_ = after;
+    return line;
+  }
+
+ private:
+  text::LineBreaker& Breaker() {
+    if (!breaker_) breaker_ = std::make_unique<text::LineBreaker>(fonts_, pt_->fw, width_);
+    return *breaker_;
+  }
+  text::Fonts& fonts_;
+  std::shared_ptr<ParaText> pt_;
+  float width_;
+  std::shared_ptr<CachedPara> cache_;
+  std::unique_ptr<text::LineBreaker> breaker_;
+  text::LineBreaker::State state_;
+};
+
 }  // namespace
 
 struct Engine::Impl {
@@ -43,7 +110,7 @@ struct Engine::Impl {
 
   // The paragraph in progress (it may continue on the next page).
   std::shared_ptr<ParaText> pt;
-  std::unique_ptr<text::LineBreaker> breaker;
+  std::unique_ptr<ParaLines> breaker;
   float breakerWidth = 0;
   text::LineBreaker::State paraStart;
   uint32_t paraLines = 0;  // lines of it on earlier columns
@@ -161,6 +228,11 @@ struct Engine::Impl {
   size_t convergeFrom = 0;
   bool noConverge = false;
   std::vector<size_t> seams;  // old pages that don't follow from the one before (from two layouts)
+  // Paragraph lines laid out again (CachedPara), by w:p element; new ones are kept while laying
+  // out the pages before `cacheUntil`.
+  std::unordered_map<ElemId, std::shared_ptr<CachedPara>> lineCache;
+  size_t cacheUntil = 0;
+  uint32_t edits = 0;
 };
 
 // The body, flattened: paragraphs and tables in order, with their sections.
@@ -660,8 +732,31 @@ struct Flow {
   Step Paragraph(const Item& item) {
     Frame frame = BodyFrame();
     if (!f.pt) {
-      f.pt = std::make_shared<ParaText>();
-      e.BuildText(item.para, f.fields, *f.pt, true);
+      // After an edit, paragraphs laid out again before come from the cache.
+      std::shared_ptr<CachedPara> cached;
+      const fw::doc::Paragraph& model = doc.Para(item.para);
+      if (auto it = f.lineCache.find(model.elem); it != f.lineCache.end()) {
+        if (it->second->version == model.version && it->second->width == frame.width && it->second->pt->para == item.para)
+          cached = it->second;
+        else f.lineCache.erase(it);
+      }
+      if (cached) {
+        cached->used = f.edits;
+        f.pt = cached->pt;
+      } else {
+        f.pt = std::make_shared<ParaText>();
+        e.BuildText(item.para, f.fields, *f.pt, true);
+        // Not text that depends on the page it's on: page fields and note numbers.
+        if (e.pages_.size() < f.cacheUntil && !f.pt->empty && !f.pt->usesPage && !f.pt->usesPageCount &&
+            f.pt->notes.empty()) {
+          cached = std::make_shared<CachedPara>();
+          cached->version = model.version;
+          cached->width = frame.width;
+          cached->pt = f.pt;
+          cached->used = f.edits;
+          f.lineCache[model.elem] = cached;
+        }
+      }
       // A paragraph nothing of which shows takes no room, and nor does an empty one that only
       // holds a section break (Word gives it no line and no spacing).
       if (f.pt->empty || (EndsSection() && f.pt->inlines.empty() && f.pt->anchors.empty() &&
@@ -670,7 +765,7 @@ struct Flow {
         ++f.next;
         return Step::Continue;
       }
-      f.breaker = std::make_unique<text::LineBreaker>(e.fonts_, f.pt->fw, frame.width);
+      f.breaker = std::make_unique<ParaLines>(e.fonts_, f.pt, frame.width, std::move(cached));
       f.breakerWidth = frame.width;
       f.paraStart = f.breaker->Save();
       f.paraLines = 0;
@@ -718,7 +813,7 @@ struct Flow {
     std::vector<Placed> placed;
     bool overflow = false;
     float estimate = 12;
-    text::LineBreaker& br = *f.breaker;
+    ParaLines& br = *f.breaker;
     while (!br.Done()) {
       text::LineBreaker::State state = br.Save();
       text::LineSpace space{f.y, ColumnLeft(), ColumnRight()};
@@ -1253,7 +1348,10 @@ struct Flow {
     f.pt = c.pt;
     f.breaker.reset();
     if (c.pt) {
-      f.breaker = std::make_unique<text::LineBreaker>(e.fonts_, c.pt->fw, c.breakerWidth);
+      std::shared_ptr<CachedPara> cached;
+      if (auto it = f.lineCache.find(doc.Para(c.pt->para).elem); it != f.lineCache.end() && it->second->pt == c.pt)
+        cached = it->second;
+      f.breaker = std::make_unique<ParaLines>(e.fonts_, c.pt, c.breakerWidth, std::move(cached));
       f.breaker->Restore(c.state);
       f.breakerWidth = c.breakerWidth;
       f.paraStart = c.paraStart;
@@ -1280,10 +1378,6 @@ struct Flow {
     f.havePage = false;
     f.chain.reset();
     f.tableStart.reset();
-  }
-
-  static bool SameState(const text::LineBreaker::State& a, const text::LineBreaker::State& b) {
-    return a.position == b.position && a.line == b.line && a.hyphenated == b.hyphenated && a.done == b.done;
   }
 
   // Whether the flow is in the same state: the next page would come out the same.
@@ -1365,7 +1459,7 @@ struct Flow {
     for (size_t p = r; p < n; ++p) {
       OldPage o;
       o.page = std::move(e.pages_[p]);
-      o.after = f.checkpoints[p + 1];
+      o.after = std::move(f.checkpoints[p + 1]);
       o.usesCount = p < f.pageUsesCount.size() && f.pageUsesCount[p];
       if (p < f.shownCounts.size()) o.shownCounts = f.shownCounts[p];
       o.notes.assign(e.noteSeq_.begin() + static_cast<std::ptrdiff_t>(f.checkpoints[p].notes),
@@ -1420,6 +1514,12 @@ struct Flow {
       f.separatorHeight = -1;
     }
     if (shift != 0) f.noteStacks.clear();
+    // Lines kept from earlier edits: not after one that may change list labels or fields
+    // anywhere, nor ones not used for a while.
+    ++f.edits;
+    if (structure) f.lineCache.clear();
+    for (auto it = f.lineCache.begin(); it != f.lineCache.end();)
+      it = it->second->used + 8 < f.edits ? f.lineCache.erase(it) : std::next(it);
 
     const size_t n = e.pages_.size();
     const bool laidOut = !f.checkpoints.empty();
@@ -1474,9 +1574,13 @@ struct Flow {
       }
     }
 
-    // Laying out again from `restart`: its pages become old pages.
+    // Laying out again from `restart`: its pages become old pages, and the lines of the next few
+    // are kept for the next keystroke.
     Checkpoint from;
-    if (restart != SIZE_MAX) from = MoveToOld(restart);
+    if (restart != SIZE_MAX) {
+      from = MoveToOld(restart);
+      f.cacheUntil = restart + 4;
+    }
 
     // The items, and where the old pages' checkpoints are in them.
     if (kind == StoryKind::Main) {
@@ -1548,6 +1652,7 @@ struct Flow {
     for (Checkpoint& c : f.checkpoints) inProgress(c.pt.get(), c.table.get());
     for (OldPage& o : f.old) inProgress(o.after.pt.get(), o.after.table.get());
     inProgress(f.pt.get(), f.table.get());
+    for (auto& [elem, cached] : f.lineCache) inProgress(cached->pt.get(), nullptr);
     if (!itemsDone)
       for (Item& it : f.items) {
         map(it.para);

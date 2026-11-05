@@ -29,6 +29,7 @@ using fw::doc::layout::SubstituteFamily;
 namespace {
 
 constexpr const char* kW = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"";
+constexpr const char* kR = "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"";
 
 // A Word document from its body and, optionally, its settings and footnotes.
 struct Doc {
@@ -44,7 +45,7 @@ fw::text::Fonts& Fonts() {
 }
 
 Doc Make(const std::string& body, const std::string& settings = "", const std::string& footnotes = "", bool all = true,
-         const std::string& fonts = "") {
+         const std::string& fonts = "", const std::string& header = "") {
   const std::string wml = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
   const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
   const std::string head = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>";
@@ -65,6 +66,11 @@ Doc Make(const std::string& body, const std::string& settings = "", const std::s
     rels += "<Relationship Id=\"rId3\" Type=\"" + rel + "fontTable\" Target=\"fontTable.xml\"/>";
     entries.push_back({"word/fontTable.xml", head + "<w:fonts " + kW + ">" + fonts + "</w:fonts>"});
   }
+  if (!header.empty()) {  // the sections refer to it as rIdH
+    types += "<Override PartName=\"/word/header1.xml\" ContentType=\"" + wml + "header+xml\"/>";
+    rels += "<Relationship Id=\"rIdH\" Type=\"" + rel + "header\" Target=\"header1.xml\"/>";
+    entries.push_back({"word/header1.xml", head + "<w:hdr " + kW + ">" + header + "</w:hdr>"});
+  }
   if (!footnotes.empty()) {
     types += "<Override PartName=\"/word/footnotes.xml\" ContentType=\"" + wml + "footnotes+xml\"/>";
     rels += "<Relationship Id=\"rId2\" Type=\"" + rel + "footnotes\" Target=\"footnotes.xml\"/>";
@@ -77,7 +83,7 @@ Doc Make(const std::string& body, const std::string& settings = "", const std::s
                   {"_rels/.rels", "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
                                   "<Relationship Id=\"rId1\" Type=\"" + rel + "officeDocument\" Target=\"word/document.xml\"/>"
                                   "</Relationships>"},
-                  {"word/document.xml", head + "<w:document " + kW + "><w:body>" + body + "</w:body></w:document>"},
+                  {"word/document.xml", head + "<w:document " + kW + " " + kR + "><w:body>" + body + "</w:body></w:document>"},
                   {"word/_rels/document.xml.rels", rels}});
   Doc d;
   fw::pkg::Status st;
@@ -443,9 +449,11 @@ bool SameAsFresh(const Document& doc, const Layout& l, const char* when) {
 
 // A random edit of the kind typing makes: text in or out, Enter, joining, a paragraph property.
 void RandomEdit(edit::Editor& ed, const Document& doc, std::mt19937& rng) {
+  // Mostly the body; now and then a header or a note.
+  const bool body = rng() % 8 != 0;
   std::vector<uint32_t> paras;
   for (uint32_t p = 0; p < doc.Paragraphs().size(); ++p)
-    if (doc.Para(p).story == doc.MainStory() || rng() % 8 == 0) paras.push_back(p);
+    if ((doc.Para(p).story == doc.MainStory()) == body) paras.push_back(p);
   if (paras.empty()) return;
   const uint32_t para = paras[rng() % paras.size()];
   const auto len = static_cast<uint32_t>(doc.Para(para).text.size());
@@ -497,19 +505,38 @@ TEST(Layout_EditsLayOutAgainAsFromScratch) {
     rows += "<w:tr><w:tc>" + P("Cell " + std::to_string(i) + " " + Words(i * 3)) + "</w:tc><w:tc>" + P(Words(4)) + "</w:tc></w:tr>";
   const std::string table = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1500\"/>"
                             "<w:gridCol w:w=\"1500\"/></w:tblGrid>" + rows + "</w:tbl>";
+  // Merged cells running on across rows, and a header showing the page and the page count.
+  const std::string merged =
+      "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1500\"/><w:gridCol w:w=\"1500\"/>"
+      "</w:tblGrid><w:tr><w:tc><w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr>" + P(Words(30)) + "</w:tc><w:tc>" + P("a") +
+      "</w:tc></w:tr><w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc>" + P("b") + "</w:tc></w:tr></w:tbl>";
+  auto field = [](const char* code) {
+    return std::string("<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> ") + code +
+           " </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>1</w:t></w:r>"
+           "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>";
+  };
+  const std::string header = "<w:p><w:r><w:t xml:space=\"preserve\">Page </w:t></w:r>" + field("PAGE") +
+                             "<w:r><w:t xml:space=\"preserve\"> of </w:t></w:r>" + field("NUMPAGES") + "</w:p>";
+  const std::string hdr = "<w:headerReference w:type=\"default\" r:id=\"rIdH\"/>";
   std::string body;
   for (int i = 0; i < 36; ++i) {
     if (i % 9 == 0) body += P("Heading " + std::to_string(i), "<w:keepNext/>");
-    body += P(Words((i * 7) % 23 + 1), i % 5 == 0 ? "<w:widowControl/>" : "");
+    body += P(Words((i * 7) % 23 + 1), i % 5 == 0 ? "<w:widowControl/>" : i % 7 == 3 ? "<w:keepLines/>" : "");
     if (i == 6) body += noteRef(1);
+    if (i == 10) body += "<w:p><w:r><w:t>Before a break</w:t></w:r><w:r><w:br w:type=\"page\"/></w:r><w:r><w:t>after</w:t></w:r></w:p>";
     if (i == 14) body += table;
-    if (i == 20) body += P("End of section one", "<w:sectPr><w:type w:val=\"nextPage\"/><w:pgSz w:w=\"4000\" w:h=\"4000\"/>"
+    if (i == 17) body += P("Starts a page", "<w:pageBreakBefore/>") + merged;
+    if (i == 20) body += P("End of section one", "<w:sectPr>" + hdr + "<w:type w:val=\"nextPage\"/><w:pgSz w:w=\"4000\" w:h=\"4000\"/>"
                                                  "<w:pgMar w:top=\"400\" w:right=\"400\" w:bottom=\"400\" w:left=\"400\" "
                                                  "w:header=\"200\" w:footer=\"200\" w:gutter=\"0\"/></w:sectPr>");
     if (i == 27) body += noteRef(2);
+    if (i == 30) body += P("Two columns from here", "<w:sectPr>" + hdr + "<w:type w:val=\"continuous\"/><w:pgSz w:w=\"4000\" w:h=\"4000\"/>"
+                                                    "<w:pgMar w:top=\"400\" w:right=\"400\" w:bottom=\"400\" w:left=\"400\" "
+                                                    "w:header=\"200\" w:footer=\"200\" w:gutter=\"0\"/></w:sectPr>");
   }
-  for (unsigned seed : {1u, 2u, 3u}) {
-    Doc d = Make(body + SmallPage(), "", notes);
+  for (unsigned seed : {1u, 2u, 3u, 4u}) {
+    Doc d = Make(body + SmallPage(hdr + "<w:type w:val=\"continuous\"/><w:cols w:num=\"2\" w:space=\"200\"/>"), "", notes,
+                 true, "", header);
     REQUIRE(d.layout);
     REQUIRE(d.pages() > 8);
     edit::Editor ed(*d.doc);

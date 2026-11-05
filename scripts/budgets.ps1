@@ -60,11 +60,16 @@ $fixedFiles = @("tests\pdfs\text.pdf", "tests\pdfs\big-600-pages.pdf", "tests\pd
 # includes paginating it all in the background, which has a budget of its own.
 $longDocBudget = 3000      # ms, launch to a 300-page document fully paginated
 $longDoc = "long-300.docx"
+# Typing in it (fwtool bench --typing): keystroke to the page painted again, the median of letters
+# and Backspaces, and the worst of every key, Enter included.
+$typingBudget = 16; $typingWorstBudget = 50  # ms
+$typingFloorMs = 1         # a typing change smaller than this is noise
 
 $ledgerPath = Join-Path $root "tests\budgets\ledger.json"
 $ledger = Get-Content $ledgerPath -Raw | ConvertFrom-Json
 $sizes = @($ledger.sizes | Where-Object { $_ })
 $timingEntries = @($ledger.timings | Where-Object { $_ })
+$typingEntries = @($ledger.typing | Where-Object { $_ })
 $failures = New-Object Collections.Generic.List[string]
 
 function Format-Bytes([long]$n) { "{0:N0}" -f $n }
@@ -127,7 +132,8 @@ function Write-Ledger([string]$path) {
   $text = "{`n  `"format`": `"featherweight-budget-ledger`",`n  `"version`": 1,`n" +
           "  `"about`": " + (& $line $ledger.about) + ",`n" +
           "  `"sizes`": " + (& $list $sizes) + ",`n" +
-          "  `"timings`": " + (& $list $timingEntries) + "`n}`n"
+          "  `"timings`": " + (& $list $timingEntries) + ",`n" +
+          "  `"typing`": " + (& $list $typingEntries) + "`n}`n"
   [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding $false))
 }
 
@@ -201,8 +207,23 @@ if (($Timings -or $TrackTimings) -and $exe) {
   }
   ""
   & $Fwtool bench-app --runs $Runs --json $benchJson $exe @files | Out-Host
-  Remove-Item $longDir -Recurse -ErrorAction SilentlyContinue
   $benchFailed = $LASTEXITCODE -ne 0
+  # Typing in the 300-page document.
+  $typing = $null; $typingTried = $false
+  $longPath = Join-Path $longDir $longDoc
+  if (Test-Path $longPath) {
+    $typingTried = $true
+    $typingJson = Join-Path ([IO.Path]::GetTempPath()) "fw-budgets-typing-$PID.json"
+    ""
+    & $Fwtool bench --typing --runs $Runs --json $typingJson $longPath | Out-Host
+    $typingFile = if (Test-Path $typingJson) { (Get-Content $typingJson -Raw | ConvertFrom-Json).files | Select-Object -First 1 } else { $null }
+    if ($LASTEXITCODE -eq 0 -and $typingFile) {
+      $typing = [ordered]@{ document = $longDoc; pages = $typingFile.pages; typicalMs = $typingFile.typicalMs
+                            worstMs = $typingFile.worstMs; places = @($typingFile.places) }
+    }
+    Remove-Item $typingJson -ErrorAction SilentlyContinue
+  }
+  Remove-Item $longDir -Recurse -ErrorAction SilentlyContinue
   $bench = if (Test-Path $benchJson) { Get-Content $benchJson -Raw | ConvertFrom-Json } else { $null }
   Remove-Item $benchJson -ErrorAction SilentlyContinue
   $timingFailures = New-Object Collections.Generic.List[string]
@@ -244,7 +265,25 @@ if (($Timings -or $TrackTimings) -and $exe) {
       $timingFailures.Add("Paginating a 300-page document took $($s.readyMs) ms, over its budget of $longDocBudget ms.")
     }
   }
-  $report.timings = [ordered]@{ machine = $machine; runs = $Runs; bench = $bench; failures = @($timingFailures) }
+  if ($typingTried) {
+    if (-not $typing) {
+      $timingFailures.Add("fwtool bench --typing didn't measure typing in the 300-page document.")
+    } else {
+      $typingThen = $typingEntries | Where-Object { $_.machine -eq $machine } | Select-Object -Last 1
+      foreach ($m in @(@{ key = "typicalMs"; label = "typing"; budget = $typingBudget }, @{ key = "worstMs"; label = "worst key"; budget = $typingWorstBudget })) {
+        $now = [double]$typing.($m.key)
+        $was = if ($typingThen) { [double]$typingThen.($m.key) } else { $null }
+        "{0,-20} {1,-8} {2,10} {3,10} {4,22}" -f $longDoc, $m.label, ("{0:N2}" -f $now), $(if ($typingThen) { "{0:N2}" -f $was } else { "-" }),
+          $(if ($typingThen) { Format-Change $now $was "ms" } else { "" })
+        if ($now -ge $m.budget) { $timingFailures.Add(("Typing in a 300-page document: the {0} is {1:N1} ms, over its budget of {2} ms." -f $m.label, $now, $m.budget)) }
+        if ($typingThen -and $now -gt $was * (1 + $slower) -and $now - $was -gt $typingFloorMs) {
+          $timingFailures.Add(("Typing in a 300-page document: the {0} went from {1:N2} to {2:N2} ms, more than {3} % worse, and the ledger doesn't say why." -f
+                               $m.label, $was, $now, ($slower * 100)))
+        }
+      }
+    }
+  }
+  $report.timings = [ordered]@{ machine = $machine; runs = $Runs; bench = $bench; typing = $typing; failures = @($timingFailures) }
   if ($TrackTimings) {
     foreach ($f in $timingFailures) { Write-Host "Tracked, not gated: $f" -ForegroundColor Yellow }
   } else {
@@ -261,6 +300,13 @@ if ($Record) {
     $timingEntries += [pscustomobject][ordered]@{
       date = $today; machine = $env:COMPUTERNAME; version = $version; commit = $commit; toolset = $tool.name
       runs = $Runs; scenarios = @($bench.scenarios); reason = $Record
+    }
+  }
+  if ($typing) {
+    $typingEntries += [pscustomobject][ordered]@{
+      date = $today; machine = $env:COMPUTERNAME; version = $version; commit = $commit; toolset = $tool.name; runs = $Runs
+      document = $typing.document; pages = $typing.pages; typicalMs = $typing.typicalMs; worstMs = $typing.worstMs
+      places = $typing.places; reason = $Record
     }
   }
   Write-Ledger $ledgerPath

@@ -301,6 +301,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
                              : kind == PageField::NumPages ? fields.pages
                                                            : fields.sectionPages;
       if (kind != PageField::Page) out.usesPageCount = true;
+      else out.usesPage = true;
       if (value.empty()) continue;  // not known yet: the last result
       if (std::string_view fmt = FormatSwitch(f.code); !fmt.empty()) {
         int64_t n = 0;
@@ -343,6 +344,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
       PageField kind = s == std::u16string::npos ? PageField::None : PageFieldOf(std::u16string_view(code).substr(s, e - s));
       if (kind != PageField::None) {
         if (kind != PageField::Page) out.usesPageCount = true;
+        else out.usesPage = true;
         const std::u16string& value = kind == PageField::Page       ? fields.page
                                       : kind == PageField::NumPages ? fields.pages
                                                                     : fields.sectionPages;
