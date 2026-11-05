@@ -21,11 +21,7 @@ namespace {
 const fw::doc::Document* g_document = nullptr;
 
 std::wstring Substitute(std::wstring_view family) {
-  if (!g_document) return {};
-  std::string name = fw::WideToUtf8(family);
-  for (const fw::doc::FontInfo& f : g_document->Fonts())
-    if (f.name == name && !f.altName.empty()) return fw::Utf8ToWide(f.altName);
-  return {};
+  return g_document ? fw::doc::layout::SubstituteFamily(*g_document, family) : std::wstring();
 }
 
 // One Fonts for the process: faces stay cached from one document to the next, as in the app.
