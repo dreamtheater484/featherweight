@@ -437,6 +437,7 @@ class Document {
 
   Pos PosOf(Node node) const;  // where an element is: its paragraph and offset
   void BuildIndexes();
+  void BuildSections();  // part of BuildIndexes, after a section break goes or comes back
   size_t RenameInModel(pkg::RefKind kind, std::string_view from, std::string_view to);
   bool attached_ = false;
 

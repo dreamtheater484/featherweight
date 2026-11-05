@@ -28,6 +28,7 @@
 namespace fw::doc::edit {
 
 struct EditorState;  // Editor.cpp
+struct KeptRefs;
 
 // What a transaction, undo or redo changed. Paragraphs [first, first + removed) were replaced by
 // [first, first + added); later paragraphs moved by added - removed. Layout lays out again from the
@@ -85,6 +86,7 @@ struct CustomStep {
   // The paragraphs whose layout it changes, all of one story (their neighbours are laid out again
   // too). kNone: anything may read differently, and the whole document is laid out again.
   uint32_t first = kNone, count = 0;
+  bool structure = false;  // with first: what follows may read differently too (Change::structure)
 };
 
 class Editor {
@@ -109,10 +111,12 @@ class Editor {
   uint32_t ParaLength(uint32_t para) const { return static_cast<uint32_t>(doc_.Para(para).text.size()); }
 
   // ---- Transactions. Each is one undo step unless inside a group, and changes nothing on failure.
-  // Inserts text at `at`. A tab becomes w:tab and U+000B a line break (w:br); paragraph breaks
-  // ("\r", "\n", "\r\n") split the paragraph. The text takes the formatting of the text before it.
+  // Inserts text at `at`. A tab becomes w:tab, and U+000B, U+000C and U+000E a line, page and
+  // column break (w:br); paragraph breaks ("\r", "\n", "\r\n") split the paragraph. The text takes
+  // the formatting of the text before it.
   Result InsertText(Pos at, std::u16string_view text);
-  // Deletes [from, to). Both ends in one story; across paragraphs they join.
+  // Deletes [from, to). Both ends in one story; across paragraphs they join. Section breaks in the
+  // marks deleted go: their paragraphs join the section after them, which keeps its headers.
   Result Delete(Pos from, Pos to);
   // Typing over a selection: deletes it, then inserts.
   Result Replace(Pos from, Pos to, std::u16string_view text);
@@ -165,10 +169,23 @@ class Editor {
   std::vector<uint32_t> DirtyParts() const;
 
  private:
+  void AddReferences(const KeptRefs& kept, Pos at);
+
   Document& doc_;
   std::unique_ptr<EditorState> impl_;
   std::vector<Listener> listeners_;
 };
+
+// Deleting the section breaks in the marks of `marks` (body paragraphs): the section after the last
+// of them goes on showing the headers and footers it did. Where it had no reference of a kind of
+// its own, it showed the one of the section before it (Word's "Link to Previous"), which may be one
+// that goes: it gets those references, the latest first. Its w:sectPr (kNoElem when no break goes)
+// and the references, as XML for TreeEdit::AddXml.
+struct KeptRefs {
+  ElemId sectPr = kNoElem;
+  std::vector<std::string> xml;
+};
+KeptRefs KeptReferences(const Document& doc, const std::vector<uint32_t>& marks);
 
 // True when every character of `utf8` can be written in XML 1.0: valid UTF-8, without control
 // characters (tab, line feed and carriage return aside), lone surrogates, U+FFFE or U+FFFF. A

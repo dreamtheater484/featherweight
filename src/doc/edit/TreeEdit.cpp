@@ -85,7 +85,8 @@ pkg::NodeId TreeEdit::NewNode() { return editor_.NewNodeId(); }
 void TreeEdit::Begin(std::u16string label) {
   if (depth_++ > 0) return;
   label_ = std::move(label);
-  local_ = toEnd_ = false;
+  local_ = toEnd_ = structure_ = false;
+  affects_ = {kNone, kNone};
   owned_.clear();
   elemsAtBegin_ = doc_.tree_.elems.size();
   before_.clear();
@@ -132,6 +133,12 @@ void TreeEdit::Commit() {
       step->first = first;
       step->count = last - first + 1;
     }
+  }
+  if (affects_.first != kNone && affects_.second < doc_.paras_.size()) {
+    step->first = affects_.first;
+    step->count = affects_.second - affects_.first + 1;
+    step->structure = structure_;
+    if (caret.para == kNone) caret = {affects_.first, 0};
   }
   editor_.RecordStep(std::move(label_), std::move(step), caret);
 }
@@ -639,13 +646,13 @@ ElemId TreeEdit::CopyChild(ElemId src, ElemId parent) {
 // ---------- Parts ----------
 
 ElemId TreeEdit::EnsurePart(PartKind kind) {
-  if (kind != PartKind::Styles && kind != PartKind::Numbering) return kNoElem;
+  if (kind != PartKind::Styles && kind != PartKind::Numbering && kind != PartKind::Settings) return kNoElem;
   if (const Part* p = doc_.FindPart(kind)) return p->root;
   const Part* main = doc_.FindPart(PartKind::Document);
   if (depth_ > 0 || !main || !doc_.Editable()) return kNoElem;
   const auto w = static_cast<size_t>(Ns::W), r = static_cast<size_t>(Ns::R);
   const bool strict = IsStrictUri(main->uri[w]);
-  const std::string local = kind == PartKind::Styles ? "styles" : "numbering";
+  const std::string local = kind == PartKind::Styles ? "styles" : kind == PartKind::Numbering ? "numbering" : "settings";
   const std::string dir = main->name.substr(0, main->name.rfind('/') + 1);
   std::string name = dir + local + ".xml";
   for (int i = 2; doc_.Package().FindPart(name); ++i) name = dir + local + std::to_string(i) + ".xml";
