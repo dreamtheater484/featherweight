@@ -18,6 +18,7 @@
 #include "doc/docx/Docx.h"
 #include "doc/docx/Save.h"
 #include "doc/edit/Editor.h"
+#include "doc/edit/HeaderFooter.h"
 #include "doc/edit/Pictures.h"
 #include "pkg/Check.h"
 
@@ -407,6 +408,36 @@ TEST(Pictures_InsertOnAThreadWithoutCom) {
   worker.join();
   CHECK(bmpOk && svgOk);
   CHECK(doc->Package().FindPart("/word/media/image1.png") != nullptr);
+}
+
+TEST(Pictures_UndoKeepsWhatWasAddedSince) {
+  // A page number after the picture makes footer1.xml with a relationship and a content type
+  // outside undo. Undoing and redoing both must keep them: the picture's step takes away and puts
+  // back only its own (torture finding 25: a footerReference was left without its relationship).
+  auto doc = Blank();
+  if (!doc) return;
+  Editor ed(*doc);
+  Pictures pics(ed);
+  CHECK(pics.Insert(Pos{0, 0}, Solid(GUID_ContainerFormatPng, 10, 10)).ok);
+  CHECK(edit::InsertPageNumber(ed, 0, true, HdrFtrType::Default, Justification::Center, true).ok);
+  auto footerRel = [&]() -> std::string {
+    const fw::pkg::RelationshipSet* rels = doc->Package().RelationshipsOf("/word/document.xml");
+    if (rels)
+      for (const fw::pkg::Relationship& r : rels->items)
+        if (r.targetPart == "/word/footer1.xml") return r.id;
+    return {};
+  };
+  const std::string id = footerRel();
+  CHECK(!id.empty());
+  CHECK(ed.Undo().ok && ed.Undo().ok);
+  CHECK(Shown(*doc) == kNone && footerRel() == id);
+  CHECK(doc->Package().FindPart("/word/media/image1.png") == nullptr);
+  CHECK(!doc->Package().Types().Lookup("/word/footer1.xml").empty());
+  CHECK(ed.Redo().ok && ed.Redo().ok);
+  CHECK(Shown(*doc) != kNone && footerRel() == id);
+  CHECK(doc->Package().FindPart("/word/media/image1.png") != nullptr);
+  auto saved = SaveAndRead(*doc, ed);  // CheckPackage: every r:id has its relationship
+  CHECK(saved && saved->Sections()[0].footers[0] != kNone);
 }
 
 TEST(Pictures_MovesStayInTheirPart) {
