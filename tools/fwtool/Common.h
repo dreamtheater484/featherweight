@@ -28,10 +28,9 @@ struct Options {
   int runs = 5;                     // bench: runs per document
   bool budgets = false;             // bench: fail when a budget is missed
   bool typing = false;              // bench: time keystrokes instead of opening
-  int edits = 40;                   // edit-check: random edits per document; torture: per round
-  // edit-check, torture: the random edits' seed. 0: edit-check uses the document's number, torture
-  // 1 (each of its files and rounds derives its own from it).
-  uint64_t seed = 0;
+  int edits = 40;                   // edit-check, torture: random edits per document (torture: per round)
+  unsigned seed = 0;                // edit-check, torture: the random edits' seed (0: edit-check takes the
+                                    // document's number, torture 1; torture derives one per file and round)
   bool layout = false;              // dump: the pages Featherweight lays out
   bool edited = false;              // save: as after an edit in every part the model owns
   uint32_t rounds = 3;              // torture: rounds per document, each from the original

@@ -208,7 +208,7 @@ int RunEditCheck(const Options& options) {
     EditCheck check;
     std::string error;
     const std::string name = Display(files[i]);
-    const unsigned seed = options.seed ? static_cast<unsigned>(options.seed) : static_cast<unsigned>(i + 1);
+    const unsigned seed = options.seed ? options.seed : static_cast<unsigned>(i + 1);
     if (!CheckEdits(files[i], options.edits, seed, check, error)) {
       std::printf("%s: failed: %s\n", name.c_str(), error.c_str());
       ++failed;

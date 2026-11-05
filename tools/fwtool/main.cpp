@@ -171,8 +171,8 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--runs" && i + 1 < argc) options.runs = _wtoi(argv[++i]);
     else if (arg == L"--budgets") options.budgets = true;
     else if (arg == L"--typing") options.typing = true;
-    else if (arg == L"--edits" && i + 1 < argc) options.edits = std::max(0, _wtoi(argv[++i]));
-    else if (arg == L"--seed" && i + 1 < argc) options.seed = _wcstoui64(argv[++i], nullptr, 10);
+    else if (arg == L"--edits" && i + 1 < argc) options.edits = std::max(1, _wtoi(argv[++i]));
+    else if (arg == L"--seed" && i + 1 < argc) options.seed = static_cast<unsigned>(std::wcstoul(argv[++i], nullptr, 10));
     else if (arg == L"--rounds" && i + 1 < argc) options.rounds = static_cast<uint32_t>(std::max(1, _wtoi(argv[++i])));
     else if (arg == L"--replay") options.replay = true;
     else if (arg == L"--edited") options.edited = true;
