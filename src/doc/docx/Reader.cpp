@@ -1038,10 +1038,45 @@ void Reader::SetUpPrefixes(Part& part, const pkg::XmlPull& pull) {
   // The writer names each namespace with the prefix the root declares for it, and declares the
   // ones the root doesn't.
   bool strict = false;
+  // A prefix is taken when the root declares it, or when the part names it: an undeclared prefix
+  // in a qualified name, or in an mc:Ignorable or mc:MustUnderstand list, would change meaning if
+  // the writer declared it.
+  const std::string_view source = pull.Source();
+  auto nameChar = [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-' ||
+           c == '_' || static_cast<unsigned char>(c) >= 0x80;
+  };
+  auto space = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+  auto named = [&](std::string_view prefix) {
+    const std::string colon = std::string(prefix) + ':';
+    for (size_t at = source.find(colon); at != std::string_view::npos; at = source.find(colon, at + 1))
+      if (at == 0 || !nameChar(source[at - 1])) return true;
+    // Markup Compatibility lists name prefixes without a colon.
+    for (std::string_view list : {std::string_view("Ignorable"), std::string_view("MustUnderstand")}) {
+      for (size_t at = source.find(list); at != std::string_view::npos; at = source.find(list, at + 1)) {
+        size_t q = at + list.size();
+        while (q < source.size() && space(source[q])) ++q;
+        if (q >= source.size() || source[q] != '=') continue;
+        ++q;
+        while (q < source.size() && space(source[q])) ++q;
+        if (q >= source.size() || (source[q] != '"' && source[q] != '\'')) continue;
+        const size_t close = source.find(source[q], q + 1);
+        if (close == std::string_view::npos) break;
+        for (size_t p = q + 1; p < close;) {
+          while (p < close && space(source[p])) ++p;
+          size_t e = p;
+          while (e < close && !space(source[e])) ++e;
+          if (source.substr(p, e - p) == prefix) return true;
+          p = e;
+        }
+      }
+    }
+    return false;
+  };
   auto declared = [&](std::string_view prefix) {
     for (const auto& a : pull.Attributes())
       if (a.IsNamespaceDecl() && (prefix.empty() ? a.qname == "xmlns" : a.qname != "xmlns" && a.local == prefix)) return true;
-    return false;
+    return !prefix.empty() && named(prefix);
   };
   for (const auto& a : pull.Attributes()) {
     if (!a.qname.starts_with("xmlns:")) continue;
