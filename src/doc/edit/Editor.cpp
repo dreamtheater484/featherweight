@@ -710,7 +710,7 @@ struct EditorState {
   // After a direct change, done or undone: the model's indexes are built again, every cache goes,
   // and every paragraph may look different.
   void RefreshAll(const CustomStep& step) {
-    d.caches_ = std::make_unique<Document::Caches>();
+    d.ResetCaches();
     d.BuildIndexes();
     for (Paragraph& p : d.paras_) p.version = ++version;
     Change ch;

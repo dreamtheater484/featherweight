@@ -14,6 +14,7 @@
 #include "PkgTestUtil.h"
 #include "doc/docx/Docx.h"
 #include "doc/edit/Editor.h"
+#include "doc/edit/Page.h"
 #include "doc/layout/Layout.h"
 #include "text/Fonts.h"
 
@@ -21,6 +22,7 @@
 #define REQUIRE(cond)   do { if (!(cond)) { test::Fail(__FILE__, __LINE__, #cond); return; } } while (0)
 
 using namespace fw::doc;
+using fw::Twips;
 using fw::doc::layout::Layout;
 using fw::doc::layout::LineBox;
 using fw::doc::layout::Page;
@@ -461,7 +463,8 @@ void RandomEdit(edit::Editor& ed, const Document& doc, std::mt19937& rng) {
   static const char16_t* const kTexts[] = {u"x", u" ", u"ab", u"word ", u"several more words to wrap the line ",
                                            u"a long run of text that is long enough to take a line or two of the small "
                                            u"page by itself, and then some more of it "};
-  switch (rng() % 10) {
+  const uint32_t section = edit::SectionOf(doc, para), sections = static_cast<uint32_t>(doc.Sections().size());
+  switch (rng() % 13) {
     case 0: case 1: case 2: case 3: ed.InsertText(at, kTexts[rng() % 6]); break;
     case 4: case 5: {
       const uint32_t to = std::min(len, at.offset + 1 + static_cast<uint32_t>(rng() % 40));
@@ -476,11 +479,51 @@ void RandomEdit(edit::Editor& ed, const Document& doc, std::mt19937& rng) {
         ed.Delete({para, len / 2}, {next, std::min<uint32_t>(3, static_cast<uint32_t>(doc.Para(next).text.size()))});
       break;
     }
-    default: {
+    case 9: {
       edit::PropEdit p;
       if (rng() % 2) p.Set("keepNext");
       else p.Remove("keepNext");
       ed.SetParaProps(para, para, p);
+      break;
+    }
+    case 10: {  // page setup (D3): the paragraph's section, or the whole document
+      const bool all = rng() % 4 == 0;
+      edit::PageSetup p;
+      switch (rng() % 4) {
+        case 0: p.landscape = rng() % 2 == 0; break;
+        case 1: p.left = Twips(200 + static_cast<int32_t>(rng() % 800)); p.right = Twips(200 + static_cast<int32_t>(rng() % 800)); break;
+        case 2: p.top = Twips(200 + static_cast<int32_t>(rng() % 600)); p.bottom = Twips(200 + static_cast<int32_t>(rng() % 600)); break;
+        default: p.width = Twips(3200 + static_cast<int32_t>(rng() % 2000)); break;
+      }
+      edit::SetPageSetup(ed, all ? 0 : section, all ? sections - 1 : section, p);
+      break;
+    }
+    case 11: {
+      switch (rng() % 3) {
+        case 0: {
+          edit::ColumnSetup c;
+          c.count = 1 + static_cast<int32_t>(rng() % 3);
+          c.space = Twips(200);
+          c.line = rng() % 2 == 0;
+          edit::SetColumns(ed, section, section, c);
+          break;
+        }
+        case 1: edit::SetSectionStart(ed, section, static_cast<SectionStart>(rng() % 4)); break;
+        default: {
+          edit::Hyphenation h;
+          h.automatic = rng() % 2 == 0;
+          edit::SetHyphenation(ed, h);
+          break;
+        }
+      }
+      break;
+    }
+    default: {
+      switch (rng() % 3) {
+        case 0: edit::InsertSectionBreak(ed, at, static_cast<SectionStart>(rng() % 4)); break;
+        case 1: if (sections > 1) edit::DeleteSectionBreak(ed, static_cast<uint32_t>(rng() % (sections - 1))); break;
+        default: edit::InsertBreak(ed, at, rng() % 2 == 0); break;
+      }
       break;
     }
   }

@@ -424,6 +424,10 @@ class Document {
   const pkg::ReferenceRegistry& Registry() const { return *registry_; }
 
   struct Caches;  // the model's own (Internal.h)
+  // Changes each time the caches are made again (an edit that changes styles, sections or
+  // formatting in place, edit::TreeEdit): what ResolvedPara and ResolvedRun gave before is gone,
+  // and whoever kept a reference to it looks it up again.
+  uint64_t CacheGeneration() const { return cacheGeneration_; }
 
   // ---- Memory (plan §11: the store stays under a quarter of the model)
   size_t ModelBytes() const;
@@ -463,6 +467,8 @@ class Document {
   };
   std::vector<CommentEx> commentsEx_;  // word/commentsExtended.xml, read but never written
   std::unique_ptr<Caches> caches_;
+  uint64_t cacheGeneration_ = 0;
+  void ResetCaches();
   std::shared_ptr<bool> alive_;  // false once the document is gone, for the registry hook
 };
 

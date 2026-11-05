@@ -210,6 +210,10 @@ class Engine {
   text::Fonts& fonts_;
   Options options_;
   OpenTimings* timings_;
+  // The model's caches the paragraph text kept points into (Document::CacheGeneration), and
+  // pointing it at the new ones after an edit made them again.
+  uint64_t generation_ = 0;
+  void Rebase();
   StylePool styles_;
   std::vector<Page> pages_;
   uint32_t revision_ = 0;
