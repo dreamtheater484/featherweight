@@ -9,6 +9,7 @@
 
 #include "PagedView.h"
 #include "doc/edit/Editor.h"
+#include "doc/edit/Toc.h"
 #include "doc/edit/Pictures.h"
 #include "doc/layout/Layout.h"
 #include "draw/Drawing.h"
@@ -280,6 +281,17 @@ class DocView : public PagedView {
   std::optional<CommandState> QueryD3(int cmd);
   void AddD3Toolbar(ToolbarModel& m);
   void FillD3Menu(HMENU m, int x, int y);
+  // The commands, keys and context menu entries of D4: footnotes, endnotes, tables of contents
+  // (DocNotes.cpp).
+  static int ShortcutD4(UINT vk, UINT mods);
+  static const std::vector<int>& CommandsD4();
+  bool ExecuteD4(int cmd);
+  std::optional<CommandState> QueryD4(int cmd);
+  void FillD4Menu(HMENU m);
+  // The page each paragraph is on as the layout numbers it, laid out as far as needed.
+  fw::doc::edit::PageText PageTexts();
+  // The table of contents the caret is in, else the document's first.
+  std::optional<fw::doc::edit::TocInfo> CurrentToc() const;
   // Formatting marks: the layout is made again with them (and hidden text) on or off.
   void ToggleMarks();
   // The layout's options: formatting marks as shown, and DATE and TIME fields at this moment.

@@ -268,6 +268,8 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     format_->insertPicture = [this] { Execute(CmdInsertPicture); };
     for (int cmd : DocPage::InsertCommands())
       format_->insertMore.push_back({page_->Query(cmd).Tooltip(), [this, cmd] { Execute(cmd); }});
+    for (int cmd : {CmdInsertFootnote, CmdInsertEndnote, CmdInsertToc})
+      format_->insertMore.push_back({QueryD4(cmd)->Tooltip(), [this, cmd] { Execute(cmd); }});
     DocStyles::Host sh;
     sh.selection = [this] {
       return std::make_pair(fw::doc::Pos{anchor_.para, anchor_.offset}, fw::doc::Pos{focus_.para, focus_.offset});
@@ -1504,12 +1506,15 @@ int DocView::ShortcutFor(UINT vk, UINT mods) const {
   }
   if (page_)
     if (int cmd = DocPage::Shortcut(vk, mods)) return cmd;
+  if (format_)
+    if (int cmd = ShortcutD4(vk, mods)) return cmd;
   return Shortcut(vk, mods);
 }
 
 CommandState DocView::QueryCommand(int cmd) {
   if (format_ && DocFormat::Owns(cmd)) return format_->Query(cmd);
   if (auto d3 = QueryD3(cmd)) return *d3;
+  if (auto d4 = QueryD4(cmd)) return *d4;
   if (table_ && DocTable::Owns(cmd)) return table_->Query(cmd);
   if (page_ && DocPage::Owns(cmd)) return page_->Query(cmd);
   if (styles_ && DocStyles::Owns(cmd)) return styles_->Query(cmd);
@@ -1574,6 +1579,8 @@ std::vector<int> DocView::Commands() {
     for (int cmd : DocTable::CommandIds()) ids.push_back(cmd);
   if (page_)
     for (int cmd : DocPage::CommandIds()) ids.push_back(cmd);
+  if (format_)
+    for (int cmd : CommandsD4()) ids.push_back(cmd);
   if (styles_)
     for (int cmd : DocStyles::CommandIds()) ids.push_back(cmd);
   return ids;
@@ -1600,6 +1607,7 @@ bool DocView::Execute(int cmd) {
   }
   if (ExecuteProof(cmd)) return true;
   if (ExecuteD3(cmd)) return true;
+  if (ExecuteD4(cmd)) return true;
   if (ExecutePicture(cmd)) return true;
   switch (cmd) {
     case CmdCopy: Copy(); return true;
@@ -1690,6 +1698,7 @@ void DocView::FillContextMenu(HMENU m, int x, int y) {
   }
   FillSpellingMenu(m, x, y);  // a spelling error's suggestions first, as Word has them
   FillD3Menu(m, x, y);        // then the link under the caret
+  FillD4Menu(m);              // and the table of contents
   FillPictureMenu(m);         // and a selected picture's
   if (Editing()) {
     table_->FillContextMenu(m);

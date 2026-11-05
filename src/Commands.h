@@ -216,6 +216,12 @@ enum Cmd : int {
   // Find and paste (D3).
   CmdSearchWords = 1300,  // find whole words only (the search card's toggle)
   CmdPasteMerge,          // paste taking the look of where it goes, keeping bold, italic and lists
+  // Footnotes, endnotes and tables of contents (D4).
+  CmdInsertFootnote = 1320,  // Ctrl+Alt+F
+  CmdInsertEndnote,          // Ctrl+Alt+D
+  CmdInsertToc,
+  CmdUpdateTocPages,  // the table of contents' page numbers
+  CmdUpdateToc,       // the whole table of contents
   // The ruler in Word documents (D3).
   CmdRuler = 1200,  // the rulers shown or not (the ⋯ menu, a setting like spelling as you type)
   // Change case (D3): Shift+F3 and the Aa menu.
