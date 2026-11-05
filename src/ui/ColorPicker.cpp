@@ -62,7 +62,7 @@ bool SameColor(D2D1_COLOR_F a, D2D1_COLOR_F b) {
 
 // The five tints and shades of a theme color shown under it, lightest first, as Office does:
 // near-black gets lighter, near-white darker, everything else both.
-void Variants(D2D1_COLOR_F base, D2D1_COLOR_F out[5], const wchar_t* names[5]) {
+void Variants(D2D1_COLOR_F base, D2D1_COLOR_F out[5], const wchar_t* names[5], float* amounts = nullptr) {
   static const wchar_t* const kLighterDarker[5] = {L"Lighter 80%", L"Lighter 60%", L"Lighter 40%", L"Darker 25%",
                                                    L"Darker 50%"};
   static const wchar_t* const kLighter[5] = {L"Lighter 50%", L"Lighter 35%", L"Lighter 25%", L"Lighter 15%",
@@ -90,6 +90,7 @@ void Variants(D2D1_COLOR_F base, D2D1_COLOR_F out[5], const wchar_t* names[5]) {
     v.l = amount[i] > 0 ? hsl.l + (1 - hsl.l) * amount[i] : hsl.l * (1 + amount[i]);
     out[i] = Quantize(FromHsl(v));
     names[i] = labels[i];
+    if (amounts) amounts[i] = amount[i];
   }
 }
 
@@ -121,6 +122,30 @@ std::vector<NamedColor> ColorPalette::DefaultTheme() {
           {Rgb(0x4472C4), L"Blue, Accent 1"}, {Rgb(0xED7D31), L"Orange, Accent 2"},
           {Rgb(0xA5A5A5), L"Gray, Accent 3"}, {Rgb(0xFFC000), L"Gold, Accent 4"},
           {Rgb(0x5B9BD5), L"Blue, Accent 5"}, {Rgb(0x70AD47), L"Green, Accent 6"}};
+}
+
+bool ColorPalette::ThemeCell(const std::vector<NamedColor>& theme, D2D1_COLOR_F c, int& index, int& tint, int& shade) {
+  tint = shade = -1;
+  for (size_t i = 0; i < theme.size() && i < kColumns; ++i)
+    if (SameColor(theme[i].color, c)) {
+      index = static_cast<int>(i);
+      return true;
+    }
+  for (size_t i = 0; i < theme.size() && i < kColumns; ++i) {
+    D2D1_COLOR_F out[5];
+    const wchar_t* names[5];
+    float amounts[5];
+    Variants(theme[i].color, out, names, amounts);
+    for (int v = 0; v < 5; ++v) {
+      if (!SameColor(out[v], c)) continue;
+      index = static_cast<int>(i);
+      // Lighter 80%: the luminance keeps 20% of itself (tint 51, "33"); darker 25%: 75% (shade 191, "BF").
+      if (amounts[v] > 0) tint = static_cast<int>(std::lround((1 - amounts[v]) * 255));
+      else shade = static_cast<int>(std::lround((1 + amounts[v]) * 255));
+      return true;
+    }
+  }
+  return false;
 }
 
 std::vector<NamedColor>& ColorPalette::Recent() {

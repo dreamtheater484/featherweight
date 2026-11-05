@@ -106,6 +106,7 @@ Control& Toolbar::ItemControl(const ToolItem& item) {
       s.colors = s.showColor = item.colors;
       s.color = item.color;
       s.automaticLabel = item.automaticLabel;
+      if (item.colors) s.theme = item.theme.empty() ? ColorPalette::DefaultTheme() : item.theme;
       if (!s.IsOpen()) {
         s.items = item.choices;
         s.selected = item.choice;
@@ -134,6 +135,7 @@ Control& Toolbar::ItemControl(const ToolItem& item) {
       p.automatic = item.automatic;
       p.automaticLabel = item.automaticLabel;
       p.automaticColor = item.automaticColor;
+      p.theme = item.theme.empty() ? ColorPalette::DefaultTheme() : item.theme;
       p.onChange = [send](D2D1_COLOR_F color, bool automatic) {
         ToolValue v;
         v.color = color;

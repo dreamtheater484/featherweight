@@ -346,6 +346,10 @@ class ColorPalette : public Control {
   static std::vector<NamedColor>& Recent();
   // A readable name for a color: the palette's own name, or its red, green and blue.
   std::wstring NameOf(D2D1_COLOR_F c, bool automatic) const;
+  // Which of `theme`'s cells a picked color is: the index of its base color, and for a tint or
+  // shade under it the w:themeTint or w:themeShade (0-255) Office writes for it (-1 for none).
+  // False for any other color.
+  static bool ThemeCell(const std::vector<NamedColor>& theme, D2D1_COLOR_F c, int& index, int& tint, int& shade);
 
   D2D1_SIZE_F PreferredSize() const;
   void Layout();

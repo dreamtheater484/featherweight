@@ -157,6 +157,7 @@ DocView::~DocView() {
   StopBlinking();
   ClosePanels();
   if (page_ && page_->ShowsIn(host_.ViewShownPanel())) host_.ViewShowPanel(nullptr);
+  if (styles_ && styles_->ShowsIn(host_.ViewShownPanel())) host_.ViewShowPanel(nullptr);
   linkPanel_.reset();
   bookmarkPanel_.reset();
   pageNumberPanel_.reset();
@@ -265,6 +266,15 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     format_->insertPicture = [this] { Execute(CmdInsertPicture); };
     for (int cmd : DocPage::InsertCommands())
       format_->insertMore.push_back({page_->Query(cmd).Tooltip(), [this, cmd] { Execute(cmd); }});
+    DocStyles::Host sh;
+    sh.selection = [this] {
+      return std::make_pair(fw::doc::Pos{anchor_.para, anchor_.offset}, fw::doc::Pos{focus_.para, focus_.offset});
+    };
+    sh.done = [this](const std::wstring& message) { AfterFormat({std::nullopt, message}); };
+    sh.showPanel = [this](PanelContent* p, bool toggle) { ShowPanel(p, toggle); };
+    styles_ = std::make_unique<DocStyles>(*editor_, std::move(sh));
+    for (int cmd : {CmdModifyStyle, CmdNewStyle})
+      format_->styleMore.push_back({styles_->Query(cmd).label, [this, cmd] { Execute(cmd); }});
     const std::vector<uint32_t> main = doc_->StoryParagraphs(doc_->MainStory());
     if (!main.empty()) anchor_ = focus_ = {main.front(), 0};
   }
@@ -1428,6 +1438,7 @@ CommandState DocView::QueryCommand(int cmd) {
   if (auto d3 = QueryD3(cmd)) return *d3;
   if (table_ && DocTable::Owns(cmd)) return table_->Query(cmd);
   if (page_ && DocPage::Owns(cmd)) return page_->Query(cmd);
+  if (styles_ && DocStyles::Owns(cmd)) return styles_->Query(cmd);
   CommandState s;
   if (auto picture = QueryPicture(cmd)) s = *picture;
   switch (cmd) {
@@ -1485,6 +1496,8 @@ std::vector<int> DocView::Commands() {
     for (int cmd : DocTable::CommandIds()) ids.push_back(cmd);
   if (page_)
     for (int cmd : DocPage::CommandIds()) ids.push_back(cmd);
+  if (styles_)
+    for (int cmd : DocStyles::CommandIds()) ids.push_back(cmd);
   return ids;
 }
 
@@ -1501,6 +1514,10 @@ bool DocView::Execute(int cmd) {
   }
   if (page_ && DocPage::Owns(cmd)) {
     page_->Execute(cmd);
+    return true;
+  }
+  if (styles_ && DocStyles::Owns(cmd)) {
+    styles_->Execute(cmd);
     return true;
   }
   if (ExecuteProof(cmd)) return true;
@@ -1588,6 +1605,10 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
 void DocView::FillContextMenu(HMENU m, int x, int y) {
   using menu::AppendItem;
   using menu::AppendSeparator;
+  if (styles_ && OnRuler(x, y)) {  // the ruler's own menu
+    FillRulerMenu(m, x, y);
+    return;
+  }
   FillSpellingMenu(m, x, y);  // a spelling error's suggestions first, as Word has them
   FillD3Menu(m, x, y);        // then the link under the caret
   FillPictureMenu(m);         // and a selected picture's

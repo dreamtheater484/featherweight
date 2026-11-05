@@ -20,6 +20,7 @@
 #include "word/DocFile.h"
 #include "word/DocFormat.h"
 #include "word/DocPage.h"
+#include "word/DocStyles.h"
 #include "word/DocTable.h"
 
 class PicturePanel;
@@ -324,6 +325,9 @@ class DocView : public PagedView {
   void RulerHover(int x, int y);
   std::wstring RulerTooltip(int x, int y);
   HCURSOR RulerCursor(int x, int y);
+  // A right-click on the ruler: a tab stop's kind and leader, clearing, the Tabs panel (DocStyles).
+  void FillRulerMenu(HMENU m, int x, int y);
+  friend class DocStyles;  // its panels' buttons
 
   // ---- Formatting (DocFormat)
   // What formatting applies to: the selection, or the caret and the word it's in.
@@ -462,6 +466,7 @@ class DocView : public PagedView {
   std::unique_ptr<DocFormat> format_;  // after the editor: it goes first
   std::unique_ptr<DocTable> table_;    // tables (D3), likewise
   std::unique_ptr<DocPage> page_;      // page layout (D3), likewise
+  std::unique_ptr<DocStyles> styles_;  // tab stops and styles (D3), likewise
   // After a change of the page: the first pages laid out now, the rest in idle time, and the
   // caret where it was or, with `caret`, where the result says (drawn once its page is laid out
   // again). False, with the refusal shown.

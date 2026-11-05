@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <map>
 
+#include "doc/edit/Editor.h"
 #include "doc/model/Internal.h"
 
 namespace fw::doc::edit {
@@ -386,6 +387,30 @@ void ModifyStyle(TreeEdit& ed, std::string_view styleId, const RunFormat& run, c
   ed.Commit();
 }
 
+namespace {
+
+// The direct formatting of paragraph `p` and of its character at `offset` (or its first) goes into
+// the style `elem`.
+void CopyFormatting(TreeEdit& ed, uint32_t p, uint32_t offset, ElemId elem) {
+  const Document& doc = ed.Doc();
+  for (Node c : doc.ParaNode(p).Child(kPPr).Kids()) {
+    uint32_t n = c.NameHash();
+    if (n == kPStyle || n == kNumPr || n == kRPr || n == kSectPr || n == kPPrChange) continue;
+    ed.CopyChild(c.Id(), ed.Child(elem, kPPr));
+  }
+  Node first;
+  for (const TextRun& r : doc.Runs(p)) {
+    if (!r.run || r.displayOnly || r.fieldCode) continue;
+    if (!first || (r.start <= offset && offset < r.end)) first = r.run;
+    if (r.start <= offset && offset < r.end) break;
+  }
+  if (first)
+    for (Node c : first.Child(kRPr).Kids())
+      if (!c.Is(kRStyle) && !c.Is(kRPrChange)) ed.CopyChild(c.Id(), ed.Child(elem, kRPr));
+}
+
+}  // namespace
+
 void UpdateStyleToMatch(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
   std::vector<uint32_t> paras = ParagraphsOf(doc, range);
@@ -394,27 +419,72 @@ void UpdateStyleToMatch(TreeEdit& ed, Range range) {
   const Style* s = doc.FindStyle(doc.ResolvedPara(p).style);
   if (!s || s->type != StyleType::Paragraph) return;
   Style style = *s;
-  ElemId elem = style.node.Id();
   ed.Begin(u"Update style");
-  // The paragraph's own formatting moves into the style.
-  for (Node c : doc.ParaNode(p).Child(kPPr).Kids()) {
-    uint32_t n = c.NameHash();
-    if (n == kPStyle || n == kNumPr || n == kRPr || n == kSectPr || n == kPPrChange) continue;
-    ed.CopyChild(c.Id(), ed.Child(elem, kPPr));
-  }
-  // So does its first character's.
-  Node first;
-  for (const TextRun& r : doc.Runs(p)) {
-    if (!r.run || r.displayOnly || r.fieldCode) continue;
-    if (!first || (r.start <= range.from.offset && range.from.offset < r.end)) first = r.run;
-    if (r.start <= range.from.offset && range.from.offset < r.end) break;
-  }
-  if (first)
-    for (Node c : first.Child(kRPr).Kids())
-      if (!c.Is(kRStyle) && !c.Is(kRPrChange)) ed.CopyChild(c.Id(), ed.Child(elem, kRPr));
+  // The paragraph's own formatting moves into the style, and so does its first character's.
+  CopyFormatting(ed, p, range.from.offset, style.node.Id());
   // Then the paragraph takes the style again, without what moved.
   ApplyParaStyle(ed, p, style);
   ed.Commit();
+}
+
+std::string NewStyleFromSelection(TreeEdit& ed, Range range, std::string_view name, std::u16string& why) {
+  const Document& doc = ed.Doc();
+  size_t a = 0, b = name.size();
+  while (a < b && name[a] == ' ') ++a;
+  while (b > a && name[b - 1] == ' ') --b;
+  const std::string trimmed(name.substr(a, b - a));
+  why.clear();
+  if (trimmed.empty()) {
+    why = u"Type a name for the style.";
+    return {};
+  }
+  if (!XmlSafe(trimmed) || trimmed.size() > 253) {
+    why = u"A style's name can't hold control characters or be that long.";
+    return {};
+  }
+  if (FindByName(doc, trimmed) || FindBuiltin(trimmed) || SameName(trimmed, "Normal")) {
+    why = u"There's already a style with that name.";
+    return {};
+  }
+  const std::vector<uint32_t> paras = ParagraphsOf(doc, range);
+  if (paras.empty()) return {};
+  if (!ed.CanChange(paras) || ed.EnsurePart(PartKind::Styles) == kNoElem) {
+    why = ed.Refused().empty() ? std::u16string(u"This document can't have styles.") : ed.Refused();
+    return {};
+  }
+  const ElemId root = StylesRoot(doc);
+  const uint32_t p = paras.front();
+  std::string basedOn;
+  if (const Style* cur = doc.FindStyle(doc.ResolvedPara(p).style); cur && cur->type == StyleType::Paragraph)
+    basedOn = std::string(cur->id);
+  else if (const Style* d = doc.DefaultStyle(StyleType::Paragraph))
+    basedOn = std::string(d->id);
+  std::string idBase = IdOf(trimmed);
+  for (char& c : idBase)  // what an id can't hold well
+    if (c == '"' || c == '<' || c == '>' || c == '&' || c == '\'') c = '_';
+  const std::string id = UniqueId(doc, idBase);
+  ed.Begin(u"New style");
+  ed.Local();
+  const ElemId elem = ed.AddXml(root, StyleXml("paragraph", id, trimmed, false, true, basedOn, "", "", -1, true, "", "", ""));
+  if (elem == kNoElem) {
+    ed.Commit();
+    why = u"The style couldn't be added.";
+    return {};
+  }
+  ed.Reindex();
+  CopyFormatting(ed, p, range.from.offset, elem);
+  ed.Reindex();
+  const Style* made = doc.FindStyle(id);
+  if (made) {
+    const Style style = *made;
+    for (uint32_t q : paras) ApplyParaStyle(ed, q, style);
+  }
+  ed.Commit();
+  if (!ed.Refused().empty()) {
+    why = ed.Refused();
+    return {};
+  }
+  return id;
 }
 
 }  // namespace fw::doc::edit
