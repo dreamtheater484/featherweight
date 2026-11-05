@@ -228,6 +228,7 @@ class Engine {
   int32_t compatMode_ = 15;
   bool sumSpacing_ = false;  // w:doNotUseHTMLParagraphAutoSpacing: space after and before add up
   std::vector<uint32_t> fieldsCount_;  // per story: fields in it
+  void CountStories();
   std::unordered_map<uint32_t, std::vector<Field>> fieldsCache_;
   std::unordered_map<uint32_t, std::u16string> noteNumbers_;  // note story -> its mark
   std::unordered_map<uint32_t, int32_t> noteOrder_;           // note story -> its number

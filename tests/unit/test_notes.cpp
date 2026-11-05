@@ -3,6 +3,8 @@
 // back exactly, and the saved package passes the checks Office's rules make.
 #include "TestHarness.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 
 #include "DocFixture.h"
@@ -48,10 +50,26 @@ std::string NoteText(const Document& doc, StoryKind kind, std::string_view id) {
   return paras.empty() ? "(empty)" : Text(doc, paras.front());
 }
 
+// With FW_TEST_OUT set, the saved packages are kept there too, for the Office SDK's validator.
+void Keep(const std::vector<uint8_t>& bytes) {
+  char* dir = nullptr;
+  size_t len = 0;
+  if (_dupenv_s(&dir, &len, "FW_TEST_OUT") != 0 || !dir) return;
+  static int n = 0;
+  const std::string path = std::string(dir) + "/notes-" + std::to_string(++n) + ".docx";
+  free(dir);
+  FILE* f = nullptr;
+  if (fopen_s(&f, path.c_str(), "wb") == 0 && f) {
+    fwrite(bytes.data(), 1, bytes.size(), f);
+    fclose(f);
+  }
+}
+
 bool SavesAndChecks(Document& doc, std::unique_ptr<Document>* reopened = nullptr) {
   if (!docx::WriteAllParts(doc).Ok()) return false;
   fw::pkg::MemorySink sink;
   if (!doc.Package().Save(sink).Ok()) return false;
+  Keep(sink.bytes);
   Status st;
   auto pkg = test::OpenBytes(std::move(sink.bytes), st);
   if (!pkg) return false;
