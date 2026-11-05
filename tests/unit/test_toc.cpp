@@ -258,3 +258,36 @@ TEST(Toc_OnlyInTheText) {
   CHECK(!edit::InsertToc(editor, {MainParas(*doc)[1], 2}, ByIndex).ok);
   CHECK(edit::TablesOfContents(*doc).size() == 1u);
 }
+
+TEST(Toc_NumberedHeadingsShowTheirNumbers) {
+  // Inserted at the start of a numbered heading: the entries show the headings' numbers, and take
+  // no number of their own from the paragraph they were made from.
+  Fixture f;
+  f.styles = kStyles;
+  f.numbering =
+      "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/>"
+      "<w:lvlText w:val=\"%1.\"/></w:lvl></w:abstractNum><w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+  auto numbered = [](const std::string& text) {
+    return "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr>"
+           "<w:r><w:t>" + text + "</w:t></w:r></w:p>";
+  };
+  f.body = numbered("First") + P("Text.") + numbered("Second");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const std::vector<edit::TocHeading> headings = edit::TocHeadings(*doc);
+  REQUIRE(headings.size() == 2u);
+  CHECK(ToUtf8(headings[0].text) == "1.\tFirst");
+  CHECK(ToUtf8(headings[1].text) == "2.\tSecond");
+  edit::Editor editor(*doc);
+  REQUIRE(edit::InsertToc(editor, {MainParas(*doc)[0], 0}, ByIndex).ok);
+  const std::string after = MainXml(*doc);
+  CHECK(Count(after, "<w:numPr>") == 2u);  // the headings' own
+  const std::vector<uint32_t> paras = MainParas(*doc);
+  REQUIRE(paras.size() == 6u);  // two entries, the field's end, then the document
+  CHECK(!doc->InList(paras[0]) && !doc->InList(paras[1]) && !doc->InList(paras[2]));
+  CHECK(doc->InList(paras[3]) && doc->InList(paras[5]));
+  CHECK(doc->Label(paras[3]).has_value() && ToUtf8(doc->Label(paras[3])->text) == "1.");
+  CHECK(ToUtf8(doc->Para(paras[0]).text).find("1.\tFirst\t") != std::string::npos);
+  CHECK(NoFieldAcrossALink(*doc));
+  CHECK(SavesAndChecks(*doc));
+}
