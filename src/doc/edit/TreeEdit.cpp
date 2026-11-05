@@ -194,6 +194,18 @@ bool TreeEdit::Editable(ElemId id, std::unordered_map<ElemId, bool>& memo, std::
   return verdict;
 }
 
+bool TreeEdit::CanChange(const std::vector<uint32_t>& paras) {
+  std::unordered_map<ElemId, bool> memo;
+  std::u16string why;
+  for (uint32_t p : paras) {
+    if (p < doc_.paras_.size() && !Editable(doc_.paras_[p].elem, memo, why)) {
+      refused_ = why;
+      return false;
+    }
+  }
+  return true;
+}
+
 bool TreeEdit::InDefinitions(ElemId id) const {
   const Tree& t = doc_.tree_;
   for (int hops = 0; hops < 256 && t.elems[id].parent != kNoElem; ++hops) id = t.elems[id].parent;
