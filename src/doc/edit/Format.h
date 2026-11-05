@@ -97,8 +97,9 @@ void ToggleRuns(TreeEdit& ed, Range range, Toggle what);
 
 // Ctrl+Shift+> and Ctrl+Shift+<: each run's size to the next one in Word's list (8, 9, 10, 11,
 // 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72, then by 10 to 1638); below 8, by 1 down to 1.
+// Ctrl+] and Ctrl+[ (`onePoint`): by one point, from 1 to 1638.
 HalfPoints NextFontSize(HalfPoints size, bool grow);
-void GrowFont(TreeEdit& ed, Range range, bool grow);
+void GrowFont(TreeEdit& ed, Range range, bool grow, bool onePoint = false);
 
 // Ctrl+Space: removes direct character formatting (a character style stays).
 void ClearRunFormatting(TreeEdit& ed, Range range);

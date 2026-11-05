@@ -15,6 +15,7 @@
 #include "draw/PrintJob.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
+#include "pkg/Zip.h"
 #include "ui/Anim.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -203,6 +204,12 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
   pagination_->LayOutPages(1);
   revision_ = pagination_->Revision();
   TakeNewPages();
+  if (doc_->Editable()) {
+    editor_ = std::make_unique<fw::doc::edit::Editor>(*doc_);
+    editor_->OnChange([this](const fw::doc::edit::Change&) { stale_ = true; });
+    format_ = std::make_unique<DocFormat>(
+        *editor_, [this] { return FormatTarget(); }, [this](const DocFormat::Done& d) { AfterEdit(d); });
+  }
 
   // Comments, for their highlight and tooltip; hyperlink fields, for clicks.
   for (const auto& c : doc_->Comments()) {
@@ -545,6 +552,11 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
       selRevision_ = pagination_->Revision();
     }
     fill(selRects_, p.selection, false);
+  } else if (caret_ && format_) {
+    if (auto at = pagination_->CaretAt(focus_); at && static_cast<int>(at->page) >= first && static_cast<int>(at->page) <= last) {
+      D2D1_RECT_F s = PageRectToScreen(static_cast<int>(at->page), layout::Rect{at->x, at->top, at->x, at->bottom});
+      c.Fill(RectF(std::round(s.left), s.top, std::round(s.left) + std::max(1.0f, std::round(ui_)), s.bottom), Rgb(0x000000));
+    }
   }
 }
 
@@ -553,7 +565,8 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
 
 bool DocView::HasIdleWork() const {
   return Ready() && (!pagination_->Done() || !noticesShown_ || !wordsCounted_ ||
-                     (!placeholder_ && sizes_.size() < pagination_->PageCount()));
+                     (!placeholder_ && sizes_.size() < pagination_->PageCount()) ||
+                     (format_ && DocFormat::FontsPending()));
 }
 
 bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
@@ -603,6 +616,8 @@ bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
     repaint = true;
   }
   if (!noticesShown_ && pagination_->Done()) ShowNotices();
+  // The font box's list, once the pages are there.
+  if (format_ && pagination_->Done() && DocFormat::FontsPending()) DocFormat::ReadFonts();
   return repaint;
 }
 
@@ -731,9 +746,13 @@ void DocView::OnMouseUp(int x, int y, int, UINT) {
   if (d == Drag::Link) {
     FollowLink(pendingLink_);
   } else if (d == Drag::Select && !HasSelection() && std::abs(x - downX_) + std::abs(y - downY_) < 3) {
-    anchor_ = focus_ = {};  // a plain click just clears the selection
+    // A plain click puts the caret there in a document being edited, and clears the selection
+    // in one that's only viewed.
+    if (format_) caret_ = true;
+    else anchor_ = focus_ = {};
     host_.ViewInvalidate();
   }
+  if (d == Drag::Select && format_ && format_->PainterOn()) format_->SelectionMade();
 }
 
 void DocView::OnMouseLeave() {
@@ -744,11 +763,18 @@ void DocView::OnMouseLeave() {
 
 bool DocView::OnKeyDown(UINT vk, UINT mods) {
   if (!Ready() || pagination_->PageCount() == 0) return NavigationKey(vk, mods);
-  if (vk == VK_ESCAPE && HasSelection()) {
-    anchor_ = focus_ = {};
+  if (vk == VK_ESCAPE && format_ && format_->PainterOn()) {
+    format_->CancelPainter();
     host_.ViewInvalidate();
     return true;
   }
+  if (vk == VK_ESCAPE && HasSelection()) {
+    anchor_ = focus_ = {};
+    caret_ = false;
+    host_.ViewInvalidate();
+    return true;
+  }
+  if (vk == VK_TAB && !(mods & (kModCtrl | kModAlt)) && ListTab((mods & kModShift) != 0)) return true;
   return NavigationKey(vk, mods);
 }
 
@@ -964,6 +990,17 @@ SaveFormat DocView::SaveAsFormat() const {
 }
 
 bool DocView::Save(const std::wstring& path, std::wstring& error) {
+  if (editor_ && editor_->Modified()) {
+    // The edited document: the parts the model owns written from it, the rest copied as they were.
+    fw::pkg::MemorySink sink;
+    if (!fw::doc::docx::WriteAllParts(*doc_).Ok() || !doc_->Package().Save(sink).Ok() ||
+        !util::WriteFileAtomic(path, std::string(sink.bytes.begin(), sink.bytes.end()))) {
+      error = L"The document couldn't be saved.";
+      return false;
+    }
+    editor_->MarkSaved();
+    return true;
+  }
   // The file exactly as it was opened (the snapshot), so a copy never differs from the original.
   const auto& snapshot = doc_->Package().GetSnapshot();
   std::string bytes(static_cast<size_t>(snapshot.Size()), '\0');
@@ -1134,10 +1171,18 @@ int DocView::Shortcut(UINT vk, UINT mods) {
   return 0;
 }
 
+int DocView::ShortcutFor(UINT vk, UINT mods) const {
+  // Word's keys first in a document being edited: Ctrl+1 is single spacing there, not actual size.
+  if (format_)
+    if (int cmd = DocFormat::Shortcut(vk, mods)) return cmd;
+  return Shortcut(vk, mods);
+}
+
 CommandState DocView::QueryCommand(int cmd) {
+  if (format_ && DocFormat::Owns(cmd)) return format_->Query(cmd);
   CommandState s;
   switch (cmd) {
-    case CmdSave: s = {false, false}; break;  // read-only until D2; Save as makes a copy
+    case CmdSave: s = {Modified(), false}; break;  // Save as makes a copy of a document not edited
     case CmdPrint: s = {Ready(), false}; break;
     case CmdCopy: s = {Ready() && HasSelection(), false}; break;
     case CmdSelectAll: s = {Ready(), false}; break;
@@ -1162,10 +1207,16 @@ CommandState DocView::QueryCommand(int cmd) {
 std::vector<int> DocView::Commands() {
   std::vector<int> ids;
   for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
+  if (format_)
+    for (int cmd : DocFormat::CommandIds()) ids.push_back(cmd);
   return ids;
 }
 
 bool DocView::Execute(int cmd) {
+  if (format_ && DocFormat::Owns(cmd)) {
+    format_->Execute(cmd);
+    return true;
+  }
   switch (cmd) {
     case CmdCopy: Copy(); return true;
     case CmdSelectAll: SelectAll(); return true;
@@ -1184,16 +1235,17 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
     t.tooltip = tooltip;
     return t;
   };
-  ToolItem save = item(CmdSave, icon::Save, L"Documents are read-only for now; Save as makes a copy");
-  save.enabled = false;
+  ToolItem save = item(CmdSave, icon::Save, format_ ? L"Save (Ctrl+S)" : L"This document can't be edited; Save as makes a copy");
+  save.enabled = Modified();
   save.joinNext = true;
   ToolItem saveAs = item(CmdSaveMenu, icon::ChevronDown, L"Save a copy as… (Ctrl+Shift+S)");
   saveAs.width = 18;
   saveAs.glyphSize = 9;
   ToolItem print = item(CmdPrint, icon::Print);
   m.left = {save, saveAs, print};
+  if (format_) format_->AddToolbar(m);
 
-  m.pager = true;
+  m.pager = !format_;  // when editing, the status bar has the page and the zoom
   m.page = currentPage_;
   m.pageCount = PageCount();
   m.zoomText = fw::FormatPercent(Zoom());
@@ -1242,7 +1294,87 @@ void DocView::BuildStatusBar(StatusBarModel& m) {
   if (!pagination_->Done()) pages += L"…";
   m.segments = {pages};
   if (wordsCounted_) m.segments.push_back(Thousands(words_) + (words_ == 1 ? L" word" : L" words"));
+  if (format_)
+    if (std::wstring lang = format_->Language(); !lang.empty()) m.segments.push_back(lang);
   m.zoom = true;
   m.zoomValue = Zoom();
   m.onZoom = [this](double z) { SetZoom(z); };
+}
+
+// ---------------------------------------------------------------------------
+// Editing
+
+DocFormat::Target DocView::FormatTarget() const {
+  DocFormat::Target t;
+  if (!Ready() || (!HasSelection() && !caret_)) return t;
+  TextPos a = std::min(anchor_, focus_), b = std::max(anchor_, focus_);
+  const auto& paras = doc_->Paragraphs();
+  if (a.para >= paras.size() || b.para >= paras.size()) return t;
+  a.offset = std::min<uint32_t>(a.offset, static_cast<uint32_t>(paras[a.para].text.size()));
+  b.offset = std::min<uint32_t>(b.offset, static_cast<uint32_t>(paras[b.para].text.size()));
+  t.any = true;
+  t.sel = {{a.para, a.offset}, {b.para, b.offset}};
+  t.chars = t.sel;
+  if (a == b) {
+    // A caret inside a word formats the word, as Word does (its space after stays as it is).
+    TextPos from, to;
+    WordAt(a, from, to);
+    const std::u16string& text = paras[a.para].text;
+    while (to.offset > from.offset && to.offset <= text.size() && text[to.offset - 1] == u' ') --to.offset;
+    if (from < a && a < to) t.chars = {{from.para, from.offset}, {to.para, to.offset}};
+  }
+  return t;
+}
+
+void DocView::AfterEdit(const DocFormat::Done& done) {
+  if (done.caret) {
+    anchor_ = focus_ = {done.caret->para, done.caret->offset};
+    caret_ = true;
+  }
+  if (!done.message.empty()) host_.ViewMessage(BannerKind::Info, done.message);
+  if (stale_) LayOutAgain();
+  host_.ViewStateChanged();
+  host_.ViewInvalidate();
+}
+
+void DocView::LayOutAgain() {
+  // Layout has no incremental pass yet: the pages are laid out again up to the one shown, and the
+  // rest in idle time, as when the document opened.
+  stale_ = false;
+  Anchor a = CaptureAnchor(0, 0);
+  pagination_ = std::make_unique<layout::Layout>(*doc_, *fonts_);
+  pagination_->LayOutPages(static_cast<size_t>(std::max(0, currentPage_)) + 2);
+  revision_ = pagination_->Revision();
+  sizes_.clear();
+  placeholder_ = false;
+  TakeNewPages();
+  RecomputeScale();
+  Relayout(&a);
+  for (auto& m : matches_) m.measured = false;
+  for (auto& cm : comments_) cm.measured = false;
+  for (auto& ch : changes_) ch.measured = false;
+  selRects_.clear();
+  selFrom_ = selTo_ = {UINT32_MAX, 0};
+  // The selection stays inside the text, and the words are counted again.
+  const auto& paras = doc_->Paragraphs();
+  for (TextPos* p : {&anchor_, &focus_}) {
+    if (paras.empty()) break;
+    if (p->para >= paras.size()) *p = {static_cast<uint32_t>(paras.size() - 1), 0};
+    p->offset = std::min<uint32_t>(p->offset, static_cast<uint32_t>(paras[p->para].text.size()));
+  }
+  words_ = wordsNext_ = 0;
+  wordsCounted_ = false;
+}
+
+bool DocView::ListTab(bool back) {
+  if (!format_) return false;
+  DocFormat::Target t = FormatTarget();
+  if (!t.any) return false;
+  // At the start of a list item, or across items: the level. Elsewhere Tab is the editor's.
+  const bool across = t.sel.from.para != t.sel.to.para;
+  if (!across && t.sel.from.offset != 0) return false;
+  const std::string_view numId = doc_->ResolvedPara(t.sel.from.para).numId;
+  if (numId.empty() || numId == "0") return false;
+  Execute(back ? CmdOutdent : CmdIndent);
+  return true;
 }

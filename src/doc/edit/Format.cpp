@@ -469,7 +469,7 @@ HalfPoints NextFontSize(HalfPoints size, bool grow) {
   return HalfPoints(16);
 }
 
-void GrowFont(TreeEdit& ed, Range range, bool grow) {
+void GrowFont(TreeEdit& ed, Range range, bool grow, bool onePoint) {
   ed.Begin(grow ? u"Grow font" : u"Shrink font");
   const Document& doc = ed.Doc();
   ForEachRunProps(ed, range, [&](uint32_t para, ElemId rPr) {
@@ -478,7 +478,7 @@ void GrowFont(TreeEdit& ed, Range range, bool grow) {
     HalfPoints size = doc.StyleRun(para, n.Child(kRStyle).AttrOr(kVal)).size;
     if (auto sz = n.Child(kSz).Int(kVal)) size = HalfPoints(static_cast<int32_t>(*sz));
     RunFormat f;
-    f.size = NextFontSize(size, grow);
+    f.size = onePoint ? HalfPoints(std::clamp(size.Value() + (grow ? 2 : -2), 2, 3276)) : NextFontSize(size, grow);
     ApplyRunFormat(ed, doc, para, rPr, f);
   });
   ed.Commit();

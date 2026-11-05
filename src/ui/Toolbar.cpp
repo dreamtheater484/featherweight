@@ -198,6 +198,10 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
   place(open_, x, kBtn * u);
   x += (kBtn + kGap) * u;
   for (const ToolItem& item : m.left) {
+    if (item.sepBefore) {
+      separators_.push_back(RectF(x + kSep * u / 2 - kGap * u / 2, top + 7 * u, x + kSep * u / 2 - kGap * u / 2 + 1, top + h - 7 * u));
+      x += kSep * u;
+    }
     if (item.kind == ToolKind::Button) {
       place(ItemButton(item), x, item.width * u);
     } else {

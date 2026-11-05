@@ -10,13 +10,16 @@
 #include "PagedView.h"
 #include "doc/layout/Layout.h"
 #include "draw/Drawing.h"
+#include "doc/edit/Editor.h"
 #include "doc/model/Document.h"
 #include "pkg/XmlDom.h"
 #include "text/Fonts.h"
+#include "word/DocFormat.h"
 
-// A Word document in a tab, read-only (plan milestone D1): the model, laid out page by page by
+// A Word document in a tab (plan milestones D1, D2): the model, laid out page by page by
 // fw::doc::layout (the first page at once, the rest in idle time), drawn through draw::Painter,
-// with selection and copy, find, links, comments and tracked changes shown, and printing.
+// with selection and copy, find, links, comments and tracked changes shown, and printing. A
+// document the model can edit gets an editor, and formatting (DocFormat) on the toolbar and keys.
 class DocView : public PagedView {
  public:
   DocView(ViewHost& host, std::wstring path);
@@ -31,7 +34,7 @@ class DocView : public PagedView {
   bool Ready() const override { return pagination_ != nullptr; }
   const std::wstring& Path() const override { return path_; }
   std::wstring Title() const override;
-  bool Modified() const override { return false; }
+  bool Modified() const override { return editor_ && editor_->Modified(); }
 
   void Draw(gfx::Canvas& c, ID2D1DeviceContext* dc) override;
   bool HasIdleWork() const override;
@@ -49,7 +52,7 @@ class DocView : public PagedView {
   std::wstring TooltipAt(int x, int y) override;
   bool HasKeyFocus() const override { return false; }
 
-  int ShortcutFor(UINT vk, UINT mods) const override { return Shortcut(vk, mods); }
+  int ShortcutFor(UINT vk, UINT mods) const override;
   CommandState QueryCommand(int cmd) override;
   std::vector<int> Commands() override;
   bool Execute(int cmd) override;
@@ -67,7 +70,7 @@ class DocView : public PagedView {
   bool SearchDone() const override { return true; }
   std::wstring SelectedText() override;
 
-  // A copy of the file: documents are read-only until D2.
+  // The edited document, or a copy of the file when nothing was edited.
   bool Save(const std::wstring& path, std::wstring& error) override;
   SaveFormat SaveAsFormat() const override;
   bool CanPrint() const override { return Ready(); }
@@ -126,6 +129,15 @@ class DocView : public PagedView {
   // The words around a position, for double-click.
   void WordAt(TextPos pos, TextPos& from, TextPos& to) const;
   uint32_t StoryOf(TextPos pos) const { return doc_->Para(pos.para).story; }
+
+  // ---- Editing (D2)
+  // What formatting applies to: the selection, or the caret and the word it's in.
+  DocFormat::Target FormatTarget() const;
+  // After an edit: the caret, a message, and the pages laid out again.
+  void AfterEdit(const DocFormat::Done& done);
+  void LayOutAgain();
+  // Tab and Shift+Tab at the start of list items change their level.
+  bool ListTab(bool back);
 
   std::wstring path_;
   std::unique_ptr<fw::doc::Document> doc_;
@@ -190,4 +202,10 @@ class DocView : public PagedView {
   // Find
   std::vector<Match> matches_;
   int current_ = -1;
+
+  // Editing: last, so they go before the document they edit.
+  std::unique_ptr<fw::doc::edit::Editor> editor_;
+  std::unique_ptr<DocFormat> format_;
+  bool caret_ = false;  // anchor_ == focus_ is a caret (a click in an edited document)
+  bool stale_ = false;  // the editor changed the document: lay out again
 };

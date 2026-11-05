@@ -5,6 +5,8 @@
 #include "DocFixture.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/TreeEdit.h"
+#include "doc/layout/Layout.h"
+#include "text/Fonts.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/Lists.h"
 #include "doc/edit/Styles.h"
@@ -708,4 +710,105 @@ TEST(Lists_AutoFormatAsYouType) {
   edit::TreeEdit ed(editor);
   edit::StartAutoList(ed, p, *a);
   CHECK(LabelOf(*doc, p) == u"a)");
+}
+
+// ---------- A report, formatted as in Word (D2's exit criterion) ----------
+
+TEST(Report_FiveFormattedPages) {
+  // A plain report as typed: a title, five sections with a heading, body text, a bulleted list,
+  // a numbered list and a subsection. Only Normal is defined, and there's no numbering part.
+  const std::string words =
+      "The quarter closed with steady growth across every region, and the figures below set out where it came from, "
+      "what it cost, and what the team expects for the months ahead. Each of these points is taken up again in the "
+      "sections that follow, with the numbers that support it and the risks that could change them. ";
+  auto para = [](const std::string& text) { return "<w:p><w:r><w:t xml:space=\"preserve\">" + text + "</w:t></w:r></w:p>"; };
+  std::string body = para("Quarterly Report") + para("Results and outlook for the third quarter");
+  for (int s = 1; s <= 5; ++s) {
+    body += para("Section " + std::to_string(s));
+    for (int i = 0; i < 6; ++i) body += para(words + words);
+    for (int i = 0; i < 4; ++i) body += para("Point " + std::to_string(i + 1));
+    for (int i = 0; i < 3; ++i) body += para("Step " + std::to_string(i + 1));
+    body += para("Details " + std::to_string(s));
+    for (int i = 0; i < 3; ++i) body += para(words);
+  }
+  Fixture f;
+  f.styles = kWordStyles;
+  f.body = body;
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string original = MainXml(*doc), styles = PartXml(*doc, PartKind::Styles);
+  auto p = MainParas(*doc);
+  CHECK(p.size() == 2 + 5 * 18);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  auto caret = [&](uint32_t i) { return edit::Range{{p[i], 0}, {p[i], 0}}; };
+  auto span = [&](uint32_t first, uint32_t last) {
+    return edit::Range{{p[first], 0}, {p[last], static_cast<uint32_t>(doc->Para(p[last]).text.size())}};
+  };
+
+  edit::ApplyStyle(ed, caret(0), "Title");
+  edit::ApplyStyle(ed, caret(1), "Subtitle");
+  edit::ParaFormat center;
+  center.jc = Justification::Center;
+  edit::FormatParagraphs(ed, span(0, 1), center);
+  for (uint32_t s = 0; s < 5; ++s) {
+    uint32_t h = 2 + s * 18;
+    edit::ApplyStyle(ed, caret(h), "Heading 1");
+    edit::ApplyStyle(ed, caret(h + 14), "heading 2");
+    edit::ToggleList(ed, span(h + 7, h + 10), edit::ListKind::Bullet);
+    edit::ToggleList(ed, span(h + 11, h + 13), s == 4 ? edit::ListKind::Multilevel : edit::ListKind::Number);
+    edit::ParaFormat text;
+    text.jc = Justification::Both;
+    text.spaceAfter = Twips(160);
+    if (s == 1) {
+      text.line = 360;
+      text.lineRule = fw::doc::LineRule::Auto;
+    }
+    edit::FormatParagraphs(ed, span(h + 1, h + 6), text);
+  }
+  // A second level in the last list, and some character formatting.
+  edit::ShiftIndent(ed, caret(2 + 4 * 18 + 12), true);
+  edit::ToggleRuns(ed, {{p[3], 4}, {p[3], 11}}, edit::Toggle::Bold);
+  edit::ToggleRuns(ed, {{p[3], 12}, {p[3], 18}}, edit::Toggle::Italic);
+  edit::RunFormat accent;
+  accent.color = fw::doc::Color::Rgb(0x2F5496);
+  edit::FormatRuns(ed, {{p[4], 0}, {p[4], 20}}, accent);
+
+  // What Word would show.
+  CHECK(doc->ResolvedPara(p[0]).style == "Title" && doc->ResolvedPara(p[0]).jc == Justification::Center);
+  CHECK(At(*doc, p[0], 0).size.Value() == 56 && doc->ResolvedPara(p[1]).style == "Subtitle");
+  for (uint32_t s = 0; s < 5; ++s) {
+    uint32_t h = 2 + s * 18;
+    CHECK(doc->ResolvedPara(p[h]).style == "Heading1" && At(*doc, p[h], 0).size.Value() == 32);
+    CHECK(doc->ResolvedPara(p[h + 14]).style == "Heading2");
+    CHECK(doc->ResolvedPara(p[h + 1]).jc == Justification::Both && doc->ResolvedPara(p[h + 1]).spaceAfter.Value() == 160);
+    for (uint32_t i = 0; i < 4; ++i) CHECK(doc->Label(p[h + 7 + i]) && doc->Label(p[h + 7 + i])->bullet);
+    if (s < 4) {
+      CHECK(LabelOf(*doc, p[h + 11]) == u"1." && LabelOf(*doc, p[h + 12]) == u"2." && LabelOf(*doc, p[h + 13]) == u"3.");
+    } else {
+      CHECK(LabelOf(*doc, p[h + 11]) == u"1." && LabelOf(*doc, p[h + 12]) == u"1.1." && LabelOf(*doc, p[h + 13]) == u"2.");
+    }
+  }
+  CHECK(doc->ResolvedPara(p[2 + 18 + 1]).line == 360);
+  CHECK(At(*doc, p[3], 5).bold && At(*doc, p[3], 13).italic && !At(*doc, p[3], 0).bold);
+  // Laid out, it's a report of more than five pages.
+  {
+    fw::text::Fonts fonts;
+    fw::doc::layout::Layout layout(*doc, fonts);
+    layout.LayOutAll();
+    CHECK(layout.PageCount() >= 5);
+  }
+  // Saved, it passes the checker and reads back the same.
+  auto again = SaveAndReopen(*doc);
+  CHECK(again);
+  if (again) {
+    auto q = MainParas(*again);
+    CHECK(again->ResolvedPara(q[2]).style == "Heading1" && LabelOf(*again, q[2 + 11]) == u"1.");
+    CHECK(again->Label(q[2 + 7]) && again->Label(q[2 + 7])->bullet);
+  }
+  // And every step undoes, back to the text as it was typed.
+  while (editor.Undo()) {
+  }
+  CHECK(MainXml(*doc) == original && PartXml(*doc, PartKind::Styles) == styles);
 }
