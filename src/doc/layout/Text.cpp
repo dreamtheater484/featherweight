@@ -1,6 +1,8 @@
 // From the model's paragraphs to fwtext's (Internal.h): resolved properties to text styles and
 // paragraph formats, the list label, field results that pagination computes, note reference
 // marks, inline objects, and what the view hides (field codes, deleted text, markers).
+#include <windows.h>
+
 #include <algorithm>
 #include <cwctype>
 
@@ -88,7 +90,118 @@ std::string_view FormatSwitch(std::u16string_view code) {
   return {};
 }
 
+// DATE and TIME, which Word updates when it opens a document (plan §6.2). The other date fields
+// (CREATEDATE, SAVEDATE, PRINTDATE) keep their results.
+bool IsDateField(std::u16string_view type) { return type == u"DATE" || type == u"TIME"; }
+
+// The \@ switch's date-time picture: quoted ("MMMM d, yyyy") or one word (dd.MM.yy).
+std::wstring DatePicture(std::u16string_view code) {
+  const size_t at = code.find(u"\\@");
+  if (at == std::u16string_view::npos) return {};
+  std::u16string_view rest = code.substr(at + 2);
+  while (!rest.empty() && rest.front() == u' ') rest.remove_prefix(1);
+  if (rest.empty()) return {};
+  if (rest.front() == u'"') {
+    const size_t end = rest.find(u'"', 1);
+    rest = rest.substr(1, end == std::u16string_view::npos ? std::u16string_view::npos : end - 1);
+  } else {
+    rest = rest.substr(0, rest.find(u' '));
+  }
+  return std::wstring(rest.begin(), rest.end());
+}
+
+// `t` as Word shows a DATE or TIME field: by the picture's codes (M MM MMM MMMM, d dd ddd dddd, yy
+// yyyy, h hh H HH, m mm, s ss, AM/PM am/pm A/P a/p, 'literal text'), with month and day names in
+// the field's language; with no picture, the language's short date (DATE) or its time (TIME).
+std::u16string FormatDateTime(const SYSTEMTIME& t, const std::wstring& picture, bool time, const wchar_t* locale) {
+  std::wstring out;
+  auto names = [&](const wchar_t* code) {  // names from Windows, in the language
+    wchar_t b[128];
+    const int n = GetDateFormatEx(locale, 0, &t, code, b, 128, nullptr);
+    if (n > 1) out.append(b, static_cast<size_t>(n - 1));
+  };
+  auto num = [&](int v, bool two) {
+    wchar_t b[16];
+    swprintf_s(b, two ? L"%02d" : L"%d", v);
+    out += b;
+  };
+  if (picture.empty()) {
+    wchar_t b[128];
+    const int n = time ? GetTimeFormatEx(locale, TIME_NOSECONDS, &t, nullptr, b, 128)
+                       : GetDateFormatEx(locale, DATE_SHORTDATE, &t, nullptr, b, 128, nullptr);
+    if (n > 1) out.assign(b, static_cast<size_t>(n - 1));
+    return std::u16string(out.begin(), out.end());
+  }
+  auto designator = [&](bool pm) {
+    wchar_t b[32] = {};
+    std::wstring d = GetLocaleInfoEx(locale, pm ? LOCALE_S2359 : LOCALE_S1159, b, 32) > 1 ? std::wstring(b) : std::wstring();
+    return d.empty() ? std::wstring(pm ? L"PM" : L"AM") : d;
+  };
+  const std::wstring& p = picture;
+  for (size_t i = 0; i < p.size();) {
+    const wchar_t c = p[i];
+    if (c == L'\'') {  // text as it is
+      const size_t end = p.find(L'\'', i + 1);
+      out += p.substr(i + 1, (end == std::wstring::npos ? p.size() : end) - i - 1);
+      i = end == std::wstring::npos ? p.size() : end + 1;
+      continue;
+    }
+    auto at = [&](std::wstring_view w) { return _wcsnicmp(p.c_str() + i, w.data(), w.size()) == 0 && p.size() - i >= w.size(); };
+    if (at(L"AM/PM") || at(L"A/P")) {
+      std::wstring d = designator(t.wHour >= 12);
+      const bool lower = c == L'a';
+      if (at(L"A/P")) d = d.substr(0, 1);
+      for (wchar_t& ch : d) ch = lower ? static_cast<wchar_t>(std::towlower(ch)) : static_cast<wchar_t>(std::towupper(ch));
+      out += d;
+      i += at(L"A/P") ? 3 : 5;
+      continue;
+    }
+    size_t n = 1;
+    while (i + n < p.size() && p[i + n] == c) ++n;
+    switch (c) {
+      case L'M':
+        if (n <= 2) num(t.wMonth, n == 2);
+        else names(n == 3 ? L"MMM" : L"MMMM");
+        break;
+      case L'd':
+      case L'D':
+        if (n <= 2) num(t.wDay, n == 2);
+        else names(n == 3 ? L"ddd" : L"dddd");
+        break;
+      case L'y':
+      case L'Y':
+        if (n <= 2) num(t.wYear % 100, true);
+        else num(t.wYear, false);
+        break;
+      case L'h': num(t.wHour % 12 == 0 ? 12 : t.wHour % 12, n >= 2); break;
+      case L'H': num(t.wHour, n >= 2); break;
+      case L'm': num(t.wMinute, n >= 2); break;
+      case L's':
+      case L'S': num(t.wSecond, n >= 2); break;
+      default: out.append(n, c); break;
+    }
+    i += n;
+  }
+  return std::u16string(out.begin(), out.end());
+}
+
 }  // namespace
+
+std::u16string DateFieldResult(std::u16string_view code, int64_t now, std::string_view lang) {
+  const size_t s = code.find_first_not_of(u' ');
+  if (s == std::u16string_view::npos || now == 0) return {};
+  const size_t e = code.find(u' ', s);
+  const std::u16string_view type = code.substr(s, e == std::u16string_view::npos ? std::u16string_view::npos : e - s);
+  if (!IsDateField(type)) return {};
+  FILETIME ft;
+  ft.dwLowDateTime = static_cast<DWORD>(static_cast<uint64_t>(now) & 0xFFFFFFFFu);
+  ft.dwHighDateTime = static_cast<DWORD>(static_cast<uint64_t>(now) >> 32);
+  SYSTEMTIME utc, local;
+  if (!FileTimeToSystemTime(&ft, &utc) || !SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local)) return {};
+  std::wstring locale(lang.begin(), lang.end());
+  const wchar_t* name = !locale.empty() && IsValidLocaleName(locale.c_str()) ? locale.c_str() : LOCALE_NAME_USER_DEFAULT;
+  return FormatDateTime(local, DatePicture(code), type == u"TIME", name);
+}
 
 const text::TextStyle* StylePool::Intern(const text::TextStyle& style) {
   std::wstring key = StyleKey(style);
@@ -301,7 +414,16 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
     for (const Field& f : StoryFields(model.story)) {
       if (f.separator.para != para || f.end.para != para || !f.complete) continue;
       PageField kind = PageFieldOf(f.Type());
-      if (kind == PageField::None) continue;
+      if (kind == PageField::None) {
+        if (options_.now == 0 || !IsDateField(f.Type())) continue;
+        // In the language of the result's first character.
+        std::string_view lang;
+        for (const TextRun& r : doc_.Runs(para))
+          if (r.run && r.start <= f.separator.offset + 1 && f.separator.offset + 1 < r.end) lang = doc_.ResolvedRun(para, r.run).lang;
+        std::u16string value = DateFieldResult(f.code, options_.now, lang);
+        if (!value.empty()) replaces.push_back({f.separator.offset + 1, f.end.offset, std::move(value)});
+        continue;
+      }
       std::u16string value = kind == PageField::Page       ? fields.page
                              : kind == PageField::NumPages ? fields.pages
                                                            : fields.sectionPages;
@@ -347,6 +469,16 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
       size_t s = code.find_first_not_of(u' ');
       size_t e = s == std::u16string::npos ? s : code.find(u' ', s);
       PageField kind = s == std::u16string::npos ? PageField::None : PageFieldOf(std::u16string_view(code).substr(s, e - s));
+      if (kind == PageField::None && options_.now != 0) {
+        if (std::u16string value = DateFieldResult(code, options_.now, rp.lang); !value.empty()) {
+          uint32_t end = run.end;
+          while (r + 1 < runs.size() && runs[r + 1].simpleField == run.simpleField) end = runs[++r].end;
+          subst(run.start, end - run.start, value, style, paint);
+          visible = true;
+          covered = end;
+          continue;
+        }
+      }
       if (kind != PageField::None) {
         if (kind != PageField::Page) out.usesPageCount = true;
         else out.usesPage = true;
