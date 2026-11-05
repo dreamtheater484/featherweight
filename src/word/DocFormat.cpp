@@ -731,7 +731,7 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
   ToolItem insert;
   insert.kind = ToolKind::Dropdown;
   insert.cmd = CmdInsertBox;
-  insert.width = 92;
+  insert.width = 104;
   insert.glyph = icon::Add;
   insert.text = L"Insert";
   insert.tooltip = L"Insert the date or time";

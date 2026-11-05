@@ -114,12 +114,14 @@ void TreeEdit::Replay(Document& doc, const std::vector<StoreOp>& ops, bool undo)
   if (undo) {
     for (auto op = ops.rbegin(); op != ops.rend(); ++op) {
       if (op->kind == StoreOp::Split) store.Merge(op->node, op->second, op->at.firstMoved);
-      else store.SetNodeAttributes(op->node, op->before);
+      else if (op->kind == StoreOp::SetAttrs) store.SetNodeAttributes(op->node, op->before);
+      else store.SetFragments(op->node, op->fragmentsBefore);
     }
   } else {
     for (const StoreOp& op : ops) {
       if (op.kind == StoreOp::Split) store.Split(op.node, op.second, op.at);
-      else store.SetNodeAttributes(op.node, op.after);
+      else if (op.kind == StoreOp::SetAttrs) store.SetNodeAttributes(op.node, op.after);
+      else store.SetFragments(op.node, op.fragmentsAfter);
     }
   }
 }
@@ -226,6 +228,40 @@ void TreeEdit::Link(ElemId parent, ElemId child, ElemId before) {
     E(prev).next = child;
   }
   E(child).parent = parent;
+  // Kept content after the last known child (the w14 extensions that end w:rPr) stays last.
+  if (prev != kNoElem && E(child).next == kNoElem) MoveFragments(prev, child, pkg::Slot::After, false, false);
+}
+
+// Moves `from`'s kept fragments after it (and before it, with `before`) to `to`, in `slot`: first
+// among to's fragments when `first`, after them otherwise.
+void TreeEdit::MoveFragments(ElemId from, ElemId to, pkg::Slot slot, bool first, bool before) {
+  auto real = [](pkg::NodeId n) { return n != pkg::kNoNode && n != pkg::kFieldNode; };
+  const pkg::NodeId a = E(from).node, b = E(to).node;
+  if (!real(a) || !real(b) || a == b) return;
+  std::vector<pkg::Fragment> stay, move;
+  for (pkg::Fragment& f : doc_.store_.FragmentsCopy(a)) {
+    bool outside = f.slot == pkg::Slot::After || (before && f.slot == pkg::Slot::Before);
+    (outside ? move : stay).push_back(std::move(f));
+  }
+  if (move.empty()) return;
+  for (pkg::Fragment& f : move) {
+    f.slot = slot;
+    f.afterChild.clear();
+  }
+  std::vector<pkg::Fragment> there = doc_.store_.FragmentsCopy(b);
+  there.insert(first ? there.begin() : there.end(), move.begin(), move.end());
+  StoreFragments(a, std::move(stay));
+  StoreFragments(b, std::move(there));
+}
+
+void TreeEdit::StoreFragments(pkg::NodeId node, std::vector<pkg::Fragment> fragments) {
+  StoreOp op;
+  op.kind = StoreOp::Fragments;
+  op.node = node;
+  op.fragmentsBefore = doc_.store_.FragmentsCopy(node);
+  op.fragmentsAfter = fragments;
+  doc_.store_.SetFragments(node, std::move(fragments));
+  store_.push_back(std::move(op));
 }
 
 ElemId TreeEdit::Insert(ElemId parent, ElemDefId def, ElemId before) {
@@ -271,6 +307,11 @@ void TreeEdit::RemoveElement(ElemId elem) {
   } else {
     Touch(prev).next = next;
   }
+  // Kept content beside it stays where it was: after the previous known child, before the next,
+  // or first in the parent.
+  if (prev != kNoElem) MoveFragments(elem, prev, pkg::Slot::After, false, true);
+  else if (next != kNoElem) MoveFragments(elem, next, pkg::Slot::Before, true, true);
+  else MoveFragments(elem, parent, pkg::Slot::Inside, true, true);
 }
 
 void TreeEdit::Remove(ElemId parent, uint32_t name) {

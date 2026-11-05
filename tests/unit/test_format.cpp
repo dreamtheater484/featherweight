@@ -812,3 +812,45 @@ TEST(Report_FiveFormattedPages) {
   }
   CHECK(MainXml(*doc) == original && PartXml(*doc, PartKind::Styles) == styles);
 }
+
+TEST(Edit_KeptExtensionsStayInSchemaOrder) {
+  // d2-torture finding 3: w14 extensions end a run's properties, and w:rPr starts the run.
+  Fixture f;
+  f.body = "<w:p><w:r><w:rPr><w:sz w:val=\"24\"/><w14:ligatures w14:val=\"standard\"/></w:rPr><w:t>liga</w:t></w:r>"
+           "<w:r><mc:AlternateContent><mc:Choice Requires=\"w14\"><w:t>alt</w:t></mc:Choice>"
+           "<mc:Fallback><w:t>alt</w:t></mc:Fallback></mc:AlternateContent></w:r><w:r><w:t>end</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  uint32_t p = MainParas(*doc)[0];
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  edit::RunFormat fmt;
+  fmt.bold = true;
+  fmt.underline = fw::doc::Underline::Single;
+  fmt.vertAlign = fw::doc::VertAlign::Superscript;
+  edit::FormatRuns(ed, Whole(*doc, p), fmt);
+  std::string xml = MainXml(*doc);
+  size_t liga = xml.find("<w14:ligatures");
+  CHECK(liga != std::string::npos);
+  for (const char* prop : {"<w:b/>", "<w:u ", "<w:vertAlign"}) {
+    size_t at = xml.find(prop);
+    CHECK(at != std::string::npos && at < liga);
+  }
+  // Text shown from mc:AlternateContent isn't edited; nothing goes after it in its run.
+  CHECK(xml.find("</mc:AlternateContent><w:rPr") == std::string::npos);
+  // Back to the style's size: w:sz goes, and the ligatures it carried stay.
+  edit::RunFormat plain;
+  plain.size = HalfPoints(20);
+  edit::FormatRuns(ed, Whole(*doc, p), plain);
+  xml = MainXml(*doc);
+  CHECK(xml.find("<w:sz ") == std::string::npos && xml.find("<w14:ligatures") != std::string::npos);
+  CHECK(xml.find("<w14:ligatures") > xml.find("<w:vertAlign"));
+  edit::ClearRunFormatting(ed, Whole(*doc, p));
+  CHECK(MainXml(*doc).find("<w14:ligatures") != std::string::npos);
+  CHECK(SaveAndReopen(*doc) != nullptr);
+  const std::string cleared = MainXml(*doc);
+  CHECK(editor.Undo() && editor.Undo() && editor.Undo());
+  CHECK(MainXml(*doc).find("<w:sz w:val=\"24\"/><w14:ligatures") != std::string::npos);
+  CHECK(editor.Redo() && editor.Redo() && editor.Redo() && MainXml(*doc) == cleared);
+}

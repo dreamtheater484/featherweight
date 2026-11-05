@@ -81,10 +81,11 @@ class TreeEdit {
  private:
   friend struct JournalStep;
   struct StoreOp {
-    enum Kind : uint8_t { Split, SetAttrs } kind = Split;
+    enum Kind : uint8_t { Split, SetAttrs, Fragments } kind = Split;
     pkg::NodeId node = pkg::kNoNode, second = pkg::kNoNode;
     pkg::SplitPoint at;
-    pkg::AttrSetId before = 0, after = 0;  // SetAttrs
+    pkg::AttrSetId before = 0, after = 0;                        // SetAttrs
+    std::vector<pkg::Fragment> fragmentsBefore, fragmentsAfter;  // Fragments
   };
   using Saved = std::vector<std::pair<ElemId, Elem>>;
   static void Restore(Document& doc, const Saved& elems);
@@ -103,6 +104,8 @@ class TreeEdit {
   void WriteAttrs(ElemId elem, const std::vector<AttrVal>& attrs);
   void StoreSplit(pkg::NodeId node, pkg::NodeId second, pkg::SplitPoint at);
   void StoreSetAttrs(pkg::NodeId node, pkg::AttrSetId set);
+  void StoreFragments(pkg::NodeId node, std::vector<pkg::Fragment> fragments);
+  void MoveFragments(ElemId from, ElemId to, pkg::Slot slot, bool first, bool before);
   std::vector<uint32_t> PartsOf(const Saved& elems) const;
 
   Editor& editor_;
