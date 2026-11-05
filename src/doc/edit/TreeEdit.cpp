@@ -245,7 +245,7 @@ std::vector<uint32_t> TreeEdit::PartsOf(const Saved& elems) const {
 }
 
 void TreeEdit::Reindex() {
-  doc_.caches_ = std::make_unique<Document::Caches>();
+  doc_.ResetCaches();
   doc_.BuildIndexes();
 }
 

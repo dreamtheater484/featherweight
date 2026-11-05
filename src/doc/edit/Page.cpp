@@ -264,7 +264,7 @@ Result SetSectionStart(Editor& editor, uint32_t section, SectionStart start) {
   if (doc.Sections()[section].props.start == start) return Result{};
   TreeEdit ed(editor);
   ed.Begin(u"Section start");
-  ed.Affects(SectionParagraphs(doc, section).first, SectionParagraphs(doc, section).second);
+  ed.Affects(SectionParagraphs(doc, section).first, SectionParagraphs(doc, section).second, true);
   if (const ElemId sectPr = SectPrOf(ed, section); sectPr != kNoElem) SetStart(ed, sectPr, start);
   ed.Commit();
   return Result{};

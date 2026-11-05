@@ -85,8 +85,14 @@ struct Engine::Impl {
   std::vector<Zone> zones;
   std::vector<uint32_t> notes;  // footnote stories on the page, in order
   float notesHeight = 0;        // with the separator
-  std::unordered_map<uint32_t, Stack> noteStacks;
+  // Notes stacked at a width (a page setup may change it, D3).
+  struct NoteStackAt {
+    float width = 0;
+    Stack stack;
+  };
+  std::unordered_map<uint32_t, NoteStackAt> noteStacks;
   float noteWidth = 0;
+  float separatorWidth = -1;  // what separatorHeight was measured at
   size_t hfLines = 0;  // header and footer lines first on the page, for refreshing page counts
   bool hfUsesCount = false;
 
@@ -222,7 +228,7 @@ static void FlattenBody(const Document& doc, std::vector<Item>& items) {
 }
 
 Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, OpenTimings* timings)
-    : impl_(new Impl), doc_(doc), fonts_(fonts), options_(options), timings_(timings) {
+    : impl_(new Impl), doc_(doc), fonts_(fonts), options_(options), timings_(timings), generation_(doc.CacheGeneration()) {
   compatMode_ = doc.Settings().compatibilityMode > 0 ? doc.Settings().compatibilityMode : 12;
   sumSpacing_ = doc.Settings().Compat(Name("doNotUseHTMLParagraphAutoSpacing"));
   fieldsCount_.assign(doc.Stories().size(), 0);
@@ -547,8 +553,8 @@ struct Flow {
 
   Stack NoteStack(uint32_t story) {
     auto it = f.noteStacks.find(story);
-    if (it != f.noteStacks.end()) {
-      Stack copy = it->second;
+    if (it != f.noteStacks.end() && it->second.width == f.noteWidth) {
+      Stack copy = it->second.stack;
       return copy;
     }
     Frame frame;
@@ -557,12 +563,12 @@ struct Flow {
     frame.width = f.noteWidth;
     frame.story = doc.Stories()[story].kind == StoryKind::Endnote ? LineStory::Endnote : LineStory::Footnote;
     Stack s = e.StackStory(story, frame);
-    return f.noteStacks.emplace(story, s).first->second;
+    return f.noteStacks.insert_or_assign(story, Engine::Impl::NoteStackAt{f.noteWidth, s}).first->second.stack;
   }
 
   float NoteHeight(uint32_t story) {
     auto it = f.noteStacks.find(story);
-    return it != f.noteStacks.end() ? it->second.height : NoteStack(story).height;
+    return it != f.noteStacks.end() && it->second.width == f.noteWidth ? it->second.stack.height : NoteStack(story).height;
   }
 
   // Footnotes the cells of a row refer to between cutFrom and cutTo (null: from the top, to the
@@ -586,7 +592,10 @@ struct Flow {
   }
 
   float SeparatorHeight() {
-    if (f.separatorHeight < 0) f.separatorHeight = Separator().height;
+    if (f.separatorHeight < 0 || f.separatorWidth != f.noteWidth) {
+      f.separatorHeight = Separator().height;
+      f.separatorWidth = f.noteWidth;
+    }
     return f.separatorHeight;
   }
 
@@ -1545,8 +1554,25 @@ struct Flow {
         // begins.
         size_t k = n;
         while (k > 0 && touched(f.checkpoints[k])) --k;
-        if (k < n || f.old.empty()) {
-          restart = k > 0 ? k - 1 : 0;
+        size_t from = k > 0 ? k - 1 : 0;
+        // A change to how a section starts (on the same page now, or without the blank page before
+        // it) can bring it back to the page where what's before it ends, and keep-with-next the
+        // page before that one too.
+        bool back = false;
+        if (structure && tableRow == SIZE_MAX) {
+          // The first page that starts with what's before it laid out, or in the section it's in
+          // (the flow enters a section before its first item).
+          const uint32_t sec = itemFrom < f.items.size() ? f.items[itemFrom].section : kNone;
+          auto before = [&](const Checkpoint& c) { return c.next < itemFrom && (c.section == kNone || c.section < sec); };
+          size_t done = 0;
+          while (done <= k && before(f.checkpoints[done])) ++done;
+          if (const size_t page = done >= 2 ? done - 2 : 0; done <= k && page < from) {
+            from = page;
+            back = true;
+          }
+        }
+        if (k < n || f.old.empty() || back) {
+          restart = from;
         } else {
           // Not reached yet: it's on an old page, which then isn't taken back as it is.
           size_t q = n;
@@ -1825,7 +1851,22 @@ std::shared_ptr<CachedPara> Engine::KeepLines(uint32_t para, float width, bool b
   return c;
 }
 
+void Engine::Rebase() {
+  if (doc_.CacheGeneration() == generation_) return;
+  generation_ = doc_.CacheGeneration();
+  Impl& f = *impl_;
+  f.lineCache.clear();  // every paragraph's version changed too
+  const size_t n = doc_.Paragraphs().size();
+  auto fix = [&](const std::shared_ptr<ParaText>& pt) {
+    if (pt && pt->para < n) pt->props = &doc_.ResolvedPara(pt->para);
+  };
+  fix(f.pt);
+  for (auto& c : f.checkpoints) fix(c.pt);
+  for (auto& o : f.old) fix(o.after.pt);
+}
+
 bool Engine::NextPage() {
+  Rebase();
   Flow flow(*this);
   Impl& f = *impl_;
   if (f.checkpoints.empty()) f.checkpoints.push_back(flow.Save());
@@ -1865,6 +1906,7 @@ bool Engine::NextPage() {
 }
 
 void Engine::Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added, bool structure) {
+  Rebase();
   Flow(*this).Edited(story, first, removed, added, structure);
 }
 

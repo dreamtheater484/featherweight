@@ -834,7 +834,7 @@ size_t Document::RenameInModel(pkg::RefKind kind, std::string_view from, std::st
     }
   }
   if (changed) {
-    caches_ = std::make_unique<Caches>();
+    ResetCaches();
     BuildIndexes();
   }
   return changed;
@@ -1063,6 +1063,11 @@ void Document::BuildIndexes() {
   }
 
   BuildSections();
+}
+
+void Document::ResetCaches() {
+  caches_ = std::make_unique<Caches>();
+  ++cacheGeneration_;
 }
 
 void Document::BuildSections() {
