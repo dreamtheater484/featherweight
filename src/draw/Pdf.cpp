@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <cfloat>
-#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -31,22 +30,24 @@ namespace {
 // ---------------------------------------------------------------------------
 // Writing
 
-// A number as PDF writes it: at most 3 decimals, no trailing zeros.
+// A number as PDF writes it: at most 3 decimals, no trailing zeros. (std::to_chars for doubles
+// would bring over 100 KB of tables into the exe, as Vml.cpp found.)
 void Num(std::string& out, double v) {
-  if (!std::isfinite(v) || std::abs(v) < 0.0005) {
+  const long long milli = std::llround(std::clamp(std::isfinite(v) ? v : 0.0, -1e12, 1e12) * 1000);
+  if (milli == 0) {
     out += '0';
     return;
   }
-  char buf[48];
-  auto r = std::to_chars(buf, buf + sizeof buf, v, std::chars_format::fixed, 3);
-  char* end = r.ptr;
-  while (end > buf && end[-1] == '0') --end;
-  if (end > buf && end[-1] == '.') --end;
-  if (end - buf == 2 && buf[0] == '-' && buf[1] == '0') {
-    out += '0';
-    return;
+  const unsigned long long m = milli < 0 ? 0ull - static_cast<unsigned long long>(milli) : milli;
+  if (milli < 0) out += '-';
+  out += std::to_string(m / 1000);
+  if (const unsigned f = static_cast<unsigned>(m % 1000)) {
+    const char digits[3] = {static_cast<char>('0' + f / 100), static_cast<char>('0' + f / 10 % 10), static_cast<char>('0' + f % 10)};
+    size_t n = 3;
+    while (digits[n - 1] == '0') --n;
+    out += '.';
+    out.append(digits, n);
   }
-  out.append(buf, end);
 }
 std::string N(double v) {
   std::string s;
@@ -820,8 +821,8 @@ class PdfPainter : public Painter {
   }
 
   // Sets the fill (or stroke) paint, runs `draw`, and puts the state back if it had to change it.
-  template <typename Draw>
-  void Paint(const Brush& b, bool stroke, Draw draw, const Rect& bounds) {
+  // (A std::function, not a template: each instance would be another 7 KB.)
+  void Paint(const Brush& b, bool stroke, const std::function<void()>& draw, const Rect& bounds) {
     State& s = states_.back();
     if (b.kind == Brush::Kind::Solid || ((b.kind == Brush::Kind::Linear || b.kind == Brush::Kind::Radial) && b.stops.size() < 2)) {
       const Color c = b.kind == Brush::Kind::Solid ? b.color : (b.stops.empty() ? Color{0, 0, 0, 0} : b.stops[0].color);
