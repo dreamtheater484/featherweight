@@ -584,10 +584,28 @@ TEST(Layout_TypingLaysOutAPageOrTwo) {
     CHECK(d.layout->Done());
   }
   CHECK(SameAsFresh(*d.doc, *d.layout, "after typing"));
+  // The caret and a selection across the change, on the pages laid out again.
+  const auto caret = d.layout->CaretAt({0, 7});
+  REQUIRE(caret);
+  CHECK_EQ(caret->page, 0u);
+  CHECK(!d.layout->Ranges({0, 0}, {1, 3}).empty());
   // Enter at the start pushes everything down a line: laid out again to the end, in idle time.
   REQUIRE(ed.SplitParagraph({0, 0}));
   d.layout->LayOutPages(1);
   CHECK_EQ(d.pages(), pages);
+  // Until then the old pages show what they did, under the paragraphs' new indices.
+  const Page& old = d.page(20);
+  const LineBox* line = nullptr;
+  for (const LineBox& l : old.lines)
+    if (l.story == fw::LayoutStory::Body && !l.text.empty() && l.line.start == 0) {
+      line = &l;
+      break;
+    }
+  REQUIRE(line);
+  CHECK(d.doc->Para(line->para).text.compare(0, line->text.size(), line->text) == 0);
+  const auto hit = d.layout->HitTest(20, line->x + line->line.left + 1, line->top + line->height / 2);
+  REQUIRE(hit);
+  CHECK_EQ(hit->para, line->para);
   d.layout->LayOutAll();
   CHECK(SameAsFresh(*d.doc, *d.layout, "after Enter"));
 }
