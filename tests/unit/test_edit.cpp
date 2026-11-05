@@ -1600,3 +1600,28 @@ TEST(Edit_UndoPutsBackMarkersBetweenParagraphs) {
   while (ed.CanUndo()) ed.Undo();
   CHECK(MainXml(*doc) == before && RoundTrips(*doc));
 }
+
+TEST(Edit_SplitBeforeKeptAlternateContentGoesAfterIt) {
+  // d1-corpus finding 11: Enter just before text shown from a kept mc:AlternateContent block (its
+  // chosen branch, written as the whole block). The block is kept beside the element before it, so
+  // the text stays with it in the first paragraph, as the file has it.
+  Fixture f;
+  f.body =
+      "<w:p><w:bookmarkStart w:id=\"5\" w:name=\"Mark\"/><w:r><w:t>marked</w:t></w:r><w:bookmarkEnd w:id=\"5\"/>"
+      "<mc:AlternateContent><mc:Choice Requires=\"w14\"><w:r><w:t xml:space=\"preserve\"> (new)</w:t></w:r></mc:Choice>"
+      "<mc:Fallback><w:r><w:t xml:space=\"preserve\"> (old)</w:t></w:r></mc:Fallback></mc:AlternateContent>"
+      "<x:kept>kept</x:kept></w:p><w:p><w:r><w:t>Next</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  CHECK(ps.size() == 2 && doc->Para(ps[0]).text == u"marked (new)");
+  if (ps.size() != 2) return;
+  auto r = ed.SplitParagraph(P(ps[0], 6));
+  CHECK(r && Main(*doc).size() == 3);
+  CHECK(doc->Para(Main(*doc)[0]).text == u"marked (new)" && doc->Para(Main(*doc)[1]).text.empty());
+  CHECK(Consistent(*doc, f));
+  CHECK(ed.Undo() && MainXml(*doc) == before && RoundTrips(*doc));
+}
