@@ -85,6 +85,7 @@ pkg::NodeId TreeEdit::NewNode() { return editor_.NewNodeId(); }
 void TreeEdit::Begin(std::u16string label) {
   if (depth_++ > 0) return;
   label_ = std::move(label);
+  refused_.clear();
   local_ = toEnd_ = structure_ = false;
   affects_ = {kNone, kNone};
   owned_.clear();
@@ -97,8 +98,24 @@ void TreeEdit::Begin(std::u16string label) {
 void TreeEdit::Commit() {
   if (depth_ == 0 || --depth_ > 0) return;
   Tree& t = doc_.tree_;
+  if (before_.empty() && store_.empty() && t.elems.size() == elemsAtBegin_) {
+    touched_.clear();
+    return;
+  }
+  // Text the editor doesn't edit changes nothing: the change goes back as a whole.
+  {
+    std::unordered_map<ElemId, bool> memo;
+    std::u16string why;
+    bool ok = true;
+    for (const auto& [id, old] : before_) ok = ok && Editable(id, memo, why);
+    for (size_t id = elemsAtBegin_; ok && id < t.elems.size(); ++id) ok = Editable(static_cast<ElemId>(id), memo, why);
+    if (!ok) {
+      Discard();
+      refused_ = why;
+      return;
+    }
+  }
   touched_.clear();
-  if (before_.empty() && store_.empty() && t.elems.size() == elemsAtBegin_) return;
   auto step = std::make_shared<JournalStep>(doc_);
   step->before = std::move(before_);
   for (const auto& [id, old] : step->before) step->after.emplace_back(id, t.elems[id]);
@@ -141,6 +158,38 @@ void TreeEdit::Commit() {
     if (caret.para == kNone) caret = {affects_.first, 0};
   }
   editor_.RecordStep(std::move(label_), std::move(step), caret);
+}
+
+bool TreeEdit::Editable(ElemId id, std::unordered_map<ElemId, bool>& memo, std::u16string& why) const {
+  static constexpr uint32_t kTextBox = Name("txbxContent");
+  const Tree& t = doc_.tree_;
+  std::vector<ElemId> chain;
+  bool verdict = true;
+  for (ElemId e = id; e != kNoElem; e = t.elems[e].parent) {
+    if (auto it = memo.find(e); it != memo.end()) {
+      verdict = it->second;
+      break;
+    }
+    chain.push_back(e);
+    if ((t.elems[e].flags & kDisplayOnly) || NameOfElem(t, e) == kTextBox) {
+      verdict = false;
+      why = NameOfElem(t, e) == kTextBox ? u"Text in a text box can't be formatted yet."
+                                         : u"This text is kept as the file has it, so it can't be formatted.";
+      break;
+    }
+    if (t.elems[e].parent == kNoElem || chain.size() > 512) {
+      // The top: a part's root (an element linked nowhere, an old copy, is fine).
+      for (const Part& part : doc_.parts_)
+        if (part.root == e && (!part.Editable() || !part.writable)) {
+          verdict = false;
+          why = u"This part of the document uses features Featherweight doesn't understand, so it can't be edited.";
+        }
+      break;
+    }
+  }
+  if (!verdict && why.empty()) why = u"This text can't be formatted.";
+  for (ElemId e : chain) memo.emplace(e, verdict);
+  return verdict;
 }
 
 bool TreeEdit::InDefinitions(ElemId id) const {
@@ -196,6 +245,17 @@ std::vector<uint32_t> TreeEdit::PartsOf(const Saved& elems) const {
 void TreeEdit::Reindex() {
   doc_.ResetCaches();
   doc_.BuildIndexes();
+}
+
+void TreeEdit::Discard() {
+  const bool changed = !before_.empty() || !store_.empty();
+  Replay(doc_, store_, true);
+  Restore(doc_, before_);  // new elements stay in the arena, linked nowhere
+  before_.clear();
+  store_.clear();
+  touched_.clear();
+  owned_.clear();
+  if (changed) Reindex();
 }
 
 Elem& TreeEdit::Touch(ElemId id) {
@@ -288,11 +348,15 @@ ElemId TreeEdit::CopyProps(ElemId src, ElemId parent) {
 
 ElemId TreeEdit::Own(ElemId container) {
   // The reader shares one set of children between identical property containers, flagging every
-  // one but the first, whose children they are (Tree.h, kSharedKids). So any container copies its
-  // children before they change, once a transaction (d2-torture finding 4); the others keep the
-  // originals. One made in this transaction, unflagged, has children of its own.
+  // one but the first, whose children they are (Tree.h, kSharedKids). So a container of those
+  // kinds copies its children before they change, once a transaction (d2-torture finding 4); the
+  // others keep the originals. A flagged one always does (Clone shares too). Anything else owns
+  // its children: copying a paragraph's runs would share their text elements, which the editor
+  // and the model's walks then skip (d2-torture findings 7, 8 and 9). One made in this
+  // transaction, unflagged, has children of its own.
   if (E(container).first == kNoElem) return container;
-  if (!(E(container).flags & kSharedKids) && container >= elemsAtBegin_) return container;
+  const bool flagged = (E(container).flags & kSharedKids) != 0;
+  if (!flagged && (container >= elemsAtBegin_ || !SharesChildren(NameOfElem(doc_.tree_, container)))) return container;
   if (!owned_.insert(container).second) return container;
   std::vector<ElemId> kids;
   for (ElemId k = E(container).first; k != kNoElem; k = E(k).next) kids.push_back(k);
