@@ -81,10 +81,17 @@ class Engine {
   void StackTable(Node tbl, const Frame& frame, Stack& out, Spacing& spacing);
 
   // Paragraph pieces shared by the flow and stacks.
-  float LineHeight(const text::Line& line, const ParaProps& p) const;
-  float BaselineIn(const text::Line& line, const ParaProps& p, float height) const;
+  float TextHeight(const ParaText& pt, const text::Line& line);
+  float LineHeight(const ParaText& pt, const text::Line& line);
+  float BaselineIn(const ParaText& pt, const text::Line& line, float height) const;
+  // What of a line's height may hang below the bottom of the page: proportional spacing's extra.
+  float Hang(const ParaText& pt, const text::Line& line, float height) const;
   float SpaceBefore(const ParaProps& p, const Spacing& s) const;
   float SpaceAfter(const ParaProps& p) const;
+  // The room paragraph borders take above a paragraph: its top border, or the between border inside
+  // a group of paragraphs with the same borders, and the bottom border of a group just ended.
+  float BorderAbove(const ParaProps& p, const Spacing& s) const;
+  float BorderBelow(const Spacing& s) const;  // what a group ending the frame still takes
   bool Contextual(const ParaProps& a, const ParaProps& b) const;
   // A floating drawing's box on the page, for a paragraph whose top is at `paraTop`.
   Rect PlaceFloat(const Drawing& d, const Frame& frame, float paraTop, float columnLeft, float columnRight) const;

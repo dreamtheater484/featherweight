@@ -105,32 +105,84 @@ void Stack::Append(Stack&& other, float dx, float dy) {
   usesPageCount = usesPageCount || other.usesPageCount;
 }
 
-float Engine::LineHeight(const text::Line& line, const ParaProps& p) const {
-  float single = line.ascent + line.descent + line.lineGap;
+// The height of a line's text alone, without its inline objects: what proportional spacing adds
+// to (as LibreOffice reproduces Word: a double-spaced line with a picture gets one more line of
+// text height, not twice the picture).
+float Engine::TextHeight(const ParaText& pt, const text::Line& line) {
+  if (line.objects.empty()) return line.ascent + line.descent + line.lineGap;
+  float top = 0, descent = 0;
+  auto use = [&](const text::TextStyle* style) {
+    if (!style) return;
+    const text::FontMetrics& m = styles_.Metrics(fonts_, style);
+    top = std::max(top, m.ascent + m.lineGap);
+    descent = std::max(descent, m.descent);
+  };
+  for (const text::GlyphPiece& g : line.pieces)
+    if (g.run < pt.runs.size()) use(pt.runs[g.run].style);
+  if (line.ending == text::LineEnd::ParagraphEnd || line.pieces.empty()) use(pt.fw.markStyle);
+  return top + descent;
+}
+
+float Engine::LineHeight(const ParaText& pt, const text::Line& line) {
+  const ParaProps& p = *pt.props;
+  const float single = line.ascent + line.descent + line.lineGap;
   switch (p.lineRule) {
     case LineRule::Exact: return std::abs(static_cast<float>(p.line)) / 20.0f;
     case LineRule::AtLeast: return std::max(single, static_cast<float>(p.line) / 20.0f);
-    default: return p.line > 0 ? single * static_cast<float>(p.line) / 240.0f : single;
+    default: {
+      if (p.line <= 0) return single;
+      const float factor = static_cast<float>(p.line) / 240.0f;
+      if (factor < 1) return single * factor;
+      return single + (factor - 1) * TextHeight(pt, line);
+    }
   }
 }
 
-float Engine::BaselineIn(const text::Line& line, const ParaProps&, float height) const {
-  // Word puts what a line's height adds above its text: the baseline is the descent above the
-  // bottom (and an exact height too small for the text cuts the top off).
+float Engine::BaselineIn(const ParaText& pt, const text::Line& line, float height) const {
+  // Proportional and at-least spacing add their space below the text: a double-spaced first line on
+  // a page has its baseline where a single-spaced one would. An exact height puts the baseline 4/5
+  // of the way down, cutting off what doesn't fit; so does proportional spacing under single.
+  const ParaProps& p = *pt.props;
+  const float single = line.ascent + line.descent + line.lineGap;
+  if (p.lineRule == LineRule::Exact) return height * 0.8f;
+  if (p.lineRule == LineRule::Auto && p.line > 0 && p.line < 240) return height * 0.8f;
+  if (height >= single) return line.lineGap + line.ascent;
   return height - line.descent;
+}
+
+float Engine::Hang(const ParaText& pt, const text::Line& line, float height) const {
+  const ParaProps& p = *pt.props;
+  if (p.lineRule != LineRule::Auto || p.line <= 240) return 0;
+  return std::max(0.0f, height - (line.ascent + line.descent + line.lineGap));
 }
 
 bool Engine::Contextual(const ParaProps& a, const ParaProps& b) const { return a.style == b.style; }
 
 float Engine::SpaceBefore(const ParaProps& p, const Spacing& s) const {
   float before = p.spaceBeforeLines >= 0 ? static_cast<float>(p.spaceBeforeLines) * 12.0f / 100.0f : Pt(p.spaceBefore);
-  if (p.spaceBeforeAuto) before = s.atTop && s.prev == nullptr ? 0 : 14;
+  if (p.spaceBeforeAuto) before = s.atTop && s.prev == nullptr ? 0.0f : 14.0f;
   if (s.prev && p.contextualSpacing && Contextual(*s.prev, p)) before = 0;
   float after = s.after;
   if (s.prev && s.prev->contextualSpacing && Contextual(*s.prev, p)) after = 0;
   if (s.afterAuto && p.spaceBeforeAuto) return std::max(after, before);
   return after + before;
 }
+
+namespace {
+float BorderRoom(const Border& b) { return b.Present() ? static_cast<float>(b.spacePt) + Pt(b.width) : 0.0f; }
+bool Bordered(const ParaBorders& b) {
+  return b.top.Present() || b.bottom.Present() || b.start.Present() || b.end.Present() || b.between.Present();
+}
+}  // namespace
+
+float Engine::BorderAbove(const ParaProps& p, const Spacing& s) const {
+  if (s.prev && Bordered(p.borders) && s.prev->borders == p.borders && s.prev->indStart == p.indStart &&
+      s.prev->indEnd == p.indEnd)
+    return BorderRoom(p.borders.between);
+  return BorderRoom(p.borders.top) + (s.prev ? BorderRoom(s.prev->borders.bottom) : 0.0f);
+}
+
+float Engine::BorderBelow(const Spacing& s) const { return s.prev ? BorderRoom(s.prev->borders.bottom) : 0.0f; }
 
 float Engine::SpaceAfter(const ParaProps& p) const {
   if (p.spaceAfterAuto) return 14;
@@ -254,7 +306,7 @@ void Engine::AddLine(const ParaText& pt, text::Line&& line, float x, float top, 
   lb.x = x;
   lb.top = top;
   lb.height = height;
-  lb.baseline = top + BaselineIn(line, *pt.props, height);
+  lb.baseline = top + BaselineIn(pt, line, height);
   lb.prefix = pt.prefix;
   lb.paint = paintBase;
   lb.text = pt.Shown(line.start, line.end, line.hyphenated);
@@ -279,6 +331,7 @@ Stack Engine::StackStory(uint32_t story, const Frame& frame) {
   Frame f = frame;
   if (!f.zones) f.zones = &zones;
   StackBlocks(doc_.Blocks(story), f, out, spacing);
+  out.height += BorderBelow(spacing);
   return out;
 }
 
@@ -298,8 +351,8 @@ void Engine::StackParagraph(uint32_t para, const Frame& frame, Stack& out, Spaci
   if (pt.empty) return;
   const ParaProps& p = *pt.props;
   if (pt.usesPageCount) out.usesPageCount = true;
-  float y = out.height - spacing.after + SpaceBefore(p, spacing);
-  if (spacing.atTop && spacing.prev == nullptr) y = out.height + SpaceBefore(p, spacing);
+  float y = out.height - spacing.after + SpaceBefore(p, spacing) + BorderAbove(p, spacing);
+  if (spacing.atTop && spacing.prev == nullptr) y = out.height + SpaceBefore(p, spacing) + BorderAbove(p, spacing);
   const float paraTop = y;
   // Floats anchored here.
   for (uint32_t a : pt.anchors) {
@@ -318,14 +371,14 @@ void Engine::StackParagraph(uint32_t para, const Frame& frame, Stack& out, Spaci
     text::LineBreaker::State state = breaker.Save();
     if (wrap) space = SpaceBeside(*frame.zones, frame.y + y, estimate, frame.x, frame.x + frame.width);
     text::Line line = breaker.Next(space.left - frame.x, space.right - frame.x);
-    float h = LineHeight(line, p);
+    float h = LineHeight(pt, line);
     if (wrap && h > estimate) {
       text::LineSpace again = SpaceBeside(*frame.zones, frame.y + y, h, frame.x, frame.x + frame.width);
       if (again.left != space.left || again.right != space.right || again.top != space.top) {
         breaker.Restore(state);
         space = again;
         line = breaker.Next(space.left - frame.x, space.right - frame.x);
-        h = LineHeight(line, p);
+        h = LineHeight(pt, line);
       }
     }
     estimate = h;

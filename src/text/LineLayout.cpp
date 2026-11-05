@@ -850,15 +850,23 @@ uint32_t LineBreaker::Impl::Hyphenate(uint32_t segFrom, uint32_t ws, uint32_t we
   return 0;
 }
 
+// Word's line height with several fonts on a line: the tallest ascent with its font's line gap
+// above it, and the deepest descent. (Not the tallest ascent plus the largest gap: a Symbol bullet
+// beside Times New Roman would be 0.4 pt too tall.)
+static void CombineMetrics(Line& line, float ascent, float descent, float gap) {
+  const float top = std::max(line.ascent + line.lineGap, ascent + gap);
+  line.ascent = std::max(line.ascent, ascent);
+  line.descent = std::max(line.descent, descent);
+  line.lineGap = top - line.ascent;
+}
+
 void LineBreaker::Impl::MarkMetrics(Line& line) {
   const TextStyle* mark = p.markStyle ? p.markStyle : (styles.empty() ? &DefaultStyle() : styles.back());
   const Face* face = fonts.Get(fonts.Resolve(mark->family), mark->bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
                                mark->italic);
   if (!face) return;
   FontMetrics m = face->Metrics(mark->size);
-  line.ascent = std::max(line.ascent, m.ascent);
-  line.descent = std::max(line.descent, m.descent);
-  line.lineGap = std::max(line.lineGap, m.lineGap);
+  CombineMetrics(line, m.ascent, m.descent, m.lineGap);
 }
 
 Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bool first) {
@@ -1055,11 +1063,7 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
     line.advance_[k] = advance;
     line.flags_[k] = static_cast<uint8_t>((rtlChar ? Line::kRtl : 0) | (caretStop[c] ? Line::kStop : 0));
   };
-  auto useMetrics = [&](float asc, float desc, float gap) {
-    line.ascent = std::max(line.ascent, asc);
-    line.descent = std::max(line.descent, desc);
-    line.lineGap = std::max(line.lineGap, gap);
-  };
+  auto useMetrics = [&](float asc, float desc, float gap) { CombineMetrics(line, asc, desc, gap); };
   float contentLeft = std::numeric_limits<float>::max(), contentRight = -std::numeric_limits<float>::max();
   std::vector<size_t> visual(items.size());
   for (size_t k = 0; k < items.size(); ++k) visual[k] = k;
@@ -1144,7 +1148,8 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
       InlineObject obj{orig[c], runOf[c], it.x, it.width, s.objectAscent, s.objectDescent, s.baselineShift};
       useMetrics(s.objectAscent + s.baselineShift, s.objectDescent - s.baselineShift, 0);
       line.objects.push_back(obj);
-    } else {
+    } else if (it.type != Item::Tab || it.leader != TabLeader::None) {
+      // A tab without a leader draws nothing, and Word doesn't size the line by its font.
       useMetrics(rf.metrics.ascent + rf.rise, rf.metrics.descent - rf.rise, rf.metrics.lineGap);
     }
     setCaret(c, odd ? it.x + it.width : it.x, it.width, odd);

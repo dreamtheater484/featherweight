@@ -32,7 +32,7 @@ std::wstring StyleKey(const text::TextStyle& s) {
   const float nums[] = {s.size, s.complexSize, s.letterSpacing, s.baselineShift, s.kerningMinSize,
                         s.objectWidth, s.objectAscent, s.objectDescent};
   k.append(reinterpret_cast<const wchar_t*>(nums), sizeof nums / sizeof(wchar_t));
-  const wchar_t flags[] = {static_cast<wchar_t>(s.bold | s.italic << 1 | s.complexBold << 2 | s.complexItalic << 3 |
+  const wchar_t flags[] = {static_cast<wchar_t>(int(s.bold) | s.italic << 1 | s.complexBold << 2 | s.complexItalic << 3 |
                                                 s.ligatures << 4 | s.hidden << 5 | s.rightToLeft << 6 |
                                                 s.complexScript << 7 | s.eastAsiaHint << 8),
                            static_cast<wchar_t>(static_cast<int>(s.caps) | static_cast<int>(s.verticalAlign) << 4)};
