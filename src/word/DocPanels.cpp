@@ -211,7 +211,6 @@ void DocView::LinkPanel::Apply() {
     return;
   }
   edit::Editor& ed = *v_.editor_;
-  const size_t marksBefore = edit::Bookmarks(*v_.doc_).size();
   ed.BeginGroup(u"Link");
   std::string target;
   auto item = std::find(address_.items.begin(), address_.items.end(), typed);
@@ -232,9 +231,9 @@ void DocView::LinkPanel::Apply() {
   } else {
     r = edit::InsertLink(ed, v_.SelFrom(), v_.SelTo(), target, shown.empty() ? U16(typed) : shown);
   }
-  ed.EndGroup();
+  if (r) ed.EndGroup();
+  else ed.CancelGroup();  // the heading's bookmark goes too
   if (!r) {
-    if (edit::Bookmarks(*v_.doc_).size() != marksBefore) ed.Undo();  // the heading's bookmark goes too
     v_.SyncFile();
     note_ = W(r.message);
     v_.host_.ViewInvalidate();
@@ -402,8 +401,8 @@ void DocView::PageNumberPanel::Insert() {
     if (r && (r = edit::InsertField(ed, at, edit::kPageField, u"1", u"Page Number"))) at = r.caret;
     if (r && ofPages && (r = ed.InsertText(at, u" of "))) at = r.caret;
     if (r && ofPages && (r = edit::InsertField(ed, at, edit::kPagesField, u"1", u"Page Number"))) at = r.caret;
-    ed.EndGroup();
-    if (!r && ofPages && ed.UndoName() == u"Page Number") ed.Undo();
+    if (r) ed.EndGroup();
+    else ed.CancelGroup();
     if (v_.Apply(r)) v_.host_.ViewShowPanel(nullptr);
     else note_ = W(r.message);
     return;

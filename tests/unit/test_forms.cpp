@@ -8,6 +8,7 @@
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/Forms.h"
+#include "doc/edit/Inline.h"
 #include "doc/edit/TreeEdit.h"
 #include "pkg/Check.h"
 
@@ -277,4 +278,31 @@ TEST(Forms_InsertingContentControls) {
   int steps = 0;
   while (editor.Undo()) ++steps;
   CHECK(steps == 7 && MainXml(*doc) == original && PartXml(*doc, PartKind::Styles) == originalStyles);
+}
+
+TEST(Forms_RefusedLinkEditKeepsTheEditBefore) {
+  // Torture finding 28: EditLink refused before it changed anything took back the edit before it
+  // (EndGroup on an empty group, then Undo). In a protected form, its text can't be typed.
+  Fixture f;
+  f.styles = kStyles;
+  f.settings = "<w:documentProtection w:edit=\"forms\" w:enforcement=\"1\"/>";
+  f.body = "<w:p><w:r><w:fldChar w:fldCharType=\"begin\"><w:ffData><w:name w:val=\"Text1\"/><w:enabled/><w:textInput/>"
+           "</w:ffData></w:fldChar></w:r><w:r><w:instrText xml:space=\"preserve\"> FORMTEXT </w:instrText></w:r>"
+           "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>abc</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>"
+           "<w:p><w:hyperlink w:anchor=\"here\"><w:r><w:t>Link</w:t></w:r></w:hyperlink><w:bookmarkStart w:id=\"0\" w:name=\"here\"/>"
+           "<w:bookmarkEnd w:id=\"0\"/></w:p>";
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  edit::Editor editor(*doc);
+  const edit::Range result = edit::FormFields(*doc, doc->MainStory())[0].result;
+  REQUIRE(editor.Replace(result.from, result.to, u"Grace"));
+  const std::string filled = MainXml(*doc);
+  const uint32_t link = MainParas(*doc)[1];
+  CHECK(!edit::EditLink(editor, {link, 1}, "#here", u"New text"));
+  CHECK(MainXml(*doc) == filled && editor.CanUndo() && !editor.CanRedo());
+  CHECK(!edit::InsertLink(editor, {link, 4}, {link, 4}, "#here", u"More"));
+  CHECK(MainXml(*doc) == filled && editor.CanUndo());
+  int steps = 0;
+  while (editor.Undo()) ++steps;
+  CHECK(steps == 1);
 }
