@@ -98,6 +98,8 @@ std::string FormatEdit(const Edit& e) {
     case EditKind::Format: line = "format " + PosText(e.at) + " " + PosText(e.to) + " " + e.format; break;
     case EditKind::Undo: line = "undo " + std::to_string(e.count); break;
     case EditKind::Redo: line = "redo " + std::to_string(e.count); break;
+    case EditKind::Replace: line = "replace " + PosText(e.at) + " " + PosText(e.to) + " " + Quote(e.text); break;
+    case EditKind::Group: line = "group " + std::to_string(e.count); break;
   }
   if (!e.target.empty()) line += "  # " + e.target;
   return line;
@@ -151,8 +153,12 @@ bool ParseEdit(std::string_view line, Edit& e) {
     e.at.para = static_cast<uint32_t>(std::strtoul(std::string(word()).c_str(), nullptr, 10));
     return true;
   }
-  if (verb == "undo" || verb == "redo") {
-    e.kind = verb == "undo" ? EditKind::Undo : EditKind::Redo;
+  if (verb == "replace") {
+    e.kind = EditKind::Replace;
+    return ParsePos(word(), e.at) && ParsePos(word(), e.to) && Unquote(word(), e.text);
+  }
+  if (verb == "undo" || verb == "redo" || verb == "group") {
+    e.kind = verb == "undo" ? EditKind::Undo : verb == "redo" ? EditKind::Redo : EditKind::Group;
     e.count = static_cast<uint32_t>(std::strtoul(std::string(word()).c_str(), nullptr, 10));
     return e.count > 0;
   }
@@ -188,6 +194,24 @@ class EditorTarget : public EditTarget {
   const fw::doc::Document& Doc() const override { return *doc_; }
 
   Applied Apply(const Edit& e, std::string& why) override {
+    if (e.kind == EditKind::Group) {  // the next e.count edits, one undo step
+      if (grouping_) return why = "a group is open already", Applied::Refused;
+      editor_.BeginGroup(u"Torture");
+      grouping_ = e.count;
+      return Applied::Done;
+    }
+    if (e.kind == EditKind::Undo || e.kind == EditKind::Redo) CloseGroup();  // as the app does: undo ends a group
+    Applied done = ApplyOne(e, why);
+    if (grouping_ && --grouping_ == 0) editor_.EndGroup();
+    return done;
+  }
+
+  void CloseGroup() {
+    if (grouping_) editor_.EndGroup();
+    grouping_ = 0;
+  }
+
+  Applied ApplyOne(const Edit& e, std::string& why) {
     namespace ed = fw::doc::edit;
     auto exists = [&](fw::doc::Pos p) { return p.para < doc_->Paragraphs().size() && p.offset <= editor_.ParaLength(p.para); };
     auto refuse = [&](const std::string& reason) {
@@ -204,6 +228,10 @@ class EditorTarget : public EditTarget {
         if (!exists(e.at) || !exists(e.to) || editor_.Compare(e.at, e.to) > 0) return refuse("no such range");
         r = editor_.Delete(e.at, e.to);
         break;
+      case EditKind::Replace:
+        if (!exists(e.at) || !exists(e.to) || editor_.Compare(e.at, e.to) > 0) return refuse("no such range");
+        r = editor_.Replace(e.at, e.to, e.text);
+        break;
       case EditKind::Split:
         if (!exists(e.at)) return refuse("no such position");
         r = editor_.SplitParagraph(e.at);
@@ -214,11 +242,14 @@ class EditorTarget : public EditTarget {
         break;
       case EditKind::Format: {
         if (!exists(e.at) || !exists(e.to) || editor_.Compare(e.at, e.to) > 0) return refuse("no such range");
-        size_t eq = e.format.find('=');
-        std::string name = e.format.substr(0, eq), value = eq == std::string::npos ? "" : e.format.substr(eq + 1);
+        bool mark = e.format.starts_with("mark:");  // the paragraph marks' run properties
+        std::string format = mark ? e.format.substr(5) : e.format;
+        size_t eq = format.find('=');
+        std::string name = format.substr(0, eq), value = eq == std::string::npos ? "" : format.substr(eq + 1);
         bool needsValue = name == "align" || name == "style" || name == "size" || name == "color" || name == "highlight";
         if (needsValue == value.empty()) return refuse("format " + name + (needsValue ? " needs =value" : " takes no value"));
         ed::PropEdit props;
+        if (mark && (name == "align" || name == "style")) return refuse("a paragraph format isn't a mark's");
         if (name == "align") {
           r = editor_.SetParaProps(e.at.para, e.to.para, props.Set("jc", {{"val", value}}));
         } else if (name == "style") {
@@ -233,10 +264,12 @@ class EditorTarget : public EditTarget {
           else if (name == "highlight") props.Set("highlight", {{"val", value}});
           else if (name == "plain") props.Remove("b").Remove("i").Remove("u");
           else return refuse("unknown format");
-          r = editor_.SetRunProps(e.at, e.to, props);
+          r = mark ? editor_.SetMarkProps(e.at.para, e.to.para, props) : editor_.SetRunProps(e.at, e.to, props);
         }
         break;
       }
+      case EditKind::Group:
+        return refuse("groups are opened by Apply");
       case EditKind::Undo:
       case EditKind::Redo:
         for (uint32_t i = 0; i < e.count; ++i) {
@@ -255,6 +288,7 @@ class EditorTarget : public EditTarget {
 
   // As the Word tab saves (DocView::Save): with nothing changed, the file exactly as it was opened.
   fw::pkg::Status Save(std::vector<uint8_t>& out) override {
+    CloseGroup();
     std::vector<uint32_t> dirty = editor_.DirtyParts();
     if (!dirty.empty()) return SaveParts(*doc_, dirty, out, written);
     written.clear();
@@ -267,6 +301,7 @@ class EditorTarget : public EditTarget {
  private:
   std::unique_ptr<fw::doc::Document> doc_;
   fw::doc::edit::Editor editor_;
+  uint32_t grouping_ = 0;  // edits left in an open group
 };
 #endif
 
@@ -363,14 +398,21 @@ class Generator {
     } else if (roll < 7 && undone) {
       e.kind = EditKind::Redo;
       e.count = rng_.Between(1, std::min<uint32_t>(undone, 4));
+    } else if (roll < 9) {
+      e.kind = EditKind::Group;  // the next few edits, undone and redone as one (as Paste and Replace All do)
+      e.count = rng_.Between(2, 4);
     } else if (roll < 40) {
       Structural(e);
     } else if (roll < 62) {
       e.kind = EditKind::Type;
       e.at = RandomPos(RandomPara());
       e.text = RandomText();
+    } else if (roll < 70) {
+      PlainDelete(e);
     } else if (roll < 74) {
       PlainDelete(e);
+      e.kind = EditKind::Replace;
+      e.text = RandomText();
     } else if (roll < 82) {
       e.kind = EditKind::Split;
       e.at = RandomPos(RandomPara());
@@ -466,6 +508,7 @@ class Generator {
     e.to = Later(e.at, rng_.Percent(80) ? 0 : 2);
     if (rng_.Percent(80)) {
       e.format = rng_.Pick(run);
+      if (rng_.Percent(20)) e.format = "mark:" + e.format;  // the paragraph marks' formatting
     } else if (rng_.Percent(50) && !doc_.Styles().empty()) {
       std::vector<std::string> styles;
       for (const Style& s : doc_.Styles())
@@ -734,6 +777,8 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
   Rng rng(seed);
   Generator gen(target->Doc(), rng);
   uint32_t undoable = 0, undone = 0;
+  uint32_t groupLeft = 0;     // edits left in an open group
+  bool groupCounted = false;  // and whether its undo step is counted yet
   size_t count = replay ? replay->size() : edits;
   for (size_t i = 0; i < count && !r.failure; ++i) {
     Edit e;
@@ -751,10 +796,13 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     r.applied.push_back(e);
     Applied applied = Applied::Refused;
     std::string why;
-    // Formatting changes only the paragraphs it's applied to: the others must read the same after.
-    // Reading every paragraph first fills the model's caches, which would hide a stale cache from the
-    // read-back comparison, so half the rounds (by seed) check this and the other half that.
-    bool locality = e.kind == EditKind::Format && (seed & 1);
+    // An edit changes only the paragraphs it's applied to (a delete, those it spans; a join, the two):
+    // the others must read the same after, those after it moved by the paragraphs it added or
+    // removed. Reading every paragraph first fills the model's caches, which would hide a stale cache
+    // from the read-back comparison, so half the rounds (by seed) check this and the other half that.
+    bool local = e.kind == EditKind::Type || e.kind == EditKind::Delete || e.kind == EditKind::Replace ||
+                 e.kind == EditKind::Split || e.kind == EditKind::Join || e.kind == EditKind::Format;
+    bool locality = local && (seed & 1);
     std::vector<std::string> linesBefore, linesAfter;
     auto apply = [&] {
       if (locality) linesBefore = ParaLines(target->Doc());
@@ -765,6 +813,14 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
       fail("crash", CrashText(crash) + " in: " + torture::FormatEdit(e));
       break;
     }
+    // A group: the next `count` edits, done or refused, are one undo step (an undo or redo ends it).
+    bool inGroup = false;
+    if (e.kind == EditKind::Group) {
+      if (applied == Applied::Done) groupLeft = e.count, groupCounted = false;
+    } else if (groupLeft) {
+      if (e.kind == EditKind::Undo || e.kind == EditKind::Redo) groupLeft = 0;
+      else inGroup = true, --groupLeft;
+    }
     if (applied == Applied::Refused) {
       ++r.refused;
       continue;
@@ -772,25 +828,32 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     ++r.done;
     if (!linesAfter.empty()) {
       uint32_t lo = std::min(e.at.para, e.to.para), hi = std::max(e.at.para, e.to.para);
-      if (linesAfter.size() != linesBefore.size()) {
+      if (e.kind == EditKind::Type || e.kind == EditKind::Split) lo = hi = e.at.para;
+      if (e.kind == EditKind::Join) lo = e.at.para, hi = e.at.para + 1;
+      int64_t shift = static_cast<int64_t>(linesAfter.size()) - static_cast<int64_t>(linesBefore.size());
+      if (e.kind == EditKind::Format && shift != 0) {
         fail("spill", "formatting changed the number of paragraphs: " + torture::FormatEdit(e));
         break;
       }
-      for (uint32_t p = 0; p < linesAfter.size(); ++p) {
-        if ((p >= lo && p <= hi) || linesAfter[p] == linesBefore[p]) continue;
-        const Story& story = target->Doc().Stories()[target->Doc().Para(p).story];
+      auto cut = [](const std::string& s) { return s.size() > 120 ? s.substr(0, 120) + "..." : s; };
+      for (uint32_t p = 0; p < linesBefore.size(); ++p) {
+        if (p >= lo && p <= hi) continue;
+        int64_t q = p > hi ? static_cast<int64_t>(p) + shift : static_cast<int64_t>(p);
+        if (q >= 0 && q < static_cast<int64_t>(linesAfter.size()) && linesAfter[static_cast<size_t>(q)] == linesBefore[p]) continue;
+        const Story& story = target->Doc().Stories()[target->Doc().Para(static_cast<uint32_t>(std::max<int64_t>(0, std::min<int64_t>(q, static_cast<int64_t>(linesAfter.size()) - 1)))).story];
         std::string where = story.part < target->Doc().Parts().size() ? target->Doc().Parts()[story.part].name : "?";
-        auto cut = [](const std::string& s) { return s.size() > 120 ? s.substr(0, 120) + "..." : s; };
-        fail("spill", "formatting paragraphs " + std::to_string(lo) + "-" + std::to_string(hi) + " also changed paragraph " +
-                          std::to_string(p) + " (" + where + "): before \"" + cut(linesBefore[p]) + "\", after \"" +
-                          cut(linesAfter[p]) + "\"");
+        std::string after = q >= 0 && q < static_cast<int64_t>(linesAfter.size()) ? cut(linesAfter[static_cast<size_t>(q)]) : "(gone)";
+        fail("spill", "\"" + torture::FormatEdit(e) + "\" also changed paragraph " + std::to_string(p) + " (" + where +
+                          "): before \"" + cut(linesBefore[p]) + "\", after \"" + after + "\"");
         break;
       }
       if (r.failure) break;
     }
     if (e.kind == EditKind::Undo) undone += e.count, undoable -= std::min(undoable, e.count);
     else if (e.kind == EditKind::Redo) undoable += e.count, undone -= std::min(undone, e.count);
-    else ++undoable, undone = 0;
+    else if (e.kind == EditKind::Group) continue;
+    else if (inGroup && groupCounted) undone = 0;  // part of a step already counted
+    else ++undoable, undone = 0, groupCounted = inGroup;
   }
   if (r.failure) return r;
 

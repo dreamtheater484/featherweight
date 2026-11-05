@@ -12,24 +12,25 @@
 // what the document model reads, and an EditTarget applies them with the editor (D2).
 namespace fwtool::torture {
 
-enum class EditKind : uint8_t { Type, Delete, Split, Join, Format, Undo, Redo };
+enum class EditKind : uint8_t { Type, Delete, Split, Join, Format, Undo, Redo, Replace, Group };
 
 // One edit, as reproducers keep it: positions are paragraph indices and offsets in the model's
 // paragraph text (Document.h) at the moment the edit is applied.
 struct Edit {
   EditKind kind = EditKind::Type;
-  fw::doc::Pos at, to;   // Type, Split: at. Join: at.para and the next. Delete, Format: [at, to), across paragraphs too.
-  std::u16string text;   // Type
+  fw::doc::Pos at, to;   // Type, Split: at. Join: at.para and the next. Delete, Replace, Format: [at, to), across paragraphs too.
+  std::u16string text;   // Type, Replace
   // Format: "bold", "italic", "underline", "strike", "size=<half-points>", "color=<RRGGBB>",
   // "highlight=<name>", "plain" (no bold, italic or underline), "align=<left|center|right|both>",
-  // "style=<paragraph style id>".
+  // "style=<paragraph style id>". "mark:" before a run format applies it to the paragraph marks.
   std::string format;
-  uint32_t count = 1;    // Undo, Redo
+  uint32_t count = 1;    // Undo, Redo: how many steps. Group: how many of the next edits make one undo step.
   std::string target;    // what it aims at, for people: "field PAGE", "bookmark 3", "table cell"
 };
 
-// One line per edit, and back: type 12:5 "abc" / delete 12:3 14:7 / split 12:5 / join 12 /
-// format 12:3 12:9 bold / undo 2 / redo 1, each optionally followed by "# target".
+// One line per edit, and back: type 12:5 "abc" / delete 12:3 14:7 / replace 12:3 14:7 "abc" /
+// split 12:5 / join 12 / format 12:3 12:9 bold / format 12:0 13:0 mark:bold / undo 2 / redo 1 /
+// group 3, each optionally followed by "# target".
 std::string FormatEdit(const Edit& edit);
 bool ParseEdit(std::string_view line, Edit& edit);
 
