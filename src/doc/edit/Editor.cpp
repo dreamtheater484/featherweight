@@ -1376,7 +1376,7 @@ struct EditorState {
         } else if (Splittable(NameOf(c))) {
           copy = CloneShallow(c, to);
           for (ElemId k = E(c).first; k != kNoElem; k = E(k).next)
-            if (PropsElem(k)) Append(copy, CopyProps(k, copy));
+            if (PropsElem(k)) Append(copy, FreshIds(CopyProps(k, copy)));
           if (NameOf(c) == kIns || NameOf(c) == kDel || NameOf(c) == kMoveFrom || NameOf(c) == kMoveTo)
             SetAttr(copy, kId, NewAnnotationId());
           if (!SplitChildren(c, copy, o, why)) return false;
@@ -1632,6 +1632,43 @@ struct EditorState {
     return true;
   }
 
+  // A copy of properties with the revision records in it given ids of their own (a run cut in
+  // two keeps its w:rPrChange in both halves; ids are unique in a document).
+  ElemId FreshIds(ElemId props) {
+    static const uint32_t kRecords[] = {kIns, kDel, kMoveFrom, kMoveTo, kRPrChange, kPPrChange, Name("sectPrChange"),
+                                        Name("tblPrChange"), Name("tblPrExChange"), Name("trPrChange"),
+                                        Name("tcPrChange"), Name("tblGridChange"), Name("cellIns"), Name("cellDel"),
+                                        Name("cellMerge"), Name("numberingChange")};
+    auto record = [&](ElemId id) {
+      const uint32_t n = NameOf(id);
+      return std::find(std::begin(kRecords), std::end(kRecords), n) != std::end(kRecords) && Attr(id, kId);
+    };
+    std::vector<ElemId> found, stack{props};
+    while (!stack.empty()) {
+      const ElemId id = stack.back();
+      stack.pop_back();
+      if (id != props && record(id)) found.push_back(id);
+      for (ElemId c = E(id).first; c != kNoElem; c = E(c).next) stack.push_back(c);
+    }
+    if (found.empty()) return props;
+    if (E(props).flags & kSharedKids) return Unshare(props), FreshIds(props);  // its own children first
+    for (ElemId id : found) SetAttr(id, kId, NewAnnotationId());
+    return props;
+  }
+  // An insertion in the paragraph (not in a link or field) that straddles `o`, if any.
+  ElemId InsertionAcross(uint32_t para, uint32_t o) {
+    for (ElemId c = E(d.paras_[para].elem).first; c != kNoElem; c = E(c).next)
+      if (NameOf(c) == kIns && E(c).start < o && o < E(c).start + E(c).length) return c;
+    return kNoElem;
+  }
+  // Cuts that insertion in two at `o` (a link or field made of text in it goes round it).
+  bool CutInsertionsAt(uint32_t para, uint32_t o, std::u16string& why) {
+    const ElemId c = InsertionAcross(para, o);
+    if (c == kNoElem) return true;
+    if (!Cut(c, o, why)) return false;
+    Reflow(para);
+    return true;
+  }
   // Cuts the runs that straddle `o` so that run boundaries fall there.
   bool CutRunsAt(uint32_t para, uint32_t o, std::u16string& why) {
     for (ElemId id : AllElems(para)) {
@@ -1652,7 +1689,7 @@ struct EditorState {
     }
     ElemId copy = CloneShallow(c, E(c).parent);
     for (ElemId k = E(c).first; k != kNoElem; k = E(k).next)
-      if (PropsElem(k)) Append(copy, CopyProps(k, copy));
+      if (PropsElem(k)) Append(copy, FreshIds(CopyProps(k, copy)));
     uint32_t n = NameOf(c);
     if (n == kIns || n == kDel || n == kMoveFrom || n == kMoveTo) SetAttr(copy, kId, NewAnnotationId());
     LinkAfter(E(c).parent, c, copy);
@@ -1924,8 +1961,18 @@ struct EditorState {
               why = u"This change holds part of a field. Accept or reject the whole field.";
               return false;
             }
+            const ElemId holder = E(c).parent;
             if (!DeleteIn(x.para, s, e, why)) return false;
             if (Attached(c, p)) UnwrapInline(c);  // what's left: bookmarks and comment ranges
+            // An insertion that was all of a simple field or a link (a field inserted with Track
+            // Changes on is w:fldSimple/w:ins) takes it along.
+            if ((NameOf(holder) == kFldSimple || NameOf(holder) == Name("hyperlink")) && Attached(holder, p)) {
+              Reflow(x.para);
+              if (E(holder).length == 0) {
+                if (const ElemId data = Child(holder, Name("fldData")); data != kNoElem) DropProp(data);
+                UnwrapInline(holder);
+              }
+            }
           }
           Reflow(x.para);
           break;
@@ -3150,6 +3197,22 @@ Result Editor::InsertCommentMarks(Pos from, Pos to, Pos refAt, std::string_view 
   return r;
 }
 
+Result Editor::CutInsertionsAround(Pos from, Pos to) {
+  EditorState& s = *impl_;
+  std::u16string why;
+  Result r;
+  r.caret = to;
+  if (from.para != to.para || from.para >= doc_.Paragraphs().size()) return Fail(u"This text can't be changed here.");
+  const uint32_t para = from.para;
+  if (s.InsertionAcross(para, from.offset) == kNoElem && s.InsertionAcross(para, to.offset) == kNoElem) return r;
+  if (!CanEdit(&why) || !s.Editable(para, why)) return Fail(why);
+  s.Begin(para, 1);
+  if (!s.CutInsertionsAt(para, from.offset, why) || !s.CutInsertionsAt(para, to.offset, why)) return s.Abort(why);
+  s.Commit(false, from, to, Kind::Other, u"Cut insertion");
+  s.Notify(listeners_);
+  return r;
+}
+
 Result Editor::RemoveCommentMarks(std::string_view id) {
   EditorState& s = *impl_;
   std::u16string why;
@@ -3333,13 +3396,7 @@ Result Editor::SetLink(Pos from, Pos to, std::string_view target) {
   s.Begin(para, 1);
   if (!s.CutRunsAt(para, from.offset, why) || !s.CutRunsAt(para, to.offset, why)) return s.Abort(why);
   // The author's insertions go round the link's text, not across its ends.
-  for (const uint32_t o : {from.offset, to.offset})
-    for (ElemId c = s.E(p).first; c != kNoElem; c = s.E(c).next)
-      if (s.NameOf(c) == kIns && s.E(c).start < o && o < s.E(c).start + s.E(c).length) {
-        if (!s.Cut(c, o, why)) return s.Abort(why);
-        s.Reflow(para);
-        break;
-      }
+  if (!s.CutInsertionsAt(para, from.offset, why) || !s.CutInsertionsAt(para, to.offset, why)) return s.Abort(why);
   // The runs (and range markers among them) in [from, to) go into a new w:hyperlink.
   std::vector<ElemId> inside;
   for (ElemId c = s.E(p).first; c != kNoElem; c = s.E(c).next) {

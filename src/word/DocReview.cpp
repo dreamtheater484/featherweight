@@ -103,7 +103,11 @@ std::optional<CommandState> DocView::QueryD4(int cmd) {
       s = {Ready(), reviewPanel_ && host_.ViewShownPanel() == reviewPanel_.get()};
       s.label = L"Comments and changes";
       break;
-    case CmdNewComment: s = {edit, false}; s.label = L"New comment"; s.shortcut = L"Ctrl+Alt+M"; break;
+    case CmdNewComment:  // in the main text, as in Word
+      s = {edit && focus_.para < doc_->Paragraphs().size() && StoryOf(focus_) == doc_->MainStory(), false};
+      s.label = L"New comment";
+      s.shortcut = L"Ctrl+Alt+M";
+      break;
     case CmdTrackChanges:
       s = {edit, edit && editor_->Tracking()};
       s.label = L"Track changes";

@@ -1,5 +1,6 @@
 #include "TestHarness.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -11,9 +12,12 @@
 #include "doc/edit/Comments.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
+#include "doc/edit/Inline.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/model/Utf.h"
 #include "pkg/Check.h"
+
+#define REQUIRE(cond) do { if (!(cond)) { test::Fail(__FILE__, __LINE__, #cond); return; } } while (0)
 
 using namespace fw::doc;
 using namespace doc_test;
@@ -531,4 +535,78 @@ TEST(Comments_RefusedLeavesNothing) {
   CHECK(!doc->FindPart(fw::doc::PartKind::Comments) && doc->Paragraphs().size() == paras && !ed.CanUndo());
   CHECK(edit::AddComment(ed, P(p, 1), P(p, 2), u"fine") && doc->FindPart(fw::doc::PartKind::Comments));
   CHECK(Consistent(*doc, f));
+}
+
+namespace {
+
+// Every revision record's w:id in the XML, which must be unique in a document.
+bool IdsUnique(const std::string& xml) {
+  std::vector<std::string> ids;
+  for (const char* tag : {"<w:ins ", "<w:del ", "<w:rPrChange ", "<w:pPrChange "})
+    for (size_t at = xml.find(tag); at != std::string::npos; at = xml.find(tag, at + 1)) {
+      const size_t id = xml.find("w:id=\"", at), end = xml.find('>', at);
+      if (id == std::string::npos || id > end) continue;
+      ids.push_back(xml.substr(id + 6, xml.find('"', id + 6) - id - 6));
+    }
+  std::sort(ids.begin(), ids.end());
+  return std::adjacent_find(ids.begin(), ids.end()) == ids.end();
+}
+
+}  // namespace
+
+TEST(Review_CutRecordsGetIdsOfTheirOwn) {
+  // Torture finding 38: tracked formatting, then a tracked deletion over part of it, cuts the run
+  // with its w:rPrChange in two; each half has an id of its own.
+  Tracked t("<w:p><w:r><w:t>abcdefghij</w:t></w:r></w:p>");
+  REQUIRE(t.ed);
+  Editor& ed = *t.ed;
+  const uint32_t p = Main(*t.doc)[0];
+  REQUIRE(ed.SetRunProps(P(p, 1), P(p, 5), edit::PropEdit().Set("color", {{"val", "1F4E79"}})));
+  REQUIRE(ed.Delete(P(p, 2), P(p, 8)));
+  const std::string xml = MainXml(*t.doc);
+  CHECK(xml.find("rPrChange") != std::string::npos && xml.find("delText") != std::string::npos);
+  CHECK(IdsUnique(xml));
+  CHECK(Consistent(*t.doc, t.f));
+}
+
+TEST(Review_FieldInsertedWhileTracking) {
+  // Torture finding 39: a field typed while tracking goes round an insertion of its own
+  // (w:fldSimple/w:ins), never inside the author's insertion; rejecting it takes the field away.
+  Tracked t("<w:p><w:r><w:t>x</w:t></w:r></w:p>");
+  REQUIRE(t.ed);
+  Editor& ed = *t.ed;
+  const uint32_t p = Main(*t.doc)[0];
+  auto typed = ed.InsertText(P(p, 1), u"Page ");
+  REQUIRE(typed);
+  REQUIRE(edit::InsertField(ed, typed.caret, " PAGE ", u"1", u"Page Number"));
+  const std::string xml = MainXml(*t.doc);
+  CHECK(xml.find("<w:fldSimple w:instr=\" PAGE \"><w:ins ") != std::string::npos);
+  CHECK(xml.find("</w:fldSimple></w:ins>") == std::string::npos);
+  CHECK(IdsUnique(xml) && Consistent(*t.doc, t.f));
+  CHECK(SavedAndRead(*t.doc, ed) != nullptr);
+  // Rejected: the text and the field go; accepted, the field stays, its text no longer an insertion.
+  REQUIRE(ed.ReviewAll(false));
+  CHECK(t.doc->Para(p).text == u"x" && MainXml(*t.doc).find("fldSimple") == std::string::npos);
+  CHECK(ed.Undo() && ed.ReviewAll(true));
+  CHECK(t.doc->Para(p).text == u"xPage 1" && MainXml(*t.doc).find("<w:fldSimple") != std::string::npos);
+  CHECK(t.doc->Revisions(t.doc->MainStory()).empty() && Consistent(*t.doc, t.f));
+}
+
+TEST(Comments_InANote) {
+  // Torture finding 40: Word keeps comments to the main text (its validator refuses one in a note),
+  // so a comment in a footnote is refused, and leaves nothing.
+  Fixture f;
+  f.body = "<w:p><w:r><w:t>a</w:t></w:r><w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p>";
+  f.footnotes = "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>"
+                "<w:footnote w:id=\"1\"><w:p><w:r><w:footnoteRef/><w:t xml:space=\"preserve\"> Note text</w:t></w:r></w:p></w:footnote>";
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  Editor ed(*doc);
+  const uint32_t note = doc->StoryParagraphs(doc->NoteStory(StoryKind::Footnote, "1")).at(0);
+  const size_t paras = doc->Paragraphs().size();
+  CHECK(!edit::AddComment(ed, P(note, 2), P(note, 6), u"In the note"));
+  CHECK(doc->Comments().empty() && !doc->FindPart(PartKind::Comments) && doc->Paragraphs().size() == paras);
+  CHECK(!ed.CanUndo());
+  // In the main text, it's fine.
+  CHECK(edit::AddComment(ed, P(Main(*doc)[0], 0), P(Main(*doc)[0], 1), u"Here") && doc->Comments().size() == 1);
 }
