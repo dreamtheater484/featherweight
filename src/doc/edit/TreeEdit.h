@@ -108,6 +108,15 @@ class TreeEdit {
   pkg::NodeId NewNode();
   ElemId Own(ElemId container);
   ElemId Clone(ElemId src, ElemId parent);
+  // A copy of a property element for new content (a cut run's second half, a style's property).
+  // A set that repeats an element exactly (a file's <w:b/><w:b/>, which the schema doesn't allow)
+  // is copied without the repeats, so the copy doesn't add an error the file has once already;
+  // the original keeps its own. Otherwise a Clone, its children shared.
+  ElemId CopyProps(ElemId src, ElemId parent);
+  // Whether `c`, in the list from `first`, repeats an element before it exactly; whether any
+  // element under `e` does.
+  bool Repeats(ElemId first, ElemId c) const;
+  bool HasRepeats(ElemId e) const;
   ElemId Insert(ElemId parent, ElemDefId def, ElemId before);  // a new empty element
   void Link(ElemId parent, ElemId child, ElemId before);       // before kNoElem: schema order
   void Append(ElemId parent, ElemId child);                    // last among its siblings
