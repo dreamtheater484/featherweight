@@ -30,6 +30,10 @@
 // The editor arrives with D2 (doc/edit/Editor.h); until then the harness runs without it.
 #if __has_include("doc/edit/Editor.h")
 #include "doc/edit/Editor.h"
+#include "doc/edit/Format.h"
+#include "doc/edit/Lists.h"
+#include "doc/edit/Styles.h"
+#include "doc/edit/TreeEdit.h"
 #define FW_TORTURE_EDITOR 1
 #else
 #define FW_TORTURE_EDITOR 0
@@ -101,6 +105,11 @@ std::string FormatEdit(const Edit& e) {
     case EditKind::Redo: line = "redo " + std::to_string(e.count); break;
     case EditKind::Replace: line = "replace " + PosText(e.at) + " " + PosText(e.to) + " " + Quote(e.text); break;
     case EditKind::Group: line = "group " + std::to_string(e.count); break;
+    case EditKind::Command:
+      line = "command " + PosText(e.at) + " " + PosText(e.to) + " " + Quote(fw::doc::ToUtf16(e.format));
+      break;
+    case EditKind::Paint: line = "paint " + PosText(e.at) + " " + PosText(e.to) + " " + PosText(e.from); break;
+    case EditKind::Save: line = "save"; break;
   }
   if (!e.target.empty()) line += "  # " + e.target;
   return line;
@@ -157,6 +166,21 @@ bool ParseEdit(std::string_view line, Edit& e) {
   if (verb == "replace") {
     e.kind = EditKind::Replace;
     return ParsePos(word(), e.at) && ParsePos(word(), e.to) && Unquote(word(), e.text);
+  }
+  if (verb == "command") {
+    e.kind = EditKind::Command;
+    std::u16string spec;
+    if (!ParsePos(word(), e.at) || !ParsePos(word(), e.to) || !Unquote(word(), spec)) return false;
+    e.format = fw::doc::ToUtf8(spec);
+    return !e.format.empty();
+  }
+  if (verb == "paint") {
+    e.kind = EditKind::Paint;
+    return ParsePos(word(), e.at) && ParsePos(word(), e.to) && ParsePos(word(), e.from);
+  }
+  if (verb == "save") {
+    e.kind = EditKind::Save;
+    return true;
   }
   if (verb == "undo" || verb == "redo" || verb == "group") {
     e.kind = verb == "undo" ? EditKind::Undo : verb == "redo" ? EditKind::Redo : EditKind::Group;
@@ -268,6 +292,17 @@ class EditorTarget : public EditTarget {
         }
         break;
       }
+      case EditKind::Command:
+      case EditKind::Paint: {
+        if (!exists(e.at) || !exists(e.to) || editor_.Compare(e.at, e.to) > 0) return refuse("no such range");
+        if (doc_->Para(e.at.para).story != doc_->Para(e.to.para).story) return refuse("a range is in one story");
+        if (e.kind == EditKind::Paint && !exists(e.from)) return refuse("no such position to copy from");
+        std::u16string whyNot;
+        if (!editor_.CanEdit(&whyNot)) return refuse(fw::doc::ToUtf8(whyNot));
+        return e.kind == EditKind::Paint ? Paint(e) : Command(e, why);
+      }
+      case EditKind::Save:
+        return refuse("saves are made by the round");
       case EditKind::Group:
         return refuse("groups are opened by Apply");
       case EditKind::Undo:
@@ -292,8 +327,128 @@ class EditorTarget : public EditTarget {
     CloseGroup();
     return SaveParts(*doc_, editor_.DirtyParts(), editor_.Modified(), out, written);
   }
+  void Saved() override { editor_.MarkSaved(); }
 
  private:
+  // A formatting command as the Word tab runs it (DocFormat::Run): one TreeEdit, the command's own
+  // transaction, the same range for characters and paragraphs.
+  Applied Command(const Edit& e, std::string& why) {
+    namespace ed = fw::doc::edit;
+    const ed::Range range{e.at, e.to};
+    const size_t eq = e.format.find('=');
+    const std::string name = e.format.substr(0, eq), value = eq == std::string::npos ? "" : e.format.substr(eq + 1);
+    ed::TreeEdit te(editor_, range.from);
+    ed::RunFormat run;
+    ed::ParaFormat para;
+    if (name == "bullets") ed::ToggleList(te, range, ed::ListKind::Bullet);
+    else if (name == "numbering") ed::ToggleList(te, range, ed::ListKind::Number);
+    else if (name == "multilevel") ed::ToggleList(te, range, ed::ListKind::Multilevel);
+    else if (name == "nolist") ed::RemoveList(te, range);
+    else if (name == "restart") ed::RestartNumbering(te, range.from.para);
+    else if (name == "continue") ed::ContinueNumbering(te, range.from.para);
+    else if (name == "indent" || name == "outdent") ed::ShiftIndent(te, range, name == "indent");
+    else if (name == "apply" && !value.empty()) ed::ApplyStyle(te, range, value);
+    else if (name == "update") ed::UpdateStyleToMatch(te, range);
+    else if (name == "modify" && !value.empty()) {
+      run.italic = true;
+      para.spaceAfter = fw::Twips(120);
+      ed::ModifyStyle(te, value, run, para);
+    } else if (name == "toggle") {
+      static const std::pair<const char*, ed::Toggle> toggles[] = {
+          {"bold", ed::Toggle::Bold},     {"italic", ed::Toggle::Italic},           {"underline", ed::Toggle::Underline},
+          {"strike", ed::Toggle::Strike}, {"super", ed::Toggle::Superscript}, {"sub", ed::Toggle::Subscript}};
+      auto t = std::find_if(std::begin(toggles), std::end(toggles), [&](const auto& p) { return value == p.first; });
+      if (t == std::end(toggles)) return why = "unknown toggle", Applied::Refused;
+      ed::ToggleRuns(te, range, t->second);
+    } else if (name == "grow" || name == "shrink" || name == "grow1" || name == "shrink1") {
+      ed::GrowFont(te, range, name.starts_with("grow"), name.ends_with("1"));
+    } else if (name == "clearchars") ed::ClearRunFormatting(te, range);
+    else if (name == "clearpara") ed::ClearParaFormatting(te, range);
+    else if (name == "clearall") ed::ClearAllFormatting(te, range);
+    else if (name == "font" && !value.empty()) {
+      run.font = value;
+      ed::FormatRuns(te, range, run);
+    } else if (name == "spacing" && !value.empty()) {
+      para.line = std::atoi(value.c_str());
+      para.lineRule = fw::doc::LineRule::Auto;
+      ed::FormatParagraphs(te, range, para);
+    } else if (name == "spacebefore") {
+      para.spaceBefore = fw::Twips(te.Doc().ResolvedPara(range.from.para).spaceBefore.Value() == 0 ? 240 : 0);
+      ed::FormatParagraphs(te, range, para);
+    } else if (name == "border") {
+      para.borders = value == "box" ? ed::BorderSides::Outside : value == "bottom" ? ed::BorderSides::Bottom : ed::BorderSides::None;
+      ed::FormatParagraphs(te, range, para);
+    } else {
+      return why = "unknown command", Applied::Refused;
+    }
+    return Applied::Done;
+  }
+
+  // The format painter (DocFormat::Capture and PaintTo): the formatting of the character at
+  // e.from and of its paragraph, painted onto [at, to). Paragraph formatting goes with whole
+  // paragraphs only.
+  Applied Paint(const Edit& e) {
+    namespace ed = fw::doc::edit;
+    const fw::doc::Document& doc = *doc_;
+    ed::Range one{e.from, e.from};
+    if (e.from.offset < doc.Para(e.from.para).text.size()) one.to = {e.from.para, e.from.offset + 1};
+    const ed::FormatState s = ed::StateOf(doc, one);
+    ed::RunFormat run;
+    run.font = s.font;
+    run.size = s.size;
+    run.bold = s.bold;
+    run.italic = s.italic;
+    run.strike = s.strike;
+    run.underline = s.underline ? fw::doc::Underline::Single : fw::doc::Underline::None;
+    run.vertAlign = s.superscript ? fw::doc::VertAlign::Superscript
+                    : s.subscript ? fw::doc::VertAlign::Subscript
+                                  : fw::doc::VertAlign::Baseline;
+    if (s.color) run.color = *s.color;
+    if (s.highlight) run.highlight = s.highlight->present ? NearestHighlight(s.highlight->rgb) : std::string("none");
+    run.charStyle = s.charStyle.value_or(std::string());
+    const fw::doc::ParaProps& pp = doc.ResolvedPara(e.from.para);
+    const std::string style(pp.style);
+    ed::ParaFormat para;
+    para.jc = pp.jc;
+    para.indStart = pp.indStart;
+    para.indEnd = pp.indEnd;
+    para.firstLine = pp.firstLine;
+    para.spaceBefore = pp.spaceBefore;
+    para.spaceAfter = pp.spaceAfter;
+    para.line = pp.line;
+    para.lineRule = pp.lineRule;
+    const ed::Range range{e.at, e.to};
+    const bool whole = e.at.offset == 0 && (e.to.para > e.at.para || e.to.offset >= doc.Para(e.at.para).text.size());
+    editor_.BeginGroup(u"Format Painter");
+    {
+      ed::TreeEdit te(editor_, range.from);
+      if (whole) {
+        if (!style.empty()) ed::ApplyStyle(te, range, style);
+        ed::FormatParagraphs(te, range, para);
+      }
+      ed::FormatRuns(te, range, run);
+    }
+    editor_.EndGroup();
+    return Applied::Done;
+  }
+
+  // Word's highlight color nearest to a color, as DocFormat picks it.
+  static std::string NearestHighlight(uint32_t rgb) {
+    static const std::pair<const char*, uint32_t> names[] = {
+        {"yellow", 0xFFFF00},    {"green", 0x00FF00},       {"cyan", 0x00FFFF},     {"magenta", 0xFF00FF},
+        {"blue", 0x0000FF},      {"red", 0xFF0000},         {"darkBlue", 0x000080}, {"darkCyan", 0x008080},
+        {"darkGreen", 0x008000}, {"darkMagenta", 0x800080}, {"darkRed", 0x800000},  {"darkYellow", 0x808000},
+        {"darkGray", 0x808080},  {"lightGray", 0xC0C0C0},   {"black", 0x000000},    {"white", 0xFFFFFF}};
+    auto dist = [](uint32_t a, uint32_t b) {
+      int dr = int(a >> 16 & 255) - int(b >> 16 & 255), dg = int(a >> 8 & 255) - int(b >> 8 & 255), db = int(a & 255) - int(b & 255);
+      return dr * dr * 3 + dg * dg * 4 + db * db * 2;
+    };
+    const auto* best = &names[0];
+    for (const auto& n : names)
+      if (dist(n.second, rgb) < dist(best->second, rgb)) best = &n;
+    return best->first;
+  }
+
   std::unique_ptr<fw::doc::Document> doc_;
   fw::doc::edit::Editor editor_;
   uint32_t grouping_ = 0;  // edits left in an open group
@@ -382,6 +537,12 @@ class Generator {
   Edit Next(uint32_t applied, uint32_t undone) {
     Index();
     Edit e;
+    if (!pending_.empty()) {  // the rest of a save, undo past it, save again
+      e = pending_.front();
+      pending_.erase(pending_.begin());
+      if (e.kind != EditKind::Undo || applied) return e;
+      e = Edit{};
+    }
     if (stories_.empty()) {
       e.kind = EditKind::Undo;
       return e;
@@ -396,25 +557,39 @@ class Generator {
     } else if (roll < 9) {
       e.kind = EditKind::Group;  // the next few edits, undone and redone as one (as Paste and Replace All do)
       e.count = rng_.Between(2, 4);
-    } else if (roll < 40) {
+    } else if (roll < 11) {
+      e.kind = EditKind::Save;
+      if (applied && rng_.Percent(60)) {  // then undo back past it, and save again
+        Edit undo;
+        undo.kind = EditKind::Undo;
+        undo.count = rng_.Between(1, std::min<uint32_t>(applied, 4));
+        Edit save;
+        save.kind = EditKind::Save;
+        pending_ = {undo, save};
+      }
+    } else if (roll < 37) {
       Structural(e);
-    } else if (roll < 62) {
+    } else if (roll < 55) {
       e.kind = EditKind::Type;
       e.at = RandomPos(RandomPara());
       e.text = RandomText();
-    } else if (roll < 70) {
+    } else if (roll < 62) {
       PlainDelete(e);
-    } else if (roll < 74) {
+    } else if (roll < 65) {
       PlainDelete(e);
       e.kind = EditKind::Replace;
       e.text = RandomText();
-    } else if (roll < 82) {
+    } else if (roll < 72) {
       e.kind = EditKind::Split;
       e.at = RandomPos(RandomPara());
-    } else if (roll < 88) {
+    } else if (roll < 77) {
       Join(e);
-    } else {
+    } else if (roll < 85) {
       Formatting(e);
+    } else if (roll < 96) {
+      Command(e);
+    } else {
+      Paint(e);
     }
     return e;
   }
@@ -514,6 +689,56 @@ class Generator {
     }
   }
 
+  // A formatting command (Format.h, Lists.h, Styles.h) on a range of one story, mostly in one
+  // paragraph, sometimes across a few.
+  void Command(Edit& e) {
+    static const std::vector<std::string> lists = {"bullets", "numbering", "multilevel", "nolist",
+                                                   "restart", "continue",  "indent",     "outdent"};
+    static const std::vector<std::string> formats = {
+        "toggle=bold", "toggle=italic", "toggle=underline", "toggle=strike", "toggle=super", "toggle=sub",
+        "grow",        "shrink",        "grow1",            "shrink1",       "clearchars",   "clearpara",
+        "clearall",    "font=Arial",    "font=Times New Roman", "spacing=240", "spacing=360", "spacing=480",
+        "spacebefore", "border=box",    "border=bottom",    "border=none"};
+    e.kind = EditKind::Command;
+    e.at = RandomPos(RandomPara());
+    e.to = Later(e.at, rng_.Percent(70) ? 0 : 3);
+    uint32_t roll = rng_.Below(100);
+    if (roll < 35) {
+      e.format = rng_.Pick(lists);
+    } else if (roll < 65) {
+      // A style from the gallery (built-ins the document lacks get Word's definition), or one the
+      // document has, paragraph or character; now and then the style itself changes.
+      std::vector<std::string> mine;
+      for (const Style& s : doc_.Styles())
+        if ((s.type == StyleType::Paragraph || s.type == StyleType::Character) && !s.id.empty()) mine.emplace_back(s.id);
+      uint32_t which = rng_.Below(100);
+      if (which < 12) {
+        e.format = "update";
+      } else if (which < 25 && !mine.empty()) {
+        e.format = "modify=" + rng_.Pick(mine);
+      } else if (which < 65 || mine.empty()) {
+        std::vector<fw::doc::edit::StyleEntry> gallery = fw::doc::edit::GalleryStyles(doc_);
+        e.format = gallery.empty() ? "apply=Normal" : "apply=" + rng_.Pick(gallery).name;
+      } else {
+        e.format = "apply=" + rng_.Pick(mine);
+      }
+    } else {
+      e.format = rng_.Pick(formats);
+    }
+  }
+
+  // The format painter: from a character anywhere editable to a range, half the time whole paragraphs.
+  void Paint(Edit& e) {
+    e.kind = EditKind::Paint;
+    e.from = RandomPos(RandomPara());
+    e.at = RandomPos(RandomPara());
+    e.to = Later(e.at, rng_.Percent(70) ? 0 : 2);
+    if (rng_.Percent(50)) {
+      e.at.offset = 0;
+      e.to.offset = Len(e.to.para);
+    }
+  }
+
   // Everything the edits can aim at in the document as it is now.
   std::vector<Span> Spans() {
     std::vector<Span> spans;
@@ -604,6 +829,7 @@ class Generator {
 
   const Document& doc_;
   Rng& rng_;
+  std::vector<Edit> pending_;  // edits that must come next
   std::vector<uint32_t> stories_;
   std::unordered_map<uint32_t, std::vector<uint32_t>> paras_;               // story -> paragraphs
   std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> order_;       // paragraph -> story, index
@@ -766,6 +992,38 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     fail("open", "the editor refuses it: " + st.message);
     return r;
   }
+  // Saves, then checks the saved file: it opens, is consistent, and reads back as the edited
+  // document. `when` names a save before the last ("after edit 12: "). False when it failed.
+  auto saveAndCheck = [&](const std::string& when) {
+    std::string before;
+    auto save = [&] {
+      before = Digest(target->Doc());
+      st = target->Save(r.saved);
+      r.written = target->written;
+    };
+    if (DWORD crash = Guarded(save)) return fail("crash", when + CrashText(crash) + " while saving"), false;
+    if (!st.Ok()) return fail("save", when + st.message), false;
+    auto again = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(r.saved), fw::pkg::Limits::Default(), st);
+    if (again) st = again->Verify();
+    if (!st.Ok()) return fail("open", when + "the saved file doesn't open: " + st.message), false;
+    for (const std::string& error : fw::pkg::CheckPackage(*again).errors)
+      if (std::find(known.begin(), known.end(), error) == known.end()) return fail("check", when + error), false;
+    std::unique_ptr<Document> reread;
+    auto reopen = [&] { reread = docx::Read(std::move(again), st); };
+    if (DWORD crash = Guarded(reopen)) return fail("crash", when + CrashText(crash) + " reading the saved file"), false;
+    if (!reread) return fail("reopen", when + st.message), false;
+    std::string after;
+    auto digest = [&] { after = Digest(*reread); };
+    if (DWORD crash = Guarded(digest)) return fail("crash", when + CrashText(crash) + " reading the saved file's text"), false;
+    if (before != after) {
+      fail("differs", when + FirstDifference(before, after));
+      r.edited = std::move(before);
+      r.readBack = std::move(after);
+      return false;
+    }
+    return true;
+  };
+
   // The edits go to the log before they're applied, so that a crash that ends fwtool still leaves them.
   std::ofstream logFile;
   if (!log.empty()) logFile.open(log, std::ios::trunc);
@@ -789,14 +1047,25 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     }
     if (logFile) logFile << torture::FormatEdit(e) << std::endl;
     r.applied.push_back(e);
+    if (e.kind == EditKind::Save) {  // as Ctrl+S: saved and checked, and the edits go on from there
+      ++r.done;
+      if (!saveAndCheck("after edit " + std::to_string(i) + ": ")) break;
+      target->Saved();
+      groupLeft = 0;  // saving closed an open group
+      continue;
+    }
     Applied applied = Applied::Refused;
     std::string why;
     // An edit changes only the paragraphs it's applied to (a delete, those it spans; a join, the two):
     // the others must read the same after, those after it moved by the paragraphs it added or
     // removed. Reading every paragraph first fills the model's caches, which would hide a stale cache
     // from the read-back comparison, so half the rounds (by seed) check this and the other half that.
+    // Formatting commands are local too, except changing a style, which changes every paragraph that
+    // uses it. (List numbers aren't in the paragraph lines.)
+    const bool styleChange = e.kind == EditKind::Command && (e.format == "update" || e.format.starts_with("modify="));
     bool local = e.kind == EditKind::Type || e.kind == EditKind::Delete || e.kind == EditKind::Replace ||
-                 e.kind == EditKind::Split || e.kind == EditKind::Join || e.kind == EditKind::Format;
+                 e.kind == EditKind::Split || e.kind == EditKind::Join || e.kind == EditKind::Format ||
+                 e.kind == EditKind::Paint || (e.kind == EditKind::Command && !styleChange);
     bool locality = local && (seed & 1);
     std::vector<std::string> linesBefore, linesAfter;
     auto apply = [&] {
@@ -826,15 +1095,23 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
       if (e.kind == EditKind::Type || e.kind == EditKind::Split) lo = hi = e.at.para;
       if (e.kind == EditKind::Join) lo = e.at.para, hi = e.at.para + 1;
       int64_t shift = static_cast<int64_t>(linesAfter.size()) - static_cast<int64_t>(linesBefore.size());
-      if (e.kind == EditKind::Format && shift != 0) {
+      if ((e.kind == EditKind::Format || e.kind == EditKind::Command || e.kind == EditKind::Paint) && shift != 0) {
         fail("spill", "formatting changed the number of paragraphs: " + torture::FormatEdit(e));
         break;
       }
       auto cut = [](const std::string& s) { return s.size() > 120 ? s.substr(0, 120) + "..." : s; };
+      // A paragraph without w:pStyle takes the default paragraph style. In a document that has
+      // none, a command that adds one (Normal, as List Paragraph's base) changes its style's name
+      // from nothing to that, and nothing else: not a spill.
+      auto same = [](const std::string& before, const std::string& after) {
+        if (after == before) return true;
+        const size_t space = after.find(' ');
+        return before.starts_with(" ") && space != std::string::npos && after.compare(space, std::string::npos, before) == 0;
+      };
       for (uint32_t p = 0; p < linesBefore.size(); ++p) {
         if (p >= lo && p <= hi) continue;
         int64_t q = p > hi ? static_cast<int64_t>(p) + shift : static_cast<int64_t>(p);
-        if (q >= 0 && q < static_cast<int64_t>(linesAfter.size()) && linesAfter[static_cast<size_t>(q)] == linesBefore[p]) continue;
+        if (q >= 0 && q < static_cast<int64_t>(linesAfter.size()) && same(linesBefore[p], linesAfter[static_cast<size_t>(q)])) continue;
         const Story& story = target->Doc().Stories()[target->Doc().Para(static_cast<uint32_t>(std::max<int64_t>(0, std::min<int64_t>(q, static_cast<int64_t>(linesAfter.size()) - 1)))).story];
         std::string where = story.part < target->Doc().Parts().size() ? target->Doc().Parts()[story.part].name : "?";
         std::string after = q >= 0 && q < static_cast<int64_t>(linesAfter.size()) ? cut(linesAfter[static_cast<size_t>(q)]) : "(gone)";
@@ -851,34 +1128,7 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     else ++undoable, undone = 0, groupCounted = inGroup;
   }
   if (r.failure) return r;
-
-  std::string before;
-  auto save = [&] {
-    before = Digest(target->Doc());
-    st = target->Save(r.saved);
-    r.written = target->written;
-  };
-  if (DWORD crash = Guarded(save)) return fail("crash", CrashText(crash) + " while saving"), r;
-  if (!st.Ok()) return fail("save", st.message), r;
-
-  // The saved file opens, is consistent, and reads back as the edited document.
-  auto again = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(r.saved), fw::pkg::Limits::Default(), st);
-  if (again) st = again->Verify();
-  if (!st.Ok()) return fail("open", "the saved file doesn't open: " + st.message), r;
-  for (const std::string& error : fw::pkg::CheckPackage(*again).errors)
-    if (std::find(known.begin(), known.end(), error) == known.end()) return fail("check", error), r;
-  std::unique_ptr<Document> reread;
-  auto reopen = [&] { reread = docx::Read(std::move(again), st); };
-  if (DWORD crash = Guarded(reopen)) return fail("crash", CrashText(crash) + " reading the saved file"), r;
-  if (!reread) return fail("reopen", st.message), r;
-  std::string after;
-  auto digest = [&] { after = Digest(*reread); };
-  if (DWORD crash = Guarded(digest)) return fail("crash", CrashText(crash) + " reading the saved file's text"), r;
-  if (before != after) {
-    fail("differs", FirstDifference(before, after));
-    r.edited = std::move(before);
-    r.readBack = std::move(after);
-  }
+  saveAndCheck("");
   return r;
 }
 
