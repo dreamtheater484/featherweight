@@ -730,9 +730,24 @@ struct EditorState {
   // After a direct change, done or undone: the model's indexes are built again, every cache goes,
   // and every paragraph may look different.
   void RefreshAll(const CustomStep& step) {
+    // A step that says which paragraphs it changed leaves the others as they were: they keep their
+    // versions, so what was measured for them stays (a big table's cells, after formatting one).
+    // Past `renumberFrom`, only the list paragraphs may read differently (their numbers).
+    const bool ranged = step.first != kNone && step.count > 0 && step.first + step.count <= d.paras_.size();
+    const uint32_t changedEnd = std::min(step.renumberFrom, step.first + step.count);
+    auto changed = [&](uint32_t i) { return i >= step.first && i < changedEnd; };
+    std::unordered_map<ElemId, uint32_t> kept;
+    if (ranged)
+      for (uint32_t i = 0; i < d.paras_.size(); ++i)
+        if (!changed(i)) kept.emplace(d.paras_[i].elem, d.paras_[i].version);
     d.ResetCaches();
     d.BuildIndexes();
-    for (Paragraph& p : d.paras_) p.version = ++version;
+    for (uint32_t i = 0; i < d.paras_.size(); ++i) {
+      Paragraph& p = d.paras_[i];
+      const bool renumbered = i >= changedEnd && i < step.first + step.count && d.InList(i);
+      const auto it = ranged && !changed(i) && !renumbered ? kept.find(p.elem) : kept.end();
+      p.version = it != kept.end() ? it->second : ++version;
+    }
     Change ch;
     if (step.first != kNone && step.count > 0 && step.first + step.count <= d.paras_.size()) {
       ch.story = d.paras_[step.first].story;

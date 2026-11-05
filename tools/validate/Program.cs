@@ -129,9 +129,16 @@ static class Program {
     problem = null;
     try {
       using OpenXmlPackage package = Open(path);
-      foreach (ValidationErrorInfo e in Validator.Validate(package))
+      bool strict = package.StrictRelationshipFound;
+      foreach (ValidationErrorInfo e in Validator.Validate(package)) {
+        // The SDK reads a Strict document as transitional, whose w:lvlJc has no start or end. Strict's
+        // ST_Jc has them, and Word writes them there (a numbered list saved as Strict).
+        if (strict && (e.Path?.XPath ?? "").EndsWith("/w:lvlJc[1]") &&
+            ((e.Description ?? "").Contains("value 'start'") || (e.Description ?? "").Contains("value 'end'")))
+          continue;
         result.Add(new Problem(e.Id ?? e.ErrorType.ToString(), e.Part?.Uri.ToString() ?? "", e.Path?.XPath ?? "",
                                e.Description ?? ""));
+      }
     } catch (Exception ex) {
       problem = ex.GetType().Name + ": " + ex.Message;
     }
