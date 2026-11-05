@@ -33,6 +33,26 @@ fwtool roundtrip --expect-reject tests/office/malicious
 
 `fwtool check` applies the reference registry (`src/pkg/References.h`, rules in `ReferenceRules.cpp`): every reference resolves, ids are unique, pairs are complete, and the derived data it can see (the calculation chain, chart caches and embedded workbooks, VML notes) matches its sources. What Office tolerates, such as a missing style, is a warning. It also lists the extensions it doesn't know, near which structural edits will be blocked.
 
+## Real-world corpus (private)
+
+`real-world.json` lists real-world Word documents (blank templates and published documents from governments, universities, international organizations and publishers) for D1's fidelity measurements against Word (plan §10). The files aren't committed, because their licences vary. `scripts/fetch-corpus.ps1` downloads them into the folder that `FW_CORPUS` names, checks each hash, and screens every file before anything opens it: only allowed hosts over HTTPS, `.docx` only, no macros, ActiveX, OLE objects, attached templates, external links other than plain hyperlinks, or risky fields, then `fwtool check` and Microsoft Defender. `scripts/reference-renders.ps1 -Corpus` makes Word's PDFs:
+
+```
+<FW_CORPUS>\docx\<category>\<id>.docx
+<FW_CORPUS>\reference\docx\<category>\<id>.docx.pdf
+<FW_CORPUS>\reference\manifest.json
+```
+
+Each entry records the source, terms of use, hash, language, producer, Word's compatibility mode and tags for the structures it contains, so tests can pick files by tag. Rejected candidates stay in the manifest's `rejected` list with their reasons.
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts/fetch-corpus.ps1 -Out D:/FeatherweightCorpus
+```
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts/reference-renders.ps1 -Corpus D:/FeatherweightCorpus
+```
+
 ## Regenerating
 
 Use a venv, never the global Python. From the repository root:
