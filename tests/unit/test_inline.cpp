@@ -1,3 +1,6 @@
+#include <windows.h>
+#include <objbase.h>
+
 #include "TestHarness.h"
 
 #include <string>
@@ -7,6 +10,8 @@
 #include "doc/edit/Editor.h"
 #include "doc/edit/HeaderFooter.h"
 #include "doc/edit/Inline.h"
+#include "doc/edit/Page.h"
+#include "doc/edit/Pictures.h"
 #include "doc/model/Utf.h"
 #include "pkg/Check.h"
 
@@ -342,6 +347,56 @@ TEST(HeaderFooter_AnUndoneFooterIsLeftOutOfTheFile) {
   CHECK(editor.Redo());
   saved = save();
   CHECK(saved && saved->FindPart("/word/footer1.xml") && footerRels(*saved) == 1);
+}
+
+TEST(HeaderFooter_ADroppedHeadersPicturesGoWithIt) {
+  // d3-torture finding 24: a picture in section 1's header, then the section break deleted. Nothing
+  // refers to that header any more, so a save leaves it out, and the pictures only it used too.
+  CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);  // the picture's PNG copy is made with WIC
+  Fixture f;
+  f.styles = kStyles;
+  const std::string sect = "<w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" "
+                           "w:left=\"1440\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/>";
+  f.body = "<w:p><w:pPr><w:sectPr>" + sect + "</w:sectPr></w:pPr><w:r><w:t>One</w:t></w:r></w:p>"
+           "<w:p><w:r><w:t>Two</w:t></w:r></w:p><w:sectPr>" + sect + "</w:sectPr>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  edit::Editor editor(*doc);
+  std::u16string why;
+  const uint32_t first = edit::EnsureHeaderFooter(editor, 0, false, HdrFtrType::Default, why);
+  // Section 2 gets a header of its own (Link to Previous off), as in the reproducer.
+  CHECK(first != kNone && edit::SetLinkToPrevious(editor, 1, false, HdrFtrType::Default, false));
+  if (first == kNone) return;
+  edit::Pictures pictures(editor);
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"20\"><rect width=\"40\" height=\"20\" fill=\"#36c\"/></svg>";
+  CHECK(pictures.Insert({doc->StoryParagraphs(first)[0], 0}, std::vector<uint8_t>(svg.begin(), svg.end())).ok);
+  auto save = [&] {
+    docx::SaveOptions o;
+    o.changedParts = editor.DirtyParts();
+    o.edited = true;
+    std::vector<uint8_t> out;
+    if (!docx::Serialize(*doc, o, out).Ok()) return std::unique_ptr<fw::pkg::Package>();
+    Status st;
+    auto pkg = test::OpenBytes(std::move(out), st);
+    if (pkg && !fw::pkg::CheckPackage(*pkg).Ok()) return std::unique_ptr<fw::pkg::Package>();
+    return pkg;
+  };
+  auto media = [](const fw::pkg::Package& pkg) {
+    size_t n = 0;
+    for (const auto& part : pkg.Parts()) n += part.name.find("/word/media/") == 0 ? 1 : 0;
+    return n;
+  };
+  auto saved = save();
+  const size_t pictureParts = saved ? media(*saved) : 0;
+  CHECK(saved && pictureParts >= 1);
+  CHECK(edit::DeleteSectionBreak(editor, 0));
+  saved = save();
+  CHECK(saved && media(*saved) == 0 && saved->FindPart("/word/header2.xml") && !saved->FindPart("/word/header1.xml"));
+  // Undone: the header and its picture are back in the file.
+  CHECK(editor.Undo());
+  saved = save();
+  CHECK(saved && media(*saved) == pictureParts && saved->FindPart("/word/header1.xml"));
 }
 
 TEST(HeaderFooter_PageNumbersGoInTheFooter) {

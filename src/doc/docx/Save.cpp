@@ -130,11 +130,15 @@ UnusedMedia FindUnusedMedia(const Document& doc, const std::vector<std::pair<uin
     for (const pkg::Relationship& r : rels->items)
       if (storyRel(r) && !Mentions(xml, r.id)) out.relationships.emplace_back(rels->source, r.id);
   }
-  // A part goes when every relationship to it does.
-  for (const auto& [source, id] : out.relationships) {
+  // A part goes when every relationship to it does. A part that goes takes its own relationships
+  // with it (its .rels is left out), so what only it used goes too: a header's pictures (d3-torture
+  // finding 24). Each relationship is looked at once, after those before it.
+  std::vector<std::pair<std::string, std::string>> going = out.relationships;
+  for (size_t k = 0; k < going.size(); ++k) {
+    const auto [source, id] = going[k];  // a copy: `going` grows
     const pkg::RelationshipSet* rels = package.RelationshipsOf(source);
     const pkg::Relationship* r = rels ? rels->Find(id) : nullptr;
-    if (!r || r->targetPart.empty()) continue;
+    if (!r || r->external || r->targetPart.empty()) continue;
     const std::string target = pkg::PartKey(r->targetPart);
     if (std::any_of(out.parts.begin(), out.parts.end(), [&](const std::string& p) { return pkg::PartKey(p) == target; }))
       continue;
@@ -142,11 +146,13 @@ UnusedMedia FindUnusedMedia(const Document& doc, const std::vector<std::pair<uin
     for (const pkg::RelationshipSet& set : package.Relationships())
       for (const pkg::Relationship& other : set.items) {
         if (other.external || pkg::PartKey(other.targetPart) != target) continue;
-        const bool going = std::find(out.relationships.begin(), out.relationships.end(),
-                                     std::make_pair(set.source, other.id)) != out.relationships.end();
-        if (!going) used = true;
+        if (std::find(going.begin(), going.end(), std::make_pair(set.source, other.id)) == going.end()) used = true;
       }
-    if (!used) out.parts.push_back(r->targetPart);
+    if (used) continue;
+    out.parts.push_back(r->targetPart);
+    if (const pkg::RelationshipSet* own = package.RelationshipsOf(r->targetPart))
+      for (const pkg::Relationship& o : own->items)
+        if (!o.external && !o.targetPart.empty()) going.emplace_back(own->source, o.id);
   }
   return out;
 }
