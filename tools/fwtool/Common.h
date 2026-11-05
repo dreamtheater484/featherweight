@@ -30,5 +30,7 @@ int RunRoundtrip(const Options& options);
 int RunDump(const Options& options);
 int RunCheck(const Options& options);
 int RunPrintSample(const Options& options);
+// Parses its own options, from argv[2] on.
+int RunLines(int argc, wchar_t** argv);
 
 }  // namespace fwtool
