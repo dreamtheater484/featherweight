@@ -69,8 +69,9 @@ Result Make(Editor& ed, Pos from, Pos to, Pos refAt, std::u16string_view text, c
       doc.Para(from.para).story != doc.Para(to.para).story)
     return Fail(u"A comment is about text in one place.");
   const StoryKind kind = doc.Stories()[doc.Para(from.para).story].kind;
-  if (kind != StoryKind::Main && kind != StoryKind::Footnote && kind != StoryKind::Endnote)
-    return Fail(u"Comments go in the document's text, not in headers, footers or other comments.");
+  // As in Word, which keeps comments to the main text (one in a note is refused by its validator).
+  if (kind != StoryKind::Main)
+    return Fail(u"Comments go in the document's text, not in notes, headers, footers or other comments.");
   const std::string id = ed.NewChangeId(), author = ed.ChangeAuthor();
   ed.BeginGroup(name);
   auto fail = [&](Result r) {

@@ -210,6 +210,10 @@ class Editor {
   Result InsertCommentMarks(Pos from, Pos to, Pos refAt, std::string_view id);
   // Takes out the marks of comment `id`, wherever they are in one story.
   Result RemoveCommentMarks(std::string_view id);
+  // An insertion that runs across `from` or `to` (one paragraph) cut there, so new text that
+  // becomes a field or link can go round its own (w:fldSimple/w:ins; one can't hold the other the
+  // other way). One transaction; none when nothing runs across.
+  Result CutInsertionsAround(Pos from, Pos to);
 
   // ---- Tables (D3, plan §6.2)
   // Cells are named by positions in them: `from` and `to` in two cells of one table name the block

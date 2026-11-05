@@ -231,6 +231,9 @@ Result InsertField(Editor& editor, Pos at, std::string_view instr, std::u16strin
   bool ok = typed.caret.para == para && to == from + result.size();
   for (const TextRun& r : doc.Runs(para))
     if (r.end > from && r.start < to && (InField(r) || r.displayOnly)) ok = false;
+  // With Track Changes on, the text joined the author's insertion before it: the field goes round
+  // an insertion of its own (w:fldSimple/w:ins), as one can't be in the other.
+  if (ok) ok = bool(editor.CutInsertionsAround({para, from}, {para, to}));
   if (ok) {
     TreeEdit te(editor, typed.caret);
     te.Begin(name);
