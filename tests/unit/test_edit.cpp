@@ -1483,3 +1483,33 @@ TEST(Clip_LinksTravel) {
   CHECK(Consistent(*doc, f) && ChecksOut(*doc));
 }
 
+
+TEST(Edit_TakingAPropertyOutKeepsWhatFollowedIt) {
+  // A w14 extension kept after a property stays when the property goes (d2-format's finding):
+  // after the property before it, or alone in the container.
+  Fixture f;
+  f.body =
+      "<w:p><w:r><w:rPr><w:sz w:val=\"24\"/><w14:cntxtAlts/></w:rPr><w:t>one</w:t></w:r></w:p>"
+      "<w:p><w:pPr><w:rPr><w:b/><w:sz w:val=\"24\"/><w14:cntxtAlts/></w:rPr></w:pPr>"
+      "<w:r><w:rPr><w:b/><w:sz w:val=\"24\"/><w14:cntxtAlts/></w:rPr><w:t>two</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  CHECK(ed.SetRunProps(P(ps[0], 0), P(ps[0], 3), PropEdit().Remove("sz")));
+  CHECK(ed.SetRunProps(P(ps[1], 0), P(ps[1], 3), PropEdit().Remove("sz")));
+  CHECK(ed.SetMarkProps(ps[1], ps[1], PropEdit().Remove("sz")));
+  CHECK(BodyIs(*doc,
+               "<w:p><w:r><w:rPr><w14:cntxtAlts/></w:rPr><w:t>one</w:t></w:r></w:p>"
+               "<w:p><w:pPr><w:rPr><w:b/><w14:cntxtAlts/></w:rPr></w:pPr>"
+               "<w:r><w:rPr><w:b/><w14:cntxtAlts/></w:rPr><w:t>two</w:t></w:r></w:p>"));
+  // And a property added back goes before it again.
+  CHECK(ed.SetRunProps(P(ps[0], 0), P(ps[0], 3), PropEdit().Set("i")));
+  CHECK(BodyIs(*doc,
+               "<w:p><w:r><w:rPr><w:i/><w14:cntxtAlts/></w:rPr><w:t>one</w:t></w:r></w:p>"
+               "<w:p><w:pPr><w:rPr><w:b/><w14:cntxtAlts/></w:rPr></w:pPr>"
+               "<w:r><w:rPr><w:b/><w14:cntxtAlts/></w:rPr><w:t>two</w:t></w:r></w:p>"));
+  CHECK(Consistent(*doc, f) && UndoSteps(ed) == 4 && MainXml(*doc) == before);
+}

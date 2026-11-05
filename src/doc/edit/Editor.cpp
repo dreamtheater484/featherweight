@@ -228,6 +228,37 @@ struct EditorState {
     }
     return id;
   }
+  // A property about to be taken out: what was kept around it (an extension that followed it)
+  // stays where it was, after the property before it, else before the one after it, else in the
+  // container. What was kept inside it goes with it.
+  void KeepFragmentsAround(ElemId child) {
+    const pkg::NodeId n = E(child).node;
+    if (n == pkg::kNoNode || n == pkg::kFieldNode) return;
+    std::vector<pkg::Fragment> stay, move;
+    for (pkg::Fragment& f : d.store_.FragmentsCopy(n))
+      (f.slot == pkg::Slot::Before || f.slot == pkg::Slot::After ? move : stay).push_back(std::move(f));
+    if (move.empty()) return;
+    // Before fragments first, then After ones: their order around the child.
+    std::stable_partition(move.begin(), move.end(), [](const pkg::Fragment& f) { return f.slot == pkg::Slot::Before; });
+    const ElemId prev = PrevSibling(child), next = E(child).next;
+    const ElemId to = prev != kNoElem ? prev : next != kNoElem ? next : E(child).parent;
+    const pkg::Slot slot = prev != kNoElem ? pkg::Slot::After : next != kNoElem ? pkg::Slot::Before : pkg::Slot::Inside;
+    const pkg::NodeId target = E(to).node;
+    if (target == pkg::kNoNode || target == pkg::kFieldNode) return;
+    for (pkg::Fragment& f : move) {
+      f.slot = slot;
+      f.afterChild.clear();
+    }
+    // After the previous property's own, or the container's first ones; before the next one's.
+    std::vector<pkg::Fragment> there = d.store_.FragmentsCopy(target);
+    auto at = slot == pkg::Slot::Before ? there.begin() : there.end();
+    if (slot == pkg::Slot::Inside)
+      at = std::find_if(there.begin(), there.end(),
+                        [](const pkg::Fragment& f) { return !(f.slot == pkg::Slot::Inside && f.afterChild.empty()); });
+    there.insert(at, std::make_move_iterator(move.begin()), std::make_move_iterator(move.end()));
+    d.store_.SetFragments(n, std::move(stay));
+    d.store_.SetFragments(target, std::move(there));
+  }
   // Moves `from`'s kept fragments in `slot` (Inside: the ones first inside it) to just after `to`.
   void MoveFragmentsBehind(ElemId from, pkg::Slot slot, ElemId to) {
     const pkg::NodeId a = E(from).node, b = E(to).node;
@@ -1379,7 +1410,10 @@ struct EditorState {
         ElemId child = Child(cur, name);
         bool lastPart = slash == std::string_view::npos;
         if (lastPart && item.remove) {
-          if (child != kNoElem) Unlink(child);
+          if (child != kNoElem) {
+            KeepFragmentsAround(child);
+            Unlink(child);
+          }
           break;
         }
         if (child == kNoElem) child = AddInOrder(cur, name);
