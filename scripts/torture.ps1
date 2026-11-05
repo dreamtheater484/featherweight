@@ -87,7 +87,7 @@ if (-not $NoWord -and $pairs.Count) {
   $check = Join-Path $PSScriptRoot "word-open-check.ps1"
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $check (Join-Path $Out "saved") -Json (Join-Path $Out "word.json")
   foreach ($f in (Read-Json (Join-Path $Out "word.json")).files) { $word[[IO.Path]::GetFullPath($f.file)] = $f }
-  $originals = @($word.Values | Where-Object { $_.status -ne "ok" } | ForEach-Object { $pairs[[IO.Path]::GetFullPath($_.file)] } | Where-Object { $_ })
+  $originals = @($word.Values | Where-Object { $_.status -notin "ok", "notice" } | ForEach-Object { $pairs[[IO.Path]::GetFullPath($_.file)] } | Where-Object { $_ })
   if ($originals.Count) {
     "== Word: the originals of the copies it complained about"
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $check @originals -Json (Join-Path $Out "word-originals.json")
@@ -102,7 +102,7 @@ foreach ($f in $torture.files) {
   $original = [IO.Path]::GetFullPath($f.file)
   $w = if ($saved) { $word[$saved] } else { $null }
   $b = $baseline[$original]
-  $wordStatus = if (-not $w) { $null } elseif ($w.status -eq "ok") { "ok" } elseif ($b -and $b.status -ne "ok") { "original too" } else { $w.status }
+  $wordStatus = if (-not $w) { $null } elseif ($w.status -in "ok", "notice") { $w.status } elseif ($b -and $b.status -notin "ok", "notice") { "original too" } else { $w.status }
   $rows += [pscustomobject][ordered]@{
     file = $f.file
     skipped = $f.skipped
@@ -114,7 +114,8 @@ foreach ($f in $torture.files) {
     wordDetail = if ($w -and $w.status -ne "ok") { (@($w.dialogs | ForEach-Object { $_.text }) + @($w.error) | Where-Object { $_ }) -join " / " } else { $null }
   }
 }
-$failed = @($rows | Where-Object { $_.failures.Count -or $_.newValidatorErrors.Count -or ($_.word -and $_.word -notin "ok", "original too") })
+$wordPasses = "ok", "notice", "original too"
+$failed = @($rows | Where-Object { $_.failures.Count -or $_.newValidatorErrors.Count -or ($_.word -and $_.word -notin $wordPasses) })
 $md = @("# Editing torture test", "",
   "Seed $Seed, $Rounds rounds of $Edits edits per document. $(Get-Date -Format 'yyyy-MM-dd HH:mm').", "",
   "| | Documents |", "|---|---|",
@@ -123,21 +124,22 @@ $md = @("# Editing torture test", "",
   "| Edits done / refused | $(($rows | Measure-Object done -Sum).Sum) / $(($rows | Measure-Object refused -Sum).Sum) |",
   "| fwtool torture failures (save, check, read back) | $(@($rows | Where-Object { $_.failures.Count }).Count) |",
   "| New validator errors | $(@($rows | Where-Object { $_.newValidatorErrors.Count }).Count) |",
-  "| Word: repair prompt or error | $(if ($NoWord) { 'not run' } else { @($rows | Where-Object { $_.word -and $_.word -notin 'ok', 'original too' }).Count }) |",
-  "| Word: the original complains too | $(if ($NoWord) { 'not run' } else { @($rows | Where-Object { $_.word -eq 'original too' }).Count }) |", "")
+  "| Word: repair prompt or error | $(if ($NoWord) { 'not run' } else { @($rows | Where-Object { $_.word -and $_.word -notin $wordPasses }).Count }) |",
+  "| Word: the original complains too | $(if ($NoWord) { 'not run' } else { @($rows | Where-Object { $_.word -eq 'original too' }).Count }) |",
+  "| Word: only a notice about this PC's Office | $(if ($NoWord) { 'not run' } else { @($rows | Where-Object { $_.word -eq 'notice' }).Count }) |", "")
 if ($failed.Count) {
   $md += "## Failures", ""
   foreach ($r in $failed) {
     $md += "### $($r.file)", ""
     foreach ($x in $r.failures) { $md += "- round $($x.round): $($x.category): $($x.message) ($($x.edits) edits: ``$($x.reproducer)``)" }
     foreach ($x in $r.newValidatorErrors | Select-Object -First 5) { $md += "- validator: $($x.Part) $($x.Path): $($x.Description) ($($x.Id))" }
-    if ($r.word -and $r.word -notin "ok", "original too") { $md += "- Word: $($r.word): $($r.wordDetail)" }
+    if ($r.word -and $r.word -notin $wordPasses) { $md += "- Word: $($r.word): $($r.wordDetail)" }
     $md += ""
   }
 }
 [IO.File]::WriteAllText((Join-Path $Out "summary.md"), ($md -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $Out "summary.json"), ([ordered]@{ seed = $Seed; edits = $Edits; rounds = $Rounds; word = -not $NoWord; files = $rows } | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
 ""
-$md[4..12] -join "`n"
+$md[4..13] -join "`n"
 "Summary: $(Join-Path $Out 'summary.md')"
 exit $(if ($failed.Count) { 1 } else { 0 })

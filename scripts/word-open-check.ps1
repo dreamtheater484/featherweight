@@ -13,9 +13,10 @@
     the file opens, every dialog the Word process shows is read (its title and text) and
     cancelled. A dialog that offers to recover the contents is a repair prompt.
 
-  Results, per file: ok (opened, no dialog); repair (Word offered to repair it, or refused it as
-  unreadable); error (Word showed another dialog or refused the file otherwise); timeout.
-  The exit code is 1 when any file isn't ok.
+  Results, per file: ok (opened, no dialog); notice (opened, and the only dialogs were about this
+  PC's Office, such as a proofing feature that isn't installed: nothing about the file); repair
+  (Word offered to repair it, or refused it as unreadable); error (Word showed another dialog or
+  refused the file otherwise); timeout. The exit code is 1 when any file isn't ok or notice.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\word-open-check.ps1 out\saved
@@ -90,7 +91,16 @@ if ($Child) {
     $doc = $word.Documents.Open([ref]$Child, [ref]$false, [ref]$true, [ref]$false, [ref]"-", [ref]"-", [ref]$false,
                                 [ref]"-", [ref]"-", [ref]0, [ref]$missing, [ref]$false, [ref]$false, [ref]$missing, [ref]$true)
     $result.opened = $true
-    $doc.Close([ref]0)  # wdDoNotSaveChanges
+    # While a dialog is up (the parent cancels it), Word rejects calls: try again for a while.
+    for ($try = 0; ; $try++) {
+      try { $doc.Close([ref]0); break }  # wdDoNotSaveChanges
+      catch {
+        $ex = $_.Exception
+        while ($ex.InnerException -and $ex -isnot [Runtime.InteropServices.COMException]) { $ex = $ex.InnerException }
+        if ($try -ge 40 -or $ex.HResult -notin 0x80010001, 0x8001010A) { throw }  # RPC_E_CALL_REJECTED, RPC_E_SERVERCALL_RETRYLATER
+        Start-Sleep -Milliseconds 500
+      }
+    }
   } catch {
     $result.error = $_.Exception.Message
   } finally {
@@ -162,6 +172,8 @@ function Get-DialogText([IntPtr]$hwnd) {
   ($texts | Select-Object -Unique) -join " "
 }
 
+# A dialog that is about this PC's Office, not the file (a proofing tool that isn't installed).
+$noticeText = '(?i)feature is not (available|installed)|Microsoft Office Setup program|install this feature'
 # A dialog or message that means Word wants to repair the file, or found it unreadable.
 $repairText = '(?i)unreadable content|recover the contents|repair|is corrupt|appears to be corrupted|found a problem|problem with (its|the) contents|cannot be opened because there are problems'
 
@@ -179,7 +191,7 @@ $n = 0
 foreach ($f in @($files)) {
   $n++
   if (Test-Path $resultPath) { Remove-Item $resultPath }
-  $entry = [ordered]@{ file = $f.FullName; status = $null; dialogs = @(); error = $null }
+  $entry = [ordered]@{ file = $f.FullName; status = $null; opened = $false; dialogs = @(); error = $null }
   $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList @(
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"",
     "-Child", "`"$($f.FullName)`"", "-ResultFile", "`"$resultPath`"")
@@ -211,11 +223,13 @@ foreach ($f in @($files)) {
   # The child ends the Word it started; if it hung or died, that's done here.
   if ($r) { Stop-Started @($r.pid) $(if ($finished) { 15000 } else { 0 }) }
   if ($r -and $r.error) { $entry.error = $r.error }
+  $entry.opened = [bool]($r -and $r.opened)
   $all = (@($entry.dialogs | ForEach-Object { "$($_.title) $($_.text)" }) + @($entry.error)) -join " "
   $entry.status =
     if (-not $finished) { "timeout" }
     elseif ($all -match $repairText) { "repair" }
-    elseif ($r -and $r.opened -and -not $entry.dialogs.Count) { "ok" }
+    elseif ($entry.opened -and -not $entry.dialogs.Count -and -not $entry.error) { "ok" }
+    elseif ($entry.opened -and -not $entry.error -and -not @($entry.dialogs | Where-Object { "$($_.title) $($_.text)" -notmatch $noticeText }).Count) { "notice" }
     else { "error" }
   $what = if ($entry.dialogs.Count) { ($entry.dialogs | ForEach-Object { $_.text }) -join " || " } elseif ($entry.error) { $entry.error } else { "" }
   if ($what.Length -gt 220) { $what = $what.Substring(0, 220) + "..." }
@@ -223,7 +237,7 @@ foreach ($f in @($files)) {
   $entries += [pscustomobject]$entry
 }
 
-$bad = @($entries | Where-Object { $_.status -ne "ok" })
+$bad = @($entries | Where-Object { $_.status -notin "ok", "notice" })
 if ($Json) {
   Write-Json ([ordered]@{
     made = (Get-Date).ToString("yyyy-MM-dd HH:mm")

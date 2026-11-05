@@ -601,7 +601,16 @@ std::string FirstDifference(const std::string& a, const std::string& b) {
     std::string l = s.substr(from, end == std::string::npos ? std::string::npos : end - from);
     return l.size() > 160 ? l.substr(0, 160) + "..." : l;
   };
-  return "edited \"" + lineAt(a, line) + "\", read back \"" + lineAt(b, line) + "\"";
+  // The story it's in: the last "[kind id]" line at or before it.
+  std::string story = "main";
+  for (size_t at = line;; at = a.rfind('\n', at - 2) + 1) {
+    if (a.compare(at, 1, "[") == 0) {
+      story = lineAt(a, at);
+      break;
+    }
+    if (at < 2) break;
+  }
+  return "in " + story + ": edited \"" + lineAt(a, line) + "\", read back \"" + lineAt(b, line) + "\"";
 }
 
 // Runs fn, catching crashes (access violations and the like) and C++ exceptions alike: a crash in
