@@ -923,3 +923,41 @@ TEST(Tables_CancelledGroupLeavesNothing) {
   CHECK(SameXml(before, Written(*doc), "undone"));
   CHECK(!ed.CanUndo());
 }
+
+TEST(Tables_DeletingAcrossWholeTables) {
+  Fixture f;
+  f.body = Para("Before text") + Table({{"a", "b"}, {"c", "d"}}) + Para("Middle") + Table({{"e"}, {"f"}}) + Table({{"g"}}) +
+           Para("After text") + Para("End");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const std::string before = Written(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);  // Before text, a, b, c, d, Middle, e, f, g, After text, End
+  REQUIRE(ps.size() == 11);
+  // From inside the text before to inside the text after: the tables go, the ends join.
+  auto r = ed.Delete(P(ps[0], 6), P(ps[9], 5));
+  REQUIRE(r);
+  CHECK(Tables(*doc).empty());
+  ps = Main(*doc);
+  REQUIRE(ps.size() == 2);
+  CHECK_EQ(Text(*doc, ps[0]), std::string("Before text"));
+  CHECK(r.caret == P(ps[0], 6));
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  CHECK(ChecksOut(*doc));
+  // One step.
+  REQUIRE(ed.Undo());
+  CHECK(SameXml(before, Written(*doc), "undone"));
+  CHECK(!ed.CanUndo());
+  // Into a table, not past it: refused, nothing changes.
+  ps = Main(*doc);
+  auto part = ed.Delete(P(ps[0], 2), P(ps[2], 1));
+  CHECK(!part && !part.message.empty());
+  CHECK(SameXml(before, Written(*doc), "refused"));
+  // Typing over a selection across a table.
+  REQUIRE(ed.Replace(P(ps[5], 0), P(ps[9], 3), u"New"));
+  CHECK_EQ(Tables(*doc).size(), 1u);
+  CHECK_EQ(Text(*doc, Main(*doc)[5]), std::string("Newer text"));
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  CHECK(UndoesAndRedoes(ed, *doc, before));
+  CHECK(ChecksOut(*doc));
+}

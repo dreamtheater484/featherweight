@@ -786,6 +786,17 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
   }
   std::optional<TextPos> pos = PosAt(x, y, false);
   if (!pos && Editing() && PageAtPoint(x, y) >= 0) pos = PosAt(x, y, true);  // in a margin: the nearest place
+  // Beside a table row, in the margin: the row; dragging on, more rows (Word's selection bar).
+  if (auto row = !doubleClick && !(mods & kModShift) ? RowMarginAt(x, y) : std::nullopt; row && SelectRows(*row, *row)) {
+    rowDrag_ = true;
+    rowAnchor_ = *row;
+    drag_ = Drag::Select;
+    goalX_ = -1;
+    editor_->BreakTyping();
+    CaretMoved(false);
+    host_.ViewInvalidate();
+    return;
+  }
   if (pos) {
     const bool triple = !doubleClick && anim::Now() - lastDoubleClick_ < GetDoubleClickTime() &&
                         std::abs(x - lastDoubleX_) + std::abs(y - lastDoubleY_) < 6 * ui_;
@@ -835,6 +846,12 @@ void DocView::OnMouseMove(int x, int y, UINT mods) {
   if (drag_ == Drag::Select) {
     if (y < vp_.top) ScrollBy(0, (y - vp_.top) * 0.5, false);
     else if (y > vp_.bottom) ScrollBy(0, (y - vp_.bottom) * 0.5, false);
+    if (rowDrag_) {
+      const TextPos a = anchor_, f = focus_;
+      if (auto pos = PosAt(x, y, true); pos && SelectRows(rowAnchor_, *pos) && (!(a == anchor_) || !(f == focus_)))
+        host_.ViewInvalidate();
+      return;
+    }
     if (auto pos = PosAt(x, y, true); pos && StoryOf(*pos) == StoryOf(anchor_) && !(*pos == focus_)) {
       focus_ = *pos;
       host_.ViewInvalidate();
@@ -849,6 +866,7 @@ void DocView::OnMouseUp(int x, int y, int, UINT) {
   if (PictureMouseUp(x, y)) return;
   Drag d = drag_;
   drag_ = Drag::None;
+  rowDrag_ = false;
   if (d == Drag::Link) {
     FollowLink(pendingLink_);
   } else if (d == Drag::Select && !Editing() && !HasSelection() && std::abs(x - downX_) + std::abs(y - downY_) < 3) {
@@ -894,12 +912,41 @@ HCURSOR DocView::CursorAt(int x, int y) {
                  hand = LoadCursor(nullptr, IDC_HAND), move = LoadCursor(nullptr, IDC_SIZEALL);
   if (!Ready()) return arrow;
   if (drag_ == Drag::Pan) return move;
-  if (drag_ == Drag::Select) return ibeam;
+  if (drag_ == Drag::Select) return rowDrag_ ? arrow : ibeam;
   if (OverScrollbar(x, y)) return arrow;
   if (HCURSOR c = PictureCursor(x, y)) return c;
   if (!HitAt(x, y).link.empty()) return hand;
   if (presentation_) return arrow;
+  if (RowMarginAt(x, y)) return arrow;
   return PosAt(x, y, false) ? ibeam : arrow;
+}
+
+std::optional<DocView::TextPos> DocView::RowMarginAt(int x, int y) const {
+  // Left of a row's first cell, past its text's indent and the cell's margin: that cell.
+  if (!Editing() || !table_ || placeholder_) return std::nullopt;
+  const int page = PageAtPoint(x, y);
+  float px, py;
+  if (page < 0 || page >= static_cast<int>(pagination_->PageCount()) || !ToPagePoint(page, x, y, px, py))
+    return std::nullopt;
+  auto pos = pagination_->HitTest(page, px, py);
+  if (!pos) return std::nullopt;
+  auto cell = editor_->CellAt({pos->para, pos->offset});
+  if (!cell || cell->col != 0) return std::nullopt;
+  auto line = pagination_->LineAt(*pos);
+  if (!line || line->page != static_cast<size_t>(page) || py < line->box.top - 12 || py > line->box.bottom + 12)
+    return std::nullopt;
+  const float indent = std::max(0.0f, doc_->ResolvedPara(pos->para).indStart.Value() / 20.0f);
+  if (px >= line->box.left - indent - 8) return std::nullopt;
+  return TextPos{cell->start.para, cell->start.offset};
+}
+
+bool DocView::SelectRows(TextPos from, TextPos to) {
+  auto corners = editor_->Grow({from.para, from.offset}, {to.para, to.offset}, fw::doc::edit::Editor::Extent::Rows);
+  if (!corners) return false;
+  const TextPos a{corners->first.para, corners->first.offset}, b{corners->second.para, corners->second.offset};
+  anchor_ = a;
+  focus_ = b;
+  return true;
 }
 
 std::wstring DocView::TooltipAt(int x, int y) {

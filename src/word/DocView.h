@@ -423,6 +423,11 @@ class DocView : public PagedView {
   TextPos cellFrom_, cellTo_;
   uint32_t cellRevision_ = UINT32_MAX;
   std::unique_ptr<fw::doc::edit::Pictures> pictures_;  // with the editor, after it
+  // Rows chosen in the margin beside a table: the drag goes on by whole rows from here.
+  bool rowDrag_ = false;
+  TextPos rowAnchor_;
+  std::optional<TextPos> RowMarginAt(int x, int y) const;
+  bool SelectRows(TextPos from, TextPos to);
   uint64_t clipSource_ = 0;  // names this document in what it copies, to paste lists back into it
   bool keyFocus_ = true;
   bool annotationsStale_ = false;  // an edit moved comments, changes or links: find them again

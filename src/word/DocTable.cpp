@@ -702,6 +702,10 @@ void DocTable::FillContextMenu(HMENU m) {
   HMENU del = CreatePopupMenu();
   for (int cmd : {CmdTableDeleteRows, CmdTableDeleteColumns, CmdTableDeleteTable}) AppendItem(del, cmd, LabelOf(cmd), Query(cmd).enabled);
   menu::AppendSubmenu(m, del, L"Delete");
+  HMENU select = CreatePopupMenu();
+  for (int cmd : {CmdTableSelectCell, CmdTableSelectRow, CmdTableSelectColumn, CmdTableSelectTable})
+    AppendItem(select, cmd, LabelOf(cmd), Query(cmd).enabled);
+  menu::AppendSubmenu(m, select, L"Select");
   AppendItem(m, CmdTableMerge, LabelOf(CmdTableMerge), Query(CmdTableMerge).enabled);
   AppendItem(m, CmdTableSplit, LabelOf(CmdTableSplit), Query(CmdTableSplit).enabled);
   AppendItem(m, CmdTableProperties, LabelOf(CmdTableProperties), Query(CmdTableProperties).enabled);

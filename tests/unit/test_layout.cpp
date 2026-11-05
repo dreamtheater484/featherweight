@@ -13,6 +13,7 @@
 
 #include "PkgTestUtil.h"
 #include "doc/docx/Docx.h"
+#include "doc/edit/Clip.h"
 #include "doc/edit/Editor.h"
 #include "doc/layout/Layout.h"
 #include "text/Fonts.h"
@@ -654,6 +655,21 @@ TEST(Layout_TableEditsLayOutAgainAsFromScratch) {
   check(bool(ed.DeleteRows(cell(9, 0), cell(10, 0))), "rows deleted");
   check(bool(ed.DeleteColumns(cell(0, 1), cell(0, 1))), "a column deleted");
   check(bool(ed.SetRowHeight(cell(2, 0), cell(2, 0), 900, "exact")), "a row's height");
+  check(bool(ed.SetRowProps(cell(0, 0), cell(1, 0), edit::PropEdit().Set("tblHeader"))), "two header rows");
+  check(bool(ed.SetRowProps(cell(0, 0), cell(1, 0), edit::PropEdit().Remove("tblHeader"))), "no header row");
+  check(bool(ed.SetCellBorders(cell(1, 0), cell(3, 1), edit::Editor::CellBorders::All, "single", 12)), "borders");
+  check(bool(ed.SetCellProps(cell(4, 0), cell(4, 0), edit::PropEdit().Set("shd", {{"val", "clear"}, {"fill", "FFFF00"}}))),
+        "shading");
+  check(bool(ed.SetTableProps(cell(0, 0), edit::PropEdit().Set("jc", {{"val", "center"}}))), "centered");
+  check(bool(ed.AutoFit(cell(0, 0), edit::Editor::Fit::Window)), "fitted to the window");
+  {
+    // Copy and paste: cells over cells, and a new table in the text before.
+    auto clip = edit::CopyCells(ed, cell(1, 0), cell(2, 1));
+    REQUIRE(clip);
+    check(bool(edit::PasteClip(ed, cell(6, 0), cell(6, 0), *clip)), "cells pasted over cells");
+    check(bool(edit::PasteClip(ed, Pos{1, 2}, Pos{1, 2}, *clip)), "a table pasted");
+    check(bool(ed.Undo()), "the pasted table undone");
+  }
   check(bool(ed.InsertTable(Pos{0, 3}, 3, 2)), "a table inserted");
   check(bool(ed.Undo()) && bool(ed.Undo()) && bool(ed.Undo()), "undone");
   check(bool(ed.Redo()), "redone");
