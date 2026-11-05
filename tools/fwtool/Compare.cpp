@@ -399,7 +399,7 @@ int CompareCorpus(const Options& options) {
 // ---------- The self-test: Word against itself, and against known changes ----------
 
 int SelfTest(const Options& options) {
-  int documents = 0, failed = 0;
+  int documents = 0, failed = 0, noted = 0;
   for (const auto& input : options.inputs) {
     std::string error;
     auto set = ReadReferences(input, error);
@@ -417,10 +417,12 @@ int SelfTest(const Options& options) {
         continue;
       }
       reference->source = e.source;
-      std::vector<std::string> problems;
+      std::vector<std::string> problems, notes;
+      // Word counts pages before it exports, from a layout that can lag on long documents (it may
+      // still be the count the file was saved with). The PDF is what's measured against.
       if (e.pages && e.pages != static_cast<int>(reference->pages.size()))
-        problems.push_back("Word counted " + std::to_string(e.pages) + " pages, its PDF has " +
-                           std::to_string(reference->pages.size()));
+        notes.push_back("note: Word counted " + std::to_string(e.pages) + " pages before exporting, its PDF has " +
+                        std::to_string(reference->pages.size()) + "; the PDF is the reference");
 
       // Word against itself, through the dump format: every line matches.
       auto copy = fw::ReadLayoutDump(fw::WriteLayoutDump(*reference), &error);
@@ -461,10 +463,14 @@ int SelfTest(const Options& options) {
 
       std::printf("%s %s: %s\n", problems.empty() ? "[ ok ]" : "[FAIL]", e.source.c_str(), detail.c_str());
       for (const std::string& p : problems) std::printf("    %s\n", p.c_str());
+      for (const std::string& n : notes) std::printf("    %s\n", n.c_str());
       if (!problems.empty()) ++failed;
+      if (!notes.empty()) ++noted;
     }
   }
-  std::printf("\n%d documents, %d failed\n", documents, failed);
+  std::printf("\n%d documents, %d failed", documents, failed);
+  if (noted) std::printf("; %d with Word's page count differing from its PDF", noted);
+  std::printf("\n");
   return failed == 0 && documents > 0 ? 0 : 1;
 }
 

@@ -106,7 +106,7 @@ Real documents say much more about layout than generated ones, but they can't be
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\reference-renders.ps1 -Corpus $env:FW_CORPUS
    ```
-3. Check that the measurement reads your documents' PDFs correctly. Every document must pass. `fwtool` takes the corpus folder or its `reference` folder.
+3. Check that the measurement reads your documents' PDFs correctly. Every document must pass. `fwtool` takes the corpus folder or its `reference` folder. A note that Word's page count differs from its PDF isn't a failure. Word counts before it exports, sometimes still the count the file was saved with, and the PDF is what's measured against.
    ```powershell
    build\tools\fwtool\Release\fwtool.exe compare --self-test $env:FW_CORPUS
    ```
