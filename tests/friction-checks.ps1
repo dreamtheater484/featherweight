@@ -30,8 +30,9 @@ Set-Location $root
 New-Item -ItemType Directory -Force $Out | Out-Null
 $Out = (Resolve-Path $Out).Path
 
-# The window the steps' coordinates are for: --size 1100x700, light theme. The style box is at
-# 308,66; its list has Normal, No Spacing, Heading 1-3, Title... 31 px apart from 102.
+# The window the steps' coordinates are for: a client area of 1072x686 (--size 1100x700 where they
+# were written), light theme. The style box is at 308,66; its list has Normal, No Spacing,
+# Heading 1-3, Title... 31 px apart from 102.
 $styleBox = "click:308,66"
 $styleNoSpacing = "click:300,132"
 $styleTitle = "click:279,255"
@@ -140,6 +141,17 @@ $flows = @(
 
 $enc = New-Object System.Text.UTF8Encoding $false
 [Console]::OutputEncoding = $enc  # fwtool writes UTF-8 (the CV's en dash), whatever the console's code page
+
+# --size is the window's; its frame, and so the client area the coordinates are in, depends on the
+# display's scale. A first snapshot measures it, and the window is sized for a 1072x686 client area.
+Add-Type -AssemblyName System.Drawing
+$probe = Join-Path $Out "probe.png"
+Start-Process -FilePath $Exe -ArgumentList @("--snapshot", "`"$probe`"", "--size", "1100x700", "--theme", "light") -Wait -NoNewWindow
+$img = [Drawing.Image]::FromFile($probe)
+$size = "{0}x{1}" -f (1100 + 1072 - $img.Width), (700 + 686 - $img.Height)
+$img.Dispose()
+Remove-Item $probe
+
 $failed = 0
 foreach ($f in $flows) {
   $docx = Join-Path $Out "$($f.name).docx"
@@ -171,7 +183,7 @@ foreach ($f in $flows) {
   $scriptFile = Join-Path $Out "$($f.name).script"
   [IO.File]::WriteAllText($scriptFile, ($script -join ";"), $enc)
   $png = Join-Path $Out "$($f.name).png"
-  $p = Start-Process -FilePath $Exe -ArgumentList ($files + @("--snapshot", "`"$png`"", "--size", "1100x700", "--theme", "light",
+  $p = Start-Process -FilePath $Exe -ArgumentList ($files + @("--snapshot", "`"$png`"", "--size", $size, "--theme", "light",
     "--script", "`"@$scriptFile`"")) -Wait -PassThru -NoNewWindow
   $problems = @()
   if ($p.ExitCode -ne 0) { $problems += "Featherweight exited with $($p.ExitCode)" }

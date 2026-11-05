@@ -515,3 +515,20 @@ TEST(Comments_AtAPointAndTracked) {
   CHECK(!ed.Delete(P(p, 0), P(p, 3)));
   CHECK(Consistent(*t.doc, t.f));
 }
+
+TEST(Comments_RefusedLeavesNothing) {
+  // Torture finding 31: a comment refused where its marks go leaves no comments part, no comment
+  // paragraph and no undo step.
+  Fixture f;
+  f.body = "<w:p><w:r><w:t>ab</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  const uint32_t p = Main(*doc)[0];
+  const size_t paras = doc->Paragraphs().size();
+  CHECK(!edit::AddComment(ed, P(p, 1), P(p, 9), u"too far"));
+  CHECK(!doc->FindPart(fw::doc::PartKind::Comments) && doc->Paragraphs().size() == paras && !ed.CanUndo());
+  CHECK(edit::AddComment(ed, P(p, 1), P(p, 2), u"fine") && doc->FindPart(fw::doc::PartKind::Comments));
+  CHECK(Consistent(*doc, f));
+}
