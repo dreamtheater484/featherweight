@@ -3,3 +3,7 @@
 *.ico binary
 *.png binary
 *.rc text eol=crlf
+# Clipboard samples are byte for byte what Word, LibreOffice and Chromium wrote (CF_HTML offsets count bytes).
+tests/clipboard/*.rtf -text
+tests/clipboard/*.html -text
+tests/clipboard/*.txt -text

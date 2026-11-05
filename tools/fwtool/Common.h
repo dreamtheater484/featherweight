@@ -35,6 +35,7 @@ struct Options {
   bool edited = false;              // save: as after an edit in every part the model owns
   uint32_t rounds = 3;              // torture: rounds per document, each from the original
   bool replay = false;              // torture: the input is a reproducer to replay
+  std::filesystem::path samples;    // paste-check: clipboard samples (.rtf, .html) to paste
   std::vector<std::filesystem::path> inputs;
 };
 
@@ -57,6 +58,7 @@ int RunLines(const Options& options);
 int RunCompare(const Options& options);
 int RunBench(const Options& options);
 int RunEditCheck(const Options& options);
+int RunPasteCheck(const Options& options);
 int RunBenchApp(const Options& options);
 int RunSpelling(const Options& options);
 int RunTorture(const Options& options);

@@ -27,6 +27,7 @@ if ($KeepAwake) {
 $office = Join-Path $PSScriptRoot '..\office'
 $seeds = Join-Path $PSScriptRoot 'seeds'
 $regressions = Join-Path $PSScriptRoot 'regressions'
+$clipboard = Join-Path $PSScriptRoot '..\clipboard'
 
 # Each target, its seed folders (regressions included) and the longest input worth trying.
 $all = [ordered]@{
@@ -43,6 +44,10 @@ $all = [ordered]@{
   fuzz_layout  = @{ Seeds = @("$seeds\docx", "$seeds\package", "$regressions\layout"); MaxLen = 65536 }
   # Inserting a picture into a document, then changing it, saving and undoing (D3). Pictures again.
   fuzz_picture = @{ Seeds = @("$seeds\picture", "$regressions\picture"); MaxLen = 65536; Asan = 'quarantine_size_mb=32' }
+  # Clipboard RTF and HTML (what Word, LibreOffice and browsers put there), and copying a document.
+  fuzz_rtf     = @{ Seeds = @("$clipboard", "$regressions\rtf"); MaxLen = 65536 }
+  fuzz_html    = @{ Seeds = @("$clipboard", "$regressions\html"); MaxLen = 65536 }
+  fuzz_clip    = @{ Seeds = @("$seeds\docx", "$seeds\package", "$regressions\clip"); MaxLen = 65536 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 

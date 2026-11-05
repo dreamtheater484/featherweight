@@ -255,7 +255,14 @@ class EditorTarget : public EditTarget {
 
   Applied ApplyOne(const Edit& e, std::string& why) {
     namespace ed = fw::doc::edit;
-    auto exists = [&](fw::doc::Pos p) { return p.para < doc_->Paragraphs().size() && p.offset <= editor_.ParaLength(p.para); };
+    // A place a person can put the caret: in the paragraph, and not between the halves of a
+    // surrogate pair (an emoji), which no selection can split.
+    auto exists = [&](fw::doc::Pos p) {
+      if (p.para >= doc_->Paragraphs().size() || p.offset > editor_.ParaLength(p.para)) return false;
+      const std::u16string& text = doc_->Para(p.para).text;
+      return !(p.offset > 0 && p.offset < text.size() && text[p.offset - 1] >= 0xD800 && text[p.offset - 1] <= 0xDBFF &&
+               text[p.offset] >= 0xDC00 && text[p.offset] <= 0xDFFF);
+    };
     auto refuse = [&](const std::string& reason) {
       why = reason;
       return Applied::Refused;
