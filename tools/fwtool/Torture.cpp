@@ -730,7 +730,7 @@ class Generator {
     }
     uint32_t roll = rng_.Below(100);
     // FW_TORTURE_SKIP=command,paint (save, format, command, d3, paint) types instead, to look past
-    // an open finding.
+    // an open finding; "headers" leaves D3's header and footer changes out.
     auto skipped = [&](const char* what, uint32_t lo, uint32_t hi) { return roll >= lo && roll < hi && skip_.contains(what); };
     if (skipped("save", 9, 11) || skipped("format", 77, 82) || skipped("command", 82, 90) || skipped("d3", 90, 97) ||
         skipped("paint", 97, 100))
@@ -928,7 +928,7 @@ class Generator {
     const uint32_t roll = rng_.Below(100);
     if (roll < 40) Table(e);
     else if (roll < 62) Picture(e);
-    else if (roll < 85) Inline(e);
+    else if (roll < 85 || skip_.contains("headers")) Inline(e);
     else HeaderFooter(e);
   }
 
@@ -1175,6 +1175,56 @@ std::string ParaLine(const Document& doc, uint32_t p) {
   return out + " " + ToUtf8(doc.Para(p).text);
 }
 
+// Tables as Word needs them, the editor's guarantees (as tests/unit/test_tables.cpp's GridOk
+// checks them): rows with cells, cells ending with a paragraph, a grid (w:tblGrid) as wide as the
+// widest row (gridBefore, the spans, gridAfter), and vertical merges that continue a cell above
+// with the same column and span. Counted by kind over every story: files from elsewhere break
+// some of these already, so a round fails only when the saved file has more than the original.
+std::map<std::string, int> GridProblems(const Document& doc) {
+  std::map<std::string, int> problems;
+  std::function<void(const std::vector<Block>&)> walk = [&](const std::vector<Block>& blocks) {
+    for (const Block& b : blocks) {
+      if (b.kind == BlockKind::ContentControl) walk(doc.Blocks(b.node));
+      if (b.kind != BlockKind::Table) continue;
+      const std::vector<Node> rows = doc.TableRows(b.node);
+      if (rows.empty()) {
+        ++problems["a table without rows"];
+        continue;
+      }
+      int32_t width = 0;
+      std::vector<std::vector<std::pair<int32_t, CellProps>>> grid;
+      for (Node tr : rows) {
+        const RowProps rp = doc.ResolvedRow(tr);
+        int32_t col = rp.gridBefore;
+        grid.emplace_back();
+        const std::vector<Node> cells = doc.RowCells(tr);
+        if (cells.empty()) ++problems["a row without cells"];
+        for (Node tc : cells) {
+          const CellProps cp = doc.ResolvedCell(tc);
+          grid.back().emplace_back(col, cp);
+          col += std::max(1, cp.gridSpan);
+          const std::vector<Block> inner = doc.Blocks(tc);
+          if (inner.empty() || inner.back().kind != BlockKind::Paragraph) ++problems["a cell that doesn't end with a paragraph"];
+          walk(inner);
+        }
+        width = std::max(width, col + rp.gridAfter);
+      }
+      if (static_cast<int32_t>(doc.TableGrid(b.node).size()) != width) ++problems["a grid not as wide as its widest row"];
+      for (size_t r = 0; r < grid.size(); ++r)
+        for (const auto& [col, cp] : grid[r]) {
+          if (cp.vMerge != VMerge::Continue) continue;
+          bool above = false;
+          if (r > 0)
+            for (const auto& [c2, p2] : grid[r - 1])
+              above = above || (c2 == col && p2.gridSpan == cp.gridSpan && p2.vMerge != VMerge::None);
+          if (!above) ++problems["a vertically merged cell that continues nothing above it"];
+        }
+    }
+  };
+  for (uint32_t s = 0; s < doc.Stories().size(); ++s) walk(doc.Blocks(s));
+  return problems;
+}
+
 // The shape of the tables among `blocks`, nested ones too: for each, its rows, each row's cells
 // and each cell's paragraphs ("table {1,1,2}{1,1}").
 void TableShapes(const Document& doc, const std::vector<Block>& blocks, std::string& out) {
@@ -1341,6 +1391,7 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     return r;
   }
   std::vector<std::string> known = fw::pkg::CheckPackage(doc->Package()).errors;
+  const std::map<std::string, int> knownGrid = GridProblems(*doc);
   std::unique_ptr<EditTarget> target = torture::OpenTarget(std::move(doc), st);
   if (!target) {
     fail("open", "the editor refuses it: " + st.message);
@@ -1366,6 +1417,17 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     auto reopen = [&] { reread = docx::Read(std::move(again), st); };
     if (DWORD crash = Guarded(reopen)) return fail("crash", when + CrashText(crash) + " reading the saved file"), false;
     if (!reread) return fail("reopen", when + st.message), false;
+    std::map<std::string, int> grid;
+    auto tables = [&] { grid = GridProblems(*reread); };
+    if (DWORD crash = Guarded(tables)) return fail("crash", when + CrashText(crash) + " reading the saved file's tables"), false;
+    for (const auto& [problem, count] : grid) {
+      const auto had = knownGrid.find(problem);
+      const int before = had == knownGrid.end() ? 0 : had->second;
+      if (count > before)
+        return fail("grid", when + problem + " (" + std::to_string(count) + " in the saved file, " + std::to_string(before) +
+                                " in the original)"),
+               false;
+    }
     std::string after;
     auto digest = [&] { after = Digest(*reread); };
     if (DWORD crash = Guarded(digest)) return fail("crash", when + CrashText(crash) + " reading the saved file's text"), false;
