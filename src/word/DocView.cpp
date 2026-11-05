@@ -25,6 +25,7 @@
 #include "ui/SwapChain.h"
 #include "ui/Theme.h"
 #include "ui/Toolbar.h"
+#include "word/PicturePanel.h"
 
 using namespace gfx;
 namespace layout = fw::doc::layout;
@@ -153,6 +154,7 @@ std::unique_ptr<DocView> DocView::FromBytes(ViewHost& host, std::vector<uint8_t>
 
 DocView::~DocView() {
   StopBlinking();
+  pictures_.reset();
   editor_.reset();
   drawings_.clear();  // pictures read from the document's package
   images_.reset();
@@ -230,6 +232,8 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     editor_->OnChange([this](const fw::doc::edit::Change& c) { OnEdited(c); });
     format_ = std::make_unique<DocFormat>(
         *editor_, [this] { return FormatTarget(); }, [this](const DocFormat::Done& d) { AfterFormat(d); });
+    pictures_ = std::make_unique<fw::doc::edit::Pictures>(*editor_);
+    format_->insertPicture = [this] { Execute(CmdInsertPicture); };
     const std::vector<uint32_t> main = doc_->StoryParagraphs(doc_->MainStory());
     if (!main.empty()) anchor_ = focus_ = {main.front(), 0};
   }
@@ -460,6 +464,7 @@ void DocView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   DrawSquiggles(c, first, last);
   DrawRanges(c, first, last);
   DrawCaret(c, first, last);
+  if (!presentation_) DrawPictureFrame(c, first, last);
   if (!presentation_) DrawScrollbars(c);
   c.PopClip();
 }
@@ -488,11 +493,14 @@ void DocView::DrawPage(Canvas& c, ID2D1DeviceContext* dc, int page, bool inverte
 }
 
 void DocView::DrawDrawing(draw::Painter& painter, const layout::DrawingBox& box) {
-  if (box.drawing >= drawings_.size()) return;
+  if (box.drawing >= doc_->Drawings().size()) return;
+  if (box.drawing >= drawings_.size()) drawings_.resize(doc_->Drawings().size());  // inserted
   DrawingSlot& slot = drawings_[box.drawing];
   const fw::doc::Drawing& d = doc_->Drawings()[box.drawing];
+  if (slot.tried && slot.version != d.version) slot = DrawingSlot{};  // changed (D3)
   if (!slot.tried) {
     slot.tried = true;
+    slot.version = d.version;
     // The model gives what is inside the w:drawing, w:pict or w:object; wrap it back in one, so
     // fwdraw sees VML shapes beside their shape types.
     const char* wrapper = d.kind == fw::doc::DrawingKind::DrawingML ? "w:drawing"
@@ -714,6 +722,7 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
     return;
   }
   if (ScrollbarMouseDown(x, y, button)) return;
+  if (PictureMouseDown(x, y, button, mods, doubleClick)) return;  // a right click selects it too
   if (button == 1) return;  // a right click keeps the selection for the context menu
   Hit hit = HitAt(x, y);
   if (!hit.link.empty() && !(mods & kModShift)) {
@@ -764,10 +773,11 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
   drag_ = Drag::Pan;
 }
 
-void DocView::OnMouseMove(int x, int y, UINT) {
+void DocView::OnMouseMove(int x, int y, UINT mods) {
   mouseX_ = x;
   mouseY_ = y;
   if (!Ready()) return;
+  if (PictureMouseMove(x, y, mods)) return;
   if (ScrollDragMove(x, y)) return;
   if (drag_ == Drag::Link) {
     if (std::abs(x - downX_) + std::abs(y - downY_) > 6 * ui_) drag_ = Drag::Pan;
@@ -787,6 +797,7 @@ void DocView::OnMouseMove(int x, int y, UINT) {
 
 void DocView::OnMouseUp(int x, int y, int, UINT) {
   if (!Ready()) return;
+  if (PictureMouseUp(x, y)) return;
   Drag d = drag_;
   drag_ = Drag::None;
   if (d == Drag::Link) {
@@ -807,6 +818,7 @@ void DocView::OnMouseLeave() {
 }
 
 bool DocView::OnKeyDown(UINT vk, UINT mods) {
+  if (PictureKey(vk, mods)) return true;
   if (vk == VK_ESCAPE && format_ && format_->PainterOn()) {
     format_->CancelPainter();
     host_.ViewInvalidate();
@@ -830,6 +842,7 @@ HCURSOR DocView::CursorAt(int x, int y) {
   if (drag_ == Drag::Pan) return move;
   if (drag_ == Drag::Select) return ibeam;
   if (OverScrollbar(x, y)) return arrow;
+  if (HCURSOR c = PictureCursor(x, y)) return c;
   if (!HitAt(x, y).link.empty()) return hand;
   if (presentation_) return arrow;
   return PosAt(x, y, false) ? ibeam : arrow;
@@ -925,6 +938,7 @@ void DocView::Copy() {
 }
 
 bool DocView::PutOnClipboard() {
+  if (SelectedPicture() != fw::doc::kNone && CopyPicture()) return true;
   const fw::doc::Pos a{std::min(anchor_, focus_).para, std::min(anchor_, focus_).offset};
   const fw::doc::Pos b{std::max(anchor_, focus_).para, std::max(anchor_, focus_).offset};
   const fw::doc::edit::Clip clip = fw::doc::edit::CopyClip(*doc_, a, b, clipSource_);
@@ -1214,6 +1228,17 @@ constexpr CommandName kCommandNames[] = {
     {CmdSpelling, L"Spelling: next error", L"F7"},
     {CmdWordCount, L"Word count", L"Ctrl+Shift+G"},
     {CmdLanguage, L"Language…", L""},
+    {CmdInsertPicture, L"Insert picture…", L""},
+    {CmdPictureInline, L"Picture: in line with text", L""},
+    {CmdPictureSquare, L"Picture: square wrapping", L""},
+    {CmdPictureTight, L"Picture: tight wrapping", L""},
+    {CmdPictureTopBottom, L"Picture: top and bottom", L""},
+    {CmdPictureBehind, L"Picture: behind text", L""},
+    {CmdPictureInFront, L"Picture: in front of text", L""},
+    {CmdPictureCrop, L"Crop picture", L""},
+    {CmdPictureRotate, L"Rotate picture 90°", L""},
+    {CmdPictureReset, L"Reset picture size", L""},
+    {CmdPicturePanel, L"Picture size, rotation and alt text…", L""},
 };
 
 }  // namespace
@@ -1254,12 +1279,13 @@ int DocView::ShortcutFor(UINT vk, UINT mods) const {
 CommandState DocView::QueryCommand(int cmd) {
   if (format_ && DocFormat::Owns(cmd)) return format_->Query(cmd);
   CommandState s;
+  if (auto picture = QueryPicture(cmd)) s = *picture;
   switch (cmd) {
     case CmdSave: s = {Ready() && (Modified() || path_.empty()), false}; break;
     case CmdPrint: s = {Ready(), false}; break;
     case CmdCopy: s = {Ready() && HasSelection(), false}; break;
     case CmdCut: s = {Editing() && HasSelection(), false}; break;
-    case CmdPaste: s = {Editing() && IsClipboardFormatAvailable(CF_UNICODETEXT), false}; break;
+    case CmdPaste: s = {Editing() && (IsClipboardFormatAvailable(CF_UNICODETEXT) || HasPictureOnClipboard()), false}; break;
     case CmdUndo: s = {Editing() && editor_->CanUndo(), false}; break;
     case CmdRedo: s = {Editing() && editor_->CanRedo(), false}; break;
     case CmdSelectAll: s = {Ready(), false}; break;
@@ -1273,7 +1299,9 @@ CommandState DocView::QueryCommand(int cmd) {
     case CmdSelectAllOnPage:
       s.visible = false;
       break;
-    default: s = PagedView::QueryCommand(cmd); break;
+    default:
+      if (cmd < CmdInsertPicture || cmd > CmdPicturePanel) s = PagedView::QueryCommand(cmd);
+      break;
   }
   for (const CommandName& n : kCommandNames) {
     if (n.cmd == cmd) {
@@ -1310,6 +1338,7 @@ bool DocView::Execute(int cmd) {
     return true;
   }
   if (ExecuteProof(cmd)) return true;
+  if (ExecutePicture(cmd)) return true;
   switch (cmd) {
     case CmdCopy: Copy(); return true;
     case CmdCut: Cut(); return true;
@@ -1356,7 +1385,9 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
     m.left.push_back(undo);
     m.left.push_back(query(CmdRedo, icon::Redo, 7));
     format_->AddToolbar(m);
+    AddPictureToolbar(m);
   }
+  SyncPicturePanel();
 
   m.pager = !Editing();  // when editing, the status bar has the page and the zoom
   m.page = currentPage_;
@@ -1388,10 +1419,11 @@ void DocView::FillContextMenu(HMENU m, int x, int y) {
   using menu::AppendItem;
   using menu::AppendSeparator;
   FillSpellingMenu(m, x, y);  // a spelling error's suggestions first, as Word has them
+  FillPictureMenu(m);         // and a selected picture's
   if (Editing()) {
     AppendItem(m, CmdCut, L"Cut\tCtrl+X", HasSelection());
     AppendItem(m, CmdCopy, L"Copy\tCtrl+C", HasSelection());
-    AppendItem(m, CmdPaste, L"Paste\tCtrl+V", IsClipboardFormatAvailable(CF_UNICODETEXT) != FALSE);
+    AppendItem(m, CmdPaste, L"Paste\tCtrl+V", QueryCommand(CmdPaste).enabled);
     AppendSeparator(m);
     HMENU language = CreatePopupMenu();
     FillLanguageMenu(language);

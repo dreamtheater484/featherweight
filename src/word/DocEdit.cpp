@@ -133,6 +133,7 @@ void DocView::Cut() {
 
 void DocView::Paste(bool formatted) {
   if (!Editing()) return;
+  if (formatted && PastePicture()) return;  // only when there's no text
   if (formatted) {
     // Featherweight's own copies come as HTML; Word's RTF says more than its HTML; then a
     // browser's HTML.

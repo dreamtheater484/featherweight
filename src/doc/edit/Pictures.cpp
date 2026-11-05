@@ -559,6 +559,11 @@ std::string PlaceMedia(Document& doc, const Part& source, const Media& m, Packag
   std::vector<uint8_t> have;
   for (const pkg::Part& p : package.Parts()) {
     if (p.deleted || package.ContentTypeOf(p.name).substr(0, 6) != "image/") continue;
+    // Its size first, from the zip, so pictures that differ aren't read.
+    const uint64_t size = p.modified ? p.data.size()
+                          : p.entry < package.Zip().Entries().size() ? package.Zip().Entries()[p.entry].uncompressedSize
+                                                                      : m.bytes.size();
+    if (size != m.bytes.size()) continue;
     if (!package.ReadPart(p.name, have).Ok() || have.size() != m.bytes.size() || Fnv(have) != hash || have != m.bytes) continue;
     partName = p.name;
     break;
@@ -569,8 +574,9 @@ std::string PlaceMedia(Document& doc, const Part& source, const Media& m, Packag
     const std::string stem = Lower(dir + "media/image");
     auto taken = [&](int n) {
       std::string prefix = stem + std::to_string(n) + ".";
+      // Deleted parts' names too: a view may still have their pictures cached by name.
       for (const pkg::Part& p : package.Parts())
-        if (!p.deleted && Lower(p.name).rfind(prefix, 0) == 0) return true;
+        if (Lower(p.name).rfind(prefix, 0) == 0) return true;
       for (const auto& s : step.partStates)
         if (Lower(s.name).rfind(prefix, 0) == 0) return true;
       return false;

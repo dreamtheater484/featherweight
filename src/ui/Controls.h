@@ -425,7 +425,8 @@ class SplitButton : public Control {
   std::wstring text;
   bool showColor = false;  // a bar under the glyph in `color`
   D2D1_COLOR_F color{};
-  // The arrow opens `items`, or a color palette when `colors` is set.
+  // The arrow opens `items`, or a color palette when `colors` is set; with neither there's no
+  // arrow (a plain button).
   std::vector<std::wstring> items;
   int selected = -1;
   bool colors = false;
