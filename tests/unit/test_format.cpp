@@ -1015,6 +1015,25 @@ TEST(Edit_CopiedPropertiesLeaveOutRepeats) {
   CHECK(editor.Undo() && MainXml(*doc) == original);
 }
 
+TEST(Edit_ValuesXmlCantHoldAreLeftOut) {
+  // A font name with a control character (pasted into the font box) never reaches the file: the
+  // part stays readable XML.
+  Fixture f;
+  f.body = "<w:p><w:r><w:t>Hello</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  uint32_t p = MainParas(*doc)[0];
+  CHECK(!edit::XmlSafe(std::string("Bad\x01" "Font")) && edit::XmlSafe("Calibri Light"));
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  edit::RunFormat bad;
+  bad.font = std::string("Bad\x01" "Font");
+  edit::FormatRuns(ed, Whole(*doc, p), bad);
+  CHECK(MainXml(*doc).find("Bad") == std::string::npos);
+  CHECK(SaveAndReopen(*doc) != nullptr);
+}
+
 TEST(Edit_FirstPropertyGoesBeforeKeptExtensions) {
   // A w:rPr that holds only an extension: the first w: property goes before it, as the editor's
   // own property edits put it (d2-torture finding 3b).

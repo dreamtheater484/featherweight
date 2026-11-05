@@ -421,7 +421,8 @@ void TreeEdit::SetAttr(ElemId elem, uint32_t name, std::string_view value) {
   Tree& t = doc_.tree_;
   const TypeDef& type = S().Type(TypeOfElem(t, elem));
   AttrDefId def = S().AttrOf(TypeOfElem(t, elem), name);
-  if (def == kNoDef) return;
+  // A value XML can't hold would make the saved part unreadable (callers refuse it first).
+  if (def == kNoDef || !XmlSafe(value)) return;
   StrId v = t.strings.Intern(value);
   const Elem& e = t.elems[elem];
   std::vector<AttrVal> attrs(t.attrs.begin() + e.attrs, t.attrs.begin() + e.attrs + e.attrCount);

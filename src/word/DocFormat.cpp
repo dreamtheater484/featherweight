@@ -459,6 +459,10 @@ void DocFormat::ApplyFont(const std::wstring& font) {
   if (font.empty()) return;
   edit::RunFormat f;
   f.font = fw::WideToUtf8(font);
+  if (!edit::XmlSafe(*f.font)) {  // typed or pasted into the font box
+    done_({std::nullopt, L"A font's name can't hold control characters."});
+    return;
+  }
   Run([&f](edit::TreeEdit& te, const Target& t) { edit::FormatRuns(te, t.chars, f); });
 }
 
