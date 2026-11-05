@@ -291,6 +291,9 @@ class Editor {
   std::vector<uint32_t> DirtyParts() const;
 
  private:
+  // Forms protection (Forms.h): true, with why, when a change of [from, to] is refused; with no
+  // range (formatting, tables, drawings), any change is.
+  bool FormsRefuse(const Pos* from, const Pos* to, std::u16string& why) const;
   void AddReferences(const KeptRefs& kept, Pos at);
   // Accepts or rejects the changes of `story` that `pick` takes (by the text each covers, and
   // whether it's in a paragraph rather than a table's or the body's properties).

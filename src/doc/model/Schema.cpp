@@ -114,7 +114,12 @@ NoBreakHyphen = !char=2011
 SoftHyphen = !char=00AD
 Sym = !char=FFFD @font @char
 PTab = !char=0009 @relativeTo @alignment @leader
-FldChar = !char=0013 @fldCharType @fldLock @dirty
+FFHelp = @type @val
+FFCheckBox = size:Val sizeAuto:OnOff default:OnOff checked:OnOff
+FFDDList = result:Val default:Val listEntry:Val
+FFTextInput = type:Val default:Val maxLength:Val format:Val
+FFData = name:Val label:Val tabIndex:Val enabled:OnOff calcOnExit:OnOff entryMacro:Val exitMacro:Val helpText:FFHelp statusText:FFHelp checkBox:FFCheckBox ddList:FFDDList textInput:FFTextInput
+FldChar = !char=0013 @fldCharType @fldLock @dirty ffData:FFData
 NoteRef = !char=0002 @customMarkFollows @id
 CommentRef = !char=0005 @id
 NoteMark = !char=0002
@@ -141,7 +146,10 @@ SdtDate = @fullDate dateFormat:Val lid:Val storeMappedDataAs:Val calendar:Val
 ListItem = @displayText @value
 SdtList = @lastValue listItem:ListItem
 SdtText = @multiLine
-SdtPr = rPr:RPrBase alias:Val tag:Val id:Val lock:Val placeholder:Placeholder temporary:OnOff showingPlcHdr:OnOff dataBinding:DataBinding label:Val tabIndex:Val docPartObj:DocPartObj docPartList:DocPartObj date:SdtDate dropDownList:SdtList comboBox:SdtList text:SdtText richText:Empty equation:Empty group:Empty picture:Empty citation:Empty bibliography:Empty
+W14OnOff = @w14:val
+W14CheckState = @w14:val @w14:font
+SdtCheckbox = w14:checked:W14OnOff w14:checkedState:W14CheckState w14:uncheckedState:W14CheckState
+SdtPr = rPr:RPrBase alias:Val tag:Val id:Val lock:Val placeholder:Placeholder temporary:OnOff showingPlcHdr:OnOff dataBinding:DataBinding label:Val tabIndex:Val docPartObj:DocPartObj docPartList:DocPartObj date:SdtDate dropDownList:SdtList comboBox:SdtList text:SdtText richText:Empty equation:Empty group:Empty picture:Empty citation:Empty bibliography:Empty w14:checkbox:SdtCheckbox
 SdtEndPr = rPr:RPrBase
 
 InlineContent = +RangeMarkup r:R hyperlink:Hyperlink ins:InlineChange del:InlineChange moveFrom:InlineChange moveTo:InlineChange sdt:SdtRun smartTag:SmartTag customXml:CustomXmlRun fldSimple:FldSimple dir:Dir bdo:Dir m:oMath:Math m:oMathPara:Math

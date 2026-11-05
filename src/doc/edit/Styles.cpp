@@ -100,6 +100,9 @@ const Builtin kBuiltins[] = {
     // What links get, from AutoCorrect and Insert link, as in Word.
     {"Hyperlink", "Hyperlink", StyleType::Character, 99, false, "Default Paragraph Font", "", "", "",
      "<w:color w:val=\"0563C1\" w:themeColor=\"hyperlink\"/><w:u w:val=\"single\"/>"},
+    // What content controls show while empty, as in Word.
+    {"Placeholder Text", "PlaceholderText", StyleType::Character, 99, false, "Default Paragraph Font", "", "", "",
+     "<w:color w:val=\"666666\"/>"},
 };
 
 char Lower(char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }

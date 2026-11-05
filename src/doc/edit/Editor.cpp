@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "doc/edit/Forms.h"
 #include "doc/edit/Kept.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/model/Internal.h"
@@ -2849,6 +2850,13 @@ bool Editor::CanEdit(std::u16string* why) const {
   return true;
 }
 
+bool Editor::FormsRefuse(const Pos* from, const Pos* to, std::u16string& why) const {
+  if (!FormsProtected(doc_)) return false;
+  if (from && to && to->para < doc_.Paragraphs().size() && InFillIn(doc_, *from, *to, &why, false)) return false;
+  if (!from || !to || why.empty()) why = u"This document is protected: only its form fields and content controls can be filled in.";
+  return true;
+}
+
 int Editor::Compare(Pos a, Pos b) const {
   if (a.para == b.para) return a.offset < b.offset ? -1 : a.offset > b.offset ? 1 : 0;
   if (a.para < doc_.Paragraphs().size() && b.para < doc_.Paragraphs().size() &&
@@ -2906,7 +2914,7 @@ Result Fail(std::u16string why) {
 Result Editor::InsertText(Pos at, std::u16string_view text) {
   EditorState& s = *impl_;
   std::u16string why;
-  if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
+  if (!CanEdit(&why) || FormsRefuse(&at, &at, why) || !s.Editable(at.para, why)) return Fail(why);
   if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
   if (text.empty()) {
     Result r;
@@ -2954,7 +2962,7 @@ Result Editor::InsertText(Pos at, std::u16string_view text) {
 Result Editor::InsertDrawing(Pos at, std::string xml, const Drawing& info) {
   EditorState& s = *impl_;
   std::u16string why;
-  if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
+  if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(at.para, why)) return Fail(why);
   if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
   if (!XmlSafe(xml)) return Fail(u"This picture can't be added.");
   Arm();
@@ -2975,7 +2983,7 @@ Result Editor::Delete(Pos from, Pos to) {
   EditorState& s = *impl_;
   if (Compare(to, from) < 0) std::swap(from, to);
   std::u16string why;
-  if (!CanEdit(&why) || !s.Editable(from.para, why) || !s.Editable(to.para, why)) return Fail(why);
+  if (!CanEdit(&why) || FormsRefuse(&from, &to, why) || !s.Editable(from.para, why) || !s.Editable(to.para, why)) return Fail(why);
   if (doc_.Para(from.para).story != doc_.Para(to.para).story)
     return Fail(u"A selection that leaves its story can't be deleted.");
   if (from == to) {
@@ -3135,7 +3143,7 @@ Result Editor::Replace(Pos from, Pos to, std::u16string_view text) {
 Result Editor::SplitParagraph(Pos at) {
   EditorState& s = *impl_;
   std::u16string why;
-  if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
+  if (!CanEdit(&why) || FormsRefuse(&at, &at, why) || !s.Editable(at.para, why)) return Fail(why);
   if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
   Arm();
   s.Begin(at.para, 1);
@@ -3152,7 +3160,9 @@ Result Editor::SplitParagraph(Pos at) {
 Result Editor::JoinParagraphs(uint32_t para) {
   EditorState& s = *impl_;
   std::u16string why;
-  if (!CanEdit(&why) || !s.Editable(para, why)) return Fail(why);
+  const bool known = para < doc_.Paragraphs().size();
+  const Pos joinFrom{para, known ? ParaLength(para) : 0}, joinTo{known ? NextPara(para) : kNone, 0};
+  if (!CanEdit(&why) || FormsRefuse(&joinFrom, &joinTo, why) || !s.Editable(para, why)) return Fail(why);
   uint32_t q = s.SiblingAfter(para);
   if (q == kNone) return Fail(u"Paragraphs in different places (a table cell and the text around it) can't be joined.");
   if (Tracking() && !reviewing_) return Delete(Pos{para, ParaLength(para)}, Pos{q, 0});
@@ -3178,7 +3188,7 @@ Result Editor::SetRunProps(Pos from, Pos to, const PropEdit& edit) {
   EditorState& s = *impl_;
   if (Compare(to, from) < 0) std::swap(from, to);
   std::u16string why;
-  if (!CanEdit(&why) || !s.Editable(from.para, why)) return Fail(why);
+  if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(from.para, why)) return Fail(why);
   Result r;
   r.caret = to;
   if (from == to) return r;
@@ -3208,7 +3218,7 @@ Result Editor::SetLink(Pos from, Pos to, std::string_view target) {
   EditorState& s = *impl_;
   if (Compare(to, from) < 0) std::swap(from, to);
   std::u16string why;
-  if (!CanEdit(&why) || !s.Editable(from.para, why)) return Fail(why);
+  if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(from.para, why)) return Fail(why);
   if (from.para != to.para || from.offset >= to.offset || target.empty())
     return Fail(u"Select text in one paragraph to make it a link.");
   if (!XmlSafe(target)) return Fail(u"A link's address can't hold control characters.");
@@ -3282,7 +3292,7 @@ Result Editor::SetMarkProps(uint32_t first, uint32_t last, const PropEdit& edit)
   EditorState& s = *impl_;
   if (last < first) std::swap(first, last);
   std::u16string why;
-  if (!CanEdit(&why) || !s.Editable(first, why)) return Fail(why);
+  if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(first, why)) return Fail(why);
   uint32_t story = doc_.Para(first).story;
   Arm();
   s.Begin(first, last - first + 1);
@@ -3307,7 +3317,7 @@ Result Editor::SetParaProps(uint32_t first, uint32_t last, const PropEdit& edit)
   EditorState& s = *impl_;
   if (last < first) std::swap(first, last);
   std::u16string why;
-  if (!CanEdit(&why) || !s.Editable(first, why)) return Fail(why);
+  if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(first, why)) return Fail(why);
   uint32_t story = doc_.Para(first).story;
   Arm();
   s.Begin(first, last - first + 1);
@@ -3630,7 +3640,7 @@ bool EditorState::Listed(ElemId p) const {
 Result Editor::EditTable(Pos from, Pos to, std::u16string name, const std::function<bool(TableOp&)>& op) {
   EditorState& s = *impl_;
   std::u16string why;
-  if (!CanEdit(&why) || !s.Editable(from.para, why)) return Fail(why);
+  if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(from.para, why)) return Fail(why);
   TableOp o{s};
   if (!s.BlockOf(from, to, o.g, o.bl, why)) return Fail(why);
   o.tbl = o.g.tbl;
@@ -3769,7 +3779,7 @@ Result Editor::InsertTable(Pos at, uint32_t rows, uint32_t cols) {
   if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
   EditorState& s = *impl_;
   std::u16string why;
-  if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
+  if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(at.para, why)) return Fail(why);
   if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
   if (rows < 1 || cols < 1 || cols > 63 || rows > 1000) return Fail(u"A table has 1 to 63 columns and 1 to 1,000 rows.");
   ElemId p = doc_.Para(at.para).elem;
@@ -3852,7 +3862,7 @@ Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
   EditorState& s = *impl_;
   std::u16string why;
   if (last < first) std::swap(first, last);
-  if (!CanEdit(&why) || !s.Editable(first, why) || !s.Editable(last, why)) return Fail(why);
+  if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(first, why) || !s.Editable(last, why)) return Fail(why);
   // One place: paragraphs that follow each other, no table or section break among them.
   std::vector<uint32_t> chain{first};
   while (chain.back() != last) {
@@ -3964,7 +3974,7 @@ Result Editor::TableToText(Pos at, char16_t separator) {
   if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
   EditorState& s = *impl_;
   std::u16string why;
-  if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
+  if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(at.para, why)) return Fail(why);
   Grid g;
   EditorState::Block bl;
   if (!s.BlockOf(at, at, g, bl, why)) return Fail(why);
@@ -4050,7 +4060,7 @@ Result Editor::DeleteTable(Pos at) {
   if (Tracking() && !reviewing_) return Fail(kUntrackedTable);
   EditorState& s = *impl_;
   std::u16string why;
-  if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
+  if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(at.para, why)) return Fail(why);
   ElemId tbl, tr, tc;
   if (!s.CellOf(at.para, tbl, tr, tc)) return Fail(u"Put the cursor in a table first.");
   uint32_t first = 0, count = 0;

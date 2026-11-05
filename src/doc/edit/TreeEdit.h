@@ -55,6 +55,9 @@ class TreeEdit {
   // change back. For commands that first add a part with EnsurePart, which isn't undone, so a
   // refused command doesn't leave one behind (d2-torture finding 18).
   bool CanChange(const std::vector<uint32_t>& paras);
+  // Its transactions fill in a form (Forms.h): they go ahead in a document protected for forms,
+  // where every other change is refused.
+  void FormFill() { fill_ = true; }
   // Says the change affects the layout of the paragraphs it touches and no others (or, with
   // `toEnd`, those and the rest of their story: a list's numbers), whatever it adds to the styles
   // and numbering parts. Only their pages are laid out again, not the whole document. It counts in
@@ -112,7 +115,9 @@ class TreeEdit {
   ElemId InsertElement(ElemId parent, uint32_t name, ElemId before, uint32_t offset);
   // Puts the siblings from `first` to `last` into a new element `name` (w:fldSimple,
   // w:hyperlink) in their place. kNoElem when their parent can't hold it, or it can't hold them.
-  ElemId Wrap(ElemId first, ElemId last, uint32_t name);
+  ElemId Wrap(ElemId first, ElemId last, uint32_t name) { return Wrap(first, last, {name}); }
+  // The same into nested new elements, outermost first (w:sdt, w:sdtContent): the outermost.
+  ElemId Wrap(ElemId first, ElemId last, std::initializer_list<uint32_t> names);
   // Puts an inline container's children in its place and takes it out (removing a link). What it
   // keeps first goes before them, what it keeps after it after them. False when it keeps content
   // between its children: then it stays.
@@ -201,6 +206,7 @@ class TreeEdit {
   Document& doc_;
   Pos caret_;
   int depth_ = 0;
+  bool fill_ = false;
   bool local_ = false, toEnd_ = false, structure_ = false;
   std::pair<uint32_t, uint32_t> affects_{kNone, kNone};
   std::u16string label_, refused_;

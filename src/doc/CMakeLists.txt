@@ -1,6 +1,7 @@
 # fwdoc: the document model and its .docx reader and writer (plan §4.8, §6.3). Headless: no UI,
 # no window, no PDFium. Layout and the view come in later phases.
 add_library(fwdoc STATIC
+  model/DateFormat.cpp
   model/Document.cpp
   model/Numbering.cpp
   model/Resolve.cpp
@@ -16,6 +17,7 @@ add_library(fwdoc STATIC
   edit/Editor.cpp
   edit/Export.cpp
   edit/Format.cpp
+  edit/Forms.cpp
   edit/HeaderFooter.cpp
   edit/Inline.cpp
   edit/Kept.cpp
@@ -62,7 +64,7 @@ target_compile_options(fwproof PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,
 # (plan §6.4 D1): read every document into the model, write every part it owns back, and check.
 if(FW_BUILD_TESTS)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_doc.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_docsave.cpp"
-    "${PROJECT_SOURCE_DIR}/tests/unit/test_edit.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_clip.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_format.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_edit.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_clip.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_format.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_forms.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_page.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_export.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_inline.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_proof.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_tables.cpp"

@@ -6,6 +6,7 @@
 
 #include "doc/docx/Docx.h"
 #include "doc/edit/Editor.h"
+#include "doc/edit/Forms.h"
 #include "doc/edit/Kept.h"
 #include "doc/model/Internal.h"
 #include "pkg/XmlWriter.h"
@@ -126,6 +127,12 @@ void TreeEdit::Commit() {
       return;
     }
   }
+  // A document protected for forms changes only as they're filled in.
+  if (!fill_ && FormsProtected(doc_)) {
+    Discard();
+    refused_ = u"This document is protected: only its form fields and content controls can be filled in.";
+    return;
+  }
   touched_.clear();
   auto step = std::make_shared<JournalStep>(doc_);
   step->before = std::move(before_);
@@ -215,6 +222,10 @@ bool TreeEdit::Editable(ElemId id, std::unordered_map<ElemId, bool>& memo, std::
 }
 
 bool TreeEdit::CanChange(const std::vector<uint32_t>& paras) {
+  if (!fill_ && FormsProtected(doc_)) {
+    refused_ = u"This document is protected: only its form fields and content controls can be filled in.";
+    return false;
+  }
   std::unordered_map<ElemId, bool> memo;
   std::u16string why;
   for (uint32_t p : paras) {
@@ -763,13 +774,18 @@ ElemId TreeEdit::InsertElement(ElemId parent, uint32_t name, ElemId before, uint
   return id;
 }
 
-ElemId TreeEdit::Wrap(ElemId first, ElemId last, uint32_t name) {
+ElemId TreeEdit::Wrap(ElemId first, ElemId last, std::initializer_list<uint32_t> names) {
   Tree& t = doc_.tree_;
   const ElemId parent = E(first).parent;
-  if (parent == kNoElem) return kNoElem;
-  const ElemDefId def = S().Child(TypeOfElem(t, parent), name);
-  if (def == kNoDef) return kNoElem;
-  const TypeId type = S().Elem(def).type;
+  if (parent == kNoElem || names.size() == 0) return kNoElem;
+  std::vector<ElemDefId> defs;  // each new element's definition in the one around it
+  TypeId type = TypeOfElem(t, parent);
+  for (uint32_t name : names) {
+    const ElemDefId def = S().Child(type, name);
+    if (def == kNoDef) return kNoElem;
+    defs.push_back(def);
+    type = S().Elem(def).type;
+  }
   std::vector<std::pair<ElemId, ElemDefId>> kids;  // with their definitions in the new element
   for (ElemId c = first;; c = E(c).next) {
     if (c == kNoElem) return kNoElem;  // `last` isn't after `first`
@@ -778,21 +794,30 @@ ElemId TreeEdit::Wrap(ElemId first, ElemId last, uint32_t name) {
     kids.emplace_back(c, kd);
     if (c == last) break;
   }
-  Elem w;
-  w.def = def;
-  w.parent = parent;
-  w.node = NewNode();
-  w.start = E(first).start;
-  w.length = E(last).start + E(last).length - w.start;
-  t.elems.push_back(w);
-  const auto id = static_cast<ElemId>(t.elems.size() - 1);
-  LinkAt(parent, id, first);
+  ElemId outer = kNoElem, inner = parent;
+  for (const ElemDefId def : defs) {
+    Elem w;
+    w.def = def;
+    w.parent = inner;
+    w.node = NewNode();
+    w.start = E(first).start;
+    w.length = E(last).start + E(last).length - w.start;
+    t.elems.push_back(w);
+    const auto id = static_cast<ElemId>(t.elems.size() - 1);
+    if (inner == parent) {
+      LinkAt(parent, id, first);
+      outer = id;
+    } else {
+      LinkAt(inner, id, kNoElem);
+    }
+    inner = id;
+  }
   for (const auto& [c, kd] : kids) Unlink(c);
   for (const auto& [c, kd] : kids) {
-    LinkAt(id, c, kNoElem);  // what each keeps beside it goes with it
+    LinkAt(inner, c, kNoElem);  // what each keeps beside it goes with it
     E(c).def = kd;
   }
-  return id;
+  return outer;
 }
 
 bool TreeEdit::Unwrap(ElemId elem) {
