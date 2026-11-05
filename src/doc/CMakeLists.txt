@@ -41,8 +41,9 @@ target_link_libraries(fwdoclayout PUBLIC fwdoc fwtext fwdraw)
 target_compile_options(fwdoclayout PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
 # fwpictures: picture editing (plan §6.2, milestone D3): insert, resize, rotate, crop, wrap, alt
-# text, on the model's editor. Apart from fwdoc because it reads pictures with fwdraw (WIC).
-add_library(fwpictures STATIC edit/Pictures.cpp)
+# text, on the model's editor; shapes, text boxes and watermarks (D4) share its DrawingML edits.
+# Apart from fwdoc because it reads pictures with fwdraw (WIC).
+add_library(fwpictures STATIC edit/Pictures.cpp edit/Shapes.cpp)
 target_link_libraries(fwpictures PUBLIC fwdoc fwdraw PRIVATE windowscodecs ole32)
 target_compile_options(fwpictures PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 

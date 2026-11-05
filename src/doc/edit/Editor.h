@@ -141,6 +141,11 @@ class Editor {
   // stays in Document::Drawings() when the insert is undone, at no position. Pictures.h makes the
   // XML and adds the picture's part.
   Result InsertDrawing(Pos at, std::string xml, const Drawing& info);
+  // Inserts a drawing kept as markup (an mc:AlternateContent block, as Word writes shapes and text
+  // boxes: `block`, self-contained) at the start of paragraph `para`, in a run of its own. Its
+  // character is shown from `info`: display-only, info.kept the block's tag, info.keptXml what's
+  // shown. Deleting the character takes the block. Shapes.h makes the XML.
+  Result InsertKeptDrawing(uint32_t para, std::string block, const Drawing& info);
   // Makes the text in [from, to), in one paragraph, a hyperlink to `target`: a web address (a
   // relationship of the part, kept if the link is undone, which is harmless) or "#bookmark".
   // Refused where the text is already a link, or in a field, a content control or a tracked change.
