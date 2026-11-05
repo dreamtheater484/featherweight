@@ -231,11 +231,7 @@ Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, 
     : impl_(new Impl), doc_(doc), fonts_(fonts), options_(options), timings_(timings), generation_(doc.CacheGeneration()) {
   compatMode_ = doc.Settings().compatibilityMode > 0 ? doc.Settings().compatibilityMode : 12;
   sumSpacing_ = doc.Settings().Compat(Name("doNotUseHTMLParagraphAutoSpacing"));
-  fieldsCount_.assign(doc.Stories().size(), 0);
-  for (uint32_t s = 0; s < doc.Stories().size(); ++s) {
-    StoryKind k = doc.Stories()[s].kind;
-    if (k == StoryKind::Header || k == StoryKind::Footer || k == StoryKind::Main) fieldsCount_[s] = 1;
-  }
+  CountStories();
   FlattenBody(doc, impl_->items);
   impl_->bodyItems = impl_->items.size();
 }
@@ -1923,7 +1919,17 @@ bool Engine::NextPage() {
   return made;
 }
 
+// Which stories' page fields are worked out: the body's, headers' and footers'. For stories an edit
+// adds too (a note, a header).
+void Engine::CountStories() {
+  for (auto s = static_cast<uint32_t>(fieldsCount_.size()); s < doc_.Stories().size(); ++s) {
+    const StoryKind k = doc_.Stories()[s].kind;
+    fieldsCount_.push_back(k == StoryKind::Header || k == StoryKind::Footer || k == StoryKind::Main ? 1 : 0);
+  }
+}
+
 void Engine::Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added, bool structure) {
+  CountStories();
   Rebase();
   Flow(*this).Edited(story, first, removed, added, structure);
 }
