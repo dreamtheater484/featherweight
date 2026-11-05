@@ -6,6 +6,7 @@
 
 #include "doc/docx/Docx.h"
 #include "doc/edit/Editor.h"
+#include "doc/edit/Kept.h"
 #include "doc/model/Internal.h"
 #include "pkg/XmlWriter.h"
 
@@ -272,30 +273,9 @@ void TreeEdit::Link(ElemId parent, ElemId child, ElemId before) {
     E(prev).next = child;
   }
   E(child).parent = parent;
-  // Kept content after the last known child (the w14 extensions that end w:rPr) stays last.
-  if (prev != kNoElem && E(child).next == kNoElem) MoveFragments(prev, child, pkg::Slot::After, false, false);
-}
-
-// Moves `from`'s kept fragments after it (and before it, with `before`) to `to`, in `slot`: first
-// among to's fragments when `first`, after them otherwise.
-void TreeEdit::MoveFragments(ElemId from, ElemId to, pkg::Slot slot, bool first, bool before) {
-  auto real = [](pkg::NodeId n) { return n != pkg::kNoNode && n != pkg::kFieldNode; };
-  const pkg::NodeId a = E(from).node, b = E(to).node;
-  if (!real(a) || !real(b) || a == b) return;
-  std::vector<pkg::Fragment> stay, move;
-  for (pkg::Fragment& f : doc_.store_.FragmentsCopy(a)) {
-    bool outside = f.slot == pkg::Slot::After || (before && f.slot == pkg::Slot::Before);
-    (outside ? move : stay).push_back(std::move(f));
-  }
-  if (move.empty()) return;
-  for (pkg::Fragment& f : move) {
-    f.slot = slot;
-    f.afterChild.clear();
-  }
-  std::vector<pkg::Fragment> there = doc_.store_.FragmentsCopy(b);
-  there.insert(first ? there.begin() : there.end(), move.begin(), move.end());
-  StoreFragments(a, std::move(stay));
-  StoreFragments(b, std::move(there));
+  // Kept content stays in schema order: after a w:rPr, the w14 extensions that end w:rPr last.
+  for (auto& [node, fragments] : FragmentsAfterLink(doc_.store_, doc_.tree_, prev, child))
+    StoreFragments(node, std::move(fragments));
 }
 
 void TreeEdit::StoreFragments(pkg::NodeId node, std::vector<pkg::Fragment> fragments) {
@@ -353,9 +333,8 @@ void TreeEdit::RemoveElement(ElemId elem) {
   }
   // Kept content beside it stays where it was: after the previous known child, before the next,
   // or first in the parent.
-  if (prev != kNoElem) MoveFragments(elem, prev, pkg::Slot::After, false, true);
-  else if (next != kNoElem) MoveFragments(elem, next, pkg::Slot::Before, true, true);
-  else MoveFragments(elem, parent, pkg::Slot::Inside, true, true);
+  for (auto& [node, fragments] : FragmentsBeforeUnlink(doc_.store_, doc_.tree_, prev, elem, next))
+    StoreFragments(node, std::move(fragments));
 }
 
 void TreeEdit::Remove(ElemId parent, uint32_t name) {
