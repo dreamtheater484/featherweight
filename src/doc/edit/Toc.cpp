@@ -130,10 +130,8 @@ Result Build(Editor& editor, Pos at, const PageText& pages, const std::string& c
     shown.push_back(page.empty() ? u"1" : page);
   }
 
-  // The styles part first, outside undo, and only when the change can be made.
   TreeEdit check(editor, at);
   if (!check.CanChange({at.para})) return Fail(check.Refused());
-  if (check.EnsurePart(PartKind::Styles) == kNoElem) return Fail(u"This document's styles can't change.");
 
   EditGroup group(editor, name);
   const std::vector<std::string> marks = BookmarksForParagraphs(editor, paras, "_Toc");
@@ -162,7 +160,10 @@ Result Build(Editor& editor, Pos at, const PageText& pages, const std::string& c
   if (endPara >= doc.Paragraphs().size() || !doc.Para(endPara).text.empty())
     return Fail(u"A table of contents can't go here.");
 
-  // Their styles, the entries' right tab at the text's edge, and no list: one step.
+  // The styles part, outside undo, once the entries are in: a table that can't go there leaves
+  // none behind (torture finding 30). Then their styles, the entries' right tab at the text's
+  // edge, and no list: one step.
+  if (check.EnsurePart(PartKind::Styles) == kNoElem) return Fail(u"This document's styles can't change.");
   {
     TreeEdit te(editor, {first, 0});
     te.Begin(name);
