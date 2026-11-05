@@ -2,9 +2,11 @@
 
 #include <d2d1.h>
 #include <dwrite_3.h>
+#include <wincodec.h>
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
@@ -15,6 +17,7 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "draw/D2DPainter.h"
 #include "draw/Images.h"
 #include "draw/Sfnt.h"
 #include "miniz.h"
@@ -255,6 +258,10 @@ Rect Through(const Matrix& m, const Rect& r) {
     b.bottom = std::max(b.bottom, q.y);
   }
   return b;
+}
+
+Rect Union(const Rect& a, const Rect& b) {
+  return {std::min(a.left, b.left), std::min(a.top, b.top), std::max(a.right, b.right), std::max(a.bottom, b.bottom)};
 }
 
 // An SVG arc as cubic Béziers (the endpoint parameterization of SVG's implementation notes).
@@ -583,6 +590,15 @@ struct Resources {
 
 }  // namespace
 
+// What something drawn under a shadow casts: its outline, filled or stroked.
+struct Silhouette {
+  Matrix ctm;  // from its coordinates to the page's
+  Path path;
+  bool stroke = false;
+  Pen pen;
+  float alpha = 1;
+};
+
 class PdfPainter : public Painter {
  public:
   PdfPainter(PdfDocument::Impl& doc, float width, float height) : doc_(doc), width_(width), height_(height) {
@@ -609,6 +625,7 @@ class PdfPainter : public Painter {
   void Restore() override {
     last_.face = nullptr;
     if (states_.size() <= 1) return;
+    if (!captures_.empty() && captures_.back().depth == states_.size()) FinishShadow();
     const State s = states_.back();
     states_.pop_back();
     if (s.group && levels_.size() > 1) {
@@ -661,8 +678,14 @@ class PdfPainter : public Painter {
     s.fillAlpha = s.strokeAlpha = 1000;
   }
 
+  void BeginShadow(const Shadow& shadow) override {
+    Save();
+    captures_.push_back({shadow, states_.size(), levels_.size() - 1, Out().size(), states_.back().ctm, {}});
+  }
+
   void FillPath(const Path& p, const Brush& b) override {
     if (p.Empty()) return;
+    Cast(p, states_.back().ctm, BrushAlpha(b));
     if (b.kind == Brush::Kind::Bitmap && b.extendX == Brush::Extend::Clamp && b.extendY == Brush::Extend::Clamp &&
         b.bitmap) {
       // A picture fill: the picture clipped to the shape (what lies past its edges stays empty).
@@ -678,6 +701,7 @@ class PdfPainter : public Painter {
   }
   void StrokePath(const Path& p, const Pen& pen) override {
     if (p.Empty() || pen.width <= 0) return;
+    Cast(p, states_.back().ctm, BrushAlpha(pen.brush), &pen);
     std::string style = N(pen.width) + " w " + std::to_string(pen.cap == LineCap::Round ? 1 : pen.cap == LineCap::Square ? 2 : 0) +
                         " J " + std::to_string(pen.join == LineJoin::Round ? 1 : pen.join == LineJoin::Bevel ? 2 : 0) +
                         " j " + N(std::max(1.f, pen.miterLimit)) + " M ";
@@ -702,6 +726,7 @@ class PdfPainter : public Painter {
       Painter::FillRect(r, b);
       return;
     }
+    Cast(Path::FromRect(r), states_.back().ctm, BrushAlpha(b));
     Paint(b, false, [&] { Out() += N(r.left) + " " + N(r.top) + " " + N(r.Width()) + " " + N(r.Height()) + " re f\n"; }, r);
   }
   bool WantsText() const override { return true; }
@@ -912,6 +937,21 @@ class PdfPainter : public Painter {
   };
   std::optional<Spaces> spaces_;
   void FlushSpaces();
+  // Shadows being drawn (BeginShadow), each with the silhouettes cast since: at its Restore its
+  // picture goes in under them.
+  struct Capture {
+    Shadow shadow;
+    size_t depth = 0;  // states_.size() after its Save
+    size_t level = 0;  // the stream it goes into, and where
+    size_t at = 0;
+    Matrix begin;  // the coordinates at BeginShadow
+    std::vector<Silhouette> parts;
+  };
+  std::vector<Capture> captures_;
+  void FinishShadow();
+  // Something drawn while a shadow is being drawn: its silhouette.
+  void Cast(Path path, const Matrix& ctm, float alpha, const Pen* pen = nullptr);
+  float BrushAlpha(const Brush& b) const { return b.kind == Brush::Kind::Solid ? b.color.a : 1.f; }
   void DrawRun(Point origin, const GlyphRun& run, const Brush& b, PdfFont* font);
 };
 
@@ -1001,6 +1041,7 @@ bool PdfPainter::AppendSpaces(Point origin, const GlyphRun& run, const Brush&, P
 
 void PdfPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* src, float opacity) {
   if (dest.Width() == 0 || dest.Height() == 0 || bitmap.Width() <= 0 || bitmap.Height() <= 0) return;
+  Cast(Path::FromRect(dest), states_.back().ctm, opacity);
   const int a = std::clamp(static_cast<int>(std::lround(opacity * 1000)), 0, 1000);
   if (a == 0) return;
   Save();
@@ -1058,6 +1099,13 @@ void PdfPainter::DrawGlyphs(Point origin, const GlyphRun& run, const Brush& b) {
       return;
     }
     FlushSpaces();
+  }
+  if (!captures_.empty() && !OnlySpaces(run, b)) {
+    Path outline;
+    OutlineSink sink(outline);
+    if (SUCCEEDED(run.face->GetGlyphRunOutline(run.emSize, run.indices, run.advances, run.offsets, run.count, run.sideways,
+                                               run.bidiLevel & 1, &sink)))
+      Cast(std::move(outline), Matrix::Translate(origin.x, origin.y) * states_.back().ctm, BrushAlpha(b));
   }
   if (OnlySpaces(run, b)) {
     if (AppendSpaces(origin, run, b, font)) return;
@@ -1242,6 +1290,92 @@ void PdfPainter::DrawRun(Point origin, const GlyphRun& run, const Brush& b, PdfF
   }
   Paint(b, false, [&] { Out() += text; show(false); if (actual) Out() += "EMC\n"; }, {});
   remember();
+}
+
+// ---------------------------------------------------------------------------
+// Shadows: PDF has no blur, so a shadow is a picture, drawn by Direct2D as the screen draws it,
+// under the vectors that cast it.
+
+static std::shared_ptr<const Bitmap> ShadowPicture(const Shadow& shadow, const Matrix& begin, const std::vector<Silhouette>& parts,
+                                            Rect& placed) {
+  // Where the shadow goes on the page: what casts it, moved, and grown by the blur.
+  Rect cast{FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX};
+  const Matrix toBegin = Inverse(begin);
+  for (const Silhouette& part : parts) {
+    Rect b = part.path.Bounds();
+    if (part.stroke) b = {b.left - part.pen.width, b.top - part.pen.width, b.right + part.pen.width, b.bottom + part.pen.width};
+    cast = Union(cast, Through(part.ctm * toBegin * shadow.transform, b));
+  }
+  if (cast.left > cast.right) return nullptr;
+  const float grow = std::max(0.f, shadow.blur) * 1.5f + 1;
+  cast = {cast.left - grow, cast.top - grow, cast.right + grow, cast.bottom + grow};
+  placed = Through(begin, cast);
+  const float area = std::max(1.f, placed.Width() * placed.Height());
+  const float k = std::min(2.f, std::sqrt(4e6f / area));  // pixels per point: 144 dpi, at most 4 million pixels
+  const int width = static_cast<int>(std::ceil(placed.Width() * k)), height = static_cast<int>(std::ceil(placed.Height() * k));
+  if (width <= 0 || height <= 0 || width > 8192 || height > 8192) return nullptr;
+  Microsoft::WRL::ComPtr<ID2D1Factory1> factory;
+  Microsoft::WRL::ComPtr<IWICImagingFactory> wic;
+  Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
+  Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
+  Microsoft::WRL::ComPtr<ID2D1DeviceContext> dc;
+  D2D1_FACTORY_OPTIONS opts{};
+  const D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+      D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f, 96.f);
+  if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory1), &opts,
+                               reinterpret_cast<void**>(factory.GetAddressOf()))) ||
+      FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) ||
+      FAILED(wic->CreateBitmap(width, height, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bitmap)) ||
+      FAILED(factory->CreateWicBitmapRenderTarget(bitmap.Get(), props, &target)) || FAILED(target.As(&dc)))
+    return nullptr;
+  dc->BeginDraw();
+  dc->Clear(D2D1::ColorF(0, 0, 0, 0));
+  {
+    D2DPainter painter(dc.Get());
+    painter.SetShadowsOnly(true);
+    painter.Transform(begin * Matrix::Translate(-placed.left, -placed.top) * Matrix::Scale(k, k));
+    painter.BeginShadow(shadow);
+    for (const Silhouette& part : parts) {
+      painter.Save();
+      painter.Transform(part.ctm * toBegin);
+      if (part.stroke) {
+        Pen pen = part.pen;
+        pen.brush = Brush::Solid({0, 0, 0, part.alpha});
+        painter.StrokePath(part.path, pen);
+      } else {
+        painter.FillPath(part.path, Brush::Solid({0, 0, 0, part.alpha}));
+      }
+      painter.Restore();
+    }
+    painter.Restore();
+  }
+  if (FAILED(dc->EndDraw())) return nullptr;
+  std::vector<uint8_t> px(static_cast<size_t>(width) * height * 4);
+  if (FAILED(bitmap->CopyPixels(nullptr, width * 4, static_cast<UINT>(px.size()), px.data()))) return nullptr;
+  return std::make_shared<Bitmap>(width, height, std::move(px));
+}
+
+void PdfPainter::FinishShadow() {
+  Capture c = std::move(captures_.back());
+  captures_.pop_back();
+  if (c.parts.empty() || c.shadow.color.a <= 0 || c.level >= levels_.size()) return;
+  Rect placed;
+  const std::shared_ptr<const Bitmap> picture = ShadowPicture(c.shadow, c.begin, c.parts, placed);
+  if (!picture) return;
+  // Under what casts it: where BeginShadow was, in page coordinates.
+  const auto image = doc_.ImageFor(*picture, true);
+  Level& level = levels_[c.level];
+  level.res.xobjects[image.first] = image.second;
+  const std::string ops = "q " + MatrixOps(Inverse(c.begin)) + "cm " + N(placed.Width()) + " 0 0 " + N(-placed.Height()) + " " +
+                          N(placed.left) + " " + N(placed.bottom) + " cm /" + image.first + " Do Q\n";
+  level.ops.insert(std::min(c.at, level.ops.size()), ops);
+}
+
+void PdfPainter::Cast(Path path, const Matrix& ctm, float alpha, const Pen* pen) {
+  if (captures_.empty() || path.Empty()) return;
+  Silhouette part{ctm, std::move(path), pen != nullptr, pen ? *pen : Pen{}, alpha};
+  for (size_t i = 0; i + 1 < captures_.size(); ++i) captures_[i].parts.push_back(part);
+  captures_.back().parts.push_back(std::move(part));
 }
 
 // ---------------------------------------------------------------------------
