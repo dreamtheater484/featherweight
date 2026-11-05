@@ -239,6 +239,46 @@ ElemId TreeEdit::Clone(ElemId src, ElemId parent) {
   return id;
 }
 
+bool TreeEdit::Repeats(ElemId first, ElemId c) const {
+  const Tree& t = doc_.tree_;
+  const Elem& a = t.elems[c];
+  if (a.first != kNoElem) return false;
+  for (ElemId s = first; s != kNoElem && s != c; s = t.elems[s].next) {
+    const Elem& b = t.elems[s];
+    if (b.def != a.def || b.attrCount != a.attrCount || b.first != kNoElem ||
+        doc_.store_.NodeAttributes(b.node) != doc_.store_.NodeAttributes(a.node))
+      continue;
+    bool same = true;
+    for (uint16_t i = 0; same && i < a.attrCount; ++i)
+      same = t.attrs[a.attrs + i].def == t.attrs[b.attrs + i].def && t.attrs[a.attrs + i].value == t.attrs[b.attrs + i].value;
+    if (same) return true;
+  }
+  return false;
+}
+
+bool TreeEdit::HasRepeats(ElemId e) const {
+  const Tree& t = doc_.tree_;
+  for (ElemId c = t.elems[e].first; c != kNoElem; c = t.elems[c].next)
+    if (Repeats(t.elems[e].first, c) || HasRepeats(c)) return true;
+  return false;
+}
+
+ElemId TreeEdit::CopyProps(ElemId src, ElemId parent) {
+  if (!HasRepeats(src)) return Clone(src, parent);
+  const ElemId copy = Clone(src, parent);
+  E(copy).flags = static_cast<uint8_t>(E(copy).flags & ~kSharedKids);
+  E(copy).first = kNoElem;
+  ElemId tail = kNoElem;
+  for (ElemId c = E(src).first; c != kNoElem; c = E(c).next) {
+    if (Repeats(E(src).first, c)) continue;
+    const ElemId k = CopyProps(c, copy);
+    if (tail == kNoElem) E(copy).first = k;
+    else E(tail).next = k;
+    tail = k;
+  }
+  return copy;
+}
+
 ElemId TreeEdit::Own(ElemId container) {
   // The reader shares one set of children between identical property containers, flagging every
   // one but the first, whose children they are (Tree.h, kSharedKids). So any container copies its
@@ -467,8 +507,12 @@ bool TreeEdit::SplitRunAt(uint32_t para, uint32_t offset) {
     tail = c;
   };
   if (props != kNoElem) {
-    if (t.elems[props].first != kNoElem) Touch(props).flags |= kSharedKids;
-    append(Clone(props, second));
+    if (HasRepeats(props)) {
+      append(CopyProps(props, second));  // without the repeats, so the split adds no error
+    } else {
+      if (t.elems[props].first != kNoElem) Touch(props).flags |= kSharedKids;
+      append(Clone(props, second));
+    }
   }
 
   pkg::NodeId firstMoved = t.elems[split].node;
@@ -585,7 +629,7 @@ ElemId TreeEdit::CopyChild(ElemId src, ElemId parent) {
   ElemDefId def = S().Child(TypeOfElem(doc_.tree_, parent), name);
   if (def == kNoDef || S().Elem(def).type != TypeOfElem(doc_.tree_, src)) return kNoElem;
   if (ElemId old = Child(parent, name, false); old != kNoElem) RemoveElement(old);
-  ElemId copy = Clone(src, parent);
+  ElemId copy = CopyProps(src, parent);
   E(copy).def = def;
   Link(parent, copy, kNoElem);
   return copy;

@@ -989,6 +989,32 @@ TEST(Edit_TheFirstOfASharedSetIsFormattedAlone) {
   CHECK(MainXml(*doc) == original);
 }
 
+TEST(Edit_CopiedPropertiesLeaveOutRepeats) {
+  // d2-torture 3b (gouvfr): a file's <w:b/><w:b/> isn't copied into a cut run's second half, so
+  // formatting part of the run adds no validator error the file had once already.
+  Fixture f;
+  f.body = "<w:p><w:r><w:rPr><w:b/><w:b/><w:sz w:val=\"24\"/></w:rPr><w:t xml:space=\"preserve\">Hello world</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  uint32_t p = MainParas(*doc)[0];
+  const std::string original = MainXml(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  edit::ToggleRuns(ed, {{p, 6}, {p, 11}}, edit::Toggle::Italic);
+  const std::string xml = MainXml(*doc);
+  auto count = [&](const std::string& what) {
+    size_t n = 0;
+    for (size_t at = xml.find(what); at != std::string::npos; at = xml.find(what, at + 1)) ++n;
+    return n;
+  };
+  CHECK(count("<w:b/><w:b/>") == 1);  // the first half keeps the file's own
+  CHECK(Has(xml, "<w:rPr><w:b/><w:i/><w:iCs/><w:sz w:val=\"24\"/></w:rPr><w:t xml:space=\"preserve\">world</w:t>"));
+  CHECK(At(*doc, p, 0).bold && !At(*doc, p, 0).italic && At(*doc, p, 7).bold && At(*doc, p, 7).italic);
+  CHECK(SaveAndReopen(*doc) != nullptr);
+  CHECK(editor.Undo() && MainXml(*doc) == original);
+}
+
 TEST(Edit_FirstPropertyGoesBeforeKeptExtensions) {
   // A w:rPr that holds only an extension: the first w: property goes before it, as the editor's
   // own property edits put it (d2-torture finding 3b).
