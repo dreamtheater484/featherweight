@@ -1,10 +1,13 @@
 #include "TestHarness.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <vector>
 
 #include "DocTestUtil.h"
+#include "doc/edit/Clip.h"
 #include "doc/edit/Editor.h"
 #include "doc/layout/Layout.h"
 #include "doc/model/Utf.h"
@@ -805,4 +808,385 @@ TEST(Edit_LinesForTheCaret) {
   CHECK(deep && deep->para > p);
   CHECK(!layout.LineStep({ps[0], 0}, -1, 100));
   CHECK(!layout.LineStep({ps.back(), 0}, 100000, 100));
+}
+
+// ---------------------------------------------------------------------------
+// The clipboard (D2): copying keeps what a reader sees, the converters carry it to RTF and HTML
+// and back, and pasting gives the text that look without damaging the file.
+
+namespace {
+
+using edit::Clip;
+using edit::ClipAlign;
+using edit::ClipPara;
+using edit::ClipRun;
+
+const char* const kClipStyles =
+    "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii=\"Calibri\" w:hAnsi=\"Calibri\" w:cs=\"Calibri\"/>"
+    "<w:sz w:val=\"22\"/></w:rPr></w:rPrDefault></w:docDefaults>"
+    "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style>"
+    "<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/><w:basedOn w:val=\"Normal\"/>"
+    "<w:pPr><w:outlineLvl w:val=\"0\"/></w:pPr><w:rPr><w:b/><w:sz w:val=\"32\"/></w:rPr></w:style>"
+    "<w:style w:type=\"character\" w:default=\"1\" w:styleId=\"DefaultParagraphFont\"><w:name w:val=\"Default Paragraph Font\"/></w:style>"
+    "<w:style w:type=\"character\" w:styleId=\"Strong\"><w:name w:val=\"Strong\"/><w:rPr><w:b/></w:rPr></w:style>";
+
+const char* const kClipNumbering =
+    "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"bullet\"/>"
+    "<w:lvlText w:val=\"\xE2\x80\xA2\"/><w:lvlJc w:val=\"left\"/><w:pPr><w:ind w:left=\"720\" w:hanging=\"360\"/></w:pPr>"
+    "</w:lvl></w:abstractNum><w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+
+// The resolved look of the text at `offset`.
+const RunProps& LookAt(const Document& doc, uint32_t para, uint32_t offset) {
+  for (const TextRun& t : doc.Runs(para))
+    if (t.run && t.start <= offset && offset < t.end) return doc.ResolvedRun(para, t.run);
+  return doc.ResolvedMark(para);
+}
+
+std::u16string ClipText(const ClipPara& p) {
+  std::u16string s;
+  for (const ClipRun& r : p.runs) s += r.text;
+  return s;
+}
+
+bool SameRuns(const ClipPara& a, const ClipPara& b) {
+  if (a.runs.size() != b.runs.size()) {
+    std::printf("  %zu runs, %zu read back (\"%s\" / \"%s\")\n", a.runs.size(), b.runs.size(), ToUtf8(ClipText(a)).c_str(),
+                ToUtf8(ClipText(b)).c_str());
+    return false;
+  }
+  for (size_t i = 0; i < a.runs.size(); ++i)
+    if (a.runs[i].text != b.runs[i].text || !a.runs[i].SameLook(b.runs[i])) {
+      std::printf("  run %zu (\"%s\") differs from the one read back (\"%s\")\n", i, ToUtf8(a.runs[i].text).c_str(),
+                  ToUtf8(b.runs[i].text).c_str());
+      return false;
+    }
+  return true;
+}
+
+// A clip with something of everything; `own` adds what only Featherweight's own copies carry.
+Clip SampleClip(bool own) {
+  Clip c;
+  ClipPara h;
+  h.heading = 1;
+  h.align = ClipAlign::Center;
+  ClipRun big;
+  big.text = u"Big";
+  big.bold = true;
+  big.halfPoints = 32;
+  big.font = "Calibri";
+  h.runs.push_back(big);
+  ClipPara p;
+  p.label = u"1.";
+  p.indent = 720;
+  p.firstLine = -360;
+  p.spaceBefore = 120;
+  p.spaceAfter = 240;
+  p.align = ClipAlign::Justify;
+  ClipRun plain;
+  plain.text = u"a\tb  c é€ & <x> \U0001F600 ";
+  plain.halfPoints = 22;
+  plain.font = "Calibri";
+  ClipRun it = plain;
+  it.text = u"it";
+  it.italic = true;
+  ClipRun us = plain;
+  us.text = u"us";
+  us.underline = us.strike = true;
+  ClipRun sup = plain;
+  sup.text = u"2";
+  sup.vertAlign = VertAlign::Superscript;
+  ClipRun colored = plain;
+  colored.text = u"f\vg";
+  colored.color = 0x336699;
+  colored.font = "Arial";
+  colored.halfPoints = 21;
+  p.runs = {plain, it, us, sup, colored};
+  if (own) {
+    c.source = 0xABC;
+    h.style = "Heading1";
+    p.numId = "3";
+    p.ilvl = 1;
+    p.runs[1].charStyle = "Emphasis";
+  }
+  c.paras = {h, p, ClipPara{}};  // ends with a paragraph mark
+  return c;
+}
+
+}  // namespace
+
+TEST(Clip_CopyKeepsWhatAReaderSees) {
+  Fixture f;
+  f.styles = kClipStyles;
+  f.body =
+      "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/><w:jc w:val=\"center\"/></w:pPr><w:r><w:t>Title</w:t></w:r></w:p>"
+      "<w:p><w:r><w:t xml:space=\"preserve\">Plain </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r>"
+      "<w:del w:id=\"1\" w:author=\"A\"><w:r><w:delText>gone</w:delText></w:r></w:del>"
+      "<w:r><w:rPr><w:i/><w:color w:val=\"FF0000\"/></w:rPr><w:t xml:space=\"preserve\"> red</w:t></w:r>"
+      "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> PAGE </w:instrText></w:r>"
+      "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>3</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r>"
+      "<w:r><w:rPr><w:vanish/></w:rPr><w:t>hidden</w:t></w:r><w:r><w:tab/><w:t>x</w:t><w:br/><w:t>y</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  auto ps = Main(*doc);
+  Clip c = edit::CopyClip(*doc, P(ps[0], 0), P(ps[1], static_cast<uint32_t>(doc->Para(ps[1]).text.size())), 42);
+  CHECK(c.source == 42 && c.paras.size() == 2);
+  if (c.paras.size() != 2) return;
+  const ClipPara& h = c.paras[0];
+  CHECK(h.heading == 1 && h.style == "Heading1" && h.align == ClipAlign::Center && ClipText(h) == u"Title");
+  CHECK(h.runs.size() == 1 && h.runs[0].bold && h.runs[0].halfPoints == 32 && h.runs[0].font == "Calibri");
+  const ClipPara& b = c.paras[1];
+  CHECK(ClipText(b) == u"Plain bold red3\tx\vy");
+  CHECK(b.runs.size() == 4);
+  if (b.runs.size() == 4) {
+    CHECK(!b.runs[0].bold && b.runs[1].bold && b.runs[1].text == u"bold");
+    CHECK(b.runs[2].italic && b.runs[2].color == std::optional<uint32_t>(0xFF0000) && b.runs[2].text == u" red");
+    CHECK(b.runs[3].text == u"3\tx\vy" && !b.runs[3].color);
+  }
+  CHECK(c.PlainText() == u"Title\r\nPlain bold red3\tx\r\ny");
+  // From the middle of a paragraph to the start of the next: the mark comes too.
+  Clip part = edit::CopyClip(*doc, P(ps[0], 2), P(ps[1], 0));
+  CHECK(part.paras.size() == 2 && ClipText(part.paras[0]) == u"tle" && part.paras[1].runs.empty());
+}
+
+TEST(Clip_RtfAndHtmlCarryTheLook) {
+  // HTML carries everything, Featherweight's own extras included.
+  Clip c = SampleClip(true);
+  std::string html = edit::ToHtml(c);
+  CHECK(html.starts_with("Version:0.9\r\n") && edit::IsOwnHtml(html));
+  auto at = [&](const char* key) { return std::stoul(html.substr(html.find(key) + std::strlen(key), 10)); };
+  CHECK(html.substr(at("StartFragment:"), 5) == "<div " && html.substr(at("EndFragment:"), 18) == "<!--EndFragment-->");
+  CHECK(at("EndHTML:") == html.size());
+  auto back = edit::FromHtml(html);
+  CHECK(back && back->source == 0xABC && back->paras.size() == 3);
+  if (back && back->paras.size() == 3) {
+    for (size_t i = 0; i < 3; ++i) {
+      const ClipPara &a = c.paras[i], &b = back->paras[i];
+      CHECK(SameRuns(a, b));
+      CHECK(a.align == b.align && a.heading == b.heading && a.label == b.label && a.style == b.style);
+      CHECK(a.numId == b.numId && a.ilvl == b.ilvl);
+      CHECK(a.indent.value_or(0) == b.indent.value_or(0) && a.firstLine.value_or(0) == b.firstLine.value_or(0));
+      CHECK(a.spaceBefore.value_or(0) == b.spaceBefore.value_or(0) && a.spaceAfter.value_or(0) == b.spaceAfter.value_or(0));
+    }
+  }
+  // RTF carries the look; styles, lists and the source stay behind.
+  Clip plain = SampleClip(false);
+  std::string rtf = edit::ToRtf(plain);
+  CHECK(rtf.starts_with("{\\rtf1") && std::none_of(rtf.begin(), rtf.end(), [](char ch) { return (ch & 0x80) != 0; }));
+  auto fromRtf = edit::FromRtf(rtf);
+  CHECK(fromRtf && fromRtf->paras.size() == 3);
+  if (fromRtf && fromRtf->paras.size() == 3) {
+    for (size_t i = 0; i < 3; ++i) {
+      const ClipPara &a = plain.paras[i], &b = fromRtf->paras[i];
+      CHECK(SameRuns(a, b));
+      CHECK(a.align == b.align && a.heading == b.heading && a.label == b.label);
+      CHECK(a.indent.value_or(0) == b.indent.value_or(0) && a.firstLine.value_or(0) == b.firstLine.value_or(0));
+      CHECK(a.spaceBefore.value_or(0) == b.spaceBefore.value_or(0) && a.spaceAfter.value_or(0) == b.spaceAfter.value_or(0));
+    }
+  }
+  CHECK(!edit::FromRtf("not rtf") && !edit::FromHtml("plain text"));
+}
+
+TEST(Clip_ReadsWordsRtf) {
+  const char* rtf =
+      "{\\rtf1\\ansi\\ansicpg1252\\deff0\\deflang1033{\\fonttbl{\\f0\\froman\\fcharset0 Times New Roman;}"
+      "{\\f1\\fswiss\\fcharset0 Arial{\\*\\falt Helvetica};}{\\f3\\fbidi \\froman\\fcharset2\\fprq2 Symbol;}}\r\n"
+      "{\\colortbl;\\red255\\green0\\blue0;\\red0\\green0\\blue0;}\r\n"
+      "{\\stylesheet{\\ql \\qc\\fs24 \\snext0 Normal;}{\\s1\\ql\\b\\fs32 \\sbasedon0 \\snext0 heading 1,h1;}"
+      "{\\*\\cs10 \\additive Default Paragraph Font;}}\r\n"
+      "{\\*\\generator Riched20;}{\\info{\\title Secret}}{\\header\\pard\\plain Header text\\par}\r\n"
+      "\\pard\\plain \\s1\\qc\\b\\fs32 Title\\par\r\n"
+      "\\pard\\plain \\f1\\fs22 Caf\\'e9 {\\b bold} {\\i\\cf1 red} \\u8364?\\tab x{\\field{\\*\\fldinst PAGE}{\\fldrslt 3}}"
+      "\\line y{\\*\\bkmkstart b}{\\*\\bkmkend b}{\\v hidden}{\\pict\\wmetafile8 0102}\\par\r\n"
+      "\\pard\\plain \\li720\\fi-360{\\listtext\\pard\\plain\\f3\\fs20 \\u-3913\\'b7\\tab}\\fs24 Item\\par\r\n"
+      "\\trowd\\cellx1000\\cellx2000\\pard\\intbl A\\cell B\\cell\\row\r\n"
+      "\\pard\\plain end}";
+  auto c = edit::FromRtf(rtf);
+  CHECK(c && c->paras.size() == 5);
+  if (!c || c->paras.size() != 5) return;
+  const ClipPara& t = c->paras[0];
+  CHECK(ClipText(t) == u"Title" && t.heading == 1 && t.align == ClipAlign::Center);
+  CHECK(t.runs.size() == 1 && t.runs[0].bold && t.runs[0].halfPoints == 32 && t.runs[0].font == "Times New Roman");
+  const ClipPara& b = c->paras[1];
+  CHECK(ClipText(b) == u"Café bold red €\tx3\vy");
+  CHECK(b.align == ClipAlign::Left && b.heading == 0);
+  CHECK(b.runs.size() == 5);
+  if (b.runs.size() == 5) {
+    CHECK(b.runs[0].font == "Arial" && b.runs[0].halfPoints == 22 && !b.runs[0].bold);
+    CHECK(b.runs[1].bold && b.runs[1].text == u"bold");
+    CHECK(b.runs[3].italic && b.runs[3].color == std::optional<uint32_t>(0xFF0000));
+  }
+  const ClipPara& item = c->paras[2];
+  CHECK(item.label == u"•" && ClipText(item) == u"Item" && item.indent == 720 && item.firstLine == -360);
+  CHECK(ClipText(c->paras[3]) == u"A\tB");
+  CHECK(ClipText(c->paras[4]) == u"end");
+}
+
+TEST(Clip_ReadsBrowsersAndWordsHtml) {
+  auto cf = [](std::string_view before, std::string_view frag, std::string_view after) {
+    const char* const kHeader =
+        "Version:0.9\r\nStartHTML:%010zu\r\nEndHTML:%010zu\r\nStartFragment:%010zu\r\nEndFragment:%010zu\r\n";
+    char probe[200];
+    const size_t head = static_cast<size_t>(std::snprintf(probe, sizeof probe, kHeader, size_t{0}, size_t{0}, size_t{0}, size_t{0}));
+    std::string body = std::string(before) + "<!--StartFragment-->";
+    const size_t sf = head + body.size();
+    body += frag;
+    const size_t ef = head + body.size();
+    body += "<!--EndFragment-->" + std::string(after);
+    char h[200];
+    std::snprintf(h, sizeof h, kHeader, head, head + body.size(), sf, ef);
+    return std::string(h) + body;
+  };
+  // A browser's: inline styles, a link, entities, a list; no paragraph mark after the last block.
+  std::string chrome = cf("<html><body>\r\n",
+                          "<h2 style=\"color: rgb(32, 33, 36); font-family: Arial, sans-serif; font-size: 24px;\">News</h2>"
+                          "<p style=\"font-size: 16px;\">One   <b>two</b>\n<a href=\"x\" style=\"color: rgb(26, 13, 171);\">link</a>"
+                          "&nbsp;&amp; more</p><ul><li>First</li><li>Second</li></ul><script>bad()</script>",
+                          "\r\n</body></html>");
+  auto c = edit::FromHtml(chrome);
+  CHECK(c && c->paras.size() == 4 && !edit::IsOwnHtml(chrome));
+  if (c && c->paras.size() == 4) {
+    const ClipPara& h = c->paras[0];
+    CHECK(ClipText(h) == u"News" && h.heading == 2 && h.runs.size() == 1);
+    if (h.runs.size() == 1)
+      CHECK(h.runs[0].bold && h.runs[0].halfPoints == 36 && h.runs[0].font == "Arial" &&
+            h.runs[0].color == std::optional<uint32_t>(0x202124));
+    const ClipPara& p = c->paras[1];
+    CHECK(ClipText(p) == u"One two link & more");
+    CHECK(p.runs.size() == 5);
+    if (p.runs.size() == 5)
+      CHECK(p.runs[0].halfPoints == 24 && p.runs[1].bold && p.runs[3].color == std::optional<uint32_t>(0x1A0DAB));
+    CHECK(c->paras[2].label == u"•" && ClipText(c->paras[2]) == u"First" && ClipText(c->paras[3]) == u"Second");
+  }
+  // Word's: a style sheet, a list item with its label in a conditional comment, an empty paragraph.
+  std::string word = cf(
+      "<html xmlns:o=\"urn:schemas-microsoft-com:office:office\"><head><style>p.MsoNormal{margin:0in;}</style></head>"
+      "<body lang=EN-US>\r\n",
+      "<p class=MsoListParagraph style='margin-left:.5in;text-indent:-.25in;mso-list:l0 level1 lfo1'>"
+      "<![if !supportLists]><span style='font-family:Symbol'><span style='mso-list:Ignore'>\xC2\xB7"
+      "<span style='font:7.0pt \"Times New Roman\"'>&nbsp;&nbsp;&nbsp; </span></span></span><![endif]>Bullet one<o:p></o:p></p>\r\n"
+      "<p class=MsoNormal><o:p>&nbsp;</o:p></p>\r\n"
+      "<p class=MsoNormal align=center style='text-align:center'><b><span style='font-size:14.0pt;color:#C00000'>"
+      "Centered</span></b><o:p></o:p></p>",
+      "</body></html>");
+  auto w = edit::FromHtml(word);
+  CHECK(w && w->paras.size() == 3);
+  if (w && w->paras.size() == 3) {
+    CHECK(w->paras[0].label == u"•" && ClipText(w->paras[0]) == u"Bullet one");
+    CHECK(w->paras[0].indent == 720 && w->paras[0].firstLine == -360);
+    CHECK(w->paras[1].runs.empty());
+    const ClipPara& ce = w->paras[2];
+    CHECK(ClipText(ce) == u"Centered" && ce.align == ClipAlign::Center && ce.runs.size() == 1);
+    if (ce.runs.size() == 1)
+      CHECK(ce.runs[0].bold && ce.runs[0].halfPoints == 28 && ce.runs[0].color == std::optional<uint32_t>(0xC00000));
+  }
+}
+
+TEST(Clip_PasteKeepsTheLookAndTheFile) {
+  Fixture f;
+  f.styles = kClipStyles;
+  f.body =
+      "<w:p><w:r><w:t xml:space=\"preserve\">Plain </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r>"
+      "<w:r><w:rPr><w:i/><w:color w:val=\"FF0000\"/></w:rPr><w:t xml:space=\"preserve\"> red</w:t></w:r></w:p>"
+      "<w:p><w:r><w:rPr><w:sz w:val=\"40\"/></w:rPr><w:t>Target here</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  Clip c = edit::CopyClip(*doc, P(ps[0], 0), P(ps[0], 14));
+  auto r = edit::PasteClip(ed, P(ps[1], 7), P(ps[1], 7), c);
+  CHECK(r && r.caret == P(ps[1], 21));
+  CHECK(doc->Para(ps[1]).text == u"Target Plain bold redhere");
+  // The pasted text looks as it did; the text around it as it did.
+  const RunProps& plain = LookAt(*doc, ps[1], 8);
+  CHECK(!plain.bold && plain.size.Value() == 22);
+  const RunProps& bold = LookAt(*doc, ps[1], 13);
+  CHECK(bold.bold && bold.size.Value() == 22);
+  const RunProps& red = LookAt(*doc, ps[1], 18);
+  CHECK(red.italic && !red.color.automatic && red.color.rgb == 0xFF0000);
+  CHECK(LookAt(*doc, ps[1], 2).size.Value() == 40 && LookAt(*doc, ps[1], 22).size.Value() == 40);
+  CHECK(Consistent(*doc, f));
+  // One undo step puts the file back exactly.
+  CHECK(ed.UndoName() == u"Paste" && ed.Undo() && MainXml(*doc) == before && !ed.CanUndo());
+  // Over a selection; text that already looks right gets no formatting of its own.
+  Clip same = edit::CopyClip(*doc, P(ps[0], 0), P(ps[0], 5));
+  CHECK(edit::PasteClip(ed, P(ps[0], 6), P(ps[0], 10), same) && doc->Para(ps[0]).text == u"Plain Plain red");
+  CHECK(BodyIs(*doc,
+               "<w:p><w:r><w:t xml:space=\"preserve\">Plain Plain</w:t></w:r>"
+               "<w:r><w:rPr><w:i/><w:color w:val=\"FF0000\"/></w:rPr><w:t xml:space=\"preserve\"> red</w:t></w:r></w:p>"
+               "<w:p><w:r><w:rPr><w:sz w:val=\"40\"/></w:rPr><w:t>Target here</w:t></w:r></w:p>"));
+}
+
+TEST(Clip_PasteParagraphsHeadingsAndLists) {
+  Fixture f;
+  f.styles = kClipStyles;
+  f.numbering = kClipNumbering;
+  f.body =
+      "<w:p><w:r><w:t>ABCD</w:t></w:r></w:p>"
+      "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr><w:r><w:t>Item</w:t></w:r></w:p>"
+      "<w:p><w:r><w:t>Other</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  // A heading and a paragraph from a web page, into the middle of a paragraph: the first pasted
+  // paragraph's mark makes "ABHead" a heading; "BodyCD" keeps the paragraph it was.
+  auto web = edit::FromHtml("<h1>Head</h1><p>Body</p>");
+  CHECK(web && web->paras.size() == 2);
+  if (!web) return;
+  auto r = edit::PasteClip(ed, P(ps[0], 2), P(ps[0], 2), *web);
+  ps = Main(*doc);
+  CHECK(r && ps.size() == 4 && r.caret == P(ps[1], 4));
+  CHECK(doc->Para(ps[0]).text == u"ABHead" && doc->Para(ps[1]).text == u"BodyCD");
+  CHECK(doc->ResolvedPara(ps[0]).style == "Heading1" && doc->ResolvedPara(ps[1]).style == "Normal");
+  CHECK(LookAt(*doc, ps[0], 3).bold && !LookAt(*doc, ps[1], 1).bold);
+  CHECK(MainXml(*doc).find("<w:b/>") == std::string::npos);  // the style makes it bold
+  CHECK(Consistent(*doc, f));
+  CHECK(ed.Undo() && MainXml(*doc) == before);
+  // A list item with its mark, back into the same document: still in the list.
+  ps = Main(*doc);
+  Clip item = edit::CopyClip(*doc, P(ps[1], 0), P(ps[2], 0), 7);
+  CHECK(item.paras.size() == 2 && item.paras[0].label == u"•" && item.paras[0].numId == "1");
+  CHECK(edit::PasteClip(ed, P(ps[2], 0), P(ps[2], 0), item, 7));
+  ps = Main(*doc);
+  CHECK(ps.size() == 4 && doc->Para(ps[2]).text == u"Item" && doc->ResolvedPara(ps[2]).numId == "1");
+  CHECK(doc->Para(ps[3]).text == u"Other" && doc->ResolvedPara(ps[3]).numId.empty());
+  CHECK(Consistent(*doc, f));
+  CHECK(ed.Undo());
+  // Into another document: the label as text.
+  ps = Main(*doc);
+  CHECK(edit::PasteClip(ed, P(ps[2], 0), P(ps[2], 0), item, 8));
+  ps = Main(*doc);
+  CHECK(doc->Para(ps[2]).text == u"•\tItem" && doc->ResolvedPara(ps[2]).numId.empty());
+  CHECK(Consistent(*doc, f) && ed.Undo() && MainXml(*doc) == before);
+}
+
+TEST(Clip_PasteThatWouldDamageIsRefused) {
+  Fixture f;
+  f.body =
+      "<w:p><w:r><w:t xml:space=\"preserve\">Page </w:t></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>"
+      "<w:r><w:instrText xml:space=\"preserve\"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/>"
+      "</w:r><w:r><w:t>3</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r>"
+      "<w:r><w:t xml:space=\"preserve\"> of</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  uint32_t p = Main(*doc)[0];
+  auto web = edit::FromHtml("<p>x</p><p>y</p>");
+  CHECK(web);
+  if (!web) return;
+  // Over part of the field: refused, nothing changes, nothing to undo.
+  auto r = edit::PasteClip(ed, P(p, 3), P(p, 7), *web);
+  CHECK(!r && !r.message.empty() && !ed.CanUndo() && !ed.Modified() && RoundTrips(*doc));
+  // Into the field's result: the field can't hold a paragraph break, so that's refused too, and
+  // nothing changes; one paragraph goes in.
+  auto two = edit::PasteClip(ed, P(p, 14), P(p, 14), *web);
+  CHECK(!ed.CanUndo() || two);
+  auto one = edit::FromHtml("<span>x</span>");
+  CHECK(one && edit::PasteClip(ed, P(p, 14), P(p, 14), *one) && Consistent(*doc, f));
 }

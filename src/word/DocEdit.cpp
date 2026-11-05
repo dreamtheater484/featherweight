@@ -7,6 +7,7 @@
 
 #include "Commands.h"
 #include "Util.h"
+#include "doc/edit/Clip.h"
 #include "ui/Anim.h"
 #include "ui/Controls.h"
 #include "ui/Theme.h"
@@ -118,13 +119,32 @@ void DocView::DeleteBy(bool forward, bool word) {
 
 void DocView::Cut() {
   if (!Editing() || !HasSelection()) return;
-  std::wstring text = TextOf(anchor_, focus_, SIZE_MAX);
-  if (!text.empty()) util::SetClipboardText(text);
-  Apply(editor_->Delete(SelFrom(), SelTo()));
+  PutOnClipboard();
+  editor_->BeginGroup(u"Cut");
+  Result r = editor_->Delete(SelFrom(), SelTo());
+  editor_->EndGroup();
+  Apply(r);
 }
 
-void DocView::Paste() {
+void DocView::Paste(bool formatted) {
   if (!Editing()) return;
+  if (formatted) {
+    // Featherweight's own copies come as HTML; Word's RTF says more than its HTML; then a
+    // browser's HTML.
+    namespace edit = fw::doc::edit;
+    std::optional<edit::Clip> clip;
+    const std::string html = util::GetClipboardBytes(L"HTML Format");
+    if (!html.empty() && edit::IsOwnHtml(html)) clip = edit::FromHtml(html);
+    if (!clip || clip->Empty()) {
+      const std::string rtf = util::GetClipboardBytes(L"Rich Text Format");
+      if (!rtf.empty()) clip = edit::FromRtf(rtf);
+    }
+    if ((!clip || clip->Empty()) && !html.empty()) clip = edit::FromHtml(html);
+    if (clip && !clip->Empty()) {
+      Apply(edit::PasteClip(*editor_, SelFrom(), SelTo(), *clip, clipSource_));
+      return;
+    }
+  }
   std::wstring text = util::GetClipboardText();
   if (text.empty()) return;
   const std::u16string t(text.begin(), text.end());
@@ -268,6 +288,10 @@ bool DocView::EditKey(UINT vk, UINT mods) {
   }
   if (ctrl && shift && vk == 'Z') {
     Redo();
+    return true;
+  }
+  if (ctrl && shift && vk == 'V') {
+    Paste(false);  // as plain text
     return true;
   }
   return false;

@@ -87,11 +87,14 @@ class DocView : public PagedView {
   bool HasSelection() const { return anchor_ != focus_; }
   void Copy();
   void SelectAll();
+  // The selection on the clipboard, as plain text, RTF and HTML. False when it has no text.
+  bool PutOnClipboard();
 
   // ---- Editing (DocEdit.cpp) ----
   bool Editing() const { return editor_ != nullptr && Ready() && !presentation_; }
   void Cut();
-  void Paste();
+  // Pastes the clipboard's formatted text (Featherweight's own, RTF or HTML), or its plain text.
+  void Paste(bool formatted = true);
   void Undo();
   void Redo();
 
@@ -237,6 +240,7 @@ class DocView : public PagedView {
 
   // Editing: null for a document shown but not edited (one the model can't write back).
   std::unique_ptr<fw::doc::edit::Editor> editor_;
+  uint64_t clipSource_ = 0;  // names this document in what it copies, to paste lists back into it
   bool keyFocus_ = true;
   bool annotationsStale_ = false;  // an edit moved comments, changes or links: find them again
   double caretStart_ = 0;          // the caret blinks from here (the last key or click)

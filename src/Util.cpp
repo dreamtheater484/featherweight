@@ -91,20 +91,47 @@ bool WriteFileAtomic(const std::wstring& path, const std::string& data) {
   return ok;
 }
 
-void SetClipboardText(const std::wstring& text) {
+namespace {
+
+void PutOnClipboard(UINT format, const void* data, size_t bytes) {
+  HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes);
+  if (!h) return;
+  void* p = GlobalLock(h);
+  if (!p) {
+    GlobalFree(h);
+    return;
+  }
+  memcpy(p, data, bytes);
+  GlobalUnlock(h);
+  if (!SetClipboardData(format, h)) GlobalFree(h);
+}
+
+}  // namespace
+
+void SetClipboardText(const std::wstring& text, const std::string& rtf, const std::string& html) {
   if (!OpenClipboard(nullptr)) return;
   EmptyClipboard();
-  size_t bytes = (text.size() + 1) * sizeof(wchar_t);
-  if (HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes)) {
-    if (void* p = GlobalLock(h)) {
-      memcpy(p, text.c_str(), bytes);
+  PutOnClipboard(CF_UNICODETEXT, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+  if (!rtf.empty())
+    if (UINT f = RegisterClipboardFormatW(L"Rich Text Format")) PutOnClipboard(f, rtf.c_str(), rtf.size() + 1);
+  if (!html.empty())
+    if (UINT f = RegisterClipboardFormatW(L"HTML Format")) PutOnClipboard(f, html.c_str(), html.size() + 1);
+  CloseClipboard();
+}
+
+std::string GetClipboardBytes(const wchar_t* format) {
+  std::string out;
+  const UINT f = RegisterClipboardFormatW(format);
+  if (!f || !IsClipboardFormatAvailable(f) || !OpenClipboard(nullptr)) return out;
+  if (HANDLE h = GetClipboardData(f)) {
+    const size_t size = GlobalSize(h);
+    if (auto* p = static_cast<const char*>(GlobalLock(h))) {
+      out.assign(p, strnlen(p, size));
       GlobalUnlock(h);
-      if (!SetClipboardData(CF_UNICODETEXT, h)) GlobalFree(h);
-    } else {
-      GlobalFree(h);
     }
   }
   CloseClipboard();
+  return out;
 }
 
 std::wstring GetClipboardText() {

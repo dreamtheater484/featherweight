@@ -8,6 +8,7 @@ add_library(fwdoc STATIC
   model/Tree.cpp
   docx/Reader.cpp
   docx/Writer.cpp
+  edit/Clip.cpp
   edit/Editor.cpp
 )
 target_include_directories(fwdoc PUBLIC "${PROJECT_SOURCE_DIR}/src")
