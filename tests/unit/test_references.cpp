@@ -447,6 +447,32 @@ TEST(Check_WordTablesWordCanOpen) {
             "a table cell ends with a table instead of a paragraph"));
 }
 
+// Content controls that hold one paragraph (date, drop-down, combo box, plain text, picture): Word
+// says a file has unreadable content when one holds a second paragraph or a table, wherever it
+// sits (opened in Word, D2's torture test, finding 22). A rich text control holds any blocks.
+TEST(Check_OneParagraphControls) {
+  auto check = [](const std::string& body) { return CheckParts(Word(body + "<w:p/>")); };
+  auto sdt = [](const std::string& kind, const std::string& content) {
+    return "<w:sdt><w:sdtPr>" + kind + "</w:sdtPr><w:sdtContent>" + content + "</w:sdtContent></w:sdt>";
+  };
+  auto table = [](const std::string& rows) { return "<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid>" + rows + "</w:tbl>"; };
+  const std::string cell = "<w:tc><w:tcPr/><w:p/></w:tc>", twoParas = "<w:tc><w:tcPr/><w:p/><w:p/></w:tc>";
+  // Word opens these.
+  CHECK(check(sdt("<w:date/>", "<w:p/>")).Ok());
+  CHECK(check("<w:p>" + sdt("<w:date/>", "<w:r><w:t>5 November</w:t></w:r>") + "</w:p>").Ok());
+  CHECK(check(sdt("<w:richText/>", "<w:p/><w:p/>")).Ok());
+  CHECK(check(sdt("", "<w:p/><w:p/>")).Ok());
+  CHECK(check(table("<w:tr>" + sdt("<w:date/>", cell) + cell + "</w:tr>")).Ok());
+  CHECK(check(table(sdt("<w:dropDownList/>", "<w:tr>" + cell + cell + "</w:tr>"))).Ok());
+  // Word says these have unreadable content.
+  CHECK(Has(check(sdt("<w:date/>", "<w:p/><w:p/>")).errors, "a date content control holds more than one paragraph"));
+  CHECK(Has(check(table("<w:tr>" + sdt("<w:date/>", twoParas) + cell + "</w:tr>")).errors,
+            "a date content control holds more than one paragraph"));
+  CHECK(Has(check(sdt("<w:text w:multiLine=\"1\"/>", "<w:p/><w:p/>")).errors, "a plain text content control holds more than one paragraph"));
+  CHECK(Has(check(sdt("<w:comboBox/>", table("<w:tr>" + cell + cell + "</w:tr>") + "<w:p/>")).errors,
+            "a combo box content control holds a table"));
+}
+
 TEST(Check_ScopesAlternatesAndWarnings) {
   // A glossary is a document of its own: its paragraph ids may repeat the main document's.
   const std::string glossary =

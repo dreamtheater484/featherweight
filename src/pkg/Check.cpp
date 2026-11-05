@@ -174,6 +174,43 @@ bool HasCell(pugi::xml_node row) {
   return false;
 }
 
+// Content controls that hold one paragraph: date, drop-down list, combo box, plain text (even
+// multi-line, which takes line breaks) and picture. Word says the file has unreadable content when
+// one holds a second paragraph or a table (probed with Word on 2026-11-05, torture finding 22). The
+// kind, or empty for a control that may hold any blocks.
+std::string_view OneParagraphKind(pugi::xml_node sdt) {
+  for (pugi::xml_node pr : sdt.children()) {
+    if (!IsWordElement(pr, "sdtPr")) continue;
+    for (pugi::xml_node k : pr.children()) {
+      if (IsWordElement(k, "date")) return "date";
+      if (IsWordElement(k, "dropDownList")) return "drop-down list";
+      if (IsWordElement(k, "comboBox")) return "combo box";
+      if (IsWordElement(k, "text")) return "plain text";
+      if (IsWordElement(k, "picture")) return "picture";
+    }
+  }
+  return {};
+}
+
+// The paragraphs and tables of one block sequence, looking through content controls and custom
+// XML; the cells it wraps (a control around a cell or a row) are collected to be counted apart.
+void CountBlocks(pugi::xml_node container, int& paragraphs, bool& table, std::vector<pugi::xml_node>& cells) {
+  for (pugi::xml_node c : container.children()) {
+    if (IsWordElement(c, "p")) {
+      ++paragraphs;
+    } else if (IsWordElement(c, "tbl")) {
+      table = true;
+    } else if (IsWordElement(c, "tc")) {
+      cells.push_back(c);
+    } else if (IsWordElement(c, "tr") || IsWordElement(c, "customXml")) {
+      CountBlocks(c, paragraphs, table, cells);
+    } else if (IsWordElement(c, "sdt")) {
+      for (pugi::xml_node k : c.children())
+        if (IsWordElement(k, "sdtContent")) CountBlocks(k, paragraphs, table, cells);
+    }
+  }
+}
+
 std::string ContainerName(pugi::xml_node n) {
   std::string_view local = LocalNameOf(n);
   return local == "hyperlink" ? "hyperlink" : local == "customXml" ? "custom XML element" : local == "fldSimple" ? "simple field" : "content control";
@@ -563,6 +600,22 @@ void Checker::CheckWordTables() {
         if (!last) Error(p->name, "a table cell has no paragraph");
         else if (IsWordElement(last, "tbl")) Error(p->name, "a table cell ends with a table instead of a paragraph");
       }
+      if (IsWordElement(n, "sdt"))
+        if (std::string_view kind = OneParagraphKind(n); !kind.empty()) {
+          // Around paragraphs, all of them count; around cells or rows, each cell's.
+          int paragraphs = 0;
+          bool table = false;
+          std::vector<pugi::xml_node> cells;
+          for (pugi::xml_node k : n.children())
+            if (IsWordElement(k, "sdtContent")) CountBlocks(k, paragraphs, table, cells);
+          for (size_t i = 0; i < cells.size() && paragraphs < 2 && !table; ++i) {
+            int inCell = 0;
+            CountBlocks(cells[i], inCell, table, cells);
+            paragraphs = std::max(paragraphs, inCell);
+          }
+          if (table) Error(p->name, "a " + std::string(kind) + " content control holds a table");
+          else if (paragraphs > 1) Error(p->name, "a " + std::string(kind) + " content control holds more than one paragraph");
+        }
       for (pugi::xml_node c = n.last_child(); c; c = c.previous_sibling())
         if (c.type() == pugi::node_element) stack.push_back(c);
     }
