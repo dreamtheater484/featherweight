@@ -174,6 +174,17 @@ class Editor {
   // Every tracked change of the document. Text boxes, which aren't edited yet, keep theirs (the
   // result's message says so).
   Result ReviewAll(bool accept);
+  // While paused, nothing is recorded (a comment's own text, which Word doesn't track).
+  void PauseTracking(bool pause) { paused_ = pause; }
+  bool TrackingPaused() const { return paused_ || reviewing_; }
+
+  // ---- Comment marks (D4; Comments.h makes and removes whole comments)
+  // A comment's marks in its story: w:commentRangeStart at `from`, w:commentRangeEnd at `to`,
+  // and its reference (a run with w:commentReference, one character) at `refAt`, after `to`
+  // (a reply's goes after the one it answers). One transaction.
+  Result InsertCommentMarks(Pos from, Pos to, Pos refAt, std::string_view id);
+  // Takes out the marks of comment `id`, wherever they are in one story.
+  Result RemoveCommentMarks(std::string_view id);
 
   // ---- Tables (D3, plan §6.2)
   // Cells are named by positions in them: `from` and `to` in two cells of one table name the block
@@ -304,6 +315,7 @@ class Editor {
   // Whether the next transaction records what it does, and as whom (Tracking(), Author()).
   void Arm();
   bool reviewing_ = false;  // accepting or rejecting: the changes it makes aren't recorded
+  bool paused_ = false;     // PauseTracking
 
   Document& doc_;
   std::string author_, fixedDate_;

@@ -480,7 +480,7 @@ class Document {
     std::string paraId, parentParaId;
     bool done = false;
   };
-  std::vector<CommentEx> commentsEx_;  // word/commentsExtended.xml, read but never written
+  std::vector<CommentEx> commentsEx_;  // word/commentsExtended.xml; written again from this (D4)
   std::unique_ptr<Caches> caches_;
   uint64_t cacheGeneration_ = 0;
   void ResetCaches();

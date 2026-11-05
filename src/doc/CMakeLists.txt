@@ -8,12 +8,14 @@ add_library(fwdoc STATIC
   model/Schema.cpp
   model/Tree.cpp
   docx/Blank.cpp
+  docx/CommentParts.cpp
   docx/Reader.cpp
   docx/Save.cpp
   docx/Writer.cpp
   edit/Case.cpp
   edit/Clip.cpp
   edit/ClipTable.cpp
+  edit/Comments.cpp
   edit/Editor.cpp
   edit/Export.cpp
   edit/Format.cpp

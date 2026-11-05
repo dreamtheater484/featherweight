@@ -6,10 +6,14 @@
 #include <vector>
 
 #include "DocTestUtil.h"
+#include "doc/docx/Docx.h"
+#include "doc/docx/Save.h"
+#include "doc/edit/Comments.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/model/Utf.h"
+#include "pkg/Check.h"
 
 using namespace fw::doc;
 using namespace doc_test;
@@ -390,4 +394,124 @@ TEST(Review_TablesWhileTracking) {
   CHECK(ed.ReviewAll(true) && t.doc->Para(paras[0]).text.empty() && t.doc->Para(paras[1]).text.empty());
   Undos(ed);
   CHECK(RoundTrips(*t.doc));
+}
+
+namespace {
+
+const CommentInfo* CommentById(const std::vector<CommentInfo>& all, std::string_view id) {
+  for (const CommentInfo& c : all)
+    if (c.id == id) return &c;
+  return nullptr;
+}
+
+// The document saved (everything edited written) and read again.
+std::unique_ptr<Document> SavedAndRead(Document& doc, Editor& ed) {
+  fw::doc::docx::SaveOptions options;
+  options.changedParts = ed.DirtyParts();
+  options.edited = true;
+  std::vector<uint8_t> bytes;
+  if (!fw::doc::docx::Serialize(doc, options, bytes).Ok()) return nullptr;
+  fw::pkg::Status st;
+  auto pkg = test::OpenBytes(std::move(bytes), st);
+  if (!pkg || !fw::pkg::CheckPackage(*pkg).Ok()) return nullptr;
+  return pkg ? fw::doc::docx::Read(std::move(pkg), st) : nullptr;
+}
+
+std::string PartXml(const Document& doc, std::string_view name) {
+  std::vector<uint8_t> bytes;
+  return doc.Package().ReadPart(name, bytes).Ok() ? test::Text(bytes) : std::string();
+}
+
+}  // namespace
+
+TEST(Comments_AddReplyEditResolveDelete) {
+  Fixture f;
+  f.body = "<w:p><w:r><w:t xml:space=\"preserve\">The buyer pays.</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  ed.SetAuthor("Ann Lee");
+  ed.SetFixedDate("2026-11-05T10:00:00Z");
+  const uint32_t p = Main(*doc)[0];
+  CHECK(edit::Initials("Ann Lee") == "AL" && edit::Initials("bob@example.com") == "B");
+  CHECK(!edit::AddComment(ed, P(p, 4), P(p, 9), u"  "));
+  CHECK(edit::AddComment(ed, P(p, 4), P(p, 9), u"Who exactly?"));
+  CHECK(doc->Para(p).text == u"The buyer\x05 pays.");
+  CHECK(BodyIs(*doc, "<w:p><w:r><w:t xml:space=\"preserve\">The </w:t></w:r><w:commentRangeStart w:id=\"0\"/>"
+                     "<w:r><w:t xml:space=\"preserve\">buyer</w:t></w:r><w:commentRangeEnd w:id=\"0\"/><w:r><w:commentReference w:id=\"0\"/></w:r>"
+                     "<w:r><w:t xml:space=\"preserve\"> pays.</w:t></w:r></w:p>"));
+  auto all = doc->Comments();
+  CHECK(all.size() == 1);
+  if (all.size() != 1) return;
+  CHECK(all[0].author == "Ann Lee" && all[0].initials == "AL" && all[0].date == "2026-11-05T10:00:00Z");
+  CHECK(all[0].start == P(p, 4) && all[0].end == P(p, 9) && all[0].reference == P(p, 9));
+  CHECK(edit::CommentText(*doc, all[0]) == u"Who exactly?" && !all[0].paraId.empty() && !all[0].done);
+  CHECK(Consistent(*doc, f));
+  const std::string first(all[0].id);
+
+  // A reply: about the same text, its reference after the first one's.
+  ed.SetAuthor("Bob");
+  CHECK(edit::ReplyToComment(ed, first, u"The company.\nNot its owner."));
+  all = doc->Comments();
+  CHECK(all.size() == 2);
+  const CommentInfo* reply = all.size() == 2 ? &all[1] : nullptr;
+  CHECK(reply && reply->parentId == first && reply->start == P(p, 4) && reply->end == P(p, 9) &&
+        reply->reference == P(p, 10));
+  CHECK(reply && edit::CommentText(*doc, *reply) == u"The company.\nNot its owner.");
+  CHECK(Consistent(*doc, f));
+  const std::string second = reply ? std::string(reply->id) : std::string();
+
+  CHECK(edit::EditComment(ed, second, u"The company itself."));
+  CHECK(edit::CommentText(*doc, *CommentById(doc->Comments(), second)) == u"The company itself.");
+  CHECK(edit::ResolveComment(ed, second, true));  // the thread
+  all = doc->Comments();
+  CHECK(CommentById(all, first)->done && CommentById(all, second)->done && CommentById(all, second)->parentId == first);
+
+  // Saved: the parts Word reads, with the reply and the resolved state.
+  auto saved = SavedAndRead(*doc, ed);
+  CHECK(saved);
+  if (saved) {
+    auto back = saved->Comments();
+    CHECK(back.size() == 2 && CommentById(back, second) && CommentById(back, second)->parentId == first &&
+          CommentById(back, first)->done);
+    const std::string ids = PartXml(*saved, "/word/commentsIds.xml"), ext = PartXml(*saved, "/word/commentsExtensible.xml");
+    CHECK(ids.find("w16cid:durableId=") != std::string::npos && ext.find("w16cex:dateUtc=") != std::string::npos);
+    CHECK(PartXml(*saved, "/word/commentsExtended.xml").find("w15:done=\"1\"") != std::string::npos);
+  }
+
+  // Deleting the first takes its reply and every mark.
+  CHECK(edit::DeleteComment(ed, first));
+  CHECK(doc->Comments().empty() && doc->Para(p).text == u"The buyer pays.");
+  CHECK(Consistent(*doc, f));
+  auto none = SavedAndRead(*doc, ed);
+  CHECK(none && none->Comments().empty());
+  // Undo takes everything back, one step each.
+  CHECK(ed.Undo() && doc->Comments().size() == 2 && doc->Para(p).text == u"The buyer\x05\x05 pays.");
+  CHECK(ed.Undo() && !CommentById(doc->Comments(), first)->done);
+  CHECK(ed.Undo() && ed.Undo() && doc->Comments().size() == 1);
+  CHECK(ed.Undo() && doc->Comments().empty() && doc->Para(p).text == u"The buyer pays.");
+  CHECK(!ed.CanUndo());
+  CHECK(ed.Redo() && ed.Redo() && doc->Comments().size() == 2 && doc->Comments()[1].start == P(p, 4));
+  while (ed.CanUndo()) ed.Undo();
+  CHECK(BodyIs(*doc, "<w:p><w:r><w:t xml:space=\"preserve\">The buyer pays.</w:t></w:r></w:p>"));
+}
+
+TEST(Comments_AtAPointAndTracked) {
+  Tracked t("<w:p><w:r><w:t>ab</w:t></w:r></w:p>");
+  CHECK(t.ed);
+  if (!t.ed) return;
+  Editor& ed = *t.ed;
+  const uint32_t p = Main(*t.doc)[0];
+  // A comment with nothing selected; its text isn't tracked, nor are its marks.
+  CHECK(edit::AddComment(ed, P(p, 1), P(p, 1), u"here"));
+  CHECK(t.doc->Revisions(t.doc->MainStory()).empty());
+  const auto all = t.doc->Comments();
+  CHECK(all.size() == 1 && all[0].start == P(p, 1) && all[0].end == P(p, 1) && all[0].reference == P(p, 1));
+  CHECK(all.size() == 1 && t.doc->Revisions(all[0].story).empty());
+  CHECK(BodyIs(*t.doc, "<w:p><w:r><w:t>a</w:t></w:r><w:commentRangeStart w:id=\"0\"/><w:commentRangeEnd w:id=\"0\"/>"
+                       "<w:r><w:commentReference w:id=\"0\"/></w:r><w:r><w:t>b</w:t></w:r></w:p>"));
+  // Its mark can't be deleted with the text around it; the comment goes from the pane.
+  CHECK(!ed.Delete(P(p, 0), P(p, 3)));
+  CHECK(Consistent(*t.doc, t.f));
 }

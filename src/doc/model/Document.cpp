@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "doc/model/Internal.h"
 #include "doc/model/Utf.h"
@@ -632,8 +633,12 @@ std::vector<Field> Document::Fields(uint32_t story) const {
 std::vector<CommentInfo> Document::Comments() const {
   std::vector<CommentInfo> out;
   std::unordered_map<std::string_view, size_t> byId;
+  // The comments in the comments part: one deleted (or added and undone) keeps its story, out of it.
+  std::unordered_set<ElemId> linked;
+  if (const Part* part = FindPart(PartKind::Comments))
+    for (ElemId c = tree_.elems[part->root].first; c != kNoElem; c = tree_.elems[c].next) linked.insert(c);
   for (uint32_t s = 0; s < stories_.size(); ++s) {
-    if (stories_[s].kind != StoryKind::Comment) continue;
+    if (stories_[s].kind != StoryKind::Comment || !linked.count(stories_[s].root)) continue;
     Node root(&tree_, stories_[s].root);
     CommentInfo c;
     c.story = s;
