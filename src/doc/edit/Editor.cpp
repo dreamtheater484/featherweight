@@ -569,6 +569,8 @@ struct EditorState {
       add(E(w).parent);
       add(PrevSibling(w));
       add(E(w).next);
+      // Range markers between it and the next paragraph, however many: joining moves them in.
+      for (ElemId m = E(w).next; m != kNoElem && RangeMarker(NameOf(m)); m = E(m).next) add(m);
       std::vector<ElemId> stack{w};
       while (!stack.empty()) {
         ElemId id = stack.back();
