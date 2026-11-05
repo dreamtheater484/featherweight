@@ -1122,6 +1122,9 @@ void App::OnKeyDown(UINT vk) {
   // Shortcuts that work everywhere, even while typing in a box or a form field: the window's own,
   // then the active tab's (with no tab open, the PDF reader's).
   auto global = [&]() -> int {
+    // Shift+F3 in a document being edited changes case, as in Word (in the search box it finds back).
+    if (vk == VK_F3 && shift && v && v->HasKeyFocus())
+      if (int cmd = v->ShortcutFor(vk, mods)) return cmd;
     if (int cmd = AppShortcut(vk, mods)) return cmd;
     return v ? v->ShortcutFor(vk, mods) : PdfView::Shortcut(vk, mods);
   };
