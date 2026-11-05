@@ -19,6 +19,13 @@ constexpr std::string_view kCp = "http://schemas.openxmlformats.org/package/2006
 constexpr std::string_view kDcTerms = "http://purl.org/dc/terms/";
 constexpr std::string_view kXsi = "http://www.w3.org/2001/XMLSchema-instance";
 constexpr std::string_view kImageRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+constexpr std::string_view kHeaderRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header";
+constexpr std::string_view kFooterRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer";
+
+// Any mention of a relationship's id in a part keeps it: an attribute, kept XML, a field.
+bool Mentions(std::string_view xml, const std::string& id) {
+  return xml.find("\"" + id + "\"") != std::string_view::npos || xml.find("'" + id + "'") != std::string_view::npos;
+}
 
 // The prefix `uri` has on the root, declaring it as `preferred` (or a free variant) if it has none.
 std::string PrefixFor(pugi::xml_node root, std::string_view uri, std::string preferred) {
@@ -100,16 +107,28 @@ Status UpdateCoreProperties(std::string_view xml, const std::string& author, int
 UnusedMedia FindUnusedMedia(const Document& doc, const std::vector<std::pair<uint32_t, const std::string*>>& written) {
   UnusedMedia out;
   const pkg::Package& package = doc.Package();
+  auto storyRel = [](const pkg::Relationship& r) { return !r.external && (r.type == kHeaderRel || r.type == kFooterRel); };
   for (const auto& [index, xml] : written) {
     if (index >= doc.Parts().size() || !xml) continue;
     const pkg::RelationshipSet* rels = package.RelationshipsOf(doc.Parts()[index].name);
     if (!rels) continue;
-    for (const pkg::Relationship& r : rels->items) {
-      if (r.external || r.type != kImageRel) continue;
-      // Any mention of the id keeps it: an attribute, kept XML, a field.
-      if (xml->find("\"" + r.id + "\"") != std::string::npos || xml->find("'" + r.id + "'") != std::string::npos) continue;
-      out.relationships.emplace_back(rels->source, r.id);
-    }
+    for (const pkg::Relationship& r : rels->items)
+      if (((!r.external && r.type == kImageRel) || storyRel(r)) && !Mentions(*xml, r.id))
+        out.relationships.emplace_back(rels->source, r.id);
+  }
+  // A header or footer made and then undone (d3-torture finding 17) left a relationship in a part
+  // whose XML is as it was, so isn't written: its relationships changed since it was opened. Such a
+  // part is read as the package has it.
+  std::vector<uint8_t> bytes;
+  for (uint32_t i = 0; i < doc.Parts().size(); ++i) {
+    if (std::any_of(written.begin(), written.end(), [&](const auto& w) { return w.first == i && w.second; })) continue;
+    const pkg::RelationshipSet* rels = package.RelationshipsOf(doc.Parts()[i].name);
+    const pkg::Part* relsPart = rels ? package.FindPart(rels->relsPart) : nullptr;
+    if (!relsPart || !relsPart->modified || std::none_of(rels->items.begin(), rels->items.end(), storyRel)) continue;
+    if (!package.ReadPart(doc.Parts()[i].name, bytes).Ok()) continue;
+    const std::string_view xml = AsText(bytes);
+    for (const pkg::Relationship& r : rels->items)
+      if (storyRel(r) && !Mentions(xml, r.id)) out.relationships.emplace_back(rels->source, r.id);
   }
   // A part goes when every relationship to it does.
   for (const auto& [source, id] : out.relationships) {
@@ -195,6 +214,9 @@ Status Serialize(Document& doc, const SaveOptions& options, std::vector<uint8_t>
     leave.replace.emplace_back(set.relsPart, std::vector<uint8_t>(xml.begin(), xml.end()));
   }
   leave.leaveOut = unused.parts;
+  for (const std::string& part : unused.parts)  // a header's own relationships go with it
+    if (const pkg::RelationshipSet* rels = package.RelationshipsOf(part); rels && package.FindPart(rels->relsPart))
+      leave.leaveOut.push_back(rels->relsPart);
   pkg::ContentTypes types = package.Types();
   const size_t overrides = types.overrides.size();
   std::erase_if(types.overrides, [&](const auto& o) {
