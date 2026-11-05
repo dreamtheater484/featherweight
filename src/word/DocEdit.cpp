@@ -345,6 +345,15 @@ const std::optional<layout::Layout::Caret>& DocView::CaretBox() {
   return caretBox_;
 }
 
+std::optional<RECT> DocView::CaretRect() {
+  if (!Editing() || !keyFocus_) return std::nullopt;
+  const auto& box = CaretBox();
+  if (!box || box->page >= static_cast<size_t>(PageCount())) return std::nullopt;
+  const D2D1_RECT_F r = PageRectToScreen(static_cast<int>(box->page), {box->x, box->top, box->x, box->bottom});
+  const LONG x = std::lround(r.left);
+  return RECT{x, std::lround(r.top), x + 1, std::lround(r.bottom)};
+}
+
 void DocView::DrawCaret(Canvas& c, int first, int last) {
   if (!Editing() || !keyFocus_ || HasSelection()) return;
   const bool on = caret::On(caretStart_) || anim::Now() - caretStart_ > kBlinkFor;

@@ -52,6 +52,7 @@ class DocView : public PagedView {
   std::wstring TooltipAt(int x, int y) override;
   bool HasKeyFocus() const override { return Editing() && keyFocus_; }
   void SetKeyFocus(bool has) override;
+  std::optional<RECT> CaretRect() override;
 
   int ShortcutFor(UINT vk, UINT mods) const override { return Shortcut(vk, mods); }
   CommandState QueryCommand(int cmd) override;
