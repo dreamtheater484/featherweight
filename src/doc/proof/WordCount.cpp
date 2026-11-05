@@ -13,9 +13,11 @@ bool Space(char16_t c) {
          c == 0x2002 || c == 0x2003 || c == 0x2009 || c == 0x200B || c == 0x202F || c == 0x3000;
 }
 
-// Markers that stand for something else in the text and aren't counted as characters.
+// Markers that stand for something else in the text and aren't counted as characters: note
+// references, note separators, comments, fields, objects, soft hyphens.
 bool Marker(char16_t c) {
-  return c == 0x02 || c == 0x05 || c == 0x13 || c == 0x14 || c == 0x15 || c == 0xFFFC || c == 0x00AD;
+  return c == 0x02 || c == 0x03 || c == 0x04 || c == 0x05 || c == 0x13 || c == 0x14 || c == 0x15 || c == 0xFFFC ||
+         c == 0x00AD;
 }
 
 }  // namespace

@@ -157,6 +157,17 @@ TEST(Proof_WordCount) {
   CHECK_EQ(c.charactersSpaces, 36u);  // 25 + 10 + 1
   const proof::Counts part = proof::CountRange(*doc, P(0, 0), P(0, 12));
   CHECK_EQ(part.words, 2u);
+
+  // Footnotes count only when asked for (Word's "Include textboxes, footnotes and endnotes").
+  Fixture g;
+  g.body = Para("<w:r><w:t>Main</w:t></w:r><w:r><w:footnoteReference w:id=\"1\"/></w:r>");
+  g.footnotes = "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>"
+                "<w:footnote w:id=\"1\"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> A note here</w:t></w:r></w:p></w:footnote>";
+  auto noted = LoadOk(g);
+  CHECK(noted != nullptr);
+  if (!noted) return;
+  CHECK_EQ(proof::CountDocument(*noted, false).words, 1u);
+  CHECK_EQ(proof::CountDocument(*noted, true).words, 4u);
 }
 
 TEST(Proof_LanguageOfTextAndSettingIt) {
