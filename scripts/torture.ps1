@@ -24,7 +24,7 @@
 #>
 param(
   [string[]]$Paths,
-  [uint64]$Seed = 1,
+  [uint32]$Seed = 1,
   [int]$Edits = 40,
   [int]$Rounds = 3,
   [string]$Out = "build\torture",

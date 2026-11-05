@@ -62,6 +62,9 @@ enum Cmd : int {
   CmdCommandSearch,
   CmdUndo,
   CmdRedo,
+  CmdReplace,     // find and replace (Ctrl+H)
+  CmdReplaceOne,
+  CmdReplaceAll,
   CmdZoomPreset = 400,  // + index into fw::ZoomPresets()
   CmdRecent = 500,      // + index into Settings::recent
   CmdBannerAction = 600,

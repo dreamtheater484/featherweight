@@ -1080,8 +1080,8 @@ int Replay(const fs::path& repro, const fs::path& outDir) {
 
 int RunTorture(const Options& options) {
   Settings set;
-  set.seed = options.seed;
-  set.edits = options.edits;
+  set.seed = options.seed ? options.seed : 1;
+  set.edits = static_cast<uint32_t>(options.edits);
   set.rounds = options.rounds;
   if (options.replay) return Replay(options.inputs.front(), options.outDir);
   set.out = options.outDir.empty() ? fs::path("build") / "torture" : options.outDir;

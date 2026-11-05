@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -116,6 +117,9 @@ class TabContent {
   // The window took the keyboard for its own boxes (find, a toolbar control), or gave it back.
   // A tab with focusable parts hides or shows its focus.
   virtual void SetKeyFocus(bool /*has*/) {}
+  // The text caret, in client pixels, while the tab has one with key focus: where input methods,
+  // dictation and the emoji panel open.
+  virtual std::optional<RECT> CaretRect() { return std::nullopt; }
 
   // ---- Commands ----
   // The command a key runs in this kind of tab, or 0. Ctrl+I can mean night reading in a PDF and
@@ -132,6 +136,14 @@ class TabContent {
   virtual void FillMenu(int /*which*/, HMENU /*menu*/) {}
   // Fills the right-click menu for a point in the viewport (client coordinates).
   virtual void FillContextMenu(HMENU menu, int x, int y) = 0;
+
+  // ---- Replace (tabs that edit) ----
+  virtual bool CanReplace() const { return false; }
+  // Replaces the current match with `with` and goes on to the next. False when it couldn't (the
+  // tab says why).
+  virtual bool ReplaceCurrent(const std::wstring& /*with*/) { return false; }
+  // Replaces every match, as one undo step; how many it replaced.
+  virtual int ReplaceAll(const std::wstring& /*with*/) { return 0; }
 
   // ---- Status bar (editors; PDFs have none) ----
   virtual bool HasStatusBar() const { return false; }

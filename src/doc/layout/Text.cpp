@@ -240,7 +240,7 @@ text::ParagraphFormat Engine::FormatOf(const ParaProps& p) const {
   return f;
 }
 
-void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, bool pageBreaks) {
+void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, bool pageBreaks, bool numberNotes) {
   out = ParaText();
   out.para = para;
   const Paragraph& model = doc_.Para(para);
@@ -301,6 +301,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
                              : kind == PageField::NumPages ? fields.pages
                                                            : fields.sectionPages;
       if (kind != PageField::Page) out.usesPageCount = true;
+      else out.usesPage = true;
       if (value.empty()) continue;  // not known yet: the last result
       if (std::string_view fmt = FormatSwitch(f.code); !fmt.empty()) {
         int64_t n = 0;
@@ -343,6 +344,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
       PageField kind = s == std::u16string::npos ? PageField::None : PageFieldOf(std::u16string_view(code).substr(s, e - s));
       if (kind != PageField::None) {
         if (kind != PageField::Page) out.usesPageCount = true;
+        else out.usesPage = true;
         const std::u16string& value = kind == PageField::Page       ? fields.page
                                       : kind == PageField::NumPages ? fields.pages
                                                                     : fields.sectionPages;
@@ -391,10 +393,10 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
             uint32_t story = doc_.NoteStory(k, it->node.AttrOr(Name("id")));
             bool custom = it->node.OnOff(Name("customMarkFollows")).value_or(false);
             if (story != kNone && !custom) {
-              mark = NoteReference(story);
+              mark = numberNotes ? NoteReference(story) : NoteMark(story);
               out.notes.push_back({static_cast<uint32_t>(out.text.size()), story});
             } else if (story != kNone) {
-              NoteReference(story);
+              if (numberNotes) NoteReference(story);
               out.notes.push_back({static_cast<uint32_t>(out.text.size()), story});
             }
           } else if (it && it->kind == ItemKind::NoteMark &&
@@ -500,6 +502,7 @@ std::u16string Engine::NoteReference(uint32_t story) {
   int32_t n = (foot ? footnoteCount_++ : endnoteCount_++) + std::max(1, np.start);
   std::string_view fmt = !np.numFmt.empty() ? np.numFmt : foot ? "decimal" : "lowerRoman";
   noteOrder_[story] = n;
+  noteSeq_.push_back(story);
   return noteNumbers_.emplace(story, FormatNumber(n, fmt)).first->second;
 }
 

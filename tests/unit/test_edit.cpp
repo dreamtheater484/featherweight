@@ -1,13 +1,17 @@
 #include "TestHarness.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <vector>
 
 #include "DocTestUtil.h"
+#include "doc/edit/Clip.h"
 #include "doc/edit/Editor.h"
 #include "doc/layout/Layout.h"
 #include "doc/model/Utf.h"
+#include "pkg/Check.h"
 #include "text/Fonts.h"
 
 using namespace fw::doc;
@@ -210,8 +214,9 @@ TEST(Edit_SplitAndJoinParagraphs) {
   auto r = ed.SplitParagraph(P(p, 5));
   CHECK(r && r.caret == P(p + 1, 0));
   CHECK(Main(*doc).size() == 3 && doc->Para(p).text == u"Hello" && doc->Para(p + 1).text == u"World");
+  // Plain text: no list, field or section reads differently after it (Edit_OnlyListsFieldsAndSectionsAreStructure).
   CHECK(changes.size() == 1 && changes[0].first == p && changes[0].removed == 1 && changes[0].added == 2 &&
-        changes[0].structure);
+        !changes[0].structure);
   // The second half has new paragraph ids, the same properties and formatting.
   std::string_view id1 = doc->W14ParaId(p), id2 = doc->W14ParaId(p + 1);
   CHECK(id1 == "11111111" && id2.size() == 8 && id2 != id1);
@@ -733,7 +738,7 @@ TEST(Edit_LayingOutAgainMatchesAFreshLayout) {
   layout.LayOutAll();
   CHECK(layout.PageCount() > 8);
   Editor ed(*doc);
-  ed.OnChange([&](const edit::Change& c) { layout.Edited(c.story, c.first, c.removed, c.added); });
+  ed.OnChange([&](const edit::Change& c) { layout.Edited(c); });
   auto ps = Main(*doc);
   auto check = [&](const char* what) {
     if (!SameLayout(layout, *doc)) {
@@ -773,7 +778,7 @@ TEST(Edit_LayingOutAgainMatchesAFreshLayout) {
   fw::doc::layout::Layout partial(*doc, EditFonts());
   partial.LayOutPages(3);
   Editor ed2(*doc);
-  ed2.OnChange([&](const edit::Change& c) { partial.Edited(c.story, c.first, c.removed, c.added); });
+  ed2.OnChange([&](const edit::Change& c) { partial.Edited(c); });
   CHECK(ed2.SplitParagraph(P(ps[2], 3)) && ed2.InsertText(P(ps[60], 0), u"Far ahead "));
   if (!SameLayout(partial, *doc)) CHECK(false);
 }
@@ -805,4 +810,652 @@ TEST(Edit_LinesForTheCaret) {
   CHECK(deep && deep->para > p);
   CHECK(!layout.LineStep({ps[0], 0}, -1, 100));
   CHECK(!layout.LineStep({ps.back(), 0}, 100000, 100));
+}
+
+// ---------------------------------------------------------------------------
+// The clipboard (D2): copying keeps what a reader sees, the converters carry it to RTF and HTML
+// and back, and pasting gives the text that look without damaging the file.
+
+namespace {
+
+using edit::Clip;
+using edit::ClipAlign;
+using edit::ClipPara;
+using edit::ClipRun;
+
+const char* const kClipStyles =
+    "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii=\"Calibri\" w:hAnsi=\"Calibri\" w:cs=\"Calibri\"/>"
+    "<w:sz w:val=\"22\"/></w:rPr></w:rPrDefault></w:docDefaults>"
+    "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style>"
+    "<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/><w:basedOn w:val=\"Normal\"/>"
+    "<w:pPr><w:outlineLvl w:val=\"0\"/></w:pPr><w:rPr><w:b/><w:sz w:val=\"32\"/></w:rPr></w:style>"
+    "<w:style w:type=\"character\" w:default=\"1\" w:styleId=\"DefaultParagraphFont\"><w:name w:val=\"Default Paragraph Font\"/></w:style>"
+    "<w:style w:type=\"character\" w:styleId=\"Strong\"><w:name w:val=\"Strong\"/><w:rPr><w:b/></w:rPr></w:style>";
+
+const char* const kClipNumbering =
+    "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"bullet\"/>"
+    "<w:lvlText w:val=\"\xE2\x80\xA2\"/><w:lvlJc w:val=\"left\"/><w:pPr><w:ind w:left=\"720\" w:hanging=\"360\"/></w:pPr>"
+    "</w:lvl></w:abstractNum><w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+
+// The resolved look of the text at `offset`.
+const RunProps& LookAt(const Document& doc, uint32_t para, uint32_t offset) {
+  for (const TextRun& t : doc.Runs(para))
+    if (t.run && t.start <= offset && offset < t.end) return doc.ResolvedRun(para, t.run);
+  return doc.ResolvedMark(para);
+}
+
+std::u16string ClipText(const ClipPara& p) {
+  std::u16string s;
+  for (const ClipRun& r : p.runs) s += r.text;
+  return s;
+}
+
+bool SameRuns(const ClipPara& a, const ClipPara& b) {
+  if (a.runs.size() != b.runs.size()) {
+    std::printf("  %zu runs, %zu read back (\"%s\" / \"%s\")\n", a.runs.size(), b.runs.size(), ToUtf8(ClipText(a)).c_str(),
+                ToUtf8(ClipText(b)).c_str());
+    return false;
+  }
+  for (size_t i = 0; i < a.runs.size(); ++i)
+    if (a.runs[i].text != b.runs[i].text || !a.runs[i].SameLook(b.runs[i])) {
+      std::printf("  run %zu (\"%s\") differs from the one read back (\"%s\")\n", i, ToUtf8(a.runs[i].text).c_str(),
+                  ToUtf8(b.runs[i].text).c_str());
+      return false;
+    }
+  return true;
+}
+
+// A clip with something of everything; `own` adds what only Featherweight's own copies carry.
+Clip SampleClip(bool own) {
+  Clip c;
+  ClipPara h;
+  h.heading = 1;
+  h.align = ClipAlign::Center;
+  ClipRun big;
+  big.text = u"Big";
+  big.bold = true;
+  big.halfPoints = 32;
+  big.font = "Calibri";
+  h.runs.push_back(big);
+  ClipPara p;
+  p.label = u"1.";
+  p.indent = 720;
+  p.firstLine = -360;
+  p.spaceBefore = 120;
+  p.spaceAfter = 240;
+  p.align = ClipAlign::Justify;
+  ClipRun plain;
+  plain.text = u"a\tb  c é€ & <x> \U0001F600 ";
+  plain.halfPoints = 22;
+  plain.font = "Calibri";
+  ClipRun it = plain;
+  it.text = u"it";
+  it.italic = true;
+  ClipRun us = plain;
+  us.text = u"us";
+  us.underline = us.strike = true;
+  ClipRun sup = plain;
+  sup.text = u"2";
+  sup.vertAlign = VertAlign::Superscript;
+  ClipRun colored = plain;
+  colored.text = u"f\vg";
+  colored.color = 0x336699;
+  colored.font = "Arial";
+  colored.halfPoints = 21;
+  p.runs = {plain, it, us, sup, colored};
+  if (own) {
+    c.source = 0xABC;
+    h.style = "Heading1";
+    p.numId = "3";
+    p.ilvl = 1;
+    p.runs[1].charStyle = "Emphasis";
+  }
+  c.paras = {h, p, ClipPara{}};  // ends with a paragraph mark
+  return c;
+}
+
+}  // namespace
+
+TEST(Clip_CopyKeepsWhatAReaderSees) {
+  Fixture f;
+  f.styles = kClipStyles;
+  f.body =
+      "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/><w:jc w:val=\"center\"/></w:pPr><w:r><w:t>Title</w:t></w:r></w:p>"
+      "<w:p><w:r><w:t xml:space=\"preserve\">Plain </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r>"
+      "<w:del w:id=\"1\" w:author=\"A\"><w:r><w:delText>gone</w:delText></w:r></w:del>"
+      "<w:r><w:rPr><w:i/><w:color w:val=\"FF0000\"/></w:rPr><w:t xml:space=\"preserve\"> red</w:t></w:r>"
+      "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> PAGE </w:instrText></w:r>"
+      "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>3</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r>"
+      "<w:r><w:rPr><w:vanish/></w:rPr><w:t>hidden</w:t></w:r><w:r><w:tab/><w:t>x</w:t><w:br/><w:t>y</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  auto ps = Main(*doc);
+  Clip c = edit::CopyClip(*doc, P(ps[0], 0), P(ps[1], static_cast<uint32_t>(doc->Para(ps[1]).text.size())), 42);
+  CHECK(c.source == 42 && c.paras.size() == 2);
+  if (c.paras.size() != 2) return;
+  const ClipPara& h = c.paras[0];
+  CHECK(h.heading == 1 && h.style == "Heading1" && h.align == ClipAlign::Center && ClipText(h) == u"Title");
+  CHECK(h.runs.size() == 1 && h.runs[0].bold && h.runs[0].halfPoints == 32 && h.runs[0].font == "Calibri");
+  const ClipPara& b = c.paras[1];
+  CHECK(ClipText(b) == u"Plain bold red3\tx\vy");
+  CHECK(b.runs.size() == 4);
+  if (b.runs.size() == 4) {
+    CHECK(!b.runs[0].bold && b.runs[1].bold && b.runs[1].text == u"bold");
+    CHECK(b.runs[2].italic && b.runs[2].color == std::optional<uint32_t>(0xFF0000) && b.runs[2].text == u" red");
+    CHECK(b.runs[3].text == u"3\tx\vy" && !b.runs[3].color);
+  }
+  CHECK(c.PlainText() == u"Title\r\nPlain bold red3\tx\r\ny");
+  // From the middle of a paragraph to the start of the next: the mark comes too.
+  Clip part = edit::CopyClip(*doc, P(ps[0], 2), P(ps[1], 0));
+  CHECK(part.paras.size() == 2 && ClipText(part.paras[0]) == u"tle" && part.paras[1].runs.empty());
+}
+
+TEST(Clip_RtfAndHtmlCarryTheLook) {
+  // HTML carries everything, Featherweight's own extras included.
+  Clip c = SampleClip(true);
+  std::string html = edit::ToHtml(c);
+  CHECK(html.starts_with("Version:0.9\r\n") && edit::IsOwnHtml(html));
+  auto at = [&](const char* key) { return std::stoul(html.substr(html.find(key) + std::strlen(key), 10)); };
+  CHECK(html.substr(at("StartFragment:"), 5) == "<div " && html.substr(at("EndFragment:"), 18) == "<!--EndFragment-->");
+  CHECK(at("EndHTML:") == html.size());
+  auto back = edit::FromHtml(html);
+  CHECK(back && back->source == 0xABC && back->paras.size() == 3);
+  if (back && back->paras.size() == 3) {
+    for (size_t i = 0; i < 3; ++i) {
+      const ClipPara &a = c.paras[i], &b = back->paras[i];
+      CHECK(SameRuns(a, b));
+      CHECK(a.align == b.align && a.heading == b.heading && a.label == b.label && a.style == b.style);
+      CHECK(a.numId == b.numId && a.ilvl == b.ilvl);
+      CHECK(a.indent.value_or(0) == b.indent.value_or(0) && a.firstLine.value_or(0) == b.firstLine.value_or(0));
+      CHECK(a.spaceBefore.value_or(0) == b.spaceBefore.value_or(0) && a.spaceAfter.value_or(0) == b.spaceAfter.value_or(0));
+    }
+  }
+  // RTF carries the look; styles, lists and the source stay behind.
+  Clip plain = SampleClip(false);
+  std::string rtf = edit::ToRtf(plain);
+  CHECK(rtf.starts_with("{\\rtf1") && std::none_of(rtf.begin(), rtf.end(), [](char ch) { return (ch & 0x80) != 0; }));
+  auto fromRtf = edit::FromRtf(rtf);
+  CHECK(fromRtf && fromRtf->paras.size() == 3);
+  if (fromRtf && fromRtf->paras.size() == 3) {
+    for (size_t i = 0; i < 3; ++i) {
+      const ClipPara &a = plain.paras[i], &b = fromRtf->paras[i];
+      CHECK(SameRuns(a, b));
+      CHECK(a.align == b.align && a.heading == b.heading && a.label == b.label);
+      CHECK(a.indent.value_or(0) == b.indent.value_or(0) && a.firstLine.value_or(0) == b.firstLine.value_or(0));
+      CHECK(a.spaceBefore.value_or(0) == b.spaceBefore.value_or(0) && a.spaceAfter.value_or(0) == b.spaceAfter.value_or(0));
+    }
+  }
+  CHECK(!edit::FromRtf("not rtf") && !edit::FromHtml("plain text"));
+  // Pasted text is untrusted: nesting a hundred thousand deep costs no more than a little.
+  const std::string deepRtf = "{\\rtf1 a" + std::string(100000, '{') + "x" + std::string(100000, '}') + "b}";
+  auto r = edit::FromRtf(deepRtf);
+  CHECK(r && r->paras.size() == 1 && ClipText(r->paras[0]) == u"ab");
+  std::string deepHtml;
+  for (int i = 0; i < 100000; ++i) deepHtml += "<b>";
+  deepHtml += "x";
+  auto h = edit::FromHtml(deepHtml);
+  CHECK(h && h->paras.size() == 1 && ClipText(h->paras[0]) == u"x");
+}
+
+TEST(Clip_ReadsWordsRtf) {
+  const char* rtf =
+      "{\\rtf1\\ansi\\ansicpg1252\\deff0\\deflang1033{\\fonttbl{\\f0\\froman\\fcharset0 Times New Roman;}"
+      "{\\f1\\fswiss\\fcharset0 Arial{\\*\\falt Helvetica};}{\\f3\\fbidi \\froman\\fcharset2\\fprq2 Symbol;}}\r\n"
+      "{\\colortbl;\\red255\\green0\\blue0;\\red0\\green0\\blue0;}\r\n"
+      "{\\stylesheet{\\ql \\qc\\fs24 \\snext0 Normal;}{\\s1\\ql\\b\\fs32 \\sbasedon0 \\snext0 heading 1,h1;}"
+      "{\\*\\cs10 \\additive Default Paragraph Font;}}\r\n"
+      "{\\*\\generator Riched20;}{\\info{\\title Secret}}{\\header\\pard\\plain Header text\\par}\r\n"
+      "\\pard\\plain \\s1\\qc\\b\\fs32 Title\\par\r\n"
+      "\\pard\\plain \\f1\\fs22 Caf\\'e9 {\\b bold} {\\i\\cf1 red} \\u8364?\\tab x{\\field{\\*\\fldinst PAGE}{\\fldrslt 3}}"
+      "\\line y{\\*\\bkmkstart b}{\\*\\bkmkend b}{\\v hidden}{\\pict\\wmetafile8 0102}\\par\r\n"
+      "\\pard\\plain \\li720\\fi-360{\\listtext\\pard\\plain\\f3\\fs20 \\u-3913\\'b7\\tab}\\fs24 Item\\par\r\n"
+      "\\trowd\\cellx1000\\cellx2000\\pard\\intbl A\\cell B\\cell\\row\r\n"
+      "\\pard\\plain end}";
+  auto c = edit::FromRtf(rtf);
+  CHECK(c && c->paras.size() == 5);
+  if (!c || c->paras.size() != 5) return;
+  const ClipPara& t = c->paras[0];
+  CHECK(ClipText(t) == u"Title" && t.heading == 1 && t.align == ClipAlign::Center);
+  CHECK(t.runs.size() == 1 && t.runs[0].bold && t.runs[0].halfPoints == 32 && t.runs[0].font == "Times New Roman");
+  const ClipPara& b = c->paras[1];
+  CHECK(ClipText(b) == u"Café bold red €\tx3\vy");
+  CHECK(b.align == ClipAlign::Left && b.heading == 0);
+  CHECK(b.runs.size() == 5);
+  if (b.runs.size() == 5) {
+    CHECK(b.runs[0].font == "Arial" && b.runs[0].halfPoints == 22 && !b.runs[0].bold);
+    CHECK(b.runs[1].bold && b.runs[1].text == u"bold");
+    CHECK(b.runs[3].italic && b.runs[3].color == std::optional<uint32_t>(0xFF0000));
+  }
+  const ClipPara& item = c->paras[2];
+  CHECK(item.label == u"•" && ClipText(item) == u"Item" && item.indent == 720 && item.firstLine == -360);
+  CHECK(ClipText(c->paras[3]) == u"A\tB");
+  CHECK(ClipText(c->paras[4]) == u"end");
+}
+
+TEST(Clip_ReadsBrowsersAndWordsHtml) {
+  auto cf = [](std::string_view before, std::string_view frag, std::string_view after) {
+    const char* const kHeader =
+        "Version:0.9\r\nStartHTML:%010zu\r\nEndHTML:%010zu\r\nStartFragment:%010zu\r\nEndFragment:%010zu\r\n";
+    char probe[200];
+    const size_t head = static_cast<size_t>(std::snprintf(probe, sizeof probe, kHeader, size_t{0}, size_t{0}, size_t{0}, size_t{0}));
+    std::string body = std::string(before) + "<!--StartFragment-->";
+    const size_t sf = head + body.size();
+    body += frag;
+    const size_t ef = head + body.size();
+    body += "<!--EndFragment-->" + std::string(after);
+    char h[200];
+    std::snprintf(h, sizeof h, kHeader, head, head + body.size(), sf, ef);
+    return std::string(h) + body;
+  };
+  // A browser's: inline styles, a link, entities, a list; no paragraph mark after the last block.
+  std::string chrome = cf("<html><body>\r\n",
+                          "<h2 style=\"color: rgb(32, 33, 36); font-family: Arial, sans-serif; font-size: 24px;\">News</h2>"
+                          "<p style=\"font-size: 16px;\">One   <b>two</b>\n<a href=\"x\" style=\"color: rgb(26, 13, 171);\">link</a>"
+                          "&nbsp;&amp; more</p><ul><li>First</li><li>Second</li></ul><script>bad()</script>",
+                          "\r\n</body></html>");
+  auto c = edit::FromHtml(chrome);
+  CHECK(c && c->paras.size() == 4 && !edit::IsOwnHtml(chrome));
+  if (c && c->paras.size() == 4) {
+    const ClipPara& h = c->paras[0];
+    CHECK(ClipText(h) == u"News" && h.heading == 2 && h.runs.size() == 1);
+    if (h.runs.size() == 1)
+      CHECK(h.runs[0].bold && h.runs[0].halfPoints == 36 && h.runs[0].font == "Arial" &&
+            h.runs[0].color == std::optional<uint32_t>(0x202124));
+    const ClipPara& p = c->paras[1];
+    CHECK(ClipText(p) == u"One two link & more");
+    CHECK(p.runs.size() == 5);
+    if (p.runs.size() == 5)
+      CHECK(p.runs[0].halfPoints == 24 && p.runs[1].bold && p.runs[3].color == std::optional<uint32_t>(0x1A0DAB));
+    CHECK(c->paras[2].label == u"•" && ClipText(c->paras[2]) == u"First" && ClipText(c->paras[3]) == u"Second");
+  }
+  // Word's: a style sheet, a list item with its label in a conditional comment, an empty paragraph.
+  std::string word = cf(
+      "<html xmlns:o=\"urn:schemas-microsoft-com:office:office\"><head><style>p.MsoNormal{margin:0in;}</style></head>"
+      "<body lang=EN-US>\r\n",
+      "<p class=MsoListParagraph style='margin-left:.5in;text-indent:-.25in;mso-list:l0 level1 lfo1'>"
+      "<![if !supportLists]><span style='font-family:Symbol'><span style='mso-list:Ignore'>\xC2\xB7"
+      "<span style='font:7.0pt \"Times New Roman\"'>&nbsp;&nbsp;&nbsp; </span></span></span><![endif]>Bullet one<o:p></o:p></p>\r\n"
+      "<p class=MsoNormal><o:p>&nbsp;</o:p></p>\r\n"
+      "<p class=MsoNormal align=center style='text-align:center'><b><span style='font-size:14.0pt;color:#C00000'>"
+      "Centered</span></b><o:p></o:p></p>",
+      "</body></html>");
+  auto w = edit::FromHtml(word);
+  CHECK(w && w->paras.size() == 3);
+  if (w && w->paras.size() == 3) {
+    CHECK(w->paras[0].label == u"•" && ClipText(w->paras[0]) == u"Bullet one");
+    CHECK(w->paras[0].indent == 720 && w->paras[0].firstLine == -360);
+    CHECK(w->paras[1].runs.empty());
+    const ClipPara& ce = w->paras[2];
+    CHECK(ClipText(ce) == u"Centered" && ce.align == ClipAlign::Center && ce.runs.size() == 1);
+    if (ce.runs.size() == 1)
+      CHECK(ce.runs[0].bold && ce.runs[0].halfPoints == 28 && ce.runs[0].color == std::optional<uint32_t>(0xC00000));
+  }
+}
+
+TEST(Clip_PasteKeepsTheLookAndTheFile) {
+  Fixture f;
+  f.styles = kClipStyles;
+  f.body =
+      "<w:p><w:r><w:t xml:space=\"preserve\">Plain </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r>"
+      "<w:r><w:rPr><w:i/><w:color w:val=\"FF0000\"/></w:rPr><w:t xml:space=\"preserve\"> red</w:t></w:r></w:p>"
+      "<w:p><w:r><w:rPr><w:sz w:val=\"40\"/></w:rPr><w:t>Target here</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  Clip c = edit::CopyClip(*doc, P(ps[0], 0), P(ps[0], 14));
+  auto r = edit::PasteClip(ed, P(ps[1], 7), P(ps[1], 7), c);
+  CHECK(r && r.caret == P(ps[1], 21));
+  CHECK(doc->Para(ps[1]).text == u"Target Plain bold redhere");
+  // The pasted text looks as it did; the text around it as it did.
+  const RunProps& plain = LookAt(*doc, ps[1], 8);
+  CHECK(!plain.bold && plain.size.Value() == 22);
+  const RunProps& bold = LookAt(*doc, ps[1], 13);
+  CHECK(bold.bold && bold.size.Value() == 22);
+  const RunProps& red = LookAt(*doc, ps[1], 18);
+  CHECK(red.italic && !red.color.automatic && red.color.rgb == 0xFF0000);
+  CHECK(LookAt(*doc, ps[1], 2).size.Value() == 40 && LookAt(*doc, ps[1], 22).size.Value() == 40);
+  CHECK(Consistent(*doc, f));
+  // One undo step puts the file back exactly.
+  CHECK(ed.UndoName() == u"Paste" && ed.Undo() && MainXml(*doc) == before && !ed.CanUndo());
+  // Over a selection; text that already looks right gets no formatting of its own.
+  Clip same = edit::CopyClip(*doc, P(ps[0], 0), P(ps[0], 5));
+  CHECK(edit::PasteClip(ed, P(ps[0], 6), P(ps[0], 10), same) && doc->Para(ps[0]).text == u"Plain Plain red");
+  CHECK(BodyIs(*doc,
+               "<w:p><w:r><w:t xml:space=\"preserve\">Plain Plain</w:t></w:r>"
+               "<w:r><w:rPr><w:i/><w:color w:val=\"FF0000\"/></w:rPr><w:t xml:space=\"preserve\"> red</w:t></w:r></w:p>"
+               "<w:p><w:r><w:rPr><w:sz w:val=\"40\"/></w:rPr><w:t>Target here</w:t></w:r></w:p>"));
+}
+
+TEST(Clip_PasteParagraphsHeadingsAndLists) {
+  Fixture f;
+  f.styles = kClipStyles;
+  f.numbering = kClipNumbering;
+  f.body =
+      "<w:p><w:r><w:t>ABCD</w:t></w:r></w:p>"
+      "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr><w:r><w:t>Item</w:t></w:r></w:p>"
+      "<w:p><w:r><w:t>Other</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  // A heading and a paragraph from a web page, into the middle of a paragraph: the first pasted
+  // paragraph's mark makes "ABHead" a heading; "BodyCD" keeps the paragraph it was.
+  auto web = edit::FromHtml("<h1>Head</h1><p>Body</p>");
+  CHECK(web && web->paras.size() == 2);
+  if (!web) return;
+  auto r = edit::PasteClip(ed, P(ps[0], 2), P(ps[0], 2), *web);
+  ps = Main(*doc);
+  CHECK(r && ps.size() == 4 && r.caret == P(ps[1], 4));
+  CHECK(doc->Para(ps[0]).text == u"ABHead" && doc->Para(ps[1]).text == u"BodyCD");
+  CHECK(doc->ResolvedPara(ps[0]).style == "Heading1" && doc->ResolvedPara(ps[1]).style == "Normal");
+  CHECK(LookAt(*doc, ps[0], 3).bold && !LookAt(*doc, ps[1], 1).bold);
+  CHECK(MainXml(*doc).find("<w:b/>") == std::string::npos);  // the style makes it bold
+  CHECK(Consistent(*doc, f));
+  CHECK(ed.Undo() && MainXml(*doc) == before);
+  // A list item with its mark, back into the same document: still in the list.
+  ps = Main(*doc);
+  Clip item = edit::CopyClip(*doc, P(ps[1], 0), P(ps[2], 0), 7);
+  CHECK(item.paras.size() == 2 && item.paras[0].label == u"•" && item.paras[0].numId == "1");
+  CHECK(edit::PasteClip(ed, P(ps[2], 0), P(ps[2], 0), item, 7));
+  ps = Main(*doc);
+  CHECK(ps.size() == 4 && doc->Para(ps[2]).text == u"Item" && doc->ResolvedPara(ps[2]).numId == "1");
+  CHECK(doc->Para(ps[3]).text == u"Other" && doc->ResolvedPara(ps[3]).numId.empty());
+  CHECK(Consistent(*doc, f));
+  CHECK(ed.Undo());
+  // Into another document: the label as text.
+  ps = Main(*doc);
+  CHECK(edit::PasteClip(ed, P(ps[2], 0), P(ps[2], 0), item, 8));
+  ps = Main(*doc);
+  CHECK(doc->Para(ps[2]).text == u"•\tItem" && doc->ResolvedPara(ps[2]).numId.empty());
+  CHECK(Consistent(*doc, f) && ed.Undo() && MainXml(*doc) == before);
+}
+
+TEST(Clip_PasteThatWouldDamageIsRefused) {
+  Fixture f;
+  f.body =
+      "<w:p><w:r><w:t xml:space=\"preserve\">Page </w:t></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>"
+      "<w:r><w:instrText xml:space=\"preserve\"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/>"
+      "</w:r><w:r><w:t>3</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r>"
+      "<w:r><w:t xml:space=\"preserve\"> of</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  uint32_t p = Main(*doc)[0];
+  auto web = edit::FromHtml("<p>x</p><p>y</p>");
+  CHECK(web);
+  if (!web) return;
+  // Over part of the field: refused, nothing changes, nothing to undo.
+  auto r = edit::PasteClip(ed, P(p, 3), P(p, 7), *web);
+  CHECK(!r && !r.message.empty() && !ed.CanUndo() && !ed.Modified() && RoundTrips(*doc));
+  // Into the field's result: the field can't hold a paragraph break, so that's refused too, and
+  // nothing changes; one paragraph goes in.
+  auto two = edit::PasteClip(ed, P(p, 14), P(p, 14), *web);
+  CHECK(!ed.CanUndo() || two);
+  auto one = edit::FromHtml("<span>x</span>");
+  CHECK(one && edit::PasteClip(ed, P(p, 14), P(p, 14), *one) && Consistent(*doc, f));
+}
+
+// ---------------------------------------------------------------------------
+// The editing torture test's findings (d2-torture), each as a boundary of its own.
+
+namespace {
+
+// Every part written from the model, saved and opened again, passes the package checker.
+bool ChecksOut(Document& doc) {
+  if (!docx::WriteAllParts(doc).Ok()) return false;
+  fw::pkg::MemorySink sink;
+  if (!doc.Package().Save(sink).Ok()) return false;
+  fw::pkg::Status st;
+  auto again = test::OpenBytes(std::move(sink.bytes), st);
+  if (!again) return false;
+  auto report = fw::pkg::CheckPackage(*again);
+  for (const auto& e : report.errors) std::printf("  check: %s\n", e.c_str());
+  return report.Ok();
+}
+
+std::string PartXml(const Document& doc, PartKind kind) {
+  const Part* part = doc.FindPart(kind);
+  std::string out;
+  if (part && !docx::WritePart(doc, static_cast<uint32_t>(part - doc.Parts().data()), out).Ok()) out.clear();
+  return out;
+}
+
+}  // namespace
+
+TEST(Edit_SplitKeepsEmptyRangesInOrder) {
+  // An empty comment range and Word's empty _GoBack bookmark: a split where both ends sit keeps
+  // them together, start before end.
+  Fixture f;
+  f.comments = "<w:comment w:id=\"0\" w:author=\"A\"><w:p><w:r><w:t>Note</w:t></w:r></w:p></w:comment>";
+  f.body =
+      "<w:p><w:commentRangeStart w:id=\"0\"/><w:commentRangeEnd w:id=\"0\"/><w:r><w:commentReference w:id=\"0\"/></w:r>"
+      "<w:r><w:t>He</w:t></w:r><w:bookmarkStart w:id=\"1\" w:name=\"_GoBack\"/><w:bookmarkEnd w:id=\"1\"/>"
+      "<w:r><w:t>llo</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  // ChecksOut saves into the package, so the original is kept here to compare with.
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  uint32_t p = Main(*doc)[0];
+  CHECK(ed.SplitParagraph(P(p, 0)) && ChecksOut(*doc) && Consistent(*doc, f));
+  CHECK(ed.Undo() && ed.SplitParagraph(P(p, 3)) && ChecksOut(*doc) && Consistent(*doc, f));
+  const std::string xml = MainXml(*doc);
+  CHECK(xml.find("<w:bookmarkStart") < xml.find("<w:bookmarkEnd"));
+  CHECK(ed.Undo() && UndoSteps(ed) == 0 && MainXml(*doc) == before);
+}
+
+TEST(Edit_PropertiesGoBeforeKeptContent) {
+  // Word 2010's extensions end w:rPr; a property added after them would be out of order.
+  Fixture f;
+  f.body =
+      "<w:p><w:pPr><w:rPr><w:b/><w14:ligatures w14:val=\"standard\"/></w:rPr></w:pPr>"
+      "<w:r><w:rPr><w:b/><w14:ligatures w14:val=\"standard\"/></w:rPr><w:t>Liga</w:t></w:r></w:p>"
+      "<w:p><w:r><mc:AlternateContent><mc:Choice Requires=\"x\"><w:t>never</w:t></mc:Choice>"
+      "<mc:Fallback><w:t>fallback</w:t></mc:Fallback></mc:AlternateContent><w:t xml:space=\"preserve\"> text</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  CHECK(ed.SetRunProps(P(ps[0], 0), P(ps[0], 4), PropEdit().Set("color", {{"val", "C00000"}})));
+  CHECK(ed.SetMarkProps(ps[0], ps[0], PropEdit().Set("i")));
+  CHECK(ed.SetRunProps(P(ps[1], 0), P(ps[1], ed.ParaLength(ps[1])), PropEdit().Set("color", {{"val", "C00000"}})));
+  CHECK(BodyIs(*doc,
+               "<w:p><w:pPr><w:rPr><w:b/><w:i/><w14:ligatures w14:val=\"standard\"/></w:rPr></w:pPr>"
+               "<w:r><w:rPr><w:b/><w:color w:val=\"C00000\"/><w14:ligatures w14:val=\"standard\"/></w:rPr><w:t>Liga</w:t></w:r></w:p>"
+               "<w:p><w:r><w:rPr><w:color w:val=\"C00000\"/></w:rPr><mc:AlternateContent><mc:Choice Requires=\"x\"><w:t>never</w:t></mc:Choice>"
+               "<mc:Fallback><w:t>fallback</w:t></mc:Fallback></mc:AlternateContent><w:t xml:space=\"preserve\"> text</w:t></w:r></w:p>"));
+  CHECK(Consistent(*doc, f) && UndoSteps(ed) == 3 && RoundTrips(*doc));
+}
+
+TEST(Edit_SharedPropertiesChangeOnlyTheirParagraph) {
+  // The reader shares identical property sets between paragraphs and runs; formatting one changes
+  // only that one.
+  Fixture f;
+  f.body =
+      "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>One</w:t></w:r></w:p>"
+      "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>Two</w:t></w:r></w:p>"
+      "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>Three</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  CHECK(ed.SetParaProps(ps[1], ps[1], PropEdit().Set("jc", {{"val", "center"}})));
+  CHECK(ed.SetRunProps(P(ps[1], 0), P(ps[1], 3), PropEdit().Set("b")));
+  CHECK(BodyIs(*doc,
+               "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>One</w:t></w:r></w:p>"
+               "<w:p><w:pPr><w:spacing w:after=\"0\"/><w:jc w:val=\"center\"/></w:pPr><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>Two</w:t></w:r></w:p>"
+               "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>Three</w:t></w:r></w:p>"));
+  CHECK(doc->ResolvedPara(ps[0]).jc == Justification::Start && doc->ResolvedPara(ps[2]).jc == Justification::Start);
+  CHECK(doc->ResolvedPara(ps[1]).jc == Justification::Center);
+  CHECK(Consistent(*doc, f) && UndoSteps(ed) == 2 && RoundTrips(*doc));
+}
+
+TEST(Edit_CommentsKeepTheirLastParagraphsId) {
+  // commentsExtended names a comment by its last paragraph's w14:paraId: joining that paragraph
+  // into the one before, or splitting it, keeps the id on the comment's last paragraph.
+  Fixture f;
+  f.comments =
+      "<w:comment w:id=\"0\" w:author=\"A\"><w:p w14:paraId=\"11111111\" w14:textId=\"77777777\"><w:r><w:t>One</w:t></w:r></w:p>"
+      "<w:p w14:paraId=\"22222222\" w14:textId=\"77777777\"><w:r><w:t>Two</w:t></w:r></w:p></w:comment>";
+  f.commentsExtended =
+      "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<w15:commentsEx "
+      "xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"><w15:commentEx w15:paraId=\"22222222\" "
+      "w15:done=\"0\"/></w15:commentsEx>";
+  f.body =
+      "<w:p><w:commentRangeStart w:id=\"0\"/><w:r><w:t>Text</w:t></w:r><w:commentRangeEnd w:id=\"0\"/>"
+      "<w:r><w:commentReference w:id=\"0\"/></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string comments = PartXml(*doc, PartKind::Comments);
+  Editor ed(*doc);
+  const uint32_t story = doc->NoteStory(StoryKind::Comment, "0");
+  auto cs = doc->StoryParagraphs(story);
+  CHECK(cs.size() == 2);
+  if (cs.size() != 2) return;
+  auto lastId = [&] {
+    auto now = doc->StoryParagraphs(story);
+    return std::string(doc->W14ParaId(now.back()));
+  };
+  // Joined: the one paragraph left is the last, with the id commentsExtended names.
+  CHECK(ed.Delete(P(cs[0], 3), P(cs[1], 0)) && lastId() == "22222222");
+  CHECK(PartXml(*doc, PartKind::Comments).find("w14:paraId=\"22222222\"") != std::string::npos);
+  CHECK(ChecksOut(*doc));
+  // Split: the second half is the last paragraph now, and it takes the id.
+  CHECK(ed.Undo() && ed.SplitParagraph(P(cs[1], 1)) && lastId() == "22222222");
+  auto now = doc->StoryParagraphs(story);
+  CHECK(now.size() == 3 && doc->W14ParaId(now[1]) != "22222222" && !doc->W14ParaId(now[1]).empty());
+  CHECK(ChecksOut(*doc) && UndoSteps(ed) == 1 && PartXml(*doc, PartKind::Comments) == comments);
+}
+
+TEST(Edit_SplitInsideAFieldIsRefused) {
+  // A table of contents entry: a hyperlink holding a PAGEREF field. Splitting inside the field
+  // would put its start and its end in two hyperlinks, which Word can't open.
+  Fixture f;
+  f.body =
+      "<w:p><w:hyperlink w:anchor=\"_Toc1\"><w:r><w:t>Intro</w:t></w:r><w:r><w:tab/></w:r>"
+      "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> PAGEREF _Toc1 \\h </w:instrText></w:r>"
+      "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>3</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r>"
+      "</w:hyperlink></w:p><w:p><w:bookmarkStart w:id=\"0\" w:name=\"_Toc1\"/><w:r><w:t>Intro</w:t></w:r><w:bookmarkEnd w:id=\"0\"/></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  uint32_t p = Main(*doc)[0];
+  const std::u16string& s = doc->Para(p).text;
+  const auto begin = static_cast<uint32_t>(s.find(u'\x13')), end = static_cast<uint32_t>(s.find(u'\x15'));
+  CHECK(begin == 6 && end + 1 == s.size());
+  for (uint32_t o : {begin + 1, begin + 4, end - 1, end}) {
+    auto r = ed.SplitParagraph(P(p, o));
+    CHECK(!r && r.message == u"A paragraph can't be split inside a field.");
+  }
+  CHECK(!ed.InsertText(P(p, end), u"a\rb"));
+  CHECK(!ed.CanUndo() && !ed.Modified() && RoundTrips(*doc));
+  // Before the field, or after it: fine.
+  CHECK(ed.SplitParagraph(P(p, 2)) && ChecksOut(*doc) && Consistent(*doc, f));
+  CHECK(ed.Undo() && ed.SplitParagraph(P(p, end + 1)) && ChecksOut(*doc) && Consistent(*doc, f));
+}
+
+TEST(Edit_OnlyListsFieldsAndSectionsAreStructure) {
+  // Enter in plain text changes nothing else in the document; in a list it may renumber what follows.
+  Fixture f;
+  f.numbering = kClipNumbering;
+  f.body =
+      "<w:p><w:r><w:t>Plain text</w:t></w:r></w:p>"
+      "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr><w:r><w:t>Item</w:t></w:r></w:p>"
+      "<w:p><w:r><w:t>Page </w:t></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r>"
+      "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  std::vector<edit::Change> changes;
+  ed.OnChange([&](const edit::Change& c) { changes.push_back(c); });
+  auto ps = Main(*doc);
+  auto structure = [&](edit::Result r) { return r && !changes.empty() && changes.back().structure; };
+  CHECK(ed.SplitParagraph(P(ps[0], 5)) && !changes.back().structure);
+  CHECK(ed.Undo() && !changes.back().structure);
+  CHECK(ed.JoinParagraphs(ps[0]) && changes.back().structure);  // joins the list item into plain text
+  CHECK(ed.Undo());
+  CHECK(structure(ed.SplitParagraph(P(ps[1], 2))));
+  CHECK(ed.Undo());
+  CHECK(structure(ed.SplitParagraph(P(ps[2], 2))));  // the paragraph has a field
+  CHECK(ed.Undo() && ed.InsertText(P(ps[0], 1), u"x") && !changes.back().structure);
+}
+
+TEST(Edit_LinksAroundText) {
+  Fixture f;
+  f.body = "<w:p><w:r><w:t>See the site now</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  uint32_t p = Main(*doc)[0];
+  // A web address: a new relationship, a w:hyperlink around the runs.
+  CHECK(ed.SetLink(P(p, 4), P(p, 12), "https://example.org/a?b=1&c=2"));
+  CHECK(BodyIs(*doc,
+               "<w:p><w:r><w:t xml:space=\"preserve\">See </w:t></w:r><w:hyperlink r:id=\"rIdLink1\" w:history=\"1\">"
+               "<w:r><w:t>the site</w:t></w:r></w:hyperlink><w:r><w:t xml:space=\"preserve\"> now</w:t></w:r></w:p>"));
+  auto runs = doc->Runs(p);
+  CHECK(runs.size() == 3 && doc->HyperlinkTarget(runs[1].hyperlink) == "https://example.org/a?b=1&c=2");
+  CHECK(Consistent(*doc, f) && ChecksOut(*doc));
+  // A link can't go over a link; one the part already has is used again; a bookmark needs no relationship.
+  CHECK(!ed.SetLink(P(p, 6), P(p, 14), "https://example.com/"));
+  CHECK(ed.SetLink(P(p, 0), P(p, 3), "https://example.com/") && doc->HyperlinkTarget(doc->Runs(p)[0].hyperlink) == "https://example.com/");
+  CHECK(MainXml(*doc).find("r:id=\"rIdLink\"") != std::string::npos);
+  CHECK(ed.SetLink(P(p, 13), P(p, 16), "#_Top") && MainXml(*doc).find("w:anchor=\"_Top\"") != std::string::npos);
+  CHECK(UndoSteps(ed) == 3 && MainXml(*doc) == before);
+}
+
+TEST(Clip_LinksTravel) {
+  Fixture f;
+  f.body =
+      "<w:p><w:r><w:t xml:space=\"preserve\">Go to </w:t></w:r><w:hyperlink r:id=\"rIdLink\"><w:r><w:t>our site</w:t></w:r>"
+      "</w:hyperlink><w:r><w:t xml:space=\"preserve\"> today</w:t></w:r></w:p><w:p><w:r><w:t>Target</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  // Copied: the link comes with its text, through RTF and HTML.
+  Clip c = edit::CopyClip(*doc, P(ps[0], 0), P(ps[0], static_cast<uint32_t>(doc->Para(ps[0]).text.size())));
+  CHECK(c.paras.size() == 1 && c.paras[0].runs.size() == 3);
+  if (c.paras.size() != 1 || c.paras[0].runs.size() != 3) return;
+  CHECK(c.paras[0].runs[1].link == "https://example.com/" && c.paras[0].runs[0].link.empty());
+  auto rtf = edit::FromRtf(edit::ToRtf(c));
+  CHECK(rtf && rtf->paras.size() == 1 && rtf->paras[0].runs.size() == 3 && rtf->paras[0].runs[1].link == "https://example.com/");
+  CHECK(edit::ToHtml(c).find("<a href=\"https://example.com/\">") != std::string::npos);
+  auto html = edit::FromHtml(edit::ToHtml(c));
+  CHECK(html && SameRuns(c.paras[0], html->paras[0]));
+  // Word's own field, with switches around the address.
+  auto word = edit::FromRtf(
+      "{\\rtf1\\ansi{\\field{\\*\\fldinst {HYPERLINK \\\\o \"tip\" \"https://example.net/\" }{\\*\\datafield 00ff}}"
+      "{\\fldrslt {\\cf1\\ul net}}} after}");
+  CHECK(word && word->paras.size() == 1 && word->paras[0].runs.size() == 2);
+  if (word && word->paras.size() == 1 && word->paras[0].runs.size() == 2)
+    CHECK(word->paras[0].runs[0].link == "https://example.net/" && word->paras[0].runs[0].text == u"net" &&
+          word->paras[0].runs[1].link.empty());
+  // Pasted: web links become hyperlinks; script links stay text.
+  auto web = edit::FromHtml("<p>See <a href=\"https://example.org/x\">this <b>page</b></a> or <a href=\"javascript:alert(1)\">that</a>.</p>");
+  CHECK(web && web->paras.size() == 1);
+  if (!web) return;
+  CHECK(edit::PasteClip(ed, P(ps[1], 6), P(ps[1], 6), *web));
+  CHECK(doc->Para(ps[1]).text == u"TargetSee this page or that.");
+  std::vector<std::string> links;
+  for (const TextRun& t : doc->Runs(ps[1]))
+    if (t.hyperlink) links.push_back(doc->HyperlinkTarget(t.hyperlink));
+  CHECK(links.size() == 2 && links[0] == "https://example.org/x" && links[1] == "https://example.org/x");
+  CHECK(MainXml(*doc).find("javascript") == std::string::npos);
+  CHECK(Consistent(*doc, f) && ChecksOut(*doc));
 }

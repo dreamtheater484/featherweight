@@ -6,6 +6,7 @@
 
 #include "doc/model/Internal.h"
 #include "doc/model/Schema.h"
+#include "pkg/Package.h"
 
 namespace fw::doc::edit {
 
@@ -36,6 +37,23 @@ bool StartMarker(uint32_t name) {
       Name("permStart"), Name("customXmlInsRangeStart"), Name("customXmlDelRangeStart"),
       Name("customXmlMoveFromRangeStart"), Name("customXmlMoveToRangeStart")};
   return kinds.count(name) != 0;
+}
+
+// The start marker an end marker pairs with; 0 for anything else.
+uint32_t StartOfEnd(uint32_t name) {
+  static const std::pair<uint32_t, uint32_t> kPairs[] = {
+      {Name("bookmarkEnd"), Name("bookmarkStart")},
+      {Name("commentRangeEnd"), Name("commentRangeStart")},
+      {Name("moveFromRangeEnd"), Name("moveFromRangeStart")},
+      {Name("moveToRangeEnd"), Name("moveToRangeStart")},
+      {Name("permEnd"), Name("permStart")},
+      {Name("customXmlInsRangeEnd"), Name("customXmlInsRangeStart")},
+      {Name("customXmlDelRangeEnd"), Name("customXmlDelRangeStart")},
+      {Name("customXmlMoveFromRangeEnd"), Name("customXmlMoveFromRangeStart")},
+      {Name("customXmlMoveToRangeEnd"), Name("customXmlMoveToRangeStart")}};
+  for (const auto& [end, start] : kPairs)
+    if (name == end) return start;
+  return 0;
 }
 
 bool RangeMarker(uint32_t name) {
@@ -116,6 +134,11 @@ struct EditorState {
   Step tx;
   size_t sizeAtBegin = 0;
   uint32_t countAtBegin = 0;
+  // The paragraphs at Begin hold a list, a field or a section break: adding or removing paragraphs
+  // there may change how lists, fields or sections read further on (Change::structure).
+  bool structuralAtBegin = false;
+  // Split: the range starts that moved to the second half where the split is.
+  std::vector<std::pair<uint32_t, std::string>> movedStarts;
 
   EditorState(Document& doc, Editor& editor) : d(doc), ed(editor), t(doc.tree_) {
     for (const Elem& e : t.elems) nextNode = std::max<pkg::NodeId>(nextNode, e.node + 1);
@@ -194,7 +217,34 @@ struct EditorState {
     ElemId after = kNoElem;
     for (ElemId c = E(parent).first; c != kNoElem && rank(c) <= mine; c = E(c).next) after = c;
     LinkAfter(parent, after, id);
+    // Kept content stays after the known content around properties: what came first in the
+    // parent (a run's mc:AlternateContent, an extension inside w:rPr) follows a new first
+    // property, and what followed the last property (the w14 extensions that end w:rPr) follows a
+    // new last one.
+    if (PropsElem(id) || PropsElem(parent)) {
+      if (after == kNoElem) MoveFragmentsBehind(parent, pkg::Slot::Inside, id);
+      else if (E(id).next == kNoElem && PropsElem(parent)) MoveFragmentsBehind(after, pkg::Slot::After, id);
+    }
     return id;
+  }
+  // Moves `from`'s kept fragments in `slot` (Inside: the ones first inside it) to just after `to`.
+  void MoveFragmentsBehind(ElemId from, pkg::Slot slot, ElemId to) {
+    const pkg::NodeId a = E(from).node, b = E(to).node;
+    if (a == pkg::kNoNode || b == pkg::kNoNode || a == pkg::kFieldNode || b == pkg::kFieldNode || a == b) return;
+    std::vector<pkg::Fragment> stay, move;
+    for (pkg::Fragment& f : d.store_.FragmentsCopy(a)) {
+      const bool moves = f.slot == slot && !f.pairEnd && (slot != pkg::Slot::Inside || f.afterChild.empty());
+      (moves ? move : stay).push_back(std::move(f));
+    }
+    if (move.empty()) return;
+    for (pkg::Fragment& f : move) {
+      f.slot = pkg::Slot::After;
+      f.afterChild.clear();
+    }
+    std::vector<pkg::Fragment> there = d.store_.FragmentsCopy(b);
+    there.insert(there.begin(), std::make_move_iterator(move.begin()), std::make_move_iterator(move.end()));
+    d.store_.SetFragments(a, std::move(stay));
+    d.store_.SetFragments(b, std::move(there));
   }
   ElemId Child(ElemId parent, uint32_t name) {
     for (ElemId c = E(parent).first; c != kNoElem; c = E(c).next)
@@ -516,6 +566,15 @@ struct EditorState {
     tx.first = first;
     sizeAtBegin = d.paras_.size();
     countAtBegin = count;
+    structuralAtBegin = false;
+    for (uint32_t p = first; p < first + count && p < d.paras_.size() && !structuralAtBegin; ++p) {
+      const std::u16string& s = d.paras_[p].text;
+      ElemId pPr = Child(d.paras_[p].elem, kPPr);
+      structuralAtBegin = !d.ResolvedPara(p).numId.empty() || s.find(u'\x13') != std::u16string::npos ||
+                          s.find(u'\x15') != std::u16string::npos || (pPr != kNoElem && Child(pPr, kSectPr) != kNoElem);
+      for (ElemId e : AllElems(p))
+        if (NameOf(e) == kFldSimple) structuralAtBegin = true;
+    }
     Capture(first, count, tx.before);
     return true;
   }
@@ -539,7 +598,7 @@ struct EditorState {
       d.paras_[p].version = ++version;
     }
     Capture(tx.first, count, tx.after);
-    tx.structure = structure || count != countAtBegin;
+    tx.structure = structure || (count != countAtBegin && structuralAtBegin);
     inTx = false;
     Refresh(tx, false);
     Record(std::move(tx), caretBefore, caretAfter, kind, std::move(name));
@@ -1049,6 +1108,16 @@ struct EditorState {
         std::string_view type = Node(&t, c).AttrOr(kType);
         move = type == "spellStart" || type == "gramStart";
       }
+      // A range that starts and ends where the split is (an empty comment range, Word's _GoBack
+      // bookmark) goes with its start, so its end stays after it.
+      if (l == 0 && s == o && StartMarker(NameOf(c))) {
+        movedStarts.emplace_back(NameOf(c), std::string(Node(&t, c).AttrOr(kId)));
+      } else if (l == 0 && s == o && !move) {
+        const uint32_t start = StartOfEnd(NameOf(c));
+        const std::string_view id = Node(&t, c).AttrOr(kId);
+        for (const auto& [kind, movedId] : movedStarts)
+          if (start != 0 && kind == start && movedId == id) move = true;
+      }
       if (move) {
         Unlink(c);
         LinkAfter(to, last, c);
@@ -1087,10 +1156,36 @@ struct EditorState {
 
   // Splits paragraph `para` at `o`; the second half becomes paragraph para + 1.
   bool Split(uint32_t para, uint32_t o, std::u16string& why) {
+    // A field that begins and ends in the paragraph stays in one: split, its start and end would
+    // sit in two paragraphs, and in a hyperlink (a table of contents entry) in two hyperlinks,
+    // which Word can't open.
+    {
+      const std::u16string& s = d.paras_[para].text;
+      std::vector<uint32_t> open;
+      for (uint32_t i = 0; i < s.size(); ++i) {
+        if (s[i] == 0x13) {
+          open.push_back(i);
+        } else if (s[i] == 0x15 && !open.empty()) {
+          if (open.back() < o && o <= i) {
+            why = u"A paragraph can't be split inside a field.";
+            return false;
+          }
+          open.pop_back();
+        }
+      }
+    }
+    movedStarts.clear();
     ElemId p = d.paras_[para].elem;
     ElemId np = CloneShallow(p, E(p).parent);
     for (uint32_t name : {kParaId, kTextId})
       if (Attr(np, name)) SetAttr(np, name, NewParaId());
+    // commentsExtended names a comment by its last paragraph's w14:paraId: the second half, now
+    // the last, takes it.
+    if (auto id = Attr(p, kParaId); id && NamedByComments(*id) && Attr(np, kParaId)) {
+      const std::string old(*id), fresh(*Attr(np, kParaId));
+      SetAttr(p, kParaId, fresh);
+      SetAttr(np, kParaId, old);
+    }
     // The paragraph mark ends the second half, so the original w:pPr goes there, with its section
     // break, revision marks and kept markup. The first half gets a new mark with the same
     // properties, without those.
@@ -1128,6 +1223,13 @@ struct EditorState {
     Reflow(para);
     Reflow(para + 1);
     return true;
+  }
+
+  // A w14:paraId that commentsExtended uses to name a comment or the comment it answers.
+  bool NamedByComments(std::string_view id) const {
+    for (const auto& c : d.commentsEx_)
+      if (c.paraId == id || c.parentParaId == id) return true;
+    return false;
   }
 
   // The paragraph that follows `para` as its sibling, or kNone.
@@ -1200,6 +1302,12 @@ struct EditorState {
         if (firstMoved == kNoElem) firstMoved = c;
       }
       c = next;
+    }
+    // commentsExtended names a comment by its last paragraph's w14:paraId: the joined paragraph
+    // takes the second one's when it's named there.
+    if (auto id = Attr(w, kParaId); id && NamedByComments(*id)) {
+      const std::string keep(*id);
+      SetAttr(p, kParaId, keep);
     }
     d.paras_[para].text += d.paras_[q].text;
     if (E(p).node && E(w).node)
@@ -1474,7 +1582,7 @@ Result Editor::SplitParagraph(Pos at) {
   s.Begin(at.para, 1);
   if (!s.Split(at.para, at.offset, why)) return s.Abort(why);
   Pos caret{at.para + 1, 0};
-  s.Commit(true, at, caret, Kind::Other, u"New paragraph");
+  s.Commit(false, at, caret, Kind::Other, u"New paragraph");
   s.Notify(listeners_);
   Result r;
   r.caret = caret;
@@ -1490,7 +1598,7 @@ Result Editor::JoinParagraphs(uint32_t para) {
   Pos caret{para, ParaLength(para)};
   s.Begin(para, q - para + 1);
   if (!s.Join(para, why)) return s.Abort(why);
-  s.Commit(true, Pos{q, 0}, caret, Kind::Other, u"Delete");
+  s.Commit(false, Pos{q, 0}, caret, Kind::Other, u"Delete");
   s.Notify(listeners_);
   Result r;
   r.caret = caret;
@@ -1522,6 +1630,66 @@ Result Editor::SetRunProps(Pos from, Pos to, const PropEdit& edit) {
   }
   s.Commit(false, from, to, Kind::Other, u"Format");
   s.Notify(listeners_);
+  return r;
+}
+
+Result Editor::SetLink(Pos from, Pos to, std::string_view target) {
+  EditorState& s = *impl_;
+  if (Compare(to, from) < 0) std::swap(from, to);
+  std::u16string why;
+  if (!CanEdit(&why) || !s.Editable(from.para, why)) return Fail(why);
+  if (from.para != to.para || from.offset >= to.offset || target.empty())
+    return Fail(u"Select text in one paragraph to make it a link.");
+  const uint32_t para = from.para;
+  const ElemId p = doc_.Para(para).elem;
+  for (const TextRun& t : doc_.Runs(para))
+    if (t.end > from.offset && t.start < to.offset &&
+        (!t.run || t.hyperlink || t.simpleField || t.contentControl || t.revision || t.fieldDepth > 0 || t.displayOnly ||
+         t.run.Parent().Id() != p))
+      return Fail(u"This text can't be made a link.");
+  // A web address is a relationship of the part.
+  std::string rid;
+  if (target[0] != '#') {
+    const uint32_t part = doc_.Stories()[doc_.Para(para).story].part;
+    if (part >= doc_.Parts().size()) return Fail(u"This text can't be made a link.");
+    const std::string& name = doc_.Parts()[part].name;
+    const std::string type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
+    pkg::RelationshipSet set;
+    if (const pkg::RelationshipSet* now = doc_.Package().RelationshipsOf(name)) set = *now;
+    else set.source = name;
+    for (const pkg::Relationship& r : set.items)
+      if (r.external && r.type == type && r.target == target) rid = r.id;
+    if (rid.empty()) {
+      for (int n = 1; rid.empty(); ++n)
+        if (std::string id = "rIdLink" + std::to_string(n); !set.Find(id)) rid = id;
+      set.items.push_back(pkg::Relationship{rid, type, std::string(target), true, {}});
+      doc_.Package().SetRelationships(std::move(set));
+    }
+  }
+  s.Begin(para, 1);
+  if (!s.CutRunsAt(para, from.offset, why) || !s.CutRunsAt(para, to.offset, why)) return s.Abort(why);
+  // The runs (and range markers among them) in [from, to) go into a new w:hyperlink.
+  std::vector<ElemId> inside;
+  for (ElemId c = s.E(p).first; c != kNoElem; c = s.E(c).next) {
+    if (s.PropsElem(c)) continue;
+    const uint32_t cs = s.E(c).start, cl = s.E(c).length;
+    if (cl == 0 ? (cs > from.offset && cs < to.offset) : (cs >= from.offset && cs + cl <= to.offset)) inside.push_back(c);
+  }
+  const ElemId h = inside.empty() ? kNoElem : s.NewElem(p, Name("hyperlink"));
+  if (h == kNoElem) return s.Abort(u"This text can't be made a link.");
+  if (!rid.empty()) s.SetAttr(h, Name("r:id"), rid);
+  else s.SetAttr(h, Name("anchor"), target.substr(1));
+  s.SetAttr(h, Name("history"), "1");
+  s.LinkAfter(p, s.PrevSibling(inside.front()), h);
+  for (ElemId c : inside) {
+    s.Unlink(c);
+    s.Append(h, c);
+  }
+  s.Reflow(para);
+  s.Commit(false, from, to, Kind::Other, u"Link");
+  s.Notify(listeners_);
+  Result r;
+  r.caret = to;
   return r;
 }
 
