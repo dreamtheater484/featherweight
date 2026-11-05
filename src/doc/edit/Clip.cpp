@@ -446,7 +446,7 @@ Result PasteClip(Editor& ed, Pos from, Pos to, const Clip& clip, uint64_t target
   if (!(from == to)) {
     Result r = ed.Delete(from, to);
     if (!r) return fail(r);
-    caret = r.caret;
+    caret = r.end.para != kNone ? r.end : r.caret;  // tracked, the deleted text stays: after it
   }
   // The text first, all of it in one step: a paragraph at a time, each split would make the model
   // pass over the story again for the next paragraph's runs, which is quadratic in big pastes. A

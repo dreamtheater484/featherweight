@@ -48,6 +48,9 @@ struct Result {
   bool ok = true;
   std::u16string message;
   Pos caret;  // where the caret goes after the edit
+  // Delete: where the deleted text ends now. With Track Changes on it stays, and text typed over
+  // a selection goes after it, as in Word; otherwise it's the caret.
+  Pos end;
   explicit operator bool() const { return ok; }
 };
 
@@ -156,6 +159,8 @@ class Editor {
   Result SetTracking(bool on);
   void SetAuthor(std::string utf8) { author_ = std::move(utf8); }
   const std::string& Author() const { return author_; }
+  // The name changes are recorded with: Author(), or "Author" when there's none.
+  std::string ChangeAuthor() const { return author_.empty() ? std::string("Author") : author_; }
   // The local time as Word writes it ("2026-11-05T14:30:00Z"); for tests, a fixed one.
   std::string ChangeDate() const;
   void SetFixedDate(std::string date) { fixedDate_ = std::move(date); }
@@ -291,6 +296,11 @@ class Editor {
   // whether it's in a paragraph rather than a table's or the body's properties).
   using ChangePicker = std::function<bool(Pos from, Pos to, bool inPara)>;
   Result Review(uint32_t story, const ChangePicker& pick, bool accept, std::u16string name, Pos caret);
+  // Delete with Track Changes on: the text is marked deleted, and stays.
+  Result DeleteTracked(Pos from, Pos to);
+  // Whether the next transaction records what it does, and as whom (Tracking(), Author()).
+  void Arm();
+  bool reviewing_ = false;  // accepting or rejecting: the changes it makes aren't recorded
 
   Document& doc_;
   std::string author_, fixedDate_;
