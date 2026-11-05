@@ -33,7 +33,7 @@ void App::InitFiles(bool userFolders) {
   s = {};
   wchar_t buf[LOCALE_NAME_MAX_LENGTH > 257 ? LOCALE_NAME_MAX_LENGTH : 257] = {};
   DWORD n = 257;
-  if (GetUserNameW(buf, &n)) s.user = buf;
+  if (userFolders && GetUserNameW(buf, &n)) s.user = buf;  // no owner files from snapshots either
   if (GetUserDefaultLocaleName(buf, LOCALE_NAME_MAX_LENGTH)) s.language = buf;
   DWORD paper = 0;
   if (GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_IPAPERSIZE | LOCALE_RETURN_NUMBER, reinterpret_cast<LPWSTR>(&paper),

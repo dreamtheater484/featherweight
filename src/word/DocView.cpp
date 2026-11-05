@@ -1003,6 +1003,11 @@ void DocView::Autosave() {
   if (doc_) file_.Autosave(*doc_);
 }
 
+void DocView::NoteEditForTesting() {
+  if (const fw::doc::Part* main = doc_ ? doc_->FindPart(fw::doc::PartKind::Document) : nullptr)
+    NoteEdit(static_cast<uint32_t>(main - doc_->Parts().data()));
+}
+
 void DocView::NoteEdit(uint32_t part) {
   const bool first = !file_.Dirty();
   file_.Edited(part);

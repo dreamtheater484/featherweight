@@ -2156,6 +2156,12 @@ void App::RunScript(const std::wstring& script) {
     } else if (op == L"view") {
       if (PagedView* v = ActivePaged())
         v->SetViewMode(arg == L"single" ? fw::ViewMode::Single : arg == L"facing" ? fw::ViewMode::Facing : fw::ViewMode::Continuous);
+    } else if (op == L"new") {
+      NewDocument();
+    } else if (op == L"edited") {
+      // Marks the document edited, as the edit session will (the dot, Save, the close prompt).
+      TabContent* v = Active();
+      if (v && v->Kind() == TabKind::Document && v->Ready()) static_cast<DocView*>(v)->NoteEditForTesting();
     } else if (op == L"save") {
       if (TabContent* v = Active()) {
         std::wstring err;

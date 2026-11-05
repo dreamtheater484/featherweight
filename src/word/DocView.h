@@ -89,6 +89,8 @@ class DocView : public PagedView {
   // Each change to the model, with the index of the part it changed: the tab becomes modified,
   // and Save writes that part from the model.
   void NoteEdit(uint32_t part);
+  // The UI checks' "edited" step: an edit in the main part.
+  void NoteEditForTesting();
   DocFile& File() { return file_; }
 
   // ---- Text ----
