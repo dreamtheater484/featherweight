@@ -32,6 +32,10 @@ param(
   [string]$Json,
   [int]$TimeoutSeconds = 90,
   [switch]$ShowWindows,  # print every window Word shows while a file opens (for diagnosing)
+  # Also read what Word sees once the file is open: its paragraphs, tracked changes (type, author,
+  # text) and comments (author, text, resolved, the comment each one replies to), into the JSON's
+  # "review" (scripts\contract-review-check.ps1).
+  [switch]$Review,
   # Internal: open one file in this process (the parent runs one child per file).
   [string]$Child, [string]$ResultFile
 )
@@ -152,6 +156,27 @@ if ($Child) {
                                 [ref]"-", [ref]"-", [ref]0, [ref]$missing, [ref]$false, [ref]$false, [ref]$missing, [ref]$true)
     $result.opened = $true
     # While a dialog is up (the parent cancels it), Word rejects calls: try again for a while.
+    if ($Review) {
+      for ($try = 0; ; $try++) {
+        try {
+          $paras = @(); foreach ($p in $doc.Paragraphs) { $paras += $p.Range.Text.TrimEnd([char]13) }
+          $revs = @(); foreach ($v in $doc.Revisions) { $revs += [ordered]@{ type = $v.Type; author = $v.Author; text = $v.Range.Text } }
+          $notes = @()
+          foreach ($c in $doc.Comments) {
+            $parent = $null
+            try { if ($c.Ancestor) { $parent = $c.Ancestor.Index } } catch {}
+            $notes += [ordered]@{ index = $c.Index; author = $c.Author; text = $c.Range.Text; done = [bool]$c.Done; parent = $parent }
+          }
+          $result.review = [ordered]@{ paragraphs = $paras; revisions = $revs; comments = $notes }
+          break
+        } catch {
+          $ex = $_.Exception
+          while ($ex.InnerException -and $ex -isnot [Runtime.InteropServices.COMException]) { $ex = $ex.InnerException }
+          if ($try -ge 40 -or $ex.HResult -notin 0x80010001, 0x8001010A) { throw }
+          Start-Sleep -Milliseconds 500
+        }
+      }
+    }
     for ($try = 0; ; $try++) {
       try { $doc.Close([ref]0); break }  # wdDoNotSaveChanges
       catch {
@@ -223,9 +248,10 @@ foreach ($f in @($files)) {
   for ($attempt = 1; ; $attempt++) {
   if (Test-Path $resultPath) { Remove-Item $resultPath }
   $entry = [ordered]@{ file = $f.FullName; status = $null; opened = $false; dialogs = @(); error = $null }
-  $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList @(
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"",
-    "-Child", "`"$($f.FullName)`"", "-ResultFile", "`"$resultPath`"")
+  $childArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"",
+                 "-Child", "`"$($f.FullName)`"", "-ResultFile", "`"$resultPath`"")
+  if ($Review) { $childArgs += "-Review" }
+  $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList $childArgs
   # Watch the Word process for dialogs until the child is done: read each one, then cancel it.
   $seen = @{}
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -255,6 +281,7 @@ foreach ($f in @($files)) {
   if ($r) { Stop-Started @($r.pid) $(if ($finished) { 15000 } else { 0 }) }
   if ($r -and $r.error) { $entry.error = $r.error }
   $entry.opened = [bool]($r -and $r.opened)
+  if ($Review -and $r -and $r.review) { $entry.review = $r.review }
   $all = (@($entry.dialogs | ForEach-Object { "$($_.title) $($_.text)" }) + @($entry.error)) -join " "
   $entry.status =
     if (-not $finished) { "timeout" }
