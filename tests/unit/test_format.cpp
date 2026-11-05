@@ -896,3 +896,24 @@ TEST(Edit_KeptExtensionsStayInSchemaOrder) {
   CHECK(MainXml(*doc).find("<w:sz w:val=\"24\"/><w14:ligatures") != std::string::npos);
   CHECK(editor.Redo() && editor.Redo() && editor.Redo() && MainXml(*doc) == cleared);
 }
+
+TEST(Edit_FirstPropertyGoesBeforeKeptExtensions) {
+  // A w:rPr that holds only an extension: the first w: property goes before it, as the editor's
+  // own property edits put it (d2-torture finding 3b).
+  Fixture f;
+  f.body = "<w:p><w:r><w:rPr><w14:ligatures w14:val=\"standard\"/></w:rPr><w:t>liga</w:t></w:r>"
+           "<w:r><w:rPr><w:sz w:val=\"24\"/><w14:cntxtAlts/></w:rPr><w:t>alts</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  uint32_t p = MainParas(*doc)[0];
+  const std::string original = MainXml(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  edit::ToggleRuns(ed, Whole(*doc, p), edit::Toggle::Bold);
+  std::string xml = MainXml(*doc);
+  CHECK(Has(xml, "<w:rPr><w:b/><w:bCs/><w14:ligatures"));
+  CHECK(Has(xml, "<w:rPr><w:b/><w:bCs/><w:sz w:val=\"24\"/><w14:cntxtAlts"));
+  CHECK(SaveAndReopen(*doc) != nullptr);
+  CHECK(editor.Undo() && MainXml(*doc) == original);
+}
