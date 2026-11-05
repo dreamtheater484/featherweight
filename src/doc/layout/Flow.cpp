@@ -4,6 +4,8 @@
 // rows split across pages under repeated header rows. Endnotes follow the body.
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <string_view>
 #include <tuple>
 
 #include "core/OpenTimings.h"
@@ -41,6 +43,8 @@ struct Engine::Impl {
   uint32_t paraLines = 0;  // lines of it on earlier columns
   bool paraBegun = false;  // its space before and floats are placed
   bool breakAfter = false;  // it ended with a page break
+  bool nextHard = false;    // the next page starts after a page or section break
+  bool hardStart = false;   // this page did
   float separatorHeight = -1;
   size_t anchorDrawings = 0, anchorZones = 0;  // where its floats start on the page
 
@@ -258,6 +262,8 @@ struct Flow {
     f.spacing = Spacing();
     f.noteWidth = f.geom.width - f.geom.left - f.geom.right;
     (void)p;
+    f.hardStart = f.nextHard || e.pages_.empty();
+    f.nextHard = false;
     f.havePage = true;
   }
 
@@ -419,6 +425,13 @@ struct Flow {
   }
 
   float Bottom() const { return f.bottom - f.notesHeight; }
+
+  // Whether a line shows nothing (it may hold a break, hidden text or markers).
+  static bool Blank(const ParaText& pt, const text::Line& line) {
+    for (char16_t c : pt.Shown(line.start, line.end, false))
+      if (c != u' ' && c != u'\t') return false;
+    return line.objects.empty();
+  }
   float ColumnLeft() const { return f.cols[f.col].left; }
   float ColumnRight() const { return f.cols[f.col].right; }
 
@@ -510,7 +523,10 @@ struct Flow {
       f.paraStart = f.breaker->Save();
       f.paraLines = 0;
       f.paraBegun = false;
-      if (f.pt->props->pageBreakBefore && !f.pageEmpty) return Step::PageFull;
+      if (f.pt->props->pageBreakBefore && !f.pageEmpty) {
+        f.nextHard = true;
+        return Step::PageFull;
+      }
     }
     ParaText& pt = *f.pt;
     const ParaProps& p = *pt.props;
@@ -520,8 +536,12 @@ struct Flow {
     if (!f.paraBegun) {
       f.anchorDrawings = f.body.drawings.size();
       f.anchorZones = f.zones.size();
-      paraTop = f.y + (f.paraLines == 0 ? e.SpaceBefore(p, f.spacing) : 0);
-      if (f.columnEmpty && f.spacing.prev == nullptr && f.paraLines == 0) paraTop = f.y + e.SpaceBefore(p, Spacing());
+      paraTop = f.y + (f.paraLines == 0 ? e.SpaceBefore(p, f.spacing) + e.BorderAbove(p, f.spacing) : 0);
+      if (f.columnEmpty && f.spacing.prev == nullptr && f.paraLines == 0) {
+        // Word keeps the space before at the top of a page (measured on the corpus: dropping it at
+        // every page top, or after hard breaks only, matches fewer pages).
+        paraTop = f.y + e.SpaceBefore(p, Spacing()) + e.BorderAbove(p, Spacing());
+      }
       for (uint32_t a : pt.anchors) {
         const Drawing& d = doc.Drawings()[a];
         Rect box = e.PlaceFloat(d, frame, paraTop, ColumnLeft(), ColumnRight());
@@ -550,21 +570,24 @@ struct Flow {
       const bool wrap = !f.zones.empty();
       if (wrap) space = e.SpaceBeside(f.zones, f.y, estimate, ColumnLeft(), ColumnRight());
       text::Line line = br.Next(space.left - ColumnLeft(), space.right - ColumnLeft());
-      float h = e.LineHeight(line, p);
+      float h = e.LineHeight(pt, line);
       if (wrap && h > estimate + kEpsilon) {
         text::LineSpace again = e.SpaceBeside(f.zones, f.y, h, ColumnLeft(), ColumnRight());
         if (again.left != space.left || again.right != space.right || again.top != space.top) {
           br.Restore(state);
           space = again;
           line = br.Next(space.left - ColumnLeft(), space.right - ColumnLeft());
-          h = e.LineHeight(line, p);
+          h = e.LineHeight(pt, line);
         }
       }
       estimate = h;
       std::vector<uint32_t> newNotes;
       float noteH = pt.notes.empty() ? 0 : NotesFor(pt, line, &newNotes);
-      const bool mustPlace = f.columnEmpty && placed.empty() && f.paraLines == 0;
-      if (space.top + h > Bottom() - noteH + kEpsilon && !mustPlace && !(f.columnEmpty && placed.empty())) {
+      // A line with nothing but a page break goes on this page even when it's full: Word never
+      // starts a page just for the break.
+      const bool breakOnly = line.ending == text::LineEnd::PageBreak && Blank(pt, line);
+      const float hang = e.Hang(pt, line, h);
+      if (space.top + h - hang > Bottom() - noteH + kEpsilon && !breakOnly && !(f.columnEmpty && placed.empty())) {
         br.Restore(state);
         overflow = true;
         break;
@@ -577,6 +600,13 @@ struct Flow {
         f.y = space.top + h;
         f.columnEmpty = false;
         f.pageEmpty = false;
+        f.nextHard = true;
+        if (!br.Done() && e.compatMode_ >= 15) {
+          // Word 2013 and later keep the paragraph mark after a page break on the break's line.
+          text::LineBreaker::State rest = br.Save();
+          text::Line tail = br.Next(0, ColumnRight() - ColumnLeft());
+          if (!(br.Done() && Blank(pt, tail) && tail.objects.empty())) br.Restore(rest);
+        }
         if (!br.Done()) {
           f.paraLines += static_cast<uint32_t>(placed.size());
           return PageBreakInParagraph();
@@ -675,8 +705,8 @@ struct Flow {
       f.table = std::make_unique<TableBox>(e.MeasureTable(item.node, frame));
       f.row = 0;
       f.rowCut.clear();
-      // The space after the paragraph before it stays above the table.
-      f.y += f.spacing.after;
+      // The space after the paragraph before it (and its bottom border) stay above the table.
+      f.y += f.spacing.after + e.BorderBelow(f.spacing);
       f.spacing = Spacing();
       f.spacing.atTop = false;
     }
@@ -850,6 +880,7 @@ struct Flow {
             return true;
           }
         } else if (!f.pageEmpty) {
+          f.nextHard = true;
           FinishPage();
           return true;
         } else {

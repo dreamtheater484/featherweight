@@ -2,6 +2,7 @@
 #include <cstdio>
 
 #include "Common.h"
+#include "LayoutHook.h"
 #include "pkg/Check.h"
 #include "pkg/References.h"
 
@@ -66,7 +67,8 @@ fw::pkg::CheckReport CheckFile(const std::filesystem::path& file, const fw::pkg:
 
 int RunDump(const Options& options) {
   for (const auto& file : CollectFiles(options.inputs)) {
-    if (options.model) DumpModel(file);
+    if (options.layout) DumpLayout(file, options.outDir);
+    else if (options.model) DumpModel(file);
     else DumpFile(file);
   }
   return 0;

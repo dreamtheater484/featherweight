@@ -29,7 +29,7 @@ std::wstring StyleKey(const text::TextStyle& s) {
   k += L'|';
   k += s.complexLanguage;
   k += L'|';
-  const float nums[] = {s.size, s.complexSize, s.letterSpacing, s.baselineShift, s.kerningMinSize,
+  const float nums[] = {s.size, s.complexSize, s.letterSpacing, s.scale, s.baselineShift, s.kerningMinSize,
                         s.objectWidth, s.objectAscent, s.objectDescent};
   k.append(reinterpret_cast<const wchar_t*>(nums), sizeof nums / sizeof(wchar_t));
   const wchar_t flags[] = {static_cast<wchar_t>(int(s.bold) | s.italic << 1 | s.complexBold << 2 | s.complexItalic << 3 |
@@ -166,6 +166,7 @@ text::TextStyle Engine::StyleOf(const RunProps& r, bool hidden) const {
   s.complexBold = r.boldCs;
   s.complexItalic = r.italicCs;
   s.letterSpacing = Pt(r.spacing);
+  s.scale = r.scale > 0 && r.scale != 100 ? static_cast<float>(r.scale) / 100.0f : 1.0f;
   s.baselineShift = Pt(r.position);
   s.kerningMinSize = r.kern.Value() > 0 ? Pt(r.kern) : 0;
   s.caps = r.caps ? text::Caps::All : r.smallCaps ? text::Caps::Small : text::Caps::None;

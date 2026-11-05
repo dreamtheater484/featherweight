@@ -1,8 +1,8 @@
 #pragma once
 
-// Where fwtool meets Featherweight's Word layout (milestone D1). `fwtool compare` and
-// `fwtool bench` call LayOutDocument for every document; until pagination exists it says so, and
-// the measurement takes layout dumps from a folder instead (--dumps).
+// Where fwtool meets Featherweight's Word layout (milestone D1, src/doc/layout). `fwtool compare`
+// and `fwtool bench` call LayOutDocument for every document; `fwtool compare --dumps` measures
+// layout dumps from a folder instead.
 #include <filesystem>
 #include <string>
 
@@ -20,5 +20,8 @@ bool HaveLayout();
 // line drawn (docs/layout-dump.md). Returns false with a plain message in `error` if it can't.
 bool LayOutDocument(const std::filesystem::path& document, fw::LayoutDump* dump, fw::OpenTimings* timings,
                     std::string& error);
+
+// fwtool dump --layout: prints each page's lines, or with `out`, writes <out>/<name>.layout.json.
+void DumpLayout(const std::filesystem::path& document, const std::filesystem::path& out);
 
 }  // namespace fwtool

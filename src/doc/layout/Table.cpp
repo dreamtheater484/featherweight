@@ -119,6 +119,7 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
         std::vector<Zone> zones;
         cf.zones = &zones;
         StackBlocks(doc_.Blocks(tc), cf, c.content, sp);
+        c.content.height += BorderBelow(sp);
       }
       col += c.span;
       rb.cells.push_back(std::move(c));

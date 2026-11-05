@@ -27,6 +27,7 @@ struct Options {
   bool all = false;                 // compare (one document): list every difference
   int runs = 5;                     // bench: runs per document
   bool budgets = false;             // bench: fail when a budget is missed
+  bool layout = false;              // dump: the pages Featherweight lays out
   std::vector<std::filesystem::path> inputs;
 };
 

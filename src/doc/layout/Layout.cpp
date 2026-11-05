@@ -203,8 +203,22 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
       const size_t at = lb.paint + g.run;
       const RunPaint* rp = at < p.paints.size() ? &p.paints[at] : nullptr;
       uint32_t color = rp ? rp->color : 0;
-      if (!g.glyphs.empty())
-        painter.DrawGlyphs({lb.x + g.OriginX(), lb.baseline - g.rise}, g.Run(), draw::Brush::Solid(ColorOf(color)));
+      if (!g.glyphs.empty()) {
+        const draw::Point origin{lb.x + g.OriginX(), lb.baseline - g.rise};
+        if (g.scale != 1 && g.scale > 0) {
+          // Scaled characters (w:w): the glyphs drawn through a horizontal scale about the origin.
+          std::vector<float> advances(g.advances);
+          for (float& a : advances) a /= g.scale;
+          draw::GlyphRun run = g.Run();
+          run.advances = advances.data();
+          painter.Save();
+          painter.Transform({g.scale, 0, 0, 1, origin.x * (1 - g.scale), 0});
+          painter.DrawGlyphs(origin, run, draw::Brush::Solid(ColorOf(color)));
+          painter.Restore();
+        } else {
+          painter.DrawGlyphs(origin, g.Run(), draw::Brush::Solid(ColorOf(color)));
+        }
+      }
       if (!rp || g.hyphen || g.leader) continue;
       float x1 = lb.x + g.x, x2 = x1 + g.width, base = lb.baseline - g.rise;
       if (rp->underline != Underline::None) {
