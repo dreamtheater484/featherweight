@@ -325,6 +325,27 @@ TEST(TextBox_InATableCellAndAHeaderToo) {
 
 // ---------- Shapes ----------
 
+TEST(Shapes_ANewShapeTakesAnIdNothingHas) {
+  // fuzz_shapes: an id in content kept as read (here the branch of an mc:AlternateContent block
+  // the reader didn't take) isn't one of the model's drawings, but a new drawing mustn't take it.
+  Fixture f;
+  f.body = "<w:p><w:r><w:t>Body</w:t></w:r>" + WordTextBox(kBoxed, {}, 3) + "</w:p>";
+  const std::string other = "<wp:docPr id=\"41\" name=\"Elsewhere\"/>";
+  const size_t fallback = f.body.find("<mc:Fallback>");
+  CHECK(fallback != std::string::npos);
+  if (fallback == std::string::npos) return;
+  f.body.insert(fallback + std::string("<mc:Fallback>").size(),
+                "<w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\"><wp:extent cx=\"1\" cy=\"1\"/>" + other +
+                    "<a:graphic><a:graphicData uri=\"x\"/></a:graphic></wp:inline></w:drawing>");
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  Shapes shapes(ed);
+  CHECK(shapes.Insert(0, ShapeKind::Oval, fw::Emu(kInch), fw::Emu(kInch), fw::Emu(kInch), fw::Emu(kInch)).ok);
+  CHECK(Count(Main(*doc), "<wp:docPr id=\"42\"") == 1u && Count(Main(*doc), "id=\"41\"") == 1u);
+}
+
 TEST(Shapes_ANewShapeGoesOnTop) {
   auto doc = Blank();
   CHECK(doc);
