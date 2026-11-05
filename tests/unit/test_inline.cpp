@@ -380,3 +380,24 @@ TEST(HeaderFooter_LinkToPreviousAndUnlink) {
   CHECK(doc->Sections()[1].headers[0] == shared && edit::LinkedToPrevious(*doc, 1, false, HdrFtrType::Default));
   CHECK(SaveAndReopen(*doc) != nullptr);
 }
+
+TEST(HeaderFooter_TypingAfterAPageNumber) {
+  // d2-torture finding 9: the page number's paragraph formatting left the footer's runs sharing
+  // their text, so typing there saved shifted text.
+  Fixture f;
+  f.styles = kStyles;
+  f.body = "<w:p><w:r><w:t>Body</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  edit::Editor editor(*doc);
+  CHECK(edit::InsertPageNumber(editor, 0, false, HdrFtrType::Default, Justification::Center, true).ok);
+  const uint32_t header = doc->Sections()[0].headers[0];
+  const uint32_t p = doc->StoryParagraphs(header).front();
+  CHECK(editor.InsertText({p, 0}, u"xy").ok && StoryText(*doc, header) == "xyPage 1 of 1");
+  auto again = SaveAndReopen(*doc);
+  CHECK(again && StoryText(*again, again->Sections()[0].headers[0]) == "xyPage 1 of 1");
+  CHECK(editor.SplitParagraph({p, 4}).ok && StoryText(*doc, header) == "xyPa|ge 1 of 1");
+  again = SaveAndReopen(*doc);
+  CHECK(again && StoryText(*again, again->Sections()[0].headers[0]) == "xyPa|ge 1 of 1");
+}
