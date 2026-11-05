@@ -174,6 +174,7 @@ void DocView::ProofEdited(const fw::doc::edit::Change& c) {
 }
 
 void DocView::SettingsChanged() {
+  if (full_.right > full_.left) SetViewport(full_, ui_);  // the rulers shown or not
   if (!Ready()) return;
   const bool on = host_.ViewSpelling();
   if (on && !spelling_) {

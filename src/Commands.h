@@ -138,4 +138,6 @@ enum Cmd : int {
   CmdSpellSuggest = 820,    // + index into the context menu's suggestions
   CmdLanguagePick = 840,    // + index into the installed languages
   CmdLanguageLast = 899,
+  // The ruler in Word documents (D3).
+  CmdRuler = 1200,  // the rulers shown or not (the ⋯ menu, a setting like spelling as you type)
 };

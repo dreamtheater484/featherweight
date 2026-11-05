@@ -48,6 +48,8 @@ class DocView : public PagedView {
   std::wstring Title() const override;
   bool Modified() const override { return file_.Dirty(); }
 
+  // The rulers, when shown, take their bands of the tab's area; the pages get the rest (DocRuler.cpp).
+  void SetViewport(const RECT& rc, float ui) override;
   void Draw(gfx::Canvas& c, ID2D1DeviceContext* dc) override;
   bool HasIdleWork() const override;
   bool IdleWork(ID2D1DeviceContext* dc, double deadlineMs) override;
@@ -219,6 +221,33 @@ class DocView : public PagedView {
   fw::doc::Pos SelFrom() const { return {std::min(anchor_, focus_).para, std::min(anchor_, focus_).offset}; }
   fw::doc::Pos SelTo() const { return {std::max(anchor_, focus_).para, std::max(anchor_, focus_).offset}; }
 
+  // ---- Rulers (DocRuler.cpp), on demand (the ⋯ menu), as Word's: along the top the caret's page
+  // with its margins and columns, and the paragraph's indents and tab stops; down the left its top
+  // and bottom margins. Dragging one changes it, one undo step each; a click on the ruler sets a tab
+  // stop of the kind the corner box shows (a click there picks the next), and a stop dragged off goes.
+  struct RulerInfo;  // what the rulers show now
+  enum class RulerPart : uint8_t {
+    None, Corner, Strip, MarginLeft, MarginRight, MarginTop, MarginBottom,
+    FirstLine, Hanging, LeftIndent, RightIndent, Tab, ColumnStart, ColumnEnd
+  };
+  struct RulerHit {
+    RulerPart part = RulerPart::None;
+    int index = -1;  // a tab stop (RulerInfo::tabs), a column
+    bool operator==(const RulerHit&) const = default;
+  };
+  bool RulerOn() const;
+  RECT RulerInner(const RECT& rc, float ui) const;  // what the rulers leave of the tab's area
+  bool OnRuler(int x, int y) const;  // in the rulers' bands
+  RulerInfo MeasureRuler();
+  RulerHit RulerAt(const RulerInfo& r, int x, int y) const;
+  void DrawRulers(gfx::Canvas& c);
+  void RulerMouseDown(int x, int y);
+  void RulerMouseMove(int x, int y, UINT mods);
+  void RulerMouseUp();
+  void RulerHover(int x, int y);
+  std::wstring RulerTooltip(int x, int y);
+  HCURSOR RulerCursor(int x, int y);
+
   // ---- Formatting (DocFormat)
   // What formatting applies to: the selection, or the caret and the word it's in.
   DocFormat::Target FormatTarget() const;
@@ -292,6 +321,17 @@ class DocView : public PagedView {
   Rects selRects_;
   std::wstring pendingLink_;
   int mouseX_ = -1, mouseY_ = -1;
+
+  // Rulers
+  RECT full_{};  // the tab's area: the rulers' bands, then vp_
+  fw::doc::TabAlign rulerTab_ = fw::doc::TabAlign::Start;  // what a click on the ruler sets
+  struct RulerDrag {
+    RulerHit hit;
+    float start = 0, at = 0;  // where the mark was and is now, page points along its ruler
+    float grab = 0;           // where the mouse took it
+    bool off = false;         // a tab stop dragged off the ruler: it goes
+  } rulerDrag_;
+  RulerHit rulerHover_;
 
   // Find
   std::vector<Match> matches_;

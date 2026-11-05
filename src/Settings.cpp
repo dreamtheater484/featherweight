@@ -58,6 +58,7 @@ void Settings::LoadFrom(const std::wstring& path) {
   highlightFields = ini_.GetBool(kGeneral, L"HighlightFields", true);
   spelling = ini_.GetBool(kGeneral, L"CheckSpelling", true);
   autoCorrect = ini_.GetBool(kGeneral, L"AutoCorrect", true);
+  ruler = ini_.GetBool(kGeneral, L"Ruler", false);
   autoUpdate = ini_.GetBool(kGeneral, L"UpdateAutomatically", true);
   lastUpdateCheck = ini_.GetInt64(kGeneral, L"LastUpdateCheck", 0);
   skippedVersion = ini_.Get(kGeneral, L"SkippedVersion");
@@ -104,6 +105,7 @@ bool Settings::Save() {
   // Written once turned off (files from before have neither, and stay as they were).
   if (!spelling || ini_.Has(kGeneral, L"CheckSpelling")) ini_.SetBool(kGeneral, L"CheckSpelling", spelling);
   if (!autoCorrect || ini_.Has(kGeneral, L"AutoCorrect")) ini_.SetBool(kGeneral, L"AutoCorrect", autoCorrect);
+  if (ruler || ini_.Has(kGeneral, L"Ruler")) ini_.SetBool(kGeneral, L"Ruler", ruler);
   ini_.SetBool(kGeneral, L"UpdateAutomatically", autoUpdate);
   ini_.SetInt(kGeneral, L"LastUpdateCheck", lastUpdateCheck);
   ini_.Set(kGeneral, L"SkippedVersion", skippedVersion);

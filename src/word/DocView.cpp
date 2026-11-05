@@ -434,6 +434,7 @@ D2D1_RECT_F DocView::PageRectToScreen(int page, const layout::Rect& rc) const {
 }
 
 void DocView::OnPresentationChanged(bool on) {
+  if (full_.right > full_.left) vp_ = RulerInner(full_, ui_);  // no rulers while presenting (laid out next)
   if (!on) return;
   ClearSearch();
   if (editor_) anchor_ = focus_;  // the caret stays where it was
@@ -449,19 +450,18 @@ void DocView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   D2D1_RECT_F vpr = RectF(vp_);
   c.PushClip(vpr);
   c.Fill(vpr, presentation_ ? Rgb(0x000000) : inverted ? p.docBgInverted : p.docBg);
-  if (!Ready()) {
-    c.PopClip();
-    return;
+  if (Ready()) {
+    StepScroll();
+    int first, last;
+    VisiblePages(first, last);
+    for (int i = first; i <= last; ++i) DrawPage(c, dc, i, inverted);
+    DrawSquiggles(c, first, last);
+    DrawRanges(c, first, last);
+    DrawCaret(c, first, last);
+    if (!presentation_) DrawScrollbars(c);
   }
-  StepScroll();
-  int first, last;
-  VisiblePages(first, last);
-  for (int i = first; i <= last; ++i) DrawPage(c, dc, i, inverted);
-  DrawSquiggles(c, first, last);
-  DrawRanges(c, first, last);
-  DrawCaret(c, first, last);
-  if (!presentation_) DrawScrollbars(c);
   c.PopClip();
+  if (RulerOn()) DrawRulers(c);
 }
 
 void DocView::DrawPage(Canvas& c, ID2D1DeviceContext* dc, int page, bool inverted) {
@@ -708,6 +708,10 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
   mouseX_ = x;
   mouseY_ = y;
   if (!Ready()) return;
+  if (OnRuler(x, y)) {
+    if (button == 0) RulerMouseDown(x, y);
+    return;
+  }
   BeginPress(x, y);
   if (button == 2) {  // the middle button pans
     drag_ = Drag::Pan;
@@ -764,10 +768,15 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
   drag_ = Drag::Pan;
 }
 
-void DocView::OnMouseMove(int x, int y, UINT) {
+void DocView::OnMouseMove(int x, int y, UINT mods) {
   mouseX_ = x;
   mouseY_ = y;
   if (!Ready()) return;
+  if (drag_ == Drag::Ruler) {
+    RulerMouseMove(x, y, mods);
+    return;
+  }
+  RulerHover(x, y);
   if (ScrollDragMove(x, y)) return;
   if (drag_ == Drag::Link) {
     if (std::abs(x - downX_) + std::abs(y - downY_) > 6 * ui_) drag_ = Drag::Pan;
@@ -789,6 +798,10 @@ void DocView::OnMouseUp(int x, int y, int, UINT) {
   if (!Ready()) return;
   Drag d = drag_;
   drag_ = Drag::None;
+  if (d == Drag::Ruler) {
+    RulerMouseUp();
+    return;
+  }
   if (d == Drag::Link) {
     FollowLink(pendingLink_);
   } else if (d == Drag::Select && !Editing() && !HasSelection() && std::abs(x - downX_) + std::abs(y - downY_) < 3) {
@@ -802,11 +815,18 @@ void DocView::OnMouseUp(int x, int y, int, UINT) {
 
 void DocView::OnMouseLeave() {
   mouseX_ = mouseY_ = -1;
+  rulerHover_ = {};
   ScrollbarMouseLeave();
   host_.ViewInvalidate();
 }
 
 bool DocView::OnKeyDown(UINT vk, UINT mods) {
+  if (vk == VK_ESCAPE && drag_ == Drag::Ruler) {  // the drag stops, and nothing changes
+    drag_ = Drag::None;
+    rulerDrag_ = {};
+    host_.ViewInvalidate();
+    return true;
+  }
   if (vk == VK_ESCAPE && format_ && format_->PainterOn()) {
     format_->CancelPainter();
     host_.ViewInvalidate();
@@ -827,6 +847,7 @@ HCURSOR DocView::CursorAt(int x, int y) {
   static HCURSOR arrow = LoadCursor(nullptr, IDC_ARROW), ibeam = LoadCursor(nullptr, IDC_IBEAM),
                  hand = LoadCursor(nullptr, IDC_HAND), move = LoadCursor(nullptr, IDC_SIZEALL);
   if (!Ready()) return arrow;
+  if (drag_ == Drag::Ruler || (drag_ == Drag::None && OnRuler(x, y))) return RulerCursor(x, y);
   if (drag_ == Drag::Pan) return move;
   if (drag_ == Drag::Select) return ibeam;
   if (OverScrollbar(x, y)) return arrow;
@@ -837,6 +858,7 @@ HCURSOR DocView::CursorAt(int x, int y) {
 
 std::wstring DocView::TooltipAt(int x, int y) {
   if (!Ready() || drag_ != Drag::None) return {};
+  if (OnRuler(x, y)) return RulerTooltip(x, y);
   Hit hit = HitAt(x, y);
   if (!hit.link.empty()) {
     if (hit.link[0] == L'#') return L"Go to “" + hit.link.substr(1) + L"”";
