@@ -2137,6 +2137,14 @@ void App::RunScript(const std::wstring& script) {
         std::wstring err;
         if (!v->Save(arg, err)) fwprintf(stderr, L"save failed: %s\n", err.c_str());
       }
+    } else if (op == L"print") {
+      // print:out.pdf prints a document's pages to Microsoft Print to PDF, with no dialog.
+      TabContent* v = Active();
+      if (v && v->Kind() == TabKind::Document && v->Ready()) {
+        std::wstring message;
+        PrintOutcome r = static_cast<DocView*>(v)->PrintToFile(arg, message);
+        fwprintf(stderr, L"print: %s (%d)\n", message.c_str(), static_cast<int>(r));
+      }
     } else if (op == L"cmd") {
       static const std::pair<const wchar_t*, int> names[] = {
           {L"find", CmdFind}, {L"next", CmdFindNext}, {L"invert", CmdToggleInvert}, {L"present", CmdPresentation},

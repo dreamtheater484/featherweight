@@ -72,6 +72,8 @@ class DocView : public PagedView {
   SaveFormat SaveAsFormat() const override;
   bool CanPrint() const override { return Ready(); }
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;
+  // Every page to Microsoft Print to PDF, into a file, with no dialog (the visual checks' print step).
+  PrintOutcome PrintToFile(const std::wstring& path, std::wstring& message);
 
   // ---- Text ----
   bool HasSelection() const { return anchor_ != focus_; }
@@ -113,6 +115,8 @@ class DocView : public PagedView {
   void DrawRanges(gfx::Canvas& c, int first, int last);
   // Draws a picture, shape or text box frame with fwdraw, made from the model's XML on first use.
   void DrawDrawing(draw::Painter& painter, const fw::doc::layout::DrawingBox& box);
+  PrintOutcome PrintPages(const std::wstring& printer, const DEVMODEW* devmode, const std::vector<int>& pages,
+                          IStream* output, const std::function<void(int, int)>& progress, std::wstring& message);
 
   std::optional<TextPos> PosAt(int x, int y, bool nearest) const;
   Hit HitAt(int x, int y);

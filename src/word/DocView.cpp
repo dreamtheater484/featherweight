@@ -1,6 +1,8 @@
 #include "word/DocView.h"
 
 #include <commdlg.h>
+#include <shlwapi.h>
+#include <wrl/client.h>
 
 #include <algorithm>
 #include <cmath>
@@ -999,19 +1001,45 @@ PrintOutcome DocView::Print(HWND owner, const std::function<void(int, int)>& pro
     GlobalUnlock(pd.hDevNames);
   }
   const DEVMODEW* devmode = pd.hDevMode ? static_cast<const DEVMODEW*>(GlobalLock(pd.hDevMode)) : nullptr;
+  PrintOutcome outcome = PrintPages(printer, devmode, toPrint, nullptr, progress, message);
+  if (devmode) GlobalUnlock(pd.hDevMode);
+  cleanup();
+  return outcome;
+}
 
+PrintOutcome DocView::PrintToFile(const std::wstring& path, std::wstring& message) {
+  pagination_->LayOutAll();
+  TakeNewPages();
+  std::vector<int> pages(pagination_->PageCount());
+  for (size_t i = 0; i < pages.size(); ++i) pages[i] = static_cast<int>(i);
+  Microsoft::WRL::ComPtr<IStream> stream;
+  if (FAILED(SHCreateStreamOnFileEx(path.c_str(), STGM_CREATE | STGM_WRITE | STGM_SHARE_DENY_WRITE,
+                                    FILE_ATTRIBUTE_NORMAL, TRUE, nullptr, &stream))) {
+    message = L"Couldn't create " + path;
+    return PrintOutcome::Failed;
+  }
+  return PrintPages(L"Microsoft Print to PDF", nullptr, pages, stream.Get(), nullptr, message);
+}
+
+PrintOutcome DocView::PrintPages(const std::wstring& printer, const DEVMODEW* devmode, const std::vector<int>& pages,
+                                 IStream* output, const std::function<void(int, int)>& progress,
+                                 std::wstring& message) {
+  if (pages.empty()) {
+    message = L"This document has nothing to print.";
+    return PrintOutcome::Failed;
+  }
+  auto drawing = [this](draw::Painter& p, const layout::DrawingBox& box) { DrawDrawing(p, box); };
   draw::PrintJob job;
-  hr = job.Start(gpu::D2DDevice(), printer, devmode, Title());
+  HRESULT hr = job.Start(gpu::D2DDevice(), printer, devmode, Title(), output);
   int done = 0;
-  for (size_t i = 0; SUCCEEDED(hr) && i < toPrint.size(); ++i) {
-    if (progress) progress(done, static_cast<int>(toPrint.size()));
-    const layout::Page& page = pagination_->GetPage(toPrint[i]);
-    hr = job.AddPage(page.width, page.height, [&](draw::Painter& painter) { pagination_->Paint(painter, toPrint[i]); });
+  for (size_t i = 0; SUCCEEDED(hr) && i < pages.size(); ++i) {
+    if (progress) progress(done, static_cast<int>(pages.size()));
+    const layout::Page& page = pagination_->GetPage(pages[i]);
+    hr = job.AddPage(page.width, page.height,
+                     [&](draw::Painter& painter) { pagination_->Paint(painter, pages[i], drawing); });
     if (SUCCEEDED(hr)) ++done;
   }
   if (SUCCEEDED(hr)) hr = job.Finish();
-  if (devmode) GlobalUnlock(pd.hDevMode);
-  cleanup();
   if (FAILED(hr)) {
     message = L"Printing stopped because the printer reported an error.";
     return PrintOutcome::Failed;
