@@ -16,7 +16,8 @@ namespace {
 // Pre-order successor of `id` inside the subtree of `top`, not descending into `id`'s children
 // when `skipChildren`.
 ElemId NextInTree(const Tree& t, ElemId id, ElemId top, bool skipChildren = false) {
-  if (!skipChildren && t.elems[id].first != kNoElem) return t.elems[id].first;
+  // A shared property set is walked through its first user only: its parent links lead there.
+  if (!skipChildren && !(t.elems[id].flags & kSharedKids) && t.elems[id].first != kNoElem) return t.elems[id].first;
   while (id != top && id != kNoElem) {
     if (t.elems[id].next != kNoElem) return t.elems[id].next;
     id = t.elems[id].parent;

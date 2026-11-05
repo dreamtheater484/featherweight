@@ -478,6 +478,35 @@ TEST(Doc_TextBoxesAndDrawings) {
   CHECK(RoundTrips(*doc));
 }
 
+TEST(Doc_SharesRepeatedPropertySets) {
+  Fixture f;
+  auto run = [](const char* rPr) { return std::string("<w:r><w:rPr>") + rPr + "</w:rPr><w:t>x</w:t></w:r>"; };
+  const char* big = "<w:b/><w:sz w:val=\"28\"/>";
+  f.body = "<w:p>" + run(big) + run(big) + run("<w:b/><w:sz w:val=\"30\"/>") +
+           run("<w:b/><w:sz w:val=\"28\" x:extra=\"1\"/>") + run("<w:b/><x:unknown/><w:sz w:val=\"28\"/>") +
+           run("<w:i/><w:rPrChange w:id=\"1\" w:author=\"A\"><w:rPr><w:b/><w:sz w:val=\"28\"/></w:rPr></w:rPrChange>") +
+           run(big) + "</w:p><w:p><w:pPr><w:rPr><w:ins w:id=\"5\" w:author=\"A\"/></w:rPr></w:pPr>" + run(big) + "</w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  uint32_t p = Paras(*doc)[0];
+  auto runs = doc->Runs(p);
+  CHECK(runs.size() == 7);
+  if (runs.size() != 7) return;
+  auto set = [&](size_t i) { return runs[i].run.Child(Name("rPr")).FirstChild().Id(); };
+  CHECK(set(0) == set(1) && set(0) == set(6));                                // one set, used three times
+  CHECK(set(2) != set(0) && set(3) != set(0) && set(4) != set(0) && set(5) != set(0));  // a value differs, or the store holds part of it
+  for (size_t i : {0, 1, 6}) CHECK(doc->ResolvedRun(p, runs[i].run).bold && doc->ResolvedRun(p, runs[i].run).size.Value() == 28);
+  // Walks into properties still find each revision once.
+  int format = 0, mark = 0;
+  for (const auto& r : doc->Revisions(doc->MainStory())) {
+    format += r.kind == RevisionKind::RunFormat;
+    mark += r.kind == RevisionKind::MarkInsertion;
+  }
+  CHECK(format == 1 && mark == 1);
+  CHECK(RoundTrips(*doc));  // every user writes the set
+}
+
 // ---------- Property resolution: each departure from ECMA-376 (Resolve.cpp, D1-D8) ----------
 
 namespace {

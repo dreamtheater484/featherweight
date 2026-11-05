@@ -47,6 +47,8 @@ class Writer;
 //
 // The model doesn't change after reading. Editing (D2) comes as operations with inverses (plan §4.3
 // rule 4) applied by an editor that is a friend of this class; nothing here mutates the model.
+// Identical sets of plain properties (a run's w:rPr, a paragraph's w:pPr, w:tabs, a cell's w:tcPr)
+// are stored once and shared by their users, so an edit gives its element its own copy first.
 // Resolution caches are filled on demand, so calls that resolve properties must come from one
 // thread at a time.
 

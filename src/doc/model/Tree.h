@@ -48,6 +48,11 @@ enum ElemFlags : uint8_t {
                          // whole and written instead; shown, never written, never edited
   kDetached = 2,         // the root of a tree outside any part's tree (a text box's story)
   kXmlSpaceDefault = 4,  // Text: written as xml:space="default"
+  // A property container (w:rPr, w:pPr, w:tabs, w:tcPr...) whose children are a property set
+  // shared with identical ones elsewhere: the reader interns sets of plain properties. They are
+  // reached from their users through first/next; their parent is the set's first user. Tree walks
+  // don't go into them a second time, and an edit (D2) gives the user its own copy first.
+  kSharedKids = 8,
 };
 
 struct AttrVal {
@@ -111,7 +116,8 @@ class Node {
   Role GetRole() const;
   bool DisplayOnly() const { return tree_ && (Raw().flags & kDisplayOnly); }
 
-  // Structure.
+  // Structure. Inside a shared property set (kSharedKids), Parent() names the set's first user:
+  // go down from a run, paragraph or cell to its properties, not up from them.
   Node Parent() const { return tree_ ? Node(tree_, Raw().parent) : Node(); }
   Node FirstChild() const { return tree_ ? Node(tree_, Raw().first) : Node(); }
   Node Next() const { return tree_ ? Node(tree_, Raw().next) : Node(); }

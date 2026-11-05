@@ -1,8 +1,16 @@
 // The .docx reader: parts into the model's element arena, everything else into the round-trip
-// store (plan §4.3 rule 1), Markup Compatibility through pkg::mce, pairs through the reference
+// store (plan §4.3 rule 1), Markup Compatibility (ECMA-376 Part 3), pairs through the reference
 // registry (rule 2).
+//
+// Each part is read in one pass with XmlPull, without a DOM: a long document's DOM would be
+// several times the size of its model (plan §11). The model is built as the events arrive, and
+// content the model doesn't know is written into self-contained fragments as it streams by,
+// attached as pkg::RoundTripStore::CaptureChildren attaches them: after the previous known
+// sibling, else before the next known one, else inside the parent. Only a drawing's own content
+// is parsed into a small DOM, for its properties and its text boxes.
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -11,10 +19,12 @@
 #include "pkg/Mce.h"
 #include "pkg/XmlDom.h"
 #include "pkg/XmlPull.h"
+#include "pkg/XmlWriter.h"
 
 namespace fw::doc::docx {
 
 using pkg::Status;
+using Event = pkg::XmlPull::Event;
 
 namespace {
 
@@ -44,12 +54,70 @@ std::string_view RelKind(std::string_view type) {
   return slash == std::string_view::npos ? type : type.substr(slash + 1);
 }
 
-bool IsWhitespace(std::string_view s) {
-  return std::all_of(s.begin(), s.end(), [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; });
-}
+bool IsSpace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
+bool IsWhitespace(std::string_view s) { return std::all_of(s.begin(), s.end(), IsSpace); }
 
 std::string_view AsText(const std::vector<uint8_t>& b) {
   return std::string_view(reinterpret_cast<const char*>(b.data()), b.size());
+}
+
+// Calls fn for each whitespace-separated token of a list ("w14 wp14").
+template <class F>
+void ForEachToken(std::string_view list, F&& fn) {
+  size_t i = 0;
+  while (i < list.size()) {
+    while (i < list.size() && IsSpace(list[i])) ++i;
+    size_t start = i;
+    while (i < list.size() && !IsSpace(list[i])) ++i;
+    if (i > start) fn(list.substr(start, i - start));
+  }
+}
+
+// Content that isn't an element, as a fragment.
+std::string TextFragment(std::string_view text, bool cdata) {
+  pkg::XmlWriter w;
+  if (cdata) w.CData(text);
+  else w.Text(text);
+  return w.Take();
+}
+
+std::string CommentFragment(std::string_view text) {
+  pkg::XmlWriter w;
+  w.Comment(text);
+  return w.Take();
+}
+
+std::string PIFragment(std::string_view target, std::string_view data) {
+  pkg::XmlWriter w;
+  w.ProcessingInstruction(target, data);
+  return w.Take();
+}
+
+// The XML declaration at the start of a part, as a fragment (it now says UTF-8, as the part will
+// be written), or empty when there is none. XmlPull has checked it.
+std::string DeclarationFragment(std::string_view src) {
+  if (!src.starts_with("<?xml") || src.size() < 6 || !IsSpace(src[5])) return {};
+  size_t end = src.find("?>");
+  if (end == std::string_view::npos) return {};
+  std::string_view body = src.substr(5, end - 5);
+  std::vector<std::pair<std::string_view, std::string_view>> attrs;
+  size_t i = 0;
+  while (i < body.size()) {
+    while (i < body.size() && IsSpace(body[i])) ++i;
+    size_t name = i;
+    while (i < body.size() && body[i] != '=' && !IsSpace(body[i])) ++i;
+    std::string_view n = body.substr(name, i - name);
+    while (i < body.size() && body[i] != '"' && body[i] != '\'') ++i;
+    if (n.empty() || i >= body.size()) break;
+    char quote = body[i++];
+    size_t close = body.find(quote, i);
+    if (close == std::string_view::npos) break;
+    attrs.emplace_back(n, n == "encoding" ? std::string_view("UTF-8") : body.substr(i, close - i));
+    i = close + 1;
+  }
+  pkg::XmlWriter w;
+  w.Declaration(attrs);
+  return w.Take();
 }
 
 // "position:absolute;margin-left:10pt;width:144pt" -> the value of one property.
@@ -85,6 +153,94 @@ std::optional<Emu> CssLength(std::string_view v) {
   return Emu(*pt100 * 127);
 }
 
+// An element's subtree as a self-contained fragment, recorded from the event stream the way
+// pkg::RoundTripStore::SerializeFragment writes one from a DOM: the prefixes the subtree uses
+// (in mc prefix lists too) but doesn't declare on its root are declared there, as bound around it.
+class Recorder {
+ public:
+  struct Attr {
+    std::string qname, nsUri, value;
+  };
+  static std::vector<Attr> AttrsOf(const pkg::XmlPull& pull) {
+    std::vector<Attr> out;
+    out.reserve(pull.Attributes().size());
+    for (const auto& a : pull.Attributes()) out.push_back({std::string(a.qname), std::string(a.nsUri), std::string(a.value)});
+    return out;
+  }
+
+  Recorder(std::string_view qname, std::string_view nsUri, std::vector<Attr> attrs) : root_(qname), attrs_(std::move(attrs)) {
+    for (const auto& a : attrs_)
+      if (a.qname == "xmlns" || a.qname.starts_with("xmlns:")) declared_.emplace_back(pkg::QNameLocal(a.qname == "xmlns" ? "" : a.qname));
+    Use(qname, nsUri, attrs_);
+  }
+
+  // An event inside the root (not its own start or end).
+  void Feed(const pkg::XmlPull& pull, Event e) {
+    switch (e) {
+      case Event::StartElement:
+        body_.StartElement(pull.QName());
+        for (const auto& a : pull.Attributes()) body_.Attribute(a.qname, a.value);
+        Use(pull.QName(), pull.NamespaceUri(), pull.Attributes());
+        break;
+      case Event::EndElement: body_.EndElement(); break;
+      case Event::Text: body_.Text(pull.Text()); break;
+      case Event::CData: body_.CData(pull.Text()); break;
+      case Event::Comment: body_.Comment(pull.Text()); break;
+      case Event::ProcessingInstruction: body_.ProcessingInstruction(pull.QName(), pull.Text()); break;
+      default: break;
+    }
+  }
+  void FeedText(std::string_view text, bool cdata) {
+    if (cdata) body_.CData(text);
+    else body_.Text(text);
+  }
+
+  // At the root's end, while the bindings around it are still in effect.
+  std::string Finish(const pkg::XmlPull& pull) {
+    pkg::XmlWriter w;
+    w.StartElement(root_);
+    for (const auto& prefix : used_) {
+      if (std::find(declared_.begin(), declared_.end(), prefix) != declared_.end()) continue;
+      auto ns = pull.LookupNamespace(prefix);
+      if (!ns || (prefix.empty() && ns->empty())) continue;
+      w.Attribute(prefix.empty() ? std::string("xmlns") : "xmlns:" + prefix, *ns);
+    }
+    for (const auto& a : attrs_) w.Attribute(a.qname, a.value);
+    std::string body = body_.Take();
+    if (!body.empty()) w.Raw(body);
+    w.EndElement();
+    return w.Take();
+  }
+
+ private:
+  template <class Attrs>
+  void Use(std::string_view qname, std::string_view nsUri, const Attrs& attrs) {
+    Add(pkg::QNamePrefix(qname));
+    bool isChoice = nsUri == pkg::mce::kNamespace && pkg::QNameLocal(qname) == "Choice";
+    for (const auto& a : attrs) {
+      std::string_view name = a.qname, value = a.value;
+      if (name == "xmlns" || name.starts_with("xmlns:")) continue;
+      std::string_view prefix = pkg::QNamePrefix(name), local = pkg::QNameLocal(name);
+      if (!prefix.empty()) Add(prefix);
+      if (isChoice && prefix.empty() && local == "Requires") ForEachToken(value, [&](std::string_view t) { Add(t); });
+      if (prefix.empty() || std::string_view(a.nsUri) != pkg::mce::kNamespace) continue;
+      if (local == "Ignorable" || local == "MustUnderstand")
+        ForEachToken(value, [&](std::string_view t) { Add(t); });
+      else if (local == "ProcessContent" || local == "PreserveElements" || local == "PreserveAttributes")
+        ForEachToken(value, [&](std::string_view t) { Add(pkg::QNamePrefix(t)); });
+    }
+  }
+  void Add(std::string_view prefix) {
+    if (prefix == "xml" || prefix == "xmlns") return;
+    if (std::find(used_.begin(), used_.end(), prefix) == used_.end()) used_.emplace_back(prefix);
+  }
+
+  std::string root_;
+  std::vector<Attr> attrs_;
+  std::vector<std::string> declared_, used_;
+  pkg::XmlWriter body_;
+};
+
 }  // namespace
 
 const std::vector<std::string_view>& DefaultUnderstood() {
@@ -100,39 +256,70 @@ class Reader {
   Reader(Document& doc, const ReadOptions& options);
   Status Run();
 
-  struct Binding {
-    std::string_view prefix, uri;
-  };
+  // One open element of the part being read.
   struct Frame {
-    pugi::xml_node xml;
+    enum Kind : uint8_t {
+      Known,      // an element of the model
+      Text,       // a w:t (or w:instrText...), until markup inside it means it must be kept whole
+      Skip,       // content the model doesn't read (recorded when it's kept)
+      Alternate,  // an mc:AlternateContent block
+      Branch,     // its chosen branch: what's in it is shown in the block's place
+    };
+    Kind kind = Skip;
+    bool capture = false;      // what the model doesn't know goes to the store
+    bool displayOnly = false;  // the elements made here are shown, not written
+    bool direct = false;       // Known and Text: a child of the owner's element, not of a branch in it
+    bool object = false;       // Known: a drawing, picture or equation, whose content is kept as it is
+    bool chosen = false;       // Alternate: a branch was chosen
+    bool pairEnd = false;      // Skip: the kept element is one end of a pair
+    bool sawKnown = false, onlySpace = true;  // Known: as CaptureChildren tracks them
+    bool kept = false;         // Known and Text: it or a child has content in the store
+    int recorder = -1;         // the recorder whose root this frame's element is
+    uint32_t attrMark = 0;     // Known: where the children's attributes start in the arena
     ElemId elem = kNoElem;
-    size_t scope = 0;
-    bool exit = false;
-    bool capture = true;  // keep unknown content in the store (false for display-only and text-box trees)
-  };
-  struct Kid {
-    pugi::xml_node xml;
-    ElemId elem;
-    bool capture;
+    uint32_t owner = 0;        // the Known frame whose element this frame's elements are linked into
+    ElemId last = kNoElem;     // Known: the element's last child so far
+    ElemId prevLast = kNoElem; // Text: the owner's last child before this one
+    uint32_t children = 0;     // Known: child nodes so far
+    pkg::NodeId prevNode = pkg::kNoNode;
+    std::vector<pkg::Fragment> pending;  // Known: unknown children before the first known one
+    std::string space;         // Known: its whitespace, while that is all it holds
+    std::string objectXml;     // Known, object: its content, for the drawing's properties
+    // Text: what it held so far, in case it must become a fragment after all.
+    struct Piece {
+      bool cdata;
+      uint32_t start, length;  // in the paragraph's text
+    };
+    std::vector<Piece> pieces;
+    std::string qname, nsUri;
+    std::vector<Recorder::Attr> attrs;
   };
 
   Status ReadPart(const std::string& name, PartKind kind);
-  void Walk(pugi::xml_node xml, ElemId elem, bool capture);
+  // Reads the element `pull` is on, made as `root`, and everything in it.
+  Status Stream(pkg::XmlPull& pull, ElemId root, bool capture, bool checkRootBindings);
+  void OnStart(const pkg::XmlPull& pull);
+  void OnEnd(const pkg::XmlPull& pull);
+  void OnText(const pkg::XmlPull& pull, Event e);
+  void OnMarkup(const pkg::XmlPull& pull, Event e);
+  void StartKnown(const pkg::XmlPull& pull, size_t at, bool checkBindings);
+  ElemId KnownChild(const pkg::XmlPull& pull, ElemId parent, ElemId& last, bool displayOnly);
+  bool ReadAttributes(const pkg::XmlPull& pull, ElemId elem, bool capture);
+  void InternProperties(const Frame& f);
+  int StartRecorder(const pkg::XmlPull& pull);
+  void PushSkip(int recorder = -1, bool pairEnd = false);
+  void Unknown(size_t at, std::string xml, bool pairEnd);
+  void SawKnown(size_t at, pkg::NodeId id);
+  void TextToFragment(size_t at);
+  bool ChoiceUnderstood(const pkg::XmlPull& pull) const;
+  void CheckMustUnderstand(const pkg::XmlPull& pull);
+  void CheckBindings(const pkg::XmlPull& pull);
   void Enter(Frame& f);
   void Exit(const Frame& f);
-  void ReadAttributes(pugi::xml_node xml, ElemId elem, bool capture);
-  std::vector<Kid> ReadChildren(pugi::xml_node xml, ElemId elem, bool capture);
-  // Creates the elements for the known children of `xml` (display-only ones from AlternateContent
-  // branches too), in order, linked after `last`.
-  ElemId KnownChild(pugi::xml_node child, ElemId parent, ElemId& last, bool displayOnly);
-  void DisplayBranch(pugi::xml_node ac, ElemId parent, ElemId& last, std::vector<Kid>& kids);
-  std::string_view Resolve(pugi::xml_node element, std::string_view prefix) const;
-  Ns NsOf(pugi::xml_node element) const { return NsFromUri(Resolve(element, pkg::QNamePrefix(element.name()))); }
-  void PushBindings(pugi::xml_node xml, bool rootOfPart);
-  void ReadDrawing(pugi::xml_node obj, ElemId elem, bool displayOnly);
+  void ReadDrawing(Frame& f);
   void FindTextBoxes(pugi::xml_node from, uint32_t drawing);
   void ReadTextBoxes();
-  void SetUpPrefixes(Part& part, pugi::xml_node rootXml);
+  void SetUpPrefixes(Part& part, const pkg::XmlPull& pull);
   void ReadTheme(std::string_view name);
   void ReadCommentsExtended(std::string_view name);
   std::u16string& Text() { return doc_.paras_[curPara_].text; }
@@ -141,15 +328,18 @@ class Reader {
   Document& doc_;
   pkg::mce::Understood understood_;
   std::unordered_set<std::string> pairSites_;  // "{ns}local" of elements that open or close a pair
-  std::vector<Binding> scope_;
   pkg::NodeId nextNode_ = 1;
   uint32_t curPart_ = kNone, curStory_ = kNone, curPara_ = kNone;
+  bool checkMust_ = false;  // mc:MustUnderstand is checked while a part is read, not its text boxes again
+  std::vector<Frame> frames_;
+  std::vector<std::unique_ptr<Recorder>> recorders_;  // innermost last; each sees every event inside its root
   struct PendingTextBox {
-    pugi::xml_node txbx;
+    std::string xml;  // the w:txbxContent, self-contained
     uint32_t drawing;
   };
   std::vector<PendingTextBox> textBoxes_;
   std::unordered_map<std::string, uint32_t> partsRead_;  // PartKey -> index in doc_.parts_
+  std::unordered_multimap<uint64_t, ElemId> propertySets_;  // hash -> the first element of an interned set
 };
 
 Reader::Reader(Document& doc, const ReadOptions& options) : doc_(doc) {
@@ -170,76 +360,406 @@ Reader::Reader(Document& doc, const ReadOptions& options) : doc_(doc) {
   }
 }
 
-std::string_view Reader::Resolve(pugi::xml_node element, std::string_view prefix) const {
-  if (prefix == "xml") return pkg::kXmlNamespace;
-  for (auto a : element.attributes()) {
-    std::string_view n = a.name();
-    if (prefix.empty() ? n == "xmlns" : (n.size() == prefix.size() + 6 && n.starts_with("xmlns:") && n.substr(6) == prefix))
-      return a.value();
-  }
-  for (size_t i = scope_.size(); i-- > 0;)
-    if (scope_[i].prefix == prefix) return scope_[i].uri;
-  return {};
-}
+// ---------- The event loop ----------
 
-void Reader::PushBindings(pugi::xml_node xml, bool rootOfPart) {
-  for (auto a : xml.attributes()) {
-    std::string_view n = a.name();
-    if (n == "xmlns") {
-      scope_.push_back({{}, a.value()});
-    } else if (n.starts_with("xmlns:")) {
-      std::string_view prefix = n.substr(6), uri = a.value();
-      scope_.push_back({prefix, uri});
-      // An inner element that rebinds a prefix the writer uses would make the writer's names
-      // mean something else below it.
-      if (!rootOfPart && curPart_ != kNone) {
-        const Part& part = doc_.parts_[curPart_];
-        for (size_t ns = 0; ns < kNsCount; ++ns)
-          if (!part.prefix[ns].empty() && part.prefix[ns] == prefix && NsFromUri(uri) != static_cast<Ns>(ns))
-            doc_.parts_[curPart_].writable = false;
-      }
+Status Reader::Stream(pkg::XmlPull& pull, ElemId root, bool capture, bool checkRootBindings) {
+  frames_.clear();
+  recorders_.clear();
+  Frame& f = frames_.emplace_back();
+  f.kind = Frame::Known;
+  f.elem = root;
+  f.capture = capture;
+  f.displayOnly = (E(root).flags & kDisplayOnly) != 0;
+  StartKnown(pull, 0, checkRootBindings);
+  while (!frames_.empty()) {
+    Event e = pull.Next();
+    switch (e) {
+      case Event::StartElement: OnStart(pull); break;
+      case Event::EndElement: OnEnd(pull); break;
+      case Event::Text:
+      case Event::CData: OnText(pull, e); break;
+      case Event::Comment:
+      case Event::ProcessingInstruction: OnMarkup(pull, e); break;
+      case Event::Error: return pull.GetStatus();
+      case Event::EndDocument: return Status::Fail(Status::Code::Damaged, "This part ends unexpectedly.");
     }
   }
+  return Status{};
 }
 
-void Reader::ReadAttributes(pugi::xml_node xml, ElemId elem, bool capture) {
+void Reader::StartKnown(const pkg::XmlPull& pull, size_t at, bool checkBindings) {
+  Frame& f = frames_[at];
+  f.kept = ReadAttributes(pull, f.elem, f.capture);
+  f.attrMark = static_cast<uint32_t>(doc_.tree_.attrs.size());
+  if (checkBindings) CheckBindings(pull);
+  const Schema& s = Schema::Get();
+  f.object = s.Type(s.Elem(E(f.elem).def).type).role == Role::Object;
+  Enter(f);
+}
+
+void Reader::OnStart(const pkg::XmlPull& pull) {
+  for (auto& r : recorders_) r->Feed(pull, Event::StartElement);
+  if (checkMust_) CheckMustUnderstand(pull);
+  size_t top = frames_.size() - 1;
+  switch (frames_[top].kind) {
+    case Frame::Skip: PushSkip(); return;
+    case Frame::Text:
+      // Markup inside text: the whole element is kept as it is.
+      TextToFragment(top);
+      if (frames_[top].recorder >= 0) recorders_.back()->Feed(pull, Event::StartElement);
+      PushSkip();
+      return;
+    case Frame::Alternate: {
+      bool mce = pull.NamespaceUri() == pkg::mce::kNamespace;
+      bool take = !frames_[top].chosen && mce &&
+                  ((pull.LocalName() == "Choice" && ChoiceUnderstood(pull)) || pull.LocalName() == "Fallback");
+      if (!take) {
+        PushSkip();
+        return;
+      }
+      frames_[top].chosen = true;
+      uint32_t owner = frames_[top].owner;
+      Frame& branch = frames_.emplace_back();
+      branch.kind = Frame::Branch;
+      branch.owner = owner;
+      return;
+    }
+    default: break;
+  }
+  // A child of a Known element, or of the chosen branch of a block in one.
+  bool direct = frames_[top].kind == Frame::Known;
+  uint32_t owner = direct ? static_cast<uint32_t>(top) : frames_[top].owner;
+  bool capture = direct && frames_[top].capture;
+  bool displayOnly = !direct || frames_[owner].displayOnly;
+  if (direct) {
+    frames_[top].onlySpace = false;
+    ++frames_[top].children;
+    if (frames_[top].object) {  // an object's content is kept as it is
+      PushSkip(StartRecorder(pull));
+      return;
+    }
+  }
+  if (pull.NamespaceUri() == pkg::mce::kNamespace && pull.LocalName() == "AlternateContent") {
+    // The whole block is kept and written back; the chosen branch is shown.
+    int recorder = capture ? StartRecorder(pull) : -1;
+    Frame& ac = frames_.emplace_back();
+    ac.kind = Frame::Alternate;
+    ac.owner = owner;
+    ac.recorder = recorder;
+    return;
+  }
+  ElemId prevLast = frames_[owner].last;
+  ElemId id = KnownChild(pull, frames_[owner].elem, frames_[owner].last, displayOnly);
+  if (id == kNoElem) {
+    if (!capture) {
+      PushSkip();
+      return;
+    }
+    std::string expanded = "{" + std::string(pull.NamespaceUri()) + "}" + std::string(pull.LocalName());
+    PushSkip(StartRecorder(pull), pairSites_.contains(expanded));
+    return;
+  }
+  const Schema& s = Schema::Get();
+  bool text = s.Type(s.Elem(E(id).def).type).role == Role::Text;
+  // A w:t is known once its end shows it held only text; until then, CaptureChildren hasn't seen it.
+  if (direct && !text) SawKnown(top, E(id).node);
+  Frame& f = frames_.emplace_back();
+  f.kind = text ? Frame::Text : Frame::Known;
+  f.elem = id;
+  f.owner = owner;
+  f.direct = direct;
+  f.capture = capture;
+  f.displayOnly = displayOnly;
+  f.prevLast = prevLast;
+  if (text) {
+    f.qname = pull.QName();
+    f.nsUri = pull.NamespaceUri();
+    if (!pull.Attributes().empty()) f.attrs = Recorder::AttrsOf(pull);
+  }
+  StartKnown(pull, frames_.size() - 1, true);
+}
+
+void Reader::OnEnd(const pkg::XmlPull& pull) {
+  size_t at = frames_.size() - 1;
+  std::string xml;
+  bool recorded = frames_[at].recorder >= 0;
+  if (recorded) {
+    xml = recorders_.back()->Finish(pull);
+    recorders_.pop_back();
+  }
+  for (auto& r : recorders_) r->Feed(pull, Event::EndElement);
+  Frame& f = frames_[at];
+  switch (f.kind) {
+    case Frame::Skip:
+    case Frame::Alternate:
+      if (recorded) Unknown(at - 1, std::move(xml), f.pairEnd);
+      break;
+    case Frame::Branch: break;
+    case Frame::Text:
+      E(f.elem).length = static_cast<uint32_t>(Text().size()) - E(f.elem).start;
+      if (f.direct) SawKnown(at - 1, E(f.elem).node);
+      Exit(f);
+      break;
+    case Frame::Known: {
+      pkg::NodeId node = E(f.elem).node;
+      if (f.capture) {
+        for (auto& frag : f.pending) {
+          frag.slot = pkg::Slot::Inside;
+          doc_.store_.Add(node, std::move(frag));
+        }
+        // Whitespace that is an element's only content is content (canonical XML keeps it).
+        if (f.children > 0 && f.onlySpace) {
+          doc_.store_.Add(node, pkg::Fragment{pkg::Slot::Inside, {}, TextFragment(f.space, false)});
+          f.kept = true;
+        }
+        if (!f.kept) InternProperties(f);
+      }
+      if (f.object) ReadDrawing(f);
+      Exit(f);
+      break;
+    }
+  }
+  if (frames_[at].kept && at > 0) frames_[at - 1].kept = true;
+  frames_.pop_back();
+}
+
+void Reader::OnText(const pkg::XmlPull& pull, Event e) {
+  for (auto& r : recorders_) r->Feed(pull, e);
+  size_t at = frames_.size() - 1;
+  Frame& f = frames_[at];
+  std::string_view text = pull.Text();
+  if (f.kind == Frame::Text) {
+    auto start = static_cast<uint32_t>(Text().size());
+    AppendUtf16(Text(), text);
+    f.pieces.push_back({e == Event::CData, start, static_cast<uint32_t>(Text().size()) - start});
+    return;
+  }
+  if (f.kind != Frame::Known) return;  // recorded, or in a branch that isn't shown
+  ++f.children;
+  if (e == Event::Text && IsWhitespace(text)) {  // formatting between elements, not content
+    f.space = text;
+    if (f.object) f.objectXml += TextFragment(text, false);
+    return;
+  }
+  f.onlySpace = false;
+  Unknown(at, TextFragment(text, e == Event::CData), false);
+}
+
+void Reader::OnMarkup(const pkg::XmlPull& pull, Event e) {
+  for (auto& r : recorders_) r->Feed(pull, e);
+  size_t at = frames_.size() - 1;
+  if (frames_[at].kind == Frame::Text) {
+    TextToFragment(at);
+    if (frames_[at].recorder >= 0) recorders_.back()->Feed(pull, e);
+    return;
+  }
+  if (frames_[at].kind != Frame::Known) return;
+  frames_[at].onlySpace = false;
+  ++frames_[at].children;
+  Unknown(at, e == Event::Comment ? CommentFragment(pull.Text()) : PIFragment(pull.QName(), pull.Text()), false);
+}
+
+// ---------- Unknown content ----------
+
+int Reader::StartRecorder(const pkg::XmlPull& pull) {
+  recorders_.push_back(std::make_unique<Recorder>(pull.QName(), pull.NamespaceUri(), Recorder::AttrsOf(pull)));
+  return static_cast<int>(recorders_.size()) - 1;
+}
+
+void Reader::PushSkip(int recorder, bool pairEnd) {
+  Frame& f = frames_.emplace_back();
+  f.kind = Frame::Skip;
+  f.recorder = recorder;
+  f.pairEnd = pairEnd;
+}
+
+// Content the model doesn't know, in the element of frame `at`: attached to its nearest known
+// neighbor, as RoundTripStore::CaptureChildren does.
+void Reader::Unknown(size_t at, std::string xml, bool pairEnd) {
+  Frame& p = frames_[at];
+  if (p.object) p.objectXml += xml;
+  if (!p.capture) return;
+  p.kept = true;
+  pkg::Fragment frag;
+  frag.xml = std::move(xml);
+  frag.pairEnd = pairEnd;
+  if (!p.sawKnown) {
+    p.pending.push_back(std::move(frag));
+  } else if (p.prevNode != pkg::kNoNode) {
+    frag.slot = pkg::Slot::After;
+    doc_.store_.Add(p.prevNode, std::move(frag));
+  } else {
+    frag.slot = pkg::Slot::Inside;
+    doc_.store_.Add(E(p.elem).node, std::move(frag));
+  }
+}
+
+void Reader::SawKnown(size_t at, pkg::NodeId id) {
+  Frame& p = frames_[at];
+  if (!p.capture) return;
+  if (!p.sawKnown) {
+    p.sawKnown = true;
+    for (auto& frag : p.pending) {
+      frag.slot = pkg::Slot::Before;
+      doc_.store_.Add(id, std::move(frag));
+    }
+    p.pending.clear();
+  }
+  p.prevNode = id;
+}
+
+void Reader::TextToFragment(size_t at) {
+  Frame& f = frames_[at];
+  Frame& owner = frames_[f.owner];
+  // Undo the element. It is the arena's last: a w:t has no elements of its own.
+  ElemId id = f.elem;
+  Elem& e = E(id);
+  std::u16string& text = Text();
+  std::vector<std::pair<std::string, bool>> pieces;
+  for (const auto& p : f.pieces) pieces.emplace_back(ToUtf8(std::u16string_view(text).substr(p.start, p.length)), p.cdata);
+  text.resize(e.start);
+  if (e.attrCount) doc_.tree_.attrs.resize(e.attrs);
+  if (e.node) doc_.store_.Delete(e.node);
+  owner.last = f.prevLast;
+  if (f.prevLast == kNoElem) E(owner.elem).first = kNoElem;
+  else E(f.prevLast).next = kNoElem;
+  doc_.tree_.elems.pop_back();
+  f.kind = Frame::Skip;
+  f.elem = kNoElem;
+  if (!f.direct || !f.capture) return;
+  // Kept whole, from its start tag on.
+  recorders_.push_back(std::make_unique<Recorder>(f.qname, f.nsUri, std::move(f.attrs)));
+  f.recorder = static_cast<int>(recorders_.size()) - 1;
+  for (const auto& [piece, cdata] : pieces) recorders_.back()->FeedText(piece, cdata);
+}
+
+// ---------- Markup Compatibility and namespaces ----------
+
+// An mc:Choice is taken when every namespace its Requires names is understood.
+bool Reader::ChoiceUnderstood(const pkg::XmlPull& pull) const {
+  const auto* required = pull.FindAttribute({}, "Requires");
+  bool all = true;
+  ForEachToken(required ? required->value : std::string_view(), [&](std::string_view prefix) {
+    auto ns = pull.LookupNamespace(prefix);
+    if (!ns || ns->empty() || !understood_.Has(*ns)) all = false;
+  });
+  return all;
+}
+
+// A part with an mc:MustUnderstand namespace that isn't understood is shown but not edited.
+void Reader::CheckMustUnderstand(const pkg::XmlPull& pull) {
+  const auto* must = pull.FindAttribute(pkg::mce::kNamespace, "MustUnderstand");
+  if (!must) return;
+  auto& list = doc_.parts_[curPart_].mustUnderstand;
+  ForEachToken(must->value, [&](std::string_view prefix) {
+    auto ns = pull.LookupNamespace(prefix);
+    if (!ns || ns->empty() || understood_.Has(*ns)) return;
+    if (std::find(list.begin(), list.end(), *ns) == list.end()) list.emplace_back(*ns);
+  });
+}
+
+// An inner element that rebinds a prefix the writer uses would make the writer's names mean
+// something else below it.
+void Reader::CheckBindings(const pkg::XmlPull& pull) {
+  if (curPart_ == kNone) return;
+  Part& part = doc_.parts_[curPart_];
+  for (const auto& a : pull.Attributes()) {
+    if (!a.qname.starts_with("xmlns:")) continue;
+    for (size_t ns = 0; ns < kNsCount; ++ns)
+      if (!part.prefix[ns].empty() && part.prefix[ns] == a.local && NsFromUri(a.value) != static_cast<Ns>(ns))
+        part.writable = false;
+  }
+}
+
+// ---------- Known elements ----------
+
+// Returns whether unknown attributes went to the store.
+bool Reader::ReadAttributes(const pkg::XmlPull& pull, ElemId elem, bool capture) {
   const Schema& s = Schema::Get();
   TypeId type = s.Elem(E(elem).def).type;
   std::vector<pkg::XmlAttr> unknown;
-  uint32_t first = static_cast<uint32_t>(doc_.tree_.attrs.size());
+  auto first = static_cast<uint32_t>(doc_.tree_.attrs.size());
   uint16_t count = 0;
-  for (auto a : xml.attributes()) {
-    std::string_view name = a.name();
-    bool decl = name == "xmlns" || name.starts_with("xmlns:");
-    std::string_view prefix = pkg::QNamePrefix(name);
-    std::string_view uri = decl ? pkg::kXmlnsNamespace : prefix.empty() ? std::string_view() : Resolve(xml, prefix);
-    AttrDefId def = decl ? kNoDef : s.AttrOf(type, NameOf(NsFromUri(uri), pkg::QNameLocal(name)));
+  for (const auto& a : pull.Attributes()) {
+    AttrDefId def = a.IsNamespaceDecl() ? kNoDef : s.AttrOf(type, NameOf(NsFromUri(a.nsUri), a.local));
     if (def != kNoDef && count < 0xFFFF) {
-      doc_.tree_.attrs.push_back(AttrVal{def, doc_.tree_.strings.Intern(a.value())});
+      doc_.tree_.attrs.push_back(AttrVal{def, doc_.tree_.strings.Intern(a.value)});
       ++count;
     } else if (capture) {
-      unknown.push_back({name.data(), std::string(uri), a.value()});
+      unknown.push_back({std::string(a.qname), std::string(a.nsUri), std::string(a.value)});
     }
   }
   E(elem).attrs = count ? first : 0;
   E(elem).attrCount = count;
-  if (!unknown.empty()) doc_.store_.SetNodeAttributes(E(elem).node, doc_.store_.Intern(std::move(unknown)));
+  if (unknown.empty()) return false;
+  doc_.store_.SetNodeAttributes(E(elem).node, doc_.store_.Intern(std::move(unknown)));
+  return true;
 }
 
-ElemId Reader::KnownChild(pugi::xml_node child, ElemId parent, ElemId& last, bool displayOnly) {
+// Documents repeat the same few property sets on every run, paragraph and cell (half of a long
+// report's elements). A container whose children are plain properties shares them with the first
+// identical set: its new children are dropped from the arena's end, where they were just made.
+void Reader::InternProperties(const Frame& f) {
+  static constexpr uint32_t kContainers[] = {Name("rPr"),     Name("pPr"),   Name("tabs"),       Name("numPr"),
+                                             Name("pBdr"),    Name("tcPr"),  Name("tcBorders"),  Name("tcMar"),
+                                             Name("trPr"),    Name("tblPr"), Name("tblBorders"), Name("tblCellMar")};
+  const Schema& s = Schema::Get();
+  ElemId c = f.elem;
+  const Elem& e = E(c);
+  uint32_t name = s.Elem(e.def).name;
+  if (e.first == kNoElem || std::find(std::begin(kContainers), std::end(kContainers), name) == std::end(kContainers)) return;
+  // Only plain properties: elements without children, made one after another just now, none of
+  // them a revision mark or anything else with an id of its own.
+  const Tree& t = doc_.tree_;
+  uint64_t hash = 1469598103934665603ull;
+  auto mix = [&](uint64_t v) { hash = (hash ^ v) * 1099511628211ull; };
+  mix(e.def);
+  size_t n = 0;
+  for (ElemId k = e.first; k != kNoElem; k = t.elems[k].next, ++n) {
+    const Elem& ke = t.elems[k];
+    if (k != c + 1 + n || ke.first != kNoElem || ke.flags != 0) return;
+    mix(ke.def);
+    mix(ke.attrCount);
+    for (uint32_t i = 0; i < ke.attrCount; ++i) {
+      const AttrVal& a = t.attrs[ke.attrs + i];
+      if (s.Attr(a.def).name == Name("id")) return;
+      mix((uint64_t{a.def} << 32) | a.value);
+    }
+  }
+  if (c + 1 + n != t.elems.size()) return;
+  auto same = [&](ElemId first) {
+    ElemId k = first;
+    for (size_t i = 0; i < n; ++i, k = t.elems[k].next) {
+      if (k == kNoElem) return false;
+      const Elem &a = t.elems[k], &b = t.elems[c + 1 + i];
+      if (a.def != b.def || a.attrCount != b.attrCount) return false;
+      for (uint32_t j = 0; j < a.attrCount; ++j)
+        if (t.attrs[a.attrs + j].def != t.attrs[b.attrs + j].def || t.attrs[a.attrs + j].value != t.attrs[b.attrs + j].value)
+          return false;
+    }
+    return k == kNoElem;
+  };
+  for (auto [it, end] = propertySets_.equal_range(hash); it != end; ++it) {
+    if (!same(it->second)) continue;
+    E(c).first = it->second;
+    E(c).flags |= kSharedKids;
+    doc_.tree_.elems.resize(c + 1);
+    doc_.tree_.attrs.resize(f.attrMark);
+    return;
+  }
+  propertySets_.emplace(hash, c + 1);
+}
+
+ElemId Reader::KnownChild(const pkg::XmlPull& pull, ElemId parent, ElemId& last, bool displayOnly) {
   const Schema& s = Schema::Get();
   TypeId ptype = s.Elem(E(parent).def).type;
-  ElemDefId def = s.Child(ptype, NameOf(NsOf(child), pkg::QNameLocal(child.name())));
+  ElemDefId def = s.Child(ptype, NameOf(NsFromUri(pull.NamespaceUri()), pull.LocalName()));
   if (def == kNoDef) return kNoElem;
   Role role = s.Type(s.Elem(def).type).role;
   bool inPara = curPara_ != kNone;
   bool textual = role == Role::Text || role == Role::Char || role == Role::Object || role == Role::Marker;
   if ((textual || role == Role::Run) && !inPara) return kNoElem;
   if ((role == Role::Paragraph || role == Role::Story) && inPara) return kNoElem;
-  if (role == Role::Text) {
-    for (auto c : child.children())
-      if (c.type() != pugi::node_pcdata && c.type() != pugi::node_cdata) return kNoElem;  // keep it whole
-  }
   ElemId id = doc_.tree_.Add(def, parent);
   if (displayOnly) E(id).flags |= kDisplayOnly;
   else E(id).node = nextNode_++;
@@ -247,69 +767,6 @@ ElemId Reader::KnownChild(pugi::xml_node child, ElemId parent, ElemId& last, boo
   else E(last).next = id;
   last = id;
   return id;
-}
-
-void Reader::DisplayBranch(pugi::xml_node ac, ElemId parent, ElemId& last, std::vector<Kid>& kids) {
-  // The chosen branch's elements in document order, with nested blocks replaced by their own
-  // chosen branch (an explicit stack, like everything else).
-  std::vector<pugi::xml_node> work;
-  auto pushChildren = [&](pugi::xml_node branch) {
-    for (auto c = branch.last_child(); c; c = c.previous_sibling())
-      if (c.type() == pugi::node_element) work.push_back(c);
-  };
-  pushChildren(pkg::mce::SelectBranch(ac, understood_));
-  while (!work.empty()) {
-    pugi::xml_node c = work.back();
-    work.pop_back();
-    if (pkg::IsElement(c, pkg::mce::kNamespace, "AlternateContent")) {
-      pushChildren(pkg::mce::SelectBranch(c, understood_));
-      continue;
-    }
-    ElemId id = KnownChild(c, parent, last, true);
-    if (id != kNoElem) kids.push_back({c, id, false});
-  }
-}
-
-std::vector<Reader::Kid> Reader::ReadChildren(pugi::xml_node xml, ElemId elem, bool capture) {
-  std::vector<Kid> kids;
-  ElemId last = kNoElem;
-  if (!capture) {
-    for (auto c : xml.children()) {
-      if (c.type() != pugi::node_element) continue;
-      if (pkg::IsElement(c, pkg::mce::kNamespace, "AlternateContent")) {
-        DisplayBranch(c, elem, last, kids);
-        continue;
-      }
-      ElemId id = KnownChild(c, elem, last, (E(elem).flags & kDisplayOnly) != 0);
-      if (id != kNoElem) kids.push_back({c, id, false});
-    }
-    return kids;
-  }
-  Role role = Schema::Get().Type(Schema::Get().Elem(E(elem).def).type).role;
-  bool opaque = role == Role::Object;
-  doc_.store_.CaptureChildren(
-      xml, E(elem).node,
-      [&](pugi::xml_node c) -> pkg::NodeId {
-        if (opaque) return pkg::kNoNode;  // an object's content is kept as it is
-        if (pkg::IsElement(c, pkg::mce::kNamespace, "AlternateContent")) {
-          // The whole block is kept and written back; the chosen branch is shown.
-          DisplayBranch(c, elem, last, kids);
-          return pkg::kNoNode;
-        }
-        ElemId id = KnownChild(c, elem, last, false);
-        if (id == kNoElem) return pkg::kNoNode;
-        kids.push_back({c, id, true});
-        return E(id).node;
-      },
-      [&](pugi::xml_node c) { return pairSites_.contains(pkg::ExpandedName(c)); });
-  // Whitespace that is an element's only content is content (canonical XML keeps it).
-  bool onlySpace = xml.first_child() && role != Role::Text;
-  for (auto c : xml.children())
-    if (c.type() != pugi::node_pcdata || !IsWhitespace(c.value())) onlySpace = false;
-  if (onlySpace)
-    for (auto c : xml.children())
-      doc_.store_.Add(E(elem).node, pkg::Fragment{pkg::Slot::Inside, {}, pkg::RoundTripStore::SerializeFragment(c)});
-  return kids;
 }
 
 void Reader::Enter(Frame& f) {
@@ -346,12 +803,6 @@ void Reader::Enter(Frame& f) {
       E(f.elem).start = curPara_;
       break;
     }
-    case Role::Text: {
-      E(f.elem).start = static_cast<uint32_t>(Text().size());
-      for (auto c : f.xml.children()) AppendUtf16(Text(), c.value());
-      E(f.elem).length = static_cast<uint32_t>(Text().size()) - E(f.elem).start;
-      break;
-    }
     case Role::Char: {
       Node n(&doc_.tree_, f.elem);
       char16_t ch = s.Type(def.type).ch;
@@ -372,13 +823,12 @@ void Reader::Enter(Frame& f) {
       E(f.elem).length = 1;
       break;
     }
-    case Role::Object:
+    case Role::Object:  // the drawing is read at its end (ReadDrawing)
       E(f.elem).start = static_cast<uint32_t>(Text().size());
       Text() += u'\xFFFC';
       E(f.elem).length = 1;
-      ReadDrawing(f.xml, f.elem, (E(f.elem).flags & kDisplayOnly) != 0);
       break;
-    default:
+    default:  // Role::Text too: its text arrives as events
       if (inPara) E(f.elem).start = static_cast<uint32_t>(Text().size());
       break;
   }
@@ -396,40 +846,22 @@ void Reader::Exit(const Frame& f) {
   } else if (curPara_ != kNone && role != Role::Text && role != Role::Char && role != Role::Object) {
     E(f.elem).length = static_cast<uint32_t>(Text().size()) - E(f.elem).start;
   }
-  scope_.resize(f.scope);
-}
-
-void Reader::Walk(pugi::xml_node xml, ElemId elem, bool capture) {
-  std::vector<Frame> stack;
-  stack.push_back({xml, elem, scope_.size(), false, capture});
-  while (!stack.empty()) {
-    Frame f = stack.back();
-    stack.pop_back();
-    if (f.exit) {
-      Exit(f);
-      continue;
-    }
-    f.scope = scope_.size();
-    PushBindings(f.xml, f.elem == elem && curPart_ != kNone && doc_.parts_[curPart_].root == elem);
-    ReadAttributes(f.xml, f.elem, f.capture);
-    Enter(f);
-    const Schema& s = Schema::Get();
-    Role role = s.Type(s.Elem(E(f.elem).def).type).role;
-    std::vector<Kid> kids;
-    if (role != Role::Text) kids = ReadChildren(f.xml, f.elem, f.capture);
-    stack.push_back({f.xml, f.elem, f.scope, true, f.capture});
-    for (size_t i = kids.size(); i-- > 0;) stack.push_back({kids[i].xml, kids[i].elem, 0, false, kids[i].capture});
-  }
 }
 
 // ---------- Drawings ----------
 
-void Reader::ReadDrawing(pugi::xml_node obj, ElemId elem, bool displayOnly) {
+void Reader::ReadDrawing(Frame& f) {
+  ElemId elem = f.elem;
   Drawing d;
   d.node = Node(&doc_.tree_, elem);
   d.pos = Pos{curPara_, E(elem).start};
   d.part = curPart_;
-  d.displayOnly = displayOnly;
+  d.displayOnly = f.displayOnly;
+  // The drawing's content as a small DOM: its fragments are self-contained, so a plain wrapper
+  // holds them.
+  pkg::XmlDom dom;
+  pugi::xml_node obj;
+  if (dom.Parse("<fw>" + f.objectXml + "</fw>", doc_.package_->GetLimits()).Ok()) obj = dom.Root();
   std::string_view local = Schema::Get().Elem(E(elem).def).local;
   auto attrEmu = [](pugi::xml_node n, const char* name) { return Emu(ParseInt(n.attribute(name).value()).value_or(0)); };
   if (local == "drawing") {
@@ -534,11 +966,11 @@ void Reader::ReadDrawing(pugi::xml_node obj, ElemId elem, bool displayOnly) {
   } else {
     d.kind = DrawingKind::Equation;
   }
-  if (displayOnly)  // nothing of it is in the store: the AlternateContent block is kept whole
-    for (auto c : obj.children()) d.keptXml += pkg::RoundTripStore::SerializeFragment(c);
   auto index = static_cast<uint32_t>(doc_.drawings_.size());
-  doc_.drawings_.push_back(std::move(d));
   if (local == "drawing" || local == "pict" || local == "object") FindTextBoxes(obj, index);
+  // Nothing of it is in the store when it's shown from a kept block or a text box: keep it here.
+  if (!f.capture) d.keptXml = std::move(f.objectXml);
+  doc_.drawings_.push_back(std::move(d));
 }
 
 void Reader::FindTextBoxes(pugi::xml_node from, uint32_t drawing) {
@@ -552,7 +984,7 @@ void Reader::FindTextBoxes(pugi::xml_node from, uint32_t drawing) {
     if (n.type() != pugi::node_element) continue;
     if (pkg::IsElement(n, pkg::mce::kNamespace, "Fallback")) continue;
     if (pkg::LocalNameOf(n) == "txbxContent" && NsFromUri(pkg::NamespaceOf(n)) == Ns::W) {
-      textBoxes_.push_back({n, drawing});
+      textBoxes_.push_back({pkg::RoundTripStore::SerializeFragment(n), drawing});
       continue;
     }
     for (auto c = n.last_child(); c; c = c.previous_sibling()) work.push_back(c);
@@ -565,53 +997,54 @@ void Reader::ReadTextBoxes() {
   // regenerates the drawing, from D4).
   const Schema& s = Schema::Get();
   ElemDefId def = s.Child(s.RootType(), Name("txbxContent"));
+  bool checkMust = checkMust_;
+  checkMust_ = false;  // the part's own pass saw these elements
   for (size_t i = 0; i < textBoxes_.size(); ++i) {
-    PendingTextBox tb = textBoxes_[i];
-    // The namespaces in scope where the text box is: its ancestors' declarations, outermost first.
-    std::vector<pugi::xml_node> chain;
-    for (pugi::xml_node n = tb.txbx.parent(); n && n.type() == pugi::node_element; n = n.parent()) chain.push_back(n);
-    scope_.clear();
-    for (size_t k = chain.size(); k-- > 0;) PushBindings(chain[k], true);
+    std::string xml = std::move(textBoxes_[i].xml);
+    uint32_t drawing = textBoxes_[i].drawing;
+    pkg::XmlPull pull(xml, doc_.package_->GetLimits());
+    Event e;
+    do e = pull.Next();
+    while (e != Event::StartElement && e != Event::Error && e != Event::EndDocument);
+    if (e != Event::StartElement) continue;
     ElemId root = doc_.tree_.Add(def, kNoElem);
     E(root).flags |= kDetached;
     uint32_t savedPara = curPara_;
     curPara_ = kNone;
-    Walk(tb.txbx, root, false);
+    Stream(pull, root, false, true);  // our own serialization: it can't be damaged
     curPara_ = savedPara;
-    // Walk made the story; link it to its drawing.
+    // Stream made the story; link it to its drawing.
     for (size_t k = doc_.stories_.size(); k-- > 0;) {
       if (doc_.stories_[k].root != root) continue;
-      doc_.stories_[k].drawing = tb.drawing;
-      doc_.drawings_[tb.drawing].textBoxes.push_back(static_cast<uint32_t>(k));
+      doc_.stories_[k].drawing = drawing;
+      doc_.drawings_[drawing].textBoxes.push_back(static_cast<uint32_t>(k));
       break;
     }
   }
+  checkMust_ = checkMust;
   textBoxes_.clear();
-  scope_.clear();
 }
 
 // ---------- Parts ----------
 
-void Reader::SetUpPrefixes(Part& part, pugi::xml_node rootXml) {
+void Reader::SetUpPrefixes(Part& part, const pkg::XmlPull& pull) {
   // The writer names each namespace with the prefix the root declares for it, and declares the
   // ones the root doesn't.
   bool strict = false;
   auto declared = [&](std::string_view prefix) {
-    for (auto a : rootXml.attributes())
-      if (std::string_view(a.name()) == (prefix.empty() ? std::string("xmlns") : "xmlns:" + std::string(prefix)))
-        return true;
+    for (const auto& a : pull.Attributes())
+      if (a.IsNamespaceDecl() && (prefix.empty() ? a.qname == "xmlns" : a.qname != "xmlns" && a.local == prefix)) return true;
     return false;
   };
-  for (auto a : rootXml.attributes()) {
-    std::string_view q = a.name();
-    if (!q.starts_with("xmlns:")) continue;
-    Ns ns = NsFromUri(a.value());
-    if (ns == Ns::W && IsStrictUri(a.value())) strict = true;
+  for (const auto& a : pull.Attributes()) {
+    if (!a.qname.starts_with("xmlns:")) continue;
+    Ns ns = NsFromUri(a.value);
+    if (ns == Ns::W && IsStrictUri(a.value)) strict = true;
     if (ns == Ns::W || ns == Ns::R || ns == Ns::W14 || ns == Ns::M) {
       size_t i = static_cast<size_t>(ns);
       if (part.prefix[i].empty()) {
-        part.prefix[i] = std::string(q.substr(6));
-        part.uri[i] = a.value();
+        part.prefix[i] = std::string(a.local);
+        part.uri[i] = a.value;
       }
     }
   }
@@ -639,16 +1072,30 @@ Status Reader::ReadPart(const std::string& name, PartKind kind) {
   std::vector<uint8_t> bytes;
   Status st = pkg.ReadPart(name, bytes);
   if (!st.Ok()) return st;
-  pkg::XmlDom dom;
-  if (!(st = dom.Parse(AsText(bytes), pkg.GetLimits(), name.substr(1))).Ok()) return st;
-  pugi::xml_node rootXml = dom.Root();
-  scope_.clear();
+  pkg::XmlPull pull(AsText(bytes), pkg.GetLimits(), name.substr(1));
+
+  // What comes before the root (the declaration, comments) is kept before it.
+  std::vector<std::string> prolog;
+  Event e;
+  for (;;) {
+    e = pull.Next();
+    if (e == Event::Error) return pull.GetStatus();
+    if (e == Event::StartElement || e == Event::EndDocument) break;
+    if (e == Event::Comment) prolog.push_back(CommentFragment(pull.Text()));
+    else if (e == Event::ProcessingInstruction) prolog.push_back(PIFragment(pull.QName(), pull.Text()));
+  }
+  if (e != Event::StartElement) return Status::Fail(Status::Code::Damaged, "Part " + name.substr(1) + " is damaged.");
+  if (std::string decl = DeclarationFragment(pull.Source()); !decl.empty()) prolog.insert(prolog.begin(), std::move(decl));
+
   const Schema& s = Schema::Get();
-  ElemDefId rootDef = s.Child(s.RootType(), NameOf(NsOf(rootXml), pkg::QNameLocal(rootXml.name())));
+  ElemDefId rootDef = s.Child(s.RootType(), NameOf(NsFromUri(pull.NamespaceUri()), pull.LocalName()));
   if (rootDef == kNoDef || s.Elem(rootDef).local == "txbxContent") {
     if (kind == PartKind::Document)
       return Status::Fail(Status::Code::Unsupported, "This file isn't a Word document: its main part is something else.");
-    return Status{};  // not WordprocessingML: the part stays as it is
+    // Not WordprocessingML: the part stays as it is, but it must still be well-formed.
+    while ((e = pull.Next()) != Event::EndDocument)
+      if (e == Event::Error) return pull.GetStatus();
+    return Status{};
   }
 
   Part part;
@@ -657,20 +1104,27 @@ Status Reader::ReadPart(const std::string& name, PartKind kind) {
   part.docNode = nextNode_++;
   part.root = doc_.tree_.Add(rootDef, kNoElem);
   doc_.tree_.elems[part.root].node = nextNode_++;
-  part.mustUnderstand = pkg::mce::CheckPart(rootXml, understood_).mustUnderstand;
   curPart_ = static_cast<uint32_t>(doc_.parts_.size());
   partsRead_[key] = curPart_;
   doc_.parts_.push_back(std::move(part));
-
-  // What surrounds the root (the declaration, comments) belongs to the part's document node.
   ElemId root = doc_.parts_[curPart_].root;
-  doc_.store_.CaptureChildren(dom.Doc(), doc_.parts_[curPart_].docNode, [&](pugi::xml_node c) -> pkg::NodeId {
-    return c == rootXml ? doc_.tree_.elems[root].node : pkg::kNoNode;
-  });
+  pkg::NodeId rootNode = E(root).node;
+  for (auto& xml : prolog) doc_.store_.Add(rootNode, pkg::Fragment{pkg::Slot::Before, {}, std::move(xml)});
+
   // The prefixes the writer uses must be known before inner elements are checked against them.
-  SetUpPrefixes(doc_.parts_[curPart_], rootXml);
-  Walk(rootXml, root, true);
+  SetUpPrefixes(doc_.parts_[curPart_], pull);
+  checkMust_ = true;
+  CheckMustUnderstand(pull);
+  if (!(st = Stream(pull, root, true, false)).Ok()) return st;
+  // What comes after the root is kept after it.
+  while ((e = pull.Next()) != Event::EndDocument) {
+    if (e == Event::Error) return pull.GetStatus();
+    if (e == Event::Comment) doc_.store_.Add(rootNode, pkg::Fragment{pkg::Slot::After, {}, CommentFragment(pull.Text())});
+    else if (e == Event::ProcessingInstruction)
+      doc_.store_.Add(rootNode, pkg::Fragment{pkg::Slot::After, {}, PIFragment(pull.QName(), pull.Text())});
+  }
   ReadTextBoxes();
+  checkMust_ = false;
   curPart_ = kNone;
   return Status{};
 }
@@ -765,6 +1219,10 @@ Status Reader::Run() {
     }
   }
   doc_.BuildIndexes();
+  // The arena grew in steps; read-only from here on (until D2 edits), it needs no spare room.
+  doc_.tree_.elems.shrink_to_fit();
+  doc_.tree_.attrs.shrink_to_fit();
+  doc_.paras_.shrink_to_fit();
   return Status{};
 }
 
