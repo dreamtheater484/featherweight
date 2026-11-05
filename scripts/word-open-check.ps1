@@ -178,7 +178,8 @@ $noticeText = '(?i)feature is not (available|installed)|Microsoft Office Setup p
 $repairText = '(?i)unreadable content|recover the contents|repair|is corrupt|appears to be corrupted|found a problem|problem with (its|the) contents|cannot be opened because there are problems'
 
 $files = foreach ($p in $Paths) {
-  if (Test-Path -LiteralPath $p -PathType Container) { Get-ChildItem -LiteralPath $p -Recurse -File -Include *.docx, *.docm, *.dotx, *.dotm | Sort-Object FullName }
+  # Filtered by hand: with -LiteralPath, Windows PowerShell's -Include lets every file through.
+  if (Test-Path -LiteralPath $p -PathType Container) { Get-ChildItem -LiteralPath $p -Recurse -File | Where-Object { $_.Extension -in ".docx", ".docm", ".dotx", ".dotm" } | Sort-Object FullName }
   elseif (Test-Path -LiteralPath $p) { Get-Item -LiteralPath $p }
   else { Write-Warning "not found: $p" }
 }
