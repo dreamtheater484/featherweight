@@ -476,8 +476,12 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
     emit(std::u16string_view(t).substr(covered), styles_.Intern(h), RunPaint());
   }
 
-  const bool markHidden = (markProps.vanish && !options_.showHiddenText) || markProps.specVanish;
-  out.empty = markHidden && !visible && out.prefix == 0;
+  // A deleted paragraph mark joins the paragraph to the next in Word's final view, so one with
+  // nothing of its own left to show is gone.
+  const Node markRPr = doc_.ParaNode(para).Child(Name("pPr")).Child(Name("rPr"));
+  const bool markDeleted = markRPr && (markRPr.Child(Name("del")) || markRPr.Child(Name("moveFrom")));
+  const bool markHidden = (markProps.vanish && !options_.showHiddenText) || markProps.specVanish || markDeleted;
+  out.empty = markHidden && !visible && (out.prefix == 0 || markDeleted);  // a deleted mark takes its label along
   text::TextStyle mark = StyleOf(markProps, false);
   out.fw.markStyle = styles_.Intern(mark);
   out.fw.text = out.text;
