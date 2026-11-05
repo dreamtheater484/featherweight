@@ -120,6 +120,9 @@ std::optional<ListLabel> Document::Label(uint32_t para) const {
   Caches& c = *caches_;
   uint32_t story = paras_[para].story;
   if (story == kNone) return std::nullopt;
+  // Not in a list: no label, without numbering the story as far as here (after an edit, a big
+  // table's cells would each wait for that).
+  if (!InList(para) || ParaNode(para).DisplayOnly()) return std::nullopt;
   if (c.labelPass.size() < stories_.size()) c.labelPass.resize(stories_.size());
   Caches::LabelPass& pass = c.labelPass[story];
   if (pass.paras.empty()) pass.paras = StoryParagraphs(story);
@@ -128,8 +131,8 @@ std::optional<ListLabel> Document::Label(uint32_t para) const {
   auto& numSeen = pass.numSeen;
   while (!pass.Passed(para) && pass.next < pass.paras.size()) {
     uint32_t pi = pass.paras[pass.next++];
+    if (!InList(pi) || ParaNode(pi).DisplayOnly()) continue;
     const ParaProps& pp = ResolvedPara(pi);
-    if (pp.numId.empty() || ParaNode(pi).DisplayOnly()) continue;
     int32_t level = pp.ilvl;
     Node lvl = NumberingLevel(pp.numId, level);
     if (!lvl) continue;

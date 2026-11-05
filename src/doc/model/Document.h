@@ -372,6 +372,9 @@ class Document {
   RunProps StyleChainRun(std::string_view styleId) const;
   ParaProps StyleChainPara(std::string_view styleId) const;
   std::optional<ListLabel> Label(uint32_t para) const;
+  // Whether ResolvedPara(para).numId isn't empty, without resolving the rest (numbering a story,
+  // or an edit asking which paragraphs after it may be numbered again, doesn't wait for that).
+  bool InList(uint32_t para) const;
   TableProps ResolvedTable(Node tbl) const;
   RowProps ResolvedRow(Node tr) const;
   CellProps ResolvedCell(Node tc) const;
