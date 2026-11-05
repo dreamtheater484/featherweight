@@ -321,7 +321,7 @@ class DocPage::Panel : public PanelContent {
   }
 
   void Done(const edit::Result& r) {
-    p_.host_.keep(r);
+    p_.host_.keep(r, false);
     shown_ = {};  // what the document has now, also after a refusal
   }
 
@@ -491,7 +491,7 @@ void DocPage::Execute(int cmd) {
     case CmdLandscape: {
       edit::PageSetup s;
       s.landscape = cmd == CmdLandscape;
-      host_.keep(edit::SetPageSetup(editor_, first, last, s));
+      host_.keep(edit::SetPageSetup(editor_, first, last, s), false);
       return;
     }
     case CmdMarginsNormal:
@@ -510,7 +510,7 @@ void DocPage::Execute(int cmd) {
       c.count = cmd - CmdColumnsOne + 1;
       c.space = now.space;
       c.line = now.separator && c.count > 1;
-      host_.keep(edit::SetColumns(editor_, first, last, c));
+      host_.keep(edit::SetColumns(editor_, first, last, c), false);
       return;
     }
     case CmdPageBreak: Break(false); return;
@@ -520,12 +520,13 @@ void DocPage::Execute(int cmd) {
     case CmdSectionEvenPage: SectionBreak(SectionStart::EvenPage); return;
     case CmdSectionOddPage: SectionBreak(SectionStart::OddPage); return;
     case CmdDeleteSectionBreak:
-      host_.apply(edit::DeleteSectionBreak(editor_, edit::SectionOf(Doc(), host_.selection().second.para)));
+      // The section's pages all take the next one's setup: laid out like a change of the page.
+      host_.keep(edit::DeleteSectionBreak(editor_, edit::SectionOf(Doc(), host_.selection().second.para)), true);
       return;
     case CmdHyphenation: {
       edit::Hyphenation h;
       h.automatic = !Doc().Settings().autoHyphenation;
-      host_.keep(edit::SetHyphenation(editor_, h));
+      host_.keep(edit::SetHyphenation(editor_, h), false);
       return;
     }
     default: return;
@@ -539,7 +540,7 @@ void DocPage::Margins(int32_t top, int32_t bottom, int32_t left, int32_t right) 
   s.bottom = Twips(bottom);
   s.left = Twips(left);
   s.right = Twips(right);
-  host_.keep(edit::SetPageSetup(editor_, first, last, s));
+  host_.keep(edit::SetPageSetup(editor_, first, last, s), false);
 }
 
 // A break replaces the selection, as typing does; one undo step.

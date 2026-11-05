@@ -173,8 +173,10 @@ DocView::RulerInfo DocView::MeasureRuler() {
   int first, last;
   VisiblePages(first, last);
   int page = currentPage_;
+  // (Only once its page is laid out: after a change of the page, the rest is laid out in idle time
+  // and the rulers don't force it in a paint.)
   std::optional<layout::Layout::Caret> caret;
-  if (Editing()) caret = CaretBox();
+  if (Editing() && pagination_->LaidOut(focus_)) caret = CaretBox();
   if (caret && static_cast<int>(caret->page) >= first && static_cast<int>(caret->page) <= last)
     page = static_cast<int>(caret->page);
   else
@@ -654,7 +656,9 @@ void DocView::RulerMouseUp() {
     }
     AfterFormat({});
   };
-  auto section = [&](const edit::Result& res) {
+  // A change of the page: the first pages now, the rest in idle time (plan §11).
+  auto section = [&](const edit::Result& res) { ApplyPageChange(res, false); };
+  auto table = [&](const edit::Result& res) {
     if (!res) host_.ViewMessage(BannerKind::Warning, std::wstring(res.message.begin(), res.message.end()));
     else AfterFormat({});
   };
@@ -708,8 +712,8 @@ void DocView::RulerMouseUp() {
     }
     case RulerPart::CellEdge:
       if (d.hit.index < 0 || d.hit.index >= static_cast<int>(r.cells.size())) return;
-      return section(editor_->MoveColumnBorder({focus_.para, focus_.offset}, r.cells[d.hit.index].line,
-                                               ToTwips(d.at - d.start).Value()));
+      return table(editor_->MoveColumnBorder({focus_.para, focus_.offset}, r.cells[d.hit.index].line,
+                                             ToTwips(d.at - d.start).Value()));
     case RulerPart::ColumnEnd:
     case RulerPart::ColumnStart: {
       const int i = d.hit.index;

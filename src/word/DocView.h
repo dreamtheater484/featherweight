@@ -460,9 +460,10 @@ class DocView : public PagedView {
   std::unique_ptr<DocFormat> format_;  // after the editor: it goes first
   std::unique_ptr<DocTable> table_;    // tables (D3), likewise
   std::unique_ptr<DocPage> page_;      // page layout (D3), likewise
-  // After a change of the page: the pages on screen laid out now, the rest in idle time, and the
-  // caret where it was (drawn once its page is laid out again). False, with the refusal shown.
-  bool ApplyPageChange(const fw::doc::edit::Result& r);
+  // After a change of the page: the first pages laid out now, the rest in idle time, and the
+  // caret where it was or, with `caret`, where the result says (drawn once its page is laid out
+  // again). False, with the refusal shown.
+  bool ApplyPageChange(const fw::doc::edit::Result& r, bool caret);
   // The cells a selection across cells covers, as drawn (DrawRanges).
   Rects cellRects_;
   TextPos cellFrom_, cellTo_;
