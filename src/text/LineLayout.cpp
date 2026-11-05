@@ -464,15 +464,15 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
   // Font fallback, for characters the font doesn't have.
   std::vector<detail::LocaleRange> locales{{start, end, sf.locale}};
   detail::TextSource source(shape, rtl, locales, nullptr);
-  const DWRITE_FONT_WEIGHT weight = sf.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL;
+  // The base face as DirectWrite names it: "Calibri" at weight 300 for Word's "Calibri Light".
   for (uint32_t pos = start; pos < end;) {
     UINT32 mapped = 0;
     ComPtr<IDWriteFont> font;
     FLOAT scale = 1;
     const Face* face = base;
-    if (FAILED(fonts.Fallback()->MapCharacters(&source, pos, end - pos, fonts.Collection(), family.c_str(), weight,
-                                               sf.italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
-                                               DWRITE_FONT_STRETCH_NORMAL, &mapped, &font, &scale)) ||
+    if (FAILED(fonts.Fallback()->MapCharacters(&source, pos, end - pos, fonts.Collection(), base->Family().c_str(),
+                                               base->Weight(), base->Style(), DWRITE_FONT_STRETCH_NORMAL, &mapped,
+                                               &font, &scale)) ||
         mapped == 0) {
       mapped = end - pos;
       scale = 1;
@@ -493,6 +493,13 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
     seg.ascent = m.ascent + rise;
     seg.descent = m.descent - rise;
     seg.lineGap = m.lineGap;
+    if (style.verticalAlign != VerticalAlign::Baseline) {
+      // Superscript and subscript text sizes its line as the run's text would on the baseline, at
+      // its own size: Word doesn't make a line taller for a footnote reference.
+      seg.ascent = bm.ascent + style.baselineShift;
+      seg.descent = bm.descent - style.baselineShift;
+      seg.lineGap = bm.lineGap;
+    }
     ShapePiece(seg, script, sf.locale, connected, style, substituted ? numbers : nullptr);
     auto index = static_cast<int32_t>(segs.size());
     for (uint32_t i = seg.start; i < seg.end; ++i) segOf[i] = index;
@@ -783,7 +790,7 @@ Fit LineBreaker::Impl::FindBreak(uint32_t a, float s0, float s1, bool first) {
 // (Measured against Word 16.0, build 20326, in compatibility mode 15: probes in Courier New, in
 // 0.5 pt steps, hit both limits exactly.)
 bool LineBreaker::Impl::Squeezes(uint32_t segFrom, uint32_t upTo, float over, float limit, float lastEnd) const {
-  if (p.format.alignment != Alignment::Justify) return false;
+  if (p.format.alignment != Alignment::Justify || !p.format.squeezeSpaces) return false;
   uint32_t spaces = 0;
   float spaceWidth = 0;
   for (uint32_t k = segFrom; k < upTo; ++k) {

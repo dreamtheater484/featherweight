@@ -5,6 +5,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <vector>
+
+#include <dwrite.h>
+#include <wrl/client.h>
 
 #include "core/OpenTimings.h"
 #include "core/Strings.h"
@@ -57,25 +61,51 @@ uint32_t ToModel(Engine& e, const LineBox& lb, uint32_t layoutOffset) {
 
 }  // namespace
 
+// A turned line's frame on the page (LineBox::turn).
+static draw::Matrix TurnOf(const LineBox& lb) {
+  return draw::Matrix::Rotate(90.0f * static_cast<float>(lb.turn)) * draw::Matrix::Translate(lb.turnX, lb.turnY);
+}
+
+// A page point in a line's own frame: itself unless the line is turned.
+static draw::Point InFrame(const LineBox& lb, float x, float y) {
+  switch (lb.turn) {
+    case 1: return {y - lb.turnY, lb.turnX - x};
+    case 2: return {lb.turnX - x, lb.turnY - y};
+    case 3: return {lb.turnY - y, x - lb.turnX};
+    default: return {x, y};
+  }
+}
+
+// A rectangle in a line's frame on the page (turned by quarter turns, it stays a rectangle).
+static Rect OnPage(const LineBox& lb, const Rect& r) {
+  if (!lb.turn) return r;
+  const draw::Matrix m = TurnOf(lb);
+  const draw::Point a = m.Apply({r.left, r.top}), b = m.Apply({r.right, r.bottom});
+  return {std::min(a.x, b.x), std::min(a.y, b.y), std::max(a.x, b.x), std::max(a.y, b.y)};
+}
+
 std::optional<TextPos> Layout::HitTest(size_t page, float x, float y) const {
   Engine& e = impl_->engine;
   if (page >= e.Pages().size()) return std::nullopt;
   const Page& p = e.Pages()[page];
   const LineBox* best = nullptr;
   float bestDistance = 1e30f;
+  float bestX = x;
   for (const LineBox& lb : p.lines) {
     if (lb.para == kNone) continue;
-    float dy = y < lb.top ? lb.top - y : y >= lb.top + lb.height ? y - (lb.top + lb.height) : 0;
+    const draw::Point at = InFrame(lb, x, y);
+    float dy = at.y < lb.top ? lb.top - at.y : at.y >= lb.top + lb.height ? at.y - (lb.top + lb.height) : 0;
     float left = lb.x + lb.line.left, right = lb.x + lb.line.right;
-    float dx = x < left ? left - x : x > right ? x - right : 0;
+    float dx = at.x < left ? left - at.x : at.x > right ? at.x - right : 0;
     float d = dy * 4 + dx;  // the line under the point first, then the nearest
     if (d < bestDistance) {
       bestDistance = d;
       best = &lb;
+      bestX = at.x;
     }
   }
   if (!best) return std::nullopt;
-  uint32_t offset = best->line.HitTest(x - best->x);
+  uint32_t offset = best->line.HitTest(bestX - best->x);
   return TextPos{best->para, ToModel(e, *best, offset)};
 }
 
@@ -92,8 +122,12 @@ std::optional<Layout::Caret> Layout::CaretAt(TextPos pos) {
       e.BuildText(lb.para, PageFields(), pt);
       uint32_t at = pt.LayoutOffset(pos.offset);
       bool lastOfPara = lb.line.ending == text::LineEnd::ParagraphEnd;
-      if (at >= lb.line.start && (at < lb.line.end || (at == lb.line.end && lastOfPara)))
-        return Caret{i, lb.x + lb.line.CaretX(at), lb.top, lb.top + lb.height};
+      if (at >= lb.line.start && (at < lb.line.end || (at == lb.line.end && lastOfPara))) {
+        const float cx = lb.x + lb.line.CaretX(at);
+        if (!lb.turn) return Caret{i, cx, lb.top, lb.top + lb.height};
+        const Rect r = OnPage(lb, {cx, lb.top, cx, lb.top + lb.height});
+        return Caret{i, r.left, r.top, r.top};
+      }
     }
   }
 }
@@ -112,13 +146,15 @@ std::vector<std::pair<size_t, Rect>> Layout::Ranges(TextPos from, TextPos to) {
       ParaText pt;
       e.BuildText(lb.para, PageFields(), pt);
       uint32_t a = lb.para == from.para ? pt.LayoutOffset(from.offset) : 0;
-      uint32_t b = lb.para == to.para ? pt.LayoutOffset(to.offset) : UINT32_MAX;
+      const uint32_t end = lb.para == to.para ? pt.LayoutOffset(to.offset) : UINT32_MAX;
+      // The line that holds the end is the last: nothing after it is in the range, even when the
+      // range ends exactly at the line's end.
+      if (lb.para == to.para && end <= lb.line.end) finished = true;
       a = std::max(a, lb.line.start);
-      b = std::min(b, lb.line.end);
+      const uint32_t b = std::min(end, lb.line.end);
       if (a >= b) continue;
       started = true;
-      for (const auto& [l, r] : lb.line.Ranges(a, b)) out.push_back({i, {lb.x + l, lb.top, lb.x + r, lb.top + lb.height}});
-      if (lb.para == to.para && b < lb.line.end) finished = true;
+      for (const auto& [l, r] : lb.line.Ranges(a, b)) out.push_back({i, OnPage(lb, {lb.x + l, lb.top, lb.x + r, lb.top + lb.height})});
     }
     if (started && e.Pages()[i].lines.empty()) break;
   }
@@ -188,10 +224,9 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
   const Page& p = e.Pages()[page];
   auto paintLine = [&](const LineBox& lb) {
     const bool clip = lb.clip.Width() > 0;
-    if (clip) {
-      painter.Save();
-      painter.ClipRect({lb.clip.left, lb.clip.top, lb.clip.right, lb.clip.bottom});
-    }
+    if (clip || lb.turn) painter.Save();
+    if (clip) painter.ClipRect({lb.clip.left, lb.clip.top, lb.clip.right, lb.clip.bottom});
+    if (lb.turn) painter.Transform(TurnOf(lb));
     for (const text::GlyphPiece& g : lb.line.pieces) {
       const size_t at = lb.paint + g.run;
       if (at >= p.paints.size()) continue;
@@ -238,7 +273,7 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
         if (rp->doubleStrike) Line(painter, x1, y - t * 2, x2, y - t * 2, t, color);
       }
     }
-    if (clip) painter.Restore();
+    if (clip || lb.turn) painter.Restore();
   };
   // A text box's lines go on top of its own shape, which is filled.
   auto drawOne = [&](const DrawingBox& d) {
@@ -259,23 +294,170 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
 
 // ---- Fonts
 
+namespace {
+
+// The East Asian scripts a font can be for, by Windows charset.
+enum class Script { None, Japanese, Korean, SimplifiedChinese, TraditionalChinese };
+
+// Well-known East Asian families, by their English and native names: the script, whether they're
+// serif (Mincho, Song, Ming, Batang) and whether fixed pitch (MS Mincho; MS PMincho is proportional).
+struct KnownFamily {
+  const wchar_t* names[3];
+  Script script;
+  bool serif, fixed;
+};
+constexpr KnownFamily kKnownFamilies[] = {
+    {{L"MS Mincho", L"\xFF2D\xFF33 \x660E\x671D", L"MS \x660E\x671D"}, Script::Japanese, true, true},
+    {{L"MS PMincho", L"\xFF2D\xFF33 \xFF30\x660E\x671D", L"MS P\x660E\x671D"}, Script::Japanese, true, false},
+    {{L"MS Gothic", L"\xFF2D\xFF33 \x30B4\x30B7\x30C3\x30AF", L"MS \x30B4\x30B7\x30C3\x30AF"}, Script::Japanese, false, true},
+    {{L"MS PGothic", L"\xFF2D\xFF33 \xFF30\x30B4\x30B7\x30C3\x30AF", L"MS P\x30B4\x30B7\x30C3\x30AF"}, Script::Japanese, false, false},
+    {{L"Yu Mincho", L"\x6E38\x660E\x671D", nullptr}, Script::Japanese, true, false},
+    {{L"Yu Gothic", L"\x6E38\x30B4\x30B7\x30C3\x30AF", nullptr}, Script::Japanese, false, false},
+    {{L"Meiryo", L"\x30E1\x30A4\x30EA\x30AA", nullptr}, Script::Japanese, false, false},
+    {{L"SimSun", L"\x5B8B\x4F53", nullptr}, Script::SimplifiedChinese, true, false},
+    {{L"NSimSun", L"\x65B0\x5B8B\x4F53", nullptr}, Script::SimplifiedChinese, true, true},
+    {{L"SimHei", L"\x9ED1\x4F53", nullptr}, Script::SimplifiedChinese, false, false},
+    {{L"Microsoft YaHei", L"\x5FAE\x8F6F\x96C5\x9ED1", nullptr}, Script::SimplifiedChinese, false, false},
+    {{L"KaiTi", L"\x6977\x4F53", nullptr}, Script::SimplifiedChinese, true, false},
+    {{L"FangSong", L"\x4EFF\x5B8B", nullptr}, Script::SimplifiedChinese, true, false},
+    {{L"PMingLiU", L"\x65B0\x7D30\x660E\x9AD4", nullptr}, Script::TraditionalChinese, true, false},
+    {{L"MingLiU", L"\x7D30\x660E\x9AD4", nullptr}, Script::TraditionalChinese, true, true},
+    {{L"Microsoft JhengHei", L"\x5FAE\x8EDF\x6B63\x9ED1\x9AD4", nullptr}, Script::TraditionalChinese, false, false},
+    {{L"DFKai-SB", L"\x6A19\x6977\x9AD4", nullptr}, Script::TraditionalChinese, true, false},
+    {{L"Batang", L"\xBC14\xD0D5", nullptr}, Script::Korean, true, false},
+    {{L"BatangChe", L"\xBC14\xD0D5\xCCB4", nullptr}, Script::Korean, true, true},
+    {{L"Gungsuh", L"\xAD81\xC11C", nullptr}, Script::Korean, true, false},
+    {{L"Gulim", L"\xAD74\xB9BC", nullptr}, Script::Korean, false, false},
+    {{L"GulimChe", L"\xAD74\xB9BC\xCCB4", nullptr}, Script::Korean, false, true},
+    {{L"Dotum", L"\xB3CB\xC6C0", nullptr}, Script::Korean, false, false},
+    {{L"Malgun Gothic", L"\xB9D1\xC740 \xACE0\xB515", nullptr}, Script::Korean, false, false},
+};
+
+const KnownFamily* Known(std::wstring_view family) {
+  const std::wstring key = ToLower(std::wstring(family));
+  for (const KnownFamily& k : kKnownFamilies)
+    for (const wchar_t* n : k.names)
+      if (n && ToLower(std::wstring(n)) == key) return &k;
+  return nullptr;
+}
+
+// The script of an East Asian family the font table describes, or None: its charset; else the
+// code pages it covers (sig csb0 bits 17-21), when they name one script; else its name's letters.
+Script ScriptOf(const FontInfo* f, std::wstring_view family) {
+  if (f) {
+    if (f->charset == "80") return Script::Japanese;
+    if (f->charset == "81" || f->charset == "82") return Script::Korean;
+    if (f->charset == "86") return Script::SimplifiedChinese;
+    if (f->charset == "88") return Script::TraditionalChinese;
+    const uint32_t csb0 = f->sig[4];
+    const bool jp = csb0 & (1u << 17), sc = csb0 & (1u << 18), kr = csb0 & ((1u << 19) | (1u << 21)),
+               tc = csb0 & (1u << 20);
+    if (jp + sc + kr + tc == 1) return jp ? Script::Japanese : sc ? Script::SimplifiedChinese : kr ? Script::Korean : Script::TraditionalChinese;
+  }
+  bool han = false;
+  for (wchar_t c : family) {
+    if ((c >= 0xAC00 && c <= 0xD7AF) || (c >= 0x1100 && c <= 0x11FF) || (c >= 0x3130 && c <= 0x318F)) return Script::Korean;
+    if ((c >= 0x3040 && c <= 0x30FF) || (c >= 0xFF66 && c <= 0xFF9F)) return Script::Japanese;
+    if (c >= 0x4E00 && c <= 0x9FFF) han = true;
+  }
+  return han ? Script::SimplifiedChinese : Script::None;
+}
+
+// Whether a name says serif: Mincho, Song, Ming, Kai, Fang, Batang, Myeongjo, Gungsuh.
+bool SerifName(std::wstring_view family) {
+  const std::wstring n = ToLower(std::wstring(family));
+  for (const wchar_t* k : {L"\x660E\x671D", L"mincho", L"\x5B8B", L"song", L"sun", L"\x660E\x9AD4", L"ming", L"\x6977",
+                           L"kai", L"\x4EFF", L"fang", L"\xBC14\xD0D5", L"batang", L"\xBA85\xC870", L"myeongjo",
+                           L"\xAD81\xC11C", L"gungsuh"})
+    if (n.find(k) != std::wstring::npos) return true;
+  return false;
+}
+
+int HexByte(std::string_view s, size_t at) {
+  int v = 0;
+  for (size_t i = at; i < at + 2 && i < s.size(); ++i) {
+    const char c = s[i];
+    const int d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+    if (d < 0) return -1;
+    v = v * 16 + d;
+  }
+  return s.size() >= at + 2 ? v : -1;
+}
+
+// Whether the PC has a family, by any of its localized names.
+bool SystemHas(const wchar_t* family) {
+  static const Microsoft::WRL::ComPtr<IDWriteFontCollection> fonts = [] {
+    Microsoft::WRL::ComPtr<IDWriteFactory> factory;
+    Microsoft::WRL::ComPtr<IDWriteFontCollection> collection;
+    if (SUCCEEDED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                                      reinterpret_cast<IUnknown**>(factory.GetAddressOf()))))
+      factory->GetSystemFontCollection(&collection);
+    return collection;
+  }();
+  UINT32 index = 0;
+  BOOL exists = FALSE;
+  return fonts && SUCCEEDED(fonts->FindFamilyName(family, &index, &exists)) && exists;
+}
+
+// The East Asian family drawn for a missing one of the script: the closest in style that the PC
+// has, ending with the ones every Windows 10 and 11 has (Yu Gothic, MS Gothic, SimSun, Microsoft
+// YaHei, Microsoft JhengHei, Malgun Gothic). Empty if it has none of them.
+std::wstring EastAsianSubstitute(Script script, bool serif, bool fixed) {
+  std::vector<const wchar_t*> c;
+  switch (script) {
+    case Script::Japanese:
+      if (serif) c = fixed ? std::vector<const wchar_t*>{L"MS Mincho", L"Yu Mincho", L"MS Gothic", L"Yu Gothic"}
+                           : std::vector<const wchar_t*>{L"MS PMincho", L"Yu Mincho", L"MS PGothic", L"Yu Gothic"};
+      else c = fixed ? std::vector<const wchar_t*>{L"MS Gothic", L"Yu Gothic"}
+                     : std::vector<const wchar_t*>{L"MS PGothic", L"Yu Gothic", L"Meiryo", L"MS Gothic"};
+      break;
+    case Script::SimplifiedChinese:
+      c = serif ? std::vector<const wchar_t*>{fixed ? L"NSimSun" : L"SimSun", L"SimSun", L"Microsoft YaHei"}
+                : std::vector<const wchar_t*>{L"Microsoft YaHei", L"SimHei", L"SimSun"};
+      break;
+    case Script::TraditionalChinese:
+      c = serif ? std::vector<const wchar_t*>{fixed ? L"MingLiU" : L"PMingLiU", L"MingLiU", L"Microsoft JhengHei"}
+                : std::vector<const wchar_t*>{L"Microsoft JhengHei", L"PMingLiU"};
+      break;
+    case Script::Korean:
+      c = serif ? std::vector<const wchar_t*>{fixed ? L"BatangChe" : L"Batang", L"Batang", L"Malgun Gothic"}
+                : std::vector<const wchar_t*>{fixed ? L"GulimChe" : L"Malgun Gothic", L"Malgun Gothic", L"Gulim", L"Dotum"};
+      break;
+    case Script::None: break;
+  }
+  for (const wchar_t* name : c)
+    if (SystemHas(name)) return name;
+  return {};
+}
+
+}  // namespace
+
 std::wstring SubstituteFamily(const Document& doc, std::wstring_view family) {
   if (!text::Fonts::BuiltInSubstitute(family).empty()) return {};
   const std::string name = WideToUtf8(family);
-  for (const FontInfo& f : doc.Fonts()) {
-    if (f.name != name) continue;
-    if (f.pitch == "fixed") return L"Courier New";
-    // PANOSE: family kind 2 is Latin text; the second digit is the serif style (11-13 sans serif).
-    if (f.panose.size() >= 4 && f.panose.substr(0, 2) == "02") {
-      const int serif = std::stoi(std::string(f.panose.substr(2, 2)), nullptr, 16);
-      if (serif >= 11 && serif <= 13) return L"Arial";
-      if (serif >= 2 && serif <= 10) return L"Times New Roman";
+  const FontInfo* f = nullptr;
+  for (const FontInfo& info : doc.Fonts())
+    if (info.name == name) {
+      f = &info;
+      break;
     }
-    if (f.family == "swiss") return L"Arial";
-    if (f.family == "roman") return L"Times New Roman";
-    if (f.family == "modern") return L"Tahoma";
-    return {};
+  // An East Asian font gets an East Asian stand-in of its script, never a Latin one, whose letters
+  // and spaces would be wrong for the text (a fixed-pitch Mincho as Courier New): by the family's
+  // own name when it's a well-known one, else by its charset, code pages or name, and its style.
+  if (const KnownFamily* k = Known(family)) return EastAsianSubstitute(k->script, k->serif, k->fixed);
+  const int serifStyle = f && f->panose.size() >= 4 && f->panose.substr(0, 2) == "02" ? HexByte(f->panose, 2) : -1;
+  if (const Script script = ScriptOf(f, family); script != Script::None) {
+    const bool serif = SerifName(family) || (serifStyle >= 2 && serifStyle <= 10);
+    return EastAsianSubstitute(script, serif, f && f->pitch == "fixed");
   }
+  if (!f) return {};
+  if (f->pitch == "fixed") return L"Courier New";
+  // PANOSE: family kind 2 is Latin text; the second digit is the serif style (11-13 sans serif).
+  if (serifStyle >= 11 && serifStyle <= 13) return L"Arial";
+  if (serifStyle >= 2 && serifStyle <= 10) return L"Times New Roman";
+  if (f->family == "swiss") return L"Arial";
+  if (f->family == "roman") return L"Times New Roman";
+  if (f->family == "modern") return L"Tahoma";
   return {};
 }
 
@@ -299,6 +481,11 @@ LayoutDump Layout::Dump(std::string source) const {
       line.story = lb.story;
       line.x = lb.x + lb.line.contentLeft;
       line.baseline = lb.baseline;
+      if (lb.turn) {  // where the turned line starts on the page
+        const draw::Point at = TurnOf(lb).Apply({static_cast<float>(line.x), static_cast<float>(line.baseline)});
+        line.x = at.x;
+        line.baseline = at.y;
+      }
       line.width = lb.line.contentRight - lb.line.contentLeft;
       float size = 0;
       for (const text::GlyphPiece& g : lb.line.pieces)

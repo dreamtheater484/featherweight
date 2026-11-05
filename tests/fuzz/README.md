@@ -9,6 +9,7 @@ One target per parser (plan §10). So far:
 - `fuzz_formula`: the formula scanner the registry uses (sheet names and cell references), and every other syntax a reference can have. Seeds: `seeds/formula`.
 - `fuzz_docx`: the Word document model (`src/doc`): the reader, what pagination asks of the model (runs, inline items, resolved properties, list labels, fields, tables) and the writer. Seeds: `seeds/docx`, a small hand-written document with every structure the model reads, and `seeds/package`. Inputs are read like `fuzz_check`'s.
 - `fuzz_drawing`: fwdraw (plan §4.5): DrawingML and VML into the shape model, preset and custom geometry, themes, picture decoding through WIC, metafiles and SVG, and drawing the result into a small software surface. Seeds: `seeds/drawing`, the corpus's drawings and a tiny picture in each format (see below).
+- `fuzz_layout`: pagination (`src/doc/layout`): the document read into the model, laid out a page at a time with the PC's fonts, hit-tested and dumped. Seeds as `fuzz_docx`'s.
 
 `make_seeds.py` makes `seeds/opc`, `seeds/package`, `seeds/formula` and `seeds/drawing` from the corpus (standard library only): `python tests/fuzz/make_seeds.py`.
 
@@ -21,6 +22,7 @@ Besides crashes and AddressSanitizer reports, each target aborts when an invaria
 - Relationships and content types that Featherweight writes read back the same.
 - Renaming references and renewing ids leaves a document that still parses.
 - Every part the document model writes back equals what it read, after canonicalization; runs and inline items stay inside their paragraph's text.
+- Pagination ends, within its page cap; every page has a size, and hit tests and carets land on the page and in the text.
 - A drawing's extent, ink bounds, wrap outline and text boxes are finite, and a decoded picture stays within its limits.
 
 ### Drawings

@@ -70,6 +70,7 @@ The totals over a corpus are the share of documents whose page count matches, an
 `fwtool lines` reads Word's PDF export (`tests/office/reference/`, made with tags by `scripts/reference-renders.ps1`) with PDFium:
 
 - Characters come in the order Word drew them. A line is a run of characters in the same container, on the same baseline (give or take half the font size, so superscripts and note marks stay on their line), that doesn't jump back to the left (except in right-to-left text). The baseline is that of the line's largest text.
+- Turned text (vertical text in text boxes and table cells) is read in its own direction: a character's angle, in quarter turns, turns its position back first, so its line runs down or up the page instead of falling apart into a line per glyph. Such a line is placed (`x`, `baseline`) where its first character is, and its header or footer half comes from there too.
 - Containers and stories come from the PDF's tag tree. Word tags table cells `TD` and `TH`, footnotes `Footnote`, endnotes `Endnote` and text boxes `Textbox` (role-mapped to `Note` and `Sect`); a line never crosses one of them.
 - Headers and footers are untagged pagination artifacts. Word doesn't say which is which, so an artifact line in the top half of the page is a header, and in the bottom half a footer.
 - A gap of at least 0.18 em between characters is a space: Word often draws no space glyph at a tab or after a note mark. PDFium's hyphen at a line end (U+0002) is written as `-`.
