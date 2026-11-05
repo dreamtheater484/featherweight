@@ -140,6 +140,31 @@ enum Cmd : int {
   CmdBookmark,
   CmdNavigationPane,
   CmdShowMarks,  // Ctrl+Shift+8
+  // Documents: tables (D3).
+  CmdTableGrid = 1150,  // the toolbar's Insert table grid (after the header and footer commands)
+  CmdTableBox,          // the toolbar's Table menu, in a table
+  CmdInsertTable,       // the Table panel, to insert a table of any size
+  CmdTextToTable,
+  CmdTableToText,
+  CmdTableInsertAbove,
+  CmdTableInsertBelow,
+  CmdTableInsertLeft,
+  CmdTableInsertRight,
+  CmdTableDeleteRows,
+  CmdTableDeleteColumns,
+  CmdTableDeleteTable,
+  CmdTableMerge,
+  CmdTableSplit,
+  CmdTableSelectCell,
+  CmdTableSelectRow,
+  CmdTableSelectColumn,
+  CmdTableSelectTable,
+  CmdTableAutoFitContents,
+  CmdTableAutoFitWindow,
+  CmdTableFixedWidth,
+  CmdTableDistributeColumns,
+  CmdTableHeaderRow,
+  CmdTableProperties,
   // Proofing in Word documents.
   CmdSpelling = 800,  // F7: the next spelling error
   CmdWordCount,

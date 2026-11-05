@@ -98,6 +98,7 @@ bool DocView::Apply(const Result& r) {
 
 void DocView::TypeText(std::u16string_view text) {
   if (text.empty()) return;
+  if (HasSelection() && table_ && table_->ReplaceCells(text)) return;  // cells selected: they're replaced
   const bool typed = !HasSelection();
   if (!Apply(HasSelection() ? editor_->Replace(SelFrom(), SelTo(), text) : editor_->InsertText(ToDoc(focus_), text))) return;
   // "1. " or "* " at the start of a paragraph starts a list (DocFormat::AutoFormat).
@@ -105,6 +106,7 @@ void DocView::TypeText(std::u16string_view text) {
 }
 
 void DocView::DeleteBy(bool forward, bool word) {
+  if (HasSelection() && table_ && table_->ReplaceCells(u"")) return;  // cells selected: they're emptied
   if (HasSelection()) {
     Apply(editor_->Delete(SelFrom(), SelTo()));
     return;
@@ -134,6 +136,10 @@ void DocView::DeleteBy(bool forward, bool word) {
 void DocView::Cut() {
   if (!Editing() || !HasSelection()) return;
   PutOnClipboard();
+  if (table_ && table_->SelectedCells()) {
+    table_->ReplaceCells(u"");
+    return;
+  }
   editor_->BeginGroup(u"Cut");
   Result r = editor_->Delete(SelFrom(), SelTo());
   editor_->EndGroup();
@@ -142,6 +148,14 @@ void DocView::Cut() {
 
 void DocView::Paste(bool formatted) {
   if (!Editing()) return;
+  if (HasSelection() && table_ && table_->SelectedCells()) {
+    // Cells selected: emptied, then the paste goes into the first, as one step.
+    editor_->BeginGroup(u"Paste");
+    table_->ReplaceCells(u"");
+    if (!HasSelection()) Paste(formatted);
+    editor_->EndGroup();
+    return;
+  }
   if (formatted) {
     // Featherweight's own copies come as HTML; Word's RTF says more than its HTML; then a
     // browser's HTML.
