@@ -141,6 +141,8 @@ TEST(Forms_FillingInContentControls) {
   editor.BreakTyping();
   CHECK(editor.InsertText(control(1).content.from, u"*") && Text(*doc, control(1).content) == u"☐");
   CHECK(doc->Para(control(1).content.from.para).text.starts_with(u"*☐! Agree"));
+  // ... in the look of the text around it, not the box's symbol font.
+  CHECK(Has(MainXml(*doc), "<w:p><w:r><w:t>*</w:t></w:r><w:sdt>") && Has(MainXml(*doc), "</w:sdt><w:r><w:t>!</w:t></w:r>"));
   CHECK(edit::PickItem(editor, control(2), 2) && Text(*doc, control(2).content) == u"Blue" && !control(2).placeholder);
   // Its first entry, "Choose an item.": the placeholder again.
   CHECK(edit::PickItem(editor, control(2), 0) && control(2).placeholder && Text(*doc, control(2).content) == u"Choose an item.");
