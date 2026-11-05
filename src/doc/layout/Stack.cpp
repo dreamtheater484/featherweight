@@ -124,7 +124,7 @@ bool Engine::Contextual(const ParaProps& a, const ParaProps& b) const { return a
 
 float Engine::SpaceBefore(const ParaProps& p, const Spacing& s) const {
   float before = p.spaceBeforeLines >= 0 ? static_cast<float>(p.spaceBeforeLines) * 12.0f / 100.0f : Pt(p.spaceBefore);
-  if (p.spaceBeforeAuto) before = s.atTop && s.prev == nullptr ? 0 : 14;
+  if (p.spaceBeforeAuto) before = s.atTop && s.prev == nullptr ? 0.0f : 14.0f;
   if (s.prev && p.contextualSpacing && Contextual(*s.prev, p)) before = 0;
   float after = s.after;
   if (s.prev && s.prev->contextualSpacing && Contextual(*s.prev, p)) after = 0;
