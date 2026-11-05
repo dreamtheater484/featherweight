@@ -13,6 +13,7 @@ add_library(fwdoc STATIC
   edit/Clip.cpp
   edit/Editor.cpp
   edit/Format.cpp
+  edit/Inline.cpp
   edit/Kept.cpp
   edit/Lists.cpp
   edit/Styles.cpp
@@ -50,6 +51,7 @@ target_compile_options(fwproof PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,
 if(FW_BUILD_TESTS)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_doc.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_docsave.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_edit.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_format.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_inline.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_proof.cpp"
     # The document tab's file (D2 "Files"): an app source, tested here with temporary folders.
     "${PROJECT_SOURCE_DIR}/tests/unit/test_docfile.cpp" "${PROJECT_SOURCE_DIR}/src/word/DocFile.cpp")

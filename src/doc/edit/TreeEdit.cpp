@@ -56,6 +56,8 @@ uint32_t QNameHash(std::string_view qname) {
 
 bool Space(char16_t c) { return c == u' ' || c == u'\t' || c == u'\n' || c == u'\r'; }
 
+bool RealNode(pkg::NodeId n) { return n != pkg::kNoNode && n != pkg::kFieldNode; }
+
 }  // namespace
 
 // The journal of one change, as the editor's history keeps it.
@@ -189,6 +191,19 @@ std::vector<uint32_t> TreeEdit::PartsOf(const Saved& elems) const {
 void TreeEdit::Reindex() {
   doc_.caches_ = std::make_unique<Document::Caches>();
   doc_.BuildIndexes();
+}
+
+void TreeEdit::Abort() {
+  if (depth_ == 0) return;
+  depth_ = 0;
+  const bool changed = !before_.empty() || !store_.empty();
+  Replay(doc_, store_, true);
+  Restore(doc_, before_);  // new elements stay in the arena, linked nowhere
+  before_.clear();
+  store_.clear();
+  touched_.clear();
+  owned_.clear();
+  if (changed) Reindex();
 }
 
 Elem& TreeEdit::Touch(ElemId id) {
@@ -448,6 +463,137 @@ void TreeEdit::RemoveAttr(ElemId elem, uint32_t name) {
   if (it == attrs.end()) return;
   attrs.erase(it);
   WriteAttrs(elem, attrs);
+}
+
+// ---------- Inline content ----------
+
+void TreeEdit::LinkAt(ElemId parent, ElemId child, ElemId before) {
+  Touch(child);
+  ElemId prev = kNoElem;
+  for (ElemId c = E(parent).first; c != kNoElem && c != before; c = E(c).next) prev = c;
+  if (prev == kNoElem) {
+    E(child).next = Touch(parent).first;
+    E(parent).first = child;
+  } else {
+    E(child).next = Touch(prev).next;
+    E(prev).next = child;
+  }
+  E(child).parent = parent;
+}
+
+void TreeEdit::Unlink(ElemId elem) {
+  const ElemId parent = E(elem).parent;
+  if (parent == kNoElem) return;
+  ElemId prev = kNoElem;
+  for (ElemId c = E(parent).first; c != kNoElem && c != elem; c = E(c).next) prev = c;
+  if (prev == kNoElem) {
+    if (E(parent).first != elem) return;
+    Touch(parent).first = E(elem).next;
+  } else {
+    Touch(prev).next = E(elem).next;
+  }
+  Touch(elem).next = kNoElem;
+}
+
+ElemId TreeEdit::InsertElement(ElemId parent, uint32_t name, ElemId before, uint32_t offset) {
+  if (parent == kNoElem) return kNoElem;
+  const ElemDefId def = S().Child(TypeOfElem(doc_.tree_, parent), name);
+  if (def == kNoDef) return kNoElem;
+  Elem e;
+  e.def = def;
+  e.parent = parent;
+  e.node = NewNode();
+  e.start = offset;
+  e.length = 0;
+  doc_.tree_.elems.push_back(e);
+  const auto id = static_cast<ElemId>(doc_.tree_.elems.size() - 1);
+  LinkAt(parent, id, before);
+  return id;
+}
+
+ElemId TreeEdit::Wrap(ElemId first, ElemId last, uint32_t name) {
+  Tree& t = doc_.tree_;
+  const ElemId parent = E(first).parent;
+  if (parent == kNoElem) return kNoElem;
+  const ElemDefId def = S().Child(TypeOfElem(t, parent), name);
+  if (def == kNoDef) return kNoElem;
+  const TypeId type = S().Elem(def).type;
+  std::vector<std::pair<ElemId, ElemDefId>> kids;  // with their definitions in the new element
+  for (ElemId c = first;; c = E(c).next) {
+    if (c == kNoElem) return kNoElem;  // `last` isn't after `first`
+    const ElemDefId kd = S().Child(type, NameOfElem(t, c));
+    if (kd == kNoDef || S().Elem(kd).type != TypeOfElem(t, c)) return kNoElem;
+    kids.emplace_back(c, kd);
+    if (c == last) break;
+  }
+  Elem w;
+  w.def = def;
+  w.parent = parent;
+  w.node = NewNode();
+  w.start = E(first).start;
+  w.length = E(last).start + E(last).length - w.start;
+  t.elems.push_back(w);
+  const auto id = static_cast<ElemId>(t.elems.size() - 1);
+  LinkAt(parent, id, first);
+  for (const auto& [c, kd] : kids) Unlink(c);
+  for (const auto& [c, kd] : kids) {
+    LinkAt(id, c, kNoElem);  // what each keeps beside it goes with it
+    E(c).def = kd;
+  }
+  return id;
+}
+
+bool TreeEdit::Unwrap(ElemId elem) {
+  Tree& t = doc_.tree_;
+  const ElemId parent = E(elem).parent;
+  if (parent == kNoElem) return false;
+  const TypeId ptype = TypeOfElem(t, parent);
+  std::vector<std::pair<ElemId, ElemDefId>> kids;
+  for (ElemId c = E(elem).first; c != kNoElem; c = E(c).next) {
+    const ElemDefId kd = S().Child(ptype, NameOfElem(t, c));
+    if (kd == kNoDef || S().Elem(kd).type != TypeOfElem(t, c)) return false;
+    kids.emplace_back(c, kd);
+  }
+  const pkg::NodeId node = E(elem).node;
+  std::vector<pkg::Fragment> before, after;
+  if (RealNode(node)) {
+    for (pkg::Fragment& f : doc_.store_.FragmentsCopy(node)) {
+      if (f.slot == pkg::Slot::Inside && !f.afterChild.empty()) return false;  // between its children
+      if (f.slot == pkg::Slot::After) after.push_back(std::move(f));
+      else before.push_back(std::move(f));  // Before, then what it keeps first inside
+    }
+  }
+  if (kids.empty()) {
+    if (!before.empty() && std::any_of(before.begin(), before.end(), [](const pkg::Fragment& f) { return f.slot == pkg::Slot::Inside; }))
+      return false;
+    RemoveElement(elem);
+    return true;
+  }
+  if ((!before.empty() && !RealNode(E(kids.front().first).node)) || (!after.empty() && !RealNode(E(kids.back().first).node)))
+    return false;  // nowhere to keep them
+  for (const auto& [c, kd] : kids) {
+    LinkAt(parent, c, elem);
+    E(c).def = kd;
+  }
+  Touch(elem).first = kNoElem;
+  Unlink(elem);
+  if (!before.empty() || !after.empty()) {
+    StoreFragments(node, {});
+    auto give = [&](ElemId to, std::vector<pkg::Fragment> moved, bool first) {
+      if (moved.empty()) return;
+      for (pkg::Fragment& f : moved) {
+        f.slot = first ? pkg::Slot::Before : pkg::Slot::After;
+        f.afterChild.clear();
+      }
+      std::vector<pkg::Fragment> there = doc_.store_.FragmentsCopy(E(to).node);
+      there.insert(first ? there.begin() : there.end(), std::make_move_iterator(moved.begin()),
+                   std::make_move_iterator(moved.end()));
+      StoreFragments(E(to).node, std::move(there));
+    };
+    give(kids.front().first, std::move(before), true);
+    give(kids.back().first, std::move(after), false);
+  }
+  return true;
 }
 
 // ---------- Runs ----------

@@ -83,6 +83,21 @@ class TreeEdit {
   ElemId CopyChild(ElemId src, ElemId parent);
   // Lets the model's indexes see what the transaction has added so far (a style, a list).
   void Reindex();
+  // Puts back everything the transaction changed so far and ends it; nothing is recorded.
+  void Abort();
+
+  // ---- Inline content (fields, links, bookmarks). Positions keep their order: what is kept
+  // beside the elements (the round-trip store's fragments) stays where it was.
+  // A new empty element `name` in `parent` before `before` (kNoElem: last), its text range set
+  // to `offset` with no length (a bookmark start or end). kNoElem when `parent` can't hold it.
+  ElemId InsertElement(ElemId parent, uint32_t name, ElemId before, uint32_t offset);
+  // Puts the siblings from `first` to `last` into a new element `name` (w:fldSimple,
+  // w:hyperlink) in their place. kNoElem when their parent can't hold it, or it can't hold them.
+  ElemId Wrap(ElemId first, ElemId last, uint32_t name);
+  // Puts an inline container's children in its place and takes it out (removing a link). What it
+  // keeps first goes before them, what it keeps after it after them. False when it keeps content
+  // between its children: then it stays.
+  bool Unwrap(ElemId elem);
 
   Tree& GetTree() { return doc_.tree_; }
 
@@ -120,6 +135,10 @@ class TreeEdit {
   bool HasRepeats(ElemId e) const;
   ElemId Insert(ElemId parent, ElemDefId def, ElemId before);  // a new empty element
   void Link(ElemId parent, ElemId child, ElemId before);       // before kNoElem: schema order
+  // Links `child` (which isn't linked) into `parent` before `before` (kNoElem: last), leaving
+  // kept fragments alone: content in a paragraph is in reading order, not schema order.
+  void LinkAt(ElemId parent, ElemId child, ElemId before);
+  void Unlink(ElemId elem);  // takes a linked element out of its parent, fragments untouched
   void Append(ElemId parent, ElemId child);                    // last among its siblings
   // An element and its subtree from checked XML; linked before `before`, or last when `last`.
   ElemId Build(ElemId parent, const pugi::xml_node& n, ElemId before, bool last);
