@@ -46,6 +46,13 @@
 #else
 #define FW_TORTURE_D3 0
 #endif
+#if FW_TORTURE_D3 && __has_include("doc/edit/Page.h") && __has_include("doc/edit/TableStyles.h")
+#include "doc/edit/Page.h"
+#include "doc/edit/TableStyles.h"
+#define FW_TORTURE_PAGE 1
+#else
+#define FW_TORTURE_PAGE 0
+#endif
 #else
 #define FW_TORTURE_EDITOR 0
 #endif
@@ -339,6 +346,13 @@ class EditorTarget : public EditTarget {
     return SaveParts(*doc_, editor_.DirtyParts(), editor_.Modified(), out, written);
   }
   void Saved() override { editor_.MarkSaved(); }
+  std::string State() const override {
+    std::string s = std::to_string(doc_->Paragraphs().size()) + " paragraphs, " + std::to_string(doc_->Sections().size()) +
+                    " sections, " + std::to_string(doc_->Package().Parts().size()) + " parts" +
+                    (editor_.Modified() ? ", modified" : "") + (editor_.CanUndo() ? ", can undo" : "") + ", changed parts:";
+    for (uint32_t p : editor_.DirtyParts()) s += " " + std::to_string(p);
+    return s;
+  }
 
  private:
   // A formatting command as the Word tab runs it (DocFormat::Run): one TreeEdit, the command's own
@@ -592,7 +606,53 @@ class EditorTarget : public EditTarget {
                                            : num(3) == 1 ? fw::doc::Justification::Center
                                                          : fw::doc::Justification::End;
       r = ed::InsertPageNumber(editor_, section(0), num(1) != 0, type(2), align, num(4) != 0);
-    } else {
+    }
+#if FW_TORTURE_PAGE
+    // Page layout (Page.h), by section; breaks at e.at; table styles (TableStyles.h)
+    else if (name == "pagesetup") {  // section:landscape|portrait|margins:twips|size:WxH|header:twips
+      if (!sectionOk) return refuse("no such section");
+      ed::PageSetup setup;
+      if (arg(1) == "landscape" || arg(1) == "portrait") setup.landscape = arg(1) == "landscape";
+      else if (arg(1) == "margins") setup.top = setup.bottom = setup.left = setup.right = fw::Twips(num(2, 720));
+      else if (arg(1) == "size") {
+        const size_t x = arg(2).find('x');
+        setup.width = fw::Twips(std::atoi(arg(2).c_str()));
+        setup.height = fw::Twips(x == std::string::npos ? 15840 : std::atoi(arg(2).c_str() + x + 1));
+      } else if (arg(1) == "header") setup.header = setup.footer = fw::Twips(num(2, 360));
+      else return refuse("unknown page setup");
+      r = ed::SetPageSetup(editor_, section(0), section(0), setup);
+    } else if (name == "columns") {  // section:count:space:line
+      if (!sectionOk) return refuse("no such section");
+      ed::ColumnSetup columns;
+      columns.count = num(1, 2);
+      columns.space = fw::Twips(num(2, 720));
+      columns.line = num(3) != 0;
+      r = ed::SetColumns(editor_, section(0), section(0), columns);
+    } else if (name == "sectionstart" || name == "sectionbreak") {
+      static const std::pair<const char*, fw::doc::SectionStart> starts[] = {
+          {"nextPage", fw::doc::SectionStart::NextPage}, {"continuous", fw::doc::SectionStart::Continuous},
+          {"evenPage", fw::doc::SectionStart::EvenPage}, {"oddPage", fw::doc::SectionStart::OddPage}};
+      const std::string which = name == "sectionstart" ? arg(1) : value;
+      auto s = std::find_if(std::begin(starts), std::end(starts), [&](const auto& p) { return which == p.first; });
+      if (s == std::end(starts)) return refuse("unknown section start");
+      if (name == "sectionbreak") r = ed::InsertSectionBreak(editor_, e.at, s->second);
+      else if (!sectionOk) return refuse("no such section");
+      else r = ed::SetSectionStart(editor_, section(0), s->second);
+    } else if (name == "delsectionbreak") {
+      if (!sectionOk) return refuse("no such section");
+      r = ed::DeleteSectionBreak(editor_, section(0));
+    } else if (name == "pagebreak" || name == "columnbreak") {
+      r = ed::InsertBreak(editor_, e.at, name == "columnbreak");
+    } else if (name == "hyphenation") {
+      ed::Hyphenation h;
+      h.automatic = value == "on";
+      if (value == "on") h.zone = fw::Twips(360), h.limit = 2;
+      r = ed::SetHyphenation(editor_, h);
+    } else if (name == "tablestyle") {
+      r = ed::ApplyTableStyle(editor_, e.at, value);
+    }
+#endif
+    else {
       return std::nullopt;
     }
     if (!r) return refuse(fw::doc::ToUtf8(r.message));
@@ -926,11 +986,36 @@ class Generator {
     e.at = RandomPos(RandomPara());
     e.to = e.at;
     const uint32_t roll = rng_.Below(100);
-    if (roll < 40) Table(e);
-    else if (roll < 62) Picture(e);
-    else if (roll < 85 || skip_.contains("headers")) Inline(e);
-    else HeaderFooter(e);
+    if (roll < 32) Table(e);
+    else if (roll < 50) Picture(e);
+    else if (roll < 70 || (roll < 85 && skip_.contains("headers"))) Inline(e);
+    else if (roll < 85) HeaderFooter(e);
+#if FW_TORTURE_PAGE
+    else Page(e);
+#else
+    else Table(e);
+#endif
   }
+
+#if FW_TORTURE_PAGE
+  // Page layout by section, and breaks in the main text.
+  void Page(Edit& e) {
+    const std::string s = std::to_string(rng_.Below(std::max<uint32_t>(1, static_cast<uint32_t>(doc_.Sections().size()))));
+    static const std::vector<std::string> setups = {":landscape", ":portrait", ":margins:720", ":margins:2880",
+                                                    ":size:12240x15840", ":size:11906x16838", ":header:200"};
+    static const std::vector<std::string> starts = {"nextPage", "continuous", "evenPage", "oddPage"};
+    const uint32_t roll = rng_.Below(100);
+    const std::vector<uint32_t>* body = paras_.contains(doc_.MainStory()) ? &paras_[doc_.MainStory()] : nullptr;
+    if (roll < 25) e.format = "pagesetup=" + s + rng_.Pick(setups);
+    else if (roll < 42) e.format = "columns=" + s + ":" + std::to_string(rng_.Between(1, 3)) + ":" + std::to_string(rng_.Pick(std::vector<uint32_t>{360, 720})) + ":" + std::to_string(rng_.Below(2));
+    else if (roll < 52) e.format = "sectionstart=" + s + ":" + rng_.Pick(starts);
+    else if (roll < 67 && body) e.at = e.to = RandomPos(rng_.Pick(*body)), e.format = "sectionbreak=" + rng_.Pick(starts);
+    else if (roll < 77) e.format = "delsectionbreak=" + s;
+    else if (roll < 92) e.format = rng_.Percent(70) ? "pagebreak" : "columnbreak";
+    else e.format = rng_.Percent(50) ? "hyphenation=on" : "hyphenation=off";
+    e.target = "section " + s;
+  }
+#endif
 
   // The tables of the editable stories, each as its cells' paragraphs (nested tables apart).
   std::vector<std::vector<uint32_t>> Tables() {
@@ -978,6 +1063,12 @@ class Generator {
     e.to = rng_.Percent(50) ? e.at : RandomPos(rng_.Pick(cells));
     if (Before(e.to, e.at)) std::swap(e.at, e.to);
     e.format = rng_.Pick(changes);
+#if FW_TORTURE_PAGE
+    if (rng_.Percent(10)) {
+      std::vector<std::string> styles = fw::doc::edit::TableStyleNames(doc_);
+      if (!styles.empty()) e.format = "tablestyle=" + rng_.Pick(styles);
+    }
+#endif
     e.target = "table";
   }
 
@@ -1008,18 +1099,39 @@ class Generator {
       e.format = "link=" + (marks.empty() || rng_.Percent(60) ? std::string("https://example.com/torture")
                                                              : "#" + rng_.Pick(marks).name);
     } else if (roll < 65) {
-      // A link that's there, when one turns up among a few places.
-      for (int tries = 0; tries < 30; ++tries) {
-        Pos p = RandomPos(RandomPara());
-        if (fw::doc::edit::LinkAt(doc_, p)) {
-          e.at = e.to = p;
-          break;
-        }
+      // A link that's there: in one of its runs.
+      std::vector<Span> links;
+      for (Span& s : Spans())
+        if (s.what == "link") links.push_back(std::move(s));
+      if (!links.empty()) {
+        const Span& l = rng_.Pick(links);
+        e.at = e.to = Pos{l.a.para, rng_.Between(l.a.offset, l.b.offset)};
+        e.target = "link";
       }
       e.format = rng_.Percent(50) ? "editlink" : "unlink";
     } else if (roll < 82) {
       e.to = Later(e.at, rng_.Percent(80) ? 0 : 2);
       e.format = "bookmark=Torture" + std::to_string(rng_.Below(1000));
+      // Often around or inside a field or a link, or across one end of it.
+      std::vector<Span> spans;
+      for (Span& s : Spans())
+        if (s.what.starts_with("field") || s.what.starts_with("simple field") || s.what == "link" ||
+            s.what.starts_with("bookmark") || s.what == "content control")
+          spans.push_back(std::move(s));
+      if (!spans.empty() && rng_.Percent(50)) {
+        const Span& s = rng_.Pick(spans);
+        auto inside = [&] {
+          if (s.a.para == s.b.para) return Pos{s.a.para, rng_.Between(s.a.offset, s.b.offset)};
+          return Pos{s.a.para, rng_.Between(s.a.offset, Len(s.a.para))};
+        };
+        switch (rng_.Below(3)) {
+          case 0: e.at = s.a, e.to = s.b; break;      // around it
+          case 1: e.at = inside(), e.to = inside(); break;
+          default: e.at = Pos{s.a.para, rng_.Between(0, s.a.offset)}, e.to = inside(); break;  // across its start
+        }
+        if (Before(e.to, e.at)) std::swap(e.at, e.to);
+        e.target = s.what;
+      }
     } else if (roll < 92) {
       std::vector<fw::doc::edit::BookmarkInfo> marks = fw::doc::edit::Bookmarks(doc_);
       if (marks.empty()) return PlainDelete(e);
@@ -1032,7 +1144,8 @@ class Generator {
   void HeaderFooter(Edit& e) {
     const std::string s = std::to_string(rng_.Below(std::max<uint32_t>(1, static_cast<uint32_t>(doc_.Sections().size()))));
     const std::string type = std::to_string(rng_.Below(3));
-    const uint32_t roll = rng_.Below(100);
+    uint32_t roll = rng_.Below(100);
+    if (roll >= 75 && skip_.contains("pagenumber")) roll = rng_.Below(75);  // FW_TORTURE_SKIP=pagenumber
     if (roll < 30) e.format = (rng_.Percent(50) ? "header=" : "footer=") + s + ":" + type;
     else if (roll < 45) e.format = "linkprev=" + s + ":" + std::to_string(rng_.Below(2)) + ":" + type + ":" + std::to_string(rng_.Below(2));
     else if (roll < 55) e.format = "firstpage=" + s + ":" + std::to_string(rng_.Below(2));
@@ -1068,19 +1181,25 @@ class Generator {
         if (f.complete) add("field " + ToUtf8(f.Type()), s, f.begin, Pos{f.end.para, f.end.offset + 1});
       for (const Revision& r : doc_.Revisions(s))
         if (r.kind <= RevisionKind::MoveTo) add("tracked change", s, r.start, r.end);
-      // Inline content controls: the text of their runs; block ones: their paragraphs.
+      // Inline content controls, links and simple fields: the text of their runs; block content
+      // controls: their paragraphs.
       for (uint32_t p : paras_[s]) {
-        Node cc;
-        uint32_t start = 0, end = 0;
-        for (const TextRun& r : doc_.Runs(p)) {
-          if (r.contentControl && r.contentControl == cc) {
-            end = r.end;
-            continue;
+        auto runsOf = [&](const char* what, Node TextRun::*member) {
+          Node at;
+          uint32_t start = 0, end = 0;
+          for (const TextRun& r : doc_.Runs(p)) {
+            if (r.*member && r.*member == at) {
+              end = r.end;
+              continue;
+            }
+            if (at) add(what, s, Pos{p, start}, Pos{p, end});
+            at = r.*member, start = r.start, end = r.end;
           }
-          if (cc) add("content control", s, Pos{p, start}, Pos{p, end});
-          cc = r.contentControl, start = r.start, end = r.end;
-        }
-        if (cc) add("content control", s, Pos{p, start}, Pos{p, end});
+          if (at) add(what, s, Pos{p, start}, Pos{p, end});
+        };
+        runsOf("content control", &TextRun::contentControl);
+        runsOf("link", &TextRun::hyperlink);
+        runsOf("simple field", &TextRun::simpleField);
       }
       for (const Block& b : doc_.Blocks(s)) {
         if (b.kind == BlockKind::ContentControl) {
@@ -1490,11 +1609,37 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
                  e.kind == EditKind::Split || e.kind == EditKind::Join || e.kind == EditKind::Format ||
                  e.kind == EditKind::Paint || (formattingCommand && !styleChange);
     bool locality = local && (seed & 1);
+    // A refused edit leaves the document as it was: always its State(), and on the same rounds every
+    // paragraph's line. Inside a group the state changes when the group's last edit closes it, so
+    // there only the lines are compared.
+    const bool refusable = e.kind != EditKind::Group;
+    const bool compareState = refusable && groupLeft == 0;
+    const bool readAll = (seed & 1) && (locality || (refusable && e.kind != EditKind::Undo && e.kind != EditKind::Redo));
     std::vector<std::string> linesBefore, linesAfter;
+    std::string stateBefore;
+    bool refusalChanged = false;
+    std::string refusalWhat;
     auto apply = [&] {
-      if (locality) linesBefore = ParaLines(target->Doc());
+      if (compareState) stateBefore = target->State();
+      if (readAll) linesBefore = ParaLines(target->Doc());
       applied = target->Apply(e, why);
       if (locality && applied == Applied::Done) linesAfter = ParaLines(target->Doc());
+      if (refusable && applied == Applied::Refused) {
+        const std::string stateAfter = compareState ? target->State() : std::string();
+        if (stateAfter != stateBefore) {
+          refusalChanged = true;
+          refusalWhat = "before: " + stateBefore + "; after: " + stateAfter;
+        } else if (readAll) {
+          std::vector<std::string> now = ParaLines(target->Doc());
+          for (size_t p = 0; p < std::max(now.size(), linesBefore.size()) && !refusalChanged; ++p)
+            if (p >= now.size() || p >= linesBefore.size() || now[p] != linesBefore[p]) {
+              refusalChanged = true;
+              refusalWhat = "paragraph " + std::to_string(p) + ": before \"" +
+                            (p < linesBefore.size() ? linesBefore[p].substr(0, 120) : "(none)") + "\", after \"" +
+                            (p < now.size() ? now[p].substr(0, 120) : "(none)") + "\"";
+            }
+        }
+      }
     };
     if ((crash = Guarded(apply)) != 0) {
       fail("crash", CrashText(crash) + " in: " + torture::FormatEdit(e));
@@ -1510,6 +1655,10 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     }
     if (applied == Applied::Refused) {
       ++r.refused;
+      if (refusalChanged) {
+        fail("refused", "\"" + torture::FormatEdit(e) + "\" was refused (" + why + ") but changed the document: " + refusalWhat);
+        break;
+      }
       continue;
     }
     ++r.done;

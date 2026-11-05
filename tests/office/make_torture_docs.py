@@ -147,6 +147,97 @@ def tables_document():
             "</w:body></w:document>")
 
 
+TRANSITIONAL = {
+    "w": W, "r": R,
+    "rel": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/",
+}
+STRICT = {
+    "w": "http://purl.oclc.org/ooxml/wordprocessingml/main",
+    "r": "http://purl.oclc.org/ooxml/officeDocument/relationships",
+    "rel": "http://purl.oclc.org/ooxml/officeDocument/relationships/",
+}
+MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
+WORDML = "application/vnd.openxmlformats-officedocument.wordprocessingml."
+
+
+def headers_parts(ns):
+    """Two sections; the first has a header and a footer full of what unlinking and editing them must
+    keep whole (a PAGE field, a link, a content control, a bookmark, mc:AlternateContent, an element
+    Word doesn't know), the second shows them through Link to Previous."""
+    strict = ns is STRICT
+    root_ns = (f'xmlns:w="{ns["w"]}" xmlns:r="{ns["r"]}" xmlns:mc="{MC}" xmlns:w14="{W14}" '
+               'xmlns:x="urn:featherweight:test" mc:Ignorable="w14 x"')
+    conformance = ' w:conformance="strict"' if strict else ""
+    decl = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+    header = (decl + f"<w:hdr {root_ns}><w:p><w:pPr><w:pStyle w:val=\"Header\"/></w:pPr>"
+              + run("Annual report, page ") + field("PAGE", "1") + run(" ")
+              + '<w:hyperlink r:id="rIdLink" w:history="1">' + run("example.com") + "</w:hyperlink>" + run(" ")
+              + '<w:sdt><w:sdtPr><w:id w:val="400"/><w:alias w:val="Company"/></w:sdtPr><w:sdtContent>'
+              + run("Featherweight Ltd") + "</w:sdtContent></w:sdt>"
+              + '<w:bookmarkStart w:id="50" w:name="HeaderMark"/>' + run(" marked") + '<w:bookmarkEnd w:id="50"/>'
+              + '<mc:AlternateContent><mc:Choice Requires="w14">' + run(" (new)") + "</mc:Choice>"
+              + "<mc:Fallback>" + run(" (old)") + "</mc:Fallback></mc:AlternateContent>"
+              + "<x:kept>kept by Featherweight</x:kept>" + "</w:p></w:hdr>")
+    footer = (decl + f"<w:ftr {root_ns}><w:p><w:pPr><w:pStyle w:val=\"Footer\"/><w:jc w:val=\"center\"/></w:pPr>"
+              + run("Page ") + '<w:fldSimple w:instr=" PAGE ">' + run("1") + "</w:fldSimple>" + run(" of ")
+              + '<w:fldSimple w:instr=" NUMPAGES ">' + run("2") + "</w:fldSimple>"
+              + run(" ") + '<w:hyperlink w:anchor="Intro">' + run("back to the start") + "</w:hyperlink></w:p></w:ftr>")
+    paras = ['<w:p><w:pPr><w:pStyle w:val="Title"/></w:pPr><w:bookmarkStart w:id="1" w:name="Intro"/>'
+             + run("Annual report") + '<w:bookmarkEnd w:id="1"/></w:p>']
+    for i in range(1, 7):
+        paras.append("<w:p>" + run(f"{i}. {BODY}") + "</w:p>")
+    sect1 = ('<w:sectPr><w:headerReference w:type="default" r:id="rIdHdr"/>'
+             '<w:footerReference w:type="default" r:id="rIdFtr"/><w:pgSz w:w="12240" w:h="15840"/>'
+             '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" '
+             'w:gutter="0"/></w:sectPr>')
+    paras.append("<w:p><w:pPr>" + sect1 + "</w:pPr>" + run("The end of the first section.") + "</w:p>")
+    for i in range(7, 11):
+        paras.append("<w:p>" + run(f"{i}. {BODY}") + "</w:p>")
+    body = "".join(paras) + ('<w:sectPr><w:type w:val="nextPage"/><w:pgSz w:w="12240" w:h="15840"/>'
+                             '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" '
+                             'w:footer="720" w:gutter="0"/></w:sectPr>')
+    document_xml = (decl + f'<w:document {root_ns}{conformance}><w:body>' + body + "</w:body></w:document>")
+    styles_xml = styles()
+    if strict:
+        styles_xml = styles_xml.replace(W, ns["w"])
+        header = header.replace(W, ns["w"])
+    rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f'<Relationship Id="rId1" Type="{ns["rel"]}styles" Target="styles.xml"/>'
+            f'<Relationship Id="rIdHdr" Type="{ns["rel"]}header" Target="header1.xml"/>'
+            f'<Relationship Id="rIdFtr" Type="{ns["rel"]}footer" Target="footer1.xml"/></Relationships>')
+    header_rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                   f'<Relationship Id="rIdLink" Type="{ns["rel"]}hyperlink" Target="https://example.com/" '
+                   'TargetMode="External"/></Relationships>')
+    types = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+             '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+             '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+             '<Default Extension="xml" ContentType="application/xml"/>'
+             f'<Override PartName="/word/document.xml" ContentType="{WORDML}document.main+xml"/>'
+             f'<Override PartName="/word/styles.xml" ContentType="{WORDML}styles+xml"/>'
+             f'<Override PartName="/word/header1.xml" ContentType="{WORDML}header+xml"/>'
+             f'<Override PartName="/word/footer1.xml" ContentType="{WORDML}footer+xml"/></Types>')
+    package_rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    f'<Relationship Id="rId1" Type="{ns["rel"]}officeDocument" Target="word/document.xml"/>'
+                    "</Relationships>")
+    return {"[Content_Types].xml": types, "_rels/.rels": package_rels, "word/_rels/document.xml.rels": rels,
+            "word/document.xml": document_xml, "word/styles.xml": styles_xml, "word/header1.xml": header,
+            "word/_rels/header1.xml.rels": header_rels, "word/footer1.xml": footer}
+
+
+def write_parts(name, parts):
+    path = os.path.join(OUT, name)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for part, text in parts.items():
+            info = zipfile.ZipInfo(part, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, text.encode("utf-8"))
+    print(path)
+
+
 def write(name, document_xml):
     parts = dict(PARTS)
     parts["word/document.xml"] = document_xml
@@ -164,6 +255,8 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     write("toc-fields.docx", document())
     write("merged-table.docx", tables_document())
+    write_parts("headers-fields.docx", headers_parts(TRANSITIONAL))
+    write_parts("headers-fields-strict.docx", headers_parts(STRICT))
 
 
 if __name__ == "__main__":
