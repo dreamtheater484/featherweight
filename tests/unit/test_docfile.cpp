@@ -123,10 +123,13 @@ TEST(DocFile_SaveKeepsTheOriginalOnceAndTellsWord) {
     CHECK(!file.Save(*doc, path, error));
     CHECK(error.find(L"changed by another program") != std::wstring::npos);
     CHECK(test::Text(ReadAll(path)) == "someone else's version");
-    // Save As goes elsewhere, and the tab is that file from then on.
+    // Save As goes elsewhere, and the tab is that file from then on. The file it replaces is kept.
     const std::wstring copy = f.path + L"\\copy.docx";
+    CHECK(test::WriteFileBytes(copy, test::Bytes("an older copy")));
     CHECK(file.Save(*doc, copy, error));
     CHECK(fw::EqualsNoCase(file.Path(), copy));
+    CHECK_EQ(f.Count(L"Backups"), 2u);
+    CHECK(test::Text(ReadAll(fw::pkg::backups::Latest(DocFile::Config().backups, copy))) == "an older copy");
     CHECK(fw::pkg::ReadOwner(path).empty());  // ours went with the edits
     auto reopened = Open(copy);
     CHECK(reopened && reopened->Paragraphs().size() == 1);

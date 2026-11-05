@@ -1660,7 +1660,7 @@ bool App::CloseTab(int index) {
 }
 
 void App::RememberState(TabContent* view) {
-  if (view && view->Ready() && !snapshot_) settings_.SetState(view->Path(), view->State());
+  if (view && view->Ready() && !snapshot_ && !view->Path().empty()) settings_.SetState(view->Path(), view->State());
 }
 
 bool App::SaveActive(bool saveAs) {

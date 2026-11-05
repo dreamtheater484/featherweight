@@ -130,6 +130,11 @@ bool DocFile::Save(fw::doc::Document& doc, const std::wstring& path, std::wstrin
     std::vector<uint8_t> original(static_cast<size_t>(snapshot.Size()));
     if (snapshot.ReadAt(0, original.data(), original.size()))
       backedUp_ = !pkg::backups::Keep(Config().backups, path_, original).empty();
+  } else if (!sameFile && !Config().backups.empty() && GetFileAttributesW(target.c_str()) != INVALID_FILE_ATTRIBUTES) {
+    // Save As over another file (a recovered document over its original, say): that one is kept too.
+    std::string existing;
+    if (util::ReadFileBytes(target, existing, 1u << 30))
+      pkg::backups::Keep(Config().backups, target, std::vector<uint8_t>(existing.begin(), existing.end()));
   }
   pkg::SaveResult saved = pkg::SafeWrite(target, bytes);
   if (!saved.Ok()) {
