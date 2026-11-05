@@ -181,10 +181,19 @@ std::string_view PresetForSpt(int spt) {
   return {};
 }
 
+// A number as Geometry reads it, to 1/1000 of a unit. (std::to_chars for doubles would bring
+// over 100 KB of tables into the exe.)
 std::string Num(double d) {
-  char buf[32];
-  auto [end, ec] = std::to_chars(buf, buf + sizeof(buf), std::isfinite(d) ? d : 0.0);
-  return ec == std::errc() ? std::string(buf, end) : std::string("0");
+  const long long milli = std::llround(std::clamp(std::isfinite(d) ? d : 0.0, -1e12, 1e12) * 1000);
+  const unsigned long long m = milli < 0 ? 0ull - static_cast<unsigned long long>(milli) : milli;
+  std::string s = (milli < 0 ? "-" : "") + std::to_string(m / 1000);
+  if (const unsigned f = static_cast<unsigned>(m % 1000)) {
+    s += '.';
+    s += static_cast<char>('0' + f / 100);
+    s += static_cast<char>('0' + f / 10 % 10);
+    s += static_cast<char>('0' + f % 10);
+  }
+  return s;
 }
 
 // VML formulas (v:formulas) and paths, evaluated once the shape's size is known.

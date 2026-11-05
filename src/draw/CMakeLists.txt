@@ -16,7 +16,7 @@ add_library(fwdraw STATIC
 )
 target_include_directories(fwdraw PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(fwdraw PUBLIC fwcore fwpkg d2d1 d3d11 dxgi dwrite
-  PRIVATE windowscodecs prntvpt ole32 shlwapi gdi32 dxguid)
+  PRIVATE miniz windowscodecs prntvpt ole32 shlwapi gdi32 dxguid)
 target_compile_options(fwdraw PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
 # The tests live with the others in tests/; they're added here so the root CMakeLists.txt stays as

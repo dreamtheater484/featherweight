@@ -5,18 +5,30 @@
 #include <cmath>
 #include <iterator>
 #include <mutex>
+#include <string>
+
+#include <miniz.h>
 
 namespace draw {
 namespace {
 
+// The preset shapes: their names, where each one's statements start in the text, and the text,
+// deflated (tools/make_preset_shapes.py).
 struct PresetDef {
   const char* name;
-  const char* def;
+  uint32_t offset, size;
 };
-
-constexpr PresetDef kPresets[] = {
 #include "draw/PresetShapes.inc"
-};
+
+// The presets' text, inflated when the first one is drawn.
+std::string_view PresetText() {
+  static const std::string text = [] {
+    std::string t(kPresetTextSize, 0);
+    if (tinfl_decompress_mem_to_mem(t.data(), t.size(), kPresetData, sizeof(kPresetData), 0) != t.size()) t.clear();
+    return t;
+  }();
+  return text;
+}
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kEmuPerPoint = 12700;
@@ -203,7 +215,8 @@ std::shared_ptr<const Geometry> Geometry::Preset(std::string_view name) {
   std::shared_ptr<const Geometry>& slot = cache[it - std::begin(kPresets)];
   if (!slot) {
     auto g = std::make_shared<Geometry>();
-    g->ReadCompact(it->def);
+    const std::string_view text = PresetText();
+    if (it->offset + it->size <= text.size()) g->ReadCompact(text.substr(it->offset, it->size));
     slot = std::move(g);
   }
   return slot;
