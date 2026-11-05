@@ -125,6 +125,7 @@ bool DocView::ApplyPageChange(const Result& r, bool caret) {
 
 void DocView::TypeText(std::u16string_view text) {
   if (text.empty()) return;
+  if (TypeIntoShape(text)) return;  // a shape selected: its text (DocShapes.cpp)
   if (HasSelection() && table_ && table_->ReplaceCells(text)) return;  // cells selected: they're replaced
   const bool typed = !HasSelection();
   if (!Apply(HasSelection() ? editor_->Replace(SelFrom(), SelTo(), text) : editor_->InsertText(ToDoc(focus_), text))) return;
@@ -426,7 +427,7 @@ bool DocView::EditKey(UINT vk, UINT mods) {
         TypeText(u"\v");  // a line break (w:br)
         AutoCorrectTyped(u'\v');
       } else if (HasSelection()) {
-        TypeText(u"\r");
+        if (!TypeIntoShape(u"")) TypeText(u"\r");  // a selected shape: into its text, as in Word
       } else if (const fw::doc::ParaProps& pp = doc_->ResolvedPara(focus_.para);
                  format_ && doc_->Para(focus_.para).text.empty() && !pp.numId.empty() && pp.numId != "0") {
         // An empty list item: the list ends there, as in Word (the item becomes plain text).

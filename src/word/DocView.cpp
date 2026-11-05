@@ -27,6 +27,7 @@
 #include "ui/Toolbar.h"
 #include "word/DocPanels.h"
 #include "word/PicturePanel.h"
+#include "word/ShapePanels.h"
 
 using namespace gfx;
 namespace layout = fw::doc::layout;
@@ -162,6 +163,7 @@ DocView::~DocView() {
   bookmarkPanel_.reset();
   pageNumberPanel_.reset();
   navPanel_.reset();
+  shapes_.reset();
   pictures_.reset();
   editor_.reset();
   drawings_.clear();  // pictures read from the document's package
@@ -265,7 +267,13 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     table_ = std::make_unique<DocTable>(*editor_, std::move(th));
     page_ = std::make_unique<DocPage>(*editor_, std::move(ph));
     pictures_ = std::make_unique<fw::doc::edit::Pictures>(*editor_);
+    shapes_ = std::make_unique<fw::doc::edit::Shapes>(*editor_);
     format_->insertPicture = [this] { Execute(CmdInsertPicture); };
+    static constexpr std::pair<int, const wchar_t*> kShapes[] = {
+        {CmdInsertTextBox, L"Text box"}, {CmdInsertRectangle, L"Rectangle"}, {CmdInsertRoundedRectangle, L"Rounded rectangle"},
+        {CmdInsertOval, L"Oval"},        {CmdInsertLine, L"Line"},           {CmdInsertArrow, L"Arrow"},
+        {CmdInsertCallout, L"Callout"},  {CmdWatermarkPanel, L"Watermark…"}};
+    for (const auto& [cmd, label] : kShapes) format_->insertMore.push_back({label, [this, cmd = cmd] { Execute(cmd); }});
     for (int cmd : DocPage::InsertCommands())
       format_->insertMore.push_back({page_->Query(cmd).Tooltip(), [this, cmd] { Execute(cmd); }});
     DocStyles::Host sh;
@@ -1462,6 +1470,18 @@ constexpr CommandName kCommandNames[] = {
     {CmdPictureRotate, L"Rotate picture 90°", L""},
     {CmdPictureReset, L"Reset picture size", L""},
     {CmdPicturePanel, L"Picture size, rotation and alt text…", L""},
+    {CmdInsertTextBox, L"Insert text box", L""},
+    {CmdInsertRectangle, L"Insert rectangle", L""},
+    {CmdInsertRoundedRectangle, L"Insert rounded rectangle", L""},
+    {CmdInsertOval, L"Insert oval", L""},
+    {CmdInsertLine, L"Insert line", L""},
+    {CmdInsertArrow, L"Insert arrow", L""},
+    {CmdInsertCallout, L"Insert callout", L""},
+    {CmdShapeAddText, L"Add text to shape", L""},
+    {CmdShapeEditText, L"Edit shape text", L""},
+    {CmdShapePanel, L"Shape wrap, size, fill and outline…", L""},
+    {CmdWatermarkPanel, L"Watermark…", L""},
+    {CmdWatermarkRemove, L"Remove watermark", L""},
 };
 
 }  // namespace
@@ -1515,6 +1535,7 @@ CommandState DocView::QueryCommand(int cmd) {
   if (styles_ && DocStyles::Owns(cmd)) return styles_->Query(cmd);
   CommandState s;
   if (auto picture = QueryPicture(cmd)) s = *picture;
+  if (auto shape = QueryShape(cmd)) s = *shape;
   switch (cmd) {
     case CmdSave: s = {Ready() && (Modified() || path_.empty()), false}; break;
     case CmdPrint: s = {Ready(), false}; break;
@@ -1536,7 +1557,8 @@ CommandState DocView::QueryCommand(int cmd) {
       s.visible = false;
       break;
     default:
-      if (cmd < CmdInsertPicture || cmd > CmdPicturePanel) s = PagedView::QueryCommand(cmd);
+      if ((cmd < CmdInsertPicture || cmd > CmdPicturePanel) && (cmd < CmdInsertTextBox || cmd > CmdWatermarkRemove))
+        s = PagedView::QueryCommand(cmd);
       break;
   }
   for (const CommandName& n : kCommandNames) {
@@ -1601,6 +1623,7 @@ bool DocView::Execute(int cmd) {
   if (ExecuteProof(cmd)) return true;
   if (ExecuteD3(cmd)) return true;
   if (ExecutePicture(cmd)) return true;
+  if (ExecuteShape(cmd)) return true;
   switch (cmd) {
     case CmdCopy: Copy(); return true;
     case CmdCut: Cut(); return true;
@@ -1654,6 +1677,7 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
     AddPictureToolbar(m);
   }
   SyncPicturePanel();
+  SyncShapePanels();
 
   m.pager = !Editing();  // when editing, the status bar has the page and the zoom
   m.page = currentPage_;

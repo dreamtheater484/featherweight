@@ -213,6 +213,19 @@ enum Cmd : int {
   CmdPictureRotate,   // 90 degrees clockwise
   CmdPictureReset,
   CmdPicturePanel,    // size, rotation and alt text
+  // Shapes, text boxes and watermarks in Word documents (D4).
+  CmdInsertTextBox = 1400,
+  CmdInsertRectangle,
+  CmdInsertRoundedRectangle,
+  CmdInsertOval,
+  CmdInsertLine,
+  CmdInsertArrow,
+  CmdInsertCallout,
+  CmdShapeAddText,     // an empty paragraph in a shape without text
+  CmdShapeEditText,    // the caret into the selected shape's text
+  CmdShapePanel,       // wrap, size, rotation, fill and outline
+  CmdWatermarkPanel,
+  CmdWatermarkRemove,
   // Find and paste (D3).
   CmdSearchWords = 1300,  // find whole words only (the search card's toggle)
   CmdPasteMerge,          // paste taking the look of where it goes, keeping bold, italic and lists
