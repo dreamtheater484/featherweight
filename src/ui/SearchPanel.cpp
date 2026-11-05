@@ -84,7 +84,7 @@ void SearchPanel::Layout(const RECT& docArea, float ui) {
   x -= b;
   prev_.rc = RectF(x, cy - b / 2, x + b, cy + b / 2);
   x -= 6 * u;
-  status_ = RectF(x - 74 * u, c.top, x, c.bottom);
+  status_ = RectF(x - 74 * u, c.top, x, c.top + 48 * u);  // the find row's (not between the rows when replacing)
   box_.rc = RectF(c.left + 8 * u, cy - 15 * u, status_.left - 6 * u, cy + 15 * u);
   // The replace row.
   one_.visible = all_.visible = replace_;
