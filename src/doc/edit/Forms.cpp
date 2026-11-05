@@ -196,7 +196,9 @@ std::vector<ElemId> RunsIn(const Document& doc, uint32_t para, uint32_t from, ui
 // last run (text typed at a control's end stays in it), then the old text goes. The new range.
 Result Replace(Editor& ed, const ContentControl& c, std::u16string_view text, Range& made) {
   const Pos from = c.content.from, to = c.content.to;
+  ed.FillingIn(true);
   Result r = ed.InsertText(to, text);
+  ed.FillingIn(false);
   if (!r) return r;
   const Pos start = to;
   if (auto in = ControlAt(ed.Doc(), {start.para, start.offset + (text.empty() ? 0u : 1u)}); !in || in->sdt != c.sdt) {
@@ -466,6 +468,9 @@ Result SetChecked(Editor& ed, const ContentControl& c, bool checked) {
 
 Result PickItem(Editor& ed, const ContentControl& c, size_t index) {
   if ((c.kind != ControlKind::DropDown && c.kind != ControlKind::ComboBox) || index >= c.items.size()) return Refused(Why(c));
+  // Its "Choose an item." entry (no value): the placeholder again, as in Word.
+  if (c.items[index].value.empty() && c.items[index].text == DefaultPlaceholder(c.kind))
+    return c.placeholder ? Result{true, {}, c.content.from} : ShowPlaceholder(ed, c);
   return Group(ed, u"Choose an item", [&]() -> Result {
     const ListItem& item = c.items[index];
     Result r = FillControl(ed, c, item.text.empty() ? U16(item.value) : item.text);

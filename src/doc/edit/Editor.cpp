@@ -183,6 +183,7 @@ struct EditorState {
   pkg::NodeId nextNode = 1;
   uint32_t version = 1;
   int64_t nextAnnotation = -1;
+  bool fillingIn = false;  // Editor::FillingIn
   std::unordered_set<uint32_t> usedParaIds;
   bool paraIdsScanned = false;
   uint32_t paraIdSeed = 0x6D2B79F5u;
@@ -1015,7 +1016,7 @@ struct EditorState {
       // Text typed right after a link or a simple field isn't part of it (as in Word).
       ElemId endsHere = kNoElem;
       for (ElemId a : Ancestors(leaf)) {
-        bool boundary = NameOf(a) == kHyperlink || NameOf(a) == kFldSimple || (NameOf(a) == kSdt && Locked(a, false));
+        bool boundary = NameOf(a) == kHyperlink || NameOf(a) == kFldSimple || (NameOf(a) == kSdt && (Locked(a, false) || Chosen(a)));
         if (boundary && E(a).start + E(a).length == o) endsHere = a;
       }
       if (endsHere == kNoElem && LockedSdt(leaf) != kNoElem) {
@@ -1062,7 +1063,7 @@ struct EditorState {
     for (const LeafAt& l : leaves) {
       if (l.length == 0) continue;
       if (l.start == 0 && RoleOf(l.id) == Role::Text && NameOf(l.id) == kT && plainRun(l.id) &&
-          !(E(l.id).flags & kDisplayOnly) && LockedSdt(l.id) == kNoElem) {
+          !(E(l.id).flags & kDisplayOnly) && LockedSdt(l.id) == kNoElem && ChosenSdt(l.id) == kNoElem) {
         spot = {RunOf(l.id), l.id, kNoElem};
         return true;
       }
@@ -1479,6 +1480,21 @@ struct EditorState {
       for (ElemId id : AllElems(para))
         if (NameOf(id) == kSdt && E(id).start < *o && *o < E(id).start + E(id).length && OneParagraph(id)) return true;
     return false;
+  }
+  // A check box, drop-down list or picture control: chosen, not typed in. Text typed at its edge
+  // goes beside it (D4).
+  bool Chosen(ElemId sdt) {
+    if (fillingIn) return false;
+    static const uint32_t kinds[] = {Name("w14:checkbox"), Name("dropDownList"), Name("picture")};
+    ElemId pr = Child(sdt, kSdtPr);
+    for (ElemId c = pr == kNoElem ? kNoElem : E(pr).first; c != kNoElem; c = E(c).next)
+      if (std::find(std::begin(kinds), std::end(kinds), NameOf(c)) != std::end(kinds)) return true;
+    return false;
+  }
+  ElemId ChosenSdt(ElemId leaf) {
+    for (ElemId a : Ancestors(leaf))
+      if (NameOf(a) == kSdt && Chosen(a)) return a;
+    return kNoElem;
   }
   ElemId LockedSdt(ElemId leaf) {
     for (ElemId a : Ancestors(leaf))
@@ -3832,6 +3848,8 @@ void Editor::EndGroup() {
 }
 
 void Editor::BreakTyping() { impl_->typingBroken = true; }
+
+void Editor::FillingIn(bool on) { impl_->fillingIn = on; }
 
 void Editor::RecordStep(std::u16string name, std::shared_ptr<CustomStep> step, Pos caret) {
   if (!step) return;
