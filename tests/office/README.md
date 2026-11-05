@@ -34,6 +34,26 @@ fwtool roundtrip --expect-reject tests/office/malicious
 
 `fwtool check` applies the reference registry (`src/pkg/References.h`, rules in `ReferenceRules.cpp`): every reference resolves, ids are unique, pairs are complete, and the derived data it can see (the calculation chain, chart caches and embedded workbooks, VML notes) matches its sources. What Office tolerates, such as a missing style, is a warning. It also lists the extensions it doesn't know, near which structural edits will be blocked.
 
+### Word documents through the model (D1)
+
+With `--model`, Word documents are read into the document model, which writes back every part it owns. The saved copy must pass `fwtool check`. `--out DIR` keeps the copies, for the validator:
+
+```bash
+fwtool roundtrip --model --out <copies> <corpus> tests/office/generated tests/office/edge tests/office/layout
+fwtool roundtrip --model --reserialize-all <corpus> tests/office/generated tests/office/edge tests/office/layout
+dotnet build tools/validate/Validate.csproj -c Release -o build/validate
+build/validate/fwvalidate --saved <copies> <corpus> tests/office/generated tests/office/edge tests/office/layout
+```
+
+`fwvalidate` (a test tool, never shipped) runs the Open XML SDK validator on each copy and its original. Any error the copy has that the original doesn't fails the run (plan §3). Errors are compared by id, part and description, so namespace prefixes may differ.
+
+**Re-serialize all: the exceptions.** In this mode every XML part is rewritten: parts the model owns come from the model, and the others go through the DOM. Each rewritten part must equal the original after canonicalization (plan §10). These parts are copied byte for byte instead:
+- **Parts that aren't XML:** pictures (PNG, JPEG, TIFF, EMF, WMF), obfuscated fonts (`.odttf`), embedded objects and workbooks (`.bin`, `.xlsx`), printer settings, thumbnails. There is no XML to rewrite.
+- **Legacy VML drawing parts** (`application/vnd.openxmlformats-officedocument.vmlDrawing`, such as a sheet's comment shapes): their content type isn't XML, and Office writes them as loose HTML-style markup that isn't always well-formed. In Word documents, VML sits inside `document.xml` (`w:pict`, `w:object`), so it is rewritten with the part.
+- **Folder entries in the zip**, such as `ppt/`, which aren't parts.
+
+Measured on 2026-11-05: all 108 private corpus documents and the 27 files in `generated`, `edge` and `layout`. Results: round trip 135/135, `fwtool check` on the copies 135/135 (no new warnings), validator 0 new errors (401 in the originals), re-serialize all 135/135.
+
 ## Layout fidelity (D1)
 
 D1 is done when, across the corpus, the page count matches Word's for at least 90 % of documents and at least 95 % of lines break where Word breaks them (plan §6.4). `fwtool compare` measures both against the reference renders. Featherweight's side is a layout dump per document, which D1's pagination writes. `docs/layout-dump.md` describes the format and exactly how lines are compared.
