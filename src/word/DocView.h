@@ -271,11 +271,10 @@ class DocView : public PagedView {
   double lastDoubleClick_ = -1e9;  // a click right after a double-click selects the paragraph
   int lastDoubleX_ = 0, lastDoubleY_ = 0;
 
-  // Proofing (DocProof.cpp): spelling checked in idle time with Windows' spell checker, the
-  // pages on screen first; nothing runs once everything is checked.
+  // Proofing (DocProof.cpp): the pages on screen checked in idle time with Windows' spell
+  // checker; nothing runs once they are.
   std::unique_ptr<fw::doc::proof::Spelling> spelling_;
   bool spellingWanted_ = true;  // made on the first idle tick, when the setting is on
-  int preferredPage_ = -1;      // the page whose paragraphs were checked first
   bool typed_ = false;          // the last thing done was typing, which left the caret at typedAt_:
   TextPos typedAt_;             // the word there is still being typed, and isn't marked yet
   uint32_t edits_ = 0;          // edits so far, for what is measured from the text

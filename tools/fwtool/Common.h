@@ -50,6 +50,7 @@ int RunCompare(const Options& options);
 int RunBench(const Options& options);
 int RunBenchApp(const Options& options);
 int RunTyping(const Options& options);
+int RunSpelling(const Options& options);
 // Parses its own options, from argv[2] on.
 int RunWrap(int argc, wchar_t** argv);
 

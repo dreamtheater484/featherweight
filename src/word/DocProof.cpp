@@ -78,38 +78,52 @@ bool SameTag(const std::wstring& a, const std::wstring& b) { return _wcsicmp(a.c
 // ---------------------------------------------------------------------------
 // Checking and counting in idle time
 
-bool DocView::HasProofWork() const { return spellingWanted_ || (spelling_ && !spelling_->Done()) || !wordsCounted_; }
+namespace {
+
+// The paragraphs with lines on pages [first, last], in order.
+std::vector<uint32_t> ParagraphsOn(const layout::Layout& pages, int first, int last) {
+  std::vector<uint32_t> out;
+  for (int pg = std::max(first, 0); pg <= last && pg < static_cast<int>(pages.PageCount()); ++pg)
+    for (const layout::LineBox& lb : pages.GetPage(pg).lines)
+      if (lb.para != fw::doc::kNone && (out.empty() || out.back() != lb.para)) out.push_back(lb.para);
+  std::sort(out.begin(), out.end());
+  out.erase(std::unique(out.begin(), out.end()), out.end());
+  return out;
+}
+
+}  // namespace
+
+// The pages on screen and the next: their paragraphs are checked in idle time, so squiggles are
+// there when you scroll on. Nothing else is checked until it's shown or searched.
+bool DocView::HasProofWork() const {
+  if (spellingWanted_ || !wordsCounted_) return true;
+  if (!spelling_ || placeholder_) return false;
+  int first, last;
+  VisiblePages(first, last);
+  for (int pg = std::max(first, 0); pg <= last + 1 && pg < static_cast<int>(pagination_->PageCount()); ++pg)
+    for (const layout::LineBox& lb : pagination_->GetPage(pg).lines)
+      if (lb.para != fw::doc::kNone && !spelling_->Checked(lb.para)) return true;
+  return false;
+}
 
 bool DocView::ProofIdle(double deadlineMs) {
   bool repaint = false;
   if (spellingWanted_) {
     // The checker's first use loads Windows' spell checking: this tick's work.
     spellingWanted_ = false;
-    if (host_.ViewSpelling() && !proof::Spelling::HiddenByDocument(*doc_) && Checker().Available()) {
+    if (host_.ViewSpelling() && !proof::Spelling::HiddenByDocument(*doc_) && Checker().Available())
       spelling_ = std::make_unique<proof::Spelling>(*doc_, Checker());
-      preferredPage_ = -1;
-    }
     return false;
   }
-  if (spelling_ && !spelling_->Done()) {
-    const int pages = static_cast<int>(pagination_->PageCount());
-    if (preferredPage_ != currentPage_ && currentPage_ < pages) {
-      preferredPage_ = currentPage_;
-      spelling_->Prefer(pagination_->GetPage(currentPage_).first.para);
-    }
-    // Redrawn when paragraphs on screen get their results, or when all are checked.
-    std::vector<uint32_t> shown;
-    if (!placeholder_) {
-      int first, last;
-      VisiblePages(first, last);
-      for (int pg = std::max(first, 0); pg <= last && pg < pages; ++pg)
-        for (const layout::LineBox& lb : pagination_->GetPage(pg).lines)
-          if (lb.para != fw::doc::kNone && !spelling_->Errors(lb.para)) shown.push_back(lb.para);
-    }
-    spelling_->Continue(std::clamp(deadlineMs - anim::Now(), 1.0, 8.0));
-    repaint |= spelling_->Done();
-    for (uint32_t p : shown)
-      if (const auto* errors = spelling_->Errors(p); errors && !errors->empty()) repaint = true;
+  if (spelling_ && !placeholder_) {
+    // The pages on screen first, then the next.
+    int first, last;
+    VisiblePages(first, last);
+    const double ms = std::clamp(deadlineMs - anim::Now(), 1.0, 8.0);
+    const uint32_t before = spelling_->Revision();
+    if (!spelling_->Check(ParagraphsOn(*pagination_, first, last), ms))
+      spelling_->Check(ParagraphsOn(*pagination_, last + 1, last + 1), ms);
+    repaint |= spelling_->Revision() != before;
   }
   // Words, for the status bar, once the pages are laid out (a 300-page document takes about 35 ms).
   if (!wordsCounted_ && pagination_->Done()) {
@@ -350,15 +364,12 @@ void DocView::NextMisspelling() {
   }
   TextPos from = HasSelection() ? std::max(anchor_, focus_) : focus_;
   if (from.para >= doc_->Paragraphs().size()) from = {0, 0};
-  auto next = spelling_->Next({from.para, from.offset});
-  // Not found among the paragraphs checked so far: check the rest, up to a moment.
-  for (int i = 0; !next && !spelling_->Done() && i < 4; ++i) {
-    spelling_->Continue(100);
-    next = spelling_->Next({from.para, from.offset});
-  }
+  // Checking the paragraphs on the way, for up to two seconds (a 300-page document takes 1.6 s).
+  bool complete = true;
+  auto next = spelling_->FindNext({from.para, from.offset}, 2000, complete);
   if (!next) {
-    host_.ViewMessage(spelling_->Done() ? BannerKind::Success : BannerKind::Info,
-                      spelling_->Done() ? L"No spelling errors." : L"Still checking the spelling…");
+    host_.ViewMessage(complete ? BannerKind::Success : BannerKind::Info,
+                      complete ? L"No spelling errors." : L"Still checking the spelling: press F7 again to go on.");
     host_.ViewInvalidate();
     return;
   }

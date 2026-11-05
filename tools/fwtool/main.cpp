@@ -60,6 +60,9 @@ constexpr const char* kUsage =
     "  fwtool typing [--budgets] <file or folder>...\n"
     "      Types into each Word document a key at a time (characters, Enter, Backspace) at its\n"
     "      start, middle and end, and times each keystroke against the typing budget (plan §11).\n"
+    "  fwtool spelling <file or folder>...\n"
+    "      Checks each Word document's spelling with Windows' spell checker and counts its words,\n"
+    "      as the app does in idle time, and times both (plan §6.2, §11).\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
     "      Word's. Run it without text for its options.\n";
@@ -164,6 +167,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"bench") return fwtool::RunBench(options);
   if (command == L"bench-app") return fwtool::RunBenchApp(options);
   if (command == L"typing") return fwtool::RunTyping(options);
+  if (command == L"spelling") return fwtool::RunSpelling(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }

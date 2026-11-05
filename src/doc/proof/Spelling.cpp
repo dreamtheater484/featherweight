@@ -69,6 +69,49 @@ bool Spelling::Continue(double ms) {
   return pending_ > 0;
 }
 
+bool Spelling::Check(const std::vector<uint32_t>& paras, double ms) {
+  const auto until = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double, std::milli>(ms));
+  bool changed = false, left = false;
+  for (uint32_t p : paras) {
+    if (p >= paras_.size() || paras_[p].checked) continue;
+    if (Clock::now() >= until) {
+      left = true;
+      break;
+    }
+    CheckPara(p);
+    changed |= !paras_[p].errors.empty();
+  }
+  if (changed) ++revision_;
+  return left;
+}
+
+std::optional<std::pair<uint32_t, Misspelling>> Spelling::FindNext(Pos pos, double ms, bool& complete) {
+  complete = true;
+  if (paras_.empty()) return std::nullopt;
+  const auto until = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double, std::milli>(ms));
+  const uint32_t start = pos.para < paras_.size() ? pos.para : 0;
+  bool changed = false;
+  std::optional<std::pair<uint32_t, Misspelling>> found;
+  for (size_t n = 0; n <= paras_.size() && !found; ++n) {
+    const uint32_t p = static_cast<uint32_t>((start + n) % paras_.size());
+    if (!paras_[p].checked) {
+      if (Clock::now() >= until) {
+        complete = false;
+        break;
+      }
+      CheckPara(p);
+      changed |= !paras_[p].errors.empty();
+    }
+    for (const Misspelling& m : paras_[p].errors)
+      if (n > 0 || m.from >= pos.offset) {
+        found = std::make_pair(p, m);
+        break;
+      }
+  }
+  if (changed) ++revision_;
+  return found;
+}
+
 uint16_t Spelling::LangIndex(const std::wstring& tag) {
   for (size_t i = 0; i < langs_.size(); ++i)
     if (langs_[i] == tag) return static_cast<uint16_t>(i);

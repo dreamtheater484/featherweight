@@ -10,10 +10,12 @@
 #include "doc/model/Document.h"
 #include "text/SpellCheck.h"
 
-// Spelling as you type (plan §6.2, milestone D2): every paragraph checked with Windows' spell
-// checker in the language of its text, a few milliseconds at a time in idle time, the paragraphs
-// on screen first. Edits mark the paragraphs they change for checking again. Once everything is
-// checked nothing runs.
+// Spelling as you type (plan §6.2, milestone D2): paragraphs checked with Windows' spell checker
+// in the language of their text, a few milliseconds at a time in idle time. The app checks the
+// paragraphs on screen (Check), and those it searches through (FindNext); edits mark the
+// paragraphs they change for checking again. Windows' checker takes about 12 µs a word, so a
+// 300-page document would take 1.6 s: it's checked as it's read, and nothing runs once the text
+// on screen is checked.
 //
 // Not checked: field codes, deleted and hidden text, text marked "Do not check spelling"
 // (w:noProof), comments, and documents that ask for it (w:hideSpellingErrors).
@@ -35,6 +37,9 @@ class Spelling {
   bool Done() const { return pending_ == 0; }
   // Checks from `para` on next (the first paragraph on screen).
   void Prefer(uint32_t para);
+  // Checks those of `paras` not checked yet, for about `ms` milliseconds. True while some remain.
+  bool Check(const std::vector<uint32_t>& paras, double ms);
+  bool Checked(uint32_t para) const { return para < paras_.size() && paras_[para].checked; }
   // Changes whenever results change, for the view to redraw.
   uint32_t Revision() const { return revision_; }
 
@@ -44,6 +49,9 @@ class Spelling {
   const Misspelling* At(Pos pos) const;
   // The first error after `pos` (paragraph order, wrapping around), or nullopt when none is known.
   std::optional<std::pair<uint32_t, Misspelling>> Next(Pos pos) const;
+  // The same, checking the paragraphs on the way that aren't checked yet, for up to `ms`
+  // milliseconds; `complete` is false when time ran out first (search again to go on).
+  std::optional<std::pair<uint32_t, Misspelling>> FindNext(Pos pos, double ms, bool& complete);
   // The misspelled text, as the checker saw it (soft hyphens left out).
   std::wstring Word(uint32_t para, const Misspelling& m) const;
   const std::wstring& Language(const Misspelling& m) const { return langs_[m.lang]; }

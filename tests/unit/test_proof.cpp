@@ -238,6 +238,16 @@ TEST(Proof_SpellingFindsErrorsInTheTextShown) {
   CHECK(spelling.Errors(1) && spelling.Errors(1)->empty());  // noProof and hidden text aren't checked
   CHECK(spelling.Errors(2) && spelling.Errors(2)->empty());  // nor field codes
 
+  // Only the paragraphs asked for (those on screen); F7's search checks the ones on its way.
+  proof::Spelling shown(*doc, checker);
+  CHECK(!shown.Check({1, 2}, 1000));
+  CHECK(shown.Checked(1) && shown.Checked(2) && !shown.Checked(0));
+  bool complete = false;
+  const auto next = shown.FindNext(P(1, 0), 1000, complete);  // wraps around to the first paragraph
+  CHECK(complete && next.has_value());
+  if (next) CHECK(next->first == 0u && shown.Word(0, next->second) == L"sentense");
+  CHECK(shown.Checked(0));
+
   // An edit marks its paragraph for checking again.
   edit::Editor ed(*doc);
   ed.OnChange([&](const edit::Change& c) { spelling.Changed(c); });
