@@ -73,15 +73,25 @@ std::wstring KeyOf(const char32_t* begin, const char32_t* end) {
   return fw::ToLower(key);
 }
 
+bool IsLeader(char32_t c) { return c == '.' || c == '-' || c == '_' || c == 0xB7 || c == 0x2024 || c == 0x2026; }
+
 // The words of a line as drawn, [begin, end) in code points: split at spaces, ideographs alone.
+// A tab leader drawn as text (three or more dots, hyphens or underscores) stands for the tab, so it
+// separates words too: Word's PDFs often have no space in "PAGE.......3".
 std::vector<std::pair<size_t, size_t>> RawWords(const std::u32string& cps, size_t n) {
   std::vector<std::pair<size_t, size_t>> words;
   size_t start = 0;
   for (size_t i = 0; i <= n; ++i) {
-    bool cut = i == n || IsSeparator(cps[i]) || IsCjk(cps[i]);
-    if (!cut) continue;
+    size_t leader = i;
+    while (leader < n && IsLeader(cps[leader])) ++leader;
+    bool cut = i == n || IsSeparator(cps[i]) || IsCjk(cps[i]) || leader - i >= 3;
+    if (!cut) {
+      if (leader > i) i = leader - 1;  // a shorter run of them is part of the word
+      continue;
+    }
     if (i > start) words.emplace_back(start, i);
     if (i < n && IsCjk(cps[i])) words.emplace_back(i, i + 1);
+    if (leader - i >= 3) i = leader - 1;
     start = i + 1;
   }
   return words;

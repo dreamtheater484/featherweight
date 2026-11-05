@@ -235,11 +235,12 @@ text::ParagraphFormat Engine::FormatOf(const ParaProps& p) const {
   f.hyphenation.consecutiveLimit = set.consecutiveHyphenLimit;
   f.hyphenation.caps = !set.doNotHyphenateCaps;
   f.expandLineBreaks = !set.Compat(Name("doNotExpandShiftReturn"));
+  f.squeezeSpaces = compatMode_ >= 15;
   if (!set.decimalSymbol.empty()) f.decimalSeparator = static_cast<wchar_t>(set.decimalSymbol.front());
   return f;
 }
 
-void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out) {
+void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, bool pageBreaks) {
   out = ParaText();
   out.para = para;
   const Paragraph& model = doc_.Para(para);
@@ -369,10 +370,17 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out) {
         continue;
       }
       char16_t c = t[i];
-      while (item < items.size() && items[item].offset < i) ++item;
-      const InlineItem* it = item < items.size() && items[item].offset == i && items[item].length > 0 ? &items[item] : nullptr;
+      // The item for this character; markers without text before it (w:lastRenderedPageBreak,
+      // bookmarks) don't count.
+      while (item < items.size() && (items[item].offset < i || (items[item].offset == i && items[item].length == 0))) ++item;
+      const InlineItem* it = item < items.size() && items[item].offset == i ? &items[item] : nullptr;
       switch (c) {
         case 0x13: case 0x14: case 0x15: case 0x05: case 0x03: case 0x04:
+          emit(std::u16string_view(&t[i], 1), hide(), paint);
+          ++i;
+          continue;
+        case 0x0C: case 0x0E:
+          if (pageBreaks) break;
           emit(std::u16string_view(&t[i], 1), hide(), paint);
           ++i;
           continue;
@@ -440,6 +448,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out) {
       while (j < run.end) {
         char16_t d = t[j];
         if (d == 0x13 || d == 0x14 || d == 0x15 || d == 0x05 || d == 0x03 || d == 0x04 || d == 0x02 || d == 0xFFFC) break;
+        if ((d == 0x0C || d == 0x0E) && !pageBreaks) break;
         ++j;
       }
       for (const Replace& x : replaces)
@@ -470,8 +479,12 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out) {
     emit(std::u16string_view(t).substr(covered), styles_.Intern(h), RunPaint());
   }
 
-  const bool markHidden = (markProps.vanish && !options_.showHiddenText) || markProps.specVanish;
-  out.empty = markHidden && !visible && out.prefix == 0;
+  // A deleted paragraph mark joins the paragraph to the next in Word's final view, so one with
+  // nothing of its own left to show is gone.
+  const Node markRPr = doc_.ParaNode(para).Child(Name("pPr")).Child(Name("rPr"));
+  const bool markDeleted = markRPr && (markRPr.Child(Name("del")) || markRPr.Child(Name("moveFrom")));
+  const bool markHidden = (markProps.vanish && !options_.showHiddenText) || markProps.specVanish || markDeleted;
+  out.empty = markHidden && !visible && (out.prefix == 0 || markDeleted);  // a deleted mark takes its label along
   text::TextStyle mark = StyleOf(markProps, false);
   out.fw.markStyle = styles_.Intern(mark);
   out.fw.text = out.text;

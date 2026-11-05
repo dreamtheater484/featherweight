@@ -30,8 +30,9 @@ target_compile_options(fwdoclayout PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Rele
 # Its unit tests join fw_tests, and the never-damage tests run the corpus through the model
 # (plan §6.4 D1): read every document into the model, write every part it owns back, and check.
 if(FW_BUILD_TESTS)
-  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_doc.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_docsave.cpp")
-  target_link_libraries(fw_tests PRIVATE fwdoc)
+  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_doc.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_docsave.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp")
+  target_link_libraries(fw_tests PRIVATE fwdoc fwdoclayout)
   set(_fw_office "${PROJECT_SOURCE_DIR}/tests/office")
   add_test(NAME office_model_roundtrip COMMAND fwtool roundtrip --model "${_fw_office}/generated" "${_fw_office}/edge"
     "${_fw_office}/layout")

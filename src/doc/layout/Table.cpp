@@ -91,6 +91,7 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
     rb.header = leading && rb.props.header;
     if (!rb.props.header) leading = false;
     int32_t col = rb.props.gridBefore;
+    bool keepAll = true, anyPara = false;
     for (Node tc : doc_.RowCells(tr)) {
       CellBox c;
       c.tc = tc;
@@ -118,18 +119,73 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
         Spacing sp;
         std::vector<Zone> zones;
         cf.zones = &zones;
+        const std::string_view dir = c.props.textDirection;
+        if (dir == "btLr" || dir == "tbRl" || dir == "tbRlV" || dir == "tbLrV") {
+          // Vertical text: its lines run along the row's height, wrapped at the height the row
+          // sets, or not at all; the row is as tall as its longest line (measured on the corpus).
+          c.turn = dir == "btLr" ? 3 : 1;
+          const float spec = Pt(rb.props.height);
+          cf.width = spec > 0 ? std::max(1.0f, spec - c.marginTop - c.marginBottom) : 1584.0f;  // 22 inches
+        }
         StackBlocks(doc_.Blocks(tc), cf, c.content, sp);
         c.content.height += BorderBelow(sp);
+        if (c.turn) {
+          float longest = 0;
+          for (const LineBox& l : c.content.lines) longest = std::max(longest, l.line.contentRight - l.line.contentLeft);
+          c.turnedLength = std::max(1.0f, longest);
+        }
       }
       col += c.span;
+      if (!c.continued)
+        for (const Block& b : doc_.Blocks(tc))
+          if (b.kind == BlockKind::Paragraph) {
+            if (!doc_.ResolvedPara(b.para).keepNext) keepAll = false;
+            anyPara = true;
+          }
+      if (rb.cells.empty()) {
+        std::vector<Block> blocks = doc_.Blocks(tc);
+        rb.breakBefore = !blocks.empty() && blocks.front().kind == BlockKind::Paragraph &&
+                         doc_.ResolvedPara(blocks.front().para).pageBreakBefore;
+      }
       rb.cells.push_back(std::move(c));
     }
+    // Horizontal borders set on the cells themselves (w:tcBorders) take room inside them: the
+    // text starts below the stronger of a cell's top border and the bottom border of the cell
+    // above, and the last row's ends above its bottom border. The table's and its style's
+    // borders don't (measured on the corpus: counting those too makes rows of style-bordered
+    // tables taller than Word's).
+    {
+      auto own = [&](Node tc, uint32_t side) -> float {
+        Node b = tc.Child(Name("tcPr")).Child(Name("tcBorders")).Child(side);
+        if (!b) return 0;
+        std::string_view v = b.AttrOr(Name("val"));
+        if (v.empty() || v == "nil" || v == "none") return 0;
+        return static_cast<float>(ParseInt(b.AttrOr(Name("sz"))).value_or(0)) / 8.0f;
+      };
+      const RowBox* above = t.rows.empty() ? nullptr : &t.rows.back();
+      const bool lastRow = tr == rows.back();
+      for (CellBox& c : rb.cells) {
+        if (c.continued) continue;
+        float top = own(c.tc, Name("top"));
+        if (above)
+          for (const CellBox& a : above->cells)
+            if (c.x >= a.x - 0.5f && c.x < a.x + a.width - 0.5f) top = std::max(top, own(a.tc, Name("bottom")));
+        c.marginTop += top;
+        if (lastRow) c.marginBottom += own(c.tc, Name("bottom"));
+      }
+    }
+    rb.keepNext = keepAll && anyPara;
     float h = 0;
     for (const CellBox& c : rb.cells)
-      if (!c.continued && c.rowSpan == 1) h = std::max(h, c.content.height + c.marginTop + c.marginBottom);
+      if (!c.continued && c.rowSpan == 1)
+        h = std::max(h, (c.turnedLength > 0 ? c.turnedLength : c.content.height) + c.marginTop + c.marginBottom);
     float spec = Pt(rb.props.height);
     if (rb.props.heightRule == "exact" && spec > 0) h = spec;
-    else h = std::max(h, spec);
+    else if (spec > 0) {
+      float mv = 0;
+      for (const CellBox& c : rb.cells) mv = std::max(mv, c.marginTop + c.marginBottom);
+      h = std::max(h, spec + mv);
+    }
     rb.height = rb.props.hidden ? 0 : h;
     t.rows.push_back(std::move(rb));
   }
@@ -141,7 +197,10 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
       float have = 0;
       for (size_t k = r; k <= last; ++k) have += t.rows[k].height;
       float need = c.content.height + c.marginTop + c.marginBottom;
-      if (need > have && t.rows[last].props.heightRule != "exact") t.rows[last].height += need - have;
+      if (need > have && t.rows[last].props.heightRule != "exact") {
+        t.rows[last].height += need - have;
+        t.rows[last].grown += need - have;
+      }
     }
   for (const RowBox& r : t.rows)
     if (r.header) ++t.headerRows;
@@ -149,8 +208,70 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
   return t;
 }
 
+float Engine::VShift(const CellBox& c, float room) {
+  if (c.content.height >= room) return 0;
+  if (c.props.vAlign == "center") return (room - c.content.height) / 2;
+  if (c.props.vAlign == "bottom") return room - c.content.height;
+  return 0;
+}
+
+void Engine::EmitCell(const CellBox& c, float x, float top, float height, float from, float to, float vshift,
+                      const Rect* clip, Stack& out) {
+  const Stack& s = c.content;
+  uint32_t base = static_cast<uint32_t>(out.paints.size());
+  if (c.turn) {
+    // Vertical text goes whole in the cell's first part, its frame turned about a corner of the
+    // cell's content box: the bottom left when it runs up, the top right when it runs down.
+    if (from > 0.01f) return;
+    out.paints.insert(out.paints.end(), s.paints.begin(), s.paints.end());
+    const float left = x + c.x, right = left + c.width, bottom = top + height;
+    const Rect box{left, top, right, bottom};
+    const float turnX = c.turn == 3 ? left + c.marginLeft : right - c.marginRight;
+    const float turnY = c.turn == 3 ? bottom - c.marginBottom : top + c.marginTop;
+    for (const LineBox& l : s.lines) {
+      LineBox copy = l;
+      copy.turn = c.turn;
+      copy.turnX = turnX;
+      copy.turnY = turnY;
+      copy.clip = clip ? *clip : box;
+      copy.paint += base;
+      out.lines.push_back(std::move(copy));
+    }
+    return;
+  }
+  out.paints.insert(out.paints.end(), s.paints.begin(), s.paints.end());
+  float dx = x + c.x + c.marginLeft, dy = top + c.marginTop - from + vshift;
+  for (const LineBox& l : s.lines) {
+    if (l.top < from - 0.01f || l.top >= to - 0.01f) continue;
+    LineBox copy = l;
+    if (copy.turn) {  // vertical text in a table in this cell: its frame moves
+      copy.turnX += dx;
+      copy.turnY += dy;
+    } else {
+      copy.x += dx;
+      copy.top += dy;
+      copy.baseline += dy;
+    }
+    if (copy.clip.Width() > 0) copy.clip = {copy.clip.left + dx, copy.clip.top + dy, copy.clip.right + dx, copy.clip.bottom + dy};
+    if (clip) copy.clip = *clip;
+    copy.paint += base;
+    out.lines.push_back(std::move(copy));
+  }
+  for (const Fill& f : s.fills)
+    if (f.rect.top >= from - 0.01f && f.rect.top < to - 0.01f)
+      out.fills.push_back({{f.rect.left + dx, f.rect.top + dy, f.rect.right + dx, f.rect.bottom + dy}, f.color});
+  for (const Edge& e : s.edges)
+    if (e.y1 >= from - 0.01f && e.y1 < to - 0.01f) out.edges.push_back({e.border, e.x1 + dx, e.y1 + dy, e.x2 + dx, e.y2 + dy});
+  for (const DrawingBox& d : s.drawings)
+    if (d.rect.top >= from - 0.01f && d.rect.top < to - 0.01f) {
+      DrawingBox copy = d;
+      copy.rect = {d.rect.left + dx, d.rect.top + dy, d.rect.right + dx, d.rect.bottom + dy};
+      out.drawings.push_back(copy);
+    }
+}
+
 void Engine::EmitRow(const TableBox& t, size_t r, float x, float top, float height, const std::vector<float>* cutFrom,
-                     const std::vector<float>* cutTo, Stack& out, bool firstOnPage, bool lastOnPage) {
+                     const std::vector<float>* cutTo, Stack& out, bool firstOnPage, bool lastOnPage, bool spans) {
   const RowBox& row = t.rows[r];
   const RowBox* above = r > 0 ? &t.rows[r - 1] : nullptr;
   const RowBox* below = r + 1 < t.rows.size() ? &t.rows[r + 1] : nullptr;
@@ -177,8 +298,9 @@ void Engine::EmitRow(const TableBox& t, size_t r, float x, float top, float heig
     }
     if (c.props.shading.Present() && !c.props.shading.fill.automatic)
       out.fills.push_back({{left, top, right, bottom}, c.props.shading.fill.rgb});
-    // Content: a restart cell's lines go in its first row; split rows show their part.
-    if (!c.continued) {
+    // Content: a restart cell's lines go in its first row (unless the caller places merged cells'
+    // text itself); split rows show their part.
+    if (!c.continued && (spans || c.rowSpan <= 1)) {
       float from = cutFrom ? (*cutFrom)[i] : 0;
       float to = cutTo ? (*cutTo)[i] : 1e30f;
       float vshift = 0;
@@ -188,36 +310,10 @@ void Engine::EmitRow(const TableBox& t, size_t r, float x, float top, float heig
         for (size_t k = r; k < std::min(t.rows.size(), r + static_cast<size_t>(c.rowSpan)); ++k) room += t.rows[k].height;
         room -= c.marginTop + c.marginBottom;
       }
-      if (!cutFrom && !cutTo && c.content.height < room) {
-        if (c.props.vAlign == "center") vshift = (room - c.content.height) / 2;
-        else if (c.props.vAlign == "bottom") vshift = room - c.content.height;
-      }
-      const Stack& s = c.content;
-      uint32_t base = static_cast<uint32_t>(out.paints.size());
-      out.paints.insert(out.paints.end(), s.paints.begin(), s.paints.end());
-      float dx = left + c.marginLeft, dy = top + c.marginTop - from + vshift;
-      for (const LineBox& l : s.lines) {
-        if (l.top < from - 0.01f || l.top >= to - 0.01f) continue;
-        LineBox copy = l;
-        copy.x += dx;
-        copy.top += dy;
-        copy.baseline += dy;
-        if (copy.clip.Width() > 0) copy.clip = {copy.clip.left + dx, copy.clip.top + dy, copy.clip.right + dx, copy.clip.bottom + dy};
-        if (row.props.heightRule == "exact") copy.clip = {left, top, right, bottom};
-        copy.paint += base;
-        out.lines.push_back(std::move(copy));
-      }
-      for (const Fill& f : s.fills)
-        if (f.rect.top >= from - 0.01f && f.rect.top < to - 0.01f)
-          out.fills.push_back({{f.rect.left + dx, f.rect.top + dy, f.rect.right + dx, f.rect.bottom + dy}, f.color});
-      for (const Edge& e : s.edges)
-        if (e.y1 >= from - 0.01f && e.y1 < to - 0.01f) out.edges.push_back({e.border, e.x1 + dx, e.y1 + dy, e.x2 + dx, e.y2 + dy});
-      for (const DrawingBox& d : s.drawings)
-        if (d.rect.top >= from - 0.01f && d.rect.top < to - 0.01f) {
-          DrawingBox copy = d;
-          copy.rect = {d.rect.left + dx, d.rect.top + dy, d.rect.right + dx, d.rect.bottom + dy};
-          out.drawings.push_back(copy);
-        }
+      if (!cutFrom && !cutTo) vshift = VShift(c, room);
+      const Rect box{left, top, right, bottom};
+      EmitCell(c, x, top, room + c.marginTop + c.marginBottom, from, to, vshift,
+               row.props.heightRule == "exact" ? &box : nullptr, out);
     }
     // Borders: the cell's own, against its neighbor's (the stronger wins; each shared edge once).
     const CellProps& p = owner->props;

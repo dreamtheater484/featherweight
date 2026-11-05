@@ -90,6 +90,13 @@ struct LineBox {
   uint32_t paint = 0;  // first of the paragraph's RunPaints in Page::paints (index + piece.run)
   uint32_t drawing = doc::kNone;  // text boxes: the drawing (Document::Drawings()) it's in
   Rect clip;           // text boxes and exact-height rows: where the line may be drawn; empty: anywhere
+  // Vertical text (table cells with w:textDirection btLr or tbRl): the line is laid out as if
+  // horizontal, in a frame turned `turn` quarter turns clockwise about (turnX, turnY) on the page,
+  // and `x`, `top` and `baseline` are in that frame. 0: an ordinary line, in page coordinates.
+  // HitTest and Ranges turn with it; a caret across such a line is horizontal, so CaretAt gives
+  // where it starts, with top == bottom.
+  uint8_t turn = 0;
+  float turnX = 0, turnY = 0;
   // What the line shows, in logical order: hidden text left out, a tab as 	, the hyphen of a
   // hyphenated break added. For copying, find and the layout dump.
   std::u16string text;
