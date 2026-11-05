@@ -127,7 +127,7 @@ enum Cmd : int {
   CmdShading,
   CmdShadingNone,
   // Documents: tables (D3).
-  CmdTableGrid = 1100,  // the toolbar's Insert table grid
+  CmdTableGrid = 1150,  // the toolbar's Insert table grid (after the header and footer commands)
   CmdTableBox,          // the toolbar's Table menu, in a table
   CmdInsertTable,       // the Table panel, to insert a table of any size
   CmdTextToTable,
