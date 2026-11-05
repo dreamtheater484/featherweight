@@ -27,7 +27,8 @@ uint32_t NoteAt(const Document& doc, Pos at);
 // Where note story `story` is referred to in the text (the reference's position), when it is.
 std::optional<Pos> NoteReference(const Document& doc, uint32_t story);
 
-// Deletes note story `story` and its reference, as deleting the reference does.
+// Deletes note story `story` and its reference, as deleting the reference does. Refused for a note
+// the text doesn't refer to (Word's separators).
 Result DeleteNote(Editor& editor, uint32_t story);
 
 }  // namespace fw::doc::edit

@@ -139,23 +139,12 @@ Result DeleteNote(Editor& editor, uint32_t story) {
   if (!editor.CanEdit(&why)) return Fail(why);
   if (story >= doc.Stories().size() || !IsNote(doc.Stories()[story].kind) || doc.Stories()[story].root == kNoElem)
     return Fail(u"There's no note here.");
-  if (std::optional<Pos> ref = NoteReference(doc, story)) {
-    Result r = editor.Delete(*ref, {ref->para, ref->offset + 1});
-    if (r) r.caret = *ref;
-    return r;
-  }
-  // A note nothing refers to (a file can have one): it goes alone.
-  TreeEdit te(editor, {0, 0});
-  te.Begin(u"Delete note");
-  te.Affects(0, 0);
-  if (!te.RemoveNote(story)) {
-    te.Abort();
-    return Fail(u"This note can't be deleted.");
-  }
-  te.Commit();
-  if (!te.Refused().empty()) return Fail(te.Refused());
-  Result r;
-  r.caret = {0, 0};
+  // Through its reference: a note the text doesn't refer to (Word's separators, which settings.xml
+  // names) isn't one a person can reach, and stays (torture finding 34).
+  std::optional<Pos> ref = NoteReference(doc, story);
+  if (!ref) return Fail(u"This note isn't referred to in the text, so it can't be deleted.");
+  Result r = editor.Delete(*ref, {ref->para, ref->offset + 1});
+  if (r) r.caret = *ref;
   return r;
 }
 
