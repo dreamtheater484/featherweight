@@ -24,6 +24,14 @@ size_t Rank(const TypeDef& parent, ElemDefId def) {
   return static_cast<size_t>(it - parent.children.begin());
 }
 
+// A properties element (w:rPr, w:pPr...), as the editor's AddInOrder tells them: kept content
+// goes after the properties around it.
+bool PropsElem(const Tree& t, ElemId id) {
+  const uint32_t n = NameOfElem(t, id);
+  return n == names::kPPr || n == names::kRPr || n == Name("sdtPr") || n == Name("sdtEndPr") ||
+         n == Name("smartTagPr") || n == Name("customXmlPr") || (t.elems[id].flags & kSharedKids);
+}
+
 size_t AttrRank(const TypeDef& type, AttrDefId def) {
   auto it = std::find(type.attrs.begin(), type.attrs.end(), def);
   return static_cast<size_t>(it - type.attrs.begin());
@@ -272,20 +280,30 @@ void TreeEdit::Link(ElemId parent, ElemId child, ElemId before) {
     E(prev).next = child;
   }
   E(child).parent = parent;
-  // Kept content after the last known child (the w14 extensions that end w:rPr) stays last.
-  if (prev != kNoElem && E(child).next == kNoElem) MoveFragments(prev, child, pkg::Slot::After, false, false);
+  // Kept content stays after the known content around properties, by the editor's rule
+  // (EditorState::AddInOrder): what came first in the parent (a run's mc:AlternateContent, an
+  // extension inside w:rPr) follows a new first property, and what followed the last property
+  // (the w14 extensions that end w:rPr) follows a new last one.
+  const Tree& t = doc_.tree_;
+  if (PropsElem(t, child) || PropsElem(t, parent)) {
+    if (prev == kNoElem) MoveFragments(parent, child, pkg::Slot::After, true, false, true);
+    else if (E(child).next == kNoElem && PropsElem(t, parent)) MoveFragments(prev, child, pkg::Slot::After, true, false);
+  }
 }
 
-// Moves `from`'s kept fragments after it (and before it, with `before`) to `to`, in `slot`: first
-// among to's fragments when `first`, after them otherwise.
-void TreeEdit::MoveFragments(ElemId from, ElemId to, pkg::Slot slot, bool first, bool before) {
+// Moves `from`'s kept fragments after it (and before it, with `before`; or with `inside`, those
+// first inside it) to `to`, in `slot`: first among to's fragments when `first`, after them
+// otherwise. Pair ends move only with `before` (the element they were beside goes).
+void TreeEdit::MoveFragments(ElemId from, ElemId to, pkg::Slot slot, bool first, bool before, bool inside) {
   auto real = [](pkg::NodeId n) { return n != pkg::kNoNode && n != pkg::kFieldNode; };
   const pkg::NodeId a = E(from).node, b = E(to).node;
   if (!real(a) || !real(b) || a == b) return;
   std::vector<pkg::Fragment> stay, move;
   for (pkg::Fragment& f : doc_.store_.FragmentsCopy(a)) {
-    bool outside = f.slot == pkg::Slot::After || (before && f.slot == pkg::Slot::Before);
-    (outside ? move : stay).push_back(std::move(f));
+    bool moves = inside ? f.slot == pkg::Slot::Inside && f.afterChild.empty()
+                        : f.slot == pkg::Slot::After || (before && f.slot == pkg::Slot::Before);
+    if (f.pairEnd && !before) moves = false;
+    (moves ? move : stay).push_back(std::move(f));
   }
   if (move.empty()) return;
   for (pkg::Fragment& f : move) {
