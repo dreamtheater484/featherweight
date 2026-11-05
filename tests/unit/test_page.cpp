@@ -270,6 +270,40 @@ TEST(Page_PageAndColumnBreaksStartAParagraph) {
   CHECK(SaveAndReopen(*doc));
 }
 
+TEST(Page_OptionalAndNonBreakingHyphensAreWordsElements) {
+  // Ctrl+- and Ctrl+Shift+- in the middle of a word: w:softHyphen and w:noBreakHyphen in its run,
+  // as Word writes them; they read back, delete and undo like any character.
+  Fixture f;
+  f.body = P("Hyphenation thirtyfive");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const std::string original = MainXml(*doc);
+  edit::Editor editor(*doc);
+  const uint32_t p = MainParas(*doc)[0];
+  REQUIRE(editor.InsertText({p, 6}, u"\u00AD"));
+  REQUIRE(editor.InsertText({p, 19}, u"\u2011"));
+  CHECK(doc->Para(p).text == u"Hyphen\u00ADation thirty\u2011five");
+  CHECK(RunsCover(*doc, p));
+  const std::string xml = MainXml(*doc);
+  CHECK(Has(xml, "Hyphen</w:t><w:softHyphen/><w:t xml:space=\"preserve\">ation thirty</w:t><w:noBreakHyphen/><w:t"));
+  CHECK(!Has(xml, "\xC2\xAD") && !Has(xml, "\xE2\x80\x91"));  // not the characters in a w:t
+  int soft = 0, hard = 0;
+  for (const InlineItem& item : doc->Items(p)) {
+    if (item.kind == ItemKind::SoftHyphen) ++soft;
+    if (item.kind == ItemKind::NoBreakHyphen) ++hard;
+  }
+  CHECK(soft == 1 && hard == 1);
+  {
+    auto again = SaveAndReopen(*doc);
+    REQUIRE(again);
+    CHECK(again->Para(MainParas(*again)[0]).text == doc->Para(p).text);
+  }
+  REQUIRE(editor.Delete({p, 6}, {p, 7}));
+  CHECK(doc->Para(p).text == u"Hyphenation thirty\u2011five" && !Has(MainXml(*doc), "softHyphen"));
+  CHECK(editor.Undo() && editor.Undo() && editor.Undo());
+  CHECK(MainXml(*doc) == original);
+}
+
 TEST(Page_BreaksInAParagraphThatEndedASectionOrWasFormatted) {
   // A tree edit in a paragraph's properties (a section break deleted, the paragraph centered) and
   // then a page break in its text: the text after the break is all in the next paragraph, in the

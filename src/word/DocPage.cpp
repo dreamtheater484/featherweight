@@ -47,6 +47,8 @@ constexpr Named kNames[] = {
     {CmdSectionOddPage, L"Section break (odd page)", L""},
     {CmdDeleteSectionBreak, L"Delete section break", L""},
     {CmdHyphenation, L"Hyphenate automatically", L""},
+    {CmdOptionalHyphen, L"Optional hyphen", L"Ctrl+-"},
+    {CmdNonBreakingHyphen, L"Non-breaking hyphen", L"Ctrl+Shift+-"},
 };
 
 const Named* NameOf(int cmd) {
@@ -396,7 +398,7 @@ DocPage::~DocPage() = default;
 
 bool DocPage::ShowsIn(const PanelContent* shown) const { return shown && shown == panel_.get(); }
 
-bool DocPage::Owns(int cmd) { return cmd >= CmdPageSetup && cmd <= CmdHyphenation; }
+bool DocPage::Owns(int cmd) { return cmd >= CmdPageSetup && cmd <= CmdNonBreakingHyphen; }
 
 std::vector<int> DocPage::CommandIds() {
   std::vector<int> ids;
@@ -406,8 +408,12 @@ std::vector<int> DocPage::CommandIds() {
 }
 
 int DocPage::Shortcut(UINT vk, UINT mods) {
-  if (vk != VK_RETURN || !(mods & kModCtrl) || (mods & kModAlt)) return 0;
-  return (mods & kModShift) ? CmdColumnBreak : CmdPageBreak;
+  if (!(mods & kModCtrl) || (mods & kModAlt)) return 0;
+  const bool shift = (mods & kModShift) != 0;
+  if (vk == VK_RETURN) return shift ? CmdColumnBreak : CmdPageBreak;
+  // Word's hyphens: Ctrl+- (the key by 0; Ctrl+numpad minus still zooms out) and Ctrl+Shift+-.
+  if (vk == VK_OEM_MINUS) return shift ? CmdNonBreakingHyphen : CmdOptionalHyphen;
+  return 0;
 }
 
 const std::vector<int>& DocPage::InsertCommands() {
@@ -474,7 +480,7 @@ CommandState DocPage::Query(int cmd) {
       s.enabled = can;
       s.checked = Doc().Settings().autoHyphenation;
       break;
-    default: s.enabled = can; break;  // Page setup, the Layout menu
+    default: s.enabled = can; break;  // Page setup, the Layout menu, hyphens (in any text)
   }
   return s;
 }
@@ -515,6 +521,8 @@ void DocPage::Execute(int cmd) {
     }
     case CmdPageBreak: Break(false); return;
     case CmdColumnBreak: Break(true); return;
+    case CmdOptionalHyphen: Hyphen(false); return;
+    case CmdNonBreakingHyphen: Hyphen(true); return;
     case CmdSectionNextPage: SectionBreak(SectionStart::NextPage); return;
     case CmdSectionContinuous: SectionBreak(SectionStart::Continuous); return;
     case CmdSectionEvenPage: SectionBreak(SectionStart::EvenPage); return;
@@ -555,6 +563,24 @@ void DocPage::Break(bool column) {
   edit::Result r = editor_.Delete(from, to);
   const bool deleted = static_cast<bool>(r);
   if (r) r = edit::InsertBreak(editor_, r.caret, column);
+  editor_.EndGroup();
+  if (deleted && !r) editor_.Undo();  // nothing half done
+  host_.apply(r);
+}
+
+void DocPage::Hyphen(bool nonBreaking) {
+  // U+00AD and U+2011, which the editor writes as w:softHyphen and w:noBreakHyphen.
+  const std::u16string text(1, nonBreaking ? char16_t(0x2011) : char16_t(0x00AD));
+  auto [from, to] = host_.selection();
+  if (Before(to, from)) std::swap(from, to);
+  if (from == to) {
+    host_.apply(editor_.InsertText(from, text));
+    return;
+  }
+  editor_.BeginGroup(nonBreaking ? u"Non-breaking hyphen" : u"Optional hyphen");
+  edit::Result r = editor_.Delete(from, to);
+  const bool deleted = static_cast<bool>(r);
+  if (r) r = editor_.InsertText(r.caret, text);
   editor_.EndGroup();
   if (deleted && !r) editor_.Undo();  // nothing half done
   host_.apply(r);

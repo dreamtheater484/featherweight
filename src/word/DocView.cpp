@@ -1533,9 +1533,11 @@ CommandState DocView::QueryCommand(int cmd) {
       s.shortcut = n.keys;
     }
   }
-  // Word's keys win in a document being edited: Ctrl+=, Ctrl+0, Ctrl+1 and Ctrl+2 format there.
+  // Word's keys win in a document being edited: Ctrl+=, Ctrl+0, Ctrl+1 and Ctrl+2 format there, and
+  // Ctrl+- is an optional hyphen (Ctrl+numpad minus still zooms out).
   if (format_ && (cmd == CmdZoomIn || cmd == CmdZoomAuto || cmd == CmdZoomActual || cmd == CmdZoomFitPage))
     s.shortcut.clear();
+  if (page_ && cmd == CmdZoomOut) s.shortcut = L"Ctrl+Num −";
   // "Undo typing", "Redo new paragraph".
   // (The names are copies: one each, so their iterators are of the same string.)
   if ((cmd == CmdUndo || cmd == CmdRedo) && s.enabled) {
@@ -1685,7 +1687,7 @@ void DocView::FillContextMenu(HMENU m, int x, int y) {
   AppendItem(m, CmdSelectAll, L"Select all\tCtrl+A");
   AppendSeparator(m);
   AppendItem(m, CmdZoomIn, format_ ? L"Zoom in" : L"Zoom in\tCtrl+=");
-  AppendItem(m, CmdZoomOut, L"Zoom out\tCtrl+−");
+  AppendItem(m, CmdZoomOut, page_ ? L"Zoom out\tCtrl+Num −" : L"Zoom out\tCtrl+−");
   AppendItem(m, CmdZoomFitWidth, L"Fit width\tCtrl+3");
   AppendItem(m, CmdZoomFitPage, format_ ? L"Fit page" : L"Fit page\tCtrl+2");
   AppendSeparator(m);
