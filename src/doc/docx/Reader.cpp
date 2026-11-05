@@ -681,7 +681,11 @@ bool Reader::ReadAttributes(const pkg::XmlPull& pull, ElemId elem, bool capture)
   auto first = static_cast<uint32_t>(doc_.tree_.attrs.size());
   uint16_t count = 0;
   for (const auto& a : pull.Attributes()) {
-    AttrDefId def = a.IsNamespaceDecl() ? kNoDef : s.AttrOf(type, NameOf(NsFromUri(a.nsUri), a.local));
+    const Ns ns = NsFromUri(a.nsUri);
+    AttrDefId def = a.IsNamespaceDecl() ? kNoDef : s.AttrOf(type, NameOf(ns, a.local));
+    // NameOf spells w: and unqualified names alike: one in another namespace than its
+    // definition isn't that attribute, and is kept as it is.
+    if (def != kNoDef && s.Attr(def).ns != ns) def = kNoDef;
     if (def != kNoDef && count < 0xFFFF) {
       doc_.tree_.attrs.push_back(AttrVal{def, doc_.tree_.strings.Intern(a.value)});
       ++count;
@@ -753,8 +757,11 @@ void Reader::InternProperties(const Frame& f) {
 ElemId Reader::KnownChild(const pkg::XmlPull& pull, ElemId parent, ElemId& last, bool displayOnly) {
   const Schema& s = Schema::Get();
   TypeId ptype = s.Elem(E(parent).def).type;
-  ElemDefId def = s.Child(ptype, NameOf(NsFromUri(pull.NamespaceUri()), pull.LocalName()));
-  if (def == kNoDef) return kNoElem;
+  const Ns ns = NsFromUri(pull.NamespaceUri());
+  ElemDefId def = s.Child(ptype, NameOf(ns, pull.LocalName()));
+  // NameOf spells w: and unqualified names alike: an element in another namespace than its
+  // definition (an unprefixed "tmpl" in no namespace) isn't Word's, and is kept as it is.
+  if (def == kNoDef || s.Elem(def).ns != ns) return kNoElem;
   Role role = s.Type(s.Elem(def).type).role;
   bool inPara = curPara_ != kNone;
   bool textual = role == Role::Text || role == Role::Char || role == Role::Object || role == Role::Marker;
@@ -1031,10 +1038,45 @@ void Reader::SetUpPrefixes(Part& part, const pkg::XmlPull& pull) {
   // The writer names each namespace with the prefix the root declares for it, and declares the
   // ones the root doesn't.
   bool strict = false;
+  // A prefix is taken when the root declares it, or when the part names it: an undeclared prefix
+  // in a qualified name, or in an mc:Ignorable or mc:MustUnderstand list, would change meaning if
+  // the writer declared it.
+  const std::string_view source = pull.Source();
+  auto nameChar = [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-' ||
+           c == '_' || static_cast<unsigned char>(c) >= 0x80;
+  };
+  auto space = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+  auto named = [&](std::string_view prefix) {
+    const std::string colon = std::string(prefix) + ':';
+    for (size_t at = source.find(colon); at != std::string_view::npos; at = source.find(colon, at + 1))
+      if (at == 0 || !nameChar(source[at - 1])) return true;
+    // Markup Compatibility lists name prefixes without a colon.
+    for (std::string_view list : {std::string_view("Ignorable"), std::string_view("MustUnderstand")}) {
+      for (size_t at = source.find(list); at != std::string_view::npos; at = source.find(list, at + 1)) {
+        size_t q = at + list.size();
+        while (q < source.size() && space(source[q])) ++q;
+        if (q >= source.size() || source[q] != '=') continue;
+        ++q;
+        while (q < source.size() && space(source[q])) ++q;
+        if (q >= source.size() || (source[q] != '"' && source[q] != '\'')) continue;
+        const size_t close = source.find(source[q], q + 1);
+        if (close == std::string_view::npos) break;
+        for (size_t p = q + 1; p < close;) {
+          while (p < close && space(source[p])) ++p;
+          size_t e = p;
+          while (e < close && !space(source[e])) ++e;
+          if (source.substr(p, e - p) == prefix) return true;
+          p = e;
+        }
+      }
+    }
+    return false;
+  };
   auto declared = [&](std::string_view prefix) {
     for (const auto& a : pull.Attributes())
       if (a.IsNamespaceDecl() && (prefix.empty() ? a.qname == "xmlns" : a.qname != "xmlns" && a.local == prefix)) return true;
-    return false;
+    return !prefix.empty() && named(prefix);
   };
   for (const auto& a : pull.Attributes()) {
     if (!a.qname.starts_with("xmlns:")) continue;
@@ -1088,7 +1130,9 @@ Status Reader::ReadPart(const std::string& name, PartKind kind) {
   if (std::string decl = DeclarationFragment(pull.Source()); !decl.empty()) prolog.insert(prolog.begin(), std::move(decl));
 
   const Schema& s = Schema::Get();
-  ElemDefId rootDef = s.Child(s.RootType(), NameOf(NsFromUri(pull.NamespaceUri()), pull.LocalName()));
+  const Ns rootNs = NsFromUri(pull.NamespaceUri());
+  ElemDefId rootDef = s.Child(s.RootType(), NameOf(rootNs, pull.LocalName()));
+  if (rootDef != kNoDef && s.Elem(rootDef).ns != rootNs) rootDef = kNoDef;  // as in KnownChild
   if (rootDef == kNoDef || s.Elem(rootDef).local == "txbxContent") {
     if (kind == PartKind::Document)
       return Status::Fail(Status::Code::Unsupported, "This file isn't a Word document: its main part is something else.");
