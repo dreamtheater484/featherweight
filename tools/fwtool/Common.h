@@ -31,6 +31,7 @@ struct Options {
   int edits = 40;                   // edit-check: random edits per document
   unsigned seed = 0;                // edit-check: the random edits' seed (0: the document's number)
   bool layout = false;              // dump: the pages Featherweight lays out
+  std::filesystem::path samples;    // paste-check: clipboard samples (.rtf, .html) to paste
   std::vector<std::filesystem::path> inputs;
 };
 
@@ -52,6 +53,7 @@ int RunLines(const Options& options);
 int RunCompare(const Options& options);
 int RunBench(const Options& options);
 int RunEditCheck(const Options& options);
+int RunPasteCheck(const Options& options);
 int RunBenchApp(const Options& options);
 // Parses its own options, from argv[2] on.
 int RunWrap(int argc, wchar_t** argv);

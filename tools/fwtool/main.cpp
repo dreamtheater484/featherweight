@@ -57,6 +57,11 @@ constexpr const char* kUsage =
     "  fwtool edit-check [--edits N] [--seed S] <file or folder>...\n"
     "      Makes N random edits (40) in each Word document through the editor, lays it out again\n"
     "      incrementally after each, and checks every ten that it's what a layout from scratch is.\n"
+    "  fwtool paste-check [--samples DIR] [--out DIR] <file or folder>...\n"
+    "      Copies each Word document's main story as RTF and HTML and pastes it back (the HTML\n"
+    "      over the story, the RTF at its end), and pastes each clipboard sample in --samples at\n"
+    "      its start. Every result must save, pass check (when the original does) and undo; with\n"
+    "      --out the saved copies go to DIR/html, DIR/rtf and DIR/samples, for fwvalidate.\n"
     "  fwtool bench-app [--runs N] [--json FILE] <Featherweight.exe> [<file>...]\n"
     "      Starts a private copy of Featherweight, alone and with each file, and measures launch\n"
     "      to window, to the first frame (the start screen or the first page), memory once\n"
@@ -150,6 +155,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--typing") options.typing = true;
     else if (arg == L"--edits" && i + 1 < argc) options.edits = std::max(1, _wtoi(argv[++i]));
     else if (arg == L"--seed" && i + 1 < argc) options.seed = static_cast<unsigned>(_wtoi(argv[++i]));
+    else if (arg == L"--samples" && i + 1 < argc) options.samples = argv[++i];
     else if (arg.starts_with(L"--")) {
       std::fprintf(stderr, "Unknown option %s\n\n%s", fw::WideToUtf8(arg).c_str(), fwtool::kUsage);
       return 2;
@@ -169,6 +175,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"bench") return fwtool::RunBench(options);
   if (command == L"bench-app") return fwtool::RunBenchApp(options);
   if (command == L"edit-check") return fwtool::RunEditCheck(options);
+  if (command == L"paste-check") return fwtool::RunPasteCheck(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }
