@@ -1,12 +1,13 @@
-<!-- fwvalidate: the Open XML SDK's validator, for the never-damage tests (plan §3, §10). Not shipped. -->
 <Project Sdk="Microsoft.NET.Sdk">
+  <!-- Test tool only, never shipped: the Open XML SDK validator (plan §3, "Never damage a file"). -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
-    <AssemblyName>fwvalidate</AssemblyName>
-    <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>fwvalidate</AssemblyName>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Runs on a newer .NET when 8 isn't installed (the Office reference PC). -->
     <RollForward>Major</RollForward>
   </PropertyGroup>
   <ItemGroup>

@@ -55,7 +55,7 @@ cmake -S . -B build-fuzz -DFW_FUZZ=ON
 ```
 
 ```bash
-cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing
+cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing fuzz_layout
 ```
 
 `FW_FUZZ` instruments `fwcore`, `fwpkg`, `fwdoc`, `fwdraw`, miniz and pugixml with AddressSanitizer and coverage, so keep it out of normal builds.

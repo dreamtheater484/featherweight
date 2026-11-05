@@ -34,6 +34,26 @@ fwtool roundtrip --expect-reject tests/office/malicious
 
 `fwtool check` applies the reference registry (`src/pkg/References.h`, rules in `ReferenceRules.cpp`): every reference resolves, ids are unique, pairs are complete, and the derived data it can see (the calculation chain, chart caches and embedded workbooks, VML notes) matches its sources. What Office tolerates, such as a missing style, is a warning. It also lists the extensions it doesn't know, near which structural edits will be blocked.
 
+### Word documents through the model (D1)
+
+With `--model`, Word documents are read into the document model, which writes back every part it owns. The saved copy must pass `fwtool check`. `--out DIR` keeps the copies, for the validator:
+
+```bash
+fwtool roundtrip --model --out <copies> <corpus> tests/office/generated tests/office/edge tests/office/layout
+fwtool roundtrip --model --reserialize-all <corpus> tests/office/generated tests/office/edge tests/office/layout
+dotnet build tools/validate/Validate.csproj -c Release -o build/validate
+build/validate/fwvalidate --saved <copies> <corpus> tests/office/generated tests/office/edge tests/office/layout
+```
+
+`fwvalidate` (a test tool, never shipped) runs the Open XML SDK validator on each copy and its original. Any error the copy has that the original doesn't fails the run (plan §3). Errors are compared by id, part and description, so namespace prefixes may differ.
+
+**Re-serialize all: the exceptions.** In this mode every XML part is rewritten: parts the model owns come from the model, and the others go through the DOM. Each rewritten part must equal the original after canonicalization (plan §10). These parts are copied byte for byte instead:
+- **Parts that aren't XML:** pictures (PNG, JPEG, TIFF, EMF, WMF), obfuscated fonts (`.odttf`), embedded objects and workbooks (`.bin`, `.xlsx`), printer settings, thumbnails. There is no XML to rewrite.
+- **Legacy VML drawing parts** (`application/vnd.openxmlformats-officedocument.vmlDrawing`, such as a sheet's comment shapes): their content type isn't XML, and Office writes them as loose HTML-style markup that isn't always well-formed. In Word documents, VML sits inside `document.xml` (`w:pict`, `w:object`), so it is rewritten with the part.
+- **Folder entries in the zip**, such as `ppt/`, which aren't parts.
+
+Measured on 2026-11-05: all 108 private corpus documents and the 27 files in `generated`, `edge` and `layout`. Results: round trip 135/135, `fwtool check` on the copies 135/135 (no new warnings), validator 0 new errors (401 in the originals), re-serialize all 135/135.
+
 ## Editing torture test (D2)
 
 D2 is done when every corpus file, after scripted random edits and a save, has no new validator errors, passes `fwtool check`, and opens in Word without a repair prompt (plan §6.4). Three tools check that:
@@ -48,7 +68,7 @@ D2 is done when every corpus file, after scripted random edits and a save, has n
   The replay prints the parts the save wrote and writes `<name>-replay.docx` next to the reproducer. When the edited model and the saved file read back differ, it also writes both texts in full (`-replay-edited.txt`, `-replay-readback.txt`). A reproducer from another checkout finds its document by the tail of the recorded path, so `tests/office/...` files replay anywhere.
 
   On rounds with an odd seed, every formatting edit is also checked for locality: paragraphs outside the formatted range must read the same before and after. That is the `spill` failure. Even seeds skip it, because reading every paragraph first fills the model's caches, and a stale cache is only caught when they start cold.
-- **`fwvalidate`** (`tools/validate`, built with `dotnet build`) is the Open XML SDK validator. With `--compare` it reports only the errors a saved copy has that its original doesn't.
+- **`fwvalidate`** (above) with `--compare` or `--pairs`: the same comparison for explicit pairs, since the torture test's saved copies aren't named like their originals. `--json` writes the new errors with where they are.
 - **`scripts/word-open-check.ps1`** opens each file in Word, hidden and in safe mode, read-only, with macros off, and reports whether Word shows a repair prompt or an error. Word's alerts stay on so that a repair prompt is shown, read and cancelled, never answered. Nothing is ever saved. It needs the Office reference PC. A dialog about that PC's Office rather than the file, such as a missing proofing tool ("Word hyphenation feature is not available"), gives the status `notice`, which passes.
 
 Each saved copy in `<out>/saved` comes with its edits (`<name>.edits.txt`), so a copy that the validator or Word complains about can be shrunk too. That's slower, since each try replays the edits and asks the judge again, and with Word a try takes about 10 seconds:
