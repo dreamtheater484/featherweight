@@ -4,7 +4,6 @@
 #include <cstdio>
 #include <unordered_set>
 
-#include "doc/edit/Kept.h"
 #include "doc/model/Internal.h"
 #include "doc/model/Schema.h"
 
@@ -183,13 +182,7 @@ struct EditorState {
     E(id).node = NewNode();
     return id;
   }
-  // Stores fragment lists that keep kept content in schema order (Kept.h). The transaction's
-  // saved paragraphs hold the store's entries for their elements, so undo puts them back.
-  void StoreFragments(FragmentChanges changes) {
-    for (auto& [node, fragments] : changes) d.store_.SetFragments(node, std::move(fragments));
-  }
-  // Inserts a new child where the schema orders it among the existing ones; what was kept around
-  // the children stays in schema order.
+  // Inserts a new child where the schema orders it among the existing ones.
   ElemId AddInOrder(ElemId parent, uint32_t name) {
     ElemId id = NewElem(parent, name);
     if (id == kNoElem) return kNoElem;
@@ -202,7 +195,6 @@ struct EditorState {
     ElemId after = kNoElem;
     for (ElemId c = E(parent).first; c != kNoElem && rank(c) <= mine; c = E(c).next) after = c;
     LinkAfter(parent, after, id);
-    StoreFragments(FragmentsAfterLink(d.store_, t, after, id));
     return id;
   }
   ElemId Child(ElemId parent, uint32_t name) {
@@ -1277,10 +1269,7 @@ struct EditorState {
         ElemId child = Child(cur, name);
         bool lastPart = slash == std::string_view::npos;
         if (lastPart && item.remove) {
-          if (child != kNoElem) {
-            StoreFragments(FragmentsBeforeUnlink(d.store_, t, PrevSibling(child), child, E(child).next));
-            Unlink(child);
-          }
+          if (child != kNoElem) Unlink(child);
           break;
         }
         if (child == kNoElem) child = AddInOrder(cur, name);
