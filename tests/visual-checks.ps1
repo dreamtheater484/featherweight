@@ -116,6 +116,10 @@ $checks = @(
   @("doc-paragraph", "dark", "", "key:ctrl+home;key:down;key:down;cmd:1271;wait:300", @("..\office\layout\report.docx")),
   # Optional and non-breaking hyphens typed in the heading (Ctrl+-, Ctrl+Shift+-), formatting marks shown.
   @("doc-hyphens", "light", "", "key:ctrl+home;key:right;key:right;key:ctrl+minus;key:right;key:ctrl+shift+minus;key:ctrl+shift+8;wait:200", @("..\office\layout\report.docx")),
+  # Footnotes and tables of contents (D4): a footnote (Ctrl+Alt+F) typed in place at the foot of the
+  # page; at night, a table of contents inserted at the top, its entries on the pages the layout gives.
+  @("doc-footnote", "light", "", "key:ctrl+home;key:end;key:ctrl+alt+f;type:A footnote, typed in place.;wait:300", @("..\office\layout\report.docx")),
+  @("doc-toc", "dark", "", "key:ctrl+home;cmd:1322;key:ctrl+home;wait:400", @("..\office\layout\report.docx")),
   # Printing a document (vector, through Microsoft Print to PDF), then the PDF it made.
   @("doc-print", "light", "", "print:$out\doc-print.pdf", @("..\office\layout\textbox-table.docx")),
   @("doc-printed", "light", "", "view:facing;cmd:fit-page", @("..\..\build\visual\doc-print.pdf"))

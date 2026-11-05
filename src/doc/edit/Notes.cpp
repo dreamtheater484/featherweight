@@ -25,12 +25,6 @@ Result Fail(std::u16string why) {
 
 bool IsNote(StoryKind kind) { return kind == StoryKind::Footnote || kind == StoryKind::Endnote; }
 
-std::string Escaped(std::string_view v) {
-  std::string out;
-  for (char c : v) out += c == '"' ? std::string("&quot;") : c == '&' ? std::string("&amp;") : c == '<' ? std::string("&lt;") : std::string(1, c);
-  return out;
-}
-
 // An id for a new note: above every note's of its kind, those taken out included (their ids
 // come back with them), and at least 1 (Word's separators are -1 and 0).
 std::string NewId(const Document& doc, StoryKind kind) {
@@ -60,35 +54,33 @@ Result InsertNote(Editor& editor, Pos at, bool endnote) {
   const std::u16string name = endnote ? u"Endnote" : u"Footnote";
   const std::string tag = endnote ? "endnote" : "footnote";
 
-  // The parts first, outside undo (they say nothing empty), and only when the change can be made.
-  TreeEdit styles(editor, at);
-  if (!styles.CanChange({at.para})) return Fail(styles.Refused());
-  if (styles.EnsurePart(PartKind::Styles) == kNoElem) return Fail(u"This document's styles can't change.");
-  const ElemId root = styles.EnsurePart(endnote ? PartKind::Endnotes : PartKind::Footnotes);
+  TreeEdit parts(editor, at);
+  if (!parts.CanChange({at.para})) return Fail(parts.Refused());
+
+  // The reference first. The parts a note needs are made outside undo (they say nothing empty),
+  // so only once it's in: a note that can't go there leaves nothing behind (torture finding 30).
+  EditGroup group(editor, name);
+  const std::string id = NewId(doc, kind);
+  Result r = editor.InsertRuns(at, "<w:r><w:" + tag + "Reference w:id=\"" + id + "\"/></w:r>", name);
+  if (!r) return r;
+  if (parts.EnsurePart(PartKind::Styles) == kNoElem) return Fail(u"This document's styles can't change.");
+  const ElemId root = parts.EnsurePart(endnote ? PartKind::Endnotes : PartKind::Footnotes);
   if (root == kNoElem) return Fail(what + u" can't be added to this document.");
 
-  EditGroup group(editor, name);
-  styles.Begin(name);
-  styles.Affects(at.para, at.para);
-  const std::string textStyle = EnsureStyle(styles, tag + " text");
-  const std::string markStyle = EnsureStyle(styles, tag + " reference");
-  styles.Commit();
-  if (!styles.Refused().empty()) return Fail(styles.Refused());
-
-  // The reference, in the text.
-  const std::string id = NewId(doc, kind);
-  std::string run = "<w:r>";
-  if (!markStyle.empty()) run += "<w:rPr><w:rStyle w:val=\"" + Escaped(markStyle) + "\"/></w:rPr>";
-  run += "<w:" + tag + "Reference w:id=\"" + id + "\"/></w:r>";
-  Result r = editor.InsertRuns(at, run, name);
-  if (!r) return r;
-
-  // The note, its paragraph after every other: the caret goes after its number and space. The
-  // notes after it number again from the reference's page.
+  // Then the styles, the reference's, and the note, its paragraph after every other: the caret goes
+  // after its number and space. The notes after it number again from the reference's page.
   const Pos inNote{static_cast<uint32_t>(doc.Paragraphs().size()), 2};
   TreeEdit te(editor, inNote);
   te.Begin(name);
   te.Affects(at.para, at.para, true);
+  const std::string textStyle = EnsureStyle(te, tag + " text");
+  const std::string markStyle = EnsureStyle(te, tag + " reference");
+  if (!markStyle.empty())
+    for (const TextRun& t : doc.Runs(at.para))
+      if (t.run && t.start == at.offset && t.end == at.offset + 1) {
+        te.SetAttr(te.Path(t.run.Id(), {names::kRPr, Name("rStyle")}), names::kVal, markStyle);
+        break;
+      }
   const uint32_t story = te.AddNote(root, endnote, id, textStyle, markStyle);
   if (story == kNone) {
     te.Abort();

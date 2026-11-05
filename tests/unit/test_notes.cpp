@@ -353,3 +353,33 @@ TEST(Notes_DeletedRowsAndTablesTakeTheirNotes) {
   CHECK(NotesXml(*doc) == notes);
   CHECK(!editor.CanUndo());
 }
+
+TEST(Notes_RefusedLeavesNothing) {
+  // Torture finding 30: a footnote refused where it can't go (in a drop-down list's text) leaves no
+  // notes part, styles part or paragraphs behind.
+  Fixture f;
+  f.body = "<w:p><w:sdt><w:sdtPr><w:dropDownList><w:listItem w:displayText=\"Apples\" w:value=\"Apples\"/>"
+           "<w:listItem w:displayText=\"Pears\" w:value=\"Pears\"/></w:dropDownList></w:sdtPr><w:sdtContent><w:r>"
+           "<w:t>Apples</w:t></w:r></w:sdtContent></w:sdt></w:p><w:p><w:r><w:t>Text</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const uint32_t p = MainParas(*doc)[0];
+  REQUIRE(ToUtf8(doc->Para(p).text) == "Apples");
+  const size_t parts = doc->Parts().size(), paras = doc->Paragraphs().size(), stories = doc->Stories().size();
+  const std::string main = MainXml(*doc);
+  edit::Editor editor(*doc);
+  for (bool endnote : {false, true}) {
+    edit::Result r = edit::InsertNote(editor, {p, 3}, endnote);
+    CHECK(!r.ok && !r.message.empty());
+    CHECK(doc->Parts().size() == parts);
+    CHECK(doc->Paragraphs().size() == paras);
+    CHECK(doc->Stories().size() == stories);
+    CHECK(doc->FindPart(PartKind::Footnotes) == nullptr && doc->FindPart(PartKind::Endnotes) == nullptr);
+    CHECK(doc->FindPart(PartKind::Styles) == nullptr);
+    CHECK(MainXml(*doc) == main);
+    CHECK(!editor.CanUndo());
+  }
+  // Where it can go, it does.
+  CHECK(edit::InsertNote(editor, {MainParas(*doc)[1], 4}, false).ok);
+  CHECK(SavesAndChecks(*doc));
+}
