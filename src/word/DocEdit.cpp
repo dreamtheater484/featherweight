@@ -173,9 +173,9 @@ void DocView::Cut() {
   Apply(r);
 }
 
-void DocView::Paste(bool formatted) {
+void DocView::Paste(bool formatted, bool merge) {
   if (!Editing()) return;
-  if (formatted && PastePicture()) return;  // only when there's no text
+  if (formatted && !merge && PastePicture()) return;  // only when there's no text
   namespace edit = fw::doc::edit;
   std::optional<edit::Clip> clip;
   if (formatted) {
@@ -206,7 +206,7 @@ void DocView::Paste(bool formatted) {
     r = editor_->ClearCells(ToDoc(anchor_), ToDoc(focus_));
     from = to = r.caret;
   }
-  if (r) r = clip ? edit::PasteClip(*editor_, from, to, *clip, clipSource_)
+  if (r) r = clip ? edit::PasteClip(*editor_, from, to, *clip, clipSource_, merge)
                   : from == to ? editor_->InsertText(from, t) : editor_->Replace(from, to, t);
   if (r) editor_->EndGroup();
   else editor_->CancelGroup();

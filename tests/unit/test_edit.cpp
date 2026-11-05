@@ -1707,3 +1707,37 @@ TEST(Edit_OneParagraphControlsAreNotSplit) {
   while (ed.CanUndo()) ed.Undo();
   CHECK(MainXml(*doc) == before && RoundTrips(*doc));
 }
+
+TEST(Clip_PasteMergingFormattingTakesTheLookThere) {
+  // Word's "Merge formatting" (D3 audit): the text takes the look and paragraph properties of
+  // where it goes, and keeps its emphasis. Color, size and centering don't come along.
+  Fixture f;
+  f.styles = kClipStyles;
+  f.body =
+      "<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:rPr><w:color w:val=\"FF0000\"/><w:sz w:val=\"30\"/></w:rPr>"
+      "<w:t xml:space=\"preserve\">Red </w:t></w:r><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>loud</w:t></w:r></w:p>"
+      "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Arial\" w:hAnsi=\"Arial\"/><w:sz w:val=\"40\"/></w:rPr><w:t>Target here</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  Clip c = edit::CopyClip(*doc, P(ps[0], 0), P(ps[0], 8));
+  auto r = edit::PasteClip(ed, P(ps[1], 7), P(ps[1], 7), c, 0, true);
+  CHECK(r && doc->Para(ps[1]).text == u"Target Red loudhere");
+  const RunProps& red = LookAt(*doc, ps[1], 8);
+  CHECK(red.color.automatic && red.size.Value() == 40 && red.fonts.ascii == "Arial" && !red.bold);
+  const RunProps& loud = LookAt(*doc, ps[1], 12);
+  CHECK(loud.bold && loud.italic && loud.size.Value() == 40 && loud.fonts.ascii == "Arial");
+  CHECK(Consistent(*doc, f));
+  CHECK(ed.UndoName() == u"Paste" && ed.Undo() && MainXml(*doc) == before);
+  // A whole paragraph keeps the alignment of where it went, not its centering.
+  Clip para = edit::CopyClip(*doc, P(ps[0], 0), P(ps[1], 0));
+  CHECK(para.paras.size() == 2);
+  CHECK(edit::PasteClip(ed, P(ps[1], 0), P(ps[1], 0), para, 0, true));
+  ps = Main(*doc);
+  CHECK(ps.size() == 3 && doc->Para(ps[1]).text == u"Red loud");
+  CHECK(ps.size() == 3 && doc->ResolvedPara(ps[1]).jc != fw::doc::Justification::Center);
+  CHECK(ed.Undo() && MainXml(*doc) == before);
+}

@@ -77,7 +77,10 @@ std::optional<Clip> CopyCells(const Editor& editor, Pos from, Pos to, uint64_t s
 // their own. In a cell, a clip that is one table goes over the cells from there (rows added below
 // as needed, columns past the table's edge left out); anything else comes as text, a row a
 // paragraph with its cells separated by tabs.
-Result PasteClip(Editor& editor, Pos from, Pos to, const Clip& clip, uint64_t target = 0);
+// `merge` (Word's "Merge formatting"): the text takes the look and paragraph properties of where
+// it goes, keeping only its emphasis (bold, italic, underline, strikethrough, raised and lowered
+// text), its links and, in the same document, its lists. Tables paste as without it.
+Result PasteClip(Editor& editor, Pos from, Pos to, const Clip& clip, uint64_t target = 0, bool merge = false);
 
 // The converters. RTF is 7-bit ASCII ("Rich Text Format" on the clipboard); HTML is the
 // clipboard's "HTML Format" (CF_HTML: a header with offsets, then UTF-8). Featherweight's own

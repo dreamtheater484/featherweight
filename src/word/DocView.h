@@ -129,7 +129,8 @@ class DocView : public PagedView {
   bool Editing() const { return editor_ != nullptr && Ready() && !presentation_; }
   void Cut();
   // Pastes the clipboard's formatted text (Featherweight's own, RTF or HTML), or its plain text.
-  void Paste(bool formatted = true);
+  // `merge`: the text takes the look of where it goes, keeping its emphasis (Clip.h PasteClip).
+  void Paste(bool formatted = true, bool merge = false);
   void Undo();
   void Redo();
 

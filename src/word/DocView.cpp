@@ -1428,6 +1428,7 @@ constexpr CommandName kCommandNames[] = {
     {CmdCut, L"Cut", L"Ctrl+X"},
     {CmdCopy, L"Copy", L"Ctrl+C"},
     {CmdPaste, L"Paste", L"Ctrl+V"},
+    {CmdPasteMerge, L"Paste, merging formatting", L""},
     {CmdUndo, L"Undo", L"Ctrl+Z"},
     {CmdRedo, L"Redo", L"Ctrl+Y"},
     {CmdSelectAll, L"Select all", L"Ctrl+A"},
@@ -1503,6 +1504,7 @@ CommandState DocView::QueryCommand(int cmd) {
     case CmdCopy: s = {Ready() && HasSelection(), false}; break;
     case CmdCut: s = {Editing() && HasSelection(), false}; break;
     case CmdPaste: s = {Editing() && (IsClipboardFormatAvailable(CF_UNICODETEXT) || HasPictureOnClipboard()), false}; break;
+    case CmdPasteMerge: s = {Editing() && IsClipboardFormatAvailable(CF_UNICODETEXT), false}; break;
     case CmdUndo: s = {Editing() && editor_->CanUndo(), false}; break;
     case CmdRedo: s = {Editing() && editor_->CanRedo(), false}; break;
     case CmdSelectAll: s = {Ready(), false}; break;
@@ -1541,7 +1543,8 @@ CommandState DocView::QueryCommand(int cmd) {
 std::vector<int> DocView::Commands() {
   std::vector<int> ids;
   for (const CommandName& n : kCommandNames)
-    if (editor_ || (n.cmd != CmdCut && n.cmd != CmdPaste && n.cmd != CmdUndo && n.cmd != CmdRedo)) ids.push_back(n.cmd);
+    if (editor_ || (n.cmd != CmdCut && n.cmd != CmdPaste && n.cmd != CmdPasteMerge && n.cmd != CmdUndo && n.cmd != CmdRedo))
+      ids.push_back(n.cmd);
   if (format_)
     for (int cmd : DocFormat::CommandIds()) ids.push_back(cmd);
   for (int cmd : {CmdInsertLink, CmdRemoveLink, CmdOpenLink, CmdBookmark, CmdEditHeader, CmdEditFooter,
@@ -1577,6 +1580,7 @@ bool DocView::Execute(int cmd) {
     case CmdCopy: Copy(); return true;
     case CmdCut: Cut(); return true;
     case CmdPaste: Paste(); return true;
+    case CmdPasteMerge: Paste(true, true); return true;
     case CmdUndo: Undo(); return true;
     case CmdRedo: Redo(); return true;
     case CmdSelectAll: SelectAll(); return true;
@@ -1663,6 +1667,7 @@ void DocView::FillContextMenu(HMENU m, int x, int y) {
     AppendItem(m, CmdCut, L"Cut\tCtrl+X", HasSelection());
     AppendItem(m, CmdCopy, L"Copy\tCtrl+C", HasSelection());
     AppendItem(m, CmdPaste, L"Paste\tCtrl+V", QueryCommand(CmdPaste).enabled);
+    AppendItem(m, CmdPasteMerge, L"Paste, merging formatting", QueryCommand(CmdPasteMerge).enabled);
     AppendSeparator(m);
     HMENU language = CreatePopupMenu();
     FillLanguageMenu(language);

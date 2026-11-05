@@ -264,6 +264,33 @@ Result FormatRun(Editor& ed, Pos from, Pos to, const ClipRun& run) {
   return ok;
 }
 
+// Merge formatting: the text keeps the look of where it went, and the run's emphasis (bold,
+// italic, underline, strikethrough, raised or lowered) is added where that look hasn't it.
+Result Emphasize(Editor& ed, Pos from, Pos to, const ClipRun& run) {
+  const Document& doc = ed.Doc();
+  bool b = false, i = false, u = false, s = false, v = false;
+  for (const TextRun& t : doc.Runs(from.para)) {
+    if (!t.run || t.end <= from.offset || t.start >= to.offset) continue;
+    const RunProps& r = doc.ResolvedRun(from.para, t.run);
+    b = b || (run.bold && !r.bold);
+    i = i || (run.italic && !r.italic);
+    u = u || (run.underline && r.underline == Underline::None);
+    s = s || (run.strike && !r.strike && !r.doubleStrike);
+    v = v || (run.vertAlign != VertAlign::Baseline && r.vertAlign != run.vertAlign);
+  }
+  PropEdit set;
+  if (b) set.Set("b");
+  if (i) set.Set("i");
+  if (u) set.Set("u", {{"val", "single"}});
+  if (s) set.Set("strike");
+  if (v) set.Set("vertAlign", {{"val", run.vertAlign == VertAlign::Superscript ? "superscript" : "subscript"}});
+  Result ok;
+  ok.caret = to;
+  if (set.items.empty()) return ok;
+  if (Result r = ed.SetRunProps(from, to, set); !r) return r;
+  return ok;
+}
+
 // Gives a pasted paragraph the clip paragraph's style, alignment, indents, spacing and list.
 // Indents and spacing are kept to what Word takes (22 inches either way; spacing never negative).
 Result FormatPara(Editor& ed, uint32_t para, const ClipPara& cp, bool numbered) {
@@ -404,7 +431,7 @@ Clip CopyClip(const Document& doc, Pos from, Pos to, uint64_t source) {
   return clip;
 }
 
-Result PasteClip(Editor& ed, Pos from, Pos to, const Clip& clip, uint64_t target) {
+Result PasteClip(Editor& ed, Pos from, Pos to, const Clip& clip, uint64_t target, bool merge) {
   if (clip.HasTables()) return cliptable::PasteTables(ed, from, to, clip, target);
   const Document& doc = ed.Doc();
   const bool same = clip.source != 0 && clip.source == target;
@@ -469,9 +496,19 @@ Result PasteClip(Editor& ed, Pos from, Pos to, const Clip& clip, uint64_t target
   }
 
   // A paragraph with its mark gets its properties, then the text its look: formatted against the
-  // style it ends up with.
-  for (size_t i = 0; i + 1 < n; ++i)
+  // style it ends up with. Merged, the paragraphs keep the properties of where they went (a split
+  // carries them), and only a list comes along.
+  for (size_t i = 0; i + 1 < n; ++i) {
+    if (merge) {
+      if (!numbered[i]) continue;
+      PropEdit list;
+      list.Set("numPr/ilvl", {{"val", std::to_string(clip.paras[i].ilvl)}});
+      list.Set("numPr/numId", {{"val", clip.paras[i].numId}});
+      if (Result f = ed.SetParaProps(paras[i], paras[i], list); !f) return fail(f);
+      continue;
+    }
     if (Result f = FormatPara(ed, paras[i], clip.paras[i], numbered[i]); !f) return fail(f);
+  }
   // Web links become hyperlinks over the runs that share them. Where the editor can't make one
   // (inside a field or a content control) the text stays plain.
   for (size_t i = 0; i < n; ++i) {
@@ -489,7 +526,8 @@ Result PasteClip(Editor& ed, Pos from, Pos to, const Clip& clip, uint64_t target
         link = want;
         linkFrom = at;
       }
-      if (Result r = FormatRun(ed, {p, at}, {p, at + len}, *run); !r) return fail(r);
+      if (Result r = merge ? Emphasize(ed, {p, at}, {p, at + len}, *run) : FormatRun(ed, {p, at}, {p, at + len}, *run); !r)
+        return fail(r);
       at += len;
     }
     endLink();
