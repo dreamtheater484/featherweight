@@ -15,7 +15,10 @@ namespace {
 //   !role         para, run, text, object, marker, story, or char=XXXX (hex code unit)
 // Children are listed in schema order (ECMA-376 Part 1, §17), which is where editing operations
 // insert new elements; reading and writing keep the document's own order. Elements a type doesn't
-// list are kept as they are, and so are the attributes it doesn't list.
+// list are kept as they are, and so are the attributes it doesn't list. A new child goes after the
+// kept elements that follow the one before it, so a type children are added to lists all of its
+// schema's (Settings: all of CT_Settings but m:mathPr and sl:schemaLibrary, which nothing is
+// inserted before; d1-corpus torture finding 27), with Empty for those the model doesn't read.
 constexpr std::string_view kSchema = R"(
 OnOff = @val
 Val = @val
@@ -196,13 +199,18 @@ LvlOverride = @ilvl startOverride:Val lvl:Lvl
 Num = @numId abstractNumId:Val lvlOverride:LvlOverride
 NumPicBullet = @numPicBulletId
 Numbering = numPicBullet:NumPicBullet abstractNum:AbstractNum num:Num numIdMacAtCleanup:Val
-
+)"
+// (Two literals: MSVC takes up to 16 KB in one.)
+R"(
 NoteIdRef = @id
 NoteSettings = pos:Val numFmt:NumFmt numStart:Val numRestart:Val footnote:NoteIdRef endnote:NoteIdRef
 CompatSetting = @name @uri @val
 Compat = useSingleBorderforContiguousCells:OnOff wpJustification:OnOff noTabHangInd:OnOff noLeading:OnOff spaceForUL:OnOff noColumnBalance:OnOff balanceSingleByteDoubleByteWidth:OnOff noExtraLineSpacing:OnOff doNotLeaveBackslashAlone:OnOff ulTrailSpace:OnOff doNotExpandShiftReturn:OnOff spacingInWholePoints:OnOff lineWrapLikeWord6:OnOff printBodyTextBeforeHeader:OnOff printColBlack:OnOff wpSpaceWidth:OnOff showBreaksInFrames:OnOff subFontBySize:OnOff suppressBottomSpacing:OnOff suppressTopSpacing:OnOff suppressSpacingAtTopOfPage:OnOff suppressTopSpacingWP:OnOff suppressSpBfAfterPgBrk:OnOff swapBordersFacingPages:OnOff convMailMergeEsc:OnOff truncateFontHeightsLikeWP6:OnOff mwSmallCaps:OnOff usePrinterMetrics:OnOff doNotSuppressParagraphBorders:OnOff wrapTrailSpaces:OnOff footnoteLayoutLikeWW8:OnOff shapeLayoutLikeWW8:OnOff alignTablesRowByRow:OnOff forgetLastTabAlignment:OnOff adjustLineHeightInTable:OnOff autoSpaceLikeWord95:OnOff noSpaceRaiseLower:OnOff doNotUseHTMLParagraphAutoSpacing:OnOff layoutRawTableWidth:OnOff layoutTableRowsApart:OnOff useWord97LineBreakRules:OnOff doNotBreakWrappedTables:OnOff doNotSnapToGridInCell:OnOff selectFldWithFirstOrLastChar:OnOff applyBreakingRules:OnOff doNotWrapTextWithPunct:OnOff doNotUseEastAsianBreakRules:OnOff useWord2002TableStyleRules:OnOff growAutofit:OnOff useFELayout:OnOff useNormalStyleForList:OnOff doNotUseIndentAsNumberingTabStop:OnOff useAltKinsokuLineBreakRules:OnOff allowSpaceOfSameStyleInTable:OnOff doNotSuppressIndentation:OnOff doNotAutofitConstrainedTables:OnOff autofitToFirstFixedWidthCell:OnOff underlineTabInNumList:OnOff displayHangulFixedWidth:OnOff splitPgBreakAndParaMark:OnOff doNotVertAlignCellWithSp:OnOff doNotBreakConstrainedForcedTable:OnOff doNotVertAlignInTxbx:OnOff useAnsiKerningPairs:OnOff cachedColBalance:OnOff compatSetting:CompatSetting
 ClrSchemeMapping = @bg1 @t1 @bg2 @t2 @accent1 @accent2 @accent3 @accent4 @accent5 @accent6 @hyperlink @followedHyperlink
-Settings = displayBackgroundShape:OnOff mirrorMargins:OnOff bordersDoNotSurroundHeader:OnOff bordersDoNotSurroundFooter:OnOff gutterAtTop:OnOff trackRevisions:OnOff defaultTabStop:Val autoHyphenation:OnOff consecutiveHyphenLimit:Val hyphenationZone:Val doNotHyphenateCaps:OnOff defaultTableStyle:Val evenAndOddHeaders:OnOff bookFoldPrinting:OnOff noPunctuationKerning:OnOff characterSpacingControl:Val printTwoOnOne:OnOff updateFields:OnOff footnotePr:NoteSettings endnotePr:NoteSettings compat:Compat themeFontLang:Lang clrSchemeMapping:ClrSchemeMapping decimalSymbol:Val listSeparator:Val
+DocVar = @name @val
+DocVars = docVar:DocVar
+Rsids = rsidRoot:Val rsid:Val
+Settings = writeProtection:Empty view:Empty zoom:Empty removePersonalInformation:Empty removeDateAndTime:Empty doNotDisplayPageBoundaries:Empty displayBackgroundShape:OnOff printPostScriptOverText:Empty printFractionalCharacterWidth:Empty printFormsData:Empty embedTrueTypeFonts:Empty embedSystemFonts:Empty saveSubsetFonts:Empty saveFormsData:Empty mirrorMargins:OnOff alignBordersAndEdges:Empty bordersDoNotSurroundHeader:OnOff bordersDoNotSurroundFooter:OnOff gutterAtTop:OnOff hideSpellingErrors:Empty hideGrammaticalErrors:Empty activeWritingStyle:Empty proofState:Empty formsDesign:Empty attachedTemplate:Empty linkStyles:Empty stylePaneFormatFilter:Empty stylePaneSortMethod:Empty documentType:Empty mailMerge:Empty revisionView:Empty trackRevisions:OnOff doNotTrackMoves:Empty doNotTrackFormatting:Empty documentProtection:Empty autoFormatOverride:Empty styleLockTheme:Empty styleLockQFSet:Empty defaultTabStop:Val autoHyphenation:OnOff consecutiveHyphenLimit:Val hyphenationZone:Val doNotHyphenateCaps:OnOff showEnvelope:Empty summaryLength:Empty clickAndTypeStyle:Empty defaultTableStyle:Val evenAndOddHeaders:OnOff bookFoldRevPrinting:Empty bookFoldPrinting:OnOff bookFoldPrintingSheets:Empty drawingGridHorizontalSpacing:Empty drawingGridVerticalSpacing:Empty displayHorizontalDrawingGridEvery:Empty displayVerticalDrawingGridEvery:Empty doNotUseMarginsForDrawingGridOrigin:Empty drawingGridHorizontalOrigin:Empty drawingGridVerticalOrigin:Empty doNotShadeFormData:Empty noPunctuationKerning:OnOff characterSpacingControl:Val printTwoOnOne:OnOff strictFirstAndLastChars:Empty noLineBreaksAfter:Empty noLineBreaksBefore:Empty savePreviewPicture:Empty doNotValidateAgainstSchema:Empty saveInvalidXml:Empty ignoreMixedContent:Empty alwaysShowPlaceholderText:Empty doNotDemarcateInvalidXml:Empty saveXmlDataOnly:Empty useXSLTWhenSaving:Empty saveThroughXslt:Empty showXMLTags:Empty alwaysMergeEmptyNamespace:Empty updateFields:OnOff hdrShapeDefaults:Empty footnotePr:NoteSettings endnotePr:NoteSettings compat:Compat docVars:DocVars rsids:Rsids attachedSchema:Empty themeFontLang:Lang clrSchemeMapping:ClrSchemeMapping doNotIncludeSubdocsInStats:Empty doNotAutoCompressPictures:Empty forceUpgrade:Empty captions:Empty readModeInkLockDown:Empty smartTagType:Empty shapeDefaults:Empty doNotEmbedSmartTags:Empty decimalSymbol:Val listSeparator:Val
 
 Charset = @val @characterSet
 Sig = @usb0 @usb1 @usb2 @usb3 @csb0 @csb1
