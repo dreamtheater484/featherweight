@@ -12,8 +12,9 @@
 //   fwvalidate [--json FILE] <file>...
 //       Lists each file's validator errors.
 //
-// Errors are compared by id, part and description, counting repeats, not by path: the model may
-// write namespace prefixes differently, and an edit moves what follows it.
+// Errors are compared by id, part and description, not by path (the model may write namespace
+// prefixes differently, and an edit moves what follows it) and not by count: an error the original
+// has isn't new when an edit repeats it.
 using System.Text.Json;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -155,17 +156,12 @@ static class Program {
 
   static Problem Unopenable(string problem) => new("Package", "", "", "the SDK can't open it: " + problem);
 
-  // The problems in `after` beyond those in `before`, counting repeats: the same error twice in the
-  // copy but once in the original is new.
+  // The errors the original doesn't have. One the original has, word for word (the same invalid
+  // value), isn't new when an edit makes another of it: splitting a link whose tooltip is too long
+  // copies the tooltip onto both halves, as Word does.
   static List<Problem> NewProblems(List<Problem> before, List<Problem> after) {
-    var counts = new Dictionary<string, int>();
-    foreach (var p in before) counts[p.Key] = counts.GetValueOrDefault(p.Key) + 1;
-    var added = new List<Problem>();
-    foreach (var p in after) {
-      if (counts.GetValueOrDefault(p.Key) > 0) counts[p.Key]--;
-      else added.Add(p);
-    }
-    return added;
+    var had = new HashSet<string>(before.Select(p => p.Key));
+    return after.Where(p => !had.Contains(p.Key)).ToList();
   }
 
   static void Print(string label, List<Problem> problems) {
