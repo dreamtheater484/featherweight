@@ -572,8 +572,8 @@ struct Flow {
     if (!f.pt) {
       f.pt = std::make_unique<ParaText>();
       e.BuildText(item.para, f.fields, *f.pt, true);
-      // So is the empty paragraph that only holds a section break: Word gives it no room (it sat
-      // alone on a page, or kept a continuous section's next one a line or its spacing lower).
+      // A paragraph nothing of which shows takes no room, and nor does an empty one that only
+      // holds a section break (Word gives it no line and no spacing).
       if (f.pt->empty || (EndsSection() && f.pt->inlines.empty() && f.pt->anchors.empty() &&
                           f.pt->Shown(0, static_cast<uint32_t>(f.pt->text.size()), false).empty())) {
         f.pt.reset();
