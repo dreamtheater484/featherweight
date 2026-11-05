@@ -7,6 +7,8 @@
 // involved and the output is the same on every PC.
 #include <windows.h>
 
+#include <psapi.h>
+
 #include <d2d1_1.h>
 #include <wincodec.h>
 #include <wrl/client.h>
@@ -22,6 +24,7 @@
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
 #include "draw/Drawing.h"
+#include "draw/Images.h"
 #include "pkg/Mce.h"
 #include "pkg/XmlDom.h"
 
@@ -261,6 +264,51 @@ void RenderExcel(const Options& options, const fw::pkg::Package& pkg, const std:
   }
 }
 
+double Milliseconds(const LARGE_INTEGER& from) {
+  LARGE_INTEGER now, f;
+  QueryPerformanceCounter(&now);
+  QueryPerformanceFrequency(&f);
+  return 1000.0 * static_cast<double>(now.QuadPart - from.QuadPart) / static_cast<double>(f.QuadPart);
+}
+
+double Megabytes(const std::shared_ptr<const Bitmap>& b) {
+  return b ? static_cast<double>(b->Stride()) * b->Height() / (1 << 20) : 0.0;
+}
+
+// --pictures: how long each picture takes to decode, whole and at a size it is typically shown at
+// (within 1000 x 1000 pixels), and the memory its pixels take.
+void TimePictures(const fw::pkg::Package& pkg) {
+  for (const fw::pkg::Part& part : pkg.Parts()) {
+    if (part.deleted || part.name.find("/media/") == std::string::npos) continue;
+    auto read = [&](std::vector<uint8_t>& bytes) { return pkg.ReadPart(part.name, bytes).Ok(); };
+    std::vector<uint8_t> bytes;
+    read(bytes);
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    std::shared_ptr<Image> whole = Image::OpenFrom(read);
+    const double open = Milliseconds(t);
+    if (!whole) {
+      std::printf("  %s: not a picture fwdraw reads\n", part.name.c_str());
+      continue;
+    }
+    const Size n = whole->NaturalSize();
+    const int w = whole->Width() ? whole->Width() : static_cast<int>(n.width / 0.75f);
+    const int h = whole->Height() ? whole->Height() : static_cast<int>(n.height / 0.75f);
+    QueryPerformanceCounter(&t);
+    std::shared_ptr<const Bitmap> all = whole->Pixels();
+    const double decodeAll = Milliseconds(t);
+    const double k = std::min(1.0, 1000.0 / std::max({w, h, 1}));
+    const int sw = std::max(1, static_cast<int>(w * k)), sh = std::max(1, static_cast<int>(h * k));
+    std::shared_ptr<Image> shown = Image::OpenFrom(read);
+    QueryPerformanceCounter(&t);
+    std::shared_ptr<const Bitmap> some = shown ? shown->Pixels(sw, sh) : nullptr;
+    const double decodeShown = Milliseconds(t);
+    std::printf("  %s: %d x %d, %.0f KB; header %.1f ms; whole %.1f ms, %.1f MB; at %d x %d %.1f ms, %.1f MB\n",
+                part.name.c_str(), w, h, bytes.size() / 1024.0, open, decodeAll, Megabytes(all), sw, sh, decodeShown,
+                Megabytes(some));
+  }
+}
+
 }  // namespace
 
 int RunRender(const Options& options) {
@@ -293,7 +341,12 @@ int RunRender(const Options& options) {
     }
     std::printf("  %d drawings, %d placeholders\n", count.drawings, count.placeholders);
     failures += count.failed;
+    if (options.pictures) TimePictures(*pkg);
   }
+  PROCESS_MEMORY_COUNTERS memory{};
+  GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof(memory));
+  std::printf("Pixels kept: %.1f MB; peak working set: %.1f MB\n", PixelBytesKept() / 1048576.0,
+              memory.PeakWorkingSetSize / 1048576.0);
   return failures ? 1 : 0;
 }
 

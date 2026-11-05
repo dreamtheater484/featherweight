@@ -25,10 +25,11 @@ constexpr const char* kUsage =
     "      are unique, pairs are complete, and derived data (the calculation chain, chart\n"
     "      caches) matches its sources. With --expect-reject every file must fail (the\n"
     "      broken files).\n"
-    "  fwtool render --out DIR [--scale N] <file or folder>...\n"
+    "  fwtool render --out DIR [--scale N] [--pictures] <file or folder>...\n"
     "      Draws the pictures and shapes with fwdraw to PNG files in DIR, N pixels per point\n"
     "      (default 2): each Word drawing at its own size, each slide's shapes on a slide-sized\n"
-    "      page, each shape in a sheet's drawings. For comparing with the reference renders.\n";
+    "      page, each shape in a sheet's drawings. For comparing with the reference renders.\n"
+    "      --pictures also times decoding each picture, whole and as typically shown.\n";
 
 std::vector<std::filesystem::path> CollectSorted(const std::filesystem::path& dir) {
   std::vector<std::filesystem::path> files;
@@ -97,6 +98,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--out" && i + 1 < argc) options.outDir = argv[++i];
     else if (arg == L"--printer" && i + 1 < argc) options.printer = argv[++i];
     else if (arg == L"--warp") options.warp = true;
+    else if (arg == L"--pictures") options.pictures = true;
     else if (arg == L"--scale" && i + 1 < argc) options.scale = std::clamp(static_cast<float>(_wtof(argv[++i])), 0.1f, 16.f);
     else if (arg.starts_with(L"--")) {
       std::fprintf(stderr, "Unknown option %s\n\n%s", fw::WideToUtf8(arg).c_str(), fwtool::kUsage);

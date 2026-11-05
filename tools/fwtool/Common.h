@@ -16,6 +16,7 @@ struct Options {
   std::wstring printer;         // print-sample: the printer (default: Microsoft Print to PDF)
   bool warp = false;            // print-sample: draw with WARP instead of the graphics adapter
   float scale = 2;              // render: pixels per point
+  bool pictures = false;        // render: time decoding each picture
   std::vector<std::filesystem::path> inputs;
 };
 
