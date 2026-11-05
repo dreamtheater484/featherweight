@@ -10,7 +10,9 @@
 #include <charconv>
 #include <cmath>
 #include <cstring>
+#include <mutex>
 #include <string_view>
+#include <vector>
 
 #include "draw/D2DPainter.h"
 #include "pkg/XmlDom.h"
@@ -229,6 +231,94 @@ ImageFormat SniffImageFormat(const uint8_t* d, size_t n) {
   return ImageFormat::Unknown;
 }
 
+namespace {
+
+// What every PixelHolder keeps, for the budget. A few hundred holders at most, so a list scanned
+// in full is enough.
+struct PixelBudget {
+  struct Kept {
+    const PixelHolder* holder;
+    std::weak_ptr<const PixelHolder> ref;
+    uint64_t bytes;
+    uint64_t lastUse;
+  };
+  std::mutex mutex;
+  std::vector<Kept> kept;
+  uint64_t budget = 48ull << 20, total = 0, clock = 0;
+
+  // Over the budget: the least recently used holders' entries, removed; they drop their pixels
+  // once the lock is released.
+  void Shrink(const PixelHolder* keep, std::vector<std::shared_ptr<const PixelHolder>>& drop) {
+    while (total > budget) {
+      auto victim = kept.end();
+      for (auto it = kept.begin(); it != kept.end(); ++it) {
+        if (it->holder != keep && (victim == kept.end() || it->lastUse < victim->lastUse)) victim = it;
+      }
+      if (victim == kept.end()) break;
+      total -= victim->bytes;
+      if (auto holder = victim->ref.lock()) drop.push_back(std::move(holder));
+      kept.erase(victim);
+    }
+  }
+};
+
+PixelBudget& Budget() {
+  static PixelBudget budget;
+  return budget;
+}
+
+}  // namespace
+
+PixelHolder::~PixelHolder() {
+  PixelBudget& b = Budget();
+  std::lock_guard<std::mutex> lock(b.mutex);
+  auto it = std::find_if(b.kept.begin(), b.kept.end(), [&](const PixelBudget::Kept& k) { return k.holder == this; });
+  if (it == b.kept.end()) return;
+  b.total -= it->bytes;
+  b.kept.erase(it);
+}
+
+void KeepPixels(const std::shared_ptr<const PixelHolder>& holder, uint64_t bytes) {
+  std::vector<std::shared_ptr<const PixelHolder>> drop;
+  {
+    PixelBudget& b = Budget();
+    std::lock_guard<std::mutex> lock(b.mutex);
+    auto it = std::find_if(b.kept.begin(), b.kept.end(),
+                           [&](const PixelBudget::Kept& k) { return k.holder == holder.get(); });
+    if (it == b.kept.end()) it = b.kept.insert(b.kept.end(), {holder.get(), holder, 0, 0});
+    b.total = b.total - it->bytes + bytes;
+    it->bytes = bytes;
+    it->lastUse = ++b.clock;
+    b.Shrink(holder.get(), drop);
+  }
+  for (const auto& h : drop) h->DropPixels();
+}
+
+void UsedPixels(const PixelHolder* holder) {
+  PixelBudget& b = Budget();
+  std::lock_guard<std::mutex> lock(b.mutex);
+  for (PixelBudget::Kept& k : b.kept) {
+    if (k.holder == holder) k.lastUse = ++b.clock;
+  }
+}
+
+void SetPixelBudget(uint64_t bytes) {
+  std::vector<std::shared_ptr<const PixelHolder>> drop;
+  {
+    PixelBudget& b = Budget();
+    std::lock_guard<std::mutex> lock(b.mutex);
+    b.budget = bytes;
+    b.Shrink(nullptr, drop);
+  }
+  for (const auto& h : drop) h->DropPixels();
+}
+
+uint64_t PixelBytesKept() {
+  PixelBudget& b = Budget();
+  std::lock_guard<std::mutex> lock(b.mutex);
+  return b.total;
+}
+
 const ImageLimits& ImageLimits::Default() {
   static const ImageLimits limits;
   return limits;
@@ -292,59 +382,108 @@ std::shared_ptr<Image> Image::Open(std::vector<uint8_t> bytes, const ImageLimits
   return img;
 }
 
+std::shared_ptr<Image> Image::OpenFrom(Reader read, const ImageLimits& limits, std::string* error) {
+  std::vector<uint8_t> bytes;
+  if (!read || !read(bytes)) {
+    if (error) *error = "The picture couldn't be read.";
+    return nullptr;
+  }
+  std::shared_ptr<Image> img = Open(std::move(bytes), limits, error);
+  if (img && !img->vector_) {
+    img->bytes_ = {};  // read again for each decode
+    img->reader_ = std::move(read);
+  }
+  return img;
+}
+
 std::shared_ptr<const Bitmap> Image::Pixels(int width, int height) const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (vector_) {
-    // Rasterized at the size asked for (the natural size at 96 dpi by default), and kept.
-    int w = width > 0 ? width : static_cast<int>(std::ceil(natural_.width / 0.75f));
-    int h = height > 0 ? height : static_cast<int>(std::ceil(natural_.height / 0.75f));
-    w = std::clamp(w, 1, 4096);
-    h = std::clamp(h, 1, 4096);
-    if (pixels_ && pixels_->Width() >= w && pixels_->Height() >= h) return pixels_;
-    if (auto px = RasterizeVectorImage(*vector_, w, h)) pixels_ = px;
-    return pixels_;
-  }
-  if (failed_) return nullptr;
-  // Small pictures are decoded whole once. Larger ones at the size asked for, rounded up to a
-  // power-of-two reduction, so zooming in doesn't decode again at every step.
-  int w = width_, h = height_;
-  if (width > 0 && height > 0 && uint64_t{static_cast<uint32_t>(width_)} * height_ > (1u << 20)) {
-    while (w / 2 >= width && h / 2 >= height && w / 2 >= 1 && h / 2 >= 1) {
-      w /= 2;
-      h /= 2;
+  std::shared_ptr<const Bitmap> px;
+  bool made = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (vector_) {
+      // Rasterized at the size asked for (the natural size at 96 dpi by default).
+      int w = width > 0 ? width : static_cast<int>(std::ceil(natural_.width / 0.75f));
+      int h = height > 0 ? height : static_cast<int>(std::ceil(natural_.height / 0.75f));
+      w = std::clamp(w, 1, 4096);
+      h = std::clamp(h, 1, 4096);
+      if (!pixels_ || pixels_->Width() < w || pixels_->Height() < h) {
+        if (auto r = RasterizeVectorImage(*vector_, w, h)) {
+          pixels_ = std::move(r);
+          made = true;
+        }
+      }
+    } else if (!failed_) {
+      // Small pictures are decoded whole once. Larger ones at the size asked for, rounded up to a
+      // power-of-two reduction, so zooming in doesn't decode again at every step.
+      int w = width_, h = height_;
+      if (width > 0 && height > 0 && uint64_t{static_cast<uint32_t>(width_)} * height_ > (1u << 20)) {
+        while (w / 2 >= width && h / 2 >= height && w / 2 >= 1 && h / 2 >= 1) {
+          w /= 2;
+          h /= 2;
+        }
+      }
+      const double area = static_cast<double>(w) * h;
+      if (area > static_cast<double>(limits_.maxDecodedPixels)) {
+        const double f = std::sqrt(static_cast<double>(limits_.maxDecodedPixels) / area);
+        w = std::max(1, static_cast<int>(w * f));
+        h = std::max(1, static_cast<int>(h * f));
+      }
+      if (!pixels_ || (pixels_->Width() < w && pixels_->Width() != width_)) {
+        if (auto d = Decode(w, h)) {
+          pixels_ = std::move(d);
+          made = true;
+        } else if (!pixels_) {
+          failed_ = true;
+        }
+      }
     }
+    px = pixels_;
   }
-  const double area = static_cast<double>(w) * h;
-  if (area > static_cast<double>(limits_.maxDecodedPixels)) {
-    const double f = std::sqrt(static_cast<double>(limits_.maxDecodedPixels) / area);
-    w = std::max(1, static_cast<int>(w * f));
-    h = std::max(1, static_cast<int>(h * f));
-  }
-  if (pixels_ && (pixels_->Width() >= w || pixels_->Width() == width_)) return pixels_;
-  if (auto px = Decode(w, h)) pixels_ = std::move(px);
-  else if (!pixels_) failed_ = true;
-  return pixels_;
+  // Outside the lock: the budget may ask other pictures to drop theirs.
+  if (made) KeepPixels(shared_from_this(), static_cast<uint64_t>(px->Stride()) * px->Height());
+  else if (px) UsedPixels(this);
+  return px;
+}
+
+void Image::DropPixels() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  pixels_.reset();
 }
 
 std::shared_ptr<const Bitmap> Image::Decode(int width, int height) const {
+  std::vector<uint8_t> read;
+  if (reader_ && !reader_(read)) return nullptr;
   ComScope com;
   Decoder dec;
-  if (!dec.Open(format_, bytes_)) return nullptr;
+  UINT w = 0, h = 0;
+  if (!dec.Open(format_, reader_ ? read : bytes_) || FAILED(dec.frame->GetSize(&w, &h)) ||
+      w != static_cast<UINT>(width_) || h != static_cast<UINT>(height_)) {
+    return nullptr;
+  }
+  // A JPEG is scaled straight from the decoder, which lets WIC decode it at a reduced size; other
+  // formats are premultiplied first, so transparent edges don't bleed when scaled.
+  const bool scale = width != width_ || height != height_;
+  const bool scaleFirst = scale && format_ == ImageFormat::Jpeg;
+  ComPtr<IWICBitmapSource> source = dec.frame;
+  auto scaled = [&](IWICBitmapSource* from) -> bool {
+    ComPtr<IWICBitmapScaler> scaler;
+    if (FAILED(dec.factory->CreateBitmapScaler(&scaler)) ||
+        FAILED(scaler->Initialize(from, width, height, WICBitmapInterpolationModeFant))) {
+      return false;
+    }
+    source = scaler;
+    return true;
+  };
+  if (scaleFirst && !scaled(source.Get())) return nullptr;
   ComPtr<IWICFormatConverter> converter;
   if (FAILED(dec.factory->CreateFormatConverter(&converter)) ||
-      FAILED(converter->Initialize(dec.frame.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0,
+      FAILED(converter->Initialize(source.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0,
                                    WICBitmapPaletteTypeCustom))) {
     return nullptr;
   }
-  ComPtr<IWICBitmapSource> source = converter;
-  if (width != width_ || height != height_) {
-    ComPtr<IWICBitmapScaler> scaler;
-    if (FAILED(dec.factory->CreateBitmapScaler(&scaler)) ||
-        FAILED(scaler->Initialize(converter.Get(), width, height, WICBitmapInterpolationModeFant))) {
-      return nullptr;
-    }
-    source = scaler;
-  }
+  source = converter;
+  if (scale && !scaleFirst && !scaled(source.Get())) return nullptr;
   std::vector<uint8_t> px(static_cast<size_t>(width) * height * 4);
   if (FAILED(source->CopyPixels(nullptr, width * 4, static_cast<UINT>(px.size()), px.data()))) return nullptr;
   return std::make_shared<Bitmap>(width, height, std::move(px));

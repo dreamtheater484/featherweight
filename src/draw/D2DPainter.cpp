@@ -52,7 +52,10 @@ bool SameStroke(const Pen& a, const Pen& b) {
 
 ID2D1Bitmap* D2DBitmapCache::Get(ID2D1DeviceContext* dc, const Bitmap& bitmap) {
   auto it = bitmaps_.find(bitmap.Id());
-  if (it != bitmaps_.end()) return it->second.Get();
+  if (it != bitmaps_.end()) {
+    it->second.lastUse = ++clock_;
+    return it->second.bitmap.Get();
+  }
   if (bitmap.Width() <= 0 || bitmap.Height() <= 0) return nullptr;
   ComPtr<ID2D1Bitmap> b;
   D2D1_BITMAP_PROPERTIES props =
@@ -61,7 +64,32 @@ ID2D1Bitmap* D2DBitmapCache::Get(ID2D1DeviceContext* dc, const Bitmap& bitmap) {
                               &b))) {
     return nullptr;
   }
-  return (bitmaps_[bitmap.Id()] = b).Get();
+  const uint64_t bytes = static_cast<uint64_t>(bitmap.Stride()) * bitmap.Height();
+  // Over the budget, the least recently drawn go (Direct2D keeps any still in use this frame).
+  while (total_ + bytes > budget_ && !bitmaps_.empty()) {
+    auto oldest = std::min_element(bitmaps_.begin(), bitmaps_.end(),
+                                   [](const auto& a, const auto& b) { return a.second.lastUse < b.second.lastUse; });
+    total_ -= oldest->second.bytes;
+    bitmaps_.erase(oldest);
+  }
+  total_ += bytes;
+  Entry& e = bitmaps_[bitmap.Id()];
+  e = {b, bytes, ++clock_};
+  return e.bitmap.Get();
+}
+
+void D2DBitmapCache::Forget(uint64_t id) {
+  if (auto it = bitmaps_.find(id); it != bitmaps_.end()) {
+    total_ -= it->second.bytes;
+    bitmaps_.erase(it);
+  }
+  vectors_.erase(id);
+}
+
+void D2DBitmapCache::Clear() {
+  bitmaps_.clear();
+  vectors_.clear();
+  total_ = 0;
 }
 
 IUnknown* D2DBitmapCache::Get(ID2D1DeviceContext* dc, const VectorImage& image) {

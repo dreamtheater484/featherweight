@@ -3,6 +3,7 @@
 #include <pugixml.hpp>
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -17,7 +18,7 @@
 namespace draw {
 
 // A picture filling an area (a:blipFill, v:imagedata, v:fill type="frame"/"tile").
-struct PictureFill {
+struct PictureFill : PixelHolder, std::enable_shared_from_this<PictureFill> {
   std::shared_ptr<const Image> image;  // null: missing or unreadable
   Rect crop{};                         // a:srcRect: fractions cut from each side (negative pads)
   Rect inset{};                        // a:stretch/a:fillRect: fractions inset from each side
@@ -42,11 +43,14 @@ struct PictureFill {
            blackLevel != 0;
   }
   // Pixels to draw for about `width` x `height` device pixels: the picture's own, recolored when
-  // needed. The recolored copy is kept between draws.
+  // needed. The recolored copy is kept between draws, within the pixel budget.
   std::shared_ptr<const Bitmap> Pixels(int width, int height) const;
+  void DropPixels() const override;
 
  private:
-  mutable std::shared_ptr<const Bitmap> source_, recolored_;
+  mutable std::mutex mutex_;
+  mutable std::weak_ptr<const Bitmap> source_;  // what recolored_ was made from
+  mutable std::shared_ptr<const Bitmap> recolored_;
 };
 
 struct Fill {

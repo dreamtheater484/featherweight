@@ -293,3 +293,21 @@ TEST(Painter_Shadow) {
   CHECK_EQ(s.At(2, 2), 0xFFFFFFu);
   CHECK_EQ(s.At(36, 8), 0xFFFFFFu);
 }
+
+TEST(Painter_BitmapCacheBudget) {
+  // Device copies stay within the cache's budget: the least recently drawn go first.
+  Surface s(8, 8);
+  D2DBitmapCache cache;
+  cache.SetBudget(10000);
+  Bitmap a(32, 32, std::vector<uint8_t>(32 * 32 * 4, 255)), b(32, 32, std::vector<uint8_t>(32 * 32 * 4, 128));
+  Bitmap c(32, 32, std::vector<uint8_t>(32 * 32 * 4, 0));
+  ID2D1Bitmap* first = cache.Get(s.dc.Get(), a);
+  CHECK(first != nullptr && cache.BytesKept() == 4096);
+  CHECK(cache.Get(s.dc.Get(), b) != nullptr && cache.BytesKept() == 8192);
+  CHECK(cache.Get(s.dc.Get(), a) == first);  // a is now the most recent
+  CHECK(cache.Get(s.dc.Get(), c) != nullptr && cache.BytesKept() == 8192);  // b went
+  CHECK(cache.Get(s.dc.Get(), a) == first);
+  cache.Forget(a.Id());
+  CHECK(cache.BytesKept() == 4096);
+  CHECK(s.End());
+}

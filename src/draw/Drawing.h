@@ -141,7 +141,9 @@ class Drawing {
 std::vector<std::pair<std::string_view, std::string_view>> ParseVmlStyle(std::string_view style);
 float VmlLength(std::string_view value, float unitless = 0.75f);
 
-// Pictures decoded once per package part and shared by every drawing that shows them.
+// Pictures opened once per package part and shared by every drawing that shows them, for one
+// package. A raster picture reads its part again whenever it decodes rather than keeping a copy of
+// its bytes, so the package must outlive the pictures.
 class ImageCache {
  public:
   // Null when the part is missing or isn't a picture Featherweight reads.

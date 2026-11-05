@@ -11,24 +11,26 @@
 namespace draw {
 
 // Device copies of Bitmaps, and the metafiles and SVG documents made from VectorImages, kept
-// between frames. Clear it when the device is lost.
+// between frames. The bitmaps stay within a budget (32 MB by default): those drawn least recently
+// go first. Clear it when the device is lost.
 class D2DBitmapCache {
  public:
   ID2D1Bitmap* Get(ID2D1DeviceContext* dc, const Bitmap& bitmap);
   // An ID2D1GdiMetafile (EMF) or ID2D1SvgDocument (SVG); null when Direct2D can't read it.
   IUnknown* Get(ID2D1DeviceContext* dc, const VectorImage& image);
-  void Forget(uint64_t id) {
-    bitmaps_.erase(id);
-    vectors_.erase(id);
-  }
-  void Clear() {
-    bitmaps_.clear();
-    vectors_.clear();
-  }
+  void Forget(uint64_t id);
+  void Clear();
+  void SetBudget(uint64_t bytes) { budget_ = bytes; }
+  uint64_t BytesKept() const { return total_; }
 
  private:
-  std::map<uint64_t, Microsoft::WRL::ComPtr<ID2D1Bitmap>> bitmaps_;
+  struct Entry {
+    Microsoft::WRL::ComPtr<ID2D1Bitmap> bitmap;
+    uint64_t bytes = 0, lastUse = 0;
+  };
+  std::map<uint64_t, Entry> bitmaps_;
   std::map<uint64_t, Microsoft::WRL::ComPtr<IUnknown>> vectors_;  // null entries: unreadable
+  uint64_t budget_ = 32ull << 20, total_ = 0, clock_ = 0;
 };
 
 // Painter on a Direct2D device context: a window's swap chain, an off-screen bitmap, or a command

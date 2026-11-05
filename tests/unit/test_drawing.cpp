@@ -299,6 +299,33 @@ TEST(Images_AskedSizeDecodesLess) {
   CHECK(big && big->Width() == 2048);
 }
 
+TEST(Images_PixelBudgetAndReader) {
+  // Pictures opened from a reader keep no copy of their bytes: they read them again to decode.
+  const std::vector<uint8_t> png = SolidImage(GUID_ContainerFormatPng, 0xFF336699, 64, 64);  // 16 KB decoded
+  int readsA = 0, readsB = 0;
+  std::shared_ptr<Image> a = Image::OpenFrom([&](std::vector<uint8_t>& out) {
+    ++readsA;
+    out = png;
+    return true;
+  });
+  std::shared_ptr<Image> b = Image::OpenFrom([&](std::vector<uint8_t>& out) {
+    ++readsB;
+    out = png;
+    return true;
+  });
+  CHECK(a && b && readsA == 1 && readsB == 1);
+  if (!a || !b) return;
+  // Under a 20 KB budget only one of them keeps its pixels: the one drawn last.
+  SetPixelBudget(20000);
+  CHECK(a->Pixels() != nullptr && readsA == 2);
+  CHECK(a->Pixels() != nullptr && readsA == 2);  // kept
+  CHECK(b->Pixels() != nullptr && readsB == 2);
+  CHECK(PixelBytesKept() <= 20000);
+  CHECK(a->Pixels() != nullptr && readsA == 3);  // dropped for b, decoded again
+  SetPixelBudget(48ull << 20);
+  CHECK(Image::OpenFrom([](std::vector<uint8_t>&) { return false; }) == nullptr);
+}
+
 TEST(Images_DamagedAndUnknown) {
   std::vector<uint8_t> png = QuadPng();
   png.resize(30);  // signature and part of the header

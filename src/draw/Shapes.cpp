@@ -591,7 +591,14 @@ std::shared_ptr<const Bitmap> PictureFill::Pixels(int width, int height) const {
   if (!image) return nullptr;
   std::shared_ptr<const Bitmap> src = image->Pixels(width, height);
   if (!src || !Recolors()) return src;
-  if (src == source_ && recolored_) return recolored_;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (recolored_ && source_.lock() == src) {
+      std::shared_ptr<const Bitmap> kept = recolored_;
+      UsedPixels(this);
+      return kept;
+    }
+  }
   std::vector<uint8_t> px(src->Pixels(), src->Pixels() + static_cast<size_t>(src->Stride()) * src->Height());
   // Premultiplied BGRA: unpremultiply, change the color, premultiply again.
   for (size_t i = 0; i + 3 < px.size(); i += 4) {
@@ -630,9 +637,20 @@ std::shared_ptr<const Bitmap> PictureFill::Pixels(int width, int height) const {
     px[i + 2] = static_cast<uint8_t>(std::lround(std::clamp(r, 0.f, 1.f) * opacity * 255));
     px[i + 3] = static_cast<uint8_t>(std::lround(opacity * 255));
   }
-  source_ = src;
-  recolored_ = std::make_shared<Bitmap>(src->Width(), src->Height(), std::move(px));
-  return recolored_;
+  auto made = std::make_shared<const Bitmap>(src->Width(), src->Height(), std::move(px));
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    source_ = src;
+    recolored_ = made;
+  }
+  KeepPixels(shared_from_this(), static_cast<uint64_t>(made->Stride()) * made->Height());
+  return made;
+}
+
+void PictureFill::DropPixels() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  recolored_.reset();
+  source_.reset();
 }
 
 namespace {

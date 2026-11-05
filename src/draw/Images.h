@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -14,7 +15,8 @@
 //  - EMF is drawn by Direct2D's GDI metafile support, and WMF is converted to EMF by GDI first;
 //  - SVG is drawn by Direct2D's SVG support, or replaced by the PNG copy Office stores next to it
 //    when the SVG uses something Direct2D can't draw (text, for one) or that would fetch anything;
-//  - sizes are capped (ImageLimits), and nothing is decoded until it is drawn.
+//  - sizes are capped (ImageLimits), and nothing is decoded until it is drawn;
+//  - decoded pixels, across all pictures, stay within a budget (plan §11).
 namespace draw {
 
 enum class ImageFormat : uint8_t { Unknown, Png, Jpeg, Gif, Bmp, Tiff, Ico, Emf, Wmf, Svg };
@@ -33,14 +35,36 @@ struct ImageLimits {
   static const ImageLimits& Default();
 };
 
+// Something that keeps decoded pixels it can give up and make again. All of them together stay
+// within the pixel budget: when it is exceeded, those used least recently drop theirs.
+class PixelHolder {
+ public:
+  virtual ~PixelHolder();
+  virtual void DropPixels() const = 0;
+};
+// Records that `holder` now keeps `bytes` of pixels and was just used, and drops other holders'
+// pixels, least recently used first, while the total is over the budget.
+void KeepPixels(const std::shared_ptr<const PixelHolder>& holder, uint64_t bytes);
+// Marks `holder`'s pixels as just used.
+void UsedPixels(const PixelHolder* holder);
+// The budget, 48 MB by default, and what is kept now.
+void SetPixelBudget(uint64_t bytes);
+uint64_t PixelBytesKept();
+
 // A picture from a document. Open reads only its header; pixels are decoded when they are first
-// asked for, at the size asked for, and kept. Safe to share between threads.
-class Image {
+// asked for, at the size asked for, and kept within the pixel budget. Safe to share between
+// threads.
+class Image : public PixelHolder, public std::enable_shared_from_this<Image> {
  public:
   // Null, with a plain-language reason in `error`, when the bytes aren't a picture Featherweight
   // reads or break the limits.
   static std::shared_ptr<Image> Open(std::vector<uint8_t> bytes, const ImageLimits& limits = ImageLimits::Default(),
                                      std::string* error = nullptr);
+  // The same, for bytes the picture can read again whenever it decodes, such as a package's part:
+  // a raster picture then keeps no copy of them. `read` must stay valid as long as the picture.
+  using Reader = std::function<bool(std::vector<uint8_t>& bytes)>;
+  static std::shared_ptr<Image> OpenFrom(Reader read, const ImageLimits& limits = ImageLimits::Default(),
+                                         std::string* error = nullptr);
   ImageFormat Format() const { return format_; }
   // Pixels, for raster pictures; 0 for vector pictures.
   int Width() const { return width_; }
@@ -53,16 +77,19 @@ class Image {
   // outside itself: Office's PNG copy should be shown instead.
   bool Faithful() const { return faithful_; }
   // Pixels covering at least `width` x `height` where the picture has that many (0 x 0: all of
-  // them), within the limits. Decoded on first use and kept; asking for more decodes again. Vector
-  // pictures are rasterized. Null when the picture can't be decoded after all.
+  // them), within the limits. Decoded on first use and kept until the budget needs the memory;
+  // asking for more decodes again. Vector pictures are rasterized. Null when the picture can't be
+  // decoded after all.
   std::shared_ptr<const Bitmap> Pixels(int width = 0, int height = 0) const;
+  void DropPixels() const override;
 
  private:
   Image() = default;
   std::shared_ptr<const Bitmap> Decode(int width, int height) const;
 
   ImageFormat format_ = ImageFormat::Unknown;
-  std::vector<uint8_t> bytes_;
+  std::vector<uint8_t> bytes_;  // empty when `reader_` reads them
+  Reader reader_;
   ImageLimits limits_;
   int width_ = 0, height_ = 0;
   Size natural_;

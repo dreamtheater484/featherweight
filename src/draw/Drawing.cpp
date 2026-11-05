@@ -164,9 +164,9 @@ std::shared_ptr<const Image> ImageCache::Get(const fw::pkg::Package& package, st
   std::string key = fw::pkg::PartKey(partName);
   auto it = images_.find(key);
   if (it != images_.end()) return it->second;
-  std::vector<uint8_t> bytes;
-  std::shared_ptr<const Image> image;
-  if (package.ReadPart(partName, bytes).Ok()) image = Image::Open(std::move(bytes));
+  std::shared_ptr<const Image> image = Image::OpenFrom([&package, part = std::string(partName)](std::vector<uint8_t>& bytes) {
+    return package.ReadPart(part, bytes).Ok();
+  });
   images_[key] = image;  // null too: a damaged picture isn't read again
   return image;
 }
