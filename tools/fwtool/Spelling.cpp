@@ -21,10 +21,13 @@ int RunSpelling(const Options& options) {
   using Clock = std::chrono::steady_clock;
   CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   fw::text::SpellChecker checker;
-  if (!checker.Available()) {
+  const auto load = Clock::now();
+  if (!checker.Available() || checker.Check(L"en-US", L"Warm up").size() > 2) {
     std::printf("Windows' spell checker isn't available on this PC.\n");
     return 1;
   }
+  std::printf("Loading Windows' spell checker and an English dictionary: %.1f ms\n\n",
+              std::chrono::duration<double, std::milli>(Clock::now() - load).count());
   int failed = 0;
   std::printf("%-40s %8s %8s %8s %10s %9s\n", "Document", "paras", "words", "errors", "spell ms", "count ms");
   for (const auto& file : CollectFiles(options.inputs)) {

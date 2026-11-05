@@ -119,13 +119,13 @@ bool DocView::ProofIdle(double deadlineMs) {
     // The pages on screen first, then the next.
     int first, last;
     VisiblePages(first, last);
-    const double ms = std::clamp(deadlineMs - anim::Now(), 1.0, 8.0);
+    auto ms = [&] { return std::clamp(deadlineMs - anim::Now(), 1.0, 8.0); };
     const uint32_t before = spelling_->Revision();
-    if (!spelling_->Check(ParagraphsOn(*pagination_, first, last), ms))
-      spelling_->Check(ParagraphsOn(*pagination_, last + 1, last + 1), ms);
+    if (!spelling_->Check(ParagraphsOn(*pagination_, first, last), ms()))
+      spelling_->Check(ParagraphsOn(*pagination_, last + 1, last + 1), ms());
     repaint |= spelling_->Revision() != before;
   }
-  // Words, for the status bar, once the pages are laid out (a 300-page document takes about 35 ms).
+  // Words, for the status bar, once the pages are laid out (a 300-page document takes about 7 ms).
   if (!wordsCounted_ && pagination_->Done()) {
     const uint32_t n = static_cast<uint32_t>(doc_->Paragraphs().size()), main = doc_->MainStory();
     const double until = anim::Now() + 4;
