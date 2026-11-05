@@ -184,6 +184,13 @@ class TabContent {
   virtual bool CanPrint() const = 0;
   // Shows the print dialog and prints. `progress(done, total)` lets the window repaint between pages.
   virtual PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) = 0;
+  // Export PDF (plan §4.6): the pages into a PDF file, as they look; the tab's own file stays as it
+  // is. False with a reason in `message` when it couldn't; `message` says what was done otherwise.
+  virtual bool CanExportPdf() const { return false; }
+  virtual bool ExportPdf(const std::wstring& /*path*/, std::wstring& message) {
+    message = L"This tab can't be exported as a PDF.";
+    return false;
+  }
   virtual FileState State() const = 0;
   virtual void ApplyState(const FileState& s) = 0;
 

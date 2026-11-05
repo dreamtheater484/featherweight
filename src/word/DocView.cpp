@@ -69,6 +69,7 @@ class InvertingPainter : public draw::Painter {
   void DrawGlyphs(draw::Point origin, const draw::GlyphRun& run, const draw::Brush& b) override {
     inner_.DrawGlyphs(origin, run, Map(b));
   }
+  bool WantsText() const override { return inner_.WantsText(); }
   void DrawBitmap(const draw::Bitmap& bitmap, const draw::Rect& dest, const draw::Rect* src, float opacity) override {
     inner_.DrawBitmap(bitmap, dest, src, opacity);
   }

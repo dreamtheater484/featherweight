@@ -1324,6 +1324,7 @@ void App::Execute(int cmd) {
     case CmdRestoreOriginal: RestoreOriginal(); break;
     case CmdDeleteBackups: DeleteBackups(); break;
     case CmdPrint: PrintActive(); break;
+    case CmdExportPdf: ExportPdfActive(); break;
     case CmdCloseTab:
       if (active_ >= 0) CloseTab(active_);
       break;
@@ -1484,6 +1485,7 @@ void App::ShowMenu(int which) {
     if (ready && v->Kind() == TabKind::Document && !v->Path().empty())
       AppendItem(m, CmdRestoreOriginal, L"Restore original", !LatestBackup().empty());
     AppendItem(m, CmdPrint, L"Print…\tCtrl+P", ready && v->CanPrint());
+    if (ready && v->CanExportPdf()) AppendItem(m, CmdExportPdf, L"Export PDF…");
     AppendSeparator(m);
     AppendItem(m, CmdPresentation, L"Present\tF5", ready);
     AppendItem(m, CmdFullScreen, fullscreen_ ? L"Exit full screen\tF11" : L"Full screen\tF11");
@@ -1838,6 +1840,36 @@ void App::PrintActive() {
     case PrintOutcome::Cancelled: banner_.Hide(); break;
   }
   InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::ExportPdfActive() {
+  TabContent* v = Active();
+  if (!v || !v->Ready() || !v->CanExportPdf()) return;
+  std::wstring suggested = v->SuggestedSavePath();
+  const size_t slash = suggested.find_last_of(L"\\/"), dot = suggested.rfind(L'.');
+  if (dot != std::wstring::npos && (slash == std::wstring::npos || dot > slash)) suggested.resize(dot);
+  const std::wstring path = SaveDialog(suggested + L".pdf", {L"PDF document", L"*.pdf", L"pdf"});
+  if (path.empty()) return;
+  ExportPdfTo(path);
+}
+
+bool App::ExportPdfTo(const std::wstring& path) {
+  TabContent* v = Active();
+  if (!v || !v->Ready() || !v->CanExportPdf()) return false;
+  if (fw::EqualsNoCase(path, v->Path())) {
+    banner_.Show(BannerKind::Warning, L"Choose another name: the PDF would replace the open file.", {}, 6000);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return false;
+  }
+  banner_.Show(BannerKind::Info, L"Exporting…");
+  Layout();
+  RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+  std::wstring message;
+  const bool ok = v->ExportPdf(path, message);
+  if (ok) banner_.Show(BannerKind::Success, message, {}, 4000);
+  else banner_.Show(BannerKind::Error, message);
+  InvalidateRect(hwnd_, nullptr, FALSE);
+  return ok;
 }
 
 void App::OpenSearch() {
@@ -2314,6 +2346,15 @@ void App::RunScript(const std::wstring& script) {
         if (static_cast<DocView*>(v)->PrintToFile(arg, message) != PrintOutcome::Printed)
           fwprintf(stderr, L"print failed: %s\n", message.c_str());
       }
+    } else if (op == L"exportpdf") {
+      // exportpdf:out.pdf is File > Export PDF without the dialog.
+      if (!ExportPdfTo(arg)) fwprintf(stderr, L"export failed\n");
+    } else if (op == L"pagepngs") {
+      // pagepngs:dir writes a document's pages as dir\page-N.png at 96 dpi, as the export draws
+      // them, for comparing with the PDF's pages.
+      TabContent* v = Active();
+      if (v && v->Kind() == TabKind::Document && v->Ready())
+        fwprintf(stderr, L"pagepngs: %d\n", static_cast<DocView*>(v)->RenderPagesForTesting(arg, 96));
     } else if (op == L"cmd") {
       static const std::pair<const wchar_t*, int> names[] = {
           {L"find", CmdFind}, {L"next", CmdFindNext}, {L"invert", CmdToggleInvert}, {L"present", CmdPresentation},

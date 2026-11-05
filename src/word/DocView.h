@@ -109,6 +109,13 @@ class DocView : public PagedView {
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;
   // Every page to Microsoft Print to PDF, into a file, with no dialog (the visual checks' print step).
   PrintOutcome PrintToFile(const std::wstring& path, std::wstring& message);
+  // Export PDF (DocPdf.cpp): selectable text in the fonts on screen, links, bookmarks from the
+  // headings, the title and author.
+  bool CanExportPdf() const override { return Ready(); }
+  bool ExportPdf(const std::wstring& path, std::wstring& message) override;
+  // Each page as the screen draws it, into page-1.png, page-2.png... in `dir`, at `dpi`: what the
+  // PDF checks compare the exported pages with. Returns the pages written.
+  int RenderPagesForTesting(const std::wstring& dir, float dpi);
 
   // ---- Editing (D2) ----
   // The document's editor: every change goes through it (transactions, undo and redo). Null until

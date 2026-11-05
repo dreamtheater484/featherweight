@@ -60,6 +60,8 @@ class Engine {
   // The pages shown: those laid out, then after an edit the old ones not laid out again yet.
   size_t ShownCount() const;
   const Page& Shown(size_t index) const;
+  // What PAGE, NUMPAGES and SECTIONPAGES show on a shown page, for its text as drawn.
+  PageFields ShownFields(size_t index) const;
   // The document changed (Layout::Edited): paragraphs [first, first + removed) of `story` were
   // replaced by [first, first + added).
   void Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added, bool structure);

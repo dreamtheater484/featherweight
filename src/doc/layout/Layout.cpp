@@ -424,13 +424,17 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
   const Engine& e = impl_->engine;
   if (page >= e.ShownCount()) return;
   const Page& p = e.Shown(page);
-  // Formatting marks: each paragraph's layout text, built once for the page.
+  // PDF export keeps the text behind the glyphs, so it can be copied and searched.
+  const bool withText = painter.WantsText();
+  // Formatting marks and PDF text: each paragraph's layout text, built once for the page (for the
+  // text, with the page's PAGE and NUMPAGES as it was laid out with them).
+  const PageFields fields = withText ? e.ShownFields(page) : PageFields();
   std::unordered_map<uint32_t, std::unique_ptr<ParaText>> texts;
   auto textOf = [&](uint32_t para) -> const ParaText& {
     std::unique_ptr<ParaText>& t = texts[para];
     if (!t) {
       t = std::make_unique<ParaText>();
-      impl_->engine.BuildText(para, PageFields(), *t, false, false);
+      impl_->engine.BuildText(para, fields, *t, false, false);
     }
     return *t;
   };
@@ -454,18 +458,28 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
       uint32_t color = rp ? rp->color : 0;
       if (!g.glyphs.empty()) {
         const draw::Point origin{lb.x + g.OriginX(), lb.baseline - g.rise};
+        draw::GlyphRun run = g.Run();
+        if (withText && g.hyphen) {
+          run.text = u"-";
+          run.textLength = 1;
+        } else if (withText && lb.para != kNone && g.textEnd > g.textStart) {
+          const ParaText& t = textOf(lb.para);
+          if (g.textEnd <= t.text.size()) {
+            run.text = reinterpret_cast<const char16_t*>(t.text.data()) + g.textStart;
+            run.textLength = g.textEnd - g.textStart;
+          }
+        }
         if (g.scale != 1 && g.scale > 0) {
           // Scaled characters (w:w): the glyphs drawn through a horizontal scale about the origin.
           std::vector<float> advances(g.advances);
           for (float& a : advances) a /= g.scale;
-          draw::GlyphRun run = g.Run();
           run.advances = advances.data();
           painter.Save();
           painter.Transform({g.scale, 0, 0, 1, origin.x * (1 - g.scale), 0});
           painter.DrawGlyphs(origin, run, draw::Brush::Solid(ColorOf(color)));
           painter.Restore();
         } else {
-          painter.DrawGlyphs(origin, g.Run(), draw::Brush::Solid(ColorOf(color)));
+          painter.DrawGlyphs(origin, run, draw::Brush::Solid(ColorOf(color)));
         }
       }
       if (!rp || g.hyphen || g.leader) continue;

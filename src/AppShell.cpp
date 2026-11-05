@@ -25,6 +25,7 @@ constexpr AppCommand kAppCommands[] = {
     {CmdSave, L"Save", L"Ctrl+S"},
     {CmdSaveAs, L"Save as…", L"Ctrl+Shift+S"},
     {CmdPrint, L"Print", L"Ctrl+P"},
+    {CmdExportPdf, L"Export PDF…", L""},
     {CmdFind, L"Find", L"Ctrl+F"},
     {CmdFindNext, L"Find next", L"F3"},
     {CmdFindPrev, L"Find previous", L"Shift+F3"},
@@ -87,6 +88,7 @@ CommandState App::QueryCommand(int cmd) {
     case CmdSave: s.enabled = ready && tabEnabled; break;
     case CmdSaveAs: s.enabled = ready; break;
     case CmdPrint: s.enabled = ready && v->CanPrint(); break;
+    case CmdExportPdf: s.enabled = ready && v->CanExportPdf(); break;
     case CmdFind:
     case CmdFindNext:
     case CmdFindPrev: s.enabled = ready && !presentation_; break;

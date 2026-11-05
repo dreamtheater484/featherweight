@@ -8,7 +8,7 @@
 
 // Painter: the one drawing interface the document, spreadsheet and presentation engines draw
 // with (plan §4.1, §4.5 and §4.6). Backends draw it to the screen and printers (Direct2D,
-// D2DPainter) and, later, to PDF files. Engines never call Direct2D themselves, so whatever they
+// D2DPainter) and to PDF files (PdfDocument). Engines never call Direct2D themselves, so whatever they
 // draw looks the same on screen, on paper and in an exported PDF.
 //
 // Coordinates are whatever the current transform makes them; engines work in points with a
@@ -145,6 +145,8 @@ struct Pen {
   float dashOffset = 0;  // also in multiples of the width
 };
 
+class Image;
+
 // Pixels for an image: 32-bit premultiplied BGRA, top-down rows. Immutable once made, so a backend
 // can keep its own copy (a GPU bitmap) under Id().
 class Bitmap {
@@ -155,11 +157,16 @@ class Bitmap {
   int Stride() const { return width_ * 4; }
   const uint8_t* Pixels() const { return pixels_.data(); }
   uint64_t Id() const { return id_; }
+  // The JPEG picture these pixels were decoded from, so a backend that keeps pictures compressed
+  // (PDF export) can embed its file as it is. Set before the bitmap is shared.
+  void SetJpeg(std::weak_ptr<const Image> source) { jpeg_ = std::move(source); }
+  std::shared_ptr<const Image> Jpeg() const { return jpeg_.lock(); }
 
  private:
   int width_, height_;
   std::vector<uint8_t> pixels_;
   uint64_t id_;
+  std::weak_ptr<const Image> jpeg_;
 };
 
 // A vector picture: an EMF metafile (WMF pictures are converted to EMF when read) or an SVG
@@ -199,6 +206,10 @@ struct GlyphRun {
   const DWRITE_GLYPH_OFFSET* offsets = nullptr;  // may be null
   bool sideways = false;
   uint32_t bidiLevel = 0;  // odd: right to left
+  // The text the glyphs show, in logical order, when the painter asked for it (WantsText): PDF
+  // export keeps it so the text can be copied and searched.
+  const char16_t* text = nullptr;
+  uint32_t textLength = 0;
 };
 
 class Painter {
@@ -218,7 +229,8 @@ class Painter {
   // Draws everything until the matching Restore into a group, then blends it at `opacity`.
   // It implies a Save. When printing through Microsoft Print to PDF, the opacity ends up on each
   // shape instead of the whole group, so overlaps inside the group show through (seen in D0; not
-  // yet known whether Direct2D's print path or the driver flattens it).
+  // yet known whether Direct2D's print path or the driver flattens it). Export PDF writes a real
+  // transparency group.
   virtual void BeginGroup(float opacity) = 0;
 
   // ---- Drawing ----
@@ -227,6 +239,8 @@ class Painter {
   virtual void FillRect(const Rect& r, const Brush& b) { FillPath(Path::FromRect(r), b); }
   // Glyphs on a baseline starting at `origin`.
   virtual void DrawGlyphs(Point origin, const GlyphRun& run, const Brush& b) = 0;
+  // Whether DrawGlyphs wants each run's text (GlyphRun::text). The screen doesn't; PDF export does.
+  virtual bool WantsText() const { return false; }
   // The bitmap (or its `src` part, in pixels) stretched to `dest`.
   virtual void DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* src = nullptr, float opacity = 1) = 0;
   // A vector picture stretched to `dest`. By default it is drawn as pixels at the device's
