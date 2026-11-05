@@ -1016,14 +1016,18 @@ ElemId TreeEdit::CopyTree(ElemId src, ElemId parent, uint32_t story) {
   e.node = NewNode();
   t.elems.push_back(e);
   const auto id = static_cast<ElemId>(t.elems.size() - 1);
-  if (NameOfElem(t, id) == names::kP) {
-    // A paragraph of the new story, without the ids Word gives each paragraph.
+  if (e.attrCount) {
+    // Without the ids Word gives each paragraph and table row (one id space): the copy would use
+    // them again (d3-torture finding 20).
     const TypeId type = TypeOfElem(t, id);
     const AttrDefId paraId = S().AttrOf(type, Name("w14:paraId")), textId = S().AttrOf(type, Name("w14:textId"));
     std::vector<AttrVal> attrs;
     for (uint16_t i = 0; i < e.attrCount; ++i)
       if (const AttrVal& a = t.attrs[e.attrs + i]; a.def != paraId && a.def != textId) attrs.push_back(a);
     if (attrs.size() != e.attrCount) WriteAttrs(id, attrs);
+  }
+  if (NameOfElem(t, id) == names::kP) {
+    // A paragraph of the new story.
     Paragraph p;
     p.elem = id;
     p.story = story;
