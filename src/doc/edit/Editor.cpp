@@ -1005,6 +1005,51 @@ struct EditorState {
     return true;
   }
 
+  // Inserts an object (a w:drawing) at `o`, holding `xml` as its content, in the run the text
+  // before it is in (or a new one, as typing would make). A w:t it lands in is split.
+  ElemId InsertObject(uint32_t para, uint32_t o, uint32_t name, std::string xml, std::u16string& why) {
+    Spot spot;
+    if (!FindSpot(para, o, spot, why)) return kNoElem;
+    ElemId run = spot.run;
+    ElemId prev = spot.after != kNoElem ? spot.after : Child(run, kRPr);
+    if (ElemId cur = spot.text; cur != kNoElem) {
+      uint32_t start = E(cur).start, end = start + E(cur).length;
+      if (start < o && o < end) {
+        ElemId tail = CloneShallow(cur, run);
+        E(tail).length = end - o;
+        E(cur).length = o - start;
+        LinkAfter(run, cur, tail);
+        prev = cur;
+      } else if (start == o && o < end) {
+        prev = PrevSibling(cur);  // before the text: after w:rPr, or first
+      } else {
+        prev = cur;
+      }
+    }
+    ElemId item = NewElem(run, name);
+    if (item == kNoElem) {
+      why = u"A picture can't go here.";
+      return kNoElem;
+    }
+    E(item).length = 1;
+    LinkAfter(run, prev, item);
+    d.paras_[para].text.insert(d.paras_[para].text.begin() + o, u'\xFFFC');
+    d.store_.SetFragments(E(item).node, {pkg::Fragment{pkg::Slot::Inside, {}, std::move(xml)}});
+    Reflow(para);
+    return item;
+  }
+
+  // The handle of a drawing just inserted.
+  void AddDrawing(Drawing info, ElemId item, uint32_t para) {
+    info.node = Node(&t, item);
+    info.part = d.stories_[d.paras_[para].story].part;
+    info.pos = Pos{kNone, 0};
+    info.displayOnly = false;
+    info.keptXml.clear();
+    info.textBoxes.clear();
+    d.drawings_.push_back(std::move(info));
+  }
+
   // Deletes [a, b) inside one paragraph. Range markers stay (collapsed at a), so bookmarks and
   // comment ranges keep both ends; whole fields go only when a check before allowed it.
   bool DeleteIn(uint32_t para, uint32_t a, uint32_t b, std::u16string& why) {
@@ -2188,6 +2233,24 @@ Result Editor::InsertText(Pos at, std::u16string_view text) {
   s.Notify(listeners_);
   Result r;
   r.caret = pos;
+  return r;
+}
+
+Result Editor::InsertDrawing(Pos at, std::string xml, const Drawing& info) {
+  EditorState& s = *impl_;
+  std::u16string why;
+  if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
+  if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
+  if (!XmlSafe(xml)) return Fail(u"This picture can't be added.");
+  s.Begin(at.para, 1);
+  ElemId item = s.InsertObject(at.para, at.offset, Name("drawing"), std::move(xml), why);
+  if (item == kNoElem) return s.Abort(why);
+  s.AddDrawing(info, item, at.para);  // before Commit, which finds where it is
+  Pos after{at.para, at.offset + 1};
+  s.Commit(false, at, after, Kind::Other, u"Insert picture");
+  s.Notify(listeners_);
+  Result r;
+  r.caret = after;
   return r;
 }
 

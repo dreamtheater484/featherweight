@@ -857,6 +857,61 @@ void Reader::Exit(const Frame& f) {
 
 // ---------- Drawings ----------
 
+void ReadDrawingFrame(pugi::xml_node frame, Drawing& d) {
+  auto attrEmu = [](pugi::xml_node n, const char* name) { return Emu(ParseInt(n.attribute(name).value()).value_or(0)); };
+  d.anchored = pkg::LocalNameOf(frame) == "anchor";
+  d.wrap = d.anchored ? WrapType::None : WrapType::Inline;
+  d.distT = attrEmu(frame, "distT");
+  d.distB = attrEmu(frame, "distB");
+  d.distL = attrEmu(frame, "distL");
+  d.distR = attrEmu(frame, "distR");
+  if (d.anchored) {
+    d.simplePos = ParseOnOff(frame.attribute("simplePos").value()).value_or(false);
+    d.behindDoc = ParseOnOff(frame.attribute("behindDoc").value()).value_or(false);
+    d.locked = ParseOnOff(frame.attribute("locked").value()).value_or(false);
+    d.layoutInCell = ParseOnOff(frame.attribute("layoutInCell").value()).value_or(true);
+    d.allowOverlap = ParseOnOff(frame.attribute("allowOverlap").value()).value_or(true);
+    d.hidden = ParseOnOff(frame.attribute("hidden").value()).value_or(false);
+    d.relativeHeight = ParseInt(frame.attribute("relativeHeight").value()).value_or(0);
+  }
+  for (auto c : frame.children()) {
+    if (c.type() != pugi::node_element || pkg::NamespaceOf(c) != kWp) continue;
+    std::string_view n = pkg::LocalNameOf(c);
+    if (n == "extent") {
+      d.cx = attrEmu(c, "cx");
+      d.cy = attrEmu(c, "cy");
+    } else if (n == "effectExtent") {
+      d.effectL = attrEmu(c, "l");
+      d.effectT = attrEmu(c, "t");
+      d.effectR = attrEmu(c, "r");
+      d.effectB = attrEmu(c, "b");
+    } else if (n == "simplePos") {
+      d.simpleX = attrEmu(c, "x");
+      d.simpleY = attrEmu(c, "y");
+    } else if (n == "positionH" || n == "positionV") {
+      bool h = n == "positionH";
+      (h ? d.hRelativeFrom : d.vRelativeFrom) = c.attribute("relativeFrom").value();
+      for (auto p : c.children()) {
+        if (pkg::IsElement(p, kWp, "posOffset")) (h ? d.hOffset : d.vOffset) = Emu(ParseInt(p.text().get()).value_or(0));
+        else if (pkg::IsElement(p, kWp, "align")) (h ? d.hAlign : d.vAlign) = p.text().get();
+      }
+    } else if (n == "wrapNone") {
+      d.wrap = WrapType::None;
+    } else if (n == "wrapSquare" || n == "wrapTight" || n == "wrapThrough") {
+      d.wrap = n == "wrapSquare" ? WrapType::Square : n == "wrapTight" ? WrapType::Tight : WrapType::Through;
+      d.wrapText = c.attribute("wrapText").value();
+    } else if (n == "wrapTopAndBottom") {
+      d.wrap = WrapType::TopAndBottom;
+    } else if (n == "docPr") {
+      d.id = static_cast<uint32_t>(ParseInt(c.attribute("id").value()).value_or(0));
+      d.name = c.attribute("name").value();
+      d.descr = c.attribute("descr").value();
+      d.title = c.attribute("title").value();
+      d.hidden = d.hidden || ParseOnOff(c.attribute("hidden").value()).value_or(false);
+    }
+  }
+}
+
 void Reader::ReadDrawing(Frame& f) {
   ElemId elem = f.elem;
   Drawing d;
@@ -870,65 +925,12 @@ void Reader::ReadDrawing(Frame& f) {
   pugi::xml_node obj;
   if (dom.Parse("<fw>" + f.objectXml + "</fw>", doc_.package_->GetLimits()).Ok()) obj = dom.Root();
   std::string_view local = Schema::Get().Elem(E(elem).def).local;
-  auto attrEmu = [](pugi::xml_node n, const char* name) { return Emu(ParseInt(n.attribute(name).value()).value_or(0)); };
   if (local == "drawing") {
     d.kind = DrawingKind::DrawingML;
     pugi::xml_node frame;
     for (auto c : obj.children())
       if (pkg::IsElement(c, kWp, "inline") || pkg::IsElement(c, kWp, "anchor")) frame = c;
-    if (frame) {
-      d.anchored = pkg::LocalNameOf(frame) == "anchor";
-      d.wrap = d.anchored ? WrapType::None : WrapType::Inline;
-      d.distT = attrEmu(frame, "distT");
-      d.distB = attrEmu(frame, "distB");
-      d.distL = attrEmu(frame, "distL");
-      d.distR = attrEmu(frame, "distR");
-      if (d.anchored) {
-        d.simplePos = ParseOnOff(frame.attribute("simplePos").value()).value_or(false);
-        d.behindDoc = ParseOnOff(frame.attribute("behindDoc").value()).value_or(false);
-        d.locked = ParseOnOff(frame.attribute("locked").value()).value_or(false);
-        d.layoutInCell = ParseOnOff(frame.attribute("layoutInCell").value()).value_or(true);
-        d.allowOverlap = ParseOnOff(frame.attribute("allowOverlap").value()).value_or(true);
-        d.hidden = ParseOnOff(frame.attribute("hidden").value()).value_or(false);
-        d.relativeHeight = ParseInt(frame.attribute("relativeHeight").value()).value_or(0);
-      }
-      for (auto c : frame.children()) {
-        if (c.type() != pugi::node_element || pkg::NamespaceOf(c) != kWp) continue;
-        std::string_view n = pkg::LocalNameOf(c);
-        if (n == "extent") {
-          d.cx = attrEmu(c, "cx");
-          d.cy = attrEmu(c, "cy");
-        } else if (n == "effectExtent") {
-          d.effectL = attrEmu(c, "l");
-          d.effectT = attrEmu(c, "t");
-          d.effectR = attrEmu(c, "r");
-          d.effectB = attrEmu(c, "b");
-        } else if (n == "simplePos") {
-          d.simpleX = attrEmu(c, "x");
-          d.simpleY = attrEmu(c, "y");
-        } else if (n == "positionH" || n == "positionV") {
-          bool h = n == "positionH";
-          (h ? d.hRelativeFrom : d.vRelativeFrom) = c.attribute("relativeFrom").value();
-          for (auto p : c.children()) {
-            if (pkg::IsElement(p, kWp, "posOffset")) (h ? d.hOffset : d.vOffset) = Emu(ParseInt(p.text().get()).value_or(0));
-            else if (pkg::IsElement(p, kWp, "align")) (h ? d.hAlign : d.vAlign) = p.text().get();
-          }
-        } else if (n == "wrapNone") {
-          d.wrap = WrapType::None;
-        } else if (n == "wrapSquare" || n == "wrapTight" || n == "wrapThrough") {
-          d.wrap = n == "wrapSquare" ? WrapType::Square : n == "wrapTight" ? WrapType::Tight : WrapType::Through;
-          d.wrapText = c.attribute("wrapText").value();
-        } else if (n == "wrapTopAndBottom") {
-          d.wrap = WrapType::TopAndBottom;
-        } else if (n == "docPr") {
-          d.id = static_cast<uint32_t>(ParseInt(c.attribute("id").value()).value_or(0));
-          d.name = c.attribute("name").value();
-          d.descr = c.attribute("descr").value();
-          d.title = c.attribute("title").value();
-          d.hidden = d.hidden || ParseOnOff(c.attribute("hidden").value()).value_or(false);
-        }
-      }
-    }
+    if (frame) ReadDrawingFrame(frame, d);
   } else if (local == "pict" || local == "object") {
     d.kind = local == "pict" ? DrawingKind::Vml : DrawingKind::Object;
     pugi::xml_node shape;

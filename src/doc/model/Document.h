@@ -22,6 +22,7 @@ class Writer;
 namespace edit {
 struct EditorState;
 class TreeEdit;
+struct PictureAccess;
 }  // namespace edit
 
 // The document model (plan §6.3): a headless, read-only view of a Word document, built by the
@@ -175,6 +176,7 @@ struct Drawing {
   std::string name, descr, title;
   std::vector<uint32_t> textBoxes;  // stories read from its w:txbxContent
   std::string keptXml;  // display-only drawings: their XML (the kept AlternateContent block is what's written)
+  uint32_t version = 0;  // changes whenever its XML does (D3 picture edits), for the view's caches
 };
 
 // A field (plan §6.3): begin, separator and end, which may be in different paragraphs.
@@ -433,6 +435,7 @@ class Document {
   friend class docx::Writer;
   friend struct edit::EditorState;
   friend class edit::TreeEdit;
+  friend struct edit::PictureAccess;
   Document();
 
   Pos PosOf(Node node) const;  // where an element is: its paragraph and offset
