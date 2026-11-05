@@ -304,10 +304,12 @@ struct EditorState {
       if (!skip || !skip(c)) Append(id, CloneDeep(c, id, skip, fragments));
     return id;
   }
-  // Gives a property container its own children before they change (Tree.h, kSharedKids).
+  // Gives a property container its own children before they change (Tree.h, kSharedKids). The
+  // reader flags every container that shares a set but the first, whose children they are: so the
+  // first copies them too, and the others keep the originals.
   void Unshare(ElemId container) {
-    if (!(E(container).flags & kSharedKids)) return;
     ElemId shared = E(container).first;
+    if (shared == kNoElem) return;
     E(container).flags &= static_cast<uint8_t>(~kSharedKids);
     E(container).first = kNoElem;
     for (ElemId c = shared; c != kNoElem; c = E(c).next) Append(container, CloneDeep(c, container));
