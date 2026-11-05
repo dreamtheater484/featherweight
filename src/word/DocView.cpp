@@ -1201,6 +1201,9 @@ CommandState DocView::QueryCommand(int cmd) {
       s.shortcut = n.keys;
     }
   }
+  // Word's keys win in a document being edited: Ctrl+=, Ctrl+0, Ctrl+1 and Ctrl+2 format there.
+  if (format_ && (cmd == CmdZoomIn || cmd == CmdZoomAuto || cmd == CmdZoomActual || cmd == CmdZoomFitPage))
+    s.shortcut.clear();
   return s;
 }
 
@@ -1280,10 +1283,10 @@ void DocView::FillContextMenu(HMENU m, int, int) {
   }
   AppendItem(m, CmdSelectAll, L"Select all\tCtrl+A");
   AppendSeparator(m);
-  AppendItem(m, CmdZoomIn, L"Zoom in\tCtrl+=");
+  AppendItem(m, CmdZoomIn, format_ ? L"Zoom in" : L"Zoom in\tCtrl+=");
   AppendItem(m, CmdZoomOut, L"Zoom out\tCtrl+−");
   AppendItem(m, CmdZoomFitWidth, L"Fit width\tCtrl+3");
-  AppendItem(m, CmdZoomFitPage, L"Fit page\tCtrl+2");
+  AppendItem(m, CmdZoomFitPage, format_ ? L"Fit page" : L"Fit page\tCtrl+2");
   AppendSeparator(m);
   AppendItem(m, CmdFind, L"Find…\tCtrl+F");
   AppendItem(m, CmdPrint, L"Print…\tCtrl+P");

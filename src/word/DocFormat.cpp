@@ -621,16 +621,22 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
     return t;
   };
 
-  ToolItem undo = button(CmdUndo, icon::Undo);
+  // Priorities: what goes first when the window is narrow (Toolbar.h). Bold, italic and underline stay.
+  auto with = [](ToolItem t, int priority) {
+    t.priority = priority;
+    return t;
+  };
+  ToolItem undo = with(button(CmdUndo, icon::Undo), 8);
   undo.sepBefore = true;
   m.left.push_back(undo);
-  m.left.push_back(button(CmdRedo, icon::Redo));
+  m.left.push_back(with(button(CmdRedo, icon::Redo), 7));
 
   // Styles, font and size.
   ToolItem style;
   style.kind = ToolKind::Dropdown;
   style.cmd = CmdStyleBox;
-  style.width = 124;
+  style.width = 116;
+  style.priority = 6;
   style.tooltip = L"Styles";
   style.enabled = on;
   style.sepBefore = true;
@@ -651,7 +657,8 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
   ToolItem font;
   font.kind = ToolKind::ComboBox;
   font.cmd = CmdFontBox;
-  font.width = 124;
+  font.width = 116;
+  font.priority = 6;
   font.tooltip = L"Font";
   font.enabled = on;
   font.choices = Families();
@@ -663,6 +670,7 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
   size.kind = ToolKind::ComboBox;
   size.cmd = CmdSizeBox;
   size.width = 56;
+  size.priority = 6;
   size.tooltip = L"Font size";
   size.enabled = on;
   size.choices = Sizes();
@@ -694,9 +702,9 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
     };
     return t;
   };
-  m.left.push_back(colorButton(CmdFontColor, icon::FontColor, fontColor_, L"Automatic", false));
-  m.left.push_back(colorButton(CmdHighlightColor, icon::Highlight, highlight_, L"No color", true));
-  ToolItem painter = toggleButton(CmdFormatPainter, icon::Brush);
+  m.left.push_back(with(colorButton(CmdFontColor, icon::FontColor, fontColor_, L"Automatic", false), 5));
+  m.left.push_back(with(colorButton(CmdHighlightColor, icon::Highlight, highlight_, L"No color", true), 4));
+  ToolItem painter = with(toggleButton(CmdFormatPainter, icon::Brush), 3);
   painter.enabled = on;
   m.left.push_back(painter);
 
@@ -705,6 +713,7 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
   alignBox.kind = ToolKind::Dropdown;
   alignBox.cmd = CmdAlignBox;
   alignBox.width = 52;
+  alignBox.priority = 5;
   alignBox.glyph = AlignGlyph(st.jc);
   alignBox.tooltip = L"Alignment";
   alignBox.enabled = on;
@@ -714,8 +723,8 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
     if (v.index >= 0 && v.index < 4) Execute(CmdAlignLeft + v.index);
   };
   m.left.push_back(alignBox);
-  m.left.push_back(toggleButton(CmdBullets, icon::BulletedList));
-  ToolItem numbering = button(CmdNumbering, icon::NumberedList);
+  m.left.push_back(with(toggleButton(CmdBullets, icon::BulletedList), 7));
+  ToolItem numbering = with(button(CmdNumbering, icon::NumberedList), 6);
   numbering.kind = ToolKind::SplitButton;
   numbering.width = 52;
   numbering.choices = {L"Numbering 1. a. i.", L"Multilevel list 1. 1.1. 1.1.1.", L"Restart numbering at 1", L"Continue numbering"};
@@ -724,14 +733,15 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
     if (v.index >= 0 && v.index < 4) Execute(kCmds[v.index]);
   };
   m.left.push_back(numbering);
-  m.left.push_back(button(CmdOutdent, icon::DecreaseIndent));
-  m.left.push_back(button(CmdIndent, icon::IncreaseIndent));
+  m.left.push_back(with(button(CmdOutdent, icon::DecreaseIndent), 2));
+  m.left.push_back(with(button(CmdIndent, icon::IncreaseIndent), 2));
 
   // Insert: date and time, for now.
   ToolItem insert;
   insert.kind = ToolKind::Dropdown;
   insert.cmd = CmdInsertBox;
   insert.width = 104;
+  insert.priority = 1;
   insert.glyph = icon::Add;
   insert.text = L"Insert";
   insert.tooltip = L"Insert the date or time";
