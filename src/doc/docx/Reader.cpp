@@ -704,14 +704,11 @@ bool Reader::ReadAttributes(const pkg::XmlPull& pull, ElemId elem, bool capture)
 // report's elements). A container whose children are plain properties shares them with the first
 // identical set: its new children are dropped from the arena's end, where they were just made.
 void Reader::InternProperties(const Frame& f) {
-  static constexpr uint32_t kContainers[] = {Name("rPr"),     Name("pPr"),   Name("tabs"),       Name("numPr"),
-                                             Name("pBdr"),    Name("tcPr"),  Name("tcBorders"),  Name("tcMar"),
-                                             Name("trPr"),    Name("tblPr"), Name("tblBorders"), Name("tblCellMar")};
   const Schema& s = Schema::Get();
   ElemId c = f.elem;
   const Elem& e = E(c);
   uint32_t name = s.Elem(e.def).name;
-  if (e.first == kNoElem || std::find(std::begin(kContainers), std::end(kContainers), name) == std::end(kContainers)) return;
+  if (e.first == kNoElem || !SharesChildren(name)) return;  // the kinds TreeEdit::Own knows (Tree.h)
   // Only plain properties: elements without children, made one after another just now, none of
   // them a revision mark or anything else with an id of its own.
   const Tree& t = doc_.tree_;

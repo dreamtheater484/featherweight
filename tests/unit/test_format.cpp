@@ -1034,6 +1034,52 @@ TEST(Edit_ValuesXmlCantHoldAreLeftOut) {
   CHECK(SaveAndReopen(*doc) != nullptr);
 }
 
+TEST(Edit_TextEditsAfterParagraphFormattingKeepTheText) {
+  // d2-torture findings 7 and 8: formatting paragraphs gave them copies of their runs that shared
+  // their text and tabs, so the next text edit saved the wrong text and the model's walks lost the
+  // tab (and pictures). Format, then type, split and delete, saving and reopening after each.
+  Fixture f;
+  f.body = "<w:p><w:r><w:t>One</w:t></w:r><w:r><w:tab/><w:t>Two</w:t></w:r></w:p><w:p><w:r><w:t>Three</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string original = MainXml(*doc);
+  edit::Editor editor(*doc);
+  auto texts = [](const Document& d) {
+    std::u16string all;
+    for (uint32_t p : MainParas(d)) all += d.Para(p).text + u"|";
+    return all;
+  };
+  auto savedTexts = [&]() {
+    auto again = SaveAndReopen(*doc);
+    return again ? texts(*again) : u"(not saved)";
+  };
+  const uint32_t first = MainParas(*doc)[0], second = MainParas(*doc)[1];
+  {
+    edit::TreeEdit ed(editor);
+    edit::ParaFormat pf;
+    pf.lineRule = LineRule::Auto;
+    pf.line = 360;
+    edit::FormatParagraphs(ed, {{first, 0}, {second, 5}}, pf);
+  }
+  size_t tabs = 0;
+  for (const InlineItem& i : doc->Items(first)) tabs += i.kind == ItemKind::Tab;
+  CHECK(tabs == 1);
+  CHECK(editor.InsertText({first, 3}, u"xy").ok);
+  CHECK(texts(*doc) == u"Onexy\tTwo|Three|" && savedTexts() == texts(*doc));
+  CHECK(editor.SplitParagraph({first, 2}).ok);
+  CHECK(texts(*doc) == u"On|exy\tTwo|Three|" && savedTexts() == texts(*doc));
+  const uint32_t middle = MainParas(*doc)[1];
+  CHECK(editor.Delete({middle, 0}, {middle, 2}).ok);
+  CHECK(texts(*doc) == u"On|y\tTwo|Three|" && savedTexts() == texts(*doc));
+  // And typing at the start of the other formatted paragraph.
+  const uint32_t last = MainParas(*doc)[2];
+  CHECK(editor.InsertText({last, 0}, u"A").ok);
+  CHECK(texts(*doc) == u"On|y\tTwo|AThree|" && savedTexts() == texts(*doc));
+  for (int i = 0; i < 5; ++i) CHECK(editor.Undo().ok);
+  CHECK(MainXml(*doc) == original && !editor.CanUndo());
+}
+
 TEST(Edit_FirstPropertyGoesBeforeKeptExtensions) {
   // A w:rPr that holds only an extension: the first w: property goes before it, as the editor's
   // own property edits put it (d2-torture finding 3b).
