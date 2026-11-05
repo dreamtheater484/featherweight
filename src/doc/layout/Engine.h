@@ -67,7 +67,9 @@ class Engine {
   text::TextStyle StyleOf(const RunProps& r, bool hidden) const;
   RunPaint PaintOf(const RunProps& r, uint32_t modelRun) const;
   text::ParagraphFormat FormatOf(const ParaProps& p) const;
-  void BuildText(uint32_t para, const PageFields& fields, ParaText& out);
+  // `pageBreaks`: the paragraph is the body's own, where page and column breaks break; Word
+  // ignores them in table cells, text boxes, headers, footers and notes.
+  void BuildText(uint32_t para, const PageFields& fields, ParaText& out, bool pageBreaks = false);
   std::u16string NoteMark(uint32_t story) const;
   // A note's reference mark, numbered in the order references are laid out.
   std::u16string NoteReference(uint32_t story);

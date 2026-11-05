@@ -239,7 +239,7 @@ text::ParagraphFormat Engine::FormatOf(const ParaProps& p) const {
   return f;
 }
 
-void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out) {
+void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, bool pageBreaks) {
   out = ParaText();
   out.para = para;
   const Paragraph& model = doc_.Para(para);
@@ -376,6 +376,11 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out) {
           emit(std::u16string_view(&t[i], 1), hide(), paint);
           ++i;
           continue;
+        case 0x0C: case 0x0E:
+          if (pageBreaks) break;
+          emit(std::u16string_view(&t[i], 1), hide(), paint);
+          ++i;
+          continue;
         case 0x02: {
           std::u16string mark;
           if (it && (it->kind == ItemKind::FootnoteRef || it->kind == ItemKind::EndnoteRef)) {
@@ -440,6 +445,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out) {
       while (j < run.end) {
         char16_t d = t[j];
         if (d == 0x13 || d == 0x14 || d == 0x15 || d == 0x05 || d == 0x03 || d == 0x04 || d == 0x02 || d == 0xFFFC) break;
+        if ((d == 0x0C || d == 0x0E) && !pageBreaks) break;
         ++j;
       }
       for (const Replace& x : replaces)

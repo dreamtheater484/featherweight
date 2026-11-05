@@ -513,7 +513,7 @@ struct Flow {
     Frame frame = BodyFrame();
     if (!f.pt) {
       f.pt = std::make_unique<ParaText>();
-      e.BuildText(item.para, f.fields, *f.pt);
+      e.BuildText(item.para, f.fields, *f.pt, true);
       if (f.pt->empty) {
         f.pt.reset();
         ++f.next;
