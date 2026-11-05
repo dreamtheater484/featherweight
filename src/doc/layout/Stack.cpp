@@ -228,7 +228,9 @@ void Engine::AddDrawing(uint32_t drawing, const Rect& box, bool floating, const 
   std::array<float, 4> in = Insets(doc_.DrawingXml(d));
   Rect inner{box.left + in[0], box.top + in[1], box.right - in[2], box.bottom - in[3]};
   if (inner.Width() <= 0) return;
-  for (uint32_t story : d.textBoxes) {
+  {
+    // One story per box: linked boxes continue in the same story.
+    const uint32_t story = d.textBoxes.front();
     Frame tf = frame;
     tf.x = frame.x + inner.left;
     tf.y = frame.y + inner.top;
@@ -242,7 +244,6 @@ void Engine::AddDrawing(uint32_t drawing, const Rect& box, bool floating, const 
       l.clip = {0, 0, inner.Width(), std::max(inner.Height(), s.height)};
     }
     out.Append(std::move(s), inner.left, inner.top);
-    break;  // one story per box; linked boxes continue in the same story
   }
 }
 
