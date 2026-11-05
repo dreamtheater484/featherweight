@@ -604,7 +604,7 @@ try {
   Check "Open: a focusable button with its shortcut" { $open.Current.IsKeyboardFocusable -and $open.Current.AcceleratorKey -eq "Ctrl+O" -and (PatternNames $open) -contains "Invoke" }
   Check "no New row while no editor has shipped" { -not (FindChild $start $CT::Group "New") }
   Check "+ opens a file while no editor has shipped" {
-    $plus = FindChild (FindChild $win $CT::TitleBar $null) $CT::Button "Open a PDF"; (PatternNames $plus) -contains "Invoke" -and (PatternNames $plus) -notcontains "ExpandCollapse"
+    $plus = FindChild (FindChild $win $CT::TitleBar $null) $CT::Button "Open a file"; (PatternNames $plus) -contains "Invoke" -and (PatternNames $plus) -notcontains "ExpandCollapse"
   }
   $list = FindChild $start $CT::List "Recent"
   $names = { @(FindAll $list $CT::ListItem | ForEach-Object { $_.Current.Name }) -join "|" }
@@ -637,11 +637,18 @@ try {
   }
   Check "Recent: the selection stays on simple.docx" { (Pat (& $item "simple.docx") $SelItem).Current.IsSelected }
   $message = { $m = FindChild $win $CT::Pane "Message"; if ($m) { (FindChild $m $CT::Text $null).Current.Name } }
-  Step "Recent: opening a document shows today's message and keeps it in the list" { (Pat (& $item "simple.docx") $Invoke).Invoke() } {
-    (& $message) -like "*simple.docx* couldn't be opened*isn't a PDF." -and (FindChild $win $CT::Pane "Start") -and (& $names) -eq "text.pdf|simple.docx|Budget 2026.xlsx"
+  Step "Recent: opening a Word document opens it in a tab" { (Pat (& $item "simple.docx") $Invoke).Invoke() } {
+    FindChild $tabList $CT::TabItem "simple.docx"
+  }
+  Step "closing it shows the start page, with the document first in the list" {
+    (Pat (FindChild (FindChild $tabList $CT::TabItem "simple.docx") $CT::Button "Close tab") $Invoke).Invoke()
+  } {
+    $start = FindChild $win $CT::Pane "Start"
+    $script:list = if ($start) { FindChild $start $CT::List "Recent" }
+    $script:list -and (& $names) -eq "simple.docx|text.pdf|Budget 2026.xlsx"
   }
   Step "Recent: opening a file that's gone takes it off the list" { (Pat (& $item "Budget 2026.xlsx") $Invoke).Invoke() } {
-    (& $message) -like "*Budget 2026.xlsx* couldn't be opened*" -and (& $names) -eq "text.pdf|simple.docx"
+    (& $message) -like "*Budget 2026.xlsx* couldn't be opened*" -and (& $names) -eq "simple.docx|text.pdf"
   }
 } finally {
   [FocusWatch]::Stop()

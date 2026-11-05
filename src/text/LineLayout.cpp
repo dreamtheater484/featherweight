@@ -166,7 +166,7 @@ struct Segment {
   uint32_t start = 0, end = 0;
   uint32_t run = 0;
   const Face* face = nullptr;
-  float emSize = 0, rise = 0;
+  float emSize = 0, rise = 0, scale = 1;
   uint8_t level = 0;
   float ascent = 0, descent = 0, lineGap = 0;
   std::vector<uint16_t> clusters;  // per character: its cluster's first glyph
@@ -567,6 +567,12 @@ void LineBreaker::Impl::ShapePiece(Segment& seg, const DWRITE_SCRIPT_ANALYSIS& s
     }
   }
 
+  // Character scaling (w:w) widens or narrows the glyphs and their placement.
+  seg.scale = style.scale > 0 ? style.scale : 1;
+  if (seg.scale != 1) {
+    for (float& a : seg.advances) a *= seg.scale;
+    for (DWRITE_GLYPH_OFFSET& o : seg.offsets) o.advanceOffset *= seg.scale;
+  }
   // Per character: its cluster's advance, plus the letter spacing, which Word adds after each one.
   const float spacing = style.letterSpacing;
   const auto glyphCount = static_cast<uint32_t>(seg.glyphs.size());
@@ -850,15 +856,23 @@ uint32_t LineBreaker::Impl::Hyphenate(uint32_t segFrom, uint32_t ws, uint32_t we
   return 0;
 }
 
+// Word's line height with several fonts on a line: the tallest ascent with its font's line gap
+// above it, and the deepest descent. (Not the tallest ascent plus the largest gap: a Symbol bullet
+// beside Times New Roman would be 0.4 pt too tall.)
+static void CombineMetrics(Line& line, float ascent, float descent, float gap) {
+  const float top = std::max(line.ascent + line.lineGap, ascent + gap);
+  line.ascent = std::max(line.ascent, ascent);
+  line.descent = std::max(line.descent, descent);
+  line.lineGap = top - line.ascent;
+}
+
 void LineBreaker::Impl::MarkMetrics(Line& line) {
   const TextStyle* mark = p.markStyle ? p.markStyle : (styles.empty() ? &DefaultStyle() : styles.back());
   const Face* face = fonts.Get(fonts.Resolve(mark->family), mark->bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
                                mark->italic);
   if (!face) return;
   FontMetrics m = face->Metrics(mark->size);
-  line.ascent = std::max(line.ascent, m.ascent);
-  line.descent = std::max(line.descent, m.descent);
-  line.lineGap = std::max(line.lineGap, m.lineGap);
+  CombineMetrics(line, m.ascent, m.descent, m.lineGap);
 }
 
 Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bool first) {
@@ -1055,11 +1069,7 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
     line.advance_[k] = advance;
     line.flags_[k] = static_cast<uint8_t>((rtlChar ? Line::kRtl : 0) | (caretStop[c] ? Line::kStop : 0));
   };
-  auto useMetrics = [&](float asc, float desc, float gap) {
-    line.ascent = std::max(line.ascent, asc);
-    line.descent = std::max(line.descent, desc);
-    line.lineGap = std::max(line.lineGap, gap);
-  };
+  auto useMetrics = [&](float asc, float desc, float gap) { CombineMetrics(line, asc, desc, gap); };
   float contentLeft = std::numeric_limits<float>::max(), contentRight = -std::numeric_limits<float>::max();
   std::vector<size_t> visual(items.size());
   for (size_t k = 0; k < items.size(); ++k) visual[k] = k;
@@ -1078,6 +1088,7 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
       GlyphPiece piece;
       piece.face = sg.face->Get();
       piece.emSize = sg.emSize;
+      piece.scale = sg.scale;
       piece.x = it.x;
       piece.width = it.width;
       piece.rise = sg.rise;
@@ -1144,7 +1155,8 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
       InlineObject obj{orig[c], runOf[c], it.x, it.width, s.objectAscent, s.objectDescent, s.baselineShift};
       useMetrics(s.objectAscent + s.baselineShift, s.objectDescent - s.baselineShift, 0);
       line.objects.push_back(obj);
-    } else {
+    } else if (it.type != Item::Tab || it.leader != TabLeader::None) {
+      // A tab without a leader draws nothing, and Word doesn't size the line by its font.
       useMetrics(rf.metrics.ascent + rf.rise, rf.metrics.descent - rf.rise, rf.metrics.lineGap);
     }
     setCaret(c, odd ? it.x + it.width : it.x, it.width, odd);
@@ -1177,7 +1189,9 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
   }
   std::stable_sort(line.pieces.begin(), line.pieces.end(),
                    [](const GlyphPiece& x, const GlyphPiece& y) { return x.x < y.x; });
-  if (fit.ending == LineEnd::ParagraphEnd || items.empty()) MarkMetrics(line);
+  // The paragraph mark's font sizes only a line with nothing drawn on it (an empty paragraph, or
+  // the empty line after a line break): Word sizes a last line with text by its text alone.
+  if (line.pieces.empty() && line.objects.empty()) MarkMetrics(line);
 
   // Where the content is, and the carets of hidden text and the line's end.
   float startX = rtl ? width - last.start : last.start;

@@ -38,7 +38,7 @@ target_compile_options(fwcore PRIVATE ${FW_COMPILE_OPTIONS})
 target_compile_definitions(fwcore PUBLIC ${FW_DEFINITIONS})
 
 # --- The app ---
-file(GLOB FW_APP_SOURCES CONFIGURE_DEPENDS src/*.cpp src/ui/*.cpp src/pdf/*.cpp)
+file(GLOB FW_APP_SOURCES CONFIGURE_DEPENDS src/*.cpp src/ui/*.cpp src/pdf/*.cpp src/word/*.cpp)
 # Test-only screens (the widget gallery) never ship (plan §11): scripts/release.ps1 turns this off.
 option(FW_TEST_SCREENS "Build the widget gallery and other test-only screens into the app" ON)
 if(NOT FW_TEST_SCREENS)
@@ -92,7 +92,7 @@ add_subdirectory(src/draw)
 add_subdirectory(src/doc)
 add_subdirectory(src/text)
 add_subdirectory(tools/fwtool)
-target_link_libraries(Featherweight PRIVATE fwdraw)
+target_link_libraries(Featherweight PRIVATE fwdraw fwdoclayout)
 if(FW_FUZZ)
   enable_testing()
   add_subdirectory(tests/fuzz)

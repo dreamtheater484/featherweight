@@ -46,8 +46,10 @@ TEST(FileAssoc_PdfRegistrationUnchanged) {
       {L"Software\\RegisteredApplications", L"Featherweight", L"Software\\Featherweight\\Capabilities"},
   };
   CHECK(fileassoc::Plan(kExe, {FileKind::Pdf}) == expected);
-  // Only the PDF reader has shipped, so that is all Register writes today.
-  CHECK(fileassoc::Plan(kExe, fw::ShippedViewers()) == expected);
+  // The PDF reader and the document viewer have shipped, so Register writes both, PDF first.
+  const auto shipped = fileassoc::Plan(kExe, fw::ShippedViewers());
+  CHECK(shipped == fileassoc::Plan(kExe, {FileKind::Pdf, FileKind::Document}));
+  CHECK(std::vector<Value>(shipped.begin(), shipped.begin() + 5) == std::vector<Value>(expected.begin(), expected.begin() + 5));
 }
 
 TEST(FileAssoc_EveryKindOnceShipped) {

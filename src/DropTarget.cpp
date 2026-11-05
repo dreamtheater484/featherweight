@@ -2,6 +2,7 @@
 
 #include <shellapi.h>
 
+#include "core/FileKinds.h"
 #include "core/Strings.h"
 
 HRESULT DropTarget::QueryInterface(REFIID riid, void** ppv) {
@@ -43,7 +44,7 @@ std::vector<std::wstring> DropTarget::Files(IDataObject* data) {
 HRESULT DropTarget::DragEnter(IDataObject* data, DWORD, POINTL, DWORD* effect) {
   acceptable_ = false;
   for (const auto& f : Files(data))
-    if (fw::EndsWithNoCase(f, L".pdf")) acceptable_ = true;
+    if (fw::Opens(f)) acceptable_ = true;
   *effect = acceptable_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
   host_->OnDragEnter(acceptable_);
   return S_OK;

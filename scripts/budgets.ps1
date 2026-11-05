@@ -55,7 +55,11 @@ $floorMs = 5; $floorMB = 2 # ...when it is also more than this: smaller changes 
 $idleCpuLimit = 5          # ms over bench-app's idle window, and thread wakeups:
 $idleWakeupLimit = 2       # a timer firing once a second wakes the app 3 times
 # Opening fixed files of each kind. Add the office formats as they open.
-$fixedFiles = @("tests\pdfs\text.pdf", "tests\pdfs\big-600-pages.pdf", "tests\pdfs\form.pdf")
+$fixedFiles = @("tests\pdfs\text.pdf", "tests\pdfs\big-600-pages.pdf", "tests\pdfs\form.pdf", "tests\office\layout\report.docx")
+# A 300-page Word document, made by tests\office\make_long_docs.py when Python is there: "ready"
+# includes paginating it all in the background, which has a budget of its own.
+$longDocBudget = 3000      # ms, launch to a 300-page document fully paginated
+$longDoc = "long-300.docx"
 
 $ledgerPath = Join-Path $root "tests\budgets\ledger.json"
 $ledger = Get-Content $ledgerPath -Raw | ConvertFrom-Json
@@ -188,8 +192,16 @@ if (($Timings -or $TrackTimings) -and $exe) {
   if (-not $Fwtool) { $Fwtool = Join-Path $Build "tools\fwtool\Release\fwtool.exe" }
   if (-not (Test-Path $Fwtool)) { throw "$Fwtool doesn't exist (-Fwtool names another)." }
   $benchJson = Join-Path ([IO.Path]::GetTempPath()) "fw-budgets-$PID.json"
+  $longDir = Join-Path ([IO.Path]::GetTempPath()) "fw-budgets-docs-$PID"
+  $files = @($fixedFiles)
+  if (Get-Command python -ErrorAction SilentlyContinue) {
+    New-Item -ItemType Directory -Force $longDir | Out-Null
+    & python tests\office\make_long_docs.py $longDir 300 | Out-Null
+    if (Test-Path (Join-Path $longDir $longDoc)) { $files += (Join-Path $longDir $longDoc) }
+  }
   ""
-  & $Fwtool bench-app --runs $Runs --json $benchJson $exe @fixedFiles | Out-Host
+  & $Fwtool bench-app --runs $Runs --json $benchJson $exe @files | Out-Host
+  Remove-Item $longDir -Recurse -ErrorAction SilentlyContinue
   $benchFailed = $LASTEXITCODE -ne 0
   $bench = if (Test-Path $benchJson) { Get-Content $benchJson -Raw | ConvertFrom-Json } else { $null }
   Remove-Item $benchJson -ErrorAction SilentlyContinue
@@ -227,6 +239,9 @@ if (($Timings -or $TrackTimings) -and $exe) {
     if ($s.name -eq "launch") {
       if ([double]$s.memoryMB -ge $launchMemoryBudget) { $timingFailures.Add("Memory after launch is $($s.memoryMB) MB, over its budget of $launchMemoryBudget MB.") }
       if ([double]$s.readyMs -ge $launchBudget) { $timingFailures.Add("Launch took $($s.readyMs) ms, over its budget of $launchBudget ms.") }
+    }
+    if ($s.name -eq $longDoc -and [double]$s.readyMs -ge $longDocBudget) {
+      $timingFailures.Add("Paginating a 300-page document took $($s.readyMs) ms, over its budget of $longDocBudget ms.")
     }
   }
   $report.timings = [ordered]@{ machine = $machine; runs = $Runs; bench = $bench; failures = @($timingFailures) }
