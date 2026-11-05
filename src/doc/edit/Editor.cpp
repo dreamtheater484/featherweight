@@ -2,6 +2,10 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <functional>
+#include <map>
+#include <pugixml.hpp>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "doc/edit/Kept.h"
@@ -532,6 +536,7 @@ struct EditorState {
         for (ElemId c = E(id).first; c != kNoElem; c = E(c).next) stack.push_back(c);
       }
     }
+    CollectRoots(ids, seen);
   }
   void Capture(uint32_t first, uint32_t count, Side& side) {
     side = {};
@@ -578,9 +583,11 @@ struct EditorState {
     Renumber(at);
   }
 
-  bool Begin(uint32_t first, uint32_t count) {
+  // `extra`: elements besides the paragraphs' that the transaction changes (roots).
+  bool Begin(uint32_t first, uint32_t count, std::vector<ElemId> extra = {}) {
     if (inTx) return false;
     inTx = true;
+    roots = std::move(extra);
     tx = {};
     tx.story = d.paras_[first].story;
     tx.first = first;
@@ -1479,6 +1486,595 @@ struct EditorState {
     }
     return false;
   }
+
+  // ---------- Tables (D3) ----------
+  // A table on its grid, read from the tree for each change. Columns are grid columns.
+  struct GridCell {
+    ElemId tc = kNoElem;
+    int32_t col = 0, span = 1;
+    VMerge v = VMerge::None;
+  };
+  struct GridRow {
+    ElemId tr = kNoElem;
+    int32_t before = 0, after = 0;  // w:gridBefore, w:gridAfter
+    std::vector<GridCell> cells;
+    int32_t End() const { return cells.empty() ? before : cells.back().col + cells.back().span; }
+  };
+  struct Grid {
+    ElemId tbl = kNoElem, tblGrid = kNoElem;
+    std::vector<ElemId> cols;  // w:gridCol
+    std::vector<GridRow> rows;
+    int32_t width = 0;  // grid columns the widest row uses
+    // The cell of row `r` that covers grid column `c`: its index in rows[r].cells, or -1.
+    int At(size_t r, int32_t c) const {
+      const auto& cs = rows[r].cells;
+      for (size_t i = 0; i < cs.size(); ++i)
+        if (cs[i].col <= c && c < cs[i].col + cs[i].span) return static_cast<int>(i);
+      return -1;
+    }
+  };
+
+  static int32_t IntOr(Node n, uint32_t attr, int32_t fallback) {
+    auto v = n ? ParseInt(n.AttrOr(attr)) : std::nullopt;
+    return v ? static_cast<int32_t>(std::clamp<int64_t>(*v, -1000000, 1000000)) : fallback;
+  }
+  // The innermost table around a paragraph: its w:tbl, w:tr and w:tc. False outside tables.
+  bool CellOf(uint32_t para, ElemId& tbl, ElemId& tr, ElemId& tc) {
+    tbl = tr = tc = kNoElem;
+    for (ElemId a = E(d.paras_[para].elem).parent; a != kNoElem; a = E(a).parent) {
+      if (NameOf(a) != kTc) continue;
+      tc = a;
+      tr = E(tc).parent;
+      tbl = tr == kNoElem ? kNoElem : E(tr).parent;
+      return tbl != kNoElem;
+    }
+    return false;
+  }
+  // Reads `tbl` onto its grid. Refused (with why) where a change of shape can't be done safely:
+  // rows or cells inside content controls or custom XML, old-style horizontal merges, and tracked
+  // cell insertions, deletions, merges and grid changes.
+  bool ReadGrid(ElemId tbl, Grid& g, std::u16string& why) {
+    static const uint32_t kGridSpan = Name("gridSpan"), kVMerge = Name("vMerge"), kHMerge = Name("hMerge"),
+                          kGridBefore = Name("gridBefore"), kGridAfter = Name("gridAfter"), kCellIns = Name("cellIns"),
+                          kCellDel = Name("cellDel"), kCellMerge = Name("cellMerge"), kTblPrEx = Name("tblPrEx"),
+                          kGridChange = Name("tblGridChange");
+    g = {};
+    g.tbl = tbl;
+    const std::u16string wrapped = u"This table has rows or cells inside content controls, so its shape can't be changed yet.";
+    for (ElemId c = E(tbl).first; c != kNoElem; c = E(c).next) {
+      uint32_t n = NameOf(c);
+      if (n == kTblPr || RangeMarker(n)) continue;
+      if (n == kTblGrid) {
+        g.tblGrid = c;
+        for (ElemId k = E(c).first; k != kNoElem; k = E(k).next) {
+          if (NameOf(k) == kGridCol) g.cols.push_back(k);
+          else if (NameOf(k) == kGridChange) return why = u"This table's columns have tracked changes, so its shape can't be changed yet.", false;
+        }
+        continue;
+      }
+      if (n != kTr) return why = wrapped, false;
+      GridRow row;
+      row.tr = c;
+      ElemId trPr = Child(c, kTrPr);
+      row.before = std::max(0, IntOr(Node(&t, trPr).Child(kGridBefore), kVal, 0));
+      row.after = std::max(0, IntOr(Node(&t, trPr).Child(kGridAfter), kVal, 0));
+      int32_t col = row.before;
+      for (ElemId k = E(c).first; k != kNoElem; k = E(k).next) {
+        uint32_t kn = NameOf(k);
+        if (kn == kTrPr || kn == kTblPrEx || RangeMarker(kn)) continue;
+        if (kn != kTc) return why = wrapped, false;
+        GridCell cell;
+        cell.tc = k;
+        cell.col = col;
+        Node tcPr = Node(&t, k).Child(kTcPr);
+        cell.span = std::clamp(IntOr(tcPr.Child(kGridSpan), kVal, 1), 1, 1000);
+        if (Node vm = tcPr.Child(kVMerge)) cell.v = vm.AttrOr(kVal) == "restart" ? VMerge::Restart : VMerge::Continue;
+        if (tcPr.Child(kHMerge)) return why = u"This table uses an old kind of merged cells, so its shape can't be changed yet.", false;
+        if (tcPr.Child(kCellIns) || tcPr.Child(kCellDel) || tcPr.Child(kCellMerge))
+          return why = u"This table has tracked cell changes. Accept or reject them first.", false;
+        col += cell.span;
+        row.cells.push_back(cell);
+      }
+      if (row.cells.empty()) return why = u"This table has a row without cells, so its shape can't be changed.", false;
+      g.width = std::max(g.width, col + row.after);
+      g.rows.push_back(std::move(row));
+    }
+    if (g.rows.empty()) return why = u"This table has no rows.", false;
+    if (g.tblGrid == kNoElem) return why = u"This table has no grid, so its shape can't be changed yet.", false;
+    return true;
+  }
+  // The rows a cell's vertical merge covers: [top, bottom].
+  void MergeRows(const Grid& g, size_t r, int i, size_t& top, size_t& bottom) {
+    const GridCell& c = g.rows[r].cells[i];
+    auto same = [&](size_t row) {
+      int j = g.At(row, c.col);
+      return j >= 0 && g.rows[row].cells[j].col == c.col && g.rows[row].cells[j].span == c.span ? j : -1;
+    };
+    top = bottom = r;
+    if (c.v == VMerge::Continue)
+      while (top > 0) {
+        int j = same(top - 1);
+        if (j < 0) break;
+        --top;
+        if (g.rows[top].cells[j].v != VMerge::Continue) break;
+      }
+    if (c.v != VMerge::None)
+      while (bottom + 1 < g.rows.size()) {
+        int j = same(bottom + 1);
+        if (j < 0 || g.rows[bottom + 1].cells[j].v != VMerge::Continue) break;
+        ++bottom;
+      }
+  }
+  size_t RowOf(const Grid& g, ElemId tr) {
+    for (size_t r = 0; r < g.rows.size(); ++r)
+      if (g.rows[r].tr == tr) return r;
+    return SIZE_MAX;
+  }
+  int CellIndex(const Grid& g, size_t r, ElemId tc) {
+    for (size_t i = 0; i < g.rows[r].cells.size(); ++i)
+      if (g.rows[r].cells[i].tc == tc) return static_cast<int>(i);
+    return -1;
+  }
+  // The block of cells between the cells of two positions in one table, grown until it holds
+  // every cell it touches whole, as Word selects cells.
+  struct Block {
+    size_t row0 = 0, row1 = 0;
+    int32_t col0 = 0, col1 = 0;  // inclusive
+  };
+  bool BlockOf(Pos a, Pos b, Grid& g, Block& bl, std::u16string& why) {
+    ElemId tbl, tr, tc, tbl2, tr2, tc2;
+    if (!CellOf(a.para, tbl, tr, tc)) return why = u"Put the cursor in a table first.", false;
+    if (!CellOf(b.para, tbl2, tr2, tc2) || tbl2 != tbl) tr2 = tr, tc2 = tc;
+    if (!ReadGrid(tbl, g, why)) return false;
+    size_t ra = RowOf(g, tr), rb = RowOf(g, tr2);
+    if (ra == SIZE_MAX || rb == SIZE_MAX) return why = u"This table's shape can't be read.", false;
+    int ia = CellIndex(g, ra, tc), ib = CellIndex(g, rb, tc2);
+    if (ia < 0 || ib < 0) return why = u"This table's shape can't be read.", false;
+    bl.row0 = std::min(ra, rb);
+    bl.row1 = std::max(ra, rb);
+    bl.col0 = std::min(g.rows[ra].cells[ia].col, g.rows[rb].cells[ib].col);
+    bl.col1 = std::max(g.rows[ra].cells[ia].col + g.rows[ra].cells[ia].span, g.rows[rb].cells[ib].col + g.rows[rb].cells[ib].span) - 1;
+    for (bool grew = true; grew;) {
+      grew = false;
+      for (size_t r = bl.row0; r <= bl.row1; ++r)
+        for (size_t i = 0; i < g.rows[r].cells.size(); ++i) {
+          const GridCell& c = g.rows[r].cells[i];
+          if (c.col > bl.col1 || c.col + c.span - 1 < bl.col0) continue;
+          size_t top, bottom;
+          MergeRows(g, r, static_cast<int>(i), top, bottom);
+          int32_t c0 = std::min(bl.col0, c.col), c1 = std::max(bl.col1, c.col + c.span - 1);
+          size_t r0 = std::min(bl.row0, top), r1 = std::max(bl.row1, bottom);
+          if (c0 != bl.col0 || c1 != bl.col1 || r0 != bl.row0 || r1 != bl.row1) {
+            bl = {r0, r1, c0, c1};
+            grew = true;
+          }
+        }
+    }
+    return true;
+  }
+
+  // The paragraphs of a block (a w:p, a table and the tables inside it) in order: block-level
+  // containers only, not what's inside paragraphs (a text box is a story of its own).
+  void ParasIn(ElemId block, std::vector<ElemId>& out) {
+    uint32_t n = NameOf(block);
+    if (n == kP) {
+      out.push_back(block);
+      return;
+    }
+    if (n == kTbl || n == kTr || n == kTc || n == Name("sdt") || n == Name("sdtContent") || n == Name("customXml"))
+      for (ElemId c = E(block).first; c != kNoElem; c = E(c).next) ParasIn(c, out);
+  }
+  // A table's paragraphs: the first and how many. False when they aren't one run of its story
+  // (a paragraph shown from kept content).
+  bool TableParas(ElemId tbl, uint32_t& first, uint32_t& count, std::u16string& why) {
+    std::vector<ElemId> ps;
+    ParasIn(tbl, ps);
+    if (ps.empty()) return why = u"This table has no paragraphs.", false;
+    first = E(ps.front()).start;
+    count = static_cast<uint32_t>(ps.size());
+    for (size_t i = 0; i < ps.size(); ++i)
+      if (first + i >= d.paras_.size() || d.paras_[first + i].elem != ps[i] || (E(ps[i]).flags & kDisplayOnly))
+        return why = u"This table can't be changed: part of it is shown from content Featherweight keeps as it is.", false;
+    return true;
+  }
+
+  // Elements a transaction changes besides its paragraphs: a table (its rows, cells and grid) with
+  // its parent and neighbours. Begin saves those it's given as they were; Commit saves them, and
+  // the ones added since (new tables), as they are.
+  std::vector<ElemId> roots;
+  void CollectRoots(std::vector<ElemId>& ids, std::unordered_set<ElemId>& seen) {
+    auto add = [&](ElemId id) {
+      if (id != kNoElem && seen.insert(id).second) ids.push_back(id);
+    };
+    for (ElemId root : roots) {
+      add(E(root).parent);
+      if (E(root).parent != kNoElem) add(PrevSibling(root));
+      add(E(root).next);
+      std::vector<ElemId> stack{root};
+      while (!stack.empty()) {
+        ElemId id = stack.back();
+        stack.pop_back();
+        add(id);
+        if (E(id).flags & kSharedKids) continue;
+        for (ElemId c = E(id).first; c != kNoElem; c = E(c).next) stack.push_back(c);
+      }
+    }
+  }
+
+  // The transaction's paragraphs are now those of `blocks`, in order: paragraphs that stayed keep
+  // their text, new ones are empty. Renumbers the rest.
+  void Resync(const std::vector<ElemId>& blocks) {
+    const uint32_t first = tx.first, count = CurrentCount();
+    std::unordered_map<ElemId, Paragraph> old;
+    for (uint32_t p = first; p < first + count; ++p) old.emplace(d.paras_[p].elem, std::move(d.paras_[p]));
+    std::vector<ElemId> ps;
+    for (ElemId b : blocks) ParasIn(b, ps);
+    std::vector<Paragraph> now;
+    now.reserve(ps.size());
+    std::vector<uint32_t> fresh;
+    for (ElemId w : ps) {
+      if (auto it = old.find(w); it != old.end()) {
+        now.push_back(std::move(it->second));
+        continue;
+      }
+      Paragraph p;
+      p.elem = w;
+      p.story = tx.story;
+      p.version = ++version;
+      fresh.push_back(static_cast<uint32_t>(now.size()));
+      now.push_back(std::move(p));
+    }
+    d.paras_.erase(d.paras_.begin() + first, d.paras_.begin() + first + count);
+    d.paras_.insert(d.paras_.begin() + first, std::make_move_iterator(now.begin()), std::make_move_iterator(now.end()));
+    Renumber(first);
+    for (uint32_t i : fresh) Reflow(first + i);
+  }
+
+  // Elements from XML in the w: namespace, every element and attribute known where it goes;
+  // linked into `parent` after `after` (kNoElem: first). kNoElem when the XML isn't.
+  static uint32_t QName(std::string_view n) { return n.starts_with("w:") ? Name(n.substr(2)) : Name(n); }
+  ElemId Make(ElemId parent, ElemId after, const std::string& xml) {
+    pugi::xml_document doc;
+    if (!doc.load_buffer(xml.data(), xml.size())) return kNoElem;
+    std::function<ElemId(ElemId, const pugi::xml_node&)> build = [&](ElemId par, const pugi::xml_node& n) -> ElemId {
+      ElemId id = NewElem(par, QName(n.name()));
+      if (id == kNoElem) return kNoElem;
+      for (pugi::xml_attribute a : n.attributes())
+        if (!SetAttr(id, QName(a.name()), a.value())) return kNoElem;
+      ElemId last = kNoElem;
+      for (pugi::xml_node c : n.children()) {
+        if (c.type() != pugi::node_element) continue;
+        ElemId k = build(id, c);
+        if (k == kNoElem) return kNoElem;
+        LinkAfter(id, last, k);
+        last = k;
+      }
+      return id;
+    };
+    ElemId id = build(parent, doc.first_child());
+    if (id != kNoElem) LinkAfter(parent, after, id);
+    return id;
+  }
+  // A property element made again in `parent`'s schema place, replacing one of the same name.
+  ElemId SetProp(ElemId parent, const std::string& xml) {
+    pugi::xml_document doc;
+    if (!doc.load_buffer(xml.data(), xml.size())) return kNoElem;
+    uint32_t name = QName(doc.first_child().name());
+    if (ElemId old = Child(parent, name); old != kNoElem) {
+      StoreFragments(FragmentsBeforeUnlink(d.store_, t, PrevSibling(old), old, E(old).next));
+      Unlink(old);
+    }
+    if (S().Child(TypeOf(parent), name) == kNoDef) return kNoElem;
+    ElemId after = SlotFor(parent, name);
+    ElemId id = Make(parent, after, xml);
+    if (id != kNoElem) StoreFragments(FragmentsAfterLink(d.store_, t, after, id));
+    return id;
+  }
+  // The child a new child named `name` follows in schema order (kNoElem: it goes first).
+  ElemId SlotFor(ElemId parent, uint32_t name) {
+    const auto& order = S().Type(TypeOf(parent)).children;
+    auto rank = [&](ElemDefId e) {
+      auto it = std::find(order.begin(), order.end(), e);
+      return it == order.end() ? order.size() : static_cast<size_t>(it - order.begin());
+    };
+    size_t mine = rank(S().Child(TypeOf(parent), name));
+    ElemId after = kNoElem;
+    for (ElemId c = E(parent).first; c != kNoElem && rank(E(c).def) <= mine; c = E(c).next) after = c;
+    return after;
+  }
+  void RemoveProp(ElemId parent, uint32_t name) {
+    if (parent == kNoElem) return;
+    if (ElemId old = Child(parent, name); old != kNoElem) {
+      StoreFragments(FragmentsBeforeUnlink(d.store_, t, PrevSibling(old), old, E(old).next));
+      Unlink(old);
+    }
+  }
+  ElemId Props(ElemId owner, uint32_t name) {
+    ElemId p = Child(owner, name);
+    if (p == kNoElem) p = AddInOrder(owner, name);
+    if (p != kNoElem) Unshare(p);
+    return p;
+  }
+
+  // A new paragraph for a new cell, with the properties of `like` (a paragraph) without its section
+  // break, list, revision marks and kept content.
+  ElemId NewCellPara(ElemId tc, ElemId after, ElemId like) {
+    ElemId p = NewElem(tc, kP);
+    if (p == kNoElem) return kNoElem;
+    if (like != kNoElem) {
+      for (uint32_t name : {kParaId, kTextId})
+        if (Attr(like, name)) SetAttr(p, name, NewParaId());
+      if (ElemId pPr = Child(like, kPPr); pPr != kNoElem) {
+        auto skip = [&](ElemId c) {
+          uint32_t n = NameOf(c);
+          return n == kSectPr || n == kPPrChange || n == kIns || n == kDel || n == kMoveFrom || n == kMoveTo ||
+                 n == kRPrChange || n == Name("numPr");
+        };
+        ElemId copy = CopyProps(pPr, p, skip, false);
+        if (E(copy).first != kNoElem || E(copy).attrCount > 0) LinkAfter(p, kNoElem, copy);
+      }
+    }
+    LinkAfter(tc, after, p);
+    return p;
+  }
+  // The first paragraph of a cell (kNoElem when it starts with a table).
+  ElemId FirstPara(ElemId tc) {
+    for (ElemId c = E(tc).first; c != kNoElem; c = E(c).next)
+      if (NameOf(c) == kP) return c;
+    return kNoElem;
+  }
+  // A new cell after `after` in `tr`, like `like` (a cell: its properties and its first paragraph's),
+  // covering `span` grid columns of width `twips` in all.
+  ElemId NewCell(ElemId tr, ElemId after, ElemId like, int32_t span, VMerge v, int32_t twips) {
+    static const uint32_t kGridSpan = Name("gridSpan"), kVMerge = Name("vMerge"), kTcW = Name("tcW");
+    ElemId tc = NewElem(tr, kTc);
+    if (tc == kNoElem) return kNoElem;
+    ElemId tcPr = kNoElem;
+    if (ElemId likePr = like == kNoElem ? kNoElem : Child(like, kTcPr); likePr != kNoElem) {
+      auto skip = [&](ElemId c) {
+        uint32_t n = NameOf(c);
+        return n == kGridSpan || n == kVMerge || n == Name("hMerge") || n == Name("cellIns") || n == Name("cellDel") ||
+               n == Name("cellMerge") || n == Name("tcPrChange");
+      };
+      tcPr = CopyProps(likePr, tc, skip, false);
+      LinkAfter(tc, kNoElem, tcPr);
+      Unshare(tcPr);
+    } else {
+      tcPr = AddInOrder(tc, kTcPr);
+    }
+    if (tcPr == kNoElem) return kNoElem;
+    Node w = Node(&t, tcPr).Child(kTcW);
+    if (!w || w.AttrOr(kType) == "dxa" || w.AttrOr(kType).empty()) SetProp(tcPr, "<w:tcW w:w=\"" + std::to_string(twips) + "\" w:type=\"dxa\"/>");
+    if (span > 1) SetProp(tcPr, "<w:gridSpan w:val=\"" + std::to_string(span) + "\"/>");
+    if (v == VMerge::Restart) SetProp(tcPr, "<w:vMerge w:val=\"restart\"/>");
+    else if (v == VMerge::Continue) SetProp(tcPr, "<w:vMerge/>");
+    if (NewCellPara(tc, tcPr, like == kNoElem ? kNoElem : FirstPara(like)) == kNoElem) return kNoElem;
+    LinkAfter(tr, after, tc);
+    return tc;
+  }
+  void SetSpan(ElemId tc, int32_t span) {
+    ElemId tcPr = Props(tc, kTcPr);
+    if (span > 1) SetProp(tcPr, "<w:gridSpan w:val=\"" + std::to_string(span) + "\"/>");
+    else RemoveProp(tcPr, Name("gridSpan"));
+  }
+  void SetVMerge(ElemId tc, VMerge v) {
+    ElemId tcPr = Props(tc, kTcPr);
+    if (v == VMerge::Restart) SetProp(tcPr, "<w:vMerge w:val=\"restart\"/>");
+    else if (v == VMerge::Continue) SetProp(tcPr, "<w:vMerge/>");
+    else RemoveProp(tcPr, Name("vMerge"));
+  }
+  void SetRowGrid(ElemId tr, uint32_t name, int32_t value) {  // w:gridBefore, w:gridAfter
+    ElemId trPr = Child(tr, kTrPr);
+    if (value <= 0) {
+      if (trPr != kNoElem) {
+        Unshare(trPr);
+        RemoveProp(trPr, name);
+      }
+      return;
+    }
+    trPr = Props(tr, kTrPr);
+    SetProp(trPr, std::string("<w:") + (name == Name("gridBefore") ? "gridBefore" : "gridAfter") + " w:val=\"" +
+                      std::to_string(value) + "\"/>");
+  }
+  int32_t ColWidth(const Grid& g, int32_t c) {
+    return c >= 0 && static_cast<size_t>(c) < g.cols.size() ? IntOr(Node(&t, g.cols[c]), kW, 0) : 0;
+  }
+  // The grid's widths, as many as the widest row uses (a short grid gets the average width).
+  std::vector<int32_t> Widths(const Grid& g) {
+    std::vector<int32_t> w;
+    int64_t sum = 0;
+    for (int32_t c = 0; c < static_cast<int32_t>(g.cols.size()); ++c) sum += ColWidth(g, c);
+    int32_t avg = g.cols.empty() ? 1440 : static_cast<int32_t>(sum / static_cast<int64_t>(g.cols.size()));
+    for (int32_t c = 0; c < g.width; ++c) w.push_back(c < static_cast<int32_t>(g.cols.size()) ? ColWidth(g, c) : std::max(avg, 1));
+    return w;
+  }
+  // Writes the grid's column widths, and each dxa cell width and dxa table width from them.
+  void WriteGrid(ElemId tbl, const std::vector<int32_t>& widths) {
+    static const uint32_t kTcW = Name("tcW"), kTblW = Name("tblW");
+    ElemId grid = Child(tbl, kTblGrid);
+    for (ElemId c; (c = E(grid).first) != kNoElem;) {
+      StoreFragments(FragmentsBeforeUnlink(d.store_, t, PrevSibling(c), c, E(c).next));
+      Unlink(c);
+    }
+    ElemId last = kNoElem;
+    for (int32_t w : widths) last = Make(grid, last, "<w:gridCol w:w=\"" + std::to_string(std::max(w, 0)) + "\"/>");
+    Grid g;
+    std::u16string why;
+    if (!ReadGrid(tbl, g, why)) return;
+    for (const GridRow& row : g.rows)
+      for (const GridCell& c : row.cells) {
+        int64_t sum = 0;
+        for (int32_t k = c.col; k < c.col + c.span && k < static_cast<int32_t>(widths.size()); ++k) sum += widths[k];
+        Node w = Node(&t, c.tc).Child(kTcPr).Child(kTcW);
+        if (w && w.AttrOr(kType) != "dxa" && !w.AttrOr(kType).empty()) continue;
+        SetProp(Props(c.tc, kTcPr), "<w:tcW w:w=\"" + std::to_string(sum) + "\" w:type=\"dxa\"/>");
+      }
+    if (Node w = Node(&t, tbl).Child(kTblPr).Child(kTblW); w && w.AttrOr(kType) == "dxa") {
+      int64_t sum = 0;
+      for (int32_t x : widths) sum += x;
+      SetProp(Props(tbl, kTblPr), "<w:tblW w:w=\"" + std::to_string(sum) + "\" w:type=\"dxa\"/>");
+    }
+  }
+  // Vertical merges made whole again after rows or cells went: a continuation without the cell it
+  // continues starts a merge (or none, alone); a start that nothing continues is no merge.
+  void FixMerges(ElemId tbl) {
+    Grid g;
+    std::u16string why;
+    if (!ReadGrid(tbl, g, why)) return;
+    for (size_t r = 0; r < g.rows.size(); ++r)
+      for (size_t i = 0; i < g.rows[r].cells.size(); ++i) {
+        GridCell& c = g.rows[r].cells[i];
+        if (c.v == VMerge::None) continue;
+        auto same = [&](size_t row) -> GridCell* {
+          if (row >= g.rows.size()) return nullptr;
+          int j = g.At(row, c.col);
+          GridCell* o = j >= 0 ? &g.rows[row].cells[j] : nullptr;
+          return o && o->col == c.col && o->span == c.span ? o : nullptr;
+        };
+        GridCell* above = r > 0 ? same(r - 1) : nullptr;
+        GridCell* below = same(r + 1);
+        bool continued = below && below->v == VMerge::Continue;
+        VMerge want = c.v;
+        if (c.v == VMerge::Continue && !(above && above->v != VMerge::None)) want = continued ? VMerge::Restart : VMerge::None;
+        if (want == VMerge::Restart && !continued) want = VMerge::None;
+        if (want != c.v) {
+          SetVMerge(c.tc, want);
+          c.v = want;
+        }
+      }
+  }
+
+  // The width of a cell's text: its grid columns less its margins (Word's default 0.08 inch a side).
+  int32_t CellWidth(ElemId tc) {
+    ElemId tr = E(tc).parent, tbl = tr == kNoElem ? kNoElem : E(tr).parent;
+    Grid g;
+    std::u16string why;
+    if (tbl == kNoElem || !ReadGrid(tbl, g, why)) return 2880;
+    size_t r = RowOf(g, tr);
+    int i = r == SIZE_MAX ? -1 : CellIndex(g, r, tc);
+    if (i < 0) return 2880;
+    int32_t w = 0;
+    for (int32_t k = g.rows[r].cells[i].col; k < g.rows[r].cells[i].col + g.rows[r].cells[i].span; ++k) w += ColWidth(g, k);
+    return w > 0 ? std::max(w - 216, 360) : 2880;
+  }
+  // The room a table has: the cell it's in, or its section's text width (`para`: a paragraph of
+  // the table's, for the section).
+  int32_t RoomFor(ElemId tbl, uint32_t para) {
+    for (ElemId a = E(tbl).parent; a != kNoElem; a = E(a).parent)
+      if (NameOf(a) == kTc) return CellWidth(a);
+    return SectionWidth(para);
+  }
+  // The text width a new table fills: the cell around the paragraph, or its section's.
+  int32_t AvailableWidth(uint32_t para) {
+    ElemId tbl, tr, tc;
+    if (CellOf(para, tbl, tr, tc)) return CellWidth(tc);
+    return SectionWidth(para);
+  }
+  // The section's page between its margins (its first column's width).
+  int32_t SectionWidth(uint32_t para) {
+    const SectionProps* sp = nullptr;
+    for (const Section& s : d.sections_)
+      if (s.endPara == kNone || s.endPara >= para) {
+        sp = &s.props;
+        break;
+      }
+    if (!sp) return 9360;
+    int32_t w = sp->pageWidth.Value() - sp->marginStart.Value() - sp->marginEnd.Value() - sp->gutter.Value();
+    if (sp->columns.count > 1) {
+      if (!sp->columns.equalWidth && !sp->columns.cols.empty()) w = sp->columns.cols[0].width.Value();
+      else w = (w - sp->columns.space.Value() * (sp->columns.count - 1)) / sp->columns.count;
+    }
+    return std::max(w, 720);
+  }
+
+  // Range markers and other content that a deletion of `gone` (cells, rows or a table) would cut
+  // from what's outside it: notes and comments anchored there can't go (refused); a field that
+  // runs out of it can't either; the start or end of a range whose other end stays moves to the
+  // start of `heir`, the paragraph that takes the deleted content's place.
+  bool Evacuate(const std::vector<ElemId>& gone, ElemId heir, std::u16string& why) {
+    static const std::vector<std::pair<uint32_t, uint32_t>> pairs = {
+        {Name("bookmarkStart"), Name("bookmarkEnd")},
+        {Name("commentRangeStart"), Name("commentRangeEnd")},
+        {Name("moveFromRangeStart"), Name("moveFromRangeEnd")},
+        {Name("moveToRangeStart"), Name("moveToRangeEnd")},
+        {Name("permStart"), Name("permEnd")},
+        {Name("customXmlInsRangeStart"), Name("customXmlInsRangeEnd")},
+        {Name("customXmlDelRangeStart"), Name("customXmlDelRangeEnd")},
+        {Name("customXmlMoveFromRangeStart"), Name("customXmlMoveFromRangeEnd")},
+        {Name("customXmlMoveToRangeStart"), Name("customXmlMoveToRangeEnd")}};
+    std::vector<ElemId> markers;
+    std::map<std::pair<uint32_t, std::string>, int> inside;  // (pair kind, id) -> ends inside
+    int fields = 0;
+    std::vector<ElemId> stack(gone.rbegin(), gone.rend());
+    while (!stack.empty()) {
+      ElemId id = stack.back();
+      stack.pop_back();
+      uint32_t n = NameOf(id);
+      if (Undeletable(n)) return why = u"Footnotes, endnotes and comments in these cells would lose their place. Delete them first.", false;
+      if (n == kP) {
+        if (E(id).start >= d.paras_.size() || d.paras_[E(id).start].elem != id || d.paras_[E(id).start].story != tx.story)
+          return why = u"Text boxes in these cells can't be deleted yet.", false;
+        const std::u16string& s = d.paras_[E(id).start].text;
+        fields += static_cast<int>(std::count(s.begin(), s.end(), u'\x13')) - static_cast<int>(std::count(s.begin(), s.end(), u'\x15'));
+      }
+      for (size_t k = 0; k < pairs.size(); ++k)
+        if (n == pairs[k].first || n == pairs[k].second) {
+          markers.push_back(id);
+          ++inside[{static_cast<uint32_t>(k), std::string(Attr(id, kId).value_or(""))}];
+        }
+      if (E(id).flags & kSharedKids) continue;
+      for (ElemId c = E(id).first; c != kNoElem; c = E(c).next) stack.push_back(c);
+    }
+    if (fields != 0) return why = u"A field runs into these cells. Delete the field first.", false;
+    std::vector<ElemId> keep;
+    for (ElemId m : markers) {
+      uint32_t n = NameOf(m);
+      for (size_t k = 0; k < pairs.size(); ++k)
+        if (n == pairs[k].first || n == pairs[k].second)
+          if (inside[{static_cast<uint32_t>(k), std::string(Attr(m, kId).value_or(""))}] < 2) keep.push_back(m);
+    }
+    if (keep.empty()) return true;
+    if (heir == kNoElem) return why = u"A bookmark or comment range starts or ends here, so this can't be deleted yet.", false;
+    ElemId after = Child(heir, kPPr);
+    for (ElemId m : keep) {
+      Unlink(m);
+      LinkAfter(heir, after, m);
+      after = m;
+    }
+    return true;
+  }
+  // The paragraph after a block in reading order inside its container, or the first one inside the
+  // next table; kNoElem at the end.
+  ElemId ParaAfter(ElemId block) {
+    for (ElemId c = E(block).next; c != kNoElem; c = E(c).next) {
+      std::vector<ElemId> ps;
+      ParasIn(c, ps);
+      if (!ps.empty()) return ps.front();
+    }
+    return kNoElem;
+  }
+  // Takes an element out of its parent; what was kept beside it stays where it was.
+  void Drop(ElemId id) {
+    StoreFragments(FragmentsBeforeUnlink(d.store_, t, PrevSibling(id), id, E(id).next));
+    Unlink(id);
+  }
+  // A w:p the paragraph list has (at its own index).
+  bool Listed(ElemId p) const;
+  bool IsBlock(ElemId id) {
+    uint32_t n = NameOf(id);
+    return n == kP || n == kTbl || n == Name("sdt") || n == Name("customXml");
+  }
+  ElemId NextBlock(ElemId id) {
+    for (ElemId c = E(id).next; c != kNoElem; c = E(c).next)
+      if (IsBlock(c)) return c;
+    return kNoElem;
+  }
+  ElemId PrevBlock(ElemId id) {
+    ElemId found = kNoElem;
+    for (ElemId c = E(E(id).parent).first; c != kNoElem && c != id; c = E(c).next)
+      if (IsBlock(c)) found = c;
+    return found;
+  }
 };
 
 // ---------- Editor ----------
@@ -1887,6 +2483,1087 @@ std::vector<uint32_t> Editor::DirtyParts() const {
   for (uint32_t i = 0; i < impl_->dirty.size(); ++i)
     if (impl_->dirty[i] > 0) out.push_back(i);
   return out;
+}
+
+
+// ---------- Tables (D3) ----------
+
+// What a table change works on: the table read onto its grid and the block of cells; what it
+// leaves: the blocks in the table's place (the table itself unless it went), paragraphs whose
+// content changed besides their text (markers moved in), and the paragraph the caret goes to.
+struct TableOp {
+  EditorState& s;
+  EditorState::Grid g;
+  EditorState::Block bl;
+  ElemId tbl = kNoElem;
+  std::vector<ElemId> blocks;
+  std::vector<ElemId> touched;
+  ElemId caret = kNoElem;
+  std::u16string why;
+};
+
+namespace {
+
+using Grid = EditorState::Grid;
+using GridCell = EditorState::GridCell;
+using GridRow = EditorState::GridRow;
+
+int32_t WidthOf(const GridCell& c, const std::vector<int32_t>& w) {
+  int64_t sum = 0;
+  for (int32_t k = c.col; k < c.col + c.span && k < static_cast<int32_t>(w.size()); ++k) sum += w[k];
+  return static_cast<int32_t>(std::min<int64_t>(sum, 1000000));
+}
+
+// A cell's description for the view: where it is on the grid and its own text.
+Editor::CellInfo Info(EditorState& s, const Grid& g, size_t r, int i) {
+  const GridCell& c = g.rows[r].cells[i];
+  Editor::CellInfo ci;
+  ci.tbl = Node(&s.t, g.tbl);
+  ci.tr = Node(&s.t, g.rows[r].tr);
+  ci.tc = Node(&s.t, c.tc);
+  ci.row = static_cast<uint32_t>(r);
+  size_t top = r, bottom = r;
+  s.MergeRows(g, r, i, top, bottom);
+  ci.rows = c.v == VMerge::Restart ? static_cast<uint32_t>(bottom - r + 1) : 1;
+  ci.col = c.col;
+  ci.span = c.span;
+  ci.tableRows = static_cast<uint32_t>(g.rows.size());
+  ci.tableCols = g.width;
+  std::vector<ElemId> ps;
+  for (ElemId k = s.E(c.tc).first; k != kNoElem; k = s.E(k).next)
+    if (s.NameOf(k) == kP) ps.push_back(k);
+  if (ps.empty()) s.ParasIn(c.tc, ps);
+  if (!ps.empty()) {
+    ci.start = Pos{s.E(ps.front()).start, 0};
+    uint32_t last = s.E(ps.back()).start;
+    ci.end = Pos{last, static_cast<uint32_t>(s.d.Para(last).text.size())};
+  }
+  return ci;
+}
+
+// The cells of a grid in reading order, merged continuations left out: (row, index) pairs.
+std::vector<std::pair<size_t, int>> ReadingOrder(const Grid& g) {
+  std::vector<std::pair<size_t, int>> out;
+  for (size_t r = 0; r < g.rows.size(); ++r)
+    for (size_t i = 0; i < g.rows[r].cells.size(); ++i)
+      if (g.rows[r].cells[i].v != VMerge::Continue) out.emplace_back(r, static_cast<int>(i));
+  return out;
+}
+
+}  // namespace
+
+bool EditorState::Listed(ElemId p) const {
+  const uint32_t at = t.elems[p].start;
+  return at < d.paras_.size() && d.paras_[at].elem == p;
+}
+
+Result Editor::EditTable(Pos from, Pos to, std::u16string name, const std::function<bool(TableOp&)>& op) {
+  EditorState& s = *impl_;
+  std::u16string why;
+  if (!CanEdit(&why) || !s.Editable(from.para, why)) return Fail(why);
+  TableOp o{s};
+  if (!s.BlockOf(from, to, o.g, o.bl, why)) return Fail(why);
+  o.tbl = o.g.tbl;
+  uint32_t first = 0, count = 0;
+  if (!s.TableParas(o.tbl, first, count, why)) return Fail(why);
+  o.blocks = {o.tbl};
+  s.Begin(first, count, {o.tbl});
+  if (!op(o)) return s.Abort(o.why.empty() ? u"This table can't be changed that way." : o.why);
+  s.Resync(o.blocks);
+  for (ElemId p : o.touched)
+    if (s.Listed(p)) s.Reflow(s.E(p).start);
+  Pos caret = from;
+  if (o.caret != kNoElem && s.Listed(o.caret)) caret = Pos{s.E(o.caret).start, 0};
+  if (caret.para >= doc_.Paragraphs().size()) caret = Pos{first < doc_.Paragraphs().size() ? first : 0, 0};
+  s.Commit(false, from, caret, Kind::Other, std::move(name));
+  s.Notify(listeners_);
+  Result r;
+  r.caret = caret;
+  return r;
+}
+
+std::optional<Editor::CellInfo> Editor::CellAt(Pos at) const {
+  EditorState& s = *impl_;
+  if (at.para >= doc_.Paragraphs().size()) return std::nullopt;
+  ElemId tbl, tr, tc;
+  if (!s.CellOf(at.para, tbl, tr, tc)) return std::nullopt;
+  Grid g;
+  std::u16string why;
+  if (!s.ReadGrid(tbl, g, why)) return std::nullopt;
+  size_t r = s.RowOf(g, tr);
+  int i = r == SIZE_MAX ? -1 : s.CellIndex(g, r, tc);
+  if (i < 0) return std::nullopt;
+  return Info(s, g, r, i);
+}
+
+std::optional<Editor::CellBlock> Editor::BlockAt(Pos from, Pos to) const {
+  EditorState& s = *impl_;
+  if (from.para >= doc_.Paragraphs().size() || to.para >= doc_.Paragraphs().size()) return std::nullopt;
+  Grid g;
+  EditorState::Block bl;
+  std::u16string why;
+  if (!s.BlockOf(from, to, g, bl, why)) return std::nullopt;
+  CellBlock b;
+  b.tbl = Node(&s.t, g.tbl);
+  b.row0 = static_cast<uint32_t>(bl.row0);
+  b.row1 = static_cast<uint32_t>(bl.row1);
+  b.col0 = bl.col0;
+  b.col1 = bl.col1;
+  for (size_t r = bl.row0; r <= bl.row1; ++r)
+    for (size_t i = 0; i < g.rows[r].cells.size(); ++i) {
+      const GridCell& c = g.rows[r].cells[i];
+      if (c.v == VMerge::Continue || c.col > bl.col1 || c.col + c.span - 1 < bl.col0) continue;
+      b.cells.push_back(Info(s, g, r, static_cast<int>(i)));
+    }
+  return b;
+}
+
+std::optional<std::pair<Pos, Pos>> Editor::Grow(Pos from, Pos to, Extent extent) const {
+  EditorState& s = *impl_;
+  if (from.para >= doc_.Paragraphs().size() || to.para >= doc_.Paragraphs().size()) return std::nullopt;
+  Grid g;
+  EditorState::Block bl;
+  std::u16string why;
+  if (!s.BlockOf(from, to, g, bl, why)) return std::nullopt;
+  if (extent == Extent::Rows || extent == Extent::Table) bl.col0 = 0, bl.col1 = g.width - 1;
+  if (extent == Extent::Columns || extent == Extent::Table) bl.row0 = 0, bl.row1 = g.rows.size() - 1;
+  // The first cell the block's top row has in it, and the last its bottom row has (a merged one:
+  // the cell it continues).
+  auto cellIn = [&](size_t r, bool last) -> std::optional<CellInfo> {
+    const auto& cs = g.rows[r].cells;
+    for (size_t k = 0; k < cs.size(); ++k) {
+      size_t i = last ? cs.size() - 1 - k : k;
+      if (cs[i].col > bl.col1 || cs[i].col + cs[i].span - 1 < bl.col0) continue;
+      size_t row = r, top = r, bottom = r;
+      s.MergeRows(g, r, static_cast<int>(i), top, bottom);
+      int j = static_cast<int>(i);
+      if (cs[i].v == VMerge::Continue) {
+        row = top;
+        j = g.At(top, cs[i].col);
+      }
+      if (j < 0) return std::nullopt;
+      return Info(s, g, row, j);
+    }
+    return std::nullopt;
+  };
+  auto a = cellIn(bl.row0, false), b = cellIn(bl.row1, true);
+  if (!a || !b) return std::nullopt;
+  return std::make_pair(a->start, b->end);
+}
+
+std::optional<Editor::CellInfo> Editor::NextCell(Pos at, bool back) const {
+  EditorState& s = *impl_;
+  if (at.para >= doc_.Paragraphs().size()) return std::nullopt;
+  ElemId tbl, tr, tc;
+  if (!s.CellOf(at.para, tbl, tr, tc)) return std::nullopt;
+  Grid g;
+  std::u16string why;
+  if (!s.ReadGrid(tbl, g, why)) return std::nullopt;
+  size_t r = s.RowOf(g, tr);
+  int i = r == SIZE_MAX ? -1 : s.CellIndex(g, r, tc);
+  if (i < 0) return std::nullopt;
+  if (g.rows[r].cells[i].v == VMerge::Continue) {
+    size_t top, bottom;
+    s.MergeRows(g, r, i, top, bottom);
+    i = g.At(top, g.rows[r].cells[i].col);
+    r = top;
+  }
+  auto order = ReadingOrder(g);
+  auto it = std::find(order.begin(), order.end(), std::make_pair(r, i));
+  if (it == order.end()) return std::nullopt;
+  if (back) {
+    if (it == order.begin()) return std::nullopt;
+    --it;
+  } else if (++it == order.end()) {
+    return std::nullopt;
+  }
+  return Info(s, g, it->first, it->second);
+}
+
+// ---- New tables
+
+Result Editor::InsertTable(Pos at, uint32_t rows, uint32_t cols) {
+  EditorState& s = *impl_;
+  std::u16string why;
+  if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
+  if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
+  if (rows < 1 || cols < 1 || cols > 63 || rows > 1000) return Fail(u"A table has 1 to 63 columns and 1 to 1,000 rows.");
+  ElemId p = doc_.Para(at.para).elem;
+  if (s.E(p).flags & kDisplayOnly) return Fail(u"A table can't go here.");
+  const int32_t width = s.AvailableWidth(at.para);
+  s.Begin(at.para, 1);
+  // Where it goes: before the paragraph at its start (unless a table is just before it), after it
+  // at its end (unless nothing or a table follows), else between the halves of a split.
+  ElemId parent = s.E(p).parent, after = kNoElem, second = kNoElem;
+  const bool atStart = at.offset == 0, atEnd = at.offset == ParaLength(at.para);
+  ElemId prevBlock = s.PrevBlock(p), nextBlock = s.NextBlock(p);
+  if (atStart && !(prevBlock != kNoElem && s.NameOf(prevBlock) == kTbl)) {
+    after = s.PrevSibling(p);
+    second = p;
+    p = kNoElem;
+  } else if (atEnd && at.offset > 0 && nextBlock != kNoElem && s.NameOf(nextBlock) == kP &&
+             !(s.Child(p, kPPr) != kNoElem && s.Child(s.Child(p, kPPr), kSectPr) != kNoElem)) {
+    after = p;
+  } else {
+    if (!s.Split(at.para, at.offset, why)) return s.Abort(why);
+    second = doc_.Para(at.para + 1).elem;
+    after = p;
+  }
+  // The style: the document's "Table Grid", else single borders of its own.
+  std::string style;
+  for (const Style& st : doc_.Styles())
+    if (st.type == StyleType::Table && (st.name == "Table Grid" || st.id == "TableGrid")) {
+      style = std::string(st.id);
+      break;
+    }
+  std::string xml = "<w:tbl><w:tblPr>";
+  if (!style.empty()) xml += "<w:tblStyle w:val=\"" + style + "\"/>";
+  xml += "<w:tblW w:w=\"0\" w:type=\"auto\"/>";
+  if (style.empty()) {
+    xml += "<w:tblBorders>";
+    for (const char* edge : {"top", "left", "bottom", "right", "insideH", "insideV"})
+      xml += std::string("<w:") + edge + " w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>";
+    xml += "</w:tblBorders>";
+  }
+  xml += "<w:tblLook w:val=\"04A0\"/></w:tblPr><w:tblGrid>";
+  const int32_t col = std::max(width / static_cast<int32_t>(cols), 20);
+  for (uint32_t c = 0; c < cols; ++c) xml += "<w:gridCol w:w=\"" + std::to_string(col) + "\"/>";
+  xml += "</w:tblGrid></w:tbl>";
+  ElemId tbl = s.Make(parent, after, xml);
+  if (tbl == kNoElem) return s.Abort(u"A table can't go here.");
+  s.roots.push_back(tbl);
+  ElemId like = p != kNoElem ? p : second;
+  ElemId lastRow = s.Child(tbl, kTblGrid);
+  ElemId firstPara = kNoElem;
+  for (uint32_t r = 0; r < rows; ++r) {
+    ElemId tr = s.Make(tbl, lastRow, "<w:tr/>");
+    if (tr == kNoElem) return s.Abort(u"A table can't go here.");
+    lastRow = tr;
+    ElemId lastCell = kNoElem;
+    for (uint32_t c = 0; c < cols; ++c) {
+      ElemId tc = s.Make(tr, lastCell, "<w:tc><w:tcPr><w:tcW w:w=\"" + std::to_string(col) + "\" w:type=\"dxa\"/></w:tcPr></w:tc>");
+      if (tc == kNoElem) return s.Abort(u"A table can't go here.");
+      ElemId cp = s.NewCellPara(tc, s.Child(tc, kTcPr), like);
+      if (cp == kNoElem) return s.Abort(u"A table can't go here.");
+      if (firstPara == kNoElem) firstPara = cp;
+      lastCell = tc;
+    }
+  }
+  std::vector<ElemId> blocks;
+  if (p != kNoElem) blocks.push_back(p);
+  blocks.push_back(tbl);
+  if (second != kNoElem) blocks.push_back(second);
+  s.Resync(blocks);
+  Pos caret{s.E(firstPara).start, 0};
+  s.Commit(false, at, caret, Kind::Other, u"Insert table");
+  s.Notify(listeners_);
+  Result r;
+  r.caret = caret;
+  return r;
+}
+
+Result Editor::TextToTable(uint32_t first, uint32_t last, char16_t separator) {
+  EditorState& s = *impl_;
+  std::u16string why;
+  if (last < first) std::swap(first, last);
+  if (!CanEdit(&why) || !s.Editable(first, why) || !s.Editable(last, why)) return Fail(why);
+  // One place: paragraphs that follow each other, no table or section break among them.
+  std::vector<uint32_t> chain{first};
+  while (chain.back() != last) {
+    uint32_t next = s.SiblingAfter(chain.back());
+    if (next == kNone || next > last) return Fail(u"Select paragraphs that follow each other, without a table between them.");
+    chain.push_back(next);
+  }
+  for (uint32_t p : chain) {
+    ElemId pPr = s.Child(doc_.Para(p).elem, kPPr);
+    if (pPr != kNoElem && s.Child(pPr, kSectPr) != kNoElem) return Fail(u"Paragraphs with a section break can't go into a table.");
+    if (s.E(doc_.Para(p).elem).flags & kDisplayOnly) return Fail(u"These paragraphs can't go into a table.");
+  }
+  const int32_t width = s.AvailableWidth(first);
+  ElemId firstElem = doc_.Para(first).elem, parent = s.E(firstElem).parent;
+  s.Begin(first, last - first + 1);
+  // Each paragraph cut at its separators, from the end, so the indices before stay.
+  std::vector<std::vector<ElemId>> rows(chain.size());
+  for (size_t k = chain.size(); k-- > 0;) {
+    const uint32_t para = chain[k];
+    std::vector<uint32_t> cuts;
+    const std::u16string& text = doc_.Para(para).text;
+    for (uint32_t i = 0; i < text.size(); ++i)
+      if (text[i] == separator) cuts.push_back(i);
+    std::vector<ElemId> pieces;
+    for (size_t c = cuts.size(); c-- > 0;) {
+      if (!s.DeleteIn(para, cuts[c], cuts[c] + 1, why) || !s.Split(para, cuts[c], why)) return s.Abort(why);
+      pieces.push_back(doc_.Para(para + 1).elem);
+    }
+    pieces.push_back(doc_.Para(para).elem);
+    std::reverse(pieces.begin(), pieces.end());
+    rows[k] = std::move(pieces);
+  }
+  size_t cols = 1;
+  for (const auto& r : rows) cols = std::max(cols, r.size());
+  if (cols > 63) return s.Abort(u"A table has at most 63 columns.");
+  const int32_t col = std::max(width / static_cast<int32_t>(cols), 20);
+  std::string style;
+  for (const Style& st : doc_.Styles())
+    if (st.type == StyleType::Table && (st.name == "Table Grid" || st.id == "TableGrid")) {
+      style = std::string(st.id);
+      break;
+    }
+  std::string xml = "<w:tbl><w:tblPr>";
+  if (!style.empty()) xml += "<w:tblStyle w:val=\"" + style + "\"/>";
+  xml += "<w:tblW w:w=\"0\" w:type=\"auto\"/>";
+  if (style.empty()) {
+    xml += "<w:tblBorders>";
+    for (const char* edge : {"top", "left", "bottom", "right", "insideH", "insideV"})
+      xml += std::string("<w:") + edge + " w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>";
+    xml += "</w:tblBorders>";
+  }
+  xml += "<w:tblLook w:val=\"04A0\"/></w:tblPr><w:tblGrid>";
+  for (size_t c = 0; c < cols; ++c) xml += "<w:gridCol w:w=\"" + std::to_string(col) + "\"/>";
+  xml += "</w:tblGrid></w:tbl>";
+  ElemId tbl = s.Make(parent, s.PrevSibling(rows.front().front()), xml);
+  if (tbl == kNoElem) return s.Abort(u"These paragraphs can't go into a table.");
+  s.roots.push_back(tbl);
+  ElemId lastRow = s.Child(tbl, kTblGrid);
+  // Range markers between the paragraphs (a bookmark's end) go into the start of the next one.
+  std::vector<std::vector<ElemId>> between(rows.size());
+  for (size_t r = 1; r < rows.size(); ++r)
+    for (ElemId m = s.E(rows[r - 1].back()).next; m != kNoElem && m != rows[r].front(); m = s.E(m).next) between[r].push_back(m);
+  for (size_t r = 0; r < rows.size(); ++r) {
+    ElemId tr = s.Make(tbl, lastRow, "<w:tr/>");
+    lastRow = tr;
+    ElemId lastCell = kNoElem;
+    for (size_t c = 0; c < cols; ++c) {
+      ElemId tc = s.Make(tr, lastCell, "<w:tc><w:tcPr><w:tcW w:w=\"" + std::to_string(col) + "\" w:type=\"dxa\"/></w:tcPr></w:tc>");
+      if (tc == kNoElem) return s.Abort(u"These paragraphs can't go into a table.");
+      if (c < rows[r].size()) {
+        ElemId w = rows[r][c];
+        s.Unlink(w);
+        s.LinkAfter(tc, s.Child(tc, kTcPr), w);
+        if (c == 0) {
+          ElemId at = s.Child(w, kPPr);
+          for (ElemId m : between[r]) {
+            s.Unlink(m);
+            s.LinkAfter(w, at, m);
+            at = m;
+          }
+        }
+      } else if (s.NewCellPara(tc, s.Child(tc, kTcPr), rows[r].back()) == kNoElem) {
+        return s.Abort(u"These paragraphs can't go into a table.");
+      }
+      lastCell = tc;
+    }
+  }
+  std::vector<ElemId> blocks{tbl};
+  // A table ends neither its place nor touches another table: an empty paragraph after it.
+  if (ElemId next = s.NextBlock(tbl); next == kNoElem || s.NameOf(next) == kTbl) {
+    ElemId tail = s.NewElem(parent, kP);
+    if (tail == kNoElem) return s.Abort(u"These paragraphs can't go into a table.");
+    s.LinkAfter(parent, tbl, tail);
+    blocks.push_back(tail);
+  }
+  s.Resync(blocks);
+  for (size_t r = 0; r < rows.size(); ++r)
+    if (s.Listed(rows[r].front())) s.Reflow(s.E(rows[r].front()).start);
+  Pos caret{s.E(rows.front().front()).start, 0};
+  s.Commit(false, Pos{first, 0}, caret, Kind::Other, u"Convert to table");
+  s.Notify(listeners_);
+  Result r;
+  r.caret = caret;
+  return r;
+}
+
+Result Editor::TableToText(Pos at, char16_t separator) {
+  EditorState& s = *impl_;
+  std::u16string why;
+  if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
+  Grid g;
+  EditorState::Block bl;
+  if (!s.BlockOf(at, at, g, bl, why)) return Fail(why);
+  const ElemId tbl = g.tbl, parent = s.E(tbl).parent;
+  uint32_t first = 0, count = 0;
+  if (!s.TableParas(tbl, first, count, why)) return Fail(why);
+  // Each cell's content: paragraphs only (a table inside one can't become text here).
+  for (const GridRow& row : g.rows)
+    for (const GridCell& c : row.cells)
+      for (ElemId k = s.E(c.tc).first; k != kNoElem; k = s.E(k).next) {
+        uint32_t n = s.NameOf(k);
+        if (n != kP && n != kTcPr && !RangeMarker(n)) return Fail(u"A table with tables or content controls in its cells can't become text yet.");
+      }
+  s.Begin(first, count, {tbl});
+  // Out of the table, in order, before it: then cells of a row are joined.
+  ElemId after = s.PrevSibling(tbl);
+  std::vector<std::vector<std::pair<ElemId, ElemId>>> rows;  // per row: each cell's first and last paragraph
+  std::vector<ElemId> moved;
+  for (const GridRow& row : g.rows) {
+    rows.emplace_back();
+    for (const GridCell& c : row.cells) {
+      ElemId firstP = kNoElem, lastP = kNoElem;
+      std::vector<ElemId> kids;
+      for (ElemId k = s.E(c.tc).first; k != kNoElem; k = s.E(k).next)
+        if (s.NameOf(k) != kTcPr) kids.push_back(k);
+      for (ElemId k : kids) {
+        s.Unlink(k);
+        s.LinkAfter(parent, after, k);
+        after = k;
+        moved.push_back(k);
+        if (s.NameOf(k) == kP) {
+          if (firstP == kNoElem) firstP = k;
+          lastP = k;
+        }
+      }
+      if (firstP != kNoElem) rows.back().emplace_back(firstP, lastP);
+    }
+  }
+  s.Unlink(tbl);
+  // Paragraphs between the cells' paragraphs were siblings in the table's paragraph order, so the
+  // indices still hold; joins go from the end.
+  for (size_t r = rows.size(); r-- > 0;)
+    for (size_t c = rows[r].size(); c-- > 1;) {
+      const uint32_t para = s.E(rows[r][c - 1].second).start;
+      if (!s.InsertPlain(para, static_cast<uint32_t>(doc_.Para(para).text.size()), std::u16string(1, separator), why) ||
+          !s.Join(para, why))
+        return s.Abort(why);
+    }
+  // The moved paragraphs the joins left (a joined one is no longer in its parent).
+  std::unordered_set<ElemId> linked;
+  for (ElemId c = s.E(parent).first; c != kNoElem; c = s.E(c).next) linked.insert(c);
+  std::vector<ElemId> kept;
+  for (ElemId k : moved)
+    if (s.NameOf(k) == kP && linked.count(k)) kept.push_back(k);
+  s.Resync(kept);
+  Pos caret{kept.empty() ? first : s.E(kept.front()).start, 0};
+  s.Commit(false, at, caret, Kind::Other, u"Convert to text");
+  s.Notify(listeners_);
+  Result r;
+  r.caret = caret;
+  return r;
+}
+
+Result Editor::DeleteTable(Pos at) {
+  EditorState& s = *impl_;
+  std::u16string why;
+  if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
+  ElemId tbl, tr, tc;
+  if (!s.CellOf(at.para, tbl, tr, tc)) return Fail(u"Put the cursor in a table first.");
+  uint32_t first = 0, count = 0;
+  if (!s.TableParas(tbl, first, count, why)) return Fail(why);
+  const ElemId parent = s.E(tbl).parent;
+  ElemId next = s.NextBlock(tbl), prev = s.PrevBlock(tbl);
+  // The paragraph after it takes what must stay (a bookmark's end); with none, or between two
+  // tables, an empty paragraph takes the table's place.
+  const bool nextPara = next != kNoElem && s.NameOf(next) == kP && s.E(next).start == first + count && s.Listed(next);
+  s.Begin(first, count + (nextPara ? 1 : 0), {tbl});
+  ElemId heir = nextPara ? next : kNoElem;
+  ElemId fresh = kNoElem;
+  if (!nextPara || (prev != kNoElem && s.NameOf(prev) == kTbl)) {
+    fresh = s.NewElem(parent, kP);
+    if (fresh == kNoElem) return s.Abort(u"This table can't be deleted.");
+    s.LinkAfter(parent, tbl, fresh);
+    if (heir == kNoElem) heir = fresh;
+  }
+  if (!s.Evacuate({tbl}, heir, why)) return s.Abort(why);
+  s.Unlink(tbl);
+  std::vector<ElemId> blocks;
+  if (fresh != kNoElem) blocks.push_back(fresh);
+  if (nextPara) blocks.push_back(next);
+  s.Resync(blocks);
+  if (s.Listed(heir)) s.Reflow(s.E(heir).start);
+  Pos caret{s.E(blocks.front()).start, 0};
+  s.Commit(false, at, caret, Kind::Other, u"Delete table");
+  s.Notify(listeners_);
+  Result r;
+  r.caret = caret;
+  return r;
+}
+
+// ---- Rows and columns
+
+Result Editor::InsertRows(Pos from, Pos to, bool below) {
+  return EditTable(from, to, below ? u"Insert rows below" : u"Insert rows above", [&](TableOp& o) {
+    EditorState& s = o.s;
+    const Grid& g = o.g;
+    const size_t n = o.bl.row1 - o.bl.row0 + 1, ref = below ? o.bl.row1 : o.bl.row0;
+    const size_t next = below ? ref + 1 : ref;  // the row after the new ones
+    const std::vector<int32_t> widths = s.Widths(g);
+    const GridRow& row = g.rows[ref];
+    static const uint32_t kHeader = Name("tblHeader");
+    const bool header = Node(&s.t, row.tr).Child(kTrPr).Child(kHeader) &&
+                        (!below || (next < g.rows.size() && Node(&s.t, g.rows[next].tr).Child(kTrPr).Child(kHeader)));
+    ElemId after = below ? row.tr : s.PrevSibling(row.tr);
+    ElemId firstNew = kNoElem;
+    for (size_t k = 0; k < n; ++k) {
+      ElemId tr = s.NewElem(o.tbl, kTr);
+      if (tr == kNoElem) return false;
+      ElemId last = kNoElem;
+      for (uint32_t name : {Name("tblPrEx"), kTrPr}) {
+        ElemId src = s.Child(row.tr, name);
+        if (src == kNoElem) continue;
+        auto skip = [&](ElemId c) {
+          uint32_t cn = s.NameOf(c);
+          return cn == kIns || cn == kDel || cn == Name("trPrChange") || cn == Name("tblPrExChange") || (cn == kHeader && !header);
+        };
+        ElemId copy = s.CopyProps(src, tr, skip, false);
+        s.LinkAfter(tr, last, copy);
+        last = copy;
+      }
+      // tblPrEx goes before trPr in the schema; copied in that order above.
+      for (const GridCell& c : row.cells) {
+        VMerge v = VMerge::None;
+        if (next < g.rows.size()) {
+          int j = g.At(next, c.col);
+          if (j >= 0 && g.rows[next].cells[j].col == c.col && g.rows[next].cells[j].span == c.span &&
+              g.rows[next].cells[j].v == VMerge::Continue)
+            v = VMerge::Continue;
+        }
+        ElemId tc = s.NewCell(tr, last, c.tc, c.span, v, WidthOf(c, widths));
+        if (tc == kNoElem) return false;
+        last = tc;
+      }
+      s.LinkAfter(o.tbl, after, tr);
+      after = tr;
+      if (firstNew == kNoElem) firstNew = tr;
+    }
+    // The caret: the first new row's cell in the caret's column (else its first cell).
+    for (ElemId c = s.E(firstNew).first; c != kNoElem && o.caret == kNoElem; c = s.E(c).next)
+      if (s.NameOf(c) == kTc) o.caret = s.FirstPara(c);
+    Grid now;
+    std::u16string ignore;
+    if (s.ReadGrid(o.tbl, now, ignore)) {
+      size_t r = s.RowOf(now, firstNew);
+      int i = r == SIZE_MAX ? -1 : now.At(r, o.bl.col0);
+      if (i >= 0) o.caret = s.FirstPara(now.rows[r].cells[i].tc);
+    }
+    return true;
+  });
+}
+
+Result Editor::InsertColumns(Pos from, Pos to, bool right) {
+  return EditTable(from, to, right ? u"Insert columns right" : u"Insert columns left", [&](TableOp& o) {
+    EditorState& s = o.s;
+    const Grid& g = o.g;
+    const int32_t n = o.bl.col1 - o.bl.col0 + 1, b = right ? o.bl.col1 + 1 : o.bl.col0;
+    if (g.width + n > 63) return o.why = u"A table has at most 63 columns.", false;
+    std::vector<int32_t> widths = s.Widths(g);
+    std::vector<int32_t> added(widths.begin() + o.bl.col0, widths.begin() + o.bl.col1 + 1);
+    const ElemId caretRow = g.rows[o.bl.row0].tr;
+    for (const GridRow& row : g.rows) {
+      if (b < row.before) {
+        s.SetRowGrid(row.tr, Name("gridBefore"), row.before + n);
+        continue;
+      }
+      if (b > row.End()) {
+        s.SetRowGrid(row.tr, Name("gridAfter"), row.after + n);
+        continue;
+      }
+      // A cell across the boundary covers the new columns too.
+      bool across = false;
+      for (const GridCell& c : row.cells)
+        if (c.col < b && b < c.col + c.span) {
+          s.SetSpan(c.tc, c.span + n);
+          across = true;
+        }
+      if (across) continue;
+      const GridCell* before = nullptr;
+      const GridCell* after = nullptr;
+      for (const GridCell& c : row.cells) {
+        if (c.col + c.span == b) before = &c;
+        if (c.col == b) after = &c;
+      }
+      const GridCell* like = right ? (before ? before : after) : (after ? after : before);
+      ElemId at = before ? before->tc : s.PrevSibling(row.cells.front().tc);
+      for (int32_t k = 0; k < n; ++k) {
+        ElemId tc = s.NewCell(row.tr, at, like ? like->tc : kNoElem, 1, VMerge::None, added[k]);
+        if (tc == kNoElem) return false;
+        if (row.tr == caretRow && k == 0) o.caret = s.FirstPara(tc);
+        at = tc;
+      }
+    }
+    // Wider than the page now, but not before: every column narrows in proportion.
+    int64_t was = 0, now = 0;
+    for (int32_t w : widths) was += w;
+    widths.insert(widths.begin() + b, added.begin(), added.end());
+    for (int32_t w : widths) now += w;
+    const int32_t room = s.RoomFor(o.tbl, s.tx.first);
+    if (now > room && was <= room && now > 0)
+      for (int32_t& w : widths) w = static_cast<int32_t>(static_cast<int64_t>(w) * room / now);
+    s.WriteGrid(o.tbl, widths);
+    return true;
+  });
+}
+
+Result Editor::DeleteRows(Pos from, Pos to) {
+  {
+    EditorState& s = *impl_;
+    Grid g;
+    EditorState::Block bl;
+    std::u16string why;
+    if (s.BlockOf(from, to, g, bl, why) && bl.row0 == 0 && bl.row1 + 1 == g.rows.size()) return DeleteTable(from);
+  }
+  return EditTable(from, to, u"Delete rows", [&](TableOp& o) {
+    EditorState& s = o.s;
+    const Grid& g = o.g;
+    std::vector<ElemId> gone;
+    for (size_t r = o.bl.row0; r <= o.bl.row1; ++r) gone.push_back(g.rows[r].tr);
+    const size_t heirRow = o.bl.row1 + 1 < g.rows.size() ? o.bl.row1 + 1 : o.bl.row0 - 1;
+    int i = g.At(heirRow, o.bl.col0);
+    if (i < 0) i = 0;
+    std::vector<ElemId> ps;
+    s.ParasIn(g.rows[heirRow].cells[i].tc, ps);
+    ElemId heir = ps.empty() ? kNoElem : ps.front();
+    if (!s.Evacuate(gone, heir, o.why)) return false;
+    for (ElemId tr : gone) s.Drop(tr);
+    s.FixMerges(o.tbl);
+    o.touched.push_back(heir);
+    o.caret = heir;
+    return true;
+  });
+}
+
+Result Editor::DeleteColumns(Pos from, Pos to) {
+  {
+    EditorState& s = *impl_;
+    Grid g;
+    EditorState::Block bl;
+    std::u16string why;
+    if (s.BlockOf(from, to, g, bl, why) && bl.col0 == 0 && bl.col1 + 1 >= g.width) return DeleteTable(from);
+  }
+  return EditTable(from, to, u"Delete columns", [&](TableOp& o) {
+    EditorState& s = o.s;
+    const Grid& g = o.g;
+    const int32_t c0 = o.bl.col0, c1 = o.bl.col1;
+    auto overlap = [&](int32_t a, int32_t b) { return std::max(0, std::min(b, c1 + 1) - std::max(a, c0)); };
+    std::vector<ElemId> rowsGone;
+    ElemId anyHeir = kNoElem;
+    struct Plan {
+      const GridRow* row;
+      std::vector<ElemId> gone;
+      ElemId heir = kNoElem;
+    };
+    std::vector<Plan> plans;
+    for (const GridRow& row : g.rows) {
+      Plan p{&row, {}, kNoElem};
+      for (const GridCell& c : row.cells) {
+        int32_t ov = overlap(c.col, c.col + c.span);
+        if (ov == c.span) {
+          p.gone.push_back(c.tc);
+        } else if (p.heir == kNoElem || c.col < c0) {
+          std::vector<ElemId> ps;
+          s.ParasIn(c.tc, ps);
+          if (!ps.empty()) p.heir = ps.front();
+        }
+      }
+      if (p.heir != kNoElem && anyHeir == kNoElem) anyHeir = p.heir;
+      plans.push_back(std::move(p));
+    }
+    for (Plan& p : plans) {
+      if (p.gone.size() == p.row->cells.size()) {
+        if (!s.Evacuate({p.row->tr}, anyHeir, o.why)) return false;
+        rowsGone.push_back(p.row->tr);
+        continue;
+      }
+      if (!s.Evacuate(p.gone, p.heir, o.why)) return false;
+      if (p.heir != kNoElem) o.touched.push_back(p.heir);
+      for (ElemId tc : p.gone) s.Drop(tc);
+      const GridRow& row = *p.row;
+      for (const GridCell& c : row.cells) {
+        int32_t ov = overlap(c.col, c.col + c.span);
+        if (ov > 0 && ov < c.span) s.SetSpan(c.tc, c.span - ov);
+      }
+      if (int32_t ov = overlap(0, row.before)) s.SetRowGrid(row.tr, Name("gridBefore"), row.before - ov);
+      if (int32_t ov = overlap(row.End(), row.End() + row.after)) s.SetRowGrid(row.tr, Name("gridAfter"), row.after - ov);
+    }
+    if (rowsGone.size() == g.rows.size()) return o.why = u"This would delete the whole table.", false;
+    for (ElemId tr : rowsGone) s.Drop(tr);
+    if (anyHeir != kNoElem) o.touched.push_back(anyHeir);
+    std::vector<int32_t> widths = s.Widths(g);
+    widths.erase(widths.begin() + c0, widths.begin() + std::min<int32_t>(c1 + 1, static_cast<int32_t>(widths.size())));
+    s.WriteGrid(o.tbl, widths);
+    s.FixMerges(o.tbl);
+    // The caret: the caret's row, at the column that took the deleted ones' place.
+    Grid now;
+    if (s.ReadGrid(o.tbl, now, o.why)) {
+      size_t r = s.RowOf(now, g.rows[o.bl.row0].tr);
+      if (r != SIZE_MAX) {
+        int i = now.At(r, std::min(c0, now.width - 1));
+        if (i < 0) i = static_cast<int>(now.rows[r].cells.size()) - 1;
+        o.caret = s.FirstPara(now.rows[r].cells[i].tc);
+      }
+    }
+    if (o.caret == kNoElem) o.caret = anyHeir;
+    return true;
+  });
+}
+
+Result Editor::ClearCells(Pos from, Pos to) {
+  return EditTable(from, to, u"Delete", [&](TableOp& o) {
+    EditorState& s = o.s;
+    for (size_t r = o.bl.row0; r <= o.bl.row1; ++r)
+      for (const GridCell& c : o.g.rows[r].cells) {
+        if (c.col > o.bl.col1 || c.col + c.span - 1 < o.bl.col0) continue;
+        ElemId keep = s.FirstPara(c.tc);
+        if (keep == kNoElem) continue;
+        const uint32_t para = s.E(keep).start;
+        if (!s.DeleteIn(para, 0, static_cast<uint32_t>(doc_.Para(para).text.size()), o.why)) return false;
+        std::vector<ElemId> rest;
+        for (ElemId k = s.E(c.tc).first; k != kNoElem; k = s.E(k).next)
+          if (k != keep && s.NameOf(k) != kTcPr && !RangeMarker(s.NameOf(k))) rest.push_back(k);
+        if (!s.Evacuate(rest, keep, o.why)) return false;
+        for (ElemId k : rest) s.Unlink(k);
+        o.touched.push_back(keep);
+        if (o.caret == kNoElem) o.caret = keep;
+      }
+    return true;
+  });
+}
+
+// ---- Merging and splitting
+
+Result Editor::MergeCells(Pos from, Pos to) {
+  return EditTable(from, to, u"Merge cells", [&](TableOp& o) {
+    EditorState& s = o.s;
+    const Grid& g = o.g;
+    const auto& bl = o.bl;
+    // Every row of the block has cells covering exactly its columns.
+    std::vector<std::vector<GridCell>> cells;
+    for (size_t r = bl.row0; r <= bl.row1; ++r) {
+      cells.emplace_back();
+      for (const GridCell& c : g.rows[r].cells)
+        if (c.col <= bl.col1 && c.col + c.span - 1 >= bl.col0) cells.back().push_back(c);
+      if (cells.back().empty() || cells.back().front().col != bl.col0 ||
+          cells.back().back().col + cells.back().back().span - 1 != bl.col1)
+        return o.why = u"These cells can't be merged: their rows don't line up.", false;
+    }
+    if (cells.size() == 1 && cells[0].size() == 1) return o.why = u"Select two or more cells to merge.", false;
+    const ElemId target = cells[0][0].tc;
+    auto empty = [&](ElemId tc) {
+      ElemId only = kNoElem;
+      for (ElemId k = s.E(tc).first; k != kNoElem; k = s.E(k).next) {
+        if (s.NameOf(k) == kTcPr) continue;
+        if (only != kNoElem || s.NameOf(k) != kP) return false;
+        only = k;
+      }
+      if (only == kNoElem) return true;
+      for (ElemId k = s.E(only).first; k != kNoElem; k = s.E(k).next)
+        if (s.NameOf(k) != kPPr) return false;
+      return true;
+    };
+    // The cells' content, in reading order, into the first one (empty cells add nothing).
+    bool targetEmpty = empty(target);
+    for (size_t r = 0; r < cells.size(); ++r)
+      for (size_t i = 0; i < cells[r].size(); ++i) {
+        ElemId tc = cells[r][i].tc;
+        if (tc == target || empty(tc)) continue;
+        if (targetEmpty) {
+          for (ElemId k; (k = s.FirstPara(target)) != kNoElem;) s.Unlink(k);
+          targetEmpty = false;
+        }
+        std::vector<ElemId> kids;
+        for (ElemId k = s.E(tc).first; k != kNoElem; k = s.E(k).next)
+          if (s.NameOf(k) != kTcPr) kids.push_back(k);
+        for (ElemId k : kids) {
+          s.Unlink(k);
+          s.Append(target, k);
+        }
+      }
+    // The first row: one cell across the block; the rows below: one cell continuing it.
+    const int32_t span = bl.col1 - bl.col0 + 1;
+    for (size_t r = 0; r < cells.size(); ++r) {
+      ElemId keep = cells[r][0].tc;
+      for (size_t i = 1; i < cells[r].size(); ++i) s.Drop(cells[r][i].tc);
+      s.SetSpan(keep, span);
+      s.SetVMerge(keep, cells.size() == 1 ? VMerge::None : r == 0 ? VMerge::Restart : VMerge::Continue);
+      if (r > 0 && s.FirstPara(keep) == kNoElem) {
+        ElemId last = s.Child(keep, kTcPr);
+        for (ElemId k = s.E(keep).first; k != kNoElem; k = s.E(k).next) last = k;
+        if (s.NewCellPara(keep, last, s.FirstPara(target)) == kNoElem) return false;
+      }
+    }
+    // A cell ends with a paragraph.
+    ElemId lastKid = kNoElem;
+    for (ElemId k = s.E(target).first; k != kNoElem; k = s.E(k).next) lastKid = k;
+    if (lastKid == kNoElem || s.NameOf(lastKid) != kP) {
+      ElemId any = kNoElem;
+      std::vector<ElemId> ps;
+      s.ParasIn(target, ps);
+      if (!ps.empty()) any = ps.back();
+      if (s.NewCellPara(target, lastKid, any) == kNoElem) return false;
+    }
+    s.WriteGrid(o.tbl, s.Widths(g));
+    s.FixMerges(o.tbl);
+    o.caret = s.FirstPara(target);
+    return true;
+  });
+}
+
+Result Editor::SplitCell(Pos at, uint32_t rows, uint32_t cols) {
+  if (rows < 1 || cols < 1 || rows > 100 || cols > 63) return Fail(u"Split a cell into 1 to 100 rows and 1 to 63 columns.");
+  if (rows == 1 && cols == 1) {
+    Result r;
+    r.caret = at;
+    return r;
+  }
+  return EditTable(at, at, u"Split cells", [&](TableOp& o) {
+    EditorState& s = o.s;
+    ElemId tbl, tr, tc;
+    s.CellOf(at.para, tbl, tr, tc);
+    size_t r = s.RowOf(o.g, tr);
+    int i = r == SIZE_MAX ? -1 : s.CellIndex(o.g, r, tc);
+    if (i < 0) return false;
+    size_t top, bottom;
+    s.MergeRows(o.g, r, i, top, bottom);
+    const GridCell cell = o.g.rows[r].cells[i];
+    const ElemId first = o.g.rows[top].cells[o.g.At(top, cell.col)].tc;
+    const size_t height = bottom - top + 1;
+    std::vector<ElemId> pieceRows;  // the rows the pieces' cells are in, top to bottom
+    if (rows > 1 && height > 1) {
+      if (height % rows != 0) return o.why = u"A merged cell splits into a number of rows that divides its own.", false;
+      const size_t group = height / rows;
+      for (size_t k = 0; k < height; ++k) {
+        ElemId c = o.g.rows[top + k].cells[o.g.At(top + k, cell.col)].tc;
+        s.SetVMerge(c, group == 1 ? VMerge::None : k % group == 0 ? VMerge::Restart : VMerge::Continue);
+      }
+      for (size_t k = 0; k < height; ++k) pieceRows.push_back(o.g.rows[top + k].tr);
+    } else if (rows > 1) {
+      // New rows below: the other cells of the row run down over them; this one is cut.
+      const std::vector<int32_t> widths = s.Widths(o.g);
+      const GridRow& row = o.g.rows[r];
+      for (const GridCell& c : row.cells)
+        if (c.tc != cell.tc && c.v == VMerge::None) s.SetVMerge(c.tc, VMerge::Restart);
+      ElemId after = row.tr;
+      pieceRows.push_back(row.tr);
+      for (uint32_t k = 1; k < rows; ++k) {
+        ElemId ntr = s.NewElem(o.tbl, kTr);
+        if (ntr == kNoElem) return false;
+        ElemId last = kNoElem;
+        if (ElemId trPr = s.Child(row.tr, kTrPr); trPr != kNoElem) {
+          auto skip = [&](ElemId c) {
+            uint32_t cn = s.NameOf(c);
+            return cn == kIns || cn == kDel || cn == Name("trPrChange");
+          };
+          last = s.CopyProps(trPr, ntr, skip, false);
+          s.LinkAfter(ntr, kNoElem, last);
+        }
+        for (const GridCell& c : row.cells) {
+          ElemId nc = s.NewCell(ntr, last, c.tc, c.span, c.tc == cell.tc ? VMerge::None : VMerge::Continue, WidthOf(c, widths));
+          if (nc == kNoElem) return false;
+          last = nc;
+        }
+        s.LinkAfter(o.tbl, after, ntr);
+        after = ntr;
+        pieceRows.push_back(ntr);
+      }
+    } else {
+      for (size_t k = 0; k < height; ++k) pieceRows.push_back(o.g.rows[top + k].tr);
+    }
+    o.caret = s.FirstPara(first);
+    if (cols == 1) return true;
+    // Columns: the cell's span cut into `cols` pieces; grid lines added where it has too few.
+    if (!s.ReadGrid(o.tbl, o.g, o.why)) return false;
+    std::vector<int32_t> widths = s.Widths(o.g);
+    int32_t span = cell.span;
+    if (span < static_cast<int32_t>(cols)) {
+      if (o.g.width + static_cast<int32_t>(cols) - span > 63) return o.why = u"A table has at most 63 columns.", false;
+      // The cell's width cut evenly: each new line splits the grid column it falls in.
+      int64_t left = 0;
+      for (int32_t k = 0; k < cell.col; ++k) left += widths[k];
+      int64_t total = 0;
+      for (int32_t k = cell.col; k < cell.col + span; ++k) total += widths[k];
+      for (uint32_t piece = 1; piece < cols; ++piece) {
+        const int64_t x = left + total * piece / cols;
+        int64_t edge = 0;
+        int32_t g = 0;
+        while (g < static_cast<int32_t>(widths.size()) && edge + widths[g] <= x) edge += widths[g++];
+        if (edge == x || g >= static_cast<int32_t>(widths.size())) continue;
+        const int32_t a = static_cast<int32_t>(x - edge), b = widths[g] - a;
+        widths[g] = a;
+        widths.insert(widths.begin() + g + 1, b);
+        // Grid column g is now two: everything that covered it covers both.
+        for (const GridRow& row : o.g.rows) {
+          if (g < row.before) {
+            s.SetRowGrid(row.tr, Name("gridBefore"), row.before + 1);
+            continue;
+          }
+          if (g >= row.End()) {
+            if (g < row.End() + row.after) s.SetRowGrid(row.tr, Name("gridAfter"), row.after + 1);
+            continue;
+          }
+          for (const GridCell& c : row.cells)
+            if (c.col <= g && g < c.col + c.span) s.SetSpan(c.tc, c.span + 1);
+        }
+        s.WriteGrid(o.tbl, widths);
+        if (!s.ReadGrid(o.tbl, o.g, o.why)) return false;
+      }
+    }
+    // Each row of the piece: its cell cut at the grid lines nearest the even cuts.
+    if (!s.ReadGrid(o.tbl, o.g, o.why)) return false;
+    widths = s.Widths(o.g);
+    for (ElemId ptr : pieceRows) {
+      size_t pr = s.RowOf(o.g, ptr);
+      if (pr == SIZE_MAX) return false;
+      int pi = o.g.At(pr, cell.col);
+      if (pi < 0) return false;
+      const GridCell c = o.g.rows[pr].cells[pi];
+      int64_t total = WidthOf(c, widths);
+      std::vector<int32_t> spans;
+      int32_t col = c.col, start = c.col;
+      int64_t acc = 0;
+      for (uint32_t piece = 1; piece <= cols; ++piece) {
+        const int64_t x = total * piece / cols;
+        while (col < c.col + c.span && acc + widths[col] / 2 < x) acc += widths[col++];
+        if (piece == cols) col = c.col + c.span;
+        spans.push_back(std::max(1, col - start));
+        start = col;
+      }
+      // Too few grid columns for the rounding: give each piece one at least, from the end.
+      int32_t sum = 0;
+      for (int32_t sp : spans) sum += sp;
+      for (size_t k = spans.size(); sum > c.span && k-- > 0;)
+        while (spans[k] > 1 && sum > c.span) --spans[k], --sum;
+      s.SetSpan(c.tc, spans[0]);
+      ElemId after = c.tc;
+      int32_t at2 = c.col + spans[0];
+      for (size_t k = 1; k < spans.size(); ++k) {
+        GridCell part{c.tc, at2, spans[k], c.v};
+        ElemId nc = s.NewCell(o.g.rows[pr].tr, after, c.tc, spans[k], c.v, WidthOf(part, widths));
+        if (nc == kNoElem) return false;
+        after = nc;
+        at2 += spans[k];
+      }
+    }
+    s.WriteGrid(o.tbl, widths);
+    s.FixMerges(o.tbl);
+    return true;
+  });
+}
+
+// ---- Sizes
+
+Result Editor::SetColumnWidth(Pos from, Pos to, int32_t twips) {
+  if (twips < 20 || twips > 31680) return Fail(u"A column is between 0.01 and 22 inches wide.");
+  return EditTable(from, to, u"Column width", [&](TableOp& o) {
+    std::vector<int32_t> widths = o.s.Widths(o.g);
+    for (int32_t c = o.bl.col0; c <= o.bl.col1 && c < static_cast<int32_t>(widths.size()); ++c) widths[c] = twips;
+    o.s.WriteGrid(o.tbl, widths);
+    o.caret = kNoElem;
+    return true;
+  });
+}
+
+Result Editor::MoveColumnBorder(Pos at, int32_t line, int32_t delta) {
+  return EditTable(at, at, u"Column width", [&](TableOp& o) {
+    EditorState& s = o.s;
+    std::vector<int32_t> widths = s.Widths(o.g);
+    const int32_t n = static_cast<int32_t>(widths.size());
+    constexpr int32_t kMin = 144;  // a tenth of an inch: room for the cell's margins
+    if (line < 0 || line > n || n == 0) return o.why = u"There's no column border there.", false;
+    if (line == n) {
+      widths[n - 1] = std::max(kMin, widths[n - 1] + delta);
+    } else if (line == 0) {
+      // The left edge: the table moves in by its indent, and the first column gives the room.
+      const int32_t d = std::clamp(delta, -100000, widths[0] - kMin);
+      widths[0] -= d;
+      ElemId tblPr = s.Props(o.tbl, kTblPr);
+      Node ind = Node(&s.t, tblPr).Child(Name("tblInd"));
+      int32_t now = ind && (ind.AttrOr(kType) == "dxa" || ind.AttrOr(kType).empty()) ? EditorState::IntOr(ind, kW, 0) : 0;
+      s.SetProp(tblPr, "<w:tblInd w:w=\"" + std::to_string(now + d) + "\" w:type=\"dxa\"/>");
+    } else {
+      const int32_t d = std::clamp(delta, kMin - widths[line - 1], widths[line] - kMin);
+      widths[line - 1] += d;
+      widths[line] -= d;
+    }
+    s.WriteGrid(o.tbl, widths);
+    return true;
+  });
+}
+
+Result Editor::SetRowHeight(Pos from, Pos to, int32_t twips, std::string_view rule) {
+  if (twips < 0 || twips > 31680) return Fail(u"A row is at most 22 inches high.");
+  if (!rule.empty() && rule != "atLeast" && rule != "exact") return Fail(u"A row's height is at least or exactly a size.");
+  return EditTable(from, to, u"Row height", [&](TableOp& o) {
+    EditorState& s = o.s;
+    for (size_t r = o.bl.row0; r <= o.bl.row1; ++r) {
+      ElemId tr = o.g.rows[r].tr;
+      if (twips == 0) {
+        if (ElemId trPr = s.Child(tr, kTrPr); trPr != kNoElem) {
+          s.Unshare(trPr);
+          s.RemoveProp(trPr, Name("trHeight"));
+        }
+        continue;
+      }
+      std::string xml = "<w:trHeight w:val=\"" + std::to_string(twips) + "\"";
+      if (!rule.empty()) xml += " w:hRule=\"" + std::string(rule) + "\"";
+      if (s.SetProp(s.Props(tr, kTrPr), xml + "/>") == kNoElem) return false;
+    }
+    return true;
+  });
+}
+
+Result Editor::AutoFit(Pos at, Fit fit, const std::vector<int32_t>& given) {
+  return EditTable(at, at, u"AutoFit", [&](TableOp& o) {
+    EditorState& s = o.s;
+    std::vector<int32_t> widths = s.Widths(o.g);
+    ElemId tblPr = s.Props(o.tbl, kTblPr);
+    if (tblPr == kNoElem) return false;
+    static const uint32_t kLayout = Name("tblLayout");
+    switch (fit) {
+      case Fit::Window: {
+        const int32_t room = s.RoomFor(o.tbl, s.tx.first);
+        int64_t now = 0;
+        for (int32_t w : widths) now += w;
+        if (now <= 0) return false;
+        int64_t used = 0;
+        for (size_t k = 0; k < widths.size(); ++k) {
+          widths[k] = k + 1 == widths.size() ? static_cast<int32_t>(room - used) : static_cast<int32_t>(widths[k] * room / now);
+          used += widths[k];
+        }
+        s.RemoveProp(tblPr, kLayout);
+        s.SetProp(tblPr, "<w:tblW w:w=\"5000\" w:type=\"pct\"/>");
+        break;
+      }
+      case Fit::Fixed: {
+        int64_t sum = 0;
+        for (int32_t w : widths) sum += w;
+        s.SetProp(tblPr, "<w:tblLayout w:type=\"fixed\"/>");
+        s.SetProp(tblPr, "<w:tblW w:w=\"" + std::to_string(sum) + "\" w:type=\"dxa\"/>");
+        break;
+      }
+      case Fit::Contents: {
+        if (given.size() != widths.size()) return o.why = u"The table's columns couldn't be measured.", false;
+        for (size_t k = 0; k < widths.size(); ++k) widths[k] = std::clamp(given[k], 144, 31680);
+        s.RemoveProp(tblPr, kLayout);
+        s.SetProp(tblPr, "<w:tblW w:w=\"0\" w:type=\"auto\"/>");
+        break;
+      }
+    }
+    s.WriteGrid(o.tbl, widths);
+    return true;
+  });
+}
+
+// ---- Properties
+
+Result Editor::SetCellProps(Pos from, Pos to, const PropEdit& edit) {
+  return EditTable(from, to, u"Format cells", [&](TableOp& o) {
+    for (size_t r = o.bl.row0; r <= o.bl.row1; ++r)
+      for (const GridCell& c : o.g.rows[r].cells) {
+        if (c.col > o.bl.col1 || c.col + c.span - 1 < o.bl.col0) continue;
+        if (!o.s.ApplyProps(c.tc, kTcPr, edit, o.why)) return false;
+      }
+    return true;
+  });
+}
+
+Result Editor::SetRowProps(Pos from, Pos to, const PropEdit& edit) {
+  return EditTable(from, to, u"Format rows", [&](TableOp& o) {
+    for (size_t r = o.bl.row0; r <= o.bl.row1; ++r)
+      if (!o.s.ApplyProps(o.g.rows[r].tr, kTrPr, edit, o.why)) return false;
+    return true;
+  });
+}
+
+Result Editor::SetTableProps(Pos at, const PropEdit& edit) {
+  return EditTable(at, at, u"Format table", [&](TableOp& o) { return o.s.ApplyProps(o.tbl, kTblPr, edit, o.why); });
 }
 
 }  // namespace fw::doc::edit
