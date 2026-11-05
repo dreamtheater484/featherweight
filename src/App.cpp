@@ -21,7 +21,6 @@
 #include "ui/Icons.h"
 #include "ui/Menu.h"
 #include "ui/Theme.h"
-#include "ui/WidgetGallery.h"
 
 #pragma comment(lib, "imm32.lib")
 

@@ -19,6 +19,15 @@ Featherweight grows from a fast PDF reader into a light office suite for Windows
 2. **Look right.** Common documents look the same as in Office: same fonts, same line breaks, same page count. This is measured against Office's own output, not guessed.
 3. **Do the job.** All basic features and selected advanced ones (§6.2, §7.2, §8.2). Anything else is shown if possible, kept, and explained in plain language.
 
+**The lightweight promise**, held to the same standard:
+
+1. **Small.** One small exe and a small download. Nothing installed beside it, and nothing running in the background.
+2. **Fast.** It opens near-instantly, and everyday actions respond at once: scrolling, zooming, switching tabs, opening menus, searching and typing.
+3. **No bloat.** Every feature and every dependency earns its weight. Test-only code never ships.
+4. **Zero friction.** The fewest possible steps and decisions between you and the document (§2).
+
+Both promises are gates. No milestone or release is done while either is broken, and both are measured on every build, not assumed: the compatibility contract in §3, the lightweight contract in §11. When the two conflict, never damaging a file comes first.
+
 100 % compatibility and full feature parity are not goals. Nobody reaches them, not even Microsoft's own web and Mac versions of Office.
 
 **Not goals:** running macros, co-authoring or cloud storage, add-ins, AI features, and platforms other than Windows (for now).
@@ -52,7 +61,7 @@ The bar stays **zero friction**: the fewest possible steps and decisions, and no
 11. **Never damage a file** (see §3). A feature is editable only when Featherweight can write it back completely and consistently. Otherwise it's shown, locked, and kept.
 12. **Honest about limits.** When a file contains something Featherweight can't show, calculate or edit, a banner says what it is and what that means. Nothing is dropped silently.
 13. **Familiar, not a clone.** People know the words (Heading 1, Wrap text, Insert table) and the shortcuts, and Featherweight uses them. But there's no Ribbon with 200 buttons: one contextual toolbar, a side panel and command search.
-14. **Light and fast are the product.** Opening stays near-instant and the download small. Nothing new loads or runs at startup: engines, DLLs and features wait until a file needs them. A feature has to earn its weight, and the simplest design that works wins. Every app has performance budgets (§11), checked before every release on a typical consumer PC, not just the development PC.
+14. **Light and fast are the product.** Opening stays near-instant and the download small. Nothing new loads or runs at startup: engines, DLLs and features wait until a file needs them. A feature has to earn its weight, and the simplest design that works wins. The lightweight contract (§11) sets the budgets, and they're checked on every build, at every milestone, and on a typical consumer PC before every release.
 15. **Private.**
     - Documents never leave the PC.
     - Nothing in an Office document can make Featherweight go online, run code or open other files.
@@ -352,12 +361,12 @@ Featherweight/
 
 Only small, permissively licensed code, each pinned to a version:
 
-| Code | Use | License |
-|---|---|---|
-| PDFium | PDFs (exists) | BSD-style |
-| miniz | zip reading and writing, compression for PDF export | MIT |
-| pugixml | XML DOM for most parts. Large parts (sheet data, shared strings) use Featherweight's own streaming reader in `fwpkg`. | MIT |
-| Hyphenation patterns | hyph-utf8 and OpenTaal, about 10 languages | per language, checked one by one |
+| Code | Use | License | Adds (§11 size ledger) |
+|---|---|---|---|
+| PDFium | PDFs (exists) | BSD-style | `pdfium.dll`, about 31 MB unpacked (the V8 build) |
+| miniz | zip reading and writing, compression for PDF export | MIT | recorded in the ledger |
+| pugixml | XML DOM for most parts. Large parts (sheet data, shared strings) use Featherweight's own streaming reader in `fwpkg`. | MIT | recorded in the ledger |
+| Hyphenation patterns | hyph-utf8 and OpenTaal, about 10 languages | per language, checked one by one | a few hundred KB, compressed in the exe |
 
 Everything else comes from Windows:
 
@@ -641,10 +650,12 @@ RTF is needed anyway: it's how formatted text travels to and from Word through t
 
 ### 6.4 Milestones
 
+Every milestone also passes the lightweight gate (§11): its budgets are met, and nothing is slower or larger than at the previous milestone without a recorded reason.
+
 | Milestone | Work | Done when |
 |---|---|---|
-| **D0. Host and foundations** | **Shell:** `TabContent`, `PagedView`, the command and toolbar model, side panel, status bar, command search. Rendering on Direct3D 11 with a flip-model swap chain. New widgets (dropdown, combo box, split button, color picker, spin box, list), with UI Automation for every widget. The file association code generalized for all kinds of file (each kind is registered when its viewer ships, §12), the start screen and recent files.<br><br>**Engines:** `Painter` with the Direct2D backend and `ID2D1PrintControl`. `fwpkg`: snapshot, zip with raw copy, XML (DOM and streaming), parts, relationships, content types, round-trip store with fragment rules, the reference registry framework, Markup Compatibility, limits. Typed units.<br><br>**Testing:** `fwtool` (`roundtrip`, `check`, `dump`), the corpus and reference-render pipeline, fuzzing in CI. | The PDF reader works exactly as before. The manual checklist passes. `visual-checks.ps1` images are pixel-identical, except the start screen, which is reviewed by hand.<br><br>`fwtool roundtrip` copies every corpus file's untouched parts byte for byte.<br><br>The zip and XML fuzzers run 8 hours without findings.<br><br>Reference PDFs exist for the public corpus. |
-| **D1. Document viewer** (release 1.1) | **Model:** the `.docx` model, reader and writer (the writer is used by round-trip tests; saving comes in D2), styles and numbering.<br><br>**Drawing:** the VML subset (reading).<br><br>**Layout:** `fwtext` line layout with hyphenation. Pagination: sections, columns, headers and footers, footnotes, tables, inline and floating pictures, shapes and text boxes.<br><br>**View:** fields show their last results; comments and tracked changes shown; links; selection and copy; find; print; fonts and fallbacks; banners for unsupported content. | Across the corpus, with Office's fonts: the page count matches Word for ≥ 90 % of documents, ≥ 95 % of lines break where Word breaks them, and nothing crashes. Targets for Windows-only fonts are set from this first measurement.<br><br>The open-and-save round trip produces no new validator errors and passes `fwtool check` for 100 % of files.<br><br>In re-serialize-all mode (§10), every part equals the original after canonicalization, with each exception documented.<br><br>Opening budgets met. |
+| **D0. Host and foundations** | **Shell:** `TabContent`, `PagedView`, the command and toolbar model, side panel, status bar, command search. Rendering on Direct3D 11 with a flip-model swap chain. New widgets (dropdown, combo box, split button, color picker, spin box, list), with UI Automation for every widget. The file association code generalized for all kinds of file (each kind is registered when its viewer ships, §12), the start screen and recent files.<br><br>**Engines:** `Painter` with the Direct2D backend and `ID2D1PrintControl`. `fwpkg`: snapshot, zip with raw copy, XML (DOM and streaming), parts, relationships, content types, round-trip store with fragment rules, the reference registry framework, Markup Compatibility, limits. Typed units.<br><br>**Testing:** `fwtool` (`roundtrip`, `check`, `dump`), the corpus and reference-render pipeline, fuzzing in CI. | The PDF reader works exactly as before. The manual checklist passes. `visual-checks.ps1` images are pixel-identical, except the start screen, which is reviewed by hand.<br><br>`fwtool roundtrip` copies every corpus file's untouched parts byte for byte.<br><br>The zip and XML fuzzers run 8 hours without findings.<br><br>Reference PDFs exist for the public corpus.<br><br>Launch to window, opening a PDF and memory after launch are no worse than 0.9.4. The widget gallery is compiled only into test builds, and the size ledger has its first baseline. |
+| **D1. Document viewer** (release 1.1) | **Model:** the `.docx` model, reader and writer (the writer is used by round-trip tests; saving comes in D2), styles and numbering.<br><br>**Drawing:** the VML subset (reading).<br><br>**Layout:** `fwtext` line layout with hyphenation. Pagination: sections, columns, headers and footers, footnotes, tables, inline and floating pictures, shapes and text boxes.<br><br>**View:** fields show their last results; comments and tracked changes shown; links; selection and copy; find; print; fonts and fallbacks; banners for unsupported content. | Across the corpus, with Office's fonts: the page count matches Word for ≥ 90 % of documents, ≥ 95 % of lines break where Word breaks them, and nothing crashes. Targets for Windows-only fonts are set from this first measurement.<br><br>The open-and-save round trip produces no new validator errors and passes `fwtool check` for 100 % of files.<br><br>In re-serialize-all mode (§10), every part equals the original after canonicalization, with each exception documented.<br><br>The D1 budgets in §11 are met: opening a typical and a 300-page `.docx`, memory, and the exe under 4 MB. |
 | **D2. Editing** | **Editing:** caret, selection, TSF input, clipboard (internal, RTF, HTML, text), undo and redo, typing and deleting, find and replace.<br><br>**Formatting:** character and paragraph formatting, format painter, styles, lists, date and time.<br><br>**Files:** new document, save, crash recovery, backups, change detection, the `~$` owner file.<br><br>**Proofing:** spelling and the selection's language, AutoCorrect, word count, status bar. | A 5-page report using text, styles and lists can be written from scratch, and the text of a received document edited.<br><br>Every corpus file, after scripted random edits (including deletes across fields, bookmarks and comments) and a save: no new validator errors, passes `fwtool check`, and opens in Word without a repair prompt.<br><br>The typing budget is met in a 300-page document. |
 | **D3. Tables, pictures and layout** | Table editing; pictures (insert, resize, wrap, position, crop); page setup, columns, section breaks and hyphenation; the ruler; editing headers and footers; page numbers; hyperlinks and bookmarks; navigation pane; formatting marks | Every item under "basic" in §6.2 works, except review and Export PDF, which come in D4. The friction review passes for writing a letter, formatting a CV, and fixing a table in a received document. |
 | **D4. Review and advanced** | **Review:** comments (add, reply, resolve), tracked changes (accept, reject, record).<br><br>**Advanced:** table of contents, footnotes and endnotes, content controls and form fields, text boxes and shapes, watermark (writing VML).<br><br>**Output:** `PdfPainter` and Export PDF; saving RTF and TXT. | Everything under "basic" in §6.2 works.<br><br>A contract with tracked changes and comments can be reviewed end to end, and Word shows the result correctly.<br><br>Exported PDFs have selectable text, links and bookmarks. |
@@ -836,6 +847,8 @@ If an unknown extension in the workbook could hold references, the edit is block
 
 ### 7.4 Milestones
 
+Every milestone also passes the lightweight gate (§11): its budgets are met, and nothing is slower or larger than at the previous milestone without a recorded reason.
+
 | Milestone | Work | Done when |
 |---|---|---|
 | **S1. Spreadsheet viewer** (release 2.1) | **Files:** reading `.xlsx` and CSV, using the streaming XML reader.<br><br>**Display:** styles and number formats, the grid, merged cells, frozen panes, outline groups (expand and collapse), sheets, conditional formatting and tables, pictures and shapes, VML notes and comments.<br><br>**Charts:** `fwchart` completed: every type in §7.2, in workbooks and documents.<br><br>**View:** selection and copy, find, print.<br><br>**Formulas:** the parser, the dependency graph, background recalculation after opening (§7.3), and the first ~50 functions. | ≥ 99 % of non-empty cells show the same text as Excel's PDF export, and ≥ 90 % of pages pass the pixel threshold (§10).<br><br>CSV files open without any value changing.<br><br>Of the corpus formulas that use only implemented, non-volatile functions, ≥ 99.5 % reproduce Excel's cached values, and every mismatch is documented. |
@@ -931,6 +944,8 @@ If an unknown extension in the workbook could hold references, the edit is block
 
 ### 8.4 Milestones
 
+Every milestone also passes the lightweight gate (§11): its budgets are met, and nothing is slower or larger than at the previous milestone without a recorded reason.
+
 | Milestone | Work | Done when |
 |---|---|---|
 | **P1. Viewer and slide show** (release 3.1) | **Files:** reading `.pptx` (and `.ppsx`), including Embedded OpenType fonts.<br><br>**Display:** inheritance, rendering, thumbnails, notes.<br><br>**Slide show:** common transitions and animations, hyperlinks.<br><br>**Output:** print, Export PDF. | ≥ 90 % of corpus slides pass the pixel threshold against PowerPoint's PDF exports (§10).<br><br>On the typical consumer PC, a 50-slide deck presents at the display's refresh rate with no dropped frames during transitions. |
@@ -960,7 +975,7 @@ The sizes are rough estimates of new C++ code, about 330,000 lines in total, or 
 ### Test machines
 
 - **Development PC:** this PC (AMD Ryzen 7 7800X3D, 192 GB RAM, RTX 5090). It's much faster than what most users have, so it catches regressions but doesn't prove the budgets.
-- **Typical consumer PC:** 4 cores, 8 GB RAM, integrated graphics and an SSD, for example an inexpensive laptop from a few years ago. The performance budgets (§11) apply here (decision 19).
+- **Typical consumer PC:** 4 cores, 8 GB RAM, integrated graphics and an SSD, for example an inexpensive laptop from a few years ago. The lightweight contract's budgets (§11) apply here (decision 19).
 - **Office reference PC:** the development PC, which has Microsoft 365 (current channel) (decision 19). It makes the reference renders and checks for repair prompts.
 
 ### Corpus
@@ -1017,32 +1032,73 @@ These run on every build, for every corpus file:
   - Short runs in CI on every push, and long runs nightly.
   - Every crash becomes a regression test.
 - **Visual checks and smoke tests:** `visual-checks.ps1` grows to cover every new screen. Snapshot mode (`--snapshot`) works for every kind of file, and CI renders one file of each kind.
-- **Performance:** `fwtool bench` measures opening, layout, recalculation and typing on fixed files. CI and the development PC track the trend; the budgets are checked on the typical consumer PC before each release.
+- **Size and speed (§11):** `fwtool bench` and the budget script measure the exe and download size, launch, opening, layout, recalculation, typing, memory and idle CPU on fixed files, without touching the user's settings. CI gates on size and tracks timings; the development PC gates timings; the typical consumer PC checks the whole table before each release.
 - **Keyboard and UI Automation:** `tests/uia-checks.ps1` drives every widget through UI Automation and the keyboard. No manual screen-reader passes (decision 21).
 - **Manual checklist:** `docs/TEST_CHECKLIST.md` gets a section per app.
 - **Real use:** from each editor milestone on, Featherweight is used for real work every day, and every surprise becomes a test.
 
 ---
 
-## 11. Performance budgets
+## 11. Lightweight contract
+
+Small, fast, no bloat and zero friction are the lightweight promise (§1). They're held to the same standard as the compatibility contract (§3): written down as budgets, measured on every build, and a gate for every milestone and release. The budgets are decision 22.
+
+### Small
+
+| Budget | Target |
+|---|---|
+| `Featherweight.exe` | < 4 MB at 1.1, < 7 MB at 2.0, < 11 MB at 3.0, < 15 MB at 4.0 |
+| Download (installer or zip, with PDFium) | < 25 MB |
+| Memory right after launch, no file open | < 40 MB |
+| Memory with a typical document, workbook or deck | < 150 MB |
+| Round-trip store for kept content | < 25 % of the model's own memory |
+
+- **One exe.** PDFium is the only separate DLL, loaded on first use. Nothing else is installed beside it: no runtimes (the C runtime is linked in), no .NET, no web view, no fonts.
+- **Nothing in the background.** No services, scheduled tasks, tray icons or helper processes. The update check runs only while the app is open, as today.
+- **Nothing that grows on disk** beyond settings, recovery journals (§13) and the 30-day backups (§2 principle 9).
+- **A size ledger:** a committed baseline records the exe and download size, and the reason for every accepted increase, so growth is a decision and never an accident.
+
+### Fast
 
 On the typical consumer PC (§10).
 
-| Metric | Target |
+| Budget | Target |
 |---|---|
 | Launch to window | < 300 ms |
+| Opening a PDF | No slower than 0.9.4 |
 | Typical 20-page `.docx` to first page shown | < 400 ms |
 | 300-page `.docx`: first page / fully paginated | < 700 ms / < 3 s |
-| Keystroke to screen, 300-page document | < 16 ms typical, < 50 ms worst |
 | 1-million-cell `.xlsx` to first screen | < 1.5 s |
-| Recalculation after one edit, 100,000-formula workbook | < 100 ms typical |
 | 100 MB CSV: first screen / fully loaded | < 1 s / < 5 s |
 | 50-slide `.pptx` to first slide | < 500 ms |
+| Scrolling and zooming | Every frame within the display's refresh interval |
+| Switching tabs, opening a menu, the side panel or command search | < 50 ms |
+| Command search results, after each keystroke | < 16 ms |
+| Keystroke to screen, 300-page document | < 16 ms typical, < 50 ms worst |
+| Recalculation after one edit, 100,000-formula workbook | < 100 ms typical |
 | Slide show frame rate | The display's refresh rate, no dropped frames |
-| Memory with a typical document, workbook or deck | < 150 MB |
-| Round-trip store for kept content | < 25 % of the model's own memory |
-| `Featherweight.exe` size | < 15 MB |
-| Download size (installer or zip) | < 25 MB |
+| Idle, with nothing animating | No CPU use and no timers firing |
+
+### No bloat
+
+- Every feature passes the friction review and earns its weight in size, memory and complexity. The "not included" lists in §6.2, §7.2 and §8.2 change only deliberately.
+- Every third-party dependency states what it adds to the download (§4.9), and is chosen over writing the code only when that's clearly smaller or safer.
+- Engines, DLLs and features load nothing until a file needs them (§4.1).
+- Test-only code never ships: the widget gallery and other test screens are compiled only into test builds.
+
+### Zero friction
+
+- The principles in §2.
+- **The friction review:** each core flow (open and read, find, print, share as PDF, write and save a letter, fix a table in a received document, total a column, present a deck) is written down with its steps (clicks, keystrokes, decisions). A flow never gains a step without a reason in the plan. It's reviewed at every editor milestone.
+
+### How it's checked
+
+- **Every build** (CI and local), by `fwtool bench` and the budget script (§10):
+  - The exe and download size against the size ledger. CI fails on any unrecorded increase over 50 KB.
+  - Launch to window, opening fixed files of each kind to the first page, memory after launch and after opening, and the idle check.
+  - Timings on CI runners are noisy, so CI gates on size and tracks timings as a trend. The development PC gates timings: more than 10 % slower than the baseline fails, unless the ledger records why.
+- **Every milestone:** its budgets are met on the development PC, and nothing is slower or larger than at the previous milestone without a recorded reason.
+- **Every release:** the whole table is checked on the typical consumer PC.
 
 ---
 
@@ -1094,7 +1150,7 @@ On the typical consumer PC (§10).
 | **The file changes on disk while it's open** (sync clients, Word) | The private snapshot, change detection before every save, and the `~$` owner file |
 | **Fidelity looks better in tests than for users,** because the reference PC has Office's fonts | Every metric measured twice, with Windows-only fonts as a release gate |
 | **Scope and effort:** roughly 27 times the PDF reader | Each app ships as a viewer first, so it's useful early; strict basic and advanced lists; shared engines (`fwtext`, `fwdraw`, `fwchart`) built once |
-| **Bloat creeping in** | Every feature passes the friction review; the "not included" lists are part of this plan and change only deliberately; size and speed budgets checked at every release |
+| **Bloat creeping in** | The lightweight contract (§11): size and speed checked on every build against a committed ledger, a gate at every milestone, the friction review for every flow, and the "not included" lists, which change only deliberately |
 | **Malicious documents** | No active content and no network, size limits, built-in image codecs only, fuzzing with AddressSanitizer, crash recovery |
 | **A crash in one tab loses work in all tabs** (everything runs in one process) | Crash-recovery journals for every open file, and fuzzing. One process keeps memory low and sharing simple; revisit if crashes show up in practice. |
 | **Excel calculation quirks** | Every corpus formula checked against Excel's cached values |
@@ -1113,7 +1169,7 @@ On the typical consumer PC (§10).
 | 2 | Compatibility | **Never damage a file, and look right on common documents, measured.** No claim of 100 %. *Decided.* |
 | 3 | Order | **Documents, then spreadsheets, then presentations.** *Decided.* |
 | 4 | Scope | **All basic features plus selected advanced ones,** as listed in §6.2, §7.2 and §8.2. *Decided; the lists are to be confirmed.* |
-| 5 | Packaging | **One exe with the engines linked in.** PDFium stays a separate DLL. *Proposed.* |
+| 5 | Packaging | **One exe with the engines linked in.** PDFium stays a separate DLL. *Decided (as proposed; Roy delegated the remaining D0 and D1 decisions, 2026-11-03).* |
 | 6 | Releases | **Viewer first, then editor,** as in §9. The PDF reader ships as 1.0 now. *Proposed.* |
 | 7 | Document line layout | **Own line breaker on DirectWrite's text analyzer,** not `IDWriteTextLayout`. *Proposed.* |
 | 8 | Formula engine | **Own engine, in C++.** IronCalc (Rust, MIT/Apache) was considered. It brings its own workbook model and file reader, which conflict with the round-trip store, and a second language toolchain. *Proposed.* |
@@ -1122,7 +1178,7 @@ On the typical consumer PC (§10).
 | 11 | Fonts | **No bundled fonts.** Missing fonts get substitutes tuned by measured line-break matches, and a banner. *Open:* no free font has Aptos's metrics. One option is a one-time banner linking to Microsoft's own Aptos download, if Microsoft offers one whose license allows this use. To settle in D1. |
 | 12 | Pictures in pasted web content | **Only pictures the clipboard itself carries are inserted.** For the others, a banner offers **Download pictures**, so nothing is fetched unless you click (pasted webmail can contain tracking pixels). *Proposed.* |
 | 13 | UI language | **English,** with all strings in one table so translations can follow. *Proposed.* |
-| 14 | Local toolchain | **VS 2022 Build Tools,** for fuzzing and full C++20. *Proposed.* |
+| 14 | Local toolchain | **VS 2019 16.11 Build Tools stay the local toolchain; CI builds with VS 2022.** libFuzzer with AddressSanitizer works on VS 2019 (`tests/fuzz/README.md`), so VS 2022 is installed only if a C++20 feature or a tool needs it. *Decided (Roy delegated the remaining D0 and D1 decisions, 2026-11-03).* |
 | 15 | Backups | **Keep the original for 30 days on the first save,** capped at 1 GB, with Delete backups in ⋯. *Proposed.* |
 | 16 | Code signing | **Before 1.1 if possible, before 2.0 at the latest.** Candidates: SignPath Foundation (free for open-source projects), a Certum open-source certificate, or Microsoft's Trusted Signing, which hasn't always accepted individual developers outside the US and Canada. *Open: check eligibility and cost.* |
 | 17 | Number and formula locale | **Files are stored in Excel's invariant form; formulas are entered with English function names; decimal and list separators and date order follow Windows' regional settings,** as in Excel. New CSV files use the regional list separator. *Proposed; needed before S1.* |
@@ -1130,6 +1186,7 @@ On the typical consumer PC (§10).
 | 19 | Test machines | **A typical consumer PC** (4 cores, 8 GB RAM, integrated graphics) for the budgets, and **an Office reference PC with a Microsoft 365 subscription** for reference renders and repair checks. *The Office reference PC is the development PC (decided 2026-11-03). Open: the typical consumer PC, needed before the 1.1 budgets are checked.* |
 | 20 | Rendering | **Direct3D 11 with a flip-model swap chain** in D0, replacing `ID2D1HwndRenderTarget`, so video, smooth transitions and low latency are possible later without rework. *Decided; done in D0.* |
 | 21 | Accessibility | **Keyboard access and the basic UI Automation from D0 only.** No accessibility gates, no Narrator or NVDA passes, no screen-reader models of document, grid or slide content. *Decided (Roy, 2026-11-03).* |
+| 22 | Lightweight budgets | **The lightweight promise is a gate, like never damaging a file** (§1, §11), with these budgets added to the existing ones: exe size per release (< 4, 7, 11 and 15 MB at 1.1, 2.0, 3.0 and 4.0), memory after launch < 40 MB, menus, panels and tab switches < 50 ms, command search < 16 ms per keystroke, and no CPU use when idle. *Decided (Roy, 2026-11-03).* |
 
 ---
 
@@ -1141,8 +1198,8 @@ On the typical consumer PC (§10).
 |---|---|---|
 | PDF reader | ✅ Done | 0.9.4; see the README and git history |
 | Release 1.0 | ⏳ Next | The reader as it is: a hands-on pass with `docs/TEST_CHECKLIST.md`, then tag `v1.0.0` |
-| D0. Host and foundations | 🔄 In progress | On branch `d0/host`. Done: `TabContent`, `PagedView` and the command and toolbar model, with command labels; `fwpkg`, typed units, `fwtool` and the corpus; Direct3D 11 with a flip-model swap chain and WARP fallback; `Painter` and vector printing through `ID2D1PrintControl`; the widgets, with UI Automation for every element of the window (`tests/uia-checks.ps1`, 176 checks); the side panel, status bar and command search (Alt+Q); the start screen, recent files of every kind, and file associations per kind; the reference registry framework with `fwtool check`; fuzzing in CI (5 targets); reference renders for the public corpus (19 of 20 files: Word calls `edge/escaped-part-names.docx` corrupted). Left for the exit criteria: the 8-hour zip and XML fuzz runs (running), the manual checklist, and the first CI run on GitHub. Decisions 5 and 14 are still proposed. Known: printed group opacity is flattened per shape (see `Painter::BeginGroup`); `password-wrong.png` can differ by the password box's caret from run to run |
-| D1–D5. Documents | Not started | D1 is next. Its fidelity targets need the private corpus (`FW_CORPUS`, §10) and its reference renders. The `RoundTripStore::Split` prerequisite is done (D0) |
+| D0. Host and foundations | ✅ Done (2026-11-04) | On branch `d0/host`. Done: `TabContent`, `PagedView` and the command and toolbar model, with command labels; `fwpkg`, typed units, `fwtool` and the corpus; Direct3D 11 with a flip-model swap chain and WARP fallback; `Painter` and vector printing through `ID2D1PrintControl`; the widgets, with UI Automation for every element of the window (`tests/uia-checks.ps1`, 176 checks); the side panel, status bar and command search (Alt+Q); the start screen, recent files of every kind, and file associations per kind; the reference registry framework with `fwtool check`; fuzzing in CI (5 targets); reference renders for the public corpus (19 of 20 files: Word calls `edge/escaped-part-names.docx` corrupted). The first CI run on GitHub passed (998ffd5). Exit criteria met: the 8-hour zip and XML fuzz runs found nothing (8.9 and 27.2 million inputs); the manual checklist passed; the lightweight gate (§11) passed: launch, PDF opening and window shown 19–37 % faster than 0.9.4, memory after launch within 3 % (17.8 MB), no CPU or wakeups when idle, and the size ledger has its first baseline (on `claude/d1-measure`, 1e808e7); reference renders exist for the private corpus too (108 of 108). The widget gallery is already out of release builds (`FW_TEST_SCREENS=OFF`; the shipped exe is 1.14 MB, 0.75 MB at 0.9.4). Known: printed group opacity is flattened per shape (see `Painter::BeginGroup`); `password-wrong.png` can differ by the password box's caret from run to run |
+| D1–D5. Documents | 🔄 D1 in progress | Phase 1, in parallel sessions from `d0/host`: the `.docx` model, reader and writer; `fwtext` line layout and hyphenation; DrawingML, VML and pictures; the fidelity measurement and the size and speed checks. Phase 2: pagination and the document tab. The fidelity targets need the private corpus (`FW_CORPUS`, §10) and its reference renders |
 | S1–S4. Spreadsheets | Not started | |
 | P1–P3. Presentations | Not started | |
 
