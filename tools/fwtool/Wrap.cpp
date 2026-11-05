@@ -1,4 +1,4 @@
-// fwtool lines: lays out paragraphs with fwtext and prints the lines, to compare line breaks with
+// fwtool wrap: lays out paragraphs with fwtext and prints the lines, to compare line breaks with
 // Word's quickly (plan §10). One paragraph per line of the input; every paragraph has one style.
 #include <windows.h>
 
@@ -22,8 +22,8 @@ namespace {
 
 using namespace fw::text;
 
-constexpr const char* kLinesUsage =
-    "Usage: fwtool lines [options] (--file <utf-8 file> | <text>...)\n"
+constexpr const char* kWrapUsage =
+    "Usage: fwtool wrap [options] (--file <utf-8 file> | <text>...)\n"
     "  Lays out each paragraph (one per line of the file, or the text) and prints its lines.\n"
     "  In text, \\t is a tab, \\n a line break, \\- an optional hyphen, \\_ a no-break space.\n"
     "  --width <pt>        column width (default 451.3, A4 with 2.5 cm margins)\n"
@@ -128,7 +128,7 @@ bool ParseTabs(const std::wstring& spec, std::vector<TabStop>& tabs) {
 
 }  // namespace
 
-int RunLines(int argc, wchar_t** argv) {
+int RunWrap(int argc, wchar_t** argv) {
   TextStyle style;
   style.family = L"Calibri";
   style.language = L"en-US";
@@ -187,7 +187,7 @@ int RunLines(int argc, wchar_t** argv) {
       }
     }
   } catch (const std::exception&) {
-    std::fputs(kLinesUsage, stderr);
+    std::fputs(kWrapUsage, stderr);
     return 2;
   }
 
@@ -204,13 +204,13 @@ int RunLines(int argc, wchar_t** argv) {
       if (paragraphs.empty() && line.starts_with("\xEF\xBB\xBF")) line.erase(0, 3);
       paragraphs.push_back(Unescape(fw::Utf8ToWide(line)));
     }
-  } else {
+  } else if (!words.empty()) {
     std::wstring joined;
     for (const auto& w : words) joined += (joined.empty() ? L"" : L" ") + w;
     paragraphs.push_back(Unescape(joined));
   }
   if (paragraphs.empty()) {
-    std::fputs(kLinesUsage, stderr);
+    std::fputs(kWrapUsage, stderr);
     return 2;
   }
 

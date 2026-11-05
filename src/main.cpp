@@ -64,6 +64,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int showCommand) {
     else if (a == L"--gpu") opts.snapshotGpu = true;
     else if (a == L"--window") opts.snapshotWindow = true;
     else if (a == L"--warp") opts.forceWarp = true;
+    else if (a == L"--sandbox") opts.sandbox = true;
     else if (!a.empty() && a[0] != L'-') opts.files.push_back(a);
   }
   LocalFree(argv);
@@ -76,7 +77,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int showCommand) {
 
   const bool snapshot = !opts.snapshotPath.empty();
   HANDLE mutex = nullptr;
-  if (!snapshot && !opts.widgetGallery) {
+  if (!snapshot && !opts.widgetGallery && !opts.sandbox) {
     mutex = CreateMutexW(nullptr, FALSE, L"Local\\Featherweight-7d1c2f0e-instance");
     if (GetLastError() == ERROR_ALREADY_EXISTS && ForwardToRunningInstance(opts.files)) {
       CloseHandle(mutex);
