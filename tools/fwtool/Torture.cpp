@@ -447,7 +447,32 @@ class EditorTarget : public EditTarget {
     } else if (name == "border") {
       para.borders = value == "box" ? ed::BorderSides::Outside : value == "bottom" ? ed::BorderSides::Bottom : ed::BorderSides::None;
       ed::FormatParagraphs(te, range, para);
-    } else {
+    }
+#if FW_TORTURE_PAGE
+    else if (name == "tabs" && !value.empty()) {
+      // The ruler's tab stops: "tabs=<twips>:<start|center|end|decimal|bar>[:dot]" sets one there,
+      // "tabs=<twips>:<align>:remove" takes away the one there.
+      static const std::pair<const char*, fw::doc::TabAlign> aligns[] = {
+          {"start", fw::doc::TabAlign::Start}, {"center", fw::doc::TabAlign::Center}, {"end", fw::doc::TabAlign::End},
+          {"decimal", fw::doc::TabAlign::Decimal}, {"bar", fw::doc::TabAlign::Bar}};
+      const size_t c1 = value.find(':'), c2 = c1 == std::string::npos ? c1 : value.find(':', c1 + 1);
+      const std::string align = c1 == std::string::npos ? "start" : value.substr(c1 + 1, c2 == std::string::npos ? c2 : c2 - c1 - 1);
+      const std::string more = c2 == std::string::npos ? "" : value.substr(c2 + 1);
+      auto a = std::find_if(std::begin(aligns), std::end(aligns), [&](const auto& p) { return align == p.first; });
+      if (a == std::end(aligns)) return why = "unknown tab alignment", Applied::Refused;
+      const fw::Twips pos(std::atoi(value.c_str()));
+      if (more == "remove") {
+        ed::ChangeTabStops(te, range, {pos}, {});
+      } else {
+        fw::doc::TabStop stop;
+        stop.pos = pos;
+        stop.align = a->second;
+        if (more == "dot") stop.leader = fw::doc::TabLeader::Dot;
+        ed::ChangeTabStops(te, range, {}, {stop});
+      }
+    }
+#endif
+    else {
       return why = "unknown command", Applied::Refused;
     }
     // TreeEdit puts back a change to text it doesn't edit (a text box, kept content) and says why.
@@ -987,8 +1012,14 @@ class Generator {
     static const std::vector<std::u16string> pieces = {
         u"a", u"e", u"the ", u"word ", u"Featherweight", u"  ", u" ", u".", u", ", u"12", u"é", u"ß", u"ü", u"ñ",
         u"ç", u"€", u"—", u"“quoted”", u"日本", u"\t", u"o"};
+    // Breaks typed as characters (InsertText): a line break, and with D3 a page and a column break.
+#if FW_TORTURE_PAGE
+    static const std::vector<std::u16string> breaks = {u"\v", u"\v", u"\f", u"\x0E"};
+#else
+    static const std::vector<std::u16string> breaks = {u"\v"};
+#endif
     std::u16string t;
-    for (uint32_t n = rng_.Between(1, 4); n; --n) t += rng_.Pick(pieces);
+    for (uint32_t n = rng_.Between(1, 4); n; --n) t += rng_.Percent(4) ? rng_.Pick(breaks) : rng_.Pick(pieces);
     return t;
   }
 
@@ -1074,6 +1105,16 @@ class Generator {
       }
     } else {
       e.format = rng_.Pick(formats);
+#if FW_TORTURE_PAGE
+      if (rng_.Percent(15)) {  // the ruler's tab stops; a stop the paragraph has, to take away
+        static const std::vector<std::string> tabs = {"tabs=1440:start", "tabs=2880:center", "tabs=4320:end",
+                                                      "tabs=5760:decimal", "tabs=720:bar", "tabs=4320:end:dot"};
+        const std::vector<fw::doc::TabStop>& have = doc_.ResolvedPara(e.at.para).tabs;
+        e.format = !have.empty() && rng_.Percent(40)
+                       ? "tabs=" + std::to_string(rng_.Pick(have).pos.Value()) + ":start:remove"
+                       : rng_.Pick(tabs);
+      }
+#endif
     }
   }
 
@@ -1529,8 +1570,19 @@ std::string Digest(const Document& doc) {
   static const char* kinds[] = {"main", "header", "footer", "footnote", "endnote", "comment", "text box"};
   // A text box counts while its drawing is still in a story that counts: one whose drawing was
   // deleted is gone from the file, though the edited model may keep its story.
-  std::vector<bool> live(doc.Stories().size());
-  for (uint32_t s = 0; s < live.size(); ++s) live[s] = doc.Stories()[s].kind != StoryKind::TextBox;
+  // A header or footer counts while a section refers to it: saving leaves out one nothing refers
+  // to (D3: a new one undone, a section break deleted), though the edited model keeps its story.
+  std::vector<bool> live(doc.Stories().size()), shown(doc.Stories().size());
+  for (const Section& section : doc.Sections()) {
+    for (uint32_t h : section.headers)
+      if (h < shown.size()) shown[h] = true;
+    for (uint32_t f : section.footers)
+      if (f < shown.size()) shown[f] = true;
+  }
+  for (uint32_t s = 0; s < live.size(); ++s) {
+    const StoryKind kind = doc.Stories()[s].kind;
+    live[s] = kind != StoryKind::TextBox && ((kind != StoryKind::Header && kind != StoryKind::Footer) || shown[s]);
+  }
   for (bool grew = true; grew;) {
     grew = false;
     for (uint32_t s = 0; s < live.size(); ++s) {
@@ -1797,7 +1849,7 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     static const std::set<std::string> formatting = {
         "bullets", "numbering", "multilevel", "nolist", "restart", "continue", "indent", "outdent", "apply",
         "toggle", "grow", "shrink", "grow1", "shrink1", "clearchars", "clearpara", "clearall", "font",
-        "spacing", "spacebefore", "border"};
+        "spacing", "spacebefore", "border", "tabs"};
     const bool styleChange = e.kind == EditKind::Command && (e.format == "update" || e.format.starts_with("modify="));
     const bool formattingCommand = e.kind == EditKind::Command && formatting.contains(e.format.substr(0, e.format.find('=')));
     bool local = e.kind == EditKind::Type || e.kind == EditKind::Delete || e.kind == EditKind::Replace ||

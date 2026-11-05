@@ -16,20 +16,20 @@ The friction review (plan §11, "Zero friction") writes each core flow down step
 
 | Flow | Word | Featherweight today | Featherweight once the findings are fixed | Status |
 |---|---|---|---|---|
-| Write a letter | 6 C + 3 K, 3 D | 5 C + 4 K, 2 D (F1: Esc) | 5 C + 3 K, 2 D | Passes after F1. The letter flow is scripted. |
-| Format a CV (without tab stops and margins) | 2 C + 9 K | 3 C + 14 K | 3 C + 9 K (the one extra click is F4, accepted) | Passes after F1–F3. Tab stops and margins come with D3 (the ruler, page setup). The CV flow is scripted. |
-| Fix a table in a received document | 10 C + 2 K + 2 drags | 14 C + 3 K + 1 drag (F7: the Table panel) | 11 C + 2 K + 2 drags (the two extra clicks are F6, accepted) | Passes after F7. The table flow is scripted. |
+| Write a letter | 6 C + 3 K, 3 D | 5 C + 3 K, 2 D | 5 C + 3 K, 2 D | Passes (claude/d3-int, 2026-11-05: 5 C + 3 K, 8 of 9). The letter flow is scripted. |
+| Format a CV (without tab stops and margins) | 2 C + 9 K | 3 C + 9 K | 3 C + 9 K (the one extra click is F4, accepted) | Passes (claude/d3-int, 2026-11-05: 3 C + 9 K, 12 of 12). Tab stops and margins come with D3 (the ruler, page setup). The CV flow is scripted. |
+| Fix a table in a received document | 10 C + 2 K + 2 drags | 11 C + 2 K + 2 drags | 11 C + 2 K + 2 drags (the two extra clicks are F6, accepted) | Passes (claude/d3-int, 2026-11-05: 11 C + 2 K + 2 drags, 15 of 16). The table flow is scripted. |
 
 ## Where Featherweight needs more than Word
 
 | # | Flow, step | Word | Featherweight | Owner | Status |
 |---|---|---|---|---|---|
-| F1 | Letter and CV: choosing a style in the style box, then typing | Typing goes on in the page | Focus stays in the box: typing goes nowhere until a click in the page or Esc. **+1 every time** | widgets (the toolbar's dropdown) | Reported 2026-11-05 |
-| F2 | CV: Enter after a heading or the title | The next paragraph is Normal (the style's `w:next`) | It stays Heading 1 / Title. **+1 K per heading** (Ctrl+Shift+N) | widgets (Enter in the editor) | Reported 2026-11-05 |
-| F3 | CV: Enter on an empty list item | Ends the list: the item becomes plain text | Stays a list item, and so does what follows. **+1 per list** | widgets, with d2-format (lists) | Reported 2026-11-05 |
+| F1 | Letter and CV: choosing a style in the style box, then typing | Typing goes on in the page | Focus stays in the box: typing goes nowhere until a click in the page or Esc. **+1 every time** | widgets (the toolbar's dropdown) | Fixed (claude/d3-tables 75c11ed): after a choice from a toolbar list, typing goes to the page |
+| F2 | CV: Enter after a heading or the title | The next paragraph is Normal (the style's `w:next`) | It stays Heading 1 / Title. **+1 K per heading** (Ctrl+Shift+N) | widgets (Enter in the editor) | Fixed (claude/d3-tables 75c11ed): Enter at a paragraph's end takes the style's w:next |
+| F3 | CV: Enter on an empty list item | Ends the list: the item becomes plain text | Stays a list item, and so does what follows. **+1 per list** | widgets, with d2-format (lists) | Fixed (claude/d3-tables f31d826): Enter on an empty item ends the list (one undo step) |
 | F4 | Letter and CV: a style without a shortcut (No Spacing, Title, Subtitle, Quote) | 1 C in the Home tab's gallery | 2 C: open the style box, choose | Accepted: one toolbar row, no ribbon (plan §5.2). Normal and Heading 1–3 have Word's keys in both. | By design |
 | F6 | Table: a row in the middle | 1 C on the ⊕ at the row's edge | 3 C: right-click, Insert, Rows Below (as Word's own menu) | Accepted: the review's target for this step was at most 3 C. A handle is worth a look once layout gives cell boxes. | Accepted |
-| F7 | Table: widening a column | 1 drag of its border | Dragging a border selects text. Today: right-click, Properties, the Column width box, a number, Enter: **3 C + 1 K instead of 1 drag** | widgets (d3-tables), waiting on d1-model's `Layout::Cells(page)` | Known to widgets (their hand-over), confirmed here 2026-11-05 |
+| F7 | Table: widening a column | 1 drag of its border | Dragging a border selects text. Today: right-click, Properties, the Column width box, a number, Enter: **3 C + 1 K instead of 1 drag** | widgets (d3-tables), waiting on d1-model's `Layout::Cells(page)` | Fixed (claude/d3-tables 7abe49e): column borders and row bottoms drag on the page |
 | F5 | Letter: the date, in a narrow window | The ribbon shrinks, Insert stays | Below about 1150 pixels wide, the Insert box drops out of the toolbar: then it's command search (Alt+Q, "date", Enter) | d2-format (toolbar priorities) | Note: worth a look, not a finding |
 
 Also found while scripting: **torture finding 7** happens in the app. Centering a line with Ctrl+E and pressing Enter lets AutoCorrect's capital fix garble the line ("second" saved as "SecondS"). Reported to d1-measure as part of finding 7.
@@ -108,7 +108,7 @@ powershell -ExecutionPolicy Bypass -File tests\friction-checks.ps1 [-Workarounds
   - `fwtool check` must pass, and the table flow's saved XML must have the wider column, the merged header cells and no Lamp row.
   - The step count must stay within the budget: Word's count plus the extras accepted here (F4, F6).
 - **Images and saved files** go to `build\friction`.
-- **The scripts are the flows as they should go.** While F1–F3 are open, the letter and the CV fail on what the saved file says; while F7 is, the table does (its column isn't wider).
+- **The scripts are the flows as they should go.** All three pass on claude/d3-int (F1–F3 and F7 fixed). A finding that comes back makes its flow fail on what the saved file says.
 - **`-Workarounds`** adds the steps the findings need today. The content then checks out, and the counts show the cost: the letter takes 9 (budget 9), the CV 17 (budget 12), the table 18 (budget 16).
 - **Click coordinates** (the style box and its list, the table's cells and the Table panel's Column width box) are for that window size. A toolbar change that moves them makes the check fail, and it's fixed here.
 
