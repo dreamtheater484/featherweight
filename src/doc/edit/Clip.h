@@ -24,10 +24,12 @@ struct ClipRun {
   std::string font;                // UTF-8; empty when not said
   std::string charStyle;           // the w:rStyle id (Featherweight's own copies)
   std::string link;                // a hyperlink's target: a web address, or "#bookmark"
+  // Save as RTF: the field whose result the text is (PAGE, NUMPAGES); copies leave it empty.
+  std::string field;
   bool SameLook(const ClipRun& o) const {
     return bold == o.bold && italic == o.italic && underline == o.underline && strike == o.strike &&
            vertAlign == o.vertAlign && halfPoints == o.halfPoints && color == o.color && font == o.font &&
-           charStyle == o.charStyle && link == o.link;
+           charStyle == o.charStyle && link == o.link && field == o.field;
   }
 };
 
@@ -46,6 +48,7 @@ struct ClipPara {
   // A table cell's paragraph: its table (from 1, in the clip's order), and its row and cell there
   // as the source counts them (pasting goes by where they change). 0 outside tables.
   uint32_t table = 0, row = 0, cell = 0;
+  bool pageBreakBefore = false;  // Save as RTF; copies leave it false
 };
 
 // Paragraphs with a paragraph break between each two: text that ends with a paragraph mark has an
@@ -87,6 +90,25 @@ Result PasteClip(Editor& editor, Pos from, Pos to, const Clip& clip, uint64_t ta
 // copies carry their source, styles and lists in data-fw-* attributes.
 std::string ToRtf(const Clip& clip);
 std::string ToHtml(const Clip& clip);
+
+// RTF made of several clips (Save as RTF: the body, and each header and footer) with one font and
+// color table for all of them. ToRtf is one clip through it. Page and column breaks in the text
+// (U+000C, U+000E) are written as RTF's.
+class RtfWriter {
+ public:
+  // The clip's paragraphs. The last one is left open, for the caller to end with \par, \sect or the
+  // end of its group.
+  void Paragraphs(std::string& out, const Clip& clip);
+  // The file: the font and color tables, then `body`, which starts with the document's own
+  // properties when it has any.
+  std::string File(std::string_view body) const;
+
+ private:
+  int Font(const std::string& name);
+  int Color(uint32_t rgb);
+  std::vector<std::string> fonts_;
+  std::vector<uint32_t> colors_;
+};
 std::optional<Clip> FromRtf(std::string_view rtf);
 // Takes CF_HTML (only the fragment is read) or plain HTML.
 std::optional<Clip> FromHtml(std::string_view html);

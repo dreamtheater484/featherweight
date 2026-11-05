@@ -13,6 +13,8 @@
 #include "doc/docx/Blank.h"
 #include "doc/docx/Docx.h"
 #include "doc/edit/Clip.h"
+#include "doc/edit/Export.h"
+#include "doc/edit/Forms.h"
 #include "draw/D2DPainter.h"
 #include "draw/PrintJob.h"
 #include "pkg/Package.h"
@@ -27,6 +29,7 @@
 #include "ui/Toolbar.h"
 #include "word/DocPanels.h"
 #include "word/PicturePanel.h"
+#include "word/ShapePanels.h"
 
 using namespace gfx;
 namespace layout = fw::doc::layout;
@@ -69,6 +72,7 @@ class InvertingPainter : public draw::Painter {
   void DrawGlyphs(draw::Point origin, const draw::GlyphRun& run, const draw::Brush& b) override {
     inner_.DrawGlyphs(origin, run, Map(b));
   }
+  bool WantsText() const override { return inner_.WantsText(); }
   void DrawBitmap(const draw::Bitmap& bitmap, const draw::Rect& dest, const draw::Rect* src, float opacity) override {
     inner_.DrawBitmap(bitmap, dest, src, opacity);
   }
@@ -162,6 +166,7 @@ DocView::~DocView() {
   bookmarkPanel_.reset();
   pageNumberPanel_.reset();
   navPanel_.reset();
+  shapes_.reset();
   pictures_.reset();
   editor_.reset();
   drawings_.clear();  // pictures read from the document's package
@@ -237,6 +242,7 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
   auto editor = std::make_unique<fw::doc::edit::Editor>(*doc_);
   if (editor->CanEdit()) {
     editor_ = std::move(editor);
+    editor_->SetAuthor(ReviewerName());
     editor_->OnChange([this](const fw::doc::edit::Change& c) { OnEdited(c); });
     format_ = std::make_unique<DocFormat>(
         *editor_, [this] { return FormatTarget(); }, [this](const DocFormat::Done& d) { AfterFormat(d); });
@@ -265,11 +271,18 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     table_ = std::make_unique<DocTable>(*editor_, std::move(th));
     page_ = std::make_unique<DocPage>(*editor_, std::move(ph));
     pictures_ = std::make_unique<fw::doc::edit::Pictures>(*editor_);
+    shapes_ = std::make_unique<fw::doc::edit::Shapes>(*editor_);
     format_->insertPicture = [this] { Execute(CmdInsertPicture); };
+    static constexpr std::pair<int, const wchar_t*> kShapes[] = {
+        {CmdInsertTextBox, L"Text box"}, {CmdInsertRectangle, L"Rectangle"}, {CmdInsertRoundedRectangle, L"Rounded rectangle"},
+        {CmdInsertOval, L"Oval"},        {CmdInsertLine, L"Line"},           {CmdInsertArrow, L"Arrow"},
+        {CmdInsertCallout, L"Callout"},  {CmdWatermarkPanel, L"Watermark…"}};
+    for (const auto& [cmd, label] : kShapes) format_->insertMore.push_back({label, [this, cmd = cmd] { Execute(cmd); }});
     for (int cmd : DocPage::InsertCommands())
       format_->insertMore.push_back({page_->Query(cmd).Tooltip(), [this, cmd] { Execute(cmd); }});
+    for (int cmd : FormCommands()) format_->insertMore.push_back({QueryForms(cmd)->label, [this, cmd] { Execute(cmd); }});
     for (int cmd : {CmdInsertFootnote, CmdInsertEndnote, CmdInsertToc})
-      format_->insertMore.push_back({QueryD4(cmd)->Tooltip(), [this, cmd] { Execute(cmd); }});
+      format_->insertMore.push_back({QueryNotes(cmd)->Tooltip(), [this, cmd] { Execute(cmd); }});
     DocStyles::Host sh;
     sh.selection = [this] {
       return std::make_pair(fw::doc::Pos{anchor_.para, anchor_.offset}, fw::doc::Pos{focus_.para, focus_.offset});
@@ -321,24 +334,46 @@ void DocView::CollectAnnotations() {
     }
   }
 
-  // Tracked changes in the text (not formatting changes, which show nothing in Simple Markup).
+  // Legacy form fields: shaded gray on screen (not in print), as Word shades them, unless the
+  // document says not to (w:doNotShadeFormData).
+  formShades_.clear();
+  const fw::doc::Part* settings = doc_->FindPart(fw::doc::PartKind::Settings);
+  if (!settings || !fw::doc::Node(&doc_->GetTree(), settings->root).Child(fw::doc::Name("doNotShadeFormData")))
+    for (uint32_t s = 0; s < doc_->Stories().size(); ++s) {
+      if (doc_->Stories()[s].kind == fw::doc::StoryKind::Comment) continue;
+      for (const fw::doc::edit::FormField& f : fw::doc::edit::FormFields(*doc_, s))
+        formShades_.push_back({{f.start.para, f.start.offset}, {f.end.para, f.end.offset}});
+    }
+
+  // Tracked changes in the text; formatting and paragraph marks get only their bar.
   std::vector<std::string_view> authors;
+  allChanges_ = 0;
   for (uint32_t s = 0; s < doc_->Stories().size(); ++s) {
     if (doc_->Stories()[s].kind == fw::doc::StoryKind::Comment) continue;
     for (const auto& r : doc_->Revisions(s)) {
       using Kind = fw::doc::RevisionKind;
-      if (r.kind != Kind::Insertion && r.kind != Kind::Deletion && r.kind != Kind::MoveFrom && r.kind != Kind::MoveTo)
-        continue;
-      if (r.start.para == fw::doc::kNone || r.end.para == fw::doc::kNone) continue;
+      ++allChanges_;
+      const bool text = r.kind == Kind::Insertion || r.kind == Kind::Deletion || r.kind == Kind::MoveFrom ||
+                        r.kind == Kind::MoveTo;
+      const bool barOnly = r.kind == Kind::RunFormat || r.kind == Kind::ParagraphFormat ||
+                           r.kind == Kind::MarkInsertion || r.kind == Kind::MarkDeletion;
+      if ((!text && !barOnly) || r.start.para == fw::doc::kNone || r.end.para == fw::doc::kNone) continue;
       Change ch;
       ch.from = {r.start.para, r.start.offset};
       ch.to = {r.end.para, r.end.offset};
+      if (barOnly && r.kind != Kind::RunFormat)
+        ch.from = {r.start.para, 0}, ch.to = {r.start.para, static_cast<uint32_t>(doc_->Para(r.start.para).text.size())};
       if (ch.to < ch.from) std::swap(ch.from, ch.to);
-      if (ch.from == ch.to) continue;
+      if (ch.from == ch.to && !barOnly) continue;
+      ch.barOnly = barOnly;
       ch.deletion = r.kind == Kind::Deletion || r.kind == Kind::MoveFrom;
       auto who = std::find(authors.begin(), authors.end(), r.author);
       if (who == authors.end()) who = authors.insert(authors.end(), r.author);
       ch.author = static_cast<size_t>(who - authors.begin());
+      if (barOnly) {
+        changes_.push_back(std::move(ch));
+        continue;
+      }
       std::wstring by = r.author.empty() ? std::wstring() : L" by " + Wide(r.author);
       if (ch.deletion) {
         std::wstring gone;
@@ -365,7 +400,7 @@ void DocView::CollectAnnotations() {
 void DocView::VisibleText(uint32_t para, std::wstring& text, std::vector<uint32_t>& map) const {
   const std::u16string& s = doc_->Para(para).text;
   for (const auto& run : doc_->Runs(para)) {
-    if (run.fieldCode || Deleted(run.revision)) continue;
+    if (run.fieldCode || !RevisionShown(run.revision)) continue;
     if (run.run && doc_->ResolvedRun(para, run.run).vanish) continue;
     for (uint32_t i = run.start; i < run.end && i < s.size(); ++i) {
       char16_t c = s[i];
@@ -596,8 +631,19 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
   // Comments, changes and matches are measured once pagination is done: measuring a range lays
   // out every page up to it, which painting mustn't wait for.
   const bool done = pagination_->Done();
-  // Comments: their text is marked, as Word marks it.
+  // Legacy form fields: gray behind them.
   if (!presentation_) {
+    for (auto& m : formShades_) {
+      if (!m.measured && done) {
+        m.rects = pagination_->Ranges(m.from, m.to);
+        m.measured = true;
+      }
+      fill(m.rects, Alpha(Rgb(0x808080), 0.28f), false);
+    }
+  }
+  // Comments: their text is marked, as Word marks it (not in No markup or Original).
+  const bool markup = !presentation_ && (markup_ == Markup::Simple || markup_ == Markup::All);
+  if (markup) {
     for (auto& cm : comments_) {
       if (!cm.measured && done) {
         cm.rects = pagination_->Ranges(cm.from, cm.to);
@@ -606,9 +652,10 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
       fill(cm.rects, Alpha(Rgb(0xF2C744), 0.30f), false);
     }
   }
-  // Tracked changes: inserted text underlined, a mark where text was deleted, and a bar in the
-  // left margin beside each.
-  if (!presentation_) {
+  // Tracked changes: inserted text underlined, a mark where text was deleted (in All markup, the
+  // deleted text, struck through), and a bar in the left margin beside each.
+  const bool struck = markup_ == Markup::All && MarkupLaidOut();
+  if (markup) {
     const float u = std::max(1.0f, ui_);
     auto bar = [&](int pg, float top, float bottom, D2D1_COLOR_F color) {
       const layout::Page& page = pagination_->GetPage(pg);
@@ -618,11 +665,32 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
     };
     for (auto& ch : changes_) {
       if (!ch.measured && done) {
-        if (ch.deletion) ch.at = pagination_->CaretAt(ch.from);
+        if (ch.deletion && !struck && !ch.barOnly) ch.at = pagination_->CaretAt(ch.from);
         else ch.rects = pagination_->Ranges(ch.from, ch.to);
+        if (ch.barOnly && ch.rects.empty()) ch.at = pagination_->CaretAt(ch.from);  // an empty paragraph
         ch.measured = true;
       }
       const D2D1_COLOR_F color = ChangeColor(ch.author);
+      if (ch.barOnly) {
+        for (const auto& [page, r] : ch.rects)
+          if (static_cast<int>(page) >= first && static_cast<int>(page) <= last && static_cast<int>(page) < pages)
+            bar(static_cast<int>(page), r.top, r.bottom, color);
+        if (ch.at && static_cast<int>(ch.at->page) >= first && static_cast<int>(ch.at->page) <= last &&
+            static_cast<int>(ch.at->page) < pages)
+          bar(static_cast<int>(ch.at->page), ch.at->top, ch.at->bottom, color);
+        continue;
+      }
+      if (ch.deletion && struck) {
+        for (const auto& [page, r] : ch.rects) {
+          const int pg = static_cast<int>(page);
+          if (pg < first || pg > last || pg >= pages) continue;
+          D2D1_RECT_F s = PageRectToScreen(pg, r);
+          const float mid = std::round((s.top + s.bottom) / 2);
+          c.Fill(RectF(s.left, mid, s.right, mid + u), color);
+          bar(pg, r.top, r.bottom, color);
+        }
+        continue;
+      }
       if (ch.deletion) {
         if (!ch.at) continue;
         const int pg = static_cast<int>(ch.at->page);
@@ -702,6 +770,7 @@ bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
     for (auto& m : matches_) m.measured = false;
     for (auto& cm : comments_) cm.measured = false;
     for (auto& ch : changes_) ch.measured = false;
+    for (auto& m : formShades_) m.measured = false;
     repaint = true;
   }
   if (!noticesShown_ && pagination_->Done()) ShowNotices();
@@ -766,7 +835,8 @@ DocView::Hit DocView::HitAt(int x, int y) {
   for (size_t i = 0; i < comments_.size(); ++i)
     if (!(at < comments_[i].from) && at < comments_[i].to) hit.comment = static_cast<int>(i);
   for (size_t i = 0; i < changes_.size(); ++i)
-    if (!changes_[i].deletion && !(at < changes_[i].from) && at < changes_[i].to) hit.change = static_cast<int>(i);
+    if (!changes_[i].deletion && !changes_[i].barOnly && !(at < changes_[i].from) && at < changes_[i].to)
+      hit.change = static_cast<int>(i);
   return hit;
 }
 
@@ -839,6 +909,8 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
     host_.ViewInvalidate();
     return;
   }
+  // A check box, a list or a placeholder takes the click, even when selected (Tab selects it).
+  if (pos && Editing() && !doubleClick && !(mods & kModShift) && FormClick(*pos, x, y)) return;
   if (!doubleClick && TextDragDown(x, y, mods, pos)) return;  // pressed on the selection: it may be dragged
   if (pos) {
     const bool triple = !doubleClick && anim::Now() - lastDoubleClick_ < GetDoubleClickTime() &&
@@ -971,6 +1043,7 @@ bool DocView::OnKeyDown(UINT vk, UINT mods) {
     LeaveHeaderFooter();
     return true;
   }
+  if (Editing() && FormKey(vk, mods)) return true;  // Tab in a protected form, Alt+Down in a list
   if (vk == VK_TAB && !(mods & (kModCtrl | kModAlt)) && Editing() && table_ && table_->Tab((mods & kModShift) != 0)) return true;
   if (vk == VK_TAB && !(mods & (kModCtrl | kModAlt)) && Editing() && ListTab((mods & kModShift) != 0)) return true;
   if (Editing() && pagination_->PageCount() > 0 && EditKey(vk, mods)) return true;
@@ -1075,7 +1148,7 @@ std::wstring DocView::TooltipAt(int x, int y) {
   float px, py;
   if (page >= 0 && ToPagePoint(page, x, y, px, py)) {
     for (const auto& ch : changes_) {
-      if (ch.deletion && ch.at && static_cast<int>(ch.at->page) == page && std::abs(px - ch.at->x) < 3 &&
+      if (ch.deletion && !ch.barOnly && ch.at && static_cast<int>(ch.at->page) == page && std::abs(px - ch.at->x) < 3 &&
           py >= ch.at->top && py < ch.at->bottom)
         return ch.text;
     }
@@ -1281,6 +1354,32 @@ SaveFormat DocView::SaveAsFormat() const {
   return {L"Word document", L"*.docx", L"docx"};
 }
 
+// Word's other types, as copies (milestone D4).
+std::vector<SaveFormat> DocView::CopyFormats() const {
+  return {{L"Rich Text Format", L"*.rtf", L"rtf"},
+          {L"Plain text (UTF-8)", L"*.txt", L"txt"},
+          {L"Plain text (UTF-16)", L"*.txt", L"txt"}};
+}
+
+bool DocView::SaveCopy(const std::wstring& path, size_t format, std::wstring& error) {
+  if (!doc_ || format > 2) return false;
+  const std::wstring name = fw::FileNameOf(path);
+  // A copy never replaces the document it is a copy of.
+  if (!path_.empty() && fw::EqualsNoCase(util::FullPath(path), util::FullPath(path_))) {
+    error = name + L" is this document's own file. Choose another name for the copy.";
+    return false;
+  }
+  namespace edit = fw::doc::edit;
+  const std::string bytes = format == 0   ? edit::RtfFile(*doc_)
+                            : format == 1 ? edit::TextFile(*doc_, edit::TextEncoding::Utf8)
+                                          : edit::TextFile(*doc_, edit::TextEncoding::Utf16);
+  if (!util::WriteFileAtomic(path, bytes)) {
+    error = name + L" couldn't be saved. It may be open in another program, or the folder can't be written to.";
+    return false;
+  }
+  return true;
+}
+
 bool DocView::Save(const std::wstring& path, std::wstring& error) {
   if (!doc_) return false;
   if (!file_.Save(*doc_, path, error)) return false;
@@ -1464,6 +1563,18 @@ constexpr CommandName kCommandNames[] = {
     {CmdPictureRotate, L"Rotate picture 90°", L""},
     {CmdPictureReset, L"Reset picture size", L""},
     {CmdPicturePanel, L"Picture size, rotation and alt text…", L""},
+    {CmdInsertTextBox, L"Insert text box", L""},
+    {CmdInsertRectangle, L"Insert rectangle", L""},
+    {CmdInsertRoundedRectangle, L"Insert rounded rectangle", L""},
+    {CmdInsertOval, L"Insert oval", L""},
+    {CmdInsertLine, L"Insert line", L""},
+    {CmdInsertArrow, L"Insert arrow", L""},
+    {CmdInsertCallout, L"Insert callout", L""},
+    {CmdShapeAddText, L"Add text to shape", L""},
+    {CmdShapeEditText, L"Edit shape text", L""},
+    {CmdShapePanel, L"Shape wrap, size, fill and outline…", L""},
+    {CmdWatermarkPanel, L"Watermark…", L""},
+    {CmdWatermarkRemove, L"Remove watermark", L""},
 };
 
 }  // namespace
@@ -1503,23 +1614,28 @@ int DocView::ShortcutFor(UINT vk, UINT mods) const {
     if (!shift && vk == 'K' && format_) return CmdInsertLink;
     if (shift && vk == '8') return CmdShowMarks;
     if (shift && vk == VK_F5 && format_) return CmdBookmark;
+    if (shift && vk == 'E' && format_) return CmdTrackChanges;
   }
+  if ((mods & kModCtrl) && (mods & kModAlt) && !(mods & kModShift) && vk == 'M' && format_) return CmdNewComment;
   if (page_)
     if (int cmd = DocPage::Shortcut(vk, mods)) return cmd;
   if (format_)
-    if (int cmd = ShortcutD4(vk, mods)) return cmd;
+    if (int cmd = ShortcutNotes(vk, mods)) return cmd;
   return Shortcut(vk, mods);
 }
 
 CommandState DocView::QueryCommand(int cmd) {
   if (format_ && DocFormat::Owns(cmd)) return format_->Query(cmd);
   if (auto d3 = QueryD3(cmd)) return *d3;
+  if (auto forms = QueryForms(cmd)) return *forms;
   if (auto d4 = QueryD4(cmd)) return *d4;
+  if (auto notes = QueryNotes(cmd)) return *notes;
   if (table_ && DocTable::Owns(cmd)) return table_->Query(cmd);
   if (page_ && DocPage::Owns(cmd)) return page_->Query(cmd);
   if (styles_ && DocStyles::Owns(cmd)) return styles_->Query(cmd);
   CommandState s;
   if (auto picture = QueryPicture(cmd)) s = *picture;
+  if (auto shape = QueryShape(cmd)) s = *shape;
   switch (cmd) {
     case CmdSave: s = {Ready() && (Modified() || path_.empty()), false}; break;
     case CmdPrint: s = {Ready(), false}; break;
@@ -1541,7 +1657,8 @@ CommandState DocView::QueryCommand(int cmd) {
       s.visible = false;
       break;
     default:
-      if (cmd < CmdInsertPicture || cmd > CmdPicturePanel) s = PagedView::QueryCommand(cmd);
+      if ((cmd < CmdInsertPicture || cmd > CmdPicturePanel) && (cmd < CmdInsertTextBox || cmd > CmdWatermarkRemove))
+        s = PagedView::QueryCommand(cmd);
       break;
   }
   for (const CommandName& n : kCommandNames) {
@@ -1575,14 +1692,21 @@ std::vector<int> DocView::Commands() {
                   CmdCloseHeaderFooter, CmdDifferentFirstPage, CmdDifferentOddEven, CmdLinkToPrevious, CmdPageNumber,
                   CmdNavigationPane, CmdShowMarks})
     if (format_ || cmd == CmdNavigationPane || cmd == CmdShowMarks || cmd == CmdOpenLink) ids.push_back(cmd);
+  for (int cmd : {CmdReviewPane, CmdNewComment, CmdTrackChanges, CmdAcceptChange, CmdRejectChange, CmdAcceptAll,
+                  CmdRejectAll, CmdNextChange, CmdPrevChange, CmdMarkupSimple, CmdMarkupAll, CmdMarkupNone,
+                  CmdMarkupOriginal, CmdReviewerName})
+    if (format_ || cmd == CmdReviewPane || cmd == CmdNextChange || cmd == CmdPrevChange || cmd >= CmdMarkupSimple)
+      ids.push_back(cmd);
   if (table_)
     for (int cmd : DocTable::CommandIds()) ids.push_back(cmd);
   if (page_)
     for (int cmd : DocPage::CommandIds()) ids.push_back(cmd);
   if (format_)
-    for (int cmd : CommandsD4()) ids.push_back(cmd);
+    for (int cmd : CommandsNotes()) ids.push_back(cmd);
   if (styles_)
     for (int cmd : DocStyles::CommandIds()) ids.push_back(cmd);
+  if (format_)
+    for (int cmd : FormCommands()) ids.push_back(cmd);
   return ids;
 }
 
@@ -1608,7 +1732,10 @@ bool DocView::Execute(int cmd) {
   if (ExecuteProof(cmd)) return true;
   if (ExecuteD3(cmd)) return true;
   if (ExecuteD4(cmd)) return true;
+  if (ExecuteNotes(cmd)) return true;
   if (ExecutePicture(cmd)) return true;
+  if (ExecuteForms(cmd)) return true;
+  if (ExecuteShape(cmd)) return true;
   switch (cmd) {
     case CmdCopy: Copy(); return true;
     case CmdCut: Cut(); return true;
@@ -1657,11 +1784,13 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
     m.left.push_back(query(CmdRedo, icon::Redo, 7));
     format_->AddToolbar(m);
     AddD3Toolbar(m);
+    AddD4Toolbar(m);
     table_->AddToolbar(m);
     page_->AddToolbar(m);
     AddPictureToolbar(m);
   }
   SyncPicturePanel();
+  SyncShapePanels();
 
   m.pager = !Editing();  // when editing, the status bar has the page and the zoom
   m.page = currentPage_;
@@ -1698,7 +1827,8 @@ void DocView::FillContextMenu(HMENU m, int x, int y) {
   }
   FillSpellingMenu(m, x, y);  // a spelling error's suggestions first, as Word has them
   FillD3Menu(m, x, y);        // then the link under the caret
-  FillD4Menu(m);              // and the table of contents
+  FillD4Menu(m);              // the change there, and a new comment
+  FillNotesMenu(m);           // and the table of contents
   FillPictureMenu(m);         // and a selected picture's
   if (Editing()) {
     table_->FillContextMenu(m);

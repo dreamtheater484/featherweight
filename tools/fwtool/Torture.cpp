@@ -71,6 +71,20 @@
 #else
 #define FW_TORTURE_CASE 0
 #endif
+// D4: forms, comments and tracked changes, notes, shapes, watermarks, and Save as RTF and text.
+#if FW_TORTURE_D3 && __has_include("doc/edit/Forms.h") && __has_include("doc/edit/Comments.h") && \
+    __has_include("doc/edit/Notes.h") && __has_include("doc/edit/Shapes.h") && __has_include("doc/edit/Watermark.h") && \
+    __has_include("doc/edit/Export.h")
+#include "doc/edit/Comments.h"
+#include "doc/edit/Export.h"
+#include "doc/edit/Forms.h"
+#include "doc/edit/Notes.h"
+#include "doc/edit/Shapes.h"
+#include "doc/edit/Watermark.h"
+#define FW_TORTURE_D4 1
+#else
+#define FW_TORTURE_D4 0
+#endif
 #if __has_include("word/DocStyles.h")
 #define FW_TORTURE_THEME 1
 #else
@@ -81,6 +95,7 @@
 #define FW_TORTURE_CLIP 0
 #define FW_TORTURE_CASE 0
 #define FW_TORTURE_THEME 0
+#define FW_TORTURE_D4 0
 #endif
 
 namespace fwtool {
@@ -254,6 +269,16 @@ bool SeedPicture(const std::string& name, std::vector<uint8_t>& bytes) {
   return false;
 }
 
+// A 4 x 3 red PNG: the picture inserted when no seed file is named, and a picture watermark.
+const std::vector<uint8_t>& RedPng() {
+  static const std::vector<uint8_t> png = {
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00,
+      0x04, 0x00, 0x00, 0x00, 0x03, 0x08, 0x02, 0x00, 0x00, 0x00, 0x3B, 0x96, 0x39, 0x91, 0x00, 0x00, 0x00, 0x10, 0x49,
+      0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x38, 0xA1, 0xA1, 0x01, 0x47, 0x0C, 0x38, 0x39, 0x00, 0x07, 0xA6, 0x0D, 0x21,
+      0x7C, 0xB1, 0xBC, 0x73, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
+  return png;
+}
+
 // Saves as the app does (DocFile::Save): docx::Serialize writes the changed parts from the model,
 // updates the core properties when something was edited, saves the package and checks it opens
 // again. With nothing edited it is the file exactly as it was opened. The time is fixed, so that a
@@ -275,7 +300,13 @@ fw::pkg::Status SaveParts(fw::doc::Document& doc, const std::vector<uint32_t>& p
 // list) are refused here, so that the editor only sees edits a person could make.
 class EditorTarget : public EditTarget {
  public:
-  explicit EditorTarget(std::unique_ptr<fw::doc::Document> doc) : doc_(std::move(doc)), editor_(*doc_) {}
+  explicit EditorTarget(std::unique_ptr<fw::doc::Document> doc) : doc_(std::move(doc)), editor_(*doc_) {
+#if FW_TORTURE_D4
+    // Tracked changes and comments by one author at one moment: a replay makes the same file.
+    editor_.SetAuthor("Torture");
+    editor_.SetFixedDate("2026-01-01T00:00:00Z");
+#endif
+  }
   const char* Name() const override { return "the editor (doc/edit/Editor.h)"; }
   const fw::doc::Document& Doc() const override { return *doc_; }
 
@@ -426,6 +457,9 @@ class EditorTarget : public EditTarget {
       if (!r) return why = fw::doc::ToUtf8(r.message), Applied::Refused;
       return Applied::Done;
     }
+#endif
+#if FW_TORTURE_D4
+    if (std::optional<Applied> d4 = D4(e, why)) return *d4;
 #endif
 #if FW_TORTURE_D3
     if (std::optional<Applied> d3 = D3(e, why)) return *d3;
@@ -713,13 +747,8 @@ class EditorTarget : public EditTarget {
     }
     // Pictures: inserted here; changed by their index in Document::Drawings()
     else if (name == "picture") {
-      static const std::vector<uint8_t> png = {
-          0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00,
-          0x04, 0x00, 0x00, 0x00, 0x03, 0x08, 0x02, 0x00, 0x00, 0x00, 0x3B, 0x96, 0x39, 0x91, 0x00, 0x00, 0x00, 0x10, 0x49,
-          0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x38, 0xA1, 0xA1, 0x01, 0x47, 0x0C, 0x38, 0x39, 0x00, 0x07, 0xA6, 0x0D, 0x21,
-          0x7C, 0xB1, 0xBC, 0x73, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};  // 4 x 3, red
       if (value.empty()) {
-        r = pictures_.Insert(e.at, png, fw::Emu(0), u"torture.png");
+        r = pictures_.Insert(e.at, RedPng(), fw::Emu(0), u"torture.png");
       } else {  // "picture=<file>": one of tests/fuzz/seeds/picture (each format Insert takes, and one it doesn't)
         std::vector<uint8_t> bytes;
         if (!SeedPicture(value, bytes)) return refuse("no picture " + value + " in tests/fuzz/seeds/picture");
@@ -854,6 +883,155 @@ class EditorTarget : public EditTarget {
   }
 #endif
 
+#if FW_TORTURE_D4
+  // D4's operations. Forms at e.at: the content control there (ControlAt) or the legacy form
+  // field (FormFieldAt). Comments by id, notes by kind and id, shapes by their index in
+  // Document::Drawings(). Where the model contradicts itself (Tab picks a range that isn't
+  // there) the edit is refused with "wrong: ", which fails the round.
+  std::optional<Applied> D4(const Edit& e, std::string& why) {
+    namespace ed = fw::doc::edit;
+    using fw::doc::ToUtf16;
+    using fw::doc::ToUtf8;
+    const size_t eq = e.format.find('=');
+    const std::string name = e.format.substr(0, eq), value = eq == std::string::npos ? "" : e.format.substr(eq + 1);
+    std::vector<std::string> args;
+    for (size_t start = 0; start <= value.size();) {
+      size_t colon = std::min(value.find(':', start), value.size());
+      args.push_back(value.substr(start, colon - start));
+      start = colon + 1;
+    }
+    auto num = [&](size_t i, int def = 0) { return i < args.size() && !args[i].empty() ? std::atoi(args[i].c_str()) : def; };
+    auto arg = [&](size_t i) { return i < args.size() ? args[i] : std::string(); };
+    auto refuse = [&](std::string reason) {
+      why = std::move(reason);
+      return Applied::Refused;
+    };
+    ed::Result r;
+    // Forms: filling in a content control or legacy form field, inserting a control, Tab.
+    if (name == "fill" || name == "placeholder" || name == "check" || name == "pickitem" || name == "pickdate") {
+      const std::optional<ed::ContentControl> c = ed::ControlAt(*doc_, e.at);
+      if (!c) return refuse("no content control here");
+      if (name == "fill") r = ed::FillControl(editor_, *c, ToUtf16(value));
+      else if (name == "placeholder") r = ed::ShowPlaceholder(editor_, *c);
+      else if (name == "check") r = ed::SetChecked(editor_, *c, value == "1");
+      else if (name == "pickitem") r = ed::PickItem(editor_, *c, static_cast<size_t>(num(0)));
+      else {  // "pickdate=<year>:<month>:<day>"
+        fw::doc::DateTime date;
+        date.year = num(0, 2026), date.month = num(1, 1), date.day = num(2, 1);
+        r = ed::PickDate(editor_, *c, date);
+      }
+    } else if (name == "formcheck" || name == "formentry") {
+      const std::optional<ed::FormField> f = ed::FormFieldAt(*doc_, e.at);
+      if (!f) return refuse("no form field here");
+      r = name == "formcheck" ? ed::SetFormCheckBox(editor_, *f, value == "1")
+                              : ed::PickFormEntry(editor_, *f, static_cast<size_t>(num(0)));
+    } else if (name == "control") {  // "control=<kind>[:item:item...]"
+      static const std::pair<const char*, ed::ControlKind> kinds[] = {
+          {"richtext", ed::ControlKind::RichText}, {"plaintext", ed::ControlKind::PlainText},
+          {"checkbox", ed::ControlKind::CheckBox}, {"dropdown", ed::ControlKind::DropDown},
+          {"combobox", ed::ControlKind::ComboBox}, {"date", ed::ControlKind::Date}};
+      auto k = std::find_if(std::begin(kinds), std::end(kinds), [&](const auto& p) { return arg(0) == p.first; });
+      if (k == std::end(kinds)) return refuse("unknown content control");
+      std::vector<std::u16string> items;
+      for (size_t i = 1; i < args.size(); ++i) items.push_back(ToUtf16(args[i]));
+      r = ed::InsertControl(editor_, e.at, k->second, items);
+    } else if (name == "tabfill") {
+      // Tab (Shift+Tab: "tabfill=back") in a form, then what a person does there: types over a
+      // text, ticks a check box, picks the next item.
+      const std::optional<ed::Range> next = ed::NextFillIn(*doc_, e.at, value == "back");
+      if (!next) return refuse("nothing to fill in");
+      if (!Exists(next->from) || !Exists(next->to) || editor_.Compare(next->from, next->to) > 0)
+        return refuse("wrong: NextFillIn gave " + PosText(next->from) + " to " + PosText(next->to) + ", which isn't a range here");
+      if (const std::optional<ed::ContentControl> c = ed::ControlAt(*doc_, next->from); c && !c->Typable()) {
+        if (c->kind == ed::ControlKind::CheckBox) r = ed::SetChecked(editor_, *c, !c->checked);
+        else if (c->kind == ed::ControlKind::DropDown) r = ed::PickItem(editor_, *c, c->items.empty() ? 0 : 1);
+        else return refuse("a control that isn't filled in here");
+      } else if (const std::optional<ed::FormField> f = ed::FormFieldAt(*doc_, next->from); f && f->kind != ed::FormFieldKind::Text) {
+        r = f->kind == ed::FormFieldKind::CheckBox ? ed::SetFormCheckBox(editor_, *f, !f->checked)
+                                                   : ed::PickFormEntry(editor_, *f, f->entries.size() > 1 ? 1 : 0);
+      } else {
+        r = editor_.Replace(next->from, next->to, u"Tabbed in");
+      }
+    }
+    // Comments; their text by id.
+    else if (name == "comment") r = ed::AddComment(editor_, e.at, e.to, ToUtf16(value));
+    else if (name == "reply") r = ed::ReplyToComment(editor_, value, u"A reply from the torture test");
+    else if (name == "editcomment") r = ed::EditComment(editor_, value, u"An edited comment\nin two paragraphs");
+    else if (name == "delcomment") r = ed::DeleteComment(editor_, value);
+    else if (name == "resolve") r = ed::ResolveComment(editor_, arg(0), num(1) != 0);
+    // Footnotes and endnotes: "delnote=<f|e>:<id>".
+    else if (name == "footnote" || name == "endnote") r = ed::InsertNote(editor_, e.at, name == "endnote");
+    else if (name == "delnote") {
+      const uint32_t story = doc_->NoteStory(arg(0) == "e" ? fw::doc::StoryKind::Endnote : fw::doc::StoryKind::Footnote, arg(1));
+      if (story == fw::doc::kNone) return refuse("no such note");
+      r = ed::DeleteNote(editor_, story);
+    }
+    // Track Changes, and accepting or rejecting what it recorded.
+    else if (name == "track") r = editor_.SetTracking(value == "on");
+    else if (name == "review") r = editor_.ReviewChanges(e.at, e.to, value == "accept");
+    else if (name == "reviewall") r = editor_.ReviewAll(value == "accept");
+    // Shapes: inserted at the start of e.at's paragraph; changed by drawing index.
+    else if (name == "shape") {  // "shape=<kind>"
+      static const std::pair<const char*, ed::ShapeKind> kinds[] = {
+          {"textbox", ed::ShapeKind::TextBox}, {"rect", ed::ShapeKind::Rectangle},
+          {"roundrect", ed::ShapeKind::RoundedRectangle}, {"oval", ed::ShapeKind::Oval},
+          {"line", ed::ShapeKind::Line}, {"arrow", ed::ShapeKind::Arrow}, {"callout", ed::ShapeKind::Callout}};
+      auto k = std::find_if(std::begin(kinds), std::end(kinds), [&](const auto& p) { return value == p.first; });
+      if (k == std::end(kinds)) return refuse("unknown shape");
+      r = shapes_.Insert(e.at.para, k->second, fw::Emu(914400), fw::Emu(914400), fw::Emu(1828800), fw::Emu(914400));
+    } else if (name.starts_with("shape")) {  // "shape<change>=<drawing>[:...]"
+      const uint32_t d = static_cast<uint32_t>(num(0));
+      if (d >= doc_->Drawings().size()) return refuse("no such drawing");
+      const ed::ShapeInfo info = shapes_.Info(d);
+      if (!info.shape) return refuse("not a shape: " + ToUtf8(info.why));
+      auto rgb = [&](size_t i) -> std::optional<uint32_t> {
+        if (arg(i) == "none") return std::nullopt;
+        return static_cast<uint32_t>(std::strtoul(arg(i).c_str(), nullptr, 16));
+      };
+      if (name == "shapesize") {
+        const int64_t pct = num(1, 50);
+        r = shapes_.Resize(d, fw::Emu(std::max<int64_t>(1, info.cx.Value() * pct / 100)),
+                           fw::Emu(std::max<int64_t>(1, info.cy.Value() * pct / 100)));
+      } else if (name == "shaperotate") {
+        r = shapes_.Rotate(d, num(1));
+      } else if (name == "shapemove") {
+        r = shapes_.Move(d, fw::Emu(num(1) * 12700LL), fw::Emu(num(2) * 12700LL));
+      } else if (name == "shapewrap") {
+        static const std::pair<const char*, ed::Wrap> wraps[] = {
+            {"inline", ed::Wrap::Inline},   {"square", ed::Wrap::Square}, {"tight", ed::Wrap::Tight},
+            {"topbottom", ed::Wrap::TopAndBottom}, {"behind", ed::Wrap::Behind}, {"front", ed::Wrap::InFront}};
+        auto w = std::find_if(std::begin(wraps), std::end(wraps), [&](const auto& p) { return arg(1) == p.first; });
+        if (w == std::end(wraps)) return refuse("unknown wrap");
+        r = shapes_.SetWrap(d, w->second, fw::Emu(914400), fw::Emu(914400));
+      } else if (name == "shapefill") {
+        r = shapes_.SetFill(d, rgb(1));
+      } else if (name == "shapeline") {
+        r = shapes_.SetOutline(d, rgb(1), num(2));
+      } else if (name == "shapetext") {
+        r = shapes_.AddText(d);
+      } else {
+        return refuse("unknown shape change");
+      }
+    }
+    // Watermarks: "watermark=text" (DRAFT), "=<other text>", "=picture" or "=none".
+    else if (name == "watermark") {
+      if (value == "none") {
+        r = ed::RemoveWatermark(editor_);
+      } else if (value == "picture") {
+        r = ed::SetPictureWatermark(editor_, RedPng());
+      } else {
+        ed::TextWatermark mark;
+        if (value != "text" && !value.empty()) mark.text = ToUtf16(value), mark.diagonal = false;
+        r = ed::SetTextWatermark(editor_, mark);
+      }
+    } else {
+      return std::nullopt;
+    }
+    if (!r) return refuse(ToUtf8(r.message));
+    return Applied::Done;
+  }
+#endif
+
   // Word's highlight color nearest to a color, as DocFormat picks it.
   static std::string NearestHighlight(uint32_t rgb) {
     static const std::pair<const char*, uint32_t> names[] = {
@@ -875,6 +1053,9 @@ class EditorTarget : public EditTarget {
   fw::doc::edit::Editor editor_;
 #if FW_TORTURE_D3
   fw::doc::edit::Pictures pictures_{editor_};
+#endif
+#if FW_TORTURE_D4
+  fw::doc::edit::Shapes shapes_{editor_};
 #endif
   uint32_t grouping_ = 0;  // edits left in an open group
 };
@@ -982,12 +1163,32 @@ class Generator {
       e.kind = EditKind::Undo;
       return e;
     }
+#if FW_TORTURE_D4
+    // A fifth of the rounds edit with Track Changes on from the start.
+    if (!started_) {
+      started_ = true;
+      if (!skip_.contains("d4") && rng_.Percent(20)) {
+        e.kind = EditKind::Command;
+        e.at = e.to = RandomPos(RandomPara());
+        e.format = "track=on";
+        e.target = "Track Changes";
+        return e;
+      }
+    }
+    // In a protected form most edits are refused: fill it in often.
+    if (!skip_.contains("d4") && fw::doc::edit::FormsProtected(doc_) && rng_.Percent(40)) {
+      e.kind = EditKind::Command;
+      e.at = e.to = RandomPos(RandomPara());
+      Forms(e);
+      return e;
+    }
+#endif
     uint32_t roll = rng_.Below(100);
-    // FW_TORTURE_SKIP=command,paint (save, format, command, d3, paint) types instead, to look past
-    // an open finding; "headers" leaves D3's header and footer changes out.
+    // FW_TORTURE_SKIP=command,paint (save, format, command, d3, d4, paint) types instead, to look
+    // past an open finding; "headers" leaves D3's header and footer changes out.
     auto skipped = [&](const char* what, uint32_t lo, uint32_t hi) { return roll >= lo && roll < hi && skip_.contains(what); };
-    if (skipped("save", 9, 11) || skipped("format", 77, 82) || skipped("command", 82, 90) || skipped("d3", 90, 97) ||
-        skipped("paint", 97, 100))
+    if (skipped("save", 9, 11) || skipped("format", 77, 81) || skipped("command", 81, 87) || skipped("d3", 87, 93) ||
+        skipped("d4", 93, 98) || skipped("paint", 98, 100))
       roll = 40;
     if (roll < 4 && applied) {
       e.kind = EditKind::Undo;
@@ -1025,12 +1226,17 @@ class Generator {
       e.at = RandomPos(RandomPara());
     } else if (roll < 77) {
       Join(e);
-    } else if (roll < 82) {
+    } else if (roll < 81) {
       Formatting(e);
-    } else if (roll < 90) {
+    } else if (roll < 87) {
       Command(e);
-#if FW_TORTURE_D3
-    } else if (roll < 97) {
+#if FW_TORTURE_D4
+    } else if (roll < 93) {
+      D3(e);
+    } else if (roll < 98) {
+      D4(e);
+#elif FW_TORTURE_D3
+    } else if (roll < 98) {
       D3(e);
 #endif
     } else {
@@ -1447,6 +1653,178 @@ class Generator {
   }
 #endif
 
+#if FW_TORTURE_D4
+  void D4(Edit& e) {
+    e.kind = EditKind::Command;
+    e.at = RandomPos(RandomPara());
+    e.to = e.at;
+    const uint32_t roll = rng_.Below(100);
+    if (roll < 30) Forms(e);
+    else if (roll < 47) Comments(e);
+    else if (roll < 59) Notes(e);
+    else if (roll < 77) Review(e);
+    else if (roll < 93) Shape(e);
+    else Watermark(e);
+  }
+
+  // Content controls and legacy form fields filled in as their kind is (text typed over, boxes
+  // ticked, items and dates picked), a new control, or Tab to the next one.
+  void Forms(Edit& e) {
+    namespace ed = fw::doc::edit;
+    std::vector<ed::ContentControl> controls;
+    std::vector<ed::FormField> fields;
+    for (uint32_t s : stories_) {
+      for (ed::ContentControl& c : ed::ContentControls(doc_, s))
+        if (Known(c.content.from) && Known(c.content.to)) controls.push_back(std::move(c));
+      for (ed::FormField& f : ed::FormFields(doc_, s))
+        if (Known(f.start)) fields.push_back(std::move(f));
+    }
+    const uint32_t roll = rng_.Below(100);
+    if (roll < 20 || (controls.empty() && fields.empty())) {
+      static const std::vector<std::string> kinds = {"richtext", "plaintext", "checkbox", "dropdown:Red:Green:Blue",
+                                                     "combobox:One:Two",   "date",      "dropdown"};
+      e.format = "control=" + rng_.Pick(kinds);
+      e.target = "new content control";
+      return;
+    }
+    if (roll < 30) {
+      e.format = rng_.Percent(75) ? "tabfill" : "tabfill=back";
+      e.target = "the next fill-in";
+      return;
+    }
+    static const std::vector<std::string> texts = {"Filled in", "Ann Lee", "x", "", "Caf\xC3\xA9 \xE2\x9C\x93"};
+    if (!fields.empty() && (controls.empty() || rng_.Percent(35))) {
+      const ed::FormField& f = rng_.Pick(fields);
+      e.at = e.to = f.hasResult ? f.result.from : f.start;
+      e.target = "form field " + ToUtf8(f.name);
+      if (f.kind == ed::FormFieldKind::CheckBox) {
+        e.format = f.checked ? "formcheck=0" : "formcheck=1";
+      } else if (f.kind == ed::FormFieldKind::DropDown) {
+        e.format = "formentry=" + std::to_string(rng_.Below(static_cast<uint32_t>(f.entries.size()) + 1));
+      } else if (f.hasResult && Known(f.result.to)) {  // typed over, as in a protected form
+        e.kind = EditKind::Replace;
+        e.to = f.result.to;
+        e.text = ToUtf16(rng_.Pick(texts));
+        if (e.text.empty()) e.kind = EditKind::Delete;
+      } else {
+        e.format = "tabfill";
+      }
+      return;
+    }
+    const ed::ContentControl& c = rng_.Pick(controls);
+    e.at = e.to = rng_.Percent(80) ? c.content.from : c.content.to;
+    static const char* kinds[] = {"rich text", "plain text", "check box", "drop-down list", "combo box", "date", "picture", "other"};
+    e.target = std::string(kinds[static_cast<int>(c.kind)]) + " content control";
+    switch (c.kind) {
+      case ed::ControlKind::CheckBox: e.format = c.checked ? "check=0" : "check=1"; break;
+      case ed::ControlKind::DropDown:
+      case ed::ControlKind::ComboBox:
+        e.format = rng_.Percent(80) ? "pickitem=" + std::to_string(rng_.Below(static_cast<uint32_t>(c.items.size()) + 2)) : "placeholder";
+        break;
+      case ed::ControlKind::Date:
+        e.format = rng_.Percent(80) ? "pickdate=" + std::to_string(rng_.Between(1999, 2030)) + ":" + std::to_string(rng_.Between(1, 12)) +
+                                          ":" + std::to_string(rng_.Between(1, 31))
+                                    : "placeholder";
+        break;
+      default:
+        e.format = rng_.Percent(75) ? "fill=" + rng_.Pick(texts) : "placeholder";
+        break;
+    }
+  }
+
+  // A new comment on a range or at a point, or a reply to one, its text changed, it resolved or deleted.
+  void Comments(Edit& e) {
+    std::vector<CommentInfo> comments = doc_.Comments();
+    if (comments.empty() || rng_.Percent(40)) {
+      e.to = rng_.Percent(15) ? e.at : Later(e.at, rng_.Percent(75) ? 0 : 1);
+      static const std::vector<std::string> texts = {"A comment from the torture test", "Two paragraphs\nin one comment",
+                                                     "Caf\xC3\xA9 \xE2\x9C\x93"};
+      e.format = "comment=" + rng_.Pick(texts);
+      e.target = "new comment";
+      return;
+    }
+    const std::string id(rng_.Pick(comments).id);
+    const uint32_t roll = rng_.Below(100);
+    if (roll < 30) e.format = "reply=" + id;
+    else if (roll < 55) e.format = "editcomment=" + id;
+    else if (roll < 80) e.format = "delcomment=" + id;
+    else e.format = "resolve=" + id + ":" + (rng_.Percent(70) ? "1" : "0");
+    e.target = "comment " + id;
+  }
+
+  // A footnote or endnote at e.at (refused outside the main text), or one deleted.
+  void Notes(Edit& e) {
+    std::vector<std::string> notes;
+    for (const Story& s : doc_.Stories())
+      if ((s.kind == StoryKind::Footnote || s.kind == StoryKind::Endnote) && !s.id.empty())
+        notes.push_back(std::string(s.kind == StoryKind::Endnote ? "e:" : "f:") + std::string(s.id));
+    if (notes.empty() || rng_.Percent(60)) {
+      e.format = rng_.Percent(70) ? "footnote" : "endnote";
+      e.target = "new note";
+      return;
+    }
+    const std::string note = rng_.Pick(notes);
+    e.format = "delnote=" + note;
+    e.target = "note " + note;
+  }
+
+  // Track Changes on or off; the changes in a range, or all of them, accepted or rejected.
+  void Review(Edit& e) {
+    const uint32_t roll = rng_.Below(100);
+    if (roll < 40) {
+      e.format = rng_.Percent(75) ? "track=on" : "track=off";
+      e.target = "Track Changes";
+      return;
+    }
+    if (roll < 85) {
+      std::vector<Span> changes;
+      for (Span& s : Spans())
+        if (s.what == "tracked change") changes.push_back(std::move(s));
+      if (!changes.empty() && rng_.Percent(80)) {
+        const Span& s = rng_.Pick(changes);
+        e.at = s.a;
+        e.to = rng_.Percent(70) ? s.b : s.a;
+        e.target = "tracked change";
+      } else {
+        e.to = Later(e.at, 1);
+      }
+      e.format = rng_.Percent(50) ? "review=accept" : "review=reject";
+      return;
+    }
+    e.format = rng_.Percent(50) ? "reviewall=accept" : "reviewall=reject";
+    e.target = "every tracked change";
+  }
+
+  // A new shape at the start of a paragraph, or a drawing resized, turned, moved, wrapped,
+  // filled, outlined or given text (refused for a drawing that isn't a shape).
+  void Shape(Edit& e) {
+    const uint32_t drawings = static_cast<uint32_t>(doc_.Drawings().size());
+    if (!drawings || rng_.Percent(35)) {
+      static const std::vector<std::string> kinds = {"textbox", "rect", "roundrect", "oval", "line", "arrow", "callout"};
+      e.at.offset = 0;
+      e.to = e.at;
+      e.format = "shape=" + rng_.Pick(kinds);
+      e.target = "new shape";
+      return;
+    }
+    const std::string d = std::to_string(rng_.Below(drawings));
+    static const std::vector<std::string> changes = {
+        "shapesize=:50", "shapesize=:150", "shaperotate=:30", "shaperotate=:90", "shapemove=:72:144", "shapewrap=:square",
+        "shapewrap=:tight", "shapewrap=:topbottom", "shapewrap=:behind", "shapewrap=:front", "shapewrap=:inline",
+        "shapefill=:4472C4", "shapefill=:none", "shapeline=:C00000:2", "shapeline=:none", "shapetext="};
+    std::string change = rng_.Pick(changes);
+    change.insert(change.find('=') + 1, d);
+    e.format = change;
+    e.target = "drawing " + d;
+  }
+
+  void Watermark(Edit& e) {
+    static const std::vector<std::string> marks = {"watermark=text", "watermark=CONFIDENTIAL", "watermark=picture", "watermark=none"};
+    e.format = rng_.Pick(marks);
+    e.target = "every header";
+  }
+#endif
+
   // The format painter: from a character anywhere editable to a range, half the time whole paragraphs.
   void Paint(Edit& e) {
     e.kind = EditKind::Paint;
@@ -1557,6 +1935,7 @@ class Generator {
   Rng& rng_;
   std::vector<Edit> pending_;  // edits that must come next
   std::set<std::string> skip_;  // FW_TORTURE_SKIP
+  bool started_ = false;        // the round's first edit is made
   std::vector<uint32_t> stories_;
   std::unordered_map<uint32_t, std::vector<uint32_t>> paras_;               // story -> paragraphs
   std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> order_;       // paragraph -> story, index
@@ -1671,6 +2050,42 @@ std::vector<std::string> ParaLines(const Document& doc) {
   return lines;
 }
 
+#if FW_TORTURE_D4
+// What's wrong with the document saved as RTF and as text (Export.h), or nothing: the RTF is
+// ASCII (other characters as \uN), one group from {\rtf1 to its last }, every group closed;
+// the UTF-8 and UTF-16 text files start with their byte order marks and say the same.
+std::string ExportProblem(const Document& doc) {
+  const std::string rtf = fw::doc::edit::RtfFile(doc);
+  if (!rtf.starts_with("{\\rtf1")) return "the RTF doesn't start with {\\rtf1";
+  int depth = 0;
+  for (size_t i = 0; i < rtf.size(); ++i) {
+    const unsigned char c = static_cast<unsigned char>(rtf[i]);
+    if (c >= 0x80) return "the RTF has a byte above 127 at " + std::to_string(i);
+    if (depth == 0 && i > 0 && c != '\r' && c != '\n' && c != ' ' && c != 0)
+      return "the RTF goes on after its last } (byte " + std::to_string(i) + ")";
+    if (c == '\\') ++i;  // an escaped character, or a control word's first letter
+    else if (c == '{') ++depth;
+    else if (c == '}' && --depth < 0) return "the RTF closes a group it didn't open, at byte " + std::to_string(i);
+  }
+  if (depth != 0) return "the RTF leaves " + std::to_string(depth) + " groups open";
+  const std::string utf8 = fw::doc::edit::TextFile(doc, fw::doc::edit::TextEncoding::Utf8);
+  const std::string utf16 = fw::doc::edit::TextFile(doc, fw::doc::edit::TextEncoding::Utf16);
+  if (!utf8.starts_with("\xEF\xBB\xBF")) return "the UTF-8 text file has no byte order mark";
+  if (!utf16.starts_with("\xFF\xFE") || utf16.size() % 2 != 0) return "the UTF-16 text file has no byte order mark, or an odd length";
+  std::u16string wide;
+  for (size_t i = 2; i + 1 < utf16.size(); i += 2)
+    wide += static_cast<char16_t>(static_cast<unsigned char>(utf16[i]) | static_cast<unsigned char>(utf16[i + 1]) << 8);
+  std::string again;
+  fw::doc::AppendUtf8(again, wide);
+  if (again != utf8.substr(3)) {
+    size_t at = 0;
+    while (at < again.size() && at < utf8.size() - 3 && again[at] == utf8[at + 3]) ++at;
+    return "the UTF-8 and UTF-16 text files differ at byte " + std::to_string(at) + " of the text";
+  }
+  return {};
+}
+#endif
+
 // What a document says, for comparing the edited model with the saved file read back: each story's
 // paragraphs with their style, text, and where the formatting changes (so run splits don't matter).
 std::string Digest(const Document& doc) {
@@ -1686,9 +2101,15 @@ std::string Digest(const Document& doc) {
     for (uint32_t f : section.footers)
       if (f < shown.size()) shown[f] = true;
   }
+  // A comment counts while the text refers to it: one added and undone keeps a story in the model
+  // (D4), which saving leaves out.
+  std::vector<bool> referred(doc.Stories().size());
+  for (const CommentInfo& c : doc.Comments())
+    if (c.story < referred.size() && (c.reference.para != kNone || c.start.para != kNone)) referred[c.story] = true;
   for (uint32_t s = 0; s < live.size(); ++s) {
     const StoryKind kind = doc.Stories()[s].kind;
-    live[s] = kind != StoryKind::TextBox && ((kind != StoryKind::Header && kind != StoryKind::Footer) || shown[s]);
+    live[s] = kind != StoryKind::TextBox && ((kind != StoryKind::Header && kind != StoryKind::Footer) || shown[s]) &&
+              (kind != StoryKind::Comment || referred[s]);
   }
   for (bool grew = true; grew;) {
     grew = false;
@@ -1707,6 +2128,9 @@ std::string Digest(const Document& doc) {
   uint32_t textBoxes = 0;
   for (uint32_t s = 0; s < doc.Stories().size(); ++s) {
     if (!live[s]) continue;
+    // A note or comment added and undone (D4) leaves its story in the model without paragraphs;
+    // saving leaves it out.
+    if (s != doc.MainStory() && doc.StoryParagraphs(s).empty()) continue;
     const Story& story = doc.Stories()[s];
     // Named so that the same story sorts to the same place on both sides, whatever its text: text
     // boxes by their order, notes and comments by id, headers and footers by their part.
@@ -1886,6 +2310,13 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
                  false;
       }
     }
+#if FW_TORTURE_D4
+    // Save as RTF and as plain text, from the edited model.
+    std::string exported;
+    auto exportIt = [&] { exported = ExportProblem(target->Doc()); };
+    if (DWORD crash = Guarded(exportIt)) return fail("crash", when + CrashText(crash) + " saving as RTF or text"), false;
+    if (!exported.empty()) return fail("export", when + exported), false;
+#endif
     std::unique_ptr<Document> reread;
     auto reopen = [&] { reread = docx::Read(std::move(again), st); };
     if (DWORD crash = Guarded(reopen)) return fail("crash", when + CrashText(crash) + " reading the saved file"), false;
@@ -1974,11 +2405,20 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     bool refusalChanged = false;
     std::string refusalWhat;
     const size_t storiesBefore = target->Doc().Stories().size();
+    // Deleting a note's reference deletes the note (D4): another story's paragraphs go, and the
+    // paragraphs no longer line up by index, so such an edit isn't checked for locality.
+    auto others = [&](uint32_t story) {
+      size_t n = 0;
+      for (uint32_t p = 0; p < target->Doc().Paragraphs().size(); ++p) n += target->Doc().Para(p).story != story;
+      return n;
+    };
     auto apply = [&] {
       if (compareState) stateBefore = target->State();
       if (readAll) linesBefore = ParaLines(target->Doc());
+      const uint32_t own = locality && e.at.para < target->Doc().Paragraphs().size() ? target->Doc().Para(e.at.para).story : kNone;
+      const size_t othersBefore = own == kNone ? 0 : others(own);
       applied = target->Apply(e, why);
-      if (locality && applied == Applied::Done) linesAfter = ParaLines(target->Doc());
+      if (locality && applied == Applied::Done && (own == kNone || others(own) == othersBefore)) linesAfter = ParaLines(target->Doc());
       if (refusable && applied == Applied::Refused) {
         const std::string stateAfter = compareState ? target->State() : std::string();
         if (stateAfter != stateBefore) {
@@ -2010,6 +2450,10 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     }
     if (applied == Applied::Refused) {
       ++r.refused;
+      if (why.starts_with("wrong: ")) {  // the model contradicts itself (D4's Tab in a form)
+        fail("wrong", "\"" + torture::FormatEdit(e) + "\": " + why.substr(7));
+        break;
+      }
       if (refusalChanged) {
         fail("refused", "\"" + torture::FormatEdit(e) + "\" was refused (" + why + ") but changed the document: " + refusalWhat);
         break;

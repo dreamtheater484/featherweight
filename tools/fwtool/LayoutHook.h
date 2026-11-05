@@ -4,11 +4,19 @@
 // and `fwtool bench` call LayOutDocument for every document; `fwtool compare --dumps` measures
 // layout dumps from a folder instead.
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "core/LayoutDump.h"
 #include "core/OpenTimings.h"
+
+namespace fw::doc {
+class Document;
+namespace layout {
+class Layout;
+}
+}  // namespace fw::doc
 
 namespace fwtool {
 
@@ -21,6 +29,10 @@ bool HaveLayout();
 // line drawn (docs/layout-dump.md). Returns false with a plain message in `error` if it can't.
 bool LayOutDocument(const std::filesystem::path& document, fw::LayoutDump* dump, fw::OpenTimings* timings,
                     std::string& error);
+
+// The same, handing the model and its laid-out pages to `use` (fwtool pdf-check).
+bool WithLayout(const std::filesystem::path& document, std::string& error,
+                const std::function<void(const fw::doc::Document&, const fw::doc::layout::Layout&)>& use);
 
 // fwtool dump --layout: prints each page's lines, or with `out`, writes <out>/<name>.layout.json.
 void DumpLayout(const std::filesystem::path& document, const std::filesystem::path& out);

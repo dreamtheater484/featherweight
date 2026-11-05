@@ -96,11 +96,27 @@ std::optional<TextPos> Layout::HitTest(size_t page, float x, float y, HitStories
   Engine& e = impl_->engine;
   if (page >= e.ShownCount()) return std::nullopt;
   const Page& p = e.Shown(page);
+  const auto& doc = e.Doc();
+  // A point inside a text box (the topmost drawing there, not behind the text): its own lines.
+  uint32_t box = kNone;
+  for (auto it = p.drawings.rbegin(); it != p.drawings.rend(); ++it) {
+    const Rect& r = it->rect;
+    if (x < r.left || x >= r.right || y < r.top || y >= r.bottom) continue;
+    if (!it->behindText && it->drawing < doc.Drawings().size() && !doc.Drawings()[it->drawing].textBoxes.empty())
+      box = it->drawing;
+    break;
+  }
+  auto inBox = [&](const LineBox& lb) {
+    if (lb.story != LineStory::TextBox || lb.para >= doc.Paragraphs().size()) return false;
+    return doc.Stories()[doc.Para(lb.para).story].drawing == box;
+  };
+  if (box != kNone && std::none_of(p.lines.begin(), p.lines.end(), inBox)) box = kNone;
   const LineBox* best = nullptr;
   float bestDistance = 1e30f;
   float bestX = x;
   for (const LineBox& lb : p.lines) {
     if (lb.para == kNone) continue;
+    if (box != kNone && !inBox(lb)) continue;
     const bool hf = lb.story == LineStory::Header || lb.story == LineStory::Footer;
     if ((which == HitStories::Body && hf) || (which == HitStories::HeaderFooter && !hf)) continue;
     const draw::Point at = InFrame(lb, x, y);
@@ -266,7 +282,7 @@ std::optional<TextPos> Layout::LineStep(TextPos pos, int step, float x) {
   Engine& e = impl_->engine;
   const auto at = FindLine(e, pos);
   if (!at || step == 0) return std::nullopt;
-  const Document& doc = e.Doc();
+  const auto& doc = e.Doc();
   const uint32_t story = doc.Para(pos.para).story;
   const bool main = story == doc.MainStory();
   size_t page = at->first;
@@ -424,13 +440,17 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
   const Engine& e = impl_->engine;
   if (page >= e.ShownCount()) return;
   const Page& p = e.Shown(page);
-  // Formatting marks: each paragraph's layout text, built once for the page.
+  // PDF export keeps the text behind the glyphs, so it can be copied and searched.
+  const bool withText = painter.WantsText();
+  // Formatting marks and PDF text: each paragraph's layout text, built once for the page (for the
+  // text, with the page's PAGE and NUMPAGES as it was laid out with them).
+  const PageFields fields = withText ? e.ShownFields(page) : PageFields();
   std::unordered_map<uint32_t, std::unique_ptr<ParaText>> texts;
   auto textOf = [&](uint32_t para) -> const ParaText& {
     std::unique_ptr<ParaText>& t = texts[para];
     if (!t) {
       t = std::make_unique<ParaText>();
-      impl_->engine.BuildText(para, PageFields(), *t, false, false);
+      impl_->engine.BuildText(para, fields, *t, false, false);
     }
     return *t;
   };
@@ -454,18 +474,34 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
       uint32_t color = rp ? rp->color : 0;
       if (!g.glyphs.empty()) {
         const draw::Point origin{lb.x + g.OriginX(), lb.baseline - g.rise};
+        draw::GlyphRun run = g.Run();
+        // The text a reader finds behind the glyphs: a hyphen at the break, a tab for a leader,
+        // and a non-breaking hyphen as the hyphen it looks like (as Word exports them).
+        std::u16string shown;
+        if (withText && g.hyphen) {
+          shown = u"-";
+        } else if (withText && g.leader) {
+          shown = u"\t";
+        } else if (withText && lb.para != kNone && g.textEnd > g.textStart) {
+          const ParaText& t = textOf(lb.para);
+          if (g.textEnd <= t.text.size())
+            for (uint32_t i = g.textStart; i < g.textEnd; ++i) shown += t.text[i] == 0x2011 ? u'-' : static_cast<char16_t>(t.text[i]);
+        }
+        if (!shown.empty()) {
+          run.text = shown.data();
+          run.textLength = static_cast<uint32_t>(shown.size());
+        }
         if (g.scale != 1 && g.scale > 0) {
           // Scaled characters (w:w): the glyphs drawn through a horizontal scale about the origin.
           std::vector<float> advances(g.advances);
           for (float& a : advances) a /= g.scale;
-          draw::GlyphRun run = g.Run();
           run.advances = advances.data();
           painter.Save();
           painter.Transform({g.scale, 0, 0, 1, origin.x * (1 - g.scale), 0});
           painter.DrawGlyphs(origin, run, draw::Brush::Solid(ColorOf(color)));
           painter.Restore();
         } else {
-          painter.DrawGlyphs(origin, g.Run(), draw::Brush::Solid(ColorOf(color)));
+          painter.DrawGlyphs(origin, run, draw::Brush::Solid(ColorOf(color)));
         }
       }
       if (!rp || g.hyphen || g.leader) continue;

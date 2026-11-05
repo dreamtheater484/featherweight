@@ -248,6 +248,25 @@ const std::vector<std::string_view>& DefaultUnderstood() {
   return v;
 }
 
+std::vector<pugi::xml_node> TextBoxesIn(pugi::xml_node from, bool fallbacks) {
+  // Depth first, in document order: not into a text box's own content (its text boxes belong to
+  // its story) and, unless asked, not into fallbacks (the chosen branch is what's shown).
+  std::vector<pugi::xml_node> out, work;
+  for (auto c = from.last_child(); c; c = c.previous_sibling()) work.push_back(c);
+  while (!work.empty()) {
+    pugi::xml_node n = work.back();
+    work.pop_back();
+    if (n.type() != pugi::node_element) continue;
+    if (!fallbacks && pkg::IsElement(n, pkg::mce::kNamespace, "Fallback")) continue;
+    if (pkg::LocalNameOf(n) == "txbxContent" && NsFromUri(pkg::NamespaceOf(n)) == Ns::W) {
+      out.push_back(n);
+      continue;
+    }
+    for (auto c = n.last_child(); c; c = c.previous_sibling()) work.push_back(c);
+  }
+  return out;
+}
+
 class Reader {
  public:
   static std::unique_ptr<Document> Read(std::unique_ptr<pkg::Package> package, Status& status, const ReadOptions& options);
@@ -272,6 +291,7 @@ class Reader {
     bool object = false;       // Known: a drawing, picture or equation, whose content is kept as it is
     bool chosen = false;       // Alternate: a branch was chosen
     bool pairEnd = false;      // Skip: the kept element is one end of a pair
+    uint32_t drawingsAt = 0, boxesAt = 0;  // Alternate: drawings and text boxes before the block
     bool sawKnown = false, onlySpace = true;  // Known: as CaptureChildren tracks them
     bool kept = false;         // Known and Text: it or a child has content in the store
     int recorder = -1;         // the recorder whose root this frame's element is
@@ -308,7 +328,8 @@ class Reader {
   void InternProperties(const Frame& f);
   int StartRecorder(const pkg::XmlPull& pull);
   void PushSkip(int recorder = -1, bool pairEnd = false);
-  void Unknown(size_t at, std::string xml, bool pairEnd);
+  void Unknown(size_t at, std::string xml, bool pairEnd, uint32_t tag = 0);
+  uint32_t KeepDrawing(const Frame& block, const std::string& xml);
   void SawKnown(size_t at, pkg::NodeId id);
   void TextToFragment(size_t at);
   bool ChoiceUnderstood(const pkg::XmlPull& pull) const;
@@ -329,6 +350,7 @@ class Reader {
   pkg::mce::Understood understood_;
   std::unordered_set<std::string> pairSites_;  // "{ns}local" of elements that open or close a pair
   pkg::NodeId nextNode_ = 1;
+  uint32_t nextTag_ = 0;  // pkg::Fragment::tag of kept mc:AlternateContent drawings
   uint32_t curPart_ = kNone, curStory_ = kNone, curPara_ = kNone;
   bool checkMust_ = false;  // mc:MustUnderstand is checked while a part is read, not its text boxes again
   std::vector<Frame> frames_;
@@ -446,6 +468,8 @@ void Reader::OnStart(const pkg::XmlPull& pull) {
     ac.kind = Frame::Alternate;
     ac.owner = owner;
     ac.recorder = recorder;
+    ac.drawingsAt = static_cast<uint32_t>(doc_.drawings_.size());
+    ac.boxesAt = static_cast<uint32_t>(textBoxes_.size());
     return;
   }
   ElemId prevLast = frames_[owner].last;
@@ -491,8 +515,13 @@ void Reader::OnEnd(const pkg::XmlPull& pull) {
   Frame& f = frames_[at];
   switch (f.kind) {
     case Frame::Skip:
-    case Frame::Alternate:
       if (recorded) Unknown(at - 1, std::move(xml), f.pairEnd);
+      break;
+    case Frame::Alternate:
+      if (recorded) {
+        const uint32_t tag = KeepDrawing(f, xml);
+        Unknown(at - 1, std::move(xml), f.pairEnd, tag);
+      }
       break;
     case Frame::Branch: break;
     case Frame::Text:
@@ -575,7 +604,7 @@ void Reader::PushSkip(int recorder, bool pairEnd) {
 
 // Content the model doesn't know, in the element of frame `at`: attached to its nearest known
 // neighbor, as RoundTripStore::CaptureChildren does.
-void Reader::Unknown(size_t at, std::string xml, bool pairEnd) {
+void Reader::Unknown(size_t at, std::string xml, bool pairEnd, uint32_t tag) {
   Frame& p = frames_[at];
   if (p.object) p.objectXml += xml;
   if (!p.capture) return;
@@ -583,6 +612,7 @@ void Reader::Unknown(size_t at, std::string xml, bool pairEnd) {
   pkg::Fragment frag;
   frag.xml = std::move(xml);
   frag.pairEnd = pairEnd;
+  frag.tag = tag;
   if (!p.sawKnown) {
     p.pending.push_back(std::move(frag));
   } else if (p.prevNode != pkg::kNoNode) {
@@ -909,6 +939,40 @@ void ReadDrawingFrame(pugi::xml_node frame, Drawing& d) {
   }
 }
 
+void ReadVmlFrame(pugi::xml_node content, Drawing& d) {
+  pugi::xml_node shape;
+  for (auto c : content.children())
+    if (c.type() == pugi::node_element && pkg::NamespaceOf(c) == kV && pkg::LocalNameOf(c) != "shapetype") {
+      shape = c;
+      break;
+    }
+  if (!shape) return;
+  std::string_view style = shape.attribute("style").value();
+  d.anchored = CssValue(style, "position") == "absolute";
+  d.wrap = d.anchored ? WrapType::None : WrapType::Inline;
+  d.cx = CssLength(CssValue(style, "width")).value_or(Emu(0));
+  d.cy = CssLength(CssValue(style, "height")).value_or(Emu(0));
+  d.hOffset = CssLength(CssValue(style, "margin-left"));
+  d.vOffset = CssLength(CssValue(style, "margin-top"));
+  d.hAlign = CssValue(style, "mso-position-horizontal");
+  d.vAlign = CssValue(style, "mso-position-vertical");
+  d.hRelativeFrom = CssValue(style, "mso-position-horizontal-relative");
+  d.vRelativeFrom = CssValue(style, "mso-position-vertical-relative");
+  d.relativeHeight = ParseInt(CssValue(style, "z-index")).value_or(0);
+  d.behindDoc = d.relativeHeight < 0;
+  d.hidden = CssValue(style, "visibility") == "hidden";
+  d.name = shape.attribute("id").value();
+  d.descr = shape.attribute("alt").value();
+  for (auto c : shape.children()) {
+    if (!pkg::IsElement(c, kW10, "wrap")) continue;
+    std::string_view type = c.attribute("type").value();
+    d.wrap = type == "square" ? WrapType::Square : type == "tight" ? WrapType::Tight
+             : type == "through" ? WrapType::Through : type == "topAndBottom" ? WrapType::TopAndBottom
+             : type == "none" ? WrapType::None : d.wrap;
+    d.wrapText = c.attribute("side").value();
+  }
+}
+
 void Reader::ReadDrawing(Frame& f) {
   ElemId elem = f.elem;
   Drawing d;
@@ -930,38 +994,7 @@ void Reader::ReadDrawing(Frame& f) {
     if (frame) ReadDrawingFrame(frame, d);
   } else if (local == "pict" || local == "object") {
     d.kind = local == "pict" ? DrawingKind::Vml : DrawingKind::Object;
-    pugi::xml_node shape;
-    for (auto c : obj.children())
-      if (c.type() == pugi::node_element && pkg::NamespaceOf(c) == kV && pkg::LocalNameOf(c) != "shapetype") {
-        shape = c;
-        break;
-      }
-    if (shape) {
-      std::string_view style = shape.attribute("style").value();
-      d.anchored = CssValue(style, "position") == "absolute";
-      d.wrap = d.anchored ? WrapType::None : WrapType::Inline;
-      d.cx = CssLength(CssValue(style, "width")).value_or(Emu(0));
-      d.cy = CssLength(CssValue(style, "height")).value_or(Emu(0));
-      d.hOffset = CssLength(CssValue(style, "margin-left"));
-      d.vOffset = CssLength(CssValue(style, "margin-top"));
-      d.hAlign = CssValue(style, "mso-position-horizontal");
-      d.vAlign = CssValue(style, "mso-position-vertical");
-      d.hRelativeFrom = CssValue(style, "mso-position-horizontal-relative");
-      d.vRelativeFrom = CssValue(style, "mso-position-vertical-relative");
-      d.relativeHeight = ParseInt(CssValue(style, "z-index")).value_or(0);
-      d.behindDoc = d.relativeHeight < 0;
-      d.hidden = CssValue(style, "visibility") == "hidden";
-      d.name = shape.attribute("id").value();
-      d.descr = shape.attribute("alt").value();
-      for (auto c : shape.children()) {
-        if (!pkg::IsElement(c, kW10, "wrap")) continue;
-        std::string_view type = c.attribute("type").value();
-        d.wrap = type == "square" ? WrapType::Square : type == "tight" ? WrapType::Tight
-                 : type == "through" ? WrapType::Through : type == "topAndBottom" ? WrapType::TopAndBottom
-                 : type == "none" ? WrapType::None : d.wrap;
-        d.wrapText = c.attribute("side").value();
-      }
-    }
+    if (obj) ReadVmlFrame(obj, d);
     if (local == "object") {
       Node n(&doc_.tree_, elem);
       if (auto w = n.Int(Name("dxaOrig")); w && d.cx.Value() == 0) d.cx = Emu(*w * 635);
@@ -973,34 +1006,56 @@ void Reader::ReadDrawing(Frame& f) {
     d.kind = DrawingKind::Equation;
   }
   auto index = static_cast<uint32_t>(doc_.drawings_.size());
-  if (local == "drawing" || local == "pict" || local == "object") FindTextBoxes(obj, index);
+  if (local == "drawing" || local == "pict" || local == "object") {
+    const size_t before = textBoxes_.size();
+    FindTextBoxes(obj, index);
+    // Kept in the store as the w:drawing's (w:pict's) content, with no other copy of the text:
+    // its text boxes are written from their stories (an mc:AlternateContent block: KeepDrawing).
+    const size_t found = textBoxes_.size() - before;
+    if (found > 0 && f.capture && obj && TextBoxesIn(obj, true).size() == found) d.boxesWritable = true;
+  }
   // Nothing of it is in the store when it's shown from a kept block or a text box: keep it here.
   if (!f.capture) d.keptXml = std::move(f.objectXml);
   doc_.drawings_.push_back(std::move(d));
 }
 
 void Reader::FindTextBoxes(pugi::xml_node from, uint32_t drawing) {
-  // Depth first, not into a text box's own content (its text boxes belong to its story) and not
-  // into fallbacks (the chosen branch is what's shown).
-  std::vector<pugi::xml_node> work;
-  for (auto c = from.last_child(); c; c = c.previous_sibling()) work.push_back(c);
-  while (!work.empty()) {
-    pugi::xml_node n = work.back();
-    work.pop_back();
-    if (n.type() != pugi::node_element) continue;
-    if (pkg::IsElement(n, pkg::mce::kNamespace, "Fallback")) continue;
-    if (pkg::LocalNameOf(n) == "txbxContent" && NsFromUri(pkg::NamespaceOf(n)) == Ns::W) {
-      textBoxes_.push_back({pkg::RoundTripStore::SerializeFragment(n), drawing});
-      continue;
-    }
-    for (auto c = n.last_child(); c; c = c.previous_sibling()) work.push_back(c);
+  for (pugi::xml_node n : TextBoxesIn(from)) textBoxes_.push_back({pkg::RoundTripStore::SerializeFragment(n), drawing});
+}
+
+// An mc:AlternateContent block kept in the store whose chosen branch showed exactly one drawing:
+// its fragment gets a tag the drawing keeps, so deleting or changing the drawing finds the block
+// (which checks the block holds nothing else). Its text boxes can be written back when every branch
+// has the same number of them, each branch being one element. The tag, or 0.
+uint32_t Reader::KeepDrawing(const Frame& block, const std::string& xml) {
+  if (doc_.drawings_.size() != block.drawingsAt + 1u) return 0;
+  Drawing& d = doc_.drawings_[block.drawingsAt];
+  d.kept = ++nextTag_;
+  size_t boxes = 0;
+  for (size_t i = block.boxesAt; i < textBoxes_.size(); ++i)
+    if (textBoxes_[i].drawing == block.drawingsAt) ++boxes;
+  if (boxes == 0) return d.kept;  // nothing to check: opening stays quick
+  pkg::XmlDom dom;
+  if (!dom.Parse(xml, doc_.package_->GetLimits()).Ok()) return d.kept;
+  const pugi::xml_node root = dom.Root();
+  size_t branches = 0;
+  bool same = pkg::IsElement(root, pkg::mce::kNamespace, "AlternateContent");
+  for (pugi::xml_node b = root.first_child(); b && same; b = b.next_sibling()) {
+    if (b.type() != pugi::node_element) continue;
+    size_t elements = 0;
+    for (pugi::xml_node c = b.first_child(); c; c = c.next_sibling()) elements += c.type() == pugi::node_element;
+    same = (pkg::IsElement(b, pkg::mce::kNamespace, "Choice") || pkg::IsElement(b, pkg::mce::kNamespace, "Fallback")) &&
+           elements == 1 && TextBoxesIn(b).size() == boxes && TextBoxesIn(b, true).size() == boxes;
+    ++branches;
   }
+  d.boxesWritable = same && branches > 0;
+  return d.kept;
 }
 
 void Reader::ReadTextBoxes() {
-  // Text-box stories are read for display. The drawing that holds them is kept as XML and written
-  // back as it was, so their elements stay out of the store (plan §6.3 "Editing": a text box edit
-  // regenerates the drawing, from D4).
+  // Text-box stories are read like any story, kept content and all. The drawing holding them is
+  // kept as XML; once a story is edited, the writer puts it in place of each copy of its text
+  // (Story::edits).
   const Schema& s = Schema::Get();
   ElemDefId def = s.Child(s.RootType(), Name("txbxContent"));
   bool checkMust = checkMust_;
@@ -1015,9 +1070,10 @@ void Reader::ReadTextBoxes() {
     if (e != Event::StartElement) continue;
     ElemId root = doc_.tree_.Add(def, kNoElem);
     E(root).flags |= kDetached;
+    E(root).node = nextNode_++;
     uint32_t savedPara = curPara_;
     curPara_ = kNone;
-    Stream(pull, root, false, true);  // our own serialization: it can't be damaged
+    Stream(pull, root, true, true);  // our own serialization: it can't be damaged
     curPara_ = savedPara;
     // Stream made the story; link it to its drawing.
     for (size_t k = doc_.stories_.size(); k-- > 0;) {

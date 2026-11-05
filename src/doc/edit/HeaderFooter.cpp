@@ -1,6 +1,7 @@
 #include "doc/edit/HeaderFooter.h"
 
 #include "doc/edit/Format.h"
+#include "doc/edit/Forms.h"
 #include "doc/edit/Inline.h"
 #include "doc/edit/Styles.h"
 #include "doc/edit/TreeEdit.h"
@@ -27,6 +28,10 @@ Result Fail(std::u16string why) {
 
 bool CanChange(const Editor& editor, uint32_t section, std::u16string& why) {
   if (!editor.CanEdit(&why)) return false;
+  if (FormsProtected(editor.Doc())) {
+    why = kFormsProtected;
+    return false;
+  }
   if (section >= editor.Doc().Sections().size()) {
     why = u"There's no such section.";
     return false;
@@ -77,6 +82,10 @@ uint32_t NewOwn(Editor& editor, uint32_t section, bool footer, HdrFtrType type, 
       te.SetAttr(te.Path(doc.Para(paras.front()).elem, {names::kPPr, kPStyle}), names::kVal, style);
   }
   te.Commit();
+  if (!te.Refused().empty()) {
+    why = te.Refused();
+    return kNone;
+  }
   return story;
 }
 
@@ -190,12 +199,9 @@ Result InsertPageNumber(Editor& editor, uint32_t section, bool bottom, HdrFtrTyp
   std::u16string why;
   if (!CanChange(editor, section, why)) return Fail(why);
   const Document& doc = editor.Doc();
-  const Section& sec = doc.Sections()[section];
-  bool did = (bottom ? sec.footers : sec.headers)[static_cast<size_t>(type)] == kNone;  // a new one is made
   editor.BeginGroup(u"Page Number");
   const uint32_t story = EnsureHeaderFooter(editor, section, bottom, type, why);
   Result r = story == kNone ? Fail(why) : Result{};
-  did = did && r;
   uint32_t para = kNone;
   if (r) {
     const std::vector<uint32_t> paras = doc.StoryParagraphs(story);
@@ -205,16 +211,12 @@ Result InsertPageNumber(Editor& editor, uint32_t section, bool bottom, HdrFtrTyp
     } else if (!(paras.size() == 1 && doc.Para(para).text.empty())) {
       r = editor.SplitParagraph({para, static_cast<uint32_t>(doc.Para(para).text.size())});
       para = r.caret.para;
-      did = did || r;
     }
   }
   Pos at{para, 0};
   auto step = [&](Result next) {
     r = std::move(next);
-    if (r) {
-      at = r.caret;
-      did = true;
-    }
+    if (r) at = r.caret;
   };
   if (r && ofPages) step(editor.InsertText(at, u"Page "));
   if (r) step(InsertField(editor, at, kPageField, u"1", u"Page Number"));
@@ -226,11 +228,11 @@ Result InsertPageNumber(Editor& editor, uint32_t section, bool bottom, HdrFtrTyp
     f.jc = align;
     FormatParagraphs(te, {{para, 0}, {para, 0}}, f);
   }
-  editor.EndGroup();
   if (!r) {
-    if (did) editor.Undo();  // what the group did before the refusal goes with it
+    editor.CancelGroup();  // what the group did before the refusal goes with it
     return r;
   }
+  editor.EndGroup();
   r.caret = at;
   return r;
 }

@@ -213,11 +213,39 @@ enum Cmd : int {
   CmdPictureRotate,   // 90 degrees clockwise
   CmdPictureReset,
   CmdPicturePanel,    // size, rotation and alt text
+  // Shapes, text boxes and watermarks in Word documents (D4).
+  CmdInsertTextBox = 1460,
+  CmdInsertRectangle,
+  CmdInsertRoundedRectangle,
+  CmdInsertOval,
+  CmdInsertLine,
+  CmdInsertArrow,
+  CmdInsertCallout,
+  CmdShapeAddText,     // an empty paragraph in a shape without text
+  CmdShapeEditText,    // the caret into the selected shape's text
+  CmdShapePanel,       // wrap, size, rotation, fill and outline
+  CmdWatermarkPanel,
+  CmdWatermarkRemove,
   // Find and paste (D3).
   CmdSearchWords = 1300,  // find whole words only (the search card's toggle)
   CmdPasteMerge,          // paste taking the look of where it goes, keeping bold, italic and lists
+  // Review (D4): comments and tracked changes in Word documents.
+  CmdReviewPane = 1320,  // the toolbar's 💬: the Review pane
+  CmdNewComment,         // Ctrl+Alt+M: a comment on the selection
+  CmdTrackChanges,       // Ctrl+Shift+E: Track Changes on or off
+  CmdAcceptChange,       // the change at the caret (or the selection's), then the next
+  CmdRejectChange,
+  CmdAcceptAll,
+  CmdRejectAll,
+  CmdNextChange,
+  CmdPrevChange,
+  CmdMarkupSimple,  // what the changes look like: Word's Simple Markup, All Markup, No Markup, Original
+  CmdMarkupAll,
+  CmdMarkupNone,
+  CmdMarkupOriginal,
+  CmdReviewerName,  // ⋯: the name changes and comments are made with
   // Footnotes, endnotes and tables of contents (D4).
-  CmdInsertFootnote = 1320,  // Ctrl+Alt+F
+  CmdInsertFootnote = 1340,  // Ctrl+Alt+F
   CmdInsertEndnote,          // Ctrl+Alt+D
   CmdInsertToc,
   CmdUpdateTocPages,  // the table of contents' page numbers
@@ -248,4 +276,12 @@ enum Cmd : int {
   // Styles (D3).
   CmdModifyStyle = 1230,  // the Modify style panel, for the paragraph's style
   CmdNewStyle,            // Create a style from the selection
+  // Output (D4).
+  CmdExportPdf = 1400,  // File > Export PDF: the tab's pages into a PDF file
+  // Content controls (D4): Insert ▾ adds them, as Word's Developer tab does.
+  CmdInsertRichText = 1410,
+  CmdInsertPlainText,
+  CmdInsertCheckBox,
+  CmdInsertDropDown,
+  CmdInsertDatePicker,
 };

@@ -1081,10 +1081,9 @@ TEST(Edit_TextEditsAfterParagraphFormattingKeepTheText) {
   CHECK(MainXml(*doc) == original && !editor.CanUndo());
 }
 
-TEST(Edit_FormattingInATextBoxIsRefused) {
-  // d2-torture finding 14: a text box is written back from its drawing as it was, so formatting
-  // its text was lost on saving. Like the editor's text edits, formatting there is refused and
-  // changes nothing; the body's text is formatted as before.
+TEST(Edit_FormattingInATextBoxIsSaved) {
+  // d2-torture finding 14: formatting a text box's text was lost on saving, then refused. From D4
+  // a text box's story is written into its drawing: the formatting is saved, and undone exactly.
   Fixture f;
   f.styles = kBoldStyle;
   f.body = "<w:p><w:r><w:t>Body</w:t></w:r><w:r><w:pict><v:shape id=\"s\" style=\"position:absolute;width:144pt;"
@@ -1098,34 +1097,42 @@ TEST(Edit_FormattingInATextBoxIsRefused) {
     if (doc->Stories()[s].kind == StoryKind::TextBox && !doc->StoryParagraphs(s).empty()) boxed = doc->StoryParagraphs(s)[0];
   CHECK(boxed != kNone);
   if (boxed == kNone) return;
-  const std::string original = MainXml(*doc), styles = PartXml(*doc, PartKind::Styles);
+  const std::string original = MainXml(*doc);
   edit::Editor editor(*doc);
   edit::TreeEdit ed(editor);
+  edit::ApplyStyle(ed, Whole(*doc, boxed), "Heading 1");  // clears direct formatting: first
+  CHECK(ed.Refused().empty());
   edit::ToggleRuns(ed, Whole(*doc, boxed), edit::Toggle::Underline);
-  CHECK(!ed.Refused().empty());
+  CHECK(ed.Refused().empty());
   edit::ParaFormat pf;
   pf.jc = Justification::Center;
   edit::FormatParagraphs(ed, Whole(*doc, boxed), pf);
-  CHECK(!ed.Refused().empty());
-  edit::ApplyStyle(ed, Whole(*doc, boxed), "Heading 1");
-  CHECK(!ed.Refused().empty());
-  CHECK(MainXml(*doc) == original && PartXml(*doc, PartKind::Styles) == styles && !editor.CanUndo());
-  CHECK(doc->Para(boxed).text == u"Boxed" && !editor.Modified());
-  // The body still formats.
-  const uint32_t body = MainParas(*doc)[0];
-  edit::ToggleRuns(ed, {{body, 0}, {body, 4}}, edit::Toggle::Bold);
-  CHECK(ed.Refused().empty() && editor.CanUndo() && At(*doc, body, 0).bold);
-  CHECK(SaveAndReopen(*doc) != nullptr);
+  CHECK(ed.Refused().empty());
+  const std::string xml = MainXml(*doc);
+  CHECK(Has(xml, "<w:u w:val=\"single\"/>") && Has(xml, "<w:jc w:val=\"center\"/>") && Has(xml, "Heading1"));
+  auto back = SaveAndReopen(*doc);
+  CHECK(back);
+  if (back) {
+    uint32_t again = kNone;
+    for (uint32_t s = 0; s < back->Stories().size(); ++s)
+      if (back->Stories()[s].kind == StoryKind::TextBox && !back->StoryParagraphs(s).empty())
+        again = back->StoryParagraphs(s)[0];
+    CHECK(again != kNone && back->ResolvedPara(again).jc == Justification::Center);
+  }
+  while (editor.CanUndo()) CHECK(editor.Undo().ok);
+  CHECK(MainXml(*doc) == original && doc->Para(boxed).text == u"Boxed");
 }
 
 TEST(Edit_RefusedFormattingAddsNoPart) {
   // d2-torture finding 18: lists and styles add the numbering or styles part a document lacks
-  // before they change anything, and a part isn't undone. In a text box, where the change is
-  // refused, they add none; in the body they do.
+  // before they change anything, and a part isn't undone. In a text box whose text can't be
+  // written back (its fallback has no copy of it), where the change is refused, they add none; in
+  // the body they do.
   Fixture f;  // no styles part, no numbering part
-  f.body = "<w:p><w:r><w:t>Body</w:t></w:r><w:r><w:pict><v:shape id=\"s\" style=\"position:absolute;width:144pt;"
-           "height:36pt\"><v:textbox><w:txbxContent><w:p><w:r><w:t>Boxed</w:t></w:r></w:p></w:txbxContent></v:textbox>"
-           "</v:shape></w:pict></w:r></w:p>";
+  f.body = "<w:p><w:r><w:t>Body</w:t></w:r><w:r><mc:AlternateContent><mc:Choice Requires=\"v\"><w:pict><v:shape "
+           "id=\"s\" style=\"position:absolute;width:144pt;height:36pt\"><v:textbox><w:txbxContent><w:p><w:r>"
+           "<w:t>Boxed</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></mc:Choice><mc:Fallback>"
+           "<w:pict><v:rect style=\"width:144pt;height:36pt\"/></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>";
   auto doc = LoadOk(f);
   CHECK(doc);
   if (!doc) return;

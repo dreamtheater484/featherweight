@@ -47,4 +47,9 @@ pkg::Status UpdateCoreProperties(std::string_view xml, const std::string& author
 // "2026-11-05T14:30:12Z" (W3CDTF, UTC) for a FILETIME; 0 for the clock.
 std::string W3cTime(int64_t filetime = 0);
 
+// The comments' companions written again from the model into the package (CommentParts.cpp):
+// commentsExtended, commentsIds and commentsExtensible, added where the document has comments and
+// not the parts. A save does it whenever it writes comments.xml.
+pkg::Status WriteCommentParts(Document& doc);
+
 }  // namespace fw::doc::docx

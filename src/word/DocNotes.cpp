@@ -19,7 +19,7 @@ fw::doc::Pos ToDoc(layout::TextPos p) { return {p.para, p.offset}; }
 
 }  // namespace
 
-int DocView::ShortcutD4(UINT vk, UINT mods) {
+int DocView::ShortcutNotes(UINT vk, UINT mods) {
   // Word's keys: Ctrl+Alt+F a footnote, Ctrl+Alt+D an endnote.
   if ((mods & kModCtrl) && (mods & kModAlt) && !(mods & kModShift)) {
     if (vk == 'F') return CmdInsertFootnote;
@@ -28,7 +28,7 @@ int DocView::ShortcutD4(UINT vk, UINT mods) {
   return 0;
 }
 
-const std::vector<int>& DocView::CommandsD4() {
+const std::vector<int>& DocView::CommandsNotes() {
   static const std::vector<int> ids = {CmdInsertFootnote, CmdInsertEndnote, CmdInsertToc, CmdUpdateTocPages, CmdUpdateToc};
   return ids;
 }
@@ -49,7 +49,7 @@ std::optional<edit::TocInfo> DocView::CurrentToc() const {
   return all.front();
 }
 
-std::optional<CommandState> DocView::QueryD4(int cmd) {
+std::optional<CommandState> DocView::QueryNotes(int cmd) {
   const bool text = Editing() && !hf_ && doc_ && focus_.para < doc_->Paragraphs().size() &&
                     doc_->Para(focus_.para).story == doc_->MainStory();
   CommandState s;
@@ -70,8 +70,8 @@ std::optional<CommandState> DocView::QueryD4(int cmd) {
   return s;
 }
 
-bool DocView::ExecuteD4(int cmd) {
-  const std::optional<CommandState> q = QueryD4(cmd);
+bool DocView::ExecuteNotes(int cmd) {
+  const std::optional<CommandState> q = QueryNotes(cmd);
   if (!q) return false;
   if (!q->enabled) return true;
   const layout::TextPos at = std::max(anchor_, focus_);
@@ -95,7 +95,7 @@ bool DocView::ExecuteD4(int cmd) {
   return false;
 }
 
-void DocView::FillD4Menu(HMENU m) {
+void DocView::FillNotesMenu(HMENU m) {
   if (!Editing() || !doc_ || !edit::TocAt(*doc_, ToDoc(focus_))) return;
   menu::AppendItem(m, CmdUpdateTocPages, L"Update page numbers");
   menu::AppendItem(m, CmdUpdateToc, L"Update entire table");

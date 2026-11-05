@@ -96,6 +96,12 @@ bool LayOutDocument(const std::filesystem::path& document, fw::LayoutDump* dump,
   });
 }
 
+bool WithLayout(const std::filesystem::path& document, std::string& error,
+                const std::function<void(const fw::doc::Document&, const fw::doc::layout::Layout&)>& use) {
+  return OpenAndLayOut(document, nullptr, error,
+                       [&](const fw::doc::layout::Layout& layout) { use(*g_document, layout); });
+}
+
 void DumpLayout(const std::filesystem::path& document, const std::filesystem::path& out) {
   std::string error;
   bool ok = OpenAndLayOut(document, nullptr, error, [&](const fw::doc::layout::Layout& layout) {

@@ -1,12 +1,11 @@
 // From the model's paragraphs to fwtext's (Internal.h): resolved properties to text styles and
 // paragraph formats, the list label, field results that pagination computes, note reference
 // marks, inline objects, and what the view hides (field codes, deleted text, markers).
-#include <windows.h>
-
 #include <algorithm>
 #include <cwctype>
 
 #include "core/Strings.h"
+#include "doc/model/DateFormat.h"
 #include "doc/model/Utf.h"
 #include "doc/layout/Engine.h"
 
@@ -95,7 +94,7 @@ std::string_view FormatSwitch(std::u16string_view code) {
 bool IsDateField(std::u16string_view type) { return type == u"DATE" || type == u"TIME"; }
 
 // The \@ switch's date-time picture: quoted ("MMMM d, yyyy") or one word (dd.MM.yy).
-std::wstring DatePicture(std::u16string_view code) {
+std::u16string DatePicture(std::u16string_view code) {
   const size_t at = code.find(u"\\@");
   if (at == std::u16string_view::npos) return {};
   std::u16string_view rest = code.substr(at + 2);
@@ -107,85 +106,32 @@ std::wstring DatePicture(std::u16string_view code) {
   } else {
     rest = rest.substr(0, rest.find(u' '));
   }
-  return std::wstring(rest.begin(), rest.end());
-}
-
-// `t` as Word shows a DATE or TIME field: by the picture's codes (M MM MMM MMMM, d dd ddd dddd, yy
-// yyyy, h hh H HH, m mm, s ss, AM/PM am/pm A/P a/p, 'literal text'), with month and day names in
-// the field's language; with no picture, the language's short date (DATE) or its time (TIME).
-std::u16string FormatDateTime(const SYSTEMTIME& t, const std::wstring& picture, bool time, const wchar_t* locale) {
-  std::wstring out;
-  auto names = [&](const wchar_t* code) {  // names from Windows, in the language
-    wchar_t b[128];
-    const int n = GetDateFormatEx(locale, 0, &t, code, b, 128, nullptr);
-    if (n > 1) out.append(b, static_cast<size_t>(n - 1));
-  };
-  auto num = [&](int v, bool two) {
-    wchar_t b[16];
-    swprintf_s(b, two ? L"%02d" : L"%d", v);
-    out += b;
-  };
-  if (picture.empty()) {
-    wchar_t b[128];
-    const int n = time ? GetTimeFormatEx(locale, TIME_NOSECONDS, &t, nullptr, b, 128)
-                       : GetDateFormatEx(locale, DATE_SHORTDATE, &t, nullptr, b, 128, nullptr);
-    if (n > 1) out.assign(b, static_cast<size_t>(n - 1));
-    return std::u16string(out.begin(), out.end());
-  }
-  auto designator = [&](bool pm) {
-    wchar_t b[32] = {};
-    std::wstring d = GetLocaleInfoEx(locale, pm ? LOCALE_S2359 : LOCALE_S1159, b, 32) > 1 ? std::wstring(b) : std::wstring();
-    return d.empty() ? std::wstring(pm ? L"PM" : L"AM") : d;
-  };
-  const std::wstring& p = picture;
-  for (size_t i = 0; i < p.size();) {
-    const wchar_t c = p[i];
-    if (c == L'\'') {  // text as it is
-      const size_t end = p.find(L'\'', i + 1);
-      out += p.substr(i + 1, (end == std::wstring::npos ? p.size() : end) - i - 1);
-      i = end == std::wstring::npos ? p.size() : end + 1;
-      continue;
-    }
-    auto at = [&](std::wstring_view w) { return _wcsnicmp(p.c_str() + i, w.data(), w.size()) == 0 && p.size() - i >= w.size(); };
-    if (at(L"AM/PM") || at(L"A/P")) {
-      std::wstring d = designator(t.wHour >= 12);
-      const bool lower = c == L'a';
-      if (at(L"A/P")) d = d.substr(0, 1);
-      for (wchar_t& ch : d) ch = lower ? static_cast<wchar_t>(std::towlower(ch)) : static_cast<wchar_t>(std::towupper(ch));
-      out += d;
-      i += at(L"A/P") ? 3 : 5;
-      continue;
-    }
-    size_t n = 1;
-    while (i + n < p.size() && p[i + n] == c) ++n;
-    switch (c) {
-      case L'M':
-        if (n <= 2) num(t.wMonth, n == 2);
-        else names(n == 3 ? L"MMM" : L"MMMM");
-        break;
-      case L'd':
-      case L'D':
-        if (n <= 2) num(t.wDay, n == 2);
-        else names(n == 3 ? L"ddd" : L"dddd");
-        break;
-      case L'y':
-      case L'Y':
-        if (n <= 2) num(t.wYear % 100, true);
-        else num(t.wYear, false);
-        break;
-      case L'h': num(t.wHour % 12 == 0 ? 12 : t.wHour % 12, n >= 2); break;
-      case L'H': num(t.wHour, n >= 2); break;
-      case L'm': num(t.wMinute, n >= 2); break;
-      case L's':
-      case L'S': num(t.wSecond, n >= 2); break;
-      default: out.append(n, c); break;
-    }
-    i += n;
-  }
-  return std::u16string(out.begin(), out.end());
+  return std::u16string(rest);
 }
 
 }  // namespace
+
+// What a legacy check box or drop-down (FORMCHECKBOX, FORMDROPDOWN) shows: its state in w:ffData,
+// whatever result it was saved with, as Word draws them. Empty for other fields.
+std::u16string FormFieldShows(const Field& f) {
+  const std::u16string_view type = f.Type();
+  const bool box = type == u"FORMCHECKBOX";
+  if (!box && type != u"FORMDROPDOWN") return {};
+  const Node ff = f.beginNode.Child(Name("ffData"));
+  if (box) {
+    const Node cb = ff.Child(Name("checkBox"));
+    const Node checked = cb.Child(Name("checked"));
+    return (checked ? checked.On() : cb.Child(Name("default")).On()) ? u"\u2612" : u"\u2610";
+  }
+  const Node dd = ff.Child(Name("ddList"));
+  std::vector<Node> entries;
+  for (Node e : dd.Kids())
+    if (e.Is(Name("listEntry"))) entries.push_back(e);
+  if (entries.empty()) return {};
+  const Node picked = dd.Child(Name("result")) ? dd.Child(Name("result")) : dd.Child(Name("default"));
+  const int64_t i = picked.Int(Name("val")).value_or(0);
+  return ToUtf16(entries[i >= 0 && i < static_cast<int64_t>(entries.size()) ? static_cast<size_t>(i) : 0].AttrOr(Name("val")));
+}
 
 std::u16string DateFieldResult(std::u16string_view code, int64_t now, std::string_view lang) {
   const size_t s = code.find_first_not_of(u' ');
@@ -193,14 +139,9 @@ std::u16string DateFieldResult(std::u16string_view code, int64_t now, std::strin
   const size_t e = code.find(u' ', s);
   const std::u16string_view type = code.substr(s, e == std::u16string_view::npos ? std::u16string_view::npos : e - s);
   if (!IsDateField(type)) return {};
-  FILETIME ft;
-  ft.dwLowDateTime = static_cast<DWORD>(static_cast<uint64_t>(now) & 0xFFFFFFFFu);
-  ft.dwHighDateTime = static_cast<DWORD>(static_cast<uint64_t>(now) >> 32);
-  SYSTEMTIME utc, local;
-  if (!FileTimeToSystemTime(&ft, &utc) || !SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local)) return {};
-  std::wstring locale(lang.begin(), lang.end());
-  const wchar_t* name = !locale.empty() && IsValidLocaleName(locale.c_str()) ? locale.c_str() : LOCALE_NAME_USER_DEFAULT;
-  return FormatDateTime(local, DatePicture(code), type == u"TIME", name);
+  const DateTime local = LocalDateTime(now);
+  if (local.year == 0) return {};
+  return FormatDateTime(local, DatePicture(code), type == u"TIME", lang);
 }
 
 const text::TextStyle* StylePool::Intern(const text::TextStyle& style) {
@@ -412,6 +353,14 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   std::vector<Replace> replaces;
   if (fieldsCount_[model.story] > 0) {
     for (const Field& f : StoryFields(model.story)) {
+      // Legacy check boxes and drop-downs: their result, or at their end when they have none.
+      if (f.end.para == para && f.complete && (f.separator.para == para || f.separator.para == kNone)) {
+        if (std::u16string shows = FormFieldShows(f); !shows.empty()) {
+          const uint32_t from = f.separator.para == para ? f.separator.offset + 1 : f.end.offset;
+          replaces.push_back({from, f.end.offset, std::move(shows)});
+          continue;
+        }
+      }
       if (f.separator.para != para || f.end.para != para || !f.complete) continue;
       PageField kind = PageFieldOf(f.Type());
       if (kind == PageField::None) {
@@ -499,9 +448,12 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
     while (i < run.end) {
       // A computed field result starting here replaces the old one.
       auto rep = std::find_if(replaces.begin(), replaces.end(), [&](const Replace& x) { return x.from == i; });
-      if (rep != replaces.end() && !style->hidden) {
+      // An empty result starts at the field's end character, hidden only as a field character.
+      const text::TextStyle* shown =
+          rep != replaces.end() && style->hidden && run.fieldCode && !Deleted(run.revision) ? styles_.Intern(StyleOf(rp, false)) : style;
+      if (rep != replaces.end() && !shown->hidden) {
         uint32_t to = std::max(rep->to, i);
-        subst(i, to - i, rep->value, style, paint);
+        subst(i, to - i, rep->value, shown, paint);
         visible = true;
         i = to;
         rep->from = UINT32_MAX;

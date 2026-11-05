@@ -223,15 +223,17 @@ void DocView::DrawSquiggles(Canvas& c, int first, int last) {
             if (static_cast<int>(rp) != pg || rp >= pagination_->PageCount()) continue;
             // Just below the baseline, by the size of the text it's under.
             float y = r.bottom - 1;
+            bool hidden = false;
             for (const layout::LineBox& lb : pagination_->GetPage(pg).lines) {
               if (lb.para != p || lb.turn != 0 || std::abs(lb.top - r.top) > 0.01f) continue;
               float em = 0;
               for (const auto& piece : lb.line.pieces)
                 if (lb.x + piece.x < r.right && lb.x + piece.x + piece.width > r.left) em = std::max(em, piece.emSize);
               y = std::min(lb.top + lb.height - 1, lb.baseline + std::max(1.0f, 0.15f * em));
+              hidden = lb.clip.Width() > 0 && y >= lb.clip.bottom;  // past a text box's edge: not shown
               break;
             }
-            ps.lines.push_back({p, m.from, m.to, r.left, r.right, y});
+            if (!hidden) ps.lines.push_back({p, m.from, m.to, r.left, r.right, y});
           }
         }
       }

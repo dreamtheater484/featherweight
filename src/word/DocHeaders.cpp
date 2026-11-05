@@ -14,6 +14,8 @@
 #include "ui/Theme.h"
 #include "ui/Toolbar.h"
 #include "word/DocPanels.h"
+#include "word/PicturePanel.h"
+#include "word/ShapePanels.h"
 #include "word/DocView.h"
 
 namespace layout = fw::doc::layout;
@@ -184,6 +186,32 @@ void DocView::DrawHeaderFooterMode(Canvas& c, int page) {
 // ---------------------------------------------------------------------------
 // Formatting marks and panels
 
+namespace {
+// All markup and Original, where the layout can show them (layout::Options::showDeletions).
+template <class O>
+constexpr bool kMarkupOptions = requires(O o) {
+  o.showDeletions = true;
+  o.hideInsertions = true;
+};
+template <class O>
+void SetMarkupOptions(O& o, bool showDeletions, bool hideInsertions) {
+  if constexpr (kMarkupOptions<O>) {
+    o.showDeletions = showDeletions;
+    o.hideInsertions = hideInsertions;
+  }
+}
+}  // namespace
+
+bool DocView::MarkupLaidOut() { return kMarkupOptions<layout::Options>; }
+
+bool DocView::RevisionShown(fw::doc::Node revision) const {
+  if (!revision) return true;
+  const bool deleted = revision.Is(fw::doc::Name("del")) || revision.Is(fw::doc::Name("moveFrom"));
+  const bool laidOut = MarkupLaidOut();
+  if (deleted) return laidOut && (markup_ == Markup::All || markup_ == Markup::Original);
+  return !(laidOut && markup_ == Markup::Original);
+}
+
 layout::Options DocView::LayoutOptions() const {
   layout::Options options;
   options.showHiddenText = marks_;
@@ -191,6 +219,7 @@ layout::Options DocView::LayoutOptions() const {
   FILETIME now;
   GetSystemTimeAsFileTime(&now);  // DATE and TIME fields show it, as Word updates them on opening
   options.now = static_cast<int64_t>(static_cast<uint64_t>(now.dwHighDateTime) << 32 | now.dwLowDateTime);
+  SetMarkupOptions(options, markup_ == Markup::All || markup_ == Markup::Original, markup_ == Markup::Original);
   return options;
 }
 
@@ -223,7 +252,8 @@ void DocView::ShowPanel(PanelContent* panel, bool toggle) {
 void DocView::ClosePanels() {
   PanelContent* shown = host_.ViewShownPanel();
   if (shown && (shown == linkPanel_.get() || shown == bookmarkPanel_.get() || shown == pageNumberPanel_.get() ||
-                shown == navPanel_.get()))
+                shown == navPanel_.get() || shown == picturePanel_.get() || shown == shapePanel_.get() ||
+                shown == watermarkPanel_.get()))
     host_.ViewShowPanel(nullptr);
 }
 

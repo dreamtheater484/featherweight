@@ -100,6 +100,9 @@ const Builtin kBuiltins[] = {
     // What links get, from AutoCorrect and Insert link, as in Word.
     {"Hyperlink", "Hyperlink", StyleType::Character, 99, false, "Default Paragraph Font", "", "", "",
      "<w:color w:val=\"0563C1\" w:themeColor=\"hyperlink\"/><w:u w:val=\"single\"/>"},
+    // What content controls show while empty, as in Word.
+    {"Placeholder Text", "PlaceholderText", StyleType::Character, 99, false, "Default Paragraph Font", "", "", "",
+     "<w:color w:val=\"666666\"/>"},
     // Footnotes and endnotes (D4): the note's text, and the raised number in the text and the note.
     {"footnote text", "FootnoteText", StyleType::Paragraph, 99, false, "Normal", "", "Footnote Text Char",
      "<w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/>", "<w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/>"},

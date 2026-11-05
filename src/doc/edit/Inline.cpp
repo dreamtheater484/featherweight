@@ -224,7 +224,7 @@ Result InsertField(Editor& editor, Pos at, std::string_view instr, std::u16strin
   editor.BeginGroup(name);
   Result typed = editor.InsertText(at, result);
   if (!typed) {
-    editor.EndGroup();
+    editor.CancelGroup();
     return typed;
   }
   const uint32_t para = at.para, from = at.offset, to = typed.caret.offset;
@@ -246,11 +246,11 @@ Result InsertField(Editor& editor, Pos at, std::string_view instr, std::u16strin
       ok = false;
     }
   }
-  editor.EndGroup();
   if (!ok) {
-    editor.Undo();  // the text alone: never a field half made
+    editor.CancelGroup();  // the text alone: never a field half made
     return Fail(u"A field can't be inserted here.");
   }
+  editor.EndGroup();
   return typed;
 }
 
@@ -295,15 +295,13 @@ Result InsertLink(Editor& editor, Pos from, Pos to, std::string_view target, std
   }
   editor.BeginGroup(u"Link");
   Pos a = from, b = to;
-  bool typed = false;
   const std::u16string_view current = std::u16string_view(doc.Para(from.para).text).substr(from.offset, to.offset - from.offset);
   if (!text.empty() && text != current) {
     Result r = from == to ? editor.InsertText(from, text) : editor.Replace(from, to, text);
     if (!r) {
-      editor.EndGroup();
+      editor.CancelGroup();
       return r;
     }
-    typed = true;
     b = r.caret;
   }
   Result r = b.para == a.para ? editor.SetLink(a, b, target) : Fail(u"This text can't be made a link.");
@@ -311,11 +309,11 @@ Result InsertLink(Editor& editor, Pos from, Pos to, std::string_view target, std
     TreeEdit te(editor, b);
     ApplyStyle(te, {a, b}, "Hyperlink");
   }
-  editor.EndGroup();
   if (!r) {
-    if (typed) editor.Undo();
+    editor.CancelGroup();  // the text typed for it goes too
     return r;
   }
+  editor.EndGroup();
   r.caret = b;
   return r;
 }
@@ -362,11 +360,11 @@ Result EditLink(Editor& editor, Pos at, std::string_view target, std::u16string_
       te.Commit();
     }
   }
-  editor.EndGroup();
   if (!ok) {
-    editor.Undo();
+    editor.CancelGroup();  // what it changed so far, and nothing before it
     return Fail(u"This link can't be changed.");
   }
+  editor.EndGroup();
   Result r;
   r.caret = link->to;
   return r;
@@ -451,8 +449,8 @@ Result InsertBookmark(Editor& editor, Pos from, Pos to, std::string_view name) {
     editor.BeginGroup(u"Bookmark");
     Result gone = DeleteBookmark(editor, name);
     Result r = gone ? AddBookmark(editor, from, to, name) : gone;
-    editor.EndGroup();
-    if (!r && gone) editor.Undo();
+    if (r) editor.EndGroup();
+    else editor.CancelGroup();  // the old one stays where it was
     return r;
   }
   return AddBookmark(editor, from, to, name);

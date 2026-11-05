@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -55,6 +56,9 @@ class TreeEdit {
   // change back. For commands that first add a part with EnsurePart, which isn't undone, so a
   // refused command doesn't leave one behind (d2-torture finding 18).
   bool CanChange(const std::vector<uint32_t>& paras);
+  // Its transactions fill in a form (Forms.h): they go ahead in a document protected for forms,
+  // where every other change is refused.
+  void FormFill() { fill_ = true; }
   // Says the change affects the layout of the paragraphs it touches and no others (or, with
   // `toEnd`, those and the rest of their story: a list's numbers), whatever it adds to the styles
   // and numbering parts. Only their pages are laid out again, not the whole document. It counts in
@@ -112,7 +116,9 @@ class TreeEdit {
   ElemId InsertElement(ElemId parent, uint32_t name, ElemId before, uint32_t offset);
   // Puts the siblings from `first` to `last` into a new element `name` (w:fldSimple,
   // w:hyperlink) in their place. kNoElem when their parent can't hold it, or it can't hold them.
-  ElemId Wrap(ElemId first, ElemId last, uint32_t name);
+  ElemId Wrap(ElemId first, ElemId last, uint32_t name) { return Wrap(first, last, {name}); }
+  // The same into nested new elements, outermost first (w:sdt, w:sdtContent): the outermost.
+  ElemId Wrap(ElemId first, ElemId last, std::initializer_list<uint32_t> names);
   // Puts an inline container's children in its place and takes it out (removing a link). What it
   // keeps first goes before them, what it keeps after it after them. False when it keeps content
   // between its children: then it stays.
@@ -131,6 +137,23 @@ class TreeEdit {
   // story's index; kNone with the reason when the document isn't edited, or the content can't be
   // copied (pictures, notes, comments, or kept content that refers to something).
   uint32_t NewStoryPart(PartKind kind, uint32_t copyOf, std::string& relId, std::u16string& why);
+
+  // ---- Comments (D4)
+  // A new comment's story (outside a transaction, and not undone): its w:comment, linked nowhere
+  // until LinkComment, with one paragraph (w14:paraId `paraId`) holding the annotation mark, as
+  // Word starts one. Needs the comments part (EnsurePart). The story's index, or kNone.
+  uint32_t NewComment(std::string_view id, std::string_view author, std::string_view initials, std::string_view date,
+                      std::string_view paraId);
+  // Inside a transaction: the comment's w:comment goes into the comments part, last, or out of it.
+  void LinkComment(uint32_t story);
+  void UnlinkComment(uint32_t story);
+  // commentsExtended's entry for the comment whose last paragraph has the w14:paraId `paraId`:
+  // the comment it answers (`parentParaId`, empty for none) and whether it's resolved; or none.
+  // The comments part is written again with its companions (docx::WriteCommentParts).
+  void SetCommentState(std::string_view paraId, std::string_view parentParaId, bool done);
+  void RemoveCommentState(std::string_view paraId);
+  // The comment's state as commentsExtended has it now: false when it has no entry.
+  bool CommentState(std::string_view paraId, std::string& parentParaId, bool& done) const;
 
   // ---- Notes (D4): a footnote or endnote is a story of its own, a w:footnote (w:endnote) in the
   // notes part; its reference in the text is a run item with the same w:id.
@@ -161,12 +184,14 @@ class TreeEdit {
   // The separator notes Word starts a notes part with (ids -1 and 0), outside undo.
   void AddSeparatorNotes(uint32_t part, bool endnote);
   struct StoreOp {
-    enum Kind : uint8_t { Split, SetAttrs, Fragments } kind = Split;
+    enum Kind : uint8_t { Split, SetAttrs, Fragments, CommentsEx } kind = Split;
     pkg::NodeId node = pkg::kNoNode, second = pkg::kNoNode;
     pkg::SplitPoint at;
     pkg::AttrSetId before = 0, after = 0;                        // SetAttrs
     std::vector<pkg::Fragment> fragmentsBefore, fragmentsAfter;  // Fragments
+    std::vector<Document::CommentEx> exBefore, exAfter;          // CommentsEx
   };
+  void ChangeCommentsEx(const std::function<void(std::vector<Document::CommentEx>&)>& change);
   using Saved = std::vector<std::pair<ElemId, Elem>>;
   static void Restore(Document& doc, const Saved& elems);
   static void Replay(Document& doc, const std::vector<StoreOp>& ops, bool undo);
@@ -209,6 +234,15 @@ class TreeEdit {
   bool Editable(ElemId id, std::unordered_map<ElemId, bool>& memo, std::u16string& why) const;
   // Puts back everything the transaction changed (Abort and a refused Commit).
   void Discard();
+  // Formatting with Track Changes on (D4): before the first change to a run's or a paragraph's
+  // properties (the w:rPr of a w:r, the w:pPr of a w:p and its w:rPr, the mark's), a copy of them
+  // as they were; at Commit, a w:rPrChange or w:pPrChange holding it where they differ now and
+  // there is no record yet (the oldest stays). Not for the author's own new text.
+  void TrackBefore(ElemId at);
+  void RecordFormatting();
+  ElemId DetachedCopy(ElemId src, ElemId parent);
+  bool SameElem(ElemId a, ElemId b) const;
+  bool Attached(ElemId id) const;
   // NewStoryPart's copy: whether a story's content can be copied, and the copy of an element and
   // what it holds (new paragraphs join story `story`).
   bool Copyable(ElemId root, std::u16string& why) const;
@@ -218,6 +252,7 @@ class TreeEdit {
   Document& doc_;
   Pos caret_;
   int depth_ = 0;
+  bool fill_ = false;
   bool local_ = false, toEnd_ = false, structure_ = false;
   std::pair<uint32_t, uint32_t> affects_{kNone, kNone};
   std::u16string label_, refused_;
@@ -227,6 +262,10 @@ class TreeEdit {
   std::vector<StoryOp> storyOps_;
   std::unordered_map<ElemId, size_t> touched_;  // element -> index into before_
   std::unordered_set<ElemId> owned_;            // containers given children of their own (Own)
+  bool tracking_ = false, recording_ = false;
+  std::string trackAuthor_, trackDate_;
+  std::vector<std::pair<ElemId, ElemId>> tracked_;  // properties and their copy (kNoElem: not tracked)
+  size_t copies_ = 0;  // elements made for those copies, linked nowhere unless a record took them
 };
 
 }  // namespace fw::doc::edit

@@ -48,6 +48,9 @@ struct Result {
   bool ok = true;
   std::u16string message;
   Pos caret;  // where the caret goes after the edit
+  // Delete: where the deleted text ends now. With Track Changes on it stays, and text typed over
+  // a selection goes after it, as in Word; otherwise it's the caret.
+  Pos end;
   explicit operator bool() const { return ok; }
 };
 
@@ -145,7 +148,9 @@ class Editor {
   // would make it (ReadDrawingFrame); its node, part and position are filled in here. The handle
   // stays in Document::Drawings() when the insert is undone, at no position. Pictures.h makes the
   // XML and adds the picture's part.
-  Result InsertDrawing(Pos at, std::string xml, const Drawing& info);
+  // With `vml`, a w:pict holding `xml` (a VML shape, its v:shapetype before it), as Word writes a
+  // watermark.
+  Result InsertDrawing(Pos at, std::string xml, const Drawing& info, bool vml = false);
   // ---- Fields and notes (D4)
   // Puts runs at `at` (w:r elements made from XML in the w: namespace, every element and
   // attribute known where it goes, their w:t and w:instrText text included): between the runs
@@ -159,10 +164,52 @@ class Editor {
   // paragraphs, in the paragraphs themselves (Word refuses a field split across a link, torture
   // finding 6). Refused across the edge of another field. One undo step named `name`.
   Result WrapInField(Pos from, Pos to, std::string_view code, std::string_view rPr, std::u16string name);
+  // Inserts a drawing kept as markup (an mc:AlternateContent block, as Word writes shapes and text
+  // boxes: `block`, self-contained) at the start of paragraph `para`, in a run of its own. Its
+  // character is shown from `info`: display-only, info.kept the block's tag, info.keptXml what's
+  // shown. Deleting the character takes the block. Shapes.h makes the XML.
+  Result InsertKeptDrawing(uint32_t para, std::string block, const Drawing& info);
   // Makes the text in [from, to), in one paragraph, a hyperlink to `target`: a web address (a
   // relationship of the part, kept if the link is undone, which is harmless) or "#bookmark".
   // Refused where the text is already a link, or in a field, a content control or a tracked change.
   Result SetLink(Pos from, Pos to, std::string_view target);
+
+  // ---- Tracked changes (D4, plan §6.2 "Review")
+  // Track Changes is on while the document's settings say so (w:trackRevisions: Word's switch,
+  // saved with the document; turning it on or off is an undo step). Then typing, deleting and
+  // formatting are recorded as w:ins, w:del, w:rPrChange and w:pPrChange by Author(), dated
+  // ChangeDate(), instead of changing the text outright: nothing typed or deleted is lost until a
+  // change is accepted or rejected. Text you inserted yourself and delete again just goes, as in Word.
+  bool Tracking() const;
+  Result SetTracking(bool on);
+  void SetAuthor(std::string utf8) { author_ = std::move(utf8); }
+  const std::string& Author() const { return author_; }
+  // The name changes are recorded with: Author(), or "Author" when there's none.
+  std::string ChangeAuthor() const { return author_.empty() ? std::string("Author") : author_; }
+  // The local time as Word writes it ("2026-11-05T14:30:00Z"); for tests, a fixed one.
+  std::string ChangeDate() const;
+  void SetFixedDate(std::string date) { fixedDate_ = std::move(date); }
+  // Ids for new change records and comments (w:id), and for new paragraphs (w14:paraId).
+  std::string NewChangeId();
+  std::string NewParaId();
+  // Accepts or rejects the tracked changes [from, to] touches, in one story; with from == to, the
+  // ones the caret is in or beside. One undo step. Fails, changing nothing, when there are none or
+  // one can't be decided (part of a field, inserted or deleted cells).
+  Result ReviewChanges(Pos from, Pos to, bool accept);
+  // Every tracked change of the document. Text boxes, which aren't edited yet, keep theirs (the
+  // result's message says so).
+  Result ReviewAll(bool accept);
+  // While paused, nothing is recorded (a comment's own text, which Word doesn't track).
+  void PauseTracking(bool pause) { paused_ = pause; }
+  bool TrackingPaused() const { return paused_ || reviewing_; }
+
+  // ---- Comment marks (D4; Comments.h makes and removes whole comments)
+  // A comment's marks in its story: w:commentRangeStart at `from`, w:commentRangeEnd at `to`,
+  // and its reference (a run with w:commentReference, one character) at `refAt`, after `to`
+  // (a reply's goes after the one it answers). One transaction.
+  Result InsertCommentMarks(Pos from, Pos to, Pos refAt, std::string_view id);
+  // Takes out the marks of comment `id`, wherever they are in one story.
+  Result RemoveCommentMarks(std::string_view id);
 
   // ---- Tables (D3, plan §6.2)
   // Cells are named by positions in them: `from` and `to` in two cells of one table name the block
@@ -253,6 +300,9 @@ class Editor {
   // Typing and deleting a character at a time coalesce into one step while they continue where the
   // last one ended. The view breaks the run when the caret moves on its own or time passes.
   void BreakTyping();
+  // Text inserted at the edge of a check box or drop-down list goes beside it, as typed text does;
+  // while filling one in (Forms.h), it goes in it.
+  void FillingIn(bool on);
 
   // ---- Direct changes (TreeEdit.h). RecordStep adds an applied step to the history, as one undo
   // step or as part of the open group, rebuilds the model's indexes and tells the listeners that
@@ -280,9 +330,23 @@ class Editor {
   std::vector<uint32_t> DirtyParts() const;
 
  private:
+  // Forms protection (Forms.h): true, with why, when a change of [from, to] is refused; with no
+  // range (formatting, tables, drawings), any change is.
+  bool FormsRefuse(const Pos* from, const Pos* to, std::u16string& why) const;
   void AddReferences(const KeptRefs& kept, Pos at);
+  // Accepts or rejects the changes of `story` that `pick` takes (by the text each covers, and
+  // whether it's in a paragraph rather than a table's or the body's properties).
+  using ChangePicker = std::function<bool(Pos from, Pos to, bool inPara)>;
+  Result Review(uint32_t story, const ChangePicker& pick, bool accept, std::u16string name, Pos caret);
+  // Delete with Track Changes on: the text is marked deleted, and stays.
+  Result DeleteTracked(Pos from, Pos to);
+  // Whether the next transaction records what it does, and as whom (Tracking(), Author()).
+  void Arm();
+  bool reviewing_ = false;  // accepting or rejecting: the changes it makes aren't recorded
+  bool paused_ = false;     // PauseTracking
 
   Document& doc_;
+  std::string author_, fixedDate_;
   Result EditTable(Pos from, Pos to, std::u16string name, const std::function<bool(TableOp&)>& op);
 
   std::unique_ptr<EditorState> impl_;
@@ -310,6 +374,11 @@ struct KeptRefs {
   std::vector<std::string> xml;
 };
 KeptRefs KeptReferences(const Document& doc, const std::vector<uint32_t>& marks);
+
+// Whether the text of text-box story `story` can be edited: its drawing's kept XML holds every
+// copy of it as the reader found them (Drawing::boxesWritable), and the drawing is in the document
+// where it's written (a text box inside a text box: that one's drawing too). False for other stories.
+bool TextBoxEditable(const Document& doc, uint32_t story);
 
 // True when every character of `utf8` can be written in XML 1.0: valid UTF-8, without control
 // characters (tab, line feed and carriage return aside), lone surrogates, U+FFFE or U+FFFF. A

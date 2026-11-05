@@ -11,6 +11,7 @@
 #include "doc/edit/Editor.h"
 #include "doc/edit/Toc.h"
 #include "doc/edit/Pictures.h"
+#include "doc/edit/Shapes.h"
 #include "doc/layout/Layout.h"
 #include "draw/Drawing.h"
 #include "doc/proof/AutoCorrect.h"
@@ -25,6 +26,8 @@
 #include "word/DocTable.h"
 
 class PicturePanel;
+class ShapePanel;
+class WatermarkPanel;
 
 // A Word document in a tab (plan milestones D1 and D2): the model, laid out page by page by
 // fw::doc::layout (the first page at once, the rest in idle time), drawn through draw::Painter,
@@ -103,6 +106,8 @@ class DocView : public PagedView {
 
   bool Save(const std::wstring& path, std::wstring& error) override;
   SaveFormat SaveAsFormat() const override;
+  std::vector<SaveFormat> CopyFormats() const override;
+  bool SaveCopy(const std::wstring& path, size_t format, std::wstring& error) override;
   std::wstring SuggestedSavePath() const override;
   void Autosave() override;
   FileChange CheckFileOnDisk() override { return Ready() ? static_cast<FileChange>(file_.CheckDisk()) : FileChange::None; }
@@ -110,6 +115,13 @@ class DocView : public PagedView {
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;
   // Every page to Microsoft Print to PDF, into a file, with no dialog (the visual checks' print step).
   PrintOutcome PrintToFile(const std::wstring& path, std::wstring& message);
+  // Export PDF (DocPdf.cpp): selectable text in the fonts on screen, links, bookmarks from the
+  // headings, the title and author.
+  bool CanExportPdf() const override { return Ready(); }
+  bool ExportPdf(const std::wstring& path, std::wstring& message) override;
+  // Each page as the screen draws it, into page-1.png, page-2.png... in `dir`, at `dpi`: what the
+  // PDF checks compare the exported pages with. Returns the pages written.
+  int RenderPagesForTesting(const std::wstring& dir, float dpi);
 
   // ---- Editing (D2) ----
   // The document's editor: every change goes through it (transactions, undo and redo). Null until
@@ -283,11 +295,11 @@ class DocView : public PagedView {
   void FillD3Menu(HMENU m, int x, int y);
   // The commands, keys and context menu entries of D4: footnotes, endnotes, tables of contents
   // (DocNotes.cpp).
-  static int ShortcutD4(UINT vk, UINT mods);
-  static const std::vector<int>& CommandsD4();
-  bool ExecuteD4(int cmd);
-  std::optional<CommandState> QueryD4(int cmd);
-  void FillD4Menu(HMENU m);
+  static int ShortcutNotes(UINT vk, UINT mods);
+  static const std::vector<int>& CommandsNotes();
+  bool ExecuteNotes(int cmd);
+  std::optional<CommandState> QueryNotes(int cmd);
+  void FillNotesMenu(HMENU m);
   // The page each paragraph is on as the layout numbers it, laid out as far as needed.
   fw::doc::edit::PageText PageTexts();
   // The table of contents the caret is in, else the document's first.
@@ -314,6 +326,30 @@ class DocView : public PagedView {
   std::unique_ptr<BookmarkPanel> bookmarkPanel_;
   std::unique_ptr<PageNumberPanel> pageNumberPanel_;
   std::unique_ptr<NavPanel> navPanel_;
+
+  // ---- Review (D4, DocReview.cpp): comments and tracked changes. The 💬 button opens the Review
+  // pane; Ctrl+Shift+E turns Track Changes on or off; the ⋯ menu has the rest.
+  class ReviewPanel;
+  enum class Markup : uint8_t { Simple, All, None, Original };  // Word's four views of changes
+  bool ExecuteD4(int cmd);
+  std::optional<CommandState> QueryD4(int cmd);
+  void AddD4Toolbar(ToolbarModel& m);
+  void FillD4Menu(HMENU m);
+  // The tracked change after (or before) the caret, selected: in its story, then the next story.
+  bool GoToChange(bool back);
+  // Accepts or rejects the changes the selection touches (the one at the caret), then goes to the next.
+  void ReviewChange(bool accept);
+  // The name changes and comments are made with: the one set in ⋯, else Windows'.
+  std::string ReviewerName() const;
+  // Whether the layout can show deleted text and hide inserted text (All markup and Original).
+  static bool MarkupLaidOut();
+  // Whether a run in this change is shown in the markup chosen (deleted text in All markup and
+  // Original, inserted text not in Original): the caret stops in it, copying takes it.
+  bool RevisionShown(fw::doc::Node revision) const;
+  Markup markup_ = Markup::Simple;
+  std::unique_ptr<ReviewPanel> reviewPanel_;
+  size_t allChanges_ = 0;  // tracked changes of every kind, formatting too (CollectAnnotations)
+  uint32_t editStamp_ = 0;  // counts edits, undos and redos: the Review pane reads them again
   // ---- Rulers (DocRuler.cpp), on demand (the ⋯ menu), as Word's: along the top the caret's page
   // with its margins and columns, and the paragraph's indents and tab stops; down the left its top
   // and bottom margins. Dragging one changes it, one undo step each; a click on the ruler sets a tab
@@ -344,6 +380,24 @@ class DocView : public PagedView {
   // A right-click on the ruler: a tab stop's kind and leader, clearing, the Tabs panel (DocStyles).
   void FillRulerMenu(HMENU m, int x, int y);
   friend class DocStyles;  // its panels' buttons
+
+  // ---- Content controls and form fields (DocForms.cpp, D4)
+  static std::vector<int> FormCommands();  // Insert ▾'s content controls
+  std::optional<CommandState> QueryForms(int cmd);
+  bool ExecuteForms(int cmd);
+  // A plain click at `pos` (x, y in the window): a check box ticks, a placeholder is selected whole
+  // and a list or date opens its menu. True when the click was the control's.
+  bool FormClick(TextPos pos, int x, int y);
+  // Tab and Shift+Tab in a protected form go from field to field; Alt+Down opens a list's menu.
+  bool FormKey(UINT vk, UINT mods);
+  // Typed text: it replaces a placeholder, Space ticks a check box, a list takes none. True when
+  // handled here.
+  bool FormType(std::u16string_view text);
+  // Deleting [from, to): a placeholder, a check box and a list stay; a control emptied shows its
+  // placeholder. True when handled here.
+  bool FormDelete(TextPos from, TextPos to);
+  // The menu of the list, combo box, date or drop-down field at `at`, under it.
+  void FormMenu(fw::doc::Pos at);
 
   // ---- Formatting (DocFormat)
   // What formatting applies to: the selection, or the caret and the word it's in.
@@ -393,6 +447,22 @@ class DocView : public PagedView {
   // The Picture panel shows the selected picture.
   void SyncPicturePanel();
 
+  // ---- Shapes, text boxes and watermarks (DocShapes.cpp, D4)
+  const fw::doc::edit::ShapeInfo& ShapeInfoOf(uint32_t drawing) const;
+  // A picture or shape the handles move, resize and turn.
+  bool Movable(uint32_t drawing) const;
+  // Why a drawing can't be changed.
+  std::u16string WhyNotMovable(uint32_t drawing) const;
+  void InsertShape(fw::doc::edit::ShapeKind kind);
+  // Typing with a shape selected goes into its text (made when it has none); true when it did.
+  bool TypeIntoShape(std::u16string_view text);
+  // The caret at the end of the selected shape's text; false when it has none it can take.
+  bool EnterShapeText(bool add);
+  bool PickPictureFile(std::vector<uint8_t>& bytes, const wchar_t* title);
+  std::optional<CommandState> QueryShape(int cmd);
+  bool ExecuteShape(int cmd);
+  void SyncShapePanels();
+
   std::wstring path_;            // the file; empty for a new or recovered document
   DocFile file_;
   std::vector<uint8_t> bytes_;   // NewDocument, FromBytes: what Load reads instead of a file
@@ -438,7 +508,8 @@ class DocView : public PagedView {
   struct Change {
     TextPos from, to;
     bool deletion = false;
-    size_t author = 0;  // its color
+    bool barOnly = false;  // formatting or a paragraph mark: only the bar, beside its lines
+    size_t author = 0;     // its color
     std::wstring text;  // "Inserted by Ann", "Deleted by Ann: “old words”"
     bool measured = false;
     Rects rects;                                       // insertions
@@ -473,6 +544,7 @@ class DocView : public PagedView {
 
   // Find
   std::vector<Match> matches_;
+  std::vector<Match> formShades_;  // legacy form fields, shaded on screen as Word shades them (D4)
   int current_ = -1;
   std::wstring query_;  // what was searched for, to find again after a replace
   bool matchCase_ = false, wholeWords_ = false;
@@ -492,6 +564,7 @@ class DocView : public PagedView {
   TextPos cellFrom_, cellTo_;
   uint32_t cellRevision_ = UINT32_MAX;
   std::unique_ptr<fw::doc::edit::Pictures> pictures_;  // with the editor, after it
+  std::unique_ptr<fw::doc::edit::Shapes> shapes_;
   // Rows chosen in the margin beside a table, columns just above one, or lines in the margin beside
   // text (Word's selection bar): the drag goes on by whole rows, columns or lines from here.
   enum class LineDrag : uint8_t { None, Rows, Columns, Lines };
@@ -596,6 +669,12 @@ class DocView : public PagedView {
   mutable uint64_t infoKey_ = UINT64_MAX;  // PictureInfoOf's last answer
   mutable uint32_t infoEdits_ = UINT32_MAX;
   mutable fw::doc::edit::PictureInfo info_;
+  std::unique_ptr<ShapePanel> shapePanel_;
+  std::unique_ptr<WatermarkPanel> watermarkPanel_;
+  uint64_t shapeShown_ = UINT64_MAX, watermarkShown_ = UINT64_MAX;
+  mutable uint64_t shapeKey_ = UINT64_MAX;  // ShapeInfoOf's last answer
+  mutable uint32_t shapeEdits_ = UINT32_MAX;
+  mutable fw::doc::edit::ShapeInfo shapeInfo_;
   struct PictureDrag {
     enum Kind { None, Pending, Move, Resize, Rotate, Crop } kind = None;
     uint32_t drawing = 0;

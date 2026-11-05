@@ -106,6 +106,11 @@ class Document {
   bool FocusedField(int& page) const;
 
   bool Save(const std::wstring& path, std::wstring& error);
+  // Export PDF: a copy at `path` with filled-in form fields, highlights and notes made part of
+  // the pages, as printing them would; the document itself stays as it is. Not for protected or
+  // XFA documents.
+  bool CanExportFlattened() const;
+  bool ExportFlattened(const std::wstring& path, std::wstring& error);
 
   // Highlights and notes, stored as standard PDF annotations so other readers show them too.
   bool AddHighlight(int page, const std::vector<FS_RECTF>& rects);

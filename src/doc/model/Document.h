@@ -85,6 +85,9 @@ struct Story {
   ElemId root = kNoElem;  // w:body, w:hdr, w:ftr, w:footnote, w:endnote, w:comment or w:txbxContent
   std::string id;         // notes and comments: w:id
   uint32_t drawing = kNone;  // text boxes: the drawing they belong to
+  // Text boxes: edits applied to the story now (doing and redoing count up, undoing down). While
+  // it isn't 0, the drawing's XML is written with the story in place of each copy of its text.
+  uint32_t edits = 0;
 };
 
 // A position in a paragraph's text.
@@ -175,6 +178,12 @@ struct Drawing {
   uint32_t id = 0;
   std::string name, descr, title;
   std::vector<uint32_t> textBoxes;  // stories read from its w:txbxContent
+  // Its text boxes can be written back: every copy of the drawing's text (a DrawingML choice and
+  // a VML fallback) has the same text boxes in the same order, and the XML holding them is kept.
+  bool boxesWritable = false;
+  // Shown from an mc:AlternateContent block (displayOnly): the store fragment that is the block
+  // has this tag (pkg::Fragment::tag). 0 when the block isn't kept, or holds more than this drawing.
+  uint32_t kept = 0;
   std::string keptXml;  // display-only drawings: their XML (the kept AlternateContent block is what's written)
   uint32_t version = 0;  // changes whenever its XML does (D3 picture edits), for the view's caches
 };
@@ -471,7 +480,7 @@ class Document {
     std::string paraId, parentParaId;
     bool done = false;
   };
-  std::vector<CommentEx> commentsEx_;  // word/commentsExtended.xml, read but never written
+  std::vector<CommentEx> commentsEx_;  // word/commentsExtended.xml; written again from this (D4)
   std::unique_ptr<Caches> caches_;
   uint64_t cacheGeneration_ = 0;
   void ResetCaches();

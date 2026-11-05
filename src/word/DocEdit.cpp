@@ -40,6 +40,9 @@ bool Space(char16_t c) { return c == u' ' || c == u'\t' || c == 0x00A0 || c == 0
 
 void DocView::OnEdited(const fw::doc::edit::Change& c) {
   pagination_->Edited(c);
+  ++editStamp_;
+  // Comments and changes are found again once typing pauses, wherever the edit was.
+  if (allChanges_ > 0 || !comments_.empty() || (editor_ && editor_->Tracking())) annotationsStale_ = true;
   // Positions kept from before: later paragraphs moved; those in the changed ones are found anew.
   const int32_t shift = c.Shift();
   auto move = [&](TextPos& p) {
@@ -125,7 +128,9 @@ bool DocView::ApplyPageChange(const Result& r, bool caret) {
 
 void DocView::TypeText(std::u16string_view text) {
   if (text.empty()) return;
+  if (TypeIntoShape(text)) return;  // a shape selected: its text (DocShapes.cpp)
   if (HasSelection() && table_ && table_->ReplaceCells(text)) return;  // cells selected: they're replaced
+  if (text.find(u'\r') == std::u16string_view::npos && FormType(text)) return;  // in a content control or form field
   const bool typed = !HasSelection();
   if (!Apply(HasSelection() ? editor_->Replace(SelFrom(), SelTo(), text) : editor_->InsertText(ToDoc(focus_), text))) return;
   // "1. " or "* " at the start of a paragraph starts a list (DocFormat::AutoFormat).
@@ -135,7 +140,7 @@ void DocView::TypeText(std::u16string_view text) {
 void DocView::DeleteBy(bool forward, bool word) {
   if (HasSelection() && table_ && table_->ReplaceCells(u"")) return;  // cells selected: they're emptied
   if (HasSelection()) {
-    Apply(editor_->Delete(SelFrom(), SelTo()));
+    if (!FormDelete(anchor_, focus_)) Apply(editor_->Delete(SelFrom(), SelTo()));
     return;
   }
   TextPos from = focus_, to = focus_;
@@ -156,7 +161,7 @@ void DocView::DeleteBy(bool forward, bool word) {
       else from = StepChar(focus_, false);  // the start: joins the paragraph before
     }
   }
-  if (from == to) return;
+  if (from == to || FormDelete(from, to)) return;
   Apply(editor_->Delete(ToDoc(from), ToDoc(to)));
 }
 
@@ -426,7 +431,7 @@ bool DocView::EditKey(UINT vk, UINT mods) {
         TypeText(u"\v");  // a line break (w:br)
         AutoCorrectTyped(u'\v');
       } else if (HasSelection()) {
-        TypeText(u"\r");
+        if (!TypeIntoShape(u"")) TypeText(u"\r");  // a selected shape: into its text, as in Word
       } else if (const fw::doc::ParaProps& pp = doc_->ResolvedPara(focus_.para);
                  format_ && doc_->Para(focus_.para).text.empty() && !pp.numId.empty() && pp.numId != "0") {
         // An empty list item: the list ends there, as in Word (the item becomes plain text).
@@ -589,7 +594,7 @@ std::vector<uint32_t> DocView::Stops(uint32_t para) const {
   std::vector<uint32_t> out;
   for (const auto& run : doc_->Runs(para)) {
     if (run.fieldCode) continue;
-    if (run.revision && (run.revision.Is(fw::doc::Name("del")) || run.revision.Is(fw::doc::Name("moveFrom")))) continue;
+    if (!RevisionShown(run.revision)) continue;
     if (run.run && doc_->ResolvedRun(para, run.run).vanish) continue;
     for (uint32_t i = run.start; i < run.end && i < s.size(); ++i) {
       const char16_t c = s[i];
