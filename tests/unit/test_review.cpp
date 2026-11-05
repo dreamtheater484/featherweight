@@ -634,3 +634,28 @@ TEST(Comments_TextIsNotTracked) {
   REQUIRE(ed.InsertText(P(p, 2), u"c"));
   CHECK(!t.doc->Revisions(t.doc->MainStory()).empty());
 }
+
+TEST(Review_FormattingSplitGetsIdsOfItsOwn) {
+  // Torture finding 38, the formatting commands' path: tracked formatting over part of a run that
+  // already holds a w:rPrChange splits it; each piece's record has an id of its own.
+  Tracked t("<w:p><w:r><w:t>abcdefgh</w:t></w:r></w:p>");
+  REQUIRE(t.ed);
+  Editor& ed = *t.ed;
+  const uint32_t p = Main(*t.doc)[0];
+  {
+    edit::TreeEdit te(ed, P(p, 0));
+    edit::ToggleRuns(te, edit::Range{P(p, 0), P(p, 8)}, edit::Toggle::Strike);
+  }
+  {
+    edit::TreeEdit te(ed, P(p, 2));
+    edit::ToggleRuns(te, edit::Range{P(p, 2), P(p, 5)}, edit::Toggle::Italic);
+  }
+  const std::string xml = MainXml(*t.doc);
+  size_t records = 0;
+  for (size_t at = xml.find("<w:rPrChange "); at != std::string::npos; at = xml.find("<w:rPrChange ", at + 1)) ++records;
+  CHECK(records == 3 && IdsUnique(xml));
+  CHECK(Consistent(*t.doc, t.f));
+  // Rejected, it's as it was.
+  CHECK(ed.ReviewAll(false) && t.doc->Revisions(t.doc->MainStory()).empty());
+  CHECK(MainXml(*t.doc).find("<w:strike") == std::string::npos && MainXml(*t.doc).find("<w:i/>") == std::string::npos);
+}
