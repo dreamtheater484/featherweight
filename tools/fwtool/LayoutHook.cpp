@@ -17,7 +17,7 @@ namespace fwtool {
 
 namespace {
 
-// The document being laid out, for font substitution from its font table (w:altName).
+// The document being laid out, for font substitution from its font table (panose and family).
 const fw::doc::Document* g_document = nullptr;
 
 std::wstring Substitute(std::wstring_view family) {

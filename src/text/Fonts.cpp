@@ -1,6 +1,8 @@
 #include "text/Fonts.h"
 
 #include <algorithm>
+#include <climits>
+#include <cstdlib>
 #include <cwctype>
 
 using Microsoft::WRL::ComPtr;
@@ -45,9 +47,7 @@ std::wstring Lower(std::wstring_view s) {
   return out;
 }
 
-std::wstring FamilyName(IDWriteFontFamily* family) {
-  ComPtr<IDWriteLocalizedStrings> names;
-  if (FAILED(family->GetFamilyNames(&names))) return {};
+std::wstring EnglishName(IDWriteLocalizedStrings* names) {
   UINT32 index = 0;
   BOOL exists = FALSE;
   if (FAILED(names->FindLocaleName(L"en-us", &index, &exists)) || !exists) index = 0;
@@ -57,6 +57,11 @@ std::wstring FamilyName(IDWriteFontFamily* family) {
   if (FAILED(names->GetString(index, name.data(), length + 1))) return {};
   name.resize(length);
   return name;
+}
+
+std::wstring FamilyName(IDWriteFontFamily* family) {
+  ComPtr<IDWriteLocalizedStrings> names;
+  return SUCCEEDED(family->GetFamilyNames(&names)) ? EnglishName(names.Get()) : std::wstring();
 }
 
 // Families Office or macOS documents name that Windows doesn't install, with the Windows families
@@ -83,7 +88,8 @@ constexpr BuiltIn kBuiltIn[] = {
 
 }  // namespace
 
-Face::Face(ComPtr<IDWriteFontFace> face, std::wstring family) : face_(std::move(face)), family_(std::move(family)) {
+Face::Face(ComPtr<IDWriteFontFace> face, std::wstring family, DWRITE_FONT_WEIGHT weight, DWRITE_FONT_STYLE style)
+    : face_(std::move(face)), family_(std::move(family)), weight_(weight), style_(style) {
   DWRITE_FONT_METRICS fm{};
   face_->GetMetrics(&fm);
   upem_ = fm.designUnitsPerEm ? fm.designUnitsPerEm : 2048.0f;
@@ -171,7 +177,20 @@ bool Fonts::Installed(std::wstring_view family) {
   std::wstring name(family);
   UINT32 index = 0;
   BOOL exists = FALSE;
-  return SUCCEEDED(collection_->FindFamilyName(name.c_str(), &index, &exists)) && exists;
+  return (SUCCEEDED(collection_->FindFamilyName(name.c_str(), &index, &exists)) && exists) || Win32Family(name);
+}
+
+ComPtr<IDWriteFontSet> Fonts::Win32Family(const std::wstring& family) {
+  if (!win32Tried_) {
+    win32Tried_ = true;
+    ComPtr<IDWriteFontCollection1> collection;
+    if (collection_ && SUCCEEDED(collection_.As(&collection))) collection->GetFontSet(&win32_);
+  }
+  ComPtr<IDWriteFontSet> matches;
+  if (!win32_ || family.empty()) return matches;
+  const DWRITE_FONT_PROPERTY property{DWRITE_FONT_PROPERTY_ID_WIN32_FAMILY_NAME, family.c_str(), L""};
+  if (FAILED(win32_->GetMatchingFonts(&property, 1, &matches)) || !matches || matches->GetFontCount() == 0) matches.Reset();
+  return matches;
 }
 
 std::wstring_view Fonts::BuiltInSubstitute(std::wstring_view family) {
@@ -235,7 +254,41 @@ const Face* Fonts::Get(const std::wstring& installedFamily, DWRITE_FONT_WEIGHT w
       SUCCEEDED(family->GetFirstMatchingFont(weight, DWRITE_FONT_STRETCH_NORMAL,
                                              italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL, &font)) &&
       SUCCEEDED(font->CreateFontFace(&face))) {
-    result = std::make_unique<Face>(face, FamilyName(family.Get()));
+    result = std::make_unique<Face>(face, FamilyName(family.Get()), weight,
+                                    italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL);
+  } else if (ComPtr<IDWriteFontSet> set = Win32Family(installedFamily)) {
+    // As GDI picks within a Win32 family: the face of the right slant with the nearest weight,
+    // simulating bold and italic when there's none (Calibri Light has no bold).
+    ComPtr<IDWriteFontFaceReference> best;
+    ComPtr<IDWriteFontFace3> bestFace;
+    int bestScore = INT_MAX;
+    for (UINT32 i = 0; i < set->GetFontCount(); ++i) {
+      ComPtr<IDWriteFontFaceReference> ref;
+      ComPtr<IDWriteFontFace3> candidate;
+      if (FAILED(set->GetFontFaceReference(i, &ref)) || FAILED(ref->CreateFontFace(&candidate))) continue;
+      const bool slanted = candidate->GetStyle() != DWRITE_FONT_STYLE_NORMAL;
+      const int score = (slanted != italic ? 10000 : 0) + std::abs(static_cast<int>(candidate->GetWeight()) - weight);
+      if (score < bestScore) {
+        bestScore = score;
+        best = ref;
+        bestFace = candidate;
+      }
+    }
+    if (best) {
+      // Fallback finds the face under its DirectWrite family and its own weight and style.
+      ComPtr<IDWriteLocalizedStrings> names;
+      std::wstring dwFamily = SUCCEEDED(bestFace->GetFamilyNames(&names)) ? EnglishName(names.Get()) : installedFamily;
+      const DWRITE_FONT_WEIGHT dwWeight = bestFace->GetWeight();
+      const DWRITE_FONT_STYLE dwStyle = bestFace->GetStyle();
+      int simulations = DWRITE_FONT_SIMULATIONS_NONE;
+      if (weight >= DWRITE_FONT_WEIGHT_SEMI_BOLD && bestFace->GetWeight() < DWRITE_FONT_WEIGHT_SEMI_BOLD)
+        simulations |= DWRITE_FONT_SIMULATIONS_BOLD;
+      if (italic && bestFace->GetStyle() == DWRITE_FONT_STYLE_NORMAL) simulations |= DWRITE_FONT_SIMULATIONS_OBLIQUE;
+      ComPtr<IDWriteFontFace3> simulated;
+      if (simulations && SUCCEEDED(best->CreateFontFaceWithSimulations(static_cast<DWRITE_FONT_SIMULATIONS>(simulations), &simulated)))
+        bestFace = simulated;
+      result = std::make_unique<Face>(bestFace, std::move(dwFamily), dwWeight, dwStyle);
+    }
   }
   return faces_.emplace(std::move(key), std::move(result)).first->second.get();
 }
@@ -251,7 +304,7 @@ const Face* Fonts::Get(IDWriteFont* font) {
   if (auto it = faces_.find(key); it != faces_.end()) return it->second.get();
   std::unique_ptr<Face> result;
   ComPtr<IDWriteFontFace> face;
-  if (SUCCEEDED(font->CreateFontFace(&face))) result = std::make_unique<Face>(face, name);
+  if (SUCCEEDED(font->CreateFontFace(&face))) result = std::make_unique<Face>(face, name, font->GetWeight(), font->GetStyle());
   return faces_.emplace(std::move(key), std::move(result)).first->second.get();
 }
 

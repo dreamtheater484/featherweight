@@ -119,19 +119,32 @@ class LineBuilder {
     if (open_) space_ = true;
   }
 
-  void Add(unsigned c, int container, bool artifact, LayoutStory story, double x, double y, double size,
-           const FS_RECTF& box) {
-    // The same line: same container, the same baseline give or take a superscript, and not back
-    // to the left (unless the text runs right to left).
+  // `rotation`: the character's quarter turns clockwise on the page, as PDFium measures them (text
+  // boxes and table cells with vertical text). Its line is found in its own direction: the coordinates are turned back first.
+  void Add(unsigned c, int container, bool artifact, LayoutStory story, double pageX, double pageY, double size,
+           const FS_RECTF& pageBox, int rotation) {
+    double x = pageX, y = pageY;
+    FS_RECTF box = pageBox;
+    switch (rotation) {
+      case 1: x = -pageY, y = pageX, box.left = -pageBox.top, box.right = -pageBox.bottom; break;
+      case 2: x = -pageX, y = -pageY, box.left = -pageBox.right, box.right = -pageBox.left; break;
+      case 3: x = pageY, y = -pageX, box.left = pageBox.bottom, box.right = pageBox.top; break;
+      default: break;
+    }
+    // The same line: same container and direction, the same baseline give or take a superscript,
+    // and not back to the left (unless the text runs right to left).
     double tolerance = 0.5 * std::max(size, size_);
-    bool same = open_ && container == container_ && artifact == artifact_ && std::fabs(y - y_) <= tolerance &&
-                (x >= lastX_ - tolerance || IsRtl(c) || rtl_);
+    bool same = open_ && container == container_ && artifact == artifact_ && rotation == rotation_ &&
+                std::fabs(y - y_) <= tolerance && (x >= lastX_ - tolerance || IsRtl(c) || rtl_);
     if (!same) {
       Flush();
       open_ = true;
       container_ = container;
       artifact_ = artifact;
       story_ = story;
+      rotation_ = rotation;
+      pageX_ = pageX;
+      pageY_ = pageY;
       y_ = y;
       size_ = size;
       left_ = box.left;
@@ -165,9 +178,11 @@ class LineBuilder {
     if (text.empty()) return;
     fw::LayoutLine line;
     // Word doesn't say which pagination artifacts are headers and which footers: top or bottom.
-    line.story = artifact_ ? (y_ > page_.height / 2 ? LayoutStory::Header : LayoutStory::Footer) : story_;
-    line.x = left_;
-    line.baseline = page_.height - y_;
+    const double y = rotation_ ? pageY_ : y_;
+    line.story = artifact_ ? (y > page_.height / 2 ? LayoutStory::Header : LayoutStory::Footer) : story_;
+    // A turned line is placed where it starts.
+    line.x = rotation_ ? pageX_ : left_;
+    line.baseline = page_.height - y;
     line.width = std::max(0.0, right_ - left_);
     line.size = size_;
     line.text = std::move(text);
@@ -177,9 +192,9 @@ class LineBuilder {
  private:
   fw::LayoutPage& page_;
   bool open_ = false, space_ = false, artifact_ = false, rtl_ = false;
-  int container_ = 0;
+  int container_ = 0, rotation_ = 0;
   LayoutStory story_ = LayoutStory::Body;
-  double y_ = 0, size_ = 0, lastSize_ = 0, lastX_ = 0, left_ = 0, right_ = 0;
+  double y_ = 0, size_ = 0, lastSize_ = 0, lastX_ = 0, left_ = 0, right_ = 0, pageX_ = 0, pageY_ = 0;
   std::wstring text_;
 };
 
@@ -217,7 +232,12 @@ void ReadPage(FPDF_PAGE page, fw::LayoutPage& out) {
     FPDFText_GetCharOrigin(text, i, &x, &y);
     FS_RECTF box{static_cast<float>(x), static_cast<float>(y), static_cast<float>(x), static_cast<float>(y)};
     FPDFText_GetLooseCharBox(text, i, &box);
-    lines.Add(c, info.artifact ? -1 : m.container, info.artifact, m.story, x, y, FPDFText_GetFontSize(text, i), box);
+    // Quarter turns, from the character's angle (radians; -1 when unknown): at a quarter turn
+    // the text runs down the page.
+    const float angle = FPDFText_GetCharAngle(text, i);
+    const int rotation = angle < 0 ? 0 : static_cast<int>(std::lround(angle / 1.5707963)) % 4;
+    lines.Add(c, info.artifact ? -1 : m.container, info.artifact, m.story, x, y, FPDFText_GetFontSize(text, i), box,
+              rotation);
   }
   lines.Flush();
   FPDFText_ClosePage(text);

@@ -130,9 +130,17 @@ TEST(Fidelity_TokenizeSkipsLinesWithoutWords) {
   CHECK_EQ(t.lines.size(), 4u);
   CHECK_EQ(t.lines[0].firstWord, -1);
   CHECK_EQ(t.lines[1].firstWord, 0);
-  CHECK(t.words[0].key == L"introduction1");  // the leader joins them as drawn, on both sides alike
+  // A leader stands for its tab, which a dump may write without it: it separates the words.
+  CHECK(t.words.size() == 2 && t.words[0].key == L"introduction" && t.words[1].key == L"1");
   CHECK_EQ(t.lines[2].firstWord, -1);
   CHECK_EQ(t.lines[3].firstWord, -1);
+}
+
+TEST(Fidelity_TokenizeSplitsAtLeadersOnly) {
+  Text t = Tokenize(Dump({{TextLine(L"PAGE.......3 e.g. well--known 1.250 Notes___12")}}));
+  std::vector<std::wstring> keys;
+  for (const auto& w : t.words) keys.push_back(w.key);
+  CHECK((keys == std::vector<std::wstring>{L"page", L"3", L"eg", L"wellknown", L"1250", L"notes", L"12"}));
 }
 
 TEST(Fidelity_TokenizeSplitsIdeographs) {
