@@ -21,6 +21,7 @@
 #include "Torture.h"
 #include "core/Strings.h"
 #include "doc/docx/Docx.h"
+#include "doc/docx/Save.h"
 #include "doc/model/Schema.h"
 #include "doc/model/Utf.h"
 #include "pkg/Check.h"
@@ -167,21 +168,20 @@ bool ParseEdit(std::string_view line, Edit& e) {
 
 namespace {
 
-// Saves as the app does: the given parts written from the model into the package, then the package.
-fw::pkg::Status SaveParts(fw::doc::Document& doc, const std::vector<uint32_t>& parts, std::vector<uint8_t>& out,
-                          std::vector<std::string>& written) {
-  fw::pkg::Status st;
+// Saves as the app does (DocFile::Save): docx::Serialize writes the changed parts from the model,
+// updates the core properties when something was edited, saves the package and checks it opens
+// again. With nothing edited it is the file exactly as it was opened. The time is fixed, so that a
+// replay gives the same bytes.
+fw::pkg::Status SaveParts(fw::doc::Document& doc, const std::vector<uint32_t>& parts, bool edited,
+                          std::vector<uint8_t>& out, std::vector<std::string>& written) {
   written.clear();
-  for (uint32_t part : parts) {
-    written.push_back(doc.Parts()[part].name);
-    std::string xml;
-    if (!(st = fw::doc::docx::WritePart(doc, part, xml)).Ok()) return st;
-    doc.Package().SetPart(doc.Parts()[part].name, std::vector<uint8_t>(xml.begin(), xml.end()));
-  }
-  fw::pkg::MemorySink sink;
-  if (!(st = doc.Package().Save(sink)).Ok()) return st;
-  out = std::move(sink.bytes);
-  return st;
+  for (uint32_t part : parts) written.push_back(doc.Parts()[part].name);
+  fw::doc::docx::SaveOptions options;
+  options.changedParts = parts;
+  options.edited = edited;
+  options.author = "fwtool torture";
+  options.now = 134116992000000000LL;  // 2026-01-01T00:00:00Z
+  return fw::doc::docx::Serialize(doc, options, out);
 }
 
 #if FW_TORTURE_EDITOR
@@ -286,16 +286,11 @@ class EditorTarget : public EditTarget {
     return Applied::Done;
   }
 
-  // As the Word tab saves (DocView::Save): with nothing changed, the file exactly as it was opened.
+  // As the Word tab saves (DocView::Save → DocFile::Save): the editor's changed parts, and
+  // "edited" while the document differs from the file.
   fw::pkg::Status Save(std::vector<uint8_t>& out) override {
     CloseGroup();
-    std::vector<uint32_t> dirty = editor_.DirtyParts();
-    if (!dirty.empty()) return SaveParts(*doc_, dirty, out, written);
-    written.clear();
-    const auto& snapshot = doc_->Package().GetSnapshot();
-    out.resize(static_cast<size_t>(snapshot.Size()));
-    if (!snapshot.ReadAt(0, out.data(), out.size())) return fw::pkg::Status::Fail(fw::pkg::Status::Code::IoError, "the original couldn't be read again");
-    return {};
+    return SaveParts(*doc_, editor_.DirtyParts(), editor_.Modified(), out, written);
   }
 
  private:
@@ -318,8 +313,8 @@ class ModelOnlyTarget : public EditTarget {
   fw::pkg::Status Save(std::vector<uint8_t>& out) override {
     std::vector<uint32_t> all;
     for (uint32_t i = 0; i < doc_->Parts().size(); ++i)
-      if (doc_->Parts()[i].writable) all.push_back(i);
-    return SaveParts(*doc_, all, out, written);
+      if (doc_->Parts()[i].writable && doc_->Parts()[i].Editable()) all.push_back(i);
+    return SaveParts(*doc_, all, true, out, written);
   }
 
  private:
