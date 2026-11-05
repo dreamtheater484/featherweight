@@ -1110,6 +1110,10 @@ TEST(Edit_FormattingInATextBoxIsSaved) {
   CHECK(ed.Refused().empty());
   const std::string xml = MainXml(*doc);
   CHECK(Has(xml, "<w:u w:val=\"single\"/>") && Has(xml, "<w:jc w:val=\"center\"/>") && Has(xml, "Heading1"));
+  // The part the text box is written in is one the app saves (d4 torture finding 35).
+  const auto main = static_cast<uint32_t>(doc->FindPart(PartKind::Document) - doc->Parts().data());
+  const std::vector<uint32_t> dirty = editor.DirtyParts();
+  CHECK(std::find(dirty.begin(), dirty.end(), main) != dirty.end());
   auto back = SaveAndReopen(*doc);
   CHECK(back);
   if (back) {

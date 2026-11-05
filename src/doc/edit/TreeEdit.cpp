@@ -258,6 +258,9 @@ std::vector<uint32_t> TreeEdit::PartsOf(const Saved& elems) const {
   std::vector<uint32_t> parts;
   std::unordered_map<ElemId, uint32_t> roots;
   for (uint32_t i = 0; i < doc_.parts_.size(); ++i) roots.emplace(doc_.parts_[i].root, i);
+  // A text box's story hangs from no part: it's written in its drawing's (Story::part).
+  for (const Story& s : doc_.stories_)
+    if (s.kind == StoryKind::TextBox && s.root != kNoElem && s.part < doc_.parts_.size()) roots.emplace(s.root, s.part);
   for (const auto& [id, e] : elems) {
     ElemId top = id;
     for (int hops = 0; hops < 256 && doc_.tree_.elems[top].parent != kNoElem; ++hops) top = doc_.tree_.elems[top].parent;
