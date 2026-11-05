@@ -365,6 +365,29 @@ TEST(Page_ParagraphPanelSettingsWriteAndUndo) {
   CHECK(MainXml(*doc) == original);
 }
 
+TEST(Page_ABreakInAFieldsResultIsRefusedAndLeavesNothing) {
+  // A page or column break in the middle of a field's result: the paragraph can't be split there,
+  // so the break doesn't stay in the text either (d1-corpus torture finding 26).
+  Fixture f;
+  f.body = "<w:p><w:r><w:t xml:space=\"preserve\">Signed: </w:t></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>"
+           "<w:r><w:instrText xml:space=\"preserve\"> AUTHOR </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/>"
+           "</w:r><w:r><w:t>Featherweight</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>" + P("After");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const uint32_t p = MainParas(*doc)[0];
+  const std::u16string text = doc->Para(p).text;
+  REQUIRE(text.substr(18, 13) == u"Featherweight");
+  const std::string original = MainXml(*doc);
+  edit::Editor editor(*doc);
+  for (bool column : {false, true}) {
+    const edit::Result r = edit::InsertBreak(editor, {p, 26}, column);  // "Featherw|eight"
+    CHECK(!r && !r.message.empty());
+    CHECK(doc->Para(p).text == text && MainXml(*doc) == original && !editor.CanUndo());
+  }
+  REQUIRE(edit::InsertBreak(editor, {p, 4}, false));  // before the field: as ever
+  CHECK(editor.Undo() && MainXml(*doc) == original);
+}
+
 TEST(Page_BreaksInAParagraphThatEndedASectionOrWasFormatted) {
   // A tree edit in a paragraph's properties (a section break deleted, the paragraph centered) and
   // then a page break in its text: the text after the break is all in the next paragraph, in the
