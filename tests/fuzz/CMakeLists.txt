@@ -5,7 +5,7 @@ set(FW_FUZZ_ENGINE "libfuzzer" CACHE STRING "Fuzz engine: libfuzzer or replay")
 set_property(CACHE FW_FUZZ_ENGINE PROPERTY STRINGS libfuzzer replay)
 
 set(_fw_fuzz_targets fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing fuzz_layout fuzz_picture fuzz_rtf
-  fuzz_html fuzz_clip)
+  fuzz_html fuzz_clip fuzz_shapes)
 if(FW_FUZZ_ENGINE STREQUAL "libfuzzer")
   # VS 2022 understands /fsanitize=fuzzer. VS 2019 16.9+ ignores it but has the pieces:
   # the coverage flags, and the libFuzzer and sancov runtimes, linked by hand.
@@ -39,6 +39,7 @@ endforeach()
 target_link_libraries(fuzz_drawing PRIVATE fwdraw)
 target_link_libraries(fuzz_layout PRIVATE fwdoclayout)
 target_link_libraries(fuzz_picture PRIVATE fwpictures)
+target_link_libraries(fuzz_shapes PRIVATE fwpictures)
 
 # Replay the seeds and the regression files once (libFuzzer: -runs=0 runs the inputs, no fuzzing).
 # run-fuzzers.ps1 lists the same seed folders for the timed runs.
@@ -57,6 +58,8 @@ add_test(NAME fuzz_picture_replay COMMAND fuzz_picture ${_fw_runs} "${_fw_seeds}
 add_test(NAME fuzz_rtf_replay COMMAND fuzz_rtf ${_fw_runs} "${CMAKE_SOURCE_DIR}/tests/clipboard" "${_fw_regressions}/rtf")
 add_test(NAME fuzz_html_replay COMMAND fuzz_html ${_fw_runs} "${CMAKE_SOURCE_DIR}/tests/clipboard" "${_fw_regressions}/html")
 add_test(NAME fuzz_clip_replay COMMAND fuzz_clip ${_fw_runs} "${_fw_seeds}/docx" "${_fw_seeds}/package" "${_fw_regressions}/clip")
+add_test(NAME fuzz_shapes_replay COMMAND fuzz_shapes ${_fw_runs} "${_fw_seeds}/shapes" "${_fw_seeds}/docx" "${_fw_seeds}/package"
+  "${_fw_regressions}/shapes")
 
 # Every fuzz target, so CI builds new ones without its own list.
 add_custom_target(fuzz_all DEPENDS ${_fw_fuzz_targets})

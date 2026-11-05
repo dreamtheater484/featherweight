@@ -630,6 +630,40 @@ TEST(Tables_ClearAndDelete) {
   CHECK(ChecksOut(*doc));
 }
 
+TEST(Tables_DeleteKeepsRangesInOrder) {
+  // Torture finding 29: a bookmark that starts in a table and ends just after it (a marker between
+  // the table and the next paragraph) keeps its start before its end when the table goes, whether
+  // the table alone is deleted or a range holding it.
+  std::string tbl = Table({{"a", "b"}});
+  tbl.replace(tbl.find("<w:p>"), 5, "<w:p><w:bookmarkStart w:id=\"57\" w:name=\"b57\"/>");
+  tbl.replace(tbl.rfind("<w:p>"), 5, "<w:p><w:bookmarkEnd w:id=\"58\"/>");
+  Fixture f;
+  f.body = Para("x") + "<w:bookmarkStart w:id=\"58\" w:name=\"b58\"/>" + tbl + "<w:bookmarkEnd w:id=\"57\"/>" + Para("y");
+  auto inOrder = [](const std::string& xml) {
+    for (const char* id : {"57", "58"}) {
+      const size_t start = xml.find("bookmarkStart w:id=\"" + std::string(id) + "\""),
+                   end = xml.find("bookmarkEnd w:id=\"" + std::string(id) + "\"");
+      if (start == std::string::npos || end == std::string::npos || end < start) return false;
+    }
+    return true;
+  };
+  for (int byRange = 0; byRange < 2; ++byRange) {
+    auto doc = LoadOk(f);
+    REQUIRE(doc);
+    const std::string before = Written(*doc);
+    CHECK(inOrder(MainXml(*doc)));
+    Editor ed(*doc);
+    const uint32_t x = Main(*doc)[0], y = Main(*doc).back();
+    if (byRange) REQUIRE(ed.Delete(P(x, 1), P(y, 0)));
+    else REQUIRE(ed.DeleteTable(P(CellPara(*doc, 0, 0), 0)));
+    CHECK(doc->Blocks(doc->MainStory()).size() == (byRange ? 1u : 2u));
+    CHECK(inOrder(MainXml(*doc)));
+    CHECK(Consistent(*doc, f) && GridOk(*doc));
+    CHECK(UndoesAndRedoes(ed, *doc, before));
+    CHECK(ChecksOut(*doc));
+  }
+}
+
 TEST(Tables_NestedTablesAreTheirOwn) {
   Fixture f;
   f.body = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"4000\"/>"

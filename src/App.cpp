@@ -1246,7 +1246,8 @@ void App::OnChar(wchar_t ch) {
 int App::AppShortcut(UINT vk, UINT mods) {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0;
   if ((mods & kModAlt) && !ctrl && vk == 'Q') return CmdCommandSearch;
-  if (ctrl) {
+  // Ctrl without Alt: Ctrl+Alt is the tab's (Ctrl+Alt+F a footnote) and AltGr types letters.
+  if (ctrl && !(mods & kModAlt)) {
     switch (vk) {
       case 'O': return CmdOpen;
       case 'N':

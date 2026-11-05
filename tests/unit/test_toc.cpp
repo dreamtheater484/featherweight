@@ -309,3 +309,24 @@ TEST(Toc_NumberedHeadingsShowTheirNumbers) {
   CHECK(NoFieldAcrossALink(*doc));
   CHECK(SavesAndChecks(*doc));
 }
+
+TEST(Toc_RefusedLeavesNothing) {
+  // Torture finding 30: a table refused where it can't go (in a drop-down list's text) leaves no
+  // styles part behind.
+  Fixture f;
+  f.body = "<w:p><w:sdt><w:sdtPr><w:dropDownList><w:listItem w:displayText=\"Apples\" w:value=\"Apples\"/>"
+           "<w:listItem w:displayText=\"Pears\" w:value=\"Pears\"/></w:dropDownList></w:sdtPr><w:sdtContent><w:r>"
+           "<w:t>Apples</w:t></w:r></w:sdtContent></w:sdt></w:p><w:p><w:r><w:t>Text</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const uint32_t p = MainParas(*doc)[0];
+  const size_t parts = doc->Parts().size(), paras = doc->Paragraphs().size();
+  const std::string main = MainXml(*doc);
+  edit::Editor editor(*doc);
+  CHECK(!edit::InsertToc(editor, {p, 3}, ByIndex).ok);
+  CHECK(doc->Parts().size() == parts);
+  CHECK(doc->Paragraphs().size() == paras);
+  CHECK(doc->FindPart(PartKind::Styles) == nullptr);
+  CHECK(MainXml(*doc) == main);
+  CHECK(!editor.CanUndo());
+}
