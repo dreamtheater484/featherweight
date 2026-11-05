@@ -664,6 +664,41 @@ TEST(Tables_DeleteKeepsRangesInOrder) {
   }
 }
 
+TEST(Tables_MergeKeepsRangesInOrder) {
+  // Torture finding 42: merging moves the cells' content up into the first; a range from a cell
+  // outside the block into one of them would end before it starts, so that merge is refused.
+  auto make = [](const char* startCell, const char* endCell) {
+    std::string tbl = Table({{"a", "b", "c"}, {"d", "e", "f"}});
+    const std::string run = "<w:r><w:t xml:space=\"preserve\">";
+    tbl.replace(tbl.find(run + startCell), 0, "<w:bookmarkStart w:id=\"5\" w:name=\"b5\"/>");
+    const size_t end = tbl.find("</w:r>", tbl.find(run + endCell)) + 6;
+    tbl.insert(end, "<w:bookmarkEnd w:id=\"5\"/>");
+    Fixture f;
+    f.body = tbl + Para("");
+    return f;
+  };
+  {
+    Fixture f = make("c", "d");  // from outside the block (c) into it (d)
+    auto doc = LoadOk(f);
+    REQUIRE(doc);
+    const std::string before = Written(*doc);
+    Editor ed(*doc);
+    CHECK(!ed.MergeCells(P(CellPara(*doc, 0, 0), 0), P(CellPara(*doc, 1, 1), 0)));
+    CHECK(SameXml(before, Written(*doc), "refused") && !ed.CanUndo());
+  }
+  {
+    Fixture f = make("b", "d");  // all in the block: merged, in order
+    auto doc = LoadOk(f);
+    REQUIRE(doc);
+    const std::string before = Written(*doc);
+    Editor ed(*doc);
+    REQUIRE(ed.MergeCells(P(CellPara(*doc, 0, 0), 0), P(CellPara(*doc, 1, 1), 0)));
+    CHECK(Consistent(*doc, f) && GridOk(*doc));
+    CHECK(UndoesAndRedoes(ed, *doc, before));
+    CHECK(ChecksOut(*doc));
+  }
+}
+
 TEST(Tables_NestedTablesAreTheirOwn) {
   Fixture f;
   f.body = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"4000\"/>"

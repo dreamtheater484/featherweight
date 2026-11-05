@@ -610,3 +610,27 @@ TEST(Comments_InANote) {
   // In the main text, it's fine.
   CHECK(edit::AddComment(ed, P(Main(*doc)[0], 0), P(Main(*doc)[0], 1), u"Here") && doc->Comments().size() == 1);
 }
+
+TEST(Comments_TextIsNotTracked) {
+  // Torture finding 38's addendum: with Track Changes on, a comment's text changes as it is,
+  // whether typed, deleted or formatted (as in Word).
+  Tracked t("<w:p><w:r><w:t>ab</w:t></w:r></w:p>");
+  REQUIRE(t.ed);
+  Editor& ed = *t.ed;
+  const uint32_t p = Main(*t.doc)[0];
+  REQUIRE(edit::AddComment(ed, P(p, 0), P(p, 1), u"Note"));
+  const CommentInfo c = t.doc->Comments().at(0);
+  const uint32_t q = t.doc->StoryParagraphs(c.story).at(0);
+  REQUIRE(ed.InsertText(P(q, ed.ParaLength(q)), u" more"));
+  REQUIRE(ed.Delete(P(q, 1), P(q, 2)));
+  REQUIRE(ed.SetRunProps(P(q, 1), P(q, 3), edit::PropEdit().Set("b")));
+  {
+    edit::TreeEdit te(ed, P(q, 1));
+    edit::ToggleRuns(te, edit::Range{P(q, 1), P(q, 3)}, edit::Toggle::Italic);
+  }
+  CHECK(t.doc->Revisions(c.story).empty());
+  CHECK(edit::CommentText(*t.doc, t.doc->Comments().at(0)) == u"ote more");
+  // The main text still is.
+  REQUIRE(ed.InsertText(P(p, 2), u"c"));
+  CHECK(!t.doc->Revisions(t.doc->MainStory()).empty());
+}

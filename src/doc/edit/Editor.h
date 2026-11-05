@@ -345,7 +345,7 @@ class Editor {
   // Delete with Track Changes on: the text is marked deleted, and stays.
   Result DeleteTracked(Pos from, Pos to);
   // Whether the next transaction records what it does, and as whom (Tracking(), Author()).
-  void Arm();
+  void Arm(uint32_t para);  // recording on for an edit in `para`'s story (never a comment's)
   bool reviewing_ = false;  // accepting or rejecting: the changes it makes aren't recorded
   bool paused_ = false;     // PauseTracking
 

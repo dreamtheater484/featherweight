@@ -306,6 +306,7 @@ class DocView : public PagedView {
   std::optional<fw::doc::edit::TocInfo> CurrentToc() const;
   // Formatting marks: the layout is made again with them (and hidden text) on or off.
   void ToggleMarks();
+  void LayOutAgain();  // with LayoutOptions(): after formatting marks or the markup view change
   // The layout's options: formatting marks as shown, and DATE and TIME fields at this moment.
   fw::doc::layout::Options LayoutOptions() const;
   // Opens a side panel of this view's, or closes it when it's open.

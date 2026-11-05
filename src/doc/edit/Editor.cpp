@@ -3064,7 +3064,8 @@ struct EditorState {
   // runs out of it can't either; the start or end of a range whose other end stays moves to the
   // start of `heir`, the paragraph that takes the deleted content's place, or with `inPlaceOf`, to
   // where that element is (so it stays in order with markers between it and the heir).
-  bool Evacuate(const std::vector<ElemId>& gone, ElemId heir, std::u16string& why, ElemId inPlaceOf = kNoElem) {
+  // The range markers' starts and ends, by kind.
+  static const std::vector<std::pair<uint32_t, uint32_t>>& RangePairs() {
     static const std::vector<std::pair<uint32_t, uint32_t>> pairs = {
         {Name("bookmarkStart"), Name("bookmarkEnd")},
         {Name("commentRangeStart"), Name("commentRangeEnd")},
@@ -3075,6 +3076,37 @@ struct EditorState {
         {Name("customXmlDelRangeStart"), Name("customXmlDelRangeEnd")},
         {Name("customXmlMoveFromRangeStart"), Name("customXmlMoveFromRangeEnd")},
         {Name("customXmlMoveToRangeStart"), Name("customXmlMoveToRangeEnd")}};
+    return pairs;
+  }
+  // The ranges under `root` whose end comes before their start (both under it), in document order.
+  size_t RangesOutOfOrder(ElemId root) {
+    const auto& pairs = RangePairs();
+    std::map<std::pair<size_t, std::string>, int> seen;  // (kind, id) -> 1: start seen, 2: end before start
+    size_t out = 0;
+    std::vector<ElemId> stack{root};
+    while (!stack.empty()) {
+      const ElemId id = stack.back();
+      stack.pop_back();
+      const uint32_t n = NameOf(id);
+      for (size_t k = 0; k < pairs.size(); ++k) {
+        if (n != pairs[k].first && n != pairs[k].second) continue;
+        int& state = seen[{k, std::string(Attr(id, kId).value_or(""))}];
+        if (n == pairs[k].first) {
+          if (state == 2) ++out;
+          state = 1;
+        } else if (state == 0) {
+          state = 2;
+        }
+      }
+      if (E(id).flags & kSharedKids) continue;
+      const size_t at = stack.size();
+      for (ElemId c = E(id).first; c != kNoElem; c = E(c).next) stack.push_back(c);
+      std::reverse(stack.begin() + static_cast<std::ptrdiff_t>(at), stack.end());
+    }
+    return out;
+  }
+  bool Evacuate(const std::vector<ElemId>& gone, ElemId heir, std::u16string& why, ElemId inPlaceOf = kNoElem) {
+    const auto& pairs = RangePairs();
     std::vector<ElemId> markers;
     std::map<std::pair<uint32_t, std::string>, int> inside;  // (pair kind, id) -> ends inside
     int fields = 0;
@@ -3262,7 +3294,7 @@ Result Editor::InsertText(Pos at, std::u16string_view text) {
     r.caret = at;
     return r;
   }
-  Arm();
+  Arm(at.para);
   s.Begin(at.para, 1);
   Pos pos = at;
   for (size_t i = 0; i < lines.size(); ++i) {
@@ -3288,7 +3320,7 @@ Result Editor::InsertDrawing(Pos at, std::string xml, const Drawing& info, bool 
   if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(at.para, why)) return Fail(why);
   if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
   if (!XmlSafe(xml)) return Fail(u"This picture can't be added.");
-  Arm();
+  Arm(at.para);
   // A w:pict's elements are kept one fragment each, as the reader keeps them (each declares what it uses).
   std::vector<std::string> pieces;
   if (vml) {
@@ -3448,7 +3480,7 @@ Result Editor::Delete(Pos from, Pos to) {
     return r;
   }
   if (s.CutsField(from, to)) return Fail(u"Select the whole field to delete it.");
-  Arm();
+  Arm(from.para);
   if (s.track.on) return DeleteTracked(from, to);
   // Whole tables between the ends go first, as Delete table takes them; then the text around them.
   if (to.para != from.para) {
@@ -3679,9 +3711,12 @@ Result Editor::RemoveCommentMarks(std::string_view id) {
   return r;
 }
 
-void Editor::Arm() {
+void Editor::Arm(uint32_t para) {
   EditorState::Revisor& t = impl_->track;
-  t.on = !TrackingPaused() && Tracking();
+  // A comment's text isn't tracked (as in Word).
+  const bool comment = para < doc_.Paragraphs().size() &&
+                       doc_.Stories()[doc_.Para(para).story].kind == StoryKind::Comment;
+  t.on = !comment && !TrackingPaused() && Tracking();
   if (!t.on) return;
   t.author = ChangeAuthor();
   t.date = ChangeDate();
@@ -3712,7 +3747,7 @@ Result Editor::SplitParagraph(Pos at) {
   std::u16string why;
   if (!CanEdit(&why) || FormsRefuse(&at, &at, why) || !s.Editable(at.para, why)) return Fail(why);
   if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
-  Arm();
+  Arm(at.para);
   s.Begin(at.para, 1);
   if (!s.Split(at.para, at.offset, why)) return s.Abort(why);
   if (s.track.on && !s.TrackMark(at.para, kIns, why)) return s.Abort(why);
@@ -3732,7 +3767,8 @@ Result Editor::JoinParagraphs(uint32_t para) {
   if (!CanEdit(&why) || FormsRefuse(&joinFrom, &joinTo, why) || !s.Editable(para, why)) return Fail(why);
   uint32_t q = s.SiblingAfter(para);
   if (q == kNone) return Fail(u"Paragraphs in different places (a table cell and the text around it) can't be joined.");
-  if (Tracking() && !reviewing_) return Delete(Pos{para, ParaLength(para)}, Pos{q, 0});
+  if (Tracking() && !reviewing_ && doc_.Stories()[doc_.Para(para).story].kind != StoryKind::Comment)
+    return Delete(Pos{para, ParaLength(para)}, Pos{q, 0});
   Pos caret{para, ParaLength(para)};
   const KeptRefs kept = KeptReferences(doc_, {para});
   if (kept.sectPr != kNoElem) BeginGroup(u"Delete");
@@ -3760,7 +3796,7 @@ Result Editor::SetRunProps(Pos from, Pos to, const PropEdit& edit) {
   r.caret = to;
   if (from == to) return r;
   uint32_t story = doc_.Para(from.para).story;
-  Arm();
+  Arm(from.para);
   s.Begin(from.para, to.para - from.para + 1);
   for (uint32_t p = from.para; p <= to.para; ++p) {
     if (doc_.Para(p).story != story || (s.E(doc_.Para(p).elem).flags & kDisplayOnly)) continue;
@@ -3791,7 +3827,7 @@ Result Editor::SetLink(Pos from, Pos to, std::string_view target) {
   if (!XmlSafe(target)) return Fail(u"A link's address can't hold control characters.");
   const uint32_t para = from.para;
   const ElemId p = doc_.Para(para).elem;
-  Arm();
+  Arm(from.para);
   auto ownNew = [&](const TextRun& t) {
     return s.track.on && t.revision && t.revision.Is(kIns) && t.revision.AttrOr(kAuthor) == s.track.author &&
            t.revision.Parent().Id() == p && t.run.Parent() == t.revision;
@@ -3855,7 +3891,7 @@ Result Editor::SetMarkProps(uint32_t first, uint32_t last, const PropEdit& edit)
   std::u16string why;
   if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(first, why)) return Fail(why);
   uint32_t story = doc_.Para(first).story;
-  Arm();
+  Arm(first);
   s.Begin(first, last - first + 1);
   for (uint32_t p = first; p <= last; ++p) {
     if (doc_.Para(p).story != story || (s.E(doc_.Para(p).elem).flags & kDisplayOnly)) continue;
@@ -3880,7 +3916,7 @@ Result Editor::SetParaProps(uint32_t first, uint32_t last, const PropEdit& edit)
   std::u16string why;
   if (!CanEdit(&why) || FormsRefuse(nullptr, nullptr, why) || !s.Editable(first, why)) return Fail(why);
   uint32_t story = doc_.Para(first).story;
-  Arm();
+  Arm(first);
   s.Begin(first, last - first + 1);
   for (uint32_t p = first; p <= last; ++p) {
     if (doc_.Para(p).story != story || (s.E(doc_.Para(p).elem).flags & kDisplayOnly)) continue;
@@ -4969,7 +5005,10 @@ Result Editor::MergeCells(Pos from, Pos to) {
         if (s.NameOf(k) != kPPr) return false;
       return true;
     };
-    // The cells' content, in reading order, into the first one (empty cells add nothing).
+    // The cells' content, in reading order, into the first one (empty cells add nothing). A range
+    // that runs from a cell outside the block into one whose content moves up would end before it
+    // starts: refused (checked once it's moved).
+    const size_t disorder = s.RangesOutOfOrder(o.tbl);
     bool targetEmpty = empty(target);
     for (size_t r = 0; r < cells.size(); ++r)
       for (size_t i = 0; i < cells[r].size(); ++i) {
@@ -4987,6 +5026,8 @@ Result Editor::MergeCells(Pos from, Pos to) {
           s.Append(target, k);
         }
       }
+    if (s.RangesOutOfOrder(o.tbl) > disorder)
+      return o.why = u"A comment or bookmark runs from these cells to others, so they can't be merged.", false;
     // The first row: one cell across the block; the rows below: one cell continuing it.
     const int32_t span = bl.col1 - bl.col0 + 1;
     for (size_t r = 0; r < cells.size(); ++r) {

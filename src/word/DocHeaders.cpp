@@ -226,7 +226,12 @@ layout::Options DocView::LayoutOptions() const {
 void DocView::ToggleMarks() {
   if (!Ready() || !doc_) return;
   marks_ = !marks_;
-  // Hidden text takes room when shown: the pages are laid out again, the first on screen first.
+  LayOutAgain();  // hidden text takes room when shown
+}
+
+// The pages laid out again with the view's options (formatting marks, markup), the first on
+// screen first.
+void DocView::LayOutAgain() {
   pagination_ = std::make_unique<layout::Layout>(*doc_, *fonts_, LayoutOptions());
   pagination_->LayOutPages(static_cast<size_t>(std::max(0, currentPage_)) + 2);
   revision_ = pagination_->Revision();

@@ -138,9 +138,14 @@ bool DocView::ExecuteD4(int cmd) {
     return reviewPanel_.get();
   };
   auto setMarkup = [this](Markup m) {
-    const bool relayout = (m == Markup::All || m == Markup::Original || markup_ == Markup::All || markup_ == Markup::Original);
+    // All markup and Original lay out deleted (and hide inserted) text: the pages change.
+    const bool relayout = MarkupLaidOut() && Ready() && (m == Markup::All || m == Markup::Original ||
+                                                         markup_ == Markup::All || markup_ == Markup::Original);
     markup_ = m;
-    if (relayout) Relayout(nullptr);
+    if (relayout) {
+      LayOutAgain();
+      return;
+    }
     for (auto& ch : changes_) ch.measured = false;
     host_.ViewStateChanged();
     host_.ViewInvalidate();

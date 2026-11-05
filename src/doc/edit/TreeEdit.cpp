@@ -352,6 +352,15 @@ void TreeEdit::TrackBefore(ElemId at) {
   if (props == kNoElem) return;
   for (const auto& [p, copy] : tracked_)
     if (p == props) return;
+  // A comment's text isn't tracked (as in Word).
+  for (ElemId e = props; e != kNoElem; e = t.elems[e].parent)
+    if (NameOfElem(t, e) == kP) {
+      const uint32_t i = t.elems[e].start;
+      if (i < doc_.paras_.size() && doc_.paras_[i].elem == e &&
+          doc_.stories_[doc_.paras_[i].story].kind == StoryKind::Comment)
+        return;
+      break;
+    }
   // The author's own new text or paragraph isn't tracked again.
   const Node here(&t, props);
   bool own = false;
