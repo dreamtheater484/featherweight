@@ -20,6 +20,7 @@
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/Lists.h"
+#include "doc/edit/Notes.h"
 #include "doc/edit/Page.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/layout/Layout.h"
@@ -771,6 +772,115 @@ TEST(Layout_EditsLayOutAgainAsFromScratch) {
         std::snprintf(when, sizeof when, "seed %u, step %d", seed, step);
         REQUIRE(SameAsFresh(*d.doc, *d.layout, when));
       }
+    }
+  }
+}
+
+TEST(Layout_NotesInsertedAndDeletedLayOutAsFromScratch) {
+  // D4: a footnote or endnote inserted, a reference deleted (its note with it), and either undone
+  // or redone, lays out as from scratch: the notes after it number again on the pages they go to.
+  const std::string notes =
+      "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>"
+      "<w:footnote w:id=\"1\"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> First note.</w:t></w:r></w:p></w:footnote>"
+      "<w:footnote w:id=\"2\"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> Second note, which is "
+      "long enough to take two lines.</w:t></w:r></w:p></w:footnote>";
+  std::string body;
+  for (int i = 0; i < 30; ++i) {
+    body += "<w:p><w:r><w:t xml:space=\"preserve\">Para " + std::to_string(i) + " " + Words(i % 9 + 2) + "</w:t></w:r>";
+    if (i == 6 || i == 21) body += "<w:r><w:footnoteReference w:id=\"" + std::string(i == 6 ? "1" : "2") + "\"/></w:r>";
+    body += "</w:p>";
+  }
+  Doc d = Make(body + SmallPage(), "", notes);
+  REQUIRE(d.layout);
+  REQUIRE(d.pages() > 4);
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  auto main = [&] { return d.doc->StoryParagraphs(d.doc->MainStory()); };
+  auto same = [&](const char* when) {
+    for (size_t p = 0; p < d.pages(); ++p)
+      if (auto pos = d.layout->HitTest(p, 100, 100)) {
+        CHECK(pos->para < d.doc->Paragraphs().size());
+        CHECK(pos->offset <= d.doc->Para(pos->para).text.size());
+      }
+    d.layout->LayOutAll();
+    return SameAsFresh(*d.doc, *d.layout, when);
+  };
+  // A footnote before both: it numbers 1, theirs 2 and 3.
+  d.layout->LayOutPages(2);
+  edit::Result r = edit::InsertNote(ed, {main()[2], 4}, false);
+  REQUIRE(r.ok);
+  REQUIRE(ed.InsertText(r.caret, u"New note.").ok);
+  REQUIRE(same("footnote inserted"));
+  const LineBox* fresh = Find(d, u"New note.");
+  const LineBox* first = Find(d, u"First note.");
+  REQUIRE(fresh && first);
+  CHECK(fresh->text.rfind(u"1", 0) == 0);
+  CHECK(first->text.rfind(u"2", 0) == 0);
+  // The first note's reference deleted, laid out a page at a time: the second numbers 2.
+  const uint32_t p6 = main()[6];
+  const size_t at = d.doc->Para(p6).text.find(u'\x02');
+  REQUIRE(at != std::u16string::npos);
+  d.layout->LayOutPages(1);
+  REQUIRE(ed.Delete({p6, static_cast<uint32_t>(at)}, {p6, static_cast<uint32_t>(at + 1)}).ok);
+  REQUIRE(same("reference deleted"));
+  CHECK(!Find(d, u"First note."));
+  const LineBox* second = Find(d, u"Second note");
+  REQUIRE(second);
+  CHECK(second->text.rfind(u"2", 0) == 0);
+  // The second note's reference deleted, pages after the first page: the new note, shown on the
+  // first pages, comes after the second's in the model, and moves up a paragraph there.
+  d.layout->LayOutAll();
+  const uint32_t p21 = main()[21];
+  const size_t at21 = d.doc->Para(p21).text.find(u'\x02');
+  REQUIRE(at21 != std::u16string::npos);
+  REQUIRE(ed.Delete({p21, static_cast<uint32_t>(at21)}, {p21, static_cast<uint32_t>(at21 + 1)}).ok);
+  d.layout->LayOutPages(1);
+  REQUIRE(same("a later reference deleted"));
+  CHECK(!Find(d, u"Second note"));
+  // An endnote, at the end of the document.
+  r = edit::InsertNote(ed, {main()[0], 2}, true);
+  REQUIRE(r.ok);
+  REQUIRE(ed.InsertText(r.caret, u"The endnote.").ok);
+  REQUIRE(same("endnote inserted"));
+  size_t endPage = 0;
+  REQUIRE(Find(d, u"The endnote.", &endPage));
+  CHECK(endPage == d.pages() - 1);
+  // Undone and redone, a bit at a time.
+  for (int i = 0; i < 6; ++i) {
+    REQUIRE(ed.Undo().ok);
+    d.layout->LayOutPages(1 + static_cast<size_t>(i));
+  }
+  CHECK(!ed.CanUndo());
+  REQUIRE(same("all undone"));
+  CHECK(Find(d, u"First note.") && !Find(d, u"New note.") && !Find(d, u"The endnote."));
+  for (int i = 0; i < 6; ++i) {
+    REQUIRE(ed.Redo().ok);
+    d.layout->Continue(0.2);
+  }
+  REQUIRE(same("all redone"));
+  // Random edits with notes coming and going.
+  std::mt19937 rng(7);
+  for (int step = 0; step < 60; ++step) {
+    const std::vector<uint32_t> paras = main();
+    const uint32_t para = paras[rng() % paras.size()];
+    const auto len = static_cast<uint32_t>(d.doc->Para(para).text.size());
+    const Pos pos{para, len ? static_cast<uint32_t>(rng() % (len + 1)) : 0};
+    switch (rng() % 6) {
+      case 0: edit::InsertNote(ed, pos, rng() % 3 == 0); break;
+      case 1: {
+        const size_t ref = d.doc->Para(para).text.find(u'\x02');
+        if (ref != std::u16string::npos) ed.Delete({para, static_cast<uint32_t>(ref)}, {para, static_cast<uint32_t>(ref + 1)});
+        break;
+      }
+      case 2: ed.Undo(); break;
+      case 3: ed.Redo(); break;
+      default: RandomEdit(ed, *d.doc, rng); break;
+    }
+    if (rng() % 2) d.layout->LayOutPages(1 + rng() % 4);
+    if (step % 6 == 5) {
+      char when[48];
+      std::snprintf(when, sizeof when, "random step %d", step);
+      REQUIRE(same(when));
     }
   }
 }
