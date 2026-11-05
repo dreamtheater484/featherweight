@@ -985,3 +985,29 @@ TEST(Tables_InsertBeforeKeptAlternateContentGoesAfterIt) {
   CHECK(ChecksOut(*doc));
   CHECK(UndoesAndRedoes(ed, *doc, before));
 }
+
+TEST(Tables_TextKeepsMarkersBetweenRowsAndCells) {
+  // d1-corpus finding 21: a bookmark that ends between the last row and </w:tbl>, and one between
+  // two cells, end in the text the table becomes, where they were.
+  Fixture f;
+  f.body = "<w:p><w:bookmarkStart w:id=\"1\" w:name=\"Long\"/><w:r><w:t>Before</w:t></w:r></w:p>"
+           "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"2000\"/>"
+           "<w:gridCol w:w=\"2000\"/></w:tblGrid>"
+           "<w:tr><w:tc>" + Para("a") + "</w:tc><w:bookmarkStart w:id=\"2\" w:name=\"Mid\"/><w:tc>" + Para("b") +
+           "</w:tc></w:tr><w:tr><w:tc>" + Para("c") + "</w:tc><w:tc>" + Para("d") + "</w:tc><w:bookmarkEnd w:id=\"2\"/></w:tr>"
+           "<w:bookmarkEnd w:id=\"1\"/></w:tbl>" + Para("After");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  REQUIRE(ChecksOut(*doc));
+  const std::string before = Written(*doc);
+  Editor ed(*doc);
+  REQUIRE(ed.TableToText(P(CellPara(*doc, 0, 0), 0)));
+  CHECK(Tables(*doc).empty());
+  auto ps = Main(*doc);
+  REQUIRE(ps.size() == 4);
+  CHECK_EQ(Text(*doc, ps[1]), std::string("a\tb"));
+  CHECK_EQ(Text(*doc, ps[2]), std::string("c\td"));
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  CHECK(ChecksOut(*doc));
+  CHECK(UndoesAndRedoes(ed, *doc, before));
+}

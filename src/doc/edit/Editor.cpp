@@ -3006,25 +3006,43 @@ Result Editor::TableToText(Pos at, char16_t separator) {
         if (n != kP && n != kTcPr && !RangeMarker(n)) return Fail(u"A table with tables or content controls in its cells can't become text yet.");
       }
   s.Begin(first, count, {tbl});
-  // Out of the table, in order, before it: then cells of a row are joined.
+  // Out of the table, in order, before it: then cells of a row are joined. Range markers between
+  // rows or cells (a bookmark's end before </w:tbl>) come out in their places too (finding 21).
   ElemId after = s.PrevSibling(tbl);
   std::vector<std::vector<std::pair<ElemId, ElemId>>> rows;  // per row: each cell's first and last paragraph
   std::vector<ElemId> moved;
-  for (const GridRow& row : g.rows) {
+  auto out = [&](ElemId k) {
+    s.Unlink(k);
+    s.LinkAfter(parent, after, k);
+    after = k;
+    moved.push_back(k);
+  };
+  std::vector<ElemId> outer;
+  for (ElemId k = s.E(tbl).first; k != kNoElem; k = s.E(k).next) outer.push_back(k);
+  for (ElemId k : outer) {
+    if (RangeMarker(s.NameOf(k))) {
+      out(k);
+      continue;
+    }
+    if (s.NameOf(k) != kTr) continue;
     rows.emplace_back();
-    for (const GridCell& c : row.cells) {
+    std::vector<ElemId> inner;
+    for (ElemId c = s.E(k).first; c != kNoElem; c = s.E(c).next) inner.push_back(c);
+    for (ElemId c : inner) {
+      if (RangeMarker(s.NameOf(c))) {
+        out(c);
+        continue;
+      }
+      if (s.NameOf(c) != kTc) continue;
       ElemId firstP = kNoElem, lastP = kNoElem;
       std::vector<ElemId> kids;
-      for (ElemId k = s.E(c.tc).first; k != kNoElem; k = s.E(k).next)
-        if (s.NameOf(k) != kTcPr) kids.push_back(k);
-      for (ElemId k : kids) {
-        s.Unlink(k);
-        s.LinkAfter(parent, after, k);
-        after = k;
-        moved.push_back(k);
-        if (s.NameOf(k) == kP) {
-          if (firstP == kNoElem) firstP = k;
-          lastP = k;
+      for (ElemId e = s.E(c).first; e != kNoElem; e = s.E(e).next)
+        if (s.NameOf(e) != kTcPr) kids.push_back(e);
+      for (ElemId e : kids) {
+        out(e);
+        if (s.NameOf(e) == kP) {
+          if (firstP == kNoElem) firstP = e;
+          lastP = e;
         }
       }
       if (firstP != kNoElem) rows.back().emplace_back(firstP, lastP);
