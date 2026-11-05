@@ -13,5 +13,8 @@ CMakeUserPresets.json
 /third_party/miniz/
 /third_party/pugixml/
 
+# Downloaded hyphenation patterns (fetched by CMake)
+/third_party/hyphenation/
+
 # Python venv for the office corpus generator (tests/office)
 /.venv/

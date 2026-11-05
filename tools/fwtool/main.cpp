@@ -46,7 +46,10 @@ constexpr const char* kUsage =
     "      Starts a private copy of Featherweight, alone and with each file, and measures launch\n"
     "      to window, to the first frame (the start screen or the first page), memory once\n"
     "      settled, and CPU and wakeups while idle (plan §11). Works with any build, 0.9.4\n"
-    "      included, and never touches the user's settings or a running Featherweight.\n";
+    "      included, and never touches the user's settings or a running Featherweight.\n"
+    "  fwtool wrap [options] (--file <file> | <text>...)\n"
+    "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
+    "      Word's. Run it without text for its options.\n";
 
 std::vector<std::filesystem::path> CollectSorted(const std::filesystem::path& dir) {
   std::vector<std::filesystem::path> files;
@@ -102,6 +105,7 @@ std::string_view AsText(const std::vector<uint8_t>& bytes) {
 
 int wmain(int argc, wchar_t** argv) {
   SetConsoleOutputCP(CP_UTF8);
+  if (argc >= 2 && std::wstring(argv[1]) == L"wrap") return fwtool::RunWrap(argc, argv);
   if (argc < 3) {
     std::fputs(fwtool::kUsage, stderr);
     return 2;
