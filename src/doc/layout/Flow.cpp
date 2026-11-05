@@ -100,6 +100,7 @@ struct Engine::Impl {
 Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, OpenTimings* timings)
     : impl_(new Impl), doc_(doc), fonts_(fonts), options_(options), timings_(timings) {
   compatMode_ = doc.Settings().compatibilityMode > 0 ? doc.Settings().compatibilityMode : 12;
+  sumSpacing_ = doc.Settings().Compat(Name("doNotUseHTMLParagraphAutoSpacing"));
   fieldsCount_.assign(doc.Stories().size(), 0);
   for (uint32_t s = 0; s < doc.Stories().size(); ++s) {
     StoryKind k = doc.Stories()[s].kind;

@@ -369,8 +369,10 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
         continue;
       }
       char16_t c = t[i];
-      while (item < items.size() && items[item].offset < i) ++item;
-      const InlineItem* it = item < items.size() && items[item].offset == i && items[item].length > 0 ? &items[item] : nullptr;
+      // The item for this character; markers without text before it (w:lastRenderedPageBreak,
+      // bookmarks) don't count.
+      while (item < items.size() && (items[item].offset < i || (items[item].offset == i && items[item].length == 0))) ++item;
+      const InlineItem* it = item < items.size() && items[item].offset == i ? &items[item] : nullptr;
       switch (c) {
         case 0x13: case 0x14: case 0x15: case 0x05: case 0x03: case 0x04:
           emit(std::u16string_view(&t[i], 1), hide(), paint);

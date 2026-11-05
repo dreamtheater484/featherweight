@@ -167,8 +167,9 @@ float Engine::SpaceBefore(const ParaProps& p, const Spacing& s) const {
   if (s.prev && p.contextualSpacing && Contextual(*s.prev, p)) before = 0;
   float after = s.after;
   if (s.prev && s.prev->contextualSpacing && Contextual(*s.prev, p)) after = 0;
-  // Between two paragraphs, the larger of the one's space after and the other's space before.
-  return std::max(after, before);
+  // Between two paragraphs Word leaves the larger of the one's space after and the other's space
+  // before, as HTML does, unless the document asks it not to use HTML paragraph spacing.
+  return sumSpacing_ ? after + before : std::max(after, before);
 }
 
 namespace {
