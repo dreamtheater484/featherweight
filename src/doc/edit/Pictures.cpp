@@ -883,6 +883,14 @@ Result Pictures::SetWrap(uint32_t drawing, Wrap wrap, Emu x, Emu y) {
   });
 }
 
+// A moved picture's copy gets an id no drawing has: the one it leaves may stay, as a tracked
+// deletion (d4 torture finding 41).
+static void NewDocPrId(const Document& doc, Frame& f) {
+  uint32_t id = 1;
+  for (const Drawing& d : doc.Drawings()) id = std::max(id, d.id + 1);
+  if (pugi::xml_node docPr = Child(f.root, kWp, "docPr")) SetInt(docPr, "id", id);
+}
+
 Result Pictures::MoveFloating(uint32_t drawing, Emu x, Emu y, std::optional<Pos> anchor) {
   const Document& doc = editor_.Doc();
   if (drawing >= doc.Drawings().size()) return Fail(u"That picture isn't in the document any more.");
@@ -905,6 +913,7 @@ Result Pictures::MoveFloating(uint32_t drawing, Emu x, Emu y, std::optional<Pos>
   if (!Load(editor_, drawing, f, why)) return Fail(why);
   if (pkg::LocalNameOf(f.root) != "anchor") return Fail(u"A picture in line with the text moves with it.");
   SetPosition(f, x.Value(), y.Value());
+  NewDocPrId(doc, f);
   std::string xml = Serialize(f);
   Drawing handle = HandleFor(doc.Drawings()[drawing], f.root);
   Pos to = *anchor;
@@ -944,6 +953,7 @@ Result Pictures::MoveInline(uint32_t drawing, Pos to) {
     r.caret = was;
     return r;
   }
+  NewDocPrId(doc, f);
   std::string xml = Serialize(f);
   Drawing handle = HandleFor(doc.Drawings()[drawing], f.root);
   editor_.BeginGroup(u"Move picture");
