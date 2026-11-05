@@ -126,6 +126,20 @@ enum Cmd : int {
   CmdBorderNone,
   CmdShading,
   CmdShadingNone,
+  // Headers and footers, page numbers, links, bookmarks, navigation and marks (D3).
+  CmdEditHeader = 1100,
+  CmdEditFooter,
+  CmdCloseHeaderFooter,
+  CmdDifferentFirstPage,
+  CmdDifferentOddEven,
+  CmdLinkToPrevious,
+  CmdPageNumber,  // the page number panel
+  CmdInsertLink,  // Ctrl+K: insert or edit
+  CmdRemoveLink,
+  CmdOpenLink,
+  CmdBookmark,
+  CmdNavigationPane,
+  CmdShowMarks,  // Ctrl+Shift+8
   // Proofing in Word documents.
   CmdSpelling = 800,  // F7: the next spelling error
   CmdWordCount,

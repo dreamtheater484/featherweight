@@ -219,6 +219,61 @@ class DocView : public PagedView {
   fw::doc::Pos SelFrom() const { return {std::min(anchor_, focus_).para, std::min(anchor_, focus_).offset}; }
   fw::doc::Pos SelTo() const { return {std::max(anchor_, focus_).para, std::max(anchor_, focus_).offset}; }
 
+  // ---- Headers and footers, page numbers, links, bookmarks, navigation, marks (D3, DocHeaders.cpp)
+  class PushButton;
+  class LinkPanel;
+  class BookmarkPanel;
+  class PageNumberPanel;
+  class NavPanel;
+  // A header or footer being edited in place (double-click it; Esc or a double-click in the body
+  // leaves): its story, the page it's shown on, and which of the section's it is.
+  struct HeaderEdit {
+    uint32_t story = fw::doc::kNone;
+    size_t page = 0;
+    uint32_t section = 0;
+    bool footer = false;
+    fw::doc::HdrFtrType type = fw::doc::HdrFtrType::Default;
+  };
+  // Which lines a click may land on: the body's, or while one is edited the headers' and footers'.
+  fw::doc::layout::HitStories ClickStories() const;
+  // The page the caret's header or footer is shown on (SIZE_MAX in the body).
+  size_t CaretPage() const;
+  // Where a point on a page is: in its header area (-1), its body (0) or its footer area (1).
+  int ZoneAt(int page, float py) const;
+  // Clicks in and around headers and footers; true when handled.
+  bool HeaderFooterClick(int x, int y, bool doubleClick);
+  bool EnterHeaderFooter(int page, bool footer, std::optional<std::pair<float, float>> at = std::nullopt);
+  void LeaveHeaderFooter();
+  // After undo or redo: leaves a header or footer that is no longer the section's.
+  void CheckHeaderFooter();
+  void DrawHeaderFooterMode(gfx::Canvas& c, int page);
+  std::wstring HeaderFooterLabel(int page, bool footer) const;
+  // The commands, toolbar items and context menu entries of D3.
+  bool ExecuteD3(int cmd);
+  std::optional<CommandState> QueryD3(int cmd);
+  void AddD3Toolbar(ToolbarModel& m);
+  void FillD3Menu(HMENU m, int x, int y);
+  // Formatting marks: the layout is made again with them (and hidden text) on or off.
+  void ToggleMarks();
+  // Opens a side panel of this view's, or closes it when it's open.
+  void ShowPanel(PanelContent* panel, bool toggle);
+  void ClosePanels();
+  // The headings (paragraphs with an outline level), for the navigation pane and links.
+  struct Heading {
+    uint32_t para = 0;
+    int level = 0;  // 0 = Heading 1
+    std::wstring text;
+  };
+  std::vector<Heading> Headings() const;
+  void GoTo(TextPos at, TextPos to);
+  std::optional<HeaderEdit> hf_;
+  TextPos bodyCaret_;  // where the caret was in the body before a header was edited
+  bool marks_ = false;
+  std::unique_ptr<LinkPanel> linkPanel_;
+  std::unique_ptr<BookmarkPanel> bookmarkPanel_;
+  std::unique_ptr<PageNumberPanel> pageNumberPanel_;
+  std::unique_ptr<NavPanel> navPanel_;
+
   // ---- Formatting (DocFormat)
   // What formatting applies to: the selection, or the caret and the word it's in.
   DocFormat::Target FormatTarget() const;
