@@ -88,7 +88,7 @@ if (-not $NoWord -and $pairs.Count) {
   $check = Join-Path $PSScriptRoot "word-open-check.ps1"
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $check (Join-Path $Out "saved") -Json (Join-Path $Out "word.json")
   foreach ($f in (Read-Json (Join-Path $Out "word.json")).files) { $word[[IO.Path]::GetFullPath($f.file)] = $f }
-  $originals = @($word.Values | Where-Object { $_.status -notin "ok", "notice" } | ForEach-Object { $pairs[[IO.Path]::GetFullPath($_.file)] } | Where-Object { $_ })
+  $originals = @($word.Values | Where-Object { $_.status -notin "ok", "notice", "unchecked" } | ForEach-Object { $pairs[[IO.Path]::GetFullPath($_.file)] } | Where-Object { $_ })
   if ($originals.Count) {
     "== Word: the originals of the copies it complained about"
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $check @originals -Json (Join-Path $Out "word-originals.json")
@@ -103,7 +103,7 @@ foreach ($f in $torture.files) {
   $original = [IO.Path]::GetFullPath($f.file)
   $w = if ($saved) { $word[$saved] } else { $null }
   $b = $baseline[$original]
-  $wordStatus = if (-not $w) { $null } elseif ($w.status -in "ok", "notice") { $w.status } elseif ($b -and $b.status -notin "ok", "notice") { "original too" } else { $w.status }
+  $wordStatus = if (-not $w) { $null } elseif ($w.status -in "ok", "notice", "unchecked") { $w.status } elseif ($b -and $b.status -notin "ok", "notice") { "original too" } else { $w.status }
   $rows += [pscustomobject][ordered]@{
     file = $f.file
     skipped = $f.skipped
@@ -115,7 +115,7 @@ foreach ($f in $torture.files) {
     wordDetail = if ($w -and $w.status -ne "ok") { (@($w.dialogs | ForEach-Object { $_.text }) + @($w.error) | Where-Object { $_ }) -join " / " } else { $null }
   }
 }
-$wordPasses = "ok", "notice", "original too"
+$wordPasses = "ok", "notice", "original too", "unchecked"  # unchecked has its own row: Word's automation, not the file
 $failed = @($rows | Where-Object { $_.failures.Count -or $_.newValidatorErrors.Count -or ($_.word -and $_.word -notin $wordPasses) })
 $md = @("# Editing torture test", "",
   "Seed $Seed, $Rounds rounds of $Edits edits per document. $(Get-Date -Format 'yyyy-MM-dd HH:mm').", "",
@@ -127,7 +127,8 @@ $md = @("# Editing torture test", "",
   "| New validator errors | $(@($rows | Where-Object { $_.newValidatorErrors.Count }).Count) |",
   "| Word: repair prompt or error | $(if ($NoWord) { 'not run' } else { @($rows | Where-Object { $_.word -and $_.word -notin $wordPasses }).Count }) |",
   "| Word: the original complains too | $(if ($NoWord) { 'not run' } else { @($rows | Where-Object { $_.word -eq 'original too' }).Count }) |",
-  "| Word: only a notice about this PC's Office | $(if ($NoWord) { 'not run' } else { @($rows | Where-Object { $_.word -eq 'notice' }).Count }) |", "")
+  "| Word: only a notice about this PC's Office | $(if ($NoWord) { 'not run' } else { @($rows | Where-Object { $_.word -eq 'notice' }).Count }) |",
+  "| Word: couldn't check (its automation failed three times; run again) | $(if ($NoWord) { 'not run' } else { @($rows | Where-Object { $_.word -eq 'unchecked' }).Count }) |", "")
 if ($failed.Count) {
   $md += "## Failures", ""
   foreach ($r in $failed) {
@@ -141,6 +142,8 @@ if ($failed.Count) {
 [IO.File]::WriteAllText((Join-Path $Out "summary.md"), ($md -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $Out "summary.json"), ([ordered]@{ seed = $Seed; edits = $Edits; rounds = $Rounds; word = -not $NoWord; files = $rows } | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
 ""
-$md[4..13] -join "`n"
+$md[4..14] -join "`n"
 "Summary: $(Join-Path $Out 'summary.md')"
-exit $(if ($failed.Count) { 1 } else { 0 })
+$unchecked = @($rows | Where-Object { $_.word -eq "unchecked" })
+if ($unchecked.Count) { "Word couldn't check $($unchecked.Count) saved copies: run again." }
+exit $(if ($failed.Count -or $unchecked.Count) { 1 } else { 0 })

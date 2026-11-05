@@ -8,7 +8,9 @@
   - Word runs hidden in safe mode (/safe): no add-ins, and the session's settings aren't saved.
   - Files are opened read-only, with macros forced off, links not updated, no conversion
     dialog, and nothing added to Word's recent files. Nothing is ever saved.
-  - Each file gets its own Word process, which always ends before the next file starts.
+  - Each file gets its own Word process, which always ends before the next file starts. The check
+    makes sure COM attached to that Word (by a caption only it knows) before opening anything, and
+    never ends another Word: one check runs at a time on the PC (a global mutex).
   - Word's alerts stay on, so that a repair prompt is shown instead of answered silently. While
     the file opens, every dialog the Word process shows is read (its title and text) and
     cancelled. A dialog that offers to recover the contents is a repair prompt.
@@ -16,7 +18,9 @@
   Results, per file: ok (opened, no dialog); notice (opened, and the only dialogs were about this
   PC's Office, such as a proofing feature that isn't installed: nothing about the file); repair
   (Word offered to repair it, or refused it as unreadable); error (Word showed another dialog or
-  refused the file otherwise); timeout. The exit code is 1 when any file isn't ok or notice.
+  refused the file otherwise); timeout; unchecked (Word's automation failed three times: Word didn't
+  start or answer, which says nothing about the file). The exit code is 1 when any file isn't ok or
+  notice.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\word-open-check.ps1 out\saved
@@ -48,9 +52,57 @@ function Stop-Started($ids, [int]$waitMs = 15000) {
   }
 }
 
+Add-Type @"
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class FwWindows {
+  delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr lParam);
+  [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, EnumProc proc, IntPtr lParam);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
+  public static string ClassOf(IntPtr h) { var s = new StringBuilder(256); GetClassName(h, s, 256); return s.ToString(); }
+  public static string TextOf(IntPtr h) { var s = new StringBuilder(2048); GetWindowText(h, s, 2048); return s.ToString(); }
+  public static bool Visible(IntPtr h) { return IsWindowVisible(h); }
+  // The visible top-level windows of these processes.
+  public static List<IntPtr> TopLevel(int[] pids) {
+    var found = new List<IntPtr>();
+    EnumWindows((h, l) => {
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      if (Array.IndexOf(pids, (int)pid) >= 0 && IsWindowVisible(h)) found.Add(h);
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
+  // The text of a classic dialog's controls.
+  public static List<string> ChildTexts(IntPtr parent) {
+    var texts = new List<string>();
+    EnumChildWindows(parent, (h, l) => { string t = TextOf(h); if (t.Length > 0) texts.Add(t); return true; }, IntPtr.Zero);
+    return texts;
+  }
+  // Whether a window of this process, shown or hidden, has `text` in its title.
+  public static bool HasTitle(int pid, string text) {
+    bool found = false;
+    EnumWindows((h, l) => {
+      uint owner; GetWindowThreadProcessId(h, out owner);
+      if ((int)owner == pid && TextOf(h).Contains(text)) found = true;
+      return !found;
+    }, IntPtr.Zero);
+    return found;
+  }
+  public static void Close(IntPtr h) { PostMessage(h, 0x0010 /* WM_CLOSE */, IntPtr.Zero, IntPtr.Zero); }
+  public static void Cancel(IntPtr h) { PostMessage(h, 0x0111 /* WM_COMMAND */, (IntPtr)2 /* IDCANCEL */, IntPtr.Zero); }
+}
+"@
+
 # ---- Child: open one file in a new hidden Word, close it unsaved, quit.
 if ($Child) {
-  $started = New-Object Collections.Generic.List[int]
+  $started = New-Object Collections.Generic.List[int]  # the Word this child started: the only one it may end
   $result = [ordered]@{ pid = $started }
   $word = $null; $doc = $null
   try {
@@ -65,14 +117,22 @@ if ($Child) {
       $before = @(Get-Process WINWORD -ErrorAction SilentlyContinue | ForEach-Object Id)
       $word = New-Object -ComObject Word.Application
       $new = @(Get-Process WINWORD -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | ForEach-Object Id)
-      foreach ($id in $new) { $started.Add($id) }
-      Write-Json $result $ResultFile
-      if (-not $new.Count) { break }
-      # COM started a normal Word instead: close it and wait longer.
-      try { $word.Quit([ref]0) } catch {}
+      # Is it the Word this child started? Its main window takes a caption only this child knows. (Another
+      # program's Word waiting for its own automation could have answered instead.)
+      $mark = "fw-word-open-check $PID $wait"
+      $caption = $word.Caption
+      $word.Caption = $mark
+      $ours = $false
+      for ($i = 0; $i -lt 30 -and -not $ours; $i++) {
+        $ours = [FwWindows]::HasTitle($safe.Id, $mark)
+        if (-not $ours) { Start-Sleep -Milliseconds 100 }
+      }
+      if ($ours) { break }
+      # Not ours. A Word this call started is closed through COM; another program's is left as it was.
+      # Neither is ended by force: only the Word this child started is.
+      if ($new.Count) { try { $word.Quit([ref]0) } catch {} } else { try { $word.Caption = $caption } catch {} }
       [void][Runtime.InteropServices.Marshal]::ReleaseComObject($word)
       $word = $null
-      Stop-Started $new
     }
     if (-not $word) { throw "Word didn't connect to the safe-mode instance" }
     $result.app = "Word $($word.Version) (build $($word.Build)), safe mode"
@@ -119,43 +179,6 @@ if ($Child) {
 
 # ---- Parent
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
-Add-Type @"
-using System;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-using System.Text;
-public static class FwWindows {
-  delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
-  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr lParam);
-  [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, EnumProc proc, IntPtr lParam);
-  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, StringBuilder s, int n);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder s, int n);
-  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
-  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
-  public static string ClassOf(IntPtr h) { var s = new StringBuilder(256); GetClassName(h, s, 256); return s.ToString(); }
-  public static string TextOf(IntPtr h) { var s = new StringBuilder(2048); GetWindowText(h, s, 2048); return s.ToString(); }
-  public static bool Visible(IntPtr h) { return IsWindowVisible(h); }
-  // The visible top-level windows of these processes.
-  public static List<IntPtr> TopLevel(int[] pids) {
-    var found = new List<IntPtr>();
-    EnumWindows((h, l) => {
-      uint pid; GetWindowThreadProcessId(h, out pid);
-      if (Array.IndexOf(pids, (int)pid) >= 0 && IsWindowVisible(h)) found.Add(h);
-      return true;
-    }, IntPtr.Zero);
-    return found;
-  }
-  // The text of a classic dialog's controls.
-  public static List<string> ChildTexts(IntPtr parent) {
-    var texts = new List<string>();
-    EnumChildWindows(parent, (h, l) => { string t = TextOf(h); if (t.Length > 0) texts.Add(t); return true; }, IntPtr.Zero);
-    return texts;
-  }
-  public static void Close(IntPtr h) { PostMessage(h, 0x0010 /* WM_CLOSE */, IntPtr.Zero, IntPtr.Zero); }
-  public static void Cancel(IntPtr h) { PostMessage(h, 0x0111 /* WM_COMMAND */, (IntPtr)2 /* IDCANCEL */, IntPtr.Zero); }
-}
-"@
 
 # The message a dialog shows: its controls' text, or for Office's own dialogs (NUIDialog), what UI
 # Automation reads, without the title, icon and buttons.
@@ -184,16 +207,20 @@ $files = foreach ($p in $Paths) {
   else { Write-Warning "not found: $p" }
 }
 if (-not $files) { throw "Give the documents or folders to check." }
-# One check at a time on this PC: a second one's COM could attach to the first one's Word.
-$mutex = New-Object Threading.Mutex($false, "Global\FeatherweightWordOpenCheck")
+# One Office automation at a time on this PC (reference-renders.ps1 takes the same mutex): a second
+# one's COM could attach to the first one's Word.
+$mutex = New-Object Threading.Mutex($false, "Global\FeatherweightOfficeAutomation")
 try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] {}  # a check that died still let go
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "fw-word-open-check-$PID"
 New-Item -ItemType Directory -Force $tmp | Out-Null
 $resultPath = Join-Path $tmp "result.json"
+# Word's automation failing (it didn't start or answer) says nothing about the file: try again.
+$infraText = "(?i)didn't connect to the safe-mode instance|remote procedure call|RPC server|0x800706|0x80010108|0x80080005|disconnected from its clients|server execution failed"
 $entries = @()
 $n = 0
 foreach ($f in @($files)) {
   $n++
+  for ($attempt = 1; ; $attempt++) {
   if (Test-Path $resultPath) { Remove-Item $resultPath }
   $entry = [ordered]@{ file = $f.FullName; status = $null; opened = $false; dialogs = @(); error = $null }
   $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList @(
@@ -235,6 +262,13 @@ foreach ($f in @($files)) {
     elseif ($entry.opened -and -not $entry.dialogs.Count -and -not $entry.error) { "ok" }
     elseif ($entry.opened -and -not $entry.error -and -not @($entry.dialogs | Where-Object { "$($_.title) $($_.text)" -notmatch $noticeText }).Count) { "notice" }
     else { "error" }
+  if ($entry.status -ne "error" -or $entry.dialogs.Count -or "$($entry.error)" -notmatch $infraText) { break }
+  if ($attempt -ge 3) {
+    $entry.status = "unchecked"  # Word's automation failed three times: not a verdict on the file
+    break
+  }
+  Start-Sleep -Seconds 5
+  }
   $what = if ($entry.dialogs.Count) { ($entry.dialogs | ForEach-Object { $_.text }) -join " || " } elseif ($entry.error) { $entry.error } else { "" }
   if ($what.Length -gt 220) { $what = $what.Substring(0, 220) + "..." }
   "[{0}/{1}] {2,-7} {3}  {4}" -f $n, @($files).Count, $entry.status, $f.Name, $what
