@@ -309,6 +309,7 @@ TEST(Pictures_MoveTakesThePictureAlong) {
   uint32_t d = Shown(*doc);
   if (d == kNone) return;
   // In line, to the end of the second paragraph.
+  const uint32_t firstId = doc->Drawings()[d].id;
   auto r = pics.MoveInline(d, Pos{1, 3});
   CHECK(r.ok);
   CHECK(doc->Para(0).text == u"one");
@@ -316,6 +317,9 @@ TEST(Pictures_MoveTakesThePictureAlong) {
   CHECK(r.caret == (Pos{1, 3}));
   d = Shown(*doc);
   CHECK(d != kNone && doc->Drawings()[d].pos == (Pos{1, 3}));
+  // With an id of its own: where Track Changes keeps the old copy as a deletion, ids don't repeat
+  // (d4 torture finding 41).
+  CHECK(d != kNone && doc->Drawings()[d].id != firstId);
   // Within its paragraph, to the start.
   r = pics.MoveInline(d, Pos{1, 0});
   CHECK(r.ok && doc->Para(1).text == u"\xFFFCtwo");
