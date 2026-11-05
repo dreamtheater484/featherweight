@@ -19,6 +19,7 @@
 #include "text/Fonts.h"
 #include "word/DocFile.h"
 #include "word/DocFormat.h"
+#include "word/DocTable.h"
 
 // A Word document in a tab (plan milestones D1 and D2): the model, laid out page by page by
 // fw::doc::layout (the first page at once, the rest in idle time), drawn through draw::Painter,
@@ -302,6 +303,11 @@ class DocView : public PagedView {
   // Editing: editor_ (declared after doc_) is null for a document shown but not edited (one the
   // model can't write back).
   std::unique_ptr<DocFormat> format_;  // after the editor: it goes first
+  std::unique_ptr<DocTable> table_;    // tables (D3), likewise
+  // The cells a selection across cells covers, as drawn (DrawRanges).
+  Rects cellRects_;
+  TextPos cellFrom_, cellTo_;
+  uint32_t cellRevision_ = UINT32_MAX;
   uint64_t clipSource_ = 0;  // names this document in what it copies, to paste lists back into it
   bool keyFocus_ = true;
   bool annotationsStale_ = false;  // an edit moved comments, changes or links: find them again

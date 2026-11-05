@@ -230,6 +230,21 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     editor_->OnChange([this](const fw::doc::edit::Change& c) { OnEdited(c); });
     format_ = std::make_unique<DocFormat>(
         *editor_, [this] { return FormatTarget(); }, [this](const DocFormat::Done& d) { AfterFormat(d); });
+    DocTable::Host th;
+    th.selection = [this] {
+      return std::make_pair(fw::doc::Pos{anchor_.para, anchor_.offset}, fw::doc::Pos{focus_.para, focus_.offset});
+    };
+    th.apply = [this](const fw::doc::edit::Result& r) { return Apply(r); };
+    th.select = [this](fw::doc::Pos a, fw::doc::Pos c) {
+      anchor_ = {a.para, a.offset};
+      focus_ = {c.para, c.offset};
+      goalX_ = -1;
+      editor_->BreakTyping();
+      CaretMoved(true);
+      host_.ViewStateChanged();
+    };
+    th.showPanel = [this](PanelContent* p) { host_.ViewShowPanel(p); };
+    table_ = std::make_unique<DocTable>(*editor_, std::move(th));
     const std::vector<uint32_t> main = doc_->StoryParagraphs(doc_->MainStory());
     if (!main.empty()) anchor_ = focus_ = {main.front(), 0};
   }
@@ -594,6 +609,27 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
     }
     fill(m.rects, static_cast<int>(i) == current_ ? p.searchCurrent : p.searchHit, true);
   }
+  if (HasSelection() && table_) {
+    TextPos a = std::min(anchor_, focus_), b = std::max(anchor_, focus_);
+    if (!(cellFrom_ == a) || !(cellTo_ == b) || cellRevision_ != pagination_->Revision()) {
+      cellRects_.clear();
+      if (auto cells = table_->SelectedCells())
+        for (const auto& cell : cells->cells) {
+          Rects r = pagination_->Ranges({cell.start.para, cell.start.offset}, {cell.end.para, cell.end.offset});
+          if (r.empty())  // an empty cell: a mark where its text would be
+            if (auto at = pagination_->CaretAt({cell.start.para, cell.start.offset}))
+              r.push_back({at->page, layout::Rect{at->x, at->top, at->x + 6, at->bottom}});
+          cellRects_.insert(cellRects_.end(), r.begin(), r.end());
+        }
+      cellFrom_ = a;
+      cellTo_ = b;
+      cellRevision_ = pagination_->Revision();
+    }
+    if (!cellRects_.empty()) {
+      fill(cellRects_, p.selection, false);
+      return;
+    }
+  }
   if (HasSelection()) {
     TextPos a = std::min(anchor_, focus_), b = std::max(anchor_, focus_);
     if (!(selFrom_ == a) || !(selTo_ == b) || selRevision_ != pagination_->Revision()) {
@@ -812,6 +848,7 @@ bool DocView::OnKeyDown(UINT vk, UINT mods) {
     host_.ViewInvalidate();
     return true;
   }
+  if (vk == VK_TAB && !(mods & (kModCtrl | kModAlt)) && Editing() && table_ && table_->Tab((mods & kModShift) != 0)) return true;
   if (vk == VK_TAB && !(mods & (kModCtrl | kModAlt)) && Editing() && ListTab((mods & kModShift) != 0)) return true;
   if (Editing() && pagination_->PageCount() > 0 && EditKey(vk, mods)) return true;
   if (!Ready() || pagination_->PageCount() == 0) return NavigationKey(vk, mods);
@@ -1253,6 +1290,7 @@ int DocView::ShortcutFor(UINT vk, UINT mods) const {
 
 CommandState DocView::QueryCommand(int cmd) {
   if (format_ && DocFormat::Owns(cmd)) return format_->Query(cmd);
+  if (table_ && DocTable::Owns(cmd)) return table_->Query(cmd);
   CommandState s;
   switch (cmd) {
     case CmdSave: s = {Ready() && (Modified() || path_.empty()), false}; break;
@@ -1299,6 +1337,8 @@ std::vector<int> DocView::Commands() {
     if (editor_ || (n.cmd != CmdCut && n.cmd != CmdPaste && n.cmd != CmdUndo && n.cmd != CmdRedo)) ids.push_back(n.cmd);
   if (format_)
     for (int cmd : DocFormat::CommandIds()) ids.push_back(cmd);
+  if (table_)
+    for (int cmd : DocTable::CommandIds()) ids.push_back(cmd);
   return ids;
 }
 
@@ -1307,6 +1347,10 @@ bool DocView::Execute(int cmd) {
     // Ctrl+Shift+V pastes the format Ctrl+Shift+C copied, as in Word; with none, the text alone.
     if (cmd == CmdPasteFormat && !format_->Carrying()) Paste(false);
     else format_->Execute(cmd);
+    return true;
+  }
+  if (table_ && DocTable::Owns(cmd)) {
+    table_->Execute(cmd);
     return true;
   }
   if (ExecuteProof(cmd)) return true;
@@ -1356,6 +1400,7 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
     m.left.push_back(undo);
     m.left.push_back(query(CmdRedo, icon::Redo, 7));
     format_->AddToolbar(m);
+    table_->AddToolbar(m);
   }
 
   m.pager = !Editing();  // when editing, the status bar has the page and the zoom
@@ -1389,6 +1434,7 @@ void DocView::FillContextMenu(HMENU m, int x, int y) {
   using menu::AppendSeparator;
   FillSpellingMenu(m, x, y);  // a spelling error's suggestions first, as Word has them
   if (Editing()) {
+    table_->FillContextMenu(m);
     AppendItem(m, CmdCut, L"Cut\tCtrl+X", HasSelection());
     AppendItem(m, CmdCopy, L"Copy\tCtrl+C", HasSelection());
     AppendItem(m, CmdPaste, L"Paste\tCtrl+V", IsClipboardFormatAvailable(CF_UNICODETEXT) != FALSE);

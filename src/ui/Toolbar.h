@@ -14,7 +14,8 @@
 #include "ui/Widgets.h"
 
 // What kind of control a toolbar item is.
-enum class ToolKind { Button, Dropdown, ComboBox, SplitButton, ColorPicker, SpinBox };
+// Custom: a control the tab makes and keeps (ToolItem::control), such as a table grid.
+enum class ToolKind { Button, Dropdown, ComboBox, SplitButton, ColorPicker, SpinBox, Custom };
 
 // What a toolbar control was set to: a chosen item, typed text, a number or a color.
 struct ToolValue {
@@ -57,6 +58,8 @@ struct ToolItem {
   bool automatic = false;
   std::wstring automaticLabel;     // "Automatic" or "No color"
   D2D1_COLOR_F automaticColor{};   // how "Automatic" looks (transparent for "No color")
+  // Custom: the tab's own control, which outlives the toolbar's use of it.
+  Control* control = nullptr;
   // Called with what the control was set to. A split button's main part runs `cmd`.
   std::function<void(const ToolValue&)> onChange;
 };
