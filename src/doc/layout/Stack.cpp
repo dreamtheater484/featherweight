@@ -331,6 +331,10 @@ void Engine::AddDrawing(uint32_t drawing, const Rect& box, bool floating, const 
   tf.zones = nullptr;
   tf.inCell = false;
   Stack s = StackStory(d.textBoxes.front(), tf);
+  // "Resize shape to fit text" (a:spAutoFit, VML mso-fit-shape-to-text) grows the box to its
+  // text, as Word does when the text changes; any other box shows what fits, cut at its edge.
+  const bool grows = xml.find("spAutoFit") != std::string::npos || xml.find("fit-shape-to-text:t") != std::string::npos;
+  if (grows && !turn && s.height > inner.Height()) out.drawings.back().rect.bottom += s.height - inner.Height();
   for (LineBox& l : s.lines) {
     l.drawing = drawing;
     if (turn) {
@@ -339,7 +343,7 @@ void Engine::AddDrawing(uint32_t drawing, const Rect& box, bool floating, const 
       l.turnY = turn == 3 ? inner.Height() : 0;
       l.clip = {0, 0, inner.Width(), inner.Height()};
     } else {
-      l.clip = {0, 0, inner.Width(), std::max(inner.Height(), s.height)};
+      l.clip = {0, 0, inner.Width(), grows ? std::max(inner.Height(), s.height) : inner.Height() + in[3]};
     }
   }
   out.Append(std::move(s), inner.left, inner.top);

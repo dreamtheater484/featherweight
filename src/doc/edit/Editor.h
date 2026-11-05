@@ -321,6 +321,11 @@ struct KeptRefs {
 };
 KeptRefs KeptReferences(const Document& doc, const std::vector<uint32_t>& marks);
 
+// Whether the text of text-box story `story` can be edited: its drawing's kept XML holds every
+// copy of it as the reader found them (Drawing::boxesWritable), and the drawing is in the document
+// where it's written (a text box inside a text box: that one's drawing too). False for other stories.
+bool TextBoxEditable(const Document& doc, uint32_t story);
+
 // True when every character of `utf8` can be written in XML 1.0: valid UTF-8, without control
 // characters (tab, line feed and carriage return aside), lone surrogates, U+FFFE or U+FFFF. A
 // property value or link target with others would make the saved file unreadable.

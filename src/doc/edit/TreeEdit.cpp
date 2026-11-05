@@ -185,10 +185,18 @@ bool TreeEdit::Editable(ElemId id, std::unordered_map<ElemId, bool>& memo, std::
       break;
     }
     chain.push_back(e);
-    if ((t.elems[e].flags & kDisplayOnly) || NameOfElem(t, e) == kTextBox) {
+    if (t.elems[e].flags & kDisplayOnly) {
       verdict = false;
-      why = NameOfElem(t, e) == kTextBox ? u"Text in a text box can't be formatted yet."
-                                         : u"This text is kept as the file has it, so it can't be formatted.";
+      why = u"This text is kept as the file has it, so it can't be formatted.";
+      break;
+    }
+    // A text box's story is written into its drawing (docx::Writer), where the file allows it.
+    if (NameOfElem(t, e) == kTextBox && t.elems[e].parent == kNoElem) {
+      for (uint32_t s = 0; s < doc_.stories_.size(); ++s)
+        if (doc_.stories_[s].root == e && !TextBoxEditable(doc_, s)) {
+          verdict = false;
+          why = u"The text in this text box can't be formatted: the file keeps it in a way Featherweight can't write back.";
+        }
       break;
     }
     if (t.elems[e].parent == kNoElem || chain.size() > 512) {
