@@ -34,6 +34,12 @@ add_library(fwdoclayout STATIC
 target_link_libraries(fwdoclayout PUBLIC fwdoc fwtext fwdraw)
 target_compile_options(fwdoclayout PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
+# fwpictures: picture editing (plan §6.2, milestone D3): insert, resize, rotate, crop, wrap, alt
+# text, on the model's editor. Apart from fwdoc because it reads pictures with fwdraw (WIC).
+add_library(fwpictures STATIC edit/Pictures.cpp)
+target_link_libraries(fwpictures PUBLIC fwdoc fwdraw PRIVATE windowscodecs ole32)
+target_compile_options(fwpictures PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
+
 # fwproof: proofing (plan §6.2, milestone D2): spelling with Windows' spell checker, the language of
 # text, AutoCorrect and word count, on the model and its editor. Headless.
 add_library(fwproof STATIC
@@ -51,9 +57,10 @@ if(FW_BUILD_TESTS)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_doc.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_docsave.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_edit.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_format.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_proof.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_pictures.cpp"
     # The document tab's file (D2 "Files"): an app source, tested here with temporary folders.
     "${PROJECT_SOURCE_DIR}/tests/unit/test_docfile.cpp" "${PROJECT_SOURCE_DIR}/src/word/DocFile.cpp")
-  target_link_libraries(fw_tests PRIVATE fwdoc fwdoclayout fwproof)
+  target_link_libraries(fw_tests PRIVATE fwdoc fwdoclayout fwproof fwpictures)
   set(_fw_office "${PROJECT_SOURCE_DIR}/tests/office")
   add_test(NAME office_model_roundtrip COMMAND fwtool roundtrip --model "${_fw_office}/generated" "${_fw_office}/edge"
     "${_fw_office}/layout")

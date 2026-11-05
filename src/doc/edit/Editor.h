@@ -126,6 +126,12 @@ class Editor {
   Result SetMarkProps(uint32_t first, uint32_t last, const PropEdit& edit);
   // Sets paragraph properties on each paragraph from `first` to `last` in document order.
   Result SetParaProps(uint32_t first, uint32_t last, const PropEdit& edit);
+  // Inserts a drawing at `at` (one character, U+FFFC): a w:drawing holding `xml`, a self-contained
+  // wp:inline or wp:anchor, in the run of the text before it. `info` is its handle as the reader
+  // would make it (ReadDrawingFrame); its node, part and position are filled in here. The handle
+  // stays in Document::Drawings() when the insert is undone, at no position. Pictures.h makes the
+  // XML and adds the picture's part.
+  Result InsertDrawing(Pos at, std::string xml, const Drawing& info);
   // Makes the text in [from, to), in one paragraph, a hyperlink to `target`: a web address (a
   // relationship of the part, kept if the link is undone, which is harmless) or "#bookmark".
   // Refused where the text is already a link, or in a field, a content control or a tracked change.
