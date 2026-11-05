@@ -118,7 +118,11 @@ $checks = @(
   @("doc-hyphens", "light", "", "key:ctrl+home;key:right;key:right;key:ctrl+minus;key:right;key:ctrl+shift+minus;key:ctrl+shift+8;wait:200", @("..\office\layout\report.docx")),
   # Printing a document (vector, through Microsoft Print to PDF), then the PDF it made.
   @("doc-print", "light", "", "print:$out\doc-print.pdf", @("..\office\layout\textbox-table.docx")),
-  @("doc-printed", "light", "", "view:facing;cmd:fit-page", @("..\..\build\visual\doc-print.pdf"))
+  @("doc-printed", "light", "", "view:facing;cmd:fit-page", @("..\..\build\visual\doc-print.pdf")),
+  # Export PDF (D4): the drawings document exported (and its pages as the export draws them, for
+  # fwtool pdf-check --pngs), then the PDF it made, with its bookmarks.
+  @("doc-export", "light", "", "exportpdf:$out\doc-export.pdf;pagepngs:$out\doc-export", @("..\office\generated\drawings-dml.docx")),
+  @("doc-exported", "light", "", "view:facing;cmd:fit-page", @("..\..\build\visual\doc-export.pdf"))
 )
 
 foreach ($c in $checks) {
