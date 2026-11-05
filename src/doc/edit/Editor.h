@@ -89,6 +89,9 @@ struct CustomStep {
   // too). kNone: anything may read differently, and the whole document is laid out again.
   uint32_t first = kNone, count = 0;
   bool structure = false;  // with first: what follows may read differently too (Change::structure)
+  // With first: the paragraphs from here to the range's end didn't change, only list numbers in
+  // them may have (TreeEdit::Local(true)). kNone: all of the range changed.
+  uint32_t renumberFrom = kNone;
 };
 
 class Editor {

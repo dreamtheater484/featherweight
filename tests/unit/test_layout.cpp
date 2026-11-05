@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <random>
 #include <string>
@@ -15,7 +16,10 @@
 #include "doc/docx/Docx.h"
 #include "doc/edit/Clip.h"
 #include "doc/edit/Editor.h"
+#include "doc/edit/Format.h"
+#include "doc/edit/Lists.h"
 #include "doc/edit/Page.h"
+#include "doc/edit/TreeEdit.h"
 #include "doc/layout/Layout.h"
 #include "text/Fonts.h"
 
@@ -558,6 +562,64 @@ TEST(Layout_CellsOnAPage) {
   CHECK(in.tbl != tbl && in.row == 0 && in.col == 0);
   CHECK(in.box.left >= cells[3].box.left && in.box.right <= cells[3].box.right && in.box.top >= cells[3].box.top);
   CHECK(d.layout->Cells(99).empty());
+}
+
+TEST(Layout_ListsInATableNumberAgainAsFromScratch) {
+  // One numbered list from before a table through its cells: an edit before the table numbers the
+  // cells again, and formatting in a cell measures its row again (the table's other cells are kept,
+  // D3); each laid out again as a fresh layout lays it out.
+  std::string rows;
+  for (int i = 0; i < 10; ++i)
+    rows += "<w:tr><w:tc>" + P("Item " + std::to_string(i)) + "</w:tc><w:tc>" + P(Words(i % 4 + 1)) + "</w:tc></w:tr>";
+  const std::string table = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1500\"/>"
+                            "<w:gridCol w:w=\"1500\"/></w:tblGrid>" + rows + "</w:tbl>";
+  std::string body;
+  for (int i = 0; i < 4; ++i) body += P(Words(i * 3 + 2));
+  body += table;
+  for (int i = 0; i < 4; ++i) body += P(Words(i * 2 + 1));
+  Doc d = Make(body + SmallPage());
+  REQUIRE(d.layout);
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  auto cell = [&](size_t r, size_t c) {
+    Node tbl;
+    for (const Block& b : d.doc->Blocks(d.doc->MainStory()))
+      if (b.kind == BlockKind::Table) tbl = b.node;
+    Node tc = d.doc->RowCells(d.doc->TableRows(tbl)[r])[c];
+    return Pos{d.doc->Blocks(tc).front().para, 0};
+  };
+  auto para = [&](size_t i) { return d.doc->StoryParagraphs(d.doc->MainStory())[i]; };
+  int step = 0;
+  auto check = [&](bool ok, const char* what) {
+    REQUIRE(ok);
+    if (step++ % 2) d.layout->LayOutPages(2);
+    d.layout->LayOutAll();
+    REQUIRE(SameAsFresh(*d.doc, *d.layout, what));
+  };
+  auto tree = [&](const std::function<void(edit::TreeEdit&)>& change) {
+    edit::TreeEdit te(ed);
+    change(te);
+    return true;
+  };
+  check(tree([&](edit::TreeEdit& te) { edit::ToggleList(te, {{para(1), 0}, cell(9, 0)}, edit::ListKind::Number); }),
+        "numbered through the table");
+  const std::optional<ListLabel> before = d.doc->Label(cell(5, 0).para);
+  REQUIRE(before);
+  check(bool(ed.SplitParagraph({para(1), 2})), "Enter in the list before the table");
+  const std::optional<ListLabel> after = d.doc->Label(cell(5, 0).para);
+  REQUIRE(after);
+  CHECK(after->text != before->text);  // numbered again
+  check(tree([&](edit::TreeEdit& te) { edit::ToggleList(te, {{para(0), 0}, {para(0), 0}}, edit::ListKind::Number); }),
+        "a number before the list");
+  check(bool(ed.Undo()), "the number undone");
+  check(tree([&](edit::TreeEdit& te) { edit::ToggleList(te, {cell(3, 0), cell(3, 0)}, edit::ListKind::Bullet); }),
+        "bullets in a cell");
+  check(tree([&](edit::TreeEdit& te) { edit::ToggleRuns(te, {cell(6, 1), {cell(6, 1).para, 3}}, edit::Toggle::Bold); }),
+        "bold in a cell");
+  check(bool(ed.InsertText({cell(7, 1).para, 1}, u" more words in a cell, enough to wrap its line ")), "typing in a cell");
+  check(bool(ed.Undo()) && bool(ed.Undo()) && bool(ed.Undo()), "undone in the cells");
+  check(bool(ed.JoinParagraphs(para(1))), "the list's first items joined");
+  check(bool(ed.Undo()) && bool(ed.Undo()), "all undone");
 }
 
 TEST(Layout_APageSetupChangeLaysOutInIdleTime) {
