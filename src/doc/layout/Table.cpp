@@ -124,6 +124,31 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame) {
       col += c.span;
       rb.cells.push_back(std::move(c));
     }
+    // Horizontal borders set on the cells themselves (w:tcBorders) take room inside them: the
+    // text starts below the stronger of a cell's top border and the bottom border of the cell
+    // above, and the last row's ends above its bottom border. The table's and its style's
+    // borders don't (measured on the corpus: counting those too makes rows of style-bordered
+    // tables taller than Word's).
+    {
+      auto own = [&](Node tc, uint32_t side) -> float {
+        Node b = tc.Child(Name("tcPr")).Child(Name("tcBorders")).Child(side);
+        if (!b) return 0;
+        std::string_view v = b.AttrOr(Name("val"));
+        if (v.empty() || v == "nil" || v == "none") return 0;
+        return static_cast<float>(ParseInt(b.AttrOr(Name("sz"))).value_or(0)) / 8.0f;
+      };
+      const RowBox* above = t.rows.empty() ? nullptr : &t.rows.back();
+      const bool lastRow = tr == rows.back();
+      for (CellBox& c : rb.cells) {
+        if (c.continued) continue;
+        float top = own(c.tc, Name("top"));
+        if (above)
+          for (const CellBox& a : above->cells)
+            if (c.x >= a.x - 0.5f && c.x < a.x + a.width - 0.5f) top = std::max(top, own(a.tc, Name("bottom")));
+        c.marginTop += top;
+        if (lastRow) c.marginBottom += own(c.tc, Name("bottom"));
+      }
+    }
     float h = 0;
     for (const CellBox& c : rb.cells)
       if (!c.continued && c.rowSpan == 1) h = std::max(h, c.content.height + c.marginTop + c.marginBottom);
