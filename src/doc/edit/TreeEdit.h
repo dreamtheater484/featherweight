@@ -46,6 +46,11 @@ class TreeEdit {
   void Begin(std::u16string label);
   void Commit();
   bool InTransaction() const { return depth_ > 0; }
+  // Why the last transaction changed nothing in the end: it touched text the editor doesn't edit
+  // (a text box, which is written back from its drawing as it was; content kept as it is; a part
+  // the writer can't reproduce). Commit puts everything back then, as Abort does (d2-torture
+  // finding 14). Empty when it was recorded.
+  const std::u16string& Refused() const { return refused_; }
   // Says the change affects the layout of the paragraphs it touches and no others (or, with
   // `toEnd`, those and the rest of their story: a list's numbers), whatever it adds to the styles
   // and numbering parts. Only their pages are laid out again, not the whole document. It counts in
@@ -168,6 +173,12 @@ class TreeEdit {
   uint32_t ParagraphOf(ElemId id) const;
   // Whether an element is in the styles or numbering part.
   bool InDefinitions(ElemId id) const;
+  // Whether an element is somewhere the editor edits (Editor's Editable, for any element): not in a
+  // text box or kept content, and in a part the writer reproduces. `memo` keeps the answers for
+  // the elements passed on the way up.
+  bool Editable(ElemId id, std::unordered_map<ElemId, bool>& memo, std::u16string& why) const;
+  // Puts back everything the transaction changed (Abort and a refused Commit).
+  void Discard();
   // NewStoryPart's copy: whether a story's content can be copied, and the copy of an element and
   // what it holds (new paragraphs join story `story`).
   bool Copyable(ElemId root, std::u16string& why) const;
@@ -179,7 +190,7 @@ class TreeEdit {
   int depth_ = 0;
   bool local_ = false, toEnd_ = false, structure_ = false;
   std::pair<uint32_t, uint32_t> affects_{kNone, kNone};
-  std::u16string label_;
+  std::u16string label_, refused_;
   size_t elemsAtBegin_ = 0;
   Saved before_;
   std::vector<StoreOp> store_;

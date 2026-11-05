@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "DocTestUtil.h"
+#include "doc/edit/Clip.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/TableStyles.h"
 #include "doc/model/Utf.h"
@@ -366,6 +367,42 @@ TEST(Tables_NewRowsAndColumnsAroundMergedCells) {
   CHECK(ChecksOut(*doc));
 }
 
+TEST(Tables_NewCellsDontTakeASharedSpan) {
+  // d1-corpus's finding 10 (merged-table.docx): a header row after one empty grid column, and body
+  // rows whose first cells share one w:tcPr with a gridSpan of 2. New columns over the body: cells
+  // of one column each, and the header row moves over by as many.
+  const std::string span = "<w:tcPr><w:tcW w:w=\"1564\" w:type=\"dxa\"/><w:gridSpan w:val=\"2\"/></w:tcPr>";
+  auto cell = [](const std::string& pr, const std::string& text) { return "<w:tc>" + pr + Para(text) + "</w:tc>"; };
+  std::string tbl = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid>";
+  for (int w : {10, 1554, 10, 3371, 3000}) tbl += "<w:gridCol w:w=\"" + std::to_string(w) + "\"/>";
+  tbl += "</w:tblGrid><w:tr><w:trPr><w:gridBefore w:val=\"1\"/><w:tblHeader/></w:trPr>" + cell(span, "Issue") +
+         cell("", "Example") + cell("", "Sources") + "</w:tr>";
+  for (const char* name : {"One", "Two", "Three"})
+    tbl += "<w:tr>" + cell(span, name) + cell("<w:tcPr><w:gridSpan w:val=\"2\"/></w:tcPr>", "clause") + cell("", "added") +
+           "</w:tr>";
+  tbl += "</w:tbl>";
+  Fixture f;
+  f.body = Para("Before") + tbl + Para("After");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  REQUIRE(GridOk(*doc));
+  const std::string before = Written(*doc);
+  Editor ed(*doc);
+  // Left of the whole body: five columns.
+  REQUIRE(ed.InsertColumns(P(CellPara(*doc, 1, 0), 0), P(CellPara(*doc, 3, 2), 0), false));
+  Node t = FirstTable(*doc);
+  CHECK_EQ(doc->TableGrid(t).size(), 10u);
+  CHECK_EQ(doc->RowCells(doc->TableRows(t)[1]).size(), 8u);
+  CHECK_EQ(doc->ResolvedCell(doc->RowCells(doc->TableRows(t)[1])[0]).gridSpan, 1);
+  CHECK_EQ(doc->ResolvedRow(doc->TableRows(t)[0]).gridBefore, 6);
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  // Right of a body cell two columns wide: two columns, which the header's first cell spans.
+  REQUIRE(ed.InsertColumns(P(CellPara(*doc, 1, 5), 0), P(CellPara(*doc, 1, 5), 0), true));
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  CHECK(UndoesAndRedoes(ed, *doc, before));
+  CHECK(ChecksOut(*doc));
+}
+
 TEST(Tables_DeleteRowsAndColumns) {
   Fixture f;
   f.body = Table({{"a", "b", "c"}, {"d", "e", "f"}, {"g|<w:gridSpan w:val=\"2\"/>", "i"}}) + Para("after");
@@ -672,8 +709,8 @@ TEST(Tables_StylesTheDocumentsAndWordsBasics) {
   CHECK(added->name == "Grid Table 4 - Accent 1" && added->type == StyleType::Table);
   // Its header row shows: the first row's cells are filled.
   CHECK_EQ(doc->ResolvedCell(doc->RowCells(doc->TableRows(FirstTable(*doc))[0])[0]).shading.fill.rgb & 0xFFFFFF, 0x4472C4u);
-  CHECK(std::find(edit::TableStyleNames(*doc).begin(), edit::TableStyleNames(*doc).end(), "Grid Table 4 - Accent 1") !=
-        edit::TableStyleNames(*doc).end());
+  const auto now = edit::TableStyleNames(*doc);
+  CHECK(std::find(now.begin(), now.end(), "Grid Table 4 - Accent 1") != now.end());
   // The document's own, by name.
   REQUIRE(edit::ApplyTableStyle(ed, a, "My Table"));
   CHECK(doc->ResolvedTable(FirstTable(*doc)).style == "Mine");
@@ -684,4 +721,205 @@ TEST(Tables_StylesTheDocumentsAndWordsBasics) {
   while (ed.CanUndo() && ed.Undo()) {
   }
   CHECK(!doc->FindStyle("GridTable4-Accent1"));  // undone: the style went too
+}
+
+// ---- Copy and paste (D3): tables come and go as tables, through RTF and HTML too.
+
+namespace {
+
+std::vector<Node> Tables(const Document& doc) {
+  std::vector<Node> out;
+  for (const Block& b : doc.Blocks(doc.MainStory()))
+    if (b.kind == BlockKind::Table) out.push_back(b.node);
+  return out;
+}
+// A clip of one table: rows of cell texts.
+edit::Clip TableClip(const std::vector<std::vector<std::string>>& rows) {
+  edit::Clip c;
+  for (uint32_t r = 0; r < rows.size(); ++r)
+    for (uint32_t i = 0; i < rows[r].size(); ++i) {
+      edit::ClipPara p;
+      p.table = 1, p.row = r, p.cell = i;
+      if (!rows[r][i].empty()) {
+        edit::ClipRun run;
+        run.text = ToUtf16(rows[r][i]);
+        p.runs.push_back(run);
+      }
+      c.paras.push_back(p);
+    }
+  return c;
+}
+// Where each paragraph is: "t.r.c" in a table, "-" outside, comma-separated.
+std::string Places(const edit::Clip& c) {
+  std::string out;
+  for (const edit::ClipPara& p : c.paras) {
+    if (!out.empty()) out += ",";
+    out += p.table ? std::to_string(p.table) + "." + std::to_string(p.row) + "." + std::to_string(p.cell) : "-";
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST(Tables_CopyComesAsATable) {
+  Fixture f;
+  f.body = Para("Before") + Table({{"a", "b"}, {"c", "d"}}) + Para("After");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);  // Before, a, b, c, d, After
+  REQUIRE(ps.size() == 6);
+  const edit::Clip c = edit::CopyClip(*doc, P(ps[0], 0), P(ps[5], 5));
+  CHECK_EQ(Places(c), std::string("-,1.0.0,1.0.1,1.1.0,1.1.1,-"));
+  CHECK(c.PlainText() == u"Before\r\na\tb\r\nc\td\r\nAfter");
+  // Inside one cell: text.
+  CHECK(!edit::CopyClip(*doc, P(ps[1], 0), P(ps[1], 1)).HasTables());
+  // A column: its cells, as a table of one column.
+  auto col = edit::CopyCells(ed, P(ps[2], 0), P(ps[4], 1));
+  REQUIRE(col);
+  CHECK_EQ(Places(*col), std::string("1.0.0,1.1.0"));
+  CHECK(col->PlainText() == u"b\r\nd");
+  CHECK(!edit::CopyCells(ed, P(ps[0], 0), P(ps[1], 1)));  // not cells of one table
+  CHECK(!edit::CopyCells(ed, P(ps[1], 0), P(ps[1], 1)));  // one cell: text
+  // Through RTF and HTML and back.
+  auto rtf = edit::FromRtf(edit::ToRtf(c));
+  auto html = edit::FromHtml(edit::ToHtml(c));
+  REQUIRE(rtf && html);
+  CHECK_EQ(Places(*rtf), Places(c));
+  CHECK_EQ(Places(*html), Places(c));
+  CHECK(rtf->PlainText() == c.PlainText() && html->PlainText() == c.PlainText());
+  // Empty cells keep their places.
+  auto empty = edit::FromHtml(edit::ToHtml(TableClip({{"x", ""}, {"", "y"}})));
+  REQUIRE(empty);
+  CHECK_EQ(Places(*empty), std::string("1.0.0,1.0.1,1.1.0,1.1.1"));
+}
+
+TEST(Tables_ReadsOtherProgramsTables) {
+  // A spreadsheet's HTML: an empty cell, a cell over two columns, a header cell.
+  auto h = edit::FromHtml(
+      "<html><body><!--StartFragment--><table><tr><th>Name</th><td></td><td>3</td></tr>"
+      "<tr><td colspan=2>wide</td><td>y</td></tr></table><!--EndFragment--></body></html>");
+  REQUIRE(h);
+  CHECK_EQ(Places(*h), std::string("1.0.0,1.0.1,1.0.2,1.1.0,1.1.2"));
+  CHECK(h->paras[0].runs.size() == 1 && h->paras[0].runs[0].bold);
+  // Word's RTF with a table nested in a cell: the nested rows are paragraphs of that cell.
+  auto r = edit::FromRtf(
+      "{\\rtf1\\ansi \\pard\\intbl\\itap1 A\\cell \\pard\\intbl\\itap2 n1\\nestcell n2\\nestcell"
+      "{\\*\\nesttableprops\\trowd\\cellx500\\cellx1000\\nestrow}{\\nonesttables\\par}"
+      "\\pard\\intbl\\itap1 B\\cell\\trowd\\cellx2000\\cellx4000\\row\\pard after}");
+  REQUIRE(r);
+  CHECK_EQ(Places(*r), std::string("1.0.0,1.0.1,1.0.1,-"));
+  CHECK(r->PlainText() == u"A\tn1\tn2\r\nB\r\nafter");
+  // A table inside an HTML cell: its text.
+  auto n = edit::FromHtml("<table><tr><td>a<table><tr><td>x</td><td>y</td></tr></table></td><td>b</td></tr></table>");
+  REQUIRE(n);
+  CHECK_EQ(Places(*n), std::string("1.0.0,1.0.0,1.0.1"));
+  CHECK(n->PlainText() == u"a\r\nx\ty\tb");
+}
+
+TEST(Tables_PasteMakesATable) {
+  Fixture f;
+  f.body = Para("Before") + Table({{"a", "b"}, {"c", "d"}}) + Para("After") + Para("Hello world");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const std::string before = Written(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  const edit::Clip c = edit::CopyClip(*doc, P(ps[0], 0), P(ps[5], 5));  // Before, the table, After
+  // In the middle of "Hello world": "Hello" with "Before", the table, "After" with " world".
+  auto r = edit::PasteClip(ed, P(ps[6], 5), P(ps[6], 5), c);
+  REQUIRE(r);
+  auto tables = Tables(*doc);
+  REQUIRE(tables.size() == 2);
+  CHECK_EQ(Cells(*doc, tables[1]), std::string("a,b|c,d"));
+  ps = Main(*doc);
+  CHECK_EQ(Text(*doc, ps[6]), std::string("HelloBefore"));
+  CHECK_EQ(Text(*doc, ps.back()), std::string("After world"));
+  CHECK(r.caret == P(ps.back(), 5));
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  CHECK(ChecksOut(*doc));
+  // One undo step.
+  REQUIRE(ed.Undo());
+  CHECK(SameXml(before, Written(*doc), "undone"));
+  REQUIRE(ed.Redo());
+  // A table alone, at the start of a paragraph: before it; cells with paragraphs of their own.
+  edit::Clip t = TableClip({{"1", "2", "3"}});
+  edit::ClipPara second;
+  second.table = 1, second.cell = 2;
+  second.align = edit::ClipAlign::Right;
+  edit::ClipRun run;
+  run.text = u"more";
+  second.runs.push_back(run);
+  t.paras.push_back(second);
+  REQUIRE(edit::PasteClip(ed, P(Main(*doc).front(), 0), P(Main(*doc).front(), 0), t));
+  tables = Tables(*doc);
+  REQUIRE(tables.size() == 3);
+  CHECK_EQ(Cells(*doc, tables[0]), std::string("1,2,3/more"));
+  CHECK_EQ(Text(*doc, Main(*doc).back()), std::string("After world"));
+  const uint32_t more = CellPara(*doc, 0, 2) + 1;
+  CHECK_EQ(Text(*doc, more), std::string("more"));
+  CHECK(doc->ResolvedPara(more).jc == Justification::End);
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  CHECK(UndoesAndRedoes(ed, *doc, before));
+  CHECK(ChecksOut(*doc));
+}
+
+TEST(Tables_PasteInACellGoesOverTheCells) {
+  Fixture f;
+  f.body = Table({{"1", "2", "3"}, {"4", "5", "6"}}) + Para("End");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const std::string before = Written(*doc);
+  Editor ed(*doc);
+  // From the second cell: over four cells.
+  const Pos two = P(CellPara(*doc, 0, 1), 1);
+  REQUIRE(edit::PasteClip(ed, two, two, TableClip({{"a", "b"}, {"c", "d"}})));
+  CHECK_EQ(Cells(*doc, FirstTable(*doc)), std::string("1,a,b|4,c,d"));
+  // Past the last row: rows added; past the last column: left out.
+  const Pos six = P(CellPara(*doc, 1, 2), 0);
+  REQUIRE(edit::PasteClip(ed, six, six, TableClip({{"x", "lost"}, {"y", "lost"}, {"z", "lost"}})));
+  CHECK_EQ(Cells(*doc, FirstTable(*doc)), std::string("1,a,b|4,c,x|,,y|,,z"));
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  // Text with a table, in a cell: text, a row a paragraph.
+  edit::Clip mixed = TableClip({{"p", "q"}, {"r", "s"}});
+  edit::ClipPara intro;
+  edit::ClipRun run;
+  run.text = u"Intro";
+  intro.runs.push_back(run);
+  mixed.paras.insert(mixed.paras.begin(), intro);
+  const Pos one = P(CellPara(*doc, 0, 0), 1);
+  REQUIRE(edit::PasteClip(ed, one, one, mixed));
+  CHECK_EQ(Cells(*doc, FirstTable(*doc)), std::string("1Intro/p\tq/r\ts,a,b|4,c,x|,,y|,,z"));
+  // Cells selected, as the Word tab does it: emptied, then the paste from the first.
+  ed.BeginGroup(u"Paste");
+  auto cleared = ed.ClearCells(P(CellPara(*doc, 1, 0), 0), P(CellPara(*doc, 2, 1), 0));
+  REQUIRE(cleared);
+  REQUIRE(edit::PasteClip(ed, cleared.caret, cleared.caret, TableClip({{"m"}})));
+  ed.EndGroup();
+  CHECK_EQ(Cells(*doc, FirstTable(*doc)), std::string("1Intro/p\tq/r\ts,a,b|m,,x|,,y|,,z"));
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  CHECK(UndoesAndRedoes(ed, *doc, before));
+  CHECK(ChecksOut(*doc));
+}
+
+TEST(Tables_CancelledGroupLeavesNothing) {
+  Fixture f;
+  f.body = Para("One") + Para("Two");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const std::string before = Written(*doc);
+  Editor ed(*doc);
+  ed.BeginGroup(u"Outer");
+  REQUIRE(ed.InsertText(P(0, 3), u" kept"));
+  ed.BeginGroup(u"Inner");
+  REQUIRE(ed.InsertText(P(1, 3), u" gone"));
+  CHECK(!ed.InsertRows(P(0, 0), P(0, 0), true));  // not in a table: refused, nothing done
+  ed.CancelGroup();
+  CHECK_EQ(Text(*doc, 1), std::string("Two"));
+  CHECK_EQ(Text(*doc, 0), std::string("One kept"));
+  ed.EndGroup();
+  // The outer group is one step; undone, the document is as it was.
+  REQUIRE(ed.Undo());
+  CHECK(SameXml(before, Written(*doc), "undone"));
+  CHECK(!ed.CanUndo());
 }

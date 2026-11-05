@@ -1080,6 +1080,43 @@ TEST(Edit_TextEditsAfterParagraphFormattingKeepTheText) {
   CHECK(MainXml(*doc) == original && !editor.CanUndo());
 }
 
+TEST(Edit_FormattingInATextBoxIsRefused) {
+  // d2-torture finding 14: a text box is written back from its drawing as it was, so formatting
+  // its text was lost on saving. Like the editor's text edits, formatting there is refused and
+  // changes nothing; the body's text is formatted as before.
+  Fixture f;
+  f.styles = kBoldStyle;
+  f.body = "<w:p><w:r><w:t>Body</w:t></w:r><w:r><w:pict><v:shape id=\"s\" style=\"position:absolute;width:144pt;"
+           "height:36pt\"><v:textbox><w:txbxContent><w:p><w:r><w:t>Boxed</w:t></w:r></w:p></w:txbxContent></v:textbox>"
+           "</v:shape></w:pict></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  uint32_t boxed = kNone;
+  for (uint32_t s = 0; s < doc->Stories().size(); ++s)
+    if (doc->Stories()[s].kind == StoryKind::TextBox && !doc->StoryParagraphs(s).empty()) boxed = doc->StoryParagraphs(s)[0];
+  CHECK(boxed != kNone);
+  if (boxed == kNone) return;
+  const std::string original = MainXml(*doc), styles = PartXml(*doc, PartKind::Styles);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  edit::ToggleRuns(ed, Whole(*doc, boxed), edit::Toggle::Underline);
+  CHECK(!ed.Refused().empty());
+  edit::ParaFormat pf;
+  pf.jc = Justification::Center;
+  edit::FormatParagraphs(ed, Whole(*doc, boxed), pf);
+  CHECK(!ed.Refused().empty());
+  edit::ApplyStyle(ed, Whole(*doc, boxed), "Heading 1");
+  CHECK(!ed.Refused().empty());
+  CHECK(MainXml(*doc) == original && PartXml(*doc, PartKind::Styles) == styles && !editor.CanUndo());
+  CHECK(doc->Para(boxed).text == u"Boxed" && !editor.Modified());
+  // The body still formats.
+  const uint32_t body = MainParas(*doc)[0];
+  edit::ToggleRuns(ed, {{body, 0}, {body, 4}}, edit::Toggle::Bold);
+  CHECK(ed.Refused().empty() && editor.CanUndo() && At(*doc, body, 0).bold);
+  CHECK(SaveAndReopen(*doc) != nullptr);
+}
+
 TEST(Edit_FirstPropertyGoesBeforeKeptExtensions) {
   // A w:rPr that holds only an extension: the first w: property goes before it, as the editor's
   // own property edits put it (d2-torture finding 3b).

@@ -995,7 +995,11 @@ bool DocView::PutOnClipboard() {
   if (SelectedPicture() != fw::doc::kNone && CopyPicture()) return true;
   const fw::doc::Pos a{std::min(anchor_, focus_).para, std::min(anchor_, focus_).offset};
   const fw::doc::Pos b{std::max(anchor_, focus_).para, std::max(anchor_, focus_).offset};
-  const fw::doc::edit::Clip clip = fw::doc::edit::CopyClip(*doc_, a, b, clipSource_);
+  // A selection across cells copies those cells, as a table.
+  auto cells = table_ && table_->SelectedCells()
+                   ? fw::doc::edit::CopyCells(*editor_, {anchor_.para, anchor_.offset}, {focus_.para, focus_.offset}, clipSource_)
+                   : std::nullopt;
+  const fw::doc::edit::Clip clip = cells ? std::move(*cells) : fw::doc::edit::CopyClip(*doc_, a, b, clipSource_);
   const std::u16string text = clip.PlainText();
   if (text.empty()) return false;
   util::SetClipboardText(std::wstring(text.begin(), text.end()), fw::doc::edit::ToRtf(clip), fw::doc::edit::ToHtml(clip));

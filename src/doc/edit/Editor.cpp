@@ -319,7 +319,15 @@ struct EditorState {
     ElemId id = CloneShallow(src, parent);
     if (fragments)
       if (auto frags = d.store_.FragmentsCopy(E(src).node); !frags.empty()) d.store_.SetFragments(E(id).node, frags);
-    if (E(id).flags & kSharedKids) return id;
+    if (E(id).flags & kSharedKids) {
+      // A shared set stays shared, unless the copy leaves some of it out (a new cell's w:tcPr
+      // without the w:gridSpan of the cell it's like): then the copy has children of its own.
+      bool leaves = false;
+      for (ElemId c = E(src).first; skip && c != kNoElem && !leaves; c = E(c).next) leaves = skip(c);
+      if (!leaves) return id;
+      E(id).flags &= static_cast<uint8_t>(~kSharedKids);
+      E(id).first = kNoElem;
+    }
     for (ElemId c = E(src).first; c != kNoElem; c = E(c).next)
       if (!skip || !skip(c)) Append(id, CloneDeep(c, id, skip, fragments));
     return id;
@@ -2834,6 +2842,19 @@ std::optional<Editor::CellInfo> Editor::NextCell(Pos at, bool back) const {
     return std::nullopt;
   }
   return Info(s, g, it->first, it->second);
+}
+
+std::vector<Editor::CellInfo> Editor::TableCells(Pos at) const {
+  EditorState& s = *impl_;
+  std::vector<CellInfo> out;
+  if (at.para >= doc_.Paragraphs().size()) return out;
+  ElemId tbl, tr, tc;
+  if (!s.CellOf(at.para, tbl, tr, tc)) return out;
+  Grid g;
+  std::u16string why;
+  if (!s.ReadGrid(tbl, g, why)) return out;
+  for (const auto& [r, i] : ReadingOrder(g)) out.push_back(Info(s, g, r, i));
+  return out;
 }
 
 // ---- New tables
