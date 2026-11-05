@@ -16,7 +16,11 @@ target_compile_options(fwdoc PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,Mi
 # fwdoclayout: pagination (plan §6.3 "Layout"), on fwtext's lines. Kept apart from fwdoc so the
 # model, its tools and its fuzz target stay free of DirectWrite.
 add_library(fwdoclayout STATIC
+  layout/Flow.cpp
   layout/Layout.cpp
+  layout/Stack.cpp
+  layout/Table.cpp
+  layout/Text.cpp
 )
 target_link_libraries(fwdoclayout PUBLIC fwdoc fwtext fwdraw)
 target_compile_options(fwdoclayout PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
