@@ -162,7 +162,14 @@ uint32_t DocView::PictureAt(int x, int y) const {
   const auto& boxes = pagination_->GetPage(page).drawings;
   for (auto it = boxes.rbegin(); it != boxes.rend(); ++it) {  // the last drawn is on top
     const layout::Rect& r = it->rect;
-    if (px < r.left || px >= r.right || py < r.top || py >= r.bottom) continue;
+    if (px < r.left || px >= r.right || py < r.top || py >= r.bottom) {
+      // A thin one (a line) is picked a few pixels around it.
+      const D2D1_RECT_F s = PageRectToScreen(page, r);
+      const float slop = 4 * ui_;
+      if ((s.right - s.left >= 2 * slop && s.bottom - s.top >= 2 * slop) || x < s.left - slop || x > s.right + slop ||
+          y < s.top - slop || y > s.bottom + slop)
+        continue;
+    }
     if (it->drawing >= doc_->Drawings().size() || doc_->Drawings()[it->drawing].pos.para == kNone) continue;
     if (!doc_->Drawings()[it->drawing].textBoxes.empty()) {
       // A text box: a click in its text goes to the text; its border selects it.
@@ -204,7 +211,7 @@ static void HandleCenters(const D2D1_RECT_F& r, float ui, float out[9][2]) {
 
 int DocView::HandleAt(int x, int y) const {
   const uint32_t d = SelectedPicture();
-  if (d == kNone || !PictureInfoOf(d).picture) return -1;
+  if (d == kNone || !Movable(d)) return -1;
   auto box = BoxOf(d);
   if (!box) return -1;
   float c[9][2];
@@ -285,7 +292,7 @@ void DocView::DrawPictureFrame(Canvas& c, int first, int last) {
   if (!box || box->page < first || box->page > last) return;
   const D2D1_RECT_F r = PageRectToScreen(box->page, box->rect);
   c.Stroke(r, p.accent, 1 * u);
-  if (!PictureInfoOf(d).picture || !Editing()) return;
+  if (!Movable(d) || !Editing()) return;
   float h[9][2];
   HandleCenters(r, u, h);
   if (cropMode_) {
@@ -323,7 +330,7 @@ bool DocView::PictureMouseDown(int x, int y, int button, UINT mods, bool doubleC
       picDrag_.start = picDrag_.now = box->rect;
       ToPagePoint(box->page, x, y, picDrag_.grabX, picDrag_.grabY);
       picDrag_.startCrop = picDrag_.crop = PictureInfoOf(selected).crop;
-      picDrag_.angle = PictureInfoOf(selected).rotation;
+      picDrag_.angle = PictureInfoOf(selected).picture ? PictureInfoOf(selected).rotation : ShapeInfoOf(selected).rotation;
       // The whole picture, crop included, for crop mode.
       const edit::Crop& k = picDrag_.startCrop;
       const float w = box->rect.right - box->rect.left, ht = box->rect.bottom - box->rect.top;
@@ -367,9 +374,9 @@ bool DocView::PictureMouseMove(int x, int y, UINT mods) {
   if (g.kind == PictureDrag::None) return false;
   if (g.kind == PictureDrag::Pending) {
     if (std::abs(x - downX_) + std::abs(y - downY_) < 4 * ui_) return true;
-    if (!PictureInfoOf(g.drawing).picture) {
+    if (!Movable(g.drawing)) {
       g.kind = PictureDrag::None;
-      if (!PictureInfoOf(g.drawing).why.empty()) host_.ViewMessage(BannerKind::Info, Wide(PictureInfoOf(g.drawing).why));
+      if (const std::u16string why = WhyNotMovable(g.drawing); !why.empty()) host_.ViewMessage(BannerKind::Info, Wide(why));
       return true;
     }
     g.kind = PictureDrag::Move;
@@ -420,11 +427,15 @@ bool DocView::PictureMouseMove(int x, int y, UINT mods) {
     host_.ViewInvalidate();
     return true;
   }
-  if (r.right - r.left < minSide) (left ? r.left : r.right) = left ? r.right - minSide : r.left + minSide;
-  if (r.bottom - r.top < minSide) (top ? r.top : r.bottom) = top ? r.bottom - minSide : r.top + minSide;
-  // Corners keep the picture's shape (Shift frees them, or keeps them for a picture that isn't locked).
+  // A side that's dragged keeps some size; a line's may go to nothing (it's then level or upright).
+  const float least = !PictureInfoOf(g.drawing).picture && ShapeInfoOf(g.drawing).line ? 0 : minSide;
+  if ((left || right) && r.right - r.left < least) (left ? r.left : r.right) = left ? r.right - least : r.left + least;
+  if ((top || bottom) && r.bottom - r.top < least) (top ? r.top : r.bottom) = top ? r.bottom - least : r.top + least;
+  // Corners keep the picture's shape (Shift frees them, or keeps them for a picture that isn't
+  // locked, and for a shape).
   const bool corner = h % 2 == 0;
-  if (corner && (PictureInfoOf(g.drawing).lockAspect != g.shift)) {
+  const bool lock = PictureInfoOf(g.drawing).picture && PictureInfoOf(g.drawing).lockAspect;
+  if (corner && (lock != g.shift) && g.start.right > g.start.left && g.start.bottom > g.start.top) {
     const float w0 = g.start.right - g.start.left, h0 = g.start.bottom - g.start.top;
     const float k = std::max((r.right - r.left) / w0, (r.bottom - r.top) / h0);
     const float w = w0 * k, ht = h0 * k;
@@ -447,6 +458,32 @@ bool DocView::PictureMouseUp(int x, int y) {
   const fw::doc::Drawing& d = doc_->Drawings()[g.drawing];
   const bool floating = d.anchored;
   auto emu = [](float pt) { return fw::Emu(std::llround(pt * kEmuPerPt)); };
+  if (!PictureInfoOf(g.drawing).picture && shapes_) {
+    // A shape (DocShapes.cpp): moved on its page, as it stays anchored to its paragraph.
+    edit::Result r;
+    switch (g.kind) {
+      case PictureDrag::Move:
+        if (floating && g.dropPage != g.page) {
+          host_.ViewMessage(BannerKind::Info, L"A shape stays on the page of the paragraph it's anchored to.");
+          return true;
+        }
+        r = shapes_->Move(g.drawing, emu(g.now.left), emu(g.now.top));
+        break;
+      case PictureDrag::Resize: {
+        const bool moved = g.now.left != g.start.left || g.now.top != g.start.top;
+        editor_->BeginGroup(u"Resize shape");
+        r = shapes_->Resize(g.drawing, emu(g.now.right - g.now.left), emu(g.now.bottom - g.now.top));
+        if (r && floating && moved) r = shapes_->Move(g.drawing, emu(g.now.left), emu(g.now.top));
+        if (r) editor_->EndGroup();
+        else editor_->CancelGroup();  // all of it or none
+        break;
+      }
+      case PictureDrag::Rotate: r = shapes_->Rotate(g.drawing, g.angle); break;
+      default: return true;
+    }
+    ApplyPicture(r);
+    return true;
+  }
   switch (g.kind) {
     case PictureDrag::Move: {
       if (!floating) {
@@ -510,7 +547,7 @@ HCURSOR DocView::PictureCursor(int x, int y) const {
     case kRotateHandle: return cross;
   }
   const uint32_t d = SelectedPicture();
-  if (d != kNone && PictureAt(x, y) == d && PictureInfoOf(d).picture) return move;
+  if (d != kNone && PictureAt(x, y) == d && Movable(d)) return move;
   return nullptr;
 }
 
@@ -695,10 +732,12 @@ std::optional<CommandState> DocView::QueryPicture(int cmd) {
     return s;
   }
   const uint32_t d = SelectedPicture();
-  const bool on = Editing() && d != kNone && PictureInfoOf(d).picture;
+  const bool on = Editing() && d != kNone && Movable(d);
   s.enabled = on;
   if (!on) return s;
-  const edit::Wrap w = PictureInfoOf(d).wrap;
+  const bool picture = PictureInfoOf(d).picture;  // else a shape (DocShapes.cpp)
+  const edit::Wrap w = picture ? PictureInfoOf(d).wrap : ShapeInfoOf(d).wrap;
+  if (!picture && (cmd == CmdPictureCrop || cmd == CmdPictureReset)) s.enabled = false;
   switch (cmd) {
     case CmdPictureInline: s.checked = w == edit::Wrap::Inline; break;
     case CmdPictureSquare: s.checked = w == edit::Wrap::Square; break;
@@ -721,7 +760,8 @@ void DocView::SetPictureWrap(edit::Wrap wrap) {
     x = fw::Emu(std::llround(box->rect.left * kEmuPerPt));
     y = fw::Emu(std::llround(box->rect.top * kEmuPerPt));
   }
-  ApplyPicture(pictures_->SetWrap(d, wrap, x, y));
+  if (!PictureInfoOf(d).picture && shapes_ && ShapeInfoOf(d).shape) ApplyPicture(shapes_->SetWrap(d, wrap, x, y));
+  else ApplyPicture(pictures_->SetWrap(d, wrap, x, y));
 }
 
 bool DocView::ExecutePicture(int cmd) {
@@ -733,8 +773,23 @@ bool DocView::ExecutePicture(int cmd) {
   }
   const uint32_t d = SelectedPicture();
   if (d == kNone) return true;
+  if (!Movable(d)) {
+    if (const std::u16string why = WhyNotMovable(d); !why.empty()) host_.ViewMessage(BannerKind::Info, Wide(why));
+    return true;
+  }
   if (!PictureInfoOf(d).picture) {
-    if (!PictureInfoOf(d).why.empty()) host_.ViewMessage(BannerKind::Info, Wide(PictureInfoOf(d).why));
+    // A shape: the same wrapping and turning; its own panel.
+    switch (cmd) {
+      case CmdPictureInline: SetPictureWrap(edit::Wrap::Inline); break;
+      case CmdPictureSquare: SetPictureWrap(edit::Wrap::Square); break;
+      case CmdPictureTight: SetPictureWrap(edit::Wrap::Tight); break;
+      case CmdPictureTopBottom: SetPictureWrap(edit::Wrap::TopAndBottom); break;
+      case CmdPictureBehind: SetPictureWrap(edit::Wrap::Behind); break;
+      case CmdPictureInFront: SetPictureWrap(edit::Wrap::InFront); break;
+      case CmdPictureRotate: ApplyPicture(shapes_->Rotate(d, ShapeInfoOf(d).rotation + 90)); break;
+      case CmdPicturePanel: Execute(CmdShapePanel); break;
+      default: break;
+    }
     return true;
   }
   switch (cmd) {
@@ -799,15 +854,16 @@ void DocView::SyncPicturePanel() {
 
 void DocView::AddPictureToolbar(ToolbarModel& m) {
   const uint32_t d = SelectedPicture();
-  if (d == kNone || !PictureInfoOf(d).picture) return;
-  const edit::Wrap w = PictureInfoOf(d).wrap;
+  if (d == kNone || !Movable(d)) return;
+  const bool picture = PictureInfoOf(d).picture;  // else a shape (DocShapes.cpp)
+  const edit::Wrap w = picture ? PictureInfoOf(d).wrap : ShapeInfoOf(d).wrap;
   ToolItem wrap;
   wrap.kind = ToolKind::Dropdown;
   wrap.cmd = CmdPictureWrapBox;
   wrap.width = 176;
   wrap.priority = 9;
   wrap.glyph = icon::Picture;
-  wrap.tooltip = L"Wrap text: how text flows around the picture";
+  wrap.tooltip = picture ? L"Wrap text: how text flows around the picture" : L"Wrap text: how text flows around the shape";
   wrap.sepBefore = true;
   static constexpr int kWraps[] = {CmdPictureInline, CmdPictureSquare, CmdPictureTight, CmdPictureTopBottom, CmdPictureBehind, CmdPictureInFront};
   wrap.choices = {L"In line with text", L"Square", L"Tight", L"Top and bottom", L"Behind text", L"In front of text"};
@@ -816,6 +872,23 @@ void DocView::AddPictureToolbar(ToolbarModel& m) {
     if (v.index >= 0 && v.index < 6) Execute(kWraps[v.index]);
   };
   m.left.push_back(wrap);
+  if (!picture) {
+    ToolItem rotate;
+    rotate.cmd = CmdPictureRotate;
+    rotate.glyph = icon::Rotate;
+    rotate.priority = 8;
+    rotate.tooltip = L"Rotate 90°";
+    m.left.push_back(rotate);
+    ToolItem panel;
+    panel.cmd = CmdShapePanel;
+    panel.glyph = icon::Settings;
+    panel.toggle = true;
+    panel.checked = QueryShape(CmdShapePanel)->checked;
+    panel.priority = 8;
+    panel.tooltip = L"Shape: wrap, size, fill and outline";
+    m.left.push_back(panel);
+    return;
+  }
   ToolItem crop;
   crop.cmd = CmdPictureCrop;
   crop.glyph = icon::Crop;
@@ -845,8 +918,9 @@ void DocView::FillPictureMenu(HMENU m) {
   using menu::AppendSeparator;
   const uint32_t d = SelectedPicture();
   if (d == kNone || !Editing()) return;
-  if (!PictureInfoOf(d).picture) return;
-  const edit::Wrap w = PictureInfoOf(d).wrap;
+  if (!Movable(d)) return;
+  const bool picture = PictureInfoOf(d).picture;  // else a shape (DocShapes.cpp)
+  const edit::Wrap w = picture ? PictureInfoOf(d).wrap : ShapeInfoOf(d).wrap;
   HMENU wrap = CreatePopupMenu();
   AppendItem(wrap, CmdPictureInline, L"In line with text", true, w == edit::Wrap::Inline, true);
   AppendItem(wrap, CmdPictureSquare, L"Square", true, w == edit::Wrap::Square, true);
@@ -855,6 +929,14 @@ void DocView::FillPictureMenu(HMENU m) {
   AppendItem(wrap, CmdPictureBehind, L"Behind text", true, w == edit::Wrap::Behind, true);
   AppendItem(wrap, CmdPictureInFront, L"In front of text", true, w == edit::Wrap::InFront, true);
   menu::AppendSubmenu(m, wrap, L"Wrap text");
+  if (!picture) {
+    const edit::ShapeInfo& info = ShapeInfoOf(d);
+    if (!info.line) AppendItem(m, info.text ? CmdShapeEditText : CmdShapeAddText, info.text ? L"Edit text" : L"Add text");
+    AppendItem(m, CmdPictureRotate, L"Rotate 90°");
+    AppendItem(m, CmdShapePanel, L"Wrap, size, fill and outline…");
+    AppendSeparator(m);
+    return;
+  }
   AppendItem(m, CmdPictureCrop, L"Crop", true, cropMode_);
   AppendItem(m, CmdPictureRotate, L"Rotate 90°");
   AppendItem(m, CmdPictureReset, L"Reset size");

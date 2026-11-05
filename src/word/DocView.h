@@ -11,6 +11,7 @@
 #include "doc/edit/Editor.h"
 #include "doc/edit/Toc.h"
 #include "doc/edit/Pictures.h"
+#include "doc/edit/Shapes.h"
 #include "doc/layout/Layout.h"
 #include "draw/Drawing.h"
 #include "doc/proof/AutoCorrect.h"
@@ -25,6 +26,8 @@
 #include "word/DocTable.h"
 
 class PicturePanel;
+class ShapePanel;
+class WatermarkPanel;
 
 // A Word document in a tab (plan milestones D1 and D2): the model, laid out page by page by
 // fw::doc::layout (the first page at once, the rest in idle time), drawn through draw::Painter,
@@ -444,6 +447,22 @@ class DocView : public PagedView {
   // The Picture panel shows the selected picture.
   void SyncPicturePanel();
 
+  // ---- Shapes, text boxes and watermarks (DocShapes.cpp, D4)
+  const fw::doc::edit::ShapeInfo& ShapeInfoOf(uint32_t drawing) const;
+  // A picture or shape the handles move, resize and turn.
+  bool Movable(uint32_t drawing) const;
+  // Why a drawing can't be changed.
+  std::u16string WhyNotMovable(uint32_t drawing) const;
+  void InsertShape(fw::doc::edit::ShapeKind kind);
+  // Typing with a shape selected goes into its text (made when it has none); true when it did.
+  bool TypeIntoShape(std::u16string_view text);
+  // The caret at the end of the selected shape's text; false when it has none it can take.
+  bool EnterShapeText(bool add);
+  bool PickPictureFile(std::vector<uint8_t>& bytes, const wchar_t* title);
+  std::optional<CommandState> QueryShape(int cmd);
+  bool ExecuteShape(int cmd);
+  void SyncShapePanels();
+
   std::wstring path_;            // the file; empty for a new or recovered document
   DocFile file_;
   std::vector<uint8_t> bytes_;   // NewDocument, FromBytes: what Load reads instead of a file
@@ -545,6 +564,7 @@ class DocView : public PagedView {
   TextPos cellFrom_, cellTo_;
   uint32_t cellRevision_ = UINT32_MAX;
   std::unique_ptr<fw::doc::edit::Pictures> pictures_;  // with the editor, after it
+  std::unique_ptr<fw::doc::edit::Shapes> shapes_;
   // Rows chosen in the margin beside a table, columns just above one, or lines in the margin beside
   // text (Word's selection bar): the drag goes on by whole rows, columns or lines from here.
   enum class LineDrag : uint8_t { None, Rows, Columns, Lines };
@@ -649,6 +669,12 @@ class DocView : public PagedView {
   mutable uint64_t infoKey_ = UINT64_MAX;  // PictureInfoOf's last answer
   mutable uint32_t infoEdits_ = UINT32_MAX;
   mutable fw::doc::edit::PictureInfo info_;
+  std::unique_ptr<ShapePanel> shapePanel_;
+  std::unique_ptr<WatermarkPanel> watermarkPanel_;
+  uint64_t shapeShown_ = UINT64_MAX, watermarkShown_ = UINT64_MAX;
+  mutable uint64_t shapeKey_ = UINT64_MAX;  // ShapeInfoOf's last answer
+  mutable uint32_t shapeEdits_ = UINT32_MAX;
+  mutable fw::doc::edit::ShapeInfo shapeInfo_;
   struct PictureDrag {
     enum Kind { None, Pending, Move, Resize, Rotate, Crop } kind = None;
     uint32_t drawing = 0;

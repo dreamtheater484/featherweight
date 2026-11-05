@@ -324,6 +324,24 @@ TEST(TextBox_InATableCellAndAHeaderToo) {
 
 // ---------- Shapes ----------
 
+TEST(Shapes_ANewShapeGoesOnTop) {
+  auto doc = Blank();
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  Shapes shapes(ed);
+  CHECK(shapes.Insert(0, ShapeKind::Rectangle, fw::Emu(kInch), fw::Emu(kInch), fw::Emu(2 * kInch), fw::Emu(kInch)).ok);
+  CHECK(shapes.Insert(0, ShapeKind::Arrow, fw::Emu(kInch), fw::Emu(kInch), fw::Emu(2 * kInch), fw::Emu(0)).ok);
+  const std::vector<uint32_t> shown = Shown(*doc);
+  CHECK_EQ(shown.size(), 2u);
+  if (shown.size() != 2) return;
+  // The arrow, added last, is first in the paragraph and above the rectangle.
+  const fw::doc::Drawing& arrow = doc->Drawings()[shown[0]].pos.offset == 0 ? doc->Drawings()[shown[0]] : doc->Drawings()[shown[1]];
+  const fw::doc::Drawing& rect = &arrow == &doc->Drawings()[shown[0]] ? doc->Drawings()[shown[1]] : doc->Drawings()[shown[0]];
+  CHECK(arrow.relativeHeight > rect.relativeHeight);
+  CHECK(shapes.Info(static_cast<uint32_t>(&arrow - doc->Drawings().data())).line);
+}
+
 TEST(Shapes_EachKindIsInsertedSavedAndReopened) {
   auto doc = Blank();
   CHECK(doc);

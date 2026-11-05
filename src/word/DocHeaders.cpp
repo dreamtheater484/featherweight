@@ -14,6 +14,8 @@
 #include "ui/Theme.h"
 #include "ui/Toolbar.h"
 #include "word/DocPanels.h"
+#include "word/PicturePanel.h"
+#include "word/ShapePanels.h"
 #include "word/DocView.h"
 
 namespace layout = fw::doc::layout;
@@ -250,7 +252,8 @@ void DocView::ShowPanel(PanelContent* panel, bool toggle) {
 void DocView::ClosePanels() {
   PanelContent* shown = host_.ViewShownPanel();
   if (shown && (shown == linkPanel_.get() || shown == bookmarkPanel_.get() || shown == pageNumberPanel_.get() ||
-                shown == navPanel_.get()))
+                shown == navPanel_.get() || shown == picturePanel_.get() || shown == shapePanel_.get() ||
+                shown == watermarkPanel_.get()))
     host_.ViewShowPanel(nullptr);
 }
 
