@@ -2142,8 +2142,8 @@ void App::RunScript(const std::wstring& script) {
       TabContent* v = Active();
       if (v && v->Kind() == TabKind::Document && v->Ready()) {
         std::wstring message;
-        PrintOutcome r = static_cast<DocView*>(v)->PrintToFile(arg, message);
-        fwprintf(stderr, L"print: %s (%d)\n", message.c_str(), static_cast<int>(r));
+        if (static_cast<DocView*>(v)->PrintToFile(arg, message) != PrintOutcome::Printed)
+          fwprintf(stderr, L"print failed: %s\n", message.c_str());
       }
     } else if (op == L"cmd") {
       static const std::pair<const wchar_t*, int> names[] = {
