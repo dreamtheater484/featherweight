@@ -73,7 +73,7 @@ void App::DescribeUia(uia::Tree& t) {
     };
   }
 
-  search_.Describe(t, 0, SearchStatus(), [this](int cmd) { Execute(cmd); }, [this] { FocusBox(&search_.Box()); });
+  search_.Describe(t, 0, SearchStatus(), [this](int cmd) { Execute(cmd); }, [this](TextBox* box) { FocusBox(box); });
   banner_.Describe(t, 0, [this](int id) {
     banner_.Hide();
     if (id > 0) Execute(CmdBannerAction + id);

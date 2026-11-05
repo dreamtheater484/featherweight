@@ -193,11 +193,33 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
   pageBox_.rc = {};
   shown_.clear();
 
-  // Left group: Open, then the tab's own items.
+  // Left group: Open, then the tab's own items. When they don't fit beside More and the right
+  // group's important items (priority 5 and up), items below priority 9 go, the lowest first.
   float x = rc.left + 8 * u;
   place(open_, x, kBtn * u);
   x += (kBtn + kGap) * u;
-  for (const ToolItem& item : m.left) {
+  std::vector<const ToolItem*> left;
+  for (const ToolItem& item : m.left) left.push_back(&item);
+  float keepRight = (kBtn + kGap) * u + 16 * u;
+  for (const ToolItem& item : m.right)
+    if (item.priority >= 5) keepRight += (item.width + kGap + (item.sepBefore ? kSep : 0)) * u;
+  auto leftWidth = [&]() {
+    float w = 0;
+    for (const ToolItem* it : left) w += (it->width + (it->joinNext ? 0 : kGap) + (it->sepBefore ? kSep : 0)) * u;
+    return w;
+  };
+  while (x + leftWidth() + keepRight > rc.right) {
+    auto victim = std::min_element(left.begin(), left.end(),
+                                   [](const ToolItem* a, const ToolItem* b) { return a->priority < b->priority; });
+    if (victim == left.end() || (*victim)->priority >= 9) break;
+    left.erase(victim);
+  }
+  for (const ToolItem* it : left) {
+    const ToolItem& item = *it;
+    if (item.sepBefore) {
+      separators_.push_back(RectF(x + kSep * u / 2 - kGap * u / 2, top + 7 * u, x + kSep * u / 2 - kGap * u / 2 + 1, top + h - 7 * u));
+      x += kSep * u;
+    }
     if (item.kind == ToolKind::Button) {
       place(ItemButton(item), x, item.width * u);
     } else {

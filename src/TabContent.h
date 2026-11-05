@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,9 @@ class ViewHost {
   virtual void ViewRequestPrint() = 0;
   virtual void ViewFocusTextBox(TextBox* box) = 0;
   virtual bool ViewInverted() = 0;  // night reading
+  // Word documents: spelling checked as you type, and AutoCorrect (Settings, [General]).
+  virtual bool ViewSpelling() { return true; }
+  virtual bool ViewAutoCorrect() { return true; }
   virtual void ViewPasswordAccepted(TabContent* view) = 0;
   // Opens a side panel with the tab's content in place of whatever was open (null closes it).
   virtual void ViewShowPanel(PanelContent* content) = 0;
@@ -72,6 +76,9 @@ struct SaveFormat {
 };
 
 enum class TabKind { Pdf, Document, Gallery };
+
+// What happened to a tab's file on disk since it was opened or saved.
+enum class FileChange { None, Changed, Missing };
 
 // One tab: a PDF today, and documents, spreadsheets and presentations later. The window owns the
 // chrome (title bar, toolbar, find panel, banners); the tab owns everything inside its viewport.
@@ -116,6 +123,9 @@ class TabContent {
   // The window took the keyboard for its own boxes (find, a toolbar control), or gave it back.
   // A tab with focusable parts hides or shows its focus.
   virtual void SetKeyFocus(bool /*has*/) {}
+  // The text caret, in client pixels, while the tab has one with key focus: where input methods,
+  // dictation and the emoji panel open.
+  virtual std::optional<RECT> CaretRect() { return std::nullopt; }
 
   // ---- Commands ----
   // The command a key runs in this kind of tab, or 0. Ctrl+I can mean night reading in a PDF and
@@ -133,6 +143,14 @@ class TabContent {
   // Fills the right-click menu for a point in the viewport (client coordinates).
   virtual void FillContextMenu(HMENU menu, int x, int y) = 0;
 
+  // ---- Replace (tabs that edit) ----
+  virtual bool CanReplace() const { return false; }
+  // Replaces the current match with `with` and goes on to the next. False when it couldn't (the
+  // tab says why).
+  virtual bool ReplaceCurrent(const std::wstring& /*with*/) { return false; }
+  // Replaces every match, as one undo step; how many it replaced.
+  virtual int ReplaceAll(const std::wstring& /*with*/) { return 0; }
+
   // ---- Status bar (editors; PDFs have none) ----
   virtual bool HasStatusBar() const { return false; }
   // What the status bar shows: page and word counts, the language, the zoom.
@@ -148,8 +166,16 @@ class TabContent {
   virtual std::wstring SelectedText() = 0;
 
   // ---- File ----
+  // Saves to `path`: the file itself, or another (Save As), which the tab then is.
   virtual bool Save(const std::wstring& path, std::wstring& error) = 0;
   virtual SaveFormat SaveAsFormat() const = 0;
+  // Where Save As starts: the file, or for a tab without one (a new document) a suggested name.
+  virtual std::wstring SuggestedSavePath() const { return Path(); }
+  // Editors: unsaved changes go to the recovery folder now and then (the window's timer).
+  virtual void Autosave() {}
+  // Editors: whether the file changed on disk, when the window or the tab is activated. Each
+  // change is reported once.
+  virtual FileChange CheckFileOnDisk() { return FileChange::None; }
   virtual bool CanPrint() const = 0;
   // Shows the print dialog and prints. `progress(done, total)` lets the window repaint between pages.
   virtual PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) = 0;

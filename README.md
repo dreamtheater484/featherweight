@@ -107,6 +107,14 @@ Requires Windows 10 (version 1903 or later) or Windows 11, 64-bit.
 Featherweight never sends your documents anywhere. Its only network access is a check of
 `api.github.com` for a new release, at most once a day. You can turn off automatic updates in the ⋯ menu.
 
+Two folders keep your work safe, in `%LOCALAPPDATA%\Featherweight` (or beside a portable copy's exe):
+
+- **Backups:** the first time Featherweight saves over a document, the original is kept here for
+  30 days, up to 1 GB in all. ⋯ → **Restore original** opens it; ⋯ → **Delete backups** removes them all.
+- **Recovery:** while a document has unsaved changes, a copy is kept here, encrypted for your Windows
+  account, so they can be recovered if Featherweight closes unexpectedly. Saving or closing the
+  document removes it.
+
 ## Building from source
 
 Requirements: Visual Studio 2019 or 2022 with the C++ desktop workload (or the Build Tools), and CMake 3.21 or later.

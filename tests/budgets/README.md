@@ -36,6 +36,8 @@ The timings take about a minute and need the desktop: close Featherweight first,
 | memory | The private working set once settled (Task Manager's Memory column), and the private bytes. |
 | idle | CPU time and thread wakeups in the 3 s after settling. Nothing should run: a timer firing once a second already shows 3 wakeups. |
 
+**Typing:** `fwtool bench --typing` types in the 300-page document through the editor, at its start, middle and end and in a table cell: 44 letters, 10 Backspaces, and an Enter joined again. Each keystroke is timed from the edit to the page on screen painted again on the graphics adapter: the edit, laying out again what it moves on screen, placing the caret, and painting. The rest is laid out again untimed, as in idle time. **typing** is the median of letters and Backspaces; **worst key** is the slowest of all, Enter included.
+
 **How it stays out of your way:**
 - **A private copy.** It runs a copy of the build in a temporary folder, where settings and recent files stay (portable mode), and deletes the folder afterwards.
 - **`--sandbox`.** The copy starts with this flag, so it reads and saves no settings or recent files. It also skips the update check, notices and registration, and never hands files to, or takes files from, another Featherweight.
@@ -49,6 +51,7 @@ The timings take about a minute and need the desktop: close Featherweight first,
 
 - **`sizes`.** The exe and the download, per compiler. Compilers make different sizes: Visual Studio 2019 (`v142`) is used locally, and 2022 (`v143`) on CI (decision 14). The compiler is read from the exe itself.
 - **`timings`.** Each scenario's numbers, per computer.
+- **`typing`.** Typing in the 300-page document, per computer.
 
 **The rules:**
 - **Size.** An increase of more than 50 KB in the exe or the download fails, unless the ledger records it. The baseline is the last entry made with the same compiler, plus the increases accepted since with the other one. That way an increase recorded locally also covers CI.
@@ -58,6 +61,7 @@ The timings take about a minute and need the desktop: close Featherweight first,
   - memory after launch of 40 MB or more;
   - a launch of 300 ms or more;
   - paginating the 300-page document taking 3 s or more (its "ready" includes the background pagination);
+  - typing in it of 16 ms or more, or a worst key of 50 ms or more, or either more than 10 % slower (and over 1 ms more);
   - anything running while idle (over 5 ms of CPU or 2 wakeups).
 - **Smaller decreases.** These need no entry. The baseline stays where it was recorded, so a later increase is measured from there.
 

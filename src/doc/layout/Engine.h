@@ -54,8 +54,15 @@ class Engine {
   // Lays out one more page; false once the document is done.
   bool NextPage();
   bool Done() const { return done_; }
+  // The pages laid out.
   std::vector<Page>& Pages() { return pages_; }
   const std::vector<Page>& Pages() const { return pages_; }
+  // The pages shown: those laid out, then after an edit the old ones not laid out again yet.
+  size_t ShownCount() const;
+  const Page& Shown(size_t index) const;
+  // The document changed (Layout::Edited): paragraphs [first, first + removed) of `story` were
+  // replaced by [first, first + added).
+  void Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added, bool structure);
   uint32_t Revision() const { return revision_; }
   const Document& Doc() const { return doc_; }
   text::Fonts& Fonts() { return fonts_; }
@@ -67,8 +74,10 @@ class Engine {
   RunPaint PaintOf(const RunProps& r, uint32_t modelRun) const;
   text::ParagraphFormat FormatOf(const ParaProps& p) const;
   // `pageBreaks`: the paragraph is the body's own, where page and column breaks break; Word
-  // ignores them in table cells, text boxes, headers, footers and notes.
-  void BuildText(uint32_t para, const PageFields& fields, ParaText& out, bool pageBreaks = false);
+  // ignores them in table cells, text boxes, headers, footers and notes. `numberNotes` false (for
+  // mapping offsets): note references the flow hasn't reached keep no number rather than take one.
+  void BuildText(uint32_t para, const PageFields& fields, ParaText& out, bool pageBreaks = false,
+                 bool numberNotes = true);
   std::u16string NoteMark(uint32_t story) const;
   // A note's reference mark, numbered in the order references are laid out.
   std::u16string NoteReference(uint32_t story);
@@ -102,6 +111,12 @@ class Engine {
                      float columnLeft, float columnRight);
   void StackParagraph(uint32_t para, const Frame& frame, Stack& out, Spacing& spacing);
   void StackTable(Node tbl, const Frame& frame, Stack& out, Spacing& spacing);
+
+  // After an edit (D2): the text and lines of `para` laid out before at `width`, or null; and the
+  // cache entry to keep a paragraph's text and lines in, when it's laid out on the few pages after
+  // an edit and its text doesn't depend on its page (null otherwise).
+  std::shared_ptr<CachedPara> LinesOf(uint32_t para, float width, bool breaks);
+  std::shared_ptr<CachedPara> KeepLines(uint32_t para, float width, bool breaks, const std::shared_ptr<ParaText>& pt);
 
   // Paragraph pieces shared by the flow and stacks.
   float TextHeight(const ParaText& pt, const text::Line& line);
@@ -138,6 +153,7 @@ class Engine {
     // and how long its longest line is, which is its height in the row.
     uint8_t turn = 0;
     float turnedLength = 0;
+    uint64_t key = 0;  // its paragraphs' versions: measured again only when they change (D2)
     Stack content;
   };
   struct RowBox {
@@ -153,12 +169,26 @@ class Engine {
   struct TableBox {
     Node tbl;
     TableProps props;
+    // What it was measured in, to measure it again after an edit (D2).
+    PageGeom geom;
+    PageFields fields;
+    float frameWidth = 0;
+    LineStory story = LineStory::Body;
     float left = 0;  // relative to the frame or column
     float width = 0;
     std::vector<RowBox> rows;
     size_t headerRows = 0;
+    bool labels = false;  // its cells show list labels
   };
-  TableBox MeasureTable(Node tbl, const Frame& frame);
+  // `reuse`: the table measured before an edit, whose cells that didn't change are kept.
+  TableBox MeasureTable(Node tbl, const Frame& frame, const TableBox* reuse = nullptr);
+  // After an edit in rows [from, to] of `t` (D2): those rows measured again in place, with their
+  // cells that didn't change kept. False when they can't be on their own (merged cells over them,
+  // rows added or removed, list labels in other rows that a `structure` edit may number again):
+  // then the table is measured again.
+  bool MeasureRowsAgain(TableBox& t, size_t from, size_t to, bool structure);
+  // Rows [from, to] of `t`: added to it when it has none, else measured again in place.
+  void MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse, size_t from, size_t to);
   // Places row `r` at `top` (frame coordinates), `height` tall, into `out`. A row split across
   // pages shows each cell's content from cutFrom[i] to cutTo[i] (null: from the top, to the end).
   // With `spans` false, the text of cells merged with the rows below is left to the caller.
@@ -190,6 +220,7 @@ class Engine {
   std::unordered_map<uint32_t, std::vector<Field>> fieldsCache_;
   std::unordered_map<uint32_t, std::u16string> noteNumbers_;  // note story -> its mark
   std::unordered_map<uint32_t, int32_t> noteOrder_;           // note story -> its number
+  std::vector<uint32_t> noteSeq_;                             // note stories in the order numbered
   int32_t footnoteCount_ = 0, endnoteCount_ = 0;
 
  public:

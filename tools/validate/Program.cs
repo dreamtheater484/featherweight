@@ -1,32 +1,61 @@
 // fwvalidate: does saving add validator errors? (plan §3: "Every saved file must have no new
-// errors in the Open XML SDK validator.")
+// errors in the Open XML SDK validator.") Test tool only, never shipped.
 //
 //   fwvalidate --saved <folder> <original file or folder>...
+//       Each file in the saved folder (fwtool roundtrip --out writes them, named like the original)
+//       is validated, as is the original of the same name. An error the original doesn't have is a
+//       new error, and fails the run.
+//   fwvalidate --compare [--json FILE] (<original> <saved>... | --pairs FILE)
+//       The same for explicit pairs: --pairs reads one "original<TAB>saved" per line (fwtool
+//       torture's pairs.tsv, whose saved copies aren't named like their originals). --json writes
+//       each pair's new errors, with where they are.
+//   fwvalidate [--json FILE] <file>...
+//       Lists each file's validator errors.
 //
-// Each file in the saved folder (fwtool roundtrip --out writes them, named like the original) is
-// validated with the Open XML SDK, as is the original of the same name. An error the original
-// doesn't have is a new error, and fails the run. Errors are compared by id, part and description,
-// not by path: the model may write namespace prefixes differently.
+// Errors are compared by id, part and description, counting repeats, not by path: the model may
+// write namespace prefixes differently, and an edit moves what follows it.
+using System.Text.Json;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 
+record Problem(string Id, string Part, string Path, string Description) {
+  public string Key => $"{Id} in {Part}: {Description}";
+}
+
 static class Program {
   static readonly string[] Known = { ".docx", ".docm", ".dotx", ".dotm", ".xlsx", ".xlsm", ".xltx", ".xltm",
                                      ".pptx", ".pptm", ".potx", ".potm", ".ppsx", ".ppsm" };
+  static readonly OpenXmlValidator Validator = new(FileFormatVersions.Microsoft365) { MaxNumberOfErrors = 100000 };
 
   static int Main(string[] args) {
-    string? saved = null;
+    string? saved = null, json = null;
+    bool compare = false;
     var inputs = new List<string>();
     for (int i = 0; i < args.Length; i++) {
       if (args[i] == "--saved" && i + 1 < args.Length) saved = args[++i];
-      else inputs.Add(args[i]);
+      else if (args[i] == "--compare") compare = true;
+      else if (args[i] == "--json" && i + 1 < args.Length) json = args[++i];
+      else if (args[i] == "--pairs" && i + 1 < args.Length) {
+        compare = true;
+        foreach (string line in File.ReadAllLines(args[++i])) {
+          string[] cols = line.Split('\t');
+          if (cols.Length == 2) inputs.AddRange(cols);
+        }
+      } else inputs.Add(args[i]);
     }
-    if (saved == null || inputs.Count == 0) {
-      Console.Error.WriteLine("Usage: fwvalidate --saved <folder> <original file or folder>...");
+    if (inputs.Count == 0 || (compare && inputs.Count % 2 != 0)) {
+      Console.Error.WriteLine("Usage: fwvalidate --saved <folder> <original file or folder>...\n" +
+                              "       fwvalidate --compare [--json FILE] (<original> <saved>... | --pairs FILE)\n" +
+                              "       fwvalidate [--json FILE] <file>...");
       return 2;
     }
-    // The originals, by file name.
+    if (saved != null) return SavedFolder(saved, inputs);
+    return compare ? Pairs(inputs, json) : List(inputs, json);
+  }
+
+  // --saved: the saved folder's files against the originals of the same name.
+  static int SavedFolder(string saved, List<string> inputs) {
     var originals = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     foreach (string input in inputs) {
       IEnumerable<string> found = Directory.Exists(input)
@@ -35,7 +64,6 @@ static class Program {
       foreach (string f in found)
         if (Known.Contains(Path.GetExtension(f).ToLowerInvariant())) originals[Path.GetFileName(f)] = f;
     }
-    var validator = new OpenXmlValidator(FileFormatVersions.Microsoft365) { MaxNumberOfErrors = 100000 };
     int files = 0, failed = 0, originalErrors = 0;
     foreach (string copy in Directory.EnumerateFiles(saved).OrderBy(f => f, StringComparer.OrdinalIgnoreCase)) {
       if (!Known.Contains(Path.GetExtension(copy).ToLowerInvariant())) continue;
@@ -45,18 +73,13 @@ static class Program {
         continue;
       }
       files++;
-      var before = Errors(validator, original, out string? beforeProblem);
-      var after = Errors(validator, copy, out string? afterProblem);
-      originalErrors += before.Values.Sum();
-      // Counted per key: the same error twice in the copy but once in the original is new.
-      var added = new List<string>();
-      foreach (var (key, count) in after) {
-        before.TryGetValue(key, out int had);
-        if (count > had) added.Add($"{count - had} × {key}");
-      }
+      var before = Validate(original, out string? beforeProblem);
+      var after = Validate(copy, out string? afterProblem);
+      originalErrors += before.Count;
+      var added = NewProblems(before, after).GroupBy(p => p.Key).Select(g => $"{g.Count()} × {g.Key}").ToList();
       if (afterProblem != null && beforeProblem == null) added.Add("the saved copy can't be opened: " + afterProblem);
       if (added.Count == 0) {
-        Console.WriteLine($"[ ok ] {name}: {after.Values.Sum()} errors, as the original" +
+        Console.WriteLine($"[ ok ] {name}: {after.Count} errors, as the original" +
                           (beforeProblem != null ? $" (the original can't be opened either: {beforeProblem})" : ""));
       } else {
         failed++;
@@ -69,14 +92,52 @@ static class Program {
     return failed == 0 && files > 0 ? 0 : 1;
   }
 
-  static Dictionary<string, int> Errors(OpenXmlValidator validator, string path, out string? problem) {
-    var result = new Dictionary<string, int>();
+  // --compare: explicit pairs, original then saved.
+  static int Pairs(List<string> files, string? json) {
+    var report = new List<object>();
+    int failed = 0;
+    for (int i = 0; i < files.Count; i += 2) {
+      var before = Validate(files[i], out string? beforeProblem);
+      var after = Validate(files[i + 1], out string? afterProblem);
+      var added = NewProblems(before, after);
+      if (afterProblem != null && beforeProblem == null) added.Add(Unopenable(afterProblem));
+      Print($"{files[i + 1]} (new, against {Path.GetFileName(files[i])})", added);
+      if (added.Count > 0) ++failed;
+      report.Add(new { original = files[i], saved = files[i + 1], newErrors = added });
+    }
+    if (json != null) WriteJson(json, report);
+    Console.WriteLine($"\n{files.Count / 2} files, {failed} with new errors");
+    return failed > 0 ? 1 : 0;
+  }
+
+  // No mode: each file's errors.
+  static int List(List<string> files, string? json) {
+    var report = new List<object>();
+    foreach (string f in files) {
+      var problems = Validate(f, out string? problem);
+      if (problem != null) problems.Add(Unopenable(problem));
+      Print(f, problems);
+      report.Add(new { file = f, errors = problems });
+    }
+    if (json != null) WriteJson(json, report);
+    Console.WriteLine($"\n{files.Count} files");
+    return 0;
+  }
+
+  static List<Problem> Validate(string path, out string? problem) {
+    var result = new List<Problem>();
     problem = null;
     try {
       using OpenXmlPackage package = Open(path);
-      foreach (ValidationErrorInfo e in validator.Validate(package)) {
-        string key = $"{e.Id} in {e.Part?.Uri}: {e.Description}";
-        result[key] = result.TryGetValue(key, out int n) ? n + 1 : 1;
+      bool strict = package.StrictRelationshipFound;
+      foreach (ValidationErrorInfo e in Validator.Validate(package)) {
+        // The SDK reads a Strict document as transitional, whose w:lvlJc has no start or end. Strict's
+        // ST_Jc has them, and Word writes them there (a numbered list saved as Strict).
+        if (strict && (e.Path?.XPath ?? "").EndsWith("/w:lvlJc[1]") &&
+            ((e.Description ?? "").Contains("value 'start'") || (e.Description ?? "").Contains("value 'end'")))
+          continue;
+        result.Add(new Problem(e.Id ?? e.ErrorType.ToString(), e.Part?.Uri.ToString() ?? "", e.Path?.XPath ?? "",
+                               e.Description ?? ""));
       }
     } catch (Exception ex) {
       problem = ex.GetType().Name + ": " + ex.Message;
@@ -91,4 +152,28 @@ static class Program {
     if (ext.StartsWith(".p")) return PresentationDocument.Open(path, false, settings);
     return WordprocessingDocument.Open(path, false, settings);
   }
+
+  static Problem Unopenable(string problem) => new("Package", "", "", "the SDK can't open it: " + problem);
+
+  // The problems in `after` beyond those in `before`, counting repeats: the same error twice in the
+  // copy but once in the original is new.
+  static List<Problem> NewProblems(List<Problem> before, List<Problem> after) {
+    var counts = new Dictionary<string, int>();
+    foreach (var p in before) counts[p.Key] = counts.GetValueOrDefault(p.Key) + 1;
+    var added = new List<Problem>();
+    foreach (var p in after) {
+      if (counts.GetValueOrDefault(p.Key) > 0) counts[p.Key]--;
+      else added.Add(p);
+    }
+    return added;
+  }
+
+  static void Print(string label, List<Problem> problems) {
+    Console.WriteLine($"{(problems.Count == 0 ? "[ ok ]" : "[FAIL]")} {label}: {problems.Count} {(problems.Count == 1 ? "error" : "errors")}");
+    foreach (var p in problems.Take(20)) Console.WriteLine($"    {p.Part} {p.Path}: {p.Description} ({p.Id})");
+    if (problems.Count > 20) Console.WriteLine($"    ... and {problems.Count - 20} more");
+  }
+
+  static void WriteJson(string path, List<object> report) =>
+      File.WriteAllText(path, JsonSerializer.Serialize(new { files = report }, new JsonSerializerOptions { WriteIndented = true }));
 }

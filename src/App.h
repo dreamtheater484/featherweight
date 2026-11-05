@@ -11,6 +11,7 @@
 #include "Settings.h"
 #include "TabContent.h"
 #include "Updater.h"
+#include "pkg/Recovery.h"
 #include "pdf/NoteEditor.h"
 #include "pdf/PdfView.h"
 #include "ui/Banner.h"
@@ -69,6 +70,8 @@ class App : public PdfHost, public DropHost {
   bool ViewInverted() override { return settings_.invert; }
   bool ViewCoverAlone() override { return settings_.coverAlone; }
   bool ViewHighlightFields() override { return settings_.highlightFields; }
+  bool ViewSpelling() override { return settings_.spelling; }
+  bool ViewAutoCorrect() override { return settings_.autoCorrect; }
   void ViewPasswordAccepted(TabContent* view) override;
   void ViewShowPanel(PanelContent* content) override;
   PanelContent* ViewShownPanel() override { return panel_.Content(); }
@@ -153,6 +156,24 @@ class App : public PdfHost, public DropHost {
   void SetPresentation(bool on);
   void SetTheme(ThemeSetting t);
 
+  // Files kept safe (AppFiles.cpp): new documents, crash recovery, changes on disk, backups
+  // Where backups and recovery autosaves go, and who saves; `userFolders` false keeps them off.
+  void InitFiles(bool userFolders);
+  void NewDocument();
+  // At startup: documents a crash left unsaved, offered in a banner.
+  void OfferRecovery();
+  void RecoverDocuments(bool open);  // Recover, or Discard
+  // The window or a tab was activated: did the file change on disk?
+  void CheckActiveFile();
+  void ReloadActive();
+  std::wstring LatestBackup() const;  // of the active document, or empty
+  void RestoreOriginal();
+  void DeleteBackups();
+  // The autosave timer runs only while a tab has unsaved changes (no idle wakeups otherwise).
+  void UpdateAutosaveTimer();
+  void AutosaveAll();
+  static constexpr UINT_PTR kTimerAutosave = 5;
+
   // Startup notices and updates
   void StartupNotices();
   // Registers Featherweight and opens Default apps, where the user picks it for this kind of file.
@@ -164,6 +185,11 @@ class App : public PdfHost, public DropHost {
   // Keyboard focus and UI Automation
   // The keyboard moved between the window's own boxes and the tab: the tab shows or hides its focus.
   void KeyFocusMoved();
+  // The system caret (never shown: Featherweight draws its own) and the input method's windows
+  // follow the text caret, so IMEs, dictation and the emoji panel, through TSF's support for
+  // IMM32 windows, open beside it and type into it as WM_CHAR. After painting, and when focus
+  // or a composition starts.
+  void SyncInputCaret(bool force = false);
   // What UI Automation sees (AppUia.cpp).
   void DescribeUia(uia::Tree& t);
   void OpenGallery();
@@ -251,8 +277,16 @@ class App : public PdfHost, public DropHost {
   bool manualUpdateCheck_ = false;
   std::wstring bannerUpdateUrl_;
   std::wstring bannerUpdateVersion_;
-  enum BannerActions { kActUpdate = 1, kActDownload, kActSkip, kActNotNow = 5, kActSaveAs, kActMakeDefault = 20 };
+  enum BannerActions {
+    kActUpdate = 1, kActDownload, kActSkip, kActNotNow = 5, kActSaveAs, kActRecover, kActDiscard, kActReload,
+    kActMakeDefault = 20
+  };
   // (kActMakeDefault + fw::FileKind: the default-app offer for that kind of file)
+
+  // Files
+  std::vector<fw::pkg::recovery::Entry> orphans_;  // offered for recovery
+  int newDocuments_ = 0;
+  bool autosaveTimer_ = false;
 
   // Input state
   Region capture_ = Region::None;
@@ -260,6 +294,8 @@ class App : public PdfHost, public DropHost {
   bool mouseTracked_ = false;
   bool ncMouseTracked_ = false;
   TextBox* focusBox_ = nullptr;
+  bool inputCaret_ = false;  // the system caret exists
+  RECT inputCaretAt_{};
   double caretStart_ = 0;
   std::wstring tipText_;
   POINT lastMouse_{-1, -1};

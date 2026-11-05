@@ -1,5 +1,5 @@
-# fwtext: rich text on DirectWrite's text analyzer: fonts, line layout and hyphenation (plan §4.1,
-# §4.4). Headless: no UI and no window. The hyphenation patterns (cmake/FetchDeps.cmake) are packed
+# fwtext: rich text on DirectWrite's text analyzer: fonts, line layout, hyphenation and spelling
+# (plan §4.1, §4.4). Headless: no UI and no window. The hyphenation patterns (cmake/FetchDeps.cmake) are packed
 # into a generated source file.
 file(GLOB _fw_hyph_inputs "${FW_HYPH_UTF8_DIR}/*" "${FW_OPENTAAL_HYPH_DIR}/*")
 set(_fw_hyph_cpp "${CMAKE_CURRENT_BINARY_DIR}/HyphenationData.cpp")
@@ -15,10 +15,11 @@ add_library(fwtext STATIC
   Fonts.cpp
   Hyphenation.cpp
   LineLayout.cpp
+  SpellCheck.cpp
   "${_fw_hyph_cpp}"
 )
 target_include_directories(fwtext PUBLIC "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(fwtext PUBLIC fwcore dwrite PRIVATE miniz)
+target_link_libraries(fwtext PUBLIC fwcore dwrite ole32 PRIVATE miniz)
 target_compile_options(fwtext PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
 if(FW_BUILD_TESTS)

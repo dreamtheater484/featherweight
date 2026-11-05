@@ -12,7 +12,7 @@ using namespace gfx;
 
 namespace {
 
-// Page-layout icons that the icon font doesn't have.
+// Icons that the icon fonts don't have: page layouts, a numbered list, justified text.
 void DrawCustomIcon(Canvas& c, wchar_t glyph, const D2D1_RECT_F& r, D2D1_COLOR_F color, float size) {
   const float cx = std::round((r.left + r.right) / 2), cy = std::round((r.top + r.bottom) / 2);
   const float s = size;
@@ -32,10 +32,29 @@ void DrawCustomIcon(Canvas& c, wchar_t glyph, const D2D1_RECT_F& r, D2D1_COLOR_F
       page(cx - s * 0.48f, cy - s * 0.36f, s * 0.44f, s * 0.72f);
       page(cx + s * 0.04f, cy - s * 0.36f, s * 0.44f, s * 0.72f);
       break;
+    case icon::NumberedList:
+      for (int i = 0; i < 3; ++i) {
+        const float y = std::round(cy + (i - 1) * s * 0.34f);
+        const wchar_t digit[2] = {static_cast<wchar_t>(L'1' + i), 0};
+        c.Text(digit, RectF(cx - s * 0.52f, y - s * 0.3f, cx - s * 0.12f, y + s * 0.3f), color, s * 0.42f);
+        c.Line(cx - s * 0.08f, y + 0.5f, cx + s * 0.48f, y + 0.5f, color, stroke);
+      }
+      break;
+    case icon::AlignJustify:
+      for (int i = 0; i < 4; ++i) {
+        const float y = std::round(cy + (i - 1.5f) * s * 0.26f) + 0.5f;
+        c.Line(cx - s * 0.44f, y, cx + s * 0.44f, y, color, stroke);
+      }
+      break;
   }
 }
 
 }  // namespace
+
+void DrawGlyph(Canvas& c, wchar_t glyph, const D2D1_RECT_F& r, D2D1_COLOR_F color, float size) {
+  if (glyph >= 0xF8F0 && glyph <= 0xF8FF) DrawCustomIcon(c, glyph, r, color, size);
+  else c.Icon(glyph, r, color, size);
+}
 
 void DrawButton(Canvas& c, const Button& b, float ui, bool windowActive) {
   if (!b.visible) return;
