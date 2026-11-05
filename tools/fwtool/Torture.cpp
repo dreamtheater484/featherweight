@@ -972,9 +972,17 @@ class Generator {
     stories_.clear();
     order_.clear();
     paras_.clear();
+    // A header or footer no section shows (its section break deleted, a new one undone) can't be
+    // reached by a person.
+    std::vector<bool> shown(doc_.Stories().size());
+    for (const Section& section : doc_.Sections())
+      for (const auto* refs : {&section.headers, &section.footers})
+        for (uint32_t h : *refs)
+          if (h < shown.size()) shown[h] = true;
     for (uint32_t s = 0; s < doc_.Stories().size(); ++s) {
       const Story& story = doc_.Stories()[s];
       if (story.part >= doc_.Parts().size() || !doc_.Parts()[story.part].Editable()) continue;
+      if ((story.kind == StoryKind::Header || story.kind == StoryKind::Footer) && !shown[s]) continue;
       std::vector<uint32_t> ps = doc_.StoryParagraphs(s);
       std::vector<uint32_t> keep;
       for (uint32_t p : ps)
