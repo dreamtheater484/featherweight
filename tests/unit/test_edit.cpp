@@ -11,6 +11,7 @@
 #include "doc/edit/Editor.h"
 #include "doc/layout/Layout.h"
 #include "doc/model/Utf.h"
+#include "pkg/Check.h"
 #include "text/Fonts.h"
 
 using namespace fw::doc;
@@ -213,8 +214,9 @@ TEST(Edit_SplitAndJoinParagraphs) {
   auto r = ed.SplitParagraph(P(p, 5));
   CHECK(r && r.caret == P(p + 1, 0));
   CHECK(Main(*doc).size() == 3 && doc->Para(p).text == u"Hello" && doc->Para(p + 1).text == u"World");
+  // Plain text: no list, field or section reads differently after it (Edit_OnlyListsFieldsAndSectionsAreStructure).
   CHECK(changes.size() == 1 && changes[0].first == p && changes[0].removed == 1 && changes[0].added == 2 &&
-        changes[0].structure);
+        !changes[0].structure);
   // The second half has new paragraph ids, the same properties and formatting.
   std::string_view id1 = doc->W14ParaId(p), id2 = doc->W14ParaId(p + 1);
   CHECK(id1 == "11111111" && id2.size() == 8 && id2 != id1);
@@ -1189,4 +1191,195 @@ TEST(Clip_PasteThatWouldDamageIsRefused) {
   CHECK(!ed.CanUndo() || two);
   auto one = edit::FromHtml("<span>x</span>");
   CHECK(one && edit::PasteClip(ed, P(p, 14), P(p, 14), *one) && Consistent(*doc, f));
+}
+
+// ---------------------------------------------------------------------------
+// The editing torture test's findings (d2-torture), each as a boundary of its own.
+
+namespace {
+
+// Every part written from the model, saved and opened again, passes the package checker.
+bool ChecksOut(Document& doc) {
+  if (!docx::WriteAllParts(doc).Ok()) return false;
+  fw::pkg::MemorySink sink;
+  if (!doc.Package().Save(sink).Ok()) return false;
+  fw::pkg::Status st;
+  auto again = test::OpenBytes(std::move(sink.bytes), st);
+  if (!again) return false;
+  auto report = fw::pkg::CheckPackage(*again);
+  for (const auto& e : report.errors) std::printf("  check: %s\n", e.c_str());
+  return report.Ok();
+}
+
+std::string PartXml(const Document& doc, PartKind kind) {
+  const Part* part = doc.FindPart(kind);
+  std::string out;
+  if (part && !docx::WritePart(doc, static_cast<uint32_t>(part - doc.Parts().data()), out).Ok()) out.clear();
+  return out;
+}
+
+}  // namespace
+
+TEST(Edit_SplitKeepsEmptyRangesInOrder) {
+  // An empty comment range and Word's empty _GoBack bookmark: a split where both ends sit keeps
+  // them together, start before end.
+  Fixture f;
+  f.comments = "<w:comment w:id=\"0\" w:author=\"A\"><w:p><w:r><w:t>Note</w:t></w:r></w:p></w:comment>";
+  f.body =
+      "<w:p><w:commentRangeStart w:id=\"0\"/><w:commentRangeEnd w:id=\"0\"/><w:r><w:commentReference w:id=\"0\"/></w:r>"
+      "<w:r><w:t>He</w:t></w:r><w:bookmarkStart w:id=\"1\" w:name=\"_GoBack\"/><w:bookmarkEnd w:id=\"1\"/>"
+      "<w:r><w:t>llo</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  // ChecksOut saves into the package, so the original is kept here to compare with.
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  uint32_t p = Main(*doc)[0];
+  CHECK(ed.SplitParagraph(P(p, 0)) && ChecksOut(*doc) && Consistent(*doc, f));
+  CHECK(ed.Undo() && ed.SplitParagraph(P(p, 3)) && ChecksOut(*doc) && Consistent(*doc, f));
+  const std::string xml = MainXml(*doc);
+  CHECK(xml.find("<w:bookmarkStart") < xml.find("<w:bookmarkEnd"));
+  CHECK(ed.Undo() && UndoSteps(ed) == 0 && MainXml(*doc) == before);
+}
+
+TEST(Edit_PropertiesGoBeforeKeptContent) {
+  // Word 2010's extensions end w:rPr; a property added after them would be out of order.
+  Fixture f;
+  f.body =
+      "<w:p><w:pPr><w:rPr><w:b/><w14:ligatures w14:val=\"standard\"/></w:rPr></w:pPr>"
+      "<w:r><w:rPr><w:b/><w14:ligatures w14:val=\"standard\"/></w:rPr><w:t>Liga</w:t></w:r></w:p>"
+      "<w:p><w:r><mc:AlternateContent><mc:Choice Requires=\"x\"><w:t>never</w:t></mc:Choice>"
+      "<mc:Fallback><w:t>fallback</w:t></mc:Fallback></mc:AlternateContent><w:t xml:space=\"preserve\"> text</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  CHECK(ed.SetRunProps(P(ps[0], 0), P(ps[0], 4), PropEdit().Set("color", {{"val", "C00000"}})));
+  CHECK(ed.SetMarkProps(ps[0], ps[0], PropEdit().Set("i")));
+  CHECK(ed.SetRunProps(P(ps[1], 0), P(ps[1], ed.ParaLength(ps[1])), PropEdit().Set("color", {{"val", "C00000"}})));
+  CHECK(BodyIs(*doc,
+               "<w:p><w:pPr><w:rPr><w:b/><w:i/><w14:ligatures w14:val=\"standard\"/></w:rPr></w:pPr>"
+               "<w:r><w:rPr><w:b/><w:color w:val=\"C00000\"/><w14:ligatures w14:val=\"standard\"/></w:rPr><w:t>Liga</w:t></w:r></w:p>"
+               "<w:p><w:r><w:rPr><w:color w:val=\"C00000\"/></w:rPr><mc:AlternateContent><mc:Choice Requires=\"x\"><w:t>never</w:t></mc:Choice>"
+               "<mc:Fallback><w:t>fallback</w:t></mc:Fallback></mc:AlternateContent><w:t xml:space=\"preserve\"> text</w:t></w:r></w:p>"));
+  CHECK(Consistent(*doc, f) && UndoSteps(ed) == 3 && RoundTrips(*doc));
+}
+
+TEST(Edit_SharedPropertiesChangeOnlyTheirParagraph) {
+  // The reader shares identical property sets between paragraphs and runs; formatting one changes
+  // only that one.
+  Fixture f;
+  f.body =
+      "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>One</w:t></w:r></w:p>"
+      "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>Two</w:t></w:r></w:p>"
+      "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>Three</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  CHECK(ed.SetParaProps(ps[1], ps[1], PropEdit().Set("jc", {{"val", "center"}})));
+  CHECK(ed.SetRunProps(P(ps[1], 0), P(ps[1], 3), PropEdit().Set("b")));
+  CHECK(BodyIs(*doc,
+               "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>One</w:t></w:r></w:p>"
+               "<w:p><w:pPr><w:spacing w:after=\"0\"/><w:jc w:val=\"center\"/></w:pPr><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>Two</w:t></w:r></w:p>"
+               "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>Three</w:t></w:r></w:p>"));
+  CHECK(doc->ResolvedPara(ps[0]).jc == Justification::Start && doc->ResolvedPara(ps[2]).jc == Justification::Start);
+  CHECK(doc->ResolvedPara(ps[1]).jc == Justification::Center);
+  CHECK(Consistent(*doc, f) && UndoSteps(ed) == 2 && RoundTrips(*doc));
+}
+
+TEST(Edit_CommentsKeepTheirLastParagraphsId) {
+  // commentsExtended names a comment by its last paragraph's w14:paraId: joining that paragraph
+  // into the one before, or splitting it, keeps the id on the comment's last paragraph.
+  Fixture f;
+  f.comments =
+      "<w:comment w:id=\"0\" w:author=\"A\"><w:p w14:paraId=\"11111111\" w14:textId=\"77777777\"><w:r><w:t>One</w:t></w:r></w:p>"
+      "<w:p w14:paraId=\"22222222\" w14:textId=\"77777777\"><w:r><w:t>Two</w:t></w:r></w:p></w:comment>";
+  f.commentsExtended =
+      "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<w15:commentsEx "
+      "xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"><w15:commentEx w15:paraId=\"22222222\" "
+      "w15:done=\"0\"/></w15:commentsEx>";
+  f.body =
+      "<w:p><w:commentRangeStart w:id=\"0\"/><w:r><w:t>Text</w:t></w:r><w:commentRangeEnd w:id=\"0\"/>"
+      "<w:r><w:commentReference w:id=\"0\"/></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string comments = PartXml(*doc, PartKind::Comments);
+  Editor ed(*doc);
+  const uint32_t story = doc->NoteStory(StoryKind::Comment, "0");
+  auto cs = doc->StoryParagraphs(story);
+  CHECK(cs.size() == 2);
+  if (cs.size() != 2) return;
+  auto lastId = [&] {
+    auto now = doc->StoryParagraphs(story);
+    return std::string(doc->W14ParaId(now.back()));
+  };
+  // Joined: the one paragraph left is the last, with the id commentsExtended names.
+  CHECK(ed.Delete(P(cs[0], 3), P(cs[1], 0)) && lastId() == "22222222");
+  CHECK(PartXml(*doc, PartKind::Comments).find("w14:paraId=\"22222222\"") != std::string::npos);
+  CHECK(ChecksOut(*doc));
+  // Split: the second half is the last paragraph now, and it takes the id.
+  CHECK(ed.Undo() && ed.SplitParagraph(P(cs[1], 1)) && lastId() == "22222222");
+  auto now = doc->StoryParagraphs(story);
+  CHECK(now.size() == 3 && doc->W14ParaId(now[1]) != "22222222" && !doc->W14ParaId(now[1]).empty());
+  CHECK(ChecksOut(*doc) && UndoSteps(ed) == 1 && PartXml(*doc, PartKind::Comments) == comments);
+}
+
+TEST(Edit_SplitInsideAFieldIsRefused) {
+  // A table of contents entry: a hyperlink holding a PAGEREF field. Splitting inside the field
+  // would put its start and its end in two hyperlinks, which Word can't open.
+  Fixture f;
+  f.body =
+      "<w:p><w:hyperlink w:anchor=\"_Toc1\"><w:r><w:t>Intro</w:t></w:r><w:r><w:tab/></w:r>"
+      "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> PAGEREF _Toc1 \\h </w:instrText></w:r>"
+      "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>3</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r>"
+      "</w:hyperlink></w:p><w:p><w:bookmarkStart w:id=\"0\" w:name=\"_Toc1\"/><w:r><w:t>Intro</w:t></w:r><w:bookmarkEnd w:id=\"0\"/></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  uint32_t p = Main(*doc)[0];
+  const std::u16string& s = doc->Para(p).text;
+  const auto begin = static_cast<uint32_t>(s.find(u'\x13')), end = static_cast<uint32_t>(s.find(u'\x15'));
+  CHECK(begin == 6 && end + 1 == s.size());
+  for (uint32_t o : {begin + 1, begin + 4, end - 1, end}) {
+    auto r = ed.SplitParagraph(P(p, o));
+    CHECK(!r && r.message == u"A paragraph can't be split inside a field.");
+  }
+  CHECK(!ed.InsertText(P(p, end), u"a\rb"));
+  CHECK(!ed.CanUndo() && !ed.Modified() && RoundTrips(*doc));
+  // Before the field, or after it: fine.
+  CHECK(ed.SplitParagraph(P(p, 2)) && ChecksOut(*doc) && Consistent(*doc, f));
+  CHECK(ed.Undo() && ed.SplitParagraph(P(p, end + 1)) && ChecksOut(*doc) && Consistent(*doc, f));
+}
+
+TEST(Edit_OnlyListsFieldsAndSectionsAreStructure) {
+  // Enter in plain text changes nothing else in the document; in a list it may renumber what follows.
+  Fixture f;
+  f.numbering = kClipNumbering;
+  f.body =
+      "<w:p><w:r><w:t>Plain text</w:t></w:r></w:p>"
+      "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr><w:r><w:t>Item</w:t></w:r></w:p>"
+      "<w:p><w:r><w:t>Page </w:t></w:r><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r>"
+      "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  std::vector<edit::Change> changes;
+  ed.OnChange([&](const edit::Change& c) { changes.push_back(c); });
+  auto ps = Main(*doc);
+  auto structure = [&](edit::Result r) { return r && !changes.empty() && changes.back().structure; };
+  CHECK(ed.SplitParagraph(P(ps[0], 5)) && !changes.back().structure);
+  CHECK(ed.Undo() && !changes.back().structure);
+  CHECK(ed.JoinParagraphs(ps[0]) && changes.back().structure);  // joins the list item into plain text
+  CHECK(ed.Undo());
+  CHECK(structure(ed.SplitParagraph(P(ps[1], 2))));
+  CHECK(ed.Undo());
+  CHECK(structure(ed.SplitParagraph(P(ps[2], 2))));  // the paragraph has a field
+  CHECK(ed.Undo() && ed.InsertText(P(ps[0], 1), u"x") && !changes.back().structure);
 }
