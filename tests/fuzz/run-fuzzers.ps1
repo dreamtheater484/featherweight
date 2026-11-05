@@ -35,7 +35,10 @@ $all = [ordered]@{
   fuzz_opc     = @{ Seeds = @("$seeds\opc", "$regressions\opc"); MaxLen = 16384 }
   fuzz_check   = @{ Seeds = @("$seeds\package", "$regressions\check"); MaxLen = 65536 }
   fuzz_formula = @{ Seeds = @("$seeds\formula", "$regressions\formula"); MaxLen = 1024 }
-  fuzz_drawing = @{ Seeds = @("$seeds\drawing", "$regressions\drawing"); MaxLen = 65536 }
+  # Pictures are big allocations: with ASan's default 256 MB quarantine of freed memory, this
+  # target's memory passes 2 GB within an hour. 32 MB keeps it well below while still catching
+  # use after free.
+  fuzz_drawing = @{ Seeds = @("$seeds\drawing", "$regressions\drawing"); MaxLen = 65536; Asan = 'quarantine_size_mb=32' }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 
@@ -56,8 +59,11 @@ foreach ($name in $Targets) {
     ($target.Seeds | ForEach-Object { (Resolve-Path $_).Path })
 
   Write-Host "== $name for $Seconds s"
+  $asan = $env:ASAN_OPTIONS
+  if ($target.Asan) { $env:ASAN_OPTIONS = (@($target.Asan, $asan) | Where-Object { $_ }) -join ':' }  # yours win
   $p = Start-Process -FilePath $exe -ArgumentList ($arguments | ForEach-Object { Quote $_ }) -NoNewWindow -PassThru `
     -RedirectStandardError $log -RedirectStandardOutput (Join-Path $artifacts 'stdout.txt')
+  $env:ASAN_OPTIONS = $asan
   $null = $p.Handle  # keeps the handle, so ExitCode is there after the process ends
   if ($BelowNormal) { try { $p.PriorityClass = 'BelowNormal' } catch {} }
   $p.WaitForExit()
