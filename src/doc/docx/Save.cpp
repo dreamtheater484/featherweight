@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include <algorithm>
+
 #include "doc/docx/Docx.h"
 #include "pkg/Package.h"
 #include "pkg/XmlDom.h"
@@ -107,7 +109,14 @@ Status Serialize(Document& doc, const SaveOptions& options, std::vector<uint8_t>
     return Status{};
   }
 
-  for (uint32_t i : options.changedParts) {
+  // The edited parts, and every part written before (an earlier save or autosave): the package
+  // holds that version, and an undo since may have changed the model back.
+  std::vector<uint32_t> parts = options.changedParts;
+  for (uint32_t i = 0; i < doc.Parts().size(); ++i) {
+    const pkg::Part* written = package.FindPart(doc.Parts()[i].name);
+    if (written && written->modified && std::find(parts.begin(), parts.end(), i) == parts.end()) parts.push_back(i);
+  }
+  for (uint32_t i : parts) {
     if (i >= doc.Parts().size()) continue;
     const Part& part = doc.Parts()[i];
     if (!part.writable || !part.Editable())

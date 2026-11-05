@@ -159,6 +159,7 @@ std::unique_ptr<DocView> DocView::FromBytes(ViewHost& host, std::vector<uint8_t>
 }
 
 DocView::~DocView() {
+  editor_.reset();
   drawings_.clear();  // pictures read from the document's package
   images_.reset();
   pagination_.reset();
@@ -224,6 +225,8 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
   pagination_->LayOutPages(1);
   revision_ = pagination_->Revision();
   TakeNewPages();
+  editor_ = std::make_unique<fw::doc::edit::Editor>(*doc_);
+  editor_->OnChange([this](const fw::doc::edit::Change& change) { OnEdited(change); });
 
   // Comments, for their highlight and tooltip; hyperlink fields, for clicks.
   for (const auto& c : doc_->Comments()) {
@@ -345,6 +348,30 @@ bool DocView::TakeNewPages() {
     Relayout(&a);
   }
   return true;
+}
+
+void DocView::OnEdited(const fw::doc::edit::Change& change) {
+  pagination_->Edited(change.story, change.first, change.removed, change.added);
+  // As many pages as were shown, laid out again (typing redoes a page or two, then rejoins the old
+  // ones), and the page list rebuilt from them: an edit can remove pages too.
+  const Anchor anchor = CaptureAnchor(0, 0);
+  pagination_->LayOutPages(std::max<size_t>(sizes_.size(), 1));
+  const size_t n = pagination_->PageCount();
+  sizes_.clear();
+  placeholder_ = false;
+  if (n == 0) {
+    TakeNewPages();
+  } else {
+    for (size_t i = 0; i < n; ++i) sizes_.push_back({pagination_->GetPage(i).width, pagination_->GetPage(i).height});
+  }
+  if (VpW() > 0) {
+    RecomputeScale();
+    Relayout(&anchor);
+  }
+  const bool wasModified = file_.Dirty();
+  file_.Changed(editor_->Modified(), editor_->DirtyParts());
+  if (file_.Dirty() != wasModified) host_.ViewStateChanged();
+  host_.ViewInvalidate();
 }
 
 void DocView::ShowNotices() {
@@ -992,6 +1019,7 @@ SaveFormat DocView::SaveAsFormat() const {
 bool DocView::Save(const std::wstring& path, std::wstring& error) {
   if (!doc_) return false;
   if (!file_.Save(*doc_, path, error)) return false;
+  if (editor_) editor_->MarkSaved();  // undo back to here is clean
   path_ = file_.Path();
   host_.ViewStateChanged();
   return true;
@@ -1003,8 +1031,14 @@ void DocView::Autosave() {
   if (doc_) file_.Autosave(*doc_);
 }
 
-void DocView::NoteEditForTesting() {
-  if (const fw::doc::Part* main = doc_ ? doc_->FindPart(fw::doc::PartKind::Document) : nullptr)
+void DocView::EditForTesting() {
+  if (!doc_) return;
+  const std::vector<uint32_t> paras = doc_->StoryParagraphs(doc_->MainStory());
+  if (editor_ && editor_->CanEdit() && !paras.empty() &&
+      editor_->InsertText({paras.front(), editor_->ParaLength(paras.front())}, u" (edited)"))
+    return;
+  // A document the editor refuses: marked edited all the same, for the dot and the prompt.
+  if (const fw::doc::Part* main = doc_->FindPart(fw::doc::PartKind::Document))
     NoteEdit(static_cast<uint32_t>(main - doc_->Parts().data()));
 }
 

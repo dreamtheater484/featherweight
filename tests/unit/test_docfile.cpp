@@ -11,6 +11,8 @@
 #include "core/Strings.h"
 #include "doc/docx/Blank.h"
 #include "doc/docx/Docx.h"
+#include "doc/edit/Editor.h"
+#include "pkg/Check.h"
 #include "pkg/Backups.h"
 #include "pkg/OwnerFile.h"
 #include "word/DocFile.h"
@@ -213,6 +215,52 @@ TEST(DocFile_UndoBackToTheSavedStateIsClean) {
   CHECK(file.Save(*doc, path, error));
   CHECK(!file.Dirty());
   DocFile::RecoverySession().End();
+}
+
+TEST(DocFile_TheEditorDrivesModifiedSaveAndUndo) {
+  Folder f;
+  Configure(f);
+  const std::wstring path = f.path + L"\\memo.docx";
+  CHECK(test::WriteFileBytes(path, fw::doc::docx::BlankDocx()));
+  auto doc = Open(path);
+  CHECK(doc);
+  if (!doc) return;
+  DocFile file;
+  file.Opened(path, doc->Package().GetSnapshot().GetStamp());
+  fw::doc::edit::Editor ed(*doc);
+  ed.OnChange([&](const fw::doc::edit::Change&) { file.Changed(ed.Modified(), ed.DirtyParts()); });
+  auto firstText = [](const std::wstring& p) {
+    auto d = Open(p);
+    return d ? d->Para(d->StoryParagraphs(d->MainStory()).front()).text : std::u16string(u"(unreadable)");
+  };
+  const uint32_t para = doc->StoryParagraphs(doc->MainStory()).front();
+
+  CHECK(ed.InsertText({para, 0}, u"Hello"));
+  CHECK(file.Dirty());
+  CHECK(fw::pkg::ReadOwner(path) == L"Tester");
+  std::wstring error;
+  CHECK(file.Save(*doc, path, error));
+  ed.MarkSaved();
+  CHECK(firstText(path) == u"Hello");
+
+  // Undone after the save: the model is back to the original, so the editor lists no changed
+  // parts, but the file holds "Hello". Saving must write the model, not keep that version.
+  CHECK(ed.Undo());
+  CHECK(file.Dirty());
+  CHECK(ed.DirtyParts().empty());
+  CHECK(file.Save(*doc, path, error));
+  ed.MarkSaved();
+  CHECK(firstText(path).empty());
+
+  // Redo, then undo back to what was saved: clean again, and our owner file goes.
+  CHECK(ed.Redo());
+  CHECK(file.Dirty());
+  CHECK(fw::pkg::ReadOwner(path) == L"Tester");
+  CHECK(ed.Undo());
+  CHECK(!file.Dirty());
+  CHECK(fw::pkg::ReadOwner(path).empty());
+  auto saved = Open(path);
+  CHECK(saved && fw::pkg::CheckPackage(saved->Package()).Ok());
 }
 
 TEST(DocFile_NewAndRecoveredDocumentsSuggestAName) {

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "PagedView.h"
+#include "doc/edit/Editor.h"
 #include "doc/layout/Layout.h"
 #include "draw/Drawing.h"
 #include "doc/model/Document.h"
@@ -86,11 +87,13 @@ class DocView : public PagedView {
   PrintOutcome PrintToFile(const std::wstring& path, std::wstring& message);
 
   // ---- Editing (D2) ----
-  // Each change to the model, with the index of the part it changed: the tab becomes modified,
-  // and Save writes that part from the model.
+  // The document's editor: every change goes through it (transactions, undo and redo). Null until
+  // loaded. Its changes reach the layout, the page list and the file (modified, autosave, Save).
+  fw::doc::edit::Editor* Editor() { return editor_.get(); }
+  // Marks a part edited without the editor (tests).
   void NoteEdit(uint32_t part);
-  // The UI checks' "edited" step: an edit in the main part.
-  void NoteEditForTesting();
+  // The UI checks' "edited" step: " (edited)" typed at the end of the first paragraph.
+  void EditForTesting();
   DocFile& File() { return file_; }
 
   // ---- Text ----
@@ -128,6 +131,9 @@ class DocView : public PagedView {
   void VisibleText(uint32_t para, std::wstring& text, std::vector<uint32_t>& map) const;
   // Pages laid out since the last call: their sizes join the view's. True when there were any.
   bool TakeNewPages();
+  // After an edit, its undo or redo: the layout lays out again from there, the page list follows
+  // it (it may be shorter), and the file learns whether the document now differs from the saved one.
+  void OnEdited(const fw::doc::edit::Change& change);
   void ShowNotices();
   void DrawPage(gfx::Canvas& c, ID2D1DeviceContext* dc, int page, bool inverted);
   void DrawRanges(gfx::Canvas& c, int first, int last);
@@ -149,6 +155,7 @@ class DocView : public PagedView {
   DocFile file_;
   std::vector<uint8_t> bytes_;   // NewDocument, FromBytes: what Load reads instead of a file
   std::unique_ptr<fw::doc::Document> doc_;
+  std::unique_ptr<fw::doc::edit::Editor> editor_;  // after doc_: goes first
   std::unique_ptr<fw::text::Fonts> fonts_;
   std::unique_ptr<fw::doc::layout::Layout> pagination_;
   std::vector<fw::PageSizePt> sizes_;

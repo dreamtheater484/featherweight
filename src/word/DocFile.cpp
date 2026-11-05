@@ -96,10 +96,16 @@ void DocFile::Edited(uint32_t part) {
 }
 
 void DocFile::Changed(bool modified, const std::vector<uint32_t>& parts) {
-  changed_.insert(parts.begin(), parts.end());
+  changed_ = std::set<uint32_t>(parts.begin(), parts.end());  // exact, under undo too
   ++generation_;
   if (modified) {
-    if (!dirty_ && !parts.empty()) Edited(parts.front());
+    // Modified with no part listed is an undo past a save: the model is back to the original,
+    // but the file isn't.
+    if (!dirty_) {
+      dirty_ = true;
+      if (origin_ == Origin::File && !inUse_.locked && !Config().user.empty())
+        ownerWritten_ = pkg::WriteOwner(path_, Config().user);
+    }
     return;
   }
   if (!dirty_ || origin_ == Origin::Copy) return;  // a recovered document stays unsaved
