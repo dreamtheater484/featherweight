@@ -7,12 +7,15 @@
 // fail and kept as a reproducer. scripts\torture.ps1 then runs the validator and Word on the saved
 // copies.
 #include <windows.h>
+#include <objbase.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <set>
@@ -53,8 +56,16 @@
 #else
 #define FW_TORTURE_PAGE 0
 #endif
+// Copy and paste with formatting (D2's clipboard), through the formats the clipboard carries.
+#if __has_include("doc/edit/Clip.h")
+#include "doc/edit/Clip.h"
+#define FW_TORTURE_CLIP 1
+#else
+#define FW_TORTURE_CLIP 0
+#endif
 #else
 #define FW_TORTURE_EDITOR 0
+#define FW_TORTURE_CLIP 0
 #endif
 
 namespace fwtool {
@@ -210,6 +221,24 @@ bool ParseEdit(std::string_view line, Edit& e) {
 
 namespace {
 
+// A picture from tests/fuzz/seeds/picture, found from the current folder or above fwtool.exe (it
+// lives in build\tools\fwtool\<config>).
+bool SeedPicture(const std::string& name, std::vector<uint8_t>& bytes) {
+  if (name.find_first_of("/\\:") != std::string::npos || name.starts_with(".")) return false;
+  std::vector<std::filesystem::path> roots = {std::filesystem::current_path()};
+  wchar_t exe[MAX_PATH] = {};
+  if (GetModuleFileNameW(nullptr, exe, MAX_PATH))
+    for (std::filesystem::path p = std::filesystem::path(exe).parent_path(); p.has_relative_path(); p = p.parent_path())
+      roots.push_back(p);
+  for (const std::filesystem::path& root : roots) {
+    std::ifstream in(root / "tests" / "fuzz" / "seeds" / "picture" / name, std::ios::binary);
+    if (!in) continue;
+    bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    return !bytes.empty();
+  }
+  return false;
+}
+
 // Saves as the app does (DocFile::Save): docx::Serialize writes the changed parts from the model,
 // updates the core properties when something was edited, saves the package and checks it opens
 // again. With nothing edited it is the file exactly as it was opened. The time is fixed, so that a
@@ -253,16 +282,18 @@ class EditorTarget : public EditTarget {
     grouping_ = 0;
   }
 
+  // A place a person can put the caret: in the paragraph, and not between the halves of a
+  // surrogate pair (an emoji), which no selection can split.
+  bool Exists(fw::doc::Pos p) const {
+    if (p.para >= doc_->Paragraphs().size() || p.offset > editor_.ParaLength(p.para)) return false;
+    const std::u16string& text = doc_->Para(p.para).text;
+    return !(p.offset > 0 && p.offset < text.size() && text[p.offset - 1] >= 0xD800 && text[p.offset - 1] <= 0xDBFF &&
+             text[p.offset] >= 0xDC00 && text[p.offset] <= 0xDFFF);
+  }
+
   Applied ApplyOne(const Edit& e, std::string& why) {
     namespace ed = fw::doc::edit;
-    // A place a person can put the caret: in the paragraph, and not between the halves of a
-    // surrogate pair (an emoji), which no selection can split.
-    auto exists = [&](fw::doc::Pos p) {
-      if (p.para >= doc_->Paragraphs().size() || p.offset > editor_.ParaLength(p.para)) return false;
-      const std::u16string& text = doc_->Para(p.para).text;
-      return !(p.offset > 0 && p.offset < text.size() && text[p.offset - 1] >= 0xD800 && text[p.offset - 1] <= 0xDBFF &&
-               text[p.offset] >= 0xDC00 && text[p.offset] <= 0xDFFF);
-    };
+    auto exists = [&](fw::doc::Pos p) { return Exists(p); };
     auto refuse = [&](const std::string& reason) {
       why = reason;
       return Applied::Refused;
@@ -324,7 +355,7 @@ class EditorTarget : public EditTarget {
         if (e.kind == EditKind::Paint && !exists(e.from)) return refuse("no such position to copy from");
         std::u16string whyNot;
         if (!editor_.CanEdit(&whyNot)) return refuse(fw::doc::ToUtf8(whyNot));
-        return e.kind == EditKind::Paint ? Paint(e) : Command(e, why);
+        return e.kind == EditKind::Paint ? Paint(e, why) : Command(e, why);
       }
       case EditKind::Save:
         return refuse("saves are made by the round");
@@ -366,6 +397,9 @@ class EditorTarget : public EditTarget {
   // transaction, the same range for characters and paragraphs.
   Applied Command(const Edit& e, std::string& why) {
     namespace ed = fw::doc::edit;
+#if FW_TORTURE_CLIP
+    if (e.format.starts_with("paste=") || e.format.starts_with("pastecells=")) return Paste(e, why);
+#endif
 #if FW_TORTURE_D3
     if (std::optional<Applied> d3 = D3(e, why)) return *d3;
 #endif
@@ -416,13 +450,59 @@ class EditorTarget : public EditTarget {
     } else {
       return why = "unknown command", Applied::Refused;
     }
+    // TreeEdit puts back a change to text it doesn't edit (a text box, kept content) and says why.
+    if (!te.Refused().empty()) return why = fw::doc::ToUtf8(te.Refused()), Applied::Refused;
     return Applied::Done;
   }
+
+#if FW_TORTURE_CLIP
+  // Copy and paste as the Word tab does: what's copied from [at, to) ("paste") or the block of cells
+  // between them ("pastecells") goes through the clipboard's HTML (Featherweight's own, as it pastes
+  // its own copies), its RTF (as from another program) or as it is, and is pasted at P:O, or over
+  // [P:O, Q:R). Spec: "paste=<html|rtf|clip>:P:O[:Q:R]". Pasting is one undo step.
+  Applied Paste(const Edit& e, std::string& why) {
+    namespace ed = fw::doc::edit;
+    constexpr uint64_t kSource = 0x46575454;  // this document, for lists pasted back into it
+    std::vector<std::string> args;
+    const std::string value = e.format.substr(e.format.find('=') + 1);
+    for (size_t start = 0; start <= value.size();) {
+      size_t colon = std::min(value.find(':', start), value.size());
+      args.push_back(value.substr(start, colon - start));
+      start = colon + 1;
+    }
+    auto refuse = [&](std::string reason) {
+      why = std::move(reason);
+      return Applied::Refused;
+    };
+    if (args.size() != 3 && args.size() != 5) return refuse("paste=<via>:P:O[:Q:R]");
+    auto num = [&](size_t i) { return static_cast<uint32_t>(std::strtoul(args[i].c_str(), nullptr, 10)); };
+    const fw::doc::Pos at{num(1), num(2)}, to = args.size() == 5 ? fw::doc::Pos{num(3), num(4)} : at;
+    if (!Exists(at) || !Exists(to) || editor_.Compare(at, to) > 0) return refuse("no such place to paste");
+    if (doc_->Para(at.para).story != doc_->Para(to.para).story) return refuse("a range is in one story");
+    std::optional<ed::Clip> clip;
+#if FW_TORTURE_PAGE
+    if (e.format.starts_with("pastecells=")) {
+      clip = ed::CopyCells(editor_, e.at, e.to, kSource);
+      if (!clip) return refuse("not cells of one table");
+    } else
+#endif
+      clip = ed::CopyClip(*doc_, e.at, e.to, kSource);
+    if (clip->Empty()) return refuse("nothing copied");
+    const std::string& via = args[0];
+    if (via == "html") clip = ed::FromHtml(ed::ToHtml(*clip));
+    else if (via == "rtf") clip = ed::FromRtf(ed::ToRtf(*clip));
+    else if (via != "clip") return refuse("unknown clipboard format");
+    if (!clip) return refuse("the clipboard's " + via + " didn't read back");
+    const ed::Result r = ed::PasteClip(editor_, at, to, *clip, kSource);
+    if (!r) return refuse(fw::doc::ToUtf8(r.message));
+    return Applied::Done;
+  }
+#endif
 
   // The format painter (DocFormat::Capture and PaintTo): the formatting of the character at
   // e.from and of its paragraph, painted onto [at, to). Paragraph formatting goes with whole
   // paragraphs only.
-  Applied Paint(const Edit& e) {
+  Applied Paint(const Edit& e, std::string& why) {
     namespace ed = fw::doc::edit;
     const fw::doc::Document& doc = *doc_;
     ed::Range one{e.from, e.from};
@@ -454,6 +534,7 @@ class EditorTarget : public EditTarget {
     para.lineRule = pp.lineRule;
     const ed::Range range{e.at, e.to};
     const bool whole = e.at.offset == 0 && (e.to.para > e.at.para || e.to.offset >= doc.Para(e.at.para).text.size());
+    std::u16string refused;
     editor_.BeginGroup(u"Format Painter");
     {
       ed::TreeEdit te(editor_, range.from);
@@ -462,8 +543,10 @@ class EditorTarget : public EditTarget {
         ed::FormatParagraphs(te, range, para);
       }
       ed::FormatRuns(te, range, run);
+      refused = te.Refused();
     }
     editor_.EndGroup();
+    if (!refused.empty()) return why = fw::doc::ToUtf8(refused), Applied::Refused;
     return Applied::Done;
   }
 
@@ -537,7 +620,13 @@ class EditorTarget : public EditTarget {
           0x04, 0x00, 0x00, 0x00, 0x03, 0x08, 0x02, 0x00, 0x00, 0x00, 0x3B, 0x96, 0x39, 0x91, 0x00, 0x00, 0x00, 0x10, 0x49,
           0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x38, 0xA1, 0xA1, 0x01, 0x47, 0x0C, 0x38, 0x39, 0x00, 0x07, 0xA6, 0x0D, 0x21,
           0x7C, 0xB1, 0xBC, 0x73, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};  // 4 x 3, red
-      r = pictures_.Insert(e.at, png, fw::Emu(0), u"torture.png");
+      if (value.empty()) {
+        r = pictures_.Insert(e.at, png, fw::Emu(0), u"torture.png");
+      } else {  // "picture=<file>": one of tests/fuzz/seeds/picture (each format Insert takes, and one it doesn't)
+        std::vector<uint8_t> bytes;
+        if (!SeedPicture(value, bytes)) return refuse("no picture " + value + " in tests/fuzz/seeds/picture");
+        r = pictures_.Insert(e.at, bytes, fw::Emu(0), fw::doc::ToUtf16(value));
+      }
     } else if (name.starts_with("pic")) {
       const uint32_t d = static_cast<uint32_t>(num(0));
       if (d >= doc_->Drawings().size()) return refuse("no such drawing");
@@ -957,6 +1046,9 @@ class Generator {
         "grow",        "shrink",        "grow1",            "shrink1",       "clearchars",   "clearpara",
         "clearall",    "font=Arial",    "font=Times New Roman", "spacing=240", "spacing=360", "spacing=480",
         "spacebefore", "border=box",    "border=bottom",    "border=none"};
+#if FW_TORTURE_CLIP
+    if (!skip_.contains("paste") && rng_.Percent(15)) return Paste(e);
+#endif
     e.kind = EditKind::Command;
     e.at = RandomPos(RandomPara());
     e.to = Later(e.at, rng_.Percent(70) ? 0 : 3);
@@ -984,6 +1076,35 @@ class Generator {
       e.format = rng_.Pick(formats);
     }
   }
+
+#if FW_TORTURE_CLIP
+  // Copy and paste (EditorTarget::Paste has the spec): a range of one story, or a block of cells,
+  // pasted in body text or in a cell, now and then over a selection; mostly through the clipboard's
+  // HTML, as Featherweight pastes its own copies.
+  void Paste(Edit& e) {
+    static const std::vector<std::string> vias = {"html", "html", "html", "rtf", "clip"};
+    e.kind = EditKind::Command;
+    std::string kind = "paste=";
+    e.at = RandomPos(RandomPara());
+    e.to = Later(e.at, rng_.Percent(60) ? 0 : 4);
+    Pos where = RandomPos(RandomPara());
+#if FW_TORTURE_PAGE
+    const std::vector<std::vector<uint32_t>> tables = Tables();
+    if (!tables.empty() && rng_.Percent(35)) {
+      const std::vector<uint32_t>& cells = rng_.Pick(tables);
+      e.at = RandomPos(rng_.Pick(cells));
+      e.to = RandomPos(rng_.Pick(cells));
+      if (Before(e.to, e.at)) std::swap(e.at, e.to);
+      kind = "pastecells=";
+    }
+    if (!tables.empty() && rng_.Percent(40)) where = RandomPos(rng_.Pick(rng_.Pick(tables)));
+#endif
+    const Pos end = rng_.Percent(25) ? Later(where, 1) : where;
+    auto at = [](Pos p) { return std::to_string(p.para) + ":" + std::to_string(p.offset); };
+    e.format = kind + rng_.Pick(vias) + ":" + at(where) + (end == where ? "" : ":" + at(end));
+    e.target = kind == "pastecells=" ? "copied cells" : "copied text";
+  }
+#endif
 
 #if FW_TORTURE_D3
   // D3's operations (EditorTarget::D3 has the specs): tables, pictures, fields, links and
@@ -1082,7 +1203,22 @@ class Generator {
   void Picture(Edit& e) {
     const uint32_t drawings = static_cast<uint32_t>(doc_.Drawings().size());
     if (!drawings || rng_.Percent(30)) {
-      e.format = "picture";
+      // The 4 x 3 PNG, or a file of each kind Insert takes (and an icon, which it doesn't).
+      static const std::vector<std::string> files = {"",        "",         "",        "gray.jpg", "one.gif",
+                                                     "tile.png", "two.bmp", "two.tif", "bom.svg",  "tile.ico"};
+      const std::string file = rng_.Pick(files);
+      e.format = file.empty() ? "picture" : "picture=" + file;
+      if (!skip_.contains("save") && rng_.Percent(25)) {
+        // Saved, deleted and saved (its media leaves the file), undone and saved (back, and whole).
+        Edit save, del, undo;
+        save.kind = EditKind::Save;
+        del.kind = EditKind::Delete;
+        del.at = e.at;
+        del.to = Pos{e.at.para, e.at.offset + 1};
+        del.target = "the picture just inserted";
+        undo.kind = EditKind::Undo;
+        pending_ = {save, del, save, undo, save};
+      }
       return;
     }
     const std::string d = std::to_string(rng_.Below(drawings));
@@ -1454,6 +1590,45 @@ std::string FirstDifference(const std::string& a, const std::string& b) {
   return "in " + story + ": edited \"" + lineAt(a, line) + "\", read back \"" + lineAt(b, line) + "\"";
 }
 
+// The first paragraph whose line differs, for people; empty when none does.
+std::string LinesDiffer(const std::vector<std::string>& was, const std::vector<std::string>& now) {
+  auto cut = [](const std::string& s) { return s.size() > 120 ? s.substr(0, 120) + "..." : s; };
+  for (size_t p = 0; p < std::max(was.size(), now.size()); ++p)
+    if (p >= was.size() || p >= now.size() || was[p] != now[p])
+      return "paragraph " + std::to_string(p) + ": expected \"" + (p < was.size() ? cut(was[p]) : "(none)") + "\", got \"" +
+             (p < now.size() ? cut(now[p]) : "(none)") + "\"";
+  return {};
+}
+
+// Pictures a file keeps that nothing shows: an image relationship its part doesn't mention, and a
+// media part no relationship points to. Saving leaves out a deleted picture's (docx::Serialize), so
+// a saved file has no more of these than the original.
+std::map<std::string, int> MediaProblems(const fw::pkg::Package& pkg) {
+  std::map<std::string, int> out;
+  std::set<std::string> targets;
+  for (const fw::pkg::RelationshipSet& set : pkg.Relationships()) {
+    std::string xml;
+    bool read = false;
+    for (const fw::pkg::Relationship& r : set.items) {
+      if (r.external) continue;
+      targets.insert(fw::pkg::PartKey(r.targetPart));
+      if (!r.type.ends_with("/image") || set.source == "/") continue;
+      if (!read) {
+        std::vector<uint8_t> bytes;
+        if (pkg.ReadPart(set.source, bytes).Ok()) xml.assign(bytes.begin(), bytes.end());
+        read = true;
+      }
+      if (!xml.empty() && xml.find("\"" + r.id + "\"") == std::string::npos && xml.find("'" + r.id + "'") == std::string::npos)
+        ++out["an image relationship its part doesn't use"];
+    }
+  }
+  for (const fw::pkg::Part& p : pkg.Parts()) {
+    const std::string key = fw::pkg::PartKey(p.name);
+    if (!p.deleted && key.starts_with("/word/media/") && !targets.contains(key)) ++out["a picture part nothing refers to"];
+  }
+  return out;
+}
+
 // Runs fn, catching crashes (access violations and the like) and C++ exceptions alike: a crash in
 // the editor is a finding with a reproducer, not the end of the run.
 using Thunk = void (*)(void*);
@@ -1518,6 +1693,7 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
   }
   std::vector<std::string> known = fw::pkg::CheckPackage(doc->Package()).errors;
   const std::map<std::string, int> knownGrid = GridProblems(*doc);
+  const std::map<std::string, int> knownMedia = MediaProblems(doc->Package());
   std::unique_ptr<EditTarget> target = torture::OpenTarget(std::move(doc), st);
   if (!target) {
     fail("open", "the editor refuses it: " + st.message);
@@ -1539,6 +1715,14 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     if (!st.Ok()) return fail("open", when + "the saved file doesn't open: " + st.message), false;
     for (const std::string& error : fw::pkg::CheckPackage(*again).errors)
       if (std::find(known.begin(), known.end(), error) == known.end()) return fail("check", when + error), false;
+    for (const auto& [problem, count] : MediaProblems(*again)) {
+      const auto had = knownMedia.find(problem);
+      const int original = had == knownMedia.end() ? 0 : had->second;
+      if (count > original)
+        return fail("media", when + problem + " (" + std::to_string(count) + " in the saved file, " +
+                                 std::to_string(original) + " in the original)"),
+               false;
+    }
     std::unique_ptr<Document> reread;
     auto reopen = [&] { reread = docx::Read(std::move(again), st); };
     if (DWORD crash = Guarded(reopen)) return fail("crash", when + CrashText(crash) + " reading the saved file"), false;
@@ -1626,6 +1810,7 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     std::string stateBefore;
     bool refusalChanged = false;
     std::string refusalWhat;
+    const size_t storiesBefore = target->Doc().Stories().size();
     auto apply = [&] {
       if (compareState) stateBefore = target->State();
       if (readAll) linesBefore = ParaLines(target->Doc());
@@ -1699,6 +1884,38 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
         break;
       }
       if (r.failure) break;
+    }
+    // Undo puts back exactly what a command changed, and redo does it again: the formatting
+    // commands, D3's operations and paste, on the rounds that read every paragraph, outside groups.
+    // A command that changed no paragraph's line is left alone (it may have recorded no step).
+    if (e.kind == EditKind::Command && readAll && !inGroup && groupLeft == 0) {
+      std::string problem;
+      auto check = [&] {
+        const std::vector<std::string> after = linesAfter.empty() ? ParaLines(target->Doc()) : linesAfter;
+        if (after == linesBefore) return;
+        Edit undo, redo;
+        undo.kind = EditKind::Undo;
+        redo.kind = EditKind::Redo;
+        std::string whyNot;
+        if (target->Apply(undo, whyNot) != Applied::Done) return void(problem = "couldn't be undone (" + whyNot + ")");
+        // A header or footer part a command made stays when it's undone, unreferenced (D3 headers:
+        // EnsureHeaderFooter's parts are made outside undo), so its paragraphs aren't compared.
+        std::vector<std::string> undone;
+        const std::vector<std::string> now = ParaLines(target->Doc());
+        for (uint32_t p = 0; p < now.size(); ++p)
+          if (target->Doc().Para(p).story < storiesBefore) undone.push_back(now[p]);
+        if (std::string d = LinesDiffer(linesBefore, undone); !d.empty()) return void(problem = "wasn't undone exactly: " + d);
+        if (target->Apply(redo, whyNot) != Applied::Done) return void(problem = "couldn't be redone (" + whyNot + ")");
+        if (std::string d = LinesDiffer(after, ParaLines(target->Doc())); !d.empty()) problem = "wasn't redone exactly: " + d;
+      };
+      if ((crash = Guarded(check)) != 0) {
+        fail("crash", CrashText(crash) + " undoing or redoing: " + torture::FormatEdit(e));
+        break;
+      }
+      if (!problem.empty()) {
+        fail("undo", "\"" + torture::FormatEdit(e) + "\" " + problem);
+        break;
+      }
     }
     if (e.kind == EditKind::Undo) undone += e.count, undoable -= std::min(undoable, e.count);
     else if (e.kind == EditKind::Redo) undoable += e.count, undone -= std::min(undone, e.count);
@@ -1793,13 +2010,13 @@ std::string KeepReproducer(const fs::path& file, uint64_t seed, uint32_t round, 
     RoundResult r = RunRound(file, seed, 0, &edits, {});
     return r.failure && r.failure->category == f.category;
   };
-  std::vector<Edit> small = Minimize(failed.applied, same, set.minimizeBudget);
-  RoundResult last = RunRound(file, seed, 0, &small, {});
+  std::vector<Edit> fewest = Minimize(failed.applied, same, set.minimizeBudget);
+  RoundResult last = RunRound(file, seed, 0, &fewest, {});
   if (!last.failure) {  // shrinking lost it (a flaky failure): keep them all
     last = failed;
-    small = failed.applied;
+    fewest = failed.applied;
   }
-  kept = small.size();
+  kept = fewest.size();
   char stem[64];
   std::snprintf(stem, sizeof stem, "-seed%016llx", static_cast<unsigned long long>(seed));
   fs::path base = set.out / "repro" / (SafeName(file) + stem);
@@ -1808,8 +2025,8 @@ std::string KeepReproducer(const fs::path& file, uint64_t seed, uint32_t round, 
   docxPath += ".docx";
   std::error_code ec;
   fs::create_directories(base.parent_path(), ec);
-  WriteEdits(txtPath, file, seed, round, last.failure->category + ": " + last.failure->message, small,
-             std::to_string(small.size()) + " of " + std::to_string(failed.applied.size()));
+  WriteEdits(txtPath, file, seed, round, last.failure->category + ": " + last.failure->message, fewest,
+             std::to_string(fewest.size()) + " of " + std::to_string(failed.applied.size()));
   if (!last.saved.empty()) WriteBytes(docxPath, last.saved);
   return fw::WideToUtf8(txtPath.generic_wstring());
 }
@@ -1903,6 +2120,8 @@ int Replay(const fs::path& repro, const fs::path& outDir) {
 }  // namespace
 
 int RunTorture(const Options& options) {
+  // As the app's UI thread: inserting a BMP or SVG picture encodes a PNG with WIC.
+  CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   Settings set;
   set.seed = options.seed ? options.seed : 1;
   set.edits = static_cast<uint32_t>(options.edits);
