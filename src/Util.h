@@ -19,8 +19,13 @@ bool ReadFileBytes(const std::wstring& path, std::string& out, size_t maxBytes =
 // Writes to a temporary file next to `path`, then replaces `path` in one step.
 bool WriteFileAtomic(const std::wstring& path, const std::string& data);
 
-void SetClipboardText(const std::wstring& text);
+// Puts text on the clipboard, with the same text as RTF ("Rich Text Format") and HTML (CF_HTML,
+// "HTML Format") when given.
+void SetClipboardText(const std::wstring& text, const std::string& rtf = {}, const std::string& html = {});
 std::wstring GetClipboardText();
+// The bytes of a clipboard format registered by name ("Rich Text Format", "HTML Format"), up to
+// its first NUL; empty when the clipboard has none.
+std::string GetClipboardBytes(const wchar_t* format);
 
 int64_t UnixNow();
 

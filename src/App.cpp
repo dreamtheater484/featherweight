@@ -493,8 +493,17 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       BeginPaint(hwnd_, &ps);
       Paint();
       EndPaint(hwnd_, &ps);
+      SyncInputCaret();
       return 0;
     }
+    case WM_SETFOCUS:
+    case WM_IME_STARTCOMPOSITION:
+      SyncInputCaret(true);
+      break;
+    case WM_KILLFOCUS:
+      if (inputCaret_) DestroyCaret();
+      inputCaret_ = false;
+      break;
     case WM_ERASEBKGND:
       return 1;
     case WM_GETOBJECT:
@@ -1050,17 +1059,43 @@ void App::FocusBox(TextBox* box) {
     box->Focus(true);
     caretStart_ = anim::Now();
     SetTimer(hwnd_, kTimerCaret, 265, nullptr);
-    if (HIMC imc = ImmGetContext(hwnd_)) {
-      D2D1_POINT_2F p = box->CaretPos(ui_);
-      COMPOSITIONFORM cf{CFS_POINT, POINT{static_cast<LONG>(p.x), static_cast<LONG>(p.y)}, {}};
-      ImmSetCompositionWindow(imc, &cf);
-      ImmReleaseContext(hwnd_, imc);
-    }
+    SyncInputCaret(true);
   } else {
     KillTimer(hwnd_, kTimerCaret);
   }
   KeyFocusMoved();
   InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::SyncInputCaret(bool force) {
+  std::optional<RECT> r;
+  if (focusBox_) {
+    const D2D1_POINT_2F p = focusBox_->CaretPos(ui_);
+    const LONG x = std::lround(p.x), y = std::lround(p.y);
+    r = RECT{x, y, x + 1, y + std::lround(16 * ui_)};
+  } else if (TabContent* v = Active(); v && v->HasKeyFocus()) {
+    r = v->CaretRect();
+  }
+  if (!r || GetFocus() != hwnd_) {
+    if (inputCaret_) DestroyCaret();
+    inputCaret_ = false;
+    return;
+  }
+  if (!force && inputCaret_ && EqualRect(&*r, &inputCaretAt_)) return;
+  const int h = std::max<int>(1, r->bottom - r->top);
+  if (!inputCaret_ || h != inputCaretAt_.bottom - inputCaretAt_.top) {
+    if (inputCaret_) DestroyCaret();
+    inputCaret_ = CreateCaret(hwnd_, nullptr, 1, h) != FALSE;  // hidden until ShowCaret, which never comes
+  }
+  inputCaretAt_ = *r;
+  SetCaretPos(r->left, r->top);
+  if (HIMC imc = ImmGetContext(hwnd_)) {
+    COMPOSITIONFORM cf{CFS_POINT, POINT{r->left, r->top}, {}};
+    ImmSetCompositionWindow(imc, &cf);
+    CANDIDATEFORM cand{0, CFS_EXCLUDE, POINT{r->left, r->bottom}, *r};
+    ImmSetCandidateWindow(imc, &cand);
+    ImmReleaseContext(hwnd_, imc);
+  }
 }
 
 void App::KeyFocusMoved() {
@@ -2218,6 +2253,26 @@ void App::RunScript(const std::wstring& script) {
       GetWindowTextW(notes_.Edit(), buf, 512);
       for (wchar_t* c = buf; *c; ++c) fwprintf(stderr, L"%04x ", static_cast<unsigned>(*c));
       fwprintf(stderr, L"\n");
+    } else if (op == L"ime") {
+      // Text as an input method gives it (WM_IME_CHAR, which becomes WM_CHAR), a unit at a time.
+      for (wchar_t ch : arg) SendMessageW(hwnd_, WM_IME_CHAR, ch, 1);
+    } else if (op == L"dumpcaret") {
+      // Where the system caret and the IME's composition window are, for checks.
+      SetFocus(hwnd_);
+      UpdateWindow(hwnd_);
+      SyncInputCaret(true);
+      std::optional<RECT> want;
+      if (TabContent* v = Active()) want = v->CaretRect();
+      if (want) fwprintf(stderr, L"text caret: %d,%d-%d,%d focus=%d\n", want->left, want->top, want->right, want->bottom,
+                         GetFocus() == hwnd_ ? 1 : 0);
+      POINT caret{-1, -1};
+      GetCaretPos(&caret);
+      COMPOSITIONFORM cf{};
+      if (HIMC imc = ImmGetContext(hwnd_)) {
+        ImmGetCompositionWindow(imc, &cf);
+        ImmReleaseContext(hwnd_, imc);
+      }
+      fwprintf(stderr, L"caret: %d,%d ime: %d,%d\n", caret.x, caret.y, cf.ptCurrentPos.x, cf.ptCurrentPos.y);
     } else if (op == L"dumpselection") {
       // The selected text, as copying would give it (without touching the clipboard).
       if (TabContent* v = Active()) fwprintf(stderr, L"selection: [%s]\n", v->SelectedText().c_str());

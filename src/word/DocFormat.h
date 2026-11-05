@@ -52,6 +52,7 @@ class DocFormat {
   bool PainterOn() const { return painter_ != Painter::Off; }
   void SelectionMade();
   void CancelPainter() { painter_ = Painter::Off; }
+  bool Carrying() const { return carried_.has; }  // a format copied (Ctrl+Shift+C)
 
   // AutoFormat As You Type: "1. ", "a) " or "* " typed at the start of a paragraph (the caret just
   // after the space or tab) makes it a list item, as one undo step of its own, so Ctrl+Z gives the

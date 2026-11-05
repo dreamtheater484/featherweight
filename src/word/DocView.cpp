@@ -11,6 +11,7 @@
 #include "Util.h"
 #include "core/Strings.h"
 #include "doc/docx/Docx.h"
+#include "doc/edit/Clip.h"
 #include "draw/D2DPainter.h"
 #include "draw/PrintJob.h"
 #include "pkg/Package.h"
@@ -209,6 +210,8 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
   CollectAnnotations();
 
   // Editing, when the model can write the document back as it was.
+  clipSource_ = GetTickCount64() ^ (static_cast<uint64_t>(GetCurrentProcessId()) << 32) ^
+                static_cast<uint64_t>(reinterpret_cast<uintptr_t>(this));
   auto editor = std::make_unique<fw::doc::edit::Editor>(*doc_);
   if (editor->CanEdit()) {
     editor_ = std::move(editor);
@@ -923,10 +926,17 @@ std::wstring DocView::TextOf(TextPos from, TextPos to, size_t limit) const {
 
 void DocView::Copy() {
   if (!Ready() || !HasSelection()) return;
-  std::wstring text = TextOf(anchor_, focus_, SIZE_MAX);
-  if (text.empty()) return;
-  util::SetClipboardText(text);
-  host_.ViewMessage(BannerKind::Success, L"Copied");
+  if (PutOnClipboard()) host_.ViewMessage(BannerKind::Success, L"Copied");
+}
+
+bool DocView::PutOnClipboard() {
+  const fw::doc::Pos a{std::min(anchor_, focus_).para, std::min(anchor_, focus_).offset};
+  const fw::doc::Pos b{std::max(anchor_, focus_).para, std::max(anchor_, focus_).offset};
+  const fw::doc::edit::Clip clip = fw::doc::edit::CopyClip(*doc_, a, b, clipSource_);
+  const std::u16string text = clip.PlainText();
+  if (text.empty()) return false;
+  util::SetClipboardText(std::wstring(text.begin(), text.end()), fw::doc::edit::ToRtf(clip), fw::doc::edit::ToHtml(clip));
+  return true;
 }
 
 std::wstring DocView::SelectedText() {
@@ -1307,7 +1317,9 @@ std::vector<int> DocView::Commands() {
 
 bool DocView::Execute(int cmd) {
   if (format_ && DocFormat::Owns(cmd)) {
-    format_->Execute(cmd);
+    // Ctrl+Shift+V pastes the format Ctrl+Shift+C copied, as in Word; with none, the text alone.
+    if (cmd == CmdPasteFormat && !format_->Carrying()) Paste(false);
+    else format_->Execute(cmd);
     return true;
   }
   switch (cmd) {
