@@ -13,6 +13,7 @@
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/Lists.h"
+#include "doc/edit/Page.h"
 #include "doc/edit/Styles.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/layout/Layout.h"
@@ -93,6 +94,12 @@ bool LayOutDocument(const std::filesystem::path& document, fw::LayoutDump* dump,
   return OpenAndLayOut(document, timings, error, [&](const fw::doc::layout::Layout& layout) {
     if (dump) *dump = layout.Dump(fw::WideToUtf8(document.filename().wstring()));
   });
+}
+
+bool WithLayout(const std::filesystem::path& document, std::string& error,
+                const std::function<void(const fw::doc::Document&, const fw::doc::layout::Layout&)>& use) {
+  return OpenAndLayOut(document, nullptr, error,
+                       [&](const fw::doc::layout::Layout& layout) { use(*g_document, layout); });
 }
 
 void DumpLayout(const std::filesystem::path& document, const std::filesystem::path& out) {
@@ -287,6 +294,32 @@ bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>
         ms = key(caret, [&] { return editor.Undo(); });
         if (ms >= 0) place.format.push_back(ms);
       }
+      // Page setup: every section's left and right margins a quarter inch wider, then undone. As
+      // the document tab does it (DocView::ApplyPageChange): the first pages and 30 ms more, the
+      // page on screen painted (as it was, when not laid out again yet); the rest in idle time.
+      for (int step = 0; step < 2; ++step) {
+        const auto shown = layout.CaretAt({caret.para, caret.offset});
+        const size_t onScreen = shown ? shown->page : 0;
+        const auto start = std::chrono::steady_clock::now();
+        edit::Result r;
+        if (step == 0) {
+          const fw::doc::SectionProps& first = doc->Sections().front().props;
+          edit::PageSetup wider;
+          wider.left = fw::Twips(first.marginStart.Value() + 360);
+          wider.right = fw::Twips(first.marginEnd.Value() + 360);
+          r = edit::SetPageSetup(editor, 0, static_cast<uint32_t>(doc->Sections().size() - 1), wider);
+        } else {
+          r = editor.Undo();
+        }
+        if (!r) continue;
+        layout.LayOutPages(2);
+        layout.Continue(30);
+        painter.Paint(layout, std::min(onScreen, layout.PageCount() - 1));
+        place.page.push_back(Since(start));
+        while (layout.Continue(50)) {
+        }
+        place.pageAll.push_back(Since(start));
+      }
       places.push_back(std::move(place));
     }
   }
@@ -326,7 +359,10 @@ void RandomEdit(fw::doc::edit::Editor& ed, const fw::doc::Document& doc, std::mt
   static const char16_t* const kTexts[] = {u"x", u" ", u"word ", u"a few more words to wrap ",
                                            u"a long run of text, long enough to take a line or two by itself and push "
                                            u"what follows down the page, and then some more of it "};
-  switch (rng() % 10) {
+  namespace edit = fw::doc::edit;
+  const uint32_t section = edit::SectionOf(doc, para), sections = static_cast<uint32_t>(doc.Sections().size());
+  auto twips = [&](int32_t from, int32_t span) { return fw::Twips(from + static_cast<int32_t>(rng() % static_cast<uint32_t>(span))); };
+  switch (rng() % 13) {
     case 0: case 1: case 2: case 3: ed.InsertText(at, kTexts[rng() % 5]); break;
     case 4: case 5: {
       const uint32_t to = std::min(len, at.offset + 1 + static_cast<uint32_t>(rng() % 60));
@@ -336,13 +372,50 @@ void RandomEdit(fw::doc::edit::Editor& ed, const fw::doc::Document& doc, std::mt
     case 6: ed.SplitParagraph(at); break;
     case 7: ed.JoinParagraphs(para); break;
     case 8: ed.InsertText(at, u"\r"); break;
-    default: {
+    case 9: {
       fw::doc::edit::PropEdit p;
       if (rng() % 2) p.Set("keepNext");
       else p.Remove("keepNext");
       ed.SetParaProps(para, para, p);
       break;
     }
+    case 10: {  // page setup (D3): the paragraph's section, or the whole document
+      const bool all = rng() % 4 == 0;
+      edit::PageSetup p;
+      switch (rng() % 4) {
+        case 0: p.landscape = rng() % 2 == 0; break;
+        case 1: p.left = twips(720, 1440); p.right = twips(720, 1440); break;
+        case 2: p.top = twips(720, 1440); p.bottom = twips(720, 1440); break;
+        default: p.width = twips(10000, 6000); break;
+      }
+      edit::SetPageSetup(ed, all ? 0 : section, all ? sections - 1 : section, p);
+      break;
+    }
+    case 11:
+      switch (rng() % 3) {
+        case 0: {
+          edit::ColumnSetup c;
+          c.count = 1 + static_cast<int32_t>(rng() % 3);
+          c.line = rng() % 2 == 0;
+          edit::SetColumns(ed, section, section, c);
+          break;
+        }
+        case 1: edit::SetSectionStart(ed, section, static_cast<fw::doc::SectionStart>(rng() % 4)); break;
+        default: {
+          edit::Hyphenation h;
+          h.automatic = rng() % 2 == 0;
+          edit::SetHyphenation(ed, h);
+          break;
+        }
+      }
+      break;
+    default:
+      switch (rng() % 3) {
+        case 0: edit::InsertSectionBreak(ed, at, static_cast<fw::doc::SectionStart>(rng() % 4)); break;
+        case 1: if (sections > 1) edit::DeleteSectionBreak(ed, static_cast<uint32_t>(rng() % (sections - 1))); break;
+        default: edit::InsertBreak(ed, at, rng() % 2 == 0); break;
+      }
+      break;
   }
 }
 

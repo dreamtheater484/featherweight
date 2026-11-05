@@ -60,6 +60,8 @@ class Engine {
   // The pages shown: those laid out, then after an edit the old ones not laid out again yet.
   size_t ShownCount() const;
   const Page& Shown(size_t index) const;
+  // What PAGE, NUMPAGES and SECTIONPAGES show on a shown page, for its text as drawn.
+  PageFields ShownFields(size_t index) const;
   // The document changed (Layout::Edited): paragraphs [first, first + removed) of `story` were
   // replaced by [first, first + added).
   void Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added, bool structure);
@@ -182,6 +184,13 @@ class Engine {
   };
   // `reuse`: the table measured before an edit, whose cells that didn't change are kept.
   TableBox MeasureTable(Node tbl, const Frame& frame, const TableBox* reuse = nullptr);
+  // What a cell's measure depends on: its paragraphs and their versions, nested tables' included.
+  uint64_t CellKey(Node tc) const;
+  // Brings `t`, measured before an edit, up to date for a frame this wide: true when it has the same
+  // rows and cells, and the rows whose text changed (or depends on the page, or shows list labels)
+  // were measured again in place; false when the table must be measured anew (D3: an edit before
+  // or in a big table doesn't measure all of it again).
+  bool BringUpToDate(TableBox& t, float frameWidth, LineStory story);
   // After an edit in rows [from, to] of `t` (D2): those rows measured again in place, with their
   // cells that didn't change kept. False when they can't be on their own (merged cells over them,
   // rows added or removed, list labels in other rows that a `structure` edit may number again):
@@ -209,14 +218,30 @@ class Engine {
   const Document& doc_;
   text::Fonts& fonts_;
   Options options_;
+  // A paragraph's, a run's and a paragraph mark's properties as this view shows them: in Original
+  // (hideInsertions), the formatting from before tracked changes.
+  const ParaProps& ParaOf(uint32_t para) const {
+    return options_.hideInsertions ? doc_.OriginalPara(para) : doc_.ResolvedPara(para);
+  }
+  const RunProps& RunOf(uint32_t para, Node run) const {
+    return options_.hideInsertions ? doc_.OriginalRun(para, run) : doc_.ResolvedRun(para, run);
+  }
+  const RunProps& MarkOf(uint32_t para) const {
+    return options_.hideInsertions ? doc_.OriginalMark(para) : doc_.ResolvedMark(para);
+  }
   OpenTimings* timings_;
+  // The model's caches the paragraph text kept points into (Document::CacheGeneration), and
+  // pointing it at the new ones after an edit made them again.
+  uint64_t generation_ = 0;
+  void Rebase();
   StylePool styles_;
   std::vector<Page> pages_;
   uint32_t revision_ = 0;
   bool done_ = false;
   int32_t compatMode_ = 15;
   bool sumSpacing_ = false;  // w:doNotUseHTMLParagraphAutoSpacing: space after and before add up
-  std::vector<uint32_t> fieldsCount_;  // per story: fields in it
+  std::vector<uint32_t> fieldsCount_;  // per story: fields in it (FieldsIn)
+  void CountStories();
   std::unordered_map<uint32_t, std::vector<Field>> fieldsCache_;
   std::unordered_map<uint32_t, std::u16string> noteNumbers_;  // note story -> its mark
   std::unordered_map<uint32_t, int32_t> noteOrder_;           // note story -> its number
@@ -225,6 +250,9 @@ class Engine {
 
  public:
   const std::vector<Field>& StoryFields(uint32_t story);
+  // Whether a story may have fields pagination computes. Stories made after the engine (a new
+  // header, a new text box) are looked up as they come.
+  bool FieldsIn(uint32_t story);
 };
 
 }  // namespace fw::doc::layout

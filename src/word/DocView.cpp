@@ -13,6 +13,8 @@
 #include "doc/docx/Blank.h"
 #include "doc/docx/Docx.h"
 #include "doc/edit/Clip.h"
+#include "doc/edit/Export.h"
+#include "doc/edit/Forms.h"
 #include "draw/D2DPainter.h"
 #include "draw/PrintJob.h"
 #include "pkg/Package.h"
@@ -25,6 +27,9 @@
 #include "ui/SwapChain.h"
 #include "ui/Theme.h"
 #include "ui/Toolbar.h"
+#include "word/DocPanels.h"
+#include "word/PicturePanel.h"
+#include "word/ShapePanels.h"
 
 using namespace gfx;
 namespace layout = fw::doc::layout;
@@ -67,6 +72,7 @@ class InvertingPainter : public draw::Painter {
   void DrawGlyphs(draw::Point origin, const draw::GlyphRun& run, const draw::Brush& b) override {
     inner_.DrawGlyphs(origin, run, Map(b));
   }
+  bool WantsText() const override { return inner_.WantsText(); }
   void DrawBitmap(const draw::Bitmap& bitmap, const draw::Rect& dest, const draw::Rect* src, float opacity) override {
     inner_.DrawBitmap(bitmap, dest, src, opacity);
   }
@@ -153,6 +159,15 @@ std::unique_ptr<DocView> DocView::FromBytes(ViewHost& host, std::vector<uint8_t>
 
 DocView::~DocView() {
   StopBlinking();
+  ClosePanels();
+  if (page_ && page_->ShowsIn(host_.ViewShownPanel())) host_.ViewShowPanel(nullptr);
+  if (styles_ && styles_->ShowsIn(host_.ViewShownPanel())) host_.ViewShowPanel(nullptr);
+  linkPanel_.reset();
+  bookmarkPanel_.reset();
+  pageNumberPanel_.reset();
+  navPanel_.reset();
+  shapes_.reset();
+  pictures_.reset();
   editor_.reset();
   drawings_.clear();  // pictures read from the document's package
   images_.reset();
@@ -215,7 +230,7 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     theme_ = draw::PackageResources::FindTheme(doc_->Package(), main->name);
     colorMap_ = draw::PackageResources::FindColorMap(doc_->Package(), main->name);
   }
-  pagination_ = std::make_unique<layout::Layout>(*doc_, *fonts_);
+  pagination_ = std::make_unique<layout::Layout>(*doc_, *fonts_, LayoutOptions());
   pagination_->LayOutPages(1);
   revision_ = pagination_->Revision();
   TakeNewPages();
@@ -227,9 +242,56 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
   auto editor = std::make_unique<fw::doc::edit::Editor>(*doc_);
   if (editor->CanEdit()) {
     editor_ = std::move(editor);
+    editor_->SetAuthor(ReviewerName());
     editor_->OnChange([this](const fw::doc::edit::Change& c) { OnEdited(c); });
     format_ = std::make_unique<DocFormat>(
         *editor_, [this] { return FormatTarget(); }, [this](const DocFormat::Done& d) { AfterFormat(d); });
+    DocTable::Host th;
+    th.selection = [this] {
+      return std::make_pair(fw::doc::Pos{anchor_.para, anchor_.offset}, fw::doc::Pos{focus_.para, focus_.offset});
+    };
+    th.apply = [this](const fw::doc::edit::Result& r) { return Apply(r); };
+    th.select = [this](fw::doc::Pos a, fw::doc::Pos c) {
+      anchor_ = {a.para, a.offset};
+      focus_ = {c.para, c.offset};
+      goalX_ = -1;
+      editor_->BreakTyping();
+      CaretMoved(true);
+      host_.ViewStateChanged();
+    };
+    th.showPanel = [this](PanelContent* p) { host_.ViewShowPanel(p); };
+    th.focusPage = [this] { host_.ViewFocusPage(); };
+    DocPage::Host ph;
+    ph.selection = th.selection;
+    ph.apply = [this](const fw::doc::edit::Result& r) { return Apply(r); };
+    ph.keep = [this](const fw::doc::edit::Result& r, bool caret) { return ApplyPageChange(r, caret); };
+    ph.showPanel = [this](PanelContent* p, bool toggle) { ShowPanel(p, toggle); };
+    ph.headerSection = [this] { return hf_ ? hf_->section : fw::doc::kNone; };
+    ph.formatted = [this](const std::wstring& refused) { AfterFormat({std::nullopt, refused}); };
+    table_ = std::make_unique<DocTable>(*editor_, std::move(th));
+    page_ = std::make_unique<DocPage>(*editor_, std::move(ph));
+    pictures_ = std::make_unique<fw::doc::edit::Pictures>(*editor_);
+    shapes_ = std::make_unique<fw::doc::edit::Shapes>(*editor_);
+    format_->insertPicture = [this] { Execute(CmdInsertPicture); };
+    static constexpr std::pair<int, const wchar_t*> kShapes[] = {
+        {CmdInsertTextBox, L"Text box"}, {CmdInsertRectangle, L"Rectangle"}, {CmdInsertRoundedRectangle, L"Rounded rectangle"},
+        {CmdInsertOval, L"Oval"},        {CmdInsertLine, L"Line"},           {CmdInsertArrow, L"Arrow"},
+        {CmdInsertCallout, L"Callout"},  {CmdWatermarkPanel, L"Watermark…"}};
+    for (const auto& [cmd, label] : kShapes) format_->insertMore.push_back({label, [this, cmd = cmd] { Execute(cmd); }});
+    for (int cmd : DocPage::InsertCommands())
+      format_->insertMore.push_back({page_->Query(cmd).Tooltip(), [this, cmd] { Execute(cmd); }});
+    for (int cmd : FormCommands()) format_->insertMore.push_back({QueryForms(cmd)->label, [this, cmd] { Execute(cmd); }});
+    for (int cmd : {CmdInsertFootnote, CmdInsertEndnote, CmdInsertToc})
+      format_->insertMore.push_back({QueryNotes(cmd)->Tooltip(), [this, cmd] { Execute(cmd); }});
+    DocStyles::Host sh;
+    sh.selection = [this] {
+      return std::make_pair(fw::doc::Pos{anchor_.para, anchor_.offset}, fw::doc::Pos{focus_.para, focus_.offset});
+    };
+    sh.done = [this](const std::wstring& message) { AfterFormat({std::nullopt, message}); };
+    sh.showPanel = [this](PanelContent* p, bool toggle) { ShowPanel(p, toggle); };
+    styles_ = std::make_unique<DocStyles>(*editor_, std::move(sh));
+    for (int cmd : {CmdModifyStyle, CmdNewStyle})
+      format_->styleMore.push_back({styles_->Query(cmd).label, [this, cmd] { Execute(cmd); }});
     const std::vector<uint32_t> main = doc_->StoryParagraphs(doc_->MainStory());
     if (!main.empty()) anchor_ = focus_ = {main.front(), 0};
   }
@@ -272,24 +334,46 @@ void DocView::CollectAnnotations() {
     }
   }
 
-  // Tracked changes in the text (not formatting changes, which show nothing in Simple Markup).
+  // Legacy form fields: shaded gray on screen (not in print), as Word shades them, unless the
+  // document says not to (w:doNotShadeFormData).
+  formShades_.clear();
+  const fw::doc::Part* settings = doc_->FindPart(fw::doc::PartKind::Settings);
+  if (!settings || !fw::doc::Node(&doc_->GetTree(), settings->root).Child(fw::doc::Name("doNotShadeFormData")))
+    for (uint32_t s = 0; s < doc_->Stories().size(); ++s) {
+      if (doc_->Stories()[s].kind == fw::doc::StoryKind::Comment) continue;
+      for (const fw::doc::edit::FormField& f : fw::doc::edit::FormFields(*doc_, s))
+        formShades_.push_back({{f.start.para, f.start.offset}, {f.end.para, f.end.offset}});
+    }
+
+  // Tracked changes in the text; formatting and paragraph marks get only their bar.
   std::vector<std::string_view> authors;
+  allChanges_ = 0;
   for (uint32_t s = 0; s < doc_->Stories().size(); ++s) {
     if (doc_->Stories()[s].kind == fw::doc::StoryKind::Comment) continue;
     for (const auto& r : doc_->Revisions(s)) {
       using Kind = fw::doc::RevisionKind;
-      if (r.kind != Kind::Insertion && r.kind != Kind::Deletion && r.kind != Kind::MoveFrom && r.kind != Kind::MoveTo)
-        continue;
-      if (r.start.para == fw::doc::kNone || r.end.para == fw::doc::kNone) continue;
+      ++allChanges_;
+      const bool text = r.kind == Kind::Insertion || r.kind == Kind::Deletion || r.kind == Kind::MoveFrom ||
+                        r.kind == Kind::MoveTo;
+      const bool barOnly = r.kind == Kind::RunFormat || r.kind == Kind::ParagraphFormat ||
+                           r.kind == Kind::MarkInsertion || r.kind == Kind::MarkDeletion;
+      if ((!text && !barOnly) || r.start.para == fw::doc::kNone || r.end.para == fw::doc::kNone) continue;
       Change ch;
       ch.from = {r.start.para, r.start.offset};
       ch.to = {r.end.para, r.end.offset};
+      if (barOnly && r.kind != Kind::RunFormat)
+        ch.from = {r.start.para, 0}, ch.to = {r.start.para, static_cast<uint32_t>(doc_->Para(r.start.para).text.size())};
       if (ch.to < ch.from) std::swap(ch.from, ch.to);
-      if (ch.from == ch.to) continue;
+      if (ch.from == ch.to && !barOnly) continue;
+      ch.barOnly = barOnly;
       ch.deletion = r.kind == Kind::Deletion || r.kind == Kind::MoveFrom;
       auto who = std::find(authors.begin(), authors.end(), r.author);
       if (who == authors.end()) who = authors.insert(authors.end(), r.author);
       ch.author = static_cast<size_t>(who - authors.begin());
+      if (barOnly) {
+        changes_.push_back(std::move(ch));
+        continue;
+      }
       std::wstring by = r.author.empty() ? std::wstring() : L" by " + Wide(r.author);
       if (ch.deletion) {
         std::wstring gone;
@@ -316,7 +400,7 @@ void DocView::CollectAnnotations() {
 void DocView::VisibleText(uint32_t para, std::wstring& text, std::vector<uint32_t>& map) const {
   const std::u16string& s = doc_->Para(para).text;
   for (const auto& run : doc_->Runs(para)) {
-    if (run.fieldCode || Deleted(run.revision)) continue;
+    if (run.fieldCode || !RevisionShown(run.revision)) continue;
     if (run.run && doc_->ResolvedRun(para, run.run).vanish) continue;
     for (uint32_t i = run.start; i < run.end && i < s.size(); ++i) {
       char16_t c = s[i];
@@ -434,6 +518,7 @@ D2D1_RECT_F DocView::PageRectToScreen(int page, const layout::Rect& rc) const {
 }
 
 void DocView::OnPresentationChanged(bool on) {
+  if (full_.right > full_.left) vp_ = RulerInner(full_, ui_);  // no rulers while presenting (laid out next)
   if (!on) return;
   ClearSearch();
   if (editor_) anchor_ = focus_;  // the caret stays where it was
@@ -449,19 +534,21 @@ void DocView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   D2D1_RECT_F vpr = RectF(vp_);
   c.PushClip(vpr);
   c.Fill(vpr, presentation_ ? Rgb(0x000000) : inverted ? p.docBgInverted : p.docBg);
-  if (!Ready()) {
-    c.PopClip();
-    return;
+  if (Ready()) {
+    StepScroll();
+    int first, last;
+    VisiblePages(first, last);
+    for (int i = first; i <= last; ++i) DrawPage(c, dc, i, inverted);
+    DrawSquiggles(c, first, last);
+    DrawRanges(c, first, last);
+    DrawCellGuide(c, first, last);
+    DrawCaret(c, first, last);
+    DrawTextDrop(c, first, last);
+    if (!presentation_) DrawPictureFrame(c, first, last);
+    if (!presentation_) DrawScrollbars(c);
   }
-  StepScroll();
-  int first, last;
-  VisiblePages(first, last);
-  for (int i = first; i <= last; ++i) DrawPage(c, dc, i, inverted);
-  DrawSquiggles(c, first, last);
-  DrawRanges(c, first, last);
-  DrawCaret(c, first, last);
-  if (!presentation_) DrawScrollbars(c);
   c.PopClip();
+  if (RulerOn()) DrawRulers(c);
 }
 
 void DocView::DrawPage(Canvas& c, ID2D1DeviceContext* dc, int page, bool inverted) {
@@ -484,15 +571,19 @@ void DocView::DrawPage(Canvas& c, ID2D1DeviceContext* dc, int page, bool inverte
       pagination_->Paint(painter, page, drawing);
     }
   }
+  DrawHeaderFooterMode(c, page);  // the part not being edited, dimmed
   c.PopClip();
 }
 
 void DocView::DrawDrawing(draw::Painter& painter, const layout::DrawingBox& box) {
-  if (box.drawing >= drawings_.size()) return;
+  if (box.drawing >= doc_->Drawings().size()) return;
+  if (box.drawing >= drawings_.size()) drawings_.resize(doc_->Drawings().size());  // inserted
   DrawingSlot& slot = drawings_[box.drawing];
   const fw::doc::Drawing& d = doc_->Drawings()[box.drawing];
+  if (slot.tried && slot.version != d.version) slot = DrawingSlot{};  // changed (D3)
   if (!slot.tried) {
     slot.tried = true;
+    slot.version = d.version;
     // The model gives what is inside the w:drawing, w:pict or w:object; wrap it back in one, so
     // fwdraw sees VML shapes beside their shape types.
     const char* wrapper = d.kind == fw::doc::DrawingKind::DrawingML ? "w:drawing"
@@ -540,8 +631,19 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
   // Comments, changes and matches are measured once pagination is done: measuring a range lays
   // out every page up to it, which painting mustn't wait for.
   const bool done = pagination_->Done();
-  // Comments: their text is marked, as Word marks it.
+  // Legacy form fields: gray behind them.
   if (!presentation_) {
+    for (auto& m : formShades_) {
+      if (!m.measured && done) {
+        m.rects = pagination_->Ranges(m.from, m.to);
+        m.measured = true;
+      }
+      fill(m.rects, Alpha(Rgb(0x808080), 0.28f), false);
+    }
+  }
+  // Comments: their text is marked, as Word marks it (not in No markup or Original).
+  const bool markup = !presentation_ && (markup_ == Markup::Simple || markup_ == Markup::All);
+  if (markup) {
     for (auto& cm : comments_) {
       if (!cm.measured && done) {
         cm.rects = pagination_->Ranges(cm.from, cm.to);
@@ -550,9 +652,10 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
       fill(cm.rects, Alpha(Rgb(0xF2C744), 0.30f), false);
     }
   }
-  // Tracked changes: inserted text underlined, a mark where text was deleted, and a bar in the
-  // left margin beside each.
-  if (!presentation_) {
+  // Tracked changes: inserted text underlined, a mark where text was deleted (in All markup, the
+  // deleted text, struck through), and a bar in the left margin beside each.
+  const bool struck = markup_ == Markup::All && MarkupLaidOut();
+  if (markup) {
     const float u = std::max(1.0f, ui_);
     auto bar = [&](int pg, float top, float bottom, D2D1_COLOR_F color) {
       const layout::Page& page = pagination_->GetPage(pg);
@@ -562,11 +665,32 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
     };
     for (auto& ch : changes_) {
       if (!ch.measured && done) {
-        if (ch.deletion) ch.at = pagination_->CaretAt(ch.from);
+        if (ch.deletion && !struck && !ch.barOnly) ch.at = pagination_->CaretAt(ch.from);
         else ch.rects = pagination_->Ranges(ch.from, ch.to);
+        if (ch.barOnly && ch.rects.empty()) ch.at = pagination_->CaretAt(ch.from);  // an empty paragraph
         ch.measured = true;
       }
       const D2D1_COLOR_F color = ChangeColor(ch.author);
+      if (ch.barOnly) {
+        for (const auto& [page, r] : ch.rects)
+          if (static_cast<int>(page) >= first && static_cast<int>(page) <= last && static_cast<int>(page) < pages)
+            bar(static_cast<int>(page), r.top, r.bottom, color);
+        if (ch.at && static_cast<int>(ch.at->page) >= first && static_cast<int>(ch.at->page) <= last &&
+            static_cast<int>(ch.at->page) < pages)
+          bar(static_cast<int>(ch.at->page), ch.at->top, ch.at->bottom, color);
+        continue;
+      }
+      if (ch.deletion && struck) {
+        for (const auto& [page, r] : ch.rects) {
+          const int pg = static_cast<int>(page);
+          if (pg < first || pg > last || pg >= pages) continue;
+          D2D1_RECT_F s = PageRectToScreen(pg, r);
+          const float mid = std::round((s.top + s.bottom) / 2);
+          c.Fill(RectF(s.left, mid, s.right, mid + u), color);
+          bar(pg, r.top, r.bottom, color);
+        }
+        continue;
+      }
       if (ch.deletion) {
         if (!ch.at) continue;
         const int pg = static_cast<int>(ch.at->page);
@@ -594,10 +718,20 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
     }
     fill(m.rects, static_cast<int>(i) == current_ ? p.searchCurrent : p.searchHit, true);
   }
-  if (HasSelection()) {
+  // The selection, like the caret, once its pages are laid out again after a change of the page.
+  if (HasSelection() && !pagination_->LaidOut(std::max(anchor_, focus_))) return;
+  if (HasSelection() && table_) {
+    MeasureSelectedCells(first, last);
+    if (!cellRects_.empty()) {
+      fill(cellRects_, p.selection, false);
+      return;
+    }
+  }
+  // A selected picture has its frame and handles instead (DrawPictureFrame).
+  if (HasSelection() && SelectedPicture() == fw::doc::kNone) {
     TextPos a = std::min(anchor_, focus_), b = std::max(anchor_, focus_);
     if (!(selFrom_ == a) || !(selTo_ == b) || selRevision_ != pagination_->Revision()) {
-      selRects_ = pagination_->Ranges(a, b);
+      selRects_ = pagination_->Ranges(a, b, CaretPage());
       selFrom_ = a;
       selTo_ = b;
       selRevision_ = pagination_->Revision();
@@ -636,6 +770,7 @@ bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
     for (auto& m : matches_) m.measured = false;
     for (auto& cm : comments_) cm.measured = false;
     for (auto& ch : changes_) ch.measured = false;
+    for (auto& m : formShades_) m.measured = false;
     repaint = true;
   }
   if (!noticesShown_ && pagination_->Done()) ShowNotices();
@@ -659,7 +794,7 @@ std::optional<DocView::TextPos> DocView::PosAt(int x, int y, bool nearest) const
   if (page < 0 || placeholder_ || page >= static_cast<int>(pagination_->PageCount())) return std::nullopt;
   float px, py;
   if (!ToPagePoint(page, x, y, px, py)) return std::nullopt;
-  return pagination_->HitTest(page, px, py);
+  return pagination_->HitTest(page, px, py, ClickStories());
 }
 
 DocView::Hit DocView::HitAt(int x, int y) {
@@ -700,7 +835,8 @@ DocView::Hit DocView::HitAt(int x, int y) {
   for (size_t i = 0; i < comments_.size(); ++i)
     if (!(at < comments_[i].from) && at < comments_[i].to) hit.comment = static_cast<int>(i);
   for (size_t i = 0; i < changes_.size(); ++i)
-    if (!changes_[i].deletion && !(at < changes_[i].from) && at < changes_[i].to) hit.change = static_cast<int>(i);
+    if (!changes_[i].deletion && !changes_[i].barOnly && !(at < changes_[i].from) && at < changes_[i].to)
+      hit.change = static_cast<int>(i);
   return hit;
 }
 
@@ -708,13 +844,19 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
   mouseX_ = x;
   mouseY_ = y;
   if (!Ready()) return;
+  if (OnRuler(x, y)) {
+    if (button == 0) RulerMouseDown(x, y);
+    return;
+  }
   BeginPress(x, y);
   if (button == 2) {  // the middle button pans
     drag_ = Drag::Pan;
     return;
   }
   if (ScrollbarMouseDown(x, y, button)) return;
+  if (PictureMouseDown(x, y, button, mods, doubleClick)) return;  // a right click selects it too
   if (button == 1) return;  // a right click keeps the selection for the context menu
+  if (CellMouseDown(x, y, mods)) return;  // a table's border, or the top of its column
   Hit hit = HitAt(x, y);
   if (!hit.link.empty() && !(mods & kModShift)) {
     pendingLink_ = hit.link;
@@ -726,8 +868,50 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
     else NextPage();
     return;
   }
+  // Headers and footers: a double-click edits one in place, and one in the body goes back.
+  if (HeaderFooterClick(x, y, doubleClick)) {
+    host_.ViewInvalidate();
+    return;
+  }
   std::optional<TextPos> pos = PosAt(x, y, false);
   if (!pos && Editing() && PageAtPoint(x, y) >= 0) pos = PosAt(x, y, true);  // in a margin: the nearest place
+  // Beside a table row, in the margin: the row; dragging on, more rows (Word's selection bar).
+  if (auto row = !doubleClick && !(mods & kModShift) ? RowMarginAt(x, y) : std::nullopt; row) {
+    lineDrag_ = LineDrag::Rows;
+    if (SelectLines(*row, *row)) {
+      lineAnchor_ = *row;
+      drag_ = Drag::Select;
+      goalX_ = -1;
+      editor_->BreakTyping();
+      CaretMoved(false);
+      host_.ViewInvalidate();
+      return;
+    }
+    lineDrag_ = LineDrag::None;
+  }
+  // In the margin beside text: the line, and dragging on, more lines; a double-click, the paragraph.
+  if (auto line = !(mods & kModShift) ? LineMarginAt(x, y) : std::nullopt; line) {
+    if (doubleClick) {
+      anchor_ = {line->first.para, 0};
+      focus_ = {line->first.para, static_cast<uint32_t>(doc_->Para(line->first.para).text.size())};
+      drag_ = Drag::None;
+    } else {
+      anchor_ = lineAnchor_ = line->first;
+      focus_ = lineAnchorEnd_ = line->second;
+      lineDrag_ = LineDrag::Lines;
+      drag_ = Drag::Select;
+    }
+    if (Editing()) {
+      goalX_ = -1;
+      editor_->BreakTyping();
+      CaretMoved(false);
+    }
+    host_.ViewInvalidate();
+    return;
+  }
+  // A check box, a list or a placeholder takes the click, even when selected (Tab selects it).
+  if (pos && Editing() && !doubleClick && !(mods & kModShift) && FormClick(*pos, x, y)) return;
+  if (!doubleClick && TextDragDown(x, y, mods, pos)) return;  // pressed on the selection: it may be dragged
   if (pos) {
     const bool triple = !doubleClick && anim::Now() - lastDoubleClick_ < GetDoubleClickTime() &&
                         std::abs(x - lastDoubleX_) + std::abs(y - lastDoubleY_) < 6 * ui_;
@@ -764,10 +948,17 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
   drag_ = Drag::Pan;
 }
 
-void DocView::OnMouseMove(int x, int y, UINT) {
+void DocView::OnMouseMove(int x, int y, UINT mods) {
   mouseX_ = x;
   mouseY_ = y;
   if (!Ready()) return;
+  if (drag_ == Drag::Ruler) {
+    RulerMouseMove(x, y, mods);
+    return;
+  }
+  if (CellMouseMove(x, y) || TextDragMove(x, y)) return;
+  RulerHover(x, y);
+  if (PictureMouseMove(x, y, mods)) return;
   if (ScrollDragMove(x, y)) return;
   if (drag_ == Drag::Link) {
     if (std::abs(x - downX_) + std::abs(y - downY_) > 6 * ui_) drag_ = Drag::Pan;
@@ -776,6 +967,25 @@ void DocView::OnMouseMove(int x, int y, UINT) {
   if (drag_ == Drag::Select) {
     if (y < vp_.top) ScrollBy(0, (y - vp_.top) * 0.5, false);
     else if (y > vp_.bottom) ScrollBy(0, (y - vp_.bottom) * 0.5, false);
+    if (lineDrag_ == LineDrag::Lines) {  // whole lines, from the first one chosen either way
+      auto pos = PosAt(x, y, true);
+      auto line = pos && StoryOf(*pos) == StoryOf(lineAnchor_) ? LineRange(*pos) : std::nullopt;
+      if (!line) return;
+      const TextPos a = line->first < lineAnchor_ ? lineAnchorEnd_ : lineAnchor_;
+      const TextPos f = line->first < lineAnchor_ ? line->first : line->second;
+      if (!(a == anchor_) || !(f == focus_)) {
+        anchor_ = a;
+        focus_ = f;
+        host_.ViewInvalidate();
+      }
+      return;
+    }
+    if (lineDrag_ != LineDrag::None) {
+      const TextPos a = anchor_, f = focus_;
+      const auto pos = lineDrag_ == LineDrag::Columns ? ColumnTopAt(x, y, lineTbl_) : PosAt(x, y, true);
+      if (pos && SelectLines(lineAnchor_, *pos) && (!(a == anchor_) || !(f == focus_))) host_.ViewInvalidate();
+      return;
+    }
     if (auto pos = PosAt(x, y, true); pos && StoryOf(*pos) == StoryOf(anchor_) && !(*pos == focus_)) {
       focus_ = *pos;
       host_.ViewInvalidate();
@@ -785,10 +995,17 @@ void DocView::OnMouseMove(int x, int y, UINT) {
   UpdateScrollbarHover(x, y);
 }
 
-void DocView::OnMouseUp(int x, int y, int, UINT) {
+void DocView::OnMouseUp(int x, int y, int, UINT mods) {
   if (!Ready()) return;
+  if (PictureMouseUp(x, y)) return;
+  if (CellMouseUp() || TextDragUp(mods)) return;
   Drag d = drag_;
   drag_ = Drag::None;
+  lineDrag_ = LineDrag::None;
+  if (d == Drag::Ruler) {
+    RulerMouseUp();
+    return;
+  }
   if (d == Drag::Link) {
     FollowLink(pendingLink_);
   } else if (d == Drag::Select && !Editing() && !HasSelection() && std::abs(x - downX_) + std::abs(y - downY_) < 3) {
@@ -802,16 +1019,32 @@ void DocView::OnMouseUp(int x, int y, int, UINT) {
 
 void DocView::OnMouseLeave() {
   mouseX_ = mouseY_ = -1;
+  rulerHover_ = {};
   ScrollbarMouseLeave();
   host_.ViewInvalidate();
 }
 
 bool DocView::OnKeyDown(UINT vk, UINT mods) {
+  if (vk == VK_ESCAPE && (drag_ == Drag::Ruler || cellDrag_ || textDrag_ != TextDrag::None)) {  // the drag stops, and nothing changes
+    drag_ = Drag::None;
+    rulerDrag_ = {};
+    cellDrag_.reset();
+    textDrag_ = TextDrag::None;
+    host_.ViewInvalidate();
+    return true;
+  }
+  if (PictureKey(vk, mods)) return true;
   if (vk == VK_ESCAPE && format_ && format_->PainterOn()) {
     format_->CancelPainter();
     host_.ViewInvalidate();
     return true;
   }
+  if (vk == VK_ESCAPE && hf_ && !HasSelection()) {
+    LeaveHeaderFooter();
+    return true;
+  }
+  if (Editing() && FormKey(vk, mods)) return true;  // Tab in a protected form, Alt+Down in a list
+  if (vk == VK_TAB && !(mods & (kModCtrl | kModAlt)) && Editing() && table_ && table_->Tab((mods & kModShift) != 0)) return true;
   if (vk == VK_TAB && !(mods & (kModCtrl | kModAlt)) && Editing() && ListTab((mods & kModShift) != 0)) return true;
   if (Editing() && pagination_->PageCount() > 0 && EditKey(vk, mods)) return true;
   if (!Ready() || pagination_->PageCount() == 0) return NavigationKey(vk, mods);
@@ -827,16 +1060,80 @@ HCURSOR DocView::CursorAt(int x, int y) {
   static HCURSOR arrow = LoadCursor(nullptr, IDC_ARROW), ibeam = LoadCursor(nullptr, IDC_IBEAM),
                  hand = LoadCursor(nullptr, IDC_HAND), move = LoadCursor(nullptr, IDC_SIZEALL);
   if (!Ready()) return arrow;
+  if (drag_ == Drag::Ruler || (drag_ == Drag::None && OnRuler(x, y))) return RulerCursor(x, y);
+  if (cellDrag_ || lineDrag_ == LineDrag::Columns) return CellCursor(x, y);
+  if (textDrag_ == TextDrag::Moving) return arrow;
   if (drag_ == Drag::Pan) return move;
-  if (drag_ == Drag::Select) return ibeam;
+  if (drag_ == Drag::Select) return lineDrag_ != LineDrag::None ? arrow : ibeam;
   if (OverScrollbar(x, y)) return arrow;
+  if (HCURSOR c = PictureCursor(x, y)) return c;
+  if (HCURSOR c = CellCursor(x, y)) return c;
   if (!HitAt(x, y).link.empty()) return hand;
   if (presentation_) return arrow;
+  if (RowMarginAt(x, y) || LineMarginAt(x, y)) return arrow;
+  if (Editing() && OverSelection(x, y)) return arrow;  // it can be dragged
   return PosAt(x, y, false) ? ibeam : arrow;
+}
+
+std::optional<std::pair<DocView::TextPos, DocView::TextPos>> DocView::LineRange(TextPos pos) const {
+  auto line = pagination_->LineAt(pos);
+  if (!line) return std::nullopt;
+  // A wrapped line's end is before its last character (where End puts the caret): that's in it too.
+  TextPos end = line->end;
+  if (end.offset < doc_->Para(end.para).text.size()) ++end.offset;
+  return std::make_pair(line->start, end);
+}
+
+std::optional<std::pair<DocView::TextPos, DocView::TextPos>> DocView::LineMarginAt(int x, int y) const {
+  if (placeholder_ || presentation_) return std::nullopt;
+  const int page = PageAtPoint(x, y);
+  float px, py;
+  if (page < 0 || page >= static_cast<int>(pagination_->PageCount()) || !ToPagePoint(page, x, y, px, py))
+    return std::nullopt;
+  // Left of the text area, beside a line: not in a table (RowMarginAt), a text box or a header
+  // that isn't being edited.
+  if (px >= pagination_->GetPage(static_cast<size_t>(page)).body.left - 2) return std::nullopt;
+  auto pos = pagination_->HitTest(static_cast<size_t>(page), px, py, ClickStories());
+  if (!pos || (editor_ && editor_->CellAt({pos->para, pos->offset}))) return std::nullopt;
+  auto line = pagination_->LineAt(*pos);
+  if (!line || line->page != static_cast<size_t>(page) || py < line->box.top || py > line->box.bottom) return std::nullopt;
+  if (doc_->Stories()[doc_->Para(pos->para).story].drawing != fw::doc::kNone) return std::nullopt;
+  return LineRange(*pos);
+}
+
+std::optional<DocView::TextPos> DocView::RowMarginAt(int x, int y) const {
+  // Left of a row's first cell, past its text's indent and the cell's margin: that cell.
+  if (!Editing() || !table_ || placeholder_) return std::nullopt;
+  const int page = PageAtPoint(x, y);
+  float px, py;
+  if (page < 0 || page >= static_cast<int>(pagination_->PageCount()) || !ToPagePoint(page, x, y, px, py))
+    return std::nullopt;
+  auto pos = pagination_->HitTest(page, px, py);
+  if (!pos) return std::nullopt;
+  auto cell = editor_->CellAt({pos->para, pos->offset});
+  if (!cell || cell->col != 0) return std::nullopt;
+  auto line = pagination_->LineAt(*pos);
+  if (!line || line->page != static_cast<size_t>(page) || py < line->box.top - 12 || py > line->box.bottom + 12)
+    return std::nullopt;
+  const float indent = std::max(0.0f, doc_->ResolvedPara(pos->para).indStart.Value() / 20.0f);
+  if (px >= line->box.left - indent - 8) return std::nullopt;
+  return TextPos{cell->start.para, cell->start.offset};
+}
+
+bool DocView::SelectLines(TextPos from, TextPos to) {
+  using Extent = fw::doc::edit::Editor::Extent;
+  auto corners = editor_->Grow({from.para, from.offset}, {to.para, to.offset},
+                               lineDrag_ == LineDrag::Columns ? Extent::Columns : Extent::Rows);
+  if (!corners) return false;
+  const TextPos a{corners->first.para, corners->first.offset}, b{corners->second.para, corners->second.offset};
+  anchor_ = a;
+  focus_ = b;
+  return true;
 }
 
 std::wstring DocView::TooltipAt(int x, int y) {
   if (!Ready() || drag_ != Drag::None) return {};
+  if (OnRuler(x, y)) return RulerTooltip(x, y);
   Hit hit = HitAt(x, y);
   if (!hit.link.empty()) {
     if (hit.link[0] == L'#') return L"Go to “" + hit.link.substr(1) + L"”";
@@ -851,7 +1148,7 @@ std::wstring DocView::TooltipAt(int x, int y) {
   float px, py;
   if (page >= 0 && ToPagePoint(page, x, y, px, py)) {
     for (const auto& ch : changes_) {
-      if (ch.deletion && ch.at && static_cast<int>(ch.at->page) == page && std::abs(px - ch.at->x) < 3 &&
+      if (ch.deletion && !ch.barOnly && ch.at && static_cast<int>(ch.at->page) == page && std::abs(px - ch.at->x) < 3 &&
           py >= ch.at->top && py < ch.at->bottom)
         return ch.text;
     }
@@ -925,9 +1222,14 @@ void DocView::Copy() {
 }
 
 bool DocView::PutOnClipboard() {
+  if (SelectedPicture() != fw::doc::kNone && CopyPicture()) return true;
   const fw::doc::Pos a{std::min(anchor_, focus_).para, std::min(anchor_, focus_).offset};
   const fw::doc::Pos b{std::max(anchor_, focus_).para, std::max(anchor_, focus_).offset};
-  const fw::doc::edit::Clip clip = fw::doc::edit::CopyClip(*doc_, a, b, clipSource_);
+  // A selection across cells copies those cells, as a table.
+  auto cells = table_ && table_->SelectedCells()
+                   ? fw::doc::edit::CopyCells(*editor_, {anchor_.para, anchor_.offset}, {focus_.para, focus_.offset}, clipSource_)
+                   : std::nullopt;
+  const fw::doc::edit::Clip clip = cells ? std::move(*cells) : fw::doc::edit::CopyClip(*doc_, a, b, clipSource_);
   const std::u16string text = clip.PlainText();
   if (text.empty()) return false;
   util::SetClipboardText(std::wstring(text.begin(), text.end()), fw::doc::edit::ToRtf(clip), fw::doc::edit::ToHtml(clip));
@@ -941,7 +1243,8 @@ std::wstring DocView::SelectedText() {
 
 void DocView::SelectAll() {
   if (!Ready()) return;
-  std::vector<uint32_t> paras = doc_->StoryParagraphs(doc_->MainStory());
+  // The header or footer being edited, else the body.
+  std::vector<uint32_t> paras = doc_->StoryParagraphs(hf_ ? hf_->story : doc_->MainStory());
   if (paras.empty()) return;
   anchor_ = {paras.front(), 0};
   focus_ = {paras.back(), static_cast<uint32_t>(doc_->Para(paras.back()).text.size())};
@@ -951,11 +1254,13 @@ void DocView::SelectAll() {
 // ---------------------------------------------------------------------------
 // Find
 
-void DocView::StartSearch(const std::wstring& query, bool matchCase) {
+void DocView::StartSearch(const std::wstring& query, bool matchCase, bool wholeWords) {
   if (!Ready()) return;
   ClearSearch();
   query_ = query;
   matchCase_ = matchCase;
+  wholeWords_ = wholeWords;
+  if (navPanel_ && host_.ViewShownPanel() == navPanel_.get()) navPanel_->ShowResults(true);
   if (query.empty()) return;
   auto lower = [](std::wstring s) {
     if (!s.empty())
@@ -967,7 +1272,8 @@ void DocView::StartSearch(const std::wstring& query, bool matchCase) {
   // The main text first, then headers, footers, notes and text boxes, as Word searches them.
   std::vector<uint32_t> stories{doc_->MainStory()};
   for (uint32_t s = 0; s < doc_->Stories().size(); ++s)
-    if (s != doc_->MainStory() && doc_->Stories()[s].kind != fw::doc::StoryKind::Comment) stories.push_back(s);
+    if (s != doc_->MainStory() && doc_->Stories()[s].kind != fw::doc::StoryKind::Comment && doc_->StoryInDocument(s))
+      stories.push_back(s);
   for (uint32_t story : stories) {
     for (uint32_t p : doc_->StoryParagraphs(story)) {
       std::wstring t;
@@ -975,7 +1281,13 @@ void DocView::StartSearch(const std::wstring& query, bool matchCase) {
       VisibleText(p, t, map);
       if (t.size() < q.size()) continue;
       const std::wstring hay = matchCase ? t : lower(t);
+      // Whole words: no letter, digit or underscore just before or after.
+      auto word = [&](size_t i) { return i < t.size() && (IsCharAlphaNumericW(t[i]) || t[i] == L'_'); };
       for (size_t at = hay.find(q); at != std::wstring::npos; at = hay.find(q, at + q.size())) {
+        if (wholeWords && ((at > 0 && word(at - 1)) || word(at + q.size()))) {
+          at = at + 1 - q.size();  // and on from the next character
+          continue;
+        }
         Match m;
         m.from = {p, map[at]};
         m.to = {p, map[at + q.size() - 1] + 1};
@@ -1041,6 +1353,32 @@ SaveFormat DocView::SaveAsFormat() const {
   if (fw::EndsWithNoCase(path_, L".dotx")) return {L"Word template", L"*.dotx", L"dotx"};
   if (fw::EndsWithNoCase(path_, L".dotm")) return {L"Word macro-enabled template", L"*.dotm", L"dotm"};
   return {L"Word document", L"*.docx", L"docx"};
+}
+
+// Word's other types, as copies (milestone D4).
+std::vector<SaveFormat> DocView::CopyFormats() const {
+  return {{L"Rich Text Format", L"*.rtf", L"rtf"},
+          {L"Plain text (UTF-8)", L"*.txt", L"txt"},
+          {L"Plain text (UTF-16)", L"*.txt", L"txt"}};
+}
+
+bool DocView::SaveCopy(const std::wstring& path, size_t format, std::wstring& error) {
+  if (!doc_ || format > 2) return false;
+  const std::wstring name = fw::FileNameOf(path);
+  // A copy never replaces the document it is a copy of.
+  if (!path_.empty() && fw::EqualsNoCase(util::FullPath(path), util::FullPath(path_))) {
+    error = name + L" is this document's own file. Choose another name for the copy.";
+    return false;
+  }
+  namespace edit = fw::doc::edit;
+  const std::string bytes = format == 0   ? edit::RtfFile(*doc_)
+                            : format == 1 ? edit::TextFile(*doc_, edit::TextEncoding::Utf8)
+                                          : edit::TextFile(*doc_, edit::TextEncoding::Utf16);
+  if (!util::WriteFileAtomic(path, bytes)) {
+    error = name + L" couldn't be saved. It may be open in another program, or the folder can't be written to.";
+    return false;
+  }
+  return true;
 }
 
 bool DocView::Save(const std::wstring& path, std::wstring& error) {
@@ -1208,12 +1546,36 @@ constexpr CommandName kCommandNames[] = {
     {CmdCut, L"Cut", L"Ctrl+X"},
     {CmdCopy, L"Copy", L"Ctrl+C"},
     {CmdPaste, L"Paste", L"Ctrl+V"},
+    {CmdPasteMerge, L"Paste, merging formatting", L""},
     {CmdUndo, L"Undo", L"Ctrl+Z"},
     {CmdRedo, L"Redo", L"Ctrl+Y"},
     {CmdSelectAll, L"Select all", L"Ctrl+A"},
     {CmdSpelling, L"Spelling: next error", L"F7"},
     {CmdWordCount, L"Word count", L"Ctrl+Shift+G"},
     {CmdLanguage, L"Language…", L""},
+    {CmdInsertPicture, L"Insert picture…", L""},
+    {CmdPictureInline, L"Picture: in line with text", L""},
+    {CmdPictureSquare, L"Picture: square wrapping", L""},
+    {CmdPictureTight, L"Picture: tight wrapping", L""},
+    {CmdPictureTopBottom, L"Picture: top and bottom", L""},
+    {CmdPictureBehind, L"Picture: behind text", L""},
+    {CmdPictureInFront, L"Picture: in front of text", L""},
+    {CmdPictureCrop, L"Crop picture", L""},
+    {CmdPictureRotate, L"Rotate picture 90°", L""},
+    {CmdPictureReset, L"Reset picture size", L""},
+    {CmdPicturePanel, L"Picture size, rotation and alt text…", L""},
+    {CmdInsertTextBox, L"Insert text box", L""},
+    {CmdInsertRectangle, L"Insert rectangle", L""},
+    {CmdInsertRoundedRectangle, L"Insert rounded rectangle", L""},
+    {CmdInsertOval, L"Insert oval", L""},
+    {CmdInsertLine, L"Insert line", L""},
+    {CmdInsertArrow, L"Insert arrow", L""},
+    {CmdInsertCallout, L"Insert callout", L""},
+    {CmdShapeAddText, L"Add text to shape", L""},
+    {CmdShapeEditText, L"Edit shape text", L""},
+    {CmdShapePanel, L"Shape wrap, size, fill and outline…", L""},
+    {CmdWatermarkPanel, L"Watermark…", L""},
+    {CmdWatermarkRemove, L"Remove watermark", L""},
 };
 
 }  // namespace
@@ -1248,18 +1610,40 @@ int DocView::ShortcutFor(UINT vk, UINT mods) const {
   // Word's keys first in a document being edited: Ctrl+1 is single spacing there, not actual size.
   if (format_)
     if (int cmd = DocFormat::Shortcut(vk, mods)) return cmd;
+  if ((mods & kModCtrl) && !(mods & kModAlt)) {
+    const bool shift = (mods & kModShift) != 0;
+    if (!shift && vk == 'K' && format_) return CmdInsertLink;
+    if (shift && vk == '8') return CmdShowMarks;
+    if (shift && vk == VK_F5 && format_) return CmdBookmark;
+    if (shift && vk == 'E' && format_) return CmdTrackChanges;
+  }
+  if ((mods & kModCtrl) && (mods & kModAlt) && !(mods & kModShift) && vk == 'M' && format_) return CmdNewComment;
+  if (page_)
+    if (int cmd = DocPage::Shortcut(vk, mods)) return cmd;
+  if (format_)
+    if (int cmd = ShortcutNotes(vk, mods)) return cmd;
   return Shortcut(vk, mods);
 }
 
 CommandState DocView::QueryCommand(int cmd) {
   if (format_ && DocFormat::Owns(cmd)) return format_->Query(cmd);
+  if (auto d3 = QueryD3(cmd)) return *d3;
+  if (auto forms = QueryForms(cmd)) return *forms;
+  if (auto d4 = QueryD4(cmd)) return *d4;
+  if (auto notes = QueryNotes(cmd)) return *notes;
+  if (table_ && DocTable::Owns(cmd)) return table_->Query(cmd);
+  if (page_ && DocPage::Owns(cmd)) return page_->Query(cmd);
+  if (styles_ && DocStyles::Owns(cmd)) return styles_->Query(cmd);
   CommandState s;
+  if (auto picture = QueryPicture(cmd)) s = *picture;
+  if (auto shape = QueryShape(cmd)) s = *shape;
   switch (cmd) {
     case CmdSave: s = {Ready() && (Modified() || path_.empty()), false}; break;
     case CmdPrint: s = {Ready(), false}; break;
     case CmdCopy: s = {Ready() && HasSelection(), false}; break;
     case CmdCut: s = {Editing() && HasSelection(), false}; break;
-    case CmdPaste: s = {Editing() && IsClipboardFormatAvailable(CF_UNICODETEXT), false}; break;
+    case CmdPaste: s = {Editing() && (IsClipboardFormatAvailable(CF_UNICODETEXT) || HasPictureOnClipboard()), false}; break;
+    case CmdPasteMerge: s = {Editing() && IsClipboardFormatAvailable(CF_UNICODETEXT), false}; break;
     case CmdUndo: s = {Editing() && editor_->CanUndo(), false}; break;
     case CmdRedo: s = {Editing() && editor_->CanRedo(), false}; break;
     case CmdSelectAll: s = {Ready(), false}; break;
@@ -1273,7 +1657,10 @@ CommandState DocView::QueryCommand(int cmd) {
     case CmdSelectAllOnPage:
       s.visible = false;
       break;
-    default: s = PagedView::QueryCommand(cmd); break;
+    default:
+      if ((cmd < CmdInsertPicture || cmd > CmdPicturePanel) && (cmd < CmdInsertTextBox || cmd > CmdWatermarkRemove))
+        s = PagedView::QueryCommand(cmd);
+      break;
   }
   for (const CommandName& n : kCommandNames) {
     if (n.cmd == cmd) {
@@ -1281,9 +1668,11 @@ CommandState DocView::QueryCommand(int cmd) {
       s.shortcut = n.keys;
     }
   }
-  // Word's keys win in a document being edited: Ctrl+=, Ctrl+0, Ctrl+1 and Ctrl+2 format there.
+  // Word's keys win in a document being edited: Ctrl+=, Ctrl+0, Ctrl+1 and Ctrl+2 format there, and
+  // Ctrl+- is an optional hyphen (Ctrl+numpad minus still zooms out).
   if (format_ && (cmd == CmdZoomIn || cmd == CmdZoomAuto || cmd == CmdZoomActual || cmd == CmdZoomFitPage))
     s.shortcut.clear();
+  if (page_ && cmd == CmdZoomOut) s.shortcut = L"Ctrl+Num −";
   // "Undo typing", "Redo new paragraph".
   // (The names are copies: one each, so their iterators are of the same string.)
   if ((cmd == CmdUndo || cmd == CmdRedo) && s.enabled) {
@@ -1296,9 +1685,29 @@ CommandState DocView::QueryCommand(int cmd) {
 std::vector<int> DocView::Commands() {
   std::vector<int> ids;
   for (const CommandName& n : kCommandNames)
-    if (editor_ || (n.cmd != CmdCut && n.cmd != CmdPaste && n.cmd != CmdUndo && n.cmd != CmdRedo)) ids.push_back(n.cmd);
+    if (editor_ || (n.cmd != CmdCut && n.cmd != CmdPaste && n.cmd != CmdPasteMerge && n.cmd != CmdUndo && n.cmd != CmdRedo))
+      ids.push_back(n.cmd);
   if (format_)
     for (int cmd : DocFormat::CommandIds()) ids.push_back(cmd);
+  for (int cmd : {CmdInsertLink, CmdRemoveLink, CmdOpenLink, CmdBookmark, CmdEditHeader, CmdEditFooter,
+                  CmdCloseHeaderFooter, CmdDifferentFirstPage, CmdDifferentOddEven, CmdLinkToPrevious, CmdPageNumber,
+                  CmdNavigationPane, CmdShowMarks})
+    if (format_ || cmd == CmdNavigationPane || cmd == CmdShowMarks || cmd == CmdOpenLink) ids.push_back(cmd);
+  for (int cmd : {CmdReviewPane, CmdNewComment, CmdTrackChanges, CmdAcceptChange, CmdRejectChange, CmdAcceptAll,
+                  CmdRejectAll, CmdNextChange, CmdPrevChange, CmdMarkupSimple, CmdMarkupAll, CmdMarkupNone,
+                  CmdMarkupOriginal, CmdReviewerName})
+    if (format_ || cmd == CmdReviewPane || cmd == CmdNextChange || cmd == CmdPrevChange || cmd >= CmdMarkupSimple)
+      ids.push_back(cmd);
+  if (table_)
+    for (int cmd : DocTable::CommandIds()) ids.push_back(cmd);
+  if (page_)
+    for (int cmd : DocPage::CommandIds()) ids.push_back(cmd);
+  if (format_)
+    for (int cmd : CommandsNotes()) ids.push_back(cmd);
+  if (styles_)
+    for (int cmd : DocStyles::CommandIds()) ids.push_back(cmd);
+  if (format_)
+    for (int cmd : FormCommands()) ids.push_back(cmd);
   return ids;
 }
 
@@ -1309,11 +1718,30 @@ bool DocView::Execute(int cmd) {
     else format_->Execute(cmd);
     return true;
   }
+  if (table_ && DocTable::Owns(cmd)) {
+    table_->Execute(cmd);
+    return true;
+  }
+  if (page_ && DocPage::Owns(cmd)) {
+    page_->Execute(cmd);
+    return true;
+  }
+  if (styles_ && DocStyles::Owns(cmd)) {
+    styles_->Execute(cmd);
+    return true;
+  }
   if (ExecuteProof(cmd)) return true;
+  if (ExecuteD3(cmd)) return true;
+  if (ExecuteD4(cmd)) return true;
+  if (ExecuteNotes(cmd)) return true;
+  if (ExecutePicture(cmd)) return true;
+  if (ExecuteForms(cmd)) return true;
+  if (ExecuteShape(cmd)) return true;
   switch (cmd) {
     case CmdCopy: Copy(); return true;
     case CmdCut: Cut(); return true;
     case CmdPaste: Paste(); return true;
+    case CmdPasteMerge: Paste(true, true); return true;
     case CmdUndo: Undo(); return true;
     case CmdRedo: Redo(); return true;
     case CmdSelectAll: SelectAll(); return true;
@@ -1356,7 +1784,14 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
     m.left.push_back(undo);
     m.left.push_back(query(CmdRedo, icon::Redo, 7));
     format_->AddToolbar(m);
+    AddD3Toolbar(m);
+    AddD4Toolbar(m);
+    table_->AddToolbar(m);
+    page_->AddToolbar(m);
+    AddPictureToolbar(m);
   }
+  SyncPicturePanel();
+  SyncShapePanels();
 
   m.pager = !Editing();  // when editing, the status bar has the page and the zoom
   m.page = currentPage_;
@@ -1387,12 +1822,23 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
 void DocView::FillContextMenu(HMENU m, int x, int y) {
   using menu::AppendItem;
   using menu::AppendSeparator;
+  if (styles_ && OnRuler(x, y)) {  // the ruler's own menu
+    FillRulerMenu(m, x, y);
+    return;
+  }
   FillSpellingMenu(m, x, y);  // a spelling error's suggestions first, as Word has them
+  FillD3Menu(m, x, y);        // then the link under the caret
+  FillD4Menu(m);              // the change there, and a new comment
+  FillNotesMenu(m);           // and the table of contents
+  FillPictureMenu(m);         // and a selected picture's
   if (Editing()) {
+    table_->FillContextMenu(m);
     AppendItem(m, CmdCut, L"Cut\tCtrl+X", HasSelection());
     AppendItem(m, CmdCopy, L"Copy\tCtrl+C", HasSelection());
-    AppendItem(m, CmdPaste, L"Paste\tCtrl+V", IsClipboardFormatAvailable(CF_UNICODETEXT) != FALSE);
+    AppendItem(m, CmdPaste, L"Paste\tCtrl+V", QueryCommand(CmdPaste).enabled);
+    AppendItem(m, CmdPasteMerge, L"Paste, merging formatting", QueryCommand(CmdPasteMerge).enabled);
     AppendSeparator(m);
+    AppendItem(m, CmdParagraph, L"Paragraph…", QueryCommand(CmdParagraph).enabled);
     HMENU language = CreatePopupMenu();
     FillLanguageMenu(language);
     menu::AppendSubmenu(m, language, L"Language", GetMenuItemCount(language) > 0);
@@ -1404,7 +1850,7 @@ void DocView::FillContextMenu(HMENU m, int x, int y) {
   AppendItem(m, CmdSelectAll, L"Select all\tCtrl+A");
   AppendSeparator(m);
   AppendItem(m, CmdZoomIn, format_ ? L"Zoom in" : L"Zoom in\tCtrl+=");
-  AppendItem(m, CmdZoomOut, L"Zoom out\tCtrl+−");
+  AppendItem(m, CmdZoomOut, page_ ? L"Zoom out\tCtrl+Num −" : L"Zoom out\tCtrl+−");
   AppendItem(m, CmdZoomFitWidth, L"Fit width\tCtrl+3");
   AppendItem(m, CmdZoomFitPage, format_ ? L"Fit page" : L"Fit page\tCtrl+2");
   AppendSeparator(m);
@@ -1448,10 +1894,11 @@ DocFormat::Target DocView::FormatTarget() const {
 }
 
 void DocView::AfterFormat(const DocFormat::Done& done) {
+  SyncFile();  // a style or list change may be a group of steps
   // OnEdited has told the layout what changed: the caret's page is laid out again now.
   if (done.caret) anchor_ = focus_ = {done.caret->para, done.caret->offset};
   goalX_ = -1;
-  if (auto c = pagination_->CaretAt(focus_)) pagination_->LayOutPages(c->page + 2);
+  if (auto c = pagination_->CaretAt(focus_, CaretPage())) pagination_->LayOutPages(c->page + 2);
   TakeNewPages();
   CaretMoved(done.caret.has_value());
   if (!done.message.empty()) host_.ViewMessage(BannerKind::Info, done.message);

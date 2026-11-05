@@ -57,7 +57,7 @@ Counts CountDocument(const Document& doc, bool notesAndBoxes) {
     const StoryKind k = doc.Stories()[s].kind;
     const bool counted = k == StoryKind::Main ||
                          (notesAndBoxes && (k == StoryKind::Footnote || k == StoryKind::Endnote || k == StoryKind::TextBox));
-    if (!counted) continue;
+    if (!counted || !doc.StoryInDocument(s)) continue;
     for (uint32_t p : doc.StoryParagraphs(s)) total += CountParagraph(doc, p);
   }
   return total;

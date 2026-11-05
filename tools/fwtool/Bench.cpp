@@ -112,6 +112,9 @@ std::string Pad(const std::string& s, size_t width, bool right = true) {
 // fwtool bench --typing: keystroke to screen, plan §11: under 16 ms typical and 50 ms at worst in
 // a 300-page document. Typing is the median of letters and Backspaces; the worst includes Enter.
 constexpr double kTypingBudget = 16, kTypingWorstBudget = 50;
+// A page setup change (D3): the page on screen as fast as a 300-page document's first page, and
+// every page laid out again as fast as the whole of it (plan §11: 700 ms and 3 s).
+constexpr double kPageBudget = 700, kPageAllBudget = 3000;
 
 double Quantile(std::vector<double> v, double q) {
   if (v.empty()) return -1;
@@ -126,8 +129,8 @@ int RunTypingBench(const std::vector<std::filesystem::path>& files, const Option
               runs, runs == 1 ? "" : "s", kTypingBudget, kTypingWorstBudget);
   size_t width = 8;
   for (const auto& f : files) width = std::max(width, fw::Utf8ToWide(Display(f)).size());
-  std::printf("%s %5s  %-6s %5s %7s %7s %7s %7s %7s\n", Pad("Document", width, false).c_str(), "pages", "where", "keys",
-              "median", "p95", "worst", "Enter", "format");
+  std::printf("%s %5s  %-6s %5s %7s %7s %7s %7s %7s %7s %7s\n", Pad("Document", width, false).c_str(), "pages", "where",
+              "keys", "median", "p95", "worst", "Enter", "format", "page", "all");
   std::string json = "{\n  \"format\": \"featherweight-typing-bench\",\n  \"version\": 1,\n  \"runs\": " +
                      std::to_string(runs) + ",\n  \"files\": [";
   int failed = 0, over = 0;
@@ -148,6 +151,8 @@ int RunTypingBench(const std::vector<std::filesystem::path>& files, const Option
         it->backspace.insert(it->backspace.end(), p.backspace.begin(), p.backspace.end());
         it->enter.insert(it->enter.end(), p.enter.begin(), p.enter.end());
         it->format.insert(it->format.end(), p.format.begin(), p.format.end());
+        it->page.insert(it->page.end(), p.page.begin(), p.page.end());
+        it->pageAll.insert(it->pageAll.end(), p.pageAll.begin(), p.pageAll.end());
       }
     }
     const std::string name = Display(files[i]);
@@ -156,7 +161,7 @@ int RunTypingBench(const std::vector<std::filesystem::path>& files, const Option
       ++failed;
       continue;
     }
-    std::vector<double> keys, everything;
+    std::vector<double> keys, everything, pageShown, pageAll;
     json += std::string(i ? ",\n" : "\n") + "    {\"document\": \"" + fw::WideToUtf8(files[i].generic_wstring()) +
             "\", \"pages\": " + std::to_string(pages) + ", \"places\": [";
     for (size_t k = 0; k < all.size(); ++k) {
@@ -168,19 +173,25 @@ int RunTypingBench(const std::vector<std::filesystem::path>& files, const Option
       everything.insert(everything.end(), p.enter.begin(), p.enter.end());
       // Formatting is a keystroke too (Ctrl+B): its worst counts against the same budget.
       everything.insert(everything.end(), p.format.begin(), p.format.end());
+      pageShown.insert(pageShown.end(), p.page.begin(), p.page.end());
+      pageAll.insert(pageAll.end(), p.pageAll.begin(), p.pageAll.end());
       const double worstKey = Quantile(v, 1), enter = Quantile(p.enter, 1), format = Quantile(p.format, 1);
-      std::printf("%s %5s  %-6s %5zu %7s %7s %7s %7s %7s\n", Pad(k ? "" : name, width, false).c_str(),
+      const double page = Quantile(p.page, 1), pageEvery = Quantile(p.pageAll, 1);
+      std::printf("%s %5s  %-6s %5zu %7s %7s %7s %7s %7s %7s %7s\n", Pad(k ? "" : name, width, false).c_str(),
                   k ? "" : std::to_string(pages).c_str(), p.where.c_str(), v.size(), Ms(Quantile(v, 0.5)).c_str(),
-                  Ms(Quantile(v, 0.95)).c_str(), Ms(worstKey).c_str(), Ms(enter).c_str(), Ms(format).c_str());
+                  Ms(Quantile(v, 0.95)).c_str(), Ms(worstKey).c_str(), Ms(enter).c_str(), Ms(format).c_str(),
+                  Ms(page).c_str(), Ms(pageEvery).c_str());
       json += std::string(k ? ", " : "") + "{\"where\": \"" + p.where + "\", \"keys\": " + std::to_string(v.size()) +
               ", \"medianMs\": " + Ms(Quantile(v, 0.5)) + ", \"p95Ms\": " + Ms(Quantile(v, 0.95)) +
-              ", \"worstMs\": " + Ms(worstKey) + ", \"enterMs\": " + Ms(enter) + ", \"formatMs\": " + Ms(format) + "}";
+              ", \"worstMs\": " + Ms(worstKey) + ", \"enterMs\": " + Ms(enter) + ", \"formatMs\": " + Ms(format) + ", \"pageMs\": " + Ms(page) +
+              ", \"pageAllMs\": " + Ms(pageEvery) + "}";
     }
     const double typical = Quantile(keys, 0.5), worst = Quantile(everything, 1);
-    const bool missed = typical >= kTypingBudget || worst >= kTypingWorstBudget;
+    const double pageWorst = Quantile(pageShown, 1), pageAllWorst = Quantile(pageAll, 1);
+    const bool missed = typical >= kTypingBudget || worst >= kTypingWorstBudget || pageWorst >= kPageBudget || pageAllWorst >= kPageAllBudget;
     if (missed) ++over;
-    std::printf("%s %5s  typical %s, worst %s: %s\n", Pad("", width, false).c_str(), "", Ms(typical).c_str(),
-                Ms(worst).c_str(), missed ? "MISSED" : "met");
+    std::printf("%s %5s  typical %s, worst %s, page setup %s (all pages %s): %s\n", Pad("", width, false).c_str(), "",
+                Ms(typical).c_str(), Ms(worst).c_str(), Ms(pageWorst).c_str(), Ms(pageAllWorst).c_str(), missed ? "MISSED" : "met");
     json += "], \"typicalMs\": " + Ms(typical) + ", \"worstMs\": " + Ms(worst) + "}";
   }
   json += "\n  ]\n}\n";

@@ -530,7 +530,17 @@ std::shared_ptr<const Bitmap> Image::Decode(int width, int height) const {
   if (scale && !scaleFirst && !scaled(source.Get())) return nullptr;
   std::vector<uint8_t> px(static_cast<size_t>(width) * height * 4);
   if (FAILED(source->CopyPixels(nullptr, width * 4, static_cast<UINT>(px.size()), px.data()))) return nullptr;
-  return std::make_shared<Bitmap>(width, height, std::move(px));
+  auto bitmap = std::make_shared<Bitmap>(width, height, std::move(px));
+  if (format_ == ImageFormat::Jpeg) bitmap->SetJpeg(weak_from_this());  // PDF export embeds the file as it is
+  return bitmap;
+}
+
+bool Image::Encoded(std::vector<uint8_t>& bytes) const {
+  if (!reader_) {
+    bytes = bytes_;
+    return !bytes.empty();
+  }
+  return reader_(bytes);
 }
 
 std::shared_ptr<const Bitmap> RasterizeVectorImage(const VectorImage& image, int width, int height) {

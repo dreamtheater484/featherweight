@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "doc/model/Internal.h"
 #include "doc/model/Utf.h"
@@ -45,6 +46,20 @@ const Part* Document::FindPart(PartKind kind) const {
 
 bool Document::Editable() const {
   return std::all_of(parts_.begin(), parts_.end(), [](const Part& p) { return p.Editable(); });
+}
+
+bool Document::StoryInDocument(uint32_t story) const {
+  // Up through text boxes in text boxes, to a story that isn't one.
+  for (int depth = 0; depth < 32; ++depth) {
+    if (story >= stories_.size()) return false;
+    const Story& s = stories_[story];
+    if (s.kind != StoryKind::TextBox || s.drawing == kNone) return true;
+    if (s.drawing >= drawings_.size()) return false;
+    const Pos at = drawings_[s.drawing].pos;
+    if (at.para >= paras_.size()) return false;
+    story = paras_[at.para].story;
+  }
+  return false;
 }
 
 uint32_t Document::NoteStory(StoryKind kind, std::string_view id) const {
@@ -632,8 +647,12 @@ std::vector<Field> Document::Fields(uint32_t story) const {
 std::vector<CommentInfo> Document::Comments() const {
   std::vector<CommentInfo> out;
   std::unordered_map<std::string_view, size_t> byId;
+  // The comments in the comments part: one deleted (or added and undone) keeps its story, out of it.
+  std::unordered_set<ElemId> linked;
+  if (const Part* part = FindPart(PartKind::Comments))
+    for (ElemId c = tree_.elems[part->root].first; c != kNoElem; c = tree_.elems[c].next) linked.insert(c);
   for (uint32_t s = 0; s < stories_.size(); ++s) {
-    if (stories_[s].kind != StoryKind::Comment) continue;
+    if (stories_[s].kind != StoryKind::Comment || !linked.count(stories_[s].root)) continue;
     Node root(&tree_, stories_[s].root);
     CommentInfo c;
     c.story = s;
@@ -834,7 +853,7 @@ size_t Document::RenameInModel(pkg::RefKind kind, std::string_view from, std::st
     }
   }
   if (changed) {
-    caches_ = std::make_unique<Caches>();
+    ResetCaches();
     BuildIndexes();
   }
   return changed;
@@ -871,9 +890,10 @@ void Document::BuildIndexes() {
   Caches& c = *caches_;
   const Schema& sc = Schema::Get();
 
-  // Notes and comments by id.
+  // Notes and comments by id (a note deleted with its reference has no root, D4).
   for (uint32_t s = 0; s < stories_.size(); ++s) {
     const Story& st = stories_[s];
+    if (st.root == kNoElem) continue;
     if (st.kind == StoryKind::Footnote) c.footnoteStory.emplace(st.id, s);
     else if (st.kind == StoryKind::Endnote) c.endnoteStory.emplace(st.id, s);
     else if (st.kind == StoryKind::Comment) c.commentStory.emplace(st.id, s);
@@ -1062,6 +1082,15 @@ void Document::BuildIndexes() {
     }
   }
 
+  BuildSections();
+}
+
+void Document::ResetCaches() {
+  caches_ = std::make_unique<Caches>();
+  ++cacheGeneration_;
+}
+
+void Document::BuildSections() {
   // Sections: body-level paragraphs whose properties hold a w:sectPr, then the body's own.
   sections_.clear();
   if (main_ != kNone) {

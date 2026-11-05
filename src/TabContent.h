@@ -42,11 +42,18 @@ class ViewHost {
   // Word documents: spelling checked as you type, and AutoCorrect (Settings, [General]).
   virtual bool ViewSpelling() { return true; }
   virtual bool ViewAutoCorrect() { return true; }
+  virtual bool ViewRuler() { return false; }
+  // Word documents: the name changes and comments are made with (empty: Windows'), set in ⋯.
+  virtual std::wstring ViewReviewer() { return {}; }
+  virtual void ViewSetReviewer(const std::wstring& /*name*/) {}
   virtual void ViewPasswordAccepted(TabContent* view) = 0;
   // Opens a side panel with the tab's content in place of whatever was open (null closes it).
   virtual void ViewShowPanel(PanelContent* content) = 0;
   // The content of the open side panel, or null.
   virtual PanelContent* ViewShownPanel() = 0;
+  // The keyboard back to the page, from the toolbar or a side panel: after a panel's Insert table,
+  // typing goes into the new table.
+  virtual void ViewFocusPage() {}
 };
 
 // The window's own state, for the parts of a tab's toolbar that show it.
@@ -157,7 +164,8 @@ class TabContent {
   virtual void BuildStatusBar(StatusBarModel& /*m*/) {}
 
   // ---- Find ----
-  virtual void StartSearch(const std::wstring& query, bool matchCase) = 0;
+  // `wholeWords`: only matches with no letter or digit just before or after.
+  virtual void StartSearch(const std::wstring& query, bool matchCase, bool wholeWords) = 0;
   virtual void ClearSearch() = 0;
   virtual void SearchStep(bool forward) = 0;
   virtual int SearchCount() const = 0;
@@ -169,6 +177,10 @@ class TabContent {
   // Saves to `path`: the file itself, or another (Save As), which the tab then is.
   virtual bool Save(const std::wstring& path, std::wstring& error) = 0;
   virtual SaveFormat SaveAsFormat() const = 0;
+  // Other types Save As offers (a Word document as RTF or plain text). These save a copy: the tab
+  // stays on its own file, with its changes.
+  virtual std::vector<SaveFormat> CopyFormats() const { return {}; }
+  virtual bool SaveCopy(const std::wstring& /*path*/, size_t /*format*/, std::wstring& /*error*/) { return false; }
   // Where Save As starts: the file, or for a tab without one (a new document) a suggested name.
   virtual std::wstring SuggestedSavePath() const { return Path(); }
   // Editors: unsaved changes go to the recovery folder now and then (the window's timer).
@@ -179,12 +191,26 @@ class TabContent {
   virtual bool CanPrint() const = 0;
   // Shows the print dialog and prints. `progress(done, total)` lets the window repaint between pages.
   virtual PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) = 0;
+  // Export PDF (plan §4.6): the pages into a PDF file, as they look; the tab's own file stays as it
+  // is. False with a reason in `message` when it couldn't; `message` says what was done otherwise.
+  virtual bool CanExportPdf() const { return false; }
+  virtual bool ExportPdf(const std::wstring& /*path*/, std::wstring& message) {
+    message = L"This tab can't be exported as a PDF.";
+    return false;
+  }
   virtual FileState State() const = 0;
   virtual void ApplyState(const FileState& s) = 0;
 
   // ---- Accessibility ----
   // Adds the tab's own UI Automation elements under `parent`, the pane that holds the tab.
   virtual void DescribeUia(uia::Tree& /*t*/, int /*parent*/) {}
+
+  // ---- Pictures dragged over the window
+  // Whether the tab adds these files where they're dropped (a Word document being edited takes
+  // pictures), rather than the window opening them.
+  virtual bool TakesPictures(const std::vector<std::wstring>& /*files*/) const { return false; }
+  // Adds them at (x, y), client pixels.
+  virtual void DropPictures(const std::vector<std::wstring>& /*files*/, int /*x*/, int /*y*/) {}
 
   // ---- What kind of content ----
   // Content shown as pages (page box, zoom, page layout, presenting), or null.

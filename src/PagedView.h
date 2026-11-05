@@ -53,7 +53,7 @@ class PagedView : public TabContent {
 
  protected:
   // What the mouse is doing. Subclasses use the kinds after ThumbH for what is on their pages.
-  enum class Drag { None, Pan, ThumbV, ThumbH, Select, Form, Link, Note };
+  enum class Drag { None, Pan, ThumbV, ThumbH, Select, Form, Link, Note, Ruler };
   struct Anchor {
     int page = 0;
     double fx = 0, fy = 0;  // position inside the page box, as a fraction

@@ -72,15 +72,24 @@ class App : public PdfHost, public DropHost {
   bool ViewHighlightFields() override { return settings_.highlightFields; }
   bool ViewSpelling() override { return settings_.spelling; }
   bool ViewAutoCorrect() override { return settings_.autoCorrect; }
+  bool ViewRuler() override { return settings_.ruler; }
+  std::wstring ViewReviewer() override { return settings_.reviewer; }
+  void ViewSetReviewer(const std::wstring& name) override {
+    settings_.reviewer = name;
+    settings_.Save();
+  }
   void ViewPasswordAccepted(TabContent* view) override;
   void ViewShowPanel(PanelContent* content) override;
   PanelContent* ViewShownPanel() override { return panel_.Content(); }
+  void ViewFocusPage() override;
   void ViewOpenNote(PdfView* view, const NoteTarget& note) override;
 
   // DropHost
   void OnDragEnter(bool acceptable) override;
   void OnDragLeave() override;
   void OnDropFiles(const std::vector<std::wstring>& files) override;
+  bool TakesPictures(const std::vector<std::wstring>& files) override;
+  void OnDropPictures(const std::vector<std::wstring>& files, POINT pt) override;
 
  private:
   enum class Region { None, Title, Toolbar, Search, Banner, Note, Doc, Panel, Status, Commands };
@@ -138,12 +147,19 @@ class App : public PdfHost, public DropHost {
   void OpenDialog();
   // A click, key or UI Automation action on the start screen.
   void OnStartScreen(EmptyState::Result res);
-  std::wstring SaveDialog(const std::wstring& suggested, const SaveFormat& format);
+  // `copies`: more types to offer after `format`; `chosen` gets the type picked (0 for `format`,
+  // 1 for the first copy type).
+  std::wstring SaveDialog(const std::wstring& suggested, const SaveFormat& format,
+                          const std::vector<SaveFormat>& copies = {}, size_t* chosen = nullptr);
+  bool SaveCopy(TabContent* view, const std::wstring& path, size_t format);
   void ActivateTab(int index);
   bool CloseTab(int index);
   bool ConfirmClose(TabContent* view);
   bool SaveActive(bool saveAs);
   void PrintActive();
+  // Export PDF: asks where, then writes the tab's pages there.
+  void ExportPdfActive();
+  bool ExportPdfTo(const std::wstring& path);
   void RememberState(TabContent* view);
   void FocusBox(TextBox* box);
   void OpenSearch();

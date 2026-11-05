@@ -56,7 +56,7 @@ target_compile_definitions(Featherweight PRIVATE "$<$<BOOL:${FW_WITH_V8}>:FW_WIT
 target_link_libraries(Featherweight PRIVATE
   fwcore pdfium
   d2d1 d3d11 dxgi dwrite windowscodecs dxguid dwmapi uxtheme shlwapi shell32 ole32 oleaut32
-  comctl32 comdlg32 winhttp bcrypt version advapi32 user32 gdi32 winspool delayimp
+  comctl32 comdlg32 winhttp bcrypt version advapi32 user32 gdi32 winspool delayimp secur32
 )
 # pdfium.dll is loaded on first use, so the window appears before the engine is loaded, and
 # UI Automation's DLL only once a client such as a screen reader asks for the window. crypt32.dll
@@ -93,7 +93,7 @@ add_subdirectory(src/draw)
 add_subdirectory(src/doc)
 add_subdirectory(src/text)
 add_subdirectory(tools/fwtool)
-target_link_libraries(Featherweight PRIVATE fwdraw fwdoclayout fwproof)
+target_link_libraries(Featherweight PRIVATE fwdraw fwdoclayout fwproof fwpictures)
 if(FW_FUZZ)
   enable_testing()
   add_subdirectory(tests/fuzz)

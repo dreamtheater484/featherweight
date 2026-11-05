@@ -115,6 +115,7 @@ void Stack::Offset(float dx, float dy) {
     e.y2 += dy;
   }
   for (DrawingBox& d : drawings) d.rect = {d.rect.left + dx, d.rect.top + dy, d.rect.right + dx, d.rect.bottom + dy};
+  for (CellRect& c : cells) c.box = {c.box.left + dx, c.box.top + dy, c.box.right + dx, c.box.bottom + dy};
 }
 
 void Stack::Append(Stack&& other, float dx, float dy) {
@@ -128,6 +129,7 @@ void Stack::Append(Stack&& other, float dx, float dy) {
   fills.insert(fills.end(), other.fills.begin(), other.fills.end());
   edges.insert(edges.end(), other.edges.begin(), other.edges.end());
   drawings.insert(drawings.end(), other.drawings.begin(), other.drawings.end());
+  cells.insert(cells.end(), other.cells.begin(), other.cells.end());
   notes.insert(notes.end(), other.notes.begin(), other.notes.end());
   TakeFlags(other);
 }
@@ -329,6 +331,10 @@ void Engine::AddDrawing(uint32_t drawing, const Rect& box, bool floating, const 
   tf.zones = nullptr;
   tf.inCell = false;
   Stack s = StackStory(d.textBoxes.front(), tf);
+  // "Resize shape to fit text" (a:spAutoFit, VML mso-fit-shape-to-text) grows the box to its
+  // text, as Word does when the text changes; any other box shows what fits, cut at its edge.
+  const bool grows = xml.find("spAutoFit") != std::string::npos || xml.find("fit-shape-to-text:t") != std::string::npos;
+  if (grows && !turn && s.height > inner.Height()) out.drawings.back().rect.bottom += s.height - inner.Height();
   for (LineBox& l : s.lines) {
     l.drawing = drawing;
     if (turn) {
@@ -337,7 +343,7 @@ void Engine::AddDrawing(uint32_t drawing, const Rect& box, bool floating, const 
       l.turnY = turn == 3 ? inner.Height() : 0;
       l.clip = {0, 0, inner.Width(), inner.Height()};
     } else {
-      l.clip = {0, 0, inner.Width(), std::max(inner.Height(), s.height)};
+      l.clip = {0, 0, inner.Width(), grows ? std::max(inner.Height(), s.height) : inner.Height() + in[3]};
     }
   }
   out.Append(std::move(s), inner.left, inner.top);
@@ -407,7 +413,7 @@ void Engine::StackBlocks(const std::vector<Block>& blocks, const Frame& frame, S
 Engine::Placement Engine::PlacementOf(const Block& b) const {
   Placement place;
   auto frameOf = [&](uint32_t para) -> std::optional<FrameProps> {
-    const std::optional<FrameProps>& f = doc_.ResolvedPara(para).frame;
+    const std::optional<FrameProps>& f = ParaOf(para).frame;
     if (!f || f->dropCap == "drop" || f->dropCap == "margin") return std::nullopt;  // drop caps stay in the text
     return f;
   };

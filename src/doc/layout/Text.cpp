@@ -5,6 +5,7 @@
 #include <cwctype>
 
 #include "core/Strings.h"
+#include "doc/model/DateFormat.h"
 #include "doc/model/Utf.h"
 #include "doc/layout/Engine.h"
 
@@ -41,6 +42,11 @@ std::wstring StyleKey(const text::TextStyle& s) {
 }
 
 bool Deleted(Node revision) { return revision && (revision.Is(Name("del")) || revision.Is(Name("moveFrom"))); }
+bool Inserted(Node revision) { return revision && (revision.Is(Name("ins")) || revision.Is(Name("moveTo"))); }
+// Text the view doesn't show: deleted, unless it shows deletions; inserted, when it hides insertions.
+bool Gone(Node revision, const Options& o) {
+  return (Deleted(revision) && !o.showDeletions) || (Inserted(revision) && o.hideInsertions);
+}
 
 text::Alignment AlignmentOf(Justification jc) {
   switch (jc) {
@@ -88,7 +94,60 @@ std::string_view FormatSwitch(std::u16string_view code) {
   return {};
 }
 
+// DATE and TIME, which Word updates when it opens a document (plan §6.2). The other date fields
+// (CREATEDATE, SAVEDATE, PRINTDATE) keep their results.
+bool IsDateField(std::u16string_view type) { return type == u"DATE" || type == u"TIME"; }
+
+// The \@ switch's date-time picture: quoted ("MMMM d, yyyy") or one word (dd.MM.yy).
+std::u16string DatePicture(std::u16string_view code) {
+  const size_t at = code.find(u"\\@");
+  if (at == std::u16string_view::npos) return {};
+  std::u16string_view rest = code.substr(at + 2);
+  while (!rest.empty() && rest.front() == u' ') rest.remove_prefix(1);
+  if (rest.empty()) return {};
+  if (rest.front() == u'"') {
+    const size_t end = rest.find(u'"', 1);
+    rest = rest.substr(1, end == std::u16string_view::npos ? std::u16string_view::npos : end - 1);
+  } else {
+    rest = rest.substr(0, rest.find(u' '));
+  }
+  return std::u16string(rest);
+}
+
 }  // namespace
+
+// What a legacy check box or drop-down (FORMCHECKBOX, FORMDROPDOWN) shows: its state in w:ffData,
+// whatever result it was saved with, as Word draws them. Empty for other fields.
+std::u16string FormFieldShows(const Field& f) {
+  const std::u16string_view type = f.Type();
+  const bool box = type == u"FORMCHECKBOX";
+  if (!box && type != u"FORMDROPDOWN") return {};
+  const Node ff = f.beginNode.Child(Name("ffData"));
+  if (box) {
+    const Node cb = ff.Child(Name("checkBox"));
+    const Node checked = cb.Child(Name("checked"));
+    return (checked ? checked.On() : cb.Child(Name("default")).On()) ? u"\u2612" : u"\u2610";
+  }
+  const Node dd = ff.Child(Name("ddList"));
+  std::vector<Node> entries;
+  for (Node e : dd.Kids())
+    if (e.Is(Name("listEntry"))) entries.push_back(e);
+  if (entries.empty()) return {};
+  const Node picked = dd.Child(Name("result")) ? dd.Child(Name("result")) : dd.Child(Name("default"));
+  const int64_t i = picked.Int(Name("val")).value_or(0);
+  return ToUtf16(entries[i >= 0 && i < static_cast<int64_t>(entries.size()) ? static_cast<size_t>(i) : 0].AttrOr(Name("val")));
+}
+
+std::u16string DateFieldResult(std::u16string_view code, int64_t now, std::string_view lang) {
+  const size_t s = code.find_first_not_of(u' ');
+  if (s == std::u16string_view::npos || now == 0) return {};
+  const size_t e = code.find(u' ', s);
+  const std::u16string_view type = code.substr(s, e == std::u16string_view::npos ? std::u16string_view::npos : e - s);
+  if (!IsDateField(type)) return {};
+  const DateTime local = LocalDateTime(now);
+  if (local.year == 0) return {};
+  return FormatDateTime(local, DatePicture(code), type == u"TIME", lang);
+}
 
 const text::TextStyle* StylePool::Intern(const text::TextStyle& style) {
   std::wstring key = StyleKey(style);
@@ -202,6 +261,11 @@ RunPaint Engine::PaintOf(const RunProps& r, uint32_t modelRun) const {
     p.highlight = true;
     p.highlightColor = r.shading.fill.rgb;
   }
+  // Hidden text shown with the formatting marks: dotted underneath, as Word shows it.
+  if (r.vanish && options_.showHiddenText && options_.formattingMarks && p.underline == Underline::None) {
+    p.underline = Underline::Dotted;
+    p.underlineColor = 0x7F7F7F;
+  }
   p.modelRun = modelRun;
   return p;
 }
@@ -244,7 +308,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   out = ParaText();
   out.para = para;
   const Paragraph& model = doc_.Para(para);
-  const ParaProps& props = doc_.ResolvedPara(para);
+  const ParaProps& props = ParaOf(para);
   out.props = &props;
   const std::u16string& t = model.text;
   out.text.reserve(t.size() + 8);
@@ -274,8 +338,10 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   };
 
   // The list label and what follows it.
-  const RunProps& markProps = doc_.ResolvedMark(para);
-  if (std::optional<ListLabel> label = doc_.Label(para)) {
+  const RunProps& markProps = MarkOf(para);
+  std::optional<ListLabel> label = doc_.Label(para);
+  if (options_.hideInsertions && props.numId.empty()) label.reset();  // numbering a tracked change added
+  if (label) {
     std::u16string s = label->text;
     if (label->suffix.empty() || label->suffix == "tab") s += u'\t';
     else if (label->suffix == "space") s += u' ';
@@ -292,11 +358,28 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
     std::u16string value;
   };
   std::vector<Replace> replaces;
-  if (fieldsCount_[model.story] > 0) {
+  if (FieldsIn(model.story)) {
     for (const Field& f : StoryFields(model.story)) {
+      // Legacy check boxes and drop-downs: their result, or at their end when they have none.
+      if (f.end.para == para && f.complete && (f.separator.para == para || f.separator.para == kNone)) {
+        if (std::u16string shows = FormFieldShows(f); !shows.empty()) {
+          const uint32_t from = f.separator.para == para ? f.separator.offset + 1 : f.end.offset;
+          replaces.push_back({from, f.end.offset, std::move(shows)});
+          continue;
+        }
+      }
       if (f.separator.para != para || f.end.para != para || !f.complete) continue;
       PageField kind = PageFieldOf(f.Type());
-      if (kind == PageField::None) continue;
+      if (kind == PageField::None) {
+        if (options_.now == 0 || !IsDateField(f.Type())) continue;
+        // In the language of the result's first character.
+        std::string_view lang;
+        for (const TextRun& r : doc_.Runs(para))
+          if (r.run && r.start <= f.separator.offset + 1 && f.separator.offset + 1 < r.end) lang = RunOf(para, r.run).lang;
+        std::u16string value = DateFieldResult(f.code, options_.now, lang);
+        if (!value.empty()) replaces.push_back({f.separator.offset + 1, f.end.offset, std::move(value)});
+        continue;
+      }
       std::u16string value = kind == PageField::Page       ? fields.page
                              : kind == PageField::NumPages ? fields.pages
                                                            : fields.sectionPages;
@@ -323,8 +406,8 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   for (uint32_t r = 0; r < runs.size(); ++r) {
     const TextRun& run = runs[r];
     if (run.start < covered) continue;  // overlapping runs don't happen; be safe
-    const RunProps& rp = doc_.ResolvedRun(para, run.run);
-    bool hidden = run.fieldCode || Deleted(run.revision);
+    const RunProps& rp = RunOf(para, run.run);
+    bool hidden = run.fieldCode || Gone(run.revision, options_);
     const text::TextStyle* style = styles_.Intern(StyleOf(rp, hidden));
     const text::TextStyle* hiddenStyle = style->hidden ? style : nullptr;
     auto hide = [&]() {
@@ -342,6 +425,16 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
       size_t s = code.find_first_not_of(u' ');
       size_t e = s == std::u16string::npos ? s : code.find(u' ', s);
       PageField kind = s == std::u16string::npos ? PageField::None : PageFieldOf(std::u16string_view(code).substr(s, e - s));
+      if (kind == PageField::None && options_.now != 0) {
+        if (std::u16string value = DateFieldResult(code, options_.now, rp.lang); !value.empty()) {
+          uint32_t end = run.end;
+          while (r + 1 < runs.size() && runs[r + 1].simpleField == run.simpleField) end = runs[++r].end;
+          subst(run.start, end - run.start, value, style, paint);
+          visible = true;
+          covered = end;
+          continue;
+        }
+      }
       if (kind != PageField::None) {
         if (kind != PageField::Page) out.usesPageCount = true;
         else out.usesPage = true;
@@ -362,9 +455,12 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
     while (i < run.end) {
       // A computed field result starting here replaces the old one.
       auto rep = std::find_if(replaces.begin(), replaces.end(), [&](const Replace& x) { return x.from == i; });
-      if (rep != replaces.end() && !style->hidden) {
+      // An empty result starts at the field's end character, hidden only as a field character.
+      const text::TextStyle* shown =
+          rep != replaces.end() && style->hidden && run.fieldCode && !Gone(run.revision, options_) ? styles_.Intern(StyleOf(rp, false)) : style;
+      if (rep != replaces.end() && !shown->hidden) {
         uint32_t to = std::max(rep->to, i);
-        subst(i, to - i, rep->value, style, paint);
+        subst(i, to - i, rep->value, shown, paint);
         visible = true;
         i = to;
         rep->from = UINT32_MAX;
@@ -485,7 +581,9 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   // A deleted paragraph mark joins the paragraph to the next in Word's final view, so one with
   // nothing of its own left to show is gone.
   const Node markRPr = doc_.ParaNode(para).Child(Name("pPr")).Child(Name("rPr"));
-  const bool markDeleted = markRPr && (markRPr.Child(Name("del")) || markRPr.Child(Name("moveFrom")));
+  // A mark the view doesn't show: deleted (or, in Original, inserted).
+  const bool markDeleted = markRPr && ((!options_.showDeletions && (markRPr.Child(Name("del")) || markRPr.Child(Name("moveFrom")))) ||
+                                       (options_.hideInsertions && (markRPr.Child(Name("ins")) || markRPr.Child(Name("moveTo")))));
   const bool markHidden = (markProps.vanish && !options_.showHiddenText) || markProps.specVanish || markDeleted;
   out.empty = markHidden && !visible && (out.prefix == 0 || markDeleted);  // a deleted mark takes its label along
   text::TextStyle mark = StyleOf(markProps, false);

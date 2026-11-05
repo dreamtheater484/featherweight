@@ -346,6 +346,10 @@ class ColorPalette : public Control {
   static std::vector<NamedColor>& Recent();
   // A readable name for a color: the palette's own name, or its red, green and blue.
   std::wstring NameOf(D2D1_COLOR_F c, bool automatic) const;
+  // Which of `theme`'s cells a picked color is: the index of its base color, and for a tint or
+  // shade under it the w:themeTint or w:themeShade (0-255) Office writes for it (-1 for none).
+  // False for any other color.
+  static bool ThemeCell(const std::vector<NamedColor>& theme, D2D1_COLOR_F c, int& index, int& tint, int& shade);
 
   D2D1_SIZE_F PreferredSize() const;
   void Layout();
@@ -425,7 +429,8 @@ class SplitButton : public Control {
   std::wstring text;
   bool showColor = false;  // a bar under the glyph in `color`
   D2D1_COLOR_F color{};
-  // The arrow opens `items`, or a color palette when `colors` is set.
+  // The arrow opens `items`, or a color palette when `colors` is set; with neither there's no
+  // arrow (a plain button).
   std::vector<std::wstring> items;
   int selected = -1;
   bool colors = false;

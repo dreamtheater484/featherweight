@@ -25,13 +25,27 @@ struct Range {
   bool Empty() const { return from == to; }
 };
 
+// The theme's fonts, as Word's font box offers them first: "+Headings" (the major font) and "+Body"
+// (the minor one). A run in one follows the theme.
+enum class ThemeFontSlot : uint8_t { Headings, Body };
+
+// A theme color ("accent1", "text1", "background2"...), lighter or darker as Word's palette offers
+// it: w:themeTint or w:themeShade, 00-FF (-1 for none).
+struct ThemeColorRef {
+  std::string name;
+  int tint = -1, shade = -1;
+  bool operator==(const ThemeColorRef&) const = default;
+};
+
 // Character formatting to apply: each field that is set is applied, the others are left alone.
 struct RunFormat {
   std::optional<std::string> font;             // w:rFonts ascii, hAnsi and cs
+  std::optional<ThemeFontSlot> themeFont;      // w:rFonts asciiTheme, hAnsiTheme and cstheme instead
   std::optional<HalfPoints> size;              // w:sz and w:szCs
   std::optional<bool> bold, italic, strike, doubleStrike, caps, smallCaps;
   std::optional<Underline> underline;          // None removes it
   std::optional<Color> color;                  // automatic: the style's color, or "auto"
+  std::optional<ThemeColorRef> themeColor;     // w:color from the theme instead
   std::optional<std::string> highlight;        // a w:highlight name ("yellow"), "none" for none
   std::optional<VertAlign> vertAlign;          // superscript, subscript or baseline
   std::optional<std::string> charStyle;        // a character style id; empty removes w:rStyle
@@ -111,6 +125,12 @@ void ClearAllFormatting(TreeEdit& ed, Range range);
 // Increase and decrease indent: list paragraphs change level; others move their left indent to the
 // next or previous multiple of half an inch, as Word's buttons do.
 void ShiftIndent(TreeEdit& ed, Range range, bool increase);
+
+// The ruler's tab stops: in each of the range's paragraphs, the stops at the positions in `remove`
+// go, then those in `add` are set (in place of any at the same position). The paragraph's w:tabs
+// says only how it differs from its style: a style's stop it no longer has is cleared there
+// (w:val="clear"), and one it keeps as it is isn't written. One undo step, "Tabs".
+void ChangeTabStops(TreeEdit& ed, Range range, const std::vector<Twips>& remove, const std::vector<TabStop>& add);
 
 // The value Word writes for a justification in this document (left/right in transitional parts,
 // start/end in strict ones).

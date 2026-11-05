@@ -896,9 +896,10 @@ void ComboBox::SetText(const std::wstring& text) {
   box_.SetText(text);
 }
 
+// With no items it's a text box: no arrow.
 D2D1_RECT_F ComboBox::ArrowRect() const {
   const float u = Ui();
-  return RectF(rc.right - 30 * u, rc.top + 3 * u, rc.right - 3 * u, rc.bottom - 4 * u);
+  return RectF(items.empty() ? rc.right : rc.right - 30 * u, rc.top + 3 * u, rc.right - 3 * u, rc.bottom - 4 * u);
 }
 
 int ComboBox::IndexOf(const std::wstring& text) const {
@@ -977,6 +978,7 @@ void ComboBox::Draw(Canvas& c) {
   const float u = Ui();
   box_.rc = rc;
   box_.Draw(c, u, Focused() && CaretOn());
+  if (items.empty()) return;
   D2D1_RECT_F a = ArrowRect();
   if (enabled) {
     c.FillRound(a, 3 * u, Alpha(p.hover, arrowHover_.V()));

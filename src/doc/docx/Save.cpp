@@ -18,6 +18,14 @@ using pkg::Status;
 constexpr std::string_view kCp = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties";
 constexpr std::string_view kDcTerms = "http://purl.org/dc/terms/";
 constexpr std::string_view kXsi = "http://www.w3.org/2001/XMLSchema-instance";
+constexpr std::string_view kImageRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+constexpr std::string_view kHeaderRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header";
+constexpr std::string_view kFooterRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer";
+
+// Any mention of a relationship's id in a part keeps it: an attribute, kept XML, a field.
+bool Mentions(std::string_view xml, const std::string& id) {
+  return xml.find("\"" + id + "\"") != std::string_view::npos || xml.find("'" + id + "'") != std::string_view::npos;
+}
 
 // The prefix `uri` has on the root, declaring it as `preferred` (or a free variant) if it has none.
 std::string PrefixFor(pugi::xml_node root, std::string_view uri, std::string preferred) {
@@ -96,6 +104,59 @@ Status UpdateCoreProperties(std::string_view xml, const std::string& author, int
   return Status{};
 }
 
+UnusedMedia FindUnusedMedia(const Document& doc, const std::vector<std::pair<uint32_t, const std::string*>>& written) {
+  UnusedMedia out;
+  const pkg::Package& package = doc.Package();
+  auto storyRel = [](const pkg::Relationship& r) { return !r.external && (r.type == kHeaderRel || r.type == kFooterRel); };
+  for (const auto& [index, xml] : written) {
+    if (index >= doc.Parts().size() || !xml) continue;
+    const pkg::RelationshipSet* rels = package.RelationshipsOf(doc.Parts()[index].name);
+    if (!rels) continue;
+    for (const pkg::Relationship& r : rels->items)
+      if (((!r.external && r.type == kImageRel) || storyRel(r)) && !Mentions(*xml, r.id))
+        out.relationships.emplace_back(rels->source, r.id);
+  }
+  // A header or footer made and then undone (d3-torture finding 17) left a relationship in a part
+  // whose XML is as it was, so isn't written: its relationships changed since it was opened. Such a
+  // part is read as the package has it.
+  std::vector<uint8_t> bytes;
+  for (uint32_t i = 0; i < doc.Parts().size(); ++i) {
+    if (std::any_of(written.begin(), written.end(), [&](const auto& w) { return w.first == i && w.second; })) continue;
+    const pkg::RelationshipSet* rels = package.RelationshipsOf(doc.Parts()[i].name);
+    const pkg::Part* relsPart = rels ? package.FindPart(rels->relsPart) : nullptr;
+    if (!relsPart || !relsPart->modified || std::none_of(rels->items.begin(), rels->items.end(), storyRel)) continue;
+    if (!package.ReadPart(doc.Parts()[i].name, bytes).Ok()) continue;
+    const std::string_view xml = AsText(bytes);
+    for (const pkg::Relationship& r : rels->items)
+      if (storyRel(r) && !Mentions(xml, r.id)) out.relationships.emplace_back(rels->source, r.id);
+  }
+  // A part goes when every relationship to it does. A part that goes takes its own relationships
+  // with it (its .rels is left out), so what only it used goes too: a header's pictures (d3-torture
+  // finding 24). Each relationship is looked at once, after those before it.
+  std::vector<std::pair<std::string, std::string>> going = out.relationships;
+  for (size_t k = 0; k < going.size(); ++k) {
+    const auto [source, id] = going[k];  // a copy: `going` grows
+    const pkg::RelationshipSet* rels = package.RelationshipsOf(source);
+    const pkg::Relationship* r = rels ? rels->Find(id) : nullptr;
+    if (!r || r->external || r->targetPart.empty()) continue;
+    const std::string target = pkg::PartKey(r->targetPart);
+    if (std::any_of(out.parts.begin(), out.parts.end(), [&](const std::string& p) { return pkg::PartKey(p) == target; }))
+      continue;
+    bool used = false;
+    for (const pkg::RelationshipSet& set : package.Relationships())
+      for (const pkg::Relationship& other : set.items) {
+        if (other.external || pkg::PartKey(other.targetPart) != target) continue;
+        if (std::find(going.begin(), going.end(), std::make_pair(set.source, other.id)) == going.end()) used = true;
+      }
+    if (used) continue;
+    out.parts.push_back(r->targetPart);
+    if (const pkg::RelationshipSet* own = package.RelationshipsOf(r->targetPart))
+      for (const pkg::Relationship& o : own->items)
+        if (!o.external && !o.targetPart.empty()) going.emplace_back(own->source, o.id);
+  }
+  return out;
+}
+
 Status Serialize(Document& doc, const SaveOptions& options, std::vector<uint8_t>& out) {
   pkg::Package& package = doc.Package();
   bool changed = options.edited || !options.changedParts.empty();
@@ -116,16 +177,26 @@ Status Serialize(Document& doc, const SaveOptions& options, std::vector<uint8_t>
     const pkg::Part* written = package.FindPart(doc.Parts()[i].name);
     if (written && written->modified && std::find(parts.begin(), parts.end(), i) == parts.end()) parts.push_back(i);
   }
-  for (uint32_t i : parts) {
+  std::vector<std::string> xmls(parts.size());
+  std::vector<std::pair<uint32_t, const std::string*>> written;
+  for (size_t k = 0; k < parts.size(); ++k) {
+    const uint32_t i = parts[k];
     if (i >= doc.Parts().size()) continue;
     const Part& part = doc.Parts()[i];
     if (!part.writable || !part.Editable())
       return Status::Fail(Status::Code::Unsupported, "Part of this document can't be saved by Featherweight.");
-    std::string xml;
+    std::string& xml = xmls[k];
     Status st = WritePart(doc, i, xml);
     if (!st.Ok()) return st;
     package.SetPart(part.name, std::vector<uint8_t>(xml.begin(), xml.end()));
+    written.emplace_back(i, &xml);
   }
+  // Comments written: their companions with them.
+  for (const auto& [index, xml] : written)
+    if (doc.Parts()[index].kind == PartKind::Comments) {
+      if (Status st = WriteCommentParts(doc); !st.Ok()) return st;
+      break;
+    }
   if (options.edited) {
     if (std::string core = CorePropertiesPart(package); !core.empty() && package.FindPart(core)) {
       std::vector<uint8_t> bytes;
@@ -137,8 +208,40 @@ Status Serialize(Document& doc, const SaveOptions& options, std::vector<uint8_t>
     }
   }
 
+  // Pictures nothing refers to any more stay out of the file: their relationships, their parts and
+  // any content type naming those. The package keeps them, for undo.
+  pkg::Package::SaveChanges leave;
+  const UnusedMedia unused = FindUnusedMedia(doc, written);
+  std::vector<pkg::RelationshipSet> sets;
+  for (const auto& [source, id] : unused.relationships) {
+    auto set = std::find_if(sets.begin(), sets.end(), [&](const pkg::RelationshipSet& s) { return s.source == source; });
+    if (set == sets.end()) {
+      sets.push_back(*package.RelationshipsOf(source));
+      set = sets.end() - 1;
+    }
+    std::erase_if(set->items, [&](const pkg::Relationship& r) { return r.id == id; });
+  }
+  for (const pkg::RelationshipSet& set : sets) {
+    const std::string xml = set.Serialize();
+    leave.replace.emplace_back(set.relsPart, std::vector<uint8_t>(xml.begin(), xml.end()));
+  }
+  leave.leaveOut = unused.parts;
+  for (const std::string& part : unused.parts)  // a header's own relationships go with it
+    if (const pkg::RelationshipSet* rels = package.RelationshipsOf(part); rels && package.FindPart(rels->relsPart))
+      leave.leaveOut.push_back(rels->relsPart);
+  pkg::ContentTypes types = package.Types();
+  const size_t overrides = types.overrides.size();
+  std::erase_if(types.overrides, [&](const auto& o) {
+    return std::any_of(unused.parts.begin(), unused.parts.end(),
+                       [&](const std::string& p) { return pkg::PartKey(p) == pkg::PartKey(o.first); });
+  });
+  if (types.overrides.size() != overrides) {
+    const std::string xml = types.Serialize();
+    leave.replace.emplace_back(std::string(pkg::kContentTypesPart), std::vector<uint8_t>(xml.begin(), xml.end()));
+  }
+
   pkg::MemorySink sink;
-  Status st = package.Save(sink);
+  Status st = package.Save(sink, leave);
   if (!st.Ok()) return st;
 
   // Open what was written and check every part that was rewritten; the others are copies.
@@ -146,8 +249,18 @@ Status Serialize(Document& doc, const SaveOptions& options, std::vector<uint8_t>
   if (!again) return Status::Fail(Status::Code::Damaged, "The saved document didn't open again: " + st.message);
   std::vector<uint8_t> bytes;
   for (const auto& p : package.Parts()) {
-    if (!p.modified || p.deleted) continue;
-    if (!(st = again->ReadPart(p.name, bytes)).Ok() || bytes != p.data)
+    if (p.deleted) continue;
+    const auto replaced = std::find_if(leave.replace.begin(), leave.replace.end(),
+                                       [&](const auto& r) { return pkg::PartKey(r.first) == pkg::PartKey(p.name); });
+    const bool leftOut = std::any_of(leave.leaveOut.begin(), leave.leaveOut.end(),
+                                     [&](const std::string& n) { return pkg::PartKey(n) == pkg::PartKey(p.name); });
+    if (leftOut) {
+      if (again->FindPart(p.name)) return Status::Fail(Status::Code::Damaged, "The saved document kept a part it left out.");
+      continue;
+    }
+    if (!p.modified && replaced == leave.replace.end()) continue;
+    const std::vector<uint8_t>& want = replaced != leave.replace.end() ? replaced->second : p.data;
+    if (!(st = again->ReadPart(p.name, bytes)).Ok() || bytes != want)
       return Status::Fail(Status::Code::Damaged, "The saved document didn't read back correctly.");
     if (package.IsXmlPart(p.name) && !(st = pkg::XmlPull::Check(AsText(bytes), package.GetLimits(), p.name)).Ok())
       return st;

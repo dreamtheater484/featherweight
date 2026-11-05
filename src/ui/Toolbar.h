@@ -14,7 +14,8 @@
 #include "ui/Widgets.h"
 
 // What kind of control a toolbar item is.
-enum class ToolKind { Button, Dropdown, ComboBox, SplitButton, ColorPicker, SpinBox };
+// Custom: a control the tab makes and keeps (ToolItem::control), such as a table grid.
+enum class ToolKind { Button, Dropdown, ComboBox, SplitButton, ColorPicker, SpinBox, Custom };
 
 // What a toolbar control was set to: a chosen item, typed text, a number or a color.
 struct ToolValue {
@@ -56,7 +57,10 @@ struct ToolItem {
   D2D1_COLOR_F color{};
   bool automatic = false;
   std::wstring automaticLabel;     // "Automatic" or "No color"
+  std::vector<NamedColor> theme;   // the theme colors offered; empty for Office's
   D2D1_COLOR_F automaticColor{};   // how "Automatic" looks (transparent for "No color")
+  // Custom: the tab's own control, which outlives the toolbar's use of it.
+  Control* control = nullptr;
   // Called with what the control was set to. A split button's main part runs `cmd`.
   std::function<void(const ToolValue&)> onChange;
 };
@@ -94,9 +98,16 @@ class Toolbar {
   // The keyboard is on one of the tab's controls (after a click, say). Enter and Esc hand it
   // back to the document.
   bool HasKeyFocus() const { return group_.Focused() != nullptr; }
+  void HandBackAfterChoice(Control* open);
   void OnKeyDown(UINT vk, bool ctrl, bool shift, bool alt);
   void OnChar(wchar_t ch) { group_.OnChar(ch); }
   void Blur() { group_.Blur(); }
+  // Lets go of the controls it shows, before the tab that owns some of them (ToolKind::Custom, such
+  // as the Insert table grid) goes: the next Layout shows the next tab's.
+  void Forget() {
+    group_.Clear();
+    shown_.clear();
+  }
 
   // Runs a command: a split button's main part, or a button UI Automation invoked.
   std::function<void(int cmd)> onCommand;

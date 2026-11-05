@@ -62,6 +62,9 @@ constexpr wchar_t Brush = 0xE771;  // a paintbrush (a pen in MDL2)
 constexpr wchar_t DecreaseIndent = 0xE290;
 constexpr wchar_t IncreaseIndent = 0xE291;
 constexpr wchar_t Calendar = 0xE787;
+constexpr wchar_t Picture = 0xE8B9;
+constexpr wchar_t Crop = 0xE7A8;
+constexpr wchar_t Settings = 0xE713;
 
 // Custom vector icons drawn by DrawButton (private-use code points).
 constexpr wchar_t ViewSingle = 0xF8F0;

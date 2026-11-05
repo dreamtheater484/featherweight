@@ -7,7 +7,7 @@ target_link_libraries(fwfidelity PUBLIC fwcore)
 target_compile_options(fwfidelity PRIVATE ${FW_COMPILE_OPTIONS})
 
 add_executable(fwtool main.cpp Roundtrip.cpp Save.cpp Inspect.cpp Model.cpp Print.cpp Render.cpp Reference.cpp Compare.cpp Bench.cpp
-  BenchApp.cpp LayoutHook.cpp Paste.cpp Spelling.cpp Torture.cpp Wrap.cpp)
+  BenchApp.cpp Export.cpp LayoutHook.cpp Paste.cpp PdfCheck.cpp Spelling.cpp Torture.cpp Wrap.cpp)
 target_link_libraries(fwtool PRIVATE fwpkg fwdoc fwdoclayout fwdraw fwproof fwtext fwfidelity pdfium delayimp ole32 windowscodecs)
 # Picture editing (D3), for fwtool torture.
 if(TARGET fwpictures)
@@ -35,4 +35,8 @@ if(FW_BUILD_TESTS)
     --min-pages 100 --min-lines 100 --json "${_fw_fidelity}/word.json" --report "${_fw_fidelity}/word.md")
   set_tests_properties(fidelity_word_lines PROPERTIES FIXTURES_SETUP fidelity_word)
   set_tests_properties(fidelity_word_vs_word PROPERTIES FIXTURES_REQUIRED fidelity_word)
+  # Export PDF (D4) on the public corpus: each document's PDF strictly well formed, read back by
+  # PDFium with the text where it's drawn, and its pages as the screen draws them.
+  add_test(NAME pdf_check COMMAND fwtool pdf-check "${PROJECT_SOURCE_DIR}/tests/office/generated"
+    "${PROJECT_SOURCE_DIR}/tests/office/edge" "${PROJECT_SOURCE_DIR}/tests/office/layout" "${PROJECT_SOURCE_DIR}/tests/office/torture")
 endif()

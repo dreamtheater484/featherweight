@@ -78,7 +78,7 @@ class PdfView : public PagedView, public DocumentHost {
   void BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) override;
   void FillContextMenu(HMENU menu, int x, int y) override;
 
-  void StartSearch(const std::wstring& query, bool matchCase) override;
+  void StartSearch(const std::wstring& query, bool matchCase, bool wholeWords) override;
   void ClearSearch() override;
   void SearchStep(bool forward) override;
   int SearchCount() const override;
@@ -91,6 +91,10 @@ class PdfView : public PagedView, public DocumentHost {
   SaveFormat SaveAsFormat() const override { return {L"PDF document", L"*.pdf", L"pdf"}; }
   bool CanPrint() const override { return doc_ && doc_->CanPrint(); }
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;
+  // A copy with form fields and annotations flattened into the pages: what printing to a PDF
+  // printer gives, without the printer. Only where printing is allowed.
+  bool CanExportPdf() const override { return doc_ && doc_->CanPrint() && doc_->CanExportFlattened(); }
+  bool ExportPdf(const std::wstring& path, std::wstring& message) override;
 
   // ---- Text ----
   bool HasSelection() const { return !selection_.Empty(); }

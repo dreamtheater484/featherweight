@@ -43,6 +43,13 @@ Button& Toolbar::ItemButton(const ToolItem& item) {
 }
 
 Control& Toolbar::ItemControl(const ToolItem& item) {
+  if (item.kind == ToolKind::Custom && item.control) {
+    Control& c = *item.control;
+    c.id = item.cmd;
+    c.tooltip = item.tooltip;
+    c.enabled = item.enabled;
+    return c;
+  }
   std::unique_ptr<Control>& slot = controls_[item.cmd];
   if (!slot || controlKinds_[item.cmd] != item.kind) {
     switch (item.kind) {
@@ -99,6 +106,7 @@ Control& Toolbar::ItemControl(const ToolItem& item) {
       s.colors = s.showColor = item.colors;
       s.color = item.color;
       s.automaticLabel = item.automaticLabel;
+      if (item.colors) s.theme = item.theme.empty() ? ColorPalette::DefaultTheme() : item.theme;
       if (!s.IsOpen()) {
         s.items = item.choices;
         s.selected = item.choice;
@@ -127,6 +135,7 @@ Control& Toolbar::ItemControl(const ToolItem& item) {
       p.automatic = item.automatic;
       p.automaticLabel = item.automaticLabel;
       p.automaticColor = item.automaticColor;
+      p.theme = item.theme.empty() ? ColorPalette::DefaultTheme() : item.theme;
       p.onChange = [send](D2D1_COLOR_F color, bool automatic) {
         ToolValue v;
         v.color = color;
@@ -363,14 +372,26 @@ void Toolbar::OnMouseLeave() {
 }
 
 bool Toolbar::OnMouseDown(int x, int y, bool dbl, bool shift) {
-  if (group_.OnMouseDown((float)x, (float)y, dbl, shift)) return true;
+  Control* open = group_.Open();
+  if (group_.OnMouseDown((float)x, (float)y, dbl, shift)) {
+    HandBackAfterChoice(open);
+    return true;
+  }
   group_.Blur();  // a click anywhere else on the bar leaves the tab's boxes
   return set_.OnMouseDown((float)x, (float)y);
 }
 
 int Toolbar::OnMouseUp(int x, int y) {
+  Control* open = group_.Open();
   group_.OnMouseUp((float)x, (float)y);
+  HandBackAfterChoice(open);
   return set_.OnMouseUp((float)x, (float)y);
+}
+
+void Toolbar::HandBackAfterChoice(Control* open) {
+  // A choice from a list made with the mouse gives the keyboard back to the page, as Word's boxes
+  // and the plain buttons do: typing goes on where it was.
+  if (open && !group_.Open() && group_.Focused() == open && !group_.FocusVisible()) group_.Blur();
 }
 
 bool Toolbar::OnWheel(int delta, int x, int y) { return group_.OnWheel(delta, (float)x, (float)y); }

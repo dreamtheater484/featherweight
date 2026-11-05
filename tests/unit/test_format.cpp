@@ -3,6 +3,7 @@
 #include <string>
 
 #include "DocFixture.h"
+#include "doc/edit/Case.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/layout/Layout.h"
@@ -1080,10 +1081,9 @@ TEST(Edit_TextEditsAfterParagraphFormattingKeepTheText) {
   CHECK(MainXml(*doc) == original && !editor.CanUndo());
 }
 
-TEST(Edit_FormattingInATextBoxIsRefused) {
-  // d2-torture finding 14: a text box is written back from its drawing as it was, so formatting
-  // its text was lost on saving. Like the editor's text edits, formatting there is refused and
-  // changes nothing; the body's text is formatted as before.
+TEST(Edit_FormattingInATextBoxIsSaved) {
+  // d2-torture finding 14: formatting a text box's text was lost on saving, then refused. From D4
+  // a text box's story is written into its drawing: the formatting is saved, and undone exactly.
   Fixture f;
   f.styles = kBoldStyle;
   f.body = "<w:p><w:r><w:t>Body</w:t></w:r><w:r><w:pict><v:shape id=\"s\" style=\"position:absolute;width:144pt;"
@@ -1097,34 +1097,46 @@ TEST(Edit_FormattingInATextBoxIsRefused) {
     if (doc->Stories()[s].kind == StoryKind::TextBox && !doc->StoryParagraphs(s).empty()) boxed = doc->StoryParagraphs(s)[0];
   CHECK(boxed != kNone);
   if (boxed == kNone) return;
-  const std::string original = MainXml(*doc), styles = PartXml(*doc, PartKind::Styles);
+  const std::string original = MainXml(*doc);
   edit::Editor editor(*doc);
   edit::TreeEdit ed(editor);
+  edit::ApplyStyle(ed, Whole(*doc, boxed), "Heading 1");  // clears direct formatting: first
+  CHECK(ed.Refused().empty());
   edit::ToggleRuns(ed, Whole(*doc, boxed), edit::Toggle::Underline);
-  CHECK(!ed.Refused().empty());
+  CHECK(ed.Refused().empty());
   edit::ParaFormat pf;
   pf.jc = Justification::Center;
   edit::FormatParagraphs(ed, Whole(*doc, boxed), pf);
-  CHECK(!ed.Refused().empty());
-  edit::ApplyStyle(ed, Whole(*doc, boxed), "Heading 1");
-  CHECK(!ed.Refused().empty());
-  CHECK(MainXml(*doc) == original && PartXml(*doc, PartKind::Styles) == styles && !editor.CanUndo());
-  CHECK(doc->Para(boxed).text == u"Boxed" && !editor.Modified());
-  // The body still formats.
-  const uint32_t body = MainParas(*doc)[0];
-  edit::ToggleRuns(ed, {{body, 0}, {body, 4}}, edit::Toggle::Bold);
-  CHECK(ed.Refused().empty() && editor.CanUndo() && At(*doc, body, 0).bold);
-  CHECK(SaveAndReopen(*doc) != nullptr);
+  CHECK(ed.Refused().empty());
+  const std::string xml = MainXml(*doc);
+  CHECK(Has(xml, "<w:u w:val=\"single\"/>") && Has(xml, "<w:jc w:val=\"center\"/>") && Has(xml, "Heading1"));
+  // The part the text box is written in is one the app saves (d4 torture finding 35).
+  const auto main = static_cast<uint32_t>(doc->FindPart(PartKind::Document) - doc->Parts().data());
+  const std::vector<uint32_t> dirty = editor.DirtyParts();
+  CHECK(std::find(dirty.begin(), dirty.end(), main) != dirty.end());
+  auto back = SaveAndReopen(*doc);
+  CHECK(back);
+  if (back) {
+    uint32_t again = kNone;
+    for (uint32_t s = 0; s < back->Stories().size(); ++s)
+      if (back->Stories()[s].kind == StoryKind::TextBox && !back->StoryParagraphs(s).empty())
+        again = back->StoryParagraphs(s)[0];
+    CHECK(again != kNone && back->ResolvedPara(again).jc == Justification::Center);
+  }
+  while (editor.CanUndo()) CHECK(editor.Undo().ok);
+  CHECK(MainXml(*doc) == original && doc->Para(boxed).text == u"Boxed");
 }
 
 TEST(Edit_RefusedFormattingAddsNoPart) {
   // d2-torture finding 18: lists and styles add the numbering or styles part a document lacks
-  // before they change anything, and a part isn't undone. In a text box, where the change is
-  // refused, they add none; in the body they do.
+  // before they change anything, and a part isn't undone. In a text box whose text can't be
+  // written back (its fallback has no copy of it), where the change is refused, they add none; in
+  // the body they do.
   Fixture f;  // no styles part, no numbering part
-  f.body = "<w:p><w:r><w:t>Body</w:t></w:r><w:r><w:pict><v:shape id=\"s\" style=\"position:absolute;width:144pt;"
-           "height:36pt\"><v:textbox><w:txbxContent><w:p><w:r><w:t>Boxed</w:t></w:r></w:p></w:txbxContent></v:textbox>"
-           "</v:shape></w:pict></w:r></w:p>";
+  f.body = "<w:p><w:r><w:t>Body</w:t></w:r><w:r><mc:AlternateContent><mc:Choice Requires=\"v\"><w:pict><v:shape "
+           "id=\"s\" style=\"position:absolute;width:144pt;height:36pt\"><v:textbox><w:txbxContent><w:p><w:r>"
+           "<w:t>Boxed</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></mc:Choice><mc:Fallback>"
+           "<w:pict><v:rect style=\"width:144pt;height:36pt\"/></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>";
   auto doc = LoadOk(f);
   CHECK(doc);
   if (!doc) return;
@@ -1170,6 +1182,222 @@ TEST(Edit_FirstPropertyGoesBeforeKeptExtensions) {
   CHECK(Has(xml, "<w:rPr><w:b/><w:bCs/><w:sz w:val=\"24\"/><w14:cntxtAlts"));
   CHECK(SaveAndReopen(*doc) != nullptr);
   CHECK(editor.Undo() && MainXml(*doc) == original);
+}
+
+TEST(Edit_TabStopsFromTheRuler) {
+  Fixture f;
+  f.styles = std::string(kBoldStyle) +
+             "<w:style w:type=\"paragraph\" w:styleId=\"Tabbed\"><w:name w:val=\"Tabbed\"/><w:basedOn w:val=\"Normal\"/>"
+             "<w:pPr><w:tabs><w:tab w:val=\"left\" w:pos=\"1440\"/><w:tab w:val=\"right\" w:pos=\"2880\"/></w:tabs></w:pPr>"
+             "</w:style>";
+  f.body = "<w:p><w:pPr><w:pStyle w:val=\"Tabbed\"/></w:pPr><w:r><w:t>One</w:t></w:r></w:p>"
+           "<w:p><w:r><w:t>Two</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const auto paras = MainParas(*doc);
+  const std::string original = MainXml(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  auto tabs = [&](uint32_t p) { return doc->ResolvedPara(p).tabs; };
+  // The style's stop at 1" dragged to 1.5" and centered: the paragraph clears it and sets its own.
+  edit::ChangeTabStops(ed, Whole(*doc, paras[0]), {Twips(1440)}, {{Twips(2160), TabAlign::Center}});
+  auto t = tabs(paras[0]);
+  CHECK(t.size() == 2 && t[0].pos == Twips(2160) && t[0].align == TabAlign::Center);
+  CHECK(t.size() == 2 && t[1].pos == Twips(2880) && t[1].align == TabAlign::End);
+  CHECK(Has(MainXml(*doc), "<w:tabs><w:tab w:val=\"clear\" w:pos=\"1440\"/><w:tab w:val=\"center\" w:pos=\"2160\"/></w:tabs>"));
+  CHECK(editor.UndoName() == u"Tabs");
+  // Back where the style has it: the paragraph has nothing of its own.
+  edit::ChangeTabStops(ed, Whole(*doc, paras[0]), {Twips(2160)}, {{Twips(1440), TabAlign::Start}});
+  CHECK(MainXml(*doc) == original);
+  // Both paragraphs: the style's 2" stop goes where there is one, a dotted right stop comes.
+  edit::ChangeTabStops(ed, {{paras[0], 0}, {paras[1], 3}}, {Twips(2880)}, {{Twips(4320), TabAlign::End, TabLeader::Dot}});
+  const std::string last = MainXml(*doc);
+  CHECK(Has(last, "<w:tabs><w:tab w:val=\"clear\" w:pos=\"2880\"/><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"4320\"/></w:tabs>"));
+  CHECK(Has(last, "<w:pPr><w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"4320\"/></w:tabs></w:pPr><w:r><w:t>Two"));
+  CHECK(tabs(paras[0]).size() == 2 && tabs(paras[1]).size() == 1 && tabs(paras[1])[0].leader == TabLeader::Dot);
+  int undone = 0;
+  while (editor.Undo()) ++undone;
+  CHECK(undone == 3 && MainXml(*doc) == original);
+  while (editor.Redo()) {
+  }
+  CHECK(MainXml(*doc) == last);
+  auto back = SaveAndReopen(*doc);
+  CHECK(back && back->ResolvedPara(MainParas(*back)[1]).tabs.size() == 1);
+}
+
+TEST(Edit_ChangeCaseKeepsEachRunsFormatting) {
+  Fixture f;
+  f.styles = kBoldStyle;
+  f.body = "<w:p><w:r><w:t xml:space=\"preserve\">hello </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>big</w:t></w:r>"
+           "<w:r><w:t xml:space=\"preserve\"> world. don't stop</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string original = MainXml(*doc);
+  const uint32_t p = MainParas(*doc)[0];
+  const uint32_t n = static_cast<uint32_t>(doc->Para(p).text.size());
+  edit::Editor editor(*doc);
+  auto change = [&](edit::TextCase c) { return edit::ChangeCase(editor, {p, 0}, {p, n}, c).ok; };
+  CHECK(change(edit::TextCase::Upper) && doc->Para(p).text == u"HELLO BIG WORLD. DON'T STOP");
+  // Each run keeps its own formatting: the letters change in place.
+  CHECK(!At(*doc, p, 0).bold && At(*doc, p, 6).bold && At(*doc, p, 8).bold && !At(*doc, p, 9).bold);
+  CHECK(Has(MainXml(*doc), "<w:rPr><w:b/></w:rPr><w:t>BIG</w:t>") && editor.UndoName() == u"Change case");
+  CHECK(change(edit::TextCase::Sentence) && doc->Para(p).text == u"Hello big world. Don't stop");
+  CHECK(change(edit::TextCase::Capitalize) && doc->Para(p).text == u"Hello Big World. Don't Stop");
+  CHECK(change(edit::TextCase::Toggle) && doc->Para(p).text == u"hELLO bIG wORLD. dON'T sTOP");
+  CHECK(change(edit::TextCase::Lower) && doc->Para(p).text == u"hello big world. don't stop");
+  // Part of a word.
+  CHECK(edit::ChangeCase(editor, {p, 1}, {p, 4}, edit::TextCase::Upper).ok && doc->Para(p).text.substr(0, 5) == u"hELLo");
+  CHECK(SaveAndReopen(*doc) != nullptr);
+  int steps = 0;
+  while (editor.Undo()) ++steps;
+  CHECK(steps == 6 && MainXml(*doc) == original);
+  // Shift+F3's cycle.
+  CHECK(edit::NextCase(u"Hello world") == edit::TextCase::Upper && edit::NextCase(u"HELLO") == edit::TextCase::Lower);
+  CHECK(edit::NextCase(u"hello") == edit::TextCase::Capitalize && edit::NextCase(u"Hello World") == edit::TextCase::Upper);
+}
+
+TEST(Edit_TabLeadersAndUnchangedParagraphs) {
+  Fixture f;
+  f.styles = kBoldStyle;
+  f.body = "<w:p><w:pPr><w:tabs><w:tab w:val=\"left\" w:pos=\"1440\"/></w:tabs></w:pPr><w:r><w:t>One</w:t></w:r></w:p>"
+           "<w:p><w:r><w:t>Two</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const auto paras = MainParas(*doc);
+  const std::string original = MainXml(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  // The ruler's menu: the stop gets a dotted leader, then becomes a right stop with a line.
+  edit::ChangeTabStops(ed, Whole(*doc, paras[0]), {}, {{Twips(1440), TabAlign::Start, TabLeader::Dot}});
+  CHECK(Has(MainXml(*doc), "<w:tab w:val=\"left\" w:leader=\"dot\" w:pos=\"1440\"/>"));
+  edit::ChangeTabStops(ed, Whole(*doc, paras[0]), {}, {{Twips(1440), TabAlign::End, TabLeader::Underscore}});
+  CHECK(Has(MainXml(*doc), "<w:tab w:val=\"right\" w:leader=\"underscore\" w:pos=\"1440\"/>"));
+  const auto t = doc->ResolvedPara(paras[0]).tabs;
+  CHECK(t.size() == 1 && t[0].align == TabAlign::End && t[0].leader == TabLeader::Underscore);
+  // Clear all across both: the second paragraph has no stop there and isn't written.
+  edit::ChangeTabStops(ed, {{paras[0], 0}, {paras[1], 3}}, {Twips(1440)}, {});
+  CHECK(doc->ResolvedPara(paras[0]).tabs.empty() && !Has(MainXml(*doc), "w:tabs"));
+  CHECK(Has(MainXml(*doc), "<w:p><w:r><w:t>Two</w:t></w:r></w:p>"));
+  // Nothing to change: no undo step.
+  const std::u16string before = editor.UndoName();
+  int steps = 0;
+  while (editor.Undo()) ++steps;
+  CHECK(steps == 3 && MainXml(*doc) == original && before == u"Tabs");
+  edit::ChangeTabStops(ed, Whole(*doc, paras[1]), {Twips(720)}, {});
+  CHECK(!editor.CanUndo() && MainXml(*doc) == original);
+}
+
+TEST(Edit_ThemeFontsAndColors) {
+  Fixture f;
+  f.theme = "<a:clrScheme name=\"c\"><a:dk1><a:sysClr val=\"windowText\" lastClr=\"000000\"/></a:dk1><a:lt1><a:srgbClr "
+            "val=\"FFFFFF\"/></a:lt1><a:dk2><a:srgbClr val=\"1F497D\"/></a:dk2><a:lt2><a:srgbClr val=\"EEECE1\"/></a:lt2>"
+            "<a:accent1><a:srgbClr val=\"4F81BD\"/></a:accent1><a:accent2><a:srgbClr val=\"C0504D\"/></a:accent2>"
+            "</a:clrScheme><a:fontScheme name=\"f\"><a:majorFont><a:latin typeface=\"Cambria\"/><a:ea typeface=\"\"/>"
+            "<a:cs typeface=\"\"/></a:majorFont><a:minorFont><a:latin typeface=\"Calibri\"/><a:ea typeface=\"\"/>"
+            "<a:cs typeface=\"Arial\"/></a:minorFont></a:fontScheme>";
+  f.styles = "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/><w:rPr>"
+             "<w:rFonts w:asciiTheme=\"minorHAnsi\" w:hAnsiTheme=\"minorHAnsi\" w:cstheme=\"minorBidi\"/></w:rPr></w:style>";
+  f.body = "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Arial\" w:hAnsi=\"Arial\"/></w:rPr><w:t>Title</w:t></w:r></w:p>"
+           "<w:p><w:r><w:t>Body</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const auto paras = MainParas(*doc);
+  const std::string original = MainXml(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  auto run = [&](uint32_t p, auto set) {
+    edit::RunFormat r;
+    set(r);
+    edit::FormatRuns(ed, Whole(*doc, p), r);
+  };
+  // +Headings: the run follows the theme's major font, in place of its own.
+  run(paras[0], [](edit::RunFormat& r) { r.themeFont = edit::ThemeFontSlot::Headings; });
+  CHECK(Has(MainXml(*doc), "<w:rFonts w:asciiTheme=\"majorHAnsi\" w:hAnsiTheme=\"majorHAnsi\" w:cstheme=\"majorBidi\"/>"));
+  CHECK(!Has(MainXml(*doc), "Arial") && At(*doc, paras[0], 0).fonts.ascii == "Cambria");
+  // +Body is what Normal gives: the run's own font goes.
+  run(paras[0], [](edit::RunFormat& r) { r.themeFont = edit::ThemeFontSlot::Body; });
+  CHECK(!Has(MainXml(*doc), "w:rFonts") && At(*doc, paras[0], 0).fonts.ascii == "Calibri");
+  run(paras[1], [](edit::RunFormat& r) { r.themeFont = edit::ThemeFontSlot::Body; });  // already so: no font written
+  CHECK(!Has(MainXml(*doc), "w:rFonts") && At(*doc, paras[1], 0).fonts.ascii == "Calibri");
+  // Accent 1, lighter 40% (tint 99): the theme's color, with what it gives now ([MS-OI29500] 2.1.72's example).
+  run(paras[1], [](edit::RunFormat& r) { r.themeColor = edit::ThemeColorRef{"accent1", 0x99, -1}; });
+  CHECK(Has(MainXml(*doc), "<w:color w:val=\"95B3D7\" w:themeColor=\"accent1\" w:themeTint=\"99\"/>"));
+  CHECK(At(*doc, paras[1], 0).color.rgb == 0x95B3D7);
+  // Accent 2, darker 25% (shade BF): the tint goes.
+  run(paras[1], [](edit::RunFormat& r) { r.themeColor = edit::ThemeColorRef{"accent2", -1, 0xBF}; });
+  CHECK(Has(MainXml(*doc), "<w:color w:val=\"943634\" w:themeColor=\"accent2\" w:themeShade=\"BF\"/>"));
+  // A plain color drops the theme's.
+  run(paras[1], [](edit::RunFormat& r) { r.color = Color::Rgb(0x00B050); });
+  CHECK(Has(MainXml(*doc), "<w:color w:val=\"00B050\"/>") && !Has(MainXml(*doc), "themeColor"));
+  auto back = SaveAndReopen(*doc);
+  CHECK(back && back->Para(MainParas(*back)[1]).text == u"Body");
+  int steps = 0;
+  while (editor.Undo()) ++steps;
+  CHECK(steps == 6 && MainXml(*doc) == original);
+}
+
+TEST(Styles_NewStyleFromTheSelection) {
+  Fixture f;
+  f.styles = std::string(kWordStyles) +
+             "<w:style w:type=\"paragraph\" w:styleId=\"Quote\"><w:name w:val=\"Quote\"/><w:basedOn w:val=\"Normal\"/>"
+             "<w:qFormat/><w:rPr><w:i/></w:rPr></w:style>";
+  f.body = "<w:p><w:pPr><w:pStyle w:val=\"Quote\"/><w:jc w:val=\"center\"/><w:spacing w:after=\"360\"/></w:pPr>"
+           "<w:r><w:rPr><w:b/><w:color w:val=\"C00000\"/><w:highlight w:val=\"yellow\"/></w:rPr><w:t>Pull quote</w:t></w:r></w:p>"
+           "<w:p><w:r><w:t>Body</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const auto paras = MainParas(*doc);
+  const std::string originalMain = MainXml(*doc), originalStyles = PartXml(*doc, PartKind::Styles);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  std::u16string why;
+  // Names that can't be used.
+  CHECK(edit::NewStyleFromSelection(ed, Whole(*doc, paras[0]), "  ", why).empty() && !why.empty());
+  CHECK(edit::NewStyleFromSelection(ed, Whole(*doc, paras[0]), "quote", why).empty() && !why.empty());
+  CHECK(edit::NewStyleFromSelection(ed, Whole(*doc, paras[0]), "Heading 1", why).empty() && !why.empty());
+  CHECK(edit::NewStyleFromSelection(ed, Whole(*doc, paras[0]), std::string("Bad\x01name"), why).empty());
+  CHECK(!editor.CanUndo() && PartXml(*doc, PartKind::Styles) == originalStyles);
+  // "Pull Quote & More": based on Quote, with the paragraph's and the first character's formatting.
+  const std::string id = edit::NewStyleFromSelection(ed, {{paras[0], 2}, {paras[0], 2}}, " Pull Quote & More ", why);
+  CHECK(id == "PullQuote_More" && why.empty() && editor.UndoName() == u"New style");
+  const Style* s = doc->FindStyle(id);
+  CHECK(s && s->name == "Pull Quote & More" && s->type == StyleType::Paragraph);
+  CHECK(s && s->basedOn != kNone && doc->Styles()[s->basedOn].id == "Quote");
+  const std::string styles = PartXml(*doc, PartKind::Styles);
+  CHECK(Has(styles, "w:styleId=\"PullQuote_More\" w:customStyle=\"1\"><w:name w:val=\"Pull Quote &amp; More\"/>"
+                    "<w:basedOn w:val=\"Quote\"/><w:qFormat/>"));
+  CHECK(Has(styles, "<w:jc w:val=\"center\"/>") && Has(styles, "<w:b/>") && Has(styles, "C00000"));
+  // The paragraph takes it, without the formatting that moved; it looks as it did.
+  CHECK(doc->ResolvedPara(paras[0]).style == id && doc->ResolvedPara(paras[0]).jc == Justification::Center);
+  CHECK(doc->ResolvedPara(paras[0]).spaceAfter.Value() == 360);
+  CHECK(At(*doc, paras[0], 0).bold && At(*doc, paras[0], 0).italic && At(*doc, paras[0], 0).color.rgb == 0xC00000);
+  const std::string main = MainXml(*doc);
+  CHECK(!Has(main, "w:jc") && !Has(main, "C00000") && Has(main, "<w:pStyle w:val=\"PullQuote_More\"/>"));
+  // Highlighting stays on the text, never in a style (finding 23).
+  CHECK(Has(main, "<w:highlight w:val=\"yellow\"/>") && !Has(PartXml(*doc, PartKind::Styles), "highlight"));
+  CHECK(doc->ResolvedPara(paras[1]).style == "Normal");
+  // It's a quick style now, and modifying it reaches the paragraph.
+  bool listed = false;
+  for (const auto& e : edit::GalleryStyles(*doc)) listed = listed || e.id == id;
+  CHECK(listed);
+  edit::RunFormat r;
+  r.size = HalfPoints(30);
+  r.highlight = "green";  // left out
+  edit::ModifyStyle(ed, id, r, {});
+  CHECK(At(*doc, paras[0], 0).size.Value() == 30 && !Has(PartXml(*doc, PartKind::Styles), "highlight"));
+  // A second one of the same name is refused; another name gets its own id.
+  CHECK(edit::NewStyleFromSelection(ed, Whole(*doc, paras[1]), "pull quote & more", why).empty());
+  CHECK(edit::NewStyleFromSelection(ed, Whole(*doc, paras[1]), "Pull Quote&More", why) == "PullQuote_More1");
+  auto back = SaveAndReopen(*doc);
+  CHECK(back && back->FindStyle("PullQuote_More") && back->ResolvedPara(MainParas(*back)[0]).style == "PullQuote_More");
+  int steps = 0;
+  while (editor.Undo()) ++steps;
+  CHECK(steps == 3 && MainXml(*doc) == originalMain && PartXml(*doc, PartKind::Styles) == originalStyles);
 }
 
 TEST(Styles_HighlightingStaysOnTheText) {
