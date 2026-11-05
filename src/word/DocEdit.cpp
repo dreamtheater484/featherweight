@@ -87,7 +87,10 @@ bool DocView::Apply(const Result& r) {
 
 void DocView::TypeText(std::u16string_view text) {
   if (text.empty()) return;
-  Apply(HasSelection() ? editor_->Replace(SelFrom(), SelTo(), text) : editor_->InsertText(ToDoc(focus_), text));
+  const bool typed = !HasSelection();
+  if (!Apply(HasSelection() ? editor_->Replace(SelFrom(), SelTo(), text) : editor_->InsertText(ToDoc(focus_), text))) return;
+  // "1. " or "* " at the start of a paragraph starts a list (DocFormat::AutoFormat).
+  if (typed && format_ && (text == u" " || text == u"	")) format_->AutoFormat(ToDoc(focus_));
 }
 
 void DocView::DeleteBy(bool forward, bool word) {

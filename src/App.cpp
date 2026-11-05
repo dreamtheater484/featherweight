@@ -2238,6 +2238,7 @@ void App::RunScript(const std::wstring& script) {
           {L"replace", CmdReplace}, {L"replaceall", CmdReplaceAll}, {L"undo", CmdUndo}};
       for (const auto& [name, id] : names)
         if (arg == name) Execute(id);
+      if (!arg.empty() && iswdigit(arg[0])) Execute(_wtoi(arg.c_str()));  // any command by its id
     } else if (op == L"updatecheck") {
       if (!arg.empty()) Updater::SetReleaseUrlForTesting(arg);
       updater_.Start(hwnd_, false);

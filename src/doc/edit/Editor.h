@@ -75,6 +75,18 @@ struct PropEdit {
   }
 };
 
+// A change made to the model directly rather than as a run of paragraphs: formatting, styles and
+// lists (TreeEdit.h). It has been applied when it's recorded, and undoes and redoes itself.
+struct CustomStep {
+  virtual ~CustomStep() = default;
+  virtual void Undo() = 0;
+  virtual void Redo() = 0;
+  std::vector<uint32_t> parts;  // the parts it changes (indexes into Document::Parts())
+  // The paragraphs whose layout it changes, all of one story (their neighbours are laid out again
+  // too). kNone: anything may read differently, and the whole document is laid out again.
+  uint32_t first = kNone, count = 0;
+};
+
 class Editor {
  public:
   explicit Editor(Document& doc);
@@ -122,6 +134,13 @@ class Editor {
   // Typing and deleting a character at a time coalesce into one step while they continue where the
   // last one ended. The view breaks the run when the caret moves on its own or time passes.
   void BreakTyping();
+
+  // ---- Direct changes (TreeEdit.h). RecordStep adds an applied step to the history, as one undo
+  // step or as part of the open group, rebuilds the model's indexes and tells the listeners that
+  // every paragraph may look different. New elements take their node ids from NewNodeId, the
+  // transactions' own counter.
+  void RecordStep(std::u16string name, std::shared_ptr<CustomStep> step, Pos caret = {});
+  pkg::NodeId NewNodeId();
 
   // ---- Undo and redo
   bool CanUndo() const;

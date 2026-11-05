@@ -16,6 +16,7 @@
 #include "draw/PrintJob.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
+#include "pkg/Zip.h"
 #include "ui/Anim.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -206,7 +207,6 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
   pagination_->LayOutPages(1);
   revision_ = pagination_->Revision();
   TakeNewPages();
-
   CollectAnnotations();
 
   // Editing, when the model can write the document back as it was.
@@ -216,6 +216,8 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
   if (editor->CanEdit()) {
     editor_ = std::move(editor);
     editor_->OnChange([this](const fw::doc::edit::Change& c) { OnEdited(c); });
+    format_ = std::make_unique<DocFormat>(
+        *editor_, [this] { return FormatTarget(); }, [this](const DocFormat::Done& d) { AfterFormat(d); });
     const std::vector<uint32_t> main = doc_->StoryParagraphs(doc_->MainStory());
     if (!main.empty()) anchor_ = focus_ = {main.front(), 0};
   }
@@ -591,7 +593,8 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
 
 bool DocView::HasIdleWork() const {
   return Ready() && (!pagination_->Done() || !noticesShown_ || !wordsCounted_ || annotationsStale_ ||
-                     (!placeholder_ && sizes_.size() < pagination_->PageCount()));
+                     (!placeholder_ && sizes_.size() < pagination_->PageCount()) ||
+                     (format_ && DocFormat::FontsPending()));
 }
 
 bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
@@ -647,6 +650,8 @@ bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
     CollectAnnotations();
     repaint = true;
   }
+  // The font box's list, once the pages are there.
+  if (format_ && pagination_->Done() && DocFormat::FontsPending()) DocFormat::ReadFonts();
   return repaint;
 }
 
@@ -797,6 +802,7 @@ void DocView::OnMouseUp(int x, int y, int, UINT) {
   } else if (d == Drag::Select && Editing()) {
     CaretMoved(false);
   }
+  if (d == Drag::Select && format_ && format_->PainterOn()) format_->SelectionMade();
 }
 
 void DocView::OnMouseLeave() {
@@ -806,6 +812,12 @@ void DocView::OnMouseLeave() {
 }
 
 bool DocView::OnKeyDown(UINT vk, UINT mods) {
+  if (vk == VK_ESCAPE && format_ && format_->PainterOn()) {
+    format_->CancelPainter();
+    host_.ViewInvalidate();
+    return true;
+  }
+  if (vk == VK_TAB && !(mods & (kModCtrl | kModAlt)) && Editing() && ListTab((mods & kModShift) != 0)) return true;
   if (Editing() && pagination_->PageCount() > 0 && EditKey(vk, mods)) return true;
   if (!Ready() || pagination_->PageCount() == 0) return NavigationKey(vk, mods);
   if (vk == VK_ESCAPE && HasSelection()) {
@@ -1248,7 +1260,15 @@ int DocView::Shortcut(UINT vk, UINT mods) {
   return 0;
 }
 
+int DocView::ShortcutFor(UINT vk, UINT mods) const {
+  // Word's keys first in a document being edited: Ctrl+1 is single spacing there, not actual size.
+  if (format_)
+    if (int cmd = DocFormat::Shortcut(vk, mods)) return cmd;
+  return Shortcut(vk, mods);
+}
+
 CommandState DocView::QueryCommand(int cmd) {
+  if (format_ && DocFormat::Owns(cmd)) return format_->Query(cmd);
   CommandState s;
   switch (cmd) {
     case CmdSave: s = {Modified(), false}; break;
@@ -1274,9 +1294,15 @@ CommandState DocView::QueryCommand(int cmd) {
       s.shortcut = n.keys;
     }
   }
+  // Word's keys win in a document being edited: Ctrl+=, Ctrl+0, Ctrl+1 and Ctrl+2 format there.
+  if (format_ && (cmd == CmdZoomIn || cmd == CmdZoomAuto || cmd == CmdZoomActual || cmd == CmdZoomFitPage))
+    s.shortcut.clear();
   // "Undo typing", "Redo new paragraph".
-  if (cmd == CmdUndo && s.enabled) s.label = L"Undo " + fw::ToLower(std::wstring(editor_->UndoName().begin(), editor_->UndoName().end()));
-  if (cmd == CmdRedo && s.enabled) s.label = L"Redo " + fw::ToLower(std::wstring(editor_->RedoName().begin(), editor_->RedoName().end()));
+  // (The names are copies: one each, so their iterators are of the same string.)
+  if ((cmd == CmdUndo || cmd == CmdRedo) && s.enabled) {
+    const std::u16string name = cmd == CmdUndo ? editor_->UndoName() : editor_->RedoName();
+    s.label = (cmd == CmdUndo ? L"Undo " : L"Redo ") + fw::ToLower(std::wstring(name.begin(), name.end()));
+  }
   return s;
 }
 
@@ -1284,10 +1310,18 @@ std::vector<int> DocView::Commands() {
   std::vector<int> ids;
   for (const CommandName& n : kCommandNames)
     if (editor_ || (n.cmd != CmdCut && n.cmd != CmdPaste && n.cmd != CmdUndo && n.cmd != CmdRedo)) ids.push_back(n.cmd);
+  if (format_)
+    for (int cmd : DocFormat::CommandIds()) ids.push_back(cmd);
   return ids;
 }
 
 bool DocView::Execute(int cmd) {
+  if (format_ && DocFormat::Owns(cmd)) {
+    // Ctrl+Shift+V pastes the format Ctrl+Shift+C copied, as in Word; with none, the text alone.
+    if (cmd == CmdPasteFormat && !format_->Carrying()) Paste(false);
+    else format_->Execute(cmd);
+    return true;
+  }
   switch (cmd) {
     case CmdCopy: Copy(); return true;
     case CmdCut: Cut(); return true;
@@ -1318,8 +1352,24 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   saveAs.glyphSize = 9;
   ToolItem print = item(CmdPrint, icon::Print);
   m.left = {save, saveAs, print};
+  if (Editing()) {
+    // Undo and redo, then formatting; the priorities say what a narrow window drops first (Toolbar.h).
+    auto query = [&](int cmd, wchar_t glyph, int priority) {
+      CommandState q = QueryCommand(cmd);
+      ToolItem t = item(cmd, glyph);
+      t.tooltip = q.Tooltip();
+      t.enabled = q.enabled;
+      t.priority = priority;
+      return t;
+    };
+    ToolItem undo = query(CmdUndo, icon::Undo, 8);
+    undo.sepBefore = true;
+    m.left.push_back(undo);
+    m.left.push_back(query(CmdRedo, icon::Redo, 7));
+    format_->AddToolbar(m);
+  }
 
-  m.pager = true;
+  m.pager = !Editing();  // when editing, the status bar has the page and the zoom
   m.page = currentPage_;
   m.pageCount = PageCount();
   m.zoomText = fw::FormatPercent(Zoom());
@@ -1359,10 +1409,10 @@ void DocView::FillContextMenu(HMENU m, int, int) {
   }
   AppendItem(m, CmdSelectAll, L"Select all\tCtrl+A");
   AppendSeparator(m);
-  AppendItem(m, CmdZoomIn, L"Zoom in\tCtrl+=");
+  AppendItem(m, CmdZoomIn, format_ ? L"Zoom in" : L"Zoom in\tCtrl+=");
   AppendItem(m, CmdZoomOut, L"Zoom out\tCtrl+−");
   AppendItem(m, CmdZoomFitWidth, L"Fit width\tCtrl+3");
-  AppendItem(m, CmdZoomFitPage, L"Fit page\tCtrl+2");
+  AppendItem(m, CmdZoomFitPage, format_ ? L"Fit page" : L"Fit page\tCtrl+2");
   AppendSeparator(m);
   AppendItem(m, CmdFind, L"Find…\tCtrl+F");
   AppendItem(m, CmdPrint, L"Print…\tCtrl+P");
@@ -1373,7 +1423,59 @@ void DocView::BuildStatusBar(StatusBarModel& m) {
   if (!pagination_->Done()) pages += L"…";
   m.segments = {pages};
   if (wordsCounted_) m.segments.push_back(Thousands(words_) + (words_ == 1 ? L" word" : L" words"));
+  if (format_)
+    if (std::wstring lang = format_->Language(); !lang.empty()) m.segments.push_back(lang);
   m.zoom = true;
   m.zoomValue = Zoom();
   m.onZoom = [this](double z) { SetZoom(z); };
+}
+
+// ---------------------------------------------------------------------------
+// Formatting
+
+DocFormat::Target DocView::FormatTarget() const {
+  DocFormat::Target t;
+  if (!Editing()) return t;
+  TextPos a = std::min(anchor_, focus_), b = std::max(anchor_, focus_);
+  const auto& paras = doc_->Paragraphs();
+  if (a.para >= paras.size() || b.para >= paras.size()) return t;
+  a.offset = std::min<uint32_t>(a.offset, static_cast<uint32_t>(paras[a.para].text.size()));
+  b.offset = std::min<uint32_t>(b.offset, static_cast<uint32_t>(paras[b.para].text.size()));
+  t.any = true;
+  t.sel = {{a.para, a.offset}, {b.para, b.offset}};
+  t.chars = t.sel;
+  if (a == b) {
+    // A caret inside a word formats the word, as Word does (its space after stays as it is).
+    TextPos from, to;
+    WordAt(a, from, to);
+    const std::u16string& text = paras[a.para].text;
+    while (to.offset > from.offset && to.offset <= text.size() && text[to.offset - 1] == u' ') --to.offset;
+    if (from < a && a < to) t.chars = {{from.para, from.offset}, {to.para, to.offset}};
+  }
+  return t;
+}
+
+void DocView::AfterFormat(const DocFormat::Done& done) {
+  // OnEdited has told the layout what changed: the caret's page is laid out again now.
+  if (done.caret) anchor_ = focus_ = {done.caret->para, done.caret->offset};
+  goalX_ = -1;
+  if (auto c = pagination_->CaretAt(focus_)) pagination_->LayOutPages(c->page + 2);
+  TakeNewPages();
+  CaretMoved(done.caret.has_value());
+  if (!done.message.empty()) host_.ViewMessage(BannerKind::Info, done.message);
+  host_.ViewStateChanged();
+  host_.ViewInvalidate();
+}
+
+bool DocView::ListTab(bool back) {
+  if (!format_) return false;
+  DocFormat::Target t = FormatTarget();
+  if (!t.any) return false;
+  // At the start of a list item, or across items: the level. Elsewhere Tab is the editor's.
+  const bool across = t.sel.from.para != t.sel.to.para;
+  if (!across && t.sel.from.offset != 0) return false;
+  const std::string_view numId = doc_->ResolvedPara(t.sel.from.para).numId;
+  if (numId.empty() || numId == "0") return false;
+  Execute(back ? CmdOutdent : CmdIndent);
+  return true;
 }

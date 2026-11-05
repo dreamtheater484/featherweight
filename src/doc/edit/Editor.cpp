@@ -100,6 +100,7 @@ struct Step {
   uint32_t story = kNone, first = kNone;
   Side before, after;
   bool structure = false;
+  std::shared_ptr<CustomStep> custom;  // a direct change (RecordStep): it restores itself
 };
 enum class Kind : uint8_t { Other, Typing, Deleting };
 struct Entry {
@@ -638,12 +639,39 @@ struct EditorState {
   }
   // The parts an undo step changed, counted in or out of `dirty`.
   void Count(const Entry& e, int delta) {
+    if (dirty.size() < d.parts_.size()) dirty.resize(d.parts_.size(), 0);  // a direct change added a part
     std::vector<uint32_t> parts;
-    for (const Step& st : e.steps)
-      if (uint32_t part = d.stories_[st.story].part; part < dirty.size() &&
-                                                    std::find(parts.begin(), parts.end(), part) == parts.end())
-        parts.push_back(part);
+    auto add = [&](uint32_t part) {
+      if (part < dirty.size() && std::find(parts.begin(), parts.end(), part) == parts.end()) parts.push_back(part);
+    };
+    for (const Step& st : e.steps) {
+      if (st.custom) {
+        for (uint32_t part : st.custom->parts) add(part);
+        continue;
+      }
+      add(d.stories_[st.story].part);
+    }
     for (uint32_t part : parts) dirty[part] += delta;
+  }
+
+  // After a direct change, done or undone: the model's indexes are built again, every cache goes,
+  // and every paragraph may look different.
+  void RefreshAll(const CustomStep& step) {
+    d.caches_ = std::make_unique<Document::Caches>();
+    d.BuildIndexes();
+    for (Paragraph& p : d.paras_) p.version = ++version;
+    Change ch;
+    if (step.first != kNone && step.count > 0 && step.first + step.count <= d.paras_.size()) {
+      ch.story = d.paras_[step.first].story;
+      ch.first = step.first;
+      ch.removed = ch.added = step.count;
+    } else {
+      ch.story = d.main_;
+      ch.first = 0;
+      ch.removed = ch.added = static_cast<uint32_t>(d.paras_.size());
+      ch.structure = true;
+    }
+    pending.push_back(ch);
   }
 
   // Brings the model's indexes and caches up to date after a step was done (or undone) and tells
@@ -747,11 +775,21 @@ struct EditorState {
     from.pop_back();
     if (undoing) {
       for (auto it = e.steps.rbegin(); it != e.steps.rend(); ++it) {
+        if (it->custom) {
+          it->custom->Undo();
+          RefreshAll(*it->custom);
+          continue;
+        }
         Restore(it->before, it->first, static_cast<uint32_t>(it->after.paras.size()));
         Refresh(*it, true);
       }
     } else {
       for (const Step& s : e.steps) {
+        if (s.custom) {
+          s.custom->Redo();
+          RefreshAll(*s.custom);
+          continue;
+        }
         Restore(s.after, s.first, static_cast<uint32_t>(s.before.paras.size()));
         Refresh(s, false);
       }
@@ -1696,6 +1734,18 @@ void Editor::EndGroup() {
 }
 
 void Editor::BreakTyping() { impl_->typingBroken = true; }
+
+void Editor::RecordStep(std::u16string name, std::shared_ptr<CustomStep> step, Pos caret) {
+  if (!step) return;
+  Step s;
+  s.custom = std::move(step);
+  s.structure = true;
+  impl_->RefreshAll(*s.custom);
+  impl_->Record(std::move(s), caret, caret, Kind::Other, std::move(name));
+  impl_->Notify(listeners_);
+}
+
+pkg::NodeId Editor::NewNodeId() { return impl_->NewNode(); }
 
 bool Editor::CanUndo() const { return !impl_->undo.empty(); }
 bool Editor::CanRedo() const { return !impl_->redo.empty(); }

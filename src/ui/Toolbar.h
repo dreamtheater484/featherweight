@@ -39,7 +39,7 @@ struct ToolItem {
   bool checked = false;
   bool joinNext = false;   // no gap before the next item (a button and its arrow)
   bool sepBefore = false;  // a thin separator before this item
-  int priority = 9;        // right group: lower is dropped first when space is tight
+  int priority = 9;        // lower is dropped first when space is tight (left items only below 9)
 
   // The other kinds. Dropdowns, combo boxes and split buttons list `choices`, and `choice` is
   // the chosen one; `text` is what a combo box shows (or a dropdown, with nothing chosen).

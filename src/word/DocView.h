@@ -14,12 +14,13 @@
 #include "doc/model/Document.h"
 #include "pkg/XmlDom.h"
 #include "text/Fonts.h"
+#include "word/DocFormat.h"
 
 // A Word document in a tab (plan milestones D1 and D2): the model, laid out page by page by
 // fw::doc::layout (the first page at once, the rest in idle time), drawn through draw::Painter,
 // with selection and copy, find, links, comments and tracked changes shown, and printing. A
 // document Featherweight can write back is edited in place (DocEdit.cpp): the caret, typing,
-// deleting, undo and redo, cut and paste, through fw::doc::edit.
+// deleting, undo and redo, cut and paste, through fw::doc::edit; formatting through DocFormat.
 class DocView : public PagedView {
  public:
   DocView(ViewHost& host, std::wstring path);
@@ -54,7 +55,7 @@ class DocView : public PagedView {
   void SetKeyFocus(bool has) override;
   std::optional<RECT> CaretRect() override;
 
-  int ShortcutFor(UINT vk, UINT mods) const override { return Shortcut(vk, mods); }
+  int ShortcutFor(UINT vk, UINT mods) const override;
   CommandState QueryCommand(int cmd) override;
   std::vector<int> Commands() override;
   bool Execute(int cmd) override;
@@ -173,6 +174,14 @@ class DocView : public PagedView {
   fw::doc::Pos SelFrom() const { return {std::min(anchor_, focus_).para, std::min(anchor_, focus_).offset}; }
   fw::doc::Pos SelTo() const { return {std::max(anchor_, focus_).para, std::max(anchor_, focus_).offset}; }
 
+  // ---- Formatting (DocFormat)
+  // What formatting applies to: the selection, or the caret and the word it's in.
+  DocFormat::Target FormatTarget() const;
+  // After a formatting command: the caret where it says, or why nothing happened.
+  void AfterFormat(const DocFormat::Done& done);
+  // Tab and Shift+Tab at the start of list items change their level.
+  bool ListTab(bool back);
+
   std::wstring path_;
   std::unique_ptr<fw::doc::Document> doc_;
   std::unique_ptr<fw::text::Fonts> fonts_;
@@ -241,6 +250,7 @@ class DocView : public PagedView {
 
   // Editing: null for a document shown but not edited (one the model can't write back).
   std::unique_ptr<fw::doc::edit::Editor> editor_;
+  std::unique_ptr<DocFormat> format_;  // after the editor: it goes first
   uint64_t clipSource_ = 0;  // names this document in what it copies, to paste lists back into it
   bool keyFocus_ = true;
   bool annotationsStale_ = false;  // an edit moved comments, changes or links: find them again

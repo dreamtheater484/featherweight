@@ -662,7 +662,7 @@ void SplitButton::Draw(Canvas& c) {
   float cy = std::round((rc.top + rc.bottom) / 2);
   if (glyph) {
     float gy = showColor ? cy - 3 * u : cy;
-    c.Icon(glyph, RectF(x, gy - 10 * u, x + glyphW, gy + 10 * u), fg, 16 * u);
+    DrawGlyph(c, glyph, RectF(x, gy - 10 * u, x + glyphW, gy + 10 * u), fg, 16 * u);
     if (showColor) {
       D2D1_RECT_F bar = RectF(x, cy + 6 * u, x + glyphW, cy + 6 * u + std::max(2.f, std::round(3 * u)));
       if (color.a > 0) c.Fill(bar, enabled ? color : Alpha(color, 0.4f));

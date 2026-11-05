@@ -730,7 +730,7 @@ void Dropdown::Draw(Canvas& c) {
   D2D1_COLOR_F fg = enabled ? p.text : p.textDisabled;
   float x = rc.left + 11 * u;
   if (glyph) {
-    c.Icon(glyph, RectF(x, rc.top, x + 16 * u, rc.bottom), fg, 14 * u);
+    DrawGlyph(c, glyph, RectF(x, rc.top, x + 16 * u, rc.bottom), fg, 14 * u);
     x += 16 * u + 8 * u;
   }
   const bool chosen = selected >= 0 && selected < static_cast<int>(items.size());

@@ -21,6 +21,7 @@ class Writer;
 }  // namespace docx
 namespace edit {
 struct EditorState;
+class TreeEdit;
 }  // namespace edit
 
 // The document model (plan §6.3): a headless, read-only view of a Word document, built by the
@@ -359,6 +360,15 @@ class Document {
   const ParaProps& ResolvedPara(uint32_t para) const;
   const RunProps& ResolvedRun(uint32_t para, Node run) const;
   const RunProps& ResolvedMark(uint32_t para) const;  // the paragraph mark (w:pPr/w:rPr)
+  // What a run in this paragraph with this character style (or none) would be without direct
+  // formatting, and what the paragraph would be without its own w:pPr (but still in its list).
+  // Formatting compares with these to write only what differs. Not cached.
+  RunProps StyleRun(uint32_t para, std::string_view charStyle = {}) const;
+  ParaProps StylePara(uint32_t para) const;
+  // What a style gives on its own: the document defaults, then the style and the ones it's based
+  // on. Empty or unknown: the defaults alone. Modifying a style compares with its basedOn's.
+  RunProps StyleChainRun(std::string_view styleId) const;
+  ParaProps StyleChainPara(std::string_view styleId) const;
   std::optional<ListLabel> Label(uint32_t para) const;
   TableProps ResolvedTable(Node tbl) const;
   RowProps ResolvedRow(Node tr) const;
@@ -422,6 +432,7 @@ class Document {
   friend class docx::Reader;
   friend class docx::Writer;
   friend struct edit::EditorState;
+  friend class edit::TreeEdit;
   Document();
 
   Pos PosOf(Node node) const;  // where an element is: its paragraph and offset

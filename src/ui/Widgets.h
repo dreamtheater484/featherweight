@@ -37,6 +37,8 @@ struct Button {
 };
 
 void DrawButton(gfx::Canvas& c, const Button& b, float ui, bool windowActive = true);
+// An icon: from the icon font, or one of the custom ones (icon::ViewSingle, NumberedList, ...).
+void DrawGlyph(gfx::Canvas& c, wchar_t glyph, const D2D1_RECT_F& r, D2D1_COLOR_F color, float size);
 
 // Hover/press tracking for a set of buttons owned by a component.
 class ButtonSet {
