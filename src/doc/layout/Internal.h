@@ -75,6 +75,8 @@ struct Stack {
   std::vector<Fill> fills;
   std::vector<Edge> edges;
   std::vector<DrawingBox> drawings;
+  // Footnotes its lines refer to: the bottom of the line with the reference, and the note's story.
+  std::vector<std::pair<float, uint32_t>> notes;
   float height = 0;
   bool usesPageCount = false;  // shows NUMPAGES or SECTIONPAGES
   // Has content placed relative to the page or its margins, or that text wraps around: where it

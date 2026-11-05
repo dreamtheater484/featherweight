@@ -3,6 +3,7 @@
 // keep-with-next, keep-lines-together, widow and orphan control and page breaks, and tables whose
 // rows split across pages under repeated header rows. Endnotes follow the body.
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdlib>
 #include <numeric>
@@ -408,6 +409,31 @@ struct Flow {
     return f.noteStacks.emplace(story, s).first->second;
   }
 
+  float NoteHeight(uint32_t story) {
+    auto it = f.noteStacks.find(story);
+    return it != f.noteStacks.end() ? it->second.height : NoteStack(story).height;
+  }
+
+  // Footnotes the cells of a row refer to between cutFrom and cutTo (null: from the top, to the
+  // end), not on the page yet: their height (with the separator for the first) and stories.
+  float RowNotes(const RowBox& row, const std::vector<float>* cutFrom, const std::vector<float>* cutTo,
+                 std::vector<uint32_t>& add) {
+    add.clear();
+    float h = 0;
+    for (size_t i = 0; i < row.cells.size(); ++i) {
+      const float from = cutFrom ? (*cutFrom)[i] : -1, to = cutTo ? (*cutTo)[i] : FLT_MAX;
+      for (const auto& [y, story] : row.cells[i].content.notes) {
+        if (y <= from + kEpsilon || y > to + kEpsilon) continue;
+        if (std::find(f.notes.begin(), f.notes.end(), story) != f.notes.end()) continue;
+        if (std::find(add.begin(), add.end(), story) != add.end()) continue;
+        if (f.notes.empty() && add.empty()) h += SeparatorHeight();
+        h += NoteHeight(story);
+        add.push_back(story);
+      }
+    }
+    return h;
+  }
+
   float SeparatorHeight() {
     if (f.separatorHeight < 0) f.separatorHeight = Separator().height;
     return f.separatorHeight;
@@ -426,7 +452,7 @@ struct Flow {
         h += SeparatorHeight();
         first = false;
       }
-      h += NoteStack(story).height;
+      h += NoteHeight(story);
       if (add) add->push_back(story);
     }
     return h;
@@ -748,7 +774,15 @@ struct Flow {
         if (row.props.heightRule == "exact") h = std::max(0.0f, row.height - f.rowCut.front());
       }
       const bool last = f.row + 1 == t.rows.size();
-      if (f.y + h <= Bottom() + kEpsilon || ((f.columnEmpty || fresh) && (row.props.cantSplit || h <= 0))) {
+      const std::vector<float>* from = f.rowCut.empty() ? nullptr : &f.rowCut;
+      std::vector<uint32_t> notes;
+      float notesH = RowNotes(row, from, nullptr, notes);
+      auto takeNotes = [&]() {
+        f.notes.insert(f.notes.end(), notes.begin(), notes.end());
+        f.notesHeight += notesH;
+      };
+      if (f.y + h <= Bottom() - notesH + kEpsilon || ((f.columnEmpty || fresh) && (row.props.cantSplit || h <= 0))) {
+        takeNotes();
         e.EmitRow(t, f.row, x, f.y, h, f.rowCut.empty() ? nullptr : &f.rowCut, nullptr, f.body, firstOnPage, last);
         f.y += h;
         f.columnEmpty = false;
@@ -761,30 +795,42 @@ struct Flow {
         continue;
       }
       // It doesn't fit. Rows that can't split, and rows of which nothing fits, move on.
-      const float room = Bottom() - f.y;
+      float room = Bottom() - f.y;
       std::vector<float> cutTo(row.cells.size(), 0);
       bool any = false, allDone = true;
-      if (!row.props.cantSplit || f.columnEmpty || fresh) {
+      auto cut = [&]() {
+        any = false;
+        allDone = true;
         for (size_t i = 0; i < row.cells.size(); ++i) {
           const CellBox& c = row.cells[i];
           if (c.continued) continue;
-          float from = f.rowCut.empty() ? 0 : f.rowCut[i];
-          float limit = from + room - c.marginTop - c.marginBottom;
-          float cut = from;
+          float start = f.rowCut.empty() ? 0 : f.rowCut[i];
+          float limit = start + room - c.marginTop - c.marginBottom;
+          float to = start;
           for (const LineBox& l : c.content.lines)
-            if (l.top >= from - kEpsilon && l.top + l.height <= limit + kEpsilon) cut = std::max(cut, l.top + l.height);
-          // Lines after the cut that start before it belong with it (beside one another).
-          cutTo[i] = cut;
-          if (cut > from + kEpsilon) any = true;
+            if (l.top >= start - kEpsilon && l.top + l.height <= limit + kEpsilon) to = std::max(to, l.top + l.height);
+          cutTo[i] = to;
+          if (to > start + kEpsilon) any = true;
           bool rest = false;
           for (const LineBox& l : c.content.lines)
-            if (l.top >= cut - kEpsilon) rest = true;
+            if (l.top >= to - kEpsilon) rest = true;
           if (rest) allDone = false;
+        }
+      };
+      if (!row.props.cantSplit || f.columnEmpty || fresh) {
+        cut();
+        // The footnotes of what fits take room from it: cut again above them.
+        if (any && !allDone && (notesH = RowNotes(row, from, &cutTo, notes)) > 0) {
+          room -= notesH;
+          cut();
+          notesH = RowNotes(row, from, &cutTo, notes);
         }
       }
       if (!any || allDone) {
         if (f.columnEmpty || fresh) {
           // Taller than a page and nothing splits: it goes here anyway.
+          notesH = RowNotes(row, from, nullptr, notes);
+          takeNotes();
           e.EmitRow(t, f.row, x, f.y, h, f.rowCut.empty() ? nullptr : &f.rowCut, nullptr, f.body, firstOnPage, last);
           f.y += h;
           f.columnEmpty = false;
@@ -796,6 +842,7 @@ struct Flow {
         if (f.row == 0 && f.rowCut.empty() && BreakChain()) return NextColumn() ? Step::Continue : Step::PageFull;
         return NextColumn() ? Step::Continue : Step::PageFull;
       }
+      takeNotes();
       e.EmitRow(t, f.row, x, f.y, room, f.rowCut.empty() ? nullptr : &f.rowCut, &cutTo, f.body, firstOnPage, true);
       f.y += room;
       f.columnEmpty = false;

@@ -82,6 +82,7 @@ void Stack::Offset(float dx, float dy) {
     }
   }
   for (Fill& f : fills) f.rect = {f.rect.left + dx, f.rect.top + dy, f.rect.right + dx, f.rect.bottom + dy};
+  for (auto& n : notes) n.first += dy;
   for (Edge& e : edges) {
     e.x1 += dx;
     e.x2 += dx;
@@ -102,6 +103,7 @@ void Stack::Append(Stack&& other, float dx, float dy) {
   fills.insert(fills.end(), other.fills.begin(), other.fills.end());
   edges.insert(edges.end(), other.edges.begin(), other.edges.end());
   drawings.insert(drawings.end(), other.drawings.begin(), other.drawings.end());
+  notes.insert(notes.end(), other.notes.begin(), other.notes.end());
   usesPageCount = usesPageCount || other.usesPageCount;
   placedOnPage = placedOnPage || other.placedOnPage;
 }
@@ -502,6 +504,10 @@ void Engine::StackParagraph(uint32_t para, const Frame& frame, Stack& out, Spaci
     }
     estimate = h;
     float top = space.top - frame.y;
+    for (const auto& [offset, story] : pt.notes)
+      if (offset >= line.start && offset < std::max(line.end, line.start + 1) &&
+          doc_.Stories()[story].kind == StoryKind::Footnote)
+        out.notes.push_back({top + h, story});
     AddLine(pt, std::move(line), 0, top, h, frame, paintBase, out);
     y = top + h;
   }
