@@ -190,4 +190,6 @@ enum Cmd : int {
   CmdPictureRotate,   // 90 degrees clockwise
   CmdPictureReset,
   CmdPicturePanel,    // size, rotation and alt text
+  // The ruler in Word documents (D3).
+  CmdRuler = 1200,  // the rulers shown or not (the ⋯ menu, a setting like spelling as you type)
 };

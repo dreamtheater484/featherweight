@@ -27,11 +27,13 @@ struct SaveOptions {
 // the result is opened again and every rewritten part checked before it's returned.
 pkg::Status Serialize(Document& doc, const SaveOptions& options, std::vector<uint8_t>& out);
 
-// Pictures nothing in a part refers to any more (deleted, or replaced), which a save leaves out:
-// the image relationships of the parts written from the model whose ids their XML doesn't
-// mention, and the media parts that only those pointed to. `written` holds the parts' XML by index
-// into Document::Parts(); other parts aren't looked at. The package isn't changed: undo may still
-// bring a picture back.
+// Pictures, headers and footers nothing in a part refers to any more (deleted, replaced, or made and
+// undone), which a save leaves out: the image, header and footer relationships of the parts written
+// from the model whose ids their XML doesn't mention, and the parts that only those pointed to.
+// `written` holds the parts' XML by index into Document::Parts(). Of the other parts, only those
+// whose relationships changed since the file was opened are looked at, and only for headers and
+// footers (one made and undone leaves its part unwritten). The package isn't changed: undo or redo
+// may still bring them back.
 struct UnusedMedia {
   std::vector<std::pair<std::string, std::string>> relationships;  // source part, relationship id
   std::vector<std::string> parts;

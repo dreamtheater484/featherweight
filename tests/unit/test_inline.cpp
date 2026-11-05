@@ -3,6 +3,7 @@
 #include <string>
 
 #include "DocFixture.h"
+#include "doc/docx/Save.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/HeaderFooter.h"
 #include "doc/edit/Inline.h"
@@ -298,6 +299,49 @@ TEST(HeaderFooter_NewHeaderIsMadeTypedInAndUndone) {
   CHECK(again && again->Sections()[0].headers[0] != kNone && StoryText(*again, again->Sections()[0].headers[0]) == "Report");
   CHECK(editor.Undo() && editor.Undo() && MainXml(*doc) == original && doc->Sections()[0].headers[0] == kNone);
   CHECK(SaveAndReopen(*doc) != nullptr);  // the part nothing refers to says nothing
+}
+
+TEST(HeaderFooter_AnUndoneFooterIsLeftOutOfTheFile) {
+  // d3-torture finding 17: a footer made and undone stays in the model, so redo can bring it back,
+  // but a save writes nothing of it: no part, no relationship, no content type.
+  Fixture f;
+  f.styles = kStyles;
+  f.body = "<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/>"
+           "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/></w:sectPr>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  edit::Editor editor(*doc);
+  std::u16string why;
+  CHECK(edit::EnsureHeaderFooter(editor, 0, true, HdrFtrType::Default, why) != kNone);
+  auto save = [&] {
+    docx::SaveOptions o;
+    o.changedParts = editor.DirtyParts();
+    o.edited = true;
+    std::vector<uint8_t> out;
+    if (!docx::Serialize(*doc, o, out).Ok()) return std::unique_ptr<fw::pkg::Package>();
+    Status st;
+    auto pkg = test::OpenBytes(std::move(out), st);
+    if (pkg && !fw::pkg::CheckPackage(*pkg).Ok()) return std::unique_ptr<fw::pkg::Package>();
+    return pkg;
+  };
+  auto footerRels = [](const fw::pkg::Package& pkg) {
+    const fw::pkg::RelationshipSet* rels = pkg.RelationshipsOf("/word/document.xml");
+    size_t n = 0;
+    for (const auto& r : rels ? rels->items : std::vector<fw::pkg::Relationship>{}) n += r.type.ends_with("/footer");
+    return n;
+  };
+  auto saved = save();
+  CHECK(saved && saved->FindPart("/word/footer1.xml") && footerRels(*saved) == 1);
+  CHECK(editor.Undo());
+  saved = save();
+  CHECK(saved && !saved->FindPart("/word/footer1.xml") && footerRels(*saved) == 0);
+  if (saved)
+    for (const auto& [name, type] : saved->Types().overrides) CHECK(name.find("footer") == std::string::npos);
+  CHECK(doc->Package().FindPart("/word/footer1.xml"));  // the package keeps it, for redo
+  CHECK(editor.Redo());
+  saved = save();
+  CHECK(saved && saved->FindPart("/word/footer1.xml") && footerRels(*saved) == 1);
 }
 
 TEST(HeaderFooter_PageNumbersGoInTheFooter) {

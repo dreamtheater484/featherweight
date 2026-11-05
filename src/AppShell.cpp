@@ -40,6 +40,7 @@ constexpr AppCommand kAppCommands[] = {
     {CmdToggleHighlight, L"Highlight form fields", L""},
     {CmdToggleSpelling, L"Check spelling as you type", L""},
     {CmdToggleAutoCorrect, L"AutoCorrect as you type", L""},
+    {CmdRuler, L"Ruler", L""},
     {CmdClearRecent, L"Clear recent files", L""},
     {CmdToggleAutoUpdate, L"Update automatically", L""},
     {CmdCheckUpdates, L"Check for updates now", L""},
@@ -101,7 +102,8 @@ CommandState App::QueryCommand(int cmd) {
     case CmdToggleHighlight: s.checked = settings_.highlightFields; break;
     case CmdToggleSpelling:
     case CmdToggleAutoCorrect:
-      s.checked = cmd == CmdToggleSpelling ? settings_.spelling : settings_.autoCorrect;
+    case CmdRuler:
+      s.checked = cmd == CmdToggleSpelling ? settings_.spelling : cmd == CmdRuler ? settings_.ruler : settings_.autoCorrect;
       s.visible = ready && v->Kind() == TabKind::Document;
       break;
     case CmdToggleAutoUpdate: s.checked = settings_.autoUpdate; break;

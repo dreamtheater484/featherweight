@@ -539,4 +539,58 @@ void ShiftIndent(TreeEdit& ed, Range range, bool increase) {
   ed.Commit();
 }
 
+void ChangeTabStops(TreeEdit& ed, Range range, const std::vector<Twips>& remove, const std::vector<TabStop>& add) {
+  if (remove.empty() && add.empty()) return;
+  static constexpr uint32_t kTabs = Name("tabs");
+  const Document& doc = ed.Doc();
+  const bool strict = Strict(doc);
+  auto at = [](const std::vector<TabStop>& v, Twips pos) {
+    return std::find_if(v.begin(), v.end(), [&](const TabStop& t) { return t.pos == pos; });
+  };
+  auto byPos = [](const TabStop& a, const TabStop& b) { return a.pos < b.pos; };
+  ed.Begin(u"Tabs");
+  ed.Local();
+  for (uint32_t p : ParagraphsOf(doc, range)) {
+    std::vector<TabStop> want = doc.ResolvedPara(p).tabs;
+    want.erase(std::remove_if(want.begin(), want.end(),
+                              [&](const TabStop& t) {
+                                return std::find(remove.begin(), remove.end(), t.pos) != remove.end() ||
+                                       at(add, t.pos) != add.end();
+                              }),
+               want.end());
+    want.insert(want.end(), add.begin(), add.end());
+    // What the paragraph writes: the style's stops it doesn't have cleared, its own as they are.
+    const std::vector<TabStop> inherited = doc.StylePara(p).tabs;
+    std::vector<TabStop> own;
+    for (const TabStop& t : inherited)
+      if (at(want, t.pos) == want.end()) own.push_back({t.pos, TabAlign::Clear, TabLeader::None});
+    for (const TabStop& t : want)
+      if (auto i = at(inherited, t.pos); i == inherited.end() || !(*i == t)) own.push_back(t);
+    std::stable_sort(own.begin(), own.end(), byPos);
+    const ElemId para = doc.Para(p).elem;
+    if (own.empty()) {
+      if (doc.NodeOf(para).Path({kPPr, kTabs})) ed.Remove(ed.Child(para, kPPr), kTabs);
+      continue;
+    }
+    const ElemId tabs = ed.Path(para, {kPPr, kTabs});
+    ed.Clear(tabs);
+    for (const TabStop& t : own) {
+      static constexpr const char* kLeaders[] = {"none", "dot", "hyphen", "underscore", "heavy", "middleDot"};
+      const char* val = t.align == TabAlign::Center    ? "center"
+                        : t.align == TabAlign::End     ? (strict ? "end" : "right")
+                        : t.align == TabAlign::Decimal ? "decimal"
+                        : t.align == TabAlign::Bar     ? "bar"
+                        : t.align == TabAlign::Num     ? "num"
+                        : t.align == TabAlign::Clear   ? "clear"
+                        : strict                       ? "start"
+                                                       : "left";
+      std::string xml = std::string("<w:tab w:val=\"") + val + "\"";
+      if (t.leader != TabLeader::None) xml += std::string(" w:leader=\"") + kLeaders[static_cast<int>(t.leader)] + "\"";
+      xml += " w:pos=\"" + Num(t.pos.Value()) + "\"/>";
+      ed.AddXml(tabs, xml);
+    }
+  }
+  ed.Commit();
+}
+
 }  // namespace fw::doc::edit
