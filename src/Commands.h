@@ -213,8 +213,8 @@ enum Cmd : int {
   CmdPictureRotate,   // 90 degrees clockwise
   CmdPictureReset,
   CmdPicturePanel,    // size, rotation and alt text
-  // Shapes, text boxes and watermarks in Word documents (D4).
-  CmdInsertTextBox = 1400,
+  // Shapes, text boxes and watermarks in Word documents (D4; forms own 1410-1419).
+  CmdInsertTextBox = 1500,
   CmdInsertRectangle,
   CmdInsertRoundedRectangle,
   CmdInsertOval,
