@@ -48,6 +48,7 @@ class EditTarget {
   virtual Applied Apply(const Edit& edit, std::string& why) = 0;
   // Saves as the app saves: the bytes of the file it would write.
   virtual fw::pkg::Status Save(std::vector<uint8_t>& out) = 0;
+  std::vector<std::string> written;  // the parts the last Save wrote from the model
 };
 
 // Opens a read document for editing with the editor (doc/edit/Editor.h). Built without the

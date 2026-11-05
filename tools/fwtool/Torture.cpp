@@ -162,9 +162,12 @@ bool ParseEdit(std::string_view line, Edit& e) {
 namespace {
 
 // Saves as the app does: the given parts written from the model into the package, then the package.
-fw::pkg::Status SaveParts(fw::doc::Document& doc, const std::vector<uint32_t>& parts, std::vector<uint8_t>& out) {
+fw::pkg::Status SaveParts(fw::doc::Document& doc, const std::vector<uint32_t>& parts, std::vector<uint8_t>& out,
+                          std::vector<std::string>& written) {
   fw::pkg::Status st;
+  written.clear();
   for (uint32_t part : parts) {
+    written.push_back(doc.Parts()[part].name);
     std::string xml;
     if (!(st = fw::doc::docx::WritePart(doc, part, xml)).Ok()) return st;
     doc.Package().SetPart(doc.Parts()[part].name, std::vector<uint8_t>(xml.begin(), xml.end()));
@@ -250,7 +253,7 @@ class EditorTarget : public EditTarget {
     return Applied::Done;
   }
 
-  fw::pkg::Status Save(std::vector<uint8_t>& out) override { return SaveParts(*doc_, editor_.DirtyParts(), out); }
+  fw::pkg::Status Save(std::vector<uint8_t>& out) override { return SaveParts(*doc_, editor_.DirtyParts(), out, written); }
 
  private:
   std::unique_ptr<fw::doc::Document> doc_;
@@ -272,7 +275,7 @@ class ModelOnlyTarget : public EditTarget {
     std::vector<uint32_t> all;
     for (uint32_t i = 0; i < doc_->Parts().size(); ++i)
       if (doc_->Parts()[i].writable) all.push_back(i);
-    return SaveParts(*doc_, all, out);
+    return SaveParts(*doc_, all, out, written);
   }
 
  private:
@@ -559,6 +562,29 @@ class Generator {
   std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> order_;       // paragraph -> story, index
 };
 
+// One paragraph as the digest has it: its style, alignment, where the formatting changes (so run
+// splits don't matter) and its text.
+std::string ParaLine(const Document& doc, uint32_t p) {
+  const ParaProps& pp = doc.ResolvedPara(p);
+  std::string out = std::string(pp.style) + " " + std::to_string(static_cast<int>(pp.jc)) + " | ";
+  std::string last;
+  for (const TextRun& r : doc.Runs(p)) {
+    const RunProps& rp = doc.ResolvedRun(p, r.run);
+    std::string sig = std::string(rp.bold ? "b" : "") + (rp.italic ? "i" : "") + (rp.strike ? "s" : "") + "u" +
+                      std::to_string(static_cast<int>(rp.underline)) + "z" + std::to_string(rp.size.Value());
+    if (sig != last) out += "{" + std::to_string(r.start) + ":" + sig + "}";
+    last = sig;
+  }
+  return out + " " + ToUtf8(doc.Para(p).text);
+}
+
+// Every paragraph's line, by paragraph index: for checking that an edit changed only its own.
+std::vector<std::string> ParaLines(const Document& doc) {
+  std::vector<std::string> lines(doc.Paragraphs().size());
+  for (uint32_t p = 0; p < lines.size(); ++p) lines[p] = ParaLine(doc, p);
+  return lines;
+}
+
 // What a document says, for comparing the edited model with the saved file read back: each story's
 // paragraphs with their style, text, and where the formatting changes (so run splits don't matter).
 std::string Digest(const Document& doc) {
@@ -585,21 +611,14 @@ std::string Digest(const Document& doc) {
   for (uint32_t s = 0; s < doc.Stories().size(); ++s) {
     if (!live[s]) continue;
     const Story& story = doc.Stories()[s];
-    std::string out = std::string("[") + kinds[static_cast<int>(story.kind)] + " " +
-                      (story.kind == StoryKind::TextBox ? std::to_string(textBoxes++) : story.id) + "]\n";
-    for (uint32_t p : doc.StoryParagraphs(s)) {
-      const ParaProps& pp = doc.ResolvedPara(p);
-      out += std::string(pp.style) + " " + std::to_string(static_cast<int>(pp.jc)) + " | ";
-      std::string last;
-      for (const TextRun& r : doc.Runs(p)) {
-        const RunProps& rp = doc.ResolvedRun(p, r.run);
-        std::string sig = std::string(rp.bold ? "b" : "") + (rp.italic ? "i" : "") + (rp.strike ? "s" : "") +
-                          "u" + std::to_string(static_cast<int>(rp.underline)) + "z" + std::to_string(rp.size.Value());
-        if (sig != last) out += "{" + std::to_string(r.start) + ":" + sig + "}";
-        last = sig;
-      }
-      out += " " + ToUtf8(doc.Para(p).text) + "\n";
-    }
+    // Named so that the same story sorts to the same place on both sides, whatever its text: text
+    // boxes by their order, notes and comments by id, headers and footers by their part.
+    std::string name = story.kind == StoryKind::TextBox ? std::to_string(textBoxes++)
+                       : !story.id.empty()             ? story.id
+                       : story.part < doc.Parts().size() ? doc.Parts()[story.part].name
+                                                         : std::string();
+    std::string out = std::string("[") + kinds[static_cast<int>(story.kind)] + " " + name + "]\n";
+    for (uint32_t p : doc.StoryParagraphs(s)) out += ParaLine(doc, p) + "\n";
     if (s == doc.MainStory()) main = std::move(out);
     else stories.push_back(std::move(out));
   }
@@ -660,7 +679,7 @@ struct Settings {
 };
 
 struct Failure {
-  std::string category;  // crash, save, open, check, reopen, differs
+  std::string category;  // crash, spill (an edit changed what it shouldn't), save, open, check, reopen, differs
   std::string message;
 };
 
@@ -669,6 +688,8 @@ struct RoundResult {
   std::vector<Edit> applied;  // every edit tried, in order (refused ones too: they're part of the replay)
   uint32_t done = 0, refused = 0;
   std::vector<uint8_t> saved;
+  std::vector<std::string> written;  // the parts the save wrote
+  std::string edited, readBack;      // the digests, when they differ
 };
 
 std::string Hex(const fw::pkg::Sha256& h) {
@@ -721,7 +742,16 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     r.applied.push_back(e);
     Applied applied = Applied::Refused;
     std::string why;
-    auto apply = [&] { applied = target->Apply(e, why); };
+    // Formatting changes only the paragraphs it's applied to: the others must read the same after.
+    // Reading every paragraph first fills the model's caches, which would hide a stale cache from the
+    // read-back comparison, so half the rounds (by seed) check this and the other half that.
+    bool locality = e.kind == EditKind::Format && (seed & 1);
+    std::vector<std::string> linesBefore, linesAfter;
+    auto apply = [&] {
+      if (locality) linesBefore = ParaLines(target->Doc());
+      applied = target->Apply(e, why);
+      if (locality && applied == Applied::Done) linesAfter = ParaLines(target->Doc());
+    };
     if ((crash = Guarded(apply)) != 0) {
       fail("crash", CrashText(crash) + " in: " + torture::FormatEdit(e));
       break;
@@ -731,6 +761,24 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
       continue;
     }
     ++r.done;
+    if (!linesAfter.empty()) {
+      uint32_t lo = std::min(e.at.para, e.to.para), hi = std::max(e.at.para, e.to.para);
+      if (linesAfter.size() != linesBefore.size()) {
+        fail("spill", "formatting changed the number of paragraphs: " + torture::FormatEdit(e));
+        break;
+      }
+      for (uint32_t p = 0; p < linesAfter.size(); ++p) {
+        if ((p >= lo && p <= hi) || linesAfter[p] == linesBefore[p]) continue;
+        const Story& story = target->Doc().Stories()[target->Doc().Para(p).story];
+        std::string where = story.part < target->Doc().Parts().size() ? target->Doc().Parts()[story.part].name : "?";
+        auto cut = [](const std::string& s) { return s.size() > 120 ? s.substr(0, 120) + "..." : s; };
+        fail("spill", "formatting paragraphs " + std::to_string(lo) + "-" + std::to_string(hi) + " also changed paragraph " +
+                          std::to_string(p) + " (" + where + "): before \"" + cut(linesBefore[p]) + "\", after \"" +
+                          cut(linesAfter[p]) + "\"");
+        break;
+      }
+      if (r.failure) break;
+    }
     if (e.kind == EditKind::Undo) undone += e.count, undoable -= std::min(undoable, e.count);
     else if (e.kind == EditKind::Redo) undoable += e.count, undone -= std::min(undone, e.count);
     else ++undoable, undone = 0;
@@ -741,6 +789,7 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
   auto save = [&] {
     before = Digest(target->Doc());
     st = target->Save(r.saved);
+    r.written = target->written;
   };
   if (DWORD crash = Guarded(save)) return fail("crash", CrashText(crash) + " while saving"), r;
   if (!st.Ok()) return fail("save", st.message), r;
@@ -758,7 +807,11 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
   std::string after;
   auto digest = [&] { after = Digest(*reread); };
   if (DWORD crash = Guarded(digest)) return fail("crash", CrashText(crash) + " reading the saved file's text"), r;
-  if (before != after) fail("differs", FirstDifference(before, after));
+  if (before != after) {
+    fail("differs", FirstDifference(before, after));
+    r.edited = std::move(before);
+    r.readBack = std::move(after);
+  }
   return r;
 }
 
@@ -923,14 +976,26 @@ int Replay(const fs::path& repro, const fs::path& outDir) {
       fs::create_directories(outDir, ec);
     }
     WriteBytes(made, r.saved);
+    if (!r.edited.empty()) {  // what differs, in full: the edited model's text and the saved file's
+      fs::path base = made;
+      base.replace_extension();
+      for (auto [suffix, text] : {std::pair{"-edited.txt", &r.edited}, std::pair{"-readback.txt", &r.readBack}}) {
+        fs::path p = base;
+        p += suffix;
+        WriteBytes(p, std::vector<uint8_t>(text->begin(), text->end()));
+      }
+    }
   }
+  std::string written;
+  for (const std::string& part : r.written) written += (written.empty() ? "" : ", ") + part;
   if (r.failure) {
     std::printf("[FAIL] %s: %zu edits (%u done, %u refused): %s: %s\n", Display(file).c_str(), edits.size(), r.done,
                 r.refused, r.failure->category.c_str(), r.failure->message.c_str());
-    return 1;
+  } else {
+    std::printf("[ ok ] %s: %zu edits (%u done, %u refused)\n", Display(file).c_str(), edits.size(), r.done, r.refused);
   }
-  std::printf("[ ok ] %s: %zu edits (%u done, %u refused)\n", Display(file).c_str(), edits.size(), r.done, r.refused);
-  return 0;
+  std::printf("       parts written: %s\n", written.empty() ? "none" : written.c_str());
+  return r.failure ? 1 : 0;
 }
 
 }  // namespace

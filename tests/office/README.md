@@ -45,7 +45,9 @@ D2 is done when every corpus file, after scripted random edits and a save, has n
   ```bash
   fwtool torture --replay build/torture/repro/<name>-seed<seed>.txt
   ```
-  The replay writes `<name>-replay.docx` next to the reproducer. A reproducer from another checkout finds its document by the tail of the recorded path, so `tests/office/...` files replay anywhere.
+  The replay prints the parts the save wrote and writes `<name>-replay.docx` next to the reproducer. When the edited model and the saved file read back differ, it also writes both texts in full (`-replay-edited.txt`, `-replay-readback.txt`). A reproducer from another checkout finds its document by the tail of the recorded path, so `tests/office/...` files replay anywhere.
+
+  On rounds with an odd seed, every formatting edit is also checked for locality: paragraphs outside the formatted range must read the same before and after. That is the `spill` failure. Even seeds skip it, because reading every paragraph first fills the model's caches, and a stale cache is only caught when they start cold.
 - **`fwvalidate`** (`tools/validate`, built with `dotnet build`) is the Open XML SDK validator. With `--compare` it reports only the errors a saved copy has that its original doesn't.
 - **`scripts/word-open-check.ps1`** opens each file in Word, hidden and in safe mode, read-only, with macros off, and reports whether Word shows a repair prompt or an error. Word's alerts stay on so that a repair prompt is shown, read and cancelled, never answered. Nothing is ever saved. It needs the Office reference PC. A dialog about that PC's Office rather than the file, such as a missing proofing tool ("Word hyphenation feature is not available"), gives the status `notice`, which passes.
 

@@ -66,9 +66,10 @@ constexpr const char* kUsage =
     "      DIR/repro (default DIR: build/torture). DIR/saved and DIR/pairs.tsv hold a saved copy of\n"
     "      each document for the validator and Word (scripts/torture.ps1).\n"
     "  fwtool torture --replay <reproducer.txt> [--out DIR]\n"
-    "      Applies a reproducer's edits again and reports what happens. The file it makes goes\n"
-    "      next to the reproducer as <name>-replay.docx, or into DIR. Its document is found by its\n"
-    "      recorded path or, from another checkout, by the tail of that path.\n"
+    "      Applies a reproducer's edits again and reports what happens and which parts the save\n"
+    "      wrote. The file it makes goes next to the reproducer as <name>-replay.docx, or into DIR,\n"
+    "      with <name>-replay-edited.txt and -readback.txt when the text differs. Its document is\n"
+    "      found by its recorded path or, from another checkout, by the tail of that path.\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
     "      Word's. Run it without text for its options.\n";
