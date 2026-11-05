@@ -909,12 +909,23 @@ bool TreeEdit::SplitRunAt(uint32_t para, uint32_t offset) {
     tail = c;
   };
   if (props != kNoElem) {
+    ElemId mine;
     if (HasRepeats(props)) {
-      append(CopyProps(props, second));  // without the repeats, so the split adds no error
+      mine = CopyProps(props, second);  // without the repeats, so the split adds no error
     } else {
       if (t.elems[props].first != kNoElem) Touch(props).flags |= kSharedKids;
-      append(Clone(props, second));
+      mine = Clone(props, second);
     }
+    append(mine);
+    // A tracked formatting change (w:rPrChange) in both halves: the second gets an id of its own,
+    // as ids are unique in a document (torture finding 38).
+    for (ElemId c = E(mine).first; c != kNoElem; c = E(c).next)
+      if (NameOfElem(t, c) == Name("rPrChange") && Node(&t, c).Has(names::kId)) {
+        Own(mine);
+        for (ElemId k = E(mine).first; k != kNoElem; k = E(k).next)
+          if (NameOfElem(t, k) == Name("rPrChange")) SetAttr(k, names::kId, editor_.NewChangeId());
+        break;
+      }
   }
 
   pkg::NodeId firstMoved = t.elems[split].node;
