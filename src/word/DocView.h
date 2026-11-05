@@ -9,9 +9,9 @@
 
 #include "PagedView.h"
 #include "doc/edit/Editor.h"
+#include "doc/edit/Pictures.h"
 #include "doc/layout/Layout.h"
 #include "draw/Drawing.h"
-#include "doc/edit/Editor.h"
 #include "doc/proof/AutoCorrect.h"
 #include "doc/proof/Spelling.h"
 #include "doc/model/Document.h"
@@ -19,6 +19,9 @@
 #include "text/Fonts.h"
 #include "word/DocFile.h"
 #include "word/DocFormat.h"
+#include "word/DocTable.h"
+
+class PicturePanel;
 
 // A Word document in a tab (plan milestones D1 and D2): the model, laid out page by page by
 // fw::doc::layout (the first page at once, the rest in idle time), drawn through draw::Painter,
@@ -58,6 +61,7 @@ class DocView : public PagedView {
   void OnMouseMove(int x, int y, UINT mods) override;
   void OnMouseUp(int x, int y, int button, UINT mods) override;
   void OnMouseLeave() override;
+  bool Dragging() const override { return PagedView::Dragging() || picDrag_.kind != PictureDrag::None; }
   bool OnKeyDown(UINT vk, UINT mods) override;
   bool OnChar(wchar_t ch, UINT mods) override;
   HCURSOR CursorAt(int x, int y) override;
@@ -123,6 +127,17 @@ class DocView : public PagedView {
   void Paste(bool formatted = true);
   void Undo();
   void Redo();
+
+  // ---- Pictures (DocPictures.cpp, D3) ----
+  // Inserts the picture files at the caret, or where they were dropped (x, y); false when none was.
+  bool InsertPictureFiles(const std::vector<std::wstring>& files, int x = -1, int y = -1);
+  // Whether these are all pictures InsertPictureFiles takes (by their names).
+  static bool PictureFiles(const std::vector<std::wstring>& files);
+  bool TakesPictures(const std::vector<std::wstring>& files) const override { return Editing() && PictureFiles(files); }
+  void DropPictures(const std::vector<std::wstring>& files, int x, int y) override { InsertPictureFiles(files, x, y); }
+  // The selected picture (the selection is its one character), by index into
+  // Document::Drawings(); kNone when there's none.
+  uint32_t SelectedPicture() const;
 
  protected:
   // ---- PagedView ----
@@ -197,6 +212,10 @@ class DocView : public PagedView {
   // Edits, their undo and redo: the layout lays out again, positions kept here move, and the file
   // learns whether the document now differs from the saved one.
   void OnEdited(const fw::doc::edit::Change& change);
+  // The file learns whether the document differs from the saved one. OnEdited does it for each
+  // change; a group of changes (a paste, a page number) is only one undo step once it ends, so
+  // whatever made one calls this after it.
+  void SyncFile();
   // After an edit (or a refusal, whose message shows): the caret goes where it says.
   bool Apply(const fw::doc::edit::Result& result);
   bool EditKey(UINT vk, UINT mods);
@@ -219,6 +238,61 @@ class DocView : public PagedView {
   fw::doc::Pos SelFrom() const { return {std::min(anchor_, focus_).para, std::min(anchor_, focus_).offset}; }
   fw::doc::Pos SelTo() const { return {std::max(anchor_, focus_).para, std::max(anchor_, focus_).offset}; }
 
+  // ---- Headers and footers, page numbers, links, bookmarks, navigation, marks (D3, DocHeaders.cpp)
+  class PushButton;
+  class LinkPanel;
+  class BookmarkPanel;
+  class PageNumberPanel;
+  class NavPanel;
+  // A header or footer being edited in place (double-click it; Esc or a double-click in the body
+  // leaves): its story, the page it's shown on, and which of the section's it is.
+  struct HeaderEdit {
+    uint32_t story = fw::doc::kNone;
+    size_t page = 0;
+    uint32_t section = 0;
+    bool footer = false;
+    fw::doc::HdrFtrType type = fw::doc::HdrFtrType::Default;
+  };
+  // Which lines a click may land on: the body's, or while one is edited the headers' and footers'.
+  fw::doc::layout::HitStories ClickStories() const;
+  // The page the caret's header or footer is shown on (SIZE_MAX in the body).
+  size_t CaretPage() const;
+  // Where a point on a page is: in its header area (-1), its body (0) or its footer area (1).
+  int ZoneAt(int page, float py) const;
+  // Clicks in and around headers and footers; true when handled.
+  bool HeaderFooterClick(int x, int y, bool doubleClick);
+  bool EnterHeaderFooter(int page, bool footer, std::optional<std::pair<float, float>> at = std::nullopt);
+  void LeaveHeaderFooter();
+  // After undo or redo: leaves a header or footer that is no longer the section's.
+  void CheckHeaderFooter();
+  void DrawHeaderFooterMode(gfx::Canvas& c, int page);
+  std::wstring HeaderFooterLabel(int page, bool footer) const;
+  // The commands, toolbar items and context menu entries of D3.
+  bool ExecuteD3(int cmd);
+  std::optional<CommandState> QueryD3(int cmd);
+  void AddD3Toolbar(ToolbarModel& m);
+  void FillD3Menu(HMENU m, int x, int y);
+  // Formatting marks: the layout is made again with them (and hidden text) on or off.
+  void ToggleMarks();
+  // Opens a side panel of this view's, or closes it when it's open.
+  void ShowPanel(PanelContent* panel, bool toggle);
+  void ClosePanels();
+  // The headings (paragraphs with an outline level), for the navigation pane and links.
+  struct Heading {
+    uint32_t para = 0;
+    int level = 0;  // 0 = Heading 1
+    std::wstring text;
+  };
+  std::vector<Heading> Headings() const;
+  void GoTo(TextPos at, TextPos to);
+  std::optional<HeaderEdit> hf_;
+  TextPos bodyCaret_;  // where the caret was in the body before a header was edited
+  bool marks_ = false;
+  std::unique_ptr<LinkPanel> linkPanel_;
+  std::unique_ptr<BookmarkPanel> bookmarkPanel_;
+  std::unique_ptr<PageNumberPanel> pageNumberPanel_;
+  std::unique_ptr<NavPanel> navPanel_;
+
   // ---- Formatting (DocFormat)
   // What formatting applies to: the selection, or the caret and the word it's in.
   DocFormat::Target FormatTarget() const;
@@ -226,6 +300,46 @@ class DocView : public PagedView {
   void AfterFormat(const DocFormat::Done& done);
   // Tab and Shift+Tab at the start of list items change their level.
   bool ListTab(bool back);
+
+  // ---- Pictures (DocPictures.cpp)
+  struct PicBox {
+    int page = 0;
+    fw::doc::layout::Rect rect;  // page points
+  };
+  // Where a drawing is shown; nothing when it isn't.
+  std::optional<PicBox> BoxOf(uint32_t drawing) const;
+  // The drawing under (x, y): the top one; one behind the text only where there's no text.
+  uint32_t PictureAt(int x, int y) const;
+  const fw::doc::edit::PictureInfo& PictureInfoOf(uint32_t drawing) const;
+  // The selected picture's handle under (x, y): 0 top left, clockwise to 7; 8 turns it; -1 none.
+  int HandleAt(int x, int y) const;
+  void SelectDrawing(uint32_t drawing);
+  // Apply, keeping the picture selected.
+  bool ApplyPicture(const fw::doc::edit::Result& r);
+  void DrawPictureFrame(gfx::Canvas& c, int first, int last);
+  // The pointer and keys over pictures: true when they were the picture's.
+  bool PictureMouseDown(int x, int y, int button, UINT mods, bool doubleClick);
+  bool PictureMouseMove(int x, int y, UINT mods);
+  bool PictureMouseUp(int x, int y);
+  HCURSOR PictureCursor(int x, int y) const;
+  bool PictureKey(UINT vk, UINT mods);
+  // The text column's width at `pos`: a picture inserted there is made to fit it.
+  fw::Emu ColumnWidthAt(TextPos pos);
+  // Inserts a picture over the selection (or at `at`), as one undo step.
+  bool InsertPictureBytes(const std::vector<uint8_t>& bytes, std::u16string_view name, std::optional<TextPos> at);
+  void InsertPictureDialog();
+  // The clipboard's picture, when it has no text; true when it had one.
+  bool PastePicture();
+  bool HasPictureOnClipboard() const;
+  // The selected picture on the clipboard (PNG or JPEG as stored, and a bitmap).
+  bool CopyPicture();
+  std::optional<CommandState> QueryPicture(int cmd);
+  bool ExecutePicture(int cmd);
+  void SetPictureWrap(fw::doc::edit::Wrap wrap);
+  void AddPictureToolbar(ToolbarModel& m);
+  void FillPictureMenu(HMENU m);
+  // The Picture panel shows the selected picture.
+  void SyncPicturePanel();
 
   std::wstring path_;            // the file; empty for a new or recovered document
   DocFile file_;
@@ -241,6 +355,7 @@ class DocView : public PagedView {
   // and read from the package, which the document keeps.
   struct DrawingSlot {
     bool tried = false;
+    uint32_t version = 0;  // the drawing's (Drawing::version): made again when it changes
     std::unique_ptr<fw::pkg::XmlDom> xml;
     std::unique_ptr<draw::PackageResources> resources;
     std::unique_ptr<draw::Drawing> drawing;
@@ -302,6 +417,12 @@ class DocView : public PagedView {
   // Editing: editor_ (declared after doc_) is null for a document shown but not edited (one the
   // model can't write back).
   std::unique_ptr<DocFormat> format_;  // after the editor: it goes first
+  std::unique_ptr<DocTable> table_;    // tables (D3), likewise
+  // The cells a selection across cells covers, as drawn (DrawRanges).
+  Rects cellRects_;
+  TextPos cellFrom_, cellTo_;
+  uint32_t cellRevision_ = UINT32_MAX;
+  std::unique_ptr<fw::doc::edit::Pictures> pictures_;  // with the editor, after it
   uint64_t clipSource_ = 0;  // names this document in what it copies, to paste lists back into it
   bool keyFocus_ = true;
   bool annotationsStale_ = false;  // an edit moved comments, changes or links: find them again
@@ -345,4 +466,25 @@ class DocView : public PagedView {
   TextPos selWordsFrom_, selWordsTo_;
   uint32_t selWordsEdits_ = UINT32_MAX;
   size_t selWords_ = 0;
+
+  // Pictures (DocPictures.cpp): the selected one's frame and handles; dragging moves, resizes,
+  // turns or crops it, shown as an outline until the button is let go.
+  std::unique_ptr<PicturePanel> picturePanel_;
+  uint64_t panelShown_ = UINT64_MAX;  // what the panel shows (drawing and edits), to show it again
+  bool cropMode_ = false;
+  mutable uint64_t infoKey_ = UINT64_MAX;  // PictureInfoOf's last answer
+  mutable uint32_t infoEdits_ = UINT32_MAX;
+  mutable fw::doc::edit::PictureInfo info_;
+  struct PictureDrag {
+    enum Kind { None, Pending, Move, Resize, Rotate, Crop } kind = None;
+    uint32_t drawing = 0;
+    int handle = -1;
+    int page = 0, dropPage = 0;
+    fw::doc::layout::Rect start, now;  // page points
+    fw::doc::layout::Rect full;        // crop: the whole picture
+    float grabX = 0, grabY = 0;        // where it was taken, page points
+    double angle = 0;
+    fw::doc::edit::Crop crop, startCrop;
+    bool shift = false;
+  } picDrag_;
 };

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -28,6 +29,8 @@
 namespace fw::doc::edit {
 
 struct EditorState;  // Editor.cpp
+struct TableOp;      // Editor.cpp
+struct KeptRefs;
 
 // What a transaction, undo or redo changed. Paragraphs [first, first + removed) were replaced by
 // [first, first + added); later paragraphs moved by added - removed. Layout lays out again from the
@@ -85,6 +88,7 @@ struct CustomStep {
   // The paragraphs whose layout it changes, all of one story (their neighbours are laid out again
   // too). kNone: anything may read differently, and the whole document is laid out again.
   uint32_t first = kNone, count = 0;
+  bool structure = false;  // with first: what follows may read differently too (Change::structure)
 };
 
 class Editor {
@@ -109,10 +113,12 @@ class Editor {
   uint32_t ParaLength(uint32_t para) const { return static_cast<uint32_t>(doc_.Para(para).text.size()); }
 
   // ---- Transactions. Each is one undo step unless inside a group, and changes nothing on failure.
-  // Inserts text at `at`. A tab becomes w:tab and U+000B a line break (w:br); paragraph breaks
-  // ("\r", "\n", "\r\n") split the paragraph. The text takes the formatting of the text before it.
+  // Inserts text at `at`. A tab becomes w:tab, and U+000B, U+000C and U+000E a line, page and
+  // column break (w:br); paragraph breaks ("\r", "\n", "\r\n") split the paragraph. The text takes
+  // the formatting of the text before it.
   Result InsertText(Pos at, std::u16string_view text);
-  // Deletes [from, to). Both ends in one story; across paragraphs they join.
+  // Deletes [from, to). Both ends in one story; across paragraphs they join. Section breaks in the
+  // marks deleted go: their paragraphs join the section after them, which keeps its headers.
   Result Delete(Pos from, Pos to);
   // Typing over a selection: deletes it, then inserts.
   Result Replace(Pos from, Pos to, std::u16string_view text);
@@ -126,15 +132,101 @@ class Editor {
   Result SetMarkProps(uint32_t first, uint32_t last, const PropEdit& edit);
   // Sets paragraph properties on each paragraph from `first` to `last` in document order.
   Result SetParaProps(uint32_t first, uint32_t last, const PropEdit& edit);
+  // Inserts a drawing at `at` (one character, U+FFFC): a w:drawing holding `xml`, a self-contained
+  // wp:inline or wp:anchor, in the run of the text before it. `info` is its handle as the reader
+  // would make it (ReadDrawingFrame); its node, part and position are filled in here. The handle
+  // stays in Document::Drawings() when the insert is undone, at no position. Pictures.h makes the
+  // XML and adds the picture's part.
+  Result InsertDrawing(Pos at, std::string xml, const Drawing& info);
   // Makes the text in [from, to), in one paragraph, a hyperlink to `target`: a web address (a
   // relationship of the part, kept if the link is undone, which is harmless) or "#bookmark".
   // Refused where the text is already a link, or in a field, a content control or a tracked change.
   Result SetLink(Pos from, Pos to, std::string_view target);
 
+  // ---- Tables (D3, plan §6.2)
+  // Cells are named by positions in them: `from` and `to` in two cells of one table name the block
+  // of cells between them, grown to hold every merged cell it touches whole, as Word selects
+  // cells; in one cell, that cell. Each change is one undo step. The table's grid (w:tblGrid)
+  // stays consistent with its cells' spans and merges, every row keeps a cell and every cell ends
+  // with a paragraph. A table whose rows or cells are inside content controls, or with tracked cell
+  // changes or old-style merges, can't change shape: that's refused, as is deleting cells that
+  // hold a note's or comment's anchor or part of a field.
+  struct CellInfo {
+    Node tbl, tr, tc;
+    uint32_t row = 0, rows = 1;  // its row, and the rows its vertical merge covers from there
+    int32_t col = 0, span = 1;   // grid columns
+    uint32_t tableRows = 0;
+    int32_t tableCols = 0;
+    Pos start, end;  // its text: the start of its first paragraph, the end of its last
+  };
+  std::optional<CellInfo> CellAt(Pos at) const;  // nullopt outside tables
+  struct CellBlock {
+    Node tbl;
+    uint32_t row0 = 0, row1 = 0;
+    int32_t col0 = 0, col1 = 0;
+    std::vector<CellInfo> cells;  // each cell of the block once, in reading order
+  };
+  // nullopt unless `from` is in a table (`to` in another table: the cell of `from` alone).
+  std::optional<CellBlock> BlockAt(Pos from, Pos to) const;
+  // The two corners of the rows, columns or table around [from, to], for a selection.
+  enum class Extent : uint8_t { Cells, Rows, Columns, Table };
+  std::optional<std::pair<Pos, Pos>> Grow(Pos from, Pos to, Extent extent) const;
+  // The cell after (or before) the one `at` is in, in reading order; nullopt at either end.
+  std::optional<CellInfo> NextCell(Pos at, bool back = false) const;
+
+  // A new table of rows x cols at `at`: before the paragraph when `at` is at its start, after it
+  // at its end, else between the halves of a split. Its columns share the text width; it takes
+  // the document's "Table Grid" style, or single borders. The caret goes to the first cell.
+  Result InsertTable(Pos at, uint32_t rows, uint32_t cols);
+  // Paragraphs [first, last], following each other in one place, as a table: a row each, a cell
+  // for each piece between separators (rows padded to the widest).
+  Result TextToTable(uint32_t first, uint32_t last, char16_t separator = u'\t');
+  // The table around `at` as paragraphs: a row each, its cells joined with the separator.
+  Result TableToText(Pos at, char16_t separator = u'\t');
+  Result DeleteTable(Pos at);
+  // As many rows (columns) as the block covers, above or below (left or right) of it.
+  Result InsertRows(Pos from, Pos to, bool below);
+  Result InsertColumns(Pos from, Pos to, bool right);
+  Result DeleteRows(Pos from, Pos to);
+  Result DeleteColumns(Pos from, Pos to);
+  // Empties the block's cells, each keeping one paragraph (Delete with cells selected).
+  Result ClearCells(Pos from, Pos to);
+  // The block as one cell; the cells' content joins in reading order (empty cells add nothing).
+  Result MergeCells(Pos from, Pos to);
+  // The cell as rows x cols cells; its content stays in the first. A merged cell splits into a
+  // number of rows that divides its own.
+  Result SplitCell(Pos at, uint32_t rows, uint32_t cols);
+  // Widths in twips (1/1440 inch). The block's grid columns each `twips` wide.
+  Result SetColumnWidth(Pos from, Pos to, int32_t twips);
+  // Dragging a column border: grid line `line` (0 = the table's left edge, tableCols = its right)
+  // moves by `delta`; the columns on either side give and take (the right edge: the last column;
+  // the left edge: the indent and the first column).
+  Result MoveColumnBorder(Pos at, int32_t line, int32_t delta);
+  // `rule` "atLeast" or "exact"; twips 0: as high as the text needs.
+  Result SetRowHeight(Pos from, Pos to, int32_t twips, std::string_view rule = "atLeast");
+  // AutoFit: Window spreads the table over its room; Fixed keeps its column widths; Contents takes
+  // `widths` (twips per grid column, measured by layout).
+  enum class Fit : uint8_t { Window, Fixed, Contents };
+  Result AutoFit(Pos at, Fit fit, const std::vector<int32_t>& widths = {});
+  // Properties of the block's cells (w:tcPr: shd, vAlign, tcBorders/top, tcMar/start), its rows
+  // (w:trPr: tblHeader, cantSplit) or the table (w:tblPr: tblStyle, tblBorders/insideH, jc, tblLook).
+  Result SetCellProps(Pos from, Pos to, const PropEdit& edit);
+  Result SetRowProps(Pos from, Pos to, const PropEdit& edit);
+  Result SetTableProps(Pos at, const PropEdit& edit);
+  // Borders of the block's cells, as Word's border button sets them: every side, none (over the
+  // table's own), the block's outside edges, the lines between its cells, or one edge. `eighths`:
+  // the width in eighths of a point.
+  enum class CellBorders : uint8_t { All, None, Outside, Inside, Top, Bottom, Left, Right };
+  Result SetCellBorders(Pos from, Pos to, CellBorders which, std::string_view style = "single", int32_t eighths = 4,
+                        std::string_view color = "auto");
+
   // Groups the transactions until EndGroup into one undo step named `name` ("Bold", "Paste").
   // Groups nest; the outermost names the step.
   void BeginGroup(std::u16string name);
   void EndGroup();
+  // Ends the group BeginGroup opened last, taking back what was done since, newest first, and
+  // leaving no undo or redo step for it: a change made of several that fails part way.
+  void CancelGroup();
   // Typing and deleting a character at a time coalesce into one step while they continue where the
   // last one ended. The view breaks the run when the caret moves on its own or time passes.
   void BreakTyping();
@@ -165,10 +257,25 @@ class Editor {
   std::vector<uint32_t> DirtyParts() const;
 
  private:
+  void AddReferences(const KeptRefs& kept, Pos at);
+
   Document& doc_;
+  Result EditTable(Pos from, Pos to, std::u16string name, const std::function<bool(TableOp&)>& op);
+
   std::unique_ptr<EditorState> impl_;
   std::vector<Listener> listeners_;
 };
+
+// Deleting the section breaks in the marks of `marks` (body paragraphs): the section after the last
+// of them goes on showing the headers and footers it did. Where it had no reference of a kind of
+// its own, it showed the one of the section before it (Word's "Link to Previous"), which may be one
+// that goes: it gets those references, the latest first. Its w:sectPr (kNoElem when no break goes)
+// and the references, as XML for TreeEdit::AddXml.
+struct KeptRefs {
+  ElemId sectPr = kNoElem;
+  std::vector<std::string> xml;
+};
+KeptRefs KeptReferences(const Document& doc, const std::vector<uint32_t>& marks);
 
 // True when every character of `utf8` can be written in XML 1.0: valid UTF-8, without control
 // characters (tab, line feed and carriage return aside), lone surrogates, U+FFFE or U+FFFF. A

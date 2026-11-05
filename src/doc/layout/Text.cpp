@@ -202,6 +202,11 @@ RunPaint Engine::PaintOf(const RunProps& r, uint32_t modelRun) const {
     p.highlight = true;
     p.highlightColor = r.shading.fill.rgb;
   }
+  // Hidden text shown with the formatting marks: dotted underneath, as Word shows it.
+  if (r.vanish && options_.showHiddenText && options_.formattingMarks && p.underline == Underline::None) {
+    p.underline = Underline::Dotted;
+    p.underlineColor = 0x7F7F7F;
+  }
   p.modelRun = modelRun;
   return p;
 }

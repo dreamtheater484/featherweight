@@ -4,13 +4,13 @@
 set(FW_FUZZ_ENGINE "libfuzzer" CACHE STRING "Fuzz engine: libfuzzer or replay")
 set_property(CACHE FW_FUZZ_ENGINE PROPERTY STRINGS libfuzzer replay)
 
-set(_fw_fuzz_targets fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing fuzz_layout)
+set(_fw_fuzz_targets fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing fuzz_layout fuzz_picture)
 if(FW_FUZZ_ENGINE STREQUAL "libfuzzer")
   # VS 2022 understands /fsanitize=fuzzer. VS 2019 16.9+ ignores it but has the pieces:
   # the coverage flags, and the libFuzzer and sancov runtimes, linked by hand.
   set(_fw_instrument /fsanitize=address /fsanitize-coverage=inline-8bit-counters /fsanitize-coverage=edge
     /fsanitize-coverage=trace-cmp /fsanitize-coverage=trace-div)
-  foreach(lib fwcore fwpkg fwdoc fwdraw fwtext fwdoclayout miniz pugixml)
+  foreach(lib fwcore fwpkg fwdoc fwdraw fwtext fwdoclayout fwpictures miniz pugixml)
     target_compile_options(${lib} PRIVATE ${_fw_instrument})
   endforeach()
 endif()
@@ -34,6 +34,7 @@ endforeach()
 target_link_libraries(fuzz_docx PRIVATE fwdoc)
 target_link_libraries(fuzz_drawing PRIVATE fwdraw)
 target_link_libraries(fuzz_layout PRIVATE fwdoclayout)
+target_link_libraries(fuzz_picture PRIVATE fwpictures)
 
 # Replay the seeds and the regression files once (libFuzzer: -runs=0 runs the inputs, no fuzzing).
 # run-fuzzers.ps1 lists the same seed folders for the timed runs.
@@ -48,3 +49,4 @@ add_test(NAME fuzz_docx_replay COMMAND fuzz_docx ${_fw_runs} "${_fw_seeds}/docx"
 add_test(NAME fuzz_layout_replay COMMAND fuzz_layout ${_fw_runs} "${_fw_seeds}/docx" "${_fw_seeds}/package" "${_fw_regressions}/layout")
 add_test(NAME fuzz_formula_replay COMMAND fuzz_formula ${_fw_runs} "${_fw_seeds}/formula" "${_fw_regressions}/formula")
 add_test(NAME fuzz_drawing_replay COMMAND fuzz_drawing ${_fw_runs} "${_fw_seeds}/drawing" "${_fw_regressions}/drawing")
+add_test(NAME fuzz_picture_replay COMMAND fuzz_picture ${_fw_runs} "${_fw_seeds}/picture" "${_fw_regressions}/picture")

@@ -31,6 +31,11 @@ const std::vector<std::string_view>& DefaultUnderstood();
 std::unique_ptr<Document> Read(std::unique_ptr<pkg::Package> package, pkg::Status& status,
                                const ReadOptions& options = {});
 
+// A DrawingML drawing's wp:inline or wp:anchor, read into the Drawing's placement: anchored, extent,
+// effect extent, wrap, distances, position, z-order and wp:docPr. Fields the frame doesn't mention
+// keep their values. The reader uses it, and the editor after changing a picture.
+void ReadDrawingFrame(pugi::xml_node frame, Drawing& d);
+
 // Writes one of the document's parts from the model and the round-trip store (plan §4.3 rule 1).
 // In D1 this is used by the round-trip tests; saving comes in D2.
 pkg::Status WritePart(const Document& doc, uint32_t part, std::string& out);

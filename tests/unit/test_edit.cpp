@@ -266,11 +266,15 @@ TEST(Edit_SectionBreaksStayWithTheirMark) {
       "<w:p><w:r><w:t>C</w:t></w:r></w:p>"
       "<w:sectPr><w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/></w:sectPr>";
   CHECK(BodyIs(*doc, split));
-  // The section break itself can't be deleted yet.
+  // Deleting the section break itself (D3): its paragraphs join the next section, in one step.
   auto j = ed.JoinParagraphs(p + 1);
-  CHECK(!j && !j.message.empty());
-  CHECK(!ed.Delete(P(p + 1, 1), P(p + 2, 0)) && !ed.Delete(P(p, 0), P(p + 2, 1)));
-  CHECK(BodyIs(*doc, split) && ed.UndoName() == u"New paragraph");
+  CHECK(j && doc->Sections().size() == 1);
+  CHECK(BodyIs(*doc,
+               "<w:p><w:r><w:t>A</w:t></w:r></w:p><w:p><w:r><w:t>B</w:t></w:r><w:r><w:t>C</w:t></w:r></w:p>"
+               "<w:sectPr><w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/></w:sectPr>"));
+  CHECK(ed.Undo() && BodyIs(*doc, split) && doc->Sections().size() == 2);
+  CHECK(ed.Delete(P(p, 0), P(p + 2, 1)) && doc->Sections().size() == 1);
+  CHECK(ed.Undo() && BodyIs(*doc, split) && ed.UndoName() == u"New paragraph");
   // Joining the paragraph before it with it keeps the break, on the joined paragraph.
   CHECK(ed.Delete(P(p, 1), P(p + 1, 0)) && doc->Sections()[0].endPara == p);
   CHECK(BodyIs(*doc,

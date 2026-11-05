@@ -1062,6 +1062,10 @@ void Document::BuildIndexes() {
     }
   }
 
+  BuildSections();
+}
+
+void Document::BuildSections() {
   // Sections: body-level paragraphs whose properties hold a w:sectPr, then the body's own.
   sections_.clear();
   if (main_ != kNone) {

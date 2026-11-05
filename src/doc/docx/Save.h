@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "doc/model/Document.h"
@@ -25,6 +26,17 @@ struct SaveOptions {
 // Otherwise the changed parts are written from the model and the package is saved around them;
 // the result is opened again and every rewritten part checked before it's returned.
 pkg::Status Serialize(Document& doc, const SaveOptions& options, std::vector<uint8_t>& out);
+
+// Pictures nothing in a part refers to any more (deleted, or replaced), which a save leaves out:
+// the image relationships of the parts written from the model whose ids their XML doesn't
+// mention, and the media parts that only those pointed to. `written` holds the parts' XML by index
+// into Document::Parts(); other parts aren't looked at. The package isn't changed: undo may still
+// bring a picture back.
+struct UnusedMedia {
+  std::vector<std::pair<std::string, std::string>> relationships;  // source part, relationship id
+  std::vector<std::string> parts;
+};
+UnusedMedia FindUnusedMedia(const Document& doc, const std::vector<std::pair<uint32_t, const std::string*>>& written);
 
 // docProps/core.xml with dcterms:modified set to `now` and cp:lastModifiedBy to `author`;
 // everything else as it was. Elements that are missing are added.

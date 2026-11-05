@@ -78,6 +78,16 @@ const Builtin kBuiltins[] = {
      "<w:spacing w:before=\"360\" w:after=\"360\"/><w:ind w:left=\"864\" w:right=\"864\"/><w:jc w:val=\"center\"/>",
      "<w:i/><w:iCs/><w:color w:val=\"4472C4\" w:themeColor=\"accent1\"/>"},
     {"List Paragraph", "ListParagraph", StyleType::Paragraph, 34, true, "Normal", "", "", "<w:ind w:left=\"720\"/><w:contextualSpacing/>", ""},
+    // Priority 99: shown once used, never quick styles. {CENTER} and {RIGHT} are the middle and
+    // the end of the first section's text.
+    {"header", "Header", StyleType::Paragraph, 99, false, "Normal", "", "Header Char",
+     "<w:tabs><w:tab w:val=\"center\" w:pos=\"{CENTER}\"/><w:tab w:val=\"right\" w:pos=\"{RIGHT}\"/></w:tabs>"
+     "<w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/>", ""},
+    {"footer", "Footer", StyleType::Paragraph, 99, false, "Normal", "", "Footer Char",
+     "<w:tabs><w:tab w:val=\"center\" w:pos=\"{CENTER}\"/><w:tab w:val=\"right\" w:pos=\"{RIGHT}\"/></w:tabs>"
+     "<w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/>", ""},
+    {"Hyperlink", "Hyperlink", StyleType::Character, 99, false, "Default Paragraph Font", "", "", "",
+     "<w:color w:val=\"0563C1\" w:themeColor=\"hyperlink\"/><w:u w:val=\"single\"/>"},
 };
 
 char Lower(char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
@@ -145,6 +155,13 @@ std::string Props(const Document& doc, std::string_view props) {
              doc.GetTheme().present
                  ? "<w:rFonts w:asciiTheme=\"majorHAnsi\" w:eastAsiaTheme=\"majorEastAsia\" w:hAnsiTheme=\"majorHAnsi\" w:cstheme=\"majorBidi\"/>"
                  : "<w:rFonts w:ascii=\"Calibri Light\" w:hAnsi=\"Calibri Light\"/>");
+  if (s.find("{CENTER}") != std::string::npos) {
+    const SectionProps sp = doc.Sections().empty() ? SectionProps{} : doc.Sections().front().props;
+    const int32_t width = std::max<int32_t>(
+        720, sp.pageWidth.Value() - sp.marginStart.Value() - sp.marginEnd.Value() - sp.gutter.Value());
+    ReplaceAll(s, "{CENTER}", std::to_string(width / 2));
+    ReplaceAll(s, "{RIGHT}", std::to_string(width));
+  }
   if (Strict(doc)) {
     ReplaceAll(s, " w:left=", " w:start=");
     ReplaceAll(s, " w:right=", " w:end=");
@@ -199,8 +216,8 @@ std::string AddBuiltin(TreeEdit& ed, const Builtin& b) {
   bool isDefault = (b.id == "Normal" && !doc.DefaultStyle(StyleType::Paragraph)) ||
                    (b.id == "DefaultParagraphFont" && !doc.DefaultStyle(StyleType::Character));
   std::string extra = b.id == "DefaultParagraphFont" ? "<w:semiHidden/><w:unhideWhenUsed/>"
-                      : b.priority == 9 && b.id != "Heading1" ? "<w:unhideWhenUsed/>"
-                                                              : "";
+                      : (b.priority == 9 && b.id != "Heading1") || b.priority == 99 ? "<w:unhideWhenUsed/>"
+                                                                                    : "";
   std::string rPr = Props(doc, b.rPr);
   // A linked character style: Word's pair for headings, the title and quotes.
   std::string linkId;
@@ -209,7 +226,7 @@ std::string AddBuiltin(TreeEdit& ed, const Builtin& b) {
   else if (!b.link.empty()) linkId = UniqueId(doc, IdOf(b.link));
   if (linkId == id) linkId = UniqueId(doc, id + "Char");
   std::string xml = StyleXml(para ? "paragraph" : "character", id, b.name, isDefault, false, basedOn == id ? "" : basedOn,
-                             next == id ? "" : next, linkId, b.priority, b.id != "DefaultParagraphFont", extra,
+                             next == id ? "" : next, linkId, b.priority, b.id != "DefaultParagraphFont" && b.priority != 99, extra,
                              Props(doc, b.pPr), rPr);
   if (ed.AddXml(root, xml) == kNoElem) return {};
   ed.Reindex();

@@ -126,6 +126,45 @@ enum Cmd : int {
   CmdBorderNone,
   CmdShading,
   CmdShadingNone,
+  // Headers and footers, page numbers, links, bookmarks, navigation and marks (D3).
+  CmdEditHeader = 1100,
+  CmdEditFooter,
+  CmdCloseHeaderFooter,
+  CmdDifferentFirstPage,
+  CmdDifferentOddEven,
+  CmdLinkToPrevious,
+  CmdPageNumber,  // the page number panel
+  CmdInsertLink,  // Ctrl+K: insert or edit
+  CmdRemoveLink,
+  CmdOpenLink,
+  CmdBookmark,
+  CmdNavigationPane,
+  CmdShowMarks,  // Ctrl+Shift+8
+  // Documents: tables (D3).
+  CmdTableGrid = 1150,  // the toolbar's Insert table grid (after the header and footer commands)
+  CmdTableBox,          // the toolbar's Table menu, in a table
+  CmdInsertTable,       // the Table panel, to insert a table of any size
+  CmdTextToTable,
+  CmdTableToText,
+  CmdTableInsertAbove,
+  CmdTableInsertBelow,
+  CmdTableInsertLeft,
+  CmdTableInsertRight,
+  CmdTableDeleteRows,
+  CmdTableDeleteColumns,
+  CmdTableDeleteTable,
+  CmdTableMerge,
+  CmdTableSplit,
+  CmdTableSelectCell,
+  CmdTableSelectRow,
+  CmdTableSelectColumn,
+  CmdTableSelectTable,
+  CmdTableAutoFitContents,
+  CmdTableAutoFitWindow,
+  CmdTableFixedWidth,
+  CmdTableDistributeColumns,
+  CmdTableHeaderRow,
+  CmdTableProperties,
   // Proofing in Word documents.
   CmdSpelling = 800,  // F7: the next spelling error
   CmdWordCount,
@@ -138,4 +177,17 @@ enum Cmd : int {
   CmdSpellSuggest = 820,    // + index into the context menu's suggestions
   CmdLanguagePick = 840,    // + index into the installed languages
   CmdLanguageLast = 899,
+  // Pictures in Word documents (D3).
+  CmdInsertPicture = 900,
+  CmdPictureInline,
+  CmdPictureSquare,
+  CmdPictureTight,
+  CmdPictureTopBottom,
+  CmdPictureBehind,
+  CmdPictureInFront,
+  CmdPictureWrapBox,  // the toolbar's Wrap text box
+  CmdPictureCrop,     // crop mode on or off
+  CmdPictureRotate,   // 90 degrees clockwise
+  CmdPictureReset,
+  CmdPicturePanel,    // size, rotation and alt text
 };

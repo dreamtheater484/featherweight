@@ -43,6 +43,13 @@ Button& Toolbar::ItemButton(const ToolItem& item) {
 }
 
 Control& Toolbar::ItemControl(const ToolItem& item) {
+  if (item.kind == ToolKind::Custom && item.control) {
+    Control& c = *item.control;
+    c.id = item.cmd;
+    c.tooltip = item.tooltip;
+    c.enabled = item.enabled;
+    return c;
+  }
   std::unique_ptr<Control>& slot = controls_[item.cmd];
   if (!slot || controlKinds_[item.cmd] != item.kind) {
     switch (item.kind) {
