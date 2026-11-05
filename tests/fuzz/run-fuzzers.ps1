@@ -48,6 +48,8 @@ $all = [ordered]@{
   fuzz_rtf     = @{ Seeds = @("$clipboard", "$regressions\rtf"); MaxLen = 65536 }
   fuzz_html    = @{ Seeds = @("$clipboard", "$regressions\html"); MaxLen = 65536 }
   fuzz_clip    = @{ Seeds = @("$seeds\docx", "$seeds\package", "$regressions\clip"); MaxLen = 65536 }
+  # Shapes, text boxes and watermarks (D4): typing in text boxes, shape changes, saving and undoing.
+  fuzz_shapes  = @{ Seeds = @("$seeds\shapes", "$seeds\docx", "$seeds\package", "$regressions\shapes"); MaxLen = 65536 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 

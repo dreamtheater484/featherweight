@@ -346,6 +346,9 @@ class Document {
   // ---- Stories and blocks
   const std::vector<Story>& Stories() const { return stories_; }
   uint32_t MainStory() const { return main_; }
+  // Whether the story is in the document: a text box's only while its drawing is (a deleted or
+  // undone shape keeps its story in the model, shown, counted and searched nowhere).
+  bool StoryInDocument(uint32_t story) const;
   // The note or comment with this id; kNone when there is none.
   uint32_t NoteStory(StoryKind kind, std::string_view id) const;
   // The blocks directly inside a story, a table cell (w:tc), a block-level content control or a

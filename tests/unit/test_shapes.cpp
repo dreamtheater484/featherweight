@@ -24,6 +24,7 @@
 #include "doc/edit/Shapes.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/edit/Watermark.h"
+#include "doc/proof/WordCount.h"
 #include "pkg/Check.h"
 
 using namespace fw::doc;
@@ -403,6 +404,24 @@ TEST(Shapes_TypingInANewTextBoxGoesInBothCopies) {
   while (ed.CanUndo()) CHECK(ed.Undo().ok);
   CHECK(doc->Para(0).text.empty() && Shown(*doc).empty());
   CHECK_EQ(Count(Main(*doc), "AlternateContent"), 0u);
+}
+
+TEST(Shapes_ADeletedShapesTextIsntCounted) {
+  auto doc = Blank();
+  if (!doc) return;
+  Editor ed(*doc);
+  Shapes shapes(ed);
+  CHECK(shapes.Insert(0, ShapeKind::TextBox, fw::Emu(kInch), fw::Emu(kInch), fw::Emu(2 * kInch), fw::Emu(kInch)).ok);
+  const uint32_t story = shapes.TextStory(Shown(*doc).at(0));
+  CHECK(ed.InsertText({doc->StoryParagraphs(story).at(0), 0}, u"three more words").ok);
+  CHECK(doc->StoryInDocument(story) && doc->StoryInDocument(doc->MainStory()));
+  CHECK_EQ(fw::doc::proof::CountDocument(*doc, true).words, 3u);
+  CHECK(ed.Delete({0, 0}, {0, 1}).ok);  // the shape's character
+  CHECK(!doc->StoryInDocument(story));
+  CHECK_EQ(fw::doc::proof::CountDocument(*doc, true).words, 0u);
+  CHECK(ed.Undo().ok);
+  CHECK(doc->StoryInDocument(story));
+  CHECK_EQ(fw::doc::proof::CountDocument(*doc, true).words, 3u);
 }
 
 TEST(Shapes_EachChangeIsOneStepAndUndoesExactly) {

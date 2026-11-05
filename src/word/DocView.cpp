@@ -1272,7 +1272,8 @@ void DocView::StartSearch(const std::wstring& query, bool matchCase, bool wholeW
   // The main text first, then headers, footers, notes and text boxes, as Word searches them.
   std::vector<uint32_t> stories{doc_->MainStory()};
   for (uint32_t s = 0; s < doc_->Stories().size(); ++s)
-    if (s != doc_->MainStory() && doc_->Stories()[s].kind != fw::doc::StoryKind::Comment) stories.push_back(s);
+    if (s != doc_->MainStory() && doc_->Stories()[s].kind != fw::doc::StoryKind::Comment && doc_->StoryInDocument(s))
+      stories.push_back(s);
   for (uint32_t story : stories) {
     for (uint32_t p : doc_->StoryParagraphs(story)) {
       std::wstring t;

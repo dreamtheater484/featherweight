@@ -94,6 +94,7 @@ std::optional<std::pair<uint32_t, Misspelling>> Spelling::FindNext(Pos pos, doub
   std::optional<std::pair<uint32_t, Misspelling>> found;
   for (size_t n = 0; n <= paras_.size() && !found; ++n) {
     const uint32_t p = static_cast<uint32_t>((start + n) % paras_.size());
+    if (!InDocument(p)) continue;
     if (!paras_[p].checked) {
       if (Clock::now() >= until) {
         complete = false;
@@ -195,6 +196,7 @@ std::optional<std::pair<uint32_t, Misspelling>> Spelling::Next(Pos pos) const {
   const uint32_t start = pos.para < paras_.size() ? pos.para : 0;
   for (size_t n = 0; n <= paras_.size(); ++n) {
     const uint32_t p = static_cast<uint32_t>((start + n) % paras_.size());
+    if (!InDocument(p)) continue;
     const ParaState& s = paras_[p];
     for (const Misspelling& m : s.errors)
       if (n > 0 || m.from >= pos.offset) return std::make_pair(p, m);
@@ -213,8 +215,13 @@ std::wstring Spelling::Word(uint32_t para, const Misspelling& m) const {
 
 size_t Spelling::Count() const {
   size_t n = 0;
-  for (const ParaState& s : paras_) n += s.errors.size();
+  for (uint32_t p = 0; p < paras_.size(); ++p)
+    if (!paras_[p].errors.empty() && InDocument(p)) n += paras_[p].errors.size();
   return n;
+}
+
+bool Spelling::InDocument(uint32_t para) const {
+  return para >= doc_.Paragraphs().size() || doc_.StoryInDocument(doc_.Para(para).story);
 }
 
 void Spelling::Changed(const edit::Change& change) {
