@@ -42,11 +42,17 @@ struct AppOptions {
   std::wstring script;         // steps separated by ';' (see App::RunScript)
   bool forceWarp = false;      // draw with WARP even when a graphics adapter works
   bool widgetGallery = false;  // opens the widget gallery (settings are neither read nor saved)
+  // For measurements (fwtool bench-app): settings and recent files are neither read nor saved,
+  // there's no update check, notice or registration, and files are never handed to or taken
+  // from another running Featherweight.
+  bool sandbox = false;
 };
 
 class App : public PdfHost, public DropHost {
  public:
   static constexpr wchar_t kWindowClass[] = L"FeatherweightWindow";
+  // A sandboxed window's class, so a Featherweight that hands files on never finds it.
+  static constexpr wchar_t kSandboxWindowClass[] = L"FeatherweightSandboxWindow";
   static constexpr ULONG_PTR kCopyDataOpen = 0x46570001;
 
   App();
@@ -212,6 +218,7 @@ class App : public PdfHost, public DropHost {
   bool windowActive_ = true;
   bool snapshot_ = false;
   bool snapshotWindow_ = false;
+  bool sandbox_ = false;
   int simulatedMods_ = -1;
 
   SwapChain swap_;

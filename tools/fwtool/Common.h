@@ -16,6 +16,15 @@ struct Options {
   std::filesystem::path outDir; // roundtrip: keep the saved copies here
   std::wstring printer;         // print-sample: the printer (default: Microsoft Print to PDF)
   bool warp = false;            // print-sample: draw with WARP instead of the graphics adapter
+  std::filesystem::path dumps;      // compare: Featherweight's layout dumps, <dumps>/<source>.layout.json
+  std::filesystem::path jsonOut;    // compare, bench: the JSON report
+  std::filesystem::path reportOut;  // compare: the Markdown report
+  double minPages = -1;             // compare: fail below this share of matching page counts (%)
+  double minLines = -1;             // compare: fail below this share of matching line breaks (%)
+  bool selfTest = false;            // compare: Word's lines against themselves and known changes
+  bool all = false;                 // compare (one document): list every difference
+  int runs = 5;                     // bench: runs per document
+  bool budgets = false;             // bench: fail when a budget is missed
   std::vector<std::filesystem::path> inputs;
 };
 
@@ -32,5 +41,9 @@ void DumpModel(const std::filesystem::path& file);
 int RunDump(const Options& options);
 int RunCheck(const Options& options);
 int RunPrintSample(const Options& options);
+int RunLines(const Options& options);
+int RunCompare(const Options& options);
+int RunBench(const Options& options);
+int RunBenchApp(const Options& options);
 
 }  // namespace fwtool
