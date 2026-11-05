@@ -774,3 +774,35 @@ TEST(Layout_TableEditsLayOutAgainAsFromScratch) {
   check(bool(ed.Redo()), "redone");
   check(bool(ed.DeleteTable(cell(0, 0))), "the table deleted");
 }
+
+TEST(Layout_CellsNumberedAsTheEditorsGrid) {
+  // The Word tab fills selected cells from Layout::Cells, matching the editor's block by row and
+  // grid column (D3): both number them alike. A cell over two columns, a row past gridBefore, a
+  // merged cell whose second piece has its own w:tc.
+  const std::string table =
+      "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1200\"/>"
+      "<w:gridCol w:w=\"1200\"/><w:gridCol w:w=\"1200\"/></w:tblGrid>"
+      "<w:tr><w:tc>" + P("A") + "</w:tc><w:tc><w:tcPr><w:gridSpan w:val=\"2\"/></w:tcPr>" + P("BC") + "</w:tc></w:tr>"
+      "<w:tr><w:trPr><w:gridBefore w:val=\"1\"/></w:trPr><w:tc><w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr>" + P("E") +
+      "</w:tc><w:tc>" + P("F") + "</w:tc></w:tr>"
+      "<w:tr><w:tc>" + P("G") + "</w:tc><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc>" + P("I") + "</w:tc></w:tr></w:tbl>";
+  Doc d = Make(P("Before") + table + P("After") + SmallPage());
+  REQUIRE(d.layout);
+  edit::Editor ed(*d.doc);
+  const std::vector<fw::doc::layout::CellRect> cells = d.layout->Cells(0);
+  const auto infos = ed.TableCells(Pos{1, 0});
+  REQUIRE(infos.size() == 6);
+  for (const auto& info : infos) {
+    size_t found = 0;
+    for (const auto& c : cells)
+      if (c.tc == info.tc.Id())
+        found += c.tbl == info.tbl.Id() && c.row == info.row && c.col == info.col && c.span == info.span;
+    CHECK_EQ(found, 1u);
+  }
+  // The merged cell's second piece: the row below, the same column.
+  const auto e = ed.CellAt(Pos{3, 0});  // "E"
+  REQUIRE(e && e->rows == 2 && e->col == 1);
+  size_t pieces = 0;
+  for (const auto& c : cells) pieces += c.tbl == e->tbl.Id() && c.col == 1 && (c.row == 1 || c.row == 2);
+  CHECK_EQ(pieces, 2u);
+}

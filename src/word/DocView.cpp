@@ -492,6 +492,7 @@ void DocView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
     for (int i = first; i <= last; ++i) DrawPage(c, dc, i, inverted);
     DrawSquiggles(c, first, last);
     DrawRanges(c, first, last);
+    DrawCellGuide(c, first, last);
     DrawCaret(c, first, last);
     if (!presentation_) DrawPictureFrame(c, first, last);
     if (!presentation_) DrawScrollbars(c);
@@ -637,21 +638,7 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
   // The selection, like the caret, once its pages are laid out again after a change of the page.
   if (HasSelection() && !pagination_->LaidOut(std::max(anchor_, focus_))) return;
   if (HasSelection() && table_) {
-    TextPos a = std::min(anchor_, focus_), b = std::max(anchor_, focus_);
-    if (!(cellFrom_ == a) || !(cellTo_ == b) || cellRevision_ != pagination_->Revision()) {
-      cellRects_.clear();
-      if (auto cells = table_->SelectedCells())
-        for (const auto& cell : cells->cells) {
-          Rects r = pagination_->Ranges({cell.start.para, cell.start.offset}, {cell.end.para, cell.end.offset});
-          if (r.empty())  // an empty cell: a mark where its text would be
-            if (auto at = pagination_->CaretAt({cell.start.para, cell.start.offset}))
-              r.push_back({at->page, layout::Rect{at->x, at->top, at->x + 6, at->bottom}});
-          cellRects_.insert(cellRects_.end(), r.begin(), r.end());
-        }
-      cellFrom_ = a;
-      cellTo_ = b;
-      cellRevision_ = pagination_->Revision();
-    }
+    MeasureSelectedCells(first, last);
     if (!cellRects_.empty()) {
       fill(cellRects_, p.selection, false);
       return;
@@ -784,6 +771,7 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
   if (ScrollbarMouseDown(x, y, button)) return;
   if (PictureMouseDown(x, y, button, mods, doubleClick)) return;  // a right click selects it too
   if (button == 1) return;  // a right click keeps the selection for the context menu
+  if (CellMouseDown(x, y, mods)) return;  // a table's border, or the top of its column
   Hit hit = HitAt(x, y);
   if (!hit.link.empty() && !(mods & kModShift)) {
     pendingLink_ = hit.link;
@@ -803,15 +791,18 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
   std::optional<TextPos> pos = PosAt(x, y, false);
   if (!pos && Editing() && PageAtPoint(x, y) >= 0) pos = PosAt(x, y, true);  // in a margin: the nearest place
   // Beside a table row, in the margin: the row; dragging on, more rows (Word's selection bar).
-  if (auto row = !doubleClick && !(mods & kModShift) ? RowMarginAt(x, y) : std::nullopt; row && SelectRows(*row, *row)) {
-    rowDrag_ = true;
-    rowAnchor_ = *row;
-    drag_ = Drag::Select;
-    goalX_ = -1;
-    editor_->BreakTyping();
-    CaretMoved(false);
-    host_.ViewInvalidate();
-    return;
+  if (auto row = !doubleClick && !(mods & kModShift) ? RowMarginAt(x, y) : std::nullopt; row) {
+    lineDrag_ = LineDrag::Rows;
+    if (SelectLines(*row, *row)) {
+      lineAnchor_ = *row;
+      drag_ = Drag::Select;
+      goalX_ = -1;
+      editor_->BreakTyping();
+      CaretMoved(false);
+      host_.ViewInvalidate();
+      return;
+    }
+    lineDrag_ = LineDrag::None;
   }
   if (pos) {
     const bool triple = !doubleClick && anim::Now() - lastDoubleClick_ < GetDoubleClickTime() &&
@@ -857,6 +848,7 @@ void DocView::OnMouseMove(int x, int y, UINT mods) {
     RulerMouseMove(x, y, mods);
     return;
   }
+  if (CellMouseMove(x, y)) return;
   RulerHover(x, y);
   if (PictureMouseMove(x, y, mods)) return;
   if (ScrollDragMove(x, y)) return;
@@ -867,10 +859,10 @@ void DocView::OnMouseMove(int x, int y, UINT mods) {
   if (drag_ == Drag::Select) {
     if (y < vp_.top) ScrollBy(0, (y - vp_.top) * 0.5, false);
     else if (y > vp_.bottom) ScrollBy(0, (y - vp_.bottom) * 0.5, false);
-    if (rowDrag_) {
+    if (lineDrag_ != LineDrag::None) {
       const TextPos a = anchor_, f = focus_;
-      if (auto pos = PosAt(x, y, true); pos && SelectRows(rowAnchor_, *pos) && (!(a == anchor_) || !(f == focus_)))
-        host_.ViewInvalidate();
+      const auto pos = lineDrag_ == LineDrag::Columns ? ColumnTopAt(x, y, lineTbl_) : PosAt(x, y, true);
+      if (pos && SelectLines(lineAnchor_, *pos) && (!(a == anchor_) || !(f == focus_))) host_.ViewInvalidate();
       return;
     }
     if (auto pos = PosAt(x, y, true); pos && StoryOf(*pos) == StoryOf(anchor_) && !(*pos == focus_)) {
@@ -885,9 +877,10 @@ void DocView::OnMouseMove(int x, int y, UINT mods) {
 void DocView::OnMouseUp(int x, int y, int, UINT) {
   if (!Ready()) return;
   if (PictureMouseUp(x, y)) return;
+  if (CellMouseUp()) return;
   Drag d = drag_;
   drag_ = Drag::None;
-  rowDrag_ = false;
+  lineDrag_ = LineDrag::None;
   if (d == Drag::Ruler) {
     RulerMouseUp();
     return;
@@ -911,9 +904,10 @@ void DocView::OnMouseLeave() {
 }
 
 bool DocView::OnKeyDown(UINT vk, UINT mods) {
-  if (vk == VK_ESCAPE && drag_ == Drag::Ruler) {  // the drag stops, and nothing changes
+  if (vk == VK_ESCAPE && (drag_ == Drag::Ruler || cellDrag_)) {  // the drag stops, and nothing changes
     drag_ = Drag::None;
     rulerDrag_ = {};
+    cellDrag_.reset();
     host_.ViewInvalidate();
     return true;
   }
@@ -944,10 +938,12 @@ HCURSOR DocView::CursorAt(int x, int y) {
                  hand = LoadCursor(nullptr, IDC_HAND), move = LoadCursor(nullptr, IDC_SIZEALL);
   if (!Ready()) return arrow;
   if (drag_ == Drag::Ruler || (drag_ == Drag::None && OnRuler(x, y))) return RulerCursor(x, y);
+  if (cellDrag_ || lineDrag_ == LineDrag::Columns) return CellCursor(x, y);
   if (drag_ == Drag::Pan) return move;
-  if (drag_ == Drag::Select) return rowDrag_ ? arrow : ibeam;
+  if (drag_ == Drag::Select) return lineDrag_ != LineDrag::None ? arrow : ibeam;
   if (OverScrollbar(x, y)) return arrow;
   if (HCURSOR c = PictureCursor(x, y)) return c;
+  if (HCURSOR c = CellCursor(x, y)) return c;
   if (!HitAt(x, y).link.empty()) return hand;
   if (presentation_) return arrow;
   if (RowMarginAt(x, y)) return arrow;
@@ -973,8 +969,10 @@ std::optional<DocView::TextPos> DocView::RowMarginAt(int x, int y) const {
   return TextPos{cell->start.para, cell->start.offset};
 }
 
-bool DocView::SelectRows(TextPos from, TextPos to) {
-  auto corners = editor_->Grow({from.para, from.offset}, {to.para, to.offset}, fw::doc::edit::Editor::Extent::Rows);
+bool DocView::SelectLines(TextPos from, TextPos to) {
+  using Extent = fw::doc::edit::Editor::Extent;
+  auto corners = editor_->Grow({from.para, from.offset}, {to.para, to.offset},
+                               lineDrag_ == LineDrag::Columns ? Extent::Columns : Extent::Rows);
   if (!corners) return false;
   const TextPos a{corners->first.para, corners->first.offset}, b{corners->second.para, corners->second.offset};
   anchor_ = a;

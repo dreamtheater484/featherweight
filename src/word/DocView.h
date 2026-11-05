@@ -64,7 +64,9 @@ class DocView : public PagedView {
   void OnMouseMove(int x, int y, UINT mods) override;
   void OnMouseUp(int x, int y, int button, UINT mods) override;
   void OnMouseLeave() override;
-  bool Dragging() const override { return PagedView::Dragging() || picDrag_.kind != PictureDrag::None; }
+  bool Dragging() const override {
+    return PagedView::Dragging() || picDrag_.kind != PictureDrag::None || cellDrag_.has_value();
+  }
   bool OnKeyDown(UINT vk, UINT mods) override;
   bool OnChar(wchar_t ch, UINT mods) override;
   HCURSOR CursorAt(int x, int y) override;
@@ -469,11 +471,42 @@ class DocView : public PagedView {
   TextPos cellFrom_, cellTo_;
   uint32_t cellRevision_ = UINT32_MAX;
   std::unique_ptr<fw::doc::edit::Pictures> pictures_;  // with the editor, after it
-  // Rows chosen in the margin beside a table: the drag goes on by whole rows from here.
-  bool rowDrag_ = false;
-  TextPos rowAnchor_;
+  // Rows chosen in the margin beside a table, or columns just above one: the drag goes on by whole
+  // rows or columns from here.
+  enum class LineDrag : uint8_t { None, Rows, Columns };
+  LineDrag lineDrag_ = LineDrag::None;
+  TextPos lineAnchor_;
   std::optional<TextPos> RowMarginAt(int x, int y) const;
-  bool SelectRows(TextPos from, TextPos to);
+  bool SelectLines(TextPos from, TextPos to);
+  // ---- Table cells on the page (DocCells.cpp), from the layout's cell boxes (Layout::Cells): a
+  // column border dragged moves its grid line, a row's bottom border sets its height (at least),
+  // one undo step each; a click just above a column selects it. Selected cells are filled whole.
+  struct CellEdge {
+    int page = -1;
+    fw::doc::ElemId tbl = fw::doc::kNoElem;
+    TextPos at;              // a cell of the table (of the row, for a row's border)
+    bool column = true;      // a column border, else a row's bottom
+    int32_t line = 0;        // the column border's grid line
+    float pos = 0, lo = 0, hi = 0;  // where it is, and how far it can go (page points)
+    float top = 0;                  // a row's top
+    float from = 0, to = 0;         // the guide's extent, across the table
+    float now = 0;                  // while dragging: where it is now
+  };
+  std::optional<CellEdge> CellEdgeAt(int x, int y);
+  // The cell just below (x, y) when (x, y) is just above a table's column; with `tbl`, the cell of
+  // that table under x, at any height (a drag along the tops).
+  std::optional<TextPos> ColumnTopAt(int x, int y, fw::doc::ElemId tbl = fw::doc::kNoElem);
+  // A cell's first paragraph, when it's in the story being edited.
+  std::optional<TextPos> CellStart(fw::doc::ElemId tc) const;
+  bool CellMouseDown(int x, int y, UINT mods);
+  bool CellMouseMove(int x, int y);
+  bool CellMouseUp();
+  HCURSOR CellCursor(int x, int y);
+  void DrawCellGuide(gfx::Canvas& c, int first, int last);
+  void MeasureSelectedCells(int first, int last);  // cellRects_
+  std::optional<CellEdge> cellDrag_;
+  fw::doc::ElemId lineTbl_ = fw::doc::kNoElem;  // the table a column drag is in
+  int cellFirst_ = -1, cellLast_ = -1;          // the pages cellRects_ covers
   uint64_t clipSource_ = 0;  // names this document in what it copies, to paste lists back into it
   bool keyFocus_ = true;
   bool annotationsStale_ = false;  // an edit moved comments, changes or links: find them again
