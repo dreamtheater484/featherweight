@@ -51,6 +51,10 @@ class TreeEdit {
   // the writer can't reproduce). Commit puts everything back then, as Abort does (d2-torture
   // finding 14). Empty when it was recorded.
   const std::u16string& Refused() const { return refused_; }
+  // Whether these paragraphs can change: false, with Refused() saying why, where Commit would put a
+  // change back. For commands that first add a part with EnsurePart, which isn't undone, so a
+  // refused command doesn't leave one behind (d2-torture finding 18).
+  bool CanChange(const std::vector<uint32_t>& paras);
   // Says the change affects the layout of the paragraphs it touches and no others (or, with
   // `toEnd`, those and the rest of their story: a list's numbers), whatever it adds to the styles
   // and numbering parts. Only their pages are laid out again, not the whole document. It counts in
