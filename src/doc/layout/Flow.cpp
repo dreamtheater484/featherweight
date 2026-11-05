@@ -538,11 +538,9 @@ struct Flow {
       f.anchorZones = f.zones.size();
       paraTop = f.y + (f.paraLines == 0 ? e.SpaceBefore(p, f.spacing) + e.BorderAbove(p, f.spacing) : 0);
       if (f.columnEmpty && f.spacing.prev == nullptr && f.paraLines == 0) {
-        float before = e.SpaceBefore(p, Spacing());
-        static const char* rule = std::getenv("FW_LAYOUT_SPACE_TOP");  // TEMP: the rule under test
-        std::string_view r = rule ? rule : "keep";
-        if (r == "drop" || (r == "hard" && f.hardStart)) before = 0;
-        paraTop = f.y + before + e.BorderAbove(p, Spacing());
+        // Word keeps the space before at the top of a page (measured on the corpus: dropping it at
+        // every page top, or after hard breaks only, matches fewer pages).
+        paraTop = f.y + e.SpaceBefore(p, Spacing()) + e.BorderAbove(p, Spacing());
       }
       for (uint32_t a : pt.anchors) {
         const Drawing& d = doc.Drawings()[a];

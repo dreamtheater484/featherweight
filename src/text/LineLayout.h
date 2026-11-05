@@ -60,6 +60,7 @@ struct TextStyle {
   bool bold = false, italic = false;                // w:b, w:i
   bool complexBold = false, complexItalic = false;  // w:bCs, w:iCs
   float letterSpacing = 0;   // w:spacing: added after every character; may be negative
+  float scale = 1;           // w:w: the glyphs' width, 1 for as designed (1.03 for 103 %)
   float baselineShift = 0;   // w:position: raised (positive) or lowered
   float kerningMinSize = 0;  // w:kern: kern pairs from this size up; 0: no kerning
   bool ligatures = false;    // w14:ligatures standard (or more): standard ligatures
@@ -132,6 +133,8 @@ struct GlyphPiece {
   float emSize = 0;
   float x = 0, width = 0;  // the box, column coordinates
   float rise = 0;          // above the line's baseline: superscript, subscript, w:position
+  float scale = 1;         // the run's horizontal scale: advances include it; draw the glyphs
+                           // through a horizontal scale about OriginX() with advances / scale
   uint32_t textStart = 0, textEnd = 0;  // in Paragraph::text; empty for a hyphen or leader
   uint32_t run = 0;                     // index into Paragraph::runs: color, underline, ...
   uint8_t bidiLevel = 0;

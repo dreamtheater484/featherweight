@@ -166,7 +166,7 @@ struct Segment {
   uint32_t start = 0, end = 0;
   uint32_t run = 0;
   const Face* face = nullptr;
-  float emSize = 0, rise = 0;
+  float emSize = 0, rise = 0, scale = 1;
   uint8_t level = 0;
   float ascent = 0, descent = 0, lineGap = 0;
   std::vector<uint16_t> clusters;  // per character: its cluster's first glyph
@@ -567,6 +567,12 @@ void LineBreaker::Impl::ShapePiece(Segment& seg, const DWRITE_SCRIPT_ANALYSIS& s
     }
   }
 
+  // Character scaling (w:w) widens or narrows the glyphs and their placement.
+  seg.scale = style.scale > 0 ? style.scale : 1;
+  if (seg.scale != 1) {
+    for (float& a : seg.advances) a *= seg.scale;
+    for (DWRITE_GLYPH_OFFSET& o : seg.offsets) o.advanceOffset *= seg.scale;
+  }
   // Per character: its cluster's advance, plus the letter spacing, which Word adds after each one.
   const float spacing = style.letterSpacing;
   const auto glyphCount = static_cast<uint32_t>(seg.glyphs.size());
@@ -1082,6 +1088,7 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
       GlyphPiece piece;
       piece.face = sg.face->Get();
       piece.emSize = sg.emSize;
+      piece.scale = sg.scale;
       piece.x = it.x;
       piece.width = it.width;
       piece.rise = sg.rise;
@@ -1182,7 +1189,9 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
   }
   std::stable_sort(line.pieces.begin(), line.pieces.end(),
                    [](const GlyphPiece& x, const GlyphPiece& y) { return x.x < y.x; });
-  if (fit.ending == LineEnd::ParagraphEnd || items.empty()) MarkMetrics(line);
+  // The paragraph mark's font sizes only a line with nothing drawn on it (an empty paragraph, or
+  // the empty line after a line break): Word sizes a last line with text by its text alone.
+  if (line.pieces.empty() && line.objects.empty()) MarkMetrics(line);
 
   // Where the content is, and the carets of hidden text and the line's end.
   float startX = rtl ? width - last.start : last.start;
