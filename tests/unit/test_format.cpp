@@ -683,6 +683,40 @@ TEST(Lists_NumberedHeadingsAreSwitchedOff) {
   CHECK(Has(MainXml(*doc), "<w:numId w:val=\"0\"/>"));
 }
 
+TEST(Edit_FormattingLaysOutOnlyItsParagraphs) {
+  // Character and paragraph formatting tell the layout which paragraphs changed, with their
+  // neighbours, so it lays out again from their page; lists and styles change the whole document.
+  Fixture f;
+  f.styles = kWordStyles;
+  f.body = Paras(6);
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  auto paras = MainParas(*doc);
+  edit::Editor editor(*doc);
+  std::vector<edit::Change> seen;
+  editor.OnChange([&](const edit::Change& c) { seen.push_back(c); });
+  edit::TreeEdit ed(editor);
+  edit::ToggleRuns(ed, {{paras[3], 0}, {paras[3], 4}}, edit::Toggle::Bold);
+  CHECK(seen.size() == 1 && seen[0].story == doc->MainStory() && seen[0].first == paras[2] && seen[0].removed == 3 &&
+        seen[0].added == 3 && !seen[0].structure);
+  seen.clear();
+  edit::ParaFormat center;
+  center.jc = Justification::Center;
+  edit::FormatParagraphs(ed, {{paras[0], 0}, {paras[0], 2}}, center);
+  CHECK(seen.size() == 1 && seen[0].first == paras[0] && seen[0].removed == 2 && !seen[0].structure);  // none before
+  seen.clear();
+  edit::ToggleList(ed, {{paras[4], 0}, {paras[4], 0}}, edit::ListKind::Number);
+  CHECK(!seen.empty() && seen.back().structure && seen.back().first == 0);
+  // Undo reports the same, and puts the caret where the change was.
+  CHECK(editor.Undo());
+  seen.clear();
+  edit::Result r = editor.Undo();
+  CHECK(r && r.caret == (Pos{paras[0], 0}) && seen.size() == 1 && seen[0].first == paras[0] && !seen[0].structure);
+  r = editor.Undo();
+  CHECK(r && r.caret == (Pos{paras[3], 0}));
+}
+
 TEST(Lists_AutoFormatAsYouType) {
   using edit::DetectAutoList;
   auto one = DetectAutoList(u"1. ");

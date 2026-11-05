@@ -74,7 +74,8 @@ struct JournalStep : CustomStep {
 };
 
 // The editor holds the document it edits; it hands it out as const only to readers.
-TreeEdit::TreeEdit(Editor& editor) : editor_(editor), doc_(const_cast<Document&>(editor.Doc())) {}
+TreeEdit::TreeEdit(Editor& editor, Pos caret)
+    : editor_(editor), doc_(const_cast<Document&>(editor.Doc())), caret_(caret) {}
 
 pkg::NodeId TreeEdit::NewNode() { return editor_.NewNodeId(); }
 
@@ -83,6 +84,7 @@ pkg::NodeId TreeEdit::NewNode() { return editor_.NewNodeId(); }
 void TreeEdit::Begin(std::u16string label) {
   if (depth_++ > 0) return;
   label_ = std::move(label);
+  local_ = false;
   elemsAtBegin_ = doc_.tree_.elems.size();
   before_.clear();
   store_.clear();
@@ -102,7 +104,40 @@ void TreeEdit::Commit() {
   step->parts = PartsOf(step->after);
   before_.clear();
   store_.clear();
-  editor_.RecordStep(std::move(label_), std::move(step));
+  // The paragraphs it changed: for the caret, and when it's local, for the layout.
+  uint32_t first = kNone, last = 0;
+  bool inParagraphs = true;
+  for (const auto& [id, e] : step->after) {
+    const uint32_t p = ParagraphOf(id);
+    if (p == kNone) {
+      inParagraphs = false;
+      continue;
+    }
+    first = std::min(first, p);
+    last = std::max(last, p);
+  }
+  Pos caret = caret_;
+  if (first != kNone) {
+    if (caret.para == kNone) caret = {first, 0};
+    const uint32_t story = doc_.paras_[first].story;
+    bool oneStory = true;
+    for (uint32_t p = first; p <= last && oneStory; ++p) oneStory = doc_.paras_[p].story == story;
+    if (local_ && inParagraphs && oneStory) {
+      // Its neighbours too: borders and spacing join paragraphs.
+      if (first > 0 && doc_.paras_[first - 1].story == story) --first;
+      if (last + 1 < doc_.paras_.size() && doc_.paras_[last + 1].story == story) ++last;
+      step->first = first;
+      step->count = last - first + 1;
+    }
+  }
+  editor_.RecordStep(std::move(label_), std::move(step), caret);
+}
+
+uint32_t TreeEdit::ParagraphOf(ElemId id) const {
+  const Tree& t = doc_.tree_;
+  for (int hops = 0; id != kNoElem && hops < 256; ++hops, id = t.elems[id].parent)
+    if (S().Elem(t.elems[id].def).name == names::kP) return t.elems[id].start;
+  return kNone;
 }
 
 void TreeEdit::Restore(Document& doc, const Saved& elems) {

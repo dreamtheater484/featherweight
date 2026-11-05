@@ -598,15 +598,21 @@ struct EditorState {
 
   // After a direct change, done or undone: the model's indexes are built again, every cache goes,
   // and every paragraph may look different.
-  void RefreshAll() {
+  void RefreshAll(const CustomStep& step) {
     d.caches_ = std::make_unique<Document::Caches>();
     d.BuildIndexes();
     for (Paragraph& p : d.paras_) p.version = ++version;
     Change ch;
-    ch.story = d.main_;
-    ch.first = 0;
-    ch.removed = ch.added = static_cast<uint32_t>(d.paras_.size());
-    ch.structure = true;
+    if (step.first != kNone && step.count > 0 && step.first + step.count <= d.paras_.size()) {
+      ch.story = d.paras_[step.first].story;
+      ch.first = step.first;
+      ch.removed = ch.added = step.count;
+    } else {
+      ch.story = d.main_;
+      ch.first = 0;
+      ch.removed = ch.added = static_cast<uint32_t>(d.paras_.size());
+      ch.structure = true;
+    }
     pending.push_back(ch);
   }
 
@@ -713,7 +719,7 @@ struct EditorState {
       for (auto it = e.steps.rbegin(); it != e.steps.rend(); ++it) {
         if (it->custom) {
           it->custom->Undo();
-          RefreshAll();
+          RefreshAll(*it->custom);
           continue;
         }
         Restore(it->before, it->first, static_cast<uint32_t>(it->after.paras.size()));
@@ -723,7 +729,7 @@ struct EditorState {
       for (const Step& s : e.steps) {
         if (s.custom) {
           s.custom->Redo();
-          RefreshAll();
+          RefreshAll(*s.custom);
           continue;
         }
         Restore(s.after, s.first, static_cast<uint32_t>(s.before.paras.size()));
@@ -1627,7 +1633,7 @@ void Editor::RecordStep(std::u16string name, std::shared_ptr<CustomStep> step, P
   Step s;
   s.custom = std::move(step);
   s.structure = true;
-  impl_->RefreshAll();
+  impl_->RefreshAll(*s.custom);
   impl_->Record(std::move(s), caret, caret, Kind::Other, std::move(name));
   impl_->Notify(listeners_);
 }

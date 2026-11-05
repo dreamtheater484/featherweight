@@ -393,6 +393,7 @@ FormatState StateOf(const Document& doc, Range range) {
 void FormatRuns(TreeEdit& ed, Range range, const RunFormat& format) {
   if (!format.Any()) return;
   ed.Begin(u"Format");
+  ed.Local();
   ForEachRunProps(ed, range, [&](uint32_t para, ElemId rPr) { ApplyRunFormat(ed, ed.Doc(), para, rPr, format); });
   ed.Commit();
 }
@@ -401,6 +402,7 @@ void FormatParagraphs(TreeEdit& ed, Range range, const ParaFormat& f) {
   if (!f.Any()) return;
   const Document& doc = ed.Doc();
   ed.Begin(u"Paragraph");
+  ed.Local();
   for (uint32_t p : ParagraphsOf(doc, range)) {
     WriteParaFormat(ed, ed.Child(doc.Para(p).elem, kPPr), f, doc.StylePara(p));
   }
@@ -449,6 +451,7 @@ void ToggleRuns(TreeEdit& ed, Range range, Toggle what) {
   }
   static constexpr const char16_t* kLabels[] = {u"Bold", u"Italic", u"Underline", u"Strikethrough", u"Superscript", u"Subscript"};
   ed.Begin(kLabels[static_cast<int>(what)]);
+  ed.Local();
   FormatRuns(ed, range, f);
   ed.Commit();
 }
@@ -471,6 +474,7 @@ HalfPoints NextFontSize(HalfPoints size, bool grow) {
 
 void GrowFont(TreeEdit& ed, Range range, bool grow, bool onePoint) {
   ed.Begin(grow ? u"Grow font" : u"Shrink font");
+  ed.Local();
   const Document& doc = ed.Doc();
   ForEachRunProps(ed, range, [&](uint32_t para, ElemId rPr) {
     // The run's size as it stands: its own w:sz, or what its styles give.
@@ -486,6 +490,7 @@ void GrowFont(TreeEdit& ed, Range range, bool grow, bool onePoint) {
 
 void ClearRunFormatting(TreeEdit& ed, Range range) {
   ed.Begin(u"Clear formatting");
+  ed.Local();
   ForEachRunProps(ed, range, [&](uint32_t, ElemId rPr) { ed.Clear(rPr, {kRStyle, kRPrChange}); });
   ed.Commit();
 }
@@ -493,6 +498,7 @@ void ClearRunFormatting(TreeEdit& ed, Range range) {
 void ClearParaFormatting(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
   ed.Begin(u"Reset paragraph");
+  ed.Local();
   for (uint32_t p : ParagraphsOf(doc, range)) {
     if (ElemId pPr = ed.Child(doc.Para(p).elem, kPPr, false); pPr != kNoElem)
       ed.Clear(pPr, {kPStyle, kNumPr, kRPr, kSectPr, kPPrChange});

@@ -53,6 +53,11 @@ class DocFormat {
   void SelectionMade();
   void CancelPainter() { painter_ = Painter::Off; }
 
+  // AutoFormat As You Type: "1. ", "a) " or "* " typed at the start of a paragraph (the caret just
+  // after the space or tab) makes it a list item, as one undo step of its own, so Ctrl+Z gives the
+  // typed text back. False when the text isn't one of those.
+  bool AutoFormat(fw::doc::Pos caret);
+
   // The installed fonts for the font box, read once in idle time (a few milliseconds).
   static bool FontsPending();
   static void ReadFonts();

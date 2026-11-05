@@ -28,8 +28,6 @@ struct Named {
 
 // Labels and keys, for tooltips and command search, as Word names them.
 constexpr Named kNames[] = {
-    {CmdUndo, L"Undo", L"Ctrl+Z"},
-    {CmdRedo, L"Redo", L"Ctrl+Y"},
     {CmdBold, L"Bold", L"Ctrl+B"},
     {CmdItalic, L"Italic", L"Ctrl+I"},
     {CmdUnderline, L"Underline", L"Ctrl+U"},
@@ -229,13 +227,11 @@ int DocFormat::Shortcut(UINT vk, UINT mods) {
     case '0': return CmdSpaceBefore;
     case 'M': return CmdIndent;
     case 'T': return CmdHangingIndent;
-    case 'Z': return CmdUndo;
-    case 'Y': return CmdRedo;
   }
   return 0;
 }
 
-bool DocFormat::Owns(int cmd) { return cmd >= CmdUndo && cmd <= CmdInsertTime; }
+bool DocFormat::Owns(int cmd) { return cmd >= CmdBold && cmd <= CmdInsertTime; }
 
 std::vector<int> DocFormat::CommandIds() {
   std::vector<int> ids;
@@ -270,14 +266,6 @@ CommandState DocFormat::Query(int cmd) {
   const bool on = target_().any && Editable();
   s.enabled = on;
   switch (cmd) {
-    case CmdUndo:
-      s.enabled = editor_.CanUndo();
-      if (s.enabled) s.label = L"Undo " + W(editor_.UndoName());
-      return s;
-    case CmdRedo:
-      s.enabled = editor_.CanRedo();
-      if (s.enabled) s.label = L"Redo " + W(editor_.RedoName());
-      return s;
     case CmdPasteFormat: s.enabled = on && carried_.has; return s;
     case CmdFormatPainter: s.checked = PainterOn(); return s;
     default: break;
@@ -312,7 +300,7 @@ void DocFormat::Run(const std::function<void(edit::TreeEdit&, const Target&)>& c
     done_({std::nullopt, W(why)});
     return;
   }
-  edit::TreeEdit te(editor_);
+  edit::TreeEdit te(editor_, t.sel.from);
   change(te, t);
   done_({});
 }
@@ -335,14 +323,6 @@ void DocFormat::Execute(int cmd) {
   };
   auto list = [&](edit::ListKind kind) { Run([kind](edit::TreeEdit& te, const Target& t) { edit::ToggleList(te, t.sel, kind); }); };
   switch (cmd) {
-    case CmdUndo:
-    case CmdRedo: {
-      edit::Result r = cmd == CmdUndo ? editor_.Undo() : editor_.Redo();
-      Done d;
-      if (r && r.caret.para != fw::doc::kNone) d.caret = r.caret;
-      done_(d);
-      return;
-    }
     case CmdBold: toggle(Toggle::Bold); return;
     case CmdItalic: toggle(Toggle::Italic); return;
     case CmdUnderline: toggle(Toggle::Underline); return;
@@ -516,7 +496,7 @@ void DocFormat::PaintTo(const Format& f, const Target& t) {
                      (t.sel.to.para > t.sel.from.para || t.sel.to.offset >= doc.Para(t.sel.from.para).text.size());
   editor_.BeginGroup(u"Format Painter");
   {
-    edit::TreeEdit te(editor_);
+    edit::TreeEdit te(editor_, t.sel.from);
     if (whole) {
       if (!f.style.empty()) edit::ApplyStyle(te, t.sel, f.style);
       edit::FormatParagraphs(te, t.sel, f.para);
@@ -525,6 +505,24 @@ void DocFormat::PaintTo(const Format& f, const Target& t) {
   }
   editor_.EndGroup();
   done_({});
+}
+
+bool DocFormat::AutoFormat(fw::doc::Pos caret) {
+  const fw::doc::Document& doc = Doc();
+  if (caret.para >= doc.Paragraphs().size() || caret.offset > 8 || !Editable()) return false;
+  const std::u16string_view typed = std::u16string_view(doc.Para(caret.para).text).substr(0, caret.offset);
+  const std::optional<edit::AutoList> list = edit::DetectAutoList(typed);
+  if (!list || list->length != caret.offset) return false;
+  if (const std::string_view numId = doc.ResolvedPara(caret.para).numId; !numId.empty() && numId != "0") return false;
+  const fw::doc::Pos start{caret.para, 0};
+  editor_.BeginGroup(u"AutoFormat");
+  if (editor_.Delete(start, caret)) {
+    edit::TreeEdit te(editor_, start);
+    edit::StartAutoList(te, caret.para, *list);
+  }
+  editor_.EndGroup();
+  done_({start, {}});
+  return true;
 }
 
 void DocFormat::SelectionMade() {
@@ -626,11 +624,6 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
     t.priority = priority;
     return t;
   };
-  ToolItem undo = with(button(CmdUndo, icon::Undo), 8);
-  undo.sepBefore = true;
-  m.left.push_back(undo);
-  m.left.push_back(with(button(CmdRedo, icon::Redo), 7));
-
   // Styles, font and size.
   ToolItem style;
   style.kind = ToolKind::Dropdown;

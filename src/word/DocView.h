@@ -16,10 +16,11 @@
 #include "text/Fonts.h"
 #include "word/DocFormat.h"
 
-// A Word document in a tab (plan milestones D1, D2): the model, laid out page by page by
+// A Word document in a tab (plan milestones D1 and D2): the model, laid out page by page by
 // fw::doc::layout (the first page at once, the rest in idle time), drawn through draw::Painter,
 // with selection and copy, find, links, comments and tracked changes shown, and printing. A
-// document the model can edit gets an editor, and formatting (DocFormat) on the toolbar and keys.
+// document Featherweight can write back is edited in place (DocEdit.cpp): the caret, typing,
+// deleting, undo and redo, cut and paste, through fw::doc::edit; formatting through DocFormat.
 class DocView : public PagedView {
  public:
   DocView(ViewHost& host, std::wstring path);
@@ -40,17 +41,18 @@ class DocView : public PagedView {
   bool HasIdleWork() const override;
   bool IdleWork(ID2D1DeviceContext* dc, double deadlineMs) override;
   void ReleaseDeviceResources() override {}
-  void OnDeactivated() override { drag_ = Drag::None; }
+  void OnDeactivated() override;
 
   void OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick) override;
   void OnMouseMove(int x, int y, UINT mods) override;
   void OnMouseUp(int x, int y, int button, UINT mods) override;
   void OnMouseLeave() override;
   bool OnKeyDown(UINT vk, UINT mods) override;
-  bool OnChar(wchar_t, UINT) override { return false; }
+  bool OnChar(wchar_t ch, UINT mods) override;
   HCURSOR CursorAt(int x, int y) override;
   std::wstring TooltipAt(int x, int y) override;
-  bool HasKeyFocus() const override { return false; }
+  bool HasKeyFocus() const override { return Editing() && keyFocus_; }
+  void SetKeyFocus(bool has) override;
 
   int ShortcutFor(UINT vk, UINT mods) const override;
   CommandState QueryCommand(int cmd) override;
@@ -69,8 +71,12 @@ class DocView : public PagedView {
   int SearchCurrent() const override { return current_; }
   bool SearchDone() const override { return true; }
   std::wstring SelectedText() override;
+  bool CanReplace() const override { return Editing(); }
+  bool ReplaceCurrent(const std::wstring& with) override;
+  int ReplaceAll(const std::wstring& with) override;
 
-  // The edited document, or a copy of the file when nothing was edited.
+  // The file with the parts edits changed written anew, the rest as it was; read back before it
+  // replaces anything. Unedited, a copy of the file as it was opened.
   bool Save(const std::wstring& path, std::wstring& error) override;
   SaveFormat SaveAsFormat() const override;
   bool CanPrint() const override { return Ready(); }
@@ -82,6 +88,13 @@ class DocView : public PagedView {
   bool HasSelection() const { return anchor_ != focus_; }
   void Copy();
   void SelectAll();
+
+  // ---- Editing (DocEdit.cpp) ----
+  bool Editing() const { return editor_ != nullptr && Ready() && !presentation_; }
+  void Cut();
+  void Paste();
+  void Undo();
+  void Redo();
 
  protected:
   // ---- PagedView ----
@@ -129,13 +142,39 @@ class DocView : public PagedView {
   // The words around a position, for double-click.
   void WordAt(TextPos pos, TextPos& from, TextPos& to) const;
   uint32_t StoryOf(TextPos pos) const { return doc_->Para(pos.para).story; }
+  // Comments, tracked changes and links, with where they are in the text.
+  void CollectAnnotations();
 
-  // ---- Editing (D2)
+  // ---- Editing (DocEdit.cpp)
+  // Edits, their undo and redo: the layout lays out again, positions kept here move.
+  void OnEdited(const fw::doc::edit::Change& change);
+  // After an edit (or a refusal, whose message shows): the caret goes where it says.
+  bool Apply(const fw::doc::edit::Result& result);
+  bool EditKey(UINT vk, UINT mods);
+  void TypeText(std::u16string_view text);
+  void DeleteBy(bool forward, bool word);
+  // Moves the caret (extending the selection, or not), breaking the typing undo step.
+  void MoveCaret(TextPos to, bool extend);
+  // The caret moved or the text changed: its place is measured again, it's scrolled into view
+  // (when `show`) and blinks from the start.
+  void CaretMoved(bool show);
+  const std::optional<fw::doc::layout::Layout::Caret>& CaretBox();
+  void DrawCaret(gfx::Canvas& c, int first, int last);
+  void StopBlinking();
+  // The characters of a paragraph the caret moves over: offsets of those a reader sees (a
+  // surrogate pair once, at its first half), in order.
+  std::vector<uint32_t> Stops(uint32_t para) const;
+  TextPos StepChar(TextPos p, bool forward) const;
+  TextPos StepWord(TextPos p, bool forward) const;
+  TextPos StoryEdge(TextPos p, bool end) const;
+  fw::doc::Pos SelFrom() const { return {std::min(anchor_, focus_).para, std::min(anchor_, focus_).offset}; }
+  fw::doc::Pos SelTo() const { return {std::max(anchor_, focus_).para, std::max(anchor_, focus_).offset}; }
+
+  // ---- Formatting (DocFormat)
   // What formatting applies to: the selection, or the caret and the word it's in.
   DocFormat::Target FormatTarget() const;
-  // After an edit: the caret, a message, and the pages laid out again.
-  void AfterEdit(const DocFormat::Done& done);
-  void LayOutAgain();
+  // After a formatting command: the caret where it says, or why nothing happened.
+  void AfterFormat(const DocFormat::Done& done);
   // Tab and Shift+Tab at the start of list items change their level.
   bool ListTab(bool back);
 
@@ -202,10 +241,21 @@ class DocView : public PagedView {
   // Find
   std::vector<Match> matches_;
   int current_ = -1;
+  std::wstring query_;  // what was searched for, to find again after a replace
+  bool matchCase_ = false;
 
-  // Editing: last, so they go before the document they edit.
+  // Editing: null for a document shown but not edited (one the model can't write back).
   std::unique_ptr<fw::doc::edit::Editor> editor_;
-  std::unique_ptr<DocFormat> format_;
-  bool caret_ = false;  // anchor_ == focus_ is a caret (a click in an edited document)
-  bool stale_ = false;  // the editor changed the document: lay out again
+  std::unique_ptr<DocFormat> format_;  // after the editor: it goes first
+  bool keyFocus_ = true;
+  bool annotationsStale_ = false;  // an edit moved comments, changes or links: find them again
+  double caretStart_ = 0;          // the caret blinks from here (the last key or click)
+  bool blinking_ = false;          // the blink timer runs
+  float goalX_ = -1;               // Up and Down keep to this x (page points); < 0: the caret's
+  wchar_t highSurrogate_ = 0;      // the first half of a character typed in two
+  TextPos caretFor_;               // what caretBox_ measured
+  uint32_t caretRevision_ = UINT32_MAX;
+  std::optional<fw::doc::layout::Layout::Caret> caretBox_;
+  double lastDoubleClick_ = -1e9;  // a click right after a double-click selects the paragraph
+  int lastDoubleX_ = 0, lastDoubleY_ = 0;
 };

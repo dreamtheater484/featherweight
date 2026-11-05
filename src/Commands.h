@@ -60,15 +60,18 @@ enum Cmd : int {
   CmdCut,
   CmdPaste,
   CmdCommandSearch,
+  CmdUndo,
+  CmdRedo,
+  CmdReplace,     // find and replace (Ctrl+H)
+  CmdReplaceOne,
+  CmdReplaceAll,
   CmdZoomPreset = 400,  // + index into fw::ZoomPresets()
   CmdRecent = 500,      // + index into Settings::recent
   CmdBannerAction = 600,
   CmdNewFile = 700,     // + fw::FileKind, once that kind's editor ships
 
-  // Documents: undo, and formatting (D2). The toolbar's boxes have ids too.
-  CmdUndo = 1000,
-  CmdRedo,
-  CmdBold,
+  // Documents: formatting (D2). The toolbar's boxes have ids too.
+  CmdBold = 1000,
   CmdItalic,
   CmdUnderline,
   CmdStrike,

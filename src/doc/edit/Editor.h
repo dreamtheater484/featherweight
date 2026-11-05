@@ -82,6 +82,9 @@ struct CustomStep {
   virtual void Undo() = 0;
   virtual void Redo() = 0;
   std::vector<uint32_t> parts;  // the parts it changes (indexes into Document::Parts())
+  // The paragraphs whose layout it changes, all of one story (their neighbours are laid out again
+  // too). kNone: anything may read differently, and the whole document is laid out again.
+  uint32_t first = kNone, count = 0;
 };
 
 class Editor {

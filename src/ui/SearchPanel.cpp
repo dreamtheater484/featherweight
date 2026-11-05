@@ -24,6 +24,16 @@ SearchPanel::SearchPanel() {
   close_.glyphSize = 12;
   close_.tooltip = L"Close (Esc)";
   prev_.glyphSize = next_.glyphSize = 13;
+  with_.placeholder = L"Replace with";
+  with_.maxLength = 256;
+  one_.id = CmdReplaceOne;
+  one_.text = L"Replace";
+  one_.tooltip = L"Replace this match (Enter)";
+  all_.id = CmdReplaceAll;
+  all_.text = L"All";
+  all_.tooltip = L"Replace all matches";
+  set_.Add(&one_);
+  set_.Add(&all_);
   set_.Add(&prev_);
   set_.Add(&next_);
   set_.Add(&case_);
@@ -39,12 +49,13 @@ void SearchPanel::Close() {
   open_ = false;
   show_.To(0, 120);
   box_.Focus(false);
+  with_.Focus(false);
 }
 
 D2D1_RECT_F SearchPanel::Card() const {
   const float u = ui_;
   float w = std::min(420 * u, static_cast<float>(area_.right - area_.left) - 24 * u);
-  float h = 48 * u;
+  float h = (replace_ ? 86 : 48) * u;
   float slide = (1 - show_.V()) * -12 * u;
   float right = area_.right - 20 * u;
   float top = area_.top + 12 * u + slide;
@@ -57,7 +68,7 @@ void SearchPanel::Layout(const RECT& docArea, float ui) {
   const float u = ui;
   D2D1_RECT_F c = Card();
   float b = 30 * u;
-  float cy = (c.top + c.bottom) / 2;
+  float cy = c.top + 24 * u;
   float x = c.right - 8 * u - b;
   close_.rc = RectF(x, cy - b / 2, x + b, cy + b / 2);
   x -= b + 6 * u;
@@ -69,9 +80,15 @@ void SearchPanel::Layout(const RECT& docArea, float ui) {
   x -= 6 * u;
   status_ = RectF(x - 74 * u, c.top, x, c.bottom);
   box_.rc = RectF(c.left + 8 * u, cy - 15 * u, status_.left - 6 * u, cy + 15 * u);
+  // The replace row.
+  one_.visible = all_.visible = replace_;
+  const float ry = cy + 38 * u;
+  all_.rc = RectF(c.right - 8 * u - 52 * u, ry - b / 2, c.right - 8 * u, ry + b / 2);
+  one_.rc = RectF(all_.rc.left - 4 * u - 76 * u, ry - b / 2, all_.rc.left - 4 * u, ry + b / 2);
+  with_.rc = RectF(c.left + 8 * u, ry - 15 * u, one_.rc.left - 6 * u, ry + 15 * u);
 }
 
-void SearchPanel::Draw(Canvas& c, const std::wstring& status, bool caretVisible, bool noMatches) {
+void SearchPanel::Draw(Canvas& c, const std::wstring& status, bool caretVisible, bool noMatches, bool withCaret) {
   float v = show_.V();
   if (v <= 0.01f && !open_) return;
   const Palette& p = theme::P();
@@ -93,6 +110,12 @@ void SearchPanel::Draw(Canvas& c, const std::wstring& status, bool caretVisible,
   DrawButton(c, next_, ui_);
   DrawButton(c, case_, ui_);
   DrawButton(c, close_, ui_);
+  if (replace_) {
+    one_.enabled = all_.enabled = !noMatches && !box_.Text().empty();
+    with_.Draw(c, ui_, withCaret);
+    DrawButton(c, one_, ui_);
+    DrawButton(c, all_, ui_);
+  }
   if (fade) c.DC()->PopLayer();
 }
 
@@ -102,30 +125,35 @@ bool SearchPanel::OnMouseMove(int x, int y) { return set_.OnMouseMove((float)x, 
 void SearchPanel::OnMouseLeave() { set_.OnMouseLeave(); }
 
 void SearchPanel::OnMouseDown(int x, int y, bool shift, bool dbl) {
-  if (Contains(box_.rc, (float)x, (float)y)) {
-    if (dbl) box_.OnDoubleClick();
-    else box_.OnMouseDown((float)x, (float)y, shift, ui_);
-    return;
+  for (TextBox* b : {&box_, &with_}) {
+    if (b == &with_ && !replace_) continue;
+    if (Contains(b->rc, (float)x, (float)y)) {
+      if (dbl) b->OnDoubleClick();
+      else b->OnMouseDown((float)x, (float)y, shift, ui_);
+      return;
+    }
   }
   set_.OnMouseDown((float)x, (float)y);
 }
 
-void SearchPanel::OnMouseDrag(int x, int y) { box_.OnMouseDrag((float)x, (float)y, ui_); }
+void SearchPanel::OnMouseDrag(int x, int y) {
+  (with_.focused ? with_ : box_).OnMouseDrag((float)x, (float)y, ui_);
+}
 
 int SearchPanel::OnMouseUp(int x, int y) { return set_.OnMouseUp((float)x, (float)y); }
 
 std::wstring SearchPanel::TooltipAt(int x, int y) const {
-  for (const Button* b : {&prev_, &next_, &case_, &close_})
-    if (Contains(b->rc, (float)x, (float)y)) return b->tooltip;
+  for (const Button* b : {&prev_, &next_, &case_, &close_, &one_, &all_})
+    if (b->visible && Contains(b->rc, (float)x, (float)y)) return b->tooltip;
   return {};
 }
 
 void SearchPanel::Describe(uia::Tree& t, int parent, const std::wstring& status, const std::function<void(int)>& run,
-                           const std::function<void()>& focusBox) {
+                           const std::function<void(TextBox*)>& focusBox) {
   if (!open_) return;
   int pane = t.Add(parent, CmdFind, UIA_PaneControlTypeId, L"Find", Card());
   t[pane].layer = 1;
-  uia::AddTextBox(t, pane, 1, box_, box_.placeholder + L" (Ctrl+F)", focusBox);
+  uia::AddTextBox(t, pane, 1, box_, box_.placeholder + L" (Ctrl+F)", [focusBox, this] { focusBox(&box_); });
   if (!status.empty()) {
     int s = t.Add(pane, 2, UIA_TextControlTypeId, status, status_);
     t[s].live = true;
@@ -133,6 +161,13 @@ void SearchPanel::Describe(uia::Tree& t, int parent, const std::wstring& status,
   for (Button* b : {&prev_, &next_, &close_}) {
     const int cmd = b->id;
     uia::AddButton(t, pane, cmd, *b, [run, cmd] { run(cmd); });
+  }
+  if (replace_) {
+    uia::AddTextBox(t, pane, 3, with_, with_.placeholder + L" (Ctrl+H)", [focusBox, this] { focusBox(&with_); });
+    for (Button* b : {&one_, &all_}) {
+      const int cmd = b->id;
+      uia::AddButton(t, pane, cmd, *b, [run, cmd] { run(cmd); });
+    }
   }
   int matchCase = uia::AddButton(t, pane, case_.id, case_, nullptr);
   t[matchCase].toggle = case_.checked ? ToggleState_On : ToggleState_Off;

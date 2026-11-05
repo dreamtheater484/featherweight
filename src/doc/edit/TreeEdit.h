@@ -29,7 +29,9 @@ struct JournalStep;
 //  - Shared property sets (kSharedKids) are copied before they change.
 class TreeEdit {
  public:
-  explicit TreeEdit(Editor& editor);
+  // `caret`: where the caret goes when the change is undone or redone (else the start of the
+  // first paragraph it changed).
+  explicit TreeEdit(Editor& editor, Pos caret = {});
   TreeEdit(const TreeEdit&) = delete;
   TreeEdit& operator=(const TreeEdit&) = delete;
 
@@ -42,6 +44,12 @@ class TreeEdit {
   void Begin(std::u16string label);
   void Commit();
   bool InTransaction() const { return depth_ > 0; }
+  // Says the change only formats the paragraphs it touches (no styles, lists or sections), so only
+  // their pages are laid out again, not the whole document. It counts in the outermost transaction,
+  // and Commit checks that nothing outside paragraphs changed.
+  void Local() {
+    if (depth_ == 1) local_ = true;
+  }
 
   // ---- Primitives (inside a transaction). Element ids stay valid; Node handles too.
   // The known child of `parent` with this name, after giving `parent` its own copy of a shared
@@ -107,10 +115,14 @@ class TreeEdit {
   void StoreFragments(pkg::NodeId node, std::vector<pkg::Fragment> fragments);
   void MoveFragments(ElemId from, ElemId to, pkg::Slot slot, bool first, bool before);
   std::vector<uint32_t> PartsOf(const Saved& elems) const;
+  // The paragraph an element is in (its index), or kNone.
+  uint32_t ParagraphOf(ElemId id) const;
 
   Editor& editor_;
   Document& doc_;
+  Pos caret_;
   int depth_ = 0;
+  bool local_ = false;
   std::u16string label_;
   size_t elemsAtBegin_ = 0;
   Saved before_;
