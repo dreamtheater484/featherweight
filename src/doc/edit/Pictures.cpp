@@ -1023,40 +1023,4 @@ Result Pictures::ResetSize(uint32_t drawing) {
   });
 }
 
-// ---------- Unused media ----------
-
-UnusedMedia FindUnusedMedia(const Document& doc, const std::vector<std::pair<uint32_t, const std::string*>>& written) {
-  UnusedMedia out;
-  const pkg::Package& package = doc.Package();
-  for (const auto& [index, xml] : written) {
-    if (index >= doc.Parts().size() || !xml) continue;
-    const pkg::RelationshipSet* rels = package.RelationshipsOf(doc.Parts()[index].name);
-    if (!rels) continue;
-    for (const pkg::Relationship& r : rels->items) {
-      if (r.external || r.type != kImageRel) continue;
-      // Any mention of the id keeps it: an attribute, kept XML, a field.
-      if (xml->find("\"" + r.id + "\"") != std::string::npos || xml->find("'" + r.id + "'") != std::string::npos) continue;
-      out.relationships.emplace_back(rels->source, r.id);
-    }
-  }
-  // A part goes when every relationship to it does.
-  for (const auto& [source, id] : out.relationships) {
-    const pkg::RelationshipSet* rels = package.RelationshipsOf(source);
-    const pkg::Relationship* r = rels ? rels->Find(id) : nullptr;
-    if (!r || r->targetPart.empty()) continue;
-    std::string target = Lower(r->targetPart);
-    if (std::find(out.parts.begin(), out.parts.end(), r->targetPart) != out.parts.end()) continue;
-    bool used = false;
-    for (const pkg::RelationshipSet& set : package.Relationships())
-      for (const pkg::Relationship& other : set.items) {
-        if (other.external || Lower(other.targetPart) != target) continue;
-        bool going = std::find(out.relationships.begin(), out.relationships.end(), std::make_pair(set.source, other.id)) !=
-                     out.relationships.end();
-        if (!going) used = true;
-      }
-    if (!used) out.parts.push_back(r->targetPart);
-  }
-  return out;
-}
-
 }  // namespace fw::doc::edit

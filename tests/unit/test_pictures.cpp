@@ -366,16 +366,39 @@ TEST(Pictures_UnusedMediaAfterDelete) {
   uint32_t main = MainIndex(*doc);
   std::string xml;
   CHECK(docx::WritePart(*doc, main, xml).Ok());
-  auto used = edit::FindUnusedMedia(*doc, {{main, &xml}});
+  auto used = docx::FindUnusedMedia(*doc, {{main, &xml}});
   CHECK(used.relationships.empty() && used.parts.empty());
   CHECK(ed.Delete(Pos{0, 0}, Pos{0, 1}).ok);
   CHECK(docx::WritePart(*doc, main, xml).Ok());
-  auto unused = edit::FindUnusedMedia(*doc, {{main, &xml}});
+  auto unused = docx::FindUnusedMedia(*doc, {{main, &xml}});
   CHECK_EQ(unused.relationships.size(), 1u);
   CHECK(unused.parts.size() == 1 && unused.parts[0] == "/word/media/image1.png");
-  // The package keeps them (undo can bring the picture back).
+  // A save leaves them out of the file; the package keeps them (undo can bring the picture back).
+  auto saved = SaveAndRead(*doc, ed);
+  CHECK(saved);
+  if (saved) {
+    CHECK(saved->Package().FindPart("/word/media/image1.png") == nullptr);
+    const fw::pkg::RelationshipSet* rels = saved->Package().RelationshipsOf("/word/document.xml");
+    CHECK(rels && rels->Find(unused.relationships[0].second) == nullptr);
+  }
   CHECK(doc->Package().FindPart("/word/media/image1.png") != nullptr);
   CHECK(ed.Undo().ok);
   CHECK(Shown(*doc) != kNone);
+  saved = SaveAndRead(*doc, ed);
+  CHECK(saved && saved->Package().FindPart("/word/media/image1.png") != nullptr && saved->Drawings().size() == 1);
   (void)kRels;
+}
+
+TEST(Pictures_ReplacedPictureSharedPartStays) {
+  // Two pictures share a part; deleting one keeps the part for the other.
+  auto doc = Blank();
+  if (!doc) return;
+  Editor ed(*doc);
+  Pictures pics(ed);
+  const std::vector<uint8_t> png = Solid(GUID_ContainerFormatPng, 10, 10);
+  CHECK(pics.Insert(Pos{0, 0}, png).ok);
+  CHECK(pics.Insert(Pos{0, 1}, png).ok);
+  CHECK(ed.Delete(Pos{0, 0}, Pos{0, 1}).ok);
+  auto saved = SaveAndRead(*doc, ed);
+  CHECK(saved && saved->Package().FindPart("/word/media/image1.png") != nullptr);
 }

@@ -554,11 +554,8 @@ bool DocView::InsertPictureBytes(const std::vector<uint8_t>& bytes, std::u16stri
 
 bool DocView::InsertPictureFiles(const std::vector<std::wstring>& files, int x, int y) {
   if (!Editing()) return false;
-  std::optional<TextPos> at;
-  if (x >= 0) {
-    at = PosAt(x, y, true);
-    if (!at) return false;
-  }
+  std::optional<TextPos> at;  // the caret when not where it was dropped
+  if (x >= 0) at = PosAt(x, y, true);
   bool any = false;
   for (const std::wstring& path : files) {
     if (!IsPictureFile(path)) continue;
@@ -799,7 +796,7 @@ void DocView::AddPictureToolbar(ToolbarModel& m) {
   ToolItem wrap;
   wrap.kind = ToolKind::Dropdown;
   wrap.cmd = CmdPictureWrapBox;
-  wrap.width = 148;
+  wrap.width = 176;
   wrap.priority = 9;
   wrap.glyph = icon::Picture;
   wrap.tooltip = L"Wrap text: how text flows around the picture";

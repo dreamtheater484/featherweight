@@ -93,15 +93,5 @@ class Pictures {
   Editor& editor_;
 };
 
-// Pictures nothing in a part refers to any more (deleted, or replaced), for a save: the image
-// relationships of the parts written from the model whose ids its XML doesn't mention, and the
-// media parts that only they pointed to. `written` holds the parts' XML by index into
-// Document::Parts(); others aren't looked at. The package itself isn't changed (undo may still
-// bring a picture back), so the save leaves them out on its own.
-struct UnusedMedia {
-  std::vector<std::pair<std::string, std::string>> relationships;  // source part, relationship id
-  std::vector<std::string> parts;
-};
-UnusedMedia FindUnusedMedia(const Document& doc, const std::vector<std::pair<uint32_t, const std::string*>>& written);
 
 }  // namespace fw::doc::edit

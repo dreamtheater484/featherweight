@@ -132,6 +132,8 @@ class DocView : public PagedView {
   bool InsertPictureFiles(const std::vector<std::wstring>& files, int x = -1, int y = -1);
   // Whether these are all pictures InsertPictureFiles takes (by their names).
   static bool PictureFiles(const std::vector<std::wstring>& files);
+  bool TakesPictures(const std::vector<std::wstring>& files) const override { return Editing() && PictureFiles(files); }
+  void DropPictures(const std::vector<std::wstring>& files, int x, int y) override { InsertPictureFiles(files, x, y); }
   // The selected picture (the selection is its one character), by index into
   // Document::Drawings(); kNone when there's none.
   uint32_t SelectedPicture() const;

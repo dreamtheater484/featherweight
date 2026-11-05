@@ -602,7 +602,8 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
     }
     fill(m.rects, static_cast<int>(i) == current_ ? p.searchCurrent : p.searchHit, true);
   }
-  if (HasSelection()) {
+  // A selected picture has its frame and handles instead (DrawPictureFrame).
+  if (HasSelection() && SelectedPicture() == fw::doc::kNone) {
     TextPos a = std::min(anchor_, focus_), b = std::max(anchor_, focus_);
     if (!(selFrom_ == a) || !(selTo_ == b) || selRevision_ != pagination_->Revision()) {
       selRects_ = pagination_->Ranges(a, b);
