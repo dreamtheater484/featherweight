@@ -296,11 +296,15 @@ ElemId TreeEdit::CopyProps(ElemId src, ElemId parent) {
 
 ElemId TreeEdit::Own(ElemId container) {
   // The reader shares one set of children between identical property containers, flagging every
-  // one but the first, whose children they are (Tree.h, kSharedKids). So any container copies its
-  // children before they change, once a transaction (d2-torture finding 4); the others keep the
-  // originals. One made in this transaction, unflagged, has children of its own.
+  // one but the first, whose children they are (Tree.h, kSharedKids). So a container of those
+  // kinds copies its children before they change, once a transaction (d2-torture finding 4); the
+  // others keep the originals. A flagged one always does (Clone shares too). Anything else owns
+  // its children: copying a paragraph's runs would share their text elements, which the editor
+  // and the model's walks then skip (d2-torture findings 7, 8 and 9). One made in this
+  // transaction, unflagged, has children of its own.
   if (E(container).first == kNoElem) return container;
-  if (!(E(container).flags & kSharedKids) && container >= elemsAtBegin_) return container;
+  const bool flagged = (E(container).flags & kSharedKids) != 0;
+  if (!flagged && (container >= elemsAtBegin_ || !SharesChildren(NameOfElem(doc_.tree_, container)))) return container;
   if (!owned_.insert(container).second) return container;
   std::vector<ElemId> kids;
   for (ElemId k = E(container).first; k != kNoElem; k = E(k).next) kids.push_back(k);
