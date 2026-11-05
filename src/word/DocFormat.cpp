@@ -308,7 +308,7 @@ void DocFormat::Run(const std::function<void(edit::TreeEdit&, const Target&)>& c
   }
   edit::TreeEdit te(editor_, t.sel.from);
   change(te, t);
-  done_({});
+  done_({std::nullopt, W(te.Refused())});  // a refusal says why, and changed nothing
 }
 
 void DocFormat::Execute(int cmd) {
@@ -523,16 +523,20 @@ void DocFormat::PaintTo(const Format& f, const Target& t) {
   const bool whole = t.sel.from.offset == 0 &&
                      (t.sel.to.para > t.sel.from.para || t.sel.to.offset >= doc.Para(t.sel.from.para).text.size());
   editor_.BeginGroup(u"Format Painter");
+  std::u16string refused;
   {
     edit::TreeEdit te(editor_, t.sel.from);
     if (whole) {
       if (!f.style.empty()) edit::ApplyStyle(te, t.sel, f.style);
+      if (refused.empty()) refused = te.Refused();
       edit::FormatParagraphs(te, t.sel, f.para);
+      if (refused.empty()) refused = te.Refused();
     }
     edit::FormatRuns(te, t.chars, f.run);
+    if (refused.empty()) refused = te.Refused();
   }
   editor_.EndGroup();
-  done_({});
+  done_({std::nullopt, W(refused)});
 }
 
 bool DocFormat::AutoFormat(fw::doc::Pos caret) {
