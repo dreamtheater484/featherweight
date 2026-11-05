@@ -23,7 +23,7 @@ The timings take about a minute and need the desktop: close Featherweight first,
 ## What it measures
 
 **Size:**
-- **`Featherweight.exe`.** The budget is under 4 MB until 1.1.
+- **`Featherweight.exe`.** The budget is that of the release being built (decision 22): under 4 MB until 1.1, under 7 MB for 2.0, which D2 to D5 aim at.
 - **The download.** This is the portable zip, staged and compressed as `release.ps1` does it: the exe, `pdfium.dll`, the license and the notices. The budget is under 25 MB. The installer is a little smaller (10.8 MB against 13.1 MB at 0.9.4), but making it needs Inno Setup.
 
 **Timings:** `fwtool bench-app` starts the build alone, and with each fixed file (`tests/pdfs/text.pdf`, `big-600-pages.pdf`, `form.pdf`, `tests/office/layout/report.docx`, and a 300-page Word document that `tests/office/make_long_docs.py` makes when Python is installed). Each number is the median of several fresh starts after a warm-up, in ms from the launch:
