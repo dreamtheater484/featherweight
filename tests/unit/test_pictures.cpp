@@ -8,6 +8,7 @@
 #include <wrl/client.h>
 
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "DocTestUtil.h"
@@ -387,6 +388,25 @@ TEST(Pictures_UnusedMediaAfterDelete) {
   saved = SaveAndRead(*doc, ed);
   CHECK(saved && saved->Package().FindPart("/word/media/image1.png") != nullptr && saved->Drawings().size() == 1);
   (void)kRels;
+}
+
+TEST(Pictures_InsertOnAThreadWithoutCom) {
+  // A BMP becomes PNG and an SVG gets a PNG copy through WIC: on a thread nothing initialized COM
+  // for, that works too (torture finding 16: COM was let go before the WIC objects).
+  auto doc = Blank();
+  if (!doc) return;
+  Editor ed(*doc);
+  Pictures pics(ed);
+  const std::vector<uint8_t> bmp = Solid(GUID_ContainerFormatBmp, 8, 8);
+  const std::string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"20\"><rect width=\"40\" height=\"20\" fill=\"#36c\"/></svg>";
+  bool bmpOk = false, svgOk = false;
+  std::thread worker([&] {
+    bmpOk = pics.Insert(Pos{0, 0}, bmp).ok;
+    svgOk = pics.Insert(Pos{0, 1}, std::vector<uint8_t>(svg.begin(), svg.end())).ok;
+  });
+  worker.join();
+  CHECK(bmpOk && svgOk);
+  CHECK(doc->Package().FindPart("/word/media/image1.png") != nullptr);
 }
 
 TEST(Pictures_MovesStayInTheirPart) {
