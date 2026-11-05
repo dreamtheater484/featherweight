@@ -8,6 +8,7 @@
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/Forms.h"
+#include "doc/edit/HeaderFooter.h"
 #include "doc/edit/Inline.h"
 #include "doc/edit/TreeEdit.h"
 #include "pkg/Check.h"
@@ -302,7 +303,37 @@ TEST(Forms_RefusedLinkEditKeepsTheEditBefore) {
   CHECK(MainXml(*doc) == filled && editor.CanUndo() && !editor.CanRedo());
   CHECK(!edit::InsertLink(editor, {link, 4}, {link, 4}, "#here", u"More"));
   CHECK(MainXml(*doc) == filled && editor.CanUndo());
+  // Refused inside an open group: the group keeps what it did, and the step before stays too.
+  editor.BeginGroup(u"Group");
+  const edit::Range now = edit::FormFields(*doc, doc->MainStory())[0].result;
+  CHECK(editor.InsertText(now.to, u"!"));
+  CHECK(!edit::EditLink(editor, {link, 1}, "#here", u"New text"));
+  CHECK(!edit::InsertLink(editor, {link, 4}, {link, 4}, "#here", u"More"));
+  editor.EndGroup();
+  CHECK(doc->Para(now.from.para).text.find(u"Grace!") != std::u16string::npos);
   int steps = 0;
   while (editor.Undo()) ++steps;
-  CHECK(steps == 1);
+  CHECK(steps == 2);
+}
+
+TEST(Forms_ProtectedFormGetsNoHeaderOrFooter) {
+  // Torture finding 33: a footer under forms protection made its part (outside undo), had its
+  // reference refused and still reported success, so Undo took back the check box ticked before.
+  Fixture f;
+  f.styles = kStyles;
+  f.settings = "<w:documentProtection w:edit=\"forms\" w:enforcement=\"1\"/>";
+  f.body = "<w:p><w:sdt><w:sdtPr><w:id w:val=\"1\"/><w14:checkbox><w14:checked w14:val=\"0\"/></w14:checkbox></w:sdtPr>"
+           "<w:sdtContent><w:r><w:t>\xE2\x98\x90</w:t></w:r></w:sdtContent></w:sdt><w:r><w:t xml:space=\"preserve\"> Yes</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  edit::Editor editor(*doc);
+  REQUIRE(edit::SetChecked(editor, edit::ContentControls(*doc, doc->MainStory())[0], true));
+  const size_t parts = doc->Parts().size();
+  const std::string ticked = MainXml(*doc);
+  std::u16string why;
+  CHECK(edit::EnsureHeaderFooter(editor, 0, true, HdrFtrType::Default, why) == kNone && why == edit::kFormsProtected);
+  CHECK(!edit::InsertPageNumber(editor, 0, true, HdrFtrType::Default, Justification::Center, false));
+  CHECK(doc->Parts().size() == parts && MainXml(*doc) == ticked && editor.UndoName() == u"Check box");
+  REQUIRE(editor.Undo());
+  CHECK(!edit::ContentControls(*doc, doc->MainStory())[0].checked && !editor.CanUndo());
 }

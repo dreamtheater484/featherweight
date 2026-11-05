@@ -2316,7 +2316,7 @@ bool Editor::CanEdit(std::u16string* why) const {
 bool Editor::FormsRefuse(const Pos* from, const Pos* to, std::u16string& why) const {
   if (!FormsProtected(doc_)) return false;
   if (from && to && to->para < doc_.Paragraphs().size() && InFillIn(doc_, *from, *to, &why, false)) return false;
-  if (!from || !to || why.empty()) why = u"This document is protected: only its form fields and content controls can be filled in.";
+  if (!from || !to || why.empty()) why = kFormsProtected;
   return true;
 }
 

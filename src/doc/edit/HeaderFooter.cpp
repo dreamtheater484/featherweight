@@ -1,6 +1,7 @@
 #include "doc/edit/HeaderFooter.h"
 
 #include "doc/edit/Format.h"
+#include "doc/edit/Forms.h"
 #include "doc/edit/Inline.h"
 #include "doc/edit/Styles.h"
 #include "doc/edit/TreeEdit.h"
@@ -27,6 +28,10 @@ Result Fail(std::u16string why) {
 
 bool CanChange(const Editor& editor, uint32_t section, std::u16string& why) {
   if (!editor.CanEdit(&why)) return false;
+  if (FormsProtected(editor.Doc())) {
+    why = kFormsProtected;
+    return false;
+  }
   if (section >= editor.Doc().Sections().size()) {
     why = u"There's no such section.";
     return false;
@@ -77,6 +82,10 @@ uint32_t NewOwn(Editor& editor, uint32_t section, bool footer, HdrFtrType type, 
       te.SetAttr(te.Path(doc.Para(paras.front()).elem, {names::kPPr, kPStyle}), names::kVal, style);
   }
   te.Commit();
+  if (!te.Refused().empty()) {
+    why = te.Refused();
+    return kNone;
+  }
   return story;
 }
 

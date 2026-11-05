@@ -79,6 +79,8 @@ std::optional<FormField> FormFieldAt(const Document& doc, Pos at);
 // Forms protection (w:documentProtection w:edit="forms", enforced): only content controls and
 // form fields can be filled in. The editor refuses every other change (Editor, TreeEdit).
 bool FormsProtected(const Document& doc);
+// Why any other change is refused there.
+inline constexpr std::u16string_view kFormsProtected = u"This document is protected: only its form fields and content controls can be filled in.";
 // Whether [from, to] is text that can be typed in or deleted under forms protection: inside one
 // content control that takes typing, or the result of one enabled text form field. `why` says
 // what it is otherwise.
