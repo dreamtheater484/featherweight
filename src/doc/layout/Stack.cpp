@@ -31,6 +31,26 @@ float ParseVmlLength(std::string_view v, float fallback) {
   return fallback;
 }
 
+// A text box's text direction, in quarter turns clockwise: bodyPr vert="vert" or "eaVert" runs
+// down (1), "vert270" up (3); VML's layout-flow:vertical runs down, or up with
+// mso-layout-flow-alt:bottom-to-top. 0: horizontal.
+uint8_t TextBoxTurn(const std::string& xml) {
+  const size_t body = xml.find("bodyPr");
+  if (body != std::string::npos) {
+    const size_t end = xml.find('>', body);
+    const size_t vert = xml.find(" vert=\"", body);
+    if (vert != std::string::npos && vert < end) {
+      const std::string_view v = std::string_view(xml).substr(vert + 7, xml.find('"', vert + 7) - (vert + 7));
+      if (v == "vert" || v == "eaVert") return 1;
+      if (v == "vert270") return 3;
+    }
+    return 0;
+  }
+  if (xml.find("layout-flow:vertical") != std::string::npos)
+    return xml.find("bottom-to-top") != std::string::npos ? 3 : 1;
+  return 0;
+}
+
 // A text box's insets (left, top, right, bottom), from bodyPr or the VML textbox's inset.
 std::array<float, 4> Insets(const std::string& xml) {
   std::array<float, 4> in = {7.2f, 3.6f, 7.2f, 3.6f};
@@ -286,21 +306,32 @@ void Engine::AddDrawing(uint32_t drawing, const Rect& box, bool floating, const 
   db.z = d.relativeHeight;
   out.drawings.push_back(db);
   if (d.textBoxes.empty()) return;
-  std::array<float, 4> in = Insets(doc_.DrawingXml(d));
+  const std::string& xml = doc_.DrawingXml(d);
+  std::array<float, 4> in = Insets(xml);
   Rect inner{box.left + in[0], box.top + in[1], box.right - in[2], box.bottom - in[3]};
   if (inner.Width() <= 0) return;
+  // Vertical text runs along the box's height, in a frame turned about a corner of the box.
+  const uint8_t turn = TextBoxTurn(xml);
+  if (turn && inner.Height() <= 0) return;
   // One story per box; linked boxes continue in the same story.
   Frame tf = frame;
   tf.x = frame.x + inner.left;
   tf.y = frame.y + inner.top;
-  tf.width = inner.Width();
+  tf.width = turn ? inner.Height() : inner.Width();
   if (frame.story == LineStory::Body || frame.story == LineStory::Cell) tf.story = LineStory::TextBox;
   tf.zones = nullptr;
   tf.inCell = false;
   Stack s = StackStory(d.textBoxes.front(), tf);
   for (LineBox& l : s.lines) {
     l.drawing = drawing;
-    l.clip = {0, 0, inner.Width(), std::max(inner.Height(), s.height)};
+    if (turn) {
+      l.turn = turn;
+      l.turnX = turn == 3 ? 0 : inner.Width();
+      l.turnY = turn == 3 ? inner.Height() : 0;
+      l.clip = {0, 0, inner.Width(), inner.Height()};
+    } else {
+      l.clip = {0, 0, inner.Width(), std::max(inner.Height(), s.height)};
+    }
   }
   out.Append(std::move(s), inner.left, inner.top);
 }
