@@ -231,6 +231,12 @@ enum Cmd : int {
   CmdMarkupNone,
   CmdMarkupOriginal,
   CmdReviewerName,  // ⋯: the name changes and comments are made with
+  // Footnotes, endnotes and tables of contents (D4).
+  CmdInsertFootnote = 1340,  // Ctrl+Alt+F
+  CmdInsertEndnote,          // Ctrl+Alt+D
+  CmdInsertToc,
+  CmdUpdateTocPages,  // the table of contents' page numbers
+  CmdUpdateToc,       // the whole table of contents
   // The ruler in Word documents (D3).
   CmdRuler = 1200,  // the rulers shown or not (the ⋯ menu, a setting like spelling as you type)
   // Change case (D3): Shift+F3 and the Aa menu.

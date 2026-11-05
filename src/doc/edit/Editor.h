@@ -353,6 +353,17 @@ class Editor {
   std::vector<Listener> listeners_;
 };
 
+// A group (Editor::BeginGroup) for as long as it lives: ended when `done`, else cancelled, so a
+// change made of several that fails part way leaves nothing.
+struct EditGroup {
+  EditGroup(Editor& editor, std::u16string name) : ed(editor) { ed.BeginGroup(std::move(name)); }
+  ~EditGroup() { done ? ed.EndGroup() : ed.CancelGroup(); }
+  EditGroup(const EditGroup&) = delete;
+  EditGroup& operator=(const EditGroup&) = delete;
+  Editor& ed;
+  bool done = false;
+};
+
 // Deleting the section breaks in the marks of `marks` (body paragraphs): the section after the last
 // of them goes on showing the headers and footers it did. Where it had no reference of a kind of
 // its own, it showed the one of the section before it (Word's "Link to Previous"), which may be one

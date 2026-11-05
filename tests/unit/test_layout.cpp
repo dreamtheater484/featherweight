@@ -21,6 +21,7 @@
 #include "doc/edit/Format.h"
 #include "doc/edit/Lists.h"
 #include "doc/edit/Notes.h"
+#include "doc/edit/Toc.h"
 #include "doc/edit/Page.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/layout/Layout.h"
@@ -905,6 +906,62 @@ TEST(Layout_NotesInsertedAndDeletedLayOutAsFromScratch) {
       REQUIRE(same(when));
     }
   }
+}
+
+TEST(Layout_TocShowsTheHeadingsPages) {
+  // D4: a table of contents inserted at the start shows the page each heading is on once the table
+  // is in (it moves them), and lays out as from scratch; updating the numbers after an edit that
+  // moves headings shows their new pages.
+  std::string body = P("");
+  for (int i = 0; i < 12; ++i) {
+    body += P("Chapter " + std::to_string(i), "<w:outlineLvl w:val=\"" + std::to_string(i % 3 == 0 ? 0 : 1) + "\"/>");
+    body += P(Words(20 + (i * 7) % 30));
+  }
+  Doc d = Make(body + SmallPage());
+  REQUIRE(d.layout);
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  auto pages = [&](uint32_t para) {
+    std::optional<size_t> page = d.layout->PageOf({para, 0});
+    return page ? d.layout->GetPage(*page).numberText : std::u16string();
+  };
+  auto shows = [&](const char* when) {
+    d.layout->LayOutAll();
+    bool ok = SameAsFresh(*d.doc, *d.layout, when);
+    // Each entry's number is its heading's page.
+    std::vector<std::u16string> want, got;
+    for (const edit::TocHeading& h : edit::TocHeadings(*d.doc)) want.push_back(pages(h.para));
+    for (const Field& f : d.doc->Fields(d.doc->MainStory()))
+      if (f.Type() == u"PAGEREF") got.push_back(f.result);
+    if (want != got) {
+      std::printf("  %s: the table shows other pages than its headings are on\n", when);
+      ok = false;
+    }
+    return ok;
+  };
+  const uint32_t at = d.doc->StoryParagraphs(d.doc->MainStory())[0];
+  edit::Result r = edit::InsertToc(ed, {at, 0}, pages);
+  REQUIRE(r.ok);
+  REQUIRE(shows("inserted"));
+  // The table's entries are on the first page, and say so.
+  REQUIRE(edit::TocHeadings(*d.doc).size() == 12u);
+  REQUIRE(Find(d, u"Chapter 0"));
+  // Text before the headings moves them: the numbers follow when updated.
+  const uint32_t text = edit::TocHeadings(*d.doc).front().para + 1;
+  const std::string more = Words(120);
+  REQUIRE(ed.InsertText({text, 0}, std::u16string(more.begin(), more.end())).ok);
+  d.layout->LayOutAll();
+  REQUIRE(edit::UpdateTocPages(ed, edit::TablesOfContents(*d.doc).at(0), pages).ok);
+  REQUIRE(shows("pages updated"));
+  REQUIRE(edit::UpdateToc(ed, edit::TablesOfContents(*d.doc).at(0), pages).ok);
+  REQUIRE(shows("table updated"));
+  REQUIRE(ed.Undo().ok);
+  REQUIRE(ed.Undo().ok);
+  REQUIRE(ed.Undo().ok);
+  REQUIRE(ed.Undo().ok);
+  CHECK(!ed.CanUndo());
+  d.layout->LayOutAll();
+  REQUIRE(SameAsFresh(*d.doc, *d.layout, "undone"));
 }
 
 TEST(Layout_TypingLaysOutAPageOrTwo) {

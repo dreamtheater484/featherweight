@@ -20,6 +20,9 @@ namespace fw::doc::edit {
 // Refused inside another field, and in content that isn't edited. One undo step named `name`.
 Result InsertField(Editor& editor, Pos at, std::string_view instr, std::u16string_view result,
                    std::u16string name = u"Field");
+// Whether `at` is inside a field: between its begin and its end, or inside a w:fldSimple. Where
+// a field ends or begins is outside it.
+bool InsideField(const Document& doc, Pos at);
 
 // ---- Links (w:hyperlink)
 struct LinkInfo {
@@ -60,5 +63,11 @@ Result DeleteBookmark(Editor& editor, std::string_view name);
 // and digits) around its text when there is none: a link to a heading goes to it. Empty when
 // it can't be added. Inside the caller's group; adding is its own transaction.
 std::string BookmarkForParagraph(Editor& editor, uint32_t para);
+// For each of `paras`, the name of a bookmark whose name starts with `prefix` ("_Toc") that starts
+// in the paragraph, adding a hidden one (`prefix` and digits) around its text when there is
+// none: a table of contents' entries go to their headings. Empty for one that can't have one. One
+// transaction for all of them, inside the caller's group.
+std::vector<std::string> BookmarksForParagraphs(Editor& editor, const std::vector<uint32_t>& paras,
+                                                std::string_view prefix);
 
 }  // namespace fw::doc::edit

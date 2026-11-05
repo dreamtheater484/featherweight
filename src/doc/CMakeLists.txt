@@ -28,6 +28,7 @@ add_library(fwdoc STATIC
   edit/Page.cpp
   edit/Styles.cpp
   edit/TableStyles.cpp
+  edit/Toc.cpp
   edit/TreeEdit.cpp
 )
 target_include_directories(fwdoc PUBLIC "${PROJECT_SOURCE_DIR}/src")
@@ -71,6 +72,7 @@ if(FW_BUILD_TESTS)
     "${PROJECT_SOURCE_DIR}/tests/unit/test_edit.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_clip.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_format.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_forms.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_page.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_export.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_inline.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_notes.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_toc.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_proof.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_tables.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_review.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_pictures.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_shapes.cpp"

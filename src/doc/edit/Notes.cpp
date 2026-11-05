@@ -4,6 +4,7 @@
 #include <charconv>
 #include <string>
 
+#include "doc/edit/Inline.h"
 #include "doc/edit/Styles.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/model/Internal.h"
@@ -43,33 +44,6 @@ std::string NewId(const Document& doc, StoryKind kind) {
   return std::to_string(top + 1);
 }
 
-// Whether `at` is inside a field: between its begin and end, or inside a w:fldSimple.
-bool InsideField(const Document& doc, Pos at) {
-  const std::u16string& text = doc.Para(at.para).text;
-  const std::vector<TextRun> runs = doc.Runs(at.para);
-  const TextRun* before = nullptr;
-  const TextRun* after = nullptr;
-  for (const TextRun& r : runs) {
-    if (r.start < at.offset && at.offset <= r.end) before = &r;
-    if (r.start <= at.offset && at.offset < r.end && !after) after = &r;
-  }
-  if (before && after && before->simpleField && before->simpleField == after->simpleField) return true;
-  // The fields open after the character before `at` (an end closes one), or before the first.
-  if (before) return before->fieldDepth - (text[at.offset - 1] == u'\x15' ? 1 : 0) > 0;
-  if (after) return after->fieldDepth - (text[at.offset] == u'\x13' ? 1 : 0) > 0;
-  return false;
-}
-
-// Ends the group on the way out, cancelled unless `done`.
-struct Group {
-  Editor& ed;
-  bool done = false;
-  Group(Editor& editor, std::u16string name) : ed(editor) { ed.BeginGroup(std::move(name)); }
-  ~Group() { done ? ed.EndGroup() : ed.CancelGroup(); }
-  Group(const Group&) = delete;
-  Group& operator=(const Group&) = delete;
-};
-
 }  // namespace
 
 Result InsertNote(Editor& editor, Pos at, bool endnote) {
@@ -93,7 +67,7 @@ Result InsertNote(Editor& editor, Pos at, bool endnote) {
   const ElemId root = styles.EnsurePart(endnote ? PartKind::Endnotes : PartKind::Footnotes);
   if (root == kNoElem) return Fail(what + u" can't be added to this document.");
 
-  Group group(editor, name);
+  EditGroup group(editor, name);
   styles.Begin(name);
   styles.Affects(at.para, at.para);
   const std::string textStyle = EnsureStyle(styles, tag + " text");

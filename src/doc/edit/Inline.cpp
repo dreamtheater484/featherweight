@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <charconv>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "doc/edit/Styles.h"
 #include "doc/edit/TreeEdit.h"
@@ -191,6 +193,24 @@ Result AddBookmark(Editor& editor, Pos from, Pos to, std::string_view name) {
 }  // namespace
 
 // ---------- Fields ----------
+
+bool InsideField(const Document& doc, Pos at) {
+  if (at.para >= doc.Paragraphs().size()) return false;
+  const std::u16string& text = doc.Para(at.para).text;
+  if (at.offset > text.size()) return false;
+  const std::vector<TextRun> runs = doc.Runs(at.para);
+  const TextRun* before = nullptr;
+  const TextRun* after = nullptr;
+  for (const TextRun& r : runs) {
+    if (r.start < at.offset && at.offset <= r.end) before = &r;
+    if (r.start <= at.offset && at.offset < r.end && !after) after = &r;
+  }
+  if (before && after && before->simpleField && before->simpleField == after->simpleField) return true;
+  // The fields open after the character before `at` (an end closes one), or before the first.
+  if (before) return before->fieldDepth - (text[at.offset - 1] == u'\x15' ? 1 : 0) > 0;
+  if (after) return after->fieldDepth - (text[at.offset] == u'\x13' ? 1 : 0) > 0;
+  return false;
+}
 
 Result InsertField(Editor& editor, Pos at, std::string_view instr, std::u16string_view result, std::u16string name) {
   const Document& doc = editor.Doc();
@@ -459,6 +479,73 @@ Result DeleteBookmark(Editor& editor, std::string_view name) {
   Result r;
   r.caret = at;
   return r;
+}
+
+std::vector<std::string> BookmarksForParagraphs(Editor& editor, const std::vector<uint32_t>& paras,
+                                                std::string_view prefix) {
+  const Document& doc = editor.Doc();
+  std::vector<std::string> out(paras.size());
+  if (prefix.empty() || !editor.CanEdit()) return out;
+  auto starts = [&](std::string_view name) { return name.size() >= prefix.size() && SameName(name.substr(0, prefix.size()), prefix); };
+  // The bookmarks there are: their names (to make new ones unique) and where those with the prefix start.
+  std::unordered_set<std::string> taken;
+  std::unordered_map<uint32_t, std::string> at;
+  for (const BookmarkInfo& b : Bookmarks(doc)) {
+    std::string lower = b.name;
+    for (char& c : lower) c = c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+    taken.insert(std::move(lower));
+    if (starts(b.name)) at.emplace(b.from.para, b.name);
+  }
+  int64_t top = -1;
+  for (const PairInfo& p : doc.Pairs()) {
+    if (p.kind != pkg::RefKind::BookmarkId) continue;
+    int64_t v = 0;
+    auto [ptr, ec] = std::from_chars(p.id.data(), p.id.data() + p.id.size(), v);
+    if (ec == std::errc() && ptr == p.id.data() + p.id.size()) top = std::max(top, v);
+  }
+  TreeEdit te(editor, paras.empty() ? Pos{} : Pos{paras.front(), 0});
+  te.Begin(u"Bookmark");
+  te.Local();
+  Tree& t = te.GetTree();
+  uint32_t n = 0;
+  for (size_t i = 0; i < paras.size(); ++i) {
+    const uint32_t para = paras[i];
+    if (para >= doc.Paragraphs().size()) continue;
+    if (auto it = at.find(para); it != at.end()) {
+      out[i] = it->second;
+      continue;
+    }
+    std::string name;
+    while (name.empty() || taken.count(name)) {
+      name = std::string(prefix) + std::to_string(100000000u + ++n);
+      for (char& c : name) c = c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+    }
+    taken.insert(name);
+    name = std::string(prefix) + name.substr(prefix.size());  // the prefix as given
+    const auto len = static_cast<uint32_t>(doc.Para(para).text.size());
+    if (!te.SplitRunAt(para, 0) || !te.SplitRunAt(para, len)) continue;
+    auto s = SpotAt(doc, t, para, 0, kBookmarkStart);
+    auto e = SpotAt(doc, t, para, len, kBookmarkEnd);
+    if (!s || !e) continue;
+    const ElemId start = te.InsertElement(s->parent, kBookmarkStart, s->before, 0);
+    if (start == kNoElem) continue;
+    // The end's spot again: the start may be its sibling now.
+    e = SpotAt(doc, t, para, len, kBookmarkEnd);
+    const ElemId end = e ? te.InsertElement(e->parent, kBookmarkEnd, e->before, len) : kNoElem;
+    if (end == kNoElem) {
+      te.RemoveElement(start);
+      continue;
+    }
+    const std::string id = std::to_string(++top);
+    te.SetAttr(start, names::kId, id);
+    te.SetAttr(start, kName, name);
+    te.SetAttr(end, names::kId, id);
+    at.emplace(para, name);
+    out[i] = name;
+  }
+  te.Commit();
+  if (!te.Refused().empty()) std::fill(out.begin(), out.end(), std::string());
+  return out;
 }
 
 std::string BookmarkForParagraph(Editor& editor, uint32_t para) {
