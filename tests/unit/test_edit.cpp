@@ -1581,3 +1581,54 @@ TEST(Edit_ValuesXmlCantHoldAreRefused) {
   CHECK(doc->Para(p).text == u"Hellobold" && doc->ResolvedRun(p, doc->Runs(p).back().run).bold);
   CHECK(MainXml(*doc).find('\x01') == std::string::npos && Consistent(*doc, f) && ChecksOut(*doc));
 }
+
+TEST(Edit_UndoPutsBackMarkersBetweenParagraphs) {
+  // d1-corpus finding 15: more than two range markers between two paragraphs. A delete that joins
+  // them moves the markers in; undo must put every one back, or the next delete there finds stale
+  // offsets (it threw).
+  Fixture f;
+  f.body = "<w:p><w:r><w:t>First one</w:t></w:r></w:p><w:bookmarkStart w:id=\"1\" w:name=\"a\"/>"
+           "<w:bookmarkStart w:id=\"2\" w:name=\"b\"/><w:bookmarkEnd w:id=\"1\"/><w:bookmarkEnd w:id=\"2\"/>"
+           "<w:p><w:r><w:t>Second one, longer</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  CHECK(ps.size() == 2);
+  if (ps.size() != 2) return;
+  CHECK(ed.Delete(P(ps[0], 0), P(ps[1], 7)));
+  CHECK(ed.Undo());
+  CHECK(MainXml(*doc) == before && Consistent(*doc, f));
+  auto r = ed.Delete(P(ps[0], 1), P(ps[1], 12));
+  CHECK(r && doc->Para(Main(*doc)[0]).text == u"Flonger");
+  CHECK(Consistent(*doc, f));
+  while (ed.CanUndo()) ed.Undo();
+  CHECK(MainXml(*doc) == before && RoundTrips(*doc));
+}
+
+TEST(Edit_SplitBeforeKeptAlternateContentGoesAfterIt) {
+  // d1-corpus finding 11: Enter just before text shown from a kept mc:AlternateContent block (its
+  // chosen branch, written as the whole block). The block is kept beside the element before it, so
+  // the text stays with it in the first paragraph, as the file has it.
+  Fixture f;
+  f.body =
+      "<w:p><w:bookmarkStart w:id=\"5\" w:name=\"Mark\"/><w:r><w:t>marked</w:t></w:r><w:bookmarkEnd w:id=\"5\"/>"
+      "<mc:AlternateContent><mc:Choice Requires=\"w14\"><w:r><w:t xml:space=\"preserve\"> (new)</w:t></w:r></mc:Choice>"
+      "<mc:Fallback><w:r><w:t xml:space=\"preserve\"> (old)</w:t></w:r></mc:Fallback></mc:AlternateContent>"
+      "<x:kept>kept</x:kept></w:p><w:p><w:r><w:t>Next</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  CHECK(ps.size() == 2 && doc->Para(ps[0]).text == u"marked (new)");
+  if (ps.size() != 2) return;
+  auto r = ed.SplitParagraph(P(ps[0], 6));
+  CHECK(r && Main(*doc).size() == 3);
+  CHECK(doc->Para(Main(*doc)[0]).text == u"marked (new)" && doc->Para(Main(*doc)[1]).text.empty());
+  CHECK(Consistent(*doc, f));
+  CHECK(ed.Undo() && MainXml(*doc) == before && RoundTrips(*doc));
+}
