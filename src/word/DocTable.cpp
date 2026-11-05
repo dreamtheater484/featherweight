@@ -412,13 +412,44 @@ class DocTable::Panel : public PanelContent {
 
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
     ui_ = ui;
-    const float u = ui;
-    headings_.clear();
+    body_ = body;
+    Place(t_.Cell().has_value());
     Refresh();
     std::vector<Control*> controls;
-    const float labelX = body.left + 20 * u, cx = body.left + (20 + kLabelW) * u, right = body.right - 20 * u;
-    float y = body.top + 4 * u;
+    for (auto& [label, c] : rows)
+      if (c) controls.push_back(c);
+    return controls;
+  }
+
+  void Draw(Canvas& c) override {
+    const Palette& p = theme::P();
+    const float u = ui_;
+    Refresh();
+    for (const auto& [text, rc] : headings_) c.Text(text, rc, p.text, 13 * u, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    for (const auto& [label, control] : rows) {
+      if (!control || !control->visible || label.empty()) continue;
+      const float labelX = control->rc.left - kLabelW * u;
+      c.Text(label, RectF(labelX, control->rc.top, control->rc.left - 8 * u, control->rc.bottom), p.textSecondary, 13 * u);
+    }
+  }
+
+  std::vector<std::pair<std::wstring, Control*>> rows;  // label, control; nullptr starts a heading
+
+ private:
+  // In a table, its settings and its cell's; elsewhere, Insert table: the panel fits a window 700
+  // pixels high (it doesn't scroll). Placed again when the selection goes in or out of a table.
+  void Place(bool inTable) {
+    inTable_ = inTable;
+    const float u = ui_;
+    headings_.clear();
+    const float labelX = body_.left + 20 * u, cx = body_.left + (20 + kLabelW) * u, right = body_.right - 20 * u;
+    float y = body_.top + 4 * u;
+    bool insert = false;  // past the Insert table heading
     for (auto& [label, c] : rows) {
+      if (!c && label == L"Insert table") insert = true;
+      const bool shown = insert != inTable;
+      if (c) c->visible = shown;
+      if (!shown) continue;
       if (!c) {
         if (!headings_.empty()) y += 10 * u;
         headings_.push_back({label, RectF(labelX, y, right, y + 24 * u)});
@@ -429,28 +460,10 @@ class DocTable::Panel : public PanelContent {
       if (c == &shading_) w = 76 * u;
       else if (dynamic_cast<SpinBox*>(c)) w = std::min(w, 120 * u);
       c->rc = RectF(std::round(cx), std::round(y), std::round(cx + w), std::round(y + 32 * u));
-      controls.push_back(c);
       y += kRowH * u;
     }
-    return controls;
   }
-
-  void Draw(Canvas& c) override {
-    const Palette& p = theme::P();
-    const float u = ui_;
-    Refresh();
-    for (const auto& [text, rc] : headings_) c.Text(text, rc, p.text, 13 * u, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    for (const auto& [label, control] : rows) {
-      if (!control || label.empty()) continue;
-      const float labelX = control->rc.left - kLabelW * u;
-      c.Text(label, RectF(labelX, control->rc.top, control->rc.left - 8 * u, control->rc.bottom), p.textSecondary, 13 * u);
-    }
-  }
-
-  std::vector<std::pair<std::wstring, Control*>> rows;  // label, control; nullptr starts a heading
-
- private:
-  // The controls show the table and cell the selection is in (enabled only there).
+  // The controls show the table and cell the selection is in.
   void Refresh() {
     auto [a, f] = t_.host_.selection();
     const uint32_t version = f.para < t_.Doc().Paragraphs().size() ? t_.Doc().Para(f.para).version : 0;
@@ -459,6 +472,7 @@ class DocTable::Panel : public PanelContent {
     shownF_ = f;
     shownVersion_ = version;
     const auto cell = t_.Cell();
+    if (cell.has_value() != inTable_) Place(cell.has_value());
     for (Control* c : {static_cast<Control*>(&style_), static_cast<Control*>(&align_), static_cast<Control*>(&fit_),
                        static_cast<Control*>(&header_), static_cast<Control*>(&width_), static_cast<Control*>(&height_),
                        static_cast<Control*>(&valign_), static_cast<Control*>(&margins_), static_cast<Control*>(&borders_),
@@ -494,6 +508,8 @@ class DocTable::Panel : public PanelContent {
 
   DocTable& t_;
   float ui_ = 1;
+  D2D1_RECT_F body_{};
+  bool inTable_ = false;
   std::vector<std::pair<std::wstring, D2D1_RECT_F>> headings_;
   std::vector<std::string> styles_;
   Pos shownA_{fw::doc::kNone, 0}, shownF_{fw::doc::kNone, 0};
@@ -613,7 +629,8 @@ void DocTable::Execute(int cmd) {
 
 void DocTable::Insert(uint32_t rows, uint32_t cols) {
   auto [a, f] = host_.selection();
-  Run(editor_.InsertTable(editor_.Compare(a, f) <= 0 ? a : f, rows, cols));
+  // Then typing goes into its first cell, wherever Insert was chosen (the panel keeps the keyboard).
+  if (Run(editor_.InsertTable(editor_.Compare(a, f) <= 0 ? a : f, rows, cols)) && host_.focusPage) host_.focusPage();
 }
 
 void DocTable::Select(Editor::Extent extent) {

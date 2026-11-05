@@ -173,9 +173,9 @@ void DocView::Cut() {
   Apply(r);
 }
 
-void DocView::Paste(bool formatted) {
+void DocView::Paste(bool formatted, bool merge) {
   if (!Editing()) return;
-  if (formatted && PastePicture()) return;  // only when there's no text
+  if (formatted && !merge && PastePicture()) return;  // only when there's no text
   namespace edit = fw::doc::edit;
   std::optional<edit::Clip> clip;
   if (formatted) {
@@ -206,11 +206,108 @@ void DocView::Paste(bool formatted) {
     r = editor_->ClearCells(ToDoc(anchor_), ToDoc(focus_));
     from = to = r.caret;
   }
-  if (r) r = clip ? edit::PasteClip(*editor_, from, to, *clip, clipSource_)
+  if (r) r = clip ? edit::PasteClip(*editor_, from, to, *clip, clipSource_, merge)
                   : from == to ? editor_->InsertText(from, t) : editor_->Replace(from, to, t);
   if (r) editor_->EndGroup();
   else editor_->CancelGroup();
   Apply(r);
+}
+
+// ---------------------------------------------------------------------------
+// Dragging the selected text
+
+bool DocView::OverSelection(int x, int y) const {
+  if (!HasSelection()) return false;
+  const TextPos a = std::min(anchor_, focus_), b = std::max(anchor_, focus_);
+  if (!(selFrom_ == a) || !(selTo_ == b)) return false;  // not drawn yet
+  const int page = PageAtPoint(x, y);
+  float px, py;
+  if (page < 0 || !ToPagePoint(page, x, y, px, py)) return false;
+  for (const auto& [pg, r] : selRects_)
+    if (static_cast<int>(pg) == page && px >= r.left && px < r.right && py >= r.top && py < r.bottom) return true;
+  return false;
+}
+
+bool DocView::TextDragDown(int x, int y, UINT mods, std::optional<TextPos> pos) {
+  // Not a click right after a double-click (that's the paragraph), nor cells or a picture.
+  const bool triple = anim::Now() - lastDoubleClick_ < GetDoubleClickTime() &&
+                      std::abs(x - lastDoubleX_) + std::abs(y - lastDoubleY_) < 6 * ui_;
+  if (!pos || triple || (mods & kModShift) || !Editing() || !editor_->CanEdit() || SelectedPicture() != fw::doc::kNone ||
+      (table_ && table_->SelectedCells()) || !OverSelection(x, y))
+    return false;
+  textDrag_ = TextDrag::Pending;
+  dragDown_ = *pos;
+  dropAt_.reset();
+  return true;
+}
+
+bool DocView::TextDragMove(int x, int y) {
+  if (textDrag_ == TextDrag::None) return false;
+  if (textDrag_ == TextDrag::Pending) {
+    if (std::abs(x - downX_) + std::abs(y - downY_) < 4 * ui_) return true;
+    textDrag_ = TextDrag::Moving;
+  }
+  if (y < vp_.top) ScrollBy(0, (y - vp_.top) * 0.5, false);
+  else if (y > vp_.bottom) ScrollBy(0, (y - vp_.bottom) * 0.5, false);
+  auto at = PosAt(x, y, true);
+  if (at && StoryOf(*at) != StoryOf(anchor_)) at.reset();  // only within its story
+  if (at != dropAt_) {
+    dropAt_ = at;
+    host_.ViewInvalidate();
+  }
+  return true;
+}
+
+bool DocView::TextDragUp(UINT mods) {
+  const TextDrag d = textDrag_;
+  textDrag_ = TextDrag::None;
+  if (d == TextDrag::None) return false;
+  host_.ViewInvalidate();
+  if (d == TextDrag::Pending) {  // a click: the caret there
+    anchor_ = focus_ = dragDown_;
+    goalX_ = -1;
+    editor_->BreakTyping();
+    CaretMoved(false);
+    return true;
+  }
+  const TextPos a = std::min(anchor_, focus_), b = std::max(anchor_, focus_);
+  if (!dropAt_ || (!(*dropAt_ < a) && !(b < *dropAt_))) return true;  // onto itself: nothing
+  namespace edit = fw::doc::edit;
+  const edit::Clip clip = edit::CopyClip(*doc_, ToDoc(a), ToDoc(b), clipSource_);
+  if (clip.Empty()) return true;
+  const bool copy = (mods & kModCtrl) != 0;
+  editor_->BeginGroup(copy ? u"Copy" : u"Move");
+  fw::doc::Pos at = ToDoc(*dropAt_);
+  Result r;
+  r.caret = at;
+  if (!copy) {
+    // Taken out first; a place after it moves back by what went (into the join, on its paragraph).
+    const size_t before = doc_->Paragraphs().size();
+    r = editor_->Delete(ToDoc(a), ToDoc(b));
+    if (r && b < *dropAt_) {
+      const uint32_t gone = static_cast<uint32_t>(before - doc_->Paragraphs().size());
+      at = dropAt_->para == b.para ? fw::doc::Pos{r.caret.para, r.caret.offset + (dropAt_->offset - b.offset)}
+                                   : fw::doc::Pos{dropAt_->para - gone, dropAt_->offset};
+    }
+  }
+  if (r) r = edit::PasteClip(*editor_, at, at, clip, clipSource_);
+  if (r) editor_->EndGroup();
+  else editor_->CancelGroup();
+  if (Apply(r)) {
+    anchor_ = ToText(at);  // the dropped text, selected
+    host_.ViewInvalidate();
+  }
+  return true;
+}
+
+void DocView::DrawTextDrop(Canvas& c, int first, int last) {
+  if (textDrag_ != TextDrag::Moving || !dropAt_ || !pagination_->LaidOut(*dropAt_)) return;
+  auto at = pagination_->CaretAt(*dropAt_, CaretPage());
+  if (!at || static_cast<int>(at->page) < first || static_cast<int>(at->page) > last) return;
+  const D2D1_RECT_F r = PageRectToScreen(static_cast<int>(at->page), layout::Rect{at->x, at->top, at->x, at->bottom});
+  const float x = std::floor(r.left) + 0.5f;
+  for (float y = r.top; y < r.bottom; y += 4 * ui_)  // a dotted caret: where it goes
+    c.Line(x, y, x, std::min(y + 2 * ui_, r.bottom), theme::P().text, 2 * ui_);
 }
 
 void DocView::Undo() {
@@ -563,7 +660,7 @@ bool DocView::ReplaceCurrent(const std::wstring& with) {
   if (!Apply(editor_->Replace(ToDoc(m.from), ToDoc(m.to), std::u16string(with.begin(), with.end())))) return false;
   // Find again (the text changed) and go on to the next match after the one replaced.
   const TextPos after = focus_;
-  StartSearch(query_, matchCase_);
+  StartSearch(query_, matchCase_, wholeWords_);
   for (size_t i = 0; i < matches_.size(); ++i)
     if (StoryOf(matches_[i].from) == StoryOf(after) && !(matches_[i].from < after)) {
       current_ = static_cast<int>(i);
@@ -590,7 +687,7 @@ int DocView::ReplaceAll(const std::wstring& with) {
     r.caret = ToDoc(all.back().from);
     Apply(r);
   }
-  StartSearch(query_, matchCase_);
+  StartSearch(query_, matchCase_, wholeWords_);
   host_.ViewStateChanged();
   return replaced;
 }

@@ -153,7 +153,7 @@ bool App::CreateMainWindow(const AppOptions& opts) {
   // Search box: results update as you type.
   TextBox& sb = search_.Box();
   sb.onChange = [this] {
-    if (TabContent* v = Active()) v->StartSearch(search_.Box().Text(), search_.MatchCase());
+    if (TabContent* v = Active()) v->StartSearch(search_.Box().Text(), search_.MatchCase(), search_.WholeWords());
   };
   sb.onEnter = [this](bool shift) { Execute(shift ? CmdFindPrev : CmdFindNext); };
   sb.onEscape = [this] { CloseSearch(); };
@@ -1363,9 +1363,13 @@ void App::Execute(int cmd) {
       else if (ready) v->SearchStep(cmd == CmdFindNext);
       break;
     case CmdCloseFind: CloseSearch(); break;
+    case CmdSearchWords:
+      search_.ToggleWholeWords();
+      if (ready) v->StartSearch(search_.Box().Text(), search_.MatchCase(), search_.WholeWords());
+      break;
     case CmdSearchCase:
       search_.ToggleMatchCase();
-      if (ready) v->StartSearch(search_.Box().Text(), search_.MatchCase());
+      if (ready) v->StartSearch(search_.Box().Text(), search_.MatchCase(), search_.WholeWords());
       break;
     case CmdGoToPage:
       if (ready && v->Paged() && !presentation_) {
@@ -1843,7 +1847,7 @@ void App::OpenSearch() {
     search_.Box().SetText(selected);
   FocusBox(&search_.Box());
   search_.Box().SelectAll();
-  if (!search_.Box().Text().empty()) v->StartSearch(search_.Box().Text(), search_.MatchCase());
+  if (!search_.Box().Text().empty()) v->StartSearch(search_.Box().Text(), search_.MatchCase(), search_.WholeWords());
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -1942,6 +1946,8 @@ void App::ViewMessage(BannerKind kind, const std::wstring& text) {
 void App::ViewRequestPrint() { PostMessageW(hwnd_, WM_COMMAND, CmdPrint, 0); }
 
 void App::ViewFocusTextBox(TextBox* box) { FocusBox(box); }
+
+void App::ViewFocusPage() { MoveKeyTo(KeyArea::Doc, true, true); }
 
 void App::ViewPasswordAccepted(TabContent* view) {
   view->SetViewport(DocRect(), ui_);

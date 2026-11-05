@@ -65,7 +65,8 @@ class DocView : public PagedView {
   void OnMouseUp(int x, int y, int button, UINT mods) override;
   void OnMouseLeave() override;
   bool Dragging() const override {
-    return PagedView::Dragging() || picDrag_.kind != PictureDrag::None || cellDrag_.has_value();
+    return PagedView::Dragging() || picDrag_.kind != PictureDrag::None || cellDrag_.has_value() ||
+           textDrag_ != TextDrag::None;
   }
   bool OnKeyDown(UINT vk, UINT mods) override;
   bool OnChar(wchar_t ch, UINT mods) override;
@@ -87,7 +88,7 @@ class DocView : public PagedView {
   // Spelling or AutoCorrect turned on or off.
   void SettingsChanged() override;
 
-  void StartSearch(const std::wstring& query, bool matchCase) override;
+  void StartSearch(const std::wstring& query, bool matchCase, bool wholeWords) override;
   void ClearSearch() override;
   void SearchStep(bool forward) override;
   int SearchCount() const override { return static_cast<int>(matches_.size()); }
@@ -129,7 +130,8 @@ class DocView : public PagedView {
   bool Editing() const { return editor_ != nullptr && Ready() && !presentation_; }
   void Cut();
   // Pastes the clipboard's formatted text (Featherweight's own, RTF or HTML), or its plain text.
-  void Paste(bool formatted = true);
+  // `merge`: the text takes the look of where it goes, keeping its emphasis (Clip.h PasteClip).
+  void Paste(bool formatted = true, bool merge = false);
   void Undo();
   void Redo();
 
@@ -455,7 +457,7 @@ class DocView : public PagedView {
   std::vector<Match> matches_;
   int current_ = -1;
   std::wstring query_;  // what was searched for, to find again after a replace
-  bool matchCase_ = false;
+  bool matchCase_ = false, wholeWords_ = false;
 
   // Editing: editor_ (declared after doc_) is null for a document shown but not edited (one the
   // model can't write back).
@@ -471,12 +473,28 @@ class DocView : public PagedView {
   TextPos cellFrom_, cellTo_;
   uint32_t cellRevision_ = UINT32_MAX;
   std::unique_ptr<fw::doc::edit::Pictures> pictures_;  // with the editor, after it
-  // Rows chosen in the margin beside a table, or columns just above one: the drag goes on by whole
-  // rows or columns from here.
-  enum class LineDrag : uint8_t { None, Rows, Columns };
+  // Rows chosen in the margin beside a table, columns just above one, or lines in the margin beside
+  // text (Word's selection bar): the drag goes on by whole rows, columns or lines from here.
+  enum class LineDrag : uint8_t { None, Rows, Columns, Lines };
   LineDrag lineDrag_ = LineDrag::None;
-  TextPos lineAnchor_;
+  TextPos lineAnchor_, lineAnchorEnd_;  // for lines, the first line's start and end
   std::optional<TextPos> RowMarginAt(int x, int y) const;
+  // A line of text, from its start to the start of the next (its paragraph's end, for the last).
+  std::optional<std::pair<TextPos, TextPos>> LineRange(TextPos pos) const;
+  // In the left margin beside a line of text (not a table's): that line.
+  std::optional<std::pair<TextPos, TextPos>> LineMarginAt(int x, int y) const;
+  // Dragging the selected text (DocEdit.cpp): pressed on the selection, moved, let go elsewhere in
+  // its story, it moves there (with Ctrl, a copy goes), one undo step; a click without moving puts
+  // the caret there. The dropped text stays selected.
+  enum class TextDrag : uint8_t { None, Pending, Moving };
+  TextDrag textDrag_ = TextDrag::None;
+  TextPos dragDown_;               // where it was pressed
+  std::optional<TextPos> dropAt_;  // where it would go now
+  bool OverSelection(int x, int y) const;
+  bool TextDragDown(int x, int y, UINT mods, std::optional<TextPos> pos);
+  bool TextDragMove(int x, int y);
+  bool TextDragUp(UINT mods);
+  void DrawTextDrop(gfx::Canvas& c, int first, int last);
   bool SelectLines(TextPos from, TextPos to);
   // ---- Table cells on the page (DocCells.cpp), from the layout's cell boxes (Layout::Cells): a
   // column border dragged moves its grid line, a row's bottom border sets its height (at least),

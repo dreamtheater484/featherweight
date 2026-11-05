@@ -210,6 +210,9 @@ enum Cmd : int {
   CmdPictureRotate,   // 90 degrees clockwise
   CmdPictureReset,
   CmdPicturePanel,    // size, rotation and alt text
+  // Find and paste (D3).
+  CmdSearchWords = 1300,  // find whole words only (the search card's toggle)
+  CmdPasteMerge,          // paste taking the look of where it goes, keeping bold, italic and lists
   // The ruler in Word documents (D3).
   CmdRuler = 1200,  // the rulers shown or not (the ⋯ menu, a setting like spelling as you type)
 };

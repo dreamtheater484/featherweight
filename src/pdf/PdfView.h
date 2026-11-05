@@ -78,7 +78,7 @@ class PdfView : public PagedView, public DocumentHost {
   void BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) override;
   void FillContextMenu(HMENU menu, int x, int y) override;
 
-  void StartSearch(const std::wstring& query, bool matchCase) override;
+  void StartSearch(const std::wstring& query, bool matchCase, bool wholeWords) override;
   void ClearSearch() override;
   void SearchStep(bool forward) override;
   int SearchCount() const override;
