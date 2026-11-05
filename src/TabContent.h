@@ -38,6 +38,9 @@ class ViewHost {
   virtual void ViewRequestPrint() = 0;
   virtual void ViewFocusTextBox(TextBox* box) = 0;
   virtual bool ViewInverted() = 0;  // night reading
+  // Word documents: spelling checked as you type, and AutoCorrect (Settings, [General]).
+  virtual bool ViewSpelling() { return true; }
+  virtual bool ViewAutoCorrect() { return true; }
   virtual void ViewPasswordAccepted(TabContent* view) = 0;
   // Opens a side panel with the tab's content in place of whatever was open (null closes it).
   virtual void ViewShowPanel(PanelContent* content) = 0;

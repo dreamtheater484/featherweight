@@ -96,15 +96,6 @@ D2D1_COLOR_F ChangeColor(size_t author) {
 
 bool WordChar(wchar_t c) { return IsCharAlphaNumericW(c) || c == L'\'' || c == 0x2019 || c == L'_'; }
 
-std::wstring Thousands(size_t n) {
-  std::wstring digits = std::to_wstring(n), out;
-  for (size_t i = 0; i < digits.size(); ++i) {
-    if (i > 0 && (digits.size() - i) % 3 == 0) out += L',';
-    out += digits[i];
-  }
-  return out;
-}
-
 // The first quoted argument of a field code (HYPERLINK "https://..."), and its \l anchor.
 std::wstring HyperlinkFieldTarget(std::u16string_view code) {
   std::wstring c(code.begin(), code.end());
@@ -435,6 +426,7 @@ void DocView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   int first, last;
   VisiblePages(first, last);
   for (int i = first; i <= last; ++i) DrawPage(c, dc, i, inverted);
+  DrawSquiggles(c, first, last);
   DrawRanges(c, first, last);
   DrawCaret(c, first, last);
   if (!presentation_) DrawScrollbars(c);
@@ -587,7 +579,7 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
 // Background work
 
 bool DocView::HasIdleWork() const {
-  return Ready() && (!pagination_->Done() || !noticesShown_ || !wordsCounted_ || annotationsStale_ ||
+  return Ready() && (!pagination_->Done() || !noticesShown_ || HasProofWork() || annotationsStale_ ||
                      (!placeholder_ && sizes_.size() < pagination_->PageCount()));
 }
 
@@ -600,31 +592,8 @@ bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
     // Done now: the comments, changes and matches can be measured.
     if (pagination_->Done()) repaint = true;
   }
-  // Words, for the status bar: counted in idle time, a few milliseconds at a time (a 300-page
-  // document takes about 35 ms).
-  if (!wordsCounted_ && pagination_->Done()) {
-    const auto& paras = doc_->StoryParagraphs(doc_->MainStory());
-    const double until = anim::Now() + 4;
-    std::wstring t;
-    std::vector<uint32_t> map;
-    while (wordsNext_ < paras.size() && anim::Now() < until) {
-      for (size_t n = 0; n < 50 && wordsNext_ < paras.size(); ++n) {
-        t.clear();
-        map.clear();
-        VisibleText(paras[wordsNext_++], t, map);
-        bool in = false;
-        for (wchar_t ch : t) {
-          bool w = !iswspace(ch);
-          if (w && !in) ++words_;
-          in = w;
-        }
-      }
-    }
-    if (wordsNext_ >= paras.size()) {
-      wordsCounted_ = true;
-      host_.ViewStateChanged();
-    }
-  }
+  // Spelling, and words for the status bar (DocProof.cpp).
+  repaint |= ProofIdle(deadlineMs);
   // Pages laid out here, or by finding or scrolling to a position (which lays out up to it).
   if (TakeNewPages()) {
     repaint = true;
@@ -1208,6 +1177,9 @@ constexpr CommandName kCommandNames[] = {
     {CmdUndo, L"Undo", L"Ctrl+Z"},
     {CmdRedo, L"Redo", L"Ctrl+Y"},
     {CmdSelectAll, L"Select all", L"Ctrl+A"},
+    {CmdSpelling, L"Spelling: next error", L"F7"},
+    {CmdWordCount, L"Word count", L"Ctrl+Shift+G"},
+    {CmdLanguage, L"Language…", L""},
 };
 
 }  // namespace
@@ -1232,7 +1204,9 @@ int DocView::Shortcut(UINT vk, UINT mods) {
       case '8': return CmdViewFacing;
     }
   }
+  if (ctrl && (mods & kModShift) && !(mods & kModAlt) && vk == 'G') return CmdWordCount;
   if (vk == VK_F5) return CmdPresentation;
+  if (vk == VK_F7 && !(mods & (kModCtrl | kModShift | kModAlt))) return CmdSpelling;
   return 0;
 }
 
@@ -1247,6 +1221,9 @@ CommandState DocView::QueryCommand(int cmd) {
     case CmdUndo: s = {Editing() && editor_->CanUndo(), false}; break;
     case CmdRedo: s = {Editing() && editor_->CanRedo(), false}; break;
     case CmdSelectAll: s = {Ready(), false}; break;
+    case CmdSpelling:
+    case CmdWordCount: s = {Ready(), false}; break;
+    case CmdLanguage: s = {Editing(), false}; break;
     case CmdRotateLeft:
     case CmdRotateRight:
     case CmdToggleCover:
@@ -1276,6 +1253,7 @@ std::vector<int> DocView::Commands() {
 }
 
 bool DocView::Execute(int cmd) {
+  if (ExecuteProof(cmd)) return true;
   switch (cmd) {
     case CmdCopy: Copy(); return true;
     case CmdCut: Cut(); return true;
@@ -1333,13 +1311,18 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   m.right = {view, find, night, full};
 }
 
-void DocView::FillContextMenu(HMENU m, int, int) {
+void DocView::FillContextMenu(HMENU m, int x, int y) {
   using menu::AppendItem;
   using menu::AppendSeparator;
+  FillSpellingMenu(m, x, y);  // a spelling error's suggestions first, as Word has them
   if (Editing()) {
     AppendItem(m, CmdCut, L"Cut\tCtrl+X", HasSelection());
     AppendItem(m, CmdCopy, L"Copy\tCtrl+C", HasSelection());
     AppendItem(m, CmdPaste, L"Paste\tCtrl+V", IsClipboardFormatAvailable(CF_UNICODETEXT) != FALSE);
+    AppendSeparator(m);
+    HMENU language = CreatePopupMenu();
+    FillLanguageMenu(language);
+    menu::AppendSubmenu(m, language, L"Language", GetMenuItemCount(language) > 0);
     AppendSeparator(m);
   } else if (HasSelection()) {
     AppendItem(m, CmdCopy, L"Copy\tCtrl+C");
@@ -1360,7 +1343,7 @@ void DocView::BuildStatusBar(StatusBarModel& m) {
   std::wstring pages = L"Page " + std::to_wstring(currentPage_ + 1) + L" of " + std::to_wstring(PageCount());
   if (!pagination_->Done()) pages += L"…";
   m.segments = {pages};
-  if (wordsCounted_) m.segments.push_back(Thousands(words_) + (words_ == 1 ? L" word" : L" words"));
+  ProofStatus(m);  // words and language
   m.zoom = true;
   m.zoomValue = Zoom();
   m.onZoom = [this](double z) { SetZoom(z); };

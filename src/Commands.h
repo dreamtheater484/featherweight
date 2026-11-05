@@ -66,4 +66,16 @@ enum Cmd : int {
   CmdRecent = 500,      // + index into Settings::recent
   CmdBannerAction = 600,
   CmdNewFile = 700,     // + fw::FileKind, once that kind's editor ships
+  // Proofing in Word documents.
+  CmdSpelling = 800,  // F7: the next spelling error
+  CmdWordCount,
+  CmdLanguage,        // the selection's language, from a menu
+  CmdToggleSpelling,
+  CmdToggleAutoCorrect,
+  CmdSpellIgnore,
+  CmdSpellAdd,
+  CmdSpellDelete,           // a repeated word
+  CmdSpellSuggest = 820,    // + index into the context menu's suggestions
+  CmdLanguagePick = 840,    // + index into the installed languages
+  CmdLanguageLast = 899,
 };

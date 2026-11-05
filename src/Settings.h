@@ -46,6 +46,8 @@ class Settings {
   bool invert = false;
   bool coverAlone = false;  // two-page view: first page on its own, like a book cover
   bool highlightFields = true;
+  bool spelling = true;     // Word documents: check spelling as you type
+  bool autoCorrect = true;  // Word documents: AutoCorrect as you type
   bool autoUpdate = true;
   int64_t lastUpdateCheck = 0;
   std::wstring skippedVersion;

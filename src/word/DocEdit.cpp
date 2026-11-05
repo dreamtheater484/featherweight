@@ -64,9 +64,7 @@ void DocView::OnEdited(const fw::doc::edit::Change& c) {
     matches_ = std::move(kept);
     current_ = matches_.empty() ? -1 : std::min(current_, static_cast<int>(matches_.size()) - 1);
   }
-  wordsCounted_ = false;  // counted again in idle time
-  words_ = 0;
-  wordsNext_ = 0;
+  ProofEdited(c);  // spelling checked and words counted again for the changed paragraphs
 }
 
 bool DocView::Apply(const Result& r) {
@@ -164,6 +162,7 @@ bool DocView::OnChar(wchar_t ch, UINT mods) {
   }
   highSurrogate_ = 0;
   TypeText(text);
+  AutoCorrectTyped(text.back());
   return true;
 }
 
@@ -243,13 +242,19 @@ bool DocView::EditKey(UINT vk, UINT mods) {
       return true;
     case VK_RETURN:
       if (ctrl) return false;
-      if (shift) TypeText(u"\v");  // a line break (w:br)
-      else if (HasSelection()) TypeText(u"\r");
-      else Apply(editor_->SplitParagraph(ToDoc(focus_)));
+      if (shift) {
+        TypeText(u"\v");  // a line break (w:br)
+        AutoCorrectTyped(u'\v');
+      } else if (HasSelection()) {
+        TypeText(u"\r");
+      } else if (const uint32_t para = focus_.para; Apply(editor_->SplitParagraph(ToDoc(focus_)))) {
+        AutoCorrectBreak(para);
+      }
       return true;
     case VK_TAB:
       if (ctrl) return false;  // the window's (next tab)
       TypeText(u"\t");
+      AutoCorrectTyped(u'\t');
       return true;
     case VK_ESCAPE:
       if (!HasSelection()) return false;

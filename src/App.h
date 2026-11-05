@@ -69,6 +69,8 @@ class App : public PdfHost, public DropHost {
   bool ViewInverted() override { return settings_.invert; }
   bool ViewCoverAlone() override { return settings_.coverAlone; }
   bool ViewHighlightFields() override { return settings_.highlightFields; }
+  bool ViewSpelling() override { return settings_.spelling; }
+  bool ViewAutoCorrect() override { return settings_.autoCorrect; }
   void ViewPasswordAccepted(TabContent* view) override;
   void ViewShowPanel(PanelContent* content) override;
   PanelContent* ViewShownPanel() override { return panel_.Content(); }

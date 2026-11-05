@@ -90,6 +90,8 @@ $checks = @(
   @("doc-search", "light", "", "cmd:find;type:the;wait:400", @("..\office\layout\report.docx")),
   @("doc-selection", "light", "", "drag:200,300,600,360", @("..\office\layout\report.docx")),
   @("doc-commands", "dark", "", "key:alt+q;type:page", @("..\office\layout\footnotes.docx")),
+  # Proofing (D2): typing with AutoCorrect ("teh", "(c)", "--", capitals), red squiggles, words and language.
+  @("doc-proofing", "light", "", "type:teh quikc brown fox (c) jumps over teh dog -- it said ok,;wait:600", @("..\office\layout\report.docx")),
   # Printing a document (vector, through Microsoft Print to PDF), then the PDF it made.
   @("doc-print", "light", "", "print:$out\doc-print.pdf", @("..\office\layout\textbox-table.docx")),
   @("doc-printed", "light", "", "view:facing;cmd:fit-page", @("..\..\build\visual\doc-print.pdf"))
