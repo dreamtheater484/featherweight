@@ -12,17 +12,26 @@
   Office is driven by automation and doesn't show a window:
   - Files are opened read-only, with macros off, links not updated, and nothing added to Office's
     recent files. Nothing is saved.
-  - Each file gets its own Office process, which is ended if the file hangs it (for example with
-    a repair prompt). The manifest then says why there is no PDF.
+  - Word runs in safe mode (/safe), so no add-ins load and the session's settings (links not
+    updated at open) aren't saved.
+  - Each file gets its own Office process, which always ends before the next file starts, also
+    when the file fails or hangs it (for example with a repair prompt). The manifest then says
+    why there is no PDF.
+
+  With -Corpus it renders the private corpus (FW_CORPUS, see scripts\fetch-corpus.ps1): every file
+  under <corpus>\docx (and xlsx, pptx) into <corpus>\reference, with the same manifest.
 
   Run it again whenever Office changes noticeably. It replaces every PDF and the manifest.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\reference-renders.ps1
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\reference-renders.ps1 -Corpus $env:FW_CORPUS
 #>
 param(
   [string[]]$Folders = @("tests\office\generated", "tests\office\edge"),
   [string]$Out = "tests\office\reference",
+  [string]$Corpus,
   [int]$TimeoutSeconds = 120,
   # Internal: export one file in this process (the parent runs one child per file).
   [string]$Child, [string]$Source, [string]$Pdf, [string]$ResultFile
@@ -39,21 +48,59 @@ function Write-Json($value, [string]$path) {
   [IO.File]::WriteAllText($path, ($value | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 }
 
+# Ends the Office processes a child started, once they've had $waitMs to quit on their own. Only
+# processes with the app's name are touched, so a reused process id is left alone.
+function Stop-Started($ids, [string]$exe, [int]$waitMs = 15000) {
+  foreach ($id in @($ids)) {
+    $proc = Get-Process -Id $id -ErrorAction SilentlyContinue
+    if (-not $proc -or $proc.ProcessName -ne $exe) { continue }
+    if (-not $proc.WaitForExit($waitMs)) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
+  }
+}
+
 # ---- Child: open one file in a new Office process, export it, quit.
 if ($Child) {
   $app = $apps[$Child]
   $missing = [Type]::Missing
-  $before = @(Get-Process $app.Exe -ErrorAction SilentlyContinue | ForEach-Object Id)
-  $office = New-Object -ComObject $app.ProgId
-  $officePid = @(Get-Process $app.Exe -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | ForEach-Object Id)
-  $result = [ordered]@{ pid = $officePid; app = "$Child $($office.Version) (build $($office.Build))" }
-  Write-Json $result $ResultFile  # the parent reads the process id from here if it has to end it
+  # Every Office process this child starts. They all end before it does, whatever happens, and
+  # the parent reads them from the result file to end them if the child hangs or dies.
+  $started = New-Object Collections.Generic.List[int]
+  $result = [ordered]@{ pid = $started }
+  $office = $null; $doc = $null
   try {
+    $safe = $null
+    if ($Child -eq "Word") {
+      # Word starts in safe mode, and COM attaches to that instance instead of starting another.
+      $exe = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Winword.exe").'(default)'
+      $safe = Start-Process -FilePath $exe -ArgumentList "/safe", "/automation", "-Embedding" -PassThru -WindowStyle Hidden
+      $started.Add($safe.Id)
+      Write-Json $result $ResultFile
+      [void]$safe.WaitForInputIdle(30000)
+    }
+    foreach ($wait in 2, 4, 8, 0) {
+      if ($safe) { Start-Sleep -Seconds $wait }  # until it has registered for COM
+      $before = @(Get-Process $app.Exe -ErrorAction SilentlyContinue | ForEach-Object Id)
+      $office = New-Object -ComObject $app.ProgId
+      $new = @(Get-Process $app.Exe -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | ForEach-Object Id)
+      foreach ($id in $new) { $started.Add($id) }
+      Write-Json $result $ResultFile
+      if (-not $safe -or -not $new.Count) { break }
+      # COM started a normal Word instead: close it and wait longer.
+      try { $office.Quit([ref]0) } catch {}
+      [void][Runtime.InteropServices.Marshal]::ReleaseComObject($office)
+      $office = $null
+      Stop-Started $new $app.Exe
+    }
+    if (-not $office) { throw "Word didn't connect to the safe-mode instance" }
+    $result.app = "$Child $($office.Version) (build $($office.Build))"
     $office.AutomationSecurity = 3  # msoAutomationSecurityForceDisable: macros never run
     switch ($Child) {
       "Word" {
         $office.Visible = $false
         $office.DisplayAlerts = 0  # wdAlertsNone
+        $office.Options.UpdateLinksAtOpen = $false  # safe mode doesn't save it, so only this session
+        if (@($office.COMAddIns | Where-Object { $_.Connect }).Count) { throw "add-ins are loaded" }
+        $result.app += ", safe mode"
         # FileName, ConfirmConversions, ReadOnly, AddToRecentFiles, PasswordDocument, PasswordTemplate, Revert,
         # WritePasswordDocument, WritePasswordTemplate, Format, Encoding, Visible, OpenAndRepair, DocumentDirection,
         # NoEncodingDialog, all by reference. A dummy password makes a protected file fail instead of prompting.
@@ -63,7 +110,6 @@ if ($Child) {
         # wdExportFormatPDF, optimized for print, the whole document without markup, tagged, missing fonts as bitmaps.
         $doc.ExportAsFixedFormat($Pdf, 17, $false, 0, 0, 1, 1, 0, $false, $true, 0, $true, $true, $false)
         $doc.Close([ref]0)  # wdDoNotSaveChanges
-        $office.Quit([ref]0)
       }
       "Excel" {
         $office.Visible = $false
@@ -71,25 +117,29 @@ if ($Child) {
         $office.AskToUpdateLinks = $false
         $office.EnableEvents = $false
         # Filename, UpdateLinks (never), ReadOnly. Automation doesn't add files to Excel's recent list.
-        $wb = $office.Workbooks.Open($Source, 0, $true)
+        $doc = $office.Workbooks.Open($Source, 0, $true)
         # xlTypePDF, standard quality, print areas respected
-        $wb.ExportAsFixedFormat(0, $Pdf, 0, $false, $false, $missing, $missing, $false)
-        $wb.Close($false)
-        $office.Quit()
+        $doc.ExportAsFixedFormat(0, $Pdf, 0, $false, $false, $missing, $missing, $false)
+        $doc.Close($false)
       }
       "PowerPoint" {
         # ReadOnly, not untitled, no window
-        $pres = $office.Presentations.Open($Source, -1, 0, 0)
-        $pres.SaveCopyAs($Pdf, 32)  # ppSaveAsPDF
-        $pres.Close()
-        $office.Quit()
+        $doc = $office.Presentations.Open($Source, -1, 0, 0)
+        $doc.SaveCopyAs($Pdf, 32)  # ppSaveAsPDF
+        $doc.Close()
       }
     }
   } catch {
     $result.error = $_.Exception.Message
-    try { if ($Child -eq "Word") { $office.Quit([ref]0) } else { $office.Quit() } } catch {}
   } finally {
-    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($office)
+    if ($office) {
+      try { if ($Child -eq "Word") { $office.Quit([ref]0) } else { $office.Quit() } } catch {}
+      foreach ($o in $doc, $office) { if ($o) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($o) } }
+      $doc = $null; $office = $null
+      [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+    }
+    # Whatever happened, the Office this child started ends with it.
+    Stop-Started $started $app.Exe
   }
   Write-Json $result $ResultFile
   exit 0
@@ -98,7 +148,17 @@ if ($Child) {
 # ---- Parent
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
-$outRoot = Join-Path $root $Out
+# Sources are named by their path below $base, and each PDF goes to the same path below $outRoot.
+if ($Corpus) {
+  $base = [IO.Path]::GetFullPath($Corpus).TrimEnd('\')
+  $outRoot = Join-Path $base "reference"
+  $sourceFiles = @("docx", "xlsx", "pptx") | ForEach-Object { Join-Path $base $_ } | Where-Object { Test-Path $_ } |
+    ForEach-Object { Get-ChildItem $_ -Recurse -File } | Sort-Object FullName
+} else {
+  $base = Join-Path $root "tests\office"
+  $outRoot = Join-Path $root $Out
+  $sourceFiles = foreach ($folder in $Folders) { Get-ChildItem (Join-Path $root $folder) -File | Sort-Object Name }
+}
 if (Test-Path $outRoot) { Remove-Item -Recurse -Force $outRoot }
 New-Item -ItemType Directory -Force $outRoot | Out-Null
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "fw-reference-renders"
@@ -111,51 +171,51 @@ function Get-PdfFacts([string]$path) {
 }
 
 $entries = @()
-foreach ($folder in $Folders) {
-  $name = Split-Path -Leaf $folder
-  New-Item -ItemType Directory -Force (Join-Path $outRoot $name) | Out-Null
-  foreach ($f in Get-ChildItem (Join-Path $root $folder) -File | Sort-Object Name) {
-    $kind = $apps.Keys | Where-Object { $apps[$_].Ext -contains $f.Extension.ToLower() } | Select-Object -First 1
-    if (-not $kind) { continue }
-    $pdfPath = Join-Path $outRoot "$name\$($f.Name).pdf"
-    $resultPath = Join-Path $tmp "result.json"
-    if (Test-Path $resultPath) { Remove-Item $resultPath }
-    $entry = [ordered]@{ source = "$name/$($f.Name)"; sha256 = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower() }
-    $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList @(
-      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"",
-      "-Child", $kind, "-Source", "`"$($f.FullName)`"", "-Pdf", "`"$pdfPath`"", "-ResultFile", "`"$resultPath`"")
-    if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
-      # Office is stuck, usually on a prompt: end the child and the Office process it started.
-      $stuck = if (Test-Path $resultPath) { (Get-Content $resultPath -Raw | ConvertFrom-Json).pid } else { @() }
-      foreach ($id in $stuck) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
-      Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-      $entry.error = "$kind didn't finish within $TimeoutSeconds s"
-    } elseif (Test-Path $resultPath) {
-      $r = Get-Content $resultPath -Raw | ConvertFrom-Json
-      $entry.app = $r.app
-      if ($r.error) { $entry.error = $r.error }
-      if ($r.pages) { $entry.pages = $r.pages }
-    } else {
-      $entry.error = "$kind didn't start"
-    }
-    if (-not $entry.error -and (Test-Path $pdfPath)) {
-      $facts = Get-PdfFacts $pdfPath
-      $entry.pdf = "$name/$($f.Name).pdf"
-      if (-not $entry.pages) { $entry.pages = $facts.pages }
-      $entry.fonts = $facts.fonts
-      "{0,-45} {1,3} pages  {2}" -f $entry.source, $entry.pages, ($facts.fonts -join ", ")
-    } else {
-      if (-not $entry.error) { $entry.error = "no PDF was written" }
-      "{0,-45} FAILED: {1}" -f $entry.source, $entry.error
-    }
-    $entries += [pscustomobject]$entry
+foreach ($f in $sourceFiles) {
+  $kind = $apps.Keys | Where-Object { $apps[$_].Ext -contains $f.Extension.ToLower() } | Select-Object -First 1
+  if (-not $kind) { continue }
+  $rel = $f.FullName.Substring($base.Length).TrimStart('\')
+  $pdfPath = Join-Path $outRoot "$rel.pdf"
+  New-Item -ItemType Directory -Force (Split-Path -Parent $pdfPath) | Out-Null
+  $resultPath = Join-Path $tmp "result.json"
+  if (Test-Path $resultPath) { Remove-Item $resultPath }
+  $entry = [ordered]@{ source = $rel.Replace('\', '/'); sha256 = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower() }
+  $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList @(
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"",
+    "-Child", $kind, "-Source", "`"$($f.FullName)`"", "-Pdf", "`"$pdfPath`"", "-ResultFile", "`"$resultPath`"")
+  $finished = $p.WaitForExit($TimeoutSeconds * 1000)
+  # Office is stuck, usually on a prompt: end the child.
+  if (-not $finished) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+  $r = if (Test-Path $resultPath) { Get-Content $resultPath -Raw | ConvertFrom-Json } else { $null }
+  # The child ends the Office it started; if it hung or died, that's done here, so no hidden Office
+  # is left to block the next file.
+  if ($r) { Stop-Started @($r.pid) $apps[$kind].Exe $(if ($finished) { 15000 } else { 0 }) }
+  if (-not $finished) {
+    $entry.error = "$kind didn't finish within $TimeoutSeconds s"
+  } elseif ($r) {
+    $entry.app = $r.app
+    if ($r.error) { $entry.error = $r.error }
+    if ($r.pages) { $entry.pages = $r.pages }
+  } else {
+    $entry.error = "$kind didn't start"
   }
+  if (-not $entry.error -and (Test-Path $pdfPath)) {
+    $facts = Get-PdfFacts $pdfPath
+    $entry.pdf = $entry.source + ".pdf"
+    if (-not $entry.pages) { $entry.pages = $facts.pages }
+    $entry.fonts = $facts.fonts
+    "{0,-45} {1,3} pages  {2}" -f $entry.source, $entry.pages, ($facts.fonts -join ", ")
+  } else {
+    if (-not $entry.error) { $entry.error = "no PDF was written" }
+    "{0,-45} FAILED: {1}" -f $entry.source, $entry.error
+  }
+  $entries += [pscustomobject]$entry
 }
 
 Write-Json ([ordered]@{
   made = (Get-Date).ToString("yyyy-MM-dd")
   computer = "Office reference PC (decision 19)"
-  export = "Word: the document without markup, for print, tagged; Excel: print areas; PowerPoint: slides"
+  export = "Word (safe mode, no add-ins, macros forced off, links not updated, read-only): the document without markup, for print, tagged; Excel: print areas; PowerPoint: slides"
   files = $entries
 }) (Join-Path $outRoot "manifest.json")
 "$(@($entries | Where-Object { -not $_.error }).Count) of $($entries.Count) exported. The PDFs and manifest.json are in $outRoot"
