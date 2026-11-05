@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <numeric>
 #include <string_view>
 #include <tuple>
 
@@ -630,7 +631,6 @@ struct Flow {
       if (p.shading.Present() && !p.shading.fill.automatic)
         f.body.fills.push_back({{ColumnLeft() + Pt(p.indStart), paraTop, ColumnRight() - Pt(p.indEnd), f.y}, p.shading.fill.rgb});
       f.spacing.after = e.SpaceAfter(p);
-      f.spacing.afterAuto = p.spaceAfterAuto;
       f.spacing.prev = &p;
       f.spacing.atTop = false;
       // Space after may hang past the bottom of the page; the next paragraph starts below it.
@@ -916,11 +916,13 @@ bool Engine::NextPage() {
   // Every page must move the flow on. Content that can't be placed anywhere (a bug, or input
   // nothing could lay out) is skipped after a few tries, and no document gets more pages than its
   // paragraphs could fill, so pagination always ends.
-  const auto progress = std::make_tuple(f.next, f.paraLines, f.pt ? f.breaker->Save().position : 0u, f.row,
-                                        f.rowCut.empty() ? 0.0f : f.rowCut.front(), f.items.size());
+  // A split row moves on when any of its cells does.
+  auto cut = [&f]() { return std::accumulate(f.rowCut.begin(), f.rowCut.end(), 0.0f); };
+  const auto progress = std::make_tuple(f.next, f.paraLines, f.pt ? f.breaker->Save().position : 0u, f.row, cut(),
+                                        f.items.size());
   bool made = flow.MakePage();
-  const auto now = std::make_tuple(f.next, f.paraLines, f.pt ? f.breaker->Save().position : 0u, f.row,
-                                   f.rowCut.empty() ? 0.0f : f.rowCut.front(), f.items.size());
+  const auto now = std::make_tuple(f.next, f.paraLines, f.pt ? f.breaker->Save().position : 0u, f.row, cut(),
+                                   f.items.size());
   f.stalled = now == progress ? f.stalled + 1 : 0;
   if (f.stalled >= 3 && !done_) {
     f.pt.reset();

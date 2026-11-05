@@ -42,7 +42,6 @@ struct Frame {
 // Spacing carried from one paragraph to the next.
 struct Spacing {
   float after = 0;  // the previous paragraph's space after
-  bool afterAuto = false;
   const ParaProps* prev = nullptr;
   bool atTop = true;  // nothing above yet in this frame or column
 };

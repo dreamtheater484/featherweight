@@ -164,8 +164,8 @@ float Engine::SpaceBefore(const ParaProps& p, const Spacing& s) const {
   if (s.prev && p.contextualSpacing && Contextual(*s.prev, p)) before = 0;
   float after = s.after;
   if (s.prev && s.prev->contextualSpacing && Contextual(*s.prev, p)) after = 0;
-  if (s.afterAuto && p.spaceBeforeAuto) return std::max(after, before);
-  return after + before;
+  // Between two paragraphs, the larger of the one's space after and the other's space before.
+  return std::max(after, before);
 }
 
 namespace {
@@ -391,7 +391,6 @@ void Engine::StackParagraph(uint32_t para, const Frame& frame, Stack& out, Spaci
   float after = SpaceAfter(p);
   out.height = y + after;
   spacing.after = after;
-  spacing.afterAuto = p.spaceAfterAuto;
   spacing.prev = &p;
   spacing.atTop = false;
 }
@@ -407,7 +406,6 @@ void Engine::StackTable(Node tbl, const Frame& frame, Stack& out, Spacing& spaci
   }
   out.height = y;
   spacing.after = 0;
-  spacing.afterAuto = false;
   spacing.prev = nullptr;
   spacing.atTop = false;
 }
