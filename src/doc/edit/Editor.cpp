@@ -122,6 +122,21 @@ struct Entry {
 
 }  // namespace
 
+bool TextBoxEditable(const Document& doc, uint32_t story) {
+  for (int depth = 0; depth < 16 && story < doc.Stories().size(); ++depth) {
+    const Story& st = doc.Stories()[story];
+    const uint32_t drawing = st.drawing;
+    if (st.kind != StoryKind::TextBox || drawing >= doc.Drawings().size() || st.part >= doc.Parts().size()) return false;
+    if (!doc.Parts()[st.part].Editable() || !doc.Parts()[st.part].writable) return false;
+    const Drawing& dr = doc.Drawings()[drawing];
+    if (!dr.boxesWritable || dr.pos.para >= doc.Paragraphs().size()) return false;
+    if (doc.ParaNode(dr.pos.para).DisplayOnly()) return false;
+    story = doc.Para(dr.pos.para).story;
+    if (doc.Stories()[story].drawing == kNone) return true;
+  }
+  return false;
+}
+
 KeptRefs KeptReferences(const Document& doc, const std::vector<uint32_t>& marks) {
   KeptRefs out;
   const std::vector<Section>& sections = doc.Sections();
@@ -546,9 +561,14 @@ struct EditorState {
       why = u"This part of the document uses features Featherweight doesn't understand, so it can't be edited.";
       return false;
     }
-    // Text boxes are shown from their drawing, which is written back as it was (plan §6.3, D4).
-    if (st.drawing != kNone || (E(p.elem).flags & kDisplayOnly)) {
-      why = u"Text in a text box can't be edited yet.";
+    if (E(p.elem).flags & kDisplayOnly) {
+      why = u"This text is kept as the file has it, so it can't be edited.";
+      return false;
+    }
+    // A text box's story is written into its drawing's kept XML, in place of each copy of its text
+    // (docx::Writer): only where the reader found every copy.
+    if (st.drawing != kNone && !TextBoxEditable(d, p.story)) {
+      why = u"The text in this text box can't be edited: the file keeps it in a way Featherweight can't write back.";
       return false;
     }
     return true;
@@ -717,14 +737,33 @@ struct EditorState {
     auto add = [&](uint32_t part) {
       if (part < dirty.size() && std::find(parts.begin(), parts.end(), part) == parts.end()) parts.push_back(part);
     };
+    // Text-box stories changed: their drawings are written from them (Story::edits).
+    std::vector<uint32_t> boxes;
+    auto box = [&](uint32_t story) {
+      if (story < d.stories_.size() && d.stories_[story].kind == StoryKind::TextBox &&
+          std::find(boxes.begin(), boxes.end(), story) == boxes.end())
+        boxes.push_back(story);
+    };
     for (const Step& st : e.steps) {
       if (st.custom) {
         for (uint32_t part : st.custom->parts) add(part);
+        if (st.custom->first != kNone && st.custom->first < d.paras_.size()) {
+          box(d.paras_[st.custom->first].story);
+        } else {  // anything in its parts may have changed
+          for (uint32_t s = 0; s < d.stories_.size(); ++s)
+            if (std::find(st.custom->parts.begin(), st.custom->parts.end(), d.stories_[s].part) != st.custom->parts.end())
+              box(s);
+        }
         continue;
       }
       add(d.stories_[st.story].part);
+      box(st.story);
     }
     for (uint32_t part : parts) dirty[part] += delta;
+    for (uint32_t s : boxes) {
+      uint32_t& edits = d.stories_[s].edits;
+      edits = delta < 0 ? (edits > 0 ? edits - 1 : 0) : edits + 1;
+    }
   }
 
   // After a direct change, done or undone: the model's indexes are built again, every cache goes,

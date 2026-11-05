@@ -35,6 +35,9 @@ struct Fragment {
   std::string afterChild;  // Inside: expanded name ("{ns}local") of the known child it follows
   std::string xml;         // self-contained: declares the namespace prefixes it uses
   bool pairEnd = false;    // one end of a pair (a range start or end): outlives its owner (rule 2)
+  // A model's own mark for a fragment it must find again (a Word drawing kept as an
+  // mc:AlternateContent block): it travels with the fragment through every move. 0: none.
+  uint32_t tag = 0;
 };
 
 struct XmlAttr {

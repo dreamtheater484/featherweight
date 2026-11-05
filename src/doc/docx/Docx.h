@@ -36,6 +36,12 @@ std::unique_ptr<Document> Read(std::unique_ptr<pkg::Package> package, pkg::Statu
 // keep their values. The reader uses it, and the editor after changing a picture.
 void ReadDrawingFrame(pugi::xml_node frame, Drawing& d);
 
+// The w:txbxContent elements inside `from` (not `from` itself), in document order and not inside
+// one another: those of what is shown (none inside an mc:Fallback), or with `fallbacks` every one.
+// The reader makes a text-box story of each one shown; the writer puts the stories back in the
+// same places, in each branch of the drawing's mc:AlternateContent block.
+std::vector<pugi::xml_node> TextBoxesIn(pugi::xml_node from, bool fallbacks = false);
+
 // Writes one of the document's parts from the model and the round-trip store (plan §4.3 rule 1).
 // In D1 this is used by the round-trip tests; saving comes in D2.
 pkg::Status WritePart(const Document& doc, uint32_t part, std::string& out);
