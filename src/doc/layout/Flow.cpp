@@ -1550,11 +1550,21 @@ struct Flow {
       }
       if (structure) f.noConverge = true;
     } else if (kind != StoryKind::Comment && laidOut) {
-      // The first page that shows the changed paragraphs (a text box: or its drawing).
+      // The first page that shows the changed paragraphs (a text box: or its drawing). A footnote
+      // separator shows no text of its own, but it's above the notes of every page that has some.
       const uint32_t drawing = kind == StoryKind::TextBox ? doc.Stories()[story].drawing : kNone;
+      const bool separator = kind == StoryKind::Footnote && !doc.NodeOf(doc.Stories()[story].root).AttrOr(Name("type")).empty();
+      // A header or footer is on the pages of the sections that have it, whatever it shows.
+      auto has = [&](uint32_t section) {
+        if (section >= doc.Sections().size()) return false;
+        const Section& sec = doc.Sections()[section];
+        return std::find(sec.headers.begin(), sec.headers.end(), story) != sec.headers.end() ||
+               std::find(sec.footers.begin(), sec.footers.end(), story) != sec.footers.end();
+      };
       auto shows = [&](const Page& pg) {
+        if ((kind == StoryKind::Header || kind == StoryKind::Footer) && has(pg.section)) return true;
         for (const LineBox& l : pg.lines)
-          if (changed(l.para)) return true;
+          if (changed(l.para) || (separator && l.story == LineStory::Footnote)) return true;
         if (drawing != kNone)
           for (const DrawingBox& d : pg.drawings)
             if (d.drawing == drawing) return true;
@@ -1566,7 +1576,7 @@ struct Flow {
       if (s != SIZE_MAX) {
         // A header or footer is on many pages, and so is what an edit to it moves; endnotes are
         // items, flattened again from the restart.
-        const bool hf = kind == StoryKind::Header || kind == StoryKind::Footer;
+        const bool hf = kind == StoryKind::Header || kind == StoryKind::Footer || separator;
         if (hf || kind == StoryKind::Endnote || structure) f.noConverge = true;
         else f.convergeFrom = std::max(f.convergeFrom, Before(s + 1).next + 1);
         const size_t r = hf ? s : (s > 0 ? s - 1 : 0);

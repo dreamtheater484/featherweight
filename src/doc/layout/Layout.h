@@ -211,6 +211,17 @@ class Layout {
   std::vector<std::pair<size_t, Rect>> Ranges(TextPos from, TextPos to);
   // The page `pos` is on (the first, for a story repeated on many pages, such as a header).
   std::optional<size_t> PageOf(TextPos pos);
+  // The line `pos` is on: its page, its box, and where Home and End take the caret (the end of a
+  // wrapped line is before its last character, so the caret stays on the line).
+  struct LineSpan {
+    size_t page = 0;
+    TextPos start, end;
+    Rect box;
+  };
+  std::optional<LineSpan> LineAt(TextPos pos);
+  // The place nearest to `x` (page points) on the line before (`step` < 0) or after `pos`'s line
+  // in its story's reading order, across pages for the main text; nullopt at either end.
+  std::optional<TextPos> LineStep(TextPos pos, int step, float x);
 
   // ---- Painting
   // Paints a page at its own coordinates (the caller's transform scales it): page color and

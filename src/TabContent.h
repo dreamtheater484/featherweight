@@ -133,6 +133,14 @@ class TabContent {
   // Fills the right-click menu for a point in the viewport (client coordinates).
   virtual void FillContextMenu(HMENU menu, int x, int y) = 0;
 
+  // ---- Replace (tabs that edit) ----
+  virtual bool CanReplace() const { return false; }
+  // Replaces the current match with `with` and goes on to the next. False when it couldn't (the
+  // tab says why).
+  virtual bool ReplaceCurrent(const std::wstring& /*with*/) { return false; }
+  // Replaces every match, as one undo step; how many it replaced.
+  virtual int ReplaceAll(const std::wstring& /*with*/) { return 0; }
+
   // ---- Status bar (editors; PDFs have none) ----
   virtual bool HasStatusBar() const { return false; }
   // What the status bar shows: page and word counts, the language, the zoom.

@@ -29,6 +29,7 @@ struct Options {
   bool budgets = false;             // bench: fail when a budget is missed
   bool typing = false;              // bench: time keystrokes instead of opening
   int edits = 40;                   // edit-check: random edits per document
+  unsigned seed = 0;                // edit-check: the random edits' seed (0: the document's number)
   bool layout = false;              // dump: the pages Featherweight lays out
   std::vector<std::filesystem::path> inputs;
 };

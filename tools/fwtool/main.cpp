@@ -53,7 +53,7 @@ constexpr const char* kUsage =
     "      Times opening each Word document, stage by stage, against the opening budgets\n"
     "      (plan §11). With --budgets, a missed budget fails. With --typing, times keystrokes\n"
     "      at the start, middle and end instead: from the edit to the page painted again.\n"
-    "  fwtool edit-check [--edits N] <file or folder>...\n"
+    "  fwtool edit-check [--edits N] [--seed S] <file or folder>...\n"
     "      Makes N random edits (40) in each Word document through the editor, lays it out again\n"
     "      incrementally after each, and checks every ten that it's what a layout from scratch is.\n"
     "  fwtool bench-app [--runs N] [--json FILE] <Featherweight.exe> [<file>...]\n"
@@ -148,6 +148,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--budgets") options.budgets = true;
     else if (arg == L"--typing") options.typing = true;
     else if (arg == L"--edits" && i + 1 < argc) options.edits = std::max(1, _wtoi(argv[++i]));
+    else if (arg == L"--seed" && i + 1 < argc) options.seed = static_cast<unsigned>(_wtoi(argv[++i]));
     else if (arg.starts_with(L"--")) {
       std::fprintf(stderr, "Unknown option %s\n\n%s", fw::WideToUtf8(arg).c_str(), fwtool::kUsage);
       return 2;

@@ -208,14 +208,15 @@ int RunEditCheck(const Options& options) {
     EditCheck check;
     std::string error;
     const std::string name = Display(files[i]);
-    if (!CheckEdits(files[i], options.edits, static_cast<unsigned>(i + 1), check, error)) {
+    const unsigned seed = options.seed ? options.seed : static_cast<unsigned>(i + 1);
+    if (!CheckEdits(files[i], options.edits, seed, check, error)) {
       std::printf("%s: failed: %s\n", name.c_str(), error.c_str());
       ++failed;
     } else if (check.skipped) {
       std::printf("%s: not editable, skipped\n", name.c_str());
       ++skipped;
     } else if (!check.mismatch.empty()) {
-      std::printf("%s: DIFFERS %s\n", name.c_str(), check.mismatch.c_str());
+      std::printf("%s (seed %u): DIFFERS %s\n", name.c_str(), seed, check.mismatch.c_str());
       ++differ;
     } else {
       std::printf("%s: %d edits, %d checks, the same\n", name.c_str(), check.edits, check.checks);
