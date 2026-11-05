@@ -805,10 +805,9 @@ void DocPage::Break(bool column) {
   }
   editor_.BeginGroup(column ? u"Column break" : u"Page break");
   edit::Result r = editor_.Delete(from, to);
-  const bool deleted = static_cast<bool>(r);
   if (r) r = edit::InsertBreak(editor_, r.caret, column);
-  editor_.EndGroup();
-  if (deleted && !r) editor_.Undo();  // nothing half done
+  if (r) editor_.EndGroup();
+  else editor_.CancelGroup();  // nothing half done
   host_.apply(r);
 }
 
@@ -829,10 +828,9 @@ void DocPage::SectionBreak(SectionStart start) {
   }
   editor_.BeginGroup(u"Section break");
   edit::Result r = editor_.Delete(from, to);
-  const bool deleted = static_cast<bool>(r);
   if (r) r = edit::InsertSectionBreak(editor_, r.caret, start);
-  editor_.EndGroup();
-  if (deleted && !r) editor_.Undo();
+  if (r) editor_.EndGroup();
+  else editor_.CancelGroup();
   host_.apply(r);
 }
 
