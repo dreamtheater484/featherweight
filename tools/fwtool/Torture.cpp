@@ -1541,9 +1541,9 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     if (DWORD crash = Guarded(tables)) return fail("crash", when + CrashText(crash) + " reading the saved file's tables"), false;
     for (const auto& [problem, count] : grid) {
       const auto had = knownGrid.find(problem);
-      const int before = had == knownGrid.end() ? 0 : had->second;
-      if (count > before)
-        return fail("grid", when + problem + " (" + std::to_string(count) + " in the saved file, " + std::to_string(before) +
+      const int original = had == knownGrid.end() ? 0 : had->second;
+      if (count > original)
+        return fail("grid", when + problem + " (" + std::to_string(count) + " in the saved file, " + std::to_string(original) +
                                 " in the original)"),
                false;
     }
