@@ -410,7 +410,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
     std::u16string value;
   };
   std::vector<Replace> replaces;
-  if (fieldsCount_[model.story] > 0) {
+  if (FieldsIn(model.story)) {
     for (const Field& f : StoryFields(model.story)) {
       if (f.separator.para != para || f.end.para != para || !f.complete) continue;
       PageField kind = PageFieldOf(f.Type());

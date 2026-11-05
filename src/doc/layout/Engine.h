@@ -227,7 +227,7 @@ class Engine {
   bool done_ = false;
   int32_t compatMode_ = 15;
   bool sumSpacing_ = false;  // w:doNotUseHTMLParagraphAutoSpacing: space after and before add up
-  std::vector<uint32_t> fieldsCount_;  // per story: fields in it
+  std::vector<uint32_t> fieldsCount_;  // per story: fields in it (FieldsIn)
   std::unordered_map<uint32_t, std::vector<Field>> fieldsCache_;
   std::unordered_map<uint32_t, std::u16string> noteNumbers_;  // note story -> its mark
   std::unordered_map<uint32_t, int32_t> noteOrder_;           // note story -> its number
@@ -236,6 +236,9 @@ class Engine {
 
  public:
   const std::vector<Field>& StoryFields(uint32_t story);
+  // Whether a story may have fields pagination computes. Stories made after the engine (a new
+  // header, a new text box) are looked up as they come.
+  bool FieldsIn(uint32_t story);
 };
 
 }  // namespace fw::doc::layout

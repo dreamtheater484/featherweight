@@ -21,6 +21,7 @@
 #include "doc/edit/Format.h"
 #include "doc/edit/Lists.h"
 #include "doc/edit/Page.h"
+#include "doc/edit/Shapes.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/layout/Layout.h"
 #include "text/Fonts.h"
@@ -909,4 +910,24 @@ TEST(Layout_CellsNumberedAsTheEditorsGrid) {
   size_t pieces = 0;
   for (const auto& c : cells) pieces += c.tbl == e->tbl.Id() && c.col == 1 && (c.row == 1 || c.row == 2);
   CHECK_EQ(pieces, 2u);
+}
+
+TEST(Layout_ATextBoxMadeAfterTheLayoutIsLaidOut) {
+  // A new shape's text box is a story made after the layout was (D4), as a new header is (D3):
+  // laid out with its text, as a fresh layout lays it out.
+  Doc d = Make(P(Words(3)) + P(Words(2)) + SmallPage());
+  REQUIRE(d.layout);
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  d.layout->LayOutAll();
+  edit::Shapes shapes(ed);
+  const uint32_t para = d.doc->StoryParagraphs(d.doc->MainStory()).front();
+  REQUIRE(shapes.Insert(para, edit::ShapeKind::TextBox, fw::Emu(914400), fw::Emu(914400), fw::Emu(1828800), fw::Emu(914400)).ok);
+  uint32_t story = kNone;
+  for (const Drawing& dr : d.doc->Drawings())
+    if (dr.pos.para != kNone && !dr.textBoxes.empty()) story = dr.textBoxes.front();
+  REQUIRE(story != kNone);
+  REQUIRE(ed.InsertText({d.doc->StoryParagraphs(story).front(), 0}, u"Inside the box").ok);
+  d.layout->LayOutAll();
+  REQUIRE(SameAsFresh(*d.doc, *d.layout, "a new text box"));
 }

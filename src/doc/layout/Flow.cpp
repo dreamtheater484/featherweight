@@ -231,16 +231,20 @@ Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, 
     : impl_(new Impl), doc_(doc), fonts_(fonts), options_(options), timings_(timings), generation_(doc.CacheGeneration()) {
   compatMode_ = doc.Settings().compatibilityMode > 0 ? doc.Settings().compatibilityMode : 12;
   sumSpacing_ = doc.Settings().Compat(Name("doNotUseHTMLParagraphAutoSpacing"));
-  fieldsCount_.assign(doc.Stories().size(), 0);
-  for (uint32_t s = 0; s < doc.Stories().size(); ++s) {
-    StoryKind k = doc.Stories()[s].kind;
-    if (k == StoryKind::Header || k == StoryKind::Footer || k == StoryKind::Main) fieldsCount_[s] = 1;
-  }
+  FieldsIn(static_cast<uint32_t>(doc.Stories().size()));  // every story's
   FlattenBody(doc, impl_->items);
   impl_->bodyItems = impl_->items.size();
 }
 
 Engine::~Engine() = default;
+
+bool Engine::FieldsIn(uint32_t story) {
+  while (fieldsCount_.size() < doc_.Stories().size() && fieldsCount_.size() <= story) {
+    const StoryKind k = doc_.Stories()[fieldsCount_.size()].kind;
+    fieldsCount_.push_back(k == StoryKind::Header || k == StoryKind::Footer || k == StoryKind::Main ? 1 : 0);
+  }
+  return story < fieldsCount_.size() && fieldsCount_[story] > 0;
+}
 
 const std::vector<Field>& Engine::StoryFields(uint32_t story) {
   auto it = fieldsCache_.find(story);
