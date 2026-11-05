@@ -2396,8 +2396,8 @@ void App::RunScript(const std::wstring& script) {
       // pagepngs:dir writes a document's pages as dir\page-N.png at 96 dpi, as the export draws
       // them, for comparing with the PDF's pages.
       TabContent* v = Active();
-      if (v && v->Kind() == TabKind::Document && v->Ready())
-        fwprintf(stderr, L"pagepngs: %d\n", static_cast<DocView*>(v)->RenderPagesForTesting(arg, 96));
+      if (!v || v->Kind() != TabKind::Document || !v->Ready() || static_cast<DocView*>(v)->RenderPagesForTesting(arg, 96) == 0)
+        fwprintf(stderr, L"pagepngs failed\n");
     } else if (op == L"cmd") {
       static const std::pair<const wchar_t*, int> names[] = {
           {L"find", CmdFind}, {L"next", CmdFindNext}, {L"invert", CmdToggleInvert}, {L"present", CmdPresentation},
