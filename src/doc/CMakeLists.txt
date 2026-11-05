@@ -13,6 +13,7 @@ add_library(fwdoc STATIC
   edit/Clip.cpp
   edit/Editor.cpp
   edit/Format.cpp
+  edit/HeaderFooter.cpp
   edit/Inline.cpp
   edit/Kept.cpp
   edit/Lists.cpp

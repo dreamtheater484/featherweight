@@ -105,6 +105,13 @@ class TreeEdit {
   // without one gets an empty part, with its content type and relationship; that isn't undone
   // (an empty part says nothing). kNoElem for other kinds, or when the document isn't edited.
   ElemId EnsurePart(PartKind kind);
+  // A new header or footer part (outside a transaction, and not undone: a part nothing refers to
+  // says nothing): its content type, its relationship from the main part (`relId`), its story,
+  // and its content: a copy of story `copyOf`'s, or one empty paragraph (kNone). The copy leaves
+  // out what must be unique in a document (bookmarks, paragraph ids, content control ids). The
+  // story's index; kNone with the reason when the document isn't edited, or the content can't be
+  // copied (pictures, notes, comments, or kept content that refers to something).
+  uint32_t NewStoryPart(PartKind kind, uint32_t copyOf, std::string& relId, std::u16string& why);
 
  private:
   friend struct JournalStep;
@@ -151,6 +158,10 @@ class TreeEdit {
   uint32_t ParagraphOf(ElemId id) const;
   // Whether an element is in the styles or numbering part.
   bool InDefinitions(ElemId id) const;
+  // NewStoryPart's copy: whether a story's content can be copied, and the copy of an element and
+  // what it holds (new paragraphs join story `story`).
+  bool Copyable(ElemId root, std::u16string& why) const;
+  ElemId CopyTree(ElemId src, ElemId parent, uint32_t story);
 
   Editor& editor_;
   Document& doc_;
