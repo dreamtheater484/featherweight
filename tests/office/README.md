@@ -34,6 +34,26 @@ fwtool roundtrip --expect-reject tests/office/malicious
 
 `fwtool check` applies the reference registry (`src/pkg/References.h`, rules in `ReferenceRules.cpp`): every reference resolves, ids are unique, pairs are complete, and the derived data it can see (the calculation chain, chart caches and embedded workbooks, VML notes) matches its sources. What Office tolerates, such as a missing style, is a warning. It also lists the extensions it doesn't know, near which structural edits will be blocked.
 
+## Editing torture test (D2)
+
+D2 is done when every corpus file, after scripted random edits and a save, has no new validator errors, passes `fwtool check`, and opens in Word without a repair prompt (plan §6.4). Three tools check that:
+
+- **`fwtool torture`** applies rounds of seeded random edits to each Word document through the editor: typing, deletes across fields, bookmarks, comments, content controls, tables and tracked changes, paragraph splits and joins, formatting, undo and redo. Then it saves. The saved file must open, pass `fwtool check` with no errors the original didn't have, and read back into the model as the edited document. A failure is shrunk to the fewest edits that still fail it and kept in `<out>/repro/` as a text file of edits, with the file they make. `--replay` applies one again:
+  ```bash
+  fwtool torture --seed 1 --edits 40 --rounds 3 --out build/torture tests/office/generated
+  ```
+  ```bash
+  fwtool torture --replay build/torture/repro/<name>-seed<seed>.txt
+  ```
+- **`fwvalidate`** (`tools/validate`, built with `dotnet build`) is the Open XML SDK validator. With `--compare` it reports only the errors a saved copy has that its original doesn't.
+- **`scripts/word-open-check.ps1`** opens each file in Word, hidden and in safe mode, read-only, with macros off, and reports whether Word shows a repair prompt or an error. Word's alerts stay on so that a repair prompt is shown, read and cancelled, never answered. Nothing is ever saved. It needs the Office reference PC.
+
+`scripts/torture.ps1` runs all three over the corpus (`tests/office` and, when `FW_CORPUS` is set, the private corpus) and writes `summary.md`. When Word complains about a saved copy, it also opens the original: if Word complains about that too, the editor isn't to blame, and the summary says so. CI runs `scripts/torture.ps1 -Ci`: the public corpus, no Word.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\torture.ps1
+```
+
 ## Layout fidelity (D1)
 
 D1 is done when, across the corpus, the page count matches Word's for at least 90 % of documents and at least 95 % of lines break where Word breaks them (plan §6.4). `fwtool compare` measures both against the reference renders. Featherweight's side is a layout dump per document, which D1's pagination writes. `docs/layout-dump.md` describes the format and exactly how lines are compared.

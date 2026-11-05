@@ -37,6 +37,23 @@ jobs:
           & $fwtool check tests\office\generated tests\office\edge tests\office\layout; if ($LASTEXITCODE) { exit $LASTEXITCODE }
           & $fwtool check --expect-reject tests\office\broken; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
+      # D2's editing torture test, CI subset (plan §10): seeded random edits, a save, fwtool check,
+      # the model reading it back, and the Open XML SDK validator, on the public corpus. Word's
+      # repair check runs on the Office reference PC (scripts/torture.ps1 without -Ci).
+      - name: Editing torture test (fwtool torture and the validator)
+        shell: pwsh
+        run: scripts\torture.ps1 -Ci
+
+      - name: Upload the torture test's reproducers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: torture
+          path: |
+            build/torture/summary.md
+            build/torture/repro/
+          if-no-files-found: ignore
+
       - name: Smoke test (render a PDF off-screen)
         shell: pwsh
         run: |

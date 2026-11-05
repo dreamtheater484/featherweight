@@ -57,6 +57,16 @@ constexpr const char* kUsage =
     "      to window, to the first frame (the start screen or the first page), memory once\n"
     "      settled, and CPU and wakeups while idle (plan §11). Works with any build, 0.9.4\n"
     "      included, and never touches the user's settings or a running Featherweight.\n"
+    "  fwtool torture [--seed S] [--edits N] [--rounds R] [--out DIR] [--json FILE] <file or folder>...\n"
+    "      The open, edit and save test (plan §10, D2): R rounds of N seeded random edits per Word\n"
+    "      document through the editor (typing, deletes across fields, bookmarks, comments, content\n"
+    "      controls, tables and tracked changes, splits, joins, formatting, undo and redo), then\n"
+    "      save: the saved file must open, pass check with no new errors, and read back as the\n"
+    "      edited document. A failure is shrunk to the fewest edits that still fail, kept in\n"
+    "      DIR/repro (default DIR: torture). DIR/saved and DIR/pairs.tsv hold a saved copy of each\n"
+    "      document for the validator and Word (scripts/torture.ps1).\n"
+    "  fwtool torture --replay <reproducer.txt> [--out DIR]\n"
+    "      Applies a reproducer's edits again and reports what happens.\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
     "      Word's. Run it without text for its options.\n";
@@ -142,6 +152,10 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--all") options.all = true;
     else if (arg == L"--runs" && i + 1 < argc) options.runs = _wtoi(argv[++i]);
     else if (arg == L"--budgets") options.budgets = true;
+    else if (arg == L"--seed" && i + 1 < argc) options.seed = _wcstoui64(argv[++i], nullptr, 10);
+    else if (arg == L"--edits" && i + 1 < argc) options.edits = static_cast<uint32_t>(std::max(0, _wtoi(argv[++i])));
+    else if (arg == L"--rounds" && i + 1 < argc) options.rounds = static_cast<uint32_t>(std::max(1, _wtoi(argv[++i])));
+    else if (arg == L"--replay") options.replay = true;
     else if (arg.starts_with(L"--")) {
       std::fprintf(stderr, "Unknown option %s\n\n%s", fw::WideToUtf8(arg).c_str(), fwtool::kUsage);
       return 2;
@@ -160,6 +174,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"compare") return fwtool::RunCompare(options);
   if (command == L"bench") return fwtool::RunBench(options);
   if (command == L"bench-app") return fwtool::RunBenchApp(options);
+  if (command == L"torture") return fwtool::RunTorture(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }

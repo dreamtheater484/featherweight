@@ -28,6 +28,10 @@ struct Options {
   int runs = 5;                     // bench: runs per document
   bool budgets = false;             // bench: fail when a budget is missed
   bool layout = false;              // dump: the pages Featherweight lays out
+  uint64_t seed = 1;                // torture: the run's seed (each file and round derives its own)
+  uint32_t edits = 40;              // torture: random edits per round
+  uint32_t rounds = 3;              // torture: rounds per document, each from the original
+  bool replay = false;              // torture: the input is a reproducer to replay
   std::vector<std::filesystem::path> inputs;
 };
 
@@ -49,6 +53,7 @@ int RunLines(const Options& options);
 int RunCompare(const Options& options);
 int RunBench(const Options& options);
 int RunBenchApp(const Options& options);
+int RunTorture(const Options& options);
 // Parses its own options, from argv[2] on.
 int RunWrap(int argc, wchar_t** argv);
 
