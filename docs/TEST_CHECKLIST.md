@@ -82,7 +82,7 @@ Run before every release. Test PDFs are in `tests/pdfs/` (regenerate with `pytho
 - [ ] Launch with a 10 MB PDF to first page: ___ ms (target < 500 ms)
 - [ ] Memory with one typical document: ___ MB (target < 100 MB)
 
-## Word documents (D1–D3)
+## Word documents (D1–D4)
 
 What the automated checks can't judge: how it looks and feels, real input devices, Word itself, and paper. Test documents: `tests/office/generated/`, `tests/office/torture/`, and any of your own `.docx` files. Keep a copy of your own files first.
 
@@ -124,6 +124,18 @@ What the automated checks can't judge: how it looks and feels, real input device
 - [ ] The navigation pane lists the headings and follows the caret; clicking one goes there.
 - [ ] Formatting marks (Ctrl+Shift+8) show ¶, spaces and tabs; change case (Shift+F3); the Paragraph panel sets spacing and "keep with next".
 - [ ] Format a CV from scratch: name as a heading, sections, a two-column table for dates, a photo. It takes no more steps than in Word.
+
+### Review and advanced (D4)
+
+- [ ] Review a contract you received with tracked changes and comments: step through the changes, accept some, reject others, reply to a comment and resolve another. Save and open in **Word**: Word shows exactly the changes and comments you left.
+- [ ] Turn on Track Changes (Ctrl+Shift+E), type, delete and make something bold. Open in Word: the changes carry your name and can be accepted there. Switch between Simple markup, All markup, No markup and Original.
+- [ ] Add a comment on a selection, reply to it, and resolve it.
+- [ ] Insert a table of contents in a document with headings, add a heading, then update the table (page numbers only, then the entire table). The entries are links.
+- [ ] Insert a footnote (Ctrl+Alt+F) and an endnote (Ctrl+Alt+D), edit them, and delete one: the numbers follow.
+- [ ] Fill in a form with content controls (text, dropdown, date, checkbox), and a protected form with legacy fields: Tab moves between fields, and nothing else can be edited.
+- [ ] Insert a text box and a few shapes, type in them, resize and move them, change the fill and outline. Add a text watermark ("DRAFT") and remove it.
+- [ ] Export a document to PDF (File → Export PDF). In Edge or Acrobat: text can be selected and searched, links work, and the bookmarks list the headings. It looks like the screen.
+- [ ] Save as RTF and as plain text, and open both in Word or Notepad.
 
 ### Speed and feel (record anything that feels slow)
 
