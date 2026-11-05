@@ -23,6 +23,10 @@ struct Point {
   float x = 0, y = 0;
 };
 
+struct Size {
+  float width = 0, height = 0;
+};
+
 struct Rect {
   float left = 0, top = 0, right = 0, bottom = 0;
   float Width() const { return right - left; }
@@ -42,6 +46,11 @@ struct Matrix {
   Point Apply(Point p) const { return {p.x * m11 + p.y * m21 + dx, p.x * m12 + p.y * m22 + dy}; }
   // No rotation or skew, so rectangles stay rectangles.
   bool AxisAligned() const { return m12 == 0 && m21 == 0; }
+  // The inverse, or the identity when there is none (a degenerate transform).
+  Matrix Inverse() const;
+  // How much the transform enlarges lengths along x and y, ignoring rotation.
+  float ScaleX() const;
+  float ScaleY() const;
 };
 
 // An outline made of figures. Each figure starts with MoveTo; a segment without one starts at the
@@ -71,6 +80,16 @@ class Path {
   static Path RoundedRect(const Rect& r, float rx, float ry);
   static Path Ellipse(const Rect& bounds);
 
+  // The outline as straight lines: one polygon per figure, curves and arcs within `tolerance` of
+  // the true curve. Wrap outlines and tests use it; drawing doesn't need it.
+  struct Polygon {
+    std::vector<Point> points;
+    bool closed = false;
+  };
+  std::vector<Polygon> Flatten(float tolerance) const;
+  // The bounds of the flattened outline; an empty rectangle at the origin for an empty path.
+  Rect Bounds() const;
+
   FillRule fillRule = FillRule::Winding;
   const std::vector<Segment>& Segments() const { return segments_; }
   bool Empty() const { return segments_.empty(); }
@@ -84,9 +103,13 @@ struct GradientStop {
   Color color;
 };
 
+class Bitmap;
+
 // How an area is painted. Gradient geometry is in the current coordinate space.
 struct Brush {
-  enum class Kind { Solid, Linear, Radial };
+  enum class Kind { Solid, Linear, Radial, Bitmap };
+  // How a bitmap continues past its edges.
+  enum class Extend : uint8_t { Clamp, Repeat, Mirror };
   Kind kind = Kind::Solid;
   Color color;                       // Solid
   Point start, end;                  // Linear: the gradient line
@@ -94,10 +117,17 @@ struct Brush {
   float rx = 0, ry = 0;              // ...and radii
   Point focusOffset;                 // Radial: the focus, relative to the center
   std::vector<GradientStop> stops;   // Linear and Radial, in increasing offset
+  // Bitmap: its pixels placed by `bitmapTransform` (from pixels to the current coordinates), for
+  // tiled pictures and pattern fills. Without `smooth`, pixels stay sharp squares (patterns).
+  std::shared_ptr<const draw::Bitmap> bitmap;
+  Matrix bitmapTransform;
+  Extend extendX = Extend::Clamp, extendY = Extend::Clamp;
+  bool smooth = true;
 
   static Brush Solid(Color c);
   static Brush Linear(Point start, Point end, std::vector<GradientStop> stops);
   static Brush Radial(Point center, float rx, float ry, std::vector<GradientStop> stops);
+  static Brush FromBitmap(std::shared_ptr<const draw::Bitmap> bitmap, const Matrix& transform, Extend extend);
 };
 
 enum class LineCap { Flat, Square, Round };
@@ -130,6 +160,32 @@ class Bitmap {
   int width_, height_;
   std::vector<uint8_t> pixels_;
   uint64_t id_;
+};
+
+// A vector picture: an EMF metafile (WMF pictures are converted to EMF when read) or an SVG
+// document. Immutable like a Bitmap, so a backend can keep its own copy under Id().
+class VectorImage {
+ public:
+  enum class Kind : uint8_t { Emf, Svg };
+  // `size` is its natural size in points: an EMF's frame, an SVG's width and height.
+  VectorImage(Kind kind, std::vector<uint8_t> data, Size size);
+  Kind GetKind() const { return kind_; }
+  const std::vector<uint8_t>& Data() const { return data_; }
+  Size NaturalSize() const { return size_; }
+  uint64_t Id() const { return id_; }
+
+ private:
+  Kind kind_;
+  std::vector<uint8_t> data_;
+  Size size_;
+  uint64_t id_;
+};
+
+// A soft shadow behind what is drawn (DrawingML's outer shadow).
+struct Shadow {
+  Color color;      // its alpha is the shadow's opacity
+  float blur = 0;   // blur radius, in the current coordinates
+  Matrix transform;  // moves (and scales or skews) the silhouette, in the current coordinates
 };
 
 // Shaped glyphs in one font at one size, as text layout produces them. The arrays outlive the
@@ -173,6 +229,16 @@ class Painter {
   virtual void DrawGlyphs(Point origin, const GlyphRun& run, const Brush& b) = 0;
   // The bitmap (or its `src` part, in pixels) stretched to `dest`.
   virtual void DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* src = nullptr, float opacity = 1) = 0;
+  // A vector picture stretched to `dest`. By default it is drawn as pixels at the device's
+  // resolution (RasterizeVectorImage), which is what a backend that can't play metafiles or SVG
+  // gets, such as PDF export (plan §4.6, decision 9).
+  virtual void DrawVectorImage(const VectorImage& image, const Rect& dest, float opacity = 1);
+
+  // ---- Effects ----
+  // Draws everything until the matching Restore with `shadow` behind it: the silhouette of what
+  // was drawn, in the shadow's color, blurred and moved. It implies a Save. By default there is no
+  // shadow: backends that can't blur leave it out (best effort, plan §4.5).
+  virtual void BeginShadow(const Shadow& shadow);
 };
 
 }  // namespace draw
