@@ -42,6 +42,11 @@ std::wstring StyleKey(const text::TextStyle& s) {
 }
 
 bool Deleted(Node revision) { return revision && (revision.Is(Name("del")) || revision.Is(Name("moveFrom"))); }
+bool Inserted(Node revision) { return revision && (revision.Is(Name("ins")) || revision.Is(Name("moveTo"))); }
+// Text the view doesn't show: deleted, unless it shows deletions; inserted, when it hides insertions.
+bool Gone(Node revision, const Options& o) {
+  return (Deleted(revision) && !o.showDeletions) || (Inserted(revision) && o.hideInsertions);
+}
 
 text::Alignment AlignmentOf(Justification jc) {
   switch (jc) {
@@ -400,7 +405,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
     const TextRun& run = runs[r];
     if (run.start < covered) continue;  // overlapping runs don't happen; be safe
     const RunProps& rp = doc_.ResolvedRun(para, run.run);
-    bool hidden = run.fieldCode || Deleted(run.revision);
+    bool hidden = run.fieldCode || Gone(run.revision, options_);
     const text::TextStyle* style = styles_.Intern(StyleOf(rp, hidden));
     const text::TextStyle* hiddenStyle = style->hidden ? style : nullptr;
     auto hide = [&]() {
@@ -450,7 +455,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
       auto rep = std::find_if(replaces.begin(), replaces.end(), [&](const Replace& x) { return x.from == i; });
       // An empty result starts at the field's end character, hidden only as a field character.
       const text::TextStyle* shown =
-          rep != replaces.end() && style->hidden && run.fieldCode && !Deleted(run.revision) ? styles_.Intern(StyleOf(rp, false)) : style;
+          rep != replaces.end() && style->hidden && run.fieldCode && !Gone(run.revision, options_) ? styles_.Intern(StyleOf(rp, false)) : style;
       if (rep != replaces.end() && !shown->hidden) {
         uint32_t to = std::max(rep->to, i);
         subst(i, to - i, rep->value, shown, paint);
@@ -574,7 +579,9 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   // A deleted paragraph mark joins the paragraph to the next in Word's final view, so one with
   // nothing of its own left to show is gone.
   const Node markRPr = doc_.ParaNode(para).Child(Name("pPr")).Child(Name("rPr"));
-  const bool markDeleted = markRPr && (markRPr.Child(Name("del")) || markRPr.Child(Name("moveFrom")));
+  // A mark the view doesn't show: deleted (or, in Original, inserted).
+  const bool markDeleted = markRPr && ((!options_.showDeletions && (markRPr.Child(Name("del")) || markRPr.Child(Name("moveFrom")))) ||
+                                       (options_.hideInsertions && (markRPr.Child(Name("ins")) || markRPr.Child(Name("moveTo")))));
   const bool markHidden = (markProps.vanish && !options_.showHiddenText) || markProps.specVanish || markDeleted;
   out.empty = markHidden && !visible && (out.prefix == 0 || markDeleted);  // a deleted mark takes its label along
   text::TextStyle mark = StyleOf(markProps, false);

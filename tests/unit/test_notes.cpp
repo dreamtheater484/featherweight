@@ -239,6 +239,53 @@ TEST(Notes_DeleteNoteTakesItsReference) {
   REQUIRE(editor.Undo().ok);
   CHECK(MainXml(*doc) == main);
   CHECK(NotesXml(*doc) == notes);
+  // Word's separators aren't referred to, and stay (torture finding 34).
+  for (const char* id : {"-1", "0"}) {
+    const uint32_t sep = doc->NoteStory(StoryKind::Footnote, id);
+    REQUIRE(sep != kNone);
+    CHECK(!edit::DeleteNote(editor, sep).ok);
+  }
+  CHECK(NotesXml(*doc) == notes);
+}
+
+TEST(Notes_DrawingsAfterADeletedNoteKeepTheirPlace) {
+  // Torture finding 37: a note's paragraphs taken out move the drawings in the paragraphs after
+  // them (a later note's, or a header made after the notes); undone, they're back where they were.
+  Fixture f;
+  f.styles = kStyles;
+  f.footnotes = kSeparators + Note(1, "First.") +
+                "<w:footnote w:id=\"2\"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> A picture: </w:t></w:r>"
+                "<w:r><w:drawing><wp:inline><wp:extent cx=\"100\" cy=\"200\"/><wp:docPr id=\"8\" name=\"P\"/></wp:inline>"
+                "</w:drawing></w:r></w:p></w:footnote>";
+  f.body = "<w:p>" + Run("One") + Ref(1) + Run(" two") + Ref(2) + "</w:p>";
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  REQUIRE(doc->Drawings().size() == 1u);
+  auto drawingAt = [&]() {
+    const Pos pos = doc->Drawings()[0].pos;
+    if (pos.para == kNone || pos.para >= doc->Paragraphs().size()) return false;
+    for (const InlineItem& it : doc->Items(pos.para))
+      if (it.kind == ItemKind::Drawing && it.offset == pos.offset) return it.drawing == 0u;
+    return false;
+  };
+  const uint32_t second = doc->NoteStory(StoryKind::Footnote, "2");
+  REQUIRE(drawingAt() && doc->Drawings()[0].pos.para == doc->StoryParagraphs(second).front());
+  const uint32_t p = MainParas(*doc)[0];
+  edit::Editor editor(*doc);
+  REQUIRE(editor.Delete({p, 3}, {p, 4}).ok);  // the first note's reference, and the note
+  CHECK(drawingAt());
+  CHECK(doc->Drawings()[0].pos.para == doc->StoryParagraphs(second).front());
+  REQUIRE(editor.Undo().ok);
+  CHECK(drawingAt());
+  // The note with the picture itself: its drawing has no place until it comes back.
+  REQUIRE(editor.Delete({p, 8}, {p, 9}).ok);
+  CHECK(doc->Drawings()[0].pos.para == kNone);
+  REQUIRE(editor.Undo().ok);
+  CHECK(drawingAt());
+  CHECK(doc->Drawings()[0].pos.para == doc->StoryParagraphs(second).front());
+  REQUIRE(editor.Redo().ok);
+  CHECK(doc->Drawings()[0].pos.para == kNone);
+  CHECK(SavesAndChecks(*doc));
 }
 
 TEST(Notes_AReferenceLeftKeepsItsNote) {
