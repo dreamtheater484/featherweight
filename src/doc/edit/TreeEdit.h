@@ -64,6 +64,7 @@ class TreeEdit {
   // Removes a known child that holds no text (a property, a style). Its kept fragments go with it.
   void Remove(ElemId parent, uint32_t name);
   void RemoveElement(ElemId elem);
+  // Values XML can't hold (XmlSafe) are left out.
   void SetAttr(ElemId elem, uint32_t name, std::string_view value);
   void RemoveAttr(ElemId elem, uint32_t name);
   // Removes every child of a property container (w:rPr, w:pPr) except those named in `keep`.
