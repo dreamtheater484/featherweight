@@ -1233,6 +1233,17 @@ struct EditorState {
         }
       }
     }
+    // Text shown from a kept mc:AlternateContent block is written as that block, which stays with
+    // the element it's kept beside: a split just before the text goes after it, so the two agree.
+    for (bool later = true; later;) {
+      later = false;
+      for (ElemId id : AllElems(para))
+        if ((E(id).flags & kDisplayOnly) && E(id).start == o && E(id).length > 0 &&
+            !(E(E(id).parent).flags & kDisplayOnly)) {
+          o = E(id).start + E(id).length;
+          later = true;
+        }
+    }
     movedStarts.clear();
     ElemId p = d.paras_[para].elem;
     ElemId np = CloneShallow(p, E(p).parent);
