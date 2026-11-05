@@ -11,7 +11,7 @@
 // Formatted text for the clipboard (milestone D2): what copying takes out of a document, what
 // pasting puts into one, and the small converters between it and RTF and HTML, both ways. Only
 // what a reader sees is kept: bold, italic, underline, strikethrough, raised and lowered text,
-// size, color and font; alignment, indents, spacing and headings. Copying within Featherweight
+// size, color and font; links; alignment, indents, spacing and headings. Copying within Featherweight
 // also keeps style names and, in the same document, lists.
 namespace fw::doc::edit {
 
@@ -23,10 +23,11 @@ struct ClipRun {
   std::optional<uint32_t> color;   // 0xRRGGBB; none for automatic
   std::string font;                // UTF-8; empty when not said
   std::string charStyle;           // the w:rStyle id (Featherweight's own copies)
+  std::string link;                // a hyperlink's target: a web address, or "#bookmark"
   bool SameLook(const ClipRun& o) const {
     return bold == o.bold && italic == o.italic && underline == o.underline && strike == o.strike &&
            vertAlign == o.vertAlign && halfPoints == o.halfPoints && color == o.color && font == o.font &&
-           charStyle == o.charStyle;
+           charStyle == o.charStyle && link == o.link;
   }
 };
 
@@ -62,7 +63,8 @@ Clip CopyClip(const Document& doc, Pos from, Pos to, uint64_t source = 0);
 
 // Replaces [from, to) with the clip, as one undo step ("Paste"). `target` names the document as
 // CopyClip's `source` does. Formatting the text there already has is left alone; the rest is set
-// as direct formatting. Nothing changes when the editor refuses.
+// as direct formatting; web links (http, https, mailto, ftp) become hyperlinks, other links plain
+// text. Nothing changes when the editor refuses.
 Result PasteClip(Editor& editor, Pos from, Pos to, const Clip& clip, uint64_t target = 0);
 
 // The converters. RTF is 7-bit ASCII ("Rich Text Format" on the clipboard); HTML is the

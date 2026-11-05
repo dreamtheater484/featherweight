@@ -6,6 +6,7 @@
 
 #include "doc/model/Internal.h"
 #include "doc/model/Schema.h"
+#include "pkg/Package.h"
 
 namespace fw::doc::edit {
 
@@ -1667,6 +1668,66 @@ Result Editor::SetRunProps(Pos from, Pos to, const PropEdit& edit) {
   }
   s.Commit(false, from, to, Kind::Other, u"Format");
   s.Notify(listeners_);
+  return r;
+}
+
+Result Editor::SetLink(Pos from, Pos to, std::string_view target) {
+  EditorState& s = *impl_;
+  if (Compare(to, from) < 0) std::swap(from, to);
+  std::u16string why;
+  if (!CanEdit(&why) || !s.Editable(from.para, why)) return Fail(why);
+  if (from.para != to.para || from.offset >= to.offset || target.empty())
+    return Fail(u"Select text in one paragraph to make it a link.");
+  const uint32_t para = from.para;
+  const ElemId p = doc_.Para(para).elem;
+  for (const TextRun& t : doc_.Runs(para))
+    if (t.end > from.offset && t.start < to.offset &&
+        (!t.run || t.hyperlink || t.simpleField || t.contentControl || t.revision || t.fieldDepth > 0 || t.displayOnly ||
+         t.run.Parent().Id() != p))
+      return Fail(u"This text can't be made a link.");
+  // A web address is a relationship of the part.
+  std::string rid;
+  if (target[0] != '#') {
+    const uint32_t part = doc_.Stories()[doc_.Para(para).story].part;
+    if (part >= doc_.Parts().size()) return Fail(u"This text can't be made a link.");
+    const std::string& name = doc_.Parts()[part].name;
+    const std::string type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
+    pkg::RelationshipSet set;
+    if (const pkg::RelationshipSet* now = doc_.Package().RelationshipsOf(name)) set = *now;
+    else set.source = name;
+    for (const pkg::Relationship& r : set.items)
+      if (r.external && r.type == type && r.target == target) rid = r.id;
+    if (rid.empty()) {
+      for (int n = 1; rid.empty(); ++n)
+        if (std::string id = "rIdLink" + std::to_string(n); !set.Find(id)) rid = id;
+      set.items.push_back(pkg::Relationship{rid, type, std::string(target), true, {}});
+      doc_.Package().SetRelationships(std::move(set));
+    }
+  }
+  s.Begin(para, 1);
+  if (!s.CutRunsAt(para, from.offset, why) || !s.CutRunsAt(para, to.offset, why)) return s.Abort(why);
+  // The runs (and range markers among them) in [from, to) go into a new w:hyperlink.
+  std::vector<ElemId> inside;
+  for (ElemId c = s.E(p).first; c != kNoElem; c = s.E(c).next) {
+    if (s.PropsElem(c)) continue;
+    const uint32_t cs = s.E(c).start, cl = s.E(c).length;
+    if (cl == 0 ? (cs > from.offset && cs < to.offset) : (cs >= from.offset && cs + cl <= to.offset)) inside.push_back(c);
+  }
+  const ElemId h = inside.empty() ? kNoElem : s.NewElem(p, Name("hyperlink"));
+  if (h == kNoElem) return s.Abort(u"This text can't be made a link.");
+  if (!rid.empty()) s.SetAttr(h, Name("r:id"), rid);
+  else s.SetAttr(h, Name("anchor"), target.substr(1));
+  s.SetAttr(h, Name("history"), "1");
+  s.LinkAfter(p, s.PrevSibling(inside.front()), h);
+  for (ElemId c : inside) {
+    s.Unlink(c);
+    s.Append(h, c);
+  }
+  s.Reflow(para);
+  s.Commit(false, from, to, Kind::Other, u"Link");
+  s.Notify(listeners_);
+  Result r;
+  r.caret = to;
   return r;
 }
 

@@ -100,6 +100,18 @@ std::u16string Clean(std::u16string_view s) {
   return out;
 }
 
+// A link worth keeping from the clipboard: a web address (http, https, mailto, ftp) or, from
+// Featherweight's own copies, "#bookmark". Anything else (javascript:, file:, data:) is dropped.
+std::string SafeLink(std::string_view href, bool anchors) {
+  href = TrimView(href);
+  const std::string low = LowerAscii(href.substr(0, 8));
+  for (const char* scheme : {"http://", "https://", "mailto:", "ftp://"})
+    if (low.rfind(scheme, 0) == 0 && href.size() > std::strlen(scheme)) return std::string(href);
+  if (anchors && href.size() > 1 && href[0] == '#') return std::string(href);
+  return {};
+}
+bool WebLink(std::string_view link) { return !link.empty() && link[0] != '#'; }
+
 // ---------------------------------------------------------------------------
 // Pasting
 
@@ -316,6 +328,7 @@ Clip CopyClip(const Document& doc, Pos from, Pos to, uint64_t source) {
       const RunProps& rp = run.run ? doc.ResolvedRun(p, run.run) : doc.ResolvedMark(p);
       if (rp.vanish) continue;
       ClipRun cr = LookOf(rp);
+      if (run.hyperlink) cr.link = doc.HyperlinkTarget(run.hyperlink);
       for (uint32_t i = std::max(run.start, a); i < run.end && i < b && i < s.size(); ++i)
         if (!Hidden(s[i])) cr.text += s[i];
       cr.text = Clean(cr.text);
@@ -347,11 +360,26 @@ Result PasteClip(Editor& ed, Pos from, Pos to, const Clip& clip, uint64_t target
     changed = true;
     caret = r.caret;
   }
+  // Web links become hyperlinks over the runs that share them, once their text is in. Where the
+  // editor can't make one (inside a field or a content control) the text stays plain.
+  std::string link;
+  Pos linkFrom = caret;
+  auto endLink = [&]() {
+    if (!link.empty() && linkFrom.para == caret.para && linkFrom.offset < caret.offset)
+      ed.SetLink(linkFrom, caret, link);
+    link.clear();
+  };
   auto insert = [&](const ClipRun& run) {
     const std::u16string text = Clean(run.text);
     Result r;
     r.caret = caret;
     if (text.empty()) return r;
+    const std::string want = WebLink(run.link) ? run.link : std::string();
+    if (want != link) {
+      endLink();
+      link = want;
+      linkFrom = caret;
+    }
     r = ed.InsertText(caret, text);
     if (!r) return r;
     changed = true;
@@ -375,10 +403,12 @@ Result PasteClip(Editor& ed, Pos from, Pos to, const Clip& clip, uint64_t target
     if (!numbered && !cp.label.empty()) {
       ClipRun label = cp.runs.empty() ? ClipRun{} : cp.runs.front();
       label.text = cp.label + u"\t";
+      label.link.clear();
       if (Result r = insert(label); !r) return fail(r);
     }
     for (const ClipRun& run : cp.runs)
       if (Result r = insert(run); !r) return fail(r);
+    endLink();
     if (next.para != kNone) caret = next;
   }
   ed.EndGroup();
@@ -443,6 +473,20 @@ std::string ToRtf(const Clip& clip) {
     if (p.heading > 0) body += "\\outlinelevel" + std::to_string(p.heading - 1);
     body += ' ';
     auto run = [&](const ClipRun& r, std::u16string_view text) {
+      if (!r.link.empty()) {
+        // A link is Word's HYPERLINK field around the run: HYPERLINK "address" or \l "bookmark".
+        const bool anchor = r.link[0] == '#';
+        std::string target;
+        for (char c : anchor ? r.link.substr(1) : r.link) {
+          if (c == '"') {
+            target += "%22";
+            continue;
+          }
+          if (c == '\\' || c == '{' || c == '}') target += '\\';
+          target += c;
+        }
+        body += std::string("{\\field{\\*\\fldinst HYPERLINK ") + (anchor ? "\\\\l " : "") + "\"" + target + "\"}{\\fldrslt ";
+      }
       body += '{';
       if (!r.font.empty()) body += "\\f" + std::to_string(fontIndex(r.font));
       if (r.halfPoints > 0) body += "\\fs" + std::to_string(r.halfPoints);
@@ -456,6 +500,7 @@ std::string ToRtf(const Clip& clip) {
       body += ' ';
       RtfText(body, text);
       body += '}';
+      if (!r.link.empty()) body += "}}";
     };
     if (!p.label.empty()) {
       body += "{\\listtext ";
@@ -603,7 +648,7 @@ class RtfReader {
   }
 
  private:
-  enum class Dest : uint8_t { Text, Skip, Fonts, Colors, Styles, Label };
+  enum class Dest : uint8_t { Text, Skip, Fonts, Colors, Styles, Label, FieldCode };
   struct State {
     ClipRun look;
     Dest dest = Dest::Text;
@@ -688,7 +733,7 @@ class RtfReader {
     // Destinations.
     static const char* const kSkip[] = {
         "info", "pict", "object", "header", "headerl", "headerr", "headerf", "footer", "footerl", "footerr", "footerf",
-        "footnote", "annotation", "fldinst", "xe", "tc", "themedata", "colorschememapping", "latentstyles", "datastore",
+        "footnote", "annotation", "xe", "tc", "themedata", "colorschememapping", "latentstyles", "datastore",
         "listtable", "listoverridetable", "rsidtbl", "generator", "shpinst", "nonshppict", "pgdsctbl", "revtbl",
         "xmlnstbl", "filetbl", "fchars", "lchars", "pntxta", "pntxtb", "docvar", "userprops", "defchp", "defpap",
         "background", "protusertbl", "txe", "atnid", "atnauthor", "template", "falt", "panose", "mmathPr"};
@@ -697,6 +742,18 @@ class RtfReader {
         st_.dest = Dest::Skip;
         return;
       }
+    if (w == "fldinst") {
+      st_.dest = Dest::FieldCode;
+      fieldCode_.clear();
+      return;
+    }
+    if (w == "fldrslt") {
+      // A HYPERLINK field's result is the link's text.
+      st_.dest = Dest::Text;
+      L.link = LinkOfField(fieldCode_);
+      b_.look = L;
+      return;
+    }
     if (w == "fonttbl") st_.dest = Dest::Fonts;
     else if (w == "colortbl") st_.dest = Dest::Colors, colorHas_ = false, red_ = green_ = blue_ = 0;
     else if (w == "stylesheet") st_.dest = Dest::Styles;
@@ -767,6 +824,43 @@ class RtfReader {
     else if (w == "enspace") Char(0x2002);
     else if (w == "qmspace") Char(0x2005);
     b_.look = L;
+  }
+
+  // HYPERLINK "address" or HYPERLINK \l "bookmark", with other switches around them.
+  static std::string LinkOfField(std::string_view code) {
+    code = TrimView(code);
+    if (code.size() < 9 || !SameNoCase(code.substr(0, 9), "HYPERLINK")) return {};
+    code.remove_prefix(9);
+    bool anchor = false, skipNext = false;
+    while (!code.empty()) {
+      code = TrimView(code);
+      if (code.empty()) break;
+      std::string token;
+      if (code[0] == '"') {
+        size_t end = code.find('"', 1);
+        if (end == std::string_view::npos) end = code.size();
+        token = std::string(code.substr(1, end - 1));
+        code.remove_prefix(std::min(code.size(), end + 1));
+      } else {
+        size_t end = code.find_first_of(" \t");
+        token = std::string(code.substr(0, end));
+        code.remove_prefix(end == std::string_view::npos ? code.size() : end);
+        if (token == "\\l") {
+          anchor = true;
+          continue;
+        }
+        if (!token.empty() && token[0] == '\\') {
+          skipNext = true;  // \o "tooltip", \t "frame": their argument isn't the address
+          continue;
+        }
+      }
+      if (skipNext) {
+        skipNext = false;
+        continue;
+      }
+      return SafeLink(anchor ? "#" + token : token, true);
+    }
+    return {};
   }
 
   static int HeadingOf(const std::string& style) {
@@ -850,6 +944,7 @@ class RtfReader {
         if (st_.hidden) return;
         b_.Text(t);
         return;
+      case Dest::FieldCode: AppendUtf8(fieldCode_, t); return;
     }
   }
 
@@ -877,7 +972,7 @@ class RtfReader {
   Builder b_;
   State st_;
   std::vector<State> stack_;
-  std::string bytes_, entry_;
+  std::string bytes_, entry_, fieldCode_;
   int skip_ = 0;
   size_t overflow_ = 0;  // groups open beyond kMaxDepth
   uint32_t codePage_ = 1252;
@@ -994,6 +1089,11 @@ std::string ToHtml(const Clip& clip) {
       }
       if (!Automatic(r.color)) rc += ";color:#" + Hex6(*r.color);
       if (!r.font.empty()) rc += ";font-family:'" + r.font + "'";
+      if (!r.link.empty()) {
+        frag += "<a";
+        Attr(frag, "href", r.link);
+        frag += ">";
+      }
       frag += "<span";
       Attr(frag, "style", rc);
       if (!r.charStyle.empty()) Attr(frag, "data-fw-cstyle", r.charStyle);
@@ -1001,6 +1101,7 @@ std::string ToHtml(const Clip& clip) {
       frag += ">";
       HtmlText(frag, text);
       frag += "</span>";
+      if (!r.link.empty()) frag += "</a>";
     };
     if (!p.label.empty()) span(p.runs.empty() ? ClipRun{} : p.runs.front(), p.label + u"\t", true);
     for (const ClipRun& r : p.runs) span(r, r.text, false);
@@ -1324,6 +1425,7 @@ class HtmlReader {
       else if (an == "data-fw-ilvl") props.ilvl = std::atoi(av.c_str());
       else if (an == "data-fw-cstyle") L.charStyle = av;
       else if (an == "data-fw-label") f.label = true;
+      else if (an == "href" && name == "a") L.link = SafeLink(av, own_);
       else if (an == "hidden") f.skip = true;
     }
     f.align = props.align;
