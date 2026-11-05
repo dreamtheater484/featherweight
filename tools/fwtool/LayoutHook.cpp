@@ -288,6 +288,29 @@ bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>
         ms = key(caret, [&] { return editor.Undo(); });
         if (ms >= 0) place.format.push_back(ms);
       }
+      // Page setup: every section's left and right margins a quarter inch wider, then undone.
+      for (int step = 0; step < 2; ++step) {
+        const auto start = std::chrono::steady_clock::now();
+        edit::Result r;
+        if (step == 0) {
+          const fw::doc::SectionProps& first = doc->Sections().front().props;
+          edit::PageSetup wider;
+          wider.left = fw::Twips(first.marginStart.Value() + 360);
+          wider.right = fw::Twips(first.marginEnd.Value() + 360);
+          r = edit::SetPageSetup(editor, 0, static_cast<uint32_t>(doc->Sections().size() - 1), wider);
+        } else {
+          r = editor.Undo();
+        }
+        if (!r) continue;
+        const auto at = layout.CaretAt({caret.para, caret.offset});
+        const size_t page = at ? at->page : 0;
+        layout.LayOutPages(page + 2);
+        painter.Paint(layout, page);
+        place.page.push_back(Since(start));
+        while (layout.Continue(50)) {
+        }
+        place.pageAll.push_back(Since(start));
+      }
       places.push_back(std::move(place));
     }
   }

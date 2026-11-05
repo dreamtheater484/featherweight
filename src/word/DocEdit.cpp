@@ -96,6 +96,22 @@ bool DocView::Apply(const Result& r) {
   return true;
 }
 
+bool DocView::ApplyPageChange(const Result& r) {
+  SyncFile();
+  if (!r) {
+    if (!r.message.empty()) host_.ViewMessage(BannerKind::Warning, std::wstring(r.message.begin(), r.message.end()));
+    return false;
+  }
+  // Every page may move: those on screen now, the rest in idle time (IdleWork), shown as they
+  // were until then. The caret and the selection stay, drawn once their pages are laid out.
+  pagination_->LayOutPages(static_cast<size_t>(std::max(currentPage_, 0)) + 2);
+  TakeNewPages();
+  caretRevision_ = UINT32_MAX;
+  host_.ViewStateChanged();
+  host_.ViewInvalidate();
+  return true;
+}
+
 void DocView::TypeText(std::u16string_view text) {
   if (text.empty()) return;
   if (HasSelection() && table_ && table_->ReplaceCells(text)) return;  // cells selected: they're replaced
@@ -387,7 +403,7 @@ const std::optional<layout::Layout::Caret>& DocView::CaretBox() {
 }
 
 std::optional<RECT> DocView::CaretRect() {
-  if (!Editing() || !keyFocus_) return std::nullopt;
+  if (!Editing() || !keyFocus_ || !pagination_->LaidOut(focus_)) return std::nullopt;
   const auto& box = CaretBox();
   if (!box || box->page >= static_cast<size_t>(PageCount())) return std::nullopt;
   const D2D1_RECT_F r = PageRectToScreen(static_cast<int>(box->page), {box->x, box->top, box->x, box->bottom});
@@ -399,7 +415,8 @@ void DocView::DrawCaret(Canvas& c, int first, int last) {
   if (!Editing() || !keyFocus_ || HasSelection()) return;
   const bool on = caret::On(caretStart_) || anim::Now() - caretStart_ > kBlinkFor;
   if (blinking_ && anim::Now() - caretStart_ > kBlinkFor) StopBlinking();
-  if (!on) return;
+  // After a change of the page, the caret shows once idle time has laid out its page again.
+  if (!on || !pagination_->LaidOut(focus_)) return;
   const auto& box = CaretBox();
   if (!box) return;
   const int page = static_cast<int>(box->page);

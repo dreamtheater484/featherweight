@@ -165,6 +165,26 @@ enum Cmd : int {
   CmdTableDistributeColumns,
   CmdTableHeaderRow,
   CmdTableProperties,
+  // Documents: page layout (D3).
+  CmdPageSetup = 1250,  // the Page setup panel
+  CmdLayoutBox,         // the toolbar's Layout menu
+  CmdPortrait,
+  CmdLandscape,
+  CmdMarginsNormal,     // Word's presets
+  CmdMarginsNarrow,
+  CmdMarginsModerate,
+  CmdMarginsWide,
+  CmdColumnsOne,
+  CmdColumnsTwo,
+  CmdColumnsThree,
+  CmdPageBreak,         // Ctrl+Enter
+  CmdColumnBreak,       // Ctrl+Shift+Enter
+  CmdSectionNextPage,
+  CmdSectionContinuous,
+  CmdSectionEvenPage,
+  CmdSectionOddPage,
+  CmdDeleteSectionBreak,
+  CmdHyphenation,       // automatic hyphenation on or off
   // Proofing in Word documents.
   CmdSpelling = 800,  // F7: the next spelling error
   CmdWordCount,
