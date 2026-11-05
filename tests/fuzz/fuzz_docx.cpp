@@ -6,6 +6,7 @@
 // An input is a zip, or parts as text as fuzz_check reads them: each part starts on a line
 // "@<part name>", and the rest of the input up to the next such line is its content.
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <span>
 #include <string>
@@ -123,7 +124,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     std::string_view original(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     Check(CanonicalizeXml(original, before, limits, part.name).Ok());
     Check(CanonicalizeXml(out, after, limits, part.name).Ok());
-    Check(before == after);
+    if (before != after) {
+      // Where they part, for the report.
+      size_t at = 0;
+      while (at < before.size() && at < after.size() && before[at] == after[at]) ++at;
+      const size_t from = at > 80 ? at - 80 : 0;
+      std::fprintf(stderr, "%s differs after canonicalization at %zu:\n  read:    %s\n  written: %s\n",
+                   part.name.c_str(), at, before.substr(from, 200).c_str(), after.substr(from, 200).c_str());
+      std::abort();
+    }
   }
   return 0;
 }
