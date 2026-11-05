@@ -37,7 +37,7 @@ inline std::string DocumentXml(std::string_view body) {
 struct Fixture {
   std::string body;         // inside w:body
   std::string documentXml;  // the whole main part, instead of body
-  std::string styles, numbering, settings, comments, footnotes;
+  std::string styles, numbering, settings, comments, footnotes, commentsExtended;
 
   std::vector<uint8_t> Bytes() const {
     struct Part {
@@ -60,6 +60,8 @@ struct Fixture {
     add("word/settings.xml", wml + "settings+xml", rel + "settings", "w:settings", settings);
     add("word/comments.xml", wml + "comments+xml", rel + "comments", "w:comments", comments);
     add("word/footnotes.xml", wml + "footnotes+xml", rel + "footnotes", "w:footnotes", footnotes);
+    add("word/commentsExtended.xml", wml + "commentsExtended+xml",
+        "http://schemas.microsoft.com/office/2011/relationships/commentsExtended", "w15:commentsEx", commentsExtended);
     std::string types =
         "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
         "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"

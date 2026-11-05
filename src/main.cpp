@@ -57,7 +57,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int showCommand) {
     } else if (a == L"--scale") opts.snapshotScale = static_cast<float>(_wtof(next().c_str()));
     else if (a == L"--theme") opts.snapshotTheme = next();
     else if (a == L"--invert") opts.snapshotInvert = true;
-    else if (a == L"--script") opts.script = next();
+    else if (a == L"--script") {
+      opts.script = next();
+      // --script @file: a script too long for a command line, in UTF-8.
+      std::string bytes;
+      if (!opts.script.empty() && opts.script[0] == L'@' && util::ReadFileBytes(opts.script.substr(1), bytes))
+        opts.script = fw::Utf8ToWide(bytes);
+    }
 #if FW_TEST_SCREENS
     else if (a == L"--widget-gallery") opts.widgetGallery = true;
 #endif

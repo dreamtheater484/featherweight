@@ -164,6 +164,11 @@ class App : public PdfHost, public DropHost {
   // Keyboard focus and UI Automation
   // The keyboard moved between the window's own boxes and the tab: the tab shows or hides its focus.
   void KeyFocusMoved();
+  // The system caret (never shown: Featherweight draws its own) and the input method's windows
+  // follow the text caret, so IMEs, dictation and the emoji panel, through TSF's support for
+  // IMM32 windows, open beside it and type into it as WM_CHAR. After painting, and when focus
+  // or a composition starts.
+  void SyncInputCaret(bool force = false);
   // What UI Automation sees (AppUia.cpp).
   void DescribeUia(uia::Tree& t);
   void OpenGallery();
@@ -260,6 +265,8 @@ class App : public PdfHost, public DropHost {
   bool mouseTracked_ = false;
   bool ncMouseTracked_ = false;
   TextBox* focusBox_ = nullptr;
+  bool inputCaret_ = false;  // the system caret exists
+  RECT inputCaretAt_{};
   double caretStart_ = 0;
   std::wstring tipText_;
   POINT lastMouse_{-1, -1};

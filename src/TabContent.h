@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -116,6 +117,9 @@ class TabContent {
   // The window took the keyboard for its own boxes (find, a toolbar control), or gave it back.
   // A tab with focusable parts hides or shows its focus.
   virtual void SetKeyFocus(bool /*has*/) {}
+  // The text caret, in client pixels, while the tab has one with key focus: where input methods,
+  // dictation and the emoji panel open.
+  virtual std::optional<RECT> CaretRect() { return std::nullopt; }
 
   // ---- Commands ----
   // The command a key runs in this kind of tab, or 0. Ctrl+I can mean night reading in a PDF and
