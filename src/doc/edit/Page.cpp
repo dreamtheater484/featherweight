@@ -29,6 +29,14 @@ Result Fail(std::u16string why) {
   return r;
 }
 
+// Ends the editor group a change began, however it returns; with `cancel`, undoing what the group
+// did so far (a change refused halfway leaves nothing behind).
+struct GroupEnd {
+  Editor& ed;
+  bool cancel = false;
+  ~GroupEnd() { cancel ? ed.CancelGroup() : ed.EndGroup(); }
+};
+
 // The section's w:sectPr; the last section's is made at the end of the body when it has none.
 ElemId SectPrOf(TreeEdit& ed, uint32_t section) {
   const Document& doc = ed.Doc();
@@ -280,10 +288,7 @@ Result InsertSectionBreak(Editor& editor, Pos at, SectionStart start) {
     return Fail(u"A section break can't go in a table or a content control. Put it before or after it.");
 
   editor.BeginGroup(u"Section break");
-  struct Ender {
-    Editor& ed;
-    ~Ender() { ed.EndGroup(); }
-  } ender{editor};
+  GroupEnd ender{editor};
   Result split = editor.SplitParagraph(at);
   if (!split) return split;
   const uint32_t a = at.para, b = split.caret.para;  // the halves
@@ -303,6 +308,10 @@ Result InsertSectionBreak(Editor& editor, Pos at, SectionStart start) {
       ed.RemoveAttr(ed.Child(rest, kPgNumType), Name("start"));
   }
   ed.Commit();
+  if (!ed.Refused().empty()) {
+    ender.cancel = true;  // the split too
+    return Fail(ed.Refused());
+  }
   Result r;
   r.caret = split.caret;
   return r;
@@ -318,10 +327,7 @@ Result DeleteSectionBreak(Editor& editor, uint32_t section) {
   const uint32_t next = editor.NextPara(para);
   // A break with text before it: its mark stays, as a paragraph mark.
   editor.BeginGroup(u"Delete section break");
-  struct Ender {
-    Editor& ed;
-    ~Ender() { ed.EndGroup(); }
-  } ender{editor};
+  GroupEnd ender{editor};
   const KeptRefs kept = KeptReferences(doc, {para});
   TreeEdit ed(editor, {para, 0});
   ed.Begin(u"Delete section break");
@@ -330,6 +336,7 @@ Result DeleteSectionBreak(Editor& editor, uint32_t section) {
   for (const std::string& xml : kept.xml) ed.AddXml(kept.sectPr, xml);
   ed.Remove(ed.Child(doc.Para(para).elem, kPPr), kSectPr);
   ed.Commit();
+  if (!ed.Refused().empty()) return Fail(ed.Refused());  // put back: nothing changed
   // An empty paragraph held only the break: it goes too, when a paragraph follows it.
   Result r;
   r.caret = {para, 0};
@@ -343,10 +350,13 @@ Result DeleteSectionBreak(Editor& editor, uint32_t section) {
 Result InsertBreak(Editor& editor, Pos at, bool column) {
   std::u16string why;
   if (!editor.CanEdit(&why)) return Fail(why);
+  // The break, then the paragraph split after it; where it can't be split (in a field's result),
+  // the break comes out again (d1-corpus torture finding 26).
   editor.BeginGroup(column ? u"Column break" : u"Page break");
+  GroupEnd ender{editor};
   Result r = editor.InsertText(at, std::u16string(1, column ? char16_t(0x0E) : char16_t(0x0C)));
   if (r) r = editor.SplitParagraph(r.caret);
-  editor.EndGroup();
+  ender.cancel = !r;
   return r;
 }
 
