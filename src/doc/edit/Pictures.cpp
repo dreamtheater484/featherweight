@@ -950,6 +950,14 @@ Result Pictures::MoveInline(uint32_t drawing, Pos to) {
   if (!Load(editor_, drawing, f, why)) return Fail(why);
   if (pkg::LocalNameOf(f.root) != "inline") return Fail(u"Drag a floating picture to place it.");
   Pos was = doc.Drawings()[drawing].pos;
+  if (to.para >= doc.Paragraphs().size()) return Fail(u"That place isn't in the document.");
+  // Its r:embed names a relationship of its own part: it stays in that part (the main text, a
+  // header or footer, the notes), and out of text boxes, as Insert does.
+  const Story& from = doc.Stories()[doc.Para(was.para).story];
+  const Story& into = doc.Stories()[doc.Para(to.para).story];
+  if (into.part != from.part)
+    return Fail(u"A picture can't be moved between the main text, a header or footer, and the notes. Copy it and paste it there.");
+  if (into.drawing != kNone) return Fail(u"A picture can't go here.");
   if (to.para == was.para && (to.offset == was.offset || to.offset == was.offset + 1)) {
     Result r;
     r.caret = was;
