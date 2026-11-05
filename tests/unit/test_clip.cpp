@@ -198,8 +198,8 @@ TEST(Clip_HostileCopiesAreCapped) {
   CHECK(!edit::FromRtf("{\\rtf1 " + std::string(64u << 20, 'x') + "}"));
   CHECK(!edit::FromHtml("<p>" + std::string(64u << 20, 'x')));
   CHECK(!edit::FromRtf("{\\rtf1 " + std::string((8u << 20) + 1, 'x') + "}"));
-  CHECK(!edit::FromRtf("{\\rtf1 " + Repeat("\\par ", 100001) + "}"));
-  CHECK(!edit::FromRtf("{\\rtf1 " + Repeat("{\\b x}{x}", 100001) + "}"));
+  CHECK(!edit::FromRtf("{\\rtf1 " + Repeat("\\par ", 10001) + "}"));
+  CHECK(!edit::FromRtf("{\\rtf1 " + Repeat("{\\b x}{x}", 20001) + "}"));
   CHECK(!edit::FromRtf("{\\rtf1 " + Repeat("{}", (4u << 20) + 1) + "}"));
   auto many = edit::FromRtf("{\\rtf1 " + Repeat("\\par ", 1000) + "}");
   CHECK(many && many->paras.size() == 1001);

@@ -17,9 +17,10 @@ namespace {
 // Small helpers
 
 // Pasted RTF and HTML are untrusted. Beyond these the readers give nothing, and pasting takes the
-// clipboard's plain text instead.
-constexpr size_t kMaxInput = 64u << 20;                                         // bytes
-constexpr size_t kMaxParas = 100000, kMaxRuns = 200000, kMaxText = 8u << 20;  // text in UTF-16 units
+// clipboard's plain text instead. Formatting costs the editor a step a run: 10,000 paragraphs of
+// 40,000 runs, each with a look of its own, take about 4 s to paste (plain text: under 1 s).
+constexpr size_t kMaxInput = 64u << 20;                                       // bytes
+constexpr size_t kMaxParas = 10000, kMaxRuns = 40000, kMaxText = 8u << 20;  // text in UTF-16 units
 constexpr size_t kMaxGroups = 4u << 20;  // RTF groups and HTML elements opened
 // Longer names and addresses are left out.
 constexpr size_t kMaxName = 63;     // a font's name in UTF-8 (Word's have at most 31 characters)
