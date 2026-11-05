@@ -22,6 +22,7 @@
 #include "ui/Icons.h"
 #include "ui/Menu.h"
 #include "ui/Theme.h"
+#include "pkg/Backups.h"
 #include "word/DocView.h"
 
 #pragma comment(lib, "imm32.lib")
@@ -74,6 +75,7 @@ int App::Run(const AppOptions& opts) {
   if (!snapshot_ && !sandbox_) Updater::CleanupOldFiles();
 
   if (!CreateMainWindow(opts)) return 1;
+  InitFiles(!snapshot_ && !opts.widgetGallery && !sandbox_);
   if (snapshot_) return RunSnapshot(opts);
 
   OpenFiles(opts.files);
@@ -82,6 +84,7 @@ int App::Run(const AppOptions& opts) {
     RunScript(opts.script);  // the UI checks' recent files (the gallery's settings are sandboxed)
   } else if (!sandbox_) {
     StartupNotices();
+    OfferRecovery();  // after the notices: unsaved work matters more
   }
   Layout();
   int show = settings_.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
@@ -476,6 +479,7 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ACTIVATE:
       windowActive_ = LOWORD(wp) != WA_INACTIVE;
       if (!windowActive_) HideTooltip();
+      else if (!snapshot_) CheckActiveFile();
       InvalidateRect(hwnd_, nullptr, FALSE);
       break;
     case WM_PAINT: {
@@ -661,6 +665,9 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
           Idle();
           if (anim::Running()) InvalidateRect(hwnd_, nullptr, FALSE);
           break;
+        case kTimerAutosave:
+          AutosaveAll();
+          break;
         case kTimerCursorHide:
           if (presentation_ && anim::Now() - lastMouseMove_ > 2000) SetCursor(nullptr);
           break;
@@ -714,6 +721,7 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       tooltip_.Destroy();
       panel_.Show(nullptr, false);
       tabs_.clear();
+      DocFile::RecoverySession().End();  // a clean exit leaves nothing to recover
       DestroyWindow(hwnd_);
       return 0;
     }
@@ -1184,6 +1192,9 @@ int App::AppShortcut(UINT vk, UINT mods) {
   if (ctrl) {
     switch (vk) {
       case 'O': return CmdOpen;
+      case 'N':
+        if (fw::EditorShipped(fw::FileKind::Document)) return CmdNewFile + static_cast<int>(fw::FileKind::Document);
+        break;
       case 'S': return shift ? CmdSaveAs : CmdSave;
       case 'P': return CmdPrint;
       case 'W':
@@ -1212,7 +1223,8 @@ void App::Execute(int cmd) {
     return;
   }
   if (cmd >= CmdNewFile && cmd < CmdNewFile + fw::kFileKindCount) {
-    // A new document, workbook or presentation comes with that kind's editor; none has shipped yet.
+    // A new document, workbook or presentation comes with that kind's editor.
+    if (cmd - CmdNewFile == static_cast<int>(fw::FileKind::Document)) NewDocument();
     return;
   }
   if (const int act = cmd - CmdBannerAction; act >= kActMakeDefault && act < kActMakeDefault + fw::kFileKindCount) {
@@ -1233,6 +1245,9 @@ void App::Execute(int cmd) {
         settings_.Save();
         break;
       case kActSaveAs: SaveActive(true); break;
+      case kActRecover: RecoverDocuments(true); break;
+      case kActDiscard: RecoverDocuments(false); break;
+      case kActReload: ReloadActive(); break;
       default: break;
     }
     InvalidateRect(hwnd_, nullptr, FALSE);
@@ -1248,6 +1263,8 @@ void App::Execute(int cmd) {
       break;
     case CmdSave: SaveActive(false); break;
     case CmdSaveAs: SaveActive(true); break;
+    case CmdRestoreOriginal: RestoreOriginal(); break;
+    case CmdDeleteBackups: DeleteBackups(); break;
     case CmdPrint: PrintActive(); break;
     case CmdCloseTab:
       if (active_ >= 0) CloseTab(active_);
@@ -1363,6 +1380,8 @@ void App::ShowMenu(int which) {
     }
     AppendSubmenu(m, recent, L"Open recent", !settings_.recent.empty());
     AppendItem(m, CmdSaveAs, L"Save as…\tCtrl+Shift+S", ready);
+    if (ready && v->Kind() == TabKind::Document && !v->Path().empty())
+      AppendItem(m, CmdRestoreOriginal, L"Restore original", !LatestBackup().empty());
     AppendItem(m, CmdPrint, L"Print…\tCtrl+P", ready && v->CanPrint());
     AppendSeparator(m);
     AppendItem(m, CmdPresentation, L"Present\tF5", ready);
@@ -1375,6 +1394,7 @@ void App::ShowMenu(int which) {
     AppendSubmenu(m, themeMenu, L"App theme");
     AppendItem(m, CmdToggleHighlight, L"Highlight form fields", true, settings_.highlightFields);
     AppendSeparator(m);
+    if (fw::pkg::backups::Any(DocFile::Config().backups)) AppendItem(m, CmdDeleteBackups, L"Delete backups");
     AppendItem(m, CmdToggleAutoUpdate, L"Update automatically", true, settings_.autoUpdate);
     AppendItem(m, CmdCheckUpdates, L"Check for updates now");
     if (!fileassoc::IsDefault()) AppendItem(m, CmdMakeDefault, L"Make Featherweight the default PDF app");
@@ -1581,6 +1601,7 @@ void App::ActivateTab(int index) {
   Layout();
   std::wstring title = v->Title() + L" – Featherweight";
   SetWindowTextW(hwnd_, title.c_str());
+  if (!snapshot_) CheckActiveFile();
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -1623,6 +1644,7 @@ bool App::CloseTab(int index) {
   if (index == active_ && search_.IsOpen()) CloseSearch();
   if (index == active_) panel_.Show(nullptr, false);
   tabs_.erase(tabs_.begin() + index);
+  UpdateAutosaveTimer();
   if (tabs_.empty()) {
     active_ = -1;
     SetWindowTextW(hwnd_, L"Featherweight");
@@ -1644,10 +1666,11 @@ void App::RememberState(TabContent* view) {
 bool App::SaveActive(bool saveAs) {
   TabContent* v = Active();
   if (!v || !v->Ready()) return false;
-  if (!saveAs && !v->Modified()) return true;
+  if (!saveAs && !v->Modified() && !v->Path().empty()) return true;
   std::wstring path = v->Path();
+  if (path.empty()) saveAs = true;  // a new or recovered document
   if (saveAs) {
-    path = SaveDialog(v->Path(), v->SaveAsFormat());
+    path = SaveDialog(v->SuggestedSavePath(), v->SaveAsFormat());
     if (path.empty()) return false;
   }
   std::wstring error;
@@ -1665,7 +1688,7 @@ bool App::SaveActive(bool saveAs) {
     banner_.Show(BannerKind::Warning, error + L" Choose another place to save it.");
     InvalidateRect(hwnd_, nullptr, FALSE);
     UpdateWindow(hwnd_);
-    path = SaveDialog(v->Path(), v->SaveAsFormat());
+    path = SaveDialog(v->SuggestedSavePath(), v->SaveAsFormat());
     if (!path.empty() && v->Save(path, error)) {
       settings_.AddRecent(v->Path());
       settings_.Save();
@@ -1798,6 +1821,7 @@ void App::ViewInvalidate() {
 }
 
 void App::ViewStateChanged() {
+  UpdateAutosaveTimer();
   if (hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
 }
 

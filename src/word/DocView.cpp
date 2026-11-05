@@ -10,6 +10,7 @@
 #include "Commands.h"
 #include "Util.h"
 #include "core/Strings.h"
+#include "doc/docx/Blank.h"
 #include "doc/docx/Docx.h"
 #include "draw/D2DPainter.h"
 #include "draw/PrintJob.h"
@@ -140,6 +141,23 @@ std::wstring OpenError(const std::wstring& name, const fw::pkg::Status& st) {
 
 DocView::DocView(ViewHost& host, std::wstring path) : PagedView(host), path_(std::move(path)) {}
 
+std::unique_ptr<DocView> DocView::NewDocument(ViewHost& host, int number) {
+  auto view = std::make_unique<DocView>(host, L"");
+  const DocFile::Setup& setup = DocFile::Config();
+  view->bytes_ = fw::doc::docx::BlankDocx(
+      {fw::WideToUtf8(setup.language.empty() ? L"en-US" : setup.language), setup.a4, fw::WideToUtf8(setup.user)});
+  view->file_.New(number);
+  return view;
+}
+
+std::unique_ptr<DocView> DocView::FromBytes(ViewHost& host, std::vector<uint8_t> bytes, std::wstring title,
+                                            std::wstring suggested, bool unsaved) {
+  auto view = std::make_unique<DocView>(host, L"");
+  view->bytes_ = std::move(bytes);
+  view->file_.Copy(std::move(title), std::move(suggested), unsaved);
+  return view;
+}
+
 DocView::~DocView() {
   drawings_.clear();  // pictures read from the document's package
   images_.reset();
@@ -148,7 +166,7 @@ DocView::~DocView() {
   doc_.reset();
 }
 
-std::wstring DocView::Title() const { return fw::FileNameOf(path_); }
+std::wstring DocView::Title() const { return path_.empty() ? file_.Title() : fw::FileNameOf(path_); }
 
 // ---------------------------------------------------------------------------
 // Loading
@@ -157,7 +175,7 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
   const std::wstring name = Title();
   // Password-protected Office files aren't zip packages but OLE compound files with the
   // encrypted package inside.
-  {
+  if (bytes_.empty()) {
     std::string head;
     HANDLE f = CreateFileW(path_.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -178,7 +196,9 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
   fw::pkg::Snapshot::Options options;
   wchar_t temp[MAX_PATH + 1] = {};
   if (GetTempPathW(MAX_PATH + 1, temp)) options.recoveryDir = std::wstring(temp) + L"Featherweight";
-  auto snapshot = fw::pkg::Snapshot::Open(path_, options, st);
+  auto snapshot = bytes_.empty() ? fw::pkg::Snapshot::Open(path_, options, st)
+                                 : fw::pkg::Snapshot::FromBytes(std::move(bytes_));
+  bytes_.clear();
   std::unique_ptr<fw::pkg::Package> package =
       snapshot ? fw::pkg::Package::Open(std::move(snapshot), fw::pkg::Limits::Default(), st) : nullptr;
   std::unique_ptr<fw::doc::Document> doc = package ? fw::doc::docx::Read(std::move(package), st) : nullptr;
@@ -187,6 +207,7 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     return OpenResult::Failed;
   }
   doc_ = std::move(doc);
+  if (!path_.empty()) file_.Opened(path_, doc_->Package().GetSnapshot().GetStamp());
 
   // Fonts this PC doesn't have: the family Word draws instead, from the document's font table.
   // The document outlives the fonts (members are destroyed in reverse order).
@@ -328,6 +349,11 @@ bool DocView::TakeNewPages() {
 
 void DocView::ShowNotices() {
   noticesShown_ = true;
+  // Someone else editing the file matters most: changes can only be saved as a copy.
+  if (std::wstring inUse = file_.InUseMessage(); !inUse.empty()) {
+    host_.ViewMessage(BannerKind::Warning, inUse);
+    return;
+  }
   // Content that isn't drawn comes first: the banner is one line, and a long font list is cut.
   std::wstring text;
   bool equations = false, ink = false;
@@ -964,14 +990,23 @@ SaveFormat DocView::SaveAsFormat() const {
 }
 
 bool DocView::Save(const std::wstring& path, std::wstring& error) {
-  // The file exactly as it was opened (the snapshot), so a copy never differs from the original.
-  const auto& snapshot = doc_->Package().GetSnapshot();
-  std::string bytes(static_cast<size_t>(snapshot.Size()), '\0');
-  if (!snapshot.ReadAt(0, bytes.data(), bytes.size()) || !util::WriteFileAtomic(path, bytes)) {
-    error = L"The copy couldn't be saved.";
-    return false;
-  }
+  if (!doc_) return false;
+  if (!file_.Save(*doc_, path, error)) return false;
+  path_ = file_.Path();
+  host_.ViewStateChanged();
   return true;
+}
+
+std::wstring DocView::SuggestedSavePath() const { return doc_ ? file_.SuggestedPath(*doc_) : path_; }
+
+void DocView::Autosave() {
+  if (doc_) file_.Autosave(*doc_);
+}
+
+void DocView::NoteEdit(uint32_t part) {
+  const bool first = !file_.Dirty();
+  file_.Edited(part);
+  if (first) host_.ViewStateChanged();  // the tab's dot, Save, the autosave timer
 }
 
 PrintOutcome DocView::Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) {
@@ -1137,7 +1172,7 @@ int DocView::Shortcut(UINT vk, UINT mods) {
 CommandState DocView::QueryCommand(int cmd) {
   CommandState s;
   switch (cmd) {
-    case CmdSave: s = {false, false}; break;  // read-only until D2; Save as makes a copy
+    case CmdSave: s = {Ready() && (Modified() || path_.empty()), false}; break;
     case CmdPrint: s = {Ready(), false}; break;
     case CmdCopy: s = {Ready() && HasSelection(), false}; break;
     case CmdSelectAll: s = {Ready(), false}; break;
@@ -1184,10 +1219,10 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
     t.tooltip = tooltip;
     return t;
   };
-  ToolItem save = item(CmdSave, icon::Save, L"Documents are read-only for now; Save as makes a copy");
-  save.enabled = false;
+  ToolItem save = item(CmdSave, icon::Save);
+  save.enabled = QueryCommand(CmdSave).enabled;
   save.joinNext = true;
-  ToolItem saveAs = item(CmdSaveMenu, icon::ChevronDown, L"Save a copy as… (Ctrl+Shift+S)");
+  ToolItem saveAs = item(CmdSaveMenu, icon::ChevronDown, L"Save as… (Ctrl+Shift+S)");
   saveAs.width = 18;
   saveAs.glyphSize = 9;
   ToolItem print = item(CmdPrint, icon::Print);

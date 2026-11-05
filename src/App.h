@@ -11,6 +11,7 @@
 #include "Settings.h"
 #include "TabContent.h"
 #include "Updater.h"
+#include "pkg/Recovery.h"
 #include "pdf/NoteEditor.h"
 #include "pdf/PdfView.h"
 #include "ui/Banner.h"
@@ -153,6 +154,24 @@ class App : public PdfHost, public DropHost {
   void SetPresentation(bool on);
   void SetTheme(ThemeSetting t);
 
+  // Files kept safe (AppFiles.cpp): new documents, crash recovery, changes on disk, backups
+  // Where backups and recovery autosaves go, and who saves; `userFolders` false keeps them off.
+  void InitFiles(bool userFolders);
+  void NewDocument();
+  // At startup: documents a crash left unsaved, offered in a banner.
+  void OfferRecovery();
+  void RecoverDocuments(bool open);  // Recover, or Discard
+  // The window or a tab was activated: did the file change on disk?
+  void CheckActiveFile();
+  void ReloadActive();
+  std::wstring LatestBackup() const;  // of the active document, or empty
+  void RestoreOriginal();
+  void DeleteBackups();
+  // The autosave timer runs only while a tab has unsaved changes (no idle wakeups otherwise).
+  void UpdateAutosaveTimer();
+  void AutosaveAll();
+  static constexpr UINT_PTR kTimerAutosave = 5;
+
   // Startup notices and updates
   void StartupNotices();
   // Registers Featherweight and opens Default apps, where the user picks it for this kind of file.
@@ -251,8 +270,16 @@ class App : public PdfHost, public DropHost {
   bool manualUpdateCheck_ = false;
   std::wstring bannerUpdateUrl_;
   std::wstring bannerUpdateVersion_;
-  enum BannerActions { kActUpdate = 1, kActDownload, kActSkip, kActNotNow = 5, kActSaveAs, kActMakeDefault = 20 };
+  enum BannerActions {
+    kActUpdate = 1, kActDownload, kActSkip, kActNotNow = 5, kActSaveAs, kActRecover, kActDiscard, kActReload,
+    kActMakeDefault = 20
+  };
   // (kActMakeDefault + fw::FileKind: the default-app offer for that kind of file)
+
+  // Files
+  std::vector<fw::pkg::recovery::Entry> orphans_;  // offered for recovery
+  int newDocuments_ = 0;
+  bool autosaveTimer_ = false;
 
   // Input state
   Region capture_ = Region::None;

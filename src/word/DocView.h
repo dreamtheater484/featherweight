@@ -13,14 +13,22 @@
 #include "doc/model/Document.h"
 #include "pkg/XmlDom.h"
 #include "text/Fonts.h"
+#include "word/DocFile.h"
 
-// A Word document in a tab, read-only (plan milestone D1): the model, laid out page by page by
+// A Word document in a tab (plan milestones D1, D2): the model, laid out page by page by
 // fw::doc::layout (the first page at once, the rest in idle time), drawn through draw::Painter,
-// with selection and copy, find, links, comments and tracked changes shown, and printing.
+// with selection and copy, find, links, comments and tracked changes shown, and printing. Its
+// file (saving, backups, recovery, changes on disk) is kept by a DocFile.
 class DocView : public PagedView {
  public:
   DocView(ViewHost& host, std::wstring path);
   ~DocView() override;
+  // A new document from the built-in template: "Document <number>".
+  static std::unique_ptr<DocView> NewDocument(ViewHost& host, int number);
+  // A document that isn't its file: a recovered one (`unsaved` changes) or a backup. Save goes to
+  // Save As, starting at `suggested`.
+  static std::unique_ptr<DocView> FromBytes(ViewHost& host, std::vector<uint8_t> bytes, std::wstring title,
+                                            std::wstring suggested, bool unsaved);
 
   // The document viewer's keys.
   static int Shortcut(UINT vk, UINT mods);
@@ -31,7 +39,7 @@ class DocView : public PagedView {
   bool Ready() const override { return pagination_ != nullptr; }
   const std::wstring& Path() const override { return path_; }
   std::wstring Title() const override;
-  bool Modified() const override { return false; }
+  bool Modified() const override { return file_.Dirty(); }
 
   void Draw(gfx::Canvas& c, ID2D1DeviceContext* dc) override;
   bool HasIdleWork() const override;
@@ -67,13 +75,21 @@ class DocView : public PagedView {
   bool SearchDone() const override { return true; }
   std::wstring SelectedText() override;
 
-  // A copy of the file: documents are read-only until D2.
   bool Save(const std::wstring& path, std::wstring& error) override;
   SaveFormat SaveAsFormat() const override;
+  std::wstring SuggestedSavePath() const override;
+  void Autosave() override;
+  FileChange CheckFileOnDisk() override { return Ready() ? static_cast<FileChange>(file_.CheckDisk()) : FileChange::None; }
   bool CanPrint() const override { return Ready(); }
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;
   // Every page to Microsoft Print to PDF, into a file, with no dialog (the visual checks' print step).
   PrintOutcome PrintToFile(const std::wstring& path, std::wstring& message);
+
+  // ---- Editing (D2) ----
+  // Each change to the model, with the index of the part it changed: the tab becomes modified,
+  // and Save writes that part from the model.
+  void NoteEdit(uint32_t part);
+  DocFile& File() { return file_; }
 
   // ---- Text ----
   bool HasSelection() const { return anchor_ != focus_; }
@@ -127,7 +143,9 @@ class DocView : public PagedView {
   void WordAt(TextPos pos, TextPos& from, TextPos& to) const;
   uint32_t StoryOf(TextPos pos) const { return doc_->Para(pos.para).story; }
 
-  std::wstring path_;
+  std::wstring path_;            // the file; empty for a new or recovered document
+  DocFile file_;
+  std::vector<uint8_t> bytes_;   // NewDocument, FromBytes: what Load reads instead of a file
   std::unique_ptr<fw::doc::Document> doc_;
   std::unique_ptr<fw::text::Fonts> fonts_;
   std::unique_ptr<fw::doc::layout::Layout> pagination_;
