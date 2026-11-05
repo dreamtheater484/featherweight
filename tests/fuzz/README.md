@@ -8,6 +8,7 @@ One target per parser (plan §10). So far:
 - `fuzz_check`: `fwtool check`'s path over a package: the reference registry, the consistency checker, the id renewer and the extension query. Seeds: `seeds/package`, corpus files written as text (see below), so the fuzzer can change the XML inside them.
 - `fuzz_formula`: the formula scanner the registry uses (sheet names and cell references), and every other syntax a reference can have. Seeds: `seeds/formula`.
 - `fuzz_docx`: the Word document model (`src/doc`): the reader, what pagination asks of the model (runs, inline items, resolved properties, list labels, fields, tables) and the writer. Seeds: `seeds/docx`, a small hand-written document with every structure the model reads, and `seeds/package`. Inputs are read like `fuzz_check`'s.
+- `fuzz_layout`: pagination (`src/doc/layout`): the document read into the model, laid out a page at a time with the PC's fonts, hit-tested and dumped. Seeds as `fuzz_docx`'s.
 
 `make_seeds.py` makes `seeds/opc`, `seeds/package` and `seeds/formula` from the corpus (standard library only): `python tests/fuzz/make_seeds.py`.
 
@@ -20,6 +21,7 @@ Besides crashes and AddressSanitizer reports, each target aborts when an invaria
 - Relationships and content types that Featherweight writes read back the same.
 - Renaming references and renewing ids leaves a document that still parses.
 - Every part the document model writes back equals what it read, after canonicalization; runs and inline items stay inside their paragraph's text.
+- Pagination ends, within its page cap; every page has a size, and hit tests and carets land on the page and in the text.
 
 ### Packages as text
 

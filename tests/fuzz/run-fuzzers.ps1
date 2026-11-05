@@ -36,6 +36,7 @@ $all = [ordered]@{
   fuzz_check   = @{ Seeds = @("$seeds\package", "$regressions\check"); MaxLen = 65536 }
   fuzz_formula = @{ Seeds = @("$seeds\formula", "$regressions\formula"); MaxLen = 1024 }
   fuzz_docx    = @{ Seeds = @("$seeds\docx", "$seeds\package", "$regressions\docx"); MaxLen = 65536 }
+  fuzz_layout  = @{ Seeds = @("$seeds\docx", "$seeds\package", "$regressions\layout"); MaxLen = 65536 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 
