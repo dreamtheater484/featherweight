@@ -3,6 +3,7 @@
 #include <string>
 
 #include "DocFixture.h"
+#include "doc/edit/Editor.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/Lists.h"
@@ -74,21 +75,52 @@ TEST(Edit_BoldSplitsRunsUndoesAndRedoes) {
   if (!doc) return;
   std::string original = MainXml(*doc);
   uint32_t p = MainParas(*doc)[0];
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ToggleRuns(ed, {{p, 6}, {p, 11}}, edit::Toggle::Bold);
   CHECK(!At(*doc, p, 0).bold && At(*doc, p, 6).bold && At(*doc, p, 10).bold);
   CHECK(At(*doc, p, 0).italic && At(*doc, p, 6).italic);  // the split run keeps its properties
   std::string xml = MainXml(*doc);
   CHECK(Has(xml, "<w:t xml:space=\"preserve\">Hello </w:t>"));
   CHECK(Has(xml, "<w:rPr><w:b/><w:bCs/><w:i/></w:rPr><w:t>world</w:t>"));
-  CHECK(ed.CanUndo() && ed.UndoLabel() == L"Bold");
-  CHECK(ed.Undo());
+  CHECK(editor.CanUndo() && editor.UndoName() == u"Bold");
+  CHECK(editor.Undo());
   CHECK(MainXml(*doc) == original);
   CHECK(!At(*doc, p, 6).bold);
-  CHECK(ed.Redo());
+  CHECK(editor.Redo());
   CHECK(MainXml(*doc) == xml);
   CHECK(At(*doc, p, 6).bold);
-  CHECK(ed.Undo() && MainXml(*doc) == original);
+  CHECK(editor.Undo() && MainXml(*doc) == original);
+}
+
+TEST(Edit_FormattingAndTypingShareOneHistory) {
+  Fixture f;
+  f.styles = kBoldStyle;
+  f.body = "<w:p><w:r><w:t>Hello world</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  std::string original = MainXml(*doc);
+  uint32_t p = MainParas(*doc)[0];
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  edit::ToggleRuns(ed, {{p, 0}, {p, 5}}, edit::Toggle::Bold);
+  CHECK(editor.InsertText({p, 11}, u"!"));
+  editor.BreakTyping();
+  CHECK(editor.InsertText({p, 3}, u"p"));  // inside the bold run
+  CHECK(At(*doc, p, 3).bold && !At(*doc, p, 8).bold);
+  edit::ToggleRuns(ed, {{p, 0}, {p, 13}}, edit::Toggle::Italic);
+  CHECK(doc->Para(p).text == u"Helplo world!" && At(*doc, p, 12).italic);
+  edit::ApplyStyle(ed, {{p, 0}, {p, 0}}, "Strong P");
+  CHECK(!At(*doc, p, 12).italic && At(*doc, p, 12).bold);  // the italic covered it all
+  std::string last = MainXml(*doc);
+  CHECK(editor.Modified() && !editor.DirtyParts().empty());
+  int undone = 0;
+  while (editor.Undo()) ++undone;
+  CHECK(undone == 5 && MainXml(*doc) == original && !editor.Modified());
+  while (editor.Redo()) --undone;
+  CHECK(undone == 0 && MainXml(*doc) == last);
+  CHECK(SaveAndReopen(*doc) != nullptr);
 }
 
 TEST(Edit_PropertiesFollowTheStyles) {
@@ -100,7 +132,8 @@ TEST(Edit_PropertiesFollowTheStyles) {
   CHECK(doc);
   if (!doc) return;
   auto paras = MainParas(*doc);
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   // Unbolding text whose style is bold needs w:b w:val="0".
   edit::ToggleRuns(ed, Whole(*doc, paras[0]), edit::Toggle::Bold);
   CHECK(!At(*doc, paras[0], 0).bold);
@@ -122,7 +155,8 @@ TEST(Edit_SharedPropertySetsAreCopiedFirst) {
   uint32_t p = MainParas(*doc)[0];
   auto runs = doc->Runs(p);
   CHECK(runs.size() == 2 && runs[0].run.Child(Name("rPr")).FirstChild() == runs[1].run.Child(Name("rPr")).FirstChild());
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ToggleRuns(ed, {{p, 3}, {p, 6}}, edit::Toggle::Bold);
   CHECK(!At(*doc, p, 0).bold && At(*doc, p, 3).bold);
   CHECK(At(*doc, p, 0).italic && At(*doc, p, 3).italic);
@@ -135,7 +169,8 @@ TEST(Edit_TogglesFollowTheWholeRange) {
   CHECK(doc);
   if (!doc) return;
   uint32_t p = MainParas(*doc)[0];
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   CHECK(!edit::StateOf(*doc, Whole(*doc, p)).bold);
   edit::ToggleRuns(ed, Whole(*doc, p), edit::Toggle::Bold);  // mixed: all on
   CHECK(At(*doc, p, 0).bold && At(*doc, p, 7).bold && edit::StateOf(*doc, Whole(*doc, p)).bold);
@@ -150,7 +185,7 @@ TEST(Edit_TogglesFollowTheWholeRange) {
   CHECK(At(*doc, p, 3).vertAlign == VertAlign::Subscript);
   // Undo walks back through every step.
   int undone = 0;
-  while (ed.Undo()) ++undone;
+  while (editor.Undo()) ++undone;
   CHECK(undone == 5);
   CHECK(At(*doc, p, 7).bold && !At(*doc, p, 0).bold && At(*doc, p, 3).vertAlign == VertAlign::Baseline);
 }
@@ -162,7 +197,8 @@ TEST(Edit_FontSizeColorHighlight) {
   CHECK(doc);
   if (!doc) return;
   uint32_t p = MainParas(*doc)[0];
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::RunFormat fmt;
   fmt.font = "Georgia";
   fmt.size = HalfPoints(28);
@@ -194,7 +230,8 @@ TEST(Edit_UnknownPropertiesAreKept) {
   CHECK(doc);
   if (!doc) return;
   uint32_t p = MainParas(*doc)[0];
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ToggleRuns(ed, Whole(*doc, p), edit::Toggle::Bold);
   edit::ParaFormat center;
   center.jc = Justification::Center;
@@ -213,7 +250,8 @@ TEST(Edit_ParagraphFormatting) {
   CHECK(doc);
   if (!doc) return;
   auto paras = MainParas(*doc);
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   // From inside the first paragraph to the start of the third: two paragraphs.
   edit::Range r{{paras[0], 1}, {paras[2], 0}};
   CHECK(edit::ParagraphsOf(*doc, r).size() == 2);
@@ -261,7 +299,8 @@ TEST(Edit_MarksFollowWhenCovered) {
   CHECK(doc);
   if (!doc) return;
   auto paras = MainParas(*doc);
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ToggleRuns(ed, {{paras[0], 0}, {paras[1], 3}}, edit::Toggle::Bold);
   CHECK(doc->ResolvedMark(paras[0]).bold);    // covered: the selection goes past its end
   CHECK(!doc->ResolvedMark(paras[1]).bold);   // the last paragraph's mark isn't
@@ -286,7 +325,8 @@ TEST(Edit_GrowAndShrinkFollowWordsSizes) {
   CHECK(doc);
   if (!doc) return;
   uint32_t p = MainParas(*doc)[0];
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::GrowFont(ed, Whole(*doc, p), true);
   CHECK(At(*doc, p, 0).size.Value() == 22 && At(*doc, p, 1).size.Value() == 22);  // 10.5 and 10 (the default) grow to 11
 }
@@ -301,14 +341,15 @@ TEST(Edit_ClearFormatting) {
   CHECK(doc);
   if (!doc) return;
   uint32_t p = MainParas(*doc)[0];
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ClearRunFormatting(ed, Whole(*doc, p));
   RunProps r = At(*doc, p, 0);
   CHECK(r.italic && r.underline == Underline::None && r.size.Value() == 22 && r.bold);  // the character style stays
   edit::ClearParaFormatting(ed, Whole(*doc, p));
   CHECK(doc->ResolvedPara(p).jc == Justification::Start && doc->ResolvedPara(p).style == "Strong");
-  ed.Undo();
-  ed.Undo();
+  editor.Undo();
+  editor.Undo();
   edit::ClearAllFormatting(ed, Whole(*doc, p));
   r = At(*doc, p, 0);
   CHECK(!r.italic && !r.bold && r.underline == Underline::None);
@@ -322,7 +363,8 @@ TEST(Edit_IndentSteps) {
   CHECK(doc);
   if (!doc) return;
   uint32_t p = MainParas(*doc)[0];
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ShiftIndent(ed, Whole(*doc, p), true);
   CHECK(doc->ResolvedPara(p).indStart.Value() == 720);
   edit::ShiftIndent(ed, Whole(*doc, p), true);
@@ -373,7 +415,8 @@ TEST(Styles_BuiltinsComeWithWordsDefinition) {
   if (!doc) return;
   std::string styles = PartXml(*doc, PartKind::Styles), main = MainXml(*doc);
   uint32_t p = MainParas(*doc)[0];
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ApplyStyle(ed, {{p, 2}, {p, 2}}, "Heading 1");
   CHECK(doc->ResolvedPara(p).style == "Heading1");
   CHECK(doc->ResolvedPara(p).jc == Justification::Start && doc->ResolvedPara(p).keepNext);  // direct jc gone
@@ -389,10 +432,10 @@ TEST(Styles_BuiltinsComeWithWordsDefinition) {
   edit::ApplyStyle(ed, {{MainParas(*doc)[1], 0}, {MainParas(*doc)[1], 0}}, "heading 1");
   CHECK(StyleCount(*doc) == count && doc->ResolvedPara(MainParas(*doc)[1]).style == "Heading1");
   // Undo takes the styles away again.
-  CHECK(ed.Undo() && ed.Undo());
+  CHECK(editor.Undo() && editor.Undo());
   CHECK(PartXml(*doc, PartKind::Styles) == styles && MainXml(*doc) == main);
   CHECK(!doc->FindStyle("Heading1"));
-  CHECK(ed.Redo());
+  CHECK(editor.Redo());
   auto again = SaveAndReopen(*doc);
   CHECK(again);
   if (again) CHECK(again->ResolvedPara(MainParas(*again)[0]).style == "Heading1");
@@ -409,7 +452,8 @@ TEST(Styles_TranslatedIdsAreFoundByName) {
   if (!doc) return;
   size_t count = StyleCount(*doc);
   uint32_t p = MainParas(*doc)[0];
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ApplyStyle(ed, {{p, 0}, {p, 0}}, "Heading 1");
   CHECK(doc->ResolvedPara(p).style == "Kop1" && StyleCount(*doc) == count && At(*doc, p, 0).size.Value() == 40);
   auto gallery = edit::GalleryStyles(*doc);
@@ -431,7 +475,8 @@ TEST(Styles_DirectFormattingOverHalfTheParagraphGoes) {
   CHECK(doc);
   if (!doc) return;
   uint32_t p = MainParas(*doc)[0];
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ApplyStyle(ed, {{p, 0}, {p, 8}}, "Heading 2");
   CHECK(doc->ResolvedPara(p).style == "Heading2");
   CHECK(!At(*doc, p, 0).bold && At(*doc, p, 7).italic);
@@ -445,7 +490,8 @@ TEST(Styles_LinkedStylesOnPartOfAParagraph) {
   CHECK(doc);
   if (!doc) return;
   uint32_t p = MainParas(*doc)[0];
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ApplyStyle(ed, {{p, 5}, {p, 10}}, "Heading 1");
   CHECK(doc->ResolvedPara(p).style == "Normal");
   CHECK(At(*doc, p, 5).charStyle == "Heading1Char" && At(*doc, p, 5).size.Value() == 32);
@@ -469,7 +515,8 @@ TEST(Styles_ModifyAndUpdateToMatch) {
   CHECK(doc);
   if (!doc) return;
   auto paras = MainParas(*doc);
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   // Modify Normal: everything based on it follows.
   edit::RunFormat r;
   r.size = HalfPoints(24);
@@ -501,7 +548,8 @@ TEST(Styles_DocumentsWithoutAStylesPart) {
   if (!doc) return;
   CHECK(!doc->FindPart(PartKind::Styles));
   uint32_t p = MainParas(*doc)[0];
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ApplyStyle(ed, {{p, 0}, {p, 0}}, "Title");
   CHECK(doc->FindPart(PartKind::Styles));
   CHECK(doc->ResolvedPara(p).style == "Title" && At(*doc, p, 0).size.Value() == 56);
@@ -538,7 +586,8 @@ TEST(Lists_BulletsInADocumentWithoutNumbering) {
   CHECK(!doc->FindPart(PartKind::Numbering));
   std::string main = MainXml(*doc);
   auto paras = MainParas(*doc);
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ToggleList(ed, {{paras[0], 2}, {paras[1], 2}}, edit::ListKind::Bullet);
   CHECK(doc->FindPart(PartKind::Numbering));
   CHECK(doc->Label(paras[0]) && doc->Label(paras[0])->bullet && doc->Label(paras[1]) && doc->Label(paras[1])->bullet);
@@ -554,7 +603,7 @@ TEST(Lists_BulletsInADocumentWithoutNumbering) {
   // The button again: out of the list, back to Normal.
   edit::ToggleList(ed, {{paras[0], 2}, {paras[1], 2}}, edit::ListKind::Bullet);
   CHECK(!doc->Label(paras[0]) && doc->ResolvedPara(paras[0]).style == "Normal");
-  CHECK(ed.Undo() && ed.Undo());
+  CHECK(editor.Undo() && editor.Undo());
   CHECK(MainXml(*doc) == main);
 }
 
@@ -566,7 +615,8 @@ TEST(Lists_NumbersCountJoinRestartAndContinue) {
   CHECK(doc);
   if (!doc) return;
   auto p = MainParas(*doc);
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ToggleList(ed, {{p[0], 0}, {p[1], 1}}, edit::ListKind::Number);
   CHECK(LabelOf(*doc, p[0]) == u"1." && LabelOf(*doc, p[1]) == u"2.");
   edit::ToggleList(ed, {{p[3], 0}, {p[3], 0}}, edit::ListKind::Number);  // after a plain paragraph: a new list
@@ -589,7 +639,7 @@ TEST(Lists_NumbersCountJoinRestartAndContinue) {
   CHECK(doc->Label(p[1]) && doc->Label(p[1])->bullet && doc->Label(p[2]) && doc->Label(p[2])->level == 1);
   CHECK(SaveAndReopen(*doc) != nullptr);
   int undone = 0;
-  while (ed.Undo()) ++undone;
+  while (editor.Undo()) ++undone;
   CHECK(undone == 9 && !doc->Label(p[0]));
 }
 
@@ -601,7 +651,8 @@ TEST(Lists_MultilevelLabels) {
   CHECK(doc);
   if (!doc) return;
   auto p = MainParas(*doc);
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ToggleList(ed, {{p[0], 0}, {p[2], 1}}, edit::ListKind::Multilevel);
   edit::ShiftIndent(ed, {{p[1], 0}, {p[2], 1}}, true);
   edit::ShiftIndent(ed, {{p[2], 0}, {p[2], 1}}, true);
@@ -623,7 +674,8 @@ TEST(Lists_NumberedHeadingsAreSwitchedOff) {
   if (!doc) return;
   uint32_t p = MainParas(*doc)[0];
   CHECK(LabelOf(*doc, p) == u"1.");
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::ToggleList(ed, {{p, 0}, {p, 0}}, edit::ListKind::Number);  // already numbered: the button turns it off
   CHECK(!doc->Label(p) && doc->ResolvedPara(p).style == "Heading1");
   CHECK(Has(MainXml(*doc), "<w:numId w:val=\"0\"/>"));
@@ -652,7 +704,8 @@ TEST(Lists_AutoFormatAsYouType) {
   CHECK(doc);
   if (!doc) return;
   uint32_t p = MainParas(*doc)[0];
-  edit::TreeEdit ed(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
   edit::StartAutoList(ed, p, *a);
   CHECK(LabelOf(*doc, p) == u"a)");
 }

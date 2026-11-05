@@ -20,6 +20,7 @@ class Reader;
 class Writer;
 }  // namespace docx
 namespace edit {
+struct EditorState;
 class TreeEdit;
 }  // namespace edit
 
@@ -430,6 +431,7 @@ class Document {
  private:
   friend class docx::Reader;
   friend class docx::Writer;
+  friend struct edit::EditorState;
   friend class edit::TreeEdit;
   Document();
 

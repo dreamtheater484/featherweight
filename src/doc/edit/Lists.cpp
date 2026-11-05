@@ -126,7 +126,7 @@ std::string AddList(TreeEdit& ed, ListKind kind, const AutoList* first = nullptr
   auto [absId, numId] = NextIds(doc);
   // w:nsid tells lists apart when content is copied between documents: unique per definition.
   uint32_t nsid = 2166136261u;
-  for (uint64_t v : {static_cast<uint64_t>(absId), static_cast<uint64_t>(doc.GetTree().elems.size()), static_cast<uint64_t>(ed.Version())})
+  for (uint64_t v : {static_cast<uint64_t>(absId), static_cast<uint64_t>(doc.GetTree().elems.size()), static_cast<uint64_t>(doc.GetTree().attrs.size())})
     for (int i = 0; i < 8; ++i) nsid = (nsid ^ static_cast<uint8_t>(v >> (8 * i))) * 16777619u;
   std::string xml = "<w:abstractNum w:abstractNumId=\"" + std::to_string(absId) + "\"><w:nsid w:val=\"" + Hex8(nsid) +
                     "\"/><w:multiLevelType w:val=\"" + (kind == ListKind::Multilevel ? "multilevel" : "hybridMultilevel") +
@@ -169,7 +169,6 @@ void SetNumPr(TreeEdit& ed, uint32_t para, std::string_view numId, int32_t level
   ElemId np = ed.Path(ed.Doc().Para(para).elem, {kPPr, kNumPr});
   ed.SetAttr(ed.Child(np, kIlvl), kVal, std::to_string(level));
   ed.SetAttr(ed.Child(np, kNumId), kVal, numId);
-  ed.TouchPara(para);
 }
 
 // Puts paragraphs into a list: their indents come from the list, and the default style becomes
@@ -238,7 +237,7 @@ void ToggleList(TreeEdit& ed, Range range, ListKind kind) {
     return;
   }
   if (ed.EnsurePart(PartKind::Numbering) == kNoElem || ed.EnsurePart(PartKind::Styles) == kNoElem) return;
-  ed.Begin(kind == ListKind::Bullet ? L"Bullets" : kind == ListKind::Number ? L"Numbering" : L"Multilevel list");
+  ed.Begin(kind == ListKind::Bullet ? u"Bullets" : kind == ListKind::Number ? u"Numbering" : u"Multilevel list");
   std::string numId;
   int32_t level = 0;
   // Next to a list of the same kind, the paragraphs join it.
@@ -253,14 +252,13 @@ void ToggleList(TreeEdit& ed, Range range, ListKind kind) {
     std::string listStyle = EnsureStyle(ed, "List Paragraph");
     // Paragraphs in a list of another kind change kind, keeping their level.
     Join(ed, paras, numId, level, listStyle);
-    ed.TouchAll();
   }
   ed.Commit();
 }
 
 void RemoveList(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
-  ed.Begin(L"Remove list");
+  ed.Begin(u"Remove list");
   for (uint32_t p : ParagraphsOf(doc, range)) {
     const ParaProps& pp = doc.ResolvedPara(p);
     if (!InList(pp)) continue;
@@ -274,9 +272,7 @@ void RemoveList(TreeEdit& ed, Range range) {
     } else if (StyleGivesList(doc, styleId)) {
       ed.SetAttr(ed.Path(pPr, {kNumPr, kNumId}), kVal, "0");
     }
-    ed.TouchPara(p);
   }
-  ed.TouchAll();
   ed.Commit();
 }
 
@@ -293,14 +289,13 @@ void RestartNumbering(TreeEdit& ed, uint32_t para) {
   int32_t level = pp.ilvl;
   int64_t start = 0;
   if (Node l = doc.NumberingLevel(pp.numId, level)) start = l.Child(kStart).Int(kVal).value_or(0);
-  ed.Begin(L"Restart numbering");
+  ed.Begin(u"Restart numbering");
   std::string id = std::to_string(NextIds(doc).second);
   std::string xml = "<w:num w:numId=\"" + id + "\"><w:abstractNumId w:val=\"" + Escape(absId) + "\"/><w:lvlOverride w:ilvl=\"" +
                     std::to_string(level) + "\"><w:startOverride w:val=\"" + std::to_string(start) + "\"/></w:lvlOverride></w:num>";
   if (ed.AddXml(root, xml) != kNoElem) {
     ed.Reindex();
     Repoint(ed, para, id);
-    ed.TouchAll();
   }
   ed.Commit();
 }
@@ -316,9 +311,8 @@ bool ContinueNumbering(TreeEdit& ed, uint32_t para) {
     if (InList(qp) && qp.numId != own && KindOfList(doc, qp.numId) == kind) target = std::string(qp.numId);
   }
   if (target.empty()) return false;
-  ed.Begin(L"Continue numbering");
+  ed.Begin(u"Continue numbering");
   Repoint(ed, para, target);
-  ed.TouchAll();
   ed.Commit();
   return true;
 }
@@ -387,11 +381,10 @@ std::optional<AutoList> DetectAutoList(std::u16string_view typed) {
 
 void StartAutoList(TreeEdit& ed, uint32_t para, const AutoList& list) {
   if (ed.EnsurePart(PartKind::Numbering) == kNoElem || ed.EnsurePart(PartKind::Styles) == kNoElem) return;
-  ed.Begin(L"AutoFormat");
+  ed.Begin(u"AutoFormat");
   std::string numId = AddList(ed, list.kind == ListKind::Bullet ? ListKind::Bullet : ListKind::Number, &list);
   if (!numId.empty()) {
     Join(ed, {para}, numId, 0, EnsureStyle(ed, "List Paragraph"));
-    ed.TouchAll();
   }
   ed.Commit();
 }

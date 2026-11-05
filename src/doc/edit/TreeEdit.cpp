@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "doc/docx/Docx.h"
+#include "doc/edit/Editor.h"
 #include "doc/model/Internal.h"
 #include "pkg/XmlWriter.h"
 
@@ -56,96 +57,86 @@ bool Space(char16_t c) { return c == u' ' || c == u'\t' || c == u'\n' || c == u'
 
 }  // namespace
 
-TreeEdit::TreeEdit(Document& doc) : doc_(doc) {
-  // New elements need node ids the round-trip store hasn't seen.
-  pkg::NodeId top = 0;
-  for (const Elem& e : doc_.tree_.elems)
-    if (e.node != pkg::kFieldNode) top = std::max(top, e.node);
-  for (const Part& p : doc_.parts_) top = std::max(top, p.docNode);
-  nextNode_ = top + 1;
-}
+// The journal of one change, as the editor's history keeps it.
+struct JournalStep : CustomStep {
+  explicit JournalStep(Document& d) : doc(d) {}
+  void Undo() override {
+    TreeEdit::Replay(doc, store, true);
+    TreeEdit::Restore(doc, before);
+  }
+  void Redo() override {
+    TreeEdit::Restore(doc, after);
+    TreeEdit::Replay(doc, store, false);
+  }
+  Document& doc;
+  TreeEdit::Saved before, after;  // after: the touched elements and the new ones
+  std::vector<TreeEdit::StoreOp> store;
+};
+
+// The editor holds the document it edits; it hands it out as const only to readers.
+TreeEdit::TreeEdit(Editor& editor) : editor_(editor), doc_(const_cast<Document&>(editor.Doc())) {}
+
+pkg::NodeId TreeEdit::NewNode() { return editor_.NewNodeId(); }
 
 // ---------- Transactions ----------
 
-void TreeEdit::Begin(std::wstring label) {
+void TreeEdit::Begin(std::u16string label) {
   if (depth_++ > 0) return;
-  txn_ = Txn{};
-  txn_.label = std::move(label);
-  txn_.elems = doc_.tree_.elems.size();
-  txn_.attrs = doc_.tree_.attrs.size();
+  label_ = std::move(label);
+  elemsAtBegin_ = doc_.tree_.elems.size();
+  before_.clear();
+  store_.clear();
   touched_.clear();
 }
 
 void TreeEdit::Commit() {
   if (depth_ == 0 || --depth_ > 0) return;
   Tree& t = doc_.tree_;
-  for (const auto& [id, old] : txn_.before) txn_.after.emplace_back(id, t.elems[id]);
-  txn_.added.assign(t.elems.begin() + static_cast<std::ptrdiff_t>(txn_.elems), t.elems.end());
-  txn_.addedAttrs.assign(t.attrs.begin() + static_cast<std::ptrdiff_t>(txn_.attrs), t.attrs.end());
   touched_.clear();
-  if (txn_.Empty()) return;
-  Invalidate(txn_);
-  undo_.push_back(std::move(txn_));
-  redo_.clear();
-  ++version_;
+  if (before_.empty() && store_.empty() && t.elems.size() == elemsAtBegin_) return;
+  auto step = std::make_shared<JournalStep>(doc_);
+  step->before = std::move(before_);
+  for (const auto& [id, old] : step->before) step->after.emplace_back(id, t.elems[id]);
+  for (size_t id = elemsAtBegin_; id < t.elems.size(); ++id) step->after.emplace_back(static_cast<ElemId>(id), t.elems[id]);
+  step->store = std::move(store_);
+  step->parts = PartsOf(step->after);
+  before_.clear();
+  store_.clear();
+  editor_.RecordStep(std::move(label_), std::move(step));
 }
 
-bool TreeEdit::Undo() {
-  if (undo_.empty() || depth_ > 0) return false;
-  Txn txn = std::move(undo_.back());
-  undo_.pop_back();
-  Tree& t = doc_.tree_;
-  pkg::RoundTripStore& store = doc_.store_;
-  for (auto op = txn.store.rbegin(); op != txn.store.rend(); ++op) {
-    if (op->kind == StoreOp::Split) store.Merge(op->node, op->second, op->at.firstMoved);
-    else store.SetNodeAttributes(op->node, op->before);
-  }
-  for (auto it = txn.before.rbegin(); it != txn.before.rend(); ++it) t.elems[it->first] = it->second;
-  t.elems.resize(txn.elems);
-  t.attrs.resize(txn.attrs);
-  Invalidate(txn);
-  redo_.push_back(std::move(txn));
-  ++version_;
-  return true;
+void TreeEdit::Restore(Document& doc, const Saved& elems) {
+  for (auto it = elems.rbegin(); it != elems.rend(); ++it) doc.tree_.elems[it->first] = it->second;
 }
 
-bool TreeEdit::Redo() {
-  if (redo_.empty() || depth_ > 0) return false;
-  Txn txn = std::move(redo_.back());
-  redo_.pop_back();
-  Tree& t = doc_.tree_;
-  pkg::RoundTripStore& store = doc_.store_;
-  t.elems.resize(txn.elems);
-  t.attrs.resize(txn.attrs);
-  t.elems.insert(t.elems.end(), txn.added.begin(), txn.added.end());
-  t.attrs.insert(t.attrs.end(), txn.addedAttrs.begin(), txn.addedAttrs.end());
-  for (const auto& [id, e] : txn.after) t.elems[id] = e;
-  for (const StoreOp& op : txn.store) {
-    if (op.kind == StoreOp::Split) store.Split(op.node, op.second, op.at);
-    else store.SetNodeAttributes(op.node, op.after);
-  }
-  Invalidate(txn);
-  undo_.push_back(std::move(txn));
-  ++version_;
-  return true;
-}
-
-void TreeEdit::Invalidate(const Txn& txn) {
-  doc_.caches_ = std::make_unique<Document::Caches>();
-  doc_.BuildIndexes();
-  if (txn.all) {
-    for (auto& p : doc_.paras_) ++p.version;
+void TreeEdit::Replay(Document& doc, const std::vector<StoreOp>& ops, bool undo) {
+  pkg::RoundTripStore& store = doc.store_;
+  if (undo) {
+    for (auto op = ops.rbegin(); op != ops.rend(); ++op) {
+      if (op->kind == StoreOp::Split) store.Merge(op->node, op->second, op->at.firstMoved);
+      else store.SetNodeAttributes(op->node, op->before);
+    }
   } else {
-    for (uint32_t p : txn.paras)
-      if (p < doc_.paras_.size()) ++doc_.paras_[p].version;
+    for (const StoreOp& op : ops) {
+      if (op.kind == StoreOp::Split) store.Split(op.node, op.second, op.at);
+      else store.SetNodeAttributes(op.node, op.after);
+    }
   }
 }
 
-void TreeEdit::TouchPara(uint32_t para) {
-  if (std::find(txn_.paras.begin(), txn_.paras.end(), para) == txn_.paras.end()) txn_.paras.push_back(para);
+// The parts the elements are in: up their parents to a part's root.
+std::vector<uint32_t> TreeEdit::PartsOf(const Saved& elems) const {
+  std::vector<uint32_t> parts;
+  std::unordered_map<ElemId, uint32_t> roots;
+  for (uint32_t i = 0; i < doc_.parts_.size(); ++i) roots.emplace(doc_.parts_[i].root, i);
+  for (const auto& [id, e] : elems) {
+    ElemId top = id;
+    for (int hops = 0; hops < 256 && doc_.tree_.elems[top].parent != kNoElem; ++hops) top = doc_.tree_.elems[top].parent;
+    auto it = roots.find(top);
+    if (it != roots.end() && std::find(parts.begin(), parts.end(), it->second) == parts.end()) parts.push_back(it->second);
+  }
+  return parts;
 }
-
-void TreeEdit::TouchAll() { txn_.all = true; }
 
 void TreeEdit::Reindex() {
   doc_.caches_ = std::make_unique<Document::Caches>();
@@ -153,9 +144,9 @@ void TreeEdit::Reindex() {
 }
 
 Elem& TreeEdit::Touch(ElemId id) {
-  if (id < txn_.elems && touched_.find(id) == touched_.end()) {
-    touched_.emplace(id, txn_.before.size());
-    txn_.before.emplace_back(id, doc_.tree_.elems[id]);
+  if (id < elemsAtBegin_ && touched_.find(id) == touched_.end()) {
+    touched_.emplace(id, before_.size());
+    before_.emplace_back(id, doc_.tree_.elems[id]);
   }
   return doc_.tree_.elems[id];
 }
@@ -167,7 +158,7 @@ void TreeEdit::StoreSplit(pkg::NodeId node, pkg::NodeId second, pkg::SplitPoint 
   op.node = node;
   op.second = second;
   op.at = at;
-  txn_.store.push_back(op);
+  store_.push_back(op);
 }
 
 void TreeEdit::StoreSetAttrs(pkg::NodeId node, pkg::AttrSetId set) {
@@ -177,7 +168,7 @@ void TreeEdit::StoreSetAttrs(pkg::NodeId node, pkg::AttrSetId set) {
   op.before = doc_.store_.NodeAttributes(node);
   op.after = set;
   doc_.store_.SetNodeAttributes(node, set);
-  txn_.store.push_back(op);
+  store_.push_back(op);
 }
 
 // ---------- Elements ----------
@@ -434,7 +425,6 @@ bool TreeEdit::SplitRunAt(uint32_t para, uint32_t offset) {
     append(split);
   }
   StoreSplit(E(run).node, E(second).node, pkg::SplitPoint{firstMoved, false});
-  TouchPara(para);
   return true;
 }
 
@@ -587,11 +577,7 @@ ElemId TreeEdit::EnsurePart(PartKind kind) {
   if (docx::WritePart(doc_, static_cast<uint32_t>(doc_.parts_.size() - 1), xml).Ok())
     package.SetPart(name, std::vector<uint8_t>(xml.begin(), xml.end()));
 
-  // Redo would re-add elements where the new root now is.
-  redo_.clear();
-  doc_.caches_ = std::make_unique<Document::Caches>();
-  doc_.BuildIndexes();
-  ++version_;
+  Reindex();
   return root;
 }
 

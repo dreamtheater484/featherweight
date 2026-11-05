@@ -176,7 +176,6 @@ void ForEachRunProps(TreeEdit& ed, Range range, Fn fn) {
     }
     bool emptyHere = range.Empty() && doc.Para(p).text.empty();
     if (p < range.to.para || emptyHere) fn(p, ed.Path(doc.Para(p).elem, {kPPr, kRPr}));
-    ed.TouchPara(p);
   }
 }
 
@@ -393,7 +392,7 @@ FormatState StateOf(const Document& doc, Range range) {
 
 void FormatRuns(TreeEdit& ed, Range range, const RunFormat& format) {
   if (!format.Any()) return;
-  ed.Begin(L"Format");
+  ed.Begin(u"Format");
   ForEachRunProps(ed, range, [&](uint32_t para, ElemId rPr) { ApplyRunFormat(ed, ed.Doc(), para, rPr, format); });
   ed.Commit();
 }
@@ -401,10 +400,9 @@ void FormatRuns(TreeEdit& ed, Range range, const RunFormat& format) {
 void FormatParagraphs(TreeEdit& ed, Range range, const ParaFormat& f) {
   if (!f.Any()) return;
   const Document& doc = ed.Doc();
-  ed.Begin(L"Paragraph");
+  ed.Begin(u"Paragraph");
   for (uint32_t p : ParagraphsOf(doc, range)) {
     WriteParaFormat(ed, ed.Child(doc.Para(p).elem, kPPr), f, doc.StylePara(p));
-    ed.TouchPara(p);
   }
   ed.Commit();
 }
@@ -449,7 +447,7 @@ void ToggleRuns(TreeEdit& ed, Range range, Toggle what) {
     case Toggle::Superscript: f.vertAlign = s.superscript ? VertAlign::Baseline : VertAlign::Superscript; break;
     case Toggle::Subscript: f.vertAlign = s.subscript ? VertAlign::Baseline : VertAlign::Subscript; break;
   }
-  static constexpr const wchar_t* kLabels[] = {L"Bold", L"Italic", L"Underline", L"Strikethrough", L"Superscript", L"Subscript"};
+  static constexpr const char16_t* kLabels[] = {u"Bold", u"Italic", u"Underline", u"Strikethrough", u"Superscript", u"Subscript"};
   ed.Begin(kLabels[static_cast<int>(what)]);
   FormatRuns(ed, range, f);
   ed.Commit();
@@ -472,7 +470,7 @@ HalfPoints NextFontSize(HalfPoints size, bool grow) {
 }
 
 void GrowFont(TreeEdit& ed, Range range, bool grow) {
-  ed.Begin(grow ? L"Grow font" : L"Shrink font");
+  ed.Begin(grow ? u"Grow font" : u"Shrink font");
   const Document& doc = ed.Doc();
   ForEachRunProps(ed, range, [&](uint32_t para, ElemId rPr) {
     // The run's size as it stands: its own w:sz, or what its styles give.
@@ -487,36 +485,34 @@ void GrowFont(TreeEdit& ed, Range range, bool grow) {
 }
 
 void ClearRunFormatting(TreeEdit& ed, Range range) {
-  ed.Begin(L"Clear formatting");
+  ed.Begin(u"Clear formatting");
   ForEachRunProps(ed, range, [&](uint32_t, ElemId rPr) { ed.Clear(rPr, {kRStyle, kRPrChange}); });
   ed.Commit();
 }
 
 void ClearParaFormatting(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
-  ed.Begin(L"Reset paragraph");
+  ed.Begin(u"Reset paragraph");
   for (uint32_t p : ParagraphsOf(doc, range)) {
     if (ElemId pPr = ed.Child(doc.Para(p).elem, kPPr, false); pPr != kNoElem)
       ed.Clear(pPr, {kPStyle, kNumPr, kRPr, kSectPr, kPPrChange});
-    ed.TouchPara(p);
   }
   ed.Commit();
 }
 
 void ClearAllFormatting(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
-  ed.Begin(L"Clear all formatting");
+  ed.Begin(u"Clear all formatting");
   ForEachRunProps(ed, range, [&](uint32_t, ElemId rPr) { ed.Clear(rPr, {kRPrChange}); });
   for (uint32_t p : ParagraphsOf(doc, range)) {
     if (ElemId pPr = ed.Child(doc.Para(p).elem, kPPr, false); pPr != kNoElem) ed.Clear(pPr, {kRPr, kSectPr, kPPrChange});
-    ed.TouchPara(p);
   }
   ed.Commit();
 }
 
 void ShiftIndent(TreeEdit& ed, Range range, bool increase) {
   const Document& doc = ed.Doc();
-  ed.Begin(increase ? L"Increase indent" : L"Decrease indent");
+  ed.Begin(increase ? u"Increase indent" : u"Decrease indent");
   const int32_t step = std::max<int32_t>(1, doc.Settings().defaultTabStop.Value());
   for (uint32_t p : ParagraphsOf(doc, range)) {
     const ParaProps& pp = doc.ResolvedPara(p);
@@ -524,7 +520,6 @@ void ShiftIndent(TreeEdit& ed, Range range, bool increase) {
       int32_t level = std::clamp(pp.ilvl + (increase ? 1 : -1), 0, 8);
       ElemId ilvl = ed.Path(doc.Para(p).elem, {kPPr, kNumPr, kIlvl});
       ed.SetAttr(ilvl, kVal, Num(level));
-      ed.TouchPara(p);
       continue;
     }
     int32_t at = pp.indStart.Value();

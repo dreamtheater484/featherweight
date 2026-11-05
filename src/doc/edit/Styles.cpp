@@ -219,7 +219,6 @@ std::string AddBuiltin(TreeEdit& ed, const Builtin& b) {
                                    b.priority, false, "", "", rPr);
     if (ed.AddXml(root, charXml) != kNoElem) ed.Reindex();
   }
-  ed.TouchAll();
   return id;
 }
 
@@ -263,7 +262,6 @@ void ApplyParaStyle(TreeEdit& ed, uint32_t p, const Style& style) {
     for (ElemId run : runs) ed.Remove(ed.Child(run, kRPr, false), name);
     ed.Remove(ed.Child(pPr, kRPr, false), name);
   }
-  ed.TouchPara(p);
 }
 
 std::string TitleCase(std::string_view name) {
@@ -320,7 +318,7 @@ std::string EnsureStyle(TreeEdit& ed, std::string_view nameOrId) {
 void ApplyStyle(TreeEdit& ed, Range range, std::string_view nameOrId) {
   const Document& doc = ed.Doc();
   if (ed.EnsurePart(PartKind::Styles) == kNoElem) return;
-  ed.Begin(L"Style");
+  ed.Begin(u"Style");
   std::string id = EnsureStyle(ed, nameOrId);
   const Style* s = id.empty() ? nullptr : doc.FindStyle(id);
   if (s && (s->type == StyleType::Paragraph || s->type == StyleType::Character)) {
@@ -354,14 +352,13 @@ void ModifyStyle(TreeEdit& ed, std::string_view styleId, const RunFormat& run, c
   ElemId elem = s->node.Id();
   bool isPara = s->type == StyleType::Paragraph;
   std::string basedOn = s->basedOn == kNone ? std::string() : std::string(doc.Styles()[s->basedOn].id);
-  ed.Begin(L"Modify style");
+  ed.Begin(u"Modify style");
   if (run.Any()) {
     RunFormat r = run;
     r.charStyle.reset();
     WriteRunFormat(ed, ed.Child(elem, kRPr), r, doc.StyleChainRun(basedOn));
   }
   if (para.Any() && isPara) WriteParaFormat(ed, ed.Child(elem, kPPr), para, doc.StyleChainPara(basedOn));
-  ed.TouchAll();
   ed.Commit();
 }
 
@@ -374,7 +371,7 @@ void UpdateStyleToMatch(TreeEdit& ed, Range range) {
   if (!s || s->type != StyleType::Paragraph) return;
   Style style = *s;
   ElemId elem = style.node.Id();
-  ed.Begin(L"Update style");
+  ed.Begin(u"Update style");
   // The paragraph's own formatting moves into the style.
   for (Node c : doc.ParaNode(p).Child(kPPr).Kids()) {
     uint32_t n = c.NameHash();
@@ -393,7 +390,6 @@ void UpdateStyleToMatch(TreeEdit& ed, Range range) {
       if (!c.Is(kRStyle) && !c.Is(kRPrChange)) ed.CopyChild(c.Id(), ed.Child(elem, kRPr));
   // Then the paragraph takes the style again, without what moved.
   ApplyParaStyle(ed, p, style);
-  ed.TouchAll();
   ed.Commit();
 }
 
