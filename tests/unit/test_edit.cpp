@@ -1392,3 +1392,70 @@ TEST(Edit_OnlyListsFieldsAndSectionsAreStructure) {
   CHECK(structure(ed.SplitParagraph(P(ps[2], 2))));  // the paragraph has a field
   CHECK(ed.Undo() && ed.InsertText(P(ps[0], 1), u"x") && !changes.back().structure);
 }
+
+TEST(Edit_LinksAroundText) {
+  Fixture f;
+  f.body = "<w:p><w:r><w:t>See the site now</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  uint32_t p = Main(*doc)[0];
+  // A web address: a new relationship, a w:hyperlink around the runs.
+  CHECK(ed.SetLink(P(p, 4), P(p, 12), "https://example.org/a?b=1&c=2"));
+  CHECK(BodyIs(*doc,
+               "<w:p><w:r><w:t xml:space=\"preserve\">See </w:t></w:r><w:hyperlink r:id=\"rIdLink1\" w:history=\"1\">"
+               "<w:r><w:t>the site</w:t></w:r></w:hyperlink><w:r><w:t xml:space=\"preserve\"> now</w:t></w:r></w:p>"));
+  auto runs = doc->Runs(p);
+  CHECK(runs.size() == 3 && doc->HyperlinkTarget(runs[1].hyperlink) == "https://example.org/a?b=1&c=2");
+  CHECK(Consistent(*doc, f) && ChecksOut(*doc));
+  // A link can't go over a link; one the part already has is used again; a bookmark needs no relationship.
+  CHECK(!ed.SetLink(P(p, 6), P(p, 14), "https://example.com/"));
+  CHECK(ed.SetLink(P(p, 0), P(p, 3), "https://example.com/") && doc->HyperlinkTarget(doc->Runs(p)[0].hyperlink) == "https://example.com/");
+  CHECK(MainXml(*doc).find("r:id=\"rIdLink\"") != std::string::npos);
+  CHECK(ed.SetLink(P(p, 13), P(p, 16), "#_Top") && MainXml(*doc).find("w:anchor=\"_Top\"") != std::string::npos);
+  CHECK(UndoSteps(ed) == 3 && MainXml(*doc) == before);
+}
+
+TEST(Clip_LinksTravel) {
+  Fixture f;
+  f.body =
+      "<w:p><w:r><w:t xml:space=\"preserve\">Go to </w:t></w:r><w:hyperlink r:id=\"rIdLink\"><w:r><w:t>our site</w:t></w:r>"
+      "</w:hyperlink><w:r><w:t xml:space=\"preserve\"> today</w:t></w:r></w:p><w:p><w:r><w:t>Target</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  // Copied: the link comes with its text, through RTF and HTML.
+  Clip c = edit::CopyClip(*doc, P(ps[0], 0), P(ps[0], static_cast<uint32_t>(doc->Para(ps[0]).text.size())));
+  CHECK(c.paras.size() == 1 && c.paras[0].runs.size() == 3);
+  if (c.paras.size() != 1 || c.paras[0].runs.size() != 3) return;
+  CHECK(c.paras[0].runs[1].link == "https://example.com/" && c.paras[0].runs[0].link.empty());
+  auto rtf = edit::FromRtf(edit::ToRtf(c));
+  CHECK(rtf && rtf->paras.size() == 1 && rtf->paras[0].runs.size() == 3 && rtf->paras[0].runs[1].link == "https://example.com/");
+  CHECK(edit::ToHtml(c).find("<a href=\"https://example.com/\">") != std::string::npos);
+  auto html = edit::FromHtml(edit::ToHtml(c));
+  CHECK(html && SameRuns(c.paras[0], html->paras[0]));
+  // Word's own field, with switches around the address.
+  auto word = edit::FromRtf(
+      "{\\rtf1\\ansi{\\field{\\*\\fldinst {HYPERLINK \\\\o \"tip\" \"https://example.net/\" }{\\*\\datafield 00ff}}"
+      "{\\fldrslt {\\cf1\\ul net}}} after}");
+  CHECK(word && word->paras.size() == 1 && word->paras[0].runs.size() == 2);
+  if (word && word->paras.size() == 1 && word->paras[0].runs.size() == 2)
+    CHECK(word->paras[0].runs[0].link == "https://example.net/" && word->paras[0].runs[0].text == u"net" &&
+          word->paras[0].runs[1].link.empty());
+  // Pasted: web links become hyperlinks; script links stay text.
+  auto web = edit::FromHtml("<p>See <a href=\"https://example.org/x\">this <b>page</b></a> or <a href=\"javascript:alert(1)\">that</a>.</p>");
+  CHECK(web && web->paras.size() == 1);
+  if (!web) return;
+  CHECK(edit::PasteClip(ed, P(ps[1], 6), P(ps[1], 6), *web));
+  CHECK(doc->Para(ps[1]).text == u"TargetSee this page or that.");
+  std::vector<std::string> links;
+  for (const TextRun& t : doc->Runs(ps[1]))
+    if (t.hyperlink) links.push_back(doc->HyperlinkTarget(t.hyperlink));
+  CHECK(links.size() == 2 && links[0] == "https://example.org/x" && links[1] == "https://example.org/x");
+  CHECK(MainXml(*doc).find("javascript") == std::string::npos);
+  CHECK(Consistent(*doc, f) && ChecksOut(*doc));
+}
