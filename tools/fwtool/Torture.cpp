@@ -836,7 +836,23 @@ bool IsWordFile(const fs::path& file) {
   return ext == L".docx" || ext == L".docm" || ext == L".dotx" || ext == L".dotm";
 }
 
-int Replay(const fs::path& repro, const Settings& set) {
+// A reproducer names its file by the path it had where it was made. Elsewhere (another checkout),
+// the same file is found by the longest tail of that path that exists from the current folder.
+fs::path FindReproFile(const fs::path& recorded) {
+  std::error_code ec;
+  if (fs::exists(recorded, ec)) return recorded;
+  const fs::path relative = recorded.relative_path();
+  std::vector<fs::path> parts(relative.begin(), relative.end());
+  for (size_t first = 1; first < parts.size(); ++first) {
+    fs::path tail;
+    for (size_t i = first; i < parts.size(); ++i) tail /= parts[i];
+    if (fs::exists(tail, ec)) return tail;
+  }
+  return recorded;
+}
+
+// Replays a reproducer. The file it makes goes next to it (<name>-replay.docx), or into --out.
+int Replay(const fs::path& repro, const fs::path& outDir) {
   std::ifstream in(repro);
   if (!in) {
     std::fprintf(stderr, "Can't read %s\n", Display(repro).c_str());
@@ -844,14 +860,16 @@ int Replay(const fs::path& repro, const Settings& set) {
   }
   fs::path file;
   uint64_t seed = 0;
+  std::string sha;
   std::vector<Edit> edits;
   std::string line;
   while (std::getline(in, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
     if (line.empty() || line[0] == '#') continue;
     if (line.starts_with("file: ")) file = fs::path(fw::Utf8ToWide(line.substr(6)));
     else if (line.starts_with("seed: ")) seed = std::strtoull(line.c_str() + 6, nullptr, 10);
-    else if (line.starts_with("sha256: ") || line.starts_with("round: ") || line.starts_with("failure: ") ||
-             line.starts_with("edits: ")) continue;
+    else if (line.starts_with("sha256: ")) sha = line.substr(8);
+    else if (line.starts_with("round: ") || line.starts_with("failure: ") || line.starts_with("edits: ")) continue;
     else {
       Edit e;
       if (!torture::ParseEdit(line, e)) {
@@ -861,8 +879,23 @@ int Replay(const fs::path& repro, const Settings& set) {
       edits.push_back(std::move(e));
     }
   }
+  file = FindReproFile(file);
+  if (std::ifstream original{file, std::ios::binary}; original && !sha.empty() && sha != "unknown") {
+    std::vector<uint8_t> bytes(std::istreambuf_iterator<char>(original), {});
+    if (Hex(fw::pkg::HashBytes(bytes)) != sha)
+      std::fprintf(stderr, "Note: %s isn't the file this reproducer was made from (its SHA-256 differs).\n",
+                   Display(file).c_str());
+  }
   RoundResult r = RunRound(file, seed, 0, &edits, {});
-  if (!set.out.empty() && !r.saved.empty()) WriteBytes(set.out / (SafeName(file) + "-replay.docx"), r.saved);
+  if (!r.saved.empty()) {
+    fs::path made = outDir.empty() ? repro.parent_path() / repro.stem() : outDir / repro.stem();
+    made += "-replay.docx";
+    if (!outDir.empty()) {
+      std::error_code ec;
+      fs::create_directories(outDir, ec);
+    }
+    WriteBytes(made, r.saved);
+  }
   if (r.failure) {
     std::printf("[FAIL] %s: %zu edits (%u done, %u refused): %s: %s\n", Display(file).c_str(), edits.size(), r.done,
                 r.refused, r.failure->category.c_str(), r.failure->message.c_str());
@@ -879,8 +912,8 @@ int RunTorture(const Options& options) {
   set.seed = options.seed;
   set.edits = options.edits;
   set.rounds = options.rounds;
-  set.out = options.outDir.empty() ? fs::path("torture") : options.outDir;
-  if (options.replay) return Replay(options.inputs.front(), set);
+  if (options.replay) return Replay(options.inputs.front(), options.outDir);
+  set.out = options.outDir.empty() ? fs::path("build") / "torture" : options.outDir;
 
   std::vector<fs::path> files;
   for (const auto& f : CollectFiles(options.inputs))
