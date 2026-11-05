@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "doc/docx/Docx.h"
+#include "doc/edit/DrawingEdit.h"
 #include "doc/model/Internal.h"
 #include "draw/Images.h"
 #include "pkg/Package.h"
@@ -19,26 +20,9 @@
 
 namespace fw::doc::edit {
 
-// The document's drawing handles, which only the model's friends change.
-struct PictureAccess {
-  static Drawing& At(Document& d, uint32_t i) { return d.drawings_[i]; }
-};
-
-namespace {
+namespace dx {
 
 using Microsoft::WRL::ComPtr;
-
-constexpr std::string_view kWp = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
-constexpr std::string_view kA = "http://schemas.openxmlformats.org/drawingml/2006/main";
-constexpr std::string_view kPic = "http://schemas.openxmlformats.org/drawingml/2006/picture";
-constexpr std::string_view kR = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-constexpr std::string_view kWp14 = "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing";
-constexpr std::string_view kAsvg = "http://schemas.microsoft.com/office/drawing/2016/SVG/main";
-constexpr std::string_view kImageRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
-constexpr const char* kSvgExt = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}";
-constexpr int64_t kEmuPerPoint = 12700;
-// Word's limits for a picture's size: 1/100 inch to 22 inches.
-constexpr int64_t kMinEmu = 9144, kMaxEmu = 22 * 914400;
 
 std::u16string Msg(const char* s) { return std::u16string(s, s + std::char_traits<char>::length(s)); }
 
@@ -49,22 +33,9 @@ Result Fail(std::u16string why) {
   return r;
 }
 
-uint32_t g_version = 0;  // Drawing::version: every change gets a new one
+uint32_t g_version = 0;
 
 // ---------- A drawing's XML ----------
-
-// One picture's wp:inline or wp:anchor, parsed for a change, with the w:drawing's fragments.
-struct Frame {
-  pkg::XmlDom dom;
-  pugi::xml_node root;  // wp:inline or wp:anchor
-  pugi::xml_node pic;   // pic:pic
-  size_t index = 0;     // which of the fragments it is
-  std::vector<pkg::Fragment> fragments;
-  std::string wp, a;    // the prefixes it uses for them, with the colon ("wp:"), or empty
-
-  std::string Wp(std::string_view local) const { return wp + std::string(local); }
-  std::string A(std::string_view local) const { return a + std::string(local); }
-};
 
 pugi::xml_node Child(pugi::xml_node parent, std::string_view ns, std::string_view local) {
   for (pugi::xml_node c = parent.first_child(); c; c = c.next_sibling())
@@ -173,108 +144,59 @@ Drawing HandleFor(const Drawing& was, pugi::xml_node root) {
 
 // ---------- Steps ----------
 
-// A change to a drawing's XML and its handle. Applied when made; undo and redo swap.
-struct DrawingStep : CustomStep {
-  Document* doc = nullptr;
-  uint32_t drawing = 0;
-  pkg::NodeId node = pkg::kNoNode;
-  std::vector<pkg::Fragment> before, after;
-  Drawing handleBefore, handleAfter;
-
-  void Apply(const std::vector<pkg::Fragment>& frags, const Drawing& handle) {
-    doc->Store().SetFragments(node, frags);
-    Drawing& h = PictureAccess::At(*doc, drawing);
-    Drawing keep = h;
-    h = handle;
-    h.node = keep.node;
-    h.pos = keep.pos;
-    h.part = keep.part;
-    h.kind = keep.kind;
-    h.textBoxes = keep.textBoxes;
-    h.keptXml = keep.keptXml;
-    h.displayOnly = keep.displayOnly;
-    h.version = ++g_version;
-  }
-  void Undo() override { Apply(before, handleBefore); }
-  void Redo() override { Apply(after, handleAfter); }
-};
-
 // Package changes: parts added or changed, a relationship set, the content types.
 std::string Lower(std::string s) {
   for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   return s;
 }
 
-// What an insert adds to the package: its media parts, its relationships from the picture's part
-// and its content types. Undo takes away exactly those and redo adds them again, keeping what else
-// changed in the meantime: a new header or footer part gets its relationship and content type
-// outside undo (torture finding 25: putting back whole sets lost them).
-struct PackageStep : CustomStep {
-  Document* doc = nullptr;
-  struct PartState {
-    std::string name;
-    std::optional<std::vector<uint8_t>> before, after;  // nothing: no such part
-  };
-  std::vector<PartState> partStates;
-  std::string relsSource;                    // the picture's part
-  bool relsExisted = true;                   // it had a relationships part before
-  std::vector<pkg::Relationship> relsAdded;  // from relsSource
-  std::vector<std::pair<std::string, std::string>> defaultsAdded, overridesAdded;  // content types
-
-  bool Any() const {
-    return !partStates.empty() || !relsAdded.empty() || !defaultsAdded.empty() || !overridesAdded.empty();
+void PackageStep::Apply(bool undo) {
+  pkg::Package& p = doc->Package();
+  for (const PartState& s : partStates) {
+    const auto& v = undo ? s.before : s.after;
+    if (v) p.SetPart(s.name, *v);
+    else p.DeletePart(s.name);
   }
-
-  void Apply(bool undo) {
-    pkg::Package& p = doc->Package();
-    for (const PartState& s : partStates) {
-      const auto& v = undo ? s.before : s.after;
-      if (v) p.SetPart(s.name, *v);
-      else p.DeletePart(s.name);
+  if (!relsAdded.empty()) {
+    pkg::RelationshipSet set;
+    if (const pkg::RelationshipSet* now = p.RelationshipsOf(relsSource)) {
+      set = *now;
+    } else {
+      set.source = relsSource;
+      set.relsPart = pkg::RelsPartFor(relsSource);
     }
-    if (!relsAdded.empty()) {
-      pkg::RelationshipSet set;
-      if (const pkg::RelationshipSet* now = p.RelationshipsOf(relsSource)) {
-        set = *now;
-      } else {
-        set.source = relsSource;
-        set.relsPart = pkg::RelsPartFor(relsSource);
-      }
-      std::erase_if(set.items, [&](const pkg::Relationship& r) {
-        return std::any_of(relsAdded.begin(), relsAdded.end(), [&](const pkg::Relationship& a) { return a.id == r.id; });
-      });
-      if (!undo) set.items.insert(set.items.end(), relsAdded.begin(), relsAdded.end());
-      const std::string relsPart = set.relsPart;
-      const bool empty = set.items.empty();
-      p.SetRelationships(std::move(set));
-      if (undo && empty && !relsExisted) p.DeletePart(relsPart);
-    }
-    if (!defaultsAdded.empty() || !overridesAdded.empty()) {
-      pkg::ContentTypes types = p.Types();
-      std::erase_if(types.defaults, [&](const auto& d) {
-        return std::any_of(defaultsAdded.begin(), defaultsAdded.end(),
-                           [&](const auto& a) { return Lower(a.first) == Lower(d.first); });
-      });
-      std::erase_if(types.overrides, [&](const auto& o) {
-        return std::any_of(overridesAdded.begin(), overridesAdded.end(),
-                           [&](const auto& a) { return pkg::PartKey(a.first) == pkg::PartKey(o.first); });
-      });
-      if (!undo) {
-        types.defaults.insert(types.defaults.end(), defaultsAdded.begin(), defaultsAdded.end());
-        types.overrides.insert(types.overrides.end(), overridesAdded.begin(), overridesAdded.end());
-      }
-      p.SetContentTypes(std::move(types));
-    }
+    std::erase_if(set.items, [&](const pkg::Relationship& r) {
+      return std::any_of(relsAdded.begin(), relsAdded.end(), [&](const pkg::Relationship& a) { return a.id == r.id; });
+    });
+    if (!undo) set.items.insert(set.items.end(), relsAdded.begin(), relsAdded.end());
+    const std::string relsPart = set.relsPart;
+    const bool empty = set.items.empty();
+    p.SetRelationships(std::move(set));
+    if (undo && empty && !relsExisted) p.DeletePart(relsPart);
   }
-  void Undo() override { Apply(true); }
-  void Redo() override { Apply(false); }
-};
+  if (!defaultsAdded.empty() || !overridesAdded.empty()) {
+    pkg::ContentTypes types = p.Types();
+    std::erase_if(types.defaults, [&](const auto& d) {
+      return std::any_of(defaultsAdded.begin(), defaultsAdded.end(),
+                         [&](const auto& a) { return Lower(a.first) == Lower(d.first); });
+    });
+    std::erase_if(types.overrides, [&](const auto& o) {
+      return std::any_of(overridesAdded.begin(), overridesAdded.end(),
+                         [&](const auto& a) { return pkg::PartKey(a.first) == pkg::PartKey(o.first); });
+    });
+    if (!undo) {
+      types.defaults.insert(types.defaults.end(), defaultsAdded.begin(), defaultsAdded.end());
+      types.overrides.insert(types.overrides.end(), overridesAdded.begin(), overridesAdded.end());
+    }
+    p.SetContentTypes(std::move(types));
+  }
+}
 
 // ---------- Geometry ----------
 
 int64_t ClampEmu(int64_t v) { return std::clamp<int64_t>(v, kMinEmu, kMaxEmu); }
 
-int64_t AttrInt(pugi::xml_node n, const char* name, int64_t fallback = 0) {
+int64_t AttrInt(pugi::xml_node n, const char* name, int64_t fallback) {
   pugi::xml_attribute at = n.attribute(name);
   if (!at) return fallback;
   char* end = nullptr;
@@ -290,11 +212,16 @@ void SetInt(pugi::xml_node n, const char* name, int64_t v) {
 
 // pic:spPr's a:xfrm, made with a:off and a:ext when missing (`create`).
 pugi::xml_node Xfrm(Frame& f, bool create) {
-  pugi::xml_node spPr = Child(f.pic, kPic, "spPr");
+  pugi::xml_node owner = f.pic ? f.pic : f.shape;
+  const std::string_view ns = f.pic ? kPic : kWps;
+  pugi::xml_node spPr = Child(owner, ns, "spPr");
   if (!spPr && create) {
-    std::string name = PrefixOf(f.pic) + "spPr";
-    pugi::xml_node blipFill = Child(f.pic, kPic, "blipFill");
-    spPr = blipFill ? f.pic.insert_child_after(name.c_str(), blipFill) : f.pic.append_child(name.c_str());
+    std::string name = PrefixOf(owner) + "spPr";
+    pugi::xml_node before = f.pic ? Child(f.pic, kPic, "blipFill") : pugi::xml_node();
+    if (!f.pic)
+      for (const char* nv : {"cNvPr", "cNvSpPr", "cNvCnPr"})
+        if (pugi::xml_node n = Child(owner, kWps, nv)) before = n;
+    spPr = before ? owner.insert_child_after(name.c_str(), before) : owner.prepend_child(name.c_str());
   }
   if (!spPr) return {};
   pugi::xml_node x = Child(spPr, kA, "xfrm");
@@ -442,6 +369,14 @@ void SetPosition(Frame& f, int64_t x, int64_t y) {
   simple = "0";
 }
 
+Wrap WrapOf(const Drawing& d) {
+  if (!d.anchored) return Wrap::Inline;
+  if (d.wrap == WrapType::None) return d.behindDoc ? Wrap::Behind : Wrap::InFront;
+  if (d.wrap == WrapType::Square) return Wrap::Square;
+  if (d.wrap == WrapType::TopAndBottom) return Wrap::TopAndBottom;
+  return Wrap::Tight;
+}
+
 int64_t TopZ(const Document& doc) {
   int64_t z = 251658240;  // where Word starts
   for (const Drawing& d : doc.Drawings())
@@ -477,7 +412,8 @@ bool ToInline(Frame& f, std::u16string& why) {
                                 std::find_if(std::begin(kWraps), std::end(kWraps), [&](const char* w) { return local == w; }) != std::end(kWraps))) ||
                  (ns == kA && local == "graphic") || (ns == kWp14 && (local == "sizeRelH" || local == "sizeRelV"));
     if (!known) {
-      why = u"This picture has settings Featherweight doesn't know, so it stays where it is.";
+      why = f.pic ? u"This picture has settings Featherweight doesn't know, so it stays where it is."
+                    : u"This shape has settings Featherweight doesn't know, so it stays where it is.";
       return false;
     }
   }
@@ -499,7 +435,7 @@ bool ToInline(Frame& f, std::u16string& why) {
 
 // ---------- Making a change ----------
 
-std::string Serialize(const Frame& f) { return pkg::RoundTripStore::SerializeFragment(f.root); }
+std::string Serialize(const Frame& f) { return pkg::RoundTripStore::SerializeFragment(f.dom.Root()); }
 
 // Loads drawing `i`, lets `edit` change its XML, and records the change as one undo step.
 Result ChangeDrawing(Editor& editor, uint32_t i, const char* name, const std::function<bool(Frame&, std::u16string&)>& edit) {
@@ -592,11 +528,6 @@ std::vector<uint8_t> EncodePng(const draw::Bitmap& bmp) {
   }
   return out;
 }
-
-struct Media {
-  std::vector<uint8_t> bytes;
-  std::string ext, type;
-};
 
 // Where a picture's part goes, and the relationship to it, as a package step (null when the
 // document already has both).
@@ -749,7 +680,9 @@ std::string BlipId(Frame& f) {
   return at ? at.value() : std::string();
 }
 
-}  // namespace
+}  // namespace dx
+
+using namespace dx;
 
 // ---------- Pictures ----------
 
@@ -884,11 +817,7 @@ PictureInfo Pictures::Info(uint32_t drawing) const {
   info.picture = true;
   info.cx = d.cx;
   info.cy = d.cy;
-  if (!d.anchored) info.wrap = Wrap::Inline;
-  else if (d.wrap == WrapType::None) info.wrap = d.behindDoc ? Wrap::Behind : Wrap::InFront;
-  else if (d.wrap == WrapType::Square) info.wrap = Wrap::Square;
-  else if (d.wrap == WrapType::TopAndBottom) info.wrap = Wrap::TopAndBottom;
-  else info.wrap = Wrap::Tight;
+  info.wrap = WrapOf(d);
   pugi::xml_node x = Xfrm(f, false);
   double rot = x ? AttrInt(x, "rot") / 60000.0 : 0;
   info.rotation = std::fmod(std::fmod(rot, 360.0) + 360.0, 360.0);

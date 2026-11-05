@@ -19,6 +19,7 @@
 #include "doc/model/Schema.h"
 #include "doc/model/Utf.h"
 #include "pkg/Package.h"
+#include "pkg/XmlDom.h"
 
 namespace fw::doc::edit {
 
@@ -1304,6 +1305,75 @@ struct EditorState {
     d.drawings_.push_back(std::move(info));
   }
 
+  // The handle of a kept drawing just inserted: display-only, as the reader makes it.
+  void AddKeptDrawing(Drawing info, ElemId item, uint32_t para) {
+    info.node = Node(&t, item);
+    info.part = d.stories_[d.paras_[para].story].part;
+    info.pos = Pos{kNone, 0};
+    info.displayOnly = true;
+    d.drawings_.push_back(std::move(info));
+  }
+
+  // A drawing kept as a markup block, at the start of `para`: a run of its own holding the block
+  // (tagged, so it's found again) and the display-only element its character stands for.
+  ElemId InsertKept(uint32_t para, std::string block, uint32_t tag, std::u16string& why) {
+    const ElemId p = d.paras_[para].elem;
+    const ElemId run = NewElem(p, kR);
+    const ElemId item = run == kNoElem ? kNoElem : NewElem(run, Name("drawing"));
+    if (item == kNoElem) {
+      why = u"A drawing can't go here.";
+      return kNoElem;
+    }
+    LinkAfter(p, Child(p, kPPr), run);
+    E(item).flags |= kDisplayOnly;
+    E(item).length = 1;
+    LinkAfter(run, kNoElem, item);
+    d.paras_[para].text.insert(d.paras_[para].text.begin(), u'\xFFFC');
+    pkg::Fragment f{pkg::Slot::Inside, {}, std::move(block)};
+    f.tag = tag;
+    d.store_.SetFragments(E(run).node, {std::move(f)});
+    Reflow(para);
+    return item;
+  }
+
+  // Deleting a display-only drawing's character: the kept block it's shown from goes with it, when
+  // the block holds nothing else. `leaf` is the drawing's element; the top display-only element
+  // around it goes into `remove`.
+  bool RemoveKept(uint32_t para, ElemId leaf, std::vector<ElemId>& remove, std::u16string& why) {
+    why = u"This drawing is kept with other content of the file, so it can't be deleted.";
+    ElemId top = leaf;
+    while (E(top).parent != kNoElem && (E(E(top).parent).flags & kDisplayOnly)) top = E(top).parent;
+    if (RoleOf(leaf) != Role::Object || E(leaf).length != 1 || E(top).length != 1) return false;
+    uint32_t tag = 0;
+    for (const Drawing& dr : d.drawings_)
+      if (dr.node.Id() == leaf && dr.displayOnly) tag = dr.kept;
+    if (tag == 0) return false;
+    std::vector<ElemId> ids = AllElems(para);
+    ids.push_back(d.paras_[para].elem);
+    for (ElemId id : ids) {
+      const pkg::NodeId node = E(id).node;
+      if (node == pkg::kNoNode) continue;
+      std::vector<pkg::Fragment> frags = d.store_.FragmentsCopy(node);
+      auto it = std::find_if(frags.begin(), frags.end(), [&](const pkg::Fragment& f) { return f.tag == tag; });
+      if (it == frags.end()) continue;
+      // The block shows only this drawing: each branch is one element.
+      pkg::XmlDom dom;
+      if (!dom.Parse(it->xml, d.package_->GetLimits()).Ok()) return false;
+      for (pugi::xml_node b = dom.Root().first_child(); b; b = b.next_sibling()) {
+        if (b.type() != pugi::node_element) continue;
+        size_t elements = 0;
+        for (pugi::xml_node c = b.first_child(); c; c = c.next_sibling()) elements += c.type() == pugi::node_element;
+        if (elements != 1) return false;
+      }
+      frags.erase(it);
+      d.store_.SetFragments(node, std::move(frags));
+      remove.push_back(top);
+      why.clear();
+      return true;
+    }
+    return false;
+  }
+
   // Deletes [a, b) inside one paragraph. Range markers stay (collapsed at a), so bookmarks and
   // comment ranges keep both ends; whole fields go only when a check before allowed it.
   bool DeleteIn(uint32_t para, uint32_t a, uint32_t b, std::u16string& why) {
@@ -1344,8 +1414,8 @@ struct EditorState {
       uint32_t s = std::max(a, l.start), e = std::min(b, l.start + l.length);
       if (s >= e) continue;
       if (E(l.id).flags & kDisplayOnly) {
-        why = u"Deleting this drawing isn't possible yet.";
-        return false;
+        if (!RemoveKept(para, l.id, remove, why)) return false;
+        continue;
       }
       Role r = RoleOf(l.id);
       if (r == Role::Text) {
@@ -3151,6 +3221,23 @@ Result Editor::InsertDrawing(Pos at, std::string xml, const Drawing& info) {
   s.Notify(listeners_);
   Result r;
   r.caret = after;
+  return r;
+}
+
+Result Editor::InsertKeptDrawing(uint32_t para, std::string block, const Drawing& info) {
+  EditorState& s = *impl_;
+  std::u16string why;
+  if (!CanEdit(&why) || !s.Editable(para, why)) return Fail(why);
+  if (!XmlSafe(block) || info.kept == 0) return Fail(u"This drawing can't be added.");
+  s.Begin(para, 1);
+  ElemId item = s.InsertKept(para, std::move(block), info.kept, why);
+  if (item == kNoElem) return s.Abort(why);
+  s.AddKeptDrawing(info, item, para);  // before Commit, which finds where it is
+  const Pos at{para, 0}, after{para, 1};
+  s.Commit(false, at, after, Kind::Other, u"Insert shape");
+  s.Notify(listeners_);
+  Result r;
+  r.caret = at;
   return r;
 }
 

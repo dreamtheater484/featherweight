@@ -10,18 +10,39 @@
 #include "DocTestUtil.h"
 #include "PkgTestUtil.h"
 #include "TestHarness.h"
+#include "doc/docx/Blank.h"
 #include "doc/docx/Docx.h"
 #include "doc/docx/Save.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
+#include "doc/edit/Shapes.h"
 #include "doc/edit/TreeEdit.h"
 #include "pkg/Check.h"
 
 using namespace fw::doc;
 using namespace docfix;
 using edit::Editor;
+using edit::ShapeKind;
+using edit::Shapes;
+using edit::Wrap;
 
 namespace {
+
+std::unique_ptr<Document> Blank() {
+  fw::pkg::Status st;
+  auto pkg = test::OpenBytes(docx::BlankDocx({"en-US", false, "Test", 0}), st);
+  return pkg ? docx::Read(std::move(pkg), st) : nullptr;
+}
+
+// The drawings in the text, in order of their index.
+std::vector<uint32_t> Shown(const Document& doc) {
+  std::vector<uint32_t> out;
+  for (uint32_t i = 0; i < doc.Drawings().size(); ++i)
+    if (doc.Drawings()[i].pos.para != kNone) out.push_back(i);
+  return out;
+}
+
+constexpr int64_t kInch = 914400;
 
 std::string PartXml(const Document& doc, PartKind kind) {
   for (uint32_t i = 0; i < doc.Parts().size(); ++i) {
@@ -247,4 +268,195 @@ TEST(TextBox_InATableCellAndAHeaderToo) {
   std::u16string all = BoxText(*back, 0) + BoxText(*back, 1);
   CHECK(all.find(u"1Boxed|") != std::u16string::npos && all.find(u"2Top|") != std::u16string::npos);
   CHECK_EQ(Count(PartXml(*back, PartKind::Header), ">2Top<"), 2u);
+}
+
+// ---------- Shapes ----------
+
+TEST(Shapes_EachKindIsInsertedSavedAndReopened) {
+  auto doc = Blank();
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  Shapes shapes(ed);
+  const ShapeKind kinds[] = {ShapeKind::TextBox, ShapeKind::Rectangle, ShapeKind::RoundedRectangle, ShapeKind::Oval,
+                             ShapeKind::Line,    ShapeKind::Arrow,     ShapeKind::Callout};
+  int64_t y = kInch;
+  for (ShapeKind k : kinds) {
+    auto r = shapes.Insert(0, k, fw::Emu(kInch), fw::Emu(y), fw::Emu(2 * kInch), fw::Emu(k == ShapeKind::Line ? 0 : kInch / 2));
+    CHECK(r.ok);
+    y += kInch;
+  }
+  CHECK(doc->Para(0).text == std::u16string(7, u'\xFFFC'));
+  const std::vector<uint32_t> shown = Shown(*doc);
+  CHECK_EQ(shown.size(), 7u);
+  for (uint32_t d : shown) {
+    CHECK(doc->Drawings()[d].displayOnly && doc->Drawings()[d].kept != 0 && doc->Drawings()[d].anchored);
+    CHECK(shapes.Info(d).shape);
+  }
+  const std::string xml = Main(*doc);
+  CHECK_EQ(Count(xml, "<mc:AlternateContent"), 7u);
+  CHECK_EQ(Count(xml, "<mc:Fallback>"), 6u);  // not the callout: its VML isn't written
+  CHECK(Count(xml, "<v:roundrect ") == 1 && Count(xml, "<v:oval ") == 1 && Count(xml, "<v:line ") == 2 &&
+        Count(xml, "endarrow=\"block\"") == 1);
+  CHECK_EQ(Count(xml, "<w:txbxContent>"), 3u);  // the text box twice, the callout once
+  std::string saved;
+  auto back = SaveAndRead(*doc, ed, &saved);
+  CHECK(back);
+  if (!back) return;
+  CHECK_EQ(Shown(*back).size(), 7u);
+  uint32_t boxes = 0;
+  for (const Story& s : back->Stories()) boxes += s.kind == StoryKind::TextBox;
+  CHECK_EQ(boxes, 2u);
+  for (uint32_t d : Shown(*back)) CHECK(back->Drawings()[d].kept != 0);
+  CHECK(back->Drawings()[Shown(*back)[0]].boxesWritable);
+}
+
+TEST(Shapes_TypingInANewTextBoxGoesInBothCopies) {
+  auto doc = Blank();
+  if (!doc) return;
+  Editor ed(*doc);
+  Shapes shapes(ed);
+  CHECK(shapes.Insert(0, ShapeKind::TextBox, fw::Emu(kInch), fw::Emu(kInch), fw::Emu(2 * kInch), fw::Emu(kInch)).ok);
+  const uint32_t d = Shown(*doc).at(0);
+  const uint32_t story = shapes.TextStory(d);
+  CHECK(story != kNone && edit::TextBoxEditable(*doc, story));
+  const uint32_t p = doc->StoryParagraphs(story).at(0);
+  CHECK(ed.InsertText({p, 0}, u"Hello").ok);
+  CHECK(ed.SplitParagraph({p, 5}).ok);
+  CHECK(ed.InsertText({doc->StoryParagraphs(story).at(1), 0}, u"world").ok);
+  CHECK_EQ(Count(Main(*doc), ">Hello<"), 2u);
+  CHECK_EQ(Count(Main(*doc), ">world<"), 2u);
+  auto back = SaveAndRead(*doc, ed);
+  CHECK(back);
+  if (back) CHECK(BoxText(*back) == u"Hello|world|");
+  // Undo all of it: the shape goes too.
+  while (ed.CanUndo()) CHECK(ed.Undo().ok);
+  CHECK(doc->Para(0).text.empty() && Shown(*doc).empty());
+  CHECK_EQ(Count(Main(*doc), "AlternateContent"), 0u);
+}
+
+TEST(Shapes_EachChangeIsOneStepAndUndoesExactly) {
+  auto doc = Blank();
+  if (!doc) return;
+  Editor ed(*doc);
+  Shapes shapes(ed);
+  CHECK(shapes.Insert(0, ShapeKind::Rectangle, fw::Emu(kInch), fw::Emu(kInch), fw::Emu(2 * kInch), fw::Emu(kInch)).ok);
+  const uint32_t d = Shown(*doc).at(0);
+  std::vector<std::string> states{Main(*doc)};
+  auto step = [&](const fw::doc::edit::Result& r) {
+    CHECK(r.ok);
+    states.push_back(Main(*doc));
+    CHECK(states.back() != states[states.size() - 2]);
+  };
+  step(shapes.Resize(d, fw::Emu(3 * kInch), fw::Emu(kInch)));
+  CHECK_EQ(shapes.Info(d).cx.Value(), 3 * kInch);
+  CHECK(Count(states.back(), "width:216pt") == 1);
+  step(shapes.Move(d, fw::Emu(2 * kInch), fw::Emu(3 * kInch)));
+  CHECK(Count(states.back(), "margin-left:144pt") == 1 && Count(states.back(), "<wp:posOffset>1828800<") == 1);
+  step(shapes.Rotate(d, 30));
+  CHECK(shapes.Info(d).rotation == 30 && Count(states.back(), "rotation:30") == 1);
+  step(shapes.SetFill(d, 0xFF0000u));
+  CHECK(shapes.Info(d).fill == 0xFF0000u && Count(states.back(), "fillcolor=\"#FF0000\"") == 1);
+  step(shapes.SetOutline(d, std::nullopt));
+  CHECK(shapes.Info(d).noOutline && Count(states.back(), "stroked=\"f\"") == 1);
+  step(shapes.SetWrap(d, Wrap::Square));
+  CHECK(shapes.Info(d).wrap == Wrap::Square && Count(states.back(), "<w10:wrap type=\"square\"/>") == 1);
+  step(shapes.SetWrap(d, Wrap::Inline));
+  CHECK(shapes.Info(d).wrap == Wrap::Inline && Count(states.back(), "<wp:inline") == 1);
+  auto back = SaveAndRead(*doc, ed);
+  CHECK(back && Shown(*back).size() == 1);
+  // Each undo puts back the XML before it, each redo the one after.
+  for (size_t k = states.size() - 1; k > 0; --k) {
+    CHECK(ed.Undo().ok);
+    CHECK(Main(*doc) == states[k - 1]);
+  }
+  for (size_t k = 1; k < states.size(); ++k) {
+    CHECK(ed.Redo().ok);
+    CHECK(Main(*doc) == states[k]);
+  }
+}
+
+TEST(Shapes_DeleteTakesItsBlockAndUndoBringsItBack) {
+  auto doc = Blank();
+  if (!doc) return;
+  Editor ed(*doc);
+  Shapes shapes(ed);
+  CHECK(ed.InsertText({0, 0}, u"Text").ok);
+  CHECK(shapes.Insert(0, ShapeKind::Oval, fw::Emu(kInch), fw::Emu(kInch), fw::Emu(kInch), fw::Emu(kInch)).ok);
+  const std::string with = Main(*doc);
+  CHECK(doc->Para(0).text == u"\xFFFCText");
+  CHECK(ed.Delete({0, 0}, {0, 1}).ok);
+  CHECK(doc->Para(0).text == u"Text" && Shown(*doc).empty());
+  CHECK_EQ(Count(Main(*doc), "AlternateContent"), 0u);
+  CHECK(SaveAndRead(*doc, ed) != nullptr);
+  CHECK(ed.Undo().ok);
+  CHECK(Main(*doc) == with && Shown(*doc).size() == 1);
+  // Typing right after it and before it.
+  CHECK(ed.InsertText({0, 1}, u"A").ok);
+  CHECK(ed.InsertText({0, 0}, u"B").ok);
+  CHECK(doc->Para(0).text == u"B\xFFFC" u"AText");
+  auto back = SaveAndRead(*doc, ed);
+  CHECK(back && back->Para(back->StoryParagraphs(back->MainStory())[0]).text == u"B\xFFFC" u"AText");
+}
+
+TEST(Shapes_AddTextToARectangle) {
+  auto doc = Blank();
+  if (!doc) return;
+  Editor ed(*doc);
+  Shapes shapes(ed);
+  CHECK(shapes.Insert(0, ShapeKind::Rectangle, fw::Emu(kInch), fw::Emu(kInch), fw::Emu(2 * kInch), fw::Emu(kInch)).ok);
+  const uint32_t d = Shown(*doc).at(0);
+  CHECK(!shapes.Info(d).text && shapes.TextStory(d) == kNone);
+  CHECK(shapes.AddText(d).ok);
+  const uint32_t story = shapes.TextStory(d);
+  CHECK(story != kNone && shapes.Info(d).text);
+  CHECK(ed.InsertText({doc->StoryParagraphs(story).at(0), 0}, u"Inside").ok);
+  CHECK_EQ(Count(Main(*doc), ">Inside<"), 2u);
+  auto back = SaveAndRead(*doc, ed);
+  CHECK(back);
+  if (back) CHECK(BoxText(*back) == u"Inside|");
+  // Lines hold no text.
+  CHECK(shapes.Insert(0, ShapeKind::Line, fw::Emu(kInch), fw::Emu(kInch), fw::Emu(kInch), fw::Emu(0)).ok);
+  CHECK(!shapes.AddText(Shown(*doc).back()).ok);
+}
+
+TEST(Shapes_AWordTextBoxChangesAndKeepsItsText) {
+  Fixture f;
+  f.body = "<w:p><w:r><w:t>Body</w:t></w:r>" + WordTextBox(kBoxed) + "</w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  Shapes shapes(ed);
+  const uint32_t d = Shown(*doc).at(0);
+  const fw::doc::edit::ShapeInfo info = shapes.Info(d);
+  CHECK(info.shape && info.text && info.preset == "rect" && info.wrap == Wrap::Square);
+  CHECK(shapes.SetFill(d, 0x00FF00u).ok);
+  std::string xml = Main(*doc);
+  CHECK(Count(xml, "fillcolor=\"#00FF00\"") == 1 && Count(xml, ">Boxed<") == 2 && Count(xml, "<v:shape ") == 0);
+  CHECK(ed.InsertText({BoxPara(*doc), 0}, u"Green ").ok);
+  CHECK_EQ(Count(Main(*doc), ">Green Boxed<"), 2u);
+  auto back = SaveAndRead(*doc, ed);
+  CHECK(back);
+  if (back) CHECK(BoxText(*back) == u"Green Boxed|");
+  // And it can be deleted.
+  const uint32_t at = doc->Drawings()[d].pos.offset;
+  CHECK(ed.Delete({doc->Drawings()[d].pos.para, at}, {doc->Drawings()[d].pos.para, at + 1}).ok);
+  CHECK_EQ(Count(Main(*doc), "txbxContent"), 0u);
+}
+
+TEST(Shapes_PicturesAndOlderShapesAreNotShapesHere) {
+  Fixture f;
+  f.body = "<w:p><w:r><w:pict><v:shape id=\"s\" style=\"position:absolute;width:144pt;height:36pt\"><v:textbox>"
+           "<w:txbxContent><w:p><w:r><w:t>Boxed</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>";
+  auto doc = LoadOk(f);
+  if (!doc) return;
+  Editor ed(*doc);
+  Shapes shapes(ed);
+  const uint32_t d = Shown(*doc).at(0);
+  const fw::doc::edit::ShapeInfo info = shapes.Info(d);
+  CHECK(!info.shape && !info.why.empty());
+  CHECK(!shapes.SetFill(d, 0xFF0000u).ok);
+  // Its text is still edited.
+  CHECK(ed.InsertText({BoxPara(*doc), 0}, u"x").ok);
 }
