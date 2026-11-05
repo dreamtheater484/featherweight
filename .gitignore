@@ -18,3 +18,5 @@ CMakeUserPresets.json
 
 # Python venv for the office corpus generator (tests/office)
 /.venv/
+/tools/validate/bin/
+/tools/validate/obj/
