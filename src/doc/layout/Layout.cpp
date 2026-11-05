@@ -12,6 +12,7 @@
 
 #include "core/OpenTimings.h"
 #include "core/Strings.h"
+#include "doc/edit/Editor.h"
 #include "doc/layout/Engine.h"
 #include "draw/Painter.h"
 
@@ -43,11 +44,12 @@ bool Layout::Continue(double milliseconds) {
 }
 
 bool Layout::Done() const { return impl_->engine.Done(); }
-void Layout::Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added) {
-  impl_->engine.Edited(story, first, removed, added);
+size_t Layout::PageCount() const { return impl_->engine.ShownCount(); }
+const Page& Layout::GetPage(size_t index) const { return impl_->engine.Shown(index); }
+
+void Layout::Edited(const edit::Change& change) {
+  impl_->engine.Edited(change.story, change.first, change.removed, change.added, change.structure);
 }
-size_t Layout::PageCount() const { return impl_->engine.Pages().size(); }
-const Page& Layout::GetPage(size_t index) const { return impl_->engine.Pages()[index]; }
 uint32_t Layout::Revision() const { return impl_->engine.Revision(); }
 size_t Layout::MemoryBytes() const { return impl_->engine.MemoryBytes(); }
 
@@ -58,7 +60,7 @@ namespace {
 // The model offset of a layout offset on a line, through the paragraph's own text mapping.
 uint32_t ToModel(Engine& e, const LineBox& lb, uint32_t layoutOffset) {
   ParaText pt;
-  e.BuildText(lb.para, PageFields(), pt);
+  e.BuildText(lb.para, PageFields(), pt, false, false);
   return pt.ModelOffset(layoutOffset);
 }
 
@@ -89,8 +91,8 @@ static Rect OnPage(const LineBox& lb, const Rect& r) {
 
 std::optional<TextPos> Layout::HitTest(size_t page, float x, float y) const {
   Engine& e = impl_->engine;
-  if (page >= e.Pages().size()) return std::nullopt;
-  const Page& p = e.Pages()[page];
+  if (page >= e.ShownCount()) return std::nullopt;
+  const Page& p = e.Shown(page);
   const LineBox* best = nullptr;
   float bestDistance = 1e30f;
   float bestX = x;
@@ -109,7 +111,9 @@ std::optional<TextPos> Layout::HitTest(size_t page, float x, float y) const {
   }
   if (!best) return std::nullopt;
   uint32_t offset = best->line.HitTest(bestX - best->x);
-  return TextPos{best->para, ToModel(e, *best, offset)};
+  // (An old page shown until it's laid out again after an edit may have more text than there is.)
+  const auto size = static_cast<uint32_t>(e.Doc().Para(best->para).text.size());
+  return TextPos{best->para, std::min(ToModel(e, *best, offset), size)};
 }
 
 std::optional<Layout::Caret> Layout::CaretAt(TextPos pos) {
@@ -122,7 +126,7 @@ std::optional<Layout::Caret> Layout::CaretAt(TextPos pos) {
       const LineBox& lb = p.lines[k];
       if (lb.para != pos.para) continue;
       ParaText pt;
-      e.BuildText(lb.para, PageFields(), pt);
+      e.BuildText(lb.para, PageFields(), pt, false, false);
       uint32_t at = pt.LayoutOffset(pos.offset);
       bool lastOfPara = lb.line.ending == text::LineEnd::ParagraphEnd;
       if (at >= lb.line.start && (at < lb.line.end || (at == lb.line.end && lastOfPara))) {
@@ -147,7 +151,7 @@ std::vector<std::pair<size_t, Rect>> Layout::Ranges(TextPos from, TextPos to) {
     for (const LineBox& lb : p.lines) {
       if (lb.para == kNone || lb.para < from.para || lb.para > to.para) continue;
       ParaText pt;
-      e.BuildText(lb.para, PageFields(), pt);
+      e.BuildText(lb.para, PageFields(), pt, false, false);
       uint32_t a = lb.para == from.para ? pt.LayoutOffset(from.offset) : 0;
       const uint32_t end = lb.para == to.para ? pt.LayoutOffset(to.offset) : UINT32_MAX;
       // The line that holds the end is the last: nothing after it is in the range, even when the
@@ -296,8 +300,8 @@ void Placeholder(draw::Painter& painter, const Rect& r) {
 
 void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& drawing) const {
   const Engine& e = impl_->engine;
-  if (page >= e.Pages().size()) return;
-  const Page& p = e.Pages()[page];
+  if (page >= e.ShownCount()) return;
+  const Page& p = e.Shown(page);
   auto paintLine = [&](const LineBox& lb) {
     const bool clip = lb.clip.Width() > 0;
     if (clip || lb.turn) painter.Save();

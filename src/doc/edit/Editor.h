@@ -126,6 +126,10 @@ class Editor {
   Result SetMarkProps(uint32_t first, uint32_t last, const PropEdit& edit);
   // Sets paragraph properties on each paragraph from `first` to `last` in document order.
   Result SetParaProps(uint32_t first, uint32_t last, const PropEdit& edit);
+  // Makes the text in [from, to), in one paragraph, a hyperlink to `target`: a web address (a
+  // relationship of the part, kept if the link is undone, which is harmless) or "#bookmark".
+  // Refused where the text is already a link, or in a field, a content control or a tracked change.
+  Result SetLink(Pos from, Pos to, std::string_view target);
 
   // Groups the transactions until EndGroup into one undo step named `name` ("Bold", "Paste").
   // Groups nest; the outermost names the step.

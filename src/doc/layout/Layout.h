@@ -22,6 +22,9 @@ class OpenTimings;
 namespace fw::text {
 class Fonts;
 }
+namespace fw::doc::edit {
+struct Change;
+}
 
 // Pagination: a Document's stories laid out on pages, the way Word lays them out (plan §6.3
 // "Layout", milestone D1). Lines come from fwtext; this places them in sections, columns, headers
@@ -33,6 +36,10 @@ class Fonts;
 // time until Done(). Pages already laid out never change while later ones are added, except their
 // NUMPAGES and SECTIONPAGES fields, which are filled in again once the page count is known
 // (Revision() changes when that happens).
+//
+// And after an edit (D2, plan §4), Edited() lays out again only what the change moves: from the
+// page before the change, until a page ends where it ended before, past the change; the pages
+// after that are kept as they are. Until they're laid out again, the old pages are still shown.
 //
 // Coordinates are page coordinates in points (1/72 inch): from the page's top-left corner, y down.
 // Single-threaded: use it, the Document and the Fonts on one thread.
@@ -171,17 +178,21 @@ class Layout {
   // Everything at once.
   void LayOutAll() { LayOutPages(SIZE_MAX); }
   bool Done() const;
-  // The document changed (an edit, its undo or redo): paragraphs [first, first + removed) of
-  // `story` became [first, first + added), and later ones were renumbered. The pages from the one
-  // the change starts on are laid out again, as LayOutPages and Continue ask; once a page starts
-  // where one did before, the rest are the old pages (their paragraph numbers moved), so typing
-  // lays out a page or two however long the document is. Pages before it stay.
-  void Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added);
+
+  // ---- Editing (D2)
+  // The document changed: an edit::Editor change notification (Editor::OnChange). The pages from
+  // the one before the change on are laid out again as LayOutPages and Continue ask for them.
+  // Until then they're shown as they were (PageCount and GetPage include them), with paragraph
+  // indices moved along, so HitTest on them stays valid; Done() is false. For typing: Edited, then
+  // LayOutPages(last page on screen + 1) and paint; Continue() lays out the rest in idle time.
+  void Edited(const edit::Change& change);
 
   // ---- Pages
-  size_t PageCount() const;  // so far; final once Done()
+  // Laid out so far (final once Done()), then after an edit the old pages not laid out again yet.
+  size_t PageCount() const;
   const Page& GetPage(size_t index) const;
-  // Changes whenever pages already returned change (their NUMPAGES fields, once the count is known).
+  // Changes whenever pages already returned change: their NUMPAGES fields once the count is known,
+  // or an edit.
   uint32_t Revision() const;
 
   // ---- Selection and find. Positions on pages not laid out yet are laid out first.

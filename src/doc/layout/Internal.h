@@ -57,6 +57,7 @@ struct ParaText {
   std::vector<uint32_t> anchors;                     // floating drawings anchored in it
   std::vector<std::pair<uint32_t, uint32_t>> inlines;  // (layout offset, drawing) for inline drawings
   bool usesPageCount = false;                        // NUMPAGES or SECTIONPAGES
+  bool usesPage = false;                             // PAGE
   bool empty = false;                                // nothing visible: a hidden paragraph
 
   uint32_t ModelOffset(uint32_t layoutOffset) const;
