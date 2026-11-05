@@ -1,11 +1,14 @@
 #include "TestHarness.h"
 
+#include <cmath>
 #include <string>
 #include <vector>
 
 #include "DocTestUtil.h"
 #include "doc/edit/Editor.h"
+#include "doc/layout/Layout.h"
 #include "doc/model/Utf.h"
+#include "text/Fonts.h"
 
 using namespace fw::doc;
 using namespace doc_test;
@@ -657,4 +660,149 @@ TEST(Edit_ModifiedFollowsSavesAndUndo) {
   CHECK(ed.Undo() && !ed.Modified() && doc->Para(p).text == u"ab");
   CHECK(ed.Undo() && ed.Modified() && ed.Redo() && !ed.Modified());
   CHECK(ed.DirtyParts().size() == 1);
+}
+
+// ---- Laying out again after edits (Layout::Edited)
+
+namespace {
+
+fw::text::Fonts& EditFonts() {
+  static fw::text::Fonts fonts;
+  return fonts;
+}
+
+// The same pages, line for line.
+bool SameLayout(fw::doc::layout::Layout& got, const Document& doc) {
+  fw::doc::layout::Layout fresh(doc, EditFonts());
+  got.LayOutAll();
+  fresh.LayOutAll();
+  if (got.PageCount() != fresh.PageCount()) {
+    std::printf("  %zu pages, a fresh layout has %zu\n", got.PageCount(), fresh.PageCount());
+    return false;
+  }
+  for (size_t i = 0; i < got.PageCount(); ++i) {
+    const auto& a = got.GetPage(i);
+    const auto& b = fresh.GetPage(i);
+    bool same = a.lines.size() == b.lines.size() && a.number == b.number && a.first == b.first;
+    for (size_t k = 0; same && k < a.lines.size(); ++k) {
+      const auto& x = a.lines[k];
+      const auto& y = b.lines[k];
+      same = x.para == y.para && x.text == y.text && std::abs(x.top - y.top) < 0.01f && std::abs(x.x - y.x) < 0.01f;
+    }
+    if (!same) {
+      std::printf("  page %zu differs from a fresh layout's (%zu lines, %zu)\n", i, a.lines.size(), b.lines.size());
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string LongBody() {
+  std::string body;
+  const char* words = "the quick brown fox jumps over a lazy dog while seven wizards quietly box jumping frogs ";
+  for (int i = 0; i < 70; ++i) {
+    std::string text;
+    for (int k = 0; k <= (i * 7) % 23; ++k) text += words;
+    if (i % 9 == 0)
+      body += "<w:p><w:pPr><w:keepNext/><w:spacing w:before=\"240\"/></w:pPr><w:r><w:rPr><w:sz w:val=\"32\"/></w:rPr>"
+              "<w:t>Heading " + std::to_string(i) + "</w:t></w:r></w:p>";
+    body += "<w:p><w:r><w:t xml:space=\"preserve\">" + std::to_string(i) + " " + text + "</w:t></w:r>";
+    if (i == 33) body += "<w:r><w:footnoteReference w:id=\"1\"/></w:r>";
+    body += "</w:p>";
+    if (i == 25) body += "<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>";
+    if (i == 40)
+      body += "<w:tbl><w:tblGrid><w:gridCol w:w=\"4000\"/><w:gridCol w:w=\"4000\"/></w:tblGrid><w:tr><w:tc><w:p><w:r>"
+              "<w:t>cell one</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>cell two</w:t></w:r></w:p></w:tc></w:tr></w:tbl>";
+  }
+  return body + "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" "
+                "w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/></w:sectPr>";
+}
+
+}  // namespace
+
+TEST(Edit_LayingOutAgainMatchesAFreshLayout) {
+  Fixture f;
+  f.body = LongBody();
+  f.footnotes =
+      "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>"
+      "<w:footnote w:id=\"1\"><w:p><w:r><w:footnoteRef/><w:t xml:space=\"preserve\"> A note.</w:t></w:r></w:p></w:footnote>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  fw::doc::layout::Layout layout(*doc, EditFonts());
+  layout.LayOutAll();
+  CHECK(layout.PageCount() > 8);
+  Editor ed(*doc);
+  ed.OnChange([&](const edit::Change& c) { layout.Edited(c.story, c.first, c.removed, c.added); });
+  auto ps = Main(*doc);
+  auto check = [&](const char* what) {
+    if (!SameLayout(layout, *doc)) {
+      std::printf("  after %s\n", what);
+      CHECK(false);
+    }
+  };
+  CHECK(ed.InsertText(P(ps[12], 5), u"x"));
+  check("typing a character");
+  CHECK(ed.InsertText(P(ps[20], 3), u"more words that make the paragraph longer by a line or two, and then some more"));
+  check("typing a line's worth");
+  CHECK(ed.SplitParagraph(P(ps[30], 10)));
+  check("Enter");
+  CHECK(ed.JoinParagraphs(ps[30]));
+  check("joining");
+  ps = Main(*doc);
+  CHECK(ed.Delete(P(ps[55], 4), P(ps[58], 2)));
+  check("deleting across paragraphs");
+  ps = Main(*doc);
+  CHECK(ed.InsertText(P(ps[0], 0), u"Start: "));
+  check("typing on the first page");
+  ps = Main(*doc);
+  CHECK(ed.InsertText(P(ps.back(), ed.ParaLength(ps.back())), u" The end."));
+  check("typing at the end");
+  uint32_t cell = kNone;
+  for (uint32_t p : ps)
+    if (doc->Para(p).text == u"cell one") cell = p;
+  CHECK(cell != kNone && ed.InsertText(P(cell, 4), u" and a half"));
+  check("typing in a table");
+  uint32_t note = doc->StoryParagraphs(doc->NoteStory(StoryKind::Footnote, "1")).at(0);
+  CHECK(ed.InsertText(P(note, ed.ParaLength(note)), u" It grew into a much longer note than it was before, two lines."));
+  check("typing in a footnote");
+  while (ed.CanUndo()) CHECK(ed.Undo());
+  check("undoing everything");
+  CHECK(RoundTrips(*doc));
+  // Edits while the layout is still under way.
+  fw::doc::layout::Layout partial(*doc, EditFonts());
+  partial.LayOutPages(3);
+  Editor ed2(*doc);
+  ed2.OnChange([&](const edit::Change& c) { partial.Edited(c.story, c.first, c.removed, c.added); });
+  CHECK(ed2.SplitParagraph(P(ps[2], 3)) && ed2.InsertText(P(ps[60], 0), u"Far ahead "));
+  if (!SameLayout(partial, *doc)) CHECK(false);
+}
+
+TEST(Edit_LinesForTheCaret) {
+  Fixture f;
+  f.body = LongBody();
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  fw::doc::layout::Layout layout(*doc, EditFonts());
+  auto ps = Main(*doc);
+  uint32_t p = ps[3];  // a paragraph of several lines
+  auto first = layout.LineAt({p, 0});
+  CHECK(first && first->start == (fw::doc::layout::TextPos{p, 0}) && first->end.offset > 10);
+  if (!first) return;
+  // Home and End stay on the line: End is before the wrap, and the caret there is on the same line.
+  auto caretEnd = layout.CaretAt(first->end);
+  CHECK(caretEnd && std::abs(caretEnd->top - first->box.top) < 0.5f);
+  // Down from the first line: the second line, near the same x; up again: the first.
+  auto down = layout.LineStep({p, 3}, 1, first->box.left + 20);
+  CHECK(down && down->para == p && down->offset > first->end.offset);
+  if (down) {
+    auto up = layout.LineStep(*down, -1, first->box.left + 20);
+    CHECK(up && up->para == p && up->offset < first->end.offset);
+  }
+  // Many lines down crosses pages; past either end there's nothing.
+  auto deep = layout.LineStep({p, 0}, 200, 100);
+  CHECK(deep && deep->para > p);
+  CHECK(!layout.LineStep({ps[0], 0}, -1, 100));
+  CHECK(!layout.LineStep({ps.back(), 0}, 100000, 100));
 }
