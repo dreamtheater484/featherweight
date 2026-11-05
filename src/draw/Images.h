@@ -87,6 +87,8 @@ class Image : public PixelHolder, public std::enable_shared_from_this<Image> {
   // decoded after all.
   std::shared_ptr<const Bitmap> Pixels(int width = 0, int height = 0) const;
   void DropPixels() const override;
+  // The picture's file, as it was opened. False when it can't be read again.
+  bool Encoded(std::vector<uint8_t>& bytes) const;
 
  private:
   Image() = default;

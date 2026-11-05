@@ -1,4 +1,4 @@
-# fwdraw: the Painter interface, its Direct2D backend and vector printing (plan §4.1, §4.5, §4.6),
+# fwdraw: the Painter interface, its Direct2D backend, vector printing and PDF export (plan §4.1, §4.5, §4.6),
 # and the drawing formats the three apps share: DrawingML and a VML subset, themes, pictures.
 # Headless: no UI and no window.
 add_library(fwdraw STATIC
@@ -9,7 +9,9 @@ add_library(fwdraw STATIC
   Geometry.cpp
   Images.cpp
   Painter.cpp
+  Pdf.cpp
   PrintJob.cpp
+  Sfnt.cpp
   Shapes.cpp
   Theme.cpp
   Vml.cpp

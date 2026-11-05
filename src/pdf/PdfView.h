@@ -91,6 +91,10 @@ class PdfView : public PagedView, public DocumentHost {
   SaveFormat SaveAsFormat() const override { return {L"PDF document", L"*.pdf", L"pdf"}; }
   bool CanPrint() const override { return doc_ && doc_->CanPrint(); }
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;
+  // A copy with form fields and annotations flattened into the pages: what printing to a PDF
+  // printer gives, without the printer. Only where printing is allowed.
+  bool CanExportPdf() const override { return doc_ && doc_->CanPrint() && doc_->CanExportFlattened(); }
+  bool ExportPdf(const std::wstring& path, std::wstring& message) override;
 
   // ---- Text ----
   bool HasSelection() const { return !selection_.Empty(); }

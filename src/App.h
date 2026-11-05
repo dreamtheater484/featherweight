@@ -152,6 +152,9 @@ class App : public PdfHost, public DropHost {
   bool ConfirmClose(TabContent* view);
   bool SaveActive(bool saveAs);
   void PrintActive();
+  // Export PDF: asks where, then writes the tab's pages there.
+  void ExportPdfActive();
+  bool ExportPdfTo(const std::wstring& path);
   void RememberState(TabContent* view);
   void FocusBox(TextBox* box);
   void OpenSearch();

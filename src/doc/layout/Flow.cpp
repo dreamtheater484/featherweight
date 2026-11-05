@@ -1934,6 +1934,15 @@ const Page& Engine::Shown(size_t index) const {
   return index < pages_.size() ? pages_[index] : impl_->old[index - pages_.size()].page;
 }
 
+PageFields Engine::ShownFields(size_t index) const {
+  PageFields fields;
+  fields.page = Shown(index).numberText;
+  const auto* counts = index < pages_.size() ? (index < impl_->shownCounts.size() ? &impl_->shownCounts[index] : nullptr)
+                                             : &impl_->old[index - pages_.size()].shownCounts;
+  if (counts) std::tie(fields.pages, fields.sectionPages) = *counts;
+  return fields;
+}
+
 // Once the page count is known, NUMPAGES and SECTIONPAGES in headers and footers show it.
 void Engine::RefreshPageCounts() {
   Impl& f = *impl_;

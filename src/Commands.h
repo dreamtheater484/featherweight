@@ -242,4 +242,6 @@ enum Cmd : int {
   // Styles (D3).
   CmdModifyStyle = 1230,  // the Modify style panel, for the paragraph's style
   CmdNewStyle,            // Create a style from the selection
+  // Output (D4).
+  CmdExportPdf = 1400,  // File > Export PDF: the tab's pages into a PDF file
 };
