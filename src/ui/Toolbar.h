@@ -101,6 +101,12 @@ class Toolbar {
   void OnKeyDown(UINT vk, bool ctrl, bool shift, bool alt);
   void OnChar(wchar_t ch) { group_.OnChar(ch); }
   void Blur() { group_.Blur(); }
+  // Lets go of the controls it shows, before the tab that owns some of them (ToolKind::Custom, such
+  // as the Insert table grid) goes: the next Layout shows the next tab's.
+  void Forget() {
+    group_.Clear();
+    shown_.clear();
+  }
 
   // Runs a command: a split button's main part, or a button UI Automation invoked.
   std::function<void(int cmd)> onCommand;

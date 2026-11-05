@@ -1750,7 +1750,10 @@ bool App::CloseTab(int index) {
   if (!snapshot_) settings_.Save();
   if (focusBox_ && focusBox_ == v->PasswordBox()) FocusBox(nullptr);
   if (index == active_ && search_.IsOpen()) CloseSearch();
-  if (index == active_) panel_.Show(nullptr, false);
+  if (index == active_) {
+    panel_.Show(nullptr, false);
+    toolbar_.Forget();  // the tab's own toolbar controls (the Insert table grid) go with it
+  }
   tabs_.erase(tabs_.begin() + index);
   UpdateAutosaveTimer();
   if (tabs_.empty()) {
