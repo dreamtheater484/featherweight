@@ -24,6 +24,6 @@ target_compile_options(fwdraw PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,M
 # The tests live with the others in tests/; they're added here so the root CMakeLists.txt stays as
 # it is while the D1 engines are built side by side.
 if(TARGET fw_tests)
-  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_drawing.cpp")
-  target_link_libraries(fw_tests PRIVATE gdi32)
+  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_drawing.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_pdf.cpp")
+  target_link_libraries(fw_tests PRIVATE gdi32 miniz)
 endif()

@@ -61,6 +61,8 @@ class D2DPainter : public Painter {
   // Records what follows into a command list on a second context of the same device; Restore
   // draws it twice, through Direct2D's shadow effect and then as it is.
   void BeginShadow(const Shadow& shadow) override;
+  // Restore draws only the shadow: PDF export draws shadows as pictures under the vectors.
+  void SetShadowsOnly(bool on) { shadowsOnly_ = on; }
 
  private:
   enum class Pushed : uint8_t { AxisClip, Layer };
@@ -92,6 +94,7 @@ class D2DPainter : public Painter {
   // The last stroke style, reused while pens keep the same caps, join and dashes.
   Pen strokeKey_;
   Microsoft::WRL::ComPtr<ID2D1StrokeStyle> stroke_;
+  bool shadowsOnly_ = false;
 };
 
 }  // namespace draw

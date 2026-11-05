@@ -151,6 +151,7 @@ bool DocView::ExportPdf(const std::wstring& path, std::wstring& message) {
 
 int DocView::RenderPagesForTesting(const std::wstring& dir, float dpi) {
   if (!Ready() || !pagination_) return 0;
+  CreateDirectoryW(dir.c_str(), nullptr);
   pagination_->LayOutAll();
   TakeNewPages();
   auto drawing = [this](draw::Painter& p, const layout::DrawingBox& box) { DrawDrawing(p, box); };

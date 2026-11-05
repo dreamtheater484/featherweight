@@ -189,7 +189,7 @@ void D2DPainter::DrawShadowed(const Saved& s) {
     dc_->DrawImage(effect.Get());
   }
   dc_->SetTransform(D2D1::IdentityMatrix());
-  dc_->DrawImage(s.recording.Get());
+  if (!shadowsOnly_) dc_->DrawImage(s.recording.Get());
 }
 
 void D2DPainter::PopTo(size_t depth) {

@@ -35,4 +35,8 @@ if(FW_BUILD_TESTS)
     --min-pages 100 --min-lines 100 --json "${_fw_fidelity}/word.json" --report "${_fw_fidelity}/word.md")
   set_tests_properties(fidelity_word_lines PROPERTIES FIXTURES_SETUP fidelity_word)
   set_tests_properties(fidelity_word_vs_word PROPERTIES FIXTURES_REQUIRED fidelity_word)
+  # Export PDF (D4) on the public corpus: each document's PDF strictly well formed, read back by
+  # PDFium with the text where it's drawn, and its pages as the screen draws them.
+  add_test(NAME pdf_check COMMAND fwtool pdf-check "${PROJECT_SOURCE_DIR}/tests/office/generated"
+    "${PROJECT_SOURCE_DIR}/tests/office/edge" "${PROJECT_SOURCE_DIR}/tests/office/layout" "${PROJECT_SOURCE_DIR}/tests/office/torture")
 endif()
