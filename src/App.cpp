@@ -1976,7 +1976,7 @@ void App::OnUpdaterDone() {
 }
 
 void App::ShowAbout() {
-  std::wstring content = L"Version " FW_VERSION_WSTRING L"\n\nA light, fast PDF reader. No bloat, no subscriptions, no cloud.\n\n"
+  std::wstring content = L"Version " FW_VERSION_WSTRING L"\n\nA light, fast PDF reader that also opens Word documents. No bloat, no subscriptions, no cloud.\n\n"
                          L"PDF engine: PDFium (build " + fw::Utf8ToWide(FW_PDFIUM_BUILD) +
                          L")\nMIT License © 2026 Roy Clerx\n\n"
                          L"<a href=\"https://github.com/dreamtheater484/featherweight\">github.com/dreamtheater484/featherweight</a>";

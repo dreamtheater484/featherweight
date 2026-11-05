@@ -93,6 +93,7 @@ class DocView : public PagedView {
   struct Hit {
     std::wstring link;     // a URL, or "#bookmark"
     int comment = -1;      // index into comments_
+    int change = -1;       // index into changes_
   };
 
   // Coordinates: page points <-> window pixels, with the view's rotation.
@@ -136,6 +137,18 @@ class DocView : public PagedView {
     Rects rects;
   };
   std::vector<Comment> comments_;
+  // Tracked changes, as Word's Simple Markup shows them: deleted text isn't laid out, so a
+  // deletion is a mark where it was; inserted text is underlined; both get a bar in the margin.
+  struct Change {
+    TextPos from, to;
+    bool deletion = false;
+    size_t author = 0;  // its color
+    std::wstring text;  // "Inserted by Ann", "Deleted by Ann: “old words”"
+    bool measured = false;
+    Rects rects;                                       // insertions
+    std::optional<fw::doc::layout::Layout::Caret> at;  // deletions
+  };
+  std::vector<Change> changes_;
   // HYPERLINK fields: their results, and where they go.
   struct Link {
     TextPos from, to;

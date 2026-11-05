@@ -83,7 +83,13 @@ $checks = @(
   @("gallery-commands-dark", "dark", "--widget-gallery", "key:alt+q;type:theme;key:down", @()),
   @("gallery-commands-light-200", "light", "--widget-gallery --scale 2 --size 2200x1400", "key:alt+q;type:pa;move:1092,288", @()),
   @("gallery-commands-dark-200", "dark", "--widget-gallery --scale 2 --size 2200x1400", "key:alt+q;type:fi;key:down;key:down", @()),
-  @("commands-pdf", "light", "", "key:alt+q;type:page", @("text.pdf"))
+  @("commands-pdf", "light", "", "key:alt+q;type:page", @("text.pdf")),
+  # Word documents (D1): the document tab, two pages at night, find, a selection, command search.
+  @("doc-report", "light", "", "", @("..\office\layout\report.docx")),
+  @("doc-night", "dark", "--invert", "view:facing;cmd:fit-page", @("..\office\layout\tabs-columns.docx")),
+  @("doc-search", "light", "", "cmd:find;type:the;wait:400", @("..\office\layout\report.docx")),
+  @("doc-selection", "light", "", "drag:200,300,600,360", @("..\office\layout\report.docx")),
+  @("doc-commands", "dark", "", "key:alt+q;type:page", @("..\office\layout\footnotes.docx"))
 )
 
 foreach ($c in $checks) {

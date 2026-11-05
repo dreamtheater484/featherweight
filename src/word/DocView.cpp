@@ -82,6 +82,17 @@ bool Invisible(char16_t c) {
          c == 0x00AD;
 }
 
+// Text of a deletion (w:del, w:moveFrom): not laid out, so not shown, found or copied.
+bool Deleted(fw::doc::Node revision) {
+  return revision && (revision.Is(fw::doc::Name("del")) || revision.Is(fw::doc::Name("moveFrom")));
+}
+
+// The color tracked changes are marked in, one per author as Word does.
+D2D1_COLOR_F ChangeColor(size_t author) {
+  static const uint32_t kColors[] = {0xC0392B, 0x2E6FD8, 0x1E8A4C, 0x8E44AD, 0xD35400, 0x16A085, 0xB03A6F, 0x7F6A00};
+  return Rgb(kColors[author % (sizeof(kColors) / sizeof(kColors[0]))]);
+}
+
 bool WordChar(wchar_t c) { return IsCharAlphaNumericW(c) || c == L'\'' || c == 0x2019 || c == L'_'; }
 
 std::wstring Thousands(size_t n) {
@@ -117,7 +128,8 @@ std::wstring OpenError(const std::wstring& name, const fw::pkg::Status& st) {
   using Code = fw::pkg::Status::Code;
   switch (st.code) {
     case Code::IoError: return name + L" couldn't be opened — the file couldn't be read.";
-    case Code::TooLarge: return name + L" couldn't be opened — it's larger than Featherweight allows for safety.";
+    case Code::TooLarge: return name + L" couldn't be opened — it goes beyond the limits Featherweight sets for safety.";
+    case Code::Rejected: return name + L" couldn't be opened — it contains something Featherweight refuses for safety.";
     case Code::Unsupported: return name + L" couldn't be opened — it uses something Featherweight doesn't support yet.";
     default: return name + L" couldn't be opened — it seems to be damaged or isn't a Word document.";
   }
@@ -216,6 +228,45 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     }
   }
 
+  // Tracked changes in the text (not formatting changes, which show nothing in Simple Markup).
+  std::vector<std::string_view> authors;
+  for (uint32_t s = 0; s < doc_->Stories().size(); ++s) {
+    if (doc_->Stories()[s].kind == fw::doc::StoryKind::Comment) continue;
+    for (const auto& r : doc_->Revisions(s)) {
+      using Kind = fw::doc::RevisionKind;
+      if (r.kind != Kind::Insertion && r.kind != Kind::Deletion && r.kind != Kind::MoveFrom && r.kind != Kind::MoveTo)
+        continue;
+      if (r.start.para == fw::doc::kNone || r.end.para == fw::doc::kNone) continue;
+      Change ch;
+      ch.from = {r.start.para, r.start.offset};
+      ch.to = {r.end.para, r.end.offset};
+      if (ch.to < ch.from) std::swap(ch.from, ch.to);
+      if (ch.from == ch.to) continue;
+      ch.deletion = r.kind == Kind::Deletion || r.kind == Kind::MoveFrom;
+      auto who = std::find(authors.begin(), authors.end(), r.author);
+      if (who == authors.end()) who = authors.insert(authors.end(), r.author);
+      ch.author = static_cast<size_t>(who - authors.begin());
+      std::wstring by = r.author.empty() ? std::wstring() : L" by " + Wide(r.author);
+      if (ch.deletion) {
+        std::wstring gone;
+        for (uint32_t p = ch.from.para; p <= ch.to.para && gone.size() < 200; ++p) {
+          const std::u16string& t = doc_->Para(p).text;
+          uint32_t a = p == ch.from.para ? ch.from.offset : 0;
+          uint32_t b = p == ch.to.para ? ch.to.offset : static_cast<uint32_t>(t.size());
+          for (uint32_t i = a; i < b && i < t.size(); ++i)
+            if (!Invisible(t[i])) gone += static_cast<wchar_t>(t[i]);
+          if (p != ch.to.para) gone += L' ';
+        }
+        if (gone.size() > 200) gone = gone.substr(0, 200) + L"…";
+        ch.text = std::wstring(r.kind == Kind::MoveFrom ? L"Moved away" : L"Deleted") + by +
+                  (gone.empty() ? std::wstring() : L": “" + gone + L"”");
+      } else {
+        ch.text = std::wstring(r.kind == Kind::MoveTo ? L"Moved here" : L"Inserted") + by;
+      }
+      changes_.push_back(std::move(ch));
+    }
+  }
+
   // Words, for the status bar.
   for (uint32_t p : doc_->StoryParagraphs(doc_->MainStory())) {
     std::wstring t;
@@ -235,7 +286,7 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
 void DocView::VisibleText(uint32_t para, std::wstring& text, std::vector<uint32_t>& map) const {
   const std::u16string& s = doc_->Para(para).text;
   for (const auto& run : doc_->Runs(para)) {
-    if (run.fieldCode) continue;
+    if (run.fieldCode || Deleted(run.revision)) continue;
     if (run.run && doc_->ResolvedRun(para, run.run).vanish) continue;
     for (uint32_t i = run.start; i < run.end && i < s.size(); ++i) {
       char16_t c = s[i];
@@ -407,6 +458,42 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
       fill(cm.rects, Alpha(Rgb(0xF2C744), 0.30f), false);
     }
   }
+  // Tracked changes: inserted text underlined, a mark where text was deleted, and a bar in the
+  // left margin beside each.
+  if (!presentation_) {
+    const float u = std::max(1.0f, ui_);
+    auto bar = [&](int pg, float top, float bottom, D2D1_COLOR_F color) {
+      const layout::Page& page = pagination_->GetPage(pg);
+      const float x = std::max(4.0f, page.body.left - 14.0f);
+      D2D1_RECT_F s = PageRectToScreen(pg, {x, top, x + 1, bottom});
+      c.Fill(RectF(s.left, s.top, s.left + u, s.bottom), color);
+    };
+    for (auto& ch : changes_) {
+      if (!ch.measured) {
+        if (ch.deletion) ch.at = pagination_->CaretAt(ch.from);
+        else ch.rects = pagination_->Ranges(ch.from, ch.to);
+        ch.measured = true;
+      }
+      const D2D1_COLOR_F color = ChangeColor(ch.author);
+      if (ch.deletion) {
+        if (!ch.at) continue;
+        const int pg = static_cast<int>(ch.at->page);
+        if (pg < first || pg > last || pg >= pages) continue;
+        D2D1_RECT_F s = PageRectToScreen(pg, {ch.at->x, ch.at->top, ch.at->x, ch.at->bottom});
+        c.Fill(RectF(s.left - u, s.top, s.left + u, s.bottom), color);
+        c.Fill(RectF(s.left - 3 * u, s.top, s.left + 3 * u, s.top + u), color);
+        bar(pg, ch.at->top, ch.at->bottom, color);
+        continue;
+      }
+      for (const auto& [page, r] : ch.rects) {
+        const int pg = static_cast<int>(page);
+        if (pg < first || pg > last || pg >= pages) continue;
+        D2D1_RECT_F s = PageRectToScreen(pg, r);
+        c.Fill(RectF(s.left, s.bottom - u, s.right, s.bottom), color);
+        bar(pg, r.top, r.bottom, color);
+      }
+    }
+  }
   for (size_t i = 0; i < matches_.size(); ++i) {
     Match& m = matches_[i];
     if (!m.measured) {
@@ -447,6 +534,7 @@ bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
     revision_ = pagination_->Revision();
     for (auto& m : matches_) m.measured = false;
     for (auto& cm : comments_) cm.measured = false;
+    for (auto& ch : changes_) ch.measured = false;
     repaint = true;
   }
   if (!noticesShown_ && pagination_->Done()) ShowNotices();
@@ -497,6 +585,8 @@ DocView::Hit DocView::HitAt(int x, int y) {
   }
   for (size_t i = 0; i < comments_.size(); ++i)
     if (!(at < comments_[i].from) && at < comments_[i].to) hit.comment = static_cast<int>(i);
+  for (size_t i = 0; i < changes_.size(); ++i)
+    if (!changes_[i].deletion && !(at < changes_[i].from) && at < changes_[i].to) hit.change = static_cast<int>(i);
   return hit;
 }
 
@@ -611,7 +701,20 @@ std::wstring DocView::TooltipAt(int x, int y) {
     if (hit.link[0] == L'#') return L"Go to “" + hit.link.substr(1) + L"”";
     return hit.link;
   }
-  if (hit.comment >= 0) return comments_[hit.comment].text;
+  std::wstring tip;
+  if (hit.comment >= 0) tip = comments_[hit.comment].text;
+  if (hit.change >= 0) tip += (tip.empty() ? L"" : L"\n") + changes_[hit.change].text;
+  if (!tip.empty()) return tip;
+  // A deletion's mark, near its caret.
+  int page = PageAtPoint(x, y);
+  float px, py;
+  if (page >= 0 && ToPagePoint(page, x, y, px, py)) {
+    for (const auto& ch : changes_) {
+      if (ch.deletion && ch.at && static_cast<int>(ch.at->page) == page && std::abs(px - ch.at->x) < 3 &&
+          py >= ch.at->top && py < ch.at->bottom)
+        return ch.text;
+    }
+  }
   return {};
 }
 
