@@ -21,7 +21,11 @@
 //  - The toolbar's Layout menu: orientation, Word's margin presets, one to three columns, page
 //    setup, and automatic hyphenation.
 //  - Breaks: page (Ctrl+Enter), column (Ctrl+Shift+Enter) and section breaks, in Insert ▾ and
-//    command search; Delete section break joins the caret's section to the next.
+//    command search; Delete section break joins the caret's section to the next. Optional and
+//    non-breaking hyphens (Ctrl+-, Ctrl+Shift+-).
+//  - The Paragraph panel (the context menu, ⋯, command search): the selection's paragraphs'
+//    alignment, indents, spacing, line spacing and line and page breaks, as Word's Paragraph
+//    dialog has them; each change applies at once, as one undo step.
 // A change to the page lays out the pages shown at once and the rest in idle time.
 class DocPage {
  public:
@@ -37,6 +41,9 @@ class DocPage {
     std::function<void(PanelContent*, bool toggle)> showPanel;
     // The section of the header or footer being edited, or kNone in the body.
     std::function<uint32_t()> headerSection;
+    // After paragraph formatting: the caret's page laid out again, and why nothing changed
+    // when it didn't (empty otherwise).
+    std::function<void(const std::wstring& refused)> formatted;
   };
 
   DocPage(fw::doc::edit::Editor& editor, Host host);
@@ -46,7 +53,7 @@ class DocPage {
 
   static bool Owns(int cmd);
   static std::vector<int> CommandIds();
-  // Ctrl+Enter and Ctrl+Shift+Enter, or 0.
+  // Ctrl+Enter and Ctrl+Shift+Enter (breaks), Ctrl+- and Ctrl+Shift+- (hyphens), or 0.
   static int Shortcut(UINT vk, UINT mods);
   // The breaks Insert ▾ offers, after Picture….
   static const std::vector<int>& InsertCommands();
@@ -55,12 +62,14 @@ class DocPage {
   void Execute(int cmd);
   // The Layout menu, after the formatting groups.
   void AddToolbar(ToolbarModel& m);
-  // Whether the side panel shows this one's (to close it when the tab goes).
+  // Whether the side panel shows one of this one's (to close it when the tab goes).
   bool ShowsIn(const PanelContent* shown) const;
 
  private:
   class Panel;
+  class ParaPanel;
   friend class Panel;
+  friend class ParaPanel;
 
   const fw::doc::Document& Doc() const { return editor_.Doc(); }
   // The sections the selection is in (the caret's in a header or a note: the last one).
@@ -73,4 +82,5 @@ class DocPage {
   fw::doc::edit::Editor& editor_;
   Host host_;
   std::unique_ptr<Panel> panel_;
+  std::unique_ptr<ParaPanel> paraPanel_;
 };

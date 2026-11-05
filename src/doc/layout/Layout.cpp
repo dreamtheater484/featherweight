@@ -382,6 +382,18 @@ void DrawMarks(draw::Painter& painter, const LineBox& lb, const ParaText& pt) {
       path.LineTo({l, b - em * 0.25f});
       path.LineTo({l + w * 0.4f, b - em * 0.05f});
       painter.StrokePath(path, pen);
+    } else if (c == 0x00AD) {
+      // An optional hyphen, which takes no room: Word's ¬, small, above the letters it's between.
+      const float w = em * 0.36f, l = x1 - w / 2, y = b - em * 0.86f;
+      draw::Path path;
+      path.MoveTo({l, y});
+      path.LineTo({l + w, y});
+      path.LineTo({l + w, y + em * 0.22f});
+      painter.StrokePath(path, pen);
+    } else if (c == 0x2011 && x2 - x1 > 1) {
+      // A non-breaking hyphen: a dash as wide as the character, over the hyphen drawn.
+      const float h = std::max(0.6f, em * 0.08f);
+      painter.FillRect({x1, mid - h / 2, x2, mid + h / 2}, ink);
     } else if (c == 0x0C || c == 0x0E) {
       draw::Pen dots = pen;
       dots.dashes = {1, 2};

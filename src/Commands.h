@@ -187,6 +187,7 @@ enum Cmd : int {
   CmdHyphenation,       // automatic hyphenation on or off
   CmdOptionalHyphen,    // Ctrl+-
   CmdNonBreakingHyphen, // Ctrl+Shift+-
+  CmdParagraph,         // the Paragraph panel (indents, spacing, line and page breaks)
   // Proofing in Word documents.
   CmdSpelling = 800,  // F7: the next spelling error
   CmdWordCount,

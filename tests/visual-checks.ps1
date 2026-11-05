@@ -112,6 +112,10 @@ $checks = @(
   # page break (Ctrl+Enter) and a next-page section break near the start.
   @("doc-page-setup", "light", "", "cmd:1253;cmd:1259;cmd:1268;cmd:1250;wait:400", @("..\office\layout\report.docx")),
   @("doc-page-breaks", "dark", "", "key:ctrl+home;key:right;key:ctrl+enter;cmd:1263;view:facing;wait:300", @("..\office\layout\report.docx")),
+  # The Paragraph panel on a justified paragraph with exact line spacing.
+  @("doc-paragraph", "dark", "", "key:ctrl+home;key:down;key:down;cmd:1271;wait:300", @("..\office\layout\report.docx")),
+  # Optional and non-breaking hyphens typed in the heading (Ctrl+-, Ctrl+Shift+-), formatting marks shown.
+  @("doc-hyphens", "light", "", "key:ctrl+home;key:right;key:right;key:ctrl+minus;key:right;key:ctrl+shift+minus;key:ctrl+shift+8;wait:200", @("..\office\layout\report.docx")),
   # Printing a document (vector, through Microsoft Print to PDF), then the PDF it made.
   @("doc-print", "light", "", "print:$out\doc-print.pdf", @("..\office\layout\textbox-table.docx")),
   @("doc-printed", "light", "", "view:facing;cmd:fit-page", @("..\..\build\visual\doc-print.pdf"))
