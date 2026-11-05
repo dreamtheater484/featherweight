@@ -236,7 +236,8 @@ void ToggleList(TreeEdit& ed, Range range, ListKind kind) {
     RemoveList(ed, range);
     return;
   }
-  if (ed.EnsurePart(PartKind::Numbering) == kNoElem || ed.EnsurePart(PartKind::Styles) == kNoElem) return;
+  if (!ed.CanChange(paras) || ed.EnsurePart(PartKind::Numbering) == kNoElem || ed.EnsurePart(PartKind::Styles) == kNoElem)
+    return;
   ed.Begin(kind == ListKind::Bullet ? u"Bullets" : kind == ListKind::Number ? u"Numbering" : u"Multilevel list");
   ed.Local(true);  // the numbers after it change too
   std::string numId;
@@ -384,7 +385,8 @@ std::optional<AutoList> DetectAutoList(std::u16string_view typed) {
 }
 
 void StartAutoList(TreeEdit& ed, uint32_t para, const AutoList& list) {
-  if (ed.EnsurePart(PartKind::Numbering) == kNoElem || ed.EnsurePart(PartKind::Styles) == kNoElem) return;
+  if (!ed.CanChange({para}) || ed.EnsurePart(PartKind::Numbering) == kNoElem || ed.EnsurePart(PartKind::Styles) == kNoElem)
+    return;
   ed.Begin(u"AutoFormat");
   ed.Local(true);
   std::string numId = AddList(ed, list.kind == ListKind::Bullet ? ListKind::Bullet : ListKind::Number, &list);

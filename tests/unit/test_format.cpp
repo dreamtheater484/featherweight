@@ -1117,6 +1117,40 @@ TEST(Edit_FormattingInATextBoxIsRefused) {
   CHECK(SaveAndReopen(*doc) != nullptr);
 }
 
+TEST(Edit_RefusedFormattingAddsNoPart) {
+  // d2-torture finding 18: lists and styles add the numbering or styles part a document lacks
+  // before they change anything, and a part isn't undone. In a text box, where the change is
+  // refused, they add none; in the body they do.
+  Fixture f;  // no styles part, no numbering part
+  f.body = "<w:p><w:r><w:t>Body</w:t></w:r><w:r><w:pict><v:shape id=\"s\" style=\"position:absolute;width:144pt;"
+           "height:36pt\"><v:textbox><w:txbxContent><w:p><w:r><w:t>Boxed</w:t></w:r></w:p></w:txbxContent></v:textbox>"
+           "</v:shape></w:pict></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  uint32_t boxed = kNone;
+  for (uint32_t s = 0; s < doc->Stories().size(); ++s)
+    if (doc->Stories()[s].kind == StoryKind::TextBox && !doc->StoryParagraphs(s).empty()) boxed = doc->StoryParagraphs(s)[0];
+  CHECK(boxed != kNone);
+  if (boxed == kNone) return;
+  const size_t parts = doc->Parts().size(), packaged = doc->Package().Parts().size();
+  CHECK(!doc->FindPart(PartKind::Numbering) && !doc->FindPart(PartKind::Styles));
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  edit::ToggleList(ed, Whole(*doc, boxed), edit::ListKind::Bullet);
+  CHECK(!ed.Refused().empty());
+  edit::ToggleList(ed, Whole(*doc, boxed), edit::ListKind::Multilevel);
+  CHECK(!ed.Refused().empty());
+  edit::ApplyStyle(ed, Whole(*doc, boxed), "Subtitle");
+  CHECK(!ed.Refused().empty());
+  CHECK(doc->Parts().size() == parts && doc->Package().Parts().size() == packaged && !editor.CanUndo());
+  CHECK(!doc->FindPart(PartKind::Numbering) && !doc->FindPart(PartKind::Styles));
+  const uint32_t body = MainParas(*doc)[0];
+  edit::ToggleList(ed, Whole(*doc, body), edit::ListKind::Bullet);
+  CHECK(ed.Refused().empty() && editor.CanUndo() && doc->FindPart(PartKind::Numbering) && doc->FindPart(PartKind::Styles));
+  CHECK(SaveAndReopen(*doc) != nullptr);
+}
+
 TEST(Edit_FirstPropertyGoesBeforeKeptExtensions) {
   // A w:rPr that holds only an extension: the first w: property goes before it, as the editor's
   // own property edits put it (d2-torture finding 3b).
