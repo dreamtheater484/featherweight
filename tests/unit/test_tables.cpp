@@ -1011,3 +1011,25 @@ TEST(Tables_TextKeepsMarkersBetweenRowsAndCells) {
   CHECK(ChecksOut(*doc));
   CHECK(UndoesAndRedoes(ed, *doc, before));
 }
+
+TEST(Tables_NoTableInAOneParagraphControl) {
+  // d1-corpus finding 22, by way of tables: a date, list, plain-text or picture content control
+  // holds one paragraph, so no table goes into one, and its paragraph doesn't become a table.
+  Fixture f;
+  f.body = "<w:sdt><w:sdtPr><w:date><w:dateFormat w:val=\"d-M-yyyy\"/></w:date></w:sdtPr><w:sdtContent>" +
+           Para("5-11-2026") + "</w:sdtContent></w:sdt>" + Para("After");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const std::string before = Written(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  REQUIRE(ps.size() == 2);
+  CHECK(!ed.InsertTable(P(ps[0], 0), 2, 2));
+  CHECK(!ed.InsertTable(P(ps[0], 4), 2, 2));
+  CHECK(!ed.InsertTable(P(ps[0], 9), 2, 2));
+  CHECK(!ed.TextToTable(ps[0], ps[0], u'-'));
+  CHECK(Written(*doc) == before && !ed.CanUndo());
+  CHECK(ed.InsertTable(P(ps[1], 5), 1, 2));  // after it: fine
+  CHECK(Tables(*doc).size() == 1);
+  CHECK(UndoesAndRedoes(ed, *doc, before));
+}
