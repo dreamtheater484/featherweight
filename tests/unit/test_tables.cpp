@@ -557,6 +557,17 @@ TEST(Tables_CellRowAndTableProperties) {
   CHECK(Consistent(*doc, f) && GridOk(*doc));
   CHECK(UndoesAndRedoes(ed, *doc, before));
   CHECK(ChecksOut(*doc));
+  // Border presets: the block's outside edges, then none over a single cell.
+  REQUIRE(ed.SetCellBorders(a, d, Editor::CellBorders::Outside, "single", 12));
+  auto cell = [&](size_t r, size_t c) { return doc->ResolvedCell(doc->RowCells(doc->TableRows(FirstTable(*doc))[r])[c]); };
+  CHECK(cell(0, 0).top.Present() && cell(0, 0).start.Present() && cell(1, 1).bottom.Present() && cell(1, 1).end.Present());
+  CHECK(cell(0, 0).top.width.Value() == 12);
+  REQUIRE(ed.SetCellBorders(a, a, Editor::CellBorders::None));
+  CHECK(!cell(0, 0).top.Present() && !cell(0, 0).start.Present());
+  REQUIRE(ed.SetCellBorders(a, d, Editor::CellBorders::Inside));
+  CHECK(cell(0, 0).end.Present() && cell(0, 0).bottom.Present() && cell(1, 1).top.Present());
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  CHECK(UndoesAndRedoes(ed, *doc, before));
   // Values XML can't hold, and properties that don't exist, are refused.
   CHECK(!ed.SetCellProps(a, a, PropEdit().Set("vAlign", {{"val", "\x01"}})));
   CHECK(!ed.SetCellProps(a, a, PropEdit().Set("noSuchThing")));

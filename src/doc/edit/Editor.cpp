@@ -3566,4 +3566,47 @@ Result Editor::SetTableProps(Pos at, const PropEdit& edit) {
   return EditTable(at, at, u"Format table", [&](TableOp& o) { return o.s.ApplyProps(o.tbl, kTblPr, edit, o.why); });
 }
 
+Result Editor::SetCellBorders(Pos from, Pos to, CellBorders which, std::string_view style, int32_t eighths,
+                              std::string_view color) {
+  if (!XmlSafe(style) || !XmlSafe(color) || eighths < 2 || eighths > 96) return Fail(u"That isn't a border Word knows.");
+  return EditTable(from, to, u"Borders", [&](TableOp& o) {
+    const auto& bl = o.bl;
+    for (size_t r = bl.row0; r <= bl.row1; ++r)
+      for (size_t i = 0; i < o.g.rows[r].cells.size(); ++i) {
+        const GridCell& c = o.g.rows[r].cells[i];
+        if (c.col > bl.col1 || c.col + c.span - 1 < bl.col0) continue;
+        size_t top = r, bottom = r;
+        o.s.MergeRows(o.g, r, static_cast<int>(i), top, bottom);
+        // Which of the cell's sides are on the block's edge.
+        const bool edgeTop = top <= bl.row0, edgeBottom = bottom >= bl.row1;
+        const bool edgeLeft = c.col <= bl.col0, edgeRight = c.col + c.span - 1 >= bl.col1;
+        // Each side: on, none ("nil", over the table's), or left as it is.
+        auto act = [&](bool edge, CellBorders alone) {
+          switch (which) {
+            case CellBorders::All: return 1;
+            case CellBorders::None: return 0;
+            case CellBorders::Outside: return edge ? 1 : -1;
+            case CellBorders::Inside: return edge ? -1 : 1;
+            default: return which == alone && edge ? 1 : -1;
+          }
+        };
+        const std::pair<const char*, int> sides[] = {{"top", act(edgeTop, CellBorders::Top)},
+                                                     {"left", act(edgeLeft, CellBorders::Left)},
+                                                     {"bottom", act(edgeBottom, CellBorders::Bottom)},
+                                                     {"right", act(edgeRight, CellBorders::Right)}};
+        PropEdit edit;
+        for (const auto& [name, a] : sides) {
+          if (a < 0) continue;
+          if (a == 0)
+            edit.Set(std::string("tcBorders/") + name, {{"val", "nil"}});
+          else
+            edit.Set(std::string("tcBorders/") + name,
+                     {{"val", std::string(style)}, {"sz", std::to_string(eighths)}, {"space", "0"}, {"color", std::string(color)}});
+        }
+        if (!edit.items.empty() && !o.s.ApplyProps(c.tc, kTcPr, edit, o.why)) return false;
+      }
+    return true;
+  });
+}
+
 }  // namespace fw::doc::edit

@@ -203,6 +203,12 @@ class Editor {
   Result SetCellProps(Pos from, Pos to, const PropEdit& edit);
   Result SetRowProps(Pos from, Pos to, const PropEdit& edit);
   Result SetTableProps(Pos at, const PropEdit& edit);
+  // Borders of the block's cells, as Word's border button sets them: every side, none (over the
+  // table's own), the block's outside edges, the lines between its cells, or one edge. `eighths`:
+  // the width in eighths of a point.
+  enum class CellBorders : uint8_t { All, None, Outside, Inside, Top, Bottom, Left, Right };
+  Result SetCellBorders(Pos from, Pos to, CellBorders which, std::string_view style = "single", int32_t eighths = 4,
+                        std::string_view color = "auto");
 
   // Groups the transactions until EndGroup into one undo step named `name` ("Bold", "Paste").
   // Groups nest; the outermost names the step.
