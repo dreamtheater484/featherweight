@@ -111,7 +111,60 @@ struct Engine::Impl {
   bool blankPending = false;
   std::vector<bool> pageUsesCount;
   int stalled = 0;  // pages in a row that moved nothing on
+
+  // The paragraph in progress was built with these fields, and its breaker is this wide.
+  PageFields paraFields;
+  float paraWidth = 0;
+
+  // Editing (Engine::Edited). Where each page started: the flow's state between pages, to lay out
+  // again from there. Inside a table it can't be resumed.
+  struct Resume {
+    bool usable = false;
+    size_t next = 0;
+    bool endnotesAdded = false;
+    bool para = false;  // a paragraph goes on from the page before
+    text::LineBreaker::State at, paraStart;
+    PageFields fields;
+    float width = 0;
+    uint32_t paraLines = 0;
+    bool paraBegun = false, breakAfter = false, nextHard = false, blankPending = false;
+    uint32_t section = kNone;
+    int32_t number = 0;
+    size_t pagesInSection = 0;
+  };
+  std::vector<Resume> starts;  // by page
+  // After an edit of a fully laid out document: the pages from the edit on, as they were, which
+  // the new layout rejoins once a page starts where an old one did.
+  struct Old {
+    std::vector<Page> pages;  // old pages from `from` on
+    size_t from = 0;
+    std::vector<Resume> starts;  // all of them, as they were
+    std::vector<bool> usesCount;
+    std::vector<size_t> sectionFirstPage;
+    uint32_t first = 0, removed = 0;  // the paragraphs that changed, numbered as before
+    int32_t shift = 0;                // how far later paragraphs' numbers moved
+    size_t itemEnd = 0;               // the first item after the change, numbered as before
+    ptrdiff_t itemShift = 0;          // how far later items' numbers moved
+  };
+  std::optional<Old> old;
 };
+
+namespace {
+
+bool SameState(const text::LineBreaker::State& a, const text::LineBreaker::State& b) {
+  return a.position == b.position && a.line == b.line && a.hyphenated == b.hyphenated && a.done == b.done;
+}
+
+// Paragraph numbers on a page after `removed` paragraphs from `first` became `removed + shift`.
+void Renumber(Page& page, uint32_t first, uint32_t removed, int32_t shift) {
+  auto move = [&](uint32_t& para) {
+    if (para != kNone && para >= first + removed) para = static_cast<uint32_t>(static_cast<int64_t>(para) + shift);
+  };
+  for (LineBox& l : page.lines) move(l.para);
+  move(page.first.para);
+}
+
+}  // namespace
 
 Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, OpenTimings* timings)
     : impl_(new Impl), doc_(doc), fonts_(fonts), options_(options), timings_(timings) {
@@ -122,6 +175,12 @@ Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, 
     StoryKind k = doc.Stories()[s].kind;
     if (k == StoryKind::Header || k == StoryKind::Footer || k == StoryKind::Main) fieldsCount_[s] = 1;
   }
+  BuildItems();
+}
+
+void Engine::BuildItems() {
+  const Document& doc = doc_;
+  impl_->items.clear();
   // The body, flattened: paragraphs and tables in order, with their sections.
   const std::vector<Section>& sections = doc.Sections();
   uint32_t sec = 0;
@@ -613,6 +672,8 @@ struct Flow {
         return Step::Continue;
       }
       f.breaker = std::make_unique<text::LineBreaker>(e.fonts_, f.pt->fw, frame.width);
+      f.paraFields = f.fields;
+      f.paraWidth = frame.width;
       f.paraStart = f.breaker->Save();
       f.paraLines = 0;
       f.paraBegun = false;
@@ -1228,11 +1289,247 @@ struct Flow {
     f.next += group.size();
     return true;
   }
+
+  // ---- Editing
+
+  // Two page starts from which the flow goes on the same way (`next` already in one numbering).
+  static bool SameStart(const Engine::Impl::Resume& a, const Engine::Impl::Resume& b) {
+    if (!a.usable || !b.usable || a.next != b.next || a.endnotesAdded != b.endnotesAdded || a.para != b.para ||
+        a.nextHard != b.nextHard || a.blankPending != b.blankPending || a.section != b.section || a.number != b.number ||
+        a.pagesInSection != b.pagesInSection)
+      return false;
+    if (!a.para) return true;
+    return SameState(a.at, b.at) && SameState(a.paraStart, b.paraStart) && a.width == b.width &&
+           a.paraLines == b.paraLines && a.paraBegun == b.paraBegun && a.breakAfter == b.breakAfter &&
+           a.fields.page == b.fields.page;
+  }
+
+  // The flow's state between two pages.
+  Engine::Impl::Resume Here() const {
+    Engine::Impl::Resume r;
+    r.usable = !f.havePage && !f.table && f.spans.empty();
+    r.next = f.next;
+    r.endnotesAdded = f.endnotesAdded;
+    r.para = f.pt != nullptr;
+    if (r.para) {
+      r.at = f.breaker->Save();
+      r.paraStart = f.paraStart;
+      r.fields = f.paraFields;
+      r.width = f.paraWidth;
+      r.paraLines = f.paraLines;
+      r.paraBegun = f.paraBegun;
+      r.breakAfter = f.breakAfter;
+    }
+    r.nextHard = f.nextHard;
+    r.blankPending = f.blankPending;
+    r.section = f.section;
+    r.number = f.number;
+    r.pagesInSection = f.pagesInSection;
+    return r;
+  }
+
+  // Back to a page start: the pages from `page` on are laid out again.
+  void ResumeAt(size_t page) {
+    const Engine::Impl::Resume r = f.starts[page];
+    e.pages_.resize(page);
+    f.starts.resize(page);
+    f.pageUsesCount.resize(page);
+    while (!f.sectionFirstPage.empty() && f.sectionFirstPage.back() >= page) f.sectionFirstPage.pop_back();
+    if (f.endnotesAdded && !r.endnotesAdded) {
+      e.BuildItems();
+      f.endnotesAdded = false;
+    }
+    f.next = r.next;
+    f.table.reset();
+    f.row = 0;
+    f.rowCut.clear();
+    f.spans.clear();
+    f.pt.reset();
+    f.breaker.reset();
+    if (r.para && r.next < f.items.size()) {
+      f.pt = std::make_unique<ParaText>();
+      e.BuildText(f.items[r.next].para, r.fields, *f.pt, true);
+      f.breaker = std::make_unique<text::LineBreaker>(e.fonts_, f.pt->fw, r.width);
+      f.breaker->Restore(r.at);
+      f.paraStart = r.paraStart;
+      f.paraFields = r.fields;
+      f.paraWidth = r.width;
+      f.paraLines = r.paraLines;
+      f.paraBegun = r.paraBegun;
+      f.breakAfter = r.breakAfter;
+    } else {
+      f.paraLines = 0;
+      f.paraBegun = false;
+      f.breakAfter = false;
+    }
+    f.nextHard = r.nextHard;
+    f.blankPending = r.blankPending;
+    f.section = r.section;
+    f.number = r.number;
+    f.pagesInSection = r.pagesInSection;
+    f.havePage = false;
+    f.chain.reset();
+    f.tableStart.reset();
+    f.stalled = 0;
+    e.done_ = false;
+  }
+
+  // At a page start after an edit: when an old page started the same way, the old pages from there
+  // on are the new ones too, and the document is laid out.
+  bool Rejoin() {
+    Engine::Impl::Old& o = *f.old;
+    const size_t page = e.pages_.size();
+    Engine::Impl::Resume now = f.starts.back();
+    if (!now.usable || static_cast<ptrdiff_t>(now.next) < static_cast<ptrdiff_t>(o.itemEnd) + o.itemShift) return false;
+    const size_t oldCount = o.from + o.pages.size();
+    const size_t lo = std::max(o.from + 1, page > 4 ? page - 4 : 0), hi = std::min(oldCount, page + 5);
+    for (size_t m = lo; m < hi; ++m) {
+      Engine::Impl::Resume was = o.starts[m];
+      was.next = static_cast<size_t>(static_cast<ptrdiff_t>(was.next) + o.itemShift);
+      if (!SameStart(now, was)) continue;
+      // The changed paragraphs mustn't show on the pages taken (a header shows on every page).
+      for (size_t k = m; k < oldCount; ++k)
+        for (const LineBox& l : o.pages[k - o.from].lines)
+          if (l.para != kNone && l.para >= o.first && l.para < o.first + o.removed) return false;
+      f.starts.resize(page);
+      for (size_t k = m; k < oldCount; ++k) {
+        Page& p = o.pages[k - o.from];
+        Renumber(p, o.first, o.removed, o.shift);
+        e.pages_.push_back(std::move(p));
+        Engine::Impl::Resume r = o.starts[k];
+        r.next = static_cast<size_t>(static_cast<ptrdiff_t>(r.next) + o.itemShift);
+        f.starts.push_back(r);
+        f.pageUsesCount.push_back(k < o.usesCount.size() && o.usesCount[k]);
+      }
+      for (size_t s : o.sectionFirstPage)
+        if (s >= m) f.sectionFirstPage.push_back(s - m + page);
+      f.old.reset();
+      f.pt.reset();
+      f.breaker.reset();
+      f.table.reset();
+      f.next = f.items.size();
+      f.havePage = false;
+      e.done_ = true;
+      // Page counts in the pages laid out again; in all of them when the count changed.
+      if (e.pages_.size() != oldCount) e.RefreshPageCounts();
+      else e.RefreshPageCounts(o.from, page);
+      ++e.revision_;
+      return true;
+    }
+    return false;
+  }
 };
+
+void Engine::Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added) {
+  Impl& f = *impl_;
+  Flow flow(*this);
+  timings_ = nullptr;  // the open is long over
+  const int32_t shift = static_cast<int32_t>(added) - static_cast<int32_t>(removed);
+  // What knows paragraphs by number, or holds the changed ones.
+  if (shift != 0) {
+    fieldsCache_.clear();
+    f.noteStacks.clear();
+  } else {
+    fieldsCache_.erase(story);
+    f.noteStacks.erase(story);
+  }
+  ++revision_;
+
+  // Where the change is in the flow: the items it's in (body and endnotes).
+  size_t itemFirst = SIZE_MAX, itemEnd = 0;
+  if (first < doc_.Paragraphs().size()) {
+    for (size_t i = 0; i < f.items.size(); ++i)
+      if (f.items[i].para == first) {
+        itemFirst = i;
+        break;
+      }
+    if (itemFirst == SIZE_MAX) {  // in a table: the item that holds it
+      for (Node n = doc_.ParaNode(first); n && itemFirst == SIZE_MAX; n = n.Parent())
+        for (size_t i = 0; i < f.items.size(); ++i)
+          if (f.items[i].kind != BlockKind::Paragraph && f.items[i].node == n) {
+            itemFirst = i;
+            break;
+          }
+    }
+    if (itemFirst != SIZE_MAX) {
+      itemEnd = itemFirst + 1;
+      while (itemEnd < f.items.size() && f.items[itemEnd].para != kNone && f.items[itemEnd].para < first + removed)
+        ++itemEnd;
+    }
+  }
+  ptrdiff_t itemShift = 0;
+  if (shift != 0) {
+    const size_t before = f.items.size();
+    const bool endnotes = f.endnotesAdded;
+    BuildItems();
+    f.endnotesAdded = false;
+    if (endnotes) flow.AddEndnotes();
+    itemShift = static_cast<ptrdiff_t>(f.items.size()) - static_cast<ptrdiff_t>(before);
+    // The frontier, between pages, moves with the items (when it's past the change).
+    if (f.next >= itemEnd && itemFirst != SIZE_MAX) f.next = static_cast<size_t>(static_cast<ptrdiff_t>(f.next) + itemShift);
+  }
+
+  // The page to lay out again from: the last that starts before the change (and before a chain of
+  // keep-with-next paragraphs leading to it); for a header, footer or note, the first that shows it.
+  size_t restart = SIZE_MAX;
+  if (itemFirst != SIZE_MAX) {
+    size_t from = itemFirst;
+    while (from > 0 && f.items[from - 1].kind == BlockKind::Paragraph && f.items[from - 1].para != kNone &&
+           doc_.ResolvedPara(f.items[from - 1].para).keepNext)
+      --from;
+    for (size_t p = 0; p < f.starts.size() && p < pages_.size(); ++p) {
+      const Impl::Resume& r = f.starts[p];
+      if (r.next > from || (r.next == from && r.para)) break;
+      if (r.usable) restart = p;
+    }
+  } else {
+    size_t shows = SIZE_MAX;
+    for (size_t p = 0; p < pages_.size() && shows == SIZE_MAX; ++p)
+      for (const LineBox& l : pages_[p].lines)
+        if (l.para != kNone && l.para >= first && l.para < first + removed) {
+          shows = p;
+          break;
+        }
+    if (shows != SIZE_MAX)
+      for (size_t p = 0; p <= shows && p < f.starts.size(); ++p)
+        if (f.starts[p].usable) restart = p;
+  }
+  if (restart == SIZE_MAX) {
+    // Nothing laid out shows it (a comment, or text not reached yet).
+    if (shift != 0)
+      for (Page& p : pages_) Renumber(p, first, removed, shift);
+    return;
+  }
+  for (size_t p = 0; p < restart; ++p) Renumber(pages_[p], first, removed, shift);
+  if (done_) {
+    Impl::Old o;
+    o.from = restart;
+    o.pages.assign(std::make_move_iterator(pages_.begin() + static_cast<ptrdiff_t>(restart)),
+                   std::make_move_iterator(pages_.end()));
+    o.starts = f.starts;
+    o.usesCount = f.pageUsesCount;
+    o.sectionFirstPage = f.sectionFirstPage;
+    o.first = first;
+    o.removed = removed;
+    o.shift = shift;
+    // A header, footer or note: any later page start (Rejoin checks the old pages taken don't show it).
+    o.itemEnd = itemFirst != SIZE_MAX ? itemEnd : f.starts[restart].next;
+    o.itemShift = itemShift;
+    f.old = std::move(o);
+  } else {
+    f.old.reset();  // laid out only in part: the rest is laid out anew
+  }
+  flow.ResumeAt(restart);
+}
 
 bool Engine::NextPage() {
   Flow flow(*this);
   Impl& f = *impl_;
+  if (!done_ && !f.havePage) {
+    f.starts.resize(pages_.size());
+    f.starts.push_back(flow.Here());
+    if (f.old && flow.Rejoin()) return true;
+  }
   // Every page must move the flow on. Content that can't be placed anywhere (a bug, or input
   // nothing could lay out) is skipped after a few tries, and no document gets more pages than its
   // paragraphs could fill, so pagination always ends.
@@ -1261,14 +1558,14 @@ bool Engine::NextPage() {
 }
 
 // Once the page count is known, NUMPAGES and SECTIONPAGES in headers and footers show it.
-void Engine::RefreshPageCounts() {
+void Engine::RefreshPageCounts(size_t from, size_t to) {
   Impl& f = *impl_;
   bool any = false;
-  for (bool b : f.pageUsesCount) any = any || b;
+  for (size_t i = from; i < f.pageUsesCount.size() && i < to; ++i) any = any || f.pageUsesCount[i];
   if (!any) return;
   std::u16string total = FormatNumber(static_cast<int64_t>(pages_.size()), "decimal");
   Flow flow(*this);
-  for (size_t i = 0; i < pages_.size(); ++i) {
+  for (size_t i = from; i < pages_.size() && i < to; ++i) {
     if (i >= f.pageUsesCount.size() || !f.pageUsesCount[i]) continue;
     Page& page = pages_[i];
     // The header and footer lines come first on the page; lay them out again.

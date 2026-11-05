@@ -171,6 +171,12 @@ class Layout {
   // Everything at once.
   void LayOutAll() { LayOutPages(SIZE_MAX); }
   bool Done() const;
+  // The document changed (an edit, its undo or redo): paragraphs [first, first + removed) of
+  // `story` became [first, first + added), and later ones were renumbered. The pages from the one
+  // the change starts on are laid out again, as LayOutPages and Continue ask; once a page starts
+  // where one did before, the rest are the old pages (their paragraph numbers moved), so typing
+  // lays out a page or two however long the document is. Pages before it stay.
+  void Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added);
 
   // ---- Pages
   size_t PageCount() const;  // so far; final once Done()
@@ -194,6 +200,17 @@ class Layout {
   std::vector<std::pair<size_t, Rect>> Ranges(TextPos from, TextPos to);
   // The page `pos` is on (the first, for a story repeated on many pages, such as a header).
   std::optional<size_t> PageOf(TextPos pos);
+  // The line `pos` is on: its page, its box, and where Home and End take the caret (the end of a
+  // wrapped line is before its last character, so the caret stays on the line).
+  struct LineSpan {
+    size_t page = 0;
+    TextPos start, end;
+    Rect box;
+  };
+  std::optional<LineSpan> LineAt(TextPos pos);
+  // The place nearest to `x` (page points) on the line before (`step` < 0) or after `pos`'s line
+  // in its story's reading order, across pages for the main text; nullopt at either end.
+  std::optional<TextPos> LineStep(TextPos pos, int step, float x);
 
   // ---- Painting
   // Paints a page at its own coordinates (the caller's transform scales it): page color and

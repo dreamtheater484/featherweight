@@ -53,6 +53,8 @@ class Engine {
 
   // Lays out one more page; false once the document is done.
   bool NextPage();
+  // Paragraphs [first, first + removed) of `story` became [first, first + added) (Layout::Edited).
+  void Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added);
   bool Done() const { return done_; }
   std::vector<Page>& Pages() { return pages_; }
   const std::vector<Page>& Pages() const { return pages_; }
@@ -72,7 +74,8 @@ class Engine {
   std::u16string NoteMark(uint32_t story) const;
   // A note's reference mark, numbered in the order references are laid out.
   std::u16string NoteReference(uint32_t story);
-  void RefreshPageCounts();
+  // NUMPAGES and SECTIONPAGES in the headers and footers of pages [from, to).
+  void RefreshPageCounts(size_t from = 0, size_t to = SIZE_MAX);
   float EquationWidth(uint32_t drawing, float size);
 
   // Stacked layout (Stack.cpp).
@@ -176,6 +179,7 @@ class Engine {
   std::unique_ptr<Impl> impl_;
 
   friend struct Flow;
+  void BuildItems();  // the body's blocks as flow items
   const Document& doc_;
   text::Fonts& fonts_;
   Options options_;
