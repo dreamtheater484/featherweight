@@ -65,7 +65,10 @@ fw::pkg::CheckReport CheckFile(const std::filesystem::path& file, const fw::pkg:
 }  // namespace
 
 int RunDump(const Options& options) {
-  for (const auto& file : CollectFiles(options.inputs)) DumpFile(file);
+  for (const auto& file : CollectFiles(options.inputs)) {
+    if (options.model) DumpModel(file);
+    else DumpFile(file);
+  }
   return 0;
 }
 
