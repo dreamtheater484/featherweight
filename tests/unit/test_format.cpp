@@ -1335,7 +1335,7 @@ TEST(Styles_NewStyleFromTheSelection) {
              "<w:style w:type=\"paragraph\" w:styleId=\"Quote\"><w:name w:val=\"Quote\"/><w:basedOn w:val=\"Normal\"/>"
              "<w:qFormat/><w:rPr><w:i/></w:rPr></w:style>";
   f.body = "<w:p><w:pPr><w:pStyle w:val=\"Quote\"/><w:jc w:val=\"center\"/><w:spacing w:after=\"360\"/></w:pPr>"
-           "<w:r><w:rPr><w:b/><w:color w:val=\"C00000\"/></w:rPr><w:t>Pull quote</w:t></w:r></w:p>"
+           "<w:r><w:rPr><w:b/><w:color w:val=\"C00000\"/><w:highlight w:val=\"yellow\"/></w:rPr><w:t>Pull quote</w:t></w:r></w:p>"
            "<w:p><w:r><w:t>Body</w:t></w:r></w:p>";
   auto doc = LoadOk(f);
   CHECK(doc);
@@ -1367,6 +1367,8 @@ TEST(Styles_NewStyleFromTheSelection) {
   CHECK(At(*doc, paras[0], 0).bold && At(*doc, paras[0], 0).italic && At(*doc, paras[0], 0).color.rgb == 0xC00000);
   const std::string main = MainXml(*doc);
   CHECK(!Has(main, "w:jc") && !Has(main, "C00000") && Has(main, "<w:pStyle w:val=\"PullQuote_More\"/>"));
+  // Highlighting stays on the text, never in a style (finding 23).
+  CHECK(Has(main, "<w:highlight w:val=\"yellow\"/>") && !Has(PartXml(*doc, PartKind::Styles), "highlight"));
   CHECK(doc->ResolvedPara(paras[1]).style == "Normal");
   // It's a quick style now, and modifying it reaches the paragraph.
   bool listed = false;
@@ -1374,8 +1376,9 @@ TEST(Styles_NewStyleFromTheSelection) {
   CHECK(listed);
   edit::RunFormat r;
   r.size = HalfPoints(30);
+  r.highlight = "green";  // left out
   edit::ModifyStyle(ed, id, r, {});
-  CHECK(At(*doc, paras[0], 0).size.Value() == 30);
+  CHECK(At(*doc, paras[0], 0).size.Value() == 30 && !Has(PartXml(*doc, PartKind::Styles), "highlight"));
   // A second one of the same name is refused; another name gets its own id.
   CHECK(edit::NewStyleFromSelection(ed, Whole(*doc, paras[1]), "pull quote & more", why).empty());
   CHECK(edit::NewStyleFromSelection(ed, Whole(*doc, paras[1]), "Pull Quote&More", why) == "PullQuote_More1");

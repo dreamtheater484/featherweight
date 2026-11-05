@@ -43,7 +43,8 @@ std::string EnsureStyle(TreeEdit& ed, std::string_view nameOrId);
 void ApplyStyle(TreeEdit& ed, Range range, std::string_view nameOrId);
 
 // Changes a style's own definition: every paragraph or run that uses it follows. Properties equal
-// to what the style's basedOn gives are removed from it.
+// to what the style's basedOn gives are removed from it. Highlighting and a character style are
+// never a style's, and are left out.
 void ModifyStyle(TreeEdit& ed, std::string_view styleId, const RunFormat& run, const ParaFormat& para);
 
 // "Update Heading 1 to Match Selection": the direct formatting of the paragraph at the range's start

@@ -388,11 +388,10 @@ void ModifyStyle(TreeEdit& ed, std::string_view styleId, const RunFormat& run, c
   bool isPara = s->type == StyleType::Paragraph;
   std::string basedOn = s->basedOn == kNone ? std::string() : std::string(doc.Styles()[s->basedOn].id);
   ed.Begin(u"Modify style");
-  if (run.Any()) {
-    RunFormat r = run;
-    r.charStyle.reset();
-    WriteRunFormat(ed, ed.Child(elem, kRPr), r, doc.StyleChainRun(basedOn));
-  }
+  RunFormat r = run;
+  r.charStyle.reset();
+  r.highlight.reset();  // never a style's, as NotStyleFormatting says (finding 23)
+  if (r.Any()) WriteRunFormat(ed, ed.Child(elem, kRPr), r, doc.StyleChainRun(basedOn));
   if (para.Any() && isPara) WriteParaFormat(ed, ed.Child(elem, kPPr), para, doc.StyleChainPara(basedOn));
   ed.Commit();
 }
