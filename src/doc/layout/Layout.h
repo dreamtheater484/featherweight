@@ -220,6 +220,10 @@ class Layout {
   std::vector<std::pair<size_t, Rect>> Ranges(TextPos from, TextPos to, size_t page = SIZE_MAX);
   // The page `pos` is on (the first, for a story repeated on many pages, such as a header).
   std::optional<size_t> PageOf(TextPos pos);
+  // Whether CaretAt and Ranges for `pos` answer without laying out more than a page: its main-text
+  // paragraph is on a page laid out since the last edit (other stories always are). What's drawn
+  // each frame asks first, so a change of the page (D3) lays out in idle time, not in a paint.
+  bool LaidOut(TextPos pos) const;
   // The line `pos` is on: its page, its box, and where Home and End take the caret (the end of a
   // wrapped line is before its last character, so the caret stays on the line).
   struct LineSpan {

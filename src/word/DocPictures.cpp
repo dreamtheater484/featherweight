@@ -142,7 +142,7 @@ uint32_t DocView::SelectedPicture() const {
 std::optional<DocView::PicBox> DocView::BoxOf(uint32_t drawing) const {
   if (!pagination_ || drawing >= doc_->Drawings().size()) return std::nullopt;
   const fw::doc::Drawing& d = doc_->Drawings()[drawing];
-  if (d.pos.para == kNone) return std::nullopt;
+  if (d.pos.para == kNone || !pagination_->LaidOut(ToText(d.pos))) return std::nullopt;
   const auto page = pagination_->PageOf(ToText(d.pos));
   if (!page) return std::nullopt;
   const size_t count = pagination_->PageCount();

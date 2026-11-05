@@ -31,6 +31,9 @@ struct TypingPlace {
   std::string where;  // "start", "middle", "end", "table" (a cell from the middle on)
   std::vector<double> typing, backspace, enter;  // enter: Enter, and Backspace joining again
   std::vector<double> format;  // bold, centered, Heading 1 and bullets, each undone
+  // The whole document's margins changed and undone (D3): to the caret's page painted, and to
+  // every page laid out again (in idle time in the app).
+  std::vector<double> page, pageAll;
 };
 // Opens and lays out the document, then types at its start, middle and end, and in a table, through
 // the editor, and formats there as Word's keys and buttons do.

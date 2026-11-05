@@ -288,6 +288,32 @@ bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>
         ms = key(caret, [&] { return editor.Undo(); });
         if (ms >= 0) place.format.push_back(ms);
       }
+      // Page setup: every section's left and right margins a quarter inch wider, then undone. As
+      // the document tab does it (DocView::ApplyPageChange): the first pages and 30 ms more, the
+      // page on screen painted (as it was, when not laid out again yet); the rest in idle time.
+      for (int step = 0; step < 2; ++step) {
+        const auto shown = layout.CaretAt({caret.para, caret.offset});
+        const size_t onScreen = shown ? shown->page : 0;
+        const auto start = std::chrono::steady_clock::now();
+        edit::Result r;
+        if (step == 0) {
+          const fw::doc::SectionProps& first = doc->Sections().front().props;
+          edit::PageSetup wider;
+          wider.left = fw::Twips(first.marginStart.Value() + 360);
+          wider.right = fw::Twips(first.marginEnd.Value() + 360);
+          r = edit::SetPageSetup(editor, 0, static_cast<uint32_t>(doc->Sections().size() - 1), wider);
+        } else {
+          r = editor.Undo();
+        }
+        if (!r) continue;
+        layout.LayOutPages(2);
+        layout.Continue(30);
+        painter.Paint(layout, std::min(onScreen, layout.PageCount() - 1));
+        place.page.push_back(Since(start));
+        while (layout.Continue(50)) {
+        }
+        place.pageAll.push_back(Since(start));
+      }
       places.push_back(std::move(place));
     }
   }

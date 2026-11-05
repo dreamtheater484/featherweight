@@ -1490,6 +1490,11 @@ void App::ShowMenu(int which) {
     if (ready && v->Kind() == TabKind::Document) {
       AppendItem(m, CmdToggleSpelling, L"Check spelling as you type", true, settings_.spelling);
       AppendItem(m, CmdToggleAutoCorrect, L"AutoCorrect as you type", true, settings_.autoCorrect);
+      const CommandState setup = v->QueryCommand(CmdPageSetup), hyphens = v->QueryCommand(CmdHyphenation);
+      if (setup.visible && setup.enabled) {
+        AppendItem(m, CmdPageSetup, L"Page setup…");
+        AppendItem(m, CmdHyphenation, L"Hyphenate automatically", hyphens.enabled, hyphens.checked);
+      }
       AppendItem(m, CmdRuler, L"Ruler", true, settings_.ruler);
     }
     AppendSeparator(m);
