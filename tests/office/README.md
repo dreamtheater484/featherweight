@@ -2,7 +2,7 @@
 
 Files for the never-damage tests (plan §10), made by `make_test_office.py`:
 
-- `generated/`: documents, workbooks and decks made with python-docx, openpyxl and python-pptx.
+- `generated/`: documents, workbooks and decks made with python-docx, openpyxl and python-pptx; and `drawings-dml.docx` and `drawings-vml.docx`, pictures and shapes written by hand in DrawingML and VML for fwdraw (plan §4.5) by `make_drawing_tests.py`. `fwtool render` draws their drawings to PNG to compare with the reference renders by eye.
 - `edge/`: hand-made files that must round-trip:
   - Markup Compatibility (`mc:AlternateContent`, `mc:Ignorable`)
   - `extLst` extensions and repeated unknown attributes (`x14ac:dyDescent`)
@@ -47,6 +47,12 @@ python -m venv .venv
 
 ```bash
 .venv/Scripts/python tests/office/make_test_office.py
+```
+
+`make_drawing_tests.py` needs only the standard library:
+
+```bash
+python tests/office/make_drawing_tests.py
 ```
 
 The output is deterministic: document dates and zip timestamps are fixed, so regenerating changes nothing unless the script or a pinned library changes. `.gitattributes` keeps git from touching line ends in these files.

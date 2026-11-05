@@ -7,8 +7,9 @@ One target per parser (plan §10). So far:
 - `fuzz_opc`: the relationships and content types parsers, and the part-name helpers. Seeds: `seeds/opc`.
 - `fuzz_check`: `fwtool check`'s path over a package: the reference registry, the consistency checker, the id renewer and the extension query. Seeds: `seeds/package`, corpus files written as text (see below), so the fuzzer can change the XML inside them.
 - `fuzz_formula`: the formula scanner the registry uses (sheet names and cell references), and every other syntax a reference can have. Seeds: `seeds/formula`.
+- `fuzz_drawing`: fwdraw (plan §4.5): DrawingML and VML into the shape model, preset and custom geometry, themes, picture decoding through WIC, metafiles and SVG, and drawing the result into a small software surface. Seeds: `seeds/drawing`, the corpus's drawings and a tiny picture in each format (see below).
 
-`make_seeds.py` makes `seeds/opc`, `seeds/package` and `seeds/formula` from the corpus (standard library only): `python tests/fuzz/make_seeds.py`.
+`make_seeds.py` makes `seeds/opc`, `seeds/package`, `seeds/formula` and `seeds/drawing` from the corpus (standard library only): `python tests/fuzz/make_seeds.py`.
 
 Besides crashes and AddressSanitizer reports, each target aborts when an invariant breaks:
 
@@ -18,6 +19,17 @@ Besides crashes and AddressSanitizer reports, each target aborts when an invaria
 - Saving a package without edits copies every entry byte for byte.
 - Relationships and content types that Featherweight writes read back the same.
 - Renaming references and renewing ids leaves a document that still parses.
+- A drawing's extent, ink bounds, wrap outline and text boxes are finite, and a decoded picture stays within its limits.
+
+### Drawings
+
+`fuzz_drawing` reads a picture when the input doesn't start with `<`. Otherwise the input is a drawing's XML (`w:drawing`, `wp:inline`, `w:pict`, a VML shape, `p:spTree` or a shape), and lines `@<name>` start sections after it: `@theme` is the theme, any other name a relationship id, whose content is a picture or a part.
+
+```
+<wp:inline xmlns:wp="..." ...>...<a:blip r:embed="rId1"/>...</wp:inline>
+@rId1
+<svg xmlns="http://www.w3.org/2000/svg" ...>...</svg>
+```
 
 ### Packages as text
 
@@ -39,10 +51,10 @@ cmake -S . -B build-fuzz -DFW_FUZZ=ON
 ```
 
 ```bash
-cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula
+cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_drawing
 ```
 
-`FW_FUZZ` instruments `fwcore`, `fwpkg`, miniz and pugixml with AddressSanitizer and coverage, so keep it out of normal builds.
+`FW_FUZZ` instruments `fwcore`, `fwpkg`, `fwdraw`, miniz and pugixml with AddressSanitizer and coverage, so keep it out of normal builds.
 
 ### Toolchains
 

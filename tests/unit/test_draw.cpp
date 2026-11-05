@@ -7,59 +7,21 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 
+#include <cmath>
 #include <cstdint>
+#include <memory>
+#include <vector>
 
+#include "DrawTestUtil.h"
 #include "draw/D2DPainter.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace draw;
+using namespace drawtest;
 
 namespace {
 
 const Color kRed{1, 0, 0, 1}, kGreen{0, 1, 0, 1}, kBlue{0, 0, 1, 1}, kBlack{0, 0, 0, 1};
-
-// An off-screen surface drawn by Direct2D's software renderer, so results are the same on every PC.
-struct Surface {
-  ComPtr<ID2D1Factory1> factory;
-  ComPtr<IWICImagingFactory> wic;
-  ComPtr<IWICBitmap> bitmap;
-  ComPtr<ID2D1RenderTarget> target;
-  ComPtr<ID2D1DeviceContext> dc;
-  int w, h;
-
-  Surface(int width, int height) : w(width), h(height) {
-    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    D2D1_FACTORY_OPTIONS opts{};
-    D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory1), &opts,
-                      reinterpret_cast<void**>(factory.GetAddressOf()));
-    CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic));
-    wic->CreateBitmap(w, h, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bitmap);
-    D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
-        D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
-    factory->CreateWicBitmapRenderTarget(bitmap.Get(), props, &target);
-    target.As(&dc);
-    dc->BeginDraw();
-    dc->Clear(D2D1::ColorF(1, 1, 1, 1));
-  }
-
-  // Ends drawing; true if Direct2D accepted everything (pushes and pops matched).
-  bool End() { return SUCCEEDED(dc->EndDraw()); }
-
-  // The pixel as 0xRRGGBB (the surface is opaque).
-  uint32_t At(int x, int y) {
-    WICRect r{x, y, 1, 1};
-    ComPtr<IWICBitmapLock> lock;
-    bitmap->Lock(&r, WICBitmapLockRead, &lock);
-    UINT size = 0;
-    BYTE* p = nullptr;
-    lock->GetDataPointer(&size, &p);
-    return (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[1]) << 8) | p[0];
-  }
-};
-
-int Red(uint32_t c) { return (c >> 16) & 0xFF; }
-int Green(uint32_t c) { return (c >> 8) & 0xFF; }
-int Blue(uint32_t c) { return c & 0xFF; }
 
 }  // namespace
 
@@ -262,4 +224,72 @@ TEST(Painter_UnbalancedSaveIsUndone) {
   s.dc->GetTransform(&after);
   CHECK(s.End());
   CHECK(after._11 == before._11 && after._22 == before._22 && after._31 == before._31);
+}
+
+TEST(Painter_MatrixInverseAndScale) {
+  const Matrix m = Matrix::Scale(2, 3) * Matrix::Rotate(30) * Matrix::Translate(5, 7);
+  const Point p = m.Inverse().Apply(m.Apply({4, -6}));
+  CHECK_NEAR(p.x, 4, 1e-4);
+  CHECK_NEAR(p.y, -6, 1e-4);
+  // How much a unit along each axis grows, rotation aside.
+  CHECK_NEAR(m.ScaleX(), 2, 1e-4);
+  CHECK_NEAR(m.ScaleY(), 3, 1e-4);
+}
+
+TEST(Painter_PathFlattenAndBounds) {
+  // A half circle of radius 10 around (10, 0), closed by its diameter.
+  Path half;
+  half.MoveTo({0, 0});
+  half.ArcTo({20, 0}, 10, 10, 0, false, true);
+  half.Close();
+  std::vector<Path::Polygon> polys = half.Flatten(0.05f);
+  CHECK_EQ(polys.size(), 1u);
+  CHECK(polys[0].closed);
+  CHECK(polys[0].points.size() > 8);
+  for (const Point& pt : polys[0].points) CHECK_NEAR(std::hypot(pt.x - 10, pt.y), 10, 0.1);
+  // Clockwise in y-down coordinates: through the top.
+  const Rect b = half.Bounds();
+  CHECK_NEAR(b.left, 0, 0.01);
+  CHECK_NEAR(b.right, 20, 0.01);
+  CHECK_NEAR(b.top, -10, 0.05);
+  CHECK_NEAR(b.bottom, 0, 0.01);
+}
+
+TEST(Painter_BitmapBrushTiles) {
+  // 2x2: red, green / blue, white, each pixel 4 units, repeated; mirrored across.
+  auto bmp = std::make_shared<Bitmap>(
+      2, 2, std::vector<uint8_t>{0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 255, 255, 255, 255});
+  Surface s(32, 32);
+  {
+    D2DBitmapCache cache;
+    D2DPainter p(s.dc.Get(), &cache);
+    Brush tiles = Brush::FromBitmap(bmp, Matrix::Scale(4, 4), Brush::Extend::Repeat);
+    tiles.smooth = false;
+    p.FillRect({0, 0, 32, 16}, tiles);
+    tiles.extendX = Brush::Extend::Mirror;
+    p.FillRect({0, 16, 32, 32}, tiles);
+  }
+  CHECK(s.End());
+  CHECK_EQ(s.At(2, 2), 0xFF0000u);
+  CHECK_EQ(s.At(6, 2), 0x00FF00u);
+  CHECK_EQ(s.At(10, 2), 0xFF0000u);  // repeated
+  CHECK_EQ(s.At(2, 6), 0x0000FFu);
+  CHECK_EQ(s.At(2, 18), 0xFF0000u);
+  CHECK_EQ(s.At(10, 18), 0x00FF00u);  // mirrored: green comes first again
+}
+
+TEST(Painter_Shadow) {
+  // A red square with a black shadow 10 units down and right, slightly blurred.
+  Surface s(40, 40);
+  {
+    D2DPainter p(s.dc.Get());
+    p.BeginShadow({kBlack, 1, Matrix::Translate(10, 10)});
+    p.FillRect({5, 5, 20, 20}, Brush::Solid(kRed));
+    p.Restore();
+  }
+  CHECK(s.End());
+  CHECK_EQ(s.At(12, 12), 0xFF0000u);        // the square, over its shadow
+  CHECK(Red(s.At(25, 25)) < 40);            // the shadow
+  CHECK_EQ(s.At(2, 2), 0xFFFFFFu);
+  CHECK_EQ(s.At(36, 8), 0xFFFFFFu);
 }

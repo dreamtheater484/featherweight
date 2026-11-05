@@ -4,6 +4,28 @@
     "export":  "Word: the document without markup, for print, tagged; Excel: print areas; PowerPoint: slides",
     "files":  [
                   {
+                      "source":  "generated/drawings-dml.docx",
+                      "sha256":  "d9b882f823b12c713cc722fd1542cfb87f5e992c62b23b3a66a6e4f053c87656",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  3,
+                      "pdf":  "generated/drawings-dml.docx.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "generated/drawings-vml.docx",
+                      "sha256":  "a5886dcd9c4132bc7a8480ca905d1e5260e938a2bded764ef6f34e278e982e4e",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  1,
+                      "pdf":  "generated/drawings-vml.docx.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
                       "source":  "generated/formatting.xlsx",
                       "sha256":  "51c2f708a7d29ec01c005152000f717ca864332793e1f32eaaff32264f914012",
                       "app":  "Excel 16.0 (build 20326)",

@@ -1,5 +1,9 @@
 #include "draw/D2DPainter.h"
 
+#include <d2d1_3.h>
+#include <d2d1effects.h>
+#include <shlwapi.h>
+
 #include <algorithm>
 
 using Microsoft::WRL::ComPtr;
@@ -31,6 +35,14 @@ D2D1_LINE_JOIN Join(LineJoin j) {
   }
 }
 
+D2D1_EXTEND_MODE Extend(Brush::Extend e) {
+  switch (e) {
+    case Brush::Extend::Repeat: return D2D1_EXTEND_MODE_WRAP;
+    case Brush::Extend::Mirror: return D2D1_EXTEND_MODE_MIRROR;
+    default: return D2D1_EXTEND_MODE_CLAMP;
+  }
+}
+
 bool SameStroke(const Pen& a, const Pen& b) {
   return a.cap == b.cap && a.join == b.join && a.miterLimit == b.miterLimit && a.dashes == b.dashes &&
          a.dashOffset == b.dashOffset;
@@ -52,6 +64,34 @@ ID2D1Bitmap* D2DBitmapCache::Get(ID2D1DeviceContext* dc, const Bitmap& bitmap) {
   return (bitmaps_[bitmap.Id()] = b).Get();
 }
 
+IUnknown* D2DBitmapCache::Get(ID2D1DeviceContext* dc, const VectorImage& image) {
+  auto it = vectors_.find(image.Id());
+  if (it != vectors_.end()) return it->second.Get();
+  ComPtr<IUnknown>& slot = vectors_[image.Id()];
+  const std::vector<uint8_t>& data = image.Data();
+  if (data.empty() || data.size() > UINT_MAX) return nullptr;
+  ComPtr<IStream> stream;
+  stream.Attach(SHCreateMemStream(data.data(), static_cast<UINT>(data.size())));
+  if (!stream) return nullptr;
+  if (image.GetKind() == VectorImage::Kind::Emf) {
+    ComPtr<ID2D1Factory> f;
+    ComPtr<ID2D1Factory1> f1;
+    ComPtr<ID2D1GdiMetafile> metafile;
+    dc->GetFactory(&f);
+    if (SUCCEEDED(f.As(&f1)) && SUCCEEDED(f1->CreateGdiMetafile(stream.Get(), &metafile))) slot = metafile;
+  } else {
+    // The viewport is the picture's natural size in pixels at 96 dpi; the painter scales it.
+    ComPtr<ID2D1DeviceContext5> dc5;
+    ComPtr<ID2D1SvgDocument> doc;
+    const Size n = image.NaturalSize();
+    if (SUCCEEDED(dc->QueryInterface(IID_PPV_ARGS(&dc5))) &&
+        SUCCEEDED(dc5->CreateSvgDocument(stream.Get(), D2D1::SizeF(n.width / 0.75f, n.height / 0.75f), &doc))) {
+      slot = doc;
+    }
+  }
+  return slot.Get();
+}
+
 D2DPainter::D2DPainter(ID2D1DeviceContext* dc, D2DBitmapCache* cache)
     : dc_(dc), cache_(cache ? cache : &ownCache_) {
   dc_->GetFactory(&factory_);
@@ -60,6 +100,7 @@ D2DPainter::D2DPainter(ID2D1DeviceContext* dc, D2DBitmapCache* cache)
 }
 
 D2DPainter::~D2DPainter() {
+  while (!saved_.empty()) Restore();
   PopTo(0);
   dc_->SetTransform(initial_);
 }
@@ -69,9 +110,58 @@ void D2DPainter::Save() { saved_.push_back({current_, pushed_.size()}); }
 void D2DPainter::Restore() {
   if (saved_.empty()) return;
   PopTo(saved_.back().pushed);
-  current_ = saved_.back().transform;
-  dc_->SetTransform(current_);
+  Saved s = std::move(saved_.back());
   saved_.pop_back();
+  if (s.recorder) {
+    dc_->EndDraw();
+    s.recording->Close();
+    dc_ = s.outer.Get();
+    DrawShadowed(s);
+  }
+  current_ = s.transform;
+  dc_->SetTransform(current_);
+}
+
+void D2DPainter::BeginShadow(const Shadow& shadow) {
+  ComPtr<ID2D1Device> device;
+  ComPtr<ID2D1DeviceContext> recorder;
+  ComPtr<ID2D1CommandList> recording;
+  dc_->GetDevice(&device);
+  if (!device || FAILED(device->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &recorder)) ||
+      FAILED(recorder->CreateCommandList(&recording))) {
+    Save();
+    return;
+  }
+  float dpiX = 96, dpiY = 96;
+  dc_->GetDpi(&dpiX, &dpiY);
+  recorder->SetDpi(dpiX, dpiY);
+  recorder->SetUnitMode(dc_->GetUnitMode());
+  recorder->SetAntialiasMode(dc_->GetAntialiasMode());
+  recorder->SetTextAntialiasMode(dc_->GetTextAntialiasMode());
+  recorder->SetTarget(recording.Get());
+  recorder->BeginDraw();
+  recorder->SetTransform(current_);
+  saved_.push_back({current_, pushed_.size(), dc_, recorder, recording, shadow});
+  dc_ = recorder.Get();
+}
+
+void D2DPainter::DrawShadowed(const Saved& s) {
+  // The recording is in device units; the shadow's offset and blur are in the coordinates that
+  // were current at BeginShadow.
+  const Matrix user = FromD2D(s.transform);
+  ComPtr<ID2D1Effect> effect;
+  if (s.shadow.color.a > 0 && SUCCEEDED(dc_->CreateEffect(CLSID_D2D1Shadow, &effect))) {
+    effect->SetInput(0, s.recording.Get());
+    // Office's blur radius is about two standard deviations of a Gaussian blur.
+    const float sigma = std::clamp(s.shadow.blur * (user.ScaleX() + user.ScaleY()) / 4, 0.f, 250.f);
+    effect->SetValue(D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION, sigma);
+    const Color& c = s.shadow.color;
+    effect->SetValue(D2D1_SHADOW_PROP_COLOR, D2D1::Vector4F(c.r, c.g, c.b, c.a));
+    dc_->SetTransform(ToD2D(user.Inverse() * s.shadow.transform * user));
+    dc_->DrawImage(effect.Get());
+  }
+  dc_->SetTransform(D2D1::IdentityMatrix());
+  dc_->DrawImage(s.recording.Get());
 }
 
 void D2DPainter::PopTo(size_t depth) {
@@ -119,6 +209,21 @@ void D2DPainter::BeginGroup(float opacity) {
 }
 
 ID2D1Brush* D2DPainter::MakeBrush(const Brush& b) {
+  if (b.kind == Brush::Kind::Bitmap) {
+    ID2D1Bitmap* bitmap = b.bitmap ? cache_->Get(dc_, *b.bitmap) : nullptr;
+    ComPtr<ID2D1BitmapBrush1> brush;
+    if (bitmap &&
+        SUCCEEDED(dc_->CreateBitmapBrush(
+            bitmap,
+            D2D1::BitmapBrushProperties1(Extend(b.extendX), Extend(b.extendY),
+                                         b.smooth ? D2D1_INTERPOLATION_MODE_LINEAR
+                                                  : D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR),
+            D2D1::BrushProperties(1.f, ToD2D(b.bitmapTransform)), &brush))) {
+      gradient_ = brush;
+      return gradient_.Get();
+    }
+    return MakeBrush(Brush::Solid({0, 0, 0, 0}));
+  }
   if (b.kind == Brush::Kind::Solid || b.stops.empty()) {
     D2D1_COLOR_F c = ColorF(b.kind == Brush::Kind::Solid ? b.color : Color{0, 0, 0, 0});
     if (!solid_) dc_->CreateSolidColorBrush(c, &solid_);
@@ -242,6 +347,35 @@ void D2DPainter::DrawBitmap(const Bitmap& bitmap, const Rect& dest, const Rect* 
   if (src) s = RectF(*src);
   dc_->DrawBitmap(b, &d, std::clamp(opacity, 0.f, 1.f), D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
                   src ? &s : nullptr, nullptr);
+}
+
+void D2DPainter::DrawVectorImage(const VectorImage& image, const Rect& dest, float opacity) {
+  IUnknown* object = cache_->Get(dc_, image);
+  if (!object || dest.Width() == 0 || dest.Height() == 0) return;
+  ComPtr<ID2D1GdiMetafile> metafile;
+  ComPtr<ID2D1SvgDocument> svg;
+  ComPtr<ID2D1DeviceContext5> dc5;
+  D2D1_RECT_F from{};
+  if (SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&metafile)))) {
+    if (FAILED(metafile->GetBounds(&from))) return;
+  } else if (SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&svg))) &&
+             SUCCEEDED(dc_->QueryInterface(IID_PPV_ARGS(&dc5)))) {
+    const D2D1_SIZE_F v = svg->GetViewportSize();
+    from = {0, 0, v.width, v.height};
+  } else {
+    return;
+  }
+  if (from.right - from.left <= 0 || from.bottom - from.top <= 0) return;
+  Save();
+  if (opacity < 1) BeginGroup(opacity);
+  ClipRect(dest);
+  Transform(Matrix::Translate(-from.left, -from.top) *
+            Matrix::Scale(dest.Width() / (from.right - from.left), dest.Height() / (from.bottom - from.top)) *
+            Matrix::Translate(dest.left, dest.top));
+  if (metafile) dc_->DrawGdiMetafile(metafile.Get(), nullptr);
+  else dc5->DrawSvgDocument(svg.Get());
+  if (opacity < 1) Restore();
+  Restore();
 }
 
 }  // namespace draw

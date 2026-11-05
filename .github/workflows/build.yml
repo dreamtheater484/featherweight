@@ -61,7 +61,7 @@ jobs:
         run: cmake -S . -B build-fuzz -DFW_FUZZ=ON
 
       - name: Build the fuzz targets
-        run: cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula
+        run: cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_drawing
 
       # VS 2022 links AddressSanitizer's runtime as a DLL: put its folder on the PATH.
       - name: Find the AddressSanitizer runtime

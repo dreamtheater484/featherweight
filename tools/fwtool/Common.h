@@ -15,6 +15,7 @@ struct Options {
   std::filesystem::path outDir; // roundtrip: keep the saved copies here
   std::wstring printer;         // print-sample: the printer (default: Microsoft Print to PDF)
   bool warp = false;            // print-sample: draw with WARP instead of the graphics adapter
+  float scale = 2;              // render: pixels per point
   std::vector<std::filesystem::path> inputs;
 };
 
@@ -30,5 +31,6 @@ int RunRoundtrip(const Options& options);
 int RunDump(const Options& options);
 int RunCheck(const Options& options);
 int RunPrintSample(const Options& options);
+int RunRender(const Options& options);
 
 }  // namespace fwtool
