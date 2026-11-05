@@ -1246,3 +1246,30 @@ TEST(Edit_ChangeCaseKeepsEachRunsFormatting) {
   CHECK(edit::NextCase(u"Hello world") == edit::TextCase::Upper && edit::NextCase(u"HELLO") == edit::TextCase::Lower);
   CHECK(edit::NextCase(u"hello") == edit::TextCase::Capitalize && edit::NextCase(u"Hello World") == edit::TextCase::Upper);
 }
+
+TEST(Styles_HighlightingStaysOnTheText) {
+  // Torture finding 23: Word never puts highlighting in a style. Updating a style to match
+  // highlighted text moves the text's other formatting into the style and leaves the highlighting
+  // on the text; applying a style leaves it there too.
+  Fixture f;
+  f.styles = std::string(kWordStyles) +
+             "<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/><w:basedOn w:val=\"Normal\"/>"
+             "<w:qFormat/></w:style>";
+  f.body = "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr>"
+           "<w:r><w:rPr><w:i/><w:highlight w:val=\"yellow\"/></w:rPr><w:t>Marked</w:t></w:r></w:p>"
+           "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>Other</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  auto paras = MainParas(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  edit::UpdateStyleToMatch(ed, {{paras[0], 1}, {paras[0], 1}});
+  CHECK(!Has(PartXml(*doc, PartKind::Styles), "highlight"));
+  CHECK(Has(PartXml(*doc, PartKind::Styles), "<w:i/>"));
+  CHECK(At(*doc, paras[0], 0).italic && At(*doc, paras[1], 0).italic);
+  CHECK(Has(MainXml(*doc), "<w:highlight w:val=\"yellow\"/>") && !Has(MainXml(*doc), "<w:i/>"));
+  edit::ApplyStyle(ed, {{paras[0], 0}, {paras[0], 0}}, "Normal");
+  CHECK(Has(MainXml(*doc), "<w:highlight w:val=\"yellow\"/>"));
+  CHECK(SaveAndReopen(*doc) != nullptr);
+}

@@ -1,6 +1,7 @@
 #include "doc/edit/Styles.h"
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 
 #include "doc/model/Internal.h"
@@ -15,6 +16,15 @@ constexpr uint32_t kPStyle = Name("pStyle"), kNumPr = Name("numPr"), kSectPr = N
 constexpr uint32_t kRStyle = Name("rStyle"), kRPrChange = Name("rPrChange"), kPPrChange = Name("pPrChange");
 constexpr uint32_t kSemiHidden = Name("semiHidden"), kUnhide = Name("unhideWhenUsed"), kQFormat = Name("qFormat");
 constexpr uint32_t kHidden = Name("hidden"), kUiPriority = Name("uiPriority");
+
+// Run properties that are never a style's: the character style and tracked changes, highlighting
+// (Word keeps it out of styles, and applying a style or Ctrl+Space leaves it on the text), and
+// what belongs to that text alone (fitted width, the style separator, math). Finding 23.
+bool NotStyleFormatting(Node c) {
+  static constexpr uint32_t kNames[] = {kRStyle, kRPrChange, Name("highlight"), Name("fitText"), Name("specVanish"),
+                                        Name("oMath")};
+  return std::find(std::begin(kNames), std::end(kNames), c.NameHash()) != std::end(kNames);
+}
 
 // Word's built-in styles (the Office 2013 and later definitions). Names are as Word writes them;
 // basedOn, next and link name other built-ins. "{MAJOR}" stands for the heading font.
@@ -275,7 +285,7 @@ void ApplyParaStyle(TreeEdit& ed, uint32_t p, const Style& style) {
     total += len;
     if (std::find(runs.begin(), runs.end(), r.run.Id()) == runs.end()) runs.push_back(r.run.Id());
     for (Node c : r.run.Child(kRPr).Kids())
-      if (!c.Is(kRStyle) && !c.Is(kRPrChange)) covered[c.NameHash()] += len;
+      if (!NotStyleFormatting(c)) covered[c.NameHash()] += len;
   }
   for (auto [name, chars] : covered) {
     if (chars * 2 <= total) continue;
@@ -414,7 +424,7 @@ void UpdateStyleToMatch(TreeEdit& ed, Range range) {
   }
   if (first)
     for (Node c : first.Child(kRPr).Kids())
-      if (!c.Is(kRStyle) && !c.Is(kRPrChange)) ed.CopyChild(c.Id(), ed.Child(elem, kRPr));
+      if (!NotStyleFormatting(c)) ed.CopyChild(c.Id(), ed.Child(elem, kRPr));
   // Then the paragraph takes the style again, without what moved.
   ApplyParaStyle(ed, p, style);
   ed.Commit();
