@@ -296,6 +296,42 @@ struct EditorState {
     E(container).first = kNoElem;
     for (ElemId c = shared; c != kNoElem; c = E(c).next) Append(container, CloneDeep(c, container));
   }
+  // An element in the list from `first` that repeats one before it exactly: a file's <w:b/><w:b/>,
+  // which the schema doesn't allow. (The list is passed: a shared child's parent may own others.)
+  bool Repeats(ElemId first, ElemId c) {
+    const Elem& a = E(c);
+    if (a.first != kNoElem) return false;
+    for (ElemId s = first; s != kNoElem && s != c; s = E(s).next) {
+      const Elem& b = E(s);
+      if (b.def != a.def || b.attrCount != a.attrCount || b.first != kNoElem ||
+          d.store_.NodeAttributes(b.node) != d.store_.NodeAttributes(a.node))
+        continue;
+      bool same = true;
+      for (uint16_t i = 0; same && i < a.attrCount; ++i)
+        same = t.attrs[a.attrs + i].def == t.attrs[b.attrs + i].def && t.attrs[a.attrs + i].value == t.attrs[b.attrs + i].value;
+      if (same) return true;
+    }
+    return false;
+  }
+  bool HasRepeats(ElemId e) {
+    for (ElemId c = E(e).first; c != kNoElem; c = E(c).next)
+      if (Repeats(E(e).first, c) || HasRepeats(c)) return true;
+    return false;
+  }
+  // A copy of a property element for new content (a paragraph mark, a run, a cut run's second
+  // half). A set with repeats is copied whole without them, so the copy doesn't add an error the
+  // file has once already; the original keeps its own.
+  ElemId CopyProps(ElemId src, ElemId parent, const std::function<bool(ElemId)>& skip = {}, bool fragments = true) {
+    if (!HasRepeats(src)) return CloneDeep(src, parent, skip, fragments);
+    ElemId id = CloneShallow(src, parent);
+    E(id).flags &= static_cast<uint8_t>(~kSharedKids);
+    E(id).first = kNoElem;
+    if (fragments)
+      if (auto frags = d.store_.FragmentsCopy(E(src).node); !frags.empty()) d.store_.SetFragments(E(id).node, frags);
+    for (ElemId c = E(src).first; c != kNoElem; c = E(c).next)
+      if (!Repeats(E(src).first, c) && (!skip || !skip(c))) Append(id, CopyProps(c, id, skip, fragments));
+    return id;
+  }
   // A run's properties for new text: its w:rPr, or the paragraph mark's, without revision marks.
   void CopyRunProps(ElemId fromRunOrPPr, ElemId toRun, bool dropLinkStyle = false) {
     ElemId rPr = fromRunOrPPr == kNoElem ? kNoElem : Child(fromRunOrPPr, kRPr);
@@ -306,7 +342,7 @@ struct EditorState {
       return dropLinkStyle && n == kRStyle && Node(&t, c).AttrOr(kVal) == "Hyperlink";
     };
     ElemId copy;
-    if ((E(rPr).flags & kSharedKids) && !dropLinkStyle && NameOf(fromRunOrPPr) == kR) {
+    if ((E(rPr).flags & kSharedKids) && !dropLinkStyle && NameOf(fromRunOrPPr) == kR && !HasRepeats(rPr)) {
       // A run's shared set: share it too (shared sets hold plain properties only).
       copy = CloneShallow(rPr, toRun);
     } else {
@@ -314,10 +350,10 @@ struct EditorState {
       copy = NewElem(toRun, kRPr);
       if (copy == kNoElem) return;
       for (ElemId c = E(rPr).first; c != kNoElem; c = E(c).next) {
-        if (skip(c)) continue;
+        if (skip(c) || Repeats(E(rPr).first, c)) continue;
         ElemDefId def = S().Child(TypeOf(copy), NameOf(c));
         if (def == kNoDef) continue;
-        ElemId k = CloneDeep(c, copy);
+        ElemId k = CopyProps(c, copy);
         E(k).def = def;
         Append(copy, k);
       }
@@ -1156,7 +1192,7 @@ struct EditorState {
         } else if (Splittable(NameOf(c))) {
           copy = CloneShallow(c, to);
           for (ElemId k = E(c).first; k != kNoElem; k = E(k).next)
-            if (PropsElem(k)) Append(copy, CloneDeep(k, copy));
+            if (PropsElem(k)) Append(copy, CopyProps(k, copy));
           if (NameOf(c) == kIns || NameOf(c) == kDel || NameOf(c) == kMoveFrom || NameOf(c) == kMoveTo)
             SetAttr(copy, kId, NewAnnotationId());
           if (!SplitChildren(c, copy, o, why)) return false;
@@ -1212,7 +1248,7 @@ struct EditorState {
     // properties, without those.
     if (ElemId pPr = Child(p, kPPr); pPr != kNoElem) {
       ElemId copy;
-      if (E(pPr).flags & kSharedKids) {
+      if ((E(pPr).flags & kSharedKids) && !HasRepeats(pPr)) {
         copy = CloneShallow(pPr, p);
       } else {
         auto skip = [&](ElemId c) {
@@ -1220,7 +1256,7 @@ struct EditorState {
           return n == kSectPr || n == kPPrChange || n == kIns || n == kDel || n == kMoveFrom || n == kMoveTo ||
                  n == kRPrChange;
         };
-        copy = CloneDeep(pPr, p, skip, false);
+        copy = CopyProps(pPr, p, skip, false);
       }
       Unlink(pPr);
       LinkAfter(np, kNoElem, pPr);
@@ -1375,7 +1411,10 @@ struct EditorState {
         if (lastPart) {
           if (item.attrs.empty() && Attr(child, kVal)) RemoveAttr(child, kVal);
           for (const auto& [attr, value] : item.attrs)
-            if (!SetAttr(child, Name(attr), value)) {
+            if (!XmlSafe(value)) {
+              why = u"A property's value can't hold control characters.";
+              return false;
+            } else if (!SetAttr(child, Name(attr), value)) {
               why = u"Featherweight doesn't know the attribute " + Msg(attr.c_str()) + u".";
               return false;
             }
@@ -1408,7 +1447,7 @@ struct EditorState {
     }
     ElemId copy = CloneShallow(c, E(c).parent);
     for (ElemId k = E(c).first; k != kNoElem; k = E(k).next)
-      if (PropsElem(k)) Append(copy, CloneDeep(k, copy));
+      if (PropsElem(k)) Append(copy, CopyProps(k, copy));
     uint32_t n = NameOf(c);
     if (n == kIns || n == kDel || n == kMoveFrom || n == kMoveTo) SetAttr(copy, kId, NewAnnotationId());
     LinkAfter(E(c).parent, c, copy);
@@ -1479,6 +1518,26 @@ uint32_t Editor::NextPara(uint32_t para) const {
   for (uint32_t p = para + 1; p < doc_.Paragraphs().size(); ++p)
     if (doc_.Para(p).story == story) return p;
   return kNone;
+}
+
+bool XmlSafe(std::string_view s) {
+  static constexpr uint32_t kLeast[] = {0, 0, 0x80, 0x800, 0x10000};  // below these, overlong
+  for (size_t i = 0; i < s.size();) {
+    const auto lead = static_cast<unsigned char>(s[i]);
+    const int n = lead < 0x80 ? 1 : (lead & 0xE0) == 0xC0 ? 2 : (lead & 0xF0) == 0xE0 ? 3 : (lead & 0xF8) == 0xF0 ? 4 : 0;
+    if (n == 0 || i + n > s.size()) return false;
+    uint32_t cp = n == 1 ? lead : lead & (0x7Fu >> n);
+    for (int k = 1; k < n; ++k) {
+      const auto b = static_cast<unsigned char>(s[i + k]);
+      if ((b & 0xC0) != 0x80) return false;
+      cp = cp << 6 | (b & 0x3Fu);
+    }
+    if (cp < kLeast[n] || cp > 0x10FFFF) return false;
+    if (!(cp == 0x9 || cp == 0xA || cp == 0xD || (cp >= 0x20 && cp <= 0xD7FF) || (cp >= 0xE000 && cp <= 0xFFFD) || cp >= 0x10000))
+      return false;
+    i += n;
+  }
+  return true;
 }
 
 namespace {
@@ -1664,6 +1723,7 @@ Result Editor::SetLink(Pos from, Pos to, std::string_view target) {
   if (!CanEdit(&why) || !s.Editable(from.para, why)) return Fail(why);
   if (from.para != to.para || from.offset >= to.offset || target.empty())
     return Fail(u"Select text in one paragraph to make it a link.");
+  if (!XmlSafe(target)) return Fail(u"A link's address can't hold control characters.");
   const uint32_t para = from.para;
   const ElemId p = doc_.Para(para).elem;
   for (const TextRun& t : doc_.Runs(para))
