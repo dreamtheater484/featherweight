@@ -147,18 +147,21 @@ bool Writer::WithTextBoxes(uint32_t i, std::vector<std::string>& xmls) {
     if (!box) return false;
     boxes.push_back(box);
   }
+  // A fragment that isn't an element (text kept among the drawing's content) holds no text box: it
+  // stays as it is. One that should hold one and doesn't parse leaves its copies short: refused.
   std::vector<pkg::XmlDom> doms(xmls.size());
-  for (size_t k = 0; k < xmls.size(); ++k)
-    if (!doms[k].Parse(xmls[k], doc_.Package().GetLimits()).Ok()) return false;
+  std::vector<char> parsed(xmls.size(), 0);
+  for (size_t k = 0; k < xmls.size(); ++k) parsed[k] = doms[k].Parse(xmls[k], doc_.Package().GetLimits()).Ok();
   // Where each copy goes: per branch of a block, else through the drawing's fragments in order.
   std::vector<std::vector<pugi::xml_node>> copies;
-  if (doms.size() == 1 && pkg::IsElement(doms[0].Root(), pkg::mce::kNamespace, "AlternateContent")) {
+  if (doms.size() == 1 && parsed[0] && pkg::IsElement(doms[0].Root(), pkg::mce::kNamespace, "AlternateContent")) {
     for (pugi::xml_node b = doms[0].Root().first_child(); b; b = b.next_sibling())
       if (b.type() == pugi::node_element) copies.push_back(TextBoxesIn(b));
   } else {
     std::vector<pugi::xml_node> all;
-    for (pkg::XmlDom& dom : doms) {
-      pugi::xml_node holder = dom.Doc();  // the fragment's root may itself be a text box's holder
+    for (size_t k = 0; k < doms.size(); ++k) {
+      if (!parsed[k]) continue;
+      pugi::xml_node holder = doms[k].Doc();  // the fragment's root may itself be a text box's holder
       for (pugi::xml_node n : TextBoxesIn(holder)) all.push_back(n);
     }
     copies.push_back(std::move(all));
@@ -168,7 +171,8 @@ bool Writer::WithTextBoxes(uint32_t i, std::vector<std::string>& xmls) {
     if (places.size() != boxes.size()) return false;
   for (const auto& places : copies)
     for (size_t k = 0; k < places.size(); ++k) Replace(places[k], boxes[k]);
-  for (size_t k = 0; k < xmls.size(); ++k) xmls[k] = pkg::RoundTripStore::SerializeFragment(doms[k].Root());
+  for (size_t k = 0; k < xmls.size(); ++k)
+    if (parsed[k]) xmls[k] = pkg::RoundTripStore::SerializeFragment(doms[k].Root());
   return true;
 }
 

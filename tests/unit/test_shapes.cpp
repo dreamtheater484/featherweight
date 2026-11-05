@@ -298,6 +298,27 @@ TEST(TextBox_OlderVmlTextBoxIsSaved) {
   CHECK(Count(saved, "v:textbox") == 2);
 }
 
+TEST(TextBox_TextKeptBesideItIsWrittenAsItWas) {
+  // fuzz_shapes: characters among a VML drawing's elements are kept as a text fragment, which
+  // isn't XML on its own; writing the box's text kept it as it was instead of failing.
+  Fixture f;
+  f.body = "<w:p><w:r><w:pict>333<v:shape id=\"s\" style=\"position:absolute;width:144pt;height:36pt\"><v:textbox>"
+           "<w:txbxContent><w:p><w:r><w:t>Boxed</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const uint32_t box = BoxPara(*doc);
+  CHECK(box != kNone);
+  if (box == kNone) return;
+  Editor ed(*doc);
+  CHECK(ed.InsertText({box, 0}, u"Un").ok);
+  std::string saved;
+  auto back = SaveAndRead(*doc, ed, &saved);
+  CHECK(back);
+  if (back) CHECK(BoxText(*back) == u"UnBoxed|");
+  CHECK(Count(saved, "333") == 1u && Count(saved, "UnBoxed") == 1u);
+}
+
 TEST(TextBox_InATableCellAndAHeaderToo) {
   // A text box in a table cell, and one in the header: each written into its own part.
   Fixture f;
