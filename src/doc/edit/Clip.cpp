@@ -208,7 +208,7 @@ Result FormatRun(Editor& ed, Pos from, Pos to, const ClipRun& want) {
   if (Automatic(want.color) != Automatic(base->color) ||
       (!Automatic(want.color) && (base->color.rgb & 0xFFFFFF) != (*want.color & 0xFFFFFF)))
     set.Set("color", {{"val", Automatic(want.color) ? "auto" : Hex6(*want.color)}});
-  if (!want.font.empty() && !SameNoCase(base->fonts.ascii, want.font))
+  if (!want.font.empty() && XmlSafe(want.font) && !SameNoCase(base->fonts.ascii, want.font))
     set.Set("rFonts", {{"ascii", want.font}, {"hAnsi", want.font}, {"cs", want.font}});
   if (set.items.empty()) return ok;
   if (Result r = ed.SetRunProps(from, to, set); !r) return r;

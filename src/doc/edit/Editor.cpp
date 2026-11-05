@@ -1411,7 +1411,10 @@ struct EditorState {
         if (lastPart) {
           if (item.attrs.empty() && Attr(child, kVal)) RemoveAttr(child, kVal);
           for (const auto& [attr, value] : item.attrs)
-            if (!SetAttr(child, Name(attr), value)) {
+            if (!XmlSafe(value)) {
+              why = u"A property's value can't hold control characters.";
+              return false;
+            } else if (!SetAttr(child, Name(attr), value)) {
               why = u"Featherweight doesn't know the attribute " + Msg(attr.c_str()) + u".";
               return false;
             }
@@ -1515,6 +1518,26 @@ uint32_t Editor::NextPara(uint32_t para) const {
   for (uint32_t p = para + 1; p < doc_.Paragraphs().size(); ++p)
     if (doc_.Para(p).story == story) return p;
   return kNone;
+}
+
+bool XmlSafe(std::string_view s) {
+  static constexpr uint32_t kLeast[] = {0, 0, 0x80, 0x800, 0x10000};  // below these, overlong
+  for (size_t i = 0; i < s.size();) {
+    const auto lead = static_cast<unsigned char>(s[i]);
+    const int n = lead < 0x80 ? 1 : (lead & 0xE0) == 0xC0 ? 2 : (lead & 0xF0) == 0xE0 ? 3 : (lead & 0xF8) == 0xF0 ? 4 : 0;
+    if (n == 0 || i + n > s.size()) return false;
+    uint32_t cp = n == 1 ? lead : lead & (0x7Fu >> n);
+    for (int k = 1; k < n; ++k) {
+      const auto b = static_cast<unsigned char>(s[i + k]);
+      if ((b & 0xC0) != 0x80) return false;
+      cp = cp << 6 | (b & 0x3Fu);
+    }
+    if (cp < kLeast[n] || cp > 0x10FFFF) return false;
+    if (!(cp == 0x9 || cp == 0xA || cp == 0xD || (cp >= 0x20 && cp <= 0xD7FF) || (cp >= 0xE000 && cp <= 0xFFFD) || cp >= 0x10000))
+      return false;
+    i += n;
+  }
+  return true;
 }
 
 namespace {
@@ -1700,6 +1723,7 @@ Result Editor::SetLink(Pos from, Pos to, std::string_view target) {
   if (!CanEdit(&why) || !s.Editable(from.para, why)) return Fail(why);
   if (from.para != to.para || from.offset >= to.offset || target.empty())
     return Fail(u"Select text in one paragraph to make it a link.");
+  if (!XmlSafe(target)) return Fail(u"A link's address can't hold control characters.");
   const uint32_t para = from.para;
   const ElemId p = doc_.Para(para).elem;
   for (const TextRun& t : doc_.Runs(para))
