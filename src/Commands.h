@@ -215,4 +215,28 @@ enum Cmd : int {
   CmdPasteMerge,          // paste taking the look of where it goes, keeping bold, italic and lists
   // The ruler in Word documents (D3).
   CmdRuler = 1200,  // the rulers shown or not (the ⋯ menu, a setting like spelling as you type)
+  // Change case (D3): Shift+F3 and the Aa menu.
+  CmdChangeCase,  // Shift+F3: the next case in Word's cycle
+  CmdCaseSentence,
+  CmdCaseLower,
+  CmdCaseUpper,
+  CmdCaseCapitalize,
+  CmdCaseToggle,
+  CmdCaseBox,  // the toolbar's Aa menu
+  // Tab stops (D3): the ruler's menu on a tab stop, and the Tabs panel.
+  CmdTabsPanel = 1210,
+  CmdTabLeft,
+  CmdTabCenter,
+  CmdTabRight,
+  CmdTabDecimal,
+  CmdTabBar,
+  CmdTabLeaderNone,
+  CmdTabLeaderDots,
+  CmdTabLeaderDashes,
+  CmdTabLeaderLine,
+  CmdTabClear,
+  CmdTabClearAll,
+  // Styles (D3).
+  CmdModifyStyle = 1230,  // the Modify style panel, for the paragraph's style
+  CmdNewStyle,            // Create a style from the selection
 };

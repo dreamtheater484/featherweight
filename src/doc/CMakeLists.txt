@@ -10,6 +10,7 @@ add_library(fwdoc STATIC
   docx/Reader.cpp
   docx/Save.cpp
   docx/Writer.cpp
+  edit/Case.cpp
   edit/Clip.cpp
   edit/ClipTable.cpp
   edit/Editor.cpp

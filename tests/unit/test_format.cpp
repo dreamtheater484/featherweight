@@ -3,6 +3,7 @@
 #include <string>
 
 #include "DocFixture.h"
+#include "doc/edit/Case.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/layout/Layout.h"
@@ -1212,4 +1213,36 @@ TEST(Edit_TabStopsFromTheRuler) {
   CHECK(MainXml(*doc) == last);
   auto back = SaveAndReopen(*doc);
   CHECK(back && back->ResolvedPara(MainParas(*back)[1]).tabs.size() == 1);
+}
+
+TEST(Edit_ChangeCaseKeepsEachRunsFormatting) {
+  Fixture f;
+  f.styles = kBoldStyle;
+  f.body = "<w:p><w:r><w:t xml:space=\"preserve\">hello </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>big</w:t></w:r>"
+           "<w:r><w:t xml:space=\"preserve\"> world. don't stop</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string original = MainXml(*doc);
+  const uint32_t p = MainParas(*doc)[0];
+  const uint32_t n = static_cast<uint32_t>(doc->Para(p).text.size());
+  edit::Editor editor(*doc);
+  auto change = [&](edit::TextCase c) { return edit::ChangeCase(editor, {p, 0}, {p, n}, c).ok; };
+  CHECK(change(edit::TextCase::Upper) && doc->Para(p).text == u"HELLO BIG WORLD. DON'T STOP");
+  // Each run keeps its own formatting: the letters change in place.
+  CHECK(!At(*doc, p, 0).bold && At(*doc, p, 6).bold && At(*doc, p, 8).bold && !At(*doc, p, 9).bold);
+  CHECK(Has(MainXml(*doc), "<w:rPr><w:b/></w:rPr><w:t>BIG</w:t>") && editor.UndoName() == u"Change case");
+  CHECK(change(edit::TextCase::Sentence) && doc->Para(p).text == u"Hello big world. Don't stop");
+  CHECK(change(edit::TextCase::Capitalize) && doc->Para(p).text == u"Hello Big World. Don't Stop");
+  CHECK(change(edit::TextCase::Toggle) && doc->Para(p).text == u"hELLO bIG wORLD. dON'T sTOP");
+  CHECK(change(edit::TextCase::Lower) && doc->Para(p).text == u"hello big world. don't stop");
+  // Part of a word.
+  CHECK(edit::ChangeCase(editor, {p, 1}, {p, 4}, edit::TextCase::Upper).ok && doc->Para(p).text.substr(0, 5) == u"hELLo");
+  CHECK(SaveAndReopen(*doc) != nullptr);
+  int steps = 0;
+  while (editor.Undo()) ++steps;
+  CHECK(steps == 6 && MainXml(*doc) == original);
+  // Shift+F3's cycle.
+  CHECK(edit::NextCase(u"Hello world") == edit::TextCase::Upper && edit::NextCase(u"HELLO") == edit::TextCase::Lower);
+  CHECK(edit::NextCase(u"hello") == edit::TextCase::Capitalize && edit::NextCase(u"Hello World") == edit::TextCase::Upper);
 }

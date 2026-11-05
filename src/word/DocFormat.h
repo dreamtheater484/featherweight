@@ -82,6 +82,8 @@ class DocFormat {
   bool Editable() const { return editor_.CanEdit(); }
   // Runs one change on the current target, as one undo step.
   void Run(const std::function<void(fw::doc::edit::TreeEdit&, const Target&)>& change);
+  // The Aa menu's cases and Shift+F3 (the next one), for the selection or the word at the caret.
+  void ChangeCase(int cmd);
   void ApplyStyle(const std::wstring& nameOrId);
   void ApplyFont(const std::wstring& name);
   void ApplySize(double points);

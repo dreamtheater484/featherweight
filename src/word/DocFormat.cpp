@@ -9,6 +9,7 @@
 
 #include "Commands.h"
 #include "core/Strings.h"
+#include "doc/edit/Case.h"
 #include "doc/edit/Lists.h"
 #include "doc/edit/TreeEdit.h"
 #include "ui/Gfx.h"
@@ -76,6 +77,12 @@ constexpr Named kNames[] = {
     {CmdBorderNone, L"No border", L""},
     {CmdShading, L"Gray shading", L""},
     {CmdShadingNone, L"No shading", L""},
+    {CmdChangeCase, L"Change case", L"Shift+F3"},
+    {CmdCaseSentence, L"Sentence case.", L""},
+    {CmdCaseLower, L"lowercase", L""},
+    {CmdCaseUpper, L"UPPERCASE", L""},
+    {CmdCaseCapitalize, L"Capitalize Each Word", L""},
+    {CmdCaseToggle, L"tOGGLE cASE", L""},
 };
 
 const Named* NameOf(int cmd) {
@@ -190,6 +197,7 @@ DocFormat::DocFormat(edit::Editor& editor, std::function<Target()> target, std::
 
 int DocFormat::Shortcut(UINT vk, UINT mods) {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
+  if (vk == VK_F3 && shift && !ctrl && !alt) return CmdChangeCase;
   if (!ctrl) return 0;
   if (alt) {
     if (shift) return 0;
@@ -237,7 +245,9 @@ int DocFormat::Shortcut(UINT vk, UINT mods) {
   return 0;
 }
 
-bool DocFormat::Owns(int cmd) { return cmd >= CmdBold && cmd <= CmdShadingNone; }
+bool DocFormat::Owns(int cmd) {
+  return (cmd >= CmdBold && cmd <= CmdShadingNone) || (cmd >= CmdChangeCase && cmd <= CmdCaseBox);
+}
 
 std::vector<int> DocFormat::CommandIds() {
   std::vector<int> ids;
@@ -298,6 +308,24 @@ CommandState DocFormat::Query(int cmd) {
   return s;
 }
 
+void DocFormat::ChangeCase(int cmd) {
+  Target t = target_();
+  if (!t.any || t.chars.Empty()) return;
+  edit::TextCase c = static_cast<edit::TextCase>(cmd - CmdCaseSentence);
+  if (cmd == CmdChangeCase) {  // Shift+F3: what comes after the text's own case
+    std::u16string text;
+    for (uint32_t p : edit::ParagraphsOf(Doc(), t.chars)) {
+      const std::u16string& s = Doc().Para(p).text;
+      const size_t a = p == t.chars.from.para ? std::min<size_t>(t.chars.from.offset, s.size()) : 0;
+      const size_t b = p == t.chars.to.para ? std::min<size_t>(t.chars.to.offset, s.size()) : s.size();
+      if (a < b) text.append(s, a, b - a).push_back(u' ');
+    }
+    c = edit::NextCase(text);
+  }
+  const edit::Result r = edit::ChangeCase(editor_, t.chars.from, t.chars.to, c);
+  done_({std::nullopt, r ? std::wstring() : W(r.message)});
+}
+
 void DocFormat::Run(const std::function<void(edit::TreeEdit&, const Target&)>& change) {
   Target t = target_();
   if (!t.any) return;
@@ -328,6 +356,10 @@ void DocFormat::Execute(int cmd) {
     para(f);
   };
   auto list = [&](edit::ListKind kind) { Run([kind](edit::TreeEdit& te, const Target& t) { edit::ToggleList(te, t.sel, kind); }); };
+  if (cmd >= CmdChangeCase && cmd <= CmdCaseToggle) {
+    ChangeCase(cmd);
+    return;
+  }
   switch (cmd) {
     case CmdBold: toggle(Toggle::Bold); return;
     case CmdItalic: toggle(Toggle::Italic); return;
@@ -723,6 +755,19 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
   ToolItem painter = with(toggleButton(CmdFormatPainter, icon::Brush), 3);
   painter.enabled = on;
   m.left.push_back(painter);
+  ToolItem caseBox;
+  caseBox.kind = ToolKind::Dropdown;
+  caseBox.cmd = CmdCaseBox;
+  caseBox.width = 44;
+  caseBox.priority = 2;
+  caseBox.text = L"Aa";
+  caseBox.tooltip = L"Change case (Shift+F3)";
+  caseBox.enabled = on;
+  for (int c = CmdCaseSentence; c <= CmdCaseToggle; ++c) caseBox.choices.push_back(NameOf(c)->label);
+  caseBox.onChange = [this](const ToolValue& v) {
+    if (v.index >= 0 && v.index <= CmdCaseToggle - CmdCaseSentence) Execute(CmdCaseSentence + v.index);
+  };
+  m.left.push_back(caseBox);
 
   // Paragraphs and lists.
   ToolItem alignBox;
