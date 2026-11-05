@@ -300,8 +300,15 @@ struct Flow {
       if (footer != kNone) {
         frame.story = LineStory::Footer;
         frame.y = 0;
+        const size_t zones = hfZones.size();
         Stack ft = e.StackStory(footer, frame);
         float y = f.geom.height - f.geom.footer - ft.height;
+        if (ft.placedOnPage) {
+          // Again where it goes, for what's placed by the page or wraps text.
+          hfZones.resize(zones);
+          frame.y = y;
+          ft = e.StackStory(footer, frame);
+        }
         if (ft.usesPageCount) f.hfUsesCount = true;
         if (Pt(sec.props.marginBottom) >= 0) bottom = std::min(bottom, y);
         f.body.Append(std::move(ft), frame.x, y);
@@ -898,6 +905,10 @@ struct Flow {
           continue;
         }
       }
+      if (!f.pt && !f.table) {
+        Engine::Placement place = e.PlacementOf({item.kind, item.node, item.para});
+        if (place && Place(item, place)) continue;
+      }
       Step s = item.kind == BlockKind::Table ? Table(item) : Paragraph(item);
       if (s == Step::PageFull) {
         FinishPage();
@@ -906,6 +917,25 @@ struct Flow {
     }
     FinishPage();
     e.done_ = true;
+    return true;
+  }
+
+  // A frame or floating table, from the current item: placed on this page, where the flow goes on
+  // beside or below it. False for a floating table that doesn't fit below the text it's anchored
+  // to: Word lets it break across pages, as tables in the flow do.
+  bool Place(const Item& item, const Engine::Placement& place) {
+    std::vector<Block> group{{item.kind, item.node, item.para}};
+    while (f.next + group.size() < f.items.size()) {
+      const Item& it = f.items[f.next + group.size()];
+      if (it.section != item.section || it.story != item.story || !e.JoinsPlaced(place, {it.kind, it.node, it.para})) break;
+      group.push_back({it.kind, it.node, it.para});
+    }
+    Engine::Placed p = e.PlaceBlocks(group, place, BodyFrame(), f.y, ColumnLeft(), ColumnRight());
+    if (place.table && place.table->vertAnchor != "page" && p.box.bottom > Bottom() + kEpsilon) return false;
+    if (p.zone.wrap != WrapType::None) f.zones.push_back(p.zone);
+    f.body.Append(std::move(p.content), p.box.left, p.box.top);
+    f.pageEmpty = false;
+    f.next += group.size();
     return true;
   }
 };

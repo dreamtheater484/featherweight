@@ -78,6 +78,28 @@ class Engine {
   // Stacked layout (Stack.cpp).
   Stack StackStory(uint32_t story, const Frame& frame);
   void StackBlocks(const std::vector<Block>& blocks, const Frame& frame, Stack& out, Spacing& spacing);
+
+  // Frames and floating tables: blocks that leave the flow and are placed like a floating
+  // drawing, with text wrapping around them. A paragraph with w:framePr is in a frame (with the
+  // paragraphs after it that have the same one), and so is a table whose first paragraph is (a
+  // table in a frame); a table with w:tblpPr floats.
+  struct Placement {
+    std::optional<FrameProps> frame;
+    std::optional<TableFloat> table;
+    explicit operator bool() const { return frame || table; }
+  };
+  Placement PlacementOf(const Block& b) const;
+  // Whether `b` goes in the frame `place` began: it has the same w:framePr.
+  bool JoinsPlaced(const Placement& place, const Block& b) const;
+  struct Placed {
+    Stack content;  // relative to the box's top-left corner
+    Rect box;       // page coordinates
+    Zone zone;
+  };
+  // Lays out such blocks and places them. `anchorTop`: where the flow is on the page, for those
+  // placed relative to the text.
+  Placed PlaceBlocks(const std::vector<Block>& group, const Placement& place, const Frame& frame, float anchorTop,
+                     float columnLeft, float columnRight);
   void StackParagraph(uint32_t para, const Frame& frame, Stack& out, Spacing& spacing);
   void StackTable(Node tbl, const Frame& frame, Stack& out, Spacing& spacing);
 

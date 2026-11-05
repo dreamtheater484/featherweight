@@ -103,6 +103,7 @@ void Stack::Append(Stack&& other, float dx, float dy) {
   edges.insert(edges.end(), other.edges.begin(), other.edges.end());
   drawings.insert(drawings.end(), other.drawings.begin(), other.drawings.end());
   usesPageCount = usesPageCount || other.usesPageCount;
+  placedOnPage = placedOnPage || other.placedOnPage;
 }
 
 // The height of a line's text alone, without its inline objects: what proportional spacing adds
@@ -336,13 +337,127 @@ Stack Engine::StackStory(uint32_t story, const Frame& frame) {
 }
 
 void Engine::StackBlocks(const std::vector<Block>& blocks, const Frame& frame, Stack& out, Spacing& spacing) {
-  for (const Block& b : blocks) {
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    const Block& b = blocks[i];
+    if (!frame.inCell && b.kind != BlockKind::ContentControl && b.kind != BlockKind::CustomXml) {
+      if (Placement place = PlacementOf(b)) {
+        size_t n = 1;
+        while (i + n < blocks.size() && JoinsPlaced(place, blocks[i + n])) ++n;
+        std::vector<Block> group(blocks.begin() + static_cast<ptrdiff_t>(i), blocks.begin() + static_cast<ptrdiff_t>(i + n));
+        Placed p = PlaceBlocks(group, place, frame, frame.y + out.height, frame.x, frame.x + frame.width);
+        if (frame.zones && p.zone.wrap != WrapType::None) frame.zones->push_back(p.zone);
+        out.Append(std::move(p.content), p.box.left - frame.x, p.box.top - frame.y);
+        out.placedOnPage = true;
+        i += n - 1;
+        continue;
+      }
+    }
     switch (b.kind) {
       case BlockKind::Paragraph: StackParagraph(b.para, frame, out, spacing); break;
       case BlockKind::Table: StackTable(b.node, frame, out, spacing); break;
       default: StackBlocks(doc_.Blocks(b.node), frame, out, spacing); break;
     }
   }
+}
+
+Engine::Placement Engine::PlacementOf(const Block& b) const {
+  Placement place;
+  auto frameOf = [&](uint32_t para) -> std::optional<FrameProps> {
+    const std::optional<FrameProps>& f = doc_.ResolvedPara(para).frame;
+    if (!f || f->dropCap == "drop" || f->dropCap == "margin") return std::nullopt;  // drop caps stay in the text
+    return f;
+  };
+  if (b.kind == BlockKind::Paragraph) {
+    place.frame = frameOf(b.para);
+  } else if (b.kind == BlockKind::Table) {
+    TableProps t = doc_.ResolvedTable(b.node);
+    if (t.floating) {
+      place.table = t.floating;
+    } else if (std::vector<Node> rows = doc_.TableRows(b.node); !rows.empty()) {
+      std::vector<Node> cells = doc_.RowCells(rows.front());
+      if (!cells.empty()) {
+        for (const Block& c : doc_.Blocks(cells.front())) {
+          if (c.kind != BlockKind::Paragraph) continue;
+          place.frame = frameOf(c.para);
+          break;
+        }
+      }
+    }
+  }
+  return place;
+}
+
+bool Engine::JoinsPlaced(const Placement& place, const Block& b) const {
+  if (!place.frame || (b.kind != BlockKind::Paragraph && b.kind != BlockKind::Table)) return false;
+  Placement next = PlacementOf(b);
+  return next.frame && !next.table && *next.frame == *place.frame;
+}
+
+Engine::Placed Engine::PlaceBlocks(const std::vector<Block>& group, const Placement& place, const Frame& frame,
+                                   float anchorTop, float columnLeft, float columnRight) {
+  const PageGeom& g = *frame.geom;
+  const FrameProps* fp = place.frame ? &*place.frame : nullptr;
+  const TableFloat* tf = place.table ? &*place.table : nullptr;
+  // The range it's placed in: Word's defaults are the column across and the margins down.
+  const std::string_view ha = fp ? fp->hAnchor : tf->horzAnchor;
+  const std::string_view va = fp ? fp->vAnchor : tf->vertAnchor;
+  float l = columnLeft, r = columnRight, t = g.top, b = g.height - g.bottom;
+  if (ha == "page") l = 0, r = g.width;
+  else if (ha == "margin") l = g.left, r = g.width - g.right;
+  if (va == "page") t = 0, b = g.height;
+  else if (va == "text") t = b = anchorTop;
+
+  // Its content, at the frame's width; a frame without one is as wide as its widest line.
+  auto stack = [&](float width) {
+    Frame inner = frame;
+    inner.x = l;
+    inner.y = t;
+    inner.width = width;
+    inner.zones = nullptr;
+    inner.inCell = true;  // nothing in it is placed again
+    Stack s;
+    Spacing spacing;
+    StackBlocks(group, inner, s, spacing);
+    s.height += BorderBelow(spacing);
+    return s;
+  };
+  const bool autoWidth = fp && fp->w.Value() <= 0 && group.size() == 1 && group.front().kind == BlockKind::Paragraph;
+  Placed out;
+  out.content = stack(fp && fp->w.Value() > 0 ? Pt(fp->w) : columnRight - columnLeft);
+  float w = fp && fp->w.Value() > 0 ? Pt(fp->w) : 0;
+  if (w <= 0) {
+    for (const LineBox& lb : out.content.lines) w = std::max(w, lb.x + lb.line.contentRight);
+    for (const Edge& e : out.content.edges) w = std::max({w, e.x1, e.x2});
+    for (const Fill& f : out.content.fills) w = std::max(w, f.rect.right);
+    if (autoWidth) {
+      float narrow = 0;
+      for (const LineBox& lb : out.content.lines) narrow = std::max(narrow, lb.line.contentRight - lb.line.contentLeft);
+      if (narrow > 0 && narrow + 0.5f < w) out.content = stack(w = narrow + 0.5f);
+    }
+  }
+  float h = out.content.height;
+  if (fp && fp->h.Value() > 0 && fp->hRule == "exact") h = Pt(fp->h);
+  else if (fp && fp->h.Value() > 0 && fp->hRule == "atLeast") h = std::max(h, Pt(fp->h));
+
+  const std::string_view xa = fp ? fp->xAlign : tf->xSpec;
+  const std::string_view ya = fp ? fp->yAlign : tf->ySpec;
+  float x = l + Pt(fp ? fp->x : tf->x), y = t + Pt(fp ? fp->y : tf->y);
+  if (xa == "left" || xa == "inside") x = l;
+  else if (xa == "right" || xa == "outside") x = r - w;
+  else if (xa == "center") x = (l + r - w) / 2;
+  if (ya == "top" || ya == "inside") y = t;
+  else if (ya == "bottom" || ya == "outside") y = b - h;
+  else if (ya == "center") y = (t + b - h) / 2;
+  else if (ya == "inline") y = anchorTop;
+  out.box = {x, y, x + w, y + h};
+
+  // Text keeps the frame's distances from it, beside or (notBeside, none) above and below.
+  const float dl = Pt(fp ? fp->hSpace : tf->leftFromText), dr = Pt(fp ? fp->hSpace : tf->rightFromText);
+  const float dt = Pt(fp ? fp->vSpace : tf->topFromText), db = Pt(fp ? fp->vSpace : tf->bottomFromText);
+  const bool beside = !(fp && (fp->wrap == "notBeside" || fp->wrap == "none"));
+  out.zone.wrap = w <= 0 || h <= 0 ? WrapType::None : beside ? WrapType::Square : WrapType::TopAndBottom;
+  out.zone.rect = beside ? Rect{x - dl, y - dt, x + w + dr, y + h + db} : Rect{x, y - dt, x + w, y + h + db};
+  return out;
 }
 
 void Engine::StackParagraph(uint32_t para, const Frame& frame, Stack& out, Spacing& spacing) {
@@ -358,7 +473,11 @@ void Engine::StackParagraph(uint32_t para, const Frame& frame, Stack& out, Spaci
   for (uint32_t a : pt.anchors) {
     const Drawing& d = doc_.Drawings()[a];
     Rect box = PlaceFloat(d, frame, frame.y + paraTop, frame.x, frame.x + frame.width);
-    if (frame.zones && !d.behindDoc && d.wrap != WrapType::None) frame.zones->push_back(ZoneOf(d, box));
+    if (frame.zones && !d.behindDoc && d.wrap != WrapType::None) {
+      frame.zones->push_back(ZoneOf(d, box));
+      out.placedOnPage = true;
+    }
+    if (d.vRelativeFrom == "page" || d.vRelativeFrom == "margin" || d.vRelativeFrom.ends_with("Margin")) out.placedOnPage = true;
     AddDrawing(a, {box.left - frame.x, box.top - frame.y, box.right - frame.x, box.bottom - frame.y}, true, frame, out);
   }
   uint32_t paintBase = static_cast<uint32_t>(out.paints.size());

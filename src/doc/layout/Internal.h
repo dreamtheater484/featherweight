@@ -77,6 +77,9 @@ struct Stack {
   std::vector<DrawingBox> drawings;
   float height = 0;
   bool usesPageCount = false;  // shows NUMPAGES or SECTIONPAGES
+  // Has content placed relative to the page or its margins, or that text wraps around: where it
+  // goes depends on where the stack goes (a footer is stacked before it's placed).
+  bool placedOnPage = false;
   void Append(Stack&& other, float dx, float dy);
   void Offset(float dx, float dy);
 };
