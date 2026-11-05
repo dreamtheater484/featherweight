@@ -4,7 +4,9 @@
 
 #include "DocFixture.h"
 #include "doc/edit/Editor.h"
+#include "doc/edit/Format.h"
 #include "doc/edit/Page.h"
+#include "doc/edit/TreeEdit.h"
 #include "pkg/Check.h"
 
 using namespace fw;
@@ -232,6 +234,16 @@ TEST(Page_SectionBreaksGoInAndOut) {
   CHECK(!ted.CanUndo());
 }
 
+// Each run of the paragraph lies in its text, one after another, and together they cover it.
+static bool RunsCover(const Document& doc, uint32_t para) {
+  uint32_t end = 0;
+  for (const TextRun& run : doc.Runs(para)) {
+    if (run.start < end || run.end > doc.Para(para).text.size()) return false;
+    end = run.end;
+  }
+  return end == doc.Para(para).text.size();
+}
+
 TEST(Page_PageAndColumnBreaksStartAParagraph) {
   Fixture f;
   f.body = P("Before after");
@@ -243,6 +255,7 @@ TEST(Page_PageAndColumnBreaksStartAParagraph) {
   edit::Result r = edit::InsertBreak(editor, {p, 7}, false);
   REQUIRE(r);
   CHECK(doc->Para(p).text == u"Before \x0C" && doc->Para(r.caret.para).text == u"after");
+  CHECK(RunsCover(*doc, p) && RunsCover(*doc, r.caret.para));
   CHECK(Has(MainXml(*doc), "<w:br w:type=\"page\"/>"));
   CHECK(editor.UndoName() == u"Page break");
   CHECK(editor.Undo() && MainXml(*doc) == original);
@@ -250,6 +263,38 @@ TEST(Page_PageAndColumnBreaksStartAParagraph) {
   REQUIRE(r);
   CHECK(Has(MainXml(*doc), "<w:br w:type=\"column\"/>"));
   CHECK(SaveAndReopen(*doc));
+}
+
+TEST(Page_BreaksInAParagraphThatEndedASectionOrWasFormatted) {
+  // A tree edit in a paragraph's properties (a section break deleted, the paragraph centered) and
+  // then a page break in its text: the text after the break is all in the next paragraph, in the
+  // file too. (The tree edit used to give the paragraph shared copies of its runs, d2-torture 7-9.)
+  Fixture f;
+  f.body = P("End of section one", "<w:sectPr><w:type w:val=\"continuous\"/></w:sectPr>") + P("Next");
+  for (int how = 0; how < 3; ++how) {
+    auto doc = LoadOk(f);
+    REQUIRE(doc);
+    edit::Editor editor(*doc);
+    const uint32_t p = MainParas(*doc)[0];
+    if (how == 1) {
+      REQUIRE(edit::DeleteSectionBreak(editor, 0));
+    } else if (how == 2) {
+      edit::ParaFormat centered;
+      centered.jc = Justification::Center;
+      edit::TreeEdit ed(editor, {p, 0});
+      edit::FormatParagraphs(ed, {{p, 0}, {p, 0}}, centered);
+    }
+    edit::Result r = edit::InsertBreak(editor, {p, 9}, false);
+    REQUIRE(r);
+    CHECK(doc->Para(p).text == u"End of se\x0C" && doc->Para(r.caret.para).text == u"ction one");
+    for (uint32_t q : MainParas(*doc)) CHECK(RunsCover(*doc, q));
+    const std::string xml = MainXml(*doc);
+    CHECK(Has(xml, ">End of se</w:t>") && Has(xml, ">ction one</w:t>"));
+    // The section break, when there is one, stays with the end of the paragraph.
+    CHECK(doc->Sections().size() == (how == 1 ? 1u : 2u));
+    if (how != 1) CHECK(edit::SectionParagraphs(*doc, 0).second == r.caret.para);
+    CHECK(SaveAndReopen(*doc));
+  }
 }
 
 TEST(Page_HyphenationSettings) {
