@@ -1632,3 +1632,38 @@ TEST(Edit_SplitBeforeKeptAlternateContentGoesAfterIt) {
   CHECK(Consistent(*doc, f));
   CHECK(ed.Undo() && MainXml(*doc) == before && RoundTrips(*doc));
 }
+
+TEST(Edit_SplitKeepsARangeInOrderAcrossAnEmptyLink) {
+  // d1-corpus finding 19: Enter at the start of an empty paragraph whose bookmark ends inside a
+  // link. The bookmark's start goes to the second paragraph, so the link with its end goes too.
+  Fixture f;
+  f.body =
+      "<w:p><w:r><w:t>Before</w:t></w:r></w:p>"
+      "<w:p><w:bookmarkStart w:id=\"0\" w:name=\"Mark\"/><w:hyperlink w:anchor=\"Mark\"><w:bookmarkEnd w:id=\"0\"/></w:hyperlink></w:p>"
+      "<w:p><w:bookmarkStart w:id=\"1\" w:name=\"Other\"/><w:hyperlink w:anchor=\"Mark\"><w:bookmarkStart w:id=\"2\" w:name=\"In\"/>"
+      "</w:hyperlink><w:bookmarkEnd w:id=\"2\"/><w:bookmarkEnd w:id=\"1\"/></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  CHECK(ps.size() == 3);
+  if (ps.size() != 3) return;
+  CHECK(ed.SplitParagraph(P(ps[1], 0)));
+  CHECK(BodyIs(*doc,
+               "<w:p><w:r><w:t>Before</w:t></w:r></w:p><w:p/>"
+               "<w:p><w:bookmarkStart w:id=\"0\" w:name=\"Mark\"/><w:hyperlink w:anchor=\"Mark\"><w:bookmarkEnd w:id=\"0\"/></w:hyperlink></w:p>"
+               "<w:p><w:bookmarkStart w:id=\"1\" w:name=\"Other\"/><w:hyperlink w:anchor=\"Mark\"><w:bookmarkStart w:id=\"2\" w:name=\"In\"/>"
+               "</w:hyperlink><w:bookmarkEnd w:id=\"2\"/><w:bookmarkEnd w:id=\"1\"/></w:p>"));
+  // A link holding a start, with its end after the link: all of it goes.
+  CHECK(ed.SplitParagraph(P(Main(*doc)[3], 0)));
+  CHECK(BodyIs(*doc,
+               "<w:p><w:r><w:t>Before</w:t></w:r></w:p><w:p/>"
+               "<w:p><w:bookmarkStart w:id=\"0\" w:name=\"Mark\"/><w:hyperlink w:anchor=\"Mark\"><w:bookmarkEnd w:id=\"0\"/></w:hyperlink></w:p><w:p/>"
+               "<w:p><w:bookmarkStart w:id=\"1\" w:name=\"Other\"/><w:hyperlink w:anchor=\"Mark\"><w:bookmarkStart w:id=\"2\" w:name=\"In\"/>"
+               "</w:hyperlink><w:bookmarkEnd w:id=\"2\"/><w:bookmarkEnd w:id=\"1\"/></w:p>"));
+  CHECK(Consistent(*doc, f));
+  while (ed.CanUndo()) ed.Undo();
+  CHECK(MainXml(*doc) == before && RoundTrips(*doc));
+}

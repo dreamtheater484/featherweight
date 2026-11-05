@@ -303,8 +303,26 @@ bool DocView::EditKey(UINT vk, UINT mods) {
         AutoCorrectTyped(u'\v');
       } else if (HasSelection()) {
         TypeText(u"\r");
-      } else if (const uint32_t para = focus_.para; Apply(editor_->SplitParagraph(ToDoc(focus_)))) {
-        AutoCorrectBreak(para);
+      } else {
+        // At a paragraph's end, the new one takes its style's "style for the following paragraph"
+        // (w:next: a heading's is Normal), in the same step.
+        const uint32_t para = focus_.para;
+        const fw::doc::Style* next = nullptr;
+        if (focus_.offset == doc_->Para(para).text.size())
+          if (const fw::doc::Style* own = doc_->FindStyle(std::string(doc_->ResolvedPara(para).style)))
+            if (own->next != fw::doc::kNone && own->next < doc_->Styles().size() && &doc_->Styles()[own->next] != own &&
+                doc_->Styles()[own->next].type == fw::doc::StyleType::Paragraph)
+              next = &doc_->Styles()[own->next];
+        editor_->BeginGroup(u"New paragraph");
+        Result r = editor_->SplitParagraph(ToDoc(focus_));
+        if (r && next) {
+          fw::doc::edit::PropEdit e;
+          if (next->isDefault) e.Remove("pStyle");
+          else e.Set("pStyle", {{"val", std::string(next->id)}});
+          editor_->SetParaProps(r.caret.para, r.caret.para, e);  // refused, the paragraph keeps its style
+        }
+        editor_->EndGroup();
+        if (Apply(r)) AutoCorrectBreak(para);
       }
       return true;
     case VK_TAB:

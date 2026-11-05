@@ -1259,6 +1259,30 @@ struct EditorState {
 
   // Moves what follows `o` from `from` into `to` (both containers of one paragraph), cutting
   // containers that straddle it. False with `why` when one can't be cut.
+  // Whether a container at a split point holds a range start, or the end of a range whose start
+  // went to the second half.
+  bool MovesWithMarkers(ElemId c) {
+    for (ElemId k = E(c).first; k != kNoElem; k = E(k).next) {
+      if (PropsElem(k)) continue;
+      const uint32_t n = NameOf(k);
+      if (StartMarker(n)) return true;
+      if (const uint32_t start = StartOfEnd(n); start != 0) {
+        const std::string_view id = Node(&t, k).AttrOr(kId);
+        for (const auto& [kind, movedId] : movedStarts)
+          if (kind == start && movedId == id) return true;
+      }
+      if (E(k).first != kNoElem && MovesWithMarkers(k)) return true;
+    }
+    return false;
+  }
+  // The range starts in a container that moves, so that their ends after it move too.
+  void RecordStarts(ElemId c) {
+    for (ElemId k = E(c).first; k != kNoElem; k = E(k).next) {
+      if (PropsElem(k)) continue;
+      if (StartMarker(NameOf(k))) movedStarts.emplace_back(NameOf(k), std::string(Node(&t, k).AttrOr(kId)));
+      if (E(k).first != kNoElem) RecordStarts(k);
+    }
+  }
   bool SplitChildren(ElemId from, ElemId to, uint32_t o, std::u16string& why) {
     ElemId last = LastChild(to);
     for (ElemId c = E(from).first; c != kNoElem;) {
@@ -1271,6 +1295,12 @@ struct EditorState {
       bool move;
       if (l == 0) move = s > o || (s == o && StartMarker(NameOf(c)) && !(NameOf(c) == kProofErr));
       else move = s >= o;
+      // A container with no text at the split point (a link around a bookmark's end) goes with
+      // the range markers in it: with a start, or with an end whose start went (finding 19).
+      if (l == 0 && s == o && !move && E(c).first != kNoElem && MovesWithMarkers(c)) {
+        move = true;
+        RecordStarts(c);
+      }
       if (NameOf(c) == kProofErr && l == 0 && s == o) {
         std::string_view type = Node(&t, c).AttrOr(kType);
         move = type == "spellStart" || type == "gramStart";
