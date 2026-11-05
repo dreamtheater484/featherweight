@@ -9,6 +9,7 @@
 #include <unordered_set>
 
 #include "doc/edit/Kept.h"
+#include "doc/edit/TreeEdit.h"
 #include "doc/model/Internal.h"
 #include "doc/model/Schema.h"
 #include "pkg/Package.h"
@@ -118,6 +119,38 @@ struct Entry {
 };
 
 }  // namespace
+
+KeptRefs KeptReferences(const Document& doc, const std::vector<uint32_t>& marks) {
+  KeptRefs out;
+  const std::vector<Section>& sections = doc.Sections();
+  std::vector<size_t> ending;
+  for (uint32_t p : marks)
+    for (size_t s = 0; s + 1 < sections.size(); ++s)
+      if (sections[s].endPara == p) ending.push_back(s);
+  if (ending.empty()) return out;
+  std::sort(ending.begin(), ending.end());
+  const Section& next = sections[ending.back() + 1];
+  out.sectPr = next.sectPr.Id();
+  if (out.sectPr == kNoElem) return out;
+  std::vector<std::string> have;  // "headerReference default", ...
+  auto key = [](Node ref) { return std::string(ref.Is(Name("headerReference")) ? "headerReference " : "footerReference ") +
+                                   std::string(ref.AttrOr(kType, "default")); };
+  auto isRef = [](Node n) { return n.Is(Name("headerReference")) || n.Is(Name("footerReference")); };
+  for (Node ref : next.sectPr.Kids())
+    if (isRef(ref)) have.push_back(key(ref));
+  for (auto it = ending.rbegin(); it != ending.rend(); ++it)
+    for (Node ref : sections[*it].sectPr.Kids()) {
+      if (!isRef(ref) || std::find(have.begin(), have.end(), key(ref)) != have.end()) continue;
+      const std::string_view id = ref.AttrOr(Name("r:id")), type = ref.AttrOr(kType, "default");
+      auto plain = [](std::string_view v) { return XmlSafe(v) && v.find_first_of("<>&\"") == std::string_view::npos; };
+      if (id.empty() || !plain(id) || !plain(type)) continue;
+      have.push_back(key(ref));
+      const std::string name = ref.Is(Name("headerReference")) ? "headerReference" : "footerReference";
+      out.xml.push_back("<w:" + name + " w:type=\"" + std::string(type) + "\" r:id=\"" +
+                        std::string(id) + "\"/>");
+    }
+  return out;
+}
 
 struct EditorState {
   Document& d;
@@ -693,6 +726,7 @@ struct EditorState {
       ch.story = d.paras_[step.first].story;
       ch.first = step.first;
       ch.removed = ch.added = step.count;
+      ch.structure = step.structure;
     } else {
       ch.story = d.main_;
       ch.first = 0;
@@ -768,10 +802,18 @@ struct EditorState {
       fix(pi.openPos, pi.open.Id());
       fix(pi.closePos, pi.close.Id());
     }
-    for (Section& s : d.sections_) {
-      if (s.endPara == kNone) continue;
-      if (s.endPara >= first && s.endPara < first + removed) s.endPara = d.ParagraphOf(s.sectPr);
-      else if (s.endPara >= first + removed) s.endPara = static_cast<uint32_t>(static_cast<int64_t>(s.endPara) + shift);
+    // Section breaks: where they are now, or the sections again when one went or came back (a
+    // deletion takes the breaks in the marks it deletes, and undoing it brings them back).
+    bool breaks = false;
+    for (const Section& s : d.sections_) breaks = breaks || (s.endPara != kNone && s.endPara >= first && s.endPara < first + removed);
+    for (uint32_t p = first; p < first + added && !breaks; ++p) breaks = static_cast<bool>(d.ParaNode(p).Path({kPPr, kSectPr}));
+    if (breaks) {
+      d.BuildSections();
+    } else {
+      for (Section& s : d.sections_) {
+        if (s.endPara == kNone) continue;
+        if (s.endPara >= first + removed) s.endPara = static_cast<uint32_t>(static_cast<int64_t>(s.endPara) + shift);
+      }
     }
 
     Change ch;
@@ -945,7 +987,8 @@ struct EditorState {
     return true;
   }
 
-  // Inserts text without paragraph breaks; tabs and line breaks become w:tab and w:br.
+  // Inserts text without paragraph breaks; tabs and line, page and column breaks (U+000B, U+000C,
+  // U+000E) become w:tab and w:br.
   bool InsertPlain(uint32_t para, uint32_t o, std::u16string_view text, std::u16string& why) {
     if (text.empty()) return true;
     Spot spot;
@@ -956,7 +999,8 @@ struct EditorState {
     ElemId after = spot.after;
     bool atStart = cur != kNoElem && E(cur).start == o && o < E(cur).start + E(cur).length;
     // A tab or break in the middle of a w:t splits it; the text after the last one joins the tail.
-    auto hasSpecial = std::any_of(text.begin(), text.end(), [](char16_t c) { return c == u'\t' || c == 0x0B; });
+    auto special = [](char16_t c) { return c == u'\t' || c == 0x0B || c == 0x0C || c == 0x0E; };
+    auto hasSpecial = std::any_of(text.begin(), text.end(), special);
     ElemId tail = kNoElem;
     if (cur != kNoElem && hasSpecial && o > E(cur).start && o < E(cur).start + E(cur).length) {
       tail = CloneShallow(cur, run);
@@ -972,9 +1016,10 @@ struct EditorState {
     size_t i = 0;
     while (i < text.size()) {
       char16_t ch = text[i];
-      if (ch == u'\t' || ch == 0x0B) {
+      if (special(ch)) {
         ElemId item = NewElem(run, ch == u'\t' ? kTab : kBr);
         E(item).length = 1;
+        if (ch == 0x0C || ch == 0x0E) SetAttr(item, kType, ch == 0x0C ? "page" : "column");
         ElemId prev = cur != kNoElem ? cur : (after != kNoElem ? after : Child(run, kRPr));
         LinkAfter(run, prev, item);
         s.insert(s.begin() + at, ch);
@@ -985,7 +1030,7 @@ struct EditorState {
         continue;
       }
       size_t j = i;
-      while (j < text.size() && text[j] != u'\t' && text[j] != 0x0B) ++j;
+      while (j < text.size() && !special(text[j])) ++j;
       if (cur == kNoElem && j == text.size() && tail != kNoElem) {
         cur = tail;  // it starts at `at`
       } else if (cur == kNoElem) {
@@ -1361,13 +1406,19 @@ struct EditorState {
     }
     ElemId p = d.paras_[para].elem, w = d.paras_[q].elem;
     ElemId pPr = Child(p, kPPr), qPr = Child(w, kPPr);
-    if (pPr != kNoElem && Child(pPr, kSectPr) != kNoElem) {
-      why = u"Deleting a section break isn't possible yet.";
-      return false;
-    }
     if ((E(p).flags & kDisplayOnly) || (E(w).flags & kDisplayOnly)) {
       why = u"This part of the document can't be edited.";
       return false;
+    }
+    // A section break at the end of the first goes with its mark: its paragraphs join the next
+    // section (the callers keep the headers and footers that one shows, KeptReferences).
+    if (pPr != kNoElem && Child(pPr, kSectPr) != kNoElem) {
+      Unshare(pPr);
+      Unlink(Child(pPr, kSectPr));
+      if (E(pPr).first == kNoElem && E(pPr).attrCount == 0 && (!E(pPr).node || (d.store_.FragmentsCopy(E(pPr).node).empty() && d.store_.NodeAttributes(E(pPr).node) == 0))) {
+        Unlink(pPr);  // nothing else in it
+        pPr = kNoElem;
+      }
     }
     // Range markers between the two paragraphs move to the join point.
     std::vector<ElemId> between;
@@ -2210,7 +2261,7 @@ Result Editor::InsertText(Pos at, std::u16string_view text) {
     if (c == u'\r' || c == u'\n') {
       if (c == u'\r' && i + 1 < text.size() && text[i + 1] == u'\n') ++i;
       lines.emplace_back();
-    } else if ((c == u'\t' || c == 0x0B || c >= 0x20) && c != 0xFFFC) {  // U+FFFC stands for objects
+    } else if ((c == u'\t' || c == 0x0B || c == 0x0C || c == 0x0E || c >= 0x20) && c != 0xFFFC) {  // U+FFFC: objects
       if (c == 0x2028) lines.back() += char16_t(0x0B);
       else if (c == 0x2029) lines.emplace_back();
       else lines.back() += c;
@@ -2280,10 +2331,17 @@ Result Editor::Delete(Pos from, Pos to) {
       chain.push_back(next);
     }
   }
-  for (size_t i = 0; i + 1 < chain.size(); ++i) {
-    ElemId pPr = s.Child(doc_.Para(chain[i]).elem, kPPr);
-    if (pPr != kNoElem && s.Child(pPr, kSectPr) != kNoElem) return Fail(u"Deleting a section break isn't possible yet.");
-  }
+  // Section breaks it takes (in the marks of all but the last paragraph): the section after them
+  // keeps the headers and footers it showed.
+  const KeptRefs kept = KeptReferences(doc_, std::vector<uint32_t>(chain.begin(), chain.end() - 1));
+  if (kept.sectPr != kNoElem) BeginGroup(u"Delete");
+  struct Ender {
+    Editor& ed;
+    bool on;
+    ~Ender() {
+      if (on) ed.EndGroup();
+    }
+  } ender{*this, kept.sectPr != kNoElem};
   bool single = from.para == to.para && to.offset == from.offset + 1;
   s.Begin(from.para, to.para - from.para + 1);
   if (from.para == to.para) {
@@ -2299,9 +2357,19 @@ Result Editor::Delete(Pos from, Pos to) {
   }
   s.Commit(false, to, from, single ? Kind::Deleting : Kind::Other, u"Delete");
   s.Notify(listeners_);
+  AddReferences(kept, from);
   Result r;
   r.caret = from;
   return r;
+}
+
+void Editor::AddReferences(const KeptRefs& kept, Pos at) {
+  if (kept.sectPr == kNoElem || kept.xml.empty()) return;
+  TreeEdit te(*this, at);
+  te.Begin(u"Delete");
+  te.Affects(at.para, at.para);
+  for (const std::string& xml : kept.xml) te.AddXml(kept.sectPr, xml);
+  te.Commit();
 }
 
 Result Editor::Replace(Pos from, Pos to, std::u16string_view text) {
@@ -2341,10 +2409,18 @@ Result Editor::JoinParagraphs(uint32_t para) {
   uint32_t q = s.SiblingAfter(para);
   if (q == kNone) return Fail(u"Paragraphs in different places (a table cell and the text around it) can't be joined.");
   Pos caret{para, ParaLength(para)};
+  const KeptRefs kept = KeptReferences(doc_, {para});
+  if (kept.sectPr != kNoElem) BeginGroup(u"Delete");
   s.Begin(para, q - para + 1);
-  if (!s.Join(para, why)) return s.Abort(why);
+  if (!s.Join(para, why)) {
+    Result failed = s.Abort(why);
+    if (kept.sectPr != kNoElem) EndGroup();
+    return failed;
+  }
   s.Commit(false, Pos{q, 0}, caret, Kind::Other, u"Delete");
   s.Notify(listeners_);
+  AddReferences(kept, caret);
+  if (kept.sectPr != kNoElem) EndGroup();
   Result r;
   r.caret = caret;
   return r;

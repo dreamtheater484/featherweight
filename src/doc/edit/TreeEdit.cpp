@@ -87,7 +87,8 @@ pkg::NodeId TreeEdit::NewNode() { return editor_.NewNodeId(); }
 void TreeEdit::Begin(std::u16string label) {
   if (depth_++ > 0) return;
   label_ = std::move(label);
-  local_ = toEnd_ = false;
+  local_ = toEnd_ = structure_ = false;
+  affects_ = {kNone, kNone};
   owned_.clear();
   elemsAtBegin_ = doc_.tree_.elems.size();
   before_.clear();
@@ -134,6 +135,12 @@ void TreeEdit::Commit() {
       step->first = first;
       step->count = last - first + 1;
     }
+  }
+  if (affects_.first != kNone && affects_.second < doc_.paras_.size()) {
+    step->first = affects_.first;
+    step->count = affects_.second - affects_.first + 1;
+    step->structure = structure_;
+    if (caret.para == kNone) caret = {affects_.first, 0};
   }
   editor_.RecordStep(std::move(label_), std::move(step), caret);
 }
