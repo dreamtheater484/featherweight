@@ -738,7 +738,7 @@ TEST(Edit_LayingOutAgainMatchesAFreshLayout) {
   layout.LayOutAll();
   CHECK(layout.PageCount() > 8);
   Editor ed(*doc);
-  ed.OnChange([&](const edit::Change& c) { layout.Edited(c.story, c.first, c.removed, c.added); });
+  ed.OnChange([&](const edit::Change& c) { layout.Edited(c); });
   auto ps = Main(*doc);
   auto check = [&](const char* what) {
     if (!SameLayout(layout, *doc)) {
@@ -778,7 +778,7 @@ TEST(Edit_LayingOutAgainMatchesAFreshLayout) {
   fw::doc::layout::Layout partial(*doc, EditFonts());
   partial.LayOutPages(3);
   Editor ed2(*doc);
-  ed2.OnChange([&](const edit::Change& c) { partial.Edited(c.story, c.first, c.removed, c.added); });
+  ed2.OnChange([&](const edit::Change& c) { partial.Edited(c); });
   CHECK(ed2.SplitParagraph(P(ps[2], 3)) && ed2.InsertText(P(ps[60], 0), u"Far ahead "));
   if (!SameLayout(partial, *doc)) CHECK(false);
 }

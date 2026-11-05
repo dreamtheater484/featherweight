@@ -53,11 +53,16 @@ class Engine {
 
   // Lays out one more page; false once the document is done.
   bool NextPage();
-  // Paragraphs [first, first + removed) of `story` became [first, first + added) (Layout::Edited).
-  void Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added);
   bool Done() const { return done_; }
+  // The pages laid out.
   std::vector<Page>& Pages() { return pages_; }
   const std::vector<Page>& Pages() const { return pages_; }
+  // The pages shown: those laid out, then after an edit the old ones not laid out again yet.
+  size_t ShownCount() const;
+  const Page& Shown(size_t index) const;
+  // The document changed (Layout::Edited): paragraphs [first, first + removed) of `story` were
+  // replaced by [first, first + added).
+  void Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added, bool structure);
   uint32_t Revision() const { return revision_; }
   const Document& Doc() const { return doc_; }
   text::Fonts& Fonts() { return fonts_; }
@@ -69,13 +74,14 @@ class Engine {
   RunPaint PaintOf(const RunProps& r, uint32_t modelRun) const;
   text::ParagraphFormat FormatOf(const ParaProps& p) const;
   // `pageBreaks`: the paragraph is the body's own, where page and column breaks break; Word
-  // ignores them in table cells, text boxes, headers, footers and notes.
-  void BuildText(uint32_t para, const PageFields& fields, ParaText& out, bool pageBreaks = false);
+  // ignores them in table cells, text boxes, headers, footers and notes. `numberNotes` false (for
+  // mapping offsets): note references the flow hasn't reached keep no number rather than take one.
+  void BuildText(uint32_t para, const PageFields& fields, ParaText& out, bool pageBreaks = false,
+                 bool numberNotes = true);
   std::u16string NoteMark(uint32_t story) const;
   // A note's reference mark, numbered in the order references are laid out.
   std::u16string NoteReference(uint32_t story);
-  // NUMPAGES and SECTIONPAGES in the headers and footers of pages [from, to).
-  void RefreshPageCounts(size_t from = 0, size_t to = SIZE_MAX);
+  void RefreshPageCounts();
   float EquationWidth(uint32_t drawing, float size);
 
   // Stacked layout (Stack.cpp).
@@ -179,7 +185,6 @@ class Engine {
   std::unique_ptr<Impl> impl_;
 
   friend struct Flow;
-  void BuildItems();  // the body's blocks as flow items
   const Document& doc_;
   text::Fonts& fonts_;
   Options options_;
@@ -194,6 +199,7 @@ class Engine {
   std::unordered_map<uint32_t, std::vector<Field>> fieldsCache_;
   std::unordered_map<uint32_t, std::u16string> noteNumbers_;  // note story -> its mark
   std::unordered_map<uint32_t, int32_t> noteOrder_;           // note story -> its number
+  std::vector<uint32_t> noteSeq_;                             // note stories in the order numbered
   int32_t footnoteCount_ = 0, endnoteCount_ = 0;
 
  public:

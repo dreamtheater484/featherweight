@@ -37,7 +37,7 @@ bool Space(char16_t c) { return c == u' ' || c == u'\t' || c == 0x00A0 || c == 0
 // Edits
 
 void DocView::OnEdited(const fw::doc::edit::Change& c) {
-  pagination_->Edited(c.story, c.first, c.removed, c.added);
+  pagination_->Edited(c);
   // Positions kept from before: later paragraphs moved; those in the changed ones are found anew.
   const int32_t shift = c.Shift();
   auto move = [&](TextPos& p) {
