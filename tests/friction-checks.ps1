@@ -39,10 +39,14 @@ $dash = [string][char]0x2013  # the script stays ASCII: PowerShell 5.1 reads it 
 $dot = [string][char]0x00B7
 
 # A flow: its steps as "script step|count". The count is what the review counts: C (clicks),
-# K (keys), both ("2C"), or nothing for typing the content. A count ending in "?" is a step only
-# a reported finding needs (run with -Workarounds); "!", one the workaround replaces. `expect` are regular expressions the
-# lines of `fwtool dump --model` must match, in order. `budget` is Word's count plus the extras
-# the review accepts (docs/friction-review.md).
+# K (keys), D (drags), or nothing for typing the content; a step with no script step is one the
+# script doesn't take (opening the file it starts with). A count ending in "?" is a step only a
+# reported finding needs (run with -Workarounds); "!", one the workaround replaces. `expect` are
+# regular expressions the lines of `fwtool dump --model` must match, in order; `xml`, ones the
+# saved word/document.xml must match. `open` is the file it starts with (a copy), else a new
+# document. `budget` is Word's count plus the extras the review accepts (docs/friction-review.md).
+# The context menu is Windows' own and a script can't click it: a right-click is a click there
+# (it puts the caret there too) and its menu items are the command they run (cmd:<id>), counted.
 $flows = @(
   @{
     name = "letter"
@@ -100,17 +104,48 @@ $flows = @(
       '^\s*Heading1\s+\S+pt \| Education$',
       '^\s*Normal\s+\S+pt \| Master of Design, TU Delft$'
     )
+  },
+  @{
+    name = "table"
+    open = "tests\office\torture\received-table.docx"
+    budget = 16  # Word: 10 clicks, 2 keys, 2 drags; +2 clicks accepted: a row in the middle from the context menu, not a handle
+    steps = @(
+      "|1C",                                      # double-click the attachment: it opens ready to edit
+      "dblclick:189,298|1C", "type:Chair|",       # the typo: double-click the word, type
+      "click:785,340|1C", "key:tab|1K", "type:Rug|",  # a row at the end: Tab in the last cell
+      "click:250,277|1C", "cmd:1156|2C",          # a row in the middle: right-click, Insert, Rows Below
+      "click:250,340|1C", "cmd:1159|2C",          # delete Lamp: right-click, Delete, Rows
+      "drag:560,256,760,256|1D", "cmd:1162|2C",   # merge Price and Total: select them, right-click, Merge Cells
+      "drag:410,300,480,300|1D!",                 # widen Item: drag its border
+      "click:250,277|1C?", "cmd:1173|1C?",        # finding F7: right-click, Properties (the Table panel)...
+      "click:905,390|1C?", "type:7|?", "key:enter|1K?",  # ...Column width: 7 cm
+      "save:{out}|1K"                             # Ctrl+S
+    )
+    expect = @(
+      '^\s*\S+\s+\S+pt \| Quote for the new office$',
+      '\| Item$', '\| Quantity$', '\| Price$', '\| Total$',
+      '\| Desk$', '\| 2$', '\| 250$', '\| 500$', '\| $', '\| $', '\| $', '\| $',
+      '\| Chair$', '\| 4$', '\| 80$', '\| 320$',
+      '\| Shelf$', '\| 1$', '\| 150$', '\| 150$',
+      '\| Rug$', '\| $', '\| $', '\| $',
+      '\| Prices in euros, without VAT\.$'
+    )
+    xml = @(
+      '<w:tblGrid><w:gridCol w:w="(3[5-9]\d\d|[4-9]\d\d\d)"/>',  # Item wider than its 3000 twips
+      '<w:gridSpan w:val="2"/>',                                      # Price and Total merged
+      '^(?!.*>Lamp<)'                                                 # Lamp's row gone
+    )
   }
 )
-# "Fix a table in a received document" joins when table editing lands (D3, claude/d3-tables).
 
 $enc = New-Object System.Text.UTF8Encoding $false
+[Console]::OutputEncoding = $enc  # fwtool writes UTF-8 (the CV's en dash), whatever the console's code page
 $failed = 0
 foreach ($f in $flows) {
   $docx = Join-Path $Out "$($f.name).docx"
   Remove-Item $docx -ErrorAction SilentlyContinue
   $script = @()
-  $clicks = 0; $keys = 0
+  $clicks = 0; $keys = 0; $drags = 0
   foreach ($s in $f.steps) {
     $bar = $s.LastIndexOf('|')
     $step = $s.Substring(0, $bar).Replace("{out}", $docx)
@@ -124,16 +159,23 @@ foreach ($f in $flows) {
     }
     if ($count -match '^(\d+)C$') { $clicks += [int]$Matches[1] }
     elseif ($count -match '^(\d+)K$') { $keys += [int]$Matches[1] }
-    $script += $step
+    elseif ($count -match '^(\d+)D$') { $drags += [int]$Matches[1] }
+    if ($step) { $script += $step }
+  }
+  $files = @()
+  if ($f.open) {
+    $copy = Join-Path $Out (Split-Path -Leaf $f.open)
+    Copy-Item $f.open $copy -Force
+    $files = @("`"$copy`"")
   }
   $scriptFile = Join-Path $Out "$($f.name).script"
   [IO.File]::WriteAllText($scriptFile, ($script -join ";"), $enc)
   $png = Join-Path $Out "$($f.name).png"
-  $p = Start-Process -FilePath $Exe -ArgumentList @("--snapshot", "`"$png`"", "--size", "1100x700", "--theme", "light",
-    "--script", "`"@$scriptFile`"") -Wait -PassThru -NoNewWindow
+  $p = Start-Process -FilePath $Exe -ArgumentList ($files + @("--snapshot", "`"$png`"", "--size", "1100x700", "--theme", "light",
+    "--script", "`"@$scriptFile`"")) -Wait -PassThru -NoNewWindow
   $problems = @()
   if ($p.ExitCode -ne 0) { $problems += "Featherweight exited with $($p.ExitCode)" }
-  $steps = $clicks + $keys
+  $steps = $clicks + $keys + $drags
   if ($steps -gt $f.budget) { $problems += "$steps steps, more than the budget of $($f.budget)" }
   $lines = @()
   if (-not (Test-Path $docx)) {
@@ -148,10 +190,20 @@ foreach ($f in $flows) {
       if ($at -ge $lines.Count) { $problems += "no paragraph like /$e/ (in order)"; break }
       $at++
     }
+    if ($f.xml) {
+      Add-Type -AssemblyName System.IO.Compression.FileSystem
+      $zip = [IO.Compression.ZipFile]::OpenRead($docx)
+      try {
+        $reader = New-Object IO.StreamReader($zip.GetEntry("word/document.xml").Open())
+        $xml = $reader.ReadToEnd()
+        $reader.Close()
+      } finally { $zip.Dispose() }
+      foreach ($x in $f.xml) { if ($xml -notmatch $x) { $problems += "word/document.xml has nothing like /$x/" } }
+    }
   }
   $status = if ($problems.Count) { "FAIL" } else { "ok" }
   if ($problems.Count) { $failed++ }
-  "{0,-8} {1,-4} {2} clicks + {3} keys = {4} (budget {5})" -f $f.name, $status, $clicks, $keys, $steps, $f.budget
+  "{0,-8} {1,-4} {2} clicks + {3} keys + {4} drags = {5} (budget {6})" -f $f.name, $status, $clicks, $keys, $drags, $steps, $f.budget
   foreach ($pr in $problems) { "         $pr" }
   if ($problems.Count -and $lines.Count) { "         the saved document:"; $lines | ForEach-Object { "           $($_.Trim())" } }
 }

@@ -499,14 +499,29 @@ uint64_t Fnv(const std::vector<uint8_t>& b) {
 }
 
 // PNG bytes for premultiplied BGRA pixels; empty when WIC can't.
+// COM for this thread while it lives, when nothing had it yet. Declared before the COM objects it
+// serves, so they're released first (torture finding 16: a thread without COM crashed).
+class ComScope {
+ public:
+  ComScope() : hr_(CoInitializeEx(nullptr, COINIT_MULTITHREADED)) {}
+  ~ComScope() {
+    if (SUCCEEDED(hr_)) CoUninitialize();
+  }
+  ComScope(const ComScope&) = delete;
+  ComScope& operator=(const ComScope&) = delete;
+
+ private:
+  HRESULT hr_;
+};
+
 std::vector<uint8_t> EncodePng(const draw::Bitmap& bmp) {
+  ComScope com;
   ComPtr<IWICImagingFactory> wic;
   ComPtr<IWICBitmap> source;
   ComPtr<IWICFormatConverter> straight;
   ComPtr<IStream> stream;
   ComPtr<IWICBitmapEncoder> encoder;
   ComPtr<IWICBitmapFrameEncode> frame;
-  HRESULT hrCom = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   std::vector<uint8_t> out;
   WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
   if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) &&
@@ -529,7 +544,6 @@ std::vector<uint8_t> EncodePng(const draw::Bitmap& bmp) {
       if (FAILED(stream->Read(out.data(), static_cast<ULONG>(out.size()), &read)) || read != out.size()) out.clear();
     }
   }
-  if (SUCCEEDED(hrCom)) CoUninitialize();
   return out;
 }
 

@@ -112,6 +112,12 @@ void ClearAllFormatting(TreeEdit& ed, Range range);
 // next or previous multiple of half an inch, as Word's buttons do.
 void ShiftIndent(TreeEdit& ed, Range range, bool increase);
 
+// The ruler's tab stops: in each of the range's paragraphs, the stops at the positions in `remove`
+// go, then those in `add` are set (in place of any at the same position). The paragraph's w:tabs
+// says only how it differs from its style: a style's stop it no longer has is cleared there
+// (w:val="clear"), and one it keeps as it is isn't written. One undo step, "Tabs".
+void ChangeTabStops(TreeEdit& ed, Range range, const std::vector<Twips>& remove, const std::vector<TabStop>& add);
+
 // The value Word writes for a justification in this document (left/right in transitional parts,
 // start/end in strict ones).
 std::string_view JcValue(const Document& doc, Justification jc);

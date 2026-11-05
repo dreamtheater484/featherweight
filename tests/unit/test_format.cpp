@@ -1171,3 +1171,45 @@ TEST(Edit_FirstPropertyGoesBeforeKeptExtensions) {
   CHECK(SaveAndReopen(*doc) != nullptr);
   CHECK(editor.Undo() && MainXml(*doc) == original);
 }
+
+TEST(Edit_TabStopsFromTheRuler) {
+  Fixture f;
+  f.styles = std::string(kBoldStyle) +
+             "<w:style w:type=\"paragraph\" w:styleId=\"Tabbed\"><w:name w:val=\"Tabbed\"/><w:basedOn w:val=\"Normal\"/>"
+             "<w:pPr><w:tabs><w:tab w:val=\"left\" w:pos=\"1440\"/><w:tab w:val=\"right\" w:pos=\"2880\"/></w:tabs></w:pPr>"
+             "</w:style>";
+  f.body = "<w:p><w:pPr><w:pStyle w:val=\"Tabbed\"/></w:pPr><w:r><w:t>One</w:t></w:r></w:p>"
+           "<w:p><w:r><w:t>Two</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const auto paras = MainParas(*doc);
+  const std::string original = MainXml(*doc);
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  auto tabs = [&](uint32_t p) { return doc->ResolvedPara(p).tabs; };
+  // The style's stop at 1" dragged to 1.5" and centered: the paragraph clears it and sets its own.
+  edit::ChangeTabStops(ed, Whole(*doc, paras[0]), {Twips(1440)}, {{Twips(2160), TabAlign::Center}});
+  auto t = tabs(paras[0]);
+  CHECK(t.size() == 2 && t[0].pos == Twips(2160) && t[0].align == TabAlign::Center);
+  CHECK(t.size() == 2 && t[1].pos == Twips(2880) && t[1].align == TabAlign::End);
+  CHECK(Has(MainXml(*doc), "<w:tabs><w:tab w:val=\"clear\" w:pos=\"1440\"/><w:tab w:val=\"center\" w:pos=\"2160\"/></w:tabs>"));
+  CHECK(editor.UndoName() == u"Tabs");
+  // Back where the style has it: the paragraph has nothing of its own.
+  edit::ChangeTabStops(ed, Whole(*doc, paras[0]), {Twips(2160)}, {{Twips(1440), TabAlign::Start}});
+  CHECK(MainXml(*doc) == original);
+  // Both paragraphs: the style's 2" stop goes where there is one, a dotted right stop comes.
+  edit::ChangeTabStops(ed, {{paras[0], 0}, {paras[1], 3}}, {Twips(2880)}, {{Twips(4320), TabAlign::End, TabLeader::Dot}});
+  const std::string last = MainXml(*doc);
+  CHECK(Has(last, "<w:tabs><w:tab w:val=\"clear\" w:pos=\"2880\"/><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"4320\"/></w:tabs>"));
+  CHECK(Has(last, "<w:pPr><w:tabs><w:tab w:val=\"right\" w:leader=\"dot\" w:pos=\"4320\"/></w:tabs></w:pPr><w:r><w:t>Two"));
+  CHECK(tabs(paras[0]).size() == 2 && tabs(paras[1]).size() == 1 && tabs(paras[1])[0].leader == TabLeader::Dot);
+  int undone = 0;
+  while (editor.Undo()) ++undone;
+  CHECK(undone == 3 && MainXml(*doc) == original);
+  while (editor.Redo()) {
+  }
+  CHECK(MainXml(*doc) == last);
+  auto back = SaveAndReopen(*doc);
+  CHECK(back && back->ResolvedPara(MainParas(*back)[1]).tabs.size() == 1);
+}

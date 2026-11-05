@@ -1032,7 +1032,18 @@ ElemId TreeEdit::CopyTree(ElemId src, ElemId parent, uint32_t story) {
     doc_.paras_.push_back(std::move(p));
   }
   if (RealNode(from)) {
-    if (pkg::AttrSetId set = doc_.store_.NodeAttributes(from)) doc_.store_.SetNodeAttributes(t.elems[id].node, set);
+    if (pkg::AttrSetId set = doc_.store_.NodeAttributes(from)) {
+      // Word's ids for paragraphs and rows (w14:paraId, w14:textId) are kept as the file has them,
+      // outside the schema: the copy goes without them, or an id is used twice (d3-torture finding 20).
+      std::vector<pkg::XmlAttr> kept = doc_.store_.Attributes(set);
+      const size_t before = kept.size();
+      std::erase_if(kept, [](const pkg::XmlAttr& a) {
+        const std::string_view local = std::string_view(a.qname).substr(a.qname.find(':') + 1);
+        return a.nsUri == "http://schemas.microsoft.com/office/word/2010/wordml" && (local == "paraId" || local == "textId");
+      });
+      if (kept.size() != before) set = kept.empty() ? 0 : doc_.store_.Intern(std::move(kept));
+      if (set) doc_.store_.SetNodeAttributes(t.elems[id].node, set);
+    }
     if (std::vector<pkg::Fragment> kept = doc_.store_.FragmentsCopy(from); !kept.empty())
       doc_.store_.SetFragments(t.elems[id].node, std::move(kept));
   }

@@ -42,6 +42,7 @@ class ViewHost {
   // Word documents: spelling checked as you type, and AutoCorrect (Settings, [General]).
   virtual bool ViewSpelling() { return true; }
   virtual bool ViewAutoCorrect() { return true; }
+  virtual bool ViewRuler() { return false; }
   virtual void ViewPasswordAccepted(TabContent* view) = 0;
   // Opens a side panel with the tab's content in place of whatever was open (null closes it).
   virtual void ViewShowPanel(PanelContent* content) = 0;

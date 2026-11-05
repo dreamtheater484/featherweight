@@ -1414,6 +1414,11 @@ void App::Execute(int cmd) {
       settings_.autoCorrect = !settings_.autoCorrect;
       settings_.Save();
       break;
+    case CmdRuler:
+      settings_.ruler = !settings_.ruler;
+      settings_.Save();
+      for (auto& t : tabs_) t->SettingsChanged();
+      break;
     case CmdCheckUpdates: MaybeCheckForUpdates(true); break;
     case CmdMakeDefault: MakeDefaultApp(fw::FileKind::Pdf); break;
     case CmdAbout: ShowAbout(); break;
@@ -1490,6 +1495,7 @@ void App::ShowMenu(int which) {
         AppendItem(m, CmdPageSetup, L"Page setup…");
         AppendItem(m, CmdHyphenation, L"Hyphenate automatically", hyphens.enabled, hyphens.checked);
       }
+      AppendItem(m, CmdRuler, L"Ruler", true, settings_.ruler);
     }
     AppendSeparator(m);
     if (fw::pkg::backups::Any(DocFile::Config().backups)) AppendItem(m, CmdDeleteBackups, L"Delete backups");

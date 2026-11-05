@@ -961,3 +961,53 @@ TEST(Tables_DeletingAcrossWholeTables) {
   CHECK(UndoesAndRedoes(ed, *doc, before));
   CHECK(ChecksOut(*doc));
 }
+
+TEST(Tables_InsertBeforeKeptAlternateContentGoesAfterIt) {
+  // d1-corpus finding 11, by way of a new table: just before text shown from a kept
+  // mc:AlternateContent block, the table goes after the text, which stays with its block.
+  Fixture f;
+  f.body =
+      "<w:p><w:bookmarkStart w:id=\"5\" w:name=\"Mark\"/><w:r><w:t>marked</w:t></w:r><w:bookmarkEnd w:id=\"5\"/>"
+      "<mc:AlternateContent><mc:Choice Requires=\"w14\"><w:r><w:t xml:space=\"preserve\"> (new)</w:t></w:r></mc:Choice>"
+      "<mc:Fallback><w:r><w:t xml:space=\"preserve\"> (old)</w:t></w:r></mc:Fallback></mc:AlternateContent>"
+      "<x:kept>kept</x:kept></w:p><w:p><w:r><w:t>Next</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const std::string before = Written(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  REQUIRE(ps.size() == 2 && doc->Para(ps[0]).text == u"marked (new)");
+  REQUIRE(ed.InsertTable(P(ps[0], 6), 1, 3));
+  ps = Main(*doc);
+  CHECK_EQ(Text(*doc, ps[0]), std::string("marked (new)"));
+  CHECK_EQ(Tables(*doc).size(), 1u);
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  CHECK(ChecksOut(*doc));
+  CHECK(UndoesAndRedoes(ed, *doc, before));
+}
+
+TEST(Tables_TextKeepsMarkersBetweenRowsAndCells) {
+  // d1-corpus finding 21: a bookmark that ends between the last row and </w:tbl>, and one between
+  // two cells, end in the text the table becomes, where they were.
+  Fixture f;
+  f.body = "<w:p><w:bookmarkStart w:id=\"1\" w:name=\"Long\"/><w:r><w:t>Before</w:t></w:r></w:p>"
+           "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"2000\"/>"
+           "<w:gridCol w:w=\"2000\"/></w:tblGrid>"
+           "<w:tr><w:tc>" + Para("a") + "</w:tc><w:bookmarkStart w:id=\"2\" w:name=\"Mid\"/><w:tc>" + Para("b") +
+           "</w:tc></w:tr><w:tr><w:tc>" + Para("c") + "</w:tc><w:tc>" + Para("d") + "</w:tc><w:bookmarkEnd w:id=\"2\"/></w:tr>"
+           "<w:bookmarkEnd w:id=\"1\"/></w:tbl>" + Para("After");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  REQUIRE(ChecksOut(*doc));
+  const std::string before = Written(*doc);
+  Editor ed(*doc);
+  REQUIRE(ed.TableToText(P(CellPara(*doc, 0, 0), 0)));
+  CHECK(Tables(*doc).empty());
+  auto ps = Main(*doc);
+  REQUIRE(ps.size() == 4);
+  CHECK_EQ(Text(*doc, ps[1]), std::string("a\tb"));
+  CHECK_EQ(Text(*doc, ps[2]), std::string("c\td"));
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  CHECK(ChecksOut(*doc));
+  CHECK(UndoesAndRedoes(ed, *doc, before));
+}

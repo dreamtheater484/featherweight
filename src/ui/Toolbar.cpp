@@ -370,14 +370,26 @@ void Toolbar::OnMouseLeave() {
 }
 
 bool Toolbar::OnMouseDown(int x, int y, bool dbl, bool shift) {
-  if (group_.OnMouseDown((float)x, (float)y, dbl, shift)) return true;
+  Control* open = group_.Open();
+  if (group_.OnMouseDown((float)x, (float)y, dbl, shift)) {
+    HandBackAfterChoice(open);
+    return true;
+  }
   group_.Blur();  // a click anywhere else on the bar leaves the tab's boxes
   return set_.OnMouseDown((float)x, (float)y);
 }
 
 int Toolbar::OnMouseUp(int x, int y) {
+  Control* open = group_.Open();
   group_.OnMouseUp((float)x, (float)y);
+  HandBackAfterChoice(open);
   return set_.OnMouseUp((float)x, (float)y);
+}
+
+void Toolbar::HandBackAfterChoice(Control* open) {
+  // A choice from a list made with the mouse gives the keyboard back to the page, as Word's boxes
+  // and the plain buttons do: typing goes on where it was.
+  if (open && !group_.Open() && group_.Focused() == open && !group_.FocusVisible()) group_.Blur();
 }
 
 bool Toolbar::OnWheel(int delta, int x, int y) { return group_.OnWheel(delta, (float)x, (float)y); }

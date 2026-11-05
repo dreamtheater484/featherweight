@@ -52,6 +52,8 @@ class DocView : public PagedView {
   std::wstring Title() const override;
   bool Modified() const override { return file_.Dirty(); }
 
+  // The rulers, when shown, take their bands of the tab's area; the pages get the rest (DocRuler.cpp).
+  void SetViewport(const RECT& rc, float ui) override;
   void Draw(gfx::Canvas& c, ID2D1DeviceContext* dc) override;
   bool HasIdleWork() const override;
   bool IdleWork(ID2D1DeviceContext* dc, double deadlineMs) override;
@@ -62,7 +64,9 @@ class DocView : public PagedView {
   void OnMouseMove(int x, int y, UINT mods) override;
   void OnMouseUp(int x, int y, int button, UINT mods) override;
   void OnMouseLeave() override;
-  bool Dragging() const override { return PagedView::Dragging() || picDrag_.kind != PictureDrag::None; }
+  bool Dragging() const override {
+    return PagedView::Dragging() || picDrag_.kind != PictureDrag::None || cellDrag_.has_value();
+  }
   bool OnKeyDown(UINT vk, UINT mods) override;
   bool OnChar(wchar_t ch, UINT mods) override;
   HCURSOR CursorAt(int x, int y) override;
@@ -293,6 +297,33 @@ class DocView : public PagedView {
   std::unique_ptr<BookmarkPanel> bookmarkPanel_;
   std::unique_ptr<PageNumberPanel> pageNumberPanel_;
   std::unique_ptr<NavPanel> navPanel_;
+  // ---- Rulers (DocRuler.cpp), on demand (the ⋯ menu), as Word's: along the top the caret's page
+  // with its margins and columns, and the paragraph's indents and tab stops; down the left its top
+  // and bottom margins. Dragging one changes it, one undo step each; a click on the ruler sets a tab
+  // stop of the kind the corner box shows (a click there picks the next), and a stop dragged off goes.
+  struct RulerInfo;  // what the rulers show now
+  enum class RulerPart : uint8_t {
+    None, Corner, Strip, MarginLeft, MarginRight, MarginTop, MarginBottom,
+    FirstLine, Hanging, LeftIndent, RightIndent, Tab, ColumnStart, ColumnEnd, CellEdge
+  };
+  struct RulerHit {
+    RulerPart part = RulerPart::None;
+    int index = -1;  // a tab stop (RulerInfo::tabs), a column, a cell edge (RulerInfo::cells)
+    bool operator==(const RulerHit&) const = default;
+  };
+  bool RulerOn() const;
+  RECT RulerInner(const RECT& rc, float ui) const;  // what the rulers leave of the tab's area
+  bool OnRuler(int x, int y) const;  // in the rulers' bands
+  RulerInfo MeasureRuler();
+  void MeasureCells(RulerInfo& r, const fw::doc::layout::Page& page, uint32_t para);  // the caret's table row
+  RulerHit RulerAt(const RulerInfo& r, int x, int y) const;
+  void DrawRulers(gfx::Canvas& c);
+  void RulerMouseDown(int x, int y);
+  void RulerMouseMove(int x, int y, UINT mods);
+  void RulerMouseUp();
+  void RulerHover(int x, int y);
+  std::wstring RulerTooltip(int x, int y);
+  HCURSOR RulerCursor(int x, int y);
 
   // ---- Formatting (DocFormat)
   // What formatting applies to: the selection, or the caret and the word it's in.
@@ -409,6 +440,17 @@ class DocView : public PagedView {
   std::wstring pendingLink_;
   int mouseX_ = -1, mouseY_ = -1;
 
+  // Rulers
+  RECT full_{};  // the tab's area: the rulers' bands, then vp_
+  fw::doc::TabAlign rulerTab_ = fw::doc::TabAlign::Start;  // what a click on the ruler sets
+  struct RulerDrag {
+    RulerHit hit;
+    float start = 0, at = 0;  // where the mark was and is now, page points along its ruler
+    float grab = 0;           // where the mouse took it
+    bool off = false;         // a tab stop dragged off the ruler: it goes
+  } rulerDrag_;
+  RulerHit rulerHover_;
+
   // Find
   std::vector<Match> matches_;
   int current_ = -1;
@@ -429,11 +471,42 @@ class DocView : public PagedView {
   TextPos cellFrom_, cellTo_;
   uint32_t cellRevision_ = UINT32_MAX;
   std::unique_ptr<fw::doc::edit::Pictures> pictures_;  // with the editor, after it
-  // Rows chosen in the margin beside a table: the drag goes on by whole rows from here.
-  bool rowDrag_ = false;
-  TextPos rowAnchor_;
+  // Rows chosen in the margin beside a table, or columns just above one: the drag goes on by whole
+  // rows or columns from here.
+  enum class LineDrag : uint8_t { None, Rows, Columns };
+  LineDrag lineDrag_ = LineDrag::None;
+  TextPos lineAnchor_;
   std::optional<TextPos> RowMarginAt(int x, int y) const;
-  bool SelectRows(TextPos from, TextPos to);
+  bool SelectLines(TextPos from, TextPos to);
+  // ---- Table cells on the page (DocCells.cpp), from the layout's cell boxes (Layout::Cells): a
+  // column border dragged moves its grid line, a row's bottom border sets its height (at least),
+  // one undo step each; a click just above a column selects it. Selected cells are filled whole.
+  struct CellEdge {
+    int page = -1;
+    fw::doc::ElemId tbl = fw::doc::kNoElem;
+    TextPos at;              // a cell of the table (of the row, for a row's border)
+    bool column = true;      // a column border, else a row's bottom
+    int32_t line = 0;        // the column border's grid line
+    float pos = 0, lo = 0, hi = 0;  // where it is, and how far it can go (page points)
+    float top = 0;                  // a row's top
+    float from = 0, to = 0;         // the guide's extent, across the table
+    float now = 0;                  // while dragging: where it is now
+  };
+  std::optional<CellEdge> CellEdgeAt(int x, int y);
+  // The cell just below (x, y) when (x, y) is just above a table's column; with `tbl`, the cell of
+  // that table under x, at any height (a drag along the tops).
+  std::optional<TextPos> ColumnTopAt(int x, int y, fw::doc::ElemId tbl = fw::doc::kNoElem);
+  // A cell's first paragraph, when it's in the story being edited.
+  std::optional<TextPos> CellStart(fw::doc::ElemId tc) const;
+  bool CellMouseDown(int x, int y, UINT mods);
+  bool CellMouseMove(int x, int y);
+  bool CellMouseUp();
+  HCURSOR CellCursor(int x, int y);
+  void DrawCellGuide(gfx::Canvas& c, int first, int last);
+  void MeasureSelectedCells(int first, int last);  // cellRects_
+  std::optional<CellEdge> cellDrag_;
+  fw::doc::ElemId lineTbl_ = fw::doc::kNoElem;  // the table a column drag is in
+  int cellFirst_ = -1, cellLast_ = -1;          // the pages cellRects_ covers
   uint64_t clipSource_ = 0;  // names this document in what it copies, to paste lists back into it
   bool keyFocus_ = true;
   bool annotationsStale_ = false;  // an edit moved comments, changes or links: find them again
