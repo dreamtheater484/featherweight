@@ -1300,6 +1300,29 @@ TEST(Edit_SharedPropertiesChangeOnlyTheirParagraph) {
   CHECK(Consistent(*doc, f) && UndoSteps(ed) == 2 && RoundTrips(*doc));
 }
 
+TEST(Edit_TheFirstOfASharedSetChangesAlone) {
+  // The first paragraph of a shared set holds the children the others share (d2-torture's
+  // alternate-content.docx: a style set on "One" restyled "Two" in the saved file).
+  Fixture f;
+  const std::string same = "<w:pPr><w:pStyle w:val=\"ListNumber\"/><w:rPr><w:b/></w:rPr></w:pPr><w:r><w:rPr><w:i/></w:rPr>";
+  f.body = "<w:p>" + same + "<w:t>One</w:t></w:r></w:p><w:p>" + same + "<w:t>Two</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  const std::string twoStyle(doc->ResolvedPara(ps[1]).style);
+  CHECK(ed.SetParaProps(ps[0], ps[0], PropEdit().Set("pStyle", {{"val", "List2"}})));
+  CHECK(ed.SetRunProps(P(ps[0], 0), P(ps[0], 3), PropEdit().Set("i", {{"val", "0"}})));
+  CHECK(ed.SetMarkProps(ps[0], ps[0], PropEdit().Remove("b")));
+  CHECK(BodyIs(*doc,
+               "<w:p><w:pPr><w:pStyle w:val=\"List2\"/><w:rPr/></w:pPr><w:r><w:rPr><w:i w:val=\"0\"/></w:rPr><w:t>One</w:t></w:r></w:p>"
+               "<w:p>" + same + "<w:t>Two</w:t></w:r></w:p>"));
+  CHECK(doc->ResolvedPara(ps[1]).style == twoStyle && doc->ResolvedRun(ps[1], doc->Runs(ps[1])[0].run).italic);
+  CHECK(Consistent(*doc, f) && UndoSteps(ed) == 3 && MainXml(*doc) == before);
+}
+
 TEST(Edit_CommentsKeepTheirLastParagraphsId) {
   // commentsExtended names a comment by its last paragraph's w14:paraId: joining that paragraph
   // into the one before, or splitting it, keeps the id on the comment's last paragraph.
@@ -1458,4 +1481,61 @@ TEST(Clip_LinksTravel) {
   CHECK(links.size() == 2 && links[0] == "https://example.org/x" && links[1] == "https://example.org/x");
   CHECK(MainXml(*doc).find("javascript") == std::string::npos);
   CHECK(Consistent(*doc, f) && ChecksOut(*doc));
+}
+
+
+TEST(Edit_TakingAPropertyOutKeepsWhatFollowedIt) {
+  // A w14 extension kept after a property stays when the property goes (d2-format's finding):
+  // after the property before it, or alone in the container.
+  Fixture f;
+  f.body =
+      "<w:p><w:r><w:rPr><w:sz w:val=\"24\"/><w14:cntxtAlts/></w:rPr><w:t>one</w:t></w:r></w:p>"
+      "<w:p><w:pPr><w:rPr><w:b/><w:sz w:val=\"24\"/><w14:cntxtAlts/></w:rPr></w:pPr>"
+      "<w:r><w:rPr><w:b/><w:sz w:val=\"24\"/><w14:cntxtAlts/></w:rPr><w:t>two</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  CHECK(ed.SetRunProps(P(ps[0], 0), P(ps[0], 3), PropEdit().Remove("sz")));
+  CHECK(ed.SetRunProps(P(ps[1], 0), P(ps[1], 3), PropEdit().Remove("sz")));
+  CHECK(ed.SetMarkProps(ps[1], ps[1], PropEdit().Remove("sz")));
+  CHECK(BodyIs(*doc,
+               "<w:p><w:r><w:rPr><w14:cntxtAlts/></w:rPr><w:t>one</w:t></w:r></w:p>"
+               "<w:p><w:pPr><w:rPr><w:b/><w14:cntxtAlts/></w:rPr></w:pPr>"
+               "<w:r><w:rPr><w:b/><w14:cntxtAlts/></w:rPr><w:t>two</w:t></w:r></w:p>"));
+  // And a property added back goes before it again.
+  CHECK(ed.SetRunProps(P(ps[0], 0), P(ps[0], 3), PropEdit().Set("i")));
+  CHECK(BodyIs(*doc,
+               "<w:p><w:r><w:rPr><w:i/><w14:cntxtAlts/></w:rPr><w:t>one</w:t></w:r></w:p>"
+               "<w:p><w:pPr><w:rPr><w:b/><w14:cntxtAlts/></w:rPr></w:pPr>"
+               "<w:r><w:rPr><w:b/><w14:cntxtAlts/></w:rPr><w:t>two</w:t></w:r></w:p>"));
+  CHECK(Consistent(*doc, f) && UndoSteps(ed) == 4 && MainXml(*doc) == before);
+}
+
+TEST(Edit_CopiesLeaveOutRepeatedProperties) {
+  // Some files repeat a property (<w:b/><w:b/>, which the schema doesn't allow). A new paragraph
+  // mark, a new run and a cut run's second half copy it once, so an edit doesn't add an error the
+  // file already has; the originals keep theirs (d2-torture: a split on gouvfr-fiche-action).
+  Fixture f;
+  const std::string same = "<w:pPr><w:rPr><w:b/><w:b/></w:rPr></w:pPr><w:r><w:rPr><w:i/><w:i/><w:sz w:val=\"20\"/></w:rPr>";
+  f.body = "<w:p>" + same + "<w:t>One</w:t></w:r></w:p><w:p>" + same + "<w:t>Two</w:t></w:r></w:p>"
+           "<w:p><w:pPr><w:rPr><w:b/><w:b/></w:rPr></w:pPr></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  CHECK(ed.SplitParagraph(P(ps[1], 1)));  // the second paragraph shares the first's sets
+  CHECK(ed.SplitParagraph(P(ps[0], 1)));
+  ps = Main(*doc);
+  CHECK(ps.size() == 5 && ed.InsertText(P(ps[4], 0), u"x"));  // a run with the mark's properties
+  const std::string kept = "<w:pPr><w:rPr><w:b/><w:b/></w:rPr></w:pPr>", once = "<w:pPr><w:rPr><w:b/></w:rPr></w:pPr>";
+  const std::string twice = "<w:r><w:rPr><w:i/><w:i/><w:sz w:val=\"20\"/></w:rPr>", single = "<w:r><w:rPr><w:i/><w:sz w:val=\"20\"/></w:rPr>";
+  CHECK(BodyIs(*doc, "<w:p>" + once + twice + "<w:t>O</w:t></w:r></w:p><w:p>" + kept + single + "<w:t>ne</w:t></w:r></w:p>"
+                     "<w:p>" + once + twice + "<w:t>T</w:t></w:r></w:p><w:p>" + kept + single + "<w:t>wo</w:t></w:r></w:p>"
+                     "<w:p>" + kept + "<w:r><w:rPr><w:b/></w:rPr><w:t>x</w:t></w:r></w:p>"));
+  CHECK(Consistent(*doc, f) && UndoSteps(ed) == 3 && MainXml(*doc) == before);
 }

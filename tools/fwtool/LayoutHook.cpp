@@ -174,12 +174,19 @@ class PagePainter {
   Microsoft::WRL::ComPtr<ID2D1Bitmap1> target_;
 };
 
-// A paragraph of the body (or of a table cell) with some text on or after `page`, to type into.
+// A paragraph of the body with some text on or after `page`, to type into; in a table, the last
+// cell on the page with some, not one of the header rows repeated on each page.
 uint32_t ParagraphToType(const fw::doc::Document& doc, const fw::doc::layout::Layout& layout, size_t page,
                          fw::LayoutStory story) {
-  for (size_t p = page; p < layout.PageCount(); ++p)
+  for (size_t p = page; p < layout.PageCount(); ++p) {
+    uint32_t last = fw::doc::kNone;
     for (const fw::doc::layout::LineBox& l : layout.GetPage(p).lines)
-      if (l.story == story && l.para != fw::doc::kNone && doc.Para(l.para).text.size() >= 20) return l.para;
+      if (l.story == story && l.para != fw::doc::kNone && doc.Para(l.para).text.size() >= 20) {
+        if (story == fw::LayoutStory::Body) return l.para;
+        last = l.para;
+      }
+    if (last != fw::doc::kNone) return last;
+  }
   return fw::doc::kNone;
 }
 

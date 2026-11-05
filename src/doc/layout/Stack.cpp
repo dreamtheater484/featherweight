@@ -129,8 +129,15 @@ void Stack::Append(Stack&& other, float dx, float dy) {
   edges.insert(edges.end(), other.edges.begin(), other.edges.end());
   drawings.insert(drawings.end(), other.drawings.begin(), other.drawings.end());
   notes.insert(notes.end(), other.notes.begin(), other.notes.end());
+  TakeFlags(other);
+}
+
+void Stack::TakeFlags(const Stack& other) {
   usesPageCount = usesPageCount || other.usesPageCount;
+  usesPage = usesPage || other.usesPage;
+  numbersNotes = numbersNotes || other.numbersNotes;
   placedOnPage = placedOnPage || other.placedOnPage;
+  labels = labels || other.labels;
 }
 
 // The height of a line's text alone, without its inline objects: what proportional spacing adds
@@ -498,11 +505,21 @@ Engine::Placed Engine::PlaceBlocks(const std::vector<Block>& group, const Placem
 }
 
 void Engine::StackParagraph(uint32_t para, const Frame& frame, Stack& out, Spacing& spacing) {
-  ParaText pt;
-  BuildText(para, frame.fields ? *frame.fields : PageFields(), pt);
+  // After an edit, a paragraph laid out again before comes from the cache.
+  std::shared_ptr<CachedPara> cached = LinesOf(para, frame.width, false);
+  std::shared_ptr<ParaText> text = cached ? cached->pt : nullptr;
+  if (!text) {
+    text = std::make_shared<ParaText>();
+    BuildText(para, frame.fields ? *frame.fields : PageFields(), *text);
+    cached = KeepLines(para, frame.width, false, text);
+  }
+  const ParaText& pt = *text;
   if (pt.empty) return;
   const ParaProps& p = *pt.props;
   if (pt.usesPageCount) out.usesPageCount = true;
+  if (pt.usesPage) out.usesPage = true;
+  if (!pt.notes.empty()) out.numbersNotes = true;
+  if (pt.prefix > 0) out.labels = true;
   float y = out.height - spacing.after + SpaceBefore(p, spacing) + BorderAbove(p, spacing);
   if (spacing.atTop && spacing.prev == nullptr) y = out.height + SpaceBefore(p, spacing) + BorderAbove(p, spacing);
   const float paraTop = y;
@@ -519,12 +536,12 @@ void Engine::StackParagraph(uint32_t para, const Frame& frame, Stack& out, Spaci
   }
   uint32_t paintBase = static_cast<uint32_t>(out.paints.size());
   out.paints.insert(out.paints.end(), pt.paints.begin(), pt.paints.end());
-  text::LineBreaker breaker(fonts_, pt.fw, frame.width);
+  ParaLines breaker(fonts_, text, frame.width, std::move(cached));
   const bool wrap = frame.zones && !frame.zones->empty();
   float estimate = 12;
   while (!breaker.Done()) {
     text::LineSpace space{frame.y + y, frame.x, frame.x + frame.width};
-    text::LineBreaker::State state = breaker.Save();
+    const text::LineBreaker::State state = breaker.Save();
     if (wrap) space = SpaceBeside(*frame.zones, frame.y + y, estimate, frame.x, frame.x + frame.width);
     text::Line line = breaker.Next(space.left - frame.x, space.right - frame.x);
     float h = LineHeight(pt, line);
@@ -563,6 +580,7 @@ void Engine::StackTable(Node tbl, const Frame& frame, Stack& out, Spacing& spaci
     if (row.props.hidden) continue;
     EmitRow(t, r, t.left, y, row.height, nullptr, nullptr, out, r == 0, r + 1 == t.rows.size());
     y += row.height;
+    for (const CellBox& c : row.cells) out.TakeFlags(c.content);
   }
   out.height = y;
   spacing.after = 0;
