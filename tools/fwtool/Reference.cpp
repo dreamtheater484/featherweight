@@ -29,26 +29,6 @@ bool ReadFile(const std::filesystem::path& path, std::string& out) {
   return !in.bad();
 }
 
-// pdfium.dll is delay-loaded, as in the app: only the commands that read PDFs load it, and only
-// the copy next to fwtool.exe.
-bool InitPdfium(std::string& error) {
-  static int state = 0;  // 0 not tried, 1 ready, -1 missing
-  if (state == 0) {
-    wchar_t exe[MAX_PATH];
-    DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    std::filesystem::path dll = std::filesystem::path(std::wstring(exe, n)).parent_path() / L"pdfium.dll";
-    if (LoadLibraryExW(dll.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) {
-      FPDF_LIBRARY_CONFIG config{};
-      config.version = 2;
-      FPDF_InitLibraryWithConfig(&config);
-      state = 1;
-    } else {
-      state = -1;
-    }
-  }
-  if (state < 0) error = "pdfium.dll isn't next to fwtool.exe";
-  return state > 0;
-}
 
 std::wstring ElementType(FPDF_STRUCTELEMENT e, bool raw) {
   wchar_t buf[64] = {};
@@ -244,6 +224,27 @@ void ReadPage(FPDF_PAGE page, fw::LayoutPage& out) {
 }
 
 }  // namespace
+
+// pdfium.dll is delay-loaded, as in the app: only the commands that read PDFs load it, and only
+// the copy next to fwtool.exe.
+bool InitPdfium(std::string& error) {
+  static int state = 0;  // 0 not tried, 1 ready, -1 missing
+  if (state == 0) {
+    wchar_t exe[MAX_PATH];
+    DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    std::filesystem::path dll = std::filesystem::path(std::wstring(exe, n)).parent_path() / L"pdfium.dll";
+    if (LoadLibraryExW(dll.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) {
+      FPDF_LIBRARY_CONFIG config{};
+      config.version = 2;
+      FPDF_InitLibraryWithConfig(&config);
+      state = 1;
+    } else {
+      state = -1;
+    }
+  }
+  if (state < 0) error = "pdfium.dll isn't next to fwtool.exe";
+  return state > 0;
+}
 
 bool IsWordDocument(std::string_view name) {
   std::wstring ext = fw::ToLower(std::filesystem::path(fw::Utf8ToWide(name)).extension().wstring());

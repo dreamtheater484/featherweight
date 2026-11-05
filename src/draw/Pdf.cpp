@@ -1000,19 +1000,20 @@ void PdfPainter::DrawGlyphs(Point origin, const GlyphRun& run, const Brush& b) {
   }
   auto show = [&](bool bold) {
     std::string& o = Out();
-    o += "BT\n/" + font->name + " 1 Tf\n";
+    // The size goes in Tf, where readers look for it; the matrix only places and flips.
+    o += "BT\n/" + font->name + " " + N(size) + " Tf\n";
     // The render mode is text state, which lasts past ET: set every time.
     if (font->outlines) o += "3 Tr\n";
     else if (bold) o += "2 Tr " + N(size / 48) + " w\n";
     else o += "0 Tr\n";
-    const float skew = font->oblique ? size * 0.33f : 0;
+    const char* skew = font->oblique ? " 0.33 " : " 0 ";
     std::string tj;
     float x = 0, y = 0;
     bool openTj = false;
     for (uint32_t i = 0; i < run.count; ++i) {
       if (!openTj || std::abs(at[i].y - y) > 0.001f) {
         if (openTj) o += tj + "]TJ\n";
-        o += N(size) + " 0 " + N(skew) + " " + N(-size) + " " + N(at[i].x) + " " + N(at[i].y) + " Tm\n";
+        o += std::string("1 0") + skew + "-1 " + N(at[i].x) + " " + N(at[i].y) + " Tm\n";
         tj = "[";
         x = at[i].x;
         y = at[i].y;

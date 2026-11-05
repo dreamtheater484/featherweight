@@ -475,15 +475,21 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
       if (!g.glyphs.empty()) {
         const draw::Point origin{lb.x + g.OriginX(), lb.baseline - g.rise};
         draw::GlyphRun run = g.Run();
+        // The text a reader finds behind the glyphs: a hyphen at the break, a tab for a leader,
+        // and a non-breaking hyphen as the hyphen it looks like (as Word exports them).
+        std::u16string shown;
         if (withText && g.hyphen) {
-          run.text = u"-";
-          run.textLength = 1;
+          shown = u"-";
+        } else if (withText && g.leader) {
+          shown = u"\t";
         } else if (withText && lb.para != kNone && g.textEnd > g.textStart) {
           const ParaText& t = textOf(lb.para);
-          if (g.textEnd <= t.text.size()) {
-            run.text = reinterpret_cast<const char16_t*>(t.text.data()) + g.textStart;
-            run.textLength = g.textEnd - g.textStart;
-          }
+          if (g.textEnd <= t.text.size())
+            for (uint32_t i = g.textStart; i < g.textEnd; ++i) shown += t.text[i] == 0x2011 ? u'-' : static_cast<char16_t>(t.text[i]);
+        }
+        if (!shown.empty()) {
+          run.text = shown.data();
+          run.textLength = static_cast<uint32_t>(shown.size());
         }
         if (g.scale != 1 && g.scale > 0) {
           // Scaled characters (w:w): the glyphs drawn through a horizontal scale about the origin.
