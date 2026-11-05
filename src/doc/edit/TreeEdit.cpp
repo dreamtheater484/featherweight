@@ -3,6 +3,7 @@
 #include <pugixml.hpp>
 
 #include <algorithm>
+#include <functional>
 
 #include "doc/docx/Docx.h"
 #include "doc/edit/Editor.h"
@@ -67,14 +68,17 @@ struct JournalStep : CustomStep {
   void Undo() override {
     TreeEdit::Replay(doc, store, true);
     TreeEdit::Restore(doc, before);
+    TreeEdit::ApplyStoryOps(doc, stories, true);
   }
   void Redo() override {
     TreeEdit::Restore(doc, after);
     TreeEdit::Replay(doc, store, false);
+    TreeEdit::ApplyStoryOps(doc, stories, false);
   }
   Document& doc;
   TreeEdit::Saved before, after;  // after: the touched elements and the new ones
   std::vector<TreeEdit::StoreOp> store;
+  std::vector<TreeEdit::StoryOp> stories;  // notes added or taken out (D4)
 };
 
 // The editor holds the document it edits; it hands it out as const only to readers.
@@ -95,6 +99,7 @@ void TreeEdit::Begin(std::u16string label) {
   elemsAtBegin_ = doc_.tree_.elems.size();
   before_.clear();
   store_.clear();
+  storyOps_.clear();
   touched_.clear();
   tracked_.clear();
   copies_ = 0;
@@ -139,9 +144,19 @@ void TreeEdit::Commit() {
   for (const auto& [id, old] : step->before) step->after.emplace_back(id, t.elems[id]);
   for (size_t id = elemsAtBegin_; id < t.elems.size(); ++id) step->after.emplace_back(static_cast<ElemId>(id), t.elems[id]);
   step->store = std::move(store_);
+  step->stories = std::move(storyOps_);
+  for (const StoryOp& op : step->stories) {
+    Change c;
+    c.story = op.story;
+    c.first = op.at;
+    c.structure = true;
+    (op.add ? c.added : c.removed) = static_cast<uint32_t>(op.paras.size());
+    step->paraChanges.push_back(c);
+  }
   step->parts = PartsOf(step->after);
   before_.clear();
   store_.clear();
+  storyOps_.clear();
   // The paragraphs it changed: for the caret, and when it's local, for the layout.
   uint32_t first = kNone, last = 0, story = kNone;
   bool local = local_;
@@ -301,11 +316,13 @@ void TreeEdit::Abort() {
 }
 
 void TreeEdit::Discard() {
-  const bool changed = !before_.empty() || !store_.empty();
+  const bool changed = !before_.empty() || !store_.empty() || !storyOps_.empty();
   Replay(doc_, store_, true);
   Restore(doc_, before_);  // new elements stay in the arena, linked nowhere
+  ApplyStoryOps(doc_, storyOps_, true);
   before_.clear();
   store_.clear();
+  storyOps_.clear();
   touched_.clear();
   owned_.clear();
   tracked_.clear();
@@ -977,19 +994,24 @@ bool TreeEdit::SplitRunAt(uint32_t para, uint32_t offset) {
 
 namespace {
 
-bool Known(TypeId parentType, pugi::xml_node n) {
+// With `content`, also a story's content (a note: its paragraphs, runs, text and characters),
+// empty: the text is the paragraph's (LayOutBuiltParagraph).
+bool Known(TypeId parentType, pugi::xml_node n, bool content = false) {
   if (n.type() != pugi::node_element) return n.type() == pugi::node_pcdata && std::string_view(n.value()).find_first_not_of(" \t\r\n") == std::string_view::npos;
   ElemDefId def = S().Child(parentType, QNameHash(n.name()));
   if (def == kNoDef) return false;
   TypeId type = S().Elem(def).type;
-  if (S().Type(type).role != Role::Plain) return false;
+  const Role role = S().Type(type).role;
+  if (role != Role::Plain && !(content && (role == Role::Story || role == Role::Paragraph || role == Role::Run ||
+                                          role == Role::Text || role == Role::Char)))
+    return false;
   for (pugi::xml_attribute a : n.attributes()) {
     std::string_view q = a.name();
     if (q.starts_with("xmlns")) continue;
     if (S().AttrOf(type, QNameHash(q)) == kNoDef) return false;
   }
   for (pugi::xml_node c : n.children())
-    if (!Known(type, c)) return false;
+    if (!Known(type, c, content)) return false;
   return true;
 }
 
@@ -1031,7 +1053,7 @@ ElemId TreeEdit::Build(ElemId parent, const pugi::xml_node& n, ElemId before, bo
   return id;
 }
 
-ElemId TreeEdit::AddXml(ElemId parent, std::string_view xml, ElemId before) {
+ElemId TreeEdit::AddXml(ElemId parent, std::string_view xml, ElemId before, bool content) {
   std::string wrapped = "<root";
   for (size_t i = 0; i < kNsCount; ++i) {
     auto ns = static_cast<Ns>(i);
@@ -1045,7 +1067,7 @@ ElemId TreeEdit::AddXml(ElemId parent, std::string_view xml, ElemId before) {
   if (!d.load_buffer(wrapped.data(), wrapped.size(), pugi::parse_default, pugi::encoding_utf8)) return kNoElem;
   pugi::xml_node n = d.first_child().first_child();
   while (n && n.type() != pugi::node_element) n = n.next_sibling();
-  if (!n || !Known(TypeOfElem(doc_.tree_, parent), n)) return kNoElem;
+  if (!n || !Known(TypeOfElem(doc_.tree_, parent), n, content)) return kNoElem;
   return Build(parent, n, before, false);
 }
 
@@ -1110,7 +1132,9 @@ std::string FreeName(const pkg::Package& package, const std::string& dir, const 
 }  // namespace
 
 ElemId TreeEdit::EnsurePart(PartKind kind) {
-  if (kind != PartKind::Styles && kind != PartKind::Numbering && kind != PartKind::Settings && kind != PartKind::Comments)
+  const bool notes = kind == PartKind::Footnotes || kind == PartKind::Endnotes;
+  if (kind != PartKind::Styles && kind != PartKind::Numbering && kind != PartKind::Settings &&
+      kind != PartKind::Comments && !notes)
     return kNoElem;
   if (const Part* p = doc_.FindPart(kind)) return p->root;
   const Part* main = doc_.FindPart(PartKind::Document);
@@ -1120,6 +1144,8 @@ ElemId TreeEdit::EnsurePart(PartKind kind) {
   const std::string local = kind == PartKind::Styles      ? "styles"
                             : kind == PartKind::Numbering ? "numbering"
                             : kind == PartKind::Comments  ? "comments"
+                            : kind == PartKind::Footnotes ? "footnotes"
+                            : kind == PartKind::Endnotes  ? "endnotes"
                                                           : "settings";
   const std::string dir = main->name.substr(0, main->name.rfind('/') + 1);
   pkg::Package& package = doc_.Package();
@@ -1152,6 +1178,8 @@ ElemId TreeEdit::EnsurePart(PartKind kind) {
   doc_.store_.Add(doc_.tree_.elems[part.root].node, pkg::Fragment{pkg::Slot::Before, {}, decl.Take()});
   ElemId root = part.root;
   doc_.parts_.push_back(std::move(part));
+  // A notes part starts with Word's separator notes (ids -1 and 0).
+  if (notes) AddSeparatorNotes(static_cast<uint32_t>(doc_.parts_.size() - 1), kind == PartKind::Endnotes);
   std::string xml;
   if (docx::WritePart(doc_, static_cast<uint32_t>(doc_.parts_.size() - 1), xml).Ok())
     package.SetPart(name, std::vector<uint8_t>(xml.begin(), xml.end()));
@@ -1433,6 +1461,119 @@ uint32_t TreeEdit::NewComment(std::string_view id, std::string_view author, std:
   return story;
 }
 
+// ---------- Notes (D4) ----------
+
+namespace {
+
+// A paragraph built from XML (TreeEdit::AddXml) gets its text: each character item the one it
+// stands for, each text element the next of `texts`, containers spanning what they hold (as
+// Editor's Reflow and the reader lay them out).
+std::u16string LayOutBuiltParagraph(Tree& t, ElemId p, uint32_t index, const std::vector<std::u16string>& texts) {
+  std::u16string text;
+  size_t nextText = 0;
+  std::function<void(ElemId)> walk = [&](ElemId id) {
+    Elem& e = t.elems[id];
+    e.start = static_cast<uint32_t>(text.size());
+    const TypeDef& type = S().Type(TypeOfElem(t, id));
+    if (type.role == Role::Char) {
+      text += type.ch;
+      e.length = 1;
+      return;
+    }
+    if (type.role == Role::Text) {
+      if (nextText < texts.size()) text += texts[nextText++];
+      e.length = static_cast<uint32_t>(text.size()) - e.start;
+      return;
+    }
+    for (ElemId c = e.first; c != kNoElem; c = t.elems[c].next) walk(c);
+    e.length = static_cast<uint32_t>(text.size()) - e.start;
+  };
+  for (ElemId c = t.elems[p].first; c != kNoElem; c = t.elems[c].next) walk(c);
+  t.elems[p].start = index;
+  t.elems[p].length = static_cast<uint32_t>(text.size());
+  return text;
+}
+
+ElemId FirstChildNamed(const Tree& t, ElemId parent, uint32_t name) {
+  for (ElemId c = t.elems[parent].first; c != kNoElem; c = t.elems[c].next)
+    if (NameOfElem(t, c) == name) return c;
+  return kNoElem;
+}
+
+}  // namespace
+
+void TreeEdit::ApplyStoryOps(Document& doc, const std::vector<StoryOp>& ops, bool undo) {
+  if (ops.empty()) return;
+  uint32_t from = UINT32_MAX;
+  auto apply = [&](const StoryOp& op) {
+    const bool adding = op.add != undo;
+    const auto at = std::min<size_t>(op.at, doc.paras_.size());
+    if (adding) {
+      doc.paras_.insert(doc.paras_.begin() + static_cast<std::ptrdiff_t>(at), op.paras.begin(), op.paras.end());
+      doc.stories_[op.story].root = op.root;
+    } else {
+      const size_t n = std::min(op.paras.size(), doc.paras_.size() - at);
+      doc.paras_.erase(doc.paras_.begin() + static_cast<std::ptrdiff_t>(at),
+                       doc.paras_.begin() + static_cast<std::ptrdiff_t>(at + n));
+      doc.stories_[op.story].root = kNoElem;
+    }
+    from = std::min(from, static_cast<uint32_t>(at));
+  };
+  if (undo)
+    for (auto it = ops.rbegin(); it != ops.rend(); ++it) apply(*it);
+  else
+    for (const StoryOp& op : ops) apply(op);
+  for (uint32_t p = from; p < doc.paras_.size(); ++p) doc.tree_.elems[doc.paras_[p].elem].start = p;
+}
+
+uint32_t TreeEdit::AddNote(ElemId root, bool endnote, std::string_view id, std::string_view textStyle,
+                           std::string_view markStyle) {
+  if (depth_ == 0 || root == kNoElem) return kNone;
+  uint32_t part = kNone;
+  for (uint32_t i = 0; i < doc_.parts_.size(); ++i)
+    if (doc_.parts_[i].root == root) part = i;
+  if (part == kNone || !XmlSafe(id) || !XmlSafe(textStyle) || !XmlSafe(markStyle)) return kNone;
+  const std::string tag = endnote ? "endnote" : "footnote";
+  auto attr = [](std::string_view v) {
+    std::string out;
+    for (char c : v) out += c == '"' ? std::string("&quot;") : c == '&' ? std::string("&amp;") : c == '<' ? std::string("&lt;") : std::string(1, c);
+    return out;
+  };
+  std::string xml = "<w:" + tag + " w:id=\"" + attr(id) + "\"><w:p><w:pPr>";
+  if (!textStyle.empty()) xml += "<w:pStyle w:val=\"" + attr(textStyle) + "\"/>";
+  xml += "</w:pPr><w:r>";
+  if (!markStyle.empty()) xml += "<w:rPr><w:rStyle w:val=\"" + attr(markStyle) + "\"/></w:rPr>";
+  xml += "<w:" + tag + "Ref/></w:r><w:r><w:t xml:space=\"preserve\"/></w:r></w:p></w:" + tag + ">";
+  const ElemId note = AddXml(root, xml, kNoElem, true);
+  if (note == kNoElem) return kNone;
+  const ElemId p = FirstChildNamed(doc_.tree_, note, names::kP);
+  if (p == kNoElem) return kNone;
+  const auto story = static_cast<uint32_t>(doc_.stories_.size());
+  Story s;
+  s.kind = endnote ? StoryKind::Endnote : StoryKind::Footnote;
+  s.part = part;
+  s.root = note;
+  s.id = std::string(id);
+  doc_.stories_.push_back(std::move(s));
+  // Its paragraph goes last: after every story's, so none moves.
+  const auto at = static_cast<uint32_t>(doc_.paras_.size());
+  Paragraph para;
+  para.elem = p;
+  para.story = story;
+  para.text = LayOutBuiltParagraph(doc_.tree_, p, at, {u" "});
+  para.version = 0;  // new: the editor gives it a version of its own
+  StoryOp op;
+  op.add = true;
+  op.story = story;
+  op.at = at;
+  op.root = note;
+  op.paras = {para};
+  doc_.paras_.push_back(std::move(para));
+  storyOps_.push_back(std::move(op));
+  Reindex();
+  return story;
+}
+
 void TreeEdit::LinkComment(uint32_t story) {
   const Part* part = doc_.FindPart(PartKind::Comments);
   if (!part || story >= doc_.stories_.size()) return;
@@ -1480,6 +1621,63 @@ bool TreeEdit::CommentState(std::string_view paraId, std::string& parentParaId, 
       return true;
     }
   return false;
+}
+
+bool TreeEdit::RemoveNote(uint32_t story) {
+  if (depth_ == 0 || story >= doc_.stories_.size()) return false;
+  const Story& s = doc_.stories_[story];
+  if ((s.kind != StoryKind::Footnote && s.kind != StoryKind::Endnote) || s.root == kNoElem) return false;
+  const std::vector<uint32_t> paras = doc_.StoryParagraphs(story);
+  // A story's paragraphs follow each other in the model.
+  for (size_t i = 1; i < paras.size(); ++i)
+    if (paras[i] != paras[0] + i) return false;
+  StoryOp op;
+  op.add = false;
+  op.story = story;
+  op.root = s.root;
+  op.at = paras.empty() ? static_cast<uint32_t>(doc_.paras_.size()) : paras.front();
+  for (uint32_t p : paras) op.paras.push_back(doc_.paras_[p]);
+  RemoveElement(s.root);
+  doc_.paras_.erase(doc_.paras_.begin() + op.at, doc_.paras_.begin() + op.at + static_cast<uint32_t>(paras.size()));
+  doc_.stories_[story].root = kNoElem;
+  for (uint32_t p = op.at; p < doc_.paras_.size(); ++p) doc_.tree_.elems[doc_.paras_[p].elem].start = p;
+  storyOps_.push_back(std::move(op));
+  Reindex();
+  return true;
+}
+
+void TreeEdit::AddSeparatorNotes(uint32_t part, bool endnote) {
+  const std::string tag = endnote ? "endnote" : "footnote";
+  const ElemId root = doc_.parts_[part].root;
+  Begin(u"");
+  for (const char* type : {"separator", "continuationSeparator"}) {
+    const std::string id = std::string(type) == "separator" ? "-1" : "0";
+    const std::string xml = "<w:" + tag + " w:type=\"" + type + "\" w:id=\"" + id +
+                            "\"><w:p><w:pPr><w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/></w:pPr>"
+                            "<w:r><w:" + type + "/></w:r></w:p></w:" + tag + ">";
+    const ElemId note = AddXml(root, xml, kNoElem, true);
+    const ElemId p = note == kNoElem ? kNoElem : FirstChildNamed(doc_.tree_, note, names::kP);
+    if (p == kNoElem) continue;
+    Story s;
+    s.kind = endnote ? StoryKind::Endnote : StoryKind::Footnote;
+    s.part = part;
+    s.root = note;
+    s.id = id;
+    const auto story = static_cast<uint32_t>(doc_.stories_.size());
+    doc_.stories_.push_back(std::move(s));
+    Paragraph para;
+    para.elem = p;
+    para.story = story;
+    para.text = LayOutBuiltParagraph(doc_.tree_, p, static_cast<uint32_t>(doc_.paras_.size()), {});
+    doc_.paras_.push_back(std::move(para));
+  }
+  // Part of the new part, made outside undo: no step of its own.
+  depth_ = 0;
+  before_.clear();
+  store_.clear();
+  storyOps_.clear();
+  touched_.clear();
+  owned_.clear();
 }
 
 }  // namespace fw::doc::edit

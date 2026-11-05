@@ -13,9 +13,11 @@
 
 #include "doc/edit/Forms.h"
 #include "doc/edit/Kept.h"
+#include "doc/edit/Notes.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/model/Internal.h"
 #include "doc/model/Schema.h"
+#include "doc/model/Utf.h"
 #include "pkg/Package.h"
 
 namespace fw::doc::edit {
@@ -190,6 +192,19 @@ struct EditorState {
   Entry group;
   std::vector<size_t> groupMarks;  // group.steps.size() at each open BeginGroup
   bool typingBroken = true;
+  // While Delete runs: the notes whose references it deletes, which go after the text (D4).
+  // Elsewhere a note's reference can't be deleted (null).
+  std::vector<uint32_t>* goneNotes = nullptr;
+  // A note's reference that a deletion takes (`id`, a footnoteReference or endnoteReference): its
+  // note goes too, once the deletion is done (DropNotes). False for anything else, and outside a
+  // deletion that takes notes along.
+  bool TakeNote(ElemId id) {
+    const uint32_t n = NameOf(id);
+    if (!goneNotes || (n != Name("footnoteReference") && n != Name("endnoteReference"))) return false;
+    const StoryKind kind = n == Name("footnoteReference") ? StoryKind::Footnote : StoryKind::Endnote;
+    if (uint32_t story = d.NoteStory(kind, Node(&t, id).AttrOr(kId)); story != kNone) goneNotes->push_back(story);
+    return true;
+  }
   // The open transaction.
   bool inTx = false;
   Step tx;
@@ -772,13 +787,18 @@ struct EditorState {
 
   // After a direct change, done or undone: the model's indexes are built again, every cache goes,
   // and every paragraph may look different.
-  void RefreshAll(const CustomStep& step) {
+  void RefreshAll(const CustomStep& step, bool undoing = false) {
     // A step that says which paragraphs it changed leaves the others as they were: they keep their
     // versions, so what was measured for them stays (a big table's cells, after formatting one).
     // Past `renumberFrom`, only the list paragraphs may read differently (their numbers).
     const bool ranged = step.first != kNone && step.count > 0 && step.first + step.count <= d.paras_.size();
     const uint32_t changedEnd = std::min(step.renumberFrom, step.first + step.count);
-    auto changed = [&](uint32_t i) { return i >= step.first && i < changedEnd; };
+    // A story whose paragraphs the step adds or takes out reads differently as a whole.
+    std::unordered_set<uint32_t> stories;
+    for (const Change& c : step.paraChanges) stories.insert(c.story);
+    auto changed = [&](uint32_t i) {
+      return (i >= step.first && i < changedEnd) || (!stories.empty() && stories.count(d.paras_[i].story));
+    };
     std::unordered_map<ElemId, uint32_t> kept;
     if (ranged)
       for (uint32_t i = 0; i < d.paras_.size(); ++i)
@@ -788,8 +808,9 @@ struct EditorState {
     for (uint32_t i = 0; i < d.paras_.size(); ++i) {
       Paragraph& p = d.paras_[i];
       const bool renumbered = i >= changedEnd && i < step.first + step.count && d.InList(i);
+      // A paragraph a tree edit made (a note's) has no version yet (0): it gets one.
       const auto it = ranged && !changed(i) && !renumbered ? kept.find(p.elem) : kept.end();
-      p.version = it != kept.end() ? it->second : ++version;
+      p.version = it != kept.end() && it->second != 0 ? it->second : ++version;
     }
     Change ch;
     if (step.first != kNone && step.count > 0 && step.first + step.count <= d.paras_.size()) {
@@ -804,6 +825,14 @@ struct EditorState {
       ch.structure = true;
     }
     pending.push_back(ch);
+    auto add = [&](Change c) {
+      if (undoing) std::swap(c.removed, c.added);
+      pending.push_back(c);
+    };
+    if (undoing)
+      for (auto it = step.paraChanges.rbegin(); it != step.paraChanges.rend(); ++it) add(*it);
+    else
+      for (const Change& c : step.paraChanges) add(c);
   }
 
   // Brings the model's indexes and caches up to date after a step was done (or undone) and tells
@@ -936,7 +965,7 @@ struct EditorState {
   void UndoStep(Step& s) {
     if (s.custom) {
       s.custom->Undo();
-      RefreshAll(*s.custom);
+      RefreshAll(*s.custom, true);
       return;
     }
     Restore(s.before, s.first, static_cast<uint32_t>(s.after.paras.size()));
@@ -1161,6 +1190,109 @@ struct EditorState {
     return item;
   }
 
+  // The innermost element of `para` that holds [a, b], its ends included: the paragraph, or an
+  // inline container whose children are runs (a link, a content control, a revision).
+  ElemId ContainerOf(uint32_t para, uint32_t a, uint32_t b) {
+    ElemId c = d.paras_[para].elem;
+    for (bool deeper = true; deeper;) {
+      deeper = false;
+      for (ElemId k = E(c).first; k != kNoElem; k = E(k).next) {
+        const uint32_t n = NameOf(k);
+        if (n == kR || Leaf(k) || PropsElem(k) || !Splittable(n) || E(k).length == 0 || (E(k).flags & kDisplayOnly)) continue;
+        if (E(k).start <= a && b <= E(k).start + E(k).length) {
+          c = k;
+          deeper = true;
+          break;
+        }
+      }
+    }
+    return c;
+  }
+
+  // Builds runs from XML (w:r elements, one after another, their text in w:t and w:instrText) as
+  // children of `container` at `o` in `para`: after what ends there, before what starts there
+  // (a bookmark's start, the next text), runs that straddle `o` cut. Their text goes into the
+  // paragraph's. False when an element isn't known where it goes, or something else straddles `o`.
+  bool PutRuns(uint32_t para, uint32_t o, ElemId container, std::string_view xml, std::u16string& why) {
+    if (!CutRunsAt(para, o, why)) return false;
+    ElemId after = kNoElem;
+    for (ElemId c = E(container).first; c != kNoElem; c = E(c).next) {
+      const uint32_t s = E(c).start, e = s + E(c).length;
+      if (PropsElem(c)) {
+        after = c;
+        continue;
+      }
+      if (E(c).length == 0) {
+        if (s < o || (s == o && !StartMarker(NameOf(c)))) {
+          after = c;
+          continue;
+        }
+        break;
+      }
+      if (e <= o) {
+        after = c;
+        continue;
+      }
+      if (s >= o) break;
+      why = u"Something there can't be split.";
+      return false;
+    }
+    const std::string wrapped = "<root>" + std::string(xml) + "</root>";
+    pugi::xml_document doc;
+    if (!doc.load_buffer(wrapped.data(), wrapped.size(), pugi::parse_default | pugi::parse_ws_pcdata)) {
+      why = u"This can't go here.";
+      return false;
+    }
+    std::u16string& text = d.paras_[para].text;
+    uint32_t at = o;
+    std::function<ElemId(ElemId, const pugi::xml_node&)> build = [&](ElemId par, const pugi::xml_node& n) -> ElemId {
+      ElemId id = NewElem(par, QName(n.name()));
+      if (id == kNoElem) return kNoElem;
+      for (pugi::xml_attribute a : n.attributes())
+        if (!SetAttr(id, QName(a.name()), a.value())) return kNoElem;
+      const Role role = RoleOf(id);
+      if (role == Role::Text) {
+        const std::u16string s = ToUtf16(n.child_value());
+        text.insert(at, s);
+        at += static_cast<uint32_t>(s.size());
+        E(id).length = static_cast<uint32_t>(s.size());
+        return id;
+      }
+      if (role == Role::Char) {
+        char16_t ch = Schema::Get().Type(TypeOf(id)).ch;
+        if (NameOf(id) == kFldChar) {
+          const std::string_view type = Node(&t, id).AttrOr(Name("fldCharType"));
+          ch = type == "begin" ? u'\x13' : type == "separate" ? u'\x14' : u'\x15';
+        }
+        text.insert(text.begin() + at, ch);
+        ++at;
+        E(id).length = 1;
+        return id;
+      }
+      ElemId last = kNoElem;
+      for (pugi::xml_node c : n.children()) {
+        if (c.type() != pugi::node_element) continue;
+        ElemId k = build(id, c);
+        if (k == kNoElem) return kNoElem;
+        LinkAfter(id, last, k);
+        last = k;
+      }
+      return id;
+    };
+    for (pugi::xml_node n : doc.first_child().children()) {
+      if (n.type() != pugi::node_element) continue;
+      ElemId run = QName(n.name()) == kR ? build(container, n) : kNoElem;
+      if (run == kNoElem) {
+        why = u"This can't go here.";
+        return false;
+      }
+      LinkAfter(container, after, run);
+      after = run;
+    }
+    Reflow(para);
+    return true;
+  }
+
   // The handle of a drawing just inserted.
   void AddDrawing(Drawing info, ElemId item, uint32_t para) {
     info.node = Node(&t, item);
@@ -1223,9 +1355,17 @@ struct EditorState {
       }
       if (Undeletable(NameOf(l.id))) {
         uint32_t n = NameOf(l.id);
+        // A note's reference: its note goes with it (D4), once the text has. A note's own number
+        // goes alone; the note stays, numbered in the text, as in Word.
+        if (TakeNote(l.id) || n == Name("footnoteRef") || n == Name("endnoteRef")) {
+          remove.push_back(l.id);
+          continue;
+        }
         why = n == Name("commentReference") || n == Name("annotationRef")
                   ? u"Deleting a comment isn't possible yet. Leave its mark in place."
-                  : u"Deleting a footnote or endnote isn't possible yet. Leave its number in place.";
+              : n == Name("separator") || n == Name("continuationSeparator")
+                  ? u"The line above the notes can't be deleted."
+                  : u"A footnote or endnote can't be deleted here. Delete its number in the text.";
         return false;
       }
       remove.push_back(l.id);
@@ -2800,7 +2940,8 @@ struct EditorState {
       ElemId id = stack.back();
       stack.pop_back();
       uint32_t n = NameOf(id);
-      if (Undeletable(n)) return why = u"Footnotes, endnotes and comments in these cells would lose their place. Delete them first.", false;
+      if (TakeNote(id)) continue;  // its note goes too (D4)
+      if (Undeletable(n)) return why = u"Comments in these cells would lose their place. Delete them first.", false;
       if (n == kP) {
         if (E(id).start >= d.paras_.size() || d.paras_[E(id).start].elem != id || d.paras_[E(id).start].story != tx.story)
           return why = u"Text boxes in these cells can't be deleted yet.", false;
@@ -3013,6 +3154,111 @@ Result Editor::InsertDrawing(Pos at, std::string xml, const Drawing& info) {
   return r;
 }
 
+Result Editor::InsertRuns(Pos at, std::string_view runsXml, std::u16string name) {
+  EditorState& s = *impl_;
+  std::u16string why;
+  if (!CanEdit(&why) || !s.Editable(at.para, why)) return Fail(why);
+  if (at.offset > ParaLength(at.para)) return Fail(u"That place isn't in the paragraph.");
+  if (!XmlSafe(runsXml)) return Fail(u"This can't go here.");
+  const uint32_t before = ParaLength(at.para);
+  s.Begin(at.para, 1);
+  // With the text before it, as typing would go: in a link that ends there, not one that starts there.
+  const ElemId container = s.ContainerOf(at.para, at.offset > 0 ? at.offset - 1 : 0, at.offset);
+  if (!s.PutRuns(at.para, at.offset, container, runsXml, why)) return s.Abort(why);
+  const Pos after{at.para, at.offset + ParaLength(at.para) - before};
+  s.Commit(false, at, after, Kind::Other, std::move(name));
+  s.Notify(listeners_);
+  Result r;
+  r.caret = after;
+  return r;
+}
+
+Result Editor::WrapInField(Pos from, Pos to, std::string_view code, std::string_view rPr, std::u16string name) {
+  EditorState& s = *impl_;
+  if (Compare(to, from) < 0) std::swap(from, to);
+  std::u16string why;
+  if (!CanEdit(&why) || !s.Editable(from.para, why) || !s.Editable(to.para, why)) return Fail(why);
+  if (doc_.Para(from.para).story != doc_.Para(to.para).story || from.offset > ParaLength(from.para) ||
+      to.offset > ParaLength(to.para))
+    return Fail(u"A field's ends go in one story.");
+  if (!XmlSafe(code) || !XmlSafe(rPr)) return Fail(u"A field's code can't hold control characters.");
+  if (s.CutsField(from, to)) return Fail(u"A field can't cross the edge of another one.");
+  for (uint32_t p = from.para; p < to.para; ++p)
+    if (s.SiblingAfter(p) != p + 1) return Fail(u"A field's paragraphs must follow each other.");
+  std::string escaped;
+  for (char c : code) escaped += c == '&' ? std::string("&amp;") : c == '<' ? std::string("&lt;") : c == '>' ? std::string("&gt;") : std::string(1, c);
+  const std::string props(rPr);
+  auto run = [&](std::string_view inner) { return "<w:r>" + props + std::string(inner) + "</w:r>"; };
+  const std::string begin = run("<w:fldChar w:fldCharType=\"begin\"/>") +
+                            run("<w:instrText xml:space=\"preserve\">" + escaped + "</w:instrText>") +
+                            run("<w:fldChar w:fldCharType=\"separate\"/>");
+  const std::string end = run("<w:fldChar w:fldCharType=\"end\"/>");
+  s.Begin(from.para, to.para - from.para + 1);
+  // Both ends in the innermost container that holds them: a field that starts inside a link and
+  // ends outside it is one Word refuses to open (torture finding 6). Across paragraphs, in them.
+  const bool one = from.para == to.para;
+  const ElemId fromIn = one ? s.ContainerOf(from.para, from.offset, to.offset) : doc_.Para(from.para).elem;
+  const ElemId toIn = one ? fromIn : doc_.Para(to.para).elem;
+  if (!s.PutRuns(to.para, to.offset, toIn, end, why)) return s.Abort(why);
+  const uint32_t beginBefore = ParaLength(from.para);
+  if (!s.PutRuns(from.para, from.offset, fromIn, begin, why)) return s.Abort(why);
+  const uint32_t added = ParaLength(from.para) - beginBefore;  // the begin, the code, the separator
+  const Pos after{to.para, to.offset + (one ? added : 0) + 1};  // after the end
+  s.Commit(false, from, after, Kind::Other, std::move(name));
+  s.Notify(listeners_);
+  Result r;
+  r.caret = after;
+  return r;
+}
+
+namespace {
+
+// The notes of the references a deletion took (EditorState::goneNotes), taken out as one more
+// step of the open group: each that no reference is left to (a file may refer to a note twice).
+// `at` is in the text, before the notes' paragraphs, where the notes after them number again from.
+// Empty, or why that was refused.
+std::u16string DropNotes(Editor& ed, std::vector<uint32_t> gone, Pos at) {
+  const Document& d = ed.Doc();
+  std::sort(gone.begin(), gone.end());
+  gone.erase(std::unique(gone.begin(), gone.end()), gone.end());
+  std::erase_if(gone, [&](uint32_t story) { return NoteReference(d, story).has_value(); });
+  if (gone.empty()) return {};
+  TreeEdit te(ed, at);
+  te.Begin(u"Delete");
+  bool before = false;
+  for (uint32_t story : gone) {
+    const std::vector<uint32_t> paras = d.StoryParagraphs(story);
+    before = before || (!paras.empty() && paras.front() <= at.para);
+  }
+  if (!before) te.Affects(at.para, at.para, true);
+  for (uint32_t story : gone) te.RemoveNote(story);
+  te.Commit();
+  return te.Refused();
+}
+
+// Sets EditorState::goneNotes for a deletion, and puts back what it was after.
+struct TakingNotes {
+  EditorState& s;
+  std::vector<uint32_t> gone;
+  std::vector<uint32_t>* was;
+  explicit TakingNotes(EditorState& state) : s(state), was(state.goneNotes) { s.goneNotes = &gone; }
+  ~TakingNotes() { s.goneNotes = was; }
+  TakingNotes(const TakingNotes&) = delete;
+  TakingNotes& operator=(const TakingNotes&) = delete;
+};
+
+// Ends a group on the way out: cancelled when `cancel` is set.
+struct GroupGuard {
+  Editor& ed;
+  bool on = true;
+  bool cancel = false;
+  ~GroupGuard() {
+    if (on) cancel ? ed.CancelGroup() : ed.EndGroup();
+  }
+};
+
+}  // namespace
+
 Result Editor::Delete(Pos from, Pos to) {
   EditorState& s = *impl_;
   if (Compare(to, from) < 0) std::swap(from, to);
@@ -3075,14 +3321,17 @@ Result Editor::Delete(Pos from, Pos to) {
   // Section breaks it takes (in the marks of all but the last paragraph): the section after them
   // keeps the headers and footers it showed.
   const KeptRefs kept = KeptReferences(doc_, std::vector<uint32_t>(chain.begin(), chain.end() - 1));
-  if (kept.sectPr != kNoElem) BeginGroup(u"Delete");
-  struct Ender {
-    Editor& ed;
-    bool on;
-    ~Ender() {
-      if (on) ed.EndGroup();
-    }
-  } ender{*this, kept.sectPr != kNoElem};
+  // Note references it takes (U+0002 is a note's reference or mark): their notes go too (D4).
+  bool notes = false;
+  for (uint32_t p : chain) {
+    const std::u16string& text = doc_.Para(p).text;
+    const uint32_t a = p == from.para ? from.offset : 0, b = p == to.para ? to.offset : static_cast<uint32_t>(text.size());
+    for (uint32_t i = a; i < b && i < text.size() && !notes; ++i) notes = text[i] == u'\x02';
+  }
+  const bool group = kept.sectPr != kNoElem || notes;
+  if (group) BeginGroup(u"Delete");
+  GroupGuard ender{*this, group};
+  TakingNotes taking(s);
   bool single = from.para == to.para && to.offset == from.offset + 1;
   s.Begin(from.para, to.para - from.para + 1);
   if (from.para == to.para) {
@@ -3096,9 +3345,15 @@ Result Editor::Delete(Pos from, Pos to) {
     for (size_t i = 1; i < chain.size(); ++i)
       if (!s.Join(from.para, why)) return s.Abort(why);
   }
+  s.goneNotes = taking.was;
   s.Commit(false, to, from, single ? Kind::Deleting : Kind::Other, u"Delete");
   s.Notify(listeners_);
   AddReferences(kept, from);
+  // The notes of the references deleted, in the same undo step.
+  if (std::u16string refused = DropNotes(*this, taking.gone, from); !refused.empty()) {
+    ender.cancel = true;  // the text comes back too
+    return Fail(refused);
+  }
   Result r;
   r.caret = r.end = from;
   return r;
@@ -3767,6 +4022,10 @@ Result Editor::EditTable(Pos from, Pos to, std::u16string name, const std::funct
   uint32_t first = 0, count = 0;
   if (!s.TableParas(o.tbl, first, count, why)) return Fail(why);
   o.blocks = {o.tbl};
+  // Notes referred to in cells that go go with them, in the same undo step (D4).
+  BeginGroup(name);
+  GroupGuard group{*this};
+  TakingNotes taking(s);
   s.Begin(first, count, {o.tbl});
   if (!op(o)) return s.Abort(o.why.empty() ? u"This table can't be changed that way." : o.why);
   s.Resync(o.blocks);
@@ -3775,8 +4034,13 @@ Result Editor::EditTable(Pos from, Pos to, std::u16string name, const std::funct
   Pos caret = from;
   if (o.caret != kNoElem && s.Listed(o.caret)) caret = Pos{s.E(o.caret).start, 0};
   if (caret.para >= doc_.Paragraphs().size()) caret = Pos{first < doc_.Paragraphs().size() ? first : 0, 0};
+  s.goneNotes = taking.was;
   s.Commit(false, from, caret, Kind::Other, std::move(name));
   s.Notify(listeners_);
+  if (std::u16string refused = DropNotes(*this, taking.gone, caret); !refused.empty()) {
+    group.cancel = true;
+    return Fail(refused);
+  }
   Result r;
   r.caret = caret;
   return r;
@@ -4190,6 +4454,10 @@ Result Editor::DeleteTable(Pos at) {
   // The paragraph after it takes what must stay (a bookmark's end); with none, or between two
   // tables, an empty paragraph takes the table's place.
   const bool nextPara = next != kNoElem && s.NameOf(next) == kP && s.E(next).start == first + count && s.Listed(next);
+  // Notes referred to in the table go with it, in the same undo step (D4).
+  BeginGroup(u"Delete table");
+  GroupGuard group{*this};
+  TakingNotes taking(s);
   s.Begin(first, count + (nextPara ? 1 : 0), {tbl});
   ElemId heir = nextPara ? next : kNoElem;
   ElemId fresh = kNoElem;
@@ -4207,8 +4475,13 @@ Result Editor::DeleteTable(Pos at) {
   s.Resync(blocks);
   if (s.Listed(heir)) s.Reflow(s.E(heir).start);
   Pos caret{s.E(blocks.front()).start, 0};
+  s.goneNotes = taking.was;
   s.Commit(false, at, caret, Kind::Other, u"Delete table");
   s.Notify(listeners_);
+  if (std::u16string refused = DropNotes(*this, taking.gone, caret); !refused.empty()) {
+    group.cancel = true;
+    return Fail(refused);
+  }
   Result r;
   r.caret = caret;
   return r;

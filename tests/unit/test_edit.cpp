@@ -447,18 +447,21 @@ TEST(Edit_CommentsAndNotesKeepTheirMarks) {
                "<w:p><w:commentRangeStart w:id=\"0\"/><w:commentRangeEnd w:id=\"0\"/><w:r><w:commentReference w:id=\"0\"/>"
                "</w:r><w:r><w:t>de</w:t></w:r><w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p>"));
   CHECK(ed.Undo() && RoundTrips(*doc));
-  // The marks of comments and notes can't be deleted yet.
+  // The marks of comments can't be deleted yet.
   auto c = ed.Delete(P(p, 2), P(p, 5));
   CHECK(!c && c.message.find(u"comment") != std::u16string::npos);
-  auto n = ed.Delete(P(p, 5), P(p, 7));
-  CHECK(!n && n.message.find(u"footnote") != std::u16string::npos);
-  // Notes and comments are edited like the body; the note keeps its number.
+  // A note's reference takes its note along (D4), in one undo step.
+  CHECK(ed.Delete(P(p, 5), P(p, 7)) && doc->NoteStory(StoryKind::Footnote, "1") == kNone);
+  CHECK(ed.Undo() && RoundTrips(*doc));
+  // Notes and comments are edited like the body.
   uint32_t note = doc->StoryParagraphs(doc->NoteStory(StoryKind::Footnote, "1")).at(0);
-  CHECK(!ed.Delete(P(note, 0), P(note, 2)) && ed.InsertText(P(note, 5), u"s") && doc->Para(note).text == u"\x02Notes");
+  CHECK(ed.InsertText(P(note, 5), u"s") && doc->Para(note).text == u"\x02Notes");
   CHECK(!ed.Delete(P(p, 0), P(note, 1)));  // across stories
   auto dirty = ed.DirtyParts();
   CHECK(dirty.size() == 1 && doc->Parts()[dirty[0]].name == "/word/footnotes.xml");
-  CHECK(ed.Undo() && RoundTrips(*doc));
+  // A note's own number can go: the note stays, numbered at its reference, as in Word.
+  CHECK(ed.Delete(P(note, 0), P(note, 1)) && doc->Para(note).text == u"Notes");
+  CHECK(ed.Undo() && ed.Undo() && RoundTrips(*doc));
 }
 
 TEST(Edit_TrackedChanges) {

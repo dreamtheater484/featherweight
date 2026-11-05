@@ -100,7 +100,7 @@ class TreeEdit {
   // before `before` (kNoElem: where the schema puts it among its siblings, after the last of
   // its kind). The XML uses the w: prefix; every element and attribute in it must be known.
   // kNoElem when it isn't.
-  ElemId AddXml(ElemId parent, std::string_view xml, ElemId before = kNoElem);
+  ElemId AddXml(ElemId parent, std::string_view xml, ElemId before = kNoElem) { return AddXml(parent, xml, before, false); }
   // Puts a copy of `src` (a property such as w:jc or w:b, with what it holds) into `parent`, in
   // place of a child with the same name. kNoElem when `parent` can't hold it.
   ElemId CopyChild(ElemId src, ElemId parent);
@@ -155,8 +155,34 @@ class TreeEdit {
   // The comment's state as commentsExtended has it now: false when it has no entry.
   bool CommentState(std::string_view paraId, std::string& parentParaId, bool& done) const;
 
+  // ---- Notes (D4): a footnote or endnote is a story of its own, a w:footnote (w:endnote) in the
+  // notes part; its reference in the text is a run item with the same w:id.
+  // A new note with id `id` at the end of the notes part `root` (EnsurePart(Footnotes or
+  // Endnotes)), as Word makes one: a paragraph in style `textStyle` holding the note's mark in
+  // character style `markStyle` (either empty: none), then a space in a run of its own. Its story
+  // and paragraph join the model at once; undoing the transaction takes them out, redoing puts
+  // them back. The story's index; kNone outside a transaction or when the part can't hold it.
+  uint32_t AddNote(ElemId root, bool endnote, std::string_view id, std::string_view textStyle,
+                   std::string_view markStyle);
+  // Takes note story `story` out: its element leaves the part and its paragraphs the model (the
+  // story stays, empty, with no root), undone with the transaction. False when it isn't a note.
+  bool RemoveNote(uint32_t story);
+
  private:
   friend struct JournalStep;
+  // A note story joining or leaving the model (AddNote, RemoveNote), undone and redone with the
+  // step: its paragraphs go in or out of Document::Paragraphs() at `at`, its root in or out.
+  struct StoryOp {
+    bool add = true;
+    uint32_t story = kNone, at = 0;
+    ElemId root = kNoElem;
+    std::vector<Paragraph> paras;
+  };
+  static void ApplyStoryOps(Document& doc, const std::vector<StoryOp>& ops, bool undo);
+  // AddXml, with `content` a story's empty content too (a note's paragraph and runs).
+  ElemId AddXml(ElemId parent, std::string_view xml, ElemId before, bool content);
+  // The separator notes Word starts a notes part with (ids -1 and 0), outside undo.
+  void AddSeparatorNotes(uint32_t part, bool endnote);
   struct StoreOp {
     enum Kind : uint8_t { Split, SetAttrs, Fragments, CommentsEx } kind = Split;
     pkg::NodeId node = pkg::kNoNode, second = pkg::kNoNode;
@@ -233,6 +259,7 @@ class TreeEdit {
   size_t elemsAtBegin_ = 0;
   Saved before_;
   std::vector<StoreOp> store_;
+  std::vector<StoryOp> storyOps_;
   std::unordered_map<ElemId, size_t> touched_;  // element -> index into before_
   std::unordered_set<ElemId> owned_;            // containers given children of their own (Own)
   bool tracking_ = false, recording_ = false;

@@ -103,6 +103,22 @@ const Builtin kBuiltins[] = {
     // What content controls show while empty, as in Word.
     {"Placeholder Text", "PlaceholderText", StyleType::Character, 99, false, "Default Paragraph Font", "", "", "",
      "<w:color w:val=\"666666\"/>"},
+    // Footnotes and endnotes (D4): the note's text, and the raised number in the text and the note.
+    {"footnote text", "FootnoteText", StyleType::Paragraph, 99, false, "Normal", "", "Footnote Text Char",
+     "<w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/>", "<w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/>"},
+    {"footnote reference", "FootnoteReference", StyleType::Character, 99, false, "Default Paragraph Font", "", "", "",
+     "<w:vertAlign w:val=\"superscript\"/>"},
+    {"endnote text", "EndnoteText", StyleType::Paragraph, 99, false, "Normal", "", "Endnote Text Char",
+     "<w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/>", "<w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/>"},
+    {"endnote reference", "EndnoteReference", StyleType::Character, 99, false, "Default Paragraph Font", "", "", "",
+     "<w:vertAlign w:val=\"superscript\"/>"},
+    // A table of contents (D4): its entries by level, and its heading.
+    {"toc 1", "TOC1", StyleType::Paragraph, 39, false, "Normal", "Normal", "", "<w:spacing w:after=\"100\"/>", ""},
+    {"toc 2", "TOC2", StyleType::Paragraph, 39, false, "Normal", "Normal", "",
+     "<w:spacing w:after=\"100\"/><w:ind w:left=\"220\"/>", ""},
+    {"toc 3", "TOC3", StyleType::Paragraph, 39, false, "Normal", "Normal", "",
+     "<w:spacing w:after=\"100\"/><w:ind w:left=\"440\"/>", ""},
+    {"TOC Heading", "TOCHeading", StyleType::Paragraph, 39, false, "heading 1", "Normal", "", "<w:outlineLvl w:val=\"9\"/>", ""},
 };
 
 char Lower(char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }

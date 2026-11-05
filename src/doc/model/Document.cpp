@@ -876,9 +876,10 @@ void Document::BuildIndexes() {
   Caches& c = *caches_;
   const Schema& sc = Schema::Get();
 
-  // Notes and comments by id.
+  // Notes and comments by id (a note deleted with its reference has no root, D4).
   for (uint32_t s = 0; s < stories_.size(); ++s) {
     const Story& st = stories_[s];
+    if (st.root == kNoElem) continue;
     if (st.kind == StoryKind::Footnote) c.footnoteStory.emplace(st.id, s);
     else if (st.kind == StoryKind::Endnote) c.endnoteStory.emplace(st.id, s);
     else if (st.kind == StoryKind::Comment) c.commentStory.emplace(st.id, s);
