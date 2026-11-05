@@ -3,8 +3,10 @@
 // keep-with-next, keep-lines-together, widow and orphan control and page breaks, and tables whose
 // rows split across pages under repeated header rows. Endnotes follow the body.
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdlib>
+#include <numeric>
 #include <string_view>
 #include <tuple>
 
@@ -43,7 +45,7 @@ struct Engine::Impl {
   uint32_t paraLines = 0;  // lines of it on earlier columns
   bool paraBegun = false;  // its space before and floats are placed
   bool breakAfter = false;  // it ended with a page break
-  bool nextHard = false;    // the next page starts after a page or section break
+  bool nextHard = false;    // the next page starts after a section break or a page break before
   bool hardStart = false;   // this page did
   float separatorHeight = -1;
   size_t anchorDrawings = 0, anchorZones = 0;  // where its floats start on the page
@@ -53,6 +55,16 @@ struct Engine::Impl {
   size_t row = 0;
   std::vector<float> rowCut;  // the current row's cells, content already shown (a split row)
   float tableX = 0;
+  // Vertically merged cells whose rows are being placed: their text runs on through the rows they
+  // span, and on the next page when those rows do.
+  struct Span {
+    size_t row = 0, cell = 0;  // the restart cell
+    size_t last = 0;           // the last row it spans
+    float shown = 0;           // its content placed on earlier pages
+    float top = -1;            // where its part on this page starts; < 0: not on this page yet
+    size_t at = 0;             // where its lines go in the page's, in reading order
+  };
+  std::vector<Span> spans;
 
   // The page being laid out.
   bool havePage = false;
@@ -83,8 +95,14 @@ struct Engine::Impl {
     size_t lines = 0, paints = 0, fills = 0, edges = 0, drawings = 0, zones = 0, notes = 0;
     float notesHeight = 0;
     bool columnEmpty = true;
+    // Inside the table in progress (its rows kept together): the row it starts at.
+    size_t row = SIZE_MAX;
+    std::vector<float> rowCut;
+    std::vector<Span> spans;
   };
   std::optional<Mark> chain;
+  // Where the table in progress started, when it started on this page.
+  std::optional<Mark> tableStart;
 
   // Page numbering.
   int32_t number = 0;
@@ -98,6 +116,7 @@ struct Engine::Impl {
 Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, OpenTimings* timings)
     : impl_(new Impl), doc_(doc), fonts_(fonts), options_(options), timings_(timings) {
   compatMode_ = doc.Settings().compatibilityMode > 0 ? doc.Settings().compatibilityMode : 12;
+  sumSpacing_ = doc.Settings().Compat(Name("doNotUseHTMLParagraphAutoSpacing"));
   fieldsCount_.assign(doc.Stories().size(), 0);
   for (uint32_t s = 0; s < doc.Stories().size(); ++s) {
     StoryKind k = doc.Stories()[s].kind;
@@ -106,6 +125,22 @@ Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, 
   // The body, flattened: paragraphs and tables in order, with their sections.
   const std::vector<Section>& sections = doc.Sections();
   uint32_t sec = 0;
+  // A table's first paragraph, for its section.
+  std::function<uint32_t(Node)> firstPara = [&](Node container) -> uint32_t {
+    for (const Block& b : doc.Blocks(container)) {
+      if (b.kind == BlockKind::Paragraph) return b.para;
+      uint32_t p = kNone;
+      if (b.kind == BlockKind::Table) {
+        for (Node tr : doc.TableRows(b.node)) {
+          for (Node tc : doc.RowCells(tr))
+            if ((p = firstPara(tc)) != kNone) return p;
+        }
+      } else if ((p = firstPara(b.node)) != kNone) {
+        return p;
+      }
+    }
+    return kNone;
+  };
   std::function<void(const std::vector<Block>&)> add = [&](const std::vector<Block>& blocks) {
     for (const Block& b : blocks) {
       if (b.kind == BlockKind::ContentControl || b.kind == BlockKind::CustomXml) {
@@ -116,7 +151,14 @@ Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, 
       it.kind = b.kind;
       it.node = b.node;
       it.para = b.para;
-      uint32_t first = b.kind == BlockKind::Paragraph ? b.para : doc.ParagraphOf(b.node);
+      uint32_t first = kNone;
+      if (b.kind == BlockKind::Paragraph) first = b.para;
+      else
+        for (Node tr : doc.TableRows(b.node)) {
+          for (Node tc : doc.RowCells(tr))
+            if ((first = firstPara(tc)) != kNone) break;
+          if (first != kNone) break;
+        }
       while (sec + 1 < sections.size() && sections[sec].endPara != kNone && first != kNone && first > sections[sec].endPara)
         ++sec;
       it.section = sec;
@@ -161,6 +203,7 @@ struct Flow {
   using TableBox = Engine::TableBox;
   using RowBox = Engine::RowBox;
   using CellBox = Engine::CellBox;
+  using Span = Engine::Impl::Span;
 
   const SectionProps& Props(uint32_t s) const {
     static const SectionProps none;
@@ -250,6 +293,7 @@ struct Flow {
     f.notes.clear();
     f.notesHeight = 0;
     f.chain.reset();
+    f.tableStart.reset();
     f.hfLines = 0;
     f.hfUsesCount = false;
     LayOutHeaderFooter();
@@ -299,8 +343,15 @@ struct Flow {
       if (footer != kNone) {
         frame.story = LineStory::Footer;
         frame.y = 0;
+        const size_t zones = hfZones.size();
         Stack ft = e.StackStory(footer, frame);
         float y = f.geom.height - f.geom.footer - ft.height;
+        if (ft.placedOnPage) {
+          // Again where it goes, for what's placed by the page or wraps text.
+          hfZones.resize(zones);
+          frame.y = y;
+          ft = e.StackStory(footer, frame);
+        }
         if (ft.usesPageCount) f.hfUsesCount = true;
         if (Pt(sec.props.marginBottom) >= 0) bottom = std::min(bottom, y);
         f.body.Append(std::move(ft), frame.x, y);
@@ -400,6 +451,31 @@ struct Flow {
     return f.noteStacks.emplace(story, s).first->second;
   }
 
+  float NoteHeight(uint32_t story) {
+    auto it = f.noteStacks.find(story);
+    return it != f.noteStacks.end() ? it->second.height : NoteStack(story).height;
+  }
+
+  // Footnotes the cells of a row refer to between cutFrom and cutTo (null: from the top, to the
+  // end), not on the page yet: their height (with the separator for the first) and stories.
+  float RowNotes(const RowBox& row, const std::vector<float>* cutFrom, const std::vector<float>* cutTo,
+                 std::vector<uint32_t>& add) {
+    add.clear();
+    float h = 0;
+    for (size_t i = 0; i < row.cells.size(); ++i) {
+      const float from = cutFrom ? (*cutFrom)[i] : -1, to = cutTo ? (*cutTo)[i] : FLT_MAX;
+      for (const auto& [y, story] : row.cells[i].content.notes) {
+        if (y <= from + kEpsilon || y > to + kEpsilon) continue;
+        if (std::find(f.notes.begin(), f.notes.end(), story) != f.notes.end()) continue;
+        if (std::find(add.begin(), add.end(), story) != add.end()) continue;
+        if (f.notes.empty() && add.empty()) h += SeparatorHeight();
+        h += NoteHeight(story);
+        add.push_back(story);
+      }
+    }
+    return h;
+  }
+
   float SeparatorHeight() {
     if (f.separatorHeight < 0) f.separatorHeight = Separator().height;
     return f.separatorHeight;
@@ -418,7 +494,7 @@ struct Flow {
         h += SeparatorHeight();
         first = false;
       }
-      h += NoteStack(story).height;
+      h += NoteHeight(story);
       if (add) add->push_back(story);
     }
     return h;
@@ -462,6 +538,11 @@ struct Flow {
     m.notes = f.notes.size();
     m.notesHeight = f.notesHeight;
     m.columnEmpty = f.columnEmpty;
+    if (f.table) {
+      m.row = f.row;
+      m.rowCut = f.rowCut;
+      m.spans = f.spans;
+    }
     return m;
   }
 
@@ -481,7 +562,16 @@ struct Flow {
     f.columnEmpty = m.columnEmpty;
     f.pt.reset();
     f.breaker.reset();
-    f.table.reset();
+    if (m.row == SIZE_MAX) {
+      f.table.reset();
+      return;
+    }
+    // Back to a row of a table: the table again (measured anew if it had ended), at that row.
+    const Node tbl = f.items[m.next].node;
+    if (!f.table || !(f.table->tbl == tbl)) f.table = std::make_unique<TableBox>(e.MeasureTable(tbl, BodyFrame()));
+    f.row = m.row;
+    f.rowCut = m.rowCut;
+    f.spans = m.spans;
   }
 
   Frame BodyFrame() {
@@ -513,8 +603,11 @@ struct Flow {
     Frame frame = BodyFrame();
     if (!f.pt) {
       f.pt = std::make_unique<ParaText>();
-      e.BuildText(item.para, f.fields, *f.pt);
-      if (f.pt->empty) {
+      e.BuildText(item.para, f.fields, *f.pt, true);
+      // A paragraph nothing of which shows takes no room, and nor does an empty one that only
+      // holds a section break (Word gives it no line and no spacing).
+      if (f.pt->empty || (EndsSection() && f.pt->inlines.empty() && f.pt->anchors.empty() &&
+                          f.pt->Shown(0, static_cast<uint32_t>(f.pt->text.size()), false).empty())) {
         f.pt.reset();
         ++f.next;
         return Step::Continue;
@@ -538,9 +631,12 @@ struct Flow {
       f.anchorZones = f.zones.size();
       paraTop = f.y + (f.paraLines == 0 ? e.SpaceBefore(p, f.spacing) + e.BorderAbove(p, f.spacing) : 0);
       if (f.columnEmpty && f.spacing.prev == nullptr && f.paraLines == 0) {
-        // Word keeps the space before at the top of a page (measured on the corpus: dropping it at
-        // every page top, or after hard breaks only, matches fewer pages).
-        paraTop = f.y + e.SpaceBefore(p, Spacing()) + e.BorderAbove(p, Spacing());
+        // At the top of a page Word keeps the space before only after a section break or a page
+        // break before (w:pageBreakBefore), not after a page break character or where the text
+        // just flowed on; at the top of a later column it keeps it (measured on the corpus:
+        // dropping it there too, or always keeping it, matches fewer lines and pages).
+        const bool keep = f.hardStart || f.col > 0;
+        paraTop = f.y + (keep ? e.SpaceBefore(p, Spacing()) : 0.0f) + e.BorderAbove(p, Spacing());
       }
       for (uint32_t a : pt.anchors) {
         const Drawing& d = doc.Drawings()[a];
@@ -600,7 +696,7 @@ struct Flow {
         f.y = space.top + h;
         f.columnEmpty = false;
         f.pageEmpty = false;
-        f.nextHard = true;
+        // (A page break here doesn't keep the space before of what starts the next page.)
         if (!br.Done() && e.compatMode_ >= 15) {
           // Word 2013 and later keep the paragraph mark after a page break on the break's line.
           text::LineBreaker::State rest = br.Save();
@@ -630,11 +726,8 @@ struct Flow {
       if (p.shading.Present() && !p.shading.fill.automatic)
         f.body.fills.push_back({{ColumnLeft() + Pt(p.indStart), paraTop, ColumnRight() - Pt(p.indEnd), f.y}, p.shading.fill.rgb});
       f.spacing.after = e.SpaceAfter(p);
-      f.spacing.afterAuto = p.spaceAfterAuto;
       f.spacing.prev = &p;
       f.spacing.atTop = false;
-      // Space after may hang past the bottom of the page; the next paragraph starts below it.
-      f.y += 0;
       if (!p.keepNext) f.chain.reset();
       f.pt.reset();
       f.breaker.reset();
@@ -693,18 +786,144 @@ struct Flow {
     return NextColumn() ? Step::Continue : Step::PageFull;
   }
 
+  // Where a split row's cell is cut, for widow and orphan control and keep lines together: the
+  // paragraph the cut goes through keeps two lines on each side of it, or all of them together.
+  float KeepTogether(const Stack& s, float start, float to) const {
+    const LineBox* next = nullptr;
+    for (const LineBox& l : s.lines)
+      if (l.top >= to - kEpsilon && (!next || l.top < next->top)) next = &l;
+    if (!next || next->para == kNone) return to;
+    const uint32_t para = next->para;
+    std::vector<float> above;
+    size_t below = 0;
+    for (const LineBox& l : s.lines) {
+      if (l.para != para) continue;
+      if (l.top >= to - kEpsilon) ++below;
+      else if (l.top >= start - kEpsilon) above.push_back(l.top);
+    }
+    if (above.empty()) return to;
+    const ParaProps& p = doc.ResolvedPara(para);
+    size_t keep = above.size();
+    if (p.keepLines) keep = 0;
+    else if (p.widowControl) {
+      if (below == 1) --keep;    // its last line doesn't go on alone
+      if (keep == 1) keep = 0;   // nor does its first stay alone
+    }
+    if (keep == above.size()) return to;
+    std::sort(above.begin(), above.end());
+    return std::max(start, above[keep]);
+  }
+
+  // Whether the current item is the last of its section: the paragraph that holds its w:sectPr.
+  bool EndsSection() const {
+    return f.next + 1 < f.items.size() && f.items[f.next + 1].section != f.items[f.next].section;
+  }
+
   // A page break inside a paragraph: the rest of it starts the next page.
   Step PageBreakInParagraph() {
     f.paraBegun = true;
     return Step::PageFull;
   }
 
+  // What a merged cell's text still needs below where its part on this page starts.
+  float SpanNeed(const Span& s) const {
+    const CellBox& c = f.table->rows[s.row].cells[s.cell];
+    return c.content.height - s.shown + c.marginTop + c.marginBottom;
+  }
+
+  // How far a merged cell's text goes on this page when its part there, starting at `top`, ends
+  // at `bottom`.
+  float SpanCut(const Span& s, float top, float bottom) const {
+    const CellBox& c = f.table->rows[s.row].cells[s.cell];
+    const float limit = s.shown + (bottom - top) - c.marginTop - c.marginBottom;
+    float to = s.shown;
+    for (const LineBox& l : c.content.lines)
+      if (l.top >= s.shown - kEpsilon && l.top + l.height <= limit + kEpsilon) to = std::max(to, l.top + l.height);
+    return KeepTogether(c.content, s.shown, to);
+  }
+
+  // Places the text of a merged cell's part on this page: what fits above `bottom`, or with
+  // `bottom` < 0 all the rest, its rows having ended at f.y.
+  void FlushSpan(Span& s, float x, float bottom) {
+    if (s.top < 0) return;
+    const CellBox& c = f.table->rows[s.row].cells[s.cell];
+    float to = 1e30f, vshift = 0;
+    if (bottom >= 0) {
+      to = SpanCut(s, s.top, bottom);
+    } else if (s.shown <= 0) {
+      vshift = Engine::VShift(c, f.y - s.top - c.marginTop - c.marginBottom);
+    }
+    // Its lines go where the row's cells to its left end, in reading order.
+    const size_t old = f.body.lines.size();
+    Engine::EmitCell(c, x, s.top, (bottom >= 0 ? bottom : f.y) - s.top, s.shown, to, vshift, nullptr, f.body);
+    const size_t added = f.body.lines.size() - old;
+    const size_t at = std::min(s.at, old);
+    std::rotate(f.body.lines.begin() + static_cast<std::ptrdiff_t>(at), f.body.lines.begin() + static_cast<std::ptrdiff_t>(old),
+                f.body.lines.end());
+    for (Span& other : f.spans)
+      if (&other != &s && other.top >= 0 &&
+          (other.at > at || (other.at == at && f.table->rows[other.row].cells[other.cell].x > c.x)))
+        other.at += added;
+    s.shown = to;
+    s.top = -1;
+  }
+
+  // Where a merged cell's lines go among those of the row that starts its part on this page: after
+  // the row's cells to its left, which EmitRow placed from line `rowStart` on.
+  size_t SpanAt(const Span& s, float x, size_t rowStart) const {
+    const float left = x + f.table->rows[s.row].cells[s.cell].x - 0.5f;
+    size_t at = rowStart;
+    while (at < f.body.lines.size() && f.body.lines[at].x < left) ++at;
+    return at;
+  }
+
+  // Row f.row, placed at `top` from line `rowStart` on: merged cells already open start their
+  // part on this page there, and on its first part, the merged cells that start in it open.
+  void StartSpans(float x, float top, size_t rowStart, bool firstPart) {
+    for (Span& s : f.spans)
+      if (s.top < 0) {
+        s.top = top;
+        s.at = SpanAt(s, x, rowStart);
+      }
+    if (!firstPart) return;
+    const TableBox& t = *f.table;
+    const RowBox& row = t.rows[f.row];
+    for (size_t i = 0; i < row.cells.size(); ++i) {
+      const CellBox& c = row.cells[i];
+      if (c.continued || c.rowSpan <= 1) continue;
+      Span s{f.row, i, std::min(t.rows.size() - 1, f.row + static_cast<size_t>(c.rowSpan) - 1), 0, top};
+      s.at = SpanAt(s, x, rowStart);
+      f.spans.push_back(s);
+    }
+  }
+
+  // Row f.row placed, whole or its last part, from `top` to f.y and from line `rowStart` on:
+  // merged cells start in it, and those that end in it place the rest of their text.
+  void RowPlaced(float x, float top, size_t rowStart, bool firstPart) {
+    StartSpans(x, top, rowStart, firstPart);
+    for (size_t k = 0; k < f.spans.size();) {
+      if (f.spans[k].last <= f.row) {
+        FlushSpan(f.spans[k], x, -1);
+        f.spans.erase(f.spans.begin() + static_cast<std::ptrdiff_t>(k));
+      } else {
+        ++k;
+      }
+    }
+  }
+
+  // The page or column ends inside the table: merged cells place what fits of their text above f.y.
+  void FlushSpans(float x) {
+    for (Span& s : f.spans) FlushSpan(s, x, f.y);
+  }
+
   Step Table(const Item& item) {
     Frame frame = BodyFrame();
     if (!f.table) {
+      f.tableStart = MarkNow();
       f.table = std::make_unique<TableBox>(e.MeasureTable(item.node, frame));
       f.row = 0;
       f.rowCut.clear();
+      f.spans.clear();
       // The space after the paragraph before it (and its bottom border) stay above the table.
       f.y += f.spacing.after + e.BorderBelow(f.spacing);
       f.spacing = Spacing();
@@ -729,73 +948,149 @@ struct Flow {
         ++f.row;
         continue;
       }
-      float h = row.height;
-      if (!f.rowCut.empty()) {
+      const bool firstPart = f.rowCut.empty();
+      // A row whose first paragraph has a page break before starts a page, as that paragraph
+      // would outside a table (measured on the corpus: Word does it for the row's first cell).
+      if (firstPart && row.breakBefore && !f.pageEmpty) {
+        FlushSpans(x);
+        f.nextHard = true;
+        return Step::PageFull;
+      }
+      float h = row.height - row.grown;
+      if (!firstPart) {
         // The rest of a split row: its tallest remaining cell.
         h = 0;
         for (size_t i = 0; i < row.cells.size(); ++i) {
           const CellBox& c = row.cells[i];
-          if (c.continued) continue;
+          if (c.continued || c.rowSpan > 1 || c.turn) continue;
           h = std::max(h, c.content.height - f.rowCut[i] + c.marginTop + c.marginBottom);
         }
         if (row.props.heightRule == "exact") h = std::max(0.0f, row.height - f.rowCut.front());
       }
+      // Merged cells that end in this row make it tall enough for the rest of their text.
+      if (row.props.heightRule != "exact")
+        for (const Span& s : f.spans)
+          if (s.last == f.row) h = std::max(h, SpanNeed(s) - (s.top >= 0 ? f.y - s.top : 0.0f));
       const bool last = f.row + 1 == t.rows.size();
-      if (f.y + h <= Bottom() + kEpsilon || ((f.columnEmpty || fresh) && (row.props.cantSplit || h <= 0))) {
-        e.EmitRow(t, f.row, x, f.y, h, f.rowCut.empty() ? nullptr : &f.rowCut, nullptr, f.body, firstOnPage, last);
+      const std::vector<float>* from = f.rowCut.empty() ? nullptr : &f.rowCut;
+      std::vector<uint32_t> notes;
+      float notesH = RowNotes(row, from, nullptr, notes);
+      auto takeNotes = [&]() {
+        f.notes.insert(f.notes.end(), notes.begin(), notes.end());
+        f.notesHeight += notesH;
+      };
+      if (f.y + h <= Bottom() - notesH + kEpsilon || ((f.columnEmpty || fresh) && (row.props.cantSplit || h <= 0))) {
+        takeNotes();
+        const size_t rowStart = f.body.lines.size();
+        // A row kept with the next starts a chain, if none runs yet; header rows, kept rows and
+        // what precedes them stay together with the first row that isn't kept.
+        // (Not while merged cells are open: their text goes in among earlier lines, which a
+        // rollback to the chain's start couldn't take back.)
+        if (row.keepNext && !f.chain && firstPart && f.spans.empty()) {
+          f.chain = MarkNow();
+          if (fresh) f.chain->columnEmpty = true;  // only repeated header rows above: moving won't help
+        }
+        e.EmitRow(t, f.row, x, f.y, h, f.rowCut.empty() ? nullptr : &f.rowCut, nullptr, f.body, firstOnPage, last, false);
+        const float rowTop = f.y;
         f.y += h;
+        RowPlaced(x, rowTop, rowStart, firstPart);
         f.columnEmpty = false;
         f.pageEmpty = false;
         firstOnPage = false;
         f.rowCut.clear();
         ++f.row;
-        f.chain.reset();
+        if (f.row > t.headerRows && !row.keepNext) f.chain.reset();
         fresh = false;
         continue;
       }
       // It doesn't fit. Rows that can't split, and rows of which nothing fits, move on.
-      const float room = Bottom() - f.y;
+      float room = Bottom() - f.y;
       std::vector<float> cutTo(row.cells.size(), 0);
       bool any = false, allDone = true;
-      if (!row.props.cantSplit || f.columnEmpty || fresh) {
+      auto cut = [&]() {
+        any = false;
+        allDone = true;
+        bool starved = false;
         for (size_t i = 0; i < row.cells.size(); ++i) {
           const CellBox& c = row.cells[i];
-          if (c.continued) continue;
-          float from = f.rowCut.empty() ? 0 : f.rowCut[i];
-          float limit = from + room - c.marginTop - c.marginBottom;
-          float cut = from;
+          if (c.continued || c.rowSpan > 1 || c.turn) continue;  // vertical text doesn't split
+          float start = f.rowCut.empty() ? 0 : f.rowCut[i];
+          float limit = start + room - c.marginTop - c.marginBottom;
+          float to = start;
           for (const LineBox& l : c.content.lines)
-            if (l.top >= from - kEpsilon && l.top + l.height <= limit + kEpsilon) cut = std::max(cut, l.top + l.height);
-          // Lines after the cut that start before it belong with it (beside one another).
-          cutTo[i] = cut;
-          if (cut > from + kEpsilon) any = true;
+            if (l.top >= start - kEpsilon && l.top + l.height <= limit + kEpsilon) to = std::max(to, l.top + l.height);
+          to = KeepTogether(c.content, start, to);
+          cutTo[i] = to;
+          if (to > start + kEpsilon) any = true;
           bool rest = false;
           for (const LineBox& l : c.content.lines)
-            if (l.top >= cut - kEpsilon) rest = true;
+            if (l.top >= to - kEpsilon) rest = true;
           if (rest) allDone = false;
+          if (rest && to <= start + kEpsilon) starved = true;
+        }
+        // Word splits a row only where every cell with text left keeps some of it on this page.
+        if (starved) any = false;
+        // Merged cells ending in this row whose text doesn't all fit go on too, and the row
+        // splits for them when some of it fits.
+        for (const Span& s : f.spans) {
+          if (s.last != f.row || SpanNeed(s) <= (s.top >= 0 ? f.y - s.top : 0.0f) + room + kEpsilon) continue;
+          allDone = false;
+          if (!starved && SpanCut(s, s.top >= 0 ? s.top : f.y, f.y + room) > s.shown + kEpsilon) any = true;
+        }
+      };
+      if (!row.props.cantSplit || f.columnEmpty || fresh) {
+        cut();
+        // The footnotes of what fits take room from it: cut again above them.
+        if (any && !allDone && (notesH = RowNotes(row, from, &cutTo, notes)) > 0) {
+          room -= notesH;
+          cut();
+          notesH = RowNotes(row, from, &cutTo, notes);
         }
       }
       if (!any || allDone) {
         if (f.columnEmpty || fresh) {
           // Taller than a page and nothing splits: it goes here anyway.
-          e.EmitRow(t, f.row, x, f.y, h, f.rowCut.empty() ? nullptr : &f.rowCut, nullptr, f.body, firstOnPage, last);
+          notesH = RowNotes(row, from, nullptr, notes);
+          takeNotes();
+          const size_t rowStart = f.body.lines.size();
+          e.EmitRow(t, f.row, x, f.y, h, f.rowCut.empty() ? nullptr : &f.rowCut, nullptr, f.body, firstOnPage, last, false);
+          const float rowTop = f.y;
           f.y += h;
+          RowPlaced(x, rowTop, rowStart, firstPart);
           f.columnEmpty = false;
           f.pageEmpty = false;
           f.rowCut.clear();
           ++f.row;
           continue;
         }
-        if (f.row == 0 && f.rowCut.empty() && BreakChain()) return NextColumn() ? Step::Continue : Step::PageFull;
+        if (f.rowCut.empty() && BreakChain()) return NextColumn() ? Step::Continue : Step::PageFull;
+        // Word doesn't leave a table's header rows alone at the foot of a page: the table starts
+        // on the next one, with what's kept with it.
+        if (f.rowCut.empty() && f.row > 0 && f.row <= t.headerRows && f.tableStart && !f.tableStart->columnEmpty) {
+          if (BreakChain()) return NextColumn() ? Step::Continue : Step::PageFull;
+          Rollback(*f.tableStart);
+          f.tableStart.reset();
+          f.columnEmpty = false;
+          return NextColumn() ? Step::Continue : Step::PageFull;
+        }
+        FlushSpans(x);
         return NextColumn() ? Step::Continue : Step::PageFull;
       }
-      e.EmitRow(t, f.row, x, f.y, room, f.rowCut.empty() ? nullptr : &f.rowCut, &cutTo, f.body, firstOnPage, true);
+      takeNotes();
+      const size_t rowStart = f.body.lines.size();
+      e.EmitRow(t, f.row, x, f.y, room, f.rowCut.empty() ? nullptr : &f.rowCut, &cutTo, f.body, firstOnPage, true, false);
+      // The row's merged cells start here; with the others, they place what fits on this page.
+      StartSpans(x, f.y, rowStart, firstPart);
       f.y += room;
+      FlushSpans(x);
       f.columnEmpty = false;
       f.pageEmpty = false;
       f.rowCut = cutTo;
       return NextColumn() ? Step::Continue : Step::PageFull;
     }
+    // Rows a merged cell claims to span that the table doesn't have.
+    for (Span& s : f.spans) FlushSpan(s, x, -1);
+    f.spans.clear();
     f.table.reset();
     ++f.next;
     f.spacing = Spacing();
@@ -857,7 +1152,9 @@ struct Flow {
       // A new section: on this page (continuous), in the next column, or on a new page.
       if (!f.pt && !f.table && item.section != f.section && !doc.Sections().empty()) {
         const SectionProps& p = Props(item.section);
-        if (p.start == SectionStart::Continuous && !f.pageEmpty) {
+        // A continuous break to another page size or orientation starts a new page all the same.
+        const bool samePage = Pt(p.pageWidth) == f.geom.width && Pt(p.pageHeight) == f.geom.height;
+        if (p.start == SectionStart::Continuous && !f.pageEmpty && samePage) {
           float low = f.y;
           for (size_t k = f.hfLines; k < f.body.lines.size(); ++k) {
             const LineBox& l = f.body.lines[k];
@@ -898,6 +1195,10 @@ struct Flow {
           continue;
         }
       }
+      if (!f.pt && !f.table) {
+        Engine::Placement place = e.PlacementOf({item.kind, item.node, item.para});
+        if (place && Place(item, place)) continue;
+      }
       Step s = item.kind == BlockKind::Table ? Table(item) : Paragraph(item);
       if (s == Step::PageFull) {
         FinishPage();
@@ -908,6 +1209,25 @@ struct Flow {
     e.done_ = true;
     return true;
   }
+
+  // A frame or floating table, from the current item: placed on this page, where the flow goes on
+  // beside or below it. False for a floating table that doesn't fit below the text it's anchored
+  // to: Word lets it break across pages, as tables in the flow do.
+  bool Place(const Item& item, const Engine::Placement& place) {
+    std::vector<Block> group{{item.kind, item.node, item.para}};
+    while (f.next + group.size() < f.items.size()) {
+      const Item& it = f.items[f.next + group.size()];
+      if (it.section != item.section || it.story != item.story || !e.JoinsPlaced(place, {it.kind, it.node, it.para})) break;
+      group.push_back({it.kind, it.node, it.para});
+    }
+    Engine::Placed p = e.PlaceBlocks(group, place, BodyFrame(), f.y, ColumnLeft(), ColumnRight());
+    if (place.table && place.table->vertAnchor != "page" && p.box.bottom > Bottom() + kEpsilon) return false;
+    if (p.zone.wrap != WrapType::None) f.zones.push_back(p.zone);
+    f.body.Append(std::move(p.content), p.box.left, p.box.top);
+    f.pageEmpty = false;
+    f.next += group.size();
+    return true;
+  }
 };
 
 bool Engine::NextPage() {
@@ -916,11 +1236,13 @@ bool Engine::NextPage() {
   // Every page must move the flow on. Content that can't be placed anywhere (a bug, or input
   // nothing could lay out) is skipped after a few tries, and no document gets more pages than its
   // paragraphs could fill, so pagination always ends.
-  const auto progress = std::make_tuple(f.next, f.paraLines, f.pt ? f.breaker->Save().position : 0u, f.row,
-                                        f.rowCut.empty() ? 0.0f : f.rowCut.front(), f.items.size());
+  // A split row moves on when any of its cells does.
+  auto cut = [&f]() { return std::accumulate(f.rowCut.begin(), f.rowCut.end(), 0.0f); };
+  const auto progress = std::make_tuple(f.next, f.paraLines, f.pt ? f.breaker->Save().position : 0u, f.row, cut(),
+                                        f.items.size());
   bool made = flow.MakePage();
-  const auto now = std::make_tuple(f.next, f.paraLines, f.pt ? f.breaker->Save().position : 0u, f.row,
-                                   f.rowCut.empty() ? 0.0f : f.rowCut.front(), f.items.size());
+  const auto now = std::make_tuple(f.next, f.paraLines, f.pt ? f.breaker->Save().position : 0u, f.row, cut(),
+                                   f.items.size());
   f.stalled = now == progress ? f.stalled + 1 : 0;
   if (f.stalled >= 3 && !done_) {
     f.pt.reset();
