@@ -1,6 +1,8 @@
 // Pagination (src/doc/layout): documents built from XML, laid out with the PC's fonts. The checks
 // are about where things go relative to each other and to the page, not exact positions, so they
 // hold whatever the font metrics.
+#include <windows.h>
+
 #include "TestHarness.h"
 
 #include <algorithm>
@@ -131,6 +133,46 @@ const LineBox* Find(const Doc& d, const std::u16string& text, size_t* page = nul
         return &l;
       }
   return nullptr;
+}
+
+TEST(Layout_DateAndTimeFieldsShowTheMoment) {
+  // D3 audit: DATE and TIME update, as Word updates them on opening. Thursday 5 March 2026,
+  // 14:07:09 local time.
+  SYSTEMTIME local{2026, 3, 4, 5, 14, 7, 9, 0}, utc;
+  FILETIME ft;
+  REQUIRE(TzSpecificLocalTimeToSystemTime(nullptr, &local, &utc) && SystemTimeToFileTime(&utc, &ft));
+  const int64_t now = static_cast<int64_t>(static_cast<uint64_t>(ft.dwHighDateTime) << 32 | ft.dwLowDateTime);
+  auto at = [&](std::u16string_view code, std::string_view lang = "en-US") {
+    return fw::doc::layout::DateFieldResult(code, now, lang);
+  };
+  CHECK(at(u" DATE \\@ \"d MMMM yyyy\" ") == u"5 March 2026");
+  CHECK(at(u" DATE \\@ \"dddd, MMMM d, yyyy\" \\* MERGEFORMAT ") == u"Thursday, March 5, 2026");
+  CHECK(at(u"DATE \\@ dd.MM.yy") == u"05.03.26");
+  CHECK(at(u" TIME \\@ \"h:mm am/pm\" ") == u"2:07 pm");
+  CHECK(at(u" TIME \\@ \"HH:mm:ss\" ") == u"14:07:09");
+  CHECK(at(u" DATE \\@ \"'Week of' MMM d\" ") == u"Week of Mar 5");
+  CHECK(at(u" DATE \\@ \"MMMM\" ", "nl-NL") == u"maart");  // in the field's language
+  CHECK(!at(u" DATE ").empty() && !at(u" TIME ").empty());  // the language's own formats
+  CHECK(at(u" PAGE ").empty() && at(u" CREATEDATE ").empty());
+  CHECK(fw::doc::layout::DateFieldResult(u" DATE ", 0, "en-US").empty());
+
+  // Laid out: a complex field and a simple one. Without a moment (the tools' layouts), the results
+  // the file holds; with one, the moment.
+  const std::string body =
+      "<w:p><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> DATE \\@ \"d MMMM yyyy\" "
+      "</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:rPr><w:lang w:val=\"en-GB\"/></w:rPr>"
+      "<w:t>1 January 2000</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>"
+      "<w:p><w:fldSimple w:instr=\" TIME \\@ &quot;HH:mm&quot; \"><w:r><w:t>09:00</w:t></w:r></w:fldSimple></w:p>";
+  Doc d = Make(body + SmallPage());
+  REQUIRE(d.layout);
+  CHECK(Find(d, u"1 January 2000") && Find(d, u"09:00"));
+  fw::doc::layout::Options options;
+  options.now = now;
+  Doc live;
+  live.doc = std::move(d.doc);
+  live.layout = std::make_unique<Layout>(*live.doc, Fonts(), options);
+  live.layout->LayOutAll();
+  CHECK(Find(live, u"5 March 2026") && Find(live, u"14:07") && !Find(live, u"2000"));
 }
 
 }  // namespace

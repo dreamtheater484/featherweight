@@ -184,14 +184,21 @@ void DocView::DrawHeaderFooterMode(Canvas& c, int page) {
 // ---------------------------------------------------------------------------
 // Formatting marks and panels
 
-void DocView::ToggleMarks() {
-  if (!Ready() || !doc_) return;
-  marks_ = !marks_;
+layout::Options DocView::LayoutOptions() const {
   layout::Options options;
   options.showHiddenText = marks_;
   options.formattingMarks = marks_;
+  FILETIME now;
+  GetSystemTimeAsFileTime(&now);  // DATE and TIME fields show it, as Word updates them on opening
+  options.now = static_cast<int64_t>(static_cast<uint64_t>(now.dwHighDateTime) << 32 | now.dwLowDateTime);
+  return options;
+}
+
+void DocView::ToggleMarks() {
+  if (!Ready() || !doc_) return;
+  marks_ = !marks_;
   // Hidden text takes room when shown: the pages are laid out again, the first on screen first.
-  pagination_ = std::make_unique<layout::Layout>(*doc_, *fonts_, options);
+  pagination_ = std::make_unique<layout::Layout>(*doc_, *fonts_, LayoutOptions());
   pagination_->LayOutPages(static_cast<size_t>(std::max(0, currentPage_)) + 2);
   revision_ = pagination_->Revision();
   caretRevision_ = UINT32_MAX;

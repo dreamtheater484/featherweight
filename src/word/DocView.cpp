@@ -225,7 +225,7 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     theme_ = draw::PackageResources::FindTheme(doc_->Package(), main->name);
     colorMap_ = draw::PackageResources::FindColorMap(doc_->Package(), main->name);
   }
-  pagination_ = std::make_unique<layout::Layout>(*doc_, *fonts_);
+  pagination_ = std::make_unique<layout::Layout>(*doc_, *fonts_, LayoutOptions());
   pagination_->LayOutPages(1);
   revision_ = pagination_->Revision();
   TakeNewPages();

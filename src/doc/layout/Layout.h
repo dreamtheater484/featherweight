@@ -161,6 +161,10 @@ struct Options {
   // Formatting marks drawn over the text (Ctrl+Shift+8): paragraph marks, spaces, tabs and breaks.
   // Hidden text is shown with them, so set showHiddenText too.
   bool formattingMarks = false;
+  // The moment DATE and TIME fields show, as Word updates them when it opens a document: a FILETIME
+  // (100-nanosecond ticks since 1601, UTC), shown in local time. 0 keeps the results the file holds
+  // (the tools' layouts, which must not depend on the day).
+  int64_t now = 0;
 };
 
 // Which lines Layout::HitTest picks from: all, the body's (with notes, cells and text boxes), or
@@ -173,6 +177,11 @@ enum class HitStories : uint8_t { All, Body, HeaderFooter };
 // Word's renders of the corpus). Empty when the table says nothing useful, or for families fwtext's
 // own table knows (Aptos, Helvetica...). For text::Fonts' SubstituteFn.
 std::wstring SubstituteFamily(const Document& doc, std::wstring_view family);
+
+// What a DATE or TIME field (its instruction, `code`) shows at `now` (as Options::now): by its \@
+// picture, as Word reads one, in the language `lang` (BCP 47; the user's when empty or unknown).
+// Empty for other fields, or when `now` is 0.
+std::u16string DateFieldResult(std::u16string_view code, int64_t now, std::string_view lang);
 
 // Draws a drawing into its box with the painter. fwdraw provides it (plan §4.5); without one,
 // Paint() draws a light frame where the drawing goes.
