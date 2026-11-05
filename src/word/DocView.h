@@ -9,7 +9,9 @@
 
 #include "PagedView.h"
 #include "doc/layout/Layout.h"
+#include "draw/Drawing.h"
 #include "doc/model/Document.h"
+#include "pkg/XmlDom.h"
 #include "text/Fonts.h"
 
 // A Word document in a tab, read-only (plan milestone D1): the model, laid out page by page by
@@ -109,6 +111,8 @@ class DocView : public PagedView {
   void ShowNotices();
   void DrawPage(gfx::Canvas& c, ID2D1DeviceContext* dc, int page, bool inverted);
   void DrawRanges(gfx::Canvas& c, int first, int last);
+  // Draws a picture, shape or text box frame with fwdraw, made from the model's XML on first use.
+  void DrawDrawing(draw::Painter& painter, const fw::doc::layout::DrawingBox& box);
 
   std::optional<TextPos> PosAt(int x, int y, bool nearest) const;
   Hit HitAt(int x, int y);
@@ -125,6 +129,19 @@ class DocView : public PagedView {
   std::unique_ptr<fw::doc::layout::Layout> pagination_;
   std::vector<fw::PageSizePt> sizes_;
   bool placeholder_ = false;  // nothing is laid out: one empty page
+
+  // Drawings, by index into Document::Drawings(), made when first shown. The pictures are shared
+  // and read from the package, which the document keeps.
+  struct DrawingSlot {
+    bool tried = false;
+    std::unique_ptr<fw::pkg::XmlDom> xml;
+    std::unique_ptr<draw::PackageResources> resources;
+    std::unique_ptr<draw::Drawing> drawing;
+  };
+  std::vector<DrawingSlot> drawings_;
+  std::shared_ptr<const draw::Theme> theme_;
+  draw::ColorMap colorMap_;
+  std::shared_ptr<draw::ImageCache> images_;
   uint32_t revision_ = 0;
   bool noticesShown_ = false;
   size_t words_ = 0;

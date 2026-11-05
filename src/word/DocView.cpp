@@ -140,6 +140,8 @@ std::wstring OpenError(const std::wstring& name, const fw::pkg::Status& st) {
 DocView::DocView(ViewHost& host, std::wstring path) : PagedView(host), path_(std::move(path)) {}
 
 DocView::~DocView() {
+  drawings_.clear();  // pictures read from the document's package
+  images_.reset();
   pagination_.reset();
   fonts_.reset();
   doc_.reset();
@@ -193,6 +195,12 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     auto it = alternatives.find(fw::ToLower(std::wstring(family)));
     return it != alternatives.end() ? it->second : std::wstring();
   });
+  drawings_.resize(doc_->Drawings().size());
+  images_ = std::make_shared<draw::ImageCache>();
+  if (const fw::doc::Part* main = doc_->FindPart(fw::doc::PartKind::Document)) {
+    theme_ = draw::PackageResources::FindTheme(doc_->Package(), main->name);
+    colorMap_ = draw::PackageResources::FindColorMap(doc_->Package(), main->name);
+  }
   pagination_ = std::make_unique<layout::Layout>(*doc_, *fonts_);
   pagination_->LayOutPages(1);
   revision_ = pagination_->Revision();
@@ -346,14 +354,14 @@ void DocView::ShowNotices() {
     text = (subs.size() == 1 ? L"A font in this document isn't installed: " : L"Fonts in this document aren't installed: ") +
            list + L". Lines may break differently than in Word.";
   }
-  bool equations = false, objects = false;
+  bool equations = false, ink = false;
   for (const auto& d : doc_->Drawings()) {
     equations |= d.kind == fw::doc::DrawingKind::Equation;
-    objects |= d.kind == fw::doc::DrawingKind::Object || d.kind == fw::doc::DrawingKind::ContentPart;
+    ink |= d.kind == fw::doc::DrawingKind::ContentPart;
   }
   std::wstring missing;
   if (equations) missing = L"Equations";
-  if (objects) missing += missing.empty() ? L"Embedded objects" : L" and embedded objects";
+  if (ink) missing += missing.empty() ? L"Ink drawings" : L" and ink drawings";
   if (!missing.empty()) {
     if (!text.empty()) text += L" ";
     text += missing + L" aren't shown yet.";
@@ -426,14 +434,53 @@ void DocView::DrawPage(Canvas& c, ID2D1DeviceContext* dc, int page, bool inverte
   {
     draw::D2DPainter painter(dc);
     painter.Transform(PageToScreen(page));
+    auto drawing = [this](draw::Painter& p, const layout::DrawingBox& box) { DrawDrawing(p, box); };
     if (inverted) {
       InvertingPainter dark(painter);
-      pagination_->Paint(dark, page);
+      pagination_->Paint(dark, page, drawing);
     } else {
-      pagination_->Paint(painter, page);
+      pagination_->Paint(painter, page, drawing);
     }
   }
   c.PopClip();
+}
+
+void DocView::DrawDrawing(draw::Painter& painter, const layout::DrawingBox& box) {
+  if (box.drawing >= drawings_.size()) return;
+  DrawingSlot& slot = drawings_[box.drawing];
+  const fw::doc::Drawing& d = doc_->Drawings()[box.drawing];
+  if (!slot.tried) {
+    slot.tried = true;
+    // The model gives what is inside the w:drawing, w:pict or w:object; wrap it back in one, so
+    // fwdraw sees VML shapes beside their shape types.
+    const char* wrapper = d.kind == fw::doc::DrawingKind::DrawingML ? "w:drawing"
+                          : d.kind == fw::doc::DrawingKind::Vml     ? "w:pict"
+                          : d.kind == fw::doc::DrawingKind::Object  ? "w:object"
+                                                                    : nullptr;
+    if (wrapper && d.part < doc_->Parts().size()) {
+      std::string xml = std::string("<") + wrapper +
+                        " xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
+                        doc_->DrawingXml(d) + "</" + wrapper + ">";
+      slot.xml = std::make_unique<fw::pkg::XmlDom>();
+      if (slot.xml->Parse(xml).Ok()) {
+        slot.resources = std::make_unique<draw::PackageResources>(doc_->Package(), doc_->Parts()[d.part].name, theme_,
+                                                                   colorMap_, images_);
+        slot.drawing = d.kind == fw::doc::DrawingKind::DrawingML
+                           ? draw::Drawing::FromWordDrawing(slot.xml->Root(), *slot.resources)
+                           : draw::Drawing::FromVml(slot.xml->Root(), *slot.resources);
+      }
+    }
+  }
+  const draw::Rect frame{box.rect.left, box.rect.top, box.rect.right, box.rect.bottom};
+  if (slot.drawing) {
+    if (!slot.drawing->IsHidden()) slot.drawing->Draw(painter, frame);
+    return;
+  }
+  // Not something fwdraw draws (an equation, ink): a light frame where it goes.
+  draw::Pen pen;
+  pen.brush = draw::Brush::Solid({0.75f, 0.75f, 0.75f, 1});
+  pen.width = 0.75f;
+  painter.StrokePath(draw::Path::FromRect(frame), pen);
 }
 
 void DocView::DrawRanges(Canvas& c, int first, int last) {
