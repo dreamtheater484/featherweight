@@ -141,7 +141,9 @@ class Engine {
     RowProps props;
     std::vector<CellBox> cells;
     float height = 0;
+    float grown = 0;  // of the height: what merged cells ending in it added
     bool header = false;
+    bool breakBefore = false;  // its first cell starts with a paragraph that has w:pageBreakBefore
   };
   struct TableBox {
     Node tbl;
@@ -154,8 +156,15 @@ class Engine {
   TableBox MeasureTable(Node tbl, const Frame& frame);
   // Places row `r` at `top` (frame coordinates), `height` tall, into `out`. A row split across
   // pages shows each cell's content from cutFrom[i] to cutTo[i] (null: from the top, to the end).
+  // With `spans` false, the text of cells merged with the rows below is left to the caller.
   void EmitRow(const TableBox& t, size_t r, float x, float top, float height, const std::vector<float>* cutFrom,
-               const std::vector<float>* cutTo, Stack& out, bool firstOnPage, bool lastOnPage);
+               const std::vector<float>* cutTo, Stack& out, bool firstOnPage, bool lastOnPage, bool spans = true);
+  // A cell's content from `from` to `to` (content coordinates), its part starting at `top` in a
+  // table at `x`; `clip` (optional) where its lines may be drawn.
+  static void EmitCell(const CellBox& c, float x, float top, float from, float to, float vshift, const Rect* clip,
+                       Stack& out);
+  // How far a cell's content moves down for its vertical alignment, in `room`.
+  static float VShift(const CellBox& c, float room);
 
  private:
   struct Impl;

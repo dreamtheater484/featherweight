@@ -55,6 +55,16 @@ struct Engine::Impl {
   size_t row = 0;
   std::vector<float> rowCut;  // the current row's cells, content already shown (a split row)
   float tableX = 0;
+  // Vertically merged cells whose rows are being placed: their text runs on through the rows they
+  // span, and on the next page when those rows do.
+  struct Span {
+    size_t row = 0, cell = 0;  // the restart cell
+    size_t last = 0;           // the last row it spans
+    float shown = 0;           // its content placed on earlier pages
+    float top = -1;            // where its part on this page starts; < 0: not on this page yet
+    size_t at = 0;             // where its lines go in the page's, in reading order
+  };
+  std::vector<Span> spans;
 
   // The page being laid out.
   bool havePage = false;
@@ -187,6 +197,7 @@ struct Flow {
   using TableBox = Engine::TableBox;
   using RowBox = Engine::RowBox;
   using CellBox = Engine::CellBox;
+  using Span = Engine::Impl::Span;
 
   const SectionProps& Props(uint32_t s) const {
     static const SectionProps none;
@@ -792,12 +803,97 @@ struct Flow {
     return Step::PageFull;
   }
 
+  // What a merged cell's text still needs below where its part on this page starts.
+  float SpanNeed(const Span& s) const {
+    const CellBox& c = f.table->rows[s.row].cells[s.cell];
+    return c.content.height - s.shown + c.marginTop + c.marginBottom;
+  }
+
+  // Places the text of a merged cell's part on this page: what fits above `bottom`, or with
+  // `bottom` < 0 all the rest, its rows having ended at f.y.
+  void FlushSpan(Span& s, float x, float bottom) {
+    if (s.top < 0) return;
+    const CellBox& c = f.table->rows[s.row].cells[s.cell];
+    float to = 1e30f, vshift = 0;
+    if (bottom >= 0) {
+      const float limit = s.shown + (bottom - s.top) - c.marginTop - c.marginBottom;
+      to = s.shown;
+      for (const LineBox& l : c.content.lines)
+        if (l.top >= s.shown - kEpsilon && l.top + l.height <= limit + kEpsilon) to = std::max(to, l.top + l.height);
+      to = KeepTogether(c.content, s.shown, to);
+    } else if (s.shown <= 0) {
+      vshift = Engine::VShift(c, f.y - s.top - c.marginTop - c.marginBottom);
+    }
+    // Its lines go where the row's cells to its left end, in reading order.
+    const size_t old = f.body.lines.size();
+    Engine::EmitCell(c, x, s.top, s.shown, to, vshift, nullptr, f.body);
+    const size_t added = f.body.lines.size() - old;
+    const size_t at = std::min(s.at, old);
+    std::rotate(f.body.lines.begin() + static_cast<std::ptrdiff_t>(at), f.body.lines.begin() + static_cast<std::ptrdiff_t>(old),
+                f.body.lines.end());
+    for (Span& other : f.spans)
+      if (&other != &s && other.top >= 0 &&
+          (other.at > at || (other.at == at && f.table->rows[other.row].cells[other.cell].x > c.x)))
+        other.at += added;
+    s.shown = to;
+    s.top = -1;
+  }
+
+  // Where a merged cell's lines go among those of the row that starts its part on this page: after
+  // the row's cells to its left, which EmitRow placed from line `rowStart` on.
+  size_t SpanAt(const Span& s, float x, size_t rowStart) const {
+    const float left = x + f.table->rows[s.row].cells[s.cell].x - 0.5f;
+    size_t at = rowStart;
+    while (at < f.body.lines.size() && f.body.lines[at].x < left) ++at;
+    return at;
+  }
+
+  // Row f.row, placed at `top` from line `rowStart` on: merged cells already open start their
+  // part on this page there, and on its first part, the merged cells that start in it open.
+  void StartSpans(float x, float top, size_t rowStart, bool firstPart) {
+    for (Span& s : f.spans)
+      if (s.top < 0) {
+        s.top = top;
+        s.at = SpanAt(s, x, rowStart);
+      }
+    if (!firstPart) return;
+    const TableBox& t = *f.table;
+    const RowBox& row = t.rows[f.row];
+    for (size_t i = 0; i < row.cells.size(); ++i) {
+      const CellBox& c = row.cells[i];
+      if (c.continued || c.rowSpan <= 1) continue;
+      Span s{f.row, i, std::min(t.rows.size() - 1, f.row + static_cast<size_t>(c.rowSpan) - 1), 0, top};
+      s.at = SpanAt(s, x, rowStart);
+      f.spans.push_back(s);
+    }
+  }
+
+  // Row f.row placed, whole or its last part, from `top` to f.y and from line `rowStart` on:
+  // merged cells start in it, and those that end in it place the rest of their text.
+  void RowPlaced(float x, float top, size_t rowStart, bool firstPart) {
+    StartSpans(x, top, rowStart, firstPart);
+    for (size_t k = 0; k < f.spans.size();) {
+      if (f.spans[k].last <= f.row) {
+        FlushSpan(f.spans[k], x, -1);
+        f.spans.erase(f.spans.begin() + static_cast<std::ptrdiff_t>(k));
+      } else {
+        ++k;
+      }
+    }
+  }
+
+  // The page or column ends inside the table: merged cells place what fits of their text above f.y.
+  void FlushSpans(float x) {
+    for (Span& s : f.spans) FlushSpan(s, x, f.y);
+  }
+
   Step Table(const Item& item) {
     Frame frame = BodyFrame();
     if (!f.table) {
       f.table = std::make_unique<TableBox>(e.MeasureTable(item.node, frame));
       f.row = 0;
       f.rowCut.clear();
+      f.spans.clear();
       // The space after the paragraph before it (and its bottom border) stay above the table.
       f.y += f.spacing.after + e.BorderBelow(f.spacing);
       f.spacing = Spacing();
@@ -822,17 +918,29 @@ struct Flow {
         ++f.row;
         continue;
       }
-      float h = row.height;
-      if (!f.rowCut.empty()) {
+      const bool firstPart = f.rowCut.empty();
+      // A row whose first paragraph has a page break before starts a page, as that paragraph
+      // would outside a table (measured on the corpus: Word does it for the row's first cell).
+      if (firstPart && row.breakBefore && !f.pageEmpty) {
+        FlushSpans(x);
+        f.nextHard = true;
+        return Step::PageFull;
+      }
+      float h = row.height - row.grown;
+      if (!firstPart) {
         // The rest of a split row: its tallest remaining cell.
         h = 0;
         for (size_t i = 0; i < row.cells.size(); ++i) {
           const CellBox& c = row.cells[i];
-          if (c.continued) continue;
+          if (c.continued || c.rowSpan > 1) continue;
           h = std::max(h, c.content.height - f.rowCut[i] + c.marginTop + c.marginBottom);
         }
         if (row.props.heightRule == "exact") h = std::max(0.0f, row.height - f.rowCut.front());
       }
+      // Merged cells that end in this row make it tall enough for the rest of their text.
+      if (row.props.heightRule != "exact")
+        for (const Span& s : f.spans)
+          if (s.last == f.row) h = std::max(h, SpanNeed(s) - (s.top >= 0 ? f.y - s.top : 0.0f));
       const bool last = f.row + 1 == t.rows.size();
       const std::vector<float>* from = f.rowCut.empty() ? nullptr : &f.rowCut;
       std::vector<uint32_t> notes;
@@ -843,8 +951,11 @@ struct Flow {
       };
       if (f.y + h <= Bottom() - notesH + kEpsilon || ((f.columnEmpty || fresh) && (row.props.cantSplit || h <= 0))) {
         takeNotes();
-        e.EmitRow(t, f.row, x, f.y, h, f.rowCut.empty() ? nullptr : &f.rowCut, nullptr, f.body, firstOnPage, last);
+        const size_t rowStart = f.body.lines.size();
+        e.EmitRow(t, f.row, x, f.y, h, f.rowCut.empty() ? nullptr : &f.rowCut, nullptr, f.body, firstOnPage, last, false);
+        const float rowTop = f.y;
         f.y += h;
+        RowPlaced(x, rowTop, rowStart, firstPart);
         f.columnEmpty = false;
         f.pageEmpty = false;
         firstOnPage = false;
@@ -864,7 +975,7 @@ struct Flow {
         bool starved = false;
         for (size_t i = 0; i < row.cells.size(); ++i) {
           const CellBox& c = row.cells[i];
-          if (c.continued) continue;
+          if (c.continued || c.rowSpan > 1) continue;
           float start = f.rowCut.empty() ? 0 : f.rowCut[i];
           float limit = start + room - c.marginTop - c.marginBottom;
           float to = start;
@@ -881,6 +992,9 @@ struct Flow {
         }
         // Word splits a row only where every cell with text left keeps some of it on this page.
         if (starved) any = false;
+        // Merged cells ending in this row whose text doesn't all fit go on too.
+        for (const Span& s : f.spans)
+          if (s.last == f.row && SpanNeed(s) > (s.top >= 0 ? f.y - s.top : 0.0f) + room + kEpsilon) allDone = false;
       };
       if (!row.props.cantSplit || f.columnEmpty || fresh) {
         cut();
@@ -896,8 +1010,11 @@ struct Flow {
           // Taller than a page and nothing splits: it goes here anyway.
           notesH = RowNotes(row, from, nullptr, notes);
           takeNotes();
-          e.EmitRow(t, f.row, x, f.y, h, f.rowCut.empty() ? nullptr : &f.rowCut, nullptr, f.body, firstOnPage, last);
+          const size_t rowStart = f.body.lines.size();
+          e.EmitRow(t, f.row, x, f.y, h, f.rowCut.empty() ? nullptr : &f.rowCut, nullptr, f.body, firstOnPage, last, false);
+          const float rowTop = f.y;
           f.y += h;
+          RowPlaced(x, rowTop, rowStart, firstPart);
           f.columnEmpty = false;
           f.pageEmpty = false;
           f.rowCut.clear();
@@ -905,16 +1022,24 @@ struct Flow {
           continue;
         }
         if (f.row == 0 && f.rowCut.empty() && BreakChain()) return NextColumn() ? Step::Continue : Step::PageFull;
+        FlushSpans(x);
         return NextColumn() ? Step::Continue : Step::PageFull;
       }
       takeNotes();
-      e.EmitRow(t, f.row, x, f.y, room, f.rowCut.empty() ? nullptr : &f.rowCut, &cutTo, f.body, firstOnPage, true);
+      const size_t rowStart = f.body.lines.size();
+      e.EmitRow(t, f.row, x, f.y, room, f.rowCut.empty() ? nullptr : &f.rowCut, &cutTo, f.body, firstOnPage, true, false);
+      // The row's merged cells start here; with the others, they place what fits on this page.
+      StartSpans(x, f.y, rowStart, firstPart);
       f.y += room;
+      FlushSpans(x);
       f.columnEmpty = false;
       f.pageEmpty = false;
       f.rowCut = cutTo;
       return NextColumn() ? Step::Continue : Step::PageFull;
     }
+    // Rows a merged cell claims to span that the table doesn't have.
+    for (Span& s : f.spans) FlushSpan(s, x, -1);
+    f.spans.clear();
     f.table.reset();
     ++f.next;
     f.spacing = Spacing();
