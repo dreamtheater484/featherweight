@@ -13,6 +13,7 @@
 
 #include "PkgTestUtil.h"
 #include "doc/docx/Docx.h"
+#include "doc/edit/Clip.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/Page.h"
 #include "doc/layout/Layout.h"
@@ -656,4 +657,64 @@ TEST(Layout_TypingLaysOutAPageOrTwo) {
   CHECK_EQ(hit->para, line->para);
   d.layout->LayOutAll();
   CHECK(SameAsFresh(*d.doc, *d.layout, "after Enter"));
+}
+
+TEST(Layout_TableEditsLayOutAgainAsFromScratch) {
+  // Table editing (D3) on a table that runs over several small pages, between paragraphs: each
+  // change of shape is laid out again as a fresh layout lays it out, a bit at a time or at once.
+  std::string rows;
+  for (int i = 0; i < 12; ++i)
+    rows += std::string("<w:tr>") + (i == 0 ? "<w:trPr><w:tblHeader/></w:trPr>" : "") + "<w:tc>" + P("Cell " + std::to_string(i)) +
+            "</w:tc><w:tc>" + P(Words(i % 5 + 1)) + "</w:tc><w:tc>" + P(Words(2)) + "</w:tc></w:tr>";
+  const std::string table = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1000\"/>"
+                            "<w:gridCol w:w=\"1000\"/><w:gridCol w:w=\"1000\"/></w:tblGrid>" + rows + "</w:tbl>";
+  std::string body;
+  for (int i = 0; i < 8; ++i) body += P(Words(i * 3 + 2));
+  body += table;
+  for (int i = 0; i < 8; ++i) body += P(Words(i * 2 + 1));
+  Doc d = Make(body + SmallPage());
+  REQUIRE(d.layout);
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  auto cell = [&](size_t r, size_t c) {
+    Node tbl;
+    for (const Block& b : d.doc->Blocks(d.doc->MainStory()))
+      if (b.kind == BlockKind::Table) tbl = b.node;
+    Node tc = d.doc->RowCells(d.doc->TableRows(tbl)[r])[c];
+    return Pos{d.doc->Blocks(tc).front().para, 0};
+  };
+  int step = 0;
+  auto check = [&](bool ok, const char* what) {
+    REQUIRE(ok);
+    if (step++ % 2) d.layout->LayOutPages(2);
+    d.layout->LayOutAll();
+    REQUIRE(SameAsFresh(*d.doc, *d.layout, what));
+  };
+  check(bool(ed.InsertRows(cell(3, 1), cell(4, 1), true)), "rows inserted");
+  check(bool(ed.InsertColumns(cell(2, 0), cell(2, 0), true)), "a column inserted");
+  check(bool(ed.MergeCells(cell(5, 0), cell(7, 1))), "cells merged");
+  check(bool(ed.SplitCell(cell(1, 2), 2, 2)), "a cell split");
+  check(bool(ed.SetColumnWidth(cell(0, 0), cell(0, 0), 600)), "a column narrowed");
+  check(bool(ed.DeleteRows(cell(9, 0), cell(10, 0))), "rows deleted");
+  check(bool(ed.DeleteColumns(cell(0, 1), cell(0, 1))), "a column deleted");
+  check(bool(ed.SetRowHeight(cell(2, 0), cell(2, 0), 900, "exact")), "a row's height");
+  check(bool(ed.SetRowProps(cell(0, 0), cell(1, 0), edit::PropEdit().Set("tblHeader"))), "two header rows");
+  check(bool(ed.SetRowProps(cell(0, 0), cell(1, 0), edit::PropEdit().Remove("tblHeader"))), "no header row");
+  check(bool(ed.SetCellBorders(cell(1, 0), cell(3, 1), edit::Editor::CellBorders::All, "single", 12)), "borders");
+  check(bool(ed.SetCellProps(cell(4, 0), cell(4, 0), edit::PropEdit().Set("shd", {{"val", "clear"}, {"fill", "FFFF00"}}))),
+        "shading");
+  check(bool(ed.SetTableProps(cell(0, 0), edit::PropEdit().Set("jc", {{"val", "center"}}))), "centered");
+  check(bool(ed.AutoFit(cell(0, 0), edit::Editor::Fit::Window)), "fitted to the window");
+  {
+    // Copy and paste: cells over cells, and a new table in the text before.
+    auto clip = edit::CopyCells(ed, cell(1, 0), cell(2, 1));
+    REQUIRE(clip);
+    check(bool(edit::PasteClip(ed, cell(6, 0), cell(6, 0), *clip)), "cells pasted over cells");
+    check(bool(edit::PasteClip(ed, Pos{1, 2}, Pos{1, 2}, *clip)), "a table pasted");
+    check(bool(ed.Undo()), "the pasted table undone");
+  }
+  check(bool(ed.InsertTable(Pos{0, 3}, 3, 2)), "a table inserted");
+  check(bool(ed.Undo()) && bool(ed.Undo()) && bool(ed.Undo()), "undone");
+  check(bool(ed.Redo()), "redone");
+  check(bool(ed.DeleteTable(cell(0, 0))), "the table deleted");
 }

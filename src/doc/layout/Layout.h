@@ -148,7 +148,14 @@ struct Page {
 
 struct Options {
   bool showHiddenText = false;  // w:vanish text laid out and drawn (formatting marks shown)
+  // Formatting marks drawn over the text (Ctrl+Shift+8): paragraph marks, spaces, tabs and breaks.
+  // Hidden text is shown with them, so set showHiddenText too.
+  bool formattingMarks = false;
 };
+
+// Which lines Layout::HitTest picks from: all, the body's (with notes, cells and text boxes), or
+// the headers' and footers' (for editing them in place).
+enum class HitStories : uint8_t { All, Body, HeaderFooter };
 
 // The family Word draws for one a document names but the PC doesn't have, from the document's font
 // table: fixed pitch is Courier New; a sans-serif panose number or the "swiss" family is Arial; a
@@ -198,17 +205,19 @@ class Layout {
   // ---- Selection and find. Positions on pages not laid out yet are laid out first.
   // The text position nearest to (x, y) on a page: the line under or nearest the point, then the
   // nearest caret stop on it. nullopt on a page without text.
-  std::optional<TextPos> HitTest(size_t page, float x, float y) const;
+  std::optional<TextPos> HitTest(size_t page, float x, float y, HitStories which = HitStories::All) const;
   struct Caret {
     size_t page = 0;
     float x = 0, top = 0, bottom = 0;
   };
   // Where the caret before `pos` is drawn; nullopt for text that isn't shown (hidden, or in a story
-  // not on any page, such as an unused header or a comment).
-  std::optional<Caret> CaretAt(TextPos pos);
+  // not on any page, such as an unused header or a comment). A header or footer is on many pages:
+  // `page` says which one to show it on (the first it's on, when it isn't there).
+  std::optional<Caret> CaretAt(TextPos pos, size_t page = SIZE_MAX);
   // The rectangles that [from, to) covers, page by page, for the selection and find highlights.
-  // Both positions are in one story; table cells are covered in reading order.
-  std::vector<std::pair<size_t, Rect>> Ranges(TextPos from, TextPos to);
+  // Both positions are in one story; table cells are covered in reading order. For a header or
+  // footer, `page` names the page (else the first it's on).
+  std::vector<std::pair<size_t, Rect>> Ranges(TextPos from, TextPos to, size_t page = SIZE_MAX);
   // The page `pos` is on (the first, for a story repeated on many pages, such as a header).
   std::optional<size_t> PageOf(TextPos pos);
   // The line `pos` is on: its page, its box, and where Home and End take the caret (the end of a

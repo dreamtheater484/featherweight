@@ -82,6 +82,8 @@ class App : public PdfHost, public DropHost {
   void OnDragEnter(bool acceptable) override;
   void OnDragLeave() override;
   void OnDropFiles(const std::vector<std::wstring>& files) override;
+  bool TakesPictures(const std::vector<std::wstring>& files) override;
+  void OnDropPictures(const std::vector<std::wstring>& files, POINT pt) override;
 
  private:
   enum class Region { None, Title, Toolbar, Search, Banner, Note, Doc, Panel, Status, Commands };

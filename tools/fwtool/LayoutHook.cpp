@@ -13,6 +13,7 @@
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/Lists.h"
+#include "doc/edit/Page.h"
 #include "doc/edit/Styles.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/layout/Layout.h"
@@ -326,7 +327,10 @@ void RandomEdit(fw::doc::edit::Editor& ed, const fw::doc::Document& doc, std::mt
   static const char16_t* const kTexts[] = {u"x", u" ", u"word ", u"a few more words to wrap ",
                                            u"a long run of text, long enough to take a line or two by itself and push "
                                            u"what follows down the page, and then some more of it "};
-  switch (rng() % 10) {
+  namespace edit = fw::doc::edit;
+  const uint32_t section = edit::SectionOf(doc, para), sections = static_cast<uint32_t>(doc.Sections().size());
+  auto twips = [&](int32_t from, int32_t span) { return fw::Twips(from + static_cast<int32_t>(rng() % static_cast<uint32_t>(span))); };
+  switch (rng() % 13) {
     case 0: case 1: case 2: case 3: ed.InsertText(at, kTexts[rng() % 5]); break;
     case 4: case 5: {
       const uint32_t to = std::min(len, at.offset + 1 + static_cast<uint32_t>(rng() % 60));
@@ -336,13 +340,50 @@ void RandomEdit(fw::doc::edit::Editor& ed, const fw::doc::Document& doc, std::mt
     case 6: ed.SplitParagraph(at); break;
     case 7: ed.JoinParagraphs(para); break;
     case 8: ed.InsertText(at, u"\r"); break;
-    default: {
+    case 9: {
       fw::doc::edit::PropEdit p;
       if (rng() % 2) p.Set("keepNext");
       else p.Remove("keepNext");
       ed.SetParaProps(para, para, p);
       break;
     }
+    case 10: {  // page setup (D3): the paragraph's section, or the whole document
+      const bool all = rng() % 4 == 0;
+      edit::PageSetup p;
+      switch (rng() % 4) {
+        case 0: p.landscape = rng() % 2 == 0; break;
+        case 1: p.left = twips(720, 1440); p.right = twips(720, 1440); break;
+        case 2: p.top = twips(720, 1440); p.bottom = twips(720, 1440); break;
+        default: p.width = twips(10000, 6000); break;
+      }
+      edit::SetPageSetup(ed, all ? 0 : section, all ? sections - 1 : section, p);
+      break;
+    }
+    case 11:
+      switch (rng() % 3) {
+        case 0: {
+          edit::ColumnSetup c;
+          c.count = 1 + static_cast<int32_t>(rng() % 3);
+          c.line = rng() % 2 == 0;
+          edit::SetColumns(ed, section, section, c);
+          break;
+        }
+        case 1: edit::SetSectionStart(ed, section, static_cast<fw::doc::SectionStart>(rng() % 4)); break;
+        default: {
+          edit::Hyphenation h;
+          h.automatic = rng() % 2 == 0;
+          edit::SetHyphenation(ed, h);
+          break;
+        }
+      }
+      break;
+    default:
+      switch (rng() % 3) {
+        case 0: edit::InsertSectionBreak(ed, at, static_cast<fw::doc::SectionStart>(rng() % 4)); break;
+        case 1: if (sections > 1) edit::DeleteSectionBreak(ed, static_cast<uint32_t>(rng() % (sections - 1))); break;
+        default: edit::InsertBreak(ed, at, rng() % 2 == 0); break;
+      }
+      break;
   }
 }
 

@@ -187,6 +187,13 @@ class TabContent {
   // Adds the tab's own UI Automation elements under `parent`, the pane that holds the tab.
   virtual void DescribeUia(uia::Tree& /*t*/, int /*parent*/) {}
 
+  // ---- Pictures dragged over the window
+  // Whether the tab adds these files where they're dropped (a Word document being edited takes
+  // pictures), rather than the window opening them.
+  virtual bool TakesPictures(const std::vector<std::wstring>& /*files*/) const { return false; }
+  // Adds them at (x, y), client pixels.
+  virtual void DropPictures(const std::vector<std::wstring>& /*files*/, int /*x*/, int /*y*/) {}
+
   // ---- What kind of content ----
   // Content shown as pages (page box, zoom, page layout, presenting), or null.
   virtual PagedView* Paged() { return nullptr; }

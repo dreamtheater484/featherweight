@@ -8,6 +8,7 @@
 #include <cstring>
 #include <map>
 
+#include "doc/edit/ClipTable.h"
 #include "doc/model/Utf.h"
 
 namespace fw::doc::edit {
@@ -15,6 +16,17 @@ namespace {
 
 // ---------------------------------------------------------------------------
 // Small helpers
+
+// Pasted RTF and HTML are untrusted. Beyond these the readers give nothing, and pasting takes the
+// clipboard's plain text instead. Formatting costs the editor a step a run: 10,000 paragraphs of
+// 40,000 runs, each with a look of its own, take about 4 s to paste (plain text: under 1 s).
+constexpr size_t kMaxInput = 64u << 20;                                       // bytes
+constexpr size_t kMaxParas = 10000, kMaxRuns = 40000, kMaxText = 8u << 20;  // text in UTF-16 units
+constexpr size_t kMaxGroups = 4u << 20;  // RTF groups and HTML elements opened
+// Longer names and addresses are left out.
+constexpr size_t kMaxName = 63;     // a font's name in UTF-8 (Word's have at most 31 characters)
+constexpr size_t kMaxLink = 2048;   // a link's address
+constexpr size_t kMaxEntries = 4096;  // fonts, colors and styles in RTF's tables
 
 // Characters in paragraph text that aren't shown (field marks, note and annotation marks,
 // drawings, soft hyphens), and page and column breaks, which copying leaves out.
@@ -88,26 +100,52 @@ ClipRun LookOf(const RunProps& r) {
 bool Automatic(const std::optional<uint32_t>& c) { return !c || (*c & 0xFFFFFF) == 0; }
 bool Automatic(const Color& c) { return c.automatic || (c.rgb & 0xFFFFFF) == 0; }
 
-// The text as pasting inserts it: no paragraph breaks or other control characters inside a run.
+// The text as pasting inserts it: no paragraph breaks or other control characters inside a run, and
+// only characters XML can hold (U+FFFE and U+FFFF dropped, a lone surrogate made U+FFFD).
 std::u16string Clean(std::u16string_view s) {
   std::u16string out;
   out.reserve(s.size());
-  for (char16_t c : s) {
+  for (size_t i = 0; i < s.size(); ++i) {
+    char16_t c = s[i];
     if (c == u'\r' || c == u'\n') c = u' ';
-    if (c < 0x20 && c != u'\t' && c != 0x0B) continue;
+    if ((c < 0x20 && c != u'\t' && c != 0x0B) || c == 0xFFFE || c == 0xFFFF) continue;
+    if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.size() && s[i + 1] >= 0xDC00 && s[i + 1] <= 0xDFFF) {
+      out += c;
+      c = s[++i];
+    } else if (c >= 0xD800 && c <= 0xDFFF) {
+      c = 0xFFFD;
+    }
     out += c;
   }
   return out;
 }
 
+// A name or address from the clipboard as a document's XML can hold it: valid UTF-8 without control
+// characters, at most `max` bytes (cut between characters), trimmed.
+std::string Tidy(std::string_view s, size_t max) {
+  std::u16string text, kept;
+  AppendUtf16(text, s.substr(0, 4 * max));
+  for (char16_t c : text)
+    if (c >= 0x20 && c != 0x7F && c != 0xFFFE && c != 0xFFFF) kept += c;
+  std::string out = ToUtf8(kept);  // a lone surrogate becomes U+FFFD
+  if (out.size() > max) {
+    size_t n = max;
+    while (n > 0 && (static_cast<uint8_t>(out[n]) & 0xC0) == 0x80) --n;
+    out.resize(n);
+  }
+  return std::string(TrimView(out));
+}
+
 // A link worth keeping from the clipboard: a web address (http, https, mailto, ftp) or, from
-// Featherweight's own copies, "#bookmark". Anything else (javascript:, file:, data:) is dropped.
+// Featherweight's own copies, "#bookmark". Anything else (javascript:, file:, data:) is dropped, as
+// is an address longer than kMaxLink.
 std::string SafeLink(std::string_view href, bool anchors) {
   href = TrimView(href);
+  if (href.size() > kMaxLink) return {};
   const std::string low = LowerAscii(href.substr(0, 8));
   for (const char* scheme : {"http://", "https://", "mailto:", "ftp://"})
-    if (low.rfind(scheme, 0) == 0 && href.size() > std::strlen(scheme)) return std::string(href);
-  if (anchors && href.size() > 1 && href[0] == '#') return std::string(href);
+    if (low.rfind(scheme, 0) == 0 && href.size() > std::strlen(scheme)) return Tidy(href, kMaxLink);
+  if (anchors && href.size() > 1 && href[0] == '#') return Tidy(href, kMaxLink);
   return {};
 }
 bool WebLink(std::string_view link) { return !link.empty() && link[0] != '#'; }
@@ -154,9 +192,20 @@ bool LooksRight(const RunProps& r, const ClipRun& want, std::string_view charSty
   return r.charStyle == charStyle;
 }
 
+// A run's look, without its text or link.
+ClipRun LookOnly(const ClipRun& run) {
+  ClipRun look;
+  look.bold = run.bold, look.italic = run.italic, look.underline = run.underline, look.strike = run.strike;
+  look.vertAlign = run.vertAlign, look.halfPoints = run.halfPoints, look.color = run.color, look.font = run.font;
+  look.charStyle = run.charStyle;
+  return look;
+}
+
 // Gives the text in [from, to) (one paragraph) the run's look, setting only what differs from
-// what its paragraph and character styles give it.
-Result FormatRun(Editor& ed, Pos from, Pos to, const ClipRun& want) {
+// what its paragraph and character styles give it. Sizes are kept to what Word takes (1 to 1638 pt).
+Result FormatRun(Editor& ed, Pos from, Pos to, const ClipRun& run) {
+  ClipRun want = LookOnly(run);
+  if (want.halfPoints > 0) want.halfPoints = std::clamp(want.halfPoints, 2, 3276);
   const Document& doc = ed.Doc();
   const std::string charStyle = CharStyleFor(doc, want);
   auto over = [&](auto&& fn) {
@@ -216,15 +265,21 @@ Result FormatRun(Editor& ed, Pos from, Pos to, const ClipRun& want) {
 }
 
 // Gives a pasted paragraph the clip paragraph's style, alignment, indents, spacing and list.
+// Indents and spacing are kept to what Word takes (22 inches either way; spacing never negative).
 Result FormatPara(Editor& ed, uint32_t para, const ClipPara& cp, bool numbered) {
   const Document& doc = ed.Doc();
   const std::string style = ParaStyleFor(doc, cp);
+  auto twips = [](const std::optional<int32_t>& v, int32_t low) {
+    return v ? std::optional<int32_t>(std::clamp(*v, low, 31680)) : std::nullopt;
+  };
+  const std::optional<int32_t> indent = twips(cp.indent, -31680), firstLine = twips(cp.firstLine, -31680),
+                               spaceBefore = twips(cp.spaceBefore, 0), spaceAfter = twips(cp.spaceAfter, 0);
   auto right = [&](const ParaProps& pp) {
     if (pp.style != style || AlignOf(pp.jc) != cp.align) return false;
-    if (cp.indent && pp.indStart.Value() != *cp.indent) return false;
-    if (cp.firstLine && pp.firstLine.Value() != *cp.firstLine) return false;
-    if (cp.spaceBefore && pp.spaceBefore.Value() != *cp.spaceBefore) return false;
-    if (cp.spaceAfter && pp.spaceAfter.Value() != *cp.spaceAfter) return false;
+    if (indent && pp.indStart.Value() != *indent) return false;
+    if (firstLine && pp.firstLine.Value() != *firstLine) return false;
+    if (spaceBefore && pp.spaceBefore.Value() != *spaceBefore) return false;
+    if (spaceAfter && pp.spaceAfter.Value() != *spaceAfter) return false;
     if (numbered && (pp.numId != cp.numId || pp.ilvl != cp.ilvl)) return false;
     return true;
   };
@@ -260,13 +315,13 @@ Result FormatPara(Editor& ed, uint32_t para, const ClipPara& cp, bool numbered) 
     set.Set("jc", {{"val", kJc[static_cast<int>(cp.align)]}});
   }
   std::vector<std::pair<std::string, std::string>> ind, spacing;
-  if (cp.indent && base.indStart.Value() != *cp.indent) ind.push_back({"left", std::to_string(*cp.indent)});
-  if (cp.firstLine && base.firstLine.Value() != *cp.firstLine) {
-    if (*cp.firstLine >= 0) ind.push_back({"firstLine", std::to_string(*cp.firstLine)});
-    else ind.push_back({"hanging", std::to_string(-*cp.firstLine)});
+  if (indent && base.indStart.Value() != *indent) ind.push_back({"left", std::to_string(*indent)});
+  if (firstLine && base.firstLine.Value() != *firstLine) {
+    if (*firstLine >= 0) ind.push_back({"firstLine", std::to_string(*firstLine)});
+    else ind.push_back({"hanging", std::to_string(-*firstLine)});
   }
-  if (cp.spaceBefore && base.spaceBefore.Value() != *cp.spaceBefore) spacing.push_back({"before", std::to_string(*cp.spaceBefore)});
-  if (cp.spaceAfter && base.spaceAfter.Value() != *cp.spaceAfter) spacing.push_back({"after", std::to_string(*cp.spaceAfter)});
+  if (spaceBefore && base.spaceBefore.Value() != *spaceBefore) spacing.push_back({"before", std::to_string(*spaceBefore)});
+  if (spaceAfter && base.spaceAfter.Value() != *spaceAfter) spacing.push_back({"after", std::to_string(*spaceAfter)});
   if (!ind.empty()) set.Set("ind", ind);
   if (!spacing.empty()) set.Set("spacing", spacing);
   if (set.items.empty()) return ok;
@@ -287,7 +342,7 @@ bool Clip::Empty() const {
 std::u16string Clip::PlainText() const {
   std::u16string out;
   for (size_t i = 0; i < paras.size(); ++i) {
-    if (i) out += u"\r\n";
+    if (i) out += cliptable::SameRow(paras[i - 1], paras[i]) && paras[i - 1].cell != paras[i].cell ? u"\t" : u"\r\n";
     if (!paras[i].label.empty()) out += paras[i].label + u"\t";
     for (const ClipRun& r : paras[i].runs)
       for (char16_t c : r.text) {
@@ -298,6 +353,12 @@ std::u16string Clip::PlainText() const {
   return out;
 }
 
+bool Clip::HasTables() const {
+  for (const ClipPara& p : paras)
+    if (p.table) return true;
+  return false;
+}
+
 Clip CopyClip(const Document& doc, Pos from, Pos to, uint64_t source) {
   Clip clip;
   clip.source = source;
@@ -305,9 +366,11 @@ Clip CopyClip(const Document& doc, Pos from, Pos to, uint64_t source) {
   const auto& paras = doc.Paragraphs();
   if (from.para >= paras.size()) return clip;
   const uint32_t story = doc.Para(from.para).story;
+  cliptable::CellMarker cells(doc, from.para, std::min<uint32_t>(to.para, static_cast<uint32_t>(paras.size() - 1)));
   for (uint32_t p = from.para; p <= to.para && p < paras.size(); ++p) {
     if (doc.Para(p).story != story) continue;
     ClipPara cp;
+    cells.Mark(p, cp);
     const ParaProps& pp = doc.ResolvedPara(p);
     cp.align = AlignOf(pp.jc);
     cp.heading = pp.outlineLevel >= 0 && pp.outlineLevel < 9 ? pp.outlineLevel + 1 : 0;
@@ -342,14 +405,13 @@ Clip CopyClip(const Document& doc, Pos from, Pos to, uint64_t source) {
 }
 
 Result PasteClip(Editor& ed, Pos from, Pos to, const Clip& clip, uint64_t target) {
+  if (clip.HasTables()) return cliptable::PasteTables(ed, from, to, clip, target);
   const Document& doc = ed.Doc();
   const bool same = clip.source != 0 && clip.source == target;
   if (ed.Compare(from, to) > 0) std::swap(from, to);
   ed.BeginGroup(u"Paste");
-  bool changed = false;
   auto fail = [&](Result r) {
-    ed.EndGroup();
-    if (changed) ed.Undo();
+    ed.CancelGroup();  // inside a group, Undo would take the step before
     r.ok = false;
     return r;
   };
@@ -357,63 +419,84 @@ Result PasteClip(Editor& ed, Pos from, Pos to, const Clip& clip, uint64_t target
   if (!(from == to)) {
     Result r = ed.Delete(from, to);
     if (!r) return fail(r);
-    changed = true;
     caret = r.caret;
   }
-  // Web links become hyperlinks over the runs that share them, once their text is in. Where the
-  // editor can't make one (inside a field or a content control) the text stays plain.
-  std::string link;
-  Pos linkFrom = caret;
-  auto endLink = [&]() {
-    if (!link.empty() && linkFrom.para == caret.para && linkFrom.offset < caret.offset)
-      ed.SetLink(linkFrom, caret, link);
-    link.clear();
-  };
-  auto insert = [&](const ClipRun& run) {
-    const std::u16string text = Clean(run.text);
-    Result r;
-    r.caret = caret;
-    if (text.empty()) return r;
-    const std::string want = WebLink(run.link) ? run.link : std::string();
-    if (want != link) {
-      endLink();
-      link = want;
-      linkFrom = caret;
-    }
-    r = ed.InsertText(caret, text);
-    if (!r) return r;
-    changed = true;
-    const Pos start = caret;
-    caret = r.caret;
-    return FormatRun(ed, start, caret, run);
-  };
-  for (size_t i = 0; i < clip.paras.size(); ++i) {
+  // The text first, all of it in one step: a paragraph at a time, each split would make the model
+  // pass over the story again for the next paragraph's runs, which is quadratic in big pastes. A
+  // list label, where the list itself doesn't come along, is text in its paragraph's first look.
+  const size_t n = clip.paras.size();
+  if (n == 0) {
+    ed.EndGroup();
+    Result ok;
+    ok.caret = caret;
+    return ok;
+  }
+  std::vector<uint8_t> numbered(n);
+  std::vector<ClipRun> labels(n);
+  std::vector<std::vector<std::pair<const ClipRun*, uint32_t>>> pieces(n);  // each run and its length
+  std::u16string text;
+  for (size_t i = 0; i < n; ++i) {
     const ClipPara& cp = clip.paras[i];
-    const bool numbered = same && !cp.numId.empty() && doc.NumberingLevel(cp.numId, cp.ilvl);
-    // A paragraph with its mark: the mark first, so that its text is formatted against the style
-    // it ends up with. The text goes at the end of the first half; the second half is the rest.
-    Pos next{kNone, 0};
-    if (i + 1 < clip.paras.size()) {
-      Result r = ed.SplitParagraph(caret);
-      if (!r) return fail(r);
-      changed = true;
-      next = r.caret;
-      if (Result f = FormatPara(ed, caret.para, cp, numbered); !f) return fail(f);
+    numbered[i] = same && !cp.numId.empty() && doc.NumberingLevel(cp.numId, cp.ilvl);
+    if (i) text += u'\n';
+    auto add = [&](const ClipRun& run, std::u16string_view s) {
+      const std::u16string clean = Clean(s);
+      if (clean.empty()) return;
+      text += clean;
+      pieces[i].push_back({&run, static_cast<uint32_t>(clean.size())});
+    };
+    if (!numbered[i] && !cp.label.empty()) {
+      if (!cp.runs.empty()) labels[i] = LookOnly(cp.runs.front());
+      add(labels[i], cp.label + u"\t");
     }
-    if (!numbered && !cp.label.empty()) {
-      ClipRun label = cp.runs.empty() ? ClipRun{} : cp.runs.front();
-      label.text = cp.label + u"\t";
-      label.link.clear();
-      if (Result r = insert(label); !r) return fail(r);
+    for (const ClipRun& run : cp.runs) add(run, run.text);
+  }
+  Pos end = caret;
+  if (!text.empty()) {
+    Result r = ed.InsertText(caret, text);
+    if (!r) return fail(r);
+    end = r.caret;
+  }
+  std::vector<uint32_t> paras(n, caret.para);
+  for (size_t i = 1; i < n; ++i)
+    if ((paras[i] = ed.NextPara(paras[i - 1])) == kNone) break;
+  uint32_t length = 0;
+  for (const auto& [run, len] : pieces[n - 1]) length += len;
+  if (paras[n - 1] != end.para || (n == 1 ? caret.offset : 0) + length != end.offset) {
+    Result r;
+    r.message = u"The pasted text didn't land where it should.";
+    return fail(r);
+  }
+
+  // A paragraph with its mark gets its properties, then the text its look: formatted against the
+  // style it ends up with.
+  for (size_t i = 0; i + 1 < n; ++i)
+    if (Result f = FormatPara(ed, paras[i], clip.paras[i], numbered[i]); !f) return fail(f);
+  // Web links become hyperlinks over the runs that share them. Where the editor can't make one
+  // (inside a field or a content control) the text stays plain.
+  for (size_t i = 0; i < n; ++i) {
+    const uint32_t p = paras[i];
+    uint32_t at = i == 0 ? caret.offset : 0, linkFrom = at;
+    std::string link;
+    auto endLink = [&]() {
+      if (!link.empty() && linkFrom < at) ed.SetLink({p, linkFrom}, {p, at}, link);
+      link.clear();
+    };
+    for (const auto& [run, len] : pieces[i]) {
+      const std::string want = WebLink(run->link) ? run->link : std::string();
+      if (want != link) {
+        endLink();
+        link = want;
+        linkFrom = at;
+      }
+      if (Result r = FormatRun(ed, {p, at}, {p, at + len}, *run); !r) return fail(r);
+      at += len;
     }
-    for (const ClipRun& run : cp.runs)
-      if (Result r = insert(run); !r) return fail(r);
     endLink();
-    if (next.para != kNone) caret = next;
   }
   ed.EndGroup();
   Result ok;
-  ok.caret = caret;
+  ok.caret = end;
   return ok;
 }
 
@@ -463,7 +546,20 @@ std::string ToRtf(const Clip& clip) {
   std::string body;
   for (size_t i = 0; i < clip.paras.size(); ++i) {
     const ClipPara& p = clip.paras[i];
+    const ClipPara* next = i + 1 < clip.paras.size() ? &clip.paras[i + 1] : nullptr;
+    if (p.table && (i == 0 || !cliptable::SameRow(clip.paras[i - 1], p))) {
+      // A row: its cells share the usual text width, with single borders.
+      int cells = 1;
+      for (size_t k = i + 1; k < clip.paras.size() && cliptable::SameRow(clip.paras[k - 1], clip.paras[k]); ++k)
+        cells += clip.paras[k].cell != clip.paras[k - 1].cell;
+      body += "\\trowd\\trgaph108\\trleft-108";
+      for (int c = 1; c <= cells; ++c)
+        body += "\\clbrdrt\\brdrs\\brdrw10\\clbrdrl\\brdrs\\brdrw10\\clbrdrb\\brdrs\\brdrw10\\clbrdrr\\brdrs\\brdrw10\\cellx" +
+                std::to_string(std::max(360, 9360 / cells) * c - 108);
+      body += "\r\n";
+    }
     body += "\\pard\\plain";
+    if (p.table) body += "\\intbl";
     static const char* const kAlign[] = {"\\ql", "\\qc", "\\qr", "\\qj"};
     body += kAlign[static_cast<int>(p.align)];
     if (p.indent && *p.indent) body += "\\li" + std::to_string(*p.indent);
@@ -488,6 +584,7 @@ std::string ToRtf(const Clip& clip) {
         body += std::string("{\\field{\\*\\fldinst HYPERLINK ") + (anchor ? "\\\\l " : "") + "\"" + target + "\"}{\\fldrslt ";
       }
       body += '{';
+      const size_t words = body.size();
       if (!r.font.empty()) body += "\\f" + std::to_string(fontIndex(r.font));
       if (r.halfPoints > 0) body += "\\fs" + std::to_string(r.halfPoints);
       if (r.bold) body += "\\b";
@@ -497,7 +594,7 @@ std::string ToRtf(const Clip& clip) {
       if (r.vertAlign == VertAlign::Superscript) body += "\\super";
       if (r.vertAlign == VertAlign::Subscript) body += "\\sub";
       if (!Automatic(r.color)) body += "\\cf" + std::to_string(colorIndex(*r.color));
-      body += ' ';
+      if (body.size() > words) body += ' ';  // ends the last control word; after "{" it would be text
       RtfText(body, text);
       body += '}';
       if (!r.link.empty()) body += "}}";
@@ -508,7 +605,8 @@ std::string ToRtf(const Clip& clip) {
       body += '}';
     }
     for (const ClipRun& r : p.runs) run(r, r.text);
-    if (i + 1 < clip.paras.size()) body += "\\par\r\n";
+    if (p.table && !(next && cliptable::SameCell(p, *next))) body += cliptable::SameRow(p, next ? *next : ClipPara{}) ? "\\cell\r\n" : "\\cell\\row\r\n";
+    else if (next) body += "\\par\r\n";
   }
   if (fonts.empty()) fonts.push_back("Calibri");
   std::string out = "{\\rtf1\\ansi\\ansicpg1252\\deff0\\uc1{\\fonttbl";
@@ -561,14 +659,48 @@ struct Builder {
   ClipPara cur;
   ClipRun look;
   bool label = false;  // text goes to the list label
+  // Tables: the paragraphs that end in a cell are its (ClipPara::table, row and cell).
+  uint32_t tables = 0, table = 0, row = 0, cell = 0, nextCell = 0;
+  bool rowOpen = false, cellUsed = false;
+  void StartTable() {
+    table = ++tables;
+    row = cell = nextCell = 0;
+    rowOpen = false;
+  }
+  void EndTable() { table = 0; }
+  void StartRow() {
+    if (!table) StartTable();
+    if (rowOpen) ++row;
+    rowOpen = true;
+    cell = nextCell = 0;
+  }
+  void StartCell(uint32_t span = 1) {
+    if (!rowOpen) StartRow();
+    cell = nextCell;
+    nextCell += span;
+    cellUsed = false;
+  }
+  void EndCell() {
+    if (table && !cellUsed) EndPara();  // an empty cell keeps its place
+  }
+  bool over = false;   // more paragraphs, runs or text than the caps allow: the reader gives nothing
+  size_t runs = 0, text = 0;
 
   void Text(std::u16string_view t) {
-    if (t.empty()) return;
+    if (t.empty() || over) return;
+    if ((text += t.size()) > kMaxText) {
+      over = true;
+      return;
+    }
     if (label) {
       cur.label += t;
       return;
     }
     if (cur.runs.empty() || !cur.runs.back().SameLook(look)) {
+      if (++runs > kMaxRuns) {
+        over = true;
+        return;
+      }
       ClipRun r = look;
       r.text.clear();
       cur.runs.push_back(std::move(r));
@@ -578,16 +710,22 @@ struct Builder {
   bool HasContent() const { return !cur.runs.empty() || !cur.label.empty(); }
   static void CleanLabel(std::u16string& label) {
     TrimEnd(label);
+    // LibreOffice's bullets start with a space: "\plain  \u-3913".
+    label.erase(0, std::min(label.find_first_not_of(u" \t "), label.size()));
     if (label == u"\u00B7" || label == u"\uF0B7") label = u"\u2022";
   }
   void EndPara() {
     CleanLabel(cur.label);
+    if (table) cur.table = table, cur.row = row, cur.cell = cell, cellUsed = true;
     clip.paras.push_back(std::move(cur));
     cur = ClipPara{};
+    if (clip.paras.size() > kMaxParas) over = true;
   }
   Clip Finish() {
     CleanLabel(cur.label);
-    clip.paras.push_back(std::move(cur));
+    if (table && HasContent()) cur.table = table, cur.row = row, cur.cell = cell;
+    // Nothing after a table at the end (RTF's last \row): no paragraph of its own.
+    if (HasContent() || clip.paras.empty() || !clip.paras.back().table) clip.paras.push_back(std::move(cur));
     for (ClipPara& p : clip.paras)
       p.runs.erase(std::remove_if(p.runs.begin(), p.runs.end(), [](const ClipRun& r) { return r.text.empty(); }),
                    p.runs.end());
@@ -602,8 +740,8 @@ class RtfReader {
   std::optional<Clip> Read() {
     if (s_.substr(0, 5) != "{\\rtf") return std::nullopt;
     Plain();
-    size_t i = 0;
-    while (i < s_.size()) {
+    size_t i = 0, groups = 0;
+    while (i < s_.size() && !b_.over) {
       const char c = s_[i];
       // Groups nested deeper than any real document are skipped whole: pasted RTF is untrusted.
       if (overflow_ > 0) {
@@ -619,6 +757,7 @@ class RtfReader {
         continue;
       }
       if (c == '{') {
+        if (++groups > kMaxGroups) b_.over = true;
         Flush();
         stack_.push_back(st_);
         skip_ = 0;
@@ -644,6 +783,8 @@ class RtfReader {
       }
     }
     Flush();
+    if (b_.over) return std::nullopt;
+    if (!intbl_) b_.EndTable();
     return b_.Finish();
   }
 
@@ -729,6 +870,17 @@ class RtfReader {
   void Word(std::string_view w, bool has, int n) {
     const bool on = !has || n != 0;
     const bool body = st_.dest == Dest::Text;
+    if (w == "nesttableprops") {
+      // A nested table's row ends (in {\*\nesttableprops ...\nestrow}): a paragraph of the cell
+      // around it, its cells separated by tabs.
+      if (!stack_.empty() && stack_.back().dest == Dest::Text) {
+        if (!b_.cur.runs.empty() && !b_.cur.runs.back().text.empty() && b_.cur.runs.back().text.back() == u'\t')
+          b_.cur.runs.back().text.pop_back();
+        b_.EndPara();
+      }
+      st_.dest = Dest::Skip;
+      return;
+    }
     ClipRun& L = st_.look;
     // Destinations.
     static const char* const kSkip[] = {
@@ -736,7 +888,8 @@ class RtfReader {
         "footnote", "annotation", "xe", "tc", "themedata", "colorschememapping", "latentstyles", "datastore",
         "listtable", "listoverridetable", "rsidtbl", "generator", "shpinst", "nonshppict", "pgdsctbl", "revtbl",
         "xmlnstbl", "filetbl", "fchars", "lchars", "pntxta", "pntxtb", "docvar", "userprops", "defchp", "defpap",
-        "background", "protusertbl", "txe", "atnid", "atnauthor", "template", "falt", "panose", "mmathPr"};
+        "background", "protusertbl", "txe", "atnid", "atnauthor", "template", "falt", "panose", "mmathPr",
+        "nonesttables"};
     for (const char* k : kSkip)
       if (w == k) {
         st_.dest = Dest::Skip;
@@ -794,7 +947,11 @@ class RtfReader {
     else if (w == "v") st_.hidden = on;
     // Paragraphs (the style sheet's paragraph properties are the styles').
     else if (!body) {
-    } else if (w == "pard") Pard();
+    } else if (w == "pard") Pard(), intbl_ = false;
+    else if (w == "intbl" || (w == "itap" && n > 0)) {
+      intbl_ = true;
+      if (!b_.table) b_.StartTable();
+    } else if (w == "itap") intbl_ = false;
     else if (w == "ql") b_.cur.align = ClipAlign::Left;
     else if (w == "qc") b_.cur.align = ClipAlign::Center;
     else if (w == "qr") b_.cur.align = ClipAlign::Right;
@@ -806,12 +963,20 @@ class RtfReader {
     else if (w == "outlinelevel") b_.cur.heading = n >= 0 && n < 9 ? n + 1 : 0;
     // Breaks and special characters.
     else if (w == "par" || w == "sect") Par();
-    else if (w == "row") {
-      if (st_.dest == Dest::Text && !b_.cur.runs.empty() && !b_.cur.runs.back().text.empty() &&
-          b_.cur.runs.back().text.back() == u'\t')
-        b_.cur.runs.back().text.pop_back();
+    else if (w == "cell") {
+      // A cell ends with its last paragraph; a row after its last cell.
+      intbl_ = true;
+      if (!b_.table) b_.StartTable();
       Par();
-    } else if (w == "cell" || w == "nestcell" || w == "tab") Char(u'\t');
+      ++b_.cell;
+    } else if (w == "row") {
+      if (b_.table) {
+        if (b_.HasContent()) Par(), ++b_.cell;
+        ++b_.row;
+        b_.cell = 0;
+      }
+    }
+    else if (w == "nestcell" || w == "tab") Char(u'\t');
     else if (w == "line") Char(0x0B);
     else if (w == "emdash") Char(0x2014);
     else if (w == "endash") Char(0x2013);
@@ -872,6 +1037,7 @@ class RtfReader {
 
   void Par() {
     if (st_.dest != Dest::Text) return;
+    if (!intbl_) b_.EndTable();  // a paragraph out of the table: the table ended before it
     b_.EndPara();
     // The next paragraph keeps the paragraph properties until \pard.
     const ClipPara& done = b_.clip.paras.back();
@@ -925,12 +1091,12 @@ class RtfReader {
       case Dest::Styles:
         for (char16_t c : t) {
           if (c == u';') EndEntry();
-          else AppendUtf8(entry_, std::u16string_view(&c, 1));
+          else if (entry_.size() < 4 * kMaxName) AppendUtf8(entry_, std::u16string_view(&c, 1));
         }
         return;
       case Dest::Colors:
         for (char16_t c : t)
-          if (c == u';') {
+          if (c == u';' && colors_.size() < kMaxEntries) {
             colors_.push_back(colorHas_ ? std::optional<uint32_t>((static_cast<uint32_t>(red_ & 0xFF) << 16) |
                                                                   (static_cast<uint32_t>(green_ & 0xFF) << 8) |
                                                                   static_cast<uint32_t>(blue_ & 0xFF))
@@ -944,17 +1110,19 @@ class RtfReader {
         if (st_.hidden) return;
         b_.Text(t);
         return;
-      case Dest::FieldCode: AppendUtf8(fieldCode_, t); return;
+      case Dest::FieldCode:
+        if (fieldCode_.size() < 4 * kMaxLink) AppendUtf8(fieldCode_, t);
+        return;
     }
   }
 
   void EndEntry() {
-    std::string name(TrimView(entry_));
+    std::string name = Tidy(entry_, kMaxName);
     entry_.clear();
     if (st_.dest == Dest::Fonts && entryFont_ >= 0) {
-      fonts_[entryFont_] = {name, entryCharset_};
+      if (fonts_.size() < kMaxEntries || fonts_.count(entryFont_)) fonts_[entryFont_] = {name, entryCharset_};
     } else if (st_.dest == Dest::Styles) {
-      styles_[entryStyle_] = name;
+      if (styles_.size() < kMaxEntries || styles_.count(entryStyle_)) styles_[entryStyle_] = name;
       entryStyle_ = 0;
     }
   }
@@ -983,11 +1151,13 @@ class RtfReader {
   bool colorHas_ = false;
   int red_ = 0, green_ = 0, blue_ = 0;
   int entryFont_ = -1, entryCharset_ = 0, entryStyle_ = 0;
+  bool intbl_ = false;  // the paragraph is in a table (\intbl until \pard)
 };
 
 }  // namespace
 
 std::optional<Clip> FromRtf(std::string_view rtf) {
+  if (rtf.size() > kMaxInput) return std::nullopt;
   RtfReader r(rtf);
   return r.Read();
 }
@@ -1049,7 +1219,7 @@ std::string ToHtml(const Clip& clip) {
   }
   size_t count = clip.paras.size();
   // The empty paragraph after a final paragraph mark is where pasting continues, not a paragraph.
-  const bool mark = count > 1 && clip.paras.back().runs.empty() && clip.paras.back().label.empty();
+  const bool mark = count > 1 && clip.paras.back().runs.empty() && clip.paras.back().label.empty() && !clip.paras.back().table;
   if (mark) {
     --count;
     Attr(frag, "data-fw-mark", "1");
@@ -1057,6 +1227,13 @@ std::string ToHtml(const Clip& clip) {
   frag += ">";
   for (size_t i = 0; i < count; ++i) {
     const ClipPara& p = clip.paras[i];
+    const ClipPara* prev = i ? &clip.paras[i - 1] : nullptr;
+    const ClipPara* next = i + 1 < count ? &clip.paras[i + 1] : nullptr;
+    if (p.table) {
+      if (!prev || prev->table != p.table) frag += "<table style=\"border-collapse:collapse\">";
+      if (!prev || !cliptable::SameRow(*prev, p)) frag += "<tr>";
+      if (!prev || !cliptable::SameCell(*prev, p)) frag += "<td style=\"border:solid windowtext 1px;padding:0 5.4pt;vertical-align:top\">";
+    }
     const std::string tag = p.heading >= 1 && p.heading <= 6 ? "h" + std::to_string(p.heading) : "p";
     std::string css = "margin:0;white-space:pre-wrap";
     static const char* const kAlign[] = {"left", "center", "right", "justify"};
@@ -1105,8 +1282,14 @@ std::string ToHtml(const Clip& clip) {
     };
     if (!p.label.empty()) span(p.runs.empty() ? ClipRun{} : p.runs.front(), p.label + u"\t", true);
     for (const ClipRun& r : p.runs) span(r, r.text, false);
-    if (p.runs.empty() && p.label.empty()) frag += "<br>";
+    // A block's last <br> shows no line: an empty paragraph, or one that ends in a line break, needs one more.
+    if ((p.runs.empty() && p.label.empty()) || (!p.runs.empty() && p.runs.back().text.ends_with(u'\v'))) frag += "<br>";
     frag += "</" + tag + ">";
+    if (p.table) {
+      if (!next || !cliptable::SameCell(p, *next)) frag += "</td>";
+      if (!next || !cliptable::SameRow(p, *next)) frag += "</tr>";
+      if (!next || next->table != p.table) frag += "</table>";
+    }
   }
   frag += "</div>";
 
@@ -1265,7 +1448,7 @@ class HtmlReader {
     Frame root;
     stack_.push_back(root);
     size_t i = begin;
-    while (i < end) {
+    while (i < end && !b_.over) {
       if (fragBegin != SIZE_MAX) emit_ = i >= fragBegin && i < fragEnd;
       if (s_[i] == '<') {
         i = Tag(i, end);
@@ -1283,6 +1466,7 @@ class HtmlReader {
   }
 
   bool Own() const { return own_; }
+  bool Over() const { return b_.over; }
 
  private:
   Frame& Top() { return stack_.back(); }
@@ -1382,6 +1566,7 @@ class HtmlReader {
     if (IsVoid(name) || selfClosing) {
       return;
     }
+    if (++groups_ > kMaxGroups) b_.over = true;
     Frame f = Top();
     f.name = name;
     f.block = IsBlock(name);
@@ -1408,10 +1593,11 @@ class HtmlReader {
     if (name == "ol") f.listKind = 2, f.counter = 1;
     if (name == "center") props.align = ClipAlign::Center;
     for (const auto& [an, av] : attrs) {
+      if (an.starts_with("data-fw-") && av.size() > 4 * kMaxName) continue;  // no style or list id is that long
       if (an == "style") Css(av, f, props);
       else if (an == "align") props.align = AlignNamed(av, props.align);
       else if (an == "color" && name == "font") L.color = CssColor(av);
-      else if (an == "face" && name == "font") L.font = FirstFamily(av);
+      else if (an == "face" && name == "font") L.font = Tidy(FirstFamily(av), kMaxName);
       else if (an == "size" && name == "font") {
         static const int kSizes[] = {0, 15, 20, 24, 27, 36, 48, 72};  // <font size=1..7>, in half-points
         int n = std::atoi(av.c_str());
@@ -1453,7 +1639,23 @@ class HtmlReader {
         }
       }
     }
-    if ((name == "td" || name == "th") && emit_ && !f.skip) {
+    bool outerCell = false;
+    if (emit_ && !f.skip && (name == "table" || name == "tr" || name == "td" || name == "th")) {
+      // The outermost table's rows and cells (tables in its cells come as their text).
+      size_t tables = 0;
+      for (const Frame& open : stack_) tables += open.name == "table";
+      if (name == "table" && tables == 0) Break(), b_.StartTable();
+      if (name == "tr" && tables == 1) Break(), b_.StartRow();
+      if ((name == "td" || name == "th") && tables == 1) {
+        uint32_t span = 1;
+        for (const auto& [an, av] : attrs)
+          if (an == "colspan") span = static_cast<uint32_t>(std::clamp(std::atoi(av.c_str()), 1, 63));
+        Break();
+        b_.StartCell(span);
+        outerCell = true;
+      }
+    }
+    if ((name == "td" || name == "th") && emit_ && !f.skip && !outerCell) {
       for (size_t k = stack_.size(); k-- > 0;)
         if (stack_[k].name == "tr") {
           if (stack_[k].counter++ > 0) Emit(u"\t");
@@ -1483,11 +1685,22 @@ class HtmlReader {
     bool block = false;
     while (stack_.size() > k) {
       block = block || stack_.back().block;
+      Closing();
       stack_.pop_back();
     }
     if (block && emit_ && !Top().skip) Break();
     b_.look = Top().look;
     b_.label = Top().label;
+  }
+
+  // The element on top is closing: the outermost table's cells and the table end with theirs.
+  void Closing() {
+    const std::string& name = stack_.back().name;
+    if (!emit_ || stack_.back().skip || (name != "td" && name != "th" && name != "table")) return;
+    size_t tables = 0;
+    for (size_t k = 0; k + 1 < stack_.size(); ++k) tables += stack_[k].name == "table";
+    if (name != "table" && tables == 1) Break(), b_.EndCell();
+    if (name == "table" && tables == 0) Break(), b_.EndTable();
   }
 
   static ClipAlign AlignNamed(std::string_view v, ClipAlign fallback) {
@@ -1542,7 +1755,7 @@ class HtmlReader {
       } else if (prop == "color") {
         if (v != "inherit" && v != "initial" && v != "currentcolor") L.color = CssColor(v);
       } else if (prop == "font-family") {
-        if (std::string fam = FirstFamily(value); !fam.empty()) L.font = fam;
+        if (std::string fam = Tidy(FirstFamily(value), kMaxName); !fam.empty()) L.font = fam;
       } else if (prop == "font") {
         // The shorthand, only for Word's list label spacers ("7.0pt Times New Roman"): ignored.
       } else if (prop == "text-align") {
@@ -1604,6 +1817,7 @@ class HtmlReader {
         c += t[k] == u'\n' ? char16_t(0x0B) : t[k];
       }
       t = std::move(c);
+      pre_ = pre_ || !t.empty();
     }
     Emit(t);
   }
@@ -1624,29 +1838,32 @@ class HtmlReader {
   // A block starts or ends: the paragraph so far ends, if it has anything in it.
   void Break() {
     if (!b_.HasContent()) return;
-    CleanEnd(b_.cur);
+    CleanEnd(b_.cur, pre_);
     b_.EndPara();
+    pre_ = false;
     lastFromBlock_ = true;
   }
 
-  static void CleanEnd(ClipPara& p) {
-    // Trailing spaces and one trailing line break (a block's last <br>) aren't text.
+  static void CleanEnd(ClipPara& p, bool pre) {
+    // One trailing line break (a block's last <br>) isn't text, nor are trailing spaces unless the
+    // text is preformatted (as Featherweight's own copies are).
+    bool lineBreak = false;
     while (!p.runs.empty()) {
       std::u16string& s = p.runs.back().text;
-      while (!s.empty() && s.back() == u' ') s.pop_back();
-      if (!s.empty() && s.back() == 0x0B) s.pop_back();
-      while (!s.empty() && s.back() == u' ') s.pop_back();
+      while (!pre && !s.empty() && s.back() == u' ') s.pop_back();
+      if (!lineBreak && !s.empty() && s.back() == 0x0B) s.pop_back(), lineBreak = true;
+      while (!pre && !s.empty() && s.back() == u' ') s.pop_back();
       if (!s.empty()) break;
       p.runs.pop_back();
     }
     // Word's empty paragraphs hold a no-break space.
-    if (p.runs.size() == 1 && p.runs[0].text == u"\u00A0") p.runs.clear();
+    if (!pre && p.runs.size() == 1 && p.runs[0].text == u"\u00A0") p.runs.clear();
     Builder::CleanLabel(p.label);
   }
 
   void Finish() {
     if (b_.HasContent()) {
-      CleanEnd(b_.cur);
+      CleanEnd(b_.cur, pre_);
       lastFromBlock_ = false;
     }
     // A last block's end isn't a paragraph mark, unless Featherweight copied one.
@@ -1674,11 +1891,12 @@ class HtmlReader {
         out += s[i];
         continue;
       }
-      size_t semi = s.find(';', i);
-      if (semi == std::string_view::npos || semi - i > 12) {
+      size_t semi = s.substr(i, 13).find(';');  // only so far: a search to the end for each & is quadratic
+      if (semi == std::string_view::npos) {
         out += '&';
         continue;
       }
+      semi += i;
       std::string_view ent = s.substr(i + 1, semi - i - 1);
       char32_t cp = 0;
       if (!ent.empty() && ent[0] == '#') {
@@ -1709,14 +1927,18 @@ class HtmlReader {
   Builder b_;
   std::vector<Frame> stack_;
   bool emit_ = false, own_ = false, mark_ = false, lastFromBlock_ = false;
+  bool pre_ = false;  // the paragraph has preformatted text
+  size_t groups_ = 0;  // elements opened
 };
 
 }  // namespace
 
 std::optional<Clip> FromHtml(std::string_view html) {
-  if (html.find('<') == std::string_view::npos) return std::nullopt;
+  if (html.size() > kMaxInput || html.find('<') == std::string_view::npos) return std::nullopt;
   HtmlReader r(html);
-  return r.Read();
+  Clip clip = r.Read();
+  if (r.Over()) return std::nullopt;
+  return clip;
 }
 
 bool IsOwnHtml(std::string_view html) { return html.find("data-fw-src=") != std::string_view::npos; }

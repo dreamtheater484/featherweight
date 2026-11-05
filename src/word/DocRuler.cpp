@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <cwchar>
 #include <iterator>
 
@@ -31,6 +32,11 @@ constexpr float kBand = 24;  // the rulers' breadth, UI pixels
 
 float Pt(Twips t) { return static_cast<float>(t.Value()) / 20.f; }
 Twips ToTwips(float pt) { return Twips(static_cast<int32_t>(std::lround(pt * 20.f))); }
+// A cell margin as the layout takes it (Table.cpp): twips, none, or the table's default.
+float MarginPt(const fw::doc::TableWidth& w, float fallback) {
+  using Type = fw::doc::TableWidth::Type;
+  return w.type == Type::Dxa ? static_cast<float>(w.value) / 20.f : w.type == Type::Nil ? 0.f : fallback;
+}
 // Widths that must fit between margins: rounded down, so their sum doesn't grow.
 Twips FloorTwips(float pt) { return Twips(static_cast<int32_t>(std::floor(pt * 20.f + 0.01f))); }
 
@@ -110,6 +116,13 @@ struct DocView::RulerInfo {
   bool equalColumns = true, columnLine = false;
   Twips columnSpace{720};
   int column = -1;  // the caret's column; -1 in a cell, a text box, a header
+  // The caret's table row: the grid lines its cells' edges are on, where (page points), and the
+  // cell margins on either side.
+  struct Edge {
+    int32_t line = 0;
+    float x = 0, marginBefore = 0, marginAfter = 0;
+  };
+  std::vector<Edge> cells;
   // The caret's paragraph: kNone when its marks aren't shown.
   uint32_t para = kNone;
   float frameL = 0, frameR = 0;            // its column or cell
@@ -237,6 +250,7 @@ DocView::RulerInfo DocView::MeasureRuler() {
   if (line->story == layout::LineStory::Cell || line->story == layout::LineStory::TextBox) {
     r.frameL = line->x;
     r.frameR = line->x + line->line.right + Pt(pp.indEnd);
+    if (line->story == layout::LineStory::Cell) MeasureCells(r, pg, para);
   } else {
     r.frameL = r.marginL;
     r.frameR = r.marginR;
@@ -260,6 +274,37 @@ DocView::RulerInfo DocView::MeasureRuler() {
   return r;
 }
 
+void DocView::MeasureCells(RulerInfo& r, const layout::Page& pg, uint32_t para) {
+  // Each cell of the caret's row with text on this page: its edges are its text's, past its margins.
+  const fw::doc::Pos at{para, focus_.offset};
+  const auto cell = editor_ ? editor_->CellAt(at) : std::nullopt;
+  if (!cell) return;
+  const fw::doc::TableProps table = doc_->ResolvedTable(cell->tbl);
+  const float defLeft = MarginPt(table.cellMargins.start, 5.4f), defRight = MarginPt(table.cellMargins.end, 5.4f);
+  std::map<int32_t, RulerInfo::Edge> edges;
+  for (const auto& c : editor_->TableCells(at)) {
+    if (c.row > cell->row || cell->row >= c.row + c.rows) continue;
+    const layout::LineBox* text = nullptr;
+    for (const layout::LineBox& lb : pg.lines)
+      if (lb.para == c.start.para && lb.turn == 0 && lb.story == layout::LineStory::Cell) {
+        text = &lb;
+        break;
+      }
+    if (!text) continue;
+    const fw::doc::CellProps props = doc_->ResolvedCell(c.tc);
+    const float left = MarginPt(props.margins.start, defLeft), right = MarginPt(props.margins.end, defRight);
+    RulerInfo::Edge& before = edges[c.col];
+    before.line = c.col;
+    before.x = text->x - left;
+    before.marginAfter = left;
+    RulerInfo::Edge& after = edges[c.col + c.span];
+    after.line = c.col + c.span;
+    after.x = text->x + text->line.right + Pt(doc_->ResolvedPara(c.start.para).indEnd) + right;
+    after.marginBefore = right;
+  }
+  for (const auto& [line, e] : edges) r.cells.push_back(e);
+}
+
 DocView::RulerHit DocView::RulerAt(const RulerInfo& r, int xi, int yi) const {
   const float x = static_cast<float>(xi) + 0.5f, y = static_cast<float>(yi) + 0.5f;
   if (Contains(r.corner, x, y)) return {RulerPart::Corner};
@@ -277,6 +322,8 @@ DocView::RulerHit DocView::RulerAt(const RulerInfo& r, int xi, int yi) const {
         if (y >= mid && std::abs(x - r.X(r.frameL + Pt(r.tabs[i].pos))) <= reach) return {RulerPart::Tab, static_cast<int>(i)};
     }
     if (r.canEdit) {
+      for (size_t i = 0; i < r.cells.size(); ++i)
+        if (std::abs(x - r.X(r.cells[i].x)) <= reach) return {RulerPart::CellEdge, static_cast<int>(i)};
       for (size_t i = 1; i < r.columns.size(); ++i) {
         if (std::abs(x - r.X(r.columns[i - 1].second)) <= edge) return {RulerPart::ColumnEnd, static_cast<int>(i) - 1};
         if (std::abs(x - r.X(r.columns[i].first)) <= edge) return {RulerPart::ColumnStart, static_cast<int>(i)};
@@ -324,6 +371,7 @@ void DocView::DrawRulers(Canvas& c) {
       case RulerPart::MarginBottom: r.marginB = at; break;
       case RulerPart::ColumnEnd: r.columns[d.hit.index].second = at; break;
       case RulerPart::ColumnStart: r.columns[d.hit.index].first = at; break;
+      case RulerPart::CellEdge: r.cells[d.hit.index].x = at; break;
       default: break;
     }
   }
@@ -375,7 +423,19 @@ void DocView::DrawRulers(Canvas& c) {
     const float s0 = r.StripTop(), s1 = r.StripBottom(), mid = (s0 + s1) / 2;
     c.Fill(RectF(r.X(0), s0, r.X(r.width), s1), margin);
     for (const auto& [a, b] : r.columns) c.Fill(RectF(r.X(a), s0, r.X(b), s1), paper);
-    if (r.para != kNone && r.column < 0) {  // a cell or a text box: its edges
+    if (!r.cells.empty()) {
+      // A table row: its cells' edges, with their margins, as Word's "Move Table Column" marks.
+      for (size_t i = 0; i < r.cells.size(); ++i) {
+        const RulerInfo::Edge& e = r.cells[i];
+        const float x = r.X(e.x), half = 3 * ui_;
+        const D2D1_RECT_F box =
+            RectF(std::min(r.X(e.x - e.marginBefore), x - half), s0, std::max(r.X(e.x + e.marginAfter), x + half), s1);
+        c.Fill(box, margin);
+        const D2D1_COLOR_F grip = colorOf(RulerPart::CellEdge, static_cast<int>(i));
+        for (float y = s0 + 3 * ui_; y + hair <= s1 - 2 * ui_; y += 3 * ui_)
+          c.Fill(RectF(x - 2 * ui_, y, x + 2 * ui_, y + hair), grip);
+      }
+    } else if (r.para != kNone && r.column < 0) {  // a text box: its edges
       for (float e : {r.frameL, r.frameR}) c.Fill(RectF(r.X(e) - 2 * ui_, s0, r.X(e) + 2 * ui_, s1), margin);
     }
     ticks(0, r.width, r.Origin(), [&](float at, int number, bool longer) {
@@ -492,6 +552,7 @@ void DocView::RulerMouseDown(int x, int y) {
     case RulerPart::MarginBottom: at = r.marginB; break;
     case RulerPart::ColumnEnd: at = r.columns[hit.index].second; break;
     case RulerPart::ColumnStart: at = r.columns[hit.index].first; break;
+    case RulerPart::CellEdge: at = r.cells[hit.index].x; break;
     default: break;  // a new tab stop: where the click is
   }
   rulerDrag_ = {hit, at, at, at, false};
@@ -540,6 +601,12 @@ void DocView::RulerMouseMove(int x, int y, UINT mods) {
       hi = r.marginB - minColumn;
       break;
     case RulerPart::MarginBottom: lo = r.marginT + minColumn; break;
+    case RulerPart::CellEdge: {  // the cells on either side keep a tenth of an inch (Editor::MoveColumnBorder)
+      const int i = d.hit.index;
+      if (i > 0) lo = r.cells[i - 1].x + 7.2f;
+      if (i + 1 < static_cast<int>(r.cells.size())) hi = r.cells[i + 1].x - 7.2f;
+      break;
+    }
     case RulerPart::ColumnEnd:
     case RulerPart::ColumnStart: {
       const auto& c = r.columns;
@@ -637,6 +704,10 @@ void DocView::RulerMouseUp() {
       ps.bottom = r.bottomFixed ? Twips(-m.Value()) : m;
       return section(edit::SetPageSetup(*editor_, r.section, r.section, ps));
     }
+    case RulerPart::CellEdge:
+      if (d.hit.index < 0 || d.hit.index >= static_cast<int>(r.cells.size())) return;
+      return section(editor_->MoveColumnBorder({focus_.para, focus_.offset}, r.cells[d.hit.index].line,
+                                               ToTwips(d.at - d.start).Value()));
     case RulerPart::ColumnEnd:
     case RulerPart::ColumnStart: {
       const int i = d.hit.index;
@@ -691,6 +762,7 @@ std::wstring DocView::RulerTooltip(int x, int y) {
     case RulerPart::MarginBottom: return L"Bottom margin: " + Length(r.height - r.marginB);
     case RulerPart::ColumnEnd:
     case RulerPart::ColumnStart: return L"Column edge: drag to change the columns' widths and spacing";
+    case RulerPart::CellEdge: return L"Move table column";
     default: return {};
   }
 }
@@ -705,7 +777,8 @@ HCURSOR DocView::RulerCursor(int x, int y) {
     case RulerPart::MarginLeft:
     case RulerPart::MarginRight:
     case RulerPart::ColumnEnd:
-    case RulerPart::ColumnStart: return we;
+    case RulerPart::ColumnStart:
+    case RulerPart::CellEdge: return we;
     default: return arrow;
   }
 }

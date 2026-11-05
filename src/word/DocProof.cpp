@@ -198,16 +198,17 @@ void DocView::DrawSquiggles(Canvas& c, int first, int last) {
   const D2D1_COLOR_F red = Rgb(0xE81123);
   const float u = std::max(1.0f, ui_);
   for (int pg = std::max(first, 0); pg <= last && pg < pages; ++pg) {
+    if (pg >= static_cast<int>(pagination_->PageCount())) break;  // fewer once an edit's layout is done
     PageSquiggles& ps = squiggles_[pg];
     if (ps.layout != pagination_->Revision() || ps.spelling != spelling_->Revision() || ps.edits != edits_) {
       // Measured again: the errors of the paragraphs with lines on the page.
-      ps.layout = pagination_->Revision();
+      const uint32_t revision = pagination_->Revision();
+      ps.layout = revision;
       ps.spelling = spelling_->Revision();
       ps.edits = edits_;
       ps.lines.clear();
-      const layout::Page& page = pagination_->GetPage(pg);
       std::vector<uint32_t> paras;
-      for (const layout::LineBox& lb : page.lines)
+      for (const layout::LineBox& lb : pagination_->GetPage(pg).lines)
         if (lb.para != fw::doc::kNone && (paras.empty() || paras.back() != lb.para)) paras.push_back(lb.para);
       std::sort(paras.begin(), paras.end());
       paras.erase(std::unique(paras.begin(), paras.end()), paras.end());
@@ -216,11 +217,13 @@ void DocView::DrawSquiggles(Canvas& c, int first, int last) {
         if (!errors) continue;
         for (const proof::Misspelling& m : *errors) {
           if (ps.lines.size() >= kSquigglesPerPage) break;
+          // Ranges lays out pages that aren't yet, and after an edit that replaces the old page
+          // shown here: the page is looked up again after it, never held across it.
           for (const auto& [rp, r] : pagination_->Ranges({p, m.from}, {p, m.to})) {
-            if (static_cast<int>(rp) != pg) continue;
+            if (static_cast<int>(rp) != pg || rp >= pagination_->PageCount()) continue;
             // Just below the baseline, by the size of the text it's under.
             float y = r.bottom - 1;
-            for (const layout::LineBox& lb : page.lines) {
+            for (const layout::LineBox& lb : pagination_->GetPage(pg).lines) {
               if (lb.para != p || lb.turn != 0 || std::abs(lb.top - r.top) > 0.01f) continue;
               float em = 0;
               for (const auto& piece : lb.line.pieces)
@@ -232,6 +235,9 @@ void DocView::DrawSquiggles(Canvas& c, int first, int last) {
           }
         }
       }
+      // Pages laid out while measuring: this frame painted the old ones, so it's painted again
+      // (and the squiggles measured again, as the revision no longer matches).
+      if (pagination_->Revision() != revision) host_.ViewInvalidate();
     }
     for (const Squiggle& s : ps.lines) {
       // The word being typed isn't marked until it's finished, as Word does it.

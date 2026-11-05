@@ -54,6 +54,7 @@ void DocView::OnEdited(const fw::doc::edit::Change& c) {
     ch.measured = false;
   }
   for (auto& l : links_) annotationsStale_ |= !move(l.from) | !move(l.to);
+  if (hf_ && !move(bodyCaret_)) bodyCaret_ = {c.first, 0};
   // Matches in changed paragraphs are gone (finding again finds them).
   std::vector<Match> kept;
   for (Match& m : matches_) {
@@ -72,7 +73,15 @@ void DocView::OnEdited(const fw::doc::edit::Change& c) {
   if (file_.Dirty() != wasModified) host_.ViewStateChanged();
 }
 
+void DocView::SyncFile() {
+  if (!editor_) return;
+  const bool wasModified = file_.Dirty();
+  file_.Changed(editor_->Modified(), editor_->DirtyParts());
+  if (file_.Dirty() != wasModified) host_.ViewStateChanged();
+}
+
 bool DocView::Apply(const Result& r) {
+  SyncFile();
   if (!r) {
     if (!r.message.empty()) host_.ViewMessage(BannerKind::Warning, std::wstring(r.message.begin(), r.message.end()));
     return false;
@@ -80,7 +89,7 @@ bool DocView::Apply(const Result& r) {
   anchor_ = focus_ = ToText(r.caret);
   goalX_ = -1;
   // The caret's page, and the next where the new layout meets the old one, now; the rest in idle time.
-  if (auto c = pagination_->CaretAt(focus_)) pagination_->LayOutPages(c->page + 2);
+  if (auto c = pagination_->CaretAt(focus_, CaretPage())) pagination_->LayOutPages(c->page + 2);
   TakeNewPages();
   CaretMoved(true);
   host_.ViewStateChanged();
@@ -89,6 +98,7 @@ bool DocView::Apply(const Result& r) {
 
 void DocView::TypeText(std::u16string_view text) {
   if (text.empty()) return;
+  if (HasSelection() && table_ && table_->ReplaceCells(text)) return;  // cells selected: they're replaced
   const bool typed = !HasSelection();
   if (!Apply(HasSelection() ? editor_->Replace(SelFrom(), SelTo(), text) : editor_->InsertText(ToDoc(focus_), text))) return;
   // "1. " or "* " at the start of a paragraph starts a list (DocFormat::AutoFormat).
@@ -96,6 +106,7 @@ void DocView::TypeText(std::u16string_view text) {
 }
 
 void DocView::DeleteBy(bool forward, bool word) {
+  if (HasSelection() && table_ && table_->ReplaceCells(u"")) return;  // cells selected: they're emptied
   if (HasSelection()) {
     Apply(editor_->Delete(SelFrom(), SelTo()));
     return;
@@ -125,6 +136,10 @@ void DocView::DeleteBy(bool forward, bool word) {
 void DocView::Cut() {
   if (!Editing() || !HasSelection()) return;
   PutOnClipboard();
+  if (table_ && table_->SelectedCells()) {
+    table_->ReplaceCells(u"");
+    return;
+  }
   editor_->BeginGroup(u"Cut");
   Result r = editor_->Delete(SelFrom(), SelTo());
   editor_->EndGroup();
@@ -133,11 +148,12 @@ void DocView::Cut() {
 
 void DocView::Paste(bool formatted) {
   if (!Editing()) return;
+  if (formatted && PastePicture()) return;  // only when there's no text
+  namespace edit = fw::doc::edit;
+  std::optional<edit::Clip> clip;
   if (formatted) {
     // Featherweight's own copies come as HTML; Word's RTF says more than its HTML; then a
     // browser's HTML.
-    namespace edit = fw::doc::edit;
-    std::optional<edit::Clip> clip;
     const std::string html = util::GetClipboardBytes(L"HTML Format");
     if (!html.empty() && edit::IsOwnHtml(html)) clip = edit::FromHtml(html);
     if (!clip || clip->Empty()) {
@@ -145,26 +161,39 @@ void DocView::Paste(bool formatted) {
       if (!rtf.empty()) clip = edit::FromRtf(rtf);
     }
     if ((!clip || clip->Empty()) && !html.empty()) clip = edit::FromHtml(html);
-    if (clip && !clip->Empty()) {
-      Apply(edit::PasteClip(*editor_, SelFrom(), SelTo(), *clip, clipSource_));
-      return;
-    }
+    if (clip && clip->Empty()) clip.reset();
   }
-  std::wstring text = util::GetClipboardText();
-  if (text.empty()) return;
-  const std::u16string t(text.begin(), text.end());
+  std::u16string t;
+  if (!clip) {
+    std::wstring text = util::GetClipboardText();
+    if (text.empty()) return;
+    t.assign(text.begin(), text.end());
+  }
   editor_->BeginGroup(u"Paste");
-  Result r = HasSelection() ? editor_->Replace(SelFrom(), SelTo(), t) : editor_->InsertText(ToDoc(focus_), t);
-  editor_->EndGroup();
+  fw::doc::Pos from = SelFrom(), to = SelTo();
+  Result r;
+  r.caret = from;
+  if (HasSelection() && table_ && table_->SelectedCells()) {
+    // Cells selected: they're emptied, and the paste goes in from the first (a table over the
+    // cells from there).
+    r = editor_->ClearCells(ToDoc(anchor_), ToDoc(focus_));
+    from = to = r.caret;
+  }
+  if (r) r = clip ? edit::PasteClip(*editor_, from, to, *clip, clipSource_)
+                  : from == to ? editor_->InsertText(from, t) : editor_->Replace(from, to, t);
+  if (r) editor_->EndGroup();
+  else editor_->CancelGroup();
   Apply(r);
 }
 
 void DocView::Undo() {
   if (Editing() && editor_->CanUndo()) Apply(editor_->Undo());
+  CheckHeaderFooter();
 }
 
 void DocView::Redo() {
   if (Editing() && editor_->CanRedo()) Apply(editor_->Redo());
+  CheckHeaderFooter();
 }
 
 // ---------------------------------------------------------------------------
@@ -349,7 +378,7 @@ void DocView::CaretMoved(bool show) {
 
 const std::optional<layout::Layout::Caret>& DocView::CaretBox() {
   if (!(caretFor_ == focus_) || caretRevision_ != pagination_->Revision()) {
-    caretBox_ = pagination_->CaretAt(focus_);
+    caretBox_ = pagination_->CaretAt(focus_, CaretPage());
     caretFor_ = focus_;
     caretRevision_ = pagination_->Revision();
     TakeNewPages();

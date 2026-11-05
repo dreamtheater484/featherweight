@@ -569,7 +569,10 @@ TEST(Edit_TablesAndStoriesBoundEdits) {
   Editor ed(*doc);
   auto ps = Main(*doc);
   CHECK(ps.size() == 3);
-  CHECK(!ed.Delete(P(ps[0], 3), P(ps[2], 2)) && !ed.JoinParagraphs(ps[0]) && !ed.JoinParagraphs(ps[1]));
+  // Across the whole table: it goes with the text (tables, D3), in one step; undone for what follows.
+  CHECK(ed.Delete(P(ps[0], 3), P(ps[2], 2)) && Main(*doc).size() == 1 && doc->Para(Main(*doc)[0]).text == u"befter");
+  CHECK(ed.Undo() && Main(*doc).size() == 3);
+  CHECK(!ed.JoinParagraphs(ps[0]) && !ed.JoinParagraphs(ps[1]));
   CHECK(!ed.Delete(P(ps[1], 4), P(ps[2], 0)));
   CHECK(RoundTrips(*doc));
   CHECK(ed.InsertText(P(ps[1], 4), u"s") && ed.SplitParagraph(P(ps[1], 2)));
@@ -1017,8 +1020,8 @@ TEST(Clip_ReadsWordsRtf) {
       "\\trowd\\cellx1000\\cellx2000\\pard\\intbl A\\cell B\\cell\\row\r\n"
       "\\pard\\plain end}";
   auto c = edit::FromRtf(rtf);
-  CHECK(c && c->paras.size() == 5);
-  if (!c || c->paras.size() != 5) return;
+  CHECK(c && c->paras.size() == 6);
+  if (!c || c->paras.size() != 6) return;
   const ClipPara& t = c->paras[0];
   CHECK(ClipText(t) == u"Title" && t.heading == 1 && t.align == ClipAlign::Center);
   CHECK(t.runs.size() == 1 && t.runs[0].bold && t.runs[0].halfPoints == 32 && t.runs[0].font == "Times New Roman");
@@ -1033,8 +1036,10 @@ TEST(Clip_ReadsWordsRtf) {
   }
   const ClipPara& item = c->paras[2];
   CHECK(item.label == u"•" && ClipText(item) == u"Item" && item.indent == 720 && item.firstLine == -360);
-  CHECK(ClipText(c->paras[3]) == u"A\tB");
-  CHECK(ClipText(c->paras[4]) == u"end");
+  // The table's cells (D3: tables are tables).
+  CHECK(ClipText(c->paras[3]) == u"A" && c->paras[3].table == 1 && c->paras[3].cell == 0);
+  CHECK(ClipText(c->paras[4]) == u"B" && c->paras[4].table == 1 && c->paras[4].cell == 1);
+  CHECK(ClipText(c->paras[5]) == u"end" && c->paras[5].table == 0);
 }
 
 TEST(Clip_ReadsBrowsersAndWordsHtml) {
@@ -1568,7 +1573,10 @@ TEST(Edit_ValuesXmlCantHoldAreRefused) {
   auto rtf = edit::FromRtf("{\\rtf1\\ansi{\\fonttbl{\\f0 Bad\\'01Font;}}\\f0\\b bold}");
   CHECK(rtf && rtf->paras.size() == 1 && rtf->paras[0].runs.size() == 1);
   if (!rtf || rtf->paras.empty() || rtf->paras[0].runs.empty()) return;
-  CHECK(rtf->paras[0].runs[0].font.find('\x01') != std::string::npos);  // the reader keeps what the file says
+  // The reader leaves out what XML can't hold (fwpkg's clipboard hardening). A clip from elsewhere
+  // could still have it, and pasting leaves it out too.
+  CHECK(rtf->paras[0].runs[0].font == "BadFont");
+  rtf->paras[0].runs[0].font = std::string("Bad\x01" "Font");
   CHECK(edit::PasteClip(ed, P(p, 5), P(p, 5), *rtf));
   CHECK(doc->Para(p).text == u"Hellobold" && doc->ResolvedRun(p, doc->Runs(p).back().run).bold);
   CHECK(MainXml(*doc).find('\x01') == std::string::npos && Consistent(*doc, f) && ChecksOut(*doc));

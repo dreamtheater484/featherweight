@@ -585,9 +585,12 @@ void SplitButton::SetGroup(ControlGroup* g) {
   palette_.SetGroup(g);
 }
 
-D2D1_RECT_F SplitButton::ArrowRect() const { return RectF(rc.right - 18 * Ui(), rc.top, rc.right, rc.bottom); }
+// With nothing to list it's a plain button: no arrow.
+D2D1_RECT_F SplitButton::ArrowRect() const {
+  return RectF(colors || !items.empty() ? rc.right - 18 * Ui() : rc.right, rc.top, rc.right, rc.bottom);
+}
 
-D2D1_RECT_F SplitButton::MainRect() const { return RectF(rc.left, rc.top, rc.right - 18 * Ui(), rc.bottom); }
+D2D1_RECT_F SplitButton::MainRect() const { return RectF(rc.left, rc.top, ArrowRect().left, rc.bottom); }
 
 SplitButton::Part SplitButton::PartAt(float x, float y) const {
   if (!Hit(x, y)) return kNone;
@@ -652,7 +655,7 @@ void SplitButton::Draw(Canvas& c) {
   c.FillRound(rc, 4 * u, Alpha(p.hover, ah * 0.6f));
   c.FillRound(rc, 4 * u, Alpha(p.pressed, enabled ? std::max(arrowPress_.V(), popup_.open ? 1.f : 0.f) : 0));
   c.PopClip();
-  if (any > 0.01f || popup_.open)
+  if ((any > 0.01f || popup_.open) && arrow.left < rc.right)
     c.Fill(RectF(arrow.left, rc.top + 6 * u, arrow.left + 1, rc.bottom - 6 * u), Alpha(p.textSecondary, 0.3f * std::max(any, popup_.open ? 1.f : 0.f)));
 
   const D2D1_COLOR_F fg = enabled ? p.text : p.textDisabled;
@@ -671,7 +674,7 @@ void SplitButton::Draw(Canvas& c) {
     x += glyphW + gap;
   }
   if (!text.empty()) c.Text(text, RectF(x, rc.top, x + textW + 2, rc.bottom), fg, 13 * u);
-  ctl::DrawChevron(c, arrow, enabled ? p.textSecondary : p.textDisabled, u);
+  if (arrow.left < rc.right) ctl::DrawChevron(c, arrow, enabled ? p.textSecondary : p.textDisabled, u);
   if (FocusVisible()) ctl::DrawFocusRing(c, rc, u);
 }
 

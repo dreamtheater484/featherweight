@@ -46,6 +46,11 @@ class TreeEdit {
   void Begin(std::u16string label);
   void Commit();
   bool InTransaction() const { return depth_ > 0; }
+  // Why the last transaction changed nothing in the end: it touched text the editor doesn't edit
+  // (a text box, which is written back from its drawing as it was; content kept as it is; a part
+  // the writer can't reproduce). Commit puts everything back then, as Abort does (d2-torture
+  // finding 14). Empty when it was recorded.
+  const std::u16string& Refused() const { return refused_; }
   // Says the change affects the layout of the paragraphs it touches and no others (or, with
   // `toEnd`, those and the rest of their story: a list's numbers), whatever it adds to the styles
   // and numbering parts. Only their pages are laid out again, not the whole document. It counts in
@@ -93,6 +98,21 @@ class TreeEdit {
   ElemId CopyChild(ElemId src, ElemId parent);
   // Lets the model's indexes see what the transaction has added so far (a style, a list).
   void Reindex();
+  // Puts back everything the transaction changed so far and ends it; nothing is recorded.
+  void Abort();
+
+  // ---- Inline content (fields, links, bookmarks). Positions keep their order: what is kept
+  // beside the elements (the round-trip store's fragments) stays where it was.
+  // A new empty element `name` in `parent` before `before` (kNoElem: last), its text range set
+  // to `offset` with no length (a bookmark start or end). kNoElem when `parent` can't hold it.
+  ElemId InsertElement(ElemId parent, uint32_t name, ElemId before, uint32_t offset);
+  // Puts the siblings from `first` to `last` into a new element `name` (w:fldSimple,
+  // w:hyperlink) in their place. kNoElem when their parent can't hold it, or it can't hold them.
+  ElemId Wrap(ElemId first, ElemId last, uint32_t name);
+  // Puts an inline container's children in its place and takes it out (removing a link). What it
+  // keeps first goes before them, what it keeps after it after them. False when it keeps content
+  // between its children: then it stays.
+  bool Unwrap(ElemId elem);
 
   Tree& GetTree() { return doc_.tree_; }
 
@@ -100,6 +120,13 @@ class TreeEdit {
   // without one gets an empty part, with its content type and relationship; that isn't undone
   // (an empty part says nothing). kNoElem for other kinds, or when the document isn't edited.
   ElemId EnsurePart(PartKind kind);
+  // A new header or footer part (outside a transaction, and not undone: a part nothing refers to
+  // says nothing): its content type, its relationship from the main part (`relId`), its story,
+  // and its content: a copy of story `copyOf`'s, or one empty paragraph (kNone). The copy leaves
+  // out what must be unique in a document (bookmarks, paragraph ids, content control ids). The
+  // story's index; kNone with the reason when the document isn't edited, or the content can't be
+  // copied (pictures, notes, comments, or kept content that refers to something).
+  uint32_t NewStoryPart(PartKind kind, uint32_t copyOf, std::string& relId, std::u16string& why);
 
  private:
   friend struct JournalStep;
@@ -130,6 +157,10 @@ class TreeEdit {
   bool HasRepeats(ElemId e) const;
   ElemId Insert(ElemId parent, ElemDefId def, ElemId before);  // a new empty element
   void Link(ElemId parent, ElemId child, ElemId before);       // before kNoElem: schema order
+  // Links `child` (which isn't linked) into `parent` before `before` (kNoElem: last), leaving
+  // kept fragments alone: content in a paragraph is in reading order, not schema order.
+  void LinkAt(ElemId parent, ElemId child, ElemId before);
+  void Unlink(ElemId elem);  // takes a linked element out of its parent, fragments untouched
   void Append(ElemId parent, ElemId child);                    // last among its siblings
   // An element and its subtree from checked XML; linked before `before`, or last when `last`.
   ElemId Build(ElemId parent, const pugi::xml_node& n, ElemId before, bool last);
@@ -142,6 +173,16 @@ class TreeEdit {
   uint32_t ParagraphOf(ElemId id) const;
   // Whether an element is in the styles or numbering part.
   bool InDefinitions(ElemId id) const;
+  // Whether an element is somewhere the editor edits (Editor's Editable, for any element): not in a
+  // text box or kept content, and in a part the writer reproduces. `memo` keeps the answers for
+  // the elements passed on the way up.
+  bool Editable(ElemId id, std::unordered_map<ElemId, bool>& memo, std::u16string& why) const;
+  // Puts back everything the transaction changed (Abort and a refused Commit).
+  void Discard();
+  // NewStoryPart's copy: whether a story's content can be copied, and the copy of an element and
+  // what it holds (new paragraphs join story `story`).
+  bool Copyable(ElemId root, std::u16string& why) const;
+  ElemId CopyTree(ElemId src, ElemId parent, uint32_t story);
 
   Editor& editor_;
   Document& doc_;
@@ -149,7 +190,7 @@ class TreeEdit {
   int depth_ = 0;
   bool local_ = false, toEnd_ = false, structure_ = false;
   std::pair<uint32_t, uint32_t> affects_{kNone, kNone};
-  std::u16string label_;
+  std::u16string label_, refused_;
   size_t elemsAtBegin_ = 0;
   Saved before_;
   std::vector<StoreOp> store_;
