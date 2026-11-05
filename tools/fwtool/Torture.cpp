@@ -441,6 +441,29 @@ class EditorTarget : public EditTarget {
       para.line = std::atoi(value.c_str());
       para.lineRule = fw::doc::LineRule::Auto;
       ed::FormatParagraphs(te, range, para);
+    } else if (name == "para" && !value.empty()) {
+      // The Paragraph panel (FormatParagraphs): "para=<field>:<value>", one field at a time. Line
+      // spacing at least, exactly (twips) or auto (240ths); indents and the first line (negative:
+      // hanging); space before and after; keep with next, keep lines together, page break before,
+      // widow control and contextual spacing (1 or 0).
+      const size_t c = value.find(':');
+      const std::string field = value.substr(0, c);
+      const int n = c == std::string::npos ? 0 : std::atoi(value.c_str() + c + 1);
+      if (field == "atleast" || field == "exact" || field == "auto") {
+        para.lineRule = field == "atleast" ? fw::doc::LineRule::AtLeast : field == "exact" ? fw::doc::LineRule::Exact : fw::doc::LineRule::Auto;
+        para.line = n;
+      } else if (field == "indstart") para.indStart = fw::Twips(n);
+      else if (field == "indend") para.indEnd = fw::Twips(n);
+      else if (field == "firstline") para.firstLine = fw::Twips(n);
+      else if (field == "before") para.spaceBefore = fw::Twips(n);
+      else if (field == "after") para.spaceAfter = fw::Twips(n);
+      else if (field == "keepnext") para.keepNext = n != 0;
+      else if (field == "keeplines") para.keepLines = n != 0;
+      else if (field == "pagebreak") para.pageBreakBefore = n != 0;
+      else if (field == "widow") para.widowControl = n != 0;
+      else if (field == "contextual") para.contextualSpacing = n != 0;
+      else return why = "unknown paragraph field", Applied::Refused;
+      ed::FormatParagraphs(te, range, para);
     } else if (name == "spacebefore") {
       para.spaceBefore = fw::Twips(te.Doc().ResolvedPara(range.from.para).spaceBefore.Value() == 0 ? 240 : 0);
       ed::FormatParagraphs(te, range, para);
@@ -1020,9 +1043,10 @@ class Generator {
     static const std::vector<std::u16string> pieces = {
         u"a", u"e", u"the ", u"word ", u"Featherweight", u"  ", u" ", u".", u", ", u"12", u"é", u"ß", u"ü", u"ñ",
         u"ç", u"€", u"—", u"“quoted”", u"日本", u"\t", u"o"};
-    // Breaks typed as characters (InsertText): a line break, and with D3 a page and a column break.
+    // Breaks typed as characters (InsertText): a line break, and with D3 a page and a column break,
+    // and optional and non-breaking hyphens (w:softHyphen, w:noBreakHyphen), mid-word too.
 #if FW_TORTURE_PAGE
-    static const std::vector<std::u16string> breaks = {u"\v", u"\v", u"\f", u"\x0E"};
+    static const std::vector<std::u16string> breaks = {u"\v", u"\v", u"\f", u"\x0E", u"co\u00ADop", u"e\u2011mail", u"\u00AD", u"\u2011"};
 #else
     static const std::vector<std::u16string> breaks = {u"\v"};
 #endif
@@ -1113,6 +1137,13 @@ class Generator {
       }
     } else {
       e.format = rng_.Pick(formats);
+      if (rng_.Percent(20)) {  // the Paragraph panel, one field at a time
+        static const std::vector<std::string> fields = {
+            "atleast:360", "exact:280", "auto:720",  "indstart:720", "indstart:0",   "indend:1440", "firstline:360",
+            "firstline:-360", "before:120", "after:0", "after:240",   "keepnext:1",   "keepnext:0",  "keeplines:1",
+            "pagebreak:1",    "pagebreak:0", "widow:0", "widow:1",    "contextual:1"};
+        e.format = "para=" + rng_.Pick(fields);
+      }
 #if FW_TORTURE_PAGE
       if (rng_.Percent(15)) {  // the ruler's tab stops; a stop the paragraph has, to take away
         static const std::vector<std::string> tabs = {"tabs=1440:start", "tabs=2880:center", "tabs=4320:end",
@@ -1857,7 +1888,7 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     static const std::set<std::string> formatting = {
         "bullets", "numbering", "multilevel", "nolist", "restart", "continue", "indent", "outdent", "apply",
         "toggle", "grow", "shrink", "grow1", "shrink1", "clearchars", "clearpara", "clearall", "font",
-        "spacing", "spacebefore", "border", "tabs"};
+        "spacing", "spacebefore", "border", "tabs", "para"};
     const bool styleChange = e.kind == EditKind::Command && (e.format == "update" || e.format.starts_with("modify="));
     const bool formattingCommand = e.kind == EditKind::Command && formatting.contains(e.format.substr(0, e.format.find('=')));
     bool local = e.kind == EditKind::Type || e.kind == EditKind::Delete || e.kind == EditKind::Replace ||
