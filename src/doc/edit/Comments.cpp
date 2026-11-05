@@ -71,18 +71,19 @@ Result Make(Editor& ed, Pos from, Pos to, Pos refAt, std::u16string_view text, c
   const StoryKind kind = doc.Stories()[doc.Para(from.para).story].kind;
   if (kind != StoryKind::Main && kind != StoryKind::Footnote && kind != StoryKind::Endnote)
     return Fail(u"Comments go in the document's text, not in headers, footers or other comments.");
-  TreeEdit te(ed, from);
-  if (te.EnsurePart(PartKind::Comments) == kNoElem) return Fail(u"Comments can't be added to this document.");
   const std::string id = ed.NewChangeId(), author = ed.ChangeAuthor();
-  const uint32_t story = te.NewComment(id, author, Initials(author), ed.ChangeDate(), ed.NewParaId());
-  if (story == kNone) return Fail(u"Comments can't be added to this document.");
   ed.BeginGroup(name);
   auto fail = [&](Result r) {
     ed.CancelGroup();
     r.ok = false;
     return r;
   };
+  // Its marks first: where they're refused, nothing else is made (not the part, nor the comment).
   if (Result r = ed.InsertCommentMarks(from, to, refAt, id); !r) return fail(r);
+  TreeEdit te(ed, from);
+  if (te.EnsurePart(PartKind::Comments) == kNoElem) return fail(Fail(u"Comments can't be added to this document."));
+  const uint32_t story = te.NewComment(id, author, Initials(author), ed.ChangeDate(), ed.NewParaId());
+  if (story == kNone) return fail(Fail(u"Comments can't be added to this document."));
   // Its text, which isn't tracked.
   const uint32_t first = doc.StoryParagraphs(story).front();
   ed.PauseTracking(true);
