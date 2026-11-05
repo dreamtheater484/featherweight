@@ -148,24 +148,23 @@ bool IsRangeMarker(Node n) {
 std::vector<TextRun> Document::Runs(uint32_t para) const {
   std::vector<TextRun> out;
   if (para >= paras_.size()) return out;
-  // The field state where the paragraph starts.
+  // The field state where the paragraph starts: the story's field characters up to it.
   uint32_t story = paras_[para].story;
   if (story != kNone) {
-    if (caches_->fieldsDone.size() < stories_.size()) caches_->fieldsDone.resize(stories_.size(), false);
-    if (!caches_->fieldsDone[story]) {
-      caches_->fieldsDone[story] = true;
-      std::vector<uint8_t> stack;
-      for (uint32_t pi : StoryParagraphs(story)) {
-        if (!stack.empty()) caches_->fieldStack[pi] = stack;
-        ElemId top = paras_[pi].elem;
-        for (ElemId id = top; id != kNoElem; id = NextInTree(tree_, id, top)) {
-          if (tree_.elems[id].flags & kDisplayOnly) continue;
-          if (Schema::Get().Elem(tree_.elems[id].def).name != Name("fldChar")) continue;
-          std::string_view type = Node(&tree_, id).AttrOr(Name("fldCharType"));
-          if (type == "begin") stack.push_back(1);
-          else if (type == "separate" && !stack.empty()) stack.back() = 0;
-          else if (type == "end" && !stack.empty()) stack.pop_back();
-        }
+    if (caches_->fieldPass.size() < stories_.size()) caches_->fieldPass.resize(stories_.size());
+    Caches::FieldPass& pass = caches_->fieldPass[story];
+    if (pass.paras.empty()) pass.paras = StoryParagraphs(story);
+    while (!pass.Passed(para) && pass.next < pass.paras.size()) {
+      uint32_t pi = pass.paras[pass.next++];
+      if (!pass.open.empty()) caches_->fieldStack[pi] = pass.open;
+      ElemId top = paras_[pi].elem;
+      for (ElemId id = top; id != kNoElem; id = NextInTree(tree_, id, top)) {
+        if (tree_.elems[id].flags & kDisplayOnly) continue;
+        if (Schema::Get().Elem(tree_.elems[id].def).name != Name("fldChar")) continue;
+        std::string_view type = Node(&tree_, id).AttrOr(Name("fldCharType"));
+        if (type == "begin") pass.open.push_back(1);
+        else if (type == "separate" && !pass.open.empty()) pass.open.back() = 0;
+        else if (type == "end" && !pass.open.empty()) pass.open.pop_back();
       }
     }
   }

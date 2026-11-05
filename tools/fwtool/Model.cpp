@@ -1,5 +1,9 @@
 // fwtool dump --model: what the document model reads from a Word document, for checking the
 // reader and for the layout work that builds on it.
+#include <windows.h>
+#include <psapi.h>
+
+#include <chrono>
 #include <cstdio>
 
 #include "Common.h"
@@ -52,14 +56,43 @@ const char* StoryName(StoryKind k) {
 }  // namespace
 
 void DumpModel(const std::filesystem::path& file) {
+  using Clock = std::chrono::steady_clock;
+  auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
   fw::pkg::Status st;
+  Clock::time_point t0 = Clock::now();
   auto pkg = OpenPackage(file, st);
+  Clock::time_point t1 = Clock::now();
   std::printf("%s\n", Display(file).c_str());
   std::unique_ptr<Document> doc = pkg ? docx::Read(std::move(pkg), st) : nullptr;
+  Clock::time_point t2 = Clock::now();
   if (!doc) {
     std::printf("  refused: %s\n\n", st.message.c_str());
     return;
   }
+  // What the first page asks for: about 60 paragraphs' properties, runs and labels.
+  auto main = doc->StoryParagraphs(doc->MainStory());
+  for (size_t i = 0; i < main.size() && i < 60; ++i) {
+    doc->ResolvedPara(main[i]);
+    doc->Label(main[i]);
+    for (const TextRun& r : doc->Runs(main[i])) doc->ResolvedRun(main[i], r.run);
+  }
+  Clock::time_point t3 = Clock::now();
+  // What pagination asks for: every paragraph's.
+  for (uint32_t story = 0; story < doc->Stories().size(); ++story)
+    for (uint32_t para : doc->StoryParagraphs(story)) {
+      doc->ResolvedPara(para);
+      doc->ResolvedMark(para);
+      doc->Label(para);
+      for (const TextRun& r : doc->Runs(para)) doc->ResolvedRun(para, r.run);
+    }
+  Clock::time_point t4 = Clock::now();
+  PROCESS_MEMORY_COUNTERS mem{};
+  K32GetProcessMemoryInfo(GetCurrentProcess(), &mem, sizeof mem);
+  size_t model = doc->ModelBytes(), store = doc->Store().BytesUsed();
+  std::printf("  opened in %.1f ms (package %.1f ms, model %.1f ms); properties: first page %.1f ms, all %.1f ms\n",
+              ms(t0, t2), ms(t0, t1), ms(t1, t2), ms(t2, t3), ms(t2, t4));
+  std::printf("  model %zu KB, store %zu KB (%zu%%), peak working set %zu MB\n", model / 1024, store / 1024,
+              model ? store * 100 / model : 0, static_cast<size_t>(mem.PeakWorkingSetSize >> 20));
   const DocSettings& set = doc->Settings();
   std::printf("  compatibility mode %d, default tab %d twips, auto hyphenation %s, even/odd headers %s\n",
               set.compatibilityMode, set.defaultTabStop.Value(), set.autoHyphenation ? "on" : "off",

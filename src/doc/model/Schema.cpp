@@ -15,7 +15,7 @@ namespace {
 //   !role         para, run, text, object, marker, story, or char=XXXX (hex code unit)
 // Children are listed in schema order (ECMA-376 Part 1, §17), which is where editing operations
 // insert new elements; reading and writing keep the document's own order. Elements a type doesn't
-// list are kept as they are, and so are the attributes it doesn't list (rsids, for example).
+// list are kept as they are, and so are the attributes it doesn't list.
 constexpr std::string_view kSchema = R"(
 OnOff = @val
 Val = @val
@@ -67,7 +67,7 @@ Cols = @equalWidth @space @num @sep col:Col
 DocGrid = @type @linePitch @charSpace
 SectPrBase = footnotePr:NotePr endnotePr:NotePr type:Val pgSz:PgSz pgMar:PgMar paperSrc:PaperSrc pgBorders:PgBorders lnNumType:LnNumType pgNumType:PgNumType cols:Cols formProt:OnOff vAlign:Val noEndnote:OnOff titlePg:OnOff textDirection:Val bidi:OnOff rtlGutter:OnOff docGrid:DocGrid printerSettings:RelId
 SectPrChange = @id @author @date sectPr:SectPrBase
-SectPr = headerReference:HdrFtrRef footerReference:HdrFtrRef +SectPrBase sectPrChange:SectPrChange
+SectPr = @rsidRPr @rsidDel @rsidR @rsidSect headerReference:HdrFtrRef footerReference:HdrFtrRef +SectPrBase sectPrChange:SectPrChange
 
 TblpPr = @leftFromText @rightFromText @topFromText @bottomFromText @vertAnchor @horzAnchor @tblpXSpec @tblpX @tblpYSpec @tblpY
 TblBorders = top:Border start:Border left:Border bottom:Border end:Border right:Border insideH:Border insideV:Border
@@ -126,7 +126,7 @@ Pict = !object
 Object = !object @dxaOrig @dyaOrig
 ContentPart = !object @r:id
 Math = !object
-R = !run rPr:RPr t:Text delText:Text instrText:Text delInstrText:Text tab:TabChar br:Br cr:Cr noBreakHyphen:NoBreakHyphen softHyphen:SoftHyphen sym:Sym ptab:PTab fldChar:FldChar footnoteReference:NoteRef endnoteReference:NoteRef commentReference:CommentRef footnoteRef:NoteMark endnoteRef:NoteMark annotationRef:AnnotationRef separator:Separator continuationSeparator:ContSeparator pgNum:PgNum dayShort:DateItem monthShort:DateItem yearShort:DateItem dayLong:DateItem monthLong:DateItem yearLong:DateItem lastRenderedPageBreak:RenderedPageBreak drawing:Drawing pict:Pict object:Object contentPart:ContentPart
+R = !run @rsidRPr @rsidDel @rsidR rPr:RPr t:Text delText:Text instrText:Text delInstrText:Text tab:TabChar br:Br cr:Cr noBreakHyphen:NoBreakHyphen softHyphen:SoftHyphen sym:Sym ptab:PTab fldChar:FldChar footnoteReference:NoteRef endnoteReference:NoteRef commentReference:CommentRef footnoteRef:NoteMark endnoteRef:NoteMark annotationRef:AnnotationRef separator:Separator continuationSeparator:ContSeparator pgNum:PgNum dayShort:DateItem monthShort:DateItem yearShort:DateItem dayLong:DateItem monthLong:DateItem yearLong:DateItem lastRenderedPageBreak:RenderedPageBreak drawing:Drawing pict:Pict object:Object contentPart:ContentPart
 
 SmartAttr = @uri @name @val
 SmartTagPr = attr:SmartAttr
@@ -150,7 +150,7 @@ SmartTag = @uri @element smartTagPr:SmartTagPr +InlineContent
 CustomXmlRun = @uri @element customXmlPr:CustomXmlPr +InlineContent
 FldSimple = @instr @fldLock @dirty +InlineContent
 Dir = @val +InlineContent
-P = !para @w14:paraId @w14:textId pPr:PPr +InlineContent
+P = !para @rsidRPr @rsidR @rsidDel @rsidP @rsidRDefault @w14:paraId @w14:textId pPr:PPr +InlineContent
 
 BlockContent = +RangeMarkup p:P tbl:Tbl sdt:SdtBlock customXml:CustomXmlBlock
 BlockGroup = +BlockContent
@@ -165,7 +165,7 @@ CellGroup = +CellContent
 SdtCell = sdtPr:SdtPr sdtEndPr:SdtEndPr sdtContent:CellGroup
 CustomXmlCell = @uri @element customXmlPr:CustomXmlPr +CellContent
 Tbl = tblPr:TblPr tblGrid:TblGrid +RowContent
-Tr = @w14:paraId @w14:textId tblPrEx:TblPrEx trPr:TrPr +CellContent
+Tr = @rsidRPr @rsidR @rsidDel @rsidTr @w14:paraId @w14:textId tblPrEx:TblPrEx trPr:TrPr +CellContent
 Tc = @id tcPr:TcPr +BlockContent
 
 Background = @color @themeColor @themeTint @themeShade

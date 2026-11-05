@@ -120,100 +120,96 @@ std::optional<ListLabel> Document::Label(uint32_t para) const {
   Caches& c = *caches_;
   uint32_t story = paras_[para].story;
   if (story == kNone) return std::nullopt;
-  if (c.labelsDone.size() < stories_.size()) c.labelsDone.resize(stories_.size(), false);
-  if (!c.labelsDone[story]) {
-    c.labelsDone[story] = true;
-    // One pass over the story in document order.
-    struct List {
-      std::array<int64_t, 9> count{};
-      std::array<bool, 9> used{};
+  if (c.labelPass.size() < stories_.size()) c.labelPass.resize(stories_.size());
+  Caches::LabelPass& pass = c.labelPass[story];
+  if (pass.paras.empty()) pass.paras = StoryParagraphs(story);
+  // The story in document order, as far as this paragraph.
+  auto& lists = pass.lists;  // by abstract definition
+  auto& numSeen = pass.numSeen;
+  while (!pass.Passed(para) && pass.next < pass.paras.size()) {
+    uint32_t pi = pass.paras[pass.next++];
+    const ParaProps& pp = ResolvedPara(pi);
+    if (pp.numId.empty() || ParaNode(pi).DisplayOnly()) continue;
+    int32_t level = pp.ilvl;
+    Node lvl = NumberingLevel(pp.numId, level);
+    if (!lvl) continue;
+    auto numIt = caches_->nums.find(pp.numId);
+    if (numIt == caches_->nums.end()) continue;
+    Node num(&tree_, numIt->second);
+    std::string_view key = num.Child(Name("abstractNumId")).AttrOr(kVal);
+    Caches::ListCounters& list = lists[key];
+    auto levelNode = [&](int32_t k) { return NumberingLevel(pp.numId, k); };
+    auto startOf = [&](int32_t k) {
+      // The abstract definition's start: an override's w:lvl doesn't change it (2.1.292).
+      Node l = levelNode(k);
+      if (l && l.Parent().Is(Name("lvlOverride"))) {
+        auto absIt = caches_->abstractNums.find(key);
+        if (absIt != caches_->abstractNums.end())
+          for (Node al : Node(&tree_, absIt->second).Kids())
+            if (al.Is(Name("lvl")) && al.Int(Name("ilvl")).value_or(-1) == k) l = al;
+      }
+      return l ? l.Child(Name("start")).Int(kVal).value_or(0) : 0;
     };
-    std::unordered_map<std::string_view, List> lists;  // by abstract definition
-    std::unordered_map<std::string_view, bool> numSeen;
-    for (uint32_t pi : StoryParagraphs(story)) {
-      const ParaProps& pp = ResolvedPara(pi);
-      if (pp.numId.empty() || ParaNode(pi).DisplayOnly()) continue;
-      int32_t level = pp.ilvl;
-      Node lvl = NumberingLevel(pp.numId, level);
-      if (!lvl) continue;
-      auto numIt = caches_->nums.find(pp.numId);
-      if (numIt == caches_->nums.end()) continue;
-      Node num(&tree_, numIt->second);
-      std::string_view key = num.Child(Name("abstractNumId")).AttrOr(kVal);
-      List& list = lists[key];
-      auto levelNode = [&](int32_t k) { return NumberingLevel(pp.numId, k); };
-      auto startOf = [&](int32_t k) {
-        // The abstract definition's start: an override's w:lvl doesn't change it (2.1.292).
-        Node l = levelNode(k);
-        if (l && l.Parent().Is(Name("lvlOverride"))) {
-          auto absIt = caches_->abstractNums.find(key);
-          if (absIt != caches_->abstractNums.end())
-            for (Node al : Node(&tree_, absIt->second).Kids())
-              if (al.Is(Name("lvl")) && al.Int(Name("ilvl")).value_or(-1) == k) l = al;
-        }
-        return l ? l.Child(Name("start")).Int(kVal).value_or(0) : 0;
-      };
-      // A w:num's start overrides restart their levels where it's first used.
-      if (!numSeen[pp.numId]) {
-        numSeen[pp.numId] = true;
-        for (Node o : num.Kids()) {
-          if (!o.Is(Name("lvlOverride"))) continue;
-          auto k = o.Int(Name("ilvl"));
-          Node so = o.Child(Name("startOverride"));
-          if (!k || !so || *k < 0 || *k > 8) continue;
-          list.count[*k] = so.Int(kVal).value_or(0) - 1;
-          list.used[*k] = true;
-        }
+    // A w:num's start overrides restart their levels where it's first used.
+    if (!numSeen[pp.numId]) {
+      numSeen[pp.numId] = true;
+      for (Node o : num.Kids()) {
+        if (!o.Is(Name("lvlOverride"))) continue;
+        auto k = o.Int(Name("ilvl"));
+        Node so = o.Child(Name("startOverride"));
+        if (!k || !so || *k < 0 || *k > 8) continue;
+        list.count[*k] = so.Int(kVal).value_or(0) - 1;
+        list.used[*k] = true;
       }
-      if (list.used[level]) ++list.count[level];
-      else list.count[level] = startOf(level);
-      list.used[level] = true;
-      // Lower levels restart after this one, as their w:lvlRestart says.
-      for (int32_t k = level + 1; k < 9; ++k) {
-        Node kl = levelNode(k);
-        std::optional<int64_t> restart;
-        if (kl && !kl.Parent().Is(Name("lvlOverride"))) restart = kl.Child(Name("lvlRestart")).Int(kVal);
-        if (restart && *restart == 0) continue;  // never
-        int64_t after = restart ? *restart - 1 : k - 1;
-        if (level <= after) list.used[k] = false;
-      }
-
-      ListLabel label;
-      label.level = level;
-      label.numId = pp.numId;
-      label.lvl = lvl;
-      label.numFmt = lvl.Child(Name("numFmt")).AttrOr(kVal, "decimal");
-      label.bullet = label.numFmt == "bullet";
-      label.suffix = lvl.Child(Name("suff")).AttrOr(kVal, "tab");
-      label.jc = ParseJustification(lvl.Child(Name("lvlJc")).AttrOr(kVal));
-      bool legal = lvl.Child(Name("isLgl")) && lvl.Child(Name("isLgl")).On();
-      std::u16string text = ToUtf16(lvl.Child(Name("lvlText")).AttrOr(kVal));
-      if (!label.bullet) {
-        std::u16string out;
-        bool ignore = false;
-        for (size_t i = 0; i < text.size(); ++i) {
-          if (text[i] == u'%' && i + 1 < text.size() && text[i + 1] >= u'1' && text[i + 1] <= u'9') {
-            int32_t k = text[i + 1] - u'1';
-            ++i;
-            if (k > level) {
-              ignore = true;  // 2.1.283
-              break;
-            }
-            int64_t n = list.used[k] ? list.count[k] : startOf(k);
-            Node kl = levelNode(k);
-            std::string_view fmt = kl ? kl.Child(Name("numFmt")).AttrOr(kVal, "decimal") : std::string_view("decimal");
-            if (legal && fmt != "none") fmt = "decimal";  // 2.1.278
-            out += FormatNumber(n, fmt);
-          } else {
-            out += text[i];
-          }
-        }
-        text = ignore ? std::u16string() : out;
-      }
-      label.text = std::move(text);
-      label.props = LabelProps(*this, c, pi, lvl);
-      c.labels[pi] = std::move(label);
     }
+    if (list.used[level]) ++list.count[level];
+    else list.count[level] = startOf(level);
+    list.used[level] = true;
+    // Lower levels restart after this one, as their w:lvlRestart says.
+    for (int32_t k = level + 1; k < 9; ++k) {
+      Node kl = levelNode(k);
+      std::optional<int64_t> restart;
+      if (kl && !kl.Parent().Is(Name("lvlOverride"))) restart = kl.Child(Name("lvlRestart")).Int(kVal);
+      if (restart && *restart == 0) continue;  // never
+      int64_t after = restart ? *restart - 1 : k - 1;
+      if (level <= after) list.used[k] = false;
+    }
+
+    ListLabel label;
+    label.level = level;
+    label.numId = pp.numId;
+    label.lvl = lvl;
+    label.numFmt = lvl.Child(Name("numFmt")).AttrOr(kVal, "decimal");
+    label.bullet = label.numFmt == "bullet";
+    label.suffix = lvl.Child(Name("suff")).AttrOr(kVal, "tab");
+    label.jc = ParseJustification(lvl.Child(Name("lvlJc")).AttrOr(kVal));
+    bool legal = lvl.Child(Name("isLgl")) && lvl.Child(Name("isLgl")).On();
+    std::u16string text = ToUtf16(lvl.Child(Name("lvlText")).AttrOr(kVal));
+    if (!label.bullet) {
+      std::u16string out;
+      bool ignore = false;
+      for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == u'%' && i + 1 < text.size() && text[i + 1] >= u'1' && text[i + 1] <= u'9') {
+          int32_t k = text[i + 1] - u'1';
+          ++i;
+          if (k > level) {
+            ignore = true;  // 2.1.283
+            break;
+          }
+          int64_t n = list.used[k] ? list.count[k] : startOf(k);
+          Node kl = levelNode(k);
+          std::string_view fmt = kl ? kl.Child(Name("numFmt")).AttrOr(kVal, "decimal") : std::string_view("decimal");
+          if (legal && fmt != "none") fmt = "decimal";  // 2.1.278
+          out += FormatNumber(n, fmt);
+        } else {
+          out += text[i];
+        }
+      }
+      text = ignore ? std::u16string() : out;
+    }
+    label.text = std::move(text);
+    label.props = LabelProps(*this, c, pi, lvl);
+    c.labels[pi] = std::move(label);
   }
   auto it = c.labels.find(para);
   if (it == c.labels.end()) return std::nullopt;

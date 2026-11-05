@@ -233,6 +233,9 @@ TEST(Doc_FieldsAndTheirResults) {
   CHECK(shown == u"Page 3 of 9");
   auto second = doc->Runs(Paras(*doc)[2]);  // starts inside the IF field's result
   CHECK(!second.empty() && !second[0].fieldCode && second[0].fieldDepth == 1);
+  // Asked for first, a paragraph inside a field still knows it: the pass goes as far as it needs.
+  auto fresh = LoadOk(f);
+  CHECK(fresh && fresh->Runs(Paras(*fresh)[2]).at(0).fieldDepth == 1);
   CHECK(RoundTrips(*doc));
 }
 
@@ -312,6 +315,7 @@ TEST(Doc_RoundTripKeepsEverything) {
   auto paras = Paras(*doc);
   const Paragraph& first = doc->Para(paras[0]);
   CHECK(doc->W14ParaId(paras[0]) == "1A2B3C4D");
+  CHECK(doc->ParaNode(paras[0]).AttrOr(Name("rsidR")) == "00AB12CD");  // rsids are the model's, not the store's
   // The display-only fallback's text is shown; the kept block is what's written.
   CHECK(first.text.find(u"fallback") != std::u16string::npos && first.text.find(u"never") == std::u16string::npos);
   CHECK(first.text.find(u"a<b>c") != std::u16string::npos);
@@ -743,6 +747,14 @@ TEST(Numbering_LabelsCountRestartAndContinue) {
   CHECK(labels == want);
   for (size_t i = 0; i < labels.size() && i < want.size(); ++i)
     if (labels[i] != want[i]) std::printf("  label %zu: %s\n", i, ToUtf8(labels[i]).c_str());
+  // Asked for out of order, the labels are the same.
+  auto again = LoadOk(f);
+  CHECK(again);
+  if (!again) return;
+  for (size_t i : {4, 0, 9, 2, 13, 11}) {
+    auto l = again->Label(Paras(*again)[i]);
+    CHECK((l ? l->text : u"-") == want[i]);
+  }
   auto bullet = doc->Label(Paras(*doc)[11]);
   CHECK(bullet && bullet->bullet && bullet->suffix == "tab" && bullet->numFmt == "bullet");
 }

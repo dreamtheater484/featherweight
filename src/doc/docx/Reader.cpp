@@ -389,6 +389,7 @@ void Reader::Exit(const Frame& f) {
   Role role = s.Type(s.Elem(E(f.elem).def).type).role;
   if (role == Role::Paragraph) {
     E(f.elem).length = static_cast<uint32_t>(Text().size());
+    Text().shrink_to_fit();  // the text grew piece by piece; a quarter of it would be spare capacity
     curPara_ = kNone;
   } else if (role == Role::Story) {
     curStory_ = kNone;

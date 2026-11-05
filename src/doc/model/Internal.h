@@ -1,6 +1,7 @@
 #pragma once
 
 // Shared by the model's own sources: the caches behind Document's resolved properties.
+#include <array>
 #include <deque>
 #include <optional>
 #include <string>
@@ -20,12 +21,31 @@ struct Document::Caches {
   std::vector<uint32_t> mark;            // by paragraph
   std::unordered_map<ElemId, uint32_t> run;  // by w:r
   std::deque<RunProps> runPool;
+  // Field state and list labels come from passes over a story in document order. Each pass goes
+  // only as far as the paragraph asked for, so the first page costs the same in a long document.
+  // A story's paragraphs are numbered consecutively, in order (the reader numbers them as it goes).
+  struct StoryPass {
+    std::vector<uint32_t> paras;  // the story's paragraphs; empty until the pass starts
+    size_t next = 0;              // paras[next] is the first paragraph not passed yet
+    bool Passed(uint32_t para) const { return next > 0 && para <= paras[next - 1]; }
+  };
   // Field state at the start of each paragraph that begins inside a field: for each open field,
   // outermost first, whether it is still in its code (1) or in its result (0).
-  std::vector<bool> fieldsDone;          // by story
+  struct FieldPass : StoryPass {
+    std::vector<uint8_t> open;
+  };
+  std::vector<FieldPass> fieldPass;      // by story
   std::unordered_map<uint32_t, std::vector<uint8_t>> fieldStack;  // by paragraph
-  // List labels, computed a story at a time.
-  std::vector<bool> labelsDone;          // by story
+  // List labels: counters per abstract definition, and the w:num elements already used.
+  struct ListCounters {
+    std::array<int64_t, 9> count{};
+    std::array<bool, 9> used{};
+  };
+  struct LabelPass : StoryPass {
+    std::unordered_map<std::string_view, ListCounters> lists;
+    std::unordered_map<std::string_view, bool> numSeen;
+  };
+  std::vector<LabelPass> labelPass;      // by story
   std::unordered_map<uint32_t, ListLabel> labels;  // by paragraph
   // Lookups.
   std::unordered_map<std::string_view, uint32_t> styleIndex;  // style id -> index into Styles()
