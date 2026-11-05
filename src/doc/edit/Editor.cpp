@@ -1013,7 +1013,8 @@ struct EditorState {
   }
 
   // Inserts text without paragraph breaks; tabs and line, page and column breaks (U+000B, U+000C,
-  // U+000E) become w:tab and w:br.
+  // U+000E) become w:tab and w:br, optional and non-breaking hyphens (U+00AD, U+2011) the
+  // w:softHyphen and w:noBreakHyphen Word writes for them.
   bool InsertPlain(uint32_t para, uint32_t o, std::u16string_view text, std::u16string& why) {
     if (text.empty()) return true;
     Spot spot;
@@ -1024,7 +1025,10 @@ struct EditorState {
     ElemId after = spot.after;
     bool atStart = cur != kNoElem && E(cur).start == o && o < E(cur).start + E(cur).length;
     // A tab or break in the middle of a w:t splits it; the text after the last one joins the tail.
-    auto special = [](char16_t c) { return c == u'\t' || c == 0x0B || c == 0x0C || c == 0x0E; };
+    auto special = [](char16_t c) { return c == u'\t' || c == 0x0B || c == 0x0C || c == 0x0E || c == 0x00AD || c == 0x2011; };
+    auto itemName = [](char16_t c) {
+      return c == u'\t' ? kTab : c == 0x00AD ? Name("softHyphen") : c == 0x2011 ? Name("noBreakHyphen") : kBr;
+    };
     auto hasSpecial = std::any_of(text.begin(), text.end(), special);
     ElemId tail = kNoElem;
     if (cur != kNoElem && hasSpecial && o > E(cur).start && o < E(cur).start + E(cur).length) {
@@ -1042,7 +1046,7 @@ struct EditorState {
     while (i < text.size()) {
       char16_t ch = text[i];
       if (special(ch)) {
-        ElemId item = NewElem(run, ch == u'\t' ? kTab : kBr);
+        ElemId item = NewElem(run, itemName(ch));
         E(item).length = 1;
         if (ch == 0x0C || ch == 0x0E) SetAttr(item, kType, ch == 0x0C ? "page" : "column");
         ElemId prev = cur != kNoElem ? cur : (after != kNoElem ? after : Child(run, kRPr));

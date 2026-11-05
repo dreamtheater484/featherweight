@@ -185,6 +185,8 @@ enum Cmd : int {
   CmdSectionOddPage,
   CmdDeleteSectionBreak,
   CmdHyphenation,       // automatic hyphenation on or off
+  CmdOptionalHyphen,    // Ctrl+-
+  CmdNonBreakingHyphen, // Ctrl+Shift+-
   // Proofing in Word documents.
   CmdSpelling = 800,  // F7: the next spelling error
   CmdWordCount,

@@ -68,6 +68,7 @@ class DocPage {
   void Margins(int32_t top, int32_t bottom, int32_t left, int32_t right);
   void SectionBreak(fw::doc::SectionStart start);
   void Break(bool column);
+  void Hyphen(bool nonBreaking);  // Ctrl+- and Ctrl+Shift+-, over the selection
 
   fw::doc::edit::Editor& editor_;
   Host host_;
