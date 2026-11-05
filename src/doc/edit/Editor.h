@@ -173,6 +173,8 @@ class Editor {
   std::optional<std::pair<Pos, Pos>> Grow(Pos from, Pos to, Extent extent) const;
   // The cell after (or before) the one `at` is in, in reading order; nullopt at either end.
   std::optional<CellInfo> NextCell(Pos at, bool back = false) const;
+  // Every cell of the table `at` is in, in reading order (a merged cell once); empty elsewhere.
+  std::vector<CellInfo> TableCells(Pos at) const;
 
   // A new table of rows x cols at `at`: before the paragraph when `at` is at its start, after it
   // at its end, else between the halves of a split. Its columns share the text width; it takes

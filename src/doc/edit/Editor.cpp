@@ -2836,6 +2836,19 @@ std::optional<Editor::CellInfo> Editor::NextCell(Pos at, bool back) const {
   return Info(s, g, it->first, it->second);
 }
 
+std::vector<Editor::CellInfo> Editor::TableCells(Pos at) const {
+  EditorState& s = *impl_;
+  std::vector<CellInfo> out;
+  if (at.para >= doc_.Paragraphs().size()) return out;
+  ElemId tbl, tr, tc;
+  if (!s.CellOf(at.para, tbl, tr, tc)) return out;
+  Grid g;
+  std::u16string why;
+  if (!s.ReadGrid(tbl, g, why)) return out;
+  for (const auto& [r, i] : ReadingOrder(g)) out.push_back(Info(s, g, r, i));
+  return out;
+}
+
 // ---- New tables
 
 Result Editor::InsertTable(Pos at, uint32_t rows, uint32_t cols) {

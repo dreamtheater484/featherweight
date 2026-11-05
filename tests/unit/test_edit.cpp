@@ -1017,8 +1017,8 @@ TEST(Clip_ReadsWordsRtf) {
       "\\trowd\\cellx1000\\cellx2000\\pard\\intbl A\\cell B\\cell\\row\r\n"
       "\\pard\\plain end}";
   auto c = edit::FromRtf(rtf);
-  CHECK(c && c->paras.size() == 5);
-  if (!c || c->paras.size() != 5) return;
+  CHECK(c && c->paras.size() == 6);
+  if (!c || c->paras.size() != 6) return;
   const ClipPara& t = c->paras[0];
   CHECK(ClipText(t) == u"Title" && t.heading == 1 && t.align == ClipAlign::Center);
   CHECK(t.runs.size() == 1 && t.runs[0].bold && t.runs[0].halfPoints == 32 && t.runs[0].font == "Times New Roman");
@@ -1033,8 +1033,10 @@ TEST(Clip_ReadsWordsRtf) {
   }
   const ClipPara& item = c->paras[2];
   CHECK(item.label == u"•" && ClipText(item) == u"Item" && item.indent == 720 && item.firstLine == -360);
-  CHECK(ClipText(c->paras[3]) == u"A\tB");
-  CHECK(ClipText(c->paras[4]) == u"end");
+  // The table's cells (D3: tables are tables).
+  CHECK(ClipText(c->paras[3]) == u"A" && c->paras[3].table == 1 && c->paras[3].cell == 0);
+  CHECK(ClipText(c->paras[4]) == u"B" && c->paras[4].table == 1 && c->paras[4].cell == 1);
+  CHECK(ClipText(c->paras[5]) == u"end" && c->paras[5].table == 0);
 }
 
 TEST(Clip_ReadsBrowsersAndWordsHtml) {

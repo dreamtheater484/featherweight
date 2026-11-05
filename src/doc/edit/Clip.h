@@ -43,6 +43,9 @@ struct ClipPara {
   // Featherweight's own copies: the paragraph style and the list (used in the same document).
   std::string style, numId;
   int32_t ilvl = 0;
+  // A table cell's paragraph: its table (from 1, in the clip's order), and its row and cell there
+  // as the source counts them (pasting goes by where they change). 0 outside tables.
+  uint32_t table = 0, row = 0, cell = 0;
 };
 
 // Paragraphs with a paragraph break between each two: text that ends with a paragraph mark has an
@@ -53,18 +56,27 @@ struct Clip {
   uint64_t source = 0;  // the document it came from (Featherweight's own copies), 0 when unknown
   bool Empty() const;
   // As plain text: list labels and a tab before the text, CR LF between paragraphs and for line
-  // breaks.
+  // breaks; a tab between a row's cells.
   std::u16string PlainText() const;
+  bool HasTables() const;
 };
 
 // The text in [from, to) of one story, as shown: deleted text, field codes and hidden text left
 // out. `source` names the document, for pasting lists back into it.
+// Tables whose cells it crosses come as tables (whole tables nested in them as their text).
 Clip CopyClip(const Document& doc, Pos from, Pos to, uint64_t source = 0);
+// The block of cells between from and to (a selection across cells) as a table; nullopt when
+// they aren't cells of one table.
+std::optional<Clip> CopyCells(const Editor& editor, Pos from, Pos to, uint64_t source = 0);
 
 // Replaces [from, to) with the clip, as one undo step ("Paste"). `target` names the document as
 // CopyClip's `source` does. Formatting the text there already has is left alone; the rest is set
 // as direct formatting; web links (http, https, mailto, ftp) become hyperlinks, other links plain
 // text. Nothing changes when the editor refuses.
+// Tables: in body text each is a new table, with the text before and after it in paragraphs of
+// their own. In a cell, a clip that is one table goes over the cells from there (rows added below
+// as needed, columns past the table's edge left out); anything else comes as text, a row a
+// paragraph with its cells separated by tabs.
 Result PasteClip(Editor& editor, Pos from, Pos to, const Clip& clip, uint64_t target = 0);
 
 // The converters. RTF is 7-bit ASCII ("Rich Text Format" on the clipboard); HTML is the

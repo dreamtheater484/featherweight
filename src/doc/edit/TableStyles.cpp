@@ -124,8 +124,8 @@ Result ApplyTableStyle(Editor& editor, Pos at, std::string_view name) {
   } else {
     r = editor.SetTableProps(at, PropEdit().Set("tblStyle", {{"val", id}}));
   }
-  editor.EndGroup();
-  if (!r && added) editor.Undo();  // the style went in alone: it goes again
+  if (r) editor.EndGroup();
+  else editor.CancelGroup();  // a style added for it goes again
   return r;
 }
 
