@@ -559,6 +559,11 @@ std::string PlaceMedia(Document& doc, const Part& source, const Media& m, Packag
   std::vector<uint8_t> have;
   for (const pkg::Part& p : package.Parts()) {
     if (p.deleted || package.ContentTypeOf(p.name).substr(0, 6) != "image/") continue;
+    // Its size first, from the zip, so pictures that differ aren't read.
+    const uint64_t size = p.modified ? p.data.size()
+                          : p.entry < package.Zip().Entries().size() ? package.Zip().Entries()[p.entry].uncompressedSize
+                                                                      : m.bytes.size();
+    if (size != m.bytes.size()) continue;
     if (!package.ReadPart(p.name, have).Ok() || have.size() != m.bytes.size() || Fnv(have) != hash || have != m.bytes) continue;
     partName = p.name;
     break;
@@ -569,8 +574,9 @@ std::string PlaceMedia(Document& doc, const Part& source, const Media& m, Packag
     const std::string stem = Lower(dir + "media/image");
     auto taken = [&](int n) {
       std::string prefix = stem + std::to_string(n) + ".";
+      // Deleted parts' names too: a view may still have their pictures cached by name.
       for (const pkg::Part& p : package.Parts())
-        if (!p.deleted && Lower(p.name).rfind(prefix, 0) == 0) return true;
+        if (Lower(p.name).rfind(prefix, 0) == 0) return true;
       for (const auto& s : step.partStates)
         if (Lower(s.name).rfind(prefix, 0) == 0) return true;
       return false;
@@ -928,8 +934,7 @@ Result Pictures::MoveFloating(uint32_t drawing, Emu x, Emu y, std::optional<Pos>
     if (old.para == to.para && old.offset >= to.offset) ++old.offset;
     Result del = editor_.Delete(old, Pos{old.para, old.offset + 1});
     if (!del) {
-      editor_.EndGroup();
-      editor_.Undo();
+      editor_.CancelGroup();
       return del;
     }
   }
@@ -961,8 +966,7 @@ Result Pictures::MoveInline(uint32_t drawing, Pos to) {
     else if (old.para == to.para) --final.offset;  // the old one before it goes
     Result del = editor_.Delete(old, Pos{old.para, old.offset + 1});
     if (!del) {
-      editor_.EndGroup();
-      editor_.Undo();
+      editor_.CancelGroup();
       return del;
     }
   }
@@ -1015,42 +1019,6 @@ Result Pictures::ResetSize(uint32_t drawing) {
     SetGeometry(f, natural->first.Value(), natural->second.Value(), 0);
     return true;
   });
-}
-
-// ---------- Unused media ----------
-
-UnusedMedia FindUnusedMedia(const Document& doc, const std::vector<std::pair<uint32_t, const std::string*>>& written) {
-  UnusedMedia out;
-  const pkg::Package& package = doc.Package();
-  for (const auto& [index, xml] : written) {
-    if (index >= doc.Parts().size() || !xml) continue;
-    const pkg::RelationshipSet* rels = package.RelationshipsOf(doc.Parts()[index].name);
-    if (!rels) continue;
-    for (const pkg::Relationship& r : rels->items) {
-      if (r.external || r.type != kImageRel) continue;
-      // Any mention of the id keeps it: an attribute, kept XML, a field.
-      if (xml->find("\"" + r.id + "\"") != std::string::npos || xml->find("'" + r.id + "'") != std::string::npos) continue;
-      out.relationships.emplace_back(rels->source, r.id);
-    }
-  }
-  // A part goes when every relationship to it does.
-  for (const auto& [source, id] : out.relationships) {
-    const pkg::RelationshipSet* rels = package.RelationshipsOf(source);
-    const pkg::Relationship* r = rels ? rels->Find(id) : nullptr;
-    if (!r || r->targetPart.empty()) continue;
-    std::string target = Lower(r->targetPart);
-    if (std::find(out.parts.begin(), out.parts.end(), r->targetPart) != out.parts.end()) continue;
-    bool used = false;
-    for (const pkg::RelationshipSet& set : package.Relationships())
-      for (const pkg::Relationship& other : set.items) {
-        if (other.external || Lower(other.targetPart) != target) continue;
-        bool going = std::find(out.relationships.begin(), out.relationships.end(), std::make_pair(set.source, other.id)) !=
-                     out.relationships.end();
-        if (!going) used = true;
-      }
-    if (!used) out.parts.push_back(r->targetPart);
-  }
-  return out;
 }
 
 }  // namespace fw::doc::edit

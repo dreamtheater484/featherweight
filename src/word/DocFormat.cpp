@@ -762,13 +762,17 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
   insert.priority = 1;
   insert.glyph = icon::Add;
   insert.text = L"Insert";
-  insert.tooltip = L"Insert the date or time";
+  insert.tooltip = L"Insert a picture, the date or the time";
   insert.enabled = on;
   insert.sepBefore = true;
   std::vector<std::wstring> pictures;
-  DateFormats(pictures, insert.choices);
+  insert.choices = {L"Picture…"};
+  std::vector<std::wstring> dates;
+  DateFormats(pictures, dates);
+  insert.choices.insert(insert.choices.end(), dates.begin(), dates.end());
   insert.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0) InsertDateTime(static_cast<size_t>(v.index));
+    if (v.index == 0 && insertPicture) insertPicture();
+    else if (v.index > 0) InsertDateTime(static_cast<size_t>(v.index - 1));
   };
   m.left.push_back(insert);
 }

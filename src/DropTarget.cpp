@@ -43,15 +43,17 @@ std::vector<std::wstring> DropTarget::Files(IDataObject* data) {
 
 HRESULT DropTarget::DragEnter(IDataObject* data, DWORD, POINTL, DWORD* effect) {
   acceptable_ = false;
-  for (const auto& f : Files(data))
+  const std::vector<std::wstring> files = Files(data);
+  pictures_ = host_->TakesPictures(files);
+  for (const auto& f : files)
     if (fw::Opens(f)) acceptable_ = true;
-  *effect = acceptable_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
-  host_->OnDragEnter(acceptable_);
+  *effect = acceptable_ || pictures_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+  host_->OnDragEnter(acceptable_ && !pictures_);
   return S_OK;
 }
 
 HRESULT DropTarget::DragOver(DWORD, POINTL, DWORD* effect) {
-  *effect = acceptable_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+  *effect = acceptable_ || pictures_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
   return S_OK;
 }
 
@@ -60,10 +62,11 @@ HRESULT DropTarget::DragLeave() {
   return S_OK;
 }
 
-HRESULT DropTarget::Drop(IDataObject* data, DWORD, POINTL, DWORD* effect) {
+HRESULT DropTarget::Drop(IDataObject* data, DWORD, POINTL pt, DWORD* effect) {
   std::vector<std::wstring> files = Files(data);
-  *effect = acceptable_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+  *effect = acceptable_ || pictures_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
   host_->OnDragLeave();
-  host_->OnDropFiles(files);
+  if (pictures_ && host_->TakesPictures(files)) host_->OnDropPictures(files, POINT{pt.x, pt.y});
+  else host_->OnDropFiles(files);
   return S_OK;
 }

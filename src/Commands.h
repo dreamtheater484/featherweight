@@ -177,4 +177,17 @@ enum Cmd : int {
   CmdSpellSuggest = 820,    // + index into the context menu's suggestions
   CmdLanguagePick = 840,    // + index into the installed languages
   CmdLanguageLast = 899,
+  // Pictures in Word documents (D3).
+  CmdInsertPicture = 900,
+  CmdPictureInline,
+  CmdPictureSquare,
+  CmdPictureTight,
+  CmdPictureTopBottom,
+  CmdPictureBehind,
+  CmdPictureInFront,
+  CmdPictureWrapBox,  // the toolbar's Wrap text box
+  CmdPictureCrop,     // crop mode on or off
+  CmdPictureRotate,   // 90 degrees clockwise
+  CmdPictureReset,
+  CmdPicturePanel,    // size, rotation and alt text
 };

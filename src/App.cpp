@@ -1992,6 +1992,18 @@ void App::OnDropFiles(const std::vector<std::wstring>& files) {
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
+bool App::TakesPictures(const std::vector<std::wstring>& files) {
+  TabContent* v = Active();
+  return v && v->Ready() && !presentation_ && v->TakesPictures(files);
+}
+
+void App::OnDropPictures(const std::vector<std::wstring>& files, POINT pt) {
+  ScreenToClient(hwnd_, &pt);
+  SetForegroundWindow(hwnd_);
+  if (TabContent* v = Active()) v->DropPictures(files, pt.x, pt.y);
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
 // ---------------------------------------------------------------------------
 // Startup notices and updates
 
@@ -2260,6 +2272,11 @@ void App::RunScript(const std::wstring& script) {
       // Marks the document edited, as the edit session will (the dot, Save, the close prompt).
       TabContent* v = Active();
       if (v && v->Kind() == TabKind::Document && v->Ready()) static_cast<DocView*>(v)->EditForTesting();
+    } else if (op == L"picture") {
+      // picture:file inserts a picture at the caret, as a drop does where it's dropped.
+      TabContent* v = Active();
+      if (v && v->Ready() && v->TakesPictures({arg})) v->DropPictures({arg}, -1, -1);
+      else fwprintf(stderr, L"picture: %s isn't taken here\n", arg.c_str());
     } else if (op == L"save") {
       if (TabContent* v = Active()) {
         std::wstring err;
