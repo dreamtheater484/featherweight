@@ -1570,8 +1570,19 @@ std::string Digest(const Document& doc) {
   static const char* kinds[] = {"main", "header", "footer", "footnote", "endnote", "comment", "text box"};
   // A text box counts while its drawing is still in a story that counts: one whose drawing was
   // deleted is gone from the file, though the edited model may keep its story.
-  std::vector<bool> live(doc.Stories().size());
-  for (uint32_t s = 0; s < live.size(); ++s) live[s] = doc.Stories()[s].kind != StoryKind::TextBox;
+  // A header or footer counts while a section refers to it: saving leaves out one nothing refers
+  // to (D3: a new one undone, a section break deleted), though the edited model keeps its story.
+  std::vector<bool> live(doc.Stories().size()), shown(doc.Stories().size());
+  for (const Section& section : doc.Sections()) {
+    for (uint32_t h : section.headers)
+      if (h < shown.size()) shown[h] = true;
+    for (uint32_t f : section.footers)
+      if (f < shown.size()) shown[f] = true;
+  }
+  for (uint32_t s = 0; s < live.size(); ++s) {
+    const StoryKind kind = doc.Stories()[s].kind;
+    live[s] = kind != StoryKind::TextBox && ((kind != StoryKind::Header && kind != StoryKind::Footer) || shown[s]);
+  }
   for (bool grew = true; grew;) {
     grew = false;
     for (uint32_t s = 0; s < live.size(); ++s) {
