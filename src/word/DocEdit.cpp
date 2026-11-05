@@ -99,11 +99,15 @@ bool DocView::Apply(const Result& r) {
 // How long a change of the page may lay out before the window shows it.
 constexpr double kPageChangeMs = 30;
 
-bool DocView::ApplyPageChange(const Result& r) {
+bool DocView::ApplyPageChange(const Result& r, bool caret) {
   SyncFile();
   if (!r) {
     if (!r.message.empty()) host_.ViewMessage(BannerKind::Warning, std::wstring(r.message.begin(), r.message.end()));
     return false;
+  }
+  if (caret) {
+    anchor_ = focus_ = ToText(r.caret);
+    goalX_ = -1;
   }
   // Every page may move: the first ones now, and as many more as a frame allows, the rest in idle
   // time (IdleWork), shown as they were until then (plan §11: the first page fast, the rest in the

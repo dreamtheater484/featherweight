@@ -256,7 +256,7 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     DocPage::Host ph;
     ph.selection = th.selection;
     ph.apply = [this](const fw::doc::edit::Result& r) { return Apply(r); };
-    ph.keep = [this](const fw::doc::edit::Result& r) { return ApplyPageChange(r); };
+    ph.keep = [this](const fw::doc::edit::Result& r, bool caret) { return ApplyPageChange(r, caret); };
     ph.showPanel = [this](PanelContent* p, bool toggle) { ShowPanel(p, toggle); };
     ph.headerSection = [this] { return hf_ ? hf_->section : fw::doc::kNone; };
     table_ = std::make_unique<DocTable>(*editor_, std::move(th));

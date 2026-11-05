@@ -30,9 +30,9 @@ class DocPage {
     std::function<std::pair<fw::doc::Pos, fw::doc::Pos>()> selection;
     // After an edit that moves the caret (a break): the caret where it says, or the refusal shown.
     std::function<bool(const fw::doc::edit::Result&)> apply;
-    // After a change of the page: the caret stays, the pages shown are laid out now, the rest
-    // later; or the refusal shown. False for a refusal.
-    std::function<bool(const fw::doc::edit::Result&)> keep;
+    // After a change of the page: the pages shown are laid out now, the rest later; the caret
+    // stays, or with `caret` goes where the result says. Or the refusal shown: false.
+    std::function<bool(const fw::doc::edit::Result&, bool caret)> keep;
     // Opens a side panel (null closes it), or closes it when it's open and `toggle`.
     std::function<void(PanelContent*, bool toggle)> showPanel;
     // The section of the header or footer being edited, or kNone in the body.
