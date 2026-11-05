@@ -533,6 +533,33 @@ void RandomEdit(edit::Editor& ed, const Document& doc, std::mt19937& rng) {
 
 }  // namespace
 
+TEST(Layout_CellsOnAPage) {
+  // A 2 x 2 table: the first column's two cells merged, a table in the last cell. Every piece of a
+  // cell is there, in its row and grid column, the inner table's after the cell it's in.
+  const std::string inner = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"600\"/>"
+                            "</w:tblGrid><w:tr><w:tc>" + P("In") + "</w:tc></w:tr></w:tbl>";
+  const std::string table =
+      "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1200\"/><w:gridCol w:w=\"1400\"/>"
+      "</w:tblGrid><w:tr><w:tc><w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr>" + P("Merged") + "</w:tc><w:tc>" + P("B") +
+      "</w:tc></w:tr><w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc>" + inner + P("D") + "</w:tc></w:tr></w:tbl>";
+  Doc d = Make(P("Before") + table + P("After") + SmallPage());
+  REQUIRE(d.layout);
+  const std::vector<fw::doc::layout::CellRect> cells = d.layout->Cells(0);
+  REQUIRE(cells.size() == 5);
+  const ElemId tbl = cells[0].tbl;
+  CHECK(cells[0].row == 0 && cells[0].col == 0 && cells[1].row == 0 && cells[1].col == 1);
+  CHECK(cells[2].row == 1 && cells[2].col == 0 && cells[3].row == 1 && cells[3].col == 1);
+  for (size_t i = 0; i < 4; ++i) CHECK(cells[i].tbl == tbl && cells[i].box.Width() > 0 && cells[i].box.bottom > cells[i].box.top);
+  // Rows share their edges; columns line up.
+  CHECK(std::abs(cells[0].box.bottom - cells[2].box.top) < 0.01f && std::abs(cells[1].box.left - cells[3].box.left) < 0.01f);
+  CHECK(std::abs(cells[0].box.right - cells[1].box.left) < 0.01f);
+  // The inner table, inside the cell it's in.
+  const fw::doc::layout::CellRect& in = cells[4];
+  CHECK(in.tbl != tbl && in.row == 0 && in.col == 0);
+  CHECK(in.box.left >= cells[3].box.left && in.box.right <= cells[3].box.right && in.box.top >= cells[3].box.top);
+  CHECK(d.layout->Cells(99).empty());
+}
+
 TEST(Layout_APageSetupChangeLaysOutInIdleTime) {
   // A change of every section's margins: the first pages again at once, and the caret near the end
   // isn't laid out (so painting doesn't lay out the whole document) until the rest is.

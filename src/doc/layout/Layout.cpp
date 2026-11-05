@@ -204,6 +204,13 @@ std::optional<size_t> Layout::PageOf(TextPos pos) {
   return std::nullopt;
 }
 
+std::vector<CellRect> Layout::Cells(size_t page) {
+  Engine& e = impl_->engine;
+  while (page >= e.Pages().size() && !e.Done()) e.NextPage();
+  if (page >= PageCount()) return {};
+  return GetPage(page).cells;
+}
+
 bool Layout::LaidOut(TextPos pos) const {
   const Engine& e = impl_->engine;
   const Document& d = e.Doc();
