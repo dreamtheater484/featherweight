@@ -1508,26 +1508,50 @@ ElemId FirstChildNamed(const Tree& t, ElemId parent, uint32_t name) {
 
 void TreeEdit::ApplyStoryOps(Document& doc, const std::vector<StoryOp>& ops, bool undo) {
   if (ops.empty()) return;
-  uint32_t from = UINT32_MAX;
+  // The drawings in the paragraphs that come back, found again once they're numbered.
+  std::vector<size_t> found;
   auto apply = [&](const StoryOp& op) {
     const bool adding = op.add != undo;
-    const auto at = std::min<size_t>(op.at, doc.paras_.size());
+    const auto at = static_cast<uint32_t>(std::min<size_t>(op.at, doc.paras_.size()));
+    uint32_t n = 0;
     if (adding) {
-      doc.paras_.insert(doc.paras_.begin() + static_cast<std::ptrdiff_t>(at), op.paras.begin(), op.paras.end());
+      doc.paras_.insert(doc.paras_.begin() + at, op.paras.begin(), op.paras.end());
       doc.stories_[op.story].root = op.root;
+      n = static_cast<uint32_t>(op.paras.size());
     } else {
-      const size_t n = std::min(op.paras.size(), doc.paras_.size() - at);
-      doc.paras_.erase(doc.paras_.begin() + static_cast<std::ptrdiff_t>(at),
-                       doc.paras_.begin() + static_cast<std::ptrdiff_t>(at + n));
+      n = static_cast<uint32_t>(std::min<size_t>(op.paras.size(), doc.paras_.size() - at));
+      doc.paras_.erase(doc.paras_.begin() + at, doc.paras_.begin() + at + n);
       doc.stories_[op.story].root = kNoElem;
     }
-    from = std::min(from, static_cast<uint32_t>(at));
+    for (uint32_t p = at; p < doc.paras_.size(); ++p) doc.tree_.elems[doc.paras_[p].elem].start = p;
+    // Drawings after them move along (a header part made after the notes, finding 37); those in
+    // the paragraphs that go have no position until they come back, as an undone insert's.
+    std::unordered_set<ElemId> paras;
+    if (adding)
+      for (const Paragraph& p : op.paras) paras.insert(p.elem);
+    for (size_t d = 0; d < doc.drawings_.size(); ++d) {
+      Pos& pos = doc.drawings_[d].pos;
+      if (pos.para == kNone) {
+        if (!adding) continue;
+        for (Node a = doc.drawings_[d].node; a; a = a.Parent())
+          if (paras.count(a.Id())) {
+            found.push_back(d);
+            break;
+          }
+      } else if (adding && pos.para >= at) {
+        pos.para += n;
+      } else if (!adding && pos.para >= at + n) {
+        pos.para -= n;
+      } else if (!adding && pos.para >= at) {
+        pos = Pos{kNone, 0};
+      }
+    }
   };
   if (undo)
     for (auto it = ops.rbegin(); it != ops.rend(); ++it) apply(*it);
   else
     for (const StoryOp& op : ops) apply(op);
-  for (uint32_t p = from; p < doc.paras_.size(); ++p) doc.tree_.elems[doc.paras_[p].elem].start = p;
+  for (size_t d : found) doc.drawings_[d].pos = doc.PosOf(doc.drawings_[d].node);
 }
 
 uint32_t TreeEdit::AddNote(ElemId root, bool endnote, std::string_view id, std::string_view textStyle,
@@ -1631,6 +1655,8 @@ bool TreeEdit::RemoveNote(uint32_t story) {
   if (depth_ == 0 || story >= doc_.stories_.size()) return false;
   const Story& s = doc_.stories_[story];
   if ((s.kind != StoryKind::Footnote && s.kind != StoryKind::Endnote) || s.root == kNoElem) return false;
+  // Word's separators (w:type) aren't notes anyone refers to: settings.xml names them (finding 34).
+  if (!doc_.NodeOf(s.root).AttrOr(names::kType).empty()) return false;
   const std::vector<uint32_t> paras = doc_.StoryParagraphs(story);
   // A story's paragraphs follow each other in the model.
   for (size_t i = 1; i < paras.size(); ++i)
@@ -1642,9 +1668,7 @@ bool TreeEdit::RemoveNote(uint32_t story) {
   op.at = paras.empty() ? static_cast<uint32_t>(doc_.paras_.size()) : paras.front();
   for (uint32_t p : paras) op.paras.push_back(doc_.paras_[p]);
   RemoveElement(s.root);
-  doc_.paras_.erase(doc_.paras_.begin() + op.at, doc_.paras_.begin() + op.at + static_cast<uint32_t>(paras.size()));
-  doc_.stories_[story].root = kNoElem;
-  for (uint32_t p = op.at; p < doc_.paras_.size(); ++p) doc_.tree_.elems[doc_.paras_[p].elem].start = p;
+  ApplyStoryOps(doc_, {op}, false);  // its paragraphs out, and the drawings after them moved along
   storyOps_.push_back(std::move(op));
   Reindex();
   return true;

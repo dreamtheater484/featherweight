@@ -348,6 +348,56 @@ TEST(Layout_WhatWordLeavesOut) {
   CHECK_NEAR(next->top, kept->top + kept->height, 0.5f);
 }
 
+TEST(Layout_MarkupViews) {
+  // D4 review: the final text by default; All Markup (showDeletions) lays out deleted text too and
+  // keeps a paragraph whose mark is deleted; Original (and hideInsertions) hides inserted text, and
+  // leaves out the paragraph an inserted mark makes. Offsets stay the model's either way.
+  const std::string body =
+      "<w:p><w:r><w:t xml:space=\"preserve\">Kept </w:t></w:r><w:del w:id=\"1\" w:author=\"a\"><w:r><w:delText>gone</w:delText>"
+      "</w:r></w:del><w:ins w:id=\"2\" w:author=\"a\"><w:r><w:t>added</w:t></w:r></w:ins></w:p>"
+      "<w:p><w:pPr><w:rPr><w:del w:id=\"3\" w:author=\"a\"/></w:rPr></w:pPr><w:del w:id=\"4\" w:author=\"a\"><w:r>"
+      "<w:delText>struck</w:delText></w:r></w:del></w:p>"
+      "<w:p><w:pPr><w:rPr><w:ins w:id=\"5\" w:author=\"a\"/></w:rPr></w:pPr><w:ins w:id=\"6\" w:author=\"a\"><w:r>"
+      "<w:t>fresh</w:t></w:r></w:ins></w:p>" +
+      P("last") + SmallPage();
+  Doc d = Make(body);
+  REQUIRE(d.layout);
+  const std::vector<uint32_t> paras = d.doc->StoryParagraphs(d.doc->MainStory());
+  REQUIRE(paras.size() >= 4u);
+  struct View {
+    std::optional<Layout::Caret> gone, added, end;  // carets before "gone", before "added", at the end
+    int linesAbove = 0;                             // lines above "last"
+  };
+  auto view = [&](bool showDeletions, bool hideInsertions) {
+    fw::doc::layout::Options o;
+    o.showDeletions = showDeletions;
+    o.hideInsertions = hideInsertions;
+    Layout l(*d.doc, Fonts(), o);
+    l.LayOutAll();
+    View v;
+    v.gone = l.CaretAt({paras[0], 5});
+    v.added = l.CaretAt({paras[0], 9});
+    v.end = l.CaretAt({paras[0], 14});
+    for (const LineBox& lb : l.GetPage(0).lines)
+      if (lb.para != kNone && lb.para < paras[3]) ++v.linesAbove;
+    return v;
+  };
+  const View final = view(false, false), all = view(true, false), original = view(true, true);
+  REQUIRE(final.gone && final.added && final.end && all.gone && all.added && all.end && original.gone && original.added);
+  // The final text: "Kept added", the deleted paragraph gone, the inserted one there.
+  CHECK_NEAR(final.gone->x, final.added->x, 0.5f);
+  CHECK(final.end->x > final.added->x + 5);
+  CHECK_EQ(final.linesAbove, 2);
+  // All Markup: "Kept goneadded", and the deleted paragraph back.
+  CHECK(all.added->x > all.gone->x + 5);
+  CHECK(all.end->x > all.added->x + 5);
+  CHECK_EQ(all.linesAbove, 3);
+  // Original: "Kept gone", the deleted paragraph there, the inserted one left out.
+  CHECK(original.added->x > original.gone->x + 5);
+  if (original.end) CHECK_NEAR(original.end->x, original.added->x, 0.5f);
+  CHECK_EQ(original.linesAbove, 2);
+}
+
 TEST(Layout_HitTestAndCarets) {
   Doc d = Make(P("Hello world") + P(Words(30)));
   REQUIRE(d.layout);
