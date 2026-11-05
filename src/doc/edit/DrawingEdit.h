@@ -85,6 +85,9 @@ std::string Lower(std::string s);
 int64_t ClampEmu(int64_t v);
 int64_t AttrInt(pugi::xml_node n, const char* name, int64_t fallback = 0);
 void SetInt(pugi::xml_node n, const char* name, int64_t v);
+// A wp:docPr id no drawing in the document has: past the drawings' ids and any in content kept as
+// read (an mc:AlternateContent block's other branch, a drawing the model doesn't read).
+uint32_t FreeDrawingId(const Document& doc);
 // The picture's or shape's spPr's a:xfrm, made with a:off and a:ext when missing (`create`).
 pugi::xml_node Xfrm(Frame& f, bool create);
 int64_t RotationOf(Frame& f);

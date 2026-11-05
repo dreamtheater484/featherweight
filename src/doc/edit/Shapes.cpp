@@ -573,11 +573,9 @@ Result Shapes::Insert(uint32_t para, ShapeKind kind, Emu x, Emu y, Emu cx, Emu c
   if (line && w == 0 && h == 0) w = 914400;
   const int64_t px = std::clamp<int64_t>(x.Value(), -kMaxEmu, kMaxEmu), py = std::clamp<int64_t>(y.Value(), -kMaxEmu, kMaxEmu);
   // Its docPr id and its block's tag: ones no drawing has.
-  uint32_t id = 1, tag = 1;
-  for (const Drawing& d : doc.Drawings()) {
-    id = std::max(id, d.id + 1);
-    tag = std::max(tag, d.kept + 1);
-  }
+  const uint32_t id = FreeDrawingId(doc);
+  uint32_t tag = 1;
+  for (const Drawing& d : doc.Drawings()) tag = std::max(tag, d.kept + 1);
   const std::string name = std::string(KindName(kind)) + " " + std::to_string(id);
   ShapeFrame f;
   f.alternate = true;

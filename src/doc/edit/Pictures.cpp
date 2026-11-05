@@ -210,6 +210,36 @@ void SetInt(pugi::xml_node n, const char* name, int64_t v) {
   at.set_value(std::to_string(v).c_str());
 }
 
+uint32_t FreeDrawingId(const Document& doc) {
+  constexpr uint64_t kMax = 0x7FFFFFFE;
+  std::vector<uint64_t> used;
+  for (const Drawing& d : doc.Drawings()) used.push_back(d.id);
+  // The ids in each docPr tag of content kept as text: "id=" after whitespace, quoted digits.
+  auto scan = [&](std::string_view xml) {
+    for (size_t at = xml.find("docPr"); at != std::string_view::npos; at = xml.find("docPr", at + 5)) {
+      const size_t end = xml.find('>', at);
+      const std::string_view tag = xml.substr(at, end == std::string_view::npos ? std::string_view::npos : end - at);
+      for (size_t i = tag.find("id="); i != std::string_view::npos; i = tag.find("id=", i + 3)) {
+        if (i == 0 || (tag[i - 1] != ' ' && tag[i - 1] != '\t' && tag[i - 1] != '\n' && tag[i - 1] != '\r')) continue;
+        uint64_t v = 0;
+        size_t k = i + 4;
+        for (; k < tag.size() && tag[k] >= '0' && tag[k] <= '9' && v <= kMax; ++k) v = v * 10 + static_cast<uint64_t>(tag[k] - '0');
+        used.push_back(v);
+        break;
+      }
+    }
+  };
+  const_cast<Document&>(doc).Store().ForEachFragment([&](pkg::NodeId, pkg::Fragment& f) { scan(f.xml); });
+  std::sort(used.begin(), used.end());
+  // Past the highest, as Word numbers them; else the first one free.
+  if (used.empty() || used.back() < kMax) return static_cast<uint32_t>(used.empty() ? 1 : used.back() + 1);
+  uint64_t id = 1;
+  for (uint64_t u : used)
+    if (u == id) ++id;
+    else if (u > id) break;
+  return static_cast<uint32_t>(std::min(id, kMax));
+}
+
 // pic:spPr's a:xfrm, made with a:off and a:ext when missing (`create`).
 pugi::xml_node Xfrm(Frame& f, bool create) {
   pugi::xml_node owner = f.pic ? f.pic : f.shape;
@@ -768,8 +798,7 @@ Result Pictures::Insert(Pos at, const std::vector<uint8_t>& bytes, Emu maxWidth,
   std::string svgRid = isSvg ? PlaceMedia(doc, *part, svg, *step) : std::string();
 
   // Its docPr id: one no drawing has.
-  uint32_t id = 1;
-  for (const Drawing& d : doc.Drawings()) id = std::max(id, d.id + 1);
+  const uint32_t id = FreeDrawingId(doc);
   std::string fileName = Utf8(name);
   if (fileName.empty()) fileName = "Picture " + std::to_string(id);
   std::string blipExt;
@@ -886,9 +915,7 @@ Result Pictures::SetWrap(uint32_t drawing, Wrap wrap, Emu x, Emu y) {
 // A moved picture's copy gets an id no drawing has: the one it leaves may stay, as a tracked
 // deletion (d4 torture finding 41).
 static void NewDocPrId(const Document& doc, Frame& f) {
-  uint32_t id = 1;
-  for (const Drawing& d : doc.Drawings()) id = std::max(id, d.id + 1);
-  if (pugi::xml_node docPr = Child(f.root, kWp, "docPr")) SetInt(docPr, "id", id);
+  if (pugi::xml_node docPr = Child(f.root, kWp, "docPr")) SetInt(docPr, "id", FreeDrawingId(doc));
 }
 
 Result Pictures::MoveFloating(uint32_t drawing, Emu x, Emu y, std::optional<Pos> anchor) {
