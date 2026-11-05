@@ -30,7 +30,7 @@ constexpr uint32_t kDDList = Name("ddList"), kResult = Name("result"), kListEntr
 constexpr uint32_t kTextInput = Name("textInput"), kMaxLength = Name("maxLength");
 constexpr uint32_t kRStyle = Name("rStyle"), kRFonts = Name("rFonts");
 
-constexpr std::u16string_view kProtected = u"This document is protected: only its form fields and content controls can be filled in.";
+constexpr std::u16string_view kProtected = kFormsProtected;
 
 std::u16string U16(std::string_view s) { return ToUtf16(s); }
 

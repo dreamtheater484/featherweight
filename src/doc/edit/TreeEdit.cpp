@@ -135,7 +135,7 @@ void TreeEdit::Commit() {
   // A document protected for forms changes only as they're filled in.
   if (!fill_ && FormsProtected(doc_)) {
     Discard();
-    refused_ = u"This document is protected: only its form fields and content controls can be filled in.";
+    refused_ = kFormsProtected;
     return;
   }
   touched_.clear();
@@ -238,7 +238,7 @@ bool TreeEdit::Editable(ElemId id, std::unordered_map<ElemId, bool>& memo, std::
 
 bool TreeEdit::CanChange(const std::vector<uint32_t>& paras) {
   if (!fill_ && FormsProtected(doc_)) {
-    refused_ = u"This document is protected: only its form fields and content controls can be filled in.";
+    refused_ = kFormsProtected;
     return false;
   }
   std::unordered_map<ElemId, bool> memo;
@@ -1138,7 +1138,7 @@ ElemId TreeEdit::EnsurePart(PartKind kind) {
     return kNoElem;
   if (const Part* p = doc_.FindPart(kind)) return p->root;
   const Part* main = doc_.FindPart(PartKind::Document);
-  if (depth_ > 0 || !main || !doc_.Editable()) return kNoElem;
+  if (depth_ > 0 || !main || !doc_.Editable() || (!fill_ && FormsProtected(doc_))) return kNoElem;
   const auto w = static_cast<size_t>(Ns::W), r = static_cast<size_t>(Ns::R);
   const bool strict = IsStrictUri(main->uri[w]);
   const std::string local = kind == PartKind::Styles      ? "styles"
@@ -1308,6 +1308,10 @@ uint32_t TreeEdit::NewStoryPart(PartKind kind, uint32_t copyOf, std::string& rel
   const Part* main = doc_.FindPart(PartKind::Document);
   if ((kind != PartKind::Header && kind != PartKind::Footer) || depth_ > 0 || !main || !doc_.Editable()) {
     why = u"This document can't get a new header or footer.";
+    return kNone;
+  }
+  if (!fill_ && FormsProtected(doc_)) {  // it isn't undone: nothing made that the change can't keep
+    why = kFormsProtected;
     return kNone;
   }
   const bool footer = kind == PartKind::Footer;
