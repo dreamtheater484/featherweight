@@ -54,6 +54,7 @@ void DocView::OnEdited(const fw::doc::edit::Change& c) {
     ch.measured = false;
   }
   for (auto& l : links_) annotationsStale_ |= !move(l.from) | !move(l.to);
+  if (hf_ && !move(bodyCaret_)) bodyCaret_ = {c.first, 0};
   // Matches in changed paragraphs are gone (finding again finds them).
   std::vector<Match> kept;
   for (Match& m : matches_) {
@@ -72,7 +73,15 @@ void DocView::OnEdited(const fw::doc::edit::Change& c) {
   if (file_.Dirty() != wasModified) host_.ViewStateChanged();
 }
 
+void DocView::SyncFile() {
+  if (!editor_) return;
+  const bool wasModified = file_.Dirty();
+  file_.Changed(editor_->Modified(), editor_->DirtyParts());
+  if (file_.Dirty() != wasModified) host_.ViewStateChanged();
+}
+
 bool DocView::Apply(const Result& r) {
+  SyncFile();
   if (!r) {
     if (!r.message.empty()) host_.ViewMessage(BannerKind::Warning, std::wstring(r.message.begin(), r.message.end()));
     return false;
@@ -80,7 +89,7 @@ bool DocView::Apply(const Result& r) {
   anchor_ = focus_ = ToText(r.caret);
   goalX_ = -1;
   // The caret's page, and the next where the new layout meets the old one, now; the rest in idle time.
-  if (auto c = pagination_->CaretAt(focus_)) pagination_->LayOutPages(c->page + 2);
+  if (auto c = pagination_->CaretAt(focus_, CaretPage())) pagination_->LayOutPages(c->page + 2);
   TakeNewPages();
   CaretMoved(true);
   host_.ViewStateChanged();
@@ -161,10 +170,12 @@ void DocView::Paste(bool formatted) {
 
 void DocView::Undo() {
   if (Editing() && editor_->CanUndo()) Apply(editor_->Undo());
+  CheckHeaderFooter();
 }
 
 void DocView::Redo() {
   if (Editing() && editor_->CanRedo()) Apply(editor_->Redo());
+  CheckHeaderFooter();
 }
 
 // ---------------------------------------------------------------------------
@@ -349,7 +360,7 @@ void DocView::CaretMoved(bool show) {
 
 const std::optional<layout::Layout::Caret>& DocView::CaretBox() {
   if (!(caretFor_ == focus_) || caretRevision_ != pagination_->Revision()) {
-    caretBox_ = pagination_->CaretAt(focus_);
+    caretBox_ = pagination_->CaretAt(focus_, CaretPage());
     caretFor_ = focus_;
     caretRevision_ = pagination_->Revision();
     TakeNewPages();

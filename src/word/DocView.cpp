@@ -25,6 +25,7 @@
 #include "ui/SwapChain.h"
 #include "ui/Theme.h"
 #include "ui/Toolbar.h"
+#include "word/DocPanels.h"
 
 using namespace gfx;
 namespace layout = fw::doc::layout;
@@ -153,6 +154,11 @@ std::unique_ptr<DocView> DocView::FromBytes(ViewHost& host, std::vector<uint8_t>
 
 DocView::~DocView() {
   StopBlinking();
+  ClosePanels();
+  linkPanel_.reset();
+  bookmarkPanel_.reset();
+  pageNumberPanel_.reset();
+  navPanel_.reset();
   editor_.reset();
   drawings_.clear();  // pictures read from the document's package
   images_.reset();
@@ -484,6 +490,7 @@ void DocView::DrawPage(Canvas& c, ID2D1DeviceContext* dc, int page, bool inverte
       pagination_->Paint(painter, page, drawing);
     }
   }
+  DrawHeaderFooterMode(c, page);  // the part not being edited, dimmed
   c.PopClip();
 }
 
@@ -597,7 +604,7 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
   if (HasSelection()) {
     TextPos a = std::min(anchor_, focus_), b = std::max(anchor_, focus_);
     if (!(selFrom_ == a) || !(selTo_ == b) || selRevision_ != pagination_->Revision()) {
-      selRects_ = pagination_->Ranges(a, b);
+      selRects_ = pagination_->Ranges(a, b, CaretPage());
       selFrom_ = a;
       selTo_ = b;
       selRevision_ = pagination_->Revision();
@@ -659,7 +666,7 @@ std::optional<DocView::TextPos> DocView::PosAt(int x, int y, bool nearest) const
   if (page < 0 || placeholder_ || page >= static_cast<int>(pagination_->PageCount())) return std::nullopt;
   float px, py;
   if (!ToPagePoint(page, x, y, px, py)) return std::nullopt;
-  return pagination_->HitTest(page, px, py);
+  return pagination_->HitTest(page, px, py, ClickStories());
 }
 
 DocView::Hit DocView::HitAt(int x, int y) {
@@ -724,6 +731,11 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
   if (presentation_) {
     if (x < (vp_.left + vp_.right) / 2 - VpW() / 4) PrevPage();
     else NextPage();
+    return;
+  }
+  // Headers and footers: a double-click edits one in place, and one in the body goes back.
+  if (HeaderFooterClick(x, y, doubleClick)) {
+    host_.ViewInvalidate();
     return;
   }
   std::optional<TextPos> pos = PosAt(x, y, false);
@@ -810,6 +822,10 @@ bool DocView::OnKeyDown(UINT vk, UINT mods) {
   if (vk == VK_ESCAPE && format_ && format_->PainterOn()) {
     format_->CancelPainter();
     host_.ViewInvalidate();
+    return true;
+  }
+  if (vk == VK_ESCAPE && hf_ && !HasSelection()) {
+    LeaveHeaderFooter();
     return true;
   }
   if (vk == VK_TAB && !(mods & (kModCtrl | kModAlt)) && Editing() && ListTab((mods & kModShift) != 0)) return true;
@@ -941,7 +957,8 @@ std::wstring DocView::SelectedText() {
 
 void DocView::SelectAll() {
   if (!Ready()) return;
-  std::vector<uint32_t> paras = doc_->StoryParagraphs(doc_->MainStory());
+  // The header or footer being edited, else the body.
+  std::vector<uint32_t> paras = doc_->StoryParagraphs(hf_ ? hf_->story : doc_->MainStory());
   if (paras.empty()) return;
   anchor_ = {paras.front(), 0};
   focus_ = {paras.back(), static_cast<uint32_t>(doc_->Para(paras.back()).text.size())};
@@ -956,6 +973,7 @@ void DocView::StartSearch(const std::wstring& query, bool matchCase) {
   ClearSearch();
   query_ = query;
   matchCase_ = matchCase;
+  if (navPanel_ && host_.ViewShownPanel() == navPanel_.get()) navPanel_->ShowResults(true);
   if (query.empty()) return;
   auto lower = [](std::wstring s) {
     if (!s.empty())
@@ -1248,11 +1266,18 @@ int DocView::ShortcutFor(UINT vk, UINT mods) const {
   // Word's keys first in a document being edited: Ctrl+1 is single spacing there, not actual size.
   if (format_)
     if (int cmd = DocFormat::Shortcut(vk, mods)) return cmd;
+  if ((mods & kModCtrl) && !(mods & kModAlt)) {
+    const bool shift = (mods & kModShift) != 0;
+    if (!shift && vk == 'K' && format_) return CmdInsertLink;
+    if (shift && vk == '8') return CmdShowMarks;
+    if (shift && vk == VK_F5 && format_) return CmdBookmark;
+  }
   return Shortcut(vk, mods);
 }
 
 CommandState DocView::QueryCommand(int cmd) {
   if (format_ && DocFormat::Owns(cmd)) return format_->Query(cmd);
+  if (auto d3 = QueryD3(cmd)) return *d3;
   CommandState s;
   switch (cmd) {
     case CmdSave: s = {Ready() && (Modified() || path_.empty()), false}; break;
@@ -1299,6 +1324,10 @@ std::vector<int> DocView::Commands() {
     if (editor_ || (n.cmd != CmdCut && n.cmd != CmdPaste && n.cmd != CmdUndo && n.cmd != CmdRedo)) ids.push_back(n.cmd);
   if (format_)
     for (int cmd : DocFormat::CommandIds()) ids.push_back(cmd);
+  for (int cmd : {CmdInsertLink, CmdRemoveLink, CmdOpenLink, CmdBookmark, CmdEditHeader, CmdEditFooter,
+                  CmdCloseHeaderFooter, CmdDifferentFirstPage, CmdDifferentOddEven, CmdLinkToPrevious, CmdPageNumber,
+                  CmdNavigationPane, CmdShowMarks})
+    if (format_ || cmd == CmdNavigationPane || cmd == CmdShowMarks || cmd == CmdOpenLink) ids.push_back(cmd);
   return ids;
 }
 
@@ -1310,6 +1339,7 @@ bool DocView::Execute(int cmd) {
     return true;
   }
   if (ExecuteProof(cmd)) return true;
+  if (ExecuteD3(cmd)) return true;
   switch (cmd) {
     case CmdCopy: Copy(); return true;
     case CmdCut: Cut(); return true;
@@ -1356,6 +1386,7 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
     m.left.push_back(undo);
     m.left.push_back(query(CmdRedo, icon::Redo, 7));
     format_->AddToolbar(m);
+    AddD3Toolbar(m);
   }
 
   m.pager = !Editing();  // when editing, the status bar has the page and the zoom
@@ -1388,6 +1419,7 @@ void DocView::FillContextMenu(HMENU m, int x, int y) {
   using menu::AppendItem;
   using menu::AppendSeparator;
   FillSpellingMenu(m, x, y);  // a spelling error's suggestions first, as Word has them
+  FillD3Menu(m, x, y);        // then the link under the caret
   if (Editing()) {
     AppendItem(m, CmdCut, L"Cut\tCtrl+X", HasSelection());
     AppendItem(m, CmdCopy, L"Copy\tCtrl+C", HasSelection());
@@ -1448,10 +1480,11 @@ DocFormat::Target DocView::FormatTarget() const {
 }
 
 void DocView::AfterFormat(const DocFormat::Done& done) {
+  SyncFile();  // a style or list change may be a group of steps
   // OnEdited has told the layout what changed: the caret's page is laid out again now.
   if (done.caret) anchor_ = focus_ = {done.caret->para, done.caret->offset};
   goalX_ = -1;
-  if (auto c = pagination_->CaretAt(focus_)) pagination_->LayOutPages(c->page + 2);
+  if (auto c = pagination_->CaretAt(focus_, CaretPage())) pagination_->LayOutPages(c->page + 2);
   TakeNewPages();
   CaretMoved(done.caret.has_value());
   if (!done.message.empty()) host_.ViewMessage(BannerKind::Info, done.message);
