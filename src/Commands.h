@@ -244,4 +244,10 @@ enum Cmd : int {
   CmdNewStyle,            // Create a style from the selection
   // Output (D4).
   CmdExportPdf = 1400,  // File > Export PDF: the tab's pages into a PDF file
+  // Content controls (D4): Insert ▾ adds them, as Word's Developer tab does.
+  CmdInsertRichText = 1410,
+  CmdInsertPlainText,
+  CmdInsertCheckBox,
+  CmdInsertDropDown,
+  CmdInsertDatePicker,
 };
