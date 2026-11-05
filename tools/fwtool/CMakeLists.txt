@@ -7,7 +7,7 @@ target_link_libraries(fwfidelity PUBLIC fwcore)
 target_compile_options(fwfidelity PRIVATE ${FW_COMPILE_OPTIONS})
 
 add_executable(fwtool main.cpp Roundtrip.cpp Save.cpp Inspect.cpp Model.cpp Print.cpp Render.cpp Reference.cpp Compare.cpp Bench.cpp
-  BenchApp.cpp LayoutHook.cpp Spelling.cpp Torture.cpp Wrap.cpp)
+  BenchApp.cpp LayoutHook.cpp Paste.cpp Spelling.cpp Torture.cpp Wrap.cpp)
 target_link_libraries(fwtool PRIVATE fwpkg fwdoc fwdoclayout fwdraw fwproof fwtext fwfidelity pdfium delayimp ole32 windowscodecs)
 target_compile_options(fwtool PRIVATE ${FW_COMPILE_OPTIONS})
 # PDFium reads Word's reference PDFs. As in the app, it's delay-loaded: only `lines` and `compare`

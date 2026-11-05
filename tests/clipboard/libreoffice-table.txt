@@ -1,0 +1,2 @@
+Region	Q2	Q3
+North	1,200	1,344
