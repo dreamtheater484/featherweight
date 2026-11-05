@@ -2,6 +2,7 @@
 
 #include <fpdf_annot.h>
 #include <fpdf_edit.h>
+#include <fpdf_flatten.h>
 #include <fpdf_save.h>
 
 #include <algorithm>
@@ -494,6 +495,62 @@ bool Document::Save(const std::wstring& path, std::wstring& error) {
   path_ = path;
   modified_ = false;
   return true;
+}
+
+bool Document::CanExportFlattened() const {
+  return doc_ && !isXfa_ && FPDF_GetSecurityHandlerRevision(doc_) < 0;
+}
+
+bool Document::ExportFlattened(const std::wstring& path, std::wstring& error) {
+  if (!CanExportFlattened()) {
+    error = L"This PDF is protected, so it can't be exported. Save as makes a copy.";
+    return false;
+  }
+  if (form_) FORM_ForceToKillFocus(form_);
+  // A copy in memory, flattened page by page and written out; the open document isn't touched.
+  struct MemoryWriter : FPDF_FILEWRITE {
+    std::string bytes;
+  } copy;
+  copy.version = 1;
+  copy.WriteBlock = [](FPDF_FILEWRITE* self, const void* data, unsigned long size) -> int {
+    static_cast<MemoryWriter*>(self)->bytes.append(static_cast<const char*>(data), size);
+    return 1;
+  };
+  FPDF_DOCUMENT flat = nullptr;
+  if (FPDF_SaveAsCopy(doc_, &copy, FPDF_NO_INCREMENTAL))
+    flat = FPDF_LoadMemDocument64(copy.bytes.data(), copy.bytes.size(), nullptr);
+  if (!flat) {
+    error = L"The PDF couldn't be exported.";
+    return false;
+  }
+  const int count = FPDF_GetPageCount(flat);
+  for (int i = 0; i < count; ++i) {
+    if (FPDF_PAGE page = FPDF_LoadPage(flat, i)) {
+      FPDFPage_Flatten(page, FLAT_PRINT);
+      FPDF_ClosePage(page);
+    }
+  }
+  const std::wstring tmp = fw::DirOf(path) + L"\\~" + fw::FileNameOf(path) + L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp";
+  FileWriter w;
+  w.version = 1;
+  w.WriteBlock = WriteBlock;
+  w.h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  bool ok = w.h != INVALID_HANDLE_VALUE;
+  if (ok) {
+    ok = FPDF_SaveAsCopy(flat, &w, FPDF_NO_INCREMENTAL) && w.ok && FlushFileBuffers(w.h);
+    CloseHandle(w.h);
+  }
+  FPDF_CloseDocument(flat);
+  if (ok) ok = MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+  if (!ok) {
+    const DWORD e = GetLastError();
+    DeleteFileW(tmp.c_str());
+    error = (e == ERROR_SHARING_VIOLATION || e == ERROR_LOCK_VIOLATION)
+                ? L"The PDF couldn't be saved: another program has " + fw::FileNameOf(path) + L" open."
+            : (e == ERROR_ACCESS_DENIED || e == ERROR_WRITE_PROTECT) ? L"Featherweight can't save in this folder."
+                                                                    : L"The PDF couldn't be saved. " + util::LastErrorMessage(e);
+  }
+  return ok;
 }
 
 // ---------------------------------------------------------------------------

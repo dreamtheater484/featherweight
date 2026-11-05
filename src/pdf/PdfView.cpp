@@ -972,6 +972,18 @@ bool PdfView::Save(const std::wstring& path, std::wstring& error) {
   return ok;
 }
 
+bool PdfView::ExportPdf(const std::wstring& path, std::wstring& message) {
+  if (!Ready() || !CanExportPdf()) {
+    message = L"This PDF can't be exported.";
+    return false;
+  }
+  if (!doc_->ExportFlattened(path, message)) return false;
+  const int count = doc_->PageCount();
+  message = count == 1 ? L"Exported 1 page to " + fw::FileNameOf(path)
+                       : L"Exported " + std::to_wstring(count) + L" pages to " + fw::FileNameOf(path);
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // PDFium callbacks
 
