@@ -63,9 +63,24 @@
 #else
 #define FW_TORTURE_CLIP 0
 #endif
+// D3's audit of the Home tab: change case (Case.h); a new style from the selection and theme fonts
+// and colors (Styles.h, Format.h), which came with the Style panel (word/DocStyles.h).
+#if __has_include("doc/edit/Case.h")
+#include "doc/edit/Case.h"
+#define FW_TORTURE_CASE 1
+#else
+#define FW_TORTURE_CASE 0
+#endif
+#if __has_include("word/DocStyles.h")
+#define FW_TORTURE_THEME 1
+#else
+#define FW_TORTURE_THEME 0
+#endif
 #else
 #define FW_TORTURE_EDITOR 0
 #define FW_TORTURE_CLIP 0
+#define FW_TORTURE_CASE 0
+#define FW_TORTURE_THEME 0
 #endif
 
 namespace fwtool {
@@ -400,6 +415,18 @@ class EditorTarget : public EditTarget {
 #if FW_TORTURE_CLIP
     if (e.format.starts_with("paste=") || e.format.starts_with("pastecells=")) return Paste(e, why);
 #endif
+#if FW_TORTURE_CASE
+    if (e.format.starts_with("case=")) {  // Change Case (Aa, Shift+F3), an editor edit of its own
+      static const std::pair<const char*, ed::TextCase> cases[] = {
+          {"sentence", ed::TextCase::Sentence}, {"lower", ed::TextCase::Lower}, {"upper", ed::TextCase::Upper},
+          {"capitalize", ed::TextCase::Capitalize}, {"toggle", ed::TextCase::Toggle}};
+      auto c = std::find_if(std::begin(cases), std::end(cases), [&](const auto& p) { return e.format.substr(5) == p.first; });
+      if (c == std::end(cases)) return why = "unknown case", Applied::Refused;
+      const ed::Result r = ed::ChangeCase(editor_, e.at, e.to, c->second);
+      if (!r) return why = fw::doc::ToUtf8(r.message), Applied::Refused;
+      return Applied::Done;
+    }
+#endif
 #if FW_TORTURE_D3
     if (std::optional<Applied> d3 = D3(e, why)) return *d3;
 #endif
@@ -441,7 +468,26 @@ class EditorTarget : public EditTarget {
       para.line = std::atoi(value.c_str());
       para.lineRule = fw::doc::LineRule::Auto;
       ed::FormatParagraphs(te, range, para);
-    } else if (name == "para" && !value.empty()) {
+    }
+#if FW_TORTURE_THEME
+    else if (name == "newstyle" && !value.empty()) {  // New style from the selection
+      std::u16string whyNot;
+      if (ed::NewStyleFromSelection(te, range, value, whyNot).empty())
+        return why = fw::doc::ToUtf8(whyNot.empty() ? te.Refused() : whyNot), Applied::Refused;
+    } else if (name == "themefont" && !value.empty()) {  // "+Headings" or "+Body" in the font box
+      run.themeFont = value == "headings" ? ed::ThemeFontSlot::Headings : ed::ThemeFontSlot::Body;
+      ed::FormatRuns(te, range, run);
+    } else if (name == "themecolor" && !value.empty()) {  // "<name>[:tint:shade]", hex 00-FF or -1
+      const size_t c1 = value.find(':'), c2 = c1 == std::string::npos ? c1 : value.find(':', c1 + 1);
+      ed::ThemeColorRef color;
+      color.name = value.substr(0, c1);
+      if (c1 != std::string::npos) color.tint = static_cast<int>(std::strtol(value.c_str() + c1 + 1, nullptr, 16));
+      if (c2 != std::string::npos) color.shade = static_cast<int>(std::strtol(value.c_str() + c2 + 1, nullptr, 16));
+      run.themeColor = color;
+      ed::FormatRuns(te, range, run);
+    }
+#endif
+    else if (name == "para" && !value.empty()) {
       // The Paragraph panel (FormatParagraphs): "para=<field>:<value>", one field at a time. Line
       // spacing at least, exactly (twips) or auto (240ths); indents and the first line (negative:
       // hanging); space before and after; keep with next, keep lines together, page break before,
@@ -491,6 +537,10 @@ class EditorTarget : public EditTarget {
         stop.pos = pos;
         stop.align = a->second;
         if (more == "dot") stop.leader = fw::doc::TabLeader::Dot;
+        else if (more == "hyphen") stop.leader = fw::doc::TabLeader::Hyphen;
+        else if (more == "underscore") stop.leader = fw::doc::TabLeader::Underscore;
+        else if (more == "heavy") stop.leader = fw::doc::TabLeader::Heavy;
+        else if (more == "middledot") stop.leader = fw::doc::TabLeader::MiddleDot;
         ed::ChangeTabStops(te, range, {}, {stop});
       }
     }
@@ -1115,6 +1165,22 @@ class Generator {
     e.kind = EditKind::Command;
     e.at = RandomPos(RandomPara());
     e.to = Later(e.at, rng_.Percent(70) ? 0 : 3);
+#if FW_TORTURE_CASE
+    if (rng_.Percent(15)) {  // change case; a new style from the selection, theme fonts and colors
+      static const std::vector<std::string> audit = {
+          "case=sentence", "case=lower", "case=upper", "case=capitalize", "case=toggle",
+#if FW_TORTURE_THEME
+          "themefont=headings", "themefont=body", "themecolor=accent1", "themecolor=accent2:99:-1",
+          "themecolor=text1:-1:BF", "themecolor=background2",
+#endif
+      };
+      e.format = rng_.Pick(audit);
+#if FW_TORTURE_THEME
+      if (rng_.Percent(15)) e.format = "newstyle=Torture " + std::to_string(rng_.Between(1, 4));
+#endif
+      return;
+    }
+#endif
     uint32_t roll = rng_.Below(100);
     if (roll < 35) {
       e.format = rng_.Pick(lists);
@@ -1147,7 +1213,9 @@ class Generator {
 #if FW_TORTURE_PAGE
       if (rng_.Percent(15)) {  // the ruler's tab stops; a stop the paragraph has, to take away
         static const std::vector<std::string> tabs = {"tabs=1440:start", "tabs=2880:center", "tabs=4320:end",
-                                                      "tabs=5760:decimal", "tabs=720:bar", "tabs=4320:end:dot"};
+                                                      "tabs=5760:decimal", "tabs=720:bar", "tabs=4320:end:dot",
+                                                      "tabs=5040:end:hyphen", "tabs=3600:start:underscore",
+                                                      "tabs=6480:end:heavy", "tabs=4320:center:middledot"};
         const std::vector<fw::doc::TabStop>& have = doc_.ResolvedPara(e.at.para).tabs;
         e.format = !have.empty() && rng_.Percent(40)
                        ? "tabs=" + std::to_string(rng_.Pick(have).pos.Value()) + ":start:remove"
@@ -1888,7 +1956,7 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     static const std::set<std::string> formatting = {
         "bullets", "numbering", "multilevel", "nolist", "restart", "continue", "indent", "outdent", "apply",
         "toggle", "grow", "shrink", "grow1", "shrink1", "clearchars", "clearpara", "clearall", "font",
-        "spacing", "spacebefore", "border", "tabs", "para"};
+        "spacing", "spacebefore", "border", "tabs", "para", "case", "newstyle", "themefont", "themecolor"};
     const bool styleChange = e.kind == EditKind::Command && (e.format == "update" || e.format.starts_with("modify="));
     const bool formattingCommand = e.kind == EditKind::Command && formatting.contains(e.format.substr(0, e.format.find('=')));
     bool local = e.kind == EditKind::Type || e.kind == EditKind::Delete || e.kind == EditKind::Replace ||
