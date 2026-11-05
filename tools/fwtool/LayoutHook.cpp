@@ -11,6 +11,10 @@
 #include "core/Strings.h"
 #include "doc/docx/Docx.h"
 #include "doc/edit/Editor.h"
+#include "doc/edit/Format.h"
+#include "doc/edit/Lists.h"
+#include "doc/edit/Styles.h"
+#include "doc/edit/TreeEdit.h"
 #include "doc/layout/Layout.h"
 #include "draw/D2DDevice.h"
 #include "draw/D2DPainter.h"
@@ -251,6 +255,31 @@ bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>
       if (ms >= 0) place.enter.push_back(ms);
       ms = key(caret, [&] { return editor.JoinParagraphs(editor.PrevPara(caret.para)); });
       if (ms >= 0) place.enter.push_back(ms);
+      // Formatting there, each undone: a word bold (Ctrl+B), the paragraph centered, Heading 1,
+      // bullets. Styles and lists may lay out the rest of the story again (TreeEdit::Local).
+      namespace edit = fw::doc::edit;
+      const edit::Range word{{caret.para, 0}, {caret.para, std::min<uint32_t>(4, editor.ParaLength(caret.para))}};
+      const edit::Range here{caret, caret};
+      edit::ParaFormat center;
+      center.jc = fw::doc::Justification::Center;
+      const std::function<void(edit::TreeEdit&)> commands[] = {
+          [&](edit::TreeEdit& te) { edit::ToggleRuns(te, word, edit::Toggle::Bold); },
+          [&](edit::TreeEdit& te) { edit::FormatParagraphs(te, here, center); },
+          [&](edit::TreeEdit& te) { edit::ApplyStyle(te, here, "heading 1"); },
+          [&](edit::TreeEdit& te) { edit::ToggleList(te, here, edit::ListKind::Bullet); },
+      };
+      for (const auto& command : commands) {
+        ms = key(caret, [&] {
+          edit::TreeEdit te(editor, caret);
+          command(te);
+          edit::Result r;
+          r.caret = caret;
+          return r;
+        });
+        if (ms >= 0) place.format.push_back(ms);
+        ms = key(caret, [&] { return editor.Undo(); });
+        if (ms >= 0) place.format.push_back(ms);
+      }
       places.push_back(std::move(place));
     }
   }

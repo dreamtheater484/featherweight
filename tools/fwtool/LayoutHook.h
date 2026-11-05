@@ -30,9 +30,10 @@ void DumpLayout(const std::filesystem::path& document, const std::filesystem::pa
 struct TypingPlace {
   std::string where;  // "start", "middle", "end", "table" (a cell from the middle on)
   std::vector<double> typing, backspace, enter;  // enter: Enter, and Backspace joining again
+  std::vector<double> format;  // bold, centered, Heading 1 and bullets, each undone
 };
 // Opens and lays out the document, then types at its start, middle and end, and in a table, through
-// the editor.
+// the editor, and formats there as Word's keys and buttons do.
 bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>& places, size_t& pages,
                  std::string& error);
 

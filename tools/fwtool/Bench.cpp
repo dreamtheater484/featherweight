@@ -126,8 +126,8 @@ int RunTypingBench(const std::vector<std::filesystem::path>& files, const Option
               runs, runs == 1 ? "" : "s", kTypingBudget, kTypingWorstBudget);
   size_t width = 8;
   for (const auto& f : files) width = std::max(width, fw::Utf8ToWide(Display(f)).size());
-  std::printf("%s %5s  %-6s %5s %7s %7s %7s %7s\n", Pad("Document", width, false).c_str(), "pages", "where", "keys",
-              "median", "p95", "worst", "Enter");
+  std::printf("%s %5s  %-6s %5s %7s %7s %7s %7s %7s\n", Pad("Document", width, false).c_str(), "pages", "where", "keys",
+              "median", "p95", "worst", "Enter", "format");
   std::string json = "{\n  \"format\": \"featherweight-typing-bench\",\n  \"version\": 1,\n  \"runs\": " +
                      std::to_string(runs) + ",\n  \"files\": [";
   int failed = 0, over = 0;
@@ -147,6 +147,7 @@ int RunTypingBench(const std::vector<std::filesystem::path>& files, const Option
         it->typing.insert(it->typing.end(), p.typing.begin(), p.typing.end());
         it->backspace.insert(it->backspace.end(), p.backspace.begin(), p.backspace.end());
         it->enter.insert(it->enter.end(), p.enter.begin(), p.enter.end());
+        it->format.insert(it->format.end(), p.format.begin(), p.format.end());
       }
     }
     const std::string name = Display(files[i]);
@@ -165,13 +166,15 @@ int RunTypingBench(const std::vector<std::filesystem::path>& files, const Option
       keys.insert(keys.end(), v.begin(), v.end());
       everything.insert(everything.end(), v.begin(), v.end());
       everything.insert(everything.end(), p.enter.begin(), p.enter.end());
-      const double worstKey = Quantile(v, 1), enter = Quantile(p.enter, 1);
-      std::printf("%s %5s  %-6s %5zu %7s %7s %7s %7s\n", Pad(k ? "" : name, width, false).c_str(),
+      // Formatting is a keystroke too (Ctrl+B): its worst counts against the same budget.
+      everything.insert(everything.end(), p.format.begin(), p.format.end());
+      const double worstKey = Quantile(v, 1), enter = Quantile(p.enter, 1), format = Quantile(p.format, 1);
+      std::printf("%s %5s  %-6s %5zu %7s %7s %7s %7s %7s\n", Pad(k ? "" : name, width, false).c_str(),
                   k ? "" : std::to_string(pages).c_str(), p.where.c_str(), v.size(), Ms(Quantile(v, 0.5)).c_str(),
-                  Ms(Quantile(v, 0.95)).c_str(), Ms(worstKey).c_str(), Ms(enter).c_str());
+                  Ms(Quantile(v, 0.95)).c_str(), Ms(worstKey).c_str(), Ms(enter).c_str(), Ms(format).c_str());
       json += std::string(k ? ", " : "") + "{\"where\": \"" + p.where + "\", \"keys\": " + std::to_string(v.size()) +
               ", \"medianMs\": " + Ms(Quantile(v, 0.5)) + ", \"p95Ms\": " + Ms(Quantile(v, 0.95)) +
-              ", \"worstMs\": " + Ms(worstKey) + ", \"enterMs\": " + Ms(enter) + "}";
+              ", \"worstMs\": " + Ms(worstKey) + ", \"enterMs\": " + Ms(enter) + ", \"formatMs\": " + Ms(format) + "}";
     }
     const double typical = Quantile(keys, 0.5), worst = Quantile(everything, 1);
     const bool missed = typical >= kTypingBudget || worst >= kTypingWorstBudget;

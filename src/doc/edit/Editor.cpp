@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <unordered_set>
 
+#include "doc/edit/Kept.h"
 #include "doc/model/Internal.h"
 #include "doc/model/Schema.h"
 #include "pkg/Package.h"
@@ -205,7 +206,13 @@ struct EditorState {
     E(id).node = NewNode();
     return id;
   }
-  // Inserts a new child where the schema orders it among the existing ones.
+  // Stores fragment lists that keep kept content in schema order (Kept.h). The transaction's
+  // saved paragraphs hold the store's entries for their elements, so undo puts them back.
+  void StoreFragments(FragmentChanges changes) {
+    for (auto& [node, fragments] : changes) d.store_.SetFragments(node, std::move(fragments));
+  }
+  // Inserts a new child where the schema orders it among the existing ones; what was kept around
+  // the children stays in schema order.
   ElemId AddInOrder(ElemId parent, uint32_t name) {
     ElemId id = NewElem(parent, name);
     if (id == kNoElem) return kNoElem;
@@ -218,65 +225,8 @@ struct EditorState {
     ElemId after = kNoElem;
     for (ElemId c = E(parent).first; c != kNoElem && rank(c) <= mine; c = E(c).next) after = c;
     LinkAfter(parent, after, id);
-    // Kept content stays after the known content around properties: what came first in the
-    // parent (a run's mc:AlternateContent, an extension inside w:rPr) follows a new first
-    // property, and what followed the last property (the w14 extensions that end w:rPr) follows a
-    // new last one.
-    if (PropsElem(id) || PropsElem(parent)) {
-      if (after == kNoElem) MoveFragmentsBehind(parent, pkg::Slot::Inside, id);
-      else if (E(id).next == kNoElem && PropsElem(parent)) MoveFragmentsBehind(after, pkg::Slot::After, id);
-    }
+    StoreFragments(FragmentsAfterLink(d.store_, t, after, id));
     return id;
-  }
-  // A property about to be taken out: what was kept around it (an extension that followed it)
-  // stays where it was, after the property before it, else before the one after it, else in the
-  // container. What was kept inside it goes with it.
-  void KeepFragmentsAround(ElemId child) {
-    const pkg::NodeId n = E(child).node;
-    if (n == pkg::kNoNode || n == pkg::kFieldNode) return;
-    std::vector<pkg::Fragment> stay, move;
-    for (pkg::Fragment& f : d.store_.FragmentsCopy(n))
-      (f.slot == pkg::Slot::Before || f.slot == pkg::Slot::After ? move : stay).push_back(std::move(f));
-    if (move.empty()) return;
-    // Before fragments first, then After ones: their order around the child.
-    std::stable_partition(move.begin(), move.end(), [](const pkg::Fragment& f) { return f.slot == pkg::Slot::Before; });
-    const ElemId prev = PrevSibling(child), next = E(child).next;
-    const ElemId to = prev != kNoElem ? prev : next != kNoElem ? next : E(child).parent;
-    const pkg::Slot slot = prev != kNoElem ? pkg::Slot::After : next != kNoElem ? pkg::Slot::Before : pkg::Slot::Inside;
-    const pkg::NodeId target = E(to).node;
-    if (target == pkg::kNoNode || target == pkg::kFieldNode) return;
-    for (pkg::Fragment& f : move) {
-      f.slot = slot;
-      f.afterChild.clear();
-    }
-    // After the previous property's own, or the container's first ones; before the next one's.
-    std::vector<pkg::Fragment> there = d.store_.FragmentsCopy(target);
-    auto at = slot == pkg::Slot::Before ? there.begin() : there.end();
-    if (slot == pkg::Slot::Inside)
-      at = std::find_if(there.begin(), there.end(),
-                        [](const pkg::Fragment& f) { return !(f.slot == pkg::Slot::Inside && f.afterChild.empty()); });
-    there.insert(at, std::make_move_iterator(move.begin()), std::make_move_iterator(move.end()));
-    d.store_.SetFragments(n, std::move(stay));
-    d.store_.SetFragments(target, std::move(there));
-  }
-  // Moves `from`'s kept fragments in `slot` (Inside: the ones first inside it) to just after `to`.
-  void MoveFragmentsBehind(ElemId from, pkg::Slot slot, ElemId to) {
-    const pkg::NodeId a = E(from).node, b = E(to).node;
-    if (a == pkg::kNoNode || b == pkg::kNoNode || a == pkg::kFieldNode || b == pkg::kFieldNode || a == b) return;
-    std::vector<pkg::Fragment> stay, move;
-    for (pkg::Fragment& f : d.store_.FragmentsCopy(a)) {
-      const bool moves = f.slot == slot && !f.pairEnd && (slot != pkg::Slot::Inside || f.afterChild.empty());
-      (moves ? move : stay).push_back(std::move(f));
-    }
-    if (move.empty()) return;
-    for (pkg::Fragment& f : move) {
-      f.slot = pkg::Slot::After;
-      f.afterChild.clear();
-    }
-    std::vector<pkg::Fragment> there = d.store_.FragmentsCopy(b);
-    there.insert(there.begin(), std::make_move_iterator(move.begin()), std::make_move_iterator(move.end()));
-    d.store_.SetFragments(a, std::move(stay));
-    d.store_.SetFragments(b, std::move(there));
   }
   ElemId Child(ElemId parent, uint32_t name) {
     for (ElemId c = E(parent).first; c != kNoElem; c = E(c).next)
@@ -1411,7 +1361,7 @@ struct EditorState {
         bool lastPart = slash == std::string_view::npos;
         if (lastPart && item.remove) {
           if (child != kNoElem) {
-            KeepFragmentsAround(child);
+            StoreFragments(FragmentsBeforeUnlink(d.store_, t, PrevSibling(child), child, E(child).next));
             Unlink(child);
           }
           break;
