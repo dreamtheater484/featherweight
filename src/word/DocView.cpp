@@ -141,6 +141,8 @@ std::wstring OpenError(const std::wstring& name, const fw::pkg::Status& st) {
 DocView::DocView(ViewHost& host, std::wstring path) : PagedView(host), path_(std::move(path)) {}
 
 DocView::~DocView() {
+  StopBlinking();
+  editor_.reset();
   drawings_.clear();  // pictures read from the document's package
   images_.reset();
   pagination_.reset();
@@ -204,7 +206,26 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
   revision_ = pagination_->Revision();
   TakeNewPages();
 
+  CollectAnnotations();
+
+  // Editing, when the model can write the document back as it was.
+  auto editor = std::make_unique<fw::doc::edit::Editor>(*doc_);
+  if (editor->CanEdit()) {
+    editor_ = std::move(editor);
+    editor_->OnChange([this](const fw::doc::edit::Change& c) { OnEdited(c); });
+    const std::vector<uint32_t> main = doc_->StoryParagraphs(doc_->MainStory());
+    if (!main.empty()) anchor_ = focus_ = {main.front(), 0};
+  }
+
+  Relayout(nullptr);
+  return OpenResult::Ok;
+}
+
+void DocView::CollectAnnotations() {
   // Comments, for their highlight and tooltip; hyperlink fields, for clicks.
+  comments_.clear();
+  links_.clear();
+  changes_.clear();
   for (const auto& c : doc_->Comments()) {
     if (c.start.para == fw::doc::kNone) continue;
     Comment cm;
@@ -273,8 +294,6 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     }
   }
 
-  Relayout(nullptr);
-  return OpenResult::Ok;
 }
 
 void DocView::VisibleText(uint32_t para, std::wstring& text, std::vector<uint32_t>& map) const {
@@ -312,7 +331,21 @@ bool DocView::TakeNewPages() {
     sizes_.clear();
     placeholder_ = false;
   }
-  if (sizes_.size() >= n) return false;
+  // After an edit, pages are laid out again: their sizes may change, and once the layout is done
+  // there may be fewer. Until then the old ones hold their places, so the view doesn't jump.
+  bool changed = false;
+  for (size_t i = 0; i < n && i < sizes_.size(); ++i) {
+    const layout::Page& p = pagination_->GetPage(i);
+    if (sizes_[i].w != p.width || sizes_[i].h != p.height) {
+      sizes_[i] = {p.width, p.height};
+      changed = true;
+    }
+  }
+  if (pagination_->Done() && sizes_.size() > n) {
+    sizes_.resize(n);
+    changed = true;
+  }
+  if (sizes_.size() >= n && !changed) return false;
   const bool first = sizes_.empty();
   for (size_t i = sizes_.size(); i < n; ++i) {
     const layout::Page& p = pagination_->GetPage(i);
@@ -381,7 +414,8 @@ D2D1_RECT_F DocView::PageRectToScreen(int page, const layout::Rect& rc) const {
 void DocView::OnPresentationChanged(bool on) {
   if (!on) return;
   ClearSearch();
-  anchor_ = focus_ = {};
+  if (editor_) anchor_ = focus_;  // the caret stays where it was
+  else anchor_ = focus_ = {};
 }
 
 // ---------------------------------------------------------------------------
@@ -402,6 +436,7 @@ void DocView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   VisiblePages(first, last);
   for (int i = first; i <= last; ++i) DrawPage(c, dc, i, inverted);
   DrawRanges(c, first, last);
+  DrawCaret(c, first, last);
   if (!presentation_) DrawScrollbars(c);
   c.PopClip();
 }
@@ -552,7 +587,7 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
 // Background work
 
 bool DocView::HasIdleWork() const {
-  return Ready() && (!pagination_->Done() || !noticesShown_ || !wordsCounted_ ||
+  return Ready() && (!pagination_->Done() || !noticesShown_ || !wordsCounted_ || annotationsStale_ ||
                      (!placeholder_ && sizes_.size() < pagination_->PageCount()));
 }
 
@@ -603,6 +638,12 @@ bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
     repaint = true;
   }
   if (!noticesShown_ && pagination_->Done()) ShowNotices();
+  // Comments, changes and links an edit moved: found again once typing pauses.
+  if (annotationsStale_ && pagination_->Done()) {
+    annotationsStale_ = false;
+    CollectAnnotations();
+    repaint = true;
+  }
   return repaint;
 }
 
@@ -682,16 +723,33 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
     else NextPage();
     return;
   }
-  if (auto pos = PosAt(x, y, false)) {
+  std::optional<TextPos> pos = PosAt(x, y, false);
+  if (!pos && Editing() && PageAtPoint(x, y) >= 0) pos = PosAt(x, y, true);  // in a margin: the nearest place
+  if (pos) {
+    const bool triple = !doubleClick && anim::Now() - lastDoubleClick_ < GetDoubleClickTime() &&
+                        std::abs(x - lastDoubleX_) + std::abs(y - lastDoubleY_) < 6 * ui_;
     if (doubleClick) {
       WordAt(*pos, anchor_, focus_);
       drag_ = Drag::None;
-    } else if ((mods & kModShift) && HasSelection() && StoryOf(*pos) == StoryOf(anchor_)) {
+      lastDoubleClick_ = anim::Now();
+      lastDoubleX_ = x;
+      lastDoubleY_ = y;
+    } else if (triple) {  // the paragraph
+      anchor_ = {pos->para, 0};
+      focus_ = {pos->para, static_cast<uint32_t>(doc_->Para(pos->para).text.size())};
+      drag_ = Drag::None;
+      lastDoubleClick_ = -1e9;
+    } else if ((mods & kModShift) && (HasSelection() || Editing()) && StoryOf(*pos) == StoryOf(anchor_)) {
       focus_ = *pos;
       drag_ = Drag::Select;
     } else {
       anchor_ = focus_ = *pos;
       drag_ = Drag::Select;
+    }
+    if (Editing()) {
+      goalX_ = -1;
+      editor_->BreakTyping();
+      CaretMoved(false);
     }
     host_.ViewInvalidate();
     return;
@@ -730,9 +788,11 @@ void DocView::OnMouseUp(int x, int y, int, UINT) {
   drag_ = Drag::None;
   if (d == Drag::Link) {
     FollowLink(pendingLink_);
-  } else if (d == Drag::Select && !HasSelection() && std::abs(x - downX_) + std::abs(y - downY_) < 3) {
-    anchor_ = focus_ = {};  // a plain click just clears the selection
+  } else if (d == Drag::Select && !Editing() && !HasSelection() && std::abs(x - downX_) + std::abs(y - downY_) < 3) {
+    anchor_ = focus_ = {};  // a plain click just clears the selection (when editing, it leaves the caret there)
     host_.ViewInvalidate();
+  } else if (d == Drag::Select && Editing()) {
+    CaretMoved(false);
   }
 }
 
@@ -743,6 +803,7 @@ void DocView::OnMouseLeave() {
 }
 
 bool DocView::OnKeyDown(UINT vk, UINT mods) {
+  if (Editing() && pagination_->PageCount() > 0 && EditKey(vk, mods)) return true;
   if (!Ready() || pagination_->PageCount() == 0) return NavigationKey(vk, mods);
   if (vk == VK_ESCAPE && HasSelection()) {
     anchor_ = focus_ = {};
@@ -964,13 +1025,50 @@ SaveFormat DocView::SaveAsFormat() const {
 }
 
 bool DocView::Save(const std::wstring& path, std::wstring& error) {
-  // The file exactly as it was opened (the snapshot), so a copy never differs from the original.
-  const auto& snapshot = doc_->Package().GetSnapshot();
-  std::string bytes(static_cast<size_t>(snapshot.Size()), '\0');
-  if (!snapshot.ReadAt(0, bytes.data(), bytes.size()) || !util::WriteFileAtomic(path, bytes)) {
-    error = L"The copy couldn't be saved.";
+  if (!editor_ || editor_->DirtyParts().empty()) {
+    // The file exactly as it was opened (the snapshot), so a copy never differs from the original.
+    const auto& snapshot = doc_->Package().GetSnapshot();
+    std::string bytes(static_cast<size_t>(snapshot.Size()), '\0');
+    if (!snapshot.ReadAt(0, bytes.data(), bytes.size()) || !util::WriteFileAtomic(path, bytes)) {
+      error = L"The copy couldn't be saved.";
+      return false;
+    }
+    if (editor_) editor_->MarkSaved();
+    host_.ViewStateChanged();
+    return true;
+  }
+  // The parts edits changed, written from the model; everything else copied as it was.
+  fw::pkg::Package& pkg = doc_->Package();
+  for (uint32_t part : editor_->DirtyParts()) {
+    std::string xml;
+    if (!fw::doc::docx::WritePart(*doc_, part, xml).Ok()) {
+      error = L"The document couldn't be saved: Featherweight couldn't write part of it.";
+      return false;
+    }
+    pkg.SetPart(doc_->Parts()[part].name, std::vector<uint8_t>(xml.begin(), xml.end()));
+  }
+  fw::pkg::MemorySink sink;
+  if (!pkg.Save(sink).Ok()) {
+    error = L"The document couldn't be saved.";
     return false;
   }
+  // Never damage a file: what replaces it must open again as a Word document.
+  {
+    fw::pkg::Status st;
+    auto back = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(sink.bytes), fw::pkg::Limits::Default(), st);
+    if (!back || !fw::doc::docx::Read(std::move(back), st)) {
+      error = L"The document wasn't saved: the saved copy didn't read back correctly, so the file was left as it was.";
+      return false;
+    }
+  }
+  const std::vector<uint8_t>& bytes = sink.bytes;
+  if (!util::WriteFileAtomic(path, std::string(bytes.begin(), bytes.end()))) {
+    error = L"The document couldn't be saved here.";
+    return false;
+  }
+  editor_->MarkSaved();
+  path_ = path;
+  host_.ViewStateChanged();
   return true;
 }
 
@@ -1104,7 +1202,11 @@ constexpr CommandName kCommandNames[] = {
     {CmdViewFacing, L"Two pages", L"Ctrl+8"},
     {CmdPresentation, L"Present", L"F5"},
     {CmdToggleInvert, L"Night reading: dark pages", L""},
+    {CmdCut, L"Cut", L"Ctrl+X"},
     {CmdCopy, L"Copy", L"Ctrl+C"},
+    {CmdPaste, L"Paste", L"Ctrl+V"},
+    {CmdUndo, L"Undo", L"Ctrl+Z"},
+    {CmdRedo, L"Redo", L"Ctrl+Y"},
     {CmdSelectAll, L"Select all", L"Ctrl+A"},
 };
 
@@ -1137,9 +1239,13 @@ int DocView::Shortcut(UINT vk, UINT mods) {
 CommandState DocView::QueryCommand(int cmd) {
   CommandState s;
   switch (cmd) {
-    case CmdSave: s = {false, false}; break;  // read-only until D2; Save as makes a copy
+    case CmdSave: s = {Modified(), false}; break;
     case CmdPrint: s = {Ready(), false}; break;
     case CmdCopy: s = {Ready() && HasSelection(), false}; break;
+    case CmdCut: s = {Editing() && HasSelection(), false}; break;
+    case CmdPaste: s = {Editing() && IsClipboardFormatAvailable(CF_UNICODETEXT), false}; break;
+    case CmdUndo: s = {Editing() && editor_->CanUndo(), false}; break;
+    case CmdRedo: s = {Editing() && editor_->CanRedo(), false}; break;
     case CmdSelectAll: s = {Ready(), false}; break;
     case CmdRotateLeft:
     case CmdRotateRight:
@@ -1156,18 +1262,26 @@ CommandState DocView::QueryCommand(int cmd) {
       s.shortcut = n.keys;
     }
   }
+  // "Undo typing", "Redo new paragraph".
+  if (cmd == CmdUndo && s.enabled) s.label = L"Undo " + fw::ToLower(std::wstring(editor_->UndoName().begin(), editor_->UndoName().end()));
+  if (cmd == CmdRedo && s.enabled) s.label = L"Redo " + fw::ToLower(std::wstring(editor_->RedoName().begin(), editor_->RedoName().end()));
   return s;
 }
 
 std::vector<int> DocView::Commands() {
   std::vector<int> ids;
-  for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
+  for (const CommandName& n : kCommandNames)
+    if (editor_ || (n.cmd != CmdCut && n.cmd != CmdPaste && n.cmd != CmdUndo && n.cmd != CmdRedo)) ids.push_back(n.cmd);
   return ids;
 }
 
 bool DocView::Execute(int cmd) {
   switch (cmd) {
     case CmdCopy: Copy(); return true;
+    case CmdCut: Cut(); return true;
+    case CmdPaste: Paste(); return true;
+    case CmdUndo: Undo(); return true;
+    case CmdRedo: Redo(); return true;
     case CmdSelectAll: SelectAll(); return true;
     case CmdRotateLeft:
     case CmdRotateRight:
@@ -1184,8 +1298,8 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
     t.tooltip = tooltip;
     return t;
   };
-  ToolItem save = item(CmdSave, icon::Save, L"Documents are read-only for now; Save as makes a copy");
-  save.enabled = false;
+  ToolItem save = item(CmdSave, icon::Save, editor_ ? L"Save (Ctrl+S)" : L"This document can't be edited; Save as makes a copy");
+  save.enabled = Modified();
   save.joinNext = true;
   ToolItem saveAs = item(CmdSaveMenu, icon::ChevronDown, L"Save a copy as… (Ctrl+Shift+S)");
   saveAs.width = 18;
@@ -1222,7 +1336,12 @@ void DocView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
 void DocView::FillContextMenu(HMENU m, int, int) {
   using menu::AppendItem;
   using menu::AppendSeparator;
-  if (HasSelection()) {
+  if (Editing()) {
+    AppendItem(m, CmdCut, L"Cut\tCtrl+X", HasSelection());
+    AppendItem(m, CmdCopy, L"Copy\tCtrl+C", HasSelection());
+    AppendItem(m, CmdPaste, L"Paste\tCtrl+V", IsClipboardFormatAvailable(CF_UNICODETEXT) != FALSE);
+    AppendSeparator(m);
+  } else if (HasSelection()) {
     AppendItem(m, CmdCopy, L"Copy\tCtrl+C");
     AppendSeparator(m);
   }

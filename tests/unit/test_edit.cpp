@@ -777,3 +777,32 @@ TEST(Edit_LayingOutAgainMatchesAFreshLayout) {
   CHECK(ed2.SplitParagraph(P(ps[2], 3)) && ed2.InsertText(P(ps[60], 0), u"Far ahead "));
   if (!SameLayout(partial, *doc)) CHECK(false);
 }
+
+TEST(Edit_LinesForTheCaret) {
+  Fixture f;
+  f.body = LongBody();
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  fw::doc::layout::Layout layout(*doc, EditFonts());
+  auto ps = Main(*doc);
+  uint32_t p = ps[3];  // a paragraph of several lines
+  auto first = layout.LineAt({p, 0});
+  CHECK(first && first->start == (fw::doc::layout::TextPos{p, 0}) && first->end.offset > 10);
+  if (!first) return;
+  // Home and End stay on the line: End is before the wrap, and the caret there is on the same line.
+  auto caretEnd = layout.CaretAt(first->end);
+  CHECK(caretEnd && std::abs(caretEnd->top - first->box.top) < 0.5f);
+  // Down from the first line: the second line, near the same x; up again: the first.
+  auto down = layout.LineStep({p, 3}, 1, first->box.left + 20);
+  CHECK(down && down->para == p && down->offset > first->end.offset);
+  if (down) {
+    auto up = layout.LineStep(*down, -1, first->box.left + 20);
+    CHECK(up && up->para == p && up->offset < first->end.offset);
+  }
+  // Many lines down crosses pages; past either end there's nothing.
+  auto deep = layout.LineStep({p, 0}, 200, 100);
+  CHECK(deep && deep->para > p);
+  CHECK(!layout.LineStep({ps[0], 0}, -1, 100));
+  CHECK(!layout.LineStep({ps.back(), 0}, 100000, 100));
+}

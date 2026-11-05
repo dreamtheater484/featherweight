@@ -60,6 +60,8 @@ enum Cmd : int {
   CmdCut,
   CmdPaste,
   CmdCommandSearch,
+  CmdUndo,
+  CmdRedo,
   CmdZoomPreset = 400,  // + index into fw::ZoomPresets()
   CmdRecent = 500,      // + index into Settings::recent
   CmdBannerAction = 600,

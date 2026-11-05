@@ -169,6 +169,79 @@ std::optional<size_t> Layout::PageOf(TextPos pos) {
   return std::nullopt;
 }
 
+namespace {
+
+// The line that holds `pos` (laying out pages up to it): its page and index on the page.
+std::optional<std::pair<size_t, size_t>> FindLine(Engine& e, TextPos pos) {
+  for (size_t i = 0;; ++i) {
+    while (i >= e.Pages().size() && !e.Done()) e.NextPage();
+    if (i >= e.Pages().size()) return std::nullopt;
+    const Page& p = e.Pages()[i];
+    for (size_t k = 0; k < p.lines.size(); ++k) {
+      const LineBox& lb = p.lines[k];
+      if (lb.para != pos.para) continue;
+      ParaText pt;
+      e.BuildText(lb.para, PageFields(), pt);
+      const uint32_t at = pt.LayoutOffset(pos.offset);
+      const bool last = lb.line.ending == text::LineEnd::ParagraphEnd;
+      if (at >= lb.line.start && (at < lb.line.end || (at == lb.line.end && last))) return std::make_pair(i, k);
+    }
+  }
+}
+
+}  // namespace
+
+std::optional<Layout::LineSpan> Layout::LineAt(TextPos pos) {
+  Engine& e = impl_->engine;
+  const auto at = FindLine(e, pos);
+  if (!at) return std::nullopt;
+  const LineBox& lb = e.Pages()[at->first].lines[at->second];
+  ParaText pt;
+  e.BuildText(lb.para, PageFields(), pt);
+  LineSpan s;
+  s.page = at->first;
+  s.start = {lb.para, pt.ModelOffset(lb.line.start)};
+  uint32_t end = lb.line.end;
+  if (lb.line.ending != text::LineEnd::ParagraphEnd && end > lb.line.start) --end;
+  s.end = {lb.para, std::max(s.start.offset, pt.ModelOffset(end))};
+  s.box = OnPage(lb, {lb.x + lb.line.left, lb.top, lb.x + lb.line.right, lb.top + lb.height});
+  return s;
+}
+
+std::optional<TextPos> Layout::LineStep(TextPos pos, int step, float x) {
+  Engine& e = impl_->engine;
+  const auto at = FindLine(e, pos);
+  if (!at || step == 0) return std::nullopt;
+  const Document& doc = e.Doc();
+  const uint32_t story = doc.Para(pos.para).story;
+  const bool main = story == doc.MainStory();
+  size_t page = at->first;
+  ptrdiff_t k = static_cast<ptrdiff_t>(at->second);
+  for (int left = std::abs(step); left > 0;) {
+    k += step < 0 ? -1 : 1;
+    if (k < 0 || k >= static_cast<ptrdiff_t>(e.Pages()[page].lines.size())) {
+      if (!main) return std::nullopt;  // a header's or note's lines stay on their page
+      if (step < 0) {
+        if (page == 0) return std::nullopt;
+        --page;
+        k = static_cast<ptrdiff_t>(e.Pages()[page].lines.size());
+        continue;
+      }
+      while (page + 1 >= e.Pages().size() && !e.Done()) e.NextPage();
+      if (page + 1 >= e.Pages().size()) return std::nullopt;
+      ++page;
+      k = -1;
+      continue;
+    }
+    const LineBox& lb = e.Pages()[page].lines[static_cast<size_t>(k)];
+    if (lb.para == kNone || doc.Para(lb.para).story != story) continue;
+    if (--left > 0) continue;
+    const draw::Point p = InFrame(lb, x, lb.top + lb.height / 2);
+    return TextPos{lb.para, ToModel(e, lb, lb.line.HitTest(p.x - lb.x))};
+  }
+  return std::nullopt;
+}
+
 // ---- Painting
 
 namespace {
