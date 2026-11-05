@@ -18,7 +18,7 @@ The friction review (plan §11, "Zero friction") writes each core flow down step
 |---|---|---|---|---|
 | Write a letter | 6 C + 3 K, 3 D | 5 C + 4 K, 2 D (F1: Esc) | 5 C + 3 K, 2 D | Passes after F1. The letter flow is scripted. |
 | Format a CV (without tab stops and margins) | 2 C + 9 K | 3 C + 14 K | 3 C + 9 K (the one extra click is F4, accepted) | Passes after F1–F3. Tab stops and margins come with D3 (the ruler, page setup). The CV flow is scripted. |
-| Fix a table in a received document | 9 C + 2 K + 2 drags | Waits for table editing | Target: no more than Word | D3 tables (claude/d3-tables) |
+| Fix a table in a received document | 10 C + 2 K + 2 drags | 14 C + 3 K + 1 drag (F7: the Table panel) | 11 C + 2 K + 2 drags (the two extra clicks are F6, accepted) | Passes after F7. The table flow is scripted. |
 
 ## Where Featherweight needs more than Word
 
@@ -28,6 +28,8 @@ The friction review (plan §11, "Zero friction") writes each core flow down step
 | F2 | CV: Enter after a heading or the title | The next paragraph is Normal (the style's `w:next`) | It stays Heading 1 / Title. **+1 K per heading** (Ctrl+Shift+N) | widgets (Enter in the editor) | Reported 2026-11-05 |
 | F3 | CV: Enter on an empty list item | Ends the list: the item becomes plain text | Stays a list item, and so does what follows. **+1 per list** | widgets, with d2-format (lists) | Reported 2026-11-05 |
 | F4 | Letter and CV: a style without a shortcut (No Spacing, Title, Subtitle, Quote) | 1 C in the Home tab's gallery | 2 C: open the style box, choose | Accepted: one toolbar row, no ribbon (plan §5.2). Normal and Heading 1–3 have Word's keys in both. | By design |
+| F6 | Table: a row in the middle | 1 C on the ⊕ at the row's edge | 3 C: right-click, Insert, Rows Below (as Word's own menu) | Accepted: the review's target for this step was at most 3 C. A handle is worth a look once layout gives cell boxes. | Accepted |
+| F7 | Table: widening a column | 1 drag of its border | Dragging a border selects text. Today: right-click, Properties, the Column width box, a number, Enter: **3 C + 1 K instead of 1 drag** | widgets (d3-tables), waiting on d1-model's `Layout::Cells(page)` | Known to widgets (their hand-over), confirmed here 2026-11-05 |
 | F5 | Letter: the date, in a narrow window | The ribbon shrinks, Insert stays | Below about 1150 pixels wide, the Insert box drops out of the toolbar: then it's command search (Alt+Q, "date", Enter) | d2-format (toolbar priorities) | Note: worth a look, not a finding |
 
 Also found while scripting: **torture finding 7** happens in the app. Centering a line with Ctrl+E and pressing Enter lets AutoCorrect's capital fix garble the line ("second" saved as "SecondS"). Reported to d1-measure as part of finding 7.
@@ -79,20 +81,20 @@ Export PDF comes in D4 and isn't part of D3's review.
 
 ## 3. Fix a table in a received document
 
-A .docx received by mail, with a four-column table. Fix a typo in a cell, add a row at the end and one in the middle, delete a row, merge two header cells, widen a column, and save.
+A .docx received by mail, with a four-column table (`tests/office/torture/received-table.docx`, made by `make_torture_docs.py`). Fix a typo in a cell, add a row at the end and one in the middle, delete a row, merge two header cells, widen a column, and save.
 
-| # | Step | Word | Featherweight (target, as table editing lands) |
+| # | Step | Word | Featherweight |
 |---|---|---|---|
 | 1 | Open the attachment | Double-click: 1 C, then Enable Editing in Protected View: 1 C | Double-click: 1 C. It opens ready to edit. |
-| 2 | Fix a typo in a cell | Click in the cell, type | The same |
-| 3 | A row at the end | Click in the last cell, Tab: 1 C + 1 K | Same as Word: Tab in the last cell |
-| 4 | A row in the middle | The ⊕ at the row's left edge: 1 C (or right-click, Insert, Insert Rows Below: 3 C) | At most 3 C |
-| 5 | Delete a row | Right-click, Delete, Delete Rows: 3 C | At most 3 C |
-| 6 | Merge two header cells | Select them (drag), right-click, Merge Cells: 1 drag + 2 C | At most the same |
-| 7 | Widen a column | Drag its border: 1 drag | The same |
+| 2 | Fix a typo in a cell ("Chiar") | Double-click the word, type: 1 C | The same |
+| 3 | A row at the end | Click in the last cell, Tab: 1 C + 1 K | The same |
+| 4 | A row in the middle | The ⊕ at the row's left edge: 1 C (or right-click, Insert, Insert Rows Below: 3 C) | Right-click, Insert, Rows Below: 3 C (F6, accepted) |
+| 5 | Delete a row | Right-click, Delete, Delete Rows: 3 C | Right-click, Delete, Rows: 3 C |
+| 6 | Merge two header cells | Select them (drag), right-click, Merge Cells: 1 drag + 2 C | The same |
+| 7 | Widen a column | Drag its border: 1 drag | Today: right-click, Properties, Column width, type, Enter: 3 C + 1 K (F7). Once border drags land: 1 drag. |
 | 8 | Save | Ctrl+S: 1 K | Ctrl+S: 1 K. The original is kept for 30 days as a backup, with no step. |
 
-This flow is added to the scripted checks when claude/d3-tables lands.
+Word: 10 C + 2 K + 2 drags (14). Featherweight today: 14 C + 3 K + 1 drag (18); with F7 fixed, 11 C + 2 K + 2 drags (15), within the budget of 16 (Word's 14 and F6's two clicks).
 
 ## Scripted checks
 
@@ -100,14 +102,14 @@ This flow is added to the scripted checks when claude/d3-tables lands.
 powershell -ExecutionPolicy Bypass -File tests\friction-checks.ps1 [-Workarounds]
 ```
 
-- **How each flow runs.** `Featherweight.exe --snapshot --size 1100x700 --script @<flow>.script`: a new document, the flow's clicks, keys and typing, then `save:` (standing for Ctrl+S and Enter in the Save dialog).
+- **How each flow runs.** `Featherweight.exe [<file>] --snapshot --size 1100x700 --script @<flow>.script`: a new document (or a copy of the received one), the flow's clicks, keys, drags and typing, then `save:` (standing for Ctrl+S, and Enter in the Save dialog for a new file). The right-click menu is Windows' own, which a script can't click: a right-click is a click there and its items are the command they run (`cmd:<id>`), counted as the clicks they take.
 - **What's checked afterwards.**
   - `fwtool dump --model` must show each paragraph with the style, list label and text the flow wrote.
-  - `fwtool check` must pass.
-  - The step count must stay within the budget: Word's count plus the extras accepted here (F4).
+  - `fwtool check` must pass, and the table flow's saved XML must have the wider column, the merged header cells and no Lamp row.
+  - The step count must stay within the budget: Word's count plus the extras accepted here (F4, F6).
 - **Images and saved files** go to `build\friction`.
-- **The scripts are the flows as they should go.** While F1–F3 are open, both flows fail on what the saved file says.
-- **`-Workarounds`** adds the steps the findings need today. The content then checks out, and the counts show the cost: the letter takes 9 (budget 9), the CV 17 (budget 12).
-- **Click coordinates** (the style box and its list) are for that window size. A toolbar change that moves them makes the check fail, and it's fixed here.
+- **The scripts are the flows as they should go.** While F1–F3 are open, the letter and the CV fail on what the saved file says; while F7 is, the table does (its column isn't wider).
+- **`-Workarounds`** adds the steps the findings need today. The content then checks out, and the counts show the cost: the letter takes 9 (budget 9), the CV 17 (budget 12), the table 18 (budget 16).
+- **Click coordinates** (the style box and its list, the table's cells and the Table panel's Column width box) are for that window size. A toolbar change that moves them makes the check fail, and it's fixed here.
 
 The checks open Featherweight's own window off-screen, and nothing else. They aren't in CI, like `visual-checks.ps1`.

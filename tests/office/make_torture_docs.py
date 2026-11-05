@@ -147,6 +147,34 @@ def tables_document():
             "</w:body></w:document>")
 
 
+def received_table_document():
+    """A table as one arrives by mail, for the friction review's "fix a table" flow
+    (docs/friction-review.md, tests/friction-checks.ps1): four columns with a header row and grid
+    lines (Table Grid, its borders set on the table, as the style isn't in styles.xml), and a typo in
+    a cell."""
+    widths = [3000, 1500, 2000, 2000]
+    grid = "".join(f'<w:gridCol w:w="{w}"/>' for w in widths)
+    def row(texts, header=False):
+        trpr = "<w:trPr><w:tblHeader/></w:trPr>" if header else ""
+        rpr = "<w:rPr><w:b/></w:rPr>" if header else ""
+        return ("<w:tr>" + trpr + "".join(f'<w:tc><w:tcPr><w:tcW w:w="{w}" w:type="dxa"/></w:tcPr><w:p>{run(t, rpr)}</w:p></w:tc>'
+                                           for t, w in zip(texts, widths)) + "</w:tr>")
+    rows = [row(["Item", "Quantity", "Price", "Total"], True)]
+    for texts in [["Desk", "2", "250", "500"], ["Chiar", "4", "80", "320"], ["Lamp", "3", "40", "120"], ["Shelf", "1", "150", "150"]]:
+        rows.append(row(texts))
+    borders = "".join(f'<w:{side} w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+                      for side in ["top", "left", "bottom", "right", "insideH", "insideV"])
+    table = ('<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/>'
+             f'<w:tblBorders>{borders}</w:tblBorders>'
+             '<w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="0" '
+             f'w:noVBand="1"/></w:tblPr><w:tblGrid>{grid}</w:tblGrid>' + "".join(rows) + "</w:tbl>")
+    body = ("<w:p>" + run("Quote for the new office") + "</w:p>" + table + "<w:p>" + run("Prices in euros, without VAT.")
+            + "</w:p>")
+    return (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="{W}" xmlns:r="{R}"><w:body>'
+            + body + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" '
+            'w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>')
+
+
 TRANSITIONAL = {
     "w": W, "r": R,
     "rel": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/",
@@ -255,6 +283,7 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     write("toc-fields.docx", document())
     write("merged-table.docx", tables_document())
+    write("received-table.docx", received_table_document())
     write_parts("headers-fields.docx", headers_parts(TRANSITIONAL))
     write_parts("headers-fields-strict.docx", headers_parts(STRICT))
 
