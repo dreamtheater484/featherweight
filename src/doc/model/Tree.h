@@ -55,6 +55,18 @@ enum ElemFlags : uint8_t {
   kSharedKids = 8,
 };
 
+// The property containers whose children the reader shares (kSharedKids). The first user of a
+// shared set isn't flagged, so an edit copies the children of any container of these kinds before
+// it changes them; other elements (a paragraph, a run) always own theirs.
+inline constexpr uint32_t kSharedPropertyContainers[] = {
+    Name("rPr"),  Name("pPr"),   Name("tabs"),       Name("numPr"), Name("pBdr"),  Name("tcPr"),
+    Name("tcBorders"), Name("tcMar"), Name("trPr"), Name("tblPr"), Name("tblBorders"), Name("tblCellMar")};
+inline bool SharesChildren(uint32_t name) {
+  for (uint32_t n : kSharedPropertyContainers)
+    if (n == name) return true;
+  return false;
+}
+
 struct AttrVal {
   AttrDefId def = kNoDef;
   StrId value = 0;
