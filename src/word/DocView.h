@@ -197,6 +197,10 @@ class DocView : public PagedView {
   // Edits, their undo and redo: the layout lays out again, positions kept here move, and the file
   // learns whether the document now differs from the saved one.
   void OnEdited(const fw::doc::edit::Change& change);
+  // The file learns whether the document differs from the saved one. OnEdited does it for each
+  // change; a group of changes (a paste, a page number) is only one undo step once it ends, so
+  // whatever made one calls this after it.
+  void SyncFile();
   // After an edit (or a refusal, whose message shows): the caret goes where it says.
   bool Apply(const fw::doc::edit::Result& result);
   bool EditKey(UINT vk, UINT mods);

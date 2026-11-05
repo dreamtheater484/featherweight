@@ -87,6 +87,7 @@ bool DocView::EnterHeaderFooter(int page, bool footer, std::optional<std::pair<f
   }
   if (!hf_) bodyCaret_ = focus_;
   hf_ = HeaderEdit{story, static_cast<size_t>(page), section, footer, type};
+  SyncFile();  // a new header or footer is an edit
   pagination_->LayOutPages(static_cast<size_t>(page) + 1);
   TakeNewPages();
   const std::vector<uint32_t> paras = doc_->StoryParagraphs(story);
@@ -291,6 +292,7 @@ bool DocView::ExecuteD3(int cmd) {
   if (!QueryD3(cmd)->enabled) return true;
   auto apply = [this](const edit::Result& r) {
     if (!r && !r.message.empty()) host_.ViewMessage(BannerKind::Warning, W(r.message));
+    SyncFile();
     caretRevision_ = UINT32_MAX;
     TakeNewPages();
     host_.ViewStateChanged();

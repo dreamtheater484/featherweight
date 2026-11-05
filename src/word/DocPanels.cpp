@@ -235,6 +235,7 @@ void DocView::LinkPanel::Apply() {
   ed.EndGroup();
   if (!r) {
     if (edit::Bookmarks(*v_.doc_).size() != marksBefore) ed.Undo();  // the heading's bookmark goes too
+    v_.SyncFile();
     note_ = W(r.message);
     v_.host_.ViewInvalidate();
     return;
@@ -296,6 +297,7 @@ void DocView::BookmarkPanel::Refresh() {
 void DocView::BookmarkPanel::Add() {
   const std::string name = fw::WideToUtf8(Trim(name_.Text()));
   edit::Result r = edit::InsertBookmark(*v_.editor_, v_.SelFrom(), v_.SelTo(), name);
+  v_.SyncFile();
   note_ = r ? L"Added “" + Wide(name) + L"”." : W(r.message);
   Refresh();
 }
@@ -314,6 +316,7 @@ void DocView::BookmarkPanel::GoTo() {
 void DocView::BookmarkPanel::Delete() {
   const std::string name = fw::WideToUtf8(Trim(name_.Text()));
   edit::Result r = edit::DeleteBookmark(*v_.editor_, name);
+  v_.SyncFile();
   note_ = r ? L"Deleted “" + Wide(name) + L"”." : W(r.message);
   if (r) name_.SetText(L"");
   Refresh();
@@ -408,6 +411,7 @@ void DocView::PageNumberPanel::Insert() {
   const bool footer = position_.selected == 1;
   const fw::doc::HdrFtrType type = v_.hf_ ? v_.hf_->type : fw::doc::HdrFtrType::Default;
   edit::Result r = edit::InsertPageNumber(ed, Section(), footer, type, jc, ofPages);
+  v_.SyncFile();
   if (!r) {
     note_ = W(r.message);
     v_.host_.ViewInvalidate();
@@ -429,6 +433,7 @@ void DocView::PageNumberPanel::ApplyFormat() {
   std::optional<int32_t> start;
   if (numbering_.selected == 1) start = static_cast<int32_t>(std::lround(start_.value));
   edit::Result r = edit::SetPageNumbering(*v_.editor_, Section(), kFormats[std::min(f, std::size(kFormats) - 1)], start);
+  v_.SyncFile();
   note_ = r ? L"Page numbering changed." : W(r.message);
   v_.caretRevision_ = UINT32_MAX;
   v_.TakeNewPages();

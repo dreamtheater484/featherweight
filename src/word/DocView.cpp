@@ -1480,6 +1480,7 @@ DocFormat::Target DocView::FormatTarget() const {
 }
 
 void DocView::AfterFormat(const DocFormat::Done& done) {
+  SyncFile();  // a style or list change may be a group of steps
   // OnEdited has told the layout what changed: the caret's page is laid out again now.
   if (done.caret) anchor_ = focus_ = {done.caret->para, done.caret->offset};
   goalX_ = -1;

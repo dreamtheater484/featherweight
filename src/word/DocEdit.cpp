@@ -73,7 +73,15 @@ void DocView::OnEdited(const fw::doc::edit::Change& c) {
   if (file_.Dirty() != wasModified) host_.ViewStateChanged();
 }
 
+void DocView::SyncFile() {
+  if (!editor_) return;
+  const bool wasModified = file_.Dirty();
+  file_.Changed(editor_->Modified(), editor_->DirtyParts());
+  if (file_.Dirty() != wasModified) host_.ViewStateChanged();
+}
+
 bool DocView::Apply(const Result& r) {
+  SyncFile();
   if (!r) {
     if (!r.message.empty()) host_.ViewMessage(BannerKind::Warning, std::wstring(r.message.begin(), r.message.end()));
     return false;
