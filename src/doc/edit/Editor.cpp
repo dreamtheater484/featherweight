@@ -955,7 +955,14 @@ struct EditorState {
         ElemId nr = NewElem(E(endsHere).parent, kR);
         if (nr != kNoElem) {
           LinkAfter(E(endsHere).parent, endsHere, nr);
-          CopyRunProps(run, nr, true);
+          // After a check box or a list, the look of the text before it, not the box's symbol font.
+          ElemId look = run;
+          if (NameOf(endsHere) == kSdt && Chosen(endsHere)) {
+            look = Child(d.paras_[para].elem, kPPr);
+            for (ElemId c = E(E(endsHere).parent).first; c != endsHere && c != kNoElem; c = E(c).next)
+              if (NameOf(c) == kR) look = c;
+          }
+          CopyRunProps(look, nr, true);
           spot = {nr, kNoElem, LastChild(nr)};
           return true;
         }
@@ -1010,8 +1017,8 @@ struct EditorState {
         break;
     }
     LinkAfter(p, after, nr);
-    if (firstRun != kNoElem) CopyRunProps(firstRun, nr);
-    else CopyRunProps(Child(p, kPPr), nr);
+    if (firstRun != kNoElem && ChosenSdt(firstRun) == kNoElem) CopyRunProps(firstRun, nr);
+    else CopyRunProps(Child(p, kPPr), nr);  // before a check box or list: not its symbol font
     spot = {nr, kNoElem, LastChild(nr)};
     return true;
   }

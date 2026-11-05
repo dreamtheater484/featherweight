@@ -13,6 +13,7 @@
 #include "doc/docx/Blank.h"
 #include "doc/docx/Docx.h"
 #include "doc/edit/Clip.h"
+#include "doc/edit/Forms.h"
 #include "draw/D2DPainter.h"
 #include "draw/PrintJob.h"
 #include "pkg/Package.h"
@@ -268,6 +269,7 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     format_->insertPicture = [this] { Execute(CmdInsertPicture); };
     for (int cmd : DocPage::InsertCommands())
       format_->insertMore.push_back({page_->Query(cmd).Tooltip(), [this, cmd] { Execute(cmd); }});
+    for (int cmd : FormCommands()) format_->insertMore.push_back({QueryForms(cmd)->label, [this, cmd] { Execute(cmd); }});
     DocStyles::Host sh;
     sh.selection = [this] {
       return std::make_pair(fw::doc::Pos{anchor_.para, anchor_.offset}, fw::doc::Pos{focus_.para, focus_.offset});
@@ -318,6 +320,17 @@ void DocView::CollectAnnotations() {
       if (!target.empty()) links_.push_back({{f.separator.para, f.separator.offset}, {f.end.para, f.end.offset}, target});
     }
   }
+
+  // Legacy form fields: shaded gray on screen (not in print), as Word shades them, unless the
+  // document says not to (w:doNotShadeFormData).
+  formShades_.clear();
+  const fw::doc::Part* settings = doc_->FindPart(fw::doc::PartKind::Settings);
+  if (!settings || !fw::doc::Node(&doc_->GetTree(), settings->root).Child(fw::doc::Name("doNotShadeFormData")))
+    for (uint32_t s = 0; s < doc_->Stories().size(); ++s) {
+      if (doc_->Stories()[s].kind == fw::doc::StoryKind::Comment) continue;
+      for (const fw::doc::edit::FormField& f : fw::doc::edit::FormFields(*doc_, s))
+        formShades_.push_back({{f.start.para, f.start.offset}, {f.end.para, f.end.offset}});
+    }
 
   // Tracked changes in the text (not formatting changes, which show nothing in Simple Markup).
   std::vector<std::string_view> authors;
@@ -594,6 +607,16 @@ void DocView::DrawRanges(Canvas& c, int first, int last) {
   // Comments, changes and matches are measured once pagination is done: measuring a range lays
   // out every page up to it, which painting mustn't wait for.
   const bool done = pagination_->Done();
+  // Legacy form fields: gray behind them.
+  if (!presentation_) {
+    for (auto& m : formShades_) {
+      if (!m.measured && done) {
+        m.rects = pagination_->Ranges(m.from, m.to);
+        m.measured = true;
+      }
+      fill(m.rects, Alpha(Rgb(0x808080), 0.28f), false);
+    }
+  }
   // Comments: their text is marked, as Word marks it.
   if (!presentation_) {
     for (auto& cm : comments_) {
@@ -700,6 +723,7 @@ bool DocView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
     for (auto& m : matches_) m.measured = false;
     for (auto& cm : comments_) cm.measured = false;
     for (auto& ch : changes_) ch.measured = false;
+    for (auto& m : formShades_) m.measured = false;
     repaint = true;
   }
   if (!noticesShown_ && pagination_->Done()) ShowNotices();
@@ -837,6 +861,8 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
     host_.ViewInvalidate();
     return;
   }
+  // A check box, a list or a placeholder takes the click, even when selected (Tab selects it).
+  if (pos && Editing() && !doubleClick && !(mods & kModShift) && FormClick(*pos, x, y)) return;
   if (!doubleClick && TextDragDown(x, y, mods, pos)) return;  // pressed on the selection: it may be dragged
   if (pos) {
     const bool triple = !doubleClick && anim::Now() - lastDoubleClick_ < GetDoubleClickTime() &&
@@ -969,6 +995,7 @@ bool DocView::OnKeyDown(UINT vk, UINT mods) {
     LeaveHeaderFooter();
     return true;
   }
+  if (Editing() && FormKey(vk, mods)) return true;  // Tab in a protected form, Alt+Down in a list
   if (vk == VK_TAB && !(mods & (kModCtrl | kModAlt)) && Editing() && table_ && table_->Tab((mods & kModShift) != 0)) return true;
   if (vk == VK_TAB && !(mods & (kModCtrl | kModAlt)) && Editing() && ListTab((mods & kModShift) != 0)) return true;
   if (Editing() && pagination_->PageCount() > 0 && EditKey(vk, mods)) return true;
@@ -1510,6 +1537,7 @@ int DocView::ShortcutFor(UINT vk, UINT mods) const {
 CommandState DocView::QueryCommand(int cmd) {
   if (format_ && DocFormat::Owns(cmd)) return format_->Query(cmd);
   if (auto d3 = QueryD3(cmd)) return *d3;
+  if (auto forms = QueryForms(cmd)) return *forms;
   if (table_ && DocTable::Owns(cmd)) return table_->Query(cmd);
   if (page_ && DocPage::Owns(cmd)) return page_->Query(cmd);
   if (styles_ && DocStyles::Owns(cmd)) return styles_->Query(cmd);
@@ -1576,6 +1604,8 @@ std::vector<int> DocView::Commands() {
     for (int cmd : DocPage::CommandIds()) ids.push_back(cmd);
   if (styles_)
     for (int cmd : DocStyles::CommandIds()) ids.push_back(cmd);
+  if (format_)
+    for (int cmd : FormCommands()) ids.push_back(cmd);
   return ids;
 }
 
@@ -1601,6 +1631,7 @@ bool DocView::Execute(int cmd) {
   if (ExecuteProof(cmd)) return true;
   if (ExecuteD3(cmd)) return true;
   if (ExecutePicture(cmd)) return true;
+  if (ExecuteForms(cmd)) return true;
   switch (cmd) {
     case CmdCopy: Copy(); return true;
     case CmdCut: Cut(); return true;

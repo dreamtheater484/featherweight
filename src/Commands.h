@@ -242,4 +242,10 @@ enum Cmd : int {
   // Styles (D3).
   CmdModifyStyle = 1230,  // the Modify style panel, for the paragraph's style
   CmdNewStyle,            // Create a style from the selection
+  // Content controls (D4): Insert ▾ adds them, as Word's Developer tab does.
+  CmdInsertRichText = 1400,
+  CmdInsertPlainText,
+  CmdInsertCheckBox,
+  CmdInsertDropDown,
+  CmdInsertDatePicker,
 };

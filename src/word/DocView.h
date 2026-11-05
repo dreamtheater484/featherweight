@@ -333,6 +333,24 @@ class DocView : public PagedView {
   void FillRulerMenu(HMENU m, int x, int y);
   friend class DocStyles;  // its panels' buttons
 
+  // ---- Content controls and form fields (DocForms.cpp, D4)
+  static std::vector<int> FormCommands();  // Insert ▾'s content controls
+  std::optional<CommandState> QueryForms(int cmd);
+  bool ExecuteForms(int cmd);
+  // A plain click at `pos` (x, y in the window): a check box ticks, a placeholder is selected whole
+  // and a list or date opens its menu. True when the click was the control's.
+  bool FormClick(TextPos pos, int x, int y);
+  // Tab and Shift+Tab in a protected form go from field to field; Alt+Down opens a list's menu.
+  bool FormKey(UINT vk, UINT mods);
+  // Typed text: it replaces a placeholder, Space ticks a check box, a list takes none. True when
+  // handled here.
+  bool FormType(std::u16string_view text);
+  // Deleting [from, to): a placeholder, a check box and a list stay; a control emptied shows its
+  // placeholder. True when handled here.
+  bool FormDelete(TextPos from, TextPos to);
+  // The menu of the list, combo box, date or drop-down field at `at`, under it.
+  void FormMenu(fw::doc::Pos at);
+
   // ---- Formatting (DocFormat)
   // What formatting applies to: the selection, or the caret and the word it's in.
   DocFormat::Target FormatTarget() const;
@@ -461,6 +479,7 @@ class DocView : public PagedView {
 
   // Find
   std::vector<Match> matches_;
+  std::vector<Match> formShades_;  // legacy form fields, shaded on screen as Word shades them (D4)
   int current_ = -1;
   std::wstring query_;  // what was searched for, to find again after a replace
   bool matchCase_ = false, wholeWords_ = false;

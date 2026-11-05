@@ -126,6 +126,7 @@ bool DocView::ApplyPageChange(const Result& r, bool caret) {
 void DocView::TypeText(std::u16string_view text) {
   if (text.empty()) return;
   if (HasSelection() && table_ && table_->ReplaceCells(text)) return;  // cells selected: they're replaced
+  if (text.find(u'\r') == std::u16string_view::npos && FormType(text)) return;  // in a content control or form field
   const bool typed = !HasSelection();
   if (!Apply(HasSelection() ? editor_->Replace(SelFrom(), SelTo(), text) : editor_->InsertText(ToDoc(focus_), text))) return;
   // "1. " or "* " at the start of a paragraph starts a list (DocFormat::AutoFormat).
@@ -135,7 +136,7 @@ void DocView::TypeText(std::u16string_view text) {
 void DocView::DeleteBy(bool forward, bool word) {
   if (HasSelection() && table_ && table_->ReplaceCells(u"")) return;  // cells selected: they're emptied
   if (HasSelection()) {
-    Apply(editor_->Delete(SelFrom(), SelTo()));
+    if (!FormDelete(anchor_, focus_)) Apply(editor_->Delete(SelFrom(), SelTo()));
     return;
   }
   TextPos from = focus_, to = focus_;
@@ -156,7 +157,7 @@ void DocView::DeleteBy(bool forward, bool word) {
       else from = StepChar(focus_, false);  // the start: joins the paragraph before
     }
   }
-  if (from == to) return;
+  if (from == to || FormDelete(from, to)) return;
   Apply(editor_->Delete(ToDoc(from), ToDoc(to)));
 }
 
