@@ -47,6 +47,20 @@ bool Document::Editable() const {
   return std::all_of(parts_.begin(), parts_.end(), [](const Part& p) { return p.Editable(); });
 }
 
+bool Document::StoryInDocument(uint32_t story) const {
+  // Up through text boxes in text boxes, to a story that isn't one.
+  for (int depth = 0; depth < 32; ++depth) {
+    if (story >= stories_.size()) return false;
+    const Story& s = stories_[story];
+    if (s.kind != StoryKind::TextBox || s.drawing == kNone) return true;
+    if (s.drawing >= drawings_.size()) return false;
+    const Pos at = drawings_[s.drawing].pos;
+    if (at.para >= paras_.size()) return false;
+    story = paras_[at.para].story;
+  }
+  return false;
+}
+
 uint32_t Document::NoteStory(StoryKind kind, std::string_view id) const {
   const auto& map = kind == StoryKind::Footnote ? caches_->footnoteStory
                     : kind == StoryKind::Endnote ? caches_->endnoteStory
