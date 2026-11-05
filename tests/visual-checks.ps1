@@ -108,6 +108,10 @@ $checks = @(
   # Tables (D3): text made a table, a column selected (the Table menu in the toolbar); the Table panel at night.
   @("doc-table", "light", "", "new;type:Name;key:tab;type:Qty|Apples;key:tab;type:3|Pears;key:tab;type:5;cmd:selectall;cmd:1153;key:ctrl+home;key:tab;key:tab;cmd:1166", @()),
   @("doc-table-panel", "dark", "", "key:ctrl+end;key:enter;type:Item;key:tab;type:Price;key:shift+home;cmd:1153;cmd:1173", @("..\office\layout\report.docx")),
+  # Page layout (D3): landscape in two columns, hyphenated, with the Page setup panel; at night, a
+  # page break (Ctrl+Enter) and a next-page section break near the start.
+  @("doc-page-setup", "light", "", "cmd:1253;cmd:1259;cmd:1268;cmd:1250;wait:400", @("..\office\layout\report.docx")),
+  @("doc-page-breaks", "dark", "", "key:ctrl+home;key:right;key:ctrl+enter;cmd:1263;view:facing;wait:300", @("..\office\layout\report.docx")),
   # Printing a document (vector, through Microsoft Print to PDF), then the PDF it made.
   @("doc-print", "light", "", "print:$out\doc-print.pdf", @("..\office\layout\textbox-table.docx")),
   @("doc-printed", "light", "", "view:facing;cmd:fit-page", @("..\..\build\visual\doc-print.pdf"))
