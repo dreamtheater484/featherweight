@@ -1,0 +1,510 @@
+#include "doc/edit/Editor.h"
+
+#include <pugixml.hpp>
+
+#include <algorithm>
+
+#include "doc/model/Internal.h"
+
+namespace fw::doc::edit {
+
+namespace {
+
+const Schema& S() { return Schema::Get(); }
+
+uint32_t NameOfElem(const Tree& t, ElemId id) { return S().Elem(t.elems[id].def).name; }
+TypeId TypeOfElem(const Tree& t, ElemId id) { return S().Elem(t.elems[id].def).type; }
+
+// Where a child goes among its siblings: its place in the parent type's schema order.
+size_t Rank(const TypeDef& parent, ElemDefId def) {
+  auto it = std::find(parent.children.begin(), parent.children.end(), def);
+  return static_cast<size_t>(it - parent.children.begin());
+}
+
+size_t AttrRank(const TypeDef& type, AttrDefId def) {
+  auto it = std::find(type.attrs.begin(), type.attrs.end(), def);
+  return static_cast<size_t>(it - type.attrs.begin());
+}
+
+// Pre-order successor inside `top`'s subtree, as Document walks it: shared property sets aren't
+// entered.
+ElemId NextIn(const Tree& t, ElemId id, ElemId top, bool skipChildren = false) {
+  if (!skipChildren && !(t.elems[id].flags & kSharedKids) && t.elems[id].first != kNoElem) return t.elems[id].first;
+  while (id != top && id != kNoElem) {
+    if (t.elems[id].next != kNoElem) return t.elems[id].next;
+    id = t.elems[id].parent;
+  }
+  return kNoElem;
+}
+
+Ns NsOfPrefix(std::string_view prefix) {
+  for (size_t i = 0; i < kNsCount; ++i)
+    if (NsPrefix(static_cast<Ns>(i)) == prefix && static_cast<Ns>(i) != Ns::Other) return static_cast<Ns>(i);
+  return Ns::Other;
+}
+
+// "w:val" -> the name hash the schema knows it by.
+uint32_t QNameHash(std::string_view qname) {
+  size_t colon = qname.find(':');
+  if (colon == std::string_view::npos) return NameOf(Ns::None, qname);
+  return NameOf(NsOfPrefix(qname.substr(0, colon)), qname.substr(colon + 1));
+}
+
+bool Space(char16_t c) { return c == u' ' || c == u'\t' || c == u'\n' || c == u'\r'; }
+
+}  // namespace
+
+Editor::Editor(Document& doc) : doc_(doc) {
+  // New elements need node ids the round-trip store hasn't seen.
+  pkg::NodeId top = 0;
+  for (const Elem& e : doc_.tree_.elems)
+    if (e.node != pkg::kFieldNode) top = std::max(top, e.node);
+  for (const Part& p : doc_.parts_) top = std::max(top, p.docNode);
+  nextNode_ = top + 1;
+}
+
+// ---------- Transactions ----------
+
+void Editor::Begin(std::wstring label) {
+  if (depth_++ > 0) return;
+  txn_ = Txn{};
+  txn_.label = std::move(label);
+  txn_.elems = doc_.tree_.elems.size();
+  txn_.attrs = doc_.tree_.attrs.size();
+  touched_.clear();
+}
+
+void Editor::Commit() {
+  if (depth_ == 0 || --depth_ > 0) return;
+  Tree& t = doc_.tree_;
+  for (const auto& [id, old] : txn_.before) txn_.after.emplace_back(id, t.elems[id]);
+  txn_.added.assign(t.elems.begin() + static_cast<std::ptrdiff_t>(txn_.elems), t.elems.end());
+  txn_.addedAttrs.assign(t.attrs.begin() + static_cast<std::ptrdiff_t>(txn_.attrs), t.attrs.end());
+  touched_.clear();
+  if (txn_.Empty()) return;
+  Invalidate(txn_);
+  undo_.push_back(std::move(txn_));
+  redo_.clear();
+  ++version_;
+}
+
+bool Editor::Undo() {
+  if (undo_.empty() || depth_ > 0) return false;
+  Txn txn = std::move(undo_.back());
+  undo_.pop_back();
+  Tree& t = doc_.tree_;
+  pkg::RoundTripStore& store = doc_.store_;
+  for (auto op = txn.store.rbegin(); op != txn.store.rend(); ++op) {
+    if (op->kind == StoreOp::Split) store.Merge(op->node, op->second, op->at.firstMoved);
+    else store.SetNodeAttributes(op->node, op->before);
+  }
+  for (auto it = txn.before.rbegin(); it != txn.before.rend(); ++it) t.elems[it->first] = it->second;
+  t.elems.resize(txn.elems);
+  t.attrs.resize(txn.attrs);
+  Invalidate(txn);
+  redo_.push_back(std::move(txn));
+  ++version_;
+  return true;
+}
+
+bool Editor::Redo() {
+  if (redo_.empty() || depth_ > 0) return false;
+  Txn txn = std::move(redo_.back());
+  redo_.pop_back();
+  Tree& t = doc_.tree_;
+  pkg::RoundTripStore& store = doc_.store_;
+  t.elems.resize(txn.elems);
+  t.attrs.resize(txn.attrs);
+  t.elems.insert(t.elems.end(), txn.added.begin(), txn.added.end());
+  t.attrs.insert(t.attrs.end(), txn.addedAttrs.begin(), txn.addedAttrs.end());
+  for (const auto& [id, e] : txn.after) t.elems[id] = e;
+  for (const StoreOp& op : txn.store) {
+    if (op.kind == StoreOp::Split) store.Split(op.node, op.second, op.at);
+    else store.SetNodeAttributes(op.node, op.after);
+  }
+  Invalidate(txn);
+  undo_.push_back(std::move(txn));
+  ++version_;
+  return true;
+}
+
+void Editor::Invalidate(const Txn& txn) {
+  doc_.caches_ = std::make_unique<Document::Caches>();
+  doc_.BuildIndexes();
+  if (txn.all) {
+    for (auto& p : doc_.paras_) ++p.version;
+  } else {
+    for (uint32_t p : txn.paras)
+      if (p < doc_.paras_.size()) ++doc_.paras_[p].version;
+  }
+}
+
+void Editor::TouchPara(uint32_t para) {
+  if (std::find(txn_.paras.begin(), txn_.paras.end(), para) == txn_.paras.end()) txn_.paras.push_back(para);
+}
+
+void Editor::TouchAll() { txn_.all = true; }
+
+Elem& Editor::Touch(ElemId id) {
+  if (id < txn_.elems && touched_.find(id) == touched_.end()) {
+    touched_.emplace(id, txn_.before.size());
+    txn_.before.emplace_back(id, doc_.tree_.elems[id]);
+  }
+  return doc_.tree_.elems[id];
+}
+
+void Editor::StoreSplit(pkg::NodeId node, pkg::NodeId second, pkg::SplitPoint at) {
+  doc_.store_.Split(node, second, at);
+  StoreOp op;
+  op.kind = StoreOp::Split;
+  op.node = node;
+  op.second = second;
+  op.at = at;
+  txn_.store.push_back(op);
+}
+
+void Editor::StoreSetAttrs(pkg::NodeId node, pkg::AttrSetId set) {
+  StoreOp op;
+  op.kind = StoreOp::SetAttrs;
+  op.node = node;
+  op.before = doc_.store_.NodeAttributes(node);
+  op.after = set;
+  doc_.store_.SetNodeAttributes(node, set);
+  txn_.store.push_back(op);
+}
+
+// ---------- Elements ----------
+
+ElemId Editor::Clone(ElemId src, ElemId parent) {
+  Elem copy = E(src);
+  copy.parent = parent;
+  copy.next = kNoElem;
+  if (copy.first != kNoElem) copy.flags |= kSharedKids;  // its own children stay shared with src's
+  pkg::NodeId from = copy.node;
+  copy.node = NewNode();
+  doc_.tree_.elems.push_back(copy);
+  auto id = static_cast<ElemId>(doc_.tree_.elems.size() - 1);
+  if (from != pkg::kNoNode && from != pkg::kFieldNode)
+    if (pkg::AttrSetId set = doc_.store_.NodeAttributes(from)) StoreSetAttrs(copy.node, set);
+  return id;
+}
+
+ElemId Editor::Own(ElemId container) {
+  if (!(E(container).flags & kSharedKids)) return container;
+  std::vector<ElemId> kids;
+  for (ElemId k = E(container).first; k != kNoElem; k = E(k).next) kids.push_back(k);
+  Touch(container);
+  E(container).first = kNoElem;
+  E(container).flags = static_cast<uint8_t>(E(container).flags & ~kSharedKids);
+  ElemId prev = kNoElem;
+  for (ElemId k : kids) {
+    ElemId c = Clone(k, container);
+    if (prev == kNoElem) E(container).first = c;
+    else E(prev).next = c;
+    prev = c;
+  }
+  return container;
+}
+
+void Editor::Link(ElemId parent, ElemId child, ElemId before) {
+  ElemId prev = kNoElem;
+  if (before == kNoElem) {
+    const TypeDef& pt = S().Type(TypeOfElem(doc_.tree_, parent));
+    size_t rank = Rank(pt, E(child).def);
+    for (ElemId c = E(parent).first; c != kNoElem; c = E(c).next) {
+      if (Rank(pt, E(c).def) > rank) break;
+      prev = c;
+    }
+  } else {
+    for (ElemId c = E(parent).first; c != kNoElem && c != before; c = E(c).next) prev = c;
+  }
+  if (prev == kNoElem) {
+    ElemId first = Touch(parent).first;
+    E(child).next = first;
+    E(parent).first = child;
+  } else {
+    ElemId next = Touch(prev).next;
+    E(child).next = next;
+    E(prev).next = child;
+  }
+  E(child).parent = parent;
+}
+
+ElemId Editor::Insert(ElemId parent, ElemDefId def, ElemId before) {
+  Elem e;
+  e.def = def;
+  e.parent = parent;
+  e.node = NewNode();
+  doc_.tree_.elems.push_back(e);
+  auto id = static_cast<ElemId>(doc_.tree_.elems.size() - 1);
+  Link(parent, id, before);
+  return id;
+}
+
+ElemId Editor::Child(ElemId parent, uint32_t name, bool create) {
+  if (parent == kNoElem) return kNoElem;
+  Own(parent);
+  for (ElemId c = E(parent).first; c != kNoElem; c = E(c).next)
+    if (NameOfElem(doc_.tree_, c) == name) return c;
+  if (!create) return kNoElem;
+  ElemDefId def = S().Child(TypeOfElem(doc_.tree_, parent), name);
+  if (def == kNoDef) return kNoElem;
+  return Insert(parent, def, kNoElem);
+}
+
+ElemId Editor::Path(ElemId parent, std::initializer_list<uint32_t> names, bool create) {
+  ElemId e = parent;
+  for (uint32_t n : names) {
+    e = Child(e, n, create);
+    if (e == kNoElem) return kNoElem;
+  }
+  return e;
+}
+
+void Editor::RemoveElement(ElemId elem) {
+  ElemId parent = E(elem).parent;
+  if (parent == kNoElem) return;
+  ElemId prev = kNoElem;
+  for (ElemId c = E(parent).first; c != kNoElem && c != elem; c = E(c).next) prev = c;
+  ElemId next = E(elem).next;
+  if (prev == kNoElem) {
+    if (E(parent).first != elem) return;  // not a child of its parent (a shared set's member)
+    Touch(parent).first = next;
+  } else {
+    Touch(prev).next = next;
+  }
+}
+
+void Editor::Remove(ElemId parent, uint32_t name) {
+  if (parent == kNoElem) return;
+  if (!(E(parent).flags & kSharedKids)) {
+    bool has = false;
+    for (ElemId c = E(parent).first; c != kNoElem; c = E(c).next) has |= NameOfElem(doc_.tree_, c) == name;
+    if (!has) return;
+  }
+  ElemId c = Child(parent, name, false);
+  if (c != kNoElem) RemoveElement(c);
+}
+
+void Editor::Clear(ElemId container, std::initializer_list<uint32_t> keep) {
+  if (container == kNoElem || E(container).first == kNoElem) return;
+  Own(container);
+  std::vector<ElemId> kids;
+  for (ElemId c = E(container).first; c != kNoElem; c = E(c).next) kids.push_back(c);
+  for (ElemId c : kids)
+    if (std::find(keep.begin(), keep.end(), NameOfElem(doc_.tree_, c)) == keep.end()) RemoveElement(c);
+}
+
+void Editor::WriteAttrs(ElemId elem, const std::vector<AttrVal>& attrs) {
+  Tree& t = doc_.tree_;
+  auto first = static_cast<uint32_t>(t.attrs.size());
+  t.attrs.insert(t.attrs.end(), attrs.begin(), attrs.end());
+  Elem& e = Touch(elem);
+  e.attrs = attrs.empty() ? 0 : first;
+  e.attrCount = static_cast<uint16_t>(attrs.size());
+}
+
+void Editor::SetAttr(ElemId elem, uint32_t name, std::string_view value) {
+  Tree& t = doc_.tree_;
+  const TypeDef& type = S().Type(TypeOfElem(t, elem));
+  AttrDefId def = S().AttrOf(TypeOfElem(t, elem), name);
+  if (def == kNoDef) return;
+  StrId v = t.strings.Intern(value);
+  const Elem& e = t.elems[elem];
+  std::vector<AttrVal> attrs(t.attrs.begin() + e.attrs, t.attrs.begin() + e.attrs + e.attrCount);
+  for (AttrVal& a : attrs) {
+    if (a.def != def) continue;
+    if (a.value == v) return;
+    a.value = v;
+    WriteAttrs(elem, attrs);
+    return;
+  }
+  size_t rank = AttrRank(type, def);
+  auto at = std::find_if(attrs.begin(), attrs.end(), [&](const AttrVal& a) { return AttrRank(type, a.def) > rank; });
+  attrs.insert(at, AttrVal{def, v});
+  WriteAttrs(elem, attrs);
+}
+
+void Editor::RemoveAttr(ElemId elem, uint32_t name) {
+  Tree& t = doc_.tree_;
+  AttrDefId def = S().AttrOf(TypeOfElem(t, elem), name);
+  const Elem& e = t.elems[elem];
+  std::vector<AttrVal> attrs(t.attrs.begin() + e.attrs, t.attrs.begin() + e.attrs + e.attrCount);
+  auto it = std::find_if(attrs.begin(), attrs.end(), [&](const AttrVal& a) { return a.def == def; });
+  if (it == attrs.end()) return;
+  attrs.erase(it);
+  WriteAttrs(elem, attrs);
+}
+
+// ---------- Runs ----------
+
+bool Editor::SplitRunAt(uint32_t para, uint32_t offset) {
+  Tree& t = doc_.tree_;
+  const Paragraph& p = doc_.paras_[para];
+  if (offset == 0 || offset >= p.text.size()) return true;
+  // The innermost run with text on both sides of the offset.
+  ElemId run = kNoElem;
+  for (ElemId id = p.elem; id != kNoElem;) {
+    const Elem& e = t.elems[id];
+    bool inside = e.start < offset && offset < e.start + e.length;
+    Role role = S().Type(TypeOfElem(t, id)).role;
+    if (id != p.elem && !inside) {
+      id = NextIn(t, id, p.elem, true);
+      continue;
+    }
+    if (id != p.elem && (e.flags & kDisplayOnly)) return false;
+    if (role == Role::Run) {
+      run = id;
+      break;
+    }
+    if (role == Role::Object || role == Role::Text || role == Role::Char) return false;
+    id = NextIn(t, id, p.elem);
+  }
+  if (run == kNoElem) return true;  // between runs already
+
+  // The first content child that reaches past the offset; it and the ones after it move.
+  ElemId props = kNoElem, last = kNoElem, split = kNoElem;
+  for (ElemId c = t.elems[run].first; c != kNoElem; c = t.elems[c].next) {
+    if (NameOfElem(t, c) == names::kRPr) {
+      props = c;
+    } else if (t.elems[c].start + t.elems[c].length > offset) {
+      split = c;
+      break;
+    }
+    last = c;
+  }
+  if (split == kNoElem) return true;
+
+  // The second half: a copy of the run, with the same properties (shared until one changes).
+  Elem half = t.elems[run];
+  half.first = kNoElem;
+  half.start = offset;
+  half.length = t.elems[run].start + t.elems[run].length - offset;
+  half.node = NewNode();
+  t.elems.push_back(half);
+  auto second = static_cast<ElemId>(t.elems.size() - 1);
+  if (pkg::AttrSetId set = doc_.store_.NodeAttributes(t.elems[run].node)) StoreSetAttrs(t.elems[second].node, set);
+  Touch(run).length = offset - t.elems[run].start;
+  E(run).next = second;
+
+  ElemId tail = kNoElem;  // the second half's last child so far
+  auto append = [&](ElemId c) {
+    if (tail == kNoElem) E(second).first = c;
+    else E(tail).next = c;
+    tail = c;
+  };
+  if (props != kNoElem) {
+    if (t.elems[props].first != kNoElem) Touch(props).flags |= kSharedKids;
+    append(Clone(props, second));
+  }
+
+  pkg::NodeId firstMoved = t.elems[split].node;
+  if (t.elems[split].start < offset) {
+    // Inside text: the w:t splits too, and each half keeps its spaces.
+    Elem text = t.elems[split];
+    text.parent = second;
+    text.start = offset;
+    text.length = t.elems[split].start + t.elems[split].length - offset;
+    text.node = NewNode();
+    t.elems.push_back(text);
+    auto textHalf = static_cast<ElemId>(t.elems.size() - 1);
+    Touch(split).length = offset - t.elems[split].start;
+    E(split).next = kNoElem;
+    if (pkg::AttrSetId set = doc_.store_.NodeAttributes(t.elems[split].node)) StoreSetAttrs(t.elems[textHalf].node, set);
+    StoreSplit(t.elems[split].node, t.elems[textHalf].node, pkg::SplitPoint{pkg::kNoNode, false});
+    for (ElemId piece : {split, textHalf}) {
+      std::u16string_view s = std::u16string_view(p.text).substr(t.elems[piece].start, t.elems[piece].length);
+      if (!s.empty() && (Space(s.front()) || Space(s.back())) && !Node(&t, piece).Has(Name("xml:space")))
+        SetAttr(piece, Name("xml:space"), "preserve");
+    }
+    firstMoved = E(textHalf).next != kNoElem ? E(E(textHalf).next).node : pkg::kNoNode;
+    append(textHalf);
+    for (ElemId c = E(textHalf).next; c != kNoElem; c = E(c).next) Touch(c).parent = second;
+  } else {
+    if (last == kNoElem) Touch(run).first = props;  // nothing before it but the properties
+    else Touch(last).next = kNoElem;
+    for (ElemId c = split; c != kNoElem; c = E(c).next) Touch(c).parent = second;
+    append(split);
+  }
+  StoreSplit(E(run).node, E(second).node, pkg::SplitPoint{firstMoved, false});
+  TouchPara(para);
+  return true;
+}
+
+// ---------- Elements from XML ----------
+
+namespace {
+
+bool Known(TypeId parentType, pugi::xml_node n) {
+  if (n.type() != pugi::node_element) return n.type() == pugi::node_pcdata && std::string_view(n.value()).find_first_not_of(" \t\r\n") == std::string_view::npos;
+  ElemDefId def = S().Child(parentType, QNameHash(n.name()));
+  if (def == kNoDef) return false;
+  TypeId type = S().Elem(def).type;
+  if (S().Type(type).role != Role::Plain) return false;
+  for (pugi::xml_attribute a : n.attributes()) {
+    std::string_view q = a.name();
+    if (q.starts_with("xmlns")) continue;
+    if (S().AttrOf(type, QNameHash(q)) == kNoDef) return false;
+  }
+  for (pugi::xml_node c : n.children())
+    if (!Known(type, c)) return false;
+  return true;
+}
+
+}  // namespace
+
+void Editor::Append(ElemId parent, ElemId child) {
+  ElemId prev = kNoElem;
+  for (ElemId c = E(parent).first; c != kNoElem; c = E(c).next) prev = c;
+  if (prev == kNoElem) Touch(parent).first = child;
+  else Touch(prev).next = child;
+  E(child).next = kNoElem;
+  E(child).parent = parent;
+}
+
+ElemId Editor::Build(ElemId parent, const pugi::xml_node& n, ElemId before, bool last) {
+  ElemDefId def = S().Child(TypeOfElem(doc_.tree_, parent), QNameHash(n.name()));
+  Elem e;
+  e.def = def;
+  e.parent = parent;
+  e.node = NewNode();
+  doc_.tree_.elems.push_back(e);
+  auto id = static_cast<ElemId>(doc_.tree_.elems.size() - 1);
+  if (last) Append(parent, id);
+  else Link(parent, id, before);
+  TypeId type = S().Elem(def).type;
+  const TypeDef& td = S().Type(type);
+  std::vector<AttrVal> attrs;
+  for (pugi::xml_attribute a : n.attributes()) {
+    std::string_view q = a.name();
+    if (q.starts_with("xmlns")) continue;
+    AttrDefId ad = S().AttrOf(type, QNameHash(q));
+    auto at = std::find_if(attrs.begin(), attrs.end(), [&](const AttrVal& o) { return AttrRank(td, o.def) > AttrRank(td, ad); });
+    attrs.insert(at, AttrVal{ad, doc_.tree_.strings.Intern(a.value())});
+  }
+  if (!attrs.empty()) WriteAttrs(id, attrs);
+  // The XML is written in schema order already: its children keep their order.
+  for (pugi::xml_node c : n.children())
+    if (c.type() == pugi::node_element) Build(id, c, kNoElem, true);
+  return id;
+}
+
+ElemId Editor::AddXml(ElemId parent, std::string_view xml, ElemId before) {
+  std::string wrapped = "<root";
+  for (size_t i = 0; i < kNsCount; ++i) {
+    auto ns = static_cast<Ns>(i);
+    if (ns == Ns::None || ns == Ns::Xml || ns == Ns::Other) continue;
+    wrapped += " xmlns:" + std::string(NsPrefix(ns)) + "=\"" + std::string(NsUri(ns)) + "\"";
+  }
+  wrapped += ">";
+  wrapped += xml;
+  wrapped += "</root>";
+  pugi::xml_document d;
+  if (!d.load_buffer(wrapped.data(), wrapped.size(), pugi::parse_default, pugi::encoding_utf8)) return kNoElem;
+  pugi::xml_node n = d.first_child().first_child();
+  while (n && n.type() != pugi::node_element) n = n.next_sibling();
+  if (!n || !Known(TypeOfElem(doc_.tree_, parent), n)) return kNoElem;
+  return Build(parent, n, before, false);
+}
+
+}  // namespace fw::doc::edit

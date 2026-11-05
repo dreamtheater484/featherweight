@@ -692,17 +692,14 @@ std::pair<const Style*, uint16_t> CellStyleOf(const Document& doc, Node para) {
   return {TableStyleOf(doc, table), CellConditions(doc, cell, tp)};
 }
 
-}  // namespace
-
-const ParaProps& Document::ResolvedPara(uint32_t para) const {
-  Caches& c = *caches_;
-  if (c.para.size() < paras_.size()) c.para.resize(paras_.size(), kNone);
-  if (c.para[para] != kNone) return c.paraPool[c.para[para]];
-  Node pn = ParaNode(para);
+// A paragraph's properties; without its own w:pPr when !withDirect (but still in its list, whose
+// level gives it indents).
+ParaProps ResolveParaProps(const Document& doc, uint32_t para, bool withDirect) {
+  Node pn = doc.ParaNode(para);
   Node direct = pn.Child(kPPr);
   ParaProps p;
-  const Style* style = ParaStyleOf(*this, pn);
-  auto chain = Chain(*this, style);
+  const Style* style = ParaStyleOf(doc, pn);
+  auto chain = Chain(doc, style);
 
   // The list: numId and ilvl from the closest that names them, direct formatting first.
   std::string_view numId;
@@ -730,39 +727,49 @@ const ParaProps& Document::ResolvedPara(uint32_t para) const {
     if (!ilvl && numStyle) {
       // A style linked to a list level by the level's w:pStyle.
       for (int32_t k = 0; k < 9 && !ilvl; ++k) {
-        Node l = NumberingLevel(numId, k);
+        Node l = doc.NumberingLevel(numId, k);
         if (l && l.Child(Name("pStyle")).AttrOr(kVal) == numStyle->id) ilvl = k;
       }
     }
     int32_t level = static_cast<int32_t>(std::clamp<int64_t>(ilvl.value_or(0), 0, 8));
-    lvl = NumberingLevel(numId, level);
+    lvl = doc.NumberingLevel(numId, level);
     if (lvl) {
       p.numId = numId;
       p.ilvl = level;
     }
   }
 
-  if (const Part* styles = FindPart(PartKind::Styles))
-    ApplyPara(*this, RootOf(*styles).Path({Name("docDefaults"), Name("pPrDefault"), kPPr}), p);
-  auto [tableStyle, conds] = CellStyleOf(*this, pn);
-  if (tableStyle) ForEachTableStyleLevel(*this, tableStyle, conds, kPPr, [&](Node n) { ApplyPara(*this, n, p); });
+  if (const Part* styles = doc.FindPart(PartKind::Styles))
+    ApplyPara(doc, doc.RootOf(*styles).Path({Name("docDefaults"), Name("pPrDefault"), kPPr}), p);
+  auto [tableStyle, conds] = CellStyleOf(doc, pn);
+  if (tableStyle) ForEachTableStyleLevel(doc, tableStyle, conds, kPPr, [&](Node n) { ApplyPara(doc, n, p); });
   Justification tableJc = p.jc;
-  if (lvl && !numDirect) ApplyPara(*this, lvl.Child(kPPr), p);  // D2: from the style, before it
-  for (const Style* s : chain) ApplyPara(*this, s->node.Child(kPPr), p);
+  if (lvl && !numDirect) ApplyPara(doc, lvl.Child(kPPr), p);  // D2: from the style, before it
+  for (const Style* s : chain) ApplyPara(doc, s->node.Child(kPPr), p);
   // D3: the default style's left justification doesn't override the table style's.
-  if (tableStyle && style && style->isDefault && !OverrideTableStyleFontSize(*this)) {
+  if (tableStyle && style && style->isDefault && !OverrideTableStyleFontSize(doc)) {
     Node jc = style->node.Path({kPPr, Name("jc")});
     if (jc && ParseJustification(jc.AttrOr(kVal)) == Justification::Start) p.jc = tableJc;
   }
-  if (lvl && numDirect) ApplyPara(*this, lvl.Child(kPPr), p);  // D2: named directly, after the style
-  ApplyPara(*this, direct, p);
+  if (lvl && numDirect) ApplyPara(doc, lvl.Child(kPPr), p);  // D2: named directly, after the style
+  if (withDirect) ApplyPara(doc, direct, p);
   std::sort(p.tabs.begin(), p.tabs.end(), [](const TabStop& a, const TabStop& b) { return a.pos < b.pos; });
   if (style) p.style = style->id;
+  return p;
+}
 
+}  // namespace
+
+const ParaProps& Document::ResolvedPara(uint32_t para) const {
+  Caches& c = *caches_;
+  if (c.para.size() < paras_.size()) c.para.resize(paras_.size(), kNone);
+  if (c.para[para] != kNone) return c.paraPool[c.para[para]];
   c.para[para] = static_cast<uint32_t>(c.paraPool.size());
-  c.paraPool.push_back(std::move(p));
+  c.paraPool.push_back(ResolveParaProps(*this, para, true));
   return c.paraPool.back();
 }
+
+ParaProps Document::StylePara(uint32_t para) const { return ResolveParaProps(*this, para, false); }
 
 namespace {
 
@@ -786,15 +793,26 @@ void ParagraphLevels(const Document& doc, Node pn, RunLevels& lv) {
   }
 }
 
-void CharacterLevel(const Document& doc, Node rPrNode, RunLevels& lv) {
-  std::string_view id = rPrNode.Child(Name("rStyle")).AttrOr(kVal);
+void CharacterStyleLevel(const Document& doc, std::string_view id, RunLevels& lv) {
   const Style* s = id.empty() ? nullptr : doc.FindStyle(id);
   if (!s || s->type != StyleType::Character) return;
   for (const Style* st : Chain(doc, s)) ApplyRun(doc, st->node.Child(kRPr), lv.work, lv.toggles[3]);
   lv.work.p.charStyle = s->id;
 }
 
+void CharacterLevel(const Document& doc, Node rPrNode, RunLevels& lv) {
+  CharacterStyleLevel(doc, rPrNode.Child(Name("rStyle")).AttrOr(kVal), lv);
+}
+
 }  // namespace
+
+RunProps Document::StyleRun(uint32_t para, std::string_view charStyle) const {
+  RunLevels lv;
+  ParagraphLevels(*this, ParaNode(para), lv);
+  CharacterStyleLevel(*this, charStyle, lv);
+  FinishRun(*this, *caches_, lv);
+  return lv.work.p;
+}
 
 const RunProps& Document::ResolvedRun(uint32_t para, Node run) const {
   Caches& c = *caches_;
