@@ -136,6 +136,13 @@ struct Options {
   bool showHiddenText = false;  // w:vanish text laid out and drawn (formatting marks shown)
 };
 
+// The family Word draws for one a document names but the PC doesn't have, from the document's font
+// table: fixed pitch is Courier New; a sans-serif panose number or the "swiss" family is Arial; a
+// serif one or "roman" is Times New Roman; "modern" with variable pitch is Tahoma (measured on
+// Word's renders of the corpus). Empty when the table says nothing useful, or for families fwtext's
+// own table knows (Aptos, Helvetica...). For text::Fonts' SubstituteFn.
+std::wstring SubstituteFamily(const Document& doc, std::wstring_view family);
+
 // Draws a drawing into its box with the painter. fwdraw provides it (plan §4.5); without one,
 // Paint() draws a light frame where the drawing goes.
 using DrawingPainter = std::function<void(draw::Painter&, const DrawingBox&)>;

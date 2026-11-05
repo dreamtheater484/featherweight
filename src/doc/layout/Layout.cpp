@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "core/OpenTimings.h"
+#include "core/Strings.h"
 #include "doc/layout/Engine.h"
 #include "draw/Painter.h"
 
@@ -249,6 +250,28 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
   for (const Edge& edge : p.edges) StrokeEdge(painter, edge);
   for (const DrawingBox& d : p.drawings)
     if (!d.behindText) drawOne(d);
+}
+
+// ---- Fonts
+
+std::wstring SubstituteFamily(const Document& doc, std::wstring_view family) {
+  if (!text::Fonts::BuiltInSubstitute(family).empty()) return {};
+  const std::string name = WideToUtf8(family);
+  for (const FontInfo& f : doc.Fonts()) {
+    if (f.name != name) continue;
+    if (f.pitch == "fixed") return L"Courier New";
+    // PANOSE: family kind 2 is Latin text; the second digit is the serif style (11-13 sans serif).
+    if (f.panose.size() >= 4 && f.panose.substr(0, 2) == "02") {
+      const int serif = std::stoi(std::string(f.panose.substr(2, 2)), nullptr, 16);
+      if (serif >= 11 && serif <= 13) return L"Arial";
+      if (serif >= 2 && serif <= 10) return L"Times New Roman";
+    }
+    if (f.family == "swiss") return L"Arial";
+    if (f.family == "roman") return L"Times New Roman";
+    if (f.family == "modern") return L"Tahoma";
+    return {};
+  }
+  return {};
 }
 
 // ---- The layout dump
