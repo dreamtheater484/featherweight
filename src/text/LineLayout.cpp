@@ -790,7 +790,7 @@ Fit LineBreaker::Impl::FindBreak(uint32_t a, float s0, float s1, bool first) {
 // (Measured against Word 16.0, build 20326, in compatibility mode 15: probes in Courier New, in
 // 0.5 pt steps, hit both limits exactly.)
 bool LineBreaker::Impl::Squeezes(uint32_t segFrom, uint32_t upTo, float over, float limit, float lastEnd) const {
-  if (p.format.alignment != Alignment::Justify) return false;
+  if (p.format.alignment != Alignment::Justify || !p.format.squeezeSpaces) return false;
   uint32_t spaces = 0;
   float spaceWidth = 0;
   for (uint32_t k = segFrom; k < upTo; ++k) {

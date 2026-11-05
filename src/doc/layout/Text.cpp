@@ -235,6 +235,7 @@ text::ParagraphFormat Engine::FormatOf(const ParaProps& p) const {
   f.hyphenation.consecutiveLimit = set.consecutiveHyphenLimit;
   f.hyphenation.caps = !set.doNotHyphenateCaps;
   f.expandLineBreaks = !set.Compat(Name("doNotExpandShiftReturn"));
+  f.squeezeSpaces = compatMode_ >= 15;
   if (!set.decimalSymbol.empty()) f.decimalSeparator = static_cast<wchar_t>(set.decimalSymbol.front());
   return f;
 }
