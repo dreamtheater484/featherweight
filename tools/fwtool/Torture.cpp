@@ -15,6 +15,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <set>
 #include <unordered_map>
 
 #include "Common.h"
@@ -35,6 +36,23 @@
 #include "doc/edit/Styles.h"
 #include "doc/edit/TreeEdit.h"
 #define FW_TORTURE_EDITOR 1
+// D3's operations, as each lands: tables (Editor.h), pictures, fields, links, bookmarks, headers
+// and footers.
+#if __has_include("doc/edit/Pictures.h") && __has_include("doc/edit/Inline.h") && __has_include("doc/edit/HeaderFooter.h")
+#include "doc/edit/HeaderFooter.h"
+#include "doc/edit/Inline.h"
+#include "doc/edit/Pictures.h"
+#define FW_TORTURE_D3 1
+#else
+#define FW_TORTURE_D3 0
+#endif
+#if FW_TORTURE_D3 && __has_include("doc/edit/Page.h") && __has_include("doc/edit/TableStyles.h")
+#include "doc/edit/Page.h"
+#include "doc/edit/TableStyles.h"
+#define FW_TORTURE_PAGE 1
+#else
+#define FW_TORTURE_PAGE 0
+#endif
 #else
 #define FW_TORTURE_EDITOR 0
 #endif
@@ -237,7 +255,14 @@ class EditorTarget : public EditTarget {
 
   Applied ApplyOne(const Edit& e, std::string& why) {
     namespace ed = fw::doc::edit;
-    auto exists = [&](fw::doc::Pos p) { return p.para < doc_->Paragraphs().size() && p.offset <= editor_.ParaLength(p.para); };
+    // A place a person can put the caret: in the paragraph, and not between the halves of a
+    // surrogate pair (an emoji), which no selection can split.
+    auto exists = [&](fw::doc::Pos p) {
+      if (p.para >= doc_->Paragraphs().size() || p.offset > editor_.ParaLength(p.para)) return false;
+      const std::u16string& text = doc_->Para(p.para).text;
+      return !(p.offset > 0 && p.offset < text.size() && text[p.offset - 1] >= 0xD800 && text[p.offset - 1] <= 0xDBFF &&
+               text[p.offset] >= 0xDC00 && text[p.offset] <= 0xDFFF);
+    };
     auto refuse = [&](const std::string& reason) {
       why = reason;
       return Applied::Refused;
@@ -328,12 +353,22 @@ class EditorTarget : public EditTarget {
     return SaveParts(*doc_, editor_.DirtyParts(), editor_.Modified(), out, written);
   }
   void Saved() override { editor_.MarkSaved(); }
+  std::string State() const override {
+    std::string s = std::to_string(doc_->Paragraphs().size()) + " paragraphs, " + std::to_string(doc_->Sections().size()) +
+                    " sections, " + std::to_string(doc_->Package().Parts().size()) + " parts" +
+                    (editor_.Modified() ? ", modified" : "") + (editor_.CanUndo() ? ", can undo" : "") + ", changed parts:";
+    for (uint32_t p : editor_.DirtyParts()) s += " " + std::to_string(p);
+    return s;
+  }
 
  private:
   // A formatting command as the Word tab runs it (DocFormat::Run): one TreeEdit, the command's own
   // transaction, the same range for characters and paragraphs.
   Applied Command(const Edit& e, std::string& why) {
     namespace ed = fw::doc::edit;
+#if FW_TORTURE_D3
+    if (std::optional<Applied> d3 = D3(e, why)) return *d3;
+#endif
     const ed::Range range{e.at, e.to};
     const size_t eq = e.format.find('=');
     const std::string name = e.format.substr(0, eq), value = eq == std::string::npos ? "" : e.format.substr(eq + 1);
@@ -432,6 +467,206 @@ class EditorTarget : public EditTarget {
     return Applied::Done;
   }
 
+#if FW_TORTURE_D3
+  // D3's operations, as the Word tab calls them: tables (Editor.h), pictures (Pictures.h), fields,
+  // links and bookmarks (Inline.h), headers, footers and page numbers (HeaderFooter.h). The spec's
+  // arguments are separated by ':'. nullopt: not one of them.
+  std::optional<Applied> D3(const Edit& e, std::string& why) {
+    namespace ed = fw::doc::edit;
+    const size_t eq = e.format.find('=');
+    const std::string name = e.format.substr(0, eq), value = eq == std::string::npos ? "" : e.format.substr(eq + 1);
+    std::vector<std::string> args;
+    for (size_t start = 0; start <= value.size();) {
+      size_t colon = std::min(value.find(':', start), value.size());
+      args.push_back(value.substr(start, colon - start));
+      start = colon + 1;
+    }
+    auto num = [&](size_t i, int def = 0) { return i < args.size() && !args[i].empty() ? std::atoi(args[i].c_str()) : def; };
+    auto arg = [&](size_t i) { return i < args.size() ? args[i] : std::string(); };
+    auto grid = [&](uint32_t& rows, uint32_t& cols) {  // "RxC"
+      const size_t x = value.find('x');
+      rows = static_cast<uint32_t>(std::atoi(value.c_str()));
+      cols = x == std::string::npos ? 1 : static_cast<uint32_t>(std::atoi(value.c_str() + x + 1));
+    };
+    auto refuse = [&](std::string reason) {
+      why = std::move(reason);
+      return Applied::Refused;
+    };
+    const auto type = [&](size_t i) { return static_cast<fw::doc::HdrFtrType>(std::clamp(num(i), 0, 2)); };
+    const auto section = [&](size_t i) { return static_cast<uint32_t>(num(i)); };
+    const bool sectionOk = section(0) < doc_->Sections().size();
+    ed::Result r;
+    ed::PropEdit props;
+    uint32_t rows = 1, cols = 1;
+    // Tables
+    if (name == "table") grid(rows, cols), r = editor_.InsertTable(e.at, rows, cols);
+    else if (name == "texttotable") r = editor_.TextToTable(e.at.para, e.to.para);
+    else if (name == "tabletotext") r = editor_.TableToText(e.at);
+    else if (name == "deletetable") r = editor_.DeleteTable(e.at);
+    else if (name == "rows") r = editor_.InsertRows(e.at, e.to, value == "below");
+    else if (name == "cols") r = editor_.InsertColumns(e.at, e.to, value == "right");
+    else if (name == "deleterows") r = editor_.DeleteRows(e.at, e.to);
+    else if (name == "deletecols") r = editor_.DeleteColumns(e.at, e.to);
+    else if (name == "clearcells") r = editor_.ClearCells(e.at, e.to);
+    else if (name == "merge") r = editor_.MergeCells(e.at, e.to);
+    else if (name == "splitcell") grid(rows, cols), r = editor_.SplitCell(e.at, rows, cols);
+    else if (name == "colwidth") r = editor_.SetColumnWidth(e.at, e.to, num(0, 1440));
+    else if (name == "colborder") r = editor_.MoveColumnBorder(e.at, num(0), num(1));
+    else if (name == "rowheight") r = editor_.SetRowHeight(e.at, e.to, num(0), arg(1).empty() ? "atLeast" : arg(1));
+    else if (name == "autofit") r = editor_.AutoFit(e.at, value == "fixed" ? fw::doc::edit::Editor::Fit::Fixed : fw::doc::edit::Editor::Fit::Window);
+    else if (name == "cellborders") {
+      static const std::pair<const char*, ed::Editor::CellBorders> kinds[] = {
+          {"all", ed::Editor::CellBorders::All},         {"none", ed::Editor::CellBorders::None},
+          {"outside", ed::Editor::CellBorders::Outside}, {"inside", ed::Editor::CellBorders::Inside},
+          {"top", ed::Editor::CellBorders::Top},         {"bottom", ed::Editor::CellBorders::Bottom},
+          {"left", ed::Editor::CellBorders::Left},       {"right", ed::Editor::CellBorders::Right}};
+      auto k = std::find_if(std::begin(kinds), std::end(kinds), [&](const auto& p) { return value == p.first; });
+      if (k == std::end(kinds)) return refuse("unknown borders");
+      r = editor_.SetCellBorders(e.at, e.to, k->second);
+    } else if (name == "cellshade") {
+      r = editor_.SetCellProps(e.at, e.to, props.Set("shd", {{"val", "clear"}, {"color", "auto"}, {"fill", value}}));
+    } else if (name == "headerrow") {
+      r = editor_.SetRowProps(e.at, e.to, props.Set("tblHeader"));
+    } else if (name == "tablealign") {
+      r = editor_.SetTableProps(e.at, props.Set("jc", {{"val", value}}));
+    }
+    // Pictures: inserted here; changed by their index in Document::Drawings()
+    else if (name == "picture") {
+      static const std::vector<uint8_t> png = {
+          0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00,
+          0x04, 0x00, 0x00, 0x00, 0x03, 0x08, 0x02, 0x00, 0x00, 0x00, 0x3B, 0x96, 0x39, 0x91, 0x00, 0x00, 0x00, 0x10, 0x49,
+          0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x38, 0xA1, 0xA1, 0x01, 0x47, 0x0C, 0x38, 0x39, 0x00, 0x07, 0xA6, 0x0D, 0x21,
+          0x7C, 0xB1, 0xBC, 0x73, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};  // 4 x 3, red
+      r = pictures_.Insert(e.at, png, fw::Emu(0), u"torture.png");
+    } else if (name.starts_with("pic")) {
+      const uint32_t d = static_cast<uint32_t>(num(0));
+      if (d >= doc_->Drawings().size()) return refuse("no such drawing");
+      const ed::PictureInfo info = pictures_.Info(d);
+      if (!info.picture) return refuse("not a picture: " + fw::doc::ToUtf8(info.why));
+      if (name == "picsize") {
+        const int64_t pct = num(1, 50);
+        r = pictures_.Resize(d, fw::Emu(info.cx.Value() * pct / 100), fw::Emu(info.cy.Value() * pct / 100));
+      } else if (name == "picrotate") {
+        r = pictures_.Rotate(d, num(1));
+      } else if (name == "piccrop") {
+        ed::Crop crop;
+        crop.left = crop.top = num(1) / 100.0;
+        r = pictures_.SetCrop(d, crop);
+      } else if (name == "picwrap") {
+        static const std::pair<const char*, ed::Wrap> wraps[] = {
+            {"inline", ed::Wrap::Inline},   {"square", ed::Wrap::Square}, {"tight", ed::Wrap::Tight},
+            {"topbottom", ed::Wrap::TopAndBottom}, {"behind", ed::Wrap::Behind}, {"front", ed::Wrap::InFront}};
+        auto w = std::find_if(std::begin(wraps), std::end(wraps), [&](const auto& p) { return arg(1) == p.first; });
+        if (w == std::end(wraps)) return refuse("unknown wrap");
+        r = pictures_.SetWrap(d, w->second, fw::Emu(914400), fw::Emu(914400));
+      } else if (name == "picmove") {
+        r = info.wrap == ed::Wrap::Inline ? pictures_.MoveInline(d, e.at)
+                                          : pictures_.MoveFloating(d, fw::Emu(num(1) * 12700LL), fw::Emu(num(2) * 12700LL));
+      } else if (name == "picalt") {
+        r = pictures_.SetAltText(d, u"A picture from the torture test");
+      } else if (name == "picreset") {
+        r = pictures_.ResetSize(d);
+      } else {
+        return refuse("unknown picture change");
+      }
+    }
+    // Fields, links and bookmarks
+    else if (name == "field") {
+      const std::string instr = value == "DATE" ? " DATE \\@ \"yyyy-MM-dd\" " : " " + value + " ";
+      r = ed::InsertField(editor_, e.at, instr, value == "DATE" ? u"2026-01-01" : value == "AUTHOR" ? u"Torture" : u"1");
+    } else if (name == "link") {
+      r = ed::InsertLink(editor_, e.at, e.to, value, u"a link");
+    } else if (name == "editlink") {
+      r = ed::EditLink(editor_, e.at, "https://example.org/changed", u"a changed link");
+    } else if (name == "unlink") {
+      r = ed::RemoveLink(editor_, e.at);
+    } else if (name == "bookmark") {
+      r = ed::InsertBookmark(editor_, e.at, e.to, value);
+    } else if (name == "delbookmark") {
+      r = ed::DeleteBookmark(editor_, value);
+    } else if (name == "parabookmark") {  // as a link to a heading makes one
+      editor_.BeginGroup(u"Link");
+      const std::string made = ed::BookmarkForParagraph(editor_, e.at.para);
+      editor_.EndGroup();
+      if (made.empty()) return refuse("no bookmark for the paragraph");
+    }
+    // Headers, footers and page numbers, by section
+    else if (name == "header" || name == "footer") {
+      if (!sectionOk) return refuse("no such section");
+      std::u16string whyNot;
+      if (ed::EnsureHeaderFooter(editor_, section(0), name == "footer", type(1), whyNot) == fw::doc::kNone)
+        return refuse(fw::doc::ToUtf8(whyNot));
+    } else if (name == "linkprev") {
+      if (!sectionOk) return refuse("no such section");
+      r = ed::SetLinkToPrevious(editor_, section(0), num(1) != 0, type(2), num(3) != 0);
+    } else if (name == "firstpage") {
+      if (!sectionOk) return refuse("no such section");
+      r = ed::SetDifferentFirstPage(editor_, section(0), num(1) != 0);
+    } else if (name == "oddeven") {
+      r = ed::SetDifferentOddEven(editor_, value == "on");
+    } else if (name == "pagenumbering") {
+      if (!sectionOk) return refuse("no such section");
+      r = ed::SetPageNumbering(editor_, section(0), arg(1), args.size() > 2 ? std::optional<int32_t>(num(2)) : std::nullopt);
+    } else if (name == "pagenumber") {
+      if (!sectionOk) return refuse("no such section");
+      const fw::doc::Justification align = num(3) == 0 ? fw::doc::Justification::Start
+                                           : num(3) == 1 ? fw::doc::Justification::Center
+                                                         : fw::doc::Justification::End;
+      r = ed::InsertPageNumber(editor_, section(0), num(1) != 0, type(2), align, num(4) != 0);
+    }
+#if FW_TORTURE_PAGE
+    // Page layout (Page.h), by section; breaks at e.at; table styles (TableStyles.h)
+    else if (name == "pagesetup") {  // section:landscape|portrait|margins:twips|size:WxH|header:twips
+      if (!sectionOk) return refuse("no such section");
+      ed::PageSetup setup;
+      if (arg(1) == "landscape" || arg(1) == "portrait") setup.landscape = arg(1) == "landscape";
+      else if (arg(1) == "margins") setup.top = setup.bottom = setup.left = setup.right = fw::Twips(num(2, 720));
+      else if (arg(1) == "size") {
+        const size_t x = arg(2).find('x');
+        setup.width = fw::Twips(std::atoi(arg(2).c_str()));
+        setup.height = fw::Twips(x == std::string::npos ? 15840 : std::atoi(arg(2).c_str() + x + 1));
+      } else if (arg(1) == "header") setup.header = setup.footer = fw::Twips(num(2, 360));
+      else return refuse("unknown page setup");
+      r = ed::SetPageSetup(editor_, section(0), section(0), setup);
+    } else if (name == "columns") {  // section:count:space:line
+      if (!sectionOk) return refuse("no such section");
+      ed::ColumnSetup columns;
+      columns.count = num(1, 2);
+      columns.space = fw::Twips(num(2, 720));
+      columns.line = num(3) != 0;
+      r = ed::SetColumns(editor_, section(0), section(0), columns);
+    } else if (name == "sectionstart" || name == "sectionbreak") {
+      static const std::pair<const char*, fw::doc::SectionStart> starts[] = {
+          {"nextPage", fw::doc::SectionStart::NextPage}, {"continuous", fw::doc::SectionStart::Continuous},
+          {"evenPage", fw::doc::SectionStart::EvenPage}, {"oddPage", fw::doc::SectionStart::OddPage}};
+      const std::string which = name == "sectionstart" ? arg(1) : value;
+      auto s = std::find_if(std::begin(starts), std::end(starts), [&](const auto& p) { return which == p.first; });
+      if (s == std::end(starts)) return refuse("unknown section start");
+      if (name == "sectionbreak") r = ed::InsertSectionBreak(editor_, e.at, s->second);
+      else if (!sectionOk) return refuse("no such section");
+      else r = ed::SetSectionStart(editor_, section(0), s->second);
+    } else if (name == "delsectionbreak") {
+      if (!sectionOk) return refuse("no such section");
+      r = ed::DeleteSectionBreak(editor_, section(0));
+    } else if (name == "pagebreak" || name == "columnbreak") {
+      r = ed::InsertBreak(editor_, e.at, name == "columnbreak");
+    } else if (name == "hyphenation") {
+      ed::Hyphenation h;
+      h.automatic = value == "on";
+      if (value == "on") h.zone = fw::Twips(360), h.limit = 2;
+      r = ed::SetHyphenation(editor_, h);
+    } else if (name == "tablestyle") {
+      r = ed::ApplyTableStyle(editor_, e.at, value);
+    }
+#endif
+    else {
+      return std::nullopt;
+    }
+    if (!r) return refuse(fw::doc::ToUtf8(r.message));
+    return Applied::Done;
+  }
+#endif
+
   // Word's highlight color nearest to a color, as DocFormat picks it.
   static std::string NearestHighlight(uint32_t rgb) {
     static const std::pair<const char*, uint32_t> names[] = {
@@ -451,6 +686,9 @@ class EditorTarget : public EditTarget {
 
   std::unique_ptr<fw::doc::Document> doc_;
   fw::doc::edit::Editor editor_;
+#if FW_TORTURE_D3
+  fw::doc::edit::Pictures pictures_{editor_};
+#endif
   uint32_t grouping_ = 0;  // edits left in an open group
 };
 #endif
@@ -531,7 +769,17 @@ struct Span {
 
 class Generator {
  public:
-  Generator(const Document& doc, Rng& rng) : doc_(doc), rng_(rng) {}
+  Generator(const Document& doc, Rng& rng) : doc_(doc), rng_(rng) {
+    char buf[256] = {};
+    if (GetEnvironmentVariableA("FW_TORTURE_SKIP", buf, sizeof(buf)) && buf[0]) {
+      std::string list(buf);
+      for (size_t start = 0; start <= list.size();) {
+        size_t comma = std::min(list.find(',', start), list.size());
+        skip_.insert(list.substr(start, comma - start));
+        start = comma + 1;
+      }
+    }
+  }
 
   // The next edit for the document as it is now. `undone` is how many edits can be redone.
   Edit Next(uint32_t applied, uint32_t undone) {
@@ -548,6 +796,12 @@ class Generator {
       return e;
     }
     uint32_t roll = rng_.Below(100);
+    // FW_TORTURE_SKIP=command,paint (save, format, command, d3, paint) types instead, to look past
+    // an open finding; "headers" leaves D3's header and footer changes out.
+    auto skipped = [&](const char* what, uint32_t lo, uint32_t hi) { return roll >= lo && roll < hi && skip_.contains(what); };
+    if (skipped("save", 9, 11) || skipped("format", 77, 82) || skipped("command", 82, 90) || skipped("d3", 90, 97) ||
+        skipped("paint", 97, 100))
+      roll = 40;
     if (roll < 4 && applied) {
       e.kind = EditKind::Undo;
       e.count = rng_.Between(1, std::min<uint32_t>(applied, 4));
@@ -584,10 +838,14 @@ class Generator {
       e.at = RandomPos(RandomPara());
     } else if (roll < 77) {
       Join(e);
-    } else if (roll < 85) {
+    } else if (roll < 82) {
       Formatting(e);
-    } else if (roll < 96) {
+    } else if (roll < 90) {
       Command(e);
+#if FW_TORTURE_D3
+    } else if (roll < 97) {
+      D3(e);
+#endif
     } else {
       Paint(e);
     }
@@ -727,6 +985,184 @@ class Generator {
     }
   }
 
+#if FW_TORTURE_D3
+  // D3's operations (EditorTarget::D3 has the specs): tables, pictures, fields, links and
+  // bookmarks, headers and footers.
+  void D3(Edit& e) {
+    e.kind = EditKind::Command;
+    e.at = RandomPos(RandomPara());
+    e.to = e.at;
+    const uint32_t roll = rng_.Below(100);
+    if (roll < 32) Table(e);
+    else if (roll < 50) Picture(e);
+    else if (roll < 70 || (roll < 85 && skip_.contains("headers"))) Inline(e);
+    else if (roll < 85) HeaderFooter(e);
+#if FW_TORTURE_PAGE
+    else Page(e);
+#else
+    else Table(e);
+#endif
+  }
+
+#if FW_TORTURE_PAGE
+  // Page layout by section, and breaks in the main text.
+  void Page(Edit& e) {
+    const std::string s = std::to_string(rng_.Below(std::max<uint32_t>(1, static_cast<uint32_t>(doc_.Sections().size()))));
+    static const std::vector<std::string> setups = {":landscape", ":portrait", ":margins:720", ":margins:2880",
+                                                    ":size:12240x15840", ":size:11906x16838", ":header:200"};
+    static const std::vector<std::string> starts = {"nextPage", "continuous", "evenPage", "oddPage"};
+    const uint32_t roll = rng_.Below(100);
+    const std::vector<uint32_t>* body = paras_.contains(doc_.MainStory()) ? &paras_[doc_.MainStory()] : nullptr;
+    if (roll < 25) e.format = "pagesetup=" + s + rng_.Pick(setups);
+    else if (roll < 42) e.format = "columns=" + s + ":" + std::to_string(rng_.Between(1, 3)) + ":" + std::to_string(rng_.Pick(std::vector<uint32_t>{360, 720})) + ":" + std::to_string(rng_.Below(2));
+    else if (roll < 52) e.format = "sectionstart=" + s + ":" + rng_.Pick(starts);
+    else if (roll < 67 && body) e.at = e.to = RandomPos(rng_.Pick(*body)), e.format = "sectionbreak=" + rng_.Pick(starts);
+    else if (roll < 77) e.format = "delsectionbreak=" + s;
+    else if (roll < 92) e.format = rng_.Percent(70) ? "pagebreak" : "columnbreak";
+    else e.format = rng_.Percent(50) ? "hyphenation=on" : "hyphenation=off";
+    e.target = "section " + s;
+  }
+#endif
+
+  // The tables of the editable stories, each as its cells' paragraphs (nested tables apart).
+  std::vector<std::vector<uint32_t>> Tables() {
+    std::vector<std::vector<uint32_t>> tables;
+    std::function<void(const std::vector<Block>&)> walk = [&](const std::vector<Block>& blocks) {
+      for (const Block& b : blocks) {
+        if (b.kind == BlockKind::ContentControl) walk(doc_.Blocks(b.node));
+        if (b.kind != BlockKind::Table) continue;
+        std::vector<uint32_t> cells;
+        for (Node tr : doc_.TableRows(b.node))
+          for (Node tc : doc_.RowCells(tr)) {
+            std::vector<Block> inner = doc_.Blocks(tc);
+            for (const Block& i : inner)
+              if (i.kind == BlockKind::Paragraph && order_.contains(i.para)) cells.push_back(i.para);
+            walk(inner);
+          }
+        if (!cells.empty()) tables.push_back(std::move(cells));
+      }
+    };
+    for (uint32_t s : stories_) walk(doc_.Blocks(s));
+    return tables;
+  }
+
+  void Table(Edit& e) {
+    static const std::vector<std::string> changes = {
+        "rows=above", "rows=below", "cols=left", "cols=right", "deleterows", "deletecols", "clearcells", "merge",
+        "merge", "splitcell=2x1", "splitcell=1x2", "splitcell=2x2", "colwidth=1440", "colwidth=2880",
+        "colborder=1:360", "colborder=1:-360", "colborder=0:200", "rowheight=600", "rowheight=400:exact",
+        "autofit=window", "autofit=fixed", "cellborders=all", "cellborders=none", "cellborders=outside",
+        "cellborders=inside", "cellborders=bottom", "cellshade=D9E2F3", "headerrow", "tablealign=center",
+        "tabletotext", "deletetable"};
+    std::vector<std::vector<uint32_t>> tables = Tables();
+    if (tables.empty() || rng_.Percent(20)) {
+      if (rng_.Percent(80)) {
+        e.format = "table=" + std::to_string(rng_.Between(1, 4)) + "x" + std::to_string(rng_.Between(1, 4));
+        e.target = "new table";
+      } else {
+        e.to = Later(e.at, 3);
+        e.format = "texttotable";
+      }
+      return;
+    }
+    const std::vector<uint32_t>& cells = rng_.Pick(tables);
+    e.at = RandomPos(rng_.Pick(cells));
+    e.to = rng_.Percent(50) ? e.at : RandomPos(rng_.Pick(cells));
+    if (Before(e.to, e.at)) std::swap(e.at, e.to);
+    e.format = rng_.Pick(changes);
+#if FW_TORTURE_PAGE
+    if (rng_.Percent(10)) {
+      std::vector<std::string> styles = fw::doc::edit::TableStyleNames(doc_);
+      if (!styles.empty()) e.format = "tablestyle=" + rng_.Pick(styles);
+    }
+#endif
+    e.target = "table";
+  }
+
+  void Picture(Edit& e) {
+    const uint32_t drawings = static_cast<uint32_t>(doc_.Drawings().size());
+    if (!drawings || rng_.Percent(30)) {
+      e.format = "picture";
+      return;
+    }
+    const std::string d = std::to_string(rng_.Below(drawings));
+    static const std::vector<std::string> changes = {
+        ":50", ":150", ":90", ":45", ":10", ":square", ":tight", ":topbottom", ":behind", ":front", ":inline", ":72:144", "", ""};
+    static const std::vector<std::string> names = {
+        "picsize", "picsize", "picrotate", "picrotate", "piccrop", "picwrap", "picwrap", "picwrap", "picwrap", "picwrap", "picwrap", "picmove", "picalt", "picreset"};
+    const uint32_t i = rng_.Below(static_cast<uint32_t>(names.size()));
+    e.format = names[i] + "=" + d + changes[i];
+    e.target = "drawing " + d;
+  }
+
+  void Inline(Edit& e) {
+    const uint32_t roll = rng_.Below(100);
+    if (roll < 25) {
+      static const std::vector<std::string> fields = {"PAGE", "NUMPAGES", "DATE", "AUTHOR"};
+      e.format = "field=" + rng_.Pick(fields);
+    } else if (roll < 50) {
+      e.to = Later(e.at, rng_.Percent(80) ? 0 : 1);
+      std::vector<fw::doc::edit::BookmarkInfo> marks = fw::doc::edit::Bookmarks(doc_);
+      e.format = "link=" + (marks.empty() || rng_.Percent(60) ? std::string("https://example.com/torture")
+                                                             : "#" + rng_.Pick(marks).name);
+    } else if (roll < 65) {
+      // A link that's there: in one of its runs.
+      std::vector<Span> links;
+      for (Span& s : Spans())
+        if (s.what == "link") links.push_back(std::move(s));
+      if (!links.empty()) {
+        const Span& l = rng_.Pick(links);
+        e.at = e.to = Pos{l.a.para, rng_.Between(l.a.offset, l.b.offset)};
+        e.target = "link";
+      }
+      e.format = rng_.Percent(50) ? "editlink" : "unlink";
+    } else if (roll < 82) {
+      e.to = Later(e.at, rng_.Percent(80) ? 0 : 2);
+      e.format = "bookmark=Torture" + std::to_string(rng_.Below(1000));
+      // Often around or inside a field or a link, or across one end of it.
+      std::vector<Span> spans;
+      for (Span& s : Spans())
+        if (s.what.starts_with("field") || s.what.starts_with("simple field") || s.what == "link" ||
+            s.what.starts_with("bookmark") || s.what == "content control")
+          spans.push_back(std::move(s));
+      if (!spans.empty() && rng_.Percent(50)) {
+        const Span& s = rng_.Pick(spans);
+        auto inside = [&] {
+          if (s.a.para == s.b.para) return Pos{s.a.para, rng_.Between(s.a.offset, s.b.offset)};
+          return Pos{s.a.para, rng_.Between(s.a.offset, Len(s.a.para))};
+        };
+        switch (rng_.Below(3)) {
+          case 0: e.at = s.a, e.to = s.b; break;      // around it
+          case 1: e.at = inside(), e.to = inside(); break;
+          default: e.at = Pos{s.a.para, rng_.Between(0, s.a.offset)}, e.to = inside(); break;  // across its start
+        }
+        if (Before(e.to, e.at)) std::swap(e.at, e.to);
+        e.target = s.what;
+      }
+    } else if (roll < 92) {
+      std::vector<fw::doc::edit::BookmarkInfo> marks = fw::doc::edit::Bookmarks(doc_);
+      if (marks.empty()) return PlainDelete(e);
+      e.format = "delbookmark=" + rng_.Pick(marks).name;
+    } else {
+      e.format = "parabookmark";
+    }
+  }
+
+  void HeaderFooter(Edit& e) {
+    const std::string s = std::to_string(rng_.Below(std::max<uint32_t>(1, static_cast<uint32_t>(doc_.Sections().size()))));
+    const std::string type = std::to_string(rng_.Below(3));
+    uint32_t roll = rng_.Below(100);
+    if (roll >= 75 && skip_.contains("pagenumber")) roll = rng_.Below(75);  // FW_TORTURE_SKIP=pagenumber
+    if (roll < 30) e.format = (rng_.Percent(50) ? "header=" : "footer=") + s + ":" + type;
+    else if (roll < 45) e.format = "linkprev=" + s + ":" + std::to_string(rng_.Below(2)) + ":" + type + ":" + std::to_string(rng_.Below(2));
+    else if (roll < 55) e.format = "firstpage=" + s + ":" + std::to_string(rng_.Below(2));
+    else if (roll < 62) e.format = rng_.Percent(50) ? "oddeven=on" : "oddeven=off";
+    else if (roll < 75) e.format = "pagenumbering=" + s + (rng_.Percent(50) ? ":lowerRoman:1" : ":decimal");
+    else e.format = "pagenumber=" + s + ":" + std::to_string(rng_.Below(2)) + ":" + type + ":" + std::to_string(rng_.Below(3)) + ":" + std::to_string(rng_.Below(2));
+    e.target = "section " + s;
+  }
+#endif
+
   // The format painter: from a character anywhere editable to a range, half the time whole paragraphs.
   void Paint(Edit& e) {
     e.kind = EditKind::Paint;
@@ -752,19 +1188,25 @@ class Generator {
         if (f.complete) add("field " + ToUtf8(f.Type()), s, f.begin, Pos{f.end.para, f.end.offset + 1});
       for (const Revision& r : doc_.Revisions(s))
         if (r.kind <= RevisionKind::MoveTo) add("tracked change", s, r.start, r.end);
-      // Inline content controls: the text of their runs; block ones: their paragraphs.
+      // Inline content controls, links and simple fields: the text of their runs; block content
+      // controls: their paragraphs.
       for (uint32_t p : paras_[s]) {
-        Node cc;
-        uint32_t start = 0, end = 0;
-        for (const TextRun& r : doc_.Runs(p)) {
-          if (r.contentControl && r.contentControl == cc) {
-            end = r.end;
-            continue;
+        auto runsOf = [&](const char* what, Node TextRun::*member) {
+          Node at;
+          uint32_t start = 0, end = 0;
+          for (const TextRun& r : doc_.Runs(p)) {
+            if (r.*member && r.*member == at) {
+              end = r.end;
+              continue;
+            }
+            if (at) add(what, s, Pos{p, start}, Pos{p, end});
+            at = r.*member, start = r.start, end = r.end;
           }
-          if (cc) add("content control", s, Pos{p, start}, Pos{p, end});
-          cc = r.contentControl, start = r.start, end = r.end;
-        }
-        if (cc) add("content control", s, Pos{p, start}, Pos{p, end});
+          if (at) add(what, s, Pos{p, start}, Pos{p, end});
+        };
+        runsOf("content control", &TextRun::contentControl);
+        runsOf("link", &TextRun::hyperlink);
+        runsOf("simple field", &TextRun::simpleField);
       }
       for (const Block& b : doc_.Blocks(s)) {
         if (b.kind == BlockKind::ContentControl) {
@@ -830,6 +1272,7 @@ class Generator {
   const Document& doc_;
   Rng& rng_;
   std::vector<Edit> pending_;  // edits that must come next
+  std::set<std::string> skip_;  // FW_TORTURE_SKIP
   std::vector<uint32_t> stories_;
   std::unordered_map<uint32_t, std::vector<uint32_t>> paras_;               // story -> paragraphs
   std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> order_;       // paragraph -> story, index
@@ -848,7 +1291,93 @@ std::string ParaLine(const Document& doc, uint32_t p) {
     if (sig != last) out += "{" + std::to_string(r.start) + ":" + sig + "}";
     last = sig;
   }
+  // Its drawings as the layout sees them: size, in line or floating, and wrap.
+  for (const InlineItem& item : doc.Items(p)) {
+    if (item.kind != ItemKind::Drawing || item.drawing >= doc.Drawings().size()) continue;
+    const Drawing& d = doc.Drawings()[item.drawing];
+    out += "[d" + std::to_string(d.cx.Value()) + "x" + std::to_string(d.cy.Value()) + (d.anchored ? " a" : " i") +
+           std::to_string(static_cast<int>(d.wrap)) + "]";
+  }
   return out + " " + ToUtf8(doc.Para(p).text);
+}
+
+// Tables as Word needs them, the editor's guarantees (as tests/unit/test_tables.cpp's GridOk
+// checks them): rows with cells, cells ending with a paragraph, a grid (w:tblGrid) as wide as the
+// widest row (gridBefore, the spans, gridAfter), and vertical merges that continue a cell above
+// with the same column and span. Counted by kind over every story: files from elsewhere break
+// some of these already, so a round fails only when the saved file has more than the original.
+std::map<std::string, int> GridProblems(const Document& doc) {
+  std::map<std::string, int> problems;
+  std::function<void(const std::vector<Block>&)> walk = [&](const std::vector<Block>& blocks) {
+    for (const Block& b : blocks) {
+      if (b.kind == BlockKind::ContentControl) walk(doc.Blocks(b.node));
+      if (b.kind != BlockKind::Table) continue;
+      const std::vector<Node> rows = doc.TableRows(b.node);
+      if (rows.empty()) {
+        ++problems["a table without rows"];
+        continue;
+      }
+      int32_t width = 0;
+      std::vector<std::vector<std::pair<int32_t, CellProps>>> grid;
+      for (Node tr : rows) {
+        const RowProps rp = doc.ResolvedRow(tr);
+        int32_t col = rp.gridBefore;
+        grid.emplace_back();
+        const std::vector<Node> cells = doc.RowCells(tr);
+        if (cells.empty()) ++problems["a row without cells"];
+        for (Node tc : cells) {
+          const CellProps cp = doc.ResolvedCell(tc);
+          grid.back().emplace_back(col, cp);
+          col += std::max(1, cp.gridSpan);
+          const std::vector<Block> inner = doc.Blocks(tc);
+          if (inner.empty() || inner.back().kind != BlockKind::Paragraph) ++problems["a cell that doesn't end with a paragraph"];
+          walk(inner);
+        }
+        width = std::max(width, col + rp.gridAfter);
+      }
+      if (static_cast<int32_t>(doc.TableGrid(b.node).size()) != width) ++problems["a grid not as wide as its widest row"];
+      for (size_t r = 0; r < grid.size(); ++r)
+        for (const auto& [col, cp] : grid[r]) {
+          if (cp.vMerge != VMerge::Continue) continue;
+          bool above = false;
+          if (r > 0)
+            for (const auto& [c2, p2] : grid[r - 1])
+              above = above || (c2 == col && p2.gridSpan == cp.gridSpan && p2.vMerge != VMerge::None);
+          if (!above) ++problems["a vertically merged cell that continues nothing above it"];
+        }
+    }
+  };
+  for (uint32_t s = 0; s < doc.Stories().size(); ++s) walk(doc.Blocks(s));
+  return problems;
+}
+
+// The shape of the tables among `blocks`, nested ones too: for each, its rows, each row's cells
+// and each cell's paragraphs ("table {1,1,2}{1,1}").
+void TableShapes(const Document& doc, const std::vector<Block>& blocks, std::string& out) {
+  for (const Block& b : blocks) {
+    if (b.kind == BlockKind::ContentControl) {
+      TableShapes(doc, doc.Blocks(b.node), out);
+      continue;
+    }
+    if (b.kind != BlockKind::Table) continue;
+    std::string shape = "table ";
+    std::vector<std::vector<Block>> inner;
+    for (Node tr : doc.TableRows(b.node)) {
+      shape += "{";
+      bool first = true;
+      for (Node tc : doc.RowCells(tr)) {
+        std::vector<Block> cell = doc.Blocks(tc);
+        uint32_t paras = 0;
+        for (const Block& c : cell) paras += c.kind == BlockKind::Paragraph;
+        shape += (first ? "" : ",") + std::to_string(paras);
+        first = false;
+        inner.push_back(std::move(cell));
+      }
+      shape += "}";
+    }
+    out += shape + "\n";
+    for (const auto& cell : inner) TableShapes(doc, cell, out);
+  }
 }
 
 // Every paragraph's line, by paragraph index: for checking that an edit changed only its own.
@@ -892,6 +1421,7 @@ std::string Digest(const Document& doc) {
                                                          : std::string();
     std::string out = std::string("[") + kinds[static_cast<int>(story.kind)] + " " + name + "]\n";
     for (uint32_t p : doc.StoryParagraphs(s)) out += ParaLine(doc, p) + "\n";
+    TableShapes(doc, doc.Blocks(s), out);
     if (s == doc.MainStory()) main = std::move(out);
     else stories.push_back(std::move(out));
   }
@@ -987,6 +1517,7 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     return r;
   }
   std::vector<std::string> known = fw::pkg::CheckPackage(doc->Package()).errors;
+  const std::map<std::string, int> knownGrid = GridProblems(*doc);
   std::unique_ptr<EditTarget> target = torture::OpenTarget(std::move(doc), st);
   if (!target) {
     fail("open", "the editor refuses it: " + st.message);
@@ -1012,6 +1543,17 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     auto reopen = [&] { reread = docx::Read(std::move(again), st); };
     if (DWORD crash = Guarded(reopen)) return fail("crash", when + CrashText(crash) + " reading the saved file"), false;
     if (!reread) return fail("reopen", when + st.message), false;
+    std::map<std::string, int> grid;
+    auto tables = [&] { grid = GridProblems(*reread); };
+    if (DWORD crash = Guarded(tables)) return fail("crash", when + CrashText(crash) + " reading the saved file's tables"), false;
+    for (const auto& [problem, count] : grid) {
+      const auto had = knownGrid.find(problem);
+      const int original = had == knownGrid.end() ? 0 : had->second;
+      if (count > original)
+        return fail("grid", when + problem + " (" + std::to_string(count) + " in the saved file, " + std::to_string(original) +
+                                " in the original)"),
+               false;
+    }
     std::string after;
     auto digest = [&] { after = Digest(*reread); };
     if (DWORD crash = Guarded(digest)) return fail("crash", when + CrashText(crash) + " reading the saved file's text"), false;
@@ -1062,16 +1604,49 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     // from the read-back comparison, so half the rounds (by seed) check this and the other half that.
     // Formatting commands are local too, except changing a style, which changes every paragraph that
     // uses it. (List numbers aren't in the paragraph lines.)
+    // D3's operations (tables, pictures, fields, headers) aren't checked for it: they add paragraphs
+    // and parts by design.
+    static const std::set<std::string> formatting = {
+        "bullets", "numbering", "multilevel", "nolist", "restart", "continue", "indent", "outdent", "apply",
+        "toggle", "grow", "shrink", "grow1", "shrink1", "clearchars", "clearpara", "clearall", "font",
+        "spacing", "spacebefore", "border"};
     const bool styleChange = e.kind == EditKind::Command && (e.format == "update" || e.format.starts_with("modify="));
+    const bool formattingCommand = e.kind == EditKind::Command && formatting.contains(e.format.substr(0, e.format.find('=')));
     bool local = e.kind == EditKind::Type || e.kind == EditKind::Delete || e.kind == EditKind::Replace ||
                  e.kind == EditKind::Split || e.kind == EditKind::Join || e.kind == EditKind::Format ||
-                 e.kind == EditKind::Paint || (e.kind == EditKind::Command && !styleChange);
+                 e.kind == EditKind::Paint || (formattingCommand && !styleChange);
     bool locality = local && (seed & 1);
+    // A refused edit leaves the document as it was: always its State(), and on the same rounds every
+    // paragraph's line. Inside a group the state changes when the group's last edit closes it, so
+    // there only the lines are compared.
+    const bool refusable = e.kind != EditKind::Group;
+    const bool compareState = refusable && groupLeft == 0;
+    const bool readAll = (seed & 1) && (locality || (refusable && e.kind != EditKind::Undo && e.kind != EditKind::Redo));
     std::vector<std::string> linesBefore, linesAfter;
+    std::string stateBefore;
+    bool refusalChanged = false;
+    std::string refusalWhat;
     auto apply = [&] {
-      if (locality) linesBefore = ParaLines(target->Doc());
+      if (compareState) stateBefore = target->State();
+      if (readAll) linesBefore = ParaLines(target->Doc());
       applied = target->Apply(e, why);
       if (locality && applied == Applied::Done) linesAfter = ParaLines(target->Doc());
+      if (refusable && applied == Applied::Refused) {
+        const std::string stateAfter = compareState ? target->State() : std::string();
+        if (stateAfter != stateBefore) {
+          refusalChanged = true;
+          refusalWhat = "before: " + stateBefore + "; after: " + stateAfter;
+        } else if (readAll) {
+          std::vector<std::string> now = ParaLines(target->Doc());
+          for (size_t p = 0; p < std::max(now.size(), linesBefore.size()) && !refusalChanged; ++p)
+            if (p >= now.size() || p >= linesBefore.size() || now[p] != linesBefore[p]) {
+              refusalChanged = true;
+              refusalWhat = "paragraph " + std::to_string(p) + ": before \"" +
+                            (p < linesBefore.size() ? linesBefore[p].substr(0, 120) : "(none)") + "\", after \"" +
+                            (p < now.size() ? now[p].substr(0, 120) : "(none)") + "\"";
+            }
+        }
+      }
     };
     if ((crash = Guarded(apply)) != 0) {
       fail("crash", CrashText(crash) + " in: " + torture::FormatEdit(e));
@@ -1087,6 +1662,10 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     }
     if (applied == Applied::Refused) {
       ++r.refused;
+      if (refusalChanged) {
+        fail("refused", "\"" + torture::FormatEdit(e) + "\" was refused (" + why + ") but changed the document: " + refusalWhat);
+        break;
+      }
       continue;
     }
     ++r.done;
