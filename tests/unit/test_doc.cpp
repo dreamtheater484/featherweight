@@ -34,8 +34,6 @@ struct Fixture {
   std::string body;         // inside w:body
   std::string documentXml;  // the whole main part, instead of body
   std::string styles, numbering, settings, theme, comments, commentsEx, footnotes, header, footer;
-  std::string fontTable;  // inside w:fonts; its fonts' r:id rIdFont1... are fontFiles, in order
-  std::vector<std::string> fontFiles;
 
   std::vector<uint8_t> Bytes() const {
     struct Part {
@@ -60,7 +58,6 @@ struct Fixture {
     add("word/footnotes.xml", wml + "footnotes+xml", rel + "footnotes", "w:footnotes", footnotes);
     add("word/header1.xml", wml + "header+xml", rel + "header", "w:hdr", header);
     add("word/footer1.xml", wml + "footer+xml", rel + "footer", "w:ftr", footer);
-    add("word/fontTable.xml", wml + "fontTable+xml", rel + "fontTable", "w:fonts", fontTable);
     if (!commentsEx.empty())
       parts.push_back({"word/commentsExtended.xml", wml + "commentsExtended+xml",
                        "http://schemas.microsoft.com/office/2011/relationships/commentsExtended",
@@ -100,17 +97,6 @@ struct Fixture {
         {"word/_rels/document.xml.rels", rels},
     };
     for (const auto& p : parts) entries.emplace_back(p.name, p.xml);
-    if (!fontFiles.empty()) {
-      std::string fontRels = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">";
-      for (size_t i = 0; i < fontFiles.size(); ++i) {
-        const std::string n = std::to_string(i + 1);
-        fontRels += "<Relationship Id=\"rIdFont" + n + "\" Type=\"" + rel + "font\" Target=\"fonts/font" + n + ".odttf\"/>";
-        entries.emplace_back("word/fonts/font" + n + ".odttf", fontFiles[i]);
-      }
-      entries.emplace_back("word/_rels/fontTable.xml.rels", fontRels + "</Relationships>");
-      entries[0].second.insert(entries[0].second.size() - 8,
-                               "<Default Extension=\"odttf\" ContentType=\"application/vnd.openxmlformats-officedocument.obfuscatedFont\"/>");
-    }
     return test::MakeZip(entries);
   }
 
@@ -651,28 +637,6 @@ TEST(Resolve_D2_DirectNumberingOverridesTheParagraphStyle) {
   // Out of the style's list, it loses the style's indents too (as Word does).
   CHECK(doc->ResolvedPara(p[2]).indStart.Value() == 0 && doc->ResolvedPara(p[2]).firstLine.Value() == 0);
   CHECK(doc->ResolvedPara(p[3]).indStart.Value() == 100);  // direct indents beat both
-}
-
-TEST(Document_D5_EmbeddedFontsAreUnmasked) {
-  // ECMA-376 17.8.1: the font key's 16 bytes, last to first, mask the font's first 32 bytes.
-  std::string font(64, '\0');
-  for (int i = 0; i < 64; ++i) font[i] = static_cast<char>(i * 7 + 1);
-  const uint8_t key[16] = {0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00};
-  std::string masked = font;
-  for (int i = 0; i < 32; ++i) masked[i] = static_cast<char>(masked[i] ^ key[i % 16]);
-  Fixture f;
-  f.body = "<w:p/>";
-  f.fontTable = "<w:font w:name=\"Embedded Sans\"><w:embedRegular r:id=\"rIdFont1\" "
-                "w:fontKey=\"{00112233-4455-6677-8899-AABBCCDDEEFF}\"/></w:font><w:font w:name=\"Arial\"/>";
-  f.fontFiles = {masked};
-  auto doc = LoadOk(f);
-  CHECK(doc);
-  if (!doc) return;
-  const auto fonts = doc->EmbeddedFonts();
-  CHECK(fonts.size() == 1);
-  if (fonts.size() != 1) return;
-  CHECK(fonts[0].first == L"Embedded Sans");
-  CHECK(std::string(fonts[0].second.begin(), fonts[0].second.end()) == font);
 }
 
 TEST(Resolve_D5_StyleListLevelSitsBetweenTheStyleAndItsBase) {

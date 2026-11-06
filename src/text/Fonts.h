@@ -3,7 +3,6 @@
 #include <dwrite_3.h>
 #include <wrl/client.h>
 
-#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -93,11 +92,6 @@ class Fonts {
   // The face for a font DirectWrite's fallback picked.
   const Face* Get(IDWriteFont* font);
 
-  // Fonts a document carries (w:embedRegular and the like, de-obfuscated), by the family the
-  // document names them: each one whose family this PC doesn't have joins the collection, as Word
-  // uses them. Call before anything is laid out. Returns how many it added.
-  size_t AddEmbedded(const std::vector<std::pair<std::wstring, std::vector<uint8_t>>>& fonts);
-
   // Every family replaced so far, in the order first seen.
   const std::vector<Substitution>& Substitutions() const { return substitutions_; }
   void ClearSubstitutions() { substitutions_.clear(); }
@@ -118,7 +112,6 @@ class Fonts {
   Microsoft::WRL::ComPtr<IDWriteTextAnalyzer1> analyzer_;
   Microsoft::WRL::ComPtr<IDWriteFontFallback> fallback_;
   Microsoft::WRL::ComPtr<IDWriteFontCollection> collection_;
-  Microsoft::WRL::ComPtr<IDWriteInMemoryFontFileLoader> loader_;  // embedded fonts, registered
   // The collection's fonts, for finding families by their Win32 (GDI) names, which documents use:
   // "Calibri Light" and "Arial Narrow" are a weight and a width of the families DirectWrite lists
   // as "Calibri" and "Arial". Null where the collection has no font set.

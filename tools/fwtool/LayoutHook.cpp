@@ -132,13 +132,7 @@ bool OpenAndLayOut(const std::filesystem::path& document, fw::OpenTimings* timin
   std::unique_ptr<fw::doc::Document> doc = OpenModel(document, timings, error, password);
   if (!doc) return false;
   g_document = doc.get();
-  // A document that carries fonts the PC doesn't have gets Fonts of its own, as in the app.
-  std::unique_ptr<fw::text::Fonts> own;
-  if (auto embedded = doc->EmbeddedFonts(); !embedded.empty()) {
-    own = std::make_unique<fw::text::Fonts>(Substitute);
-    if (own->AddEmbedded(embedded) == 0) own.reset();
-  }
-  fw::text::Fonts& fonts = own ? *own : SharedFonts();
+  fw::text::Fonts& fonts = SharedFonts();
   fonts.ClearSubstitutions();
   {
     fw::doc::layout::Layout layout(*doc, fonts, {}, timings);

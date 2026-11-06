@@ -433,9 +433,6 @@ class Document {
   const pkg::RelationshipSet* RelationshipsOf(uint32_t part) const;
   // A relationship's target part read from the package (images, embedded objects, fonts).
   pkg::Status ReadTarget(uint32_t part, std::string_view relId, std::vector<uint8_t>& out) const;
-  // The fonts the font table embeds (w:embedRegular and the like), de-obfuscated with their
-  // w:fontKey (ECMA-376 17.8.1), each with the family the table names. Unreadable ones are left out.
-  std::vector<std::pair<std::wstring, std::vector<uint8_t>>> EmbeddedFonts() const;
   const std::vector<PairInfo>& Pairs() const { return pairs_; }
   // The external URL of a w:hyperlink (from its relationship), or "#anchor".
   std::string HyperlinkTarget(Node hyperlink) const;

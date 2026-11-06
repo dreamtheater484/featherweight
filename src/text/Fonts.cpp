@@ -170,67 +170,7 @@ Fonts::Fonts(SubstituteFn substitute, IDWriteFontCollection* collection) : subst
   if (FAILED(factory_->CreateTextAnalyzer(&analyzer)) || FAILED(analyzer.As(&analyzer_))) analyzer_.Reset();
 }
 
-Fonts::~Fonts() {
-  if (!loader_) return;
-  faces_.clear();
-  win32_.Reset();
-  collection_.Reset();
-  factory_->UnregisterFontFileLoader(loader_.Get());
-}
-
-size_t Fonts::AddEmbedded(const std::vector<std::pair<std::wstring, std::vector<uint8_t>>>& fonts) {
-  ComPtr<IDWriteFactory5> factory;
-  ComPtr<IDWriteFontCollection1> current;
-  if (fonts.empty() || loader_ || !collection_ || FAILED(factory_.As(&factory)) || FAILED(collection_.As(&current)))
-    return 0;
-  ComPtr<IDWriteFontSet> installed;
-  ComPtr<IDWriteFontSetBuilder1> builder;
-  ComPtr<IDWriteInMemoryFontFileLoader> loader;
-  if (FAILED(current->GetFontSet(&installed)) || FAILED(factory->CreateFontSetBuilder(&builder)) ||
-      FAILED(builder->AddFontSet(installed.Get())) || FAILED(factory->CreateInMemoryFontFileLoader(&loader)) ||
-      FAILED(factory->RegisterFontFileLoader(loader.Get())))
-    return 0;
-  loader_ = loader;
-  size_t added = 0;
-  std::vector<std::pair<std::wstring, std::wstring>> aliases;  // the table's name, the font's own family
-  for (const auto& [family, data] : fonts) {
-    if (data.empty() || Installed(family)) continue;
-    ComPtr<IDWriteFontFile> file;  // the loader keeps a copy of the data
-    if (FAILED(loader->CreateInMemoryFontFileReference(factory.Get(), data.data(), static_cast<UINT32>(data.size()),
-                                                       nullptr, &file)) ||
-        FAILED(builder->AddFontFile(file.Get())))
-      continue;
-    ++added;
-    // Word goes by the table's name ("Encode Sans Normal BLack"), which needn't be the font's own.
-    ComPtr<IDWriteFontFace> face;
-    ComPtr<IDWriteFontFace3> face3;
-    ComPtr<IDWriteLocalizedStrings> names;
-    IDWriteFontFile* files[] = {file.Get()};
-    if (SUCCEEDED(factory->CreateFontFace(DWRITE_FONT_FACE_TYPE_TRUETYPE, 1, files, 0, DWRITE_FONT_SIMULATIONS_NONE, &face)) &&
-        SUCCEEDED(face.As(&face3)) && SUCCEEDED(face3->GetFamilyNames(&names)) && names && names->GetCount() > 0) {
-      UINT32 length = 0;
-      if (SUCCEEDED(names->GetStringLength(0, &length))) {
-        std::wstring own(length + 1, L'\0');
-        if (SUCCEEDED(names->GetString(0, own.data(), length + 1))) {
-          own.resize(length);
-          if (Lower(own) != Lower(family)) aliases.emplace_back(family, own);
-        }
-      }
-    }
-  }
-  ComPtr<IDWriteFontSet> set;
-  ComPtr<IDWriteFontCollection1> collection;
-  if (added == 0 || FAILED(builder->CreateFontSet(&set)) || FAILED(factory->CreateFontCollectionFromFontSet(set.Get(), &collection)))
-    return 0;
-  collection_ = collection;
-  win32_.Reset();
-  win32Tried_ = false;
-  resolved_.clear();
-  faces_.clear();
-  for (const auto& [family, own] : aliases)
-    if (!Installed(family) && Installed(own)) resolved_.emplace(Lower(family), own);
-  return added;
-}
+Fonts::~Fonts() = default;
 
 bool Fonts::Installed(std::wstring_view family) {
   if (family.empty() || !collection_) return false;
