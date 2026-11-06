@@ -8,6 +8,7 @@ The fidelity piece of D5 (`docs/d5-plan.md`). Measured with `fwtool compare` aga
 |---|---:|---:|
 | Start: `claude/d5-int` 2c7f571 | 98 of 108 (90.7 %) | 106,609 of 111,064 (96.0 %) |
 | Hyphenation as Word on this PC hyphenates | 98 (90.7 %) | 107,167 (96.5 %) |
+| `numId 0` drops the style's list indents; no automatic spacing between items of one list | 98 (90.7 %) | 107,218 (96.5 %) |
 | Target | 105 (97 %) | 108,843 (98 %) |
 
 ## Fonts
@@ -50,4 +51,12 @@ Modes 11, 12 and 14 cost 140 lines in all, so the mode work goes to the flags th
   - fwtext now checks Office's PROOF folder (`Hyphenator::WordHyphenates`). Without Office, every language we have patterns for is hyphenated, as before.
   - Word also keeps at least three letters before a Spanish hyphen. With that, un-convencion has no hyphenated lines, as in Word.
   - The hyphenation zone in mode 15 is still ignored, as d1-text measured. Using it explained the Spanish lines less well (+28 against +53).
+- **Lists.**
+  - A paragraph that leaves its style's list with `w:numId 0` loses the style's indents too (+40 lines).
+  - Between two items of one list, `beforeAutospacing` and `afterAutospacing` give no space, as between HTML `<li>`s. This took revised-methodology from 127 pages to 119 (Word: 109).
+- **Open: deleted paragraph marks.** In Word's final view, a paragraph whose mark is a tracked deletion joins the next paragraph. We only drop such paragraphs when they're empty. revised-methodology has 130 of them; doing this properly means laying two model paragraphs out as one.
+- **Open: EPA brownfields QAPP (1,150 lines missing).** Its reference PDF has 171 pages, while Word itself counts 160. Two findings there are held back until they help the totals:
+  - Table borders: Word's rows are taller by the border width (0.5 pt rows in the acronym table: 12.56 pt against our 12.07 pt). Counting table and style borders makes pages 6–9 match exactly. On its own it costs 98 lines, because the page before is one row short.
+  - Space before after a section break: Word drops it at the top of some pages after a section break and keeps it on others with the same structure.
+- **Open: worldbank-sustainable (38 pages, ours 37).** A table row splits differently across pages 11–12, so the page-break paragraph after the table fits on our page 12 but not on Word's.
 - **Rounding of line heights.** Rounding font metrics to device units (96 to 1440 dpi) changes ±20 lines and doesn't help. Word's PDF positions sit on a 0.12 pt grid. acuk-example-cv's last two lines miss page 1 because of a drift of 0.7 pt that is still unexplained.
