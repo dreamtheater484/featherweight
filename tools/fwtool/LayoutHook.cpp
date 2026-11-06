@@ -12,6 +12,7 @@
 #include <memory>
 #include <random>
 
+#include "Common.h"
 #include "core/Strings.h"
 #include "doc/docx/Docx.h"
 #include "doc/edit/Editor.h"
@@ -49,8 +50,9 @@ std::unique_ptr<fw::doc::Document> OpenModel(const std::filesystem::path& docume
                                              std::string& error) {
   fw::pkg::Status status;
   std::unique_ptr<fw::pkg::Package> package;
-  if (fw::ToLower(document.extension().wstring()) == L".doc") {
-    package = OpenPackage(document, status);  // a Word 97-2003 document, read as the .docx it imports as
+  if (fw::ToLower(document.extension().wstring()) == L".doc") {  // read as the .docx it becomes
+    package = fwtool::OpenPackage(document, status);
+    if (timings) timings->Mark(fw::OpenTimings::Read);
   } else {
     fw::pkg::Snapshot::Options options;
     std::error_code ec;

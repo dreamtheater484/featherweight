@@ -320,6 +320,8 @@ struct Ppr {
   const char* lineRule = "auto";
   std::array<std::string, 6> bdr;  // top, left, bottom, right, between, bar
   std::map<int, std::string> tabs;
+  // A frame (w:framePr): position codes, position, size, wrap, distance from text; a drop cap.
+  std::optional<int> pc, frameX, frameY, frameW, frameH, wrap, hSpace, vSpace, dropCap;
   int itap = 0;
   bool inTable = false, ttp = false, innerCell = false, innerTtp = false;
   std::vector<Bytes> table;  // grpprls whose table sprms describe the row this paragraph ends
@@ -345,6 +347,10 @@ struct Tap {
   bool header = false, cantSplit = false, autofit = true;
   std::array<std::string, 6> borders;  // top, left, bottom, right, insideH, insideV
   std::array<int, 4> padding = {-1, -1, -1, -1};  // top, left, bottom, right
+  // A floating table: position codes (as a frame's), position, and distance from the text
+  // (left, top, right, bottom).
+  std::optional<int> pc, x, y;
+  std::array<int, 4> fromText{};
 };
 
 void Toggle(std::string& slot, std::string_view name, uint8_t v) {
@@ -1056,6 +1062,15 @@ void Converter::ApplyPap(const Bytes& g, Ppr& p, int depth) const {
         p.bdr[side] = Border(k[side], a.Sub(1), false);
         break;
       }
+      case 0x261B: p.pc = a.U8(0); break;
+      case 0x8418: p.frameX = a.I16(0); break;
+      case 0x8419: p.frameY = a.I16(0); break;
+      case 0x841A: p.frameW = a.U16(0); break;
+      case 0x442B: p.frameH = a.U16(0); break;
+      case 0x2423: p.wrap = a.U8(0); break;
+      case 0x842F: p.hSpace = a.I16(0); break;
+      case 0x842E: p.vSpace = a.I16(0); break;
+      case 0x442C: p.dropCap = a.U16(0); break;
       case 0x442D: p.s[pShd] = Shading(a, true); break;
       case 0xC64D: p.s[pShd] = Shading(a.Sub(1), false); break;
       case 0x6646:  // sprmPHugePapx: the rest of the paragraph's sprms, in the Data stream
@@ -1128,6 +1143,13 @@ void Converter::ApplyTap(const Bytes& g, Tap& t) const {
         break;
       }
       case 0x9602: t.gapHalf = a.I16(0); break;
+      case 0x360D: t.pc = a.U8(0); break;
+      case 0x940E: t.x = a.I16(0); break;
+      case 0x940F: t.y = a.I16(0); break;
+      case 0x9410: t.fromText[0] = a.I16(0); break;
+      case 0x9411: t.fromText[1] = a.I16(0); break;
+      case 0x941B: t.fromText[2] = a.I16(0); break;
+      case 0x941C: t.fromText[3] = a.I16(0); break;
       case 0x9407: t.height = a.I16(0); break;
       case 0x3404: t.header = a.U8(0) != 0; break;
       case 0x3403: case 0x3466: t.cantSplit = a.U8(0) != 0; break;
@@ -1150,6 +1172,12 @@ void Converter::ApplyTap(const Bytes& g, Tap& t) const {
         const int width = a.U16(5);
         for (size_t b = 0; b < 4; ++b)
           if (a.U8(3) & (1 << b)) t.padding[b] = width;
+        break;
+      }
+      case 0x7629: {  // sprmTTextFlow: itcFirst, itcLim, then the cells' text flow
+        const size_t first = a.U8(0), lim = a.U8(1);
+        for (size_t k = first; k < lim && k < t.tc.size(); ++k)
+          t.tc[k].flags = static_cast<uint16_t>((t.tc[k].flags & ~0x1C) | ((a.U16(2) & 7) << 2));
         break;
       }
       case 0xD62C: {
@@ -1224,6 +1252,37 @@ std::string Converter::PprXml(const Ppr& p, const std::string& rPr, const std::s
       case pStyle:
         if (p.istd != 0 && p.istd < styles_.size() && styles_[p.istd].defined && styles_[p.istd].type == 1)
           out += El("pStyle", StyleId(p.istd));
+        break;
+      case pFramePr:
+        if (p.pc || p.frameX || p.frameY || p.frameW || p.frameH || p.wrap || p.dropCap) {
+          out += "<w:framePr";
+          if (p.dropCap && (*p.dropCap & 7)) {
+            out += std::string(" w:dropCap=\"") + ((*p.dropCap & 7) == 2 ? "margin" : "drop") + "\" w:lines=\"" +
+                   Num(std::max(1, (*p.dropCap >> 3) & 0x1F)) + "\"";
+          }
+          if (p.frameW && *p.frameW) out += " w:w=\"" + Num(*p.frameW) + "\"";
+          if (p.frameH && (*p.frameH & 0x7FFF)) {
+            out += " w:h=\"" + Num(*p.frameH & 0x7FFF) + "\" w:hRule=\"" + ((*p.frameH & 0x8000) ? "atLeast" : "exact") + "\"";
+          }
+          if (p.vSpace) out += " w:vSpace=\"" + Num(*p.vSpace) + "\"";
+          if (p.hSpace) out += " w:hSpace=\"" + Num(*p.hSpace) + "\"";
+          static const char* const kWrap[] = {"auto", "notBeside", "around", "none", "tight", "through"};
+          if (p.wrap && *p.wrap < 6) out += std::string(" w:wrap=\"") + kWrap[*p.wrap] + "\"";
+          // Position codes: the vertical anchor in bits 4-5 (margin, page, text), the horizontal in
+          // bits 6-7 (column, margin, page).
+          const int pc = p.pc.value_or(0x20);
+          static const char* const kV[] = {"margin", "page", "text", "text"};
+          static const char* const kH[] = {"text", "margin", "page", "page"};
+          out += std::string(" w:vAnchor=\"") + kV[(pc >> 4) & 3] + "\" w:hAnchor=\"" + kH[(pc >> 6) & 3] + "\"";
+          const int x = p.frameX.value_or(0), y = p.frameY.value_or(0);
+          static const char* const kX[] = {"left", "center", "right", "inside", "outside"};
+          if (x <= 0 && x >= -16 && x % 4 == 0) out += std::string(" w:xAlign=\"") + kX[-x / 4] + "\"";
+          else out += " w:x=\"" + Num(x) + "\"";
+          static const char* const kY[] = {"inline", "top", "center", "bottom", "inside", "outside"};
+          if (y < 0 && y >= -20 && y % 4 == 0) out += std::string(" w:yAlign=\"") + kY[-y / 4] + "\"";
+          else out += " w:y=\"" + Num(y) + "\"";
+          out += "/>";
+        }
         break;
       case pNumPr:
         if (p.ilfo >= 0 || p.ilvl >= 0) {
@@ -1418,9 +1477,24 @@ void Converter::EmitTable(const std::vector<Para>& paras, size_t i0, size_t i1, 
   out += "<w:tbl><w:tblPr>";
   if (first.istd > 0 && static_cast<size_t>(first.istd) < styles_.size() && styles_[static_cast<size_t>(first.istd)].type == 3)
     out += El("tblStyle", StyleId(static_cast<size_t>(first.istd)));
+  if (first.pc || first.x || first.y) {
+    const int pc = first.pc.value_or(0x20), x = first.x.value_or(0), y = first.y.value_or(0);
+    static const char* const kV[] = {"margin", "page", "text", "text"};
+    static const char* const kH[] = {"text", "margin", "page", "page"};
+    out += "<w:tblpPr w:leftFromText=\"" + Num(first.fromText[0]) + "\" w:rightFromText=\"" + Num(first.fromText[2]) +
+           "\" w:topFromText=\"" + Num(first.fromText[1]) + "\" w:bottomFromText=\"" + Num(first.fromText[3]) +
+           "\" w:vertAnchor=\"" + kV[(pc >> 4) & 3] + "\" w:horzAnchor=\"" + kH[(pc >> 6) & 3] + "\"";
+    static const char* const kX[] = {"left", "center", "right", "inside", "outside"};
+    if (x < 0 && x >= -16 && x % 4 == 0) out += std::string(" w:tblpXSpec=\"") + kX[-x / 4] + "\"";
+    else out += " w:tblpX=\"" + Num(x) + "\"";
+    static const char* const kY[] = {"inline", "top", "center", "bottom", "inside", "outside"};
+    if (y < 0 && y >= -20 && y % 4 == 0) out += std::string(" w:tblpYSpec=\"") + kY[-y / 4] + "\"";
+    else out += " w:tblpY=\"" + Num(y) + "\"";
+    out += "/>";
+  }
   out += "<w:tblW w:w=\"0\" w:type=\"auto\"/>";
   if (first.jc == 1 || first.jc == 2) out += El("jc", first.jc == 1 ? "center" : "right");
-  out += "<w:tblInd w:w=\"" + Num((first.centers.empty() ? 0 : first.centers[0]) + first.gapHalf) + "\" w:type=\"dxa\"/>";
+  out += "<w:tblInd w:w=\"" + Num((grid.empty() ? 0 : grid.front()) + first.gapHalf) + "\" w:type=\"dxa\"/>";
   if (std::any_of(first.borders.begin(), first.borders.end(), [](const std::string& b) { return !b.empty(); })) {
     out += "<w:tblBorders>";
     for (const std::string& b : first.borders) out += b;
@@ -1442,6 +1516,16 @@ void Converter::EmitTable(const std::vector<Para>& paras, size_t i0, size_t i1, 
   out += "</w:tblGrid>";
   for (const Row& r : rows) {
     out += "<w:tr><w:trPr>";
+    // A row that starts after the grid's left edge, or ends before its right one, skips those columns.
+    if (!r.tap.centers.empty() && grid.size() >= 2) {
+      const auto before = std::lower_bound(grid.begin(), grid.end(), r.tap.centers.front()) - grid.begin();
+      const auto last = std::lower_bound(grid.begin(), grid.end(), r.tap.centers.back()) - grid.begin();
+      const auto after = static_cast<std::ptrdiff_t>(grid.size()) - 1 - last;
+      if (before > 0)
+        out += El("gridBefore", before) + "<w:wBefore w:w=\"" + Num(r.tap.centers.front() - grid.front()) + "\" w:type=\"dxa\"/>";
+      if (after > 0)
+        out += El("gridAfter", after) + "<w:wAfter w:w=\"" + Num(grid.back() - r.tap.centers.back()) + "\" w:type=\"dxa\"/>";
+    }
     if (r.tap.cantSplit) out += "<w:cantSplit/>";
     if (r.tap.height)
       out += "<w:trHeight w:val=\"" + Num(std::abs(r.tap.height)) + "\" w:hRule=\"" + (r.tap.height < 0 ? "exact" : "atLeast") + "\"/>";
@@ -1469,6 +1553,15 @@ void Converter::EmitTable(const std::vector<Para>& paras, size_t i0, size_t i1, 
         out += "</w:tcBorders>";
       }
       out += tc.shd;
+      if (tc.flags & 0x2000) out += "<w:noWrap/>";
+      // TCGRF.textFlow: vertical text (a header turned along the page's side, for one).
+      switch ((tc.flags >> 2) & 7) {
+        case 1: out += El("textDirection", "tbRl"); break;
+        case 3: out += El("textDirection", "btLr"); break;
+        case 4: out += El("textDirection", "lrTbV"); break;
+        case 5: out += El("textDirection", "tbRlV"); break;
+        default: break;
+      }
       const unsigned va = (tc.flags >> 7) & 3;
       if (va == 1 || va == 2) out += El("vAlign", va == 1 ? "center" : "bottom");
       out += "</w:tcPr>";
