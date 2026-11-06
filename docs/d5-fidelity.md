@@ -10,6 +10,40 @@ The fidelity piece of D5 (`docs/d5-plan.md`). Measured with `fwtool compare` aga
 | Hyphenation as Word on this PC hyphenates | 98 (90.7 %) | 107,167 (96.5 %) |
 | `numId 0` drops the style's list indents; no automatic spacing between items of one list | 98 (90.7 %) | 107,218 (96.5 %) |
 | A page break keeps its paragraph mark in mode 14 too | 97 (89.8 %) | 107,216 (96.5 %) |
+| Contextual spacing collapses before dropping the space after; space after must fit above footnotes | 98 (90.7 %) | 107,226 (96.5 %) |
+| Merged with `claude/d5-int` e38b850 (equations, drawings in the dump, `.doc` import) | 98 (90.7 %) | 107,255 (96.6 %) |
+| A paragraph that only holds a section break gets no list number (tudresden 35 → 33 pages, as in Word; QAPP 64 → 63, Word 62) | 99 (91.7 %) | 107,259 (96.6 %) |
+| In mode 15, a list level that shows no number has no tab after it; a page break before doesn't keep the space before at the page top (short-form contract 77 → 76 pages, as in Word) | 100 (92.6 %) | 107,415 (96.7 %) |
+| Target | 105 (97 %) | 108,843 (98 %) |
+
+From 766982d on, the targets (below) are the measure. With the last step: **140 of 152 (92.1 %), 110,011 of 114,076 lines (96.4 %)**; copies 168 of 258 (65.1 %), 210,703 of 239,892 lines (87.8 %).
+
+## What the targets count
+
+The 97 % and 98 % targets count each document once:
+- **Counted:** the original 108 `.docx` documents, plus the new distinct documents d1-corpus adds (the public chart, equation, right-to-left and East Asian files).
+- **Copies:** format copies of a counted document are measured against Word's render of each copy, but reported apart and kept out of the targets.
+  - These are the `.dotx`, `.doc`, `.odt` and password-protected copies.
+  - The manifest marks each one with `"copyOf"`, the source of the document it copies. For an older manifest without it, compare uses the folder and name: a document under `dotx/`, `doc/`, `odt/` or `protected/` with the same category and name as one under `docx/`.
+- **How compare opens them:** `.doc` and `.odt` copies go through the importers, and protected copies are decrypted with the manifest's test `"password"`, as the app opens them.
+- **How compare says it:** `fwtool compare` prints the targets' line first and the copies' line after it. Its JSON has `"copy": true` on each copy and the copies' totals under `"copies"`. Its report puts the copies in a table of their own.
+
+On 766982d, with d1-corpus's manifest of 411 entries:
+
+| Set | Page counts match | Lines |
+|---|---:|---:|
+| **Targets**: 152 distinct documents | 139 (91.4 %) | 109,822 of 114,078 (96.3 %) |
+| The original 108 | 99 | 107,259 of 111,064 (96.6 %) |
+| The 44 new ones (charts, equations, right-to-left, East Asian) | 40 | 2,563 of 3,014 (85.0 %) |
+| **Copies**: 258, one `.odt` has no render | 168 (65.1 %) | 210,648 of 239,892 (87.8 %) |
+| `.doc` | 83 of 108 | 101,465 of 111,331 (91.1 %) |
+| `.odt` | 53 of 107 | 68,595 of 86,034 (79.7 %) |
+| `.dotx` | 25 of 31 | 35,946 of 37,530 (95.8 %) |
+| Password-protected | 7 of 12 | 4,642 of 4,997 (92.9 %) |
+
+The 4 new documents whose page count differs:
+- gojp-mhlw-form-b1, b2 and b3: Word 23, 28 and 12 pages, ours 17, 21 and 8 (Japanese, the document grid);
+- who-lqsi-controlled-document-front-page-arabic: Word 1 page, ours 2.
 
 D1 ended at 98/108 and 95.9 %, not the 99/108 and 95.2 % in the plan. Those numbers were measured before D1's last layout commit (399a105, spaces squeezed only in mode 15). That commit gained 776 lines and lost eu-bijlage's page match, which had been a coincidence (1,070 of its 1,385 lines matched).
 
@@ -24,7 +58,6 @@ These documents differ only because the reference Word is English. We show what 
 - **bund-abnahmeprotokoll** (5 pages in Word, 4 here). Its headers hold `STYLEREF "Überschrift 1;Überschrift-1"`.
   - English Word doesn't know the German style name, so it prints "Error! Use the Home tab to apply …" over three lines, and page 4's body moves down 26 pt.
   - German Word, and we, show the heading.
-| Target | 105 (97 %) | 108,843 (98 %) |
 
 ## Fonts
 
@@ -69,9 +102,16 @@ Modes 11, 12 and 14 cost 140 lines in all, so the mode work goes to the flags th
 - **Lists.**
   - A paragraph that leaves its style's list with `w:numId 0` loses the style's indents too (+40 lines).
   - Between two items of one list, `beforeAutospacing` and `afterAutospacing` give no space, as between HTML `<li>`s. This took revised-methodology from 127 pages to 119 (Word: 109).
+- **An empty list number.** A level with `w:numFmt none` and an empty `w:lvlText` (the short-form contract's defined terms) gets no tab after it in mode 15, so the term starts at the cell's edge. Word's render of the `.doc` copy (mode 11) still has the tab, so the rule is for mode 15 only.
+- **Page tops after `w:pageBreakBefore`.** Word drops the space before there, as after a page break character. Checked on the 14 target documents that use it: 14 page tops come closer to Word's (tudresden, both bund-bsi documents, the short-form contract), 2 move away (bund-bsi page 5).
+- **Open: borders as room in table rows.** Counting only the table's own `w:tblBorders` puts the short-form contract's rows exactly where Word's are, but loses 45 target lines in total (EPA: 90). EPA's acronym table takes its borders from a style, and its page 5 also starts 6 pt low after a section break, which Word drops there.
 - **Open: deleted paragraph marks.** In Word's final view, a paragraph whose mark is a tracked deletion joins the next paragraph. We only drop such paragraphs when they're empty. revised-methodology has 130 of them; doing this properly means laying two model paragraphs out as one.
 - **Open: EPA brownfields QAPP (1,150 lines missing).** Its reference PDF has 171 pages, while Word itself counts 160. Two findings there are held back until they help the totals:
   - Table borders: Word's rows are taller by the border width (0.5 pt rows in the acronym table: 12.56 pt against our 12.07 pt). Counting table and style borders makes pages 6–9 match exactly. On its own it costs 98 lines, because the page before is one row short.
   - Space before after a section break: Word drops it at the top of some pages after a section break and keeps it on others with the same structure.
+- **Open: usgov region-3 QAPP (62 pages, ours 63).**
+  - On page 14, Word's schedule table rows are about 0.5 pt taller each, the border width; the drift is 5.6 pt by the end of the table.
+  - That pushes Word's A6 heading to page 15. We fit 55 lines on that page, Word 43.
+  - Counting table and style borders as room (re-measured on 766982d) changes nothing here and costs 78 target lines, mostly in EPA. So the extra page comes from later in the document; still to find.
 - **Open: worldbank-sustainable (38 pages, ours 37).** A table row splits differently across pages 11–12, so the page-break paragraph after the table fits on our page 12 but not on Word's.
 - **Rounding of line heights.** Rounding font metrics to device units (96 to 1440 dpi) changes ±20 lines and doesn't help. Word's PDF positions sit on a 0.12 pt grid. acuk-example-cv's last two lines miss page 1 because of a drift of 0.7 pt that is still unexplained.

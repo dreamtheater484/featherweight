@@ -86,7 +86,7 @@ Doc Make(const std::string& body, const std::string& settings = "", const std::s
   }
   if (!numbering.empty()) {
     types += "<Override PartName=\"/word/numbering.xml\" ContentType=\"" + wml + "numbering+xml\"/>";
-    rels += "<Relationship Id=\"rIdN\" Type=\"" + rel + "numbering\" Target=\"numbering.xml\"/>";
+    rels += "<Relationship Id=\"rId4\" Type=\"" + rel + "numbering\" Target=\"numbering.xml\"/>";
     entries.push_back({"word/numbering.xml", head + "<w:numbering " + kW + ">" + numbering + "</w:numbering>"});
   }
   if (!footnotes.empty()) {
@@ -258,6 +258,41 @@ TEST(Layout_PageBreakKeepsItsParagraphMark) {
   CHECK(s->top > k->top + 10);  // below the mark's own line and the space before
 }
 
+TEST(Layout_AnEmptyNumberHasNoTabInMode15) {
+  // A list level that shows no number (as govuk-the-short-form-contract's defined terms): Word
+  // 2013 and later put no tab after it, older modes do.
+  const std::string numbering =
+      "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"none\"/>"
+      "<w:lvlText w:val=\"\"/><w:pPr><w:ind w:left=\"0\" w:firstLine=\"0\"/></w:pPr></w:lvl></w:abstractNum>"
+      "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+  const std::string body = P("Term", "<w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr>");
+  auto mode = [](int m) {
+    return "<w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" "
+           "w:val=\"" + std::to_string(m) + "\"/></w:compat>";
+  };
+  Doc now = Make(body, mode(15), "", true, "", "", numbering);
+  Doc old = Make(body, mode(11), "", true, "", "", numbering);
+  REQUIRE(now.layout && old.layout);
+  const LineBox *a = Find(now, u"Term"), *b = Find(old, u"Term");
+  REQUIRE(a && b);
+  CHECK(a->text.front() == u'T');
+  CHECK(b->text.front() == u'\t');
+}
+
+TEST(Layout_PageBreakBeforeDropsTheSpaceBefore) {
+  // A paragraph with w:pageBreakBefore starts its page at the top, without its space before, as
+  // after a page break character (tudresden, bund-bsi); after a section break the space stays.
+  Doc d = Make(P("one") + P("two", "<w:pageBreakBefore/><w:spacing w:before=\"480\"/>") +
+               "<w:p><w:pPr>" + SmallPage() + "</w:pPr></w:p>" + P("three", "<w:spacing w:before=\"480\"/>") + SmallPage());
+  REQUIRE(d.layout);
+  size_t p2 = 9, p3 = 9;
+  const LineBox *one = Find(d, u"one"), *two = Find(d, u"two", &p2), *three = Find(d, u"three", &p3);
+  REQUIRE(one && two && three);
+  CHECK(p2 == 1u && p3 == 2u);
+  CHECK_NEAR(two->top, one->top, 0.05f);
+  CHECK_NEAR(three->top, one->top + 24.0f, 0.05f);
+}
+
 TEST(Layout_SpacingBetweenParagraphsIsTheLarger) {
   const std::string body = P("A", "<w:spacing w:after=\"240\"/>") + P("B", "<w:spacing w:before=\"480\"/>");
   Doc html = Make(body);
@@ -268,6 +303,15 @@ TEST(Layout_SpacingBetweenParagraphsIsTheLarger) {
   REQUIRE(a && b && a2 && b2);
   CHECK_NEAR(b->top - (a->top + a->height), 24.0f, 0.05f);    // max(12, 24)
   CHECK_NEAR(b2->top - (a2->top + a2->height), 36.0f, 0.05f);  // 12 + 24
+}
+
+TEST(Layout_ContextualSpaceAfterComesOutOfTheNextSpaceBefore) {
+  // A has 8 pt after and contextual spacing; B (same style) has 24 pt before: Word leaves 16 pt.
+  Doc d = Make(P("A", "<w:spacing w:after=\"160\"/><w:contextualSpacing/>") + P("B", "<w:spacing w:before=\"480\"/>"));
+  REQUIRE(d.layout);
+  const LineBox *a = Find(d, u"A"), *b = Find(d, u"B");
+  REQUIRE(a && b);
+  CHECK_NEAR(b->top - (a->top + a->height), 16.0f, 0.05f);
 }
 
 TEST(Layout_KeepWithNextAndWidowControl) {
@@ -1371,26 +1415,6 @@ TEST(Layout_LineNumbersInTheMargin) {
   CHECK(std::abs(numbers[1].baseline - four->baseline) < 0.01f);
   CHECK(std::abs(numbers[1].x + numbers[1].line.contentRight - (20 - 18)) < 0.01f);  // 20 pt margin
   CHECK(d.layout->Dump("t").pages[0].lines.back().story == fw::LayoutStory::LineNumber);
-}
-
-TEST(Layout_AnEmptyListLabelHasNoTabAfterIt) {
-  auto lvl = [](int i, const char* fmt, const char* text) {
-    return "<w:lvl w:ilvl=\"" + std::to_string(i) + "\"><w:start w:val=\"1\"/><w:numFmt w:val=\"" + fmt +
-           "\"/><w:lvlText w:val=\"" + text + "\"/><w:pPr><w:ind w:left=\"0\" w:firstLine=\"0\"/></w:pPr></w:lvl>";
-  };
-  const std::string numbering = "<w:abstractNum w:abstractNumId=\"0\">" + lvl(0, "none", "") + lvl(1, "decimal", "%2.") +
-                                "</w:abstractNum><w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
-  auto p = [](int ilvl, const char* text) {
-    return "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"" + std::to_string(ilvl) + "\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr>" +
-           "<w:r><w:t>" + text + "</w:t></w:r></w:p>";
-  };
-  Doc d = Make(p(0, "Term") + p(1, "Item") + SmallPage(), "", "", true, "", "", numbering);
-  REQUIRE(d.doc && d.pages() == 1);
-  const LineBox* term = Find(d, u"Term");
-  const LineBox* item = Find(d, u"Item");
-  REQUIRE(term && item);
-  CHECK(term->text.front() == u'T');  // no label, no tab: the term starts at the margin
-  CHECK(item->text.substr(0, 3) == u"1.\t");
 }
 
 TEST(Layout_LinesSnapToTheDocumentGrid) {

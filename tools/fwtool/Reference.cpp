@@ -307,13 +307,17 @@ std::optional<ReferenceSet> ReadReferences(const std::filesystem::path& folder, 
   for (const fw::JsonValue& f : files->array) {
     ReferenceEntry e;
     e.source = f.StringOr("source");
-    if (!IsWordDocument(e.source)) continue;
+    // .odt copies too: Word renders them, and Featherweight imports them (`fwtool compare`).
+    const bool odt = fw::ToLower(std::filesystem::path(fw::Utf8ToWide(e.source)).extension().wstring()) == L".odt";
+    if (!IsWordDocument(e.source) && !odt) continue;
     e.document = set.corpus / fw::Utf8ToWide(e.source);
     std::string pdf = f.StringOr("pdf");
     if (!pdf.empty()) e.pdf = set.folder / fw::Utf8ToWide(pdf);
     if (const fw::JsonValue* pages = f.Find("pages"); pages && pages->type == fw::JsonValue::Type::Number)
       e.pages = static_cast<int>(pages->number);
     e.error = f.StringOr("error");
+    e.copyOf = f.StringOr("copyOf");
+    e.password = f.StringOr("password");
     if (e.pdf.empty() && e.error.empty()) e.error = "no PDF";
     set.entries.push_back(std::move(e));
   }

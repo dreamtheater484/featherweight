@@ -2,13 +2,19 @@
 // with fwdoclayout (src/doc/layout/Layout.h), marking each stage in OpenTimings.
 #include "LayoutHook.h"
 
+#include "Common.h"
+
 #include <chrono>
 #include <cstdio>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <random>
 
 #include "core/Strings.h"
+#include "doc/msdoc/MsDoc.h"
+#include "doc/odf/Odt.h"
 #include "doc/docx/Docx.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
@@ -19,6 +25,8 @@
 #include "doc/layout/Layout.h"
 #include "draw/D2DDevice.h"
 #include "draw/D2DPainter.h"
+#include "pkg/CompoundFile.h"
+#include "pkg/OfficeCrypto.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "text/Fonts.h"
@@ -40,20 +48,70 @@ fw::text::Fonts& SharedFonts() {
   return fonts;
 }
 
+// A document the app imports or decrypts first, as the .docx bytes it then reads: a Word 97-2003
+// .doc, an .odt, or a password-protected .docx or .doc opened with `password`. Empty without
+// `error` for a plain package, which is read directly.
+std::vector<uint8_t> ImportedDocx(const std::filesystem::path& document, std::wstring_view password, std::string& error) {
+  namespace crypto = fw::pkg::crypto;
+  const std::wstring ext = fw::ToLower(document.extension().wstring());
+  std::ifstream in(document, std::ios::binary);
+  std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  fw::pkg::Status status;
+  std::vector<uint8_t> docx;
+  if (auto cf = fw::pkg::CompoundFile::Open(bytes)) {
+    if (crypto::IsEncryptedPackage(*cf)) {
+      crypto::Key key;
+      if (crypto::Decrypt(*cf, password, docx, key) != crypto::Result::Ok) error = "the password doesn't open it";
+      return docx;
+    }
+    if (crypto::IsEncryptedDoc(*cf)) {
+      crypto::DocStreams s;
+      if (crypto::DecryptDoc(*cf, password, s) != crypto::Result::Ok) {
+        error = "the password doesn't open it";
+        return docx;
+      }
+      docx = fw::doc::msdoc::ToDocx(
+          [&](std::string_view name) -> std::optional<std::vector<uint8_t>> {
+            if (name == "WordDocument") return s.wordDocument;
+            if (name == s.table) return s.tableStream;
+            if (name == "Data") return s.data.empty() ? std::nullopt : std::optional<std::vector<uint8_t>>(s.data);
+            return cf->Stream(name);
+          },
+          status, true);
+    } else {
+      docx = fw::doc::msdoc::ToDocx([&](std::string_view name) { return cf->Stream(name); }, status);
+    }
+  } else if (ext == L".odt") {
+    status = fw::doc::odf::OdtToDocx(bytes, docx);
+    if (!status.Ok()) docx.clear();
+  } else {
+    return docx;
+  }
+  if (docx.empty()) error = status.message.empty() ? "can't be imported" : status.message;
+  return docx;
+}
+
 // Reads a document into the model as the app does.
 std::unique_ptr<fw::doc::Document> OpenModel(const std::filesystem::path& document, fw::OpenTimings* timings,
-                                             std::string& error) {
+                                             std::string& error, std::wstring_view password = {}) {
   fw::pkg::Status status;
-  fw::pkg::Snapshot::Options options;
-  std::error_code ec;
-  options.recoveryDir = (std::filesystem::temp_directory_path(ec) / L"fwtool-recovery").wstring();
-  auto snapshot = fw::pkg::Snapshot::Open(document.wstring(), options, status);
-  if (!snapshot) {
-    error = status.message.empty() ? "can't read the file" : status.message;
-    return nullptr;
+  std::unique_ptr<fw::pkg::Package> package;
+  std::vector<uint8_t> imported = ImportedDocx(document, password, error);
+  if (!error.empty()) return nullptr;
+  if (!imported.empty()) {
+    package = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(imported)), fw::pkg::Limits::Default(), status);
+  } else {
+    fw::pkg::Snapshot::Options options;
+    std::error_code ec;
+    options.recoveryDir = (std::filesystem::temp_directory_path(ec) / L"fwtool-recovery").wstring();
+    auto snapshot = fw::pkg::Snapshot::Open(document.wstring(), options, status);
+    if (!snapshot) {
+      error = status.message.empty() ? "can't read the file" : status.message;
+      return nullptr;
+    }
+    if (timings) timings->Mark(fw::OpenTimings::Read);
+    package = fw::pkg::Package::Open(std::move(snapshot), fw::pkg::Limits::Default(), status);
   }
-  if (timings) timings->Mark(fw::OpenTimings::Read);
-  auto package = fw::pkg::Package::Open(std::move(snapshot), fw::pkg::Limits::Default(), status);
   if (!package) {
     error = status.message.empty() ? "can't open the package" : status.message;
     return nullptr;
@@ -70,8 +128,8 @@ std::unique_ptr<fw::doc::Document> OpenModel(const std::filesystem::path& docume
 
 // Opens a document as the app does and lays out every page, then hands the layout to `use`.
 bool OpenAndLayOut(const std::filesystem::path& document, fw::OpenTimings* timings, std::string& error,
-                   const std::function<void(const fw::doc::layout::Layout&)>& use) {
-  std::unique_ptr<fw::doc::Document> doc = OpenModel(document, timings, error);
+                   const std::function<void(const fw::doc::layout::Layout&)>& use, std::wstring_view password = {}) {
+  std::unique_ptr<fw::doc::Document> doc = OpenModel(document, timings, error, password);
   if (!doc) return false;
   g_document = doc.get();
   // A document that carries fonts the PC doesn't have gets Fonts of its own, as in the app.
@@ -96,10 +154,13 @@ bool OpenAndLayOut(const std::filesystem::path& document, fw::OpenTimings* timin
 bool HaveLayout() { return true; }
 
 bool LayOutDocument(const std::filesystem::path& document, fw::LayoutDump* dump, fw::OpenTimings* timings,
-                    std::string& error) {
-  return OpenAndLayOut(document, timings, error, [&](const fw::doc::layout::Layout& layout) {
-    if (dump) *dump = layout.Dump(fw::WideToUtf8(document.filename().wstring()));
-  });
+                    std::string& error, std::wstring_view password) {
+  return OpenAndLayOut(
+      document, timings, error,
+      [&](const fw::doc::layout::Layout& layout) {
+        if (dump) *dump = layout.Dump(fw::WideToUtf8(document.filename().wstring()));
+      },
+      password);
 }
 
 bool WithLayout(const std::filesystem::path& document, std::string& error,

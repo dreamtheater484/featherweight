@@ -189,6 +189,23 @@ std::u16string FormatNumber(int64_t n, std::string_view fmt) {
   return ToUtf16(std::to_string(n));
 }
 
+namespace {
+
+// A paragraph that only holds a section break: properties with a w:sectPr, and nothing but
+// bookmarks and the like besides. Word gives it no number and doesn't count it in its list.
+bool OnlySectionBreak(Node p) {
+  Node ppr = p.Child(Name("pPr"));
+  if (!ppr || !ppr.Child(Name("sectPr"))) return false;
+  for (Node k : p.Kids())
+    if (!k.Is(Name("pPr")) && !k.Is(Name("bookmarkStart")) && !k.Is(Name("bookmarkEnd")) && !k.Is(Name("proofErr")) &&
+        !k.Is(Name("permStart")) && !k.Is(Name("permEnd")) && !k.Is(Name("commentRangeStart")) &&
+        !k.Is(Name("commentRangeEnd")))
+      return false;
+  return true;
+}
+
+}  // namespace
+
 std::optional<ListLabel> Document::Label(uint32_t para) const {
   if (para >= paras_.size()) return std::nullopt;
   Caches& c = *caches_;
@@ -196,7 +213,7 @@ std::optional<ListLabel> Document::Label(uint32_t para) const {
   if (story == kNone) return std::nullopt;
   // Not in a list: no label, without numbering the story as far as here (after an edit, a big
   // table's cells would each wait for that).
-  if (!InList(para) || ParaNode(para).DisplayOnly()) return std::nullopt;
+  if (!InList(para) || ParaNode(para).DisplayOnly() || OnlySectionBreak(ParaNode(para))) return std::nullopt;
   if (c.labelPass.size() < stories_.size()) c.labelPass.resize(stories_.size());
   Caches::LabelPass& pass = c.labelPass[story];
   if (pass.paras.empty()) pass.paras = StoryParagraphs(story);
@@ -205,7 +222,7 @@ std::optional<ListLabel> Document::Label(uint32_t para) const {
   auto& numSeen = pass.numSeen;
   while (!pass.Passed(para) && pass.next < pass.paras.size()) {
     uint32_t pi = pass.paras[pass.next++];
-    if (!InList(pi) || ParaNode(pi).DisplayOnly()) continue;
+    if (!InList(pi) || ParaNode(pi).DisplayOnly() || OnlySectionBreak(ParaNode(pi))) continue;
     const ParaProps& pp = ResolvedPara(pi);
     int32_t level = pp.ilvl;
     Node lvl = NumberingLevel(pp.numId, level);

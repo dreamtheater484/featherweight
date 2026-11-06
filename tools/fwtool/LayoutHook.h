@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/LayoutDump.h"
@@ -27,8 +28,9 @@ bool HaveLayout();
 // package, build the model, lay out the first page, then the rest. Marks each of those stages in
 // `timings` (if given; the caller has called Start()) and fills `dump` (if given) with every
 // line drawn (docs/layout-dump.md). Returns false with a plain message in `error` if it can't.
+// A .doc or .odt is imported, and a password-protected file decrypted with `password`, first.
 bool LayOutDocument(const std::filesystem::path& document, fw::LayoutDump* dump, fw::OpenTimings* timings,
-                    std::string& error);
+                    std::string& error, std::wstring_view password = {});
 
 // The same, handing the model and its laid-out pages to `use` (fwtool pdf-check).
 bool WithLayout(const std::filesystem::path& document, std::string& error,
