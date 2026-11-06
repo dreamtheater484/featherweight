@@ -102,6 +102,7 @@ if(FW_BUILD_TESTS)
   target_sources(fw_tests PRIVATE
     tests/unit/test_units.cpp
     tests/unit/test_zip.cpp
+    tests/unit/test_cfb.cpp
     tests/unit/test_xml.cpp
     tests/unit/test_package.cpp
     tests/unit/test_safefile.cpp

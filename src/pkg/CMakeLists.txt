@@ -2,6 +2,7 @@
 add_library(fwpkg STATIC
   Canonical.cpp
   Check.cpp
+  CompoundFile.cpp
   Derived.cpp
   Formula.cpp
   Limits.cpp
