@@ -58,7 +58,7 @@ fw::text::Fonts& Fonts() {
 }
 
 Doc Make(const std::string& body, const std::string& settings = "", const std::string& footnotes = "", bool all = true,
-         const std::string& fonts = "", const std::string& header = "") {
+         const std::string& fonts = "", const std::string& header = "", const std::string& numbering = "") {
   const std::string wml = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
   const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
   const std::string head = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>";
@@ -83,6 +83,11 @@ Doc Make(const std::string& body, const std::string& settings = "", const std::s
     types += "<Override PartName=\"/word/header1.xml\" ContentType=\"" + wml + "header+xml\"/>";
     rels += "<Relationship Id=\"rIdH\" Type=\"" + rel + "header\" Target=\"header1.xml\"/>";
     entries.push_back({"word/header1.xml", head + "<w:hdr " + kW + ">" + header + "</w:hdr>"});
+  }
+  if (!numbering.empty()) {
+    types += "<Override PartName=\"/word/numbering.xml\" ContentType=\"" + wml + "numbering+xml\"/>";
+    rels += "<Relationship Id=\"rIdN\" Type=\"" + rel + "numbering\" Target=\"numbering.xml\"/>";
+    entries.push_back({"word/numbering.xml", head + "<w:numbering " + kW + ">" + numbering + "</w:numbering>"});
   }
   if (!footnotes.empty()) {
     types += "<Override PartName=\"/word/footnotes.xml\" ContentType=\"" + wml + "footnotes+xml\"/>";
@@ -1349,6 +1354,26 @@ TEST(Layout_RightToLeftTableStartsAtTheRight) {
 
 // The document grid (w:docGrid, East Asian layout, D5): lines of a paragraph that snaps to it are
 // one grid pitch apart, and one that doesn't snap keeps its own height.
+TEST(Layout_AnEmptyListLabelHasNoTabAfterIt) {
+  auto lvl = [](int i, const char* fmt, const char* text) {
+    return "<w:lvl w:ilvl=\"" + std::to_string(i) + "\"><w:start w:val=\"1\"/><w:numFmt w:val=\"" + fmt +
+           "\"/><w:lvlText w:val=\"" + text + "\"/><w:pPr><w:ind w:left=\"0\" w:firstLine=\"0\"/></w:pPr></w:lvl>";
+  };
+  const std::string numbering = "<w:abstractNum w:abstractNumId=\"0\">" + lvl(0, "none", "") + lvl(1, "decimal", "%2.") +
+                                "</w:abstractNum><w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+  auto p = [](int ilvl, const char* text) {
+    return "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"" + std::to_string(ilvl) + "\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr>" +
+           "<w:r><w:t>" + text + "</w:t></w:r></w:p>";
+  };
+  Doc d = Make(p(0, "Term") + p(1, "Item") + SmallPage(), "", "", true, "", "", numbering);
+  REQUIRE(d.doc && d.pages() == 1);
+  const LineBox* term = Find(d, u"Term");
+  const LineBox* item = Find(d, u"Item");
+  REQUIRE(term && item);
+  CHECK(term->text.front() == u'T');  // no label, no tab: the term starts at the margin
+  CHECK(item->text.substr(0, 3) == u"1.\t");
+}
+
 TEST(Layout_LinesSnapToTheDocumentGrid) {
   const std::string text = "<w:r><w:t>" + std::string(60, 'x') + " " + std::string(60, 'x') + "</w:t></w:r>";
   const std::string sect = "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" "

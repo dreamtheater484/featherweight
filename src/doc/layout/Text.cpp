@@ -346,7 +346,10 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   if (options_.hideInsertions && props.numId.empty()) label.reset();  // numbering a tracked change added
   if (label) {
     std::u16string s = label->text;
-    if (label->suffix.empty() || label->suffix == "tab") s += u'\t';
+    // An empty label (w:numFmt none, no w:lvlText) has no tab or space after it either, as in Word
+    // (measured on the corpus: definition tables whose terms start at the cell's edge).
+    if (s.empty()) {
+    } else if (label->suffix.empty() || label->suffix == "tab") s += u'\t';
     else if (label->suffix == "space") s += u' ';
     if (!s.empty() && !(markProps.vanish && !options_.showHiddenText)) {
       text::TextStyle ls = StyleOf(label->props, false);
