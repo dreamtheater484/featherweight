@@ -10,6 +10,7 @@
 #include <numeric>
 #include <string_view>
 #include <tuple>
+#include <unordered_set>
 
 #include "core/OpenTimings.h"
 #include "doc/layout/Engine.h"
@@ -228,7 +229,8 @@ static void FlattenBody(const Document& doc, std::vector<Item>& items) {
 }
 
 Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, OpenTimings* timings)
-    : impl_(new Impl), doc_(doc), fonts_(fonts), options_(options), timings_(timings), generation_(doc.CacheGeneration()) {
+    : impl_(new Impl), doc_(doc), fonts_(fonts), options_(options), timings_(timings), generation_(doc.CacheGeneration()),
+      store_(doc.CacheStore()) {
   compatMode_ = doc.Settings().compatibilityMode > 0 ? doc.Settings().compatibilityMode : 12;
   sumSpacing_ = doc.Settings().Compat(Name("doNotUseHTMLParagraphAutoSpacing"));
   splitPageBreakAndMark_ = doc.Settings().Compat(Name("splitPgBreakAndParaMark"));
@@ -1748,12 +1750,8 @@ struct Flow {
     };
     for (Page& pg : e.pages_) page(pg);
     for (OldPage& o : f.old) page(o.page);
-    std::vector<const void*> seen;
-    auto once = [&](const void* p) {
-      if (!p || std::find(seen.begin(), seen.end(), p) != seen.end()) return false;
-      seen.push_back(p);
-      return true;
-    };
+    std::unordered_set<const void*> seen;  // a page each, and a paragraph each: not a list (H3)
+    auto once = [&](const void* p) { return p && seen.insert(p).second; };
     auto inProgress = [&](ParaText* pt, TableBox* t) {
       if (once(pt)) map(pt->para);
       if (once(t))
@@ -1906,7 +1904,10 @@ void Engine::Rebase() {
   if (doc_.CacheGeneration() == generation_) return;
   generation_ = doc_.CacheGeneration();
   Impl& f = *impl_;
-  f.lineCache.clear();  // every paragraph's version changed too
+  // The caches made again: the lines kept point into the old ones. (When only some paragraphs'
+  // went, theirs have new versions, and the others' lines stay.)
+  if (doc_.CacheStore() != store_) f.lineCache.clear();
+  store_ = doc_.CacheStore();
   const size_t n = doc_.Paragraphs().size();
   auto fix = [&](const std::shared_ptr<ParaText>& pt) {
     if (pt && pt->para < n) pt->props = &ParaOf(pt->para);

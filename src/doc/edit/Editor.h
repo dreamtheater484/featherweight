@@ -95,6 +95,10 @@ struct CustomStep {
   // With first: the paragraphs from here to the range's end didn't change, only list numbers in
   // them may have (TreeEdit::Local(true)). kNone: all of the range changed.
   uint32_t renumberFrom = kNone;
+  // With first: the paragraphs whose own elements it changed, [touchedFirst, touchedEnd), which the
+  // model reads again (a section's page setup changes only its w:sectPr: none, or one). kNone: the
+  // range above, to renumberFrom.
+  uint32_t touchedFirst = kNone, touchedEnd = kNone;
   // Paragraphs the step adds to the model or takes out of it (a note's story, D4), in the order
   // it does so, each as the Change it is then. Listeners hear of them after the range above;
   // undoing reverses them, newest first.

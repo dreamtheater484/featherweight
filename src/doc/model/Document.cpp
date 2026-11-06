@@ -1088,6 +1088,106 @@ void Document::BuildIndexes() {
 void Document::ResetCaches() {
   caches_ = std::make_unique<Caches>();
   ++cacheGeneration_;
+  ++cacheStore_;
+}
+
+void Document::RefreshCaches(uint32_t first, uint32_t end) {
+  Caches& c = *caches_;
+  end = std::min<uint32_t>(end, static_cast<uint32_t>(paras_.size()));
+  // What earlier edits left in the pools doesn't pile up: made again from nothing now and then.
+  if (c.paraPool.size() > 2 * paras_.size() + 4096 || c.runPool.size() > 2 * c.run.size() + 65536) {
+    ResetCaches();
+    BuildIndexes();
+    return;
+  }
+  ++cacheGeneration_;
+  std::vector<uint32_t> from(stories_.size(), kNone);  // by story: its first paragraph that changed
+  for (uint32_t p = first; p < end; ++p) {
+    for (std::vector<uint32_t>* v : {&c.para, &c.mark, &c.originalPara, &c.originalMark})
+      if (p < v->size()) (*v)[p] = kNone;
+    const ElemId top = paras_[p].elem;
+    for (ElemId id = top; id != kNoElem; id = NextInTree(tree_, id, top))
+      if (tree_.elems[id].def != kNoDef && Schema::Get().Elem(tree_.elems[id].def).name == names::kR) {
+        c.run.erase(id);
+        c.originalRun.erase(id);
+      }
+    if (const uint32_t s = paras_[p].story; s < from.size() && from[s] == kNone) from[s] = p;
+  }
+  for (uint32_t s = 0; s < from.size(); ++s)
+    if (from[s] != kNone) PassesFrom(s, from[s], 0, 0);
+  // The lookups again, with what was added (made again by BuildIndexes; the first entry wins).
+  c.styleIndex.clear();
+  c.nums.clear();
+  c.abstractNums.clear();
+  c.commentStory.clear();
+  c.footnoteStory.clear();
+  c.endnoteStory.clear();
+  BuildIndexes();
+}
+
+void Document::PassesFrom(uint32_t story, uint32_t first, uint32_t removed, uint32_t added) {
+  Caches& c = *caches_;
+  const int64_t shift = static_cast<int64_t>(added) - static_cast<int64_t>(removed);
+  // A paragraph's number before the change, now: kNone for one that changed or went.
+  auto now = [&](uint32_t p) -> uint32_t {
+    if (p < first) return p;
+    if (p < first + removed) return kNone;
+    return static_cast<uint32_t>(p + shift);
+  };
+  // A pass's paragraphs renumbered, the story's own with the ones the change made in their place
+  // (none yet: the pass hasn't started).
+  auto renumber = [&](std::vector<uint32_t>& paras, bool own) {
+    if (shift == 0 || paras.empty()) return;
+    std::vector<uint32_t> out;
+    out.reserve(paras.size() + added);
+    bool made = !own;
+    for (uint32_t p : paras) {
+      if (p >= first && !made) {
+        for (uint32_t k = 0; k < added; ++k) out.push_back(first + k);
+        made = true;
+      }
+      if (const uint32_t q = now(p); q != kNone) out.push_back(q);
+    }
+    if (!made)
+      for (uint32_t k = 0; k < added; ++k) out.push_back(first + k);
+    paras = std::move(out);
+  };
+  // What's kept by paragraph, under its number now; the story's own from `first` on goes.
+  auto rekey = [&](auto& map, uint32_t from) {
+    std::remove_reference_t<decltype(map)> out;
+    out.reserve(map.size());
+    for (auto& [p, value] : map) {
+      const uint32_t q = now(p);
+      if (q == kNone || q >= paras_.size() || (q >= from && paras_[q].story == story)) continue;
+      out.emplace(q, std::move(value));
+    }
+    map = std::move(out);
+  };
+  // List labels: numbered again from the story's start (the counters where it starts aren't kept).
+  bool labels = false;
+  for (uint32_t s = 0; s < c.labelPass.size(); ++s) {
+    Caches::LabelPass& pass = c.labelPass[s];
+    if (s == story && pass.Passed(first)) {
+      pass = {};
+      labels = true;
+    } else {
+      renumber(pass.paras, s == story);
+    }
+  }
+  if (labels || shift != 0) rekey(c.labels, labels ? first : static_cast<uint32_t>(paras_.size()));
+  // Field state: the pass goes back to where the paragraph starts, the state there as it was.
+  for (uint32_t s = 0; s < c.fieldPass.size(); ++s) {
+    Caches::FieldPass& pass = c.fieldPass[s];
+    if (s != story || !pass.Passed(first)) {
+      renumber(pass.paras, s == story);
+      continue;
+    }
+    const auto at = c.fieldStack.find(first);  // where `first` starts, which the change doesn't move
+    pass.open = at != c.fieldStack.end() ? at->second : std::vector<uint8_t>();
+    renumber(pass.paras, true);
+    pass.next = static_cast<size_t>(std::lower_bound(pass.paras.begin(), pass.paras.end(), first) - pass.paras.begin());
+  }
+  rekey(c.fieldStack, first + 1);
 }
 
 void Document::BuildSections() {

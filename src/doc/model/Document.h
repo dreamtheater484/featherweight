@@ -447,10 +447,13 @@ class Document {
   const pkg::ReferenceRegistry& Registry() const { return *registry_; }
 
   struct Caches;  // the model's own (Internal.h)
-  // Changes each time the caches are made again (an edit that changes styles, sections or
-  // formatting in place, edit::TreeEdit): what ResolvedPara and ResolvedRun gave before is gone,
-  // and whoever kept a reference to it looks it up again.
+  // Changes each time an edit changes styles, sections or formatting in place (edit::TreeEdit):
+  // what ResolvedPara and ResolvedRun give may read differently, so whoever shows it looks again.
   uint64_t CacheGeneration() const { return cacheGeneration_; }
+  // Changes when the caches are made again from nothing: what ResolvedPara and ResolvedRun gave
+  // before is gone, and whoever kept a reference to it looks it up again. After a change only some
+  // paragraphs read differently (edit::TreeEdit::Local), only theirs went; the rest stays put.
+  uint64_t CacheStore() const { return cacheStore_; }
 
   // ---- Memory (plan §11: the store stays under a quarter of the model)
   size_t ModelBytes() const;
@@ -491,8 +494,17 @@ class Document {
   };
   std::vector<CommentEx> commentsEx_;  // word/commentsExtended.xml; written again from this (D4)
   std::unique_ptr<Caches> caches_;
-  uint64_t cacheGeneration_ = 0;
+  uint64_t cacheGeneration_ = 0, cacheStore_ = 0;
   void ResetCaches();
+  // After a change that only paragraphs [first, end) read differently, whatever it added to the
+  // styles and numbering: what's cached for them goes, and the list labels and field state of
+  // their story from there on; the rest stays. The indexes are built again. (An empty range: only
+  // the indexes, for definitions added.)
+  void RefreshCaches(uint32_t first, uint32_t end);
+  // The list labels and field state of `story` from paragraph `first` on go (its passes go back
+  // there, or the labels' to its start); after paragraphs [first, first + removed) were replaced
+  // by `added` others, every story's kept from after them moves along.
+  void PassesFrom(uint32_t story, uint32_t first, uint32_t removed, uint32_t added);
   std::shared_ptr<bool> alive_;  // false once the document is gone, for the registry hook
 };
 
