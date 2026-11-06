@@ -4,6 +4,7 @@
 #include "doc/odf/Odt.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <optional>
@@ -122,6 +123,8 @@ struct RunProps {
   std::string font, color, shade, lang, vert;
   int size = 0;  // half-points
   int b = -1, i = -1, caps = -1, smallCaps = -1, strike = -1, u = -1;  // -1: not set
+  std::optional<int> spacing;  // fo:letter-spacing, twips ("normal" is 0)
+  int scale = 0;               // style:text-scale, percent (0: not set)
 
   void Read(xml_node p, const std::unordered_map<std::string, std::string>& fonts) {
     if (!p) return;
@@ -140,6 +143,10 @@ struct RunProps {
     if (auto s = Attr(p, "style:text-line-through-style"); !s.empty()) strike = s != "none";
     if (auto s = Attr(p, "style:text-underline-style"); !s.empty()) u = s == "none" ? 0 : Attr(p, "style:text-underline-type") == "double" ? 2 : 1;
     if (auto c = Attr(p, "fo:color"); !c.empty()) color = Color(c);
+    if (auto ls = Attr(p, "fo:letter-spacing"); ls == "normal") spacing = 0;
+    else if (auto v = Twips(ls)) spacing = std::clamp(*v, -31680, 31680);
+    if (auto ts = Attr(p, "style:text-scale"); !ts.empty() && ts.back() == '%')
+      scale = std::clamp(std::atoi(std::string(ts).c_str()), 1, 600);
     if (auto c = Attr(p, "fo:background-color"); !c.empty()) shade = Color(c);
     if (auto pos = Attr(p, "style:text-position"); !pos.empty())
       vert = pos.starts_with("super") || (pos[0] != '-' && pos[0] != '0' && std::isdigit(static_cast<unsigned char>(pos[0]))) ? "superscript"
@@ -157,6 +164,8 @@ struct RunProps {
     if (!o.lang.empty()) lang = o.lang;
     if (!o.vert.empty()) vert = o.vert;
     if (o.size) size = o.size;
+    if (o.spacing) spacing = o.spacing;
+    if (o.scale) scale = o.scale;
     for (auto [mine, theirs] : {std::pair{&b, o.b}, {&i, o.i}, {&caps, o.caps}, {&smallCaps, o.smallCaps}, {&strike, o.strike}, {&u, o.u}})
       if (theirs >= 0) *mine = theirs;
   }
@@ -178,6 +187,8 @@ struct RunProps {
     flag(smallCaps, "smallCaps");
     flag(strike, "strike");
     if (!color.empty()) s += "<w:color w:val=\"" + color + "\"/>";
+    if (spacing) s += "<w:spacing w:val=\"" + std::to_string(*spacing) + "\"/>";
+    if (scale) s += "<w:w w:val=\"" + std::to_string(scale) + "\"/>";
     if (size) s += "<w:sz w:val=\"" + std::to_string(size) + "\"/><w:szCs w:val=\"" + std::to_string(size) + "\"/>";
     if (u >= 0) s += std::string("<w:u w:val=\"") + (u == 0 ? "none" : u == 2 ? "double" : "single") + "\"/>";
     if (!shade.empty()) s += "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"" + shade + "\"/>";
@@ -187,8 +198,12 @@ struct RunProps {
   }
 };
 
+std::string Border(const char* side, std::string_view v);
+
 struct ParaProps {
   std::string jc, shade, tabs;
+  std::array<std::string, 4> border;     // ODF's borders: top, left, bottom, right
+  std::array<std::optional<double>, 4> padding;  // points
   std::optional<int> before, after, left, right, first, line, outline;
   std::string lineRule;
   bool keepNext = false, pageBreak = false;
@@ -217,6 +232,14 @@ struct ParaProps {
       lineRule = "atLeast";
     }
     if (auto c = Attr(p, "fo:background-color"); !c.empty()) shade = Color(c);
+    static const char* const kBorder[] = {"fo:border-top", "fo:border-left", "fo:border-bottom", "fo:border-right"};
+    static const char* const kPadding[] = {"fo:padding-top", "fo:padding-left", "fo:padding-bottom", "fo:padding-right"};
+    for (size_t k = 0; k < 4; ++k) {
+      if (auto b = Attr(p, kBorder[k]); !b.empty()) border[k] = std::string(b);
+      else if (auto all = Attr(p, "fo:border"); !all.empty()) border[k] = std::string(all);
+      if (auto v = Points(Attr(p, kPadding[k]))) padding[k] = *v;
+      else if (auto all = Points(Attr(p, "fo:padding"))) padding[k] = *all;
+    }
     if (Attr(p, "fo:keep-with-next") == "always") keepNext = true;
     if (Attr(p, "fo:break-before") == "page") pageBreak = true;
     std::string t;
@@ -236,6 +259,19 @@ struct ParaProps {
     if (keepNext) s += "<w:keepNext/>";
     if (pageBreak) s += "<w:pageBreakBefore/>";
     s += numPr;
+    // Borders, each its padding from the text as w:space (whole points, at most 31).
+    if (std::any_of(border.begin(), border.end(), [](const std::string& b) { return !b.empty(); })) {
+      static const char* const kSide[] = {"top", "left", "bottom", "right"};
+      std::string b;
+      for (size_t k = 0; k < 4; ++k) {
+        std::string one = Border(kSide[k], border[k]);
+        const size_t at = one.find(" w:space=\"0\"");
+        if (at != std::string::npos && padding[k])
+          one.replace(at, 12, " w:space=\"" + std::to_string(std::clamp(static_cast<int>(std::lround(*padding[k])), 0, 31)) + "\"");
+        b += one;
+      }
+      if (!b.empty()) s += "<w:pBdr>" + b + "</w:pBdr>";
+    }
     if (!shade.empty()) s += "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"" + shade + "\"/>";
     s += tabs;
     if (before || after || line) {
@@ -327,6 +363,9 @@ class Converter {
   int Num(std::string_view listStyle, bool restart);
   std::string NumPr(std::string_view listStyle, int level, bool restart);
   std::string SectPr();
+  int TextWidth() const;  // the section's text width, twips
+  // A paragraph that starts another page style: the section before it ends with the paragraph before.
+  void SectionBreak(std::string& out, std::string_view master, std::string_view pageNumber);
   std::string StylesXml();
   std::string NumberingXml();
 
@@ -334,9 +373,18 @@ class Converter {
   const pkg::Limits& limits_;
   pkg::XmlDom content_, styles_;
   std::unordered_map<std::string, std::string> fonts_;
+  std::map<std::string, xml_node> faces_;  // each font's declaration, by its family name: the font table
+  std::string FontTableXml() const;
+  // Bookmarks' text, for references that show it (reference-format "text"): read before the body is written.
+  void BookmarkTexts(xml_node parent, int depth);
+  std::unordered_map<std::string, std::string> refText_, openText_;
+  size_t refBudget_ = 4 << 20;  // the most text references may repeat, in bytes
+  size_t refCollect_ = 16 << 20;  // the most bookmark text kept
   std::unordered_map<std::string, Style> named_, autos_[2];  // "family\nname"
   std::unordered_map<std::string, xml_node> listStyles_[2], pageLayouts_;
-  xml_node outline_, defaults_, master_;
+  xml_node outline_, defaults_, master_;  // master_: the page style of the section being written
+  int pageStart_ = 0;                      // its first page's number, when it starts again (0: it doesn't)
+  std::string* body_ = nullptr;            // the body's blocks, where sections end
   int scope_ = 0;  // 0: the body's automatic styles; 1: styles.xml's (headers and footers)
 
   std::vector<OutPart> parts_;
@@ -420,7 +468,12 @@ pkg::Status Converter::Load(const char* name, pkg::XmlDom& dom, bool required) {
 
 void Converter::ReadStyles(xml_node root, int scope) {
   for (xml_node f : root.child("office:font-face-decls").children("style:font-face"))
-    if (auto fam = Attr(f, "svg:font-family"); !fam.empty()) fonts_[f.attribute("style:name").value()] = std::string(fam);
+    if (auto fam = Attr(f, "svg:font-family"); !fam.empty()) {
+      fonts_[f.attribute("style:name").value()] = std::string(fam);
+      std::string name(fam);
+      name.erase(std::remove(name.begin(), name.end(), '\''), name.end());
+      if (!name.empty() && !faces_.count(name)) faces_[name] = f;
+    }
   auto read = [&](xml_node group, bool automatic) {
     for (xml_node s : group.children()) {
       const std::string_view n = s.name();
@@ -615,7 +668,10 @@ void Converter::Paragraph(xml_node p, std::string& out, int depth, std::string_v
   if (st && autos_[scope_].count("paragraph\n" + std::string(styleName))) {
     pp.Read(st->node.child("style:paragraph-properties"));
     mark.Read(st->node.child("style:text-properties"), fonts_);
-    if (!st->master.empty() && !firstParagraph_ && scope_ == 0) pp.pageBreak = true;
+    if (!st->master.empty() && !firstParagraph_ && scope_ == 0) {
+      if (&out == body_) SectionBreak(out, st->master, Attr(st->node.child("style:paragraph-properties"), "style:page-number"));
+      else pp.pageBreak = true;  // in a table or a note: the page style can't change there
+    }
   }
   pStyle = Mapped("paragraph", styleName);
   const bool heading = std::string_view(p.name()) == "text:h";
@@ -692,8 +748,20 @@ void Converter::Table(xml_node table, std::string& out, int depth) {
   std::string tblPr = "<w:tblW w:w=\"0\" w:type=\"auto\"/>";
   if (const Style* s = Find("table", Attr(table, "table:style-name"))) {
     xml_node tp = s->node.child("style:table-properties");
+    // A width relative to the text's: Word fits the columns to it.
+    if (auto rel = Attr(tp, "style:rel-width"); !rel.empty() && rel.back() == '%') {
+      const int pct = std::clamp(std::atoi(std::string(rel).c_str()), 1, 100);
+      tblPr = "<w:tblW w:w=\"" + std::to_string(pct * 50) + "\" w:type=\"pct\"/>";
+      const int text = TextWidth();
+      long long sum = 0;
+      for (int w : widths) sum += w;
+      if (&out == body_ && text > 0 && sum > 0)
+        for (int& w : widths) w = static_cast<int>(std::max<long long>(1, static_cast<long long>(w) * text * pct / 100 / sum));
+    }
     if (auto a = Attr(tp, "table:align"); a == "center" || a == "right")
       tblPr += std::string("<w:jc w:val=\"") + (a == "center" ? "center" : "right") + "\"/>";
+    if (auto ind = Twips(Attr(tp, "fo:margin-left")); ind && *ind != 0 && Attr(tp, "table:align") != "center")
+      tblPr += "<w:tblInd w:w=\"" + std::to_string(std::clamp(*ind, -31680, 31680)) + "\" w:type=\"dxa\"/>";
   }
   out += "<w:tbl><w:tblPr>" + tblPr + "<w:tblLayout w:type=\"fixed\"/></w:tblPr><w:tblGrid>";
   for (int w : widths) out += "<w:gridCol w:w=\"" + std::to_string(w) + "\"/>";
@@ -701,7 +769,20 @@ void Converter::Table(xml_node table, std::string& out, int depth) {
   std::vector<std::pair<int, int>> below(cols, {0, 1});  // rows still merged down from above, and their span
   for (size_t r = 0; r < rows.size(); ++r) {
     out += "<w:tr>";
-    if (header[r]) out += "<w:trPr><w:tblHeader/></w:trPr>";
+    {
+      // The row: kept on one page, its height, a header that repeats.
+      std::string trPr;
+      if (const Style* rs = Find("table-row", Attr(rows[r], "table:style-name"))) {
+        xml_node rp = rs->node.child("style:table-row-properties");
+        if (Attr(rp, "fo:keep-together") == "always") trPr += "<w:cantSplit/>";
+        if (auto h = Twips(Attr(rp, "style:row-height")); h && *h > 0)
+          trPr += "<w:trHeight w:val=\"" + std::to_string(std::min(*h, 31680)) + "\" w:hRule=\"exact\"/>";
+        else if (auto m = Twips(Attr(rp, "style:min-row-height")); m && *m > 0)
+          trPr += "<w:trHeight w:val=\"" + std::to_string(std::min(*m, 31680)) + "\" w:hRule=\"atLeast\"/>";
+      }
+      if (header[r]) trPr += "<w:tblHeader/>";
+      if (!trPr.empty()) out += "<w:trPr>" + trPr + "</w:trPr>";
+    }
     size_t col = 0;
     bool any = false;
     for (xml_node c : rows[r].children()) {
@@ -735,7 +816,7 @@ void Converter::Table(xml_node table, std::string& out, int depth) {
           tcPr += "<w:vMerge w:val=\"restart\"/>";
           below[col] = {down - 1, span};
         }
-        std::string borders, shade, valign;
+        std::string borders, shade, valign, margins;
         if (const Style* s = Find("table-cell", Attr(c, "table:style-name"))) {
           xml_node cp = s->node.child("style:table-cell-properties");
           const std::string_view all = Attr(cp, "fo:border");
@@ -745,11 +826,20 @@ void Converter::Table(xml_node table, std::string& out, int depth) {
           }
           if (auto bg = Color(Attr(cp, "fo:background-color")); !bg.empty())
             shade = "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"" + bg + "\"/>";
+          // The cell's padding: its margins.
+          static const std::pair<const char*, const char*> kPad[] = {
+              {"top", "fo:padding-top"}, {"left", "fo:padding-left"}, {"bottom", "fo:padding-bottom"}, {"right", "fo:padding-right"}};
+          for (auto [side, attr] : kPad) {
+            std::optional<int> v = Twips(Attr(cp, attr));
+            if (!v) v = Twips(Attr(cp, "fo:padding"));
+            if (v) margins += std::string("<w:") + side + " w:w=\"" + std::to_string(std::clamp(*v, 0, 31680)) + "\" w:type=\"dxa\"/>";
+          }
+          if (!margins.empty()) margins = "<w:tcMar>" + margins + "</w:tcMar>";
           if (auto va = Attr(cp, "style:vertical-align"); va == "middle" || va == "bottom")
             valign = std::string("<w:vAlign w:val=\"") + (va == "middle" ? "center" : "bottom") + "\"/>";
         }
         if (!borders.empty()) tcPr += "<w:tcBorders>" + borders + "</w:tcBorders>";
-        tcPr += shade + valign;
+        tcPr += shade + margins + valign;
         std::string inner;
         Blocks(c, inner, depth + 1);
         if (inner.size() < 7 || inner.compare(inner.size() - 6, 6, "</w:p>") != 0) inner += "<w:p/>";
@@ -789,6 +879,54 @@ void Converter::Text(std::string_view text, Inline& in, std::string& out) {
   const std::string rpr = in.props.Xml(in.rStyle);
   out += "<w:r>" + (rpr.empty() ? std::string() : "<w:rPr>" + rpr + "</w:rPr>") + "<w:t xml:space=\"preserve\">" + Esc(t) +
          "</w:t></w:r>";
+}
+
+void Converter::BookmarkTexts(xml_node parent, int depth) {
+  constexpr size_t kMost = 4096;  // a bookmark's text that a reference repeats, at most
+  auto add = [&](std::string_view t) {
+    for (auto& [name, text] : openText_)
+      for (char ch : t) {
+        if (text.size() >= kMost) break;
+        const bool white = ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+        if (white && (text.empty() || text.back() == ' ')) continue;  // ODF's white space collapses
+        if (refCollect_ == 0) return;
+        --refCollect_;
+        text += white ? ' ' : ch;
+      }
+  };
+  for (xml_node c : parent.children()) {
+    if (c.type() == pugi::node_pcdata || c.type() == pugi::node_cdata) {
+      if (!openText_.empty()) add(c.value());
+      continue;
+    }
+    if (c.type() != pugi::node_element) continue;
+    const std::string_view n = c.name();
+    const std::string name(Attr(c, "text:name"));
+    if (n == "text:bookmark-start") {
+      if (!name.empty() && !refText_.count(name) && openText_.size() < 64) openText_.emplace(name, std::string());
+    } else if (n == "text:bookmark-end") {
+      if (auto it = openText_.find(name); it != openText_.end()) {
+        while (!it->second.empty() && it->second.back() == ' ') it->second.pop_back();
+        // Cut at kMost: not inside a character.
+        if (it->second.size() >= kMost)
+          while (!it->second.empty() && (static_cast<unsigned char>(it->second.back()) & 0xC0) == 0x80) it->second.pop_back();
+        if (!it->second.empty() && static_cast<unsigned char>(it->second.back()) >= 0xC0) it->second.pop_back();
+        refText_[name] = std::move(it->second);
+        openText_.erase(it);
+      }
+    } else if (n == "text:s" || n == "text:tab") {
+      if (!openText_.empty()) add(" ");
+    } else if (n == "text:bookmark-ref" && !openText_.empty() &&
+               (Attr(c, "text:reference-format") == "text" || Attr(c, "text:reference-format").empty()) &&
+               refText_.count(std::string(Attr(c, "text:ref-name")))) {
+      add(refText_[std::string(Attr(c, "text:ref-name"))]);  // a reference in the text: what it shows
+    } else if (n == "text:note" || n == "office:annotation" || n == "text:tracked-changes" || n.starts_with("text:change")) {
+      continue;
+    } else if (depth < kMaxDepth) {
+      if ((n == "text:p" || n == "text:h") && !openText_.empty()) add(" ");  // paragraphs: a space between
+      BookmarkTexts(c, depth + 1);
+    }
+  }
 }
 
 void Converter::Runs(xml_node parent, Inline& in, std::string& out, std::string& after, int depth) {
@@ -899,6 +1037,22 @@ void Converter::Runs(xml_node parent, Inline& in, std::string& out, std::string&
       out += std::string("<w:fldSimple w:instr=\"") + (n == "text:page-number" ? " PAGE " : " NUMPAGES ") + "\"><w:r>" +
              (rpr.empty() ? std::string() : "<w:rPr>" + rpr + "</w:rPr>") + "<w:t>" + Esc(result) + "</w:t></w:r></w:fldSimple>";
       in.space = false;
+    } else if (n == "text:bookmark-ref" && (Attr(c, "text:reference-format") == "text" || Attr(c, "text:reference-format").empty()) &&
+               refText_.count(std::string(Attr(c, "text:ref-name"))) && !refText_[std::string(Attr(c, "text:ref-name"))].empty() &&
+               Attr(c, "text:ref-name").find_first_of(" \"\\") == std::string_view::npos &&
+               refText_[std::string(Attr(c, "text:ref-name"))].size() <= refBudget_) {
+      // A reference to the bookmark's text shows that text (the file keeps what it showed when saved: Word
+      // writes its numbered references so, and shows the text when it reads them back).
+      std::string name(Attr(c, "text:ref-name"));
+      const std::string& text = refText_[name];
+      refBudget_ -= text.size();
+      size_t cut = std::min<size_t>(name.size(), 40);  // as the bookmark's name was cut
+      while (cut > 0 && cut < name.size() && (static_cast<unsigned char>(name[cut]) & 0xC0) == 0x80) --cut;
+      name.resize(cut);
+      const std::string rpr = in.props.Xml(in.rStyle);
+      out += "<w:fldSimple w:instr=\" REF " + Esc(name) + " \\h \"><w:r>" + (rpr.empty() ? std::string() : "<w:rPr>" + rpr + "</w:rPr>") +
+             "<w:t xml:space=\"preserve\">" + Esc(text) + "</w:t></w:r></w:fldSimple>";
+      in.space = text.back() == ' ';
     } else if (n == "office:annotation" || n == "office:annotation-end" || n == "text:soft-page-break" ||
                n.starts_with("text:change") || n == "text:tracked-changes" || n == "text:ruby-text" ||
                n == "text:sequence-decls" || n == "text:variable-decls" || n == "text:user-field-decls") {
@@ -976,7 +1130,48 @@ void Converter::Picture(xml_node frame, std::string& out) {
   std::string descr(frame.child("svg:desc").text().get());
   if (descr.empty()) descr = frame.child("svg:title").text().get();
   const std::string extent = "<wp:extent cx=\"" + std::to_string(cx) + "\" cy=\"" + std::to_string(cy) + "\"/>";
-  out += "<w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">" + extent + "<wp:docPr id=\"" +
+  // A frame anchored to the paragraph, a character or the page floats where its graphic style puts it.
+  const std::string_view anchor = Attr(frame, "text:anchor-type");
+  const bool floating = anchor == "paragraph" || anchor == "char" || anchor == "page";
+  std::string open = "<wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">" + extent, close = "</wp:inline>";
+  if (floating) {
+    xml_node gp;
+    if (const Style* st = Find("graphic", Attr(frame, "draw:style-name"))) gp = st->node.child("style:graphic-properties");
+    auto rel = [&](const char* attr, bool horizontal) -> std::string {
+      const std::string_view v = Attr(gp, attr);
+      if (v == "page" || anchor == "page") return "page";
+      if (v == "page-content" || v == "page-start-margin" || v == "page-end-margin") return "margin";
+      if (v == "char" || v == "line" || v == "baseline" || v == "text") return horizontal ? "character" : "line";
+      return horizontal ? "column" : "paragraph";
+    };
+    auto pos = [&](bool horizontal) {
+      const std::string_view p = Attr(gp, horizontal ? "style:horizontal-pos" : "style:vertical-pos");
+      std::string align;
+      if (horizontal) align = p == "left" ? "left" : p == "center" ? "center" : p == "right" ? "right" : p == "inside" ? "inside" : p == "outside" ? "outside" : "";
+      else align = p == "top" ? "top" : p == "middle" ? "center" : p == "bottom" ? "bottom" : "";
+      const char* tag = horizontal ? "positionH" : "positionV";
+      std::string x = std::string("<wp:") + tag + " relativeFrom=\"" + rel(horizontal ? "style:horizontal-rel" : "style:vertical-rel", horizontal) + "\">";
+      if (!align.empty()) x += "<wp:align>" + align + "</wp:align>";
+      else {
+        const std::optional<double> pt = Points(Attr(frame, horizontal ? "svg:x" : "svg:y"));
+        x += "<wp:posOffset>" + std::to_string(std::clamp<int64_t>(pt ? std::llround(*pt * 12700) : 0, -20000000, 20000000)) + "</wp:posOffset>";
+      }
+      return x + "</wp:" + tag + ">";
+    };
+    const std::string_view wrap = Attr(gp, "style:wrap");
+    const bool behind = wrap == "run-through" && Attr(gp, "style:run-through") == "background";
+    std::string wrapXml = wrap == "none" ? "<wp:wrapTopAndBottom/>"
+                          : wrap == "run-through" ? "<wp:wrapNone/>"
+                          : std::string("<wp:wrapSquare wrapText=\"") + (wrap == "left" ? "left" : wrap == "right" ? "right" : wrap == "dynamic" ? "largest" : "bothSides") + "\"/>";
+    auto dist = [&](const char* attr) { return std::to_string(std::clamp<int64_t>(Emu(Attr(gp, attr), 0), 0, 2000000)); };
+    const int z = std::clamp(std::atoi(Attr(frame, "draw:z-index").data()), 0, 0x7FFFFFFF);
+    open = "<wp:anchor distT=\"" + dist("fo:margin-top") + "\" distB=\"" + dist("fo:margin-bottom") + "\" distL=\"" + dist("fo:margin-left") +
+           "\" distR=\"" + dist("fo:margin-right") + "\" simplePos=\"0\" relativeHeight=\"" + std::to_string(z) + "\" behindDoc=\"" +
+           (behind ? "1" : "0") + "\" locked=\"0\" layoutInCell=\"1\" allowOverlap=\"1\"><wp:simplePos x=\"0\" y=\"0\"/>" + pos(true) + pos(false) +
+           extent + wrapXml;
+    close = "</wp:anchor>";
+  }
+  out += "<w:r><w:drawing>" + open + "<wp:docPr id=\"" +
          std::to_string(id) + "\" name=\"Picture " + std::to_string(id) + "\"" +
          (descr.empty() ? std::string() : " descr=\"" + Esc(descr) + "\"") +
          "/><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:pic>"
@@ -985,10 +1180,37 @@ void Converter::Picture(xml_node frame, std::string& out) {
          "\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"" +
          std::to_string(cx) + "\" cy=\"" + std::to_string(cy) +
          "\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData>"
-         "</a:graphic></wp:inline></w:drawing></w:r>";
+         "</a:graphic>" + close + "</w:drawing></w:r>";
 }
 
 // ---------- Parts ----------
+
+// The font table: what Word (and layout) substitute a font that isn't installed by, its family and pitch.
+std::string Converter::FontTableXml() const {
+  std::string s = std::string(kDecl) + "<w:fonts " + std::string(kNs) + ">";
+  for (const auto& [name, f] : faces_) {
+    s += "<w:font w:name=\"" + Esc(name) + "\">";
+    // svg:panose-1 "2 15 5 2 2 2 4 3 2 4" as "020F0502020204030204"; all zeros says nothing.
+    std::string panose;
+    bool known = false;
+    for (std::string_view v = Attr(f, "svg:panose-1"); !v.empty();) {
+      const size_t sp = v.find(' ');
+      const int n = std::atoi(std::string(v.substr(0, sp)).c_str());
+      static const char kHex[] = "0123456789ABCDEF";
+      panose += kHex[(n >> 4) & 15];
+      panose += kHex[n & 15];
+      known = known || n != 0;
+      v = sp == std::string_view::npos ? std::string_view() : v.substr(sp + 1);
+    }
+    if (known && panose.size() == 20) s += "<w:panose1 w:val=\"" + panose + "\"/>";
+    if (Attr(f, "style:font-charset") == "x-symbol") s += "<w:charset w:val=\"02\"/>";
+    const std::string_view g = Attr(f, "style:font-family-generic");
+    if (g == "roman" || g == "swiss" || g == "modern" || g == "script" || g == "decorative") s += "<w:family w:val=\"" + std::string(g) + "\"/>";
+    if (const std::string_view p = Attr(f, "style:font-pitch"); p == "fixed" || p == "variable") s += "<w:pitch w:val=\"" + std::string(p) + "\"/>";
+    s += "</w:font>";
+  }
+  return s + "</w:fonts>";
+}
 
 std::string Converter::StylesXml() {
   RunProps base;
@@ -1050,6 +1272,33 @@ std::string Converter::StylesXml() {
   return s + "</w:styles>";
 }
 
+void Converter::SectionBreak(std::string& out, std::string_view master, std::string_view pageNumber) {
+  const std::string sect = SectPr();
+  const size_t full = out.rfind("<w:p>"), empty = out.rfind("<w:p/>");
+  const bool para = out.size() >= 6 && (out.compare(out.size() - 6, 6, "</w:p>") == 0 || out.compare(out.size() - 6, 6, "<w:p/>") == 0);
+  if (!para) {
+    out += "<w:p><w:pPr>" + sect + "</w:pPr></w:p>";  // after a table, a paragraph to hold it
+  } else if (empty != std::string::npos && (full == std::string::npos || empty > full)) {
+    out.replace(empty, 6, "<w:p><w:pPr>" + sect + "</w:pPr></w:p>");
+  } else if (out.compare(full + 5, 7, "<w:pPr>") == 0) {
+    out.insert(out.find("</w:pPr>", full), sect);  // after its w:rPr, as the schema orders them
+  } else {
+    out.insert(full + 5, "<w:pPr>" + sect + "</w:pPr>");
+  }
+  for (xml_node m : styles_.Root().child("office:master-styles").children("style:master-page"))
+    if (Attr(m, "style:name") == master) master_ = m;
+  pageStart_ = std::clamp(std::atoi(std::string(pageNumber).c_str()), 0, 32767);
+}
+
+int Converter::TextWidth() const {
+  xml_node layout;
+  if (master_)
+    if (auto it = pageLayouts_.find(Attr(master_, "style:page-layout-name").data()); it != pageLayouts_.end()) layout = it->second;
+  xml_node pl = layout.child("style:page-layout-properties");
+  const int width = Twips(Attr(pl, "fo:page-width")).value_or(11906);
+  return width - Twips(Attr(pl, "fo:margin-left")).value_or(1134) - Twips(Attr(pl, "fo:margin-right")).value_or(1134);
+}
+
 std::string Converter::SectPr() {
   std::string s = "<w:sectPr>";
   xml_node layout;
@@ -1094,13 +1343,24 @@ std::string Converter::SectPr() {
       s += std::string("<w:") + kind + "Reference w:type=\"" + (variant[0] ? "first" : "default") + "\" r:id=\"" + rid + "\"/>";
     }
   }
-  if (master_.child("style:header")) top += extra("style:header-style");
-  if (master_.child("style:footer")) bottom += extra("style:footer-style");
+  // Word reserves the header's and footer's height whether the page style has them or not (a page with only
+  // a first-page footer, or none): it writes its header distance so.
+  top += extra("style:header-style");
+  bottom += extra("style:footer-style");
   s += "<w:pgSz w:w=\"" + std::to_string(width) + "\" w:h=\"" + std::to_string(height) + "\"" +
        (Attr(pl, "style:print-orientation") == "landscape" ? " w:orient=\"landscape\"" : "") + "/>";
   s += "<w:pgMar w:top=\"" + std::to_string(top) + "\" w:right=\"" + std::to_string(right) + "\" w:bottom=\"" +
        std::to_string(bottom) + "\" w:left=\"" + std::to_string(left) + "\" w:header=\"" + std::to_string(header) +
        "\" w:footer=\"" + std::to_string(footer) + "\" w:gutter=\"0\"/>";
+  // The page numbers: their format (the page layout's) and where they start again.
+  const std::string_view nf = Attr(pl, "style:num-format");
+  const char* fmt = nf == "i" ? "lowerRoman" : nf == "I" ? "upperRoman" : nf == "a" ? "lowerLetter" : nf == "A" ? "upperLetter" : nullptr;
+  if (fmt || pageStart_ > 0) {
+    s += "<w:pgNumType";
+    if (fmt) s += std::string(" w:fmt=\"") + fmt + "\"";
+    if (pageStart_ > 0) s += " w:start=\"" + std::to_string(pageStart_) + "\"";
+    s += "/>";
+  }
   if (xml_node cols = pl.child("style:columns"); cols) {
     const int n = std::clamp(std::atoi(Attr(cols, "fo:column-count").data()), 1, 45);
     if (n > 1) s += "<w:cols w:num=\"" + std::to_string(n) + "\" w:space=\"" + std::to_string(Twips(Attr(cols, "fo:column-gap")).value_or(709)) + "\"/>";
@@ -1141,7 +1401,10 @@ pkg::Status Converter::Run(std::vector<uint8_t>& docx) {
 
   parts_.push_back({"word/document.xml", {}, {}});
   part_ = 0;
+  BookmarkTexts(text, 0);
+  openText_.clear();
   std::string body;
+  body_ = &body;
   Blocks(text, body, 0);
   CloseBookmarks(body);
   const std::string sect = SectPr();
@@ -1157,6 +1420,7 @@ pkg::Status Converter::Run(std::vector<uint8_t>& docx) {
     parts_.push_back({std::move(name), std::move(xml), {}});
   };
   add("word/styles.xml", "styles+xml", "styles", StylesXml());
+  if (!faces_.empty()) add("word/fontTable.xml", "fontTable+xml", "fontTable", FontTableXml());
   std::string settings = std::string(kDecl) + "<w:settings " + std::string(kNs) + "><w:defaultTabStop w:val=\"709\"/>";
   if (nextFootnote_ > 1) settings += "<w:footnotePr><w:footnote w:id=\"-1\"/><w:footnote w:id=\"0\"/></w:footnotePr>";
   if (nextEndnote_ > 1) settings += "<w:endnotePr><w:endnote w:id=\"-1\"/><w:endnote w:id=\"0\"/></w:endnotePr>";

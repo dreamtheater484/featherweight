@@ -32,7 +32,9 @@ const unsigned char kPng[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x
                               0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xC9, 0xFE, 0x92, 0xEF, 0x00, 0x00, 0x00,
                               0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
 
-std::vector<uint8_t> Odt(const std::string& body, const std::string& autos = "", const std::string& prefix = "") {
+// `layouts` and `masters`: more page layouts and master pages for styles.xml.
+std::vector<uint8_t> Odt(const std::string& body, const std::string& autos = "", const std::string& prefix = "",
+                         const std::string& layouts = "", const std::string& masters = "") {
   const std::string styles =
       std::string("<?xml version=\"1.0\" encoding=\"UTF-8\"?><office:document-styles ") + kOfficeNs + ">"
       "<office:font-face-decls><style:font-face style:name=\"Liberation Sans\" svg:font-family=\"'Liberation Sans'\"/>"
@@ -45,9 +47,10 @@ std::vector<uint8_t> Odt(const std::string& body, const std::string& autos = "",
       "<text:list-style style:name=\"Numbering_20_123\"><text:list-level-style-number text:level=\"1\" style:num-suffix=\".\" style:num-format=\"1\"/>"
       "<text:list-level-style-number text:level=\"2\" style:num-suffix=\".\" style:num-format=\"a\"/></text:list-style>"
       "</office:styles><office:automatic-styles><style:page-layout style:name=\"pm1\"><style:page-layout-properties fo:page-width=\"21cm\" "
-      "fo:page-height=\"29.7cm\" fo:margin-top=\"2cm\" fo:margin-bottom=\"2cm\" fo:margin-left=\"2cm\" fo:margin-right=\"2cm\"/></style:page-layout>"
-      "</office:automatic-styles><office:master-styles><style:master-page style:name=\"Standard\" style:page-layout-name=\"pm1\">"
-      "<style:header><text:p>Header text <text:page-number>1</text:page-number></text:p></style:header></style:master-page></office:master-styles>"
+      "fo:page-height=\"29.7cm\" fo:margin-top=\"2cm\" fo:margin-bottom=\"2cm\" fo:margin-left=\"2cm\" fo:margin-right=\"2cm\"/></style:page-layout>" +
+      layouts + "</office:automatic-styles><office:master-styles><style:master-page style:name=\"Standard\" style:page-layout-name=\"pm1\">"
+      "<style:header><text:p>Header text <text:page-number>1</text:page-number></text:p></style:header></style:master-page>" + masters +
+      "</office:master-styles>"
       "</office:document-styles>";
   const std::string content = std::string("<?xml version=\"1.0\" encoding=\"UTF-8\"?><office:document-content ") + kOfficeNs + ">"
                               "<office:automatic-styles>" + autos + "</office:automatic-styles><office:body><office:text>" + body +
@@ -193,4 +196,150 @@ TEST(Odt_OtherPrefixesAndBadInput) {
   const std::string junk = "not a zip";
   CHECK(!odf::OdtToDocx(std::span(reinterpret_cast<const uint8_t*>(junk.data()), junk.size()), docx).Ok());
   CHECK(odf::OdtToDocx(Odt("<text:p>x</text:p>"), docx).Ok() && !docx.empty());
+}
+
+TEST(Odt_PageStylesAreSectionsAndAnchoredPicturesFloat) {
+  // The second paragraph starts the landscape page style "Wide", numbered from 5: the first section ends with
+  // the first paragraph. Its picture is anchored to the paragraph, placed on the page, behind the text.
+  const std::string autos =
+      "<style:style style:name=\"P1\" style:family=\"paragraph\" style:master-page-name=\"Wide\">"
+      "<style:paragraph-properties style:page-number=\"5\"/></style:style>"
+      "<style:style style:name=\"fr1\" style:family=\"graphic\"><style:graphic-properties style:wrap=\"run-through\" "
+      "style:run-through=\"background\" style:horizontal-rel=\"page\" style:vertical-rel=\"page\" "
+      "style:horizontal-pos=\"from-left\" style:vertical-pos=\"from-top\"/></style:style>";
+  const std::string body =
+      "<text:p>One<draw:frame draw:style-name=\"fr1\" text:anchor-type=\"paragraph\" svg:x=\"1in\" svg:y=\"-0.5in\" "
+      "svg:width=\"1in\" svg:height=\"1in\"><draw:image xlink:href=\"Pictures/dot.png\"/></draw:frame></text:p>"
+      "<text:p text:style-name=\"P1\">Two</text:p>";
+  const std::string layouts =
+      "<style:page-layout style:name=\"pm2\"><style:page-layout-properties fo:page-width=\"29.7cm\" fo:page-height=\"21cm\" "
+      "style:print-orientation=\"landscape\" fo:margin-top=\"1cm\" fo:margin-bottom=\"1cm\" fo:margin-left=\"1cm\" "
+      "fo:margin-right=\"1cm\"/></style:page-layout>";
+  const std::string masters = "<style:master-page style:name=\"Wide\" style:page-layout-name=\"pm2\"/>";
+  std::string xml;
+  auto doc = Converted(Odt(body, autos, "", layouts, masters), &xml);
+  CHECK(doc);
+  if (!doc) return;
+  const std::u16string text = StoryText(*doc, doc->MainStory());  // the picture is an object in the first
+  CHECK(text.starts_with(u"One") && text.ends_with(u"|Two|") && Main(*doc).size() == 2u);
+  // Two sections: the first in the first paragraph, the landscape one at the end, numbered from 5.
+  const size_t first = xml.find("<w:sectPr>"), second = xml.find("<w:sectPr>", first + 1);
+  CHECK(first != std::string::npos && second != std::string::npos);
+  if (second == std::string::npos) return;
+  CHECK(xml.find("<w:sectPr>", second + 1) == std::string::npos);
+  CHECK(first < xml.find("Two") && second > xml.find("Two"));
+  CHECK(xml.find("w:orient=\"landscape\"", second) != std::string::npos && xml.find("w:orient=\"landscape\"") > second);
+  CHECK(xml.find("<w:pgNumType w:start=\"5\"/>", second) != std::string::npos);
+  CHECK(xml.find("<w:pageBreakBefore/>") == std::string::npos);
+  // The picture floats: from the page's edges, behind the text, the negative offset kept.
+  CHECK(xml.find("<wp:anchor ") != std::string::npos && xml.find("<wp:inline") == std::string::npos);
+  CHECK(xml.find("behindDoc=\"1\"") != std::string::npos && xml.find("<wp:wrapNone/>") != std::string::npos);
+  CHECK(xml.find("<wp:positionH relativeFrom=\"page\"><wp:posOffset>914400</wp:posOffset>") != std::string::npos);
+  CHECK(xml.find("<wp:positionV relativeFrom=\"page\"><wp:posOffset>-457200</wp:posOffset>") != std::string::npos);
+}
+
+TEST(Odt_LetterSpacingAndScale) {
+  // fo:letter-spacing and style:text-scale: w:spacing in twips and w:w, in rPr's order (after w:color).
+  const std::string autos =
+      "<style:style style:name=\"T1\" style:family=\"text\"><style:text-properties fo:color=\"#ff0000\" "
+      "fo:letter-spacing=\"0.0027in\" style:text-scale=\"103%\" fo:font-size=\"10pt\"/></style:style>";
+  std::string xml;
+  auto doc = Converted(Odt("<text:p><text:span text:style-name=\"T1\">Wide</text:span></text:p>", autos), &xml);
+  CHECK(doc);
+  CHECK(xml.find("<w:color w:val=\"FF0000\"/><w:spacing w:val=\"4\"/><w:w w:val=\"103\"/><w:sz w:val=\"20\"/>") != std::string::npos);
+}
+
+TEST(Odt_FontTableFromFontFaces) {
+  // The font-face declarations are the font table: family, pitch and PANOSE (all zeros says nothing), so a font
+  // that isn't installed is substituted as Word does.
+  const std::string content =
+      std::string("<?xml version=\"1.0\" encoding=\"UTF-8\"?><office:document-content ") + kOfficeNs + ">"
+      "<office:font-face-decls><style:font-face style:name=\"PN\" svg:font-family=\"'Proxima Nova Rg'\" "
+      "style:font-family-generic=\"modern\" style:font-pitch=\"variable\" svg:panose-1=\"0 0 0 0 0 0 0 0 0 0\"/>"
+      "<style:font-face style:name=\"Calibri\" svg:font-family=\"Calibri\" style:font-family-generic=\"swiss\" "
+      "style:font-pitch=\"variable\" svg:panose-1=\"2 15 5 2 2 2 4 3 2 4\"/></office:font-face-decls>"
+      "<office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>";
+  auto doc = Converted(Odt("", "", content));
+  CHECK(doc);
+  if (!doc) return;
+  const FontInfo* pn = nullptr;
+  const FontInfo* calibri = nullptr;
+  for (const FontInfo& f : doc->Fonts()) {
+    if (f.name == "Proxima Nova Rg") pn = &f;
+    if (f.name == "Calibri") calibri = &f;
+  }
+  CHECK(pn && pn->family == "modern" && pn->pitch == "variable" && pn->panose.empty());
+  CHECK(calibri && calibri->family == "swiss" && calibri->panose == "020F0502020204030204");
+}
+
+TEST(Odt_TextReferencesAndParagraphBorders) {
+  // A reference to a bookmark's text shows the text (a REF field), with the references in it shown as they
+  // show; one to its number keeps what the file has. A border's padding is its w:space.
+  const std::string autos =
+      "<style:style style:name=\"P1\" style:family=\"paragraph\"><style:paragraph-properties "
+      "fo:border=\"0.5pt solid #000000\" fo:padding=\"0.1in\" fo:border-left=\"none\"/></style:style>";
+  const std::string body =
+      "<text:p><text:bookmark-start text:name=\"inner\"/>Inner<text:bookmark-end text:name=\"inner\"/></text:p>"
+      "<text:p><text:bookmark-start text:name=\"_Ref1\"/>Target  text, see "
+      "<text:bookmark-ref text:ref-name=\"inner\" text:reference-format=\"text\">1</text:bookmark-ref>"
+      "<text:bookmark-end text:name=\"_Ref1\"/></text:p>"
+      "<text:p text:style-name=\"P1\">Clause <text:bookmark-ref text:ref-name=\"_Ref1\" text:reference-format=\"text\">7.4</text:bookmark-ref>"
+      " and <text:bookmark-ref text:ref-name=\"_Ref1\" text:reference-format=\"number\">7.5</text:bookmark-ref></text:p>";
+  std::string xml;
+  auto doc = Converted(Odt(body, autos), &xml);
+  CHECK(doc);
+  if (!doc) return;
+  CHECK(xml.find("<w:fldSimple w:instr=\" REF _Ref1 \\h \"><w:r><w:t xml:space=\"preserve\">Target text, see Inner</w:t>") !=
+        std::string::npos);
+  CHECK(xml.find(">7.5<") != std::string::npos && xml.find(">7.4<") == std::string::npos);
+  CHECK(xml.find("<w:pBdr><w:top w:val=\"single\" w:sz=\"4\" w:space=\"7\" w:color=\"000000\"/><w:left w:val=\"nil\"/>") !=
+        std::string::npos);
+}
+
+TEST(Odt_TableWidthPaddingRowsAndPageNumberFormat) {
+  // A table half the text's width (17 cm): its two 1-inch columns fitted to it. Its cells' padding is their
+  // margins; its row stays on one page, at least half an inch high. The second page style numbers in roman.
+  const std::string autos =
+      "<style:style style:name=\"Tb\" style:family=\"table\"><style:table-properties style:width=\"2in\" style:rel-width=\"50%\" "
+      "fo:margin-left=\"0.25in\"/></style:style>"
+      "<style:style style:name=\"Col\" style:family=\"table-column\"><style:table-column-properties style:column-width=\"1in\"/></style:style>"
+      "<style:style style:name=\"Row\" style:family=\"table-row\"><style:table-row-properties fo:keep-together=\"always\" "
+      "style:min-row-height=\"0.5in\"/></style:style>"
+      "<style:style style:name=\"Cell\" style:family=\"table-cell\"><style:table-cell-properties fo:padding=\"0in\" "
+      "fo:padding-left=\"0.1in\"/></style:style>"
+      "<style:style style:name=\"P1\" style:family=\"paragraph\" style:master-page-name=\"Roman\"/>";
+  const std::string body =
+      "<table:table table:style-name=\"Tb\"><table:table-column table:style-name=\"Col\" table:number-columns-repeated=\"2\"/>"
+      "<table:table-row table:style-name=\"Row\"><table:table-cell table:style-name=\"Cell\"><text:p>A</text:p></table:table-cell>"
+      "<table:table-cell><text:p>B</text:p></table:table-cell></table:table-row></table:table>"
+      "<text:p text:style-name=\"P1\">Next</text:p>";
+  const std::string layouts =
+      "<style:page-layout style:name=\"pm3\"><style:page-layout-properties fo:page-width=\"21cm\" fo:page-height=\"29.7cm\" "
+      "style:num-format=\"i\" fo:margin-left=\"2cm\" fo:margin-right=\"2cm\"/></style:page-layout>";
+  const std::string masters = "<style:master-page style:name=\"Roman\" style:page-layout-name=\"pm3\"/>";
+  std::string xml;
+  auto doc = Converted(Odt(body, autos, "", layouts, masters), &xml);
+  CHECK(doc);
+  if (!doc) return;
+  CHECK(xml.find("<w:tblW w:w=\"2500\" w:type=\"pct\"/><w:tblInd w:w=\"360\" w:type=\"dxa\"/>") != std::string::npos);
+  CHECK(xml.find("<w:gridCol w:w=\"2409\"/><w:gridCol w:w=\"2409\"/>") != std::string::npos);  // 9638 / 2 / 2
+  CHECK(xml.find("<w:trPr><w:cantSplit/><w:trHeight w:val=\"720\" w:hRule=\"atLeast\"/></w:trPr>") != std::string::npos);
+  CHECK(xml.find("<w:tcMar><w:top w:w=\"0\" w:type=\"dxa\"/><w:left w:w=\"144\" w:type=\"dxa\"/>") != std::string::npos);
+  CHECK(xml.find("<w:pgNumType w:fmt=\"lowerRoman\"/>") != std::string::npos);
+}
+
+TEST(Odt_LongBookmarkTextIsCutBetweenCharacters) {
+  // A reference repeats at most 4 KB of its bookmark's text, cut where a character starts.
+  std::string many = "x";                             // one byte, so that 4 KB would end inside a character
+  for (int i = 0; i < 3000; ++i) many += "\xC3\xA9";  // é, two bytes each
+  const std::string body = "<text:p><text:bookmark-start text:name=\"b\"/>" + many + "<text:bookmark-end text:name=\"b\"/></text:p>"
+                           "<text:p><text:bookmark-ref text:ref-name=\"b\" text:reference-format=\"text\">1</text:bookmark-ref></text:p>";
+  std::string xml;
+  auto doc = Converted(Odt(body), &xml);
+  CHECK(doc);
+  const size_t at = xml.find("<w:fldSimple");
+  CHECK(at != std::string::npos);
+  if (at == std::string::npos) return;
+  const size_t t = xml.find("\">", xml.find("<w:t ", at)) + 2, end = xml.find("</w:t>", t);
+  CHECK(end - t <= 4096 && (end - t) % 2 == 1 && end - t >= 4000);  // "x" and whole é's
 }
