@@ -16,6 +16,13 @@ namespace fw::doc {
 struct Document::Caches {
   // Resolved properties: indices into the pools, kNone until resolved. The pools are deques, so
   // the references Document hands out stay valid as they grow.
+  // Document::PlaceOfRow: each table's rows by element, its row count and header rows.
+  struct TableIndex {
+    std::vector<Node> list;  // Document::TableRows
+    std::unordered_map<ElemId, int32_t> at;
+    int32_t rows = 0, headers = 1;
+  };
+  std::unordered_map<ElemId, TableIndex> tables;  // by w:tbl
   std::vector<uint32_t> para;            // by paragraph
   std::deque<ParaProps> paraPool;
   std::vector<uint32_t> mark;            // by paragraph

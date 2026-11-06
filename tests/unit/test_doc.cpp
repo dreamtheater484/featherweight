@@ -733,10 +733,13 @@ TEST(Resolve_D4_D5_TableConditionalFormatting) {
     }
     return t + "</w:tbl><w:p/>";
   };
+  std::string headed = table("Grid", "");  // two repeated header rows: both take the first row's format
+  for (size_t at = 0, n = 0; n < 2 && (at = headed.find("<w:tr>", at)) != std::string::npos; ++n, at += 6)
+    headed.insert(at + 6, "<w:trPr><w:tblHeader/></w:trPr>");
   f.body = table("Grid", "") +  // D5: no tblLook means firstRow, firstColumn, noVBand
            table("Grid", "<w:tblLook w:val=\"0120\"/>") +  // firstRow and lastColumn, from the bits
            table("Grid", "<w:tblLook w:val=\"0120\" w:firstRow=\"0\" w:lastColumn=\"1\"/>") +  // named attributes win
-           table("NoBands", "");
+           table("NoBands", "") + headed;
   auto doc = LoadOk(f);
   CHECK(doc);
   if (!doc) return;
@@ -757,6 +760,8 @@ TEST(Resolve_D4_D5_TableConditionalFormatting) {
   CHECK(fill(2, 0, 1) == 0x333333 && fill(2, 1, 2) == 0x555555);
   // Table 4: band size 0 means no banding.
   CHECK(fill(3, 1, 1) == 0xEEEEEE);
+  // Table 5: two header rows; the bands start after them.
+  CHECK(fill(4, 0, 1) == 0x111111 && fill(4, 1, 1) == 0x111111 && fill(4, 2, 1) == 0x333333 && fill(4, 3, 1) == 0x444444);
   // Borders: the cell's inner edges take the style's insideH.
   Node mid = doc->RowCells(doc->TableRows(blocks[0].node)[1])[1];
   CellProps cp = doc->ResolvedCell(mid);

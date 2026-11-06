@@ -360,18 +360,13 @@ int32_t Document::CellGridColumn(Node cell) const {
 int32_t Document::CellRowSpan(Node cell) const {
   Node vm = cell.Path({kTcPr, Name("vMerge")});
   if (!vm || vm.AttrOr(kVal) != "restart") return 1;
-  Node table = Enclosing(cell, kTbl);
   int32_t col = CellGridColumn(cell);
-  auto rows = TableRows(table);
-  Node row = Enclosing(cell, kTr);
+  // The rows below the cell's (found once per table: a long table merges in linear time).
+  const RowPlace place = PlaceOfRow(Enclosing(cell, kTr));
+  if (place.index < 0 || !place.list) return 1;
   int32_t span = 1;
-  bool after = false;
-  for (Node r : rows) {
-    if (r == row) {
-      after = true;
-      continue;
-    }
-    if (!after) continue;
+  for (size_t i = static_cast<size_t>(place.index) + 1; i < place.list->size(); ++i) {
+    const Node r = (*place.list)[i];
     bool continues = false;
     for (Node c : RowCells(r)) {
       if (CellGridColumn(c) != col) continue;

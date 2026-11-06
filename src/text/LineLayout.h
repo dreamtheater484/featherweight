@@ -151,7 +151,7 @@ struct GlyphPiece {
   bool leader = false;  // a tab leader
   std::vector<uint16_t> glyphs;
   std::vector<float> advances;
-  std::vector<DWRITE_GLYPH_OFFSET> offsets;
+  std::vector<DWRITE_GLYPH_OFFSET> offsets;  // empty when all are zero (most lines)
 
   // Where DrawGlyphs starts: the left edge, or the right edge for right-to-left glyphs.
   float OriginX() const { return (bidiLevel & 1) ? x + width : x; }

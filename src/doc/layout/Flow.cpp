@@ -256,7 +256,7 @@ const std::vector<Field>& Engine::StoryFields(uint32_t story) {
 namespace {
 
 size_t LineBytes(const LineBox& l) {
-  size_t n = sizeof(LineBox) + l.line.caretX_.capacity() * 4 + l.line.advance_.capacity() * 4 + l.line.flags_.capacity() +
+  size_t n =sizeof(LineBox) + l.line.caretX_.capacity() * 4 + l.line.advance_.capacity() * 4 + l.line.flags_.capacity() +
              l.line.objects.capacity() * sizeof(text::InlineObject) + l.text.capacity() * 2;
   for (const text::GlyphPiece& g : l.line.pieces)
     n += sizeof(g) + g.glyphs.capacity() * 2 + g.advances.capacity() * 4 + g.offsets.capacity() * sizeof(DWRITE_GLYPH_OFFSET);
@@ -704,7 +704,8 @@ struct Flow {
     }
     // Back to a row of a table: the table again (measured anew if it had ended), at that row.
     const Node tbl = f.items[m.next].node;
-    if (!f.table || !(f.table->tbl == tbl)) f.table = std::make_shared<TableBox>(e.MeasureTable(tbl, BodyFrame()));
+    if (!f.table || !(f.table->tbl == tbl)) f.table = std::make_shared<TableBox>(e.MeasureTable(tbl, BodyFrame(), nullptr, true));
+    e.MeasureThrough(*f.table, m.row);
     f.row = m.row;
     f.rowCut = m.rowCut;
     f.spans = m.spans;
@@ -1040,7 +1041,7 @@ struct Flow {
     for (size_t i = 0; i < row.cells.size(); ++i) {
       const CellBox& c = row.cells[i];
       if (c.continued || c.rowSpan <= 1) continue;
-      Span s{f.row, i, std::min(t.rows.size() - 1, f.row + static_cast<size_t>(c.rowSpan) - 1), 0, top};
+      Span s{f.row, i, std::min(t.count - 1, f.row + static_cast<size_t>(c.rowSpan) - 1), 0, top};
       s.at = SpanAt(s, x, rowStart);
       f.spans.push_back(s);
     }
@@ -1083,7 +1084,7 @@ struct Flow {
       if (before && e.BringUpToDate(*before, frame.width, frame.story)) f.table = before;
       else
         f.table = std::make_shared<TableBox>(
-            e.MeasureTable(item.node, frame, before && before->frameWidth == frame.width ? before.get() : nullptr));
+            e.MeasureTable(item.node, frame, before && before->frameWidth == frame.width ? before.get() : nullptr, true));
       f.row = 0;
       f.rowCut.clear();
       f.spans.clear();
@@ -1092,7 +1093,10 @@ struct Flow {
       f.spacing = Spacing();
       f.spacing.atTop = false;
     }
-    const TableBox& t = *f.table;
+    // A long table is measured as it goes: the rows the page gets to (the first ones, or after an
+    // edit, those it was measured in before), then a few more at a time.
+    TableBox& t = *f.table;
+    e.MeasureThrough(t, f.row);
     const float x = ColumnLeft() + t.left;
     bool firstOnPage = f.columnEmpty;
     bool fresh = f.columnEmpty;  // nothing above but repeated header rows
@@ -1105,7 +1109,8 @@ struct Flow {
       firstOnPage = false;
       f.columnEmpty = false;
     }
-    while (f.row < t.rows.size()) {
+    while (f.row < t.count) {
+      e.MeasureThrough(t, f.row);
       const RowBox& row = t.rows[f.row];
       if (row.props.hidden) {
         ++f.row;
@@ -1133,7 +1138,7 @@ struct Flow {
       if (row.props.heightRule != "exact")
         for (const Span& s : f.spans)
           if (s.last == f.row) h = std::max(h, SpanNeed(s) - (s.top >= 0 ? f.y - s.top : 0.0f));
-      const bool last = f.row + 1 == t.rows.size();
+      const bool last = f.row + 1 == t.count;
       const std::vector<float>* from = f.rowCut.empty() ? nullptr : &f.rowCut;
       std::vector<uint32_t> notes;
       float notesH = RowNotes(row, from, nullptr, notes);
@@ -1719,7 +1724,7 @@ struct Flow {
       frame.fields = &stale->fields;
       frame.width = stale->frameWidth;
       frame.story = stale->story;
-      auto measured = std::make_shared<TableBox>(e.MeasureTable(stale->tbl, frame, structure ? nullptr : stale.get()));
+      auto measured = std::make_shared<TableBox>(e.MeasureTable(stale->tbl, frame, structure ? nullptr : stale.get(), true));
       for (Checkpoint& c : f.checkpoints)
         if (c.table == stale) c.table = measured;  // the pages before show the same rows of it
       if (f.table == stale) f.table = measured;

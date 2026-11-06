@@ -360,22 +360,16 @@ void ForEachTableStyleLevel(const Document& doc, const Style* style, uint16_t co
 
 // The conditional formats that apply to a cell.
 uint16_t CellConditions(const Document& doc, Node cell, const TableProps& tp) {
-  Node row = Up(cell, kTr), table = Up(cell, kTbl);
-  auto rows = doc.TableRows(table);
+  Node row = Up(cell, kTr);
   auto cells = doc.RowCells(row);
-  int32_t r = static_cast<int32_t>(std::find(rows.begin(), rows.end(), row) - rows.begin());
+  const Document::RowPlace place = doc.PlaceOfRow(row);
+  int32_t r = place.index < 0 ? place.rows : place.index;
   int32_t c = static_cast<int32_t>(std::find(cells.begin(), cells.end(), cell) - cells.begin());
-  int32_t nr = static_cast<int32_t>(rows.size()), nc = static_cast<int32_t>(cells.size());
+  int32_t nr = place.rows, nc = static_cast<int32_t>(cells.size());
   const TableLook& look = tp.look;
   uint16_t bits = 0;
   // Header rows: the first row, and the rows marked as repeating headers that follow it.
-  int32_t headers = 0;
-  if (look.firstRow) {
-    headers = 1;
-    while (headers < nr && rows[headers].Path({kTrPr, Name("tblHeader")}) &&
-           rows[headers].Path({kTrPr, Name("tblHeader")}).On() && rows[headers - 1].Path({kTrPr, Name("tblHeader")}))
-      ++headers;
-  }
+  const int32_t headers = look.firstRow ? place.headers : 0;
   bool firstRow = look.firstRow && r < headers;
   bool lastRow = look.lastRow && r == nr - 1 && !firstRow;
   bool firstCol = look.firstColumn && c == 0;
@@ -516,6 +510,29 @@ void ApplyCell(const Document& doc, Node pr, CellProps& p) {
 
 }  // namespace
 
+Document::RowPlace Document::PlaceOfRow(Node row) const {
+  RowPlace place;
+  Node table = Up(row, kTbl);
+  if (!table) return place;
+  auto [it, made] = caches_->tables.try_emplace(table.Id());
+  Caches::TableIndex& ti = it->second;
+  if (made) {
+    ti.list = TableRows(table);
+    const std::vector<Node>& rows = ti.list;
+    ti.rows = static_cast<int32_t>(rows.size());
+    ti.at.reserve(rows.size());
+    for (size_t i = 0; i < rows.size(); ++i) ti.at.emplace(rows[i].Id(), static_cast<int32_t>(i));
+    while (ti.headers < ti.rows && rows[ti.headers].Path({kTrPr, Name("tblHeader")}) &&
+           rows[ti.headers].Path({kTrPr, Name("tblHeader")}).On() && rows[ti.headers - 1].Path({kTrPr, Name("tblHeader")}))
+      ++ti.headers;
+  }
+  place.rows = ti.rows;
+  place.headers = ti.headers;
+  place.list = &ti.list;
+  if (auto at = ti.at.find(row.Id()); at != ti.at.end()) place.index = at->second;
+  return place;
+}
+
 TableProps Document::ResolvedTable(Node table) const {
   TableProps t;
   t.cellMargins.start = t.cellMargins.end = TableWidth{TableWidth::Type::Dxa, 108};
@@ -547,9 +564,9 @@ CellProps Document::ResolvedCell(Node cell) const {
   TableProps tp = ResolvedTable(table);
   // Row exceptions (w:tblPrEx) change the table's borders and margins for one row.
   if (Node ex = row.Child(Name("tblPrEx"))) ApplyTable(*this, ex, tp, false);
-  auto rows = TableRows(table);
+  const RowPlace place = PlaceOfRow(row);
   auto cells = RowCells(row);
-  bool firstRow = !rows.empty() && rows.front() == row, lastRow = !rows.empty() && rows.back() == row;
+  bool firstRow = place.index == 0, lastRow = place.index >= 0 && place.index == place.rows - 1;
   bool firstCell = !cells.empty() && cells.front() == cell, lastCell = !cells.empty() && cells.back() == cell;
   // Outer edges take the table's borders, inner edges its inside borders.
   p.top = firstRow ? tp.borders.top : tp.borders.insideH;

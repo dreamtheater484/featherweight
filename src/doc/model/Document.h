@@ -446,6 +446,17 @@ class Document {
   void AttachTo(pkg::ReferenceRegistry& registry);
   const pkg::ReferenceRegistry& Registry() const { return *registry_; }
 
+  // Where a table row is: its index among its table's rows (-1 if it isn't in one), how many rows
+  // the table has, and how many lead it as header rows (the first, and the repeating ones right
+  // after it). Found once per table until the tree changes, so a long table's cells resolve in
+  // constant time instead of gathering its rows each. `list`: the table's rows (TableRows), until
+  // the next edit.
+  struct RowPlace {
+    int32_t index = -1, rows = 0, headers = 1;
+    const std::vector<Node>* list = nullptr;
+  };
+  RowPlace PlaceOfRow(Node row) const;
+
   struct Caches;  // the model's own (Internal.h)
   // Changes each time the caches are made again (an edit that changes styles, sections or
   // formatting in place, edit::TreeEdit): what ResolvedPara and ResolvedRun gave before is gone,

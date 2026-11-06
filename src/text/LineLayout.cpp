@@ -1126,7 +1126,11 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
       uint32_t g0 = sg.GlyphAt(it.from), g1 = sg.GlyphAt(it.to);
       piece.glyphs.assign(sg.glyphs.begin() + g0, sg.glyphs.begin() + g1);
       piece.advances.assign(sg.advances.begin() + g0, sg.advances.begin() + g1);
-      piece.offsets.assign(sg.offsets.begin() + g0, sg.offsets.begin() + g1);
+      // Offsets only where a glyph has one (marks, some scripts): most lines have none, and they'd
+      // take a third of a line's memory (H4).
+      if (std::any_of(sg.offsets.begin() + g0, sg.offsets.begin() + g1,
+                      [](const DWRITE_GLYPH_OFFSET& o) { return o.advanceOffset != 0 || o.ascenderOffset != 0; }))
+        piece.offsets.assign(sg.offsets.begin() + g0, sg.offsets.begin() + g1);
       // Justification goes after each character's cluster, and carets follow the advances.
       float along = 0;
       for (uint32_t c = it.from; c < it.to;) {
@@ -1168,7 +1172,6 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
         piece.hyphen = true;
         piece.glyphs = {glyph};
         piece.advances = {it.width};
-        piece.offsets = {DWRITE_GLYPH_OFFSET{}};
         FontMetrics m = face->Metrics(piece.emSize);
         useMetrics(m.ascent + rise, m.descent - rise, m.lineGap);
         line.pieces.push_back(std::move(piece));
@@ -1208,7 +1211,6 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
           piece.leader = true;
           piece.glyphs.assign(count, glyph);
           piece.advances.assign(count, a1);
-          piece.offsets.assign(count, DWRITE_GLYPH_OFFSET{});
           line.pieces.push_back(std::move(piece));
         }
       }
@@ -1323,7 +1325,7 @@ draw::GlyphRun GlyphPiece::Run() const {
   r.count = static_cast<uint32_t>(glyphs.size());
   r.indices = glyphs.data();
   r.advances = advances.data();
-  r.offsets = offsets.data();
+  r.offsets = offsets.empty() ? nullptr : offsets.data();
   r.bidiLevel = bidiLevel;
   return r;
 }
