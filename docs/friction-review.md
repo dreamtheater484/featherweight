@@ -1,6 +1,6 @@
 # Friction review
 
-The friction review (plan §11, "Zero friction") writes each core flow down step by step, in Word and in Featherweight, so that a flow never gains a step without a reason in the plan. D3 is done when it passes for writing a letter, formatting a CV and fixing a table in a received document (plan §6.4).
+The friction review (plan §11, "Zero friction") writes each core flow down step by step, in Word and in Featherweight, so that a flow never gains a step without a reason in the plan. D3 is done when it passes for writing a letter, formatting a CV and fixing a table in a received document (plan §6.4). D5 adds the rest of the Word flows, D3's to D5's (flows 4 to 15).
 
 `tests/friction-checks.ps1` runs the flows that can be scripted through Featherweight's `--script` mode, off-screen. It checks what the saved file says and counts the steps against this review's budget (see [Scripted checks](#scripted-checks)).
 
@@ -9,7 +9,8 @@ The friction review (plan §11, "Zero friction") writes each core flow down step
 - **C**: a click (or a drag). **K**: a key or a chord (Ctrl+S is one). **D**: a decision the flow asks for (a name, a format, a place).
 - Typing the content itself, including Enter between paragraphs, isn't counted: it's the same in both.
 - **Word** means Word for Microsoft 365 on Windows (version 2410 and later) with its default ribbon, in a window at least 1366 pixels wide.
-- **Featherweight** means claude/d2-integration 5957ba4, with D3's operations added as they land.
+- **Featherweight** means claude/d2-integration 5957ba4, with D3's operations added as they land, for flows 1 to 3. Flows 4 to 15 were counted on claude/d5-friction (2026-11-06), from d5-int with the D5 pieces.
+- **A scroll** in a list counts as a step. A list shows what fits in a 700-pixel window.
 - When a step has a mouse way and a keyboard way, the table gives the one most people use, and the other in brackets.
 
 ## Summary
@@ -19,6 +20,18 @@ The friction review (plan §11, "Zero friction") writes each core flow down step
 | Write a letter | 6 C + 3 K, 3 D | 5 C + 3 K, 2 D | 5 C + 3 K, 2 D | Passes (claude/d3-int, 2026-11-05: 5 C + 3 K, 8 of 9). The letter flow is scripted. |
 | Format a CV (without tab stops and margins) | 2 C + 9 K | 3 C + 9 K | 3 C + 9 K (the one extra click is F4, accepted) | Passes (claude/d3-int, 2026-11-05: 3 C + 9 K, 12 of 12). Tab stops and margins come with D3 (the ruler, page setup). The CV flow is scripted. |
 | Fix a table in a received document | 10 C + 2 K + 2 drags | 11 C + 2 K + 2 drags | 11 C + 2 K + 2 drags (the two extra clicks are F6, accepted) | Passes (claude/d3-int, 2026-11-05: 11 C + 2 K + 2 drags, 15 of 16). The table flow is scripted. |
+| Pictures | 6 C + 1 drag | 5 C + 1 drag | | Passes |
+| Headers and page numbers | 5 C + 1 K | 4 C + 1 K | | Passes |
+| Page setup | 7 C | 6 C | | Passes (8 C before F14) |
+| Links and bookmarks | 6 K + 2 C | 6 K + 2 C | | Passes (10 before F9 and F10) |
+| Review a contract | 7 C + 2 K | 7 C + 2 K | | Passes (11 before F11) |
+| Table of contents and notes | 7 C + 1 K | 4 C + 1 K | | Passes (a scroll more before F12) |
+| Fill in a form | 5 C + 1 K | 5 C + 1 K | | Passes |
+| Text boxes, shapes, watermark | 9 C + 1 drag | 8 C (+1 scroll) | | Passes. The watermark is one click more (F15, accepted) |
+| Export PDF | 4 C | 2 C + 1 K | | Passes |
+| A letter from a template | 3 C + 2 K | 1 C + 1 drag + 2 K | 2 C + 2 K | Passes on the count. Selecting a placeholder takes a drag (F16) |
+| Opening other formats | 1 C, Ctrl+S | 1 C, Ctrl+S + Enter | | Saving a `.doc` is one key more (F17, by design) |
+| A password-protected document | 1 C + 1 K | 1 C + 1 K | | Passes (`claude/d5-crypt`) |
 
 ## Where Featherweight needs more than Word
 
@@ -30,7 +43,18 @@ The friction review (plan §11, "Zero friction") writes each core flow down step
 | F4 | Letter and CV: a style without a shortcut (No Spacing, Title, Subtitle, Quote) | 1 C in the Home tab's gallery | 2 C: open the style box, choose | Accepted: one toolbar row, no ribbon (plan §5.2). Normal and Heading 1–3 have Word's keys in both. | By design |
 | F6 | Table: a row in the middle | 1 C on the ⊕ at the row's edge | 3 C: right-click, Insert, Rows Below (as Word's own menu) | Accepted: the review's target for this step was at most 3 C. A handle is worth a look once layout gives cell boxes. | Accepted |
 | F7 | Table: widening a column | 1 drag of its border | Dragging a border selects text. Today: right-click, Properties, the Column width box, a number, Enter: **3 C + 1 K instead of 1 drag** | widgets (d3-tables), waiting on d1-model's `Layout::Cells(page)` | Fixed (claude/d3-tables 7abe49e): column borders and row bottoms drag on the page |
-| F5 | Letter: the date, in a narrow window | The ribbon shrinks, Insert stays | Below about 1150 pixels wide, the Insert box drops out of the toolbar: then it's command search (Alt+Q, "date", Enter) | d2-format (toolbar priorities) | Note: worth a look, not a finding |
+| F5 | Letter: the date, in a narrow window | The ribbon shrinks, Insert stays | Below about 1150 pixels wide, the Insert box drops out of the toolbar: then it's command search (Alt+Q, "date", Enter) | d2-format (toolbar priorities) | Fixed with F13 (claude/d5-friction): Insert now goes after change case, the indents, ¶, the navigation pane, the table grid, Layout, the format painter, Review and Highlight |
+| F8 | Letter and CV: Ctrl+Shift+N for the Normal style | Normal style | A new document: the app's Ctrl+N took Ctrl+Shift+N too (5998996). The letter flow failed on d5-int. | widgets | Fixed (claude/d5-friction 3367a2d) |
+| F9 | Links: Ctrl+K, then the address | Ctrl+K, type, Enter | The panel didn't take the keyboard, and Enter didn't insert: **1 K + 2 C instead of 2 K** | widgets | Fixed (claude/d5-friction 33827ce) |
+| F10 | Bookmarks: Ctrl+Shift+F5, then the name | Type, Enter | The same as F9: **+2 steps** | widgets | Fixed (claude/d5-friction 33827ce) |
+| F11 | Review: replying to a comment | Its Reply box, type, Ctrl+Enter | Its card, the box, type, the Reply button: **+1 C** | widgets | Fixed (claude/d5-friction 33827ce): the card puts the keyboard in the box for a reply, and Enter posts |
+| F12 | Insert ▾: footnote, endnote, table of contents, watermark, content controls | One tab each (References, Design) | Past the list's 12 rows: **+1 scroll** | widgets | Fixed (claude/d5-friction 80ff7f0): notes, the TOC, text box and watermark come right after Picture. The list shows up to 24 rows. Shapes, breaks and content controls come last. |
+| F13 | Insert ▾ in a narrower window | Insert's tab stays | Insert was the first box to drop out (F5) | widgets | Fixed (claude/d5-friction 80ff7f0) |
+| F14 | Page setup: paper size | Layout, Size, A4: 3 C | Layout ▾, Page setup…, Paper, A4: **4 C** | widgets | Fixed (claude/d5-friction 80ff7f0): Layout ▾ lists the sizes |
+| F15 | Watermark | Design, Watermark, a preset: 3 C | Insert ▾, Watermark…, Kind: Text: **4 C** | | Accepted: one panel for text and picture watermarks, with the presets in its text box. It's rare. |
+| F16 | Templates: replacing a placeholder | Click it (a content control), type | The placeholders are plain text in brackets: a drag or a triple-click to select one | widgets | Open: the templates' placeholders become content controls showing their placeholder, which the editor already selects with one click. This waits for d5-int to have claude/d5-odt. |
+| F17 | Saving a `.doc` | Ctrl+S keeps the `.doc` | Ctrl+S opens Save As with `<name>.docx` suggested: **+1 K** | | By design: imported formats are never overwritten (D5 plan) |
+| F18 | Opening an `.odt` | No notice. Word asks about the format on the first save | A `.doc` shows a banner that saving makes a new `.docx`; an `.odt` doesn't yet | widgets | Open: the same banner for `.odt`, once d5-int has claude/d5-doc and claude/d5-odt |
 
 Also found while scripting: **torture finding 7** happens in the app. Centering a line with Ctrl+E and pressing Enter lets AutoCorrect's capital fix garble the line ("second" saved as "SecondS"). Reported to d1-measure as part of finding 7.
 
@@ -39,6 +63,11 @@ Also found while scripting: **torture finding 7** happens in the app. Centering 
 - **The date** in a letter: Insert box, then a format (2 C), against Word's Insert tab, Date & Time, a format and OK (4 C).
 - **Saving a new file**: Featherweight suggests the first words as the name, in Documents. Word also asks where to save (OneDrive or this PC): one decision fewer.
 - **A received document** opens ready to edit. Word opens attachments and downloads in Protected View, with an "Enable Editing" click first.
+- **Updating a table of contents**: right-click, Update entire table (2 C), against Word's four clicks and a dialog.
+- **Export PDF**: ⋯, Export PDF…, Enter, against Word's File, Export, Create PDF/XPS, Publish.
+- **Page numbers**: Insert ▾, Page numbers…, Insert (3 C), against Word's four.
+- **Content controls** are in Insert ▾. Word needs the Developer tab turned on first.
+- **A template** from the start screen: one click, against Word's two (and Word's featured templates change).
 
 ## 1. Write a letter
 
@@ -95,6 +124,135 @@ A .docx received by mail, with a four-column table (`tests/office/torture/receiv
 | 8 | Save | Ctrl+S: 1 K | Ctrl+S: 1 K. The original is kept for 30 days as a backup, with no step. |
 
 Word: 10 C + 2 K + 2 drags (14). Featherweight today: 14 C + 3 K + 1 drag (18); with F7 fixed, 11 C + 2 K + 2 drags (15), within the budget of 16 (Word's 14 and F6's two clicks).
+
+## 4. Pictures (D3)
+
+A picture from a file, made smaller, with the text wrapping around it.
+
+| # | Step | Word | Featherweight |
+|---|---|---|---|
+| 1 | Insert a picture from a file | Insert, Pictures, This Device, double-click the file: 4 C | Insert ▾, Picture…, double-click the file: 3 C. Dragging it in from Explorer takes 1 drag in both. |
+| 2 | Smaller, keeping its shape | Drag a corner (it's selected after inserting): 1 drag | The same |
+| 3 | Text wraps around it | The Layout Options button, Square: 2 C | Wrap text ▾ (on the toolbar while it's selected), Square: 2 C |
+| | **Total** | **6 C + 1 drag** | **5 C + 1 drag** |
+
+## 5. Headers and page numbers (D3)
+
+A line of text in the header, and page numbers centered at the bottom.
+
+| # | Step | Word | Featherweight |
+|---|---|---|---|
+| 1 | Edit the header | Double-click the top margin: 1 C | The same |
+| 2 | Back to the text | Esc: 1 K (or double-click the body) | The same |
+| 3 | Page numbers at the bottom, centered | Insert, Page Number, Bottom of Page, Plain Number 2: 4 C | Insert ▾, Page numbers… (Bottom and Center are the defaults), Insert page number: 3 C |
+| | **Total** | **5 C + 1 K** | **4 C + 1 K** |
+
+## 6. Page setup (D3)
+
+A4 paper, narrow margins, landscape.
+
+| # | Step | Word | Featherweight |
+|---|---|---|---|
+| 1 | A4 | Layout, Size, A4: 3 C | Layout ▾, Size: A4: 2 C (it was 4 C through Page setup: F14) |
+| 2 | Narrow margins | Margins, Narrow (the Layout tab is open): 2 C | Layout ▾, Margins: Narrow: 2 C |
+| 3 | Landscape | Orientation, Landscape: 2 C | Layout ▾, Landscape: 2 C |
+| | **Total** | **7 C** | **6 C** |
+
+## 7. Links and bookmarks (D3)
+
+A link on selected text to a web page, a bookmark on a heading, and a link to that heading.
+
+| # | Step | Word | Featherweight |
+|---|---|---|---|
+| 1 | A link on the selection | Ctrl+K, type the address, Enter: 2 K, 1 D | The same (it was 1 K + 2 C: F9) |
+| 2 | A bookmark | Ctrl+Shift+F5, type the name, Enter: 2 K, 1 D | The same (it was 1 K + 2 C: F10) |
+| 3 | A link to a heading | Ctrl+K, Place in This Document, the heading, Enter: 2 K + 2 C | Ctrl+K, open the address list, the heading, Enter: 2 K + 2 C |
+| | **Total** | **6 K + 2 C** | **6 K + 2 C** |
+
+## 8. Review a contract (D4)
+
+A received contract with tracked changes and comments (`tests/office/torture/review-contract.docx`). Accept one change, reject the next, reply to one comment, resolve another, and save.
+
+| # | Step | Word | Featherweight |
+|---|---|---|---|
+| 1 | The review tools | The Review tab: 1 C | The 💬 Review pane: 1 C |
+| 2 | The first change | Next: 1 C | Next: 1 C |
+| 3 | Accept it and go to the next | Accept (and Move to Next): 1 C | Accept: 1 C (it moves on) |
+| 4 | Reject that one | Reject (and Move to Next): 1 C | Reject: 1 C |
+| 5 | Reply to a comment | Its Reply box: 1 C, type, Ctrl+Enter: 1 K | Its card: 1 C (the box gets the keyboard), type, Enter: 1 K. It was 3 C: F11 |
+| 6 | Resolve another | Its ⋯ menu, Resolve thread: 2 C | Its card, Resolve: 2 C |
+| 7 | Save | Ctrl+S: 1 K | Ctrl+S: 1 K |
+| | **Total** | **7 C + 2 K** | **7 C + 2 K** |
+
+## 9. Table of contents and notes (D4)
+
+A table of contents at the start, a footnote, and the table updated after a new heading.
+
+| # | Step | Word | Featherweight |
+|---|---|---|---|
+| 1 | The table of contents | References, Table of Contents, Automatic Table 1: 3 C | Insert ▾, Table of contents: 2 C (it needed a scroll: F12) |
+| 2 | A footnote | Ctrl+Alt+F: 1 K | Ctrl+Alt+F: 1 K |
+| 3 | Update the table | Click in it, Update Table, Update entire table, OK: 4 C | Right-click in it, Update entire table: 2 C |
+| | **Total** | **7 C + 1 K** | **4 C + 1 K** |
+
+## 10. Fill in a form (D4)
+
+A form with content controls: a text box, a check box, a drop-down list and a date.
+
+| # | Step | Word | Featherweight |
+|---|---|---|---|
+| 1 | The text | Click the placeholder (it's selected), type: 1 C | The same |
+| 2 | The check box | 1 C | 1 C |
+| 3 | An item from the list | Open it, the item: 2 C | The same (or Alt+Down) |
+| 4 | The date | Click the control, type the date: 1 C (or the calendar: 3 C) | Click it, type the date: 1 C. Its menu has Today, Yesterday and Tomorrow, but no calendar (worth a look, not a finding). |
+| 5 | Save | Ctrl+S: 1 K | Ctrl+S: 1 K |
+| | **Total** | **5 C + 1 K** | **5 C + 1 K** |
+
+Inserting content controls is much shorter. Word needs the Developer tab first (File, Options, Customize Ribbon, Developer, OK), then Developer and the control. Featherweight has them in Insert ▾ (2 C, plus a scroll in a 700-pixel window).
+
+## 11. Text boxes, shapes and watermarks (D4)
+
+| # | Step | Word | Featherweight |
+|---|---|---|---|
+| 1 | A text box | Insert, Text Box, Simple Text Box: 3 C | Insert ▾, Text box: 2 C |
+| 2 | A rectangle | Insert, Shapes, Rectangle, then drag to draw it: 3 C + 1 drag | Insert ▾, Rectangle: 2 C, at a default size (plus a scroll in a 700-pixel window) |
+| 3 | A "DRAFT" watermark | Design, Watermark, DRAFT 1: 3 C | Insert ▾, Watermark…, Kind: Text (DRAFT is the default): 4 C (F15, accepted) |
+| | **Total** | **9 C + 1 drag** | **8 C** |
+
+## 12. Export PDF (D4)
+
+| # | Step | Word | Featherweight |
+|---|---|---|---|
+| 1 | A PDF beside the document | File, Export, Create PDF/XPS, Publish (the name is suggested): 4 C | ⋯, Export PDF…, Enter (the name is suggested): 2 C + 1 K |
+
+## 13. A letter from a template (D5)
+
+The letter template, the sender's name filled in, saved.
+
+| # | Step | Word | Featherweight |
+|---|---|---|---|
+| 1 | The template, from the start screen | The template, Create: 2 C, when it's among the featured ones (otherwise More templates and a search) | Templates: Letter: 1 C |
+| 1b | The template, from an open document | File, New, the template, Create: 4 C | +, New from template, Letter: 3 C |
+| 2 | Replace a placeholder | Click it (it's a content control), type: 1 C | Today, select it first: a drag or a triple-click (F16) |
+| 3 | Save | Ctrl+S, name and place, Enter: 2 K, 2 D | Ctrl+S, the name, Enter: 2 K, 1 D |
+| | **Total (from the start screen, one placeholder)** | **3 C + 2 K** | **1 C + 1 drag + 2 K**; 2 C + 2 K once F16 is fixed |
+
+## 14. Opening other formats (D5)
+
+| # | Step | Word | Featherweight |
+|---|---|---|---|
+| 1 | Open a `.doc` or an `.odt` | Double-click: 1 C (and Enable Editing when it was downloaded: 1 C) | Double-click: 1 C. A banner says that saving makes a `.docx` (the `.odt` banner is F18). |
+| 2 | Save a `.doc` | Ctrl+S keeps it a `.doc` (Compatibility Mode): 1 K | Ctrl+S, then Enter in Save As, where `<name>.docx` beside it is suggested: 2 K (F17, by design) |
+| 3 | Save an `.odt` | Ctrl+S, then "Use Word format" in the format question: 1 K + 1 C | Ctrl+S, then Enter: 2 K |
+| 4 | Open a `.dotx` | Double-click: a new document from it: 1 C | The same |
+
+## 15. A password-protected document (D5)
+
+| # | Step | Word | Featherweight (`claude/d5-crypt`) |
+|---|---|---|---|
+| 1 | Open it | Double-click, type the password, Enter: 1 C + 1 K, 1 D | Double-click, type the password in the tab, Enter: 1 C + 1 K, 1 D |
+| 2 | A wrong password | An error, OK, then open it again: +2 C | The box shakes and says so; type it again |
+| 3 | Save | Ctrl+S, with the same password: 1 K | The same |
 
 ## Scripted checks
 
