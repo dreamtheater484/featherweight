@@ -337,6 +337,41 @@ TEST(MsDoc_TrackedRunsSplitByTabsKeepOneRevision) {
   CHECK_EQ(TextOf(*doc, Body(*doc)[0]), std::string("a\tb\tc d\te"));
 }
 
+TEST(MsDoc_RepeatedBookmarkNameKeepsTheLast) {
+  // A damaged bookmark table names "Mark" (One) and "mark" (two), and "other" (three). Word keeps one
+  // bookmark of a name, the last, ignoring case: so "mark" around "two" and "other", no "Mark".
+  DocBuilder b;
+  b.text = u"One two three\r";
+  b.chars = {{14, {}}};
+  b.paras = {{14, 0, {}}};
+  Bytes names;
+  Add16(names, 0xFFFF);
+  Add16(names, 3);
+  Add16(names, 0);
+  for (const std::u16string& name : {std::u16string(u"Mark"), std::u16string(u"mark"), std::u16string(u"other")}) {
+    Add16(names, static_cast<uint32_t>(name.size()));
+    for (char16_t c : name) Add16(names, c);
+  }
+  b.tables[21] = names;
+  Bytes bkf, bkl;
+  for (uint32_t cp : {0, 4, 8, 14}) Add32(bkf, cp);
+  for (uint32_t k : {0, 1, 2}) {
+    Add16(bkf, k);
+    Add16(bkf, 0);
+  }
+  for (uint32_t cp : {3, 7, 13, 14}) Add32(bkl, cp);
+  b.tables[22] = bkf;
+  b.tables[23] = bkl;
+  auto doc = Open(b.Build());
+  REQUIRE(doc);
+  std::vector<std::string> seen;
+  for (const PairInfo& pr : doc->Pairs())
+    if (std::string name(pr.open.AttrOr(Name("name"))); !name.empty()) seen.push_back(name);
+  REQUIRE(seen.size() == 2u);
+  CHECK_EQ(seen[0], std::string("mark"));
+  CHECK_EQ(seen[1], std::string("other"));
+}
+
 TEST(MsDoc_StylesListsSectionsAndHeaders) {
   // Heading 1 (bold, 16 pt, outline level 1) on the first paragraph; the second numbered "1." from a
   // simple list; a landscape section with a title page and a header "Head".

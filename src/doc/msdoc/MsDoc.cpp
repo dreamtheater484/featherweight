@@ -908,10 +908,26 @@ void Converter::ReadNotes() {
   const Bytes bkf = Table(22), bkl = Table(23);
   const size_t n = bkf.size() >= 4 ? (bkf.size() - 4) / 8 : 0;
   const size_t ends = bkl.size() >= 4 ? bkl.size() / 4 - 1 : 0;
-  for (size_t k = 0; k < n && k < bookmarkNames_.size(); ++k) {
+  // A name the table repeats (Word never writes one, a damaged file can): Word keeps one bookmark of
+  // that name, the last, and the earlier ones are gone. Names compare without case, as in Word.
+  std::map<std::u16string, size_t> last;
+  auto key = [&](size_t k) {
+    std::u16string s = bookmarkNames_[k];
+    for (char16_t& c : s)
+      if (c >= u'A' && c <= u'Z') c = static_cast<char16_t>(c - u'A' + u'a');
+    return s;
+  };
+  std::vector<std::pair<uint32_t, uint32_t>> range(std::min(n, bookmarkNames_.size()), {1, 0});
+  for (size_t k = 0; k < range.size(); ++k) {
     const size_t end = bkf.U16(4 * (n + 1) + 4 * k);
     const uint32_t a = bkf.U32(4 * k), b = end < ends ? bkl.U32(4 * end) : a;
     if (a > ccp_[0] || b > ccp_[0] || b < a || bookmarkNames_[k].empty()) continue;
+    range[k] = {a, b};
+    last[key(k)] = k;
+  }
+  for (size_t k = 0; k < range.size(); ++k) {
+    const auto [a, b] = range[k];
+    if (b < a || last[key(k)] != k) continue;
     bookmarks_.insert({a, {true, static_cast<int>(k)}});
     bookmarks_.insert({b, {false, static_cast<int>(k)}});
   }
