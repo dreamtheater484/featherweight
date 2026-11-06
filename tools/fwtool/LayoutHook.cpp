@@ -2,6 +2,8 @@
 // with fwdoclayout (src/doc/layout/Layout.h), marking each stage in OpenTimings.
 #include "LayoutHook.h"
 
+#include <windows.h>
+#include <psapi.h>
 #include "Common.h"
 
 #include <chrono>
@@ -215,6 +217,54 @@ uint32_t ParagraphToType(const fw::doc::Document& doc, const fw::doc::layout::La
 }
 
 }  // namespace
+
+namespace {
+
+double PrivateMB() {
+  PROCESS_MEMORY_COUNTERS_EX pmc{};
+  pmc.cb = sizeof pmc;
+  K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof pmc);
+  return pmc.PrivateUsage / 1048576.0;
+}
+
+double PeakWorkingSetMB() {
+  PROCESS_MEMORY_COUNTERS pmc{};
+  K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc);
+  return pmc.PeakWorkingSetSize / 1048576.0;
+}
+
+}  // namespace
+
+bool BenchScrolling(const std::filesystem::path& document, ScrollResult& result, std::string& error) {
+  PagePainter painter;
+  if (!painter.Init()) {
+    error = "can't paint: no Direct2D device";
+    return false;
+  }
+  result.memoryOpen = PrivateMB();
+  const auto start = std::chrono::steady_clock::now();
+  std::unique_ptr<fw::doc::Document> doc = OpenModel(document, nullptr, error);
+  if (!doc) return false;
+  g_document = doc.get();
+  fw::text::Fonts& fonts = SharedFonts();
+  fonts.ClearSubstitutions();
+  {
+    fw::doc::layout::Layout layout(*doc, fonts);
+    layout.LayOutAll();
+    result.layOutMs = Since(start);
+    result.pages = layout.PageCount();
+    result.memoryLaidOut = PrivateMB();
+    for (size_t page = 0; page < layout.PageCount(); ++page) {
+      const auto t = std::chrono::steady_clock::now();
+      painter.Paint(layout, page);
+      result.paint.push_back(Since(t));
+    }
+    result.memoryScrolled = PrivateMB();
+  }
+  g_document = nullptr;
+  result.peakWorkingSet = PeakWorkingSetMB();
+  return true;
+}
 
 bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>& places, size_t& pages,
                  std::string& error) {

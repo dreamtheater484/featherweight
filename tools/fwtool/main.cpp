@@ -62,11 +62,13 @@ constexpr const char* kUsage =
     "  fwtool compare --self-test <reference folder>...\n"
     "      Checks the measurement: Word's lines match themselves, one moved line break costs\n"
     "      exactly one line, and an added page changes only the page count.\n"
-    "  fwtool bench [--runs N] [--json FILE] [--budgets] [--typing] <file or folder>...\n"
+    "  fwtool bench [--runs N] [--json FILE] [--budgets] [--typing | --scrolling] <file or folder>...\n"
     "      Times opening each Word document, stage by stage, against the opening budgets\n"
     "      (plan §11). With --budgets, a missed budget fails. With --typing, times keystrokes\n"
     "      at the start, middle and end and in a table instead: from the edit to the page painted\n"
     "      again. Formatting there (bold, centered, Heading 1, bullets, each undone) counts too.\n"
+    "      With --scrolling, paints every page in order, as scrolling to the end shows them, and\n"
+    "      reports each page's paint time and the memory laid out and scrolled (huge documents).\n"
     "  fwtool edit-check [--edits N] [--seed S] <file or folder>...\n"
     "      Makes N random edits (40) in each Word document through the editor, lays it out again\n"
     "      incrementally after each, and checks every ten that it's what a layout from scratch is.\n"
@@ -244,6 +246,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--runs" && i + 1 < argc) options.runs = _wtoi(argv[++i]);
     else if (arg == L"--budgets") options.budgets = true;
     else if (arg == L"--typing") options.typing = true;
+    else if (arg == L"--scrolling") options.scrolling = true;
     else if (arg == L"--edits" && i + 1 < argc) options.edits = std::max(1, _wtoi(argv[++i]));
     else if (arg == L"--seed" && i + 1 < argc) options.seed = static_cast<unsigned>(std::wcstoul(argv[++i], nullptr, 10));
     else if (arg == L"--rounds" && i + 1 < argc) options.rounds = static_cast<uint32_t>(std::max(1, _wtoi(argv[++i])));
