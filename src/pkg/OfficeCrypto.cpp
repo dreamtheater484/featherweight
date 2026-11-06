@@ -676,6 +676,8 @@ Result DecryptDoc(const CompoundFile& file, std::wstring_view password, DocStrea
   if (!DecryptBlocks(key, wordPlain) || !DecryptBlocks(key, tablePlain)) return Result::Unsupported;
   std::copy(word->begin(), word->begin() + kFibBase, wordPlain.begin());
   std::copy(table->begin(), table->begin() + lKey, tablePlain.begin());
+  wordPlain[0x0B] &= ~0x01;                          // fEncrypted
+  std::fill(wordPlain.begin() + 0x0E, wordPlain.begin() + 0x12, uint8_t(0));  // lKey
   if (auto data = file.Stream("Data")) {
     out.data = std::move(*data);
     if (!DecryptBlocks(key, out.data)) return Result::Unsupported;

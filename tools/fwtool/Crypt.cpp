@@ -83,9 +83,7 @@ int RunCrypt(const Options& options, bool encrypt) {
         ++failed;
         continue;
       }
-      // fEncrypted off and lKey 0: a .doc without a password.
-      streams.wordDocument[0x0B] &= ~0x01;
-      for (int i = 0; i < 4; ++i) streams.wordDocument[0x0E + i] = 0;
+      // DecryptDoc's streams are a .doc without a password (fEncrypted off, lKey 0).
       std::vector<std::vector<uint8_t>> kept;
       std::vector<fw::pkg::CompoundStream> list;
       for (const auto& path : doc->Streams()) {
