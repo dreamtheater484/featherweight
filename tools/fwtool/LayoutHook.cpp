@@ -4,7 +4,6 @@
 
 #include <windows.h>
 #include <psapi.h>
-#include "Common.h"
 
 #include <chrono>
 #include <cstdio>
