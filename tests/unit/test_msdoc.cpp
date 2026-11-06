@@ -303,6 +303,40 @@ TEST(MsDoc_TextAndFormatting) {
   }
 }
 
+TEST(MsDoc_TrackedRunsSplitByTabsKeepOneRevision) {
+  // An inserted and a deleted stretch, each written as several w:r (text and tabs): one w:ins and one
+  // w:del around them, each with its own w:id. A w:ins per piece with the stretch's one id repeated it,
+  // which the Open XML SDK refuses (three govuk .doc files of the corpus).
+  DocBuilder b;
+  b.text = u"a\tb\tc d\te\r";
+  b.chars = {{5, S8(0x0801, 1)}, {6, {}}, {9, S8(0x0800, 1)}, {10, {}}};
+  b.paras = {{10, 0, {}}};
+  pkg::Status st;
+  Bytes docx = msdoc::ToDocx(From(b.Build()), st);
+  REQUIRE(!docx.empty());
+  auto package = test::OpenBytes(docx, st);
+  REQUIRE(package);
+  Bytes part;
+  REQUIRE(package->ReadPart("/word/document.xml", part).Ok());
+  const std::string xml = test::Text(part);
+  auto count = [&](std::string_view what) {
+    size_t n = 0;
+    for (size_t at = xml.find(what); at != std::string::npos; at = xml.find(what, at + 1)) ++n;
+    return n;
+  };
+  CHECK_EQ(count("<w:ins "), size_t{1});
+  CHECK_EQ(count("<w:del "), size_t{1});
+  CHECK_EQ(count("<w:tab/>"), size_t{3});
+  CHECK_EQ(count("w:id=\"1\""), size_t{1});
+  CHECK_EQ(count("w:id=\"2\""), size_t{1});
+  const size_t ins = xml.find("<w:ins "), insEnd = xml.find("</w:ins>"), del = xml.find("<w:del ");
+  CHECK(ins < insEnd && insEnd < del && xml.find("</w:del>") > del);
+  CHECK(xml.find("<w:delText xml:space=\"preserve\">d</w:delText>") > del);
+  auto doc = Open(b.Build());
+  REQUIRE(doc);
+  CHECK_EQ(TextOf(*doc, Body(*doc)[0]), std::string("a\tb\tc d\te"));
+}
+
 TEST(MsDoc_StylesListsSectionsAndHeaders) {
   // Heading 1 (bold, 16 pt, outline level 1) on the first paragraph; the second numbered "1." from a
   // simple list; a landscape section with a title page and a header "Head".
