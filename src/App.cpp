@@ -1251,7 +1251,9 @@ int App::AppShortcut(UINT vk, UINT mods) {
     switch (vk) {
       case 'O': return CmdOpen;
       case 'N':
-        if (fw::EditorShipped(fw::FileKind::Document)) return CmdNewFile + static_cast<int>(fw::FileKind::Document);
+        // Not Ctrl+Shift+N: that's Word's Normal style, the document's own.
+        if (!shift && fw::EditorShipped(fw::FileKind::Document))
+          return CmdNewFile + static_cast<int>(fw::FileKind::Document);
         break;
       case 'S': return shift ? CmdSaveAs : CmdSave;
       case 'P': return CmdPrint;
