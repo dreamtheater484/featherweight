@@ -615,6 +615,11 @@ TEST(Text_CapsSuperscriptSpacing) {
   spaced.letterSpacing = 2;
   auto plain = Lay(L"abcd", s, 400), wide = Lay(L"abcd", spaced, 400);
   CHECK_NEAR(wide[0].contentRight - plain[0].contentRight, 8, 0.01);
+  // The spacing after a line's last letter takes no room there (D5, the UN reports' spaced text):
+  // "abcd abcd" fits a column 1 pt narrower than it is with that spacing.
+  const float width = Lay(L"abcd abcd", spaced, 400)[0].contentRight;
+  CHECK(Lay(L"abcd abcd", spaced, width - 1).size() == 1);
+  CHECK(Lay(L"abcd abcd", spaced, width - 3).size() == 2);
 }
 
 TEST(Text_InlineObjects) {
