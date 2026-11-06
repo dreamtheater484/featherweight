@@ -78,6 +78,12 @@ constexpr const char* kUsage =
     "  fwtool export --out DIR <file or folder>...\n"
     "      Saves each Word document as RTF and as plain text (UTF-8) in DIR, as the Word tab's\n"
     "      Save As does, for Word to read back (scripts\\word-open-check.ps1).\n"
+    "  fwtool encrypt --password P --out DIR <file or folder>...\n"
+    "      Saves each Office file in DIR protected with password P, as Featherweight saves a\n"
+    "      protected document (agile encryption), for Word to open.\n"
+    "  fwtool decrypt --password P --out DIR <file or folder>...\n"
+    "      Opens each password-protected Office file as Featherweight does and saves its package\n"
+    "      in DIR; checks that encrypting it again with the key from opening round-trips.\n"
     "  fwtool bench-app [--runs N] [--json FILE] <Featherweight.exe> [<file>...]\n"
     "      Starts a private copy of Featherweight, alone and with each file, and measures launch\n"
     "      to window, to the first frame (the start screen or the first page), memory once\n"
@@ -172,6 +178,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--layout") options.layout = true;
     else if (arg == L"--expect-reject") options.expectReject = true;
     else if (arg == L"--out" && i + 1 < argc) options.outDir = argv[++i];
+    else if (arg == L"--password" && i + 1 < argc) options.password = argv[++i];
     else if (arg == L"--printer" && i + 1 < argc) options.printer = argv[++i];
     else if (arg == L"--warp") options.warp = true;
     else if (arg == L"--pictures") options.pictures = true;
@@ -217,6 +224,8 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"torture") return fwtool::RunTorture(options);
   if (command == L"paste-check") return fwtool::RunPasteCheck(options);
   if (command == L"export") return fwtool::RunExport(options);
+  if (command == L"encrypt") return fwtool::RunCrypt(options, true);
+  if (command == L"decrypt") return fwtool::RunCrypt(options, false);
   if (command == L"pdf-check") return fwtool::RunPdfCheck(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;

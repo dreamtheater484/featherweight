@@ -103,6 +103,7 @@ if(FW_BUILD_TESTS)
     tests/unit/test_units.cpp
     tests/unit/test_zip.cpp
     tests/unit/test_cfb.cpp
+    tests/unit/test_crypto.cpp
     tests/unit/test_xml.cpp
     tests/unit/test_package.cpp
     tests/unit/test_safefile.cpp

@@ -7,6 +7,7 @@ add_library(fwpkg STATIC
   Formula.cpp
   Limits.cpp
   Mce.cpp
+  OfficeCrypto.cpp
   Package.cpp
   ReferenceRules.cpp
   References.cpp

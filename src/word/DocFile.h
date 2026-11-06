@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "pkg/OfficeCrypto.h"
 #include "pkg/OwnerFile.h"
 #include "pkg/Recovery.h"
 #include "pkg/Snapshot.h"
@@ -73,6 +74,13 @@ class DocFile {
 
   // Writes unsaved changes to the recovery folder when there are some it doesn't have yet.
   void Autosave(fw::doc::Document& doc);
+  // A recovered password-protected document still waiting for its password: its file as it is.
+  void AutosaveProtected(std::span<const uint8_t> file);
+
+  // A password-protected document (D5): saves, backups and autosaves stay encrypted with this key
+  // (the password the file was opened with).
+  void Protect(fw::pkg::crypto::Key key) { key_ = std::move(key); }
+  bool Protected() const { return !key_.Empty(); }
 
   // Someone else is editing the file (checked when it was opened): a message for a banner, or empty.
   std::wstring InUseMessage() const;
@@ -96,6 +104,7 @@ class DocFile {
   std::set<uint32_t> changed_;
   uint64_t generation_ = 0, autosaved_ = 0;
   std::wstring autosave_;
+  fw::pkg::crypto::Key key_;
   uint64_t notifiedSize_ = 0;  // the last disk change reported
   int64_t notifiedTime_ = 0;
 };
