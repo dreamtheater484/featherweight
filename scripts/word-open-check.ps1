@@ -33,8 +33,8 @@ param(
   [int]$TimeoutSeconds = 90,
   [switch]$ShowWindows,  # print every window Word shows while a file opens (for diagnosing)
   # Also read what Word sees once the file is open: its paragraphs, tracked changes (type, author,
-  # text) and comments (author, text, resolved, the comment each one replies to), into the JSON's
-  # "review" (scripts\contract-review-check.ps1).
+  # text), comments (author, text, resolved, the comment each one replies to) and bookmarks (name,
+  # range and text, hidden ones too), into the JSON's "review" (scripts\contract-review-check.ps1).
   [switch]$Review,
   # The password of protected files (D5: Featherweight's encrypted saves). Without it, a protected
   # file fails to open instead of prompting.
@@ -171,7 +171,9 @@ if ($Child) {
             try { if ($c.Ancestor) { $parent = $c.Ancestor.Index } } catch {}
             $notes += [ordered]@{ index = $c.Index; author = $c.Author; text = $c.Range.Text; done = [bool]$c.Done; parent = $parent }
           }
-          $result.review = [ordered]@{ paragraphs = $paras; revisions = $revs; comments = $notes }
+          $doc.Bookmarks.ShowHidden = $true  # _Toc and _Ref bookmarks too
+          $marks = @(); foreach ($b in $doc.Bookmarks) { $marks += [ordered]@{ name = $b.Name; start = $b.Start; end = $b.End; text = $b.Range.Text } }
+          $result.review = [ordered]@{ paragraphs = $paras; revisions = $revs; comments = $notes; bookmarks = $marks }
           break
         } catch {
           $ex = $_.Exception
