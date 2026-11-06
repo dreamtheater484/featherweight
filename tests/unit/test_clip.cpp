@@ -236,6 +236,10 @@ TEST(Clip_HostileCopiesAreCapped) {
        {"<p>a&#xD800;b&#xFFFE;c&#xFFFF;d\xED\xA0\x80" "e\xEF\xBF\xBE" "f</p>",
         "<p><a href=\"https://example.com/a\x80\x01\">link</a> <span style=\"font-family:'Bad\x01\x80'\">x</span></p>",
         "{\\rtf1\\ansi a\\u-10240?b\\u-2?c\\u-1?d}",
+        // An object's place (U+FFFC) and a paragraph separator (U+2029), which typing leaves out or
+        // breaks at: the paste puts in the same text (fuzz_rtf's finding).
+        "{\\rtf1\\ansi a\\u-4?b\\u8233?c}",
+        "<p>a&#xFFFC;b&#x2029;c</p>",
         "{\\rtf1\\ansi{\\fonttbl{\\f0\\fnil Bad\\'01\\'80Name;}}\\f0 {\\field{\\*\\fldinst HYPERLINK \"https://e.com/\\'01\"}{\\fldrslt x}}}"}) {
     const std::string_view h = hostile;
     const auto clip = h.starts_with("{\\rtf") ? edit::FromRtf(h) : edit::FromHtml(h);

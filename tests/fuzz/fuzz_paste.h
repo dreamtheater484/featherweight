@@ -161,6 +161,9 @@ inline bool PasteAndCheck(Document& doc, Pos from, Pos to, const edit::Clip& cli
   const std::string before = MainXml(doc);
   const edit::Result r = edit::PasteClip(ed, from, to, clip, target);
   if (!r.ok) {
+    std::string why;
+    for (char16_t c : r.message) why += c < 0x80 ? static_cast<char>(c) : '?';
+    std::fprintf(stderr, "Paste refused: %s\n", why.c_str());
     Check(MainXml(doc) == before, "a refused paste changed the document");
     return false;
   }
