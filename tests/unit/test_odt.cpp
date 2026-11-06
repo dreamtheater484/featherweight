@@ -295,3 +295,35 @@ TEST(Odt_TextReferencesAndParagraphBorders) {
   CHECK(xml.find("<w:pBdr><w:top w:val=\"single\" w:sz=\"4\" w:space=\"7\" w:color=\"000000\"/><w:left w:val=\"nil\"/>") !=
         std::string::npos);
 }
+
+TEST(Odt_TableWidthPaddingRowsAndPageNumberFormat) {
+  // A table half the text's width (17 cm): its two 1-inch columns fitted to it. Its cells' padding is their
+  // margins; its row stays on one page, at least half an inch high. The second page style numbers in roman.
+  const std::string autos =
+      "<style:style style:name=\"Tb\" style:family=\"table\"><style:table-properties style:width=\"2in\" style:rel-width=\"50%\" "
+      "fo:margin-left=\"0.25in\"/></style:style>"
+      "<style:style style:name=\"Col\" style:family=\"table-column\"><style:table-column-properties style:column-width=\"1in\"/></style:style>"
+      "<style:style style:name=\"Row\" style:family=\"table-row\"><style:table-row-properties fo:keep-together=\"always\" "
+      "style:min-row-height=\"0.5in\"/></style:style>"
+      "<style:style style:name=\"Cell\" style:family=\"table-cell\"><style:table-cell-properties fo:padding=\"0in\" "
+      "fo:padding-left=\"0.1in\"/></style:style>"
+      "<style:style style:name=\"P1\" style:family=\"paragraph\" style:master-page-name=\"Roman\"/>";
+  const std::string body =
+      "<table:table table:style-name=\"Tb\"><table:table-column table:style-name=\"Col\" table:number-columns-repeated=\"2\"/>"
+      "<table:table-row table:style-name=\"Row\"><table:table-cell table:style-name=\"Cell\"><text:p>A</text:p></table:table-cell>"
+      "<table:table-cell><text:p>B</text:p></table:table-cell></table:table-row></table:table>"
+      "<text:p text:style-name=\"P1\">Next</text:p>";
+  const std::string layouts =
+      "<style:page-layout style:name=\"pm3\"><style:page-layout-properties fo:page-width=\"21cm\" fo:page-height=\"29.7cm\" "
+      "style:num-format=\"i\" fo:margin-left=\"2cm\" fo:margin-right=\"2cm\"/></style:page-layout>";
+  const std::string masters = "<style:master-page style:name=\"Roman\" style:page-layout-name=\"pm3\"/>";
+  std::string xml;
+  auto doc = Converted(Odt(body, autos, "", layouts, masters), &xml);
+  CHECK(doc);
+  if (!doc) return;
+  CHECK(xml.find("<w:tblW w:w=\"2500\" w:type=\"pct\"/><w:tblInd w:w=\"360\" w:type=\"dxa\"/>") != std::string::npos);
+  CHECK(xml.find("<w:gridCol w:w=\"2409\"/><w:gridCol w:w=\"2409\"/>") != std::string::npos);  // 9638 / 2 / 2
+  CHECK(xml.find("<w:trPr><w:cantSplit/><w:trHeight w:val=\"720\" w:hRule=\"atLeast\"/></w:trPr>") != std::string::npos);
+  CHECK(xml.find("<w:tcMar><w:top w:w=\"0\" w:type=\"dxa\"/><w:left w:w=\"144\" w:type=\"dxa\"/>") != std::string::npos);
+  CHECK(xml.find("<w:pgNumType w:fmt=\"lowerRoman\"/>") != std::string::npos);
+}

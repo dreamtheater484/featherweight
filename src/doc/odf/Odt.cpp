@@ -363,6 +363,7 @@ class Converter {
   int Num(std::string_view listStyle, bool restart);
   std::string NumPr(std::string_view listStyle, int level, bool restart);
   std::string SectPr();
+  int TextWidth() const;  // the section's text width, twips
   // A paragraph that starts another page style: the section before it ends with the paragraph before.
   void SectionBreak(std::string& out, std::string_view master, std::string_view pageNumber);
   std::string StylesXml();
@@ -747,8 +748,20 @@ void Converter::Table(xml_node table, std::string& out, int depth) {
   std::string tblPr = "<w:tblW w:w=\"0\" w:type=\"auto\"/>";
   if (const Style* s = Find("table", Attr(table, "table:style-name"))) {
     xml_node tp = s->node.child("style:table-properties");
+    // A width relative to the text's: Word fits the columns to it.
+    if (auto rel = Attr(tp, "style:rel-width"); !rel.empty() && rel.back() == '%') {
+      const int pct = std::clamp(std::atoi(std::string(rel).c_str()), 1, 100);
+      tblPr = "<w:tblW w:w=\"" + std::to_string(pct * 50) + "\" w:type=\"pct\"/>";
+      const int text = TextWidth();
+      long long sum = 0;
+      for (int w : widths) sum += w;
+      if (&out == body_ && text > 0 && sum > 0)
+        for (int& w : widths) w = static_cast<int>(std::max<long long>(1, static_cast<long long>(w) * text * pct / 100 / sum));
+    }
     if (auto a = Attr(tp, "table:align"); a == "center" || a == "right")
       tblPr += std::string("<w:jc w:val=\"") + (a == "center" ? "center" : "right") + "\"/>";
+    if (auto ind = Twips(Attr(tp, "fo:margin-left")); ind && *ind != 0 && Attr(tp, "table:align") != "center")
+      tblPr += "<w:tblInd w:w=\"" + std::to_string(std::clamp(*ind, -31680, 31680)) + "\" w:type=\"dxa\"/>";
   }
   out += "<w:tbl><w:tblPr>" + tblPr + "<w:tblLayout w:type=\"fixed\"/></w:tblPr><w:tblGrid>";
   for (int w : widths) out += "<w:gridCol w:w=\"" + std::to_string(w) + "\"/>";
@@ -756,7 +769,20 @@ void Converter::Table(xml_node table, std::string& out, int depth) {
   std::vector<std::pair<int, int>> below(cols, {0, 1});  // rows still merged down from above, and their span
   for (size_t r = 0; r < rows.size(); ++r) {
     out += "<w:tr>";
-    if (header[r]) out += "<w:trPr><w:tblHeader/></w:trPr>";
+    {
+      // The row: kept on one page, its height, a header that repeats.
+      std::string trPr;
+      if (const Style* rs = Find("table-row", Attr(rows[r], "table:style-name"))) {
+        xml_node rp = rs->node.child("style:table-row-properties");
+        if (Attr(rp, "fo:keep-together") == "always") trPr += "<w:cantSplit/>";
+        if (auto h = Twips(Attr(rp, "style:row-height")); h && *h > 0)
+          trPr += "<w:trHeight w:val=\"" + std::to_string(std::min(*h, 31680)) + "\" w:hRule=\"exact\"/>";
+        else if (auto m = Twips(Attr(rp, "style:min-row-height")); m && *m > 0)
+          trPr += "<w:trHeight w:val=\"" + std::to_string(std::min(*m, 31680)) + "\" w:hRule=\"atLeast\"/>";
+      }
+      if (header[r]) trPr += "<w:tblHeader/>";
+      if (!trPr.empty()) out += "<w:trPr>" + trPr + "</w:trPr>";
+    }
     size_t col = 0;
     bool any = false;
     for (xml_node c : rows[r].children()) {
@@ -790,7 +816,7 @@ void Converter::Table(xml_node table, std::string& out, int depth) {
           tcPr += "<w:vMerge w:val=\"restart\"/>";
           below[col] = {down - 1, span};
         }
-        std::string borders, shade, valign;
+        std::string borders, shade, valign, margins;
         if (const Style* s = Find("table-cell", Attr(c, "table:style-name"))) {
           xml_node cp = s->node.child("style:table-cell-properties");
           const std::string_view all = Attr(cp, "fo:border");
@@ -800,11 +826,20 @@ void Converter::Table(xml_node table, std::string& out, int depth) {
           }
           if (auto bg = Color(Attr(cp, "fo:background-color")); !bg.empty())
             shade = "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"" + bg + "\"/>";
+          // The cell's padding: its margins.
+          static const std::pair<const char*, const char*> kPad[] = {
+              {"top", "fo:padding-top"}, {"left", "fo:padding-left"}, {"bottom", "fo:padding-bottom"}, {"right", "fo:padding-right"}};
+          for (auto [side, attr] : kPad) {
+            std::optional<int> v = Twips(Attr(cp, attr));
+            if (!v) v = Twips(Attr(cp, "fo:padding"));
+            if (v) margins += std::string("<w:") + side + " w:w=\"" + std::to_string(std::clamp(*v, 0, 31680)) + "\" w:type=\"dxa\"/>";
+          }
+          if (!margins.empty()) margins = "<w:tcMar>" + margins + "</w:tcMar>";
           if (auto va = Attr(cp, "style:vertical-align"); va == "middle" || va == "bottom")
             valign = std::string("<w:vAlign w:val=\"") + (va == "middle" ? "center" : "bottom") + "\"/>";
         }
         if (!borders.empty()) tcPr += "<w:tcBorders>" + borders + "</w:tcBorders>";
-        tcPr += shade + valign;
+        tcPr += shade + margins + valign;
         std::string inner;
         Blocks(c, inner, depth + 1);
         if (inner.size() < 7 || inner.compare(inner.size() - 6, 6, "</w:p>") != 0) inner += "<w:p/>";
@@ -1251,6 +1286,15 @@ void Converter::SectionBreak(std::string& out, std::string_view master, std::str
   pageStart_ = std::clamp(std::atoi(std::string(pageNumber).c_str()), 0, 32767);
 }
 
+int Converter::TextWidth() const {
+  xml_node layout;
+  if (master_)
+    if (auto it = pageLayouts_.find(Attr(master_, "style:page-layout-name").data()); it != pageLayouts_.end()) layout = it->second;
+  xml_node pl = layout.child("style:page-layout-properties");
+  const int width = Twips(Attr(pl, "fo:page-width")).value_or(11906);
+  return width - Twips(Attr(pl, "fo:margin-left")).value_or(1134) - Twips(Attr(pl, "fo:margin-right")).value_or(1134);
+}
+
 std::string Converter::SectPr() {
   std::string s = "<w:sectPr>";
   xml_node layout;
@@ -1302,7 +1346,15 @@ std::string Converter::SectPr() {
   s += "<w:pgMar w:top=\"" + std::to_string(top) + "\" w:right=\"" + std::to_string(right) + "\" w:bottom=\"" +
        std::to_string(bottom) + "\" w:left=\"" + std::to_string(left) + "\" w:header=\"" + std::to_string(header) +
        "\" w:footer=\"" + std::to_string(footer) + "\" w:gutter=\"0\"/>";
-  if (pageStart_ > 0) s += "<w:pgNumType w:start=\"" + std::to_string(pageStart_) + "\"/>";
+  // The page numbers: their format (the page layout's) and where they start again.
+  const std::string_view nf = Attr(pl, "style:num-format");
+  const char* fmt = nf == "i" ? "lowerRoman" : nf == "I" ? "upperRoman" : nf == "a" ? "lowerLetter" : nf == "A" ? "upperLetter" : nullptr;
+  if (fmt || pageStart_ > 0) {
+    s += "<w:pgNumType";
+    if (fmt) s += std::string(" w:fmt=\"") + fmt + "\"";
+    if (pageStart_ > 0) s += " w:start=\"" + std::to_string(pageStart_) + "\"";
+    s += "/>";
+  }
   if (xml_node cols = pl.child("style:columns"); cols) {
     const int n = std::clamp(std::atoi(Attr(cols, "fo:column-count").data()), 1, 45);
     if (n > 1) s += "<w:cols w:num=\"" + std::to_string(n) + "\" w:space=\"" + std::to_string(Twips(Attr(cols, "fo:column-gap")).value_or(709)) + "\"/>";
