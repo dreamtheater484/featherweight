@@ -13,6 +13,10 @@ The fidelity piece of D5 (`docs/d5-plan.md`). Measured with `fwtool compare` aga
 | Contextual spacing collapses before dropping the space after; space after must fit above footnotes | 98 (90.7 %) | 107,226 (96.5 %) |
 | Merged with `claude/d5-int` e38b850 (equations, drawings in the dump, `.doc` import) | 98 (90.7 %) | 107,255 (96.6 %) |
 | A paragraph that only holds a section break gets no list number (tudresden 35 → 33 pages, as in Word; QAPP 64 → 63, Word 62) | 99 (91.7 %) | 107,259 (96.6 %) |
+| In mode 15, a list level that shows no number has no tab after it; a page break before doesn't keep the space before at the page top (short-form contract 77 → 76 pages, as in Word) | 100 (92.6 %) | 107,415 (96.7 %) |
+| Target | 105 (97 %) | 108,843 (98 %) |
+
+From 766982d on, the targets (below) are the measure. With the last step: **140 of 152 (92.1 %), 110,011 of 114,076 lines (96.4 %)**; copies 168 of 258 (65.1 %), 210,703 of 239,892 lines (87.8 %).
 
 ## What the targets count
 
@@ -54,7 +58,6 @@ These documents differ only because the reference Word is English. We show what 
 - **bund-abnahmeprotokoll** (5 pages in Word, 4 here). Its headers hold `STYLEREF "Überschrift 1;Überschrift-1"`.
   - English Word doesn't know the German style name, so it prints "Error! Use the Home tab to apply …" over three lines, and page 4's body moves down 26 pt.
   - German Word, and we, show the heading.
-| Target | 105 (97 %) | 108,843 (98 %) |
 
 ## Fonts
 
@@ -99,6 +102,9 @@ Modes 11, 12 and 14 cost 140 lines in all, so the mode work goes to the flags th
 - **Lists.**
   - A paragraph that leaves its style's list with `w:numId 0` loses the style's indents too (+40 lines).
   - Between two items of one list, `beforeAutospacing` and `afterAutospacing` give no space, as between HTML `<li>`s. This took revised-methodology from 127 pages to 119 (Word: 109).
+- **An empty list number.** A level with `w:numFmt none` and an empty `w:lvlText` (the short-form contract's defined terms) gets no tab after it in mode 15, so the term starts at the cell's edge. Word's render of the `.doc` copy (mode 11) still has the tab, so the rule is for mode 15 only.
+- **Page tops after `w:pageBreakBefore`.** Word drops the space before there, as after a page break character. Checked on the 14 target documents that use it: 14 page tops come closer to Word's (tudresden, both bund-bsi documents, the short-form contract), 2 move away (bund-bsi page 5).
+- **Open: borders as room in table rows.** Counting only the table's own `w:tblBorders` puts the short-form contract's rows exactly where Word's are, but loses 45 target lines in total (EPA: 90). EPA's acronym table takes its borders from a style, and its page 5 also starts 6 pt low after a section break, which Word drops there.
 - **Open: deleted paragraph marks.** In Word's final view, a paragraph whose mark is a tracked deletion joins the next paragraph. We only drop such paragraphs when they're empty. revised-methodology has 130 of them; doing this properly means laying two model paragraphs out as one.
 - **Open: EPA brownfields QAPP (1,150 lines missing).** Its reference PDF has 171 pages, while Word itself counts 160. Two findings there are held back until they help the totals:
   - Table borders: Word's rows are taller by the border width (0.5 pt rows in the acronym table: 12.56 pt against our 12.07 pt). Counting table and style borders makes pages 6–9 match exactly. On its own it costs 98 lines, because the page before is one row short.
