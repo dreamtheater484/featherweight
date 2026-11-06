@@ -298,6 +298,7 @@ text::ParagraphFormat Engine::FormatOf(const ParaProps& p) const {
   f.hyphenation.zone = compatMode_ >= 15 ? 0 : Pt(set.hyphenationZone);
   f.hyphenation.consecutiveLimit = set.consecutiveHyphenLimit;
   f.hyphenation.caps = !set.doNotHyphenateCaps;
+  f.hyphenation.likeWord = true;
   f.expandLineBreaks = !set.Compat(Name("doNotExpandShiftReturn"));
   f.squeezeSpaces = compatMode_ >= 15;
   if (!set.decimalSymbol.empty()) f.decimalSeparator = static_cast<wchar_t>(set.decimalSymbol.front());

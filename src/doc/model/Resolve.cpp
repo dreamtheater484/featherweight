@@ -791,6 +791,19 @@ ParaProps ResolveParaProps(const Document& doc, uint32_t para, bool withDirect, 
     if (jc && ParseJustification(jc.AttrOr(kVal)) == Justification::Start) p.jc = tableJc;
   }
   if (lvl && numDirect) ApplyPara(doc, lvl.Child(kPPr), p);  // D2: named directly, after the style
+  // A paragraph that takes itself out of its style's list (w:numId 0) loses the style's indents
+  // too, as in Word: they belong to the list (measured on the corpus).
+  if (!lvl && direct.Path({Name("numPr"), Name("numId")}).AttrOr(kVal) == "0") {
+    bool styleList = false;
+    for (const Style* s : chain)
+      if (Node n = s->node.Path({kPPr, Name("numPr"), Name("numId")}); n && n.AttrOr(kVal) != "0") styleList = true;
+    if (styleList) {
+      p.indStart = Twips(0);
+      p.firstLine = Twips(0);
+      p.indStartChars = -1;
+      p.firstLineChars = -1;
+    }
+  }
   if (withDirect) ApplyPara(doc, direct, p);
   std::sort(p.tabs.begin(), p.tabs.end(), [](const TabStop& a, const TabStop& b) { return a.pos < b.pos; });
   if (style) p.style = style->id;

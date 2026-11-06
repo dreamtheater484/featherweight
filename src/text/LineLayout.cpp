@@ -846,6 +846,7 @@ uint32_t LineBreaker::Impl::Hyphenate(uint32_t segFrom, uint32_t ws, uint32_t we
     for (uint32_t k = cs; k < ce; ++k)
       if (CharType(text[k]) & C1_LOWER) lower = true;
     const Hyphenator* hyphenator = ce - cs >= 4 && (h.caps || lower) ? Hyphenator::For(StyleOf(cs).language) : nullptr;
+    if (hyphenator && h.likeWord && !Hyphenator::WordHyphenates(StyleOf(cs).language)) hyphenator = nullptr;
     if (hyphenator) {
       for (uint32_t point : hyphenator->Points(std::wstring_view(text).substr(cs, ce - cs)))
         if (clusterStart[cs + point]) points.push_back(cs + point);
