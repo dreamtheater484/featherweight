@@ -162,9 +162,7 @@ const text::FontMetrics& StylePool::Metrics(text::Fonts& fonts, const text::Text
   auto it = metrics_.find(style);
   if (it != metrics_.end()) return it->second;
   text::FontMetrics m;
-  const std::wstring& family = fonts.Resolve(style->family);
-  if (const text::Face* face = fonts.Get(family, style->bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
-                                         style->italic))
+  if (const text::Face* face = fonts.FaceFor(style->family, style->bold, style->italic))
     m = face->Metrics(style->size);
   return metrics_.emplace(style, m).first->second;
 }
@@ -275,6 +273,8 @@ text::ParagraphFormat Engine::FormatOf(const ParaProps& p) const {
   text::ParagraphFormat f;
   f.alignment = AlignmentOf(p.jc);
   f.rightToLeft = p.bidi;
+  f.hangPunctuation = p.overflowPunct;
+  f.compressPunctuation = set.characterSpacingControl.starts_with("compressPunctuation");
   f.startIndent = Pt(p.indStart);
   f.endIndent = Pt(p.indEnd);
   f.firstLineIndent = Pt(p.firstLine);
@@ -298,6 +298,7 @@ text::ParagraphFormat Engine::FormatOf(const ParaProps& p) const {
   f.hyphenation.zone = compatMode_ >= 15 ? 0 : Pt(set.hyphenationZone);
   f.hyphenation.consecutiveLimit = set.consecutiveHyphenLimit;
   f.hyphenation.caps = !set.doNotHyphenateCaps;
+  f.hyphenation.likeWord = true;
   f.expandLineBreaks = !set.Compat(Name("doNotExpandShiftReturn"));
   f.squeezeSpaces = compatMode_ >= 15;
   if (!set.decimalSymbol.empty()) f.decimalSeparator = static_cast<wchar_t>(set.decimalSymbol.front());
@@ -341,15 +342,45 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   const RunProps& markProps = MarkOf(para);
   std::optional<ListLabel> label = doc_.Label(para);
   if (options_.hideInsertions && props.numId.empty()) label.reset();  // numbering a tracked change added
+  if (joining_) label.reset();  // a paragraph joined to the next: the next's label is the one shown
   if (label) {
     std::u16string s = label->text;
-    if (label->suffix.empty() || label->suffix == "tab") s += u'\t';
-    else if (label->suffix == "space") s += u' ';
+    // A level whose number shows nothing has no tab or space after it in compatibility mode 15
+    // (govuk-the-short-form-contract's defined terms); Word in older modes still adds it there
+    // (Word's render of the .doc copy).
+    const bool bare = s.empty() && compatMode_ >= 15;
+    if (!bare && (label->suffix.empty() || label->suffix == "tab")) s += u'\t';
+    else if (!bare && label->suffix == "space") s += u' ';
     if (!s.empty() && !(markProps.vanish && !options_.showHiddenText)) {
       text::TextStyle ls = StyleOf(label->props, false);
       emit(s, styles_.Intern(ls), PaintOf(label->props, kNone));
       out.prefix = static_cast<uint32_t>(out.text.size());
     }
+  }
+
+  // The paragraphs before that the view joins to this one, their text first (Word's final view shows
+  // a paragraph whose mark is deleted run on into the next, in the next's formatting).
+  if (!joining_) {
+    std::vector<uint32_t> chain;
+    for (uint32_t p = para; p > 0 && chain.size() < 1000 && JoinsNext(p - 1); --p) chain.insert(chain.begin(), p - 1);
+    for (uint32_t p : chain) {
+      ParaText part;
+      joining_ = true;
+      BuildText(p, fields, part, pageBreaks, numberNotes);
+      joining_ = false;
+      if (part.text.empty()) continue;
+      const uint32_t at = static_cast<uint32_t>(out.text.size());
+      out.text += part.text;
+      out.runs.insert(out.runs.end(), part.runs.begin(), part.runs.end());
+      out.paints.insert(out.paints.end(), part.paints.begin(), part.paints.end());
+      out.subst.push_back({at, static_cast<uint32_t>(part.text.size()), 0, 0});  // it stands for this paragraph's start
+      for (auto [offset, story] : part.notes) out.notes.push_back({offset + at, story});
+      for (auto [offset, drawing] : part.inlines) out.inlines.push_back({offset + at, drawing});
+      out.anchors.insert(out.anchors.end(), part.anchors.begin(), part.anchors.end());
+      out.usesPage = out.usesPage || part.usesPage;
+      out.usesPageCount = out.usesPageCount || part.usesPageCount;
+    }
+    out.joined = std::move(chain);
   }
 
   // Field results pagination computes: [from, to) in the model text, replaced.
@@ -403,8 +434,38 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   bool visible = false;
   uint32_t covered = 0;  // model text emitted so far
 
+  // Text outside every run, up to `upto`: equations (m:oMath and m:oMathPara sit in the paragraph,
+  // not in a run), laid out as objects in the paragraph mark's style; anything else hidden, so
+  // offsets still match.
+  const text::TextStyle* gapStyle = nullptr;
+  auto gap = [&](uint32_t upto) {
+    upto = std::min<uint32_t>(upto, static_cast<uint32_t>(t.size()));
+    for (uint32_t k = covered; k < upto; ++k) {
+      while (item < items.size() && items[item].offset < k) ++item;
+      const InlineItem* it = item < items.size() && items[item].offset == k ? &items[item] : nullptr;
+      if (!gapStyle) gapStyle = styles_.Intern(StyleOf(markProps, false));
+      if (t[k] == 0xFFFC && it && it->kind == ItemKind::Drawing && it->drawing != kNone && !gapStyle->hidden &&
+          doc_.Drawings()[it->drawing].kind == DrawingKind::Equation && !doc_.Drawings()[it->drawing].hidden) {
+        text::TextStyle os = *gapStyle;
+        const math::Equation& eq = EquationOf(it->drawing, gapStyle->size);
+        os.objectWidth = eq.width;
+        os.objectAscent = eq.ascent;
+        os.objectDescent = eq.descent;
+        out.inlines.push_back({static_cast<uint32_t>(out.text.size()), it->drawing});
+        emit(std::u16string_view(&t[k], 1), styles_.Intern(os), RunPaint());
+        visible = true;
+      } else {
+        text::TextStyle h = *gapStyle;
+        h.hidden = true;
+        emit(std::u16string_view(&t[k], 1), styles_.Intern(h), RunPaint());
+      }
+    }
+    covered = std::max(covered, upto);
+  };
+
   for (uint32_t r = 0; r < runs.size(); ++r) {
     const TextRun& run = runs[r];
+    if (run.start > covered) gap(run.start);
     if (run.start < covered) continue;  // overlapping runs don't happen; be safe
     const RunProps& rp = RunOf(para, run.run);
     bool hidden = run.fieldCode || Gone(run.revision, options_);
@@ -520,9 +581,10 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
               os.objectAscent = Pt(Emu(d.cy.Value() + d.effectT.Value() + d.effectB.Value()));
               os.objectDescent = 0;
               if (d.kind == DrawingKind::Equation) {
-                os.objectWidth = EquationWidth(it->drawing, style->size);
-                os.objectAscent = style->size * 0.9f;
-                os.objectDescent = style->size * 0.25f;
+                const math::Equation& eq = EquationOf(it->drawing, style->size);
+                os.objectWidth = eq.width;
+                os.objectAscent = eq.ascent;
+                os.objectDescent = eq.descent;
               }
               out.inlines.push_back({static_cast<uint32_t>(out.text.size()), it->drawing});
               emit(std::u16string_view(&t[i], 1), styles_.Intern(os), paint);
@@ -572,11 +634,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
     }
     covered = std::max(covered, run.end);
   }
-  // Text no run covers (there shouldn't be any): hidden, so offsets still match.
-  if (covered < t.size()) {
-    text::TextStyle h = StyleOf(markProps, true);
-    emit(std::u16string_view(t).substr(covered), styles_.Intern(h), RunPaint());
-  }
+  gap(static_cast<uint32_t>(t.size()));
 
   // A deleted paragraph mark joins the paragraph to the next in Word's final view, so one with
   // nothing of its own left to show is gone.
@@ -586,11 +644,44 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
                                        (options_.hideInsertions && (markRPr.Child(Name("ins")) || markRPr.Child(Name("moveTo")))));
   const bool markHidden = (markProps.vanish && !options_.showHiddenText) || markProps.specVanish || markDeleted;
   out.empty = markHidden && !visible && (out.prefix == 0 || markDeleted);  // a deleted mark takes its label along
+  if (!joining_ && JoinsNext(para)) out.empty = true;  // its text is laid out with the next paragraph's
   text::TextStyle mark = StyleOf(markProps, false);
   out.fw.markStyle = styles_.Intern(mark);
   out.fw.text = out.text;
   out.fw.runs = out.runs;
   out.fw.format = FormatOf(props);
+  // A display equation (m:oMathPara) alone in its paragraph is placed by its own m:jc, centered
+  // unless it says otherwise, whatever the paragraph's alignment, as Word shows it.
+  const math::Equation* display = nullptr;
+  bool alone = true;
+  for (size_t k = 0; k < out.text.size() && alone; ++k) {
+    if (out.text[k] == u' ' || out.text[k] == u'\t') continue;
+    auto in = std::find_if(out.inlines.begin(), out.inlines.end(), [&](const auto& x) { return x.first == k; });
+    alone = in != out.inlines.end() && doc_.Drawings()[in->second].node.Is(Name("m:oMathPara"));
+    if (alone) display = LaidOutEquation(in->second);
+  }
+  if (alone && display)
+    out.fw.format.alignment = display->justify == math::Equation::Justify::Left    ? text::Alignment::Start
+                              : display->justify == math::Equation::Justify::Right ? text::Alignment::End
+                                                                                   : text::Alignment::Center;
+}
+
+bool Engine::JoinsNext(uint32_t para) const {
+  if (para + 1 >= doc_.Paragraphs().size() || doc_.Para(para).story != doc_.Para(para + 1).story) return false;
+  const Node node = doc_.ParaNode(para);
+  const Node pPr = node.Child(Name("pPr"));
+  const Node markRPr = pPr.Child(Name("rPr"));
+  if (!markRPr || pPr.Child(Name("sectPr"))) return false;
+  const bool hidden = (!options_.showDeletions && (markRPr.Child(Name("del")) || markRPr.Child(Name("moveFrom")))) ||
+                      (options_.hideInsertions && (markRPr.Child(Name("ins")) || markRPr.Child(Name("moveTo"))));
+  if (!hidden) return false;
+  // The next block in the same parent is the next paragraph (bookmarks and the like may be between).
+  const Node next = doc_.ParaNode(para + 1);
+  for (Node s = node.Next(); s; s = s.Next()) {
+    if (s == next) return true;
+    if (s.Is(Name("p")) || s.Is(Name("tbl")) || s.Is(Name("sdt")) || s.Is(Name("sectPr")) || s.Is(Name("customXml"))) return false;
+  }
+  return false;
 }
 
 std::u16string Engine::NoteReference(uint32_t story) {
@@ -611,19 +702,21 @@ std::u16string Engine::NoteMark(uint32_t story) const {
   return it->second;
 }
 
-float Engine::EquationWidth(uint32_t drawing, float size) {
-  std::string xml = doc_.DrawingXml(doc_.Drawings()[drawing]);
-  size_t chars = 0;
-  for (size_t at = xml.find("<m:t"); at != std::string::npos; at = xml.find("<m:t", at + 1)) {
-    size_t open = xml.find('>', at);
-    if (open == std::string::npos) break;
-    if (xml[open - 1] == '/') continue;
-    size_t close = xml.find("</m:t>", open);
-    if (close == std::string::npos) break;
-    for (size_t k = open + 1; k < close; ++k)
-      if ((static_cast<unsigned char>(xml[k]) & 0xC0) != 0x80) ++chars;
+const math::Equation& Engine::EquationOf(uint32_t drawing, float size) {
+  const Drawing& d = doc_.Drawings()[drawing];
+  std::string xml = doc_.DrawingXml(d);
+  EquationSlot& slot = equations_[drawing];
+  if (!slot.eq || slot.size != size || slot.xml != xml) {
+    slot.eq = math::LayOut(fonts_, xml, size, d.node.Is(Name("m:oMathPara")));
+    slot.size = size;
+    slot.xml = std::move(xml);
   }
-  return static_cast<float>(chars) * size * 0.5f;
+  return *slot.eq;
+}
+
+const math::Equation* Engine::LaidOutEquation(uint32_t drawing) const {
+  auto it = equations_.find(drawing);
+  return it == equations_.end() ? nullptr : it->second.eq.get();
 }
 
 }  // namespace fw::doc::layout

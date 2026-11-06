@@ -868,7 +868,8 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
   insert.kind = ToolKind::Dropdown;
   insert.cmd = CmdInsertBox;
   insert.width = 104;
-  insert.priority = 1;
+  insert.priority = 4;  // after change case, the indents, ¶, the painter and Highlight (friction review)
+  insert.maxRows = 24;
   insert.glyph = icon::Add;
   insert.text = L"Insert";
   insert.tooltip = L"Insert a picture, a break, the date or the time";

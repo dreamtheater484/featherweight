@@ -416,13 +416,16 @@ struct EditorState {
       if (!Repeats(E(src).first, c) && (!skip || !skip(c))) Append(id, CopyProps(c, id, skip, fragments));
     return id;
   }
-  // A run's properties for new text: its w:rPr, or the paragraph mark's, without revision marks.
+  // A run's properties for new text: its w:rPr, or the paragraph mark's, without revision marks,
+  // nor the mark's w:oMath (a math paragraph's mark, which a text run can't have: the Open XML SDK
+  // refuses it there).
   void CopyRunProps(ElemId fromRunOrPPr, ElemId toRun, bool dropLinkStyle = false) {
     ElemId rPr = fromRunOrPPr == kNoElem ? kNoElem : Child(fromRunOrPPr, kRPr);
     if (rPr == kNoElem) return;
+    static constexpr uint32_t kOMath = Name("oMath");
     auto skip = [&](ElemId c) {
       uint32_t n = NameOf(c);
-      if (n == kIns || n == kDel || n == kMoveFrom || n == kMoveTo || n == kRPrChange) return true;
+      if (n == kIns || n == kDel || n == kMoveFrom || n == kMoveTo || n == kRPrChange || n == kOMath) return true;
       return dropLinkStyle && n == kRStyle && Node(&t, c).AttrOr(kVal) == "Hyperlink";
     };
     ElemId copy;
@@ -787,8 +790,8 @@ struct EditorState {
     }
   }
 
-  // After a direct change, done or undone: the model's indexes are built again, every cache goes,
-  // and every paragraph may look different.
+  // After a direct change, done or undone: the model's indexes are built again, and every cache
+  // goes and every paragraph may look different, unless the step says which paragraphs changed.
   void RefreshAll(const CustomStep& step, bool undoing = false) {
     // A step that says which paragraphs it changed leaves the others as they were: they keep their
     // versions, so what was measured for them stays (a big table's cells, after formatting one).
@@ -801,18 +804,32 @@ struct EditorState {
     auto changed = [&](uint32_t i) {
       return (i >= step.first && i < changedEnd) || (!stories.empty() && stories.count(d.paras_[i].story));
     };
-    std::unordered_map<ElemId, uint32_t> kept;
-    if (ranged)
-      for (uint32_t i = 0; i < d.paras_.size(); ++i)
-        if (!changed(i)) kept.emplace(d.paras_[i].elem, d.paras_[i].version);
-    d.ResetCaches();
-    d.BuildIndexes();
-    for (uint32_t i = 0; i < d.paras_.size(); ++i) {
-      Paragraph& p = d.paras_[i];
-      const bool renumbered = i >= changedEnd && i < step.first + step.count && d.InList(i);
-      // A paragraph a tree edit made (a note's) has no version yet (0): it gets one.
-      const auto it = ranged && !changed(i) && !renumbered ? kept.find(p.elem) : kept.end();
-      p.version = it != kept.end() && it->second != 0 ? it->second : ++version;
+    if (ranged && stories.empty()) {
+      // The paragraphs stay where they are (a new story's come after them): what's cached for the
+      // others stays too, and so do the list numbers and field state before the change. The
+      // document's size doesn't matter then (H3).
+      if (step.touchedFirst != kNone) d.RefreshCaches(step.touchedFirst, step.touchedEnd, step.pairs, step.sections);
+      else d.RefreshCaches(step.first, changedEnd);
+      for (uint32_t i = 0; i < d.paras_.size(); ++i) {
+        Paragraph& p = d.paras_[i];
+        // A paragraph a tree edit made (a new header's) has no version yet (0): it gets one.
+        if (changed(i) || p.version == 0 || (i >= changedEnd && i < step.first + step.count && d.InList(i)))
+          p.version = ++version;
+      }
+    } else {
+      std::unordered_map<ElemId, uint32_t> kept;
+      if (ranged)
+        for (uint32_t i = 0; i < d.paras_.size(); ++i)
+          if (!changed(i)) kept.emplace(d.paras_[i].elem, d.paras_[i].version);
+      d.ResetCaches();
+      d.BuildIndexes();
+      for (uint32_t i = 0; i < d.paras_.size(); ++i) {
+        Paragraph& p = d.paras_[i];
+        const bool renumbered = i >= changedEnd && i < step.first + step.count && d.InList(i);
+        // A paragraph a tree edit made (a note's) has no version yet (0): it gets one.
+        const auto it = ranged && !changed(i) && !renumbered ? kept.find(p.elem) : kept.end();
+        p.version = it != kept.end() && it->second != 0 ? it->second : ++version;
+      }
     }
     Change ch;
     if (step.first != kNone && step.count > 0 && step.first + step.count <= d.paras_.size()) {
@@ -867,6 +884,14 @@ struct EditorState {
       if (NameOf(id) == kR) c.run.erase(id), c.originalRun.erase(id);
     for (ElemId id : nowIds)
       if (NameOf(id) == kR) c.run.erase(id), c.originalRun.erase(id);
+    // Rows in or out, or a row's properties (a repeated header row): the tables' row indexes
+    // (Document::PlaceOfRow) are found again.
+    auto rows = [this](ElemId id) {
+      const uint32_t n = NameOf(id);
+      return n == kTbl || n == kTr || n == Name("trPr") || n == Name("tblHeader") || n == Name("body") || n == Name("sdt") ||
+             n == Name("sdtContent") || n == Name("customXml");
+    };
+    if (std::any_of(wasIds.begin(), wasIds.end(), rows) || std::any_of(nowIds.begin(), nowIds.end(), rows)) c.tables.clear();
 
     bool fields = false;
     auto countFields = [](const std::vector<Paragraph>& ps) {
@@ -875,15 +900,8 @@ struct EditorState {
       return n;
     };
     if (countFields(was.paras) != countFields(now.paras)) fields = true;
-    if (step.structure || shift != 0) {
-      c.labels.clear();
-      c.fieldStack.clear();
-      for (auto& p : c.fieldPass) p = {};
-      for (auto& p : c.labelPass) p = {};
-    } else if (fields) {
-      c.fieldStack.clear();
-      for (auto& p : c.fieldPass) p = {};
-    }
+    // List numbers and field state: from the change on (what's before it reads the same).
+    if (step.structure || shift != 0 || fields) d.PassesFrom(step.story, first, removed, added);
 
     // Positions of drawings and range ends: found again for the elements the step touched (kNone
     // for the ones it removed), moved along for the ones after it.

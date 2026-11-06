@@ -646,6 +646,50 @@ TEST(Lists_NumbersCountJoinRestartAndContinue) {
   CHECK(undone == 9 && !doc->Label(p[0]));
 }
 
+// H3: an edit keeps what the model worked out for the paragraphs before it (list numbers, whether
+// a field's code goes on), and what comes after reads as it would from scratch.
+TEST(Lists_NumbersAndFieldsAfterEnterAndFormatting) {
+  Fixture f;
+  f.styles = kWordStyles;
+  f.body = "<w:p><w:r><w:t>first</w:t></w:r></w:p>"
+           "<w:p><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText> QUOTE</w:instrText></w:r></w:p>"
+           "<w:p><w:r><w:instrText> code</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>"
+           "<w:r><w:t>result</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>" +
+           Paras(5);
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  edit::Editor editor(*doc);
+  edit::TreeEdit ed(editor);
+  auto p = MainParas(*doc);
+  edit::ToggleList(ed, {{p[3], 0}, {p[6], 1}}, edit::ListKind::Number);  // four items, the fifth not
+  auto code = [&](uint32_t para) { return doc->Runs(para).front().fieldCode; };
+  CHECK(code(p[2]) && !code(p[3]) && LabelOf(*doc, p[4]) == u"2.");  // passes as far as p[4]
+  // Enter before the field and the list: what's after moves along.
+  CHECK(editor.SplitParagraph({p[0], 2}));
+  p = MainParas(*doc);
+  CHECK(code(p[3]) && !code(p[4]));
+  CHECK(LabelOf(*doc, p[4]) == u"1." && LabelOf(*doc, p[5]) == u"2.");  // numbered as far as p[5]
+  // Enter in an item the numbers haven't reached yet.
+  CHECK(editor.SplitParagraph({p[6], 2}));
+  p = MainParas(*doc);
+  CHECK(LabelOf(*doc, p[6]) == u"3." && LabelOf(*doc, p[7]) == u"4." && LabelOf(*doc, p[8]) == u"5.");
+  CHECK(LabelOf(*doc, p[9]).empty());
+  // Bold in one item: its run reads bold, the next one's doesn't, and the numbers stay.
+  edit::ToggleRuns(ed, {{p[5], 0}, {p[5], 4}}, edit::Toggle::Bold);
+  CHECK(doc->ResolvedRun(p[5], doc->Runs(p[5]).front().run).bold);
+  CHECK(!doc->ResolvedRun(p[6], doc->Runs(p[6]).front().run).bold);
+  CHECK(LabelOf(*doc, p[5]) == u"2." && LabelOf(*doc, p[8]) == u"5." && code(p[3]));
+  // Joined again, and undone: as it was.
+  CHECK(editor.JoinParagraphs(p[6]));
+  p = MainParas(*doc);
+  CHECK(LabelOf(*doc, p[7]) == u"4." && LabelOf(*doc, p[8]).empty());
+  while (editor.Undo()) {
+  }
+  p = MainParas(*doc);
+  CHECK(code(p[2]) && !code(p[3]) && !doc->Label(p[3]));
+}
+
 TEST(Lists_MultilevelLabels) {
   Fixture f;
   f.styles = kWordStyles;

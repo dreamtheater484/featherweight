@@ -14,6 +14,7 @@
 Uses only the standard library. From the repository root:
   python tests/fuzz/make_seeds.py
 """
+import io
 import os
 import posixpath
 import re
@@ -37,6 +38,7 @@ OPC = [
 
 PACKAGES = [
     "generated/simple.docx",
+    "layout/equations.docx",
     "generated/styles-unicode-comments.docx",
     "generated/sections-headers.docx",
     "edge/alternate-content.docx",
@@ -293,6 +295,44 @@ def write(folder, name, data):
     print(f"  {os.path.relpath(os.path.join(folder, name), ROOT)}  ({len(data):,} bytes)")
 
 
+def embedded_font_docx(ttf):
+    """A document carrying a font in word/fonts, obfuscated with its key as Word does (ECMA-376
+    17.8.1), for fuzz_layout: the tiny TrueType font, under a family the PC doesn't have."""
+    guid = "{01234567-89AB-CDEF-0123-456789ABCDEF}"
+    key = bytes.fromhex(guid.strip("{}").replace("-", ""))[::-1]
+    hidden = bytes(b ^ key[i % 16] for i, b in enumerate(ttf[:32])) + ttf[32:]
+    w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    r = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+    rels = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    parts = [
+        ("[Content_Types].xml",
+         '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" '
+         'ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" '
+         'ContentType="application/xml"/><Default Extension="odttf" '
+         'ContentType="application/vnd.openxmlformats-officedocument.obfuscatedFont"/><Override '
+         'PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.'
+         'document.main+xml"/><Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-'
+         'officedocument.wordprocessingml.fontTable+xml"/></Types>'),
+        ("_rels/.rels", f'{rels}<Relationship Id="rId1" Type="{rel}officeDocument" Target="word/document.xml"/>'
+                        '</Relationships>'),
+        ("word/document.xml", f'<w:document {w}><w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="Tiny Test" '
+                              'w:hAnsi="Tiny Test"/></w:rPr><w:t>AAA AA</w:t></w:r></w:p></w:body></w:document>'),
+        ("word/_rels/document.xml.rels", f'{rels}<Relationship Id="rId1" Type="{rel}fontTable" '
+                                         'Target="fontTable.xml"/></Relationships>'),
+        ("word/fontTable.xml", f'<w:fonts {w} {r}><w:font w:name="Tiny Test"><w:embedRegular r:id="rId1" '
+                               f'w:fontKey="{guid}"/></w:font></w:fonts>'),
+        ("word/_rels/fontTable.xml.rels", f'{rels}<Relationship Id="rId1" Type="{rel}font" '
+                                          'Target="fonts/font1.odttf"/></Relationships>'),
+        ("word/fonts/font1.odttf", hidden),
+    ]
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in parts:
+            z.writestr(zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0)), data)
+    return out.getvalue()
+
+
 def main():
     for source, part, name in OPC:
         with zipfile.ZipFile(os.path.join(OFFICE, source)) as z:
@@ -312,8 +352,10 @@ def main():
     pictures["gray.jpg"] = tiny_jpeg()
     for name in ("tile.png", "gray.jpg", "one.gif", "two.bmp", "two.tif", "bom.svg", "tile.ico"):
         write(os.path.join(SEEDS, "picture"), name, pictures[name])
-    for name, data in tiny_fonts().items():
+    fonts = tiny_fonts()
+    for name, data in fonts.items():
         write(os.path.join(SEEDS, "font"), name, data)
+    write(os.path.join(SEEDS, "docx"), "embedded-font.docx", embedded_font_docx(fonts["tiny.ttf"]))
 
 
 if __name__ == "__main__":

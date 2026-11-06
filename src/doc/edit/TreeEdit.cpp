@@ -160,7 +160,15 @@ void TreeEdit::Commit() {
   // The paragraphs it changed: for the caret, and when it's local, for the layout.
   uint32_t first = kNone, last = 0, story = kNone;
   bool local = local_;
+  static constexpr uint32_t kFldSimple = Name("fldSimple"), kFldChar = Name("fldChar");
+  bool sectPr = false;
+  step->pairs = false;
   for (const auto& [id, e] : step->after) {
+    // A field that comes, goes or moves: the story's fields read differently after it.
+    const uint32_t n = e.def == kNoDef ? 0 : S().Elem(e.def).name;
+    if (n == kFldSimple || n == kFldChar) step->structure = true;
+    step->pairs = step->pairs || doc_.PairSite(n);
+    sectPr = sectPr || n == names::kSectPr;
     const uint32_t p = ParagraphOf(id);
     if (p == kNone) {
       local = local && (InDefinitions(id) || !Attached(id));  // or an unused copy, linked nowhere
@@ -172,6 +180,12 @@ void TreeEdit::Commit() {
     last = std::max(last, p);
   }
   Pos caret = caret_;
+  // What the model reads again: only these, whatever the layout does again; the sections only
+  // after a section break changed (or anything, outside formatting).
+  step->touchedFirst = first == kNone ? 0 : first;
+  step->touchedEnd = first == kNone ? 0 : last + 1;
+  step->sections = sectPr || !local;
+  step->pairs = step->pairs || !local;
   if (first != kNone) {
     if (caret.para == kNone) caret = {first, 0};
     if (local) {
@@ -179,9 +193,12 @@ void TreeEdit::Commit() {
       // a text box's between them; the layout passes over those.)
       if (first > 0 && doc_.paras_[first - 1].story == story) --first;
       if (last + 1 < doc_.paras_.size() && doc_.paras_[last + 1].story == story) ++last;
-      if (toEnd_ && doc_.StoryParagraphs(story).back() > last) {
+      // To the story's last paragraph (numbered in order, the highest).
+      uint32_t end = static_cast<uint32_t>(doc_.paras_.size());
+      while (end > last + 1 && doc_.paras_[end - 1].story != story) --end;
+      if (toEnd_ && end > last + 1) {
         step->renumberFrom = last + 1;
-        last = doc_.StoryParagraphs(story).back();
+        last = end - 1;
       }
       step->first = first;
       step->count = last - first + 1;
@@ -190,7 +207,7 @@ void TreeEdit::Commit() {
   if (affects_.first != kNone && affects_.second < doc_.paras_.size()) {
     step->first = affects_.first;
     step->count = affects_.second - affects_.first + 1;
-    step->structure = structure_;
+    step->structure = step->structure || structure_;
     if (caret.para == kNone) caret = {affects_.first, 0};
   }
   editor_.RecordStep(std::move(label_), std::move(step), caret);
@@ -308,8 +325,29 @@ std::vector<uint32_t> TreeEdit::PartsOf(const Saved& elems) const {
 }
 
 void TreeEdit::Reindex() {
-  doc_.ResetCaches();
-  doc_.BuildIndexes();
+  // What's added so far is definitions (a style, a list, with ids no other paragraph uses): only
+  // the paragraphs the transaction changed read differently. Stories added or taken out move them.
+  if (!storyOps_.empty()) {
+    doc_.ResetCaches();
+    doc_.BuildIndexes();
+    return;
+  }
+  uint32_t first = kNone, last = 0;
+  bool pairs = false, sectPr = false;
+  auto add = [&](ElemId id) {
+    const ElemDefId def = doc_.tree_.elems[id].def;
+    const uint32_t n = def == kNoDef ? 0 : S().Elem(def).name;
+    pairs = pairs || doc_.PairSite(n);
+    sectPr = sectPr || n == names::kSectPr;
+    if (const uint32_t p = ParagraphOf(id); p != kNone) {
+      first = std::min(first, p);
+      last = std::max(last, p);
+    }
+  };
+  for (const auto& [id, old] : before_) add(id);
+  for (size_t id = elemsAtBegin_; id < doc_.tree_.elems.size(); ++id) add(static_cast<ElemId>(id));
+  if (first == kNone) doc_.RefreshCaches(0, 0, pairs, sectPr);
+  else doc_.RefreshCaches(first, last + 1, pairs, sectPr);
 }
 
 void TreeEdit::Abort() {

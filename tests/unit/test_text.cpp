@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "draw/CloudFonts.h"
 #include "text/Fonts.h"
 #include "text/Hyphenation.h"
 #include "text/LineLayout.h"
@@ -529,6 +530,46 @@ TEST(Text_FontSlotsAndFallback) {
   }
 }
 
+TEST(Text_AFullFaceNameIsThatFace) {
+  // "Times New Roman Bold" names a face, not a family: Word draws it bold, as GDI finds it, and
+  // nothing is missing. A face name that isn't installed is still substituted.
+  Fonts fonts;
+  if (!fonts.Installed(L"Times New Roman")) return;
+  const Face* bold = fonts.FaceFor(L"Times New Roman Bold", false, false);
+  CHECK(bold != nullptr);
+  if (!bold) return;
+  CHECK(bold->Weight() >= DWRITE_FONT_WEIGHT_BOLD);
+  const Face* italic = fonts.FaceFor(L"Times New Roman Italic", false, false);
+  CHECK(italic != nullptr);
+  if (!italic) return;
+  CHECK(italic->Style() != DWRITE_FONT_STYLE_NORMAL);
+  const Face* plain = fonts.FaceFor(L"Times New Roman", false, false);
+  CHECK(plain != nullptr);
+  if (!plain) return;
+  CHECK(plain->Weight() < DWRITE_FONT_WEIGHT_BOLD);
+  CHECK(fonts.Substitutions().empty());
+  fonts.FaceFor(L"Times New Roman Nonexistent", false, false);
+  CHECK_EQ(fonts.Substitutions().size(), 1u);
+}
+
+TEST(Text_OfficeCloudFontsAreUsedAsWordUsesThem) {
+  // Word's cloud fonts (%LOCALAPPDATA%\Microsoft\FontCache\4\CloudFonts) count as installed, under
+  // the family Word downloaded (a folder each), never in place of one the PC has. Another name
+  // their fonts carry ("Open Sans Light") is substituted, as Word does. On a PC without the
+  // folder, only the first checks apply.
+  CHECK(!draw::CloudFontsHave(L""));
+  CHECK(!draw::CloudFontsHave(L"Calibri"));  // the PC's own
+  CHECK(!draw::CloudFontsHave(L"Open Sans Light"));
+  if (!draw::CloudFontsHave(L"Open Sans")) return;
+  Fonts fonts;
+  CHECK(fonts.Resolve(L"Open Sans") == L"Open Sans");
+  CHECK(fonts.Substitutions().empty());
+  const Face* face = fonts.FaceFor(L"Open Sans", true, false);
+  CHECK(face != nullptr && face->Family() == L"Open Sans");
+  CHECK(fonts.Resolve(L"Open Sans Light") != L"Open Sans Light");
+  CHECK_EQ(fonts.Substitutions().size(), 1u);
+}
+
 TEST(Text_MissingFontsAreSubstitutedAndReported) {
   Fonts fonts([](std::wstring_view family) { return family == L"House Font" ? std::wstring(kSans) : std::wstring(); });
   CHECK(fonts.Resolve(L"Courier New") == L"Courier New");
@@ -593,6 +634,11 @@ TEST(Text_CapsSuperscriptSpacing) {
   spaced.letterSpacing = 2;
   auto plain = Lay(L"abcd", s, 400), wide = Lay(L"abcd", spaced, 400);
   CHECK_NEAR(wide[0].contentRight - plain[0].contentRight, 8, 0.01);
+  // The spacing after a line's last letter takes no room there (D5, the UN reports' spaced text):
+  // "abcd abcd" fits a column 1 pt narrower than it is with that spacing.
+  const float width = Lay(L"abcd abcd", spaced, 400)[0].contentRight;
+  CHECK(Lay(L"abcd abcd", spaced, width - 1).size() == 1);
+  CHECK(Lay(L"abcd abcd", spaced, width - 3).size() == 2);
 }
 
 TEST(Text_InlineObjects) {

@@ -43,7 +43,11 @@ const Border& Stronger(const Border& a, const Border& b) {
 
 }  // namespace
 
-Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame, const TableBox* reuse) {
+namespace {
+constexpr size_t kRowsAtATime = 64;  // a lazily measured table: rows measured ahead of the flow
+}  // namespace
+
+Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame, const TableBox* reuse, bool lazy) {
   TableBox t;
   t.tbl = tbl;
   t.props = doc_.ResolvedTable(tbl);
@@ -51,15 +55,46 @@ Engine::TableBox Engine::MeasureTable(Node tbl, const Frame& frame, const TableB
   if (frame.fields) t.fields = *frame.fields;
   t.frameWidth = frame.width;
   t.story = frame.story;
-  MeasureRows(t, frame, reuse, 0, SIZE_MAX);
+  t.trs = doc_.TableRows(tbl);
+  t.count = t.trs.size();
+  // Measured lazily, still the rows the table it was measured as before had: they're kept.
+  const size_t first = std::max(kRowsAtATime, reuse ? reuse->rows.size() : 0);
+  MeasureRows(t, frame, reuse, 0, lazy ? first - 1 : SIZE_MAX);
+  if (t.rows.size() >= t.count) t.trs = {};
   return t;
+}
+
+void Engine::MeasureThrough(TableBox& t, size_t row) {
+  if (t.trs.empty()) return;
+  Frame frame;
+  frame.geom = &t.geom;
+  frame.fields = &t.fields;
+  frame.width = t.frameWidth;
+  frame.story = t.story;
+  // The last row needed: the one after `row`, and those merged cells that start by then end in.
+  auto needed = [&]() {
+    size_t need = std::min(row + 1, t.count - 1);
+    for (const auto& [r, i] : t.openSpans) {
+      if (r > row + 1) break;
+      need = std::max(need, std::min(t.count - 1, r + static_cast<size_t>(t.rows[r].cells[i].rowSpan) - 1));
+    }
+    return need;
+  };
+  for (size_t need = needed(); t.rows.size() <= need; need = needed())
+    MeasureRows(t, frame, nullptr, t.rows.size(), std::max(need, t.rows.size() + kRowsAtATime - 1));
+  if (t.rows.size() >= t.count) t.trs = {};
 }
 
 bool Engine::MeasureRowsAgain(TableBox& t, size_t from, size_t to, bool structure) {
   const std::vector<Node> rows = doc_.TableRows(t.tbl);
-  if (from > to || to >= rows.size() || rows.size() != t.rows.size() || (structure && t.labels)) return false;
-  for (size_t r = 0; r < rows.size(); ++r)
+  if (from > to || to >= rows.size() || rows.size() != t.count || (structure && t.labels)) return false;
+  for (size_t r = 0; r < t.rows.size(); ++r)
     if (!(rows[r] == t.rows[r].tr)) return false;
+  // Rows not measured yet are measured when the flow gets to them (unless merged cells reach
+  // them: the edit may have changed how far).
+  if (!t.trs.empty()) t.trs = rows;
+  if (from >= t.rows.size()) return t.openSpans.empty();
+  to = std::min(to, t.rows.size() - 1);
   for (size_t r = from; r <= to; ++r)
     for (const CellBox& c : t.rows[r].cells)
       if (c.continued || c.rowSpan > 1) return false;
@@ -94,9 +129,10 @@ uint64_t Engine::CellKey(Node tc) const {
 bool Engine::BringUpToDate(TableBox& t, float frameWidth, LineStory story) {
   if (t.frameWidth != frameWidth || t.story != story) return false;
   const std::vector<Node> rows = doc_.TableRows(t.tbl);
-  if (rows.size() != t.rows.size()) return false;
-  size_t from = SIZE_MAX, to = 0;  // the rows to measure again
-  for (size_t r = 0; r < rows.size(); ++r) {
+  if (rows.size() != t.count || !t.openSpans.empty()) return false;
+  if (!t.trs.empty()) t.trs = rows;  // the rest, measured as the flow gets to them
+  size_t from = SIZE_MAX, to = 0;  // the rows to measure again (of those measured yet)
+  for (size_t r = 0; r < t.rows.size(); ++r) {
     const RowBox& rb = t.rows[r];
     if (!(rows[r] == rb.tr)) return false;
     const std::vector<Node> cells = doc_.RowCells(rows[r]);
@@ -117,7 +153,7 @@ bool Engine::BringUpToDate(TableBox& t, float frameWidth, LineStory story) {
 
 void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse, size_t from, size_t to) {
   const Node tbl = t.tbl;
-  const bool all = t.rows.empty();
+  const size_t had = t.rows.size();  // rows measured before: those from here on are new
   std::unordered_map<ElemId, const CellBox*> before;
   if (reuse)
     for (size_t r = from; r < reuse->rows.size() && r <= to; ++r)
@@ -125,7 +161,8 @@ void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse,
         if (!c.continued) before[c.tc.Id()] = &c;
   std::vector<float> grid;
   for (Twips w : doc_.TableGrid(tbl)) grid.push_back(std::max(0.0f, Pt(w)));
-  std::vector<Node> rows = doc_.TableRows(tbl);
+  std::vector<Node> fetched;
+  const std::vector<Node>& rows = t.trs.empty() ? (fetched = doc_.TableRows(tbl)) : t.trs;
 
   // Without a usable grid, the first row's cell widths make one.
   float gridSum = std::accumulate(grid.begin(), grid.end(), 0.0f);
@@ -154,10 +191,12 @@ void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse,
 
   t.width = gridSum;
   float indent = t.props.indent.type == TableWidth::Type::Dxa ? static_cast<float>(t.props.indent.value) / 20.0f : 0;
+  // A right-to-left table (w:bidiVisual) starts at the right: its indent and its first column.
+  const bool rtl = t.props.bidiVisual;
   switch (t.props.jc) {
     case Justification::Center: t.left = (frame.width - t.width) / 2; break;
-    case Justification::End: t.left = frame.width - t.width; break;
-    default: t.left = indent; break;
+    case Justification::End: t.left = rtl ? 0 : frame.width - t.width; break;
+    default: t.left = rtl ? frame.width - t.width - indent : indent; break;
   }
 
   bool leading = from == 0 || t.rows[from - 1].header;  // the rows above are all header rows
@@ -179,11 +218,12 @@ void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse,
       c.x = gridX(col);
       c.width = gridX(col + c.span) - c.x;
       if (c.width <= 0) c.width = WidthPt(c.props.width, 36, t.width);
+      if (rtl) c.x = t.width - c.x - c.width;
       c.continued = c.props.vMerge == VMerge::Continue;
       c.rowSpan = c.props.vMerge == VMerge::Restart ? std::max(1, doc_.CellRowSpan(tc)) : 1;
       const CellMargins& m = c.props.margins;
-      c.marginLeft = WidthPt(m.start, defLeft);
-      c.marginRight = WidthPt(m.end, defRight);
+      c.marginLeft = WidthPt(rtl ? m.end : m.start, rtl ? defRight : defLeft);
+      c.marginRight = WidthPt(rtl ? m.start : m.end, rtl ? defLeft : defRight);
       c.marginTop = WidthPt(m.top, defTop);
       c.marginBottom = WidthPt(m.bottom, defBottom);
       if (!c.continued) {
@@ -278,23 +318,30 @@ void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse,
       h = std::max(h, spec + mv);
     }
     rb.height = rb.props.hidden ? 0 : h;
-    if (all) t.rows.push_back(std::move(rb));
-    else t.rows[r] = std::move(rb);
+    if (r < t.rows.size()) t.rows[r] = std::move(rb);
+    else t.rows.push_back(std::move(rb));
   }
-  // A vertically merged cell taller than the rows it spans makes the last of them taller (rows
+  // A vertically merged cell taller than the rows it spans makes the last of them taller, once
+  // they're all measured; in order, as one that ends in the rows of another counts for it (rows
   // measured again on their own have none over them).
-  for (size_t r = 0; all && r < t.rows.size(); ++r)
-    for (const CellBox& c : t.rows[r].cells) {
-      if (c.continued || c.rowSpan <= 1) continue;
-      size_t last = std::min(t.rows.size() - 1, r + static_cast<size_t>(c.rowSpan) - 1);
-      float have = 0;
-      for (size_t k = r; k <= last; ++k) have += t.rows[k].height;
-      float need = c.content.height + c.marginTop + c.marginBottom;
-      if (need > have && t.rows[last].props.heightRule != "exact") {
-        t.rows[last].height += need - have;
-        t.rows[last].grown += need - have;
-      }
+  for (size_t r = had; r < t.rows.size(); ++r)
+    for (size_t i = 0; i < t.rows[r].cells.size(); ++i)
+      if (!t.rows[r].cells[i].continued && t.rows[r].cells[i].rowSpan > 1) t.openSpans.emplace_back(r, i);
+  size_t closed = 0;
+  for (; closed < t.openSpans.size(); ++closed) {
+    const auto [r, i] = t.openSpans[closed];
+    const CellBox& c = t.rows[r].cells[i];
+    const size_t last = std::min(std::max(t.count, rows.size()) - 1, r + static_cast<size_t>(c.rowSpan) - 1);
+    if (last >= t.rows.size()) break;
+    float have = 0;
+    for (size_t k = r; k <= last; ++k) have += t.rows[k].height;
+    float need = c.content.height + c.marginTop + c.marginBottom;
+    if (need > have && t.rows[last].props.heightRule != "exact") {
+      t.rows[last].height += need - have;
+      t.rows[last].grown += need - have;
     }
+  }
+  t.openSpans.erase(t.openSpans.begin(), t.openSpans.begin() + static_cast<std::ptrdiff_t>(closed));
   t.headerRows = 0;
   for (const RowBox& r : t.rows)
     if (r.header) ++t.headerRows;
@@ -415,7 +462,9 @@ void Engine::EmitRow(const TableBox& t, size_t r, float x, float top, float heig
     }
     // Borders: the cell's own, against its neighbor's (the stronger wins; each shared edge once).
     const CellProps& p = owner->props;
-    Border topB = p.top, bottomB = p.bottom, leftB = p.start, rightB = p.end;
+    // Right to left, the cells run from the right: a cell's start edge is its right one.
+    const bool rtl = t.props.bidiVisual;
+    Border topB = p.top, bottomB = p.bottom, leftB = rtl ? p.end : p.start, rightB = rtl ? p.start : p.end;
     if (!firstOnPage && above && !c.continued)
       if (const CellBox* a = cellAt(above, c.x + 1)) topB = Stronger(topB, a->props.bottom);
     if (!lastOnPage && below) {
@@ -424,8 +473,10 @@ void Engine::EmitRow(const TableBox& t, size_t r, float x, float top, float heig
       else if (b) bottomB = Border();             // drawn as the next row's top
     }
     if (c.continued) topB = Border();
-    if (i > 0) leftB = Border();  // drawn as the previous cell's right edge
-    if (i + 1 < row.cells.size()) rightB = Stronger(rightB, row.cells[i + 1].props.start);
+    const CellBox* toLeft = rtl ? (i + 1 < row.cells.size() ? &row.cells[i + 1] : nullptr) : (i > 0 ? &row.cells[i - 1] : nullptr);
+    const CellBox* toRight = rtl ? (i > 0 ? &row.cells[i - 1] : nullptr) : (i + 1 < row.cells.size() ? &row.cells[i + 1] : nullptr);
+    if (toLeft) leftB = Border();  // drawn as that cell's right edge
+    if (toRight) rightB = Stronger(rightB, rtl ? toRight->props.end : toRight->props.start);
     if (topB.Present()) out.edges.push_back({topB, left, top, right, top});
     if (bottomB.Present()) out.edges.push_back({bottomB, left, bottom, right, bottom});
     if (leftB.Present()) out.edges.push_back({leftB, left, top, left, bottom});

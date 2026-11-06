@@ -26,6 +26,7 @@
 #include <functional>
 #include <iterator>
 #include <cfloat>
+#include <map>
 #include <set>
 
 #include "Common.h"
@@ -285,6 +286,12 @@ bool Format(wchar_t c) {
 // same ones whichever order a reader finds them in.
 std::wstring Characters(std::wstring text) {
   std::erase_if(text, [](wchar_t c) { return Ignored(c) || Format(c); });
+  // Right-to-left text draws "(" with the glyph of ")" (bidi mirroring), which readers take back
+  // either way: brackets count as their pair.
+  for (wchar_t& c : text) {
+    const size_t k = std::wstring_view(L")]}>»›").find(c);
+    if (k != std::wstring_view::npos) c = L"([{<«‹"[k];
+  }
   std::sort(text.begin(), text.end());
   return text;
 }
@@ -373,10 +380,25 @@ class TextRecorder : public draw::Painter {
     // Raised or lowered text (a note mark, mc²) goes on with the word before it.
     if (!text.empty() && (std::abs(start.x - end_.x) > size * 0.3f || std::abs(start.y - end_.y) > size)) text += L'\n';
     end_ = end;
+    // An equation's pieces (a font with a MATH table) are set apart by layout, not by spaces:
+    // each is a word of its own.
+    auto math = mathFaces_.find(run.face);
+    if (math == mathFaces_.end()) {
+      const void* data = nullptr;
+      UINT32 bytes = 0;
+      void* context = nullptr;
+      BOOL exists = FALSE;
+      if (run.face && SUCCEEDED(run.face->TryGetFontTable(DWRITE_MAKE_OPENTYPE_TAG('M', 'A', 'T', 'H'), &data, &bytes, &context, &exists)) && exists)
+        run.face->ReleaseFontTable(context);
+      math = mathFaces_.emplace(run.face, exists != FALSE).first;
+    }
+    if (math->second && !text.empty()) text += L'\n';
     if (run.text) text.append(reinterpret_cast<const wchar_t*>(run.text), run.textLength);
+    if (math->second) text += L'\n';
     // Its box, a little larger: a mark raised above the line, an accent, a slanted glyph.
-    const draw::Point corners[] = {{origin.x - size * 0.5f, origin.y - size * 1.2f}, {x1 + size * 0.5f, origin.y - size * 1.2f},
-                                   {origin.x - size * 0.5f, origin.y + size * 0.6f}, {x1 + size * 0.5f, origin.y + size * 0.6f}};
+    const float left = std::min(origin.x, x1) - size * 0.5f, right = std::max(origin.x, x1) + size * 0.5f;  // right to left too
+    const draw::Point corners[] = {{left, origin.y - size * 1.2f}, {right, origin.y - size * 1.2f},
+                                   {left, origin.y + size * 0.6f}, {right, origin.y + size * 0.6f}};
     draw::Rect box{FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX};
     for (draw::Point c : corners) {
       const draw::Point p = m_.Apply(run.sideways ? draw::Point{origin.x + (c.y - origin.y), origin.y + (c.x - origin.x)} : c);
@@ -389,6 +411,7 @@ class TextRecorder : public draw::Painter {
   draw::Matrix m_;
   std::vector<draw::Matrix> stack_;
   draw::Point end_;
+  std::map<IDWriteFontFace*, bool> mathFaces_;
 };
 
 // The characters PDFium finds on a page that aren't where any run drew text: copied or searched,
@@ -595,7 +618,15 @@ std::string WordProblems(const std::wstring& drawn, const std::wstring& read, in
     size_t end = k;
     std::wstring letters;
     while (end < got.size() && got[end].size() == 1) letters += got[end++];
-    if (letters.size() >= 4 && std::any_of(words.begin(), words.end(), [&](const std::wstring& w) {
+    // Equations: their symbols are set apart by layout, with no space characters to go by. So is
+    // Chinese, Japanese and Korean text spread across a cell (distributed): it has no spaces.
+    const bool math = std::any_of(letters.begin(), letters.end(), [](wchar_t c) {
+      return std::wstring_view(L"+-=<>|~±×÷·").find(c) != std::wstring_view::npos ||
+             (c >= 0x2190 && c <= 0x22FF) || (c >= 0x27C0 && c <= 0x27FF) || (c >= 0x2A00 && c <= 0x2AFF) ||
+             (c >= 0x3000 && c <= 0x9FFF) || (c >= 0xAC00 && c <= 0xD7AF) || (c >= 0xF900 && c <= 0xFAFF) ||
+             (c >= 0xFF00 && c <= 0xFFEF);
+    });
+    if (letters.size() >= 4 && !math && std::any_of(words.begin(), words.end(), [&](const std::wstring& w) {
           return w.size() > letters.size() && w.find(letters) != std::wstring::npos;
         })) {
       if (!count++) first = "\"" + fw::WideToUtf8(letters) + "\" reads letter by letter";

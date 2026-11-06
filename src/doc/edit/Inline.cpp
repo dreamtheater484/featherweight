@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "doc/docx/Docx.h"
 #include "doc/edit/Styles.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/model/Internal.h"
@@ -156,15 +157,9 @@ Result AddBookmark(Editor& editor, Pos from, Pos to, std::string_view name) {
       doc.Para(from.para).story != doc.Para(to.para).story || from.offset > doc.Para(from.para).text.size() ||
       to.offset > doc.Para(to.para).text.size())
     return Fail(u"A bookmark starts and ends in the same part of the document.");
-  // An id no bookmark has: above every one in the document.
-  int64_t top = -1;
-  for (const PairInfo& p : doc.Pairs()) {
-    if (p.kind != pkg::RefKind::BookmarkId) continue;
-    int64_t v = 0;
-    auto [ptr, ec] = std::from_chars(p.id.data(), p.id.data() + p.id.size(), v);
-    if (ec == std::errc() && ptr == p.id.data() + p.id.size()) top = std::max(top, v);
-  }
-  const std::string id = std::to_string(top + 1);
+  // An id no bookmark has: above every one in the document, those only in kept XML too (a text
+  // box's fallback copy; D5 corpus pass T4).
+  const std::string id = std::to_string(docx::TopBookmarkId(doc) + 1);
   TreeEdit te(editor, from);
   te.Begin(u"Bookmark");
   te.Local();
@@ -499,13 +494,7 @@ std::vector<std::string> BookmarksForParagraphs(Editor& editor, const std::vecto
     taken.insert(std::move(lower));
     if (starts(b.name)) at.emplace(b.from.para, b.name);
   }
-  int64_t top = -1;
-  for (const PairInfo& p : doc.Pairs()) {
-    if (p.kind != pkg::RefKind::BookmarkId) continue;
-    int64_t v = 0;
-    auto [ptr, ec] = std::from_chars(p.id.data(), p.id.data() + p.id.size(), v);
-    if (ec == std::errc() && ptr == p.id.data() + p.id.size()) top = std::max(top, v);
-  }
+  int64_t top = docx::TopBookmarkId(doc);
   TreeEdit te(editor, paras.empty() ? Pos{} : Pos{paras.front(), 0});
   te.Begin(u"Bookmark");
   te.Local();

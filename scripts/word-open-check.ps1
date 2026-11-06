@@ -18,9 +18,9 @@
   Results, per file: ok (opened, no dialog); notice (opened, and the only dialogs were about this
   PC's Office, such as a proofing feature that isn't installed: nothing about the file); repair
   (Word offered to repair it, or refused it as unreadable); error (Word showed another dialog or
-  refused the file otherwise); timeout; unchecked (Word's automation failed three times: Word didn't
-  start or answer, which says nothing about the file). The exit code is 1 when any file isn't ok or
-  notice.
+  refused the file otherwise; a bare "Command failed" only when it comes three times in three);
+  timeout; unchecked (Word's automation failed three times: Word didn't start or answer, which says
+  nothing about the file). The exit code is 1 when any file isn't ok or notice.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\word-open-check.ps1 out\saved
@@ -33,9 +33,13 @@ param(
   [int]$TimeoutSeconds = 90,
   [switch]$ShowWindows,  # print every window Word shows while a file opens (for diagnosing)
   # Also read what Word sees once the file is open: its paragraphs, tracked changes (type, author,
-  # text) and comments (author, text, resolved, the comment each one replies to), into the JSON's
-  # "review" (scripts\contract-review-check.ps1).
+  # text), comments (author, text, resolved, the comment each one replies to), bookmarks (name,
+  # range and text, hidden ones too) and tables (rows, cells per row), into the JSON's "review"
+  # (scripts\contract-review-check.ps1).
   [switch]$Review,
+  # The password of protected files (D5: Featherweight's encrypted saves). Without it, a protected
+  # file fails to open instead of prompting.
+  [string]$Password,
   # Internal: open one file in this process (the parent runs one child per file).
   [string]$Child, [string]$ResultFile
 )
@@ -152,7 +156,8 @@ if ($Child) {
     # WritePasswordDocument, WritePasswordTemplate, Format, Encoding, Visible, OpenAndRepair, DocumentDirection,
     # NoEncodingDialog, all by reference. A dummy password makes a protected file fail instead of prompting.
     $missing = [Type]::Missing
-    $doc = $word.Documents.Open([ref]$Child, [ref]$false, [ref]$true, [ref]$false, [ref]"-", [ref]"-", [ref]$false,
+    $pw = if ($Password) { $Password } else { "-" }
+    $doc = $word.Documents.Open([ref]$Child, [ref]$false, [ref]$true, [ref]$false, [ref]$pw, [ref]"-", [ref]$false,
                                 [ref]"-", [ref]"-", [ref]0, [ref]$missing, [ref]$false, [ref]$false, [ref]$missing, [ref]$true)
     $result.opened = $true
     # While a dialog is up (the parent cancels it), Word rejects calls: try again for a while.
@@ -167,7 +172,16 @@ if ($Child) {
             try { if ($c.Ancestor) { $parent = $c.Ancestor.Index } } catch {}
             $notes += [ordered]@{ index = $c.Index; author = $c.Author; text = $c.Range.Text; done = [bool]$c.Done; parent = $parent }
           }
-          $result.review = [ordered]@{ paragraphs = $paras; revisions = $revs; comments = $notes }
+          $doc.Bookmarks.ShowHidden = $true  # _Toc and _Ref bookmarks too
+          $marks = @(); foreach ($b in $doc.Bookmarks) { $marks += [ordered]@{ name = $b.Name; start = $b.Start; end = $b.End; text = $b.Range.Text } }
+          # Tables: each one's rows, and how many cells each row has (by the cells' row index, which
+          # works with vertically merged cells too).
+          $tables = @()
+          foreach ($t in $doc.Tables) {
+            $perRow = @{}; foreach ($c in $t.Range.Cells) { $perRow[$c.RowIndex] = 1 + [int]$perRow[$c.RowIndex] }
+            $tables += [ordered]@{ rows = $t.Rows.Count; cells = @($perRow.Keys | Sort-Object | ForEach-Object { $perRow[$_] }) }
+          }
+          $result.review = [ordered]@{ paragraphs = $paras; revisions = $revs; comments = $notes; bookmarks = $marks; tables = $tables }
           break
         } catch {
           $ex = $_.Exception
@@ -241,6 +255,10 @@ New-Item -ItemType Directory -Force $tmp | Out-Null
 $resultPath = Join-Path $tmp "result.json"
 # Word's automation failing (it didn't start or answer) says nothing about the file: try again.
 $infraText = "(?i)didn't connect to the safe-mode instance|remote procedure call|RPC server|0x800706|0x80010108|0x80080005|disconnected from its clients|server execution failed"
+# Word's bare "Command failed" from Documents.Open, with no dialog, also comes from a Word that wasn't
+# ready: the defra form's edited copy got it once in a torture run, then opened 3 times in 3. Tried
+# again too, but if every try gets it, it stays the file's error.
+$retryText = "(?i)^Command failed\.?$"
 $entries = @()
 $n = 0
 foreach ($f in @($files)) {
@@ -251,6 +269,7 @@ foreach ($f in @($files)) {
   $childArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"",
                  "-Child", "`"$($f.FullName)`"", "-ResultFile", "`"$resultPath`"")
   if ($Review) { $childArgs += "-Review" }
+  if ($Password) { $childArgs += @("-Password", "`"$Password`"") }
   $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList $childArgs
   # Watch the Word process for dialogs until the child is done: read each one, then cancel it.
   $seen = @{}
@@ -289,9 +308,10 @@ foreach ($f in @($files)) {
     elseif ($entry.opened -and -not $entry.dialogs.Count -and -not $entry.error) { "ok" }
     elseif ($entry.opened -and -not $entry.error -and -not @($entry.dialogs | Where-Object { "$($_.title) $($_.text)" -notmatch $noticeText }).Count) { "notice" }
     else { "error" }
-  if ($entry.status -ne "error" -or $entry.dialogs.Count -or "$($entry.error)" -notmatch $infraText) { break }
+  $infra = "$($entry.error)" -match $infraText
+  if ($entry.status -ne "error" -or $entry.dialogs.Count -or -not ($infra -or "$($entry.error)" -match $retryText)) { break }
   if ($attempt -ge 3) {
-    $entry.status = "unchecked"  # Word's automation failed three times: not a verdict on the file
+    if ($infra) { $entry.status = "unchecked" }  # Word's automation failed three times: not a verdict on the file
     break
   }
   Start-Sleep -Seconds 5

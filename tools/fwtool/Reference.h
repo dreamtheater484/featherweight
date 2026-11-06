@@ -18,6 +18,9 @@ struct ReferenceEntry {
   std::filesystem::path pdf;       // Word's PDF; empty when Word couldn't export it
   int pages = 0;                   // Word's own page count, 0 if unknown
   std::string error;               // why there is no PDF
+  std::string copyOf;              // a format copy: the source of the document it copies
+  std::string password;            // a password-protected copy's (test) password
+  std::string exclude;             // why it's left out of fidelity (Word's own render of it is broken)
 };
 
 struct ReferenceSet {

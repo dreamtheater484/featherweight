@@ -6,6 +6,10 @@
   - the page count
   - the fonts Office actually drew with, from each PDF
   - the source file's hash
+  - for a format copy (D5: doc\, odt\, dotx\, protected\, made by scripts\make-test-files.ps1),
+    "copyOf": the original's source in the same manifest, so fidelity counts each document once
+    and measures the copies as a set of their own
+  - for a password-protected copy, "password": its test password (Get-TestPassword)
   `fwtool compare` (D1) measures Featherweight against these PDFs.
 
   Office is driven by automation and doesn't show a window:
@@ -47,9 +51,22 @@ param(
 
 $ErrorActionPreference = "Stop"
 $apps = @{
-  Word = @{ Exe = "WINWORD"; ProgId = "Word.Application"; Ext = @(".docx", ".docm", ".dotx", ".dotm") }
+  Word = @{ Exe = "WINWORD"; ProgId = "Word.Application"; Ext = @(".docx", ".docm", ".dotx", ".dotm", ".doc", ".odt") }
   Excel = @{ Exe = "EXCEL"; ProgId = "Excel.Application"; Ext = @(".xlsx", ".xlsm", ".xltx", ".xltm") }
   PowerPoint = @{ Exe = "POWERPNT"; ProgId = "PowerPoint.Application"; Ext = @(".pptx", ".pptm", ".potx", ".potm", ".ppsx", ".ppsm") }
+}
+
+# The test password of a password-protected copy (D5): files in a protected\ folder, made by
+# scripts\make-test-files.ps1 with "featherweight", except msoffcrypto-tool's ECMA-376 standard
+# encryption file and its decrypted twin (tests\office\README.md). Null when it has none. These are
+# test values, not secrets; the manifest records them so fwtool compare and the torture test can open
+# the copies.
+function Get-TestPassword([string]$path) {
+  if ($path -notmatch '(^|[\\/])protected[\\/]') { return $null }
+  $leaf = Split-Path -Leaf $path
+  if ($leaf -eq "ecma376-standard.docx") { return "Password1234_" }
+  if ($leaf -eq "ecma376-standard-plain.docx") { return $null }
+  "featherweight"
 }
 
 function Write-Json($value, [string]$path) {
@@ -156,7 +173,10 @@ if ($Child) {
         # FileName, ConfirmConversions, ReadOnly, AddToRecentFiles, PasswordDocument, PasswordTemplate, Revert,
         # WritePasswordDocument, WritePasswordTemplate, Format, Encoding, Visible, OpenAndRepair, DocumentDirection,
         # NoEncodingDialog, all by reference. A dummy password makes a protected file fail instead of prompting.
-        $doc = $office.Documents.Open([ref]$Source, [ref]$false, [ref]$true, [ref]$false, [ref]"-", [ref]"-", [ref]$false,
+        # The test files in a "protected" folder (scripts\make-test-files.ps1) open with the test password.
+        $pw = Get-TestPassword $Source
+        if (-not $pw) { $pw = "-" }  # a password-protected file we don't know fails instead of prompting
+        $doc = $office.Documents.Open([ref]$Source, [ref]$false, [ref]$true, [ref]$false, [ref]$pw, [ref]"-", [ref]$false,
                                       [ref]"-", [ref]"-", [ref]0, [ref]$missing, [ref]$false, [ref]$false, [ref]$missing, [ref]$true)
         $result.pages = $doc.ComputeStatistics(2)  # wdStatisticPages
         # wdExportFormatPDF, optimized for print, the whole document without markup, tagged, missing fonts as bitmaps.
@@ -215,6 +235,17 @@ function Get-Kind([string]$ext) {
   $apps.Keys | Where-Object { $apps[$_].Ext -contains $ext.ToLower() } | Select-Object -First 1
 }
 
+# A format copy's original: the .docx it was made from (private: docx\<category>\, the same name;
+# public: generated\ or torture\, the name without "-protected"). Null for anything else.
+function Get-CopyOf([string]$source, [string]$sourceRoot) {
+  $parts = $source -split '/'
+  if ($parts.Count -lt 2 -or @("doc", "odt", "dotx", "protected") -notcontains $parts[0]) { return $null }
+  $stem = (($parts[1..($parts.Count - 1)] -join '/') -replace '\.[^./]+$', '') -replace '-protected$', ''
+  $candidates = if ($Corpus) { @("docx/$stem.docx") } else { @("generated/$stem.docx", "torture/$stem.docx") }
+  foreach ($c in $candidates) { if (Test-Path -LiteralPath (Join-Path $sourceRoot $c)) { return $c } }
+  $null
+}
+
 # Each job: the source file, its name in the manifest, and its PDF relative to the output folder.
 $jobs = @()
 $kept = @()
@@ -229,7 +260,9 @@ if ($Corpus) {
   New-Item -ItemType Directory -Force $outRoot | Out-Null
   $manifestPath = Join-Path $outRoot "manifest.json"
   if ((Test-Path $manifestPath) -and -not $Force) { $old = @((Get-Content $manifestPath -Raw | ConvertFrom-Json).files) }
-  $screened = @("docx", "xlsx", "pptx") | ForEach-Object { Join-Path $corpusRoot $_ } | Where-Object { Test-Path $_ }
+  # docx, xlsx, pptx: screened downloads; doc, odt, dotx, protected: Word's copies of them (D5,
+  # scripts\make-test-files.ps1).
+  $screened = @("docx", "xlsx", "pptx", "doc", "odt", "dotx", "protected") | ForEach-Object { Join-Path $corpusRoot $_ } | Where-Object { Test-Path $_ }
   if (-not $screened) { throw "$corpusRoot has no docx, xlsx or pptx folder (see scripts\fetch-corpus.ps1)." }
   foreach ($f in $screened | ForEach-Object { Get-ChildItem $_ -File -Recurse } | Sort-Object FullName) {
     if ((Test-Inside $f.FullName $outRoot) -or -not (Get-Kind $f.Extension)) { continue }
@@ -319,6 +352,14 @@ if ($Corpus) { $manifest.corpus = $corpusRoot }  # fwtool compare finds the docu
 # Folders stay in the order the manifest had them, new folders after them; files by name.
 $groups = @(@($previousFiles) + @($entries) | ForEach-Object { ($_.source -split '/')[0] } | Select-Object -Unique)
 $manifest.files = @(@($kept) + @($entries) | Sort-Object { if ($Corpus) { 0 } else { [array]::IndexOf($groups, ($_.source -split '/')[0]) } }, { $_.source })
+# Every entry, kept ones too, says which original it copies (the coordinator's D5 decision).
+$sourceRoot = if ($Corpus) { $corpusRoot } else { Join-Path $root "tests\office" }
+foreach ($e in $manifest.files) {
+  $c = Get-CopyOf $e.source $sourceRoot
+  if ($c) { $e | Add-Member -NotePropertyName copyOf -NotePropertyValue $c -Force }
+  $p = Get-TestPassword $e.source
+  if ($p) { $e | Add-Member -NotePropertyName password -NotePropertyValue $p -Force }
+}
 Write-Json $manifest $manifestPath
 $mutex.ReleaseMutex()
 $unchanged = if ($reused) { ", $reused of them unchanged since the last run" } else { "" }

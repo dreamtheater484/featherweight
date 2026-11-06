@@ -2,16 +2,25 @@
 // with fwdoclayout (src/doc/layout/Layout.h), marking each stage in OpenTimings.
 #include "LayoutHook.h"
 
+#include <windows.h>
+#include <psapi.h>
+
 #include <chrono>
 #include <cstdio>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <random>
 
+#include "Common.h"
 #include "core/Strings.h"
+#include "doc/msdoc/MsDoc.h"
+#include "doc/odf/Odt.h"
 #include "doc/docx/Docx.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
+#include "doc/edit/Inline.h"
 #include "doc/edit/Lists.h"
 #include "doc/edit/Page.h"
 #include "doc/edit/Styles.h"
@@ -19,6 +28,8 @@
 #include "doc/layout/Layout.h"
 #include "draw/D2DDevice.h"
 #include "draw/D2DPainter.h"
+#include "pkg/CompoundFile.h"
+#include "pkg/OfficeCrypto.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "text/Fonts.h"
@@ -34,26 +45,85 @@ std::wstring Substitute(std::wstring_view family) {
   return g_document ? fw::doc::layout::SubstituteFamily(*g_document, family) : std::wstring();
 }
 
+// The fonts the document carries, by the names its font table gives them, as in the app.
+void UseDocumentFonts(fw::text::Fonts& fonts, const fw::doc::Document& doc) {
+  std::vector<std::wstring> names;
+  const std::vector<std::vector<uint8_t>> files = fw::doc::layout::EmbeddedFonts(doc, &names);
+  fonts.UseDocumentFonts(files, names);
+}
+
 // One Fonts for the process: faces stay cached from one document to the next, as in the app.
 fw::text::Fonts& SharedFonts() {
   static fw::text::Fonts fonts(Substitute);
   return fonts;
 }
 
+// A document the app imports or decrypts first, as the .docx bytes it then reads: a Word 97-2003
+// .doc, an .odt, or a password-protected .docx or .doc opened with `password`. Empty without
+// `error` for a plain package, which is read directly.
+std::vector<uint8_t> ImportedDocx(const std::filesystem::path& document, std::wstring_view password, std::string& error) {
+  namespace crypto = fw::pkg::crypto;
+  const std::wstring ext = fw::ToLower(document.extension().wstring());
+  std::ifstream in(document, std::ios::binary);
+  std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  fw::pkg::Status status;
+  std::vector<uint8_t> docx;
+  if (auto cf = fw::pkg::CompoundFile::Open(bytes)) {
+    if (crypto::IsEncryptedPackage(*cf)) {
+      crypto::Key key;
+      if (crypto::Decrypt(*cf, password, docx, key) != crypto::Result::Ok) error = "the password doesn't open it";
+      return docx;
+    }
+    if (crypto::IsEncryptedDoc(*cf)) {
+      crypto::DocStreams s;
+      if (crypto::DecryptDoc(*cf, password, s) != crypto::Result::Ok) {
+        error = "the password doesn't open it";
+        return docx;
+      }
+      docx = fw::doc::msdoc::ToDocx(
+          [&](std::string_view name) -> std::optional<std::vector<uint8_t>> {
+            if (name == "WordDocument") return s.wordDocument;
+            if (name == s.table) return s.tableStream;
+            if (name == "Data") return s.data.empty() ? std::nullopt : std::optional<std::vector<uint8_t>>(s.data);
+            return cf->Stream(name);
+          },
+          status, true);
+    } else {
+      docx = fw::doc::msdoc::ToDocx([&](std::string_view name) { return cf->Stream(name); }, status);
+    }
+  } else if (ext == L".odt") {
+    status = fw::doc::odf::OdtToDocx(bytes, docx);
+    if (!status.Ok()) docx.clear();
+  } else {
+    return docx;
+  }
+  if (docx.empty()) error = status.message.empty() ? "can't be imported" : status.message;
+  return docx;
+}
+
 // Reads a document into the model as the app does.
 std::unique_ptr<fw::doc::Document> OpenModel(const std::filesystem::path& document, fw::OpenTimings* timings,
-                                             std::string& error) {
+                                             std::string& error, std::wstring_view password = {}) {
   fw::pkg::Status status;
-  fw::pkg::Snapshot::Options options;
-  std::error_code ec;
-  options.recoveryDir = (std::filesystem::temp_directory_path(ec) / L"fwtool-recovery").wstring();
-  auto snapshot = fw::pkg::Snapshot::Open(document.wstring(), options, status);
-  if (!snapshot) {
-    error = status.message.empty() ? "can't read the file" : status.message;
-    return nullptr;
+  std::unique_ptr<fw::pkg::Package> package;
+  error.clear();  // its emptiness below says whether importing failed
+  std::vector<uint8_t> imported = ImportedDocx(document, password, error);
+  if (!error.empty()) return nullptr;
+  if (!imported.empty()) {
+    package = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(imported)), fw::pkg::Limits::Default(), status);
+    if (timings) timings->Mark(fw::OpenTimings::Read);
+  } else {
+    fw::pkg::Snapshot::Options options;
+    std::error_code ec;
+    options.recoveryDir = (std::filesystem::temp_directory_path(ec) / L"fwtool-recovery").wstring();
+    auto snapshot = fw::pkg::Snapshot::Open(document.wstring(), options, status);
+    if (!snapshot) {
+      error = status.message.empty() ? "can't read the file" : status.message;
+      return nullptr;
+    }
+    if (timings) timings->Mark(fw::OpenTimings::Read);
+    package = fw::pkg::Package::Open(std::move(snapshot), fw::pkg::Limits::Default(), status);
   }
-  if (timings) timings->Mark(fw::OpenTimings::Read);
-  auto package = fw::pkg::Package::Open(std::move(snapshot), fw::pkg::Limits::Default(), status);
   if (!package) {
     error = status.message.empty() ? "can't open the package" : status.message;
     return nullptr;
@@ -70,17 +140,24 @@ std::unique_ptr<fw::doc::Document> OpenModel(const std::filesystem::path& docume
 
 // Opens a document as the app does and lays out every page, then hands the layout to `use`.
 bool OpenAndLayOut(const std::filesystem::path& document, fw::OpenTimings* timings, std::string& error,
-                   const std::function<void(const fw::doc::layout::Layout&)>& use) {
-  std::unique_ptr<fw::doc::Document> doc = OpenModel(document, timings, error);
+                   const std::function<void(const fw::doc::layout::Layout&)>& use, std::wstring_view password = {}) {
+  std::unique_ptr<fw::doc::Document> doc = OpenModel(document, timings, error, password);
   if (!doc) return false;
   g_document = doc.get();
   fw::text::Fonts& fonts = SharedFonts();
   fonts.ClearSubstitutions();
+  UseDocumentFonts(fonts, *doc);
   {
     fw::doc::layout::Layout layout(*doc, fonts, {}, timings);
     layout.LayOutAll();
     use(layout);
   }
+  // FWTOOL_FONTS=1: the fonts this document asked for that aren't installed, and what was drawn.
+  wchar_t flag[4] = {};
+  if (GetEnvironmentVariableW(L"FWTOOL_FONTS", flag, 4) > 0)
+    for (const auto& s : fonts.Substitutions())
+      std::fprintf(stderr, "font: %s: %s -> %s\n", fw::WideToUtf8(document.filename().wstring()).c_str(),
+                   fw::WideToUtf8(s.requested).c_str(), fw::WideToUtf8(s.used).c_str());
   g_document = nullptr;
   return true;
 }
@@ -90,10 +167,13 @@ bool OpenAndLayOut(const std::filesystem::path& document, fw::OpenTimings* timin
 bool HaveLayout() { return true; }
 
 bool LayOutDocument(const std::filesystem::path& document, fw::LayoutDump* dump, fw::OpenTimings* timings,
-                    std::string& error) {
-  return OpenAndLayOut(document, timings, error, [&](const fw::doc::layout::Layout& layout) {
-    if (dump) *dump = layout.Dump(fw::WideToUtf8(document.filename().wstring()));
-  });
+                    std::string& error, std::wstring_view password) {
+  return OpenAndLayOut(
+      document, timings, error,
+      [&](const fw::doc::layout::Layout& layout) {
+        if (dump) *dump = layout.Dump(fw::WideToUtf8(document.filename().wstring()));
+      },
+      password);
 }
 
 bool WithLayout(const std::filesystem::path& document, std::string& error,
@@ -203,6 +283,54 @@ uint32_t ParagraphToType(const fw::doc::Document& doc, const fw::doc::layout::La
 
 }  // namespace
 
+namespace {
+
+double PrivateMB() {
+  PROCESS_MEMORY_COUNTERS_EX pmc{};
+  pmc.cb = sizeof pmc;
+  K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof pmc);
+  return pmc.PrivateUsage / 1048576.0;
+}
+
+double PeakWorkingSetMB() {
+  PROCESS_MEMORY_COUNTERS pmc{};
+  K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc);
+  return pmc.PeakWorkingSetSize / 1048576.0;
+}
+
+}  // namespace
+
+bool BenchScrolling(const std::filesystem::path& document, ScrollResult& result, std::string& error) {
+  PagePainter painter;
+  if (!painter.Init()) {
+    error = "can't paint: no Direct2D device";
+    return false;
+  }
+  result.memoryOpen = PrivateMB();
+  const auto start = std::chrono::steady_clock::now();
+  std::unique_ptr<fw::doc::Document> doc = OpenModel(document, nullptr, error);
+  if (!doc) return false;
+  g_document = doc.get();
+  fw::text::Fonts& fonts = SharedFonts();
+  fonts.ClearSubstitutions();
+  {
+    fw::doc::layout::Layout layout(*doc, fonts);
+    layout.LayOutAll();
+    result.layOutMs = Since(start);
+    result.pages = layout.PageCount();
+    result.memoryLaidOut = PrivateMB();
+    for (size_t page = 0; page < layout.PageCount(); ++page) {
+      const auto t = std::chrono::steady_clock::now();
+      painter.Paint(layout, page);
+      result.paint.push_back(Since(t));
+    }
+    result.memoryScrolled = PrivateMB();
+  }
+  g_document = nullptr;
+  result.peakWorkingSet = PeakWorkingSetMB();
+  return true;
+}
+
 bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>& places, size_t& pages,
                  std::string& error) {
   std::unique_ptr<fw::doc::Document> doc = OpenModel(document, nullptr, error);
@@ -215,6 +343,7 @@ bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>
   g_document = doc.get();
   fw::text::Fonts& fonts = SharedFonts();
   fonts.ClearSubstitutions();
+  UseDocumentFonts(fonts, *doc);
   {
     fw::doc::layout::Layout layout(*doc, fonts);
     layout.LayOutAll();
@@ -346,7 +475,8 @@ std::vector<std::string> DumpLines(const fw::doc::layout::Layout& layout) {
   return lines;
 }
 
-// A random edit of the kind typing makes, mostly in the body.
+// A random edit of the kind typing makes, mostly in the body; formatting, a field, undo and redo
+// too (H3: only the paragraphs they change read differently).
 void RandomEdit(fw::doc::edit::Editor& ed, const fw::doc::Document& doc, std::mt19937& rng) {
   const bool body = rng() % 8 != 0;
   std::vector<uint32_t> paras;
@@ -362,7 +492,7 @@ void RandomEdit(fw::doc::edit::Editor& ed, const fw::doc::Document& doc, std::mt
   namespace edit = fw::doc::edit;
   const uint32_t section = edit::SectionOf(doc, para), sections = static_cast<uint32_t>(doc.Sections().size());
   auto twips = [&](int32_t from, int32_t span) { return fw::Twips(from + static_cast<int32_t>(rng() % static_cast<uint32_t>(span))); };
-  switch (rng() % 13) {
+  switch (rng() % 18) {
     case 0: case 1: case 2: case 3: ed.InsertText(at, kTexts[rng() % 5]); break;
     case 4: case 5: {
       const uint32_t to = std::min(len, at.offset + 1 + static_cast<uint32_t>(rng() % 60));
@@ -409,15 +539,52 @@ void RandomEdit(fw::doc::edit::Editor& ed, const fw::doc::Document& doc, std::mt
         }
       }
       break;
-    default:
+    case 12:
       switch (rng() % 3) {
         case 0: edit::InsertSectionBreak(ed, at, static_cast<fw::doc::SectionStart>(rng() % 4)); break;
         case 1: if (sections > 1) edit::DeleteSectionBreak(ed, static_cast<uint32_t>(rng() % (sections - 1))); break;
         default: edit::InsertBreak(ed, at, rng() % 2 == 0); break;
       }
       break;
+    case 13: {  // a few letters bold or italic
+      const edit::Range range{at, {para, std::min(len, at.offset + 1 + static_cast<uint32_t>(rng() % 20))}};
+      edit::TreeEdit te(ed, at);
+      edit::ToggleRuns(te, range, rng() % 2 ? edit::Toggle::Bold : edit::Toggle::Italic);
+      break;
+    }
+    case 14: {  // the paragraph centered, or back at the start
+      edit::ParaFormat f;
+      f.jc = rng() % 2 ? fw::doc::Justification::Center : fw::doc::Justification::Start;
+      edit::TreeEdit te(ed, at);
+      edit::FormatParagraphs(te, {at, at}, f);
+      break;
+    }
+    case 15: {  // a heading, or the normal style
+      edit::TreeEdit te(ed, at);
+      edit::ApplyStyle(te, {at, at}, rng() % 2 ? "heading 1" : "Normal");
+      break;
+    }
+    case 16: {  // bullets or numbers, on or off
+      edit::TreeEdit te(ed, at);
+      edit::ToggleList(te, {at, at}, rng() % 2 ? edit::ListKind::Bullet : edit::ListKind::Number);
+      break;
+    }
+    default:
+      switch (rng() % 4) {
+        case 0: edit::InsertField(ed, at, " PAGE ", u"1"); break;
+        case 1: ed.Redo(); break;
+        default: ed.Undo(); break;
+      }
+      break;
   }
 }
+
+// A step that says anything may read differently: the model's caches are made again from nothing,
+// so a layout from scratch after it doesn't see what an edit left in them.
+struct EverythingAgain : fw::doc::edit::CustomStep {
+  void Undo() override {}
+  void Redo() override {}
+};
 
 }  // namespace
 
@@ -427,6 +594,7 @@ bool CheckEdits(const std::filesystem::path& document, int edits, unsigned seed,
   g_document = doc.get();
   fw::text::Fonts& fonts = SharedFonts();
   fonts.ClearSubstitutions();
+  UseDocumentFonts(fonts, *doc);
   {
     fw::doc::layout::Layout layout(*doc, fonts);
     layout.LayOutAll();
@@ -449,10 +617,14 @@ bool CheckEdits(const std::filesystem::path& document, int edits, unsigned seed,
       else layout.Continue(1);
       if (i % 10 != 9 && i + 1 != edits) continue;
       layout.LayOutAll();
+      const std::vector<std::string> a = DumpLines(layout);
+      const int counted = changes;
+      editor.RecordStep(u"Check", std::make_shared<EverythingAgain>());
+      changes = counted;
       fw::doc::layout::Layout fresh(*doc, fonts);
       fresh.LayOutAll();
       ++result.checks;
-      const std::vector<std::string> a = DumpLines(layout), b = DumpLines(fresh);
+      const std::vector<std::string> b = DumpLines(fresh);
       if (a == b && layout.PageCount() == fresh.PageCount()) continue;
       size_t k = 0;
       while (k < a.size() && k < b.size() && a[k] == b[k]) ++k;

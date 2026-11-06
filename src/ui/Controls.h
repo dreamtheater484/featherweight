@@ -243,6 +243,7 @@ class Dropdown : public Control {
   int selected = -1;
   std::wstring placeholder;  // shown while nothing is chosen
   wchar_t glyph = 0;
+  int maxRows = 12;  // rows the list shows before it scrolls (it's never taller than the window)
   std::function<void(int)> onChange;
 
   void SetGroup(ControlGroup* g) override;
@@ -281,6 +282,8 @@ class ComboBox : public Control {
   std::function<void(const std::wstring&, int)> onCommit;
   // Returns false for text that can't be applied (the box shakes); may tidy the text.
   std::function<bool(std::wstring&)> validate;
+  // Enter, once the text is applied: a panel's main action, as a dialog's default button.
+  std::function<void()> onEnter;
 
   // The applied value (ignored while the box is being edited).
   void SetText(const std::wstring& text);

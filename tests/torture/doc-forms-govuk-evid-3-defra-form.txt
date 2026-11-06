@@ -1,0 +1,52 @@
+# Kept torture reproducer: scripts/torture.ps1 replays it in every run, and the validator and Word check
+# its saved copy. Word once said "Command failed" opening this edited .doc form (torture run, 2026-11-06);
+# the same bytes then opened in Word 3 times in 3, so that was Word, which word-open-check.ps1 now tries
+# again. Kept for what the 40 edits do to an imported .doc form: a drop-down content control next to its
+# legacy fields, a column break, a split inside a HYPERLINK field, a page number format.
+# Its file is relative to the private corpus (FW_CORPUS).
+file: doc/forms/govuk-evid-3-annual-interim-project-report-defra-form.doc
+sha256: 11676eaba89cf98186229e20707a6518e71069b552abbd9f17ef6363ff781948
+seed: 3337911266815067849
+round: 0
+failure: none
+edits: 40
+split 44:0
+split 139:11
+split 7:39  # field HYPERLINK
+command 31:0 31:0 "toggle=super"
+type 7:94 "çthe “quoted”"  # field PAGEREF
+replace 111:0 114:20 "\t.o, "
+delete 119:0 120:0
+type 19:14 "a"
+type 49:0 "eüéß"
+group 4
+type 15:61 "עברית, "  # field PAGEREF
+undo 4
+command 139:7 139:9 "grow1"
+command 57:0 57:0 "columnbreak"  # section 0
+delete 38:0 39:0  # paragraph join
+type 33:0 "“quoted”Featherweightß."
+format 40:8 40:11 mark:highlight=yellow
+group 2
+type 47:63 "12ñ日本"
+type 36:1 "ç—€ç"
+command 32:21 32:21 "control=dropdown"  # new content control
+delete 74:0 74:0
+group 2
+delete 125:0 125:0
+split 63:0
+split 126:0
+command 22:0 22:18 "case=upper"
+type 56:0 "e—€ "
+delete 143:14 143:15
+delete 65:0 95:0  # table
+undo 1
+split 109:0  # table cell
+group 4
+delete 46:7 46:18  # bookmark 10
+delete 38:0 38:0  # table
+command 18:1 18:1 "pagenumber=0:0:2:1:1"  # section 0
+format 59:0 59:0 mark:size=28
+delete 65:0 65:6
+command 37:135 38:0 "newstyle=Torture 2"
+delete 126:0 126:0  # table cell

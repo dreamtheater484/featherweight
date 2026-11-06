@@ -634,7 +634,55 @@ TEST(Resolve_D2_DirectNumberingOverridesTheParagraphStyle) {
   const ParaProps& fromStyle = doc->ResolvedPara(p[1]);
   CHECK(fromStyle.indStart.Value() == 2880 && fromStyle.firstLine.Value() == -360 && fromStyle.numId == "1");
   CHECK(doc->ResolvedPara(p[2]).numId.empty() && !doc->Label(p[2]));
+  // Out of the style's list, it loses the style's indents too (as Word does).
+  CHECK(doc->ResolvedPara(p[2]).indStart.Value() == 0 && doc->ResolvedPara(p[2]).firstLine.Value() == 0);
   CHECK(doc->ResolvedPara(p[3]).indStart.Value() == 100);  // direct indents beat both
+}
+
+TEST(Numbering_ASectionBreakParagraphIsNotNumbered) {
+  // An empty numbered paragraph that only holds a section break gets no number and isn't counted.
+  Fixture f;
+  f.numbering = "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/>"
+                "<w:lvlText w:val=\"%1\"/></w:lvl></w:abstractNum><w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+  const std::string num = "<w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr>";
+  f.body = "<w:p><w:pPr>" + num + "</w:pPr><w:r><w:t>One</w:t></w:r></w:p>"
+           "<w:p><w:pPr>" + num + "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr></w:pPr><w:bookmarkStart w:id=\"1\" w:name=\"b\"/></w:p>"
+           "<w:p><w:pPr>" + num + "</w:pPr><w:r><w:t>Two</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  auto p = Paras(*doc);
+  CHECK(p.size() == 3);
+  if (p.size() != 3) return;
+  CHECK(!doc->Label(p[1]));
+  auto two = doc->Label(p[2]);
+  CHECK(two && two->text == u"2");
+}
+
+TEST(Resolve_D5_StyleListLevelSitsBetweenTheStyleAndItsBase) {
+  Fixture f;
+  f.styles = Styles(
+      "<w:style w:type=\"paragraph\" w:styleId=\"ListParagraph\"><w:pPr><w:ind w:left=\"720\"/></w:pPr></w:style>"
+      "<w:style w:type=\"paragraph\" w:styleId=\"Numbered\"><w:basedOn w:val=\"ListParagraph\"/><w:pPr><w:numPr>"
+      "<w:numId w:val=\"1\"/></w:numPr></w:pPr></w:style>"
+      "<w:style w:type=\"paragraph\" w:styleId=\"Numbered2\"><w:basedOn w:val=\"Numbered\"/><w:pPr><w:numPr>"
+      "<w:ilvl w:val=\"1\"/></w:numPr></w:pPr></w:style>");
+  auto lvl = [](int i, const char* left) {
+    return "<w:lvl w:ilvl=\"" + std::to_string(i) + "\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/>" +
+           "<w:lvlText w:val=\"%1.\"/><w:pPr><w:ind w:left=\"" + left + "\" w:hanging=\"360\"/></w:pPr></w:lvl>";
+  };
+  f.numbering = "<w:abstractNum w:abstractNumId=\"0\">" + lvl(0, "3240") + lvl(1, "4320") +
+                "</w:abstractNum><w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+  f.body = "<w:p><w:pPr><w:pStyle w:val=\"Numbered\"/></w:pPr></w:p><w:p><w:pPr><w:pStyle w:val=\"Numbered2\"/></w:pPr></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  auto p = Paras(*doc);
+  // The level's indent beats List Paragraph's, which the list's style is only based on.
+  CHECK(doc->ResolvedPara(p[0]).indStart.Value() == 3240 && doc->ResolvedPara(p[0]).ilvl == 0);
+  // A style that sets only the level keeps the list of the style it's based on.
+  CHECK(doc->ResolvedPara(p[1]).numId == "1" && doc->ResolvedPara(p[1]).ilvl == 1);
+  CHECK(doc->ResolvedPara(p[1]).indStart.Value() == 4320);
 }
 
 TEST(Resolve_D3_DefaultStyleSizeDoesNotOverrideTableStyle) {
@@ -685,10 +733,13 @@ TEST(Resolve_D4_D5_TableConditionalFormatting) {
     }
     return t + "</w:tbl><w:p/>";
   };
+  std::string headed = table("Grid", "");  // two repeated header rows: both take the first row's format
+  for (size_t at = 0, n = 0; n < 2 && (at = headed.find("<w:tr>", at)) != std::string::npos; ++n, at += 6)
+    headed.insert(at + 6, "<w:trPr><w:tblHeader/></w:trPr>");
   f.body = table("Grid", "") +  // D5: no tblLook means firstRow, firstColumn, noVBand
            table("Grid", "<w:tblLook w:val=\"0120\"/>") +  // firstRow and lastColumn, from the bits
            table("Grid", "<w:tblLook w:val=\"0120\" w:firstRow=\"0\" w:lastColumn=\"1\"/>") +  // named attributes win
-           table("NoBands", "");
+           table("NoBands", "") + headed;
   auto doc = LoadOk(f);
   CHECK(doc);
   if (!doc) return;
@@ -709,6 +760,8 @@ TEST(Resolve_D4_D5_TableConditionalFormatting) {
   CHECK(fill(2, 0, 1) == 0x333333 && fill(2, 1, 2) == 0x555555);
   // Table 4: band size 0 means no banding.
   CHECK(fill(3, 1, 1) == 0xEEEEEE);
+  // Table 5: two header rows; the bands start after them.
+  CHECK(fill(4, 0, 1) == 0x111111 && fill(4, 1, 1) == 0x111111 && fill(4, 2, 1) == 0x333333 && fill(4, 3, 1) == 0x444444);
   // Borders: the cell's inner edges take the style's insideH.
   Node mid = doc->RowCells(doc->TableRows(blocks[0].node)[1])[1];
   CellProps cp = doc->ResolvedCell(mid);
@@ -784,6 +837,12 @@ TEST(Numbering_FormatsNumbers) {
   CHECK(FormatNumber(40, "ordinalText") == u"Fortieth" && FormatNumber(5, "decimalZero") == u"05");
   CHECK(FormatNumber(6, "chicago") == u"††" && FormatNumber(3, "decimalEnclosedCircle") == u"③");
   CHECK(FormatNumber(7, "none").empty() && FormatNumber(7, "someFutureFormat") == u"7");
+  // Right-to-left and Asian scripts (D5).
+  CHECK(FormatNumber(15, "hebrew1") == u"טו" && FormatNumber(123, "hebrew1") == u"קכג");
+  CHECK(FormatNumber(3, "arabicAbjad") == u"ج" && FormatNumber(3, "arabicAlpha") == u"ت");
+  CHECK(FormatNumber(12, "hindiNumbers") == u"١٢" && FormatNumber(23, "hebrew2") == u"אא");
+  CHECK(FormatNumber(21, "japaneseCounting") == u"二十一" && FormatNumber(10, "chineseCounting") == u"十");
+  CHECK(FormatNumber(105, "japaneseCounting") == u"百五" && FormatNumber(2, "aiueoFullWidth") == u"イ");
 }
 
 TEST(Numbering_LabelsCountRestartAndContinue) {

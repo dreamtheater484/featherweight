@@ -82,7 +82,7 @@ Run before every release. Test PDFs are in `tests/pdfs/` (regenerate with `pytho
 - [ ] Launch with a 10 MB PDF to first page: ___ ms (target < 500 ms)
 - [ ] Memory with one typical document: ___ MB (target < 100 MB)
 
-## Word documents (D1–D4)
+## Word documents (D1–D5)
 
 What the automated checks can't judge: how it looks and feels, real input devices, Word itself, and paper. Test documents: `tests/office/generated/`, `tests/office/torture/`, and any of your own `.docx` files. Keep a copy of your own files first.
 
@@ -136,6 +136,54 @@ What the automated checks can't judge: how it looks and feels, real input device
 - [ ] Insert a text box and a few shapes, type in them, resize and move them, change the fill and outline. Add a text watermark ("DRAFT") and remove it.
 - [ ] Export a document to PDF (File → Export PDF). In Edge or Acrobat: text can be selected and searched, links work, and the bookmarks list the headings. It looks like the screen.
 - [ ] Save as RTF and as plain text, and open both in Word or Notepad.
+
+### Breadth (D5)
+
+Test documents: `tests/office/doc/`, `tests/office/odt/`, `tests/office/dotx/`, `tests/office/protected/`, and `tests/office/script/` (`charts`, `equations`, `rtl` and `eastasia.docx`). Keep a copy of your own files first. The protected test files' password is `featherweight` (`ecma376-standard.docx`: `Password1234_`).
+
+- [ ] **Opening a `.doc`.** Open an old Word 97–2003 `.doc` (one of yours, if you have one).
+  - It opens in a tab and looks as it does in Word. Known gap: a `.doc`'s grouped drawings and plain lines and rectangles aren't brought in yet (its pictures and text boxes are).
+  - A banner says that saving makes a new `.docx`.
+  - Edit it and press Ctrl+S. Save As suggests the same name as a `.docx` in the same folder.
+  - The `.doc` is unchanged. The `.docx` opens in **Word** without a repair prompt.
+- [ ] **Opening an `.odt`.** Open an `.odt` from LibreOffice, or one saved by Word as OpenDocument.
+  - Its styles, lists, tables, pictures, text boxes, headers and footers, footnotes, links, bookmarks, comments, tracked changes and table of contents are there.
+  - Ctrl+S goes to Save As `.docx`, and the `.odt` is unchanged.
+  - The `.docx` opens in Word without a prompt.
+- [ ] **The other ways in.** Open a `.doc` and an `.odt` by double-clicking them in Explorer (Open with Featherweight), by dragging them onto the window, and with Ctrl+O.
+  - Each opens in its own tab, shows in Recent, and reopens from there.
+  - Opening one takes no more steps than in Word (Word adds Protected View's Enable Editing).
+- [ ] **A password-protected `.docx`.**
+  - Featherweight asks for the password, with the same prompt as for PDFs. A wrong password says so and asks again; Cancel leaves the other tabs as they are.
+  - Edit and save, then open it in Word: Word asks for the same password and shows the edit.
+  - The backup and the recovery copy can't be read without the password. End Featherweight from Task Manager with unsaved changes: at the next start, recovery offers the document back.
+- [ ] **A password-protected `.doc`.** It opens after the password, or says plainly why it can't.
+- [ ] **Templates.** On the start screen, Templates → Letter, CV and Report each open a new "Document N" with placeholder text in brackets.
+  - Select a placeholder and type over it.
+  - The + menu and the … menu have "New from template" with the same three.
+  - Ctrl+S suggests a name from the first words, in Documents. The saved file opens in Word, with its bullets, the report's table and its page numbers.
+- [ ] **Template files.** Double-click a `.dotx`, such as `tests/office/dotx/simple.dotx` or one of your own.
+  - A new untitled document opens with the template's text and styles.
+  - Ctrl+S asks where to save, and the `.dotx` is unchanged.
+  - A document made from a `.dotm` saves as a `.docm`. An `.ott` opens like a `.dotx`.
+- [ ] **Charts.** A document with column, bar, line, pie, doughnut, area and scatter charts shows each as Word does: titles, axes, gridlines, legend and data labels, with numbers in their formats. (A pie of pie shows as one pie: known.)
+  - They print, and they're in Export PDF.
+  - Edit text elsewhere and save: in Word, each chart is still there and can still be edited.
+- [ ] **Equations.** A document with fractions, roots, sums and integrals, a matrix and an equation array looks as it does in Word (Cambria Math).
+  - The equations print, are in Export PDF, and can still be edited in Word after a save.
+  - Type before and after an equation, and in a paragraph with one: the equation stays as it was.
+- [ ] **Right-to-left text.** Open an Arabic or Hebrew document, or type some with a second keyboard language.
+  - Text runs from the right. English words and numbers inside it are in the right order.
+  - The caret, selection, Home, End and the arrow keys move as they do in Word.
+- [ ] **East Asian text.** In a Chinese or Japanese document, lines break where Word breaks them: no line starts with a closing bracket or "。".
+  - A Japanese document with a character grid lines up as it does in Word.
+- [ ] **Huge documents.** Make them with `python tests/office/make_long_docs.py <folder> 1000 3000 table-5000 pictures-300` (or use your own). Open the 1,000-page one.
+  - The first page shows at once.
+  - Ctrl+End, scrolling, and typing at the start and the end all feel instant.
+  - So do Bold, a paragraph centered, Heading 1, bullets, Enter, and Undo after each of them, at the start, in the middle and at the end.
+  - Layout ▾ → Margins: Narrow, then back to Normal: the page on screen changes at once, and the page count settles within a few seconds.
+  - Write down the memory Task Manager shows.
+  - Do the same with the 3,000-page one, the 5,000-row table and the 300 pictures. Known: in the 3,000-page document, Enter at the very start can take up to about 50 ms, which may just be noticeable.
 
 ### Speed and feel (record anything that feels slow)
 

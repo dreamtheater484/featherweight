@@ -10,6 +10,7 @@
 #include <numeric>
 #include <string_view>
 #include <tuple>
+#include <unordered_set>
 
 #include "core/OpenTimings.h"
 #include "doc/layout/Engine.h"
@@ -50,7 +51,7 @@ struct Engine::Impl {
   uint32_t paraLines = 0;  // lines of it on earlier columns
   bool paraBegun = false;  // its space before and floats are placed
   bool breakAfter = false;  // it ended with a page break
-  bool nextHard = false;    // the next page starts after a section break or a page break before
+  bool nextHard = false;    // the next page starts after a section break
   bool hardStart = false;   // this page did
   float separatorHeight = -1;
   size_t anchorDrawings = 0, anchorZones = 0;  // where its floats start on the page
@@ -228,9 +229,11 @@ static void FlattenBody(const Document& doc, std::vector<Item>& items) {
 }
 
 Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, OpenTimings* timings)
-    : impl_(new Impl), doc_(doc), fonts_(fonts), options_(options), timings_(timings), generation_(doc.CacheGeneration()) {
+    : impl_(new Impl), doc_(doc), fonts_(fonts), options_(options), timings_(timings), generation_(doc.CacheGeneration()),
+      store_(doc.CacheStore()) {
   compatMode_ = doc.Settings().compatibilityMode > 0 ? doc.Settings().compatibilityMode : 12;
   sumSpacing_ = doc.Settings().Compat(Name("doNotUseHTMLParagraphAutoSpacing"));
+  splitPageBreakAndMark_ = doc.Settings().Compat(Name("splitPgBreakAndParaMark"));
   CountStories();
   FlattenBody(doc, impl_->items);
   impl_->bodyItems = impl_->items.size();
@@ -255,7 +258,7 @@ const std::vector<Field>& Engine::StoryFields(uint32_t story) {
 namespace {
 
 size_t LineBytes(const LineBox& l) {
-  size_t n = sizeof(LineBox) + l.line.caretX_.capacity() * 4 + l.line.advance_.capacity() * 4 + l.line.flags_.capacity() +
+  size_t n =sizeof(LineBox) + l.line.caretX_.capacity() * 4 + l.line.advance_.capacity() * 4 + l.line.flags_.capacity() +
              l.line.objects.capacity() * sizeof(text::InlineObject) + l.text.capacity() * 2;
   for (const text::GlyphPiece& g : l.line.pieces)
     n += sizeof(g) + g.glyphs.capacity() * 2 + g.advances.capacity() * 4 + g.offsets.capacity() * sizeof(DWRITE_GLYPH_OFFSET);
@@ -344,8 +347,11 @@ struct Flow {
     if (set.mirrorMargins && number % 2 == 0) std::swap(g.left, g.right);
     float gutter = Pt(p.gutter);
     if (set.gutterAtTop) g.top += gutter;
-    else if (set.mirrorMargins && number % 2 == 0) g.right += gutter;
+    else if ((set.mirrorMargins && number % 2 == 0) != p.rtlGutter) g.right += gutter;  // w:rtlGutter: on the right
     else g.left += gutter;
+    // The document grid (East Asian layout): lines snap to its pitch.
+    if ((p.docGridType == "lines" || p.docGridType == "linesAndChars" || p.docGridType == "snapToChars") && p.linePitch.Value() > 0)
+      g.gridPitch = Pt(p.linePitch);
     return g;
   }
 
@@ -490,7 +496,8 @@ struct Flow {
       Stack sep = Separator();
       float x = f.geom.left;
       if (sep.height > 0) {
-        sep.edges.push_back({SeparatorBorder(), 0, sep.height / 2, std::min(144.0f, f.noteWidth), sep.height / 2});
+        const float w = std::min(144.0f, f.noteWidth), from = sep.rtl ? f.noteWidth - w : 0;
+        sep.edges.push_back({SeparatorBorder(), from, sep.height / 2, from + w, sep.height / 2});
         float h = sep.height;
         f.body.Append(std::move(sep), x, y);
         y += h;
@@ -552,6 +559,9 @@ struct Flow {
       if (type != "separator") continue;
       Stack st = e.StackStory(s, frame);
       st.lines.clear();  // the separator character draws a line, not text
+      // In a right-to-left paragraph the line starts at the right.
+      const std::vector<uint32_t> paras = doc.StoryParagraphs(s);
+      st.rtl = !paras.empty() && doc.ResolvedPara(paras.front()).bidi;
       return st;
     }
     Stack st;
@@ -696,7 +706,8 @@ struct Flow {
     }
     // Back to a row of a table: the table again (measured anew if it had ended), at that row.
     const Node tbl = f.items[m.next].node;
-    if (!f.table || !(f.table->tbl == tbl)) f.table = std::make_shared<TableBox>(e.MeasureTable(tbl, BodyFrame()));
+    if (!f.table || !(f.table->tbl == tbl)) f.table = std::make_shared<TableBox>(e.MeasureTable(tbl, BodyFrame(), nullptr, true));
+    e.MeasureThrough(*f.table, m.row);
     f.row = m.row;
     f.rowCut = m.rowCut;
     f.spans = m.spans;
@@ -753,7 +764,7 @@ struct Flow {
       f.paraLines = 0;
       f.paraBegun = false;
       if (f.pt->props->pageBreakBefore && !f.pageEmpty) {
-        f.nextHard = true;
+        // (Its space before doesn't stay at the top of the next page.)
         return Step::PageFull;
       }
     }
@@ -767,10 +778,11 @@ struct Flow {
       f.anchorZones = f.zones.size();
       paraTop = f.y + (f.paraLines == 0 ? e.SpaceBefore(p, f.spacing) + e.BorderAbove(p, f.spacing) : 0);
       if (f.columnEmpty && f.spacing.prev == nullptr && f.paraLines == 0) {
-        // At the top of a page Word keeps the space before only after a section break or a page
-        // break before (w:pageBreakBefore), not after a page break character or where the text
-        // just flowed on; at the top of a later column it keeps it (measured on the corpus:
-        // dropping it there too, or always keeping it, matches fewer lines and pages).
+        // At the top of a page Word keeps the space before only after a section break, not after
+        // a page break character, a page break before (w:pageBreakBefore: tudresden, bund-bsi
+        // and the short-form contract's page tops) or where the text just flowed on; at the top
+        // of a later column it keeps it (measured on the corpus: dropping it there too, or
+        // always keeping it, matches fewer lines and pages).
         const bool keep = f.hardStart || f.col > 0;
         paraTop = f.y + (keep ? e.SpaceBefore(p, Spacing()) : 0.0f) + e.BorderAbove(p, Spacing());
       }
@@ -802,24 +814,29 @@ struct Flow {
       const bool wrap = !f.zones.empty();
       if (wrap) space = e.SpaceBeside(f.zones, f.y, estimate, ColumnLeft(), ColumnRight());
       text::Line line = br.Next(space.left - ColumnLeft(), space.right - ColumnLeft());
-      float h = e.LineHeight(pt, line);
+      float h = e.LineHeight(pt, line, f.geom.gridPitch);
       if (wrap && h > estimate + kEpsilon) {
         text::LineSpace again = e.SpaceBeside(f.zones, f.y, h, ColumnLeft(), ColumnRight());
         if (again.left != space.left || again.right != space.right || again.top != space.top) {
           br.Restore(state);
           space = again;
           line = br.Next(space.left - ColumnLeft(), space.right - ColumnLeft());
-          h = e.LineHeight(pt, line);
+          h = e.LineHeight(pt, line, f.geom.gridPitch);
         }
       }
       estimate = h;
       std::vector<uint32_t> newNotes;
       float noteH = pt.notes.empty() ? 0 : NotesFor(pt, line, &newNotes);
-      // A line with nothing but a page break goes on this page even when it's full: Word never
-      // starts a page just for the break.
-      const bool breakOnly = line.ending == text::LineEnd::PageBreak && Blank(pt, line);
+      // A line with nothing but a page or column break goes on this page or column even when it's
+      // full: Word never starts a page or column just for the break (the region-3 QAPP's
+      // attachment page).
+      const bool breakOnly =
+          (line.ending == text::LineEnd::PageBreak || line.ending == text::LineEnd::ColumnBreak) && Blank(pt, line);
       const float hang = e.Hang(pt, line, h);
-      if (space.top + h - hang > Bottom() - noteH + kEpsilon && !breakOnly && !(f.columnEmpty && placed.empty())) {
+      // Above footnotes, a paragraph's last line needs room for its space after too (measured on
+      // the corpus: Word moves the line to the next page instead).
+      const float afterRoom = br.Done() && (noteH > 0 || !f.notes.empty()) ? e.SpaceAfter(p) : 0.0f;
+      if (space.top + h - hang + afterRoom > Bottom() - noteH + kEpsilon && !breakOnly && !(f.columnEmpty && placed.empty())) {
         br.Restore(state);
         overflow = true;
         break;
@@ -833,8 +850,9 @@ struct Flow {
         f.columnEmpty = false;
         f.pageEmpty = false;
         // (A page break here doesn't keep the space before of what starts the next page.)
-        if (!br.Done() && e.compatMode_ >= 15) {
-          // Word 2013 and later keep the paragraph mark after a page break on the break's line.
+        if (!br.Done() && !e.splitPageBreakAndMark_) {
+          // Word keeps the paragraph mark after a page break on the break's line, in compatibility
+          // mode 14 too (measured on the corpus), unless w:splitPgBreakAndParaMark asks otherwise.
           text::LineBreaker::State rest = br.Save();
           text::Line tail = br.Next(0, ColumnRight() - ColumnLeft());
           if (!(br.Done() && Blank(pt, tail) && tail.objects.empty())) br.Restore(rest);
@@ -1027,7 +1045,7 @@ struct Flow {
     for (size_t i = 0; i < row.cells.size(); ++i) {
       const CellBox& c = row.cells[i];
       if (c.continued || c.rowSpan <= 1) continue;
-      Span s{f.row, i, std::min(t.rows.size() - 1, f.row + static_cast<size_t>(c.rowSpan) - 1), 0, top};
+      Span s{f.row, i, std::min(t.count - 1, f.row + static_cast<size_t>(c.rowSpan) - 1), 0, top};
       s.at = SpanAt(s, x, rowStart);
       f.spans.push_back(s);
     }
@@ -1070,7 +1088,7 @@ struct Flow {
       if (before && e.BringUpToDate(*before, frame.width, frame.story)) f.table = before;
       else
         f.table = std::make_shared<TableBox>(
-            e.MeasureTable(item.node, frame, before && before->frameWidth == frame.width ? before.get() : nullptr));
+            e.MeasureTable(item.node, frame, before && before->frameWidth == frame.width ? before.get() : nullptr, true));
       f.row = 0;
       f.rowCut.clear();
       f.spans.clear();
@@ -1079,7 +1097,10 @@ struct Flow {
       f.spacing = Spacing();
       f.spacing.atTop = false;
     }
-    const TableBox& t = *f.table;
+    // A long table is measured as it goes: the rows the page gets to (the first ones, or after an
+    // edit, those it was measured in before), then a few more at a time.
+    TableBox& t = *f.table;
+    e.MeasureThrough(t, f.row);
     const float x = ColumnLeft() + t.left;
     bool firstOnPage = f.columnEmpty;
     bool fresh = f.columnEmpty;  // nothing above but repeated header rows
@@ -1092,7 +1113,8 @@ struct Flow {
       firstOnPage = false;
       f.columnEmpty = false;
     }
-    while (f.row < t.rows.size()) {
+    while (f.row < t.count) {
+      e.MeasureThrough(t, f.row);
       const RowBox& row = t.rows[f.row];
       if (row.props.hidden) {
         ++f.row;
@@ -1103,7 +1125,6 @@ struct Flow {
       // would outside a table (measured on the corpus: Word does it for the row's first cell).
       if (firstPart && row.breakBefore && !f.pageEmpty) {
         FlushSpans(x);
-        f.nextHard = true;
         return Step::PageFull;
       }
       float h = row.height - row.grown;
@@ -1121,7 +1142,7 @@ struct Flow {
       if (row.props.heightRule != "exact")
         for (const Span& s : f.spans)
           if (s.last == f.row) h = std::max(h, SpanNeed(s) - (s.top >= 0 ? f.y - s.top : 0.0f));
-      const bool last = f.row + 1 == t.rows.size();
+      const bool last = f.row + 1 == t.count;
       const std::vector<float>* from = f.rowCut.empty() ? nullptr : &f.rowCut;
       std::vector<uint32_t> notes;
       float notesH = RowNotes(row, from, nullptr, notes);
@@ -1236,6 +1257,16 @@ struct Flow {
       f.columnEmpty = false;
       f.pageEmpty = false;
       f.rowCut = cutTo;
+      // Each cell goes on at the top of its next line: the space between, the space after above
+      // the cut and before below it, stays behind, as at the top of a page (worldbank-guidance).
+      for (size_t i = 0; i < row.cells.size() && i < f.rowCut.size(); ++i) {
+        const CellBox& c = row.cells[i];
+        if (c.continued || c.rowSpan > 1 || c.turn) continue;
+        float next = FLT_MAX;
+        for (const LineBox& l : c.content.lines)
+          if (l.top >= f.rowCut[i] - kEpsilon) next = std::min(next, l.top);
+        if (next < FLT_MAX) f.rowCut[i] = next;
+      }
       return NextColumn() ? Step::Continue : Step::PageFull;
     }
     // Rows a merged cell claims to span that the table doesn't have.
@@ -1260,7 +1291,8 @@ struct Flow {
     const float y = f.spacing.atTop ? f.y : f.y + f.spacing.after;
     if (sep.height <= 0 || y + sep.height > Bottom() + kEpsilon) return;
     const float x = ColumnLeft(), width = ColumnRight() - ColumnLeft();
-    sep.edges.push_back({SeparatorBorder(), 0, sep.height / 2, std::min(144.0f, width), sep.height / 2});
+    const float w = std::min(144.0f, width), from = sep.rtl ? width - w : 0;
+    sep.edges.push_back({SeparatorBorder(), from, sep.height / 2, from + w, sep.height / 2});
     const float h = sep.height;
     f.body.Append(std::move(sep), x, y);
     f.y = y + h;
@@ -1706,7 +1738,7 @@ struct Flow {
       frame.fields = &stale->fields;
       frame.width = stale->frameWidth;
       frame.story = stale->story;
-      auto measured = std::make_shared<TableBox>(e.MeasureTable(stale->tbl, frame, structure ? nullptr : stale.get()));
+      auto measured = std::make_shared<TableBox>(e.MeasureTable(stale->tbl, frame, structure ? nullptr : stale.get(), true));
       for (Checkpoint& c : f.checkpoints)
         if (c.table == stale) c.table = measured;  // the pages before show the same rows of it
       if (f.table == stale) f.table = measured;
@@ -1735,12 +1767,8 @@ struct Flow {
     };
     for (Page& pg : e.pages_) page(pg);
     for (OldPage& o : f.old) page(o.page);
-    std::vector<const void*> seen;
-    auto once = [&](const void* p) {
-      if (!p || std::find(seen.begin(), seen.end(), p) != seen.end()) return false;
-      seen.push_back(p);
-      return true;
-    };
+    std::unordered_set<const void*> seen;  // a page each, and a paragraph each: not a list (H3)
+    auto once = [&](const void* p) { return p && seen.insert(p).second; };
     auto inProgress = [&](ParaText* pt, TableBox* t) {
       if (once(pt)) map(pt->para);
       if (once(t))
@@ -1878,7 +1906,10 @@ std::shared_ptr<CachedPara> Engine::LinesOf(uint32_t para, float width, bool bre
 std::shared_ptr<CachedPara> Engine::KeepLines(uint32_t para, float width, bool breaks, const std::shared_ptr<ParaText>& pt) {
   Impl& f = *impl_;
   // Not text that depends on the page it's on: page fields and note numbers.
-  if (pages_.size() >= f.cacheUntil || pt->empty || pt->usesPage || pt->usesPageCount || !pt->notes.empty()) return nullptr;
+  // Nor text joined from paragraphs before (an edit to those doesn't change this one's version).
+  if (pages_.size() >= f.cacheUntil || pt->empty || pt->usesPage || pt->usesPageCount || !pt->notes.empty() ||
+      !pt->joined.empty())
+    return nullptr;
   auto c = std::make_shared<CachedPara>();
   c->version = doc_.Para(para).version;
   c->width = width;
@@ -1893,7 +1924,10 @@ void Engine::Rebase() {
   if (doc_.CacheGeneration() == generation_) return;
   generation_ = doc_.CacheGeneration();
   Impl& f = *impl_;
-  f.lineCache.clear();  // every paragraph's version changed too
+  // The caches made again: the lines kept point into the old ones. (When only some paragraphs'
+  // went, theirs have new versions, and the others' lines stay.)
+  if (doc_.CacheStore() != store_) f.lineCache.clear();
+  store_ = doc_.CacheStore();
   const size_t n = doc_.Paragraphs().size();
   auto fix = [&](const std::shared_ptr<ParaText>& pt) {
     if (pt && pt->para < n) pt->props = &ParaOf(pt->para);
@@ -1939,6 +1973,7 @@ bool Engine::NextPage() {
     if (timings_ && !f.paginatedMarked) timings_->Mark(OpenTimings::Paginated);
     f.paginatedMarked = true;
     RefreshPageCounts();
+    NumberLines();
   }
   return made;
 }
@@ -1955,6 +1990,11 @@ void Engine::CountStories() {
 void Engine::Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added, bool structure) {
   CountStories();
   Rebase();
+  // A changed paragraph the view joins to the next changes what the next shows: that one too.
+  while (added > 0 && first + added < doc_.Paragraphs().size() && JoinsNext(first + added - 1)) {
+    ++added;
+    ++removed;
+  }
   Flow(*this).Edited(story, first, removed, added, structure);
 }
 
@@ -2024,6 +2064,73 @@ void Engine::RefreshPageCounts() {
     page.paints = std::move(paints);
   }
   if (changed) ++revision_;
+}
+
+// Line numbers (w:lnNumType), once the pages are known, since they move nothing: beside each line
+// of the body, right-aligned their distance (a quarter inch by default) before the column, in the
+// default paragraph style with the "line number" character style, as Word draws them. Table
+// cells, text boxes, notes and paragraphs with w:suppressLineNumbers aren't counted; empty
+// paragraphs are. They start again on each page, in each section or never (w:restart).
+void Engine::NumberLines() {
+  const std::vector<Section>& sections = doc_.Sections();
+  bool any = false;
+  for (const Section& s : sections) any = any || s.props.lineNumberCountBy > 0;
+  if (!any) return;
+  std::string_view normal, lineStyle;
+  for (const Style& s : doc_.Styles()) {
+    if (s.type == StyleType::Paragraph && s.isDefault) normal = s.id;
+    if (s.type == StyleType::Character && s.name.size() == 11 && (s.name[0] | 0x20) == 'l' && s.name.substr(1) == "ine number")
+      lineStyle = s.id;
+  }
+  const text::TextStyle* style = styles_.Intern(StyleOf(doc_.StyleChainRun(normal, lineStyle), false));
+  std::unordered_map<int32_t, text::Line> shaped;
+  auto shape = [&](int32_t n) -> const text::Line& {
+    auto it = shaped.find(n);
+    if (it != shaped.end()) return it->second;
+    const std::wstring digits = std::to_wstring(n);
+    text::Paragraph p;
+    p.text = digits;
+    p.runs = {{static_cast<uint32_t>(digits.size()), style}};
+    p.markStyle = style;
+    text::LineBreaker breaker(fonts_, p, 1e6f);
+    return shaped.emplace(n, breaker.Next()).first->second;
+  };
+  int32_t count = 0;
+  uint32_t lastSection = kNone;
+  for (Page& page : pages_) {
+    page.lineNumbers.clear();
+    if (page.section >= sections.size()) continue;
+    const SectionProps& sp = sections[page.section].props;
+    if (sp.lineNumberCountBy <= 0) {
+      lastSection = page.section;
+      continue;
+    }
+    // Numbering starts again on each page (newPage, the default), in each section or only where
+    // numbered sections begin (continuous).
+    const bool begins = lastSection == kNone || sections[lastSection].props.lineNumberCountBy <= 0;
+    const std::string_view restart = sp.lineNumberRestart;
+    if (restart == "continuous" ? begins : restart == "newSection" ? begins || page.section != lastSection : true)
+      count = sp.lineNumberStart - 1;
+    lastSection = page.section;
+    const float distance = sp.lineNumberDistance.Value() > 0 ? static_cast<float>(sp.lineNumberDistance.Value()) / 20.0f : 18.0f;
+    for (const LineBox& lb : page.lines) {
+      if (lb.story != LineStory::Body || lb.para == kNone || lb.drawing != kNone || lb.turn) continue;
+      if (doc_.ResolvedPara(lb.para).suppressLineNumbers) continue;
+      if (++count % sp.lineNumberCountBy != 0) continue;
+      LineBox nb;
+      nb.story = LineStory::LineNumber;
+      nb.line = shape(count);
+      nb.x = lb.x - distance - nb.line.contentRight;
+      nb.top = lb.top;
+      nb.height = lb.height;
+      nb.baseline = lb.baseline;
+      nb.paint = UINT32_MAX / 2;  // no RunPaint: drawn in automatic black
+      const std::wstring digits = std::to_wstring(count);
+      nb.text.assign(digits.begin(), digits.end());
+      page.lineNumbers.push_back(std::move(nb));
+    }
+  }
+  ++revision_;
 }
 
 }  // namespace fw::doc::layout

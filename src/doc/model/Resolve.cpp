@@ -360,22 +360,16 @@ void ForEachTableStyleLevel(const Document& doc, const Style* style, uint16_t co
 
 // The conditional formats that apply to a cell.
 uint16_t CellConditions(const Document& doc, Node cell, const TableProps& tp) {
-  Node row = Up(cell, kTr), table = Up(cell, kTbl);
-  auto rows = doc.TableRows(table);
+  Node row = Up(cell, kTr);
   auto cells = doc.RowCells(row);
-  int32_t r = static_cast<int32_t>(std::find(rows.begin(), rows.end(), row) - rows.begin());
+  const Document::RowPlace place = doc.PlaceOfRow(row);
+  int32_t r = place.index < 0 ? place.rows : place.index;
   int32_t c = static_cast<int32_t>(std::find(cells.begin(), cells.end(), cell) - cells.begin());
-  int32_t nr = static_cast<int32_t>(rows.size()), nc = static_cast<int32_t>(cells.size());
+  int32_t nr = place.rows, nc = static_cast<int32_t>(cells.size());
   const TableLook& look = tp.look;
   uint16_t bits = 0;
   // Header rows: the first row, and the rows marked as repeating headers that follow it.
-  int32_t headers = 0;
-  if (look.firstRow) {
-    headers = 1;
-    while (headers < nr && rows[headers].Path({kTrPr, Name("tblHeader")}) &&
-           rows[headers].Path({kTrPr, Name("tblHeader")}).On() && rows[headers - 1].Path({kTrPr, Name("tblHeader")}))
-      ++headers;
-  }
+  const int32_t headers = look.firstRow ? place.headers : 0;
   bool firstRow = look.firstRow && r < headers;
   bool lastRow = look.lastRow && r == nr - 1 && !firstRow;
   bool firstCol = look.firstColumn && c == 0;
@@ -516,6 +510,29 @@ void ApplyCell(const Document& doc, Node pr, CellProps& p) {
 
 }  // namespace
 
+Document::RowPlace Document::PlaceOfRow(Node row) const {
+  RowPlace place;
+  Node table = Up(row, kTbl);
+  if (!table) return place;
+  auto [it, made] = caches_->tables.try_emplace(table.Id());
+  Caches::TableIndex& ti = it->second;
+  if (made) {
+    ti.list = TableRows(table);
+    const std::vector<Node>& rows = ti.list;
+    ti.rows = static_cast<int32_t>(rows.size());
+    ti.at.reserve(rows.size());
+    for (size_t i = 0; i < rows.size(); ++i) ti.at.emplace(rows[i].Id(), static_cast<int32_t>(i));
+    while (ti.headers < ti.rows && rows[ti.headers].Path({kTrPr, Name("tblHeader")}) &&
+           rows[ti.headers].Path({kTrPr, Name("tblHeader")}).On() && rows[ti.headers - 1].Path({kTrPr, Name("tblHeader")}))
+      ++ti.headers;
+  }
+  place.rows = ti.rows;
+  place.headers = ti.headers;
+  place.list = &ti.list;
+  if (auto at = ti.at.find(row.Id()); at != ti.at.end()) place.index = at->second;
+  return place;
+}
+
 TableProps Document::ResolvedTable(Node table) const {
   TableProps t;
   t.cellMargins.start = t.cellMargins.end = TableWidth{TableWidth::Type::Dxa, 108};
@@ -547,9 +564,9 @@ CellProps Document::ResolvedCell(Node cell) const {
   TableProps tp = ResolvedTable(table);
   // Row exceptions (w:tblPrEx) change the table's borders and margins for one row.
   if (Node ex = row.Child(Name("tblPrEx"))) ApplyTable(*this, ex, tp, false);
-  auto rows = TableRows(table);
+  const RowPlace place = PlaceOfRow(row);
   auto cells = RowCells(row);
-  bool firstRow = !rows.empty() && rows.front() == row, lastRow = !rows.empty() && rows.back() == row;
+  bool firstRow = place.index == 0, lastRow = place.index >= 0 && place.index == place.rows - 1;
   bool firstCell = !cells.empty() && cells.front() == cell, lastCell = !cells.empty() && cells.back() == cell;
   // Outer edges take the table's borders, inner edges its inside borders.
   p.top = firstRow ? tp.borders.top : tp.borders.insideH;
@@ -718,7 +735,8 @@ struct ParaList {
   std::string_view numId;
   int32_t level = 0;
   Node lvl;
-  bool numDirect = false;  // named in the paragraph's own w:pPr
+  bool numDirect = false;      // named in the paragraph's own w:pPr
+  const Style* style = nullptr;  // otherwise the style that names the w:numId
 };
 ParaList ListOf(const Document& doc, Node direct, const std::vector<const Style*>& chain) {
   ParaList out;
@@ -732,14 +750,16 @@ ParaList ListOf(const Document& doc, Node direct, const std::vector<const Style*
     }
     if (Node l = np.Child(Name("ilvl"))) ilvl = l.Int(kVal);
   }
+  // A style can set only the level and take the list from the style it's based on (Heading 2 with
+  // w:ilvl 1, based on Heading 1 with the w:numId): the closest w:ilvl on the way to the w:numId.
   const Style* numStyle = nullptr;
   for (size_t i = chain.size(); i-- > 0 && (numId.empty() && !numDirect);) {
     Node np = chain[i]->node.Path({kPPr, Name("numPr")});
+    if (!ilvl)
+      if (Node l = np.Child(Name("ilvl"))) ilvl = l.Int(kVal);
     if (Node n = np.Child(Name("numId"))) {
       numId = n.AttrOr(kVal);
       numStyle = chain[i];
-      if (!ilvl)
-        if (Node l = np.Child(Name("ilvl"))) ilvl = l.Int(kVal);
     }
   }
   if (!numId.empty() && numId != "0") {
@@ -758,6 +778,7 @@ ParaList ListOf(const Document& doc, Node direct, const std::vector<const Style*
     }
   }
   out.numDirect = numDirect;
+  out.style = numStyle;
   return out;
 }
 
@@ -783,14 +804,32 @@ ParaProps ResolveParaProps(const Document& doc, uint32_t para, bool withDirect, 
   auto [tableStyle, conds] = CellStyleOf(doc, pn);
   if (tableStyle) ForEachTableStyleLevel(doc, tableStyle, conds, kPPr, [&](Node n) { ApplyPara(doc, n, p); });
   Justification tableJc = p.jc;
-  if (lvl && !numDirect) ApplyPara(doc, lvl.Child(kPPr), p);  // D2: from the style, before it
-  for (const Style* s : chain) ApplyPara(doc, s->node.Child(kPPr), p);
+  // D2: a list named by a style, just before that style: its level's indents override the styles
+  // it's based on (a list style based on List Paragraph) but not its own (measured on the corpus).
+  if (lvl && !numDirect && !list.style) ApplyPara(doc, lvl.Child(kPPr), p);
+  for (const Style* s : chain) {
+    if (lvl && !numDirect && s == list.style) ApplyPara(doc, lvl.Child(kPPr), p);
+    ApplyPara(doc, s->node.Child(kPPr), p);
+  }
   // D3: the default style's left justification doesn't override the table style's.
   if (tableStyle && style && style->isDefault && !OverrideTableStyleFontSize(doc)) {
     Node jc = style->node.Path({kPPr, Name("jc")});
     if (jc && ParseJustification(jc.AttrOr(kVal)) == Justification::Start) p.jc = tableJc;
   }
   if (lvl && numDirect) ApplyPara(doc, lvl.Child(kPPr), p);  // D2: named directly, after the style
+  // A paragraph that takes itself out of its style's list (w:numId 0) loses the style's indents
+  // too, as in Word: they belong to the list (measured on the corpus).
+  if (!lvl && direct.Path({Name("numPr"), Name("numId")}).AttrOr(kVal) == "0") {
+    bool styleList = false;
+    for (const Style* s : chain)
+      if (Node n = s->node.Path({kPPr, Name("numPr"), Name("numId")}); n && n.AttrOr(kVal) != "0") styleList = true;
+    if (styleList) {
+      p.indStart = Twips(0);
+      p.firstLine = Twips(0);
+      p.indStartChars = -1;
+      p.firstLineChars = -1;
+    }
+  }
   if (withDirect) ApplyPara(doc, direct, p);
   std::sort(p.tabs.begin(), p.tabs.end(), [](const TabStop& a, const TabStop& b) { return a.pos < b.pos; });
   if (style) p.style = style->id;
@@ -884,7 +923,7 @@ RunProps Document::StyleRun(uint32_t para, std::string_view charStyle) const {
   return lv.work.p;
 }
 
-RunProps Document::StyleChainRun(std::string_view styleId) const {
+RunProps Document::StyleChainRun(std::string_view styleId, std::string_view charStyle) const {
   RunLevels lv;
   if (const Part* styles = FindPart(PartKind::Styles))
     ApplyRun(*this, RootOf(*styles).Path({Name("docDefaults"), Name("rPrDefault"), kRPr}), lv.work, lv.toggles[0]);
@@ -894,6 +933,7 @@ RunProps Document::StyleChainRun(std::string_view styleId) const {
     for (const Style* st : Chain(*this, s)) ApplyRun(*this, st->node.Child(kRPr), lv.work, lv.toggles[level]);
     if (level == 3) lv.work.p.charStyle = s->id;
   }
+  CharacterStyleLevel(*this, charStyle, lv);
   FinishRun(*this, *caches_, lv);
   return lv.work.p;
 }
@@ -1030,7 +1070,7 @@ SectionProps ResolveSection(Node sp) {
       if (auto v = c.Int(Name("start"))) s.pageNumberStart = static_cast<int32_t>(*v);
     } else if (name == Name("lnNumType")) {
       s.lineNumberCountBy = static_cast<int32_t>(c.Int(Name("countBy")).value_or(0));
-      s.lineNumberStart = static_cast<int32_t>(c.Int(Name("start")).value_or(1));
+      s.lineNumberStart = static_cast<int32_t>(c.Int(Name("start")).value_or(0)) + 1;  // w:start counts from 0
       s.lineNumberDistance = Twips(c.Twips(Name("distance")).value_or(0));
       s.lineNumberRestart = c.AttrOr(Name("restart"));
     } else if (name == Name("docGrid")) {

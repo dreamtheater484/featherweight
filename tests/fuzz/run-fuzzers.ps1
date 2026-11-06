@@ -52,7 +52,14 @@ $all = [ordered]@{
   fuzz_shapes  = @{ Seeds = @("$seeds\shapes", "$seeds\docx", "$seeds\package", "$regressions\shapes"); MaxLen = 65536 }
   # Export PDF's font subsetter (D4): tiny fonts, and locally the small fonts in C:\Windows\Fonts
   # (copied to the work folder, never committed: their licences don't allow it).
+  # Compound files (D5): .doc files and password-protected Office files.
+  fuzz_cfb     = @{ Seeds = @("$seeds\cfb", "$regressions\cfb"); MaxLen = 65536 }
+  fuzz_doc     = @{ Seeds = @("$seeds\doc", "$regressions\doc"); MaxLen = 131072 }
   fuzz_sfnt    = @{ Seeds = @("$seeds\font", "$regressions\sfnt"); MaxLen = 262144; SystemFonts = $true }
+  # Charts (D5): a chart part read from its cached values and laid out at a few sizes.
+  fuzz_chart   = @{ Seeds = @("$seeds\chart", "$regressions\chart"); MaxLen = 65536 }
+  # OpenDocument text import (D5): every .odt converts to a document that opens and passes the check, or is refused.
+  fuzz_odt     = @{ Seeds = @("$seeds\odt", "$regressions\odt"); MaxLen = 65536 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 

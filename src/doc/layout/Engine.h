@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "doc/layout/Internal.h"
+#include "doc/layout/Math.h"
 
 namespace fw::doc::layout {
 
@@ -18,6 +19,7 @@ struct PageGeom {
   float width = 612, height = 792;
   float left = 72, right = 72, top = 72, bottom = 72;  // margins, after mirroring and the gutter
   float header = 36, footer = 36;                       // header and footer distances
+  float gridPitch = 0;  // w:docGrid's line pitch when lines snap to the grid, else 0
   Rect Margins() const { return {left, top, width - right, height - bottom}; }
 };
 
@@ -80,11 +82,19 @@ class Engine {
   // mapping offsets): note references the flow hasn't reached keep no number rather than take one.
   void BuildText(uint32_t para, const PageFields& fields, ParaText& out, bool pageBreaks = false,
                  bool numberNotes = true);
+  // Whether the view joins `para` to the next paragraph: its mark is a change the view doesn't show
+  // (deleted in the final view, inserted in Original), and a paragraph of the same story follows it
+  // in the same place, with no table, section break or content control between.
+  bool JoinsNext(uint32_t para) const;
   std::u16string NoteMark(uint32_t story) const;
   // A note's reference mark, numbered in the order references are laid out.
   std::u16string NoteReference(uint32_t story);
   void RefreshPageCounts();
-  float EquationWidth(uint32_t drawing, float size);
+  void NumberLines();
+  // An equation laid out at `size` points (Math.cpp), kept for painting; laid out again when it
+  // changes. LaidOutEquation: as last laid out, or null.
+  const math::Equation& EquationOf(uint32_t drawing, float size);
+  const math::Equation* LaidOutEquation(uint32_t drawing) const;
 
   // Stacked layout (Stack.cpp).
   Stack StackStory(uint32_t story, const Frame& frame);
@@ -122,7 +132,8 @@ class Engine {
 
   // Paragraph pieces shared by the flow and stacks.
   float TextHeight(const ParaText& pt, const text::Line& line);
-  float LineHeight(const ParaText& pt, const text::Line& line);
+  // `grid`: the document grid's line pitch (PageGeom::gridPitch), or 0.
+  float LineHeight(const ParaText& pt, const text::Line& line, float grid = 0);
   float BaselineIn(const ParaText& pt, const text::Line& line, float height) const;
   // What of a line's height may hang below the bottom of the page: proportional spacing's extra.
   float Hang(const ParaText& pt, const text::Line& line, float height) const;
@@ -178,12 +189,22 @@ class Engine {
     LineStory story = LineStory::Body;
     float left = 0;  // relative to the frame or column
     float width = 0;
-    std::vector<RowBox> rows;
+    std::vector<RowBox> rows;  // measured so far: all, or (measured lazily) the first ones
+    size_t count = 0;          // rows the table has
     size_t headerRows = 0;
     bool labels = false;  // its cells show list labels
+    // Measured lazily: the table's rows, and merged cells (row, cell) whose last row isn't
+    // measured yet. Empty once all are.
+    std::vector<Node> trs;
+    std::vector<std::pair<size_t, size_t>> openSpans;
   };
-  // `reuse`: the table measured before an edit, whose cells that didn't change are kept.
-  TableBox MeasureTable(Node tbl, const Frame& frame, const TableBox* reuse = nullptr);
+  // `reuse`: the table measured before an edit, whose cells that didn't change are kept. `lazy`:
+  // only the first rows now, the rest as MeasureThrough asks for them, so a page of a long table
+  // costs what its rows cost.
+  TableBox MeasureTable(Node tbl, const Frame& frame, const TableBox* reuse = nullptr, bool lazy = false);
+  // Measures a lazily measured table's rows through `row`, the row after it (its borders), and the
+  // last rows of the merged cells that start in them; a few rows more at a time.
+  void MeasureThrough(TableBox& t, size_t row);
   // What a cell's measure depends on: its paragraphs and their versions, nested tables' included.
   uint64_t CellKey(Node tc) const;
   // Brings `t`, measured before an edit, up to date for a frame this wide: true when it has the same
@@ -232,19 +253,27 @@ class Engine {
   OpenTimings* timings_;
   // The model's caches the paragraph text kept points into (Document::CacheGeneration), and
   // pointing it at the new ones after an edit made them again.
-  uint64_t generation_ = 0;
+  uint64_t generation_ = 0, store_ = 0;
   void Rebase();
   StylePool styles_;
   std::vector<Page> pages_;
   uint32_t revision_ = 0;
   bool done_ = false;
   int32_t compatMode_ = 15;
+  bool joining_ = false;  // BuildText for a paragraph joined to the next: its text only, no label
+  bool splitPageBreakAndMark_ = false;  // w:splitPgBreakAndParaMark
   bool sumSpacing_ = false;  // w:doNotUseHTMLParagraphAutoSpacing: space after and before add up
   std::vector<uint32_t> fieldsCount_;  // per story: fields in it (FieldsIn)
   void CountStories();
   std::unordered_map<uint32_t, std::vector<Field>> fieldsCache_;
   std::unordered_map<uint32_t, std::u16string> noteNumbers_;  // note story -> its mark
   std::unordered_map<uint32_t, int32_t> noteOrder_;           // note story -> its number
+  struct EquationSlot {
+    std::string xml;
+    float size = 0;
+    std::shared_ptr<const math::Equation> eq;
+  };
+  std::unordered_map<uint32_t, EquationSlot> equations_;      // drawing -> as laid out
   std::vector<uint32_t> noteSeq_;                             // note stories in the order numbered
   int32_t footnoteCount_ = 0, endnoteCount_ = 0;
 

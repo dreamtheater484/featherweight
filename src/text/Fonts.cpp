@@ -1,5 +1,7 @@
 #include "text/Fonts.h"
 
+#include "draw/CloudFonts.h"
+
 #include <algorithm>
 #include <climits>
 #include <cstdlib>
@@ -170,14 +172,109 @@ Fonts::Fonts(SubstituteFn substitute, IDWriteFontCollection* collection) : subst
   if (FAILED(factory_->CreateTextAnalyzer(&analyzer)) || FAILED(analyzer.As(&analyzer_))) analyzer_.Reset();
 }
 
-Fonts::~Fonts() = default;
+Fonts::~Fonts() {
+  if (memory_) factory_->UnregisterFontFileLoader(memory_.Get());
+}
+
+void Fonts::UseDocumentFonts(const std::vector<std::vector<uint8_t>>& files,
+                             const std::vector<std::wstring>& documentNames) {
+  if (files.empty() && !installed_) return;  // none before, none now
+  std::vector<std::pair<std::wstring, std::wstring>> aliases;  // the document's name, the font's family
+  if (!installed_) installed_ = collection_;
+  ComPtr<IDWriteFontCollection> next = installed_;
+  ComPtr<IDWriteFactory5> factory;
+  ComPtr<IDWriteFontCollection1> installed;
+  ComPtr<IDWriteFontSet> installedSet;
+  ComPtr<IDWriteFontSetBuilder1> builder;
+  if (!files.empty() && SUCCEEDED(factory_.As(&factory)) && SUCCEEDED(installed_.As(&installed)) &&
+      SUCCEEDED(installed->GetFontSet(&installedSet)) && SUCCEEDED(factory->CreateFontSetBuilder(&builder))) {
+    if (!memory_ && SUCCEEDED(factory->CreateInMemoryFontFileLoader(&memory_)) &&
+        FAILED(factory->RegisterFontFileLoader(memory_.Get())))
+      memory_.Reset();
+    bool added = false;
+    for (size_t k = 0; k < files.size(); ++k) {
+      const std::vector<uint8_t>& file = files[k];
+      // DirectWrite copies the bytes. A family the PC has keeps its installed fonts, as in Word: a
+      // document's copy is often a subset of it.
+      ComPtr<IDWriteFontFile> font;
+      ComPtr<IDWriteFontSetBuilder1> one;
+      ComPtr<IDWriteFontSet> faces;
+      if (!memory_ || file.empty() || file.size() > UINT32_MAX ||
+          FAILED(memory_->CreateInMemoryFontFileReference(factory.Get(), file.data(), static_cast<UINT32>(file.size()),
+                                                          nullptr, &font)) ||
+          FAILED(factory->CreateFontSetBuilder(&one)) || FAILED(one->AddFontFile(font.Get())) ||
+          FAILED(one->CreateFontSet(&faces)) || faces->GetFontCount() == 0)
+        continue;
+      bool installedFamily = false;
+      for (UINT32 i = 0; i < faces->GetFontCount() && !installedFamily; ++i) {
+        ComPtr<IDWriteLocalizedStrings> names;
+        BOOL exists = FALSE;
+        if (SUCCEEDED(faces->GetPropertyValues(i, DWRITE_FONT_PROPERTY_ID_WIN32_FAMILY_NAME, &exists, &names)) && exists) {
+          const std::wstring family = EnglishName(names.Get());
+          if (i == 0 && k < documentNames.size() && !documentNames[k].empty() && Lower(documentNames[k]) != Lower(family))
+            aliases.emplace_back(documentNames[k], family);
+          UINT32 index = 0;
+          BOOL has = FALSE;
+          const DWRITE_FONT_PROPERTY property{DWRITE_FONT_PROPERTY_ID_WIN32_FAMILY_NAME, family.c_str(), L""};
+          ComPtr<IDWriteFontSet> matches;
+          installedFamily = (SUCCEEDED(installed_->FindFamilyName(family.c_str(), &index, &has)) && has) ||
+                            (SUCCEEDED(installedSet->GetMatchingFonts(&property, 1, &matches)) && matches &&
+                             matches->GetFontCount() > 0);
+        }
+      }
+      if (!installedFamily && SUCCEEDED(builder->AddFontSet(faces.Get()))) added = true;
+    }
+    ComPtr<IDWriteFontSet> set;
+    ComPtr<IDWriteFontCollection1> collection;
+    if (added && SUCCEEDED(builder->AddFontSet(installedSet.Get())) && SUCCEEDED(builder->CreateFontSet(&set)) &&
+        SUCCEEDED(factory->CreateFontCollectionFromFontSet(set.Get(), &collection)))
+      next = collection;
+  }
+  collection_ = next;
+  if (collection_ == installed_) installed_.Reset();
+  // Everything found in the old collection goes.
+  win32_.Reset();
+  win32Tried_ = false;
+  resolved_.clear();
+  faces_.clear();
+  faceNames_.clear();
+  substitutions_.clear();
+  for (const auto& [name, family] : aliases)
+    if (!Installed(name) && Installed(family)) resolved_.emplace(Lower(name), family);
+}
 
 bool Fonts::Installed(std::wstring_view family) {
   if (family.empty() || !collection_) return false;
   std::wstring name(family);
   UINT32 index = 0;
   BOOL exists = FALSE;
+  if ((SUCCEEDED(collection_->FindFamilyName(name.c_str(), &index, &exists)) && exists) || Win32Family(name)) return true;
+  // Not on the PC: one of Office's cloud fonts, which Word draws as installed ones.
+  if (!AddCloudFonts(name)) return false;
   return (SUCCEEDED(collection_->FindFamilyName(name.c_str(), &index, &exists)) && exists) || Win32Family(name);
+}
+
+bool Fonts::AddCloudFonts(const std::wstring& name) {
+  if (cloudAdded_ || !draw::CloudFontsHave(name)) return false;
+  cloudAdded_ = true;
+  // The collection with them, and the one without the document's own fonts (UseDocumentFonts) too.
+  ComPtr<IDWriteFactory5> factory;
+  if (FAILED(factory_.As(&factory))) return false;
+  const auto with = [&](ComPtr<IDWriteFontCollection>& c) {
+    ComPtr<IDWriteFontCollection1> c1;
+    ComPtr<IDWriteFontSet> set, merged;
+    ComPtr<IDWriteFontSetBuilder1> builder;
+    ComPtr<IDWriteFontCollection1> collection;
+    if (c && SUCCEEDED(c.As(&c1)) && SUCCEEDED(c1->GetFontSet(&set)) && SUCCEEDED(factory->CreateFontSetBuilder(&builder)) &&
+        SUCCEEDED(builder->AddFontSet(set.Get())) && SUCCEEDED(builder->AddFontSet(draw::CloudFontSet())) &&
+        SUCCEEDED(builder->CreateFontSet(&merged)) && SUCCEEDED(factory->CreateFontCollectionFromFontSet(merged.Get(), &collection)))
+      c = collection;
+  };
+  with(collection_);
+  if (installed_) with(installed_);
+  win32_.Reset();
+  win32Tried_ = false;
+  return true;
 }
 
 ComPtr<IDWriteFontSet> Fonts::Win32Family(const std::wstring& family) {
@@ -191,6 +288,34 @@ ComPtr<IDWriteFontSet> Fonts::Win32Family(const std::wstring& family) {
   const DWRITE_FONT_PROPERTY property{DWRITE_FONT_PROPERTY_ID_WIN32_FAMILY_NAME, family.c_str(), L""};
   if (FAILED(win32_->GetMatchingFonts(&property, 1, &matches)) || !matches || matches->GetFontCount() == 0) matches.Reset();
   return matches;
+}
+
+bool Fonts::FullName(const std::wstring& name, FaceName& out) {
+  Win32Family(name);  // makes the font set
+  ComPtr<IDWriteFontSet> matches;
+  ComPtr<IDWriteFontFaceReference> ref;
+  ComPtr<IDWriteFontFace3> face;
+  ComPtr<IDWriteLocalizedStrings> names;
+  const DWRITE_FONT_PROPERTY property{DWRITE_FONT_PROPERTY_ID_FULL_NAME, name.c_str(), L""};
+  if (!win32_ || name.empty() || FAILED(win32_->GetMatchingFonts(&property, 1, &matches)) || !matches ||
+      matches->GetFontCount() == 0 || FAILED(matches->GetFontFaceReference(0, &ref)) ||
+      FAILED(ref->CreateFontFace(&face)) || FAILED(face->GetFamilyNames(&names)))
+    return false;
+  out.family = EnglishName(names.Get());
+  out.weight = face->GetWeight();
+  out.italic = face->GetStyle() != DWRITE_FONT_STYLE_NORMAL;
+  return !out.family.empty() && Installed(out.family);
+}
+
+const Face* Fonts::FaceFor(std::wstring_view requested, bool bold, bool italic) {
+  const std::wstring& family = Resolve(requested);
+  DWRITE_FONT_WEIGHT weight = bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL;
+  if (!faceNames_.empty())
+    if (auto it = faceNames_.find(Lower(requested)); it != faceNames_.end()) {
+      weight = std::max(weight, it->second.weight);
+      italic = italic || it->second.italic;
+    }
+  return Get(family, weight, italic);
 }
 
 std::wstring_view Fonts::BuiltInSubstitute(std::wstring_view family) {
@@ -215,8 +340,13 @@ const std::wstring& Fonts::Resolve(std::wstring_view family) {
   if (auto it = resolved_.find(key); it != resolved_.end()) return it->second;
 
   std::wstring used;
+  FaceName face;
   if (Installed(family)) {
     used = family;
+  } else if (FullName(std::wstring(family), face)) {
+    // "Times New Roman Bold": that face of an installed family, not a replacement.
+    used = face.family;
+    faceNames_[key] = std::move(face);
   } else {
     if (substitute_) {
       std::wstring s = substitute_(family);
@@ -238,6 +368,11 @@ const std::wstring& Fonts::Resolve(std::wstring_view family) {
     if (std::find(substitutions_.begin(), substitutions_.end(), sub) == substitutions_.end()) substitutions_.push_back(sub);
   }
   return resolved_.emplace(std::move(key), std::move(used)).first->second;
+}
+
+void Fonts::ClearSubstitutions() {
+  for (const Substitution& s : substitutions_) resolved_.erase(Lower(s.requested));
+  substitutions_.clear();
 }
 
 const Face* Fonts::Get(const std::wstring& installedFamily, DWRITE_FONT_WEIGHT weight, bool italic) {

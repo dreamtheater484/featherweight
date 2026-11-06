@@ -45,6 +45,7 @@ struct ToolItem {
   // The other kinds. Dropdowns, combo boxes and split buttons list `choices`, and `choice` is
   // the chosen one; `text` is what a combo box shows (or a dropdown, with nothing chosen).
   std::vector<std::wstring> choices;
+  int maxRows = 12;  // a dropdown's list: rows shown before it scrolls
   int choice = -1;
   std::wstring text;
   std::function<bool(std::wstring&)> validate;  // combo boxes: tidies typed text, or refuses it

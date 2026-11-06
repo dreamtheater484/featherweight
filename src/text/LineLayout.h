@@ -100,6 +100,7 @@ struct HyphenationSettings {
   float zone = 0;
   int consecutiveLimit = 0;  // w:consecutiveHyphenLimit: most lines in a row ending in a hyphen; 0: any
   bool caps = true;          // false: w:doNotHyphenateCaps (words typed in capitals)
+  bool likeWord = false;     // only the languages Word on this PC hyphenates (Hyphenator::WordHyphenates)
 };
 
 struct ParagraphFormat {
@@ -116,6 +117,11 @@ struct ParagraphFormat {
   // later do (compatibility mode 15); earlier modes don't.
   bool squeezeSpaces = true;
   wchar_t decimalSeparator = L'.';
+  // East Asian commas and full stops (、。，．) may hang past the line's end (w:overflowPunct).
+  bool hangPunctuation = true;
+  // Two East Asian punctuation marks in a row close up the blank halves between them
+  // (w:characterSpacingControl compressPunctuation).
+  bool compressPunctuation = false;
   // Digits: none (as typed), or by context or locale for Arabic and other scripts.
   DWRITE_NUMBER_SUBSTITUTION_METHOD digits = DWRITE_NUMBER_SUBSTITUTION_METHOD_NONE;
 };
@@ -145,7 +151,7 @@ struct GlyphPiece {
   bool leader = false;  // a tab leader
   std::vector<uint16_t> glyphs;
   std::vector<float> advances;
-  std::vector<DWRITE_GLYPH_OFFSET> offsets;
+  std::vector<DWRITE_GLYPH_OFFSET> offsets;  // empty when all are zero (most lines)
 
   // Where DrawGlyphs starts: the left edge, or the right edge for right-to-left glyphs.
   float OriginX() const { return (bidiLevel & 1) ? x + width : x; }

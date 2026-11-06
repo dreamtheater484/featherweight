@@ -111,6 +111,19 @@ struct TextBody {
   TextBox box;  // the flags; rect and transform are filled in later
 };
 
+// Vector art made elsewhere (fwchart's charts): paths, each with its own transform, fill and line,
+// in the art's coordinates ((0, 0) to `size`), scaled to the shape's box when drawn.
+struct Art {
+  struct Mark {
+    Path path;
+    Matrix transform;  // the path's coordinates to the art's
+    Fill fill;         // Kind::None: not filled
+    Line line;         // line.fill Kind::None: no outline
+  };
+  Size size;
+  std::vector<Mark> marks;
+};
+
 struct Shape {
   enum class Kind : uint8_t { Shape, Picture, Group, Placeholder };
   Kind kind = Kind::Shape;
@@ -129,6 +142,7 @@ struct Shape {
   std::vector<Shape> children;
   std::shared_ptr<TextBody> text;
   std::shared_ptr<TextPath> textPath;
+  std::shared_ptr<const Art> art;  // Shape: drawn in place of the geometry when set
 };
 
 // The shape's own coordinates ((0, 0) to its size) → its parent's: flips, then rotation, about
@@ -171,5 +185,10 @@ bool ReadDrawingMLShape(pugi::xml_node el, ReadContext& ctx, Shape& out, const F
 bool ReadGraphicData(pugi::xml_node graphicData, Size extent, ReadContext& ctx, Shape& out);
 // One VML element (v:shape, v:rect, v:group…) into `out`, with bounds from its style.
 bool ReadVmlShape(pugi::xml_node el, ReadContext& ctx, Shape& out);
+
+// Charts (D5): a reader turns a c:chartSpace into `out` (art filling (0, 0) to `extent`), or returns
+// false for a placeholder. fw::chart::Install() sets it; fwdraw itself doesn't read charts.
+using ChartReader = bool (*)(pugi::xml_node chartSpace, Size extent, ReadContext& ctx, Shape& out);
+void SetChartReader(ChartReader reader);
 
 }  // namespace draw

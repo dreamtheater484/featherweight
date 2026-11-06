@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "doc/model/Document.h"
@@ -16,6 +17,13 @@ namespace fw::doc {
 struct Document::Caches {
   // Resolved properties: indices into the pools, kNone until resolved. The pools are deques, so
   // the references Document hands out stay valid as they grow.
+  // Document::PlaceOfRow: each table's rows by element, its row count and header rows.
+  struct TableIndex {
+    std::vector<Node> list;  // Document::TableRows
+    std::unordered_map<ElemId, int32_t> at;
+    int32_t rows = 0, headers = 1;
+  };
+  std::unordered_map<ElemId, TableIndex> tables;  // by w:tbl
   std::vector<uint32_t> para;            // by paragraph
   std::deque<ParaProps> paraPool;
   std::vector<uint32_t> mark;            // by paragraph
@@ -51,6 +59,7 @@ struct Document::Caches {
   std::vector<LabelPass> labelPass;      // by story
   std::unordered_map<uint32_t, ListLabel> labels;  // by paragraph
   // Lookups.
+  std::unordered_set<uint32_t> pairSites;  // names of the elements that open or close pairs (PairSite)
   std::unordered_map<std::string_view, uint32_t> styleIndex;  // style id -> index into Styles()
   std::unordered_map<std::string_view, ElemId> nums, abstractNums;  // w:numId / w:abstractNumId
   std::unordered_map<std::string_view, uint32_t> commentStory;  // comment id -> story

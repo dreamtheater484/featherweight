@@ -224,7 +224,7 @@ struct SectionProps {
   // Page numbers.
   std::string_view pageNumberFormat;  // "decimal" when empty
   std::optional<int32_t> pageNumberStart;
-  // Line numbers (countBy 0 = off).
+  // Line numbers (countBy 0 = off). lineNumberStart is the first number shown (w:start + 1).
   int32_t lineNumberCountBy = 0, lineNumberStart = 1;
   Twips lineNumberDistance{0};
   std::string_view lineNumberRestart;

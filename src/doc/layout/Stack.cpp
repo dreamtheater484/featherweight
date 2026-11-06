@@ -160,14 +160,19 @@ float Engine::TextHeight(const ParaText& pt, const text::Line& line) {
   return top + descent;
 }
 
-float Engine::LineHeight(const ParaText& pt, const text::Line& line) {
+float Engine::LineHeight(const ParaText& pt, const text::Line& line, float grid) {
   const ParaProps& p = *pt.props;
-  const float single = line.ascent + line.descent + line.lineGap;
+  float single = line.ascent + line.descent + line.lineGap;
+  // On the document grid a line takes as many whole grid lines as its text needs, and multiple
+  // spacing multiplies those (East Asian layout, w:docGrid with w:snapToGrid).
+  const bool snap = grid > 0 && p.snapToGrid;
+  if (snap) single = std::max(1.0f, std::ceil(single / grid - 0.01f)) * grid;
   switch (p.lineRule) {
     case LineRule::Exact: return std::abs(static_cast<float>(p.line)) / 20.0f;
     case LineRule::AtLeast: return std::max(single, static_cast<float>(p.line) / 20.0f);
     default: {
       if (p.line <= 0) return single;
+      if (snap) return single * static_cast<float>(p.line) / 240.0f;
       const float factor = static_cast<float>(p.line) / 240.0f;
       if (factor < 1) return single * factor;
       return single + (factor - 1) * TextHeight(pt, line);
@@ -197,10 +202,22 @@ bool Engine::Contextual(const ParaProps& a, const ParaProps& b) const { return a
 
 float Engine::SpaceBefore(const ParaProps& p, const Spacing& s) const {
   float before = p.spaceBeforeLines >= 0 ? static_cast<float>(p.spaceBeforeLines) * 12.0f / 100.0f : Pt(p.spaceBefore);
-  if (p.spaceBeforeAuto) before = s.atTop && s.prev == nullptr ? 0.0f : 14.0f;
+  // With w:doNotUseHTMLParagraphAutoSpacing, Word ignores automatic spacing and uses the space
+  // set (the region-3 QAPP's attachment page: 5 pt after, not 14).
+  const bool useAuto = !sumSpacing_;
+  if (p.spaceBeforeAuto && useAuto) before = s.atTop && s.prev == nullptr ? 0.0f : 14.0f;
   if (s.prev && p.contextualSpacing && Contextual(*s.prev, p)) before = 0;
   float after = s.after;
-  if (s.prev && s.prev->contextualSpacing && Contextual(*s.prev, p)) after = 0;
+  // HTML's automatic spacing leaves none between two items of one list, as between <li>s.
+  const bool sameList = s.prev && !p.numId.empty() && s.prev->numId == p.numId;
+  if (sameList && p.spaceBeforeAuto && useAuto) before = 0;
+  if (sameList && s.prev->spaceAfterAuto && useAuto) after = 0;
+  if (s.prev && s.prev->contextualSpacing && Contextual(*s.prev, p)) {
+    // Word first takes the space after out of the space before, as HTML collapses margins, then
+    // drops the space after: 8 pt after and 24 pt before leave 16 pt (measured on the corpus).
+    if (!sumSpacing_) before = std::max(0.0f, before - after);
+    after = 0;
+  }
   // Between two paragraphs Word leaves the larger of the one's space after and the other's space
   // before, as HTML does, unless the document asks it not to use HTML paragraph spacing.
   return sumSpacing_ ? after + before : std::max(after, before);
@@ -223,7 +240,7 @@ float Engine::BorderAbove(const ParaProps& p, const Spacing& s) const {
 float Engine::BorderBelow(const Spacing& s) const { return s.prev ? BorderRoom(s.prev->borders.bottom) : 0.0f; }
 
 float Engine::SpaceAfter(const ParaProps& p) const {
-  if (p.spaceAfterAuto) return 14;
+  if (p.spaceAfterAuto && !sumSpacing_) return 14;  // see SpaceBefore
   return p.spaceAfterLines >= 0 ? static_cast<float>(p.spaceAfterLines) * 12.0f / 100.0f : Pt(p.spaceAfter);
 }
 
@@ -550,14 +567,16 @@ void Engine::StackParagraph(uint32_t para, const Frame& frame, Stack& out, Spaci
     const text::LineBreaker::State state = breaker.Save();
     if (wrap) space = SpaceBeside(*frame.zones, frame.y + y, estimate, frame.x, frame.x + frame.width);
     text::Line line = breaker.Next(space.left - frame.x, space.right - frame.x);
-    float h = LineHeight(pt, line);
+    // Text boxes don't snap to the document grid; the body's frames, cells and notes do.
+    const float grid = frame.geom && frame.story != LineStory::TextBox ? frame.geom->gridPitch : 0;
+    float h = LineHeight(pt, line, grid);
     if (wrap && h > estimate) {
       text::LineSpace again = SpaceBeside(*frame.zones, frame.y + y, h, frame.x, frame.x + frame.width);
       if (again.left != space.left || again.right != space.right || again.top != space.top) {
         breaker.Restore(state);
         space = again;
         line = breaker.Next(space.left - frame.x, space.right - frame.x);
-        h = LineHeight(pt, line);
+        h = LineHeight(pt, line, grid);
       }
     }
     estimate = h;

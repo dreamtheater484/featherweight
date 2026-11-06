@@ -45,6 +45,11 @@ void ReadVmlFrame(pugi::xml_node content, Drawing& d);
 // same places, in each branch of the drawing's mc:AlternateContent block.
 std::vector<pugi::xml_node> TextBoxesIn(pugi::xml_node from, bool fallbacks = false);
 
+// The highest bookmark id (w:id of a w:bookmarkStart or w:bookmarkEnd) in the document, -1 when
+// there's none: the model's, and those in content kept as XML that the model doesn't read, such as
+// the mc:Fallback copy of a text box's text. A new bookmark takes an id above it.
+int64_t TopBookmarkId(const Document& doc);
+
 // Writes one of the document's parts from the model and the round-trip store (plan §4.3 rule 1).
 // In D1 this is used by the round-trip tests; saving comes in D2.
 pkg::Status WritePart(const Document& doc, uint32_t part, std::string& out);

@@ -605,6 +605,11 @@ try {
   Check "New: the Document tile, the editor that has shipped" {
     $newRow = FindChild $start $CT::Group "New"; $newRow -and (@(FindAll $newRow $CT::Button | ForEach-Object { $_.Current.Name }) -join "|") -eq "Document"
   }
+  Check "Templates: Letter, CV and Report, focusable buttons" {
+    $row = FindChild $start $CT::Group "Templates"
+    $row -and (@(FindAll $row $CT::Button | ForEach-Object { $_.Current.Name }) -join "|") -eq "Letter|CV|Report" -and
+      @(FindAll $row $CT::Button | Where-Object { -not ($_.Current.IsKeyboardFocusable -and (PatternNames $_) -contains "Invoke") }).Count -eq 0
+  }
   Check "+ is a menu now that an editor has shipped" {
     $plus = FindChild (FindChild $win $CT::TitleBar $null) $CT::Button "New or open a file"; (PatternNames $plus) -contains "ExpandCollapse" -and (PatternNames $plus) -notcontains "Invoke"
   }
@@ -682,11 +687,15 @@ try {
   $menu = $AE::RootElement.FindFirst($Scope::Children, $menuCond)
   if ($menu) {
     $choices = [FocusWatch]::MenuItems([IntPtr]$menu.Current.NativeWindowHandle) -join "|"
-    Check "+ menu: the start screen's choices" { $choices -eq "New document`tCtrl+N|New spreadsheet|New presentation||Open$([char]0x2026)`tCtrl+O" }
+    Check "+ menu: the start screen's choices" { $choices -eq "New document`tCtrl+N|New spreadsheet|New presentation|New from template||Open$([char]0x2026)`tCtrl+O" }
     Step "+ menu: closes" { [FocusWatch]::CancelMenu([IntPtr]$win.Current.NativeWindowHandle) } {
       -not $AE::RootElement.FindFirst($Scope::Children, $menuCond) -and (State $plus) -eq "Collapsed"
     }
   }
+  $letter = FindChild (FindChild (FindChild $win $CT::Pane "Start") $CT::Group "Templates") $CT::Button "Letter"
+  Step "Templates: Letter makes a new document" { (Pat $letter $Invoke).Invoke() } {
+    FindChild (Find $titleBar $CT::Tab "Open files") $CT::TabItem "Document 1"
+  } 10000
 } finally {
   if (-not $p.HasExited) { $p.CloseMainWindow() | Out-Null; if (-not $p.WaitForExit(3000)) { $p.Kill() } }
 }

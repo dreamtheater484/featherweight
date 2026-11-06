@@ -17,7 +17,11 @@ param(
   [switch]$Publish,
   [switch]$Winget,  # with -Publish: also submit the new version to winget (after the first winget release is accepted)
   [switch]$SkipTests,
-  [string]$Notes = ""
+  [string]$Notes = "",
+  # A pre-release (a beta): GitHub never shows it as the latest release, so the updater, which asks
+  # for /releases/latest, doesn't offer it to existing installations, and -Winget isn't allowed.
+  [switch]$Prerelease,
+  [string]$Title = ""  # the release's title; by default "Featherweight x.y.z"
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,6 +42,9 @@ $iscc = @(
   "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) { throw "Inno Setup 6 was not found. Install it with: winget install JRSoftware.InnoSetup" }
+
+if ($Prerelease -and $Winget) { throw "-Winget can't be used with -Prerelease: winget gets stable releases only." }
+if (-not $Title) { $Title = "Featherweight $version" }
 
 if ($Publish) {
   if (git status --porcelain) { throw "The working tree has uncommitted changes. Commit them first." }
@@ -107,7 +114,8 @@ Existing installations update themselves automatically.
 git tag -a $tag -m "Featherweight $version"
 git push origin $tag
 $paths = $assets | ForEach-Object { Join-Path $dist $_ }
-gh release create $tag @paths --title "Featherweight $version" --notes $Notes
+$pre = @(); if ($Prerelease) { $pre = @("--prerelease") }
+gh release create $tag @paths --title $Title --notes $Notes @pre
 if ($LASTEXITCODE -ne 0) { throw "Creating the GitHub release failed" }
 Write-Host "Released $tag" -ForegroundColor Green
 

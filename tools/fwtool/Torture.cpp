@@ -22,6 +22,7 @@
 #include <unordered_map>
 
 #include "Common.h"
+#include "DrawingPlaces.h"
 #include "Torture.h"
 #include "core/Strings.h"
 #include "doc/docx/Docx.h"
@@ -30,6 +31,12 @@
 #include "doc/model/Utf.h"
 #include "pkg/Check.h"
 #include "pkg/Snapshot.h"
+// D5: other formats and password-protected files, opened as the app opens them.
+#include "doc/docx/Blank.h"
+#include "doc/msdoc/MsDoc.h"
+#include "doc/odf/Odt.h"
+#include "pkg/CompoundFile.h"
+#include "pkg/OfficeCrypto.h"
 
 // The editor arrives with D2 (doc/edit/Editor.h); until then the harness runs without it.
 #if __has_include("doc/edit/Editor.h")
@@ -1128,6 +1135,7 @@ using torture::Applied;
 using torture::Edit;
 using torture::EditKind;
 using torture::EditTarget;
+using torture::MisplacedDrawings;
 namespace fs = std::filesystem;
 
 // SplitMix64: the same draws on every compiler and machine, so a seed always means the same edits.
@@ -1324,7 +1332,9 @@ class Generator {
   std::u16string RandomText() {
     static const std::vector<std::u16string> pieces = {
         u"a", u"e", u"the ", u"word ", u"Featherweight", u"  ", u" ", u".", u", ", u"12", u"é", u"ß", u"ü", u"ñ",
-        u"ç", u"€", u"—", u"“quoted”", u"日本", u"\t", u"o"};
+        u"ç", u"€", u"—", u"“quoted”", u"日本", u"\t", u"o",
+        // D5: right-to-left and East Asian text, with Latin and digits beside it.
+        u"مرحبا ", u"שלום ", u"عربي 123", u"עברית, ", u"中文，", u"日本語の文。", u"「引用」", u"한국어 "};
     // Breaks typed as characters (InsertText): a line break, and with D3 a page and a column break,
     // and optional and non-breaking hyphens (w:softHyphen, w:noBreakHyphen), mid-word too.
 #if FW_TORTURE_PAGE
@@ -1957,6 +1967,14 @@ class Generator {
     for (const CommentInfo& c : doc_.Comments())
       if (c.reference.para != kNone)
         add("comment " + std::string(c.id) + " reference", c.story, c.reference, Pos{c.reference.para, c.reference.offset + 1});
+    // D5: charts and equations, which saving must keep exactly.
+    for (const Drawing& d : doc_.Drawings()) {
+      if (!Known(d.pos)) continue;
+      const bool equation = d.kind == DrawingKind::Equation;
+      if (!equation && (d.kind != DrawingKind::DrawingML || doc_.DrawingXml(d).find("drawingml/2006/chart") == std::string::npos))
+        continue;
+      add(equation ? "equation" : "chart", order_[d.pos.para].first, d.pos, Pos{d.pos.para, d.pos.offset + 1});
+    }
     return spans;
   }
 
@@ -2303,7 +2321,191 @@ struct RoundResult {
   std::vector<uint8_t> saved;
   std::vector<std::string> written;  // the parts the save wrote
   std::string edited, readBack;      // the digests, when they differ
+  // D5: the .docx the app opened when it isn't the file (an import, a template, a decrypted file),
+  // and a protected file's saved copy as the app writes it: encrypted with its password.
+  std::vector<uint8_t> asOpened, protectedSaved;
+  std::wstring password;
 };
+
+// D5: a file as the app opens it (DocView::Load and Unlock). A .doc or an .odt is imported into a
+// .docx, a template becomes a new document made from it, and a password-protected .docx or .doc is
+// decrypted with its test password (tests/office/README.md); saving encrypts it again with the same
+// password, as DocFile does.
+struct Opened {
+  std::unique_ptr<fw::pkg::Package> pkg;
+  std::vector<uint8_t> asOpened;  // the .docx read, when it isn't the file itself
+  fw::pkg::crypto::Key key;       // a protected file's
+  std::wstring password;
+};
+
+constexpr const wchar_t* kTestPasswords[] = {L"featherweight", L"Password1234_"};
+
+Opened OpenAsApp(const fs::path& file, fw::pkg::Status& st) {
+  namespace crypto = fw::pkg::crypto;
+  using Code = fw::pkg::Status::Code;
+  Opened o;
+  const std::wstring ext = fw::ToLower(file.extension().wstring());
+  std::ifstream in(file, std::ios::binary);
+  const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  auto open = [&](std::vector<uint8_t> docx) {
+    o.asOpened = docx;
+    o.pkg = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(docx)), fw::pkg::Limits::Default(), st);
+  };
+  static constexpr uint8_t kCompound[] = {0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1};
+  if (bytes.size() >= 8 && std::equal(std::begin(kCompound), std::end(kCompound), bytes.begin())) {
+    auto cf = fw::pkg::CompoundFile::Open(bytes);
+    if (!cf) return st = fw::pkg::Status::Fail(Code::Damaged, "not a compound file"), std::move(o);
+    const std::vector<std::string> streams = cf->Streams();
+    if (std::find(streams.begin(), streams.end(), "WordDocument") != streams.end()) {
+      const bool locked = crypto::IsEncryptedDoc(*cf);
+      crypto::DocStreams plain;
+      if (locked)
+        for (const wchar_t* pw : kTestPasswords)
+          if (crypto::DecryptDoc(*cf, pw, plain) == crypto::Result::Ok) {
+            o.password = pw;
+            break;
+          }
+      if (locked && o.password.empty())
+        return st = fw::pkg::Status::Fail(Code::Unsupported, "a protected .doc without a test password"), std::move(o);
+      std::vector<uint8_t> docx = fw::doc::msdoc::ToDocx(
+          [&](std::string_view stream) -> std::optional<std::vector<uint8_t>> {
+            if (locked && stream == "WordDocument") return plain.wordDocument;
+            if (locked && stream == plain.table) return plain.tableStream;
+            if (locked && stream == "Data") return plain.data.empty() ? std::nullopt : std::make_optional(plain.data);
+            return cf->Stream(stream);
+          },
+          st, locked);
+      if (docx.empty()) return o;
+      if (locked) o.key = crypto::NewKey(o.password);  // the .docx it's saved as keeps its password
+      open(std::move(docx));
+    } else if (crypto::IsEncryptedPackage(*cf)) {
+      std::vector<uint8_t> docx;
+      for (const wchar_t* pw : kTestPasswords)
+        if (crypto::Decrypt(*cf, pw, docx, o.key) == crypto::Result::Ok) {
+          o.password = pw;
+          break;
+        }
+      if (o.password.empty())
+        return st = fw::pkg::Status::Fail(Code::Unsupported, "a protected file without a test password"), std::move(o);
+      open(std::move(docx));
+    } else {
+      st = fw::pkg::Status::Fail(Code::Unsupported, "a compound file that isn't a Word document");
+    }
+    return o;
+  }
+  std::vector<uint8_t> docx;
+  if (ext == L".odt" || ext == L".ott") {
+    if ((st = fw::doc::odf::OdtToDocx(bytes, docx)).Ok()) open(std::move(docx));
+    return o;
+  }
+  if (ext == L".dotx" || ext == L".dotm") {  // opened as Word does: a new document made from it
+    if ((st = fw::doc::docx::DocumentFromTemplate(bytes, docx)).Ok()) open(std::move(docx));
+    return o;
+  }
+  o.pkg = OpenPackage(file, st);
+  return o;
+}
+
+// D5: what saving must keep exactly as it was. Charts: their parts (/word/charts/), and the parts
+// they point to (an embedded workbook): the editor never changes them. Equations (m:oMath,
+// m:oMathPara): each one in the saved file must be one of the original's, character for character.
+struct Kept {
+  std::map<std::string, std::vector<uint8_t>> parts;
+  std::set<std::string> equations;
+};
+
+void EquationsIn(std::string_view xml, std::set<std::string>& out) {
+  for (size_t i = xml.find("<m:oMath"); i != std::string_view::npos; i = xml.find("<m:oMath", i)) {
+    const size_t name = i + 1, nameEnd = xml.find_first_of(" />", name);
+    if (nameEnd == std::string_view::npos) break;
+    const std::string_view tag = xml.substr(name, nameEnd - name);
+    if (tag != "m:oMath" && tag != "m:oMathPara") {
+      i = nameEnd;
+      continue;
+    }
+    const size_t open = xml.find('>', nameEnd);
+    if (open == std::string_view::npos) break;
+    size_t end = open + 1;
+    if (xml[open - 1] != '/') {  // not empty: up to its end tag (an m:oMathPara holds m:oMath, never itself)
+      const std::string close = "</" + std::string(tag) + ">";
+      const size_t c = xml.find(close, open);
+      if (c == std::string_view::npos) break;
+      end = c + close.size();
+    }
+    // As XML, not as bytes: once its part is rewritten, the writer declares m: on each of an
+    // equation's children (the reader keeps them as fragments that stand alone) and writes empty
+    // elements short; an indented file's whitespace between elements goes. Reported to d1-text
+    // (D5 torture). Everything else must be as it was.
+    std::string eq(xml.substr(i, end - i));
+    for (size_t d = eq.find(" xmlns"); d != std::string::npos; d = eq.find(" xmlns", d)) {
+      const size_t q = eq.find('"', d), q2 = q == std::string::npos ? q : eq.find('"', q + 1);
+      if (q2 == std::string::npos || eq.find_first_of("<>", d) < q) break;
+      eq.erase(d, q2 + 1 - d);
+    }
+    // Whitespace between elements (an indented file's) isn't kept, and means nothing; inside a run's
+    // text (m:t, w:t) it's the text.
+    for (size_t p = eq.find('>'); p != std::string::npos && p + 1 < eq.size(); p = eq.find('>', p + 1)) {
+      const size_t next = eq.find_first_not_of(" \t\r\n", p + 1);
+      if (next == p + 1 || next == std::string::npos || eq[next] != '<') continue;
+      const size_t start = eq.rfind('<', p);
+      const size_t wsNameEnd = eq.find_first_of(" />", start + 1);
+      const std::string_view wsTag(eq.data() + start + 1, wsNameEnd - start - 1);
+      if (eq[start + 1] != '/' && eq[p - 1] != '/' && wsTag.ends_with(":t")) continue;
+      eq.erase(p + 1, next - p - 1);
+    }
+    // And an empty element written either way: <m:deg></m:deg> is <m:deg/>.
+    for (size_t p = eq.find("></"); p != std::string::npos; p = eq.find("></", p + 1)) {
+      const size_t start = eq.rfind('<', p);
+      if (start == std::string::npos || eq[start + 1] == '/' || eq[p - 1] == '/') continue;
+      const size_t tagEnd = eq.find_first_of(" >", start + 1);
+      const std::string tagName = eq.substr(start + 1, tagEnd - start - 1);
+      if (eq.compare(p + 3, tagName.size() + 1, tagName + ">") == 0) eq.replace(p, tagName.size() + 4, "/>");
+    }
+    out.insert(std::move(eq));
+    i = end;
+  }
+}
+
+std::set<std::string> EquationsOf(const fw::pkg::Package& pkg) {
+  std::set<std::string> out;
+  std::vector<uint8_t> bytes;
+  for (const fw::pkg::Part& p : pkg.Parts()) {
+    if (p.deleted || !p.name.starts_with("/word/") || !p.name.ends_with(".xml") || !pkg.ReadPart(p.name, bytes).Ok()) continue;
+    const std::string_view xml(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    if (xml.find("<m:oMath") != std::string_view::npos) EquationsIn(xml, out);
+  }
+  return out;
+}
+
+Kept KeptOf(const fw::pkg::Package& pkg) {
+  Kept k;
+  std::set<std::string> names;
+  for (const fw::pkg::Part& p : pkg.Parts())
+    if (!p.deleted && p.name.starts_with("/word/charts/")) names.insert(p.name);
+  for (const fw::pkg::RelationshipSet& set : pkg.Relationships())
+    if (set.source.starts_with("/word/charts/"))
+      for (const fw::pkg::Relationship& r : set.items)
+        if (!r.external && !r.targetPart.empty()) names.insert(r.targetPart);
+  std::vector<uint8_t> bytes;
+  for (const std::string& name : names)
+    if (pkg.ReadPart(name, bytes).Ok()) k.parts[name] = bytes;
+  k.equations = EquationsOf(pkg);
+  return k;
+}
+
+// Empty when the saved package keeps them: a chart part that's still there has the same bytes,
+// and every equation is one the original had.
+std::string KeptProblem(const Kept& original, const fw::pkg::Package& saved) {
+  std::vector<uint8_t> bytes;
+  for (const auto& [name, was] : original.parts) {
+    const fw::pkg::Part* p = saved.FindPart(name);
+    if (!p || p->deleted) continue;  // its chart deleted
+    if (!saved.ReadPart(name, bytes).Ok() || bytes != was) return "chart part " + name + " changed";
+  }
+  for (const std::string& eq : EquationsOf(saved))
+    if (!original.equations.contains(eq)) return "an equation changed: " + eq.substr(0, 160);
+  return {};
+}
 
 std::string Hex(const fw::pkg::Sha256& h) {
   static const char* digits = "0123456789abcdef";
@@ -2320,7 +2522,11 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     if (!r.failure) r.failure = Failure{std::move(category), std::move(message)};
   };
   fw::pkg::Status st;
-  auto pkg = OpenPackage(file, st);
+  Opened opened = OpenAsApp(file, st);
+  auto pkg = std::move(opened.pkg);
+  r.asOpened = opened.asOpened;
+  r.password = opened.password;
+  const Kept kept = pkg ? KeptOf(*pkg) : Kept{};
   std::unique_ptr<Document> doc = pkg ? docx::Read(std::move(pkg), st) : nullptr;
   if (!doc) {
     fail("open", "the model refuses the original: " + st.message);
@@ -2329,6 +2535,7 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
   std::vector<std::string> known = fw::pkg::CheckPackage(doc->Package()).errors;
   const std::map<std::string, int> knownGrid = GridProblems(*doc);
   const std::map<std::string, int> knownMedia = MediaProblems(doc->Package());
+  const std::map<std::string, int> knownPlaces = MisplacedDrawings(doc->Package());
   std::unique_ptr<EditTarget> target = torture::OpenTarget(std::move(doc), st);
   if (!target) {
     fail("open", "the editor refuses it: " + st.message);
@@ -2345,11 +2552,33 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     };
     if (DWORD crash = Guarded(save)) return fail("crash", when + CrashText(crash) + " while saving"), false;
     if (!st.Ok()) return fail("save", when + st.message), false;
+    if (!opened.key.Empty()) {  // as DocFile saves a protected document: encrypted with its password
+      namespace crypto = fw::pkg::crypto;
+      r.protectedSaved = crypto::Encrypt(r.saved, opened.key);
+      if (r.protectedSaved.empty()) return fail("protected", when + "the saved file couldn't be encrypted"), false;
+      std::vector<uint8_t> plain;
+      crypto::Key key;
+      auto cf = fw::pkg::CompoundFile::Open(r.protectedSaved);
+      const crypto::Result dr = cf ? crypto::Decrypt(*cf, opened.password, plain, key) : crypto::Result::Damaged;
+      if (dr != crypto::Result::Ok || plain != r.saved)
+        return fail("protected", when + "the saved file doesn't decrypt with its password to what was saved"), false;
+    }
     auto again = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(r.saved), fw::pkg::Limits::Default(), st);
     if (again) st = again->Verify();
     if (!st.Ok()) return fail("open", when + "the saved file doesn't open: " + st.message), false;
     for (const std::string& error : fw::pkg::CheckPackage(*again).errors)
       if (std::find(known.begin(), known.end(), error) == known.end()) return fail("check", when + error), false;
+    if (std::string problem = KeptProblem(kept, *again); !problem.empty()) return fail("kept", when + problem), false;
+    // A shape or a floating drawing where Word refuses the file (DrawingPlaces.h): in a note, a
+    // comment or a text box's text, no more of them than the original had there.
+    for (const auto& [problem, count] : MisplacedDrawings(*again)) {
+      const auto had = knownPlaces.find(problem);
+      const int original = had == knownPlaces.end() ? 0 : had->second;
+      if (count > original)
+        return fail("drawing", when + problem + " (" + std::to_string(count) + " in the saved file, " +
+                                   std::to_string(original) + " in the original)"),
+               false;
+    }
     // Only where saving leaves out pictures nothing uses (D3's pictures, docx::Serialize); D2's Save
     // keeps a deleted picture's relationship, which does no harm.
     if constexpr (FW_TORTURE_D3 != 0) {
@@ -2692,7 +2921,8 @@ std::string KeepReproducer(const fs::path& file, uint64_t seed, uint32_t round, 
 
 bool IsWordFile(const fs::path& file) {
   std::wstring ext = fw::ToLower(file.extension().wstring());
-  return ext == L".docx" || ext == L".docm" || ext == L".dotx" || ext == L".dotm";
+  return ext == L".docx" || ext == L".docm" || ext == L".dotx" || ext == L".dotm" || ext == L".doc" || ext == L".odt" ||
+         ext == L".ott";
 }
 
 // A reproducer names its file by the path it had where it was made. Elsewhere (another checkout),
@@ -2791,6 +3021,18 @@ int RunTorture(const Options& options) {
   std::vector<fs::path> files;
   for (const auto& f : CollectFiles(options.inputs))
     if (IsWordFile(f)) files.push_back(f);
+  // OpenDocument text (D5), which fwtool's other commands don't take.
+  for (const auto& in : options.inputs) {
+    std::error_code walk;
+    if (!fs::is_directory(in, walk)) continue;
+    std::vector<fs::path> odf;
+    for (auto it = fs::recursive_directory_iterator(in, walk); !walk && it != fs::end(it); it.increment(walk)) {
+      const std::wstring ext = fw::ToLower(it->path().extension().wstring());
+      if (it->is_regular_file(walk) && (ext == L".odt" || ext == L".ott")) odf.push_back(it->path());
+    }
+    std::sort(odf.begin(), odf.end());
+    files.insert(files.end(), odf.begin(), odf.end());
+  }
   if (files.empty()) {
     std::fprintf(stderr, "No Word documents found.\n");
     return 1;
@@ -2828,7 +3070,19 @@ int RunTorture(const Options& options) {
         WriteEdits(edits, file, seed, round, r.failure ? r.failure->category + ": " + r.failure->message : "none",
                    r.applied, std::to_string(r.applied.size()));
         savedPath = fw::WideToUtf8(fs::absolute(saved).generic_wstring());
-        pairs << fw::WideToUtf8(fs::absolute(file).generic_wstring()) << "\t" << savedPath << "\n";
+        std::string original = fw::WideToUtf8(fs::absolute(file).generic_wstring());
+        if (!r.asOpened.empty()) {
+          const fs::path as = set.out / "opened" / (SafeName(file) + ".docx");
+          fs::create_directories(as.parent_path(), ec);
+          WriteBytes(as, r.asOpened);
+          original = fw::WideToUtf8(fs::absolute(as).generic_wstring());
+        }
+        if (!r.protectedSaved.empty()) {
+          const fs::path p = set.out / "saved-protected" / r.password / (SafeName(file) + ".docx");
+          fs::create_directories(p.parent_path(), ec);
+          WriteBytes(p, r.protectedSaved);
+        }
+        pairs << original << "\t" << savedPath << "\n";
       }
       if (!r.failure) continue;
       size_t kept = 0;

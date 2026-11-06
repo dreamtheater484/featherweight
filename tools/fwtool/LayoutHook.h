@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/LayoutDump.h"
@@ -27,8 +28,9 @@ bool HaveLayout();
 // package, build the model, lay out the first page, then the rest. Marks each of those stages in
 // `timings` (if given; the caller has called Start()) and fills `dump` (if given) with every
 // line drawn (docs/layout-dump.md). Returns false with a plain message in `error` if it can't.
+// A .doc or .odt is imported, and a password-protected file decrypted with `password`, first.
 bool LayOutDocument(const std::filesystem::path& document, fw::LayoutDump* dump, fw::OpenTimings* timings,
-                    std::string& error);
+                    std::string& error, std::wstring_view password = {});
 
 // The same, handing the model and its laid-out pages to `use` (fwtool pdf-check).
 bool WithLayout(const std::filesystem::path& document, std::string& error,
@@ -51,6 +53,20 @@ struct TypingPlace {
 // the editor, and formats there as Word's keys and buttons do.
 bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>& places, size_t& pages,
                  std::string& error);
+
+// fwtool bench --scrolling: the document opened and laid out, then every page painted in order,
+// as scrolling from the top to the end shows them (pictures decoded on first sight), each timed.
+// Memory is the process's private bytes, in MB.
+struct ScrollResult {
+  size_t pages = 0;
+  double layOutMs = 0;           // open and lay out every page
+  std::vector<double> paint;     // each page painted, in ms, in order
+  double memoryOpen = 0;         // before the document is opened
+  double memoryLaidOut = 0;      // laid out
+  double memoryScrolled = 0;     // every page painted once
+  double peakWorkingSet = 0;     // the process's peak working set
+};
+bool BenchScrolling(const std::filesystem::path& document, ScrollResult& result, std::string& error);
 
 // fwtool edit-check: random edits through the editor, laid out again a few pages at a time after
 // each (Layout::Edited), and every ten the whole layout compared with one made from scratch.

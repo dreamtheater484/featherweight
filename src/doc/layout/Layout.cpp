@@ -17,6 +17,8 @@
 #include "doc/edit/Editor.h"
 #include "doc/layout/Engine.h"
 #include "draw/Painter.h"
+#include "draw/Sfnt.h"
+#include "pkg/Package.h"
 
 namespace fw::doc::layout {
 
@@ -482,6 +484,8 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
           shown = u"-";
         } else if (withText && g.leader) {
           shown = u"\t";
+        } else if (withText && lb.story == LineStory::LineNumber) {
+          shown = lb.text;
         } else if (withText && lb.para != kNone && g.textEnd > g.textStart) {
           const ParaText& t = textOf(lb.para);
           if (g.textEnd <= t.text.size())
@@ -527,7 +531,9 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
   };
   // A text box's lines go on top of its own shape, which is filled.
   auto drawOne = [&](const DrawingBox& d) {
-    if (drawing) drawing(painter, d);
+    if (const math::Equation* eq = d.floating ? nullptr : e.LaidOutEquation(d.drawing))
+      math::Paint(painter, *eq, d.rect.left, d.rect.bottom - eq->descent);
+    else if (drawing) drawing(painter, d);
     else Placeholder(painter, d.rect);
     for (const LineBox& lb : p.lines)
       if (lb.drawing == d.drawing) paintLine(lb);
@@ -537,6 +543,7 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
   for (const Fill& f : p.fills) painter.FillRect({f.rect.left, f.rect.top, f.rect.right, f.rect.bottom}, draw::Brush::Solid(ColorOf(f.color)));
   for (const LineBox& lb : p.lines)
     if (lb.drawing == doc::kNone) paintLine(lb);
+  for (const LineBox& lb : p.lineNumbers) paintLine(lb);
   for (const Edge& edge : p.edges) StrokeEdge(painter, edge);
   for (const DrawingBox& d : p.drawings)
     if (!d.behindText) drawOne(d);
@@ -703,12 +710,49 @@ std::wstring SubstituteFamily(const Document& doc, std::wstring_view family) {
   if (!f) return {};
   if (f->pitch == "fixed") return L"Courier New";
   // PANOSE: family kind 2 is Latin text; the second digit is the serif style (11-13 sans serif).
-  if (serifStyle >= 11 && serifStyle <= 13) return L"Arial";
+  // Word draws a missing sans-serif family in Calibri (corpus: EC Square Sans Pro, Open Sans
+  // Light, Marianne, Barcode 3 of 9), a serif one in Times New Roman.
+  if (serifStyle >= 11 && serifStyle <= 13) return L"Calibri";
   if (serifStyle >= 2 && serifStyle <= 10) return L"Times New Roman";
-  if (f->family == "swiss") return L"Arial";
+  if (f->family == "swiss") return L"Calibri";
   if (f->family == "roman") return L"Times New Roman";
   if (f->family == "modern") return L"Tahoma";
   return {};
+}
+
+std::vector<std::vector<uint8_t>> EmbeddedFonts(const Document& doc, std::vector<std::wstring>* names) {
+  constexpr size_t kMaxFonts = 64, kMaxBytes = 32u << 20;
+  std::vector<std::vector<uint8_t>> out;
+  const Part* table = doc.FindPart(PartKind::FontTable);
+  const pkg::RelationshipSet* rels = table ? doc.Package().RelationshipsOf(table->name) : nullptr;
+  if (!rels) return out;
+  size_t total = 0;
+  for (const FontInfo& f : doc.Fonts())
+    for (const FontInfo::Embedded* e : {&f.regular, &f.bold, &f.italic, &f.boldItalic}) {
+      if (e->relId.empty() || out.size() >= kMaxFonts) continue;
+      // The key: the GUID's 16 bytes, last first. It hides the font's first 32 bytes.
+      uint8_t key[16];
+      size_t digits = 0;
+      for (char c : e->fontKey) {
+        const int d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+        if (d < 0 || digits >= 32) continue;
+        const size_t byte = 15 - digits / 2;
+        key[byte] = static_cast<uint8_t>(digits % 2 ? (key[byte] | d) : d << 4);
+        ++digits;
+      }
+      const pkg::Relationship* rel = rels->Find(e->relId);
+      std::vector<uint8_t> bytes;
+      if (digits != 32 || !rel || rel->external || !doc.Package().ReadPart(rel->targetPart, bytes).Ok() ||
+          bytes.size() < 32 || bytes.size() > kMaxBytes - total)
+        continue;
+      for (size_t i = 0; i < 32; ++i) bytes[i] ^= key[i % 16];
+      // Only what reads as a font goes to DirectWrite.
+      if (!draw::sfnt::ReadInfo(draw::sfnt::FileTables(bytes))) continue;
+      total += bytes.size();
+      out.push_back(std::move(bytes));
+      if (names) names->push_back(Utf8ToWide(f.name));
+    }
+  return out;
 }
 
 // ---- The layout dump
@@ -722,6 +766,12 @@ LayoutDump Layout::Dump(std::string source) const {
     LayoutPage page;
     page.width = p.width;
     page.height = p.height;
+    const auto ZOf = [&](uint32_t drawing) {
+      for (const DrawingBox& d : p.drawings)
+        if (d.drawing == drawing) return d.z;
+      return int64_t{0};
+    };
+    std::vector<int64_t> zs;  // each line's text box's z-order
     for (const LineBox& lb : p.lines) {
       bool any = false;
       for (char16_t c : lb.text)
@@ -741,6 +791,26 @@ LayoutDump Layout::Dump(std::string source) const {
       for (const text::GlyphPiece& g : lb.line.pieces)
         if (!g.leader && !g.hyphen) size = std::max(size, g.emSize);
       line.size = size;
+      line.text.assign(lb.text.begin(), lb.text.end());
+      page.lines.push_back(std::move(line));
+      zs.push_back(lb.story == LineStory::TextBox ? ZOf(lb.drawing) : 0);
+    }
+    // Text boxes in the order Word draws and tags them, back to front (their z-order), not the
+    // order their anchors come in: each box's lines stay together and in order.
+    std::vector<size_t> boxes;
+    for (size_t i = 0; i < page.lines.size(); ++i)
+      if (page.lines[i].story == LayoutStory::TextBox) boxes.push_back(i);
+    std::vector<size_t> sorted = boxes;
+    std::stable_sort(sorted.begin(), sorted.end(), [&](size_t a, size_t b) { return zs[a] < zs[b]; });
+    std::vector<LayoutLine> lines = page.lines;
+    for (size_t k = 0; k < boxes.size(); ++k) page.lines[boxes[k]] = lines[sorted[k]];
+    for (const LineBox& lb : p.lineNumbers) {
+      LayoutLine line;
+      line.story = LayoutStory::LineNumber;
+      line.x = lb.x + lb.line.contentLeft;
+      line.baseline = lb.baseline;
+      line.width = lb.line.contentRight - lb.line.contentLeft;
+      for (const text::GlyphPiece& g : lb.line.pieces) line.size = std::max(line.size, static_cast<double>(g.emSize));
       line.text.assign(lb.text.begin(), lb.text.end());
       page.lines.push_back(std::move(line));
     }

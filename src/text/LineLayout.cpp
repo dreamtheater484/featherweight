@@ -107,6 +107,15 @@ bool IsEastAsianChar(wchar_t c) {
 
 // Punctuation and symbols both Latin and East Asian fonts have, which w:hint="eastAsia" sends to
 // the East Asian font.
+// Full-width punctuation with a blank half: after the mark (closing brackets, commas, full stops)
+// or before it (opening brackets).
+bool BlankAfter(wchar_t c) {
+  return std::wstring_view(L"\x3001\x3002\xFF0C\xFF0E\xFF09\x300D\x300F\x3011\x3015\x3009\x300B\xFF3D\xFF5D").find(c) != std::wstring_view::npos;
+}
+bool BlankBefore(wchar_t c) {
+  return std::wstring_view(L"\xFF08\x300C\x300E\x3010\x3014\x3008\x300A\xFF3B\xFF5B").find(c) != std::wstring_view::npos;
+}
+
 bool IsSharedPunctuation(wchar_t c) {
   return (c >= 0x00A1 && c <= 0x00BF) || c == 0x00D7 || c == 0x00F7 || (c >= 0x2010 && c <= 0x2BFF);
 }
@@ -284,6 +293,8 @@ struct LineBreaker::Impl {
 
   uint32_t Size() const { return static_cast<uint32_t>(text.size()); }
   const TextStyle& StyleOf(uint32_t i) const { return *styles[runOf[i]]; }
+  // The letter spacing after the character at i: at a line's end it doesn't take room (Word).
+  float SpacingAfter(uint32_t i) const { return kind[i] == kText ? StyleOf(i).letterSpacing : 0; }
   bool CanBreakBefore(uint32_t i) const;
   const RunFont& FontOfRun(uint32_t run);
   void Shape(uint32_t start, uint32_t end, uint32_t run, Slot slot, const DWRITE_SCRIPT_ANALYSIS& script,
@@ -332,6 +343,9 @@ LineBreaker::Impl::Impl(Fonts& f, const Paragraph& para, float columnWidth)
   for (uint32_t i = 0; i < n; ++i) {
     text[i] = p.text[orig[i]];
     kind[i] = KindOf(text[i]);
+    const wchar_t c = text[i];
+    if (p.format.hangPunctuation && (c == 0x3001 || c == 0x3002 || c == 0xFF0C || c == 0xFF0E || c == 0xFF61 || c == 0xFF64))
+      kind[i] = kHang;
   }
 
   // What gets shaped: capitals, and look-alikes the font is more likely to have.
@@ -404,6 +418,9 @@ LineBreaker::Impl::Impl(Fonts& f, const Paragraph& para, float columnWidth)
       auto iso = static_cast<uint16_t>(props.isoScriptNumber);
       auto slotOf = [&](uint32_t i) {
         const TextStyle& s = StyleOf(i);
+        // A symbol font's characters (U+F000..U+F0FF, a bullet in Symbol or Wingdings) are in the
+        // run's own font, also in right-to-left text, as Word draws them.
+        if (text[i] >= 0xF000 && text[i] <= 0xF0FF) return kLatin;
         if (s.rightToLeft || s.complexScript || IsComplexScript(iso)) return kComplex;
         if (IsEastAsianScript(iso) || IsEastAsianChar(text[i])) return kEastAsia;
         if (s.eastAsiaHint && IsSharedPunctuation(text[i])) return kEastAsia;
@@ -445,8 +462,7 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
                               IDWriteNumberSubstitution* numbers) {
   const TextStyle& style = *styles[run];
   SlotFont sf = ForSlot(style, slot);
-  const std::wstring& family = fonts.Resolve(*sf.family);
-  const Face* base = fonts.Get(family, sf.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL, sf.italic);
+  const Face* base = fonts.FaceFor(*sf.family, sf.bold, sf.italic);
   if (!base) base = fonts.Get(fonts.Resolve(L""), DWRITE_FONT_WEIGHT_NORMAL, false);
   if (!base) return;
 
@@ -598,6 +614,13 @@ void LineBreaker::Impl::ShapePiece(Segment& seg, const DWRITE_SCRIPT_ANALYSIS& s
       seg.advances[g1 - 1] += spacing;
       sum += spacing;
     }
+    // Punctuation compression: a blank half between two marks in a row goes (half an em).
+    if (p.format.compressPunctuation && g1 > g0 && i + 1 < text.size() && (BlankAfter(text[i]) || BlankBefore(text[i + 1])) &&
+        (BlankAfter(text[i + 1]) || BlankBefore(text[i + 1])) && (BlankAfter(text[i]) || BlankBefore(text[i]))) {
+      const float half = seg.emSize * seg.scale / 2;
+      seg.advances[g1 - 1] -= half;
+      sum -= half;
+    }
     adv[i] = sum;
   }
 }
@@ -627,8 +650,7 @@ const RunFont& LineBreaker::Impl::FontOfRun(uint32_t run) {
   if (rf.made) return rf;
   rf.made = true;
   const TextStyle& s = *styles[run];
-  const std::wstring& family = fonts.Resolve(s.family);
-  rf.face = fonts.Get(family, s.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL, s.italic);
+  rf.face = fonts.FaceFor(s.family, s.bold, s.italic);
   rf.size = s.size;
   rf.rise = s.baselineShift;
   if (rf.face) {
@@ -755,7 +777,7 @@ Fit LineBreaker::Impl::FindBreak(uint32_t a, float s0, float s1, bool first) {
     const float w = adv[i];
     if (tab.active && tab.align == TabAlign::Decimal && beforeDecimal < 0 && text[i] == p.format.decimalSeparator)
       beforeDecimal = content;
-    if (placed && w > 0 && end(content + w) > limit + kEpsilon) {
+    if (placed && w > 0 && end(content + w) > limit + kEpsilon && end(content + w - SpacingAfter(i)) > limit + kEpsilon) {
       // The cluster at i doesn't fit. The word it's in: from the last break to the next one.
       uint32_t ws = lastBreak ? lastBreak : a;
       uint32_t we = i + 1;
@@ -778,7 +800,7 @@ Fit LineBreaker::Impl::FindBreak(uint32_t a, float s0, float s1, bool first) {
       lastBreak = i + 1;
       lastHyphen = false;
       lastContent = content;
-      lastEnd = end(content);
+      lastEnd = end(content - SpacingAfter(i));
     }
   }
   return {n, LineEnd::ParagraphEnd, false};
@@ -814,7 +836,7 @@ uint32_t LineBreaker::Impl::Squeeze(uint32_t segFrom, uint32_t i, uint32_t we, f
   uint32_t e = we;
   while (e < n && Hangs(kind[e])) ++e;
   if (e >= n || Mandatory(kind[e])) return 0;
-  float c = content;
+  float c = content - (we > i ? SpacingAfter(we - 1) : 0);
   for (uint32_t k = i; k < we; ++k) c += adv[k];
   return Squeezes(segFrom, we, SegmentStart(tab, c, beforeDecimal) + c - limit, limit, lastEnd) ? e : 0;
 }
@@ -846,6 +868,7 @@ uint32_t LineBreaker::Impl::Hyphenate(uint32_t segFrom, uint32_t ws, uint32_t we
     for (uint32_t k = cs; k < ce; ++k)
       if (CharType(text[k]) & C1_LOWER) lower = true;
     const Hyphenator* hyphenator = ce - cs >= 4 && (h.caps || lower) ? Hyphenator::For(StyleOf(cs).language) : nullptr;
+    if (hyphenator && h.likeWord && !Hyphenator::WordHyphenates(StyleOf(cs).language)) hyphenator = nullptr;
     if (hyphenator) {
       for (uint32_t point : hyphenator->Points(std::wstring_view(text).substr(cs, ce - cs)))
         if (clusterStart[cs + point]) points.push_back(cs + point);
@@ -875,8 +898,7 @@ static void CombineMetrics(Line& line, float ascent, float descent, float gap) {
 
 void LineBreaker::Impl::MarkMetrics(Line& line) {
   const TextStyle* mark = p.markStyle ? p.markStyle : (styles.empty() ? &DefaultStyle() : styles.back());
-  const Face* face = fonts.Get(fonts.Resolve(mark->family), mark->bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
-                               mark->italic);
+  const Face* face = fonts.FaceFor(mark->family, mark->bold, mark->italic);
   if (!face) return;
   FontMetrics m = face->Metrics(mark->size);
   CombineMetrics(line, m.ascent, m.descent, m.lineGap);
@@ -1106,7 +1128,11 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
       uint32_t g0 = sg.GlyphAt(it.from), g1 = sg.GlyphAt(it.to);
       piece.glyphs.assign(sg.glyphs.begin() + g0, sg.glyphs.begin() + g1);
       piece.advances.assign(sg.advances.begin() + g0, sg.advances.begin() + g1);
-      piece.offsets.assign(sg.offsets.begin() + g0, sg.offsets.begin() + g1);
+      // Offsets only where a glyph has one (marks, some scripts): most lines have none, and they'd
+      // take a third of a line's memory (H4).
+      if (std::any_of(sg.offsets.begin() + g0, sg.offsets.begin() + g1,
+                      [](const DWRITE_GLYPH_OFFSET& o) { return o.advanceOffset != 0 || o.ascenderOffset != 0; }))
+        piece.offsets.assign(sg.offsets.begin() + g0, sg.offsets.begin() + g1);
       // Justification goes after each character's cluster, and carets follow the advances.
       float along = 0;
       for (uint32_t c = it.from; c < it.to;) {
@@ -1148,7 +1174,6 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
         piece.hyphen = true;
         piece.glyphs = {glyph};
         piece.advances = {it.width};
-        piece.offsets = {DWRITE_GLYPH_OFFSET{}};
         FontMetrics m = face->Metrics(piece.emSize);
         useMetrics(m.ascent + rise, m.descent - rise, m.lineGap);
         line.pieces.push_back(std::move(piece));
@@ -1188,7 +1213,6 @@ Line LineBreaker::Impl::Build(uint32_t a, const Fit& fit, float s0, float s1, bo
           piece.leader = true;
           piece.glyphs.assign(count, glyph);
           piece.advances.assign(count, a1);
-          piece.offsets.assign(count, DWRITE_GLYPH_OFFSET{});
           line.pieces.push_back(std::move(piece));
         }
       }
@@ -1303,7 +1327,7 @@ draw::GlyphRun GlyphPiece::Run() const {
   r.count = static_cast<uint32_t>(glyphs.size());
   r.indices = glyphs.data();
   r.advances = advances.data();
-  r.offsets = offsets.data();
+  r.offsets = offsets.empty() ? nullptr : offsets.data();
   r.bidiLevel = bidiLevel;
   return r;
 }

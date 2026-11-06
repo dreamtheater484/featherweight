@@ -42,14 +42,8 @@ D2D1_MATRIX_5X4_F InvertMatrix() {
 
 }  // namespace
 
-PdfView::PdfView(PdfHost& host, std::wstring path) : PagedView(host), pdfHost_(host), path_(std::move(path)) {
-  pwBox_.password = true;
-  pwBox_.placeholder = L"Password";
-  pwBox_.onEnter = [this](bool) { SubmitPassword(); };
-  pwOpen_.id = 1;
-  pwOpen_.text = L"Open";
-  pwOpen_.style = ButtonStyle::Primary;
-  pwButtons_.Add(&pwOpen_);
+PdfView::PdfView(PdfHost& host, std::wstring path)
+    : PagedView(host), pdfHost_(host), path_(std::move(path)), pw_(host, [this](const std::wstring& p) { SubmitPassword(p); }) {
   selHighlight_.id = 1;
   selHighlight_.glyph = icon::Highlight;
   selHighlight_.text = L"Highlight";
@@ -92,18 +86,16 @@ OpenResult PdfView::Load(const std::wstring& password, std::wstring& error) {
   return r;
 }
 
-void PdfView::SubmitPassword() {
+void PdfView::SubmitPassword(const std::wstring& password) {
   std::wstring err;
-  OpenResult r = Load(pwBox_.Text(), err);
+  OpenResult r = Load(password, err);
   if (r == OpenResult::Ok) {
-    pwBox_.SetText(L"");
+    pw_.Accepted();
     host_.ViewPasswordAccepted(this);
   } else if (r == OpenResult::WrongPassword || r == OpenResult::NeedPassword) {
-    pwError_ = L"That password isn’t right. Try again.";
-    pwBox_.SelectAll();
-    pwBox_.ShakeError();
+    pw_.Wrong();
   } else {
-    pwError_ = err;
+    pw_.Failed(err);
   }
   host_.ViewInvalidate();
 }
@@ -218,7 +210,7 @@ void PdfView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   c.Fill(vpr, bg);
 
   if (state_ == LoadState::NeedPassword) {
-    DrawPasswordCard(c);
+    pw_.Draw(c, vp_, ui_, Title());
     c.PopClip();
     return;
   }
@@ -362,37 +354,6 @@ void PdfView::DrawOverlays(Canvas& c, int first, int last) {
   }
 }
 
-void PdfView::DrawPasswordCard(Canvas& c) {
-  const Palette& p = theme::P();
-  const float u = ui_;
-  const float w = 360 * u, h = (pwError_.empty() ? 196 : 222) * u;
-  float x = std::round((vp_.left + vp_.right) / 2.0f - w / 2), y = std::round((vp_.top + vp_.bottom) / 2.0f - h / 2 - 20 * u);
-  D2D1_RECT_F card = RectF(x, y, x + w, y + h);
-  c.SoftShadow(card, 8 * u, 16 * u, p.popupShadow, 4 * u);
-  c.FillRound(card, 8 * u, p.popupBg);
-  c.StrokeRound(card, 8 * u, p.popupBorder, 1);
-
-  float cy = y + 24 * u;
-  c.FillEllipse(x + w / 2, cy + 18 * u, 22 * u, 22 * u, Alpha(p.accent, 0.14f));
-  c.Icon(icon::Lock, RectF(x, cy, x + w, cy + 36 * u), p.accentText, 18 * u);
-  cy += 50 * u;
-  std::wstring title = L"“" + Title() + L"” is protected";
-  c.Text(title, RectF(x + 20 * u, cy, x + w - 20 * u, cy + 22 * u), p.text, 15 * u, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-         Align::Center);
-  cy += 24 * u;
-  c.Text(L"Enter the password to open it.", RectF(x + 20 * u, cy, x + w - 20 * u, cy + 20 * u), p.textSecondary,
-         13 * u, DWRITE_FONT_WEIGHT_REGULAR, Align::Center);
-  cy += 32 * u;
-  pwBox_.rc = RectF(x + 24 * u, cy, x + w - 24 * u - 88 * u, cy + 32 * u);
-  pwOpen_.rc = RectF(pwBox_.rc.right + 8 * u, cy, x + w - 24 * u, cy + 32 * u);
-  pwBox_.Draw(c, u, pwBox_.focused && static_cast<int>(anim::Now() / 530) % 2 == 0);
-  DrawButton(c, pwOpen_, u);
-  if (!pwError_.empty()) {
-    cy += 40 * u;
-    c.Text(pwError_, RectF(x + 24 * u, cy, x + w - 24 * u, cy + 20 * u), p.error, 12.5f * u);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Background work
 
@@ -447,14 +408,7 @@ void PdfView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
   mouseX_ = x;
   mouseY_ = y;
   if (state_ == LoadState::NeedPassword) {
-    if (gfx::Contains(pwBox_.rc, (float)x, (float)y)) {
-      host_.ViewFocusTextBox(&pwBox_);
-      if (doubleClick) pwBox_.OnDoubleClick();
-      else pwBox_.OnMouseDown((float)x, (float)y, (mods & kModShift) != 0, ui_);
-    } else {
-      pwButtons_.OnMouseDown((float)x, (float)y);
-    }
-    host_.ViewInvalidate();
+    pw_.OnMouseDown(x, y, mods, doubleClick, ui_);
     return;
   }
   if (!Ready()) return;
@@ -571,9 +525,7 @@ void PdfView::OnMouseMove(int x, int y, UINT mods) {
   mouseX_ = x;
   mouseY_ = y;
   if (state_ == LoadState::NeedPassword) {
-    if (GetKeyState(VK_LBUTTON) < 0 && pwBox_.focused && gfx::Contains(Inflate(pwBox_.rc, 200, 50), (float)x, (float)y))
-      pwBox_.OnMouseDrag((float)x, (float)y, ui_);
-    if (pwButtons_.OnMouseMove((float)x, (float)y)) host_.ViewInvalidate();
+    pw_.OnMouseMove(x, y, ui_);
     return;
   }
   if (!Ready()) return;
@@ -644,8 +596,7 @@ void PdfView::OnMouseMove(int x, int y, UINT mods) {
 
 void PdfView::OnMouseUp(int x, int y, int button, UINT mods) {
   if (state_ == LoadState::NeedPassword) {
-    if (pwButtons_.OnMouseUp((float)x, (float)y) == 1) SubmitPassword();
-    host_.ViewInvalidate();
+    pw_.OnMouseUp(x, y);
     return;
   }
   if (!Ready()) return;
@@ -689,14 +640,14 @@ void PdfView::OnMouseLeave() {
   markerHover_ = -1;
   selButtons_.OnMouseLeave();
   ScrollbarMouseLeave();
-  if (state_ == LoadState::NeedPassword) pwButtons_.OnMouseLeave();
+  if (state_ == LoadState::NeedPassword) pw_.OnMouseLeave();
   host_.ViewInvalidate();
 }
 
 HCURSOR PdfView::CursorAt(int x, int y) {
   static HCURSOR arrow = LoadCursor(nullptr, IDC_ARROW), ibeam = LoadCursor(nullptr, IDC_IBEAM),
                  hand = LoadCursor(nullptr, IDC_HAND), move = LoadCursor(nullptr, IDC_SIZEALL);
-  if (state_ == LoadState::NeedPassword) return gfx::Contains(pwBox_.rc, (float)x, (float)y) ? ibeam : arrow;
+  if (state_ == LoadState::NeedPassword) return pw_.CursorAt(x, y);
   if (!Ready()) return arrow;
   if (drag_ == Drag::Pan) return move;
   if (drag_ == Drag::Select) return ibeam;
@@ -1551,8 +1502,7 @@ void PdfView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
 
 void PdfView::DescribeUia(uia::Tree& t, int parent) {
   if (state_ == LoadState::NeedPassword) {
-    uia::AddTextBox(t, parent, 1, pwBox_, L"Password", [this] { host_.ViewFocusTextBox(&pwBox_); });
-    uia::AddButton(t, parent, 2, pwOpen_, [this] { SubmitPassword(); });
+    pw_.DescribeUia(t, parent);
     return;
   }
   if (selBar_ && !selection_.Empty() && drag_ != Drag::Select) {

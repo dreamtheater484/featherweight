@@ -5,13 +5,13 @@ set(FW_FUZZ_ENGINE "libfuzzer" CACHE STRING "Fuzz engine: libfuzzer or replay")
 set_property(CACHE FW_FUZZ_ENGINE PROPERTY STRINGS libfuzzer replay)
 
 set(_fw_fuzz_targets fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing fuzz_layout fuzz_picture fuzz_rtf
-  fuzz_html fuzz_clip fuzz_shapes fuzz_sfnt)
+  fuzz_html fuzz_clip fuzz_shapes fuzz_sfnt fuzz_cfb fuzz_chart fuzz_doc fuzz_odt)
 if(FW_FUZZ_ENGINE STREQUAL "libfuzzer")
   # VS 2022 understands /fsanitize=fuzzer. VS 2019 16.9+ ignores it but has the pieces:
   # the coverage flags, and the libFuzzer and sancov runtimes, linked by hand.
   set(_fw_instrument /fsanitize=address /fsanitize-coverage=inline-8bit-counters /fsanitize-coverage=edge
     /fsanitize-coverage=trace-cmp /fsanitize-coverage=trace-div)
-  foreach(lib fwcore fwpkg fwdoc fwdraw fwtext fwdoclayout fwpictures miniz pugixml)
+  foreach(lib fwcore fwpkg fwdoc fwdraw fwchart fwtext fwdoclayout fwpictures miniz pugixml)
     target_compile_options(${lib} PRIVATE ${_fw_instrument})
   endforeach()
 endif()
@@ -33,7 +33,7 @@ foreach(target ${_fw_fuzz_targets})
   target_compile_options(${target} PRIVATE ${FW_COMPILE_OPTIONS})
 endforeach()
 target_link_libraries(fuzz_docx PRIVATE fwdoc)
-foreach(target fuzz_rtf fuzz_html fuzz_clip)
+foreach(target fuzz_rtf fuzz_html fuzz_clip fuzz_doc fuzz_odt)
   target_link_libraries(${target} PRIVATE fwdoc)
 endforeach()
 target_link_libraries(fuzz_drawing PRIVATE fwdraw)
@@ -41,6 +41,7 @@ target_link_libraries(fuzz_sfnt PRIVATE fwdraw)
 target_link_libraries(fuzz_layout PRIVATE fwdoclayout)
 target_link_libraries(fuzz_picture PRIVATE fwpictures)
 target_link_libraries(fuzz_shapes PRIVATE fwpictures)
+target_link_libraries(fuzz_chart PRIVATE fwchart)
 
 # Replay the seeds and the regression files once (libFuzzer: -runs=0 runs the inputs, no fuzzing).
 # run-fuzzers.ps1 lists the same seed folders for the timed runs.
@@ -61,7 +62,11 @@ add_test(NAME fuzz_html_replay COMMAND fuzz_html ${_fw_runs} "${CMAKE_SOURCE_DIR
 add_test(NAME fuzz_clip_replay COMMAND fuzz_clip ${_fw_runs} "${_fw_seeds}/docx" "${_fw_seeds}/package" "${_fw_regressions}/clip")
 add_test(NAME fuzz_shapes_replay COMMAND fuzz_shapes ${_fw_runs} "${_fw_seeds}/shapes" "${_fw_seeds}/docx" "${_fw_seeds}/package"
   "${_fw_regressions}/shapes")
+add_test(NAME fuzz_cfb_replay COMMAND fuzz_cfb ${_fw_runs} "${_fw_seeds}/cfb" "${_fw_regressions}/cfb")
+add_test(NAME fuzz_doc_replay COMMAND fuzz_doc ${_fw_runs} "${_fw_seeds}/doc" "${_fw_regressions}/doc")
 add_test(NAME fuzz_sfnt_replay COMMAND fuzz_sfnt ${_fw_runs} "${_fw_seeds}/font" "${_fw_regressions}/sfnt")
+add_test(NAME fuzz_chart_replay COMMAND fuzz_chart ${_fw_runs} "${_fw_seeds}/chart" "${_fw_regressions}/chart")
+add_test(NAME fuzz_odt_replay COMMAND fuzz_odt ${_fw_runs} "${_fw_seeds}/odt" "${_fw_regressions}/odt")
 
 # Every fuzz target, so CI builds new ones without its own list.
 add_custom_target(fuzz_all DEPENDS ${_fw_fuzz_targets})

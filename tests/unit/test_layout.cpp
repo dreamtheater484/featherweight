@@ -7,7 +7,9 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <random>
 #include <string>
@@ -58,7 +60,7 @@ fw::text::Fonts& Fonts() {
 }
 
 Doc Make(const std::string& body, const std::string& settings = "", const std::string& footnotes = "", bool all = true,
-         const std::string& fonts = "", const std::string& header = "") {
+         const std::string& fonts = "", const std::string& header = "", const std::string& numbering = "") {
   const std::string wml = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
   const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
   const std::string head = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>";
@@ -83,6 +85,11 @@ Doc Make(const std::string& body, const std::string& settings = "", const std::s
     types += "<Override PartName=\"/word/header1.xml\" ContentType=\"" + wml + "header+xml\"/>";
     rels += "<Relationship Id=\"rIdH\" Type=\"" + rel + "header\" Target=\"header1.xml\"/>";
     entries.push_back({"word/header1.xml", head + "<w:hdr " + kW + ">" + header + "</w:hdr>"});
+  }
+  if (!numbering.empty()) {
+    types += "<Override PartName=\"/word/numbering.xml\" ContentType=\"" + wml + "numbering+xml\"/>";
+    rels += "<Relationship Id=\"rIdN\" Type=\"" + rel + "numbering\" Target=\"numbering.xml\"/>";
+    entries.push_back({"word/numbering.xml", head + "<w:numbering " + kW + ">" + numbering + "</w:numbering>"});
   }
   if (!footnotes.empty()) {
     types += "<Override PartName=\"/word/footnotes.xml\" ContentType=\"" + wml + "footnotes+xml\"/>";
@@ -236,6 +243,110 @@ TEST(Layout_PageAndSectionBreaks) {
   CHECK(d.pages() == 3 && d.page(2).width > d.page(2).height);  // the landscape section
 }
 
+TEST(Layout_PageBreakKeepsItsParagraphMark) {
+  // A paragraph holding only a page break: its mark stays on the break's line, so what follows
+  // starts the next page at its top (its space before dropped), in mode 14 too; with
+  // w:splitPgBreakAndParaMark the mark takes a line of its own on the next page.
+  const std::string body = P("one") + "<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>" +
+                           P("two", "<w:spacing w:before=\"480\"/>");
+  const std::string mode14 = "<w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" w:val=\"14\"/>";
+  Doc kept = Make(body, mode14 + "</w:compat>");
+  Doc split = Make(body, mode14 + "<w:splitPgBreakAndParaMark/></w:compat>");
+  REQUIRE(kept.layout && split.layout);
+  size_t pk = 9, ps = 9;
+  const LineBox *k = Find(kept, u"two", &pk), *s = Find(split, u"two", &ps);
+  REQUIRE(k && s);
+  CHECK(pk == 1u && ps == 1u);
+  CHECK(s->top > k->top + 10);  // below the mark's own line and the space before
+}
+
+TEST(Layout_AnEmptyNumberHasNoTabInMode15) {
+  // A list level that shows no number (as govuk-the-short-form-contract's defined terms): Word
+  // 2013 and later put no tab after it, older modes do.
+  const std::string numbering =
+      "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"none\"/>"
+      "<w:lvlText w:val=\"\"/><w:pPr><w:ind w:left=\"0\" w:firstLine=\"0\"/></w:pPr></w:lvl></w:abstractNum>"
+      "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+  const std::string body = P("Term", "<w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr>");
+  auto mode = [](int m) {
+    return "<w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" "
+           "w:val=\"" + std::to_string(m) + "\"/></w:compat>";
+  };
+  Doc now = Make(body, mode(15), "", true, "", "", numbering);
+  Doc old = Make(body, mode(11), "", true, "", "", numbering);
+  REQUIRE(now.layout && old.layout);
+  const LineBox *a = Find(now, u"Term"), *b = Find(old, u"Term");
+  REQUIRE(a && b);
+  CHECK(a->text.front() == u'T');
+  CHECK(b->text.front() == u'\t');
+}
+
+TEST(Layout_PageBreakBeforeDropsTheSpaceBefore) {
+  // A paragraph with w:pageBreakBefore starts its page at the top, without its space before, as
+  // after a page break character (tudresden, bund-bsi); after a section break the space stays.
+  Doc d = Make(P("one") + P("two", "<w:pageBreakBefore/><w:spacing w:before=\"480\"/>") +
+               "<w:p><w:pPr>" + SmallPage() + "</w:pPr></w:p>" + P("three", "<w:spacing w:before=\"480\"/>") + SmallPage());
+  REQUIRE(d.layout);
+  size_t p2 = 9, p3 = 9;
+  const LineBox *one = Find(d, u"one"), *two = Find(d, u"two", &p2), *three = Find(d, u"three", &p3);
+  REQUIRE(one && two && three);
+  CHECK(p2 == 1u && p3 == 2u);
+  CHECK_NEAR(two->top, one->top, 0.05f);
+  CHECK_NEAR(three->top, one->top + 24.0f, 0.05f);
+}
+
+TEST(Layout_NoAutomaticSpacingWithoutHTMLSpacing) {
+  // A has 5 pt after and automatic spacing after, B 6 pt before. HTML spacing: the larger of
+  // 14 and 6; with w:doNotUseHTMLParagraphAutoSpacing Word ignores the automatic spacing: 5 + 6.
+  const std::string body = P("A", "<w:spacing w:after=\"100\" w:afterAutospacing=\"1\"/>") + P("B", "<w:spacing w:before=\"120\"/>");
+  Doc html = Make(body);
+  Doc sum = Make(body, "<w:compat><w:doNotUseHTMLParagraphAutoSpacing/></w:compat>");
+  REQUIRE(html.layout && sum.layout);
+  const LineBox *a = Find(html, u"A"), *b = Find(html, u"B");
+  const LineBox *a2 = Find(sum, u"A"), *b2 = Find(sum, u"B");
+  REQUIRE(a && b && a2 && b2);
+  CHECK_NEAR(b->top - (a->top + a->height), 14.0f, 0.05f);
+  CHECK_NEAR(b2->top - (a2->top + a2->height), 11.0f, 0.05f);
+}
+
+TEST(Layout_AColumnBreakNeedNotFitItsColumn) {
+  // Column one full to the last line, then a paragraph that starts with a column break: the
+  // break's empty line stays in column one, and the text after it starts column two.
+  const std::string cols = "<w:cols w:num=\"2\" w:space=\"200\"/>";
+  std::string probeBody;
+  for (int i = 0; i < 40; ++i) probeBody += P("f" + std::to_string(i));
+  Doc probe = Make(probeBody + SmallPage(cols));
+  REQUIRE(probe.layout);
+  size_t perColumn = 0;
+  for (const LineBox& l : probe.page(0).lines)
+    if (l.story == fw::LayoutStory::Body && l.x < 90) ++perColumn;
+  REQUIRE(perColumn > 2);
+  std::string body;
+  for (size_t i = 0; i < perColumn; ++i) body += P("f" + std::to_string(i));
+  body += "<w:p><w:r><w:br w:type=\"column\"/></w:r><w:r><w:t>Right</w:t></w:r></w:p>";
+  Doc d = Make(body + SmallPage(cols));
+  REQUIRE(d.layout);
+  size_t page = 9;
+  const LineBox* right = Find(d, u"Right", &page);
+  REQUIRE(right);
+  CHECK_EQ(page, 0u);
+  CHECK(right->x > 90);
+}
+
+TEST(Layout_ASplitRowGoesOnAtItsNextLine) {
+  // One cell of paragraphs with 12 pt before each, taller than a page: on the next page the cell
+  // goes on at the top of its next line, without the space before (worldbank-guidance).
+  std::string cell;
+  for (int i = 0; i < 20; ++i) cell += P("para " + std::to_string(i), "<w:spacing w:before=\"240\" w:after=\"0\"/>");
+  Doc d = Make("<w:tbl><w:tblGrid><w:gridCol w:w=\"3000\"/></w:tblGrid><w:tr><w:tc>" + cell + "</w:tc></w:tr></w:tbl>" + P("") +
+               SmallPage());
+  REQUIRE(d.layout && d.pages() > 1);
+  float top = 1e9f;
+  for (const LineBox& l : d.page(1).lines)
+    if (l.story == fw::LayoutStory::Cell) top = std::min(top, l.top);
+  CHECK_NEAR(top, 20.0f, 0.05f);
+}
+
 TEST(Layout_SpacingBetweenParagraphsIsTheLarger) {
   const std::string body = P("A", "<w:spacing w:after=\"240\"/>") + P("B", "<w:spacing w:before=\"480\"/>");
   Doc html = Make(body);
@@ -246,6 +357,15 @@ TEST(Layout_SpacingBetweenParagraphsIsTheLarger) {
   REQUIRE(a && b && a2 && b2);
   CHECK_NEAR(b->top - (a->top + a->height), 24.0f, 0.05f);    // max(12, 24)
   CHECK_NEAR(b2->top - (a2->top + a2->height), 36.0f, 0.05f);  // 12 + 24
+}
+
+TEST(Layout_ContextualSpaceAfterComesOutOfTheNextSpaceBefore) {
+  // A has 8 pt after and contextual spacing; B (same style) has 24 pt before: Word leaves 16 pt.
+  Doc d = Make(P("A", "<w:spacing w:after=\"160\"/><w:contextualSpacing/>") + P("B", "<w:spacing w:before=\"480\"/>"));
+  REQUIRE(d.layout);
+  const LineBox *a = Find(d, u"A"), *b = Find(d, u"B");
+  REQUIRE(a && b);
+  CHECK_NEAR(b->top - (a->top + a->height), 16.0f, 0.05f);
 }
 
 TEST(Layout_KeepWithNextAndWidowControl) {
@@ -347,6 +467,40 @@ TEST(Layout_WhatWordLeavesOut) {
   CHECK(!Find(d, u"deleted"));
   CHECK_NEAR(kept->top, after->top + after->height, 0.5f);
   CHECK_NEAR(next->top, kept->top + kept->height, 0.5f);
+}
+
+TEST(Layout_DeletedMarkJoinsTheNextParagraph) {
+  // Word's final view runs a paragraph whose mark is deleted on into the next, in the next's
+  // formatting: one line "Start end", the caret at the next paragraph's start after "Start ". All
+  // Markup and Original keep the two apart. The document isn't changed.
+  const std::string body =
+      "<w:p><w:pPr><w:rPr><w:del w:id=\"1\" w:author=\"a\"/></w:rPr></w:pPr><w:r><w:t xml:space=\"preserve\">Start </w:t></w:r></w:p>"
+      "<w:p><w:pPr><w:jc w:val=\"right\"/></w:pPr><w:r><w:t>end</w:t></w:r></w:p>" + P("last") + SmallPage();
+  Doc d = Make(body);
+  REQUIRE(d.layout);
+  const std::vector<uint32_t> paras = d.doc->StoryParagraphs(d.doc->MainStory());
+  REQUIRE(paras.size() >= 3u);
+  const LineBox* joined = Find(d, u"Start end");
+  REQUIRE(joined);
+  CHECK_EQ(joined->para, paras[1]);
+  const LineBox* last = Find(d, u"last");
+  REQUIRE(last);
+  const auto start = d.layout->CaretAt({paras[1], 0}), end = d.layout->CaretAt({paras[1], 3});
+  const auto left = d.layout->CaretAt({paras[2], 0});
+  REQUIRE(start && end && left);
+  CHECK(end->x > start->x + 5);
+  CHECK(start->x > left->x + 60);  // after "Start ", right-aligned as the second paragraph says
+  CHECK_EQ(d.doc->Para(paras[0]).text, std::u16string(u"Start "));
+  for (bool original : {false, true}) {
+    fw::doc::layout::Options o;
+    o.showDeletions = true;
+    o.hideInsertions = original;
+    Layout l(*d.doc, Fonts(), o);
+    l.LayOutAll();
+    int lines = 0;
+    for (const LineBox& lb : l.GetPage(0).lines) lines += lb.para == paras[0] || lb.para == paras[1];
+    CHECK_EQ(lines, 2);
+  }
 }
 
 TEST(Layout_MarkupViews) {
@@ -522,6 +676,88 @@ TEST(Layout_EastAsianFontsGetEastAsianStandIns) {
   CHECK(in(SubstituteFamily(*d.doc, L"\xBC14\xD0D5"), {L"Batang", L"Malgun Gothic"}));  // not in the table
   CHECK(in(SubstituteFamily(*d.doc, L"Unknown Song"), {L"SimSun", L"Microsoft YaHei"}));
   CHECK(SubstituteFamily(*d.doc, L"Unknown Typewriter") == L"Courier New");
+}
+
+TEST(Layout_FontsTheDocumentCarries) {
+  // A font the PC lacks, embedded and obfuscated as Word does (ECMA-376 §17.8.1): Arial renamed
+  // "Brial" in its name table (same length, so the tables stay whole).
+  wchar_t dir[MAX_PATH] = {};
+  GetWindowsDirectoryW(dir, MAX_PATH);
+  std::ifstream in(std::wstring(dir) + L"\\Fonts\\arial.ttf", std::ios::binary);
+  std::vector<uint8_t> font((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  if (font.size() < 1000) return;  // no Arial on this PC
+  const auto u32 = [&](size_t at) { return uint32_t(font[at]) << 24 | uint32_t(font[at + 1]) << 16 | font[at + 2] << 8 | font[at + 3]; };
+  for (size_t t = 0, n = size_t(font[4]) << 8 | font[5]; t < n; ++t) {
+    const size_t entry = 12 + 16 * t;
+    if (u32(entry) != ('n' << 24 | 'a' << 16 | 'm' << 8 | 'e')) continue;
+    const size_t start = u32(entry + 8), end = start + u32(entry + 12);
+    for (size_t i = start; i + 10 <= end && end <= font.size(); ++i) {
+      if (font[i] == 'A' && font[i + 1] == 'r' && font[i + 2] == 'i' && font[i + 3] == 'a' && font[i + 4] == 'l') font[i] = 'B';
+      if (font[i] == 0 && font[i + 1] == 'A' && font[i + 3] == 'r' && font[i + 5] == 'i' && font[i + 9] == 'l') font[i + 1] = 'B';
+    }
+  }
+  const uint8_t key[16] = {0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01, 0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01};
+  std::string hidden(font.begin(), font.end());
+  for (size_t i = 0; i < 32; ++i) hidden[i] = static_cast<char>(font[i] ^ key[i % 16]);
+  const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+  const std::string rels = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">";
+  fw::pkg::Status st;
+  auto pkg = test::OpenBytes(
+      test::MakeZip({
+          {"[Content_Types].xml",
+           "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" "
+           "ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" "
+           "ContentType=\"application/xml\"/><Default Extension=\"odttf\" "
+           "ContentType=\"application/vnd.openxmlformats-officedocument.obfuscatedFont\"/><Override PartName=\"/word/"
+           "document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>"
+           "<Override PartName=\"/word/fontTable.xml\" ContentType=\"application/vnd.openxmlformats-officedocument."
+           "wordprocessingml.fontTable+xml\"/></Types>"},
+          {"_rels/.rels", rels + "<Relationship Id=\"rId1\" Type=\"" + rel + "officeDocument\" Target=\"word/document.xml\"/></Relationships>"},
+          {"word/document.xml", std::string("<w:document ") + kW + "><w:body><w:p><w:r><w:rPr><w:rFonts w:ascii=\"Brial\" "
+                                "w:hAnsi=\"Brial\"/></w:rPr><w:t>Text</w:t></w:r></w:p></w:body></w:document>"},
+          {"word/_rels/document.xml.rels", rels + "<Relationship Id=\"rId1\" Type=\"" + rel + "fontTable\" Target=\"fontTable.xml\"/></Relationships>"},
+          {"word/fontTable.xml", std::string("<w:fonts ") + kW + " " + kR + "><w:font w:name=\"Brial\"><w:embedRegular r:id=\"rId1\" "
+                                 "w:fontKey=\"{01234567-89AB-CDEF-0123-456789ABCDEF}\"/></w:font></w:fonts>"},
+          {"word/_rels/fontTable.xml.rels", rels + "<Relationship Id=\"rId1\" Type=\"" + rel + "font\" Target=\"fonts/font1.odttf\"/></Relationships>"},
+          {"word/fonts/font1.odttf", hidden},
+      }),
+      st);
+  REQUIRE(pkg != nullptr);
+  auto doc = docx::Read(std::move(pkg), st);
+  REQUIRE(doc != nullptr);
+  const std::vector<std::vector<uint8_t>> files = fw::doc::layout::EmbeddedFonts(*doc);
+  REQUIRE(files.size() == 1u);
+  CHECK(files[0] == font);
+  // Used for that document's text, and gone again without it.
+  fw::text::Fonts fonts;
+  CHECK(!fonts.Installed(L"Brial"));
+  fonts.UseDocumentFonts(files);
+  CHECK(fonts.Installed(L"Brial"));
+  CHECK(fonts.Resolve(L"Brial") == L"Brial");
+  CHECK(fonts.Substitutions().empty());
+  fonts.UseDocumentFonts({});
+  CHECK(!fonts.Installed(L"Brial"));
+  // By the name the font table gives it where that isn't the font's own, as Word goes by the table.
+  std::vector<std::wstring> names;
+  CHECK(fw::doc::layout::EmbeddedFonts(*doc, &names).size() == 1u && names == std::vector<std::wstring>{L"Brial"});
+  fonts.UseDocumentFonts(files, {L"Brial Heavy"});
+  CHECK(fonts.Resolve(L"Brial Heavy") == L"Brial");
+  CHECK(fonts.Substitutions().empty());
+}
+
+TEST(Layout_MissingLatinFontsAsWordDrawsThem) {
+  // From the corpus's Word renders: a missing sans-serif family in Calibri (EC Square Sans Pro's
+  // PANOSE), or by its family class alone; a serif one in Times New Roman.
+  Doc d = Make(P("text"), "", "", true,
+               "<w:font w:name=\"House Sans\"><w:panose1 w:val=\"020B0506040000020004\"/><w:charset w:val=\"00\"/>"
+               "<w:family w:val=\"swiss\"/><w:pitch w:val=\"variable\"/></w:font>"
+               "<w:font w:name=\"House Grotesk\"><w:charset w:val=\"00\"/><w:family w:val=\"swiss\"/></w:font>"
+               "<w:font w:name=\"House Serif\"><w:panose1 w:val=\"02020603050405020304\"/><w:charset w:val=\"00\"/>"
+               "<w:family w:val=\"roman\"/></w:font>");
+  REQUIRE(d.doc);
+  CHECK(SubstituteFamily(*d.doc, L"House Sans") == L"Calibri");
+  CHECK(SubstituteFamily(*d.doc, L"House Grotesk") == L"Calibri");
+  CHECK(SubstituteFamily(*d.doc, L"House Serif") == L"Times New Roman");
 }
 
 // ---- Laying out again after edits (D2)
@@ -1227,6 +1463,88 @@ TEST(Layout_TableEditsLayOutAgainAsFromScratch) {
   check(bool(ed.DeleteTable(cell(0, 0))), "the table deleted");
 }
 
+TEST(Layout_LongTablesMeasuredAsTheyGo) {
+  // H1 (D5): a long table's rows are measured as the pages get to them, a few dozen at a time, so
+  // its first page doesn't wait for the rest. Merged cells that run on past the rows measured so
+  // far, repeated header rows, and edits in rows not measured yet lay out as from scratch.
+  auto lines = [](const std::string& name, int n) {
+    std::string s;
+    for (int i = 0; i < n; ++i) s += P(name + " " + std::to_string(i));
+    return s;
+  };
+  std::string rows = "<w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc>" + P("header") + "</w:tc><w:tc>" + P("header") + "</w:tc></w:tr>";
+  for (int i = 1; i < 300; ++i) {
+    std::string first;
+    if (i == 60 || i == 126)
+      first = "<w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr>" + lines(i == 60 ? "tall" : "taller", i == 60 ? 40 : 30);
+    else if ((i > 60 && i <= 66) || (i > 126 && i <= 129))
+      first = "<w:tcPr><w:vMerge/></w:tcPr>" + P("");
+    else
+      first = P("cell " + std::to_string(i));
+    rows += "<w:tr><w:tc>" + first + "</w:tc><w:tc>" + P("row " + std::to_string(i)) + "</w:tc></w:tr>";
+  }
+  const std::string body = P("before") + "<w:tbl><w:tblGrid><w:gridCol w:w=\"1500\"/><w:gridCol w:w=\"1500\"/></w:tblGrid>" + rows +
+                           "</w:tbl>" + P("after") + SmallPage();
+  Doc d = Make(body, "", "", false);
+  REQUIRE(d.layout);
+  d.layout->LayOutPages(1);
+  CHECK(Find(d, u"row 1") != nullptr);
+  d.layout->LayOutAll();
+  // The merged cells' text ends above the rows after them: the rows they end in grew.
+  auto above = [&](const std::u16string& upper, const std::u16string& lower) {
+    size_t pu = 0, pl = 0;
+    const LineBox* u = Find(d, upper, &pu);
+    const LineBox* l = Find(d, lower, &pl);
+    return u && l && (pl > pu || (pl == pu && l->top >= u->top + u->height - 0.5f));
+  };
+  CHECK(above(u"tall 39", u"row 67"));
+  CHECK(above(u"taller 29", u"row 130"));
+  CHECK(above(u"row 299", u"after"));
+  // The header row repeats on the table's last page.
+  size_t last = 0;
+  REQUIRE(Find(d, u"row 299", &last));
+  size_t headers = 0;
+  for (const LineBox& l : d.page(last).lines) headers += l.text == u"header";
+  CHECK_EQ(headers, 2u);
+  for (size_t p = 0; p < d.pages(); ++p)
+    for (const LineBox& l : d.page(p).lines) CHECK(l.top + l.height <= d.page(p).body.bottom + 0.5f);
+  CHECK(SameAsFresh(*d.doc, *d.layout, "laid out a page at a time"));
+
+  // Edits, with only the first pages laid out (rows further down not measured yet).
+  Doc e = Make(body, "", "", false);
+  REQUIRE(e.layout);
+  e.layout->LayOutPages(3);
+  edit::Editor ed(*e.doc);
+  ed.OnChange([&](const edit::Change& c) { e.layout->Edited(c); });
+  auto cell = [&](size_t r, size_t c) {
+    Node tbl;
+    for (const Block& b : e.doc->Blocks(e.doc->MainStory()))
+      if (b.kind == BlockKind::Table) tbl = b.node;
+    Node tc = e.doc->RowCells(e.doc->TableRows(tbl)[r])[c];
+    return Pos{e.doc->Blocks(tc).front().para, 0};
+  };
+  REQUIRE(ed.InsertText(cell(200, 1), u"typed far down "));
+  e.layout->LayOutPages(2);
+  REQUIRE(ed.InsertText(cell(2, 1), u"typed on the first page "));
+  e.layout->LayOutPages(2);
+  REQUIRE(ed.InsertRows(cell(100, 1), cell(101, 1), true));
+  e.layout->LayOutPages(2);
+  REQUIRE(ed.MergeCells(cell(62, 1), cell(66, 1)));
+  e.layout->LayOutAll();
+  REQUIRE(SameAsFresh(*e.doc, *e.layout, "edits below the rows measured"));
+  int step = 0;
+  auto check = [&](bool ok, const char* what) {
+    REQUIRE(ok);
+    e.layout->LayOutPages(step++ % 2 ? 2 : 6);
+    e.layout->LayOutAll();
+    REQUIRE(SameAsFresh(*e.doc, *e.layout, what));
+  };
+  check(bool(ed.InsertText(cell(60, 0), u"more ")), "typed in a merged cell");
+  check(bool(ed.InsertText(cell(250, 1), u"typed ")), "typed further down");
+  check(bool(ed.DeleteRows(cell(64, 1), cell(65, 1))), "rows deleted");
+  check(bool(ed.SetRowProps(cell(0, 0), cell(1, 0), edit::PropEdit().Set("tblHeader"))), "two header rows");
+}
+
 TEST(Layout_CellsNumberedAsTheEditorsGrid) {
   // The Word tab fills selected cells from Layout::Cells, matching the editor's block by row and
   // grid column (D3): both number them alike. A cell over two columns, a row past gridBefore, a
@@ -1259,6 +1577,26 @@ TEST(Layout_CellsNumberedAsTheEditorsGrid) {
   CHECK_EQ(pieces, 2u);
 }
 
+TEST(Layout_DumpListsTextBoxesBackToFront) {
+  // Word draws and tags floating text boxes back to front, by z-order, whatever order their anchors
+  // come in. The layout dump lists them the same way, so fwtool compare pairs their lines.
+  const auto box = [](const char* z, const char* top, const char* text) {
+    return std::string("<w:r><w:pict xmlns:v=\"urn:schemas-microsoft-com:vml\"><v:shape style=\"position:absolute;"
+                       "margin-left:0;margin-top:") + top + ";width:100pt;height:30pt;z-index:" + z +
+           "\"><v:textbox><w:txbxContent><w:p><w:r><w:t>" + text + "</w:t></w:r></w:p></w:txbxContent></v:textbox>"
+           "</v:shape></w:pict></w:r>";
+  };
+  Doc d = Make("<w:p>" + box("5", "90pt", "Front") + box("2", "0", "Back") + "<w:r><w:t>Body</w:t></w:r></w:p>" + SmallPage());
+  REQUIRE(d.layout);
+  d.layout->LayOutAll();
+  const fw::LayoutDump dump = d.layout->Dump("boxes.docx");
+  std::vector<std::wstring> boxes;
+  for (const fw::LayoutPage& page : dump.pages)
+    for (const fw::LayoutLine& l : page.lines)
+      if (l.story == fw::LayoutStory::TextBox) boxes.push_back(l.text);
+  CHECK(boxes == (std::vector<std::wstring>{L"Back", L"Front"}));
+}
+
 TEST(Layout_ATextBoxMadeAfterTheLayoutIsLaidOut) {
   // A new shape's text box is a story made after the layout was (D4), as a new header is (D3):
   // laid out with its text, as a fresh layout lays it out.
@@ -1277,4 +1615,91 @@ TEST(Layout_ATextBoxMadeAfterTheLayoutIsLaidOut) {
   REQUIRE(ed.InsertText({d.doc->StoryParagraphs(story).front(), 0}, u"Inside the box").ok);
   d.layout->LayOutAll();
   REQUIRE(SameAsFresh(*d.doc, *d.layout, "a new text box"));
+}
+
+// Equations (D5): an m:oMath in a line of text is an object as wide as it's laid out, and an
+// m:oMathPara alone in its paragraph is centered, taller for its fraction.
+TEST(Layout_EquationsInlineAndDisplay) {
+  const std::string m = "xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"";
+  Doc d = Make("<w:p><w:r><w:t xml:space=\"preserve\">Area </w:t></w:r><m:oMath " + m +
+               "><m:r><m:t>A=</m:t></m:r><m:sSup><m:e><m:r><m:t>r</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup>"
+               "</m:sSup></m:oMath><w:r><w:t xml:space=\"preserve\"> here.</w:t></w:r></w:p>"
+               "<w:p><m:oMathPara " + m + "><m:oMath><m:f><m:num><m:r><m:t>a+b</m:t></m:r></m:num><m:den><m:r><m:t>2</m:t></m:r>"
+               "</m:den></m:f></m:oMath></m:oMathPara></w:p>");
+  REQUIRE(d.doc && d.pages() == 1);
+  const Page& p = d.page(0);
+  REQUIRE(p.drawings.size() == 2);
+  const auto& in = p.drawings[0].rect;
+  const auto& display = p.drawings[1].rect;
+  CHECK(in.right - in.left > 15 && in.right - in.left < 60);
+  CHECK(display.bottom - display.top > (in.bottom - in.top) * 1.3f);
+  CHECK(std::abs((display.left + display.right) / 2 - p.width / 2) < 2);
+}
+
+// A right-to-left table (w:bidiVisual, D5) starts at the right: its first cell is the rightmost.
+TEST(Layout_RightToLeftTableStartsAtTheRight) {
+  const std::string cell = "<w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc>";
+  Doc d = Make("<w:tbl><w:tblPr><w:bidiVisual/></w:tblPr><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"3000\"/></w:tblGrid>"
+               "<w:tr>" + cell + cell + "</w:tr></w:tbl><w:p/>");
+  REQUIRE(d.doc && d.pages() == 1);
+  const auto& cells = d.page(0).cells;
+  REQUIRE(cells.size() == 2);
+  CHECK(cells[0].box.left > cells[1].box.left);
+  CHECK(std::abs((cells[0].box.right - cells[0].box.left) - 100) < 1);  // the first column, 2000 twips
+}
+
+// The document grid (w:docGrid, East Asian layout, D5): lines of a paragraph that snaps to it are
+// one grid pitch apart, and one that doesn't snap keeps its own height.
+TEST(Layout_AnEmptyListLabelHasNoTabAfterIt) {
+  auto lvl = [](int i, const char* fmt, const char* text) {
+    return "<w:lvl w:ilvl=\"" + std::to_string(i) + "\"><w:start w:val=\"1\"/><w:numFmt w:val=\"" + fmt +
+           "\"/><w:lvlText w:val=\"" + text + "\"/><w:pPr><w:ind w:left=\"0\" w:firstLine=\"0\"/></w:pPr></w:lvl>";
+  };
+  const std::string numbering = "<w:abstractNum w:abstractNumId=\"0\">" + lvl(0, "none", "") + lvl(1, "decimal", "%2.") +
+                                "</w:abstractNum><w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+  auto p = [](int ilvl, const char* text) {
+    return "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"" + std::to_string(ilvl) + "\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr>" +
+           "<w:r><w:t>" + text + "</w:t></w:r></w:p>";
+  };
+  // Compatibility mode 15, as Word 2013 and later write: older modes keep the tab (d5-fidelity's measure).
+  const std::string mode15 = "<w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" "
+                             "w:val=\"15\"/></w:compat>";
+  Doc d = Make(p(0, "Term") + p(1, "Item") + SmallPage(), mode15, "", true, "", "", numbering);
+  REQUIRE(d.doc && d.pages() == 1);
+  const LineBox* term = Find(d, u"Term");
+  const LineBox* item = Find(d, u"Item");
+  REQUIRE(term && item);
+  CHECK(term->text.front() == u'T');  // no label, no tab: the term starts at the margin
+  CHECK(item->text.substr(0, 3) == u"1.\t");
+}
+
+TEST(Layout_LineNumbersInTheMargin) {
+  // Every second line numbered, from 1 (w:start counts from 0), a quarter inch before the column;
+  // a paragraph with w:suppressLineNumbers and a table cell aren't counted, an empty paragraph is.
+  const std::string body = P("one") + "<w:p/>" + P("skipped", "<w:suppressLineNumbers/>") +
+                           "<w:tbl><w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid><w:tr><w:tc>" + P("cell") +
+                           "</w:tc></w:tr></w:tbl>" + P("three") + P("four") +
+                           SmallPage("<w:lnNumType w:countBy=\"2\" w:start=\"0\"/>");
+  Doc d = Make(body);
+  REQUIRE(d.doc && d.pages() == 1);
+  const auto& numbers = d.page(0).lineNumbers;
+  REQUIRE(numbers.size() == 2);
+  CHECK(numbers[0].text == u"2" && numbers[1].text == u"4");
+  const LineBox* four = Find(d, u"four");
+  REQUIRE(four);
+  CHECK(std::abs(numbers[1].baseline - four->baseline) < 0.01f);
+  CHECK(std::abs(numbers[1].x + numbers[1].line.contentRight - (20 - 18)) < 0.01f);  // 20 pt margin
+  CHECK(d.layout->Dump("t").pages[0].lines.back().story == fw::LayoutStory::LineNumber);
+}
+
+TEST(Layout_LinesSnapToTheDocumentGrid) {
+  const std::string text = "<w:r><w:t>" + std::string(60, 'x') + " " + std::string(60, 'x') + "</w:t></w:r>";
+  const std::string sect = "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" "
+                           "w:left=\"1440\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/><w:docGrid w:type=\"lines\" w:linePitch=\"400\"/></w:sectPr>";
+  Doc d = Make("<w:p>" + text + "</w:p><w:p><w:pPr><w:snapToGrid w:val=\"0\"/></w:pPr>" + text + "</w:p>" + sect);
+  REQUIRE(d.doc && d.pages() == 1);
+  const auto& lines = d.page(0).lines;
+  REQUIRE(lines.size() >= 4);
+  CHECK(std::abs((lines[1].top - lines[0].top) - 20) < 0.01f);
+  CHECK(std::abs((lines[3].top - lines[2].top) - 20) > 1);
 }

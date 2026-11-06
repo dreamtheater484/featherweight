@@ -835,24 +835,54 @@ void DocPage::SectionBreak(SectionStart start) {
 }
 
 void DocPage::AddToolbar(ToolbarModel& m) {
+  // Orientation, margins, then the paper sizes (as Word's Size menu: one click fewer than the
+  // Page setup panel, the friction review), columns, hyphenation and Page setup.
   static constexpr int kMenu[] = {CmdPortrait,   CmdLandscape,  CmdMarginsNormal, CmdMarginsNarrow, CmdMarginsModerate,
                                   CmdMarginsWide, CmdColumnsOne, CmdColumnsTwo,    CmdColumnsThree,  CmdHyphenation,
                                   CmdPageSetup};
+  constexpr int kSizesAt = 6, kSizes = static_cast<int>(std::size(kPapers));
   ToolItem t;
   t.kind = ToolKind::Dropdown;
   t.cmd = CmdLayoutBox;
   t.width = 52;
   t.priority = 2;
   t.glyph = icon::Page;
-  t.tooltip = L"Layout: orientation, margins, columns and page setup";
+  t.tooltip = L"Layout: orientation, margins, paper size, columns and page setup";
   t.enabled = editor_.CanEdit();
   t.sepBefore = true;
-  for (int cmd : kMenu) {
-    const CommandState q = Query(cmd);
+  t.maxRows = static_cast<int>(std::size(kMenu)) + kSizes;
+  const auto [first, last] = Sections();
+  const SectionProps* p = first != kNone ? &Doc().Sections()[first].props : nullptr;
+  for (int i = 0; i < static_cast<int>(std::size(kMenu)); ++i) {
+    if (i == kSizesAt)
+      for (const Paper& paper : kPapers) {
+        const int32_t w = p ? std::min(p->pageWidth.Value(), p->pageHeight.Value()) : 0;
+        const int32_t h = p ? std::max(p->pageWidth.Value(), p->pageHeight.Value()) : 0;
+        const bool on = p && Near(w, paper.width) && Near(h, paper.height);
+        t.choices.push_back(std::wstring(on ? L"✓ " : L"") + L"Size: " + PaperLabel(paper));
+      }
+    const CommandState q = Query(kMenu[i]);
     t.choices.push_back(q.checked ? L"✓ " + q.label : q.label);
   }
   t.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0 && v.index < static_cast<int>(std::size(kMenu))) Execute(kMenu[v.index]);
+    const int i = v.index;
+    if (i >= kSizesAt && i < kSizesAt + kSizes) {
+      PaperSize(static_cast<size_t>(i - kSizesAt));
+      return;
+    }
+    const int cmd = i < kSizesAt ? i : i - kSizes;
+    if (cmd >= 0 && cmd < static_cast<int>(std::size(kMenu))) Execute(kMenu[cmd]);
   };
   m.left.push_back(t);
+}
+
+void DocPage::PaperSize(size_t i) {
+  const auto [first, last] = Sections();
+  if (i >= std::size(kPapers) || first == kNone || !editor_.CanEdit()) return;
+  // As the page lies now.
+  const bool turned = Landscape(Doc().Sections()[first].props);
+  edit::PageSetup s;
+  s.width = Twips(turned ? kPapers[i].height : kPapers[i].width);
+  s.height = Twips(turned ? kPapers[i].width : kPapers[i].height);
+  host_.keep(edit::SetPageSetup(editor_, first, last, s), false);
 }

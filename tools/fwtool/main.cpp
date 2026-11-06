@@ -6,13 +6,20 @@
 #include <string>
 
 #include "Common.h"
+#include "chart/Chart.h"
 #include "core/Strings.h"
+#include "doc/msdoc/MsDoc.h"
+#include "pkg/CompoundFile.h"
 
 namespace fwtool {
 namespace {
 
 constexpr const char* kUsage =
     "Usage:\n"
+    "  fwtool odt [--out DIR] <file or folder>...\n"
+    "      Converts OpenDocument text files (.odt, .ott) and Word templates (.dotx, .dotm, to a new\n"
+    "      document) as the app opens them, checks the .docx and reads it into the model; with\n"
+    "      --out the converted documents are kept there.\n"
     "  fwtool roundtrip [--model] [--reserialize-all] [--expect-reject] [--out DIR] <file or folder>...\n"
     "      Opens and saves each file without edits. Untouched parts must be byte-identical;\n"
     "      with --reserialize-all every XML part is rewritten through the DOM and must equal\n"
@@ -55,11 +62,13 @@ constexpr const char* kUsage =
     "  fwtool compare --self-test <reference folder>...\n"
     "      Checks the measurement: Word's lines match themselves, one moved line break costs\n"
     "      exactly one line, and an added page changes only the page count.\n"
-    "  fwtool bench [--runs N] [--json FILE] [--budgets] [--typing] <file or folder>...\n"
+    "  fwtool bench [--runs N] [--json FILE] [--budgets] [--typing | --scrolling] <file or folder>...\n"
     "      Times opening each Word document, stage by stage, against the opening budgets\n"
     "      (plan §11). With --budgets, a missed budget fails. With --typing, times keystrokes\n"
     "      at the start, middle and end and in a table instead: from the edit to the page painted\n"
     "      again. Formatting there (bold, centered, Heading 1, bullets, each undone) counts too.\n"
+    "      With --scrolling, paints every page in order, as scrolling to the end shows them, and\n"
+    "      reports each page's paint time and the memory laid out and scrolled (huge documents).\n"
     "  fwtool edit-check [--edits N] [--seed S] <file or folder>...\n"
     "      Makes N random edits (40) in each Word document through the editor, lays it out again\n"
     "      incrementally after each, and checks every ten that it's what a layout from scratch is.\n"
@@ -78,6 +87,16 @@ constexpr const char* kUsage =
     "  fwtool export --out DIR <file or folder>...\n"
     "      Saves each Word document as RTF and as plain text (UTF-8) in DIR, as the Word tab's\n"
     "      Save As does, for Word to read back (scripts\\word-open-check.ps1).\n"
+    "  fwtool encrypt --password P --out DIR <file or folder>...\n"
+    "      Saves each Office file in DIR protected with password P, as Featherweight saves a\n"
+    "      protected document (agile encryption), for Word to open.\n"
+    "  fwtool decrypt --password P --out DIR <file or folder>...\n"
+    "      Opens each password-protected Office file as Featherweight does and saves its package\n"
+    "      in DIR; checks that encrypting it again with the key from opening round-trips.\n"
+    "  fwtool cfb [--all] <file>...\n"
+    "      Reads each compound file (.doc, protected Office files): every stream must read, and\n"
+    "      writing them and reading them back must give the same bytes. --all lists the streams,\n"
+    "      with small ones in hex.\n"
     "  fwtool bench-app [--runs N] [--json FILE] <Featherweight.exe> [<file>...]\n"
     "      Starts a private copy of Featherweight, alone and with each file, and measures launch\n"
     "      to window, to the first frame (the start screen or the first page), memory once\n"
@@ -100,6 +119,9 @@ constexpr const char* kUsage =
     "      wrote. The file it makes goes next to the reproducer as <name>-replay.docx, or into DIR,\n"
     "      with <name>-replay-edited.txt and -readback.txt when the text differs. Its document is\n"
     "      found by its recorded path or, from another checkout, by the tail of that path.\n"
+    "  fwtool convert <file.doc> <file.docx>\n"
+    "      Writes the .docx a Word 97-2003 document is read as. Every other command reads .doc\n"
+    "      files this way too.\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
     "      Word's. Run it without text for its options.\n";
@@ -111,7 +133,7 @@ std::vector<std::filesystem::path> CollectSorted(const std::filesystem::path& di
        it.increment(ec)) {
     if (!it->is_regular_file(ec)) continue;
     std::wstring ext = fw::ToLower(it->path().extension().wstring());
-    for (const wchar_t* known : {L".docx", L".docm", L".dotx", L".dotm", L".xlsx", L".xlsm", L".xltx", L".xltm",
+    for (const wchar_t* known : {L".docx", L".docm", L".dotx", L".dotm", L".doc", L".xlsx", L".xlsm", L".xltx", L".xltm",
                                  L".pptx", L".pptm", L".potx", L".potm", L".ppsx", L".ppsm"})
       if (ext == known) files.push_back(it->path());
   }
@@ -141,7 +163,30 @@ std::string Display(const std::filesystem::path& file) {
   return fw::WideToUtf8(shown.generic_wstring());
 }
 
+// A Word 97-2003 document as the .docx it's read as; empty (with `status`) when it isn't one or
+// can't be read.
+std::vector<uint8_t> ConvertDoc(const std::filesystem::path& file, fw::pkg::Status& status) {
+  std::vector<uint8_t> bytes;
+  FILE* f = nullptr;
+  if (_wfopen_s(&f, file.c_str(), L"rb") == 0 && f) {
+    uint8_t buf[1 << 16];
+    for (size_t n; (n = std::fread(buf, 1, sizeof buf, f)) > 0;) bytes.insert(bytes.end(), buf, buf + n);
+    std::fclose(f);
+  }
+  auto cf = fw::pkg::CompoundFile::Open(bytes);
+  if (!cf || !cf->Stream("WordDocument")) {
+    status = fw::pkg::Status::Fail(fw::pkg::Status::Code::Unsupported, "not a Word 97-2003 document");
+    return {};
+  }
+  return fw::doc::msdoc::ToDocx([&cf](std::string_view name) { return cf->Stream(name); }, status);
+}
+
 std::unique_ptr<fw::pkg::Package> OpenPackage(const std::filesystem::path& file, fw::pkg::Status& status) {
+  if (fw::ToLower(file.extension().wstring()) == L".doc") {
+    std::vector<uint8_t> docx = ConvertDoc(file, status);
+    if (docx.empty()) return nullptr;
+    return fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(docx)), fw::pkg::Limits::Default(), status);
+  }
   fw::pkg::Snapshot::Options options;
   std::error_code ec;
   options.recoveryDir = (std::filesystem::temp_directory_path(ec) / L"fwtool-recovery").wstring();
@@ -158,7 +203,21 @@ std::string_view AsText(const std::vector<uint8_t>& bytes) {
 
 int wmain(int argc, wchar_t** argv) {
   SetConsoleOutputCP(CP_UTF8);
+  fw::chart::Install();
   if (argc >= 2 && std::wstring(argv[1]) == L"wrap") return fwtool::RunWrap(argc, argv);
+  if (argc == 4 && std::wstring(argv[1]) == L"convert") {
+    fw::pkg::Status st;
+    const std::vector<uint8_t> docx = fwtool::ConvertDoc(argv[2], st);
+    FILE* f = nullptr;
+    if (!docx.empty() && _wfopen_s(&f, argv[3], L"wb") != 0) f = nullptr;
+    if (!f) {
+      std::fprintf(stderr, "%s: %s\n", fw::WideToUtf8(argv[2]).c_str(), docx.empty() ? st.message.c_str() : "can't write");
+      return 1;
+    }
+    std::fwrite(docx.data(), 1, docx.size(), f);
+    std::fclose(f);
+    return 0;
+  }
   if (argc < 3) {
     std::fputs(fwtool::kUsage, stderr);
     return 2;
@@ -172,6 +231,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--layout") options.layout = true;
     else if (arg == L"--expect-reject") options.expectReject = true;
     else if (arg == L"--out" && i + 1 < argc) options.outDir = argv[++i];
+    else if (arg == L"--password" && i + 1 < argc) options.password = argv[++i];
     else if (arg == L"--printer" && i + 1 < argc) options.printer = argv[++i];
     else if (arg == L"--warp") options.warp = true;
     else if (arg == L"--pictures") options.pictures = true;
@@ -186,6 +246,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--runs" && i + 1 < argc) options.runs = _wtoi(argv[++i]);
     else if (arg == L"--budgets") options.budgets = true;
     else if (arg == L"--typing") options.typing = true;
+    else if (arg == L"--scrolling") options.scrolling = true;
     else if (arg == L"--edits" && i + 1 < argc) options.edits = std::max(1, _wtoi(argv[++i]));
     else if (arg == L"--seed" && i + 1 < argc) options.seed = static_cast<unsigned>(std::wcstoul(argv[++i], nullptr, 10));
     else if (arg == L"--rounds" && i + 1 < argc) options.rounds = static_cast<uint32_t>(std::max(1, _wtoi(argv[++i])));
@@ -206,6 +267,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"dump") return fwtool::RunDump(options);
   if (command == L"save") return fwtool::RunSave(options);
   if (command == L"check") return fwtool::RunCheck(options);
+  if (command == L"odt") return fwtool::RunOdt(options);
   if (command == L"print-sample") return fwtool::RunPrintSample(options);
   if (command == L"render") return fwtool::RunRender(options);
   if (command == L"lines") return fwtool::RunLines(options);
@@ -217,6 +279,9 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"torture") return fwtool::RunTorture(options);
   if (command == L"paste-check") return fwtool::RunPasteCheck(options);
   if (command == L"export") return fwtool::RunExport(options);
+  if (command == L"encrypt") return fwtool::RunCrypt(options, true);
+  if (command == L"decrypt") return fwtool::RunCrypt(options, false);
+  if (command == L"cfb") return fwtool::RunCfb(options);
   if (command == L"pdf-check") return fwtool::RunPdfCheck(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;

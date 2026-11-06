@@ -12,6 +12,8 @@ add_library(fwdoc STATIC
   docx/Reader.cpp
   docx/Save.cpp
   docx/Writer.cpp
+  msdoc/MsDoc.cpp
+  odf/Odt.cpp
   edit/Case.cpp
   edit/Clip.cpp
   edit/ClipTable.cpp
@@ -40,6 +42,7 @@ target_compile_options(fwdoc PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,Mi
 add_library(fwdoclayout STATIC
   layout/Flow.cpp
   layout/Layout.cpp
+  layout/Math.cpp
   layout/Stack.cpp
   layout/Table.cpp
   layout/Text.cpp
@@ -72,9 +75,9 @@ if(FW_BUILD_TESTS)
     "${PROJECT_SOURCE_DIR}/tests/unit/test_edit.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_clip.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_format.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_forms.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_page.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_export.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_inline.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_notes.cpp"
-    "${PROJECT_SOURCE_DIR}/tests/unit/test_toc.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_toc.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_msdoc.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_proof.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_tables.cpp"
-    "${PROJECT_SOURCE_DIR}/tests/unit/test_review.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_review.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_odt.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_pictures.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_shapes.cpp"
     # The document tab's file (D2 "Files"): an app source, tested here with temporary folders.
     "${PROJECT_SOURCE_DIR}/tests/unit/test_docfile.cpp" "${PROJECT_SOURCE_DIR}/src/word/DocFile.cpp")
@@ -90,4 +93,8 @@ if(FW_BUILD_TESTS)
   add_test(NAME office_save_edited
     COMMAND fwtool save --edited "${_fw_office}/generated" "${_fw_office}/edge" "${_fw_office}/layout")
   add_test(NAME office_model_malicious COMMAND fwtool roundtrip --model --expect-reject "${_fw_office}/malicious")
+  # Word's .doc copies of the corpus (D5, from d1-corpus): read as .docx, they pass check.
+  if(EXISTS "${_fw_office}/doc")
+    add_test(NAME office_doc_check COMMAND fwtool check "${_fw_office}/doc")
+  endif()
 endif()
