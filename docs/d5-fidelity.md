@@ -10,6 +10,9 @@ The fidelity piece of D5 (`docs/d5-plan.md`). Measured with `fwtool compare` aga
 | Hyphenation as Word on this PC hyphenates | 98 (90.7 %) | 107,167 (96.5 %) |
 | `numId 0` drops the style's list indents; no automatic spacing between items of one list | 98 (90.7 %) | 107,218 (96.5 %) |
 | A page break keeps its paragraph mark in mode 14 too | 97 (89.8 %) | 107,216 (96.5 %) |
+| Contextual spacing collapses before dropping the space after; space after must fit above footnotes | 98 (90.7 %) | 107,226 (96.5 %) |
+
+From 6 Nov the corpus also holds 37 other reference documents: `.dotx` copies and password-protected `.docx` files from d1-corpus. The table counts only the original 108 `.docx` documents. On all 145, the last step gives 123 page matches (84.8 %) and 94.8 % of lines; the protected files show 0 pages until they can be opened.
 
 D1 ended at 98/108 and 95.9 %, not the 99/108 and 95.2 % in the plan. Those numbers were measured before D1's last layout commit (399a105, spaces squeezed only in mode 15). That commit gained 776 lines and lost eu-bijlage's page match, which had been a coincidence (1,070 of its 1,385 lines matched).
 

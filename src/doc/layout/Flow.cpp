@@ -820,7 +820,10 @@ struct Flow {
       // starts a page just for the break.
       const bool breakOnly = line.ending == text::LineEnd::PageBreak && Blank(pt, line);
       const float hang = e.Hang(pt, line, h);
-      if (space.top + h - hang > Bottom() - noteH + kEpsilon && !breakOnly && !(f.columnEmpty && placed.empty())) {
+      // Above footnotes, a paragraph's last line needs room for its space after too (measured on
+      // the corpus: Word moves the line to the next page instead).
+      const float afterRoom = br.Done() && (noteH > 0 || !f.notes.empty()) ? e.SpaceAfter(p) : 0.0f;
+      if (space.top + h - hang + afterRoom > Bottom() - noteH + kEpsilon && !breakOnly && !(f.columnEmpty && placed.empty())) {
         br.Restore(state);
         overflow = true;
         break;

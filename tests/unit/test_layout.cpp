@@ -265,6 +265,15 @@ TEST(Layout_SpacingBetweenParagraphsIsTheLarger) {
   CHECK_NEAR(b2->top - (a2->top + a2->height), 36.0f, 0.05f);  // 12 + 24
 }
 
+TEST(Layout_ContextualSpaceAfterComesOutOfTheNextSpaceBefore) {
+  // A has 8 pt after and contextual spacing; B (same style) has 24 pt before: Word leaves 16 pt.
+  Doc d = Make(P("A", "<w:spacing w:after=\"160\"/><w:contextualSpacing/>") + P("B", "<w:spacing w:before=\"480\"/>"));
+  REQUIRE(d.layout);
+  const LineBox *a = Find(d, u"A"), *b = Find(d, u"B");
+  REQUIRE(a && b);
+  CHECK_NEAR(b->top - (a->top + a->height), 16.0f, 0.05f);
+}
+
 TEST(Layout_KeepWithNextAndWidowControl) {
   // Lines of filler, then a heading kept with its paragraph: both go to the next page together.
   std::string body;

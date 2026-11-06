@@ -204,7 +204,12 @@ float Engine::SpaceBefore(const ParaProps& p, const Spacing& s) const {
   const bool sameList = s.prev && !p.numId.empty() && s.prev->numId == p.numId;
   if (sameList && p.spaceBeforeAuto) before = 0;
   if (sameList && s.prev->spaceAfterAuto) after = 0;
-  if (s.prev && s.prev->contextualSpacing && Contextual(*s.prev, p)) after = 0;
+  if (s.prev && s.prev->contextualSpacing && Contextual(*s.prev, p)) {
+    // Word first takes the space after out of the space before, as HTML collapses margins, then
+    // drops the space after: 8 pt after and 24 pt before leave 16 pt (measured on the corpus).
+    if (!sumSpacing_) before = std::max(0.0f, before - after);
+    after = 0;
+  }
   // Between two paragraphs Word leaves the larger of the one's space after and the other's space
   // before, as HTML does, unless the document asks it not to use HTML paragraph spacing.
   return sumSpacing_ ? after + before : std::max(after, before);
