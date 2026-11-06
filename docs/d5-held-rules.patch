@@ -1,0 +1,92 @@
+diff --git a/src/doc/layout/Flow.cpp b/src/doc/layout/Flow.cpp
+index f043e5f..6961c18 100644
+--- a/src/doc/layout/Flow.cpp
++++ b/src/doc/layout/Flow.cpp
+@@ -644,6 +644,12 @@ struct Flow {
+       if (c != u' ' && c != u'\t') return false;
+     return line.objects.empty();
+   }
++  // Whether the paragraph shows nothing after this line (a paragraph holding only a break).
++  static bool NothingAfter(const ParaText& pt, const text::Line& line) {
++    for (char16_t c : pt.Shown(line.end, static_cast<uint32_t>(pt.text.size()), false))
++      if (c != u' ' && c != u'\t') return false;
++    return true;
++  }
+   float ColumnLeft() const { return f.cols[f.col].left; }
+   float ColumnRight() const { return f.cols[f.col].right; }
+ 
+@@ -830,8 +836,11 @@ struct Flow {
+       // A line with nothing but a page or column break goes on this page or column even when it's
+       // full: Word never starts a page or column just for the break (the region-3 QAPP's
+       // attachment page).
++      static const bool brkFit = std::getenv("FW_BRKFIT") != nullptr;
+       const bool breakOnly =
+-          (line.ending == text::LineEnd::PageBreak || line.ending == text::LineEnd::ColumnBreak) && Blank(pt, line);
++          (line.ending == text::LineEnd::PageBreak || line.ending == text::LineEnd::ColumnBreak) && Blank(pt, line) &&
++          !(brkFit && line.ending == text::LineEnd::PageBreak && space.top + h > f.bottom + kEpsilon && placed.empty() &&
++            f.paraLines == 0 && f.next > 0 && f.items[f.next - 1].kind == BlockKind::Table);
+       const float hang = e.Hang(pt, line, h);
+       // Above footnotes, a paragraph's last line needs room for its space after too (measured on
+       // the corpus: Word moves the line to the next page instead).
+@@ -1188,8 +1197,15 @@ struct Flow {
+           float start = f.rowCut.empty() ? 0 : f.rowCut[i];
+           float limit = start + room - c.marginTop - c.marginBottom;
+           float to = start;
+-          for (const LineBox& l : c.content.lines)
+-            if (l.top >= start - kEpsilon && l.top + l.height <= limit + kEpsilon) to = std::max(to, l.top + l.height);
++          static const bool cutAfter = std::getenv("FW_CUTAFTER") != nullptr;
++          const std::vector<LineBox>& ls = c.content.lines;
++          for (size_t k = 0; k < ls.size(); ++k) {
++            const LineBox& l = ls[k];
++            float need = l.top + l.height;
++            if (cutAfter && (k + 1 == ls.size() || ls[k + 1].para != l.para) && l.para != kNone)
++              need += e.SpaceAfter(e.ParaOf(l.para));
++            if (l.top >= start - kEpsilon && need <= limit + kEpsilon) to = std::max(to, l.top + l.height);
++          }
+           to = KeepTogether(c.content, start, to);
+           cutTo[i] = to;
+           if (to > start + kEpsilon) any = true;
+@@ -1835,7 +1851,7 @@ struct Flow {
+             return true;
+           }
+         } else if (!f.pageEmpty) {
+-          f.nextHard = true;
++          f.nextHard = !std::getenv("FW_SECTDROP");
+           FinishPage();
+           return true;
+         } else {
+diff --git a/src/doc/layout/Table.cpp b/src/doc/layout/Table.cpp
+index 3178290..177f194 100644
+--- a/src/doc/layout/Table.cpp
++++ b/src/doc/layout/Table.cpp
+@@ -1,6 +1,7 @@
+ // Tables (Engine.h): the grid Word saved, cell margins, row heights and vertical merges; cell
+ // shading and borders, with conflicts between neighboring cells resolved the way Word does.
+ #include <algorithm>
++#include <cstdlib>
+ #include <functional>
+ #include <numeric>
+ 
+@@ -293,16 +294,19 @@ void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse,
+         if (v.empty() || v == "nil" || v == "none") return 0;
+         return static_cast<float>(ParseInt(b.AttrOr(Name("sz"))).value_or(0)) / 8.0f;
+       };
++      static const bool resolved = std::getenv("FW_TBLS") != nullptr;
++      auto room = [](const Border& b) { return b.Present() ? Pt(b.width) : 0.0f; };
+       const RowBox* above = r == 0 ? nullptr : &t.rows[r - 1];
+       const bool lastRow = r + 1 == rows.size();
+       for (CellBox& c : rb.cells) {
+         if (c.continued) continue;
+-        float top = own(c.tc, Name("top"));
++        float top = resolved ? room(c.props.top) : own(c.tc, Name("top"));
+         if (above)
+           for (const CellBox& a : above->cells)
+-            if (c.x >= a.x - 0.5f && c.x < a.x + a.width - 0.5f) top = std::max(top, own(a.tc, Name("bottom")));
++            if (c.x >= a.x - 0.5f && c.x < a.x + a.width - 0.5f)
++              top = std::max(top, resolved ? room(a.props.bottom) : own(a.tc, Name("bottom")));
+         c.marginTop += top;
+-        if (lastRow) c.marginBottom += own(c.tc, Name("bottom"));
++        if (lastRow) c.marginBottom += resolved ? room(c.props.bottom) : own(c.tc, Name("bottom"));
+       }
+     }
+     rb.keepNext = keepAll && anyPara;

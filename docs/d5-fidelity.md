@@ -2,6 +2,71 @@
 
 The fidelity piece of D5 (`docs/d5-plan.md`). Measured with `fwtool compare` against Word's renders in the private corpus (108 Word documents with a reference PDF, made by Word on Roy's PC).
 
+## Handover (6 Nov 2026, paused for the weekly usage limit)
+
+### Where it stands
+
+Measured on `claude/d5-int` 79b6f6c with 52ae90d:
+- **Targets:** 143 of 152 page counts (94.1 %); 110,431 of 114,076 lines (96.8 %).
+- **Copies:** 196 of 258 (76.0 %); 93.5 % of lines.
+
+The 97 % page target needs 148.
+
+Measure with `fwtool compare --json F <FW_CORPUS>\reference`. Since 52ae90d, a missing or unreadable reference PDF fails only its own document. Before, it failed every document after it.
+
+### The 9 misses, the next causes worst first
+
+1. **worldbank-sustainable** (Word 38, ours 37). Owner: d1-measure. Fixed by the held group below, which can't land yet.
+2. **govuk revised-methodology** (109 / 119). Owner: d1-model.
+   - 130 paragraph marks are tracked deletions. Word's final view joins each such paragraph to the next.
+   - We drop only the empty ones.
+3. **un-financial report** (348 / 353). Owner: d1-text.
+   - Its lines are 98.4 % right. The extra pages build up from line breaks: about one more line every few pages (for example, page 9's "The Secretary-General is responsible…").
+   - The held split-row rule gains it 44 lines.
+4. **gojp-mhlw-form b1** (23 / 18) and **b4** (20 / 13). Owner: d1-text.
+   - The document grid.
+   - Their reference PDFs were missing from about 14:00 on 6 Nov, apparently being rendered again.
+5. **who-lqsi Arabic front page** (1 / 2). Owner: d1-text.
+6. **acuk-example-cv** (1 / 2). Owner: d1-measure.
+   - Our lines are about 0.012 pt taller each, on every kind of line, and the last line misses page 1 by 0.08 pt.
+   - Rounding metrics to device units didn't help. No rule found yet.
+7. **EPA brownfields QAPP** (171 / 160). Owner: d1-measure.
+   - The reference is odd: Word's own count is 160.
+   - Rows are 0.5 pt taller in Word (see the border group).
+   - Worksheet 15.2 then puts one row more on page 61 with us, and the three-column list of abbreviations after it runs onto an extra page.
+8. **bund-abnahmeprotokoll** (5 / 4): a reference-locale exception. It stays a miss (see below).
+
+### Held rule groups
+
+Each group is right where it was checked, but doesn't gain pages yet. The code is small: `docs/d5-held-rules.patch` applies to d5-int 79b6f6c. It puts each rule behind an environment switch, and also has the rejected `FW_SECTDROP` (below). Measure a group with its switches set, then land it without them.
+
+- **A. A split row needs room for each cell's space after** (`FW_CUTAFTER`, in Flow.cpp's row cut).
+  - A cell's line counts as fitting only with its paragraph's space after, when it's that paragraph's last line.
+  - Gains 71 lines (un-financial +44, worldbank-sustainable +27). The short-form contract's "12. Charges" row then moves on whole, as in Word.
+  - Costs worldbank-guidance its page match. We wrap "Europe, etc.).  All supporting documents must be included in the bid." before "bid.", where Word keeps it on one line. That line is d1-text's.
+    - The cause: it's the last line of a justified paragraph, in Times New Roman 12, ending "bid. " with a trailing space. We measure it at 331.6 pt (two spaces after "etc.).") against 324.6 pt of room. Word fits it, so Word squeezes its spaces about 15 %.
+    - Both of `Squeezes`' limits allow that: a quarter of the spaces' width, and half the stretch.
+    - But `Squeeze` (LineLayout.cpp) leaves out a paragraph's last line ("text must follow").
+    - Letting a last line squeeze when it ends in a trailing space fits the line. The breaker then ends it as a wrap and adds an empty line, so the line's end needs handling too.
+  - **Land A once that line is fixed.**
+- **B. Borders as room in table rows** (`FW_TBLS`, in Table.cpp).
+  - Every resolved horizontal border takes room: the stronger of a cell's top border and the bottom border of the cell above, and the last row's bottom border. This means `c.props.top` / `bottom`, which merge the table, its style and `tcBorders`; today only `tcBorders` counts.
+  - Rows then sit exactly where Word's do (short-form contract, worldbank-sustainable, EPA's acronym table).
+  - It needs A, or the contract loses 76 lines and its page match.
+  - With A, it costs EPA 90 lines (cause 7).
+- **C. A break-only paragraph after a table must end within the text area** (`FW_BRKFIT`, in Flow.cpp's fit check).
+  - Today a line with nothing but a page break may overflow the page. With C, right after a table, it may run into the footnote area but not past the text area's bottom.
+  - Matches Word in worldbank-sustainable, wipo-form-mm2, hamburg and govuk-draft-investigations. Doesn't match in gojp-b3, whose lines snap to the document grid.
+  - Without the text-area condition, it also loses wipo-form-mm2.
+- **A + B + C on d5-int:** worldbank-sustainable matches (+1); worldbank-guidance (−1) and gojp-b3 (−1) are lost; EPA −90 lines. Net −1 page.
+  - With the "bid." line fixed, net 0.
+  - Then, if C leaves out pages with a document grid (an untested guess), +1.
+
+### Tested and rejected
+
+- **Dropping the space before at the top of every page after a section break:** changes only EPA, −30 lines. Word keeps the space at some section starts in that document and drops it at others.
+- **Sizing lines that hold only an inline drawing by the paragraph mark:** doesn't change the public `drawings-dml.docx` (Word 3 pages, ours 2). There the inline drawings themselves are too small (about 340 pt against Word's 670), which is d1-draw's.
+
 ## Progress
 
 | Step | Page counts match | Lines break where Word breaks them |
@@ -18,7 +83,7 @@ The fidelity piece of D5 (`docs/d5-plan.md`). Measured with `fwtool compare` aga
 | A split table row goes on at each cell's next line, without the space between (worldbank-guidance 75 → 74 pages, as in Word) | 102 (94.4 %) | 107,477 (96.8 %) |
 | Target | 105 (97 %) | 108,843 (98 %) |
 
-From 766982d on, the targets (below) are the measure. With the last step: **142 of 152 (93.4 %), 110,073 of 114,076 lines (96.5 %)**; copies 170 of 258 (65.9 %), 210,767 of 239,892 lines (87.9 %).
+From 766982d on, the targets (below) are the measure. With the last step, on `claude/d5-fidelity` alone: **142 of 152 (93.4 %), 110,073 of 114,076 lines (96.5 %)**; copies 170 of 258 (65.9 %), 210,767 of 239,892 lines (87.9 %). On `claude/d5-int` 79b6f6c, with the other sessions' work: 143 of 152, 110,431 lines (see the handover).
 
 ## What the targets count
 
