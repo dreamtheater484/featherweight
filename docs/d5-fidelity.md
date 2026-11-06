@@ -9,6 +9,21 @@ The fidelity piece of D5 (`docs/d5-plan.md`). Measured with `fwtool compare` aga
 | Start: `claude/d5-int` 2c7f571 | 98 of 108 (90.7 %) | 106,609 of 111,064 (96.0 %) |
 | Hyphenation as Word on this PC hyphenates | 98 (90.7 %) | 107,167 (96.5 %) |
 | `numId 0` drops the style's list indents; no automatic spacing between items of one list | 98 (90.7 %) | 107,218 (96.5 %) |
+| A page break keeps its paragraph mark in mode 14 too | 97 (89.8 %) | 107,216 (96.5 %) |
+
+D1 ended at 98/108 and 95.9 %, not the 99/108 and 95.2 % in the plan. Those numbers were measured before D1's last layout commit (399a105, spaces squeezed only in mode 15). That commit gained 776 lines and lost eu-bijlage's page match, which had been a coincidence (1,070 of its 1,385 lines matched).
+
+The page-break step makes eu-bijlage match. It also costs two page matches that were coincidences:
+- eu-anexo: its own cause, from page 6 on;
+- bund-abnahmeprotokoll: see the exceptions below.
+
+## Reference-locale exceptions
+
+These documents differ only because the reference Word is English. We show what Word in the document's own language shows. They still count as mismatches in the totals.
+
+- **bund-abnahmeprotokoll** (5 pages in Word, 4 here). Its headers hold `STYLEREF "Überschrift 1;Überschrift-1"`.
+  - English Word doesn't know the German style name, so it prints "Error! Use the Home tab to apply …" over three lines, and page 4's body moves down 26 pt.
+  - German Word, and we, show the heading.
 | Target | 105 (97 %) | 108,843 (98 %) |
 
 ## Fonts

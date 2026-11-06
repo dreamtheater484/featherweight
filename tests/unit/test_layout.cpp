@@ -236,6 +236,23 @@ TEST(Layout_PageAndSectionBreaks) {
   CHECK(d.pages() == 3 && d.page(2).width > d.page(2).height);  // the landscape section
 }
 
+TEST(Layout_PageBreakKeepsItsParagraphMark) {
+  // A paragraph holding only a page break: its mark stays on the break's line, so what follows
+  // starts the next page at its top (its space before dropped), in mode 14 too; with
+  // w:splitPgBreakAndParaMark the mark takes a line of its own on the next page.
+  const std::string body = P("one") + "<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>" +
+                           P("two", "<w:spacing w:before=\"480\"/>");
+  const std::string mode14 = "<w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" w:val=\"14\"/>";
+  Doc kept = Make(body, mode14 + "</w:compat>");
+  Doc split = Make(body, mode14 + "<w:splitPgBreakAndParaMark/></w:compat>");
+  REQUIRE(kept.layout && split.layout);
+  size_t pk = 9, ps = 9;
+  const LineBox *k = Find(kept, u"two", &pk), *s = Find(split, u"two", &ps);
+  REQUIRE(k && s);
+  CHECK(pk == 1u && ps == 1u);
+  CHECK(s->top > k->top + 10);  // below the mark's own line and the space before
+}
+
 TEST(Layout_SpacingBetweenParagraphsIsTheLarger) {
   const std::string body = P("A", "<w:spacing w:after=\"240\"/>") + P("B", "<w:spacing w:before=\"480\"/>");
   Doc html = Make(body);
