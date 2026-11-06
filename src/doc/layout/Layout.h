@@ -153,6 +153,7 @@ struct Page {
   std::vector<LineBox> lines;        // in reading order per story
   std::vector<RunPaint> paints;      // LineBox::paint indexes this
   std::vector<CellRect> cells;       // table cells, a nested table's after the cell it's in
+  std::vector<LineBox> lineNumbers;  // w:lnNumType: story LineNumber, para kNone, no paints
   TextPos first;                     // the first body text on the page
 };
 

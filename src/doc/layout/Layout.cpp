@@ -482,6 +482,8 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
           shown = u"-";
         } else if (withText && g.leader) {
           shown = u"\t";
+        } else if (withText && lb.story == LineStory::LineNumber) {
+          shown = lb.text;
         } else if (withText && lb.para != kNone && g.textEnd > g.textStart) {
           const ParaText& t = textOf(lb.para);
           if (g.textEnd <= t.text.size())
@@ -539,6 +541,7 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
   for (const Fill& f : p.fills) painter.FillRect({f.rect.left, f.rect.top, f.rect.right, f.rect.bottom}, draw::Brush::Solid(ColorOf(f.color)));
   for (const LineBox& lb : p.lines)
     if (lb.drawing == doc::kNone) paintLine(lb);
+  for (const LineBox& lb : p.lineNumbers) paintLine(lb);
   for (const Edge& edge : p.edges) StrokeEdge(painter, edge);
   for (const DrawingBox& d : p.drawings)
     if (!d.behindText) drawOne(d);
@@ -762,6 +765,16 @@ LayoutDump Layout::Dump(std::string source) const {
     std::stable_sort(sorted.begin(), sorted.end(), [&](size_t a, size_t b) { return zs[a] < zs[b]; });
     std::vector<LayoutLine> lines = page.lines;
     for (size_t k = 0; k < boxes.size(); ++k) page.lines[boxes[k]] = lines[sorted[k]];
+    for (const LineBox& lb : p.lineNumbers) {
+      LayoutLine line;
+      line.story = LayoutStory::LineNumber;
+      line.x = lb.x + lb.line.contentLeft;
+      line.baseline = lb.baseline;
+      line.width = lb.line.contentRight - lb.line.contentLeft;
+      for (const text::GlyphPiece& g : lb.line.pieces) line.size = std::max(line.size, static_cast<double>(g.emSize));
+      line.text.assign(lb.text.begin(), lb.text.end());
+      page.lines.push_back(std::move(line));
+    }
     dump.pages.push_back(std::move(page));
   }
   return dump;

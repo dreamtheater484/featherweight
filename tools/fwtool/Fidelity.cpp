@@ -130,12 +130,13 @@ Area AreaOf(LayoutStory story) {
     case LayoutStory::Footnote:
     case LayoutStory::Endnote: return Area::Notes;
     case LayoutStory::TextBox: return Area::TextBox;
+    case LayoutStory::LineNumber: return Area::LineNumbers;
     default: return Area::Main;
   }
 }
 
 const char* AreaName(Area area) {
-  static const char* const kNames[] = {"main text", "notes", "headers", "footers", "text boxes"};
+  static const char* const kNames[] = {"main text", "notes", "headers", "footers", "text boxes", "line numbers"};
   return kNames[static_cast<int>(area)];
 }
 

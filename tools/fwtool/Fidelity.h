@@ -12,8 +12,8 @@ namespace fwtool::fidelity {
 
 // Lines are compared within areas, so stories the two sides may list in a different order
 // (headers, notes, text boxes) don't disturb each other. Table cells are part of the main text.
-enum class Area { Main, Notes, Header, Footer, TextBox };
-constexpr int kAreas = 5;
+enum class Area { Main, Notes, Header, Footer, TextBox, LineNumbers };
+constexpr int kAreas = 6;
 Area AreaOf(fw::LayoutStory story);
 const char* AreaName(Area area);
 

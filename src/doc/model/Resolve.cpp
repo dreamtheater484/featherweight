@@ -906,7 +906,7 @@ RunProps Document::StyleRun(uint32_t para, std::string_view charStyle) const {
   return lv.work.p;
 }
 
-RunProps Document::StyleChainRun(std::string_view styleId) const {
+RunProps Document::StyleChainRun(std::string_view styleId, std::string_view charStyle) const {
   RunLevels lv;
   if (const Part* styles = FindPart(PartKind::Styles))
     ApplyRun(*this, RootOf(*styles).Path({Name("docDefaults"), Name("rPrDefault"), kRPr}), lv.work, lv.toggles[0]);
@@ -916,6 +916,7 @@ RunProps Document::StyleChainRun(std::string_view styleId) const {
     for (const Style* st : Chain(*this, s)) ApplyRun(*this, st->node.Child(kRPr), lv.work, lv.toggles[level]);
     if (level == 3) lv.work.p.charStyle = s->id;
   }
+  CharacterStyleLevel(*this, charStyle, lv);
   FinishRun(*this, *caches_, lv);
   return lv.work.p;
 }
@@ -1052,7 +1053,7 @@ SectionProps ResolveSection(Node sp) {
       if (auto v = c.Int(Name("start"))) s.pageNumberStart = static_cast<int32_t>(*v);
     } else if (name == Name("lnNumType")) {
       s.lineNumberCountBy = static_cast<int32_t>(c.Int(Name("countBy")).value_or(0));
-      s.lineNumberStart = static_cast<int32_t>(c.Int(Name("start")).value_or(1));
+      s.lineNumberStart = static_cast<int32_t>(c.Int(Name("start")).value_or(0)) + 1;  // w:start counts from 0
       s.lineNumberDistance = Twips(c.Twips(Name("distance")).value_or(0));
       s.lineNumberRestart = c.AttrOr(Name("restart"));
     } else if (name == Name("docGrid")) {

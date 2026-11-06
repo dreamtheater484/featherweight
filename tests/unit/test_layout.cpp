@@ -1354,6 +1354,25 @@ TEST(Layout_RightToLeftTableStartsAtTheRight) {
 
 // The document grid (w:docGrid, East Asian layout, D5): lines of a paragraph that snaps to it are
 // one grid pitch apart, and one that doesn't snap keeps its own height.
+TEST(Layout_LineNumbersInTheMargin) {
+  // Every second line numbered, from 1 (w:start counts from 0), a quarter inch before the column;
+  // a paragraph with w:suppressLineNumbers and a table cell aren't counted, an empty paragraph is.
+  const std::string body = P("one") + "<w:p/>" + P("skipped", "<w:suppressLineNumbers/>") +
+                           "<w:tbl><w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid><w:tr><w:tc>" + P("cell") +
+                           "</w:tc></w:tr></w:tbl>" + P("three") + P("four") +
+                           SmallPage("<w:lnNumType w:countBy=\"2\" w:start=\"0\"/>");
+  Doc d = Make(body);
+  REQUIRE(d.doc && d.pages() == 1);
+  const auto& numbers = d.page(0).lineNumbers;
+  REQUIRE(numbers.size() == 2);
+  CHECK(numbers[0].text == u"2" && numbers[1].text == u"4");
+  const LineBox* four = Find(d, u"four");
+  REQUIRE(four);
+  CHECK(std::abs(numbers[1].baseline - four->baseline) < 0.01f);
+  CHECK(std::abs(numbers[1].x + numbers[1].line.contentRight - (20 - 18)) < 0.01f);  // 20 pt margin
+  CHECK(d.layout->Dump("t").pages[0].lines.back().story == fw::LayoutStory::LineNumber);
+}
+
 TEST(Layout_AnEmptyListLabelHasNoTabAfterIt) {
   auto lvl = [](int i, const char* fmt, const char* text) {
     return "<w:lvl w:ilvl=\"" + std::to_string(i) + "\"><w:start w:val=\"1\"/><w:numFmt w:val=\"" + fmt +

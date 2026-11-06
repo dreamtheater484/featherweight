@@ -10,7 +10,7 @@ namespace fw {
 namespace {
 
 constexpr std::string_view kFormat = "featherweight-layout";
-constexpr std::string_view kStoryNames[] = {"body", "header", "footer", "footnote", "endnote", "cell", "textbox"};
+constexpr std::string_view kStoryNames[] = {"body", "header", "footer", "footnote", "endnote", "cell", "textbox", "lineNumber"};
 
 // Points with at most two decimals, without trailing zeros, independent of the locale.
 void AppendNumber(std::string& out, double v) {
