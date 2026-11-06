@@ -101,14 +101,16 @@ bool Automatic(const std::optional<uint32_t>& c) { return !c || (*c & 0xFFFFFF) 
 bool Automatic(const Color& c) { return c.automatic || (c.rgb & 0xFFFFFF) == 0; }
 
 // The text as pasting inserts it: no paragraph breaks or other control characters inside a run, and
-// only characters XML can hold (U+FFFE and U+FFFF dropped, a lone surrogate made U+FFFD).
+// only characters XML can hold (U+FFFE and U+FFFF dropped, a lone surrogate made U+FFFD). It keeps
+// exactly what Editor::InsertText inserts, character for character: InsertText leaves out U+FFFC
+// (an object's place) and breaks the paragraph at U+2029, so those go here too (fuzz_rtf's finding).
 std::u16string Clean(std::u16string_view s) {
   std::u16string out;
   out.reserve(s.size());
   for (size_t i = 0; i < s.size(); ++i) {
     char16_t c = s[i];
-    if (c == u'\r' || c == u'\n') c = u' ';
-    if ((c < 0x20 && c != u'\t' && c != 0x0B) || c == 0xFFFE || c == 0xFFFF) continue;
+    if (c == u'\r' || c == u'\n' || c == 0x2029) c = u' ';
+    if ((c < 0x20 && c != u'\t' && c != 0x0B) || c == 0xFFFC || c == 0xFFFE || c == 0xFFFF) continue;
     if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.size() && s[i + 1] >= 0xDC00 && s[i + 1] <= 0xDFFF) {
       out += c;
       c = s[++i];
