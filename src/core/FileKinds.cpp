@@ -6,8 +6,8 @@ namespace fw {
 namespace {
 
 constexpr const wchar_t* kPdf[] = {L".pdf"};
-constexpr const wchar_t* kDocument[] = {L".docx", L".docm", L".dotx", L".dotm", L".doc"};
-constexpr const wchar_t* kDocumentLater[] = {L".rtf", L".txt", L".odt"};  // .rtf and .txt come in D2
+constexpr const wchar_t* kDocument[] = {L".docx", L".docm", L".dotx", L".dotm", L".doc", L".odt", L".ott"};
+constexpr const wchar_t* kDocumentLater[] = {L".rtf", L".txt"};  // .rtf and .txt come in D2
 constexpr const wchar_t* kWorkbook[] = {L".xlsx", L".xlsm", L".xltx", L".xltm", L".csv", L".tsv"};
 constexpr const wchar_t* kWorkbookLater[] = {L".xls", L".ods"};
 constexpr const wchar_t* kPresentation[] = {L".pptx", L".pptm", L".potx", L".potm", L".ppsx"};

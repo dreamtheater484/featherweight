@@ -634,6 +634,8 @@ TEST(Resolve_D2_DirectNumberingOverridesTheParagraphStyle) {
   const ParaProps& fromStyle = doc->ResolvedPara(p[1]);
   CHECK(fromStyle.indStart.Value() == 2880 && fromStyle.firstLine.Value() == -360 && fromStyle.numId == "1");
   CHECK(doc->ResolvedPara(p[2]).numId.empty() && !doc->Label(p[2]));
+  // Out of the style's list, it loses the style's indents too (as Word does).
+  CHECK(doc->ResolvedPara(p[2]).indStart.Value() == 0 && doc->ResolvedPara(p[2]).firstLine.Value() == 0);
   CHECK(doc->ResolvedPara(p[3]).indStart.Value() == 100);  // direct indents beat both
 }
 

@@ -100,6 +100,7 @@ struct HyphenationSettings {
   float zone = 0;
   int consecutiveLimit = 0;  // w:consecutiveHyphenLimit: most lines in a row ending in a hyphen; 0: any
   bool caps = true;          // false: w:doNotHyphenateCaps (words typed in capitals)
+  bool likeWord = false;     // only the languages Word on this PC hyphenates (Hyphenator::WordHyphenates)
 };
 
 struct ParagraphFormat {

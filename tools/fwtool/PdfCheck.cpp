@@ -26,6 +26,7 @@
 #include <functional>
 #include <iterator>
 #include <cfloat>
+#include <map>
 #include <set>
 
 #include "Common.h"
@@ -373,7 +374,21 @@ class TextRecorder : public draw::Painter {
     // Raised or lowered text (a note mark, mc²) goes on with the word before it.
     if (!text.empty() && (std::abs(start.x - end_.x) > size * 0.3f || std::abs(start.y - end_.y) > size)) text += L'\n';
     end_ = end;
+    // An equation's pieces (a font with a MATH table) are set apart by layout, not by spaces:
+    // each is a word of its own.
+    auto math = mathFaces_.find(run.face);
+    if (math == mathFaces_.end()) {
+      const void* data = nullptr;
+      UINT32 bytes = 0;
+      void* context = nullptr;
+      BOOL exists = FALSE;
+      if (run.face && SUCCEEDED(run.face->TryGetFontTable(DWRITE_MAKE_OPENTYPE_TAG('M', 'A', 'T', 'H'), &data, &bytes, &context, &exists)) && exists)
+        run.face->ReleaseFontTable(context);
+      math = mathFaces_.emplace(run.face, exists != FALSE).first;
+    }
+    if (math->second && !text.empty()) text += L'\n';
     if (run.text) text.append(reinterpret_cast<const wchar_t*>(run.text), run.textLength);
+    if (math->second) text += L'\n';
     // Its box, a little larger: a mark raised above the line, an accent, a slanted glyph.
     const draw::Point corners[] = {{origin.x - size * 0.5f, origin.y - size * 1.2f}, {x1 + size * 0.5f, origin.y - size * 1.2f},
                                    {origin.x - size * 0.5f, origin.y + size * 0.6f}, {x1 + size * 0.5f, origin.y + size * 0.6f}};
@@ -389,6 +404,7 @@ class TextRecorder : public draw::Painter {
   draw::Matrix m_;
   std::vector<draw::Matrix> stack_;
   draw::Point end_;
+  std::map<IDWriteFontFace*, bool> mathFaces_;
 };
 
 // The characters PDFium finds on a page that aren't where any run drew text: copied or searched,
@@ -595,7 +611,12 @@ std::string WordProblems(const std::wstring& drawn, const std::wstring& read, in
     size_t end = k;
     std::wstring letters;
     while (end < got.size() && got[end].size() == 1) letters += got[end++];
-    if (letters.size() >= 4 && std::any_of(words.begin(), words.end(), [&](const std::wstring& w) {
+    // Equations: their symbols are set apart by layout, with no space characters to go by.
+    const bool math = std::any_of(letters.begin(), letters.end(), [](wchar_t c) {
+      return std::wstring_view(L"+-=<>|~±×÷·").find(c) != std::wstring_view::npos ||
+             (c >= 0x2190 && c <= 0x22FF) || (c >= 0x27C0 && c <= 0x27FF) || (c >= 0x2A00 && c <= 0x2AFF);
+    });
+    if (letters.size() >= 4 && !math && std::any_of(words.begin(), words.end(), [&](const std::wstring& w) {
           return w.size() > letters.size() && w.find(letters) != std::wstring::npos;
         })) {
       if (!count++) first = "\"" + fw::WideToUtf8(letters) + "\" reads letter by letter";

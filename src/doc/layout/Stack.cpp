@@ -200,6 +200,10 @@ float Engine::SpaceBefore(const ParaProps& p, const Spacing& s) const {
   if (p.spaceBeforeAuto) before = s.atTop && s.prev == nullptr ? 0.0f : 14.0f;
   if (s.prev && p.contextualSpacing && Contextual(*s.prev, p)) before = 0;
   float after = s.after;
+  // HTML's automatic spacing leaves none between two items of one list, as between <li>s.
+  const bool sameList = s.prev && !p.numId.empty() && s.prev->numId == p.numId;
+  if (sameList && p.spaceBeforeAuto) before = 0;
+  if (sameList && s.prev->spaceAfterAuto) after = 0;
   if (s.prev && s.prev->contextualSpacing && Contextual(*s.prev, p)) after = 0;
   // Between two paragraphs Word leaves the larger of the one's space after and the other's space
   // before, as HTML does, unless the document asks it not to use HTML paragraph spacing.

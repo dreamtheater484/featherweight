@@ -57,8 +57,8 @@ void App::InitFiles(bool userFolders) {
   s.recovery = base + L"\\Recovery";
 }
 
-void App::NewDocument() {
-  auto view = DocView::NewDocument(*this, ++newDocuments_);
+void App::NewDocument(int kind) {
+  auto view = DocView::NewDocument(*this, ++newDocuments_, static_cast<fw::doc::docx::Template>(kind));
   view->SetViewport(DocRect(), ui_);
   std::wstring error;
   if (view->Load(L"", error) == OpenResult::Failed) {

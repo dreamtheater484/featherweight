@@ -141,13 +141,24 @@ bool DocFile::Save(fw::doc::Document& doc, const std::wstring& path, std::wstrin
     error = name + L" couldn't be saved. " + fw::Utf8ToWide(st.message);
     return false;
   }
+  if (Protected()) {  // with the password it was opened with, as Word does
+    bytes = pkg::crypto::Encrypt(bytes, key_);
+    if (bytes.empty()) {
+      error = name + L" couldn't be saved — Windows couldn't encrypt it.";
+      return false;
+    }
+  }
   // The first time Featherweight replaces a file, the original is kept for 30 days (§13). It is
-  // the snapshot, which CheckDisk just found identical to the file.
+  // the snapshot, which CheckDisk just found identical to the file. A protected document's snapshot
+  // is the decrypted package, so the file itself is kept, still encrypted.
   if (sameFile && !backedUp_ && !Config().backups.empty()) {
     const pkg::Snapshot& snapshot = doc.Package().GetSnapshot();
-    std::vector<uint8_t> original(static_cast<size_t>(snapshot.Size()));
-    if (snapshot.ReadAt(0, original.data(), original.size()))
+    std::vector<uint8_t> original(Protected() ? 0 : static_cast<size_t>(snapshot.Size()));
+    std::string file;
+    if (Protected() ? util::ReadFileBytes(path_, file, 1u << 30) : snapshot.ReadAt(0, original.data(), original.size())) {
+      if (Protected()) original.assign(file.begin(), file.end());
       backedUp_ = !pkg::backups::Keep(Config().backups, path_, original).empty();
+    }
   } else if (!sameFile && !Config().backups.empty() && GetFileAttributesW(target.c_str()) != INVALID_FILE_ATTRIBUTES) {
     // Save As over another file (a recovered document over its original, say): that one is kept too.
     std::string existing;
@@ -183,8 +194,17 @@ void DocFile::Autosave(fw::doc::Document& doc) {
   options.author = fw::WideToUtf8(Config().user);
   std::vector<uint8_t> bytes;
   const std::wstring where = origin_ == Origin::File ? path_ : suggested_;
-  if (fw::doc::docx::Serialize(doc, options, bytes).Ok() && pkg::recovery::Write(autosave_, where, Title(), bytes))
-    autosaved_ = generation_;
+  if (!fw::doc::docx::Serialize(doc, options, bytes).Ok()) return;
+  if (Protected()) bytes = pkg::crypto::Encrypt(bytes, key_);  // never in clear, even for this Windows user
+  if (!bytes.empty() && pkg::recovery::Write(autosave_, where, Title(), bytes)) autosaved_ = generation_;
+}
+
+void DocFile::AutosaveProtected(std::span<const uint8_t> file) {
+  if (!dirty_ || generation_ == autosaved_ || Config().recovery.empty()) return;
+  pkg::recovery::Session& session = RecoverySession();
+  if (!session.Started() && !session.Start(Config().recovery)) return;
+  if (autosave_.empty()) autosave_ = session.NewFile();
+  if (pkg::recovery::Write(autosave_, origin_ == Origin::File ? path_ : suggested_, Title(), file)) autosaved_ = generation_;
 }
 
 std::wstring DocFile::InUseMessage() const {

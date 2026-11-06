@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "PagedView.h"
+#include "PasswordCard.h"
 #include "pdf/Document.h"
 #include "pdf/RenderCache.h"
 #include "pdf/Search.h"
@@ -48,7 +49,7 @@ class PdfView : public PagedView, public DocumentHost {
   OpenResult Load(const std::wstring& password, std::wstring& error) override;
   bool Ready() const override { return state_ == LoadState::Ready; }
   bool NeedsPassword() const override { return state_ == LoadState::NeedPassword; }
-  TextBox* PasswordBox() override { return NeedsPassword() ? &pwBox_ : nullptr; }
+  TextBox* PasswordBox() override { return NeedsPassword() ? &pw_.Box() : nullptr; }
   const std::wstring& Path() const override;
   std::wstring Title() const override;
   bool Modified() const override { return doc_ && doc_->Modified(); }
@@ -149,7 +150,6 @@ class PdfView : public PagedView, public DocumentHost {
   void DrawBitmap(ID2D1DeviceContext* dc, ID2D1Bitmap* bmp, const D2D1_RECT_F& dest, const D2D1_RECT_F& src,
                   bool inverted, bool exact);
   void DrawOverlays(gfx::Canvas& c, int first, int last);
-  void DrawPasswordCard(gfx::Canvas& c);
 
   // Interaction helpers
   void AfterFormEvent();
@@ -157,7 +157,7 @@ class PdfView : public PagedView, public DocumentHost {
   bool FieldKey(UINT vk, UINT mods);
   bool FocusFieldOnNextPage(int fromPage, bool backwards);
   void ScrollToMatch(int index);
-  void SubmitPassword();
+  void SubmitPassword(const std::wstring& password);
   void AnnotationsChanged(int page);
   // Notes: hover preview, markers along the right edge.
   void UpdateHoverNote(int x, int y);
@@ -178,11 +178,7 @@ class PdfView : public PagedView, public DocumentHost {
   std::unique_ptr<RenderCache> cache_;
   LoadState state_ = LoadState::Empty;
 
-  // Password prompt
-  TextBox pwBox_;
-  Button pwOpen_;
-  ButtonSet pwButtons_;
-  std::wstring pwError_;
+  PasswordCard pw_;
 
   // Interaction
   int formPage_ = -1;

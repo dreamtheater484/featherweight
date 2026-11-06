@@ -6,6 +6,7 @@
 #include <string>
 
 #include "Common.h"
+#include "chart/Chart.h"
 #include "core/Strings.h"
 #include "doc/msdoc/MsDoc.h"
 #include "pkg/CompoundFile.h"
@@ -15,6 +16,10 @@ namespace {
 
 constexpr const char* kUsage =
     "Usage:\n"
+    "  fwtool odt [--out DIR] <file or folder>...\n"
+    "      Converts OpenDocument text files (.odt, .ott) and Word templates (.dotx, .dotm, to a new\n"
+    "      document) as the app opens them, checks the .docx and reads it into the model; with\n"
+    "      --out the converted documents are kept there.\n"
     "  fwtool roundtrip [--model] [--reserialize-all] [--expect-reject] [--out DIR] <file or folder>...\n"
     "      Opens and saves each file without edits. Untouched parts must be byte-identical;\n"
     "      with --reserialize-all every XML part is rewritten through the DOM and must equal\n"
@@ -80,6 +85,16 @@ constexpr const char* kUsage =
     "  fwtool export --out DIR <file or folder>...\n"
     "      Saves each Word document as RTF and as plain text (UTF-8) in DIR, as the Word tab's\n"
     "      Save As does, for Word to read back (scripts\\word-open-check.ps1).\n"
+    "  fwtool encrypt --password P --out DIR <file or folder>...\n"
+    "      Saves each Office file in DIR protected with password P, as Featherweight saves a\n"
+    "      protected document (agile encryption), for Word to open.\n"
+    "  fwtool decrypt --password P --out DIR <file or folder>...\n"
+    "      Opens each password-protected Office file as Featherweight does and saves its package\n"
+    "      in DIR; checks that encrypting it again with the key from opening round-trips.\n"
+    "  fwtool cfb [--all] <file>...\n"
+    "      Reads each compound file (.doc, protected Office files): every stream must read, and\n"
+    "      writing them and reading them back must give the same bytes. --all lists the streams,\n"
+    "      with small ones in hex.\n"
     "  fwtool bench-app [--runs N] [--json FILE] <Featherweight.exe> [<file>...]\n"
     "      Starts a private copy of Featherweight, alone and with each file, and measures launch\n"
     "      to window, to the first frame (the start screen or the first page), memory once\n"
@@ -186,6 +201,7 @@ std::string_view AsText(const std::vector<uint8_t>& bytes) {
 
 int wmain(int argc, wchar_t** argv) {
   SetConsoleOutputCP(CP_UTF8);
+  fw::chart::Install();
   if (argc >= 2 && std::wstring(argv[1]) == L"wrap") return fwtool::RunWrap(argc, argv);
   if (argc == 4 && std::wstring(argv[1]) == L"convert") {
     fw::pkg::Status st;
@@ -213,6 +229,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--layout") options.layout = true;
     else if (arg == L"--expect-reject") options.expectReject = true;
     else if (arg == L"--out" && i + 1 < argc) options.outDir = argv[++i];
+    else if (arg == L"--password" && i + 1 < argc) options.password = argv[++i];
     else if (arg == L"--printer" && i + 1 < argc) options.printer = argv[++i];
     else if (arg == L"--warp") options.warp = true;
     else if (arg == L"--pictures") options.pictures = true;
@@ -247,6 +264,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"dump") return fwtool::RunDump(options);
   if (command == L"save") return fwtool::RunSave(options);
   if (command == L"check") return fwtool::RunCheck(options);
+  if (command == L"odt") return fwtool::RunOdt(options);
   if (command == L"print-sample") return fwtool::RunPrintSample(options);
   if (command == L"render") return fwtool::RunRender(options);
   if (command == L"lines") return fwtool::RunLines(options);
@@ -258,6 +276,9 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"torture") return fwtool::RunTorture(options);
   if (command == L"paste-check") return fwtool::RunPasteCheck(options);
   if (command == L"export") return fwtool::RunExport(options);
+  if (command == L"encrypt") return fwtool::RunCrypt(options, true);
+  if (command == L"decrypt") return fwtool::RunCrypt(options, false);
+  if (command == L"cfb") return fwtool::RunCfb(options);
   if (command == L"pdf-check") return fwtool::RunPdfCheck(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;

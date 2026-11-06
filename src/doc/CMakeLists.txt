@@ -13,6 +13,7 @@ add_library(fwdoc STATIC
   docx/Save.cpp
   docx/Writer.cpp
   msdoc/MsDoc.cpp
+  odf/Odt.cpp
   edit/Case.cpp
   edit/Clip.cpp
   edit/ClipTable.cpp
@@ -41,6 +42,7 @@ target_compile_options(fwdoc PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,Mi
 add_library(fwdoclayout STATIC
   layout/Flow.cpp
   layout/Layout.cpp
+  layout/Math.cpp
   layout/Stack.cpp
   layout/Table.cpp
   layout/Text.cpp
@@ -75,7 +77,7 @@ if(FW_BUILD_TESTS)
     "${PROJECT_SOURCE_DIR}/tests/unit/test_inline.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_notes.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_toc.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_msdoc.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_proof.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_tables.cpp"
-    "${PROJECT_SOURCE_DIR}/tests/unit/test_review.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_review.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_odt.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_pictures.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_shapes.cpp"
     # The document tab's file (D2 "Files"): an app source, tested here with temporary folders.
     "${PROJECT_SOURCE_DIR}/tests/unit/test_docfile.cpp" "${PROJECT_SOURCE_DIR}/src/word/DocFile.cpp")

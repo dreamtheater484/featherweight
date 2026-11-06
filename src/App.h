@@ -175,7 +175,7 @@ class App : public PdfHost, public DropHost {
   // Files kept safe (AppFiles.cpp): new documents, crash recovery, changes on disk, backups
   // Where backups and recovery autosaves go, and who saves; `userFolders` false keeps them off.
   void InitFiles(bool userFolders);
-  void NewDocument();
+  void NewDocument(int kind = 0);  // fw::doc::docx::Template
   // At startup: documents a crash left unsaved, offered in a banner.
   void OfferRecovery();
   void RecoverDocuments(bool open);  // Recover, or Discard

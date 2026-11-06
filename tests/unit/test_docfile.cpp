@@ -14,6 +14,8 @@
 #include "doc/edit/Editor.h"
 #include "pkg/Check.h"
 #include "pkg/Backups.h"
+#include "pkg/CompoundFile.h"
+#include "pkg/OfficeCrypto.h"
 #include "pkg/OwnerFile.h"
 #include "word/DocFile.h"
 
@@ -186,6 +188,73 @@ TEST(DocFile_AutosaveGoesWithACleanClose) {
     CHECK(fw::pkg::recovery::FindOrphans(DocFile::Config().recovery).empty());
   }
   CHECK_EQ(f.Count(L"Recovery", L"*.fwr"), 0u);
+  DocFile::RecoverySession().End();
+}
+
+TEST(DocFile_ProtectedDocumentStaysEncrypted) {
+  // Saves, the backup of the original and autosaves of a password-protected document (D5) are
+  // all encrypted with its password.
+  namespace crypto = fw::pkg::crypto;
+  Folder f;
+  Configure(f);
+  const std::wstring path = f.path + L"\\secret.docx";
+  const std::wstring password = L"pw";
+  const auto package = fw::doc::docx::BlankDocx();
+  const auto original = crypto::Encrypt(package, crypto::NewKey(password));
+  CHECK(test::WriteFileBytes(path, original));
+  // As DocView opens it: the decrypted package, the encrypted file's stamp.
+  auto cf = fw::pkg::CompoundFile::Open(original);
+  std::vector<uint8_t> opened;
+  crypto::Key key;
+  CHECK(cf && crypto::Decrypt(*cf, password, opened, key) == crypto::Result::Ok);
+  fw::pkg::Status st;
+  auto pkg = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(opened), fw::pkg::Limits::Default(), st);
+  auto doc = pkg ? fw::doc::docx::Read(std::move(pkg), st) : nullptr;
+  CHECK(doc);
+  if (!doc) return;
+  fw::pkg::Snapshot::Stamp stamp;
+  CHECK(fw::pkg::StampOf(path, fw::pkg::HashBytes(original), stamp));
+  auto decrypts = [&](const std::vector<uint8_t>& bytes) {
+    auto file = fw::pkg::CompoundFile::Open(bytes);
+    std::vector<uint8_t> out;
+    crypto::Key k;
+    return file && crypto::Decrypt(*file, password, out, k) == crypto::Result::Ok && out.size() > 2 && out[0] == 'P' &&
+           out[1] == 'K';
+  };
+  {
+    DocFile file;
+    file.Opened(path, stamp);
+    file.Protect(key);
+    CHECK(file.Protected());
+    CHECK(file.CheckDisk() == DocFile::DiskChange::None);
+    file.Edited(MainPart(*doc));
+    std::wstring error;
+    CHECK(file.Save(*doc, path, error));
+    const auto saved = ReadAll(path);
+    CHECK(saved != original && decrypts(saved));
+    // The backup is the file as it was: encrypted.
+    CHECK(ReadAll(fw::pkg::backups::Latest(DocFile::Config().backups, path)) == original);
+    // An autosave holds the encrypted file.
+    file.Edited(MainPart(*doc));
+    file.Autosave(*doc);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((DocFile::Config().recovery + L"\\*.fwr").c_str(), &fd);
+    CHECK(h != INVALID_HANDLE_VALUE);
+    if (h != INVALID_HANDLE_VALUE) {
+      FindClose(h);
+      fw::pkg::recovery::Entry entry;
+      std::vector<uint8_t> autosaved;
+      CHECK(fw::pkg::recovery::Read(DocFile::Config().recovery + L"\\" + fd.cFileName, entry, autosaved));
+      CHECK(decrypts(autosaved));
+    }
+  }
+  {
+    // Recovered and still locked: kept in this session's recovery as it is.
+    DocFile recovered;
+    recovered.Copy(L"secret (recovered).docx", path, true);
+    recovered.AutosaveProtected(original);
+    CHECK_EQ(f.Count(L"Recovery", L"*.fwr"), 1u);
+  }
   DocFile::RecoverySession().End();
 }
 

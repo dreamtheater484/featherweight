@@ -36,6 +36,9 @@ param(
   # text) and comments (author, text, resolved, the comment each one replies to), into the JSON's
   # "review" (scripts\contract-review-check.ps1).
   [switch]$Review,
+  # The password of protected files (D5: Featherweight's encrypted saves). Without it, a protected
+  # file fails to open instead of prompting.
+  [string]$Password,
   # Internal: open one file in this process (the parent runs one child per file).
   [string]$Child, [string]$ResultFile
 )
@@ -152,7 +155,8 @@ if ($Child) {
     # WritePasswordDocument, WritePasswordTemplate, Format, Encoding, Visible, OpenAndRepair, DocumentDirection,
     # NoEncodingDialog, all by reference. A dummy password makes a protected file fail instead of prompting.
     $missing = [Type]::Missing
-    $doc = $word.Documents.Open([ref]$Child, [ref]$false, [ref]$true, [ref]$false, [ref]"-", [ref]"-", [ref]$false,
+    $pw = if ($Password) { $Password } else { "-" }
+    $doc = $word.Documents.Open([ref]$Child, [ref]$false, [ref]$true, [ref]$false, [ref]$pw, [ref]"-", [ref]$false,
                                 [ref]"-", [ref]"-", [ref]0, [ref]$missing, [ref]$false, [ref]$false, [ref]$missing, [ref]$true)
     $result.opened = $true
     # While a dialog is up (the parent cancels it), Word rejects calls: try again for a while.
@@ -251,6 +255,7 @@ foreach ($f in @($files)) {
   $childArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"",
                  "-Child", "`"$($f.FullName)`"", "-ResultFile", "`"$resultPath`"")
   if ($Review) { $childArgs += "-Review" }
+  if ($Password) { $childArgs += @("-Password", "`"$Password`"") }
   $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList $childArgs
   # Watch the Word process for dialogs until the child is done: read each one, then cancel it.
   $seen = @{}

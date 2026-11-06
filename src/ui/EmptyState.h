@@ -12,14 +12,17 @@
 #include "ui/Widgets.h"
 
 // The start screen (plan §5.1): the logo, Open… with the drop hint, a New row with a tile for each
-// editor that has shipped, and the recent files. Tab moves between Open…, the New tiles and the
+// editor that has shipped, a row of templates once the Word editor has (D5), and the recent files. Tab moves between Open…, the New tiles and the
 // list; the arrows move through the files, Enter opens one and Delete takes it off the list.
 class EmptyState {
  public:
   struct Result {
-    enum class Kind { None, Open, New, OpenRecent, RemoveRecent } kind = Kind::None;
-    int index = -1;  // the recent file, or the fw::FileKind to create
+    enum class Kind { None, Open, New, Template, OpenRecent, RemoveRecent } kind = Kind::None;
+    int index = -1;  // the recent file, the fw::FileKind to create, or the template (kTemplates)
   };
+  // The built-in templates, in fw::doc::docx::Template's order (after None).
+  static constexpr int kTemplateCount = 3;
+  static constexpr const wchar_t* kTemplates[kTemplateCount] = {L"Letter", L"CV", L"Report"};
 
   EmptyState();
   void Layout(const RECT& area, float ui, const std::vector<RecentFile>& recent);
@@ -43,8 +46,9 @@ class EmptyState {
   D2D1_RECT_F RemoveRect(int row) const;
   bool OverRemove(int row, int x, int y) const;
   int TileAt(int x, int y) const;
-  // The New tiles that are showing, as file kinds.
+  // The tiles that are showing: file kinds, then kFileKindCount + the template.
   std::vector<int> Tiles() const;
+  Result TileResult(int tile) const;
   void FocusOn(Focus f, int tile);
   void Select(int row);
   void MoveFocus(bool forward);
@@ -52,9 +56,9 @@ class EmptyState {
   RECT area_{};
   float ui_ = 1;
   Button open_;
-  Button tiles_[fw::kFileKindCount];  // by file kind; PDF's never shows
+  Button tiles_[fw::kFileKindCount + kTemplateCount];  // by file kind (PDF's never shows), then the templates
   ButtonSet set_;
-  D2D1_RECT_F logo_{}, title_{}, hint_{}, newLabel_{}, listHeader_{};
+  D2D1_RECT_F logo_{}, title_{}, hint_{}, newLabel_{}, templateLabel_{}, listHeader_{};
   bool hintBeside_ = true;  // next to Open…, or below it in a narrow window
   std::vector<D2D1_RECT_F> rows_;
   std::vector<std::wstring> paths_;  // the files the rows show
@@ -66,7 +70,7 @@ class EmptyState {
 
   // Keyboard focus. The selected file is remembered by path, so it stays put when the list changes.
   Focus focus_ = Focus::None;
-  int focusTile_ = -1;  // file kind
+  int focusTile_ = -1;  // a tile, as Tiles() has them
   bool focusVisible_ = false;
   int selected_ = -1;
   std::wstring selectedPath_;

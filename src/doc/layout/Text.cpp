@@ -298,6 +298,7 @@ text::ParagraphFormat Engine::FormatOf(const ParaProps& p) const {
   f.hyphenation.zone = compatMode_ >= 15 ? 0 : Pt(set.hyphenationZone);
   f.hyphenation.consecutiveLimit = set.consecutiveHyphenLimit;
   f.hyphenation.caps = !set.doNotHyphenateCaps;
+  f.hyphenation.likeWord = true;
   f.expandLineBreaks = !set.Compat(Name("doNotExpandShiftReturn"));
   f.squeezeSpaces = compatMode_ >= 15;
   if (!set.decimalSymbol.empty()) f.decimalSeparator = static_cast<wchar_t>(set.decimalSymbol.front());
@@ -403,8 +404,38 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   bool visible = false;
   uint32_t covered = 0;  // model text emitted so far
 
+  // Text outside every run, up to `upto`: equations (m:oMath and m:oMathPara sit in the paragraph,
+  // not in a run), laid out as objects in the paragraph mark's style; anything else hidden, so
+  // offsets still match.
+  const text::TextStyle* gapStyle = nullptr;
+  auto gap = [&](uint32_t upto) {
+    upto = std::min<uint32_t>(upto, static_cast<uint32_t>(t.size()));
+    for (uint32_t k = covered; k < upto; ++k) {
+      while (item < items.size() && items[item].offset < k) ++item;
+      const InlineItem* it = item < items.size() && items[item].offset == k ? &items[item] : nullptr;
+      if (!gapStyle) gapStyle = styles_.Intern(StyleOf(markProps, false));
+      if (t[k] == 0xFFFC && it && it->kind == ItemKind::Drawing && it->drawing != kNone && !gapStyle->hidden &&
+          doc_.Drawings()[it->drawing].kind == DrawingKind::Equation && !doc_.Drawings()[it->drawing].hidden) {
+        text::TextStyle os = *gapStyle;
+        const math::Equation& eq = EquationOf(it->drawing, gapStyle->size);
+        os.objectWidth = eq.width;
+        os.objectAscent = eq.ascent;
+        os.objectDescent = eq.descent;
+        out.inlines.push_back({static_cast<uint32_t>(out.text.size()), it->drawing});
+        emit(std::u16string_view(&t[k], 1), styles_.Intern(os), RunPaint());
+        visible = true;
+      } else {
+        text::TextStyle h = *gapStyle;
+        h.hidden = true;
+        emit(std::u16string_view(&t[k], 1), styles_.Intern(h), RunPaint());
+      }
+    }
+    covered = std::max(covered, upto);
+  };
+
   for (uint32_t r = 0; r < runs.size(); ++r) {
     const TextRun& run = runs[r];
+    if (run.start > covered) gap(run.start);
     if (run.start < covered) continue;  // overlapping runs don't happen; be safe
     const RunProps& rp = RunOf(para, run.run);
     bool hidden = run.fieldCode || Gone(run.revision, options_);
@@ -520,9 +551,10 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
               os.objectAscent = Pt(Emu(d.cy.Value() + d.effectT.Value() + d.effectB.Value()));
               os.objectDescent = 0;
               if (d.kind == DrawingKind::Equation) {
-                os.objectWidth = EquationWidth(it->drawing, style->size);
-                os.objectAscent = style->size * 0.9f;
-                os.objectDescent = style->size * 0.25f;
+                const math::Equation& eq = EquationOf(it->drawing, style->size);
+                os.objectWidth = eq.width;
+                os.objectAscent = eq.ascent;
+                os.objectDescent = eq.descent;
               }
               out.inlines.push_back({static_cast<uint32_t>(out.text.size()), it->drawing});
               emit(std::u16string_view(&t[i], 1), styles_.Intern(os), paint);
@@ -572,11 +604,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
     }
     covered = std::max(covered, run.end);
   }
-  // Text no run covers (there shouldn't be any): hidden, so offsets still match.
-  if (covered < t.size()) {
-    text::TextStyle h = StyleOf(markProps, true);
-    emit(std::u16string_view(t).substr(covered), styles_.Intern(h), RunPaint());
-  }
+  gap(static_cast<uint32_t>(t.size()));
 
   // A deleted paragraph mark joins the paragraph to the next in Word's final view, so one with
   // nothing of its own left to show is gone.
@@ -591,6 +619,20 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   out.fw.text = out.text;
   out.fw.runs = out.runs;
   out.fw.format = FormatOf(props);
+  // A display equation (m:oMathPara) alone in its paragraph is placed by its own m:jc, centered
+  // unless it says otherwise, whatever the paragraph's alignment, as Word shows it.
+  const math::Equation* display = nullptr;
+  bool alone = true;
+  for (size_t k = 0; k < out.text.size() && alone; ++k) {
+    if (out.text[k] == u' ' || out.text[k] == u'\t') continue;
+    auto in = std::find_if(out.inlines.begin(), out.inlines.end(), [&](const auto& x) { return x.first == k; });
+    alone = in != out.inlines.end() && doc_.Drawings()[in->second].node.Is(Name("m:oMathPara"));
+    if (alone) display = LaidOutEquation(in->second);
+  }
+  if (alone && display)
+    out.fw.format.alignment = display->justify == math::Equation::Justify::Left    ? text::Alignment::Start
+                              : display->justify == math::Equation::Justify::Right ? text::Alignment::End
+                                                                                   : text::Alignment::Center;
 }
 
 std::u16string Engine::NoteReference(uint32_t story) {
@@ -611,19 +653,21 @@ std::u16string Engine::NoteMark(uint32_t story) const {
   return it->second;
 }
 
-float Engine::EquationWidth(uint32_t drawing, float size) {
-  std::string xml = doc_.DrawingXml(doc_.Drawings()[drawing]);
-  size_t chars = 0;
-  for (size_t at = xml.find("<m:t"); at != std::string::npos; at = xml.find("<m:t", at + 1)) {
-    size_t open = xml.find('>', at);
-    if (open == std::string::npos) break;
-    if (xml[open - 1] == '/') continue;
-    size_t close = xml.find("</m:t>", open);
-    if (close == std::string::npos) break;
-    for (size_t k = open + 1; k < close; ++k)
-      if ((static_cast<unsigned char>(xml[k]) & 0xC0) != 0x80) ++chars;
+const math::Equation& Engine::EquationOf(uint32_t drawing, float size) {
+  const Drawing& d = doc_.Drawings()[drawing];
+  std::string xml = doc_.DrawingXml(d);
+  EquationSlot& slot = equations_[drawing];
+  if (!slot.eq || slot.size != size || slot.xml != xml) {
+    slot.eq = math::LayOut(fonts_, xml, size, d.node.Is(Name("m:oMathPara")));
+    slot.size = size;
+    slot.xml = std::move(xml);
   }
-  return static_cast<float>(chars) * size * 0.5f;
+  return *slot.eq;
+}
+
+const math::Equation* Engine::LaidOutEquation(uint32_t drawing) const {
+  auto it = equations_.find(drawing);
+  return it == equations_.end() ? nullptr : it->second.eq.get();
 }
 
 }  // namespace fw::doc::layout
