@@ -14,8 +14,9 @@ namespace {
 constexpr const char* kUsage =
     "Usage:\n"
     "  fwtool odt [--out DIR] <file or folder>...\n"
-    "      Converts OpenDocument text files (.odt, .ott) as the app opens them, checks the .docx\n"
-    "      and reads it into the model; with --out the converted documents are kept there.\n"
+    "      Converts OpenDocument text files (.odt, .ott) and Word templates (.dotx, .dotm, to a new\n"
+    "      document) as the app opens them, checks the .docx and reads it into the model; with\n"
+    "      --out the converted documents are kept there.\n"
     "  fwtool roundtrip [--model] [--reserialize-all] [--expect-reject] [--out DIR] <file or folder>...\n"
     "      Opens and saves each file without edits. Untouched parts must be byte-identical;\n"
     "      with --reserialize-all every XML part is rewritten through the DOM and must equal\n"

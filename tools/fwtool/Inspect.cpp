@@ -5,6 +5,7 @@
 
 #include "Common.h"
 #include "LayoutHook.h"
+#include "doc/docx/Blank.h"
 #include "doc/docx/Docx.h"
 #include "doc/odf/Odt.h"
 #include "pkg/Check.h"
@@ -106,13 +107,15 @@ int RunCheck(const Options& options) {
   return failed == 0 ? 0 : 1;
 }
 
-// OpenDocument text files as the app opens them (D5): converted to .docx, checked, and read into
-// the model. With --out, the converted documents are kept there (for the Word open check).
+// OpenDocument text files and Word templates as the app opens them (D5): converted to .docx (a
+// template to a new document made from it), checked, and read into the model. With --out, the
+// converted documents are kept there (for the Word open check).
 int RunOdt(const Options& options) {
   std::vector<std::filesystem::path> files;
   auto take = [&](const std::filesystem::path& f) {
     const std::wstring ext = f.extension().wstring();
-    if (_wcsicmp(ext.c_str(), L".odt") == 0 || _wcsicmp(ext.c_str(), L".ott") == 0) files.push_back(f);
+    for (const wchar_t* e : {L".odt", L".ott", L".dotx", L".dotm"})
+      if (_wcsicmp(ext.c_str(), e) == 0) files.push_back(f);
   };
   for (const auto& in : options.inputs) {
     std::error_code ec;
@@ -129,7 +132,8 @@ int RunOdt(const Options& options) {
     std::ifstream f(file, std::ios::binary);
     std::vector<uint8_t> odt((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     std::vector<uint8_t> docx;
-    fw::pkg::Status st = fw::doc::odf::OdtToDocx(odt, docx);
+    const bool word = _wcsnicmp(file.extension().wstring().c_str(), L".do", 3) == 0;
+    fw::pkg::Status st = word ? fw::doc::docx::DocumentFromTemplate(odt, docx) : fw::doc::odf::OdtToDocx(odt, docx);
     std::string problem;
     size_t paragraphs = 0;
     if (!st.Ok()) {

@@ -144,6 +144,23 @@ TEST(Odt_TextStylesListsTablesNotes) {
   CHECK(doc->Drawings().size() == 1);
 }
 
+TEST(Odt_NoteInTextWithALanguage) {
+  // The note's reference is raised among the run's properties in the schema's order: w:vertAlign
+  // before w:lang (Word-written .odt files, found by the Open XML SDK validator).
+  const std::string autos =
+      "<style:style style:name=\"T1\" style:family=\"text\"><style:text-properties fo:language=\"fr\" fo:country=\"FR\"/></style:style>";
+  const std::string body =
+      "<text:p><text:span text:style-name=\"T1\">mot<text:note text:note-class=\"footnote\"><text:note-citation>1</text:note-citation>"
+      "<text:note-body><text:p>Note</text:p></text:note-body></text:note></text:span></text:p>";
+  std::string xml;
+  auto doc = Converted(Odt(body, autos), &xml);
+  CHECK(doc);
+  const size_t ref = xml.find("<w:footnoteReference");
+  const size_t rpr = xml.rfind("<w:rPr>", ref);
+  const size_t vert = xml.find("<w:vertAlign w:val=\"superscript\"/>", rpr), lang = xml.find("<w:lang ", rpr);
+  CHECK(ref != std::string::npos && vert < ref && lang < ref && vert < lang);
+}
+
 TEST(Odt_OtherPrefixesAndBadInput) {
   // Prefixes other than ODF's usual ones are read by their namespaces.
   const std::string content =

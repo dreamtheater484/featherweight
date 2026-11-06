@@ -907,10 +907,9 @@ void Converter::Note(xml_node note, const Inline& in, std::string& out, int dept
   if (!body || depth >= kMaxDepth) return;
   const int id = end ? nextEndnote_++ : nextFootnote_++;
   const char* kind = end ? "endnote" : "footnote";
-  RunProps plain = in.props;
-  plain.vert.clear();
-  out += "<w:r><w:rPr>" + plain.Xml() + "<w:vertAlign w:val=\"superscript\"/></w:rPr><w:" + kind + "Reference w:id=\"" +
-         std::to_string(id) + "\"/></w:r>";
+  RunProps raised = in.props;
+  raised.vert = "superscript";  // in its place among the run's properties (before w:lang)
+  out += "<w:r><w:rPr>" + raised.Xml() + "</w:rPr><w:" + kind + "Reference w:id=\"" + std::to_string(id) + "\"/></w:r>";
   // The note's text, in its own part: its first paragraph starts with the number.
   const size_t was = part_;
   for (size_t i = 0; i < parts_.size(); ++i)
