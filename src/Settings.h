@@ -48,6 +48,8 @@ class Settings {
   bool highlightFields = true;
   bool spelling = true;     // Word documents: check spelling as you type
   bool autoCorrect = true;  // Word documents: AutoCorrect as you type
+  bool ruler = false;       // Word documents: the rulers shown
+  std::wstring reviewer;    // Word documents: the name changes and comments are made with (empty: Windows')
   bool autoUpdate = true;
   int64_t lastUpdateCheck = 0;
   std::wstring skippedVersion;

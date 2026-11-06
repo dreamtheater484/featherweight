@@ -24,10 +24,12 @@ struct ClipRun {
   std::string font;                // UTF-8; empty when not said
   std::string charStyle;           // the w:rStyle id (Featherweight's own copies)
   std::string link;                // a hyperlink's target: a web address, or "#bookmark"
+  // Save as RTF: the field whose result the text is (PAGE, NUMPAGES); copies leave it empty.
+  std::string field;
   bool SameLook(const ClipRun& o) const {
     return bold == o.bold && italic == o.italic && underline == o.underline && strike == o.strike &&
            vertAlign == o.vertAlign && halfPoints == o.halfPoints && color == o.color && font == o.font &&
-           charStyle == o.charStyle && link == o.link;
+           charStyle == o.charStyle && link == o.link && field == o.field;
   }
 };
 
@@ -43,6 +45,10 @@ struct ClipPara {
   // Featherweight's own copies: the paragraph style and the list (used in the same document).
   std::string style, numId;
   int32_t ilvl = 0;
+  // A table cell's paragraph: its table (from 1, in the clip's order), and its row and cell there
+  // as the source counts them (pasting goes by where they change). 0 outside tables.
+  uint32_t table = 0, row = 0, cell = 0;
+  bool pageBreakBefore = false;  // Save as RTF; copies leave it false
 };
 
 // Paragraphs with a paragraph break between each two: text that ends with a paragraph mark has an
@@ -53,25 +59,56 @@ struct Clip {
   uint64_t source = 0;  // the document it came from (Featherweight's own copies), 0 when unknown
   bool Empty() const;
   // As plain text: list labels and a tab before the text, CR LF between paragraphs and for line
-  // breaks.
+  // breaks; a tab between a row's cells.
   std::u16string PlainText() const;
+  bool HasTables() const;
 };
 
 // The text in [from, to) of one story, as shown: deleted text, field codes and hidden text left
 // out. `source` names the document, for pasting lists back into it.
+// Tables whose cells it crosses come as tables (whole tables nested in them as their text).
 Clip CopyClip(const Document& doc, Pos from, Pos to, uint64_t source = 0);
+// The block of cells between from and to (a selection across cells) as a table; nullopt when
+// they aren't cells of one table.
+std::optional<Clip> CopyCells(const Editor& editor, Pos from, Pos to, uint64_t source = 0);
 
 // Replaces [from, to) with the clip, as one undo step ("Paste"). `target` names the document as
 // CopyClip's `source` does. Formatting the text there already has is left alone; the rest is set
 // as direct formatting; web links (http, https, mailto, ftp) become hyperlinks, other links plain
 // text. Nothing changes when the editor refuses.
-Result PasteClip(Editor& editor, Pos from, Pos to, const Clip& clip, uint64_t target = 0);
+// Tables: in body text each is a new table, with the text before and after it in paragraphs of
+// their own. In a cell, a clip that is one table goes over the cells from there (rows added below
+// as needed, columns past the table's edge left out); anything else comes as text, a row a
+// paragraph with its cells separated by tabs.
+// `merge` (Word's "Merge formatting"): the text takes the look and paragraph properties of where
+// it goes, keeping only its emphasis (bold, italic, underline, strikethrough, raised and lowered
+// text), its links and, in the same document, its lists. Tables paste as without it.
+Result PasteClip(Editor& editor, Pos from, Pos to, const Clip& clip, uint64_t target = 0, bool merge = false);
 
 // The converters. RTF is 7-bit ASCII ("Rich Text Format" on the clipboard); HTML is the
 // clipboard's "HTML Format" (CF_HTML: a header with offsets, then UTF-8). Featherweight's own
 // copies carry their source, styles and lists in data-fw-* attributes.
 std::string ToRtf(const Clip& clip);
 std::string ToHtml(const Clip& clip);
+
+// RTF made of several clips (Save as RTF: the body, and each header and footer) with one font and
+// color table for all of them. ToRtf is one clip through it. Page and column breaks in the text
+// (U+000C, U+000E) are written as RTF's.
+class RtfWriter {
+ public:
+  // The clip's paragraphs. The last one is left open, for the caller to end with \par, \sect or the
+  // end of its group.
+  void Paragraphs(std::string& out, const Clip& clip);
+  // The file: the font and color tables, then `body`, which starts with the document's own
+  // properties when it has any.
+  std::string File(std::string_view body) const;
+
+ private:
+  int Font(const std::string& name);
+  int Color(uint32_t rgb);
+  std::vector<std::string> fonts_;
+  std::vector<uint32_t> colors_;
+};
 std::optional<Clip> FromRtf(std::string_view rtf);
 // Takes CF_HTML (only the fragment is read) or plain HTML.
 std::optional<Clip> FromHtml(std::string_view html);

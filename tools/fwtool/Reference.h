@@ -36,4 +36,7 @@ std::filesystem::path DumpPathFor(const std::filesystem::path& dumps, std::strin
 // order Word drew them, with their story (docs/layout-dump.md says how they're found).
 std::optional<fw::LayoutDump> ReadPdfLines(const std::filesystem::path& pdf, std::string& error);
 
+// Loads pdfium.dll from next to fwtool.exe and initializes it, once; false with `error` if it can't.
+bool InitPdfium(std::string& error);
+
 }  // namespace fwtool

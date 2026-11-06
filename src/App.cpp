@@ -153,7 +153,7 @@ bool App::CreateMainWindow(const AppOptions& opts) {
   // Search box: results update as you type.
   TextBox& sb = search_.Box();
   sb.onChange = [this] {
-    if (TabContent* v = Active()) v->StartSearch(search_.Box().Text(), search_.MatchCase());
+    if (TabContent* v = Active()) v->StartSearch(search_.Box().Text(), search_.MatchCase(), search_.WholeWords());
   };
   sb.onEnter = [this](bool shift) { Execute(shift ? CmdFindPrev : CmdFindNext); };
   sb.onEscape = [this] { CloseSearch(); };
@@ -1122,6 +1122,9 @@ void App::OnKeyDown(UINT vk) {
   // Shortcuts that work everywhere, even while typing in a box or a form field: the window's own,
   // then the active tab's (with no tab open, the PDF reader's).
   auto global = [&]() -> int {
+    // Shift+F3 in a document being edited changes case, as in Word (in the search box it finds back).
+    if (vk == VK_F3 && shift && v && v->HasKeyFocus())
+      if (int cmd = v->ShortcutFor(vk, mods)) return cmd;
     if (int cmd = AppShortcut(vk, mods)) return cmd;
     return v ? v->ShortcutFor(vk, mods) : PdfView::Shortcut(vk, mods);
   };
@@ -1243,7 +1246,8 @@ void App::OnChar(wchar_t ch) {
 int App::AppShortcut(UINT vk, UINT mods) {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0;
   if ((mods & kModAlt) && !ctrl && vk == 'Q') return CmdCommandSearch;
-  if (ctrl) {
+  // Ctrl without Alt: Ctrl+Alt is the tab's (Ctrl+Alt+F a footnote) and AltGr types letters.
+  if (ctrl && !(mods & kModAlt)) {
     switch (vk) {
       case 'O': return CmdOpen;
       case 'N':
@@ -1321,6 +1325,7 @@ void App::Execute(int cmd) {
     case CmdRestoreOriginal: RestoreOriginal(); break;
     case CmdDeleteBackups: DeleteBackups(); break;
     case CmdPrint: PrintActive(); break;
+    case CmdExportPdf: ExportPdfActive(); break;
     case CmdCloseTab:
       if (active_ >= 0) CloseTab(active_);
       break;
@@ -1363,9 +1368,13 @@ void App::Execute(int cmd) {
       else if (ready) v->SearchStep(cmd == CmdFindNext);
       break;
     case CmdCloseFind: CloseSearch(); break;
+    case CmdSearchWords:
+      search_.ToggleWholeWords();
+      if (ready) v->StartSearch(search_.Box().Text(), search_.MatchCase(), search_.WholeWords());
+      break;
     case CmdSearchCase:
       search_.ToggleMatchCase();
-      if (ready) v->StartSearch(search_.Box().Text(), search_.MatchCase());
+      if (ready) v->StartSearch(search_.Box().Text(), search_.MatchCase(), search_.WholeWords());
       break;
     case CmdGoToPage:
       if (ready && v->Paged() && !presentation_) {
@@ -1414,6 +1423,11 @@ void App::Execute(int cmd) {
       settings_.autoCorrect = !settings_.autoCorrect;
       settings_.Save();
       break;
+    case CmdRuler:
+      settings_.ruler = !settings_.ruler;
+      settings_.Save();
+      for (auto& t : tabs_) t->SettingsChanged();
+      break;
     case CmdCheckUpdates: MaybeCheckForUpdates(true); break;
     case CmdMakeDefault: MakeDefaultApp(fw::FileKind::Pdf); break;
     case CmdAbout: ShowAbout(); break;
@@ -1440,6 +1454,11 @@ int App::TrackMenu(HMENU menu, const D2D1_RECT_F& anchor, bool alignRight) {
   return TrackPopupMenuEx(menu, flags, pt.x, pt.y, hwnd_, nullptr);
 }
 
+// "New document\tCtrl+N": Ctrl+N makes a new document (AppShortcut).
+static std::wstring NewLabel(const fw::FileKindInfo& k) {
+  return L"New " + std::wstring(k.noun) + (k.kind == fw::FileKind::Document ? L"\tCtrl+N" : L"");
+}
+
 void App::ShowMenu(int which) {
   TabContent* v = Active();
   const bool ready = v && v->Ready();
@@ -1448,7 +1467,7 @@ void App::ShowMenu(int which) {
   if (which == CmdNewTab) {
     for (const fw::FileKindInfo& k : fw::FileKinds())
       if (fw::EditorShipped(k.kind))
-        AppendItem(m, CmdNewFile + static_cast<int>(k.kind), L"New " + std::wstring(k.noun));
+        AppendItem(m, CmdNewFile + static_cast<int>(k.kind), NewLabel(k));
     AppendSeparator(m);
     AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
   } else if (which == CmdSaveMenu && ready) {
@@ -1456,6 +1475,8 @@ void App::ShowMenu(int which) {
     AppendItem(m, CmdSaveAs, L"Save as\u2026\tCtrl+Shift+S");
   } else if (which == CmdMoreMenu) {
     alignRight = true;
+    for (const fw::FileKindInfo& k : fw::FileKinds())
+      if (fw::EditorShipped(k.kind)) AppendItem(m, CmdNewFile + static_cast<int>(k.kind), NewLabel(k));
     AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
     HMENU recent = CreatePopupMenu();
     for (int i = 0; i < static_cast<int>(settings_.recent.size()); ++i) {
@@ -1472,6 +1493,7 @@ void App::ShowMenu(int which) {
     if (ready && v->Kind() == TabKind::Document && !v->Path().empty())
       AppendItem(m, CmdRestoreOriginal, L"Restore original", !LatestBackup().empty());
     AppendItem(m, CmdPrint, L"Print…\tCtrl+P", ready && v->CanPrint());
+    if (ready && v->CanExportPdf()) AppendItem(m, CmdExportPdf, L"Export PDF…");
     AppendSeparator(m);
     AppendItem(m, CmdPresentation, L"Present\tF5", ready);
     AppendItem(m, CmdFullScreen, fullscreen_ ? L"Exit full screen\tF11" : L"Full screen\tF11");
@@ -1485,6 +1507,31 @@ void App::ShowMenu(int which) {
     if (ready && v->Kind() == TabKind::Document) {
       AppendItem(m, CmdToggleSpelling, L"Check spelling as you type", true, settings_.spelling);
       AppendItem(m, CmdToggleAutoCorrect, L"AutoCorrect as you type", true, settings_.autoCorrect);
+      const CommandState setup = v->QueryCommand(CmdPageSetup), hyphens = v->QueryCommand(CmdHyphenation);
+      if (setup.visible && setup.enabled) {
+        AppendItem(m, CmdParagraph, L"Paragraph…");
+        AppendItem(m, CmdPageSetup, L"Page setup…");
+        AppendItem(m, CmdHyphenation, L"Hyphenate automatically", hyphens.enabled, hyphens.checked);
+      }
+      AppendItem(m, CmdRuler, L"Ruler", true, settings_.ruler);
+      // Review: Track Changes, the changes one at a time or all at once, the markup shown.
+      HMENU review = CreatePopupMenu();
+      auto add = [&](HMENU menu, int cmd, bool radio = false) {
+        const CommandState s = v->QueryCommand(cmd);
+        if (!s.visible) return;
+        AppendItem(menu, cmd, s.label + (s.shortcut.empty() ? L"" : L"\t" + s.shortcut), s.enabled, s.checked, radio);
+      };
+      add(review, CmdTrackChanges);
+      AppendSeparator(review);
+      for (int cmd : {CmdAcceptChange, CmdRejectChange, CmdAcceptAll, CmdRejectAll, CmdNextChange, CmdPrevChange})
+        add(review, cmd);
+      AppendSeparator(review);
+      for (int cmd : {CmdMarkupSimple, CmdMarkupAll, CmdMarkupNone, CmdMarkupOriginal}) add(review, cmd, true);
+      AppendSeparator(review);
+      add(review, CmdNewComment);
+      add(review, CmdReviewPane);
+      add(review, CmdReviewerName);
+      AppendSubmenu(m, review, L"Review");
     }
     AppendSeparator(m);
     if (fw::pkg::backups::Any(DocFile::Config().backups)) AppendItem(m, CmdDeleteBackups, L"Delete backups");
@@ -1649,12 +1696,15 @@ void App::OnStartScreen(EmptyState::Result res) {
   }
 }
 
-std::wstring App::SaveDialog(const std::wstring& suggested, const SaveFormat& format) {
+std::wstring App::SaveDialog(const std::wstring& suggested, const SaveFormat& format,
+                             const std::vector<SaveFormat>& copies, size_t* chosen) {
+  if (chosen) *chosen = 0;
   ComPtr<IFileSaveDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return {};
-  COMDLG_FILTERSPEC filters[] = {{format.name, format.pattern}};
-  dlg->SetFileTypes(1, filters);
-  dlg->SetDefaultExtension(format.ext);
+  std::vector<COMDLG_FILTERSPEC> filters{{format.name, format.pattern}};
+  for (const SaveFormat& f : copies) filters.push_back({f.name, f.pattern});
+  dlg->SetFileTypes(static_cast<UINT>(filters.size()), filters.data());
+  dlg->SetDefaultExtension(format.ext);  // and the chosen type's, when another is picked
   dlg->SetFileName(fw::FileNameOf(suggested).c_str());
   ComPtr<IShellItem> folder;
   std::wstring dir = fw::DirOf(suggested);
@@ -1678,7 +1728,22 @@ std::wstring App::SaveDialog(const std::wstring& suggested, const SaveFormat& fo
     result = path;
     CoTaskMemFree(path);
   }
+  UINT type = 1;  // from 1
+  if (chosen && SUCCEEDED(dlg->GetFileTypeIndex(&type)) && type >= 1 && type <= filters.size()) *chosen = type - 1;
   return result;
+}
+
+// Save As to another type (RTF, plain text): a copy, and the tab stays on its own file.
+bool App::SaveCopy(TabContent* view, const std::wstring& path, size_t format) {
+  std::wstring error;
+  if (!view->SaveCopy(path, format, error)) {
+    banner_.Show(BannerKind::Error, error.empty() ? fw::FileNameOf(path) + L" couldn't be saved." : error);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return false;
+  }
+  banner_.Show(BannerKind::Success, L"Saved a copy as " + fw::FileNameOf(path), {}, 2400);
+  InvalidateRect(hwnd_, nullptr, FALSE);
+  return true;
 }
 
 void App::ActivateTab(int index) {
@@ -1735,7 +1800,10 @@ bool App::CloseTab(int index) {
   if (!snapshot_) settings_.Save();
   if (focusBox_ && focusBox_ == v->PasswordBox()) FocusBox(nullptr);
   if (index == active_ && search_.IsOpen()) CloseSearch();
-  if (index == active_) panel_.Show(nullptr, false);
+  if (index == active_) {
+    panel_.Show(nullptr, false);
+    toolbar_.Forget();  // the tab's own toolbar controls (the Insert table grid) go with it
+  }
   tabs_.erase(tabs_.begin() + index);
   UpdateAutosaveTimer();
   if (tabs_.empty()) {
@@ -1763,8 +1831,14 @@ bool App::SaveActive(bool saveAs) {
   std::wstring path = v->Path();
   if (path.empty()) saveAs = true;  // a new or recovered document
   if (saveAs) {
-    path = SaveDialog(v->SuggestedSavePath(), v->SaveAsFormat());
+    const std::vector<SaveFormat> copies = v->CopyFormats();
+    size_t type = 0;
+    path = SaveDialog(v->SuggestedSavePath(), v->SaveAsFormat(), copies, &type);
     if (path.empty()) return false;
+    // A name typed with another type's extension (report.rtf) is that type.
+    for (size_t i = 0; i < copies.size() && type == 0; ++i)
+      if (fw::EndsWithNoCase(path, std::wstring(L".") + copies[i].ext)) type = i + 1;
+    if (type > 0) return SaveCopy(v, path, type - 1);
   }
   std::wstring error;
   if (v->Save(path, error)) {
@@ -1818,6 +1892,36 @@ void App::PrintActive() {
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
+void App::ExportPdfActive() {
+  TabContent* v = Active();
+  if (!v || !v->Ready() || !v->CanExportPdf()) return;
+  std::wstring suggested = v->SuggestedSavePath();
+  const size_t slash = suggested.find_last_of(L"\\/"), dot = suggested.rfind(L'.');
+  if (dot != std::wstring::npos && (slash == std::wstring::npos || dot > slash)) suggested.resize(dot);
+  const std::wstring path = SaveDialog(suggested + L".pdf", {L"PDF document", L"*.pdf", L"pdf"});
+  if (path.empty()) return;
+  ExportPdfTo(path);
+}
+
+bool App::ExportPdfTo(const std::wstring& path) {
+  TabContent* v = Active();
+  if (!v || !v->Ready() || !v->CanExportPdf()) return false;
+  if (fw::EqualsNoCase(path, v->Path())) {
+    banner_.Show(BannerKind::Warning, L"Choose another name: the PDF would replace the open file.", {}, 6000);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return false;
+  }
+  banner_.Show(BannerKind::Info, L"Exporting…");
+  Layout();
+  RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+  std::wstring message;
+  const bool ok = v->ExportPdf(path, message);
+  if (ok) banner_.Show(BannerKind::Success, message, {}, 4000);
+  else banner_.Show(BannerKind::Error, message);
+  InvalidateRect(hwnd_, nullptr, FALSE);
+  return ok;
+}
+
 void App::OpenSearch() {
   TabContent* v = Active();
   if (!v || !v->Ready()) return;
@@ -1832,7 +1936,7 @@ void App::OpenSearch() {
     search_.Box().SetText(selected);
   FocusBox(&search_.Box());
   search_.Box().SelectAll();
-  if (!search_.Box().Text().empty()) v->StartSearch(search_.Box().Text(), search_.MatchCase());
+  if (!search_.Box().Text().empty()) v->StartSearch(search_.Box().Text(), search_.MatchCase(), search_.WholeWords());
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -1932,6 +2036,8 @@ void App::ViewRequestPrint() { PostMessageW(hwnd_, WM_COMMAND, CmdPrint, 0); }
 
 void App::ViewFocusTextBox(TextBox* box) { FocusBox(box); }
 
+void App::ViewFocusPage() { MoveKeyTo(KeyArea::Doc, true, true); }
+
 void App::ViewPasswordAccepted(TabContent* view) {
   view->SetViewport(DocRect(), ui_);
   if (auto st = settings_.GetState(view->Path())) view->ApplyState(*st);
@@ -1989,6 +2095,18 @@ void App::OnDropFiles(const std::vector<std::wstring>& files) {
     SetForegroundWindow(hwnd_);
     OpenFiles(opened);
   }
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+bool App::TakesPictures(const std::vector<std::wstring>& files) {
+  TabContent* v = Active();
+  return v && v->Ready() && !presentation_ && v->TakesPictures(files);
+}
+
+void App::OnDropPictures(const std::vector<std::wstring>& files, POINT pt) {
+  ScreenToClient(hwnd_, &pt);
+  SetForegroundWindow(hwnd_);
+  if (TabContent* v = Active()) v->DropPictures(files, pt.x, pt.y);
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -2260,6 +2378,11 @@ void App::RunScript(const std::wstring& script) {
       // Marks the document edited, as the edit session will (the dot, Save, the close prompt).
       TabContent* v = Active();
       if (v && v->Kind() == TabKind::Document && v->Ready()) static_cast<DocView*>(v)->EditForTesting();
+    } else if (op == L"picture") {
+      // picture:file inserts a picture at the caret, as a drop does where it's dropped.
+      TabContent* v = Active();
+      if (v && v->Ready() && v->TakesPictures({arg})) v->DropPictures({arg}, -1, -1);
+      else fwprintf(stderr, L"picture: %s isn't taken here\n", arg.c_str());
     } else if (op == L"save") {
       if (TabContent* v = Active()) {
         std::wstring err;
@@ -2273,6 +2396,15 @@ void App::RunScript(const std::wstring& script) {
         if (static_cast<DocView*>(v)->PrintToFile(arg, message) != PrintOutcome::Printed)
           fwprintf(stderr, L"print failed: %s\n", message.c_str());
       }
+    } else if (op == L"exportpdf") {
+      // exportpdf:out.pdf is File > Export PDF without the dialog.
+      if (!ExportPdfTo(arg)) fwprintf(stderr, L"export failed\n");
+    } else if (op == L"pagepngs") {
+      // pagepngs:dir writes a document's pages as dir\page-N.png at 96 dpi, as the export draws
+      // them, for comparing with the PDF's pages.
+      TabContent* v = Active();
+      if (!v || v->Kind() != TabKind::Document || !v->Ready() || static_cast<DocView*>(v)->RenderPagesForTesting(arg, 96) == 0)
+        fwprintf(stderr, L"pagepngs failed\n");
     } else if (op == L"cmd") {
       static const std::pair<const wchar_t*, int> names[] = {
           {L"find", CmdFind}, {L"next", CmdFindNext}, {L"invert", CmdToggleInvert}, {L"present", CmdPresentation},

@@ -126,6 +126,68 @@ enum Cmd : int {
   CmdBorderNone,
   CmdShading,
   CmdShadingNone,
+  // Headers and footers, page numbers, links, bookmarks, navigation and marks (D3).
+  CmdEditHeader = 1100,
+  CmdEditFooter,
+  CmdCloseHeaderFooter,
+  CmdDifferentFirstPage,
+  CmdDifferentOddEven,
+  CmdLinkToPrevious,
+  CmdPageNumber,  // the page number panel
+  CmdInsertLink,  // Ctrl+K: insert or edit
+  CmdRemoveLink,
+  CmdOpenLink,
+  CmdBookmark,
+  CmdNavigationPane,
+  CmdShowMarks,  // Ctrl+Shift+8
+  // Documents: tables (D3).
+  CmdTableGrid = 1150,  // the toolbar's Insert table grid (after the header and footer commands)
+  CmdTableBox,          // the toolbar's Table menu, in a table
+  CmdInsertTable,       // the Table panel, to insert a table of any size
+  CmdTextToTable,
+  CmdTableToText,
+  CmdTableInsertAbove,
+  CmdTableInsertBelow,
+  CmdTableInsertLeft,
+  CmdTableInsertRight,
+  CmdTableDeleteRows,
+  CmdTableDeleteColumns,
+  CmdTableDeleteTable,
+  CmdTableMerge,
+  CmdTableSplit,
+  CmdTableSelectCell,
+  CmdTableSelectRow,
+  CmdTableSelectColumn,
+  CmdTableSelectTable,
+  CmdTableAutoFitContents,
+  CmdTableAutoFitWindow,
+  CmdTableFixedWidth,
+  CmdTableDistributeColumns,
+  CmdTableHeaderRow,
+  CmdTableProperties,
+  // Documents: page layout (D3).
+  CmdPageSetup = 1250,  // the Page setup panel
+  CmdLayoutBox,         // the toolbar's Layout menu
+  CmdPortrait,
+  CmdLandscape,
+  CmdMarginsNormal,     // Word's presets
+  CmdMarginsNarrow,
+  CmdMarginsModerate,
+  CmdMarginsWide,
+  CmdColumnsOne,
+  CmdColumnsTwo,
+  CmdColumnsThree,
+  CmdPageBreak,         // Ctrl+Enter
+  CmdColumnBreak,       // Ctrl+Shift+Enter
+  CmdSectionNextPage,
+  CmdSectionContinuous,
+  CmdSectionEvenPage,
+  CmdSectionOddPage,
+  CmdDeleteSectionBreak,
+  CmdHyphenation,       // automatic hyphenation on or off
+  CmdOptionalHyphen,    // Ctrl+-
+  CmdNonBreakingHyphen, // Ctrl+Shift+-
+  CmdParagraph,         // the Paragraph panel (indents, spacing, line and page breaks)
   // Proofing in Word documents.
   CmdSpelling = 800,  // F7: the next spelling error
   CmdWordCount,
@@ -138,4 +200,88 @@ enum Cmd : int {
   CmdSpellSuggest = 820,    // + index into the context menu's suggestions
   CmdLanguagePick = 840,    // + index into the installed languages
   CmdLanguageLast = 899,
+  // Pictures in Word documents (D3).
+  CmdInsertPicture = 900,
+  CmdPictureInline,
+  CmdPictureSquare,
+  CmdPictureTight,
+  CmdPictureTopBottom,
+  CmdPictureBehind,
+  CmdPictureInFront,
+  CmdPictureWrapBox,  // the toolbar's Wrap text box
+  CmdPictureCrop,     // crop mode on or off
+  CmdPictureRotate,   // 90 degrees clockwise
+  CmdPictureReset,
+  CmdPicturePanel,    // size, rotation and alt text
+  // Shapes, text boxes and watermarks in Word documents (D4): 1460-1479, as claude/d4-int has them.
+  CmdInsertTextBox = 1460,
+  CmdInsertRectangle,
+  CmdInsertRoundedRectangle,
+  CmdInsertOval,
+  CmdInsertLine,
+  CmdInsertArrow,
+  CmdInsertCallout,
+  CmdShapeAddText,     // an empty paragraph in a shape without text
+  CmdShapeEditText,    // the caret into the selected shape's text
+  CmdShapePanel,       // wrap, size, rotation, fill and outline
+  CmdWatermarkPanel,
+  CmdWatermarkRemove,
+  // Find and paste (D3).
+  CmdSearchWords = 1300,  // find whole words only (the search card's toggle)
+  CmdPasteMerge,          // paste taking the look of where it goes, keeping bold, italic and lists
+  // Review (D4): comments and tracked changes in Word documents.
+  CmdReviewPane = 1320,  // the toolbar's 💬: the Review pane
+  CmdNewComment,         // Ctrl+Alt+M: a comment on the selection
+  CmdTrackChanges,       // Ctrl+Shift+E: Track Changes on or off
+  CmdAcceptChange,       // the change at the caret (or the selection's), then the next
+  CmdRejectChange,
+  CmdAcceptAll,
+  CmdRejectAll,
+  CmdNextChange,
+  CmdPrevChange,
+  CmdMarkupSimple,  // what the changes look like: Word's Simple Markup, All Markup, No Markup, Original
+  CmdMarkupAll,
+  CmdMarkupNone,
+  CmdMarkupOriginal,
+  CmdReviewerName,  // ⋯: the name changes and comments are made with
+  // Footnotes, endnotes and tables of contents (D4).
+  CmdInsertFootnote = 1340,  // Ctrl+Alt+F
+  CmdInsertEndnote,          // Ctrl+Alt+D
+  CmdInsertToc,
+  CmdUpdateTocPages,  // the table of contents' page numbers
+  CmdUpdateToc,       // the whole table of contents
+  // The ruler in Word documents (D3).
+  CmdRuler = 1200,  // the rulers shown or not (the ⋯ menu, a setting like spelling as you type)
+  // Change case (D3): Shift+F3 and the Aa menu.
+  CmdChangeCase,  // Shift+F3: the next case in Word's cycle
+  CmdCaseSentence,
+  CmdCaseLower,
+  CmdCaseUpper,
+  CmdCaseCapitalize,
+  CmdCaseToggle,
+  CmdCaseBox,  // the toolbar's Aa menu
+  // Tab stops (D3): the ruler's menu on a tab stop, and the Tabs panel.
+  CmdTabsPanel = 1210,
+  CmdTabLeft,
+  CmdTabCenter,
+  CmdTabRight,
+  CmdTabDecimal,
+  CmdTabBar,
+  CmdTabLeaderNone,
+  CmdTabLeaderDots,
+  CmdTabLeaderDashes,
+  CmdTabLeaderLine,
+  CmdTabClear,
+  CmdTabClearAll,
+  // Styles (D3).
+  CmdModifyStyle = 1230,  // the Modify style panel, for the paragraph's style
+  CmdNewStyle,            // Create a style from the selection
+  // Output (D4).
+  CmdExportPdf = 1400,  // File > Export PDF: the tab's pages into a PDF file
+  // Content controls (D4): Insert ▾ adds them, as Word's Developer tab does.
+  CmdInsertRichText = 1410,
+  CmdInsertPlainText,
+  CmdInsertCheckBox,
+  CmdInsertDropDown,
+  CmdInsertDatePicker,
 };

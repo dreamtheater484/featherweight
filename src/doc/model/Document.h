@@ -22,6 +22,7 @@ class Writer;
 namespace edit {
 struct EditorState;
 class TreeEdit;
+struct PictureAccess;
 }  // namespace edit
 
 // The document model (plan §6.3): a headless, read-only view of a Word document, built by the
@@ -84,6 +85,9 @@ struct Story {
   ElemId root = kNoElem;  // w:body, w:hdr, w:ftr, w:footnote, w:endnote, w:comment or w:txbxContent
   std::string id;         // notes and comments: w:id
   uint32_t drawing = kNone;  // text boxes: the drawing they belong to
+  // Text boxes: edits applied to the story now (doing and redoing count up, undoing down). While
+  // it isn't 0, the drawing's XML is written with the story in place of each copy of its text.
+  uint32_t edits = 0;
 };
 
 // A position in a paragraph's text.
@@ -174,7 +178,14 @@ struct Drawing {
   uint32_t id = 0;
   std::string name, descr, title;
   std::vector<uint32_t> textBoxes;  // stories read from its w:txbxContent
+  // Its text boxes can be written back: every copy of the drawing's text (a DrawingML choice and
+  // a VML fallback) has the same text boxes in the same order, and the XML holding them is kept.
+  bool boxesWritable = false;
+  // Shown from an mc:AlternateContent block (displayOnly): the store fragment that is the block
+  // has this tag (pkg::Fragment::tag). 0 when the block isn't kept, or holds more than this drawing.
+  uint32_t kept = 0;
   std::string keptXml;  // display-only drawings: their XML (the kept AlternateContent block is what's written)
+  uint32_t version = 0;  // changes whenever its XML does (D3 picture edits), for the view's caches
 };
 
 // A field (plan §6.3): begin, separator and end, which may be in different paragraphs.
@@ -335,6 +346,9 @@ class Document {
   // ---- Stories and blocks
   const std::vector<Story>& Stories() const { return stories_; }
   uint32_t MainStory() const { return main_; }
+  // Whether the story is in the document: a text box's only while its drawing is (a deleted or
+  // undone shape keeps its story in the model, shown, counted and searched nowhere).
+  bool StoryInDocument(uint32_t story) const;
   // The note or comment with this id; kNone when there is none.
   uint32_t NoteStory(StoryKind kind, std::string_view id) const;
   // The blocks directly inside a story, a table cell (w:tc), a block-level content control or a
@@ -360,6 +374,12 @@ class Document {
   const ParaProps& ResolvedPara(uint32_t para) const;
   const RunProps& ResolvedRun(uint32_t para, Node run) const;
   const RunProps& ResolvedMark(uint32_t para) const;  // the paragraph mark (w:pPr/w:rPr)
+  // The same as Word's Original markup view shows them: with the formatting from before tracked
+  // changes, a w:pPrChange's w:pPr (and the paragraph style it names) and a w:rPrChange's w:rPr.
+  // The resolved ones where nothing was changed.
+  const ParaProps& OriginalPara(uint32_t para) const;
+  const RunProps& OriginalRun(uint32_t para, Node run) const;
+  const RunProps& OriginalMark(uint32_t para) const;
   // What a run in this paragraph with this character style (or none) would be without direct
   // formatting, and what the paragraph would be without its own w:pPr (but still in its list).
   // Formatting compares with these to write only what differs. Not cached.
@@ -370,6 +390,9 @@ class Document {
   RunProps StyleChainRun(std::string_view styleId) const;
   ParaProps StyleChainPara(std::string_view styleId) const;
   std::optional<ListLabel> Label(uint32_t para) const;
+  // Whether ResolvedPara(para).numId isn't empty, without resolving the rest (numbering a story,
+  // or an edit asking which paragraphs after it may be numbered again, doesn't wait for that).
+  bool InList(uint32_t para) const;
   TableProps ResolvedTable(Node tbl) const;
   RowProps ResolvedRow(Node tr) const;
   CellProps ResolvedCell(Node tc) const;
@@ -424,6 +447,10 @@ class Document {
   const pkg::ReferenceRegistry& Registry() const { return *registry_; }
 
   struct Caches;  // the model's own (Internal.h)
+  // Changes each time the caches are made again (an edit that changes styles, sections or
+  // formatting in place, edit::TreeEdit): what ResolvedPara and ResolvedRun gave before is gone,
+  // and whoever kept a reference to it looks it up again.
+  uint64_t CacheGeneration() const { return cacheGeneration_; }
 
   // ---- Memory (plan §11: the store stays under a quarter of the model)
   size_t ModelBytes() const;
@@ -433,10 +460,12 @@ class Document {
   friend class docx::Writer;
   friend struct edit::EditorState;
   friend class edit::TreeEdit;
+  friend struct edit::PictureAccess;
   Document();
 
   Pos PosOf(Node node) const;  // where an element is: its paragraph and offset
   void BuildIndexes();
+  void BuildSections();  // part of BuildIndexes, after a section break goes or comes back
   size_t RenameInModel(pkg::RefKind kind, std::string_view from, std::string_view to);
   bool attached_ = false;
 
@@ -460,8 +489,10 @@ class Document {
     std::string paraId, parentParaId;
     bool done = false;
   };
-  std::vector<CommentEx> commentsEx_;  // word/commentsExtended.xml, read but never written
+  std::vector<CommentEx> commentsEx_;  // word/commentsExtended.xml; written again from this (D4)
   std::unique_ptr<Caches> caches_;
+  uint64_t cacheGeneration_ = 0;
+  void ResetCaches();
   std::shared_ptr<bool> alive_;  // false once the document is gone, for the registry hook
 };
 

@@ -4,6 +4,7 @@
 #include <iterator>
 #include <map>
 
+#include "doc/edit/Editor.h"
 #include "doc/model/Internal.h"
 
 namespace fw::doc::edit {
@@ -88,6 +89,36 @@ const Builtin kBuiltins[] = {
      "<w:spacing w:before=\"360\" w:after=\"360\"/><w:ind w:left=\"864\" w:right=\"864\"/><w:jc w:val=\"center\"/>",
      "<w:i/><w:iCs/><w:color w:val=\"4472C4\" w:themeColor=\"accent1\"/>"},
     {"List Paragraph", "ListParagraph", StyleType::Paragraph, 34, true, "Normal", "", "", "<w:ind w:left=\"720\"/><w:contextualSpacing/>", ""},
+    // Priority 99: shown once used, never quick styles. {CENTER} and {RIGHT} are the middle and
+    // the end of the first section's text.
+    {"header", "Header", StyleType::Paragraph, 99, false, "Normal", "", "Header Char",
+     "<w:tabs><w:tab w:val=\"center\" w:pos=\"{CENTER}\"/><w:tab w:val=\"right\" w:pos=\"{RIGHT}\"/></w:tabs>"
+     "<w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/>", ""},
+    {"footer", "Footer", StyleType::Paragraph, 99, false, "Normal", "", "Footer Char",
+     "<w:tabs><w:tab w:val=\"center\" w:pos=\"{CENTER}\"/><w:tab w:val=\"right\" w:pos=\"{RIGHT}\"/></w:tabs>"
+     "<w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/>", ""},
+    // What links get, from AutoCorrect and Insert link, as in Word.
+    {"Hyperlink", "Hyperlink", StyleType::Character, 99, false, "Default Paragraph Font", "", "", "",
+     "<w:color w:val=\"0563C1\" w:themeColor=\"hyperlink\"/><w:u w:val=\"single\"/>"},
+    // What content controls show while empty, as in Word.
+    {"Placeholder Text", "PlaceholderText", StyleType::Character, 99, false, "Default Paragraph Font", "", "", "",
+     "<w:color w:val=\"666666\"/>"},
+    // Footnotes and endnotes (D4): the note's text, and the raised number in the text and the note.
+    {"footnote text", "FootnoteText", StyleType::Paragraph, 99, false, "Normal", "", "Footnote Text Char",
+     "<w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/>", "<w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/>"},
+    {"footnote reference", "FootnoteReference", StyleType::Character, 99, false, "Default Paragraph Font", "", "", "",
+     "<w:vertAlign w:val=\"superscript\"/>"},
+    {"endnote text", "EndnoteText", StyleType::Paragraph, 99, false, "Normal", "", "Endnote Text Char",
+     "<w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/>", "<w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/>"},
+    {"endnote reference", "EndnoteReference", StyleType::Character, 99, false, "Default Paragraph Font", "", "", "",
+     "<w:vertAlign w:val=\"superscript\"/>"},
+    // A table of contents (D4): its entries by level, and its heading.
+    {"toc 1", "TOC1", StyleType::Paragraph, 39, false, "Normal", "Normal", "", "<w:spacing w:after=\"100\"/>", ""},
+    {"toc 2", "TOC2", StyleType::Paragraph, 39, false, "Normal", "Normal", "",
+     "<w:spacing w:after=\"100\"/><w:ind w:left=\"220\"/>", ""},
+    {"toc 3", "TOC3", StyleType::Paragraph, 39, false, "Normal", "Normal", "",
+     "<w:spacing w:after=\"100\"/><w:ind w:left=\"440\"/>", ""},
+    {"TOC Heading", "TOCHeading", StyleType::Paragraph, 39, false, "heading 1", "Normal", "", "<w:outlineLvl w:val=\"9\"/>", ""},
 };
 
 char Lower(char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
@@ -155,6 +186,13 @@ std::string Props(const Document& doc, std::string_view props) {
              doc.GetTheme().present
                  ? "<w:rFonts w:asciiTheme=\"majorHAnsi\" w:eastAsiaTheme=\"majorEastAsia\" w:hAnsiTheme=\"majorHAnsi\" w:cstheme=\"majorBidi\"/>"
                  : "<w:rFonts w:ascii=\"Calibri Light\" w:hAnsi=\"Calibri Light\"/>");
+  if (s.find("{CENTER}") != std::string::npos) {
+    const SectionProps sp = doc.Sections().empty() ? SectionProps{} : doc.Sections().front().props;
+    const int32_t width = std::max<int32_t>(
+        720, sp.pageWidth.Value() - sp.marginStart.Value() - sp.marginEnd.Value() - sp.gutter.Value());
+    ReplaceAll(s, "{CENTER}", std::to_string(width / 2));
+    ReplaceAll(s, "{RIGHT}", std::to_string(width));
+  }
   if (Strict(doc)) {
     ReplaceAll(s, " w:left=", " w:start=");
     ReplaceAll(s, " w:right=", " w:end=");
@@ -208,9 +246,11 @@ std::string AddBuiltin(TreeEdit& ed, const Builtin& b) {
   bool para = b.type == StyleType::Paragraph;
   bool isDefault = (b.id == "Normal" && !doc.DefaultStyle(StyleType::Paragraph)) ||
                    (b.id == "DefaultParagraphFont" && !doc.DefaultStyle(StyleType::Character));
+  // Priority 99 is Word's for styles it shows only once used (Hyperlink): no quick style either.
+  const bool quick = b.id != "DefaultParagraphFont" && b.priority != 99;
   std::string extra = b.id == "DefaultParagraphFont" ? "<w:semiHidden/><w:unhideWhenUsed/>"
-                      : b.priority == 9 && b.id != "Heading1" ? "<w:unhideWhenUsed/>"
-                                                              : "";
+                      : (b.priority == 9 && b.id != "Heading1") || b.priority == 99 ? "<w:unhideWhenUsed/>"
+                                                                                    : "";
   std::string rPr = Props(doc, b.rPr);
   // A linked character style: Word's pair for headings, the title and quotes.
   std::string linkId;
@@ -219,7 +259,7 @@ std::string AddBuiltin(TreeEdit& ed, const Builtin& b) {
   else if (!b.link.empty()) linkId = UniqueId(doc, IdOf(b.link));
   if (linkId == id) linkId = UniqueId(doc, id + "Char");
   std::string xml = StyleXml(para ? "paragraph" : "character", id, b.name, isDefault, false, basedOn == id ? "" : basedOn,
-                             next == id ? "" : next, linkId, b.priority, b.id != "DefaultParagraphFont", extra,
+                             next == id ? "" : next, linkId, b.priority, quick, extra,
                              Props(doc, b.pPr), rPr);
   if (ed.AddXml(root, xml) == kNoElem) return {};
   ed.Reindex();
@@ -370,14 +410,37 @@ void ModifyStyle(TreeEdit& ed, std::string_view styleId, const RunFormat& run, c
   bool isPara = s->type == StyleType::Paragraph;
   std::string basedOn = s->basedOn == kNone ? std::string() : std::string(doc.Styles()[s->basedOn].id);
   ed.Begin(u"Modify style");
-  if (run.Any()) {
-    RunFormat r = run;
-    r.charStyle.reset();
-    WriteRunFormat(ed, ed.Child(elem, kRPr), r, doc.StyleChainRun(basedOn));
-  }
+  RunFormat r = run;
+  r.charStyle.reset();
+  r.highlight.reset();  // never a style's, as NotStyleFormatting says (finding 23)
+  if (r.Any()) WriteRunFormat(ed, ed.Child(elem, kRPr), r, doc.StyleChainRun(basedOn));
   if (para.Any() && isPara) WriteParaFormat(ed, ed.Child(elem, kPPr), para, doc.StyleChainPara(basedOn));
   ed.Commit();
 }
+
+namespace {
+
+// The direct formatting of paragraph `p` and of its character at `offset` (or its first) goes into
+// the style `elem`.
+void CopyFormatting(TreeEdit& ed, uint32_t p, uint32_t offset, ElemId elem) {
+  const Document& doc = ed.Doc();
+  for (Node c : doc.ParaNode(p).Child(kPPr).Kids()) {
+    uint32_t n = c.NameHash();
+    if (n == kPStyle || n == kNumPr || n == kRPr || n == kSectPr || n == kPPrChange) continue;
+    ed.CopyChild(c.Id(), ed.Child(elem, kPPr));
+  }
+  Node first;
+  for (const TextRun& r : doc.Runs(p)) {
+    if (!r.run || r.displayOnly || r.fieldCode) continue;
+    if (!first || (r.start <= offset && offset < r.end)) first = r.run;
+    if (r.start <= offset && offset < r.end) break;
+  }
+  if (first)
+    for (Node c : first.Child(kRPr).Kids())
+      if (!NotStyleFormatting(c)) ed.CopyChild(c.Id(), ed.Child(elem, kRPr));
+}
+
+}  // namespace
 
 void UpdateStyleToMatch(TreeEdit& ed, Range range) {
   const Document& doc = ed.Doc();
@@ -387,27 +450,72 @@ void UpdateStyleToMatch(TreeEdit& ed, Range range) {
   const Style* s = doc.FindStyle(doc.ResolvedPara(p).style);
   if (!s || s->type != StyleType::Paragraph) return;
   Style style = *s;
-  ElemId elem = style.node.Id();
   ed.Begin(u"Update style");
-  // The paragraph's own formatting moves into the style.
-  for (Node c : doc.ParaNode(p).Child(kPPr).Kids()) {
-    uint32_t n = c.NameHash();
-    if (n == kPStyle || n == kNumPr || n == kRPr || n == kSectPr || n == kPPrChange) continue;
-    ed.CopyChild(c.Id(), ed.Child(elem, kPPr));
-  }
-  // So does its first character's.
-  Node first;
-  for (const TextRun& r : doc.Runs(p)) {
-    if (!r.run || r.displayOnly || r.fieldCode) continue;
-    if (!first || (r.start <= range.from.offset && range.from.offset < r.end)) first = r.run;
-    if (r.start <= range.from.offset && range.from.offset < r.end) break;
-  }
-  if (first)
-    for (Node c : first.Child(kRPr).Kids())
-      if (!NotStyleFormatting(c)) ed.CopyChild(c.Id(), ed.Child(elem, kRPr));
+  // The paragraph's own formatting moves into the style, and so does its first character's.
+  CopyFormatting(ed, p, range.from.offset, style.node.Id());
   // Then the paragraph takes the style again, without what moved.
   ApplyParaStyle(ed, p, style);
   ed.Commit();
+}
+
+std::string NewStyleFromSelection(TreeEdit& ed, Range range, std::string_view name, std::u16string& why) {
+  const Document& doc = ed.Doc();
+  size_t a = 0, b = name.size();
+  while (a < b && name[a] == ' ') ++a;
+  while (b > a && name[b - 1] == ' ') --b;
+  const std::string trimmed(name.substr(a, b - a));
+  why.clear();
+  if (trimmed.empty()) {
+    why = u"Type a name for the style.";
+    return {};
+  }
+  if (!XmlSafe(trimmed) || trimmed.size() > 253) {
+    why = u"A style's name can't hold control characters or be that long.";
+    return {};
+  }
+  if (FindByName(doc, trimmed) || FindBuiltin(trimmed) || SameName(trimmed, "Normal")) {
+    why = u"There's already a style with that name.";
+    return {};
+  }
+  const std::vector<uint32_t> paras = ParagraphsOf(doc, range);
+  if (paras.empty()) return {};
+  if (!ed.CanChange(paras) || ed.EnsurePart(PartKind::Styles) == kNoElem) {
+    why = ed.Refused().empty() ? std::u16string(u"This document can't have styles.") : ed.Refused();
+    return {};
+  }
+  const ElemId root = StylesRoot(doc);
+  const uint32_t p = paras.front();
+  std::string basedOn;
+  if (const Style* cur = doc.FindStyle(doc.ResolvedPara(p).style); cur && cur->type == StyleType::Paragraph)
+    basedOn = std::string(cur->id);
+  else if (const Style* d = doc.DefaultStyle(StyleType::Paragraph))
+    basedOn = std::string(d->id);
+  std::string idBase = IdOf(trimmed);
+  for (char& c : idBase)  // what an id can't hold well
+    if (c == '"' || c == '<' || c == '>' || c == '&' || c == '\'') c = '_';
+  const std::string id = UniqueId(doc, idBase);
+  ed.Begin(u"New style");
+  ed.Local();
+  const ElemId elem = ed.AddXml(root, StyleXml("paragraph", id, trimmed, false, true, basedOn, "", "", -1, true, "", "", ""));
+  if (elem == kNoElem) {
+    ed.Commit();
+    why = u"The style couldn't be added.";
+    return {};
+  }
+  ed.Reindex();
+  CopyFormatting(ed, p, range.from.offset, elem);
+  ed.Reindex();
+  const Style* made = doc.FindStyle(id);
+  if (made) {
+    const Style style = *made;
+    for (uint32_t q : paras) ApplyParaStyle(ed, q, style);
+  }
+  ed.Commit();
+  if (!ed.Refused().empty()) {
+    why = ed.Refused();
+    return {};
+  }
+  return id;
 }
 
 }  // namespace fw::doc::edit

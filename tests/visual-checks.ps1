@@ -97,11 +97,36 @@ $checks = @(
   # Files (D2): a new document, and an edited one (the tab's dot, Save enabled).
   @("doc-new", "light", "", "new", @()),
   @("doc-edited", "dark", "", "edited", @("..\office\layout\report.docx")),
-  # Proofing (D2): typing with AutoCorrect ("teh", "(c)", "--", capitals), red squiggles, words and language.
-  @("doc-proofing", "light", "", "type:teh quikc brown fox (c) jumps over teh dog -- it said ok,;wait:600", @("..\office\layout\report.docx")),
+  # Proofing (D2): typing with AutoCorrect ("teh", "(c)", "--", capitals, a link), red squiggles, words and language.
+  @("doc-proofing", "light", "", "type:teh quikc brown fox (c) jumps over teh dog -- it said ok, see www.example.com now;wait:600", @("..\office\layout\report.docx")),
+  # Pictures (D3): inserted and selected (handles, the picture tools), square wrapping after a
+  # drag, cropping, the Picture panel at night.
+  @("doc-picture", "light", "", "key:ctrl+home;picture:$root\docs\logo.png", @("..\office\layout\report.docx")),
+  @("doc-picture-moved", "light", "", "key:ctrl+home;picture:$root\docs\logo.png;cmd:902;drag:300,400,600,330", @("..\office\layout\report.docx")),
+  @("doc-picture-crop", "light", "", "key:ctrl+home;picture:$root\docs\logo.png;cmd:908;drag:466,414,380,414", @("..\office\layout\report.docx")),
+  @("doc-picture-panel", "dark", "", "key:ctrl+home;picture:$root\docs\logo.png;cmd:911", @("..\office\layout\report.docx")),
+  # Tables (D3): text made a table, a column selected (the Table menu in the toolbar); the Table panel at night.
+  @("doc-table", "light", "", "new;type:Name;key:tab;type:Qty|Apples;key:tab;type:3|Pears;key:tab;type:5;cmd:selectall;cmd:1153;key:ctrl+home;key:tab;key:tab;cmd:1166", @()),
+  @("doc-table-panel", "dark", "", "key:ctrl+end;key:enter;type:Item;key:tab;type:Price;key:shift+home;cmd:1153;cmd:1173", @("..\office\layout\report.docx")),
+  # Page layout (D3): landscape in two columns, hyphenated, with the Page setup panel; at night, a
+  # page break (Ctrl+Enter) and a next-page section break near the start.
+  @("doc-page-setup", "light", "", "cmd:1253;cmd:1259;cmd:1268;cmd:1250;wait:400", @("..\office\layout\report.docx")),
+  @("doc-page-breaks", "dark", "", "key:ctrl+home;key:right;key:ctrl+enter;cmd:1263;view:facing;wait:300", @("..\office\layout\report.docx")),
+  # The Paragraph panel on a justified paragraph with exact line spacing.
+  @("doc-paragraph", "dark", "", "key:ctrl+home;key:down;key:down;cmd:1271;wait:300", @("..\office\layout\report.docx")),
+  # Optional and non-breaking hyphens typed in the heading (Ctrl+-, Ctrl+Shift+-), formatting marks shown.
+  @("doc-hyphens", "light", "", "key:ctrl+home;key:right;key:right;key:ctrl+minus;key:right;key:ctrl+shift+minus;key:ctrl+shift+8;wait:200", @("..\office\layout\report.docx")),
+  # Footnotes and tables of contents (D4): a footnote (Ctrl+Alt+F) typed in place at the foot of the
+  # page; at night, a table of contents inserted at the top, its entries on the pages the layout gives.
+  @("doc-footnote", "light", "", "key:ctrl+home;key:end;key:ctrl+alt+f;type:A footnote, typed in place.;wait:300", @("..\office\layout\report.docx")),
+  @("doc-toc", "dark", "", "key:ctrl+home;cmd:1322;key:ctrl+home;wait:400", @("..\office\layout\report.docx")),
   # Printing a document (vector, through Microsoft Print to PDF), then the PDF it made.
   @("doc-print", "light", "", "print:$out\doc-print.pdf", @("..\office\layout\textbox-table.docx")),
-  @("doc-printed", "light", "", "view:facing;cmd:fit-page", @("..\..\build\visual\doc-print.pdf"))
+  @("doc-printed", "light", "", "view:facing;cmd:fit-page", @("..\..\build\visual\doc-print.pdf")),
+  # Export PDF (D4): the drawings document exported (and its pages as the export draws them, for
+  # fwtool pdf-check --pngs), then the PDF it made, with its bookmarks.
+  @("doc-export", "light", "", "exportpdf:$out\doc-export.pdf;pagepngs:$out\doc-export", @("..\office\generated\drawings-dml.docx")),
+  @("doc-exported", "light", "", "view:facing;cmd:fit-page", @("..\..\build\visual\doc-export.pdf"))
 )
 
 foreach ($c in $checks) {

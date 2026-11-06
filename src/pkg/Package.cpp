@@ -356,7 +356,17 @@ Status Package::Verify() const {
   return Status{};
 }
 
-Status Package::Save(ByteSink& sink) const {
+Status Package::Save(ByteSink& sink, const SaveChanges& changes) const {
+  auto leftOut = [&](const Part& part) {
+    for (const std::string& name : changes.leaveOut)
+      if (PartKey(name) == PartKey(part.name)) return true;
+    return false;
+  };
+  auto replaced = [&](const Part& part) -> const std::vector<uint8_t>* {
+    for (const auto& [name, bytes] : changes.replace)
+      if (PartKey(name) == PartKey(part.name)) return &bytes;
+    return nullptr;
+  };
   ZipWriter writer(sink);
   const auto& entries = zip_.Entries();
   for (size_t i = 0; i < entries.size(); ++i) {
@@ -366,14 +376,16 @@ Status Package::Save(ByteSink& sink) const {
       s = writer.CopyRaw(zip_, entries[i]);  // a directory entry
     } else {
       const Part& part = parts_[pi];
-      if (part.deleted) continue;
-      s = part.modified ? writer.Add(ZipNameOf(part.name), part.data, &entries[i]) : writer.CopyRaw(zip_, entries[i]);
+      if (part.deleted || leftOut(part)) continue;
+      if (const std::vector<uint8_t>* bytes = replaced(part)) s = writer.Add(ZipNameOf(part.name), *bytes, &entries[i]);
+      else s = part.modified ? writer.Add(ZipNameOf(part.name), part.data, &entries[i]) : writer.CopyRaw(zip_, entries[i]);
     }
     if (!s.Ok()) return s;
   }
   for (const auto& part : parts_) {
-    if (part.entry != Part::kNoEntry || part.deleted) continue;
-    Status s = writer.Add(ZipNameOf(part.name), part.data);
+    if (part.entry != Part::kNoEntry || part.deleted || leftOut(part)) continue;
+    const std::vector<uint8_t>* bytes = replaced(part);
+    Status s = writer.Add(ZipNameOf(part.name), bytes ? *bytes : part.data);
     if (!s.Ok()) return s;
   }
   return writer.Finish(zip_.Comment());

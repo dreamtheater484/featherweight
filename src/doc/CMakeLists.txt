@@ -1,21 +1,34 @@
 # fwdoc: the document model and its .docx reader and writer (plan §4.8, §6.3). Headless: no UI,
 # no window, no PDFium. Layout and the view come in later phases.
 add_library(fwdoc STATIC
+  model/DateFormat.cpp
   model/Document.cpp
   model/Numbering.cpp
   model/Resolve.cpp
   model/Schema.cpp
   model/Tree.cpp
   docx/Blank.cpp
+  docx/CommentParts.cpp
   docx/Reader.cpp
   docx/Save.cpp
   docx/Writer.cpp
+  edit/Case.cpp
   edit/Clip.cpp
+  edit/ClipTable.cpp
+  edit/Comments.cpp
   edit/Editor.cpp
+  edit/Export.cpp
   edit/Format.cpp
+  edit/Forms.cpp
+  edit/HeaderFooter.cpp
+  edit/Inline.cpp
   edit/Kept.cpp
   edit/Lists.cpp
+  edit/Notes.cpp
+  edit/Page.cpp
   edit/Styles.cpp
+  edit/TableStyles.cpp
+  edit/Toc.cpp
   edit/TreeEdit.cpp
 )
 target_include_directories(fwdoc PUBLIC "${PROJECT_SOURCE_DIR}/src")
@@ -34,6 +47,13 @@ add_library(fwdoclayout STATIC
 target_link_libraries(fwdoclayout PUBLIC fwdoc fwtext fwdraw)
 target_compile_options(fwdoclayout PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
+# fwpictures: picture editing (plan §6.2, milestone D3): insert, resize, rotate, crop, wrap, alt
+# text, on the model's editor; shapes, text boxes and watermarks (D4) share its DrawingML edits.
+# Apart from fwdoc because it reads pictures with fwdraw (WIC).
+add_library(fwpictures STATIC edit/Pictures.cpp edit/Shapes.cpp edit/Watermark.cpp)
+target_link_libraries(fwpictures PUBLIC fwdoc fwdraw PRIVATE windowscodecs ole32)
+target_compile_options(fwpictures PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
+
 # fwproof: proofing (plan §6.2, milestone D2): spelling with Windows' spell checker, the language of
 # text, AutoCorrect and word count, on the model and its editor. Headless.
 add_library(fwproof STATIC
@@ -49,11 +69,16 @@ target_compile_options(fwproof PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,
 # (plan §6.4 D1): read every document into the model, write every part it owns back, and check.
 if(FW_BUILD_TESTS)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_doc.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_docsave.cpp"
-    "${PROJECT_SOURCE_DIR}/tests/unit/test_edit.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_clip.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_format.cpp"
-    "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_proof.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_edit.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_clip.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_format.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_forms.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_page.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_export.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_inline.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_notes.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_toc.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_layout.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_proof.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_tables.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_review.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_pictures.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_shapes.cpp"
     # The document tab's file (D2 "Files"): an app source, tested here with temporary folders.
     "${PROJECT_SOURCE_DIR}/tests/unit/test_docfile.cpp" "${PROJECT_SOURCE_DIR}/src/word/DocFile.cpp")
-  target_link_libraries(fw_tests PRIVATE fwdoc fwdoclayout fwproof)
+  target_link_libraries(fw_tests PRIVATE fwdoc fwdoclayout fwproof fwpictures)
   set(_fw_office "${PROJECT_SOURCE_DIR}/tests/office")
   add_test(NAME office_model_roundtrip COMMAND fwtool roundtrip --model "${_fw_office}/generated" "${_fw_office}/edge"
     "${_fw_office}/layout")

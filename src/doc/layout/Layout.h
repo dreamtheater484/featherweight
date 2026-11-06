@@ -132,6 +132,15 @@ struct Edge {
   float x1 = 0, y1 = 0, x2 = 0, y2 = 0;
 };
 
+// A table cell's piece on a page, as drawn: a cell split across pages has one on each, and a
+// merged cell (vMerge) one in each row it spans.
+struct CellRect {
+  ElemId tc = kNoElem, tbl = kNoElem;
+  uint32_t row = 0;           // the row's index in its table
+  int32_t col = 0, span = 1;  // the grid columns it covers
+  Rect box;                   // its border box, the row's full height (page points)
+};
+
 struct Page {
   float width = 0, height = 0;  // points; landscape sections already swapped
   uint32_t section = 0;         // index into Document::Sections()
@@ -143,12 +152,32 @@ struct Page {
   std::vector<DrawingBox> drawings;  // behind-text ones first, then by z
   std::vector<LineBox> lines;        // in reading order per story
   std::vector<RunPaint> paints;      // LineBox::paint indexes this
+  std::vector<CellRect> cells;       // table cells, a nested table's after the cell it's in
   TextPos first;                     // the first body text on the page
 };
 
 struct Options {
   bool showHiddenText = false;  // w:vanish text laid out and drawn (formatting marks shown)
+  // Formatting marks drawn over the text (Ctrl+Shift+8): paragraph marks, spaces, tabs and breaks.
+  // Hidden text is shown with them, so set showHiddenText too.
+  bool formattingMarks = false;
+  // The moment DATE and TIME fields show, as Word updates them when it opens a document: a FILETIME
+  // (100-nanosecond ticks since 1601, UTC), shown in local time. 0 keeps the results the file holds
+  // (the tools' layouts, which must not depend on the day).
+  int64_t now = 0;
+  // Word's markup views (D4 review). The defaults are the final text (Simple Markup, No Markup).
+  // All Markup and Original: deleted text (w:del, w:moveFrom) laid out as text, and a deleted
+  // paragraph mark kept. Original: inserted text (w:ins, w:moveTo) hidden, offsets unchanged, and a
+  // paragraph with an inserted mark and nothing else shown left out, as a deleted one is now; and
+  // the formatting from before tracked changes (w:rPrChange, w:pPrChange, Document::OriginalRun).
+  // The view draws the changes' colors and lines itself.
+  bool showDeletions = false;
+  bool hideInsertions = false;
 };
+
+// Which lines Layout::HitTest picks from: all, the body's (with notes, cells and text boxes), or
+// the headers' and footers' (for editing them in place).
+enum class HitStories : uint8_t { All, Body, HeaderFooter };
 
 // The family Word draws for one a document names but the PC doesn't have, from the document's font
 // table: fixed pitch is Courier New; a sans-serif panose number or the "swiss" family is Arial; a
@@ -156,6 +185,11 @@ struct Options {
 // Word's renders of the corpus). Empty when the table says nothing useful, or for families fwtext's
 // own table knows (Aptos, Helvetica...). For text::Fonts' SubstituteFn.
 std::wstring SubstituteFamily(const Document& doc, std::wstring_view family);
+
+// What a DATE or TIME field (its instruction, `code`) shows at `now` (as Options::now): by its \@
+// picture, as Word reads one, in the language `lang` (BCP 47; the user's when empty or unknown).
+// Empty for other fields, or when `now` is 0.
+std::u16string DateFieldResult(std::u16string_view code, int64_t now, std::string_view lang);
 
 // Draws a drawing into its box with the painter. fwdraw provides it (plan §4.5); without one,
 // Paint() draws a light frame where the drawing goes.
@@ -198,19 +232,28 @@ class Layout {
   // ---- Selection and find. Positions on pages not laid out yet are laid out first.
   // The text position nearest to (x, y) on a page: the line under or nearest the point, then the
   // nearest caret stop on it. nullopt on a page without text.
-  std::optional<TextPos> HitTest(size_t page, float x, float y) const;
+  std::optional<TextPos> HitTest(size_t page, float x, float y, HitStories which = HitStories::All) const;
   struct Caret {
     size_t page = 0;
     float x = 0, top = 0, bottom = 0;
   };
   // Where the caret before `pos` is drawn; nullopt for text that isn't shown (hidden, or in a story
-  // not on any page, such as an unused header or a comment).
-  std::optional<Caret> CaretAt(TextPos pos);
+  // not on any page, such as an unused header or a comment). A header or footer is on many pages:
+  // `page` says which one to show it on (the first it's on, when it isn't there).
+  std::optional<Caret> CaretAt(TextPos pos, size_t page = SIZE_MAX);
   // The rectangles that [from, to) covers, page by page, for the selection and find highlights.
-  // Both positions are in one story; table cells are covered in reading order.
-  std::vector<std::pair<size_t, Rect>> Ranges(TextPos from, TextPos to);
+  // Both positions are in one story; table cells are covered in reading order. For a header or
+  // footer, `page` names the page (else the first it's on).
+  std::vector<std::pair<size_t, Rect>> Ranges(TextPos from, TextPos to, size_t page = SIZE_MAX);
   // The page `pos` is on (the first, for a story repeated on many pages, such as a header).
   std::optional<size_t> PageOf(TextPos pos);
+  // The table cells on a page (Page::cells), laying it out first when it isn't yet: for dragging
+  // column borders and row heights, and selecting rows and columns (D3).
+  std::vector<CellRect> Cells(size_t page);
+  // Whether CaretAt and Ranges for `pos` answer without laying out more than a page: its main-text
+  // paragraph is on a page laid out since the last edit (other stories always are). What's drawn
+  // each frame asks first, so a change of the page (D3) lays out in idle time, not in a paint.
+  bool LaidOut(TextPos pos) const;
   // The line `pos` is on: its page, its box, and where Home and End take the caret (the end of a
   // wrapped line is before its last character, so the caret stays on the line).
   struct LineSpan {

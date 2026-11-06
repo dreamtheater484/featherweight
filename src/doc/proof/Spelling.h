@@ -67,6 +67,8 @@ class Spelling {
   static bool HiddenByDocument(const Document& doc);
 
  private:
+  // Whether the paragraph is in the document (not in the text box of a deleted shape).
+  bool InDocument(uint32_t para) const;
   struct ParaState {
     bool checked = false;
     std::vector<Misspelling> errors;

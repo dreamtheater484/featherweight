@@ -18,7 +18,7 @@ const FileKindInfo kKinds[] = {
     {FileKind::Pdf, L"PDF", L"PDF", L"PDFs", L"Featherweight.PDF", L"PDF Document", L"PDF documents", kPdf, {}, 0,
      true, false},
     {FileKind::Document, L"Document", L"document", L"documents", L"Featherweight.Document", L"Document", L"Documents",
-     kDocument, kDocumentLater, 1, true, false},
+     kDocument, kDocumentLater, 1, true, true},
     {FileKind::Workbook, L"Workbook", L"spreadsheet", L"spreadsheets", L"Featherweight.Workbook", L"Spreadsheet",
      L"Spreadsheets", kWorkbook, kWorkbookLater, 2, false, false},
     {FileKind::Presentation, L"Presentation", L"presentation", L"presentations", L"Featherweight.Presentation",

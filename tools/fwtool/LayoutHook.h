@@ -4,11 +4,19 @@
 // and `fwtool bench` call LayOutDocument for every document; `fwtool compare --dumps` measures
 // layout dumps from a folder instead.
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "core/LayoutDump.h"
 #include "core/OpenTimings.h"
+
+namespace fw::doc {
+class Document;
+namespace layout {
+class Layout;
+}
+}  // namespace fw::doc
 
 namespace fwtool {
 
@@ -22,6 +30,10 @@ bool HaveLayout();
 bool LayOutDocument(const std::filesystem::path& document, fw::LayoutDump* dump, fw::OpenTimings* timings,
                     std::string& error);
 
+// The same, handing the model and its laid-out pages to `use` (fwtool pdf-check).
+bool WithLayout(const std::filesystem::path& document, std::string& error,
+                const std::function<void(const fw::doc::Document&, const fw::doc::layout::Layout&)>& use);
+
 // fwtool dump --layout: prints each page's lines, or with `out`, writes <out>/<name>.layout.json.
 void DumpLayout(const std::filesystem::path& document, const std::filesystem::path& out);
 
@@ -31,6 +43,9 @@ struct TypingPlace {
   std::string where;  // "start", "middle", "end", "table" (a cell from the middle on)
   std::vector<double> typing, backspace, enter;  // enter: Enter, and Backspace joining again
   std::vector<double> format;  // bold, centered, Heading 1 and bullets, each undone
+  // The whole document's margins changed and undone (D3): to the caret's page painted, and to
+  // every page laid out again (in idle time in the app).
+  std::vector<double> page, pageAll;
 };
 // Opens and lays out the document, then types at its start, middle and end, and in a table, through
 // the editor, and formats there as Word's keys and buttons do.

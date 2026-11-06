@@ -72,10 +72,7 @@ bool Engine::MeasureRowsAgain(TableBox& t, size_t from, size_t to, bool structur
   return true;
 }
 
-void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse, size_t from, size_t to) {
-  const Node tbl = t.tbl;
-  const bool all = t.rows.empty();
-  // A cell's paragraphs and their versions, nested tables' included.
+uint64_t Engine::CellKey(Node tc) const {
   std::function<void(Node, uint64_t&)> key = [&](Node container, uint64_t& h) {
     for (const Block& b : doc_.Blocks(container)) {
       if (b.kind == BlockKind::Paragraph) {
@@ -83,12 +80,44 @@ void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse,
         h = (h ^ (static_cast<uint64_t>(p.elem) << 32 | p.version)) * 0x100000001B3ull;
       } else if (b.kind == BlockKind::Table) {
         for (Node tr : doc_.TableRows(b.node))
-          for (Node tc : doc_.RowCells(tr)) key(tc, h);
+          for (Node inner : doc_.RowCells(tr)) key(inner, h);
       } else {
         key(b.node, h);
       }
     }
   };
+  uint64_t h = 0xCBF29CE484222325ull;
+  key(tc, h);
+  return h;
+}
+
+bool Engine::BringUpToDate(TableBox& t, float frameWidth, LineStory story) {
+  if (t.frameWidth != frameWidth || t.story != story) return false;
+  const std::vector<Node> rows = doc_.TableRows(t.tbl);
+  if (rows.size() != t.rows.size()) return false;
+  size_t from = SIZE_MAX, to = 0;  // the rows to measure again
+  for (size_t r = 0; r < rows.size(); ++r) {
+    const RowBox& rb = t.rows[r];
+    if (!(rows[r] == rb.tr)) return false;
+    const std::vector<Node> cells = doc_.RowCells(rows[r]);
+    if (cells.size() != rb.cells.size()) return false;
+    for (size_t i = 0; i < cells.size(); ++i) {
+      const CellBox& c = rb.cells[i];
+      if (!(cells[i] == c.tc)) return false;
+      if (c.continued) continue;
+      const Stack& s = c.content;
+      if (s.usesPage || s.usesPageCount || s.numbersNotes || s.placedOnPage || s.labels || CellKey(c.tc) != c.key) {
+        from = std::min(from, r);
+        to = std::max(to, r);
+      }
+    }
+  }
+  return from == SIZE_MAX || MeasureRowsAgain(t, from, to, false);
+}
+
+void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse, size_t from, size_t to) {
+  const Node tbl = t.tbl;
+  const bool all = t.rows.empty();
   std::unordered_map<ElemId, const CellBox*> before;
   if (reuse)
     for (size_t r = from; r < reuse->rows.size() && r <= to; ++r)
@@ -176,14 +205,14 @@ void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse,
           const float spec = Pt(rb.props.height);
           cf.width = spec > 0 ? std::max(1.0f, spec - c.marginTop - c.marginBottom) : 1584.0f;  // 22 inches
         }
-        c.key = 0xCBF29CE484222325ull;
-        key(tc, c.key);
-        // A cell measured before whose text didn't change and doesn't depend on its page.
+        c.key = CellKey(tc);
+        // A cell measured before whose text didn't change and doesn't depend on its page, nor on
+        // how the lists before it are numbered.
         auto it = reuse ? before.find(tc.Id()) : before.end();
         const CellBox* old = it != before.end() ? it->second : nullptr;
         if (old && old->key == c.key && old->turn == c.turn && old->width == c.width && old->marginLeft == c.marginLeft &&
             old->marginRight == c.marginRight && !old->content.usesPage && !old->content.usesPageCount &&
-            !old->content.numbersNotes && !old->content.placedOnPage) {
+            !old->content.numbersNotes && !old->content.placedOnPage && !old->content.labels) {
           c.content = old->content;
           c.turnedLength = old->turnedLength;
         } else {
@@ -201,13 +230,13 @@ void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse,
       if (!c.continued)
         for (const Block& b : doc_.Blocks(tc))
           if (b.kind == BlockKind::Paragraph) {
-            if (!doc_.ResolvedPara(b.para).keepNext) keepAll = false;
+            if (!ParaOf(b.para).keepNext) keepAll = false;
             anyPara = true;
           }
       if (rb.cells.empty()) {
         std::vector<Block> blocks = doc_.Blocks(tc);
         rb.breakBefore = !blocks.empty() && blocks.front().kind == BlockKind::Paragraph &&
-                         doc_.ResolvedPara(blocks.front().para).pageBreakBefore;
+                         ParaOf(blocks.front().para).pageBreakBefore;
       }
       rb.cells.push_back(std::move(c));
     }
@@ -332,6 +361,10 @@ void Engine::EmitCell(const CellBox& c, float x, float top, float height, float 
       copy.rect = {d.rect.left + dx, d.rect.top + dy, d.rect.right + dx, d.rect.bottom + dy};
       out.drawings.push_back(copy);
     }
+  for (const CellRect& n : s.cells)  // a table in the cell
+    if (n.box.top >= from - 0.01f && n.box.top < to - 0.01f)
+      out.cells.push_back({n.tc, n.tbl, n.row, n.col, n.span,
+                           {n.box.left + dx, n.box.top + dy, n.box.right + dx, n.box.bottom + dy}});
 }
 
 void Engine::EmitRow(const TableBox& t, size_t r, float x, float top, float height, const std::vector<float>* cutFrom,
@@ -362,6 +395,7 @@ void Engine::EmitRow(const TableBox& t, size_t r, float x, float top, float heig
     }
     if (c.props.shading.Present() && !c.props.shading.fill.automatic)
       out.fills.push_back({{left, top, right, bottom}, c.props.shading.fill.rgb});
+    out.cells.push_back({c.tc.Id(), t.tbl.Id(), static_cast<uint32_t>(r), c.col, c.span, {left, top, right, bottom}});
     // Content: a restart cell's lines go in its first row (unless the caller places merged cells'
     // text itself); split rows show their part.
     if (!c.continued && (spans || c.rowSpan <= 1)) {

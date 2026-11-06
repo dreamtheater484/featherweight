@@ -43,11 +43,19 @@ std::string EnsureStyle(TreeEdit& ed, std::string_view nameOrId);
 void ApplyStyle(TreeEdit& ed, Range range, std::string_view nameOrId);
 
 // Changes a style's own definition: every paragraph or run that uses it follows. Properties equal
-// to what the style's basedOn gives are removed from it.
+// to what the style's basedOn gives are removed from it. Highlighting and a character style are
+// never a style's, and are left out.
 void ModifyStyle(TreeEdit& ed, std::string_view styleId, const RunFormat& run, const ParaFormat& para);
 
 // "Update Heading 1 to Match Selection": the direct formatting of the paragraph at the range's start
 // (and of its first character) moves into the paragraph's style, and off the paragraph.
 void UpdateStyleToMatch(TreeEdit& ed, Range range);
+
+// Create a style from the selection, as Word's "Create a Style" does: a paragraph style named
+// `name` (a custom quick style, based on the paragraph's style and followed by itself) holding the
+// direct formatting of the range's first paragraph and of its first character; the range's
+// paragraphs then take it. One undo step, "New style". Returns the new style's id, or empty with
+// `why` (a name that's taken, empty or can't be written, or text that can't change).
+std::string NewStyleFromSelection(TreeEdit& ed, Range range, std::string_view name, std::u16string& why);
 
 }  // namespace fw::doc::edit

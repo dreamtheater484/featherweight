@@ -1,8 +1,11 @@
 #include "doc/proof/AutoCorrect.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cwctype>
 
+#include "doc/edit/Styles.h"
+#include "doc/edit/TreeEdit.h"
 #include "doc/proof/Language.h"
 
 namespace fw::doc::proof {
@@ -142,6 +145,72 @@ bool SentenceStart(std::u16string_view text, uint32_t at) {
   return true;
 }
 
+// An Internet address at the start of `word` (as typed, without opening quotes and brackets):
+// how much of the word it is, without the punctuation after it, and the link's address.
+struct Address {
+  uint32_t length = 0;
+  std::string target;
+};
+
+// A host name: labels of letters, digits and hyphens between dots. `dotted`: two labels at least,
+// the last one letters (a domain like example.org, not "example" or "1.5").
+bool HostName(std::string_view host, bool dotted) {
+  if (host.empty() || host.front() == '.' || host.back() == '.' || host.find("..") != std::string_view::npos)
+    return false;
+  for (char c : host)
+    if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '.')) return false;
+  if (!dotted) return true;
+  const size_t dot = host.rfind('.');
+  if (dot == std::string_view::npos || host.size() - dot - 1 < 2) return false;
+  return std::all_of(host.begin() + dot + 1, host.end(), [](char c) { return std::isalpha(static_cast<unsigned char>(c)) != 0; });
+}
+
+bool EmailAddress(std::string_view s) {
+  const size_t at = s.find('@');
+  if (at == 0 || at == std::string_view::npos || s.find('@', at + 1) != std::string_view::npos) return false;
+  const std::string_view local = s.substr(0, at);
+  if (local.front() == '.' || local.back() == '.') return false;
+  for (char c : local)
+    if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == '%' || c == '+' || c == '-'))
+      return false;
+  return HostName(s.substr(at + 1), true);
+}
+
+std::optional<Address> AddressIn(std::u16string_view word) {
+  std::u16string_view w = word;
+  // Punctuation after it isn't part of it; a closing bracket is only when the address opened it.
+  while (!w.empty()) {
+    const char16_t c = w.back();
+    if (c == u')' || c == u']' || c == u'}') {
+      const char16_t open = c == u')' ? u'(' : c == u']' ? u'[' : u'{';
+      if (std::count(w.begin(), w.end(), open) >= std::count(w.begin(), w.end(), c)) break;
+    } else if (!(c == u'.' || c == u',' || c == u';' || c == u':' || c == u'!' || c == u'?' || c == u'"' ||
+                 c == u'\'' || c == u'>' || c == 0x2019 || c == 0x201D)) {
+      break;
+    }
+    w.remove_suffix(1);
+  }
+  // Printable ASCII only: an address with other characters is left as typed, not guessed at.
+  if (w.empty() || !std::all_of(w.begin(), w.end(), [](char16_t c) { return c > 0x20 && c < 0x7F; })) return std::nullopt;
+  std::string s, lower;
+  for (char16_t c : w) {
+    s += static_cast<char>(c);  // ASCII, checked above
+    lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  const auto length = static_cast<uint32_t>(w.size());
+  auto host = [](std::string_view rest) { return rest.substr(0, rest.find_first_of("/?#:")); };
+  for (std::string_view scheme : {"http://", "https://", "ftp://"})
+    if (lower.starts_with(scheme))
+      return HostName(host(std::string_view(s).substr(scheme.size())), false) ? std::optional<Address>({length, s})
+                                                                             : std::nullopt;
+  if (lower.starts_with("www."))
+    return HostName(host(s), true) ? std::optional<Address>({length, "http://" + s}) : std::nullopt;
+  if (lower.starts_with("mailto:"))
+    return EmailAddress(std::string_view(s).substr(7)) ? std::optional<Address>({length, s}) : std::nullopt;
+  if (EmailAddress(s)) return Address{length, "mailto:" + s};
+  return std::nullopt;
+}
+
 }  // namespace
 
 std::vector<Correction> AutoCorrect::Find(std::u16string_view text, uint32_t caret, char16_t typed,
@@ -191,6 +260,11 @@ std::vector<Correction> AutoCorrect::Find(std::u16string_view text, uint32_t car
   const std::u16string lower = Lowered(word);
   const bool startsSentence = options_.capitalizeSentences && SentenceStart(text, start) && lead == start;
 
+  // An Internet address: a link once a space, a tab or Enter ends it, and nothing changed in it.
+  const std::optional<Address> address = AddressIn(word);
+  if (address && options_.links && (typed == 0 || Space(typed)))
+    out.push_back({lead, lead + address->length, std::u16string(), address->target});
+
   // Replacements from the list (whole words) and "..." (at the end of a word).
   if (options_.replaceText) {
     std::optional<std::u16string> replacement;
@@ -212,8 +286,8 @@ std::vector<Correction> AutoCorrect::Find(std::u16string_view text, uint32_t car
 
   // Hyphens to dashes.
   if (options_.dashes) {
-    // "word--word": an em dash, no spaces.
-    for (size_t k = 1; k + 2 < word.size(); ++k)
+    // "word--word": an em dash, no spaces (not inside an address).
+    for (size_t k = 1; !address && k + 2 < word.size(); ++k)
       if (word[k] == u'-' && word[k + 1] == u'-' && Alnum(word[k - 1]) && Alnum(word[k + 2]) &&
           (k + 3 >= word.size() || word[k + 2] != u'-')) {
         out.push_back({lead + static_cast<uint32_t>(k), lead + static_cast<uint32_t>(k) + 2, u"—"});
@@ -232,7 +306,7 @@ std::vector<Correction> AutoCorrect::Find(std::u16string_view text, uint32_t car
   std::u16string_view letters = word;
   while (!letters.empty() && !Letter(letters.back())) letters.remove_suffix(1);
   const bool plain = std::all_of(letters.begin(), letters.end(), [](char16_t c) { return Letter(c) || c == u'\'' || c == 0x2019; });
-  if (options_.twoInitialCapitals && plain && letters.size() >= 3 && Upper(letters[0]) && Upper(letters[1])) {
+  if (options_.twoInitialCapitals && plain && !address && letters.size() >= 3 && Upper(letters[0]) && Upper(letters[1])) {
     bool restLower = true, anyLower = false;
     for (size_t k = 2; k < letters.size(); ++k)
       if (Letter(letters[k])) {
@@ -262,6 +336,16 @@ std::optional<Pos> AutoCorrect::Apply(edit::Editor& editor, uint32_t para, uint3
   int64_t shift = 0;
   bool any = false;
   for (const Correction& c : corrections) {
+    if (!c.link.empty()) {
+      // A link in Word's Hyperlink style, its text as typed. Where the editor makes no link (in a
+      // field or a content control, or a link already) the text stays as it is.
+      if (editor.SetLink({para, c.from}, {para, c.to}, c.link)) {
+        edit::TreeEdit style(editor, {para, c.to});
+        edit::ApplyStyle(style, {{para, c.from}, {para, c.to}}, "Hyperlink");
+        any = true;
+      }
+      continue;
+    }
     if (!editor.Replace({para, c.from}, {para, c.to}, c.text)) break;  // refused: keep what's done
     any = true;
     if (c.to <= caret) shift += static_cast<int64_t>(c.text.size()) - static_cast<int64_t>(c.to - c.from);

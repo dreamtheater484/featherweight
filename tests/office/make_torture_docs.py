@@ -147,6 +147,34 @@ def tables_document():
             "</w:body></w:document>")
 
 
+def received_table_document():
+    """A table as one arrives by mail, for the friction review's "fix a table" flow
+    (docs/friction-review.md, tests/friction-checks.ps1): four columns with a header row and grid
+    lines (Table Grid, its borders set on the table, as the style isn't in styles.xml), and a typo in
+    a cell."""
+    widths = [3000, 1500, 2000, 2000]
+    grid = "".join(f'<w:gridCol w:w="{w}"/>' for w in widths)
+    def row(texts, header=False):
+        trpr = "<w:trPr><w:tblHeader/></w:trPr>" if header else ""
+        rpr = "<w:rPr><w:b/></w:rPr>" if header else ""
+        return ("<w:tr>" + trpr + "".join(f'<w:tc><w:tcPr><w:tcW w:w="{w}" w:type="dxa"/></w:tcPr><w:p>{run(t, rpr)}</w:p></w:tc>'
+                                           for t, w in zip(texts, widths)) + "</w:tr>")
+    rows = [row(["Item", "Quantity", "Price", "Total"], True)]
+    for texts in [["Desk", "2", "250", "500"], ["Chiar", "4", "80", "320"], ["Lamp", "3", "40", "120"], ["Shelf", "1", "150", "150"]]:
+        rows.append(row(texts))
+    borders = "".join(f'<w:{side} w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+                      for side in ["top", "left", "bottom", "right", "insideH", "insideV"])
+    table = ('<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/>'
+             f'<w:tblBorders>{borders}</w:tblBorders>'
+             '<w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="0" '
+             f'w:noVBand="1"/></w:tblPr><w:tblGrid>{grid}</w:tblGrid>' + "".join(rows) + "</w:tbl>")
+    body = ("<w:p>" + run("Quote for the new office") + "</w:p>" + table + "<w:p>" + run("Prices in euros, without VAT.")
+            + "</w:p>")
+    return (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="{W}" xmlns:r="{R}"><w:body>'
+            + body + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" '
+            'w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>')
+
+
 TRANSITIONAL = {
     "w": W, "r": R,
     "rel": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/",
@@ -228,6 +256,95 @@ def headers_parts(ns):
             "word/_rels/header1.xml.rels": header_rels, "word/footer1.xml": footer}
 
 
+PLACEHOLDER = '<w:rPr><w:rStyle w:val="PlaceholderText"/></w:rPr>'
+
+
+def sdt(sdt_id, alias, choice, content, placeholder=False, lock=""):
+    """An inline content control as Word writes it: its properties, then the runs it holds."""
+    pr = (f'<w:alias w:val="{alias}"/><w:tag w:val="{alias.lower()}"/><w:id w:val="{sdt_id}"/>'
+          + (f'<w:lock w:val="{lock}"/>' if lock else "") + ("<w:showingPlcHdr/>" if placeholder else "") + choice)
+    return f"<w:sdt><w:sdtPr>{pr}</w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"
+
+
+def list_items(*items):
+    return '<w:listItem w:displayText="Choose an item." w:value=""/>' + "".join(
+        f'<w:listItem w:displayText="{i}" w:value="{i}"/>' for i in items)
+
+
+def form_field(name, kind_xml, instr, result=None):
+    """A legacy form field: w:ffData in its begin, and a result only when it has one."""
+    begin = (f'<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="{name}"/><w:enabled/>'
+             f'<w:calcOnExit w:val="0"/>{kind_xml}</w:ffData></w:fldChar></w:r>'
+             f'<w:r><w:instrText xml:space="preserve"> {instr} </w:instrText></w:r>')
+    if result is None:
+        return begin + '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+    return begin + '<w:r><w:fldChar w:fldCharType="separate"/></w:r>' + run(result) + '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+
+
+def forms_parts(protected):
+    """A form of every kind of content control and legacy form field the editor fills in: rich and
+    plain text (one locked), check box, drop-down list, combo box and date controls, a block control
+    around two paragraphs, controls in a table, and FORMTEXT, FORMCHECKBOX and FORMDROPDOWN. With
+    `protected`, forms protection is enforced (only the fill-ins can change)."""
+    decl = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+    root_ns = f'xmlns:w="{W}" xmlns:r="{R}" xmlns:mc="{MC}" xmlns:w14="{W14}" mc:Ignorable="w14"'
+    box = ('<w14:checkbox><w14:checked w14:val="0"/><w14:checkedState w14:val="2612" w14:font="MS Gothic"/>'
+           '<w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox>')
+    gothic = '<w:rPr><w:rFonts w:ascii="MS Gothic" w:eastAsia="MS Gothic" w:hAnsi="MS Gothic" w:hint="eastAsia"/></w:rPr>'
+    placeholder_text = f"<w:r>{PLACEHOLDER}<w:t>Click or tap here to enter text.</w:t></w:r>"
+    choose = f"<w:r>{PLACEHOLDER}<w:t>Choose an item.</w:t></w:r>"
+    paras = ['<w:p><w:pPr><w:pStyle w:val="Title"/></w:pPr>' + run("Application form") + "</w:p>",
+             "<w:p>" + run("Name: ") + sdt(501, "Name", "", placeholder_text, placeholder=True) + "</w:p>",
+             "<w:p>" + run("Reference: ") + sdt(502, "Reference", "<w:text/>", run("FW-2026-001")) + run(" (plain text)") + "</w:p>",
+             "<w:p>" + sdt(503, "Agree", box, f"<w:r>{gothic}<w:t>☐</w:t></w:r>") + run(" I agree to the terms.") + "</w:p>",
+             "<w:p>" + run("Colour: ") + sdt(504, "Colour", "<w:dropDownList>" + list_items("Red", "Green", "Blue") + "</w:dropDownList>",
+                                            choose, placeholder=True) + "</w:p>",
+             "<w:p>" + run("Size: ") + sdt(505, "Size", "<w:comboBox>" + list_items("Small", "Large") + "</w:comboBox>",
+                                          run("Medium")) + "</w:p>",
+             "<w:p>" + run("Start date: ") + sdt(506, "Start", '<w:date w:fullDate="2026-11-05T00:00:00Z"><w:dateFormat w:val="d MMMM yyyy"/>'
+                                                 '<w:lid w:val="en-GB"/><w:storeMappedDataAs w:val="dateTime"/>'
+                                                 '<w:calendar w:val="gregorian"/></w:date>', run("5 November 2026")) + "</w:p>",
+             "<w:p>" + run("Office use: ") + sdt(507, "Office", "", run("Do not change this"), lock="contentLocked") + "</w:p>",
+             ('<w:sdt><w:sdtPr><w:alias w:val="Statement"/><w:tag w:val="statement"/><w:id w:val="508"/></w:sdtPr><w:sdtContent>'
+              "<w:p>" + run("Your statement, first paragraph.") + "</w:p><w:p>" + run("And its second paragraph.")
+              + "</w:p></w:sdtContent></w:sdt>"),
+             "<w:p>" + run("Legacy name: ") + form_field("Text1", "<w:textInput/>", "FORMTEXT", " " * 5) + "</w:p>",
+             "<w:p>" + form_field("Check1", '<w:checkBox><w:sizeAuto/><w:default w:val="0"/></w:checkBox>', "FORMCHECKBOX")
+             + run(" Send me the newsletter.") + "</w:p>",
+             "<w:p>" + run("Legacy size: ") + form_field("Dropdown1", '<w:ddList><w:listEntry w:val="Small"/><w:listEntry w:val="Medium"/>'
+                                                        '<w:listEntry w:val="Large"/></w:ddList>', "FORMDROPDOWN") + "</w:p>"]
+    cell = '<w:tc><w:tcPr><w:tcW w:w="4675" w:type="dxa"/></w:tcPr><w:p>{}</w:p></w:tc>'
+    paras.append('<w:tbl><w:tblPr><w:tblW w:w="9350" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+                 '<w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/>'
+                 '</w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="4675"/><w:gridCol w:w="4675"/></w:tblGrid>'
+                 "<w:tr>" + cell.format(run("Phone")) + cell.format(sdt(509, "Phone", "<w:text/>", placeholder_text, placeholder=True)) + "</w:tr>"
+                 "<w:tr>" + cell.format(run("Contact by post")) + cell.format(sdt(510, "Post", box, f"<w:r>{gothic}<w:t>☐</w:t></w:r>"))
+                 + "</w:tr></w:tbl>")
+    paras.append("<w:p>" + run("Thank you for applying.") + "</w:p>")
+    body = "".join(paras) + ('<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" '
+                             'w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>')
+    document_xml = decl + f"<w:document {root_ns}><w:body>{body}</w:body></w:document>"
+    styles_xml = styles().replace("</w:styles>", '<w:style w:type="character" w:styleId="PlaceholderText"><w:name w:val="Placeholder Text"/>'
+                                                 '<w:uiPriority w:val="99"/><w:semiHidden/>'
+                                                 '<w:rPr><w:color w:val="808080"/></w:rPr></w:style></w:styles>')
+    protection = '<w:documentProtection w:edit="forms" w:enforcement="1"/>' if protected else ""
+    settings_xml = decl + f'<w:settings xmlns:w="{W}">{protection}<w:defaultTabStop w:val="720"/></w:settings>'
+    rel = TRANSITIONAL["rel"]
+    rels = (decl + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f'<Relationship Id="rId1" Type="{rel}styles" Target="styles.xml"/>'
+            f'<Relationship Id="rId2" Type="{rel}settings" Target="settings.xml"/></Relationships>')
+    types = (decl + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+             '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+             '<Default Extension="xml" ContentType="application/xml"/>'
+             f'<Override PartName="/word/document.xml" ContentType="{WORDML}document.main+xml"/>'
+             f'<Override PartName="/word/styles.xml" ContentType="{WORDML}styles+xml"/>'
+             f'<Override PartName="/word/settings.xml" ContentType="{WORDML}settings+xml"/></Types>')
+    package_rels = (decl + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    f'<Relationship Id="rId1" Type="{rel}officeDocument" Target="word/document.xml"/></Relationships>')
+    return {"[Content_Types].xml": types, "_rels/.rels": package_rels, "word/_rels/document.xml.rels": rels,
+            "word/document.xml": document_xml, "word/styles.xml": styles_xml, "word/settings.xml": settings_xml}
+
+
 def write_parts(name, parts):
     path = os.path.join(OUT, name)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
@@ -255,8 +372,11 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     write("toc-fields.docx", document())
     write("merged-table.docx", tables_document())
+    write("received-table.docx", received_table_document())
     write_parts("headers-fields.docx", headers_parts(TRANSITIONAL))
     write_parts("headers-fields-strict.docx", headers_parts(STRICT))
+    write_parts("forms.docx", forms_parts(protected=False))
+    write_parts("forms-protected.docx", forms_parts(protected=True))
 
 
 if __name__ == "__main__":

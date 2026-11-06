@@ -85,8 +85,14 @@ struct Engine::Impl {
   std::vector<Zone> zones;
   std::vector<uint32_t> notes;  // footnote stories on the page, in order
   float notesHeight = 0;        // with the separator
-  std::unordered_map<uint32_t, Stack> noteStacks;
+  // Notes stacked at a width (a page setup may change it, D3).
+  struct NoteStackAt {
+    float width = 0;
+    Stack stack;
+  };
+  std::unordered_map<uint32_t, NoteStackAt> noteStacks;
   float noteWidth = 0;
+  float separatorWidth = -1;  // what separatorHeight was measured at
   size_t hfLines = 0;  // header and footer lines first on the page, for refreshing page counts
   bool hfUsesCount = false;
 
@@ -96,7 +102,7 @@ struct Engine::Impl {
     size_t col = 0;
     float y = 0;
     Spacing spacing;
-    size_t lines = 0, paints = 0, fills = 0, edges = 0, drawings = 0, zones = 0, notes = 0;
+    size_t lines = 0, paints = 0, fills = 0, edges = 0, drawings = 0, cells = 0, zones = 0, notes = 0;
     float notesHeight = 0;
     bool columnEmpty = true;
     // Inside the table in progress (its rows kept together): the row it starts at.
@@ -222,19 +228,23 @@ static void FlattenBody(const Document& doc, std::vector<Item>& items) {
 }
 
 Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, OpenTimings* timings)
-    : impl_(new Impl), doc_(doc), fonts_(fonts), options_(options), timings_(timings) {
+    : impl_(new Impl), doc_(doc), fonts_(fonts), options_(options), timings_(timings), generation_(doc.CacheGeneration()) {
   compatMode_ = doc.Settings().compatibilityMode > 0 ? doc.Settings().compatibilityMode : 12;
   sumSpacing_ = doc.Settings().Compat(Name("doNotUseHTMLParagraphAutoSpacing"));
-  fieldsCount_.assign(doc.Stories().size(), 0);
-  for (uint32_t s = 0; s < doc.Stories().size(); ++s) {
-    StoryKind k = doc.Stories()[s].kind;
-    if (k == StoryKind::Header || k == StoryKind::Footer || k == StoryKind::Main) fieldsCount_[s] = 1;
-  }
+  CountStories();
   FlattenBody(doc, impl_->items);
   impl_->bodyItems = impl_->items.size();
 }
 
 Engine::~Engine() = default;
+
+bool Engine::FieldsIn(uint32_t story) {
+  while (fieldsCount_.size() < doc_.Stories().size() && fieldsCount_.size() <= story) {
+    const StoryKind k = doc_.Stories()[fieldsCount_.size()].kind;
+    fieldsCount_.push_back(k == StoryKind::Header || k == StoryKind::Footer || k == StoryKind::Main ? 1 : 0);
+  }
+  return story < fieldsCount_.size() && fieldsCount_[story] > 0;
+}
 
 const std::vector<Field>& Engine::StoryFields(uint32_t story) {
   auto it = fieldsCache_.find(story);
@@ -254,7 +264,8 @@ size_t LineBytes(const LineBox& l) {
 
 size_t PageBytes(const Page& p) {
   size_t n = sizeof(Page) + p.paints.capacity() * sizeof(RunPaint) + p.fills.capacity() * sizeof(Fill) +
-             p.edges.capacity() * sizeof(Edge) + p.drawings.capacity() * sizeof(DrawingBox);
+             p.edges.capacity() * sizeof(Edge) + p.drawings.capacity() * sizeof(DrawingBox) +
+             p.cells.capacity() * sizeof(CellRect);
   for (const LineBox& l : p.lines) n += LineBytes(l);
   return n;
 }
@@ -498,6 +509,7 @@ struct Flow {
     p.fills = std::move(f.body.fills);
     p.edges = std::move(f.body.edges);
     p.drawings = std::move(f.body.drawings);
+    p.cells = std::move(f.body.cells);
     std::stable_sort(p.drawings.begin(), p.drawings.end(), [](const DrawingBox& a, const DrawingBox& b) {
       if (a.behindText != b.behindText) return a.behindText;
       if (a.floating != b.floating) return !a.floating;
@@ -524,15 +536,17 @@ struct Flow {
     return b;
   }
 
-  Stack Separator() {
-    const std::vector<std::string_view>& ids = doc.Settings().footnoteSeparators;
+  // The separator note above footnotes (or endnotes): its height, without its text (the line is
+  // drawn as an edge).
+  Stack Separator(bool endnote = false) {
+    const std::vector<std::string_view>& ids = endnote ? doc.Settings().endnoteSeparators : doc.Settings().footnoteSeparators;
     Frame frame;
     frame.geom = &f.geom;
     frame.fields = &f.fields;
-    frame.width = f.noteWidth;
-    frame.story = LineStory::Footnote;
+    frame.width = endnote ? ColumnRight() - ColumnLeft() : f.noteWidth;
+    frame.story = endnote ? LineStory::Endnote : LineStory::Footnote;
     for (std::string_view id : ids) {
-      uint32_t s = doc.NoteStory(StoryKind::Footnote, id);
+      uint32_t s = doc.NoteStory(endnote ? StoryKind::Endnote : StoryKind::Footnote, id);
       if (s == kNone) continue;
       std::string_view type = doc.NodeOf(doc.Stories()[s].root).AttrOr(Name("type"));
       if (type != "separator") continue;
@@ -547,8 +561,8 @@ struct Flow {
 
   Stack NoteStack(uint32_t story) {
     auto it = f.noteStacks.find(story);
-    if (it != f.noteStacks.end()) {
-      Stack copy = it->second;
+    if (it != f.noteStacks.end() && it->second.width == f.noteWidth) {
+      Stack copy = it->second.stack;
       return copy;
     }
     Frame frame;
@@ -557,12 +571,12 @@ struct Flow {
     frame.width = f.noteWidth;
     frame.story = doc.Stories()[story].kind == StoryKind::Endnote ? LineStory::Endnote : LineStory::Footnote;
     Stack s = e.StackStory(story, frame);
-    return f.noteStacks.emplace(story, s).first->second;
+    return f.noteStacks.insert_or_assign(story, Engine::Impl::NoteStackAt{f.noteWidth, s}).first->second.stack;
   }
 
   float NoteHeight(uint32_t story) {
     auto it = f.noteStacks.find(story);
-    return it != f.noteStacks.end() ? it->second.height : NoteStack(story).height;
+    return it != f.noteStacks.end() && it->second.width == f.noteWidth ? it->second.stack.height : NoteStack(story).height;
   }
 
   // Footnotes the cells of a row refer to between cutFrom and cutTo (null: from the top, to the
@@ -586,7 +600,10 @@ struct Flow {
   }
 
   float SeparatorHeight() {
-    if (f.separatorHeight < 0) f.separatorHeight = Separator().height;
+    if (f.separatorHeight < 0 || f.separatorWidth != f.noteWidth) {
+      f.separatorHeight = Separator().height;
+      f.separatorWidth = f.noteWidth;
+    }
     return f.separatorHeight;
   }
 
@@ -643,6 +660,7 @@ struct Flow {
     m.fills = f.body.fills.size();
     m.edges = f.body.edges.size();
     m.drawings = f.body.drawings.size();
+    m.cells = f.body.cells.size();
     m.zones = f.zones.size();
     m.notes = f.notes.size();
     m.notesHeight = f.notesHeight;
@@ -665,6 +683,7 @@ struct Flow {
     f.body.fills.resize(m.fills);
     f.body.edges.resize(m.edges);
     f.body.drawings.resize(m.drawings);
+    f.body.cells.resize(m.cells);
     f.zones.resize(m.zones);
     f.notes.resize(m.notes);
     f.notesHeight = m.notesHeight;
@@ -919,7 +938,7 @@ struct Flow {
       else if (l.top >= start - kEpsilon) above.push_back(l.top);
     }
     if (above.empty()) return to;
-    const ParaProps& p = doc.ResolvedPara(para);
+    const ParaProps& p = e.ParaOf(para);
     size_t keep = above.size();
     if (p.keepLines) keep = 0;
     else if (p.widowControl) {
@@ -1033,11 +1052,25 @@ struct Flow {
     for (Span& s : f.spans) FlushSpan(s, x, f.y);
   }
 
+  // The table as it was measured before an edit before it: an old page's flow went on in it.
+  std::shared_ptr<TableBox> OldTable(Node tbl) const {
+    for (const OldPage& o : f.old)
+      if (o.after.table && o.after.table->tbl == tbl) return o.after.table;
+    return nullptr;
+  }
+
   Step Table(const Item& item) {
     Frame frame = BodyFrame();
     if (!f.table) {
       f.tableStart = MarkNow();
-      f.table = std::make_shared<TableBox>(e.MeasureTable(item.node, frame));
+      // Laid out again after an edit before it: the table measured before, as it was when nothing
+      // in it changed, or with the cells that didn't change kept (cells with list labels are
+      // measured again: an edit before them may number them again).
+      const std::shared_ptr<TableBox> before = OldTable(item.node);
+      if (before && e.BringUpToDate(*before, frame.width, frame.story)) f.table = before;
+      else
+        f.table = std::make_shared<TableBox>(
+            e.MeasureTable(item.node, frame, before && before->frameWidth == frame.width ? before.get() : nullptr));
       f.row = 0;
       f.rowCut.clear();
       f.spans.clear();
@@ -1218,7 +1251,21 @@ struct Flow {
   // Endnotes, after the body: each note's blocks as flow items.
   void AddEndnotes() {
     f.endnotesAdded = true;
+    const size_t before = f.items.size();
     AddEndnoteItems(f.section == kNone ? 0 : f.section);
+    if (f.items.size() == before) return;
+    // Word's separator above them where they start, after the body's last space: the separator
+    // note's height, a line across its first two inches (as above footnotes).
+    Stack sep = Separator(true);
+    const float y = f.spacing.atTop ? f.y : f.y + f.spacing.after;
+    if (sep.height <= 0 || y + sep.height > Bottom() + kEpsilon) return;
+    const float x = ColumnLeft(), width = ColumnRight() - ColumnLeft();
+    sep.edges.push_back({SeparatorBorder(), 0, sep.height / 2, std::min(144.0f, width), sep.height / 2});
+    const float h = sep.height;
+    f.body.Append(std::move(sep), x, y);
+    f.y = y + h;
+    f.spacing = Spacing();
+    f.spacing.atTop = false;
   }
 
   void AddEndnoteItems(uint32_t sec) {
@@ -1545,8 +1592,25 @@ struct Flow {
         // begins.
         size_t k = n;
         while (k > 0 && touched(f.checkpoints[k])) --k;
-        if (k < n || f.old.empty()) {
-          restart = k > 0 ? k - 1 : 0;
+        size_t from = k > 0 ? k - 1 : 0;
+        // A change to how a section starts (on the same page now, or without the blank page before
+        // it) can bring it back to the page where what's before it ends, and keep-with-next the
+        // page before that one too.
+        bool back = false;
+        if (structure && tableRow == SIZE_MAX) {
+          // The first page that starts with what's before it laid out, or in the section it's in
+          // (the flow enters a section before its first item).
+          const uint32_t sec = itemFrom < f.items.size() ? f.items[itemFrom].section : kNone;
+          auto before = [&](const Checkpoint& c) { return c.next < itemFrom && (c.section == kNone || c.section < sec); };
+          size_t done = 0;
+          while (done <= k && before(f.checkpoints[done])) ++done;
+          if (const size_t page = done >= 2 ? done - 2 : 0; done <= k && page < from) {
+            from = page;
+            back = true;
+          }
+        }
+        if (k < n || f.old.empty() || back) {
+          restart = from;
         } else {
           // Not reached yet: it's on an old page, which then isn't taken back as it is.
           size_t q = n;
@@ -1825,7 +1889,22 @@ std::shared_ptr<CachedPara> Engine::KeepLines(uint32_t para, float width, bool b
   return c;
 }
 
+void Engine::Rebase() {
+  if (doc_.CacheGeneration() == generation_) return;
+  generation_ = doc_.CacheGeneration();
+  Impl& f = *impl_;
+  f.lineCache.clear();  // every paragraph's version changed too
+  const size_t n = doc_.Paragraphs().size();
+  auto fix = [&](const std::shared_ptr<ParaText>& pt) {
+    if (pt && pt->para < n) pt->props = &ParaOf(pt->para);
+  };
+  fix(f.pt);
+  for (auto& c : f.checkpoints) fix(c.pt);
+  for (auto& o : f.old) fix(o.after.pt);
+}
+
 bool Engine::NextPage() {
+  Rebase();
   Flow flow(*this);
   Impl& f = *impl_;
   if (f.checkpoints.empty()) f.checkpoints.push_back(flow.Save());
@@ -1864,7 +1943,18 @@ bool Engine::NextPage() {
   return made;
 }
 
+// Which stories' page fields are worked out: the body's, headers' and footers'. For stories an edit
+// adds too (a note, a header).
+void Engine::CountStories() {
+  for (auto s = static_cast<uint32_t>(fieldsCount_.size()); s < doc_.Stories().size(); ++s) {
+    const StoryKind k = doc_.Stories()[s].kind;
+    fieldsCount_.push_back(k == StoryKind::Header || k == StoryKind::Footer || k == StoryKind::Main ? 1 : 0);
+  }
+}
+
 void Engine::Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added, bool structure) {
+  CountStories();
+  Rebase();
   Flow(*this).Edited(story, first, removed, added, structure);
 }
 
@@ -1872,6 +1962,15 @@ size_t Engine::ShownCount() const { return pages_.size() + impl_->old.size(); }
 
 const Page& Engine::Shown(size_t index) const {
   return index < pages_.size() ? pages_[index] : impl_->old[index - pages_.size()].page;
+}
+
+PageFields Engine::ShownFields(size_t index) const {
+  PageFields fields;
+  fields.page = Shown(index).numberText;
+  const auto* counts = index < pages_.size() ? (index < impl_->shownCounts.size() ? &impl_->shownCounts[index] : nullptr)
+                                             : &impl_->old[index - pages_.size()].shownCounts;
+  if (counts) std::tie(fields.pages, fields.sectionPages) = *counts;
+  return fields;
 }
 
 // Once the page count is known, NUMPAGES and SECTIONPAGES in headers and footers show it.

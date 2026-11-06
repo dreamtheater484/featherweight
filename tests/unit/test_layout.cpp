@@ -1,10 +1,13 @@
 // Pagination (src/doc/layout): documents built from XML, laid out with the PC's fonts. The checks
 // are about where things go relative to each other and to the page, not exact positions, so they
 // hold whatever the font metrics.
+#include <windows.h>
+
 #include "TestHarness.h"
 
 #include <algorithm>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <random>
 #include <string>
@@ -13,7 +16,15 @@
 
 #include "PkgTestUtil.h"
 #include "doc/docx/Docx.h"
+#include "doc/edit/Clip.h"
 #include "doc/edit/Editor.h"
+#include "doc/edit/Format.h"
+#include "doc/edit/Lists.h"
+#include "doc/edit/Notes.h"
+#include "doc/edit/Toc.h"
+#include "doc/edit/Page.h"
+#include "doc/edit/Shapes.h"
+#include "doc/edit/TreeEdit.h"
 #include "doc/layout/Layout.h"
 #include "text/Fonts.h"
 
@@ -21,7 +32,9 @@
 #define REQUIRE(cond)   do { if (!(cond)) { test::Fail(__FILE__, __LINE__, #cond); return; } } while (0)
 
 using namespace fw::doc;
+using fw::Twips;
 using fw::doc::layout::Layout;
+using fw::doc::layout::TextPos;
 using fw::doc::layout::LineBox;
 using fw::doc::layout::Page;
 using fw::doc::layout::SubstituteFamily;
@@ -123,6 +136,68 @@ const LineBox* Find(const Doc& d, const std::u16string& text, size_t* page = nul
         return &l;
       }
   return nullptr;
+}
+
+TEST(Layout_DateAndTimeFieldsShowTheMoment) {
+  // D3 audit: DATE and TIME update, as Word updates them on opening. Thursday 5 March 2026,
+  // 14:07:09 local time.
+  SYSTEMTIME local{2026, 3, 4, 5, 14, 7, 9, 0}, utc;
+  FILETIME ft;
+  REQUIRE(TzSpecificLocalTimeToSystemTime(nullptr, &local, &utc) && SystemTimeToFileTime(&utc, &ft));
+  const int64_t now = static_cast<int64_t>(static_cast<uint64_t>(ft.dwHighDateTime) << 32 | ft.dwLowDateTime);
+  auto at = [&](std::u16string_view code, std::string_view lang = "en-US") {
+    return fw::doc::layout::DateFieldResult(code, now, lang);
+  };
+  CHECK(at(u" DATE \\@ \"d MMMM yyyy\" ") == u"5 March 2026");
+  CHECK(at(u" DATE \\@ \"dddd, MMMM d, yyyy\" \\* MERGEFORMAT ") == u"Thursday, March 5, 2026");
+  CHECK(at(u"DATE \\@ dd.MM.yy") == u"05.03.26");
+  CHECK(at(u" TIME \\@ \"h:mm am/pm\" ") == u"2:07 pm");
+  CHECK(at(u" TIME \\@ \"HH:mm:ss\" ") == u"14:07:09");
+  CHECK(at(u" DATE \\@ \"'Week of' MMM d\" ") == u"Week of Mar 5");
+  CHECK(at(u" DATE \\@ \"MMMM\" ", "nl-NL") == u"maart");  // in the field's language
+  CHECK(!at(u" DATE ").empty() && !at(u" TIME ").empty());  // the language's own formats
+  CHECK(at(u" PAGE ").empty() && at(u" CREATEDATE ").empty());
+  CHECK(fw::doc::layout::DateFieldResult(u" DATE ", 0, "en-US").empty());
+
+  // Laid out: a complex field and a simple one. Without a moment (the tools' layouts), the results
+  // the file holds; with one, the moment.
+  const std::string body =
+      "<w:p><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> DATE \\@ \"d MMMM yyyy\" "
+      "</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:rPr><w:lang w:val=\"en-GB\"/></w:rPr>"
+      "<w:t>1 January 2000</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>"
+      "<w:p><w:fldSimple w:instr=\" TIME \\@ &quot;HH:mm&quot; \"><w:r><w:t>09:00</w:t></w:r></w:fldSimple></w:p>";
+  Doc d = Make(body + SmallPage());
+  REQUIRE(d.layout);
+  CHECK(Find(d, u"1 January 2000") && Find(d, u"09:00"));
+  fw::doc::layout::Options options;
+  options.now = now;
+  Doc live;
+  live.doc = std::move(d.doc);
+  live.layout = std::make_unique<Layout>(*live.doc, Fonts(), options);
+  live.layout->LayOutAll();
+  CHECK(Find(live, u"5 March 2026") && Find(live, u"14:07") && !Find(live, u"2000"));
+}
+
+TEST(Layout_LegacyCheckBoxesAndDropDownsShowTheirState) {
+  // D4: Word draws FORMCHECKBOX and FORMDROPDOWN from w:ffData, result or not.
+  auto field = [](const std::string& ff, const char* code, const std::string& result) {
+    return "<w:r><w:fldChar w:fldCharType=\"begin\"><w:ffData><w:name w:val=\"F\"/><w:enabled/>" + ff +
+           "</w:ffData></w:fldChar></w:r><w:r><w:instrText xml:space=\"preserve\"> " + code + " </w:instrText></w:r>" + result +
+           "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>";
+  };
+  const std::string sep = "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>";
+  const std::string body =
+      "<w:p><w:r><w:t xml:space=\"preserve\">A </w:t></w:r>" +
+      field("<w:checkBox><w:sizeAuto/><w:default w:val=\"0\"/><w:checked/></w:checkBox>", "FORMCHECKBOX", "") +
+      "<w:r><w:t xml:space=\"preserve\"> B </w:t></w:r>" +
+      field("<w:checkBox><w:sizeAuto/><w:default w:val=\"1\"/><w:checked w:val=\"0\"/></w:checkBox>", "FORMCHECKBOX", sep) +
+      "<w:r><w:t xml:space=\"preserve\"> C </w:t></w:r>" +
+      field("<w:ddList><w:result w:val=\"1\"/><w:listEntry w:val=\"One\"/><w:listEntry w:val=\"Two\"/></w:ddList>", "FORMDROPDOWN",
+            sep + "<w:r><w:t>Stale</w:t></w:r>") +
+      "</w:p>";
+  Doc d = Make(body + SmallPage());
+  REQUIRE(d.layout);
+  CHECK(Find(d, u"A ☒ B ☐ C Two") && !Find(d, u"Stale"));
 }
 
 }  // namespace
@@ -272,6 +347,56 @@ TEST(Layout_WhatWordLeavesOut) {
   CHECK(!Find(d, u"deleted"));
   CHECK_NEAR(kept->top, after->top + after->height, 0.5f);
   CHECK_NEAR(next->top, kept->top + kept->height, 0.5f);
+}
+
+TEST(Layout_MarkupViews) {
+  // D4 review: the final text by default; All Markup (showDeletions) lays out deleted text too and
+  // keeps a paragraph whose mark is deleted; Original (and hideInsertions) hides inserted text, and
+  // leaves out the paragraph an inserted mark makes. Offsets stay the model's either way.
+  const std::string body =
+      "<w:p><w:r><w:t xml:space=\"preserve\">Kept </w:t></w:r><w:del w:id=\"1\" w:author=\"a\"><w:r><w:delText>gone</w:delText>"
+      "</w:r></w:del><w:ins w:id=\"2\" w:author=\"a\"><w:r><w:t>added</w:t></w:r></w:ins></w:p>"
+      "<w:p><w:pPr><w:rPr><w:del w:id=\"3\" w:author=\"a\"/></w:rPr></w:pPr><w:del w:id=\"4\" w:author=\"a\"><w:r>"
+      "<w:delText>struck</w:delText></w:r></w:del></w:p>"
+      "<w:p><w:pPr><w:rPr><w:ins w:id=\"5\" w:author=\"a\"/></w:rPr></w:pPr><w:ins w:id=\"6\" w:author=\"a\"><w:r>"
+      "<w:t>fresh</w:t></w:r></w:ins></w:p>" +
+      P("last") + SmallPage();
+  Doc d = Make(body);
+  REQUIRE(d.layout);
+  const std::vector<uint32_t> paras = d.doc->StoryParagraphs(d.doc->MainStory());
+  REQUIRE(paras.size() >= 4u);
+  struct View {
+    std::optional<Layout::Caret> gone, added, end;  // carets before "gone", before "added", at the end
+    int linesAbove = 0;                             // lines above "last"
+  };
+  auto view = [&](bool showDeletions, bool hideInsertions) {
+    fw::doc::layout::Options o;
+    o.showDeletions = showDeletions;
+    o.hideInsertions = hideInsertions;
+    Layout l(*d.doc, Fonts(), o);
+    l.LayOutAll();
+    View v;
+    v.gone = l.CaretAt({paras[0], 5});
+    v.added = l.CaretAt({paras[0], 9});
+    v.end = l.CaretAt({paras[0], 14});
+    for (const LineBox& lb : l.GetPage(0).lines)
+      if (lb.para != kNone && lb.para < paras[3]) ++v.linesAbove;
+    return v;
+  };
+  const View final = view(false, false), all = view(true, false), original = view(true, true);
+  REQUIRE(final.gone && final.added && final.end && all.gone && all.added && all.end && original.gone && original.added);
+  // The final text: "Kept added", the deleted paragraph gone, the inserted one there.
+  CHECK_NEAR(final.gone->x, final.added->x, 0.5f);
+  CHECK(final.end->x > final.added->x + 5);
+  CHECK_EQ(final.linesAbove, 2);
+  // All Markup: "Kept goneadded", and the deleted paragraph back.
+  CHECK(all.added->x > all.gone->x + 5);
+  CHECK(all.end->x > all.added->x + 5);
+  CHECK_EQ(all.linesAbove, 3);
+  // Original: "Kept gone", the deleted paragraph there, the inserted one left out.
+  CHECK(original.added->x > original.gone->x + 5);
+  if (original.end) CHECK_NEAR(original.end->x, original.added->x, 0.5f);
+  CHECK_EQ(original.linesAbove, 2);
 }
 
 TEST(Layout_HitTestAndCarets) {
@@ -434,8 +559,8 @@ std::vector<std::string> Signature(const Layout& l) {
 }
 
 // Whether `l` is as a layout made from scratch would be; prints where not.
-bool SameAsFresh(const Document& doc, const Layout& l, const char* when) {
-  Layout fresh(doc, Fonts());
+bool SameAsFresh(const Document& doc, const Layout& l, const char* when, const fw::doc::layout::Options& options = {}) {
+  Layout fresh(doc, Fonts(), options);
   fresh.LayOutAll();
   const std::vector<std::string> a = Signature(l), b = Signature(fresh);
   for (size_t p = 0; p < std::max(a.size(), b.size()); ++p) {
@@ -461,7 +586,8 @@ void RandomEdit(edit::Editor& ed, const Document& doc, std::mt19937& rng) {
   static const char16_t* const kTexts[] = {u"x", u" ", u"ab", u"word ", u"several more words to wrap the line ",
                                            u"a long run of text that is long enough to take a line or two of the small "
                                            u"page by itself, and then some more of it "};
-  switch (rng() % 10) {
+  const uint32_t section = edit::SectionOf(doc, para), sections = static_cast<uint32_t>(doc.Sections().size());
+  switch (rng() % 13) {
     case 0: case 1: case 2: case 3: ed.InsertText(at, kTexts[rng() % 6]); break;
     case 4: case 5: {
       const uint32_t to = std::min(len, at.offset + 1 + static_cast<uint32_t>(rng() % 40));
@@ -476,17 +602,170 @@ void RandomEdit(edit::Editor& ed, const Document& doc, std::mt19937& rng) {
         ed.Delete({para, len / 2}, {next, std::min<uint32_t>(3, static_cast<uint32_t>(doc.Para(next).text.size()))});
       break;
     }
-    default: {
+    case 9: {
       edit::PropEdit p;
       if (rng() % 2) p.Set("keepNext");
       else p.Remove("keepNext");
       ed.SetParaProps(para, para, p);
       break;
     }
+    case 10: {  // page setup (D3): the paragraph's section, or the whole document
+      const bool all = rng() % 4 == 0;
+      edit::PageSetup p;
+      switch (rng() % 4) {
+        case 0: p.landscape = rng() % 2 == 0; break;
+        case 1: p.left = Twips(200 + static_cast<int32_t>(rng() % 800)); p.right = Twips(200 + static_cast<int32_t>(rng() % 800)); break;
+        case 2: p.top = Twips(200 + static_cast<int32_t>(rng() % 600)); p.bottom = Twips(200 + static_cast<int32_t>(rng() % 600)); break;
+        default: p.width = Twips(3200 + static_cast<int32_t>(rng() % 2000)); break;
+      }
+      edit::SetPageSetup(ed, all ? 0 : section, all ? sections - 1 : section, p);
+      break;
+    }
+    case 11: {
+      switch (rng() % 3) {
+        case 0: {
+          edit::ColumnSetup c;
+          c.count = 1 + static_cast<int32_t>(rng() % 3);
+          c.space = Twips(200);
+          c.line = rng() % 2 == 0;
+          edit::SetColumns(ed, section, section, c);
+          break;
+        }
+        case 1: edit::SetSectionStart(ed, section, static_cast<SectionStart>(rng() % 4)); break;
+        default: {
+          edit::Hyphenation h;
+          h.automatic = rng() % 2 == 0;
+          edit::SetHyphenation(ed, h);
+          break;
+        }
+      }
+      break;
+    }
+    default: {
+      switch (rng() % 3) {
+        case 0: edit::InsertSectionBreak(ed, at, static_cast<SectionStart>(rng() % 4)); break;
+        case 1: if (sections > 1) edit::DeleteSectionBreak(ed, static_cast<uint32_t>(rng() % (sections - 1))); break;
+        default: edit::InsertBreak(ed, at, rng() % 2 == 0); break;
+      }
+      break;
+    }
   }
 }
 
 }  // namespace
+
+TEST(Layout_CellsOnAPage) {
+  // A 2 x 2 table: the first column's two cells merged, a table in the last cell. Every piece of a
+  // cell is there, in its row and grid column, the inner table's after the cell it's in.
+  const std::string inner = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"600\"/>"
+                            "</w:tblGrid><w:tr><w:tc>" + P("In") + "</w:tc></w:tr></w:tbl>";
+  const std::string table =
+      "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1200\"/><w:gridCol w:w=\"1400\"/>"
+      "</w:tblGrid><w:tr><w:tc><w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr>" + P("Merged") + "</w:tc><w:tc>" + P("B") +
+      "</w:tc></w:tr><w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc>" + inner + P("D") + "</w:tc></w:tr></w:tbl>";
+  Doc d = Make(P("Before") + table + P("After") + SmallPage());
+  REQUIRE(d.layout);
+  const std::vector<fw::doc::layout::CellRect> cells = d.layout->Cells(0);
+  REQUIRE(cells.size() == 5);
+  const ElemId tbl = cells[0].tbl;
+  CHECK(cells[0].row == 0 && cells[0].col == 0 && cells[1].row == 0 && cells[1].col == 1);
+  CHECK(cells[2].row == 1 && cells[2].col == 0 && cells[3].row == 1 && cells[3].col == 1);
+  for (size_t i = 0; i < 4; ++i) CHECK(cells[i].tbl == tbl && cells[i].box.Width() > 0 && cells[i].box.bottom > cells[i].box.top);
+  // Rows share their edges; columns line up.
+  CHECK(std::abs(cells[0].box.bottom - cells[2].box.top) < 0.01f && std::abs(cells[1].box.left - cells[3].box.left) < 0.01f);
+  CHECK(std::abs(cells[0].box.right - cells[1].box.left) < 0.01f);
+  // The inner table, inside the cell it's in.
+  const fw::doc::layout::CellRect& in = cells[4];
+  CHECK(in.tbl != tbl && in.row == 0 && in.col == 0);
+  CHECK(in.box.left >= cells[3].box.left && in.box.right <= cells[3].box.right && in.box.top >= cells[3].box.top);
+  CHECK(d.layout->Cells(99).empty());
+}
+
+TEST(Layout_ListsInATableNumberAgainAsFromScratch) {
+  // One numbered list from before a table through its cells: an edit before the table numbers the
+  // cells again, and formatting in a cell measures its row again (the table's other cells are kept,
+  // D3); each laid out again as a fresh layout lays it out.
+  std::string rows;
+  for (int i = 0; i < 10; ++i)
+    rows += "<w:tr><w:tc>" + P("Item " + std::to_string(i)) + "</w:tc><w:tc>" + P(Words(i % 4 + 1)) + "</w:tc></w:tr>";
+  const std::string table = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1500\"/>"
+                            "<w:gridCol w:w=\"1500\"/></w:tblGrid>" + rows + "</w:tbl>";
+  std::string body;
+  for (int i = 0; i < 4; ++i) body += P(Words(i * 3 + 2));
+  body += table;
+  for (int i = 0; i < 4; ++i) body += P(Words(i * 2 + 1));
+  Doc d = Make(body + SmallPage());
+  REQUIRE(d.layout);
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  auto cell = [&](size_t r, size_t c) {
+    Node tbl;
+    for (const Block& b : d.doc->Blocks(d.doc->MainStory()))
+      if (b.kind == BlockKind::Table) tbl = b.node;
+    Node tc = d.doc->RowCells(d.doc->TableRows(tbl)[r])[c];
+    return Pos{d.doc->Blocks(tc).front().para, 0};
+  };
+  auto para = [&](size_t i) { return d.doc->StoryParagraphs(d.doc->MainStory())[i]; };
+  int step = 0;
+  auto check = [&](bool ok, const char* what) {
+    REQUIRE(ok);
+    if (step++ % 2) d.layout->LayOutPages(2);
+    d.layout->LayOutAll();
+    REQUIRE(SameAsFresh(*d.doc, *d.layout, what));
+  };
+  auto tree = [&](const std::function<void(edit::TreeEdit&)>& change) {
+    edit::TreeEdit te(ed);
+    change(te);
+    return true;
+  };
+  check(tree([&](edit::TreeEdit& te) { edit::ToggleList(te, {{para(1), 0}, cell(9, 0)}, edit::ListKind::Number); }),
+        "numbered through the table");
+  const std::optional<ListLabel> before = d.doc->Label(cell(5, 0).para);
+  REQUIRE(before);
+  check(bool(ed.SplitParagraph({para(1), 2})), "Enter in the list before the table");
+  const std::optional<ListLabel> after = d.doc->Label(cell(5, 0).para);
+  REQUIRE(after);
+  CHECK(after->text != before->text);  // numbered again
+  check(tree([&](edit::TreeEdit& te) { edit::ToggleList(te, {{para(0), 0}, {para(0), 0}}, edit::ListKind::Number); }),
+        "a number before the list");
+  check(bool(ed.Undo()), "the number undone");
+  check(tree([&](edit::TreeEdit& te) { edit::ToggleList(te, {cell(3, 0), cell(3, 0)}, edit::ListKind::Bullet); }),
+        "bullets in a cell");
+  check(tree([&](edit::TreeEdit& te) { edit::ToggleRuns(te, {cell(6, 1), {cell(6, 1).para, 3}}, edit::Toggle::Bold); }),
+        "bold in a cell");
+  check(bool(ed.InsertText({cell(7, 1).para, 1}, u" more words in a cell, enough to wrap its line ")), "typing in a cell");
+  check(bool(ed.Undo()) && bool(ed.Undo()) && bool(ed.Undo()), "undone in the cells");
+  check(bool(ed.JoinParagraphs(para(1))), "the list's first items joined");
+  check(bool(ed.Undo()) && bool(ed.Undo()), "all undone");
+}
+
+TEST(Layout_APageSetupChangeLaysOutInIdleTime) {
+  // A change of every section's margins: the first pages again at once, and the caret near the end
+  // isn't laid out (so painting doesn't lay out the whole document) until the rest is.
+  std::string body;
+  for (int i = 0; i < 60; ++i) body += P(Words(25));
+  Doc d = Make(body + SmallPage());
+  REQUIRE(d.layout);
+  const size_t pages = d.pages();
+  REQUIRE(pages > 20);
+  const std::vector<uint32_t> paras = d.doc->StoryParagraphs(d.doc->MainStory());
+  const TextPos first{paras.front(), 0}, last{paras.back(), 3};
+  CHECK(d.layout->LaidOut(first) && d.layout->LaidOut(last));
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  edit::PageSetup wider;
+  wider.left = Twips(1600);
+  REQUIRE(edit::SetPageSetup(ed, 0, 0, wider));
+  CHECK(!d.layout->Done() && !d.layout->LaidOut(first) && !d.layout->LaidOut(last));
+  d.layout->LayOutPages(2);
+  CHECK(d.layout->LaidOut(first) && !d.layout->LaidOut(last));
+  CHECK(!d.layout->Done());  // asking laid nothing out
+  CHECK(d.pages() >= pages - 1);  // the old pages are shown meanwhile
+  while (d.layout->Continue(5)) {
+  }
+  CHECK(d.layout->LaidOut(last) && d.pages() > pages);
+  CHECK(SameAsFresh(*d.doc, *d.layout, "page setup"));
+}
 
 TEST(Layout_EditsLayOutAgainAsFromScratch) {
   // Paragraphs of every length, kept-together headings, a table that splits, footnotes and a
@@ -571,6 +850,279 @@ TEST(Layout_EditsLayOutAgainAsFromScratch) {
   }
 }
 
+TEST(Layout_NotesInsertedAndDeletedLayOutAsFromScratch) {
+  // D4: a footnote or endnote inserted, a reference deleted (its note with it), and either undone
+  // or redone, lays out as from scratch: the notes after it number again on the pages they go to.
+  const std::string notes =
+      "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>"
+      "<w:footnote w:id=\"1\"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> First note.</w:t></w:r></w:p></w:footnote>"
+      "<w:footnote w:id=\"2\"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> Second note, which is "
+      "long enough to take two lines.</w:t></w:r></w:p></w:footnote>";
+  std::string body;
+  for (int i = 0; i < 30; ++i) {
+    body += "<w:p><w:r><w:t xml:space=\"preserve\">Para " + std::to_string(i) + " " + Words(i % 9 + 2) + "</w:t></w:r>";
+    if (i == 6 || i == 21) body += "<w:r><w:footnoteReference w:id=\"" + std::string(i == 6 ? "1" : "2") + "\"/></w:r>";
+    body += "</w:p>";
+  }
+  Doc d = Make(body + SmallPage(), "", notes);
+  REQUIRE(d.layout);
+  REQUIRE(d.pages() > 4);
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  auto main = [&] { return d.doc->StoryParagraphs(d.doc->MainStory()); };
+  auto same = [&](const char* when) {
+    for (size_t p = 0; p < d.pages(); ++p)
+      if (auto pos = d.layout->HitTest(p, 100, 100)) {
+        CHECK(pos->para < d.doc->Paragraphs().size());
+        CHECK(pos->offset <= d.doc->Para(pos->para).text.size());
+      }
+    d.layout->LayOutAll();
+    return SameAsFresh(*d.doc, *d.layout, when);
+  };
+  // A footnote before both: it numbers 1, theirs 2 and 3.
+  d.layout->LayOutPages(2);
+  edit::Result r = edit::InsertNote(ed, {main()[2], 4}, false);
+  REQUIRE(r.ok);
+  REQUIRE(ed.InsertText(r.caret, u"New note.").ok);
+  REQUIRE(same("footnote inserted"));
+  const LineBox* fresh = Find(d, u"New note.");
+  const LineBox* first = Find(d, u"First note.");
+  REQUIRE(fresh && first);
+  CHECK(fresh->text.rfind(u"1", 0) == 0);
+  CHECK(first->text.rfind(u"2", 0) == 0);
+  // The first note's reference deleted, laid out a page at a time: the second numbers 2.
+  const uint32_t p6 = main()[6];
+  const size_t at = d.doc->Para(p6).text.find(u'\x02');
+  REQUIRE(at != std::u16string::npos);
+  d.layout->LayOutPages(1);
+  REQUIRE(ed.Delete({p6, static_cast<uint32_t>(at)}, {p6, static_cast<uint32_t>(at + 1)}).ok);
+  REQUIRE(same("reference deleted"));
+  CHECK(!Find(d, u"First note."));
+  const LineBox* second = Find(d, u"Second note");
+  REQUIRE(second);
+  CHECK(second->text.rfind(u"2", 0) == 0);
+  // The second note's reference deleted, pages after the first page: the new note, shown on the
+  // first pages, comes after the second's in the model, and moves up a paragraph there.
+  d.layout->LayOutAll();
+  const uint32_t p21 = main()[21];
+  const size_t at21 = d.doc->Para(p21).text.find(u'\x02');
+  REQUIRE(at21 != std::u16string::npos);
+  REQUIRE(ed.Delete({p21, static_cast<uint32_t>(at21)}, {p21, static_cast<uint32_t>(at21 + 1)}).ok);
+  d.layout->LayOutPages(1);
+  REQUIRE(same("a later reference deleted"));
+  CHECK(!Find(d, u"Second note"));
+  // An endnote, at the end of the document.
+  r = edit::InsertNote(ed, {main()[0], 2}, true);
+  REQUIRE(r.ok);
+  REQUIRE(ed.InsertText(r.caret, u"The endnote.").ok);
+  REQUIRE(same("endnote inserted"));
+  size_t endPage = 0;
+  REQUIRE(Find(d, u"The endnote.", &endPage));
+  CHECK(endPage == d.pages() - 1);
+  // Undone and redone, a bit at a time.
+  for (int i = 0; i < 6; ++i) {
+    REQUIRE(ed.Undo().ok);
+    d.layout->LayOutPages(1 + static_cast<size_t>(i));
+  }
+  CHECK(!ed.CanUndo());
+  REQUIRE(same("all undone"));
+  CHECK(Find(d, u"First note.") && !Find(d, u"New note.") && !Find(d, u"The endnote."));
+  for (int i = 0; i < 6; ++i) {
+    REQUIRE(ed.Redo().ok);
+    d.layout->Continue(0.2);
+  }
+  REQUIRE(same("all redone"));
+  // Random edits with notes coming and going.
+  std::mt19937 rng(7);
+  for (int step = 0; step < 60; ++step) {
+    const std::vector<uint32_t> paras = main();
+    const uint32_t para = paras[rng() % paras.size()];
+    const auto len = static_cast<uint32_t>(d.doc->Para(para).text.size());
+    const Pos pos{para, len ? static_cast<uint32_t>(rng() % (len + 1)) : 0};
+    switch (rng() % 6) {
+      case 0: edit::InsertNote(ed, pos, rng() % 3 == 0); break;
+      case 1: {
+        const size_t ref = d.doc->Para(para).text.find(u'\x02');
+        if (ref != std::u16string::npos) ed.Delete({para, static_cast<uint32_t>(ref)}, {para, static_cast<uint32_t>(ref + 1)});
+        break;
+      }
+      case 2: ed.Undo(); break;
+      case 3: ed.Redo(); break;
+      default: RandomEdit(ed, *d.doc, rng); break;
+    }
+    if (rng() % 2) d.layout->LayOutPages(1 + rng() % 4);
+    if (step % 6 == 5) {
+      char when[48];
+      std::snprintf(when, sizeof when, "random step %d", step);
+      REQUIRE(same(when));
+    }
+  }
+}
+
+TEST(Layout_EndnotesHaveTheirSeparator) {
+  // As in Word, a short line separates the endnotes from the text above them, where they start; a
+  // document without endnotes has none.
+  Doc d = Make(P("First") + P(Words(30)) + SmallPage());
+  REQUIRE(d.layout);
+  auto rules = [&](size_t page) {
+    size_t n = 0;
+    for (const auto& e : d.page(page).edges) n += e.y1 == e.y2 && e.x2 - e.x1 > 20 && e.x2 - e.x1 <= 145 ? 1 : 0;
+    return n;
+  };
+  const size_t pages = d.pages();
+  for (size_t p = 0; p < pages; ++p) CHECK_EQ(rules(p), 0u);
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  const uint32_t first = d.doc->StoryParagraphs(d.doc->MainStory())[0];
+  edit::Result r = edit::InsertNote(ed, {first, 5}, true);
+  REQUIRE(r.ok);
+  REQUIRE(ed.InsertText(r.caret, u"The endnote.").ok);
+  d.layout->LayOutAll();
+  REQUIRE(SameAsFresh(*d.doc, *d.layout, "endnote added"));
+  size_t notePage = 0;
+  const LineBox* note = Find(d, u"The endnote.", &notePage);
+  REQUIRE(note);
+  CHECK_EQ(rules(notePage), 1u);
+  for (const auto& e : d.page(notePage).edges)
+    if (e.y1 == e.y2 && e.x2 - e.x1 > 20 && e.x2 - e.x1 <= 145) CHECK(e.y1 < note->top && e.y1 > note->top - 20);
+  REQUIRE(ed.Undo().ok);
+  REQUIRE(ed.Undo().ok);
+  d.layout->LayOutAll();
+  for (size_t p = 0; p < d.pages(); ++p) CHECK_EQ(rules(p), 0u);
+}
+
+TEST(Layout_OriginalViewShowsTheOldFormatting) {
+  // D4 review: Original (hideInsertions) lays out a tracked formatting change with the formatting
+  // from before it, the w:rPrChange's w:rPr and the w:pPrChange's w:pPr; Simple and All Markup
+  // with the new. Here the term's italic, color and size and the paragraph's indent were added;
+  // then a tracked edit makes the last paragraph big, and is undone and rejected.
+  const std::string body =
+      "<w:p><w:pPr><w:ind w:left=\"720\"/><w:pPrChange w:id=\"1\" w:author=\"a\"><w:pPr/></w:pPrChange></w:pPr>"
+      "<w:r><w:t xml:space=\"preserve\">The </w:t></w:r><w:r><w:rPr><w:i/><w:color w:val=\"C00000\"/><w:sz w:val=\"48\"/>"
+      "<w:rPrChange w:id=\"2\" w:author=\"a\"><w:rPr/></w:rPrChange></w:rPr><w:t>term</w:t></w:r>"
+      "<w:r><w:t xml:space=\"preserve\"> clause</w:t></w:r></w:p>" +
+      P("last") + SmallPage();
+  Doc d = Make(body);
+  REQUIRE(d.layout);
+  const std::vector<uint32_t> paras = d.doc->StoryParagraphs(d.doc->MainStory());
+  REQUIRE(paras.size() >= 2u);
+  fw::doc::layout::Options all, original;
+  all.showDeletions = true;
+  original.showDeletions = original.hideInsertions = true;
+  Layout allView(*d.doc, Fonts(), all), originalView(*d.doc, Fonts(), original);
+  allView.LayOutAll();
+  originalView.LayOutAll();
+  struct Look {
+    float start = 0, height = 0, lastHeight = 0;  // the first paragraph's start and line, the last's line
+    bool red = false;                              // the term's color drawn
+  };
+  auto look = [&](Layout& l) {
+    Look k;
+    if (auto c = l.CaretAt({paras[0], 0})) k.start = c->x;
+    const Page& page = l.GetPage(0);
+    for (const LineBox& lb : page.lines) {
+      if (lb.para == paras[0]) k.height = std::max(k.height, lb.height);
+      if (lb.para == paras[1]) k.lastHeight = std::max(k.lastHeight, lb.height);
+    }
+    for (const auto& paint : page.paints) k.red = k.red || paint.color == 0xC00000u;
+    return k;
+  };
+  const Look simple = look(*d.layout), markup = look(allView), was = look(originalView);
+  CHECK_NEAR(simple.start, was.start + 36, 0.5f);
+  CHECK_NEAR(markup.start, simple.start, 0.5f);
+  CHECK(simple.red && markup.red && !was.red);
+  CHECK(simple.height > was.height + 8);
+  CHECK_NEAR(markup.height, simple.height, 0.5f);
+  CHECK_NEAR(simple.lastHeight, was.lastHeight, 0.5f);
+
+  // Formatting tracked now: the views follow it, as from scratch.
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) {
+    d.layout->Edited(c);
+    originalView.Edited(c);
+  });
+  auto same = [&](const char* when) {
+    d.layout->LayOutAll();
+    originalView.LayOutAll();
+    return SameAsFresh(*d.doc, *d.layout, when) && SameAsFresh(*d.doc, originalView, when, original);
+  };
+  REQUIRE(ed.SetTracking(true));
+  REQUIRE(ed.SetRunProps({paras[1], 0}, {paras[1], 4}, edit::PropEdit().Set("sz", {{"val", "48"}})));
+  REQUIRE(same("tracked size"));
+  CHECK(look(*d.layout).lastHeight > look(originalView).lastHeight + 8);
+  CHECK_NEAR(look(originalView).lastHeight, was.lastHeight, 0.5f);
+  REQUIRE(ed.InsertText({paras[0], 6}, u"x"));  // typed into the changed run, tracked
+  REQUIRE(same("typed"));
+  CHECK(!look(originalView).red);
+  REQUIRE(ed.Undo());
+  REQUIRE(ed.Undo());
+  REQUIRE(same("undone"));
+  CHECK_NEAR(look(*d.layout).lastHeight, look(originalView).lastHeight, 0.5f);
+  // All rejected: Original and the final text are the same.
+  REQUIRE(ed.ReviewAll(false));
+  REQUIRE(same("rejected"));
+  const Look final = look(*d.layout), old = look(originalView);
+  CHECK_NEAR(final.start, old.start, 0.5f);
+  CHECK_NEAR(final.height, old.height, 0.5f);
+  CHECK(!final.red && !old.red);
+}
+
+TEST(Layout_TocShowsTheHeadingsPages) {
+  // D4: a table of contents inserted at the start shows the page each heading is on once the table
+  // is in (it moves them), and lays out as from scratch; updating the numbers after an edit that
+  // moves headings shows their new pages.
+  std::string body = P("");
+  for (int i = 0; i < 12; ++i) {
+    body += P("Chapter " + std::to_string(i), "<w:outlineLvl w:val=\"" + std::to_string(i % 3 == 0 ? 0 : 1) + "\"/>");
+    body += P(Words(20 + (i * 7) % 30));
+  }
+  Doc d = Make(body + SmallPage());
+  REQUIRE(d.layout);
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  auto pages = [&](uint32_t para) {
+    std::optional<size_t> page = d.layout->PageOf({para, 0});
+    return page ? d.layout->GetPage(*page).numberText : std::u16string();
+  };
+  auto shows = [&](const char* when) {
+    d.layout->LayOutAll();
+    bool ok = SameAsFresh(*d.doc, *d.layout, when);
+    // Each entry's number is its heading's page.
+    std::vector<std::u16string> want, got;
+    for (const edit::TocHeading& h : edit::TocHeadings(*d.doc)) want.push_back(pages(h.para));
+    for (const Field& f : d.doc->Fields(d.doc->MainStory()))
+      if (f.Type() == u"PAGEREF") got.push_back(f.result);
+    if (want != got) {
+      std::printf("  %s: the table shows other pages than its headings are on\n", when);
+      ok = false;
+    }
+    return ok;
+  };
+  const uint32_t at = d.doc->StoryParagraphs(d.doc->MainStory())[0];
+  edit::Result r = edit::InsertToc(ed, {at, 0}, pages);
+  REQUIRE(r.ok);
+  REQUIRE(shows("inserted"));
+  // The table's entries are on the first page, and say so.
+  REQUIRE(edit::TocHeadings(*d.doc).size() == 12u);
+  REQUIRE(Find(d, u"Chapter 0"));
+  // Text before the headings moves them: the numbers follow when updated.
+  const uint32_t text = edit::TocHeadings(*d.doc).front().para + 1;
+  const std::string more = Words(120);
+  REQUIRE(ed.InsertText({text, 0}, std::u16string(more.begin(), more.end())).ok);
+  d.layout->LayOutAll();
+  REQUIRE(edit::UpdateTocPages(ed, edit::TablesOfContents(*d.doc).at(0), pages).ok);
+  REQUIRE(shows("pages updated"));
+  REQUIRE(edit::UpdateToc(ed, edit::TablesOfContents(*d.doc).at(0), pages).ok);
+  REQUIRE(shows("table updated"));
+  REQUIRE(ed.Undo().ok);
+  REQUIRE(ed.Undo().ok);
+  REQUIRE(ed.Undo().ok);
+  REQUIRE(ed.Undo().ok);
+  CHECK(!ed.CanUndo());
+  d.layout->LayOutAll();
+  REQUIRE(SameAsFresh(*d.doc, *d.layout, "undone"));
+}
+
 TEST(Layout_TypingLaysOutAPageOrTwo) {
   // A keystroke on the first page of a long document: the old pages after the first page that
   // ends as it did come back as they were, so laying out three pages finishes the document.
@@ -613,4 +1165,116 @@ TEST(Layout_TypingLaysOutAPageOrTwo) {
   CHECK_EQ(hit->para, line->para);
   d.layout->LayOutAll();
   CHECK(SameAsFresh(*d.doc, *d.layout, "after Enter"));
+}
+
+TEST(Layout_TableEditsLayOutAgainAsFromScratch) {
+  // Table editing (D3) on a table that runs over several small pages, between paragraphs: each
+  // change of shape is laid out again as a fresh layout lays it out, a bit at a time or at once.
+  std::string rows;
+  for (int i = 0; i < 12; ++i)
+    rows += std::string("<w:tr>") + (i == 0 ? "<w:trPr><w:tblHeader/></w:trPr>" : "") + "<w:tc>" + P("Cell " + std::to_string(i)) +
+            "</w:tc><w:tc>" + P(Words(i % 5 + 1)) + "</w:tc><w:tc>" + P(Words(2)) + "</w:tc></w:tr>";
+  const std::string table = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1000\"/>"
+                            "<w:gridCol w:w=\"1000\"/><w:gridCol w:w=\"1000\"/></w:tblGrid>" + rows + "</w:tbl>";
+  std::string body;
+  for (int i = 0; i < 8; ++i) body += P(Words(i * 3 + 2));
+  body += table;
+  for (int i = 0; i < 8; ++i) body += P(Words(i * 2 + 1));
+  Doc d = Make(body + SmallPage());
+  REQUIRE(d.layout);
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  auto cell = [&](size_t r, size_t c) {
+    Node tbl;
+    for (const Block& b : d.doc->Blocks(d.doc->MainStory()))
+      if (b.kind == BlockKind::Table) tbl = b.node;
+    Node tc = d.doc->RowCells(d.doc->TableRows(tbl)[r])[c];
+    return Pos{d.doc->Blocks(tc).front().para, 0};
+  };
+  int step = 0;
+  auto check = [&](bool ok, const char* what) {
+    REQUIRE(ok);
+    if (step++ % 2) d.layout->LayOutPages(2);
+    d.layout->LayOutAll();
+    REQUIRE(SameAsFresh(*d.doc, *d.layout, what));
+  };
+  check(bool(ed.InsertRows(cell(3, 1), cell(4, 1), true)), "rows inserted");
+  check(bool(ed.InsertColumns(cell(2, 0), cell(2, 0), true)), "a column inserted");
+  check(bool(ed.MergeCells(cell(5, 0), cell(7, 1))), "cells merged");
+  check(bool(ed.SplitCell(cell(1, 2), 2, 2)), "a cell split");
+  check(bool(ed.SetColumnWidth(cell(0, 0), cell(0, 0), 600)), "a column narrowed");
+  check(bool(ed.DeleteRows(cell(9, 0), cell(10, 0))), "rows deleted");
+  check(bool(ed.DeleteColumns(cell(0, 1), cell(0, 1))), "a column deleted");
+  check(bool(ed.SetRowHeight(cell(2, 0), cell(2, 0), 900, "exact")), "a row's height");
+  check(bool(ed.SetRowProps(cell(0, 0), cell(1, 0), edit::PropEdit().Set("tblHeader"))), "two header rows");
+  check(bool(ed.SetRowProps(cell(0, 0), cell(1, 0), edit::PropEdit().Remove("tblHeader"))), "no header row");
+  check(bool(ed.SetCellBorders(cell(1, 0), cell(3, 1), edit::Editor::CellBorders::All, "single", 12)), "borders");
+  check(bool(ed.SetCellProps(cell(4, 0), cell(4, 0), edit::PropEdit().Set("shd", {{"val", "clear"}, {"fill", "FFFF00"}}))),
+        "shading");
+  check(bool(ed.SetTableProps(cell(0, 0), edit::PropEdit().Set("jc", {{"val", "center"}}))), "centered");
+  check(bool(ed.AutoFit(cell(0, 0), edit::Editor::Fit::Window)), "fitted to the window");
+  {
+    // Copy and paste: cells over cells, and a new table in the text before.
+    auto clip = edit::CopyCells(ed, cell(1, 0), cell(2, 1));
+    REQUIRE(clip);
+    check(bool(edit::PasteClip(ed, cell(6, 0), cell(6, 0), *clip)), "cells pasted over cells");
+    check(bool(edit::PasteClip(ed, Pos{1, 2}, Pos{1, 2}, *clip)), "a table pasted");
+    check(bool(ed.Undo()), "the pasted table undone");
+  }
+  check(bool(ed.InsertTable(Pos{0, 3}, 3, 2)), "a table inserted");
+  check(bool(ed.Undo()) && bool(ed.Undo()) && bool(ed.Undo()), "undone");
+  check(bool(ed.Redo()), "redone");
+  check(bool(ed.DeleteTable(cell(0, 0))), "the table deleted");
+}
+
+TEST(Layout_CellsNumberedAsTheEditorsGrid) {
+  // The Word tab fills selected cells from Layout::Cells, matching the editor's block by row and
+  // grid column (D3): both number them alike. A cell over two columns, a row past gridBefore, a
+  // merged cell whose second piece has its own w:tc.
+  const std::string table =
+      "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1200\"/>"
+      "<w:gridCol w:w=\"1200\"/><w:gridCol w:w=\"1200\"/></w:tblGrid>"
+      "<w:tr><w:tc>" + P("A") + "</w:tc><w:tc><w:tcPr><w:gridSpan w:val=\"2\"/></w:tcPr>" + P("BC") + "</w:tc></w:tr>"
+      "<w:tr><w:trPr><w:gridBefore w:val=\"1\"/></w:trPr><w:tc><w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr>" + P("E") +
+      "</w:tc><w:tc>" + P("F") + "</w:tc></w:tr>"
+      "<w:tr><w:tc>" + P("G") + "</w:tc><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc>" + P("I") + "</w:tc></w:tr></w:tbl>";
+  Doc d = Make(P("Before") + table + P("After") + SmallPage());
+  REQUIRE(d.layout);
+  edit::Editor ed(*d.doc);
+  const std::vector<fw::doc::layout::CellRect> cells = d.layout->Cells(0);
+  const auto infos = ed.TableCells(Pos{1, 0});
+  REQUIRE(infos.size() == 6);
+  for (const auto& info : infos) {
+    size_t found = 0;
+    for (const auto& c : cells)
+      if (c.tc == info.tc.Id())
+        found += c.tbl == info.tbl.Id() && c.row == info.row && c.col == info.col && c.span == info.span;
+    CHECK_EQ(found, 1u);
+  }
+  // The merged cell's second piece: the row below, the same column.
+  const auto e = ed.CellAt(Pos{3, 0});  // "E"
+  REQUIRE(e && e->rows == 2 && e->col == 1);
+  size_t pieces = 0;
+  for (const auto& c : cells) pieces += c.tbl == e->tbl.Id() && c.col == 1 && (c.row == 1 || c.row == 2);
+  CHECK_EQ(pieces, 2u);
+}
+
+TEST(Layout_ATextBoxMadeAfterTheLayoutIsLaidOut) {
+  // A new shape's text box is a story made after the layout was (D4), as a new header is (D3):
+  // laid out with its text, as a fresh layout lays it out.
+  Doc d = Make(P(Words(3)) + P(Words(2)) + SmallPage());
+  REQUIRE(d.layout);
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  d.layout->LayOutAll();
+  edit::Shapes shapes(ed);
+  const uint32_t para = d.doc->StoryParagraphs(d.doc->MainStory()).front();
+  REQUIRE(shapes.Insert(para, edit::ShapeKind::TextBox, fw::Emu(914400), fw::Emu(914400), fw::Emu(1828800), fw::Emu(914400)).ok);
+  uint32_t story = kNone;
+  for (const Drawing& dr : d.doc->Drawings())
+    if (dr.pos.para != kNone && !dr.textBoxes.empty()) story = dr.textBoxes.front();
+  REQUIRE(story != kNone);
+  REQUIRE(ed.InsertText({d.doc->StoryParagraphs(story).front(), 0}, u"Inside the box").ok);
+  d.layout->LayOutAll();
+  REQUIRE(SameAsFresh(*d.doc, *d.layout, "a new text box"));
 }

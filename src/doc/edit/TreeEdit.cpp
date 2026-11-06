@@ -3,9 +3,11 @@
 #include <pugixml.hpp>
 
 #include <algorithm>
+#include <functional>
 
 #include "doc/docx/Docx.h"
 #include "doc/edit/Editor.h"
+#include "doc/edit/Forms.h"
 #include "doc/edit/Kept.h"
 #include "doc/model/Internal.h"
 #include "pkg/XmlWriter.h"
@@ -56,6 +58,8 @@ uint32_t QNameHash(std::string_view qname) {
 
 bool Space(char16_t c) { return c == u' ' || c == u'\t' || c == u'\n' || c == u'\r'; }
 
+bool RealNode(pkg::NodeId n) { return n != pkg::kNoNode && n != pkg::kFieldNode; }
+
 }  // namespace
 
 // The journal of one change, as the editor's history keeps it.
@@ -64,14 +68,17 @@ struct JournalStep : CustomStep {
   void Undo() override {
     TreeEdit::Replay(doc, store, true);
     TreeEdit::Restore(doc, before);
+    TreeEdit::ApplyStoryOps(doc, stories, true);
   }
   void Redo() override {
     TreeEdit::Restore(doc, after);
     TreeEdit::Replay(doc, store, false);
+    TreeEdit::ApplyStoryOps(doc, stories, false);
   }
   Document& doc;
   TreeEdit::Saved before, after;  // after: the touched elements and the new ones
   std::vector<TreeEdit::StoreOp> store;
+  std::vector<TreeEdit::StoryOp> stories;  // notes added or taken out (D4)
 };
 
 // The editor holds the document it edits; it hands it out as const only to readers.
@@ -86,18 +93,29 @@ void TreeEdit::Begin(std::u16string label) {
   if (depth_++ > 0) return;
   label_ = std::move(label);
   refused_.clear();
-  local_ = toEnd_ = false;
+  local_ = toEnd_ = structure_ = false;
+  affects_ = {kNone, kNone};
   owned_.clear();
   elemsAtBegin_ = doc_.tree_.elems.size();
   before_.clear();
   store_.clear();
+  storyOps_.clear();
   touched_.clear();
+  tracked_.clear();
+  copies_ = 0;
+  tracking_ = !editor_.TrackingPaused() && editor_.Tracking();
+  if (tracking_) {
+    trackAuthor_ = editor_.ChangeAuthor();
+    trackDate_ = editor_.ChangeDate();
+  }
 }
 
 void TreeEdit::Commit() {
   if (depth_ == 0 || --depth_ > 0) return;
+  RecordFormatting();
   Tree& t = doc_.tree_;
-  if (before_.empty() && store_.empty() && t.elems.size() == elemsAtBegin_) {
+  // (Copies kept for tracked formatting that no record took don't count: nothing changed.)
+  if (before_.empty() && store_.empty() && t.elems.size() == elemsAtBegin_ + copies_) {
     touched_.clear();
     return;
   }
@@ -114,22 +132,38 @@ void TreeEdit::Commit() {
       return;
     }
   }
+  // A document protected for forms changes only as they're filled in.
+  if (!fill_ && FormsProtected(doc_)) {
+    Discard();
+    refused_ = kFormsProtected;
+    return;
+  }
   touched_.clear();
   auto step = std::make_shared<JournalStep>(doc_);
   step->before = std::move(before_);
   for (const auto& [id, old] : step->before) step->after.emplace_back(id, t.elems[id]);
   for (size_t id = elemsAtBegin_; id < t.elems.size(); ++id) step->after.emplace_back(static_cast<ElemId>(id), t.elems[id]);
   step->store = std::move(store_);
+  step->stories = std::move(storyOps_);
+  for (const StoryOp& op : step->stories) {
+    Change c;
+    c.story = op.story;
+    c.first = op.at;
+    c.structure = true;
+    (op.add ? c.added : c.removed) = static_cast<uint32_t>(op.paras.size());
+    step->paraChanges.push_back(c);
+  }
   step->parts = PartsOf(step->after);
   before_.clear();
   store_.clear();
+  storyOps_.clear();
   // The paragraphs it changed: for the caret, and when it's local, for the layout.
   uint32_t first = kNone, last = 0, story = kNone;
   bool local = local_;
   for (const auto& [id, e] : step->after) {
     const uint32_t p = ParagraphOf(id);
     if (p == kNone) {
-      local = local && InDefinitions(id);
+      local = local && (InDefinitions(id) || !Attached(id));  // or an unused copy, linked nowhere
       continue;
     }
     if (story == kNone) story = doc_.paras_[p].story;
@@ -144,11 +178,20 @@ void TreeEdit::Commit() {
       // Its neighbours too: borders and spacing join paragraphs. (A story's paragraphs can have
       // a text box's between them; the layout passes over those.)
       if (first > 0 && doc_.paras_[first - 1].story == story) --first;
-      if (toEnd_) last = std::max(last, doc_.StoryParagraphs(story).back());
-      else if (last + 1 < doc_.paras_.size() && doc_.paras_[last + 1].story == story) ++last;
+      if (last + 1 < doc_.paras_.size() && doc_.paras_[last + 1].story == story) ++last;
+      if (toEnd_ && doc_.StoryParagraphs(story).back() > last) {
+        step->renumberFrom = last + 1;
+        last = doc_.StoryParagraphs(story).back();
+      }
       step->first = first;
       step->count = last - first + 1;
     }
+  }
+  if (affects_.first != kNone && affects_.second < doc_.paras_.size()) {
+    step->first = affects_.first;
+    step->count = affects_.second - affects_.first + 1;
+    step->structure = structure_;
+    if (caret.para == kNone) caret = {affects_.first, 0};
   }
   editor_.RecordStep(std::move(label_), std::move(step), caret);
 }
@@ -164,10 +207,18 @@ bool TreeEdit::Editable(ElemId id, std::unordered_map<ElemId, bool>& memo, std::
       break;
     }
     chain.push_back(e);
-    if ((t.elems[e].flags & kDisplayOnly) || NameOfElem(t, e) == kTextBox) {
+    if (t.elems[e].flags & kDisplayOnly) {
       verdict = false;
-      why = NameOfElem(t, e) == kTextBox ? u"Text in a text box can't be formatted yet."
-                                         : u"This text is kept as the file has it, so it can't be formatted.";
+      why = u"This text is kept as the file has it, so it can't be formatted.";
+      break;
+    }
+    // A text box's story is written into its drawing (docx::Writer), where the file allows it.
+    if (NameOfElem(t, e) == kTextBox && t.elems[e].parent == kNoElem) {
+      for (uint32_t s = 0; s < doc_.stories_.size(); ++s)
+        if (doc_.stories_[s].root == e && !TextBoxEditable(doc_, s)) {
+          verdict = false;
+          why = u"The text in this text box can't be formatted: the file keeps it in a way Featherweight can't write back.";
+        }
       break;
     }
     if (t.elems[e].parent == kNoElem || chain.size() > 512) {
@@ -186,6 +237,10 @@ bool TreeEdit::Editable(ElemId id, std::unordered_map<ElemId, bool>& memo, std::
 }
 
 bool TreeEdit::CanChange(const std::vector<uint32_t>& paras) {
+  if (!fill_ && FormsProtected(doc_)) {
+    refused_ = kFormsProtected;
+    return false;
+  }
   std::unordered_map<ElemId, bool> memo;
   std::u16string why;
   for (uint32_t p : paras) {
@@ -222,12 +277,14 @@ void TreeEdit::Replay(Document& doc, const std::vector<StoreOp>& ops, bool undo)
     for (auto op = ops.rbegin(); op != ops.rend(); ++op) {
       if (op->kind == StoreOp::Split) store.Merge(op->node, op->second, op->at.firstMoved);
       else if (op->kind == StoreOp::SetAttrs) store.SetNodeAttributes(op->node, op->before);
+      else if (op->kind == StoreOp::CommentsEx) doc.commentsEx_ = op->exBefore;
       else store.SetFragments(op->node, op->fragmentsBefore);
     }
   } else {
     for (const StoreOp& op : ops) {
       if (op.kind == StoreOp::Split) store.Split(op.node, op.second, op.at);
       else if (op.kind == StoreOp::SetAttrs) store.SetNodeAttributes(op.node, op.after);
+      else if (op.kind == StoreOp::CommentsEx) doc.commentsEx_ = op.exAfter;
       else store.SetFragments(op.node, op.fragmentsAfter);
     }
   }
@@ -238,6 +295,9 @@ std::vector<uint32_t> TreeEdit::PartsOf(const Saved& elems) const {
   std::vector<uint32_t> parts;
   std::unordered_map<ElemId, uint32_t> roots;
   for (uint32_t i = 0; i < doc_.parts_.size(); ++i) roots.emplace(doc_.parts_[i].root, i);
+  // A text box's story hangs from no part: it's written in its drawing's (Story::part).
+  for (const Story& s : doc_.stories_)
+    if (s.kind == StoryKind::TextBox && s.root != kNoElem && s.part < doc_.parts_.size()) roots.emplace(s.root, s.part);
   for (const auto& [id, e] : elems) {
     ElemId top = id;
     for (int hops = 0; hops < 256 && doc_.tree_.elems[top].parent != kNoElem; ++hops) top = doc_.tree_.elems[top].parent;
@@ -248,19 +308,180 @@ std::vector<uint32_t> TreeEdit::PartsOf(const Saved& elems) const {
 }
 
 void TreeEdit::Reindex() {
-  doc_.caches_ = std::make_unique<Document::Caches>();
+  doc_.ResetCaches();
   doc_.BuildIndexes();
 }
 
+void TreeEdit::Abort() {
+  if (depth_ == 0) return;
+  depth_ = 0;
+  Discard();
+}
+
 void TreeEdit::Discard() {
-  const bool changed = !before_.empty() || !store_.empty();
+  const bool changed = !before_.empty() || !store_.empty() || !storyOps_.empty();
   Replay(doc_, store_, true);
   Restore(doc_, before_);  // new elements stay in the arena, linked nowhere
+  ApplyStoryOps(doc_, storyOps_, true);
   before_.clear();
   store_.clear();
+  storyOps_.clear();
   touched_.clear();
   owned_.clear();
+  tracked_.clear();
   if (changed) Reindex();
+}
+
+// ---------- Tracked formatting (D4) ----------
+
+void TreeEdit::TrackBefore(ElemId at) {
+  if (!tracking_ || recording_ || at == kNoElem) return;
+  const Tree& t = doc_.tree_;
+  static constexpr uint32_t kP = names::kP, kR = Name("r"), kRPr = Name("rPr"), kPPr = Name("pPr"), kIns = Name("ins"),
+                            kDel = Name("del"), kMoveFrom = Name("moveFrom"), kMoveTo = Name("moveTo");
+  // The properties `at` is in (or is), unless it's inside a change record.
+  ElemId props = kNoElem;
+  for (ElemId e = at; e != kNoElem && props == kNoElem; e = t.elems[e].parent) {
+    const uint32_t n = NameOfElem(t, e);
+    if (n == Name("rPrChange") || n == Name("pPrChange")) return;
+    const ElemId up = t.elems[e].parent;
+    const uint32_t un = up == kNoElem ? 0 : NameOfElem(t, up);
+    if ((n == kRPr && un == kR) || (n == kPPr && un == kP) ||
+        (n == kRPr && un == kPPr && t.elems[up].parent != kNoElem && NameOfElem(t, t.elems[up].parent) == kP))
+      props = e;
+    else if (n == kP || n == kR || up == kNoElem)
+      return;
+  }
+  if (props == kNoElem) return;
+  for (const auto& [p, copy] : tracked_)
+    if (p == props) return;
+  // A comment's text isn't tracked (as in Word).
+  for (ElemId e = props; e != kNoElem; e = t.elems[e].parent)
+    if (NameOfElem(t, e) == kP) {
+      const uint32_t i = t.elems[e].start;
+      if (i < doc_.paras_.size() && doc_.paras_[i].elem == e &&
+          doc_.stories_[doc_.paras_[i].story].kind == StoryKind::Comment)
+        return;
+      break;
+    }
+  // The author's own new text or paragraph isn't tracked again.
+  const Node here(&t, props);
+  bool own = false;
+  auto mine = [&](Node c) { return c && c.AttrOr(Name("author")) == trackAuthor_; };
+  if (here.Parent().Is(kR)) {
+    for (Node a = here.Parent().Parent(); a && !a.Is(kP) && !own; a = a.Parent()) {
+      if (a.Is(kIns) || a.Is(kDel) || a.Is(kMoveFrom) || a.Is(kMoveTo)) {
+        own = a.Is(kIns) && mine(a);
+        break;
+      }
+    }
+  } else {
+    const Node p = here.Parent().Is(kP) ? here.Parent() : here.Parent().Parent();
+    own = mine(p.Child(kPPr).Child(kRPr).Child(kIns));
+  }
+  tracked_.emplace_back(props, own ? kNoElem : DetachedCopy(props, kNoElem));
+}
+
+ElemId TreeEdit::DetachedCopy(ElemId src, ElemId parent) {
+  Elem e = E(src);  // a copy: the arena grows below
+  const ElemId first = e.first;
+  const pkg::NodeId from = e.node;
+  e.parent = parent;
+  e.next = kNoElem;
+  e.first = kNoElem;
+  e.flags = static_cast<uint8_t>(e.flags & ~kSharedKids);
+  e.node = NewNode();
+  doc_.tree_.elems.push_back(e);
+  ++copies_;
+  const auto id = static_cast<ElemId>(doc_.tree_.elems.size() - 1);
+  if (RealNode(from))
+    if (pkg::AttrSetId set = doc_.store_.NodeAttributes(from)) doc_.store_.SetNodeAttributes(e.node, set);
+  ElemId tail = kNoElem;
+  for (ElemId c = first; c != kNoElem; c = E(c).next) {
+    const ElemId k = DetachedCopy(c, id);
+    if (tail == kNoElem) E(id).first = k;
+    else E(tail).next = k;
+    tail = k;
+  }
+  return id;
+}
+
+bool TreeEdit::SameElem(ElemId a, ElemId b) const {
+  const Tree& t = doc_.tree_;
+  const Elem &x = t.elems[a], &y = t.elems[b];
+  if (NameOfElem(t, a) != NameOfElem(t, b) || x.attrCount != y.attrCount) return false;
+  for (uint16_t i = 0; i < x.attrCount; ++i) {
+    const AttrVal& p = t.attrs[x.attrs + i];
+    bool found = false;
+    for (uint16_t j = 0; j < y.attrCount && !found; ++j)
+      found = S().Attr(t.attrs[y.attrs + j].def).name == S().Attr(p.def).name && t.attrs[y.attrs + j].value == p.value;
+    if (!found) return false;
+  }
+  ElemId c = x.first, d = y.first;
+  for (; c != kNoElem && d != kNoElem; c = t.elems[c].next, d = t.elems[d].next)
+    if (!SameElem(c, d)) return false;
+  return c == kNoElem && d == kNoElem;
+}
+
+bool TreeEdit::Attached(ElemId id) const {
+  const Tree& t = doc_.tree_;
+  for (int hops = 0; hops < 256; ++hops) {
+    const ElemId up = t.elems[id].parent;
+    if (up == kNoElem) {
+      for (const Part& part : doc_.parts_)
+        if (part.root == id) return true;
+      return false;
+    }
+    bool found = false;
+    for (ElemId c = t.elems[up].first; c != kNoElem && !found; c = t.elems[c].next) found = c == id;
+    if (!found) return false;
+    id = up;
+  }
+  return false;
+}
+
+void TreeEdit::RecordFormatting() {
+  if (tracked_.empty()) return;
+  const Tree& t = doc_.tree_;
+  static constexpr uint32_t kRPr = Name("rPr"), kPPr = Name("pPr");
+  recording_ = true;
+  for (const auto& [props, copy] : tracked_) {
+    if (copy == kNoElem || !Attached(props)) continue;
+    const bool para = NameOfElem(t, props) == kPPr;
+    const uint32_t changeName = para ? Name("pPrChange") : Name("rPrChange");
+    const ElemDefId changeDef = S().Child(TypeOfElem(t, props), changeName);
+    if (changeDef == kNoDef) continue;
+    const ElemDefId innerDef = S().Child(S().Elem(changeDef).type, para ? kPPr : kRPr);
+    if (innerDef == kNoDef) continue;
+    const TypeId inner = S().Elem(innerDef).type;
+    // What the record holds: a paragraph's w:rPr and w:sectPr, and a mark's records, aren't.
+    auto held = [&](ElemId c) { return S().Child(inner, NameOfElem(t, c)) != kNoDef; };
+    bool recorded = false, same = true;
+    std::vector<ElemId> now, was;
+    for (ElemId c = E(props).first; c != kNoElem; c = E(c).next) {
+      recorded = recorded || NameOfElem(t, c) == changeName;
+      if (held(c)) now.push_back(c);
+    }
+    if (recorded) continue;  // the oldest stays
+    for (ElemId c = E(copy).first; c != kNoElem; c = E(c).next)
+      if (held(c)) was.push_back(c);
+    same = now.size() == was.size();
+    for (size_t i = 0; same && i < now.size(); ++i) same = SameElem(now[i], was[i]);
+    if (same) continue;
+    const ElemId change = Child(props, changeName);
+    if (change == kNoElem) continue;
+    SetAttr(change, names::kId, editor_.NewChangeId());
+    SetAttr(change, Name("author"), trackAuthor_);
+    SetAttr(change, Name("date"), trackDate_);
+    const ElemId into = Child(change, para ? kPPr : kRPr);
+    if (into == kNoElem) continue;
+    for (ElemId k : was) {
+      E(k).def = S().Child(inner, NameOfElem(t, k));
+      Append(into, k);
+    }
+  }
+  recording_ = false;
+  tracked_.clear();
 }
 
 Elem& TreeEdit::Touch(ElemId id) {
@@ -428,6 +649,7 @@ ElemId TreeEdit::Insert(ElemId parent, ElemDefId def, ElemId before) {
 
 ElemId TreeEdit::Child(ElemId parent, uint32_t name, bool create) {
   if (parent == kNoElem) return kNoElem;
+  TrackBefore(parent);
   Own(parent);
   for (ElemId c = E(parent).first; c != kNoElem; c = E(c).next)
     if (NameOfElem(doc_.tree_, c) == name) return c;
@@ -449,6 +671,7 @@ ElemId TreeEdit::Path(ElemId parent, std::initializer_list<uint32_t> names, bool
 void TreeEdit::RemoveElement(ElemId elem) {
   ElemId parent = E(elem).parent;
   if (parent == kNoElem) return;
+  TrackBefore(parent);
   ElemId prev = kNoElem;
   for (ElemId c = E(parent).first; c != kNoElem && c != elem; c = E(c).next) prev = c;
   ElemId next = E(elem).next;
@@ -477,11 +700,19 @@ void TreeEdit::Remove(ElemId parent, uint32_t name) {
 
 void TreeEdit::Clear(ElemId container, std::initializer_list<uint32_t> keep) {
   if (container == kNoElem || E(container).first == kNoElem) return;
+  TrackBefore(container);
   Own(container);
+  // Tracked changes are never cleared away: a mark's insertion or deletion, a formatting record.
+  static const uint32_t kRecords[] = {Name("rPrChange"), Name("pPrChange"), Name("ins"), Name("del"), Name("moveFrom"),
+                                      Name("moveTo")};
   std::vector<ElemId> kids;
   for (ElemId c = E(container).first; c != kNoElem; c = E(c).next) kids.push_back(c);
-  for (ElemId c : kids)
-    if (std::find(keep.begin(), keep.end(), NameOfElem(doc_.tree_, c)) == keep.end()) RemoveElement(c);
+  for (ElemId c : kids) {
+    const uint32_t n = NameOfElem(doc_.tree_, c);
+    if (std::find(keep.begin(), keep.end(), n) == keep.end() &&
+        std::find(std::begin(kRecords), std::end(kRecords), n) == std::end(kRecords))
+      RemoveElement(c);
+  }
 }
 
 void TreeEdit::WriteAttrs(ElemId elem, const std::vector<AttrVal>& attrs) {
@@ -494,6 +725,7 @@ void TreeEdit::WriteAttrs(ElemId elem, const std::vector<AttrVal>& attrs) {
 }
 
 void TreeEdit::SetAttr(ElemId elem, uint32_t name, std::string_view value) {
+  TrackBefore(elem);
   Tree& t = doc_.tree_;
   const TypeDef& type = S().Type(TypeOfElem(t, elem));
   AttrDefId def = S().AttrOf(TypeOfElem(t, elem), name);
@@ -516,6 +748,7 @@ void TreeEdit::SetAttr(ElemId elem, uint32_t name, std::string_view value) {
 }
 
 void TreeEdit::RemoveAttr(ElemId elem, uint32_t name) {
+  TrackBefore(elem);
   Tree& t = doc_.tree_;
   AttrDefId def = S().AttrOf(TypeOfElem(t, elem), name);
   const Elem& e = t.elems[elem];
@@ -524,6 +757,151 @@ void TreeEdit::RemoveAttr(ElemId elem, uint32_t name) {
   if (it == attrs.end()) return;
   attrs.erase(it);
   WriteAttrs(elem, attrs);
+}
+
+// ---------- Inline content ----------
+
+void TreeEdit::LinkAt(ElemId parent, ElemId child, ElemId before) {
+  Touch(child);
+  ElemId prev = kNoElem;
+  for (ElemId c = E(parent).first; c != kNoElem && c != before; c = E(c).next) prev = c;
+  if (prev == kNoElem) {
+    E(child).next = Touch(parent).first;
+    E(parent).first = child;
+  } else {
+    E(child).next = Touch(prev).next;
+    E(prev).next = child;
+  }
+  E(child).parent = parent;
+}
+
+void TreeEdit::Unlink(ElemId elem) {
+  const ElemId parent = E(elem).parent;
+  if (parent == kNoElem) return;
+  ElemId prev = kNoElem;
+  for (ElemId c = E(parent).first; c != kNoElem && c != elem; c = E(c).next) prev = c;
+  if (prev == kNoElem) {
+    if (E(parent).first != elem) return;
+    Touch(parent).first = E(elem).next;
+  } else {
+    Touch(prev).next = E(elem).next;
+  }
+  Touch(elem).next = kNoElem;
+}
+
+ElemId TreeEdit::InsertElement(ElemId parent, uint32_t name, ElemId before, uint32_t offset) {
+  if (parent == kNoElem) return kNoElem;
+  const ElemDefId def = S().Child(TypeOfElem(doc_.tree_, parent), name);
+  if (def == kNoDef) return kNoElem;
+  Elem e;
+  e.def = def;
+  e.parent = parent;
+  e.node = NewNode();
+  e.start = offset;
+  e.length = 0;
+  doc_.tree_.elems.push_back(e);
+  const auto id = static_cast<ElemId>(doc_.tree_.elems.size() - 1);
+  LinkAt(parent, id, before);
+  return id;
+}
+
+ElemId TreeEdit::Wrap(ElemId first, ElemId last, std::initializer_list<uint32_t> names) {
+  Tree& t = doc_.tree_;
+  const ElemId parent = E(first).parent;
+  if (parent == kNoElem || names.size() == 0) return kNoElem;
+  std::vector<ElemDefId> defs;  // each new element's definition in the one around it
+  TypeId type = TypeOfElem(t, parent);
+  for (uint32_t name : names) {
+    const ElemDefId def = S().Child(type, name);
+    if (def == kNoDef) return kNoElem;
+    defs.push_back(def);
+    type = S().Elem(def).type;
+  }
+  std::vector<std::pair<ElemId, ElemDefId>> kids;  // with their definitions in the new element
+  for (ElemId c = first;; c = E(c).next) {
+    if (c == kNoElem) return kNoElem;  // `last` isn't after `first`
+    const ElemDefId kd = S().Child(type, NameOfElem(t, c));
+    if (kd == kNoDef || S().Elem(kd).type != TypeOfElem(t, c)) return kNoElem;
+    kids.emplace_back(c, kd);
+    if (c == last) break;
+  }
+  ElemId outer = kNoElem, inner = parent;
+  for (const ElemDefId def : defs) {
+    Elem w;
+    w.def = def;
+    w.parent = inner;
+    w.node = NewNode();
+    w.start = E(first).start;
+    w.length = E(last).start + E(last).length - w.start;
+    t.elems.push_back(w);
+    const auto id = static_cast<ElemId>(t.elems.size() - 1);
+    if (inner == parent) {
+      LinkAt(parent, id, first);
+      outer = id;
+    } else {
+      LinkAt(inner, id, kNoElem);
+    }
+    inner = id;
+  }
+  for (const auto& [c, kd] : kids) Unlink(c);
+  for (const auto& [c, kd] : kids) {
+    LinkAt(inner, c, kNoElem);  // what each keeps beside it goes with it
+    E(c).def = kd;
+  }
+  return outer;
+}
+
+bool TreeEdit::Unwrap(ElemId elem) {
+  Tree& t = doc_.tree_;
+  const ElemId parent = E(elem).parent;
+  if (parent == kNoElem) return false;
+  const TypeId ptype = TypeOfElem(t, parent);
+  std::vector<std::pair<ElemId, ElemDefId>> kids;
+  for (ElemId c = E(elem).first; c != kNoElem; c = E(c).next) {
+    const ElemDefId kd = S().Child(ptype, NameOfElem(t, c));
+    if (kd == kNoDef || S().Elem(kd).type != TypeOfElem(t, c)) return false;
+    kids.emplace_back(c, kd);
+  }
+  const pkg::NodeId node = E(elem).node;
+  std::vector<pkg::Fragment> before, after;
+  if (RealNode(node)) {
+    for (pkg::Fragment& f : doc_.store_.FragmentsCopy(node)) {
+      if (f.slot == pkg::Slot::Inside && !f.afterChild.empty()) return false;  // between its children
+      if (f.slot == pkg::Slot::After) after.push_back(std::move(f));
+      else before.push_back(std::move(f));  // Before, then what it keeps first inside
+    }
+  }
+  if (kids.empty()) {
+    if (!before.empty() && std::any_of(before.begin(), before.end(), [](const pkg::Fragment& f) { return f.slot == pkg::Slot::Inside; }))
+      return false;
+    RemoveElement(elem);
+    return true;
+  }
+  if ((!before.empty() && !RealNode(E(kids.front().first).node)) || (!after.empty() && !RealNode(E(kids.back().first).node)))
+    return false;  // nowhere to keep them
+  for (const auto& [c, kd] : kids) {
+    LinkAt(parent, c, elem);
+    E(c).def = kd;
+  }
+  Touch(elem).first = kNoElem;
+  Unlink(elem);
+  if (!before.empty() || !after.empty()) {
+    StoreFragments(node, {});
+    auto give = [&](ElemId to, std::vector<pkg::Fragment> moved, bool first) {
+      if (moved.empty()) return;
+      for (pkg::Fragment& f : moved) {
+        f.slot = first ? pkg::Slot::Before : pkg::Slot::After;
+        f.afterChild.clear();
+      }
+      std::vector<pkg::Fragment> there = doc_.store_.FragmentsCopy(E(to).node);
+      there.insert(first ? there.begin() : there.end(), std::make_move_iterator(moved.begin()),
+                   std::make_move_iterator(moved.end()));
+      StoreFragments(E(to).node, std::move(there));
+    };
+    give(kids.front().first, std::move(before), true);
+    give(kids.back().first, std::move(after), false);
+  }
+  return true;
 }
 
 // ---------- Runs ----------
@@ -584,12 +962,23 @@ bool TreeEdit::SplitRunAt(uint32_t para, uint32_t offset) {
     tail = c;
   };
   if (props != kNoElem) {
+    ElemId mine;
     if (HasRepeats(props)) {
-      append(CopyProps(props, second));  // without the repeats, so the split adds no error
+      mine = CopyProps(props, second);  // without the repeats, so the split adds no error
     } else {
       if (t.elems[props].first != kNoElem) Touch(props).flags |= kSharedKids;
-      append(Clone(props, second));
+      mine = Clone(props, second);
     }
+    append(mine);
+    // A tracked formatting change (w:rPrChange) in both halves: the second gets an id of its own,
+    // as ids are unique in a document (torture finding 38).
+    for (ElemId c = E(mine).first; c != kNoElem; c = E(c).next)
+      if (NameOfElem(t, c) == Name("rPrChange") && Node(&t, c).Has(names::kId)) {
+        Own(mine);
+        for (ElemId k = E(mine).first; k != kNoElem; k = E(k).next)
+          if (NameOfElem(t, k) == Name("rPrChange")) SetAttr(k, names::kId, editor_.NewChangeId());
+        break;
+      }
   }
 
   pkg::NodeId firstMoved = t.elems[split].node;
@@ -628,19 +1017,24 @@ bool TreeEdit::SplitRunAt(uint32_t para, uint32_t offset) {
 
 namespace {
 
-bool Known(TypeId parentType, pugi::xml_node n) {
+// With `content`, also a story's content (a note: its paragraphs, runs, text and characters),
+// empty: the text is the paragraph's (LayOutBuiltParagraph).
+bool Known(TypeId parentType, pugi::xml_node n, bool content = false) {
   if (n.type() != pugi::node_element) return n.type() == pugi::node_pcdata && std::string_view(n.value()).find_first_not_of(" \t\r\n") == std::string_view::npos;
   ElemDefId def = S().Child(parentType, QNameHash(n.name()));
   if (def == kNoDef) return false;
   TypeId type = S().Elem(def).type;
-  if (S().Type(type).role != Role::Plain) return false;
+  const Role role = S().Type(type).role;
+  if (role != Role::Plain && !(content && (role == Role::Story || role == Role::Paragraph || role == Role::Run ||
+                                          role == Role::Text || role == Role::Char)))
+    return false;
   for (pugi::xml_attribute a : n.attributes()) {
     std::string_view q = a.name();
     if (q.starts_with("xmlns")) continue;
     if (S().AttrOf(type, QNameHash(q)) == kNoDef) return false;
   }
   for (pugi::xml_node c : n.children())
-    if (!Known(type, c)) return false;
+    if (!Known(type, c, content)) return false;
   return true;
 }
 
@@ -682,7 +1076,7 @@ ElemId TreeEdit::Build(ElemId parent, const pugi::xml_node& n, ElemId before, bo
   return id;
 }
 
-ElemId TreeEdit::AddXml(ElemId parent, std::string_view xml, ElemId before) {
+ElemId TreeEdit::AddXml(ElemId parent, std::string_view xml, ElemId before, bool content) {
   std::string wrapped = "<root";
   for (size_t i = 0; i < kNsCount; ++i) {
     auto ns = static_cast<Ns>(i);
@@ -696,12 +1090,13 @@ ElemId TreeEdit::AddXml(ElemId parent, std::string_view xml, ElemId before) {
   if (!d.load_buffer(wrapped.data(), wrapped.size(), pugi::parse_default, pugi::encoding_utf8)) return kNoElem;
   pugi::xml_node n = d.first_child().first_child();
   while (n && n.type() != pugi::node_element) n = n.next_sibling();
-  if (!n || !Known(TypeOfElem(doc_.tree_, parent), n)) return kNoElem;
+  if (!n || !Known(TypeOfElem(doc_.tree_, parent), n, content)) return kNoElem;
   return Build(parent, n, before, false);
 }
 
 ElemId TreeEdit::CopyChild(ElemId src, ElemId parent) {
   if (src == kNoElem || parent == kNoElem) return kNoElem;
+  TrackBefore(parent);
   uint32_t name = NameOfElem(doc_.tree_, src);
   ElemDefId def = S().Child(TypeOfElem(doc_.tree_, parent), name);
   if (def == kNoDef || S().Elem(def).type != TypeOfElem(doc_.tree_, src)) return kNoElem;
@@ -714,42 +1109,72 @@ ElemId TreeEdit::CopyChild(ElemId src, ElemId parent) {
 
 // ---------- Parts ----------
 
-ElemId TreeEdit::EnsurePart(PartKind kind) {
-  if (kind != PartKind::Styles && kind != PartKind::Numbering) return kNoElem;
-  if (const Part* p = doc_.FindPart(kind)) return p->root;
-  const Part* main = doc_.FindPart(PartKind::Document);
-  if (depth_ > 0 || !main || !doc_.Editable()) return kNoElem;
-  const auto w = static_cast<size_t>(Ns::W), r = static_cast<size_t>(Ns::R);
-  const bool strict = IsStrictUri(main->uri[w]);
-  const std::string local = kind == PartKind::Styles ? "styles" : "numbering";
-  const std::string dir = main->name.substr(0, main->name.rfind('/') + 1);
-  std::string name = dir + local + ".xml";
-  for (int i = 2; doc_.Package().FindPart(name); ++i) name = dir + local + std::to_string(i) + ".xml";
+namespace {
 
-  // The package: a content type and a relationship from the main part.
-  pkg::Package& package = doc_.Package();
+// A new part's content type and its relationship from `source`; returns the relationship's id.
+std::string AddToPackage(pkg::Package& package, const std::string& source, const std::string& name,
+                         const std::string& contentType, const std::string& relType) {
   pkg::ContentTypes types = package.Types();
-  types.overrides.emplace_back(name, "application/vnd.openxmlformats-officedocument.wordprocessingml." + local + "+xml");
+  types.overrides.emplace_back(name, contentType);
   package.SetContentTypes(std::move(types));
   pkg::RelationshipSet rels;
-  if (const pkg::RelationshipSet* have = package.RelationshipsOf(main->name)) {
+  if (const pkg::RelationshipSet* have = package.RelationshipsOf(source)) {
     rels = *have;
   } else {
-    rels.source = main->name;
-    rels.relsPart = pkg::RelsPartFor(main->name);
+    rels.source = source;
+    rels.relsPart = pkg::RelsPartFor(source);
   }
   pkg::Relationship rel;
   for (size_t n = rels.items.size() + 1;; ++n) {
     rel.id = "rId" + std::to_string(n);
     if (!rels.Find(rel.id)) break;
   }
-  rel.type = std::string(strict ? "http://purl.oclc.org/ooxml/officeDocument/relationships/"
-                                : "http://schemas.openxmlformats.org/officeDocument/2006/relationships/") +
-             local;
-  rel.target = name.substr(dir.size());
+  const std::string dir = source.substr(0, source.rfind('/') + 1);
+  rel.type = relType;
+  rel.target = name.starts_with(dir) ? name.substr(dir.size()) : name;
   rel.targetPart = name;
+  std::string id = rel.id;
   rels.items.push_back(std::move(rel));
   package.SetRelationships(std::move(rels));
+  return id;
+}
+
+std::string RelType(bool strict, std::string_view local) {
+  return std::string(strict ? "http://purl.oclc.org/ooxml/officeDocument/relationships/"
+                            : "http://schemas.openxmlformats.org/officeDocument/2006/relationships/") +
+         std::string(local);
+}
+
+// The first free name like /word/header3.xml.
+std::string FreeName(const pkg::Package& package, const std::string& dir, const std::string& local, bool numbered) {
+  std::string name = dir + local + (numbered ? "1" : "") + ".xml";
+  for (int i = 2; package.FindPart(name); ++i) name = dir + local + std::to_string(i) + ".xml";
+  return name;
+}
+
+}  // namespace
+
+ElemId TreeEdit::EnsurePart(PartKind kind) {
+  const bool notes = kind == PartKind::Footnotes || kind == PartKind::Endnotes;
+  if (kind != PartKind::Styles && kind != PartKind::Numbering && kind != PartKind::Settings &&
+      kind != PartKind::Comments && !notes)
+    return kNoElem;
+  if (const Part* p = doc_.FindPart(kind)) return p->root;
+  const Part* main = doc_.FindPart(PartKind::Document);
+  if (depth_ > 0 || !main || !doc_.Editable() || (!fill_ && FormsProtected(doc_))) return kNoElem;
+  const auto w = static_cast<size_t>(Ns::W), r = static_cast<size_t>(Ns::R);
+  const bool strict = IsStrictUri(main->uri[w]);
+  const std::string local = kind == PartKind::Styles      ? "styles"
+                            : kind == PartKind::Numbering ? "numbering"
+                            : kind == PartKind::Comments  ? "comments"
+                            : kind == PartKind::Footnotes ? "footnotes"
+                            : kind == PartKind::Endnotes  ? "endnotes"
+                                                          : "settings";
+  const std::string dir = main->name.substr(0, main->name.rfind('/') + 1);
+  pkg::Package& package = doc_.Package();
+  const std::string name = FreeName(package, dir, local, false);
+  AddToPackage(package, main->name, name, "application/vnd.openxmlformats-officedocument.wordprocessingml." + local + "+xml",
+               RelType(strict, local));
 
   // The model: an empty root with the main part's namespaces.
   Part part;
@@ -763,18 +1188,547 @@ ElemId TreeEdit::EnsurePart(PartKind kind) {
     part.uri[i] = main->uri[i].empty() ? std::string(NsUri(static_cast<Ns>(i))) : main->uri[i];
     part.addDecls.emplace_back(part.prefix[i], part.uri[i]);
   }
+  if (kind == PartKind::Comments) {
+    // Comments' paragraphs carry w14:paraId, which commentsExtended names them by.
+    const auto w14 = static_cast<size_t>(Ns::W14);
+    part.prefix[w14] = std::string(NsPrefix(Ns::W14));
+    part.uri[w14] = std::string(NsUri(Ns::W14));
+    part.addDecls.emplace_back(part.prefix[w14], part.uri[w14]);
+  }
   part.prefix[static_cast<size_t>(Ns::Xml)] = "xml";
   pkg::XmlWriter decl;
   decl.Declaration(true);
   doc_.store_.Add(doc_.tree_.elems[part.root].node, pkg::Fragment{pkg::Slot::Before, {}, decl.Take()});
   ElemId root = part.root;
   doc_.parts_.push_back(std::move(part));
+  // A notes part starts with Word's separator notes (ids -1 and 0).
+  if (notes) AddSeparatorNotes(static_cast<uint32_t>(doc_.parts_.size() - 1), kind == PartKind::Endnotes);
   std::string xml;
   if (docx::WritePart(doc_, static_cast<uint32_t>(doc_.parts_.size() - 1), xml).Ok())
     package.SetPart(name, std::vector<uint8_t>(xml.begin(), xml.end()));
 
   Reindex();
   return root;
+}
+
+// ---------- Header and footer parts ----------
+
+namespace {
+
+// Range markers and ids a copy leaves out: they must be unique in a document.
+bool LeftOutOfCopy(uint32_t name, uint32_t parentName) {
+  static const uint32_t kMarkers[] = {
+      Name("bookmarkStart"), Name("bookmarkEnd"), Name("commentRangeStart"), Name("commentRangeEnd"),
+      Name("permStart"), Name("permEnd"), Name("moveFromRangeStart"), Name("moveFromRangeEnd"),
+      Name("moveToRangeStart"), Name("moveToRangeEnd"), Name("customXmlInsRangeStart"), Name("customXmlInsRangeEnd"),
+      Name("customXmlDelRangeStart"), Name("customXmlDelRangeEnd"), Name("customXmlMoveFromRangeStart"),
+      Name("customXmlMoveFromRangeEnd"), Name("customXmlMoveToRangeStart"), Name("customXmlMoveToRangeEnd")};
+  for (uint32_t m : kMarkers)
+    if (name == m) return true;
+  return name == names::kId && parentName == Name("sdtPr");  // a content control's id
+}
+
+}  // namespace
+
+bool TreeEdit::Copyable(ElemId root, std::u16string& why) const {
+  const Tree& t = doc_.tree_;
+  static const uint32_t kRefuse[] = {Name("footnoteReference"), Name("endnoteReference"), Name("commentReference"),
+                                     Name("annotationRef")};
+  for (ElemId id = root; id != kNoElem; id = NextIn(t, id, root)) {
+    const Elem& e = t.elems[id];
+    const uint32_t name = NameOfElem(t, id);
+    if (e.flags & kDisplayOnly) {
+      why = u"This header or footer holds content Featherweight keeps as it is, so it can't be copied.";
+      return false;
+    }
+    if (S().Type(TypeOfElem(t, id)).role == Role::Object) {
+      why = u"This header or footer has a picture or an object, which Featherweight can't copy yet.";
+      return false;
+    }
+    for (uint32_t r : kRefuse)
+      if (name == r) {
+        why = u"This header or footer has a note or a comment, which can't be copied.";
+        return false;
+      }
+    if (!RealNode(e.node)) continue;
+    const bool leftOut = e.parent != kNoElem && LeftOutOfCopy(name, NameOfElem(t, e.parent));
+    for (const pkg::Fragment& f : doc_.store_.FragmentsCopy(e.node)) {
+      // Kept content that refers to the part's relationships or holds ids would be wrong twice.
+      const std::string& x = f.xml;
+      if (f.slot == pkg::Slot::Before && x.starts_with("<?xml")) continue;  // the declaration
+      if (leftOut || x.find("r:id=") != std::string::npos || x.find("r:embed=") != std::string::npos ||
+          x.find("r:link=") != std::string::npos || x.find(":id=") != std::string::npos ||
+          x.find("paraId=") != std::string::npos) {
+        why = u"This header or footer holds content Featherweight keeps as it is, so it can't be copied.";
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+ElemId TreeEdit::CopyTree(ElemId src, ElemId parent, uint32_t story) {
+  Tree& t = doc_.tree_;
+  Elem e = t.elems[src];
+  const ElemId srcFirst = e.first;
+  const pkg::NodeId from = e.node;
+  e.parent = parent;
+  e.next = kNoElem;
+  e.first = kNoElem;
+  e.flags = static_cast<uint8_t>(e.flags & ~kSharedKids);  // the copy owns what it holds
+  e.node = NewNode();
+  t.elems.push_back(e);
+  const auto id = static_cast<ElemId>(t.elems.size() - 1);
+  if (e.attrCount) {
+    // Without the ids Word gives each paragraph and table row (one id space): the copy would use
+    // them again (d3-torture finding 20).
+    const TypeId type = TypeOfElem(t, id);
+    const AttrDefId paraId = S().AttrOf(type, Name("w14:paraId")), textId = S().AttrOf(type, Name("w14:textId"));
+    std::vector<AttrVal> attrs;
+    for (uint16_t i = 0; i < e.attrCount; ++i)
+      if (const AttrVal& a = t.attrs[e.attrs + i]; a.def != paraId && a.def != textId) attrs.push_back(a);
+    if (attrs.size() != e.attrCount) WriteAttrs(id, attrs);
+  }
+  if (NameOfElem(t, id) == names::kP) {
+    // A paragraph of the new story.
+    Paragraph p;
+    p.elem = id;
+    p.story = story;
+    p.text = doc_.paras_[t.elems[src].start].text;
+    t.elems[id].start = static_cast<uint32_t>(doc_.paras_.size());
+    doc_.paras_.push_back(std::move(p));
+  }
+  if (RealNode(from)) {
+    if (pkg::AttrSetId set = doc_.store_.NodeAttributes(from)) {
+      // Word's ids for paragraphs and rows (w14:paraId, w14:textId) are kept as the file has them,
+      // outside the schema: the copy goes without them, or an id is used twice (d3-torture finding 20).
+      std::vector<pkg::XmlAttr> kept = doc_.store_.Attributes(set);
+      const size_t before = kept.size();
+      std::erase_if(kept, [](const pkg::XmlAttr& a) {
+        const std::string_view local = std::string_view(a.qname).substr(a.qname.find(':') + 1);
+        return a.nsUri == "http://schemas.microsoft.com/office/word/2010/wordml" && (local == "paraId" || local == "textId");
+      });
+      if (kept.size() != before) set = kept.empty() ? 0 : doc_.store_.Intern(std::move(kept));
+      if (set) doc_.store_.SetNodeAttributes(t.elems[id].node, set);
+    }
+    if (std::vector<pkg::Fragment> kept = doc_.store_.FragmentsCopy(from); !kept.empty())
+      doc_.store_.SetFragments(t.elems[id].node, std::move(kept));
+  }
+  const uint32_t name = NameOfElem(t, src);
+  ElemId tail = kNoElem;
+  for (ElemId c = srcFirst; c != kNoElem; c = t.elems[c].next) {
+    if (LeftOutOfCopy(NameOfElem(t, c), name)) continue;
+    const ElemId k = CopyTree(c, id, story);
+    if (tail == kNoElem) t.elems[id].first = k;
+    else t.elems[tail].next = k;
+    tail = k;
+  }
+  return id;
+}
+
+uint32_t TreeEdit::NewStoryPart(PartKind kind, uint32_t copyOf, std::string& relId, std::u16string& why) {
+  why.clear();
+  const Part* main = doc_.FindPart(PartKind::Document);
+  if ((kind != PartKind::Header && kind != PartKind::Footer) || depth_ > 0 || !main || !doc_.Editable()) {
+    why = u"This document can't get a new header or footer.";
+    return kNone;
+  }
+  if (!fill_ && FormsProtected(doc_)) {  // it isn't undone: nothing made that the change can't keep
+    why = kFormsProtected;
+    return kNone;
+  }
+  const bool footer = kind == PartKind::Footer;
+  const Story* source = copyOf < doc_.stories_.size() ? &doc_.stories_[copyOf] : nullptr;
+  if (source && !Copyable(source->root, why)) return kNone;
+  const auto w = static_cast<size_t>(Ns::W), r = static_cast<size_t>(Ns::R);
+  const bool strict = IsStrictUri(main->uri[w]);
+  const std::string local = footer ? "footer" : "header";
+  const std::string mainName = main->name;
+  const std::string dir = mainName.substr(0, mainName.rfind('/') + 1);
+  pkg::Package& package = doc_.Package();
+  const std::string name = FreeName(package, dir, local, true);
+  relId = AddToPackage(package, mainName, name,
+                       "application/vnd.openxmlformats-officedocument.wordprocessingml." + local + "+xml",
+                       RelType(strict, local));
+
+  Part part;
+  part.name = name;
+  part.kind = kind;
+  part.docNode = NewNode();
+  const auto partIndex = static_cast<uint32_t>(doc_.parts_.size());
+  const auto story = static_cast<uint32_t>(doc_.stories_.size());
+  const StoryKind storyKind = footer ? StoryKind::Footer : StoryKind::Header;
+  if (source) {
+    // The source part's namespaces and what surrounds its root; its relationships too, for its
+    // links (the same ids, in the new part's own set).
+    const Part& from = doc_.parts_[source->part];
+    const ElemId srcRoot = source->root;
+    part.prefix = from.prefix;
+    part.uri = from.uri;
+    part.addDecls = from.addDecls;
+    if (std::vector<pkg::Fragment> around = doc_.store_.FragmentsCopy(from.docNode); !around.empty())
+      doc_.store_.SetFragments(part.docNode, std::move(around));
+    if (const pkg::RelationshipSet* rels = package.RelationshipsOf(from.name); rels && !rels->items.empty()) {
+      pkg::RelationshipSet copy;
+      copy.source = name;
+      copy.relsPart = pkg::RelsPartFor(name);
+      copy.items = rels->items;
+      package.SetRelationships(std::move(copy));
+    }
+    doc_.stories_.push_back(Story{storyKind, partIndex, kNoElem, {}, kNone});
+    part.root = CopyTree(srcRoot, kNoElem, story);
+  } else {
+    part.root = doc_.tree_.Add(S().Child(S().RootType(), NameOf(Ns::W, footer ? "ftr" : "hdr")), kNoElem);
+    doc_.tree_.elems[part.root].node = NewNode();
+    for (size_t i : {w, r}) {
+      part.prefix[i] = std::string(NsPrefix(static_cast<Ns>(i)));
+      part.uri[i] = main->uri[i].empty() ? std::string(NsUri(static_cast<Ns>(i))) : main->uri[i];
+      part.addDecls.emplace_back(part.prefix[i], part.uri[i]);
+    }
+    part.prefix[static_cast<size_t>(Ns::Xml)] = "xml";
+    pkg::XmlWriter decl;
+    decl.Declaration(true);
+    doc_.store_.Add(doc_.tree_.elems[part.root].node, pkg::Fragment{pkg::Slot::Before, {}, decl.Take()});
+    doc_.stories_.push_back(Story{storyKind, partIndex, kNoElem, {}, kNone});
+    // One empty paragraph.
+    const ElemId p = doc_.tree_.Add(S().Child(TypeOfElem(doc_.tree_, part.root), names::kP), part.root);
+    doc_.tree_.elems[p].node = NewNode();
+    doc_.tree_.elems[part.root].first = p;
+    doc_.tree_.elems[p].start = static_cast<uint32_t>(doc_.paras_.size());
+    doc_.tree_.elems[p].length = 0;
+    Paragraph para;
+    para.elem = p;
+    para.story = story;
+    doc_.paras_.push_back(std::move(para));
+  }
+  doc_.stories_[story].root = part.root;
+  doc_.parts_.push_back(std::move(part));
+  std::string xml;
+  if (docx::WritePart(doc_, partIndex, xml).Ok()) package.SetPart(name, std::vector<uint8_t>(xml.begin(), xml.end()));
+  Reindex();
+  return story;
+}
+
+// ---------- Comments ----------
+
+uint32_t TreeEdit::NewComment(std::string_view id, std::string_view author, std::string_view initials,
+                              std::string_view date, std::string_view paraId) {
+  const Part* part = doc_.FindPart(PartKind::Comments);
+  if (!part || depth_ > 0 || !doc_.Editable()) return kNone;
+  const auto partIndex = static_cast<uint32_t>(part - doc_.parts_.data());
+  Tree& t = doc_.tree_;
+  const ElemId root = part->root;
+  // Its paragraphs' w14:paraId needs the prefix (a comments part from elsewhere may not declare it).
+  if (Part& p = doc_.parts_[partIndex]; p.prefix[static_cast<size_t>(Ns::W14)].empty()) {
+    const auto w14 = static_cast<size_t>(Ns::W14);
+    p.prefix[w14] = std::string(NsPrefix(Ns::W14));
+    p.uri[w14] = std::string(NsUri(Ns::W14));
+    p.addDecls.emplace_back(p.prefix[w14], p.uri[w14]);
+  }
+  auto make = [&](ElemId parent, uint32_t name, std::initializer_list<std::pair<const char*, std::string_view>> attrs) {
+    const ElemDefId def = S().Child(TypeOfElem(t, parent), name);
+    if (def == kNoDef) return kNoElem;
+    const ElemId id = t.Add(def, parent);
+    t.elems[id].node = NewNode();
+    std::vector<AttrVal> vals;
+    const TypeDef& type = S().Type(S().Elem(def).type);
+    for (const auto& [n, v] : attrs) {
+      const AttrDefId ad = S().AttrOf(S().Elem(def).type, Name(n));
+      if (ad == kNoDef || v.empty()) continue;
+      auto at = std::find_if(vals.begin(), vals.end(), [&](const AttrVal& o) { return AttrRank(type, o.def) > AttrRank(type, ad); });
+      vals.insert(at, AttrVal{ad, t.strings.Intern(v)});
+    }
+    if (!vals.empty()) {
+      t.elems[id].attrs = static_cast<uint32_t>(t.attrs.size());
+      t.elems[id].attrCount = static_cast<uint16_t>(vals.size());
+      t.attrs.insert(t.attrs.end(), vals.begin(), vals.end());
+    }
+    return id;
+  };
+  auto chain = [&](ElemId parent, std::initializer_list<ElemId> kids) {
+    ElemId tail = kNoElem;
+    for (ElemId k : kids) {
+      if (k == kNoElem) continue;
+      if (tail == kNoElem) t.elems[parent].first = k;
+      else t.elems[tail].next = k;
+      tail = k;
+    }
+  };
+  const ElemId comment = make(root, Name("comment"), {{"id", id}, {"author", author}, {"date", date}, {"initials", initials}});
+  if (comment == kNoElem) return kNone;
+  const ElemId p = make(comment, names::kP, {{"w14:paraId", paraId}, {"w14:textId", "77777777"}});
+  // Word's comment styles, where the document has them.
+  ElemId pPr = kNoElem, rPr = kNoElem;
+  if (doc_.FindStyle("CommentText")) {
+    pPr = make(p, Name("pPr"), {});
+    chain(pPr, {make(pPr, Name("pStyle"), {{"val", "CommentText"}})});
+  }
+  const ElemId r = make(p, Name("r"), {});
+  if (doc_.FindStyle("CommentReference")) {
+    rPr = make(r, Name("rPr"), {});
+    chain(rPr, {make(rPr, Name("rStyle"), {{"val", "CommentReference"}})});
+  }
+  const ElemId mark = make(r, Name("annotationRef"), {});
+  if (p == kNoElem || r == kNoElem || mark == kNoElem) return kNone;
+  chain(comment, {p});
+  chain(p, {pPr, r});
+  chain(r, {rPr, mark});
+  const auto para = static_cast<uint32_t>(doc_.paras_.size());
+  t.elems[p].start = para;
+  t.elems[p].length = 1;
+  t.elems[r].length = t.elems[mark].length = 1;
+  const auto story = static_cast<uint32_t>(doc_.stories_.size());
+  doc_.stories_.push_back(Story{StoryKind::Comment, partIndex, comment, std::string(id), kNone});
+  Paragraph text;
+  text.elem = p;
+  text.story = story;
+  text.text = u"\x05";  // the annotation mark
+  doc_.paras_.push_back(std::move(text));
+  Reindex();
+  return story;
+}
+
+// ---------- Notes (D4) ----------
+
+namespace {
+
+// A paragraph built from XML (TreeEdit::AddXml) gets its text: each character item the one it
+// stands for, each text element the next of `texts`, containers spanning what they hold (as
+// Editor's Reflow and the reader lay them out).
+std::u16string LayOutBuiltParagraph(Tree& t, ElemId p, uint32_t index, const std::vector<std::u16string>& texts) {
+  std::u16string text;
+  size_t nextText = 0;
+  std::function<void(ElemId)> walk = [&](ElemId id) {
+    Elem& e = t.elems[id];
+    e.start = static_cast<uint32_t>(text.size());
+    const TypeDef& type = S().Type(TypeOfElem(t, id));
+    if (type.role == Role::Char) {
+      text += type.ch;
+      e.length = 1;
+      return;
+    }
+    if (type.role == Role::Text) {
+      if (nextText < texts.size()) text += texts[nextText++];
+      e.length = static_cast<uint32_t>(text.size()) - e.start;
+      return;
+    }
+    for (ElemId c = e.first; c != kNoElem; c = t.elems[c].next) walk(c);
+    e.length = static_cast<uint32_t>(text.size()) - e.start;
+  };
+  for (ElemId c = t.elems[p].first; c != kNoElem; c = t.elems[c].next) walk(c);
+  t.elems[p].start = index;
+  t.elems[p].length = static_cast<uint32_t>(text.size());
+  return text;
+}
+
+ElemId FirstChildNamed(const Tree& t, ElemId parent, uint32_t name) {
+  for (ElemId c = t.elems[parent].first; c != kNoElem; c = t.elems[c].next)
+    if (NameOfElem(t, c) == name) return c;
+  return kNoElem;
+}
+
+}  // namespace
+
+void TreeEdit::ApplyStoryOps(Document& doc, const std::vector<StoryOp>& ops, bool undo) {
+  if (ops.empty()) return;
+  // The drawings in the paragraphs that come back, found again once they're numbered.
+  std::vector<size_t> found;
+  auto apply = [&](const StoryOp& op) {
+    const bool adding = op.add != undo;
+    const auto at = static_cast<uint32_t>(std::min<size_t>(op.at, doc.paras_.size()));
+    uint32_t n = 0;
+    if (adding) {
+      doc.paras_.insert(doc.paras_.begin() + at, op.paras.begin(), op.paras.end());
+      doc.stories_[op.story].root = op.root;
+      n = static_cast<uint32_t>(op.paras.size());
+    } else {
+      n = static_cast<uint32_t>(std::min<size_t>(op.paras.size(), doc.paras_.size() - at));
+      doc.paras_.erase(doc.paras_.begin() + at, doc.paras_.begin() + at + n);
+      doc.stories_[op.story].root = kNoElem;
+    }
+    for (uint32_t p = at; p < doc.paras_.size(); ++p) doc.tree_.elems[doc.paras_[p].elem].start = p;
+    // Drawings after them move along (a header part made after the notes, finding 37); those in
+    // the paragraphs that go have no position until they come back, as an undone insert's.
+    std::unordered_set<ElemId> paras;
+    if (adding)
+      for (const Paragraph& p : op.paras) paras.insert(p.elem);
+    for (size_t d = 0; d < doc.drawings_.size(); ++d) {
+      Pos& pos = doc.drawings_[d].pos;
+      if (pos.para == kNone) {
+        if (!adding) continue;
+        for (Node a = doc.drawings_[d].node; a; a = a.Parent())
+          if (paras.count(a.Id())) {
+            found.push_back(d);
+            break;
+          }
+      } else if (adding && pos.para >= at) {
+        pos.para += n;
+      } else if (!adding && pos.para >= at + n) {
+        pos.para -= n;
+      } else if (!adding && pos.para >= at) {
+        pos = Pos{kNone, 0};
+      }
+    }
+  };
+  if (undo)
+    for (auto it = ops.rbegin(); it != ops.rend(); ++it) apply(*it);
+  else
+    for (const StoryOp& op : ops) apply(op);
+  for (size_t d : found) doc.drawings_[d].pos = doc.PosOf(doc.drawings_[d].node);
+}
+
+uint32_t TreeEdit::AddNote(ElemId root, bool endnote, std::string_view id, std::string_view textStyle,
+                           std::string_view markStyle) {
+  if (depth_ == 0 || root == kNoElem) return kNone;
+  uint32_t part = kNone;
+  for (uint32_t i = 0; i < doc_.parts_.size(); ++i)
+    if (doc_.parts_[i].root == root) part = i;
+  if (part == kNone || !XmlSafe(id) || !XmlSafe(textStyle) || !XmlSafe(markStyle)) return kNone;
+  const std::string tag = endnote ? "endnote" : "footnote";
+  auto attr = [](std::string_view v) {
+    std::string out;
+    for (char c : v) out += c == '"' ? std::string("&quot;") : c == '&' ? std::string("&amp;") : c == '<' ? std::string("&lt;") : std::string(1, c);
+    return out;
+  };
+  std::string xml = "<w:" + tag + " w:id=\"" + attr(id) + "\"><w:p><w:pPr>";
+  if (!textStyle.empty()) xml += "<w:pStyle w:val=\"" + attr(textStyle) + "\"/>";
+  xml += "</w:pPr><w:r>";
+  if (!markStyle.empty()) xml += "<w:rPr><w:rStyle w:val=\"" + attr(markStyle) + "\"/></w:rPr>";
+  xml += "<w:" + tag + "Ref/></w:r><w:r><w:t xml:space=\"preserve\"/></w:r></w:p></w:" + tag + ">";
+  const ElemId note = AddXml(root, xml, kNoElem, true);
+  if (note == kNoElem) return kNone;
+  const ElemId p = FirstChildNamed(doc_.tree_, note, names::kP);
+  if (p == kNoElem) return kNone;
+  const auto story = static_cast<uint32_t>(doc_.stories_.size());
+  Story s;
+  s.kind = endnote ? StoryKind::Endnote : StoryKind::Footnote;
+  s.part = part;
+  s.root = note;
+  s.id = std::string(id);
+  doc_.stories_.push_back(std::move(s));
+  // Its paragraph goes last: after every story's, so none moves.
+  const auto at = static_cast<uint32_t>(doc_.paras_.size());
+  Paragraph para;
+  para.elem = p;
+  para.story = story;
+  para.text = LayOutBuiltParagraph(doc_.tree_, p, at, {u" "});
+  para.version = 0;  // new: the editor gives it a version of its own
+  StoryOp op;
+  op.add = true;
+  op.story = story;
+  op.at = at;
+  op.root = note;
+  op.paras = {para};
+  doc_.paras_.push_back(std::move(para));
+  storyOps_.push_back(std::move(op));
+  Reindex();
+  return story;
+}
+
+void TreeEdit::LinkComment(uint32_t story) {
+  const Part* part = doc_.FindPart(PartKind::Comments);
+  if (!part || story >= doc_.stories_.size()) return;
+  Link(part->root, doc_.stories_[story].root, kNoElem);
+}
+
+void TreeEdit::UnlinkComment(uint32_t story) {
+  if (story < doc_.stories_.size() && Attached(doc_.stories_[story].root)) RemoveElement(doc_.stories_[story].root);
+}
+
+void TreeEdit::ChangeCommentsEx(const std::function<void(std::vector<Document::CommentEx>&)>& change) {
+  StoreOp op;
+  op.kind = StoreOp::CommentsEx;
+  op.exBefore = doc_.commentsEx_;
+  change(doc_.commentsEx_);
+  op.exAfter = doc_.commentsEx_;
+  store_.push_back(std::move(op));
+  // The comments part is written again, and its companions with it.
+  if (const Part* part = doc_.FindPart(PartKind::Comments)) Touch(part->root);
+}
+
+void TreeEdit::SetCommentState(std::string_view paraId, std::string_view parentParaId, bool done) {
+  ChangeCommentsEx([&](std::vector<Document::CommentEx>& all) {
+    for (Document::CommentEx& ex : all)
+      if (ex.paraId == paraId) {
+        ex.parentParaId = std::string(parentParaId);
+        ex.done = done;
+        return;
+      }
+    all.push_back(Document::CommentEx{std::string(paraId), std::string(parentParaId), done});
+  });
+}
+
+void TreeEdit::RemoveCommentState(std::string_view paraId) {
+  ChangeCommentsEx([&](std::vector<Document::CommentEx>& all) {
+    std::erase_if(all, [&](const Document::CommentEx& ex) { return ex.paraId == paraId; });
+  });
+}
+
+bool TreeEdit::CommentState(std::string_view paraId, std::string& parentParaId, bool& done) const {
+  for (const Document::CommentEx& ex : doc_.commentsEx_)
+    if (ex.paraId == paraId) {
+      parentParaId = ex.parentParaId;
+      done = ex.done;
+      return true;
+    }
+  return false;
+}
+
+bool TreeEdit::RemoveNote(uint32_t story) {
+  if (depth_ == 0 || story >= doc_.stories_.size()) return false;
+  const Story& s = doc_.stories_[story];
+  if ((s.kind != StoryKind::Footnote && s.kind != StoryKind::Endnote) || s.root == kNoElem) return false;
+  // Word's separators (w:type) aren't notes anyone refers to: settings.xml names them (finding 34).
+  if (!doc_.NodeOf(s.root).AttrOr(names::kType).empty()) return false;
+  const std::vector<uint32_t> paras = doc_.StoryParagraphs(story);
+  // A story's paragraphs follow each other in the model.
+  for (size_t i = 1; i < paras.size(); ++i)
+    if (paras[i] != paras[0] + i) return false;
+  StoryOp op;
+  op.add = false;
+  op.story = story;
+  op.root = s.root;
+  op.at = paras.empty() ? static_cast<uint32_t>(doc_.paras_.size()) : paras.front();
+  for (uint32_t p : paras) op.paras.push_back(doc_.paras_[p]);
+  RemoveElement(s.root);
+  ApplyStoryOps(doc_, {op}, false);  // its paragraphs out, and the drawings after them moved along
+  storyOps_.push_back(std::move(op));
+  Reindex();
+  return true;
+}
+
+void TreeEdit::AddSeparatorNotes(uint32_t part, bool endnote) {
+  const std::string tag = endnote ? "endnote" : "footnote";
+  const ElemId root = doc_.parts_[part].root;
+  Begin(u"");
+  for (const char* type : {"separator", "continuationSeparator"}) {
+    const std::string id = std::string(type) == "separator" ? "-1" : "0";
+    const std::string xml = "<w:" + tag + " w:type=\"" + type + "\" w:id=\"" + id +
+                            "\"><w:p><w:pPr><w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/></w:pPr>"
+                            "<w:r><w:" + type + "/></w:r></w:p></w:" + tag + ">";
+    const ElemId note = AddXml(root, xml, kNoElem, true);
+    const ElemId p = note == kNoElem ? kNoElem : FirstChildNamed(doc_.tree_, note, names::kP);
+    if (p == kNoElem) continue;
+    Story s;
+    s.kind = endnote ? StoryKind::Endnote : StoryKind::Footnote;
+    s.part = part;
+    s.root = note;
+    s.id = id;
+    const auto story = static_cast<uint32_t>(doc_.stories_.size());
+    doc_.stories_.push_back(std::move(s));
+    Paragraph para;
+    para.elem = p;
+    para.story = story;
+    para.text = LayOutBuiltParagraph(doc_.tree_, p, static_cast<uint32_t>(doc_.paras_.size()), {});
+    doc_.paras_.push_back(std::move(para));
+  }
+  // Part of the new part, made outside undo: no step of its own.
+  depth_ = 0;
+  before_.clear();
+  store_.clear();
+  storyOps_.clear();
+  touched_.clear();
+  owned_.clear();
 }
 
 }  // namespace fw::doc::edit

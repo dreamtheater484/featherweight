@@ -35,7 +35,7 @@ inline constexpr const char* kNs =
 struct Fixture {
   std::string body;         // inside w:body
   std::string documentXml;  // the whole main part, instead of body
-  std::string styles, numbering, settings, theme, comments, commentsEx, footnotes, header, footer;
+  std::string styles, numbering, settings, theme, comments, commentsEx, footnotes, endnotes, header, footer;
 
   std::vector<uint8_t> Bytes() const {
     struct Part {
@@ -58,6 +58,7 @@ struct Fixture {
     add("word/settings.xml", wml + "settings+xml", rel + "settings", "w:settings", settings);
     add("word/comments.xml", wml + "comments+xml", rel + "comments", "w:comments", comments);
     add("word/footnotes.xml", wml + "footnotes+xml", rel + "footnotes", "w:footnotes", footnotes);
+    add("word/endnotes.xml", wml + "endnotes+xml", rel + "endnotes", "w:endnotes", endnotes);
     add("word/header1.xml", wml + "header+xml", rel + "header", "w:hdr", header);
     add("word/footer1.xml", wml + "footer+xml", rel + "footer", "w:ftr", footer);
     if (!commentsEx.empty())

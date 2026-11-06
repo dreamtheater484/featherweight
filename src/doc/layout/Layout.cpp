@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
+#include <unordered_map>
 #include <cmath>
 #include <vector>
 
@@ -19,9 +21,10 @@
 namespace fw::doc::layout {
 
 struct Layout::Impl {
-  Impl(const Document& doc, text::Fonts& fonts, const Options& options, OpenTimings* timings)
-      : engine(doc, fonts, options, timings) {}
+  Impl(const Document& doc, text::Fonts& fonts, const Options& o, OpenTimings* timings)
+      : engine(doc, fonts, o, timings), options(o) {}
   Engine engine;
+  Options options;
 };
 
 Layout::Layout(const Document& doc, text::Fonts& fonts, Options options, OpenTimings* timings)
@@ -89,15 +92,33 @@ static Rect OnPage(const LineBox& lb, const Rect& r) {
   return {std::min(a.x, b.x), std::min(a.y, b.y), std::max(a.x, b.x), std::max(a.y, b.y)};
 }
 
-std::optional<TextPos> Layout::HitTest(size_t page, float x, float y) const {
+std::optional<TextPos> Layout::HitTest(size_t page, float x, float y, HitStories which) const {
   Engine& e = impl_->engine;
   if (page >= e.ShownCount()) return std::nullopt;
   const Page& p = e.Shown(page);
+  const auto& doc = e.Doc();
+  // A point inside a text box (the topmost drawing there, not behind the text): its own lines.
+  uint32_t box = kNone;
+  for (auto it = p.drawings.rbegin(); it != p.drawings.rend(); ++it) {
+    const Rect& r = it->rect;
+    if (x < r.left || x >= r.right || y < r.top || y >= r.bottom) continue;
+    if (!it->behindText && it->drawing < doc.Drawings().size() && !doc.Drawings()[it->drawing].textBoxes.empty())
+      box = it->drawing;
+    break;
+  }
+  auto inBox = [&](const LineBox& lb) {
+    if (lb.story != LineStory::TextBox || lb.para >= doc.Paragraphs().size()) return false;
+    return doc.Stories()[doc.Para(lb.para).story].drawing == box;
+  };
+  if (box != kNone && std::none_of(p.lines.begin(), p.lines.end(), inBox)) box = kNone;
   const LineBox* best = nullptr;
   float bestDistance = 1e30f;
   float bestX = x;
   for (const LineBox& lb : p.lines) {
     if (lb.para == kNone) continue;
+    if (box != kNone && !inBox(lb)) continue;
+    const bool hf = lb.story == LineStory::Header || lb.story == LineStory::Footer;
+    if ((which == HitStories::Body && hf) || (which == HitStories::HeaderFooter && !hf)) continue;
     const draw::Point at = InFrame(lb, x, y);
     float dy = at.y < lb.top ? lb.top - at.y : at.y >= lb.top + lb.height ? at.y - (lb.top + lb.height) : 0;
     float left = lb.x + lb.line.left, right = lb.x + lb.line.right;
@@ -116,9 +137,9 @@ std::optional<TextPos> Layout::HitTest(size_t page, float x, float y) const {
   return TextPos{best->para, std::min(ToModel(e, *best, offset), size)};
 }
 
-std::optional<Layout::Caret> Layout::CaretAt(TextPos pos) {
-  Engine& e = impl_->engine;
-  for (size_t i = 0;; ++i) {
+// The caret before `pos`, on the first page from `from` that shows it.
+static std::optional<Layout::Caret> CaretFrom(Engine& e, TextPos pos, size_t from) {
+  for (size_t i = from;; ++i) {
     while (i >= e.Pages().size() && !e.Done()) e.NextPage();
     if (i >= e.Pages().size()) return std::nullopt;
     const Page& p = e.Pages()[i];
@@ -131,20 +152,46 @@ std::optional<Layout::Caret> Layout::CaretAt(TextPos pos) {
       bool lastOfPara = lb.line.ending == text::LineEnd::ParagraphEnd;
       if (at >= lb.line.start && (at < lb.line.end || (at == lb.line.end && lastOfPara))) {
         const float cx = lb.x + lb.line.CaretX(at);
-        if (!lb.turn) return Caret{i, cx, lb.top, lb.top + lb.height};
+        if (!lb.turn) return Layout::Caret{i, cx, lb.top, lb.top + lb.height};
         const Rect r = OnPage(lb, {cx, lb.top, cx, lb.top + lb.height});
-        return Caret{i, r.left, r.top, r.top};
+        return Layout::Caret{i, r.left, r.top, r.top};
       }
     }
   }
 }
 
-std::vector<std::pair<size_t, Rect>> Layout::Ranges(TextPos from, TextPos to) {
+std::optional<Layout::Caret> Layout::CaretAt(TextPos pos, size_t page) {
+  Engine& e = impl_->engine;
+  if (page != SIZE_MAX) {
+    while (page >= e.Pages().size() && !e.Done()) e.NextPage();
+    if (page < e.Pages().size())
+      for (const LineBox& lb : e.Pages()[page].lines)
+        if (lb.para == pos.para) {
+          if (auto c = CaretFrom(e, pos, page); c && c->page == page) return c;
+          break;
+        }
+  }
+  return CaretFrom(e, pos, 0);
+}
+
+std::vector<std::pair<size_t, Rect>> Layout::Ranges(TextPos from, TextPos to, size_t page) {
   std::vector<std::pair<size_t, Rect>> out;
   if (to < from) std::swap(from, to);
   Engine& e = impl_->engine;
+  // A header or footer: on the page asked for, when it's there.
+  size_t first = 0;
+  if (page != SIZE_MAX && from.para < e.Doc().Paragraphs().size() &&
+      e.Doc().Para(from.para).story != e.Doc().MainStory()) {
+    while (page >= e.Pages().size() && !e.Done()) e.NextPage();
+    if (page < e.Pages().size())
+      for (const LineBox& lb : e.Pages()[page].lines)
+        if (lb.para == from.para) {
+          first = page;
+          break;
+        }
+  }
   bool started = false, finished = false;
-  for (size_t i = 0; !finished; ++i) {
+  for (size_t i = first; !finished; ++i) {
     while (i >= e.Pages().size() && !e.Done()) e.NextPage();
     if (i >= e.Pages().size()) break;
     const Page& p = e.Pages()[i];
@@ -171,6 +218,25 @@ std::vector<std::pair<size_t, Rect>> Layout::Ranges(TextPos from, TextPos to) {
 std::optional<size_t> Layout::PageOf(TextPos pos) {
   if (auto c = CaretAt(pos)) return c->page;
   return std::nullopt;
+}
+
+std::vector<CellRect> Layout::Cells(size_t page) {
+  Engine& e = impl_->engine;
+  while (page >= e.Pages().size() && !e.Done()) e.NextPage();
+  if (page >= PageCount()) return {};
+  return GetPage(page).cells;
+}
+
+bool Layout::LaidOut(TextPos pos) const {
+  const Engine& e = impl_->engine;
+  const Document& d = e.Doc();
+  if (e.Done() || pos.para >= d.Paragraphs().size() || d.Para(pos.para).story != d.MainStory()) return true;
+  // The main text's paragraphs are in reading order: the last one laid out so far says.
+  const std::vector<Page>& pages = e.Pages();
+  for (size_t i = pages.size(); i-- > 0;)
+    for (auto it = pages[i].lines.rbegin(); it != pages[i].lines.rend(); ++it)
+      if (it->para < d.Paragraphs().size() && d.Para(it->para).story == d.MainStory()) return it->para >= pos.para;
+  return false;
 }
 
 namespace {
@@ -216,7 +282,7 @@ std::optional<TextPos> Layout::LineStep(TextPos pos, int step, float x) {
   Engine& e = impl_->engine;
   const auto at = FindLine(e, pos);
   if (!at || step == 0) return std::nullopt;
-  const Document& doc = e.Doc();
+  const auto& doc = e.Doc();
   const uint32_t story = doc.Para(pos.para).story;
   const bool main = story == doc.MainStory();
   size_t page = at->first;
@@ -296,12 +362,99 @@ void Placeholder(draw::Painter& painter, const Rect& r) {
   painter.StrokePath(draw::Path::FromRect({r.left, r.top, r.right, r.bottom}), pen);
 }
 
+// Formatting marks over a line (Ctrl+Shift+8), drawn as Word draws them but as shapes, in the
+// line's own frame: a dot for a space, an arrow for a tab, a bent arrow for a line break, a dotted
+// line for a page or column break, and a pilcrow after a paragraph.
+void DrawMarks(draw::Painter& painter, const LineBox& lb, const ParaText& pt) {
+  const draw::Brush ink = draw::Brush::Solid(ColorOf(0x4F6D9A));
+  draw::Pen pen;
+  pen.brush = ink;
+  const float em = std::clamp(lb.baseline - lb.top, 4.0f, 16.0f);
+  const float b = lb.baseline, mid = b - em * 0.32f;
+  pen.width = std::max(0.5f, em * 0.07f);
+  auto x = [&](uint32_t i) { return lb.x + lb.line.CaretX(i); };
+  for (uint32_t i = lb.line.start; i < lb.line.end && i < pt.text.size(); ++i) {
+    const wchar_t c = pt.text[i];
+    const float x1 = std::min(x(i), x(i + 1)), x2 = std::max(x(i), x(i + 1));
+    if (c == L' ' || c == 0x00A0 || c == 0x3000) {
+      const float d = std::max(0.9f, em * 0.13f), cx = (x1 + x2) / 2;
+      painter.FillPath(draw::Path::Ellipse({cx - d / 2, mid - d / 2, cx + d / 2, mid + d / 2}), ink);
+    } else if (c == L'\t' && x2 - x1 > 2) {
+      const float a = std::min(3.0f, em * 0.25f), l = x1 + 1, r = x2 - 1;
+      draw::Path path;
+      path.MoveTo({l, mid});
+      path.LineTo({r, mid});
+      path.MoveTo({r - a, mid - a * 0.7f});
+      path.LineTo({r, mid});
+      path.LineTo({r - a, mid + a * 0.7f});
+      painter.StrokePath(path, pen);
+    } else if (c == 0x0B || c == L'\n') {
+      const float w = em * 0.5f, l = x1 + 1;
+      draw::Path path;
+      path.MoveTo({l + w, b - em * 0.7f});
+      path.LineTo({l + w, b - em * 0.25f});
+      path.LineTo({l, b - em * 0.25f});
+      path.MoveTo({l + w * 0.4f, b - em * 0.45f});
+      path.LineTo({l, b - em * 0.25f});
+      path.LineTo({l + w * 0.4f, b - em * 0.05f});
+      painter.StrokePath(path, pen);
+    } else if (c == 0x00AD) {
+      // An optional hyphen, which takes no room: Word's ¬, small, above the letters it's between.
+      const float w = em * 0.36f, l = x1 - w / 2, y = b - em * 0.86f;
+      draw::Path path;
+      path.MoveTo({l, y});
+      path.LineTo({l + w, y});
+      path.LineTo({l + w, y + em * 0.22f});
+      painter.StrokePath(path, pen);
+    } else if (c == 0x2011 && x2 - x1 > 1) {
+      // A non-breaking hyphen: a dash as wide as the character, over the hyphen drawn.
+      const float h = std::max(0.6f, em * 0.08f);
+      painter.FillRect({x1, mid - h / 2, x2, mid + h / 2}, ink);
+    } else if (c == 0x0C || c == 0x0E) {
+      draw::Pen dots = pen;
+      dots.dashes = {1, 2};
+      draw::Path path;
+      path.MoveTo({x1, mid});
+      path.LineTo({std::max(x1 + em, lb.x + lb.line.right), mid});
+      painter.StrokePath(path, dots);
+    }
+  }
+  if (lb.line.ending == text::LineEnd::ParagraphEnd) {
+    // The pilcrow: a bowl and two stems.
+    const float h = em * 0.72f, w = h * 0.6f, l = x(lb.line.end) + std::max(1.0f, em * 0.08f), top = b - h;
+    painter.FillPath(draw::Path::Ellipse({l, top, l + w * 0.75f, top + h * 0.55f}), ink);
+    draw::Path path;
+    path.MoveTo({l + w * 0.4f, top});
+    path.LineTo({l + w, top});
+    path.MoveTo({l + w * 0.6f, top});
+    path.LineTo({l + w * 0.6f, b});
+    path.MoveTo({l + w * 0.92f, top});
+    path.LineTo({l + w * 0.92f, b});
+    painter.StrokePath(path, pen);
+  }
+}
+
 }  // namespace
 
 void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& drawing) const {
   const Engine& e = impl_->engine;
   if (page >= e.ShownCount()) return;
   const Page& p = e.Shown(page);
+  // PDF export keeps the text behind the glyphs, so it can be copied and searched.
+  const bool withText = painter.WantsText();
+  // Formatting marks and PDF text: each paragraph's layout text, built once for the page (for the
+  // text, with the page's PAGE and NUMPAGES as it was laid out with them).
+  const PageFields fields = withText ? e.ShownFields(page) : PageFields();
+  std::unordered_map<uint32_t, std::unique_ptr<ParaText>> texts;
+  auto textOf = [&](uint32_t para) -> const ParaText& {
+    std::unique_ptr<ParaText>& t = texts[para];
+    if (!t) {
+      t = std::make_unique<ParaText>();
+      impl_->engine.BuildText(para, fields, *t, false, false);
+    }
+    return *t;
+  };
+  const bool marks = impl_->options.formattingMarks;
   auto paintLine = [&](const LineBox& lb) {
     const bool clip = lb.clip.Width() > 0;
     if (clip || lb.turn) painter.Save();
@@ -321,18 +474,34 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
       uint32_t color = rp ? rp->color : 0;
       if (!g.glyphs.empty()) {
         const draw::Point origin{lb.x + g.OriginX(), lb.baseline - g.rise};
+        draw::GlyphRun run = g.Run();
+        // The text a reader finds behind the glyphs: a hyphen at the break, a tab for a leader,
+        // and a non-breaking hyphen as the hyphen it looks like (as Word exports them).
+        std::u16string shown;
+        if (withText && g.hyphen) {
+          shown = u"-";
+        } else if (withText && g.leader) {
+          shown = u"\t";
+        } else if (withText && lb.para != kNone && g.textEnd > g.textStart) {
+          const ParaText& t = textOf(lb.para);
+          if (g.textEnd <= t.text.size())
+            for (uint32_t i = g.textStart; i < g.textEnd; ++i) shown += t.text[i] == 0x2011 ? u'-' : static_cast<char16_t>(t.text[i]);
+        }
+        if (!shown.empty()) {
+          run.text = shown.data();
+          run.textLength = static_cast<uint32_t>(shown.size());
+        }
         if (g.scale != 1 && g.scale > 0) {
           // Scaled characters (w:w): the glyphs drawn through a horizontal scale about the origin.
           std::vector<float> advances(g.advances);
           for (float& a : advances) a /= g.scale;
-          draw::GlyphRun run = g.Run();
           run.advances = advances.data();
           painter.Save();
           painter.Transform({g.scale, 0, 0, 1, origin.x * (1 - g.scale), 0});
           painter.DrawGlyphs(origin, run, draw::Brush::Solid(ColorOf(color)));
           painter.Restore();
         } else {
-          painter.DrawGlyphs(origin, g.Run(), draw::Brush::Solid(ColorOf(color)));
+          painter.DrawGlyphs(origin, run, draw::Brush::Solid(ColorOf(color)));
         }
       }
       if (!rp || g.hyphen || g.leader) continue;
@@ -353,6 +522,7 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
         if (rp->doubleStrike) Line(painter, x1, y - t * 2, x2, y - t * 2, t, color);
       }
     }
+    if (marks && lb.para != kNone && lb.para < e.Doc().Paragraphs().size()) DrawMarks(painter, lb, textOf(lb.para));
     if (clip || lb.turn) painter.Restore();
   };
   // A text box's lines go on top of its own shape, which is filled.

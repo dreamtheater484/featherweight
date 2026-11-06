@@ -55,7 +55,7 @@ class WidgetGallery : public TabContent {
   bool HasStatusBar() const override { return true; }
   void BuildStatusBar(StatusBarModel& m) override;
 
-  void StartSearch(const std::wstring&, bool) override {}
+  void StartSearch(const std::wstring&, bool, bool) override {}
   void ClearSearch() override {}
   void SearchStep(bool) override {}
   int SearchCount() const override { return 0; }

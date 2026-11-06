@@ -21,6 +21,9 @@ struct Document::Caches {
   std::vector<uint32_t> mark;            // by paragraph
   std::unordered_map<ElemId, uint32_t> run;  // by w:r
   std::deque<RunProps> runPool;
+  // The same before tracked formatting changes (Document::OriginalPara...), for the ones with any.
+  std::vector<uint32_t> originalPara, originalMark;  // by paragraph
+  std::unordered_map<ElemId, uint32_t> originalRun;  // by w:r
   // Field state and list labels come from passes over a story in document order. Each pass goes
   // only as far as the paragraph asked for, so the first page costs the same in a long document.
   // A story's paragraphs are numbered consecutively, in order (the reader numbers them as it goes).

@@ -7,6 +7,9 @@
   seeds/drawing/  drawings cut from the corpus, in the format fuzz_drawing reads (the element with
                   its namespaces, then "@<relationship id>" sections with the pictures it uses),
                   and tiny pictures in each format fwdraw decodes
+  seeds/picture/  a tiny picture in each format a picture can be inserted from (fuzz_picture),
+                  and one it refuses
+  seeds/font/     tiny TrueType, collection and CFF fonts for the PDF font subsetter (fuzz_sfnt)
 
 Uses only the standard library. From the repository root:
   python tests/fuzz/make_seeds.py
@@ -195,6 +198,94 @@ def tiny_pictures():
             "rect.emf": emf, "rect.wmf": wmf, "bom.svg": b"\xef\xbb\xbf" + svg}
 
 
+def tiny_jpeg():
+    """A baseline JPEG of one gray pixel: one component, a DC-only scan, one-symbol tables."""
+    def segment(marker, body):
+        return bytes([0xFF, marker]) + struct.pack(">H", len(body) + 2) + body
+    quant = segment(0xDB, bytes([0] + [1] * 64))
+    frame = segment(0xC0, struct.pack(">BHHB", 8, 1, 1, 1) + bytes([1, 0x11, 0]))
+    table = bytes([1] + [0] * 15 + [0])  # one code of one bit, for symbol 0
+    huffman = segment(0xC4, bytes([0x00]) + table) + segment(0xC4, bytes([0x10]) + table)
+    scan = segment(0xDA, bytes([1, 1, 0x00, 0, 63, 0])) + bytes([0x3F])  # DC 0, then end of block
+    return bytes([0xFF, 0xD8]) + quant + frame + huffman + scan + bytes([0xFF, 0xD9])
+
+
+def sfnt(version, tables):
+    """An sfnt file of these tables, as fonts have them: sorted, aligned, with checksums."""
+    def checksum(data):
+        data = data + b"\0" * (-len(data) % 4)
+        return sum(struct.unpack(f">{len(data) // 4}I", data)) & 0xFFFFFFFF
+    tags = sorted(tables)
+    power = 1 << (len(tags).bit_length() - 1)
+    out = struct.pack(">IHHHH", version, len(tags), power * 16, power.bit_length() - 1, len(tags) * 16 - power * 16)
+    offset, body = 12 + 16 * len(tags), b""
+    for tag in tags:
+        data = tables[tag]
+        out += tag.encode("latin-1") + struct.pack(">III", checksum(data), offset + len(body), len(data))
+        body += data + b"\0" * (-len(data) % 4)
+    font = bytearray(out + body)
+    if "head" in tables:
+        at = offset + sum(len(tables[t]) + (-len(tables[t]) % 4) for t in tags[:tags.index("head")]) + 8
+        font[at:at + 4] = struct.pack(">I", (0xB1B0AFBA - checksum(bytes(font))) & 0xFFFFFFFF)
+    return bytes(font)
+
+
+def tiny_fonts():
+    """Tiny fonts for fuzz_sfnt (Export PDF's font subsetter): TrueType with a simple and a
+    composite glyph, the same in a collection, one that forbids embedding, and CFF fonts with a
+    plain and a CID-keyed Top DICT. System fonts make better seeds but can't be committed;
+    run-fuzzers.ps1 adds some from C:\\Windows\\Fonts locally."""
+    head = struct.pack(">IIIIHHqqhhhhHHhhh", 0x00010000, 0x00010000, 0, 0x5F0F3CF5, 0x000B, 1000, 0, 0,
+                       0, -200, 600, 800, 0, 8, 2, 0, 0)
+    hhea = struct.pack(">IhhhHhhhhhhhhhhhH", 0x00010000, 800, -200, 0, 600, 0, 0, 600, 1, 0, 0, 0, 0, 0, 0, 0, 3)
+    maxp = struct.pack(">IH", 0x00005000, 3)
+    hmtx = struct.pack(">HhHhHh", 500, 0, 600, 0, 600, 0)
+    triangle = struct.pack(">hhhhhH H BBB hhh hhh", 1, 0, 0, 600, 800, 2, 0, 1, 1, 1, 0, 300, 300, 0, 800, -800)
+    composite = struct.pack(">hhhhh HHhh HHhhh", -1, 0, 0, 900, 800, 0x0023, 1, 0, 0, 0x000B, 1, 300, 0, 0x2000)
+    glyf = triangle + b"\0" * (-len(triangle) % 4) + composite
+    loca = struct.pack(">HHHH", 0, 0, (len(triangle) + 3) // 4 * 2, len(glyf) // 2)
+    cmap = struct.pack(">HHHHI", 0, 1, 3, 1, 12) + struct.pack(">HHHHHHHHHhHH", 4, 32, 0, 4, 4, 1, 0, 0x41, 0xFFFF, 0,
+                                                                 0x41, 0xFFFF) + struct.pack(">hhHH", -0x40, 1, 0, 0)
+    post = struct.pack(">IiHhII", 0x00030000, 0, 0xFF9C, 50, 0, 0) + b"\0" * 16
+    ps = "TinyTest-Regular".encode("utf-16-be")
+    name = struct.pack(">HHH", 0, 1, 18) + struct.pack(">HHHHHH", 3, 1, 0x409, 6, len(ps), 0) + ps
+    os2 = struct.pack(">HhHHH", 0, 500, 400, 5, 0) + b"\0" * 68
+    tables = {"head": head, "hhea": hhea, "maxp": maxp, "hmtx": hmtx, "loca": loca, "glyf": glyf, "cmap": cmap,
+              "post": post, "name": name, "OS/2": os2, "cvt ": struct.pack(">hh", 0, 100), "fpgm": b"\xb0\x00",
+              "prep": b"\xb0\x01"}
+    ttf = sfnt(0x00010000, tables)
+    ttc = struct.pack(">IIII", 0x74746366, 0x00010000, 1, 16) + sfnt_at(16, tables)
+    restricted = sfnt(0x00010000, {**tables, "OS/2": struct.pack(">HhHHH", 0, 500, 400, 5, 0x0002) + b"\0" * 68})
+
+    def index(items):
+        offsets, data = [1], b""
+        for item in items:
+            data += item
+            offsets.append(len(data) + 1)
+        return struct.pack(">HB", len(items), 1) + bytes(offsets) + data if items else b"\0\0"
+    # Top DICT: CharStrings at a fixed offset (17), and for the CID-keyed font ROS first (12 30).
+    plain_top = bytes([28, 0, 40, 17])
+    cid_top = bytes([28, 1, 135, 28, 1, 136, 139, 12, 30]) + plain_top
+    def cff(top):
+        return b"\x01\x00\x04\x01" + index([b"Tiny"]) + index([top]) + index([]) + index([]) + index([b"\x0e"])
+    rest = {k: v for k, v in tables.items() if k not in ("glyf", "loca", "cvt ", "fpgm", "prep")}
+    otf = sfnt(0x4F54544F, {**rest, "CFF ": cff(plain_top)})
+    cid = sfnt(0x4F54544F, {**rest, "CFF ": cff(cid_top)})
+    return {"tiny.ttf": ttf, "tiny.ttc": ttc, "restricted.ttf": restricted, "tiny.otf": otf, "tiny-cid.otf": cid}
+
+
+def sfnt_at(start, tables):
+    """sfnt() for a font that starts `start` bytes into its file (in a collection): table offsets
+    count from the start of the file."""
+    font = sfnt(0x00010000, tables)
+    count = struct.unpack(">H", font[4:6])[0]
+    out = bytearray(font)
+    for i in range(count):
+        at = 12 + 16 * i + 8
+        out[at:at + 4] = struct.pack(">I", struct.unpack(">I", font[at:at + 4])[0] + start)
+    return bytes(out)
+
+
 def write(folder, name, data):
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, name), "wb") as f:
@@ -215,8 +306,14 @@ def main():
         stem = source.split("/")[-1].replace(".", "-")
         for i, seed in enumerate(drawing_seeds(os.path.join(OFFICE, source)), start=1):
             write(os.path.join(SEEDS, "drawing"), f"{stem}-{i:03}.xml", seed)
-    for name, data in tiny_pictures().items():
+    pictures = tiny_pictures()
+    for name, data in pictures.items():
         write(os.path.join(SEEDS, "drawing"), name, data)
+    pictures["gray.jpg"] = tiny_jpeg()
+    for name in ("tile.png", "gray.jpg", "one.gif", "two.bmp", "two.tif", "bom.svg", "tile.ico"):
+        write(os.path.join(SEEDS, "picture"), name, pictures[name])
+    for name, data in tiny_fonts().items():
+        write(os.path.join(SEEDS, "font"), name, data)
 
 
 if __name__ == "__main__":

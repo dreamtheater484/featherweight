@@ -9,6 +9,7 @@
 
 #include "Commands.h"
 #include "core/Strings.h"
+#include "doc/edit/Case.h"
 #include "doc/edit/Lists.h"
 #include "doc/edit/TreeEdit.h"
 #include "ui/Gfx.h"
@@ -76,6 +77,12 @@ constexpr Named kNames[] = {
     {CmdBorderNone, L"No border", L""},
     {CmdShading, L"Gray shading", L""},
     {CmdShadingNone, L"No shading", L""},
+    {CmdChangeCase, L"Change case", L"Shift+F3"},
+    {CmdCaseSentence, L"Sentence case.", L""},
+    {CmdCaseLower, L"lowercase", L""},
+    {CmdCaseUpper, L"UPPERCASE", L""},
+    {CmdCaseCapitalize, L"Capitalize Each Word", L""},
+    {CmdCaseToggle, L"tOGGLE cASE", L""},
 };
 
 const Named* NameOf(int cmd) {
@@ -109,6 +116,48 @@ bool g_familiesRead = false;
 }  // namespace
 
 bool DocFormat::FontsPending() { return !g_familiesRead; }
+
+const std::vector<std::wstring>& DocFormat::FontNames() { return Families(); }
+
+namespace {
+// The theme colors in the order Office's palette shows them, as w:themeColor names them.
+constexpr const char* kThemeColorNames[] = {"background1", "text1",   "background2", "text2",   "accent1",
+                                            "accent2",     "accent3", "accent4",     "accent5", "accent6"};
+constexpr const wchar_t* kThemeColorLabels[] = {L"Background 1", L"Text 1",   L"Background 2", L"Text 2",   L"Accent 1",
+                                                L"Accent 2",     L"Accent 3", L"Accent 4",     L"Accent 5", L"Accent 6"};
+}  // namespace
+
+std::vector<std::wstring> DocFormat::ThemeFontChoices(const fw::doc::Document& doc) {
+  std::vector<std::wstring> out;
+  if (!doc.GetTheme().present) return out;
+  if (const std::string_view major = doc.ThemeFont("majorHAnsi"); !major.empty()) out.push_back(W(major) + L" (Headings)");
+  if (const std::string_view minor = doc.ThemeFont("minorHAnsi"); !minor.empty()) out.push_back(W(minor) + L" (Body)");
+  return out;
+}
+
+std::optional<edit::ThemeFontSlot> DocFormat::ThemeFontOf(const fw::doc::Document& doc, const std::wstring& text) {
+  if (!doc.GetTheme().present || !text.ends_with(L")")) return std::nullopt;
+  if (text == W(doc.ThemeFont("majorHAnsi")) + L" (Headings)") return edit::ThemeFontSlot::Headings;
+  if (text == W(doc.ThemeFont("minorHAnsi")) + L" (Body)") return edit::ThemeFontSlot::Body;
+  return std::nullopt;
+}
+
+std::vector<NamedColor> DocFormat::ThemeColors(const fw::doc::Document& doc) {
+  std::vector<NamedColor> out;
+  for (size_t i = 0; i < std::size(kThemeColorNames); ++i) {
+    const std::optional<uint32_t> rgb = doc.ThemeColor(kThemeColorNames[i]);
+    if (!rgb) return {};
+    out.push_back({D2D1::ColorF(*rgb), kThemeColorLabels[i]});
+  }
+  return out;
+}
+
+std::optional<edit::ThemeColorRef> DocFormat::ThemeColorOf(const fw::doc::Document& doc, D2D1_COLOR_F color) {
+  const std::vector<NamedColor> theme = ThemeColors(doc);
+  int index = 0, tint = -1, shade = -1;
+  if (theme.empty() || !ColorPalette::ThemeCell(theme, color, index, tint, shade)) return std::nullopt;
+  return edit::ThemeColorRef{kThemeColorNames[index], tint, shade};
+}
 
 void DocFormat::ReadFonts() {
   if (g_familiesRead) return;
@@ -190,6 +239,7 @@ DocFormat::DocFormat(edit::Editor& editor, std::function<Target()> target, std::
 
 int DocFormat::Shortcut(UINT vk, UINT mods) {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
+  if (vk == VK_F3 && shift && !ctrl && !alt) return CmdChangeCase;
   if (!ctrl) return 0;
   if (alt) {
     if (shift) return 0;
@@ -237,7 +287,9 @@ int DocFormat::Shortcut(UINT vk, UINT mods) {
   return 0;
 }
 
-bool DocFormat::Owns(int cmd) { return cmd >= CmdBold && cmd <= CmdShadingNone; }
+bool DocFormat::Owns(int cmd) {
+  return (cmd >= CmdBold && cmd <= CmdShadingNone) || (cmd >= CmdChangeCase && cmd <= CmdCaseBox);
+}
 
 std::vector<int> DocFormat::CommandIds() {
   std::vector<int> ids;
@@ -298,6 +350,24 @@ CommandState DocFormat::Query(int cmd) {
   return s;
 }
 
+void DocFormat::ChangeCase(int cmd) {
+  Target t = target_();
+  if (!t.any || t.chars.Empty()) return;
+  edit::TextCase c = static_cast<edit::TextCase>(cmd - CmdCaseSentence);
+  if (cmd == CmdChangeCase) {  // Shift+F3: what comes after the text's own case
+    std::u16string text;
+    for (uint32_t p : edit::ParagraphsOf(Doc(), t.chars)) {
+      const std::u16string& s = Doc().Para(p).text;
+      const size_t a = p == t.chars.from.para ? std::min<size_t>(t.chars.from.offset, s.size()) : 0;
+      const size_t b = p == t.chars.to.para ? std::min<size_t>(t.chars.to.offset, s.size()) : s.size();
+      if (a < b) text.append(s, a, b - a).push_back(u' ');
+    }
+    c = edit::NextCase(text);
+  }
+  const edit::Result r = edit::ChangeCase(editor_, t.chars.from, t.chars.to, c);
+  done_({std::nullopt, r ? std::wstring() : W(r.message)});
+}
+
 void DocFormat::Run(const std::function<void(edit::TreeEdit&, const Target&)>& change) {
   Target t = target_();
   if (!t.any) return;
@@ -328,6 +398,10 @@ void DocFormat::Execute(int cmd) {
     para(f);
   };
   auto list = [&](edit::ListKind kind) { Run([kind](edit::TreeEdit& te, const Target& t) { edit::ToggleList(te, t.sel, kind); }); };
+  if (cmd >= CmdChangeCase && cmd <= CmdCaseToggle) {
+    ChangeCase(cmd);
+    return;
+  }
   switch (cmd) {
     case CmdBold: toggle(Toggle::Bold); return;
     case CmdItalic: toggle(Toggle::Italic); return;
@@ -458,6 +532,11 @@ void DocFormat::ApplyStyle(const std::wstring& nameOrId) {
 void DocFormat::ApplyFont(const std::wstring& font) {
   if (font.empty()) return;
   edit::RunFormat f;
+  if (const auto slot = ThemeFontOf(Doc(), font)) {  // "+Headings" or "+Body": the run follows the theme
+    f.themeFont = *slot;
+    Run([&f](edit::TreeEdit& te, const Target& t) { edit::FormatRuns(te, t.chars, f); });
+    return;
+  }
   f.font = fw::WideToUtf8(font);
   if (!edit::XmlSafe(*f.font)) {  // typed or pasted into the font box
     done_({std::nullopt, L"A font's name can't hold control characters."});
@@ -476,7 +555,9 @@ void DocFormat::ApplySize(double points) {
 void DocFormat::ApplyColor(D2D1_COLOR_F color, bool automatic, bool highlight) {
   edit::RunFormat f;
   if (highlight) f.highlight = automatic ? std::string("none") : NearestHighlight(RgbOf(color));
-  else f.color = automatic ? fw::doc::Color{} : fw::doc::Color::Rgb(RgbOf(color));
+  else if (automatic) f.color = fw::doc::Color{};
+  else if (auto theme = ThemeColorOf(Doc(), color)) f.themeColor = std::move(*theme);  // follows the theme
+  else f.color = fw::doc::Color::Rgb(RgbOf(color));
   Run([&f](edit::TreeEdit& te, const Target& t) { edit::FormatRuns(te, t.chars, f); });
 }
 
@@ -663,10 +744,14 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
   }
   if (style.choice < 0 && st.paraStyle)
     if (const fw::doc::Style* s = Doc().FindStyle(*st.paraStyle)) style.text = W(std::string_view(edit::DisplayName(s->name)));
+  for (const auto& [label, run] : styleMore) style.choices.push_back(label);
   style.onChange = [this](const ToolValue& v) {
     const auto& g = Gallery();
-    if (v.index >= 0 && v.index < static_cast<int>(g.size()))
+    const int n = static_cast<int>(g.size());
+    if (v.index >= 0 && v.index < n)
       ApplyStyle(W(std::string_view(g[v.index].id.empty() ? g[v.index].name : g[v.index].id)));
+    else if (v.index >= n && v.index < n + static_cast<int>(styleMore.size()))
+      styleMore[static_cast<size_t>(v.index - n)].second();
   };
   m.left.push_back(style);
 
@@ -677,7 +762,8 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
   font.priority = 6;
   font.tooltip = L"Font";
   font.enabled = on;
-  font.choices = Families();
+  font.choices = ThemeFontChoices(Doc());
+  font.choices.insert(font.choices.end(), Families().begin(), Families().end());
   font.text = st.font ? W(std::string_view(*st.font)) : std::wstring();
   font.onChange = [this](const ToolValue& v) { ApplyFont(v.text); };
   m.left.push_back(font);
@@ -718,11 +804,30 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
     };
     return t;
   };
-  m.left.push_back(with(colorButton(CmdFontColor, icon::FontColor, fontColor_, L"Automatic", false), 5));
+  if (!themeRead_) {
+    themeColors_ = ThemeColors(Doc());
+    themeRead_ = true;
+  }
+  ToolItem fontColor = with(colorButton(CmdFontColor, icon::FontColor, fontColor_, L"Automatic", false), 5);
+  fontColor.theme = themeColors_;
+  m.left.push_back(fontColor);
   m.left.push_back(with(colorButton(CmdHighlightColor, icon::Highlight, highlight_, L"No color", true), 4));
   ToolItem painter = with(toggleButton(CmdFormatPainter, icon::Brush), 3);
   painter.enabled = on;
   m.left.push_back(painter);
+  ToolItem caseBox;
+  caseBox.kind = ToolKind::Dropdown;
+  caseBox.cmd = CmdCaseBox;
+  caseBox.width = 44;
+  caseBox.priority = 2;
+  caseBox.text = L"Aa";
+  caseBox.tooltip = L"Change case (Shift+F3)";
+  caseBox.enabled = on;
+  for (int c = CmdCaseSentence; c <= CmdCaseToggle; ++c) caseBox.choices.push_back(NameOf(c)->label);
+  caseBox.onChange = [this](const ToolValue& v) {
+    if (v.index >= 0 && v.index <= CmdCaseToggle - CmdCaseSentence) Execute(CmdCaseSentence + v.index);
+  };
+  m.left.push_back(caseBox);
 
   // Paragraphs and lists.
   ToolItem alignBox;
@@ -766,13 +871,20 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
   insert.priority = 1;
   insert.glyph = icon::Add;
   insert.text = L"Insert";
-  insert.tooltip = L"Insert the date or time";
+  insert.tooltip = L"Insert a picture, a break, the date or the time";
   insert.enabled = on;
   insert.sepBefore = true;
   std::vector<std::wstring> pictures;
-  DateFormats(pictures, insert.choices);
+  insert.choices = {L"Picture…"};
+  for (const auto& [label, run] : insertMore) insert.choices.push_back(label);
+  std::vector<std::wstring> dates;
+  DateFormats(pictures, dates);
+  insert.choices.insert(insert.choices.end(), dates.begin(), dates.end());
   insert.onChange = [this](const ToolValue& v) {
-    if (v.index >= 0) InsertDateTime(static_cast<size_t>(v.index));
+    const int more = static_cast<int>(insertMore.size());
+    if (v.index == 0 && insertPicture) insertPicture();
+    else if (v.index > 0 && v.index <= more) insertMore[static_cast<size_t>(v.index - 1)].second();
+    else if (v.index > more) InsertDateTime(static_cast<size_t>(v.index - 1 - more));
   };
   m.left.push_back(insert);
 }

@@ -87,9 +87,16 @@ class Package {
   // within the limits. Opening only reads what it needs; this reads everything.
   Status Verify() const;
 
+  // What one save writes differently, leaving the package as it is: parts left out, and parts
+  // written with other bytes (docx::Serialize leaves out pictures nothing uses any more, which
+  // undo may still bring back).
+  struct SaveChanges {
+    std::vector<std::string> leaveOut;                                  // part names
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> replace;  // part name, its bytes
+  };
   // Writes the package: parts in their original order, unchanged ones copied raw, changed ones
   // deflated in their place, new ones at the end.
-  Status Save(ByteSink& sink) const;
+  Status Save(ByteSink& sink, const SaveChanges& changes = {}) const;
 
  private:
   Package() = default;

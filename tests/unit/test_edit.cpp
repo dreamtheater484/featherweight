@@ -266,11 +266,15 @@ TEST(Edit_SectionBreaksStayWithTheirMark) {
       "<w:p><w:r><w:t>C</w:t></w:r></w:p>"
       "<w:sectPr><w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/></w:sectPr>";
   CHECK(BodyIs(*doc, split));
-  // The section break itself can't be deleted yet.
+  // Deleting the section break itself (D3): its paragraphs join the next section, in one step.
   auto j = ed.JoinParagraphs(p + 1);
-  CHECK(!j && !j.message.empty());
-  CHECK(!ed.Delete(P(p + 1, 1), P(p + 2, 0)) && !ed.Delete(P(p, 0), P(p + 2, 1)));
-  CHECK(BodyIs(*doc, split) && ed.UndoName() == u"New paragraph");
+  CHECK(j && doc->Sections().size() == 1);
+  CHECK(BodyIs(*doc,
+               "<w:p><w:r><w:t>A</w:t></w:r></w:p><w:p><w:r><w:t>B</w:t></w:r><w:r><w:t>C</w:t></w:r></w:p>"
+               "<w:sectPr><w:pgSz w:w=\"15840\" w:h=\"12240\" w:orient=\"landscape\"/></w:sectPr>"));
+  CHECK(ed.Undo() && BodyIs(*doc, split) && doc->Sections().size() == 2);
+  CHECK(ed.Delete(P(p, 0), P(p + 2, 1)) && doc->Sections().size() == 1);
+  CHECK(ed.Undo() && BodyIs(*doc, split) && ed.UndoName() == u"New paragraph");
   // Joining the paragraph before it with it keeps the break, on the joined paragraph.
   CHECK(ed.Delete(P(p, 1), P(p + 1, 0)) && doc->Sections()[0].endPara == p);
   CHECK(BodyIs(*doc,
@@ -443,18 +447,21 @@ TEST(Edit_CommentsAndNotesKeepTheirMarks) {
                "<w:p><w:commentRangeStart w:id=\"0\"/><w:commentRangeEnd w:id=\"0\"/><w:r><w:commentReference w:id=\"0\"/>"
                "</w:r><w:r><w:t>de</w:t></w:r><w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p>"));
   CHECK(ed.Undo() && RoundTrips(*doc));
-  // The marks of comments and notes can't be deleted yet.
+  // The marks of comments can't be deleted yet.
   auto c = ed.Delete(P(p, 2), P(p, 5));
   CHECK(!c && c.message.find(u"comment") != std::u16string::npos);
-  auto n = ed.Delete(P(p, 5), P(p, 7));
-  CHECK(!n && n.message.find(u"footnote") != std::u16string::npos);
-  // Notes and comments are edited like the body; the note keeps its number.
+  // A note's reference takes its note along (D4), in one undo step.
+  CHECK(ed.Delete(P(p, 5), P(p, 7)) && doc->NoteStory(StoryKind::Footnote, "1") == kNone);
+  CHECK(ed.Undo() && RoundTrips(*doc));
+  // Notes and comments are edited like the body.
   uint32_t note = doc->StoryParagraphs(doc->NoteStory(StoryKind::Footnote, "1")).at(0);
-  CHECK(!ed.Delete(P(note, 0), P(note, 2)) && ed.InsertText(P(note, 5), u"s") && doc->Para(note).text == u"\x02Notes");
+  CHECK(ed.InsertText(P(note, 5), u"s") && doc->Para(note).text == u"\x02Notes");
   CHECK(!ed.Delete(P(p, 0), P(note, 1)));  // across stories
   auto dirty = ed.DirtyParts();
   CHECK(dirty.size() == 1 && doc->Parts()[dirty[0]].name == "/word/footnotes.xml");
-  CHECK(ed.Undo() && RoundTrips(*doc));
+  // A note's own number can go: the note stays, numbered at its reference, as in Word.
+  CHECK(ed.Delete(P(note, 0), P(note, 1)) && doc->Para(note).text == u"Notes");
+  CHECK(ed.Undo() && ed.Undo() && RoundTrips(*doc));
 }
 
 TEST(Edit_TrackedChanges) {
@@ -565,7 +572,10 @@ TEST(Edit_TablesAndStoriesBoundEdits) {
   Editor ed(*doc);
   auto ps = Main(*doc);
   CHECK(ps.size() == 3);
-  CHECK(!ed.Delete(P(ps[0], 3), P(ps[2], 2)) && !ed.JoinParagraphs(ps[0]) && !ed.JoinParagraphs(ps[1]));
+  // Across the whole table: it goes with the text (tables, D3), in one step; undone for what follows.
+  CHECK(ed.Delete(P(ps[0], 3), P(ps[2], 2)) && Main(*doc).size() == 1 && doc->Para(Main(*doc)[0]).text == u"befter");
+  CHECK(ed.Undo() && Main(*doc).size() == 3);
+  CHECK(!ed.JoinParagraphs(ps[0]) && !ed.JoinParagraphs(ps[1]));
   CHECK(!ed.Delete(P(ps[1], 4), P(ps[2], 0)));
   CHECK(RoundTrips(*doc));
   CHECK(ed.InsertText(P(ps[1], 4), u"s") && ed.SplitParagraph(P(ps[1], 2)));
@@ -1013,8 +1023,8 @@ TEST(Clip_ReadsWordsRtf) {
       "\\trowd\\cellx1000\\cellx2000\\pard\\intbl A\\cell B\\cell\\row\r\n"
       "\\pard\\plain end}";
   auto c = edit::FromRtf(rtf);
-  CHECK(c && c->paras.size() == 5);
-  if (!c || c->paras.size() != 5) return;
+  CHECK(c && c->paras.size() == 6);
+  if (!c || c->paras.size() != 6) return;
   const ClipPara& t = c->paras[0];
   CHECK(ClipText(t) == u"Title" && t.heading == 1 && t.align == ClipAlign::Center);
   CHECK(t.runs.size() == 1 && t.runs[0].bold && t.runs[0].halfPoints == 32 && t.runs[0].font == "Times New Roman");
@@ -1029,8 +1039,10 @@ TEST(Clip_ReadsWordsRtf) {
   }
   const ClipPara& item = c->paras[2];
   CHECK(item.label == u"•" && ClipText(item) == u"Item" && item.indent == 720 && item.firstLine == -360);
-  CHECK(ClipText(c->paras[3]) == u"A\tB");
-  CHECK(ClipText(c->paras[4]) == u"end");
+  // The table's cells (D3: tables are tables).
+  CHECK(ClipText(c->paras[3]) == u"A" && c->paras[3].table == 1 && c->paras[3].cell == 0);
+  CHECK(ClipText(c->paras[4]) == u"B" && c->paras[4].table == 1 && c->paras[4].cell == 1);
+  CHECK(ClipText(c->paras[5]) == u"end" && c->paras[5].table == 0);
 }
 
 TEST(Clip_ReadsBrowsersAndWordsHtml) {
@@ -1697,4 +1709,38 @@ TEST(Edit_OneParagraphControlsAreNotSplit) {
   CHECK(Consistent(*doc, f));
   while (ed.CanUndo()) ed.Undo();
   CHECK(MainXml(*doc) == before && RoundTrips(*doc));
+}
+
+TEST(Clip_PasteMergingFormattingTakesTheLookThere) {
+  // Word's "Merge formatting" (D3 audit): the text takes the look and paragraph properties of
+  // where it goes, and keeps its emphasis. Color, size and centering don't come along.
+  Fixture f;
+  f.styles = kClipStyles;
+  f.body =
+      "<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:rPr><w:color w:val=\"FF0000\"/><w:sz w:val=\"30\"/></w:rPr>"
+      "<w:t xml:space=\"preserve\">Red </w:t></w:r><w:r><w:rPr><w:b/><w:i/></w:rPr><w:t>loud</w:t></w:r></w:p>"
+      "<w:p><w:r><w:rPr><w:rFonts w:ascii=\"Arial\" w:hAnsi=\"Arial\"/><w:sz w:val=\"40\"/></w:rPr><w:t>Target here</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::string before = MainXml(*doc);
+  Editor ed(*doc);
+  auto ps = Main(*doc);
+  Clip c = edit::CopyClip(*doc, P(ps[0], 0), P(ps[0], 8));
+  auto r = edit::PasteClip(ed, P(ps[1], 7), P(ps[1], 7), c, 0, true);
+  CHECK(r && doc->Para(ps[1]).text == u"Target Red loudhere");
+  const RunProps& red = LookAt(*doc, ps[1], 8);
+  CHECK(red.color.automatic && red.size.Value() == 40 && red.fonts.ascii == "Arial" && !red.bold);
+  const RunProps& loud = LookAt(*doc, ps[1], 12);
+  CHECK(loud.bold && loud.italic && loud.size.Value() == 40 && loud.fonts.ascii == "Arial");
+  CHECK(Consistent(*doc, f));
+  CHECK(ed.UndoName() == u"Paste" && ed.Undo() && MainXml(*doc) == before);
+  // A whole paragraph keeps the alignment of where it went, not its centering.
+  Clip para = edit::CopyClip(*doc, P(ps[0], 0), P(ps[1], 0));
+  CHECK(para.paras.size() == 2);
+  CHECK(edit::PasteClip(ed, P(ps[1], 0), P(ps[1], 0), para, 0, true));
+  ps = Main(*doc);
+  CHECK(ps.size() == 3 && doc->Para(ps[1]).text == u"Red loud");
+  CHECK(ps.size() == 3 && doc->ResolvedPara(ps[1]).jc != fw::doc::Justification::Center);
+  CHECK(ed.Undo() && MainXml(*doc) == before);
 }

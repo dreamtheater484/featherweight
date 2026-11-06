@@ -56,7 +56,7 @@ EmptyState::EmptyState() {
     b.text[0] = static_cast<wchar_t>(towupper(b.text[0]));
     b.glyph = KindGlyph(k.kind);
     b.style = ButtonStyle::Standard;
-    b.tooltip = L"New " + std::wstring(k.noun);
+    b.tooltip = L"New " + std::wstring(k.noun) + (k.kind == fw::FileKind::Document ? L" (Ctrl+N)" : L"");
     b.visible = false;
     set_.Add(&b);
   }
