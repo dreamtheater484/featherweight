@@ -62,7 +62,7 @@ TEST(FileKinds_ThePdfReaderAndTheDocumentEditorHaveShipped) {
   CHECK(!EditorShipped(FileKind::Unknown));
   // What the viewers open: not the formats that come later.
   CHECK(Opens(L"C:\\Docs\\Lease.PDF"));
-  CHECK(Opens(L"Report.docx") && Opens(L"Template.DOTM"));
+  CHECK(Opens(L"Report.docx") && Opens(L"Template.DOTM") && Opens(L"Notes.odt") && Opens(L"Form.OTT"));
   CHECK(!Opens(L"notes.txt") && !Opens(L"letter.rtf") && !Opens(L"old.doc"));
   CHECK(!Opens(L"Budget.xlsx") && !Opens(L"photo.png"));
 }

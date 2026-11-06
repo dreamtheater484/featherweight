@@ -1286,6 +1286,10 @@ void App::Execute(int cmd) {
     if (cmd - CmdNewFile == static_cast<int>(fw::FileKind::Document)) NewDocument();
     return;
   }
+  if (cmd >= CmdNewTemplate && cmd < CmdNewTemplate + EmptyState::kTemplateCount) {
+    if (fw::EditorShipped(fw::FileKind::Document)) NewDocument(cmd - CmdNewTemplate + 1);
+    return;
+  }
   if (const int act = cmd - CmdBannerAction; act >= kActMakeDefault && act < kActMakeDefault + fw::kFileKindCount) {
     MakeDefaultApp(static_cast<fw::FileKind>(act - kActMakeDefault));
     InvalidateRect(hwnd_, nullptr, FALSE);
@@ -1459,6 +1463,14 @@ static std::wstring NewLabel(const fw::FileKindInfo& k) {
   return L"New " + std::wstring(k.noun) + (k.kind == fw::FileKind::Document ? L"\tCtrl+N" : L"");
 }
 
+// "New from template": the built-in templates, once the Word editor ships.
+static void AppendTemplates(HMENU m) {
+  if (!fw::EditorShipped(fw::FileKind::Document)) return;
+  HMENU sub = CreatePopupMenu();
+  for (int i = 0; i < EmptyState::kTemplateCount; ++i) AppendItem(sub, CmdNewTemplate + i, EmptyState::kTemplates[i]);
+  AppendSubmenu(m, sub, L"New from template");
+}
+
 void App::ShowMenu(int which) {
   TabContent* v = Active();
   const bool ready = v && v->Ready();
@@ -1468,6 +1480,7 @@ void App::ShowMenu(int which) {
     for (const fw::FileKindInfo& k : fw::FileKinds())
       if (fw::EditorShipped(k.kind))
         AppendItem(m, CmdNewFile + static_cast<int>(k.kind), NewLabel(k));
+    AppendTemplates(m);
     AppendSeparator(m);
     AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
   } else if (which == CmdSaveMenu && ready) {
@@ -1477,6 +1490,7 @@ void App::ShowMenu(int which) {
     alignRight = true;
     for (const fw::FileKindInfo& k : fw::FileKinds())
       if (fw::EditorShipped(k.kind)) AppendItem(m, CmdNewFile + static_cast<int>(k.kind), NewLabel(k));
+    AppendTemplates(m);
     AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
     HMENU recent = CreatePopupMenu();
     for (int i = 0; i < static_cast<int>(settings_.recent.size()); ++i) {
@@ -1588,7 +1602,11 @@ PdfView* App::ActivePdf() const {
 }
 
 std::unique_ptr<TabContent> App::CreateTab(const std::wstring& path) {
-  if (fw::KindOfPath(path) == fw::FileKind::Document) return std::make_unique<DocView>(*this, path);
+  if (fw::KindOfPath(path) == fw::FileKind::Document) {
+    auto view = std::make_unique<DocView>(*this, path);
+    if (DocView::IsTemplate(path)) view->OpenAsNew(++newDocuments_);  // as Word: a new document from it
+    return view;
+  }
   return std::make_unique<PdfView>(*this, path);
 }
 
@@ -1684,6 +1702,7 @@ void App::OnStartScreen(EmptyState::Result res) {
   switch (res.kind) {
     case EmptyState::Result::Kind::Open: Execute(CmdOpen); break;
     case EmptyState::Result::Kind::New: Execute(CmdNewFile + res.index); break;
+    case EmptyState::Result::Kind::Template: Execute(CmdNewTemplate + res.index); break;
     case EmptyState::Result::Kind::OpenRecent: Execute(CmdRecent + res.index); break;
     case EmptyState::Result::Kind::RemoveRecent:
       if (res.index < static_cast<int>(settings_.recent.size())) {
@@ -2373,7 +2392,11 @@ void App::RunScript(const std::wstring& script) {
       if (PagedView* v = ActivePaged())
         v->SetViewMode(arg == L"single" ? fw::ViewMode::Single : arg == L"facing" ? fw::ViewMode::Facing : fw::ViewMode::Continuous);
     } else if (op == L"new") {
-      NewDocument();
+      // new, or new:letter (a template's name) for a new document from that template.
+      int kind = 0;
+      for (int i = 0; i < EmptyState::kTemplateCount; ++i)
+        if (fw::EqualsNoCase(arg, EmptyState::kTemplates[i])) kind = i + 1;
+      NewDocument(kind);
     } else if (op == L"edited") {
       // Marks the document edited, as the edit session will (the dot, Save, the close prompt).
       TabContent* v = Active();
