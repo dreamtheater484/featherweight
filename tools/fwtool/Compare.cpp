@@ -390,6 +390,10 @@ int CompareCorpus(const Options& options) {
         std::printf("[skip] %s: no reference PDF (%s)\n", e.source.c_str(), e.error.c_str());
         continue;
       }
+      if (!e.exclude.empty()) {  // the manifest's "exclude": Word's own render can't be the reference
+        std::printf("[skip] %s: left out (%s)\n", e.source.c_str(), e.exclude.c_str());
+        continue;
+      }
       auto reference = ReadPdfLines(e.pdf, error);
       if (!reference) {
         std::printf("[FAIL] %s: Word's PDF can't be read: %s\n", e.source.c_str(), error.c_str());
