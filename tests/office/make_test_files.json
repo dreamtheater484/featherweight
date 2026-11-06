@@ -1,0 +1,40 @@
+{
+  "comment": "Text for the documents scripts\\make-test-files.ps1 has Word write (tests\\office\\script). Written for Featherweight's tests; equations in Word's linear format (UnicodeMath), built up by Word.",
+  "equations": [
+    ["Quadratic formula", "x=(-b±√(b^2-4ac))/2a"],
+    ["Sum", "∑_(i=1)^n▒i=(n(n+1))/2"],
+    ["Product", "∏_(k=1)^n▒k=n!"],
+    ["Integral", "∫_0^∞▒〖e^(-x^2) dx〗=√π/2"],
+    ["Matrix", "A=[■(a&b@c&d)]"],
+    ["Limit", "lim┬(x→∞)⁡〖(1+1/x)^x〗=e"],
+    ["Cases", "f(x)={■(x^2&x≥0@-x&x<0)┤"],
+    ["Equation array", "█(x+y=1@x-y=3)"],
+    ["Accents and bar", "(x+y) ̅=x ̂+y ̃"],
+    ["Box", "□(a=b)"],
+    ["Functions", "sin^2⁡θ+cos^2⁡θ=1"],
+    ["Roots", "√(3&x)+∛8=2+√(x^2+y^2)"]
+  ],
+  "inline": ["Einstein's relation ", "E=mc^2", " sits inside this sentence, between ordinary words."],
+  "arabic": [
+    "مرحباً بكم في Featherweight، محرر المستندات الخفيف والسريع.",
+    "يحتوي هذا المستند على فقرات من اليمين إلى اليسار مع أرقام مثل 2026 و3.14 وكلمات لاتينية مثل Word وPDF.",
+    "الفقرة الثالثة أطول قليلاً لاختبار التفاف الأسطر: يجب أن يبدأ كل سطر جديد من اليمين، وأن تبقى علامات الترقيم في مكانها الصحيح، وأن تظهر الأرقام من اليسار إلى اليمين داخل النص العربي."
+  ],
+  "hebrew": [
+    "שלום וברוכים הבאים ל-Featherweight, עורך מסמכים קל ומהיר.",
+    "פסקה זו כתובה מימין לשמאל וכוללת מספרים כמו 42 ו-1,000 ומילים באנגלית כמו Office."
+  ],
+  "mixed": "The Arabic word كتاب and the Hebrew word ספר both mean book; this paragraph runs left to right.",
+  "rtlTable": [["الاسم", "المدينة", "العدد"], ["سارة", "القاهرة", "12"], ["يوسف", "عمّان", "7"]],
+  "japanese": [
+    "Featherweightは、軽くて速い文書エディターです。ファイルを壊さずに、すぐに開きます。",
+    "日本語の文章では、句読点「、」や「。」が行頭に来ないように調整されます。これを禁則処理と呼びます。（括弧）や「かぎ括弧」も同じように扱われます！本当ですか？はい、そうです。行末と行頭の規則を確かめるために、この段落は何行にもわたって続きます。日本語の文章では、句読点「、」や「。」が行頭に来ないように調整されます。"
+  ],
+  "chineseSimplified": [
+    "Featherweight 是一个轻量、快速的文档编辑器。它打开文件很快，并且从不损坏文件。",
+    "中文排版中，标点符号“，”和“。”不应出现在行首，而“（”和“《”不应出现在行尾。这称为避头尾规则。为了检验换行，这一段会写得比较长，一直延续到好几行，其中还包括数字2026和英文单词Office。"
+  ],
+  "chineseTraditional": ["Featherweight 是一個輕巧、快速的文件編輯器，從不損壞檔案。"],
+  "korean": ["Featherweight는 가볍고 빠른 문서 편집기입니다. 파일을 손상시키지 않고 빠르게 엽니다."],
+  "vertical": "縦書きの段落です。「Featherweight」は縦書きの文章も正しく表示しなければなりません。"
+}
