@@ -4,7 +4,8 @@
   after scripted random edits and a save, has no new validator errors, passes fwtool check, and
   opens in Word without a repair prompt).
   1. fwtool torture: seeded random edits through the editor, a save, fwtool check, and the saved
-     file read back into the model. Failures are shrunk to reproducers (<out>\repro).
+     file read back into the model. Failures are shrunk to reproducers (<out>\repro). Kept
+     reproducers (tests\torture) are replayed too, and their saved copies checked with the rest.
   2. The Open XML SDK validator (tools\validate): each saved copy against its original.
   3. Word (scripts\word-open-check.ps1): each saved copy must open without a repair prompt or an
      error. When one doesn't, its original is opened too: if Word complains about the original as
@@ -77,12 +78,50 @@ function Read-Json([string]$path) { if (Test-Path $path) { Get-Content $path -Ra
 $torture = Read-Json (Join-Path $Out "torture.json")
 if (-not $torture) { throw "fwtool torture wrote no results." }
 
+# 1b. Kept reproducers (tests\torture\*.txt): edits once suspected, replayed in every run; their saved
+#     copies go to the validator and Word with the rest. Each names its file relative to the private
+#     corpus (FW_CORPUS) or to the checkout; one whose file isn't on this PC is left out.
+$pairsFile = Join-Path $Out "pairs.tsv"
+foreach ($repro in @(Get-ChildItem (Join-Path $root "tests\torture") -Filter *.txt -ErrorAction SilentlyContinue)) {
+  $recorded = @(Get-Content $repro.FullName -Encoding UTF8 | Where-Object { $_ -match '^file: ' } | ForEach-Object { $_.Substring(6) })[0]
+  $base = @($env:FW_CORPUS, $root) | Where-Object { $_ -and $recorded -and (Test-Path (Join-Path $_ $recorded)) } | Select-Object -First 1
+  if (-not $base) { "== Kept reproducer $($repro.Name): its file isn't on this PC, left out"; continue }
+  "== Kept reproducer $($repro.Name)"
+  $original = [IO.Path]::GetFullPath((Join-Path $base $recorded))
+  Push-Location $base  # the replay finds the relative path from here
+  $log = @(& $Fwtool torture --replay $repro.FullName --out (Join-Path $Out "saved"))
+  $code = $LASTEXITCODE
+  Pop-Location
+  $log
+  $saved = Join-Path $Out "saved\$($repro.BaseName)-replay.docx"
+  $counts = [regex]::Match(($log -join "`n"), '\((\d+) done, (\d+) refused\)')
+  $failures = @(if ($code) {
+    [pscustomobject]@{ round = 0; category = "kept reproducer"; message = (@($log | Where-Object { $_ -match '^\[FAIL\]' }) -join " ")
+                       edits = $repro.Name; reproducer = $repro.FullName }
+  })
+  # The validator compares the saved copy with the .docx the app opened.
+  $opened = $original
+  if ([IO.Path]::GetExtension($original) -ieq ".doc") {
+    New-Item -ItemType Directory -Force (Join-Path $Out "opened") | Out-Null
+    $opened = Join-Path $Out "opened\$($repro.BaseName).docx"
+    & $Fwtool convert $original $opened
+  }
+  if ((Test-Path $saved) -and [IO.Path]::GetExtension($opened) -in ".docx", ".docm") {
+    [IO.File]::AppendAllText($pairsFile, "$opened`t$saved`n", [Text.UTF8Encoding]::new($false))
+  }
+  $torture.files = @($torture.files) + [pscustomobject]@{
+    file = $original; failures = $failures; skipped = $null
+    done = if ($counts.Success) { [int]$counts.Groups[1].Value } else { 0 }
+    refused = if ($counts.Success) { [int]$counts.Groups[2].Value } else { 0 }
+    saved = if (Test-Path $saved) { $saved } else { $null }
+  }
+}
+
 # 2. The validator: no new errors in any saved copy.
 "== Validator (Open XML SDK): saved copies against their originals"
 $validator = Join-Path $root "build\validate\fwvalidate.exe"
 & dotnet build (Join-Path $root "tools\validate\Validate.csproj") -c Release -o (Join-Path $root "build\validate") --nologo -v q | Out-Null
 if ($LASTEXITCODE) { throw "building tools\validate failed" }
-$pairsFile = Join-Path $Out "pairs.tsv"
 $newErrors = @{}  # saved copy -> new validator errors
 if ((Test-Path $pairsFile) -and (Get-Item $pairsFile).Length) {
   & $validator --pairs $pairsFile --json (Join-Path $Out "validate.json") | Where-Object { $_ -match '^\[FAIL\]|^\s{4}|files,' }
