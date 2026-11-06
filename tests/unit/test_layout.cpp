@@ -58,7 +58,7 @@ fw::text::Fonts& Fonts() {
 }
 
 Doc Make(const std::string& body, const std::string& settings = "", const std::string& footnotes = "", bool all = true,
-         const std::string& fonts = "", const std::string& header = "") {
+         const std::string& fonts = "", const std::string& header = "", const std::string& numbering = "") {
   const std::string wml = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
   const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
   const std::string head = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>";
@@ -83,6 +83,11 @@ Doc Make(const std::string& body, const std::string& settings = "", const std::s
     types += "<Override PartName=\"/word/header1.xml\" ContentType=\"" + wml + "header+xml\"/>";
     rels += "<Relationship Id=\"rIdH\" Type=\"" + rel + "header\" Target=\"header1.xml\"/>";
     entries.push_back({"word/header1.xml", head + "<w:hdr " + kW + ">" + header + "</w:hdr>"});
+  }
+  if (!numbering.empty()) {
+    types += "<Override PartName=\"/word/numbering.xml\" ContentType=\"" + wml + "numbering+xml\"/>";
+    rels += "<Relationship Id=\"rId4\" Type=\"" + rel + "numbering\" Target=\"numbering.xml\"/>";
+    entries.push_back({"word/numbering.xml", head + "<w:numbering " + kW + ">" + numbering + "</w:numbering>"});
   }
   if (!footnotes.empty()) {
     types += "<Override PartName=\"/word/footnotes.xml\" ContentType=\"" + wml + "footnotes+xml\"/>";
@@ -251,6 +256,41 @@ TEST(Layout_PageBreakKeepsItsParagraphMark) {
   REQUIRE(k && s);
   CHECK(pk == 1u && ps == 1u);
   CHECK(s->top > k->top + 10);  // below the mark's own line and the space before
+}
+
+TEST(Layout_AnEmptyNumberHasNoTabInMode15) {
+  // A list level that shows no number (as govuk-the-short-form-contract's defined terms): Word
+  // 2013 and later put no tab after it, older modes do.
+  const std::string numbering =
+      "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"none\"/>"
+      "<w:lvlText w:val=\"\"/><w:pPr><w:ind w:left=\"0\" w:firstLine=\"0\"/></w:pPr></w:lvl></w:abstractNum>"
+      "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+  const std::string body = P("Term", "<w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr>");
+  auto mode = [](int m) {
+    return "<w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" "
+           "w:val=\"" + std::to_string(m) + "\"/></w:compat>";
+  };
+  Doc now = Make(body, mode(15), "", true, "", "", numbering);
+  Doc old = Make(body, mode(11), "", true, "", "", numbering);
+  REQUIRE(now.layout && old.layout);
+  const LineBox *a = Find(now, u"Term"), *b = Find(old, u"Term");
+  REQUIRE(a && b);
+  CHECK(a->text.front() == u'T');
+  CHECK(b->text.front() == u'\t');
+}
+
+TEST(Layout_PageBreakBeforeDropsTheSpaceBefore) {
+  // A paragraph with w:pageBreakBefore starts its page at the top, without its space before, as
+  // after a page break character (tudresden, bund-bsi); after a section break the space stays.
+  Doc d = Make(P("one") + P("two", "<w:pageBreakBefore/><w:spacing w:before=\"480\"/>") +
+               "<w:p><w:pPr>" + SmallPage() + "</w:pPr></w:p>" + P("three", "<w:spacing w:before=\"480\"/>") + SmallPage());
+  REQUIRE(d.layout);
+  size_t p2 = 9, p3 = 9;
+  const LineBox *one = Find(d, u"one"), *two = Find(d, u"two", &p2), *three = Find(d, u"three", &p3);
+  REQUIRE(one && two && three);
+  CHECK(p2 == 1u && p3 == 2u);
+  CHECK_NEAR(two->top, one->top, 0.05f);
+  CHECK_NEAR(three->top, one->top + 24.0f, 0.05f);
 }
 
 TEST(Layout_SpacingBetweenParagraphsIsTheLarger) {

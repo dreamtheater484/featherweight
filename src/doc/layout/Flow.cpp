@@ -50,7 +50,7 @@ struct Engine::Impl {
   uint32_t paraLines = 0;  // lines of it on earlier columns
   bool paraBegun = false;  // its space before and floats are placed
   bool breakAfter = false;  // it ended with a page break
-  bool nextHard = false;    // the next page starts after a section break or a page break before
+  bool nextHard = false;    // the next page starts after a section break
   bool hardStart = false;   // this page did
   float separatorHeight = -1;
   size_t anchorDrawings = 0, anchorZones = 0;  // where its floats start on the page
@@ -758,7 +758,7 @@ struct Flow {
       f.paraLines = 0;
       f.paraBegun = false;
       if (f.pt->props->pageBreakBefore && !f.pageEmpty) {
-        f.nextHard = true;
+        // (Its space before doesn't stay at the top of the next page.)
         return Step::PageFull;
       }
     }
@@ -772,10 +772,11 @@ struct Flow {
       f.anchorZones = f.zones.size();
       paraTop = f.y + (f.paraLines == 0 ? e.SpaceBefore(p, f.spacing) + e.BorderAbove(p, f.spacing) : 0);
       if (f.columnEmpty && f.spacing.prev == nullptr && f.paraLines == 0) {
-        // At the top of a page Word keeps the space before only after a section break or a page
-        // break before (w:pageBreakBefore), not after a page break character or where the text
-        // just flowed on; at the top of a later column it keeps it (measured on the corpus:
-        // dropping it there too, or always keeping it, matches fewer lines and pages).
+        // At the top of a page Word keeps the space before only after a section break, not after
+        // a page break character, a page break before (w:pageBreakBefore: tudresden, bund-bsi
+        // and the short-form contract's page tops) or where the text just flowed on; at the top
+        // of a later column it keeps it (measured on the corpus: dropping it there too, or
+        // always keeping it, matches fewer lines and pages).
         const bool keep = f.hardStart || f.col > 0;
         paraTop = f.y + (keep ? e.SpaceBefore(p, Spacing()) : 0.0f) + e.BorderAbove(p, Spacing());
       }
@@ -1112,7 +1113,6 @@ struct Flow {
       // would outside a table (measured on the corpus: Word does it for the row's first cell).
       if (firstPart && row.breakBefore && !f.pageEmpty) {
         FlushSpans(x);
-        f.nextHard = true;
         return Step::PageFull;
       }
       float h = row.height - row.grown;
