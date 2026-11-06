@@ -2432,12 +2432,24 @@ void EquationsIn(std::string_view xml, std::set<std::string>& out) {
     }
     // As XML, not as bytes: once its part is rewritten, the writer declares m: on each of an
     // equation's children (the reader keeps them as fragments that stand alone) and writes empty
-    // elements short. Reported to d1-text (D5 torture). Everything else must be as it was.
+    // elements short; an indented file's whitespace between elements goes. Reported to d1-text
+    // (D5 torture). Everything else must be as it was.
     std::string eq(xml.substr(i, end - i));
     for (size_t d = eq.find(" xmlns"); d != std::string::npos; d = eq.find(" xmlns", d)) {
       const size_t q = eq.find('"', d), q2 = q == std::string::npos ? q : eq.find('"', q + 1);
       if (q2 == std::string::npos || eq.find_first_of("<>", d) < q) break;
       eq.erase(d, q2 + 1 - d);
+    }
+    // Whitespace between elements (an indented file's) isn't kept, and means nothing; inside a run's
+    // text (m:t, w:t) it's the text.
+    for (size_t p = eq.find('>'); p != std::string::npos && p + 1 < eq.size(); p = eq.find('>', p + 1)) {
+      const size_t next = eq.find_first_not_of(" \t\r\n", p + 1);
+      if (next == p + 1 || next == std::string::npos || eq[next] != '<') continue;
+      const size_t start = eq.rfind('<', p);
+      const size_t wsNameEnd = eq.find_first_of(" />", start + 1);
+      const std::string_view wsTag(eq.data() + start + 1, wsNameEnd - start - 1);
+      if (eq[start + 1] != '/' && eq[p - 1] != '/' && wsTag.ends_with(":t")) continue;
+      eq.erase(p + 1, next - p - 1);
     }
     // And an empty element written either way: <m:deg></m:deg> is <m:deg/>.
     for (size_t p = eq.find("></"); p != std::string::npos; p = eq.find("></", p + 1)) {
