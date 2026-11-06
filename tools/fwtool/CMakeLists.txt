@@ -8,7 +8,7 @@ target_compile_options(fwfidelity PRIVATE ${FW_COMPILE_OPTIONS})
 
 add_executable(fwtool main.cpp Roundtrip.cpp Save.cpp Inspect.cpp Model.cpp Print.cpp Render.cpp Reference.cpp Compare.cpp Bench.cpp
   BenchApp.cpp Export.cpp LayoutHook.cpp Paste.cpp PdfCheck.cpp Spelling.cpp Torture.cpp Wrap.cpp)
-target_link_libraries(fwtool PRIVATE fwpkg fwdoc fwdoclayout fwdraw fwproof fwtext fwfidelity pdfium delayimp ole32 windowscodecs)
+target_link_libraries(fwtool PRIVATE fwpkg fwdoc fwdoclayout fwdraw fwchart fwproof fwtext fwfidelity pdfium delayimp ole32 windowscodecs)
 # Picture editing (D3), for fwtool torture.
 if(TARGET fwpictures)
   target_link_libraries(fwtool PRIVATE fwpictures)
