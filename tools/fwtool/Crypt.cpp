@@ -3,6 +3,7 @@
 // open (scripts\word-open-check.ps1 -Password); decrypt opens protected files as the app does and
 // checks that encrypting the package again with the key from opening gives a file the same
 // password opens to the same package.
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <iterator>
@@ -98,6 +99,70 @@ int RunCrypt(const Options& options, bool encrypt) {
   }
   std::printf("%d %s, %d failed\n", done, encrypt ? "encrypted" : "decrypted", failed);
   return failed || !done ? 1 : 0;
+}
+
+int RunCfb(const Options& options) {
+  int failed = 0;
+  for (const auto& in : options.inputs) {
+    std::vector<std::filesystem::path> files;
+    std::error_code ec;
+    if (std::filesystem::is_directory(in)) {
+      for (auto it = std::filesystem::recursive_directory_iterator(in, ec); !ec && it != std::filesystem::end(it); it.increment(ec))
+        if (it->is_regular_file(ec)) files.push_back(it->path());
+    } else {
+      files.push_back(in);
+    }
+    std::sort(files.begin(), files.end());
+    for (const auto& file : files) {
+      const std::string name = Display(file);
+      std::vector<uint8_t> bytes;
+      if (!ReadAll(file, bytes) || !fw::pkg::CompoundFile::HasSignature(bytes)) continue;
+      auto cf = fw::pkg::CompoundFile::Open(bytes);
+      if (!cf) {
+        std::printf("FAIL %s: not read\n", name.c_str());
+        ++failed;
+        continue;
+      }
+      std::vector<std::vector<uint8_t>> data;
+      std::vector<fw::pkg::CompoundStream> streams;
+      bool ok = true;
+      for (const auto& path : cf->Streams()) {
+        auto s = cf->Stream(path);
+        if (!s) {
+          std::printf("FAIL %s: stream %s not read\n", name.c_str(), path.c_str());
+          ok = false;
+          continue;
+        }
+        data.push_back(std::move(*s));
+        streams.push_back({path, {}});
+      }
+      for (size_t i = 0; i < data.size(); ++i) streams[i].data = data[i];
+      const auto written = fw::pkg::WriteCompoundFile(streams);
+      auto again = fw::pkg::CompoundFile::Open(written);
+      for (size_t i = 0; ok && i < streams.size(); ++i)
+        if (!again || again->Stream(streams[i].path) != data[i]) {
+          std::printf("FAIL %s: %s differs once written\n", name.c_str(), streams[i].path.c_str());
+          ok = false;
+        }
+      if (!ok) {
+        ++failed;
+        continue;
+      }
+      std::printf("ok   %s: %zu streams\n", name.c_str(), streams.size());
+      if (!options.all) continue;
+      for (size_t i = 0; i < streams.size(); ++i) {
+        std::string shown;
+        for (char c : streams[i].path) shown += c >= 0x20 ? std::string(1, c) : "\\x0" + std::to_string(int(c));
+        std::printf("       %-60s %zu", shown.c_str(), data[i].size());
+        if (data[i].size() <= 256) {
+          std::printf("\n        ");
+          for (uint8_t b : data[i]) std::printf("%02x", b);
+        }
+        std::printf("\n");
+      }
+    }
+  }
+  return failed ? 1 : 0;
 }
 
 }  // namespace fwtool

@@ -119,6 +119,9 @@ if(FW_BUILD_TESTS)
   add_test(NAME office_check COMMAND fwtool check "${_fw_office}/generated" "${_fw_office}/edge" "${_fw_office}/layout")
   add_test(NAME office_check_broken COMMAND fwtool check --expect-reject "${_fw_office}/broken")
   add_test(NAME office_malicious COMMAND fwtool roundtrip --expect-reject "${_fw_office}/malicious")
+  # Password-protected documents (D5): each opens with its password and encrypts again.
+  add_test(NAME office_protected COMMAND fwtool decrypt --password featherweight --out "${CMAKE_BINARY_DIR}/protected"
+    "${_fw_office}/protected")
 endif()
 
 # Packaging (installer, portable zip, checksums) is done by scripts/release.ps1.

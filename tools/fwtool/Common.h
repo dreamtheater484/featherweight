@@ -63,6 +63,7 @@ int RunEditCheck(const Options& options);
 int RunPasteCheck(const Options& options);
 int RunExport(const Options& options);
 int RunCrypt(const Options& options, bool encrypt);
+int RunCfb(const Options& options);
 int RunPdfCheck(const Options& options);
 int RunBenchApp(const Options& options);
 int RunSpelling(const Options& options);
