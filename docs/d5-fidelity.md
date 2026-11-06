@@ -193,3 +193,22 @@ Modes 11, 12 and 14 cost 140 lines in all, so the mode work goes to the flags th
   - Its rows on page 14 are still 0.5 pt shorter than Word's (see table borders below).
 - **Open: worldbank-sustainable (38 pages, ours 37).** A table row splits differently across pages 11–12, so the page-break paragraph after the table fits on our page 12 but not on Word's.
 - **Rounding of line heights.** Rounding font metrics to device units (96 to 1440 dpi) changes ±20 lines and doesn't help. Word's PDF positions sit on a 0.12 pt grid. acuk-example-cv's last two lines miss page 1 because of a drift of 0.7 pt that is still unexplained.
+
+## Lines (d5-lines handover, 2026-11-06)
+
+97.13 % of 150 documents on ffa25cc (gojp b1 and b4 out while d1-corpus re-renders them); 98 % needs about 980 more.
+
+**Done:** list levels from styles (ilvl from a derived style, the level's indents just before the style that names the list); line numbers (`w:lnNumType`, own area in compare); the font table's name for embedded fonts; no room for the letter spacing after a line's last character (+132, UN reports); compare leaves equations (Formula) out and no longer lets one unreadable PDF fail the rest.
+
+**Tried, didn't help:**
+- Kerning off for `w:kern` text: un-financial 28,374 to 27,764 lines. Word kerns as we do.
+- Scaled text (`w:w`) measured at the size rounded to 600 dpi pixels (9.96 pt for 10): -874 lines in un-financial. Natural width times the scale is right for most lines.
+- Word's glyph positions are on a 0.12 pt grid with each glyph alternating between two neighbouring advances: quantized positions, not per-glyph rounding.
+
+**Next causes, worst first:**
+1. Page-level (d1-measure): EPA brownfields (~1,090 lines, 171 pages in Word vs 160: repeated table headers on Word's extra pages), un-financial (348 vs 351 pages: odd/even headers flip after page 103), revised-methodology, region-3 qapp (64 vs 62 pages: its "Page X of 62" footer alone is 62 lines).
+2. Chart text (~230 lines): Word's PDF has chart labels as plain artifacts, counted as headers and footers; our charts are pictures without lines. A measuring decision: leave them out like equations?
+3. STYLEREF with German style names (~140 lines): English Word prints "Error! Use the Home tab to apply Überschrift 1…"; we show the heading.
+4. PAGEREF in tables of contents (~110 lines): Word's PDF export recalculates them; the screen (Word's and ours) shows the saved numbers.
+5. Remaining "later/earlier" breaks in main text (~700, spread thin): the largest are un-financial (76, Word wraps a word earlier than natural widths allow), short-form contract, worldbank-sustainable, un-le-pacte, draft-investigations, revised-mgn-543, overheid-model-kennisgeving (Word draws Normal's 11 pt at 12 pt; unexplained).
+6. Distributed text (`jc distribute`, Japanese forms): Word's PDF reads "E - m a i l", so compare sees other words.
