@@ -390,6 +390,7 @@ int CompareCorpus(const Options& options) {
         std::printf("[skip] %s: no reference PDF (%s)\n", e.source.c_str(), e.error.c_str());
         continue;
       }
+      error.clear();  // one unreadable PDF mustn't fail the documents after it
       auto reference = ReadPdfLines(e.pdf, error);
       if (!reference) {
         std::printf("[FAIL] %s: Word's PDF can't be read: %s\n", e.source.c_str(), error.c_str());
