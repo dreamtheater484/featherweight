@@ -53,6 +53,8 @@ $all = [ordered]@{
   # Export PDF's font subsetter (D4): tiny fonts, and locally the small fonts in C:\Windows\Fonts
   # (copied to the work folder, never committed: their licences don't allow it).
   fuzz_sfnt    = @{ Seeds = @("$seeds\font", "$regressions\sfnt"); MaxLen = 262144; SystemFonts = $true }
+  # OpenDocument text import (D5): every .odt converts to a document that opens and passes the check, or is refused.
+  fuzz_odt     = @{ Seeds = @("$seeds\odt", "$regressions\odt"); MaxLen = 65536 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 
