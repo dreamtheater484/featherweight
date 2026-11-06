@@ -15,9 +15,10 @@ The fidelity piece of D5 (`docs/d5-plan.md`). Measured with `fwtool compare` aga
 | A paragraph that only holds a section break gets no list number (tudresden 35 → 33 pages, as in Word; QAPP 64 → 63, Word 62) | 99 (91.7 %) | 107,259 (96.6 %) |
 | In mode 15, a list level that shows no number has no tab after it; a page break before doesn't keep the space before at the page top (short-form contract 77 → 76 pages, as in Word) | 100 (92.6 %) | 107,415 (96.7 %) |
 | With `doNotUseHTMLParagraphAutoSpacing`, no automatic spacing; a line with only a column break needn't fit its column (region-3 QAPP 63 → 62 pages, as in Word) | 101 (93.5 %) | 107,477 (96.8 %) |
+| A split table row goes on at each cell's next line, without the space between (worldbank-guidance 75 → 74 pages, as in Word) | 102 (94.4 %) | 107,477 (96.8 %) |
 | Target | 105 (97 %) | 108,843 (98 %) |
 
-From 766982d on, the targets (below) are the measure. With the last step: **141 of 152 (92.8 %), 110,073 of 114,076 lines (96.5 %)**; copies 169 of 258 (65.5 %), 210,765 of 239,892 lines (87.9 %).
+From 766982d on, the targets (below) are the measure. With the last step: **142 of 152 (93.4 %), 110,073 of 114,076 lines (96.5 %)**; copies 170 of 258 (65.9 %), 210,767 of 239,892 lines (87.9 %).
 
 ## What the targets count
 
@@ -105,7 +106,12 @@ Modes 11, 12 and 14 cost 140 lines in all, so the mode work goes to the flags th
   - Between two items of one list, `beforeAutospacing` and `afterAutospacing` give no space, as between HTML `<li>`s. This took revised-methodology from 127 pages to 119 (Word: 109).
 - **An empty list number.** A level with `w:numFmt none` and an empty `w:lvlText` (the short-form contract's defined terms) gets no tab after it in mode 15, so the term starts at the cell's edge. Word's render of the `.doc` copy (mode 11) still has the tab, so the rule is for mode 15 only.
 - **Page tops after `w:pageBreakBefore`.** Word drops the space before there, as after a page break character. Checked on the 14 target documents that use it: 14 page tops come closer to Word's (tudresden, both bund-bsi documents, the short-form contract), 2 move away (bund-bsi page 5).
-- **Open: borders as room in table rows.** Counting only the table's own `w:tblBorders` puts the short-form contract's rows exactly where Word's are, but loses 45 target lines in total (EPA: 90). EPA's acronym table takes its borders from a style, and its page 5 also starts 6 pt low after a section break, which Word drops there.
+- **A split table row** goes on, on the next page, at the top of each cell's next line. The space after above the cut and the space before below it stay behind, as at the top of a page (worldbank-guidance matches).
+- **Open: borders as room in table rows.** Word's rows are taller by the border width, whether the border comes from the table, its style or the cell.
+  - Counting all of them puts the rows of the short-form contract, worldbank-sustainable and EPA's acronym table exactly where Word's are.
+  - It still loses 154 target lines and the contract's page match (EPA −90, the contract −76). Other differences were hiding behind the shorter rows:
+    - the contract's split rows still part from Word's;
+    - Word ends a split row about 1.3 pt higher above footnotes than we do (worldbank-sustainable page 6, where widow control then moves two lines).
 - **Open: deleted paragraph marks.** In Word's final view, a paragraph whose mark is a tracked deletion joins the next paragraph. We only drop such paragraphs when they're empty. revised-methodology has 130 of them; doing this properly means laying two model paragraphs out as one.
 - **Open: EPA brownfields QAPP (1,150 lines missing).** Its reference PDF has 171 pages, while Word itself counts 160. Two findings there are held back until they help the totals:
   - Table borders: Word's rows are taller by the border width (0.5 pt rows in the acronym table: 12.56 pt against our 12.07 pt). Counting table and style borders makes pages 6–9 match exactly. On its own it costs 98 lines, because the page before is one row short.

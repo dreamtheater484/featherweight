@@ -1247,6 +1247,16 @@ struct Flow {
       f.columnEmpty = false;
       f.pageEmpty = false;
       f.rowCut = cutTo;
+      // Each cell goes on at the top of its next line: the space between, the space after above
+      // the cut and before below it, stays behind, as at the top of a page (worldbank-guidance).
+      for (size_t i = 0; i < row.cells.size() && i < f.rowCut.size(); ++i) {
+        const CellBox& c = row.cells[i];
+        if (c.continued || c.rowSpan > 1 || c.turn) continue;
+        float next = FLT_MAX;
+        for (const LineBox& l : c.content.lines)
+          if (l.top >= f.rowCut[i] - kEpsilon) next = std::min(next, l.top);
+        if (next < FLT_MAX) f.rowCut[i] = next;
+      }
       return NextColumn() ? Step::Continue : Step::PageFull;
     }
     // Rows a merged cell claims to span that the table doesn't have.

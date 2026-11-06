@@ -331,6 +331,20 @@ TEST(Layout_AColumnBreakNeedNotFitItsColumn) {
   CHECK(right->x > 90);
 }
 
+TEST(Layout_ASplitRowGoesOnAtItsNextLine) {
+  // One cell of paragraphs with 12 pt before each, taller than a page: on the next page the cell
+  // goes on at the top of its next line, without the space before (worldbank-guidance).
+  std::string cell;
+  for (int i = 0; i < 20; ++i) cell += P("para " + std::to_string(i), "<w:spacing w:before=\"240\" w:after=\"0\"/>");
+  Doc d = Make("<w:tbl><w:tblGrid><w:gridCol w:w=\"3000\"/></w:tblGrid><w:tr><w:tc>" + cell + "</w:tc></w:tr></w:tbl>" + P("") +
+               SmallPage());
+  REQUIRE(d.layout && d.pages() > 1);
+  float top = 1e9f;
+  for (const LineBox& l : d.page(1).lines)
+    if (l.story == fw::LayoutStory::Cell) top = std::min(top, l.top);
+  CHECK_NEAR(top, 20.0f, 0.05f);
+}
+
 TEST(Layout_SpacingBetweenParagraphsIsTheLarger) {
   const std::string body = P("A", "<w:spacing w:after=\"240\"/>") + P("B", "<w:spacing w:before=\"480\"/>");
   Doc html = Make(body);
