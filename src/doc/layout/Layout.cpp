@@ -705,9 +705,11 @@ std::wstring SubstituteFamily(const Document& doc, std::wstring_view family) {
   if (!f) return {};
   if (f->pitch == "fixed") return L"Courier New";
   // PANOSE: family kind 2 is Latin text; the second digit is the serif style (11-13 sans serif).
-  if (serifStyle >= 11 && serifStyle <= 13) return L"Arial";
+  // Word draws a missing sans-serif family in Calibri (corpus: EC Square Sans Pro, Open Sans
+  // Light, Marianne, Barcode 3 of 9), a serif one in Times New Roman.
+  if (serifStyle >= 11 && serifStyle <= 13) return L"Calibri";
   if (serifStyle >= 2 && serifStyle <= 10) return L"Times New Roman";
-  if (f->family == "swiss") return L"Arial";
+  if (f->family == "swiss") return L"Calibri";
   if (f->family == "roman") return L"Times New Roman";
   if (f->family == "modern") return L"Tahoma";
   return {};

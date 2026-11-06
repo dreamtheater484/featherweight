@@ -550,6 +550,21 @@ TEST(Layout_EastAsianFontsGetEastAsianStandIns) {
   CHECK(SubstituteFamily(*d.doc, L"Unknown Typewriter") == L"Courier New");
 }
 
+TEST(Layout_MissingLatinFontsAsWordDrawsThem) {
+  // From the corpus's Word renders: a missing sans-serif family in Calibri (EC Square Sans Pro's
+  // PANOSE), or by its family class alone; a serif one in Times New Roman.
+  Doc d = Make(P("text"), "", "", true,
+               "<w:font w:name=\"House Sans\"><w:panose1 w:val=\"020B0506040000020004\"/><w:charset w:val=\"00\"/>"
+               "<w:family w:val=\"swiss\"/><w:pitch w:val=\"variable\"/></w:font>"
+               "<w:font w:name=\"House Grotesk\"><w:charset w:val=\"00\"/><w:family w:val=\"swiss\"/></w:font>"
+               "<w:font w:name=\"House Serif\"><w:panose1 w:val=\"02020603050405020304\"/><w:charset w:val=\"00\"/>"
+               "<w:family w:val=\"roman\"/></w:font>");
+  REQUIRE(d.doc);
+  CHECK(SubstituteFamily(*d.doc, L"House Sans") == L"Calibri");
+  CHECK(SubstituteFamily(*d.doc, L"House Grotesk") == L"Calibri");
+  CHECK(SubstituteFamily(*d.doc, L"House Serif") == L"Times New Roman");
+}
+
 // ---- Laying out again after edits (D2)
 
 namespace {

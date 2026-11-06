@@ -460,8 +460,7 @@ void LineBreaker::Impl::Shape(uint32_t start, uint32_t end, uint32_t run, Slot s
                               IDWriteNumberSubstitution* numbers) {
   const TextStyle& style = *styles[run];
   SlotFont sf = ForSlot(style, slot);
-  const std::wstring& family = fonts.Resolve(*sf.family);
-  const Face* base = fonts.Get(family, sf.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL, sf.italic);
+  const Face* base = fonts.FaceFor(*sf.family, sf.bold, sf.italic);
   if (!base) base = fonts.Get(fonts.Resolve(L""), DWRITE_FONT_WEIGHT_NORMAL, false);
   if (!base) return;
 
@@ -649,8 +648,7 @@ const RunFont& LineBreaker::Impl::FontOfRun(uint32_t run) {
   if (rf.made) return rf;
   rf.made = true;
   const TextStyle& s = *styles[run];
-  const std::wstring& family = fonts.Resolve(s.family);
-  rf.face = fonts.Get(family, s.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL, s.italic);
+  rf.face = fonts.FaceFor(s.family, s.bold, s.italic);
   rf.size = s.size;
   rf.rise = s.baselineShift;
   if (rf.face) {
@@ -898,8 +896,7 @@ static void CombineMetrics(Line& line, float ascent, float descent, float gap) {
 
 void LineBreaker::Impl::MarkMetrics(Line& line) {
   const TextStyle* mark = p.markStyle ? p.markStyle : (styles.empty() ? &DefaultStyle() : styles.back());
-  const Face* face = fonts.Get(fonts.Resolve(mark->family), mark->bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
-                               mark->italic);
+  const Face* face = fonts.FaceFor(mark->family, mark->bold, mark->italic);
   if (!face) return;
   FontMetrics m = face->Metrics(mark->size);
   CombineMetrics(line, m.ascent, m.descent, m.lineGap);
