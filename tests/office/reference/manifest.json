@@ -1,7 +1,7 @@
 {
-    "made":  "2026-11-03",
+    "made":  "2026-11-06",
     "computer":  "Office reference PC (decision 19)",
-    "export":  "Word: the document without markup, for print, tagged; Excel: print areas; PowerPoint: slides",
+    "export":  "Word (safe mode, no add-ins, macros forced off, links not updated, read-only): the document without markup, for print, tagged; Excel: print areas; PowerPoint: slides",
     "files":  [
                   {
                       "source":  "generated/drawings-dml.docx",
@@ -316,6 +316,524 @@
                       "fonts":  [
                                     "Calibri",
                                     "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "doc/drawings-dml.doc",
+                      "sha256":  "f6e5de25b193801fe4c5268c3d42817800068ee811b77f4d2f5c799d2c399b06",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  3,
+                      "pdf":  "doc/drawings-dml.doc.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ],
+                      "copyOf":  "generated/drawings-dml.docx"
+                  },
+                  {
+                      "source":  "doc/drawings-vml.doc",
+                      "sha256":  "8abec5263a4bd857f2a3965b523994e46ebdf1c247237578144236de93800cb1",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "doc/drawings-vml.doc.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ],
+                      "copyOf":  "generated/drawings-vml.docx"
+                  },
+                  {
+                      "source":  "doc/forms.doc",
+                      "sha256":  "b376c87c5051f40b2cf9796167fe794971ca8c2d3fc1b405be7238199a7423e0",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "doc/forms.doc.pdf",
+                      "fonts":  [
+                                    "MS-Gothic",
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "torture/forms.docx"
+                  },
+                  {
+                      "source":  "doc/forms-protected.doc",
+                      "sha256":  "e6632f71618405e55fb4a47c470f3701f354add7cbb6a92d464bce73d5311442",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "doc/forms-protected.doc.pdf",
+                      "fonts":  [
+                                    "MS-Gothic",
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "torture/forms.docx"
+                  },
+                  {
+                      "source":  "doc/headers-fields.doc",
+                      "sha256":  "ab834b2565e645b59341c06fa233f784a763d0fa8982ea3a5979f2814e5b05a6",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "doc/headers-fields.doc.pdf",
+                      "fonts":  [
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "torture/headers-fields.docx"
+                  },
+                  {
+                      "source":  "doc/headers-fields-strict.doc",
+                      "sha256":  "3006694c61e3fc39a995a71caa1e69f20b94447d4d12870f42e0de1061dba639",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "doc/headers-fields-strict.doc.pdf",
+                      "fonts":  [
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "torture/headers-fields-strict.docx"
+                  },
+                  {
+                      "source":  "doc/merged-table.doc",
+                      "sha256":  "cd10dd41079e3473f9fe064354f87fd1a4457d0607e79c17b0e9586c67a20c77",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "doc/merged-table.doc.pdf",
+                      "fonts":  [
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "torture/merged-table.docx"
+                  },
+                  {
+                      "source":  "doc/received-table.doc",
+                      "sha256":  "733829fd17cabbf2bcb238e916dd764ee638cf64e52e37afd06ce82f04d7d1bc",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "doc/received-table.doc.pdf",
+                      "fonts":  [
+                                    "TimesNewRomanPS-BoldMT",
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "torture/received-table.docx"
+                  },
+                  {
+                      "source":  "doc/review-contract.doc",
+                      "sha256":  "550bd562ac225780733a8cbad5ebab778837307a31c4fc79060335ed41f2304a",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "doc/review-contract.doc.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold",
+                                    "Calibri-Italic"
+                                ],
+                      "copyOf":  "torture/review-contract.docx"
+                  },
+                  {
+                      "source":  "doc/sections-headers.doc",
+                      "sha256":  "b22a3069e51caf325e0f0a6847caaaa8b69bf42aa23201a7f2a57e6935424995",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "doc/sections-headers.doc.pdf",
+                      "fonts":  [
+                                    "Calibri-Bold",
+                                    "Cambria"
+                                ],
+                      "copyOf":  "generated/sections-headers.docx"
+                  },
+                  {
+                      "source":  "doc/simple.doc",
+                      "sha256":  "743d0b96f983de9e0c0f37f612dcfb64ad4c105c563b202352b8e7c91dd13f1e",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "doc/simple.doc.pdf",
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri-Bold",
+                                    "Cambria",
+                                    "Cambria-Bold",
+                                    "Cambria-Italic",
+                                    "SymbolMT"
+                                ],
+                      "copyOf":  "generated/simple.docx"
+                  },
+                  {
+                      "source":  "doc/styles-unicode-comments.doc",
+                      "sha256":  "f4eaeb6ac30ff08dab4ce82ca0ac987382a86dcc8b96e15dcfa92ac9b9e8fa5c",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "doc/styles-unicode-comments.doc.pdf",
+                      "fonts":  [
+                                    "Calibri-Bold",
+                                    "Cambria",
+                                    "Georgia-Italic",
+                                    "MalgunGothic",
+                                    "MS Mincho",
+                                    "SansSerifCollection",
+                                    "SegoeUIEmoji",
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "generated/styles-unicode-comments.docx"
+                  },
+                  {
+                      "source":  "doc/tables-images-links.doc",
+                      "sha256":  "70a99269c640cce28c67246d063edeb75e3b4b4faaa944cedc62f9312e3b7a40",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "doc/tables-images-links.doc.pdf",
+                      "fonts":  [
+                                    "Calibri-Bold",
+                                    "Cambria"
+                                ],
+                      "copyOf":  "generated/tables-images-links.docx"
+                  },
+                  {
+                      "source":  "doc/toc-fields.doc",
+                      "sha256":  "f294244bfda28dec4517fd94443c66dc79e8b21399db38c6d3978d46e9c80713",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "doc/toc-fields.doc.pdf",
+                      "fonts":  [
+                                    "TimesNewRomanPS-BoldMT",
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "torture/toc-fields.docx"
+                  },
+                  {
+                      "source":  "odt/drawings-dml.odt",
+                      "sha256":  "aec6d46566f68bec431d205e9978145bb3b7eca0666e19182b1a5f2aa1c76287",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  3,
+                      "pdf":  "odt/drawings-dml.odt.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ],
+                      "copyOf":  "generated/drawings-dml.docx"
+                  },
+                  {
+                      "source":  "odt/drawings-vml.odt",
+                      "sha256":  "71f66bfb842a4ca73265f480b0f44691d61e15f6ed12b90fb2bacab69bc22945",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "odt/drawings-vml.odt.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ],
+                      "copyOf":  "generated/drawings-vml.docx"
+                  },
+                  {
+                      "source":  "odt/forms.odt",
+                      "sha256":  "167e34ad519bd7f05cd9a623de3044e9c2952090bc797a6800f6b5394f2059c1",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "error":  "Word experienced an error trying to open the file.\nTry these suggestions.\n* Check the file permissions for the document or drive.\n* Make sure there is sufficient free memory and disk space.\n* Open the file with the Text Recovery converter.\r (D:\\Documents\\Codex\\...\\odt\\forms.odt)",
+                      "copyOf":  "torture/forms.docx"
+                  },
+                  {
+                      "source":  "odt/forms-protected.odt",
+                      "sha256":  "167e34ad519bd7f05cd9a623de3044e9c2952090bc797a6800f6b5394f2059c1",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "error":  "Word experienced an error trying to open the file.\nTry these suggestions.\n* Check the file permissions for the document or drive.\n* Make sure there is sufficient free memory and disk space.\n* Open the file with the Text Recovery converter.\r (D:\\Documents\\...\\odt\\forms-protected.odt)",
+                      "copyOf":  "torture/forms.docx"
+                  },
+                  {
+                      "source":  "odt/headers-fields.odt",
+                      "sha256":  "2c83b6a62c858b659c0a7b6caedc0c2e7bb1c430bc3cc346d0cb10d8f4870e02",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "odt/headers-fields.odt.pdf",
+                      "fonts":  [
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "torture/headers-fields.docx"
+                  },
+                  {
+                      "source":  "odt/headers-fields-strict.odt",
+                      "sha256":  "2c83b6a62c858b659c0a7b6caedc0c2e7bb1c430bc3cc346d0cb10d8f4870e02",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "odt/headers-fields-strict.odt.pdf",
+                      "fonts":  [
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "torture/headers-fields-strict.docx"
+                  },
+                  {
+                      "source":  "odt/merged-table.odt",
+                      "sha256":  "6f6c16af38942f13a2b27d62aaf5c0376caf1c0b35e6213ffbe4dd688e633476",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "odt/merged-table.odt.pdf",
+                      "fonts":  [
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "torture/merged-table.docx"
+                  },
+                  {
+                      "source":  "odt/received-table.odt",
+                      "sha256":  "ecffa18940cbf3818e8d02da6462316cf3ebddb2a30da2ea6a219a38b10bde0c",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "odt/received-table.odt.pdf",
+                      "fonts":  [
+                                    "TimesNewRomanPS-BoldMT",
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "torture/received-table.docx"
+                  },
+                  {
+                      "source":  "odt/review-contract.odt",
+                      "sha256":  "dc15849ee1f86dbcc41c08a05295e76e46682db5363def81618a7f49c94cd4e0",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "odt/review-contract.odt.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold",
+                                    "Calibri-Italic"
+                                ],
+                      "copyOf":  "torture/review-contract.docx"
+                  },
+                  {
+                      "source":  "odt/sections-headers.odt",
+                      "sha256":  "65a388445d65e6d9f27ab0d59b79eaa43300b99adf918291090656ea7747cfbf",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "odt/sections-headers.odt.pdf",
+                      "fonts":  [
+                                    "Calibri-Bold",
+                                    "Cambria"
+                                ],
+                      "copyOf":  "generated/sections-headers.docx"
+                  },
+                  {
+                      "source":  "odt/simple.odt",
+                      "sha256":  "85f6a45e21890efbc19ad070b825a3cf23833c9c6d84923c02cb458fd2a826db",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "odt/simple.odt.pdf",
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri-Bold",
+                                    "Cambria",
+                                    "Cambria-Bold",
+                                    "Cambria-Italic",
+                                    "SymbolMT"
+                                ],
+                      "copyOf":  "generated/simple.docx"
+                  },
+                  {
+                      "source":  "odt/styles-unicode-comments.odt",
+                      "sha256":  "8619ebeb38b4545c0d90b7b645003734144ae75e794c35cd951734addd5e4dbe",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "odt/styles-unicode-comments.odt.pdf",
+                      "fonts":  [
+                                    "Calibri-Bold",
+                                    "Cambria",
+                                    "Georgia-Italic",
+                                    "MalgunGothic",
+                                    "MS Mincho",
+                                    "SansSerifCollection",
+                                    "SegoeUIEmoji",
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "generated/styles-unicode-comments.docx"
+                  },
+                  {
+                      "source":  "odt/tables-images-links.odt",
+                      "sha256":  "00a1a7ea039948b62cce7033a0beaa10ca8eb7881d2d7ec3e9b2bac870e92e4e",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "odt/tables-images-links.odt.pdf",
+                      "fonts":  [
+                                    "Calibri-Bold",
+                                    "Cambria"
+                                ],
+                      "copyOf":  "generated/tables-images-links.docx"
+                  },
+                  {
+                      "source":  "odt/toc-fields.odt",
+                      "sha256":  "02ee530e0a11af8605e0c8b29c3b49a70ef392f4757b078e23c02f49d58b1a31",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "odt/toc-fields.odt.pdf",
+                      "fonts":  [
+                                    "TimesNewRomanPS-BoldMT",
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "torture/toc-fields.docx"
+                  },
+                  {
+                      "source":  "dotx/simple.dotx",
+                      "sha256":  "789e549a50c6979047212458daf0d162ba42bcdcaba89294439313965ae96fbe",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "dotx/simple.dotx.pdf",
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri-Bold",
+                                    "Cambria",
+                                    "Cambria-Bold",
+                                    "Cambria-Italic",
+                                    "SymbolMT"
+                                ],
+                      "copyOf":  "generated/simple.docx"
+                  },
+                  {
+                      "source":  "dotx/styles-unicode-comments.dotx",
+                      "sha256":  "941df420011658b2a80c6b52cab427d642a50674f18febf4497c952b2fa3ae33",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "dotx/styles-unicode-comments.dotx.pdf",
+                      "fonts":  [
+                                    "Calibri-Bold",
+                                    "Cambria",
+                                    "Georgia-Italic",
+                                    "MalgunGothic",
+                                    "MS Mincho",
+                                    "SansSerifCollection",
+                                    "SegoeUIEmoji",
+                                    "TimesNewRomanPSMT"
+                                ],
+                      "copyOf":  "generated/styles-unicode-comments.docx"
+                  },
+                  {
+                      "source":  "protected/ecma376-standard.docx",
+                      "sha256":  "d265dcf02f7d552486229b8c67a627ef3752fe6802b02fd2d2d485fcfbbac5de",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "protected/ecma376-standard.docx.pdf",
+                      "fonts":  [
+                                    "LiberationSerif"
+                                ],
+                      "password":  "Password1234_"
+                  },
+                  {
+                      "source":  "protected/ecma376-standard-plain.docx",
+                      "sha256":  "ca1c0ebb465553361b9034e696d4081df0a2d41918f820060325b3ca634eb69b",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "protected/ecma376-standard-plain.docx.pdf",
+                      "fonts":  [
+                                    "LiberationSerif"
+                                ]
+                  },
+                  {
+                      "source":  "protected/report-featherweight.docx",
+                      "sha256":  "560a9fad07412fe8d9f0261ee46c4e8957866497276cbc0ddadc1c2c56d696e9",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  8,
+                      "pdf":  "protected/report-featherweight.docx.pdf",
+                      "fonts":  [
+                                    "Calibri-Bold",
+                                    "Cambria"
+                                ],
+                      "password":  "featherweight"
+                  },
+                  {
+                      "source":  "protected/simple-protected.doc",
+                      "sha256":  "f2ed7fcb256bb1dd5262ac599a6b5879febbc260379d17c672dec97b464a6618",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "protected/simple-protected.doc.pdf",
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri-Bold",
+                                    "Cambria",
+                                    "Cambria-Bold",
+                                    "Cambria-Italic",
+                                    "SymbolMT"
+                                ],
+                      "copyOf":  "generated/simple.docx",
+                      "password":  "featherweight"
+                  },
+                  {
+                      "source":  "protected/simple-protected.docx",
+                      "sha256":  "fddb732ff8d05db4f423f5895d57d19a85f070d9d859e3931dcd2d871fc787a2",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "protected/simple-protected.docx.pdf",
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri-Bold",
+                                    "Cambria",
+                                    "Cambria-Bold",
+                                    "Cambria-Italic",
+                                    "SymbolMT"
+                                ],
+                      "copyOf":  "generated/simple.docx",
+                      "password":  "featherweight"
+                  },
+                  {
+                      "source":  "protected/tables-images-links-protected.doc",
+                      "sha256":  "ee29ea561a71d0eccb0e0242f50cf32cc704b16824dff2e8bde8c14c90886632",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "protected/tables-images-links-protected.doc.pdf",
+                      "fonts":  [
+                                    "Calibri-Bold",
+                                    "Cambria"
+                                ],
+                      "copyOf":  "generated/tables-images-links.docx",
+                      "password":  "featherweight"
+                  },
+                  {
+                      "source":  "protected/tables-images-links-protected.docx",
+                      "sha256":  "ad7c6cf3359859beafd6e448330b46dc5dbddb2c6ae1034882ee8aeeb1ab9641",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "protected/tables-images-links-protected.docx.pdf",
+                      "fonts":  [
+                                    "Calibri-Bold",
+                                    "Cambria"
+                                ],
+                      "copyOf":  "generated/tables-images-links.docx",
+                      "password":  "featherweight"
+                  },
+                  {
+                      "source":  "script/charts.docx",
+                      "sha256":  "45630c531180701f4e63a9063f49fc26d37a90fdecfda23df437369ebd29f6da",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  4,
+                      "pdf":  "script/charts.docx.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Light"
+                                ]
+                  },
+                  {
+                      "source":  "script/eastasia.docx",
+                      "sha256":  "41b07f35631f39d08654c1473885efcaa21f66e1cdb658e0805a6e345cb4dbd9",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "script/eastasia.docx.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "MalgunGothic",
+                                    "MicrosoftJhengHeiRegular",
+                                    "MicrosoftYaHei",
+                                    "MS-Gothic",
+                                    "Yu Mincho"
+                                ]
+                  },
+                  {
+                      "source":  "script/equations.docx",
+                      "sha256":  "9961d3b4036a7c672b08f8fa95b14fafe27e7402d9f710ed01e5cf913d762ad3",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  2,
+                      "pdf":  "script/equations.docx.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Light",
+                                    "CambriaMath"
+                                ]
+                  },
+                  {
+                      "source":  "script/rtl.docx",
+                      "sha256":  "42a0837b4a7e60e73a78707c7e1ee49ed3438a68248de08c71a9c74bbca205b3",
+                      "app":  "Word 16.0 (build 16.0.20326), safe mode",
+                      "pages":  1,
+                      "pdf":  "script/rtl.docx.pdf",
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri"
                                 ]
                   }
               ]
