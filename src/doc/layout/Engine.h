@@ -82,6 +82,10 @@ class Engine {
   // mapping offsets): note references the flow hasn't reached keep no number rather than take one.
   void BuildText(uint32_t para, const PageFields& fields, ParaText& out, bool pageBreaks = false,
                  bool numberNotes = true);
+  // Whether the view joins `para` to the next paragraph: its mark is a change the view doesn't show
+  // (deleted in the final view, inserted in Original), and a paragraph of the same story follows it
+  // in the same place, with no table, section break or content control between.
+  bool JoinsNext(uint32_t para) const;
   std::u16string NoteMark(uint32_t story) const;
   // A note's reference mark, numbered in the order references are laid out.
   std::u16string NoteReference(uint32_t story);
@@ -256,6 +260,7 @@ class Engine {
   uint32_t revision_ = 0;
   bool done_ = false;
   int32_t compatMode_ = 15;
+  bool joining_ = false;  // BuildText for a paragraph joined to the next: its text only, no label
   bool splitPageBreakAndMark_ = false;  // w:splitPgBreakAndParaMark
   bool sumSpacing_ = false;  // w:doNotUseHTMLParagraphAutoSpacing: space after and before add up
   std::vector<uint32_t> fieldsCount_;  // per story: fields in it (FieldsIn)
