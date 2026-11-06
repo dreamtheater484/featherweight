@@ -11,8 +11,23 @@ The fidelity piece of D5 (`docs/d5-plan.md`). Measured with `fwtool compare` aga
 | `numId 0` drops the style's list indents; no automatic spacing between items of one list | 98 (90.7 %) | 107,218 (96.5 %) |
 | A page break keeps its paragraph mark in mode 14 too | 97 (89.8 %) | 107,216 (96.5 %) |
 | Contextual spacing collapses before dropping the space after; space after must fit above footnotes | 98 (90.7 %) | 107,226 (96.5 %) |
+| Merged with `claude/d5-int` e38b850 (equations, drawings in the dump, `.doc` import) | 98 (90.7 %) | 107,255 (96.6 %) |
 
-From 6 Nov the corpus also holds 37 other reference documents: `.dotx` copies and password-protected `.docx` files from d1-corpus. The table counts only the original 108 `.docx` documents. On all 145, the last step gives 123 page matches (84.8 %) and 94.8 % of lines; the protected files show 0 pages until they can be opened.
+## What the targets count
+
+The 97 % and 98 % targets count each document once:
+- **Counted:** the original 108 `.docx` documents, plus the new distinct documents d1-corpus adds (the public chart, equation, right-to-left and East Asian files).
+- **Copies:** format copies of a counted document are measured against Word's render of each copy, but reported apart and kept out of the targets. These are the `.dotx`, `.doc`, `.odt` and password-protected copies, which sit under `dotx/`, `doc/`, `odt/` and `protected/` with the same category and name as the `.docx` under `docx/`.
+- **How compare says it:** `fwtool compare` prints the targets' line first and the copies' line after it. Its JSON has `"copy": true` on each copy and the copies' totals under `"copies"`. Its report puts the copies in a table of their own.
+
+Copies on e38b850:
+
+| Copies | Page counts match | Lines |
+|---|---:|---:|
+| `.doc`, opened through the `.doc` import | 82 of 108 | 101,461 of 111,331 (91.1 %) |
+| `.dotx` | 25 of 31 | 35,946 of 37,530 (95.8 %) |
+| Password-protected | 0 of 12 | not measured: the corpus doesn't record their passwords |
+| All copies | 107 of 151 (70.9 %) | 137,407 of 153,858 (89.3 %) |
 
 D1 ended at 98/108 and 95.9 %, not the 99/108 and 95.2 % in the plan. Those numbers were measured before D1's last layout commit (399a105, spaces squeezed only in mode 15). That commit gained 776 lines and lost eu-bijlage's page match, which had been a coincidence (1,070 of its 1,385 lines matched).
 
