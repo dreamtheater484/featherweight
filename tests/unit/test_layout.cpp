@@ -703,6 +703,12 @@ TEST(Layout_FontsTheDocumentCarries) {
   CHECK(fonts.Substitutions().empty());
   fonts.UseDocumentFonts({});
   CHECK(!fonts.Installed(L"Brial"));
+  // By the name the font table gives it where that isn't the font's own, as Word goes by the table.
+  std::vector<std::wstring> names;
+  CHECK(fw::doc::layout::EmbeddedFonts(*doc, &names).size() == 1u && names == std::vector<std::wstring>{L"Brial"});
+  fonts.UseDocumentFonts(files, {L"Brial Heavy"});
+  CHECK(fonts.Resolve(L"Brial Heavy") == L"Brial");
+  CHECK(fonts.Substitutions().empty());
 }
 
 TEST(Layout_MissingLatinFontsAsWordDrawsThem) {
@@ -1631,6 +1637,25 @@ TEST(Layout_AnEmptyListLabelHasNoTabAfterIt) {
   REQUIRE(term && item);
   CHECK(term->text.front() == u'T');  // no label, no tab: the term starts at the margin
   CHECK(item->text.substr(0, 3) == u"1.\t");
+}
+
+TEST(Layout_LineNumbersInTheMargin) {
+  // Every second line numbered, from 1 (w:start counts from 0), a quarter inch before the column;
+  // a paragraph with w:suppressLineNumbers and a table cell aren't counted, an empty paragraph is.
+  const std::string body = P("one") + "<w:p/>" + P("skipped", "<w:suppressLineNumbers/>") +
+                           "<w:tbl><w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid><w:tr><w:tc>" + P("cell") +
+                           "</w:tc></w:tr></w:tbl>" + P("three") + P("four") +
+                           SmallPage("<w:lnNumType w:countBy=\"2\" w:start=\"0\"/>");
+  Doc d = Make(body);
+  REQUIRE(d.doc && d.pages() == 1);
+  const auto& numbers = d.page(0).lineNumbers;
+  REQUIRE(numbers.size() == 2);
+  CHECK(numbers[0].text == u"2" && numbers[1].text == u"4");
+  const LineBox* four = Find(d, u"four");
+  REQUIRE(four);
+  CHECK(std::abs(numbers[1].baseline - four->baseline) < 0.01f);
+  CHECK(std::abs(numbers[1].x + numbers[1].line.contentRight - (20 - 18)) < 0.01f);  // 20 pt margin
+  CHECK(d.layout->Dump("t").pages[0].lines.back().story == fw::LayoutStory::LineNumber);
 }
 
 TEST(Layout_LinesSnapToTheDocumentGrid) {

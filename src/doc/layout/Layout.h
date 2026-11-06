@@ -153,6 +153,7 @@ struct Page {
   std::vector<LineBox> lines;        // in reading order per story
   std::vector<RunPaint> paints;      // LineBox::paint indexes this
   std::vector<CellRect> cells;       // table cells, a nested table's after the cell it's in
+  std::vector<LineBox> lineNumbers;  // w:lnNumType: story LineNumber, para kNone, no paints
   TextPos first;                     // the first body text on the page
 };
 
@@ -188,7 +189,8 @@ std::wstring SubstituteFamily(const Document& doc, std::wstring_view family);
 // The fonts a document carries (word/fonts, from w:embedRegular and the like), as font files for
 // text::Fonts::UseDocumentFonts: unobfuscated with their keys (ECMA-376 §17.8.1), and only those
 // whose tables read as a font. At most 64 files and 32 MB.
-std::vector<std::vector<uint8_t>> EmbeddedFonts(const Document& doc);
+// `names`, when given: the font table's name for each file, for Fonts::UseDocumentFonts.
+std::vector<std::vector<uint8_t>> EmbeddedFonts(const Document& doc, std::vector<std::wstring>* names = nullptr);
 
 // What a DATE or TIME field (its instruction, `code`) shows at `now` (as Options::now): by its \@
 // picture, as Word reads one, in the language `lang` (BCP 47; the user's when empty or unknown).

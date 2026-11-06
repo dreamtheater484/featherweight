@@ -12,7 +12,7 @@ namespace fw {
 // (plan §10), and `fwtool lines` writes the same format from that PDF.
 
 // Where a line's text comes from.
-enum class LayoutStory { Body, Header, Footer, Footnote, Endnote, Cell, TextBox };
+enum class LayoutStory { Body, Header, Footer, Footnote, Endnote, Cell, TextBox, LineNumber };
 
 struct LayoutLine {
   LayoutStory story = LayoutStory::Body;

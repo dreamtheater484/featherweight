@@ -293,6 +293,8 @@ struct LineBreaker::Impl {
 
   uint32_t Size() const { return static_cast<uint32_t>(text.size()); }
   const TextStyle& StyleOf(uint32_t i) const { return *styles[runOf[i]]; }
+  // The letter spacing after the character at i: at a line's end it doesn't take room (Word).
+  float SpacingAfter(uint32_t i) const { return kind[i] == kText ? StyleOf(i).letterSpacing : 0; }
   bool CanBreakBefore(uint32_t i) const;
   const RunFont& FontOfRun(uint32_t run);
   void Shape(uint32_t start, uint32_t end, uint32_t run, Slot slot, const DWRITE_SCRIPT_ANALYSIS& script,
@@ -775,7 +777,7 @@ Fit LineBreaker::Impl::FindBreak(uint32_t a, float s0, float s1, bool first) {
     const float w = adv[i];
     if (tab.active && tab.align == TabAlign::Decimal && beforeDecimal < 0 && text[i] == p.format.decimalSeparator)
       beforeDecimal = content;
-    if (placed && w > 0 && end(content + w) > limit + kEpsilon) {
+    if (placed && w > 0 && end(content + w) > limit + kEpsilon && end(content + w - SpacingAfter(i)) > limit + kEpsilon) {
       // The cluster at i doesn't fit. The word it's in: from the last break to the next one.
       uint32_t ws = lastBreak ? lastBreak : a;
       uint32_t we = i + 1;
@@ -798,7 +800,7 @@ Fit LineBreaker::Impl::FindBreak(uint32_t a, float s0, float s1, bool first) {
       lastBreak = i + 1;
       lastHyphen = false;
       lastContent = content;
-      lastEnd = end(content);
+      lastEnd = end(content - SpacingAfter(i));
     }
   }
   return {n, LineEnd::ParagraphEnd, false};
@@ -834,7 +836,7 @@ uint32_t LineBreaker::Impl::Squeeze(uint32_t segFrom, uint32_t i, uint32_t we, f
   uint32_t e = we;
   while (e < n && Hangs(kind[e])) ++e;
   if (e >= n || Mandatory(kind[e])) return 0;
-  float c = content;
+  float c = content - (we > i ? SpacingAfter(we - 1) : 0);
   for (uint32_t k = i; k < we; ++k) c += adv[k];
   return Squeezes(segFrom, we, SegmentStart(tab, c, beforeDecimal) + c - limit, limit, lastEnd) ? e : 0;
 }

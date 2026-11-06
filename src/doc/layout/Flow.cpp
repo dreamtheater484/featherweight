@@ -1970,6 +1970,7 @@ bool Engine::NextPage() {
     if (timings_ && !f.paginatedMarked) timings_->Mark(OpenTimings::Paginated);
     f.paginatedMarked = true;
     RefreshPageCounts();
+    NumberLines();
   }
   return made;
 }
@@ -2055,6 +2056,73 @@ void Engine::RefreshPageCounts() {
     page.paints = std::move(paints);
   }
   if (changed) ++revision_;
+}
+
+// Line numbers (w:lnNumType), once the pages are known, since they move nothing: beside each line
+// of the body, right-aligned their distance (a quarter inch by default) before the column, in the
+// default paragraph style with the "line number" character style, as Word draws them. Table
+// cells, text boxes, notes and paragraphs with w:suppressLineNumbers aren't counted; empty
+// paragraphs are. They start again on each page, in each section or never (w:restart).
+void Engine::NumberLines() {
+  const std::vector<Section>& sections = doc_.Sections();
+  bool any = false;
+  for (const Section& s : sections) any = any || s.props.lineNumberCountBy > 0;
+  if (!any) return;
+  std::string_view normal, lineStyle;
+  for (const Style& s : doc_.Styles()) {
+    if (s.type == StyleType::Paragraph && s.isDefault) normal = s.id;
+    if (s.type == StyleType::Character && s.name.size() == 11 && (s.name[0] | 0x20) == 'l' && s.name.substr(1) == "ine number")
+      lineStyle = s.id;
+  }
+  const text::TextStyle* style = styles_.Intern(StyleOf(doc_.StyleChainRun(normal, lineStyle), false));
+  std::unordered_map<int32_t, text::Line> shaped;
+  auto shape = [&](int32_t n) -> const text::Line& {
+    auto it = shaped.find(n);
+    if (it != shaped.end()) return it->second;
+    const std::wstring digits = std::to_wstring(n);
+    text::Paragraph p;
+    p.text = digits;
+    p.runs = {{static_cast<uint32_t>(digits.size()), style}};
+    p.markStyle = style;
+    text::LineBreaker breaker(fonts_, p, 1e6f);
+    return shaped.emplace(n, breaker.Next()).first->second;
+  };
+  int32_t count = 0;
+  uint32_t lastSection = kNone;
+  for (Page& page : pages_) {
+    page.lineNumbers.clear();
+    if (page.section >= sections.size()) continue;
+    const SectionProps& sp = sections[page.section].props;
+    if (sp.lineNumberCountBy <= 0) {
+      lastSection = page.section;
+      continue;
+    }
+    // Numbering starts again on each page (newPage, the default), in each section or only where
+    // numbered sections begin (continuous).
+    const bool begins = lastSection == kNone || sections[lastSection].props.lineNumberCountBy <= 0;
+    const std::string_view restart = sp.lineNumberRestart;
+    if (restart == "continuous" ? begins : restart == "newSection" ? begins || page.section != lastSection : true)
+      count = sp.lineNumberStart - 1;
+    lastSection = page.section;
+    const float distance = sp.lineNumberDistance.Value() > 0 ? static_cast<float>(sp.lineNumberDistance.Value()) / 20.0f : 18.0f;
+    for (const LineBox& lb : page.lines) {
+      if (lb.story != LineStory::Body || lb.para == kNone || lb.drawing != kNone || lb.turn) continue;
+      if (doc_.ResolvedPara(lb.para).suppressLineNumbers) continue;
+      if (++count % sp.lineNumberCountBy != 0) continue;
+      LineBox nb;
+      nb.story = LineStory::LineNumber;
+      nb.line = shape(count);
+      nb.x = lb.x - distance - nb.line.contentRight;
+      nb.top = lb.top;
+      nb.height = lb.height;
+      nb.baseline = lb.baseline;
+      nb.paint = UINT32_MAX / 2;  // no RunPaint: drawn in automatic black
+      const std::wstring digits = std::to_wstring(count);
+      nb.text.assign(digits.begin(), digits.end());
+      page.lineNumbers.push_back(std::move(nb));
+    }
+  }
+  ++revision_;
 }
 
 }  // namespace fw::doc::layout

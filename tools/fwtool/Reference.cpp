@@ -39,10 +39,13 @@ std::wstring ElementType(FPDF_STRUCTELEMENT e, bool raw) {
 
 // What the structure tree says about a marked-content id: which container its text is in (lines
 // never cross one) and which story. Word tags table cells TD and TH, notes Footnote and Endnote,
-// and text boxes Textbox, role-mapped to Note and Sect.
+// and text boxes Textbox, role-mapped to Note and Sect; equations Formula.
 struct Marked {
   int container = 0;  // 0: the page itself
   LayoutStory story = LayoutStory::Body;
+  // In an equation: left out, as Featherweight's layout has an equation as one object without
+  // lines, while Word's PDF puts each script on its own baseline (they read as lines of their own).
+  bool formula = false;
 };
 
 void Walk(FPDF_STRUCTELEMENT e, Marked m, int& nextContainer, std::unordered_map<int, Marked>& out, int depth) {
@@ -56,6 +59,8 @@ void Walk(FPDF_STRUCTELEMENT e, Marked m, int& nextContainer, std::unordered_map
   } else if (type == L"TD" || type == L"TH") {
     m.container = nextContainer++;
     if (m.story == LayoutStory::Body) m.story = LayoutStory::Cell;
+  } else if (type == L"Formula") {
+    m.formula = true;
   }
   for (int i = 0, n = FPDF_StructElement_GetMarkedContentIdCount(e); i < n; ++i) {
     int mcid = FPDF_StructElement_GetMarkedContentIdAtIndex(e, i);
@@ -68,6 +73,7 @@ void Walk(FPDF_STRUCTELEMENT e, Marked m, int& nextContainer, std::unordered_map
 
 struct ObjectInfo {
   bool artifact = false;  // headers and footers: Word marks them as pagination artifacts
+  bool plain = false;     // an artifact without properties: Word's line numbers (w:lnNumType)
   int mcid = -1;
 };
 
@@ -79,8 +85,10 @@ ObjectInfo InfoOf(FPDF_PAGEOBJECT obj) {
     wchar_t name[32] = {};
     unsigned long len = 0;
     if (FPDFPageObjMark_GetName(FPDFPageObj_GetMark(obj, i), reinterpret_cast<FPDF_WCHAR*>(name), sizeof(name), &len) &&
-        std::wstring_view(name) == L"Artifact")
+        std::wstring_view(name) == L"Artifact") {
       info.artifact = true;
+      info.plain = FPDFPageObjMark_CountParams(FPDFPageObj_GetMark(obj, i)) == 0;
+    }
   }
   return info;
 }
@@ -159,7 +167,8 @@ class LineBuilder {
     fw::LayoutLine line;
     // Word doesn't say which pagination artifacts are headers and which footers: top or bottom.
     const double y = rotation_ ? pageY_ : y_;
-    line.story = artifact_ ? (y > page_.height / 2 ? LayoutStory::Header : LayoutStory::Footer) : story_;
+    line.story = artifact_ && story_ != LayoutStory::LineNumber ? (y > page_.height / 2 ? LayoutStory::Header : LayoutStory::Footer)
+                                                                 : story_;
     // A turned line is placed where it starts.
     line.x = rotation_ ? pageX_ : left_;
     line.baseline = page_.height - y;
@@ -208,6 +217,10 @@ void ReadPage(FPDF_PAGE page, fw::LayoutPage& out) {
     Marked m;
     if (!info.artifact)
       if (auto found = marked.find(info.mcid); found != marked.end()) m = found->second;
+    if (m.formula) {
+      lines.Gap();
+      continue;
+    }
     double x = 0, y = 0;
     FPDFText_GetCharOrigin(text, i, &x, &y);
     FS_RECTF box{static_cast<float>(x), static_cast<float>(y), static_cast<float>(x), static_cast<float>(y)};
@@ -216,11 +229,26 @@ void ReadPage(FPDF_PAGE page, fw::LayoutPage& out) {
     // the text runs down the page.
     const float angle = FPDFText_GetCharAngle(text, i);
     const int rotation = angle < 0 ? 0 : static_cast<int>(std::lround(angle / 1.5707963)) % 4;
-    lines.Add(c, info.artifact ? -1 : m.container, info.artifact, m.story, x, y, FPDFText_GetFontSize(text, i), box,
+    if (info.artifact && info.plain) m.story = LayoutStory::LineNumber;
+    lines.Add(c, info.artifact ? (info.plain ? -2 : -1) : m.container, info.artifact, m.story, x, y, FPDFText_GetFontSize(text, i), box,
               rotation);
   }
   lines.Flush();
   FPDFText_ClosePage(text);
+  // Artifacts without properties: line numbers (w:lnNumType), digits beside the page's text, and
+  // anything else (a chart's text, a shape in a header), which is a header or footer as before.
+  double left = 1e9, right = -1e9;
+  for (const fw::LayoutLine& l : out.lines)
+    if (l.story != LayoutStory::LineNumber && l.story != LayoutStory::Header && l.story != LayoutStory::Footer) {
+      left = std::min(left, l.x);
+      right = std::max(right, l.x + l.width);
+    }
+  for (fw::LayoutLine& l : out.lines) {
+    if (l.story != LayoutStory::LineNumber) continue;
+    const bool digits = std::all_of(l.text.begin(), l.text.end(), [](wchar_t c) { return c >= L'0' && c <= L'9'; });
+    if (!digits || (l.x + l.width > left + 0.5 && l.x < right - 0.5))
+      l.story = l.baseline < out.height / 2 ? LayoutStory::Header : LayoutStory::Footer;
+  }
 }
 
 }  // namespace

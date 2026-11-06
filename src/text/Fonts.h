@@ -84,8 +84,10 @@ class Fonts {
 
   // Font files a document carries (Word's word/fonts), used as Word uses them: for families this
   // PC doesn't have. Replaces the ones given before; none restores the installed fonts alone. Only
-  // before anything is laid out with this Fonts: the faces it gave out go.
-  void UseDocumentFonts(const std::vector<std::vector<uint8_t>>& files);
+  // before anything is laid out with this Fonts: the faces it gave out go. `names`, when given:
+  // the family the document calls each file, which Word goes by when it isn't the font's own
+  // ("Encode Sans Normal BLack" for a font of the family "Encode Sans Normal").
+  void UseDocumentFonts(const std::vector<std::vector<uint8_t>>& files, const std::vector<std::wstring>& names = {});
 
   bool Installed(std::wstring_view family);
   // The installed family drawn for `family`: itself, a substitute, or the last resort. Replacements

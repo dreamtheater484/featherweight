@@ -174,8 +174,10 @@ Fonts::~Fonts() {
   if (memory_) factory_->UnregisterFontFileLoader(memory_.Get());
 }
 
-void Fonts::UseDocumentFonts(const std::vector<std::vector<uint8_t>>& files) {
+void Fonts::UseDocumentFonts(const std::vector<std::vector<uint8_t>>& files,
+                             const std::vector<std::wstring>& documentNames) {
   if (files.empty() && !installed_) return;  // none before, none now
+  std::vector<std::pair<std::wstring, std::wstring>> aliases;  // the document's name, the font's family
   if (!installed_) installed_ = collection_;
   ComPtr<IDWriteFontCollection> next = installed_;
   ComPtr<IDWriteFactory5> factory;
@@ -188,7 +190,8 @@ void Fonts::UseDocumentFonts(const std::vector<std::vector<uint8_t>>& files) {
         FAILED(factory->RegisterFontFileLoader(memory_.Get())))
       memory_.Reset();
     bool added = false;
-    for (const std::vector<uint8_t>& file : files) {
+    for (size_t k = 0; k < files.size(); ++k) {
+      const std::vector<uint8_t>& file = files[k];
       // DirectWrite copies the bytes. A family the PC has keeps its installed fonts, as in Word: a
       // document's copy is often a subset of it.
       ComPtr<IDWriteFontFile> font;
@@ -206,6 +209,8 @@ void Fonts::UseDocumentFonts(const std::vector<std::vector<uint8_t>>& files) {
         BOOL exists = FALSE;
         if (SUCCEEDED(faces->GetPropertyValues(i, DWRITE_FONT_PROPERTY_ID_WIN32_FAMILY_NAME, &exists, &names)) && exists) {
           const std::wstring family = EnglishName(names.Get());
+          if (i == 0 && k < documentNames.size() && !documentNames[k].empty() && Lower(documentNames[k]) != Lower(family))
+            aliases.emplace_back(documentNames[k], family);
           UINT32 index = 0;
           BOOL has = FALSE;
           const DWRITE_FONT_PROPERTY property{DWRITE_FONT_PROPERTY_ID_WIN32_FAMILY_NAME, family.c_str(), L""};
@@ -232,6 +237,8 @@ void Fonts::UseDocumentFonts(const std::vector<std::vector<uint8_t>>& files) {
   faces_.clear();
   faceNames_.clear();
   substitutions_.clear();
+  for (const auto& [name, family] : aliases)
+    if (!Installed(name) && Installed(family)) resolved_.emplace(Lower(name), family);
 }
 
 bool Fonts::Installed(std::wstring_view family) {

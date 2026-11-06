@@ -36,7 +36,7 @@ Each line:
 
 | Field | Meaning |
 |---|---|
-| `story` | Where the text comes from: `body`, `header`, `footer`, `footnote`, `endnote`, `cell` (a table cell) or `textbox` (a text box, or a shape with text). |
+| `story` | Where the text comes from: `body`, `header`, `footer`, `footnote`, `endnote`, `cell` (a table cell), `textbox` (a text box, or a shape with text) or `lineNumber` (a line number in the margin, w:lnNumType). |
 | `x` | The left edge of the first glyph (its pen position), in points from the page's left edge. |
 | `baseline` | The baseline, in points from the page's top edge. |
 | `width` | From `x` to the end of the last glyph's advance, trailing spaces left out, in points. |
