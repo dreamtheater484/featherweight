@@ -91,10 +91,16 @@ class Fonts {
   const Face* Get(const std::wstring& installedFamily, DWRITE_FONT_WEIGHT weight, bool italic);
   // The face for a font DirectWrite's fallback picked.
   const Face* Get(IDWriteFont* font);
+  // The face drawn for a run in `requested`, bold and italic as the run is: Resolve and Get, except
+  // that a full face name ("Times New Roman Bold"), which Word finds as GDI does, keeps that face's
+  // weight and slant.
+  const Face* FaceFor(std::wstring_view requested, bool bold, bool italic);
 
   // Every family replaced so far, in the order first seen.
   const std::vector<Substitution>& Substitutions() const { return substitutions_; }
-  void ClearSubstitutions() { substitutions_.clear(); }
+  // Forgets the replacements and the choices behind them, so the next document's own font table
+  // picks its substitutes again. Only between documents: Resolve's references to them go.
+  void ClearSubstitutions();
 
   // The family drawn when nothing else is installed.
   static constexpr const wchar_t* kLastResort = L"Times New Roman";
@@ -118,6 +124,14 @@ class Fonts {
   Microsoft::WRL::ComPtr<IDWriteFontSet> win32_;
   bool win32Tried_ = false;
   Microsoft::WRL::ComPtr<IDWriteFontSet> Win32Family(const std::wstring& family);
+  // An installed face by its full name: its family, weight and slant.
+  struct FaceName {
+    std::wstring family;
+    DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL;
+    bool italic = false;
+  };
+  bool FullName(const std::wstring& name, FaceName& out);
+  std::map<std::wstring, FaceName, std::less<>> faceNames_;  // lower-cased request -> the face it names
   SubstituteFn substitute_;
   std::map<std::wstring, std::wstring, std::less<>> resolved_;  // lower-cased request -> family
   std::map<std::tuple<std::wstring, int, int, int>, std::unique_ptr<Face>> faces_;

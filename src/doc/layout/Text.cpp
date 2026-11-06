@@ -162,9 +162,7 @@ const text::FontMetrics& StylePool::Metrics(text::Fonts& fonts, const text::Text
   auto it = metrics_.find(style);
   if (it != metrics_.end()) return it->second;
   text::FontMetrics m;
-  const std::wstring& family = fonts.Resolve(style->family);
-  if (const text::Face* face = fonts.Get(family, style->bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
-                                         style->italic))
+  if (const text::Face* face = fonts.FaceFor(style->family, style->bold, style->italic))
     m = face->Metrics(style->size);
   return metrics_.emplace(style, m).first->second;
 }

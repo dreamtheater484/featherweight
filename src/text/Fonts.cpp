@@ -193,6 +193,34 @@ ComPtr<IDWriteFontSet> Fonts::Win32Family(const std::wstring& family) {
   return matches;
 }
 
+bool Fonts::FullName(const std::wstring& name, FaceName& out) {
+  Win32Family(name);  // makes the font set
+  ComPtr<IDWriteFontSet> matches;
+  ComPtr<IDWriteFontFaceReference> ref;
+  ComPtr<IDWriteFontFace3> face;
+  ComPtr<IDWriteLocalizedStrings> names;
+  const DWRITE_FONT_PROPERTY property{DWRITE_FONT_PROPERTY_ID_FULL_NAME, name.c_str(), L""};
+  if (!win32_ || name.empty() || FAILED(win32_->GetMatchingFonts(&property, 1, &matches)) || !matches ||
+      matches->GetFontCount() == 0 || FAILED(matches->GetFontFaceReference(0, &ref)) ||
+      FAILED(ref->CreateFontFace(&face)) || FAILED(face->GetFamilyNames(&names)))
+    return false;
+  out.family = EnglishName(names.Get());
+  out.weight = face->GetWeight();
+  out.italic = face->GetStyle() != DWRITE_FONT_STYLE_NORMAL;
+  return !out.family.empty() && Installed(out.family);
+}
+
+const Face* Fonts::FaceFor(std::wstring_view requested, bool bold, bool italic) {
+  const std::wstring& family = Resolve(requested);
+  DWRITE_FONT_WEIGHT weight = bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL;
+  if (!faceNames_.empty())
+    if (auto it = faceNames_.find(Lower(requested)); it != faceNames_.end()) {
+      weight = std::max(weight, it->second.weight);
+      italic = italic || it->second.italic;
+    }
+  return Get(family, weight, italic);
+}
+
 std::wstring_view Fonts::BuiltInSubstitute(std::wstring_view family) {
   std::wstring key = Lower(family);
   for (const auto& b : kBuiltIn) {
@@ -215,8 +243,13 @@ const std::wstring& Fonts::Resolve(std::wstring_view family) {
   if (auto it = resolved_.find(key); it != resolved_.end()) return it->second;
 
   std::wstring used;
+  FaceName face;
   if (Installed(family)) {
     used = family;
+  } else if (FullName(std::wstring(family), face)) {
+    // "Times New Roman Bold": that face of an installed family, not a replacement.
+    used = face.family;
+    faceNames_[key] = std::move(face);
   } else {
     if (substitute_) {
       std::wstring s = substitute_(family);
@@ -238,6 +271,11 @@ const std::wstring& Fonts::Resolve(std::wstring_view family) {
     if (std::find(substitutions_.begin(), substitutions_.end(), sub) == substitutions_.end()) substitutions_.push_back(sub);
   }
   return resolved_.emplace(std::move(key), std::move(used)).first->second;
+}
+
+void Fonts::ClearSubstitutions() {
+  for (const Substitution& s : substitutions_) resolved_.erase(Lower(s.requested));
+  substitutions_.clear();
 }
 
 const Face* Fonts::Get(const std::wstring& installedFamily, DWRITE_FONT_WEIGHT weight, bool italic) {
