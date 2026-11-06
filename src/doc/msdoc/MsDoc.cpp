@@ -302,6 +302,7 @@ struct Rpr {
   int64_t pic = -1;  // sprmCPicLocation: the picture in the Data stream
   uint16_t ibst = 0, ibstDel = 0;
   uint32_t dttm = 0, dttmDel = 0;
+  int cstyle = -1;  // sprmCIstd: the character style
   std::string sym;  // w:sym for a symbol character
 };
 
@@ -338,6 +339,7 @@ struct Tc {
   uint16_t flags = 0;  // TCGRF
   std::array<std::string, 4> brc;  // top, left, bottom, right
   std::string shd;
+  std::array<int, 4> padding = {-1, -1, -1, -1};  // the cell's own margins: top, left, bottom, right
 };
 
 struct Tap {
@@ -353,11 +355,20 @@ struct Tap {
   std::array<int, 4> fromText{};
 };
 
+// A toggle property's operand: 0 off, 1 on, 0x80 as the style says, 0x81 the style's opposite. The
+// last is kept as "\x81name" until the paragraph's and character's styles are known (RprXml).
 void Toggle(std::string& slot, std::string_view name, uint8_t v) {
-  if (v == 0x80) slot.clear();  // as the style says
+  if (v == 0x80) slot.clear();
   else if (v == 0) slot = "<w:" + std::string(name) + " w:val=\"0\"/>";
-  else slot = "<w:" + std::string(name) + "/>";  // on, or the style's opposite (0x81)
+  else if (v == 0x81) slot = "\x81" + std::string(name);
+  else slot = "<w:" + std::string(name) + "/>";
 }
+
+// The toggle sprms, by their element's name.
+constexpr std::pair<std::string_view, uint16_t> kToggleSprms[] = {
+    {"b", 0x0835},       {"i", 0x0836},       {"strike", 0x0837},  {"outline", 0x0838}, {"shadow", 0x0839},
+    {"smallCaps", 0x083A}, {"caps", 0x083B},  {"vanish", 0x083C},  {"dstrike", 0x2A53}, {"imprint", 0x0854},
+    {"emboss", 0x0858},  {"bCs", 0x085C},     {"iCs", 0x085D}};
 
 void OnOff(std::string& slot, std::string_view name, uint8_t v) {
   slot = v ? "<w:" + std::string(name) + "/>" : "<w:" + std::string(name) + " w:val=\"0\"/>";
@@ -546,6 +557,8 @@ class Converter {
   std::map<uint32_t, Bytes> spaMain_, spaHeader_;        // anchor CP -> SPA
   std::map<uint32_t, std::pair<uint32_t, uint32_t>> textBoxes_, headerTextBoxes_;  // spid -> its story
   int z_ = 1;
+  int paraStyle_ = -1;  // the paragraph being written's style, for toggles that say "the style's opposite"
+  bool StyleToggle(int istd, uint16_t op) const;
   std::vector<std::pair<uint32_t, Sep>> sections_;  // each section's end CP and properties
   std::map<uint32_t, size_t> sectionEnds_;           // the CP of a section's last paragraph mark -> section
   std::vector<uint32_t> hdd_;                        // header story CPs
@@ -947,6 +960,7 @@ void Converter::ApplyChp(const Bytes& g, Rpr& r) const {
       case 0x4A30: {
         const uint16_t istd = a.U16(0);
         r.s[rStyle] = istd == 10 || istd >= styles_.size() || !styles_[istd].defined ? "" : El("rStyle", StyleId(istd));
+        r.cstyle = r.s[rStyle].empty() ? -1 : istd;
         break;
       }
       case 0x4A4F: case 0x4A50: case 0x4A51: case 0x4A5E: {
@@ -1148,8 +1162,8 @@ void Converter::ApplyTap(const Bytes& g, Tap& t) const {
       case 0x940F: t.y = a.I16(0); break;
       case 0x9410: t.fromText[0] = a.I16(0); break;
       case 0x9411: t.fromText[1] = a.I16(0); break;
-      case 0x941B: t.fromText[2] = a.I16(0); break;
-      case 0x941C: t.fromText[3] = a.I16(0); break;
+      case 0x941E: t.fromText[2] = a.I16(0); break;  // sprmTDxaFromTextRight
+      case 0x941F: t.fromText[3] = a.I16(0); break;  // sprmTDyaFromTextBottom
       case 0x9407: t.height = a.I16(0); break;
       case 0x3404: t.header = a.U8(0) != 0; break;
       case 0x3403: case 0x3466: t.cantSplit = a.U8(0) != 0; break;
@@ -1172,6 +1186,13 @@ void Converter::ApplyTap(const Bytes& g, Tap& t) const {
         const int width = a.U16(5);
         for (size_t b = 0; b < 4; ++b)
           if (a.U8(3) & (1 << b)) t.padding[b] = width;
+        break;
+      }
+      case 0xD632: {  // sprmTCellPadding: cells itcFirst to itcLim, the sides in grfbrc, the width (ftsWidth 3: twips; 0: none)
+        const int width = a.U8(4) == 3 ? a.U16(5) : 0;
+        for (size_t k = a.U8(1); k < a.U8(2) && k < t.tc.size(); ++k)
+          for (size_t b = 0; b < 4; ++b)
+            if (a.U8(3) & (1 << b)) t.tc[k].padding[b] = width;
         break;
       }
       case 0x7629: {  // sprmTTextFlow: itcFirst, itcLim, then the cells' text flow
@@ -1238,11 +1259,35 @@ std::string Converter::RprXml(const Rpr& r, bool mark) {
       for (size_t f = 0; f < 3; ++f)
         if (!r.lang[f].empty()) out += kAttr[f] + r.lang[f] + "\"";
       out += "/>";
+    } else if (!r.s[k].empty() && r.s[k][0] == '\x81') {
+      // The style's opposite: the paragraph's and the character's styles, toggled as Word does. In a style,
+      // where this is the base style's opposite, w:on toggles it already.
+      const std::string name = r.s[k].substr(1);
+      bool on = true;
+      if (paraStyle_ >= 0)
+        for (const auto& [n, op] : kToggleSprms)
+          if (n == name) on = StyleToggle(paraStyle_, op) == StyleToggle(r.cstyle, op);
+      out += on ? "<w:" + name + "/>" : "<w:" + name + " w:val=\"0\"/>";
     } else {
       out += r.s[k];
     }
   }
   return out.empty() ? out : "<w:rPr>" + out + "</w:rPr>";
+}
+
+bool Converter::StyleToggle(int istd, uint16_t op) const {
+  std::vector<size_t> chain;
+  for (size_t i = static_cast<size_t>(istd); istd >= 0 && i < styles_.size() && chain.size() < 16;
+       i = static_cast<size_t>(styles_[i].base))
+    chain.push_back(i);
+  bool on = false;
+  for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+    ForEachSprm(styles_[*it].chpx, [&](const Sprm& sp) {
+      if (sp.op != op) return;
+      const uint8_t v = sp.arg.U8(0);
+      on = v == 0 ? false : v == 1 ? true : v == 0x81 ? !on : on;
+    });
+  return on;
 }
 
 std::string Converter::PprXml(const Ppr& p, const std::string& rPr, const std::string& sectPr) const {
@@ -1554,6 +1599,13 @@ void Converter::EmitTable(const std::vector<Para>& paras, size_t i0, size_t i1, 
       }
       out += tc.shd;
       if (tc.flags & 0x2000) out += "<w:noWrap/>";
+      if (std::any_of(tc.padding.begin(), tc.padding.end(), [](int w) { return w >= 0; })) {
+        static const char* const kSide[] = {"top", "left", "bottom", "right"};
+        out += "<w:tcMar>";
+        for (size_t b = 0; b < 4; ++b)
+          if (tc.padding[b] >= 0) out += std::string("<w:") + kSide[b] + " w:w=\"" + Num(tc.padding[b]) + "\" w:type=\"dxa\"/>";
+        out += "</w:tcMar>";
+      }
       // TCGRF.textFlow: vertical text (a header turned along the page's side, for one).
       switch ((tc.flags >> 2) & 7) {
         case 1: out += El("textDirection", "tbRl"); break;
@@ -1581,9 +1633,12 @@ void Converter::EmitPara(const Para& p, Story& story, std::string& out) {
   std::string sectPr;
   if (story.kind == StoryKind::Main && p.depth == 0)
     if (auto it = sectionEnds_.find(p.mark); it != sectionEnds_.end()) sectPr = SepXml(it->second);
+  const int outerStyle = paraStyle_;  // a text box's paragraphs are written inside another's runs
+  paraStyle_ = p.ppr.istd;
   const std::string mark = p.mark < text_.size() ? RprXml(ChpAt(p.mark), true) : std::string();
   out += "<w:p>" + PprXml(p.ppr, mark, sectPr);
   EmitRuns(p.cp0, p.mark, story, out);
+  paraStyle_ = outerStyle;
   if (story.kind == StoryKind::Main) EmitMarks(p.mark, out);
   out += "</w:p>";
 }

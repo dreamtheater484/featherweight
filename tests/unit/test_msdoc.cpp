@@ -311,7 +311,8 @@ TEST(MsDoc_StylesListsSectionsAndHeaders) {
   b.ccp[0] = 11;
   b.ccp[2] = 6;
   b.styles.push_back(Std(1, 1, 0, u"heading 1,h1", Cat({S8(0x2640, 0), S8(0x2406, 1)}), Cat({S8(0x0835, 1), S16(0x4A43, 32)})));
-  b.chars = {{17, {}}};
+  // "Ti" and "It": bold as the opposite of their paragraph's style (0x81), so off in the heading and on in Normal.
+  b.chars = {{2, S8(0x0835, 0x81)}, {6, {}}, {8, S8(0x0835, 0x81)}, {17, {}}};
   b.paras = {{6, 1, {}}, {11, 0, Cat({S16(0x460B, 1), S8(0x260A, 0)})}, {16, 0, {}}, {17, 0, {}}};
   b.sepx = Cat({S16(0xB01F, 15840), S16(0xB020, 12240), S16(0xB021, 1440), S8(0x300A, 1)});
   {  // one simple list, decimal "%1.", indented, and one LFO for it
@@ -358,8 +359,9 @@ TEST(MsDoc_StylesListsSectionsAndHeaders) {
   REQUIRE(p.size() == 2u);
   const ParaProps& heading = doc->ResolvedPara(p[0]);
   CHECK(heading.style == "Heading1" && heading.outlineLevel == 0 && heading.keepNext);
-  CHECK(RunAt(*doc, p[0], 0).bold && RunAt(*doc, p[0], 0).size.Value() == 32);
-  CHECK(!RunAt(*doc, p[1], 0).bold);
+  CHECK(RunAt(*doc, p[0], 3).bold && RunAt(*doc, p[0], 3).size.Value() == 32);
+  CHECK(!RunAt(*doc, p[0], 0).bold && RunAt(*doc, p[1], 0).bold);
+  CHECK(!RunAt(*doc, p[1], 3).bold);
   const std::optional<ListLabel> label = doc->Label(p[1]);
   CHECK(label && label->text == u"1." && doc->ResolvedPara(p[1]).indStart.Value() == 720);
   REQUIRE(doc->Sections().size() == 1u);
@@ -390,7 +392,8 @@ TEST(MsDoc_TablesFieldsNotesBookmarksAndPictures) {
     for (int x : {-108, 2000, 4000}) Add16(def, static_cast<uint32_t>(x) & 0xFFFF);
     def.resize(def.size() + 40, 0);
     Add(row, Sprm(0xD608, def));
-    Add(row, S16(0x3404, 1));  // a header row: after the table definition, so its size must be right
+    Add(row, S8(0x3404, 1));  // a header row: after the table definition, so its size must be right
+    Add(row, Sprm(0xD632, {6, 1, 2, 0x0A, 3, 58, 0}));  // the second cell's own margins: 58 twips left and right
   }
   b.paras = {{2, 0, S8(0x2416, 1)}, {4, 0, S8(0x2416, 1)}, {5, 0, row}, {22, 0, {}}, {30, 0, {}}, {31, 0, {}}};
   {  // the footnote: its reference at 19, its text from 0 to 8 in the footnote story
@@ -460,6 +463,13 @@ TEST(MsDoc_TablesFieldsNotesBookmarksAndPictures) {
   CHECK(tbl.Is(Name("tbl")) && doc->TableRows(tbl).size() == 1u && doc->RowCells(doc->TableRows(tbl)[0]).size() == 2u);
   CHECK(doc->TableGrid(tbl).size() == 2u && doc->TableGrid(tbl)[0].Value() == 2108);
   CHECK(doc->TableRows(tbl)[0].Path({Name("trPr"), Name("tblHeader")}));
+  {
+    const std::vector<Node> cells = doc->RowCells(doc->TableRows(tbl)[0]);
+    CHECK(!cells[0].Path({Name("tcPr"), Name("tcMar")}));
+    const CellMargins m = doc->ResolvedCell(cells[1]).margins;
+    CHECK(m.start.value == 58 && m.end.value == 58 && m.start.type == TableWidth::Type::Dxa);
+    CHECK(m.top.value == 0);
+  }
   const std::vector<Field> fields = doc->Fields(doc->MainStory());
   CHECK(fields.size() == 1u && fields[0].Type() == u"PAGE");
   // The footnote: referred to, with its text.
