@@ -318,6 +318,7 @@ std::optional<ReferenceSet> ReadReferences(const std::filesystem::path& folder, 
     e.error = f.StringOr("error");
     e.copyOf = f.StringOr("copyOf");
     e.password = f.StringOr("password");
+    e.exclude = f.StringOr("exclude");
     if (e.pdf.empty() && e.error.empty()) e.error = "no PDF";
     set.entries.push_back(std::move(e));
   }

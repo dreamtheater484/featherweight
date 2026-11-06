@@ -12,7 +12,9 @@ Measured on `claude/d5-int` 79b6f6c with 52ae90d:
 
 The 97 % page target needs 148.
 
-Measure with `fwtool compare --json F <FW_CORPUS>\reference`. Since 52ae90d, a missing or unreadable reference PDF fails only its own document. Before, it failed every document after it.
+Measure with `fwtool compare --json F <FW_CORPUS>\reference`.
+- Since 52ae90d, a missing or unreadable reference PDF fails only its own document. Before, it failed every document after it.
+- A manifest entry with `"exclude"` (the reason) is skipped and not counted. d1-corpus asked for this for `odt/tables/un-financial-report-and-audited-financial.odt`, whose PDF has 5,444 pages because Word's own `.odt` of the report is broken; the private manifest marks it. If the manifest is generated again, keep that mark.
 
 ### The 9 misses, the next causes worst first
 
@@ -25,7 +27,7 @@ Measure with `fwtool compare --json F <FW_CORPUS>\reference`. Since 52ae90d, a m
    - The held split-row rule gains it 44 lines.
 4. **gojp-mhlw-form b1** (23 / 18) and **b4** (20 / 13). Owner: d1-text.
    - The document grid.
-   - Their reference PDFs were missing from about 14:00 on 6 Nov, apparently being rendered again.
+   - d1-corpus rendered them again with the same result: Word on this PC makes 23 and 20 pages every time, where the files say 18 and 13. So the PDFs are the reference.
 5. **who-lqsi Arabic front page** (1 / 2). Owner: d1-text.
 6. **acuk-example-cv** (1 / 2). Owner: d1-measure.
    - Our lines are about 0.012 pt taller each, on every kind of line, and the last line misses page 1 by 0.08 pt.
