@@ -43,7 +43,11 @@ Each group is right where it was checked, but doesn't gain pages yet. The code i
 - **A. A split row needs room for each cell's space after** (`FW_CUTAFTER`, in Flow.cpp's row cut).
   - A cell's line counts as fitting only with its paragraph's space after, when it's that paragraph's last line.
   - Gains 71 lines (un-financial +44, worldbank-sustainable +27). The short-form contract's "12. Charges" row then moves on whole, as in Word.
-  - Costs worldbank-guidance its page match. We wrap "Europe, etc.).  All supporting documents must be included in the bid." before "bid.", where Word keeps it on one line (justified, with a double space). That line is d1-text's.
+  - Costs worldbank-guidance its page match. We wrap "Europe, etc.).  All supporting documents must be included in the bid." before "bid.", where Word keeps it on one line. That line is d1-text's.
+    - The cause: it's the last line of a justified paragraph, in Times New Roman 12, ending "bid. " with a trailing space. We measure it at 331.6 pt (two spaces after "etc.).") against 324.6 pt of room. Word fits it, so Word squeezes its spaces about 15 %.
+    - Both of `Squeezes`' limits allow that: a quarter of the spaces' width, and half the stretch.
+    - But `Squeeze` (LineLayout.cpp) leaves out a paragraph's last line ("text must follow").
+    - Letting a last line squeeze when it ends in a trailing space fits the line. The breaker then ends it as a wrap and adds an empty line, so the line's end needs handling too.
   - **Land A once that line is fixed.**
 - **B. Borders as room in table rows** (`FW_TBLS`, in Table.cpp).
   - Every resolved horizontal border takes room: the stronger of a cell's top border and the bottom border of the cell above, and the last row's bottom border. This means `c.props.top` / `bottom`, which merge the table, its style and `tcBorders`; today only `tcBorders` counts.
