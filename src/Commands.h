@@ -71,6 +71,7 @@ enum Cmd : int {
   CmdRecent = 500,      // + index into Settings::recent
   CmdBannerAction = 600,
   CmdNewFile = 700,     // + fw::FileKind, once that kind's editor ships
+  CmdNewTemplate = 720, // + index into EmptyState::kTemplates (D5): a new document from a template
 
   // Documents: formatting (D2). The toolbar's boxes have ids too.
   CmdBold = 1000,

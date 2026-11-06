@@ -203,7 +203,7 @@ def header_footer(tag, paragraphs):
     return HEAD + f'<w:{tag} {XMLNS}>{"".join(paragraphs)}</w:{tag}>'
 
 
-def package(body, style_xml, settings_xml, parts=()):
+def package(body, style_xml, settings_xml, parts=(), xmlns=XMLNS):
     """parts: (relationship id, type, target, content type, xml) for headers, footers and notes."""
     rels = [("rIdStyles", "styles", "styles.xml"), ("rIdSettings", "settings", "settings.xml")]
     overrides = [("/word/document.xml", CT + "document.main+xml"), ("/word/styles.xml", CT + "styles+xml"),
@@ -222,7 +222,7 @@ def package(body, style_xml, settings_xml, parts=()):
     doc_rels = (HEAD + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
                 + "".join(f'<Relationship Id="{i}" Type="{RT}{k}" Target="{t}"/>' for i, k, t in rels)
                 + "</Relationships>")
-    document = HEAD + f'<w:document {XMLNS}><w:body>{body}</w:body></w:document>'
+    document = HEAD + f'<w:document {xmlns}><w:body>{body}</w:body></w:document>'
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for name, data in [("[Content_Types].xml", types), ("_rels/.rels", root_rels),
@@ -399,11 +399,113 @@ def report():
     return package(body, styles("Cambria", "Calibri"), settings(), parts)
 
 
+# ---------- Equations (OMML, D5) ----------
+
+
+def mr(text, sty=None, scr=None):
+    props = (f'<m:sty m:val="{sty}"/>' if sty else "") + (f'<m:scr m:val="{scr}"/>' if scr else "")
+    props = f"<m:rPr>{props}</m:rPr>" if props else ""
+    return f'<m:r>{props}<m:t xml:space="preserve">{escape(text)}</m:t></m:r>'
+
+
+def mx(tag, *content, pr=""):
+    return f"<m:{tag}>" + (f"<m:{tag}Pr>{pr}</m:{tag}Pr>" if pr else "") + "".join(content) + f"</m:{tag}>"
+
+
+def arg(tag, *content):
+    return f"<m:{tag}>" + "".join(content) + f"</m:{tag}>"
+
+
+def val(tag, v):
+    return f'<m:{tag} m:val="{escape(v)}"/>'
+
+
+def frac(num, den, kind=None):
+    return mx("f", arg("num", num), arg("den", den), pr=val("type", kind) if kind else "")
+
+
+def ssup(base, s):
+    return mx("sSup", arg("e", base), arg("sup", s))
+
+
+def ssub(base, s):
+    return mx("sSub", arg("e", base), arg("sub", s))
+
+
+def subsup(base, b, t):
+    return mx("sSubSup", arg("e", base), arg("sub", b), arg("sup", t))
+
+
+def rad(e, deg=None):
+    return mx("rad", arg("deg", deg or ""), arg("e", e), pr="" if deg else val("degHide", "1"))
+
+
+def nary(chr_, low, high, e, loc=None):
+    pr = val("chr", chr_) + (val("limLoc", loc) if loc else "")
+    return mx("nary", arg("sub", low), arg("sup", high), arg("e", e), pr=pr)
+
+
+def delim(*args, beg=None, end=None):
+    pr = (val("begChr", beg) if beg is not None else "") + (val("endChr", end) if end is not None else "")
+    return mx("d", *[arg("e", a) for a in args], pr=pr)
+
+
+def func(name, e):
+    return mx("func", arg("fName", mr(name, "p")), arg("e", e))
+
+
+def omath(*content):
+    return "<m:oMath>" + "".join(content) + "</m:oMath>"
+
+
+def display(*content):
+    return para("<m:oMathPara>" + omath(*content) + "</m:oMathPara>")
+
+
+def equations():
+    """Every OMML construct the reader shows, inline in text and as display equations."""
+    x2 = ssup(mr("x"), mr("2"))
+    body = text_para("Equations", style="Heading1")
+    body += para(run("The area of a circle is ") + omath(mr("A=π"), ssup(mr("r"), mr("2"))) +
+                 run(", and a small fraction ") + omath(frac(mr("a"), mr("b"))) + run(" sits in the line, as do ") +
+                 omath(frac(mr("1"), mr("2"), "lin")) + run(" and ") + omath(frac(mr("3"), mr("4"), "skw")) + run("."))
+    body += display(mr("x="), frac(mr("-b±") + rad(ssup(mr("b"), mr("2")) + mr("-4ac")),
+                                    mr("2a")))
+    body += display(nary("∑", mr("i=1"), mr("n"), mr("i")), mr("="), frac(mr("n") + delim(mr("n+1")), mr("2")))
+    body += display(nary("∫", mr("0"), mr("∞"), ssup(mr("e"), mr("-") + x2) + mr("d") + mr("x")), mr("="),
+                    frac(rad(mr("π")), mr("2")))
+    body += display(mr("A="), delim(mx("m", arg("mr", arg("e", mr("a")), arg("e", mr("b"))),
+                                          arg("mr", arg("e", mr("c")), arg("e", mr("d"))))),
+                    mr(","), mr(" "), mr("det"), delim(mr("A"), beg="|", end="|"), mr("=ad-bc"))
+    body += display(mr("f"), delim(mr("x")), mr("="),
+                    delim(mx("eqArr", arg("e", mr("x,") + mr("&") + mr("x≥0")),
+                             arg("e", mr("-x,") + mr("&") + mr("x<0"))), beg="{", end=""))
+    body += para(run("A limit inline: ") +
+                 omath(mx("func", arg("fName", mx("limLow", arg("e", mr("lim", "p")), arg("lim", mr("x→0")))),
+                          arg("e", frac(func("sin", mr("x")), mr("x")))), mr("=1")) +
+                 run(", and a sum inline: ") + omath(nary("∑", mr("k=0"), mr("∞"), frac(mr("1"), ssup(mr("2"), mr("k"))))) +
+                 run(" which equals two."))
+    body += display(mx("acc", arg("e", mr("x"))), mr("+"), mx("bar", arg("e", mr("y")), pr=val("pos", "top")), mr("+"),
+                    mx("acc", arg("e", mr("v")), pr=val("chr", "⃗")), mr("+"),
+                    mx("acc", arg("e", mr("abc")), pr=val("chr", "̃")), mr("+"), rad(mr("x+1"), mr("3")))
+    body += display(mx("groupChr", arg("e", mr("a+b+c"))), mr("+"), mx("borderBox", arg("e", mr("E=m") + ssup(mr("c"), mr("2")))),
+                    mr("+"), mx("bar", arg("e", mr("z"))))
+    body += display(mr("1+"), frac(mr("1"), mr("1+") + frac(mr("1"), mr("1+") + frac(mr("1"), mr("x")))))
+    body += display(nary("∏", mr("j=1"), mr("m"), ssub(mr("a"), mr("j"))), mr("≤"),
+                    nary("∮", mr("C"), mr(""), mr("F·d") + mr("r"), "subSup"), mr("+"),
+                    subsup(mr("T"), mr("ij"), mr("k")), mr("∈"), mr("R", scr="double-struck"))
+    body += para("<m:oMathPara>" + omath(mr("a=b+c")) + omath(mr("d=e-f")) + "</m:oMathPara>")
+    body += text_para("The last paragraph is plain text after the equations.")
+    body += sect_pr()
+    math = ' xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"'
+    return package(body, styles("Cambria", "Calibri"), settings(), xmlns=XMLNS + math)
+
+
 def main():
     os.makedirs(LAYOUT, exist_ok=True)
     for name, make in [("hyphenation.docx", hyphenation), ("footnotes.docx", footnotes),
                        ("tabs-columns.docx", tabs_columns), ("textbox-table.docx", textbox_table),
-                       ("report.docx", report)]:
+                       ("report.docx", report), ("equations.docx", equations)]:
         data = make()
         with open(os.path.join(LAYOUT, name), "wb") as f:
             f.write(data)

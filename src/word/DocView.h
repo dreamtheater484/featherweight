@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "PagedView.h"
+#include "PasswordCard.h"
+#include "doc/docx/Blank.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/Toc.h"
 #include "doc/edit/Pictures.h"
@@ -39,8 +41,12 @@ class DocView : public PagedView {
  public:
   DocView(ViewHost& host, std::wstring path);
   ~DocView() override;
-  // A new document from the built-in template: "Document <number>".
-  static std::unique_ptr<DocView> NewDocument(ViewHost& host, int number);
+  // A new document, empty or from a built-in template: "Document <number>".
+  static std::unique_ptr<DocView> NewDocument(ViewHost& host, int number,
+                                              fw::doc::docx::Template kind = fw::doc::docx::Template::None);
+  // Opening a template file (.dotx, .dotm, .ott) makes a new document from it, as Word does.
+  static bool IsTemplate(const std::wstring& path);
+  void OpenAsNew(int number) { newNumber_ = number; }
   // A document that isn't its file: a recovered one (`unsaved` changes) or a backup. Save goes to
   // Save As, starting at `suggested`.
   static std::unique_ptr<DocView> FromBytes(ViewHost& host, std::vector<uint8_t> bytes, std::wstring title,
@@ -53,6 +59,9 @@ class DocView : public PagedView {
   TabKind Kind() const override { return TabKind::Document; }
   OpenResult Load(const std::wstring& password, std::wstring& error) override;
   bool Ready() const override { return pagination_ != nullptr; }
+  bool NeedsPassword() const override { return needPassword_; }
+  TextBox* PasswordBox() override { return needPassword_ ? &pw_.Box() : nullptr; }
+  void DescribeUia(uia::Tree& t, int parent) override;
   const std::wstring& Path() const override { return path_; }
   std::wstring Title() const override;
   bool Modified() const override { return file_.Dirty(); }
@@ -467,6 +476,15 @@ class DocView : public PagedView {
   std::wstring path_;            // the file; empty for a new or recovered document
   DocFile file_;
   std::vector<uint8_t> bytes_;   // NewDocument, FromBytes: what Load reads instead of a file
+  // A password-protected file (D5): its bytes until the password opens it, and its stamp.
+  PasswordCard pw_;
+  bool needPassword_ = false;
+  std::vector<uint8_t> protected_;
+  fw::pkg::Snapshot::Stamp protectedStamp_;
+  OpenResult Unlock(const std::wstring& password, std::wstring& error);
+  void SubmitPassword(const std::wstring& password);
+  std::wstring imported_;        // a .doc read into the model: its file name (saved with Save As)
+  int newNumber_ = 0;            // OpenAsNew: the file is a template, and the tab a new document
   std::unique_ptr<fw::doc::Document> doc_;
   std::unique_ptr<fw::doc::edit::Editor> editor_;  // after doc_: goes first
   std::unique_ptr<fw::text::Fonts> fonts_;

@@ -65,6 +65,9 @@ constexpr wchar_t Calendar = 0xE787;
 constexpr wchar_t Picture = 0xE8B9;
 constexpr wchar_t Crop = 0xE7A8;
 constexpr wchar_t Settings = 0xE713;
+constexpr wchar_t Mail = 0xE715;
+constexpr wchar_t Contact = 0xE77B;  // a person
+constexpr wchar_t Report = 0xE9F9;   // a page with a chart
 
 // Custom vector icons drawn by DrawButton (private-use code points).
 constexpr wchar_t ViewSingle = 0xF8F0;
