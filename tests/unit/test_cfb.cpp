@@ -98,7 +98,8 @@ TEST(Cfb_DamageIsRefusedNotFollowed) {
   const auto big = Pattern(5000, 2);
   const auto file = WriteCompoundFile({{"Big", big}, {"Small", Bytes("tiny")}});
   CHECK(!CompoundFile::Open(std::span(file).first(511)));
-  CHECK(!CompoundFile::Open(Bytes("not a compound file at all")));
+  const auto text = Bytes("not a compound file at all");
+  CHECK(!CompoundFile::Open(text));
   auto bad = file;
   bad[0x1E] = 10;  // a sector size CFB doesn't have
   CHECK(!CompoundFile::Open(bad));

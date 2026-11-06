@@ -22,6 +22,8 @@ class CompoundFile {
   // compound file or they are damaged. Streams are read from `bytes` later, so it must stay alive
   // and unchanged while the CompoundFile is used.
   static std::unique_ptr<CompoundFile> Open(std::span<const uint8_t> bytes);
+  // Not from a temporary, which would be gone before the streams are read.
+  static std::unique_ptr<CompoundFile> Open(std::vector<uint8_t>&&) = delete;
 
   // A stream by its path from the root, with storages separated by '/': "WordDocument",
   // "ObjectPool/_1234/\x01Ole". Names are UTF-8 and compared ignoring ASCII case, as CFB compares

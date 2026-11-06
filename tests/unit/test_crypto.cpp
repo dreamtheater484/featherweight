@@ -1,9 +1,13 @@
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 #include "TestHarness.h"
 
 #include "PkgTestUtil.h"
 #include "pkg/CompoundFile.h"
+#include "doc/msdoc/MsDoc.h"
 #include "pkg/OfficeCrypto.h"
 
 using namespace fw::pkg;
@@ -11,7 +15,14 @@ using test::MakeZip;
 
 namespace {
 
-const std::wstring kPassword = L"Fw-pässword";
+const std::wstring kPassword = L"Fw-p\u00e4ssword";
+
+// tests/office/protected: Word's own protected files, and msoffcrypto-tool's standard-encryption one.
+std::vector<uint8_t> Protected(const char* name) {
+  const auto path = std::filesystem::path(__FILE__).parent_path().parent_path() / "office" / "protected" / name;
+  std::ifstream in(path, std::ios::binary);
+  return std::vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
 
 }  // namespace
 
@@ -35,7 +46,8 @@ TEST(Crypto_EncryptedPackageOpensWithItsPasswordOnly) {
 
   // A plain compound file isn't an encrypted package.
   const std::vector<uint8_t> word(100, 1);
-  auto doc = CompoundFile::Open(WriteCompoundFile({{"WordDocument", word}}));
+  const auto plain = WriteCompoundFile({{"WordDocument", word}});
+  auto doc = CompoundFile::Open(plain);
   CHECK(doc && !crypto::IsEncryptedPackage(*doc));
 }
 
@@ -91,4 +103,63 @@ TEST(Crypto_DamagedEncryptionInfoIsRefused) {
   auto shortPackage = encrypted;
   shortPackage.resize(20);
   CHECK(with(info, shortPackage) == crypto::Result::Damaged);
+}
+
+TEST(Crypto_WordsAgileFilesOpen) {
+  for (const char* name : {"simple-protected.docx", "tables-images-links-protected.docx"}) {
+    const auto file = Protected(name);
+    auto cf = CompoundFile::Open(file);
+    CHECK(cf && crypto::IsEncryptedPackage(*cf));
+    if (!cf) continue;
+    std::vector<uint8_t> package;
+    crypto::Key key;
+    CHECK(crypto::Decrypt(*cf, L"featherweight", package, key) == crypto::Result::Ok);
+    CHECK(package.size() > 4 && package[0] == 'P' && package[1] == 'K' && !key.Empty());
+    // Saved again with that key: the same password opens it to the same package.
+    const auto saved = crypto::Encrypt(package, key);  // streams are read from it later
+    auto again = CompoundFile::Open(saved);
+    std::vector<uint8_t> back;
+    crypto::Key key2;
+    CHECK(again && crypto::Decrypt(*again, L"featherweight", back, key2) == crypto::Result::Ok && back == package);
+    CHECK(crypto::Decrypt(*cf, L"Featherweight", package, key) == crypto::Result::WrongPassword);
+  }
+}
+
+TEST(Crypto_StandardEncryptionGivesTheKnownPackage) {
+  // ECMA-376 standard encryption (Office 2007, AES-128): byte for byte msoffcrypto-tool's output.
+  const auto file = Protected("ecma376-standard.docx");
+  auto cf = CompoundFile::Open(file);
+  CHECK(cf && crypto::IsEncryptedPackage(*cf));
+  if (!cf) return;
+  std::vector<uint8_t> package;
+  crypto::Key key;
+  CHECK(crypto::Decrypt(*cf, L"Password1234_", package, key) == crypto::Result::Ok);
+  CHECK(!package.empty() && package == Protected("ecma376-standard-plain.docx"));
+  CHECK(!key.Empty() && key.dataHash == "SHA512");  // saved with agile encryption
+  CHECK(crypto::Decrypt(*cf, L"Password1234", package, key) == crypto::Result::WrongPassword);
+}
+
+TEST(Crypto_WordsProtectedDocFilesDecryptForTheImporter) {
+  // RC4 CryptoAPI, as Word writes a .doc with a password: the streams decrypt to a .doc without
+  // one, which the .doc importer reads.
+  for (const char* name : {"simple-protected.doc", "tables-images-links-protected.doc"}) {
+    const auto file = Protected(name);
+    auto cf = CompoundFile::Open(file);
+    CHECK(cf && crypto::IsEncryptedDoc(*cf) && !crypto::IsEncryptedPackage(*cf));
+    if (!cf) continue;
+    crypto::DocStreams streams;
+    CHECK(crypto::DecryptDoc(*cf, L"wrong", streams) == crypto::Result::WrongPassword);
+    CHECK(crypto::DecryptDoc(*cf, L"featherweight", streams) == crypto::Result::Ok);
+    CHECK(!fw::doc::msdoc::IsEncrypted(streams.wordDocument));
+    fw::pkg::Status st;
+    const auto docx = fw::doc::msdoc::ToDocx(
+        [&](std::string_view s) -> std::optional<std::vector<uint8_t>> {
+          if (s == "WordDocument") return streams.wordDocument;
+          if (s == streams.table) return streams.tableStream;
+          if (s == "Data") return streams.data.empty() ? std::nullopt : std::make_optional(streams.data);
+          return cf->Stream(s);
+        },
+        st);
+    CHECK(!docx.empty() && st.Ok());
+  }
 }
