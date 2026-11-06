@@ -28,6 +28,7 @@ struct Options {
   int runs = 5;                     // bench: runs per document
   bool budgets = false;             // bench: fail when a budget is missed
   bool typing = false;              // bench: time keystrokes instead of opening
+  bool scrolling = false;           // bench: time painting every page in order, and memory
   int edits = 40;                   // edit-check, torture: random edits per document (torture: per round)
   unsigned seed = 0;                // edit-check, torture: the random edits' seed (0: edit-check takes the
                                     // document's number, torture 1; torture derives one per file and round)
