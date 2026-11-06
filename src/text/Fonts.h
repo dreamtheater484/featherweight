@@ -82,6 +82,11 @@ class Fonts {
   // False if DirectWrite couldn't be started (it can't fail on Windows 10 and 11).
   bool Ok() const { return analyzer_ != nullptr; }
 
+  // Font files a document carries (Word's word/fonts), used as Word uses them: for families this
+  // PC doesn't have. Replaces the ones given before; none restores the installed fonts alone. Only
+  // before anything is laid out with this Fonts: the faces it gave out go.
+  void UseDocumentFonts(const std::vector<std::vector<uint8_t>>& files);
+
   bool Installed(std::wstring_view family);
   // The installed family drawn for `family`: itself, a substitute, or the last resort. Replacements
   // are recorded in Substitutions(). An empty name means the last resort, without recording.
@@ -118,6 +123,8 @@ class Fonts {
   Microsoft::WRL::ComPtr<IDWriteTextAnalyzer1> analyzer_;
   Microsoft::WRL::ComPtr<IDWriteFontFallback> fallback_;
   Microsoft::WRL::ComPtr<IDWriteFontCollection> collection_;
+  Microsoft::WRL::ComPtr<IDWriteFontCollection> installed_;  // with document fonts: the collection without them
+  Microsoft::WRL::ComPtr<IDWriteInMemoryFontFileLoader> memory_;
   // The collection's fonts, for finding families by their Win32 (GDI) names, which documents use:
   // "Calibri Light" and "Arial Narrow" are a weight and a width of the families DirectWrite lists
   // as "Calibri" and "Arial". Null where the collection has no font set.

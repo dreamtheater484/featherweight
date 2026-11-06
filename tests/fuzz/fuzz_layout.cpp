@@ -73,6 +73,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   std::unique_ptr<Document> doc = docx::Read(std::move(pkg), st);
   if (!doc) return 0;
 
+  SharedFonts().UseDocumentFonts(layout::EmbeddedFonts(*doc));  // word/fonts, as the app uses them
   layout::Layout layout(*doc, SharedFonts());
   // A page at a time, as the document tab does; pagination guarantees an end.
   const size_t cap = 4 * doc->Paragraphs().size() + 1100;

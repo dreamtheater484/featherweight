@@ -76,6 +76,7 @@ bool OpenAndLayOut(const std::filesystem::path& document, fw::OpenTimings* timin
   g_document = doc.get();
   fw::text::Fonts& fonts = SharedFonts();
   fonts.ClearSubstitutions();
+  fonts.UseDocumentFonts(fw::doc::layout::EmbeddedFonts(*doc));
   {
     fw::doc::layout::Layout layout(*doc, fonts, {}, timings);
     layout.LayOutAll();
@@ -221,6 +222,7 @@ bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>
   g_document = doc.get();
   fw::text::Fonts& fonts = SharedFonts();
   fonts.ClearSubstitutions();
+  fonts.UseDocumentFonts(fw::doc::layout::EmbeddedFonts(*doc));
   {
     fw::doc::layout::Layout layout(*doc, fonts);
     layout.LayOutAll();
@@ -433,6 +435,7 @@ bool CheckEdits(const std::filesystem::path& document, int edits, unsigned seed,
   g_document = doc.get();
   fw::text::Fonts& fonts = SharedFonts();
   fonts.ClearSubstitutions();
+  fonts.UseDocumentFonts(fw::doc::layout::EmbeddedFonts(*doc));
   {
     fw::doc::layout::Layout layout(*doc, fonts);
     layout.LayOutAll();

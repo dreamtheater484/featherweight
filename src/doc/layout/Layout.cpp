@@ -17,6 +17,8 @@
 #include "doc/edit/Editor.h"
 #include "doc/layout/Engine.h"
 #include "draw/Painter.h"
+#include "draw/Sfnt.h"
+#include "pkg/Package.h"
 
 namespace fw::doc::layout {
 
@@ -713,6 +715,40 @@ std::wstring SubstituteFamily(const Document& doc, std::wstring_view family) {
   if (f->family == "roman") return L"Times New Roman";
   if (f->family == "modern") return L"Tahoma";
   return {};
+}
+
+std::vector<std::vector<uint8_t>> EmbeddedFonts(const Document& doc) {
+  constexpr size_t kMaxFonts = 64, kMaxBytes = 32u << 20;
+  std::vector<std::vector<uint8_t>> out;
+  const Part* table = doc.FindPart(PartKind::FontTable);
+  const pkg::RelationshipSet* rels = table ? doc.Package().RelationshipsOf(table->name) : nullptr;
+  if (!rels) return out;
+  size_t total = 0;
+  for (const FontInfo& f : doc.Fonts())
+    for (const FontInfo::Embedded* e : {&f.regular, &f.bold, &f.italic, &f.boldItalic}) {
+      if (e->relId.empty() || out.size() >= kMaxFonts) continue;
+      // The key: the GUID's 16 bytes, last first. It hides the font's first 32 bytes.
+      uint8_t key[16];
+      size_t digits = 0;
+      for (char c : e->fontKey) {
+        const int d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+        if (d < 0 || digits >= 32) continue;
+        const size_t byte = 15 - digits / 2;
+        key[byte] = static_cast<uint8_t>(digits % 2 ? (key[byte] | d) : d << 4);
+        ++digits;
+      }
+      const pkg::Relationship* rel = rels->Find(e->relId);
+      std::vector<uint8_t> bytes;
+      if (digits != 32 || !rel || rel->external || !doc.Package().ReadPart(rel->targetPart, bytes).Ok() ||
+          bytes.size() < 32 || bytes.size() > kMaxBytes - total)
+        continue;
+      for (size_t i = 0; i < 32; ++i) bytes[i] ^= key[i % 16];
+      // Only what reads as a font goes to DirectWrite.
+      if (!draw::sfnt::ReadInfo(draw::sfnt::FileTables(bytes))) continue;
+      total += bytes.size();
+      out.push_back(std::move(bytes));
+    }
+  return out;
 }
 
 // ---- The layout dump
