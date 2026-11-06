@@ -347,6 +347,10 @@ struct Tap {
   bool header = false, cantSplit = false, autofit = true;
   std::array<std::string, 6> borders;  // top, left, bottom, right, insideH, insideV
   std::array<int, 4> padding = {-1, -1, -1, -1};  // top, left, bottom, right
+  // A floating table: position codes (as a frame's), position, and distance from the text
+  // (left, top, right, bottom).
+  std::optional<int> pc, x, y;
+  std::array<int, 4> fromText{};
 };
 
 void Toggle(std::string& slot, std::string_view name, uint8_t v) {
@@ -1139,6 +1143,13 @@ void Converter::ApplyTap(const Bytes& g, Tap& t) const {
         break;
       }
       case 0x9602: t.gapHalf = a.I16(0); break;
+      case 0x360D: t.pc = a.U8(0); break;
+      case 0x940E: t.x = a.I16(0); break;
+      case 0x940F: t.y = a.I16(0); break;
+      case 0x9410: t.fromText[0] = a.I16(0); break;
+      case 0x9411: t.fromText[1] = a.I16(0); break;
+      case 0x941B: t.fromText[2] = a.I16(0); break;
+      case 0x941C: t.fromText[3] = a.I16(0); break;
       case 0x9407: t.height = a.I16(0); break;
       case 0x3404: t.header = a.U8(0) != 0; break;
       case 0x3403: case 0x3466: t.cantSplit = a.U8(0) != 0; break;
@@ -1161,6 +1172,12 @@ void Converter::ApplyTap(const Bytes& g, Tap& t) const {
         const int width = a.U16(5);
         for (size_t b = 0; b < 4; ++b)
           if (a.U8(3) & (1 << b)) t.padding[b] = width;
+        break;
+      }
+      case 0x7629: {  // sprmTTextFlow: itcFirst, itcLim, then the cells' text flow
+        const size_t first = a.U8(0), lim = a.U8(1);
+        for (size_t k = first; k < lim && k < t.tc.size(); ++k)
+          t.tc[k].flags = static_cast<uint16_t>((t.tc[k].flags & ~0x1C) | ((a.U16(2) & 7) << 2));
         break;
       }
       case 0xD62C: {
@@ -1460,6 +1477,21 @@ void Converter::EmitTable(const std::vector<Para>& paras, size_t i0, size_t i1, 
   out += "<w:tbl><w:tblPr>";
   if (first.istd > 0 && static_cast<size_t>(first.istd) < styles_.size() && styles_[static_cast<size_t>(first.istd)].type == 3)
     out += El("tblStyle", StyleId(static_cast<size_t>(first.istd)));
+  if (first.pc || first.x || first.y) {
+    const int pc = first.pc.value_or(0x20), x = first.x.value_or(0), y = first.y.value_or(0);
+    static const char* const kV[] = {"margin", "page", "text", "text"};
+    static const char* const kH[] = {"text", "margin", "page", "page"};
+    out += "<w:tblpPr w:leftFromText=\"" + Num(first.fromText[0]) + "\" w:rightFromText=\"" + Num(first.fromText[2]) +
+           "\" w:topFromText=\"" + Num(first.fromText[1]) + "\" w:bottomFromText=\"" + Num(first.fromText[3]) +
+           "\" w:vertAnchor=\"" + kV[(pc >> 4) & 3] + "\" w:horzAnchor=\"" + kH[(pc >> 6) & 3] + "\"";
+    static const char* const kX[] = {"left", "center", "right", "inside", "outside"};
+    if (x < 0 && x >= -16 && x % 4 == 0) out += std::string(" w:tblpXSpec=\"") + kX[-x / 4] + "\"";
+    else out += " w:tblpX=\"" + Num(x) + "\"";
+    static const char* const kY[] = {"inline", "top", "center", "bottom", "inside", "outside"};
+    if (y < 0 && y >= -20 && y % 4 == 0) out += std::string(" w:tblpYSpec=\"") + kY[-y / 4] + "\"";
+    else out += " w:tblpY=\"" + Num(y) + "\"";
+    out += "/>";
+  }
   out += "<w:tblW w:w=\"0\" w:type=\"auto\"/>";
   if (first.jc == 1 || first.jc == 2) out += El("jc", first.jc == 1 ? "center" : "right");
   out += "<w:tblInd w:w=\"" + Num((grid.empty() ? 0 : grid.front()) + first.gapHalf) + "\" w:type=\"dxa\"/>";
@@ -1521,6 +1553,15 @@ void Converter::EmitTable(const std::vector<Para>& paras, size_t i0, size_t i1, 
         out += "</w:tcBorders>";
       }
       out += tc.shd;
+      if (tc.flags & 0x2000) out += "<w:noWrap/>";
+      // TCGRF.textFlow: vertical text (a header turned along the page's side, for one).
+      switch ((tc.flags >> 2) & 7) {
+        case 1: out += El("textDirection", "tbRl"); break;
+        case 3: out += El("textDirection", "btLr"); break;
+        case 4: out += El("textDirection", "lrTbV"); break;
+        case 5: out += El("textDirection", "tbRlV"); break;
+        default: break;
+      }
       const unsigned va = (tc.flags >> 7) & 3;
       if (va == 1 || va == 2) out += El("vAlign", va == 1 ? "center" : "bottom");
       out += "</w:tcPr>";
