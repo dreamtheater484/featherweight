@@ -81,6 +81,12 @@ bool OpenAndLayOut(const std::filesystem::path& document, fw::OpenTimings* timin
     layout.LayOutAll();
     use(layout);
   }
+  // FWTOOL_FONTS=1: the fonts this document asked for that aren't installed, and what was drawn.
+  wchar_t flag[4] = {};
+  if (GetEnvironmentVariableW(L"FWTOOL_FONTS", flag, 4) > 0)
+    for (const auto& s : fonts.Substitutions())
+      std::fprintf(stderr, "font: %s: %s -> %s\n", fw::WideToUtf8(document.filename().wstring()).c_str(),
+                   fw::WideToUtf8(s.requested).c_str(), fw::WideToUtf8(s.used).c_str());
   g_document = nullptr;
   return true;
 }
