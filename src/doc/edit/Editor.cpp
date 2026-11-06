@@ -416,13 +416,16 @@ struct EditorState {
       if (!Repeats(E(src).first, c) && (!skip || !skip(c))) Append(id, CopyProps(c, id, skip, fragments));
     return id;
   }
-  // A run's properties for new text: its w:rPr, or the paragraph mark's, without revision marks.
+  // A run's properties for new text: its w:rPr, or the paragraph mark's, without revision marks,
+  // nor the mark's w:oMath (a math paragraph's mark, which a text run can't have: the Open XML SDK
+  // refuses it there).
   void CopyRunProps(ElemId fromRunOrPPr, ElemId toRun, bool dropLinkStyle = false) {
     ElemId rPr = fromRunOrPPr == kNoElem ? kNoElem : Child(fromRunOrPPr, kRPr);
     if (rPr == kNoElem) return;
+    static constexpr uint32_t kOMath = Name("oMath");
     auto skip = [&](ElemId c) {
       uint32_t n = NameOf(c);
-      if (n == kIns || n == kDel || n == kMoveFrom || n == kMoveTo || n == kRPrChange) return true;
+      if (n == kIns || n == kDel || n == kMoveFrom || n == kMoveTo || n == kRPrChange || n == kOMath) return true;
       return dropLinkStyle && n == kRStyle && Node(&t, c).AttrOr(kVal) == "Hyperlink";
     };
     ElemId copy;

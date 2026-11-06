@@ -11,6 +11,14 @@
      well, that isn't the editor's doing, and the summary says so.
   The summary goes to <out>\summary.md and summary.json. The exit code is 1 when anything failed.
 
+  D5: the files are opened as the app opens them. A .doc or an .odt is imported, a template is
+  made a new document, and a password-protected file is decrypted with its test password. Saving
+  writes a .docx; a protected file is saved encrypted with its password. The validator and Word
+  compare the saved copy with the .docx the app opened (<out>\opened). Word also opens each
+  protected copy as the app writes it (<out>\saved-protected\<password>) with that password.
+  Chart parts must be kept byte for byte, and equations as they were. Typing includes
+  right-to-left and East Asian text, and edits aim at charts and equations too.
+
   -Ci runs the CI subset: the public corpus only, fewer edits, no Word. Without -Paths the full run
   takes tests\office's Word documents (generated, edge, layout, and torture: a table of contents and
   other fields made by tests\office\make_torture_docs.py) and, when FW_CORPUS is set, the private corpus.
@@ -44,14 +52,20 @@ if ($Ci) {
 # powershell -File passes "-Paths a,b" as one string.
 $Paths = @($Paths | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 if (-not $Paths) {
-  $Paths = @("tests\office\generated", "tests\office\edge", "tests\office\layout", "tests\office\torture")
-  if (-not $Ci -and $env:FW_CORPUS) { $Paths += Join-Path $env:FW_CORPUS "docx" }
+  $Paths = @("tests\office\generated", "tests\office\edge", "tests\office\layout", "tests\office\torture",
+             "tests\office\script", "tests\office\doc", "tests\office\odt", "tests\office\dotx", "tests\office\protected")
+  if (-not $Ci -and $env:FW_CORPUS) {
+    foreach ($sub in "docx", "doc", "odt", "dotx", "protected") {
+      $dir = Join-Path $env:FW_CORPUS $sub
+      if (Test-Path $dir) { $Paths += $dir }
+    }
+  }
 }
 if (-not [IO.Path]::IsPathRooted($Out)) { $Out = Join-Path $root $Out }
 if (-not [IO.Path]::IsPathRooted($Fwtool)) { $Fwtool = Join-Path $root $Fwtool }
 if (-not (Test-Path $Fwtool)) { throw "fwtool.exe not found at $Fwtool. Build it, or pass -Fwtool." }
 # This run's output only: earlier saved copies and reproducers would mix with this run's.
-foreach ($old in "saved", "repro") { if (Test-Path (Join-Path $Out $old)) { Remove-Item -Recurse -Force (Join-Path $Out $old) } }
+foreach ($old in "saved", "repro", "opened", "saved-protected") { if (Test-Path (Join-Path $Out $old)) { Remove-Item -Recurse -Force (Join-Path $Out $old) } }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
 function Read-Json([string]$path) { if (Test-Path $path) { Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json } }
@@ -78,6 +92,7 @@ if ((Test-Path $pairsFile) -and (Get-Item $pairsFile).Length) {
 # 3. Word: each saved copy opens without a prompt; the originals of those that don't, too.
 $word = @{}      # saved copy -> Word's result
 $baseline = @{}  # original -> Word's result
+$protectedWord = @{}  # D5: a protected copy's file name (as its saved copy's) -> Word's result
 $pairs = @{}     # saved copy -> original
 foreach ($line in @(Get-Content $pairsFile -ErrorAction SilentlyContinue)) {
   $cols = $line -split "`t"
@@ -94,15 +109,28 @@ if (-not $NoWord -and $pairs.Count) {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $check @originals -Json (Join-Path $Out "word-originals.json")
     foreach ($f in (Read-Json (Join-Path $Out "word-originals.json")).files) { $baseline[[IO.Path]::GetFullPath($f.file)] = $f }
   }
+  # D5: the protected copies as the app writes them, each folder opened with its password.
+  $protectedDir = Join-Path $Out "saved-protected"
+  if (Test-Path $protectedDir) {
+    foreach ($dir in Get-ChildItem $protectedDir -Directory) {
+      "== Word: the protected copies, with their password"
+      $json = Join-Path $Out "word-protected-$($dir.Name).json"
+      & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $check $dir.FullName -Password $dir.Name -Json $json
+      foreach ($f in (Read-Json $json).files) { $protectedWord[[IO.Path]::GetFileName($f.file)] = $f }
+    }
+  }
 }
 
 # 4. The summary.
 $rows = @()
 foreach ($f in $torture.files) {
   $saved = if ($f.saved) { [IO.Path]::GetFullPath($f.saved) } else { $null }
-  $original = [IO.Path]::GetFullPath($f.file)
+  $original = if ($saved -and $pairs[$saved]) { $pairs[$saved] } else { [IO.Path]::GetFullPath($f.file) }  # D5: the .docx the app opened
   $w = if ($saved) { $word[$saved] } else { $null }
   $b = $baseline[$original]
+  # A protected copy that Word doesn't open with its password fails the file.
+  $p = if ($saved) { $protectedWord[[IO.Path]::GetFileName($saved)] } else { $null }
+  if ($p -and $p.status -notin "ok", "notice", "unchecked") { $w = $p; $b = $null }
   $wordStatus = if (-not $w) { $null } elseif ($w.status -in "ok", "notice", "unchecked") { $w.status } elseif ($b -and $b.status -notin "ok", "notice") { "original too" } else { $w.status }
   $rows += [pscustomobject][ordered]@{
     file = $f.file
