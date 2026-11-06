@@ -1162,8 +1162,8 @@ void Converter::ApplyTap(const Bytes& g, Tap& t) const {
       case 0x940F: t.y = a.I16(0); break;
       case 0x9410: t.fromText[0] = a.I16(0); break;
       case 0x9411: t.fromText[1] = a.I16(0); break;
-      case 0x941B: t.fromText[2] = a.I16(0); break;
-      case 0x941C: t.fromText[3] = a.I16(0); break;
+      case 0x941E: t.fromText[2] = a.I16(0); break;  // sprmTDxaFromTextRight
+      case 0x941F: t.fromText[3] = a.I16(0); break;  // sprmTDyaFromTextBottom
       case 0x9407: t.height = a.I16(0); break;
       case 0x3404: t.header = a.U8(0) != 0; break;
       case 0x3403: case 0x3466: t.cantSplit = a.U8(0) != 0; break;
