@@ -7,7 +7,9 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <random>
 #include <string>
@@ -588,6 +590,67 @@ TEST(Layout_EastAsianFontsGetEastAsianStandIns) {
   CHECK(in(SubstituteFamily(*d.doc, L"\xBC14\xD0D5"), {L"Batang", L"Malgun Gothic"}));  // not in the table
   CHECK(in(SubstituteFamily(*d.doc, L"Unknown Song"), {L"SimSun", L"Microsoft YaHei"}));
   CHECK(SubstituteFamily(*d.doc, L"Unknown Typewriter") == L"Courier New");
+}
+
+TEST(Layout_FontsTheDocumentCarries) {
+  // A font the PC lacks, embedded and obfuscated as Word does (ECMA-376 §17.8.1): Arial renamed
+  // "Brial" in its name table (same length, so the tables stay whole).
+  wchar_t dir[MAX_PATH] = {};
+  GetWindowsDirectoryW(dir, MAX_PATH);
+  std::ifstream in(std::wstring(dir) + L"\\Fonts\\arial.ttf", std::ios::binary);
+  std::vector<uint8_t> font((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  if (font.size() < 1000) return;  // no Arial on this PC
+  const auto u32 = [&](size_t at) { return uint32_t(font[at]) << 24 | uint32_t(font[at + 1]) << 16 | font[at + 2] << 8 | font[at + 3]; };
+  for (size_t t = 0, n = size_t(font[4]) << 8 | font[5]; t < n; ++t) {
+    const size_t entry = 12 + 16 * t;
+    if (u32(entry) != ('n' << 24 | 'a' << 16 | 'm' << 8 | 'e')) continue;
+    const size_t start = u32(entry + 8), end = start + u32(entry + 12);
+    for (size_t i = start; i + 10 <= end && end <= font.size(); ++i) {
+      if (font[i] == 'A' && font[i + 1] == 'r' && font[i + 2] == 'i' && font[i + 3] == 'a' && font[i + 4] == 'l') font[i] = 'B';
+      if (font[i] == 0 && font[i + 1] == 'A' && font[i + 3] == 'r' && font[i + 5] == 'i' && font[i + 9] == 'l') font[i + 1] = 'B';
+    }
+  }
+  const uint8_t key[16] = {0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01, 0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01};
+  std::string hidden(font.begin(), font.end());
+  for (size_t i = 0; i < 32; ++i) hidden[i] = static_cast<char>(font[i] ^ key[i % 16]);
+  const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+  const std::string rels = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">";
+  fw::pkg::Status st;
+  auto pkg = test::OpenBytes(
+      test::MakeZip({
+          {"[Content_Types].xml",
+           "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" "
+           "ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" "
+           "ContentType=\"application/xml\"/><Default Extension=\"odttf\" "
+           "ContentType=\"application/vnd.openxmlformats-officedocument.obfuscatedFont\"/><Override PartName=\"/word/"
+           "document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>"
+           "<Override PartName=\"/word/fontTable.xml\" ContentType=\"application/vnd.openxmlformats-officedocument."
+           "wordprocessingml.fontTable+xml\"/></Types>"},
+          {"_rels/.rels", rels + "<Relationship Id=\"rId1\" Type=\"" + rel + "officeDocument\" Target=\"word/document.xml\"/></Relationships>"},
+          {"word/document.xml", std::string("<w:document ") + kW + "><w:body><w:p><w:r><w:rPr><w:rFonts w:ascii=\"Brial\" "
+                                "w:hAnsi=\"Brial\"/></w:rPr><w:t>Text</w:t></w:r></w:p></w:body></w:document>"},
+          {"word/_rels/document.xml.rels", rels + "<Relationship Id=\"rId1\" Type=\"" + rel + "fontTable\" Target=\"fontTable.xml\"/></Relationships>"},
+          {"word/fontTable.xml", std::string("<w:fonts ") + kW + " " + kR + "><w:font w:name=\"Brial\"><w:embedRegular r:id=\"rId1\" "
+                                 "w:fontKey=\"{01234567-89AB-CDEF-0123-456789ABCDEF}\"/></w:font></w:fonts>"},
+          {"word/_rels/fontTable.xml.rels", rels + "<Relationship Id=\"rId1\" Type=\"" + rel + "font\" Target=\"fonts/font1.odttf\"/></Relationships>"},
+          {"word/fonts/font1.odttf", hidden},
+      }),
+      st);
+  REQUIRE(pkg != nullptr);
+  auto doc = docx::Read(std::move(pkg), st);
+  REQUIRE(doc != nullptr);
+  const std::vector<std::vector<uint8_t>> files = fw::doc::layout::EmbeddedFonts(*doc);
+  REQUIRE(files.size() == 1u);
+  CHECK(files[0] == font);
+  // Used for that document's text, and gone again without it.
+  fw::text::Fonts fonts;
+  CHECK(!fonts.Installed(L"Brial"));
+  fonts.UseDocumentFonts(files);
+  CHECK(fonts.Installed(L"Brial"));
+  CHECK(fonts.Resolve(L"Brial") == L"Brial");
+  CHECK(fonts.Substitutions().empty());
+  fonts.UseDocumentFonts({});
+  CHECK(!fonts.Installed(L"Brial"));
 }
 
 TEST(Layout_MissingLatinFontsAsWordDrawsThem) {

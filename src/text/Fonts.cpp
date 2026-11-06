@@ -170,7 +170,69 @@ Fonts::Fonts(SubstituteFn substitute, IDWriteFontCollection* collection) : subst
   if (FAILED(factory_->CreateTextAnalyzer(&analyzer)) || FAILED(analyzer.As(&analyzer_))) analyzer_.Reset();
 }
 
-Fonts::~Fonts() = default;
+Fonts::~Fonts() {
+  if (memory_) factory_->UnregisterFontFileLoader(memory_.Get());
+}
+
+void Fonts::UseDocumentFonts(const std::vector<std::vector<uint8_t>>& files) {
+  if (files.empty() && !installed_) return;  // none before, none now
+  if (!installed_) installed_ = collection_;
+  ComPtr<IDWriteFontCollection> next = installed_;
+  ComPtr<IDWriteFactory5> factory;
+  ComPtr<IDWriteFontCollection1> installed;
+  ComPtr<IDWriteFontSet> installedSet;
+  ComPtr<IDWriteFontSetBuilder1> builder;
+  if (!files.empty() && SUCCEEDED(factory_.As(&factory)) && SUCCEEDED(installed_.As(&installed)) &&
+      SUCCEEDED(installed->GetFontSet(&installedSet)) && SUCCEEDED(factory->CreateFontSetBuilder(&builder))) {
+    if (!memory_ && SUCCEEDED(factory->CreateInMemoryFontFileLoader(&memory_)) &&
+        FAILED(factory->RegisterFontFileLoader(memory_.Get())))
+      memory_.Reset();
+    bool added = false;
+    for (const std::vector<uint8_t>& file : files) {
+      // DirectWrite copies the bytes. A family the PC has keeps its installed fonts, as in Word: a
+      // document's copy is often a subset of it.
+      ComPtr<IDWriteFontFile> font;
+      ComPtr<IDWriteFontSetBuilder1> one;
+      ComPtr<IDWriteFontSet> faces;
+      if (!memory_ || file.empty() || file.size() > UINT32_MAX ||
+          FAILED(memory_->CreateInMemoryFontFileReference(factory.Get(), file.data(), static_cast<UINT32>(file.size()),
+                                                          nullptr, &font)) ||
+          FAILED(factory->CreateFontSetBuilder(&one)) || FAILED(one->AddFontFile(font.Get())) ||
+          FAILED(one->CreateFontSet(&faces)) || faces->GetFontCount() == 0)
+        continue;
+      bool installedFamily = false;
+      for (UINT32 i = 0; i < faces->GetFontCount() && !installedFamily; ++i) {
+        ComPtr<IDWriteLocalizedStrings> names;
+        BOOL exists = FALSE;
+        if (SUCCEEDED(faces->GetPropertyValues(i, DWRITE_FONT_PROPERTY_ID_WIN32_FAMILY_NAME, &exists, &names)) && exists) {
+          const std::wstring family = EnglishName(names.Get());
+          UINT32 index = 0;
+          BOOL has = FALSE;
+          const DWRITE_FONT_PROPERTY property{DWRITE_FONT_PROPERTY_ID_WIN32_FAMILY_NAME, family.c_str(), L""};
+          ComPtr<IDWriteFontSet> matches;
+          installedFamily = (SUCCEEDED(installed_->FindFamilyName(family.c_str(), &index, &has)) && has) ||
+                            (SUCCEEDED(installedSet->GetMatchingFonts(&property, 1, &matches)) && matches &&
+                             matches->GetFontCount() > 0);
+        }
+      }
+      if (!installedFamily && SUCCEEDED(builder->AddFontSet(faces.Get()))) added = true;
+    }
+    ComPtr<IDWriteFontSet> set;
+    ComPtr<IDWriteFontCollection1> collection;
+    if (added && SUCCEEDED(builder->AddFontSet(installedSet.Get())) && SUCCEEDED(builder->CreateFontSet(&set)) &&
+        SUCCEEDED(factory->CreateFontCollectionFromFontSet(set.Get(), &collection)))
+      next = collection;
+  }
+  collection_ = next;
+  if (collection_ == installed_) installed_.Reset();
+  // Everything found in the old collection goes.
+  win32_.Reset();
+  win32Tried_ = false;
+  resolved_.clear();
+  faces_.clear();
+  faceNames_.clear();
+  substitutions_.clear();
+}
 
 bool Fonts::Installed(std::wstring_view family) {
   if (family.empty() || !collection_) return false;
