@@ -91,4 +91,8 @@ if(FW_BUILD_TESTS)
   add_test(NAME office_save_edited
     COMMAND fwtool save --edited "${_fw_office}/generated" "${_fw_office}/edge" "${_fw_office}/layout")
   add_test(NAME office_model_malicious COMMAND fwtool roundtrip --model --expect-reject "${_fw_office}/malicious")
+  # Word's .doc copies of the corpus (D5, from d1-corpus): read as .docx, they pass check.
+  if(EXISTS "${_fw_office}/doc")
+    add_test(NAME office_doc_check COMMAND fwtool check "${_fw_office}/doc")
+  endif()
 endif()
