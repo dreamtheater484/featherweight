@@ -248,3 +248,26 @@ TEST(Odt_LetterSpacingAndScale) {
   CHECK(doc);
   CHECK(xml.find("<w:color w:val=\"FF0000\"/><w:spacing w:val=\"4\"/><w:w w:val=\"103\"/><w:sz w:val=\"20\"/>") != std::string::npos);
 }
+
+TEST(Odt_FontTableFromFontFaces) {
+  // The font-face declarations are the font table: family, pitch and PANOSE (all zeros says nothing), so a font
+  // that isn't installed is substituted as Word does.
+  const std::string content =
+      std::string("<?xml version=\"1.0\" encoding=\"UTF-8\"?><office:document-content ") + kOfficeNs + ">"
+      "<office:font-face-decls><style:font-face style:name=\"PN\" svg:font-family=\"'Proxima Nova Rg'\" "
+      "style:font-family-generic=\"modern\" style:font-pitch=\"variable\" svg:panose-1=\"0 0 0 0 0 0 0 0 0 0\"/>"
+      "<style:font-face style:name=\"Calibri\" svg:font-family=\"Calibri\" style:font-family-generic=\"swiss\" "
+      "style:font-pitch=\"variable\" svg:panose-1=\"2 15 5 2 2 2 4 3 2 4\"/></office:font-face-decls>"
+      "<office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>";
+  auto doc = Converted(Odt("", "", content));
+  CHECK(doc);
+  if (!doc) return;
+  const FontInfo* pn = nullptr;
+  const FontInfo* calibri = nullptr;
+  for (const FontInfo& f : doc->Fonts()) {
+    if (f.name == "Proxima Nova Rg") pn = &f;
+    if (f.name == "Calibri") calibri = &f;
+  }
+  CHECK(pn && pn->family == "modern" && pn->pitch == "variable" && pn->panose.empty());
+  CHECK(calibri && calibri->family == "swiss" && calibri->panose == "020F0502020204030204");
+}

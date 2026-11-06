@@ -346,6 +346,8 @@ class Converter {
   const pkg::Limits& limits_;
   pkg::XmlDom content_, styles_;
   std::unordered_map<std::string, std::string> fonts_;
+  std::map<std::string, xml_node> faces_;  // each font's declaration, by its family name: the font table
+  std::string FontTableXml() const;
   std::unordered_map<std::string, Style> named_, autos_[2];  // "family\nname"
   std::unordered_map<std::string, xml_node> listStyles_[2], pageLayouts_;
   xml_node outline_, defaults_, master_;  // master_: the page style of the section being written
@@ -434,7 +436,12 @@ pkg::Status Converter::Load(const char* name, pkg::XmlDom& dom, bool required) {
 
 void Converter::ReadStyles(xml_node root, int scope) {
   for (xml_node f : root.child("office:font-face-decls").children("style:font-face"))
-    if (auto fam = Attr(f, "svg:font-family"); !fam.empty()) fonts_[f.attribute("style:name").value()] = std::string(fam);
+    if (auto fam = Attr(f, "svg:font-family"); !fam.empty()) {
+      fonts_[f.attribute("style:name").value()] = std::string(fam);
+      std::string name(fam);
+      name.erase(std::remove(name.begin(), name.end(), '\''), name.end());
+      if (!name.empty() && !faces_.count(name)) faces_[name] = f;
+    }
   auto read = [&](xml_node group, bool automatic) {
     for (xml_node s : group.children()) {
       const std::string_view n = s.name();
@@ -1048,6 +1055,33 @@ void Converter::Picture(xml_node frame, std::string& out) {
 
 // ---------- Parts ----------
 
+// The font table: what Word (and layout) substitute a font that isn't installed by, its family and pitch.
+std::string Converter::FontTableXml() const {
+  std::string s = std::string(kDecl) + "<w:fonts " + std::string(kNs) + ">";
+  for (const auto& [name, f] : faces_) {
+    s += "<w:font w:name=\"" + Esc(name) + "\">";
+    // svg:panose-1 "2 15 5 2 2 2 4 3 2 4" as "020F0502020204030204"; all zeros says nothing.
+    std::string panose;
+    bool known = false;
+    for (std::string_view v = Attr(f, "svg:panose-1"); !v.empty();) {
+      const size_t sp = v.find(' ');
+      const int n = std::atoi(std::string(v.substr(0, sp)).c_str());
+      static const char kHex[] = "0123456789ABCDEF";
+      panose += kHex[(n >> 4) & 15];
+      panose += kHex[n & 15];
+      known = known || n != 0;
+      v = sp == std::string_view::npos ? std::string_view() : v.substr(sp + 1);
+    }
+    if (known && panose.size() == 20) s += "<w:panose1 w:val=\"" + panose + "\"/>";
+    if (Attr(f, "style:font-charset") == "x-symbol") s += "<w:charset w:val=\"02\"/>";
+    const std::string_view g = Attr(f, "style:font-family-generic");
+    if (g == "roman" || g == "swiss" || g == "modern" || g == "script" || g == "decorative") s += "<w:family w:val=\"" + std::string(g) + "\"/>";
+    if (const std::string_view p = Attr(f, "style:font-pitch"); p == "fixed" || p == "variable") s += "<w:pitch w:val=\"" + std::string(p) + "\"/>";
+    s += "</w:font>";
+  }
+  return s + "</w:fonts>";
+}
+
 std::string Converter::StylesXml() {
   RunProps base;
   ParaProps basePara;
@@ -1235,6 +1269,7 @@ pkg::Status Converter::Run(std::vector<uint8_t>& docx) {
     parts_.push_back({std::move(name), std::move(xml), {}});
   };
   add("word/styles.xml", "styles+xml", "styles", StylesXml());
+  if (!faces_.empty()) add("word/fontTable.xml", "fontTable+xml", "fontTable", FontTableXml());
   std::string settings = std::string(kDecl) + "<w:settings " + std::string(kNs) + "><w:defaultTabStop w:val=\"709\"/>";
   if (nextFootnote_ > 1) settings += "<w:footnotePr><w:footnote w:id=\"-1\"/><w:footnote w:id=\"0\"/></w:footnotePr>";
   if (nextEndnote_ > 1) settings += "<w:endnotePr><w:endnote w:id=\"-1\"/><w:endnote w:id=\"0\"/></w:endnotePr>";
