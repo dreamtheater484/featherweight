@@ -4,6 +4,7 @@
 #include "doc/odf/Odt.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <optional>
@@ -197,8 +198,12 @@ struct RunProps {
   }
 };
 
+std::string Border(const char* side, std::string_view v);
+
 struct ParaProps {
   std::string jc, shade, tabs;
+  std::array<std::string, 4> border;     // ODF's borders: top, left, bottom, right
+  std::array<std::optional<double>, 4> padding;  // points
   std::optional<int> before, after, left, right, first, line, outline;
   std::string lineRule;
   bool keepNext = false, pageBreak = false;
@@ -227,6 +232,14 @@ struct ParaProps {
       lineRule = "atLeast";
     }
     if (auto c = Attr(p, "fo:background-color"); !c.empty()) shade = Color(c);
+    static const char* const kBorder[] = {"fo:border-top", "fo:border-left", "fo:border-bottom", "fo:border-right"};
+    static const char* const kPadding[] = {"fo:padding-top", "fo:padding-left", "fo:padding-bottom", "fo:padding-right"};
+    for (size_t k = 0; k < 4; ++k) {
+      if (auto b = Attr(p, kBorder[k]); !b.empty()) border[k] = std::string(b);
+      else if (auto all = Attr(p, "fo:border"); !all.empty()) border[k] = std::string(all);
+      if (auto v = Points(Attr(p, kPadding[k]))) padding[k] = *v;
+      else if (auto all = Points(Attr(p, "fo:padding"))) padding[k] = *all;
+    }
     if (Attr(p, "fo:keep-with-next") == "always") keepNext = true;
     if (Attr(p, "fo:break-before") == "page") pageBreak = true;
     std::string t;
@@ -246,6 +259,19 @@ struct ParaProps {
     if (keepNext) s += "<w:keepNext/>";
     if (pageBreak) s += "<w:pageBreakBefore/>";
     s += numPr;
+    // Borders, each its padding from the text as w:space (whole points, at most 31).
+    if (std::any_of(border.begin(), border.end(), [](const std::string& b) { return !b.empty(); })) {
+      static const char* const kSide[] = {"top", "left", "bottom", "right"};
+      std::string b;
+      for (size_t k = 0; k < 4; ++k) {
+        std::string one = Border(kSide[k], border[k]);
+        const size_t at = one.find(" w:space=\"0\"");
+        if (at != std::string::npos && padding[k])
+          one.replace(at, 12, " w:space=\"" + std::to_string(std::clamp(static_cast<int>(std::lround(*padding[k])), 0, 31)) + "\"");
+        b += one;
+      }
+      if (!b.empty()) s += "<w:pBdr>" + b + "</w:pBdr>";
+    }
     if (!shade.empty()) s += "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"" + shade + "\"/>";
     s += tabs;
     if (before || after || line) {
@@ -348,6 +374,11 @@ class Converter {
   std::unordered_map<std::string, std::string> fonts_;
   std::map<std::string, xml_node> faces_;  // each font's declaration, by its family name: the font table
   std::string FontTableXml() const;
+  // Bookmarks' text, for references that show it (reference-format "text"): read before the body is written.
+  void BookmarkTexts(xml_node parent, int depth);
+  std::unordered_map<std::string, std::string> refText_, openText_;
+  size_t refBudget_ = 4 << 20;  // the most text references may repeat, in bytes
+  size_t refCollect_ = 16 << 20;  // the most bookmark text kept
   std::unordered_map<std::string, Style> named_, autos_[2];  // "family\nname"
   std::unordered_map<std::string, xml_node> listStyles_[2], pageLayouts_;
   xml_node outline_, defaults_, master_;  // master_: the page style of the section being written
@@ -815,6 +846,50 @@ void Converter::Text(std::string_view text, Inline& in, std::string& out) {
          "</w:t></w:r>";
 }
 
+void Converter::BookmarkTexts(xml_node parent, int depth) {
+  constexpr size_t kMost = 4096;  // a bookmark's text that a reference repeats, at most
+  auto add = [&](std::string_view t) {
+    for (auto& [name, text] : openText_)
+      for (char ch : t) {
+        if (text.size() >= kMost) break;
+        const bool white = ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+        if (white && (text.empty() || text.back() == ' ')) continue;  // ODF's white space collapses
+        if (refCollect_ == 0) return;
+        --refCollect_;
+        text += white ? ' ' : ch;
+      }
+  };
+  for (xml_node c : parent.children()) {
+    if (c.type() == pugi::node_pcdata || c.type() == pugi::node_cdata) {
+      if (!openText_.empty()) add(c.value());
+      continue;
+    }
+    if (c.type() != pugi::node_element) continue;
+    const std::string_view n = c.name();
+    const std::string name(Attr(c, "text:name"));
+    if (n == "text:bookmark-start") {
+      if (!name.empty() && !refText_.count(name) && openText_.size() < 64) openText_.emplace(name, std::string());
+    } else if (n == "text:bookmark-end") {
+      if (auto it = openText_.find(name); it != openText_.end()) {
+        while (!it->second.empty() && it->second.back() == ' ') it->second.pop_back();
+        refText_[name] = std::move(it->second);
+        openText_.erase(it);
+      }
+    } else if (n == "text:s" || n == "text:tab") {
+      if (!openText_.empty()) add(" ");
+    } else if (n == "text:bookmark-ref" && !openText_.empty() &&
+               (Attr(c, "text:reference-format") == "text" || Attr(c, "text:reference-format").empty()) &&
+               refText_.count(std::string(Attr(c, "text:ref-name")))) {
+      add(refText_[std::string(Attr(c, "text:ref-name"))]);  // a reference in the text: what it shows
+    } else if (n == "text:note" || n == "office:annotation" || n == "text:tracked-changes" || n.starts_with("text:change")) {
+      continue;
+    } else if (depth < kMaxDepth) {
+      if ((n == "text:p" || n == "text:h") && !openText_.empty()) add(" ");  // paragraphs: a space between
+      BookmarkTexts(c, depth + 1);
+    }
+  }
+}
+
 void Converter::Runs(xml_node parent, Inline& in, std::string& out, std::string& after, int depth) {
   auto run = [&](std::string_view inner) {
     const std::string rpr = in.props.Xml(in.rStyle);
@@ -923,6 +998,22 @@ void Converter::Runs(xml_node parent, Inline& in, std::string& out, std::string&
       out += std::string("<w:fldSimple w:instr=\"") + (n == "text:page-number" ? " PAGE " : " NUMPAGES ") + "\"><w:r>" +
              (rpr.empty() ? std::string() : "<w:rPr>" + rpr + "</w:rPr>") + "<w:t>" + Esc(result) + "</w:t></w:r></w:fldSimple>";
       in.space = false;
+    } else if (n == "text:bookmark-ref" && (Attr(c, "text:reference-format") == "text" || Attr(c, "text:reference-format").empty()) &&
+               refText_.count(std::string(Attr(c, "text:ref-name"))) && !refText_[std::string(Attr(c, "text:ref-name"))].empty() &&
+               Attr(c, "text:ref-name").find_first_of(" \"\\") == std::string_view::npos &&
+               refText_[std::string(Attr(c, "text:ref-name"))].size() <= refBudget_) {
+      // A reference to the bookmark's text shows that text (the file keeps what it showed when saved: Word
+      // writes its numbered references so, and shows the text when it reads them back).
+      std::string name(Attr(c, "text:ref-name"));
+      const std::string& text = refText_[name];
+      refBudget_ -= text.size();
+      size_t cut = std::min<size_t>(name.size(), 40);  // as the bookmark's name was cut
+      while (cut > 0 && cut < name.size() && (static_cast<unsigned char>(name[cut]) & 0xC0) == 0x80) --cut;
+      name.resize(cut);
+      const std::string rpr = in.props.Xml(in.rStyle);
+      out += "<w:fldSimple w:instr=\" REF " + Esc(name) + " \\h \"><w:r>" + (rpr.empty() ? std::string() : "<w:rPr>" + rpr + "</w:rPr>") +
+             "<w:t xml:space=\"preserve\">" + Esc(text) + "</w:t></w:r></w:fldSimple>";
+      in.space = text.back() == ' ';
     } else if (n == "office:annotation" || n == "office:annotation-end" || n == "text:soft-page-break" ||
                n.starts_with("text:change") || n == "text:tracked-changes" || n == "text:ruby-text" ||
                n == "text:sequence-decls" || n == "text:variable-decls" || n == "text:user-field-decls") {
@@ -1252,6 +1343,8 @@ pkg::Status Converter::Run(std::vector<uint8_t>& docx) {
 
   parts_.push_back({"word/document.xml", {}, {}});
   part_ = 0;
+  BookmarkTexts(text, 0);
+  openText_.clear();
   std::string body;
   body_ = &body;
   Blocks(text, body, 0);

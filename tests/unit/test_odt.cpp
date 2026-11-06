@@ -271,3 +271,27 @@ TEST(Odt_FontTableFromFontFaces) {
   CHECK(pn && pn->family == "modern" && pn->pitch == "variable" && pn->panose.empty());
   CHECK(calibri && calibri->family == "swiss" && calibri->panose == "020F0502020204030204");
 }
+
+TEST(Odt_TextReferencesAndParagraphBorders) {
+  // A reference to a bookmark's text shows the text (a REF field), with the references in it shown as they
+  // show; one to its number keeps what the file has. A border's padding is its w:space.
+  const std::string autos =
+      "<style:style style:name=\"P1\" style:family=\"paragraph\"><style:paragraph-properties "
+      "fo:border=\"0.5pt solid #000000\" fo:padding=\"0.1in\" fo:border-left=\"none\"/></style:style>";
+  const std::string body =
+      "<text:p><text:bookmark-start text:name=\"inner\"/>Inner<text:bookmark-end text:name=\"inner\"/></text:p>"
+      "<text:p><text:bookmark-start text:name=\"_Ref1\"/>Target  text, see "
+      "<text:bookmark-ref text:ref-name=\"inner\" text:reference-format=\"text\">1</text:bookmark-ref>"
+      "<text:bookmark-end text:name=\"_Ref1\"/></text:p>"
+      "<text:p text:style-name=\"P1\">Clause <text:bookmark-ref text:ref-name=\"_Ref1\" text:reference-format=\"text\">7.4</text:bookmark-ref>"
+      " and <text:bookmark-ref text:ref-name=\"_Ref1\" text:reference-format=\"number\">7.5</text:bookmark-ref></text:p>";
+  std::string xml;
+  auto doc = Converted(Odt(body, autos), &xml);
+  CHECK(doc);
+  if (!doc) return;
+  CHECK(xml.find("<w:fldSimple w:instr=\" REF _Ref1 \\h \"><w:r><w:t xml:space=\"preserve\">Target text, see Inner</w:t>") !=
+        std::string::npos);
+  CHECK(xml.find(">7.5<") != std::string::npos && xml.find(">7.4<") == std::string::npos);
+  CHECK(xml.find("<w:pBdr><w:top w:val=\"single\" w:sz=\"4\" w:space=\"7\" w:color=\"000000\"/><w:left w:val=\"nil\"/>") !=
+        std::string::npos);
+}
