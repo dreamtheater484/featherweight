@@ -68,4 +68,13 @@ class Snapshot {
   void* copy_ = nullptr;  // HANDLE of the recovery copy, opened delete-on-close
 };
 
+// Compares the file at `path` with `stamp` (what Snapshot::CheckDisk does), for a file that has
+// been saved since it was opened: size and last-write time, then the hash.
+Snapshot::DiskState CheckDisk(const std::wstring& path, const Snapshot::Stamp& stamp);
+// Size and last-write time only: cheap enough to run each time the window is activated.
+bool SameSizeAndTime(const std::wstring& path, const Snapshot::Stamp& stamp);
+// The size and last-write time of the file at `path` now, with `hash` as given. False when it
+// can't be read.
+bool StampOf(const std::wstring& path, const Sha256& hash, Snapshot::Stamp& stamp);
+
 }  // namespace fw::pkg

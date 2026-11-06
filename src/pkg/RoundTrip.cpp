@@ -44,6 +44,21 @@ void RoundTripStore::Add(NodeId owner, Fragment fragment) {
   fragments_[owner].push_back(std::move(fragment));
 }
 
+std::vector<Fragment> RoundTripStore::FragmentsCopy(NodeId owner) const {
+  auto it = fragments_.find(owner);
+  return it == fragments_.end() ? std::vector<Fragment>{} : it->second;
+}
+
+void RoundTripStore::SetFragments(NodeId owner, std::vector<Fragment> fragments) {
+  if (auto it = fragments_.find(owner); it != fragments_.end()) {
+    for (const auto& f : it->second) bytes_ -= Cost(f);
+    fragments_.erase(it);
+  }
+  if (fragments.empty()) return;
+  for (const auto& f : fragments) bytes_ += Cost(f);
+  fragments_[owner] = std::move(fragments);
+}
+
 std::vector<const Fragment*> RoundTripStore::FragmentsOf(NodeId owner, Slot slot) const {
   std::vector<const Fragment*> out;
   auto it = fragments_.find(owner);

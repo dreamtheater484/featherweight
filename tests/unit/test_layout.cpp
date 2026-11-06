@@ -3,13 +3,17 @@
 // hold whatever the font metrics.
 #include "TestHarness.h"
 
+#include <algorithm>
+#include <cstdio>
 #include <memory>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "PkgTestUtil.h"
 #include "doc/docx/Docx.h"
+#include "doc/edit/Editor.h"
 #include "doc/layout/Layout.h"
 #include "text/Fonts.h"
 
@@ -25,6 +29,7 @@ using fw::doc::layout::SubstituteFamily;
 namespace {
 
 constexpr const char* kW = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"";
+constexpr const char* kR = "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"";
 
 // A Word document from its body and, optionally, its settings and footnotes.
 struct Doc {
@@ -40,7 +45,7 @@ fw::text::Fonts& Fonts() {
 }
 
 Doc Make(const std::string& body, const std::string& settings = "", const std::string& footnotes = "", bool all = true,
-         const std::string& fonts = "") {
+         const std::string& fonts = "", const std::string& header = "") {
   const std::string wml = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
   const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
   const std::string head = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>";
@@ -61,6 +66,11 @@ Doc Make(const std::string& body, const std::string& settings = "", const std::s
     rels += "<Relationship Id=\"rId3\" Type=\"" + rel + "fontTable\" Target=\"fontTable.xml\"/>";
     entries.push_back({"word/fontTable.xml", head + "<w:fonts " + kW + ">" + fonts + "</w:fonts>"});
   }
+  if (!header.empty()) {  // the sections refer to it as rIdH
+    types += "<Override PartName=\"/word/header1.xml\" ContentType=\"" + wml + "header+xml\"/>";
+    rels += "<Relationship Id=\"rIdH\" Type=\"" + rel + "header\" Target=\"header1.xml\"/>";
+    entries.push_back({"word/header1.xml", head + "<w:hdr " + kW + ">" + header + "</w:hdr>"});
+  }
   if (!footnotes.empty()) {
     types += "<Override PartName=\"/word/footnotes.xml\" ContentType=\"" + wml + "footnotes+xml\"/>";
     rels += "<Relationship Id=\"rId2\" Type=\"" + rel + "footnotes\" Target=\"footnotes.xml\"/>";
@@ -73,7 +83,7 @@ Doc Make(const std::string& body, const std::string& settings = "", const std::s
                   {"_rels/.rels", "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
                                   "<Relationship Id=\"rId1\" Type=\"" + rel + "officeDocument\" Target=\"word/document.xml\"/>"
                                   "</Relationships>"},
-                  {"word/document.xml", head + "<w:document " + kW + "><w:body>" + body + "</w:body></w:document>"},
+                  {"word/document.xml", head + "<w:document " + kW + " " + kR + "><w:body>" + body + "</w:body></w:document>"},
                   {"word/_rels/document.xml.rels", rels}});
   Doc d;
   fw::pkg::Status st;
@@ -387,4 +397,220 @@ TEST(Layout_EastAsianFontsGetEastAsianStandIns) {
   CHECK(in(SubstituteFamily(*d.doc, L"\xBC14\xD0D5"), {L"Batang", L"Malgun Gothic"}));  // not in the table
   CHECK(in(SubstituteFamily(*d.doc, L"Unknown Song"), {L"SimSun", L"Microsoft YaHei"}));
   CHECK(SubstituteFamily(*d.doc, L"Unknown Typewriter") == L"Courier New");
+}
+
+// ---- Laying out again after edits (D2)
+
+namespace {
+
+std::string Narrow(const std::u16string& s) {
+  std::string out;
+  for (char16_t c : s) out += c < 128 ? static_cast<char>(c) : '?';
+  return out;
+}
+
+// The layout as text, page by page, to compare one laid out again after edits with one laid out
+// from scratch.
+std::vector<std::string> Signature(const Layout& l) {
+  std::vector<std::string> pages;
+  char buf[160];
+  for (size_t p = 0; p < l.PageCount(); ++p) {
+    const Page& pg = l.GetPage(p);
+    std::snprintf(buf, sizeof buf, "page %zu: %.2fx%.2f number %d first %u.%u\n", p, pg.width, pg.height, pg.number,
+                  pg.first.para, pg.first.offset);
+    std::string s = buf;
+    for (const LineBox& lb : pg.lines) {
+      std::snprintf(buf, sizeof buf, "  %d p%u [%u,%u) x%.2f y%.2f h%.2f ", static_cast<int>(lb.story), lb.para,
+                    lb.line.start, lb.line.end, lb.x, lb.top, lb.height);
+      s += buf + Narrow(lb.text) + "\n";
+    }
+    for (const auto& dr : pg.drawings) {
+      std::snprintf(buf, sizeof buf, "  drawing %u %.2f,%.2f\n", dr.drawing, dr.rect.left, dr.rect.top);
+      s += buf;
+    }
+    pages.push_back(std::move(s));
+  }
+  return pages;
+}
+
+// Whether `l` is as a layout made from scratch would be; prints where not.
+bool SameAsFresh(const Document& doc, const Layout& l, const char* when) {
+  Layout fresh(doc, Fonts());
+  fresh.LayOutAll();
+  const std::vector<std::string> a = Signature(l), b = Signature(fresh);
+  for (size_t p = 0; p < std::max(a.size(), b.size()); ++p) {
+    if (p < a.size() && p < b.size() && a[p] == b[p]) continue;
+    std::printf("  %s: page %zu differs (%zu pages, from scratch %zu)\n  incremental:\n%s  from scratch:\n%s", when, p,
+                a.size(), b.size(), p < a.size() ? a[p].c_str() : "(none)\n", p < b.size() ? b[p].c_str() : "(none)\n");
+    return false;
+  }
+  return true;
+}
+
+// A random edit of the kind typing makes: text in or out, Enter, joining, a paragraph property.
+void RandomEdit(edit::Editor& ed, const Document& doc, std::mt19937& rng) {
+  // Mostly the body; now and then a header or a note.
+  const bool body = rng() % 8 != 0;
+  std::vector<uint32_t> paras;
+  for (uint32_t p = 0; p < doc.Paragraphs().size(); ++p)
+    if ((doc.Para(p).story == doc.MainStory()) == body) paras.push_back(p);
+  if (paras.empty()) return;
+  const uint32_t para = paras[rng() % paras.size()];
+  const auto len = static_cast<uint32_t>(doc.Para(para).text.size());
+  const Pos at{para, len ? static_cast<uint32_t>(rng() % (len + 1)) : 0};
+  static const char16_t* const kTexts[] = {u"x", u" ", u"ab", u"word ", u"several more words to wrap the line ",
+                                           u"a long run of text that is long enough to take a line or two of the small "
+                                           u"page by itself, and then some more of it "};
+  switch (rng() % 10) {
+    case 0: case 1: case 2: case 3: ed.InsertText(at, kTexts[rng() % 6]); break;
+    case 4: case 5: {
+      const uint32_t to = std::min(len, at.offset + 1 + static_cast<uint32_t>(rng() % 40));
+      if (to > at.offset) ed.Delete(at, {para, to});
+      break;
+    }
+    case 6: ed.SplitParagraph(at); break;
+    case 7: ed.JoinParagraphs(para); break;
+    case 8: {
+      const uint32_t next = ed.NextPara(para);
+      if (next != kNone && len > 0)
+        ed.Delete({para, len / 2}, {next, std::min<uint32_t>(3, static_cast<uint32_t>(doc.Para(next).text.size()))});
+      break;
+    }
+    default: {
+      edit::PropEdit p;
+      if (rng() % 2) p.Set("keepNext");
+      else p.Remove("keepNext");
+      ed.SetParaProps(para, para, p);
+      break;
+    }
+  }
+}
+
+}  // namespace
+
+TEST(Layout_EditsLayOutAgainAsFromScratch) {
+  // Paragraphs of every length, kept-together headings, a table that splits, footnotes and a
+  // section break, on small pages; then random edits, laid out again a bit at a time.
+  const std::string notes =
+      "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>"
+      "<w:footnote w:id=\"1\"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> A note.</w:t></w:r></w:p></w:footnote>"
+      "<w:footnote w:id=\"2\"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t xml:space=\"preserve\"> Another, longer note that "
+      "takes two lines at least.</w:t></w:r></w:p></w:footnote>";
+  auto noteRef = [](int id) {
+    return "<w:p><w:r><w:t xml:space=\"preserve\">Noted </w:t></w:r><w:r><w:footnoteReference w:id=\"" +
+           std::to_string(id) + "\"/></w:r><w:r><w:t xml:space=\"preserve\"> " + Words(12) + "</w:t></w:r></w:p>";
+  };
+  // A table with a repeated header row and a table in one of its cells.
+  const std::string inner = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"700\"/>"
+                            "</w:tblGrid><w:tr><w:tc>" + P(Words(5)) + "</w:tc></w:tr></w:tbl>";
+  std::string rows;
+  for (int i = 0; i < 8; ++i)
+    rows += std::string("<w:tr>") + (i == 0 ? "<w:trPr><w:tblHeader/></w:trPr>" : "") + "<w:tc>" +
+            P("Cell " + std::to_string(i) + " " + Words(i * 3)) + "</w:tc><w:tc>" + (i == 4 ? inner : "") + P(Words(4)) +
+            "</w:tc></w:tr>";
+  const std::string table = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1500\"/>"
+                            "<w:gridCol w:w=\"1500\"/></w:tblGrid>" + rows + "</w:tbl>";
+  // Merged cells running on across rows, and a header showing the page and the page count.
+  const std::string merged =
+      "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1500\"/><w:gridCol w:w=\"1500\"/>"
+      "</w:tblGrid><w:tr><w:tc><w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr>" + P(Words(30)) + "</w:tc><w:tc>" + P("a") +
+      "</w:tc></w:tr><w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc>" + P("b") + "</w:tc></w:tr></w:tbl>";
+  auto field = [](const char* code) {
+    return std::string("<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> ") + code +
+           " </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>1</w:t></w:r>"
+           "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>";
+  };
+  const std::string header = "<w:p><w:r><w:t xml:space=\"preserve\">Page </w:t></w:r>" + field("PAGE") +
+                             "<w:r><w:t xml:space=\"preserve\"> of </w:t></w:r>" + field("NUMPAGES") + "</w:p>";
+  const std::string hdr = "<w:headerReference w:type=\"default\" r:id=\"rIdH\"/>";
+  std::string body;
+  for (int i = 0; i < 36; ++i) {
+    if (i % 9 == 0) body += P("Heading " + std::to_string(i), "<w:keepNext/>");
+    body += P(Words((i * 7) % 23 + 1), i % 5 == 0 ? "<w:widowControl/>" : i % 7 == 3 ? "<w:keepLines/>" : "");
+    if (i == 6) body += noteRef(1);
+    if (i == 10) body += "<w:p><w:r><w:t>Before a break</w:t></w:r><w:r><w:br w:type=\"page\"/></w:r><w:r><w:t>after</w:t></w:r></w:p>";
+    if (i == 14) body += table;
+    if (i == 17) body += P("Starts a page", "<w:pageBreakBefore/>") + merged;
+    if (i == 20) body += P("End of section one", "<w:sectPr>" + hdr + "<w:type w:val=\"nextPage\"/><w:pgSz w:w=\"4000\" w:h=\"4000\"/>"
+                                                 "<w:pgMar w:top=\"400\" w:right=\"400\" w:bottom=\"400\" w:left=\"400\" "
+                                                 "w:header=\"200\" w:footer=\"200\" w:gutter=\"0\"/></w:sectPr>");
+    if (i == 27) body += noteRef(2);
+    if (i == 30) body += P("Two columns from here", "<w:sectPr>" + hdr + "<w:type w:val=\"continuous\"/><w:pgSz w:w=\"4000\" w:h=\"4000\"/>"
+                                                    "<w:pgMar w:top=\"400\" w:right=\"400\" w:bottom=\"400\" w:left=\"400\" "
+                                                    "w:header=\"200\" w:footer=\"200\" w:gutter=\"0\"/></w:sectPr>");
+  }
+  for (unsigned seed : {1u, 2u, 3u, 4u}) {
+    Doc d = Make(body + SmallPage(hdr + "<w:type w:val=\"continuous\"/><w:cols w:num=\"2\" w:space=\"200\"/>"), "", notes,
+                 true, "", header);
+    REQUIRE(d.layout);
+    REQUIRE(d.pages() > 8);
+    edit::Editor ed(*d.doc);
+    ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+    std::mt19937 rng(seed);
+    for (int step = 0; step < 120; ++step) {
+      RandomEdit(ed, *d.doc, rng);
+      switch (rng() % 4) {
+        case 0: d.layout->LayOutPages(1 + rng() % 6); break;
+        case 1: d.layout->Continue(0.2); break;
+        case 2: break;
+        default: d.layout->LayOutAll(); break;
+      }
+      // The pages shown, old ones too, hit-test to positions that exist.
+      for (size_t p = 0; p < d.pages(); ++p)
+        if (auto pos = d.layout->HitTest(p, 100, 100)) {
+          CHECK(pos->para < d.doc->Paragraphs().size());
+          CHECK(pos->offset <= d.doc->Para(pos->para).text.size());
+        }
+      if (step % 8 == 7) {
+        d.layout->LayOutAll();
+        char when[64];
+        std::snprintf(when, sizeof when, "seed %u, step %d", seed, step);
+        REQUIRE(SameAsFresh(*d.doc, *d.layout, when));
+      }
+    }
+  }
+}
+
+TEST(Layout_TypingLaysOutAPageOrTwo) {
+  // A keystroke on the first page of a long document: the old pages after the first page that
+  // ends as it did come back as they were, so laying out three pages finishes the document.
+  std::string body;
+  for (int i = 0; i < 200; ++i) body += P(Words(i % 17 + 3));
+  Doc d = Make(body + SmallPage());
+  REQUIRE(d.layout && d.pages() > 40);
+  const size_t pages = d.pages();
+  edit::Editor ed(*d.doc);
+  ed.OnChange([&](const edit::Change& c) { d.layout->Edited(c); });
+  for (int i = 0; i < 5; ++i) {
+    REQUIRE(ed.InsertText({0, 2}, u"x"));
+    CHECK(!d.layout->Done());
+    CHECK_EQ(d.pages(), pages);  // the old pages are still shown
+    d.layout->LayOutPages(3);
+    CHECK(d.layout->Done());
+  }
+  CHECK(SameAsFresh(*d.doc, *d.layout, "after typing"));
+  // The caret and a selection across the change, on the pages laid out again.
+  const auto caret = d.layout->CaretAt({0, 7});
+  REQUIRE(caret);
+  CHECK_EQ(caret->page, 0u);
+  CHECK(!d.layout->Ranges({0, 0}, {1, 3}).empty());
+  // Enter at the start pushes everything down a line: laid out again to the end, in idle time.
+  REQUIRE(ed.SplitParagraph({0, 0}));
+  d.layout->LayOutPages(1);
+  CHECK_EQ(d.pages(), pages);
+  // Until then the old pages show what they did, under the paragraphs' new indices.
+  const Page& old = d.page(20);
+  const LineBox* line = nullptr;
+  for (const LineBox& l : old.lines)
+    if (l.story == fw::LayoutStory::Body && !l.text.empty() && l.line.start == 0) {
+      line = &l;
+      break;
+    }
+  REQUIRE(line);
+  CHECK(d.doc->Para(line->para).text.compare(0, line->text.size(), line->text) == 0);
+  const auto hit = d.layout->HitTest(20, line->x + line->line.left + 1, line->top + line->height / 2);
+  REQUIRE(hit);
+  CHECK_EQ(hit->para, line->para);
+  d.layout->LayOutAll();
+  CHECK(SameAsFresh(*d.doc, *d.layout, "after Enter"));
 }

@@ -6,9 +6,13 @@ target_include_directories(fwfidelity PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(fwfidelity PUBLIC fwcore)
 target_compile_options(fwfidelity PRIVATE ${FW_COMPILE_OPTIONS})
 
-add_executable(fwtool main.cpp Roundtrip.cpp Inspect.cpp Model.cpp Print.cpp Render.cpp Reference.cpp Compare.cpp Bench.cpp
-  BenchApp.cpp LayoutHook.cpp Wrap.cpp)
-target_link_libraries(fwtool PRIVATE fwpkg fwdoc fwdoclayout fwdraw fwtext fwfidelity pdfium delayimp ole32 windowscodecs)
+add_executable(fwtool main.cpp Roundtrip.cpp Save.cpp Inspect.cpp Model.cpp Print.cpp Render.cpp Reference.cpp Compare.cpp Bench.cpp
+  BenchApp.cpp LayoutHook.cpp Paste.cpp Spelling.cpp Torture.cpp Wrap.cpp)
+target_link_libraries(fwtool PRIVATE fwpkg fwdoc fwdoclayout fwdraw fwproof fwtext fwfidelity pdfium delayimp ole32 windowscodecs)
+# Picture editing (D3), for fwtool torture.
+if(TARGET fwpictures)
+  target_link_libraries(fwtool PRIVATE fwpictures)
+endif()
 target_compile_options(fwtool PRIVATE ${FW_COMPILE_OPTIONS})
 # PDFium reads Word's reference PDFs. As in the app, it's delay-loaded: only `lines` and `compare`
 # load it, and only the copy next to fwtool.exe.

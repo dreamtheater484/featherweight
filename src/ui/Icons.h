@@ -51,9 +51,22 @@ constexpr wchar_t Color = 0xE790;  // palette
 constexpr wchar_t FontColor = 0xE8D3;
 constexpr wchar_t Bold = 0xE8DD;
 constexpr wchar_t BulletedList = 0xE8FD;
+constexpr wchar_t Italic = 0xE8DB;
+constexpr wchar_t Underline = 0xE8DC;
+constexpr wchar_t AlignRight = 0xE8E2;
+constexpr wchar_t AlignCenter = 0xE8E3;
+constexpr wchar_t AlignLeft = 0xE8E4;
+constexpr wchar_t Undo = 0xE7A7;
+constexpr wchar_t Redo = 0xE7A6;
+constexpr wchar_t Brush = 0xE771;  // a paintbrush (a pen in MDL2)
+constexpr wchar_t DecreaseIndent = 0xE290;
+constexpr wchar_t IncreaseIndent = 0xE291;
+constexpr wchar_t Calendar = 0xE787;
 
 // Custom vector icons drawn by DrawButton (private-use code points).
 constexpr wchar_t ViewSingle = 0xF8F0;
 constexpr wchar_t ViewContinuous = 0xF8F1;
 constexpr wchar_t ViewFacing = 0xF8F2;
+constexpr wchar_t NumberedList = 0xF8F3;
+constexpr wchar_t AlignJustify = 0xF8F4;
 }  // namespace icon

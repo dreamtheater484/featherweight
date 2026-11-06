@@ -20,6 +20,12 @@ constexpr const char* kUsage =
     "      refused with a plain message (malicious files). With --model Word documents are\n"
     "      read into the document model, which writes back every part it owns; those parts\n"
     "      must equal the originals after canonicalization, and the saved copy must pass check.\n"
+    "  fwtool save [--edited] [--out DIR] <file or folder>...\n"
+    "      Saves each Word document as Featherweight's Save does (the document model's save, then\n"
+    "      safe saving) into DIR (default: a temporary folder, removed afterwards). With no edits\n"
+    "      the saved file must be identical to the original; with --edited every part the model\n"
+    "      owns is rewritten and the document properties updated, as after an edit. Either way the\n"
+    "      saved file must open and have no new fwtool check errors. Prints each save's time.\n"
     "  fwtool dump [--model | --layout [--out DIR]] <file>...\n"
     "      Lists parts, relationships and content types; with --model, what the document\n"
     "      model reads from a Word document (stories, paragraphs, labels, fields); with\n"
@@ -49,14 +55,41 @@ constexpr const char* kUsage =
     "  fwtool compare --self-test <reference folder>...\n"
     "      Checks the measurement: Word's lines match themselves, one moved line break costs\n"
     "      exactly one line, and an added page changes only the page count.\n"
-    "  fwtool bench [--runs N] [--json FILE] [--budgets] <file or folder>...\n"
+    "  fwtool bench [--runs N] [--json FILE] [--budgets] [--typing] <file or folder>...\n"
     "      Times opening each Word document, stage by stage, against the opening budgets\n"
-    "      (plan §11). With --budgets, a missed budget fails.\n"
+    "      (plan §11). With --budgets, a missed budget fails. With --typing, times keystrokes\n"
+    "      at the start, middle and end and in a table instead: from the edit to the page painted\n"
+    "      again. Formatting there (bold, centered, Heading 1, bullets, each undone) counts too.\n"
+    "  fwtool edit-check [--edits N] [--seed S] <file or folder>...\n"
+    "      Makes N random edits (40) in each Word document through the editor, lays it out again\n"
+    "      incrementally after each, and checks every ten that it's what a layout from scratch is.\n"
+    "  fwtool paste-check [--samples DIR] [--out DIR] <file or folder>...\n"
+    "      Copies each Word document's main story as RTF and HTML and pastes it back (the HTML\n"
+    "      over the story, the RTF at its end), and pastes each clipboard sample in --samples at\n"
+    "      its start. Every result must save, pass check (when the original does) and undo; with\n"
+    "      --out the saved copies go to DIR/html, DIR/rtf and DIR/samples, for fwvalidate.\n"
     "  fwtool bench-app [--runs N] [--json FILE] <Featherweight.exe> [<file>...]\n"
     "      Starts a private copy of Featherweight, alone and with each file, and measures launch\n"
     "      to window, to the first frame (the start screen or the first page), memory once\n"
     "      settled, and CPU and wakeups while idle (plan §11). Works with any build, 0.9.4\n"
     "      included, and never touches the user's settings or a running Featherweight.\n"
+    "  fwtool spelling <file or folder>...\n"
+    "      Checks each Word document's spelling with Windows' spell checker and counts its words,\n"
+    "      as the app does in idle time, and times both (plan §6.2, §11).\n"
+    "  fwtool torture [--seed S] [--edits N] [--rounds R] [--out DIR] [--json FILE] <file or folder>...\n"
+    "      The open, edit and save test (plan §10, D2): R rounds of N seeded random edits per Word\n"
+    "      document through the editor (typing, deletes and replacements across fields, bookmarks,\n"
+    "      comments, content controls, tables and tracked changes, splits, joins, run, paragraph and\n"
+    "      paragraph-mark formatting, groups of edits as one undo step, undo and redo), then\n"
+    "      save: the saved file must open, pass check with no new errors, and read back as the\n"
+    "      edited document. A failure is shrunk to the fewest edits that still fail, kept in\n"
+    "      DIR/repro (default DIR: build/torture). DIR/saved and DIR/pairs.tsv hold a saved copy of\n"
+    "      each document for the validator and Word (scripts/torture.ps1).\n"
+    "  fwtool torture --replay <reproducer.txt> [--out DIR]\n"
+    "      Applies a reproducer's edits again and reports what happens and which parts the save\n"
+    "      wrote. The file it makes goes next to the reproducer as <name>-replay.docx, or into DIR,\n"
+    "      with <name>-replay-edited.txt and -readback.txt when the text differs. Its document is\n"
+    "      found by its recorded path or, from another checkout, by the tail of that path.\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
     "      Word's. Run it without text for its options.\n";
@@ -142,6 +175,13 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--all") options.all = true;
     else if (arg == L"--runs" && i + 1 < argc) options.runs = _wtoi(argv[++i]);
     else if (arg == L"--budgets") options.budgets = true;
+    else if (arg == L"--typing") options.typing = true;
+    else if (arg == L"--edits" && i + 1 < argc) options.edits = std::max(1, _wtoi(argv[++i]));
+    else if (arg == L"--seed" && i + 1 < argc) options.seed = static_cast<unsigned>(std::wcstoul(argv[++i], nullptr, 10));
+    else if (arg == L"--rounds" && i + 1 < argc) options.rounds = static_cast<uint32_t>(std::max(1, _wtoi(argv[++i])));
+    else if (arg == L"--replay") options.replay = true;
+    else if (arg == L"--edited") options.edited = true;
+    else if (arg == L"--samples" && i + 1 < argc) options.samples = argv[++i];
     else if (arg.starts_with(L"--")) {
       std::fprintf(stderr, "Unknown option %s\n\n%s", fw::WideToUtf8(arg).c_str(), fwtool::kUsage);
       return 2;
@@ -153,6 +193,7 @@ int wmain(int argc, wchar_t** argv) {
   }
   if (command == L"roundtrip") return fwtool::RunRoundtrip(options);
   if (command == L"dump") return fwtool::RunDump(options);
+  if (command == L"save") return fwtool::RunSave(options);
   if (command == L"check") return fwtool::RunCheck(options);
   if (command == L"print-sample") return fwtool::RunPrintSample(options);
   if (command == L"render") return fwtool::RunRender(options);
@@ -160,6 +201,10 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"compare") return fwtool::RunCompare(options);
   if (command == L"bench") return fwtool::RunBench(options);
   if (command == L"bench-app") return fwtool::RunBenchApp(options);
+  if (command == L"edit-check") return fwtool::RunEditCheck(options);
+  if (command == L"spelling") return fwtool::RunSpelling(options);
+  if (command == L"torture") return fwtool::RunTorture(options);
+  if (command == L"paste-check") return fwtool::RunPasteCheck(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }

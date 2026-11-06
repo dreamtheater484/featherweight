@@ -209,14 +209,19 @@ bool Snapshot::ReadAt(uint64_t offset, void* dst, size_t size) const {
 
 Snapshot::DiskState Snapshot::CheckDisk() const {
   if (path_.empty()) return DiskState::Unchanged;
-  HANDLE h = OpenShared(path_);
+  return pkg::CheckDisk(path_, stamp_);
+}
+
+Snapshot::DiskState CheckDisk(const std::wstring& path, const Snapshot::Stamp& stamp) {
+  HANDLE h = OpenShared(path);
   if (h == INVALID_HANDLE_VALUE) {
     DWORD err = GetLastError();
-    return err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND ? DiskState::Missing : DiskState::Changed;
+    return err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND ? Snapshot::DiskState::Missing
+                                                                       : Snapshot::DiskState::Changed;
   }
   FileInfo now;
-  DiskState state = DiskState::Changed;
-  if (QueryInfo(h, now) && now.size == stamp_.size && now.lastWrite == stamp_.lastWrite) {
+  Snapshot::DiskState state = Snapshot::DiskState::Changed;
+  if (QueryInfo(h, now) && now.size == stamp.size && now.lastWrite == stamp.lastWrite) {
     // Same size and time. Some tools keep the time when they write, so the hash decides.
     Hasher hasher;
     std::vector<uint8_t> buffer(static_cast<size_t>(std::min<uint64_t>(now.size, kChunk)));
@@ -228,10 +233,29 @@ Snapshot::DiskState Snapshot::CheckDisk() const {
       hasher.Add(buffer.data(), n);
       left -= n;
     }
-    if (read && hasher.Finish() == stamp_.hash) state = DiskState::Unchanged;
+    if (read && hasher.Finish() == stamp.hash) state = Snapshot::DiskState::Unchanged;
   }
   CloseHandle(h);
   return state;
+}
+
+bool SameSizeAndTime(const std::wstring& path, const Snapshot::Stamp& stamp) {
+  WIN32_FILE_ATTRIBUTE_DATA fa{};
+  if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fa)) return false;
+  const uint64_t size = (static_cast<uint64_t>(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow;
+  const int64_t time = static_cast<int64_t>((static_cast<uint64_t>(fa.ftLastWriteTime.dwHighDateTime) << 32) |
+                                            fa.ftLastWriteTime.dwLowDateTime);
+  return size == stamp.size && time == stamp.lastWrite;
+}
+
+bool StampOf(const std::wstring& path, const Sha256& hash, Snapshot::Stamp& stamp) {
+  HANDLE h = OpenShared(path);
+  if (h == INVALID_HANDLE_VALUE) return false;
+  FileInfo info;
+  bool ok = QueryInfo(h, info);
+  CloseHandle(h);
+  if (ok) stamp = {info.size, info.lastWrite, hash};
+  return ok;
 }
 
 }  // namespace fw::pkg

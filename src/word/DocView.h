@@ -8,19 +8,34 @@
 #include <vector>
 
 #include "PagedView.h"
+#include "doc/edit/Editor.h"
 #include "doc/layout/Layout.h"
 #include "draw/Drawing.h"
+#include "doc/edit/Editor.h"
+#include "doc/proof/AutoCorrect.h"
+#include "doc/proof/Spelling.h"
 #include "doc/model/Document.h"
 #include "pkg/XmlDom.h"
 #include "text/Fonts.h"
+#include "word/DocFile.h"
+#include "word/DocFormat.h"
 
-// A Word document in a tab, read-only (plan milestone D1): the model, laid out page by page by
+// A Word document in a tab (plan milestones D1 and D2): the model, laid out page by page by
 // fw::doc::layout (the first page at once, the rest in idle time), drawn through draw::Painter,
-// with selection and copy, find, links, comments and tracked changes shown, and printing.
+// with selection and copy, find, links, comments and tracked changes shown, and printing. A
+// document Featherweight can write back is edited in place (DocEdit.cpp): the caret, typing,
+// deleting, undo and redo, cut and paste, through fw::doc::edit; formatting through DocFormat.
+// Its file (saving, backups, recovery, changes on disk) is kept by a DocFile.
 class DocView : public PagedView {
  public:
   DocView(ViewHost& host, std::wstring path);
   ~DocView() override;
+  // A new document from the built-in template: "Document <number>".
+  static std::unique_ptr<DocView> NewDocument(ViewHost& host, int number);
+  // A document that isn't its file: a recovered one (`unsaved` changes) or a backup. Save goes to
+  // Save As, starting at `suggested`.
+  static std::unique_ptr<DocView> FromBytes(ViewHost& host, std::vector<uint8_t> bytes, std::wstring title,
+                                            std::wstring suggested, bool unsaved);
 
   // The document viewer's keys.
   static int Shortcut(UINT vk, UINT mods);
@@ -31,25 +46,27 @@ class DocView : public PagedView {
   bool Ready() const override { return pagination_ != nullptr; }
   const std::wstring& Path() const override { return path_; }
   std::wstring Title() const override;
-  bool Modified() const override { return false; }
+  bool Modified() const override { return file_.Dirty(); }
 
   void Draw(gfx::Canvas& c, ID2D1DeviceContext* dc) override;
   bool HasIdleWork() const override;
   bool IdleWork(ID2D1DeviceContext* dc, double deadlineMs) override;
   void ReleaseDeviceResources() override {}
-  void OnDeactivated() override { drag_ = Drag::None; }
+  void OnDeactivated() override;
 
   void OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick) override;
   void OnMouseMove(int x, int y, UINT mods) override;
   void OnMouseUp(int x, int y, int button, UINT mods) override;
   void OnMouseLeave() override;
   bool OnKeyDown(UINT vk, UINT mods) override;
-  bool OnChar(wchar_t, UINT) override { return false; }
+  bool OnChar(wchar_t ch, UINT mods) override;
   HCURSOR CursorAt(int x, int y) override;
   std::wstring TooltipAt(int x, int y) override;
-  bool HasKeyFocus() const override { return false; }
+  bool HasKeyFocus() const override { return Editing() && keyFocus_; }
+  void SetKeyFocus(bool has) override;
+  std::optional<RECT> CaretRect() override;
 
-  int ShortcutFor(UINT vk, UINT mods) const override { return Shortcut(vk, mods); }
+  int ShortcutFor(UINT vk, UINT mods) const override;
   CommandState QueryCommand(int cmd) override;
   std::vector<int> Commands() override;
   bool Execute(int cmd) override;
@@ -58,6 +75,8 @@ class DocView : public PagedView {
 
   bool HasStatusBar() const override { return Ready(); }
   void BuildStatusBar(StatusBarModel& m) override;
+  // Spelling or AutoCorrect turned on or off.
+  void SettingsChanged() override;
 
   void StartSearch(const std::wstring& query, bool matchCase) override;
   void ClearSearch() override;
@@ -66,19 +85,44 @@ class DocView : public PagedView {
   int SearchCurrent() const override { return current_; }
   bool SearchDone() const override { return true; }
   std::wstring SelectedText() override;
+  bool CanReplace() const override { return Editing(); }
+  bool ReplaceCurrent(const std::wstring& with) override;
+  int ReplaceAll(const std::wstring& with) override;
 
-  // A copy of the file: documents are read-only until D2.
   bool Save(const std::wstring& path, std::wstring& error) override;
   SaveFormat SaveAsFormat() const override;
+  std::wstring SuggestedSavePath() const override;
+  void Autosave() override;
+  FileChange CheckFileOnDisk() override { return Ready() ? static_cast<FileChange>(file_.CheckDisk()) : FileChange::None; }
   bool CanPrint() const override { return Ready(); }
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;
   // Every page to Microsoft Print to PDF, into a file, with no dialog (the visual checks' print step).
   PrintOutcome PrintToFile(const std::wstring& path, std::wstring& message);
 
+  // ---- Editing (D2) ----
+  // The document's editor: every change goes through it (transactions, undo and redo). Null until
+  // loaded. Its changes reach the layout, the page list and the file (modified, autosave, Save).
+  fw::doc::edit::Editor* Editor() { return editor_.get(); }
+  // Marks a part edited without the editor (tests).
+  void NoteEdit(uint32_t part);
+  // The UI checks' "edited" step: " (edited)" typed at the end of the first paragraph.
+  void EditForTesting();
+  DocFile& File() { return file_; }
+
   // ---- Text ----
   bool HasSelection() const { return anchor_ != focus_; }
   void Copy();
   void SelectAll();
+  // The selection on the clipboard, as plain text, RTF and HTML. False when it has no text.
+  bool PutOnClipboard();
+
+  // ---- Editing (DocEdit.cpp) ----
+  bool Editing() const { return editor_ != nullptr && Ready() && !presentation_; }
+  void Cut();
+  // Pastes the clipboard's formatted text (Featherweight's own, RTF or HTML), or its plain text.
+  void Paste(bool formatted = true);
+  void Undo();
+  void Redo();
 
  protected:
   // ---- PagedView ----
@@ -126,9 +170,68 @@ class DocView : public PagedView {
   // The words around a position, for double-click.
   void WordAt(TextPos pos, TextPos& from, TextPos& to) const;
   uint32_t StoryOf(TextPos pos) const { return doc_->Para(pos.para).story; }
+  // Comments, tracked changes and links, with where they are in the text.
+  void CollectAnnotations();
 
-  std::wstring path_;
+  // ---- Proofing (DocProof.cpp)
+  // Spelling and words in idle time until `deadlineMs`; true when the squiggles or counts changed.
+  bool ProofIdle(double deadlineMs);
+  bool HasProofWork() const;
+  // An edit, undo or redo: the paragraphs it replaced are checked and counted again.
+  void ProofEdited(const fw::doc::edit::Change& change);
+  void DrawSquiggles(gfx::Canvas& c, int first, int last);
+  // The spelling error under (x, y): its suggestions, Ignore all and Add to dictionary, first.
+  void FillSpellingMenu(HMENU m, int x, int y);
+  void FillLanguageMenu(HMENU m);
+  bool ExecuteProof(int cmd);
+  void NextMisspelling();  // F7
+  void ShowWordCount();    // Ctrl+Shift+G
+  void ChooseLanguage();   // the language menu at the mouse
+  void SetLanguage(const std::wstring& tag);
+  // After a character was typed before the caret, or Enter ended `para`: AutoCorrect.
+  void AutoCorrectTyped(char16_t typed);
+  void AutoCorrectBreak(uint32_t para);
+  void ProofStatus(StatusBarModel& m);
+
+  // ---- Editing (DocEdit.cpp)
+  // Edits, their undo and redo: the layout lays out again, positions kept here move, and the file
+  // learns whether the document now differs from the saved one.
+  void OnEdited(const fw::doc::edit::Change& change);
+  // After an edit (or a refusal, whose message shows): the caret goes where it says.
+  bool Apply(const fw::doc::edit::Result& result);
+  bool EditKey(UINT vk, UINT mods);
+  void TypeText(std::u16string_view text);
+  void DeleteBy(bool forward, bool word);
+  // Moves the caret (extending the selection, or not), breaking the typing undo step.
+  void MoveCaret(TextPos to, bool extend);
+  // The caret moved or the text changed: its place is measured again, it's scrolled into view
+  // (when `show`) and blinks from the start.
+  void CaretMoved(bool show);
+  const std::optional<fw::doc::layout::Layout::Caret>& CaretBox();
+  void DrawCaret(gfx::Canvas& c, int first, int last);
+  void StopBlinking();
+  // The characters of a paragraph the caret moves over: offsets of those a reader sees (a
+  // surrogate pair once, at its first half), in order.
+  std::vector<uint32_t> Stops(uint32_t para) const;
+  TextPos StepChar(TextPos p, bool forward) const;
+  TextPos StepWord(TextPos p, bool forward) const;
+  TextPos StoryEdge(TextPos p, bool end) const;
+  fw::doc::Pos SelFrom() const { return {std::min(anchor_, focus_).para, std::min(anchor_, focus_).offset}; }
+  fw::doc::Pos SelTo() const { return {std::max(anchor_, focus_).para, std::max(anchor_, focus_).offset}; }
+
+  // ---- Formatting (DocFormat)
+  // What formatting applies to: the selection, or the caret and the word it's in.
+  DocFormat::Target FormatTarget() const;
+  // After a formatting command: the caret where it says, or why nothing happened.
+  void AfterFormat(const DocFormat::Done& done);
+  // Tab and Shift+Tab at the start of list items change their level.
+  bool ListTab(bool back);
+
+  std::wstring path_;            // the file; empty for a new or recovered document
+  DocFile file_;
+  std::vector<uint8_t> bytes_;   // NewDocument, FromBytes: what Load reads instead of a file
   std::unique_ptr<fw::doc::Document> doc_;
+  std::unique_ptr<fw::doc::edit::Editor> editor_;  // after doc_: goes first
   std::unique_ptr<fw::text::Fonts> fonts_;
   std::unique_ptr<fw::doc::layout::Layout> pagination_;
   std::vector<fw::PageSizePt> sizes_;
@@ -148,8 +251,11 @@ class DocView : public PagedView {
   std::shared_ptr<draw::ImageCache> images_;
   uint32_t revision_ = 0;
   bool noticesShown_ = false;
+  // Words in the main story, for the status bar: counted in idle time by paragraph, and for the
+  // paragraphs an edit replaces as it's made (DocProof.cpp).
   size_t words_ = 0;
-  size_t wordsNext_ = 0;  // the next main-story paragraph to count
+  uint32_t wordsNext_ = 0;           // the next paragraph to count (Document::Paragraphs() order)
+  std::vector<uint32_t> paraWords_;  // the counted paragraphs' words (0 outside the main story)
   bool wordsCounted_ = false;
 
   // Comments, with their ranges and text for the tooltip.
@@ -190,4 +296,53 @@ class DocView : public PagedView {
   // Find
   std::vector<Match> matches_;
   int current_ = -1;
+  std::wstring query_;  // what was searched for, to find again after a replace
+  bool matchCase_ = false;
+
+  // Editing: editor_ (declared after doc_) is null for a document shown but not edited (one the
+  // model can't write back).
+  std::unique_ptr<DocFormat> format_;  // after the editor: it goes first
+  uint64_t clipSource_ = 0;  // names this document in what it copies, to paste lists back into it
+  bool keyFocus_ = true;
+  bool annotationsStale_ = false;  // an edit moved comments, changes or links: find them again
+  double caretStart_ = 0;          // the caret blinks from here (the last key or click)
+  bool blinking_ = false;          // the blink timer runs
+  float goalX_ = -1;               // Up and Down keep to this x (page points); < 0: the caret's
+  wchar_t highSurrogate_ = 0;      // the first half of a character typed in two
+  TextPos caretFor_;               // what caretBox_ measured
+  uint32_t caretRevision_ = UINT32_MAX;
+  std::optional<fw::doc::layout::Layout::Caret> caretBox_;
+  double lastDoubleClick_ = -1e9;  // a click right after a double-click selects the paragraph
+  int lastDoubleX_ = 0, lastDoubleY_ = 0;
+
+  // Proofing (DocProof.cpp): the pages on screen checked in idle time with Windows' spell
+  // checker; nothing runs once they are.
+  std::unique_ptr<fw::doc::proof::Spelling> spelling_;
+  bool spellingWanted_ = true;  // made on the first idle tick, when the setting is on
+  bool typed_ = false;          // the last thing done was typing, which left the caret at typedAt_:
+  TextPos typedAt_;             // the word there is still being typed, and isn't marked yet
+  uint32_t edits_ = 0;          // edits so far, for what is measured from the text
+  fw::doc::proof::AutoCorrect autoCorrect_;
+  // Squiggles under the errors, measured per page when shown: [x1, x2) at y, page points.
+  struct Squiggle {
+    uint32_t para, from, to;
+    float x1, x2, y;
+  };
+  struct PageSquiggles {
+    uint32_t layout = UINT32_MAX, spelling = 0, edits = 0;
+    std::vector<Squiggle> lines;
+  };
+  std::vector<PageSquiggles> squiggles_;
+  // The error the context menu was opened on, and what it offered.
+  struct MenuError {
+    uint32_t para = 0;
+    fw::doc::proof::Misspelling error;
+    std::wstring word;
+    std::vector<std::wstring> suggestions;
+  };
+  std::optional<MenuError> menuError_;
+  // The selection's words for the status bar, counted when it changes.
+  TextPos selWordsFrom_, selWordsTo_;
+  uint32_t selWordsEdits_ = UINT32_MAX;
+  size_t selWords_ = 0;
 };

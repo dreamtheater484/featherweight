@@ -66,12 +66,37 @@ function Stop-Started($ids, [string]$exe, [int]$waitMs = 15000) {
   }
 }
 
+# Whether a window of this process, shown or hidden, has `text` in its title: how a Word child knows
+# that COM attached to the Word it started (see the child).
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class FwOfficeWindows {
+  delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr lParam);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder s, int n);
+  public static bool HasTitle(int pid, string text) {
+    bool found = false;
+    EnumWindows((h, l) => {
+      uint owner; GetWindowThreadProcessId(h, out owner);
+      var s = new StringBuilder(512); GetWindowText(h, s, 512);
+      if ((int)owner == pid && s.ToString().Contains(text)) found = true;
+      return !found;
+    }, IntPtr.Zero);
+    return found;
+  }
+}
+"@
+
 # ---- Child: open one file in a new Office process, export it, quit.
 if ($Child) {
   $app = $apps[$Child]
   $missing = [Type]::Missing
   # Every Office process this child starts. They all end before it does, whatever happens, and
-  # the parent reads them from the result file to end them if the child hangs or dies.
+  # the parent reads them from the result file to end them if the child hangs or dies. An Office
+  # this child didn't start (someone's PowerPoint, another program's Word) is never touched.
   $started = New-Object Collections.Generic.List[int]
   $result = [ordered]@{ pid = $started }
   $office = $null; $doc = $null
@@ -90,14 +115,33 @@ if ($Child) {
       $before = @(Get-Process $app.Exe -ErrorAction SilentlyContinue | ForEach-Object Id)
       $office = New-Object -ComObject $app.ProgId
       $new = @(Get-Process $app.Exe -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | ForEach-Object Id)
-      foreach ($id in $new) { $started.Add($id) }
-      Write-Json $result $ResultFile
-      if (-not $safe -or -not $new.Count) { break }
-      # COM started a normal Word instead: close it and wait longer.
-      try { $office.Quit([ref]0) } catch {}
+      if (-not $safe) {
+        # Excel and PowerPoint: COM started a process for this call, or attached to one already
+        # running (PowerPoint runs once per user), which isn't this script's to use or close.
+        if (-not $new.Count) {
+          [void][Runtime.InteropServices.Marshal]::ReleaseComObject($office)
+          $office = $null
+          throw "$Child is already running on this PC: close it first (this script only uses an Office it starts)"
+        }
+        foreach ($id in $new) { $started.Add($id) }
+        Write-Json $result $ResultFile
+        break
+      }
+      # Word: is it the safe-mode Word this child started? Its main window takes a caption only this
+      # child knows. (Another program's Word waiting for its own automation could have answered.)
+      $mark = "fw-reference-renders $PID $wait"
+      $caption = $office.Caption
+      $office.Caption = $mark
+      $ours = $false
+      for ($i = 0; $i -lt 30 -and -not $ours; $i++) {
+        $ours = [FwOfficeWindows]::HasTitle($safe.Id, $mark)
+        if (-not $ours) { Start-Sleep -Milliseconds 100 }
+      }
+      if ($ours) { break }
+      # Not ours. A Word this call started is closed through COM; another program's is left as it was.
+      if ($new.Count) { try { $office.Quit([ref]0) } catch {} } else { try { $office.Caption = $caption } catch {} }
       [void][Runtime.InteropServices.Marshal]::ReleaseComObject($office)
       $office = $null
-      Stop-Started $new $app.Exe
     }
     if (-not $office) { throw "Word didn't connect to the safe-mode instance" }
     $result.app = "$Child $($office.Version) (build $($office.Build))"
@@ -212,6 +256,10 @@ if ($Corpus) {
   }
 }
 
+# One Office automation at a time on this PC (word-open-check.ps1 takes the same mutex): a second
+# one's COM could attach to the first one's Word.
+$mutex = New-Object Threading.Mutex($false, "Global\FeatherweightOfficeAutomation")
+try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] {}
 $entries = @()
 $n = 0
 $reused = 0
@@ -272,5 +320,6 @@ if ($Corpus) { $manifest.corpus = $corpusRoot }  # fwtool compare finds the docu
 $groups = @(@($previousFiles) + @($entries) | ForEach-Object { ($_.source -split '/')[0] } | Select-Object -Unique)
 $manifest.files = @(@($kept) + @($entries) | Sort-Object { if ($Corpus) { 0 } else { [array]::IndexOf($groups, ($_.source -split '/')[0]) } }, { $_.source })
 Write-Json $manifest $manifestPath
+$mutex.ReleaseMutex()
 $unchanged = if ($reused) { ", $reused of them unchanged since the last run" } else { "" }
 "$(@($entries | Where-Object { -not $_.error }).Count) of $($entries.Count) exported$unchanged. The PDFs and manifest.json are in $outRoot"

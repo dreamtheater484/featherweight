@@ -109,6 +109,113 @@ std::string NormalCell(std::string_view ref) {
   return ParseCellRef(ref, col, row) ? CellName(col, row) : std::string();
 }
 
+// Where a field mark (w:fldChar) sits: the containers around it, innermost first. Word refuses a
+// file in which a field begins in a hyperlink, a custom XML element or a simple field and
+// separates or ends outside it (or in another one), and repairs one in which a field separates or
+// ends inside a content control it didn't begin in; leaving a content control it tolerates.
+// Probed with Word on 2026-11-05 (D2's editing torture test); neither the Open XML SDK validator
+// nor the other rules here see it. Tables, smart tags and tracked changes don't matter.
+struct FieldPlace {
+  std::vector<pugi::xml_node> strict;  // w:hyperlink, w:customXml, w:fldSimple
+  std::vector<pugi::xml_node> sdts;    // w:sdt
+  bool reported = false;
+};
+
+FieldPlace PlaceOf(pugi::xml_node mark) {
+  constexpr std::string_view kW = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  constexpr std::string_view kWStrict = "http://purl.oclc.org/ooxml/wordprocessingml/main";
+  FieldPlace place;
+  for (pugi::xml_node n = mark.parent(); n && n.type() == pugi::node_element; n = n.parent()) {
+    std::string_view local = LocalNameOf(n);
+    if (local != "hyperlink" && local != "customXml" && local != "fldSimple" && local != "sdt") continue;
+    std::string_view ns = NamespaceOf(n);
+    if (ns != kW && ns != kWStrict) continue;
+    (local == "sdt" ? place.sdts : place.strict).push_back(n);
+  }
+  return place;
+}
+
+// Word's tables as Word can open them. Word refuses a row without cells and repairs a cell that
+// has no paragraph or ends with a nested table instead of one; the Open XML SDK validator accepts
+// all three (probed with Word on 2026-11-05, D2's torture test). An empty table is fine.
+bool IsWordElement(pugi::xml_node n, std::string_view local) {
+  if (n.type() != pugi::node_element || LocalNameOf(n) != local) return false;
+  std::string_view ns = NamespaceOf(n);
+  return ns == "http://schemas.openxmlformats.org/wordprocessingml/2006/main" ||
+         ns == "http://purl.oclc.org/ooxml/wordprocessingml/main";
+}
+
+// The last block in a cell (or a block content control's content, or a custom XML element),
+// looking through content controls and custom XML; null when there is none.
+pugi::xml_node LastBlock(pugi::xml_node container) {
+  for (pugi::xml_node c = container.last_child(); c; c = c.previous_sibling()) {
+    if (IsWordElement(c, "p") || IsWordElement(c, "tbl")) return c;
+    pugi::xml_node inner;
+    if (IsWordElement(c, "sdt")) {
+      for (pugi::xml_node k : c.children())
+        if (IsWordElement(k, "sdtContent")) inner = k;
+    } else if (IsWordElement(c, "customXml")) {
+      inner = c;
+    }
+    if (inner)
+      if (pugi::xml_node last = LastBlock(inner)) return last;
+  }
+  return {};
+}
+
+bool HasCell(pugi::xml_node row) {
+  for (pugi::xml_node c : row.children()) {
+    if (IsWordElement(c, "tc")) return true;
+    if (IsWordElement(c, "customXml") && HasCell(c)) return true;
+    if (IsWordElement(c, "sdt"))
+      for (pugi::xml_node k : c.children())
+        if (IsWordElement(k, "sdtContent") && HasCell(k)) return true;
+  }
+  return false;
+}
+
+// Content controls that hold one paragraph: date, drop-down list, combo box, plain text (even
+// multi-line, which takes line breaks) and picture. Word says the file has unreadable content when
+// one holds a second paragraph or a table (probed with Word on 2026-11-05, torture finding 22). The
+// kind, or empty for a control that may hold any blocks.
+std::string_view OneParagraphKind(pugi::xml_node sdt) {
+  for (pugi::xml_node pr : sdt.children()) {
+    if (!IsWordElement(pr, "sdtPr")) continue;
+    for (pugi::xml_node k : pr.children()) {
+      if (IsWordElement(k, "date")) return "date";
+      if (IsWordElement(k, "dropDownList")) return "drop-down list";
+      if (IsWordElement(k, "comboBox")) return "combo box";
+      if (IsWordElement(k, "text")) return "plain text";
+      if (IsWordElement(k, "picture")) return "picture";
+    }
+  }
+  return {};
+}
+
+// The paragraphs and tables of one block sequence, looking through content controls and custom
+// XML; the cells it wraps (a control around a cell or a row) are collected to be counted apart.
+void CountBlocks(pugi::xml_node container, int& paragraphs, bool& table, std::vector<pugi::xml_node>& cells) {
+  for (pugi::xml_node c : container.children()) {
+    if (IsWordElement(c, "p")) {
+      ++paragraphs;
+    } else if (IsWordElement(c, "tbl")) {
+      table = true;
+    } else if (IsWordElement(c, "tc")) {
+      cells.push_back(c);
+    } else if (IsWordElement(c, "tr") || IsWordElement(c, "customXml")) {
+      CountBlocks(c, paragraphs, table, cells);
+    } else if (IsWordElement(c, "sdt")) {
+      for (pugi::xml_node k : c.children())
+        if (IsWordElement(k, "sdtContent")) CountBlocks(k, paragraphs, table, cells);
+    }
+  }
+}
+
+std::string ContainerName(pugi::xml_node n) {
+  std::string_view local = LocalNameOf(n);
+  return local == "hyperlink" ? "hyperlink" : local == "customXml" ? "custom XML element" : local == "fldSimple" ? "simple field" : "content control";
+}
+
 class Checker;
 
 struct Sheet {
@@ -182,6 +289,7 @@ class Checker {
   void CheckRules();
   void CheckAnchor(const FoundRef& ref, const PartDom& part);
   void LoadWorkbook();
+  void CheckWordTables();
   void CheckCalcChain();
   void CheckNotes();
   void CheckCharts();
@@ -219,6 +327,7 @@ void Checker::Run() {
   LoadParts();
   AssignScopes();
   CheckRules();
+  if (format_ == DocFormat::Word) CheckWordTables();
   if (format_ == DocFormat::Excel) {
     LoadWorkbook();
     CheckCalcChain();
@@ -343,6 +452,28 @@ void Checker::CheckRules() {
   for (auto& p : parts_) {
     std::map<size_t, std::map<std::string, PairState>> pairs;  // rule -> key -> state
     std::map<size_t, std::vector<bool>> fields;                 // rule -> open fields (separator seen)
+    std::map<size_t, std::vector<FieldPlace>> places;           // rule -> where each open field begins
+    // A field's separator or end must be where it began (see FieldPlace).
+    auto checkPlace = [&](FieldPlace& begun, pugi::xml_node mark, const char* what, bool lenient) {
+      if (begun.reported) return;
+      FieldPlace here = PlaceOf(mark);
+      auto has = [](const std::vector<pugi::xml_node>& list, pugi::xml_node n) {
+        return std::find(list.begin(), list.end(), n) != list.end();
+      };
+      std::string msg;
+      bool error = true;
+      for (pugi::xml_node n : begun.strict)
+        if (msg.empty() && !has(here.strict, n)) msg = "a field begins inside a " + ContainerName(n) + " but its " + what + " is outside it";
+      for (pugi::xml_node n : here.strict)
+        if (msg.empty() && !has(begun.strict, n)) msg = "a field's " + std::string(what) + " is inside a " + ContainerName(n) + " the field doesn't begin in";
+      for (pugi::xml_node n : here.sdts)
+        if (msg.empty() && !has(begun.sdts, n)) msg = "a field's " + std::string(what) + " is inside a content control the field doesn't begin in";
+      for (pugi::xml_node n : begun.sdts)
+        if (msg.empty() && !has(here.sdts, n)) msg = "a field begins inside a content control but its " + std::string(what) + " is outside it", error = false;
+      if (msg.empty()) return;
+      begun.reported = true;
+      Issue(lenient || !error, p->name, msg);
+    };
     const RelationshipSet* rels = pkg_.RelationshipsOf(p->name);
     for (const auto& ref : reg_.Find(p->dom.Root())) {
       const RefRule& rule = *ref.rule;
@@ -358,17 +489,25 @@ void Checker::CheckRules() {
       if (rule.nested) {
         if (ref.alternate) continue;
         auto& open = fields[ri];
+        auto& where = places[ri];
+        bool field = rule.kind == RefKind::Field;
         if (site.role & kOpens) {
           open.push_back(false);
+          where.push_back(field ? PlaceOf(ref.element) : FieldPlace{});
         } else if (site.role & kInside) {
           if (open.empty()) Issue(lenient, p->name, "a " + std::string(rule.name) + " separator is outside any " + std::string(rule.name));
           else if (open.back()) Issue(lenient, p->name, "a " + std::string(rule.name) + " has two separators");
-          else open.back() = true;
+          else {
+            open.back() = true;
+            if (field) checkPlace(where.back(), ref.element, "separator", lenient);
+          }
         } else if (site.role & kCloses) {
           if (open.empty()) {
             Issue(lenient, p->name, "a " + std::string(rule.name) + " ends but doesn't begin");
           } else {
+            if (field) checkPlace(where.back(), ref.element, "end", lenient);
             open.pop_back();
+            where.pop_back();
             ++rep_.pairs;
           }
         }
@@ -445,6 +584,40 @@ void Checker::CheckRules() {
       auto it = rs.defs.find(ref.scope);
       if (it != rs.defs.end() && it->second.count(ref.key)) ++rep_.references;
       else Issue(ref.lenient, ref.part, ref.desc + " names " + std::string(rule.name) + " " + Quote(ref.value) + ", which doesn't exist");
+    }
+  }
+}
+
+void Checker::CheckWordTables() {
+  for (auto& p : parts_) {
+    std::vector<pugi::xml_node> stack{p->dom.Root()};
+    while (!stack.empty()) {
+      pugi::xml_node n = stack.back();
+      stack.pop_back();
+      if (IsWordElement(n, "tr") && !HasCell(n)) Error(p->name, "a table row has no cells");
+      if (IsWordElement(n, "tc")) {
+        pugi::xml_node last = LastBlock(n);
+        if (!last) Error(p->name, "a table cell has no paragraph");
+        else if (IsWordElement(last, "tbl")) Error(p->name, "a table cell ends with a table instead of a paragraph");
+      }
+      if (IsWordElement(n, "sdt"))
+        if (std::string_view kind = OneParagraphKind(n); !kind.empty()) {
+          // Around paragraphs, all of them count; around cells or rows, each cell's.
+          int paragraphs = 0;
+          bool table = false;
+          std::vector<pugi::xml_node> cells;
+          for (pugi::xml_node k : n.children())
+            if (IsWordElement(k, "sdtContent")) CountBlocks(k, paragraphs, table, cells);
+          for (size_t i = 0; i < cells.size() && paragraphs < 2 && !table; ++i) {
+            int inCell = 0;
+            CountBlocks(cells[i], inCell, table, cells);
+            paragraphs = std::max(paragraphs, inCell);
+          }
+          if (table) Error(p->name, "a " + std::string(kind) + " content control holds a table");
+          else if (paragraphs > 1) Error(p->name, "a " + std::string(kind) + " content control holds more than one paragraph");
+        }
+      for (pugi::xml_node c = n.last_child(); c; c = c.previous_sibling())
+        if (c.type() == pugi::node_element) stack.push_back(c);
     }
   }
 }
