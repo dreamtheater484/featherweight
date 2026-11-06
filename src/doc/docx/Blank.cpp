@@ -55,7 +55,7 @@ std::string Heading(int level, int size, std::string_view color, int before) {
                    true);
 }
 
-std::string Styles(const std::string& lang) {
+std::string Styles(const std::string& lang, bool placeholders) {
   std::string s(kDecl);
   s += "<w:styles " + std::string(kW) + ">";
   s += "<w:docDefaults><w:rPrDefault><w:rPr>" + Fonts("Calibri") +
@@ -82,6 +82,10 @@ std::string Styles(const std::string& lang) {
   s += ParaStyle("Subtitle", "Subtitle", 11, "<w:spacing w:after=\"160\"/>",
                  "<w:color w:val=\"5A5A5A\"/><w:spacing w:val=\"15\"/>", true);
   s += ParaStyle("ListParagraph", "List Paragraph", 34, "<w:ind w:left=\"720\"/><w:contextualSpacing/>", "");
+  if (placeholders)  // Word's own, for the templates' placeholders
+    s += "<w:style w:type=\"character\" w:styleId=\"PlaceholderText\"><w:name w:val=\"Placeholder Text\"/><w:basedOn "
+         "w:val=\"DefaultParagraphFont\"/><w:uiPriority w:val=\"99\"/><w:semiHidden/><w:rPr><w:color "
+         "w:val=\"808080\"/></w:rPr></w:style>";
   s += "<w:style w:type=\"character\" w:styleId=\"Hyperlink\"><w:name w:val=\"Hyperlink\"/><w:basedOn "
        "w:val=\"DefaultParagraphFont\"/><w:uiPriority w:val=\"99\"/><w:unhideWhenUsed/><w:rPr><w:color "
        "w:val=\"0563C1\"/><w:u w:val=\"single\"/></w:rPr></w:style>";
@@ -109,6 +113,38 @@ constexpr std::string_view kGrey = "<w:color w:val=\"595959\"/>";
 #define FW_DASH " \xE2\x80\x93 "  // an en dash between spaces
 
 // A paragraph with a style (or none), more of w:pPr (after the style, in schema order) and one run.
+// The content controls' ids, from 1 in each document (Body starts them).
+thread_local int t_nextId = 1;
+
+// Text as runs. Each placeholder in brackets is a content control showing its placeholder, as in
+// Word's templates: one click selects it and typing replaces it (the friction review's F16).
+std::string Runs(std::string_view text, std::string_view rpr) {
+  std::string s;
+  const std::string props = rpr.empty() ? "" : "<w:rPr>" + std::string(rpr) + "</w:rPr>";
+  auto run = [&](std::string_view t, std::string_view style) {
+    s += "<w:r>";
+    if (!style.empty()) s += "<w:rPr><w:rStyle w:val=\"" + std::string(style) + "\"/>" + std::string(rpr) + "</w:rPr>";
+    else s += props;
+    s += "<w:t xml:space=\"preserve\">" + Escape(t) + "</w:t></w:r>";
+  };
+  size_t i = 0;
+  while (i < text.size()) {
+    const size_t open = text.find('[', i), close = open == std::string_view::npos ? open : text.find(']', open);
+    if (close == std::string_view::npos) {
+      run(text.substr(i), {});
+      break;
+    }
+    if (open > i) run(text.substr(i, open - i), {});
+    s += "<w:sdt><w:sdtPr>" + props + "<w:id w:val=\"" + std::to_string(t_nextId++) +
+         "\"/><w:showingPlcHdr/></w:sdtPr><w:sdtContent>";
+    run(text.substr(open, close + 1 - open), "PlaceholderText");
+    s += "</w:sdtContent></w:sdt>";
+    i = close + 1;
+  }
+  return s;
+}
+
+// A paragraph with a style (or none), more of w:pPr (after the style, in schema order) and its text.
 std::string P(std::string_view style, std::string_view text, std::string_view ppr = {}, std::string_view rpr = {}) {
   std::string s = "<w:p>";
   if (!style.empty() || !ppr.empty()) {
@@ -116,12 +152,7 @@ std::string P(std::string_view style, std::string_view text, std::string_view pp
     if (!style.empty()) s += "<w:pStyle w:val=\"" + std::string(style) + "\"/>";
     s += std::string(ppr) + "</w:pPr>";
   }
-  if (!text.empty()) {
-    s += "<w:r>";
-    if (!rpr.empty()) s += "<w:rPr>" + std::string(rpr) + "</w:rPr>";
-    s += "<w:t xml:space=\"preserve\">" + Escape(text) + "</w:t></w:r>";
-  }
-  return s + "</w:p>";
+  return s + Runs(text, rpr) + "</w:p>";
 }
 
 std::string Bullet(std::string_view text) {
@@ -136,7 +167,7 @@ std::string Letter() {
   for (const char* line : {"[Recipient's name]", "[Company]", "[Street address]", "[Postcode and city]"})
     s += P("", line, kTight);
   s += P("", "") + P("", "[Subject]", "", "<w:b/><w:bCs/>") + P("", "Dear [Recipient's name],") +
-       P("", "[Start your letter here. To replace text in brackets, select it and type.]") +
+       P("", "[Start your letter here. To replace text in brackets, click it and type.]") +
        P("", "[Add another paragraph, or delete this one.]") + P("", "Kind regards,", kTight) + P("", "", kTight) +
        P("", "", kTight) + P("", "[Your name]");
   return s;
@@ -199,6 +230,7 @@ std::string Numbering() {
 }
 
 std::string Body(bool a4, Template kind) {
+  t_nextId = 1;
   // Word's own: Letter with 1-inch margins; A4 with 2.5 cm (as Word's European templates).
   const std::string page = a4 ? "<w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1417\" w:right=\"1417\" "
                                 "w:bottom=\"1417\" w:left=\"1417\" w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/>"
@@ -266,7 +298,7 @@ std::vector<uint8_t> BlankDocx(const BlankOptions& options) {
            "core-properties\" Target=\"docProps/core.xml\"/></Relationships>"},
       {"word/document.xml", Body(options.a4, options.kind)},
       {"word/_rels/document.xml.rels", rels + "</Relationships>"},
-      {"word/styles.xml", Styles(lang)},
+      {"word/styles.xml", Styles(lang, options.kind != Template::None)},
       {"word/settings.xml", Settings(lang)},
   };
   if (lists) parts.push_back({"word/numbering.xml", Numbering()});

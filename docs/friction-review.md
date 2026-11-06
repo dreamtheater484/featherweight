@@ -29,7 +29,7 @@ The friction review (plan §11, "Zero friction") writes each core flow down step
 | Fill in a form | 5 C + 1 K | 5 C + 1 K | | Passes |
 | Text boxes, shapes, watermark | 9 C + 1 drag | 8 C (+1 scroll) | | Passes. The watermark is one click more (F15, accepted) |
 | Export PDF | 4 C | 2 C + 1 K | | Passes |
-| A letter from a template | 3 C + 2 K | 1 C + 1 drag + 2 K | 2 C + 2 K | Passes on the count. Selecting a placeholder takes a drag (F16) |
+| A letter from a template | 3 C + 2 K | 2 C + 2 K | | Passes (a drag more before F16) |
 | Opening other formats | 1 C, Ctrl+S | 1 C, Ctrl+S + Enter | | Saving a `.doc` is one key more (F17, by design) |
 | A password-protected document | 1 C + 1 K | 1 C + 1 K | | Passes (`claude/d5-crypt`) |
 
@@ -52,9 +52,9 @@ The friction review (plan §11, "Zero friction") writes each core flow down step
 | F13 | Insert ▾ in a narrower window | Insert's tab stays | Insert was the first box to drop out (F5) | widgets | Fixed (claude/d5-friction 80ff7f0) |
 | F14 | Page setup: paper size | Layout, Size, A4: 3 C | Layout ▾, Page setup…, Paper, A4: **4 C** | widgets | Fixed (claude/d5-friction 80ff7f0): Layout ▾ lists the sizes |
 | F15 | Watermark | Design, Watermark, a preset: 3 C | Insert ▾, Watermark…, Kind: Text: **4 C** | | Accepted: one panel for text and picture watermarks, with the presets in its text box. It's rare. |
-| F16 | Templates: replacing a placeholder | Click it (a content control), type | The placeholders are plain text in brackets: a drag or a triple-click to select one | widgets | Open: the templates' placeholders become content controls showing their placeholder, which the editor already selects with one click. This waits for d5-int to have claude/d5-odt. |
+| F16 | Templates: replacing a placeholder | Click it (a content control), type | The placeholders were plain text in brackets: a drag or a triple-click to select one | widgets | Fixed (claude/d5-friction): each placeholder is a content control showing its placeholder, in Word's grey Placeholder Text. One click selects it, and typing replaces it. |
 | F17 | Saving a `.doc` | Ctrl+S keeps the `.doc` | Ctrl+S opens Save As with `<name>.docx` suggested: **+1 K** | | By design: imported formats are never overwritten (D5 plan) |
-| F18 | Opening an `.odt` | No notice. Word asks about the format on the first save | A `.doc` shows a banner that saving makes a new `.docx`; an `.odt` doesn't yet | widgets | Open: the same banner for `.odt`, once d5-int has claude/d5-doc and claude/d5-odt |
+| F18 | Opening an `.odt` | No notice. Word asks about the format on the first save | A `.doc` showed a banner that saving makes a new `.docx`; an `.odt` didn't | widgets | Fixed (claude/d5-friction): the same banner for an `.odt` |
 
 Also found while scripting: **torture finding 7** happens in the app. Centering a line with Ctrl+E and pressing Enter lets AutoCorrect's capital fix garble the line ("second" saved as "SecondS"). Reported to d1-measure as part of finding 7.
 
@@ -233,15 +233,15 @@ The letter template, the sender's name filled in, saved.
 |---|---|---|---|
 | 1 | The template, from the start screen | The template, Create: 2 C, when it's among the featured ones (otherwise More templates and a search) | Templates: Letter: 1 C |
 | 1b | The template, from an open document | File, New, the template, Create: 4 C | +, New from template, Letter: 3 C |
-| 2 | Replace a placeholder | Click it (it's a content control), type: 1 C | Today, select it first: a drag or a triple-click (F16) |
+| 2 | Replace a placeholder | Click it (it's a content control), type: 1 C | The same (it took a drag: F16) |
 | 3 | Save | Ctrl+S, name and place, Enter: 2 K, 2 D | Ctrl+S, the name, Enter: 2 K, 1 D |
-| | **Total (from the start screen, one placeholder)** | **3 C + 2 K** | **1 C + 1 drag + 2 K**; 2 C + 2 K once F16 is fixed |
+| | **Total (from the start screen, one placeholder)** | **3 C + 2 K** | **2 C + 2 K** |
 
 ## 14. Opening other formats (D5)
 
 | # | Step | Word | Featherweight |
 |---|---|---|---|
-| 1 | Open a `.doc` or an `.odt` | Double-click: 1 C (and Enable Editing when it was downloaded: 1 C) | Double-click: 1 C. A banner says that saving makes a `.docx` (the `.odt` banner is F18). |
+| 1 | Open a `.doc` or an `.odt` | Double-click: 1 C (and Enable Editing when it was downloaded: 1 C) | Double-click: 1 C. A banner says that saving makes a new `.docx` and leaves the file as it is (F18). |
 | 2 | Save a `.doc` | Ctrl+S keeps it a `.doc` (Compatibility Mode): 1 K | Ctrl+S, then Enter in Save As, where `<name>.docx` beside it is suggested: 2 K (F17, by design) |
 | 3 | Save an `.odt` | Ctrl+S, then "Use Word format" in the format question: 1 K + 1 C | Ctrl+S, then Enter: 2 K |
 | 4 | Open a `.dotx` | Double-click: a new document from it: 1 C | The same |

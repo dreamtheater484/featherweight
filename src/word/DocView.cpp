@@ -324,8 +324,12 @@ OpenResult DocView::Load(const std::wstring& password, std::wstring& error) {
                   : OpenError(name, st);
       return OpenResult::Failed;
     }
-    if (newNumber_) file_.New(newNumber_);
-    else file_.Copy(name, path_.substr(0, path_.size() - 4) + L".docx", false);
+    if (newNumber_) {
+      file_.New(newNumber_);
+    } else {
+      file_.Copy(name, path_.substr(0, path_.size() - 4) + L".docx", false);
+      imported_ = name;  // the banner says where saving goes, as for a .doc
+    }
     path_.clear();
   }
   fw::pkg::Snapshot::Options options;
@@ -601,8 +605,10 @@ void DocView::ShowNotices() {
   std::wstring text;
   if (!imported_.empty()) {
     const size_t dot = imported_.find_last_of(L'.');
-    text = imported_ + L" is a Word 97–2003 document. Saving makes a new " +
-           (dot == std::wstring::npos ? imported_ : imported_.substr(0, dot)) + L".docx and leaves it as it is.";
+    const bool odf = fw::EndsWithNoCase(imported_, L".odt") || fw::EndsWithNoCase(imported_, L".ott");
+    text = imported_ + (odf ? L" is an OpenDocument text document" : L" is a Word 97–2003 document") +
+           L". Saving makes a new " + (dot == std::wstring::npos ? imported_ : imported_.substr(0, dot)) +
+           L".docx and leaves it as it is.";
   }
   bool ink = false;
   for (const auto& d : doc_->Drawings()) ink |= d.kind == fw::doc::DrawingKind::ContentPart;

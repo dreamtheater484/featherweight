@@ -483,7 +483,7 @@ class DocView : public PagedView {
   fw::pkg::Snapshot::Stamp protectedStamp_;
   OpenResult Unlock(const std::wstring& password, std::wstring& error);
   void SubmitPassword(const std::wstring& password);
-  std::wstring imported_;        // a .doc read into the model: its file name (saved with Save As)
+  std::wstring imported_;        // a .doc or .odt read into the model: its file name (saved with Save As)
   int newNumber_ = 0;            // OpenAsNew: the file is a template, and the tab a new document
   std::unique_ptr<fw::doc::Document> doc_;
   std::unique_ptr<fw::doc::edit::Editor> editor_;  // after doc_: goes first
