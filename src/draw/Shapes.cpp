@@ -436,6 +436,26 @@ Shadow ShadowFor(const OuterShadow& sh, const Rect& bounds) {
 
 void DrawShapeAt(Painter& p, const Shape& s, const Rect& bounds);
 
+void DrawArt(Painter& p, const Art& art, const Rect& box) {
+  if (!(art.size.width > 0 && art.size.height > 0)) return;
+  p.Save();
+  p.Transform(Matrix::Scale(box.Width() / art.size.width, box.Height() / art.size.height) * Matrix::Translate(box.left, box.top));
+  for (const Art::Mark& m : art.marks) {
+    if (m.path.Empty()) continue;
+    const bool moved = m.transform.m11 != 1 || m.transform.m12 != 0 || m.transform.m21 != 0 || m.transform.m22 != 1 ||
+                       m.transform.dx != 0 || m.transform.dy != 0;
+    if (moved) {
+      p.Save();
+      p.Transform(m.transform);
+    }
+    const Rect b = m.path.Bounds();
+    if (m.fill.kind != Fill::Kind::None) FillArea(p, m.path, m.fill, b, 0, Geometry::PathFill::Normal);
+    if (m.line.fill.kind != Fill::Kind::None) p.StrokePath(m.path, MakePen(p, m.line, b, 0));
+    if (moved) p.Restore();
+  }
+  p.Restore();
+}
+
 void DrawContent(Painter& p, const Shape& s, Size size) {
   const Rect box{0, 0, size.width, size.height};
   switch (s.kind) {
@@ -457,6 +477,10 @@ void DrawContent(Painter& p, const Shape& s, Size size) {
       return;
     }
     case Shape::Kind::Shape: {
+      if (s.art) {
+        DrawArt(p, *s.art, box);
+        return;
+      }
       if (s.textPath) {
         DrawTextPath(p, s, box);
         return;
