@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "doc/layout/Internal.h"
+#include "doc/layout/Math.h"
 
 namespace fw::doc::layout {
 
@@ -84,7 +85,10 @@ class Engine {
   // A note's reference mark, numbered in the order references are laid out.
   std::u16string NoteReference(uint32_t story);
   void RefreshPageCounts();
-  float EquationWidth(uint32_t drawing, float size);
+  // An equation laid out at `size` points (Math.cpp), kept for painting; laid out again when it
+  // changes. LaidOutEquation: as last laid out, or null.
+  const math::Equation& EquationOf(uint32_t drawing, float size);
+  const math::Equation* LaidOutEquation(uint32_t drawing) const;
 
   // Stacked layout (Stack.cpp).
   Stack StackStory(uint32_t story, const Frame& frame);
@@ -246,6 +250,12 @@ class Engine {
   std::unordered_map<uint32_t, std::vector<Field>> fieldsCache_;
   std::unordered_map<uint32_t, std::u16string> noteNumbers_;  // note story -> its mark
   std::unordered_map<uint32_t, int32_t> noteOrder_;           // note story -> its number
+  struct EquationSlot {
+    std::string xml;
+    float size = 0;
+    std::shared_ptr<const math::Equation> eq;
+  };
+  std::unordered_map<uint32_t, EquationSlot> equations_;      // drawing -> as laid out
   std::vector<uint32_t> noteSeq_;                             // note stories in the order numbered
   int32_t footnoteCount_ = 0, endnoteCount_ = 0;
 

@@ -12,6 +12,7 @@ namespace {
 using namespace xml;
 
 constexpr std::string_view kChartUri = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+ChartReader g_chartReader = nullptr;  // SetChartReader
 constexpr std::string_view kDiagramUri = "http://schemas.openxmlformats.org/drawingml/2006/diagram";
 
 float Percent(pugi::xml_node n, const char* attr, double def) {
@@ -509,6 +510,12 @@ class Reader {
         if (pugi::xml_node pic = Part(c, "pic")) found = ReadShape(pic, s, nullptr);
       } else if (k == "relIds" && uri == kDiagramUri) {
         found = ReadSmartArt(c, extent, s);
+      } else if (k == "chart" && uri == kChartUri && g_chartReader) {
+        if (pugi::xml_node space = ctx_.resources.GetPartXml(RelId(c, "id")))
+          if (g_chartReader(space, extent, ctx_, s)) {
+            s.kind = Shape::Kind::Shape;
+            found = true;
+          }
       }
       return !found;
     });
@@ -555,6 +562,8 @@ class Reader {
 };
 
 }  // namespace
+
+void SetChartReader(ChartReader reader) { g_chartReader = reader; }
 
 ReadContext::ReadContext(DrawingResources& r) : resources(r), theme(r.GetTheme()) {
   if (!theme) theme = Theme::Default();

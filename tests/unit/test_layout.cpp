@@ -1304,3 +1304,22 @@ TEST(Layout_ATextBoxMadeAfterTheLayoutIsLaidOut) {
   d.layout->LayOutAll();
   REQUIRE(SameAsFresh(*d.doc, *d.layout, "a new text box"));
 }
+
+// Equations (D5): an m:oMath in a line of text is an object as wide as it's laid out, and an
+// m:oMathPara alone in its paragraph is centered, taller for its fraction.
+TEST(Layout_EquationsInlineAndDisplay) {
+  const std::string m = "xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"";
+  Doc d = Make("<w:p><w:r><w:t xml:space=\"preserve\">Area </w:t></w:r><m:oMath " + m +
+               "><m:r><m:t>A=</m:t></m:r><m:sSup><m:e><m:r><m:t>r</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup>"
+               "</m:sSup></m:oMath><w:r><w:t xml:space=\"preserve\"> here.</w:t></w:r></w:p>"
+               "<w:p><m:oMathPara " + m + "><m:oMath><m:f><m:num><m:r><m:t>a+b</m:t></m:r></m:num><m:den><m:r><m:t>2</m:t></m:r>"
+               "</m:den></m:f></m:oMath></m:oMathPara></w:p>");
+  REQUIRE(d.doc && d.pages() == 1);
+  const Page& p = d.page(0);
+  REQUIRE(p.drawings.size() == 2);
+  const auto& in = p.drawings[0].rect;
+  const auto& display = p.drawings[1].rect;
+  CHECK(in.right - in.left > 15 && in.right - in.left < 60);
+  CHECK(display.bottom - display.top > (in.bottom - in.top) * 1.3f);
+  CHECK(std::abs((display.left + display.right) / 2 - p.width / 2) < 2);
+}
