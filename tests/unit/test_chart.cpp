@@ -146,6 +146,7 @@ TEST(Chart_OtherTypesStayPlaceholders) {
 
 TEST(Chart_NumbersAsTheirFormatCodesShowThem) {
   SetNumberSeparators(L'.', L',');
+  SetShortDate("");
   CHECK(FormatNumber(1234.5, "General") == L"1234.5");
   CHECK(FormatNumber(1234.5, "") == L"1234.5");
   CHECK(FormatNumber(1234567.891, "#,##0.00") == L"1,234,567.89");
@@ -161,6 +162,11 @@ TEST(Chart_NumbersAsTheirFormatCodesShowThem) {
   CHECK(FormatNumber(1234567.891, "#,##0.00") == L"1.234.567,89");
   CHECK(FormatNumber(4.5, "General") == L"4,5");
   CHECK(FormatNumber(0.256, "0.0%") == L"25,6%");
+  // Excel's built-in short date takes the user's form; other date codes stay as they are.
+  SetShortDate("dd/MM/yyyy");
+  CHECK(FormatNumber(45000, "m/d/yyyy") == L"15/03/2023");
+  CHECK(FormatNumber(45000, "d-mmm") == L"15-Mar");
+  SetShortDate("");
   SetNumberSeparators(L'.', L',');
 }
 

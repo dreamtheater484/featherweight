@@ -86,6 +86,9 @@ std::wstring FormatNumber(double v, std::string_view code);
 // The decimal and thousands separators FormatNumber uses: '.' and ',' until Install() sets the
 // user's (Windows' regional settings), as Office does.
 void SetNumberSeparators(wchar_t decimal, wchar_t group);
+// The user's short date as Windows writes it ("dd/MM/yyyy"), which Excel's built-in short date
+// (m/d/yyyy) shows as; empty: m/d/yyyy as it is. Install() sets it.
+void SetShortDate(std::string_view picture);
 // The chart laid out as vector art at `size` (points), its text in `font`.
 draw::Art Draw(const Chart& chart, draw::Size size, const draw::ColorContext& colors, const std::wstring& font);
 

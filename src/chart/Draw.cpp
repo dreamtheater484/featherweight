@@ -29,6 +29,7 @@ const Color kText = draw::Rgb(0x000000), kGrid = draw::Rgb(0xD9D9D9), kAxis = dr
 std::wstring Wide(const std::string& s) { return fw::Utf8ToWide(s); }
 
 wchar_t g_decimal = L'.', g_group = L',';
+std::string g_shortDate;  // empty: m/d/yyyy as it is
 
 // Digits with '.' and ',' as the separators in use show them.
 std::wstring Localized(const std::string& number) {
@@ -117,6 +118,12 @@ void SetNumberSeparators(wchar_t decimal, wchar_t group) {
   g_group = group ? group : L',';
 }
 
+void SetShortDate(std::string_view picture) {
+  // Windows' picture (d, M, y, 'text') as a format code (d, m, y, "text").
+  g_shortDate.clear();
+  for (char c : picture.substr(0, 64)) g_shortDate += c == '\'' ? '"' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+}
+
 std::wstring FormatNumber(double v, std::string_view code) {
   if (!std::isfinite(v)) return {};
   // The first section, outside quotes.
@@ -133,6 +140,8 @@ std::wstring FormatNumber(double v, std::string_view code) {
   std::string lower(code);
   for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   if (lower.empty() || lower == "general") return General(v);
+  // Excel's built-in short date (format 14) is shown as the user's.
+  if ((lower == "m/d/yyyy" || lower == "mm-dd-yy") && !g_shortDate.empty()) return FormatDate(v, g_shortDate);
 
   std::string before, after;
   bool digits = false, inDecimals = false, group = false, percent = false, date = false;
@@ -282,18 +291,19 @@ struct Scale {
 double Up(double v, double step) { return std::ceil(v / step - 1e-9); }
 double Down(double v, double step) { return std::floor(v / step + 1e-9); }
 
-// The smallest major unit of 1, 2 or 5 times a power of ten that needs at most ten of them.
-double NiceStep(double lo, double hi) {
+// The smallest major unit of 1, 2 or 5 times a power of ten that needs at most `most` of them (ten,
+// fewer where the plot is too short for ten labels).
+double NiceStep(double lo, double hi, int most) {
   double mag = std::pow(10.0, std::floor(std::log10((hi - lo) / 10)));
-  for (int i = 0; i < 4 && mag > 0 && std::isfinite(mag); ++i, mag *= 10)
+  for (int i = 0; i < 12 && mag > 0 && std::isfinite(mag); ++i, mag *= 10)
     for (double f : {1.0, 2.0, 5.0})
-      if (Up(hi, f * mag) - Down(lo, f * mag) <= 10) return f * mag;
+      if (Up(hi, f * mag) - Down(lo, f * mag) <= most) return f * mag;
   return (hi - lo) / 5;
 }
 
 // Excel's automatic scale: from zero unless the values sit in a narrow band far from it, 5% of the
 // values' range past the extremes, round major units; the axis's own minimum and maximum win.
-Scale MakeScale(double lo, double hi, const Axis& axis, bool zero, bool pad) {
+Scale MakeScale(double lo, double hi, const Axis& axis, bool zero, bool pad, int most = 10) {
   if (!std::isfinite(lo) || !std::isfinite(hi) || lo > hi) lo = 0, hi = 1;
   const double spread = hi - lo;
   if (lo > 0 && (zero || hi - lo >= hi / 6)) lo = 0;
@@ -308,7 +318,7 @@ Scale MakeScale(double lo, double hi, const Axis& axis, bool zero, bool pad) {
   if (axis.max) hi = *axis.max;
   if (!(hi > lo) || !std::isfinite(hi - lo)) hi = lo + 1;
   Scale s;
-  s.step = NiceStep(lo, hi);
+  s.step = NiceStep(lo, hi, std::clamp(most, 1, 10));
   if (!(s.step > 0) || !std::isfinite(s.step)) s.step = (hi - lo) / 5;
   s.min = axis.min ? lo : Down(lo, s.step) * s.step;
   s.max = axis.max ? hi : Up(hi, s.step) * s.step;
@@ -357,8 +367,10 @@ std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
       if (line && s.look.line) c = *s.look.line;
       else if (!line && s.look.fill) c = *s.look.fill;
       out.push_back({s.name.empty() ? L"Series " + std::to_wstring(k + 1) : s.name, c, line});
-      if (++k >= 64) return out;
+      if (++k >= 64) break;
     }
+  // Horizontal bars list their series bottom up, as they're stacked in each category.
+  if (g0.type == Type::Bar && ch.groups.size() == 1) std::reverse(out.begin(), out.end());
   return out;
 }
 
@@ -712,8 +724,10 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     cats.n = std::max(cats.n, n);
   }
   cats.n = std::max<size_t>(1, std::max(cats.n, names.size()));
-  const Scale vs = MakeScale(lo[0], hi[0], ch.value, zero[0] || percent, !percent);
-  const Scale ss = MakeScale(lo[1], hi[1], ch.secondary, zero[1], true);
+  // A value axis up the side has room for a label every 1.6 lines or so.
+  const int most = bar ? 10 : static_cast<int>((r.bottom - r.top - ts * 3) / (ts * 1.6f));
+  const Scale vs = MakeScale(lo[0], hi[0], ch.value, zero[0] || percent, !percent, most);
+  const Scale ss = MakeScale(lo[1], hi[1], ch.secondary, zero[1], true, most);
   const Scale xscale = MakeScale(xlo, xhi, ch.category, false, true);
   const std::string vformat = ch.value.format.empty() && percent ? "0%" : ch.value.format;
 
@@ -756,6 +770,13 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     p.r.left += std::min(vw, maxSide) + (vw > 0 ? 6 : 0);
     p.r.right -= std::min(sw, maxSide) + (sw > 0 ? 6 : 0);
     p.r.bottom -= clabels.empty() ? 0 : row;
+  }
+  // Labels centred on the plot's left and right edges (values across the bottom, categories on the
+  // tick marks) stay inside the chart.
+  const std::vector<Label>& across = bar ? vlabels : clabels;
+  if (!across.empty() && (bar || scatter || !cats.between)) {
+    p.r.left = std::max(p.r.left, r.left + std::min(across.front().width / 2, maxSide));
+    p.r.right = std::min(p.r.right, r.right - std::min(across.back().width / 2, maxSide));
   }
   p.r.top += ts / 2;
   if (p.r.right - p.r.left < 8 || p.r.bottom - p.r.top < 8) return;
@@ -855,6 +876,8 @@ void Install() {
   GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_SDECIMAL, decimal, 8);
   GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_STHOUSAND, group, 8);
   SetNumberSeparators(decimal[1] ? L'.' : decimal[0], group[1] ? L',' : group[0]);
+  wchar_t date[64] = {};
+  if (GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_SSHORTDATE, date, 64) > 1) SetShortDate(fw::WideToUtf8(date));
   draw::SetChartReader(&ReadChart);
 }
 
