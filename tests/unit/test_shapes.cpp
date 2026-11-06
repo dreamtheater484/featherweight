@@ -8,6 +8,7 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,7 @@
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
 #include "doc/edit/HeaderFooter.h"
+#include "doc/edit/Inline.h"
 #include "doc/edit/Shapes.h"
 #include "doc/edit/TreeEdit.h"
 #include "doc/edit/Watermark.h"
@@ -275,6 +277,92 @@ TEST(TextBox_WhereTheCopiesDifferItIsRefused) {
   edit::ToggleRuns(te, {{box, 0}, {box, 5}}, edit::Toggle::Bold);
   CHECK(!te.Refused().empty());
   CHECK(Main(*doc) == original && !ed.CanUndo());
+}
+
+namespace {
+
+// A text box's bookmark as Word writes it: the same name in both copies, an id of its own in each
+// (the choice 0, the fallback 1; eu-annex-2, govuk-revised-methodology in the corpus).
+std::string BookmarkedBox(int id) {
+  const std::string n = std::to_string(id);
+  return "<w:txbxContent><w:p><w:bookmarkStart w:id=\"" + n + "\" w:name=\"_GoBack\"/><w:r><w:t>Boxed</w:t></w:r>"
+         "<w:bookmarkEnd w:id=\"" + n + "\"/></w:p></w:txbxContent>";
+}
+
+// The w:id of each w:bookmarkStart in `xml`, in order.
+std::vector<std::string> BookmarkIds(const std::string& xml) {
+  std::vector<std::string> out;
+  for (size_t at = xml.find("<w:bookmarkStart "); at != std::string::npos; at = xml.find("<w:bookmarkStart ", at + 1)) {
+    const size_t id = xml.find("w:id=\"", at), end = xml.find('>', at);
+    if (id < end) out.push_back(xml.substr(id + 6, xml.find('"', id + 6) - id - 6));
+  }
+  return out;
+}
+
+bool Unique(std::vector<std::string> ids) {
+  std::sort(ids.begin(), ids.end());
+  return std::adjacent_find(ids.begin(), ids.end()) == ids.end();
+}
+
+}  // namespace
+
+// D5 corpus pass T4 (gojp-mhlw-form-b4): a new bookmark took id 1, which the text box's fallback
+// copy of its bookmark has; the model reads only the choice. New ones go above those too.
+TEST(TextBox_NewBookmarksSkipTheFallbacksIds) {
+  Fixture f;
+  f.body = "<w:p><w:r><w:t>Body</w:t></w:r>" + WordTextBox(BookmarkedBox(0), BookmarkedBox(1)) +
+           "</w:p><w:p><w:r><w:t>Second</w:t></w:r></w:p><w:p><w:r><w:t>Third</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const std::vector<uint32_t> body = doc->StoryParagraphs(doc->MainStory());
+  CHECK(body.size() == 3);
+  if (body.size() != 3) return;
+  Editor ed(*doc);
+  CHECK(!edit::BookmarkForParagraph(ed, body[0]).empty());
+  CHECK(edit::InsertBookmark(ed, {body[1], 0}, {body[1], 6}, "Mark").ok);
+  CHECK(!edit::BookmarksForParagraphs(ed, {body[2]}, "_Toc").front().empty());
+  std::string saved;
+  auto back = SaveAndRead(*doc, ed, &saved);
+  CHECK(back);
+  const std::vector<std::string> ids = BookmarkIds(saved);
+  CHECK_EQ(ids.size(), 5u);  // the box's two copies and the three new ones
+  CHECK(Unique(ids));
+}
+
+// Typing in a text box writes its text into both copies; the fallback's bookmark gets an id of its
+// own, as Word writes it, not the choice's again.
+TEST(TextBox_EditedBookmarkHasItsOwnIdInEachCopy) {
+  Fixture f;
+  f.body = "<w:p><w:bookmarkStart w:id=\"2\" w:name=\"Body\"/><w:r><w:t>Body</w:t></w:r><w:bookmarkEnd w:id=\"2\"/>" +
+           WordTextBox(BookmarkedBox(0), BookmarkedBox(1)) + "</w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  const uint32_t box = BoxPara(*doc);
+  CHECK(box != kNone);
+  if (box == kNone) return;
+  CHECK(edit::TextBoxEditable(*doc, doc->Para(box).story));
+  Editor ed(*doc);
+  CHECK(ed.InsertText({box, 5}, u" and typed").ok);
+  std::string saved;
+  auto back = SaveAndRead(*doc, ed, &saved);
+  CHECK(back);
+  if (back) CHECK(BoxText(*back) == u"Boxed and typed|");
+  CHECK_EQ(Count(saved, ">Boxed and typed<"), 2u);
+  CHECK_EQ(Count(saved, "w:name=\"_GoBack\""), 2u);
+  const std::vector<std::string> ids = BookmarkIds(saved);
+  CHECK_EQ(ids.size(), 3u);
+  CHECK(Unique(ids));
+  // Saved again from what was read back, the ids stay apart.
+  if (back) {
+    Editor again(*back);
+    const uint32_t p = BoxPara(*back);
+    CHECK(p != kNone && again.InsertText({p, 0}, u"x").ok);
+    std::string twice;
+    CHECK(SaveAndRead(*back, again, &twice));
+    CHECK(BookmarkIds(twice).size() == 3u && Unique(BookmarkIds(twice)));
+  }
 }
 
 TEST(TextBox_OlderVmlTextBoxIsSaved) {
