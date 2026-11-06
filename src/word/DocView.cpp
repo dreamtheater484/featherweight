@@ -273,16 +273,18 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     pictures_ = std::make_unique<fw::doc::edit::Pictures>(*editor_);
     shapes_ = std::make_unique<fw::doc::edit::Shapes>(*editor_);
     format_->insertPicture = [this] { Execute(CmdInsertPicture); };
+    // Insert ▾ after Picture: what's used most first, so it shows without scrolling in a small
+    // window (the friction review); the shapes, breaks and content controls further down.
+    auto more = [this](std::wstring label, int cmd) { format_->insertMore.push_back({std::move(label), [this, cmd] { Execute(cmd); }}); };
+    for (int cmd : {CmdInsertFootnote, CmdInsertEndnote, CmdInsertToc}) more(QueryNotes(cmd)->Tooltip(), cmd);
+    more(L"Text box", CmdInsertTextBox);
+    more(L"Watermark…", CmdWatermarkPanel);
+    for (int cmd : DocPage::InsertCommands()) more(page_->Query(cmd).Tooltip(), cmd);
     static constexpr std::pair<int, const wchar_t*> kShapes[] = {
-        {CmdInsertTextBox, L"Text box"}, {CmdInsertRectangle, L"Rectangle"}, {CmdInsertRoundedRectangle, L"Rounded rectangle"},
-        {CmdInsertOval, L"Oval"},        {CmdInsertLine, L"Line"},           {CmdInsertArrow, L"Arrow"},
-        {CmdInsertCallout, L"Callout"},  {CmdWatermarkPanel, L"Watermark…"}};
-    for (const auto& [cmd, label] : kShapes) format_->insertMore.push_back({label, [this, cmd = cmd] { Execute(cmd); }});
-    for (int cmd : DocPage::InsertCommands())
-      format_->insertMore.push_back({page_->Query(cmd).Tooltip(), [this, cmd] { Execute(cmd); }});
-    for (int cmd : FormCommands()) format_->insertMore.push_back({QueryForms(cmd)->label, [this, cmd] { Execute(cmd); }});
-    for (int cmd : {CmdInsertFootnote, CmdInsertEndnote, CmdInsertToc})
-      format_->insertMore.push_back({QueryNotes(cmd)->Tooltip(), [this, cmd] { Execute(cmd); }});
+        {CmdInsertRectangle, L"Rectangle"}, {CmdInsertRoundedRectangle, L"Rounded rectangle"}, {CmdInsertOval, L"Oval"},
+        {CmdInsertLine, L"Line"},           {CmdInsertArrow, L"Arrow"},                         {CmdInsertCallout, L"Callout"}};
+    for (const auto& [cmd, label] : kShapes) more(label, cmd);
+    for (int cmd : FormCommands()) more(QueryForms(cmd)->label, cmd);
     DocStyles::Host sh;
     sh.selection = [this] {
       return std::make_pair(fw::doc::Pos{anchor_.para, anchor_.offset}, fw::doc::Pos{focus_.para, focus_.offset});

@@ -75,6 +75,7 @@ class DocPage {
   // The sections the selection is in (the caret's in a header or a note: the last one).
   std::pair<uint32_t, uint32_t> Sections() const;
   void Margins(int32_t top, int32_t bottom, int32_t left, int32_t right);
+  void PaperSize(size_t i);  // one of the Layout menu's sizes, for the sections the selection is in
   void SectionBreak(fw::doc::SectionStart start);
   void Break(bool column);
   void Hyphen(bool nonBreaking);  // Ctrl+- and Ctrl+Shift+-, over the selection
