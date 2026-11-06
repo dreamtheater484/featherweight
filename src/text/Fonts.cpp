@@ -1,5 +1,7 @@
 #include "text/Fonts.h"
 
+#include "draw/CloudFonts.h"
+
 #include <algorithm>
 #include <climits>
 #include <cstdlib>
@@ -246,7 +248,33 @@ bool Fonts::Installed(std::wstring_view family) {
   std::wstring name(family);
   UINT32 index = 0;
   BOOL exists = FALSE;
+  if ((SUCCEEDED(collection_->FindFamilyName(name.c_str(), &index, &exists)) && exists) || Win32Family(name)) return true;
+  // Not on the PC: one of Office's cloud fonts, which Word draws as installed ones.
+  if (!AddCloudFonts(name)) return false;
   return (SUCCEEDED(collection_->FindFamilyName(name.c_str(), &index, &exists)) && exists) || Win32Family(name);
+}
+
+bool Fonts::AddCloudFonts(const std::wstring& name) {
+  if (cloudAdded_ || !draw::CloudFontsHave(name)) return false;
+  cloudAdded_ = true;
+  // The collection with them, and the one without the document's own fonts (UseDocumentFonts) too.
+  ComPtr<IDWriteFactory5> factory;
+  if (FAILED(factory_.As(&factory))) return false;
+  const auto with = [&](ComPtr<IDWriteFontCollection>& c) {
+    ComPtr<IDWriteFontCollection1> c1;
+    ComPtr<IDWriteFontSet> set, merged;
+    ComPtr<IDWriteFontSetBuilder1> builder;
+    ComPtr<IDWriteFontCollection1> collection;
+    if (c && SUCCEEDED(c.As(&c1)) && SUCCEEDED(c1->GetFontSet(&set)) && SUCCEEDED(factory->CreateFontSetBuilder(&builder)) &&
+        SUCCEEDED(builder->AddFontSet(set.Get())) && SUCCEEDED(builder->AddFontSet(draw::CloudFontSet())) &&
+        SUCCEEDED(builder->CreateFontSet(&merged)) && SUCCEEDED(factory->CreateFontCollectionFromFontSet(merged.Get(), &collection)))
+      c = collection;
+  };
+  with(collection_);
+  if (installed_) with(installed_);
+  win32_.Reset();
+  win32Tried_ = false;
+  return true;
 }
 
 ComPtr<IDWriteFontSet> Fonts::Win32Family(const std::wstring& family) {

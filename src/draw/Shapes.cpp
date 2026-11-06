@@ -1,5 +1,7 @@
 #include "draw/Shapes.h"
 
+#include "draw/CloudFonts.h"
+
 #include <d2d1.h>
 #include <dwrite.h>
 #include <wrl/client.h>
@@ -807,9 +809,16 @@ class PathSink : public IDWriteGeometrySink {
 };
 
 ComPtr<IDWriteFontFace> FindFace(IDWriteFactory* dw, const std::wstring& family, bool bold, bool italic) {
-  ComPtr<IDWriteFontCollection> fonts;
-  if (FAILED(dw->GetSystemFontCollection(&fonts))) return nullptr;
+  ComPtr<IDWriteFontCollection> system;
+  if (FAILED(dw->GetSystemFontCollection(&system))) return nullptr;
+  // The family on the PC, or else among Office's cloud fonts (Aptos in recent charts); Arial last.
+  UINT32 at = 0;
+  BOOL there = FALSE;
+  IDWriteFontCollection* cloud = nullptr;
+  if (!(SUCCEEDED(system->FindFamilyName(family.c_str(), &at, &there)) && there) && CloudFontsHave(family))
+    cloud = CloudFontCollection();
   for (const std::wstring& name : {family, std::wstring(L"Arial")}) {
+    IDWriteFontCollection* fonts = cloud && name == family ? cloud : system.Get();
     UINT32 index = 0;
     BOOL exists = FALSE;
     ComPtr<IDWriteFontFamily> fam;

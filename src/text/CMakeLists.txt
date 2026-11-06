@@ -19,7 +19,7 @@ add_library(fwtext STATIC
   "${_fw_hyph_cpp}"
 )
 target_include_directories(fwtext PUBLIC "${PROJECT_SOURCE_DIR}/src")
-target_link_libraries(fwtext PUBLIC fwcore dwrite ole32 PRIVATE miniz)
+target_link_libraries(fwtext PUBLIC fwcore dwrite ole32 PRIVATE fwdraw miniz)
 target_compile_options(fwtext PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
 if(FW_BUILD_TESTS)
