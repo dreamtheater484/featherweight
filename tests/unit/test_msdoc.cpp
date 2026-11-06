@@ -506,6 +506,10 @@ TEST(MsDoc_RefusesWhatItCannotRead) {
   locked.flags |= 0x0100;
   CHECK(status(locked.Build()) == Code::Unsupported);
   CHECK(msdoc::IsEncrypted(locked.Build().at("WordDocument")) && !msdoc::IsEncrypted(good.at("WordDocument")));
+  {  // decrypted streams keep the flag; the reader is told
+    pkg::Status st;
+    CHECK(!msdoc::ToDocx(From(locked.Build()), st, true).empty());
+  }
   // Cut short anywhere, or with any byte of the FIB changed, the streams never crash the reader:
   // it either fails or makes a package the docx reader takes.
   for (const char* name : {"WordDocument", "1Table"}) {
