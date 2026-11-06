@@ -22,6 +22,10 @@ class Hyphenator {
   static const Hyphenator* For(std::wstring_view language);
   // The tags of the pattern sets that ship ("en-US", "en-GB", "nl", ...).
   static std::vector<std::wstring> Languages();
+  // Whether Word on this PC hyphenates `language`: it does only with Office's proofing tools for
+  // that language (an English Office has English, Spanish and French), so without them a German
+  // document isn't hyphenated. True when Office isn't installed. Thread-safe.
+  static bool WordHyphenates(std::wstring_view language);
 
   // Where `word` may be hyphenated: each p means a hyphen may go between word[p - 1] and word[p].
   // `word` is one word of letters (any case, apostrophes allowed). At least leftMin letters stay

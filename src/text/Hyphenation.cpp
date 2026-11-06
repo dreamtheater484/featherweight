@@ -5,6 +5,7 @@
 #include <miniz.h>
 
 #include <algorithm>
+#include <cwctype>
 #include <memory>
 #include <mutex>
 #include <tuple>
@@ -16,7 +17,8 @@ namespace {
 
 // The shipped pattern sets. `matches` are the language tags each covers, lower case: a tag
 // matches when it equals one or starts with one followed by "-". British English comes before
-// the other English tags. The minimums are hyph-utf8's for typesetting.
+// the other English tags. The minimums are hyph-utf8's for typesetting, except Spanish's left
+// minimum: Word keeps at least three letters before a Spanish hyphen ("me-diante" stays whole).
 struct Language {
   const wchar_t* tag;
   const char* blob;
@@ -30,7 +32,7 @@ constexpr Language kLanguages[] = {
     {L"nl", "nl", {L"nl"}, 2, 2, true},
     {L"de", "de", {L"de"}, 2, 2, false},
     {L"fr", "fr", {L"fr"}, 2, 2, false},
-    {L"es", "es", {L"es"}, 2, 2, false},
+    {L"es", "es", {L"es"}, 3, 2, false},
     {L"it", "it", {L"it"}, 2, 2, false},
     {L"pt", "pt", {L"pt"}, 2, 3, false},
     {L"da", "da", {L"da"}, 2, 2, false},
@@ -90,7 +92,58 @@ bool IsDirective(std::wstring_view line) {
   return capitals >= 2;
 }
 
+// The two-letter languages of the hyphenators in Office's PROOF folders, from their file names
+// (MSHY7EN.DLL, LTSHYPH_EN.LEX): "en", "es", "fr". Empty when Office isn't installed.
+std::vector<std::wstring> OfficeHyphenators() {
+  std::vector<std::wstring> dirs;
+  wchar_t buf[MAX_PATH];
+  DWORD size = sizeof(buf);
+  if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Office\\ClickToRun\\Configuration", L"InstallationPath",
+                   RRF_RT_REG_SZ, nullptr, buf, &size) == ERROR_SUCCESS)
+    dirs.push_back(std::wstring(buf) + L"\\root\\Office16\\PROOF");
+  for (const wchar_t* var : {L"ProgramFiles", L"ProgramFiles(x86)", L"CommonProgramFiles", L"CommonProgramFiles(x86)"}) {
+    DWORD n = GetEnvironmentVariableW(var, buf, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) continue;
+    const bool common = var[0] == L'C';
+    dirs.push_back(std::wstring(buf, n) + (common ? L"\\Microsoft Shared\\PROOF" : L"\\Microsoft Office\\root\\Office16\\PROOF"));
+  }
+  std::vector<std::wstring> codes;
+  for (const std::wstring& dir : dirs) {
+    WIN32_FIND_DATAW f;
+    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &f);
+    if (h == INVALID_HANDLE_VALUE) continue;
+    do {
+      const std::wstring name = Lower(f.cFileName);
+      size_t at = 0;
+      if (name.rfind(L"mshy", 0) == 0) {
+        at = 4;
+        while (at < name.size() && name[at] >= L'0' && name[at] <= L'9') ++at;
+      } else if (name.rfind(L"ltshyph_", 0) == 0) {
+        at = 8;
+      } else {
+        continue;
+      }
+      const std::wstring code = name.substr(at, 2);
+      if (code.size() == 2 && iswalpha(code[0]) && iswalpha(code[1]) &&
+          std::find(codes.begin(), codes.end(), code) == codes.end())
+        codes.push_back(code);
+    } while (FindNextFileW(h, &f));
+    FindClose(h);
+  }
+  return codes;
+}
+
 }  // namespace
+
+bool Hyphenator::WordHyphenates(std::wstring_view language) {
+  static const std::vector<std::wstring> office = OfficeHyphenators();
+  if (office.empty()) return true;
+  const std::wstring two = Lower(language.substr(0, 2));
+  auto norwegian = [](const std::wstring& c) { return c == L"nb" || c == L"nn" || c == L"no"; };
+  for (const std::wstring& c : office)
+    if (c == two || (norwegian(c) && norwegian(two))) return true;
+  return false;
+}
 
 Hyphenator::Hyphenator(std::wstring tag, std::wstring_view patterns, int leftMin, int rightMin)
     : tag_(std::move(tag)), leftMin_(leftMin), rightMin_(rightMin) {
