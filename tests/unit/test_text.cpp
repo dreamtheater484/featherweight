@@ -529,6 +529,28 @@ TEST(Text_FontSlotsAndFallback) {
   }
 }
 
+TEST(Text_AFullFaceNameIsThatFace) {
+  // "Times New Roman Bold" names a face, not a family: Word draws it bold, as GDI finds it, and
+  // nothing is missing. A face name that isn't installed is still substituted.
+  Fonts fonts;
+  if (!fonts.Installed(L"Times New Roman")) return;
+  const Face* bold = fonts.FaceFor(L"Times New Roman Bold", false, false);
+  CHECK(bold != nullptr);
+  if (!bold) return;
+  CHECK(bold->Weight() >= DWRITE_FONT_WEIGHT_BOLD);
+  const Face* italic = fonts.FaceFor(L"Times New Roman Italic", false, false);
+  CHECK(italic != nullptr);
+  if (!italic) return;
+  CHECK(italic->Style() != DWRITE_FONT_STYLE_NORMAL);
+  const Face* plain = fonts.FaceFor(L"Times New Roman", false, false);
+  CHECK(plain != nullptr);
+  if (!plain) return;
+  CHECK(plain->Weight() < DWRITE_FONT_WEIGHT_BOLD);
+  CHECK(fonts.Substitutions().empty());
+  fonts.FaceFor(L"Times New Roman Nonexistent", false, false);
+  CHECK_EQ(fonts.Substitutions().size(), 1u);
+}
+
 TEST(Text_MissingFontsAreSubstitutedAndReported) {
   Fonts fonts([](std::wstring_view family) { return family == L"House Font" ? std::wstring(kSans) : std::wstring(); });
   CHECK(fonts.Resolve(L"Courier New") == L"Courier New");

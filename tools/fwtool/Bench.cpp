@@ -205,6 +205,58 @@ int RunTypingBench(const std::vector<std::filesystem::path>& files, const Option
   return options.budgets && over ? 1 : 0;
 }
 
+// fwtool bench --scrolling: a frame is 16 ms; a page painted slower than that stutters.
+constexpr double kFrameMs = 16;
+
+int RunScrollBench(const std::vector<std::filesystem::path>& files, const Options& options) {
+  std::printf("Scrolling through Word documents: open and lay out, then every page painted in order (pictures\n"
+              "decoded on first sight), in ms; memory in MB of private bytes (laid out, scrolled to the end).\n\n");
+  size_t width = 8;
+  for (const auto& f : files) width = std::max(width, fw::Utf8ToWide(Display(f)).size());
+  std::printf("%s %6s %9s %7s %7s %7s %6s %9s %9s %9s %9s\n", Pad("Document", width, false).c_str(), "pages", "laid out",
+              "median", "p95", "worst", "slow", "all pages", "mem laid", "mem end", "peak WS");
+  std::string json = "{\n  \"format\": \"featherweight-scroll-bench\",\n  \"version\": 1,\n  \"files\": [";
+  int failed = 0;
+  for (size_t i = 0; i < files.size(); ++i) {
+    ScrollResult r;
+    std::string error;
+    const std::string name = Display(files[i]);
+    if (!BenchScrolling(files[i], r, error)) {
+      std::printf("%s  failed: %s\n", Pad(name, width, false).c_str(), error.c_str());
+      ++failed;
+      continue;
+    }
+    double total = 0;
+    size_t slow = 0;
+    for (double ms : r.paint) {
+      total += ms;
+      if (ms >= kFrameMs) ++slow;
+    }
+    auto mb = [](double v) { char b[32]; std::snprintf(b, sizeof b, "%.0f", v); return std::string(b); };
+    std::printf("%s %6zu %9s %7s %7s %7s %6zu %9s %9s %9s %9s\n", Pad(name, width, false).c_str(), r.pages,
+                Ms(r.layOutMs).c_str(), Ms(Quantile(r.paint, 0.5)).c_str(), Ms(Quantile(r.paint, 0.95)).c_str(),
+                Ms(Quantile(r.paint, 1)).c_str(), slow, Ms(total).c_str(), mb(r.memoryLaidOut - r.memoryOpen).c_str(),
+                mb(r.memoryScrolled - r.memoryOpen).c_str(), mb(r.peakWorkingSet).c_str());
+    std::fflush(stdout);
+    json += std::string(i ? ",\n    " : "\n    ") + "{\"document\": \"" + fw::WideToUtf8(files[i].generic_wstring()) +
+            "\", \"pages\": " + std::to_string(r.pages) + ", \"layOutMs\": " + Ms(r.layOutMs) +
+            ", \"paintMedianMs\": " + Ms(Quantile(r.paint, 0.5)) + ", \"paintP95Ms\": " + Ms(Quantile(r.paint, 0.95)) +
+            ", \"paintWorstMs\": " + Ms(Quantile(r.paint, 1)) + ", \"slowPages\": " + std::to_string(slow) +
+            ", \"paintAllMs\": " + Ms(total) + ", \"memoryLaidOutMB\": " + mb(r.memoryLaidOut - r.memoryOpen) +
+            ", \"memoryScrolledMB\": " + mb(r.memoryScrolled - r.memoryOpen) + ", \"peakWorkingSetMB\": " +
+            mb(r.peakWorkingSet) + "}";
+  }
+  json += "\n  ]\n}\n";
+  if (!options.jsonOut.empty()) {
+    std::ofstream out(options.jsonOut, std::ios::binary);
+    out << json;
+    if (!out) std::fprintf(stderr, "Couldn't write %s\n", Display(options.jsonOut).c_str());
+  }
+  std::printf("\nslow: pages painted in %.0f ms or more (a dropped frame while scrolling). %zu documents, %d failed\n",
+              kFrameMs, files.size(), failed);
+  return failed ? 1 : 0;
+}
+
 }  // namespace
 
 int RunEditCheck(const Options& options) {
@@ -250,6 +302,7 @@ int RunBench(const Options& options) {
     return 1;
   }
   if (options.typing) return RunTypingBench(files, options);
+  if (options.scrolling) return RunScrollBench(files, options);
   const int runs = std::max(1, options.runs);
   std::printf("Opening Word documents: the median of %d runs after a warm-up, in ms from the open request.\n", runs);
   if (!HaveLayout())

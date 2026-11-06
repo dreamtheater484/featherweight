@@ -161,6 +161,25 @@ TEST(Odt_NoteInTextWithALanguage) {
   CHECK(ref != std::string::npos && vert < ref && lang < ref && vert < lang);
 }
 
+TEST(Odt_BulletInItsFont) {
+  // Word's own .odt files have Symbol bullets (U+F0B7): the level keeps the bullet's font.
+  const std::string autos =
+      "<text:list-style style:name=\"L1\"><text:list-level-style-bullet text:level=\"1\" text:bullet-char=\"\xEF\x82\xB7\">"
+      "<style:text-properties style:font-name=\"Symbol\"/></text:list-level-style-bullet></text:list-style>";
+  const std::string body = "<text:list text:style-name=\"L1\"><text:list-item><text:p>Item</text:p></text:list-item></text:list>";
+  std::vector<uint8_t> docx;
+  CHECK(odf::OdtToDocx(Odt(body, autos), docx).Ok());
+  fw::pkg::Status st;
+  auto pkg = test::OpenBytes(std::move(docx), st);
+  CHECK(pkg != nullptr);
+  if (!pkg) return;
+  std::vector<uint8_t> bytes;
+  CHECK(pkg->ReadPart("/word/numbering.xml", bytes).Ok());
+  const std::string numbering(bytes.begin(), bytes.end());
+  CHECK(numbering.find("<w:lvlText w:val=\"\xEF\x82\xB7\"/>") != std::string::npos);
+  CHECK(numbering.find("</w:pPr><w:rPr><w:rFonts w:ascii=\"Symbol\"") != std::string::npos);
+}
+
 TEST(Odt_OtherPrefixesAndBadInput) {
   // Prefixes other than ODF's usual ones are read by their namespaces.
   const std::string content =

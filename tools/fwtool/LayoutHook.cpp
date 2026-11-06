@@ -2,7 +2,8 @@
 // with fwdoclayout (src/doc/layout/Layout.h), marking each stage in OpenTimings.
 #include "LayoutHook.h"
 
-#include "Common.h"
+#include <windows.h>
+#include <psapi.h>
 
 #include <chrono>
 #include <cstdio>
@@ -12,6 +13,7 @@
 #include <memory>
 #include <random>
 
+#include "Common.h"
 #include "core/Strings.h"
 #include "doc/msdoc/MsDoc.h"
 #include "doc/odf/Odt.h"
@@ -100,6 +102,7 @@ std::unique_ptr<fw::doc::Document> OpenModel(const std::filesystem::path& docume
   if (!error.empty()) return nullptr;
   if (!imported.empty()) {
     package = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(imported)), fw::pkg::Limits::Default(), status);
+    if (timings) timings->Mark(fw::OpenTimings::Read);
   } else {
     fw::pkg::Snapshot::Options options;
     std::error_code ec;
@@ -134,11 +137,18 @@ bool OpenAndLayOut(const std::filesystem::path& document, fw::OpenTimings* timin
   g_document = doc.get();
   fw::text::Fonts& fonts = SharedFonts();
   fonts.ClearSubstitutions();
+  fonts.UseDocumentFonts(fw::doc::layout::EmbeddedFonts(*doc));
   {
     fw::doc::layout::Layout layout(*doc, fonts, {}, timings);
     layout.LayOutAll();
     use(layout);
   }
+  // FWTOOL_FONTS=1: the fonts this document asked for that aren't installed, and what was drawn.
+  wchar_t flag[4] = {};
+  if (GetEnvironmentVariableW(L"FWTOOL_FONTS", flag, 4) > 0)
+    for (const auto& s : fonts.Substitutions())
+      std::fprintf(stderr, "font: %s: %s -> %s\n", fw::WideToUtf8(document.filename().wstring()).c_str(),
+                   fw::WideToUtf8(s.requested).c_str(), fw::WideToUtf8(s.used).c_str());
   g_document = nullptr;
   return true;
 }
@@ -264,6 +274,54 @@ uint32_t ParagraphToType(const fw::doc::Document& doc, const fw::doc::layout::La
 
 }  // namespace
 
+namespace {
+
+double PrivateMB() {
+  PROCESS_MEMORY_COUNTERS_EX pmc{};
+  pmc.cb = sizeof pmc;
+  K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof pmc);
+  return pmc.PrivateUsage / 1048576.0;
+}
+
+double PeakWorkingSetMB() {
+  PROCESS_MEMORY_COUNTERS pmc{};
+  K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc);
+  return pmc.PeakWorkingSetSize / 1048576.0;
+}
+
+}  // namespace
+
+bool BenchScrolling(const std::filesystem::path& document, ScrollResult& result, std::string& error) {
+  PagePainter painter;
+  if (!painter.Init()) {
+    error = "can't paint: no Direct2D device";
+    return false;
+  }
+  result.memoryOpen = PrivateMB();
+  const auto start = std::chrono::steady_clock::now();
+  std::unique_ptr<fw::doc::Document> doc = OpenModel(document, nullptr, error);
+  if (!doc) return false;
+  g_document = doc.get();
+  fw::text::Fonts& fonts = SharedFonts();
+  fonts.ClearSubstitutions();
+  {
+    fw::doc::layout::Layout layout(*doc, fonts);
+    layout.LayOutAll();
+    result.layOutMs = Since(start);
+    result.pages = layout.PageCount();
+    result.memoryLaidOut = PrivateMB();
+    for (size_t page = 0; page < layout.PageCount(); ++page) {
+      const auto t = std::chrono::steady_clock::now();
+      painter.Paint(layout, page);
+      result.paint.push_back(Since(t));
+    }
+    result.memoryScrolled = PrivateMB();
+  }
+  g_document = nullptr;
+  result.peakWorkingSet = PeakWorkingSetMB();
+  return true;
+}
+
 bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>& places, size_t& pages,
                  std::string& error) {
   std::unique_ptr<fw::doc::Document> doc = OpenModel(document, nullptr, error);
@@ -276,6 +334,7 @@ bool BenchTyping(const std::filesystem::path& document, std::vector<TypingPlace>
   g_document = doc.get();
   fw::text::Fonts& fonts = SharedFonts();
   fonts.ClearSubstitutions();
+  fonts.UseDocumentFonts(fw::doc::layout::EmbeddedFonts(*doc));
   {
     fw::doc::layout::Layout layout(*doc, fonts);
     layout.LayOutAll();
@@ -488,6 +547,7 @@ bool CheckEdits(const std::filesystem::path& document, int edits, unsigned seed,
   g_document = doc.get();
   fw::text::Fonts& fonts = SharedFonts();
   fonts.ClearSubstitutions();
+  fonts.UseDocumentFonts(fw::doc::layout::EmbeddedFonts(*doc));
   {
     fw::doc::layout::Layout layout(*doc, fonts);
     layout.LayOutAll();

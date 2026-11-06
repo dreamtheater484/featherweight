@@ -49,13 +49,20 @@ class DocPanelRows {
   float ui_ = 1;
 };
 
+// A box of text a panel can put the keyboard in (once it's laid out).
+class PanelTextBox : public ComboBox {
+ public:
+  using ComboBox::TakeFocus;
+};
+
 class DocView::LinkPanel : public PanelContent, DocPanelRows {
  public:
   explicit LinkPanel(DocView& view);
   std::wstring Title() const override { return editing_ ? L"Edit link" : L"Insert link"; }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
-  void Draw(gfx::Canvas& c) override { DrawLabels(c); }
-  // Fills the boxes from the link at the caret, or the selection.
+  void Draw(gfx::Canvas& c) override;
+  // Fills the boxes from the link at the caret, or the selection. The keyboard goes to the address,
+  // and Enter inserts the link, as in Word's Ctrl+K dialog.
   void Open();
 
  private:
@@ -69,7 +76,8 @@ class DocView::LinkPanel : public PanelContent, DocPanelRows {
   bool editing_ = false;
   TextPos at_;  // the link being edited
   std::vector<Place> places_;  // the address list's places in the document, after its first item
-  ComboBox address_, text_;
+  PanelTextBox address_, text_;
+  PanelTextBox* focusWanted_ = nullptr;  // the box the keyboard goes to once it's drawn
   PushButton apply_, remove_;
 };
 
@@ -78,7 +86,8 @@ class DocView::BookmarkPanel : public PanelContent, DocPanelRows {
   explicit BookmarkPanel(DocView& view);
   std::wstring Title() const override { return L"Bookmarks"; }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
-  void Draw(gfx::Canvas& c) override { DrawLabels(c); }
+  void Draw(gfx::Canvas& c) override;
+  // The keyboard goes to the name, and Enter adds the bookmark, as in Word's dialog.
   void Open();
 
  private:
@@ -88,7 +97,8 @@ class DocView::BookmarkPanel : public PanelContent, DocPanelRows {
   void Delete();
   DocView& v_;
   std::vector<fw::doc::edit::BookmarkInfo> marks_;
-  ComboBox name_;
+  PanelTextBox name_;
+  PanelTextBox* focusWanted_ = nullptr;
   ListBox list_;
   PushButton add_, goTo_, delete_;
 };
@@ -109,12 +119,6 @@ class DocView::PageNumberPanel : public PanelContent, DocPanelRows {
   Dropdown position_, align_, style_, format_, numbering_;
   SpinBox start_;
   PushButton insert_, apply_;
-};
-
-// A box of text a panel can put the keyboard in (once it's laid out).
-class PanelTextBox : public ComboBox {
- public:
-  using ComboBox::TakeFocus;
 };
 
 // The Review pane (D4, DocReview.cpp): Track Changes, the markup shown, the tracked changes one at
@@ -159,6 +163,7 @@ class DocView::ReviewPanel : public PanelContent, DocPanelRows {
   Dropdown markup_;
   PanelTextBox box_, name_;
   PanelTextBox* focusWanted_ = nullptr;  // the box the keyboard goes to once it's drawn
+  bool replying_ = false;  // the box is a reply to the picked comment (a card was clicked)
   std::vector<Card> cards_;
   std::string picked_, editing_;  // comment ids: the picked thread's first, and the one the box edits
   D2D1_RECT_F list_{};

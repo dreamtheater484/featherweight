@@ -82,6 +82,11 @@ class Fonts {
   // False if DirectWrite couldn't be started (it can't fail on Windows 10 and 11).
   bool Ok() const { return analyzer_ != nullptr; }
 
+  // Font files a document carries (Word's word/fonts), used as Word uses them: for families this
+  // PC doesn't have. Replaces the ones given before; none restores the installed fonts alone. Only
+  // before anything is laid out with this Fonts: the faces it gave out go.
+  void UseDocumentFonts(const std::vector<std::vector<uint8_t>>& files);
+
   bool Installed(std::wstring_view family);
   // The installed family drawn for `family`: itself, a substitute, or the last resort. Replacements
   // are recorded in Substitutions(). An empty name means the last resort, without recording.
@@ -91,10 +96,16 @@ class Fonts {
   const Face* Get(const std::wstring& installedFamily, DWRITE_FONT_WEIGHT weight, bool italic);
   // The face for a font DirectWrite's fallback picked.
   const Face* Get(IDWriteFont* font);
+  // The face drawn for a run in `requested`, bold and italic as the run is: Resolve and Get, except
+  // that a full face name ("Times New Roman Bold"), which Word finds as GDI does, keeps that face's
+  // weight and slant.
+  const Face* FaceFor(std::wstring_view requested, bool bold, bool italic);
 
   // Every family replaced so far, in the order first seen.
   const std::vector<Substitution>& Substitutions() const { return substitutions_; }
-  void ClearSubstitutions() { substitutions_.clear(); }
+  // Forgets the replacements and the choices behind them, so the next document's own font table
+  // picks its substitutes again. Only between documents: Resolve's references to them go.
+  void ClearSubstitutions();
 
   // The family drawn when nothing else is installed.
   static constexpr const wchar_t* kLastResort = L"Times New Roman";
@@ -112,12 +123,22 @@ class Fonts {
   Microsoft::WRL::ComPtr<IDWriteTextAnalyzer1> analyzer_;
   Microsoft::WRL::ComPtr<IDWriteFontFallback> fallback_;
   Microsoft::WRL::ComPtr<IDWriteFontCollection> collection_;
+  Microsoft::WRL::ComPtr<IDWriteFontCollection> installed_;  // with document fonts: the collection without them
+  Microsoft::WRL::ComPtr<IDWriteInMemoryFontFileLoader> memory_;
   // The collection's fonts, for finding families by their Win32 (GDI) names, which documents use:
   // "Calibri Light" and "Arial Narrow" are a weight and a width of the families DirectWrite lists
   // as "Calibri" and "Arial". Null where the collection has no font set.
   Microsoft::WRL::ComPtr<IDWriteFontSet> win32_;
   bool win32Tried_ = false;
   Microsoft::WRL::ComPtr<IDWriteFontSet> Win32Family(const std::wstring& family);
+  // An installed face by its full name: its family, weight and slant.
+  struct FaceName {
+    std::wstring family;
+    DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL;
+    bool italic = false;
+  };
+  bool FullName(const std::wstring& name, FaceName& out);
+  std::map<std::wstring, FaceName, std::less<>> faceNames_;  // lower-cased request -> the face it names
   SubstituteFn substitute_;
   std::map<std::wstring, std::wstring, std::less<>> resolved_;  // lower-cased request -> family
   std::map<std::tuple<std::wstring, int, int, int>, std::unique_ptr<Face>> faces_;

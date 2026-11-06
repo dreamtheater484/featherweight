@@ -639,6 +639,26 @@ TEST(Resolve_D2_DirectNumberingOverridesTheParagraphStyle) {
   CHECK(doc->ResolvedPara(p[3]).indStart.Value() == 100);  // direct indents beat both
 }
 
+TEST(Numbering_ASectionBreakParagraphIsNotNumbered) {
+  // An empty numbered paragraph that only holds a section break gets no number and isn't counted.
+  Fixture f;
+  f.numbering = "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/>"
+                "<w:lvlText w:val=\"%1\"/></w:lvl></w:abstractNum><w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+  const std::string num = "<w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr>";
+  f.body = "<w:p><w:pPr>" + num + "</w:pPr><w:r><w:t>One</w:t></w:r></w:p>"
+           "<w:p><w:pPr>" + num + "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr></w:pPr><w:bookmarkStart w:id=\"1\" w:name=\"b\"/></w:p>"
+           "<w:p><w:pPr>" + num + "</w:pPr><w:r><w:t>Two</w:t></w:r></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  auto p = Paras(*doc);
+  CHECK(p.size() == 3);
+  if (p.size() != 3) return;
+  CHECK(!doc->Label(p[1]));
+  auto two = doc->Label(p[2]);
+  CHECK(two && two->text == u"2");
+}
+
 TEST(Resolve_D5_StyleListLevelSitsBetweenTheStyleAndItsBase) {
   Fixture f;
   f.styles = Styles(
@@ -663,26 +683,6 @@ TEST(Resolve_D5_StyleListLevelSitsBetweenTheStyleAndItsBase) {
   // A style that sets only the level keeps the list of the style it's based on.
   CHECK(doc->ResolvedPara(p[1]).numId == "1" && doc->ResolvedPara(p[1]).ilvl == 1);
   CHECK(doc->ResolvedPara(p[1]).indStart.Value() == 4320);
-}
-
-TEST(Numbering_ASectionBreakParagraphIsNotNumbered) {
-  // An empty numbered paragraph that only holds a section break gets no number and isn't counted.
-  Fixture f;
-  f.numbering = "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/>"
-                "<w:lvlText w:val=\"%1\"/></w:lvl></w:abstractNum><w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
-  const std::string num = "<w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr>";
-  f.body = "<w:p><w:pPr>" + num + "</w:pPr><w:r><w:t>One</w:t></w:r></w:p>"
-           "<w:p><w:pPr>" + num + "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr></w:pPr><w:bookmarkStart w:id=\"1\" w:name=\"b\"/></w:p>"
-           "<w:p><w:pPr>" + num + "</w:pPr><w:r><w:t>Two</w:t></w:r></w:p>";
-  auto doc = LoadOk(f);
-  CHECK(doc);
-  if (!doc) return;
-  auto p = Paras(*doc);
-  CHECK(p.size() == 3);
-  if (p.size() != 3) return;
-  CHECK(!doc->Label(p[1]));
-  auto two = doc->Label(p[2]);
-  CHECK(two && two->text == u"2");
 }
 
 TEST(Resolve_D3_DefaultStyleSizeDoesNotOverrideTableStyle) {

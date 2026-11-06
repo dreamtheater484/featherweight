@@ -186,6 +186,10 @@ enum class HitStories : uint8_t { All, Body, HeaderFooter };
 // Word's renders of the corpus). Empty when the table says nothing useful, or for families fwtext's
 // own table knows (Aptos, Helvetica...). For text::Fonts' SubstituteFn.
 std::wstring SubstituteFamily(const Document& doc, std::wstring_view family);
+// The fonts a document carries (word/fonts, from w:embedRegular and the like), as font files for
+// text::Fonts::UseDocumentFonts: unobfuscated with their keys (ECMA-376 §17.8.1), and only those
+// whose tables read as a font. At most 64 files and 32 MB.
+std::vector<std::vector<uint8_t>> EmbeddedFonts(const Document& doc);
 
 // What a DATE or TIME field (its instruction, `code`) shows at `now` (as Options::now): by its \@
 // picture, as Word reads one, in the language `lang` (BCP 47; the user's when empty or unknown).

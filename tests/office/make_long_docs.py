@@ -8,7 +8,10 @@ bookmarks, lists, tables, footnotes, comments, links, pictures and a footer with
 
 Uses only the standard library, and the output is deterministic. From the repository root:
   python tests/office/make_long_docs.py <output folder> [pages ...]
-Without pages, it makes long-20.docx and long-300.docx.
+Without pages, it makes long-20.docx and long-300.docx. Huge documents for D5 (opening, typing,
+scrolling and memory, with fwtool bench and bench --typing / --scrolling): a number makes
+long-N.docx; table-N makes one table of N rows with a repeated header row; pictures-N makes N
+pages, each with its own picture part.
 """
 import os
 import random
@@ -61,9 +64,11 @@ WORDS = (
 
 
 class Doc:
-    def __init__(self, pages, seed):
+    def __init__(self, pages, seed, kind="long"):
         self.rng = random.Random(seed)
         self.pages = pages
+        self.kind = kind
+        self.images = []  # pictures-N: the image numbers, each its own part
         self.rsids = ["00%06X" % self.rng.randrange(0x1000000) for _ in range(40)]
         self.footnotes = []
         self.comments = []
@@ -153,9 +158,10 @@ class Doc:
         return (self.p_open() + '<w:pPr><w:pStyle w:val="Heading%d"/></w:pPr><w:bookmarkStart w:id="%d" w:name="%s"/>'
                 % (level, b, name) + self.run(text) + '<w:bookmarkEnd w:id="%d"/></w:p>' % b)
 
-    def table(self):
+    def table(self, rows=None):
         rng = self.rng
-        cols, rows = 4, rng.randint(4, 8)
+        header = rows is not None  # a long table repeats its first row on each page
+        cols, rows = 4, rows or rng.randint(4, 8)
         out = ['<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/>'
                '<w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" '
                'w:noHBand="0" w:noVBand="1"/></w:tblPr><w:tblGrid>']
@@ -163,6 +169,8 @@ class Doc:
         out.append("</w:tblGrid>")
         for r in range(rows):
             out.append('<w:tr w:rsidR="%s" w14:paraId="%s" w14:textId="%s">' % (rng.choice(self.rsids), self.para_id(), self.para_id()))
+            if header and r == 0:
+                out.append("<w:trPr><w:tblHeader/></w:trPr>")
             for c in range(cols):
                 shade = '<w:shd w:val="clear" w:color="auto" w:fill="D9E2F3" w:themeFill="accent1" w:themeFillTint="33"/>' if r == 0 else ""
                 text = self.words(rng.randint(1, 4)) if r == 0 or c == 0 else "%d.%d" % (rng.randint(0, 999), rng.randint(0, 99))
@@ -172,28 +180,37 @@ class Doc:
         out.append("</w:tbl>")
         return "".join(out)
 
-    def picture(self, n):
+    def picture(self, n, rid="rIdImage1", cx=3657600, cy=2057400):
         return (self.p_open() + '<w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:noProof/></w:rPr><w:drawing>'
                 '<wp:inline distT="0" distB="0" distL="0" distR="0" wp14:anchorId="%s" wp14:editId="%s">'
-                '<wp:extent cx="3657600" cy="2057400"/><wp:effectExtent l="0" t="0" r="0" b="0"/>'
+                '<wp:extent cx="%d" cy="%d"/><wp:effectExtent l="0" t="0" r="0" b="0"/>'
                 '<wp:docPr id="%d" name="Picture %d" descr="A chart"/><wp:cNvGraphicFramePr>'
                 '<a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/>'
                 '</wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
                 '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
                 '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr>'
                 '<pic:cNvPr id="%d" name="Picture %d"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill>'
-                '<a:blip r:embed="rIdImage1"><a:extLst><a:ext uri="{28A0092B-C50C-407E-A947-70E740481C1C}">'
+                '<a:blip r:embed="%s"><a:extLst><a:ext uri="{28A0092B-C50C-407E-A947-70E740481C1C}">'
                 '<a14:useLocalDpi xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main" val="0"/></a:ext>'
                 '</a:extLst></a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm>'
-                '<a:off x="0" y="0"/><a:ext cx="3657600" cy="2057400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/>'
+                '<a:off x="0" y="0"/><a:ext cx="%d" cy="%d"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/>'
                 '</a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>'
-                % (self.para_id(), self.para_id(), n, n, n, n))
+                % (self.para_id(), self.para_id(), cx, cy, n, n, n, n, rid, cx, cy))
 
     def body(self):
         rng = self.rng
         content = []
         pictures = 0
-        for page in range(self.pages):
+        if self.kind == "table":  # table-N: one table of N rows
+            content += [self.heading(1), self.body_para(), self.table(self.pages), self.body_para()]
+        elif self.kind == "pictures":  # pictures-N: N pages, each with its own picture (image part)
+            for n in range(1, self.pages + 1):
+                if n % 10 == 1:
+                    content.append(self.heading(1))
+                content.append(self.body_para())
+                self.images.append(n + 1)
+                content.append(self.picture(n, "rIdImage%d" % (n + 1), 5486400, 4114800))
+        for page in range(self.pages if self.kind == "long" else 0):
             if page % 3 == 0:
                 content.append(self.heading(1 if page % 9 == 0 else 2))
             for _ in range(rng.randint(3, 5)):
@@ -391,8 +408,24 @@ def png():
             chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
-def make(path, pages):
-    d = Doc(pages, seed=pages)
+def picture_png(n):
+    """A distinct 320 x 240 picture for pictures-N, so each is decoded and cached on its own."""
+    width, height = 320, 240
+    red = bytes((x * 3 + n * 37) & 255 for x in range(width))
+    rows = []
+    for y in range(height):
+        row = bytearray(1 + width * 3)
+        row[1::3] = red
+        row[2::3] = bytes([(y * 5 + n * 11) & 255]) * width
+        row[3::3] = bytes([(n * 53 + y) & 255]) * width
+        rows.append(bytes(row))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    return (bytes([137]) + b"PNG" + bytes([13, 10, 26, 10]) + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) +
+            chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b""))
+
+
+def make(path, pages, kind="long"):
+    d = Doc(pages, seed=pages, kind=kind)
     document = d.body()
     comments, comments_ex = d.comments_xml()
     rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
@@ -416,12 +449,14 @@ def make(path, pages):
     rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
             "".join('<Relationship Id="%s" Type="%s" Target="%s"/>' % (p[2], p[3], p[0][5:]) for p in parts) +
             '<Relationship Id="rIdImage1" Type="%simage" Target="media/image1.png"/>' % rel +
+            "".join('<Relationship Id="rIdImage%d" Type="%simage" Target="media/image%d.png"/>' % (n, rel, n) for n in d.images) +
             '<Relationship Id="rIdLink" Type="%shyperlink" Target="https://example.com/report" TargetMode="External"/>' % rel +
             "</Relationships>")
     root_rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
                  '<Relationship Id="rId1" Type="%sofficeDocument" Target="word/document.xml"/></Relationships>' % rel)
     entries = [("[Content_Types].xml", types), ("_rels/.rels", root_rels), ("word/document.xml", document),
-               ("word/_rels/document.xml.rels", rels)] + [(p[0], p[4]) for p in parts] + [("word/media/image1.png", png())]
+               ("word/_rels/document.xml.rels", rels)] + [(p[0], p[4]) for p in parts] + [("word/media/image1.png", png())] + \
+        [("word/media/image%d.png" % n, picture_png(n)) for n in d.images]
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         for name, data in entries:
             info = zipfile.ZipInfo(name, (2026, 1, 1, 0, 0, 0))
@@ -437,8 +472,12 @@ def main():
         sys.exit(1)
     out = sys.argv[1]
     os.makedirs(out, exist_ok=True)
-    for pages in [int(p) for p in sys.argv[2:]] or [20, 300]:
-        make(os.path.join(out, "long-%d.docx" % pages), pages)
+    for spec in sys.argv[2:] or ["20", "300"]:
+        if spec.isdigit():
+            make(os.path.join(out, "long-%s.docx" % spec), int(spec))
+        else:  # table-N (one table of N rows) or pictures-N (N pages, a picture each)
+            kind, n = spec.split("-")
+            make(os.path.join(out, "%s.docx" % spec), int(n), kind)
 
 
 if __name__ == "__main__":

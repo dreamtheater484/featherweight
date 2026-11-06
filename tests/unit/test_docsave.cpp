@@ -12,6 +12,7 @@
 #include "doc/docx/Blank.h"
 #include "doc/docx/Docx.h"
 #include "doc/docx/Save.h"
+#include "doc/edit/Forms.h"
 #include "pkg/Check.h"
 #include "pkg/XmlDom.h"
 #include "pkg/Zip.h"
@@ -80,6 +81,10 @@ TEST(Blank_Templates) {
     int bullets = 0;
     for (uint32_t p : main) bullets += doc->ResolvedPara(p).numId == "1";
     CHECK_EQ(bullets, kind == Template::Cv ? 5 : kind == Template::Report ? 2 : 0);
+    // Each placeholder is a content control showing its placeholder: one click selects it, typing replaces it.
+    const auto controls = fw::doc::edit::ContentControls(*doc, doc->MainStory());
+    CHECK(controls.size() >= 5);
+    for (const auto& c : controls) CHECK(c.placeholder && c.Typable());
     // The model writes it back as it was, and again after the body is rewritten.
     std::vector<uint8_t> same, rewritten;
     CHECK(fw::doc::docx::Serialize(*doc, {}, same).Ok() && same == bytes);

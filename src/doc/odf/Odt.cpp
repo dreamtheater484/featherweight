@@ -516,7 +516,15 @@ int Converter::Num(std::string_view listStyle, bool restart) {
       lvls += "<w:lvl w:ilvl=\"" + std::to_string(lvl) + "\"><w:start w:val=\"" + std::to_string(start) +
               "\"/><w:numFmt w:val=\"" + fmt + "\"/><w:lvlText w:val=\"" + Esc(text) +
               "\"/><w:lvlJc w:val=\"left\"/><w:pPr><w:ind w:left=\"" + std::to_string(std::clamp(left, 0, 31680)) +
-              "\" w:hanging=\"" + std::to_string(std::clamp(hanging, 0, 31680)) + "\"/></w:pPr></w:lvl>";
+              "\" w:hanging=\"" + std::to_string(std::clamp(hanging, 0, 31680)) + "\"/></w:pPr>";
+      // The label's font: a bullet in Symbol or Wingdings (Word's own .odt files) needs it.
+      RunProps label;
+      label.Read(def.child("style:text-properties"), fonts_);
+      if (!label.font.empty()) {
+        const std::string f = Esc(label.font);
+        lvls += "<w:rPr><w:rFonts w:ascii=\"" + f + "\" w:hAnsi=\"" + f + "\" w:cs=\"" + f + "\" w:hint=\"default\"/></w:rPr>";
+      }
+      lvls += "</w:lvl>";
     }
     it = abstractOf_.emplace(key, static_cast<int>(abstracts_.size())).first;
     xml_node first;
