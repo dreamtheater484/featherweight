@@ -161,6 +161,7 @@ DocView::LinkPanel::LinkPanel(DocView& view) : v_(view) {
   };
   apply_.primary = true;
   apply_.onInvoke = [this] { Apply(); };
+  address_.onEnter = text_.onEnter = [this] { Apply(); };
   remove_.text = L"Remove link";
   remove_.onInvoke = [this] { Remove(); };
 }
@@ -171,9 +172,18 @@ std::vector<Control*> DocView::LinkPanel::Layout(const D2D1_RECT_F& body, float 
                     body, ui);
 }
 
+void DocView::LinkPanel::Draw(Canvas& c) {
+  DrawLabels(c);
+  if (focusWanted_) {
+    focusWanted_->TakeFocus();
+    focusWanted_ = nullptr;
+  }
+}
+
 void DocView::LinkPanel::Open() {
   const fw::doc::Document& doc = *v_.doc_;
   note_.clear();
+  focusWanted_ = &address_;
   places_.clear();
   std::vector<std::wstring> items;
   for (const Heading& h : v_.Headings()) {
@@ -263,6 +273,7 @@ DocView::BookmarkPanel::BookmarkPanel(DocView& view) : v_(view) {
   add_.text = L"Add";
   add_.primary = true;
   add_.onInvoke = [this] { Add(); };
+  name_.onEnter = [this] { Add(); };
   goTo_.text = L"Go to";
   goTo_.onInvoke = [this] { GoTo(); };
   delete_.text = L"Delete";
@@ -277,9 +288,18 @@ std::vector<Control*> DocView::BookmarkPanel::Layout(const D2D1_RECT_F& body, fl
                     body, ui);
 }
 
+void DocView::BookmarkPanel::Draw(Canvas& c) {
+  DrawLabels(c);
+  if (focusWanted_) {
+    focusWanted_->TakeFocus();
+    focusWanted_ = nullptr;
+  }
+}
+
 void DocView::BookmarkPanel::Open() {
   note_.clear();
   name_.SetText(L"");
+  focusWanted_ = &name_;
   Refresh();
 }
 

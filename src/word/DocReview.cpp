@@ -325,7 +325,12 @@ DocView::ReviewPanel::ReviewPanel(DocView& view) : v_(view) {
   };
   box_.label = L"Comment";
   box_.autoComplete = false;
-  box_.onCommit = [this](const std::wstring&, int) {};  // Enter keeps the text; the buttons post it
+  box_.onCommit = [this](const std::wstring&, int) {};
+  // Enter posts: a reply when a card was picked, else the new comment (or the edited one).
+  box_.onEnter = [this] {
+    if (replying_ && editing_.empty() && !picked_.empty()) Reply();
+    else Post();
+  };
   post_.text = L"Comment";
   post_.primary = true;
   post_.onInvoke = [this] { Post(); };
@@ -404,6 +409,7 @@ void DocView::ReviewPanel::Refresh() {
   reply_.enabled = edit_.enabled = resolve_.enabled = delete_.enabled = editing && picked;
   resolve_.text = done ? L"Reopen" : L"Resolve";
   post_.text = editing_.empty() ? L"Comment" : L"Save";
+  box_.label = !editing_.empty() ? L"Comment" : replying_ && picked ? L"Reply" : L"Comment";
   if (cards_.empty()) note_ = editing ? L"No comments yet. Select text and type one above." : L"No comments.";
   else if (note_.starts_with(L"No comments")) note_.clear();
 }
@@ -503,6 +509,11 @@ void DocView::ReviewPanel::Pick(int card) {
   picked_ = cards_[static_cast<size_t>(card)].id;
   editing_.clear();
   Refresh();
+  // The keyboard goes to the box, for a reply (as Word's thread has its reply box).
+  if (box_.enabled) {
+    replying_ = true;
+    focusWanted_ = &box_;
+  }
   for (const auto& c : v_.doc_->Comments())
     if (c.id == picked_) {
       const Pos from = c.start.para != kNone ? c.start : c.reference;
@@ -514,6 +525,7 @@ void DocView::ReviewPanel::Pick(int card) {
 
 void DocView::ReviewPanel::StartComment() {
   editing_.clear();
+  replying_ = false;
   Refresh();
   box_.SetText(L"");
   focusWanted_ = &box_;
