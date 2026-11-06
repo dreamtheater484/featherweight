@@ -295,6 +295,44 @@ TEST(Layout_PageBreakBeforeDropsTheSpaceBefore) {
   CHECK_NEAR(three->top, one->top + 24.0f, 0.05f);
 }
 
+TEST(Layout_NoAutomaticSpacingWithoutHTMLSpacing) {
+  // A has 5 pt after and automatic spacing after, B 6 pt before. HTML spacing: the larger of
+  // 14 and 6; with w:doNotUseHTMLParagraphAutoSpacing Word ignores the automatic spacing: 5 + 6.
+  const std::string body = P("A", "<w:spacing w:after=\"100\" w:afterAutospacing=\"1\"/>") + P("B", "<w:spacing w:before=\"120\"/>");
+  Doc html = Make(body);
+  Doc sum = Make(body, "<w:compat><w:doNotUseHTMLParagraphAutoSpacing/></w:compat>");
+  REQUIRE(html.layout && sum.layout);
+  const LineBox *a = Find(html, u"A"), *b = Find(html, u"B");
+  const LineBox *a2 = Find(sum, u"A"), *b2 = Find(sum, u"B");
+  REQUIRE(a && b && a2 && b2);
+  CHECK_NEAR(b->top - (a->top + a->height), 14.0f, 0.05f);
+  CHECK_NEAR(b2->top - (a2->top + a2->height), 11.0f, 0.05f);
+}
+
+TEST(Layout_AColumnBreakNeedNotFitItsColumn) {
+  // Column one full to the last line, then a paragraph that starts with a column break: the
+  // break's empty line stays in column one, and the text after it starts column two.
+  const std::string cols = "<w:cols w:num=\"2\" w:space=\"200\"/>";
+  std::string probeBody;
+  for (int i = 0; i < 40; ++i) probeBody += P("f" + std::to_string(i));
+  Doc probe = Make(probeBody + SmallPage(cols));
+  REQUIRE(probe.layout);
+  size_t perColumn = 0;
+  for (const LineBox& l : probe.page(0).lines)
+    if (l.story == fw::LayoutStory::Body && l.x < 90) ++perColumn;
+  REQUIRE(perColumn > 2);
+  std::string body;
+  for (size_t i = 0; i < perColumn; ++i) body += P("f" + std::to_string(i));
+  body += "<w:p><w:r><w:br w:type=\"column\"/></w:r><w:r><w:t>Right</w:t></w:r></w:p>";
+  Doc d = Make(body + SmallPage(cols));
+  REQUIRE(d.layout);
+  size_t page = 9;
+  const LineBox* right = Find(d, u"Right", &page);
+  REQUIRE(right);
+  CHECK_EQ(page, 0u);
+  CHECK(right->x > 90);
+}
+
 TEST(Layout_SpacingBetweenParagraphsIsTheLarger) {
   const std::string body = P("A", "<w:spacing w:after=\"240\"/>") + P("B", "<w:spacing w:before=\"480\"/>");
   Doc html = Make(body);

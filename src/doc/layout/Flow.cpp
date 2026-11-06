@@ -825,9 +825,11 @@ struct Flow {
       estimate = h;
       std::vector<uint32_t> newNotes;
       float noteH = pt.notes.empty() ? 0 : NotesFor(pt, line, &newNotes);
-      // A line with nothing but a page break goes on this page even when it's full: Word never
-      // starts a page just for the break.
-      const bool breakOnly = line.ending == text::LineEnd::PageBreak && Blank(pt, line);
+      // A line with nothing but a page or column break goes on this page or column even when it's
+      // full: Word never starts a page or column just for the break (the region-3 QAPP's
+      // attachment page).
+      const bool breakOnly =
+          (line.ending == text::LineEnd::PageBreak || line.ending == text::LineEnd::ColumnBreak) && Blank(pt, line);
       const float hang = e.Hang(pt, line, h);
       // Above footnotes, a paragraph's last line needs room for its space after too (measured on
       // the corpus: Word moves the line to the next page instead).

@@ -14,9 +14,10 @@ The fidelity piece of D5 (`docs/d5-plan.md`). Measured with `fwtool compare` aga
 | Merged with `claude/d5-int` e38b850 (equations, drawings in the dump, `.doc` import) | 98 (90.7 %) | 107,255 (96.6 %) |
 | A paragraph that only holds a section break gets no list number (tudresden 35 → 33 pages, as in Word; QAPP 64 → 63, Word 62) | 99 (91.7 %) | 107,259 (96.6 %) |
 | In mode 15, a list level that shows no number has no tab after it; a page break before doesn't keep the space before at the page top (short-form contract 77 → 76 pages, as in Word) | 100 (92.6 %) | 107,415 (96.7 %) |
+| With `doNotUseHTMLParagraphAutoSpacing`, no automatic spacing; a line with only a column break needn't fit its column (region-3 QAPP 63 → 62 pages, as in Word) | 101 (93.5 %) | 107,477 (96.8 %) |
 | Target | 105 (97 %) | 108,843 (98 %) |
 
-From 766982d on, the targets (below) are the measure. With the last step: **140 of 152 (92.1 %), 110,011 of 114,076 lines (96.4 %)**; copies 168 of 258 (65.1 %), 210,703 of 239,892 lines (87.8 %).
+From 766982d on, the targets (below) are the measure. With the last step: **141 of 152 (92.8 %), 110,073 of 114,076 lines (96.5 %)**; copies 169 of 258 (65.5 %), 210,765 of 239,892 lines (87.9 %).
 
 ## What the targets count
 
@@ -109,9 +110,9 @@ Modes 11, 12 and 14 cost 140 lines in all, so the mode work goes to the flags th
 - **Open: EPA brownfields QAPP (1,150 lines missing).** Its reference PDF has 171 pages, while Word itself counts 160. Two findings there are held back until they help the totals:
   - Table borders: Word's rows are taller by the border width (0.5 pt rows in the acronym table: 12.56 pt against our 12.07 pt). Counting table and style borders makes pages 6–9 match exactly. On its own it costs 98 lines, because the page before is one row short.
   - Space before after a section break: Word drops it at the top of some pages after a section break and keeps it on others with the same structure.
-- **Open: usgov region-3 QAPP (62 pages, ours 63).**
-  - On page 14, Word's schedule table rows are about 0.5 pt taller each, the border width; the drift is 5.6 pt by the end of the table.
-  - That pushes Word's A6 heading to page 15. We fit 55 lines on that page, Word 43.
-  - Counting table and style borders as room (re-measured on 766982d) changes nothing here and costs 78 target lines, mostly in EPA. So the extra page comes from later in the document; still to find.
+- **The region-3 QAPP's extra page** came from its attachment page (55), a continuous two-column section with a column break in it. Two causes, both needed to fix it:
+  - With `w:doNotUseHTMLParagraphAutoSpacing`, Word ignores `w:afterAutospacing` and `w:beforeAutospacing` and uses the spacing set: 5 pt after, not 14, so column one ends 9 pt higher.
+  - A line with nothing but a column break stays at the foot of its column even when the column is full, as a page break's line does. We had moved it to column two, so the text after the break started a new page.
+  - Its rows on page 14 are still 0.5 pt shorter than Word's (see table borders below).
 - **Open: worldbank-sustainable (38 pages, ours 37).** A table row splits differently across pages 11–12, so the page-break paragraph after the table fits on our page 12 but not on Word's.
 - **Rounding of line heights.** Rounding font metrics to device units (96 to 1440 dpi) changes ±20 lines and doesn't help. Word's PDF positions sit on a 0.12 pt grid. acuk-example-cv's last two lines miss page 1 because of a drift of 0.7 pt that is still unexplained.
