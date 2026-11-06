@@ -32,11 +32,12 @@ const wchar_t* HashId(std::string_view name) {
   if (name == "SHA256") return BCRYPT_SHA256_ALGORITHM;
   if (name == "SHA384") return BCRYPT_SHA384_ALGORITHM;
   if (name == "SHA512") return BCRYPT_SHA512_ALGORITHM;
+  if (name == "MD5") return BCRYPT_MD5_ALGORITHM;  // RC4 in .doc files
   return nullptr;
 }
 
 uint32_t HashSize(std::string_view name) {
-  return name == "SHA1" ? 20 : name == "SHA256" ? 32 : name == "SHA384" ? 48 : name == "SHA512" ? 64 : 0;
+  return name == "SHA1" ? 20 : name == "SHA256" ? 32 : name == "SHA384" ? 48 : name == "SHA512" ? 64 : name == "MD5" ? 16 : 0;
 }
 
 void Wipe(Bytes& b) {
@@ -441,6 +442,50 @@ Bytes TransformInfo() {
   return b;
 }
 
+// ---- .doc: RC4 in 512-byte blocks, each with a key of its own ([MS-OFFCRYPTO] 2.3.6, 2.3.5).
+
+constexpr size_t kRc4Block = 512;
+constexpr size_t kFibBase = 68;  // the start of WordDocument that isn't encrypted
+
+bool Rc4(std::span<const uint8_t> key, std::span<const uint8_t> in, uint8_t* out) {
+  BCRYPT_ALG_HANDLE alg = nullptr;
+  BCRYPT_KEY_HANDLE k = nullptr;
+  ULONG done = 0;
+  const bool ok = BCRYPT_SUCCESS(BCryptOpenAlgorithmProvider(&alg, BCRYPT_RC4_ALGORITHM, nullptr, 0)) &&
+                  BCRYPT_SUCCESS(BCryptGenerateSymmetricKey(alg, &k, nullptr, 0, const_cast<uint8_t*>(key.data()), ULONG(key.size()), 0)) &&
+                  BCRYPT_SUCCESS(BCryptDecrypt(k, const_cast<uint8_t*>(in.data()), ULONG(in.size()), nullptr, nullptr, 0, out,
+                                               ULONG(in.size()), &done, 0)) &&
+                  done == in.size();
+  if (k) BCryptDestroyKey(k);
+  if (alg) BCryptCloseAlgorithmProvider(alg, 0);
+  return ok;
+}
+
+// How each block's key is made from the password.
+struct DocKey {
+  bool cryptoApi = false;  // SHA-1 (RC4 CryptoAPI) or MD5 (RC4)
+  size_t keyBytes = 16;
+  Bytes base;  // CryptoAPI: H(salt + password). RC4: the truncated hash of the salted password.
+  ~DocKey() { Wipe(base); }
+  Bytes Block(uint32_t block) const {
+    Hasher h(cryptoApi ? "SHA1" : "MD5");
+    Bytes key = h.Add(base).Add(Le32(block)).Finish();
+    if (!h.Ok()) return {};
+    if (!cryptoApi) return key;  // all 16 bytes of the MD5
+    if (keyBytes == 5) return Fit(Fit(std::move(key), 5, 0), 16, 0);  // 40-bit: padded with zeros to 128
+    return Fit(std::move(key), keyBytes, 0);
+  }
+};
+
+bool DecryptBlocks(const DocKey& key, Bytes& stream) {
+  for (size_t at = 0; at < stream.size(); at += kRc4Block) {
+    const Bytes k = key.Block(uint32_t(at / kRc4Block));
+    const size_t n = std::min(kRc4Block, stream.size() - at);
+    if (k.empty() || !Rc4(k, std::span(stream).subspan(at, n), stream.data() + at)) return false;
+  }
+  return true;
+}
+
 std::string Attr(const char* name, const std::string& value) { return std::string(" ") + name + "=\"" + value + "\""; }
 std::string CipherAttrs(size_t saltBytes, size_t keyBytes, const std::string& hash) {
   return Attr("saltSize", std::to_string(saltBytes)) + Attr("blockSize", std::to_string(kBlock)) +
@@ -552,6 +597,92 @@ std::vector<uint8_t> Encrypt(std::span<const uint8_t> package, const Key& key) {
                             {"\x06" "DataSpaces/TransformInfo/StrongEncryptionTransform/\x06Primary", transform},
                             {"EncryptionInfo", info},
                             {"EncryptedPackage", encrypted}});
+}
+
+bool IsEncryptedDoc(const CompoundFile& file) {
+  const auto word = file.Stream("WordDocument");
+  return word && word->size() >= kFibBase && (U16(&(*word)[0x0A]) & 0x0100);
+}
+
+Result DecryptDoc(const CompoundFile& file, std::wstring_view password, DocStreams& out) {
+  out = {};
+  auto word = file.Stream("WordDocument");
+  if (!word || word->size() < kFibBase) return Result::Damaged;
+  const uint16_t flags = U16(&(*word)[0x0A]);
+  if (!(flags & 0x0100)) return Result::Damaged;      // not encrypted
+  if (flags & 0x8000) return Result::Unsupported;     // XOR obfuscation
+  out.table = flags & 0x0200 ? "1Table" : "0Table";
+  auto table = file.Stream(out.table);
+  const uint32_t lKey = U32(&(*word)[0x0E]);  // the encryption header's size
+  if (!table || lKey < 52 || lKey > table->size()) return Result::Damaged;
+  const uint8_t* h = table->data();
+  const uint16_t major = U16(h), minor = U16(h + 2);
+
+  DocKey key;
+  std::span<const uint8_t> salt, verifier, verifierHash;
+  if (major == 1 && minor == 1) {
+    // RC4: MD5 of the password, salted 16 times over.
+    salt = std::span(h + 4, 16);
+    verifier = std::span(h + 20, 16);
+    verifierHash = std::span(h + 36, 16);
+    Hasher md5("MD5");
+    Bytes h0 = md5.Add(PasswordBytes(password)).Finish();
+    Bytes buffer;
+    for (int i = 0; i < 16; ++i) {
+      buffer.insert(buffer.end(), h0.begin(), h0.begin() + 5);
+      buffer.insert(buffer.end(), salt.begin(), salt.end());
+    }
+    key.base = Fit(md5.Add(buffer).Finish(), 5);
+    Wipe(h0), Wipe(buffer);
+    if (!md5.Ok()) return Result::Unsupported;
+  } else if (minor == 2 && major >= 2 && major <= 4) {
+    // RC4 CryptoAPI: SHA-1 of the salted password.
+    const uint32_t eflags = U32(h + 4), headerSize = U32(h + 8);
+    if ((eflags & 0x24) != 0x04) return Result::Unsupported;  // CryptoAPI, not AES
+    if (headerSize < 32 || 12 + uint64_t(headerSize) + 4 + 16 + 16 + 4 + 20 > lKey) return Result::Damaged;
+    const uint8_t* eh = h + 12;
+    const uint32_t algId = U32(eh + 8), algHash = U32(eh + 12);
+    uint32_t keyBits = U32(eh + 16);
+    if (keyBits == 0) keyBits = 40;
+    if ((algId != 0 && algId != 0x6801) || (algHash != 0 && algHash != 0x8004) || keyBits < 40 || keyBits > 128 || keyBits % 8)
+      return Result::Unsupported;
+    const uint8_t* v = eh + headerSize;
+    if (U32(v) != 16 || U32(v + 36) != 20) return Result::Damaged;
+    salt = std::span(v + 4, 16);
+    verifier = std::span(v + 20, 16);
+    verifierHash = std::span(v + 40, 20);
+    key.cryptoApi = true;
+    key.keyBytes = keyBits / 8;
+    Hasher sha1("SHA1");
+    key.base = sha1.Add(salt).Add(PasswordBytes(password)).Finish();
+    if (!sha1.Ok()) return Result::Unsupported;
+  } else {
+    return Result::Unsupported;
+  }
+
+  // The verifier and its hash, one RC4 stream with block 0's key.
+  Bytes check(verifier.begin(), verifier.end());
+  check.insert(check.end(), verifierHash.begin(), verifierHash.end());
+  const Bytes k0 = key.Block(0);
+  if (k0.empty() || !Rc4(k0, Bytes(check), check.data())) return Result::Unsupported;
+  Hasher h2(key.cryptoApi ? "SHA1" : "MD5");
+  const Bytes expected = h2.Add(std::span(check).first(16)).Finish();
+  const bool right = std::equal(expected.begin(), expected.end(), check.begin() + 16);
+  Wipe(check);
+  if (!right) return Result::WrongPassword;
+
+  // Whole streams, block numbers from their start; then the parts that weren't encrypted back.
+  Bytes wordPlain = *word, tablePlain = *table;
+  if (!DecryptBlocks(key, wordPlain) || !DecryptBlocks(key, tablePlain)) return Result::Unsupported;
+  std::copy(word->begin(), word->begin() + kFibBase, wordPlain.begin());
+  std::copy(table->begin(), table->begin() + lKey, tablePlain.begin());
+  if (auto data = file.Stream("Data")) {
+    out.data = std::move(*data);
+    if (!DecryptBlocks(key, out.data)) return Result::Unsupported;
+  }
+  out.wordDocument = std::move(wordPlain);
+  out.tableStream = std::move(tablePlain);
+  return Result::Ok;
 }
 
 }  // namespace fw::pkg::crypto

@@ -46,5 +46,17 @@ Key NewKey(std::wstring_view password);
 // cryptography fails.
 std::vector<uint8_t> Encrypt(std::span<const uint8_t> package, const Key& key);
 
+// Password-protected .doc files: RC4 (Word 97) or RC4 CryptoAPI (Word 2002 and later), in
+// 512-byte blocks. Decrypted, the streams are what the .doc reader reads; the FIB keeps its
+// fEncrypted flag and lKey, and the table stream keeps the encryption header at its start, which
+// nothing in the FIB points into.
+struct DocStreams {
+  std::string table;  // "0Table" or "1Table"
+  std::vector<uint8_t> wordDocument, tableStream, data;  // data: empty without a Data stream
+};
+// True when the compound file is a .doc whose FIB says it is encrypted.
+bool IsEncryptedDoc(const CompoundFile& file);
+Result DecryptDoc(const CompoundFile& file, std::wstring_view password, DocStreams& out);
+
 }  // namespace crypto
 }  // namespace fw::pkg
