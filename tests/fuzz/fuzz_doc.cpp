@@ -41,7 +41,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       o += 5 + n;
     }
   }
-  const msdoc::StreamFn get = [&](std::string_view name) -> std::optional<std::vector<uint8_t>> {
+  const doc::msdoc::StreamFn get = [&](std::string_view name) -> std::optional<std::vector<uint8_t>> {
     if (cf) return cf->Stream(name);
     auto it = streams.find(std::string(name));
     if (it == streams.end()) return std::nullopt;
