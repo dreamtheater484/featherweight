@@ -1677,13 +1677,19 @@ void Converter::EmitRuns(uint32_t cp0, uint32_t cp1, Story& story, std::string& 
     const Rpr r = ChpAt(cp);
     const std::string rPr = RprXml(r);
     const bool deleted = r.del;
-    std::string wrapOpen, wrapClose;
-    if (r.ins) wrapOpen = "<w:ins" + RevisionAttrs(r.ibst, r.dttm) + ">", wrapClose = "</w:ins>";
-    if (r.del) {
-      wrapOpen += "<w:del" + RevisionAttrs(r.ibstDel ? r.ibstDel : r.ibst, r.dttmDel ? r.dttmDel : r.dttm) + ">";
-      wrapClose = "</w:del>" + wrapClose;
-    }
-    auto run = [&](const std::string& content) { out += wrapOpen + "<w:r>" + rPr + content + "</w:r>" + wrapClose; };
+    // A tracked insertion or deletion holds every run of the stretch (text, tabs, field characters):
+    // one w:ins or w:del, opened at the first run, so that its w:id isn't repeated.
+    std::string wrapClose;
+    auto run = [&](const std::string& content) {
+      if (wrapClose.empty() && (r.ins || r.del)) {
+        if (r.ins) out += "<w:ins" + RevisionAttrs(r.ibst, r.dttm) + ">", wrapClose = "</w:ins>";
+        if (r.del) {
+          out += "<w:del" + RevisionAttrs(r.ibstDel ? r.ibstDel : r.ibst, r.dttmDel ? r.dttmDel : r.dttm) + ">";
+          wrapClose = "</w:del>" + wrapClose;
+        }
+      }
+      out += "<w:r>" + rPr + content + "</w:r>";
+    };
     std::u16string text;
     auto flush = [&]() {
       if (text.empty()) return;
@@ -1762,6 +1768,7 @@ void Converter::EmitRuns(uint32_t cp0, uint32_t cp1, Story& story, std::string& 
       text.push_back(ch);
     }
     flush();
+    out += wrapClose;
     cp = end;
   }
 }
