@@ -1,0 +1,66 @@
+#pragma once
+
+#include <windows.h>
+
+#include <functional>
+#include <string>
+#include <vector>
+
+#include "ui/Uia.h"
+#include "ui/Widgets.h"
+
+struct TabInfo {
+  std::wstring title;
+  std::wstring path;
+  bool modified = false;
+};
+
+// The custom title bar: app mark, tabs, new-tab button and the caption buttons.
+class TitleBar {
+ public:
+  enum class Part { None, Caption, Tab, TabClose, NewTab, Minimize, Maximize, Close };
+  struct Hit {
+    Part part = Part::None;
+    int index = -1;
+  };
+  struct Action {
+    Part part = Part::None;
+    int index = -1;
+  };
+
+  TitleBar();
+  void Layout(const RECT& rc, float ui, int tabCount);
+  void Draw(gfx::Canvas& c, const std::vector<TabInfo>& tabs, int active, bool windowActive, bool maximized);
+  Hit HitTest(int x, int y) const;
+  int Height() const { return rc_.bottom - rc_.top; }
+
+  bool OnMouseMove(int x, int y);
+  void OnMouseLeave();
+  void OnMouseDown(int x, int y, int button);
+  Action OnMouseUp(int x, int y, int button);
+  std::wstring TooltipAt(int x, int y, const std::vector<TabInfo>& tabs) const;
+  // Rectangle of a caption button in client coordinates (for Snap Layouts hit-testing).
+  const D2D1_RECT_F& MaxButtonRect() const { return max_.rc; }
+  // ＋ opens a file until an editor ships; then it opens a menu (`open` while it shows) of New choices and Open.
+  void SetNewTabMenu(bool menu, bool open);
+  const D2D1_RECT_F& NewTabRect() const { return newTab_.rc; }
+  // UI Automation: the tabs and the buttons, under `parent`. `act` does what a click on a part would.
+  void Describe(uia::Tree& t, int parent, const std::wstring& caption, const std::vector<TabInfo>& tabs, int active,
+                bool maximized, const std::function<void(Part, int)>& act) const;
+
+ private:
+  D2D1_RECT_F TabRect(int i) const;
+  D2D1_RECT_F TabCloseRect(int i) const;
+
+  RECT rc_{};
+  float ui_ = 1;
+  int tabCount_ = 0;
+  float tabsLeft_ = 0, tabW_ = 0;
+  Button min_, max_, close_, newTab_;
+  bool newTabMenu_ = false, newTabOpen_ = false;
+  ButtonSet buttons_;
+  std::vector<Anim> tabHover_;
+  int hoverTab_ = -1;
+  bool hoverClose_ = false;
+  Hit pressed_;
+};

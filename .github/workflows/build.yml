@@ -1,7 +1,7 @@
 name: build
 
-# Builds and runs the unit tests on every push. Packaging and releases happen locally
-# (scripts/release.ps1), not on GitHub.
+# Builds and runs the unit tests, and fuzzes each parser for a minute, on every push. Packaging
+# and releases happen locally (scripts/release.ps1), not on GitHub.
 on:
   push:
   pull_request:
@@ -27,8 +27,70 @@ jobs:
       - name: Unit tests
         run: ctest --test-dir build -C Release --output-on-failure
 
+      - name: Round-trip and check the office corpus (fwtool)
+        shell: pwsh
+        run: |
+          $fwtool = 'build\tools\fwtool\Release\fwtool.exe'
+          & $fwtool roundtrip tests\office\generated tests\office\edge; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $fwtool roundtrip --reserialize-all tests\office\generated tests\office\edge; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $fwtool roundtrip --expect-reject tests\office\malicious; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $fwtool check tests\office\generated tests\office\edge; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $fwtool check --expect-reject tests\office\broken; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
       - name: Smoke test (render a PDF off-screen)
         shell: pwsh
         run: |
           $p = Start-Process -FilePath build\Release\Featherweight.exe -ArgumentList '--snapshot','smoke.png','tests\pdfs\text.pdf' -PassThru -Wait
           if ($p.ExitCode -ne 0 -or -not (Test-Path smoke.png)) { throw "snapshot failed ($($p.ExitCode))" }
+
+  fuzz:
+    # Short fuzz runs (plan §10, §12): each target for 60 s, seeded from tests/fuzz/seeds and the
+    # office corpus, with AddressSanitizer. A crash fails the job and uploads the input that caused
+    # it. tests/fuzz/run-fuzzers.ps1 runs the same way locally.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache PDFium
+        uses: actions/cache@v4
+        with:
+          path: third_party/pdfium
+          key: pdfium-${{ hashFiles('cmake/FetchPdfium.cmake') }}
+
+      - name: Configure
+        run: cmake -S . -B build-fuzz -DFW_FUZZ=ON
+
+      - name: Build the fuzz targets
+        run: cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula
+
+      # VS 2022 links AddressSanitizer's runtime as a DLL: put its folder on the PATH.
+      - name: Find the AddressSanitizer runtime
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $version = (Get-Content "$vs\VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt").Trim()
+          $bin = "$vs\VC\Tools\MSVC\$version\bin\Hostx64\x64"
+          if (-not (Test-Path "$bin\clang_rt.asan_dynamic-x86_64.dll")) { throw "No AddressSanitizer runtime in $bin" }
+          Add-Content $env:GITHUB_PATH $bin
+
+      - name: Replay the seeds and regressions
+        run: ctest --test-dir build-fuzz -C RelWithDebInfo -R fuzz_ --output-on-failure
+
+      - name: Restore the inputs earlier runs found
+        uses: actions/cache@v4
+        with:
+          path: fuzz-work
+          key: fuzz-work-${{ github.run_id }}
+          restore-keys: fuzz-work-
+
+      - name: Fuzz each target for 60 s
+        shell: pwsh
+        run: tests/fuzz/run-fuzzers.ps1 -BuildDir build-fuzz -Seconds 60 -WorkDir fuzz-work -ArtifactDir fuzz-artifacts
+
+      - name: Upload the inputs that failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-findings
+          path: fuzz-artifacts
+          if-no-files-found: ignore

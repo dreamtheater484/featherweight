@@ -22,6 +22,11 @@ std::wstring InstalledDir() {
   return buf;
 }
 
+// PDF's offer keeps its 0.9 key; the other kinds get theirs once their viewer ships.
+std::wstring OfferKey(const fw::FileKindInfo& k) {
+  return k.kind == fw::FileKind::Pdf ? L"OfferedDefaultApp" : std::wstring(L"OfferedDefaultApp") + k.name;
+}
+
 }  // namespace
 
 void Settings::Load() {
@@ -36,8 +41,12 @@ void Settings::Load() {
   } else {
     dir = util::AppDataDir();
   }
-  path_ = dir + L"\\Featherweight.ini";
+  LoadFrom(dir + L"\\Featherweight.ini");
+}
 
+void Settings::LoadFrom(const std::wstring& path) {
+  path_ = path;
+  ini_ = fw::Ini();
   std::string data;
   if (util::ReadFileBytes(path_, data, 4u << 20)) ini_.Parse(data);
 
@@ -51,7 +60,8 @@ void Settings::Load() {
   lastUpdateCheck = ini_.GetInt64(kGeneral, L"LastUpdateCheck", 0);
   skippedVersion = ini_.Get(kGeneral, L"SkippedVersion");
   lastRunVersion = ini_.Get(kGeneral, L"LastRunVersion");
-  offeredDefaultApp = ini_.GetBool(kGeneral, L"OfferedDefaultApp", false);
+  for (const fw::FileKindInfo& k : fw::FileKinds())
+    offeredDefaultApp[static_cast<int>(k.kind)] = ini_.GetBool(kGeneral, OfferKey(k), false);
 
   auto parts = fw::Split(ini_.Get(kGeneral, L"Window"), L',');
   if (parts.size() == 4) {
@@ -83,6 +93,7 @@ void Settings::Load() {
 }
 
 bool Settings::Save() {
+  if (path_.empty()) return false;  // never loaded (snapshots, the widget gallery): nowhere to save
   ini_.Set(kGeneral, L"Theme",
            theme == ThemeSetting::Light ? L"light" : theme == ThemeSetting::Dark ? L"dark" : L"system");
   ini_.SetBool(kGeneral, L"InvertPages", invert);
@@ -92,7 +103,11 @@ bool Settings::Save() {
   ini_.SetInt(kGeneral, L"LastUpdateCheck", lastUpdateCheck);
   ini_.Set(kGeneral, L"SkippedVersion", skippedVersion);
   ini_.Set(kGeneral, L"LastRunVersion", lastRunVersion);
-  ini_.SetBool(kGeneral, L"OfferedDefaultApp", offeredDefaultApp);
+  for (const fw::FileKindInfo& k : fw::FileKinds()) {
+    const bool offered = offeredDefaultApp[static_cast<int>(k.kind)];
+    if (k.kind == fw::FileKind::Pdf || offered || ini_.Has(kGeneral, OfferKey(k)))
+      ini_.SetBool(kGeneral, OfferKey(k), offered);
+  }
   if (hasWindowRect) {
     ini_.Set(kGeneral, L"Window",
              std::to_wstring(windowRect.left) + L"," + std::to_wstring(windowRect.top) + L"," +

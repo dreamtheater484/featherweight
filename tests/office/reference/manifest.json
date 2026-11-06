@@ -1,0 +1,245 @@
+{
+    "made":  "2026-11-03",
+    "computer":  "Office reference PC (decision 19)",
+    "export":  "Word: the document without markup, for print, tagged; Excel: print areas; PowerPoint: slides",
+    "files":  [
+                  {
+                      "source":  "generated/formatting.xlsx",
+                      "sha256":  "51c2f708a7d29ec01c005152000f717ca864332793e1f32eaaff32264f914012",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "pdf":  "generated/formatting.xlsx.pdf",
+                      "pages":  1,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "generated/layouts.pptx",
+                      "sha256":  "2d47f39ba5f0abcb9312a5e92a6632c80e12934410577ba07cc2f92d300d8c70",
+                      "app":  "PowerPoint 16.0 (build 20326)",
+                      "pdf":  "generated/layouts.pptx.pdf",
+                      "pages":  11,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "generated/picture.xlsx",
+                      "sha256":  "62315e814064fbc2d809bd1043788f0e8756d91ce4ad11f9ddd6e9e57af65a6e",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "pdf":  "generated/picture.xlsx.pdf",
+                      "pages":  1,
+                      "fonts":  [
+                                    "Calibri"
+                                ]
+                  },
+                  {
+                      "source":  "generated/sections-headers.docx",
+                      "sha256":  "f9a967a9fbc8929eb6170c56e226e06b8cefc4bd5ae39c802aa917c27e3e1350",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  2,
+                      "pdf":  "generated/sections-headers.docx.pdf",
+                      "fonts":  [
+                                    "Calibri-Bold",
+                                    "Cambria"
+                                ]
+                  },
+                  {
+                      "source":  "generated/shapes-table-chart.pptx",
+                      "sha256":  "929996a5787779e8c5734ae2dbd717d15a826a394288ea1015524ac22a3bca91",
+                      "app":  "PowerPoint 16.0 (build 20326)",
+                      "pdf":  "generated/shapes-table-chart.pptx.pdf",
+                      "pages":  3,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "generated/sheets-chart-names.xlsx",
+                      "sha256":  "2a00a45cfda0f0ce7f24df2614dc5df769871646c3217e00fe1221e4a84c7364",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "pdf":  "generated/sheets-chart-names.xlsx.pdf",
+                      "pages":  3,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "generated/simple.docx",
+                      "sha256":  "6f18ec39ab311dc1d1c6ae7e8a9394d1940cfe5141bb656adff6a76e7fe47204",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  2,
+                      "pdf":  "generated/simple.docx.pdf",
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri-Bold",
+                                    "Cambria",
+                                    "Cambria-Bold",
+                                    "Cambria-Italic",
+                                    "SymbolMT"
+                                ]
+                  },
+                  {
+                      "source":  "generated/simple.pptx",
+                      "sha256":  "a9d670f7e9c170dd2e1364acb56ab11367490ccedc92c0488484c19a4916a9ce",
+                      "app":  "PowerPoint 16.0 (build 20326)",
+                      "pdf":  "generated/simple.pptx.pdf",
+                      "pages":  2,
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri",
+                                    "MS-Gothic"
+                                ]
+                  },
+                  {
+                      "source":  "generated/simple.xlsx",
+                      "sha256":  "d006cebb5da42c6e1134372d23fbf1ffd1b31d819dae964de867e3e09f01e226",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "pdf":  "generated/simple.xlsx.pdf",
+                      "pages":  1,
+                      "fonts":  [
+                                    "Calibri"
+                                ]
+                  },
+                  {
+                      "source":  "generated/styles-unicode-comments.docx",
+                      "sha256":  "c3e58dff5a915bdaf6b3bc844e949697e439891cc4a7fd58e54a4fd472eebaeb",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  1,
+                      "pdf":  "generated/styles-unicode-comments.docx.pdf",
+                      "fonts":  [
+                                    "Calibri-Bold",
+                                    "Cambria",
+                                    "Georgia-Italic",
+                                    "MalgunGothic",
+                                    "MS Mincho",
+                                    "SansSerifCollection",
+                                    "SegoeUIEmoji",
+                                    "TimesNewRomanPSMT"
+                                ]
+                  },
+                  {
+                      "source":  "generated/tables-images-links.docx",
+                      "sha256":  "3814c4d40c9d03d75e5f55c15c9169af6bd724a5a0e43e153c273afba095ac37",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  1,
+                      "pdf":  "generated/tables-images-links.docx.pdf",
+                      "fonts":  [
+                                    "Calibri-Bold",
+                                    "Cambria"
+                                ]
+                  },
+                  {
+                      "source":  "edge/alternate-content.docx",
+                      "sha256":  "6dd7eda5ca8740ac8b2073245d523a1b5ca5c99efd79e8c4dfd9f07fe28cae7e",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  2,
+                      "pdf":  "edge/alternate-content.docx.pdf",
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri-Bold",
+                                    "Cambria",
+                                    "Cambria-Bold",
+                                    "Cambria-Italic",
+                                    "SymbolMT"
+                                ]
+                  },
+                  {
+                      "source":  "edge/escaped-part-names.docx",
+                      "sha256":  "8fd437ccc26482df2a1048fced4dfabc771203ab872365b063f8b43642c3c8ee",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "error":  "The file appears to be corrupted."
+                  },
+                  {
+                      "source":  "edge/extlst.xlsx",
+                      "sha256":  "356597eac8a67003bbd698130335e0fcc8c0e1042830caba39e49de0464d5463",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "pdf":  "edge/extlst.xlsx.pdf",
+                      "pages":  1,
+                      "fonts":  [
+                                    "Calibri"
+                                ]
+                  },
+                  {
+                      "source":  "edge/unknown-namespaces-custom-xml.docx",
+                      "sha256":  "52453c0005b9982d2edd72a63fd9a2b2230798f2907530419f376848a9126c72",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  2,
+                      "pdf":  "edge/unknown-namespaces-custom-xml.docx.pdf",
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri-Bold",
+                                    "Cambria",
+                                    "Cambria-Bold",
+                                    "Cambria-Italic",
+                                    "SymbolMT"
+                                ]
+                  },
+                  {
+                      "source":  "edge/utf16-part.xlsx",
+                      "sha256":  "fb5d59eab7e07355ba0b63e0da3cd40beb574a6b36ac38694918d8c7dc3dd8ad",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "pdf":  "edge/utf16-part.xlsx.pdf",
+                      "pages":  1,
+                      "fonts":  [
+                                    "Calibri"
+                                ]
+                  },
+                  {
+                      "source":  "edge/zip-comments-extra.pptx",
+                      "sha256":  "c3ca6937e8ce24ddf0bfcab5c8dff8a5df4db2fa86d86adfc55040e705b9ed30",
+                      "app":  "PowerPoint 16.0 (build 20326)",
+                      "pdf":  "edge/zip-comments-extra.pptx.pdf",
+                      "pages":  2,
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri",
+                                    "MS-Gothic"
+                                ]
+                  },
+                  {
+                      "source":  "edge/zip-data-descriptors.docx",
+                      "sha256":  "5e13c2e2a9fcfb6fbf0094f8ebf1b015e0a3b5a67396094cca4b59e843ac6ee0",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  2,
+                      "pdf":  "edge/zip-data-descriptors.docx.pdf",
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri-Bold",
+                                    "Cambria",
+                                    "Cambria-Bold",
+                                    "Cambria-Italic",
+                                    "SymbolMT"
+                                ]
+                  },
+                  {
+                      "source":  "edge/zip-stored.xlsx",
+                      "sha256":  "a25130cd2e58cab39a3cca5e7e756c8137e10cd7c52871f94aada481eba6e159",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "pdf":  "edge/zip-stored.xlsx.pdf",
+                      "pages":  1,
+                      "fonts":  [
+                                    "Calibri"
+                                ]
+                  },
+                  {
+                      "source":  "edge/zip-zip64-headers.docx",
+                      "sha256":  "dcb4d4ec586ddb0bcb9a00a37e0b53121450a8552888a4db61af4e46d6e67698",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  2,
+                      "pdf":  "edge/zip-zip64-headers.docx.pdf",
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri-Bold",
+                                    "Cambria",
+                                    "Cambria-Bold",
+                                    "Cambria-Italic",
+                                    "SymbolMT"
+                                ]
+                  }
+              ]
+}

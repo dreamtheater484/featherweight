@@ -10,16 +10,17 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include "Commands.h"
 #include "FileAssoc.h"
-#include "Icons.h"
-#include "Print.h"
-#include "Theme.h"
 #include "Util.h"
 #include "Version.h"
 #include "core/Strings.h"
 #include "resource.h"
+#include "ui/Icons.h"
+#include "ui/Menu.h"
+#include "ui/Theme.h"
 
 #pragma comment(lib, "imm32.lib")
 
@@ -34,27 +35,9 @@ constexpr UINT_PTR kTimerCursorHide = 4;
 constexpr float kTitleH = 40;
 constexpr float kToolbarH = 48;
 
-std::wstring ZoomLabel(DocumentView* v) {
-  if (!v || !v->Ready()) return L"";
-  return fw::FormatPercent(v->Zoom());
-}
-
-void AppendItem(HMENU m, UINT id, const std::wstring& text, bool enabled = true, bool checked = false,
-                bool radio = false) {
-  MENUITEMINFOW mi{sizeof(mi)};
-  mi.fMask = MIIM_ID | MIIM_STRING | MIIM_STATE | MIIM_FTYPE;
-  mi.fType = MFT_STRING | (radio ? MFT_RADIOCHECK : 0);
-  mi.fState = (enabled ? MFS_ENABLED : MFS_DISABLED) | (checked ? MFS_CHECKED : 0);
-  mi.wID = id;
-  mi.dwTypeData = const_cast<wchar_t*>(text.c_str());
-  InsertMenuItemW(m, GetMenuItemCount(m), TRUE, &mi);
-}
-
-void AppendSeparator(HMENU m) { AppendMenuW(m, MF_SEPARATOR, 0, nullptr); }
-
-void AppendSubmenu(HMENU m, HMENU sub, const std::wstring& text, bool enabled = true) {
-  AppendMenuW(m, MF_POPUP | (enabled ? 0 : MF_GRAYED), reinterpret_cast<UINT_PTR>(sub), text.c_str());
-}
+using menu::AppendItem;
+using menu::AppendSeparator;
+using menu::AppendSubmenu;
 
 }  // namespace
 
@@ -73,10 +56,12 @@ int App::Run(const AppOptions& opts) {
                 MB_ICONERROR);
     return 1;
   }
+  if (opts.forceWarp) gpu::ForceWarp();
   snapshot_ = !opts.snapshotPath.empty();
+  snapshotWindow_ = snapshot_ && opts.snapshotWindow;
   settings_.Load();
   ThemeSetting themeSetting = settings_.theme;
-  if (snapshot_) {
+  if (snapshot_ || opts.widgetGallery) {
     settings_ = Settings();  // snapshots never use or change real settings
     if (opts.snapshotTheme == L"dark") themeSetting = ThemeSetting::Dark;
     else if (opts.snapshotTheme == L"light") themeSetting = ThemeSetting::Light;
@@ -89,7 +74,12 @@ int App::Run(const AppOptions& opts) {
   if (snapshot_) return RunSnapshot(opts);
 
   OpenFiles(opts.files);
-  StartupNotices();
+  if (opts.widgetGallery) {
+    OpenGallery();
+    RunScript(opts.script);  // the UI checks' recent files (the gallery's settings are sandboxed)
+  } else {
+    StartupNotices();
+  }
   Layout();
   int show = settings_.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
   if (opts.showCommand == SW_SHOWMINIMIZED || opts.showCommand == SW_MINIMIZE ||
@@ -97,7 +87,7 @@ int App::Run(const AppOptions& opts) {
     show = opts.showCommand;
   ShowWindow(hwnd_, show);
   UpdateWindow(hwnd_);
-  MaybeCheckForUpdates(false);
+  if (!opts.widgetGallery) MaybeCheckForUpdates(false);
   MessageLoop();
   return 0;
 }
@@ -149,11 +139,15 @@ bool App::CreateMainWindow(const AppOptions& opts) {
 
   notes_.Create(hwnd_);
   notes_.onAction = [this](NoteEditor::Action a) { FinishNote(a); };
+  uia_.Attach(hwnd_, [this](uia::Tree& t) { DescribeUia(t); });
+  toolbar_.SetWindow(hwnd_);
+  toolbar_.onCommand = [this](int cmd) { Execute(cmd); };
+  InitShell();
 
   // Search box: results update as you type.
   TextBox& sb = search_.Box();
   sb.onChange = [this] {
-    if (DocumentView* v = Active()) v->StartSearch(search_.Box().Text(), search_.MatchCase());
+    if (TabContent* v = Active()) v->StartSearch(search_.Box().Text(), search_.MatchCase());
   };
   sb.onEnter = [this](bool shift) { Execute(shift ? CmdFindPrev : CmdFindNext); };
   sb.onEscape = [this] { CloseSearch(); };
@@ -161,14 +155,14 @@ bool App::CreateMainWindow(const AppOptions& opts) {
   // Page box: type a number and press Enter; Up/Down step through pages.
   TextBox& pb = toolbar_.PageBox();
   pb.onEnter = [this](bool) {
-    DocumentView* v = Active();
+    PagedView* v = ActivePaged();
     int page = 0;
     if (v && fw::ParseInt(toolbar_.PageBox().Text(), page)) v->GoToPage(std::clamp(page, 1, v->PageCount()) - 1);
     FocusBox(nullptr);
   };
   pb.onEscape = [this] { FocusBox(nullptr); };
   pb.onKey = [this](UINT vk, bool) {
-    DocumentView* v = Active();
+    PagedView* v = ActivePaged();
     if (!v || (vk != VK_UP && vk != VK_DOWN)) return false;
     vk == VK_UP ? v->PrevPage() : v->NextPage();
     toolbar_.PageBox().SetText(std::to_wstring(v->CurrentPage() + 1), true);
@@ -203,8 +197,8 @@ bool App::Idle() {
   bool more = false;
   if (anim::Running() && anim::Now() - lastFrame_ >= 14) InvalidateRect(hwnd_, nullptr, FALSE);
   if (banner_.Tick()) InvalidateRect(hwnd_, nullptr, FALSE);
-  DocumentView* v = Active();
-  if (v && v->HasIdleWork() && (dc_ || EnsureTarget())) {
+  TabContent* v = Active();
+  if (v && v->HasIdleWork() && EnsureTarget()) {
     if (v->IdleWork(dc_.Get(), anim::Now() + 8)) InvalidateRect(hwnd_, nullptr, FALSE);
     more = v->HasIdleWork();
   }
@@ -215,43 +209,35 @@ bool App::Idle() {
 // Rendering
 
 bool App::EnsureTarget() {
+  // A device lost here or in another window takes everything made with it.
+  if (swap_.DC() && swap_.Generation() != gpu::Generation()) DiscardDeviceResources();
   if (dc_) return true;
-  if (snapshot_) return false;
-  RECT rc;
-  GetClientRect(hwnd_, &rc);
-  D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
-      D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE), 96.f,
-      96.f);
-  D2D1_HWND_RENDER_TARGET_PROPERTIES hp = D2D1::HwndRenderTargetProperties(
-      hwnd_, D2D1::SizeU(std::max(1L, rc.right), std::max(1L, rc.bottom)), D2D1_PRESENT_OPTIONS_IMMEDIATELY);
-  if (FAILED(D2D()->CreateHwndRenderTarget(props, hp, &target_))) return false;
-  target_.As(&dc_);
-  if (!dc_) {
-    target_.Reset();
-    return false;
-  }
+  if (snapshot_ && !snapshotWindow_) return false;
+  if (!swap_.Create(hwnd_)) return false;
+  dc_ = swap_.DC();
   return true;
 }
 
 void App::DiscardDeviceResources() {
   for (auto& t : tabs_) t->ReleaseDeviceResources();
+  canvas_.Release();
   dc_.Reset();
-  target_.Reset();
+  swap_.Reset();
 }
 
 void App::Paint() {
-  if (!EnsureTarget()) return;
+  if (!EnsureTarget() || !swap_.DC()) return;
   RECT rc;
   GetClientRect(hwnd_, &rc);
-  D2D1_SIZE_U size = target_->GetPixelSize();
-  if (size.width != static_cast<UINT32>(rc.right) || size.height != static_cast<UINT32>(rc.bottom))
-    target_->Resize(D2D1::SizeU(std::max(1L, rc.right), std::max(1L, rc.bottom)));
-  target_->BeginDraw();
+  swap_.Resize(static_cast<UINT>(rc.right), static_cast<UINT>(rc.bottom));
+  dc_->BeginDraw();
   RenderFrame(dc_.Get());
-  HRESULT hr = target_->EndDraw();
+  HRESULT hr = dc_->EndDraw();
+  if (SUCCEEDED(hr)) hr = swap_.Present();
   lastFrame_ = anim::Now();
   notes_.RepaintEdit();
-  if (hr == D2DERR_RECREATE_TARGET) {
+  if (gpu::IsDeviceLoss(hr)) {
+    gpu::DeviceLost();
     DiscardDeviceResources();
     InvalidateRect(hwnd_, nullptr, FALSE);
   }
@@ -268,26 +254,18 @@ RECT App::DocRect() const {
   RECT rc;
   GetClientRect(hwnd_, &rc);
   int top = TitleHeight() + (fullscreen_ || presentation_ ? 0 : ToolbarHeight());
-  return RECT{0, top, rc.right, rc.bottom};
+  // An editor's status bar and the side panel take the bottom and the right.
+  const int bottom = rc.bottom - (StatusBarShown() ? StatusBarHeight() : 0);
+  const int right = rc.right - (presentation_ ? 0 : panel_.Width(ui_));
+  return RECT{0, top, right, bottom};
 }
 
-ToolbarState App::CurrentToolbarState() {
-  ToolbarState s;
-  DocumentView* v = Active();
-  s.hasDoc = v != nullptr;
-  s.ready = v && v->Ready();
-  s.inverted = settings_.invert;
-  s.searchOpen = search_.IsOpen();
-  s.fullscreen = fullscreen_;
-  if (s.ready) {
-    s.modified = v->Modified();
-    s.canPrint = v->CanPrint();
-    s.page = v->CurrentPage();
-    s.pageCount = v->PageCount();
-    s.zoomText = ZoomLabel(v);
-    s.viewMode = v->ViewMode();
-  }
-  return s;
+ToolbarModel App::CurrentToolbar() {
+  ToolbarModel m;
+  TabContent* v = Active();
+  if (v && v->Ready()) v->BuildToolbar(m, ToolbarContext{settings_.invert, search_.IsOpen(), fullscreen_});
+  NameToolbarItems(m);
+  return m;
 }
 
 void App::Layout() {
@@ -297,19 +275,21 @@ void App::Layout() {
   const int titleH = TitleHeight();
   const int toolH = ToolbarHeight();
   title_.Layout(RECT{0, 0, rc.right, titleH}, ui_, static_cast<int>(tabs_.size()));
+  title_.SetNewTabMenu(fw::AnyEditorShipped(), openMenu_ == CmdNewTab);
   int toolTop = titleH;
   if (fullscreen_) toolTop = static_cast<int>(std::lround((toolbarReveal_.V() - 1.0f) * toolH));
-  toolbar_.Layout(RECT{0, toolTop, rc.right, toolTop + toolH}, ui_, CurrentToolbarState());
+  toolbar_.Layout(RECT{0, toolTop, rc.right, toolTop + toolH}, ui_, CurrentToolbar());
+  LayoutShell();
   RECT doc = DocRect();
   search_.Layout(doc, ui_);
   banner_.Layout(doc, ui_);
   empty_.Layout(doc, ui_, settings_.recent);
   notes_.Layout(doc, ui_);
-  if (DocumentView* v = Active()) v->SetViewport(doc, ui_);
+  if (TabContent* v = Active()) v->SetViewport(doc, ui_);
 }
 
 std::wstring App::SearchStatus() {
-  DocumentView* v = Active();
+  TabContent* v = Active();
   if (!v || search_.Box().Text().empty()) return L"";
   int n = v->SearchCount();
   if (n == 0) return v->SearchDone() ? L"No results" : L"Searching…";
@@ -328,7 +308,7 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
   RECT doc = DocRect();
   bool caretOn = static_cast<int>((anim::Now() - caretStart_) / 530) % 2 == 0;
 
-  DocumentView* v = Active();
+  TabContent* v = Active();
   if (v) {
     v->Draw(canvas_, dc);
   } else {
@@ -341,6 +321,7 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
   }
   banner_.Draw(canvas_);
   notes_.Draw(canvas_);
+  DrawShell();
   if (snapshot_) DrawChildControlsForSnapshot(dc);
 
   // Drag-and-drop overlay.
@@ -366,14 +347,16 @@ void App::RenderFrame(ID2D1DeviceContext* dc) {
   // Chrome on top.
   if (!presentation_) {
     if (!fullscreen_ || toolbarReveal_.V() > 0.01f) {
-      ToolbarState ts = CurrentToolbarState();
-      toolbar_.Draw(canvas_, ts, caretOn && focusBox_ == &toolbar_.PageBox());
+      ToolbarModel tm = CurrentToolbar();
+      toolbar_.Draw(canvas_, tm, caretOn && focusBox_ == &toolbar_.PageBox());
     }
     if (!fullscreen_) {
       std::vector<TabInfo> tabs;
       for (auto& t : tabs_) tabs.push_back({t->Title(), t->Path(), t->Modified()});
       title_.Draw(canvas_, tabs, active_, windowActive_, IsZoomed(hwnd_) != FALSE);
     }
+    toolbar_.DrawPopup(canvas_);  // an open list of a toolbar control, above everything
+    commands_.Draw(canvas_, focusBox_ == &commands_.Box() && caret::On(caretStart_));
   }
   canvas_.End();
 }
@@ -388,7 +371,11 @@ LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
     self->hwnd_ = hwnd;
   }
-  if (self) return self->Handle(msg, wp, lp);
+  if (self) {
+    LRESULT result = self->Handle(msg, wp, lp);
+    self->uia_.AfterMessage(msg);  // UI Automation hears about what changed
+    return result;
+  }
   return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
@@ -497,13 +484,19 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_ERASEBKGND:
       return 1;
+    case WM_GETOBJECT:
+      if (LRESULT r = uia_.OnGetObject(wp, lp)) return r;
+      break;
+    case uia::Root::kRunMessage:
+      uia_.RunPosted();
+      return 0;
     case WM_CTLCOLOREDIT:
       if (reinterpret_cast<HWND>(lp) == notes_.Edit())
         return reinterpret_cast<LRESULT>(notes_.OnCtlColor(reinterpret_cast<HDC>(wp)));
       break;
     case WM_SIZE:
       if (wp != SIZE_MINIMIZED) {
-        if (target_) target_->Resize(D2D1::SizeU(LOWORD(lp), HIWORD(lp)));
+        swap_.Resize(LOWORD(lp), HIWORD(lp));
         Layout();
         InvalidateRect(hwnd_, nullptr, FALSE);
         if (inSizeMove_) {
@@ -601,7 +594,12 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       ScreenToClient(hwnd_, &pt);
       UINT keys = GET_KEYSTATE_WPARAM(wp);
       UINT mods = (keys & MK_CONTROL ? kModCtrl : 0) | (keys & MK_SHIFT ? kModShift : 0);
-      if (DocumentView* v = Active()) {
+      if (msg == WM_MOUSEWHEEL && (toolbar_.OnWheel(GET_WHEEL_DELTA_WPARAM(wp), pt.x, pt.y) ||
+                                   ShellWheel(GET_WHEEL_DELTA_WPARAM(wp), pt.x, pt.y))) {
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return 0;
+      }
+      if (TabContent* v = Active()) {
         v->OnWheel(GET_WHEEL_DELTA_WPARAM(wp), msg == WM_MOUSEHWHEEL, mods, pt.x, pt.y);
         InvalidateRect(hwnd_, nullptr, FALSE);
       }
@@ -614,7 +612,19 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SYSKEYDOWN:
       if (msg == WM_SYSKEYDOWN && wp != VK_F10 && !(wp >= VK_F1 && wp <= VK_F24)) {
         if (wp == VK_LEFT || wp == VK_RIGHT) {  // Alt+Left/Right: previous/next page
-          if (DocumentView* v = Active()) wp == VK_LEFT ? v->PrevPage() : v->NextPage();
+          if (TabContent* v = Active())
+            if (int cmd = v->ShortcutFor(static_cast<UINT>(wp), Mods())) Execute(cmd);
+          return 0;
+        }
+        // Alt+Down and Alt+Up open and close the list of a focused dropdown (not in PDF forms).
+        TabContent* v = Active();
+        if ((wp == VK_DOWN || wp == VK_UP) &&
+            (toolbar_.HasKeyFocus() || panel_.HasKeyFocus() || (v && !v->AsPdf() && v->HasKeyFocus()))) {
+          OnKeyDown(static_cast<UINT>(wp));
+          return 0;
+        }
+        if (wp == 'Q') {  // Alt+Q: command search
+          OnKeyDown(static_cast<UINT>(wp));
           return 0;
         }
         break;  // Alt+F4, Alt+Space etc.
@@ -624,6 +634,9 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CHAR:
       OnChar(static_cast<wchar_t>(wp));
       return 0;
+    case WM_SYSCHAR:
+      if (wp == L'q' || wp == L'Q') return 0;  // Alt+Q ran a command: no menu, no beep
+      break;
     case WM_TIMER:
       switch (wp) {
         case kTimerTooltip: {
@@ -696,11 +709,13 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       if (!snapshot_) settings_.Save();
       HideTooltip();
       tooltip_.Destroy();
+      panel_.Show(nullptr, false);
       tabs_.clear();
       DestroyWindow(hwnd_);
       return 0;
     }
     case WM_DESTROY:
+      uia_.Detach();
       if (dropTarget_) RevokeDragDrop(hwnd_);
       updater_.WaitForSwap();
       PostQuitMessage(0);
@@ -725,6 +740,8 @@ App::Region App::RegionAt(int x, int y) const {
   RECT rc;
   GetClientRect(hwnd_, &rc);
   if (x < 0 || y < 0 || x >= rc.right || y >= rc.bottom) return Region::None;
+  if (commands_.Hit(x, y)) return Region::Commands;
+  if (!presentation_ && toolbar_.HitPopup(x, y)) return Region::Toolbar;
   const int titleH = TitleHeight();
   if (y < titleH) return Region::Title;
   if (!presentation_) {
@@ -735,6 +752,7 @@ App::Region App::RegionAt(int x, int y) const {
       return Region::Toolbar;
     }
   }
+  if (Region shell = ShellRegionAt(x, y); shell != Region::None) return shell;
   if (notes_.Hit(x, y)) return Region::Note;
   if (search_.Hit(x, y)) return Region::Search;
   if (banner_.Hit(x, y)) return Region::Banner;
@@ -758,7 +776,10 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
   if (r == Region::Doc && Active() && Active()->PasswordBox() &&
       Contains(Active()->PasswordBox()->rc, (float)x, (float)y))
     clickedBox = Active()->PasswordBox();
+  if (r == Region::Commands) clickedBox = &commands_.Box();  // its results keep the box's keyboard
   if (focusBox_ != clickedBox) FocusBox(clickedBox);
+  if (r != Region::Toolbar || clickedBox) toolbar_.Blur();
+  ShellMouseDown(r, x, y, button, dbl, shift);
 
   switch (r) {
     case Region::Title: {
@@ -773,7 +794,7 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
         else if (!clickedBox->Text().empty() && !shift) clickedBox->SelectAll();
         else clickedBox->OnMouseDown((float)x, (float)y, shift, ui_);
       } else if (button == 0) {
-        toolbar_.OnMouseDown(x, y);
+        toolbar_.OnMouseDown(x, y, dbl, shift);
       }
       break;
     case Region::Search:
@@ -786,9 +807,9 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
       if (button == 0) notes_.OnMouseDown(x, y);
       break;
     case Region::Doc:
-      if (DocumentView* v = Active()) {
+      if (TabContent* v = Active()) {
         v->OnMouseDown(x, y, button, Mods(), dbl);
-        if (v->HasFieldFocus() || v->Dragging()) caretStart_ = anim::Now();
+        if (v->HasKeyFocus() || v->Dragging()) caretStart_ = anim::Now();
       } else if (button == 0) {
         empty_.OnMouseDown(x, y);
       }
@@ -796,6 +817,7 @@ void App::OnMouseDown(int x, int y, int button, bool dbl) {
     default: break;
   }
   if (presentation_) lastMouseMove_ = anim::Now();
+  KeyFocusMoved();
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -811,7 +833,7 @@ void App::OnMouseMove(int x, int y) {
   if (capture_ != Region::None) {
     switch (capture_) {
       case Region::Doc:
-        if (DocumentView* v = Active()) v->OnMouseMove(x, y, Mods());
+        if (TabContent* v = Active()) v->OnMouseMove(x, y, Mods());
         break;
       case Region::Toolbar:
         if (focusBox_ == &toolbar_.PageBox() && GetKeyState(VK_LBUTTON) < 0) toolbar_.PageBox().OnMouseDrag((float)x, (float)y, ui_);
@@ -824,7 +846,7 @@ void App::OnMouseMove(int x, int y) {
       case Region::Title: title_.OnMouseMove(x, y); break;
       case Region::Banner: banner_.OnMouseMove(x, y); break;
       case Region::Note: notes_.OnMouseMove(x, y); break;
-      default: break;
+      default: ShellMouseMove(capture_, x, y); break;
     }
     InvalidateRect(hwnd_, nullptr, FALSE);
     return;
@@ -839,10 +861,10 @@ void App::OnMouseMove(int x, int y) {
       case Region::Banner: banner_.OnMouseLeave(); break;
       case Region::Note: notes_.OnMouseLeave(); break;
       case Region::Doc:
-        if (DocumentView* v = Active()) v->OnMouseLeave();
+        if (TabContent* v = Active()) v->OnMouseLeave();
         else empty_.OnMouseLeave();
         break;
-      default: break;
+      default: ShellMouseLeave(hover_); break;
     }
     hover_ = r;
     InvalidateRect(hwnd_, nullptr, FALSE);
@@ -855,10 +877,10 @@ void App::OnMouseMove(int x, int y) {
     case Region::Banner: changed = banner_.OnMouseMove(x, y); break;
     case Region::Note: changed = notes_.OnMouseMove(x, y); break;
     case Region::Doc:
-      if (DocumentView* v = Active()) v->OnMouseMove(x, y, Mods());
+      if (TabContent* v = Active()) v->OnMouseMove(x, y, Mods());
       else changed = empty_.OnMouseMove(x, y);
       break;
-    default: break;
+    default: changed = ShellMouseMove(r, x, y); break;
   }
   if (changed) InvalidateRect(hwnd_, nullptr, FALSE);
   UpdateTooltip(x, y);
@@ -875,7 +897,7 @@ void App::OnMouseUp(int x, int y, int button) {
         case TitleBar::Part::Minimize: ShowWindow(hwnd_, SW_MINIMIZE); break;
         case TitleBar::Part::Maximize: ShowWindow(hwnd_, IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE); break;
         case TitleBar::Part::Close: PostMessageW(hwnd_, WM_CLOSE, 0, 0); break;
-        case TitleBar::Part::NewTab: Execute(CmdOpen); break;
+        case TitleBar::Part::NewTab: Execute(CmdNewTab); break;
         case TitleBar::Part::TabClose: CloseTab(a.index); break;
         default: break;
       }
@@ -905,20 +927,13 @@ void App::OnMouseUp(int x, int y, int button) {
       }
       break;
     case Region::Doc:
-      if (DocumentView* v = Active()) {
+      if (TabContent* v = Active()) {
         v->OnMouseUp(x, y, button, Mods());
       } else if (button == 0) {
-        EmptyState::Result res = empty_.OnMouseUp(x, y);
-        if (res.kind == EmptyState::Result::Kind::Open) Execute(CmdOpen);
-        else if (res.kind == EmptyState::Result::Kind::OpenRecent) Execute(CmdRecent + res.index);
-        else if (res.kind == EmptyState::Result::Kind::RemoveRecent && res.index < static_cast<int>(settings_.recent.size())) {
-          settings_.RemoveRecent(settings_.recent[res.index].path);
-          settings_.Save();
-          Layout();
-        }
+        OnStartScreen(empty_.OnMouseUp(x, y));
       }
       break;
-    default: break;
+    default: ShellMouseUp(r, x, y, button); break;
   }
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -930,7 +945,9 @@ void App::OnMouseLeave() {
   search_.OnMouseLeave();
   banner_.OnMouseLeave();
   empty_.OnMouseLeave();
-  if (DocumentView* v = Active()) v->OnMouseLeave();
+  panel_.OnMouseLeave();
+  status_.OnMouseLeave();
+  if (TabContent* v = Active()) v->OnMouseLeave();
   hover_ = Region::None;
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -949,16 +966,18 @@ bool App::OnSetCursor() {
   Region r = capture_ != Region::None ? capture_ : RegionAt(pt.x, pt.y);
   switch (r) {
     case Region::Toolbar:
-      if (toolbar_.HitPageBox(pt.x, pt.y)) c = ibeam;
+      if (toolbar_.HitPageBox(pt.x, pt.y) || toolbar_.OverText(pt.x, pt.y)) c = ibeam;
       break;
     case Region::Search:
       if (Contains(search_.Box().rc, (float)pt.x, (float)pt.y)) c = ibeam;
       break;
     case Region::Doc:
-      if (DocumentView* v = Active()) c = v->CursorAt(pt.x, pt.y);
+      if (TabContent* v = Active()) c = v->CursorAt(pt.x, pt.y);
       else if (empty_.OverClickable(pt.x, pt.y)) c = hand;
       break;
-    default: break;
+    default:
+      if (HCURSOR shell = ShellCursor(r, pt.x, pt.y)) c = shell;
+      break;
   }
   SetCursor(c);
   return true;
@@ -977,10 +996,10 @@ void App::UpdateTooltip(int x, int y) {
     case Region::Search: text = search_.TooltipAt(x, y); break;
     case Region::Note: text = notes_.TooltipAt(x, y); break;
     case Region::Doc:
-      if (DocumentView* v = Active()) text = v->TooltipAt(x, y);
+      if (TabContent* v = Active()) text = v->TooltipAt(x, y);
       else text = empty_.TooltipAt(x, y, settings_.recent);
       break;
-    default: break;
+    default: text = ShellTooltip(RegionAt(x, y), x, y); break;
   }
   if (text == tipText_) return;
   bool wasVisible = tooltip_.Visible();
@@ -997,7 +1016,13 @@ void App::HideTooltip() {
 }
 
 void App::FocusBox(TextBox* box) {
+  if (box) {
+    toolbar_.Blur();
+    panel_.Blur();
+    status_.Blur();
+  }
   if (focusBox_ == box) return;
+  if (focusBox_ == &commands_.Box()) commands_.Close();  // command search closes when its box lets go
   if (focusBox_) {
     focusBox_->Focus(false);
     if (focusBox_ == &toolbar_.PageBox()) Layout();  // restores the current page number
@@ -1016,52 +1041,44 @@ void App::FocusBox(TextBox* box) {
   } else {
     KillTimer(hwnd_, kTimerCaret);
   }
+  KeyFocusMoved();
   InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::KeyFocusMoved() {
+  if (TabContent* v = Active())
+    v->SetKeyFocus(!toolbar_.HasKeyFocus() && !panel_.HasKeyFocus() && !status_.HasKeyFocus() &&
+                   (!focusBox_ || focusBox_ == v->PasswordBox()));
 }
 
 void App::OnKeyDown(UINT vk) {
   HideTooltip();
   const UINT mods = Mods();
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0;
-  DocumentView* v = Active();
+  TabContent* v = Active();
   caretStart_ = anim::Now();
 
-  // Shortcuts that work everywhere, even while typing in a box or a form field.
+  // Shortcuts that work everywhere, even while typing in a box or a form field: the window's own,
+  // then the active tab's (with no tab open, the PDF reader's).
   auto global = [&]() -> int {
-    if (ctrl) {
-      switch (vk) {
-        case 'O': return CmdOpen;
-        case 'S': return shift ? CmdSaveAs : CmdSave;
-        case 'P': return CmdPrint;
-        case 'W':
-        case VK_F4: return CmdCloseTab;
-        case VK_TAB: return shift ? CmdPrevTab : CmdNextTab;
-        case VK_NEXT: return CmdNextTab;
-        case VK_PRIOR: return CmdPrevTab;
-        case 'F': return CmdFind;
-        case 'G': return CmdGoToPage;
-        case 'I': return CmdToggleInvert;
-        case VK_OEM_PLUS:
-        case VK_ADD: return shift ? CmdRotateRight : CmdZoomIn;
-        case VK_OEM_MINUS:
-        case VK_SUBTRACT: return shift ? CmdRotateLeft : CmdZoomOut;
-        case '0':
-        case VK_NUMPAD0: return CmdZoomAuto;
-        case '1': return CmdZoomActual;
-        case '2': return CmdZoomFitPage;
-        case '3': return CmdZoomFitWidth;
-        case '6': return CmdViewSingle;
-        case '7': return CmdViewContinuous;
-        case '8': return CmdViewFacing;
-      }
-    }
-    switch (vk) {
-      case VK_F11: return CmdFullScreen;
-      case VK_F5: return CmdPresentation;
-      case VK_F3: return shift ? CmdFindPrev : CmdFindNext;
-    }
-    return 0;
+    if (int cmd = AppShortcut(vk, mods)) return cmd;
+    return v ? v->ShortcutFor(vk, mods) : PdfView::Shortcut(vk, mods);
   };
+
+  // F6, and keys for the side panel or the status bar when they have the keyboard.
+  if (ShellKeyDown(vk, mods)) return;
+
+  // A combo box, dropdown or other control on the toolbar has the keyboard.
+  if (toolbar_.HasKeyFocus()) {
+    if (int cmd = global(); cmd && !(ctrl && (vk == 'A' || vk == 'C' || vk == 'V' || vk == 'X' || vk == 'Z'))) {
+      Execute(cmd);
+      return;
+    }
+    toolbar_.OnKeyDown(vk, ctrl, shift, (mods & kModAlt) != 0);
+    KeyFocusMoved();
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return;
+  }
 
   if (focusBox_) {
     if (int cmd = global(); cmd && !(ctrl && (vk == 'A' || vk == 'C' || vk == 'V' || vk == 'X' || vk == 'Z'))) {
@@ -1080,7 +1097,7 @@ void App::OnKeyDown(UINT vk) {
     return;
   }
 
-  if (v && v->HasFieldFocus()) {
+  if (v && v->HasKeyFocus()) {
     int cmd = global();
     if (cmd) {
       Execute(cmd);
@@ -1090,6 +1107,14 @@ void App::OnKeyDown(UINT vk) {
       InvalidateRect(hwnd_, nullptr, FALSE);
       return;
     }
+  }
+
+  // The start screen: Tab, the arrows, Enter and Delete.
+  EmptyState::Result start;
+  if (!v && !(mods & (kModCtrl | kModAlt)) && empty_.OnKeyDown(vk, shift, start)) {
+    OnStartScreen(start);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return;
   }
 
   if (int cmd = global()) {
@@ -1114,6 +1139,10 @@ void App::OnKeyDown(UINT vk) {
       CloseSearch();
       return;
     }
+    if (panel_.IsOpen()) {
+      ClosePanel();
+      return;
+    }
     if (v && v->OnKeyDown(vk, mods)) {
       InvalidateRect(hwnd_, nullptr, FALSE);
       return;
@@ -1124,14 +1153,21 @@ void App::OnKeyDown(UINT vk) {
     return;
   }
   if (v && v->OnKeyDown(vk, mods)) InvalidateRect(hwnd_, nullptr, FALSE);
+  else TabIntoPanel(vk, mods);
 }
 
 void App::OnChar(wchar_t ch) {
+  if (toolbar_.HasKeyFocus()) {
+    toolbar_.OnChar(ch);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return;
+  }
+  if (ShellChar(ch)) return;
   if (focusBox_) {
     if (focusBox_->OnChar(ch)) InvalidateRect(hwnd_, nullptr, FALSE);
     return;
   }
-  if (DocumentView* v = Active()) {
+  if (TabContent* v = Active()) {
     if (v->OnChar(ch, Mods())) InvalidateRect(hwnd_, nullptr, FALSE);
   }
 }
@@ -1139,8 +1175,31 @@ void App::OnChar(wchar_t ch) {
 // ---------------------------------------------------------------------------
 // Commands
 
+int App::AppShortcut(UINT vk, UINT mods) {
+  const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0;
+  if ((mods & kModAlt) && !ctrl && vk == 'Q') return CmdCommandSearch;
+  if (ctrl) {
+    switch (vk) {
+      case 'O': return CmdOpen;
+      case 'S': return shift ? CmdSaveAs : CmdSave;
+      case 'P': return CmdPrint;
+      case 'W':
+      case VK_F4: return CmdCloseTab;
+      case VK_TAB: return shift ? CmdPrevTab : CmdNextTab;
+      case VK_NEXT: return CmdNextTab;
+      case VK_PRIOR: return CmdPrevTab;
+      case 'F': return CmdFind;
+    }
+  }
+  switch (vk) {
+    case VK_F11: return CmdFullScreen;
+    case VK_F3: return shift ? CmdFindPrev : CmdFindNext;
+  }
+  return 0;
+}
+
 void App::Execute(int cmd) {
-  DocumentView* v = Active();
+  TabContent* v = Active();
   const bool ready = v && v->Ready();
   HideTooltip();
 
@@ -1149,10 +1208,12 @@ void App::Execute(int cmd) {
     if (i < static_cast<int>(settings_.recent.size())) OpenFiles({settings_.recent[i].path});
     return;
   }
-  if (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + 50) {
-    const auto& presets = fw::ZoomPresets();
-    int i = cmd - CmdZoomPreset;
-    if (ready && i < static_cast<int>(presets.size())) v->SetZoom(presets[i]);
+  if (cmd >= CmdNewFile && cmd < CmdNewFile + fw::kFileKindCount) {
+    // A new document, workbook or presentation comes with that kind's editor; none has shipped yet.
+    return;
+  }
+  if (const int act = cmd - CmdBannerAction; act >= kActMakeDefault && act < kActMakeDefault + fw::kFileKindCount) {
+    MakeDefaultApp(static_cast<fw::FileKind>(act - kActMakeDefault));
     InvalidateRect(hwnd_, nullptr, FALSE);
     return;
   }
@@ -1168,7 +1229,6 @@ void App::Execute(int cmd) {
         settings_.skippedVersion = bannerUpdateVersion_;
         settings_.Save();
         break;
-      case kActMakeDefault: Execute(CmdMakeDefault); break;
       case kActSaveAs: SaveActive(true); break;
       default: break;
     }
@@ -1178,6 +1238,11 @@ void App::Execute(int cmd) {
 
   switch (cmd) {
     case CmdOpen: OpenDialog(); break;
+    case CmdNewTab:
+      // The title bar's ＋ offers what the start screen does: New choices once an editor ships, and Open.
+      if (fw::AnyEditorShipped()) ShowMenu(CmdNewTab);
+      else OpenDialog();
+      break;
     case CmdSave: SaveActive(false); break;
     case CmdSaveAs: SaveActive(true); break;
     case CmdPrint: PrintActive(); break;
@@ -1191,6 +1256,7 @@ void App::Execute(int cmd) {
       if (tabs_.size() > 1) ActivateTab((active_ + static_cast<int>(tabs_.size()) - 1) % static_cast<int>(tabs_.size()));
       break;
     case CmdFind: OpenSearch(); break;
+    case CmdCommandSearch: OpenCommandSearch(); break;
     case CmdFindNext:
     case CmdFindPrev:
       if (!search_.IsOpen() || search_.Box().Text().empty()) OpenSearch();
@@ -1201,89 +1267,20 @@ void App::Execute(int cmd) {
       search_.ToggleMatchCase();
       if (ready) v->StartSearch(search_.Box().Text(), search_.MatchCase());
       break;
-    case CmdCopy:
-      if (ready) v->Copy();
-      break;
-    case CmdSelectAll:
-      if (ready) v->SelectAll();
-      break;
-    case CmdSelectAllOnPage:
-      if (ready) v->SelectAllOnPage();
-      break;
     case CmdGoToPage:
-      if (ready && !presentation_) {
+      if (ready && v->Paged() && !presentation_) {
         if (fullscreen_) toolbarReveal_.To(1, 160);
         FocusBox(&toolbar_.PageBox());
         toolbar_.PageBox().SelectAll();
       }
       break;
-    case CmdNextPage:
-      if (ready) v->NextPage();
-      break;
-    case CmdPrevPage:
-      if (ready) v->PrevPage();
-      break;
-    case CmdFirstPage:
-      if (ready) v->GoToPage(0);
-      break;
-    case CmdLastPage:
-      if (ready) v->GoToPage(v->PageCount() - 1);
-      break;
-    case CmdZoomIn:
-      if (ready) v->ZoomStep(true);
-      break;
-    case CmdZoomOut:
-      if (ready) v->ZoomStep(false);
-      break;
-    case CmdZoomAuto:
-      if (ready) v->SetZoomMode(fw::ZoomMode::Automatic);
-      break;
-    case CmdZoomActual:
-      if (ready) v->SetZoomMode(fw::ZoomMode::ActualSize);
-      break;
-    case CmdZoomFitPage:
-      if (ready) v->SetZoomMode(fw::ZoomMode::FitPage);
-      break;
-    case CmdZoomFitWidth:
-      if (ready) v->SetZoomMode(fw::ZoomMode::FitWidth);
-      break;
     case CmdZoomMenu:
     case CmdViewMenu:
     case CmdSaveMenu:
     case CmdMoreMenu: ShowMenu(cmd); break;
-    case CmdHighlight:
-      if (ready) v->HighlightSelection();
-      break;
-    case CmdAddNote: {
-      NoteTarget note;
-      if (ready && v->NewNoteAt(contextPt_.x, contextPt_.y, note)) ViewOpenNote(v, note);
-      break;
-    }
-    case CmdOpenNote:
-      if (ready && contextAnnot_.kind == AnnotHit::Kind::Note)
-        ViewOpenNote(v, NoteTarget{contextPage_, contextAnnot_.index, contextAnnot_.rect.left, contextAnnot_.rect.top});
-      break;
-    case CmdRemoveAnnot:
-      if (ready && contextAnnot_.kind != AnnotHit::Kind::None) v->RemoveAnnot(contextPage_, contextAnnot_.index);
-      break;
-    case CmdViewSingle:
-      if (ready) v->SetViewMode(fw::ViewMode::Single);
-      break;
-    case CmdViewContinuous:
-      if (ready) v->SetViewMode(fw::ViewMode::Continuous);
-      break;
-    case CmdViewFacing:
-      if (ready) v->SetViewMode(fw::ViewMode::Facing);
-      break;
     case CmdToggleCover:
       settings_.coverAlone = !settings_.coverAlone;
       for (auto& t : tabs_) t->SettingsChanged();
-      break;
-    case CmdRotateLeft:
-      if (ready) v->Rotate(false);
-      break;
-    case CmdRotateRight:
-      if (ready) v->Rotate(true);
       break;
     case CmdToggleInvert:
       settings_.invert = !settings_.invert;
@@ -1295,7 +1292,7 @@ void App::Execute(int cmd) {
       else ToggleFullScreen();
       break;
     case CmdPresentation:
-      if (ready) SetPresentation(!presentation_);
+      if (ready && v->Paged()) SetPresentation(!presentation_);
       break;
     case CmdThemeSystem: SetTheme(ThemeSetting::System); break;
     case CmdThemeLight: SetTheme(ThemeSetting::Light); break;
@@ -1309,15 +1306,7 @@ void App::Execute(int cmd) {
       settings_.Save();
       break;
     case CmdCheckUpdates: MaybeCheckForUpdates(true); break;
-    case CmdMakeDefault:
-      if (fileassoc::Register(util::ExePath())) {
-        fileassoc::OpenDefaultAppsSettings();
-        banner_.Show(BannerKind::Info, L"In the Settings window that just opened, choose Featherweight for .pdf files.",
-                     {}, 9000);
-      } else {
-        banner_.Show(BannerKind::Error, L"Featherweight couldn’t register itself as a PDF app.");
-      }
-      break;
+    case CmdMakeDefault: MakeDefaultApp(fw::FileKind::Pdf); break;
     case CmdAbout: ShowAbout(); break;
     case CmdClearRecent:
       settings_.ClearRecent();
@@ -1325,7 +1314,10 @@ void App::Execute(int cmd) {
       Layout();
       break;
     case CmdExit: PostMessageW(hwnd_, WM_CLOSE, 0, 0); break;
-    default: break;
+    default:
+      // Everything else belongs to the tab: pages, zoom, selection, highlights, notes.
+      if (ready) v->Execute(cmd);
+      break;
   }
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -1340,32 +1332,16 @@ int App::TrackMenu(HMENU menu, const D2D1_RECT_F& anchor, bool alignRight) {
 }
 
 void App::ShowMenu(int which) {
-  DocumentView* v = Active();
+  TabContent* v = Active();
   const bool ready = v && v->Ready();
   HMENU m = CreatePopupMenu();
   bool alignRight = false;
-  if (which == CmdZoomMenu && ready) {
-    auto mode = v->ZoomMode();
-    AppendItem(m, CmdZoomAuto, L"Automatic\tCtrl+0", true, mode == fw::ZoomMode::Automatic, true);
-    AppendItem(m, CmdZoomFitWidth, L"Fit width\tCtrl+3", true, mode == fw::ZoomMode::FitWidth, true);
-    AppendItem(m, CmdZoomFitPage, L"Fit page\tCtrl+2", true, mode == fw::ZoomMode::FitPage, true);
-    AppendItem(m, CmdZoomActual, L"Actual size\tCtrl+1", true, mode == fw::ZoomMode::ActualSize, true);
+  if (which == CmdNewTab) {
+    for (const fw::FileKindInfo& k : fw::FileKinds())
+      if (fw::EditorShipped(k.kind))
+        AppendItem(m, CmdNewFile + static_cast<int>(k.kind), L"New " + std::wstring(k.noun));
     AppendSeparator(m);
-    const auto& presets = fw::ZoomPresets();
-    for (int i = 0; i < static_cast<int>(presets.size()); ++i) {
-      bool current = mode == fw::ZoomMode::Custom && std::abs(v->Zoom() - presets[i]) < 0.005;
-      AppendItem(m, CmdZoomPreset + i, fw::FormatPercent(presets[i]), true, current, true);
-    }
-  } else if (which == CmdViewMenu && ready) {
-    auto mode = v->ViewMode();
-    AppendItem(m, CmdViewSingle, L"Single page\tCtrl+6", true, mode == fw::ViewMode::Single, true);
-    AppendItem(m, CmdViewContinuous, L"Continuous\tCtrl+7", true, mode == fw::ViewMode::Continuous, true);
-    AppendItem(m, CmdViewFacing, L"Two pages\tCtrl+8", true, mode == fw::ViewMode::Facing, true);
-    AppendSeparator(m);
-    AppendItem(m, CmdToggleCover, L"Show cover page on its own", mode == fw::ViewMode::Facing, settings_.coverAlone);
-    AppendSeparator(m);
-    AppendItem(m, CmdRotateLeft, L"Rotate counterclockwise\tCtrl+Shift+−");
-    AppendItem(m, CmdRotateRight, L"Rotate clockwise\tCtrl+Shift+=");
+    AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
   } else if (which == CmdSaveMenu && ready) {
     AppendItem(m, CmdSave, L"Save\tCtrl+S", v->Modified());
     AppendItem(m, CmdSaveAs, L"Save as\u2026\tCtrl+Shift+S");
@@ -1401,74 +1377,54 @@ void App::ShowMenu(int which) {
     if (!fileassoc::IsDefault()) AppendItem(m, CmdMakeDefault, L"Make Featherweight the default PDF app");
     AppendSeparator(m);
     AppendItem(m, CmdAbout, L"About Featherweight");
+  } else if (ready) {
+    v->FillMenu(which, m);  // zoom, page layout
   }
   if (GetMenuItemCount(m) > 0) {
-    int cmd = TrackMenu(m, toolbar_.ButtonRect(which == CmdSaveMenu ? CmdSave : which), alignRight);
+    openMenu_ = which;
+    title_.SetNewTabMenu(fw::AnyEditorShipped(), which == CmdNewTab);
+    const D2D1_RECT_F anchor =
+        which == CmdNewTab ? title_.NewTabRect() : toolbar_.ButtonRect(which == CmdSaveMenu ? CmdSave : which);
+    int cmd = TrackMenu(m, anchor, alignRight);
+    openMenu_ = 0;
+    title_.SetNewTabMenu(fw::AnyEditorShipped(), false);
     if (cmd) Execute(cmd);
   }
   DestroyMenu(m);
 }
 
 void App::ShowContextMenu(int sx, int sy) {
-  DocumentView* v = Active();
+  TabContent* v = Active();
   if (!v || !v->Ready()) return;
   HMENU m = CreatePopupMenu();
-  if (v->HasFieldFocus()) {
-    AppendItem(m, 1, L"Cut\tCtrl+X");
-    AppendItem(m, 2, L"Copy\tCtrl+C");
-    AppendItem(m, 3, L"Paste\tCtrl+V");
-    AppendSeparator(m);
-    AppendItem(m, 4, L"Select all\tCtrl+A");
-  } else {
-    POINT cp{sx, sy};
-    ScreenToClient(hwnd_, &cp);
-    contextPt_ = cp;
-    contextAnnot_ = v->AnnotAtPoint(cp.x, cp.y, contextPage_);
-    if (v->HasSelection()) {
-      AppendItem(m, CmdHighlight, L"Highlight");
-      AppendItem(m, CmdCopy, L"Copy\tCtrl+C");
-    }
-    if (contextAnnot_.kind == AnnotHit::Kind::Highlight) {
-      AppendItem(m, CmdRemoveAnnot, L"Remove highlight");
-    } else if (contextAnnot_.kind == AnnotHit::Kind::Note) {
-      AppendItem(m, CmdOpenNote, L"Open note");
-      AppendItem(m, CmdRemoveAnnot, L"Delete note");
-    } else if (contextPage_ >= 0) {
-      AppendItem(m, CmdAddNote, L"Add note here");
-    }
-    AppendSeparator(m);
-    AppendItem(m, CmdSelectAllOnPage, L"Select all text on this page");
-    AppendSeparator(m);
-    AppendItem(m, CmdZoomIn, L"Zoom in\tCtrl+=");
-    AppendItem(m, CmdZoomOut, L"Zoom out\tCtrl+−");
-    AppendItem(m, CmdZoomFitWidth, L"Fit width\tCtrl+3");
-    AppendItem(m, CmdZoomFitPage, L"Fit page\tCtrl+2");
-    AppendSeparator(m);
-    AppendItem(m, CmdRotateRight, L"Rotate clockwise\tCtrl+Shift+=");
-    AppendItem(m, CmdRotateLeft, L"Rotate counterclockwise\tCtrl+Shift+−");
-    AppendSeparator(m);
-    AppendItem(m, CmdFind, L"Find…\tCtrl+F");
-    AppendItem(m, CmdPrint, L"Print…\tCtrl+P", v->CanPrint());
-  }
+  POINT cp{sx, sy};
+  ScreenToClient(hwnd_, &cp);
+  v->FillContextMenu(m, cp.x, cp.y);
   theme::ApplyToMenus();
   HideTooltip();
   int cmd = TrackPopupMenuEx(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, sx, sy, hwnd_, nullptr);
   DestroyMenu(m);
-  if (v->HasFieldFocus() && cmd >= 1 && cmd <= 4) {
-    const UINT keys[] = {0, 'X', 'C', 'V', 'A'};
-    v->OnKeyDown(keys[cmd], kModCtrl);
-    InvalidateRect(hwnd_, nullptr, FALSE);
-    return;
-  }
   if (cmd) Execute(cmd);
 }
 
 // ---------------------------------------------------------------------------
 // Documents and tabs
 
-DocumentView* App::Active() const {
+TabContent* App::Active() const {
   return active_ >= 0 && active_ < static_cast<int>(tabs_.size()) ? tabs_[active_].get() : nullptr;
 }
+
+PagedView* App::ActivePaged() const {
+  TabContent* v = Active();
+  return v ? v->Paged() : nullptr;
+}
+
+PdfView* App::ActivePdf() const {
+  TabContent* v = Active();
+  return v ? v->AsPdf() : nullptr;
+}
+
+std::unique_ptr<TabContent> App::CreateTab(const std::wstring& path) { return std::make_unique<PdfView>(*this, path); }
 
 void App::OpenFiles(const std::vector<std::wstring>& files) {
   int toActivate = -1;
@@ -1485,7 +1441,7 @@ void App::OpenFiles(const std::vector<std::wstring>& files) {
       }
     }
     if (found) continue;
-    auto view = std::make_unique<DocumentView>(*this, path);
+    std::unique_ptr<TabContent> view = CreateTab(path);
     view->SetViewport(DocRect(), ui_);
     std::wstring error;
     OpenResult r = view->Load(L"", error);
@@ -1523,7 +1479,7 @@ void App::OpenDialog() {
   DWORD opts = 0;
   dlg->GetOptions(&opts);
   dlg->SetOptions(opts | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
-  if (DocumentView* v = Active()) {
+  if (TabContent* v = Active()) {
     ComPtr<IShellItem> folder;
     if (SUCCEEDED(SHCreateItemFromParsingName(fw::DirOf(v->Path()).c_str(), nullptr, IID_PPV_ARGS(&folder))))
       dlg->SetFolder(folder.Get());
@@ -1546,12 +1502,28 @@ void App::OpenDialog() {
   OpenFiles(files);
 }
 
-std::wstring App::SaveDialog(const std::wstring& suggested) {
+void App::OnStartScreen(EmptyState::Result res) {
+  switch (res.kind) {
+    case EmptyState::Result::Kind::Open: Execute(CmdOpen); break;
+    case EmptyState::Result::Kind::New: Execute(CmdNewFile + res.index); break;
+    case EmptyState::Result::Kind::OpenRecent: Execute(CmdRecent + res.index); break;
+    case EmptyState::Result::Kind::RemoveRecent:
+      if (res.index < static_cast<int>(settings_.recent.size())) {
+        settings_.RemoveRecent(settings_.recent[res.index].path);
+        settings_.Save();
+        Layout();
+      }
+      break;
+    default: break;
+  }
+}
+
+std::wstring App::SaveDialog(const std::wstring& suggested, const SaveFormat& format) {
   ComPtr<IFileSaveDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return {};
-  COMDLG_FILTERSPEC filters[] = {{L"PDF document", L"*.pdf"}};
+  COMDLG_FILTERSPEC filters[] = {{format.name, format.pattern}};
   dlg->SetFileTypes(1, filters);
-  dlg->SetDefaultExtension(L"pdf");
+  dlg->SetDefaultExtension(format.ext);
   dlg->SetFileName(fw::FileNameOf(suggested).c_str());
   ComPtr<IShellItem> folder;
   std::wstring dir = fw::DirOf(suggested);
@@ -1582,17 +1554,19 @@ void App::ActivateTab(int index) {
   if (index < 0 || index >= static_cast<int>(tabs_.size())) return;
   if (index != active_ && search_.IsOpen()) CloseSearch();
   if (index != active_ && notes_.IsOpen()) FinishNote(NoteEditor::kSave);
+  if (index != active_) panel_.Show(nullptr, false);  // its content belongs to the tab
   if (index != active_ && Active()) Active()->OnDeactivated();
   active_ = index;
-  DocumentView* v = Active();
+  TabContent* v = Active();
   FocusBox(v->PasswordBox());
+  KeyFocusMoved();
   Layout();
   std::wstring title = v->Title() + L" – Featherweight";
   SetWindowTextW(hwnd_, title.c_str());
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-bool App::ConfirmClose(DocumentView* view) {
+bool App::ConfirmClose(TabContent* view) {
   if (!view->Modified()) return true;
   std::wstring heading = L"Save changes to “" + view->Title() + L"”?";
   constexpr int kSaveAs = 100;
@@ -1619,7 +1593,7 @@ bool App::ConfirmClose(DocumentView* view) {
 
 bool App::CloseTab(int index) {
   if (index < 0 || index >= static_cast<int>(tabs_.size())) return false;
-  DocumentView* v = tabs_[index].get();
+  TabContent* v = tabs_[index].get();
   if (notes_.IsOpen() && notes_.View() == v) FinishNote(NoteEditor::kSave);
   if (v->Modified()) {
     ActivateTab(index);
@@ -1629,6 +1603,7 @@ bool App::CloseTab(int index) {
   if (!snapshot_) settings_.Save();
   if (focusBox_ && focusBox_ == v->PasswordBox()) FocusBox(nullptr);
   if (index == active_ && search_.IsOpen()) CloseSearch();
+  if (index == active_) panel_.Show(nullptr, false);
   tabs_.erase(tabs_.begin() + index);
   if (tabs_.empty()) {
     active_ = -1;
@@ -1644,17 +1619,17 @@ bool App::CloseTab(int index) {
   return true;
 }
 
-void App::RememberState(DocumentView* view) {
+void App::RememberState(TabContent* view) {
   if (view && view->Ready() && !snapshot_) settings_.SetState(view->Path(), view->State());
 }
 
 bool App::SaveActive(bool saveAs) {
-  DocumentView* v = Active();
+  TabContent* v = Active();
   if (!v || !v->Ready()) return false;
   if (!saveAs && !v->Modified()) return true;
   std::wstring path = v->Path();
   if (saveAs) {
-    path = SaveDialog(v->Path());
+    path = SaveDialog(v->Path(), v->SaveAsFormat());
     if (path.empty()) return false;
   }
   std::wstring error;
@@ -1672,7 +1647,7 @@ bool App::SaveActive(bool saveAs) {
     banner_.Show(BannerKind::Warning, error + L" Choose another place to save it.");
     InvalidateRect(hwnd_, nullptr, FALSE);
     UpdateWindow(hwnd_);
-    path = SaveDialog(v->Path());
+    path = SaveDialog(v->Path(), v->SaveAsFormat());
     if (!path.empty() && v->Save(path, error)) {
       settings_.AddRecent(v->Path());
       settings_.Save();
@@ -1687,12 +1662,12 @@ bool App::SaveActive(bool saveAs) {
 }
 
 void App::PrintActive() {
-  DocumentView* v = Active();
+  TabContent* v = Active();
   if (!v || !v->Ready()) return;
   std::wstring message;
   HideTooltip();
-  print::Outcome outcome = print::PrintDocument(
-      hwnd_, *v->Doc(), v->CurrentPage(), v->Title(),
+  PrintOutcome outcome = v->Print(
+      hwnd_,
       [this](int done, int total) {
         banner_.Show(BannerKind::Info,
                      L"Printing… page " + std::to_wstring(done + 1) + L" of " + std::to_wstring(total));
@@ -1701,16 +1676,16 @@ void App::PrintActive() {
       },
       message);
   switch (outcome) {
-    case print::Outcome::Printed: banner_.Show(BannerKind::Success, message, {}, 3000); break;
-    case print::Outcome::NotAllowed: banner_.Show(BannerKind::Warning, message, {}, 6000); break;
-    case print::Outcome::Failed: banner_.Show(BannerKind::Error, message); break;
-    case print::Outcome::Cancelled: banner_.Hide(); break;
+    case PrintOutcome::Printed: banner_.Show(BannerKind::Success, message, {}, 3000); break;
+    case PrintOutcome::NotAllowed: banner_.Show(BannerKind::Warning, message, {}, 6000); break;
+    case PrintOutcome::Failed: banner_.Show(BannerKind::Error, message); break;
+    case PrintOutcome::Cancelled: banner_.Hide(); break;
   }
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void App::OpenSearch() {
-  DocumentView* v = Active();
+  TabContent* v = Active();
   if (!v || !v->Ready()) return;
   if (presentation_) return;
   if (!search_.IsOpen()) search_.Open();
@@ -1727,7 +1702,7 @@ void App::OpenSearch() {
 void App::CloseSearch() {
   search_.Close();
   if (focusBox_ == &search_.Box()) FocusBox(nullptr);
-  if (DocumentView* v = Active()) v->ClearSearch();
+  if (TabContent* v = Active()) v->ClearSearch();
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -1766,7 +1741,7 @@ void App::ToggleFullScreen() {
 }
 
 void App::SetPresentation(bool on) {
-  DocumentView* v = Active();
+  PagedView* v = ActivePaged();
   if (on == presentation_ || !v || !v->Ready()) return;
   if (on) {
     if (search_.IsOpen()) CloseSearch();
@@ -1817,7 +1792,7 @@ void App::ViewRequestPrint() { PostMessageW(hwnd_, WM_COMMAND, CmdPrint, 0); }
 
 void App::ViewFocusTextBox(TextBox* box) { FocusBox(box); }
 
-void App::ViewPasswordAccepted(DocumentView* view) {
+void App::ViewPasswordAccepted(TabContent* view) {
   view->SetViewport(DocRect(), ui_);
   if (auto st = settings_.GetState(view->Path())) view->ApplyState(*st);
   else view->ApplyState(FileState{});
@@ -1826,7 +1801,7 @@ void App::ViewPasswordAccepted(DocumentView* view) {
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-void App::ViewOpenNote(DocumentView* view, const NoteTarget& note) {
+void App::ViewOpenNote(PdfView* view, const NoteTarget& note) {
   if (notes_.IsOpen()) FinishNote(NoteEditor::kSave);
   HideTooltip();
   FocusBox(nullptr);
@@ -1836,7 +1811,7 @@ void App::ViewOpenNote(DocumentView* view, const NoteTarget& note) {
 }
 
 void App::FinishNote(NoteEditor::Action action) {
-  DocumentView* v = notes_.View();
+  PdfView* v = notes_.View();
   if (!v) return;
   bool stillOpen = false;
   for (auto& t : tabs_)
@@ -1889,9 +1864,11 @@ void App::StartupNotices() {
 
   // If Featherweight was registered from a folder that no longer exists (moved or deleted),
   // point "Open with" at this copy. A registration of another existing copy is left alone.
+  // A kind whose viewer shipped since this copy was registered is added.
   if (fileassoc::IsRegistered() && !fileassoc::IsRegisteredAt(exe)) {
     std::wstring registered = fileassoc::RegisteredExe();
-    if (registered.empty() || !util::FileExists(registered)) fileassoc::Register(exe);
+    if (registered.empty() || !util::FileExists(registered) || fileassoc::MissesShippedKinds(exe))
+      fileassoc::Register(exe);
   }
 
   if (settings_.IsInstalled()) {
@@ -1906,13 +1883,34 @@ void App::StartupNotices() {
 
   if (updated) {
     banner_.Show(BannerKind::Success, L"Featherweight was updated to " + current, {}, 6000);
-  } else if (!settings_.offeredDefaultApp && !firstRun && !fileassoc::IsDefault()) {
-    // Offered once, on the second start, so the very first impression is just the app.
-    settings_.offeredDefaultApp = true;
-    banner_.Show(BannerKind::Info, L"Open PDFs with Featherweight by default?",
-                 {{kActMakeDefault, L"Make default", true}, {kActNotNow, L"Not now"}});
+  } else if (!firstRun) {
+    // Offered once per kind of file, from the second start on (so the very first impression is
+    // just the app), and one kind per start.
+    for (fw::FileKind kind : fw::ShippedViewers()) {
+      bool& offered = settings_.offeredDefaultApp[static_cast<int>(kind)];
+      if (offered || fileassoc::IsDefault(kind)) continue;
+      offered = true;
+      banner_.Show(BannerKind::Info,
+                   L"Open " + std::wstring(fw::Info(kind).plural) + L" with Featherweight by default?",
+                   {{kActMakeDefault + static_cast<int>(kind), L"Make default", true}, {kActNotNow, L"Not now"}});
+      break;
+    }
   }
   settings_.Save();
+}
+
+void App::MakeDefaultApp(fw::FileKind kind) {
+  const fw::FileKindInfo& k = fw::Info(kind);
+  if (fileassoc::Register(util::ExePath())) {
+    fileassoc::OpenDefaultAppsSettings();
+    banner_.Show(BannerKind::Info,
+                 L"In the Settings window that just opened, choose Featherweight for " + std::wstring(k.extensions[0]) +
+                     L" files.",
+                 {}, 9000);
+  } else {
+    banner_.Show(BannerKind::Error,
+                 L"Featherweight couldn’t register itself as a " + std::wstring(k.noun) + L" app.");
+  }
 }
 
 void App::MaybeCheckForUpdates(bool manual) {
@@ -1992,22 +1990,28 @@ void App::PumpUntilIdle(double maxMs) {
       TranslateMessage(&msg);
       DispatchMessageW(&msg);
     }
-    // Hidden windows get no WM_PAINT; draw a frame so views register what they need.
-    if (dc_) {
-      wicTarget_->BeginDraw();
-      RenderFrame(dc_.Get());
-      wicTarget_->EndDraw();
-    }
+    // Hidden windows get no WM_PAINT; draw a frame so views register what they need. (The widget
+    // gallery runs scripts too, in a window that paints itself.)
+    const bool draw = snapshot_ && dc_;
+    if (draw) DrawSnapshotFrame();
     bool more = Idle();
     if (!more && !anim::Running()) {
       // One more frame to pick up anything that just became visible.
-      wicTarget_->BeginDraw();
-      RenderFrame(dc_.Get());
-      wicTarget_->EndDraw();
+      if (draw) DrawSnapshotFrame();
       if (!Idle() && !anim::Running()) break;
     }
     if (!more) Sleep(5);
   }
+}
+
+void App::DrawSnapshotFrame() {
+  if (snapshotWindow_) {
+    Paint();
+    return;
+  }
+  dc_->BeginDraw();
+  RenderFrame(dc_.Get());
+  dc_->EndDraw();
 }
 
 void App::RunScript(const std::wstring& script) {
@@ -2102,16 +2106,16 @@ void App::RunScript(const std::wstring& script) {
       int delta = p.size() > 0 ? _wtoi(p[0].c_str()) : -120;
       x = p.size() > 1 ? _wtoi(p[1].c_str()) : 400;
       y = p.size() > 2 ? _wtoi(p[2].c_str()) : 400;
-      if (DocumentView* v = Active()) v->OnWheel(delta, false, 0, x, y);
+      if (TabContent* v = Active()) v->OnWheel(delta, false, 0, x, y);
     } else if (op == L"zoom") {
-      if (DocumentView* v = Active()) v->SetZoom(_wtoi(arg.c_str()) / 100.0);
+      if (PagedView* v = ActivePaged()) v->SetZoom(_wtoi(arg.c_str()) / 100.0);
     } else if (op == L"page") {
-      if (DocumentView* v = Active()) v->GoToPage(_wtoi(arg.c_str()) - 1);
+      if (PagedView* v = ActivePaged()) v->GoToPage(_wtoi(arg.c_str()) - 1);
     } else if (op == L"view") {
-      if (DocumentView* v = Active())
+      if (PagedView* v = ActivePaged())
         v->SetViewMode(arg == L"single" ? fw::ViewMode::Single : arg == L"facing" ? fw::ViewMode::Facing : fw::ViewMode::Continuous);
     } else if (op == L"save") {
-      if (DocumentView* v = Active()) {
+      if (TabContent* v = Active()) {
         std::wstring err;
         if (!v->Save(arg, err)) fwprintf(stderr, L"save failed: %s\n", err.c_str());
       }
@@ -2130,7 +2134,7 @@ void App::RunScript(const std::wstring& script) {
       fwprintf(stderr, L"updater: status=%d version=%s page=%s error=%s\n", static_cast<int>(r.status),
                r.version.c_str(), r.pageUrl.c_str(), r.error.c_str());
     } else if (op == L"highlight") {
-      if (DocumentView* v = Active()) v->HighlightSelection();
+      if (PdfView* v = ActivePdf()) v->HighlightSelection();
     } else if (op == L"dumpedit") {
       wchar_t buf[512] = {};
       GetWindowTextW(notes_.Edit(), buf, 512);
@@ -2139,7 +2143,7 @@ void App::RunScript(const std::wstring& script) {
     } else if (op == L"dumpnote") {
       int x, y, page;
       xy(x, y);
-      if (DocumentView* v = Active()) {
+      if (PdfView* v = ActivePdf()) {
         AnnotHit hit = v->AnnotAtPoint(x, y, page);
         std::wstring t = hit.kind == AnnotHit::Kind::Note ? v->NoteText(NoteTarget{page, hit.index}) : L"(no note)";
         for (wchar_t ch : t) fwprintf(stderr, L"%04x ", static_cast<unsigned>(ch));
@@ -2148,13 +2152,13 @@ void App::RunScript(const std::wstring& script) {
     } else if (op == L"removeannot") {
       int x, y, page;
       xy(x, y);
-      if (DocumentView* v = Active()) {
+      if (PdfView* v = ActivePdf()) {
         AnnotHit hit = v->AnnotAtPoint(x, y, page);
         if (hit.kind != AnnotHit::Kind::None) v->RemoveAnnot(page, hit.index);
       }
     } else if (op == L"note" || op == L"opennote") {
       auto p = fw::Split(arg, L',');
-      DocumentView* v = Active();
+      PdfView* v = ActivePdf();
       NoteTarget note;
       if (v && p.size() >= 2 && v->NewNoteAt(_wtoi(p[0].c_str()), _wtoi(p[1].c_str()), note)) {
         std::wstring text = p.size() > 2 ? p[2] : L"Note";
@@ -2163,13 +2167,34 @@ void App::RunScript(const std::wstring& script) {
         else ViewOpenNote(v, note);
       }
     } else if (op == L"recent") {
-      settings_.AddRecent(arg);
+      // recent:path or recent:path|seconds ago (kept in order of time).
+      size_t bar = arg.rfind(L'|');
+      settings_.AddRecent(arg.substr(0, bar));
+      if (bar != std::wstring::npos) settings_.recent.front().lastOpened -= _wtoi64(arg.c_str() + bar + 1);
+      std::stable_sort(settings_.recent.begin(), settings_.recent.end(),
+                       [](const RecentFile& a, const RecentFile& b) { return a.lastOpened > b.lastOpened; });
+      Layout();
+    } else if (op == L"editors") {
+      // editors:all or editors:document,workbook shows the New choices as they'll be once those ship.
+      for (const fw::FileKindInfo& k : fw::FileKinds())
+        for (const std::wstring& name : fw::Split(arg, L','))
+          if (name == L"all" || fw::EqualsNoCase(name, k.name) || fw::EqualsNoCase(name, k.noun))
+            fw::SetEditorShippedForTesting(k.kind, true);
       Layout();
     } else if (op == L"banner") {
       banner_.Show(BannerKind::Info, arg, {{kActUpdate, L"Update", true}, {kActSkip, L"Skip this version"}});
     } else if (op == L"wait") {
       PumpUntilIdle(_wtoi(arg.c_str()));
       continue;
+    } else if (op == L"resize" && snapshotWindow_) {
+      // resize:WxH changes the window's size (only on screen: off-screen targets have a fixed size).
+      auto parts = fw::Split(arg, L'x');
+      if (parts.size() == 2)
+        SetWindowPos(hwnd_, nullptr, 0, 0, _wtoi(parts[0].c_str()), _wtoi(parts[1].c_str()),
+                     SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    } else if (op == L"devicelost") {
+      // As if the graphics driver had been reset: everything made with the device is recreated.
+      gpu::DeviceLost();
     }
     PumpUntilIdle(1500);
   }
@@ -2209,38 +2234,98 @@ int App::RunSnapshot(const AppOptions& opts) {
   RECT rc;
   GetClientRect(hwnd_, &rc);
   UINT w = std::max(1L, rc.right), h = std::max(1L, rc.bottom);
-  if (FAILED(WIC()->CreateBitmap(w, h, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &wicBitmap_))) return 2;
-  D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
-      D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f,
-      96.f);
-  if (FAILED(D2D()->CreateWicBitmapRenderTarget(wicBitmap_.Get(), props, &wicTarget_))) return 3;
-  wicTarget_.As(&dc_);
-  if (!dc_) return 4;
+  if (snapshotWindow_) {
+    // On screen, without taking focus, so the frame goes through the swap chain and the compositor.
+    SetWindowPos(hwnd_, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    if (!EnsureTarget()) return 3;
+  } else if (opts.snapshotGpu) {
+    dc_ = gpu::CreateContext();
+    if (!dc_) return 3;
+    // Opaque, like the window's swap chain.
+    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_TARGET, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE), 96.f, 96.f);
+    if (FAILED(dc_->CreateBitmap(D2D1::SizeU(w, h), nullptr, 0, props, &gpuTarget_))) return 4;
+    dc_->SetTarget(gpuTarget_.Get());
+  } else {
+    if (FAILED(WIC()->CreateBitmap(w, h, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &wicBitmap_))) return 2;
+    D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+        D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f, 96.f);
+    if (FAILED(D2D()->CreateWicBitmapRenderTarget(wicBitmap_.Get(), props, &wicTarget_))) return 3;
+    wicTarget_.As(&dc_);
+    if (!dc_) return 4;
+  }
 
+  caret::SetSteady(true);
   OpenFiles(opts.files);
+  if (opts.widgetGallery) OpenGallery();
   Layout();
   PumpUntilIdle(5000);
   if (!opts.script.empty()) RunScript(opts.script);
   PumpUntilIdle(5000);
-
-  wicTarget_->BeginDraw();
-  RenderFrame(dc_.Get());
-  wicTarget_->EndDraw();
+  DrawSnapshotFrame();
 
   // Encode as PNG.
+  ComPtr<IWICBitmapSource> image = SnapshotImage();
   ComPtr<IWICStream> stream;
   ComPtr<IWICBitmapEncoder> encoder;
   ComPtr<IWICBitmapFrameEncode> frame;
-  if (FAILED(WIC()->CreateStream(&stream)) || FAILED(stream->InitializeFromFilename(opts.snapshotPath.c_str(), GENERIC_WRITE)) ||
+  if (!image || FAILED(WIC()->CreateStream(&stream)) ||
+      FAILED(stream->InitializeFromFilename(opts.snapshotPath.c_str(), GENERIC_WRITE)) ||
       FAILED(WIC()->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) ||
       FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) ||
       FAILED(encoder->CreateNewFrame(&frame, nullptr)) || FAILED(frame->Initialize(nullptr)) ||
-      FAILED(frame->WriteSource(wicBitmap_.Get(), nullptr)) || FAILED(frame->Commit()) || FAILED(encoder->Commit())) {
+      FAILED(frame->WriteSource(image.Get(), nullptr)) || FAILED(frame->Commit()) || FAILED(encoder->Commit())) {
     return 5;
   }
+  panel_.Show(nullptr, false);
   tabs_.clear();
   dc_.Reset();
+  gpuTarget_.Reset();
   wicTarget_.Reset();
+  swap_.Reset();
   DestroyWindow(hwnd_);
   return 0;
+}
+
+ComPtr<IWICBitmapSource> App::SnapshotImage() {
+  RECT rc;
+  GetClientRect(hwnd_, &rc);
+  UINT w = std::max(1L, rc.right), h = std::max(1L, rc.bottom);
+  ComPtr<IWICBitmap> out;
+  if (wicBitmap_) {
+    out = wicBitmap_;
+  } else if (gpuTarget_) {
+    // Copy the frame to a bitmap the CPU can read.
+    ComPtr<ID2D1Bitmap1> cpu;
+    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE), 96.f, 96.f);
+    D2D1_MAPPED_RECT mapped{};
+    if (FAILED(dc_->CreateBitmap(D2D1::SizeU(w, h), nullptr, 0, props, &cpu)) ||
+        FAILED(cpu->CopyFromBitmap(nullptr, gpuTarget_.Get(), nullptr)) ||
+        FAILED(cpu->Map(D2D1_MAP_OPTIONS_READ, &mapped))) {
+      return nullptr;
+    }
+    std::vector<BYTE> pixels(static_cast<size_t>(w) * h * 4);
+    for (UINT y = 0; y < h; ++y) memcpy(&pixels[static_cast<size_t>(y) * w * 4], mapped.bits + y * mapped.pitch, w * 4);
+    cpu->Unmap();
+    for (size_t i = 3; i < pixels.size(); i += 4) pixels[i] = 0xFF;  // the alpha of an opaque target is undefined
+    WIC()->CreateBitmapFromMemory(w, h, GUID_WICPixelFormat32bppPBGRA, w * 4, static_cast<UINT>(pixels.size()),
+                                  pixels.data(), &out);
+  } else if (snapshotWindow_) {
+    // Let the compositor show the last frame, then ask it for the window's content.
+    DwmFlush();
+    HDC screen = GetDC(hwnd_);
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP bmp = CreateCompatibleBitmap(screen, w, h);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    BOOL ok = PrintWindow(hwnd_, mem, PW_CLIENTONLY | PW_RENDERFULLCONTENT);
+    SelectObject(mem, old);
+    if (ok) WIC()->CreateBitmapFromHBITMAP(bmp, nullptr, WICBitmapIgnoreAlpha, &out);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(hwnd_, screen);
+  }
+  return out;
 }

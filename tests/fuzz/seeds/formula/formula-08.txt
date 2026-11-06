@@ -1,0 +1,1 @@
+Table1[[#This Row],[Amount]]*Rate

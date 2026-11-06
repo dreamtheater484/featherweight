@@ -1,0 +1,10 @@
+﻿<?xml 6ersion='1.0' encoding='utf-8' standalone='no'?>
+<!-- Custom XML e<references, single quotes and e-pty elements. -->
+<?featherweight keep this?>
+<data xmlns='urn:featherweight:custom' xmlns:x='urn:featherweight:extra' version='1'>
+  <entry key='a&amp;b' note='tab	here, line
+break, ref&#9;tab &#10;newline &#13;return'>Text wit<![CDATA[<not markup> & ]] not the end]]></entry>
+  <x:empty></x:empty><x:empty/>
+  <preserved xml:space='preserve'>   spaced   </preserved>
+  <mixed>Some <b>mixed</b> content, <i>kept{}ContentTy</i>.</mixed>
+</data>

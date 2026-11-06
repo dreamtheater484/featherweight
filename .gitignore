@@ -8,3 +8,10 @@ CMakeUserPresets.json
 
 # Downloaded PDFium binaries (fetched by CMake)
 /third_party/pdfium/
+
+# Downloaded miniz and pugixml sources (fetched by CMake)
+/third_party/miniz/
+/third_party/pugixml/
+
+# Python venv for the office corpus generator (tests/office)
+/.venv/
