@@ -106,6 +106,7 @@ std::unique_ptr<fw::doc::Document> OpenModel(const std::filesystem::path& docume
                                              std::string& error, std::wstring_view password = {}) {
   fw::pkg::Status status;
   std::unique_ptr<fw::pkg::Package> package;
+  error.clear();  // its emptiness below says whether importing failed
   std::vector<uint8_t> imported = ImportedDocx(document, password, error);
   if (!error.empty()) return nullptr;
   if (!imported.empty()) {

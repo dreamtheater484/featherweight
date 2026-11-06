@@ -380,6 +380,7 @@ int CompareCorpus(const Options& options) {
       if (docx) originals.insert(std::move(key));
     }
     for (const ReferenceEntry& e : set->entries) {
+      error.clear();  // one document's failure says nothing about the next
       DocResult d;
       d.source = e.source;
       bool docx = false;
@@ -467,6 +468,7 @@ int SelfTest(const Options& options) {
     for (const ReferenceEntry& e : set->entries) {
       if (e.pdf.empty()) continue;
       ++documents;
+      error.clear();
       auto reference = ReadPdfLines(e.pdf, error);
       if (!reference) {
         std::printf("[FAIL] %s: %s\n", e.source.c_str(), error.c_str());
