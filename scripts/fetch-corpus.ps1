@@ -13,12 +13,16 @@
   Every file passes the safety screen before Word or Featherweight opens it:
   1. Handling: each download goes into its own new, empty quarantine folder. Nothing from a
      download is ever run. Only HTTPS, and every redirect must stay on an allowed host (the
-     "sources" list in the manifest).
+     "sources" list in the manifest). A source with "paths" allows only URLs under those paths
+     (a shared host such as raw.githubusercontent.com, limited to one project's repository).
   2. Type: a .docx under 20 MB, a zip whose [Content_Types].xml declares the normal (not
      macro-enabled) WordprocessingML main document.
   3. Content. Rejected:
      - VBA, macro-enabled content types, ActiveX, OLE objects, anything in word/embeddings/,
-       altChunk parts, web extensions and task panes, ribbon customizations, mail merge sources
+       altChunk parts, web extensions and task panes, ribbon customizations, mail merge sources.
+       One exception: a chart's own workbook, an .xlsx in word/embeddings/ that only a chart part
+       refers to. It must be a plain workbook and pass the same kind of screen inside: no
+       macros, ActiveX, OLE, external links, data connections or web functions in formulas.
      - an attached template
      - an external relationship other than a hyperlink, and a hyperlink (relationship, field or
        VML href) that isn't plain http, https or mailto
@@ -123,13 +127,16 @@ $manifestData = if (Test-Path $Manifest) { Read-Json $Manifest } else { $null }
 if (-not $manifestData -or -not $manifestData.sources) { throw "$Manifest has no sources list." }
 $sources = @($manifestData.sources)
 
-# The source whose domain the host is, or ends with ("gov" allows every *.gov host).
-function Find-Source([string]$hostName) {
-  $h = $hostName.ToLowerInvariant().TrimEnd('.')
+# The source whose domain the URL's host is, or ends with ("gov" allows every *.gov host). A
+# source with "paths" matches only URLs whose path starts with one of them (case-sensitive).
+function Find-Source([Uri]$u) {
+  $h = $u.Host.ToLowerInvariant().TrimEnd('.')
   $best = $null
   foreach ($s in $sources) {
     $d = $s.domain.ToLowerInvariant()
-    if ($h -eq $d -or $h.EndsWith(".$d")) { if (-not $best -or $d.Length -gt $best.domain.Length) { $best = $s } }
+    if ($h -ne $d -and -not $h.EndsWith(".$d")) { continue }
+    if ($s.paths -and -not @($s.paths | Where-Object { $u.AbsolutePath.StartsWith($_, [StringComparison]::Ordinal) })) { continue }
+    if (-not $best -or $d.Length -gt $best.domain.Length) { $best = $s }
   }
   $best
 }
@@ -144,7 +151,7 @@ function Get-Download([string]$url, [string]$dest) {
     for ($hop = 0; $hop -le 5; $hop++) {
       $u = [Uri]$url
       if ($u.Scheme -ne "https") { throw "not HTTPS: $url" }
-      if (-not (Find-Source $u.Host)) { throw "host not on the sources list: $($u.Host)" }
+      if (-not (Find-Source $u)) { throw "not on the sources list: $($u.Host)" }
       $w = & $curl -sS --proto =https --max-redirs 0 --max-filesize $MaxBytes --connect-timeout 30 --max-time 300 `
         --stderr $errors -D $headers -o $dest -w "%{http_code} %{redirect_url}" $u.AbsoluteUri
       if ($LASTEXITCODE -eq 63) { throw "larger than 20 MB" }
@@ -224,6 +231,81 @@ function New-XmlReader([byte[]]$bytes) {
   [Xml.XmlReader]::Create((New-Object IO.MemoryStream(, $bytes)), $settings)
 }
 
+# A relationship's target as a part name, from the .rels part that holds it.
+function Resolve-PartName([string]$relsPart, [string]$target) {
+  $t = [Uri]::UnescapeDataString($target)
+  if ($t.StartsWith('/')) { return $t.TrimStart('/') }
+  $parts = New-Object Collections.Generic.List[string]
+  $dir = ($relsPart -replace '(?i)(^|/)_rels/[^/]+\.rels$', '').TrimEnd('/')
+  if ($dir) { foreach ($p in $dir.Split('/')) { $parts.Add($p) } }
+  foreach ($p in $t.Split('/')) {
+    if ($p -eq '..') { if ($parts.Count) { $parts.RemoveAt($parts.Count - 1) } }
+    elseif ($p -and $p -ne '.') { $parts.Add($p) }
+  }
+  $parts -join '/'
+}
+
+# A chart's own workbook (the one exception to word/embeddings/): a plain .xlsx, screened inside.
+$chartBook = '(?i)^word/embeddings/[^/]+\.xlsx$'
+$chartRels = '(?i)^word/charts/_rels/chart(ex)?\d*\.xml\.rels$'
+$xlsxType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+$xlsxMain = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+$badBookPath = '(?i)vbaProject|/activeX/|^xl/embeddings/|^xl/externalLinks/|connections\.xml$|^xl/queryTables/|^xl/pivotCache/|^customUI/|webextension|taskpanes'
+$badBookType = '(?i)externalLink|connections|queryTable|pivotCache'
+$badBookRel = @("externalLink", "externalLinkPath", "connections", "queryTable", "pivotCacheDefinition", "pivotCacheRecords")
+$badFormula = '(?i)\b(WEBSERVICE|FILTERXML|CALL|REGISTER|REGISTER\.ID|EXEC|RTD)\s*\('
+# Kana, CJK ideographs and Hangul (built from code points: the script stays ASCII).
+$cjkClass = "[{0}-{1}{2}-{3}{4}-{5}{6}-{7}]" -f [char]0x3040, [char]0x30FF, [char]0x3400, [char]0x4DBF, [char]0x4E00, [char]0x9FFF, [char]0xAC00, [char]0xD7AF
+
+# Screens the workbook in $entry. Returns the reasons it fails; none means it passed.
+function Test-Workbook($entry, $budget) {
+  $why = New-Object Collections.Generic.List[string]
+  $inner = $null
+  try {
+    $inner = [IO.Compression.ZipArchive]::new([IO.MemoryStream]::new([byte[]](Read-Part $entry $budget)), [IO.Compression.ZipArchiveMode]::Read)
+    $es = @($inner.Entries)
+    if ($es.Count -gt 1000) { $why.Add("more than 1000 parts"); return , $why }
+    $sawMain = $false
+    foreach ($e in $es) {
+      $n = $e.FullName.TrimStart('/')
+      if ($n -match $badBookPath) { $why.Add("forbidden part $n"); continue }
+      if ($n -notmatch '(?i)\.(xml|rels)$') { continue }
+      $bytes = Read-Part $e $budget
+      $m = [regex]::Match((Get-XmlText $bytes), $badString)
+      if ($m.Success) { $why.Add("contains '$($m.Value)' ($n)") }
+      $inF = $false
+      $r = New-XmlReader $bytes  # refuses a DTD, as in the document
+      while ($r.Read()) {
+        if ($r.NodeType -eq [Xml.XmlNodeType]::Text) { if ($inF -and $r.Value -match $badFormula) { $why.Add("formula with $($Matches[1]) ($n)") }; continue }
+        if ($r.NodeType -eq [Xml.XmlNodeType]::EndElement) { if ($r.LocalName -eq "f") { $inF = $false }; continue }
+        if ($r.NodeType -ne [Xml.XmlNodeType]::Element) { continue }
+        switch -CaseSensitive ($r.LocalName) {
+          "f" { $inF = -not $r.IsEmptyElement }
+          { $_ -in "Default", "Override" } {
+            $type = $r.GetAttribute("ContentType")
+            if ($type -match $badType -or $type -match $badBookType) { $why.Add("forbidden content type $type") }
+            if ($type -eq $xlsxMain) { $sawMain = $true }
+          }
+          "Relationship" {
+            $short = ($r.GetAttribute("Type") -split '/')[-1]; $target = $r.GetAttribute("Target")
+            if ($badRel -contains $short -or $badBookRel -contains $short) { $why.Add("forbidden relationship $short ($n)") }
+            if ($r.GetAttribute("TargetMode") -eq "External") {
+              if ($short -ne "hyperlink") { $why.Add("external $short relationship to $(Format-Target $target) ($n)") }
+              elseif ($target -notmatch $plainLink) { $why.Add("hyperlink that isn't http, https or mailto: $(Format-Target $target) ($n)") }
+            }
+          }
+          { $_ -in "oleObject", "oleObjects", "control", "controls" } { $why.Add("$($_) ($n)") }
+        }
+      }
+      $r.Dispose()
+    }
+    if (-not $sawMain) { $why.Add("no plain (macro-free) workbook part") }
+  } catch {
+    $why.Add("unreadable: $($_.Exception.Message)")
+  } finally { if ($inner) { $inner.Dispose() } }
+  , $why
+}
+
 # Splits a field instruction into words and quoted strings.
 function Split-Instr([string]$instr) {
   @([regex]::Matches($instr, '"[^"]*"|\S+') | ForEach-Object { $_.Value.Trim('"') })
@@ -252,8 +334,9 @@ function Test-Docx([string]$path) {
       $n = $e.FullName.TrimStart('/')
       if ($names.ContainsKey($n.ToLowerInvariant())) { throw "duplicate part name $n" }
       $names[$n.ToLowerInvariant()] = $e
-      if ($n -match $badPath) { $reasons.Add("forbidden part $n") }
+      if ($n -match $badPath -and $n -notmatch $chartBook) { $reasons.Add("forbidden part $n") }
     }
+    $books = @{}  # the workbooks chart parts refer to
     $budget = [long]$TotalCap
     $ct = $names["[content_types].xml"]
     if (-not $ct) { throw "no [Content_Types].xml" }
@@ -289,7 +372,9 @@ function Test-Docx([string]$path) {
         if ($r.NodeType -ne [Xml.XmlNodeType]::Element -or $r.LocalName -ne "Relationship") { continue }
         $type = $r.GetAttribute("Type"); $target = $r.GetAttribute("Target"); $mode = $r.GetAttribute("TargetMode")
         $short = ($type -split '/')[-1]
-        if ($badRel -contains $short) { $reasons.Add("forbidden relationship $short ($n)") }
+        if ($short -eq "package" -and $n -match $chartRels -and $mode -ne "External" -and (Resolve-PartName $n $target) -match $chartBook) {
+          $books[(Resolve-PartName $n $target).ToLowerInvariant()] = $true
+        } elseif ($badRel -contains $short) { $reasons.Add("forbidden relationship $short ($n)") }
         if ($n -ieq "_rels/.rels" -and $short -eq "officeDocument") { $main = $target.TrimStart('/') }
         if ($mode -eq "External") {
           if ($short -ne "hyperlink") { $reasons.Add("external $short relationship to $(Format-Target $target) ($n)") }
@@ -305,6 +390,14 @@ function Test-Docx([string]$path) {
       $t = Get-PartType $e.FullName.TrimStart('/')
       if ($t -and $t -match $badType) { $reasons.Add("forbidden part type $t ($($e.FullName))") }
     }
+    foreach ($k in @($names.Keys)) {
+      if ($k -notmatch $chartBook) { continue }
+      $n = $names[$k].FullName.TrimStart('/')
+      if (-not $books[$k]) { $reasons.Add("forbidden part $n (no chart refers to it)"); continue }
+      $t = Get-PartType $n
+      if ($t -ne $xlsxType) { $reasons.Add("chart workbook $n isn't a plain .xlsx ($t)"); continue }
+      foreach ($why in (Test-Workbook $names[$k] ([ref]$budget))) { $reasons.Add("chart workbook $($n): $why") }
+    }
 
     # Every XML part: forbidden strings and elements, fields, and the facts the manifest records.
     $count = @{}
@@ -319,6 +412,14 @@ function Test-Docx([string]$path) {
       $m = [regex]::Match($text, $badString)
       if ($m.Success) { $reasons.Add("contains '$($m.Value)' ($n)") }
       if ($n -match '(?i)\.rels$') { continue }
+      if ($n -match '(?i)^word/document\d*\.xml$') {
+        # Kana, CJK ideographs and Hangul in the text (not font names): East Asian text.
+        $cjk = 0
+        foreach ($tm in [regex]::Matches($text, '<w:t(?:\s[^>]*)?>([^<]+)</w:t>')) {
+          $cjk += [regex]::Matches($tm.Groups[1].Value, $cjkClass).Count
+        }
+        if ($cjk -ge 10) { Add-Count "east-asian" $cjk }
+      }
       $isWordPart = $n -match '(?i)^word/'
       $stack = New-Object Collections.Generic.List[object]
       $inInstr = $false
@@ -369,6 +470,7 @@ function Test-Docx([string]$path) {
           "hyperlink" { if ($w) { Add-Count "hyperlinks" } }
           "bidi" { if ($w) { Add-Count "rtl" } }
           "rtl" { if ($w) { Add-Count "rtl" } }
+          "bidiVisual" { if ($w) { Add-Count "rtl" } }
           "embedRegular" { Add-Count "embedded-fonts" }
           "headerReference" { Add-Count "headers" }
           "footerReference" { Add-Count "footers" }
@@ -456,7 +558,7 @@ function Test-Docx([string]$path) {
     $tags = New-Object Collections.Generic.List[string]
     if ([int]$count["sections"] -gt 1) { $tags.Add("sections") }
     foreach ($k in "landscape", "columns", "footnotes", "endnotes", "comments", "revisions", "content-controls", "legacy-form-fields",
-                   "tables", "pictures", "text-boxes", "equations", "vml", "charts", "smartart", "numbering", "hyperlinks", "rtl", "embedded-fonts") {
+                   "tables", "pictures", "text-boxes", "equations", "vml", "charts", "smartart", "numbering", "hyperlinks", "rtl", "east-asian", "embedded-fonts") {
       if ($count[$k]) { $tags.Add($k) }
     }
     if ($count["headers"] -or $count["footers"]) { $tags.Add("headers-footers") }
@@ -537,7 +639,7 @@ if ($Candidates) {
   foreach ($c in $list) {
     if ($known[$c.url]) { continue }
     $known[$c.url] = $true
-    $src = Find-Source ([Uri]$c.url).Host
+    $src = Find-Source ([Uri]$c.url)
     $tag = if ($src) { $src.tag } else { "x" }
     $name = if ($c.title) { $c.title } else { [IO.Path]::GetFileNameWithoutExtension(([Uri]$c.url).AbsolutePath) }
     $slug = Get-Slug $name

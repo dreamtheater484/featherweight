@@ -47,7 +47,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $apps = @{
-  Word = @{ Exe = "WINWORD"; ProgId = "Word.Application"; Ext = @(".docx", ".docm", ".dotx", ".dotm") }
+  Word = @{ Exe = "WINWORD"; ProgId = "Word.Application"; Ext = @(".docx", ".docm", ".dotx", ".dotm", ".doc", ".odt") }
   Excel = @{ Exe = "EXCEL"; ProgId = "Excel.Application"; Ext = @(".xlsx", ".xlsm", ".xltx", ".xltm") }
   PowerPoint = @{ Exe = "POWERPNT"; ProgId = "PowerPoint.Application"; Ext = @(".pptx", ".pptm", ".potx", ".potm", ".ppsx", ".ppsm") }
 }
@@ -156,7 +156,9 @@ if ($Child) {
         # FileName, ConfirmConversions, ReadOnly, AddToRecentFiles, PasswordDocument, PasswordTemplate, Revert,
         # WritePasswordDocument, WritePasswordTemplate, Format, Encoding, Visible, OpenAndRepair, DocumentDirection,
         # NoEncodingDialog, all by reference. A dummy password makes a protected file fail instead of prompting.
-        $doc = $office.Documents.Open([ref]$Source, [ref]$false, [ref]$true, [ref]$false, [ref]"-", [ref]"-", [ref]$false,
+        # The test files in a "protected" folder (scripts\make-test-files.ps1) open with the test password.
+        $pw = if ($Source -match '[\\/]protected[\\/]') { "featherweight" } else { "-" }
+        $doc = $office.Documents.Open([ref]$Source, [ref]$false, [ref]$true, [ref]$false, [ref]$pw, [ref]"-", [ref]$false,
                                       [ref]"-", [ref]"-", [ref]0, [ref]$missing, [ref]$false, [ref]$false, [ref]$missing, [ref]$true)
         $result.pages = $doc.ComputeStatistics(2)  # wdStatisticPages
         # wdExportFormatPDF, optimized for print, the whole document without markup, tagged, missing fonts as bitmaps.
@@ -229,7 +231,9 @@ if ($Corpus) {
   New-Item -ItemType Directory -Force $outRoot | Out-Null
   $manifestPath = Join-Path $outRoot "manifest.json"
   if ((Test-Path $manifestPath) -and -not $Force) { $old = @((Get-Content $manifestPath -Raw | ConvertFrom-Json).files) }
-  $screened = @("docx", "xlsx", "pptx") | ForEach-Object { Join-Path $corpusRoot $_ } | Where-Object { Test-Path $_ }
+  # docx, xlsx, pptx: screened downloads; doc, odt, dotx, protected: Word's copies of them (D5,
+  # scripts\make-test-files.ps1).
+  $screened = @("docx", "xlsx", "pptx", "doc", "odt", "dotx", "protected") | ForEach-Object { Join-Path $corpusRoot $_ } | Where-Object { Test-Path $_ }
   if (-not $screened) { throw "$corpusRoot has no docx, xlsx or pptx folder (see scripts\fetch-corpus.ps1)." }
   foreach ($f in $screened | ForEach-Object { Get-ChildItem $_ -File -Recurse } | Sort-Object FullName) {
     if ((Test-Inside $f.FullName $outRoot) -or -not (Get-Kind $f.Extension)) { continue }
