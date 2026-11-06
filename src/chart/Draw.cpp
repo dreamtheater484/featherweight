@@ -23,8 +23,9 @@ using draw::Rect;
 
 constexpr size_t kMaxMarks = 60000;
 constexpr double kPi = 3.14159265358979323846;
-const Color kText = draw::Rgb(0x000000), kGrid = draw::Rgb(0xD9D9D9), kAxis = draw::Rgb(0xBFBFBF),
-            kWhite = draw::Rgb(0xFFFFFF);
+// kGray: lines a chart doesn't give a color (gridlines, axes, its border), as Office 2007's
+// default style draws them; Office 2013 and later state theirs.
+const Color kText = draw::Rgb(0x000000), kGray = draw::Rgb(0x868686), kWhite = draw::Rgb(0xFFFFFF);
 
 std::wstring Wide(const std::string& s) { return fw::Utf8ToWide(s); }
 
@@ -369,8 +370,11 @@ std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
       out.push_back({s.name.empty() ? L"Series " + std::to_wstring(k + 1) : s.name, c, line});
       if (++k >= 64) break;
     }
-  // Horizontal bars list their series bottom up, as they're stacked in each category.
-  if (g0.type == Type::Bar && ch.groups.size() == 1) std::reverse(out.begin(), out.end());
+  // Horizontal bars list their series bottom up, as they're stacked in each category; so do
+  // stacked columns, lines and areas in a legend at the side, top down as they stack (Word).
+  const bool side = ch.legend == LegendPos::Right || ch.legend == LegendPos::Left;
+  if (ch.groups.size() == 1 && (g0.type == Type::Bar || (side && g0.grouping != Grouping::Clustered)))
+    std::reverse(out.begin(), out.end());
   return out;
 }
 
@@ -783,20 +787,48 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   const Rect& P = p.r;
   if (!ch.plot.noFill && ch.plot.fill) b.Mark(Path::FromRect(P), ch.plot, *ch.plot.fill, std::nullopt, 0.75f);
 
-  // Gridlines and the category axis line.
+  // Gridlines and the category axis line, as their c:spPr say, or else in Office 2007's gray.
+  const auto stroke = [&](Point a, Point z, const Look& look) {
+    if (!look.noLine) b.Line(a, z, look.line.value_or(kGray), look.lineWidth >= 0 ? look.lineWidth : 0.75f);
+  };
   if (ch.value.gridlines)
-    for (double v : vticks) {
-      const Point a = p.At(0, Clamp01(vs.At(v))), z = p.At(1, Clamp01(vs.At(v)));
-      b.Line(a, z, kGrid, 0.75f);
-    }
+    for (double v : vticks) stroke(p.At(0, Clamp01(vs.At(v))), p.At(1, Clamp01(vs.At(v))), ch.value.grid);
   if (scatter && ch.category.gridlines)
     for (double v : xticks) {
       const float x = static_cast<float>(P.left + Clamp01(xscale.At(v)) * (P.right - P.left));
-      b.Line({x, P.top}, {x, P.bottom}, kGrid, 0.75f);
+      stroke({x, P.top}, {x, P.bottom}, ch.category.grid);
     }
-  if (ch.category.shown && !scatter) {
-    const double u0 = Clamp01(vs.At(0));
-    b.Line(p.At(0, u0), p.At(1, u0), kAxis, 0.75f);
+  // Tick marks across an axis line at `at`, `out` the way out of the plot (4 points long, as Office).
+  const auto tick = [&](Point at, Point out, const Axis& ax) {
+    if (ax.line.noLine || ax.ticks == Axis::Tick::None) return;
+    const float o = ax.ticks == Axis::Tick::In ? 0.0f : 4.0f, i = ax.ticks == Axis::Tick::Out ? 0.0f : 4.0f;
+    stroke({at.x - out.x * i, at.y - out.y * i}, {at.x + out.x * o, at.y + out.y * o}, ax.line);
+  };
+  if (scatter) {
+    // Both axes are value axes, crossing at zero.
+    const float y0 = static_cast<float>(P.bottom - Clamp01(vs.At(0)) * (P.bottom - P.top));
+    const float x0 = static_cast<float>(P.left + Clamp01(xscale.At(0)) * (P.right - P.left));
+    if (ch.category.shown) {
+      stroke({P.left, y0}, {P.right, y0}, ch.category.line);
+      for (double v : xticks) tick({static_cast<float>(P.left + Clamp01(xscale.At(v)) * (P.right - P.left)), y0}, {0, 1}, ch.category);
+    }
+    if (ch.value.shown) {
+      stroke({x0, P.top}, {x0, P.bottom}, ch.value.line);
+      for (double v : vticks) tick({x0, static_cast<float>(P.bottom - Clamp01(vs.At(v)) * (P.bottom - P.top))}, {-1, 0}, ch.value);
+    }
+  } else {
+    const Point catOut = p.bar ? Point{-1, 0} : Point{0, 1}, valOut = p.bar ? Point{0, 1} : Point{-1, 0};
+    if (ch.category.shown) {
+      const double u0 = Clamp01(vs.At(0));
+      stroke(p.At(0, u0), p.At(1, u0), ch.category.line);
+      const size_t marks = cats.between ? cats.n + 1 : cats.n;
+      for (size_t i = 0; i < marks && i < 4096; ++i)
+        tick(p.At(cats.between ? double(i) / cats.n : cats.Center(i), u0), catOut, ch.category);
+    }
+    if (ch.value.shown) {
+      stroke(p.At(0, 0), p.At(0, 1), ch.value.line);
+      for (double v : vticks) tick(p.At(0, Clamp01(vs.At(v))), valOut, ch.value);
+    }
   }
 
   // The groups, back to front.
@@ -853,7 +885,7 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
   if (!(W >= 1 && H >= 1 && W < 20000 && H < 20000) || ch.groups.empty()) return b.Take();
   const Color text = ch.textColor.value_or(kText);
   const float ts = std::clamp(ch.textSize, 1.0f, 72.0f), tts = std::clamp(ch.titleSize, 1.0f, 96.0f);
-  b.Mark(Path::FromRect({0, 0, W, H}), ch.area, kWhite, std::nullopt, 0.75f);
+  b.Mark(Path::FromRect({0, 0, W, H}), ch.area, kWhite, kGray, 0.75f);
   Rect r{7, 7, W - 7, H - 7};
   if (!ch.title.empty()) {
     b.Place(b.Text(ch.title, tts, ch.titleBold), W / 2, r.top + tts * 0.95f, 1, ch.titleColor.value_or(kText));

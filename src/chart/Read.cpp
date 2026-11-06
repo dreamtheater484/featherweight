@@ -181,10 +181,16 @@ std::string SourceFormat(pugi::xml_node group, const char* tag) {
 }
 
 // An axis; `source` is the format its numbers take when they're linked to the data's.
-Axis AxisOf(pugi::xml_node ax, const std::string& source) {
+Axis AxisOf(pugi::xml_node ax, const std::string& source, const draw::ColorContext& colors) {
   Axis a;
   a.shown = !On(ax, "delete", false) && Val(C(ax, "tickLblPos")) != "none";
   a.gridlines = static_cast<bool>(C(ax, "majorGridlines"));
+  a.grid = LookOf(C(C(ax, "majorGridlines"), "spPr"), colors);
+  a.line = LookOf(C(ax, "spPr"), colors);
+  if (pugi::xml_node t = C(ax, "majorTickMark")) {
+    const std::string_view v = Val(t);
+    a.ticks = v == "none" ? Axis::Tick::None : v == "out" ? Axis::Tick::Out : v == "in" ? Axis::Tick::In : Axis::Tick::Cross;
+  }
   if (pugi::xml_node f = C(ax, "numFmt")) a.format = Bool(f, "sourceLinked", false) ? source : f.attribute("formatCode").value();
   pugi::xml_node scaling = C(ax, "scaling");
   if (pugi::xml_node m = C(scaling, "min")) a.min = Number(m, "val", kNaN);
@@ -207,7 +213,8 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
   if (!plot) return false;
   out.area = LookOf(C(chartSpace, "spPr"), colors);
   out.plot = LookOf(C(plot, "spPr"), colors);
-  TextLook(C(chartSpace, "txPr"), colors, &out.textSize, &out.textColor);
+  float size = -1;  // stated by the chart, or else (below) by its axes or legend
+  TextLook(C(chartSpace, "txPr"), colors, &size, &out.textColor);
   const std::optional<draw::Color> spaceColor = out.textColor;
 
   // The chart groups, and the axes by id.
@@ -283,20 +290,30 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     const auto valueFormat = [&](size_t i) {
       return out.groups[i].grouping == Grouping::Percent ? std::string("0%") : SourceFormat(groups[i].first, scatter ? "yVal" : "val");
     };
-    if (a) out.category = AxisOf(a, scatter ? SourceFormat(groups.front().first, "xVal") : std::string());
-    if (b) out.value = AxisOf(b, valueFormat(0));
+    if (a) out.category = AxisOf(a, scatter ? SourceFormat(groups.front().first, "xVal") : std::string(), colors);
+    if (b) out.value = AxisOf(b, valueFormat(0), colors);
     for (size_t i = 1; i < out.groups.size(); ++i) {
       const std::vector<std::string>& ids = groups[i].second;
       if (ids.size() >= 2 && ids[1] != first[1] && axis(ids[1])) {
         out.groups[i].secondary = true;
-        out.secondary = AxisOf(axis(ids[1]), valueFormat(i));
+        out.secondary = AxisOf(axis(ids[1]), valueFormat(i), colors);
       }
     }
     // Text that doesn't say its color everywhere takes the axes' or legend's (Office 2013 and later
     // give each its own).
-    for (pugi::xml_node n : {b, a, C(chart, "legend")})
+    for (pugi::xml_node n : {b, a, C(chart, "legend")}) {
       if (!out.textColor) TextLook(C(n, "txPr"), colors, nullptr, &out.textColor);
+      if (size < 0) TextLook(C(n, "txPr"), colors, &size, nullptr);
+    }
   }
+  // Or the legend's, or the data labels' (pie charts have no axes). Text no part states the size
+  // of is Office 2007's 10 points (Office 2013 and later state 9).
+  if (size < 0) TextLook(C(C(chart, "legend"), "txPr"), colors, &size, nullptr);
+  for (size_t i = 0; size < 0 && i < groups.size(); ++i) {
+    TextLook(C(C(groups[i].first, "dLbls"), "txPr"), colors, &size, nullptr);
+    if (size < 0) TextLook(C(C(C(groups[i].first, "ser"), "dLbls"), "txPr"), colors, &size, nullptr);
+  }
+  if (size > 0) out.textSize = size;
 
   // The title: its own text, or for a title without any, the series' name or "Chart Title".
   if (pugi::xml_node t = C(chart, "title")) {
@@ -305,7 +322,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     else if (out.groups.size() == 1 && out.groups.front().series.size() == 1) out.title = out.groups.front().series.front().name;
     if (out.title.empty() && !tx) out.title = L"Chart Title";
     // Bold and in the chart's text color unless its own text (or else its c:txPr) says otherwise.
-    out.titleSize = out.textSize * 14 / 9;
+    out.titleSize = size > 0 ? size * 14 / 9 : 14;
     out.titleColor = spaceColor;
     if (pugi::xml_node rich = C(tx, "rich")) TextLook(rich, colors, &out.titleSize, &out.titleColor, &out.titleBold);
     else TextLook(C(t, "txPr"), colors, &out.titleSize, &out.titleColor, &out.titleBold);

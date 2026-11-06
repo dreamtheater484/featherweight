@@ -135,6 +135,55 @@ TEST(Chart_PieSlicesAndPercentLabels) {
     CHECK_EQ(Filled(art, *draw::SchemeColor(accent, Colors())), 2u);  // a slice and its legend swatch
 }
 
+TEST(Chart_WhatAChartDoesntSayIsAsOffice2007DrawsIt) {
+  // A chart without c:spPr or c:txPr (LibreOffice, Office 2007): 10-point text, and a border,
+  // gridlines, axis lines and ticks in gray, as Word draws them (FW_CORPUS features, Word's PDFs).
+  Parsed p(ColumnChart());
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  CHECK_EQ(c.textSize, 10.0f);
+  CHECK(c.value.ticks == Axis::Tick::Cross && !c.value.line.line && !c.value.grid.noLine);
+  const draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
+  const draw::Color gray = draw::Rgb(0x868686);
+  size_t lines = 0;
+  for (const auto& m : art.marks) lines += m.line.fill.kind == draw::Fill::Kind::Solid && Same(m.line.fill.color, gray);
+  CHECK(lines >= 10);  // the border, 6 gridlines, 2 axis lines and their ticks
+  // What a chart states wins: Office 2013 and later's 9 points on the axes, no value axis line.
+  std::string stated = ColumnChart();
+  const std::string valAx = "<c:valAx><c:axId val=\"2\"/>";
+  stated.replace(stated.find(valAx), valAx.size(),
+                 valAx + "<c:majorTickMark val=\"none\"/><c:spPr><a:ln><a:noFill/></a:ln></c:spPr><c:txPr><a:bodyPr/>"
+                         "<a:p><a:pPr><a:defRPr sz=\"900\"/></a:pPr></a:p></c:txPr>");
+  Parsed q(stated);
+  REQUIRE(Read(q.Root(), Colors(), c));
+  CHECK_EQ(c.textSize, 9.0f);
+  CHECK(c.value.ticks == Axis::Tick::None && c.value.line.noLine);
+}
+
+TEST(Chart_StackedSeriesListedAsTheyStack) {
+  // A stacked column chart with its legend at the side lists the series top down, as they stack.
+  std::string xml = ColumnChart();
+  xml.replace(xml.find("clustered"), 9, "stacked");
+  xml.replace(xml.find("<c:legendPos val=\"b\"/>"), 22, "<c:legendPos val=\"r\"/>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  REQUIRE(c.groups.size() == 1u && c.groups[0].grouping == Grouping::Stacked && c.legend == LegendPos::Right);
+  const draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
+  // The legend's swatches: the second series' above the first's.
+  const draw::Color first = *draw::SchemeColor("accent1", Colors()), second = *draw::SchemeColor("accent2", Colors());
+  auto swatchTop = [&](const draw::Color& color) {
+    float top = -1;
+    for (const auto& m : art.marks) {
+      const draw::Rect b = m.path.Bounds();
+      if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, color) && b.right - b.left < 10 && b.bottom - b.top < 10)
+        top = b.top;  // a swatch, not a bar
+    }
+    return top;
+  };
+  CHECK(swatchTop(second) >= 0 && swatchTop(first) > swatchTop(second));
+}
+
 TEST(Chart_OtherTypesStayPlaceholders) {
   Parsed radar(std::string("<c:chartSpace") + kNs + "><c:chart><c:plotArea><c:radarChart>" + Ser(0, "S", {"a"}, {"1"}) +
                "</c:radarChart></c:plotArea></c:chart></c:chartSpace>");
