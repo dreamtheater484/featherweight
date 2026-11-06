@@ -333,6 +333,13 @@ void Package::SetRelationships(RelationshipSet set) {
   for (auto& r : set.items)
     r.targetPart = r.external ? std::string() : ResolveTarget(set.source, r.target);
   SetPart(set.relsPart, ToBytes(set.Serialize()));
+  // A new one needs a content type: a package that types each relationships part with an
+  // override (as LibreOffice writes them) has no default for .rels to fall back on.
+  if (ContentTypeOf(set.relsPart).empty()) {
+    ContentTypes types = types_;
+    types.overrides.emplace_back(set.relsPart, "application/vnd.openxmlformats-package.relationships+xml");
+    SetContentTypes(std::move(types));
+  }
   std::string key = PartKey(set.source);
   if (auto it = relsIndex_.find(key); it != relsIndex_.end()) {
     rels_[it->second] = std::move(set);

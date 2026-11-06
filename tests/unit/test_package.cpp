@@ -152,6 +152,32 @@ TEST(Package_SetRelationshipsAndContentTypes) {
   CHECK(again->ContentTypeOf("/word/document.xml") == "application/test.main+xml");
 }
 
+// A package that types each relationships part with an override (LibreOffice's) and has no
+// default for .rels: a relationships part made later gets one too (a picture in a new comment,
+// D5 corpus pass T2).
+TEST(Package_NewRelationshipsPartGetsAContentType) {
+  Status st;
+  auto pkg = OpenBytes(MakeZip(MiniPackage()), st);
+  CHECK(st.Ok() && pkg);
+  if (!pkg) return;
+  const std::string rels = "application/vnd.openxmlformats-package.relationships+xml";
+  ContentTypes types = pkg->Types();
+  std::erase_if(types.defaults, [](const auto& d) { return d.first == "rels"; });
+  types.overrides.emplace_back("/_rels/.rels", rels);
+  types.overrides.emplace_back("/word/_rels/document.xml.rels", rels);
+  pkg->SetContentTypes(types);
+  CHECK(pkg->ContentTypeOf("/word/_rels/comments.xml.rels").empty());
+  RelationshipSet set;
+  set.source = "/word/comments.xml";
+  set.items.push_back({"rId1", "urn:image", "media/image1.png", false, {}});
+  pkg->SetRelationships(set);
+  CHECK(pkg->ContentTypeOf("/word/_rels/comments.xml.rels") == rels);
+  MemorySink sink;
+  CHECK(pkg->Save(sink).Ok());
+  auto again = OpenBytes(sink.bytes, st);
+  CHECK(st.Ok() && again && again->ContentTypeOf("/word/_rels/comments.xml.rels") == rels);
+}
+
 // ---------- Markup Compatibility ----------
 
 static const char* kMc = "http://schemas.openxmlformats.org/markup-compatibility/2006";
