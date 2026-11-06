@@ -18,9 +18,9 @@
   Results, per file: ok (opened, no dialog); notice (opened, and the only dialogs were about this
   PC's Office, such as a proofing feature that isn't installed: nothing about the file); repair
   (Word offered to repair it, or refused it as unreadable); error (Word showed another dialog or
-  refused the file otherwise); timeout; unchecked (Word's automation failed three times: Word didn't
-  start or answer, which says nothing about the file). The exit code is 1 when any file isn't ok or
-  notice.
+  refused the file otherwise; a bare "Command failed" only when it comes three times in three);
+  timeout; unchecked (Word's automation failed three times: Word didn't start or answer, which says
+  nothing about the file). The exit code is 1 when any file isn't ok or notice.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\word-open-check.ps1 out\saved
@@ -245,6 +245,10 @@ New-Item -ItemType Directory -Force $tmp | Out-Null
 $resultPath = Join-Path $tmp "result.json"
 # Word's automation failing (it didn't start or answer) says nothing about the file: try again.
 $infraText = "(?i)didn't connect to the safe-mode instance|remote procedure call|RPC server|0x800706|0x80010108|0x80080005|disconnected from its clients|server execution failed"
+# Word's bare "Command failed" from Documents.Open, with no dialog, also comes from a Word that wasn't
+# ready: the defra form's edited copy got it once in a torture run, then opened 3 times in 3. Tried
+# again too, but if every try gets it, it stays the file's error.
+$retryText = "(?i)^Command failed\.?$"
 $entries = @()
 $n = 0
 foreach ($f in @($files)) {
@@ -294,9 +298,10 @@ foreach ($f in @($files)) {
     elseif ($entry.opened -and -not $entry.dialogs.Count -and -not $entry.error) { "ok" }
     elseif ($entry.opened -and -not $entry.error -and -not @($entry.dialogs | Where-Object { "$($_.title) $($_.text)" -notmatch $noticeText }).Count) { "notice" }
     else { "error" }
-  if ($entry.status -ne "error" -or $entry.dialogs.Count -or "$($entry.error)" -notmatch $infraText) { break }
+  $infra = "$($entry.error)" -match $infraText
+  if ($entry.status -ne "error" -or $entry.dialogs.Count -or -not ($infra -or "$($entry.error)" -match $retryText)) { break }
   if ($attempt -ge 3) {
-    $entry.status = "unchecked"  # Word's automation failed three times: not a verdict on the file
+    if ($infra) { $entry.status = "unchecked" }  # Word's automation failed three times: not a verdict on the file
     break
   }
   Start-Sleep -Seconds 5
