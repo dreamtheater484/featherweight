@@ -1285,6 +1285,26 @@ TEST(Layout_CellsNumberedAsTheEditorsGrid) {
   CHECK_EQ(pieces, 2u);
 }
 
+TEST(Layout_DumpListsTextBoxesBackToFront) {
+  // Word draws and tags floating text boxes back to front, by z-order, whatever order their anchors
+  // come in. The layout dump lists them the same way, so fwtool compare pairs their lines.
+  const auto box = [](const char* z, const char* top, const char* text) {
+    return std::string("<w:r><w:pict xmlns:v=\"urn:schemas-microsoft-com:vml\"><v:shape style=\"position:absolute;"
+                       "margin-left:0;margin-top:") + top + ";width:100pt;height:30pt;z-index:" + z +
+           "\"><v:textbox><w:txbxContent><w:p><w:r><w:t>" + text + "</w:t></w:r></w:p></w:txbxContent></v:textbox>"
+           "</v:shape></w:pict></w:r>";
+  };
+  Doc d = Make("<w:p>" + box("5", "90pt", "Front") + box("2", "0", "Back") + "<w:r><w:t>Body</w:t></w:r></w:p>" + SmallPage());
+  REQUIRE(d.layout);
+  d.layout->LayOutAll();
+  const fw::LayoutDump dump = d.layout->Dump("boxes.docx");
+  std::vector<std::wstring> boxes;
+  for (const fw::LayoutPage& page : dump.pages)
+    for (const fw::LayoutLine& l : page.lines)
+      if (l.story == fw::LayoutStory::TextBox) boxes.push_back(l.text);
+  CHECK(boxes == (std::vector<std::wstring>{L"Back", L"Front"}));
+}
+
 TEST(Layout_ATextBoxMadeAfterTheLayoutIsLaidOut) {
   // A new shape's text box is a story made after the layout was (D4), as a new header is (D3):
   // laid out with its text, as a fresh layout lays it out.
@@ -1322,4 +1342,16 @@ TEST(Layout_EquationsInlineAndDisplay) {
   CHECK(in.right - in.left > 15 && in.right - in.left < 60);
   CHECK(display.bottom - display.top > (in.bottom - in.top) * 1.3f);
   CHECK(std::abs((display.left + display.right) / 2 - p.width / 2) < 2);
+}
+
+// A right-to-left table (w:bidiVisual, D5) starts at the right: its first cell is the rightmost.
+TEST(Layout_RightToLeftTableStartsAtTheRight) {
+  const std::string cell = "<w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc>";
+  Doc d = Make("<w:tbl><w:tblPr><w:bidiVisual/></w:tblPr><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"3000\"/></w:tblGrid>"
+               "<w:tr>" + cell + cell + "</w:tr></w:tbl><w:p/>");
+  REQUIRE(d.doc && d.pages() == 1);
+  const auto& cells = d.page(0).cells;
+  REQUIRE(cells.size() == 2);
+  CHECK(cells[0].box.left > cells[1].box.left);
+  CHECK(std::abs((cells[0].box.right - cells[0].box.left) - 100) < 1);  // the first column, 2000 twips
 }

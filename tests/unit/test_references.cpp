@@ -493,6 +493,15 @@ TEST(Check_ScopesAlternatesAndWarnings) {
   rep = CheckParts(Word("<w:p><w:pPr><w:pStyle w:val=\"Missing\"/></w:pPr><w:hyperlink w:anchor=\"Nowhere\"/></w:p>"));
   CHECK(rep.Ok());
   CHECK(Has(rep.warnings, "names style \"Missing\"") && Has(rep.warnings, "names bookmark \"Nowhere\""));
+  // HYPERLINK's \l names a bookmark only without an address: with one, it's a place in that address.
+  auto field = [](const std::string& code) {
+    return "<w:p><w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\">" + code +
+           "</w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>";
+  };
+  rep = CheckParts(Word(field(" HYPERLINK \"https://example.com/page\" \\l \"section-2\" ")));
+  CHECK(rep.Ok() && !Has(rep.warnings, "section-2"));
+  rep = CheckParts(Word(field(" HYPERLINK \\o \"tip\" \\l \"Nowhere\" ")));
+  CHECK(Has(rep.warnings, "names bookmark \"Nowhere\""));
 }
 
 TEST(Check_ExcelCalcChainCellsAndNotes) {

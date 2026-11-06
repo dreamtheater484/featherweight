@@ -724,6 +724,12 @@ LayoutDump Layout::Dump(std::string source) const {
     LayoutPage page;
     page.width = p.width;
     page.height = p.height;
+    const auto ZOf = [&](uint32_t drawing) {
+      for (const DrawingBox& d : p.drawings)
+        if (d.drawing == drawing) return d.z;
+      return int64_t{0};
+    };
+    std::vector<int64_t> zs;  // each line's text box's z-order
     for (const LineBox& lb : p.lines) {
       bool any = false;
       for (char16_t c : lb.text)
@@ -745,7 +751,17 @@ LayoutDump Layout::Dump(std::string source) const {
       line.size = size;
       line.text.assign(lb.text.begin(), lb.text.end());
       page.lines.push_back(std::move(line));
+      zs.push_back(lb.story == LineStory::TextBox ? ZOf(lb.drawing) : 0);
     }
+    // Text boxes in the order Word draws and tags them, back to front (their z-order), not the
+    // order their anchors come in: each box's lines stay together and in order.
+    std::vector<size_t> boxes;
+    for (size_t i = 0; i < page.lines.size(); ++i)
+      if (page.lines[i].story == LayoutStory::TextBox) boxes.push_back(i);
+    std::vector<size_t> sorted = boxes;
+    std::stable_sort(sorted.begin(), sorted.end(), [&](size_t a, size_t b) { return zs[a] < zs[b]; });
+    std::vector<LayoutLine> lines = page.lines;
+    for (size_t k = 0; k < boxes.size(); ++k) page.lines[boxes[k]] = lines[sorted[k]];
     dump.pages.push_back(std::move(page));
   }
   return dump;

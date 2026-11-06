@@ -415,6 +415,7 @@ enum class StoryKind { Main, Footnote, Endnote, Comment, Header, TextBox };
 class Converter {
  public:
   bool Convert(const StreamFn& streams, pkg::Status& status, std::vector<uint8_t>& out);
+  bool decrypted = false;
 
  private:
   struct Piece {
@@ -606,7 +607,7 @@ bool Converter::Load(const StreamFn& streams, pkg::Status& status) {
                 "This document was made with Word 6 or Word 95, which Featherweight doesn't open. Open it in Word and "
                 "save it as a .docx.");
   const uint16_t flags = word_.U16(10);
-  if (flags & 0x0100) return fail(Code::Unsupported, "This document is protected with a password.");
+  if ((flags & 0x0100) && !decrypted) return fail(Code::Unsupported, "This document is protected with a password.");
   std::optional<std::vector<uint8_t>> table = streams((flags & 0x0200) ? "1Table" : "0Table");
   if (!table) return fail(Code::Damaged, "This Word document is damaged: its table stream is missing.");
   tableBuf_ = std::move(*table);
@@ -1825,7 +1826,7 @@ std::string Converter::Floating(uint32_t cp, Story& story) {
   uint32_t cp1 = box->second.second;
   if (cp1 - box->second.first >= 2 && text_.size() >= cp1 && text_[cp1 - 1] == 0x0D && text_[cp1 - 2] == 0x0D) --cp1;
   const std::string content = EmitStory(box->second.first, cp1, text);
-  return "<w:pict><v:shape id=\"_x0000_s" + Num(spid) + "\" type=\"#_x0000_t202\" style=\"position:absolute;margin-left:" +
+  return "<w:pict><v:shape id=\"_x0000_s" + Num(spid) + "\" style=\"position:absolute;margin-left:" +
          Pt(x) + "pt;margin-top:" + Pt(y) + "pt;width:" + Pt(w) + "pt;height:" + Pt(h) + "pt;z-index:" + (below ? "-" : "") + z +
          ";mso-position-horizontal-relative:" + kRel[bx] + ";mso-position-vertical-relative:" + kRel[by] +
          "\"><v:textbox><w:txbxContent>" + content + "</w:txbxContent></v:textbox><w10:wrap type=\"" +
@@ -2082,10 +2083,11 @@ bool Converter::Convert(const StreamFn& streams, pkg::Status& status, std::vecto
 
 }  // namespace
 
-std::vector<uint8_t> ToDocx(const StreamFn& streams, pkg::Status& status) {
+std::vector<uint8_t> ToDocx(const StreamFn& streams, pkg::Status& status, bool decrypted) {
   status = {};
   std::vector<uint8_t> out;
   Converter c;
+  c.decrypted = decrypted;
   if (!c.Convert(streams, status, out)) return {};
   return out;
 }

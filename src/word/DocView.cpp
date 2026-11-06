@@ -218,7 +218,7 @@ OpenResult DocView::Unlock(const std::wstring& password, std::wstring& error) {
             if (locked && stream == "Data") return plain.data.empty() ? std::nullopt : std::make_optional(plain.data);
             return file->Stream(stream);
           },
-          st);
+          st, locked);
       if (bytes_.empty()) {
         error = name + L" couldn't be opened. " + fw::Utf8ToWide(st.message);
         return OpenResult::Failed;

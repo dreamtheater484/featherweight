@@ -154,10 +154,12 @@ void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse,
 
   t.width = gridSum;
   float indent = t.props.indent.type == TableWidth::Type::Dxa ? static_cast<float>(t.props.indent.value) / 20.0f : 0;
+  // A right-to-left table (w:bidiVisual) starts at the right: its indent and its first column.
+  const bool rtl = t.props.bidiVisual;
   switch (t.props.jc) {
     case Justification::Center: t.left = (frame.width - t.width) / 2; break;
-    case Justification::End: t.left = frame.width - t.width; break;
-    default: t.left = indent; break;
+    case Justification::End: t.left = rtl ? 0 : frame.width - t.width; break;
+    default: t.left = rtl ? frame.width - t.width - indent : indent; break;
   }
 
   bool leading = from == 0 || t.rows[from - 1].header;  // the rows above are all header rows
@@ -179,11 +181,12 @@ void Engine::MeasureRows(TableBox& t, const Frame& frame, const TableBox* reuse,
       c.x = gridX(col);
       c.width = gridX(col + c.span) - c.x;
       if (c.width <= 0) c.width = WidthPt(c.props.width, 36, t.width);
+      if (rtl) c.x = t.width - c.x - c.width;
       c.continued = c.props.vMerge == VMerge::Continue;
       c.rowSpan = c.props.vMerge == VMerge::Restart ? std::max(1, doc_.CellRowSpan(tc)) : 1;
       const CellMargins& m = c.props.margins;
-      c.marginLeft = WidthPt(m.start, defLeft);
-      c.marginRight = WidthPt(m.end, defRight);
+      c.marginLeft = WidthPt(rtl ? m.end : m.start, rtl ? defRight : defLeft);
+      c.marginRight = WidthPt(rtl ? m.start : m.end, rtl ? defLeft : defRight);
       c.marginTop = WidthPt(m.top, defTop);
       c.marginBottom = WidthPt(m.bottom, defBottom);
       if (!c.continued) {
@@ -415,7 +418,9 @@ void Engine::EmitRow(const TableBox& t, size_t r, float x, float top, float heig
     }
     // Borders: the cell's own, against its neighbor's (the stronger wins; each shared edge once).
     const CellProps& p = owner->props;
-    Border topB = p.top, bottomB = p.bottom, leftB = p.start, rightB = p.end;
+    // Right to left, the cells run from the right: a cell's start edge is its right one.
+    const bool rtl = t.props.bidiVisual;
+    Border topB = p.top, bottomB = p.bottom, leftB = rtl ? p.end : p.start, rightB = rtl ? p.start : p.end;
     if (!firstOnPage && above && !c.continued)
       if (const CellBox* a = cellAt(above, c.x + 1)) topB = Stronger(topB, a->props.bottom);
     if (!lastOnPage && below) {
@@ -424,8 +429,10 @@ void Engine::EmitRow(const TableBox& t, size_t r, float x, float top, float heig
       else if (b) bottomB = Border();             // drawn as the next row's top
     }
     if (c.continued) topB = Border();
-    if (i > 0) leftB = Border();  // drawn as the previous cell's right edge
-    if (i + 1 < row.cells.size()) rightB = Stronger(rightB, row.cells[i + 1].props.start);
+    const CellBox* toLeft = rtl ? (i + 1 < row.cells.size() ? &row.cells[i + 1] : nullptr) : (i > 0 ? &row.cells[i - 1] : nullptr);
+    const CellBox* toRight = rtl ? (i > 0 ? &row.cells[i - 1] : nullptr) : (i + 1 < row.cells.size() ? &row.cells[i + 1] : nullptr);
+    if (toLeft) leftB = Border();  // drawn as that cell's right edge
+    if (toRight) rightB = Stronger(rightB, rtl ? toRight->props.end : toRight->props.start);
     if (topB.Present()) out.edges.push_back({topB, left, top, right, top});
     if (bottomB.Present()) out.edges.push_back({bottomB, left, bottom, right, bottom});
     if (leftB.Present()) out.edges.push_back({leftB, left, top, left, bottom});
