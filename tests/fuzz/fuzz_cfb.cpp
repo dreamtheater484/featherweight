@@ -23,7 +23,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   }
   for (size_t i = 0; i < kept.size(); ++i) streams[i].data = kept[i];
   // What it read, written and read again, gives the same streams (names that differ only in case
-  // are one stream to CFB, so only the first of those is compared).
+  // are one stream to CFB: Stream() gives the first of those, and that's the one written).
   const auto file = WriteCompoundFile(streams);
   auto again = CompoundFile::Open(file);
   if (!again) std::abort();

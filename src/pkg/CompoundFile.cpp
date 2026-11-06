@@ -115,7 +115,8 @@ std::unique_ptr<CompoundFile> CompoundFile::Open(std::span<const uint8_t> bytes)
     for (uint32_t at = 0; at < size; at += 128) {
       const uint8_t* e = &buf[at];
       Entry d;
-      const size_t chars = std::min<size_t>(U16(e + 0x40) / 2, 32);
+      // At most 31 characters: the 32nd place is the terminator's, as the writer keeps it.
+      const size_t chars = std::min<size_t>(U16(e + 0x40) / 2, 31);
       for (size_t i = 0; i < chars && U16(e + 2 * i); ++i) d.name.push_back(char16_t(U16(e + 2 * i)));
       d.type = e[0x42];
       d.left = U32(e + 0x44);
@@ -259,15 +260,21 @@ std::vector<uint8_t> WriteCompoundFile(const std::vector<CompoundStream>& stream
       const size_t slash = s.path.find('/', from);
       const std::wstring w = fw::Utf8ToWide(std::string_view(s.path).substr(from, slash - from));
       const std::u16string name(w.begin(), w.begin() + std::min<size_t>(w.size(), 31));
-      auto it = std::find_if(nodes[parent].kids.begin(), nodes[parent].kids.end(),
-                             [&](uint32_t k) { return nodes[k].name == name; });
+      // Names that differ only in case are one name, as the reader finds them; a stream and a
+      // storage of one name stay two entries, so neither loses what's in it.
+      const uint8_t type = slash == std::string::npos ? 2 : 1;
+      auto it = std::find_if(nodes[parent].kids.begin(), nodes[parent].kids.end(), [&](uint32_t k) {
+        return nodes[k].type == type && !Before(nodes[k].name, name) && !Before(name, nodes[k].name);
+      });
+      if (it != nodes[parent].kids.end() && type == 2) break;  // the first stream of a path is kept
       uint32_t at = it != nodes[parent].kids.end() ? *it : uint32_t(nodes.size());
       if (at == nodes.size()) {
-        nodes.emplace_back().name = name;
+        Node& n = nodes.emplace_back();
+        n.name = name;
+        n.type = type;
         nodes[parent].kids.push_back(at);
       }
-      if (slash == std::string::npos) {
-        nodes[at].type = 2;
+      if (type == 2) {
         nodes[at].data = s.data;
         break;
       }

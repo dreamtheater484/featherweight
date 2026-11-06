@@ -53,8 +53,9 @@ class CompoundFile {
 };
 
 // A compound file (version 3, 512-byte sectors) holding these streams. Storages are made from the
-// paths ("\x06" "DataSpaces/Version" makes the storage "\x06" "DataSpaces"). Used to save
-// password-protected files.
+// paths ("\x06" "DataSpaces/Version" makes the storage "\x06" "DataSpaces"). Names keep at most
+// 31 characters; of streams whose paths differ only in ASCII case, the first is written, the one
+// Stream() gives. Used to save password-protected files.
 struct CompoundStream {
   std::string path;  // UTF-8, '/' between storages
   std::span<const uint8_t> data;

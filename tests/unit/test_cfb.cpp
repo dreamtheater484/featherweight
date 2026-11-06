@@ -136,3 +136,33 @@ TEST(Cfb_DamageIsRefusedNotFollowed) {
   cf = CompoundFile::Open(bad);
   CHECK(cf != nullptr && cf->Streams().size() <= 2);
 }
+
+TEST(Cfb_WhatIsReadWritesBackTheSame) {
+  // A name with no terminator in its 32 places reads as its first 31 characters, the most the
+  // writer keeps (a fuzz finding: the stream was lost on the way back).
+  auto file = WriteCompoundFile({{"Stream", Bytes("data")}});
+  const uint32_t dir = (Get32(file, 0x30) + 1) * 512;
+  const size_t e = dir + 128;
+  CHECK(file[e] == 'S');
+  for (size_t i = 0; i < 32; ++i) file[e + 2 * i] = uint8_t('A' + i % 26), file[e + 2 * i + 1] = 0;
+  file[e + 0x40] = 64;
+  auto cf = CompoundFile::Open(file);
+  CHECK(cf != nullptr);
+  if (!cf) return;
+  const std::string name = "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDE";
+  CHECK(cf->Streams() == std::vector<std::string>{name});
+  const auto again = WriteCompoundFile({{name, *cf->Stream(name)}});
+  auto back = CompoundFile::Open(again);
+  CHECK(back != nullptr && back->Stream(name) == Bytes("data"));
+
+  // Of paths that differ only in case, the first is written, the one Stream() gives; a stream
+  // and a storage of one name keep both.
+  const auto a = Bytes("first"), b = Bytes("second"), c = Bytes("inside");
+  const auto mixed = WriteCompoundFile({{"Name", a}, {"NAME", b}, {"name/Inner", c}});
+  back = CompoundFile::Open(mixed);
+  CHECK(back != nullptr);
+  if (!back) return;
+  CHECK_EQ(back->Streams().size(), size_t{2});
+  CHECK(back->Stream("name") == a);
+  CHECK(back->Stream("NAME/inner") == c);
+}
