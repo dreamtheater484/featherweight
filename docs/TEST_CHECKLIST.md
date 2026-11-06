@@ -82,7 +82,7 @@ Run before every release. Test PDFs are in `tests/pdfs/` (regenerate with `pytho
 - [ ] Launch with a 10 MB PDF to first page: ___ ms (target < 500 ms)
 - [ ] Memory with one typical document: ___ MB (target < 100 MB)
 
-## Word documents (D1–D4)
+## Word documents (D1–D5)
 
 What the automated checks can't judge: how it looks and feels, real input devices, Word itself, and paper. Test documents: `tests/office/generated/`, `tests/office/torture/`, and any of your own `.docx` files. Keep a copy of your own files first.
 
@@ -136,6 +136,51 @@ What the automated checks can't judge: how it looks and feels, real input device
 - [ ] Insert a text box and a few shapes, type in them, resize and move them, change the fill and outline. Add a text watermark ("DRAFT") and remove it.
 - [ ] Export a document to PDF (File → Export PDF). In Edge or Acrobat: text can be selected and searched, links work, and the bookmarks list the headings. It looks like the screen.
 - [ ] Save as RTF and as plain text, and open both in Word or Notepad.
+
+### Breadth (D5)
+
+Test documents: `tests/office/odt/`, `tests/office/dotx/`, and the `.doc`, password-protected, chart and equation copies in `tests/office/`. Keep a copy of your own files first.
+
+- [ ] **Opening a `.doc`.** Open an old Word 97–2003 `.doc` (one of yours, if you have one).
+  - It opens in a tab and looks as it does in Word.
+  - A banner says that saving makes a new `.docx`.
+  - Edit it and press Ctrl+S. Save As suggests the same name as a `.docx` in the same folder.
+  - The `.doc` is unchanged. The `.docx` opens in **Word** without a repair prompt.
+- [ ] **Opening an `.odt`.** Open an `.odt` from LibreOffice, or one saved by Word as OpenDocument.
+  - Its styles, lists, tables, pictures, headers and footers, footnotes and links are there.
+  - Ctrl+S goes to Save As `.docx`, and the `.odt` is unchanged.
+  - The `.docx` opens in Word without a prompt.
+- [ ] **The other ways in.** Open a `.doc` and an `.odt` by double-clicking them in Explorer (Open with Featherweight), by dragging them onto the window, and with Ctrl+O.
+  - Each opens in its own tab, shows in Recent, and reopens from there.
+  - Opening one takes no more steps than in Word (Word adds Protected View's Enable Editing).
+- [ ] **A password-protected `.docx`.**
+  - Featherweight asks for the password, with the same prompt as for PDFs. A wrong password says so and asks again; Cancel leaves the other tabs as they are.
+  - Edit and save, then open it in Word: Word asks for the same password and shows the edit.
+  - The backup and the recovery copy can't be read without the password. End Featherweight from Task Manager with unsaved changes: at the next start, recovery offers the document back.
+- [ ] **A password-protected `.doc`.** It opens after the password, or says plainly why it can't.
+- [ ] **Templates.** On the start screen, Templates → Letter, CV and Report each open a new "Document N" with placeholder text in brackets.
+  - Select a placeholder and type over it.
+  - The + menu and the … menu have "New from template" with the same three.
+  - Ctrl+S suggests a name from the first words, in Documents. The saved file opens in Word, with its bullets, the report's table and its page numbers.
+- [ ] **Template files.** Double-click a `.dotx`, such as `tests/office/dotx/simple.dotx` or one of your own.
+  - A new untitled document opens with the template's text and styles.
+  - Ctrl+S asks where to save, and the `.dotx` is unchanged.
+  - A document made from a `.dotm` saves as a `.docm`. An `.ott` opens like a `.dotx`.
+- [ ] **Charts.** A document with column, bar, line, pie, area and scatter charts shows each as Word does: titles, axes, gridlines, legend and data labels.
+  - They print, and they're in Export PDF.
+  - Edit text elsewhere and save: in Word, each chart is still there and can still be edited.
+- [ ] **Equations.** A document with fractions, roots, sums and integrals, a matrix and an equation array looks as it does in Word (Cambria Math).
+  - The equations print, are in Export PDF, and can still be edited in Word after a save.
+- [ ] **Right-to-left text.** Open an Arabic or Hebrew document, or type some with a second keyboard language.
+  - Text runs from the right. English words and numbers inside it are in the right order.
+  - The caret, selection, Home, End and the arrow keys move as they do in Word.
+- [ ] **East Asian text.** In a Chinese or Japanese document, lines break where Word breaks them: no line starts with a closing bracket or "。".
+  - A Japanese document with a character grid lines up as it does in Word.
+- [ ] **Huge documents.** Open a 1,000-page document.
+  - The first page shows at once.
+  - Ctrl+End, scrolling, and typing at the start and the end all feel instant.
+  - Write down the memory Task Manager shows.
+  - Do the same with a document that has a 5,000-row table and one with 300 pictures.
 
 ### Speed and feel (record anything that feels slow)
 

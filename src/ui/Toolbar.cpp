@@ -79,6 +79,7 @@ Control& Toolbar::ItemControl(const ToolItem& item) {
       }
       d.glyph = item.glyph;
       d.placeholder = item.text;
+      d.maxRows = item.maxRows;
       d.onChange = [send, &d](int i) {
         ToolValue v;
         v.index = i;

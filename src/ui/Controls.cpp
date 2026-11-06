@@ -712,7 +712,7 @@ void Dropdown::SetOpen(bool open) {
   list_.SetSelected(selected);
   list_.SetHighlight(selected);
   float w = std::max(Width(rc), list_.PreferredWidth() + 8 * u);
-  float rows = static_cast<float>(std::min<size_t>(items.size(), kMaxPopupRows));
+  float rows = static_cast<float>(std::min<size_t>(items.size(), static_cast<size_t>(std::max(1, maxRows))));
   popup_.Place(rc, w, rows * list_.rowHeight * u + 8 * u, PopupBounds(), u);
   list_.rc = popup_.Inner(u);
   list_.ResetScroll();
@@ -1074,6 +1074,10 @@ bool ComboBox::OnKeyDown(UINT vk, bool ctrl, bool shift, bool alt) {
       if (!Commit(true)) return true;
       SetOpen(false);
       box_.SelectAll();
+      if (onEnter) {
+        onEnter();
+        return true;
+      }
       return false;
     case VK_ESCAPE:
       if (open) {

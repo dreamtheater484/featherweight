@@ -324,8 +324,12 @@ OpenResult DocView::Load(const std::wstring& password, std::wstring& error) {
                   : OpenError(name, st);
       return OpenResult::Failed;
     }
-    if (newNumber_) file_.New(newNumber_);
-    else file_.Copy(name, path_.substr(0, path_.size() - 4) + L".docx", false);
+    if (newNumber_) {
+      file_.New(newNumber_);
+    } else {
+      file_.Copy(name, path_.substr(0, path_.size() - 4) + L".docx", false);
+      imported_ = name;  // the banner says where saving goes, as for a .doc
+    }
     path_.clear();
   }
   fw::pkg::Snapshot::Options options;
@@ -400,16 +404,18 @@ OpenResult DocView::Load(const std::wstring& password, std::wstring& error) {
     pictures_ = std::make_unique<fw::doc::edit::Pictures>(*editor_);
     shapes_ = std::make_unique<fw::doc::edit::Shapes>(*editor_);
     format_->insertPicture = [this] { Execute(CmdInsertPicture); };
+    // Insert ▾ after Picture: what's used most first, so it shows without scrolling in a small
+    // window (the friction review); the shapes, breaks and content controls further down.
+    auto more = [this](std::wstring label, int cmd) { format_->insertMore.push_back({std::move(label), [this, cmd] { Execute(cmd); }}); };
+    for (int cmd : {CmdInsertFootnote, CmdInsertEndnote, CmdInsertToc}) more(QueryNotes(cmd)->Tooltip(), cmd);
+    more(L"Text box", CmdInsertTextBox);
+    more(L"Watermark…", CmdWatermarkPanel);
+    for (int cmd : DocPage::InsertCommands()) more(page_->Query(cmd).Tooltip(), cmd);
     static constexpr std::pair<int, const wchar_t*> kShapes[] = {
-        {CmdInsertTextBox, L"Text box"}, {CmdInsertRectangle, L"Rectangle"}, {CmdInsertRoundedRectangle, L"Rounded rectangle"},
-        {CmdInsertOval, L"Oval"},        {CmdInsertLine, L"Line"},           {CmdInsertArrow, L"Arrow"},
-        {CmdInsertCallout, L"Callout"},  {CmdWatermarkPanel, L"Watermark…"}};
-    for (const auto& [cmd, label] : kShapes) format_->insertMore.push_back({label, [this, cmd = cmd] { Execute(cmd); }});
-    for (int cmd : DocPage::InsertCommands())
-      format_->insertMore.push_back({page_->Query(cmd).Tooltip(), [this, cmd] { Execute(cmd); }});
-    for (int cmd : FormCommands()) format_->insertMore.push_back({QueryForms(cmd)->label, [this, cmd] { Execute(cmd); }});
-    for (int cmd : {CmdInsertFootnote, CmdInsertEndnote, CmdInsertToc})
-      format_->insertMore.push_back({QueryNotes(cmd)->Tooltip(), [this, cmd] { Execute(cmd); }});
+        {CmdInsertRectangle, L"Rectangle"}, {CmdInsertRoundedRectangle, L"Rounded rectangle"}, {CmdInsertOval, L"Oval"},
+        {CmdInsertLine, L"Line"},           {CmdInsertArrow, L"Arrow"},                         {CmdInsertCallout, L"Callout"}};
+    for (const auto& [cmd, label] : kShapes) more(label, cmd);
+    for (int cmd : FormCommands()) more(QueryForms(cmd)->label, cmd);
     DocStyles::Host sh;
     sh.selection = [this] {
       return std::make_pair(fw::doc::Pos{anchor_.para, anchor_.offset}, fw::doc::Pos{focus_.para, focus_.offset});
@@ -599,8 +605,10 @@ void DocView::ShowNotices() {
   std::wstring text;
   if (!imported_.empty()) {
     const size_t dot = imported_.find_last_of(L'.');
-    text = imported_ + L" is a Word 97–2003 document. Saving makes a new " +
-           (dot == std::wstring::npos ? imported_ : imported_.substr(0, dot)) + L".docx and leaves it as it is.";
+    const bool odf = fw::EndsWithNoCase(imported_, L".odt") || fw::EndsWithNoCase(imported_, L".ott");
+    text = imported_ + (odf ? L" is an OpenDocument text document" : L" is a Word 97–2003 document") +
+           L". Saving makes a new " + (dot == std::wstring::npos ? imported_ : imported_.substr(0, dot)) +
+           L".docx and leaves it as it is.";
   }
   bool ink = false;
   for (const auto& d : doc_->Drawings()) ink |= d.kind == fw::doc::DrawingKind::ContentPart;
