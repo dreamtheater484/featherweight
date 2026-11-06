@@ -1,9 +1,15 @@
 // fwtool dump and fwtool check: what a package contains, and whether its references hold.
 #include <cstdio>
+#include <fstream>
+#include <iterator>
 
 #include "Common.h"
 #include "LayoutHook.h"
+#include "doc/docx/Docx.h"
+#include "doc/odf/Odt.h"
 #include "pkg/Check.h"
+#include "pkg/Package.h"
+#include "pkg/Snapshot.h"
 #include "pkg/References.h"
 
 namespace fwtool {
@@ -98,6 +104,58 @@ int RunCheck(const Options& options) {
   }
   std::printf("\n%zu files, %d failed\n", files.size(), failed);
   return failed == 0 ? 0 : 1;
+}
+
+// OpenDocument text files as the app opens them (D5): converted to .docx, checked, and read into
+// the model. With --out, the converted documents are kept there (for the Word open check).
+int RunOdt(const Options& options) {
+  std::vector<std::filesystem::path> files;
+  auto take = [&](const std::filesystem::path& f) {
+    const std::wstring ext = f.extension().wstring();
+    if (_wcsicmp(ext.c_str(), L".odt") == 0 || _wcsicmp(ext.c_str(), L".ott") == 0) files.push_back(f);
+  };
+  for (const auto& in : options.inputs) {
+    std::error_code ec;
+    if (std::filesystem::is_directory(in, ec)) {
+      for (const auto& e : std::filesystem::recursive_directory_iterator(in, ec))
+        if (e.is_regular_file()) take(e.path());
+    } else {
+      take(in);
+    }
+  }
+  if (!options.outDir.empty()) std::filesystem::create_directories(options.outDir);
+  int failed = 0;
+  for (const auto& file : files) {
+    std::ifstream f(file, std::ios::binary);
+    std::vector<uint8_t> odt((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::vector<uint8_t> docx;
+    fw::pkg::Status st = fw::doc::odf::OdtToDocx(odt, docx);
+    std::string problem;
+    size_t paragraphs = 0;
+    if (!st.Ok()) {
+      problem = "not converted: " + st.message;
+    } else {
+      auto pkg = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(docx), fw::pkg::Limits::Default(), st);
+      if (!pkg) {
+        problem = "the .docx doesn't open: " + st.message;
+      } else {
+        fw::pkg::CheckReport rep = fw::pkg::CheckPackage(*pkg);
+        for (const auto& e : rep.errors) problem += (problem.empty() ? "check: " : "; ") + e;
+        auto doc = problem.empty() ? fw::doc::docx::Read(std::move(pkg), st) : nullptr;
+        if (problem.empty() && !doc) problem = "not read: " + st.message;
+        if (doc) paragraphs = doc->Paragraphs().size();
+      }
+    }
+    if (!options.outDir.empty() && !docx.empty()) {
+      std::ofstream out(options.outDir / (file.stem().wstring() + L".docx"), std::ios::binary);
+      out.write(reinterpret_cast<const char*>(docx.data()), static_cast<std::streamsize>(docx.size()));
+    }
+    std::printf("%s %s: %zu paragraphs, %zu KB%s%s\n", problem.empty() ? "[ ok ]" : "[FAIL]", Display(file).c_str(), paragraphs,
+                docx.size() / 1024, problem.empty() ? "" : "\n    ", problem.c_str());
+    if (!problem.empty()) ++failed;
+  }
+  std::printf("\n%zu files, %d failed\n", files.size(), failed);
+  return failed == 0 && !files.empty() ? 0 : 1;
 }
 
 }  // namespace fwtool

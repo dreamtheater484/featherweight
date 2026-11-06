@@ -13,6 +13,9 @@ namespace {
 
 constexpr const char* kUsage =
     "Usage:\n"
+    "  fwtool odt [--out DIR] <file or folder>...\n"
+    "      Converts OpenDocument text files (.odt, .ott) as the app opens them, checks the .docx\n"
+    "      and reads it into the model; with --out the converted documents are kept there.\n"
     "  fwtool roundtrip [--model] [--reserialize-all] [--expect-reject] [--out DIR] <file or folder>...\n"
     "      Opens and saves each file without edits. Untouched parts must be byte-identical;\n"
     "      with --reserialize-all every XML part is rewritten through the DOM and must equal\n"
@@ -206,6 +209,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"dump") return fwtool::RunDump(options);
   if (command == L"save") return fwtool::RunSave(options);
   if (command == L"check") return fwtool::RunCheck(options);
+  if (command == L"odt") return fwtool::RunOdt(options);
   if (command == L"print-sample") return fwtool::RunPrintSample(options);
   if (command == L"render") return fwtool::RunRender(options);
   if (command == L"lines") return fwtool::RunLines(options);
