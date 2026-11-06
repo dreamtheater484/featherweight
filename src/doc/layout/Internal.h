@@ -59,6 +59,9 @@ struct ParaText {
   bool usesPageCount = false;                        // NUMPAGES or SECTIONPAGES
   bool usesPage = false;                             // PAGE
   bool empty = false;                                // nothing visible: a hidden paragraph
+  // The paragraphs before it that the view joins to it (their marks deleted): their text is laid out
+  // first, after the label, and stands for this paragraph's start. They themselves are empty.
+  std::vector<uint32_t> joined;
 
   uint32_t ModelOffset(uint32_t layoutOffset) const;
   // What [from, to) of the layout text shows: hidden text and markers left out, a hyphen added.

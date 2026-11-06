@@ -455,6 +455,40 @@ TEST(Layout_WhatWordLeavesOut) {
   CHECK_NEAR(next->top, kept->top + kept->height, 0.5f);
 }
 
+TEST(Layout_DeletedMarkJoinsTheNextParagraph) {
+  // Word's final view runs a paragraph whose mark is deleted on into the next, in the next's
+  // formatting: one line "Start end", the caret at the next paragraph's start after "Start ". All
+  // Markup and Original keep the two apart. The document isn't changed.
+  const std::string body =
+      "<w:p><w:pPr><w:rPr><w:del w:id=\"1\" w:author=\"a\"/></w:rPr></w:pPr><w:r><w:t xml:space=\"preserve\">Start </w:t></w:r></w:p>"
+      "<w:p><w:pPr><w:jc w:val=\"right\"/></w:pPr><w:r><w:t>end</w:t></w:r></w:p>" + P("last") + SmallPage();
+  Doc d = Make(body);
+  REQUIRE(d.layout);
+  const std::vector<uint32_t> paras = d.doc->StoryParagraphs(d.doc->MainStory());
+  REQUIRE(paras.size() >= 3u);
+  const LineBox* joined = Find(d, u"Start end");
+  REQUIRE(joined);
+  CHECK_EQ(joined->para, paras[1]);
+  const LineBox* last = Find(d, u"last");
+  REQUIRE(last);
+  const auto start = d.layout->CaretAt({paras[1], 0}), end = d.layout->CaretAt({paras[1], 3});
+  const auto left = d.layout->CaretAt({paras[2], 0});
+  REQUIRE(start && end && left);
+  CHECK(end->x > start->x + 5);
+  CHECK(start->x > left->x + 60);  // after "Start ", right-aligned as the second paragraph says
+  CHECK_EQ(d.doc->Para(paras[0]).text, std::u16string(u"Start "));
+  for (bool original : {false, true}) {
+    fw::doc::layout::Options o;
+    o.showDeletions = true;
+    o.hideInsertions = original;
+    Layout l(*d.doc, Fonts(), o);
+    l.LayOutAll();
+    int lines = 0;
+    for (const LineBox& lb : l.GetPage(0).lines) lines += lb.para == paras[0] || lb.para == paras[1];
+    CHECK_EQ(lines, 2);
+  }
+}
+
 TEST(Layout_MarkupViews) {
   // D4 review: the final text by default; All Markup (showDeletions) lays out deleted text too and
   // keeps a paragraph whose mark is deleted; Original (and hideInsertions) hides inserted text, and

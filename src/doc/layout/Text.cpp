@@ -342,6 +342,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
   const RunProps& markProps = MarkOf(para);
   std::optional<ListLabel> label = doc_.Label(para);
   if (options_.hideInsertions && props.numId.empty()) label.reset();  // numbering a tracked change added
+  if (joining_) label.reset();  // a paragraph joined to the next: the next's label is the one shown
   if (label) {
     std::u16string s = label->text;
     // A level whose number shows nothing has no tab or space after it in compatibility mode 15
@@ -355,6 +356,31 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
       emit(s, styles_.Intern(ls), PaintOf(label->props, kNone));
       out.prefix = static_cast<uint32_t>(out.text.size());
     }
+  }
+
+  // The paragraphs before that the view joins to this one, their text first (Word's final view shows
+  // a paragraph whose mark is deleted run on into the next, in the next's formatting).
+  if (!joining_) {
+    std::vector<uint32_t> chain;
+    for (uint32_t p = para; p > 0 && chain.size() < 1000 && JoinsNext(p - 1); --p) chain.insert(chain.begin(), p - 1);
+    for (uint32_t p : chain) {
+      ParaText part;
+      joining_ = true;
+      BuildText(p, fields, part, pageBreaks, numberNotes);
+      joining_ = false;
+      if (part.text.empty()) continue;
+      const uint32_t at = static_cast<uint32_t>(out.text.size());
+      out.text += part.text;
+      out.runs.insert(out.runs.end(), part.runs.begin(), part.runs.end());
+      out.paints.insert(out.paints.end(), part.paints.begin(), part.paints.end());
+      out.subst.push_back({at, static_cast<uint32_t>(part.text.size()), 0, 0});  // it stands for this paragraph's start
+      for (auto [offset, story] : part.notes) out.notes.push_back({offset + at, story});
+      for (auto [offset, drawing] : part.inlines) out.inlines.push_back({offset + at, drawing});
+      out.anchors.insert(out.anchors.end(), part.anchors.begin(), part.anchors.end());
+      out.usesPage = out.usesPage || part.usesPage;
+      out.usesPageCount = out.usesPageCount || part.usesPageCount;
+    }
+    out.joined = std::move(chain);
   }
 
   // Field results pagination computes: [from, to) in the model text, replaced.
@@ -618,6 +644,7 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
                                        (options_.hideInsertions && (markRPr.Child(Name("ins")) || markRPr.Child(Name("moveTo")))));
   const bool markHidden = (markProps.vanish && !options_.showHiddenText) || markProps.specVanish || markDeleted;
   out.empty = markHidden && !visible && (out.prefix == 0 || markDeleted);  // a deleted mark takes its label along
+  if (!joining_ && JoinsNext(para)) out.empty = true;  // its text is laid out with the next paragraph's
   text::TextStyle mark = StyleOf(markProps, false);
   out.fw.markStyle = styles_.Intern(mark);
   out.fw.text = out.text;
@@ -637,6 +664,24 @@ void Engine::BuildText(uint32_t para, const PageFields& fields, ParaText& out, b
     out.fw.format.alignment = display->justify == math::Equation::Justify::Left    ? text::Alignment::Start
                               : display->justify == math::Equation::Justify::Right ? text::Alignment::End
                                                                                    : text::Alignment::Center;
+}
+
+bool Engine::JoinsNext(uint32_t para) const {
+  if (para + 1 >= doc_.Paragraphs().size() || doc_.Para(para).story != doc_.Para(para + 1).story) return false;
+  const Node node = doc_.ParaNode(para);
+  const Node pPr = node.Child(Name("pPr"));
+  const Node markRPr = pPr.Child(Name("rPr"));
+  if (!markRPr || pPr.Child(Name("sectPr"))) return false;
+  const bool hidden = (!options_.showDeletions && (markRPr.Child(Name("del")) || markRPr.Child(Name("moveFrom")))) ||
+                      (options_.hideInsertions && (markRPr.Child(Name("ins")) || markRPr.Child(Name("moveTo"))));
+  if (!hidden) return false;
+  // The next block in the same parent is the next paragraph (bookmarks and the like may be between).
+  const Node next = doc_.ParaNode(para + 1);
+  for (Node s = node.Next(); s; s = s.Next()) {
+    if (s == next) return true;
+    if (s.Is(Name("p")) || s.Is(Name("tbl")) || s.Is(Name("sdt")) || s.Is(Name("sectPr")) || s.Is(Name("customXml"))) return false;
+  }
+  return false;
 }
 
 std::u16string Engine::NoteReference(uint32_t story) {

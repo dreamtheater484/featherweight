@@ -1898,7 +1898,10 @@ std::shared_ptr<CachedPara> Engine::LinesOf(uint32_t para, float width, bool bre
 std::shared_ptr<CachedPara> Engine::KeepLines(uint32_t para, float width, bool breaks, const std::shared_ptr<ParaText>& pt) {
   Impl& f = *impl_;
   // Not text that depends on the page it's on: page fields and note numbers.
-  if (pages_.size() >= f.cacheUntil || pt->empty || pt->usesPage || pt->usesPageCount || !pt->notes.empty()) return nullptr;
+  // Nor text joined from paragraphs before (an edit to those doesn't change this one's version).
+  if (pages_.size() >= f.cacheUntil || pt->empty || pt->usesPage || pt->usesPageCount || !pt->notes.empty() ||
+      !pt->joined.empty())
+    return nullptr;
   auto c = std::make_shared<CachedPara>();
   c->version = doc_.Para(para).version;
   c->width = width;
@@ -1975,6 +1978,11 @@ void Engine::CountStories() {
 void Engine::Edited(uint32_t story, uint32_t first, uint32_t removed, uint32_t added, bool structure) {
   CountStories();
   Rebase();
+  // A changed paragraph the view joins to the next changes what the next shows: that one too.
+  while (added > 0 && first + added < doc_.Paragraphs().size() && JoinsNext(first + added - 1)) {
+    ++added;
+    ++removed;
+  }
   Flow(*this).Edited(story, first, removed, added, structure);
 }
 
