@@ -12,6 +12,7 @@
 #include "core/Strings.h"
 #include "doc/docx/Blank.h"
 #include "doc/docx/Docx.h"
+#include "doc/odf/Odt.h"
 #include "doc/edit/Clip.h"
 #include "doc/edit/Export.h"
 #include "doc/edit/Forms.h"
@@ -144,13 +145,17 @@ std::wstring OpenError(const std::wstring& name, const fw::pkg::Status& st) {
 DocView::DocView(ViewHost& host, std::wstring path)
     : PagedView(host), path_(std::move(path)), pw_(host, [this](const std::wstring& p) { SubmitPassword(p); }) {}
 
-std::unique_ptr<DocView> DocView::NewDocument(ViewHost& host, int number) {
+std::unique_ptr<DocView> DocView::NewDocument(ViewHost& host, int number, fw::doc::docx::Template kind) {
   auto view = std::make_unique<DocView>(host, L"");
   const DocFile::Setup& setup = DocFile::Config();
-  view->bytes_ = fw::doc::docx::BlankDocx(
-      {fw::WideToUtf8(setup.language.empty() ? L"en-US" : setup.language), setup.a4, fw::WideToUtf8(setup.user)});
+  view->bytes_ = fw::doc::docx::BlankDocx({fw::WideToUtf8(setup.language.empty() ? L"en-US" : setup.language),
+                                           setup.a4, fw::WideToUtf8(setup.user), 0, kind});
   view->file_.New(number);
   return view;
+}
+
+bool DocView::IsTemplate(const std::wstring& path) {
+  return fw::EndsWithNoCase(path, L".dotx") || fw::EndsWithNoCase(path, L".dotm") || fw::EndsWithNoCase(path, L".ott");
 }
 
 std::unique_ptr<DocView> DocView::FromBytes(ViewHost& host, std::vector<uint8_t> bytes, std::wstring title,
@@ -306,6 +311,23 @@ OpenResult DocView::Load(const std::wstring& password, std::wstring& error) {
   }
 
   fw::pkg::Status st;
+  // An OpenDocument file is converted, and the tab is a copy that Save As saves as a .docx: the
+  // file itself is never written to. A template makes a new document.
+  const bool odf = fw::EndsWithNoCase(path_, L".odt") || fw::EndsWithNoCase(path_, L".ott");
+  if (bytes_.empty() && (odf || newNumber_)) {
+    auto source = fw::pkg::Snapshot::Open(path_, {}, st);
+    if (source) st = odf ? fw::doc::odf::OdtToDocx(source->Bytes(), bytes_)
+                         : fw::doc::docx::DocumentFromTemplate(source->Bytes(), bytes_);
+    if (!source || !st.Ok()) {
+      error = odf && st.code == fw::pkg::Status::Code::Damaged
+                  ? name + L" couldn't be opened — it seems to be damaged or isn't an OpenDocument text document."
+                  : OpenError(name, st);
+      return OpenResult::Failed;
+    }
+    if (newNumber_) file_.New(newNumber_);
+    else file_.Copy(name, path_.substr(0, path_.size() - 4) + L".docx", false);
+    path_.clear();
+  }
   fw::pkg::Snapshot::Options options;
   wchar_t temp[MAX_PATH + 1] = {};
   if (GetTempPathW(MAX_PATH + 1, temp)) options.recoveryDir = std::wstring(temp) + L"Featherweight";
@@ -1461,9 +1483,11 @@ void DocView::ScrollToPos(TextPos from, TextPos to) {
 // File
 
 SaveFormat DocView::SaveAsFormat() const {
-  if (fw::EndsWithNoCase(path_, L".docm")) return {L"Word macro-enabled document", L"*.docm", L"docm"};
-  if (fw::EndsWithNoCase(path_, L".dotx")) return {L"Word template", L"*.dotx", L"dotx"};
-  if (fw::EndsWithNoCase(path_, L".dotm")) return {L"Word macro-enabled template", L"*.dotm", L"dotm"};
+  // Templates open as new documents, so the file is a document; one made from a .dotm keeps its macros.
+  const fw::doc::Part* main = doc_ ? doc_->FindPart(fw::doc::PartKind::Document) : nullptr;
+  if (fw::EndsWithNoCase(path_, L".docm") ||
+      (main && doc_->Package().ContentTypeOf(main->name).find("macroEnabled") != std::string_view::npos))
+    return {L"Word macro-enabled document", L"*.docm", L"docm"};
   return {L"Word document", L"*.docx", L"docx"};
 }
 

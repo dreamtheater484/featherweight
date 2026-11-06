@@ -58,6 +58,8 @@ $all = [ordered]@{
   fuzz_sfnt    = @{ Seeds = @("$seeds\font", "$regressions\sfnt"); MaxLen = 262144; SystemFonts = $true }
   # Charts (D5): a chart part read from its cached values and laid out at a few sizes.
   fuzz_chart   = @{ Seeds = @("$seeds\chart", "$regressions\chart"); MaxLen = 65536 }
+  # OpenDocument text import (D5): every .odt converts to a document that opens and passes the check, or is refused.
+  fuzz_odt     = @{ Seeds = @("$seeds\odt", "$regressions\odt"); MaxLen = 65536 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 

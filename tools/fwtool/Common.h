@@ -54,6 +54,7 @@ int RunSave(const Options& options);
 void DumpModel(const std::filesystem::path& file);
 int RunDump(const Options& options);
 int RunCheck(const Options& options);
+int RunOdt(const Options& options);
 int RunPrintSample(const Options& options);
 int RunRender(const Options& options);
 int RunLines(const Options& options);

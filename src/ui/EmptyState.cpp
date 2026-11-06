@@ -60,11 +60,29 @@ EmptyState::EmptyState() {
     b.visible = false;
     set_.Add(&b);
   }
+  const wchar_t glyphs[kTemplateCount] = {icon::Mail, icon::Contact, icon::Report};
+  const wchar_t* tips[kTemplateCount] = {L"New letter, from a template", L"New CV, from a template",
+                                         L"New report, from a template"};
+  for (int i = 0; i < kTemplateCount; ++i) {
+    Button& b = tiles_[fw::kFileKindCount + i];
+    b.id = 10 + fw::kFileKindCount + i;
+    b.text = kTemplates[i];
+    b.glyph = glyphs[i];
+    b.style = ButtonStyle::Standard;
+    b.tooltip = tips[i];
+    b.visible = false;
+    set_.Add(&b);
+  }
+}
+
+EmptyState::Result EmptyState::TileResult(int tile) const {
+  if (tile >= fw::kFileKindCount) return {Result::Kind::Template, tile - fw::kFileKindCount};
+  return {Result::Kind::New, tile};
 }
 
 std::vector<int> EmptyState::Tiles() const {
   std::vector<int> kinds;
-  for (int k = 0; k < fw::kFileKindCount; ++k)
+  for (int k = 0; k < fw::kFileKindCount + kTemplateCount; ++k)
     if (tiles_[k].visible) kinds.push_back(k);
   return kinds;
 }
@@ -81,13 +99,15 @@ void EmptyState::Layout(const RECT& area, float ui, const std::vector<RecentFile
 
   for (const fw::FileKindInfo& k : fw::FileKinds())
     tiles_[static_cast<int>(k.kind)].visible = fw::EditorShipped(k.kind);
+  const bool templates = fw::EditorShipped(fw::FileKind::Document);
+  for (int i = 0; i < kTemplateCount; ++i) tiles_[fw::kFileKindCount + i].visible = templates;
   const std::vector<int> tiles = Tiles();
 
   const float openW = std::round(measure.MeasureText(open_.text, 13 * u, DWRITE_FONT_WEIGHT_SEMI_BOLD) + 72 * u);
   const float hintW = std::ceil(measure.MeasureText(kHint, 13 * u)) + 2;
   hintBeside_ = openW + 16 * u + hintW <= colW;
   const float openRowH = hintBeside_ ? 36 * u : 66 * u;
-  const float headH = 40 * u + 28 * u + openRowH + (tiles.empty() ? 0 : 32 * u + 40 * u);
+  const float headH = 40 * u + 28 * u + openRowH + (tiles.empty() ? 0 : 32 * u + 40 * u) + (templates ? 48 * u : 0);
   const float listChrome = 32 * u + 26 * u;  // the gap and the "Recent" header
   int maxRows = static_cast<int>((areaH - headH - listChrome - 48 * u) / (kRowH * u));
   int rows = std::clamp(maxRows, 0, std::min(static_cast<int>(recent.size()), kMaxRows));
@@ -114,18 +134,23 @@ void EmptyState::Layout(const RECT& area, float ui, const std::vector<RecentFile
 
   if (!tiles.empty()) {
     y += 32 * u;
-    const float labelW = 64 * u, gap = 8 * u;
-    const int n = static_cast<int>(tiles.size());
+    // Two rows when the templates show: the editors, then the templates below them.
+    const float labelW = 80 * u, gap = 8 * u;
+    const int kinds = static_cast<int>(std::count_if(tiles.begin(), tiles.end(), [](int k) { return k < fw::kFileKindCount; }));
+    const int n = std::max(kinds, templates ? kTemplateCount : 0);
     newLabel_ = RectF(left, y, left + labelW, y + 40 * u);
+    templateLabel_ = RectF(left, y + 48 * u, left + labelW, y + 88 * u);
     float natural = 132 * u;
     for (int k : tiles) natural = std::max(natural, measure.MeasureText(tiles_[k].text, 13 * u) + 64 * u);
     const float w = std::floor(std::min(natural, (colW - labelW - gap * (n - 1)) / n));
     x = left + labelW;
+    float rowY = y;
     for (int k : tiles) {
-      tiles_[k].rc = RectF(x, y, x + w, y + 40 * u);
+      if (k == fw::kFileKindCount) x = left + labelW, rowY = y + 48 * u;
+      tiles_[k].rc = RectF(x, rowY, x + w, rowY + 40 * u);
       x += w + gap;
     }
-    y += 40 * u;
+    y = rowY + 40 * u;
   }
 
   listHeader_ = RectF(left, y + 32 * u, left + colW, y + 52 * u);
@@ -161,6 +186,8 @@ void EmptyState::Draw(Canvas& c, const std::vector<RecentFile>& recent) {
   const std::vector<int> tiles = Tiles();
   if (!tiles.empty()) {
     c.Text(L"New", newLabel_, p.textSecondary, 13 * u, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    if (tiles.back() >= fw::kFileKindCount)
+      c.Text(L"Templates", templateLabel_, p.textSecondary, 13 * u, DWRITE_FONT_WEIGHT_SEMI_BOLD);
     for (int k : tiles) {
       DrawButton(c, tiles_[k], u);
       if (focus_ == Focus::New && focusTile_ == k && focusVisible_) ctl::DrawFocusRing(c, tiles_[k].rc, u);
@@ -316,11 +343,7 @@ EmptyState::Result EmptyState::OnMouseUp(int x, int y) {
     r.kind = Result::Kind::Open;
     return r;
   }
-  if (id >= 10 && id < 10 + fw::kFileKindCount) {
-    r.kind = Result::Kind::New;
-    r.index = id - 10;
-    return r;
-  }
+  if (id >= 10 && id < 10 + fw::kFileKindCount + kTemplateCount) return TileResult(id - 10);
   int row = RowAt(x, y);
   if (row >= 0 && row == pressedRow_) {
     bool rem = OverRemove(row, x, y);
@@ -341,7 +364,7 @@ bool EmptyState::OnKeyDown(UINT vk, bool shift, Result& result) {
     case VK_RETURN:
     case VK_SPACE:
       if (focus_ == Focus::Open) result = {Result::Kind::Open, -1};
-      else if (focus_ == Focus::New) result = {Result::Kind::New, focusTile_};
+      else if (focus_ == Focus::New) result = TileResult(focusTile_);
       else if (focus_ == Focus::List && selected_ >= 0 && vk == VK_RETURN)
         result = {Result::Kind::OpenRecent, selected_};
       else return false;
@@ -402,11 +425,20 @@ void EmptyState::Describe(uia::Tree& t, int parent, const std::vector<RecentFile
 
   const std::vector<int> tiles = Tiles();
   if (!tiles.empty()) {
-    const D2D1_RECT_F &first = tiles_[tiles.front()].rc, &last = tiles_[tiles.back()].rc;
-    int group =
-        t.Add(parent, 3, UIA_GroupControlTypeId, L"New", RectF(newLabel_.left, first.top, last.right, last.bottom));
-    for (int k : tiles) {
-      int tile = uia::AddButton(t, group, k, tiles_[k], [act, k] { act({Result::Kind::New, k}); });
+    // A group for each row: New, and Templates.
+    int group = -1;
+    for (size_t i = 0; i < tiles.size(); ++i) {
+      const int k = tiles[i];
+      if (i == 0 || k == fw::kFileKindCount) {
+        const bool row2 = k >= fw::kFileKindCount;
+        size_t end = i;
+        while (end + 1 < tiles.size() && (tiles[end + 1] >= fw::kFileKindCount) == row2) ++end;
+        const D2D1_RECT_F &first = tiles_[k].rc, &last = tiles_[tiles[end]].rc;
+        group = t.Add(parent, row2 ? 4 : 3, UIA_GroupControlTypeId, row2 ? L"Templates" : L"New",
+                      RectF(newLabel_.left, first.top, last.right, last.bottom));
+      }
+      const Result res = TileResult(k);
+      int tile = uia::AddButton(t, group, k, tiles_[k], [act, res] { act(res); });
       t[tile].focusable = true;
       t[tile].focused = focus_ == Focus::New && focusTile_ == k;
       t[tile].focus = [this, k] { FocusOn(Focus::New, k); };
