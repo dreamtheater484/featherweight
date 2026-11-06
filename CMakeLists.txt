@@ -104,6 +104,7 @@ if(FW_BUILD_TESTS)
     tests/unit/test_units.cpp
     tests/unit/test_zip.cpp
     tests/unit/test_cfb.cpp
+    tests/unit/test_crypto.cpp
     tests/unit/test_xml.cpp
     tests/unit/test_package.cpp
     tests/unit/test_safefile.cpp
@@ -119,6 +120,14 @@ if(FW_BUILD_TESTS)
   add_test(NAME office_check COMMAND fwtool check "${_fw_office}/generated" "${_fw_office}/edge" "${_fw_office}/layout")
   add_test(NAME office_check_broken COMMAND fwtool check --expect-reject "${_fw_office}/broken")
   add_test(NAME office_malicious COMMAND fwtool roundtrip --expect-reject "${_fw_office}/malicious")
+  # Password-protected documents (D5): each opens with its password and encrypts again.
+  set(_fw_protected "${_fw_office}/protected")
+  add_test(NAME office_protected COMMAND fwtool decrypt --password featherweight --out "${CMAKE_BINARY_DIR}/protected"
+    "${_fw_protected}/report-featherweight.docx" "${_fw_protected}/simple-protected.docx"
+    "${_fw_protected}/tables-images-links-protected.docx" "${_fw_protected}/simple-protected.doc"
+    "${_fw_protected}/tables-images-links-protected.doc")
+  add_test(NAME office_protected_standard COMMAND fwtool decrypt --password Password1234_
+    --out "${CMAKE_BINARY_DIR}/protected-standard" "${_fw_protected}/ecma376-standard.docx")
 endif()
 
 # Packaging (installer, portable zip, checksums) is done by scripts/release.ps1.

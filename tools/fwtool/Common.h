@@ -37,6 +37,7 @@ struct Options {
   bool replay = false;              // torture: the input is a reproducer to replay
   std::filesystem::path samples;    // paste-check: clipboard samples (.rtf, .html) to paste
   std::filesystem::path pngs;       // pdf-check: the pages the app drew (page-1.png, ...)
+  std::wstring password;            // encrypt, decrypt
   std::vector<std::filesystem::path> inputs;
 };
 
@@ -61,6 +62,8 @@ int RunBench(const Options& options);
 int RunEditCheck(const Options& options);
 int RunPasteCheck(const Options& options);
 int RunExport(const Options& options);
+int RunCrypt(const Options& options, bool encrypt);
+int RunCfb(const Options& options);
 int RunPdfCheck(const Options& options);
 int RunBenchApp(const Options& options);
 int RunSpelling(const Options& options);

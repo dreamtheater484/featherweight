@@ -17,6 +17,8 @@
 #include "doc/edit/Forms.h"
 #include "draw/D2DPainter.h"
 #include "draw/PrintJob.h"
+#include "pkg/CompoundFile.h"
+#include "pkg/OfficeCrypto.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "pkg/Zip.h"
@@ -138,7 +140,8 @@ std::wstring OpenError(const std::wstring& name, const fw::pkg::Status& st) {
 
 }  // namespace
 
-DocView::DocView(ViewHost& host, std::wstring path) : PagedView(host), path_(std::move(path)) {}
+DocView::DocView(ViewHost& host, std::wstring path)
+    : PagedView(host), path_(std::move(path)), pw_(host, [this](const std::wstring& p) { SubmitPassword(p); }) {}
 
 std::unique_ptr<DocView> DocView::NewDocument(ViewHost& host, int number) {
   auto view = std::make_unique<DocView>(host, L"");
@@ -176,16 +179,76 @@ DocView::~DocView() {
   doc_.reset();
 }
 
+// A password-protected file: decrypted into bytes_ for Load, or why not. Without a password, or
+// with a wrong one, the tab shows the password card.
+OpenResult DocView::Unlock(const std::wstring& password, std::wstring& error) {
+  namespace crypto = fw::pkg::crypto;
+  const std::wstring name = Title();
+  auto file = fw::pkg::CompoundFile::Open(protected_);
+  if (!file || !crypto::IsEncryptedPackage(*file)) {
+    error = name + L" couldn't be opened — it isn't a Word document Featherweight can open.";
+    return OpenResult::Failed;
+  }
+  if (password.empty()) {
+    needPassword_ = true;
+    return OpenResult::NeedPassword;
+  }
+  crypto::Key key;
+  switch (crypto::Decrypt(*file, password, bytes_, key)) {
+    case crypto::Result::Ok:
+      if (!bytes_.empty()) break;
+      [[fallthrough]];  // an empty package
+    case crypto::Result::Damaged:
+      error = name + L" couldn't be opened — it seems to be damaged.";
+      return OpenResult::Failed;
+    case crypto::Result::WrongPassword: needPassword_ = true; return OpenResult::WrongPassword;
+    case crypto::Result::Unsupported:
+      error = name + L" couldn't be opened — it's protected in a way Featherweight doesn't support.";
+      return OpenResult::Failed;
+  }
+  needPassword_ = false;
+  file_.Protect(std::move(key));
+  return OpenResult::Ok;
+}
+
+void DocView::SubmitPassword(const std::wstring& password) {
+  if (password.empty()) {
+    pw_.Wrong();
+    host_.ViewInvalidate();
+    return;
+  }
+  std::wstring error;
+  const OpenResult r = Load(password, error);
+  if (r == OpenResult::Ok) {
+    pw_.Accepted();
+    host_.ViewPasswordAccepted(this);
+  } else if (r == OpenResult::WrongPassword || r == OpenResult::NeedPassword) {
+    pw_.Wrong();
+  } else {
+    needPassword_ = true;  // the card stays, with why
+    pw_.Failed(error);
+  }
+  host_.ViewInvalidate();
+}
+
+void DocView::DescribeUia(uia::Tree& t, int parent) {
+  if (needPassword_) pw_.DescribeUia(t, parent);
+}
+
 std::wstring DocView::Title() const { return path_.empty() ? file_.Title() : fw::FileNameOf(path_); }
 
 // ---------------------------------------------------------------------------
 // Loading
 
-OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
+OpenResult DocView::Load(const std::wstring& password, std::wstring& error) {
   const std::wstring name = Title();
   // Password-protected Office files aren't zip packages but OLE compound files with the
-  // encrypted package inside.
-  if (bytes_.empty()) {
+  // encrypted package inside: read whole, then decrypted with the password.
+  if (!protected_.empty() || fw::pkg::CompoundFile::HasSignature(bytes_)) {
+    if (protected_.empty()) protected_ = std::move(bytes_);  // a recovered protected document
+    bytes_.clear();
+    if (OpenResult r = Unlock(password, error); r != OpenResult::Ok) return r;
+  } else if (bytes_.empty()) {
     std::string head;
     HANDLE f = CreateFileW(path_.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -195,10 +258,17 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
       if (ReadFile(f, buf, sizeof(buf), &got, nullptr)) head.assign(buf, got);
       CloseHandle(f);
     }
-    if (head == std::string("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", 8)) {
-      error = name + L" couldn't be opened — it's protected with a password, and Featherweight doesn't open "
-                     L"protected documents yet.";
-      return OpenResult::Failed;
+    if (fw::pkg::CompoundFile::HasSignature(std::span(reinterpret_cast<const uint8_t*>(head.data()), head.size()))) {
+      // The stamp first: a change while the file is read then shows as a change on disk.
+      std::string file;
+      if (!fw::pkg::StampOf(path_, {}, protectedStamp_) || !util::ReadFileBytes(path_, file, 1u << 30)) {
+        error = name + L" couldn't be opened — the file couldn't be read.";
+        return OpenResult::Failed;
+      }
+      protected_.assign(file.begin(), file.end());
+      protectedStamp_.hash = fw::pkg::HashBytes(protected_);
+      protectedStamp_.size = protected_.size();
+      if (OpenResult r = Unlock(password, error); r != OpenResult::Ok) return r;
     }
   }
 
@@ -217,7 +287,9 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
     return OpenResult::Failed;
   }
   doc_ = std::move(doc);
-  if (!path_.empty()) file_.Opened(path_, doc_->Package().GetSnapshot().GetStamp());
+  protected_.clear();  // decrypted: the encrypted file isn't needed any more
+  protected_.shrink_to_fit();
+  if (!path_.empty()) file_.Opened(path_, file_.Protected() ? protectedStamp_ : doc_->Package().GetSnapshot().GetStamp());
 
   // Fonts this PC doesn't have: the family Word draws instead, from the document's font table.
   // The document outlives the fonts (members are destroyed in reverse order).
@@ -529,6 +601,7 @@ void DocView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   D2D1_RECT_F vpr = RectF(vp_);
   c.PushClip(vpr);
   c.Fill(vpr, presentation_ ? Rgb(0x000000) : inverted ? p.docBgInverted : p.docBg);
+  if (needPassword_) pw_.Draw(c, vp_, ui_, Title());
   if (Ready()) {
     StepScroll();
     int first, last;
@@ -838,6 +911,7 @@ DocView::Hit DocView::HitAt(int x, int y) {
 void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick) {
   mouseX_ = x;
   mouseY_ = y;
+  if (needPassword_) pw_.OnMouseDown(x, y, mods, doubleClick, ui_);
   if (!Ready()) return;
   if (OnRuler(x, y)) {
     if (button == 0) RulerMouseDown(x, y);
@@ -946,6 +1020,7 @@ void DocView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleClick)
 void DocView::OnMouseMove(int x, int y, UINT mods) {
   mouseX_ = x;
   mouseY_ = y;
+  if (needPassword_) pw_.OnMouseMove(x, y, ui_);
   if (!Ready()) return;
   if (drag_ == Drag::Ruler) {
     RulerMouseMove(x, y, mods);
@@ -991,6 +1066,7 @@ void DocView::OnMouseMove(int x, int y, UINT mods) {
 }
 
 void DocView::OnMouseUp(int x, int y, int, UINT mods) {
+  if (needPassword_) pw_.OnMouseUp(x, y);
   if (!Ready()) return;
   if (PictureMouseUp(x, y)) return;
   if (CellMouseUp() || TextDragUp(mods)) return;
@@ -1014,6 +1090,7 @@ void DocView::OnMouseUp(int x, int y, int, UINT mods) {
 
 void DocView::OnMouseLeave() {
   mouseX_ = mouseY_ = -1;
+  if (needPassword_) pw_.OnMouseLeave();
   rulerHover_ = {};
   ScrollbarMouseLeave();
   host_.ViewInvalidate();
@@ -1054,6 +1131,7 @@ bool DocView::OnKeyDown(UINT vk, UINT mods) {
 HCURSOR DocView::CursorAt(int x, int y) {
   static HCURSOR arrow = LoadCursor(nullptr, IDC_ARROW), ibeam = LoadCursor(nullptr, IDC_IBEAM),
                  hand = LoadCursor(nullptr, IDC_HAND), move = LoadCursor(nullptr, IDC_SIZEALL);
+  if (needPassword_) return pw_.CursorAt(x, y);
   if (!Ready()) return arrow;
   if (drag_ == Drag::Ruler || (drag_ == Drag::None && OnRuler(x, y))) return RulerCursor(x, y);
   if (cellDrag_ || lineDrag_ == LineDrag::Columns) return CellCursor(x, y);
@@ -1389,6 +1467,7 @@ std::wstring DocView::SuggestedSavePath() const { return doc_ ? file_.SuggestedP
 
 void DocView::Autosave() {
   if (doc_) file_.Autosave(*doc_);
+  else if (!protected_.empty()) file_.AutosaveProtected(protected_);  // recovered, still locked
 }
 
 void DocView::EditForTesting() {
