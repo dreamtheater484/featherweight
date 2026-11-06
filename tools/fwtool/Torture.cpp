@@ -22,6 +22,7 @@
 #include <unordered_map>
 
 #include "Common.h"
+#include "DrawingPlaces.h"
 #include "Torture.h"
 #include "core/Strings.h"
 #include "doc/docx/Docx.h"
@@ -1134,6 +1135,7 @@ using torture::Applied;
 using torture::Edit;
 using torture::EditKind;
 using torture::EditTarget;
+using torture::MisplacedDrawings;
 namespace fs = std::filesystem;
 
 // SplitMix64: the same draws on every compiler and machine, so a seed always means the same edits.
@@ -2533,6 +2535,7 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
   std::vector<std::string> known = fw::pkg::CheckPackage(doc->Package()).errors;
   const std::map<std::string, int> knownGrid = GridProblems(*doc);
   const std::map<std::string, int> knownMedia = MediaProblems(doc->Package());
+  const std::map<std::string, int> knownPlaces = MisplacedDrawings(doc->Package());
   std::unique_ptr<EditTarget> target = torture::OpenTarget(std::move(doc), st);
   if (!target) {
     fail("open", "the editor refuses it: " + st.message);
@@ -2566,6 +2569,16 @@ RoundResult RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const 
     for (const std::string& error : fw::pkg::CheckPackage(*again).errors)
       if (std::find(known.begin(), known.end(), error) == known.end()) return fail("check", when + error), false;
     if (std::string problem = KeptProblem(kept, *again); !problem.empty()) return fail("kept", when + problem), false;
+    // A shape or a floating drawing where Word refuses the file (DrawingPlaces.h): in a note, a
+    // comment or a text box's text, no more of them than the original had there.
+    for (const auto& [problem, count] : MisplacedDrawings(*again)) {
+      const auto had = knownPlaces.find(problem);
+      const int original = had == knownPlaces.end() ? 0 : had->second;
+      if (count > original)
+        return fail("drawing", when + problem + " (" + std::to_string(count) + " in the saved file, " +
+                                   std::to_string(original) + " in the original)"),
+               false;
+    }
     // Only where saving leaves out pictures nothing uses (D3's pictures, docx::Serialize); D2's Save
     // keeps a deleted picture's relationship, which does no harm.
     if constexpr (FW_TORTURE_D3 != 0) {
