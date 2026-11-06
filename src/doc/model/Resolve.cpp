@@ -718,7 +718,8 @@ struct ParaList {
   std::string_view numId;
   int32_t level = 0;
   Node lvl;
-  bool numDirect = false;  // named in the paragraph's own w:pPr
+  bool numDirect = false;      // named in the paragraph's own w:pPr
+  const Style* style = nullptr;  // otherwise the style that names the w:numId
 };
 ParaList ListOf(const Document& doc, Node direct, const std::vector<const Style*>& chain) {
   ParaList out;
@@ -732,14 +733,16 @@ ParaList ListOf(const Document& doc, Node direct, const std::vector<const Style*
     }
     if (Node l = np.Child(Name("ilvl"))) ilvl = l.Int(kVal);
   }
+  // A style can set only the level and take the list from the style it's based on (Heading 2 with
+  // w:ilvl 1, based on Heading 1 with the w:numId): the closest w:ilvl on the way to the w:numId.
   const Style* numStyle = nullptr;
   for (size_t i = chain.size(); i-- > 0 && (numId.empty() && !numDirect);) {
     Node np = chain[i]->node.Path({kPPr, Name("numPr")});
+    if (!ilvl)
+      if (Node l = np.Child(Name("ilvl"))) ilvl = l.Int(kVal);
     if (Node n = np.Child(Name("numId"))) {
       numId = n.AttrOr(kVal);
       numStyle = chain[i];
-      if (!ilvl)
-        if (Node l = np.Child(Name("ilvl"))) ilvl = l.Int(kVal);
     }
   }
   if (!numId.empty() && numId != "0") {
@@ -758,6 +761,7 @@ ParaList ListOf(const Document& doc, Node direct, const std::vector<const Style*
     }
   }
   out.numDirect = numDirect;
+  out.style = numStyle;
   return out;
 }
 
@@ -783,8 +787,13 @@ ParaProps ResolveParaProps(const Document& doc, uint32_t para, bool withDirect, 
   auto [tableStyle, conds] = CellStyleOf(doc, pn);
   if (tableStyle) ForEachTableStyleLevel(doc, tableStyle, conds, kPPr, [&](Node n) { ApplyPara(doc, n, p); });
   Justification tableJc = p.jc;
-  if (lvl && !numDirect) ApplyPara(doc, lvl.Child(kPPr), p);  // D2: from the style, before it
-  for (const Style* s : chain) ApplyPara(doc, s->node.Child(kPPr), p);
+  // D2: a list named by a style, just before that style: its level's indents override the styles
+  // it's based on (a list style based on List Paragraph) but not its own (measured on the corpus).
+  if (lvl && !numDirect && !list.style) ApplyPara(doc, lvl.Child(kPPr), p);
+  for (const Style* s : chain) {
+    if (lvl && !numDirect && s == list.style) ApplyPara(doc, lvl.Child(kPPr), p);
+    ApplyPara(doc, s->node.Child(kPPr), p);
+  }
   // D3: the default style's left justification doesn't override the table style's.
   if (tableStyle && style && style->isDefault && !OverrideTableStyleFontSize(doc)) {
     Node jc = style->node.Path({kPPr, Name("jc")});
