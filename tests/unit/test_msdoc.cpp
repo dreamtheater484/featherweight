@@ -372,6 +372,51 @@ TEST(MsDoc_RepeatedBookmarkNameKeepsTheLast) {
   CHECK_EQ(seen[1], std::string("other"));
 }
 
+TEST(MsDoc_DamagedRowsStillHaveCells) {
+  // A damaged table (fuzz_doc): a row whose two cells both say "merged into the cell before", then a
+  // row's end straight after the first one's. The first cell starts the merge (there is no cell before
+  // it), so the row is one cell holding A and B; the second row has no cells and nothing in it, and
+  // is left out. A row without cells is one fwtool check and Word refuse.
+  DocBuilder b;
+  b.text = u"A\x07" u"B\x07\x07\x07" u"After\r";
+  Bytes row = Cat({S8(0x2416, 1), S8(0x2417, 1)});
+  {
+    Bytes def;
+    Add16(def, 48);
+    def.push_back(2);
+    for (int x : {0, 2000, 4000}) Add16(def, static_cast<uint32_t>(x));
+    def.resize(def.size() + 40, 0);
+    def[9] = 2;  // the first cell's TC: fMerged
+    def[29] = 2;  // the second's
+    Add(row, Sprm(0xD608, def));
+  }
+  b.chars = {{12, {}}};
+  b.paras = {{2, 0, S8(0x2416, 1)}, {4, 0, S8(0x2416, 1)}, {5, 0, row}, {6, 0, row}, {12, 0, {}}};
+  pkg::Status st;
+  Bytes docx = msdoc::ToDocx(From(b.Build()), st);
+  REQUIRE(!docx.empty());
+  auto package = test::OpenBytes(docx, st);
+  REQUIRE(package);
+  Bytes part;
+  REQUIRE(package->ReadPart("/word/document.xml", part).Ok());
+  const std::string xml = test::Text(part);
+  auto count = [&](std::string_view what) {
+    size_t n = 0;
+    for (size_t at = xml.find(what); at != std::string::npos; at = xml.find(what, at + 1)) ++n;
+    return n;
+  };
+  CHECK_EQ(count("<w:tr>"), size_t{1});
+  CHECK_EQ(count("<w:tc>"), size_t{1});
+  CHECK(xml.find("<w:gridSpan w:val=\"2\"/>") != std::string::npos);
+  auto doc = Open(b.Build());
+  REQUIRE(doc);
+  const std::vector<uint32_t> p = Body(*doc);
+  REQUIRE(p.size() == 3u);
+  CHECK_EQ(TextOf(*doc, p[0]), std::string("A"));
+  CHECK_EQ(TextOf(*doc, p[1]), std::string("B"));
+  CHECK_EQ(TextOf(*doc, p[2]), std::string("After"));
+}
+
 TEST(MsDoc_StylesListsSectionsAndHeaders) {
   // Heading 1 (bold, 16 pt, outline level 1) on the first paragraph; the second numbered "1." from a
   // simple list; a landscape section with a title page and a header "Head".

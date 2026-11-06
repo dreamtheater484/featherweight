@@ -33,8 +33,9 @@ param(
   [int]$TimeoutSeconds = 90,
   [switch]$ShowWindows,  # print every window Word shows while a file opens (for diagnosing)
   # Also read what Word sees once the file is open: its paragraphs, tracked changes (type, author,
-  # text), comments (author, text, resolved, the comment each one replies to) and bookmarks (name,
-  # range and text, hidden ones too), into the JSON's "review" (scripts\contract-review-check.ps1).
+  # text), comments (author, text, resolved, the comment each one replies to), bookmarks (name,
+  # range and text, hidden ones too) and tables (rows, cells per row), into the JSON's "review"
+  # (scripts\contract-review-check.ps1).
   [switch]$Review,
   # The password of protected files (D5: Featherweight's encrypted saves). Without it, a protected
   # file fails to open instead of prompting.
@@ -173,7 +174,14 @@ if ($Child) {
           }
           $doc.Bookmarks.ShowHidden = $true  # _Toc and _Ref bookmarks too
           $marks = @(); foreach ($b in $doc.Bookmarks) { $marks += [ordered]@{ name = $b.Name; start = $b.Start; end = $b.End; text = $b.Range.Text } }
-          $result.review = [ordered]@{ paragraphs = $paras; revisions = $revs; comments = $notes; bookmarks = $marks }
+          # Tables: each one's rows, and how many cells each row has (by the cells' row index, which
+          # works with vertically merged cells too).
+          $tables = @()
+          foreach ($t in $doc.Tables) {
+            $perRow = @{}; foreach ($c in $t.Range.Cells) { $perRow[$c.RowIndex] = 1 + [int]$perRow[$c.RowIndex] }
+            $tables += [ordered]@{ rows = $t.Rows.Count; cells = @($perRow.Keys | Sort-Object | ForEach-Object { $perRow[$_] }) }
+          }
+          $result.review = [ordered]@{ paragraphs = $paras; revisions = $revs; comments = $notes; bookmarks = $marks; tables = $tables }
           break
         } catch {
           $ex = $_.Exception

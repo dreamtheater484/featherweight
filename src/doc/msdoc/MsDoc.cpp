@@ -1517,7 +1517,9 @@ void Converter::EmitTable(const std::vector<Para>& paras, size_t i0, size_t i1, 
     if (p.rowEnd) {
       if (cellStart < i) row.cells.push_back({cellStart, i});
       for (const Bytes& g : p.ppr.table) ApplyTap(g, row.tap);
-      rows.push_back(std::move(row));
+      // A row's end straight after another's (a damaged file) has no cells and nothing in it: left out,
+      // as a row needs a cell.
+      if (!row.cells.empty()) rows.push_back(std::move(row));
       row = Row();
       cellStart = i + 1;
     } else if (p.cellEnd) {
@@ -1595,7 +1597,7 @@ void Converter::EmitTable(const std::vector<Para>& paras, size_t i0, size_t i1, 
     for (size_t c = 0; c < r.cells.size(); ++c) {
       const Tc tc = c < r.tap.tc.size() ? r.tap.tc[c] : Tc();
       const unsigned horz = tc.flags & 3;
-      if (horz >= 2) continue;  // merged into the cell before it (the old way)
+      if (horz >= 2 && c > 0) continue;  // merged into the cell before it (the old way); a first cell has none
       size_t lastCell = c;
       while (lastCell + 1 < r.cells.size() && lastCell + 1 < r.tap.tc.size() && (r.tap.tc[lastCell + 1].flags & 3) >= 2) ++lastCell;
       int x0 = 0, x1 = 0, span = 1;
