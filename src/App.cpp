@@ -16,6 +16,7 @@
 #include "FileAssoc.h"
 #include "Util.h"
 #include "Version.h"
+#include "chart/Chart.h"
 #include "core/FileKinds.h"
 #include "core/Strings.h"
 #include "resource.h"
@@ -54,6 +55,7 @@ App::~App() {
 // Startup and message loop
 
 int App::Run(const AppOptions& opts) {
+  fw::chart::Install();  // charts in documents are drawn from their cached values (D5)
   if (!gfx::InitFactories()) {
     MessageBoxW(nullptr, L"Featherweight couldn’t start its graphics engine (Direct2D).", L"Featherweight",
                 MB_ICONERROR);

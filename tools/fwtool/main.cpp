@@ -6,6 +6,7 @@
 #include <string>
 
 #include "Common.h"
+#include "chart/Chart.h"
 #include "core/Strings.h"
 
 namespace fwtool {
@@ -158,6 +159,7 @@ std::string_view AsText(const std::vector<uint8_t>& bytes) {
 
 int wmain(int argc, wchar_t** argv) {
   SetConsoleOutputCP(CP_UTF8);
+  fw::chart::Install();
   if (argc >= 2 && std::wstring(argv[1]) == L"wrap") return fwtool::RunWrap(argc, argv);
   if (argc < 3) {
     std::fputs(fwtool::kUsage, stderr);

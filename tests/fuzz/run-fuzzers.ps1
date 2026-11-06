@@ -55,6 +55,8 @@ $all = [ordered]@{
   # Compound files (D5): .doc files and password-protected Office files.
   fuzz_cfb     = @{ Seeds = @("$seeds\cfb", "$regressions\cfb"); MaxLen = 65536 }
   fuzz_sfnt    = @{ Seeds = @("$seeds\font", "$regressions\sfnt"); MaxLen = 262144; SystemFonts = $true }
+  # Charts (D5): a chart part read from its cached values and laid out at a few sizes.
+  fuzz_chart   = @{ Seeds = @("$seeds\chart", "$regressions\chart"); MaxLen = 65536 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 
