@@ -867,6 +867,14 @@ struct EditorState {
       if (NameOf(id) == kR) c.run.erase(id), c.originalRun.erase(id);
     for (ElemId id : nowIds)
       if (NameOf(id) == kR) c.run.erase(id), c.originalRun.erase(id);
+    // Rows in or out, or a row's properties (a repeated header row): the tables' row indexes
+    // (Document::PlaceOfRow) are found again.
+    auto rows = [this](ElemId id) {
+      const uint32_t n = NameOf(id);
+      return n == kTbl || n == kTr || n == Name("trPr") || n == Name("tblHeader") || n == Name("body") || n == Name("sdt") ||
+             n == Name("sdtContent") || n == Name("customXml");
+    };
+    if (std::any_of(wasIds.begin(), wasIds.end(), rows) || std::any_of(nowIds.begin(), nowIds.end(), rows)) c.tables.clear();
 
     bool fields = false;
     auto countFields = [](const std::vector<Paragraph>& ps) {

@@ -18,6 +18,7 @@ struct Document::Caches {
   // the references Document hands out stay valid as they grow.
   // Document::PlaceOfRow: each table's rows by element, its row count and header rows.
   struct TableIndex {
+    std::vector<Node> list;  // Document::TableRows
     std::unordered_map<ElemId, int32_t> at;
     int32_t rows = 0, headers = 1;
   };

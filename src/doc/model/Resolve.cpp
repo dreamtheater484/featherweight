@@ -517,7 +517,8 @@ Document::RowPlace Document::PlaceOfRow(Node row) const {
   auto [it, made] = caches_->tables.try_emplace(table.Id());
   Caches::TableIndex& ti = it->second;
   if (made) {
-    const std::vector<Node> rows = TableRows(table);
+    ti.list = TableRows(table);
+    const std::vector<Node>& rows = ti.list;
     ti.rows = static_cast<int32_t>(rows.size());
     ti.at.reserve(rows.size());
     for (size_t i = 0; i < rows.size(); ++i) ti.at.emplace(rows[i].Id(), static_cast<int32_t>(i));
@@ -527,6 +528,7 @@ Document::RowPlace Document::PlaceOfRow(Node row) const {
   }
   place.rows = ti.rows;
   place.headers = ti.headers;
+  place.list = &ti.list;
   if (auto at = ti.at.find(row.Id()); at != ti.at.end()) place.index = at->second;
   return place;
 }

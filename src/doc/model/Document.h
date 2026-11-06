@@ -449,9 +449,11 @@ class Document {
   // Where a table row is: its index among its table's rows (-1 if it isn't in one), how many rows
   // the table has, and how many lead it as header rows (the first, and the repeating ones right
   // after it). Found once per table until the tree changes, so a long table's cells resolve in
-  // constant time instead of gathering its rows each.
+  // constant time instead of gathering its rows each. `list`: the table's rows (TableRows), until
+  // the next edit.
   struct RowPlace {
     int32_t index = -1, rows = 0, headers = 1;
+    const std::vector<Node>* list = nullptr;
   };
   RowPlace PlaceOfRow(Node row) const;
 
