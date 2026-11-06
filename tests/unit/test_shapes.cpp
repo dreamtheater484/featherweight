@@ -16,6 +16,7 @@
 #include "PkgTestUtil.h"
 #include "TestHarness.h"
 #include "doc/docx/Blank.h"
+#include "doc/edit/Notes.h"
 #include "doc/docx/Docx.h"
 #include "doc/docx/Save.h"
 #include "doc/edit/Editor.h"
@@ -365,6 +366,26 @@ TEST(Shapes_ANewShapeTakesAnIdNothingHas) {
   Shapes shapes(ed);
   CHECK(shapes.Insert(0, ShapeKind::Oval, fw::Emu(kInch), fw::Emu(kInch), fw::Emu(kInch), fw::Emu(kInch)).ok);
   CHECK(Count(Main(*doc), "<wp:docPr id=\"42\"") == 1u && Count(Main(*doc), "id=\"41\"") == 1u);
+}
+
+// Word refuses a file with a shape in a note or a comment ("You can't put drawing objects
+// into ..."), so the command does too (D5 torture).
+TEST(Shapes_NotInANote) {
+  auto doc = Blank();
+  CHECK(doc);
+  if (!doc) return;
+  Editor ed(*doc);
+  CHECK(edit::InsertNote(ed, {doc->StoryParagraphs(doc->MainStory())[0], 0}, false).ok);
+  uint32_t note = kNone;
+  for (uint32_t s = 0; s < doc->Stories().size(); ++s)
+    if (doc->Stories()[s].kind == StoryKind::Footnote && !doc->StoryParagraphs(s).empty()) note = s;
+  CHECK(note != kNone);
+  if (note == kNone) return;
+  Shapes shapes(ed);
+  const uint32_t p = doc->StoryParagraphs(note).back();
+  CHECK(!shapes.Insert(p, ShapeKind::Callout, fw::Emu(kInch), fw::Emu(kInch), fw::Emu(kInch), fw::Emu(kInch)).ok);
+  const uint32_t body = doc->StoryParagraphs(doc->MainStory())[0];
+  CHECK(shapes.Insert(body, ShapeKind::Callout, fw::Emu(kInch), fw::Emu(kInch), fw::Emu(kInch), fw::Emu(kInch)).ok);
 }
 
 TEST(Shapes_ANewShapeGoesOnTop) {

@@ -566,6 +566,9 @@ Result Shapes::Insert(uint32_t para, ShapeKind kind, Emu x, Emu y, Emu cx, Emu c
   const Story& story = doc.Stories()[doc.Para(para).story];
   const Part* part = PartOf(doc, story.part);
   if (!part || story.drawing != kNone || doc.ParaNode(para).DisplayOnly()) return Fail(u"A shape can't go here.");
+  // Word doesn't open a file with one there (D5 torture).
+  if (story.kind == StoryKind::Footnote || story.kind == StoryKind::Endnote || story.kind == StoryKind::Comment)
+    return Fail(u"Shapes can't go in a footnote, an endnote or a comment.");
   if (Strict(*part)) return Fail(u"Shapes can't be added to documents saved as Strict Open XML yet.");
   const bool line = kind == ShapeKind::Line || kind == ShapeKind::Arrow;
   const bool text = kind == ShapeKind::TextBox || kind == ShapeKind::Callout;
