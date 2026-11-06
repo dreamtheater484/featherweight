@@ -404,6 +404,9 @@ LineBreaker::Impl::Impl(Fonts& f, const Paragraph& para, float columnWidth)
       auto iso = static_cast<uint16_t>(props.isoScriptNumber);
       auto slotOf = [&](uint32_t i) {
         const TextStyle& s = StyleOf(i);
+        // A symbol font's characters (U+F000..U+F0FF, a bullet in Symbol or Wingdings) are in the
+        // run's own font, also in right-to-left text, as Word draws them.
+        if (text[i] >= 0xF000 && text[i] <= 0xF0FF) return kLatin;
         if (s.rightToLeft || s.complexScript || IsComplexScript(iso)) return kComplex;
         if (IsEastAsianScript(iso) || IsEastAsianChar(text[i])) return kEastAsia;
         if (s.eastAsiaHint && IsSharedPunctuation(text[i])) return kEastAsia;

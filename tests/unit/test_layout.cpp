@@ -1297,3 +1297,15 @@ TEST(Layout_EquationsInlineAndDisplay) {
   CHECK(display.bottom - display.top > (in.bottom - in.top) * 1.3f);
   CHECK(std::abs((display.left + display.right) / 2 - p.width / 2) < 2);
 }
+
+// A right-to-left table (w:bidiVisual, D5) starts at the right: its first cell is the rightmost.
+TEST(Layout_RightToLeftTableStartsAtTheRight) {
+  const std::string cell = "<w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc>";
+  Doc d = Make("<w:tbl><w:tblPr><w:bidiVisual/></w:tblPr><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"3000\"/></w:tblGrid>"
+               "<w:tr>" + cell + cell + "</w:tr></w:tbl><w:p/>");
+  REQUIRE(d.doc && d.pages() == 1);
+  const auto& cells = d.page(0).cells;
+  REQUIRE(cells.size() == 2);
+  CHECK(cells[0].box.left > cells[1].box.left);
+  CHECK(std::abs((cells[0].box.right - cells[0].box.left) - 100) < 1);  // the first column, 2000 twips
+}

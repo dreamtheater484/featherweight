@@ -83,6 +83,7 @@ struct Stack {
   bool usesPageCount = false;  // shows NUMPAGES or SECTIONPAGES
   bool usesPage = false;       // shows PAGE
   bool numbersNotes = false;   // has note references, numbered as they're laid out
+  bool rtl = false;            // a note separator in a right-to-left paragraph
   // Has content placed relative to the page or its margins, or that text wraps around: where it
   // goes depends on where the stack goes (a footer is stacked before it's placed).
   bool placedOnPage = false;

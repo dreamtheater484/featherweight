@@ -73,6 +73,53 @@ std::string OrdinalWords(int64_t n) {
   return head + tail + "th";
 }
 
+// The n-th letter of an alphabet, then each letter doubled, tripled (Word's way with letters).
+std::u16string Cycle(int64_t n, std::u16string_view letters) {
+  if (n <= 0) return ToUtf16(std::to_string(n));
+  const int64_t k = static_cast<int64_t>(letters.size());
+  return std::u16string(static_cast<size_t>(std::min<int64_t>((n - 1) / k + 1, 64)), letters[(n - 1) % k]);
+}
+
+// Each decimal digit in another script's digits.
+std::u16string Digits(int64_t n, char16_t zero) {
+  std::u16string out;
+  for (char c : std::to_string(n)) out += c == '-' ? u'-' : static_cast<char16_t>(zero + (c - '0'));
+  return out;
+}
+
+// Hebrew numerals (gematria): tens and ones as letters, hundreds from ק to ת; 15 and 16 as ט״ו, ט״ז.
+std::u16string Hebrew(int64_t n) {
+  if (n <= 0 || n > 9999) return ToUtf16(std::to_string(n));
+  std::u16string out;
+  int64_t r = n;
+  while (r >= 400) out += u'ת', r -= 400;
+  if (r >= 100) out += u"קרש"[r / 100 - 1], r %= 100;
+  if (r == 15 || r == 16) return out + (r == 15 ? u"טו" : u"טז");
+  if (r >= 10) out += u"יכלמנסעפצ"[r / 10 - 1], r %= 10;
+  if (r) out += u"אבגדהוזחט"[r - 1];
+  return out;
+}
+
+// Chinese and Japanese counting: 十, 二十一, 百五, 千...; up to 9999.
+std::u16string Counting(int64_t n) {
+  static constexpr char16_t kDigits[] = u"〇一二三四五六七八九";
+  if (n <= 0 || n > 9999) return Digits(n, 0);
+  if (n < 10) return std::u16string(1, kDigits[n]);
+  std::u16string out;
+  static constexpr char16_t kUnits[] = {u'千', u'百', u'十'};
+  int64_t place = 1000;
+  for (char16_t unit : kUnits) {
+    const int64_t d = n / place % 10;
+    if (d) {
+      if (d > 1) out += kDigits[d];
+      out += unit;
+    }
+    place /= 10;
+  }
+  if (n % 10) out += kDigits[n % 10];
+  return out;
+}
+
 std::u16string Capitalized(std::string s) {
   if (!s.empty() && s[0] >= 'a' && s[0] <= 'z') s[0] = static_cast<char>(s[0] - 32);
   return ToUtf16(s);
@@ -112,6 +159,33 @@ std::u16string FormatNumber(int64_t n, std::string_view fmt) {
     for (char c : std::to_string(n)) out += c == '-' ? u'－' : static_cast<char16_t>(0xFF10 + (c - '0'));
     return out;
   }
+  // Right-to-left and Asian scripts' numbering.
+  if (fmt == "hebrew1") return Hebrew(n);
+  if (fmt == "hebrew2") return Cycle(n, u"אבגדהוזחטיכלמנסעפצקרשת");
+  if (fmt == "arabicAlpha") return Cycle(n, u"أبتثجحخدذرزسشصضطظعغفقكلمنهوي");
+  if (fmt == "arabicAbjad") return Cycle(n, u"أبجدهوزحطيكلمنسعفصقرشتثخذضظغ");
+  if (fmt == "hindiNumbers") return Digits(n, u'٠');
+  if (fmt == "thaiNumbers") return Digits(n, u'๐');
+  if (fmt == "ideographDigital" || fmt == "japaneseDigitalTenThousand") {
+    std::u16string out;
+    for (char c : std::to_string(n)) out += c == '-' ? u'-' : u"〇一二三四五六七八九"[c - '0'];
+    return out;
+  }
+  if (fmt == "japaneseCounting" || fmt == "chineseCounting" || fmt == "chineseCountingThousand" || fmt == "taiwaneseCounting" ||
+      fmt == "taiwaneseCountingThousand" || fmt == "koreanCounting")
+    return Counting(n);
+  if (fmt == "ideographTraditional") return Cycle(n, u"甲乙丙丁戊己庚辛壬癸");
+  if (fmt == "ideographZodiac") return Cycle(n, u"子丑寅卯辰巳午未申酉戌亥");
+  if (fmt == "aiueo")
+    return Cycle(n, u"ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝ");
+  if (fmt == "aiueoFullWidth")
+    return Cycle(n, u"アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン");
+  if (fmt == "iroha" || fmt == "irohaFullWidth")
+    return Cycle(n, u"イロハニホヘトチリヌルヲワカヨタレソツネナラムウヰノオクヤマケフコエテアサキユメミシヱヒモセス");
+  if (fmt == "ganada") return Cycle(n, u"가나다라마바사아자차카타파하");
+  if (fmt == "chosung") return Cycle(n, u"ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅋㅌㅍㅎ");
+  if (fmt == "decimalEnclosedCircleChinese" || fmt == "ideographEnclosedCircle")
+    if (n >= 1 && n <= 10) return std::u16string(1, static_cast<char16_t>((fmt == "ideographEnclosedCircle" ? 0x3280 : 0x2460) + n - 1));
   return ToUtf16(std::to_string(n));
 }
 

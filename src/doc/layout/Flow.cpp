@@ -490,7 +490,8 @@ struct Flow {
       Stack sep = Separator();
       float x = f.geom.left;
       if (sep.height > 0) {
-        sep.edges.push_back({SeparatorBorder(), 0, sep.height / 2, std::min(144.0f, f.noteWidth), sep.height / 2});
+        const float w = std::min(144.0f, f.noteWidth), from = sep.rtl ? f.noteWidth - w : 0;
+        sep.edges.push_back({SeparatorBorder(), from, sep.height / 2, from + w, sep.height / 2});
         float h = sep.height;
         f.body.Append(std::move(sep), x, y);
         y += h;
@@ -552,6 +553,9 @@ struct Flow {
       if (type != "separator") continue;
       Stack st = e.StackStory(s, frame);
       st.lines.clear();  // the separator character draws a line, not text
+      // In a right-to-left paragraph the line starts at the right.
+      const std::vector<uint32_t> paras = doc.StoryParagraphs(s);
+      st.rtl = !paras.empty() && doc.ResolvedPara(paras.front()).bidi;
       return st;
     }
     Stack st;
@@ -1260,7 +1264,8 @@ struct Flow {
     const float y = f.spacing.atTop ? f.y : f.y + f.spacing.after;
     if (sep.height <= 0 || y + sep.height > Bottom() + kEpsilon) return;
     const float x = ColumnLeft(), width = ColumnRight() - ColumnLeft();
-    sep.edges.push_back({SeparatorBorder(), 0, sep.height / 2, std::min(144.0f, width), sep.height / 2});
+    const float w = std::min(144.0f, width), from = sep.rtl ? width - w : 0;
+    sep.edges.push_back({SeparatorBorder(), from, sep.height / 2, from + w, sep.height / 2});
     const float h = sep.height;
     f.body.Append(std::move(sep), x, y);
     f.y = y + h;

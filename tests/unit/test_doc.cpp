@@ -786,6 +786,12 @@ TEST(Numbering_FormatsNumbers) {
   CHECK(FormatNumber(40, "ordinalText") == u"Fortieth" && FormatNumber(5, "decimalZero") == u"05");
   CHECK(FormatNumber(6, "chicago") == u"††" && FormatNumber(3, "decimalEnclosedCircle") == u"③");
   CHECK(FormatNumber(7, "none").empty() && FormatNumber(7, "someFutureFormat") == u"7");
+  // Right-to-left and Asian scripts (D5).
+  CHECK(FormatNumber(15, "hebrew1") == u"טו" && FormatNumber(123, "hebrew1") == u"קכג");
+  CHECK(FormatNumber(3, "arabicAbjad") == u"ج" && FormatNumber(3, "arabicAlpha") == u"ت");
+  CHECK(FormatNumber(12, "hindiNumbers") == u"١٢" && FormatNumber(23, "hebrew2") == u"אא");
+  CHECK(FormatNumber(21, "japaneseCounting") == u"二十一" && FormatNumber(10, "chineseCounting") == u"十");
+  CHECK(FormatNumber(105, "japaneseCounting") == u"百五" && FormatNumber(2, "aiueoFullWidth") == u"イ");
 }
 
 TEST(Numbering_LabelsCountRestartAndContinue) {

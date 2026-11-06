@@ -361,7 +361,10 @@ bool DocView::EditKey(UINT vk, UINT mods) {
   switch (vk) {
     case VK_LEFT:
     case VK_RIGHT: {
-      const bool fwd = vk == VK_RIGHT;
+      // In a right-to-left paragraph the arrows go the other way, as Word's logical cursor
+      // movement does: Left moves on through the text.
+      const bool rtl = focus_.para < doc_->Paragraphs().size() && doc_->ResolvedPara(focus_.para).bidi;
+      const bool fwd = (vk == VK_RIGHT) != rtl;
       if (HasSelection() && !shift && !ctrl) collapse(fwd);
       else MoveCaret(ctrl ? StepWord(focus_, fwd) : StepChar(focus_, fwd), shift);
       return true;
