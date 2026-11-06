@@ -122,6 +122,8 @@ struct RunProps {
   std::string font, color, shade, lang, vert;
   int size = 0;  // half-points
   int b = -1, i = -1, caps = -1, smallCaps = -1, strike = -1, u = -1;  // -1: not set
+  std::optional<int> spacing;  // fo:letter-spacing, twips ("normal" is 0)
+  int scale = 0;               // style:text-scale, percent (0: not set)
 
   void Read(xml_node p, const std::unordered_map<std::string, std::string>& fonts) {
     if (!p) return;
@@ -140,6 +142,10 @@ struct RunProps {
     if (auto s = Attr(p, "style:text-line-through-style"); !s.empty()) strike = s != "none";
     if (auto s = Attr(p, "style:text-underline-style"); !s.empty()) u = s == "none" ? 0 : Attr(p, "style:text-underline-type") == "double" ? 2 : 1;
     if (auto c = Attr(p, "fo:color"); !c.empty()) color = Color(c);
+    if (auto ls = Attr(p, "fo:letter-spacing"); ls == "normal") spacing = 0;
+    else if (auto v = Twips(ls)) spacing = std::clamp(*v, -31680, 31680);
+    if (auto ts = Attr(p, "style:text-scale"); !ts.empty() && ts.back() == '%')
+      scale = std::clamp(std::atoi(std::string(ts).c_str()), 1, 600);
     if (auto c = Attr(p, "fo:background-color"); !c.empty()) shade = Color(c);
     if (auto pos = Attr(p, "style:text-position"); !pos.empty())
       vert = pos.starts_with("super") || (pos[0] != '-' && pos[0] != '0' && std::isdigit(static_cast<unsigned char>(pos[0]))) ? "superscript"
@@ -157,6 +163,8 @@ struct RunProps {
     if (!o.lang.empty()) lang = o.lang;
     if (!o.vert.empty()) vert = o.vert;
     if (o.size) size = o.size;
+    if (o.spacing) spacing = o.spacing;
+    if (o.scale) scale = o.scale;
     for (auto [mine, theirs] : {std::pair{&b, o.b}, {&i, o.i}, {&caps, o.caps}, {&smallCaps, o.smallCaps}, {&strike, o.strike}, {&u, o.u}})
       if (theirs >= 0) *mine = theirs;
   }
@@ -178,6 +186,8 @@ struct RunProps {
     flag(smallCaps, "smallCaps");
     flag(strike, "strike");
     if (!color.empty()) s += "<w:color w:val=\"" + color + "\"/>";
+    if (spacing) s += "<w:spacing w:val=\"" + std::to_string(*spacing) + "\"/>";
+    if (scale) s += "<w:w w:val=\"" + std::to_string(scale) + "\"/>";
     if (size) s += "<w:sz w:val=\"" + std::to_string(size) + "\"/><w:szCs w:val=\"" + std::to_string(size) + "\"/>";
     if (u >= 0) s += std::string("<w:u w:val=\"") + (u == 0 ? "none" : u == 2 ? "double" : "single") + "\"/>";
     if (!shade.empty()) s += "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"" + shade + "\"/>";

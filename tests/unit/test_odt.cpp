@@ -237,3 +237,14 @@ TEST(Odt_PageStylesAreSectionsAndAnchoredPicturesFloat) {
   CHECK(xml.find("<wp:positionH relativeFrom=\"page\"><wp:posOffset>914400</wp:posOffset>") != std::string::npos);
   CHECK(xml.find("<wp:positionV relativeFrom=\"page\"><wp:posOffset>-457200</wp:posOffset>") != std::string::npos);
 }
+
+TEST(Odt_LetterSpacingAndScale) {
+  // fo:letter-spacing and style:text-scale: w:spacing in twips and w:w, in rPr's order (after w:color).
+  const std::string autos =
+      "<style:style style:name=\"T1\" style:family=\"text\"><style:text-properties fo:color=\"#ff0000\" "
+      "fo:letter-spacing=\"0.0027in\" style:text-scale=\"103%\" fo:font-size=\"10pt\"/></style:style>";
+  std::string xml;
+  auto doc = Converted(Odt("<text:p><text:span text:style-name=\"T1\">Wide</text:span></text:p>", autos), &xml);
+  CHECK(doc);
+  CHECK(xml.find("<w:color w:val=\"FF0000\"/><w:spacing w:val=\"4\"/><w:w w:val=\"103\"/><w:sz w:val=\"20\"/>") != std::string::npos);
+}
