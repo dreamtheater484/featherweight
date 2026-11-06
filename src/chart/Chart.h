@@ -57,6 +57,9 @@ struct Group {
 struct Axis {
   bool shown = true;      // c:delete, c:tickLblPos none
   bool gridlines = false;  // c:majorGridlines
+  Look grid, line;         // the gridlines' and the axis line's c:spPr (unstated: Office 2007's gray)
+  enum class Tick : uint8_t { None, Out, In, Cross };
+  Tick ticks = Tick::Cross;  // c:majorTickMark (unstated: cross)
   std::string format;     // c:numFmt formatCode; empty: General
   std::optional<double> min, max;
   bool reversed = false;  // c:scaling/c:orientation maxMin
@@ -72,7 +75,7 @@ struct Chart {
   Axis category, value, secondary;  // scatter: `category` is the x value axis
   LegendPos legend = LegendPos::None;
   Look area, plot;  // the chart's and the plot area's c:spPr
-  float textSize = 9, titleSize = 14;  // points
+  float textSize = 10, titleSize = 14;  // points (unstated: Office 2007's 10)
   std::optional<draw::Color> textColor, titleColor;  // nullopt: black
   bool titleBold = true;
 };
