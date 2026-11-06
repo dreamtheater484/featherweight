@@ -231,6 +231,7 @@ Engine::Engine(const Document& doc, text::Fonts& fonts, const Options& options, 
     : impl_(new Impl), doc_(doc), fonts_(fonts), options_(options), timings_(timings), generation_(doc.CacheGeneration()) {
   compatMode_ = doc.Settings().compatibilityMode > 0 ? doc.Settings().compatibilityMode : 12;
   sumSpacing_ = doc.Settings().Compat(Name("doNotUseHTMLParagraphAutoSpacing"));
+  splitPageBreakAndMark_ = doc.Settings().Compat(Name("splitPgBreakAndParaMark"));
   CountStories();
   FlattenBody(doc, impl_->items);
   impl_->bodyItems = impl_->items.size();
@@ -833,8 +834,9 @@ struct Flow {
         f.columnEmpty = false;
         f.pageEmpty = false;
         // (A page break here doesn't keep the space before of what starts the next page.)
-        if (!br.Done() && e.compatMode_ >= 15) {
-          // Word 2013 and later keep the paragraph mark after a page break on the break's line.
+        if (!br.Done() && !e.splitPageBreakAndMark_) {
+          // Word keeps the paragraph mark after a page break on the break's line, in compatibility
+          // mode 14 too (measured on the corpus), unless w:splitPgBreakAndParaMark asks otherwise.
           text::LineBreaker::State rest = br.Save();
           text::Line tail = br.Next(0, ColumnRight() - ColumnLeft());
           if (!(br.Done() && Blank(pt, tail) && tail.objects.empty())) br.Restore(rest);

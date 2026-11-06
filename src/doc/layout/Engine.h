@@ -239,6 +239,7 @@ class Engine {
   uint32_t revision_ = 0;
   bool done_ = false;
   int32_t compatMode_ = 15;
+  bool splitPageBreakAndMark_ = false;  // w:splitPgBreakAndParaMark
   bool sumSpacing_ = false;  // w:doNotUseHTMLParagraphAutoSpacing: space after and before add up
   std::vector<uint32_t> fieldsCount_;  // per story: fields in it (FieldsIn)
   void CountStories();
