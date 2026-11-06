@@ -1346,3 +1346,17 @@ TEST(Layout_RightToLeftTableStartsAtTheRight) {
   CHECK(cells[0].box.left > cells[1].box.left);
   CHECK(std::abs((cells[0].box.right - cells[0].box.left) - 100) < 1);  // the first column, 2000 twips
 }
+
+// The document grid (w:docGrid, East Asian layout, D5): lines of a paragraph that snaps to it are
+// one grid pitch apart, and one that doesn't snap keeps its own height.
+TEST(Layout_LinesSnapToTheDocumentGrid) {
+  const std::string text = "<w:r><w:t>" + std::string(60, 'x') + " " + std::string(60, 'x') + "</w:t></w:r>";
+  const std::string sect = "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" "
+                           "w:left=\"1440\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/><w:docGrid w:type=\"lines\" w:linePitch=\"400\"/></w:sectPr>";
+  Doc d = Make("<w:p>" + text + "</w:p><w:p><w:pPr><w:snapToGrid w:val=\"0\"/></w:pPr>" + text + "</w:p>" + sect);
+  REQUIRE(d.doc && d.pages() == 1);
+  const auto& lines = d.page(0).lines;
+  REQUIRE(lines.size() >= 4);
+  CHECK(std::abs((lines[1].top - lines[0].top) - 20) < 0.01f);
+  CHECK(std::abs((lines[3].top - lines[2].top) - 20) > 1);
+}

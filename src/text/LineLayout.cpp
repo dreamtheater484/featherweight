@@ -107,6 +107,15 @@ bool IsEastAsianChar(wchar_t c) {
 
 // Punctuation and symbols both Latin and East Asian fonts have, which w:hint="eastAsia" sends to
 // the East Asian font.
+// Full-width punctuation with a blank half: after the mark (closing brackets, commas, full stops)
+// or before it (opening brackets).
+bool BlankAfter(wchar_t c) {
+  return std::wstring_view(L"\x3001\x3002\xFF0C\xFF0E\xFF09\x300D\x300F\x3011\x3015\x3009\x300B\xFF3D\xFF5D").find(c) != std::wstring_view::npos;
+}
+bool BlankBefore(wchar_t c) {
+  return std::wstring_view(L"\xFF08\x300C\x300E\x3010\x3014\x3008\x300A\xFF3B\xFF5B").find(c) != std::wstring_view::npos;
+}
+
 bool IsSharedPunctuation(wchar_t c) {
   return (c >= 0x00A1 && c <= 0x00BF) || c == 0x00D7 || c == 0x00F7 || (c >= 0x2010 && c <= 0x2BFF);
 }
@@ -332,6 +341,9 @@ LineBreaker::Impl::Impl(Fonts& f, const Paragraph& para, float columnWidth)
   for (uint32_t i = 0; i < n; ++i) {
     text[i] = p.text[orig[i]];
     kind[i] = KindOf(text[i]);
+    const wchar_t c = text[i];
+    if (p.format.hangPunctuation && (c == 0x3001 || c == 0x3002 || c == 0xFF0C || c == 0xFF0E || c == 0xFF61 || c == 0xFF64))
+      kind[i] = kHang;
   }
 
   // What gets shaped: capitals, and look-alikes the font is more likely to have.
@@ -600,6 +612,13 @@ void LineBreaker::Impl::ShapePiece(Segment& seg, const DWRITE_SCRIPT_ANALYSIS& s
     if (spacing != 0 && g1 > g0) {
       seg.advances[g1 - 1] += spacing;
       sum += spacing;
+    }
+    // Punctuation compression: a blank half between two marks in a row goes (half an em).
+    if (p.format.compressPunctuation && g1 > g0 && i + 1 < text.size() && (BlankAfter(text[i]) || BlankBefore(text[i + 1])) &&
+        (BlankAfter(text[i + 1]) || BlankBefore(text[i + 1])) && (BlankAfter(text[i]) || BlankBefore(text[i]))) {
+      const float half = seg.emSize * seg.scale / 2;
+      seg.advances[g1 - 1] -= half;
+      sum -= half;
     }
     adv[i] = sum;
   }
