@@ -39,10 +39,13 @@ std::wstring ElementType(FPDF_STRUCTELEMENT e, bool raw) {
 
 // What the structure tree says about a marked-content id: which container its text is in (lines
 // never cross one) and which story. Word tags table cells TD and TH, notes Footnote and Endnote,
-// and text boxes Textbox, role-mapped to Note and Sect.
+// and text boxes Textbox, role-mapped to Note and Sect; equations Formula.
 struct Marked {
   int container = 0;  // 0: the page itself
   LayoutStory story = LayoutStory::Body;
+  // In an equation: left out, as Featherweight's layout has an equation as one object without
+  // lines, while Word's PDF puts each script on its own baseline (they read as lines of their own).
+  bool formula = false;
 };
 
 void Walk(FPDF_STRUCTELEMENT e, Marked m, int& nextContainer, std::unordered_map<int, Marked>& out, int depth) {
@@ -56,6 +59,8 @@ void Walk(FPDF_STRUCTELEMENT e, Marked m, int& nextContainer, std::unordered_map
   } else if (type == L"TD" || type == L"TH") {
     m.container = nextContainer++;
     if (m.story == LayoutStory::Body) m.story = LayoutStory::Cell;
+  } else if (type == L"Formula") {
+    m.formula = true;
   }
   for (int i = 0, n = FPDF_StructElement_GetMarkedContentIdCount(e); i < n; ++i) {
     int mcid = FPDF_StructElement_GetMarkedContentIdAtIndex(e, i);
@@ -212,6 +217,10 @@ void ReadPage(FPDF_PAGE page, fw::LayoutPage& out) {
     Marked m;
     if (!info.artifact)
       if (auto found = marked.find(info.mcid); found != marked.end()) m = found->second;
+    if (m.formula) {
+      lines.Gap();
+      continue;
+    }
     double x = 0, y = 0;
     FPDFText_GetCharOrigin(text, i, &x, &y);
     FS_RECTF box{static_cast<float>(x), static_cast<float>(y), static_cast<float>(x), static_cast<float>(y)};
