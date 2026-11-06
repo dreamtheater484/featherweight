@@ -177,6 +177,13 @@ std::string El(std::string_view name, std::string_view val) {
 }
 std::string El(std::string_view name, int64_t val) { return El(name, Num(val)); }
 
+// The namespaces of every part's root.
+constexpr const char* kNs =
+    " xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\""
+    " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+    " xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\""
+    " xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:w10=\"urn:schemas-microsoft-com:office:word\"";
+
 // Word's 16 colors (ico), 0 being automatic.
 constexpr uint32_t kIco[17] = {0,        0x000000, 0x0000FF, 0x00FFFF, 0x00FF00, 0xFF00FF, 0xFF0000, 0xFFFF00, 0xFFFFFF,
                                0x000080, 0x008080, 0x008000, 0x800080, 0x800000, 0x808000, 0x808080, 0xC0C0C0};
@@ -403,7 +410,7 @@ struct PartOut {
   }
 };
 
-enum class StoryKind { Main, Footnote, Endnote, Comment, Header };
+enum class StoryKind { Main, Footnote, Endnote, Comment, Header, TextBox };
 
 class Converter {
  public:
@@ -479,6 +486,9 @@ class Converter {
   void EmitRuns(uint32_t cp0, uint32_t cp1, Story& story, std::string& out);
   void EmitMarks(uint32_t cp, std::string& out);
   std::string Picture(int64_t fc, PartOut& part);
+  std::string Media(const std::string& ext, std::vector<uint8_t> bytes, PartOut& part);
+  void ReadArt();
+  std::string Floating(uint32_t cp, Story& story);
   std::string StylesXml();
   std::string NumberingXml();
   std::string FontsXml() const;
@@ -519,6 +529,16 @@ class Converter {
   };
   std::vector<List> lists_;
   std::vector<Override> overrides_;
+  // The drawing layer.
+  struct Shape {
+    int64_t pib = 0;  // its picture: 1-based, in the blip store
+    bool text = false;
+  };
+  std::vector<Bytes> bstore_;
+  std::unordered_map<uint32_t, Shape> shapes_;           // by spid
+  std::map<uint32_t, Bytes> spaMain_, spaHeader_;        // anchor CP -> SPA
+  std::map<uint32_t, std::pair<uint32_t, uint32_t>> textBoxes_, headerTextBoxes_;  // spid -> its story
+  int z_ = 1;
   std::vector<std::pair<uint32_t, Sep>> sections_;  // each section's end CP and properties
   std::map<uint32_t, size_t> sectionEnds_;           // the CP of a section's last paragraph mark -> section
   std::vector<uint32_t> hdd_;                        // header story CPs
@@ -615,6 +635,7 @@ bool Converter::Load(const StreamFn& streams, pkg::Status& status) {
   ReadLists();
   ReadSections();
   ReadNotes();
+  ReadArt();
   const Bytes dop = Table(31);
   facingPages_ = (dop.U8(0) & 1) != 0;
   if (const int tab = dop.U16(10); tab > 0 && tab < 20000) tabStop_ = tab;
@@ -1271,11 +1292,7 @@ std::string Converter::SepXml(size_t section) {
     PartOut part{"word/" + std::string(kKind[k]) + Num(static_cast<int64_t>(parts_.size() + 1)) + ".xml"};
     Story story{StoryKind::Header, &part, {}};
     const std::string root = k == 2 || k == 3 || k == 5 ? "w:ftr" : "w:hdr";
-    std::string xml = "<" + root +
-                      " xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" "
-                      "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" "
-                      "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\">" +
-                      EmitStory(cp0, cp1, story) + "</" + root + ">";
+    std::string xml = "<" + root + kNs + ">" + EmitStory(cp0, cp1, story) + "</" + root + ">";
     part.content = std::move(xml);
     const std::string id = document_.Add(kKind[k], part.name.substr(5));
     out += std::string("<w:") + kKind[k] + "Reference w:type=\"" + kType[k] + "\" r:id=\"" + id + "\"/>";
@@ -1585,7 +1602,12 @@ void Converter::EmitRuns(uint32_t cp0, uint32_t cp1, Story& story, std::string& 
           run(r.sym);
           continue;
         }
-        if (ch < 0x20) continue;  // drawn objects (0x08) and other anchors
+        if (ch == 0x08 && (story.kind == StoryKind::Main || story.kind == StoryKind::Header)) {
+          flush();
+          if (std::string shape = Floating(c, story); !shape.empty()) run(shape);
+          continue;
+        }
+        if (ch < 0x20) continue;
       }
       if (ch < 0x20) continue;
       text.push_back(ch);
@@ -1593,6 +1615,68 @@ void Converter::EmitRuns(uint32_t cp0, uint32_t cp1, Story& story, std::string& 
     flush();
     cp = end;
   }
+}
+
+// An OfficeArt blip record as an image file: its extension and bytes. False for kinds that aren't
+// read (PICT) and damaged ones.
+bool Blip(const Bytes& rec, std::string& ext, std::vector<uint8_t>& bytes) {
+  const unsigned inst = rec.U16(0) >> 4, type = rec.U16(2);
+  const Bytes body = rec.Sub(8, rec.U32(4));
+  const size_t uids = (inst & 1) ? 32 : 16;
+  bytes.clear();
+  if (type == 0xF01A || type == 0xF01B) {  // EMF, WMF: a header, then usually deflated
+    const Bytes h = body.Sub(uids, 34);
+    const Bytes data = body.Sub(uids + 34);
+    if (h.U8(32) == 0) {
+      if (data.size() < 2 || h.U32(0) > (64u << 20) || !pkg::Inflate(data.d.subspan(2), h.U32(0), bytes)) return false;
+    } else {
+      bytes.assign(data.d.begin(), data.d.end());
+    }
+    ext = type == 0xF01A ? "emf" : "wmf";
+    return !bytes.empty();
+  }
+  const Bytes data = body.Sub(uids + 1);
+  if (type == 0xF01D || type == 0xF02A) ext = "jpeg";
+  else if (type == 0xF01E) ext = "png";
+  else if (type == 0xF029) ext = "tiff";
+  else if (type == 0xF01F) {  // a DIB: made a BMP file
+    const uint32_t header = data.U32(0), bits = data.U16(14), used = data.U32(32), compression = data.U32(16);
+    const uint32_t palette = 4 * (used ? used : bits <= 8 ? (1u << bits) : 0) + (compression == 3 && header == 40 ? 12 : 0);
+    const uint32_t size = static_cast<uint32_t>(14 + data.size()), off = 14 + header + palette;
+    const uint8_t h[14] = {'B', 'M', static_cast<uint8_t>(size), static_cast<uint8_t>(size >> 8), static_cast<uint8_t>(size >> 16),
+                           static_cast<uint8_t>(size >> 24), 0, 0, 0, 0, static_cast<uint8_t>(off), static_cast<uint8_t>(off >> 8),
+                           static_cast<uint8_t>(off >> 16), static_cast<uint8_t>(off >> 24)};
+    bytes.assign(h, h + 14);
+    ext = "bmp";
+  } else {
+    return false;
+  }
+  bytes.insert(bytes.end(), data.d.begin(), data.d.end());
+  return data.size() > 0;
+}
+
+// A picture's a:graphic.
+std::string Graphic(const std::string& rid, const std::string& id, const std::string& ext, const std::string& size) {
+  return "<a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData "
+         "uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:pic "
+         "xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:nvPicPr><pic:cNvPr id=\"0\" "
+         "name=\"image" + id + "." + ext + "\"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed=\"" + rid +
+         "\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext " +
+         size + "/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData>"
+         "</a:graphic>";
+}
+
+// Twips as VML points ("12.05").
+std::string Pt(int64_t twips) {
+  const int64_t a = twips < 0 ? -twips : twips, hundredths = a % 20 * 5;
+  return (twips < 0 ? "-" : "") + Num(a / 20) + "." + (hundredths < 10 ? "0" : "") + Num(hundredths);
+}
+
+std::string Converter::Media(const std::string& ext, std::vector<uint8_t> bytes, PartOut& part) {
+  const std::string name = "media/image" + Num(static_cast<int64_t>(media_.size() + 1)) + "." + ext;
+  media_.push_back({"word/" + name, std::move(bytes)});
+  mediaTypes_.insert(ext);
+  return part.Add("image", name);
 }
 
 // An inline picture: a PICF in the Data stream, then the OfficeArt shape and its blip.
@@ -1608,76 +1692,149 @@ std::string Converter::Picture(int64_t fc, PartOut& part) {
   // The blip: inside an FBSE, or on its own, after the shape container.
   std::string ext;
   std::vector<uint8_t> bytes;
-  auto blip = [&](const Bytes& rec) {
-    const unsigned inst = rec.U16(0) >> 4, type = rec.U16(2);
-    const Bytes body = rec.Sub(8, rec.U32(4));
-    const size_t uids = (inst & 1) ? 32 : 16;
-    if (type == 0xF01A || type == 0xF01B) {  // EMF, WMF: a header, then usually deflated
-      const Bytes h = body.Sub(uids, 34);
-      const Bytes data = body.Sub(uids + 34);
-      if (h.U8(32) == 0) {
-        if (data.size() < 2 || h.U32(0) > (64u << 20) || !pkg::Inflate(data.d.subspan(2), h.U32(0), bytes)) return false;
-      } else {
-        bytes.assign(data.d.begin(), data.d.end());
-      }
-      ext = type == 0xF01A ? "emf" : "wmf";
-      return true;
-    }
-    const Bytes data = body.Sub(uids + 1);
-    if (type == 0xF01D || type == 0xF02A) ext = "jpeg";
-    else if (type == 0xF01E) ext = "png";
-    else if (type == 0xF029) ext = "tiff";
-    else if (type == 0xF01F) {  // a DIB: made a BMP file
-      const uint32_t header = data.U32(0), bits = data.U16(14), used = data.U32(32), compression = data.U32(16);
-      const uint32_t palette = 4 * (used ? used : bits <= 8 ? (1u << bits) : 0) + (compression == 3 && header == 40 ? 12 : 0);
-      const uint32_t size = static_cast<uint32_t>(14 + data.size()), off = 14 + header + palette;
-      const uint8_t h[14] = {'B', 'M', static_cast<uint8_t>(size), static_cast<uint8_t>(size >> 8), static_cast<uint8_t>(size >> 16),
-                             static_cast<uint8_t>(size >> 24), 0, 0, 0, 0, static_cast<uint8_t>(off), static_cast<uint8_t>(off >> 8),
-                             static_cast<uint8_t>(off >> 16), static_cast<uint8_t>(off >> 24)};
-      bytes.assign(h, h + 14);
-      ext = "bmp";
-    } else {
-      return false;
-    }
-    bytes.insert(bytes.end(), data.d.begin(), data.d.end());
-    return !bytes.empty();
-  };
   for (int guard = 0; d.Has(o, 8) && guard < 64; ++guard) {
     const uint16_t type = d.U16(o + 2);
     const size_t len = d.U32(o + 4);
     const Bytes rec = d.Sub(o, 8 + len);
-    if (type == 0xF007) {
-      const Bytes inner = rec.Sub(8 + 36 + rec.U8(8 + 33));
-      if (blip(inner)) break;
-    } else if (type >= 0xF018 && type <= 0xF117 && blip(rec)) {
-      break;
-    }
+    if (type == 0xF007 && Blip(rec.Sub(8 + 36 + rec.U8(8 + 33)), ext, bytes)) break;
+    if (type >= 0xF018 && type <= 0xF117 && Blip(rec, ext, bytes)) break;
     o += 8 + len;
   }
   if (bytes.empty()) return {};
-  const std::string name = "media/image" + Num(static_cast<int64_t>(media_.size() + 1)) + "." + ext;
-  media_.push_back({"word/" + name, std::move(bytes)});
-  mediaTypes_.insert(ext);
-  const std::string rid = part.Add("image", name);
+  const std::string rid = Media(ext, std::move(bytes), part);
   const std::string id = Num(docPr_++), size = "cx=\"" + Num(cx) + "\" cy=\"" + Num(cy) + "\"";
   return "<w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\"><wp:extent " + size +
-         "/><wp:docPr id=\"" + id + "\" name=\"Picture " + id +
-         "\"/><a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData "
-         "uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:pic "
-         "xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:nvPicPr><pic:cNvPr id=\"0\" "
-         "name=\"image" + id + "." + ext + "\"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed=\"" + rid +
-         "\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext " +
-         size + "/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData>"
-         "</a:graphic></wp:inline></w:drawing>";
+         "/><wp:docPr id=\"" + id + "\" name=\"Picture " + id + "\"/>" + Graphic(rid, id, ext, size) +
+         "</wp:inline></w:drawing>";
+}
+
+// The drawing layer: the blip store, the shapes, where the text anchors them (SPA) and the text
+// boxes' stories.
+void Converter::ReadArt() {
+  const Bytes art = Table(50);
+  auto record = [](const Bytes& b, size_t at) { return b.Sub(at, 8 + size_t{b.U32(at + 4)}); };
+  size_t o = 0;
+  if (art.U16(2) == 0xF000) {  // OfficeArtDggContainer, with the OfficeArtBStoreContainer
+    const Bytes dgg = record(art, 0);
+    for (size_t k = 8; dgg.Has(k, 8); k += 8 + size_t{dgg.U32(k + 4)})
+      if (dgg.U16(k + 2) == 0xF001) {
+        const Bytes store = record(dgg, k);
+        for (size_t b = 8; store.Has(b, 8) && bstore_.size() < 65536; b += 8 + size_t{store.U32(b + 4)})
+          bstore_.push_back(record(store, b));
+      }
+    o = dgg.size();
+  }
+  // Each drawing (the body's, the headers'): a byte, then an OfficeArtDgContainer whose group holds
+  // the shapes. Groups' own shapes are placed in the group, so groups are left out.
+  for (int guard = 0; art.Has(o + 1, 8) && guard < 16; ++guard) {
+    const Bytes dg = record(art, o + 1);
+    o += 1 + dg.size();
+    for (size_t k = 8; dg.Has(k, 8); k += 8 + size_t{dg.U32(k + 4)}) {
+      if (dg.U16(k + 2) != 0xF003) continue;
+      const Bytes group = record(dg, k);
+      for (size_t j = 8; group.Has(j, 8); j += 8 + size_t{group.U32(j + 4)}) {
+        if (group.U16(j + 2) != 0xF004) continue;
+        const Bytes sp = record(group, j);
+        Shape shape;
+        uint32_t spid = 0, flags = 0;
+        for (size_t r = 8; sp.Has(r, 8); r += 8 + size_t{sp.U32(r + 4)}) {
+          const uint16_t type = sp.U16(r + 2);
+          const Bytes body = record(sp, r).Sub(8);
+          if (type == 0xF00A) {
+            spid = body.U32(0);
+            flags = body.U32(4);
+          } else if (type == 0xF00B || type == 0xF122) {
+            for (size_t p = 0, n = sp.U16(r) >> 4; p < n; ++p) {
+              const uint16_t id = body.U16(6 * p);
+              if ((id & 0x3FFF) == 0x0104 && (id & 0x4000)) shape.pib = body.U32(6 * p + 2);
+              if ((id & 0x3FFF) == 0x0080) shape.text = true;
+            }
+          }
+        }
+        if (spid && !(flags & 0x5)) shapes_[spid] = shape;  // not a group, not the patriarch
+      }
+    }
+  }
+  auto spa = [&](size_t index, std::map<uint32_t, Bytes>& out) {
+    const Bytes plc = Table(index);
+    const size_t n = plc.size() >= 4 ? (plc.size() - 4) / 30 : 0;
+    for (size_t k = 0; k < n; ++k) out[plc.U32(4 * k)] = plc.Sub(4 * (n + 1) + 26 * k, 26);
+  };
+  spa(40, spaMain_);
+  spa(41, spaHeader_);
+  const uint32_t txbx = ccp_[0] + ccp_[1] + ccp_[2] + ccp_[3] + ccp_[4] + ccp_[5];
+  auto boxes = [&](size_t index, uint32_t base, std::map<uint32_t, std::pair<uint32_t, uint32_t>>& out) {
+    const Bytes plc = Table(index);
+    const size_t n = plc.size() >= 4 ? (plc.size() - 4) / 26 : 0;
+    for (size_t k = 0; k < n; ++k) {
+      const uint32_t a = plc.U32(4 * k), b = plc.U32(4 * k + 4);
+      if (b > a) out[plc.U32(4 * (n + 1) + 22 * k + 14)] = {base + a, base + b};
+    }
+  };
+  boxes(56, txbx, textBoxes_);
+  boxes(58, txbx + ccp_[6], headerTextBoxes_);
+}
+
+// A floating picture or text box where the text has its anchor (0x08); empty for other shapes.
+std::string Converter::Floating(uint32_t cp, Story& story) {
+  const bool header = story.kind == StoryKind::Header;
+  const auto& spas = header ? spaHeader_ : spaMain_;
+  auto at = spas.find(header ? cp - (ccp_[0] + ccp_[1]) : cp);
+  if (at == spas.end()) return {};
+  const Bytes& spa = at->second;
+  const uint32_t spid = spa.U32(0);
+  auto shape = shapes_.find(spid);
+  if (shape == shapes_.end()) return {};
+  const int64_t x = spa.I32(4), y = spa.I32(8), w = int64_t{spa.I32(12)} - x, h = int64_t{spa.I32(16)} - y;
+  if (w <= 0 || h <= 0 || w > 1000000 || h > 1000000) return {};
+  const uint16_t flags = spa.U16(20);
+  const unsigned bx = (flags >> 1) & 3, by = (flags >> 3) & 3, wr = (flags >> 5) & 0xF, wrk = (flags >> 9) & 0xF;
+  const bool below = (flags & 0x4000) != 0;
+  const std::string z = Num(z_++);
+  static const char* const kSide[] = {"bothSides", "left", "right", "largest"};
+  if (shape->second.pib > 0 && static_cast<size_t>(shape->second.pib) <= bstore_.size()) {
+    // The blip: in its FBSE, or in the WordDocument stream where the FBSE says (foDelay).
+    const Bytes& fbse = bstore_[static_cast<size_t>(shape->second.pib - 1)];
+    const size_t inner = 8 + 36 + size_t{fbse.U8(8 + 33)};
+    const Bytes blip = fbse.size() > inner + 8 ? fbse.Sub(inner)
+                                               : word_.Sub(fbse.U32(8 + 28), 8 + size_t{word_.U32(size_t{fbse.U32(8 + 28)} + 4)});
+    std::string ext;
+    std::vector<uint8_t> bytes;
+    if (!Blip(blip, ext, bytes)) return {};
+    const std::string rid = Media(ext, std::move(bytes), *story.part);
+    const std::string id = Num(docPr_++), size = "cx=\"" + Num(w * 635) + "\" cy=\"" + Num(h * 635) + "\"";
+    static const char* const kH[] = {"margin", "page", "column", "column"};
+    static const char* const kV[] = {"margin", "page", "paragraph", "paragraph"};
+    const std::string wrap = wr == 1 ? "<wp:wrapTopAndBottom/>"
+                             : wr == 3 ? "<wp:wrapNone/>"
+                                       : std::string("<wp:wrapSquare wrapText=\"") + kSide[std::min(wrk, 3u)] + "\"/>";
+    return "<w:drawing><wp:anchor distT=\"0\" distB=\"0\" distL=\"114300\" distR=\"114300\" simplePos=\"0\" relativeHeight=\"" + z +
+           "\" behindDoc=\"" + (below ? "1" : "0") + "\" locked=\"0\" layoutInCell=\"1\" allowOverlap=\"1\"><wp:simplePos x=\"0\" "
+           "y=\"0\"/><wp:positionH relativeFrom=\"" + kH[bx] + "\"><wp:posOffset>" + Num(x * 635) +
+           "</wp:posOffset></wp:positionH><wp:positionV relativeFrom=\"" + kV[by] + "\"><wp:posOffset>" + Num(y * 635) +
+           "</wp:posOffset></wp:positionV><wp:extent " + size + "/><wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/>" + wrap +
+           "<wp:docPr id=\"" + id + "\" name=\"Picture " + id + "\"/>" + Graphic(rid, id, ext, size) + "</wp:anchor></w:drawing>";
+  }
+  const auto& boxes = header ? headerTextBoxes_ : textBoxes_;
+  auto box = boxes.find(spid);
+  if (box == boxes.end()) return {};
+  // A text box, as VML (which Word reads in every version): its story's paragraphs inside.
+  static const char* const kRel[] = {"margin", "page", "text", "text"};
+  static const char* const kWrap[] = {"square", "topAndBottom", "square", "none", "tight", "through"};
+  Story text{StoryKind::TextBox, story.part, {}};
+  uint32_t cp1 = box->second.second;
+  if (cp1 - box->second.first >= 2 && text_.size() >= cp1 && text_[cp1 - 1] == 0x0D && text_[cp1 - 2] == 0x0D) --cp1;
+  const std::string content = EmitStory(box->second.first, cp1, text);
+  return "<w:pict><v:shape id=\"_x0000_s" + Num(spid) + "\" type=\"#_x0000_t202\" style=\"position:absolute;margin-left:" +
+         Pt(x) + "pt;margin-top:" + Pt(y) + "pt;width:" + Pt(w) + "pt;height:" + Pt(h) + "pt;z-index:" + (below ? "-" : "") + z +
+         ";mso-position-horizontal-relative:" + kRel[bx] + ";mso-position-vertical-relative:" + kRel[by] +
+         "\"><v:textbox><w:txbxContent>" + content + "</w:txbxContent></v:textbox><w10:wrap type=\"" +
+         kWrap[std::min(wr, 5u)] + "\"/></v:shape></w:pict>";
 }
 
 // ---------------------------------------------------------------------------
 // The other parts.
 
-constexpr const char* kNs =
-    " xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\""
-    " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
-    " xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\"";
 
 std::string Converter::StylesXml() {
   std::string out = std::string("<w:styles") + kNs + "><w:docDefaults><w:rPrDefault><w:rPr>";
