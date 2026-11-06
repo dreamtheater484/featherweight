@@ -176,7 +176,8 @@ TEST(Edit_NewTextTakesTheFormattingAround) {
       "<w:p><w:pPr><w:rPr><w:ins w:id=\"7\" w:author=\"A\" w:date=\"2026-01-01T00:00:00Z\"/><w:b/></w:rPr></w:pPr></w:p>"
       "<w:p><w:hyperlink r:id=\"rIdLink\"><w:r><w:rPr><w:rStyle w:val=\"Hyperlink\"/><w:i/></w:rPr><w:t>link</w:t>"
       "</w:r></w:hyperlink></w:p>"
-      "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r></w:p>";
+      "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r></w:p>"
+      "<w:p><w:pPr><w:rPr><w:sz w:val=\"23\"/><w:oMath/></w:rPr></w:pPr></w:p>";
   auto doc = LoadOk(f);
   CHECK(doc);
   if (!doc) return;
@@ -188,14 +189,18 @@ TEST(Edit_NewTextTakesTheFormattingAround) {
   CHECK(ed.InsertText(P(ps[1], 4), u"s"));
   // At the start: the first run's.
   CHECK(ed.InsertText(P(ps[2], 0), u"B"));
+  // A math paragraph's mark: its size, not its w:oMath, which a run can't have (D5 torture).
+  CHECK(ed.InsertText(P(ps[3], 0), u"m"));
   CHECK(BodyIs(*doc,
                "<w:p><w:pPr><w:rPr><w:ins w:id=\"7\" w:author=\"A\" w:date=\"2026-01-01T00:00:00Z\"/><w:b/></w:rPr>"
                "</w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>x</w:t></w:r></w:p>"
                "<w:p><w:hyperlink r:id=\"rIdLink\"><w:r><w:rPr><w:rStyle w:val=\"Hyperlink\"/><w:i/></w:rPr>"
                "<w:t>link</w:t></w:r></w:hyperlink><w:r><w:rPr><w:i/></w:rPr><w:t>s</w:t></w:r></w:p>"
-               "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Bbold</w:t></w:r></w:p>"));
+               "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Bbold</w:t></w:r></w:p>"
+               "<w:p><w:pPr><w:rPr><w:sz w:val=\"23\"/><w:oMath/></w:rPr></w:pPr><w:r><w:rPr><w:sz w:val=\"23\"/>"
+               "</w:rPr><w:t>m</w:t></w:r></w:p>"));
   CHECK(Consistent(*doc, f));
-  CHECK(UndoSteps(ed) == 3 && RoundTrips(*doc));
+  CHECK(UndoSteps(ed) == 4 && RoundTrips(*doc));
 }
 
 TEST(Edit_SplitAndJoinParagraphs) {
