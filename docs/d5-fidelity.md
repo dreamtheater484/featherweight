@@ -18,17 +18,28 @@ The fidelity piece of D5 (`docs/d5-plan.md`). Measured with `fwtool compare` aga
 
 The 97 % and 98 % targets count each document once:
 - **Counted:** the original 108 `.docx` documents, plus the new distinct documents d1-corpus adds (the public chart, equation, right-to-left and East Asian files).
-- **Copies:** format copies of a counted document are measured against Word's render of each copy, but reported apart and kept out of the targets. These are the `.dotx`, `.doc`, `.odt` and password-protected copies, which sit under `dotx/`, `doc/`, `odt/` and `protected/` with the same category and name as the `.docx` under `docx/`.
+- **Copies:** format copies of a counted document are measured against Word's render of each copy, but reported apart and kept out of the targets.
+  - These are the `.dotx`, `.doc`, `.odt` and password-protected copies.
+  - The manifest marks each one with `"copyOf"`, the source of the document it copies. For an older manifest without it, compare uses the folder and name: a document under `dotx/`, `doc/`, `odt/` or `protected/` with the same category and name as one under `docx/`.
+- **How compare opens them:** `.doc` and `.odt` copies go through the importers, and protected copies are decrypted with the manifest's test `"password"`, as the app opens them.
 - **How compare says it:** `fwtool compare` prints the targets' line first and the copies' line after it. Its JSON has `"copy": true` on each copy and the copies' totals under `"copies"`. Its report puts the copies in a table of their own.
 
-Copies on e38b850:
+On 766982d, with d1-corpus's manifest of 411 entries:
 
-| Copies | Page counts match | Lines |
+| Set | Page counts match | Lines |
 |---|---:|---:|
-| `.doc`, opened through the `.doc` import | 82 of 108 | 101,461 of 111,331 (91.1 %) |
+| **Targets**: 152 distinct documents | 139 (91.4 %) | 109,822 of 114,078 (96.3 %) |
+| The original 108 | 99 | 107,259 of 111,064 (96.6 %) |
+| The 44 new ones (charts, equations, right-to-left, East Asian) | 40 | 2,563 of 3,014 (85.0 %) |
+| **Copies**: 258, one `.odt` has no render | 168 (65.1 %) | 210,648 of 239,892 (87.8 %) |
+| `.doc` | 83 of 108 | 101,465 of 111,331 (91.1 %) |
+| `.odt` | 53 of 107 | 68,595 of 86,034 (79.7 %) |
 | `.dotx` | 25 of 31 | 35,946 of 37,530 (95.8 %) |
-| Password-protected | 0 of 12 | not measured: the corpus doesn't record their passwords |
-| All copies | 107 of 151 (70.9 %) | 137,407 of 153,858 (89.3 %) |
+| Password-protected | 7 of 12 | 4,642 of 4,997 (92.9 %) |
+
+The 4 new documents whose page count differs:
+- gojp-mhlw-form-b1, b2 and b3: Word 23, 28 and 12 pages, ours 17, 21 and 8 (Japanese, the document grid);
+- who-lqsi-controlled-document-front-page-arabic: Word 1 page, ours 2.
 
 D1 ended at 98/108 and 95.9 %, not the 99/108 and 95.2 % in the plan. Those numbers were measured before D1's last layout commit (399a105, spaces squeezed only in mode 15). That commit gained 776 lines and lost eu-bijlage's page match, which had been a coincidence (1,070 of its 1,385 lines matched).
 
