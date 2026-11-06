@@ -161,10 +161,14 @@ void TreeEdit::Commit() {
   uint32_t first = kNone, last = 0, story = kNone;
   bool local = local_;
   static constexpr uint32_t kFldSimple = Name("fldSimple"), kFldChar = Name("fldChar");
+  bool sectPr = false;
+  step->pairs = false;
   for (const auto& [id, e] : step->after) {
     // A field that comes, goes or moves: the story's fields read differently after it.
-    if (const uint32_t n = e.def == kNoDef ? 0 : S().Elem(e.def).name; n == kFldSimple || n == kFldChar)
-      step->structure = true;
+    const uint32_t n = e.def == kNoDef ? 0 : S().Elem(e.def).name;
+    if (n == kFldSimple || n == kFldChar) step->structure = true;
+    step->pairs = step->pairs || doc_.PairSite(n);
+    sectPr = sectPr || n == names::kSectPr;
     const uint32_t p = ParagraphOf(id);
     if (p == kNone) {
       local = local && (InDefinitions(id) || !Attached(id));  // or an unused copy, linked nowhere
@@ -176,9 +180,12 @@ void TreeEdit::Commit() {
     last = std::max(last, p);
   }
   Pos caret = caret_;
-  // What the model reads again: only these, whatever the layout does again.
+  // What the model reads again: only these, whatever the layout does again; the sections only
+  // after a section break changed (or anything, outside formatting).
   step->touchedFirst = first == kNone ? 0 : first;
   step->touchedEnd = first == kNone ? 0 : last + 1;
+  step->sections = sectPr || !local;
+  step->pairs = step->pairs || !local;
   if (first != kNone) {
     if (caret.para == kNone) caret = {first, 0};
     if (local) {
@@ -326,7 +333,12 @@ void TreeEdit::Reindex() {
     return;
   }
   uint32_t first = kNone, last = 0;
+  bool pairs = false, sectPr = false;
   auto add = [&](ElemId id) {
+    const ElemDefId def = doc_.tree_.elems[id].def;
+    const uint32_t n = def == kNoDef ? 0 : S().Elem(def).name;
+    pairs = pairs || doc_.PairSite(n);
+    sectPr = sectPr || n == names::kSectPr;
     if (const uint32_t p = ParagraphOf(id); p != kNone) {
       first = std::min(first, p);
       last = std::max(last, p);
@@ -334,8 +346,8 @@ void TreeEdit::Reindex() {
   };
   for (const auto& [id, old] : before_) add(id);
   for (size_t id = elemsAtBegin_; id < doc_.tree_.elems.size(); ++id) add(static_cast<ElemId>(id));
-  if (first == kNone) doc_.RefreshCaches(0, 0);
-  else doc_.RefreshCaches(first, last + 1);
+  if (first == kNone) doc_.RefreshCaches(0, 0, pairs, sectPr);
+  else doc_.RefreshCaches(first, last + 1, pairs, sectPr);
 }
 
 void TreeEdit::Abort() {

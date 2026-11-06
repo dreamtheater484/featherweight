@@ -886,7 +886,7 @@ size_t Document::ModelBytes() const {
 
 // ---------- Indexes built after reading ----------
 
-void Document::BuildIndexes() {
+void Document::BuildIndexes(bool pairs, bool sections) {
   Caches& c = *caches_;
   const Schema& sc = Schema::Get();
 
@@ -1003,6 +1003,12 @@ void Document::BuildIndexes() {
     }
   }
 
+  // Pairs and sections: the whole document's, so only when an edit may have moved them.
+  if (!pairs) {
+    if (sections) BuildSections();
+    return;
+  }
+
   // Pairs, by the registry's rules: value pairs match by id within a part, fields by nesting.
   pairs_.clear();
   struct SiteOf {
@@ -1082,7 +1088,7 @@ void Document::BuildIndexes() {
     }
   }
 
-  BuildSections();
+  if (sections) BuildSections();
 }
 
 void Document::ResetCaches() {
@@ -1091,7 +1097,19 @@ void Document::ResetCaches() {
   ++cacheStore_;
 }
 
-void Document::RefreshCaches(uint32_t first, uint32_t end) {
+bool Document::PairSite(uint32_t name) const {
+  std::unordered_set<uint32_t>& sites = caches_->pairSites;
+  if (sites.empty())
+    for (const auto& rule : registry_->Rules()) {
+      if (rule.format != pkg::DocFormat::Word && rule.format != pkg::DocFormat::Any) continue;
+      for (const auto& site : rule.sites)
+        if ((site.role & (pkg::kOpens | pkg::kCloses)) && !site.elementLocal.empty())
+          sites.insert(NameOf(NsFromUri(site.elementNs), site.elementLocal));
+    }
+  return sites.count(name) > 0;
+}
+
+void Document::RefreshCaches(uint32_t first, uint32_t end, bool pairs, bool sections) {
   Caches& c = *caches_;
   end = std::min<uint32_t>(end, static_cast<uint32_t>(paras_.size()));
   // What earlier edits left in the pools doesn't pile up: made again from nothing now and then.
@@ -1122,7 +1140,42 @@ void Document::RefreshCaches(uint32_t first, uint32_t end) {
   c.commentStory.clear();
   c.footnoteStory.clear();
   c.endnoteStory.clear();
-  BuildIndexes();
+  // The pairs kept when the paragraphs that changed hold the same ones (an element taken out isn't
+  // always among those the edit names): found where they are now, text having come or gone.
+  if (!pairs) {
+    auto in = [&](const Pos& at) { return at.para >= first && at.para < end; };
+    std::vector<ElemId> now, kept;
+    for (uint32_t p = first; p < end; ++p)
+      for (ElemId id = paras_[p].elem; id != kNoElem; id = NextInTree(tree_, id, paras_[p].elem))
+        if (tree_.elems[id].def != kNoDef && PairSite(Schema::Get().Elem(tree_.elems[id].def).name)) now.push_back(id);
+    for (const PairInfo& pi : pairs_) {
+      if (pi.open && in(pi.openPos)) kept.push_back(pi.open.Id());
+      if (pi.close && in(pi.closePos)) kept.push_back(pi.close.Id());
+    }
+    std::sort(now.begin(), now.end());
+    std::sort(kept.begin(), kept.end());
+    pairs = now != kept;
+    if (!pairs)
+      for (PairInfo& pi : pairs_) {
+        if (pi.open && in(pi.openPos)) pi.openPos = PosOf(pi.open);
+        if (pi.close && in(pi.closePos)) pi.closePos = PosOf(pi.close);
+      }
+  }
+  // A style that came or went may be one other paragraphs name or fall back on (the default):
+  // then they all read differently.
+  auto defaults = [&] {
+    std::string ids;
+    for (StyleType type : {StyleType::Paragraph, StyleType::Character})
+      if (const Style* s = DefaultStyle(type)) ids.append(s->id).push_back('\n');
+    return ids;
+  };
+  const size_t styles = styles_.size();
+  const std::string were = defaults();
+  BuildIndexes(pairs, sections);
+  if (styles_.size() != styles || defaults() != were) {
+    ResetCaches();
+    BuildIndexes();
+  }
 }
 
 void Document::PassesFrom(uint32_t story, uint32_t first, uint32_t removed, uint32_t added) {

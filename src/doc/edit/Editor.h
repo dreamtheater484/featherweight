@@ -99,6 +99,9 @@ struct CustomStep {
   // model reads again (a section's page setup changes only its w:sectPr: none, or one). kNone: the
   // range above, to renumberFrom.
   uint32_t touchedFirst = kNone, touchedEnd = kNone;
+  // With touchedFirst: whether it added, took out or moved what opens or closes a pair (a bookmark,
+  // a field) or a section break, which the model then finds again in the whole document.
+  bool pairs = true, sections = true;
   // Paragraphs the step adds to the model or takes out of it (a note's story, D4), in the order
   // it does so, each as the Change it is then. Listeners hear of them after the range above;
   // undoing reverses them, newest first.

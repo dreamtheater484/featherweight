@@ -805,7 +805,7 @@ struct EditorState {
       // The paragraphs stay where they are (a new story's come after them): what's cached for the
       // others stays too, and so do the list numbers and field state before the change. The
       // document's size doesn't matter then (H3).
-      if (step.touchedFirst != kNone) d.RefreshCaches(step.touchedFirst, step.touchedEnd);
+      if (step.touchedFirst != kNone) d.RefreshCaches(step.touchedFirst, step.touchedEnd, step.pairs, step.sections);
       else d.RefreshCaches(step.first, changedEnd);
       for (uint32_t i = 0; i < d.paras_.size(); ++i) {
         Paragraph& p = d.paras_[i];
