@@ -327,6 +327,8 @@ class Converter {
   int Num(std::string_view listStyle, bool restart);
   std::string NumPr(std::string_view listStyle, int level, bool restart);
   std::string SectPr();
+  // A paragraph that starts another page style: the section before it ends with the paragraph before.
+  void SectionBreak(std::string& out, std::string_view master, std::string_view pageNumber);
   std::string StylesXml();
   std::string NumberingXml();
 
@@ -336,7 +338,9 @@ class Converter {
   std::unordered_map<std::string, std::string> fonts_;
   std::unordered_map<std::string, Style> named_, autos_[2];  // "family\nname"
   std::unordered_map<std::string, xml_node> listStyles_[2], pageLayouts_;
-  xml_node outline_, defaults_, master_;
+  xml_node outline_, defaults_, master_;  // master_: the page style of the section being written
+  int pageStart_ = 0;                      // its first page's number, when it starts again (0: it doesn't)
+  std::string* body_ = nullptr;            // the body's blocks, where sections end
   int scope_ = 0;  // 0: the body's automatic styles; 1: styles.xml's (headers and footers)
 
   std::vector<OutPart> parts_;
@@ -615,7 +619,10 @@ void Converter::Paragraph(xml_node p, std::string& out, int depth, std::string_v
   if (st && autos_[scope_].count("paragraph\n" + std::string(styleName))) {
     pp.Read(st->node.child("style:paragraph-properties"));
     mark.Read(st->node.child("style:text-properties"), fonts_);
-    if (!st->master.empty() && !firstParagraph_ && scope_ == 0) pp.pageBreak = true;
+    if (!st->master.empty() && !firstParagraph_ && scope_ == 0) {
+      if (&out == body_) SectionBreak(out, st->master, Attr(st->node.child("style:paragraph-properties"), "style:page-number"));
+      else pp.pageBreak = true;  // in a table or a note: the page style can't change there
+    }
   }
   pStyle = Mapped("paragraph", styleName);
   const bool heading = std::string_view(p.name()) == "text:h";
@@ -976,7 +983,48 @@ void Converter::Picture(xml_node frame, std::string& out) {
   std::string descr(frame.child("svg:desc").text().get());
   if (descr.empty()) descr = frame.child("svg:title").text().get();
   const std::string extent = "<wp:extent cx=\"" + std::to_string(cx) + "\" cy=\"" + std::to_string(cy) + "\"/>";
-  out += "<w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">" + extent + "<wp:docPr id=\"" +
+  // A frame anchored to the paragraph, a character or the page floats where its graphic style puts it.
+  const std::string_view anchor = Attr(frame, "text:anchor-type");
+  const bool floating = anchor == "paragraph" || anchor == "char" || anchor == "page";
+  std::string open = "<wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">" + extent, close = "</wp:inline>";
+  if (floating) {
+    xml_node gp;
+    if (const Style* st = Find("graphic", Attr(frame, "draw:style-name"))) gp = st->node.child("style:graphic-properties");
+    auto rel = [&](const char* attr, bool horizontal) -> std::string {
+      const std::string_view v = Attr(gp, attr);
+      if (v == "page" || anchor == "page") return "page";
+      if (v == "page-content" || v == "page-start-margin" || v == "page-end-margin") return "margin";
+      if (v == "char" || v == "line" || v == "baseline" || v == "text") return horizontal ? "character" : "line";
+      return horizontal ? "column" : "paragraph";
+    };
+    auto pos = [&](bool horizontal) {
+      const std::string_view p = Attr(gp, horizontal ? "style:horizontal-pos" : "style:vertical-pos");
+      std::string align;
+      if (horizontal) align = p == "left" ? "left" : p == "center" ? "center" : p == "right" ? "right" : p == "inside" ? "inside" : p == "outside" ? "outside" : "";
+      else align = p == "top" ? "top" : p == "middle" ? "center" : p == "bottom" ? "bottom" : "";
+      const char* tag = horizontal ? "positionH" : "positionV";
+      std::string x = std::string("<wp:") + tag + " relativeFrom=\"" + rel(horizontal ? "style:horizontal-rel" : "style:vertical-rel", horizontal) + "\">";
+      if (!align.empty()) x += "<wp:align>" + align + "</wp:align>";
+      else {
+        const std::optional<double> pt = Points(Attr(frame, horizontal ? "svg:x" : "svg:y"));
+        x += "<wp:posOffset>" + std::to_string(std::clamp<int64_t>(pt ? std::llround(*pt * 12700) : 0, -20000000, 20000000)) + "</wp:posOffset>";
+      }
+      return x + "</wp:" + tag + ">";
+    };
+    const std::string_view wrap = Attr(gp, "style:wrap");
+    const bool behind = wrap == "run-through" && Attr(gp, "style:run-through") == "background";
+    std::string wrapXml = wrap == "none" ? "<wp:wrapTopAndBottom/>"
+                          : wrap == "run-through" ? "<wp:wrapNone/>"
+                          : std::string("<wp:wrapSquare wrapText=\"") + (wrap == "left" ? "left" : wrap == "right" ? "right" : wrap == "dynamic" ? "largest" : "bothSides") + "\"/>";
+    auto dist = [&](const char* attr) { return std::to_string(std::clamp<int64_t>(Emu(Attr(gp, attr), 0), 0, 2000000)); };
+    const int z = std::clamp(std::atoi(Attr(frame, "draw:z-index").data()), 0, 0x7FFFFFFF);
+    open = "<wp:anchor distT=\"" + dist("fo:margin-top") + "\" distB=\"" + dist("fo:margin-bottom") + "\" distL=\"" + dist("fo:margin-left") +
+           "\" distR=\"" + dist("fo:margin-right") + "\" simplePos=\"0\" relativeHeight=\"" + std::to_string(z) + "\" behindDoc=\"" +
+           (behind ? "1" : "0") + "\" locked=\"0\" layoutInCell=\"1\" allowOverlap=\"1\"><wp:simplePos x=\"0\" y=\"0\"/>" + pos(true) + pos(false) +
+           extent + wrapXml;
+    close = "</wp:anchor>";
+  }
+  out += "<w:r><w:drawing>" + open + "<wp:docPr id=\"" +
          std::to_string(id) + "\" name=\"Picture " + std::to_string(id) + "\"" +
          (descr.empty() ? std::string() : " descr=\"" + Esc(descr) + "\"") +
          "/><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:pic>"
@@ -985,7 +1033,7 @@ void Converter::Picture(xml_node frame, std::string& out) {
          "\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"" +
          std::to_string(cx) + "\" cy=\"" + std::to_string(cy) +
          "\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData>"
-         "</a:graphic></wp:inline></w:drawing></w:r>";
+         "</a:graphic>" + close + "</w:drawing></w:r>";
 }
 
 // ---------- Parts ----------
@@ -1050,6 +1098,24 @@ std::string Converter::StylesXml() {
   return s + "</w:styles>";
 }
 
+void Converter::SectionBreak(std::string& out, std::string_view master, std::string_view pageNumber) {
+  const std::string sect = SectPr();
+  const size_t full = out.rfind("<w:p>"), empty = out.rfind("<w:p/>");
+  const bool para = out.size() >= 6 && (out.compare(out.size() - 6, 6, "</w:p>") == 0 || out.compare(out.size() - 6, 6, "<w:p/>") == 0);
+  if (!para) {
+    out += "<w:p><w:pPr>" + sect + "</w:pPr></w:p>";  // after a table, a paragraph to hold it
+  } else if (empty != std::string::npos && (full == std::string::npos || empty > full)) {
+    out.replace(empty, 6, "<w:p><w:pPr>" + sect + "</w:pPr></w:p>");
+  } else if (out.compare(full + 5, 7, "<w:pPr>") == 0) {
+    out.insert(out.find("</w:pPr>", full), sect);  // after its w:rPr, as the schema orders them
+  } else {
+    out.insert(full + 5, "<w:pPr>" + sect + "</w:pPr>");
+  }
+  for (xml_node m : styles_.Root().child("office:master-styles").children("style:master-page"))
+    if (Attr(m, "style:name") == master) master_ = m;
+  pageStart_ = std::clamp(std::atoi(std::string(pageNumber).c_str()), 0, 32767);
+}
+
 std::string Converter::SectPr() {
   std::string s = "<w:sectPr>";
   xml_node layout;
@@ -1101,6 +1167,7 @@ std::string Converter::SectPr() {
   s += "<w:pgMar w:top=\"" + std::to_string(top) + "\" w:right=\"" + std::to_string(right) + "\" w:bottom=\"" +
        std::to_string(bottom) + "\" w:left=\"" + std::to_string(left) + "\" w:header=\"" + std::to_string(header) +
        "\" w:footer=\"" + std::to_string(footer) + "\" w:gutter=\"0\"/>";
+  if (pageStart_ > 0) s += "<w:pgNumType w:start=\"" + std::to_string(pageStart_) + "\"/>";
   if (xml_node cols = pl.child("style:columns"); cols) {
     const int n = std::clamp(std::atoi(Attr(cols, "fo:column-count").data()), 1, 45);
     if (n > 1) s += "<w:cols w:num=\"" + std::to_string(n) + "\" w:space=\"" + std::to_string(Twips(Attr(cols, "fo:column-gap")).value_or(709)) + "\"/>";
@@ -1142,6 +1209,7 @@ pkg::Status Converter::Run(std::vector<uint8_t>& docx) {
   parts_.push_back({"word/document.xml", {}, {}});
   part_ = 0;
   std::string body;
+  body_ = &body;
   Blocks(text, body, 0);
   CloseBookmarks(body);
   const std::string sect = SectPr();

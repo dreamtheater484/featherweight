@@ -32,7 +32,9 @@ const unsigned char kPng[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x
                               0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xC9, 0xFE, 0x92, 0xEF, 0x00, 0x00, 0x00,
                               0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
 
-std::vector<uint8_t> Odt(const std::string& body, const std::string& autos = "", const std::string& prefix = "") {
+// `layouts` and `masters`: more page layouts and master pages for styles.xml.
+std::vector<uint8_t> Odt(const std::string& body, const std::string& autos = "", const std::string& prefix = "",
+                         const std::string& layouts = "", const std::string& masters = "") {
   const std::string styles =
       std::string("<?xml version=\"1.0\" encoding=\"UTF-8\"?><office:document-styles ") + kOfficeNs + ">"
       "<office:font-face-decls><style:font-face style:name=\"Liberation Sans\" svg:font-family=\"'Liberation Sans'\"/>"
@@ -45,9 +47,10 @@ std::vector<uint8_t> Odt(const std::string& body, const std::string& autos = "",
       "<text:list-style style:name=\"Numbering_20_123\"><text:list-level-style-number text:level=\"1\" style:num-suffix=\".\" style:num-format=\"1\"/>"
       "<text:list-level-style-number text:level=\"2\" style:num-suffix=\".\" style:num-format=\"a\"/></text:list-style>"
       "</office:styles><office:automatic-styles><style:page-layout style:name=\"pm1\"><style:page-layout-properties fo:page-width=\"21cm\" "
-      "fo:page-height=\"29.7cm\" fo:margin-top=\"2cm\" fo:margin-bottom=\"2cm\" fo:margin-left=\"2cm\" fo:margin-right=\"2cm\"/></style:page-layout>"
-      "</office:automatic-styles><office:master-styles><style:master-page style:name=\"Standard\" style:page-layout-name=\"pm1\">"
-      "<style:header><text:p>Header text <text:page-number>1</text:page-number></text:p></style:header></style:master-page></office:master-styles>"
+      "fo:page-height=\"29.7cm\" fo:margin-top=\"2cm\" fo:margin-bottom=\"2cm\" fo:margin-left=\"2cm\" fo:margin-right=\"2cm\"/></style:page-layout>" +
+      layouts + "</office:automatic-styles><office:master-styles><style:master-page style:name=\"Standard\" style:page-layout-name=\"pm1\">"
+      "<style:header><text:p>Header text <text:page-number>1</text:page-number></text:p></style:header></style:master-page>" + masters +
+      "</office:master-styles>"
       "</office:document-styles>";
   const std::string content = std::string("<?xml version=\"1.0\" encoding=\"UTF-8\"?><office:document-content ") + kOfficeNs + ">"
                               "<office:automatic-styles>" + autos + "</office:automatic-styles><office:body><office:text>" + body +
@@ -193,4 +196,44 @@ TEST(Odt_OtherPrefixesAndBadInput) {
   const std::string junk = "not a zip";
   CHECK(!odf::OdtToDocx(std::span(reinterpret_cast<const uint8_t*>(junk.data()), junk.size()), docx).Ok());
   CHECK(odf::OdtToDocx(Odt("<text:p>x</text:p>"), docx).Ok() && !docx.empty());
+}
+
+TEST(Odt_PageStylesAreSectionsAndAnchoredPicturesFloat) {
+  // The second paragraph starts the landscape page style "Wide", numbered from 5: the first section ends with
+  // the first paragraph. Its picture is anchored to the paragraph, placed on the page, behind the text.
+  const std::string autos =
+      "<style:style style:name=\"P1\" style:family=\"paragraph\" style:master-page-name=\"Wide\">"
+      "<style:paragraph-properties style:page-number=\"5\"/></style:style>"
+      "<style:style style:name=\"fr1\" style:family=\"graphic\"><style:graphic-properties style:wrap=\"run-through\" "
+      "style:run-through=\"background\" style:horizontal-rel=\"page\" style:vertical-rel=\"page\" "
+      "style:horizontal-pos=\"from-left\" style:vertical-pos=\"from-top\"/></style:style>";
+  const std::string body =
+      "<text:p>One<draw:frame draw:style-name=\"fr1\" text:anchor-type=\"paragraph\" svg:x=\"1in\" svg:y=\"-0.5in\" "
+      "svg:width=\"1in\" svg:height=\"1in\"><draw:image xlink:href=\"Pictures/dot.png\"/></draw:frame></text:p>"
+      "<text:p text:style-name=\"P1\">Two</text:p>";
+  const std::string layouts =
+      "<style:page-layout style:name=\"pm2\"><style:page-layout-properties fo:page-width=\"29.7cm\" fo:page-height=\"21cm\" "
+      "style:print-orientation=\"landscape\" fo:margin-top=\"1cm\" fo:margin-bottom=\"1cm\" fo:margin-left=\"1cm\" "
+      "fo:margin-right=\"1cm\"/></style:page-layout>";
+  const std::string masters = "<style:master-page style:name=\"Wide\" style:page-layout-name=\"pm2\"/>";
+  std::string xml;
+  auto doc = Converted(Odt(body, autos, "", layouts, masters), &xml);
+  CHECK(doc);
+  if (!doc) return;
+  const std::u16string text = StoryText(*doc, doc->MainStory());  // the picture is an object in the first
+  CHECK(text.starts_with(u"One") && text.ends_with(u"|Two|") && Main(*doc).size() == 2u);
+  // Two sections: the first in the first paragraph, the landscape one at the end, numbered from 5.
+  const size_t first = xml.find("<w:sectPr>"), second = xml.find("<w:sectPr>", first + 1);
+  CHECK(first != std::string::npos && second != std::string::npos);
+  if (second == std::string::npos) return;
+  CHECK(xml.find("<w:sectPr>", second + 1) == std::string::npos);
+  CHECK(first < xml.find("Two") && second > xml.find("Two"));
+  CHECK(xml.find("w:orient=\"landscape\"", second) != std::string::npos && xml.find("w:orient=\"landscape\"") > second);
+  CHECK(xml.find("<w:pgNumType w:start=\"5\"/>", second) != std::string::npos);
+  CHECK(xml.find("<w:pageBreakBefore/>") == std::string::npos);
+  // The picture floats: from the page's edges, behind the text, the negative offset kept.
+  CHECK(xml.find("<wp:anchor ") != std::string::npos && xml.find("<wp:inline") == std::string::npos);
+  CHECK(xml.find("behindDoc=\"1\"") != std::string::npos && xml.find("<wp:wrapNone/>") != std::string::npos);
+  CHECK(xml.find("<wp:positionH relativeFrom=\"page\"><wp:posOffset>914400</wp:posOffset>") != std::string::npos);
+  CHECK(xml.find("<wp:positionV relativeFrom=\"page\"><wp:posOffset>-457200</wp:posOffset>") != std::string::npos);
 }
