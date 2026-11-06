@@ -933,6 +933,32 @@ TEST(Tables_PasteMakesATable) {
   CHECK(ChecksOut(*doc));
 }
 
+TEST(Tables_PasteTwoTablesInARow) {
+  // A web page's two tables with nothing between them: two tables, an empty paragraph between
+  // them so they stay two, as in Word (fuzz_html's finding: the second one was refused).
+  Fixture f;
+  f.body = Para("Hello world");
+  auto doc = LoadOk(f);
+  REQUIRE(doc);
+  const std::string before = Written(*doc);
+  Editor ed(*doc);
+  auto c = edit::FromHtml("<table><tr><td>a</td><td>b</td></tr></table><table><tr><td>c</td></tr></table>");
+  REQUIRE(c);
+  auto r = edit::PasteClip(ed, P(Main(*doc).front(), 5), P(Main(*doc).front(), 5), *c);
+  REQUIRE(r);
+  auto tables = Tables(*doc);
+  REQUIRE(tables.size() == 2);
+  CHECK_EQ(Cells(*doc, tables[0]), std::string("a,b"));
+  CHECK_EQ(Cells(*doc, tables[1]), std::string("c"));
+  auto ps = Main(*doc);
+  CHECK_EQ(Text(*doc, ps.front()), std::string("Hello"));
+  CHECK_EQ(Text(*doc, ps.back()), std::string(" world"));
+  CHECK(r.caret == P(ps.back(), 0));
+  CHECK(Consistent(*doc, f) && GridOk(*doc));
+  CHECK(ChecksOut(*doc));
+  CHECK(UndoesAndRedoes(ed, *doc, before));
+}
+
 TEST(Tables_PasteInACellGoesOverTheCells) {
   Fixture f;
   f.body = Table({{"1", "2", "3"}, {"4", "5", "6"}}) + Para("End");

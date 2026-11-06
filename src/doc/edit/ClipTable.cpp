@@ -115,9 +115,11 @@ Result NewTable(Editor& ed, Pos caret, const Clip& clip, size_t b, size_t e, uin
   const auto cols = static_cast<uint32_t>(s.cols);
   Result r = ed.InsertTable(caret, s.rows, cols);
   if (!r) return r;
-  // The table went in before the caret's paragraph, an empty paragraph a cell.
+  // The table went in before the caret's paragraph, an empty paragraph a cell. Right after another
+  // table (the clip's previous one), an empty paragraph goes between them first, so they stay two.
   const uint32_t first = r.caret.para;
-  if (first != caret.para || doc.Paragraphs().size() != before + static_cast<size_t>(s.rows) * cols)
+  const uint32_t gap = first - caret.para;
+  if (first < caret.para || gap > 1 || doc.Paragraphs().size() != before + gap + static_cast<size_t>(s.rows) * cols)
     return Failed(u"The pasted table didn't land where it should.");
   // From the last cell back, so that the cells before keep their places.
   for (auto it = s.cells.rbegin(); it != s.cells.rend(); ++it) {
