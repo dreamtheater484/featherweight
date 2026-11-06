@@ -355,7 +355,9 @@ OpenResult DocView::Load(const std::wstring& password, std::wstring& error) {
   const fw::doc::Document* model = doc_.get();
   fonts_ = std::make_unique<fw::text::Fonts>(
       [model](std::wstring_view family) { return layout::SubstituteFamily(*model, family); });
-  fonts_->UseDocumentFonts(layout::EmbeddedFonts(*doc_));  // fonts it carries, for families the PC lacks
+  std::vector<std::wstring> fontNames;  // the fonts it carries, for families the PC lacks
+  const std::vector<std::vector<uint8_t>> fontFiles = layout::EmbeddedFonts(*doc_, &fontNames);
+  fonts_->UseDocumentFonts(fontFiles, fontNames);
   drawings_.resize(doc_->Drawings().size());
   images_ = std::make_shared<draw::ImageCache>();
   if (const fw::doc::Part* main = doc_->FindPart(fw::doc::PartKind::Document)) {

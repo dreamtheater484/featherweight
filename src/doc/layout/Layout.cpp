@@ -720,7 +720,7 @@ std::wstring SubstituteFamily(const Document& doc, std::wstring_view family) {
   return {};
 }
 
-std::vector<std::vector<uint8_t>> EmbeddedFonts(const Document& doc) {
+std::vector<std::vector<uint8_t>> EmbeddedFonts(const Document& doc, std::vector<std::wstring>* names) {
   constexpr size_t kMaxFonts = 64, kMaxBytes = 32u << 20;
   std::vector<std::vector<uint8_t>> out;
   const Part* table = doc.FindPart(PartKind::FontTable);
@@ -750,6 +750,7 @@ std::vector<std::vector<uint8_t>> EmbeddedFonts(const Document& doc) {
       if (!draw::sfnt::ReadInfo(draw::sfnt::FileTables(bytes))) continue;
       total += bytes.size();
       out.push_back(std::move(bytes));
+      if (names) names->push_back(Utf8ToWide(f.name));
     }
   return out;
 }

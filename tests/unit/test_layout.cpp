@@ -651,6 +651,12 @@ TEST(Layout_FontsTheDocumentCarries) {
   CHECK(fonts.Substitutions().empty());
   fonts.UseDocumentFonts({});
   CHECK(!fonts.Installed(L"Brial"));
+  // By the name the font table gives it where that isn't the font's own, as Word goes by the table.
+  std::vector<std::wstring> names;
+  CHECK(fw::doc::layout::EmbeddedFonts(*doc, &names).size() == 1u && names == std::vector<std::wstring>{L"Brial"});
+  fonts.UseDocumentFonts(files, {L"Brial Heavy"});
+  CHECK(fonts.Resolve(L"Brial Heavy") == L"Brial");
+  CHECK(fonts.Substitutions().empty());
 }
 
 TEST(Layout_MissingLatinFontsAsWordDrawsThem) {
