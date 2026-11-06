@@ -1259,6 +1259,26 @@ TEST(Layout_CellsNumberedAsTheEditorsGrid) {
   CHECK_EQ(pieces, 2u);
 }
 
+TEST(Layout_DumpListsTextBoxesBackToFront) {
+  // Word draws and tags floating text boxes back to front, by z-order, whatever order their anchors
+  // come in. The layout dump lists them the same way, so fwtool compare pairs their lines.
+  const auto box = [](const char* z, const char* top, const char* text) {
+    return std::string("<w:r><w:pict xmlns:v=\"urn:schemas-microsoft-com:vml\"><v:shape style=\"position:absolute;"
+                       "margin-left:0;margin-top:") + top + ";width:100pt;height:30pt;z-index:" + z +
+           "\"><v:textbox><w:txbxContent><w:p><w:r><w:t>" + text + "</w:t></w:r></w:p></w:txbxContent></v:textbox>"
+           "</v:shape></w:pict></w:r>";
+  };
+  Doc d = Make("<w:p>" + box("5", "90pt", "Front") + box("2", "0", "Back") + "<w:r><w:t>Body</w:t></w:r></w:p>" + SmallPage());
+  REQUIRE(d.layout);
+  d.layout->LayOutAll();
+  const fw::LayoutDump dump = d.layout->Dump("boxes.docx");
+  std::vector<std::wstring> boxes;
+  for (const fw::LayoutPage& page : dump.pages)
+    for (const fw::LayoutLine& l : page.lines)
+      if (l.story == fw::LayoutStory::TextBox) boxes.push_back(l.text);
+  CHECK(boxes == (std::vector<std::wstring>{L"Back", L"Front"}));
+}
+
 TEST(Layout_ATextBoxMadeAfterTheLayoutIsLaidOut) {
   // A new shape's text box is a story made after the layout was (D4), as a new header is (D3):
   // laid out with its text, as a fresh layout lays it out.
