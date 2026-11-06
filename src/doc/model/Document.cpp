@@ -6,6 +6,7 @@
 #include <unordered_set>
 
 #include "doc/model/Internal.h"
+#include "core/Strings.h"
 #include "doc/model/Utf.h"
 
 namespace fw::doc {
@@ -781,6 +782,29 @@ pkg::Status Document::ReadTarget(uint32_t part, std::string_view relId, std::vec
   // External content is never fetched (plan §4.7).
   if (r->external) return pkg::Status::Fail(pkg::Status::Code::Unsupported, "This picture is linked to a file outside the document.");
   return package_->ReadPart(r->targetPart, out);
+}
+
+std::vector<std::pair<std::wstring, std::vector<uint8_t>>> Document::EmbeddedFonts() const {
+  std::vector<std::pair<std::wstring, std::vector<uint8_t>>> out;
+  const Part* table = FindPart(PartKind::FontTable);
+  if (!table) return out;
+  const uint32_t part = static_cast<uint32_t>(table - parts_.data());
+  auto hex = [](char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; };
+  for (const FontInfo& f : fonts_)
+    for (const FontInfo::Embedded* e : {&f.regular, &f.bold, &f.italic, &f.boldItalic}) {
+      if (e->relId.empty()) continue;
+      // The key: the GUID's 16 bytes from last to first; it masks the font's first 32 bytes.
+      std::string digits;
+      for (char c : e->fontKey)
+        if (hex(c) >= 0) digits += c;
+      std::vector<uint8_t> data;
+      if (digits.size() != 32 || !ReadTarget(part, e->relId, data).Ok() || data.size() < 32) continue;
+      uint8_t key[16];
+      for (int i = 0; i < 16; ++i) key[i] = static_cast<uint8_t>(hex(digits[30 - 2 * i]) * 16 + hex(digits[31 - 2 * i]));
+      for (int i = 0; i < 32; ++i) data[i] ^= key[i % 16];
+      out.emplace_back(fw::Utf8ToWide(f.name), std::move(data));
+    }
+  return out;
 }
 
 std::string Document::HyperlinkTarget(Node hyperlink) const {
