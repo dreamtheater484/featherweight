@@ -1454,6 +1454,11 @@ int App::TrackMenu(HMENU menu, const D2D1_RECT_F& anchor, bool alignRight) {
   return TrackPopupMenuEx(menu, flags, pt.x, pt.y, hwnd_, nullptr);
 }
 
+// "New document\tCtrl+N": Ctrl+N makes a new document (AppShortcut).
+static std::wstring NewLabel(const fw::FileKindInfo& k) {
+  return L"New " + std::wstring(k.noun) + (k.kind == fw::FileKind::Document ? L"\tCtrl+N" : L"");
+}
+
 void App::ShowMenu(int which) {
   TabContent* v = Active();
   const bool ready = v && v->Ready();
@@ -1462,7 +1467,7 @@ void App::ShowMenu(int which) {
   if (which == CmdNewTab) {
     for (const fw::FileKindInfo& k : fw::FileKinds())
       if (fw::EditorShipped(k.kind))
-        AppendItem(m, CmdNewFile + static_cast<int>(k.kind), L"New " + std::wstring(k.noun));
+        AppendItem(m, CmdNewFile + static_cast<int>(k.kind), NewLabel(k));
     AppendSeparator(m);
     AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
   } else if (which == CmdSaveMenu && ready) {
@@ -1470,6 +1475,8 @@ void App::ShowMenu(int which) {
     AppendItem(m, CmdSaveAs, L"Save as\u2026\tCtrl+Shift+S");
   } else if (which == CmdMoreMenu) {
     alignRight = true;
+    for (const fw::FileKindInfo& k : fw::FileKinds())
+      if (fw::EditorShipped(k.kind)) AppendItem(m, CmdNewFile + static_cast<int>(k.kind), NewLabel(k));
     AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
     HMENU recent = CreatePopupMenu();
     for (int i = 0; i < static_cast<int>(settings_.recent.size()); ++i) {

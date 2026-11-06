@@ -51,10 +51,11 @@ TEST(FileKinds_KindOfPath) {
   CHECK(KindOfPath(L"") == FileKind::Unknown);
 }
 
-TEST(FileKinds_ThePdfReaderAndTheDocumentViewerHaveShipped) {
+TEST(FileKinds_ThePdfReaderAndTheDocumentEditorHaveShipped) {
   // Update this when a viewer or an editor ships: file associations and the start screen follow.
   CHECK(ShippedViewers() == (std::vector<FileKind>{FileKind::Pdf, FileKind::Document}));
-  CHECK(!AnyEditorShipped());
+  CHECK(EditorShipped(FileKind::Document) && AnyEditorShipped());
+  CHECK(!EditorShipped(FileKind::Workbook) && !EditorShipped(FileKind::Presentation));
   CHECK(ViewerShipped(FileKind::Pdf));
   CHECK(ViewerShipped(FileKind::Document));
   CHECK(!ViewerShipped(FileKind::Unknown));
@@ -75,5 +76,6 @@ TEST(FileKinds_EditorsForTesting) {
   SetEditorShippedForTesting(FileKind::Pdf, true);  // PDFs are read, not created
   CHECK(!EditorShipped(FileKind::Pdf));
   SetEditorShippedForTesting(FileKind::Workbook, false);
-  CHECK(!AnyEditorShipped());
+  CHECK(!EditorShipped(FileKind::Workbook));
+  CHECK(EditorShipped(FileKind::Document));  // shipped, not only for testing
 }
