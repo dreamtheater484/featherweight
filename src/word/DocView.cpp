@@ -15,8 +15,10 @@
 #include "doc/edit/Clip.h"
 #include "doc/edit/Export.h"
 #include "doc/edit/Forms.h"
+#include "doc/msdoc/MsDoc.h"
 #include "draw/D2DPainter.h"
 #include "draw/PrintJob.h"
+#include "pkg/CompoundFile.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "pkg/Zip.h"
@@ -196,9 +198,27 @@ OpenResult DocView::Load(const std::wstring&, std::wstring& error) {
       CloseHandle(f);
     }
     if (head == std::string("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", 8)) {
-      error = name + L" couldn't be opened — it's protected with a password, and Featherweight doesn't open "
-                     L"protected documents yet.";
-      return OpenResult::Failed;
+      // A Word 97-2003 document: read into a .docx in memory; saving makes a new .docx beside it
+      // and never writes the .doc (plan §5, "older formats are imported").
+      std::string file;
+      std::unique_ptr<fw::pkg::CompoundFile> cf;
+      if (util::ReadFileBytes(path_, file, 512u << 20))
+        cf = fw::pkg::CompoundFile::Open(std::span(reinterpret_cast<const uint8_t*>(file.data()), file.size()));
+      if (!cf || !cf->Stream("WordDocument")) {
+        error = name + L" couldn't be opened — it's protected with a password, and Featherweight doesn't open "
+                       L"protected documents yet.";
+        return OpenResult::Failed;
+      }
+      fw::pkg::Status st;
+      bytes_ = fw::doc::msdoc::ToDocx([&cf](std::string_view stream) { return cf->Stream(stream); }, st);
+      if (bytes_.empty()) {
+        error = name + L" couldn't be opened. " + fw::Utf8ToWide(st.message);
+        return OpenResult::Failed;
+      }
+      const size_t dot = path_.find_last_of(L'.');
+      file_.Copy(name, (dot == std::wstring::npos ? path_ : path_.substr(0, dot)) + L".docx", false);
+      imported_ = name;
+      path_.clear();  // Save is Save As
     }
   }
 
@@ -468,15 +488,22 @@ void DocView::ShowNotices() {
     return;
   }
   // Content that isn't drawn comes first: the banner is one line, and a long font list is cut.
+  // An imported document says first where its changes go.
   std::wstring text;
+  if (!imported_.empty()) {
+    const size_t dot = imported_.find_last_of(L'.');
+    text = imported_ + L" is a Word 97–2003 document. Saving makes a new " +
+           (dot == std::wstring::npos ? imported_ : imported_.substr(0, dot)) + L".docx and leaves it as it is.";
+  }
   bool equations = false, ink = false;
   for (const auto& d : doc_->Drawings()) {
     equations |= d.kind == fw::doc::DrawingKind::Equation;
     ink |= d.kind == fw::doc::DrawingKind::ContentPart;
   }
-  if (equations) text = L"Equations";
-  if (ink) text += text.empty() ? L"Ink drawings" : L" and ink drawings";
-  if (!text.empty()) text += L" aren't shown yet.";
+  std::wstring missing;
+  if (equations) missing = L"Equations";
+  if (ink) missing += missing.empty() ? L"Ink drawings" : L" and ink drawings";
+  if (!missing.empty()) text += (text.empty() ? L"" : L" ") + missing + L" aren't shown yet.";
   const auto& subs = fonts_->Substitutions();
   if (!subs.empty()) {
     std::wstring list;

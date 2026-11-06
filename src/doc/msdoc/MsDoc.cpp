@@ -1263,8 +1263,11 @@ std::string Converter::SepXml(size_t section) {
   for (size_t k = 0; k < 6; ++k) {
     const size_t j = 6 + 6 * section + k;
     if (j + 1 >= hdd_.size() || hdd_[j + 1] <= hdd_[j]) continue;
-    const uint32_t cp0 = base + hdd_[j], cp1 = std::min<uint32_t>(base + hdd_[j + 1], base + ccp_[2]);
+    const uint32_t cp0 = base + hdd_[j];
+    uint32_t cp1 = std::min<uint32_t>(base + hdd_[j + 1], base + ccp_[2]);
     if (cp1 <= cp0 || cp1 > text_.size()) continue;
+    // Each story ends with a paragraph mark of its own, then one that isn't part of it.
+    if (cp1 - cp0 >= 2 && text_[cp1 - 1] == 0x0D && text_[cp1 - 2] == 0x0D) --cp1;
     PartOut part{"word/" + std::string(kKind[k]) + Num(static_cast<int64_t>(parts_.size() + 1)) + ".xml"};
     Story story{StoryKind::Header, &part, {}};
     const std::string root = k == 2 || k == 3 || k == 5 ? "w:ftr" : "w:hdr";

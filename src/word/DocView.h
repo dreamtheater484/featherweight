@@ -467,6 +467,7 @@ class DocView : public PagedView {
   std::wstring path_;            // the file; empty for a new or recovered document
   DocFile file_;
   std::vector<uint8_t> bytes_;   // NewDocument, FromBytes: what Load reads instead of a file
+  std::wstring imported_;        // a .doc read into the model: its file name (saved with Save As)
   std::unique_ptr<fw::doc::Document> doc_;
   std::unique_ptr<fw::doc::edit::Editor> editor_;  // after doc_: goes first
   std::unique_ptr<fw::text::Fonts> fonts_;

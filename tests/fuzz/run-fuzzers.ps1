@@ -54,6 +54,7 @@ $all = [ordered]@{
   # (copied to the work folder, never committed: their licences don't allow it).
   # Compound files (D5): .doc files and password-protected Office files.
   fuzz_cfb     = @{ Seeds = @("$seeds\cfb", "$regressions\cfb"); MaxLen = 65536 }
+  fuzz_doc     = @{ Seeds = @("$seeds\doc", "$regressions\doc"); MaxLen = 131072 }
   fuzz_sfnt    = @{ Seeds = @("$seeds\font", "$regressions\sfnt"); MaxLen = 262144; SystemFonts = $true }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }

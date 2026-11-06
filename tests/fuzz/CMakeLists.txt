@@ -5,7 +5,7 @@ set(FW_FUZZ_ENGINE "libfuzzer" CACHE STRING "Fuzz engine: libfuzzer or replay")
 set_property(CACHE FW_FUZZ_ENGINE PROPERTY STRINGS libfuzzer replay)
 
 set(_fw_fuzz_targets fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing fuzz_layout fuzz_picture fuzz_rtf
-  fuzz_html fuzz_clip fuzz_shapes fuzz_sfnt fuzz_cfb)
+  fuzz_html fuzz_clip fuzz_shapes fuzz_sfnt fuzz_cfb fuzz_doc)
 if(FW_FUZZ_ENGINE STREQUAL "libfuzzer")
   # VS 2022 understands /fsanitize=fuzzer. VS 2019 16.9+ ignores it but has the pieces:
   # the coverage flags, and the libFuzzer and sancov runtimes, linked by hand.
@@ -33,7 +33,7 @@ foreach(target ${_fw_fuzz_targets})
   target_compile_options(${target} PRIVATE ${FW_COMPILE_OPTIONS})
 endforeach()
 target_link_libraries(fuzz_docx PRIVATE fwdoc)
-foreach(target fuzz_rtf fuzz_html fuzz_clip)
+foreach(target fuzz_rtf fuzz_html fuzz_clip fuzz_doc)
   target_link_libraries(${target} PRIVATE fwdoc)
 endforeach()
 target_link_libraries(fuzz_drawing PRIVATE fwdraw)
@@ -62,6 +62,7 @@ add_test(NAME fuzz_clip_replay COMMAND fuzz_clip ${_fw_runs} "${_fw_seeds}/docx"
 add_test(NAME fuzz_shapes_replay COMMAND fuzz_shapes ${_fw_runs} "${_fw_seeds}/shapes" "${_fw_seeds}/docx" "${_fw_seeds}/package"
   "${_fw_regressions}/shapes")
 add_test(NAME fuzz_cfb_replay COMMAND fuzz_cfb ${_fw_runs} "${_fw_seeds}/cfb" "${_fw_regressions}/cfb")
+add_test(NAME fuzz_doc_replay COMMAND fuzz_doc ${_fw_runs} "${_fw_seeds}/doc" "${_fw_regressions}/doc")
 add_test(NAME fuzz_sfnt_replay COMMAND fuzz_sfnt ${_fw_runs} "${_fw_seeds}/font" "${_fw_regressions}/sfnt")
 
 # Every fuzz target, so CI builds new ones without its own list.

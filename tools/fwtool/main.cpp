@@ -7,6 +7,8 @@
 
 #include "Common.h"
 #include "core/Strings.h"
+#include "doc/msdoc/MsDoc.h"
+#include "pkg/CompoundFile.h"
 
 namespace fwtool {
 namespace {
@@ -100,6 +102,9 @@ constexpr const char* kUsage =
     "      wrote. The file it makes goes next to the reproducer as <name>-replay.docx, or into DIR,\n"
     "      with <name>-replay-edited.txt and -readback.txt when the text differs. Its document is\n"
     "      found by its recorded path or, from another checkout, by the tail of that path.\n"
+    "  fwtool convert <file.doc> <file.docx>\n"
+    "      Writes the .docx a Word 97-2003 document is read as. Every other command reads .doc\n"
+    "      files this way too.\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
     "      Word's. Run it without text for its options.\n";
@@ -111,7 +116,7 @@ std::vector<std::filesystem::path> CollectSorted(const std::filesystem::path& di
        it.increment(ec)) {
     if (!it->is_regular_file(ec)) continue;
     std::wstring ext = fw::ToLower(it->path().extension().wstring());
-    for (const wchar_t* known : {L".docx", L".docm", L".dotx", L".dotm", L".xlsx", L".xlsm", L".xltx", L".xltm",
+    for (const wchar_t* known : {L".docx", L".docm", L".dotx", L".dotm", L".doc", L".xlsx", L".xlsm", L".xltx", L".xltm",
                                  L".pptx", L".pptm", L".potx", L".potm", L".ppsx", L".ppsm"})
       if (ext == known) files.push_back(it->path());
   }
@@ -141,7 +146,30 @@ std::string Display(const std::filesystem::path& file) {
   return fw::WideToUtf8(shown.generic_wstring());
 }
 
+// A Word 97-2003 document as the .docx it's read as; empty (with `status`) when it isn't one or
+// can't be read.
+std::vector<uint8_t> ConvertDoc(const std::filesystem::path& file, fw::pkg::Status& status) {
+  std::vector<uint8_t> bytes;
+  FILE* f = nullptr;
+  if (_wfopen_s(&f, file.c_str(), L"rb") == 0 && f) {
+    uint8_t buf[1 << 16];
+    for (size_t n; (n = std::fread(buf, 1, sizeof buf, f)) > 0;) bytes.insert(bytes.end(), buf, buf + n);
+    std::fclose(f);
+  }
+  auto cf = fw::pkg::CompoundFile::Open(bytes);
+  if (!cf || !cf->Stream("WordDocument")) {
+    status = fw::pkg::Status::Fail(fw::pkg::Status::Code::Unsupported, "not a Word 97-2003 document");
+    return {};
+  }
+  return fw::doc::msdoc::ToDocx([&cf](std::string_view name) { return cf->Stream(name); }, status);
+}
+
 std::unique_ptr<fw::pkg::Package> OpenPackage(const std::filesystem::path& file, fw::pkg::Status& status) {
+  if (fw::ToLower(file.extension().wstring()) == L".doc") {
+    std::vector<uint8_t> docx = ConvertDoc(file, status);
+    if (docx.empty()) return nullptr;
+    return fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(docx)), fw::pkg::Limits::Default(), status);
+  }
   fw::pkg::Snapshot::Options options;
   std::error_code ec;
   options.recoveryDir = (std::filesystem::temp_directory_path(ec) / L"fwtool-recovery").wstring();
@@ -159,6 +187,19 @@ std::string_view AsText(const std::vector<uint8_t>& bytes) {
 int wmain(int argc, wchar_t** argv) {
   SetConsoleOutputCP(CP_UTF8);
   if (argc >= 2 && std::wstring(argv[1]) == L"wrap") return fwtool::RunWrap(argc, argv);
+  if (argc == 4 && std::wstring(argv[1]) == L"convert") {
+    fw::pkg::Status st;
+    const std::vector<uint8_t> docx = fwtool::ConvertDoc(argv[2], st);
+    FILE* f = nullptr;
+    if (!docx.empty() && _wfopen_s(&f, argv[3], L"wb") != 0) f = nullptr;
+    if (!f) {
+      std::fprintf(stderr, "%s: %s\n", fw::WideToUtf8(argv[2]).c_str(), docx.empty() ? st.message.c_str() : "can't write");
+      return 1;
+    }
+    std::fwrite(docx.data(), 1, docx.size(), f);
+    std::fclose(f);
+    return 0;
+  }
   if (argc < 3) {
     std::fputs(fwtool::kUsage, stderr);
     return 2;
