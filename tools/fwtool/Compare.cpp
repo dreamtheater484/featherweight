@@ -384,7 +384,7 @@ int CompareCorpus(const Options& options) {
       d.source = e.source;
       bool docx = false;
       const std::string key = CopyKey(e.source, &docx);
-      d.copy = !docx && originals.count(key) > 0;
+      d.copy = !e.copyOf.empty() || (!docx && originals.count(key) > 0);  // the manifest's copyOf, else by name
       if (e.pdf.empty()) {
         std::printf("[skip] %s: no reference PDF (%s)\n", e.source.c_str(), e.error.c_str());
         continue;
@@ -400,7 +400,7 @@ int CompareCorpus(const Options& options) {
         ours = LoadDump(DumpPathFor(options.dumps, e.source), error);
       } else {
         LayoutDump laidOut;
-        if (LayOutDocument(e.document, &laidOut, nullptr, error)) ours = std::move(laidOut);
+        if (LayOutDocument(e.document, &laidOut, nullptr, error, fw::Utf8ToWide(e.password))) ours = std::move(laidOut);
       }
       if (!ours) d.error = error;
       Score s = fidelity::Compare(*reference, ours ? *ours : LayoutDump{});

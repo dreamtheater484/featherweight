@@ -18,17 +18,28 @@ The fidelity piece of D5 (`docs/d5-plan.md`). Measured with `fwtool compare` aga
 
 The 97 % and 98 % targets count each document once:
 - **Counted:** the original 108 `.docx` documents, plus the new distinct documents d1-corpus adds (the public chart, equation, right-to-left and East Asian files).
-- **Copies:** format copies of a counted document are measured against Word's render of each copy, but reported apart and kept out of the targets. These are the `.dotx`, `.doc`, `.odt` and password-protected copies, which sit under `dotx/`, `doc/`, `odt/` and `protected/` with the same category and name as the `.docx` under `docx/`.
+- **Copies:** format copies of a counted document are measured against Word's render of each copy, but reported apart and kept out of the targets.
+  - These are the `.dotx`, `.doc`, `.odt` and password-protected copies.
+  - The manifest marks each one with `"copyOf"`, the source of the document it copies. For an older manifest without it, compare uses the folder and name: a document under `dotx/`, `doc/`, `odt/` or `protected/` with the same category and name as one under `docx/`.
+- **How compare opens them:** `.doc` and `.odt` copies go through the importers, and protected copies are decrypted with the manifest's test `"password"`, as the app opens them.
 - **How compare says it:** `fwtool compare` prints the targets' line first and the copies' line after it. Its JSON has `"copy": true` on each copy and the copies' totals under `"copies"`. Its report puts the copies in a table of their own.
 
-Copies on e38b850:
+On 766982d, with d1-corpus's manifest of 411 entries:
 
-| Copies | Page counts match | Lines |
+| Set | Page counts match | Lines |
 |---|---:|---:|
-| `.doc`, opened through the `.doc` import | 82 of 108 | 101,461 of 111,331 (91.1 %) |
+| **Targets**: 152 distinct documents | 139 (91.4 %) | 109,822 of 114,078 (96.3 %) |
+| The original 108 | 99 | 107,259 of 111,064 (96.6 %) |
+| The 44 new ones (charts, equations, right-to-left, East Asian) | 40 | 2,563 of 3,014 (85.0 %) |
+| **Copies**: 258, one `.odt` has no render | 168 (65.1 %) | 210,648 of 239,892 (87.8 %) |
+| `.doc` | 83 of 108 | 101,465 of 111,331 (91.1 %) |
+| `.odt` | 53 of 107 | 68,595 of 86,034 (79.7 %) |
 | `.dotx` | 25 of 31 | 35,946 of 37,530 (95.8 %) |
-| Password-protected | 0 of 12 | not measured: the corpus doesn't record their passwords |
-| All copies | 107 of 151 (70.9 %) | 137,407 of 153,858 (89.3 %) |
+| Password-protected | 7 of 12 | 4,642 of 4,997 (92.9 %) |
+
+The 4 new documents whose page count differs:
+- gojp-mhlw-form-b1, b2 and b3: Word 23, 28 and 12 pages, ours 17, 21 and 8 (Japanese, the document grid);
+- who-lqsi-controlled-document-front-page-arabic: Word 1 page, ours 2.
 
 D1 ended at 98/108 and 95.9 %, not the 99/108 and 95.2 % in the plan. Those numbers were measured before D1's last layout commit (399a105, spaces squeezed only in mode 15). That commit gained 776 lines and lost eu-bijlage's page match, which had been a coincidence (1,070 of its 1,385 lines matched).
 
@@ -92,5 +103,9 @@ Modes 11, 12 and 14 cost 140 lines in all, so the mode work goes to the flags th
 - **Open: EPA brownfields QAPP (1,150 lines missing).** Its reference PDF has 171 pages, while Word itself counts 160. Two findings there are held back until they help the totals:
   - Table borders: Word's rows are taller by the border width (0.5 pt rows in the acronym table: 12.56 pt against our 12.07 pt). Counting table and style borders makes pages 6–9 match exactly. On its own it costs 98 lines, because the page before is one row short.
   - Space before after a section break: Word drops it at the top of some pages after a section break and keeps it on others with the same structure.
+- **Open: usgov region-3 QAPP (62 pages, ours 63).**
+  - On page 14, Word's schedule table rows are about 0.5 pt taller each, the border width; the drift is 5.6 pt by the end of the table.
+  - That pushes Word's A6 heading to page 15. We fit 55 lines on that page, Word 43.
+  - Counting table and style borders as room (re-measured on 766982d) changes nothing here and costs 78 target lines, mostly in EPA. So the extra page comes from later in the document; still to find.
 - **Open: worldbank-sustainable (38 pages, ours 37).** A table row splits differently across pages 11–12, so the page-break paragraph after the table fits on our page 12 but not on Word's.
 - **Rounding of line heights.** Rounding font metrics to device units (96 to 1440 dpi) changes ±20 lines and doesn't help. Word's PDF positions sit on a 0.12 pt grid. acuk-example-cv's last two lines miss page 1 because of a drift of 0.7 pt that is still unexplained.
