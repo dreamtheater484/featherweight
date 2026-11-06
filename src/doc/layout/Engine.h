@@ -184,12 +184,22 @@ class Engine {
     LineStory story = LineStory::Body;
     float left = 0;  // relative to the frame or column
     float width = 0;
-    std::vector<RowBox> rows;
+    std::vector<RowBox> rows;  // measured so far: all, or (measured lazily) the first ones
+    size_t count = 0;          // rows the table has
     size_t headerRows = 0;
     bool labels = false;  // its cells show list labels
+    // Measured lazily: the table's rows, and merged cells (row, cell) whose last row isn't
+    // measured yet. Empty once all are.
+    std::vector<Node> trs;
+    std::vector<std::pair<size_t, size_t>> openSpans;
   };
-  // `reuse`: the table measured before an edit, whose cells that didn't change are kept.
-  TableBox MeasureTable(Node tbl, const Frame& frame, const TableBox* reuse = nullptr);
+  // `reuse`: the table measured before an edit, whose cells that didn't change are kept. `lazy`:
+  // only the first rows now, the rest as MeasureThrough asks for them, so a page of a long table
+  // costs what its rows cost.
+  TableBox MeasureTable(Node tbl, const Frame& frame, const TableBox* reuse = nullptr, bool lazy = false);
+  // Measures a lazily measured table's rows through `row`, the row after it (its borders), and the
+  // last rows of the merged cells that start in them; a few rows more at a time.
+  void MeasureThrough(TableBox& t, size_t row);
   // What a cell's measure depends on: its paragraphs and their versions, nested tables' included.
   uint64_t CellKey(Node tc) const;
   // Brings `t`, measured before an edit, up to date for a frame this wide: true when it has the same

@@ -1273,6 +1273,88 @@ TEST(Layout_TableEditsLayOutAgainAsFromScratch) {
   check(bool(ed.DeleteTable(cell(0, 0))), "the table deleted");
 }
 
+TEST(Layout_LongTablesMeasuredAsTheyGo) {
+  // H1 (D5): a long table's rows are measured as the pages get to them, a few dozen at a time, so
+  // its first page doesn't wait for the rest. Merged cells that run on past the rows measured so
+  // far, repeated header rows, and edits in rows not measured yet lay out as from scratch.
+  auto lines = [](const std::string& name, int n) {
+    std::string s;
+    for (int i = 0; i < n; ++i) s += P(name + " " + std::to_string(i));
+    return s;
+  };
+  std::string rows = "<w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc>" + P("header") + "</w:tc><w:tc>" + P("header") + "</w:tc></w:tr>";
+  for (int i = 1; i < 300; ++i) {
+    std::string first;
+    if (i == 60 || i == 126)
+      first = "<w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr>" + lines(i == 60 ? "tall" : "taller", i == 60 ? 40 : 30);
+    else if ((i > 60 && i <= 66) || (i > 126 && i <= 129))
+      first = "<w:tcPr><w:vMerge/></w:tcPr>" + P("");
+    else
+      first = P("cell " + std::to_string(i));
+    rows += "<w:tr><w:tc>" + first + "</w:tc><w:tc>" + P("row " + std::to_string(i)) + "</w:tc></w:tr>";
+  }
+  const std::string body = P("before") + "<w:tbl><w:tblGrid><w:gridCol w:w=\"1500\"/><w:gridCol w:w=\"1500\"/></w:tblGrid>" + rows +
+                           "</w:tbl>" + P("after") + SmallPage();
+  Doc d = Make(body, "", "", false);
+  REQUIRE(d.layout);
+  d.layout->LayOutPages(1);
+  CHECK(Find(d, u"row 1") != nullptr);
+  d.layout->LayOutAll();
+  // The merged cells' text ends above the rows after them: the rows they end in grew.
+  auto above = [&](const std::u16string& upper, const std::u16string& lower) {
+    size_t pu = 0, pl = 0;
+    const LineBox* u = Find(d, upper, &pu);
+    const LineBox* l = Find(d, lower, &pl);
+    return u && l && (pl > pu || (pl == pu && l->top >= u->top + u->height - 0.5f));
+  };
+  CHECK(above(u"tall 39", u"row 67"));
+  CHECK(above(u"taller 29", u"row 130"));
+  CHECK(above(u"row 299", u"after"));
+  // The header row repeats on the table's last page.
+  size_t last = 0;
+  REQUIRE(Find(d, u"row 299", &last));
+  size_t headers = 0;
+  for (const LineBox& l : d.page(last).lines) headers += l.text == u"header";
+  CHECK_EQ(headers, 2u);
+  for (size_t p = 0; p < d.pages(); ++p)
+    for (const LineBox& l : d.page(p).lines) CHECK(l.top + l.height <= d.page(p).body.bottom + 0.5f);
+  CHECK(SameAsFresh(*d.doc, *d.layout, "laid out a page at a time"));
+
+  // Edits, with only the first pages laid out (rows further down not measured yet).
+  Doc e = Make(body, "", "", false);
+  REQUIRE(e.layout);
+  e.layout->LayOutPages(3);
+  edit::Editor ed(*e.doc);
+  ed.OnChange([&](const edit::Change& c) { e.layout->Edited(c); });
+  auto cell = [&](size_t r, size_t c) {
+    Node tbl;
+    for (const Block& b : e.doc->Blocks(e.doc->MainStory()))
+      if (b.kind == BlockKind::Table) tbl = b.node;
+    Node tc = e.doc->RowCells(e.doc->TableRows(tbl)[r])[c];
+    return Pos{e.doc->Blocks(tc).front().para, 0};
+  };
+  REQUIRE(ed.InsertText(cell(200, 1), u"typed far down "));
+  e.layout->LayOutPages(2);
+  REQUIRE(ed.InsertText(cell(2, 1), u"typed on the first page "));
+  e.layout->LayOutPages(2);
+  REQUIRE(ed.InsertRows(cell(100, 1), cell(101, 1), true));
+  e.layout->LayOutPages(2);
+  REQUIRE(ed.MergeCells(cell(62, 1), cell(66, 1)));
+  e.layout->LayOutAll();
+  REQUIRE(SameAsFresh(*e.doc, *e.layout, "edits below the rows measured"));
+  int step = 0;
+  auto check = [&](bool ok, const char* what) {
+    REQUIRE(ok);
+    e.layout->LayOutPages(step++ % 2 ? 2 : 6);
+    e.layout->LayOutAll();
+    REQUIRE(SameAsFresh(*e.doc, *e.layout, what));
+  };
+  check(bool(ed.InsertText(cell(60, 0), u"more ")), "typed in a merged cell");
+  check(bool(ed.InsertText(cell(250, 1), u"typed ")), "typed further down");
+  check(bool(ed.DeleteRows(cell(64, 1), cell(65, 1))), "rows deleted");
+  check(bool(ed.SetRowProps(cell(0, 0), cell(1, 0), edit::PropEdit().Set("tblHeader"))), "two header rows");
+}
+
 TEST(Layout_CellsNumberedAsTheEditorsGrid) {
   // The Word tab fills selected cells from Layout::Cells, matching the editor's block by row and
   // grid column (D3): both number them alike. A cell over two columns, a row past gridBefore, a
