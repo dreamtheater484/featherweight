@@ -4,6 +4,28 @@
     "export":  "Word: the document without markup, for print, tagged; Excel: print areas; PowerPoint: slides",
     "files":  [
                   {
+                      "source":  "generated/drawings-dml.docx",
+                      "sha256":  "d9b882f823b12c713cc722fd1542cfb87f5e992c62b23b3a66a6e4f053c87656",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  3,
+                      "pdf":  "generated/drawings-dml.docx.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "generated/drawings-vml.docx",
+                      "sha256":  "a5886dcd9c4132bc7a8480ca905d1e5260e938a2bded764ef6f34e278e982e4e",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  1,
+                      "pdf":  "generated/drawings-vml.docx.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
                       "source":  "generated/formatting.xlsx",
                       "sha256":  "51c2f708a7d29ec01c005152000f717ca864332793e1f32eaaff32264f914012",
                       "app":  "Excel 16.0 (build 20326)",
@@ -239,6 +261,61 @@
                                     "Cambria-Bold",
                                     "Cambria-Italic",
                                     "SymbolMT"
+                                ]
+                  },
+                  {
+                      "source":  "layout/footnotes.docx",
+                      "sha256":  "a17453e9fdddbb02b0a7970ded862291c452da2b2fbeffc21033e38f1354d871",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  3,
+                      "pdf":  "layout/footnotes.docx.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "layout/hyphenation.docx",
+                      "sha256":  "9b1d66ab5b02dc245354bee1713966ff5b1e2ec5b81800cc3c5a59cc79e842e1",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  2,
+                      "pdf":  "layout/hyphenation.docx.pdf",
+                      "fonts":  [
+                                    "Cambria",
+                                    "Cambria-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "layout/report.docx",
+                      "sha256":  "7a278c634b8c29f510ef635fecaecd525f62a86e1581f485c560611be87cf1b2",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  8,
+                      "pdf":  "layout/report.docx.pdf",
+                      "fonts":  [
+                                    "Calibri-Bold",
+                                    "Cambria"
+                                ]
+                  },
+                  {
+                      "source":  "layout/tabs-columns.docx",
+                      "sha256":  "025eae1dff8cd69de9d2b254a37c56680b9b849d57e3bc71bb9a35de495de9f8",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  2,
+                      "pdf":  "layout/tabs-columns.docx.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "layout/textbox-table.docx",
+                      "sha256":  "51db9109961c435562acb27d4ca76ccd213a345c8eca3c49fcfe58864e5208c2",
+                      "app":  "Word 16.0 (build 16.0.20326)",
+                      "pages":  3,
+                      "pdf":  "layout/textbox-table.docx.pdf",
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
                                 ]
                   }
               ]

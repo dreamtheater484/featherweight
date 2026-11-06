@@ -4,13 +4,13 @@
 set(FW_FUZZ_ENGINE "libfuzzer" CACHE STRING "Fuzz engine: libfuzzer or replay")
 set_property(CACHE FW_FUZZ_ENGINE PROPERTY STRINGS libfuzzer replay)
 
-set(_fw_fuzz_targets fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula)
+set(_fw_fuzz_targets fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing fuzz_layout)
 if(FW_FUZZ_ENGINE STREQUAL "libfuzzer")
   # VS 2022 understands /fsanitize=fuzzer. VS 2019 16.9+ ignores it but has the pieces:
   # the coverage flags, and the libFuzzer and sancov runtimes, linked by hand.
   set(_fw_instrument /fsanitize=address /fsanitize-coverage=inline-8bit-counters /fsanitize-coverage=edge
     /fsanitize-coverage=trace-cmp /fsanitize-coverage=trace-div)
-  foreach(lib fwcore fwpkg miniz pugixml)
+  foreach(lib fwcore fwpkg fwdoc fwdraw fwtext fwdoclayout miniz pugixml)
     target_compile_options(${lib} PRIVATE ${_fw_instrument})
   endforeach()
 endif()
@@ -31,6 +31,9 @@ foreach(target ${_fw_fuzz_targets})
   target_link_libraries(${target} PRIVATE fwpkg)
   target_compile_options(${target} PRIVATE ${FW_COMPILE_OPTIONS})
 endforeach()
+target_link_libraries(fuzz_docx PRIVATE fwdoc)
+target_link_libraries(fuzz_drawing PRIVATE fwdraw)
+target_link_libraries(fuzz_layout PRIVATE fwdoclayout)
 
 # Replay the seeds and the regression files once (libFuzzer: -runs=0 runs the inputs, no fuzzing).
 # run-fuzzers.ps1 lists the same seed folders for the timed runs.
@@ -41,4 +44,7 @@ add_test(NAME fuzz_zip_replay COMMAND fuzz_zip ${_fw_runs} "${CMAKE_SOURCE_DIR}/
 add_test(NAME fuzz_xml_replay COMMAND fuzz_xml ${_fw_runs} "${_fw_seeds}/xml" "${_fw_regressions}/xml")
 add_test(NAME fuzz_opc_replay COMMAND fuzz_opc ${_fw_runs} "${_fw_seeds}/opc" "${_fw_regressions}/opc")
 add_test(NAME fuzz_check_replay COMMAND fuzz_check ${_fw_runs} "${_fw_seeds}/package" "${_fw_regressions}/check")
+add_test(NAME fuzz_docx_replay COMMAND fuzz_docx ${_fw_runs} "${_fw_seeds}/docx" "${_fw_seeds}/package" "${_fw_regressions}/docx")
+add_test(NAME fuzz_layout_replay COMMAND fuzz_layout ${_fw_runs} "${_fw_seeds}/docx" "${_fw_seeds}/package" "${_fw_regressions}/layout")
 add_test(NAME fuzz_formula_replay COMMAND fuzz_formula ${_fw_runs} "${_fw_seeds}/formula" "${_fw_regressions}/formula")
+add_test(NAME fuzz_drawing_replay COMMAND fuzz_drawing ${_fw_runs} "${_fw_seeds}/drawing" "${_fw_regressions}/drawing")

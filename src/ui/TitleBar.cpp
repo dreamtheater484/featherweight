@@ -30,7 +30,7 @@ TitleBar::TitleBar() {
   close_.tooltip = L"Close";
   newTab_.glyph = icon::Add;
   newTab_.glyphSize = 12;
-  newTab_.tooltip = L"Open a PDF (Ctrl+O)";
+  newTab_.tooltip = L"Open a file (Ctrl+O)";
   min_.id = 1;
   max_.id = 2;
   close_.id = 3;
@@ -144,7 +144,7 @@ void TitleBar::Draw(Canvas& c, const std::vector<TabInfo>& tabs, int active, boo
 void TitleBar::SetNewTabMenu(bool menu, bool open) {
   newTabMenu_ = menu;
   newTabOpen_ = menu && open;
-  newTab_.tooltip = menu ? L"New or open a file" : L"Open a PDF (Ctrl+O)";
+  newTab_.tooltip = menu ? L"New or open a file" : L"Open a file (Ctrl+O)";
 }
 
 TitleBar::Hit TitleBar::HitTest(int x, int y) const {

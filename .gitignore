@@ -13,5 +13,12 @@ CMakeUserPresets.json
 /third_party/miniz/
 /third_party/pugixml/
 
+# Downloaded hyphenation patterns (fetched by CMake)
+/third_party/hyphenation/
+
+# .NET build folders of the validator (tools/validate; its output goes to build/validate)
+/tools/validate/obj/
+/tools/validate/bin/
+
 # Python venv for the office corpus generator (tests/office)
 /.venv/

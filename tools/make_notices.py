@@ -1,6 +1,8 @@
-"""Regenerates THIRD_PARTY_NOTICES.md from the license files shipped with the pinned PDFium build.
+"""Regenerates THIRD_PARTY_NOTICES.md from the license files shipped with the pinned PDFium build,
+the libraries cmake/FetchDeps.cmake downloads (miniz, pugixml) and the notices in tools/notices
+(data such as the hyphenation patterns).
 
-Run after updating PDFium:  python tools/make_notices.py [third_party/pdfium/<build>-v8]
+Run after updating any of them:  python tools/make_notices.py [third_party/pdfium/<build>-v8]
 """
 import glob
 import os
@@ -33,6 +35,14 @@ def main():
         title = "pdfium-binaries" if path.endswith("LICENSE") else name
         text = open(path, encoding="utf-8", errors="replace").read().strip()
         parts.append(f"\n## {title}\n\n```\n{text}\n```\n")
+    for name, pattern in (("miniz", "miniz/*/LICENSE"), ("pugixml", "pugixml/*/*/LICENSE.md")):
+        found = sorted(glob.glob(os.path.join(ROOT, "third_party", pattern)))
+        if not found:
+            sys.exit(f"{name} not found; configure the CMake build first.")
+        text = open(found[-1], encoding="utf-8").read().strip()
+        parts.append(f"\n## {name}\n\n```\n{text}\n```\n")
+    for path in sorted(glob.glob(os.path.join(ROOT, "tools", "notices", "*.md"))):
+        parts.append("\n" + open(path, encoding="utf-8").read().strip() + "\n")
     out = os.path.join(ROOT, "THIRD_PARTY_NOTICES.md")
     with open(out, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(parts))

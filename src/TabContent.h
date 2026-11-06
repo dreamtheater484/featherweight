@@ -71,7 +71,7 @@ struct SaveFormat {
   const wchar_t* ext;      // e.g. "pdf"
 };
 
-enum class TabKind { Pdf, Gallery };
+enum class TabKind { Pdf, Document, Gallery };
 
 // One tab: a PDF today, and documents, spreadsheets and presentations later. The window owns the
 // chrome (title bar, toolbar, find panel, banners); the tab owns everything inside its viewport.

@@ -11,10 +11,23 @@ namespace fwtool {
 
 struct Options {
   bool reserializeAll = false;  // roundtrip: write every XML part through the DOM
+  bool model = false;           // roundtrip: read Word documents into the model and write its parts from it
   bool expectReject = false;    // roundtrip: every file must be refused; check: every file must fail
   std::filesystem::path outDir; // roundtrip: keep the saved copies here
   std::wstring printer;         // print-sample: the printer (default: Microsoft Print to PDF)
   bool warp = false;            // print-sample: draw with WARP instead of the graphics adapter
+  float scale = 2;              // render: pixels per point
+  bool pictures = false;        // render: time decoding each picture
+  std::filesystem::path dumps;      // compare: Featherweight's layout dumps, <dumps>/<source>.layout.json
+  std::filesystem::path jsonOut;    // compare, bench: the JSON report
+  std::filesystem::path reportOut;  // compare: the Markdown report
+  double minPages = -1;             // compare: fail below this share of matching page counts (%)
+  double minLines = -1;             // compare: fail below this share of matching line breaks (%)
+  bool selfTest = false;            // compare: Word's lines against themselves and known changes
+  bool all = false;                 // compare (one document): list every difference
+  int runs = 5;                     // bench: runs per document
+  bool budgets = false;             // bench: fail when a budget is missed
+  bool layout = false;              // dump: the pages Featherweight lays out
   std::vector<std::filesystem::path> inputs;
 };
 
@@ -27,8 +40,16 @@ std::unique_ptr<fw::pkg::Package> OpenPackage(const std::filesystem::path& file,
 std::string_view AsText(const std::vector<uint8_t>& bytes);
 
 int RunRoundtrip(const Options& options);
+void DumpModel(const std::filesystem::path& file);
 int RunDump(const Options& options);
 int RunCheck(const Options& options);
 int RunPrintSample(const Options& options);
+int RunRender(const Options& options);
+int RunLines(const Options& options);
+int RunCompare(const Options& options);
+int RunBench(const Options& options);
+int RunBenchApp(const Options& options);
+// Parses its own options, from argv[2] on.
+int RunWrap(int argc, wchar_t** argv);
 
 }  // namespace fwtool

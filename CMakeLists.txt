@@ -29,6 +29,7 @@ add_library(fwcore STATIC
   src/core/Ini.cpp
   src/core/Json.cpp
   src/core/Layout.cpp
+  src/core/LayoutDump.cpp
   src/core/PageRange.cpp
   src/core/SemVer.cpp
 )
@@ -37,7 +38,7 @@ target_compile_options(fwcore PRIVATE ${FW_COMPILE_OPTIONS})
 target_compile_definitions(fwcore PUBLIC ${FW_DEFINITIONS})
 
 # --- The app ---
-file(GLOB FW_APP_SOURCES CONFIGURE_DEPENDS src/*.cpp src/ui/*.cpp src/pdf/*.cpp)
+file(GLOB FW_APP_SOURCES CONFIGURE_DEPENDS src/*.cpp src/ui/*.cpp src/pdf/*.cpp src/word/*.cpp)
 # Test-only screens (the widget gallery) never ship (plan §11): scripts/release.ps1 turns this off.
 option(FW_TEST_SCREENS "Build the widget gallery and other test-only screens into the app" ON)
 if(NOT FW_TEST_SCREENS)
@@ -88,8 +89,10 @@ option(FW_FUZZ "Build the fuzz targets in tests/fuzz (see tests/fuzz/README.md)"
 include(cmake/FetchDeps.cmake)
 add_subdirectory(src/pkg)
 add_subdirectory(src/draw)
+add_subdirectory(src/doc)
+add_subdirectory(src/text)
 add_subdirectory(tools/fwtool)
-target_link_libraries(Featherweight PRIVATE fwdraw)
+target_link_libraries(Featherweight PRIVATE fwdraw fwdoclayout)
 if(FW_FUZZ)
   enable_testing()
   add_subdirectory(tests/fuzz)
@@ -106,9 +109,9 @@ if(FW_BUILD_TESTS)
   target_link_libraries(fw_tests PRIVATE fwpkg fwdraw windowscodecs ole32)
   # Never-damage tests on the public corpus (plan §10).
   set(_fw_office "${CMAKE_SOURCE_DIR}/tests/office")
-  add_test(NAME office_roundtrip COMMAND fwtool roundtrip "${_fw_office}/generated" "${_fw_office}/edge")
-  add_test(NAME office_reserialize COMMAND fwtool roundtrip --reserialize-all "${_fw_office}/generated" "${_fw_office}/edge")
-  add_test(NAME office_check COMMAND fwtool check "${_fw_office}/generated" "${_fw_office}/edge")
+  add_test(NAME office_roundtrip COMMAND fwtool roundtrip "${_fw_office}/generated" "${_fw_office}/edge" "${_fw_office}/layout")
+  add_test(NAME office_reserialize COMMAND fwtool roundtrip --reserialize-all "${_fw_office}/generated" "${_fw_office}/edge" "${_fw_office}/layout")
+  add_test(NAME office_check COMMAND fwtool check "${_fw_office}/generated" "${_fw_office}/edge" "${_fw_office}/layout")
   add_test(NAME office_check_broken COMMAND fwtool check --expect-reject "${_fw_office}/broken")
   add_test(NAME office_malicious COMMAND fwtool roundtrip --expect-reject "${_fw_office}/malicious")
 endif()
