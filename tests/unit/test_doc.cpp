@@ -659,6 +659,32 @@ TEST(Numbering_ASectionBreakParagraphIsNotNumbered) {
   CHECK(two && two->text == u"2");
 }
 
+TEST(Resolve_D5_StyleListLevelSitsBetweenTheStyleAndItsBase) {
+  Fixture f;
+  f.styles = Styles(
+      "<w:style w:type=\"paragraph\" w:styleId=\"ListParagraph\"><w:pPr><w:ind w:left=\"720\"/></w:pPr></w:style>"
+      "<w:style w:type=\"paragraph\" w:styleId=\"Numbered\"><w:basedOn w:val=\"ListParagraph\"/><w:pPr><w:numPr>"
+      "<w:numId w:val=\"1\"/></w:numPr></w:pPr></w:style>"
+      "<w:style w:type=\"paragraph\" w:styleId=\"Numbered2\"><w:basedOn w:val=\"Numbered\"/><w:pPr><w:numPr>"
+      "<w:ilvl w:val=\"1\"/></w:numPr></w:pPr></w:style>");
+  auto lvl = [](int i, const char* left) {
+    return "<w:lvl w:ilvl=\"" + std::to_string(i) + "\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/>" +
+           "<w:lvlText w:val=\"%1.\"/><w:pPr><w:ind w:left=\"" + left + "\" w:hanging=\"360\"/></w:pPr></w:lvl>";
+  };
+  f.numbering = "<w:abstractNum w:abstractNumId=\"0\">" + lvl(0, "3240") + lvl(1, "4320") +
+                "</w:abstractNum><w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+  f.body = "<w:p><w:pPr><w:pStyle w:val=\"Numbered\"/></w:pPr></w:p><w:p><w:pPr><w:pStyle w:val=\"Numbered2\"/></w:pPr></w:p>";
+  auto doc = LoadOk(f);
+  CHECK(doc);
+  if (!doc) return;
+  auto p = Paras(*doc);
+  // The level's indent beats List Paragraph's, which the list's style is only based on.
+  CHECK(doc->ResolvedPara(p[0]).indStart.Value() == 3240 && doc->ResolvedPara(p[0]).ilvl == 0);
+  // A style that sets only the level keeps the list of the style it's based on.
+  CHECK(doc->ResolvedPara(p[1]).numId == "1" && doc->ResolvedPara(p[1]).ilvl == 1);
+  CHECK(doc->ResolvedPara(p[1]).indStart.Value() == 4320);
+}
+
 TEST(Resolve_D3_DefaultStyleSizeDoesNotOverrideTableStyle) {
   for (bool override : {false, true}) {
     Fixture f;

@@ -29,6 +29,7 @@ constexpr const char* kWrapUsage =
     "  --width <pt>        column width (default 451.3, A4 with 2.5 cm margins)\n"
     "  --font <family>     (default Calibri)       --size <pt>  (default 11)\n"
     "  --bold, --italic, --caps, --small-caps, --spacing <pt>, --kern <min pt>, --ligatures\n"
+    "  --scale <percent>   character width (w:w, default 100)\n"
     "  --align start|center|end|justify|distribute\n"
     "  --lang <tag>        (default en-US)         --hyphenate [--zone <pt>] [--limit <n>]\n"
     "  --indent <start>,<end>,<first line>         --rtl\n"
@@ -154,6 +155,7 @@ int RunWrap(int argc, wchar_t** argv) {
       else if (a == L"--small-caps") style.caps = Caps::Small;
       else if (a == L"--spacing") style.letterSpacing = std::stof(value());
       else if (a == L"--kern") style.kerningMinSize = std::stof(value());
+      else if (a == L"--scale") style.scale = std::stof(value()) / 100;
       else if (a == L"--ligatures") style.ligatures = true;
       else if (a == L"--lang") style.language = value();
       else if (a == L"--hyphenate") format.hyphenation.automatic = true;
