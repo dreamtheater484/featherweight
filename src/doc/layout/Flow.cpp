@@ -344,8 +344,11 @@ struct Flow {
     if (set.mirrorMargins && number % 2 == 0) std::swap(g.left, g.right);
     float gutter = Pt(p.gutter);
     if (set.gutterAtTop) g.top += gutter;
-    else if (set.mirrorMargins && number % 2 == 0) g.right += gutter;
+    else if ((set.mirrorMargins && number % 2 == 0) != p.rtlGutter) g.right += gutter;  // w:rtlGutter: on the right
     else g.left += gutter;
+    // The document grid (East Asian layout): lines snap to its pitch.
+    if ((p.docGridType == "lines" || p.docGridType == "linesAndChars" || p.docGridType == "snapToChars") && p.linePitch.Value() > 0)
+      g.gridPitch = Pt(p.linePitch);
     return g;
   }
 
@@ -806,14 +809,14 @@ struct Flow {
       const bool wrap = !f.zones.empty();
       if (wrap) space = e.SpaceBeside(f.zones, f.y, estimate, ColumnLeft(), ColumnRight());
       text::Line line = br.Next(space.left - ColumnLeft(), space.right - ColumnLeft());
-      float h = e.LineHeight(pt, line);
+      float h = e.LineHeight(pt, line, f.geom.gridPitch);
       if (wrap && h > estimate + kEpsilon) {
         text::LineSpace again = e.SpaceBeside(f.zones, f.y, h, ColumnLeft(), ColumnRight());
         if (again.left != space.left || again.right != space.right || again.top != space.top) {
           br.Restore(state);
           space = again;
           line = br.Next(space.left - ColumnLeft(), space.right - ColumnLeft());
-          h = e.LineHeight(pt, line);
+          h = e.LineHeight(pt, line, f.geom.gridPitch);
         }
       }
       estimate = h;

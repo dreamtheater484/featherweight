@@ -160,14 +160,19 @@ float Engine::TextHeight(const ParaText& pt, const text::Line& line) {
   return top + descent;
 }
 
-float Engine::LineHeight(const ParaText& pt, const text::Line& line) {
+float Engine::LineHeight(const ParaText& pt, const text::Line& line, float grid) {
   const ParaProps& p = *pt.props;
-  const float single = line.ascent + line.descent + line.lineGap;
+  float single = line.ascent + line.descent + line.lineGap;
+  // On the document grid a line takes as many whole grid lines as its text needs, and multiple
+  // spacing multiplies those (East Asian layout, w:docGrid with w:snapToGrid).
+  const bool snap = grid > 0 && p.snapToGrid;
+  if (snap) single = std::max(1.0f, std::ceil(single / grid - 0.01f)) * grid;
   switch (p.lineRule) {
     case LineRule::Exact: return std::abs(static_cast<float>(p.line)) / 20.0f;
     case LineRule::AtLeast: return std::max(single, static_cast<float>(p.line) / 20.0f);
     default: {
       if (p.line <= 0) return single;
+      if (snap) return single * static_cast<float>(p.line) / 240.0f;
       const float factor = static_cast<float>(p.line) / 240.0f;
       if (factor < 1) return single * factor;
       return single + (factor - 1) * TextHeight(pt, line);
@@ -550,14 +555,16 @@ void Engine::StackParagraph(uint32_t para, const Frame& frame, Stack& out, Spaci
     const text::LineBreaker::State state = breaker.Save();
     if (wrap) space = SpaceBeside(*frame.zones, frame.y + y, estimate, frame.x, frame.x + frame.width);
     text::Line line = breaker.Next(space.left - frame.x, space.right - frame.x);
-    float h = LineHeight(pt, line);
+    // Text boxes don't snap to the document grid; the body's frames, cells and notes do.
+    const float grid = frame.geom && frame.story != LineStory::TextBox ? frame.geom->gridPitch : 0;
+    float h = LineHeight(pt, line, grid);
     if (wrap && h > estimate) {
       text::LineSpace again = SpaceBeside(*frame.zones, frame.y + y, h, frame.x, frame.x + frame.width);
       if (again.left != space.left || again.right != space.right || again.top != space.top) {
         breaker.Restore(state);
         space = again;
         line = breaker.Next(space.left - frame.x, space.right - frame.x);
-        h = LineHeight(pt, line);
+        h = LineHeight(pt, line, grid);
       }
     }
     estimate = h;

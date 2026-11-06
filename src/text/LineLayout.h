@@ -116,6 +116,11 @@ struct ParagraphFormat {
   // later do (compatibility mode 15); earlier modes don't.
   bool squeezeSpaces = true;
   wchar_t decimalSeparator = L'.';
+  // East Asian commas and full stops (、。，．) may hang past the line's end (w:overflowPunct).
+  bool hangPunctuation = true;
+  // Two East Asian punctuation marks in a row close up the blank halves between them
+  // (w:characterSpacingControl compressPunctuation).
+  bool compressPunctuation = false;
   // Digits: none (as typed), or by context or locale for Arabic and other scripts.
   DWRITE_NUMBER_SUBSTITUTION_METHOD digits = DWRITE_NUMBER_SUBSTITUTION_METHOD_NONE;
 };

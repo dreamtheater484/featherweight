@@ -275,6 +275,8 @@ text::ParagraphFormat Engine::FormatOf(const ParaProps& p) const {
   text::ParagraphFormat f;
   f.alignment = AlignmentOf(p.jc);
   f.rightToLeft = p.bidi;
+  f.hangPunctuation = p.overflowPunct;
+  f.compressPunctuation = set.characterSpacingControl.starts_with("compressPunctuation");
   f.startIndent = Pt(p.indStart);
   f.endIndent = Pt(p.indEnd);
   f.firstLineIndent = Pt(p.firstLine);

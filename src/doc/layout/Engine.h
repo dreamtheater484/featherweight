@@ -19,6 +19,7 @@ struct PageGeom {
   float width = 612, height = 792;
   float left = 72, right = 72, top = 72, bottom = 72;  // margins, after mirroring and the gutter
   float header = 36, footer = 36;                       // header and footer distances
+  float gridPitch = 0;  // w:docGrid's line pitch when lines snap to the grid, else 0
   Rect Margins() const { return {left, top, width - right, height - bottom}; }
 };
 
@@ -126,7 +127,8 @@ class Engine {
 
   // Paragraph pieces shared by the flow and stacks.
   float TextHeight(const ParaText& pt, const text::Line& line);
-  float LineHeight(const ParaText& pt, const text::Line& line);
+  // `grid`: the document grid's line pitch (PageGeom::gridPitch), or 0.
+  float LineHeight(const ParaText& pt, const text::Line& line, float grid = 0);
   float BaselineIn(const ParaText& pt, const text::Line& line, float height) const;
   // What of a line's height may hang below the bottom of the page: proportional spacing's extra.
   float Hang(const ParaText& pt, const text::Line& line, float height) const;
