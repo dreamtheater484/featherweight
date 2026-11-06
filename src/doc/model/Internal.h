@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "doc/model/Document.h"
@@ -58,6 +59,7 @@ struct Document::Caches {
   std::vector<LabelPass> labelPass;      // by story
   std::unordered_map<uint32_t, ListLabel> labels;  // by paragraph
   // Lookups.
+  std::unordered_set<uint32_t> pairSites;  // names of the elements that open or close pairs (PairSite)
   std::unordered_map<std::string_view, uint32_t> styleIndex;  // style id -> index into Styles()
   std::unordered_map<std::string_view, ElemId> nums, abstractNums;  // w:numId / w:abstractNumId
   std::unordered_map<std::string_view, uint32_t> commentStory;  // comment id -> story

@@ -787,8 +787,8 @@ struct EditorState {
     }
   }
 
-  // After a direct change, done or undone: the model's indexes are built again, every cache goes,
-  // and every paragraph may look different.
+  // After a direct change, done or undone: the model's indexes are built again, and every cache
+  // goes and every paragraph may look different, unless the step says which paragraphs changed.
   void RefreshAll(const CustomStep& step, bool undoing = false) {
     // A step that says which paragraphs it changed leaves the others as they were: they keep their
     // versions, so what was measured for them stays (a big table's cells, after formatting one).
@@ -801,18 +801,32 @@ struct EditorState {
     auto changed = [&](uint32_t i) {
       return (i >= step.first && i < changedEnd) || (!stories.empty() && stories.count(d.paras_[i].story));
     };
-    std::unordered_map<ElemId, uint32_t> kept;
-    if (ranged)
-      for (uint32_t i = 0; i < d.paras_.size(); ++i)
-        if (!changed(i)) kept.emplace(d.paras_[i].elem, d.paras_[i].version);
-    d.ResetCaches();
-    d.BuildIndexes();
-    for (uint32_t i = 0; i < d.paras_.size(); ++i) {
-      Paragraph& p = d.paras_[i];
-      const bool renumbered = i >= changedEnd && i < step.first + step.count && d.InList(i);
-      // A paragraph a tree edit made (a note's) has no version yet (0): it gets one.
-      const auto it = ranged && !changed(i) && !renumbered ? kept.find(p.elem) : kept.end();
-      p.version = it != kept.end() && it->second != 0 ? it->second : ++version;
+    if (ranged && stories.empty()) {
+      // The paragraphs stay where they are (a new story's come after them): what's cached for the
+      // others stays too, and so do the list numbers and field state before the change. The
+      // document's size doesn't matter then (H3).
+      if (step.touchedFirst != kNone) d.RefreshCaches(step.touchedFirst, step.touchedEnd, step.pairs, step.sections);
+      else d.RefreshCaches(step.first, changedEnd);
+      for (uint32_t i = 0; i < d.paras_.size(); ++i) {
+        Paragraph& p = d.paras_[i];
+        // A paragraph a tree edit made (a new header's) has no version yet (0): it gets one.
+        if (changed(i) || p.version == 0 || (i >= changedEnd && i < step.first + step.count && d.InList(i)))
+          p.version = ++version;
+      }
+    } else {
+      std::unordered_map<ElemId, uint32_t> kept;
+      if (ranged)
+        for (uint32_t i = 0; i < d.paras_.size(); ++i)
+          if (!changed(i)) kept.emplace(d.paras_[i].elem, d.paras_[i].version);
+      d.ResetCaches();
+      d.BuildIndexes();
+      for (uint32_t i = 0; i < d.paras_.size(); ++i) {
+        Paragraph& p = d.paras_[i];
+        const bool renumbered = i >= changedEnd && i < step.first + step.count && d.InList(i);
+        // A paragraph a tree edit made (a note's) has no version yet (0): it gets one.
+        const auto it = ranged && !changed(i) && !renumbered ? kept.find(p.elem) : kept.end();
+        p.version = it != kept.end() && it->second != 0 ? it->second : ++version;
+      }
     }
     Change ch;
     if (step.first != kNone && step.count > 0 && step.first + step.count <= d.paras_.size()) {
@@ -883,15 +897,8 @@ struct EditorState {
       return n;
     };
     if (countFields(was.paras) != countFields(now.paras)) fields = true;
-    if (step.structure || shift != 0) {
-      c.labels.clear();
-      c.fieldStack.clear();
-      for (auto& p : c.fieldPass) p = {};
-      for (auto& p : c.labelPass) p = {};
-    } else if (fields) {
-      c.fieldStack.clear();
-      for (auto& p : c.fieldPass) p = {};
-    }
+    // List numbers and field state: from the change on (what's before it reads the same).
+    if (step.structure || shift != 0 || fields) d.PassesFrom(step.story, first, removed, added);
 
     // Positions of drawings and range ends: found again for the elements the step touched (kNone
     // for the ones it removed), moved along for the ones after it.

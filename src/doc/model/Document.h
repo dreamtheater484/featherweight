@@ -458,10 +458,13 @@ class Document {
   RowPlace PlaceOfRow(Node row) const;
 
   struct Caches;  // the model's own (Internal.h)
-  // Changes each time the caches are made again (an edit that changes styles, sections or
-  // formatting in place, edit::TreeEdit): what ResolvedPara and ResolvedRun gave before is gone,
-  // and whoever kept a reference to it looks it up again.
+  // Changes each time an edit changes styles, sections or formatting in place (edit::TreeEdit):
+  // what ResolvedPara and ResolvedRun give may read differently, so whoever shows it looks again.
   uint64_t CacheGeneration() const { return cacheGeneration_; }
+  // Changes when the caches are made again from nothing: what ResolvedPara and ResolvedRun gave
+  // before is gone, and whoever kept a reference to it looks it up again. After a change only some
+  // paragraphs read differently (edit::TreeEdit::Local), only theirs went; the rest stays put.
+  uint64_t CacheStore() const { return cacheStore_; }
 
   // ---- Memory (plan §11: the store stays under a quarter of the model)
   size_t ModelBytes() const;
@@ -475,7 +478,8 @@ class Document {
   Document();
 
   Pos PosOf(Node node) const;  // where an element is: its paragraph and offset
-  void BuildIndexes();
+  // Without `pairs` or `sections`, those of the whole document (Pairs(), Sections()) stay as they are.
+  void BuildIndexes(bool pairs = true, bool sections = true);
   void BuildSections();  // part of BuildIndexes, after a section break goes or comes back
   size_t RenameInModel(pkg::RefKind kind, std::string_view from, std::string_view to);
   bool attached_ = false;
@@ -502,8 +506,19 @@ class Document {
   };
   std::vector<CommentEx> commentsEx_;  // word/commentsExtended.xml; written again from this (D4)
   std::unique_ptr<Caches> caches_;
-  uint64_t cacheGeneration_ = 0;
+  uint64_t cacheGeneration_ = 0, cacheStore_ = 0;
   void ResetCaches();
+  // After a change that only paragraphs [first, end) read differently, whatever it added to the
+  // styles and numbering: what's cached for them goes, and the list labels and field state of
+  // their story from there on; the rest stays. The indexes are built again, the document's pairs
+  // and sections only if the change may have moved them. (An empty range: only the indexes.)
+  void RefreshCaches(uint32_t first, uint32_t end, bool pairs = true, bool sections = true);
+  // Whether elements of this name open or close a pair (a bookmark, a comment's range, a field).
+  bool PairSite(uint32_t name) const;
+  // The list labels and field state of `story` from paragraph `first` on go (its passes go back
+  // there, or the labels' to its start); after paragraphs [first, first + removed) were replaced
+  // by `added` others, every story's kept from after them moves along.
+  void PassesFrom(uint32_t story, uint32_t first, uint32_t removed, uint32_t added);
   std::shared_ptr<bool> alive_;  // false once the document is gone, for the registry hook
 };
 

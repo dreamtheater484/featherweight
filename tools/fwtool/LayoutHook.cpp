@@ -20,6 +20,7 @@
 #include "doc/docx/Docx.h"
 #include "doc/edit/Editor.h"
 #include "doc/edit/Format.h"
+#include "doc/edit/Inline.h"
 #include "doc/edit/Lists.h"
 #include "doc/edit/Page.h"
 #include "doc/edit/Styles.h"
@@ -466,7 +467,8 @@ std::vector<std::string> DumpLines(const fw::doc::layout::Layout& layout) {
   return lines;
 }
 
-// A random edit of the kind typing makes, mostly in the body.
+// A random edit of the kind typing makes, mostly in the body; formatting, a field, undo and redo
+// too (H3: only the paragraphs they change read differently).
 void RandomEdit(fw::doc::edit::Editor& ed, const fw::doc::Document& doc, std::mt19937& rng) {
   const bool body = rng() % 8 != 0;
   std::vector<uint32_t> paras;
@@ -482,7 +484,7 @@ void RandomEdit(fw::doc::edit::Editor& ed, const fw::doc::Document& doc, std::mt
   namespace edit = fw::doc::edit;
   const uint32_t section = edit::SectionOf(doc, para), sections = static_cast<uint32_t>(doc.Sections().size());
   auto twips = [&](int32_t from, int32_t span) { return fw::Twips(from + static_cast<int32_t>(rng() % static_cast<uint32_t>(span))); };
-  switch (rng() % 13) {
+  switch (rng() % 18) {
     case 0: case 1: case 2: case 3: ed.InsertText(at, kTexts[rng() % 5]); break;
     case 4: case 5: {
       const uint32_t to = std::min(len, at.offset + 1 + static_cast<uint32_t>(rng() % 60));
@@ -529,15 +531,52 @@ void RandomEdit(fw::doc::edit::Editor& ed, const fw::doc::Document& doc, std::mt
         }
       }
       break;
-    default:
+    case 12:
       switch (rng() % 3) {
         case 0: edit::InsertSectionBreak(ed, at, static_cast<fw::doc::SectionStart>(rng() % 4)); break;
         case 1: if (sections > 1) edit::DeleteSectionBreak(ed, static_cast<uint32_t>(rng() % (sections - 1))); break;
         default: edit::InsertBreak(ed, at, rng() % 2 == 0); break;
       }
       break;
+    case 13: {  // a few letters bold or italic
+      const edit::Range range{at, {para, std::min(len, at.offset + 1 + static_cast<uint32_t>(rng() % 20))}};
+      edit::TreeEdit te(ed, at);
+      edit::ToggleRuns(te, range, rng() % 2 ? edit::Toggle::Bold : edit::Toggle::Italic);
+      break;
+    }
+    case 14: {  // the paragraph centered, or back at the start
+      edit::ParaFormat f;
+      f.jc = rng() % 2 ? fw::doc::Justification::Center : fw::doc::Justification::Start;
+      edit::TreeEdit te(ed, at);
+      edit::FormatParagraphs(te, {at, at}, f);
+      break;
+    }
+    case 15: {  // a heading, or the normal style
+      edit::TreeEdit te(ed, at);
+      edit::ApplyStyle(te, {at, at}, rng() % 2 ? "heading 1" : "Normal");
+      break;
+    }
+    case 16: {  // bullets or numbers, on or off
+      edit::TreeEdit te(ed, at);
+      edit::ToggleList(te, {at, at}, rng() % 2 ? edit::ListKind::Bullet : edit::ListKind::Number);
+      break;
+    }
+    default:
+      switch (rng() % 4) {
+        case 0: edit::InsertField(ed, at, " PAGE ", u"1"); break;
+        case 1: ed.Redo(); break;
+        default: ed.Undo(); break;
+      }
+      break;
   }
 }
+
+// A step that says anything may read differently: the model's caches are made again from nothing,
+// so a layout from scratch after it doesn't see what an edit left in them.
+struct EverythingAgain : fw::doc::edit::CustomStep {
+  void Undo() override {}
+  void Redo() override {}
+};
 
 }  // namespace
 
@@ -570,10 +609,14 @@ bool CheckEdits(const std::filesystem::path& document, int edits, unsigned seed,
       else layout.Continue(1);
       if (i % 10 != 9 && i + 1 != edits) continue;
       layout.LayOutAll();
+      const std::vector<std::string> a = DumpLines(layout);
+      const int counted = changes;
+      editor.RecordStep(u"Check", std::make_shared<EverythingAgain>());
+      changes = counted;
       fw::doc::layout::Layout fresh(*doc, fonts);
       fresh.LayOutAll();
       ++result.checks;
-      const std::vector<std::string> a = DumpLines(layout), b = DumpLines(fresh);
+      const std::vector<std::string> b = DumpLines(fresh);
       if (a == b && layout.PageCount() == fresh.PageCount()) continue;
       size_t k = 0;
       while (k < a.size() && k < b.size() && a[k] == b[k]) ++k;
