@@ -1339,8 +1339,10 @@ std::string Converter::SectPr() {
       s += std::string("<w:") + kind + "Reference w:type=\"" + (variant[0] ? "first" : "default") + "\" r:id=\"" + rid + "\"/>";
     }
   }
-  if (master_.child("style:header")) top += extra("style:header-style");
-  if (master_.child("style:footer")) bottom += extra("style:footer-style");
+  // Word reserves the header's and footer's height whether the page style has them or not (a page with only
+  // a first-page footer, or none): it writes its header distance so.
+  top += extra("style:header-style");
+  bottom += extra("style:footer-style");
   s += "<w:pgSz w:w=\"" + std::to_string(width) + "\" w:h=\"" + std::to_string(height) + "\"" +
        (Attr(pl, "style:print-orientation") == "landscape" ? " w:orient=\"landscape\"" : "") + "/>";
   s += "<w:pgMar w:top=\"" + std::to_string(top) + "\" w:right=\"" + std::to_string(right) + "\" w:bottom=\"" +
