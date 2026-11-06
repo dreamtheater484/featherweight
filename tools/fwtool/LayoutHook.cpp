@@ -2,6 +2,8 @@
 // with fwdoclayout (src/doc/layout/Layout.h), marking each stage in OpenTimings.
 #include "LayoutHook.h"
 
+#include "Common.h"
+
 #include <chrono>
 #include <cstdio>
 #include <functional>
@@ -44,16 +46,21 @@ fw::text::Fonts& SharedFonts() {
 std::unique_ptr<fw::doc::Document> OpenModel(const std::filesystem::path& document, fw::OpenTimings* timings,
                                              std::string& error) {
   fw::pkg::Status status;
-  fw::pkg::Snapshot::Options options;
-  std::error_code ec;
-  options.recoveryDir = (std::filesystem::temp_directory_path(ec) / L"fwtool-recovery").wstring();
-  auto snapshot = fw::pkg::Snapshot::Open(document.wstring(), options, status);
-  if (!snapshot) {
-    error = status.message.empty() ? "can't read the file" : status.message;
-    return nullptr;
+  std::unique_ptr<fw::pkg::Package> package;
+  if (fw::ToLower(document.extension().wstring()) == L".doc") {
+    package = OpenPackage(document, status);  // a Word 97-2003 document, read as the .docx it imports as
+  } else {
+    fw::pkg::Snapshot::Options options;
+    std::error_code ec;
+    options.recoveryDir = (std::filesystem::temp_directory_path(ec) / L"fwtool-recovery").wstring();
+    auto snapshot = fw::pkg::Snapshot::Open(document.wstring(), options, status);
+    if (!snapshot) {
+      error = status.message.empty() ? "can't read the file" : status.message;
+      return nullptr;
+    }
+    if (timings) timings->Mark(fw::OpenTimings::Read);
+    package = fw::pkg::Package::Open(std::move(snapshot), fw::pkg::Limits::Default(), status);
   }
-  if (timings) timings->Mark(fw::OpenTimings::Read);
-  auto package = fw::pkg::Package::Open(std::move(snapshot), fw::pkg::Limits::Default(), status);
   if (!package) {
     error = status.message.empty() ? "can't open the package" : status.message;
     return nullptr;

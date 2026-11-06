@@ -7,6 +7,7 @@
 #include <ctime>
 #include <fstream>
 #include <iterator>
+#include <set>
 
 #include "Common.h"
 #include "Fidelity.h"
@@ -203,8 +204,26 @@ struct DocResult {
   std::string error;  // why it couldn't be measured
   int referencePages = 0, pages = 0, lines = 0, matched = 0;
   std::string first;  // the first difference
+  bool copy = false;  // another format of a document the corpus has as .docx (see CopyKey)
   bool Measured() const { return error.empty(); }
 };
+
+// The corpus keeps each document as .docx under docx/<category>/ and may add copies of it in other
+// formats or folders: dotx/<category>/<name>.dotx, doc/..., odt/..., protected/<category>/<name>.docx.
+// A copy is measured against Word's render of the copy but reported apart, so one document doesn't
+// count twice toward the targets. The key is "<category>/<name>" without the format; `docx` says
+// whether the source is the .docx original itself.
+std::string CopyKey(const std::string& source, bool* docx) {
+  const size_t slash = source.find('/');
+  const size_t dot = source.rfind('.');
+  const std::string folder = slash == std::string::npos ? "" : source.substr(0, slash);
+  std::string ext = dot == std::string::npos ? "" : source.substr(dot);
+  for (char& c : ext)
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  *docx = folder == "docx" && ext == ".docx";
+  const size_t from = slash == std::string::npos ? 0 : slash + 1;
+  return source.substr(from, (dot == std::string::npos || dot < from ? source.size() : dot) - from);
+}
 
 void AppendJsonString(std::string& out, std::string_view s) {
   out += '"';
@@ -236,15 +255,21 @@ struct Totals {
   double LinePercent() const { return Share(matched, lines); }
 };
 
-std::string JsonReport(const std::vector<DocResult>& docs, const Totals& t, const std::string& references) {
-  std::string out = "{\n  \"format\": \"featherweight-fidelity\",\n  \"version\": 1,\n  \"made\": \"" + Today() +
+// The totals are the targets'; "copies" has the format copies' (see CopyKey).
+std::string JsonReport(const std::vector<DocResult>& docs, const Totals& t, const Totals& copies,
+                       const std::string& references) {
+  std::string out = "{\n  \"format\": \"featherweight-fidelity\",\n  \"version\": 2,\n  \"made\": \"" + Today() +
                     "\",\n  \"references\": ";
   AppendJsonString(out, references);
-  char buf[256];
+  char buf[512];
   std::snprintf(buf, sizeof(buf),
                 ",\n  \"documents\": %d,\n  \"pages\": {\"match\": %d, \"documents\": %d, \"percent\": %.2f},\n"
-                "  \"lines\": {\"match\": %d, \"lines\": %d, \"percent\": %.2f},\n  \"files\": [",
-                t.documents, t.pagesMatch, t.documents, t.PagePercent(), t.matched, t.lines, t.LinePercent());
+                "  \"lines\": {\"match\": %d, \"lines\": %d, \"percent\": %.2f},\n"
+                "  \"copies\": {\"documents\": %d, \"pages\": {\"match\": %d, \"percent\": %.2f}, "
+                "\"lines\": {\"match\": %d, \"lines\": %d, \"percent\": %.2f}},\n  \"files\": [",
+                t.documents, t.pagesMatch, t.documents, t.PagePercent(), t.matched, t.lines, t.LinePercent(),
+                copies.documents, copies.pagesMatch, copies.PagePercent(), copies.matched, copies.lines,
+                copies.LinePercent());
   out += buf;
   for (size_t i = 0; i < docs.size(); ++i) {
     const DocResult& d = docs[i];
@@ -257,6 +282,7 @@ std::string JsonReport(const std::vector<DocResult>& docs, const Totals& t, cons
     std::snprintf(buf, sizeof(buf), ", \"wordPages\": %d, \"pages\": %d, \"lines\": %d, \"match\": %d, \"percent\": %.2f",
                   d.referencePages, d.pages, d.lines, d.matched, Share(d.matched, d.lines));
     out += buf;
+    if (d.copy) out += ", \"copy\": true";
     if (!d.first.empty()) {
       out += ", \"firstDifference\": ";
       AppendJsonString(out, d.first);
@@ -272,8 +298,8 @@ std::string MarkdownCell(std::string s) {
   return s;
 }
 
-std::string MarkdownReport(const std::vector<DocResult>& docs, const Totals& t, const std::string& references,
-                           const Options& options) {
+std::string MarkdownReport(const std::vector<DocResult>& docs, const Totals& t, const Totals& copies,
+                           const std::string& references, const Options& options) {
   std::string out = "# Layout fidelity\n\nFeatherweight's layout measured against Word's reference renders in `" +
                     references + "` (plan \u00A710), " + Today() + ".\n\n";
   bool targets = options.minPages >= 0 || options.minLines >= 0;
@@ -285,10 +311,19 @@ std::string MarkdownReport(const std::vector<DocResult>& docs, const Totals& t, 
   };
   row("Documents whose page count matches Word's", t.pagesMatch, t.documents, t.PagePercent(), options.minPages);
   row("Lines that break where Word breaks them", t.matched, t.lines, t.LinePercent(), options.minLines);
+  if (copies.documents) {
+    out += "\nFormat copies (.dotx, .doc, .odt and password-protected copies of the documents above), measured against "
+           "Word's render of each copy and not counted in the targets:\n\n| | Match | Of | Share |\n|---|---:|---:|---:|\n";
+    auto plain = [&](const char* name, int match, int of, double pct) {
+      out += std::string("| ") + name + " | " + std::to_string(match) + " | " + std::to_string(of) + " | " + Percent(pct) + " |\n";
+    };
+    plain("Copies whose page count matches Word's", copies.pagesMatch, copies.documents, copies.PagePercent());
+    plain("Lines that break where Word breaks them", copies.matched, copies.lines, copies.LinePercent());
+  }
 
   std::vector<const DocResult*> measured;
   for (const DocResult& d : docs)
-    if (d.Measured()) measured.push_back(&d);
+    if (d.Measured() && !d.copy) measured.push_back(&d);
   std::stable_sort(measured.begin(), measured.end(), [](const DocResult* a, const DocResult* b) {
     return Share(a->matched, a->lines) < Share(b->matched, b->lines);
   });
@@ -306,9 +341,15 @@ std::string MarkdownReport(const std::vector<DocResult>& docs, const Totals& t, 
       pages += "- " + d->source + ": " + std::to_string(d->referencePages) + " in Word, " + std::to_string(d->pages) +
                " in Featherweight\n";
   if (!pages.empty()) out += "\n## Page count differs\n\n" + pages;
+  std::string copyPages;
+  for (const DocResult& d : docs)
+    if (d.copy && d.Measured() && d.referencePages != d.pages)
+      copyPages += "- " + d.source + ": " + std::to_string(d.referencePages) + " in Word, " + std::to_string(d.pages) +
+                   " in Featherweight\n";
+  if (!copyPages.empty()) out += "\n## Copies whose page count differs\n\n" + copyPages;
   std::string missing;
   for (const DocResult& d : docs)
-    if (!d.Measured()) missing += "- " + d.source + ": " + d.error + "\n";
+    if (!d.Measured()) missing += "- " + d.source + (d.copy ? " (a copy)" : "") + ": " + d.error + "\n";
   if (!missing.empty()) out += "\n## Not measured\n\nThese count as wrong in the totals.\n\n" + missing;
   return out;
 }
@@ -321,7 +362,7 @@ int CompareCorpus(const Options& options) {
     return 2;
   }
   std::vector<DocResult> docs;
-  Totals totals;
+  Totals totals, copies;  // the targets, and the format copies (see CopyKey)
   std::string references;
   int unreadable = 0;  // reference PDFs PDFium can't read: not measured, but the run fails
   for (const auto& input : options.inputs) {
@@ -332,9 +373,18 @@ int CompareCorpus(const Options& options) {
       return 1;
     }
     references += (references.empty() ? "" : ", ") + Display(set->folder);
+    std::set<std::string> originals;
+    for (const ReferenceEntry& e : set->entries) {
+      bool docx = false;
+      std::string key = CopyKey(e.source, &docx);
+      if (docx) originals.insert(std::move(key));
+    }
     for (const ReferenceEntry& e : set->entries) {
       DocResult d;
       d.source = e.source;
+      bool docx = false;
+      const std::string key = CopyKey(e.source, &docx);
+      d.copy = !docx && originals.count(key) > 0;
       if (e.pdf.empty()) {
         std::printf("[skip] %s: no reference PDF (%s)\n", e.source.c_str(), e.error.c_str());
         continue;
@@ -360,10 +410,11 @@ int CompareCorpus(const Options& options) {
       d.matched = s.matched;
       if (const LineResult* first = s.FirstDifference(); first && ours)
         d.first = Where(s.reference, first->line) + ": " + Difference(s, *first, *reference, *ours);
-      ++totals.documents;
-      if (s.PagesMatch() && ours) ++totals.pagesMatch;
-      totals.lines += d.lines;
-      totals.matched += d.matched;
+      Totals& sum = d.copy ? copies : totals;
+      ++sum.documents;
+      if (s.PagesMatch() && ours) ++sum.pagesMatch;
+      sum.lines += d.lines;
+      sum.matched += d.matched;
       bool perfect = ours && s.PagesMatch() && s.matched == s.lines;
       std::printf("%s %s: %s in Word, %d here; %d of %d lines match (%s)%s%s\n", perfect ? "[ ok ]" : "[diff]",
                   d.source.c_str(), Plural(d.referencePages, "page", "pages").c_str(), d.pages, d.matched, d.lines,
@@ -376,9 +427,15 @@ int CompareCorpus(const Options& options) {
               "them (%s).\n",
               totals.documents, totals.pagesMatch, Percent(totals.PagePercent()).c_str(), totals.matched, totals.lines,
               Percent(totals.LinePercent()).c_str());
-  if (!options.jsonOut.empty() && !WriteFile(options.jsonOut, JsonReport(docs, totals, references)))
+  if (copies.documents)
+    std::printf("Copies in other formats, apart from those: the page count matches for %d of %d (%s); %d of %d lines "
+                "(%s).\n",
+                copies.pagesMatch, copies.documents, Percent(copies.PagePercent()).c_str(), copies.matched, copies.lines,
+                Percent(copies.LinePercent()).c_str());
+  if (!options.jsonOut.empty() && !WriteFile(options.jsonOut, JsonReport(docs, totals, copies, references)))
     std::fprintf(stderr, "Couldn't write %s\n", Display(options.jsonOut).c_str());
-  if (!options.reportOut.empty() && !WriteFile(options.reportOut, MarkdownReport(docs, totals, references, options)))
+  if (!options.reportOut.empty() &&
+      !WriteFile(options.reportOut, MarkdownReport(docs, totals, copies, references, options)))
     std::fprintf(stderr, "Couldn't write %s\n", Display(options.reportOut).c_str());
 
   bool failed = unreadable > 0;
