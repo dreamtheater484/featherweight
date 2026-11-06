@@ -327,3 +327,19 @@ TEST(Odt_TableWidthPaddingRowsAndPageNumberFormat) {
   CHECK(xml.find("<w:tcMar><w:top w:w=\"0\" w:type=\"dxa\"/><w:left w:w=\"144\" w:type=\"dxa\"/>") != std::string::npos);
   CHECK(xml.find("<w:pgNumType w:fmt=\"lowerRoman\"/>") != std::string::npos);
 }
+
+TEST(Odt_LongBookmarkTextIsCutBetweenCharacters) {
+  // A reference repeats at most 4 KB of its bookmark's text, cut where a character starts.
+  std::string many = "x";                             // one byte, so that 4 KB would end inside a character
+  for (int i = 0; i < 3000; ++i) many += "\xC3\xA9";  // é, two bytes each
+  const std::string body = "<text:p><text:bookmark-start text:name=\"b\"/>" + many + "<text:bookmark-end text:name=\"b\"/></text:p>"
+                           "<text:p><text:bookmark-ref text:ref-name=\"b\" text:reference-format=\"text\">1</text:bookmark-ref></text:p>";
+  std::string xml;
+  auto doc = Converted(Odt(body), &xml);
+  CHECK(doc);
+  const size_t at = xml.find("<w:fldSimple");
+  CHECK(at != std::string::npos);
+  if (at == std::string::npos) return;
+  const size_t t = xml.find("\">", xml.find("<w:t ", at)) + 2, end = xml.find("</w:t>", t);
+  CHECK(end - t <= 4096 && (end - t) % 2 == 1 && end - t >= 4000);  // "x" and whole é's
+}

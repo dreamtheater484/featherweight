@@ -907,6 +907,10 @@ void Converter::BookmarkTexts(xml_node parent, int depth) {
     } else if (n == "text:bookmark-end") {
       if (auto it = openText_.find(name); it != openText_.end()) {
         while (!it->second.empty() && it->second.back() == ' ') it->second.pop_back();
+        // Cut at kMost: not inside a character.
+        if (it->second.size() >= kMost)
+          while (!it->second.empty() && (static_cast<unsigned char>(it->second.back()) & 0xC0) == 0x80) it->second.pop_back();
+        if (!it->second.empty() && static_cast<unsigned char>(it->second.back()) >= 0xC0) it->second.pop_back();
         refText_[name] = std::move(it->second);
         openText_.erase(it);
       }
