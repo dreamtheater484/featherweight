@@ -40,6 +40,7 @@ target_compile_options(fwdoc PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,Mi
 add_library(fwdoclayout STATIC
   layout/Flow.cpp
   layout/Layout.cpp
+  layout/Math.cpp
   layout/Stack.cpp
   layout/Table.cpp
   layout/Text.cpp

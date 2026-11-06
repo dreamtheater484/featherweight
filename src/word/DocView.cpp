@@ -469,14 +469,9 @@ void DocView::ShowNotices() {
   }
   // Content that isn't drawn comes first: the banner is one line, and a long font list is cut.
   std::wstring text;
-  bool equations = false, ink = false;
-  for (const auto& d : doc_->Drawings()) {
-    equations |= d.kind == fw::doc::DrawingKind::Equation;
-    ink |= d.kind == fw::doc::DrawingKind::ContentPart;
-  }
-  if (equations) text = L"Equations";
-  if (ink) text += text.empty() ? L"Ink drawings" : L" and ink drawings";
-  if (!text.empty()) text += L" aren't shown yet.";
+  bool ink = false;
+  for (const auto& d : doc_->Drawings()) ink |= d.kind == fw::doc::DrawingKind::ContentPart;
+  if (ink) text = L"Ink drawings aren't shown yet.";
   const auto& subs = fonts_->Substitutions();
   if (!subs.empty()) {
     std::wstring list;

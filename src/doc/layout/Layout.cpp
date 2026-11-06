@@ -527,7 +527,9 @@ void Layout::Paint(draw::Painter& painter, size_t page, const DrawingPainter& dr
   };
   // A text box's lines go on top of its own shape, which is filled.
   auto drawOne = [&](const DrawingBox& d) {
-    if (drawing) drawing(painter, d);
+    if (const math::Equation* eq = d.floating ? nullptr : e.LaidOutEquation(d.drawing))
+      math::Paint(painter, *eq, d.rect.left, d.rect.bottom - eq->descent);
+    else if (drawing) drawing(painter, d);
     else Placeholder(painter, d.rect);
     for (const LineBox& lb : p.lines)
       if (lb.drawing == d.drawing) paintLine(lb);
