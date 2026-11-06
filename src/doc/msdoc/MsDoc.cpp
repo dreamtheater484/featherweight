@@ -338,6 +338,7 @@ struct Tc {
   uint16_t flags = 0;  // TCGRF
   std::array<std::string, 4> brc;  // top, left, bottom, right
   std::string shd;
+  std::array<int, 4> padding = {-1, -1, -1, -1};  // the cell's own margins: top, left, bottom, right
 };
 
 struct Tap {
@@ -1174,6 +1175,13 @@ void Converter::ApplyTap(const Bytes& g, Tap& t) const {
           if (a.U8(3) & (1 << b)) t.padding[b] = width;
         break;
       }
+      case 0xD632: {  // sprmTCellPadding: cells itcFirst to itcLim, the sides in grfbrc, the width (ftsWidth 3: twips; 0: none)
+        const int width = a.U8(4) == 3 ? a.U16(5) : 0;
+        for (size_t k = a.U8(1); k < a.U8(2) && k < t.tc.size(); ++k)
+          for (size_t b = 0; b < 4; ++b)
+            if (a.U8(3) & (1 << b)) t.tc[k].padding[b] = width;
+        break;
+      }
       case 0x7629: {  // sprmTTextFlow: itcFirst, itcLim, then the cells' text flow
         const size_t first = a.U8(0), lim = a.U8(1);
         for (size_t k = first; k < lim && k < t.tc.size(); ++k)
@@ -1554,6 +1562,13 @@ void Converter::EmitTable(const std::vector<Para>& paras, size_t i0, size_t i1, 
       }
       out += tc.shd;
       if (tc.flags & 0x2000) out += "<w:noWrap/>";
+      if (std::any_of(tc.padding.begin(), tc.padding.end(), [](int w) { return w >= 0; })) {
+        static const char* const kSide[] = {"top", "left", "bottom", "right"};
+        out += "<w:tcMar>";
+        for (size_t b = 0; b < 4; ++b)
+          if (tc.padding[b] >= 0) out += std::string("<w:") + kSide[b] + " w:w=\"" + Num(tc.padding[b]) + "\" w:type=\"dxa\"/>";
+        out += "</w:tcMar>";
+      }
       // TCGRF.textFlow: vertical text (a header turned along the page's side, for one).
       switch ((tc.flags >> 2) & 7) {
         case 1: out += El("textDirection", "tbRl"); break;

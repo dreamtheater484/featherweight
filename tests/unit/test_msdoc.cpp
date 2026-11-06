@@ -390,7 +390,8 @@ TEST(MsDoc_TablesFieldsNotesBookmarksAndPictures) {
     for (int x : {-108, 2000, 4000}) Add16(def, static_cast<uint32_t>(x) & 0xFFFF);
     def.resize(def.size() + 40, 0);
     Add(row, Sprm(0xD608, def));
-    Add(row, S16(0x3404, 1));  // a header row: after the table definition, so its size must be right
+    Add(row, S8(0x3404, 1));  // a header row: after the table definition, so its size must be right
+    Add(row, Sprm(0xD632, {6, 1, 2, 0x0A, 3, 58, 0}));  // the second cell's own margins: 58 twips left and right
   }
   b.paras = {{2, 0, S8(0x2416, 1)}, {4, 0, S8(0x2416, 1)}, {5, 0, row}, {22, 0, {}}, {30, 0, {}}, {31, 0, {}}};
   {  // the footnote: its reference at 19, its text from 0 to 8 in the footnote story
@@ -460,6 +461,13 @@ TEST(MsDoc_TablesFieldsNotesBookmarksAndPictures) {
   CHECK(tbl.Is(Name("tbl")) && doc->TableRows(tbl).size() == 1u && doc->RowCells(doc->TableRows(tbl)[0]).size() == 2u);
   CHECK(doc->TableGrid(tbl).size() == 2u && doc->TableGrid(tbl)[0].Value() == 2108);
   CHECK(doc->TableRows(tbl)[0].Path({Name("trPr"), Name("tblHeader")}));
+  {
+    const std::vector<Node> cells = doc->RowCells(doc->TableRows(tbl)[0]);
+    CHECK(!cells[0].Path({Name("tcPr"), Name("tcMar")}));
+    const CellMargins m = doc->ResolvedCell(cells[1]).margins;
+    CHECK(m.start.value == 58 && m.end.value == 58 && m.start.type == TableWidth::Type::Dxa);
+    CHECK(m.top.value == 0);
+  }
   const std::vector<Field> fields = doc->Fields(doc->MainStory());
   CHECK(fields.size() == 1u && fields[0].Type() == u"PAGE");
   // The footnote: referred to, with its text.
