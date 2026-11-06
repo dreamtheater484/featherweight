@@ -162,7 +162,8 @@ bool ElementMatches(const RefSite& site, pugi::xml_node e, std::string_view ns, 
   return true;
 }
 
-// Field instructions: REF, PAGEREF and NOTEREF name a bookmark first; HYPERLINK names one after \l.
+// Field instructions: REF, PAGEREF and NOTEREF name a bookmark first; HYPERLINK names one after \l
+// when it has no address (with one, \l is a place in that address: HYPERLINK "https://..." \l "frag").
 void ForEachFieldBookmark(std::string_view code, const std::function<void(std::string_view)>& fn) {
   std::vector<std::string_view> tokens;
   size_t i = 0;
@@ -187,8 +188,19 @@ void ForEachFieldBookmark(std::string_view code, const std::function<void(std::s
       !tokens[1].starts_with('\\') && !tokens[1].empty()) {
     fn(tokens[1]);
   } else if (command == "hyperlink") {
-    for (size_t t = 1; t + 1 < tokens.size(); ++t)
-      if (EqualNoCase(tokens[t], "\\l") && !tokens[t + 1].empty()) fn(tokens[t + 1]);
+    // \l, \o and \t take an argument; the address is the first token that isn't a switch or one.
+    std::string_view location;
+    bool address = false;
+    for (size_t t = 1; t < tokens.size(); ++t) {
+      const bool takesArgument = EqualNoCase(tokens[t], "\\l") || EqualNoCase(tokens[t], "\\o") || EqualNoCase(tokens[t], "\\t");
+      if (takesArgument && t + 1 < tokens.size()) {
+        if (EqualNoCase(tokens[t], "\\l")) location = tokens[t + 1];
+        ++t;
+      } else if (!tokens[t].starts_with('\\') && !tokens[t].empty()) {
+        address = true;
+      }
+    }
+    if (!address && !location.empty()) fn(location);
   }
 }
 
