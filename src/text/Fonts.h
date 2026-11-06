@@ -131,6 +131,10 @@ class Fonts {
   Microsoft::WRL::ComPtr<IDWriteFontSet> win32_;
   bool win32Tried_ = false;
   Microsoft::WRL::ComPtr<IDWriteFontSet> Win32Family(const std::wstring& family);
+  // Office's cloud fonts (draw/CloudFonts.h), added to the collection the first time a family
+  // missing from it is one of them; false if it isn't, or they were added before.
+  bool AddCloudFonts(const std::wstring& name);
+  bool cloudAdded_ = false;
   // An installed face by its full name: its family, weight and slant.
   struct FaceName {
     std::wstring family;

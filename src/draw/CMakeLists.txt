@@ -2,6 +2,7 @@
 # and the drawing formats the three apps share: DrawingML and a VML subset, themes, pictures.
 # Headless: no UI and no window.
 add_library(fwdraw STATIC
+  CloudFonts.cpp
   D2DDevice.cpp
   D2DPainter.cpp
   Drawing.cpp
