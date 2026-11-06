@@ -197,13 +197,16 @@ bool Engine::Contextual(const ParaProps& a, const ParaProps& b) const { return a
 
 float Engine::SpaceBefore(const ParaProps& p, const Spacing& s) const {
   float before = p.spaceBeforeLines >= 0 ? static_cast<float>(p.spaceBeforeLines) * 12.0f / 100.0f : Pt(p.spaceBefore);
-  if (p.spaceBeforeAuto) before = s.atTop && s.prev == nullptr ? 0.0f : 14.0f;
+  // With w:doNotUseHTMLParagraphAutoSpacing, Word ignores automatic spacing and uses the space
+  // set (the region-3 QAPP's attachment page: 5 pt after, not 14).
+  const bool useAuto = !sumSpacing_;
+  if (p.spaceBeforeAuto && useAuto) before = s.atTop && s.prev == nullptr ? 0.0f : 14.0f;
   if (s.prev && p.contextualSpacing && Contextual(*s.prev, p)) before = 0;
   float after = s.after;
   // HTML's automatic spacing leaves none between two items of one list, as between <li>s.
   const bool sameList = s.prev && !p.numId.empty() && s.prev->numId == p.numId;
-  if (sameList && p.spaceBeforeAuto) before = 0;
-  if (sameList && s.prev->spaceAfterAuto) after = 0;
+  if (sameList && p.spaceBeforeAuto && useAuto) before = 0;
+  if (sameList && s.prev->spaceAfterAuto && useAuto) after = 0;
   if (s.prev && s.prev->contextualSpacing && Contextual(*s.prev, p)) {
     // Word first takes the space after out of the space before, as HTML collapses margins, then
     // drops the space after: 8 pt after and 24 pt before leave 16 pt (measured on the corpus).
@@ -232,7 +235,7 @@ float Engine::BorderAbove(const ParaProps& p, const Spacing& s) const {
 float Engine::BorderBelow(const Spacing& s) const { return s.prev ? BorderRoom(s.prev->borders.bottom) : 0.0f; }
 
 float Engine::SpaceAfter(const ParaProps& p) const {
-  if (p.spaceAfterAuto) return 14;
+  if (p.spaceAfterAuto && !sumSpacing_) return 14;  // see SpaceBefore
   return p.spaceAfterLines >= 0 ? static_cast<float>(p.spaceAfterLines) * 12.0f / 100.0f : Pt(p.spaceAfter);
 }
 
