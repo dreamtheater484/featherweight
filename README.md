@@ -6,6 +6,7 @@
 
 <p align="center">
   <b>A light, fast PDF reader for Windows.</b><br>
+  Now opening and editing Word documents too, in beta.<br>
   Zero bloat, zero subscriptions, zero cloud.
 </p>
 
@@ -18,6 +19,8 @@
 
 <p align="center">
   <a href="https://github.com/dreamtheater484/featherweight/releases/latest"><b>⬇ Download for Windows</b></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/dreamtheater484/featherweight/releases/tag/v0.95.0"><b>Try the 0.95 beta with Word documents</b></a>
 </p>
 
 ![Featherweight with a highlight, a note preview and note markers](docs/screenshots/hero.png)
@@ -25,6 +28,40 @@
 Featherweight opens PDFs instantly, fills in and saves forms, lets you highlight and add notes, searches,
 and prints. Then it stays out of your way. No account, no ads, no telemetry, no background services,
 and a 0.7 MB program.
+
+## Beta: Word documents (0.95)
+
+[Featherweight 0.95 beta](https://github.com/dreamtheater484/featherweight/releases/tag/v0.95.0) opens and edits
+Word documents, with its own engine. It doesn't use Word or any Office component, and it's still one small program
+(5.7 MB). It's a beta: try it on copies of documents that matter. The stable download above stays the PDF reader.
+
+| Start screen: new documents and templates | Charts, as Word draws them |
+|---|---|
+| ![The start screen with New document and templates](docs/screenshots/word-start.png) | ![A Word document with a column chart](docs/screenshots/word-charts.png) |
+| **Equations** | **Every script, right to left and East Asian** |
+| ![A Word document with equations](docs/screenshots/word-equations.png) | ![Accents, Japanese, Chinese, Korean, Arabic, Hebrew and emoji in one document](docs/screenshots/word-languages.png) |
+
+**Write and edit**
+- New documents (Ctrl+N), or start from a letter, CV or report template
+- Formatting, styles, bulleted and numbered lists, find and replace, spelling (in each paragraph's language) and AutoCorrect
+- Tables, pictures, text boxes, shapes and watermarks; page setup, the ruler, columns, sections, headers and footers
+- Links, bookmarks, a table of contents, footnotes and endnotes, and the navigation pane
+- Track changes and comments that Word shows exactly as you left them
+- Fill in forms: content controls and protected legacy forms
+
+**Open and save**
+- `.docx`, `.docm`, `.dotx` and `.dotm`, and password-protected documents (saved with the same password)
+- Older `.doc` and OpenDocument `.odt` files open too, and are saved as a new `.docx`, so the original is never overwritten
+- Export PDF (with selectable text, links and bookmarks), and save as RTF or plain text
+- Charts and equations are shown as in Word, and kept exactly as they are when you save
+
+**Never damages a file:** every change is checked against Word. Saved documents open in Word without a repair prompt,
+and the parts Featherweight doesn't edit are kept as they were. Before this beta, hundreds of documents went through
+tens of thousands of random edits, each saved copy then opened in Word.
+
+**Known in this beta:**
+- Pages break where Word breaks them for about 94 % of documents. The goal for 2.0 is 97 %.
+- A `.doc` file's grouped drawings and plain lines aren't brought in yet.
 
 ## What's new in 0.9.4
 
@@ -101,6 +138,22 @@ Requires Windows 10 (version 1903 or later) or Windows 11, 64-bit.
 | Night reading | Ctrl+I |
 | Full screen, presentation | F11, F5 (Esc to leave) |
 | Save or close a note | Ctrl+Enter, Esc |
+
+In Word documents (0.95 beta):
+
+| Action | Keys |
+|---|---|
+| New document | Ctrl+N |
+| Bold, italic, underline | Ctrl+B, Ctrl+I, Ctrl+U |
+| Undo, redo | Ctrl+Z, Ctrl+Y |
+| Find and replace | Ctrl+H |
+| Insert a link | Ctrl+K |
+| Track changes on or off | Ctrl+Shift+E |
+| New comment | Ctrl+Alt+M |
+| Footnote, endnote | Ctrl+Alt+F, Ctrl+Alt+D |
+| Paste as plain text | Ctrl+Shift+V |
+| Formatting marks | Ctrl+Shift+8 |
+| Command search | Alt+Q |
 
 ## Privacy
 
