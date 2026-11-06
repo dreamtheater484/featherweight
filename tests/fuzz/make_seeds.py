@@ -37,6 +37,7 @@ OPC = [
 
 PACKAGES = [
     "generated/simple.docx",
+    "layout/equations.docx",
     "generated/styles-unicode-comments.docx",
     "generated/sections-headers.docx",
     "edge/alternate-content.docx",

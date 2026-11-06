@@ -2404,8 +2404,15 @@ void App::RunScript(const std::wstring& script) {
     } else if (op == L"pagepngs") {
       // pagepngs:dir writes a document's pages as dir\page-N.png at 96 dpi, as the export draws
       // them, for comparing with the PDF's pages.
+      // pagepngs:dir|dpi renders at another resolution.
       TabContent* v = Active();
-      if (!v || v->Kind() != TabKind::Document || !v->Ready() || static_cast<DocView*>(v)->RenderPagesForTesting(arg, 96) == 0)
+      std::wstring dir = arg;
+      float dpi = 96;
+      if (const size_t bar = dir.find(L'|'); bar != std::wstring::npos) {
+        dpi = std::clamp(static_cast<float>(_wtof(dir.c_str() + bar + 1)), 24.f, 600.f);
+        dir.resize(bar);
+      }
+      if (!v || v->Kind() != TabKind::Document || !v->Ready() || static_cast<DocView*>(v)->RenderPagesForTesting(dir, dpi) == 0)
         fwprintf(stderr, L"pagepngs failed\n");
     } else if (op == L"cmd") {
       static const std::pair<const wchar_t*, int> names[] = {
