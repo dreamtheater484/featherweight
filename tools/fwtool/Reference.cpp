@@ -248,7 +248,7 @@ bool InitPdfium(std::string& error) {
 
 bool IsWordDocument(std::string_view name) {
   std::wstring ext = fw::ToLower(std::filesystem::path(fw::Utf8ToWide(name)).extension().wstring());
-  return ext == L".docx" || ext == L".docm" || ext == L".dotx" || ext == L".dotm";
+  return ext == L".docx" || ext == L".docm" || ext == L".dotx" || ext == L".dotm" || ext == L".doc";
 }
 
 std::optional<ReferenceSet> ReadReferences(const std::filesystem::path& folder, std::string& error) {

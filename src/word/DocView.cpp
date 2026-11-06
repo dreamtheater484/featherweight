@@ -15,6 +15,7 @@
 #include "doc/edit/Clip.h"
 #include "doc/edit/Export.h"
 #include "doc/edit/Forms.h"
+#include "doc/msdoc/MsDoc.h"
 #include "draw/D2DPainter.h"
 #include "draw/PrintJob.h"
 #include "pkg/CompoundFile.h"
@@ -185,16 +186,48 @@ OpenResult DocView::Unlock(const std::wstring& password, std::wstring& error) {
   namespace crypto = fw::pkg::crypto;
   const std::wstring name = Title();
   auto file = fw::pkg::CompoundFile::Open(protected_);
-  if (!file || !crypto::IsEncryptedPackage(*file)) {
+  const std::vector<std::string> streams = file ? file->Streams() : std::vector<std::string>();
+  const bool doc = std::find(streams.begin(), streams.end(), "WordDocument") != streams.end();
+  const bool locked = file && (doc ? crypto::IsEncryptedDoc(*file) : crypto::IsEncryptedPackage(*file));
+  if (!file || (!doc && !locked)) {
     error = name + L" couldn't be opened — it isn't a Word document Featherweight can open.";
     return OpenResult::Failed;
   }
-  if (password.empty()) {
+  if (locked && password.empty()) {
     needPassword_ = true;
     return OpenResult::NeedPassword;
   }
   crypto::Key key;
-  switch (crypto::Decrypt(*file, password, bytes_, key)) {
+  crypto::Result r = crypto::Result::Ok;
+  if (doc) {
+    // A Word 97-2003 document: read into a .docx in memory; saving makes a new .docx beside it
+    // and never writes the .doc (plan §5, "older formats are imported").
+    crypto::DocStreams plain;
+    if (locked) r = crypto::DecryptDoc(*file, password, plain);
+    if (r == crypto::Result::Ok) {
+      fw::pkg::Status st;
+      bytes_ = fw::doc::msdoc::ToDocx(
+          [&](std::string_view stream) -> std::optional<std::vector<uint8_t>> {
+            if (locked && stream == "WordDocument") return plain.wordDocument;
+            if (locked && stream == plain.table) return plain.tableStream;
+            if (locked && stream == "Data") return plain.data.empty() ? std::nullopt : std::make_optional(plain.data);
+            return file->Stream(stream);
+          },
+          st);
+      if (bytes_.empty()) {
+        error = name + L" couldn't be opened. " + fw::Utf8ToWide(st.message);
+        return OpenResult::Failed;
+      }
+      if (locked) key = crypto::NewKey(password);  // the .docx it's saved as keeps its password
+      const size_t dot = path_.find_last_of(L'.');
+      file_.Copy(name, (dot == std::wstring::npos ? path_ : path_.substr(0, dot)) + L".docx", false);
+      imported_ = name;
+      path_.clear();  // Save is Save As
+    }
+  } else {
+    r = crypto::Decrypt(*file, password, bytes_, key);
+  }
+  switch (r) {
     case crypto::Result::Ok:
       if (!bytes_.empty()) break;
       [[fallthrough]];  // an empty package
@@ -207,7 +240,7 @@ OpenResult DocView::Unlock(const std::wstring& password, std::wstring& error) {
       return OpenResult::Failed;
   }
   needPassword_ = false;
-  file_.Protect(std::move(key));
+  if (locked) file_.Protect(std::move(key));
   return OpenResult::Ok;
 }
 
@@ -540,10 +573,16 @@ void DocView::ShowNotices() {
     return;
   }
   // Content that isn't drawn comes first: the banner is one line, and a long font list is cut.
+  // An imported document says first where its changes go.
   std::wstring text;
+  if (!imported_.empty()) {
+    const size_t dot = imported_.find_last_of(L'.');
+    text = imported_ + L" is a Word 97–2003 document. Saving makes a new " +
+           (dot == std::wstring::npos ? imported_ : imported_.substr(0, dot)) + L".docx and leaves it as it is.";
+  }
   bool ink = false;
   for (const auto& d : doc_->Drawings()) ink |= d.kind == fw::doc::DrawingKind::ContentPart;
-  if (ink) text = L"Ink drawings aren't shown yet.";
+  if (ink) text += std::wstring(text.empty() ? L"" : L" ") + L"Ink drawings aren't shown yet.";
   const auto& subs = fonts_->Substitutions();
   if (!subs.empty()) {
     std::wstring list;

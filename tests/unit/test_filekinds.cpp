@@ -40,7 +40,7 @@ TEST(FileKinds_KindOfPath) {
   CHECK(KindOfPath(L"C:\\Docs\\Report Q3.docx") == FileKind::Document);
   CHECK(KindOfPath(L"notes.TXT") == FileKind::Document);
   CHECK(KindOfPath(L"letter.rtf") == FileKind::Document);
-  CHECK(KindOfPath(L"old.doc") == FileKind::Document);  // a format that comes later
+  CHECK(KindOfPath(L"old.doc") == FileKind::Document);  // imported (D5)
   CHECK(KindOfPath(L"Budget.xlsm") == FileKind::Workbook);
   CHECK(KindOfPath(L"export.csv") == FileKind::Workbook);
   CHECK(KindOfPath(L"Deck.ppsx") == FileKind::Presentation);
@@ -63,7 +63,7 @@ TEST(FileKinds_ThePdfReaderAndTheDocumentEditorHaveShipped) {
   // What the viewers open: not the formats that come later.
   CHECK(Opens(L"C:\\Docs\\Lease.PDF"));
   CHECK(Opens(L"Report.docx") && Opens(L"Template.DOTM"));
-  CHECK(!Opens(L"notes.txt") && !Opens(L"letter.rtf") && !Opens(L"old.doc"));
+  CHECK(!Opens(L"notes.txt") && !Opens(L"letter.rtf") && Opens(L"old.doc"));  // .doc is imported (D5)
   CHECK(!Opens(L"Budget.xlsx") && !Opens(L"photo.png"));
 }
 
