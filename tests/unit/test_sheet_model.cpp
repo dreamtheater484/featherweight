@@ -2,6 +2,8 @@
 #include "TestHarness.h"
 
 #include <charconv>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -11,6 +13,7 @@
 
 #include "PkgTestUtil.h"
 #include "pkg/Canonical.h"
+#include "sheet/model/TableStyles.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/xlsx/Internal.h"
 #include "sheet/xlsx/Xlsx.h"
@@ -520,4 +523,64 @@ TEST(sheet_tables) {
   CHECK(t->style.name == "TableStyleMedium2" && t->style.rowStripes && !t->style.columnStripes);
   CHECK(book->GetSheet(1).TableAt(6, 3) == t && book->GetSheet(1).TableAt(7, 3) == nullptr);
   CHECK(book->FindTable("Table3") == nullptr);
+  CHECK(t->FindColumn("tax") == 2 && t->FindColumn("Amount") == 1 && t->FindColumn("Amount ") == -1);
+}
+
+namespace {
+
+// What Excel shows in the cells of tests/sheet/table-styles.xlsx (tests/sheet/excel_table_styles.py).
+struct TableCellCase {
+  int sheet, row, col, fill, font, bold, side[8];  // side: style and color of left, top, bottom, right
+};
+constexpr TableCellCase kTableCells[] = {
+#include "sheet_table_styles_table.inc"
+};
+
+// Excel's tints and ours may round apart by a step.
+bool NearRgb(uint32_t argb, int rgb) {
+  for (int shift = 0; shift < 24; shift += 8)
+    if (std::abs(static_cast<int>((argb >> shift) & 0xFF) - ((rgb >> shift) & 0xFF)) > 2) return false;
+  return true;
+}
+
+}  // namespace
+
+TEST(sheet_table_styles) {
+  const auto path = std::filesystem::path(__FILE__).parent_path().parent_path() / "sheet" / "table-styles.xlsx";
+  std::ifstream in(path, std::ios::binary);
+  std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  fw::pkg::Status st;
+  auto pkg = test::OpenBytes(std::move(bytes), st);
+  CHECK(pkg != nullptr);
+  if (!pkg) return;
+  auto book = xlsx::Read(std::move(pkg), st, xlsx::ReadOptions{true});
+  CHECK(book != nullptr);
+  if (!book) return;
+  const Styles& styles = book->GetStyles();
+  CHECK(styles.TableStyles().size() >= 3 && styles.DefaultTableStyle() == "TableStyleMedium2");
+  CHECK(BuiltInTableStyle("TableStyleDark11") != nullptr && BuiltInTableStyle("TableStyleDark12") == nullptr);
+  CHECK(BuiltInTableStyle("TableStyleLight01") == nullptr && BuiltInTableStyle("TableStyleMedium28") != nullptr);
+  int failures = 0;
+  for (const TableCellCase& c : kTableCells) {
+    const TableCellFormat f = TableFormatAt(styles, book->GetSheet(c.sheet), c.row, c.col);
+    const bool hasFill = f.fill.pattern == PatternType::Solid;
+    bool ok = c.fill < 0 ? !hasFill : hasFill && NearRgb(styles.Resolve(f.fill.fg, 0), c.fill);
+    ok = ok && NearRgb(f.fontColor.IsSet() ? styles.Resolve(f.fontColor, 0) : 0xFF000000u, c.font);
+    ok = ok && f.bold == (c.bold != 0);
+    const BorderSide* sides[] = {&f.left, &f.top, &f.bottom, &f.right};
+    for (int i = 0; i < 4; ++i)
+      ok = ok && static_cast<int>(sides[i]->style) == c.side[2 * i] &&
+           (c.side[2 * i] == 0 || NearRgb(styles.Resolve(sides[i]->color, 0), c.side[2 * i + 1]));
+    if (!ok && ++failures <= 20) {
+      std::printf("    sheet %d %s: fill %06X font %06X bold %d L%d %06X T%d %06X B%d %06X R%d %06X\n", c.sheet,
+                  CellName(c.row, c.col).c_str(), hasFill ? styles.Resolve(f.fill.fg, 0) & 0xFFFFFF : 0xFFFFFFFF,
+                  f.fontColor.IsSet() ? styles.Resolve(f.fontColor, 0) & 0xFFFFFF : 0, f.bold ? 1 : 0,
+                  static_cast<int>(f.left.style), styles.Resolve(f.left.color, 0) & 0xFFFFFF, static_cast<int>(f.top.style),
+                  styles.Resolve(f.top.color, 0) & 0xFFFFFF, static_cast<int>(f.bottom.style),
+                  styles.Resolve(f.bottom.color, 0) & 0xFFFFFF, static_cast<int>(f.right.style),
+                  styles.Resolve(f.right.color, 0) & 0xFFFFFF);
+    }
+  }
+  if (failures) std::printf("    %d of %zu cells differ from Excel\n", failures, std::size(kTableCells));
+  CHECK_EQ(failures, 0);
 }

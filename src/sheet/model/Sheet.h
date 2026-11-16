@@ -180,6 +180,9 @@ struct Table {
   Range Data() const {
     return {ref.firstRow + headerRows, ref.firstCol, ref.lastRow >= totalsRows ? ref.lastRow - totalsRows : 0, ref.lastCol};
   }
+  // A column by its name, without case (Table1[amount]): its index in `columns`, which is its
+  // offset from ref.firstCol; -1 when there's none.
+  int FindColumn(std::string_view columnName) const;
 };
 
 // sheetPr.

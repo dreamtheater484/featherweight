@@ -10,19 +10,6 @@
 namespace fw::sheet {
 namespace {
 
-bool SameNameNoCase(std::string_view a, std::string_view b) {
-  if (a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-        return (x >= 'A' && x <= 'Z' ? x + 32 : x) == (y >= 'A' && y <= 'Z' ? y + 32 : y);
-      }))
-    return true;
-  bool ascii = std::all_of(a.begin(), a.end(), [](char c) { return static_cast<unsigned char>(c) < 0x80; }) &&
-               std::all_of(b.begin(), b.end(), [](char c) { return static_cast<unsigned char>(c) < 0x80; });
-  if (ascii) return false;
-  std::wstring wa = Utf8ToWide(a), wb = Utf8ToWide(b);
-  return CompareStringOrdinal(wa.c_str(), static_cast<int>(wa.size()), wb.c_str(), static_cast<int>(wb.size()), TRUE) ==
-         CSTR_EQUAL;
-}
-
 std::string FontKey(const Font& f) {
   std::string k = f.name;
   k += '\0';
@@ -39,6 +26,19 @@ std::string FontKey(const Font& f) {
 }
 
 }  // namespace
+
+bool NameEqualsNoCase(std::string_view a, std::string_view b) {
+  if (a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+        return (x >= 'A' && x <= 'Z' ? x + 32 : x) == (y >= 'A' && y <= 'Z' ? y + 32 : y);
+      }))
+    return true;
+  bool ascii = std::all_of(a.begin(), a.end(), [](char c) { return static_cast<unsigned char>(c) < 0x80; }) &&
+               std::all_of(b.begin(), b.end(), [](char c) { return static_cast<unsigned char>(c) < 0x80; });
+  if (ascii) return false;
+  std::wstring wa = Utf8ToWide(a), wb = Utf8ToWide(b);
+  return CompareStringOrdinal(wa.c_str(), static_cast<int>(wa.size()), wb.c_str(), static_cast<int>(wb.size()), TRUE) ==
+         CSTR_EQUAL;
+}
 
 // ---- StringTable
 
@@ -89,14 +89,14 @@ Workbook::~Workbook() = default;
 
 int Workbook::FindSheet(std::string_view name) const {
   for (size_t i = 0; i < sheets_.size(); ++i)
-    if (SameNameNoCase(sheets_[i]->Name(), name)) return static_cast<int>(i);
+    if (NameEqualsNoCase(sheets_[i]->Name(), name)) return static_cast<int>(i);
   return -1;
 }
 
 const Table* Workbook::FindTable(std::string_view name, size_t* sheet) const {
   for (size_t i = 0; i < sheets_.size(); ++i)
     for (const Table& t : sheets_[i]->Tables())
-      if (SameNameNoCase(t.displayName, name)) {
+      if (NameEqualsNoCase(t.displayName, name)) {
         if (sheet) *sheet = i;
         return &t;
       }
@@ -106,9 +106,9 @@ const Table* Workbook::FindTable(std::string_view name, size_t* sheet) const {
 const DefinedName* Workbook::FindName(std::string_view name, int sheet) const {
   if (sheet >= 0)
     for (const auto& n : names_)
-      if (n.sheet == sheet && SameNameNoCase(n.name, name)) return &n;
+      if (n.sheet == sheet && NameEqualsNoCase(n.name, name)) return &n;
   for (const auto& n : names_)
-    if (n.sheet < 0 && SameNameNoCase(n.name, name)) return &n;
+    if (n.sheet < 0 && NameEqualsNoCase(n.name, name)) return &n;
   return nullptr;
 }
 

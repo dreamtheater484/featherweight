@@ -9,6 +9,7 @@
 #include "pkg/Check.h"
 #include "pkg/References.h"
 #include "pkg/XmlDom.h"
+#include "sheet/model/TableStyles.h"
 #include "sheet/xlsx/Internal.h"
 #include "sheet/xlsx/Xlsx.h"
 
@@ -294,6 +295,30 @@ void ForEachChild(pugi::xml_node n, std::string_view local, F&& fn) {
     if (c.type() == pugi::node_element && Local(c) == local) fn(c);
 }
 
+// The workbook's own table styles, from their dxfs. Excel writes table="0" for a style it doesn't
+// offer in its gallery; tables still use it, so every style is read.
+void ReadTableStyles(pugi::xml_node sec, StylesBuilder& b) {
+  static constexpr std::string_view kTypes[] = {
+      "wholeTable", "firstColumnStripe", "secondColumnStripe", "firstRowStripe", "secondRowStripe", "lastColumn",
+      "firstColumn", "headerRow", "totalRow", "firstHeaderCell", "lastHeaderCell", "firstTotalCell", "lastTotalCell"};
+  constexpr size_t kMaxStyles = 1024;
+  b.DefaultTableStyle() = Attr(sec, "defaultTableStyle");
+  ForEachChild(sec, "tableStyle", [&](pugi::xml_node n) {
+    if (b.TableStyles().size() >= kMaxStyles) return;
+    TableStyle s;
+    s.name = Attr(n, "name");
+    ForEachChild(n, "tableStyleElement", [&](pugi::xml_node e) {
+      const std::string_view type = Attr(e, "type");
+      const auto it = std::find(std::begin(kTypes), std::end(kTypes), type);
+      if (it == std::end(kTypes)) return;  // the pivot table elements
+      const uint32_t dxf = UIntAttr(e, "dxfId", UINT32_MAX);
+      s.elements[it - std::begin(kTypes)] =
+          TableElementFromDxf(dxf < b.Dxfs().size() ? b.Dxfs()[dxf] : Dxf{}, UIntAttr(e, "size", 1));
+    });
+    b.TableStyles().push_back(std::move(s));
+  });
+}
+
 }  // namespace
 
 Status ReadStyles(std::string_view xml, const pkg::Limits& limits, std::string_view label, Styles& styles) {
@@ -302,6 +327,7 @@ Status ReadStyles(std::string_view xml, const pkg::Limits& limits, std::string_v
   if (!st.Ok()) return st;
   StylesBuilder b(styles);
   pugi::xml_node root = dom.Root();
+  pugi::xml_node tableStyles;  // read after the dxfs it refers to
   for (pugi::xml_node sec = root.first_child(); sec; sec = sec.next_sibling()) {
     if (sec.type() != pugi::node_element) continue;
     std::string_view k = Local(sec);
@@ -352,6 +378,8 @@ Status ReadStyles(std::string_view xml, const pkg::Limits& limits, std::string_v
           d.protection = Protection{BoolAttr(f, "locked", true), BoolAttr(f, "hidden", false)};
         b.Dxfs().push_back(std::move(d));
       });
+    } else if (k == "tableStyles") {
+      tableStyles = sec;
     } else if (k == "colors") {
       if (pugi::xml_node ix = Child(sec, "indexedColors")) {
         ForEachChild(ix, "rgbColor", [&](pugi::xml_node n) {
@@ -361,6 +389,7 @@ Status ReadStyles(std::string_view xml, const pkg::Limits& limits, std::string_v
       }
     }
   }
+  if (tableStyles) ReadTableStyles(tableStyles, b);
   return {};
 }
 

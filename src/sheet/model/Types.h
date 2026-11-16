@@ -28,6 +28,10 @@ struct Range {
   static Range All() { return {0, 0, kMaxRows - 1, kMaxCols - 1}; }
 };
 
+// Two names (sheets, tables, defined names, table columns) are the same without case, as Excel
+// compares them: Unicode case folding, not only ASCII.
+bool NameEqualsNoCase(std::string_view a, std::string_view b);
+
 // "B3" -> column 1, row 2; "$B$3" too. False when it isn't a cell inside the sheet's bounds.
 bool ParseA1(std::string_view s, CellAddr& out);
 // "A1:B2", "A1" (one cell), "A:B" (whole columns), "1:2" (whole rows), with or without $.
