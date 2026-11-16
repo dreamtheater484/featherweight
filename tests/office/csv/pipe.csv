@@ -1,0 +1,5 @@
+id|name|score|passed
+1|alpha|9.5|TRUE
+2|beta|7.25|FALSE
+3|gamma, delta|10|true
+4||0|
