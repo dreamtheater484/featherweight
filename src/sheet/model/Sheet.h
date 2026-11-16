@@ -176,7 +176,8 @@ enum CellFlag : uint8_t {
 // 16 bytes per stored cell.
 struct CellRec {
   uint16_t col = 0;
-  XmlType type = XmlType::N;
+  XmlType type : 4 = XmlType::N;
+  uint8_t numStyle : 4 = 0;  // how a number's text is written (sheet/xlsx/Numbers.cpp)
   uint8_t flags = 0;
   uint32_t style = 0;
   union {
@@ -184,6 +185,7 @@ struct CellRec {
     uint32_t index;  // S: shared string id; Str, InlineStr: the sheet's text id; B: 0 or 1; E: ErrorCode
   } v{0.0};
 };
+static_assert(sizeof(CellRec) == 16);
 
 // What a few cells need besides their CellRec.
 struct CellSide {

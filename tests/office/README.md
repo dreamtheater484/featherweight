@@ -67,6 +67,28 @@ build/validate/fwvalidate --saved <copies> <corpus> tests/office/generated tests
 
 Measured on 2026-11-05: all 108 private corpus documents and the 27 files in `generated`, `edge` and `layout`. Results: round trip 135/135, `fwtool check` on the copies 135/135 (no new warnings), validator 0 new errors (401 in the originals), re-serialize all 135/135.
 
+### Workbooks through the model (S1)
+
+With `--model`, workbooks are read into the workbook model (`src/sheet`), every sheet, and the model writes back the parts it owns: each worksheet (sheetData from the model's cells, rows, formulas and values) and the shared strings. `--workbooks` takes only `.xlsx`, `.xlsm`, `.xltx` and `.xltm` files from the folders. `check --model` also reads each workbook into the model and fails when a cell names a format or a shared string the workbook doesn't have, or shares a formula that has no master. `ctest` runs these on every folder of `tests/office` but `malicious`, `protected` and `reference` (`broken` only through the round trip):
+
+```bash
+fwtool roundtrip --model --workbooks tests/office/<folder>...
+fwtool roundtrip --model --reserialize-all --workbooks tests/office/<folder>...
+fwtool check --model --workbooks tests/office/<folder>...
+fwtool roundtrip --model --expect-reject --workbooks tests/office/malicious
+fwtool dump --model <workbook>
+```
+
+What the model keeps as written, so that what it writes equals the original after canonicalization:
+- **Around sheetData:** the rest of the worksheet part (sheet properties, views, columns, merges, conditional formats, hyperlinks, page setup, drawings, extensions) is kept as written and put back as it was. The model reads what it shows from it (views, columns, merges, hyperlinks, page setup, headers and footers, breaks); S2's editing writes those from the model.
+- **Inside sheetData**, besides what the model reads: unknown attributes of rows and cells, interned (`x14ac:dyDescent` is stored once, not once per row); a value whose text the model would write otherwise (`1E-3`, `01`, `true`, an error Excel doesn't know, a `t="d"` date); a cell's content when it isn't `f`, `v` and `is` in that order (rich inline strings, comments, unknown elements); comments, unknown elements and text between rows and cells; and rows and cells out of order, which the model can't store and keeps as written where they were.
+- **Shared strings:** `<si><t>text</t></si>` (with `xml:space="preserve"` or not) is stored as text; any other string (rich runs, phonetic text, attributes) keeps its XML, and the model reads its text and runs from it.
+- **The workbook part and the styles** are read into the model and, in re-serialize-all mode, go through the DOM like the other parts.
+
+**Re-serialize all: the exceptions.** None so far beyond the ones above for Word documents (parts that aren't XML, VML drawings, folder entries).
+
+Measured on 2026-11-16: the 9 workbooks in `generated`, `edge` and `broken`, 15 workbooks Excel wrote (chart data embedded in the private corpus's Word documents), and a generated 1-million-cell workbook: round trip, re-serialize all and `check --model` all pass.
+
 ## Editing torture test (D2)
 
 D2 is done when every corpus file, after scripted random edits and a save, has no new validator errors, passes `fwtool check`, and opens in Word without a repair prompt (plan §6.4). Three tools check that:

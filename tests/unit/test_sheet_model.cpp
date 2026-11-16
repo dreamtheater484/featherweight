@@ -1,6 +1,10 @@
 // The workbook model and its .xlsx reader and writer (S1, src/sheet/model and src/sheet/xlsx).
 #include "TestHarness.h"
 
+#include <charconv>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -8,6 +12,7 @@
 #include "PkgTestUtil.h"
 #include "pkg/Canonical.h"
 #include "sheet/model/Workbook.h"
+#include "sheet/xlsx/Internal.h"
 #include "sheet/xlsx/Xlsx.h"
 
 using namespace fw::sheet;
@@ -404,4 +409,82 @@ TEST(sheet_build_and_copy_on_write) {
   CHECK(snapshot.back().get() == s.Blocks().back().get());  // untouched blocks are shared
   CellInfo c;
   CHECK(s.GetCell(4, 0, c) && c.computed);
+}
+
+namespace {
+
+// tests/fuzz/seeds/xlsx/model-features-xlsx.txt: parts as text ("@name" lines), as fuzz_xlsx reads them.
+std::vector<std::pair<std::string, std::string>> SeedParts() {
+  const auto path = std::filesystem::path(__FILE__).parent_path().parent_path() / "fuzz" / "seeds" / "xlsx" / "model-features-xlsx.txt";
+  std::ifstream in(path, std::ios::binary);
+  std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  std::vector<std::pair<std::string, std::string>> parts;
+  size_t pos = 0;
+  while (pos < text.size() && text[pos] == '@') {
+    size_t eol = text.find('\n', pos);
+    size_t next = text.find("\n@", eol);
+    std::string name = text.substr(pos + 1, eol - pos - 1);
+    if (!name.empty() && name.back() == '\r') name.pop_back();
+    parts.push_back({name, text.substr(eol + 1, (next == std::string::npos ? text.size() : next) - eol - 1)});
+    pos = next == std::string::npos ? text.size() : next + 1;
+  }
+  return parts;
+}
+
+}  // namespace
+
+TEST(sheet_fuzz_seed) {
+  auto parts = SeedParts();
+  CHECK(parts.size() >= 8);
+  auto book = Open(parts);
+  if (!book) return;
+  CHECK_EQ(book->SheetCount(), 2u);
+  CHECK(book->GetSheet(1).State() == SheetState::Hidden);
+  CHECK(book->Calc().mode == CalcMode::Manual && book->Calc().iterate && book->Calc().iterateCount == 10);
+  const Sheet& s = book->GetSheet(0);
+  FormulaInfo f;
+  CHECK(s.GetFormula(3, 2, f) && f.kind == FormulaKind::DataTable && s.FormulaAttribute(f, "r1") == "A1");
+  CHECK(s.Hyperlinks().size() == 2 && s.Hyperlinks()[1].target == "https://example.com/");
+  CHECK(s.Columns().size() == 3 && s.Column(2).width == 9 && s.Column(3).width == 5);  // the later overlap gives way
+  CHECK(s.ColBreaks().size() == 1 && s.Page().pageOrder == PageOrder::OverThenDown && s.HeadersFooters().differentFirst);
+  CHECK(s.DrawingRelId() == "rId2" && s.LegacyDrawingRelId() == "rId3" && s.TableRelIds().size() == 1);
+  CHECK(s.Views().size() == 1 && s.Views()[0].rightToLeft && !s.Views()[0].showGridLines);
+  CHECK_EQ(s.GetValue(4, 3).number, 45351.5 - 1462);  // t="d" in the 1904 date system
+  CHECK(book->GetSheet(1).GetValue(1, 2).text == "x");  // x: prefixed SpreadsheetML
+  const Styles& st = book->GetStyles();
+  CHECK(st.Palette().size() == 2);
+  CHECK(st.CellXf(1).alignment.rotation == 255 && !st.CellXf(1).protection.locked && st.CellXf(1).quotePrefix);
+  CHECK(st.FillOf(st.CellXf(2)).gradient && st.FillOf(st.CellXf(2)).stops.size() == 2);
+  CHECK(st.BorderOf(st.CellXf(1)).left.style == BorderStyle::Thin && st.BorderOf(st.CellXf(1)).diagonalUp);
+  CheckRoundTrip(*book, parts);
+}
+
+TEST(sheet_number_styles) {
+  // How Excel 2021 wrote these (probed 2026-11-16), and how Python's repr and C's printf do: each
+  // is written back exactly from its number and a style, without keeping its text.
+  const char* texts[] = {"0.1", "4.4000000000000004", "8.1999999999999993", "0.33333333333333331", "0.5", "1.0000000000000001E-5",
+                         "1.4999999999999999E-7", "1E+20", "1.23456789012345E+19", "123456789012345", "100000", "1000000000000000",
+                         "1E+16", "-0.1", "0.30000000000000004", "3.1415899999999999", "2.5E-300", "1.7976931348623157E+308",
+                         "45351.5", "12345.678", "1.2300000000000001E-4", "1E-3", "1.23E-2", "9.9900000000000006E-3", "0.01",
+                         "1500000000000000", "1.1499999999999999", "100.1", "1e-05", "1e+16", "1.5e+20", "0.0001", "-2.5e-07",
+                         "1.18059162071741E+21"};
+  for (const char* t : texts) {
+    std::string_view s(t);
+    double v = 0;
+    std::from_chars(s.data(), s.data() + s.size(), v);
+    uint8_t style = 0xFF;
+    bool found = xlsx::NumberStyle(s, v, style);
+    if (!found) std::printf("    no style writes %s\n", t);
+    CHECK(found);
+    char buf[48];
+    CHECK(std::string_view(buf, xlsx::FormatNumber(v, style, buf)) == s);
+  }
+  uint8_t style = 0;
+  CHECK(!xlsx::NumberStyle("1.0", 1.0, style));
+  CHECK(!xlsx::NumberStyle("01", 1.0, style));
+  CHECK(!xlsx::NumberStyle("1E-03", 0.001, style));
+  char buf[48];
+  CHECK(std::string_view(buf, xlsx::FormatNumber(0, 0, buf)) == "0");
+  CHECK(std::string_view(buf, xlsx::FormatNumber(-1234.5, 0, buf)) == "-1234.5");
+  CHECK(std::string_view(buf, xlsx::FormatNumber(1e-300, 0, buf)) == "1e-300");
 }
