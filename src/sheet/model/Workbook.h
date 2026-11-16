@@ -118,6 +118,9 @@ class Workbook {
   const Sheet& GetSheet(size_t i) const { return *sheets_[i]; }
   // By name, without case (as Excel compares sheet names); -1 when there is none.
   int FindSheet(std::string_view name) const;
+  // A table by its name (displayName, without case), on any sheet; null when there is none. `sheet`
+  // receives the sheet's index.
+  const Table* FindTable(std::string_view name, size_t* sheet = nullptr) const;
   // The tab shown when the file opens, and the first tab the tab bar shows.
   uint32_t ActiveSheet() const { return activeSheet_; }
   uint32_t FirstVisibleTab() const { return firstTab_; }
@@ -189,6 +192,7 @@ class WorkbookLoader {
   static void SetSheetInfo(Sheet& s, SheetKind kind, SheetState state, uint32_t sheetId, std::string part,
                            std::string relId);
   static void MarkLoaded(Sheet& s, bool loaded);
+  static std::vector<Table>& Tables(Sheet& s);
 
  private:
   Workbook& b_;

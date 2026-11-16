@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string_view>
 #include <string>
 #include <utility>
 #include <vector>
@@ -78,11 +79,25 @@ struct Chart {
   float textSize = 10, titleSize = 14;  // points (unstated: Office 2007's 10)
   std::optional<draw::Color> textColor, titleColor;  // nullopt: black
   bool titleBold = true;
+  bool roundedCorners = false;  // the chart area's (c:roundedCorners; Excel rounds them when it's missing)
+};
+
+// Where a chart in a workbook reads its data: the cells its references (c:f) name, as they show,
+// rather than the values cached in the chart part (missing in files other programs write, stale
+// in some).
+class DataSource {
+ public:
+  virtual ~DataSource() = default;
+  // The cells of a reference ('Sheet 1'!$B$2:$B$7, or several areas in parentheses), in order:
+  // each one's text as shown (UTF-8) and its number (NaN when it isn't one); `format`, when not
+  // null, the first cell's number format code. False when it can't be resolved: the cache is used.
+  virtual bool Cells(std::string_view ref, std::vector<std::string>& texts, std::vector<double>& numbers,
+                     std::string* format) = 0;
 };
 
 // The chart a c:chartSpace holds; false when it holds nothing Featherweight draws. Colors are
-// resolved with `colors` (the document's theme).
-bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& out);
+// resolved with `colors` (the document's theme); `data`, when given, supplies the series' values.
+bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& out, DataSource* data = nullptr);
 // A number as an Excel format code shows it (the first section: decimals, thousands separators,
 // percent, literal text, dates); "General" or empty: up to 10 significant digits.
 std::wstring FormatNumber(double v, std::string_view code);

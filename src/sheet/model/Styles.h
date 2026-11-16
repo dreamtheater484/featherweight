@@ -122,6 +122,32 @@ struct Dxf {
   std::optional<Protection> protection;
 };
 
+// The parts of a table a table style formats (ST_TableStyleType), in the order Excel applies them:
+// where two set the same thing for a cell, the later one wins.
+enum class TableElement : uint8_t {
+  WholeTable, FirstColumnStripe, SecondColumnStripe, FirstRowStripe, SecondRowStripe, LastColumn, FirstColumn,
+  HeaderRow, TotalRow, FirstHeaderCell, LastHeaderCell, FirstTotalCell, LastTotalCell, Count
+};
+
+// What a table style sets for one element (a dxf in styles.xml). The borders are those of the
+// element's area: left, top, bottom and right on its edges, vertical and horizontal between its
+// cells (a stripe's area is one band of stripeSize rows or columns).
+struct TableStyleElement {
+  bool set = false;
+  Fill fill;  // pattern None and no gradient: none
+  Color fontColor;
+  std::optional<bool> bold, italic;
+  uint32_t stripeSize = 1;
+  BorderSide left, top, bottom, right, vertical, horizontal;
+};
+
+// A table style: one of Excel's built-in ones (TableStyleMedium2) or a workbook's own (tableStyles).
+struct TableStyle {
+  std::string name;
+  std::array<TableStyleElement, static_cast<size_t>(TableElement::Count)> elements;
+  const TableStyleElement& operator[](TableElement e) const { return elements[static_cast<size_t>(e)]; }
+};
+
 class Styles {
  public:
   Styles();
@@ -133,6 +159,10 @@ class Styles {
   const std::vector<Border>& Borders() const { return borders_; }
   const std::vector<CellStyle>& CellStyles() const { return cellStyles_; }
   const std::vector<Dxf>& Dxfs() const { return dxfs_; }
+  // The workbook's own table styles (tableStyles; TableStyles.h finds the built-in ones), and the
+  // one new tables get (defaultTableStyle; empty: TableStyleMedium2).
+  const std::vector<TableStyle>& TableStyles() const { return tableStyles_; }
+  const std::string& DefaultTableStyle() const { return defaultTableStyle_; }
 
   // The cell format at a style index; the first one (or a default) when the index is out of range.
   const Xf& CellXf(uint32_t style) const;
@@ -167,6 +197,8 @@ class Styles {
   std::vector<Border> borders_;
   std::vector<CellStyle> cellStyles_;
   std::vector<Dxf> dxfs_;
+  std::vector<TableStyle> tableStyles_;
+  std::string defaultTableStyle_;
   std::unordered_map<uint32_t, std::string> numFmts_;
   std::vector<uint32_t> palette_;  // empty: the default
   std::array<uint32_t, 12> theme_{};
@@ -183,6 +215,8 @@ class StylesBuilder {
   std::vector<Border>& Borders() { return s_.borders_; }
   std::vector<CellStyle>& CellStyles() { return s_.cellStyles_; }
   std::vector<Dxf>& Dxfs() { return s_.dxfs_; }
+  std::vector<TableStyle>& TableStyles() { return s_.tableStyles_; }
+  std::string& DefaultTableStyle() { return s_.defaultTableStyle_; }
   std::unordered_map<uint32_t, std::string>& NumFmts() { return s_.numFmts_; }
   std::vector<uint32_t>& Palette() { return s_.palette_; }
 

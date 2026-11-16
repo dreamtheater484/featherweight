@@ -149,6 +149,42 @@ struct PageBreak {
   bool manual = false, pivot = false;
 };
 
+// A table (ListObject, xl/tables/tableN.xml): a range with a header row, columns with names that
+// structured references use (Table1[Amount]), an optional total row, and a table style.
+struct TableColumn {
+  uint32_t id = 0;
+  std::string name;
+  std::string totalsFunction;  // totalsRowFunction: sum, average, count, countNums, max, min, stdDev, var, custom; empty: none
+  std::string totalsLabel;     // totalsRowLabel
+  std::string calculatedFormula, totalsFormula;  // calculatedColumnFormula, totalsRowFormula (invariant form)
+  int dataDxf = -1, headerDxf = -1, totalsDxf = -1;  // differential formats (Styles::Dxfs)
+};
+
+struct TableStyleInfo {
+  std::string name;  // TableStyleMedium2, a custom style's name, or empty: none
+  bool firstColumn = false, lastColumn = false, rowStripes = false, columnStripes = false;
+};
+
+struct Table {
+  uint32_t id = 0;
+  std::string name, displayName;  // structured references use displayName
+  std::string part;               // "/xl/tables/table1.xml"
+  Range ref;                      // the whole table, header and total rows included
+  uint32_t headerRows = 1, totalsRows = 0;
+  bool totalsRowShown = true;     // a total row was ever shown (totalsRowShown)
+  bool autoFilter = false;        // has filter buttons
+  std::vector<TableColumn> columns;  // left to right, one per column of `ref`
+  TableStyleInfo style;
+  int headerDxf = -1, dataDxf = -1, totalsDxf = -1;
+  // The data rows: `ref` without the header and total rows (empty when firstRow > lastRow).
+  Range Data() const {
+    return {ref.firstRow + headerRows, ref.firstCol, ref.lastRow >= totalsRows ? ref.lastRow - totalsRows : 0, ref.lastCol};
+  }
+  // A column by its name, without case (Table1[amount]): its index in `columns`, which is its
+  // offset from ref.firstCol; -1 when there's none.
+  int FindColumn(std::string_view columnName) const;
+};
+
 // sheetPr.
 struct SheetProps {
   Color tabColor;
@@ -320,6 +356,10 @@ class Sheet {
   const std::string& DrawingRelId() const { return drawingRel_; }
   const std::string& LegacyDrawingRelId() const { return legacyDrawingRel_; }
   const std::vector<std::string>& TableRelIds() const { return tableRels_; }
+  // The sheet's tables (read when the workbook opens, before the sheet itself), and the one that
+  // covers a cell (null when none does).
+  const std::vector<Table>& Tables() const { return tables_; }
+  const Table* TableAt(uint32_t row, uint32_t col) const;
 
   // ---- Changes
   // Sets a cell's value, keeping its format and formula: recalculated results (marked computed),
@@ -387,6 +427,7 @@ class Sheet {
   std::vector<PageBreak> rowBreaks_, colBreaks_;
   std::string drawingRel_, legacyDrawingRel_;
   std::vector<std::string> tableRels_;
+  std::vector<Table> tables_;
 };
 
 // Appends rows and cells to a sheet, in order: rows ascending, and cells within a row by column.
