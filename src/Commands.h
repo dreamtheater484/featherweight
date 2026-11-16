@@ -285,4 +285,10 @@ enum Cmd : int {
   CmdInsertCheckBox,
   CmdInsertDropDown,
   CmdInsertDatePicker,
+  // Spreadsheets (S1).
+  CmdPrintPreview = 1500,  // the workbook as it prints, page by page (and back to the grid)
+  CmdNextSheet,            // Ctrl+PgDn
+  CmdPrevSheet,            // Ctrl+PgUp
+  CmdSheetPick = 1520,     // + the sheet's index: the sheet tabs' list of every sheet
+  CmdSheetPickLast = 1999,
 };

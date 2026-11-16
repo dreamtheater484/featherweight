@@ -1,0 +1,313 @@
+#include "sheet/view/CellText.h"
+
+#include <algorithm>
+#include <cmath>
+
+#include "core/Strings.h"
+#include "text/Fonts.h"
+
+namespace fw::sheet::view {
+
+namespace {
+
+struct FitContext {
+  FontMeasure* measure;
+  const Font* font;
+  const Font* base;
+  int avail;  // pixels
+};
+
+// The width of a formatted value as the cell would show it: pads as wide as their characters,
+// fills at no width.
+int ShownWidth(FontMeasure& m, const Formatted& f, const Font& font, const Font& base) {
+  int w = m.Width(f.text, font, base);
+  if (!f.pads.empty()) {
+    const int space = m.Width(L" ", font, base);
+    for (const Formatted::Pad& p : f.pads) w += m.Width(std::wstring_view(&p.as, 1), font, base) - space;
+  }
+  return w;
+}
+
+bool Fits(void* context, const Formatted& f) {
+  auto* c = static_cast<FitContext*>(context);
+  return ShownWidth(*c->measure, f, *c->font, *c->base) <= c->avail;
+}
+
+// Excel indents by three spaces of the cell's font a level.
+int IndentPx(FontMeasure& m, const Xf& xf, const Font& font, const Font& base) {
+  return xf.alignment.indent ? xf.alignment.indent * 3 * m.Of(font, base).space : 0;
+}
+
+text::TextStyle StyleOf(const Font& f, const Font& base, double size) {
+  text::TextStyle s;
+  s.family = FontMeasure::Family(f, base);
+  s.size = static_cast<float>(size);
+  s.bold = f.bold;
+  s.italic = f.italic;
+  if (f.vertAlign == VertAlign::Superscript) s.verticalAlign = text::VerticalAlign::Superscript;
+  if (f.vertAlign == VertAlign::Subscript) s.verticalAlign = text::VerticalAlign::Subscript;
+  return s;
+}
+
+}  // namespace
+
+uint32_t FormatColor(const Styles& styles, int index) {
+  const std::vector<uint32_t>& palette = styles.Palette();
+  const size_t at = static_cast<size_t>(index) + 7;
+  const uint32_t rgb = at < palette.size() ? palette[at] : PaletteColor(index);
+  return 0xFF000000u | (rgb & 0xFFFFFF);
+}
+
+CellText::CellText(const Workbook& book, text::Fonts& fonts, FontMeasure& measure, const NumLocale& locale)
+    : book_(book), fonts_(fonts), measure_(measure), locale_(locale) {}
+
+const NumberFormat& CellText::FormatOf(uint32_t numFmtId) {
+  auto& slot = formats_[numFmtId];
+  if (!slot) {
+    const std::string_view code = book_.GetStyles().FormatCode(numFmtId);
+    slot = code.empty() ? std::make_unique<NumberFormat>(NumberFormat::Builtin(static_cast<int>(numFmtId), locale_))
+                        : std::make_unique<NumberFormat>(Utf8ToWide(code));
+  }
+  return *slot;
+}
+
+std::wstring CellText::Text(const Sheet&, const CellInfo& cell) {
+  const Styles& st = book_.GetStyles();
+  const Xf& xf = st.CellXf(cell.style);
+  Formatted f;
+  FormatContext ctx;
+  ctx.locale = &locale_;
+  ctx.date1904 = book_.Date1904();
+  switch (cell.value.type) {
+    case ValueType::Empty: return {};
+    case ValueType::Number: FormatOf(xf.numFmt).Format(cell.value.number, ctx, f); break;
+    case ValueType::String: {
+      const NumberFormat& nf = FormatOf(xf.numFmt);
+      if (nf.IsGeneral()) return Utf8ToWide(cell.value.text);
+      nf.Format(Utf8ToWide(cell.value.text), ctx, f);
+      break;
+    }
+    case ValueType::Bool: return cell.value.boolean ? L"TRUE" : L"FALSE";
+    case ValueType::Error: return Utf8ToWide(ErrorText(cell.value.error));
+  }
+  return f.overflow ? std::wstring() : f.text;
+}
+
+void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out) {
+  out = Shown{};
+  const Styles& st = book_.GetStyles();
+  const Xf& xf = st.CellXf(cell.style);
+  const Font& base = st.DefaultFont();
+  const Font& font = st.FontOf(xf);
+  const int avail = std::max(0, widthPx - 5 - IndentPx(measure_, xf, font, base));
+  FitContext fit{&measure_, &font, &base, avail};
+  FormatContext ctx;
+  ctx.locale = &locale_;
+  ctx.date1904 = book_.Date1904();
+  if (widthPx > 0) {
+    ctx.fits = &Fits;
+    ctx.fitsContext = &fit;
+  }
+  Formatted f;
+  switch (cell.value.type) {
+    case ValueType::Empty: return;
+    case ValueType::Number:
+      FormatOf(xf.numFmt).Format(cell.value.number, ctx, f);
+      out.number = true;
+      break;
+    case ValueType::String: {
+      const NumberFormat& nf = FormatOf(xf.numFmt);
+      if (nf.IsGeneral()) f.text = Utf8ToWide(cell.value.text);
+      else nf.Format(Utf8ToWide(cell.value.text), ctx, f);
+      break;
+    }
+    case ValueType::Bool:
+      f.text = cell.value.boolean ? L"TRUE" : L"FALSE";
+      out.center = true;
+      break;
+    case ValueType::Error:
+      f.text = Utf8ToWide(ErrorText(cell.value.error));
+      out.center = true;
+      break;
+  }
+  out.overflow = f.overflow;
+  if (f.color) out.color = FormatColor(st, f.color);
+  out.text = f.text;
+  out.hidden.assign(out.text.size(), 0);
+  // Pads: the character whose width the space takes, not drawn.
+  for (const Formatted::Pad& p : f.pads) {
+    if (p.at < out.text.size()) {
+      out.text[p.at] = p.as;
+      out.hidden[p.at] = 1;
+    }
+  }
+  // A fill repeats its character across what is left of the cell ("####" too).
+  if (f.fill >= 0 && widthPx > 0) {
+    const wchar_t ch = f.fillChar ? f.fillChar : L'#';
+    const int one = std::max(1, measure_.Width(std::wstring_view(&ch, 1), font, base));
+    const int used = f.overflow ? 0 : measure_.Width(out.text, font, base);
+    int n = std::max(0, (avail - used) / one);
+    if (f.overflow) n = std::max(n, 1);
+    const size_t at = std::min<size_t>(static_cast<size_t>(f.fill), out.text.size());
+    out.text.insert(at, static_cast<size_t>(n), ch);
+    out.hidden.insert(out.hidden.begin() + at, static_cast<size_t>(n), 0);
+  }
+}
+
+const CellText::Layout& CellText::Get(const Sheet& sheet, const CellInfo& cell, int widthPx) {
+  if (cacheSheet_ != &sheet) {
+    cache_.clear();
+    cacheSheet_ = &sheet;
+  }
+  if (cache_.size() > 40000) cache_.clear();
+  const uint64_t key = (static_cast<uint64_t>(cell.row) << 14) | cell.col;
+  auto& slot = cache_[key];
+  if (!slot) slot = std::make_unique<Layout>();
+  if (slot->widthPx != widthPx) Make(sheet, cell, widthPx, *slot);
+  return *slot;
+}
+
+void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, Layout& out) {
+  out = Layout{};
+  out.widthPx = widthPx;
+  Show(sheet, cell, widthPx, out.shown);
+  const Styles& st = book_.GetStyles();
+  const Xf& xf = st.CellXf(cell.style);
+  const Alignment& al = xf.alignment;
+  const Font& base = st.DefaultFont();
+  const Font& font = st.FontOf(xf);
+  const Shown& shown = out.shown;
+
+  out.align = al.horizontal;
+  if (out.align == HAlign::General) out.align = shown.number ? HAlign::Right : shown.center ? HAlign::Center : HAlign::Left;
+  out.stacked = al.rotation == 255;
+  out.wrapped = !shown.number && !out.stacked &&
+                (al.wrap || al.horizontal == HAlign::Justify || al.horizontal == HAlign::Distributed);
+  const FontMeasure::Info& info = measure_.Of(font, base);
+  out.ascent = info.ascent * 0.75f;
+  out.descent = info.descent * 0.75f;
+  out.pitch = info.rowHeight * 0.75f;
+  out.size = static_cast<float>(FontMeasure::Size(font, base));
+  if (shown.text.empty()) return;
+
+  // The text and its runs: the rich text of a shared string, or the shown text in the cell's
+  // font with its pads apart.
+  std::wstring textW;
+  std::vector<text::TextStyle> styles;
+  std::vector<uint32_t> lengths;
+  std::vector<Run> runs;
+  auto runFor = [&](const Font& f, bool hidden) {
+    Run r;
+    r.color = st.Resolve(f.color, 0xFF000000);
+    if (shown.color && !hidden) r.color = shown.color;
+    r.hidden = hidden;
+    r.underline = f.underline != Underline::None;
+    r.doubleUnderline = f.underline == Underline::Double || f.underline == Underline::DoubleAccounting;
+    r.strike = f.strike;
+    if (r.underline || r.strike) {
+      if (const text::Face* face = fonts_.FaceFor(FontMeasure::Family(f, base), f.bold, f.italic)) {
+        const text::FontMetrics m = face->Metrics(static_cast<float>(FontMeasure::Size(f, base)));
+        r.underlinePos = m.underlinePosition;
+        r.underlineThick = std::max(m.underlineThickness, 0.5f);
+        r.strikePos = m.strikethroughPosition;
+        r.strikeThick = std::max(m.strikethroughThickness, 0.5f);
+      }
+    }
+    return r;
+  };
+  const bool rich = cell.sharedString != kNone && cell.value.type == ValueType::String && !out.stacked &&
+                    FormatOf(xf.numFmt).IsGeneral() && !book_.Strings().Runs(cell.sharedString).empty();
+  if (rich) {
+    const std::string_view utf8 = cell.value.text;
+    const auto rr = book_.Strings().Runs(cell.sharedString);
+    const std::vector<Font>& fonts = book_.Strings().Fonts();
+    auto add = [&](size_t from, size_t to, uint32_t fontIndex) {
+      if (to <= from) return;
+      Font f = font;
+      if (fontIndex != kNone && fontIndex < fonts.size()) {
+        const Font& r = fonts[fontIndex];
+        f = r;
+        if (f.name.empty()) f.name = font.name;
+        if (f.size <= 0) f.size = font.size;
+        if (!f.color.IsSet()) f.color = font.color;
+      }
+      const std::wstring part = Utf8ToWide(utf8.substr(from, to - from));
+      textW += part;
+      lengths.push_back(static_cast<uint32_t>(part.size()));
+      styles.push_back(StyleOf(f, base, FontMeasure::Size(f, base)));
+      runs.push_back(runFor(f, false));
+    };
+    if (rr.front().start > 0) add(0, std::min<size_t>(rr.front().start, utf8.size()), kNone);
+    for (size_t i = 0; i < rr.size(); ++i) {
+      const size_t from = std::min<size_t>(rr[i].start, utf8.size());
+      const size_t to = i + 1 < rr.size() ? std::min<size_t>(rr[i + 1].start, utf8.size()) : utf8.size();
+      add(from, to, rr[i].font);
+    }
+  }
+  if (textW.empty()) {
+    styles.clear();
+    lengths.clear();
+    runs.clear();
+    textW = shown.text;
+    const text::TextStyle s = StyleOf(font, base, out.size);
+    size_t i = 0;
+    while (i < textW.size()) {
+      const uint8_t hidden = shown.hidden[i];
+      size_t j = i;
+      while (j < textW.size() && shown.hidden[j] == hidden) ++j;
+      styles.push_back(s);
+      lengths.push_back(static_cast<uint32_t>(j - i));
+      runs.push_back(runFor(font, hidden != 0));
+      i = j;
+    }
+  }
+  // Line breaks show only in wrapped cells; a carriage return never does.
+  for (wchar_t& c : textW) {
+    if (c == L'\r' || (!out.wrapped && c == L'\n')) c = 0x200B;
+  }
+  if (out.stacked) {
+    // One character a line, top to bottom.
+    std::wstring s;
+    std::vector<uint32_t> lens;
+    for (size_t r = 0, at = 0; r < lengths.size(); at += lengths[r], ++r) {
+      uint32_t n = 0;
+      for (uint32_t k = 0; k < lengths[r]; ++k) {
+        if (!s.empty()) {
+          s += L'\n';
+          ++n;
+        }
+        s += textW[at + k];
+        ++n;
+      }
+      lens.push_back(n);
+    }
+    textW = std::move(s);
+    lengths = std::move(lens);
+  }
+
+  text::Paragraph para;
+  para.text = textW;
+  for (size_t i = 0; i < lengths.size(); ++i) para.runs.push_back({lengths[i], &styles[i]});
+  para.markStyle = &styles.front();
+  float width = 1e6f;
+  if (out.wrapped) {
+    const int avail = std::max(1, widthPx - 5 - IndentPx(measure_, xf, font, base));
+    width = avail * 0.75f;
+    switch (out.align) {
+      case HAlign::Center: para.format.alignment = text::Alignment::Center; break;
+      case HAlign::Right: para.format.alignment = text::Alignment::End; break;
+      case HAlign::Justify: para.format.alignment = text::Alignment::Justify; break;
+      case HAlign::Distributed: para.format.alignment = text::Alignment::Distribute; break;
+      default: break;
+    }
+  } else if (out.stacked) {
+    para.format.alignment = text::Alignment::Center;
+    width = 0;
+    for (const text::TextStyle& s : styles) width = std::max(width, s.size * 2);
+  }
+  out.lines = text::Layout(fonts_, para, width);
+  out.runs = std::move(runs);
+  for (const text::Line& l : out.lines) out.width = std::max(out.width, l.contentRight - l.contentLeft);
+}
+
+}  // namespace fw::sheet::view

@@ -8,3 +8,4 @@ target_compile_options(fwsheet PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,
 add_subdirectory(model)
 add_subdirectory(xlsx)
 add_subdirectory(numfmt)
+add_subdirectory(view)
