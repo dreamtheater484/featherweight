@@ -12,6 +12,8 @@ import os, sys
 import pythoncom, win32api, win32con, win32event, win32process
 import win32com.client
 
+from excel_common import scrub_author
+
 ELEMENTS = ["wholeTable", "headerRow", "totalRow", "firstColumn", "lastColumn", "firstRowStripe", "secondRowStripe",
             "firstColumnStripe", "secondColumnStripe", "firstHeaderCell", "lastHeaderCell", "firstTotalCell", "lastTotalCell"]
 BORDERS = [7, 8, 9, 10, 11, 12]  # xlEdgeLeft, Top, Bottom, Right, xlInsideVertical, Horizontal
@@ -140,6 +142,8 @@ def main(out_xlsx, out_inc, everything):
                 win32api.CloseHandle(h)
             except Exception:
                 pass
+
+    scrub_author(out_xlsx)
 
     def hx(v):
         return "-1" if v < 0 else "0x%06X" % v

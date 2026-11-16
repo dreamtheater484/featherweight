@@ -79,6 +79,7 @@ struct Chart {
   float textSize = 10, titleSize = 14;  // points (unstated: Office 2007's 10)
   std::optional<draw::Color> textColor, titleColor;  // nullopt: black
   bool titleBold = true;
+  bool roundedCorners = false;  // the chart area's (c:roundedCorners; Excel rounds them when it's missing)
 };
 
 // Where a chart in a workbook reads its data: the cells its references (c:f) name, as they show,

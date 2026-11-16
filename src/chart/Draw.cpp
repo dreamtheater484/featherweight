@@ -885,7 +885,8 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
   if (!(W >= 1 && H >= 1 && W < 20000 && H < 20000) || ch.groups.empty()) return b.Take();
   const Color text = ch.textColor.value_or(kText);
   const float ts = std::clamp(ch.textSize, 1.0f, 72.0f), tts = std::clamp(ch.titleSize, 1.0f, 96.0f);
-  b.Mark(Path::FromRect({0, 0, W, H}), ch.area, kWhite, kGray, 0.75f);
+  const float corner = ch.roundedCorners ? std::min(10.0f, std::min(W, H) / 6) : 0;
+  b.Mark(corner > 0 ? Path::RoundedRect({0, 0, W, H}, corner, corner) : Path::FromRect({0, 0, W, H}), ch.area, kWhite, kGray, 0.75f);
   Rect r{7, 7, W - 7, H - 7};
   if (!ch.title.empty()) {
     b.Place(b.Text(ch.title, tts, ch.titleBold), W / 2, r.top + tts * 0.95f, 1, ch.titleColor.value_or(kText));

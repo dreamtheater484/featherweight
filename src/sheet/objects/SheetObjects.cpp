@@ -1,6 +1,7 @@
 #include "sheet/objects/SheetObjects.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <unordered_map>
 
@@ -472,7 +473,10 @@ bool ReadVmlNote(pugi::xml_node shape, VmlNote& out) {
   int n = 0;
   while (n < 8 && !a.empty()) {
     const size_t comma = a.find(',');
-    v[n++] = std::clamp(Number(a.substr(0, comma), 0), 0.0, 1e7);
+    std::string_view part = a.substr(0, comma);
+    while (!part.empty() && std::isspace(static_cast<unsigned char>(part.front()))) part.remove_prefix(1);
+    while (!part.empty() && std::isspace(static_cast<unsigned char>(part.back()))) part.remove_suffix(1);
+    v[n++] = std::clamp(Number(part, 0), 0.0, 1e7);
     a = comma == std::string_view::npos ? std::string_view() : a.substr(comma + 1);
   }
   if (n == 8) {
@@ -486,12 +490,28 @@ bool ReadVmlNote(pugi::xml_node shape, VmlNote& out) {
   return true;
 }
 
-// Shown or not, a note draws: its style's visibility:hidden goes (in this copy of the part).
-void Unhide(pugi::xml_node shape) {
+// Excel's note colors name its palette's tooltip entries: "infoBackground [80]" for the fill,
+// "none [81]" or "infoText [81]" for the outline and shadow. As plain colors for fwdraw.
+void PlainColor(pugi::xml_attribute a) {
+  const std::string_view v = a.value();
+  if (v.ends_with("[80]")) a.set_value("#ffffe1");
+  else if (v.ends_with("[81]")) a.set_value("black");
+}
+
+// Shown or not, a note draws: its style's visibility:hidden goes (in this copy of the part), and
+// its colors are made plain.
+void Prepare(pugi::xml_node shape) {
   pugi::xml_attribute style = shape.attribute("style");
   std::string s = style.value();
   for (size_t at; (at = s.find("visibility:hidden")) != std::string::npos;) s.replace(at, 17, "visibility:visible");
   style.set_value(s.c_str());
+  PlainColor(shape.attribute("fillcolor"));
+  PlainColor(shape.attribute("strokecolor"));
+  for (pugi::xml_node c = shape.first_child(); c; c = c.next_sibling())
+    if (NamespaceOf(c) == kV) {
+      PlainColor(c.attribute("color"));
+      PlainColor(c.attribute("color2"));
+    }
 }
 
 void TriangleAt(draw::Painter& painter, const draw::Rect& cell, draw::Color color) {
@@ -598,7 +618,7 @@ void SheetObjects::ReadNotes() {
         n.shown = b->second.shown;
         d.anchored = b->second.anchored;
         d.anchor = b->second.anchor;
-        Unhide(b->second.shape);
+        Prepare(b->second.shape);
         d.box = draw::Drawing::FromVml(b->second.shape, *m.vmlResources);
         if (d.box) d.styleRect = d.box->Bounds();
       }

@@ -26,7 +26,7 @@ using namespace fw::sheet;
 namespace {
 
 std::unique_ptr<Workbook> OpenSheetFile(const char* name) {
-  const auto path = std::filesystem::path(__FILE__).parent_path().parent_path() / "office" / "sheet" / name;
+  const auto path = std::filesystem::path(__FILE__).parent_path().parent_path() / name;
   std::ifstream in(path, std::ios::binary);
   std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
   fw::pkg::Status st;
@@ -80,7 +80,7 @@ TEST(sheet_objects_render) {
   wchar_t dir[MAX_PATH];
   if (!GetEnvironmentVariableW(L"FW_SHEET_PNG", dir, MAX_PATH)) return;
   fw::chart::Install();
-  for (const char* name : {"charts.xlsx", "notes.xlsx", "pictures-shapes.xlsx"}) {
+  for (const char* name : {"office/sheet/charts.xlsx", "office/sheet/notes.xlsx", "office/sheet/pictures-shapes.xlsx", "sheet/objects.xlsx"}) {
     auto book = OpenSheetFile(name);
     if (!book) continue;
     for (size_t i = 0; i < book->SheetCount(); ++i) {
@@ -105,7 +105,7 @@ TEST(sheet_objects_render) {
 }
 
 TEST(sheet_objects_pictures) {
-  auto book = OpenSheetFile("pictures-shapes.xlsx");
+  auto book = OpenSheetFile("office/sheet/pictures-shapes.xlsx");
   if (!book) return;
   auto objects = SheetObjects::Load(*book, 0);
   GridLayout layout;
@@ -129,7 +129,7 @@ TEST(sheet_objects_pictures) {
 
 TEST(sheet_objects_charts) {
   fw::chart::Install();
-  auto book = OpenSheetFile("charts.xlsx");
+  auto book = OpenSheetFile("office/sheet/charts.xlsx");
   if (!book) return;
   // The charts' data comes from the cells (the file caches none).
   objects::WorkbookData data(*book, 0);
@@ -184,7 +184,7 @@ TEST(sheet_objects_charts) {
 }
 
 TEST(sheet_objects_notes) {
-  auto book = OpenSheetFile("notes.xlsx");
+  auto book = OpenSheetFile("office/sheet/notes.xlsx");
   if (!book) return;
   auto notes = SheetObjects::Load(*book, 0);
   CHECK(notes->Notes().size() == 4);
@@ -222,4 +222,43 @@ TEST(sheet_objects_notes) {
     }
     CHECK(card.End());
   }
+}
+
+// tests/sheet/objects.xlsx, as Excel writes shapes, text boxes, connectors, groups, pictures, a
+// combo chart, a chart sheet and a shown note (tests/sheet/excel_objects.py).
+TEST(sheet_objects_excel) {
+  fw::chart::Install();
+  auto book = OpenSheetFile("sheet/objects.xlsx");
+  if (!book) return;
+  const int sheet = book->FindSheet("Objects"), charts = book->FindSheet("Chart sheet");
+  CHECK(sheet >= 0 && charts >= 0);
+  if (sheet < 0 || charts < 0) return;
+  auto objects = SheetObjects::Load(*book, static_cast<size_t>(sheet));
+  DefaultLayout layout;
+  objects->Place(layout);
+  const auto placed = objects->Objects();
+  auto find = [&](const char* name) -> const SheetObjects::Object* {
+    for (const auto& o : placed)
+      if (o.name == name) return &o;
+    return nullptr;
+  };
+  for (const char* name : {"Rectangle text", "Rounded bold", "Text box", "Arrow", "Rotated", "Group", "Picture"})
+    CHECK(find(name) != nullptr);
+  size_t chartCount = 0;
+  for (const auto& o : placed) chartCount += o.chart ? 1 : 0;
+  CHECK_EQ(chartCount, 2u);
+  if (const auto* r = find("Rectangle text")) CHECK(Close(r->rect, 300, 20, 420, 70));
+  const CellNote* shown = objects->NoteAt(9, 5);
+  CHECK(shown && shown->shown && shown->text == L"Excel: a note that stays shown.");
+  CHECK(objects->NoteAt(13, 5) && !objects->NoteAt(13, 5)->shown);
+  drawtest::Surface s(700, 480);
+  {
+    draw::D2DPainter p(s.dc.Get());
+    objects->Draw(p, {0, 0, 700, 480}, {});
+  }
+  CHECK(s.End());
+  CHECK(s.At(380, 180) == 0xFFFFE1);                                       // the shown note, over the group
+  CHECK(drawtest::Blue(s.At(310, 60)) > 150 && drawtest::Red(s.At(310, 60)) < 120);  // the blue rectangle
+  auto chartSheet = SheetObjects::Load(*book, static_cast<size_t>(charts));
+  CHECK(chartSheet->IsChartSheet());
 }

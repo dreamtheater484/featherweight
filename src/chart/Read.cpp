@@ -241,6 +241,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
   pugi::xml_node plot = C(chart, "plotArea");
   if (!plot) return false;
   out.area = LookOf(C(chartSpace, "spPr"), colors);
+  out.roundedCorners = On(chartSpace, "roundedCorners", true);
   out.plot = LookOf(C(plot, "spPr"), colors);
   float size = -1;  // stated by the chart, or else (below) by its axes or legend
   TextLook(C(chartSpace, "txPr"), colors, &size, &out.textColor);
