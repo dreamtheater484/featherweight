@@ -52,8 +52,8 @@ LineKind KindOf(BorderStyle s) {
   switch (s) {
     case BorderStyle::Hair: return {1, false, {}, 0};
     case BorderStyle::Dotted: return {1, false, {1, 1}, 1};
-    case BorderStyle::DashDotDot: return {1, false, {3, 1, 1, 1, 1, 1}, 2};
-    case BorderStyle::DashDot: return {1, false, {3, 1, 1, 1}, 3};
+    case BorderStyle::DashDotDot: return {1, false, {9, 3, 3, 3, 3, 3}, 2};
+    case BorderStyle::DashDot: return {1, false, {9, 3, 3, 3}, 3};
     case BorderStyle::Dashed: return {1, false, {3, 1}, 4};
     case BorderStyle::Thin: return {1, false, {}, 5};
     case BorderStyle::MediumDashDotDot: return {2, false, {9, 3, 3, 3, 3, 3}, 6};
@@ -66,6 +66,8 @@ LineKind KindOf(BorderStyle s) {
     default: return {0, false, {}, -1};
   }
 }
+
+constexpr float kPrintHair = 0.2f;  // points: printed gridlines and hair borders
 
 struct Segment {
   float a0, a1;   // along the line
@@ -232,7 +234,7 @@ class Painting {
     it.clip = it.box;
     uint32_t first = cell.col, last = cell.col;
     const float need = l.width * g_.pt + 2 * pad + Indent(xf);
-    const bool runs = !l.wrapped && !l.stacked && !l.shown.number && xf.alignment.rotation == 0 &&
+    const bool runs = !l.wrapped && !l.stacked && !l.shown.number && !l.shown.fill && xf.alignment.rotation == 0 &&
                       !xf.alignment.shrinkToFit && l.align != HAlign::Fill && l.align != HAlign::Justify &&
                       l.align != HAlign::Distributed;
     auto grow = [&](int dir, float want) {  // into empty neighbors, visually right (+1) or left (-1)
@@ -300,6 +302,7 @@ class Painting {
       if (l.width * s > avail && l.width > 0) scale = std::max(0.1f, avail / (l.width * s));
     }
     const float boxH = it.box.bottom - it.box.top;
+    (void)boxH;
     p_.Save();
     p_.ClipRect(it.clip);
     const bool rotated = al.rotation != 0 && al.rotation != 255;
@@ -325,21 +328,24 @@ class Painting {
       }
       p_.Transform(draw::Matrix::Translate(-l.width / 2, -(blockH / 2 - l.ascent)) * draw::Matrix::Rotate(static_cast<float>(-deg)) *
                    draw::Matrix::Scale(s, s) * draw::Matrix::Translate(cx, cy));
-      DrawLines(l, 0, nullptr);
+      DrawLines(l, 0, l.pitch);
       p_.Restore();
       return;
     }
-    // Vertical placement of the block.
-    const float h = blockH * s * scale;
-    float top;
+    // Vertical placement in Excel's pixels, as the screen lays it out: the first line's ascent and
+    // descent and the lines' pitch (printing scales rows, and these with them).
+    const float a = l.ascent / 0.75f * scale, d = l.descent / 0.75f * scale, pitch = l.pitch / 0.75f * scale;
+    const float rp = g_.rowPx;
+    const float blockPx = a + d + (n > 1 ? (n - 1) * pitch : 0);
+    float baseline;
     switch (al.vertical) {
       case VAlign::Top:
       case VAlign::Justify:
-      case VAlign::Distributed: top = it.box.top + g_.px; break;
-      case VAlign::Center: top = it.box.top + (boxH - h) / 2; break;
-      default: top = it.box.bottom - g_.px - h; break;
+      case VAlign::Distributed: baseline = it.box.top + (1 + a) * rp; break;
+      case VAlign::Center: baseline = it.box.top + ((boxH / rp - blockPx) / 2 + a) * rp; break;
+      default: baseline = it.box.bottom - (d + (n > 1 ? (n - 1) * pitch : 0)) * rp; break;
     }
-    const float baseline = top + l.ascent * s * scale;
+    const float pitchText = pitch * rp / (s * scale);
     float x = it.x;
     if (scale != 1 && !l.wrapped) {
       const float w = l.width * s * scale;
@@ -358,19 +364,19 @@ class Painting {
       for (int i = 0; i < times; ++i) {
         p_.Save();
         p_.Transform(draw::Matrix::Scale(s, s) * draw::Matrix::Translate(it.box.left + 2 * g_.px + i * w, baseline));
-        DrawLines(l, 0, nullptr);
+        DrawLines(l, 0, pitchText);
         p_.Restore();
       }
       p_.Restore();
       return;
     }
     p_.Transform(draw::Matrix::Scale(s * scale, s * scale) * draw::Matrix::Translate(x, baseline));
-    DrawLines(l, l.wrapped || l.stacked ? 0 : 1, nullptr);
+    DrawLines(l, l.wrapped || l.stacked ? 0 : 1, pitchText);
     p_.Restore();
   }
 
   // The lines in text space: x in points from the text's left edge, y from the first baseline.
-  void DrawLines(const CellText::Layout& l, int fromContent, void*) {
+  void DrawLines(const CellText::Layout& l, int fromContent, float pitch) {
     float y = 0;
     for (const text::Line& line : l.lines) {
       const float dx = fromContent ? -line.contentLeft : 0;
@@ -401,7 +407,7 @@ class Painting {
           p_.FillRect({piece.x + dx, sy, piece.x + dx + piece.width, sy + run->strikeThick}, brush);
         }
       }
-      y += l.pitch;
+      y += pitch;
     }
   }
 
@@ -409,18 +415,21 @@ class Painting {
   void Gridlines() {
     const draw::Color c = ToColor(o_.gridColor);
     const float L = g_.line;
+    // The line's width, how far it starts before the edge and runs past it.
+    const float w = g_.centered ? kPrintHair * g_.pt : L, before = g_.centered ? w / 2 : L, after = w - before;
     // Horizontal: each row's bottom.
     for (const RowData& rd : rows_) {
-      const float y = g_.Bottom(rd.row) - L;
+      const float y = g_.Bottom(rd.row) - before;
       float runStart = 0, runEnd = 0;
       bool open = false;
       for (size_t i = 0; i < cols_.size(); ++i) {
         const uint32_t col = cols_[i];
         const Range* m = MergeAt(rd.row, col);
         const bool skip = m && rd.row < m->lastRow;
-        const float l = g_.Left(col) - (g_.rtl ? 0 : L), r = g_.Right(col) + (g_.rtl ? L : 0);
+        const float l = g_.Left(col) - (g_.centered ? before : g_.rtl ? 0 : L);
+        const float r = g_.Right(col) + (g_.centered ? after : g_.rtl ? L : 0);
         if (skip) {
-          if (open) Rect(runStart, y, runEnd, y + L, c);
+          if (open) Rect(runStart, y, runEnd, y + w, c);
           open = false;
           continue;
         }
@@ -428,39 +437,41 @@ class Painting {
           runStart = std::min(runStart, l);
           runEnd = std::max(runEnd, r);
         } else {
-          if (open) Rect(runStart, y, runEnd, y + L, c);
+          if (open) Rect(runStart, y, runEnd, y + w, c);
           runStart = l;
           runEnd = r;
           open = true;
         }
       }
-      if (open) Rect(runStart, y, runEnd, y + L, c);
+      if (open) Rect(runStart, y, runEnd, y + w, c);
     }
     // Vertical: each column's trailing edge.
     for (size_t i = 0; i < cols_.size(); ++i) {
       const uint32_t col = cols_[i];
-      const float x = g_.rtl ? g_.Left(col) : g_.Right(col) - L;
+      const float x = g_.centered ? (g_.rtl ? g_.Left(col) : g_.Right(col)) - before
+                      : g_.rtl     ? g_.Left(col)
+                                   : g_.Right(col) - L;
       float runTop = 0, runBottom = 0;
       bool open = false;
       for (const RowData& rd : rows_) {
         const Range* m = MergeAt(rd.row, col);
         const bool skip = (m && col < m->lastCol) || rd.SpanCrosses(col, col + 1);
         if (skip) {
-          if (open) Rect(x, runTop, x + L, runBottom, c);
+          if (open) Rect(x, runTop, x + w, runBottom, c);
           open = false;
           continue;
         }
-        const float t = g_.Top(rd.row) - L, b = g_.Bottom(rd.row);
-        if (open && std::fabs(t + L - runBottom) < 0.5f) {
+        const float t = g_.Top(rd.row) - before, b = g_.Bottom(rd.row) + after;
+        if (open && std::fabs(t + w - runBottom) < 0.5f) {
           runBottom = b;
         } else {
-          if (open) Rect(x, runTop, x + L, runBottom, c);
+          if (open) Rect(x, runTop, x + w, runBottom, c);
           runTop = t;
           runBottom = b;
           open = true;
         }
       }
-      if (open) Rect(x, runTop, x + L, runBottom, c);
+      if (open) Rect(x, runTop, x + w, runBottom, c);
     }
   }
 
@@ -525,7 +536,7 @@ class Painting {
   void Borders() {
     std::vector<Segment> segs;
     std::vector<std::pair<draw::Rect, std::pair<const Border*, uint32_t>>> diagonals;
-    const float L = g_.line;
+    const float L = g_.centered ? 0 : g_.line;
     for (const RowData& rd : rows_) {
       for (size_t i = 0; i < cols_.size(); ++i) {
         const uint32_t col = cols_[i];
@@ -583,7 +594,7 @@ class Painting {
       const LineKind k = KindOf(d.first->diagonal.style);
       draw::Pen pen;
       pen.brush = draw::Brush::Solid(ToColor(d.second));
-      pen.width = std::max(L, k.width * g_.px);
+      pen.width = g_.centered ? k.width * g_.pt : std::max(g_.line, k.width * g_.px);
       if (d.first->diagonalDown) {
         draw::Path path;
         path.MoveTo({r.left, r.top});
@@ -604,9 +615,23 @@ class Painting {
     if (k.width <= 0) return;
     const float L = g_.line;
     const draw::Color c = ToColor(s.color);
-    // Across the line: centered on the gridline's pixel, which is the last of the cell before it.
     std::vector<std::pair<float, float>> bands;
-    if (k.doubled) {
+    float a0 = s.a0, a1 = s.a1;
+    std::vector<int> dashes = k.dashes;
+    float unit = std::max(L, g_.px);
+    if (g_.centered) {
+      // Paper: centred on the edge, a point a pixel; hair a hairline, dots solid (as Excel prints).
+      const float U = g_.pt;
+      const float w = s.style == BorderStyle::Hair ? kPrintHair * U : (k.doubled ? 3 : k.width) * U;
+      const float lo = s.b - w / 2;
+      if (k.doubled) bands = {{lo, lo + U}, {lo + 2 * U, lo + 3 * U}};
+      else bands = {{lo, lo + w}};
+      a0 -= w / 2;
+      a1 += w / 2;
+      if (s.style == BorderStyle::Dotted) dashes.clear();
+      unit = U;
+    } else if (k.doubled) {
+      // Across the line: centered on the gridline's pixel, which is the last of the cell before it.
       bands = {{s.b - 2 * L, s.b - L}, {s.b, s.b + L}};
     } else {
       const float lo = s.b - L * static_cast<float>((k.width + 1) / 2);
@@ -618,16 +643,15 @@ class Painting {
         else Rect(a0, b0, a1, b1, c);
       }
     };
-    if (k.dashes.empty()) {
-      put(s.a0, s.a1);
+    if (dashes.empty()) {
+      put(a0, a1);
       return;
     }
-    const float unit = std::max(L, g_.px);
-    float a = s.a0;
+    float a = a0;
     size_t i = 0;
-    while (a < s.a1) {
-      const float len = k.dashes[i % k.dashes.size()] * unit;
-      if (i % 2 == 0) put(a, std::min(a + len, s.a1));
+    while (a < a1) {
+      const float len = dashes[i % dashes.size()] * unit;
+      if (i % 2 == 0) put(a, std::min(a + len, a1));
       a += len;
       ++i;
     }

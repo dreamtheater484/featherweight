@@ -131,6 +131,7 @@ void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out)
       break;
   }
   out.overflow = f.overflow;
+  out.fill = f.fill >= 0;
   if (f.color) out.color = FormatColor(st, f.color);
   out.text = f.text;
   out.hidden.assign(out.text.size(), 0);

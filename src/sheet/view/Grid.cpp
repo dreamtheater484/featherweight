@@ -59,12 +59,25 @@ FontMeasure::Face& FontMeasure::Get(const Font& f, const Font& base) {
 
 const FontMeasure::Info& FontMeasure::Of(const Font& f, const Font& base) { return Get(f, base).info; }
 
-double FontMeasure::IdealDigit(const Font& f, const Font& base) {
+int FontMeasure::DigitAt(const Font& f, const Font& base, int dpi) {
+  const int ppem = std::max(1, static_cast<int>(std::lround(Size(f, base) * dpi / 72.0)));
   const text::Face* face = fonts_.FaceFor(Family(f, base), f.bold, f.italic);
-  const float size = static_cast<float>(Size(f, base));
-  double widest = 0;
-  for (wchar_t d = L'0'; d <= L'9'; ++d) widest = std::max(widest, static_cast<double>(face ? face->Advance(d, size) : 0));
-  return widest > 0 ? widest : Of(f, base).digit * 0.75;
+  int widest = 0;
+  if (face) {
+    IDWriteFontFace* dw = face->Get();
+    DWRITE_FONT_METRICS fm{};
+    dw->GetMetrics(&fm);
+    const float upem = fm.designUnitsPerEm ? static_cast<float>(fm.designUnitsPerEm) : 2048.f;
+    UINT32 cps[10];
+    UINT16 glyphs[10];
+    DWRITE_GLYPH_METRICS gm[10];
+    for (int i = 0; i < 10; ++i) cps[i] = L'0' + i;
+    if (SUCCEEDED(dw->GetGlyphIndices(cps, 10, glyphs)) &&
+        SUCCEEDED(dw->GetGdiCompatibleGlyphMetrics(static_cast<float>(ppem), 1, nullptr, FALSE, glyphs, 10, gm, FALSE)))
+      for (int i = 0; i < 10; ++i)
+        if (glyphs[i]) widest = std::max(widest, static_cast<int>(std::lround(gm[i].advanceWidth * ppem / upem)));
+  }
+  return widest > 0 ? widest : static_cast<int>(std::lround(Of(f, base).digit * dpi / 96.0));
 }
 
 int FontMeasure::Width(std::wstring_view text, const Font& f, const Font& base) {
@@ -141,7 +154,8 @@ void Grid::Build(const Sheet& sheet, const Styles& styles, FontMeasure& measure)
   const Font& base = styles.DefaultFont();
   const FontMeasure::Info& def = measure.Of(base, base);
   mdw_ = def.digit;
-  printColPt_ = measure.IdealDigit(base, base) / mdw_;
+  printDigit_ = measure.DigitAt(base, base, kPrintDpi);
+  printColPt_ = printDigit_ * 72.0 / kPrintDpi * kPrintStretch / mdw_;
   const SheetFormat& fmt = sheet.Format();
 
   // Columns.
@@ -162,7 +176,8 @@ void Grid::Build(const Sheet& sheet, const Styles& styles, FontMeasure& measure)
     }
   }
   colLeft_.assign(kMaxCols + 1, 0);
-  for (uint32_t i = 0; i < kMaxCols; ++i) colLeft_[i + 1] = colLeft_[i] + colPx_[i];
+  colPrint_.assign(kMaxCols + 1, 0);
+  Lefts(0);
 
   // Rows: the sheet's default height, unless it is custom then Excel's for the default font.
   defaultRow_ = fmt.customHeight ? static_cast<int>(std::lround(fmt.defaultRowHeight * 96.0 / 72.0)) : def.rowHeight;
@@ -315,7 +330,25 @@ void Grid::SetRowsHidden(uint32_t first, uint32_t last, bool hidden) {
 void Grid::SetColsHidden(uint32_t first, uint32_t last, bool hidden) {
   last = std::min(last, kMaxCols - 1);
   for (uint32_t c = first; c <= last; ++c) colPx_[c] = hidden ? 0 : colStored_[c];
-  for (uint32_t i = first; i < kMaxCols; ++i) colLeft_[i + 1] = colLeft_[i] + colPx_[i];
+  Lefts(first);
+}
+
+void Grid::Lefts(uint32_t from) {
+  int px = -1;
+  double dots = 0;
+  for (uint32_t i = from; i < kMaxCols; ++i) {
+    if (colPx_[i] != px) dots = PrintDots(px = colPx_[i]);
+    colLeft_[i + 1] = colLeft_[i] + px;
+    colPrint_[i + 1] = colPrint_[i] + dots;
+  }
+}
+
+double Grid::PrintDots(int px) const {
+  if (px <= 0) return 0;
+  // The column's characters, as Excel counts them from its pixels: (px - 5) / digit, or under one
+  // character px / (digit + 5); then the same characters in the printer's digit and padding.
+  if (px < mdw_ + 5) return px * (printDigit_ + kPrintPad) / (mdw_ + 5);
+  return (px - 5.0) / mdw_ * printDigit_ + kPrintPad;
 }
 
 }  // namespace fw::sheet::view

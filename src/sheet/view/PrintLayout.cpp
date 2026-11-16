@@ -20,6 +20,8 @@ class PageGeometry : public Geometry {
     px = 0.75f;
     line = 0.75f;
     widthScale = static_cast<float>(grid.PrintColPt() / 0.75);
+    rowPx = static_cast<float>(Grid::kPrintRowPt);
+    centered = true;
   }
   float Left(uint32_t c) const override { return x0_ + grid_.PrintX(col0_, c); }
   float Right(uint32_t c) const override { return x0_ + grid_.PrintX(col0_, c + 1); }
@@ -116,6 +118,76 @@ float PrintLayout::RowsHeight(uint32_t first, uint32_t last) const {
   return last < first ? 0 : grid_.PrintY(first, last + 1);
 }
 
+uint32_t PrintLayout::Reach(const CellInfo& c, uint32_t past) {
+  if (c.value.type != ValueType::String || sheet_.MergeAt(c.row, c.col)) return c.col;
+  const Styles& styles = book_.GetStyles();
+  const Font& base = styles.DefaultFont();
+  const Xf& xf = styles.CellXf(c.style);
+  const Alignment& al = xf.alignment;
+  if (al.wrap || al.rotation != 0 || al.shrinkToFit) return c.col;
+  // No wider than its characters at the font's size, at most: most text can't get past `past`.
+  if (past >= c.col && grid_.PrintX(c.col, past + 1) >= c.value.text.size() * FontMeasure::Size(styles.FontOf(xf), base))
+    return c.col;
+  const int widthPx = static_cast<int>(std::lround(grid_.ColWidth(c.col) * grid_.PrintColPt() / kPtPerPx));
+  if (widthPx <= 0) return c.col;
+  const CellText::Layout& l = text_.Get(sheet_, c, widthPx);
+  if (l.lines.empty() || l.wrapped || l.stacked || l.shown.number || l.shown.fill) return c.col;
+  if (l.align != HAlign::Left && l.align != HAlign::Center && l.align != HAlign::CenterContinuous) return c.col;
+  // How far its ink runs, in screen pixels as Excel measures text (GDI's widths): a trailing pad
+  // (`_)`) takes no room past the cell, so "(Text)" fits a column of 5 characters.
+  FontMeasure& measure = text_.Measure();
+  const Font& font = styles.FontOf(xf);
+  const int indent = al.indent ? al.indent * 3 * measure.Of(font, base).space : 0;
+  size_t ink = l.shown.text.size();
+  while (ink > 0 && ink <= l.shown.hidden.size() && l.shown.hidden[ink - 1]) --ink;
+  const int need = measure.Width(std::wstring_view(l.shown.text).substr(0, ink), font, base) + 3 + indent;
+  const int own = grid_.ColWidth(c.col);
+  const int reach = l.align == HAlign::Left ? need : (own + need) / 2;
+  uint32_t col = c.col;
+  for (int x = own; x < reach && col + 1 < kMaxCols; x += grid_.ColWidth(col)) ++col;
+  return col;
+}
+
+// Each row's last cell, in `r` (row by row).
+static void ForEachLast(const Sheet& sheet, const Range& r, const std::function<void(const CellInfo&)>& fn) {
+  CellInfo last;
+  bool have = false;
+  sheet.ForEachCell(r, [&](const CellInfo& c) {
+    if (c.value.type == ValueType::Empty) return true;
+    if (have && c.row != last.row) fn(last);
+    last = c;
+    have = true;
+    return true;
+  });
+  if (have) fn(last);
+}
+
+uint32_t PrintLayout::SpillEnd(const Range& used) {
+  // Only a row's last cell can run past the range.
+  uint32_t end = used.lastCol;
+  ForEachLast(sheet_, used, [&](const CellInfo& c) { end = std::max(end, Reach(c, used.lastCol)); });
+  return end;
+}
+
+bool PrintLayout::Blank(const Range& body) {
+  const Styles& styles = book_.GetStyles();
+  bool ink = false;
+  sheet_.ForEachCell(body, [&](const CellInfo& c) {
+    const Xf& xf = styles.CellXf(c.style);
+    const Border& b = styles.BorderOf(xf);
+    ink = c.value.type != ValueType::Empty || styles.FillOf(xf).pattern != PatternType::None || styles.FillOf(xf).gradient ||
+          b.left.style != BorderStyle::None || b.right.style != BorderStyle::None || b.top.style != BorderStyle::None ||
+          b.bottom.style != BorderStyle::None;
+    return !ink;
+  });
+  // Or text from the left running into it.
+  if (!ink && body.firstCol > 0)
+    ForEachLast(sheet_, Range{body.firstRow, 0, body.lastRow, body.firstCol - 1}, [&](const CellInfo& c) {
+      if (!ink && Reach(c, body.firstCol - 1) >= body.firstCol) ink = true;
+    });
+  return !ink;
+}
+
 void PrintLayout::Paginate() {
   const PageSetup& ps = sheet_.Page();
   uint32_t paper = ps.paperSize;
@@ -129,7 +201,11 @@ void PrintLayout::Paginate() {
   if (const DefinedName* n = book_.FindName("_xlnm.Print_Area", static_cast<int>(index_)); n && n->sheet == static_cast<int>(index_))
     areas_ = ParseAreas(n->formula);
   if (areas_.empty())
-    if (auto used = sheet_.UsedRange()) areas_.push_back(Range{0, 0, used->lastRow, used->lastCol});  // from A1, as Excel prints
+    if (auto used = sheet_.UsedRange()) {
+      Range r{0, 0, used->lastRow, used->lastCol};  // from A1, as Excel prints
+      r.lastCol = SpillEnd(r);
+      areas_.push_back(r);
+    }
   if (const DefinedName* n = book_.FindName("_xlnm.Print_Titles", static_cast<int>(index_)); n && n->sheet == static_cast<int>(index_)) {
     for (const Range& r : ParseAreas(n->formula)) {
       if (r.firstCol == 0 && r.lastCol == kMaxCols - 1) titleRows_ = std::make_pair(r.firstRow, r.lastRow);
@@ -224,6 +300,8 @@ void PrintLayout::Paginate() {
         for (const auto& rb : rowBands) add(rb, cb);
     }
   }
+  // Excel leaves out the pages at the end with nothing on them.
+  while (pages_.size() > 1 && Blank(pages_.back().body)) pages_.pop_back();
 }
 
 void PrintLayout::Paint(draw::Painter& p, size_t index) {

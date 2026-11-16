@@ -36,8 +36,8 @@ class FontMeasure {
   };
   // `f`'s fields that aren't given come from `base` (the workbook's default font).
   const Info& Of(const Font& f, const Font& base);
-  // The widest digit as the font designs it, in points at its size: what printed columns count in.
-  double IdealDigit(const Font& f, const Font& base);
+  // The widest digit in whole pixels at `dpi` (GDI's hinted advance): a printer's digit.
+  int DigitAt(const Font& f, const Font& base, int dpi);
   // A text's width in pixels, with each character's GDI advance (no kerning, as Excel measures).
   int Width(std::wstring_view text, const Font& f, const Font& base);
   text::Fonts& Fonts() { return fonts_; }
@@ -84,12 +84,18 @@ class Grid {
   bool RowHidden(uint32_t row) const { return RowHeight(row) == 0; }
   int64_t Height() const { return RowTop(kMaxRows); }
 
-  // ---- On paper, in points. Excel prints rows at 0.72 pt a pixel (a 15 pt row is 14.4 pt), and
-  // columns as wide as their characters in the font's own (unhinted) digit width, a little wider
-  // than on screen (Calibri 11: 5.575 pt a character rather than 7 px).
-  static constexpr double kPrintRowPt = 0.72;
+  // ---- On paper, in points. Excel lays a page out at the printer's resolution (600 dpi): rows at
+  // 6 dots a pixel (a 15 pt row is 120 dots), and columns as many characters wide as on screen in
+  // the printer's digit, plus padding (Calibri 11: 47 dots a character and 30.6). The sheet then
+  // prints 0.025 % larger than its dots: a 15 pt row is 14.4035 pt and 8.43 characters 51.22 pt,
+  // as measured in Excel's PDFs (45 such rows no longer fit the 9 inches Letter leaves).
+  static constexpr int kPrintDpi = 600;
+  static constexpr double kPrintStretch = 1.00025;
+  static constexpr double kPrintPad = 30.58;  // dots
+  static constexpr double kPrintRowPt = 6 * 72.0 / kPrintDpi * kPrintStretch;
   float PrintX(uint32_t fromCol, uint32_t toCol) const {
-    return static_cast<float>((ColLeft(toCol) - ColLeft(fromCol)) * printColPt_);
+    const auto at = [&](uint32_t c) { return colPrint_[std::min<uint32_t>(c, kMaxCols)]; };
+    return static_cast<float>((at(toCol) - at(fromCol)) * 72.0 / kPrintDpi * kPrintStretch);
   }
   double PrintColPt() const { return printColPt_; }
   float PrintY(uint32_t fromRow, uint32_t toRow) const {
@@ -107,7 +113,11 @@ class Grid {
  private:
   void Prefix();
   int mdw_ = 7;
-  double printColPt_ = 0.75;  // points a pixel of column width prints as
+  double printColPt_ = 0.75;  // points a pixel of column width prints as, about
+  int printDigit_ = 47;       // the default font's digit at kPrintDpi
+  std::vector<double> colPrint_;  // column lefts at kPrintDpi
+  double PrintDots(int px) const;
+  void Lefts(uint32_t from);
   int defaultRow_ = 20;   // rows not stored apart (0 when the sheet hides them: zeroHeight)
   int naturalRow_ = 20;   // the default height a row has when shown
   int defaultCol_ = 64;

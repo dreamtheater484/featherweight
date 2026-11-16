@@ -56,6 +56,13 @@ class PrintLayout {
   void PaintHeaderFooter(draw::Painter& p, const PrintPage& page, bool header);
   float ColsWidth(uint32_t first, uint32_t last) const;   // sheet points
   float RowsHeight(uint32_t first, uint32_t last) const;
+  // The last column text in `used` runs into, past its last column too: Excel prints that text.
+  uint32_t SpillEnd(const Range& used);
+  // The last column a cell's text runs into (its own when it stays in its cell); `past` is a
+  // column it can't reach without being long enough to get past it, to skip measuring most cells.
+  uint32_t Reach(const CellInfo& c, uint32_t past);
+  // Nothing on a page: no values, fills or borders, and no text running into it.
+  bool Blank(const Range& body);
 
   const Workbook& book_;
   const Sheet& sheet_;

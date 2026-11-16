@@ -28,6 +28,7 @@ class ScreenGeometry : public Geometry {
     pt = static_cast<float>(k * 4 / 3);
     px = static_cast<float>(k);
     line = std::max(1.f, std::floor(static_cast<float>(k) + 0.01f));
+    rowPx = static_cast<float>(k);
   }
   float X(uint32_t c) const { return left_ + static_cast<float>(std::round((grid_.ColLeft(c) - gridX_) * k_)); }
   float Left(uint32_t c) const override { return rtl ? mirror_ - X(c + 1) : X(c); }

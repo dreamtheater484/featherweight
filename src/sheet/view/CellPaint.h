@@ -25,8 +25,13 @@ class Geometry {
   float pt = 1;        // painter units per point: text
   float px = 0.75f;    // painter units per Excel pixel at 100 %: padding
   float line = 0.75f;  // a thin line: one Excel pixel, at least one device pixel
+  float rowPx = 0.75f; // painter units per Excel pixel down a row (printing: 0.72 pt)
   // How much wider a column is than on screen, for wrapping and "####": printed columns are wider.
   float widthScale = 1;
+  // Paper: lines centred on the cell edges, a border's pixel a point (Excel prints thin borders at
+  // 1 pt, thick at 3) and gridlines and hair borders as 0.2 pt hairlines. The screen draws a line in
+  // the last device pixels of the cell before the edge.
+  bool centered = false;
 };
 
 struct PaintOptions {

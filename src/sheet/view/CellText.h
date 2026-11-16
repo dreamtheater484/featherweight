@@ -25,6 +25,7 @@ struct Shown {
   bool number = false;  // a number (dates too): right-aligned in General, and never overflows
   bool center = false;  // TRUE, FALSE and errors: centered in General
   bool overflow = false;  // "####"
+  bool fill = false;      // a repeated character fills the cell (`*x`): never runs into the next
 };
 
 class CellText {
