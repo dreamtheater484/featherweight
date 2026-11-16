@@ -25,6 +25,8 @@ class Geometry {
   float pt = 1;        // painter units per point: text
   float px = 0.75f;    // painter units per Excel pixel at 100 %: padding
   float line = 0.75f;  // a thin line: one Excel pixel, at least one device pixel
+  // How much wider a column is than on screen, for wrapping and "####": printed columns are wider.
+  float widthScale = 1;
 };
 
 struct PaintOptions {

@@ -19,11 +19,12 @@ class PageGeometry : public Geometry {
     pt = 1;
     px = 0.75f;
     line = 0.75f;
+    widthScale = static_cast<float>(grid.PrintColPt() / 0.75);
   }
-  float Left(uint32_t c) const override { return x0_ + (grid_.ColLeft(c) - grid_.ColLeft(col0_)) * 0.75f; }
-  float Right(uint32_t c) const override { return x0_ + (grid_.ColLeft(c + 1) - grid_.ColLeft(col0_)) * 0.75f; }
-  float Top(uint32_t r) const override { return y0_ + (grid_.RowTop(r) - grid_.RowTop(row0_)) * 0.75f; }
-  float Bottom(uint32_t r) const override { return y0_ + (grid_.RowTop(r + 1) - grid_.RowTop(row0_)) * 0.75f; }
+  float Left(uint32_t c) const override { return x0_ + grid_.PrintX(col0_, c); }
+  float Right(uint32_t c) const override { return x0_ + grid_.PrintX(col0_, c + 1); }
+  float Top(uint32_t r) const override { return y0_ + grid_.PrintY(row0_, r); }
+  float Bottom(uint32_t r) const override { return y0_ + grid_.PrintY(row0_, r + 1); }
 
  private:
   const Grid& grid_;
@@ -108,17 +109,17 @@ PrintLayout::PrintLayout(const Workbook& book, const Sheet& sheet, size_t sheetI
 }
 
 float PrintLayout::ColsWidth(uint32_t first, uint32_t last) const {
-  return last < first ? 0 : (grid_.ColLeft(last + 1) - grid_.ColLeft(first)) * 0.75f;
+  return last < first ? 0 : grid_.PrintX(first, last + 1);
 }
 
 float PrintLayout::RowsHeight(uint32_t first, uint32_t last) const {
-  return last < first ? 0 : (grid_.RowTop(last + 1) - grid_.RowTop(first)) * 0.75f;
+  return last < first ? 0 : grid_.PrintY(first, last + 1);
 }
 
 void PrintLayout::Paginate() {
   const PageSetup& ps = sheet_.Page();
   uint32_t paper = ps.paperSize;
-  if (sheet_.KeptXml().find("paperSize=") == std::string::npos) paper = info_.defaultPaper;
+  if (info_.defaultPaper && sheet_.KeptXml().find("paperSize=") == std::string::npos) paper = info_.defaultPaper;
   PaperSize(paper, paperW_, paperH_);
   float w, h;
   if (PaperFromText(ps.paperWidth, w) && PaperFromText(ps.paperHeight, h)) paperW_ = w, paperH_ = h;
@@ -128,7 +129,7 @@ void PrintLayout::Paginate() {
   if (const DefinedName* n = book_.FindName("_xlnm.Print_Area", static_cast<int>(index_)); n && n->sheet == static_cast<int>(index_))
     areas_ = ParseAreas(n->formula);
   if (areas_.empty())
-    if (auto used = sheet_.UsedRange()) areas_.push_back(*used);
+    if (auto used = sheet_.UsedRange()) areas_.push_back(Range{0, 0, used->lastRow, used->lastCol});  // from A1, as Excel prints
   if (const DefinedName* n = book_.FindName("_xlnm.Print_Titles", static_cast<int>(index_)); n && n->sheet == static_cast<int>(index_)) {
     for (const Range& r : ParseAreas(n->formula)) {
       if (r.firstCol == 0 && r.lastCol == kMaxCols - 1) titleRows_ = std::make_pair(r.firstRow, r.lastRow);
@@ -149,7 +150,7 @@ void PrintLayout::Paginate() {
     std::vector<std::pair<uint32_t, uint32_t>> out;
     const std::vector<PageBreak>& breaks = cols ? sheet_.ColBreaks() : sheet_.RowBreaks();
     auto size = [&](uint32_t i) {
-      return cols ? grid_.ColWidth(i) * 0.75f : grid_.RowHeight(i) * 0.75f;
+      return cols ? grid_.PrintX(i, i + 1) : grid_.PrintY(i, i + 1);
     };
     auto manualAt = [&](uint32_t i) {
       if (!manual) return false;
@@ -236,7 +237,7 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
 
   // Headings: row numbers and column letters, in the default font.
   const Font& base = book_.GetStyles().DefaultFont();
-  const float headH = ps.headings ? grid_.DefaultRowPx() * 0.75f : 0;
+  const float headH = ps.headings ? static_cast<float>(grid_.DefaultRowPx() * Grid::kPrintRowPt) : 0;
   const int digits = static_cast<int>(std::to_string(page.body.lastRow + 1).size());
   const float headW = ps.headings ? (std::max(digits, 1) * grid_.MaxDigit() + 8) * 0.75f : 0;
 
@@ -260,7 +261,8 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
     if (w <= 0 || h <= 0) return;
     PageGeometry g(grid_, r0, c0, x, y);
     p.Save();
-    p.ClipRect({x, y, x + w, y + h});
+    // A little room around it for the borders on its edges.
+    p.ClipRect({x - 2, y - 2, x + w + 2, y + h + 2});
     const Range area{r0, c0, r1, c1};
     PaintCells(p, sheet_, text_, grid_, g, area, o);
     if (const OverlayFn& overlay = Overlay()) overlay(p, sheet_, g, area);
@@ -302,15 +304,15 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
     auto cols = [&](uint32_t c0, uint32_t c1, float x) {
       for (uint32_t c = c0; c <= c1; ++c) {
         if (grid_.ColHidden(c)) continue;
-        const float l = x + (grid_.ColLeft(c) - grid_.ColLeft(c0)) * 0.75f;
-        label(Utf8ToWide(ColumnName(c)), l, 0, l + grid_.ColWidth(c) * 0.75f, headH);
+        const float l = x + grid_.PrintX(c0, c);
+        label(Utf8ToWide(ColumnName(c)), l, 0, l + grid_.PrintX(c, c + 1), headH);
       }
     };
     auto rows = [&](uint32_t r0, uint32_t r1, float y) {
       for (uint32_t r = r0; r <= r1; ++r) {
         if (grid_.RowHidden(r)) continue;
-        const float t = y + (grid_.RowTop(r) - grid_.RowTop(r0)) * 0.75f;
-        label(std::to_wstring(r + 1), 0, t, headW, t + grid_.RowHeight(r) * 0.75f);
+        const float t = y + grid_.PrintY(r0, r);
+        label(std::to_wstring(r + 1), 0, t, headW, t + grid_.PrintY(r, r + 1));
       }
     };
     label(L"", 0, 0, headW, headH);

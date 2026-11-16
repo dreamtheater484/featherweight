@@ -206,6 +206,10 @@ class WorkbookView : public PagedView {
 
   // ---- Print (SheetPrint.cpp)
   void Paginate();
+  PrintInfo InfoFor(const Sheet& sheet) const;
+  // Every shown sheet laid out on pages in turn (the active one as shown), as Excel exports a workbook.
+  void ForEachSheetLayout(const std::function<void(PrintLayout&)>& fn);
+  bool RenderLayoutPages(PrintLayout& layout, const std::wstring& dir, float dpi, int& written);
   PrintOutcome PrintPages(const std::wstring& printer, const DEVMODEW* devmode, const std::vector<int>& pages,
                           IStream* output, const std::function<void(int, int)>& progress, std::wstring& message);
   void PaintPage(draw::Painter& p, int page);

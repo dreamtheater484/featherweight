@@ -46,21 +46,23 @@ struct LineKind {
   int weight = 0;  // which wins where two meet: the heavier
 };
 
+// Where two cells' borders meet on one edge, Excel draws the heavier: thick over double over
+// medium and its dashes, over thin and its dashes and dots, over hair.
 LineKind KindOf(BorderStyle s) {
   switch (s) {
-    case BorderStyle::Thin: return {1, false, {}, 1};
-    case BorderStyle::Hair: return {1, false, {1, 1}, 0};
+    case BorderStyle::Hair: return {1, false, {}, 0};
     case BorderStyle::Dotted: return {1, false, {1, 1}, 1};
-    case BorderStyle::Dashed: return {1, false, {3, 1}, 1};
-    case BorderStyle::DashDot: return {1, false, {3, 1, 1, 1}, 1};
-    case BorderStyle::DashDotDot: return {1, false, {3, 1, 1, 1, 1, 1}, 1};
-    case BorderStyle::Medium: return {2, false, {}, 3};
-    case BorderStyle::MediumDashed: return {2, false, {9, 3}, 2};
-    case BorderStyle::MediumDashDot: return {2, false, {9, 3, 3, 3}, 2};
-    case BorderStyle::MediumDashDotDot: return {2, false, {9, 3, 3, 3, 3, 3}, 2};
-    case BorderStyle::SlantDashDot: return {2, false, {9, 1, 3, 1}, 2};
-    case BorderStyle::Thick: return {3, false, {}, 5};
-    case BorderStyle::Double: return {1, true, {}, 4};
+    case BorderStyle::DashDotDot: return {1, false, {3, 1, 1, 1, 1, 1}, 2};
+    case BorderStyle::DashDot: return {1, false, {3, 1, 1, 1}, 3};
+    case BorderStyle::Dashed: return {1, false, {3, 1}, 4};
+    case BorderStyle::Thin: return {1, false, {}, 5};
+    case BorderStyle::MediumDashDotDot: return {2, false, {9, 3, 3, 3, 3, 3}, 6};
+    case BorderStyle::SlantDashDot: return {2, false, {9, 1, 3, 1}, 7};
+    case BorderStyle::MediumDashDot: return {2, false, {9, 3, 3, 3}, 8};
+    case BorderStyle::MediumDashed: return {2, false, {9, 3}, 9};
+    case BorderStyle::Medium: return {2, false, {}, 10};
+    case BorderStyle::Double: return {1, true, {}, 11};
+    case BorderStyle::Thick: return {3, false, {}, 12};
     default: return {0, false, {}, -1};
   }
 }
@@ -71,6 +73,7 @@ struct Segment {
   bool vertical;
   BorderStyle style;
   uint32_t color;
+  uint64_t edge;  // the cell edge it is on: the same for a cell's bottom and the top of the one below
 };
 
 struct RowData {
@@ -190,6 +193,7 @@ class Painting {
       if (!sheet_.GetCell(m->firstRow, m->firstCol, cell) || cell.value.type == ValueType::Empty) continue;
       int widthPx = 0;
       for (uint32_t c = m->firstCol; c <= m->lastCol; ++c) widthPx += grid_.ColWidth(c);
+      widthPx = static_cast<int>(std::lround(widthPx * g_.widthScale));
       if (widthPx == 0) continue;
       const CellText::Layout& l = text_.Get(sheet_, cell, widthPx);
       const Xf& xf = styles_.CellXf(cell.style);
@@ -219,7 +223,7 @@ class Painting {
   }
 
   void PlaceCell(RowData& rd, const CellInfo& cell) {
-    const int widthPx = grid_.ColWidth(cell.col);
+    const int widthPx = static_cast<int>(std::lround(grid_.ColWidth(cell.col) * g_.widthScale));
     const CellText::Layout& l = text_.Get(sheet_, cell, widthPx);
     if (l.lines.empty()) return;
     const Xf& xf = styles_.CellXf(cell.style);
@@ -508,9 +512,14 @@ class Painting {
   }
 
   // ---- Borders
-  void AddSide(std::vector<Segment>& out, const BorderSide& side, bool vertical, float a0, float a1, float b) {
+  // Keys for cell edges: the top edge of (r, c) is the bottom of (r - 1, c); the start edge of
+  // (r, c) is the end of (r, c - 1).
+  static uint64_t HEdge(uint32_t row, uint32_t col) { return (uint64_t{row} << 15 | col) << 1; }
+  static uint64_t VEdge(uint32_t row, uint32_t col) { return (uint64_t{row} << 15 | col) << 1 | 1; }
+
+  void AddSide(std::vector<Segment>& out, const BorderSide& side, bool vertical, float a0, float a1, float b, uint64_t edge) {
     if (side.style == BorderStyle::None) return;
-    out.push_back({a0, a1, b, vertical, side.style, styles_.Resolve(side.color, 0xFF000000)});
+    out.push_back({a0, a1, b, vertical, side.style, styles_.Resolve(side.color, 0xFF000000), edge});
   }
 
   void Borders() {
@@ -526,20 +535,50 @@ class Painting {
         const bool first = !m || col == m->firstCol, last = !m || col == m->lastCol;
         const float l = g_.Left(col), r = g_.Right(col), t = g_.Top(rd.row), btm = g_.Bottom(rd.row);
         // The file's left is the start: the visual right in a right-to-left sheet.
-        const BorderSide& visLeft = g_.rtl ? b.right : b.left;
-        const BorderSide& visRight = g_.rtl ? b.left : b.right;
-        const bool visLeftEdge = g_.rtl ? last : first, visRightEdge = g_.rtl ? first : last;
-        if (top) AddSide(segs, b.top, false, l - L, r, t);
-        if (bottom) AddSide(segs, b.bottom, false, l - L, r, btm);
-        if (visLeftEdge) AddSide(segs, visLeft, true, t - L, btm, l);
-        if (visRightEdge) AddSide(segs, visRight, true, t - L, btm, r);
+        const float startX = g_.rtl ? r : l, endX = g_.rtl ? l : r;
+        if (top) AddSide(segs, b.top, false, l - L, r, t, HEdge(rd.row, col));
+        if (bottom) AddSide(segs, b.bottom, false, l - L, r, btm, HEdge(rd.row + 1, col));
+        if (first) AddSide(segs, b.left, true, t - L, btm, startX, VEdge(rd.row, col));
+        if (last) AddSide(segs, b.right, true, t - L, btm, endX, VEdge(rd.row, col + 1));
         if ((b.diagonalUp || b.diagonalDown) && b.diagonal.style != BorderStyle::None && !m)
           diagonals.push_back({{l, t, r, btm}, {&b, styles_.Resolve(b.diagonal.color, 0xFF000000)}});
       }
     }
-    std::stable_sort(segs.begin(), segs.end(),
+    // The cells just outside: their edges along the drawn ones (the row above's bottom border is
+    // the first row's top).
+    const uint32_t r0 = rows_.front().row, r1 = rows_.back().row, c0 = cols_.front(), c1 = cols_.back();
+    if (r0 > 0) {
+      const uint32_t above = r0 - 1;
+      for (uint32_t col : cols_)
+        AddSide(segs, styles_.BorderOf(styles_.CellXf(sheet_.StyleAt(above, col))).bottom, false, g_.Left(col) - L,
+                g_.Right(col), g_.Top(r0), HEdge(r0, col));
+    }
+    if (r1 + 1 < kMaxRows)
+      for (uint32_t col : cols_)
+        AddSide(segs, styles_.BorderOf(styles_.CellXf(sheet_.StyleAt(r1 + 1, col))).top, false, g_.Left(col) - L,
+                g_.Right(col), g_.Bottom(r1), HEdge(r1 + 1, col));
+    for (const RowData& rd : rows_) {
+      const float t = g_.Top(rd.row), btm = g_.Bottom(rd.row);
+      if (c0 > 0)
+        AddSide(segs, styles_.BorderOf(styles_.CellXf(sheet_.StyleAt(rd.row, c0 - 1))).right, true, t - L, btm,
+                g_.rtl ? g_.Right(c0) : g_.Left(c0), VEdge(rd.row, c0));
+      if (c1 + 1 < kMaxCols)
+        AddSide(segs, styles_.BorderOf(styles_.CellXf(sheet_.StyleAt(rd.row, c1 + 1))).left, true, t - L, btm,
+                g_.rtl ? g_.Left(c1) : g_.Right(c1), VEdge(rd.row, c1 + 1));
+    }
+    // One border an edge: the heavier, else the later cell's (below, after).
+    std::stable_sort(segs.begin(), segs.end(), [](const Segment& a, const Segment& b) { return a.edge < b.edge; });
+    std::vector<Segment> kept;
+    for (const Segment& s : segs) {
+      if (!kept.empty() && kept.back().edge == s.edge) {
+        if (KindOf(s.style).weight >= KindOf(kept.back().style).weight) kept.back() = s;
+        continue;
+      }
+      kept.push_back(s);
+    }
+    std::stable_sort(kept.begin(), kept.end(),
                      [](const Segment& a, const Segment& b) { return KindOf(a.style).weight < KindOf(b.style).weight; });
-    for (const Segment& s : segs) DrawSegment(s);
+    for (const Segment& s : kept) DrawSegment(s);
     for (const auto& [r, d] : diagonals) {
       const LineKind k = KindOf(d.first->diagonal.style);
       draw::Pen pen;

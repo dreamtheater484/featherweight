@@ -59,6 +59,14 @@ FontMeasure::Face& FontMeasure::Get(const Font& f, const Font& base) {
 
 const FontMeasure::Info& FontMeasure::Of(const Font& f, const Font& base) { return Get(f, base).info; }
 
+double FontMeasure::IdealDigit(const Font& f, const Font& base) {
+  const text::Face* face = fonts_.FaceFor(Family(f, base), f.bold, f.italic);
+  const float size = static_cast<float>(Size(f, base));
+  double widest = 0;
+  for (wchar_t d = L'0'; d <= L'9'; ++d) widest = std::max(widest, static_cast<double>(face ? face->Advance(d, size) : 0));
+  return widest > 0 ? widest : Of(f, base).digit * 0.75;
+}
+
 int FontMeasure::Width(std::wstring_view text, const Font& f, const Font& base) {
   Face& face = Get(f, base);
   int w = 0;
@@ -133,6 +141,7 @@ void Grid::Build(const Sheet& sheet, const Styles& styles, FontMeasure& measure)
   const Font& base = styles.DefaultFont();
   const FontMeasure::Info& def = measure.Of(base, base);
   mdw_ = def.digit;
+  printColPt_ = measure.IdealDigit(base, base) / mdw_;
   const SheetFormat& fmt = sheet.Format();
 
   // Columns.

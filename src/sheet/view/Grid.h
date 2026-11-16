@@ -36,6 +36,8 @@ class FontMeasure {
   };
   // `f`'s fields that aren't given come from `base` (the workbook's default font).
   const Info& Of(const Font& f, const Font& base);
+  // The widest digit as the font designs it, in points at its size: what printed columns count in.
+  double IdealDigit(const Font& f, const Font& base);
   // A text's width in pixels, with each character's GDI advance (no kerning, as Excel measures).
   int Width(std::wstring_view text, const Font& f, const Font& base);
   text::Fonts& Fonts() { return fonts_; }
@@ -81,6 +83,18 @@ class Grid {
   uint32_t RowAt(int64_t y) const;
   bool RowHidden(uint32_t row) const { return RowHeight(row) == 0; }
   int64_t Height() const { return RowTop(kMaxRows); }
+
+  // ---- On paper, in points. Excel prints rows at 0.72 pt a pixel (a 15 pt row is 14.4 pt), and
+  // columns as wide as their characters in the font's own (unhinted) digit width, a little wider
+  // than on screen (Calibri 11: 5.575 pt a character rather than 7 px).
+  static constexpr double kPrintRowPt = 0.72;
+  float PrintX(uint32_t fromCol, uint32_t toCol) const {
+    return static_cast<float>((ColLeft(toCol) - ColLeft(fromCol)) * printColPt_);
+  }
+  double PrintColPt() const { return printColPt_; }
+  float PrintY(uint32_t fromRow, uint32_t toRow) const {
+    return static_cast<float>((RowTop(toRow) - RowTop(fromRow)) * kPrintRowPt);
+  }
   int64_t Width() const { return ColLeft(kMaxCols); }
 
   // ---- Outline groups: rows or columns shown or hidden by expanding and collapsing.
@@ -93,6 +107,7 @@ class Grid {
  private:
   void Prefix();
   int mdw_ = 7;
+  double printColPt_ = 0.75;  // points a pixel of column width prints as
   int defaultRow_ = 20;   // rows not stored apart (0 when the sheet hides them: zeroHeight)
   int naturalRow_ = 20;   // the default height a row has when shown
   int defaultCol_ = 64;

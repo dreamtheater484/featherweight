@@ -26,23 +26,41 @@ using namespace gfx;
 
 namespace fw::sheet::view {
 
-void WorkbookView::Paginate() {
+PrintInfo WorkbookView::InfoFor(const Sheet& sheet) const {
   PrintInfo info;
   info.fileName = FileNameOf(path_);
   info.path = DirOf(path_) + L"\\";
-  info.sheetName = Utf8ToWide(Current().Name());
+  info.sheetName = Utf8ToWide(sheet.Name());
   wchar_t buf[128];
   if (GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, DATE_SHORTDATE, nullptr, nullptr, buf, 128, nullptr)) info.date = buf;
   if (GetTimeFormatEx(LOCALE_NAME_USER_DEFAULT, TIME_NOSECONDS, nullptr, nullptr, buf, 128)) info.time = buf;
-  DWORD paper = 0;
-  if (GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_IPAPERSIZE | LOCALE_RETURN_NUMBER, reinterpret_cast<LPWSTR>(&paper),
-                      sizeof(paper) / sizeof(wchar_t)) &&
-      paper)
-    info.defaultPaper = paper;
-  print_ = std::make_unique<PrintLayout>(*book_, Current(), sheet_, grid_, *text_, info);
+  // A sheet that names no paper prints on Letter, as Excel's exports on the reference PC do.
+  return info;
+}
+
+void WorkbookView::Paginate() {
+  print_ = std::make_unique<PrintLayout>(*book_, Current(), sheet_, grid_, *text_, InfoFor(Current()));
   pageSizes_.clear();
   for (size_t i = 0; i < print_->PageCount(); ++i)
     pageSizes_.push_back({print_->Page(i).width, print_->Page(i).height});
+}
+
+void WorkbookView::ForEachSheetLayout(const std::function<void(PrintLayout&)>& fn) {
+  for (size_t i = 0; i < book_->SheetCount(); ++i) {
+    if (!SheetShown(i)) continue;
+    Sheet& s = book_->GetSheet(i);
+    if (!s.Loaded()) book_->LoadSheet(i);
+    if (i == sheet_) {
+      Paginate();
+      fn(*print_);
+      continue;
+    }
+    Grid grid;
+    grid.Build(s, book_->GetStyles(), *measure_);
+    PrintLayout layout(*book_, s, i, grid, *text_, InfoFor(s));
+    fn(layout);
+  }
+  text_->Clear();
 }
 
 void WorkbookView::TogglePreview() {
@@ -150,17 +168,26 @@ PrintOutcome WorkbookView::Print(HWND owner, const std::function<void(int, int)>
 }
 
 PrintOutcome WorkbookView::PrintToFile(const std::wstring& path, std::wstring& message) {
+  // Every sheet, as Excel exports a workbook (the reference renders).
   if (!Ready()) return PrintOutcome::Failed;
-  if (!print_) Paginate();
-  std::vector<int> pages(print_->PageCount());
-  for (size_t i = 0; i < pages.size(); ++i) pages[i] = static_cast<int>(i);
   ComPtr<IStream> stream;
   if (FAILED(SHCreateStreamOnFileEx(path.c_str(), STGM_CREATE | STGM_WRITE | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL,
                                     TRUE, nullptr, &stream))) {
     message = L"Couldn't create " + path;
     return PrintOutcome::Failed;
   }
-  return PrintPages(L"Microsoft Print to PDF", nullptr, pages, stream.Get(), nullptr, message);
+  draw::PrintJob job;
+  HRESULT hr = job.Start(gpu::D2DDevice(), L"Microsoft Print to PDF", nullptr, Title(), stream.Get());
+  ForEachSheetLayout([&](PrintLayout& layout) {
+    for (size_t i = 0; SUCCEEDED(hr) && i < layout.PageCount(); ++i)
+      hr = job.AddPage(layout.Page(i).width, layout.Page(i).height, [&](draw::Painter& p) { layout.Paint(p, i); });
+  });
+  if (SUCCEEDED(hr)) hr = job.Finish();
+  if (FAILED(hr) || job.Wait(120000) != draw::PrintJob::Outcome::Completed) {
+    message = L"Printing failed.";
+    return PrintOutcome::Failed;
+  }
+  return PrintOutcome::Printed;
 }
 
 PrintOutcome WorkbookView::PrintPages(const std::wstring& printer, const DEVMODEW* devmode, const std::vector<int>& pages,
@@ -226,13 +253,21 @@ bool WorkbookView::ExportPdf(const std::wstring& path, std::wstring& message) {
 }
 
 int WorkbookView::RenderPagesForTesting(const std::wstring& dir, float dpi) {
+  // Every sheet's pages, numbered on through the workbook, as Excel exports a workbook.
   if (!Ready()) return 0;
   CreateDirectoryW(dir.c_str(), nullptr);
-  if (!print_) Paginate();
-  const float scale = dpi / 72;
   int written = 0;
-  for (size_t i = 0; i < print_->PageCount(); ++i) {
-    const PrintPage& page = print_->Page(i);
+  bool failed = false;
+  ForEachSheetLayout([&](PrintLayout& layout) {
+    if (!failed && !RenderLayoutPages(layout, dir, dpi, written)) failed = true;
+  });
+  return written;
+}
+
+bool WorkbookView::RenderLayoutPages(PrintLayout& layout, const std::wstring& dir, float dpi, int& written) {
+  const float scale = dpi / 72;
+  for (size_t i = 0; i < layout.PageCount(); ++i) {
+    const PrintPage& page = layout.Page(i);
     const UINT w = std::max(1u, static_cast<UINT>(std::ceil(page.width * scale)));
     const UINT h = std::max(1u, static_cast<UINT>(std::ceil(page.height * scale)));
     ComPtr<IWICBitmap> bitmap;
@@ -243,16 +278,16 @@ int WorkbookView::RenderPagesForTesting(const std::wstring& dir, float dpi) {
         96.f, 96.f);
     if (FAILED(gfx::WIC()->CreateBitmap(w, h, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bitmap)) ||
         FAILED(gfx::D2D()->CreateWicBitmapRenderTarget(bitmap.Get(), props, &target)) || FAILED(target.As(&dc)))
-      break;
+      return false;
     dc->BeginDraw();
     dc->Clear(D2D1::ColorF(1, 1, 1, 1));
     {
       draw::D2DPainter painter(dc.Get());
       painter.Transform(draw::Matrix::Scale(scale, scale));
-      print_->Paint(painter, i);
+      layout.Paint(painter, i);
     }
-    if (FAILED(dc->EndDraw())) break;
-    const std::wstring file = dir + L"\\page-" + std::to_wstring(i + 1) + L".png";
+    if (FAILED(dc->EndDraw())) return false;
+    const std::wstring file = dir + L"\\page-" + std::to_wstring(written + 1) + L".png";
     ComPtr<IWICStream> stream;
     ComPtr<IWICBitmapEncoder> encoder;
     ComPtr<IWICBitmapFrameEncode> frame;
@@ -261,10 +296,10 @@ int WorkbookView::RenderPagesForTesting(const std::wstring& dir, float dpi) {
         FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) ||
         FAILED(encoder->CreateNewFrame(&frame, nullptr)) || FAILED(frame->Initialize(nullptr)) ||
         FAILED(frame->WriteSource(bitmap.Get(), nullptr)) || FAILED(frame->Commit()) || FAILED(encoder->Commit()))
-      break;
+      return false;
     ++written;
   }
-  return written;
+  return true;
 }
 
 }  // namespace fw::sheet::view

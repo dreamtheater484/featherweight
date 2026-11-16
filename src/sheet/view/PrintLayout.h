@@ -30,7 +30,8 @@ struct PrintInfo {
   std::wstring path;       // &Z: the folder, with a trailing backslash
   std::wstring sheetName;  // &A
   std::wstring date, time; // &D and &T, as the locale writes them
-  uint32_t defaultPaper = 9;  // the paper when the file names none (the region's: 1 Letter, 9 A4)
+  // The paper when the file names none, by its paperSize code; 0: the file's default (Letter).
+  uint32_t defaultPaper = 0;
 };
 
 class PrintLayout {
