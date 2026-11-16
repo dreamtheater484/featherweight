@@ -223,6 +223,17 @@ struct Sheet {
   bool loaded = false;
   std::unordered_map<std::string, std::string> values;  // "B2" -> the value as stored
   std::set<std::string> formulas;                         // cells with a formula
+  // Multi-cell array formulas: only the first cell has the f element, but Excel's calculation
+  // chain lists every cell of the array.
+  struct Area { uint32_t c1, r1, c2, r2; };
+  std::vector<Area> arrays;
+  bool InArray(std::string_view ref) const {
+    uint32_t col = 0, row = 0;
+    if (!ParseCellRef(ref, col, row)) return false;
+    for (const Area& a : arrays)
+      if (col >= a.c1 && col <= a.c2 && row >= a.r1 && row <= a.r2) return true;
+    return false;
+  }
 };
 
 struct Workbook {
@@ -680,7 +691,15 @@ void Checker::LoadSheet(Sheet& sheet) {
       if (!IsElement(c, kX, "c")) continue;
       std::string ref = NormalCell(c.attribute("r").value());
       if (ref.empty()) continue;  // cells without r: TODO(S1), with the sheet reader
-      if (Child(c, kX, "f")) sheet.formulas.insert(ref);
+      if (auto f = Child(c, kX, "f")) {
+        sheet.formulas.insert(ref);
+        std::string_view range = f.attribute("ref").value();
+        size_t colon = range.find(':');
+        uint32_t c1 = 0, r1 = 0, c2 = 0, r2 = 0;
+        if (std::string_view(f.attribute("t").value()) == "array" && colon != std::string_view::npos &&
+            ParseCellRef(range.substr(0, colon), c1, r1) && ParseCellRef(range.substr(colon + 1), c2, r2) && c1 <= c2 && r1 <= r2)
+          sheet.arrays.push_back({c1, r1, c2, r2});
+      }
       std::string_view type = c.attribute("t").value();
       std::string value;
       if (type == "inlineStr") {
@@ -718,7 +737,7 @@ void Checker::CheckCalcChain() {
       }
       LoadSheet(*sheet);
       std::string ref = NormalCell(c.attribute("r").value());
-      if (sheet->formulas.count(ref)) ++rep_.derived;
+      if (sheet->formulas.count(ref) || sheet->InArray(ref)) ++rep_.derived;
       else Error(chain->name, "the calculation chain is stale: " + QuoteSheetName(sheet->name) + "!" + std::string(c.attribute("r").value()) + " has no formula");
     }
   }

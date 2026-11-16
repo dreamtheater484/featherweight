@@ -60,6 +60,8 @@ $all = [ordered]@{
   fuzz_chart   = @{ Seeds = @("$seeds\chart", "$regressions\chart"); MaxLen = 65536 }
   # OpenDocument text import (D5): every .odt converts to a document that opens and passes the check, or is refused.
   fuzz_odt     = @{ Seeds = @("$seeds\odt", "$regressions\odt"); MaxLen = 65536 }
+  # Workbooks (S1): the model and its .xlsx reader; every part it writes back says what it said.
+  fuzz_xlsx    = @{ Seeds = @("$seeds\xlsx", "$seeds\package", "$regressions\xlsx"); MaxLen = 65536 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 

@@ -1,0 +1,42 @@
+Kind,Value
+day-month,1-2
+slash,1/2
+gene MAR1,MAR1
+gene SEPT2,SEPT2
+gene MARCH1,MARCH1
+gene DEC1,DEC1
+gene OCT4,OCT4
+three parts,1-2-3
+day-mon,2-Mar
+mon-day,Mar-2
+month/day,12/31
+day/month,31/12
+ISO date,2025-01-02
+US date,01/02/2025
+impossible date,13/13/2025
+time,1:30
+long time,25:00
+AM time,10:00 AM
+scientific-like,1e5
+capital E,3E4
+accounting negative,(123)
+dollars,"$1,000"
+euros,€1.000
+thousands comma,"1,000"
+thousands dot,1.000
+percent,50%
+TRUE,TRUE
+false,false
+yes,yes
+error text,#N/A
+div error text,#DIV/0!
+spaces around, 12 
+trailing space,12 
+inner space,1 2
+fractions,1/2/3
+4/5/6,4/5/6
+fraction,1 1/2
+version,1.2.3
+ip address,192.168.1.1
+year only,2025
+quarter,Q1-2025
