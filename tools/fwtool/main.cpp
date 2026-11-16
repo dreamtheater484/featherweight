@@ -20,29 +20,32 @@ constexpr const char* kUsage =
     "      Converts OpenDocument text files (.odt, .ott) and Word templates (.dotx, .dotm, to a new\n"
     "      document) as the app opens them, checks the .docx and reads it into the model; with\n"
     "      --out the converted documents are kept there.\n"
-    "  fwtool roundtrip [--model] [--reserialize-all] [--expect-reject] [--out DIR] <file or folder>...\n"
+    "  fwtool roundtrip [--model] [--workbooks] [--reserialize-all] [--expect-reject] [--out DIR] <file or folder>...\n"
     "      Opens and saves each file without edits. Untouched parts must be byte-identical;\n"
     "      with --reserialize-all every XML part is rewritten through the DOM and must equal\n"
     "      the original after canonicalization. With --expect-reject every file must be\n"
     "      refused with a plain message (malicious files). With --model Word documents are\n"
-    "      read into the document model, which writes back every part it owns; those parts\n"
-    "      must equal the originals after canonicalization, and the saved copy must pass check.\n"
+    "      read into the document model, and workbooks into the workbook model (every sheet), which\n"
+    "      write back every part they own; those parts must equal the originals after\n"
+    "      canonicalization, and the saved copy must pass check. --workbooks: workbooks only.\n"
     "  fwtool save [--edited] [--out DIR] <file or folder>...\n"
     "      Saves each Word document as Featherweight's Save does (the document model's save, then\n"
     "      safe saving) into DIR (default: a temporary folder, removed afterwards). With no edits\n"
     "      the saved file must be identical to the original; with --edited every part the model\n"
     "      owns is rewritten and the document properties updated, as after an edit. Either way the\n"
     "      saved file must open and have no new fwtool check errors. Prints each save's time.\n"
-    "  fwtool dump [--model | --layout [--out DIR]] <file>...\n"
+    "  fwtool dump [--model [--workbooks] | --layout [--out DIR]] <file>...\n"
     "      Lists parts, relationships and content types; with --model, what the document\n"
-    "      model reads from a Word document (stories, paragraphs, labels, fields); with\n"
+    "      model reads from a Word document (stories, paragraphs, labels, fields) or the workbook\n"
+    "      model from a workbook (sheets, names, the first cells and their formulas); with\n"
     "      --layout, the lines on each page Featherweight lays out, or with --out, its layout\n"
     "      dumps (docs/layout-dump.md) in DIR.\n"
-    "  fwtool check [--expect-reject] <file or folder>...\n"
+    "  fwtool check [--expect-reject] [--model] [--workbooks] <file or folder>...\n"
     "      Checks each file against the reference registry: every reference resolves, ids\n"
     "      are unique, pairs are complete, and derived data (the calculation chain, chart\n"
     "      caches) matches its sources. With --expect-reject every file must fail (the\n"
-    "      broken files).\n"
+    "      broken files). With --model each workbook is also read into the workbook model, every\n"
+    "      sheet, and its cells must name formats and strings the workbook has.\n"
     "  fwtool render --out DIR [--scale N] [--pictures] <file or folder>...\n"
     "      Draws the pictures and shapes with fwdraw to PNG files in DIR, N pixels per point\n"
     "      (default 2): each Word drawing at its own size, each slide's shapes on a slide-sized\n"
@@ -156,6 +159,12 @@ std::vector<std::filesystem::path> CollectFiles(const std::vector<std::filesyste
   return files;
 }
 
+std::vector<std::filesystem::path> CollectFiles(const Options& options) {
+  auto files = CollectFiles(options.inputs);
+  if (options.workbooks) std::erase_if(files, [](const std::filesystem::path& f) { return !IsWorkbookFile(f); });
+  return files;
+}
+
 std::string Display(const std::filesystem::path& file) {
   std::error_code ec;
   std::filesystem::path rel = file.lexically_proximate(std::filesystem::current_path(ec));
@@ -228,6 +237,7 @@ int wmain(int argc, wchar_t** argv) {
     std::wstring arg = argv[i];
     if (arg == L"--reserialize-all") options.reserializeAll = true;
     else if (arg == L"--model") options.model = true;
+    else if (arg == L"--workbooks") options.workbooks = true;
     else if (arg == L"--layout") options.layout = true;
     else if (arg == L"--expect-reject") options.expectReject = true;
     else if (arg == L"--out" && i + 1 < argc) options.outDir = argv[++i];

@@ -12,6 +12,7 @@
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "pkg/References.h"
+#include "sheet/model/Workbook.h"
 
 namespace fwtool {
 namespace {
@@ -73,8 +74,9 @@ fw::pkg::CheckReport CheckFile(const std::filesystem::path& file, const fw::pkg:
 }  // namespace
 
 int RunDump(const Options& options) {
-  for (const auto& file : CollectFiles(options.inputs)) {
+  for (const auto& file : CollectFiles(options)) {
     if (options.layout) DumpLayout(file, options.outDir);
+    else if (options.model && IsWorkbookFile(file)) DumpWorkbook(file);
     else if (options.model) DumpModel(file);
     else DumpFile(file);
   }
@@ -82,7 +84,7 @@ int RunDump(const Options& options) {
 }
 
 int RunCheck(const Options& options) {
-  auto files = CollectFiles(options.inputs);
+  auto files = CollectFiles(options);
   if (files.empty()) {
     std::fprintf(stderr, "No Office files found.\n");
     return 1;
@@ -91,6 +93,14 @@ int RunCheck(const Options& options) {
   int failed = 0;
   for (const auto& file : files) {
     fw::pkg::CheckReport rep = CheckFile(file, registry);
+    // --model: the workbook model reads it, every sheet, and finds nothing wrong.
+    if (options.model && IsWorkbookFile(file)) {
+      Status st;
+      auto book = ReadWorkbook(file, st, true);
+      if (!book) rep.errors.push_back("the workbook model can't read it: " + st.message);
+      else
+        for (auto& e : CheckWorkbookModel(*book)) rep.errors.push_back("model: " + e);
+    }
     // With --expect-reject, each file must have at least one error (the broken files).
     bool ok = options.expectReject ? !rep.Ok() : rep.Ok();
     std::printf("%s %s: %zu relationships, %zu references, %zu ids, %zu pairs, %zu derived values", ok ? "[ ok ]" : "[FAIL]",

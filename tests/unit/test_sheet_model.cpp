@@ -1,0 +1,407 @@
+// The workbook model and its .xlsx reader and writer (S1, src/sheet/model and src/sheet/xlsx).
+#include "TestHarness.h"
+
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "PkgTestUtil.h"
+#include "pkg/Canonical.h"
+#include "sheet/model/Workbook.h"
+#include "sheet/xlsx/Xlsx.h"
+
+using namespace fw::sheet;
+
+namespace {
+
+constexpr const char* kMain = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+std::string Ns() {
+  return std::string(" xmlns=\"") + kMain +
+         "\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+         " xmlns:x14ac=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac\"";
+}
+
+// A workbook package from its sheets' XML (sheetData and around it), with styles and strings.
+std::vector<std::pair<std::string, std::string>> Package(const std::vector<std::string>& sheets, const std::string& strings,
+                                                         const std::string& workbookExtra = {}) {
+  std::string types =
+      "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+      "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+      "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+      "<Override PartName=\"/xl/workbook.xml\" "
+      "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>"
+      "<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>"
+      "<Override PartName=\"/xl/sharedStrings.xml\" "
+      "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/>";
+  std::string rels = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+                     "<Relationship Id=\"rS\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>"
+                     "<Relationship Id=\"rT\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"sharedStrings.xml\"/>";
+  std::string list;
+  std::vector<std::pair<std::string, std::string>> parts;
+  for (size_t i = 0; i < sheets.size(); ++i) {
+    std::string n = std::to_string(i + 1);
+    types += "<Override PartName=\"/xl/worksheets/sheet" + n +
+             ".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>";
+    rels += "<Relationship Id=\"rId" + n +
+            "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet" + n +
+            ".xml\"/>";
+    list += "<sheet name=\"Sheet " + n + "\" sheetId=\"" + n + "\" r:id=\"rId" + n + "\"/>";
+    parts.push_back({"xl/worksheets/sheet" + n + ".xml", sheets[i]});
+  }
+  types += "</Types>";
+  rels += "</Relationships>";
+  parts.insert(parts.begin(),
+               {{"[Content_Types].xml", types},
+                {"_rels/.rels",
+                 "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+                 "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" "
+                 "Target=\"xl/workbook.xml\"/></Relationships>"},
+                {"xl/workbook.xml", "<workbook" + Ns() + ">" + workbookExtra + "<sheets>" + list + "</sheets>"
+                 "<definedNames><definedName name=\"Total\">'Sheet 1'!$A$1</definedName>"
+                 "<definedName name=\"_xlnm.Print_Area\" localSheetId=\"0\">'Sheet 1'!$A$1:$C$3</definedName></definedNames>"
+                 "<calcPr calcId=\"191029\" fullCalcOnLoad=\"1\"/></workbook>"},
+                {"xl/_rels/workbook.xml.rels", rels},
+                {"xl/styles.xml",
+                 "<styleSheet xmlns=\"" + std::string(kMain) + "\">"
+                 "<numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"0.000\"/></numFmts>"
+                 "<fonts count=\"2\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font>"
+                 "<font><b/><i val=\"0\"/><u/><sz val=\"14\"/><color theme=\"4\" tint=\"-0.5\"/><name val=\"Arial\"/></font></fonts>"
+                 "<fills count=\"3\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill>"
+                 "<fill><patternFill patternType=\"solid\"><fgColor indexed=\"10\"/></patternFill></fill></fills>"
+                 "<borders count=\"2\"><border><left/><right/><top/><bottom/><diagonal/></border>"
+                 "<border><left style=\"thin\"><color rgb=\"FF00FF00\"/></left><bottom style=\"double\"/></border></borders>"
+                 "<cellStyleXfs count=\"1\"><xf/></cellStyleXfs>"
+                 "<cellXfs count=\"3\"><xf/><xf numFmtId=\"164\" fontId=\"1\" fillId=\"2\" borderId=\"1\" applyNumberFormat=\"1\">"
+                 "<alignment horizontal=\"center\" vertical=\"top\" wrapText=\"1\" textRotation=\"45\" indent=\"2\"/></xf>"
+                 "<xf numFmtId=\"14\"/></cellXfs>"
+                 "<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>"
+                 "<dxfs count=\"1\"><dxf><font><b/></font><fill><patternFill><bgColor rgb=\"FFFFC7CE\"/></patternFill></fill></dxf></dxfs>"
+                 "</styleSheet>"},
+                {"xl/sharedStrings.xml", strings}});
+  return parts;
+}
+
+std::unique_ptr<Workbook> Open(const std::vector<std::pair<std::string, std::string>>& parts, bool loadAll = true) {
+  fw::pkg::Status st;
+  auto pkg = test::OpenBytes(test::MakeZip(parts), st);
+  CHECK(pkg != nullptr);
+  if (!pkg) return nullptr;
+  xlsx::ReadOptions options;
+  options.loadAll = loadAll;
+  auto book = xlsx::Read(std::move(pkg), st, options);
+  if (!book) std::printf("    %s\n", st.message.c_str());
+  CHECK(book != nullptr);
+  return book;
+}
+
+// Each part the model writes equals the original after canonicalization.
+void CheckRoundTrip(const Workbook& book, const std::vector<std::pair<std::string, std::string>>& parts) {
+  for (const std::string& name : xlsx::ModelParts(book)) {
+    std::string original;
+    for (const auto& [n, xml] : parts)
+      if ("/" + n == name) original = xml;
+    std::string written, a, b;
+    CHECK(xlsx::WritePart(book, name, written).Ok());
+    CHECK(fw::pkg::CanonicalizeXml(original, a).Ok());
+    CHECK(fw::pkg::CanonicalizeXml(written, b).Ok());
+    if (a != b) std::printf("    %s differs:\n    %s\n    %s\n", name.c_str(), a.c_str(), b.c_str());
+    CHECK(a == b);
+  }
+}
+
+const std::string kStrings =
+    "<sst" + Ns() + " count=\"4\" uniqueCount=\"4\"><si><t>Hello</t></si><si><t xml:space=\"preserve\"> two  spaces </t></si>"
+    "<si><r><t>Bold</t></r><r><rPr><b/><sz val=\"11\"/><color rgb=\"FFFF0000\"/><rFont val=\"Calibri\"/></rPr><t xml:space=\"preserve\"> red</t></r></si>"
+    "<si><t>Name</t><rPh sb=\"0\" eb=\"1\"><t>NAME</t></rPh><phoneticPr fontId=\"1\"/></si></sst>";
+
+const std::string kSheet1 =
+    "<worksheet" + Ns() + "><sheetPr><tabColor rgb=\"FF00B050\"/><outlinePr summaryBelow=\"0\"/></sheetPr>"
+    "<dimension ref=\"A1:D6\"/>"
+    "<sheetViews><sheetView tabSelected=\"1\" zoomScale=\"85\" workbookViewId=\"0\"><pane xSplit=\"1\" ySplit=\"2\" topLeftCell=\"B3\" "
+    "activePane=\"bottomRight\" state=\"frozen\"/><selection pane=\"bottomRight\" activeCell=\"C4\" sqref=\"C4 D5:D6\"/></sheetView></sheetViews>"
+    "<sheetFormatPr defaultRowHeight=\"15\" x14ac:dyDescent=\"0.25\"/>"
+    "<cols><col min=\"1\" max=\"1\" width=\"20.7109375\" customWidth=\"1\"/><col min=\"3\" max=\"4\" width=\"5\" hidden=\"1\" style=\"2\"/></cols>"
+    "<sheetData>"
+    "<row r=\"1\" spans=\"1:4\" x14ac:dyDescent=\"0.25\"><c r=\"A1\" s=\"1\"><v>1.5</v></c><c r=\"B1\" t=\"s\"><v>0</v></c>"
+    "<c r=\"C1\" t=\"b\"><v>1</v></c><c r=\"D1\" t=\"e\"><v>#DIV/0!</v></c></row>"
+    "<row r=\"2\" spans=\"1:4\" ht=\"30\" customHeight=\"1\" x14ac:dyDescent=\"0.25\"><c r=\"A2\" t=\"n\"><v>0.1</v></c>"
+    "<c r=\"B2\" t=\"inlineStr\"><is><t xml:space=\"preserve\">inline </t></is></c><c r=\"C2\" s=\"0\"/>"
+    "<c r=\"D2\"><v>4.4999999999999998E-2</v></c></row>"
+    "<row r=\"3\" hidden=\"1\" outlineLevel=\"1\"><c r=\"A3\"><f>A1*2</f><v>3</v></c><c r=\"B3\" t=\"str\"><f>B1&amp;\"!\"</f><v>Hello!</v></c></row>"
+    "<!-- a comment between rows -->"
+    "<row r=\"4\"><c r=\"A4\"><f t=\"shared\" ref=\"A4:A6\" si=\"0\">A1+1</f><v>2.5</v></c>"
+    "<c r=\"B4\"><f t=\"array\" ref=\"B4:B5\">A1:A2*2</f><v>3</v></c></row>"
+    "<row r=\"5\"><c r=\"A5\"><f t=\"shared\" si=\"0\"/><v>3</v></c><c r=\"B5\"><v>0.2</v></c></row>"
+    "<row r=\"6\"><c r=\"A6\"><f t=\"shared\" si=\"0\"/></c><c r=\"C6\" t=\"s\"><v>3</v></c><c r=\"D6\" t=\"s\"><v>1</v></c></row>"
+    "</sheetData>"
+    "<mergeCells count=\"1\"><mergeCell ref=\"C3:D4\"/></mergeCells>"
+    "<conditionalFormatting sqref=\"A1:A6\"><cfRule type=\"cellIs\" dxfId=\"0\" priority=\"1\" operator=\"greaterThan\"><formula>2</formula></cfRule></conditionalFormatting>"
+    "<hyperlinks><hyperlink ref=\"B1\" location=\"'Sheet 2'!A1\" display=\"Go\"/></hyperlinks>"
+    "<printOptions gridLines=\"1\"/><pageMargins left=\"0.5\" right=\"0.5\" top=\"1\" bottom=\"1\" header=\"0.3\" footer=\"0.3\"/>"
+    "<pageSetup paperSize=\"9\" orientation=\"landscape\" fitToHeight=\"0\"/>"
+    "<headerFooter><oddHeader>&amp;CPage &amp;P</oddHeader></headerFooter>"
+    "<rowBreaks count=\"1\" manualBreakCount=\"1\"><brk id=\"3\" max=\"16383\" man=\"1\"/></rowBreaks>"
+    "</worksheet>";
+
+const std::string kSheet2 = "<worksheet" + Ns() + "><sheetData><row r=\"2\"><c r=\"B2\"><v>42</v></c></row></sheetData></worksheet>";
+
+}  // namespace
+
+TEST(sheet_a1_names) {
+  CellAddr a;
+  CHECK(ParseA1("A1", a) && a.row == 0 && a.col == 0);
+  CHECK(ParseA1("$XFD$1048576", a) && a.row == 1048575 && a.col == 16383);
+  CHECK(!ParseA1("XFE1", a));
+  CHECK(!ParseA1("A0", a));
+  CHECK(!ParseA1("A1048577", a));
+  CHECK(!ParseA1("1A", a));
+  Range r;
+  CHECK(ParseRange("B3:A1", r) && r == (Range{0, 0, 2, 1}));
+  CHECK(ParseRange("C:D", r) && r.firstCol == 2 && r.lastCol == 3 && r.firstRow == 0 && r.lastRow == kMaxRows - 1);
+  CHECK(ParseRange("2:3", r) && r.firstRow == 1 && r.lastRow == 2 && r.lastCol == kMaxCols - 1);
+  CHECK(!ParseRange("A:1", r));
+  CHECK_EQ(CellName(0, 0), "A1");
+  CHECK_EQ(CellName(1048575, 16383), "XFD1048576");
+  CHECK_EQ(ColumnName(25), "Z");
+  CHECK_EQ(ColumnName(26), "AA");
+  CHECK_EQ(RangeName(Range{1, 1, 2, 2}), "B2:C3");
+  ErrorCode e;
+  CHECK(ParseError("#N/A", e) && e == ErrorCode::NA);
+  CHECK(!ParseError("#nope", e));
+}
+
+TEST(sheet_read_values) {
+  auto parts = Package({kSheet1, kSheet2}, kStrings);
+  auto book = Open(parts);
+  if (!book) return;
+  CHECK_EQ(book->SheetCount(), 2u);
+  const Sheet& s = book->GetSheet(0);
+  CHECK_EQ(s.Name(), "Sheet 1");
+  CHECK(s.Loaded());
+  CHECK_EQ(s.GetValue(0, 0).number, 1.5);
+  CHECK(s.GetValue(0, 1).text == "Hello");
+  CHECK(s.GetValue(0, 2).type == ValueType::Bool && s.GetValue(0, 2).boolean);
+  CHECK(s.GetValue(0, 3).type == ValueType::Error && s.GetValue(0, 3).error == ErrorCode::Div0);
+  CHECK_EQ(s.GetValue(1, 0).number, 0.1);
+  CHECK(s.GetValue(1, 1).text == "inline ");
+  CHECK(s.GetValue(1, 2).type == ValueType::Empty);
+  CHECK_EQ(s.GetValue(1, 3).number, 0.045);
+  CHECK(s.GetValue(2, 1).text == "Hello!");
+  CHECK(s.GetValue(5, 2).text == "Name");
+  CHECK(s.GetValue(5, 3).text == " two  spaces ");
+  CHECK(s.GetValue(9, 9).type == ValueType::Empty);
+  CellInfo c;
+  CHECK(s.GetCell(1, 2, c) && c.style == 0 && c.value.type == ValueType::Empty);
+  CHECK(!s.GetCell(1, 4, c));
+  CHECK_EQ(s.CellCount(), 17u);
+  CHECK(s.UsedRange() == (Range{0, 0, 5, 3}));
+  CHECK(s.Dimension() == (Range{0, 0, 5, 3}));
+
+  // Rich text.
+  CHECK(s.GetCell(5, 3, c) && c.sharedString == 1);
+  CHECK(book->Strings().Runs(1).empty());
+  auto runs = book->Strings().Runs(2);
+  CHECK(book->Strings().Text(2) == "Bold red");
+  CHECK_EQ(runs.size(), 2u);
+  if (runs.size() == 2) {
+    CHECK(runs[0].start == 0 && runs[0].font == kNone);
+    CHECK(runs[1].start == 4 && runs[1].font != kNone);
+    CHECK(book->Strings().Fonts()[runs[1].font].bold);
+  }
+
+  // Cells in a range, in order.
+  std::vector<std::string> seen;
+  s.ForEachCell(Range{1, 1, 4, 2}, [&](const CellInfo& ci) {
+    seen.push_back(CellName(ci.row, ci.col));
+    return true;
+  });
+  CHECK((seen == std::vector<std::string>{"B2", "C2", "B3", "B4", "B5"}));
+}
+
+TEST(sheet_read_formulas) {
+  auto book = Open(Package({kSheet1, kSheet2}, kStrings));
+  if (!book) return;
+  const Sheet& s = book->GetSheet(0);
+  CHECK_EQ(s.FormulaCount(), 6u);
+  FormulaInfo f;
+  CHECK(s.GetFormula(2, 0, f) && f.text == "A1*2" && f.kind == FormulaKind::Normal);
+  CHECK(s.GetFormula(2, 1, f) && f.text == "B1&\"!\"");
+  CHECK(s.GetFormula(3, 0, f) && f.kind == FormulaKind::Shared && f.master && f.text == "A1+1" &&
+        f.ref == (Range{3, 0, 5, 0}) && f.sharedIndex == 0);
+  // Cells sharing it: the master's text, for the master's cell.
+  CHECK(s.GetFormula(4, 0, f) && f.kind == FormulaKind::Shared && !f.master && f.text == "A1+1" &&
+        f.origin == (CellAddr{3, 0}));
+  CHECK(s.GetFormula(5, 0, f) && f.text == "A1+1");
+  CellInfo c;
+  CHECK(s.GetCell(5, 0, c) && c.hasFormula && c.value.type == ValueType::Empty);  // no cached value
+  CHECK(s.GetFormula(3, 1, f) && f.kind == FormulaKind::Array && f.ref == (Range{3, 1, 4, 1}) && f.master);
+  CHECK(!s.GetFormula(4, 1, f));  // inside the array, but no formula of its own
+  CHECK(!s.GetFormula(0, 0, f));
+  FormulaInfo g;
+  CHECK(s.GetFormula(2, 0, g) && s.FormulaAttribute(g, "ref").empty());
+  CHECK(s.GetFormula(3, 0, f) && s.FormulaAttribute(f, "ref") == "A4:A6");
+}
+
+TEST(sheet_read_layout) {
+  auto book = Open(Package({kSheet1, kSheet2}, kStrings));
+  if (!book) return;
+  const Sheet& s = book->GetSheet(0);
+  RowInfo r = s.Row(1);
+  CHECK(r.stored && r.height == 30 && r.customHeight);
+  r = s.Row(2);
+  CHECK(r.hidden && r.outlineLevel == 1);
+  CHECK(!s.Row(10).stored);
+  CHECK_EQ(s.Format().defaultRowHeight, 15.0);
+  CHECK_EQ(s.Column(0).width, 20.7109375);
+  CHECK(s.Column(0).customWidth);
+  CHECK_EQ(s.Column(1).width, 0.0);
+  CHECK(s.Column(2).hidden && s.Column(3).hidden && s.Column(3).style == 2);
+  CHECK_EQ(s.StyleAt(9, 2), 2u);  // the column's format
+  CHECK_EQ(s.StyleAt(0, 0), 1u);
+  CHECK(s.MergeAt(3, 3) != nullptr && *s.MergeAt(3, 3) == (Range{2, 2, 3, 3}));
+  CHECK(s.MergeAt(4, 3) == nullptr);
+  CHECK_EQ(s.Views().size(), 1u);
+  if (!s.Views().empty()) {
+    const SheetView& v = s.Views()[0];
+    CHECK(v.paneState == PaneState::Frozen && v.xSplit == 1 && v.ySplit == 2);
+    CHECK(v.paneTopLeft == (CellAddr{2, 1}));
+    CHECK(v.zoomScale == 85 && v.tabSelected);
+    CHECK(v.selections.size() == 1 && v.selections[0].ranges.size() == 2 && v.selections[0].active == (CellAddr{3, 2}));
+  }
+  CHECK(!s.Props().summaryBelow);
+  CHECK(s.Props().tabColor.kind == Color::Kind::Rgb && s.Props().tabColor.value == 0xFF00B050);
+  CHECK(s.Hyperlinks().size() == 1 && s.Hyperlinks()[0].location == "'Sheet 2'!A1");
+  CHECK(s.Page().paperSize == 9 && s.Page().orientation == Orientation::Landscape && s.Page().fitToHeight == 0);
+  CHECK(s.Page().gridLines && s.Page().margins.top == 1);
+  CHECK(s.HeadersFooters().oddHeader == "&CPage &P");
+  CHECK(s.RowBreaks().size() == 1 && s.RowBreaks()[0].id == 3 && s.RowBreaks()[0].manual);
+  CHECK(s.KeptXml().find("conditionalFormatting") != std::string::npos);
+  CHECK(s.KeptXml().find("sheetData") == std::string::npos);
+}
+
+TEST(sheet_read_workbook) {
+  auto book = Open(Package({kSheet1, kSheet2}, kStrings, "<workbookPr date1904=\"1\"/><bookViews><workbookView activeTab=\"1\"/></bookViews>"),
+                   false);
+  if (!book) return;
+  CHECK(book->Date1904());
+  CHECK(book->Calc().fullCalcOnLoad && book->Calc().calcId == 191029);
+  CHECK_EQ(book->ActiveSheet(), 1u);
+  // Only the active sheet is read at first; the others when asked.
+  CHECK(!book->GetSheet(0).Loaded());
+  CHECK(book->GetSheet(1).Loaded());
+  CHECK_EQ(book->GetSheet(1).GetValue(1, 1).number, 42.0);
+  CHECK(book->LoadSheet(0).Ok());
+  CHECK(book->GetSheet(0).Loaded() && book->GetSheet(0).CellCount() == 17);
+  CHECK_EQ(book->FindSheet("sheet 2"), 1);
+  CHECK_EQ(book->FindSheet("Sheet 3"), -1);
+  CHECK(book->FindName("TOTAL") && book->FindName("TOTAL")->formula == "'Sheet 1'!$A$1");
+  CHECK(book->FindName("_xlnm.Print_Area", 0) != nullptr);
+  CHECK(book->FindName("_xlnm.Print_Area", 1) == nullptr);
+}
+
+TEST(sheet_read_styles) {
+  auto book = Open(Package({kSheet1}, kStrings));
+  if (!book) return;
+  const Styles& st = book->GetStyles();
+  CHECK_EQ(st.CellXfs().size(), 3u);
+  const Xf& xf = st.CellXf(1);
+  CHECK(xf.numFmt == 164 && st.FormatCode(164) == "0.000" && st.FormatCode(14).empty());
+  CHECK(xf.alignment.horizontal == HAlign::Center && xf.alignment.vertical == VAlign::Top && xf.alignment.wrap);
+  CHECK(xf.alignment.rotation == 45 && xf.alignment.indent == 2);
+  const Font& f = st.FontOf(xf);
+  CHECK(f.bold && !f.italic && f.underline == Underline::Single && f.size == 14 && f.name == "Arial");
+  CHECK(f.color.kind == Color::Kind::Theme && f.color.value == 4);
+  CHECK_EQ(st.Resolve(f.color, 0), ApplyTint(0xFF4472C4, -0.5));
+  const Fill& fill = st.FillOf(xf);
+  CHECK(fill.pattern == PatternType::Solid && st.Resolve(fill.fg, 0) == 0xFFFF0000);
+  const Border& b = st.BorderOf(xf);
+  CHECK(b.left.style == BorderStyle::Thin && st.Resolve(b.left.color, 0) == 0xFF00FF00 && b.bottom.style == BorderStyle::Double);
+  CHECK(st.CellXf(99).numFmt == 0);  // out of range: the first
+  CHECK(st.CellStyles().size() == 1 && st.CellStyles()[0].name == "Normal");
+  CHECK(st.Dxfs().size() == 1 && st.Dxfs()[0].fill && st.Dxfs()[0].fill->pattern == PatternType::Solid && st.Dxfs()[0].fontBold);
+  CHECK_EQ(ApplyTint(0xFF808080, 0), 0xFF808080u);
+  CHECK_EQ(ApplyTint(0xFF000000, 0.5), 0xFF808080u);
+  CHECK_EQ(ApplyTint(0xFFFFFFFF, -0.5), 0xFF808080u);
+  CHECK_EQ(st.Resolve(Color{Color::Kind::Indexed, 64, 0}, 0x12345678), 0x12345678u);
+}
+
+TEST(sheet_roundtrip_exact) {
+  auto parts = Package({kSheet1, kSheet2}, kStrings);
+  auto book = Open(parts);
+  if (!book) return;
+  CHECK_EQ(xlsx::ModelParts(*book).size(), 3u);
+  CheckRoundTrip(*book, parts);
+}
+
+TEST(sheet_roundtrip_odd_content) {
+  // What the model doesn't write itself is kept as written: unknown attributes and elements,
+  // comments, values the model would write otherwise, cells without r, cells out of order.
+  std::string sheet =
+      "<?xml version=\"1.0\"?>\n<!-- before --><worksheet" + Ns() + " xmlns:u=\"urn:u\"><sheetData u:a=\"1\">\n  "
+      "<row><c><v>1</v></c><c u:b=\"2\" cm=\"1\"><v>2</v></c><c r=\"e1\"><v>01</v></c><c r=\"F1\"><v>1E-3</v></c>"
+      "<c r=\"G1\" t=\"b\"><v>true</v></c><c r=\"H1\" t=\"e\"><v>#WHAT?</v></c><c r=\"I1\" t=\"x\"><v>7</v></c>"
+      "<c r=\"J1\" s=\"01\"/><c r=\"K1\"><v>1</v><f>1</f></c><c r=\"L1\"><v>1<!-- inside --></v></c>"
+      "<c r=\"M1\" t=\"inlineStr\"><is><r><t>a</t></r><r><rPr><b/></rPr><t>b</t></r></is></c>"
+      "<c r=\"N1\"> </c><c r=\"O1\" t=\"s\"><v>99</v></c><c r=\"P1\" t=\"d\"><v>2024-02-29T12:00:00</v></c>"
+      "<c r=\"B1\"><v>5</v></c><u:x/>text</row>"
+      "<row r=\"3\"> </row><row r=\"2\"><c r=\"A2\"><v>3</v></c></row><row r=\"07\" u:c=\"x\"/>"
+      "<u:unknown><u:child/></u:unknown>"
+      "</sheetData><extLst><ext uri=\"{X}\"><u:y/></ext></extLst></worksheet><!-- after -->";
+  std::string strings = "<sst" + Ns() + "><!-- c --><si><t>a</t></si><u:z xmlns:u=\"urn:u\"/><si u:q=\"1\" xmlns:u=\"urn:u\"><t>b</t></si>"
+                        "<si><t>c</t><t>d</t></si><si/></sst>";
+  auto parts = Package({sheet}, strings);
+  auto book = Open(parts);
+  if (!book) return;
+  const Sheet& s = book->GetSheet(0);
+  CHECK_EQ(s.GetValue(0, 0).number, 1.0);
+  CHECK_EQ(s.GetValue(0, 1).number, 2.0);
+  CHECK_EQ(s.GetValue(0, 4).number, 1.0);
+  CHECK_EQ(s.GetValue(0, 5).number, 0.001);
+  CHECK(s.GetValue(0, 6).boolean);
+  CHECK(s.GetValue(0, 7).type == ValueType::Error && s.GetValue(0, 7).error == ErrorCode::Unknown);
+  CHECK_EQ(s.GetValue(0, 8).number, 7.0);
+  CHECK(s.GetValue(0, 12).text == "ab");
+  CHECK(s.GetValue(0, 14).type == ValueType::Empty);  // no such shared string
+  CHECK_EQ(s.GetValue(0, 15).number, 45351.5);
+  CHECK(s.GetValue(0, 1).number == 2.0 && s.GetValue(0, 1).type == ValueType::Number);
+  CHECK(s.GetValue(1, 0).type == ValueType::Empty);  // row 2 came after row 3: kept, not read
+  CHECK(s.Row(6).stored);
+  CHECK(book->Strings().Text(2) == "cd");
+  CHECK_EQ(book->Strings().Size(), 4u);
+  CheckRoundTrip(*book, parts);
+}
+
+TEST(sheet_build_and_copy_on_write) {
+  Workbook book;
+  Sheet& s = book.AddSheet("Data");
+  {
+    SheetBuilder b(s);
+    for (uint32_t r = 0; r < 100; ++r) {
+      CHECK(b.StartRow(r * 2));
+      CHECK(b.AddNumber(0, r));
+      CHECK(b.AddString(3, "row " + std::to_string(r)));
+      CHECK(!b.AddNumber(2, 1));  // out of order
+    }
+    CHECK(!b.StartRow(10));
+  }
+  CHECK_EQ(s.CellCount(), 200u);
+  CHECK_EQ(s.GetValue(198, 0).number, 99.0);
+  CHECK(s.GetValue(198, 3).text == "row 99");
+  CHECK(s.Blocks().size() > 1);  // blocks of rows
+  // A copy of the blocks (a snapshot) doesn't see later changes.
+  auto snapshot = s.Blocks();
+  s.SetValue(4, 0, Value::Number(7));
+  s.SetValue(5, 1, Value::Text("new"));  // a new row and cell
+  s.SetValue(0, 2, Value::Bool(true));   // a new cell inside a row
+  CHECK_EQ(s.GetValue(4, 0).number, 7.0);
+  CHECK(s.GetValue(5, 1).text == "new");
+  CHECK(s.GetValue(0, 2).boolean);
+  CHECK_EQ(s.GetValue(0, 3).text, std::string_view("row 0"));
+  CHECK_EQ(s.CellCount(), 202u);
+  CHECK_EQ(snapshot[0]->cells[4].v.number, 2.0);  // row 5, column A, as it was
+  CHECK(snapshot[0].get() != s.Blocks()[0].get());
+  CHECK(snapshot.back().get() == s.Blocks().back().get());  // untouched blocks are shared
+  CellInfo c;
+  CHECK(s.GetCell(4, 0, c) && c.computed);
+}

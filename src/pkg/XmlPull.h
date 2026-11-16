@@ -57,6 +57,9 @@ class XmlPull {
   const Status& GetStatus() const { return status_; }
   // The UTF-8 text being read: the input, or its conversion from UTF-16.
   std::string_view Source() const { return src_; }
+  // Where reading stands in Source(): just after the current event's markup or text. Readers that
+  // keep parts of a document as written (the workbook reader) slice Source() with it.
+  size_t Offset() const { return pos_; }
 
   // Reads a whole document, checking that it is well-formed and within the limits.
   static Status Check(std::string_view xml, const Limits& limits = Limits::Default(), std::string_view label = {});
@@ -93,6 +96,10 @@ class XmlPull {
   bool seenRoot_ = false;
   std::vector<Attribute> attrs_;
   std::vector<std::string> attrBuf_;
+  struct RawAttr {
+    std::string_view name, value;
+  };
+  std::vector<RawAttr> raws_;  // reused by each start tag
   std::string textBuf_;
   std::vector<std::string_view> stack_;
   std::vector<Binding> bindings_;

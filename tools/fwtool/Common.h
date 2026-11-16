@@ -11,7 +11,8 @@ namespace fwtool {
 
 struct Options {
   bool reserializeAll = false;  // roundtrip: write every XML part through the DOM
-  bool model = false;           // roundtrip: read Word documents into the model and write its parts from it
+  bool model = false;           // roundtrip: read Word documents and workbooks into their models and write their parts
+  bool workbooks = false;       // roundtrip, check, dump: workbooks only
   bool expectReject = false;    // roundtrip: every file must be refused; check: every file must fail
   std::filesystem::path outDir; // roundtrip: keep the saved copies here
   std::wstring printer;         // print-sample: the printer (default: Microsoft Print to PDF)
@@ -49,6 +50,20 @@ std::string Display(const std::filesystem::path& file);
 // Takes a snapshot and opens the package, as the app does.
 std::unique_ptr<fw::pkg::Package> OpenPackage(const std::filesystem::path& file, fw::pkg::Status& status);
 std::string_view AsText(const std::vector<uint8_t>& bytes);
+
+// Workbooks (Workbook.cpp).
+}  // namespace fwtool
+namespace fw::sheet {
+class Workbook;
+}
+namespace fwtool {
+bool IsWorkbookFile(const std::filesystem::path& file);
+std::unique_ptr<fw::sheet::Workbook> ReadWorkbook(const std::filesystem::path& file, fw::pkg::Status& status, bool loadAll);
+// What the model finds wrong with a workbook it read (cells naming formats or strings that don't exist).
+std::vector<std::string> CheckWorkbookModel(const fw::sheet::Workbook& book);
+void DumpWorkbook(const std::filesystem::path& file);
+// The inputs' files, only workbooks with --workbooks.
+std::vector<std::filesystem::path> CollectFiles(const Options& options);
 
 int RunRoundtrip(const Options& options);
 int RunSave(const Options& options);
