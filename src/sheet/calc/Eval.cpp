@@ -636,8 +636,12 @@ void Machine::Run(const uint8_t* p, const uint8_t* end, bool top) {
         k += l;
         std::string_view c2 = ReadStr(p + k, &l);
         Area a;
-        if (host.Table(table, at.sheet, at.row, at.col, items, c1, c2, a)) stack.push_back(Value::Ref(a));
-        else stack.push_back(Value::Error(Err::Ref));
+        if (host.Table(table, at.sheet, at.row, at.col, items, c1, c2, a)) {
+          stack.push_back(Value::Ref(a));
+        } else {  // tables the host doesn't know (yet): keep the cached value
+          unsupported = true;
+          stack.push_back(Value::Error(Err::Ref));
+        }
         break;
       }
       case kUnary: Unary(p[1]); break;

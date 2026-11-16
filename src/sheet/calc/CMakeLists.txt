@@ -1,6 +1,7 @@
 # The formula engine (plan §7.3 "Formula engine"): parser, bytecode, evaluator, functions and the
 # dependency graph.
 target_sources(fwsheet PRIVATE
+  Bind.cpp
   Engine.cpp
   Eval.cpp
   FnDate.cpp

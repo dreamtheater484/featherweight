@@ -675,6 +675,11 @@ bool Engine::Stale(int sheet, int32_t row, int32_t col) const {
   return id != UINT32_MAX && (nodes_[id].flags & kStale);
 }
 
+bool Engine::Dirty(int sheet, int32_t row, int32_t col) const {
+  uint32_t id = NodeAt(sheet, row, col);
+  return id != UINT32_MAX && nodes_[id].state != kClean;
+}
+
 size_t Engine::StaleCount() const {
   size_t n = 0;
   for (const Node& node : nodes_) n += (node.flags & kStale) && !(node.flags & kFree) ? 1 : 0;

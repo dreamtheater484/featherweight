@@ -69,6 +69,7 @@ int RunRoundtrip(const Options& options);
 int RunSave(const Options& options);
 void DumpModel(const std::filesystem::path& file);
 int RunDump(const Options& options);
+int RunFormulas(const Options& options);  // formulas: recalculate and compare with the cached values
 int RunCheck(const Options& options);
 int RunOdt(const Options& options);
 int RunPrintSample(const Options& options);

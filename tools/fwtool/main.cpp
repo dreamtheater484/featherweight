@@ -275,6 +275,7 @@ int wmain(int argc, wchar_t** argv) {
   }
   if (command == L"roundtrip") return fwtool::RunRoundtrip(options);
   if (command == L"dump") return fwtool::RunDump(options);
+  if (command == L"formulas") return fwtool::RunFormulas(options);
   if (command == L"save") return fwtool::RunSave(options);
   if (command == L"check") return fwtool::RunCheck(options);
   if (command == L"odt") return fwtool::RunOdt(options);
