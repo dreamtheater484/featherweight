@@ -39,6 +39,7 @@ struct Options {
   bool replay = false;              // torture: the input is a reproducer to replay
   std::filesystem::path samples;    // paste-check: clipboard samples (.rtf, .html) to paste
   std::filesystem::path pngs;       // pdf-check: the pages the app drew (page-1.png, ...)
+  std::wstring locale;              // formulas: the region the files were calculated in (en-US, en-NL)
   std::wstring password;            // encrypt, decrypt
   std::vector<std::filesystem::path> inputs;
 };
@@ -69,6 +70,7 @@ int RunRoundtrip(const Options& options);
 int RunSave(const Options& options);
 void DumpModel(const std::filesystem::path& file);
 int RunDump(const Options& options);
+int RunFormulas(const Options& options);  // formulas: recalculate and compare with the cached values
 int RunCheck(const Options& options);
 int RunOdt(const Options& options);
 int RunPrintSample(const Options& options);

@@ -21,13 +21,15 @@ struct Machine {
   Resolver* res;
   Cell at;
   bool date1904 = false;
+  char decimal = '.';        // the region's decimal separator, for numbers turned into text
   bool stop = false;         // a run-time reference isn't calculated yet: retry later
   bool unsupported = false;  // something the engine can't do: keep the cached value
   int depth = 0;
   std::vector<Value>& stack;
 
   Machine(Evaluator& e, const Cell& c)
-      : ev(e), host(e.host()), res(e.resolver()), at(c), date1904(e.host().Date1904()), stack(e.stack_) {}
+      : ev(e), host(e.host()), res(e.resolver()), at(c), date1904(e.host().Date1904()),
+        decimal(e.host().Conv().decimal), stack(e.stack_) {}
 
   // Runs code from p to end, which leaves one more value on the stack. `top`: this is the
   // formula's own code (its last + or - zeroes tiny results, as Excel's does).
@@ -60,7 +62,7 @@ Value FromView(const CellView& c);
 // Excel's conversions of one scalar. On failure, `e` is the error.
 bool ToNumber(Machine& m, const Value& v, double& d, Err& e);
 bool ToNumber(Machine& m, const CellView& v, double& d, Err& e);
-bool ToText(const Value& v, std::string& s, Err& e);
+bool ToText(const Value& v, std::string& s, Err& e, char decimal = '.');
 bool ToBool(const Value& v, bool& b, Err& e);
 
 // Ordering of two values as comparison operators see them: numbers < text < booleans; text
@@ -115,6 +117,7 @@ struct Criteria {
   std::string text;
   Err err = Err::None;
   bool wildcard = false;
+  const ConvLocale* conv = &EnUsConv();
   bool Match(const CellView& c) const;
 };
 bool MakeCriteria(Machine& m, const Value& v, Criteria& c);

@@ -454,9 +454,7 @@ void Mod(Call& c) {
   double n, d;
   if (!c.Number(0, n) || !c.Number(1, d)) return;
   if (d == 0) return c.Fail(Err::Div0);
-  double r = n - d * std::floor(n / d);
-  if (r != 0 && std::fabs(r - d) < std::fabs(d) * 1e-15) r = 0;
-  c.SetNumber(r);
+  c.SetNumber(n - d * std::floor(n / d));
 }
 void Quotient(Call& c) {
   double n, d;

@@ -60,6 +60,8 @@ class Engine : public Resolver, public Names {
 
   // --- what happened ---
   bool Stale(int sheet, int32_t row, int32_t col) const;  // kept its cached value: unsupported
+  bool HasFormula(int sheet, int32_t row, int32_t col) const { return NodeAt(sheet, row, col) != UINT32_MAX; }
+  bool Dirty(int sheet, int32_t row, int32_t col) const;  // waiting to be calculated
   size_t StaleCount() const;
   bool Circular() const { return circular_; }
   size_t FormulaCount() const { return nodes_.size() - free_.size(); }

@@ -252,6 +252,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--dumps" && i + 1 < argc) options.dumps = argv[++i];
     else if (arg == L"--json" && i + 1 < argc) options.jsonOut = argv[++i];
     else if (arg == L"--report" && i + 1 < argc) options.reportOut = argv[++i];
+    else if (arg == L"--locale" && i + 1 < argc) options.locale = argv[++i];
     else if (arg == L"--min-pages" && i + 1 < argc) options.minPages = _wtof(argv[++i]);
     else if (arg == L"--min-lines" && i + 1 < argc) options.minLines = _wtof(argv[++i]);
     else if (arg == L"--self-test") options.selfTest = true;
@@ -278,6 +279,7 @@ int wmain(int argc, wchar_t** argv) {
   }
   if (command == L"roundtrip") return fwtool::RunRoundtrip(options);
   if (command == L"dump") return fwtool::RunDump(options);
+  if (command == L"formulas") return fwtool::RunFormulas(options);
   if (command == L"save") return fwtool::RunSave(options);
   if (command == L"check") return fwtool::RunCheck(options);
   if (command == L"odt") return fwtool::RunOdt(options);
