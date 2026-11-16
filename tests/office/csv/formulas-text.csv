@@ -1,0 +1,9 @@
+Kind,Value
+equals,=1+2
+plus,+1+2
+minus,-1+2
+at,"@SUM(1,2)"
+function,"=SUM(1,2)"
+link,"=HYPERLINK(""https://example.com"",""link"")"
+reference,=A1
+tab first,	=1+2
