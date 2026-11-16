@@ -36,10 +36,11 @@ bool CanonicalUInt(std::string_view s, uint32_t& out) {
   return true;
 }
 
-// A number exactly as the model would write it (shortest round trip): true when writing `v` back
-// gives `s` again.
-bool ParseNumber(std::string_view s, double& v, bool& exact) {
+// A number, and the style that writes it back as `s` (xlsx/Numbers.cpp); `exact` is false when
+// none does.
+bool ParseNumber(std::string_view s, double& v, bool& exact, uint8_t& style) {
   exact = false;
+  style = 0;
   if (s.empty()) return false;
   // Integers up to 15 digits: the common case, exact by construction.
   size_t i = s[0] == '-' ? 1 : 0;
@@ -59,9 +60,25 @@ bool ParseNumber(std::string_view s, double& v, bool& exact) {
   }
   auto [p, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
   if (ec != std::errc() || p != s.data() + s.size() || !std::isfinite(v)) return false;
-  char buf[32];
-  auto [q, ec2] = std::to_chars(buf, buf + sizeof buf, v);
-  exact = ec2 == std::errc() && std::string_view(buf, static_cast<size_t>(q - buf)) == s;
+  // Plain decimals of up to 15 significant digits (12.5, 0.0375): two of those never read as the
+  // same number, so the shortest digits are these, and style 0 writes them like this when the
+  // exponent is -4 or more. No need to format the number to know.
+  size_t dot = s.find('.', i);
+  if (dot != std::string_view::npos && dot > i && dot + 1 < s.size() && s.back() != '0' && (s[i] != '0' || dot == i + 1)) {
+    size_t sig = 0, zeros = 0;
+    bool ok = true, leading = s[i] == '0';
+    for (size_t k = i; k < s.size() && ok; ++k) {
+      if (k == dot) continue;
+      if (s[k] < '0' || s[k] > '9') ok = false;
+      else if (leading && s[k] == '0') ++zeros;
+      else leading = false, ++sig;
+    }
+    if (ok && sig <= 15 && zeros <= 4 && !(v == 0)) {
+      exact = true;
+      return true;
+    }
+  }
+  exact = xlsx::NumberStyle(s, v, style);
   return true;
 }
 
@@ -679,7 +696,9 @@ bool SheetLoader::ReadCell(size_t before, uint32_t row, uint32_t rowOrd, uint32_
     switch (type) {
       case XmlType::N: {
         bool exact = false;
-        if (ParseNumber(vText_, c->v.number, exact)) c->flags |= kHasValue;
+        uint8_t numStyle = 0;
+        if (ParseNumber(vText_, c->v.number, exact, numStyle)) c->flags |= kHasValue;
+        c->numStyle = numStyle;
         if (!exact) keepText(vText_);
         break;
       }

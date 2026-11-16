@@ -1,7 +1,15 @@
 {
-  "about": "The real-world Word corpus (plan section 10): published documents and blank templates from reputable publishers. The files aren't in the repository, because their licences vary; scripts/fetch-corpus.ps1 downloads them into FW_CORPUS, checks each hash and screens each file. Only hosts on the sources list are allowed, including after redirects.",
-  "layout": "docx/<category>/<id>.docx; Word's PDFs in reference/docx/<category>/<id>.docx.pdf with reference/manifest.json",
+  "about": "The real-world corpus (plan section 10): published documents, workbooks and CSV files, and blank templates, from reputable publishers. The files aren't in the repository, because their licences vary; scripts/fetch-corpus.ps1 downloads them into FW_CORPUS, checks each hash and screens each file. Only hosts on the sources list are allowed, including after redirects.",
+  "layout": "docx/<category>/<id>.docx, xlsx/<category>/<id>.xlsx (or .xltx), csv/<category>/<id>.csv (or .tsv); Office's PDFs in reference/<format>/<category>/<id>.<ext>.pdf (workbooks also .cells.json) with reference/manifest.json",
   "categories": {
+    "budgets": "workbooks: household, student, project and grant budgets, cash-flow forecasts",
+    "invoices": "workbooks: invoices, quotes, order forms, price lists and expense claims",
+    "schedules": "workbooks: schedules, timesheets, rosters, calendars and attendance sheets",
+    "grades": "workbooks: grade lists, grade books and marking sheets",
+    "calculators": "workbooks: calculators and forms with formulas (loans, savings, tax, benefits, applications)",
+    "business": "workbooks: small-business templates (inventory, sales logs)",
+    "statistics": "workbooks and CSV files: statistics tables from statistics offices and ministries",
+    "opendata": "CSV files from open-data portals",
     "letters": "letters and letter templates",
     "forms": "form templates, with content controls or legacy form fields",
     "reports": "reports and guidance with headings, numbered lists and a table of contents",
@@ -11,7 +19,7 @@
     "manuals": "manuals, guides, brochures and newsletters with pictures and text boxes",
     "legal": "contracts, policies, procurement documents and legislation with multi-level numbering",
     "review": "documents with comments or tracked changes",
-    "features": "small test files from LibreOffice's test suite: charts, equations, right-to-left and East Asian text"
+    "features": "small test files from LibreOffice's and Apache POI's test suites: charts, equations, right-to-left and East Asian text; for workbooks, number formats, conditional formats, charts and other features"
   },
   "sources": [
     { "domain": "gov", "tag": "usgov", "kind": "government", "name": "US government (.gov)" },

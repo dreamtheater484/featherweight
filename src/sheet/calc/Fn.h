@@ -1,0 +1,205 @@
+#pragma once
+
+// Internal to the formula engine: the machine that runs bytecode, the helpers functions use to
+// read their arguments, and the function implementations (Fn*.cpp).
+
+#include <cmath>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "sheet/calc/Bytecode.h"
+#include "sheet/calc/Eval.h"
+#include "sheet/calc/Functions.h"
+
+namespace fw::sheet::calc {
+
+// One evaluation in progress.
+struct Machine {
+  Evaluator& ev;
+  Host& host;
+  Resolver* res;
+  Cell at;
+  bool date1904 = false;
+  bool stop = false;         // a run-time reference isn't calculated yet: retry later
+  bool unsupported = false;  // something the engine can't do: keep the cached value
+  int depth = 0;
+  std::vector<Value>& stack;
+
+  Machine(Evaluator& e, const Cell& c)
+      : ev(e), host(e.host()), res(e.resolver()), at(c), date1904(e.host().Date1904()), stack(e.stack_) {}
+
+  // Runs code from p to end, which leaves one more value on the stack. `top`: this is the
+  // formula's own code (its last + or - zeroes tiny results, as Excel's does).
+  void Run(const uint8_t* p, const uint8_t* end, bool top);
+  Value RunOne(const uint8_t* p, const uint8_t* end);  // runs and pops the value
+  void Unary(uint8_t code);
+  void Binary(uint8_t code, bool final);
+  void CallFn(int id, int argc, bool arrayMode);
+  const uint8_t* Lazy(const uint8_t* p);  // runs a lazy call; returns the code after it
+
+  // Cells
+  Value CellValue(int sheet, int32_t row, int32_t col);
+  bool Ready(const Value& ref);  // a run-time reference: its cells calculated? (else sets stop)
+  // A reference as one value outside array formulas: the cell it shares the formula's row or
+  // column with (implicit intersection), else #VALUE!.
+  Value Intersect(const Value& ref);
+  // A reference as an array (whole columns and rows cut to the workbook's used extent).
+  Value RefArray(const Value& ref);
+  // A value for an operator or a 'V' argument: references intersected, or made arrays in array
+  // formulas; single cells read.
+  Value Deref(const Value& v, bool arrayMode);
+  void WorkbookExtent(int32_t& rows, int32_t& cols);
+  int32_t extentRows_ = -1, extentCols_ = -1;
+};
+
+// The view of a scalar Value as a cell's (text borrowed from the Value).
+CellView View(const Value& v);
+Value FromView(const CellView& c);
+
+// Excel's conversions of one scalar. On failure, `e` is the error.
+bool ToNumber(Machine& m, const Value& v, double& d, Err& e);
+bool ToNumber(Machine& m, const CellView& v, double& d, Err& e);
+bool ToText(const Value& v, std::string& s, Err& e);
+bool ToBool(const Value& v, bool& b, Err& e);
+
+// Ordering of two values as comparison operators see them: numbers < text < booleans; text
+// case-insensitive; numbers to 15 digits. Empty is 0, "" or FALSE as the other side needs.
+int CompareValues(const CellView& a, const CellView& b);
+bool EqualNumbers(double a, double b);  // equal to 15 significant digits
+
+struct Call {
+  Machine& m;
+  Value* args;
+  int argc;
+  bool arrayMode;
+  Value out;
+
+  bool Has(int i) const { return i >= 0 && i < argc && !args[i].IsMissing(); }
+  const Value& arg(int i) const { return args[i]; }
+  void Fail(Err e) { out = Value::Error(e); }
+  // Scalar arguments ('V'). On failure they set `out` to the error and return false. A missing
+  // argument gives `def`.
+  bool Number(int i, double& v, double def = 0);
+  bool Integer(int i, double& v, double def = 0);  // truncated toward zero
+  bool Text(int i, std::string& s);
+  bool Boolean(int i, bool& b, bool def = false);
+  void SetNumber(double v);  // #NUM! for infinities and NaN
+};
+
+// A reference (one area on one sheet), an array or a scalar seen as rows x cols. `rows`/`cols` are
+// its size; `dataRows`/`dataCols` stop where the sheet's cells do (the rest is empty).
+struct Grid {
+  Machine* m = nullptr;
+  const Value* v = nullptr;
+  bool ref = false;
+  Area area;
+  int32_t rows = 0, cols = 0, dataRows = 0, dataCols = 0;
+  CellView At(int32_t r, int32_t c) const;
+};
+// False for a union of areas or several sheets (#VALUE!), or when the reference isn't ready.
+bool MakeGrid(Machine& m, const Value& v, Grid& g);
+
+enum class From { kDirect, kRef, kArray };
+// Calls fn(const CellView&, From) for each value of an 'R' or 'A' argument: a value given
+// directly, each non-empty cell of a reference, each element of an array. Stops when fn returns
+// false; returns false then, or when a reference wasn't ready.
+template <class F>
+bool EachItem(Machine& m, const Value& v, F&& fn);
+
+// COUNTIF-style criteria: "=x", "<>x", "<5", ">=1/1/2024", "a*", 5, TRUE.
+struct Criteria {
+  enum Op { kEq, kNe, kLt, kLe, kGt, kGe } op = kEq;
+  Type type = Type::Empty;  // what is compared: Number, Text, Bool, Error, or Empty for blanks
+  double num = 0;
+  std::string text;
+  Err err = Err::None;
+  bool wildcard = false;
+  bool Match(const CellView& c) const;
+};
+bool MakeCriteria(Machine& m, const Value& v, Criteria& c);
+
+// A text's characters (UTF-16 code units, as Excel counts them).
+std::wstring Wide(std::string_view s);
+std::string Narrow(std::wstring_view s);
+
+// --- template implementation ---
+
+namespace detail {
+template <class F>
+struct ItemThunk {
+  F* fn;
+  bool stopped = false;
+  static bool Call(void* ctx, int32_t, int32_t, const CellView& c) {
+    auto* t = static_cast<ItemThunk*>(ctx);
+    if (!(*t->fn)(c, From::kRef)) {
+      t->stopped = true;
+      return false;
+    }
+    return true;
+  }
+};
+}  // namespace detail
+
+template <class F>
+bool EachItem(Machine& m, const Value& v, F&& fn) {
+  switch (v.type()) {
+    case Type::Ref:
+    case Type::RefList: {
+      if (!m.Ready(v)) return false;
+      detail::ItemThunk<std::remove_reference_t<F>> t{&fn};
+      auto area = [&](const Area& a) {
+        for (int s = a.s1; s <= a.s2 && !t.stopped; ++s)
+          m.host.ForEachCell(s, a.r1, a.c1, a.r2, a.c2, &decltype(t)::Call, &t);
+      };
+      if (v.type() == Type::Ref) {
+        area(v.area());
+      } else {
+        for (const Area& a : v.areas()) {
+          if (t.stopped) break;
+          area(a);
+        }
+      }
+      return !t.stopped;
+    }
+    case Type::Array: {
+      const Array& a = v.array();
+      for (int32_t i = 0, n = a.size(); i < n; ++i)
+        if (!fn(View(a.data()[i]), From::kArray)) return false;
+      return true;
+    }
+    case Type::Missing:
+      return true;
+    default:
+      return fn(View(v), From::kDirect);
+  }
+}
+
+// --- the functions ---
+
+namespace fn {
+#define FW_FN(name) void name(Call& c);
+FW_FN(Abs) FW_FN(Address) FW_FN(And) FW_FN(Average) FW_FN(AverageA) FW_FN(AverageIf) FW_FN(AverageIfs)
+FW_FN(Ceiling) FW_FN(CeilingMath) FW_FN(Char) FW_FN(Clean) FW_FN(Code) FW_FN(Column) FW_FN(Columns)
+FW_FN(Concat) FW_FN(Concatenate) FW_FN(Count) FW_FN(CountA) FW_FN(CountBlank) FW_FN(CountIf) FW_FN(CountIfs)
+FW_FN(Date) FW_FN(DateDif) FW_FN(DateValue) FW_FN(Day) FW_FN(Days) FW_FN(Dollar) FW_FN(EDate) FW_FN(EOMonth)
+FW_FN(ErrorType) FW_FN(Even) FW_FN(Exact) FW_FN(Exp) FW_FN(False) FW_FN(Find) FW_FN(Fixed) FW_FN(Floor)
+FW_FN(FloorMath) FW_FN(Fv) FW_FN(HLookup) FW_FN(Hour) FW_FN(Hyperlink) FW_FN(Index) FW_FN(Indirect) FW_FN(Int)
+FW_FN(IsBlank) FW_FN(IsErr) FW_FN(IsError) FW_FN(IsEven) FW_FN(IsLogical) FW_FN(IsNA) FW_FN(IsNonText)
+FW_FN(IsNumber) FW_FN(IsOdd) FW_FN(IsoWeekNum) FW_FN(IsRef) FW_FN(IsText) FW_FN(Large) FW_FN(Left) FW_FN(Len)
+FW_FN(Ln) FW_FN(Log) FW_FN(Log10) FW_FN(Lookup) FW_FN(Lower) FW_FN(Match) FW_FN(Max) FW_FN(MaxA) FW_FN(MaxIfs)
+FW_FN(Median) FW_FN(Mid) FW_FN(Min) FW_FN(MinA) FW_FN(MinIfs) FW_FN(Minute) FW_FN(Mod) FW_FN(Mode) FW_FN(Month)
+FW_FN(MRound) FW_FN(N) FW_FN(NA) FW_FN(NetworkDays) FW_FN(NetworkDaysIntl) FW_FN(Not) FW_FN(Now) FW_FN(NPer)
+FW_FN(Npv) FW_FN(NumberValue) FW_FN(Odd) FW_FN(Offset) FW_FN(Or) FW_FN(Percentile) FW_FN(Pi) FW_FN(Pmt)
+FW_FN(Power) FW_FN(Product) FW_FN(Proper) FW_FN(Pv) FW_FN(Quartile) FW_FN(Quotient) FW_FN(Rand)
+FW_FN(RandBetween) FW_FN(Rank) FW_FN(RankAvg) FW_FN(Rate) FW_FN(Replace) FW_FN(Rept) FW_FN(Right) FW_FN(Round)
+FW_FN(RoundDown) FW_FN(RoundUp) FW_FN(Row) FW_FN(Rows) FW_FN(Search) FW_FN(Second) FW_FN(Sign) FW_FN(Small)
+FW_FN(Sqrt) FW_FN(StDev) FW_FN(StDevP) FW_FN(Substitute) FW_FN(Subtotal) FW_FN(Sum) FW_FN(SumIf) FW_FN(SumIfs)
+FW_FN(SumProduct) FW_FN(SumSq) FW_FN(T) FW_FN(Text) FW_FN(TextJoin) FW_FN(Time) FW_FN(TimeValue) FW_FN(Today)
+FW_FN(Transpose) FW_FN(Trim) FW_FN(True) FW_FN(Trunc) FW_FN(TypeFn) FW_FN(Upper) FW_FN(ValueFn) FW_FN(Var)
+FW_FN(VarP) FW_FN(VLookup) FW_FN(Weekday) FW_FN(WeekNum) FW_FN(Workday) FW_FN(WorkdayIntl) FW_FN(XLookup)
+FW_FN(XMatch) FW_FN(Xor) FW_FN(Year) FW_FN(YearFrac)
+#undef FW_FN
+}  // namespace fn
+
+}  // namespace fw::sheet::calc

@@ -1,5 +1,5 @@
 # The .xlsx reader, and the writer the round-trip tests use (saving comes in S2).
-target_sources(fwsheet PRIVATE Reader.cpp SheetReader.cpp Writer.cpp)
+target_sources(fwsheet PRIVATE Numbers.cpp Reader.cpp SheetReader.cpp Writer.cpp)
 # Never-damage tests through the workbook model (plan §10): every workbook in the public corpus is
 # read into the model, which writes back the parts it owns; they must equal the originals after
 # canonicalization, and the saved copy must pass check. Every folder of tests/office but the
