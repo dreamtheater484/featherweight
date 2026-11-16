@@ -433,10 +433,8 @@ XmlPull::Event XmlPull::ParseStartTag() {
 
   // Raw attributes first; values are decoded once their number is known, so the decoded
   // strings never move while views into them exist.
-  struct Raw {
-    std::string_view name, value;
-  };
-  std::vector<Raw> raws;
+  std::vector<RawAttr>& raws = raws_;
+  raws.clear();
   bool isEmpty = false;
   for (;;) {
     bool space = SkipSpace();

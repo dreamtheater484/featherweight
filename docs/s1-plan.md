@@ -25,7 +25,7 @@ S1 starts before 2.0's fidelity targets are met (decision 23). Nothing in S1 dep
 
 ## Reference PC
 
-Excel 2021 (16.0, ProPlus 2021 Retail) on this PC, Windows locale en-US: short dates `M/d/yyyy`, decimal point `.`, list separator `,`. Excel's PDF exports use these, so the number-format engine is measured in en-US. Functions newer than Excel 2021 show their cached values in the reference too.
+Excel 2021 (16.0, ProPlus 2021 Retail) on this PC. Windows' regional format is **en-NL** (English, Netherlands): short dates `dd/MM/yyyy`, decimal comma, `.` for thousands, `,` as the list separator, `€`. Excel's PDF exports and `Range.Text` follow it, so S1 is measured in en-NL: built-in format ids follow the en-NL table (14 is `dd/mm/yyyy`, 20 is `hh:mm`), and custom codes show with en-NL separators. (.NET's `Get-Culture` says en-US here; the regional format is what Excel uses.) Functions newer than Excel 2021 show their cached values in the reference too.
 
 ## Pieces
 
