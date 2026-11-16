@@ -11,7 +11,7 @@ if(FW_FUZZ_ENGINE STREQUAL "libfuzzer")
   # the coverage flags, and the libFuzzer and sancov runtimes, linked by hand.
   set(_fw_instrument /fsanitize=address /fsanitize-coverage=inline-8bit-counters /fsanitize-coverage=edge
     /fsanitize-coverage=trace-cmp /fsanitize-coverage=trace-div)
-  foreach(lib fwcore fwpkg fwdoc fwsheet fwdraw fwchart fwtext fwdoclayout fwpictures miniz pugixml)
+  foreach(lib fwcore fwpkg fwdoc fwsheet fwsheetobjects fwdraw fwchart fwtext fwdoclayout fwpictures miniz pugixml)
     target_compile_options(${lib} PRIVATE ${_fw_instrument})
   endforeach()
 endif()
@@ -42,7 +42,7 @@ target_link_libraries(fuzz_layout PRIVATE fwdoclayout)
 target_link_libraries(fuzz_picture PRIVATE fwpictures)
 target_link_libraries(fuzz_shapes PRIVATE fwpictures)
 target_link_libraries(fuzz_chart PRIVATE fwchart)
-target_link_libraries(fuzz_xlsx PRIVATE fwsheet)
+target_link_libraries(fuzz_xlsx PRIVATE fwsheet fwsheetobjects)
 
 # Replay the seeds and the regression files once (libFuzzer: -runs=0 runs the inputs, no fuzzing).
 # run-fuzzers.ps1 lists the same seed folders for the timed runs.

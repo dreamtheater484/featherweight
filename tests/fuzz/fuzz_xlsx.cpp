@@ -1,11 +1,18 @@
 // Fuzz target: the workbook model (src/sheet/model) and its .xlsx reader and writer (S1): every
 // sheet read, everything the grid and the formula engine ask of the model, a few changes, and the
-// writer, which must give back what it read.
+// writer, which must give back what it read. Also what sits above the cells (src/sheet/objects):
+// drawings, charts with their data references, notes and threaded comments, read, placed and
+// drawn; and the table styles' formats.
 // Seeds: tests/fuzz/seeds/xlsx (a small workbook with every structure the model reads) and
 // tests/fuzz/seeds/package (corpus files as text).
 //
 // An input is a zip, or parts as text as fuzz_check reads them: each part starts on a line
 // "@<part name>", and the rest of the input up to the next such line is its content.
+#include <d2d1_1.h>
+#include <wincodec.h>
+#include <wrl/client.h>
+
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -18,6 +25,10 @@
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "pkg/Zip.h"
+#include "chart/Chart.h"
+#include "draw/D2DPainter.h"
+#include "sheet/model/TableStyles.h"
+#include "sheet/objects/SheetObjects.h"
 #include "sheet/xlsx/Xlsx.h"
 
 using namespace fw::pkg;
@@ -109,6 +120,72 @@ void ReadEverything(const Workbook& book) {
   for (size_t i = 0; i < book.SheetCount(); ++i) Check(book.FindSheet(book.GetSheet(i).Name()) >= 0);
 }
 
+// A small software render target, made once.
+struct Target {
+  Microsoft::WRL::ComPtr<ID2D1Factory1> factory;
+  Microsoft::WRL::ComPtr<IWICImagingFactory> wic;
+  Microsoft::WRL::ComPtr<IWICBitmap> bitmap;
+  Microsoft::WRL::ComPtr<ID2D1RenderTarget> target;
+  Microsoft::WRL::ComPtr<ID2D1DeviceContext> dc;
+  draw::D2DBitmapCache cache;
+
+  Target() {
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    D2D1_FACTORY_OPTIONS opts{};
+    Check(SUCCEEDED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory1), &opts,
+                                      reinterpret_cast<void**>(factory.GetAddressOf()))));
+    Check(SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))));
+    Check(SUCCEEDED(wic->CreateBitmap(64, 64, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bitmap)));
+    const D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+        D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+    Check(SUCCEEDED(factory->CreateWicBitmapRenderTarget(bitmap.Get(), props, &target)));
+    Check(SUCCEEDED(target.As(&dc)));
+    fw::chart::Install();
+  }
+};
+
+bool Finite(const draw::Rect& r) {
+  return std::isfinite(r.left) && std::isfinite(r.top) && std::isfinite(r.right) && std::isfinite(r.bottom);
+}
+
+// Every sheet's objects read, placed on a grid with a hidden column and row, and drawn; the table
+// styles' formats for the first cells of each table.
+void DrawObjects(Workbook& book) {
+  struct Layout : SheetLayout {
+    double ColumnLeft(uint32_t c) const override { return 48.0 * c - (c > 2 ? 48 : 0); }
+    double RowTop(uint32_t r) const override { return 15.0 * r - (r > 3 ? 15 : 0); }
+  } layout;
+  static Target t;
+  for (size_t i = 0; i < book.SheetCount(); ++i) {
+    auto objects = SheetObjects::Load(book, i);
+    objects->Place(layout);
+    for (const SheetObjects::Object& o : objects->Objects()) Check(Finite(o.rect));
+    for (const CellNote& n : objects->Notes()) Check(objects->NoteAt(n.row, n.col) != nullptr);
+    t.target->BeginDraw();
+    {
+      draw::D2DPainter painter(t.dc.Get(), &t.cache);
+      painter.Transform(draw::Matrix::Scale(0.1f, 0.1f));
+      objects->Draw(painter, {0, 0, 640, 640}, {});
+      if (!objects->Notes().empty()) {
+        const CellNote& n = objects->Notes().front();
+        const draw::Size size = objects->NoteSize(n);
+        Check(std::isfinite(size.width) && std::isfinite(size.height));
+        objects->DrawNote(painter, n, {0, 0, std::min(size.width, 640.f), std::min(size.height, 640.f)});
+      }
+      if (objects->IsChartSheet()) objects->DrawChartSheet(painter, {0, 0, 640, 640});
+    }
+    t.target->EndDraw();  // a failure (a device that can't draw something) is fine; a crash isn't
+    t.cache.Clear();
+    const Sheet& s = book.GetSheet(i);
+    for (const Table& table : s.Tables()) {
+      table.FindColumn("Amount");
+      for (uint32_t r = table.ref.firstRow; r <= table.ref.lastRow && r < table.ref.firstRow + 6; ++r)
+        for (uint32_t c = table.ref.firstCol; c <= table.ref.lastCol && c < table.ref.firstCol + 6; ++c)
+          TableFormatAt(book.GetStyles(), s, r, c);
+    }
+  }
+}
+
 }  // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
@@ -122,6 +199,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   std::unique_ptr<Workbook> book = xlsx::Read(std::move(pkg), st, {.loadAll = true});
   if (!book) return 0;
   ReadEverything(*book);
+  DrawObjects(*book);
 
   // The never-damage bar: every part the model writes, written back, says what it said.
   std::vector<uint8_t> bytes;
