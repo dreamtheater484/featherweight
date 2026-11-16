@@ -51,31 +51,35 @@ TEST(FileKinds_KindOfPath) {
   CHECK(KindOfPath(L"") == FileKind::Unknown);
 }
 
-TEST(FileKinds_ThePdfReaderAndTheDocumentEditorHaveShipped) {
+TEST(FileKinds_ThePdfReaderTheDocumentEditorAndTheSpreadsheetViewerHaveShipped) {
   // Update this when a viewer or an editor ships: file associations and the start screen follow.
-  CHECK(ShippedViewers() == (std::vector<FileKind>{FileKind::Pdf, FileKind::Document}));
+  CHECK(ShippedViewers() == (std::vector<FileKind>{FileKind::Pdf, FileKind::Document, FileKind::Workbook}));
   CHECK(EditorShipped(FileKind::Document) && AnyEditorShipped());
   CHECK(!EditorShipped(FileKind::Workbook) && !EditorShipped(FileKind::Presentation));
   CHECK(ViewerShipped(FileKind::Pdf));
   CHECK(ViewerShipped(FileKind::Document));
+  CHECK(ViewerShipped(FileKind::Workbook));  // S1
+  CHECK(!ViewerShipped(FileKind::Presentation));
   CHECK(!ViewerShipped(FileKind::Unknown));
   CHECK(!EditorShipped(FileKind::Unknown));
   // What the viewers open: not the formats that come later.
   CHECK(Opens(L"C:\\Docs\\Lease.PDF"));
   CHECK(Opens(L"Report.docx") && Opens(L"Template.DOTM") && Opens(L"Notes.odt") && Opens(L"Form.OTT"));
   CHECK(!Opens(L"notes.txt") && !Opens(L"letter.rtf") && Opens(L"old.doc"));  // .doc is imported (D5)
-  CHECK(!Opens(L"Budget.xlsx") && !Opens(L"photo.png"));
+  CHECK(Opens(L"Budget.xlsx") && Opens(L"export.CSV") && Opens(L"data.tsv"));  // S1
+  CHECK(!Opens(L"old.xls") && !Opens(L"sheet.ods") && !Opens(L"Deck.pptx") && !Opens(L"photo.png"));
 }
 
 TEST(FileKinds_EditorsForTesting) {
-  SetEditorShippedForTesting(FileKind::Workbook, true);
-  CHECK(EditorShipped(FileKind::Workbook));
+  SetEditorShippedForTesting(FileKind::Presentation, true);
+  CHECK(EditorShipped(FileKind::Presentation));
   CHECK(AnyEditorShipped());
-  CHECK(!ViewerShipped(FileKind::Workbook));  // file associations don't follow the testing switch
-  CHECK(ShippedViewers() == (std::vector<FileKind>{FileKind::Pdf, FileKind::Document}));
+  CHECK(!ViewerShipped(FileKind::Presentation));  // file associations don't follow the testing switch
+  CHECK(ShippedViewers() == (std::vector<FileKind>{FileKind::Pdf, FileKind::Document, FileKind::Workbook}));
   SetEditorShippedForTesting(FileKind::Pdf, true);  // PDFs are read, not created
   CHECK(!EditorShipped(FileKind::Pdf));
-  SetEditorShippedForTesting(FileKind::Workbook, false);
-  CHECK(!EditorShipped(FileKind::Workbook));
+  SetEditorShippedForTesting(FileKind::Presentation, false);
+  CHECK(!EditorShipped(FileKind::Presentation));
+  CHECK(!EditorShipped(FileKind::Workbook));  // S1 is a viewer
   CHECK(EditorShipped(FileKind::Document));  // shipped, not only for testing
 }
