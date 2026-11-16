@@ -414,7 +414,7 @@ static void RowCol(Call& c, bool row) {
   if (v.type() != Type::Ref) return c.Fail(Err::Value);
   const Area& a = v.area();
   int32_t first = row ? a.r1 : a.c1, n = row ? a.Rows() : a.Cols();
-  if (n == 1) return c.SetNumber(first + 1);
+  if (n == 1 || !c.arrayMode) return c.SetNumber(first + 1);  // legacy formulas: the first only
   if (n > 1048576) n = 1048576;
   Array* out = row ? Array::Make(n, 1) : Array::Make(1, n);
   for (int32_t i = 0; i < n; ++i) out->data()[i] = Value::Number(first + i + 1);

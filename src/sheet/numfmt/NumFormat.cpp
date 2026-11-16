@@ -4,6 +4,7 @@
 #include <cfloat>
 #include <charconv>
 #include <cmath>
+#include <cstdio>
 #include <string>
 
 // How Excel shows values, as measured on Excel 2021 (tests/sheet/excel_numfmt.py asks Excel; the
@@ -76,21 +77,24 @@ Decimal ToDecimal(double v) {
   Decimal x;
   v = std::fabs(v);
   if (!(v >= DBL_MIN) || !std::isfinite(v)) return x;
+  // printf, not std::to_chars: the app has printf anyway, and to_chars brings 100 KB of tables.
   char buf[48];
-  const auto r = std::to_chars(buf, buf + sizeof buf, v, std::chars_format::scientific, 14);
+  const int len = std::snprintf(buf, sizeof buf, "%.14e", v);
+  if (len <= 0 || len >= static_cast<int>(sizeof buf)) return x;
+  const char* end = buf + len;
   const char* p = buf;
   x.d[0] = *p++;
   int k = 1;
-  if (p < r.ptr && *p == '.') ++p;
-  while (p < r.ptr && *p != 'e' && k < 15) x.d[k++] = *p++;
-  while (p < r.ptr && *p != 'e') ++p;
+  if (p < end && *p == '.') ++p;
+  while (p < end && *p != 'e' && k < 15) x.d[k++] = *p++;
+  while (p < end && *p != 'e') ++p;
   x.n = k;
   while (x.n > 1 && x.d[x.n - 1] == '0') --x.n;
-  if (p < r.ptr) ++p;
+  if (p < end) ++p;
   int sign = 1;
-  if (p < r.ptr && (*p == '-' || *p == '+')) sign = *p++ == '-' ? -1 : 1;
+  if (p < end && (*p == '-' || *p == '+')) sign = *p++ == '-' ? -1 : 1;
   int e = 0;
-  while (p < r.ptr) e = e * 10 + (*p++ - '0');
+  while (p < end) e = e * 10 + (*p++ - '0');
   x.e = sign * e;
   return x;
 }
@@ -136,8 +140,8 @@ int FloorDiv(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
 
 std::string IntDigits(double v) {  // a non-negative whole number's digits ("0" for zero)
   char buf[400];
-  const auto r = std::to_chars(buf, buf + sizeof buf, std::floor(v), std::chars_format::fixed, 0);
-  return std::string(buf, r.ptr);
+  const int len = std::snprintf(buf, sizeof buf, "%.0f", std::floor(v));
+  return len > 0 && len < static_cast<int>(sizeof buf) ? std::string(buf, static_cast<size_t>(len)) : std::string("0");
 }
 
 // The last convergent of x's continued fraction with a denominator up to maxDen, in doubles as

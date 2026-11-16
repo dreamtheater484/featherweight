@@ -223,3 +223,80 @@ TEST(SheetNumFmt_Robust) {
   }
   CHECK(true);
 }
+
+#include <cmath>
+
+#include "sheet/numfmt/Parse.h"
+
+namespace {
+bool IsNumber(const wchar_t* s, const NumLocale& l, double v, const wchar_t* code) {
+  ParsedValue p;
+  return ParseExact(s, l, false, p) && p.kind == ParsedValue::Number && std::fabs(p.number - v) < 1e-9 &&
+         p.code == code;
+}
+}  // namespace
+
+TEST(SheetNumFmt_ParseNumbers) {
+  const NumLocale& us = EnUsLocale();
+  const NumLocale& nl = EnNlLocale();
+  CHECK(IsNumber(L"123", us, 123, L""));
+  CHECK(IsNumber(L"-12.5", us, -12.5, L""));
+  CHECK(IsNumber(L"0.5", us, 0.5, L""));
+  CHECK(IsNumber(L"12.50", us, 12.5, L"0.00"));
+  CHECK(IsNumber(L"1,234.50", us, 1234.5, L"#,##0.00"));
+  CHECK(IsNumber(L"1.234,50", nl, 1234.5, L"#,##0.00"));
+  CHECK(IsNumber(L"0,5", nl, 0.5, L""));
+  CHECK(IsNumber(L"123456789012", us, 123456789012, L"0"));
+  CHECK(IsNumber(L"3.14159265358979", us, 3.14159265358979, L"0.00000000000000"));
+  CHECK(IsNumber(L"50%", us, 0.5, L"0%"));
+  CHECK(IsNumber(L"33.3%", us, 0.333, L"0.0%"));
+  CHECK(IsNumber(L"$1,234.50", us, 1234.5, L"\"$\"#,##0.00"));
+  CHECK(IsNumber(L"-$5", us, -5, L"\"$\"0"));
+  CHECK(IsNumber(L"(1,234)", us, -1234, L"#,##0;(#,##0)"));
+  CHECK(IsNumber(L"\u20AC 12,50", nl, 12.5, L"\"\u20AC \"0.00"));
+  CHECK(IsNumber(L"12,50 \u20AC", nl, 12.5, L"0.00\" \u20AC\""));
+  CHECK(IsNumber(L"1.5E+10", us, 1.5e10, L"0.0E+00"));
+  CHECK(IsNumber(L".5", us, 0.5, L".0"));
+  ParsedValue p;
+  CHECK(ParseExact(L"TRUE", us, false, p) && p.kind == ParsedValue::Bool && p.number == 1);
+  CHECK(ParseValue(L"true", us, false, p) && p.kind == ParsedValue::Bool);  // typed: yes; CSV: no
+  CHECK(ParseValue(L"007", us, false, p) && p.number == 7 && p.plain);
+  // What CSV keeps as text: anything Excel would show differently.
+  for (const wchar_t* s : {L"007", L"1234567890123456", L"12345678901234567890", L"1,23", L"1,2345", L"abc", L"",
+                           L" 5", L"5 ", L"+5", L"true", L"1e5x", L"5%%", L"$", L"-", L"()", L"1.2.3",
+                           L"0x1F", L"1_000", L"\u20AC5", L"5-", L"--5", L"(-5)"})
+    CHECK(!ParseExact(s, us, false, p) || p.kind != ParsedValue::Number || (std::wcscmp(s, L"\u20AC5") == 0));
+  CHECK(!ParseExact(L"1.5", nl, false, p));
+  CHECK(!ParseExact(L"1,234", nl, false, p) || p.number == 1.234);
+}
+
+TEST(SheetNumFmt_ParseDates) {
+  const NumLocale& us = EnUsLocale();
+  const NumLocale& nl = EnNlLocale();
+  ParsedValue p;
+  CHECK(ParseExact(L"3/15/2023", us, false, p) && p.date && p.number == 45000 && p.code == L"m/d/yyyy");
+  CHECK(ParseExact(L"03/15/2023", us, false, p) && p.number == 45000 && p.code == L"mm/dd/yyyy");
+  CHECK(ParseExact(L"15/03/2023", nl, false, p) && p.number == 45000 && p.code == L"dd/mm/yyyy");
+  CHECK(!ParseExact(L"3/15/2023", nl, false, p));
+  CHECK(ParseExact(L"2023-03-15", nl, false, p) && p.number == 45000 && p.code == L"yyyy-mm-dd");
+  CHECK(ParseExact(L"15.03.2023", nl, false, p) && p.number == 45000);
+  CHECK(ParseExact(L"3/15/23", us, false, p) && p.number == 45000);
+  CHECK(ParseExact(L"2023-03-15 13:45:00", us, false, p) && std::fabs(p.number - (45000 + 825 / 1440.0)) < 1e-9 &&
+        p.code == L"yyyy-mm-dd h:mm:ss");
+  CHECK(ParseExact(L"15-Mar-2023", us, false, p) && p.number == 45000 && p.code == L"d-mmm-yyyy");
+  CHECK(ParseExact(L"15 March 2023", us, false, p) && p.number == 45000);
+  CHECK(ParseExact(L"March 15, 2023", us, false, p) && p.number == 45000);
+  CHECK(ParseExact(L"Mar 5, 2023", us, false, p) && p.number == 44990);
+  CHECK(ParseExact(L"13:45", us, false, p) && p.date && p.code == L"h:mm" && std::fabs(p.number - 825 / 1440.0) < 1e-12);
+  CHECK(ParseExact(L"09:05:30", us, false, p) && p.code == L"hh:mm:ss");
+  CHECK(ParseExact(L"1:45 PM", us, false, p) && std::fabs(p.number - 825 / 1440.0) < 1e-12);
+  CHECK(ParseExact(L"12:00:00.500", us, false, p) && std::fabs(p.number - 43200.5 / 86400) < 1e-12);
+  CHECK(ParseExact(L"2/29/1900", us, false, p) && p.number == 60);
+  CHECK(ParseExact(L"1/1/1904", us, true, p) && p.number == 0);
+  // Codes that look like dates stay text: no year, no two-digit minutes, or impossible.
+  for (const wchar_t* s : {L"1-2", L"MAR1", L"SEPT2", L"12-31", L"2:1", L"25:00", L"2/30/2023", L"13/1/2023",
+                           L"1/1/10000", L"3/15/2023 ", L"3/15/2023 25:00", L"1:45 pm", L"2023-3-15T10:00",
+                           L"1/2/3", L"Mar 2023", L"15 Mrch 2023"})
+    CHECK(!ParseExact(s, us, false, p));
+  CHECK(ParseValue(L"1:45 pm", us, false, p) && std::fabs(p.number - 825 / 1440.0) < 1e-12);  // typed: yes
+}

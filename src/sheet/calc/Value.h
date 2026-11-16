@@ -183,19 +183,28 @@ class Value {
 inline Value& Array::at(int32_t r, int32_t c) { return data()[r * cols_ + c]; }
 inline const Value& Array::at(int32_t r, int32_t c) const { return data()[r * cols_ + c]; }
 
-// --- Conversions as Excel makes them (en-US, the file's invariant forms) ---
+// --- Conversions as Excel makes them ---
+
+// The region's conventions for converting between text and numbers in formulas (Excel follows
+// Windows' regional settings): "0.3"&"" is "0,3" with a decimal comma.
+struct ConvLocale {
+  char decimal = '.', group = ',';
+  char dateOrder = 'M';      // typed dates: 'M' m/d/y, 'D' d/m/y, 'Y' y/m/d
+  std::string currency = "$";  // UTF-8
+};
+const ConvLocale& EnUsConv();
 
 // A number as text: up to 15 significant digits, as `&` and General show it ("0.3", "1E+20").
-std::string NumberText(double d);
+std::string NumberText(double d, char decimal = '.');
 // Excel keeps 15 significant digits: rounds `d` to them.
 double Round15(double d);
 // Text as a number, as arithmetic converts it: " 12 ", "1e3", "1,234.5", "$12", "50%", "(3)",
 // dates and times in en-US forms ("1/2/2024", "2024-01-02", "Jan 2, 2024", "12:30 PM").
 // `date1904` picks the date system for dates.
-bool TextToNumber(std::string_view s, double& out, bool date1904 = false);
+bool TextToNumber(std::string_view s, double& out, bool date1904 = false, const ConvLocale& loc = EnUsConv());
 
 // The value's text for TEXTJOIN, CONCAT and `&` (booleans as TRUE/FALSE, empty as "").
-std::string ValueText(const Value& v);
+std::string ValueText(const Value& v, char decimal = '.');
 
 // Case-insensitive comparison of text as Excel orders it: -1, 0 or 1.
 int CompareText(std::string_view a, std::string_view b);

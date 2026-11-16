@@ -534,7 +534,7 @@ bool Engine::Ready(const Area& a) {
 
 bool Engine::Spill(int sheet, int32_t row, int32_t col, Area& out) {
   uint32_t id = NodeAt(sheet, row, col);
-  if (id == UINT32_MAX || !(nodes_[id].flags & kDynamicArray)) return false;
+  if (id == UINT32_MAX || !(nodes_[id].f->flags & Formula::kArray)) return false;
   out = nodes_[id].out;
   return true;
 }
@@ -673,6 +673,11 @@ bool Engine::Recalculate(double budgetMs) {
 bool Engine::Stale(int sheet, int32_t row, int32_t col) const {
   uint32_t id = NodeAt(sheet, row, col);
   return id != UINT32_MAX && (nodes_[id].flags & kStale);
+}
+
+bool Engine::Dirty(int sheet, int32_t row, int32_t col) const {
+  uint32_t id = NodeAt(sheet, row, col);
+  return id != UINT32_MAX && nodes_[id].state != kClean;
 }
 
 size_t Engine::StaleCount() const {

@@ -118,12 +118,12 @@ bool ToNumber(Machine& m, const Value& v, double& d, Err& e) {
   return ToNumber(m, View(v), d, e);
 }
 
-bool ToText(const Value& v, std::string& s, Err& e) {
+bool ToText(const Value& v, std::string& s, Err& e, char decimal) {
   switch (v.type()) {
     case Type::Error: e = v.error(); return false;
-    case Type::Array: return ToText(v.array().at(0, 0), s, e);
+    case Type::Array: return ToText(v.array().at(0, 0), s, e, decimal);
     case Type::Ref: case Type::RefList: e = Err::Value; return false;
-    default: s = ValueText(v); return true;
+    default: s = ValueText(v, decimal); return true;
   }
 }
 
@@ -217,7 +217,7 @@ bool Call::Text(int i, std::string& s) {
     return true;
   }
   Err e = Err::None;
-  if (ToText(args[i], s, e)) return true;
+  if (ToText(args[i], s, e, m.decimal)) return true;
   Fail(e);
   return false;
 }
@@ -278,6 +278,7 @@ CellView Grid::At(int32_t r, int32_t c) const {
 
 bool MakeCriteria(Machine& m, const Value& v, Criteria& c) {
   c = Criteria();
+  c.conv = &m.host.Conv();
   switch (v.type()) {
     case Type::Number:  // 12 matches the text "12" too
       c.type = Type::Number, c.num = v.number(), c.text = NumberText(v.number());
@@ -348,7 +349,7 @@ bool Criteria::Match(const CellView& cell) const {
       if (cell.type == Type::Text && (op == kEq || op == kNe)) {
         // 5 and "5" match a cell holding text that reads as 5 (" 5 " too), as in Excel
         double d;
-        bool same = TextToNumber(cell.text, d) && EqualNumbers(d, num);
+        bool same = TextToNumber(cell.text, d, false, *conv) && EqualNumbers(d, num);
         return op == kEq ? same : !same;
       }
       return op == kNe;
@@ -471,8 +472,8 @@ Value BinaryScalar(Machine& m, uint8_t op, const Value& a, const Value& b, bool 
   if (a.IsError()) return a;
   if (b.IsError()) return b;
   if (op == kConcat) {
-    std::string s = ValueText(a);
-    s += ValueText(b);
+    std::string s = ValueText(a, m.decimal);
+    s += ValueText(b, m.decimal);
     if (s.size() > kMaxText) return Value::Error(Err::Value);
     return Value::Text(s);
   }
@@ -636,8 +637,12 @@ void Machine::Run(const uint8_t* p, const uint8_t* end, bool top) {
         k += l;
         std::string_view c2 = ReadStr(p + k, &l);
         Area a;
-        if (host.Table(table, at.sheet, at.row, at.col, items, c1, c2, a)) stack.push_back(Value::Ref(a));
-        else stack.push_back(Value::Error(Err::Ref));
+        if (host.Table(table, at.sheet, at.row, at.col, items, c1, c2, a)) {
+          stack.push_back(Value::Ref(a));
+        } else {  // tables the host doesn't know (yet): keep the cached value
+          unsupported = true;
+          stack.push_back(Value::Error(Err::Ref));
+        }
         break;
       }
       case kUnary: Unary(p[1]); break;
