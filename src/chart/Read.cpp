@@ -1,5 +1,5 @@
 // Reading c:chartSpace (fwchart): the plot area's chart groups, their series with the values Office
-// cached with them, the axes, the title and the legend. Untrusted input: counts are capped, and a
+// cached with them (or, in a workbook, its cells'), the axes, the title and the legend. Untrusted input: counts are capped, and a
 // chart with a type Featherweight doesn't draw isn't read at all (it stays a placeholder rather than
 // showing part of itself).
 #include <algorithm>
@@ -58,15 +58,30 @@ pugi::xml_node CacheOf(pugi::xml_node data, std::string_view ref, std::string_vi
   return C(data, literal);
 }
 
-std::vector<double> Numbers(pugi::xml_node data) {
+// A reference's (c:numRef, c:strRef...) cells, from the workbook when there's a data source.
+bool FromCells(pugi::xml_node ref, DataSource* source, std::vector<std::string>& texts, std::vector<double>& numbers,
+               std::string* format = nullptr) {
+  pugi::xml_node f = C(ref, "f");
+  if (!source || !f) return false;
+  texts.clear();
+  numbers.clear();
+  if (!source->Cells(f.text().get(), texts, numbers, format)) return false;
+  if (texts.size() > kMaxPoints) texts.resize(kMaxPoints);
+  numbers.resize(texts.size(), kNaN);
+  return true;
+}
+
+std::vector<double> Numbers(pugi::xml_node data, DataSource* source) {
   std::vector<double> out;
+  std::vector<std::string> texts;
+  if (FromCells(C(data, "numRef"), source, texts, out)) return out;
   for (const std::string& t : CachedText(CacheOf(data, "numRef", "numCache", "numLit")))
     out.push_back(t.empty() ? kNaN : Number(t, kNaN));
   return out;
 }
 
-// c:tx: rich text (paragraphs joined by spaces), a cached string, or a literal.
-std::wstring TextOf(pugi::xml_node tx) {
+// c:tx: rich text (paragraphs joined by spaces), a cached string (or the cells'), or a literal.
+std::wstring TextOf(pugi::xml_node tx, DataSource* source = nullptr) {
   std::string out;
   if (pugi::xml_node rich = C(tx, "rich")) {
     ForEachChild(rich, [&](pugi::xml_node p) {
@@ -80,7 +95,9 @@ std::wstring TextOf(pugi::xml_node tx) {
       return out.size() < kMaxText;
     });
   } else if (pugi::xml_node ref = C(tx, "strRef")) {
-    std::vector<std::string> pts = CachedText(C(ref, "strCache"));
+    std::vector<std::string> pts;
+    std::vector<double> numbers;
+    if (!FromCells(ref, source, pts, numbers)) pts = CachedText(C(ref, "strCache"));
     for (const std::string& s : pts) out += (out.empty() || s.empty() ? "" : " ") + s;
   } else {
     out = C(tx, "v").text().get();
@@ -132,9 +149,9 @@ void LabelsOf(pugi::xml_node dLbls, std::optional<bool>& val, std::optional<bool
   if (C(dLbls, "showCatName")) cat = On(dLbls, "showCatName", false);
 }
 
-Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors, size_t& budget) {
+Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors, size_t& budget, DataSource* source) {
   Series s;
-  if (pugi::xml_node tx = C(ser, "tx")) s.name = TextOf(tx);
+  if (pugi::xml_node tx = C(ser, "tx")) s.name = TextOf(tx, source);
   s.look = LookOf(C(ser, "spPr"), colors);
   ForEachChild(ser, [&](pugi::xml_node dPt) {
     if (LocalNameOf(dPt) == "dPt" && NamespaceOf(dPt) == kChart && s.points.size() < kMaxPoints) {
@@ -145,8 +162,15 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
   });
   const bool scatter = type == Type::Scatter;
   pugi::xml_node cat = C(ser, scatter ? "xVal" : "cat");
+  pugi::xml_node catRef = C(cat, "strRef");
+  if (!catRef) catRef = C(cat, "numRef");
+  if (!catRef) catRef = C(cat, "multiLvlStrRef");
+  std::vector<std::string> texts;
+  std::vector<double> numbers;
   if (scatter && (C(cat, "numRef") || C(cat, "numLit"))) {
-    s.xs = Numbers(cat);
+    s.xs = Numbers(cat, source);
+  } else if (FromCells(catRef, source, texts, numbers)) {
+    for (const std::string& t : texts) s.categories.push_back(Wide(t));
   } else if (cat) {
     pugi::xml_node cache = CacheOf(cat, "strRef", "strCache", "strLit");
     if (!cache) cache = CacheOf(cat, "numRef", "numCache", "numLit");
@@ -163,7 +187,7 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
       s.categories.push_back(Wide(t));
     }
   }
-  s.values = Numbers(C(ser, scatter ? "yVal" : "val"));
+  s.values = Numbers(C(ser, scatter ? "yVal" : "val"), source);
   // The chart's points are capped as a whole: a series past the budget is cut short.
   const size_t n = std::min(s.values.size(), budget);
   s.values.resize(n);
@@ -175,8 +199,13 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
   return s;
 }
 
-// The format code of a group's first series' cached numbers under `tag` (c:val, c:xVal, c:yVal).
-std::string SourceFormat(pugi::xml_node group, const char* tag) {
+// The format code of a group's first series' numbers under `tag` (c:val, c:xVal, c:yVal): their
+// first cell's, or the cache's.
+std::string SourceFormat(pugi::xml_node group, const char* tag, DataSource* source) {
+  std::vector<std::string> texts;
+  std::vector<double> numbers;
+  std::string format;
+  if (FromCells(C(C(C(group, "ser"), tag), "numRef"), source, texts, numbers, &format)) return format;
   return C(CacheOf(C(C(group, "ser"), tag), "numRef", "numCache", "numLit"), "formatCode").text().get();
 }
 
@@ -205,7 +234,7 @@ Axis AxisOf(pugi::xml_node ax, const std::string& source, const draw::ColorConte
 
 }  // namespace
 
-bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& out) {
+bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& out, DataSource* data) {
   out = Chart{};
   if (!chartSpace || LocalNameOf(chartSpace) != "chartSpace" || NamespaceOf(chartSpace) != kChart) return false;
   pugi::xml_node chart = C(chartSpace, "chart");
@@ -262,7 +291,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
       if (NamespaceOf(s) != kChart) return true;
       if (LocalNameOf(s) == "axId") ids.emplace_back(Val(s));
       else if (LocalNameOf(s) == "ser" && seriesCount < 255) {
-        g.series.push_back(SeriesOf(s, g.type, colors, budget));
+        g.series.push_back(SeriesOf(s, g.type, colors, budget, data));
         ++seriesCount;
       }
       return true;
@@ -288,9 +317,10 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     }
     // Linked to the data, a percent-stacked group's axis shows percentages.
     const auto valueFormat = [&](size_t i) {
-      return out.groups[i].grouping == Grouping::Percent ? std::string("0%") : SourceFormat(groups[i].first, scatter ? "yVal" : "val");
+      return out.groups[i].grouping == Grouping::Percent ? std::string("0%")
+                                                          : SourceFormat(groups[i].first, scatter ? "yVal" : "val", data);
     };
-    if (a) out.category = AxisOf(a, scatter ? SourceFormat(groups.front().first, "xVal") : std::string(), colors);
+    if (a) out.category = AxisOf(a, scatter ? SourceFormat(groups.front().first, "xVal", data) : std::string(), colors);
     if (b) out.value = AxisOf(b, valueFormat(0), colors);
     for (size_t i = 1; i < out.groups.size(); ++i) {
       const std::vector<std::string>& ids = groups[i].second;
@@ -318,7 +348,7 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
   // The title: its own text, or for a title without any, the series' name or "Chart Title".
   if (pugi::xml_node t = C(chart, "title")) {
     pugi::xml_node tx = C(t, "tx");
-    if (tx) out.title = TextOf(tx);
+    if (tx) out.title = TextOf(tx, data);
     else if (out.groups.size() == 1 && out.groups.front().series.size() == 1) out.title = out.groups.front().series.front().name;
     if (out.title.empty() && !tx) out.title = L"Chart Title";
     // Bold and in the chart's text color unless its own text (or else its c:txPr) says otherwise.
