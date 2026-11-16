@@ -64,6 +64,8 @@ $all = [ordered]@{
   fuzz_xlsx    = @{ Seeds = @("$seeds\xlsx", "$seeds\package", "$regressions\xlsx"); MaxLen = 65536 }
   # Number formats and value parsing (S1): spans stay inside the text; an exact parse shows as written.
   fuzz_numfmt  = @{ Seeds = @("$seeds\numfmt", "$regressions\numfmt"); MaxLen = 4096 }
+  # CSV and TSV (S1): rows in order, and every cell shows exactly its field, on one thread or several.
+  fuzz_csv     = @{ Seeds = @("$office\csv", "$regressions\csv"); MaxLen = 16384 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 
