@@ -96,6 +96,9 @@ constexpr const char* kUsage =
     "  fwtool decrypt --password P --out DIR <file or folder>...\n"
     "      Opens each password-protected Office file as Featherweight does and saves its package\n"
     "      in DIR; checks that encrypting it again with the key from opening round-trips.\n"
+    "  fwtool csv <file>...\n"
+    "      Opens each CSV or TSV file as Featherweight does: what it detected, and how long the\n"
+    "      first screen (100 rows) and the whole file took (budget: 1 s and 5 s for 100 MB).\n"
     "  fwtool cfb [--all] <file>...\n"
     "      Reads each compound file (.doc, protected Office files): every stream must read, and\n"
     "      writing them and reading them back must give the same bytes. --all lists the streams,\n"
@@ -292,6 +295,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"encrypt") return fwtool::RunCrypt(options, true);
   if (command == L"decrypt") return fwtool::RunCrypt(options, false);
   if (command == L"cfb") return fwtool::RunCfb(options);
+  if (command == L"csv") return fwtool::RunCsv(options);
   if (command == L"pdf-check") return fwtool::RunPdfCheck(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
