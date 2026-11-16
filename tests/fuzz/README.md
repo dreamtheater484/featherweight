@@ -18,6 +18,7 @@ One target per parser (plan §10). So far:
 - `fuzz_sfnt`: Export PDF's font subsetter (`src/draw/Sfnt.cpp`, D4): a font read as the export reads it, subset to glyphs a hash of the input picks, and embedded whole as a CFF font is. A subset must read back with the same glyph count, have right checksums, and subset again to the same bytes. Seeds: `seeds/font` (tiny TrueType, collection and CFF fonts), and locally up to 40 fonts of 256 KB or less from `C:\Windows\Fonts`, which `run-fuzzers.ps1` copies into the work folder (fonts' licences keep them out of the repository).
 - `fuzz_chart`: charts (`src/chart`, D5): a chart part (c:chartSpace) read from its cached values and laid out at a roomy, a small and a flat size. Every mark must be finite and near the chart, and their number within fwchart's cap. Seeds: `seeds/chart` (each chart type as Word writes it, from `tests/office/make_chart_tests.py`, and `word-chart*.xml`, the parts of `tests/office/script/charts.docx`, which Word wrote).
 - `fuzz_odt`: OpenDocument text import (`src/doc/odf`, D5): an `.odt` converted to a Word document, which must open, pass the check and be read by the model; otherwise the converter refuses it. Seeds: `seeds/odt`, a small hand-written document with every structure the converter reads. Inputs are read like `fuzz_check`'s.
+- `fuzz_xlsx`: the workbook model (`src/sheet`, S1): the .xlsx reader with every sheet, what the grid and the formula engine ask of the model (cells in order, formats, rich text, formulas, rows, columns, merges), the writer, and changes as recalculation makes them. Seeds: `seeds/xlsx`, a small hand-written workbook with every structure the model reads (and odd content it keeps as written), and `seeds/package`. Inputs are read like `fuzz_check`'s.
 
 `make_seeds.py` makes `seeds/opc`, `seeds/package`, `seeds/formula`, `seeds/drawing` and `seeds/picture` from the corpus (standard library only): `python tests/fuzz/make_seeds.py`.
 
@@ -30,6 +31,7 @@ Besides crashes and AddressSanitizer reports, each target aborts when an invaria
 - Relationships and content types that Featherweight writes read back the same.
 - Renaming references and renewing ids leaves a document that still parses.
 - Every part the document model writes back equals what it read, after canonicalization; runs and inline items stay inside their paragraph's text.
+- Every part the workbook model writes back equals what it read, after canonicalization; cells come in order, each is found again where it was walked, and rich text runs stay inside their string.
 - Pagination ends, within its page cap; every page has a size, and hit tests and carets land on the page and in the text.
 - A drawing's extent, ink bounds, wrap outline and text boxes are finite, and a decoded picture stays within its limits.
 - A picture is inserted or refused with a reason and nothing changed; one inserted is a picture the tools change; the saved file opens without package errors and has the pictures, each one the tools change; undoing everything gives the new document back (no picture, no media part), and redoing gives the pictures back.
@@ -66,10 +68,10 @@ cmake -S . -B build-fuzz -DFW_FUZZ=ON
 ```
 
 ```bash
-cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing fuzz_layout fuzz_picture fuzz_rtf fuzz_html fuzz_clip fuzz_sfnt fuzz_chart fuzz_cfb fuzz_doc fuzz_odt
+cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing fuzz_layout fuzz_picture fuzz_rtf fuzz_html fuzz_clip fuzz_sfnt fuzz_chart fuzz_cfb fuzz_doc fuzz_odt fuzz_xlsx
 ```
 
-`FW_FUZZ` instruments `fwcore`, `fwpkg`, `fwdoc`, `fwdraw`, miniz and pugixml with AddressSanitizer and coverage, so keep it out of normal builds.
+`FW_FUZZ` instruments `fwcore`, `fwpkg`, `fwdoc`, `fwsheet`, `fwdraw`, miniz and pugixml with AddressSanitizer and coverage, so keep it out of normal builds.
 
 ### Toolchains
 

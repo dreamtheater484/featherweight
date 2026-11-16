@@ -52,6 +52,11 @@ Fill ReadFill(pugi::xml_node n, bool differential);
 Border ReadBorder(pugi::xml_node n);
 Alignment ReadAlignment(pugi::xml_node n);
 
+// Numbers in <v> (Numbers.cpp): `v` written in `style` (0-6) into `out` (48 bytes), and the style
+// that writes `v` as `text`, if one does.
+size_t FormatNumber(double v, uint8_t style, char* out);
+bool NumberStyle(std::string_view text, double v, uint8_t& style);
+
 // Parses an XML fragment kept from a part (well-formed: XmlPull read it) as a DOM.
 bool ParseSlice(pugi::xml_document& doc, std::string_view xml);
 // The text of an element: its text and CDATA children, joined.
