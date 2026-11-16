@@ -750,8 +750,8 @@ def xlsx_formulas():
     ws["B2"] = ArrayFormula("B2", "=SUM(E2:E5*M2:M5)")
     ws["A3"] = "{=E2:E5*2} over B3:B6"
     ws["B3"] = ArrayFormula("B3:B6", "=E2:E5*2")
-    ws["A7"] = "{=TRANSPOSE(L2:L6)} over B7:F7 (C7:F7 in the same array)"
-    ws["B7"] = ArrayFormula("B7:F7", "=TRANSPOSE(L2:L6)")
+    ws["A16"] = "{=TRANSPOSE(L2:L6)} over B16:F16 (C16:F16 in the same array)"
+    ws["B16"] = ArrayFormula("B16:F16", "=TRANSPOSE(L2:L6)")
     ws["A8"] = "{=MAX(IF(F2:F9=\"apple\",E2:E9))}"
     ws["B8"] = ArrayFormula("B8", '=MAX(IF(F2:F9="apple",E2:E9))')
     ws["A9"] = "{=ROW(E2:E4)} over B9:B12 (one more cell than values: #N/A)"

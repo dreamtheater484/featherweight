@@ -243,7 +243,13 @@ S1's public files (`docs/s1-plan.md`, "Corpus and measuring"), at least one per 
 - every non-empty cell as `[ref, text, value, formatLocal]`: the text Excel shows (`Range.Text`, "####" included), the raw value (numbers to 17 digits, errors as `{"e": "#N/A"}`) and, in the public files, the number format as Excel's object model reports it here. That is in local form on the reference PC (`#.##0,00`, `dd/mm/jjjj` for format 14, `Standaard` for General), so it shows how Excel reads the code in this locale; the file's own code is in its `styles.xml`;
 - every formula cell as `[ref, formula, cached, opened, recalculated]`: the formula (`Formula2`), the value cached in the file (empty text when the file has none, as openpyxl's files), the value after opening, and Excel's own full recalculation.
 
-`fwtool compare` measures S1's cell text against `text` (the 99 % target counts visible cells) and `fwtool formulas` its recalculation against `cached`.
+`fwtool compare --cells` measures S1's cell text against `text`: each workbook is read into the model and each visible cell formatted by the number-format engine in the locale Excel recorded (the 99 % target counts visible cells). Differences that only the column width decides ("####", and General shortened to fit) are counted apart until the grid measures widths; a `*` fill matches when Excel's text is ours with the fill repeated there; formulas without a cached value, and those Excel recalculated on opening (volatile ones), aren't compared. `--json FILE` writes the counts and the differences per workbook, `--min-cells C` fails below C %.
+
+```bash
+fwtool compare --cells tests/office/reference
+```
+
+`fwtool formulas` (with s1-calc) will measure the engine's recalculation against `cached`.
 
 **The locale.** Excel formats with the Windows regional format, and the reference PC's is English (Netherlands), `en-NL`: decimal comma, `.` for thousands, dates `dd/MM/yyyy`, 24-hour times, list separator `;` in Excel. Every cells file records what Excel used (`locale`: separators, date order, Windows' date and time patterns, currency), and so does the manifest (`excel`), with the printer the PDFs were laid out for. The comparison formats with that recorded locale, not the PC's.
 
