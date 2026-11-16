@@ -63,6 +63,7 @@ bool ParseSlice(pugi::xml_document& doc, std::string_view xml);
 std::string TextOf(pugi::xml_node n);
 
 pkg::Status ReadStyles(std::string_view xml, const pkg::Limits& limits, std::string_view label, Styles& styles);
+pkg::Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::string& part, Table& table);
 pkg::Status ReadStrings(std::string_view xml, const pkg::Limits& limits, std::string_view label, StringTable& table);
 // Reads a sheet's part into it (rows, cells and what it shows).
 pkg::Status LoadSheetPart(Workbook& book, size_t index);

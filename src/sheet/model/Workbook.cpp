@@ -93,6 +93,16 @@ int Workbook::FindSheet(std::string_view name) const {
   return -1;
 }
 
+const Table* Workbook::FindTable(std::string_view name, size_t* sheet) const {
+  for (size_t i = 0; i < sheets_.size(); ++i)
+    for (const Table& t : sheets_[i]->Tables())
+      if (SameNameNoCase(t.displayName, name)) {
+        if (sheet) *sheet = i;
+        return &t;
+      }
+  return nullptr;
+}
+
 const DefinedName* Workbook::FindName(std::string_view name, int sheet) const {
   if (sheet >= 0)
     for (const auto& n : names_)
@@ -151,5 +161,7 @@ void WorkbookLoader::SetSheetInfo(Sheet& s, SheetKind kind, SheetState state, ui
 }
 
 void WorkbookLoader::MarkLoaded(Sheet& s, bool loaded) { s.loaded_ = loaded; }
+
+std::vector<Table>& WorkbookLoader::Tables(Sheet& s) { return s.tables_; }
 
 }  // namespace fw::sheet

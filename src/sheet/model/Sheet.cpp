@@ -235,6 +235,12 @@ const Range* Sheet::MergeAt(uint32_t row, uint32_t col) const {
   return nullptr;
 }
 
+const Table* Sheet::TableAt(uint32_t row, uint32_t col) const {
+  for (const Table& t : tables_)
+    if (t.ref.Contains(row, col)) return &t;
+  return nullptr;
+}
+
 std::string Sheet::KeptXml() const {
   if (text_.rootStart.empty()) return {};
   std::string s = text_.rootStart;

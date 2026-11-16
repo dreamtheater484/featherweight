@@ -488,3 +488,36 @@ TEST(sheet_number_styles) {
   CHECK(std::string_view(buf, xlsx::FormatNumber(-1234.5, 0, buf)) == "-1234.5");
   CHECK(std::string_view(buf, xlsx::FormatNumber(1e-300, 0, buf)) == "1e-300");
 }
+
+TEST(sheet_tables) {
+  auto parts = Package({kSheet1, kSheet2}, kStrings);
+  for (auto& [name, xml] : parts) {
+    if (name == "[Content_Types].xml")
+      xml.insert(xml.find("</Types>"), "<Override PartName=\"/xl/tables/table1.xml\" "
+                                       "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml\"/>");
+  }
+  parts.push_back({"xl/worksheets/_rels/sheet2.xml.rels",
+                   "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" "
+                   "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/table\" Target=\"../tables/table1.xml\"/>"
+                   "</Relationships>"});
+  parts.push_back({"xl/tables/table1.xml",
+                   "<table xmlns=\"" + std::string(kMain) + "\" id=\"3\" name=\"Table3\" displayName=\"Sales\" ref=\"B2:D7\" "
+                   "totalsRowCount=\"1\"><autoFilter ref=\"B2:D6\"/><tableColumns count=\"3\"><tableColumn id=\"1\" name=\"Region\" "
+                   "totalsRowLabel=\"Total\"/><tableColumn id=\"2\" name=\"Amount\" totalsRowFunction=\"sum\" dataDxfId=\"0\"/>"
+                   "<tableColumn id=\"3\" name=\"Tax\"><calculatedColumnFormula>Sales[[#This Row],[Amount]]*0.21</calculatedColumnFormula>"
+                   "</tableColumn></tableColumns><tableStyleInfo name=\"TableStyleMedium2\" showFirstColumn=\"0\" showLastColumn=\"0\" "
+                   "showRowStripes=\"1\" showColumnStripes=\"0\"/></table>"});
+  auto book = Open(parts, false);
+  if (!book) return;
+  size_t sheet = 9;
+  const Table* t = book->FindTable("SALES", &sheet);
+  CHECK(t != nullptr && sheet == 1);
+  if (!t) return;
+  CHECK(t->id == 3 && t->name == "Table3" && t->ref == (Range{1, 1, 6, 3}) && t->headerRows == 1 && t->totalsRows == 1);
+  CHECK(t->Data() == (Range{2, 1, 5, 3}));
+  CHECK(t->autoFilter && t->columns.size() == 3 && t->columns[1].totalsFunction == "sum" && t->columns[1].dataDxf == 0);
+  CHECK(t->columns[0].totalsLabel == "Total" && t->columns[2].calculatedFormula == "Sales[[#This Row],[Amount]]*0.21");
+  CHECK(t->style.name == "TableStyleMedium2" && t->style.rowStripes && !t->style.columnStripes);
+  CHECK(book->GetSheet(1).TableAt(6, 3) == t && book->GetSheet(1).TableAt(7, 3) == nullptr);
+  CHECK(book->FindTable("Table3") == nullptr);
+}

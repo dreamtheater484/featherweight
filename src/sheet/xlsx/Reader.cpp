@@ -519,6 +519,54 @@ Status ReadStrings(std::string_view xml, const pkg::Limits& limits, std::string_
   return {};
 }
 
+// ---- Tables
+
+Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::string& part, Table& t) {
+  pkg::XmlDom dom;
+  Status st = dom.Parse(xml, limits, part.substr(1));
+  if (!st.Ok()) return st;
+  pugi::xml_node n = dom.Root();
+  if (Local(n) != "table") return {};
+  t.part = part;
+  t.id = UIntAttr(n, "id", 0);
+  t.name = Attr(n, "name");
+  t.displayName = Attr(n, "displayName");
+  if (t.displayName.empty()) t.displayName = t.name;
+  if (!ParseRange(Attr(n, "ref"), t.ref)) return {};
+  t.headerRows = std::min(UIntAttr(n, "headerRowCount", 1), 1u);
+  t.totalsRows = std::min(UIntAttr(n, "totalsRowCount", 0), 1u);
+  t.totalsRowShown = BoolAttr(n, "totalsRowShown", true);
+  t.headerDxf = IntAttr(n, "headerRowDxfId", -1);
+  t.dataDxf = IntAttr(n, "dataDxfId", -1);
+  t.totalsDxf = IntAttr(n, "totalsRowDxfId", -1);
+  t.autoFilter = static_cast<bool>(Child(n, "autoFilter"));
+  if (pugi::xml_node cols = Child(n, "tableColumns"))
+    for (pugi::xml_node c = cols.first_child(); c; c = c.next_sibling()) {
+      if (c.type() != pugi::node_element || Local(c) != "tableColumn") continue;
+      TableColumn col;
+      col.id = UIntAttr(c, "id", 0);
+      col.name = Attr(c, "name");
+      col.totalsFunction = Attr(c, "totalsRowFunction");
+      if (col.totalsFunction == "none") col.totalsFunction.clear();
+      col.totalsLabel = Attr(c, "totalsRowLabel");
+      col.calculatedFormula = TextOf(Child(c, "calculatedColumnFormula"));
+      col.totalsFormula = TextOf(Child(c, "totalsRowFormula"));
+      col.dataDxf = IntAttr(c, "dataDxfId", -1);
+      col.headerDxf = IntAttr(c, "headerRowDxfId", -1);
+      col.totalsDxf = IntAttr(c, "totalsRowDxfId", -1);
+      t.columns.push_back(std::move(col));
+      if (t.columns.size() >= kMaxCols) break;
+    }
+  if (pugi::xml_node s = Child(n, "tableStyleInfo")) {
+    t.style.name = Attr(s, "name");
+    t.style.firstColumn = BoolAttr(s, "showFirstColumn", false);
+    t.style.lastColumn = BoolAttr(s, "showLastColumn", false);
+    t.style.rowStripes = BoolAttr(s, "showRowStripes", false);
+    t.style.columnStripes = BoolAttr(s, "showColumnStripes", false);
+  }
+  return {};
+}
+
 // ---- The workbook
 
 namespace {
@@ -650,6 +698,21 @@ std::unique_ptr<Workbook> Read(std::unique_ptr<pkg::Package> package, Status& st
       c.concurrentManualCount = UIntAttr(sec, "concurrentManualCount", 0);
     }
   }
+  // Tables, for every sheet: small, and structured references reach across sheets.
+  for (size_t i = 0; i < book->SheetCount(); ++i) {
+    Sheet& sheet = book->GetSheet(i);
+    const pkg::RelationshipSet* srels = sheet.PartName().empty() ? nullptr : package->RelationshipsOf(sheet.PartName());
+    for (size_t r = 0; srels && r < srels->items.size(); ++r) {
+      const pkg::Relationship& rel = srels->items[r];
+      if (rel.external || !TypeEndsWith(rel.type, "table") || !package->FindPart(rel.targetPart)) continue;
+      if (!(status = package->ReadPart(rel.targetPart, bytes)).Ok()) return nullptr;
+      xml = std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+      Table table;
+      if (!(status = ReadTable(xml, package->GetLimits(), rel.targetPart, table)).Ok()) return nullptr;
+      WorkbookLoader::Tables(sheet).push_back(std::move(table));
+    }
+  }
+
   size_t count = book->SheetCount();
   loader.SetActive(count && activeTab < count ? activeTab : 0, count && firstTab < count ? firstTab : 0);
 
