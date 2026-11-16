@@ -1,0 +1,12 @@
+Kind,Value
+integer,42
+negative,-5
+decimal,3.75
+"thousands, quoted","1,234.56"
+scientific,1.5E+3
+percent,12.5%
+currency,$19.99
+US date,12/31/2025
+time,1:30 PM
+date and time,12/31/2025 23:59
+big,999999999999999
