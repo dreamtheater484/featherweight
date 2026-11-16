@@ -66,6 +66,8 @@ $all = [ordered]@{
   fuzz_numfmt  = @{ Seeds = @("$seeds\numfmt", "$regressions\numfmt"); MaxLen = 4096 }
   # CSV and TSV (S1): rows in order, and every cell shows exactly its field, on one thread or several.
   fuzz_csv     = @{ Seeds = @("$office\csv", "$regressions\csv"); MaxLen = 16384 }
+  # Conditional formats (S1): a worksheet's rules evaluated with the formula engine and without.
+  fuzz_condfmt = @{ Seeds = @("$seeds\condfmt", "$regressions\condfmt"); MaxLen = 16384 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 
