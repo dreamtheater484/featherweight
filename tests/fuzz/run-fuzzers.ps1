@@ -62,6 +62,8 @@ $all = [ordered]@{
   fuzz_odt     = @{ Seeds = @("$seeds\odt", "$regressions\odt"); MaxLen = 65536 }
   # Workbooks (S1): the model and its .xlsx reader; every part it writes back says what it said.
   fuzz_xlsx    = @{ Seeds = @("$seeds\xlsx", "$seeds\package", "$regressions\xlsx"); MaxLen = 65536 }
+  # Number formats and value parsing (S1): spans stay inside the text; an exact parse shows as written.
+  fuzz_numfmt  = @{ Seeds = @("$seeds\numfmt", "$regressions\numfmt"); MaxLen = 4096 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 
