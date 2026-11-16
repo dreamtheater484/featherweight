@@ -134,7 +134,12 @@ double Round15(double d) {
   return std::strtod(buf, nullptr);
 }
 
-std::string NumberText(double d) {
+const ConvLocale& EnUsConv() {
+  static const ConvLocale en;
+  return en;
+}
+
+std::string NumberText(double d, char decimal) {
   if (d == 0) return "0";
   if (!std::isfinite(d)) return "#NUM!";
   char buf[40];
@@ -155,16 +160,16 @@ std::string NumberText(double d) {
     if (n <= whole) {
       fixed = digits + std::string(whole - n, '0');
     } else {
-      fixed = digits.substr(0, whole) + "." + digits.substr(whole);
+      fixed = digits.substr(0, whole) + decimal + digits.substr(whole);
     }
   } else if (exp < 0 && exp > -20) {
-    fixed = "0." + std::string(static_cast<size_t>(-exp - 1), '0') + digits;
+    fixed = std::string("0") + decimal + std::string(static_cast<size_t>(-exp - 1), '0') + digits;
   }
   std::string out = neg ? "-" : "";
   if (!fixed.empty() && fixed.size() <= 20) return out + fixed;
   out += digits[0];
   if (n > 1) {
-    out += '.';
+    out += decimal;
     out += digits.substr(1);
   }
   char eb[16];
@@ -277,7 +282,7 @@ int MonthName(std::string_view w) {  // 1..12 for "jan" .. "december", else 0
 }
 
 // A plain number: digits with optional thousands separators, decimals and exponent.
-bool PlainNumber(std::string_view s, double& out) {
+bool PlainNumber(std::string_view s, double& out, char dec = '.', char grp = ',') {
   if (s.empty() || s.size() > 300) return false;
   std::string buf;
   size_t i = 0, n = s.size();
@@ -290,21 +295,22 @@ bool PlainNumber(std::string_view s, double& out) {
       buf += c;
       digits = true;
       ++groupDigits;
-    } else if (c == ',' && !point && digits) {
-      if (grouped && groupDigits != 3) return false;
+    } else if (c == grp && !point && digits && i + 1 < n && IsDigit(s[i + 1])) {
+      // Excel wants at least 3 digits after each group separator, not exactly 3: "3.14159" is
+      // 314159 in en-NL, "3.5" isn't a number there.
+      if (grouped && groupDigits < 3) return false;
       grouped = true;
       groupDigits = 0;
-    } else if (c == '.' && !point) {
-      if (grouped && groupDigits != 3) return false;
+    } else if (c == dec && !point) {
+      if (grouped && groupDigits < 3) return false;
       grouped = false;
       point = true;
-      buf += c;
+      buf += '.';
     } else {
       break;
     }
   }
-  if (grouped && groupDigits != 3) return false;
-  if (!digits) return false;
+  if (!digits || (grouped && groupDigits < 3)) return false;
   if (i < n && (s[i] == 'e' || s[i] == 'E')) {
     buf += 'e';
     ++i;
@@ -320,7 +326,7 @@ bool PlainNumber(std::string_view s, double& out) {
 
 // "12:30", "12:30:45", "12:30:45.5", "1:30 PM", "1 PM" -> a fraction of a day. Hours run to 9999,
 // minutes and seconds to 99 (they roll over: "1:99" is 2:39), as Excel reads them.
-bool TimeOfDay(std::string_view s, double& out) {
+bool TimeOfDay(std::string_view s, double& out, char dec = '.') {
   s = Trim(s);
   int ampm = 0;  // 1 AM, 2 PM
   size_t sp = s.rfind(' ');
@@ -344,7 +350,7 @@ bool TimeOfDay(std::string_view s, double& out) {
       ++i;
       continue;
     }
-    if (i < s.size() && s[i] == '.' && np >= 2) {
+    if (i < s.size() && s[i] == dec && np >= 2) {
       std::string f = "0.";
       ++i;
       size_t fs = i;
@@ -375,7 +381,7 @@ int CurrentYear() {
 
 // en-US dates: 1/2/2024, 1/2/24, 1/2, 2024-01-02, 2024/1/2, 2-Jan-2024, 2-Jan, Jan-24,
 // Jan 2, 2024, January 2 2024, 2 January 2024.
-bool DateOnly(std::string_view s, bool date1904, double& out) {
+bool DateOnly(std::string_view s, bool date1904, double& out, char order = 'M') {
   s = Trim(s);
   // tokens: numbers and words
   struct Tok {
@@ -437,13 +443,13 @@ bool DateOnly(std::string_view s, bool date1904, double& out) {
     if (sep == 0) return false;
     if (nt == 3 && toks[0].digits == 4) {  // 2024-01-02, 2024/1/2
       y = toks[0].value, m = toks[1].value, d = toks[2].value;
-    } else if (nt == 3) {  // 1/2/2024
-      m = toks[0].value, d = toks[1].value, y = year(toks[2]);
+    } else if (nt == 3) {  // 1/2/2024 (2/1/2024 day first)
+      m = toks[order == 'D' ? 1 : 0].value, d = toks[order == 'D' ? 0 : 1].value, y = year(toks[2]);
     } else if (nt == 2) {  // 1/2 (this year), or 1/2024 (month/year)
       if (toks[1].digits >= 3 || toks[1].value > 31) {
         m = toks[0].value, d = 1, y = year(toks[1]);
       } else {
-        m = toks[0].value, d = toks[1].value, y = CurrentYear();
+        m = toks[order == 'D' ? 1 : 0].value, d = toks[order == 'D' ? 0 : 1].value, y = CurrentYear();
       }
     } else {
       return false;
@@ -459,7 +465,7 @@ bool DateOnly(std::string_view s, bool date1904, double& out) {
     } else if (nt == 2 && wi == 1) {  // 2-Jan
       d = toks[0].value, y = CurrentYear();
     } else if (nt == 2 && wi == 0) {  // Jan-24 (month and year), Jan 2 (this year)
-      if (toks[1].digits >= 3 || toks[1].value > 31 || sep == '-') {
+      if (toks[1].digits >= 3 || toks[1].value > 31 || sep == '-' || order == 'D') {
         d = 1, y = year(toks[1]);
       } else {
         d = toks[1].value, y = CurrentYear();
@@ -475,7 +481,7 @@ bool DateOnly(std::string_view s, bool date1904, double& out) {
 
 }  // namespace
 
-bool TextToNumber(std::string_view s, double& out, bool date1904) {
+bool TextToNumber(std::string_view s, double& out, bool date1904, const ConvLocale& loc) {
   s = Trim(s);
   if (s.empty()) return false;
   bool neg = false, pct = false, paren = false;
@@ -488,7 +494,8 @@ bool TextToNumber(std::string_view s, double& out, bool date1904) {
     neg = t.front() == '-';
     t = Trim(t.substr(1));
   }
-  if (!t.empty() && t.front() == '$') t = Trim(t.substr(1));
+  bool money = !loc.currency.empty() && t.substr(0, loc.currency.size()) == loc.currency;
+  if (money) t = Trim(t.substr(loc.currency.size()));
   if (!t.empty() && (t.front() == '-' || t.front() == '+') && !neg) {
     neg = t.front() == '-';
     t = Trim(t.substr(1));
@@ -501,14 +508,14 @@ bool TextToNumber(std::string_view s, double& out, bool date1904) {
     t = Trim(t.substr(1));
   }
   double v;
-  if (PlainNumber(t, v)) {
+  if (PlainNumber(t, v, loc.decimal, loc.group)) {
     if (neg && paren) return false;
     if (pct) v /= 100;
     if (neg || paren) v = -v;
     out = v;
     return true;
   }
-  if (neg || pct || paren || s.front() == '$') return false;
+  if (neg || pct || paren || money) return false;
   // "1 1/2", "3/4": fractions (only when they aren't dates: a numerator and denominator)
   {
     size_t sp = s.find(' ');
@@ -519,19 +526,20 @@ bool TextToNumber(std::string_view s, double& out, bool date1904) {
     }
     size_t slash = frac.find('/');
     double w = 0, a, b;
-    if (!whole.empty() && slash != std::string_view::npos && PlainNumber(whole, w) &&
-        PlainNumber(frac.substr(0, slash), a) && PlainNumber(frac.substr(slash + 1), b) && b != 0 &&
+    if (!whole.empty() && slash != std::string_view::npos && PlainNumber(whole, w, loc.decimal, loc.group) &&
+        PlainNumber(frac.substr(0, slash), a, loc.decimal, loc.group) &&
+        PlainNumber(frac.substr(slash + 1), b, loc.decimal, loc.group) && b != 0 &&
         whole.find_first_not_of("0123456789") == std::string_view::npos) {
       out = w + a / b;
       return true;
     }
   }
   // Dates, times, and a date with a time.
-  if (TimeOfDay(s, v)) {
+  if (TimeOfDay(s, v, loc.decimal)) {
     out = v;
     return true;
   }
-  if (DateOnly(s, date1904, v)) {
+  if (DateOnly(s, date1904, v, loc.dateOrder)) {
     out = v;
     return true;
   }
@@ -539,7 +547,7 @@ bool TextToNumber(std::string_view s, double& out, bool date1904) {
   for (size_t k = s.size(); k-- > 1;) {
     if (s[k] != ' ') continue;
     double d, tm;
-    if (DateOnly(s.substr(0, k), date1904, d) && TimeOfDay(s.substr(k + 1), tm)) {
+    if (DateOnly(s.substr(0, k), date1904, d, loc.dateOrder) && TimeOfDay(s.substr(k + 1), tm, loc.decimal)) {
       out = d + tm;
       return true;
     }
@@ -547,9 +555,9 @@ bool TextToNumber(std::string_view s, double& out, bool date1904) {
   return false;
 }
 
-std::string ValueText(const Value& v) {
+std::string ValueText(const Value& v, char decimal) {
   switch (v.type()) {
-    case Type::Number: return NumberText(v.number());
+    case Type::Number: return NumberText(v.number(), decimal);
     case Type::Bool: return v.boolean() ? "TRUE" : "FALSE";
     case Type::Text: return std::string(v.text());
     case Type::Error: return std::string(ErrText(v.error()));

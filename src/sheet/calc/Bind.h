@@ -48,10 +48,12 @@ class WorkbookCalc : public Host {
   bool Date1904() const override;
   bool FormatText(double value, std::string_view format, std::string& out) override;
   bool RowHidden(int sheet, int32_t row) override;
+  const ConvLocale& Conv() const override { return conv_; }
 
  private:
   Workbook& book_;
   const NumLocale* locale_;
+  ConvLocale conv_;
   std::unique_ptr<Engine> engine_;
   std::vector<std::pair<int32_t, int32_t>> extents_;
   std::unordered_map<std::string, std::unique_ptr<NumberFormat>> formats_;

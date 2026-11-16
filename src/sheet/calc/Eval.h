@@ -53,8 +53,10 @@ class Host {
     (void)value, (void)format, (void)out;
     return false;
   }
+  // The region's text and number conventions (Excel follows Windows' settings).
+  virtual const ConvLocale& Conv() const { return EnUsConv(); }
   // Text as a number, as typing it would read it (numbers, percentages, dates, times).
-  virtual bool ParseNumber(std::string_view text, double& out) { return TextToNumber(text, out, Date1904()); }
+  virtual bool ParseNumber(std::string_view text, double& out) { return TextToNumber(text, out, Date1904(), Conv()); }
   // The current date and time as a serial number (NOW). Tests fix it.
   virtual double Now();
   // RAND(): [0, 1).

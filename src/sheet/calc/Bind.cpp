@@ -32,7 +32,14 @@ CellView ViewOf(const sheet::Value& v) {
 }  // namespace
 
 WorkbookCalc::WorkbookCalc(Workbook& book, const NumLocale* locale)
-    : book_(book), locale_(locale), engine_(std::make_unique<Engine>(*this)) {}
+    : book_(book), locale_(locale), engine_(std::make_unique<Engine>(*this)) {
+  if (locale) {
+    if (!locale->decimal.empty() && locale->decimal[0] < 0x80) conv_.decimal = static_cast<char>(locale->decimal[0]);
+    if (!locale->group.empty() && locale->group[0] < 0x80) conv_.group = static_cast<char>(locale->group[0]);
+    conv_.dateOrder = locale->dateOrder;
+    conv_.currency = Narrow(locale->currency);
+  }
+}
 WorkbookCalc::~WorkbookCalc() = default;
 
 int WorkbookCalc::SheetCount() const { return static_cast<int>(book_.SheetCount()); }

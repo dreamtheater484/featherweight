@@ -253,6 +253,14 @@ TEST(sheet_calc_text_to_number) {
   CHECK(!TextToNumber("abc", v));
   CHECK(!TextToNumber("", v));
   CHECK(!TextToNumber("1,23", v));
+  CHECK(TextToNumber("1,2345", v) && v == 12345);  // 3 digits or more after a separator, as Excel
+  ConvLocale nl;
+  nl.decimal = ',', nl.group = '.', nl.dateOrder = 'D', nl.currency = "â¬";
+  CHECK(TextToNumber("3.14159", v, false, nl) && v == 314159);
+  CHECK(TextToNumber("1,5", v, false, nl) && v == 1.5);
+  CHECK(TextToNumber("13/1/2024", v, false, nl) && v == 45304);
+  CHECK(!TextToNumber("$5", v, false, nl));
+  CHECK_EQ(NumberText(0.5, ','), "0,5");
   CHECK(!TextToNumber("12 34", v));
 }
 

@@ -4,7 +4,8 @@
 // Counted: formulas the engine calculates (only implemented functions) that don't depend on a
 // volatile one (NOW, TODAY, RAND, OFFSET, INDIRECT...) and have a cached value. Numbers match to
 // 15 significant digits, as Excel shows and compares them; text, booleans and errors exactly.
-// --report <file.md> lists every mismatch and the unimplemented functions by use.
+// --report <file.md> lists every mismatch and the unimplemented functions by use. --locale en-NL:
+// the files were calculated with a decimal comma and day-first dates (this PC's Excel).
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
@@ -124,7 +125,7 @@ int RunFormulas(const Options& options) {
         return true;
       });
     }
-    calc::WorkbookCalc calc(*book, &EnUsLocale());
+    calc::WorkbookCalc calc(*book, options.locale == L"en-NL" ? &EnNlLocale() : &EnUsLocale());
     calc.Load();
     calc::Engine& e = calc.engine();
     // What Excel recalculates on open (volatile functions and their dependents, formulas without

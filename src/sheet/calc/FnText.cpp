@@ -59,6 +59,9 @@ static void Side(Call& c, bool left) {
   if (n < 0) return c.Fail(Err::Value);
   std::wstring w = Wide(s);
   size_t k = static_cast<size_t>(std::min<double>(std::trunc(n), static_cast<double>(w.size())));
+  // Excel keeps a character outside the BMP whole.
+  if (left && k > 0 && k < w.size() && IS_HIGH_SURROGATE(w[k - 1])) ++k;
+  if (!left && k > 0 && k < w.size() && IS_LOW_SURROGATE(w[w.size() - k])) ++k;
   SetWide(c, left ? w.substr(0, k) : w.substr(w.size() - k));
 }
 void Left(Call& c) { Side(c, true); }
@@ -244,7 +247,7 @@ static bool Pieces(Call& c, int i, bool skipEmpty, std::vector<std::string>& out
           c.Fail(cv.err);
           return false;
         }
-        std::string s = ValueText(FromView(cv));
+        std::string s = ValueText(FromView(cv), c.m.decimal);
         if (s.empty() && skipEmpty) continue;
         out.push_back(std::move(s));
         if (out.size() > kMaxText) {
@@ -259,7 +262,7 @@ static bool Pieces(Call& c, int i, bool skipEmpty, std::vector<std::string>& out
       c.Fail(cv.err);
       return false;
     }
-    std::string s = ValueText(FromView(cv));
+    std::string s = ValueText(FromView(cv), c.m.decimal);
     if (!(s.empty() && skipEmpty)) out.push_back(std::move(s));
     return out.size() <= kMaxText;
   });
