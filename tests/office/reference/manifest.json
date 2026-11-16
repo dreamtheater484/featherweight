@@ -936,10 +936,10 @@
                   },
                   {
                       "source":  "sheet/formulas.xlsx",
-                      "sha256":  "7aa72932221d6003674ba1ba7b2414143a39175237c48f6d2459972353fd00a0",
+                      "sha256":  "127b482e9120449f4dfc13d0a9a82723f8af48bfd45e471da28ec9e3fc31ab19",
                       "app":  "Excel 16.0 (build 20326)",
                       "cells":  "sheet/formulas.xlsx.cells.json",
-                      "cellCount":  656,
+                      "cellCount":  658,
                       "pdf":  "sheet/formulas.xlsx.pdf",
                       "pages":  26,
                       "fonts":  [
@@ -1155,10 +1155,10 @@
                   },
                   {
                       "source":  "excel/formulas.xlsx",
-                      "sha256":  "b7122997cbd99e8ea0eb42f44f2fcaf12dba338935ba5ae54f4349420942ce67",
+                      "sha256":  "11ba578536726f0e2c719ebd7992beafcf01be98b2a7f704a5a99a58f3113763",
                       "app":  "Excel 16.0 (build 20326)",
                       "cells":  "excel/formulas.xlsx.cells.json",
-                      "cellCount":  761,
+                      "cellCount":  763,
                       "pdf":  "excel/formulas.xlsx.pdf",
                       "pages":  28,
                       "fonts":  [

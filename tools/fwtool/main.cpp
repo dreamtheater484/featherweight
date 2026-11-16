@@ -54,6 +54,10 @@ constexpr const char* kUsage =
     "  fwtool lines [--out DIR] <reference folder or PDF>...\n"
     "      Word's lines in its reference PDFs: page sizes, and each line's story, position and\n"
     "      text. With --out, writes them as layout dumps (docs/layout-dump.md).\n"
+    "  fwtool compare --cells [--json FILE] [--min-cells C] <reference folder>\n"
+    "      Workbooks (S1): each visible cell's text as Featherweight formats it against Excel's\n"
+    "      (the cells files beside the reference PDFs), in the locale Excel recorded. Differences\n"
+    "      that only the column width decides (\"####\", General shortened) are counted apart.\n"
     "  fwtool compare [--dumps DIR] [--json FILE] [--report FILE] [--min-pages P] [--min-lines L]\n"
     "                 <reference folder>...\n"
     "      Layout fidelity (plan §10): for each Word document in the reference manifest, does\n"
@@ -256,6 +260,8 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--min-pages" && i + 1 < argc) options.minPages = _wtof(argv[++i]);
     else if (arg == L"--min-lines" && i + 1 < argc) options.minLines = _wtof(argv[++i]);
     else if (arg == L"--self-test") options.selfTest = true;
+    else if (arg == L"--cells") options.cells = true;
+    else if (arg == L"--min-cells" && i + 1 < argc) options.minCells = _wtof(argv[++i]);
     else if (arg == L"--all") options.all = true;
     else if (arg == L"--runs" && i + 1 < argc) options.runs = _wtoi(argv[++i]);
     else if (arg == L"--budgets") options.budgets = true;
@@ -286,7 +292,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"print-sample") return fwtool::RunPrintSample(options);
   if (command == L"render") return fwtool::RunRender(options);
   if (command == L"lines") return fwtool::RunLines(options);
-  if (command == L"compare") return fwtool::RunCompare(options);
+  if (command == L"compare") return options.cells ? fwtool::RunCellCompare(options) : fwtool::RunCompare(options);
   if (command == L"bench") return fwtool::RunBench(options);
   if (command == L"bench-app") return fwtool::RunBenchApp(options);
   if (command == L"edit-check") return fwtool::RunEditCheck(options);
