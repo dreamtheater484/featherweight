@@ -42,10 +42,9 @@ void WriteUInt(std::string& out, uint64_t v) {
   out.append(buf, p);
 }
 
-void WriteNumber(std::string& out, double v) {
-  char buf[32];
-  auto [p, ec] = std::to_chars(buf, buf + sizeof buf, v);
-  out.append(buf, p);
+void WriteNumber(std::string& out, double v, uint8_t style) {
+  char buf[48];
+  out.append(buf, FormatNumber(v, style, buf));
 }
 
 void WriteCellName(std::string& out, uint32_t row, uint32_t col) {
@@ -220,7 +219,7 @@ class SheetWriter {
         switch (c.type) {
           case XmlType::N:
           case XmlType::D:
-            WriteNumber(out_, c.v.number);
+            WriteNumber(out_, c.v.number, c.numStyle);
             break;
           case XmlType::S:
             WriteUInt(out_, c.v.index);

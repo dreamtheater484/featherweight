@@ -306,6 +306,7 @@ void Sheet::SetValue(uint32_t row, uint32_t col, const Value& v) {
       break;
     case ValueType::Number:
       cell.type = oldType == XmlType::D ? XmlType::D : XmlType::N;
+      cell.numStyle = 0;
       cell.v.number = v.number;
       cell.flags |= kHasValue;
       break;

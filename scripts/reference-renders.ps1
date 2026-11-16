@@ -45,11 +45,18 @@ param(
   [string]$Corpus,
   [switch]$Force,
   [int]$TimeoutSeconds = 120,
+  # Workbooks take longer: two opens, and each non-empty cell's text is read one by one.
+  [int]$ExcelTimeoutSeconds = 900,
+  # At most this many cells' text per workbook (about 1 ms each); the rest is left out and the
+  # cells file says so.
+  [int]$MaxCells = 100000,
   # Internal: export one file in this process (the parent runs one child per file).
-  [string]$Child, [string]$Source, [string]$Pdf, [string]$ResultFile
+  [string]$Child, [string]$Source, [string]$SourceName, [string]$Pdf, [string]$ResultFile, [string]$Cells, [switch]$CellFormats
 )
 
 $ErrorActionPreference = "Stop"
+# powershell -File passes "a,b" as one string.
+$Folders = @($Folders | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $apps = @{
   Word = @{ Exe = "WINWORD"; ProgId = "Word.Application"; Ext = @(".docx", ".docm", ".dotx", ".dotm", ".doc", ".odt") }
   Excel = @{ Exe = "EXCEL"; ProgId = "Excel.Application"; Ext = @(".xlsx", ".xlsm", ".xltx", ".xltm") }
@@ -104,8 +111,231 @@ public static class FwOfficeWindows {
     }, IntPtr.Zero);
     return found;
   }
+  public static int ProcessOf(int hwnd) { uint pid; GetWindowThreadProcessId(new IntPtr(hwnd), out pid); return (int)pid; }
 }
 "@
+
+# ---- Excel's view of a workbook (S1), written beside its PDF as <file>.cells.json for
+# `fwtool compare`. Per sheet: the used range, hidden rows and columns, column widths, every
+# non-empty cell's displayed text (Range.Text, "####" included) and raw value (Value2), and every
+# formula (Formula2) with three values: the cached one in the file (read with calculation manual,
+# so nothing is recalculated), the one Excel shows after opening it normally (what it recalculates
+# on open), and Excel's own full recalculation (CalculateFull). Also the locale Excel formats with.
+
+$xlErrors = @{ 2000 = "#NULL!"; 2007 = "#DIV/0!"; 2015 = "#VALUE!"; 2023 = "#REF!"; 2029 = "#NAME?"; 2036 = "#NUM!"; 2042 = "#N/A";
+  2043 = "#GETTING_DATA"; 2045 = "#SPILL!"; 2046 = "#CONNECT!"; 2047 = "#BLOCKED!"; 2048 = "#UNKNOWN!"; 2049 = "#FIELD!"; 2050 = "#CALC!" }
+$invariant = [Globalization.CultureInfo]::InvariantCulture
+
+function ConvertTo-JsonString([string]$s) {
+  $b = New-Object Text.StringBuilder ($s.Length + 2)
+  [void]$b.Append('"')
+  foreach ($ch in $s.ToCharArray()) {
+    switch ($ch) {
+      '"' { [void]$b.Append('\"') } '\' { [void]$b.Append('\\') } "`n" { [void]$b.Append('\n') } "`r" { [void]$b.Append('\r') } "`t" { [void]$b.Append('\t') }
+      default { if ([int]$ch -lt 0x20) { [void]$b.Append(('\u{0:x4}' -f [int]$ch)) } else { [void]$b.Append($ch) } }
+    }
+  }
+  [void]$b.Append('"')
+  $b.ToString()
+}
+
+# A cell value from Value2 as JSON: numbers (round-trip), text, true/false, null, and errors
+# (COM gives them as an Int32 code) as {"e": "#N/A"}.
+function ConvertTo-JsonValue($v) {
+  if ($null -eq $v) { return "null" }
+  if ($v -is [bool]) { if ($v) { return "true" } else { return "false" } }
+  if ($v -is [double]) { return $v.ToString("R", $invariant) }
+  if ($v -is [int]) { $code = $v -band 0xFFFF; $name = $xlErrors[$code]; if (-not $name) { $name = "#ERR$code" }; return '{"e": "' + $name + '"}' }
+  if ($v -is [string]) { return ConvertTo-JsonString $v }
+  ConvertTo-JsonString ([string]$v)
+}
+
+function Get-ColumnName([int]$c) {
+  $s = ""
+  while ($c -gt 0) { $m = ($c - 1) % 26; $s = [char](65 + $m) + $s; $c = [math]::Floor(($c - 1) / 26) }
+  $s
+}
+
+# A range's Value2 or Formula2 as a 1-based grid, also for a single cell (COM gives a scalar).
+function Get-Grid($range, [string]$property) {
+  $v = $range.$property
+  if ($v -is [Array]) { return , $v }
+  $g = [Array]::CreateInstance([object], [int[]]@(1, 1), [int[]]@(1, 1))
+  $g.SetValue($v, 1, 1)
+  , $g
+}
+
+# Runs of numbers as "a" or "a:b" (rows), or of columns as "C" or "C:E".
+function Format-Runs([int[]]$items, [switch]$Columns) {
+  $out = New-Object Collections.Generic.List[string]
+  $i = 0
+  while ($i -lt $items.Count) {
+    $j = $i
+    while ($j + 1 -lt $items.Count -and $items[$j + 1] -eq $items[$j] + 1) { $j++ }
+    $a = if ($Columns) { Get-ColumnName $items[$i] } else { [string]$items[$i] }
+    $b = if ($Columns) { Get-ColumnName $items[$j] } else { [string]$items[$j] }
+    $out.Add($(if ($i -eq $j) { $a } else { "${a}:$b" }))
+    $i = $j + 1
+  }
+  $out.ToArray()
+}
+
+# The formula areas of each worksheet: @{ <sheet> = @( @{ Range; Row; Col; Formulas; Values } ) }.
+function Read-Formulas($book) {
+  $all = @{}
+  foreach ($ws in $book.Worksheets) {
+    $areas = New-Object Collections.Generic.List[object]
+    $found = $null
+    try { $found = $ws.UsedRange.SpecialCells(-4123) } catch {}  # xlCellTypeFormulas; throws when there are none
+    if ($found) {
+      foreach ($a in $found.Areas) {
+        $areas.Add(@{ Address = $a.Address($false, $false); Row = $a.Row; Col = $a.Column; Rows = $a.Rows.Count; Cols = $a.Columns.Count
+                      Formulas = (Get-Grid $a "Formula2"); Values = (Get-Grid $a "Value2") })
+      }
+    }
+    $all[$ws.Name] = $areas
+  }
+  $all
+}
+
+function Get-ExcelLocale($xl) {
+  # Application.International: separators, date order and the like (the Windows regional format,
+  # unless Excel's own separators are set), and the Windows formats Excel's locale-dependent
+  # built-in number formats use.
+  $intl = [ordered]@{
+    decimalSeparator = $xl.International(3); thousandsSeparator = $xl.International(4); listSeparator = $xl.International(5)
+    dateOrder = @("MDY", "DMY", "YMD")[[int]$xl.International(32)]; dateSeparator = $xl.International(17); timeSeparator = $xl.International(18)
+    clock24 = [bool]$xl.International(33); dayLeadingZero = [bool]$xl.International(42); monthLeadingZero = [bool]$xl.International(41)
+    fourDigitYears = [bool]$xl.International(43); timeLeadingZero = [bool]$xl.International(45); currencySymbol = $xl.International(25)
+    currencyBefore = [bool]$xl.International(37); currencySpace = [bool]$xl.International(36); currencyDigits = [int]$xl.International(27)
+    currencyNegative = [int]$xl.International(28); countryCode = [int]$xl.International(1); countrySetting = [int]$xl.International(2)
+    useSystemSeparators = [bool]$xl.UseSystemSeparators; generalFormatName = [string]$xl.International(26)
+  }
+  $reg = Get-ItemProperty "HKCU:\Control Panel\International" -ErrorAction SilentlyContinue
+  if ($reg) {
+    foreach ($k in "LocaleName", "sShortDate", "sLongDate", "sTimeFormat", "sShortTime", "s1159", "s2359", "sYearMonth") { $intl["windows$k"] = $reg.$k }
+  }
+  $intl
+}
+
+
+function ConvertTo-JsonObject($map) {
+  '{' + (@($map.Keys | ForEach-Object {
+    $v = $map[$_]
+    $j = if ($v -is [bool]) { if ($v) { "true" } else { "false" } } elseif ($v -is [int]) { [string]$v } else { ConvertTo-JsonString ([string]$v) }
+    '"' + $_ + '": ' + $j
+  }) -join ", ") + '}'
+}
+
+# Reads what Excel shows of the workbook opened normally (cell text, values, formula values as
+# opened), then has Excel recalculate everything and reads the formulas' values again. $formulas
+# comes from Read-Formulas on the same file opened with calculation manual. Writes the cells file;
+# returns the number of cells read.
+function Write-WorkbookCells($xl, $book, $formulas, [string]$path, [string]$source, $result, [int]$maxCells, [bool]$formats) {
+  $total = 0
+  $sheets = New-Object Collections.Generic.List[object]
+  $charts = @{}
+  foreach ($c in $book.Charts) { $charts[$c.Name] = $true }
+  $count = $book.Sheets.Count
+  for ($si = 1; $si -le $count; $si++) {
+    $sh = $book.Sheets.Item($si)
+    $name = $sh.Name
+    $vis = switch ([int]$sh.Visible) { -1 { "visible" } 0 { "hidden" } 2 { "veryHidden" } default { "$_" } }
+    $info = @{ Head = '{"name": ' + (ConvertTo-JsonString $name) + ', "visible": "' + $vis + '"'; Name = $name }
+    $sheets.Add($info)
+    if ($charts[$name] -or -not $formulas.ContainsKey($name)) {
+      $info.Head += ', "kind": "' + $(if ($charts[$name]) { "chart" } else { "other" }) + '"'
+      continue
+    }
+    $used = $sh.UsedRange
+    $r0 = $used.Row; $c0 = $used.Column; $nr = $used.Rows.Count; $nc = $used.Columns.Count
+    $info.Head += ', "kind": "worksheet", "usedRange": "' + $used.Address($false, $false) + '", "standardWidth": ' + ([double]$sh.StandardWidth).ToString("R", $invariant)
+    # Hidden rows and columns: those of the used range outside every visible area.
+    $rowsSeen = New-Object 'Collections.Generic.HashSet[int]'
+    $colsSeen = New-Object 'Collections.Generic.HashSet[int]'
+    $visible = $null
+    try { $visible = $used.SpecialCells(12) } catch {}  # xlCellTypeVisible; throws when nothing is visible
+    if ($visible) {
+      foreach ($a in $visible.Areas) {
+        for ($r = $a.Row; $r -lt $a.Row + $a.Rows.Count; $r++) { [void]$rowsSeen.Add($r) }
+        for ($c = $a.Column; $c -lt $a.Column + $a.Columns.Count; $c++) { [void]$colsSeen.Add($c) }
+      }
+    }
+    $hiddenRows = [int[]]@(for ($r = $r0; $r -lt $r0 + $nr; $r++) { if (-not $rowsSeen.Contains($r)) { $r } })
+    $hiddenCols = [int[]]@(for ($c = $c0; $c -lt $c0 + $nc; $c++) { if (-not $colsSeen.Contains($c)) { $c } })
+    $info.Head += ",`n     " + '"hiddenRows": [' + ((Format-Runs $hiddenRows | ForEach-Object { '"' + $_ + '"' }) -join ", ") + '], "hiddenColumns": [' +
+                  ((Format-Runs $hiddenCols -Columns | ForEach-Object { '"' + $_ + '"' }) -join ", ") + ']'
+    $widths = @(for ($c = $c0; $c -lt [math]::Min($c0 + $nc, $c0 + 512); $c++) { '"' + (Get-ColumnName $c) + '": ' + ([double]$sh.Columns.Item($c).ColumnWidth).ToString("R", $invariant) })
+    $info.Head += ",`n     " + '"columnWidths": {' + ($widths -join ", ") + '}'
+    # Cells: their text (one call each) and their values (all at once).
+    $values = Get-Grid $used "Value2"
+    $cellsCom = $sh.Cells
+    $lines = New-Object Collections.Generic.List[string]
+    $truncated = $false
+    for ($i = 1; $i -le $nr -and -not $truncated; $i++) {
+      for ($j = 1; $j -le $nc; $j++) {
+        $v = $values[$i, $j]
+        if ($null -eq $v) { continue }
+        if ($total -ge $maxCells) { $truncated = $true; break }
+        $total++
+        $cell = $cellsCom.Item($r0 + $i - 1, $c0 + $j - 1)
+        $line = '["' + (Get-ColumnName ($c0 + $j - 1)) + ($r0 + $i - 1) + '", ' + (ConvertTo-JsonString ([string]$cell.Text)) + ', ' + (ConvertTo-JsonValue $v)
+        # On the reference PC this comes in local form ("#.##0,00", "dd/mm/jjjj", "Standaard"),
+        # not in the file's form: it shows how Excel reads the code here, nothing more.
+        if ($formats) { $line += ', ' + (ConvertTo-JsonString ([string]$cell.NumberFormat)) }
+        $lines.Add($line + ']')
+      }
+    }
+    $info.Head += ",`n     " + '"truncated": ' + $(if ($truncated) { "true" } else { "false" })
+    $info.Cells = $lines
+    foreach ($a in $formulas[$name]) {
+      $a.Com = $sh.Range($a.Address)
+      $a.Opened = Get-Grid $a.Com "Value2"
+    }
+  }
+
+  # Excel's own full recalculation.
+  $xl.CalculateFull()
+
+  $w = New-Object IO.StreamWriter($path, $false, (New-Object Text.UTF8Encoding($false)))
+  try {
+    $w.WriteLine("{")
+    $w.WriteLine('  "source": ' + (ConvertTo-JsonString $source) + ',')
+    $w.WriteLine('  "app": ' + (ConvertTo-JsonString $result.app) + ',')
+    $w.WriteLine('  "locale": ' + (ConvertTo-JsonObject $result.locale) + ',')
+    $w.WriteLine('  "date1904": ' + $(if ($book.Date1904) { "true" } else { "false" }) + ',')
+    $w.WriteLine('  "cellCount": ' + $total + ',')
+    $w.WriteLine('  "cellFields": ["ref", "text", "value"' + $(if ($formats) { ', "formatLocal"' } else { "" }) + '],')
+    $w.WriteLine('  "formulaFields": ["ref", "formula", "cached", "opened", "recalculated"],')
+    $w.WriteLine('  "sheets": [')
+    for ($k = 0; $k -lt $sheets.Count; $k++) {
+      $info = $sheets[$k]
+      $last = $(if ($k -lt $sheets.Count - 1) { "," } else { "" })
+      if ($null -eq $info.Cells) { $w.WriteLine('    ' + $info.Head + '}' + $last); continue }
+      $w.WriteLine('    ' + $info.Head + ',')
+      $w.WriteLine('     "cells": [')
+      if ($info.Cells.Count) { $w.WriteLine('      ' + ($info.Cells -join ",`n      ")) }
+      $w.WriteLine('     ],')
+      $flines = New-Object Collections.Generic.List[string]
+      foreach ($a in $formulas[$info.Name]) {
+        $recalc = Get-Grid $a.Com "Value2"
+        for ($i = 1; $i -le $a.Rows; $i++) {
+          for ($j = 1; $j -le $a.Cols; $j++) {
+            $ref = (Get-ColumnName ($a.Col + $j - 1)) + ($a.Row + $i - 1)
+            $flines.Add('["' + $ref + '", ' + (ConvertTo-JsonString ([string]$a.Formulas[$i, $j])) + ', ' + (ConvertTo-JsonValue $a.Values[$i, $j]) + ', ' +
+                        (ConvertTo-JsonValue $a.Opened[$i, $j]) + ', ' + (ConvertTo-JsonValue $recalc[$i, $j]) + ']')
+          }
+        }
+      }
+      $w.WriteLine('     "formulas": [')
+      if ($flines.Count) { $w.WriteLine('      ' + ($flines -join ",`n      ")) }
+      $w.WriteLine('     ]}' + $last)
+    }
+    $w.WriteLine('  ]')
+    $w.WriteLine("}")
+  } finally { $w.Dispose() }
+  $total
+}
 
 # ---- Child: open one file in a new Office process, export it, quit.
 if ($Child) {
@@ -139,6 +369,17 @@ if ($Child) {
           [void][Runtime.InteropServices.Marshal]::ReleaseComObject($office)
           $office = $null
           throw "$Child is already running on this PC: close it first (this script only uses an Office it starts)"
+        }
+        if ($Child -eq "Excel") {
+          # Excel starts a new instance for every COM call, so someone may be using Excel at the same
+          # time. Only the process behind this Excel's own window is this child's (and is ever ended).
+          $xlPid = [FwOfficeWindows]::ProcessOf([int]$office.Hwnd)
+          if ($new -notcontains $xlPid) {
+            [void][Runtime.InteropServices.Marshal]::ReleaseComObject($office)
+            $office = $null
+            throw "COM attached to an Excel this script didn't start (process $xlPid)"
+          }
+          $new = @($xlPid)
         }
         foreach ($id in $new) { $started.Add($id) }
         Write-Json $result $ResultFile
@@ -185,14 +426,37 @@ if ($Child) {
       }
       "Excel" {
         $office.Visible = $false
-        $office.DisplayAlerts = $false
+        $office.DisplayAlerts = $false  # a file that needs repair then fails to open instead of being repaired
         $office.AskToUpdateLinks = $false
         $office.EnableEvents = $false
+        $office.ScreenUpdating = $false
+        $result.locale = Get-ExcelLocale $office
+        $result.printer = [string]$office.ActivePrinter
+        # Calculation can only be set with a workbook open: a blank one, kept open throughout.
+        $blank = $office.Workbooks.Add()
+        # 1. Calculation manual: the file's cached formula values, nothing recalculated.
+        $office.Calculation = -4135  # xlCalculationManual
         # Filename, UpdateLinks (never), ReadOnly. Automation doesn't add files to Excel's recent list.
         $doc = $office.Workbooks.Open($Source, 0, $true)
-        # xlTypePDF, standard quality, print areas respected
-        $doc.ExportAsFixedFormat(0, $Pdf, 0, $false, $false, $missing, $missing, $false)
+        $formulas = Read-Formulas $doc
         $doc.Close($false)
+        [void][Runtime.InteropServices.Marshal]::ReleaseComObject($doc)
+        $doc = $null
+        # 2. Opened as anyone opens it (Excel recalculates what it would on opening): the PDF and
+        # the cells' text; then Excel's full recalculation.
+        $office.Calculation = -4105  # xlCalculationAutomatic
+        $doc = $office.Workbooks.Open($Source, 0, $true)
+        try {
+          # xlTypePDF, standard quality, no document properties, print areas respected
+          $doc.ExportAsFixedFormat(0, $Pdf, 0, $false, $false, $missing, $missing, $false)
+        } catch {
+          # A workbook with nothing to print has no PDF; its cells are still read.
+          $result.pdfError = $_.Exception.Message
+        }
+        if ($Cells) { $result.cells = Write-WorkbookCells $office $doc $formulas $Cells $SourceName $result $MaxCells $CellFormats.IsPresent }
+        $doc.Close($false)
+        $blank.Close($false)
+        [void][Runtime.InteropServices.Marshal]::ReleaseComObject($blank)
       }
       "PowerPoint" {
         # ReadOnly, not untitled, no window
@@ -294,6 +558,7 @@ if ($Corpus) {
 $mutex = New-Object Threading.Mutex($false, "Global\FeatherweightOfficeAutomation")
 try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] {}
 $entries = @()
+$excelFacts = $null
 $n = 0
 $reused = 0
 foreach ($job in $jobs) {
@@ -302,8 +567,11 @@ foreach ($job in $jobs) {
   $kind = Get-Kind $f.Extension
   $pdfPath = Join-Path $outRoot ($job.Pdf -replace '/', '\')
   $entry = [ordered]@{ source = $job.Source; sha256 = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower() }
-  $previous = $old | Where-Object { $_.source -eq $job.Source -and $_.sha256 -eq $entry.sha256 -and $_.pdf -and -not $_.error } | Select-Object -First 1
-  if ($previous -and (Test-Path $pdfPath)) {
+  # A workbook's cells file sits beside its PDF.
+  $cellsRel = if ($kind -eq "Excel") { $job.Pdf -replace '\.pdf$', '.cells.json' } else { $null }
+  $cellsPath = if ($cellsRel) { Join-Path $outRoot ($cellsRel -replace '/', '\') } else { $null }
+  $previous = $old | Where-Object { $_.source -eq $job.Source -and $_.sha256 -eq $entry.sha256 -and ($_.pdf -or $_.cells) -and -not $_.error -and ($kind -ne "Excel" -or $_.cells) } | Select-Object -First 1
+  if ($previous -and (-not $previous.pdf -or (Test-Path $pdfPath)) -and (-not $cellsPath -or (Test-Path $cellsPath))) {
     $entries += $previous
     $reused++
     continue
@@ -311,10 +579,15 @@ foreach ($job in $jobs) {
   New-Item -ItemType Directory -Force (Split-Path -Parent $pdfPath) | Out-Null
   $resultPath = Join-Path $tmp "result.json"
   if (Test-Path $resultPath) { Remove-Item $resultPath }
-  $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList @(
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"",
-    "-Child", $kind, "-Source", "`"$($f.FullName)`"", "-Pdf", "`"$pdfPath`"", "-ResultFile", "`"$resultPath`"")
-  $finished = $p.WaitForExit($TimeoutSeconds * 1000)
+  $childArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"",
+    "-Child", $kind, "-Source", "`"$($f.FullName)`"", "-SourceName", "`"$($job.Source)`"", "-Pdf", "`"$pdfPath`"", "-ResultFile", "`"$resultPath`"")
+  if ($cellsPath) {
+    $childArgs += @("-Cells", "`"$cellsPath`"", "-MaxCells", $MaxCells)
+    if (-not $Corpus) { $childArgs += "-CellFormats" }  # the public files also record each cell's number format
+  }
+  $limit = if ($kind -eq "Excel") { $ExcelTimeoutSeconds } else { $TimeoutSeconds }
+  $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList $childArgs
+  $finished = $p.WaitForExit($limit * 1000)
   # Office is stuck, usually on a prompt: end the child.
   if (-not $finished) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
   $r = if (Test-Path $resultPath) { Get-Content $resultPath -Raw | ConvertFrom-Json } else { $null }
@@ -322,11 +595,16 @@ foreach ($job in $jobs) {
   # is left to block the next file.
   if ($r) { Stop-Started @($r.pid) $apps[$kind].Exe $(if ($finished) { 15000 } else { 0 }) }
   if (-not $finished) {
-    $entry.error = "$kind didn't finish within $TimeoutSeconds s"
+    $entry.error = "$kind didn't finish within $limit s"
   } elseif ($r) {
     $entry.app = $r.app
     if ($r.error) { $entry.error = $r.error }
     if ($r.pages) { $entry.pages = $r.pages }
+    if ($r.locale -and -not $excelFacts) { $excelFacts = [ordered]@{ locale = $r.locale; printer = $r.printer } }
+    if (-not $r.error -and $cellsPath -and (Test-Path $cellsPath)) {
+      $entry.cells = $cellsRel
+      $entry.cellCount = [int]$r.cells
+    }
   } else {
     $entry.error = "$kind didn't start"
   }
@@ -335,7 +613,12 @@ foreach ($job in $jobs) {
     $entry.pdf = $job.Pdf
     if (-not $entry.pages) { $entry.pages = $facts.pages }
     $entry.fonts = $facts.fonts
-    "[{0}/{1}] {2,-45} {3,3} pages  {4}" -f $n, $jobs.Count, $entry.source, $entry.pages, ($facts.fonts -join ", ")
+    $more = if ($entry.cells) { "  $($entry.cellCount) cells" } else { "" }
+    "[{0}/{1}] {2,-45} {3,3} pages  {4}{5}" -f $n, $jobs.Count, $entry.source, $entry.pages, ($facts.fonts -join ", "), $more
+  } elseif (-not $entry.error -and $entry.cells -and $r.pdfError) {
+    # Nothing to print (Excel exports no PDF), but the cells are recorded.
+    $entry.noPdf = $r.pdfError
+    "[{0}/{1}] {2,-45} no PDF ({3})  {4} cells" -f $n, $jobs.Count, $entry.source, $r.pdfError, $entry.cellCount
   } else {
     if (-not $entry.error) { $entry.error = "no PDF was written" }
     "[{0}/{1}] {2,-45} FAILED: {3}" -f $n, $jobs.Count, $entry.source, $entry.error
@@ -346,8 +629,11 @@ foreach ($job in $jobs) {
 $manifest = [ordered]@{
   made = (Get-Date).ToString("yyyy-MM-dd")
   computer = "Office reference PC (decision 19)"
-  export = "Word (safe mode, no add-ins, macros forced off, links not updated, read-only): the document without markup, for print, tagged; Excel: print areas; PowerPoint: slides"
+  export = "Word (safe mode, no add-ins, macros forced off, links not updated, read-only): the document without markup, for print, tagged; Excel (macros forced off, links not updated, read-only): print areas, and a cells file per workbook (each non-empty cell's text and value, formulas with their cached, opened and recalculated values); PowerPoint: slides"
 }
+# The locale and printer Excel formatted and laid out with; kept from the last run that rendered workbooks.
+if (-not $excelFacts -and (Test-Path $manifestPath)) { $excelFacts = (Get-Content $manifestPath -Raw | ConvertFrom-Json).excel }
+if ($excelFacts) { $manifest.excel = $excelFacts }
 if ($Corpus) { $manifest.corpus = $corpusRoot }  # fwtool compare finds the documents here
 # Folders stay in the order the manifest had them, new folders after them; files by name.
 $groups = @(@($previousFiles) + @($entries) | ForEach-Object { ($_.source -split '/')[0] } | Select-Object -Unique)

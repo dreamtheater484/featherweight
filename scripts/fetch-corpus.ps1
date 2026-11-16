@@ -1,14 +1,31 @@
 <#
 .SYNOPSIS
-  Builds the real-world Word corpus (plan section 10) from tests\office\real-world.json: downloads
-  every file, checks its hash and screens it, so anyone can rebuild the corpus exactly. The
-  documents are never committed (their licences vary); only the manifest is.
+  Builds the real-world corpus (plan section 10) of Word documents, workbooks and CSV files from
+  tests\office\real-world.json: downloads every file, checks its hash and screens it, so anyone
+  can rebuild the corpus exactly. The files are never committed (their licences vary); only the
+  manifest is. An entry's format follows its "file" (docx/, xlsx/, csv/), or for a candidate its
+  "format" or its URL's extension: .docx; .xlsx or .xltx; .csv, .tsv or .txt.
 
   Corpus layout (point FW_CORPUS at the folder):
     docx\<category>\<id>.docx           the documents that passed the screen
-    reference\docx\<category>\<id>.docx.pdf, reference\manifest.json
-                                        Word's PDFs (scripts\reference-renders.ps1 -Corpus)
+    xlsx\<category>\<id>.xlsx           the workbooks (and .xltx templates) that passed it
+    csv\<category>\<id>.csv             the CSV and TSV files that passed it
+    reference\docx\<category>\<id>.docx.pdf, reference\xlsx\...\<id>.xlsx.pdf and .cells.json,
+    reference\manifest.json             Office's PDFs (scripts\reference-renders.ps1 -Corpus)
     screen.json                         this run's results: every file, passed or rejected, and why
+    functions.json                      the functions the screened workbooks' formulas use, counted
+
+  Workbooks get the same screen as documents (steps 1, 2, 4 and 5), with their own content rules
+  (step 3): a plain (macro-free) workbook or template; no VBA or macro sheets, no external links
+  (externalLink parts), data connections, query tables, Power Query (DataMashup), pivot caches
+  from external sources, OLE objects, ActiveX, embeddings, web extensions or form controls with
+  macros; no formulas (cells, names, conditional formats, validation) with DDE (a "|" outside
+  text) or WEBSERVICE, FILTERXML, RTD, CALL, REGISTER, EXEC, EVALUATE and other XLM functions;
+  hyperlinks only to http, https and mailto. CSV files: text (no zip, no web page, no binary
+  data), and no formula-like field that would reach out (DDE or the functions above); then
+  Defender. The screen records each file's facts: a workbook's producer, sheets, cells, formulas,
+  tags (charts, tables, conditional formats, ...) and the functions it uses; a CSV's encoding,
+  byte-order mark, delimiter, line ends, rows and columns.
 
   Every file passes the safety screen before Word or Featherweight opens it:
   1. Handling: each download goes into its own new, empty quarantine folder. Nothing from a
@@ -67,6 +84,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
+# powershell -File passes "a,b" as one string.
+$Screen = @($Screen | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+$Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 if (-not $Out -and $Screen) { $Out = [IO.Path]::GetTempPath() }
 if (-not $Out) { throw "Give the corpus folder with -Out, or set FW_CORPUS." }
 if (-not $Manifest) { $Manifest = Join-Path $root "tests\office\real-world.json" }
@@ -145,7 +165,7 @@ function Find-Source([Uri]$u) {
 $curl = Join-Path $env:SystemRoot "System32\curl.exe"
 
 # Downloads $url to $dest. Returns the final URL; throws with the reason when it can't.
-function Get-Download([string]$url, [string]$dest) {
+function Get-Download([string]$url, [string]$dest, [string]$format = "docx") {
   $headers = "$dest.headers"; $errors = "$dest.errors"
   try {
     for ($hop = 0; $hop -le 5; $hop++) {
@@ -166,10 +186,15 @@ function Get-Download([string]$url, [string]$dest) {
       # A site that wants a browser challenge solved is skipped, never worked around.
       if ($head -match '(?im)^(x-amzn-waf-action|cf-mitigated):') { throw "HTTP $code, the site asks for a browser challenge" }
       if ($code -ne "200") { throw "HTTP $code" }
-      # The served name must be a .docx too when the server or the URL gives one.
+      # The served name must be of the expected format too when the server or the URL gives one.
       $m = [regex]::Match($head, "(?im)^content-disposition:.*?filename\*?=(?:UTF-8'')?""?([^"";\r\n]+)")
       $name = if ($m.Success) { [Uri]::UnescapeDataString($m.Groups[1].Value) } else { [Uri]::UnescapeDataString($u.Segments[-1]) }
-      if ($name -match '(?i)\.(docm|dotx|dotm|doc|rtf|odt|zip|7z|rar|exe|pdf|htm|html)$') { throw "served as $name, not a .docx" }
+      $bad = switch ($format) {
+        "xlsx" { '(?i)\.(xlsm|xltm|xlsb|xls|xlam|ods|csv|docx|doc|zip|7z|rar|exe|pdf|htm|html)$' }
+        "csv" { '(?i)\.(xlsx|xlsm|xls|xlsb|ods|docx|doc|zip|gz|7z|rar|exe|pdf|htm|html|json|xml)$' }
+        default { '(?i)\.(docm|dotx|dotm|doc|rtf|odt|zip|7z|rar|exe|pdf|htm|html)$' }
+      }
+      if ($name -match $bad) { throw "served as $name, not a .$format" }
       if ((Get-Item -LiteralPath $dest).Length -gt $MaxBytes) { throw "larger than 20 MB" }
       return $u.AbsoluteUri
     }
@@ -578,6 +603,391 @@ function Test-Docx([string]$path) {
   @{ reasons = @($reasons | Select-Object -Unique); facts = $facts }
 }
 
+# ---------------------------------------------------------------- Workbooks (S1)
+
+$xlMainTypes = @{
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml" = ".xlsx"
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml" = ".xltx"
+}
+$badXlPath = '(?i)(^|/)vbaProject\.bin$|vbaProjectSignature|vbaData\.xml$|^xl/externalLinks/|^xl/connections\.xml$|^xl/queryTables/|^xl/embeddings/|^xl/activeX/|^xl/macrosheets/|^xl/dialogsheets/|webextension|taskpanes|^customUI/|^xl/customUI/'
+$badXlType = '(?i)macroEnabled|vbaProject|vbaData|externalLink|connections|queryTable|activeX|oleObject|webextension|taskpane|macrosheet|dialogsheet|keyMapCustomizations'
+$badXlRel = @("vbaProject", "externalLink", "externalLinkPath", "connections", "queryTable", "oleObject", "package", "control",
+  "activeXControl", "activeXControlBinary", "webextension", "webextensiontaskpanes", "xlMacrosheet", "xlIntlMacrosheet",
+  "dialogsheet", "extensibility", "attachedToolbars", "keyMapCustomizations", "slicerCacheExternal")
+# Functions that reach outside the workbook or run code (web, RTD, DLL calls, XLM macros).
+$badXlFunction = '(?i)(?<![A-Za-z0-9_.])(?:_xlfn\.)?(WEBSERVICE|FILTERXML|CALL|REGISTER|REGISTER\.ID|EXEC|RTD|EVALUATE|EXECUTE|FOPEN|FWRITE|FWRITELN|FREAD|FREADLN|HALT|RUN|FORMULA|DIRECTORY|FILES)\s*\('
+# Elements whose text is a formula: cells, defined names, conditional formats, data validation.
+$xlFormulaElements = @("f", "definedName", "formula", "formula1", "formula2")
+$xlMain = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+$xlTagCounts = @{
+  # element local name -> tag
+  "mergeCell" = "merged-cells"; "conditionalFormatting" = "conditional-formats"; "dataValidation" = "data-validation"
+  "hyperlink" = "hyperlinks"; "tablePart" = "tables"; "sparklineGroup" = "sparklines"; "legacyDrawing" = "notes"
+  "pageSetup" = "page-setup"; "headerFooter" = "headers-footers"; "rowBreaks" = "page-breaks"; "colBreaks" = "page-breaks"
+  "autoFilter" = "filters"; "sheetProtection" = "protection"; "dataBar" = "data-bars"; "iconSet" = "icon-sets"; "colorScale" = "color-scales"
+}
+
+# Strips text literals ("..." with "" inside) from a formula, so only its code is looked at.
+function Remove-FormulaStrings([string]$f) { [regex]::Replace($f, '"(?:[^"]|"")*"', '""') }
+
+# The functions a formula calls: names before "(" outside text literals, without _xlfn./_xlws.
+function Get-FormulaFunctions([string]$f) {
+  $code = Remove-FormulaStrings $f
+  @([regex]::Matches($code, "(?<![A-Za-z0-9_.\]'!])((?:_xlfn\.|_xlws\.|_xlpm\.)*[A-Za-z][A-Za-z0-9_.]*)\s*\(") |
+    ForEach-Object { ($_.Groups[1].Value -replace '^(_xlfn\.|_xlws\.)+', '').ToUpperInvariant() } | Where-Object { $_ -notmatch '^_XLPM\.' } | Select-Object -Unique)
+}
+
+# Why a formula's code is refused, or $null.
+function Test-XlFormula([string]$f) {
+  $code = Remove-FormulaStrings $f
+  if ($code -match '\|') { return "DDE in a formula" }
+  $m = [regex]::Match($code, $badXlFunction)
+  if ($m.Success) { return "$($m.Groups[1].Value.ToUpperInvariant()) in a formula" }
+  $null
+}
+
+# Screens one workbook. Returns @{ reasons = @(...); facts = @{...} }; no reasons means it passed.
+function Test-Xlsx([string]$path) {
+  $reasons = New-Object Collections.Generic.List[string]
+  $facts = [ordered]@{}
+  $fi = Get-Item -LiteralPath $path
+  if (@(".xlsx", ".xltx") -notcontains $fi.Extension.ToLowerInvariant()) { $reasons.Add("not a .xlsx or .xltx file"); return @{ reasons = $reasons; facts = $facts } }
+  if ($fi.Length -ge $MaxBytes) { $reasons.Add("20 MB or larger"); return @{ reasons = $reasons; facts = $facts } }
+  $head = New-Object byte[] 4
+  $fs = [IO.File]::OpenRead($path); [void]$fs.Read($head, 0, 4); $fs.Dispose()
+  if ($head[0] -ne 0x50 -or $head[1] -ne 0x4B -or $head[2] -ne 3 -or $head[3] -ne 4) {
+    $why = if ($head[0] -eq 0xD0 -and $head[1] -eq 0xCF) { "an OLE file (an .xls, or an encrypted workbook)" } else { "not a zip (a web page or another format)" }
+    $reasons.Add($why); return @{ reasons = $reasons; facts = $facts }
+  }
+  $zip = $null
+  $part = $null
+  try {
+    $zip = [IO.Compression.ZipFile]::OpenRead($path)
+    $entries = @($zip.Entries)
+    if ($entries.Count -gt 5000) { throw "more than 5000 parts" }
+    $names = @{}
+    foreach ($e in $entries) {
+      $n = $e.FullName.TrimStart('/')
+      if ($names.ContainsKey($n.ToLowerInvariant())) { throw "duplicate part name $n" }
+      $names[$n.ToLowerInvariant()] = $e
+      if ($n -match $badXlPath) { $reasons.Add("forbidden part $n") }
+    }
+    $budget = [long]$TotalCap
+    $ct = $names["[content_types].xml"]
+    if (-not $ct) { throw "no [Content_Types].xml" }
+    $defaults = @{}; $overrides = @{}
+    $r = New-XmlReader (Read-Part $ct ([ref]$budget))
+    while ($r.Read()) {
+      if ($r.NodeType -ne [Xml.XmlNodeType]::Element) { continue }
+      $type = $r.GetAttribute("ContentType")
+      if ($r.LocalName -eq "Default") { $defaults[$r.GetAttribute("Extension").ToLowerInvariant()] = $type }
+      elseif ($r.LocalName -eq "Override") { $overrides[$r.GetAttribute("PartName").TrimStart('/').ToLowerInvariant()] = $type }
+      if ($type -and $type -match $badXlType -and ($r.LocalName -eq "Override" -or $type -match '(?i)macroEnabled|vba')) { $reasons.Add("forbidden content type $type") }
+    }
+    $r.Dispose()
+    function Get-PartType([string]$n) {
+      $k = $n.ToLowerInvariant()
+      if ($overrides.ContainsKey($k)) { return $overrides[$k] }
+      $ext = [IO.Path]::GetExtension($k).TrimStart('.')
+      if ($defaults.ContainsKey($ext)) { return $defaults[$ext] }
+      $null
+    }
+    $main = $null
+    $count = @{}
+    function Add-Count([string]$k, [int]$n = 1) { $count[$k] = $n + [int]$count[$k] }
+    foreach ($e in $entries) {
+      $n = $e.FullName.TrimStart('/')
+      if ($n -notmatch '(?i)\.rels$') { continue }
+      $part = $n
+      $r = New-XmlReader (Read-Part $e ([ref]$budget))
+      while ($r.Read()) {
+        if ($r.NodeType -ne [Xml.XmlNodeType]::Element -or $r.LocalName -ne "Relationship") { continue }
+        $target = $r.GetAttribute("Target"); $mode = $r.GetAttribute("TargetMode")
+        $short = ($r.GetAttribute("Type") -split '/')[-1]
+        if ($badXlRel -contains $short) { $reasons.Add("forbidden relationship $short ($n)") }
+        if ($n -ieq "_rels/.rels" -and $short -eq "officeDocument") { $main = $target.TrimStart('/') }
+        if ($mode -eq "External") {
+          if ($short -ne "hyperlink") { $reasons.Add("external $short relationship to $(Format-Target $target) ($n)") }
+          elseif ($target -notmatch $plainLink) { $reasons.Add("hyperlink that isn't http, https or mailto: $(Format-Target $target) ($n)") }
+        }
+        switch ($short) { "chart" { Add-Count "charts" } "chartsheet" { Add-Count "chart-sheets" } "image" { Add-Count "pictures" }
+          "pivotTable" { Add-Count "pivot-tables" } "threadedComment" { Add-Count "threaded-comments" } "slicer" { Add-Count "slicers" }
+          "timeline" { Add-Count "timelines" } "ctrlProp" { Add-Count "form-controls" } }
+      }
+      $r.Dispose()
+    }
+    if (-not $main) { throw "no main workbook relationship" }
+    $mainType = Get-PartType $main
+    if (-not $xlMainTypes.ContainsKey([string]$mainType)) { $reasons.Add("main part isn't a plain workbook or template ($mainType)") }
+    elseif ($xlMainTypes[$mainType] -ne $fi.Extension.ToLowerInvariant()) { $reasons.Add("a $($xlMainTypes[$mainType]) named $($fi.Extension)") }
+    foreach ($e in $entries) {
+      $t = Get-PartType $e.FullName.TrimStart('/')
+      if ($t -and $t -match $badXlType) { $reasons.Add("forbidden part type $t ($($e.FullName))") }
+    }
+
+    # Every XML part: forbidden strings, formulas, controls; and the facts.
+    $functions = @{}
+    $sharedFns = @{}  # shared formula index -> its functions, per part
+    $sheets = 0; $cells = 0; $formulas = 0
+    foreach ($e in $entries) {
+      $n = $e.FullName.TrimStart('/')
+      $t = Get-PartType $n
+      if ($n -notmatch '(?i)\.(xml|rels|vml)$' -and -not ($t -and $t -match '(?i)[+/]xml$')) { continue }
+      $bytes = Read-Part $e ([ref]$budget)
+      $text = Get-XmlText $bytes
+      $m = [regex]::Match($text, $badString)
+      if ($m.Success) { $reasons.Add("contains '$($m.Value)' ($n)") }
+      if ($n -match '(?i)\.rels$') { continue }
+      if ($n -match '(?i)^customXml/item\d*\.xml$' -and $text -match 'DataMashup') { $reasons.Add("Power Query (DataMashup, $n)") }
+      if ($n -match '(?i)\.vml$') {
+        if ($text -match '(?i)<x:FmlaMacro') { $reasons.Add("a control that runs a macro ($n)") }
+        continue  # VML is loose HTML-style markup, not always well-formed XML
+      }
+      $part = "$n ($t)"
+      $isSheet = $n -match '(?i)^xl/worksheets/[^/]+\.xml$'
+      if ($isSheet) { $sheets++ }
+      $sharedFns.Clear()
+      $inFormula = $null; $fShared = $null; $fText = New-Object Text.StringBuilder
+      $r = New-XmlReader $bytes
+      while ($r.Read()) {
+        $nt = $r.NodeType
+        if ($nt -eq [Xml.XmlNodeType]::Text -or $nt -eq [Xml.XmlNodeType]::Whitespace -or $nt -eq [Xml.XmlNodeType]::SignificantWhitespace) {
+          if ($inFormula) { [void]$fText.Append($r.Value) }
+          continue
+        }
+        if ($nt -eq [Xml.XmlNodeType]::EndElement) {
+          if ($inFormula -and $r.LocalName -eq $inFormula) {
+            $formulaText = $fText.ToString()
+            $why = Test-XlFormula $formulaText
+            if ($why) { $reasons.Add("$why ($n)") }
+            if ($cellFormula) {
+              $fns = Get-FormulaFunctions $formulaText
+              if ($null -ne $fShared) { $sharedFns[$fShared] = $fns }
+              foreach ($fn in $fns) { $functions[$fn] = 1 + [int]$functions[$fn] }
+            }
+            $inFormula = $null
+          }
+          continue
+        }
+        if ($nt -ne [Xml.XmlNodeType]::Element) { continue }
+        $ln = $r.LocalName
+        if ($xlFormulaElements -contains $ln) {
+          # Cell formulas are counted (charts and sparklines have f elements too); all are screened.
+          $cellFormula = $ln -eq "f" -and $isSheet -and $r.NamespaceURI -eq $xlMain
+          if ($cellFormula) {
+            $formulas++
+            $kind = $r.GetAttribute("t")
+            $si = $r.GetAttribute("si")
+            if ($kind -eq "shared") { Add-Count "shared-formulas" }
+            if ($kind -eq "array") { Add-Count "array-formulas" }
+            $fShared = if ($kind -eq "shared" -and $si) { $si } else { $null }
+            if ($r.IsEmptyElement) {
+              # A shared formula's other cells: the functions of its first cell.
+              if ($fShared -and $sharedFns.ContainsKey($fShared)) { foreach ($fn in $sharedFns[$fShared]) { $functions[$fn] = 1 + [int]$functions[$fn] } }
+              continue
+            }
+          }
+          if (-not $r.IsEmptyElement) { $inFormula = $ln; [void]$fText.Clear() }
+          continue
+        }
+        switch -CaseSensitive ($ln) {
+          "c" { if ($isSheet) { $cells++; if ($r.GetAttribute("cm")) { Add-Count "dynamic-arrays" } } }
+          { $_ -in "oleObject", "oleObjects" } { $reasons.Add("OLE object ($n)") }
+          "control" { if ($r.NamespaceURI -match 'spreadsheetml') { Add-Count "controls" } }
+          "formControlPr" { if ($r.GetAttribute("macro")) { $reasons.Add("a control that runs a macro ($n)") } }
+          "cacheSource" { $ty = $r.GetAttribute("type"); if ($ty -and $ty -ne "worksheet") { $reasons.Add("pivot cache from a $ty source ($n)") }; if ($r.GetAttribute("connectionId")) { $reasons.Add("pivot cache from a data connection ($n)") } }
+          "pane" { if ($r.GetAttribute("state") -match 'frozen') { Add-Count "frozen-panes" } elseif ($r.GetAttribute("state") -eq "split") { Add-Count "split-panes" } }
+          "row" { if ($r.GetAttribute("hidden") -match '^(1|true)$') { Add-Count "hidden-rows" }; if ($r.GetAttribute("outlineLevel")) { Add-Count "outline" } }
+          "col" { if ($r.GetAttribute("hidden") -match '^(1|true)$') { Add-Count "hidden-columns" }; if ($r.GetAttribute("outlineLevel")) { Add-Count "outline" } }
+          "sheetView" { if ($r.GetAttribute("rightToLeft") -match '^(1|true)$') { Add-Count "rtl" } }
+          "workbookPr" { if ($r.GetAttribute("date1904") -match '^(1|true)$') { Add-Count "date1904" } }
+          "sheet" { if ($n -ieq "xl/workbook.xml" -and $r.GetAttribute("state") -match '^(hidden|veryHidden)$') { Add-Count "hidden-sheets" } }
+          "calcPr" { if ($r.GetAttribute("calcMode") -eq "manual") { Add-Count "manual-calculation" } }
+          "r" { if ($n -match '(?i)sharedStrings') { Add-Count "rich-text" } }
+          "pic" { if ($n -match '(?i)^xl/drawings/') { Add-Count "pictures" } }
+          "sp" { if ($n -match '(?i)^xl/drawings/') { Add-Count "shapes" } }
+          default { if ($xlTagCounts.ContainsKey($ln)) { Add-Count $xlTagCounts[$ln] } }
+        }
+        if ($ln -eq "definedName") { Add-Count "names" }
+        if ($ln -eq "conditionalFormatting" -and $r.NamespaceURI -match '2009/9/main') { Add-Count "x14-conditional-formats" }
+      }
+      $r.Dispose()
+    }
+
+    $app = $names["docprops/app.xml"]
+    if ($app) {
+      $r = New-XmlReader (Read-Part $app ([ref]$budget))
+      while ($r.Read()) {
+        if ($r.NodeType -ne [Xml.XmlNodeType]::Element) { continue }
+        switch ($r.LocalName) {
+          "Application" { $facts.producer = $r.ReadElementContentAsString() }
+          "AppVersion" { $facts.appVersion = $r.ReadElementContentAsString() }
+        }
+      }
+      $r.Dispose()
+    }
+    $core = $names["docprops/core.xml"]
+    if ($core) {
+      $r = New-XmlReader (Read-Part $core ([ref]$budget))
+      while ($r.Read()) {
+        if ($r.NodeType -eq [Xml.XmlNodeType]::Element -and $r.LocalName -eq "modified") { $v = $r.ReadElementContentAsString(); if ($v.Length -ge 10) { $facts.modified = $v.Substring(0, 10) } }
+      }
+      $r.Dispose()
+    }
+    if (-not $facts.Contains("producer")) { $facts.producer = "unknown (no docProps/app.xml)" }
+    if ($formulas) { Add-Count "formulas" $formulas }
+    $facts.sheets = $sheets
+    $facts.cells = $cells
+    $facts.formulas = $formulas
+    $facts.tags = @($count.Keys | Sort-Object)
+    $facts.counts = [ordered]@{}
+    foreach ($k in @($count.Keys | Sort-Object)) { $facts.counts[$k] = $count[$k] }
+    $facts.functions = [ordered]@{}
+    foreach ($k in @($functions.Keys | Sort-Object)) { $facts.functions[$k] = $functions[$k] }
+  } catch {
+    $where = if ($part) { " in $part" } else { "" }
+    $reasons.Add("malformed$($where): $($_.Exception.Message)")
+  } finally {
+    if ($zip) { $zip.Dispose() }
+  }
+  @{ reasons = @($reasons | Select-Object -Unique); facts = $facts }
+}
+
+# ---------------------------------------------------------------- CSV (S1)
+
+# Reads a CSV the way Excel's quoting works (a field that starts with a quote runs to the closing
+# quote, "" inside is a quote, anything else is literal) and counts what the screen and the
+# manifest need. Compiled, because a 20 MB file is too slow for a PowerShell loop.
+Add-Type @"
+using System;
+using System.Text;
+using System.Text.RegularExpressions;
+public sealed class FwCsvFacts {
+  public int Rows, MaxFields, QuotedLineBreaks, LeadingZeros, LongNumbers, DecimalCommas, FormulaLike;
+  public bool UnclosedQuote; public string Danger;
+}
+public static class FwCsv {
+  // The delimiter that splits the first lines most consistently into the most fields.
+  public static char Guess(string text) {
+    char best = ','; double bestScore = -1;
+    foreach (char d in new[] { ',', ';', '\t', '|' }) {
+      var counts = new System.Collections.Generic.List<int>();
+      int n = 0; bool q = false; int lines = 0;
+      for (int i = 0; i < text.Length && lines < 50; i++) {
+        char c = text[i];
+        if (c == '"') q = !q;
+        else if (!q && c == d) n++;
+        else if (!q && (c == '\n' || c == '\r')) {
+          if (c == '\r' && i + 1 < text.Length && text[i + 1] == '\n') i++;
+          counts.Add(n); n = 0; lines++;
+        }
+      }
+      if (n > 0) counts.Add(n);
+      if (counts.Count == 0) continue;
+      counts.Sort();
+      int median = counts[counts.Count / 2];
+      if (median == 0) continue;
+      int same = 0; foreach (int c in counts) if (c == median) same++;
+      double score = (double)same / counts.Count * 1000 + median;
+      if (score > bestScore) { bestScore = score; best = d; }
+    }
+    return best;
+  }
+  static readonly Regex Bad = new Regex(@"(?i)(?<![A-Za-z0-9_.])(?:_xlfn\.)?(WEBSERVICE|FILTERXML|CALL|REGISTER|EXEC|RTD|EVALUATE)\s*\(");
+  public static FwCsvFacts Scan(string text, char d) {
+    var f = new FwCsvFacts();
+    var field = new StringBuilder();
+    int fields = 0; bool quoted = false, inQuotes = false, any = false;
+    Action end = () => {
+      string s = field.ToString();
+      if (s.Length > 1 && s[0] == '0' && char.IsDigit(s[1]) && Regex.IsMatch(s, @"^\d+$")) f.LeadingZeros++;
+      if (s.Length >= 16 && Regex.IsMatch(s, @"^-?\d{16,}$")) f.LongNumbers++;
+      if (Regex.IsMatch(s, @"^-?\d+,\d+$")) f.DecimalCommas++;
+      if (s.Length > 1 && "=+-@".IndexOf(s[0]) >= 0 && !Regex.IsMatch(s, @"^[-+]?[\d.,]+%?$")) {
+        f.FormulaLike++;
+        string code = Regex.Replace(s, "\"(?:[^\"]|\"\")*\"", "\"\"");
+        if (f.Danger == null && (code.IndexOf('|') >= 0 || Bad.IsMatch(code))) f.Danger = s.Length > 60 ? s.Substring(0, 60) : s;
+      }
+      field.Clear(); fields++; quoted = false; any = true;
+    };
+    Action row = () => { end(); f.Rows++; if (fields > f.MaxFields) f.MaxFields = fields; fields = 0; any = false; };
+    for (int i = 0; i < text.Length; i++) {
+      char c = text[i];
+      if (inQuotes) {
+        if (c == '"') { if (i + 1 < text.Length && text[i + 1] == '"') { field.Append('"'); i++; } else inQuotes = false; }
+        else { if (c == '\n' || c == '\r') f.QuotedLineBreaks++; field.Append(c); }
+        continue;
+      }
+      if (c == '"' && field.Length == 0 && !quoted) { inQuotes = true; quoted = true; any = true; continue; }
+      if (c == d) { end(); continue; }
+      if (c == '\r' || c == '\n') { if (c == '\r' && i + 1 < text.Length && text[i + 1] == '\n') i++; row(); continue; }
+      field.Append(c); any = true;
+    }
+    if (inQuotes) f.UnclosedQuote = true;
+    if (any || field.Length > 0) row();
+    return f;
+  }
+}
+"@
+
+# Screens one CSV or TSV file. Returns @{ reasons; facts } like Test-Xlsx.
+function Test-Csv([string]$path) {
+  $reasons = New-Object Collections.Generic.List[string]
+  $facts = [ordered]@{}
+  $fi = Get-Item -LiteralPath $path
+  if (@(".csv", ".tsv", ".txt") -notcontains $fi.Extension.ToLowerInvariant()) { $reasons.Add("not a .csv, .tsv or .txt file"); return @{ reasons = $reasons; facts = $facts } }
+  if ($fi.Length -ge $MaxBytes) { $reasons.Add("20 MB or larger"); return @{ reasons = $reasons; facts = $facts } }
+  $bytes = [IO.File]::ReadAllBytes($path)
+  if ($bytes.Length -ge 2 -and $bytes[0] -eq 0x50 -and $bytes[1] -eq 0x4B) { $reasons.Add("a zip, not text"); return @{ reasons = $reasons; facts = $facts } }
+  $bom = $false
+  if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { $enc = "utf-8"; $bom = $true; $text = [Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3) }
+  elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) { $enc = "utf-16-le"; $bom = $true; $text = [Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2) }
+  elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) { $enc = "utf-16-be"; $bom = $true; $text = [Text.Encoding]::BigEndianUnicode.GetString($bytes, 2, $bytes.Length - 2) }
+  else {
+    if ([Array]::IndexOf($bytes, [byte]0) -ge 0) { $reasons.Add("binary data (NUL bytes), not text"); return @{ reasons = $reasons; facts = $facts } }
+    try { $text = (New-Object Text.UTF8Encoding($false, $true)).GetString($bytes); $enc = "utf-8" }
+    catch { $text = [Text.Encoding]::GetEncoding(1252).GetString($bytes); $enc = "windows-1252" }
+  }
+  $start = $text.Substring(0, [math]::Min(2048, $text.Length))
+  if ($start -match '(?i)<!DOCTYPE\s+html|<html[\s>]|<head[\s>]|<body[\s>]') { $reasons.Add("a web page, not CSV"); return @{ reasons = $reasons; facts = $facts } }
+  $sepHint = [regex]::Match($start, '^sep=(.)\r?\n')
+  $delim = if ($sepHint.Success) { [char]$sepHint.Groups[1].Value } else { [FwCsv]::Guess($text) }
+  $scan = [FwCsv]::Scan($text, $delim)
+  if ($scan.Danger) { $reasons.Add("formula-like field that reaches out: '$($scan.Danger)'") }
+  $crlf = ([regex]::Matches($text, "`r`n")).Count
+  $lf = ([regex]::Matches($text, "(?<!`r)`n")).Count
+  $cr = ([regex]::Matches($text, "`r(?!`n)")).Count
+  $facts.encoding = $enc
+  $facts.bom = $bom
+  $facts.delimiter = switch ($delim) { "`t" { "tab" } default { [string]$delim } }
+  $facts.lineEnding = if (($crlf -gt 0) + ($lf -gt 0) + ($cr -gt 0) -gt 1) { "mixed" } elseif ($crlf) { "CRLF" } elseif ($cr) { "CR" } else { "LF" }
+  $facts.rows = $scan.Rows
+  $facts.columns = $scan.MaxFields
+  $tags = New-Object Collections.Generic.List[string]
+  if ($sepHint.Success) { $tags.Add("sep-line") }
+  if ($scan.QuotedLineBreaks) { $tags.Add("quoted-line-breaks") }
+  if ($scan.LeadingZeros) { $tags.Add("leading-zeros") }
+  if ($scan.LongNumbers) { $tags.Add("long-numbers") }
+  if ($scan.DecimalCommas) { $tags.Add("decimal-commas") }
+  if ($scan.FormulaLike) { $tags.Add("formula-like-text") }
+  if ($scan.UnclosedQuote) { $tags.Add("unclosed-quote") }
+  if ($enc -ne "utf-8") { $tags.Add($enc) }
+  $facts.tags = @($tags)
+  @{ reasons = @($reasons); facts = $facts }
+}
+
+# The format of a manifest entry or candidate: docx, xlsx or csv.
+function Get-Format($e) {
+  $ext = if ($e.file) { [IO.Path]::GetExtension($e.file) } elseif ($e.format) { "." + $e.format } else { [IO.Path]::GetExtension(([Uri]$e.url).AbsolutePath) }
+  switch -Regex ($ext.ToLowerInvariant()) { '^\.(xlsx|xltx)$' { "xlsx" } '^\.(csv|tsv|txt)$' { "csv" } default { "docx" } }
+}
+# The file extension a format's file is kept with.
+function Get-Extension($e, [string]$format) {
+  if ($e.file) { return [IO.Path]::GetExtension($e.file).ToLowerInvariant() }
+  $ext = [IO.Path]::GetExtension(([Uri]$e.url).AbsolutePath).ToLowerInvariant()
+  switch ($format) { "xlsx" { if ($ext -eq ".xltx") { ".xltx" } else { ".xlsx" } } "csv" { if ($ext -eq ".tsv") { ".tsv" } else { ".csv" } } default { ".docx" } }
+}
+
 # fwtool check refuses malformed packages and zip bombs, and checks every reference.
 function Test-Fwtool([string]$path) {
   $ErrorActionPreference = "Continue"  # stderr lines from a native tool aren't exceptions
@@ -597,11 +1007,18 @@ function Test-Defender([string]$folder) {
 
 # ---------------------------------------------------------------- Run
 
+# Screens one file by its format; fwtool check for the packages.
+function Test-File([string]$path, [string]$format) {
+  $t = switch ($format) { "xlsx" { Test-Xlsx $path } "csv" { Test-Csv $path } default { Test-Docx $path } }
+  $reasons = @($t.reasons)
+  if (-not $reasons.Count -and $format -ne "csv") { $fw = Test-Fwtool $path; if ($fw) { $reasons = @($fw) } }
+  @{ reasons = $reasons; facts = $t.facts }
+}
+
 if ($Screen) {
   foreach ($p in $Screen) {
-    $t = Test-Docx ([IO.Path]::GetFullPath($p))
+    $t = Test-File ([IO.Path]::GetFullPath($p)) (Get-Format ([pscustomobject]@{ url = "file:///$([IO.Path]::GetFileName($p))" }))
     $reasons = @($t.reasons)
-    if (-not $reasons.Count) { $fw = Test-Fwtool $p; if ($fw) { $reasons = @($fw) } }
     if ($reasons.Count) { "REJECTED {0}: {1}" -f $p, ($reasons -join "; ") }
     else { "passed   {0}: {1}" -f $p, (ConvertTo-PrettyJson $t.facts).Replace("`n", " ") }
   }
@@ -620,9 +1037,8 @@ function Get-Slug([string]$s) {
   $s.Trim('-')
 }
 
-$docxRoot = Join-Path $Out "docx"
 $quarantine = Join-Path $Out "quarantine"
-New-Item -ItemType Directory -Force $Out, $docxRoot | Out-Null
+New-Item -ItemType Directory -Force $Out | Out-Null
 $files = @($manifestData.files | Where-Object { $_ })
 $rejected = @($manifestData.rejected | Where-Object { $_ })
 
@@ -648,10 +1064,11 @@ if ($Candidates) {
     $id = $base; $k = 2
     while ($usedIds[$id]) { $id = "$base-$k"; $k++ }
     $usedIds[$id] = $true
-    $work += [pscustomobject]@{ id = $id; candidate = $c }
+    $format = Get-Format $c
+    $work += [pscustomobject]@{ id = $id; candidate = $c; format = $format; ext = (Get-Extension $c $format) }
   }
 } else {
-  $work = @($files | ForEach-Object { [pscustomobject]@{ id = $_.id; entry = $_ } })
+  $work = @($files | ForEach-Object { $format = Get-Format $_; [pscustomobject]@{ id = $_.id; entry = $_; format = $format; ext = (Get-Extension $_ $format) } })
 }
 if ($Only) { $work = @($work | Where-Object { $Only -contains $_.id }) }
 if ($work.Count -eq 0) { "Nothing to do."; return }
@@ -665,7 +1082,7 @@ foreach ($w in $work) {
   $i++
   $folder = Join-Path $quarantine ("{0:d4}" -f $i)
   New-Item -ItemType Directory $folder | Out-Null
-  $q = Join-Path $folder "$($w.id).docx"
+  $q = Join-Path $folder "$($w.id)$($w.ext)"
   $e = if ($w.entry) { $w.entry } else { $w.candidate }
   $res = [ordered]@{ id = $w.id; url = $e.url; finalUrl = $null; quarantine = $q; sha256 = $null; size = $null; reasons = @(); facts = $null }
   try {
@@ -675,7 +1092,7 @@ foreach ($w in $work) {
       if (-not (Test-Path -LiteralPath $existing)) { throw "missing from the corpus" }
       Copy-Item -LiteralPath $existing $q
     } else {
-      $res.finalUrl = Get-Download $e.url $q
+      $res.finalUrl = Get-Download $e.url $q $w.format
       Start-Sleep -Milliseconds 300
     }
     $res.sha256 = (Get-FileHash -LiteralPath $q -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -710,21 +1127,38 @@ foreach ($res in $results) {
   if ($res.reasons.Count -or -not (Test-Path -LiteralPath $res.quarantine)) { continue }
   if ($seen[$res.sha256]) { $res.reasons = @("same file as $($seen[$res.sha256])"); continue }
   $seen[$res.sha256] = $res.id
-  $t = Test-Docx $res.quarantine
+  $w = $work | Where-Object { $_.id -eq $res.id } | Select-Object -First 1
+  $t = Test-File $res.quarantine $w.format
   $res.facts = $t.facts
   $res.reasons = @($t.reasons)
-  if (-not $res.reasons.Count) { $fw = Test-Fwtool $res.quarantine; if ($fw) { $res.reasons = @($fw) } }
 }
 
 # 5. Passing files move into the corpus; the rest are deleted. New candidates (and, with -Rescreen,
 # every file) get their facts and tags recorded in the manifest.
-function Set-Facts($entry, $facts) {
-  $values = [ordered]@{
-    modified = $facts.modified
-    producer = (@($facts.producer, $facts.appVersion) | Where-Object { $_ }) -join " "
-    compatibilityMode = $facts.compatibilityMode
-    savedPages = $facts.savedPages
-    tags = $facts.tags
+function Set-Facts($entry, $facts, [string]$format) {
+  $values = switch ($format) {
+    "xlsx" {
+      [ordered]@{
+        modified = $facts.modified
+        producer = (@($facts.producer, $facts.appVersion) | Where-Object { $_ }) -join " "
+        sheets = $facts.sheets; cells = $facts.cells; formulas = $facts.formulas
+        tags = $facts.tags
+        functions = @($facts.functions.Keys)
+      }
+    }
+    "csv" {
+      [ordered]@{ encoding = $facts.encoding; bom = $facts.bom; delimiter = $facts.delimiter; lineEnding = $facts.lineEnding
+        rows = $facts.rows; columns = $facts.columns; tags = $facts.tags }
+    }
+    default {
+      [ordered]@{
+        modified = $facts.modified
+        producer = (@($facts.producer, $facts.appVersion) | Where-Object { $_ }) -join " "
+        compatibilityMode = $facts.compatibilityMode
+        savedPages = $facts.savedPages
+        tags = $facts.tags
+      }
+    }
   }
   foreach ($k in $values.Keys) { $entry | Add-Member -NotePropertyName $k -NotePropertyValue $values[$k] -Force }
 }
@@ -733,7 +1167,7 @@ foreach ($f in $files) { $byId[$f.id] = $f }
 foreach ($res in $results) {
   $w = $work | Where-Object { $_.id -eq $res.id } | Select-Object -First 1
   $e = if ($w.entry) { $w.entry } else { $w.candidate }
-  $dest = Join-Path $docxRoot "$($e.category)\$($res.id).docx"
+  $dest = Join-Path $Out "$($w.format)\$($e.category)\$($res.id)$($w.ext)"
   if ($res.reasons.Count) {
     "REJECTED {0}: {1}" -f $res.id, ($res.reasons -join "; ")
     if ($Candidates -or $Rescreen) {
@@ -749,7 +1183,7 @@ foreach ($res in $results) {
     $c = $e
     $e = [pscustomobject][ordered]@{
       id = $res.id
-      file = "docx/$($c.category)/$($res.id).docx"
+      file = "$($w.format)/$($c.category)/$($res.id)$($w.ext)"
       category = $c.category
       language = $c.language
       title = $c.title
@@ -764,7 +1198,7 @@ foreach ($res in $results) {
     }
     $byId[$res.id] = $e
   }
-  if ($Candidates -or $Rescreen) { Set-Facts $e $res.facts }
+  if ($Candidates -or $Rescreen) { Set-Facts $e $res.facts $w.format }
 }
 Remove-Item -Recurse -Force $quarantine
 
@@ -781,5 +1215,19 @@ if ($Candidates -or $Rescreen) {
   $manifestData | Add-Member -NotePropertyName rejected -NotePropertyValue @($rejected) -Force
   Write-PrettyJson $manifestData $Manifest
 }
+# The functions the passing workbooks' formulas use: in how many formula cells, and in how many
+# workbooks (s1-calc picks its functions by these counts; plan section 7.2).
+$cellsUsing = @{}; $booksUsing = @{}
+foreach ($res in $results) {
+  if ($res.reasons.Count -or -not $res.facts -or -not $res.facts.Contains("functions")) { continue }
+  foreach ($k in $res.facts.functions.Keys) { $cellsUsing[$k] = [int]$cellsUsing[$k] + [int]$res.facts.functions[$k]; $booksUsing[$k] = 1 + [int]$booksUsing[$k] }
+}
+if ($cellsUsing.Count) {
+  Write-PrettyJson ([ordered]@{
+    date = $today
+    workbooks = @($results | Where-Object { -not $_.reasons.Count -and $_.facts -and $_.facts.Contains("functions") }).Count
+    functions = @($cellsUsing.Keys | Sort-Object { -$cellsUsing[$_] }, { $_ } | ForEach-Object { [ordered]@{ name = $_; cells = $cellsUsing[$_]; workbooks = $booksUsing[$_] } })
+  }) (Join-Path $Out "functions.json")
+}
 $passCount = @($results | Where-Object { -not $_.reasons.Count }).Count
-"$passCount of $($results.Count) passed. Corpus: $docxRoot. Results: $(Join-Path $Out 'screen.json')"
+"$passCount of $($results.Count) passed. Corpus: $Out. Results: $(Join-Path $Out 'screen.json')"

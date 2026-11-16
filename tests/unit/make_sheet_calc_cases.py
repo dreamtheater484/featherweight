@@ -1,0 +1,485 @@
+"""Makes tests/unit/sheet_calc_cases.inc: formulas with the values Excel gives them.
+
+The cells below are set in a new workbook in Excel (scripts/excel-eval.py: a new, separate
+instance), each formula is evaluated there in column ZZ (row n for the n-th formula), and Excel's
+results become the expected values that test_sheet_calc.cpp checks the engine against, at the same
+cells. Formulas whose results depend on the locale (decimal text, dates as text, currencies) are
+left out: this PC's Excel isn't en-US.
+
+  python tests/unit/make_sheet_calc_cases.py
+"""
+import json
+import os
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+
+# The test fixture: test_sheet_calc.cpp sets the same cells (keep them in step).
+CELLS = [
+    ("A1", 10), ("A2", 20), ("A3", 30), ("A4", "x"), ("A5", True), ("A7", -5),
+    ("B1", 1), ("B2", 2), ("B3", 3), ("B4", 4), ("B5", 5), ("B6", 6), ("B7", 7),
+    ("C1", "apple"), ("C2", "Banana"), ("C3", "cherry"), ("C4", "date"), ("C5", "Elder"),
+    ("D1", 45293), ("D2", 45300), ("D3", 45350.75), ("D4", 45400),
+    ("E1", "a"), ("E2", "b"), ("E3", "a"), ("E4", "c"), ("E5", "a"),
+    ("F1", 100), ("F2", 200), ("F3", 300), ("F4", 400), ("F5", 500),
+    ("G1", "12"), ("G2", " 3 "),
+    ("H1", 1), ("H2", 3), ("H3", 5), ("H4", 7),
+    ("I1", "one"), ("I2", "three"), ("I3", "five"), ("I4", "seven"),
+    ("Sheet2!A1", 7), ("Sheet2!A2", 8), ("Sheet2!B1", "s2"),
+]
+ERRORS = [("J1", "=1/0"), ("J2", "=NA()")]  # error values (the engine's fixture stores the errors)
+
+FORMULAS = r"""
+=1+2*3
+=(1+2)*3
+=-2^2
+=2^-1
+=2^3^2
+=10/4
+=1/0
+=0^0
+=(-8)^(1/3)
+=(-8)^0.5
+=5%
+=50%*A1
+="a"&"b"&1&TRUE
+=1&""
+=1E+21&""
+=A1+A2
+=A1+A4
+=A1+A6
+=A1&A6
+=A6=0
+=A6=""
+=A6
+=A4=A4
+="A"="a"
+="a"<"b"
+="b"<"A"
+=1<"a"
+="a"<TRUE
+=FALSE<TRUE
+=0.1+0.2=0.3
+=0.1+0.2-0.3
+=(0.1+0.2-0.3)
+=A1+J1
+=J1+J2
+=J2+J1
+=G1+1
+=G2*2
+="1e3"+1
+="TRUE"+0
+=TRUE+TRUE
+=SUM(A1:A7)
+=SUM(A1:A7,G1)
+=SUM(G1:G2)
+=SUM(A1,"5",TRUE)
+=SUM(B1:B7)-SUM(B:B)
+=SUM(A1:B2)
+=SUM(Sheet2!A1:A2)
+=SUM(A1:A3 A2:B2)
+=SUM((A1:A3,B1:B3))
+=SUM(J1:J2)
+=SUMSQ(B1:B3)
+=PRODUCT(B1:B5)
+=AVERAGE(A1:A7)
+=AVERAGE(B1:B7)
+=AVERAGEA(A1:A7)
+=AVERAGE(C1:C3)
+=COUNT(A1:A7)
+=COUNT(A1:A7,"3",TRUE,"x")
+=COUNTA(A1:A7)
+=COUNTA(C1:C5,1,"")
+=COUNTBLANK(A1:A7)
+=MAX(A1:A7)
+=MIN(A1:A7)
+=MAX(C1:C3)
+=MAXA(A1:A7)
+=MINA(A1:A5)
+=MEDIAN(B1:B6)
+=MEDIAN(B1:B7)
+=MODE(1,2,2,3,3,3)
+=LARGE(B1:B7,2)
+=SMALL(B1:B7,3)
+=LARGE(B1:B7,8)
+=STDEV(B1:B7)
+=STDEVP(B1:B7)
+=VAR(B1:B7)
+=VARP(B1:B7)
+=PERCENTILE(B1:B7,0.3)
+=QUARTILE(B1:B7,1)
+=RANK(3,B1:B7)
+=RANK(3,B1:B7,1)
+=SUMPRODUCT(B1:B5,F1:F5)
+=SUMPRODUCT((E1:E5="a")*F1:F5)
+=SUMPRODUCT(--(B1:B7>3))
+=SUMPRODUCT(B1:B3,F1:F2)
+=SUBTOTAL(9,B1:B7)
+=SUBTOTAL(1,B1:B7)
+=SUBTOTAL(3,A1:A7)
+=ABS(-3)
+=INT(-2.5)
+=TRUNC(-2.5)
+=TRUNC(3.14159,2)
+=SIGN(-4)
+=SQRT(16)
+=SQRT(-1)
+=EXP(1)
+=LN(10)
+=LOG(100)
+=LOG(8,2)
+=LOG10(1000)
+=PI()
+=POWER(2,10)
+=MOD(10,3)
+=MOD(-10,3)
+=MOD(10,-3)
+=MOD(5,0)
+=MOD(3.3,1)
+=QUOTIENT(-7,2)
+=ROUND(2.675,2)
+=ROUND(-2.5,0)
+=ROUND(1234.5678,-2)
+=ROUNDUP(3.14159,2)
+=ROUNDUP(-3.14159,1)
+=ROUNDDOWN(-3.9,0)
+=ROUNDUP(0.1+0.2,1)
+=MROUND(10,3)
+=MROUND(-10,-3)
+=CEILING(4.3,2)
+=CEILING(-4.3,-2)
+=CEILING(-4.3,2)
+=FLOOR(4.3,2)
+=FLOOR(-4.3,2)
+=CEILING.MATH(-4.3)
+=CEILING.MATH(-4.3,1,1)
+=FLOOR.MATH(-4.3)
+=EVEN(3)
+=EVEN(-3)
+=ODD(2)
+=ODD(0)
+=AND(TRUE,1)
+=AND(A1:A3)
+=AND(C1:C3)
+=OR(FALSE,0)
+=OR(A5,FALSE)
+=XOR(TRUE,TRUE,TRUE)
+=NOT(0)
+=IF(A1>5,"big","small")
+=IF(A1<5,"big")
+=IF(A1<5,"big",)
+=IF(J1,1,2)
+=IF("TRUE",1,2)
+=IF(A6,1,2)
+=IFERROR(J1,"err")
+=IFERROR(A1,"err")
+=IFERROR(J2,J1)
+=IFNA(J2,"na")
+=IFNA(J1,"na")
+=CHOOSE(2,"a","b","c")
+=CHOOSE(4,"a","b","c")
+=SUM(CHOOSE(2,A1:A3,B1:B3))
+=IFS(A1>20,"a",A1>5,"b",TRUE,"c")
+=IFS(A1>20,"a")
+=SWITCH(B2,1,"one",2,"two","other")
+=SWITCH(B3,1,"one",2,"two","other")
+=SWITCH(B3,1,"one",2,"two")
+=ISBLANK(A6)
+=ISBLANK(A1)
+=ISERR(J2)
+=ISERROR(J2)
+=ISNA(J2)
+=ISNUMBER(A1)
+=ISNUMBER(G1)
+=ISTEXT(G1)
+=ISLOGICAL(A5)
+=ISNONTEXT(A6)
+=ISEVEN(4.5)
+=ISODD(-3)
+=ISREF(A1)
+=ISREF(1)
+=ERROR.TYPE(J1)
+=N(A5)
+=N(C1)
+=T(C1)
+=T(A1)
+=TYPE(C1)
+=NA()
+=LEN(C2)
+=LEN(12.5*2)
+=LEFT(C2,3)
+=LEFT(C2)
+=RIGHT(C3,2)
+=MID(C3,2,3)
+=MID(C3,10,3)
+=MID(C3,0,3)
+=TRIM("  a   b  ")
+=UPPER(C1)
+=LOWER(C2)
+=PROPER("hello wORLD 2nd-try")
+=SUBSTITUTE("aaa","a","b")
+=SUBSTITUTE("aaa","a","b",2)
+=SUBSTITUTE("abc","","x")
+=REPLACE("abcdef",2,3,"X")
+=FIND("b","abcb")
+=FIND("B","abcb")
+=FIND("b","abcb",3)
+=SEARCH("B","abcb")
+=SEARCH("c*b","abcb")
+=SEARCH("?b","abcb",3)
+=SEARCH("z","abc")
+=VALUE("12")
+=VALUE(" 12 ")
+=VALUE("abc")
+=CONCATENATE(C1,"-",B1)
+=CONCAT(E1:E3,B1:B2)
+=TEXTJOIN(",",TRUE,A1:A7)
+=TEXTJOIN("-",FALSE,A4:A6)
+=TEXTJOIN({"+","-"},TRUE,B1:B4)
+=REPT("ab",3)
+=EXACT("a","A")
+=CHAR(65)
+=CHAR(233)
+=CODE("A")
+=CLEAN("a"&CHAR(9)&"b")
+=DATE(2024,1,2)
+=DATE(2024,14,1)
+=DATE(2024,1,0)
+=DATE(24,1,1)
+=DATE(1900,2,29)
+=YEAR(D1)
+=MONTH(D3)
+=DAY(D3)
+=YEAR(0)
+=DAY(0)
+=MONTH(60)
+=DAY(60)
+=HOUR(D3)
+=MINUTE(0.5104166666666666)
+=SECOND(0.50001)
+=TIME(25,30,0)
+=EDATE(D1,1)
+=EDATE(DATE(2024,1,31),1)
+=EOMONTH(D1,0)
+=EOMONTH(D1,-1)
+=EOMONTH(DATE(2024,1,31),1)
+=WEEKDAY(D1)
+=WEEKDAY(D1,2)
+=WEEKDAY(D1,3)
+=WEEKDAY(D1,11)
+=WEEKDAY(D1,17)
+=WEEKDAY(1)
+=WEEKNUM(D1)
+=WEEKNUM(DATE(2024,12,31),2)
+=WEEKNUM(DATE(2023,1,1),21)
+=ISOWEEKNUM(DATE(2021,1,3))
+=NETWORKDAYS(D1,D2)
+=NETWORKDAYS(D2,D1)
+=NETWORKDAYS(D1,D4,D2)
+=NETWORKDAYS.INTL(D1,D2,11)
+=NETWORKDAYS.INTL(D1,D2,"0000111")
+=WORKDAY(D1,5)
+=WORKDAY(D1,-5)
+=WORKDAY(D1,10,D2)
+=WORKDAY.INTL(D1,5,7)
+=DATEDIF(D1,D4,"D")
+=DATEDIF(D1,D4,"M")
+=DATEDIF(DATE(2020,5,15),DATE(2024,3,10),"Y")
+=DATEDIF(DATE(2020,5,15),DATE(2024,3,10),"YM")
+=DATEDIF(DATE(2020,5,15),DATE(2024,3,10),"MD")
+=DATEDIF(DATE(2020,5,15),DATE(2024,3,10),"YD")
+=DAYS(D2,D1)
+=DATEVALUE("2024-01-02")
+=TIMEVALUE("12:30")
+=YEARFRAC(DATE(2024,1,1),DATE(2024,7,1))
+=YEARFRAC(DATE(2024,1,1),DATE(2024,7,1),1)
+=YEARFRAC(DATE(2023,1,31),DATE(2024,2,29),0)
+=YEARFRAC(DATE(2023,1,31),DATE(2024,2,29),1)
+=YEARFRAC(DATE(2023,1,31),DATE(2024,2,29),3)
+=YEARFRAC(DATE(2023,1,31),DATE(2024,2,29),4)
+=VLOOKUP(3,H1:I4,2)
+=VLOOKUP(4,H1:I4,2)
+=VLOOKUP(0,H1:I4,2)
+=VLOOKUP(5,H1:I4,2,FALSE)
+=VLOOKUP(4,H1:I4,2,FALSE)
+=VLOOKUP("five",I1:I4,1,FALSE)
+=VLOOKUP("f*",I1:I4,1,FALSE)
+=VLOOKUP(3,H1:I4,3)
+=VLOOKUP(3,H1:I4,0)
+=VLOOKUP("b",E1:F5,2,FALSE)
+=HLOOKUP(3,{1,3,5;"a","b","c"},2)
+=MATCH(5,H1:H4,0)
+=MATCH(6,H1:H4)
+=MATCH(6,H1:H4,1)
+=MATCH(0,H1:H4)
+=MATCH("cherry",C1:C5,0)
+=MATCH("CH*",C1:C5,0)
+=MATCH(6,{9,7,5,3},-1)
+=MATCH("a",E1:E5,0)
+=INDEX(F1:F5,3)
+=INDEX(H1:I4,2,2)
+=INDEX(H1:I4,2,0)
+=SUM(INDEX(H1:I4,0,1))
+=INDEX({1,2;3,4},2,1)
+=INDEX(F1:F5,6)
+=INDEX(A1:F1,4)
+=INDEX(F1:F5,MATCH("c",E1:E5,0))
+=LOOKUP(4,H1:H4,I1:I4)
+=LOOKUP(4,H1:I4)
+=LOOKUP(10,H1:H4,F1:F4)
+=XLOOKUP("c",E1:E5,F1:F5)
+=XLOOKUP("z",E1:E5,F1:F5,"none")
+=XLOOKUP("z",E1:E5,F1:F5)
+=XLOOKUP("a",E1:E5,F1:F5,,0,-1)
+=XLOOKUP(4,H1:H4,I1:I4,,-1)
+=XLOOKUP(4,H1:H4,I1:I4,,1)
+=XLOOKUP(5,H1:H4,I1:I4,,0,2)
+=XMATCH("a",E1:E5,0,-1)
+=XMATCH(6,H1:H4,1)
+=ROW()
+=COLUMN()
+=ROW(B5)
+=COLUMN(D2)
+=SUMPRODUCT(ROW(A1:A4))
+=ROWS(A1:B5)
+=COLUMNS(A1:B5)
+=ROWS({1,2;3,4;5,6})
+=SUM(OFFSET(A1,1,0,2,1))
+=OFFSET(B1,2,0)
+=OFFSET(B1,-1,0)
+=SUM(OFFSET(B1,0,0,-2,1))
+=INDIRECT("B3")
+=SUM(INDIRECT("B1:B3"))
+=INDIRECT("Sheet2!A2")
+=INDIRECT("R2C2",FALSE)
+=INDIRECT("nonsense")
+=ADDRESS(2,3)
+=ADDRESS(2,3,4)
+=ADDRESS(2,3,1,FALSE)
+=ADDRESS(2,3,2,TRUE,"My Sheet")
+=COUNTIF(E1:E5,"a")
+=COUNTIF(A1:A7,">15")
+=COUNTIF(A1:A7,"<>10")
+=COUNTIF(A1:A7,"")
+=COUNTIF(A1:A7,A1)
+=COUNTIF(C1:C5,"*e*")
+=COUNTIF(C1:C5,"?????")
+=COUNTIF(A1:A7,TRUE)
+=COUNTIF(G1:G2,12)
+=COUNTIF(G1:G2,3)
+=COUNTIF(G1:G2,"3")
+=COUNTIF(G1:G2,"12")
+=COUNTIF(B1:B7,"3")
+=COUNTIF(G1:G2,"<20")
+=SUMIF(G1:G2,12,B1:B2)
+=MATCH(12,G1:G2,0)
+=VLOOKUP(12,G1:H2,2,FALSE)
+=COUNTIF(B1:B7,">=3")
+=COUNTIF(B1:B7,"<"&B3)
+=COUNTIF(A1:A10,"<>")
+=COUNTIFS(E1:E5,"a",F1:F5,">100")
+=SUMIF(E1:E5,"a",F1:F5)
+=SUMIF(B1:B7,">3")
+=SUMIF(E1:E5,"a",F1)
+=SUMIF(A1:A7,"<>",B1:B7)
+=SUMIFS(F1:F5,E1:E5,"a",B1:B5,"<5")
+=AVERAGEIF(E1:E5,"a",F1:F5)
+=AVERAGEIF(E1:E5,"z",F1:F5)
+=AVERAGEIFS(F1:F5,E1:E5,"<>b")
+=MAXIFS(F1:F5,E1:E5,"a")
+=MINIFS(F1:F5,E1:E5,"a")
+=SUM(COUNTIF(E1:E5,{"a","b"}))
+=PMT(0.05/12,360,200000)
+=PMT(0,10,1000)
+=FV(0.06/12,10,-200,-500,1)
+=PV(0.08/12,240,500)
+=NPER(0.01,-100,1000)
+=RATE(48,-200,8000)
+=NPV(0.1,-10000,3000,4200,6800)
+=HYPERLINK("http://x","name")
+=MEDIAN(C1:C3)
+=TRANSPOSE(B1:B3)
+=SUM(B1:B3*F1:F3)
+=MAX(IF(E1:E5="a",F1:F5))
+=SUM(IF(B1:B7>3,1,0))
+"""
+
+# Dynamic-array formulas (Formula2): the engine evaluates them as array formulas.
+DYNAMIC = [
+    "=SUM(B1:B3*F1:F3)",
+    "=MAX(IF(E1:E5=\"a\",F1:F5))",
+    "=SUM(IF(B1:B7>3,1,0))",
+    "=SUM(LEN(C1:C5))",
+    "=B1:B3*2",
+    "=INDEX(B1:B7*10,3)",
+    "=INDEX(H1:I4,2,0)",
+    "=SUMPRODUCT(LEN(C1:C5))",
+    "=SUM(--(E1:E5=\"a\"))",
+    "=SUM((B1:B7>2)*(B1:B7<6))",
+    "=TEXTJOIN(\",\",TRUE,IF(B1:B7>4,B1:B7,\"\"))",
+    "=CONCAT(IF(E1:E5=\"a\",\"x\",\"y\"))",
+    "=SUM(IFERROR(1/(B1:B3-2),0))",
+    "=ROWS(FILTER(B1:B7,B1:B7>3))",
+    "=SUM(ROW(B1:B4))",
+    "=MAX(ABS(A7:B7))",
+    "=A1:A3",
+    "=ABS(A7)",
+    "=CHOOSE({1,2},B1,B2)",
+    "=IF({TRUE,FALSE},1,2)",
+    "=SUM(COUNTIF(E1:E5,E1:E5))",
+    "=SUM(1/COUNTIF(E1:E5,E1:E5))",
+]
+# Legacy array formulas (Ctrl+Shift+Enter: FormulaArray).
+ARRAY = [
+    "=SUM(B1:B3*F1:F3)",
+    "=SUM(LEN(C1:C5))",
+    "=B1:B3*2",
+]
+
+
+def main():
+    formulas = [f.strip() for f in FORMULAS.strip().splitlines() if f.strip()]
+    items = [{"addsheet": "Sheet2"}]
+    for addr, v in CELLS:
+        items.append({"cell": addr, "value": v})
+    for addr, f in ERRORS:
+        items.append({"cell": addr, "formula": f})
+    cases = [(f, "") for f in formulas] + [(f, "dynamic") for f in DYNAMIC] + [(f, "array") for f in ARRAY]
+    for f, mode in cases:
+        items.append({"eval": f, mode: True} if mode else {"eval": f})
+    probe = os.path.join(os.environ.get("TEMP", "."), "sheet_calc_cases.json")
+    json.dump(items, open(probe, "w", encoding="utf-8"))
+    out = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "excel-eval.py"), probe],
+                         capture_output=True, text=True, encoding="utf-8")
+    results = [json.loads(line) for line in out.stdout.splitlines() if line.startswith("{")]
+    evals = [r for r in results if "cell" not in r]
+    assert len(evals) == len(cases), (len(evals), len(cases), out.stderr[-2000:])
+
+    def cstr(s):
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    lines = ["// Generated by tests/unit/make_sheet_calc_cases.py from Excel 2021's results. Don't edit.",
+             "// {formula, array formula, type (n number, s text, b boolean, e error, x Excel rejected it), number, text}"]
+    for (f, mode), r in zip(cases, evals):
+        t = r["type"]
+        if t == "number":
+            lines.append("{%s, %s, 'n', %r, \"\"}," % (cstr(f), "true" if mode else "false", r["value"]))
+        elif t == "text":
+            lines.append("{%s, %s, 's', 0, %s}," % (cstr(f), "true" if mode else "false", cstr(r["value"])))
+        elif t == "bool":
+            lines.append("{%s, %s, 'b', %d, \"\"}," % (cstr(f), "true" if mode else "false", 1 if r["value"] else 0))
+        elif t == "error":
+            lines.append("{%s, %s, 'e', 0, %s}," % (cstr(f), "true" if mode else "false", cstr(r["value"])))
+        elif t == "empty":
+            lines.append("{%s, %s, 'n', 0, \"\"}," % (cstr(f), "true" if mode else "false"))
+        else:
+            lines.append("{%s, %s, 'x', 0, %s}," % (cstr(f), "true" if mode else "false", cstr(str(r["value"])[:60])))
+    with open(os.path.join(HERE, "sheet_calc_cases.inc"), "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(lines) + "\n")
+    print("%d cases" % len(cases))
+
+
+if __name__ == "__main__":
+    main()

@@ -35,6 +35,8 @@ Files for the never-damage tests (plan §10), made by `make_test_office.py`:
   - a comment reference without its comment, a formula that names a missing sheet
   - a stale calculation chain (it names a cell without a formula)
 
+- `sheet/`, `excel/`, `csv/`: S1's spreadsheet files (below, "Spreadsheets").
+
 `ctest` runs `fwtool` over all of them:
 
 ```bash
@@ -66,6 +68,28 @@ build/validate/fwvalidate --saved <copies> <corpus> tests/office/generated tests
 - **Folder entries in the zip**, such as `ppt/`, which aren't parts.
 
 Measured on 2026-11-05: all 108 private corpus documents and the 27 files in `generated`, `edge` and `layout`. Results: round trip 135/135, `fwtool check` on the copies 135/135 (no new warnings), validator 0 new errors (401 in the originals), re-serialize all 135/135.
+
+### Workbooks through the model (S1)
+
+With `--model`, workbooks are read into the workbook model (`src/sheet`), every sheet, and the model writes back the parts it owns: each worksheet (sheetData from the model's cells, rows, formulas and values) and the shared strings. `--workbooks` takes only `.xlsx`, `.xlsm`, `.xltx` and `.xltm` files from the folders. `check --model` also reads each workbook into the model and fails when a cell names a format or a shared string the workbook doesn't have, or shares a formula that has no master. `ctest` runs these on every folder of `tests/office` but `malicious`, `protected` and `reference` (`broken` only through the round trip):
+
+```bash
+fwtool roundtrip --model --workbooks tests/office/<folder>...
+fwtool roundtrip --model --reserialize-all --workbooks tests/office/<folder>...
+fwtool check --model --workbooks tests/office/<folder>...
+fwtool roundtrip --model --expect-reject --workbooks tests/office/malicious
+fwtool dump --model <workbook>
+```
+
+What the model keeps as written, so that what it writes equals the original after canonicalization:
+- **Around sheetData:** the rest of the worksheet part (sheet properties, views, columns, merges, conditional formats, hyperlinks, page setup, drawings, extensions) is kept as written and put back as it was. The model reads what it shows from it (views, columns, merges, hyperlinks, page setup, headers and footers, breaks); S2's editing writes those from the model.
+- **Inside sheetData**, besides what the model reads: unknown attributes of rows and cells, interned (`x14ac:dyDescent` is stored once, not once per row); a value whose text the model would write otherwise (`1E-3`, `01`, `true`, an error Excel doesn't know, a `t="d"` date); a cell's content when it isn't `f`, `v` and `is` in that order (rich inline strings, comments, unknown elements); comments, unknown elements and text between rows and cells; and rows and cells out of order, which the model can't store and keeps as written where they were.
+- **Shared strings:** `<si><t>text</t></si>` (with `xml:space="preserve"` or not) is stored as text; any other string (rich runs, phonetic text, attributes) keeps its XML, and the model reads its text and runs from it.
+- **The workbook part and the styles** are read into the model and, in re-serialize-all mode, go through the DOM like the other parts.
+
+**Re-serialize all: the exceptions.** None so far beyond the ones above for Word documents (parts that aren't XML, VML drawings, folder entries).
+
+Measured on 2026-11-16: the 9 workbooks in `generated`, `edge` and `broken`, 15 workbooks Excel wrote (chart data embedded in the private corpus's Word documents), and a generated 1-million-cell workbook: round trip, re-serialize all and `check --model` all pass.
 
 ## Editing torture test (D2)
 
@@ -199,6 +223,52 @@ powershell -ExecutionPolicy Bypass -File scriptsetch-corpus.ps1 -Out $env:FW_CO
    ```powershell
    build\tools\fwtool\Release\fwtool.exe compare "$env:FW_CORPUS\reference\docx\letters\offer.docx.pdf" "$env:FW_CORPUS\docx\letters\offer.docx"
    ```
+
+## Spreadsheets (S1)
+
+S1's public files (`docs/s1-plan.md`, "Corpus and measuring"), at least one per feature:
+
+- `sheet/`: workbooks made by `make_sheet_tests.py` with openpyxl (no cached formula values, as openpyxl and many other producers write them):
+  - `numfmt.xlsx`: the number-format sampler. Every built-in format id 0–58 written as Excel writes them (an id with no code, so the reader must know it, and take 14, 22 and the currency ones from the locale), about 150 custom codes (sections, conditions, colors, locale and currency tags, fractions, elapsed times, `_` and `*`, literals, scientific, scaling) over six values, the same codes in narrow columns ("####"), and General over 40 values in columns of ten widths.
+  - `dates-1900.xlsx`, `dates-1904.xlsx`: the same serials (0, 60 = 29 February 1900, negatives, 9999-12-31 and beyond, fractions) in both date systems, and date functions.
+  - `merged-frozen.xlsx`, `rows-columns.xlsx` (widths, heights, hidden, outline groups, default sizes), `text.xlsx` (alignment, wrap, rotation, overflow, fonts, rich text, scripts), `borders-fills.xlsx` (every border and pattern, gradients, theme colors with tints, indexed colors), `sheets.xlsx` (hidden and very hidden sheets, tab colors, right to left, zoom, gridlines, links, page layout view).
+  - `functions.xlsx`: one sheet per function on s1-calc's first list (about 64), each with its cases over the same data (numbers, text, mixed values, dates, an error, lookup tables). `formulas.xlsx`: operators and precedence, references (other sheets, 3D, names, mixed), errors, array formulas, structured references; Excel adds shared formulas and dynamic arrays to its copy.
+  - `conditional-formats.xlsx`, `tables.xlsx`, `pictures-shapes.xlsx`, `notes.xlsx` (notes, and threaded comments with a reply and a resolved one, written as Excel 365 writes them), `charts.xlsx` (column, bar, line, pie, doughnut, area, scatter, combo, radar, and a chart sheet), `print-settings.xlsx` (print area and titles, fit to width and to a page, scale, margins, centering, headers and footers with first and even pages, gridlines and headings, page breaks and order).
+- `excel/`: the same workbooks as Excel saves them, made by `scripts/make-sheet-files.ps1` on the Office reference PC. Excel recalculates every formula (so each has its cached value) and adds what openpyxl can't write: shared formulas, spilling dynamic arrays (and a blocked one, which Excel stores as `#VALUE!` with rich-value metadata), shapes and a group, sparklines. The script takes the PC's traces out of the copies (the folder they were saved in, the author, the threaded comments' person).
+- `csv/`: CSV and TSV files as `make_sheet_tests.py` writes them, byte for byte (`.gitattributes` keeps git off them): UTF-8 with and without a byte-order mark, UTF-16 LE and BE, Windows-1252; comma, semicolon (with a `sep=` line too), tab and pipe; quoting with line breaks inside; CRLF, LF, CR and mixed line ends; leading zeros, 16+ digit numbers, date-like codes, formula-like text; ragged, empty, malformed, very wide (16,384 and 16,500 fields) and very long (a 40,000-character field) files. `csv/expected.json` gives each file's encoding, byte-order mark, delimiter and line ends, and the exact text of every field: opening a CSV must keep every one of them (plan §7.1).
+
+**Reference renders** (`scripts/reference-renders.ps1 -Folders tests\office\sheet,tests\office\excel`): Excel exports each workbook to PDF with its print settings, and writes `<file>.cells.json` beside it. Excel runs as for Word: a new instance of its own, hidden, macros forced off, links never updated, read-only, and only that Excel is ended. Each workbook is opened twice: first with calculation manual, for the formulas' cached values, then as anyone opens it (Excel recalculates what it would), for the PDF and the cells; then Excel recalculates everything. A cells file holds, per sheet:
+
+- the used range, hidden rows and columns, column widths and the standard width;
+- every non-empty cell as `[ref, text, value, formatLocal]`: the text Excel shows (`Range.Text`, "####" included), the raw value (numbers to 17 digits, errors as `{"e": "#N/A"}`) and, in the public files, the number format as Excel's object model reports it here. That is in local form on the reference PC (`#.##0,00`, `dd/mm/jjjj` for format 14, `Standaard` for General), so it shows how Excel reads the code in this locale; the file's own code is in its `styles.xml`;
+- every formula cell as `[ref, formula, cached, opened, recalculated]`: the formula (`Formula2`), the value cached in the file (empty text when the file has none, as openpyxl's files), the value after opening, and Excel's own full recalculation.
+
+`fwtool compare` measures S1's cell text against `text` (the 99 % target counts visible cells) and `fwtool formulas` its recalculation against `cached`.
+
+**The locale.** Excel formats with the Windows regional format, and the reference PC's is English (Netherlands), `en-NL`: decimal comma, `.` for thousands, dates `dd/MM/yyyy`, 24-hour times, list separator `;` in Excel. Every cells file records what Excel used (`locale`: separators, date order, Windows' date and time patterns, currency), and so does the manifest (`excel`), with the printer the PDFs were laid out for. The comparison formats with that recorded locale, not the PC's.
+
+**What Excel taught us** (things the reader and the engines must match):
+- With alerts off, Excel refuses to open a file it would have to repair; the scripts treat that as a broken file instead of saving a repaired copy.
+- A formula with the number `1E308` (above Excel's largest literal, 9.99999999999999E+307) makes Excel refuse the whole file.
+- Excel 2021's object model can't add threaded comments, but Excel 2021 keeps them when it saves.
+- On this PC `Range.NumberFormat` gives codes in local form, not in the file's (invariant) form.
+- Excel's calculation chain lists every cell of a multi-cell array formula, though only the first has an `f` element (`fwtool check` now allows that).
+
+**Opening budgets** (plan §11): `make_budget_files.py` writes the two big files to `build/budgets` (or a folder it's given), never into git: `million-cells.xlsx` (50,000 rows by 20 columns, with a formula column and its cached values, 6.8 MB) and `100mb.csv` (about 1.5 million rows, with leading zeros, 18-digit codes and quoted fields). Both are deterministic.
+
+To regenerate (the venv as below; the second and third steps need Excel on the Office reference PC):
+
+```bash
+.venv/Scripts/python tests/office/make_sheet_tests.py
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\make-sheet-files.ps1
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\reference-renders.ps1 -Folders tests\office\sheet,tests\office\excel
+```
 
 ## Opening budgets
 
