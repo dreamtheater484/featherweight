@@ -34,6 +34,8 @@ class Host {
   virtual CellView Cell(int sheet, int32_t row, int32_t col) = 0;
   // Each non-empty cell of the rectangle, row by row, left to right.
   virtual void ForEachCell(int sheet, int32_t r1, int32_t c1, int32_t r2, int32_t c2, CellFn fn, void* context) = 0;
+  // A formula's new value, after the engine calculated it (each cell of an array formula's range).
+  virtual void Store(int sheet, int32_t row, int32_t col, const Value& v) { (void)sheet, (void)row, (void)col, (void)v; }
   // How far the sheet's cells reach: one past the last used row and column (0 when empty).
   virtual void Extent(int sheet, int32_t& rows, int32_t& cols) = 0;
   // The workbook's date system (date1904).

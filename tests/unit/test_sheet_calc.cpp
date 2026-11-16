@@ -346,6 +346,7 @@ class MapHost : public Host {
     }
   }
   double Now() override { return now; }
+  void Store(int s, int32_t r, int32_t c, const Value& v) override { cells[{s, r, c}] = v; }
 };
 
 class TestResolver : public Resolver {
@@ -486,4 +487,217 @@ TEST(sheet_calc_matches_excel) {
   }
   std::printf("    %d of %d match Excel\n", checked - failed, checked);
   CHECK_EQ(failed, 0);
+}
+
+// --- the engine ---
+
+#include <chrono>
+
+#include "sheet/calc/Engine.h"
+
+namespace {
+
+struct EngineFixture {
+  MapHost host;
+  Engine engine{host};
+  EngineFixture() { engine.SetSheets({"Sheet1", "Sheet2", "My Sheet", "Data"}); }
+  Cell At(std::string_view addr) {
+    int s;
+    int32_t r, c;
+    ParseA1(addr, s, r, c);
+    return {s, r, c};
+  }
+  void Formula(std::string_view addr, std::string_view text, double cached = 0, bool hasCached = true) {
+    Cell at = At(addr);
+    engine.SetFormula(at, engine.CompileAt(text, at), hasCached);
+    if (hasCached) host.Set(at.sheet, at.row, at.col, Value::Number(cached));
+  }
+  void Number(std::string_view addr, double v) {
+    Cell at = At(addr);
+    host.Set(at.sheet, at.row, at.col, Value::Number(v));
+  }
+  void Edit(std::string_view addr, double v) {
+    Cell at = At(addr);
+    host.Set(at.sheet, at.row, at.col, Value::Number(v));
+    Area a;
+    a.r1 = a.r2 = at.row, a.c1 = a.c2 = static_cast<int16_t>(at.col);
+    engine.Changed(at.sheet, a);
+    engine.Recalculate();
+  }
+  double Num(std::string_view addr) {
+    Cell at = At(addr);
+    CellView v = host.Cell(at.sheet, at.row, at.col);
+    return v.type == Type::Number ? v.num : -999999;
+  }
+};
+
+CalcSettings Full() {
+  CalcSettings s;
+  s.fullCalcOnLoad = true;
+  return s;
+}
+
+}  // namespace
+
+TEST(sheet_calc_engine_order_and_edits) {
+  EngineFixture f;
+  f.Number("A1", 1);
+  // Defined in an order that isn't the calculation order.
+  f.Formula("D1", "SUM(B1:C1)");
+  f.Formula("C1", "B1+1");
+  f.Formula("B1", "A1*2");
+  f.engine.Opened(Full());
+  CHECK(f.engine.Recalculate());
+  CHECK_EQ(f.Num("D1"), 5.0);
+  f.Edit("A1", 5);
+  CHECK_EQ(f.Num("B1"), 10.0);
+  CHECK_EQ(f.Num("C1"), 11.0);
+  CHECK_EQ(f.Num("D1"), 21.0);
+  CHECK(!f.engine.Pending());
+  CHECK(!f.engine.Circular());
+  // Only the dependents of an edit run.
+  size_t before = f.engine.Evaluations();
+  f.Edit("A9", 3);
+  CHECK_EQ(f.engine.Evaluations(), before);
+}
+
+TEST(sheet_calc_engine_on_open) {
+  EngineFixture f;
+  f.Formula("A1", "TODAY()", 0);                          // volatile: recalculated
+  f.Formula("B1", "A1+1", 0);                             // depends on a volatile one: recalculated
+  f.Formula("C1", "5*2", 999);                            // cached: kept, as Excel keeps it
+  f.Formula("D1", "C1*2", 0, false);                      // no cached value: calculated
+  f.Formula("E1", "_xlfn._xlws.FILTER(C1,TRUE)+A1", 7);  // unsupported: keeps 7, stale
+  f.engine.Opened({});
+  f.engine.Recalculate();
+  CHECK_EQ(f.Num("A1"), 45293.0);
+  CHECK_EQ(f.Num("B1"), 45294.0);
+  CHECK_EQ(f.Num("C1"), 999.0);
+  CHECK_EQ(f.Num("D1"), 1998.0);
+  CHECK_EQ(f.Num("E1"), 7.0);
+  CHECK(f.engine.Stale(0, 0, 4));
+  CHECK_EQ(f.engine.StaleCount(), size_t{1});
+  // Manual calculation: nothing.
+  EngineFixture m;
+  m.Formula("A1", "TODAY()", 0);
+  CalcSettings manual;
+  manual.manual = true;
+  m.engine.Opened(manual);
+  CHECK(!m.engine.Pending());
+  CHECK_EQ(m.Num("A1"), 0.0);
+}
+
+TEST(sheet_calc_engine_circular_and_iterative) {
+  EngineFixture f;
+  f.Formula("A1", "B1+1", 0);
+  f.Formula("B1", "A1+1", 0);
+  f.engine.Opened(Full());
+  CHECK(f.engine.Recalculate());
+  CHECK(f.engine.Circular());
+  EngineFixture g;
+  g.Formula("A1", "A1/2+1", 0);
+  CalcSettings it = Full();
+  it.iterate = true;
+  it.iterateCount = 100;
+  it.iterateDelta = 1e-9;
+  g.engine.Opened(it);
+  CHECK(g.engine.Recalculate());
+  CHECK(std::fabs(g.Num("A1") - 2) < 1e-6);
+}
+
+TEST(sheet_calc_engine_dynamic_refs_names_arrays) {
+  EngineFixture f;
+  for (int i = 0; i < 3; ++i) f.host.Set(0, i, 0, Value::Number(i + 1));  // A1:A3
+  // B1 reads C1:C3 through OFFSET, which the graph can't see: the run-time check orders it.
+  f.Formula("B1", "SUM(OFFSET(C1,0,0,3,1))");
+  for (int i = 1; i <= 3; ++i) f.Formula("C" + std::to_string(i), "A" + std::to_string(i) + "*10");
+  f.engine.DefineName("Rate", -1, "Sheet1!$A$2");
+  f.engine.DefineName("Twice", -1, "Rate*2");
+  f.Formula("D1", "Rate*100+Twice");
+  Cell e1{0, 0, 4};
+  Area out;
+  out.r1 = 0, out.r2 = 2, out.c1 = out.c2 = 4;
+  f.engine.SetFormula(e1, f.engine.CompileAt("A1:A3*2", e1, true), true, &out);
+  f.engine.Opened(Full());
+  f.engine.Recalculate();
+  CHECK_EQ(f.Num("B1"), 60.0);
+  CHECK_EQ(f.Num("D1"), 204.0);
+  CHECK_EQ(f.Num("E1"), 2.0);
+  CHECK_EQ(f.Num("E3"), 6.0);
+  f.Edit("A2", 4);
+  CHECK_EQ(f.Num("B1"), 80.0);
+  CHECK_EQ(f.Num("D1"), 408.0);
+  CHECK_EQ(f.Num("E2"), 8.0);
+}
+
+namespace {
+
+// One sheet of dense columns, fast enough to time the engine rather than a map.
+class DenseHost : public Host {
+ public:
+  std::vector<std::vector<Value>> cols;
+  int SheetCount() const override { return 1; }
+  CellView Cell(int, int32_t r, int32_t c) override {
+    if (c >= static_cast<int32_t>(cols.size()) || r >= static_cast<int32_t>(cols[c].size())) return {};
+    return View(cols[c][r]);
+  }
+  void ForEachCell(int, int32_t r1, int32_t c1, int32_t r2, int32_t c2, CellFn fn, void* ctx) override {
+    int32_t rows = 0;
+    for (auto& col : cols) rows = std::max(rows, static_cast<int32_t>(col.size()));
+    for (int32_t r = r1; r <= std::min(r2, rows - 1); ++r)
+      for (int32_t c = c1; c <= c2 && c < static_cast<int32_t>(cols.size()); ++c) {
+        if (r >= static_cast<int32_t>(cols[c].size()) || cols[c][r].IsEmpty()) continue;
+        if (!fn(ctx, r, c, View(cols[c][r]))) return;
+      }
+  }
+  void Extent(int, int32_t& rows, int32_t& c) override {
+    rows = 0;
+    for (auto& col : cols) rows = std::max(rows, static_cast<int32_t>(col.size()));
+    c = static_cast<int32_t>(cols.size());
+  }
+  void Store(int, int32_t r, int32_t c, const Value& v) override { cols[c][r] = v; }
+};
+
+}  // namespace
+
+// Plan §11: recalculation after one edit in a 100,000-formula workbook, < 100 ms typical.
+TEST(sheet_calc_engine_100k_formulas) {
+  const int32_t n = 50000;
+  DenseHost host;
+  host.cols.assign(3, std::vector<Value>(n));
+  for (int32_t r = 0; r < n; ++r) host.cols[0][r] = Value::Number(r % 100);
+  Engine engine(host);
+  engine.SetSheets({"Sheet1"});
+  // B: =A*2 and C: a running total =C(prev)+B, each one shared formula as files store them.
+  auto b = engine.CompileAt("A1*2", {0, 0, 1});
+  auto c = engine.CompileAt("C1+B2", {0, 1, 2});
+  for (int32_t r = 0; r < n; ++r) {
+    engine.SetFormula({0, r, 1}, b);
+    engine.SetFormula({0, r, 2}, r == 0 ? engine.CompileAt("B1", {0, 0, 2}) : c);
+  }
+  CHECK_EQ(engine.FormulaCount(), size_t{100000});
+  auto t0 = std::chrono::steady_clock::now();
+  engine.Opened(Full());
+  CHECK(engine.Recalculate());
+  double full = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  double total = 0;
+  for (int32_t r = 0; r < n; ++r) total += (r % 100) * 2;
+  CHECK_EQ(host.cols[2][n - 1].number(), total);
+  auto edit = [&](int32_t row, double v) {
+    total += (v - host.cols[0][row].number()) * 2;
+    host.cols[0][row] = Value::Number(v);
+    Area a;
+    a.r1 = a.r2 = row, a.c1 = a.c2 = 0;
+    auto s = std::chrono::steady_clock::now();
+    engine.Changed(0, a);
+    engine.Recalculate();
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s).count();
+  };
+  double few = edit(n - 5, 1000);  // 6 dependents
+  double half = edit(n / 2, 1000);  // 25,001
+  double all = edit(0, 1000);       // 50,001
+  CHECK_EQ(host.cols[2][n - 1].number(), total);
+  std::printf("    100,000 formulas: all calculated in %.0f ms; an edit with 6 dependents %.2f ms, 25,001 %.1f ms, "
+              "50,001 %.1f ms\n", full, few, half, all);
+  CHECK(few < 100);
 }
