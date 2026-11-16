@@ -23,6 +23,8 @@ struct Options {
   std::filesystem::path jsonOut;    // compare, bench: the JSON report
   std::filesystem::path reportOut;  // compare: the Markdown report
   double minPages = -1;             // compare: fail below this share of matching page counts (%)
+  bool cells = false;               // compare: workbooks' displayed cell text against Excel's cells files
+  double minCells = -1;             // compare --cells: fail below this share of cells showing Excel's text (%)
   double minLines = -1;             // compare: fail below this share of matching line breaks (%)
   bool selfTest = false;            // compare: Word's lines against themselves and known changes
   bool all = false;                 // compare (one document): list every difference
@@ -75,6 +77,7 @@ int RunPrintSample(const Options& options);
 int RunRender(const Options& options);
 int RunLines(const Options& options);
 int RunCompare(const Options& options);
+int RunCellCompare(const Options& options);
 int RunBench(const Options& options);
 int RunEditCheck(const Options& options);
 int RunPasteCheck(const Options& options);
