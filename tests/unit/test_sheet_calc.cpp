@@ -304,3 +304,186 @@ TEST(sheet_calc_text_compare) {
   CHECK(ParseErr("#DIV/0!x", &len) == Err::Div0 && len == 7);
   CHECK(ParseErr("#nope") == Err::None);
 }
+
+// --- evaluation ---
+
+#include <map>
+#include <memory>
+#include <tuple>
+
+#include "sheet/calc/Eval.h"
+#include "sheet/calc/Fn.h"
+
+namespace {
+
+// Cells in a map, for evaluating without a workbook model.
+class MapHost : public Host {
+ public:
+  std::map<std::tuple<int, int32_t, int32_t>, Value> cells;
+  int sheets = 4;
+  double now = 45293.5;  // 2024-01-02 12:00
+
+  void Set(int s, int32_t r, int32_t c, Value v) { cells[{s, r, c}] = std::move(v); }
+  int SheetCount() const override { return sheets; }
+  CellView Cell(int s, int32_t r, int32_t c) override {
+    auto it = cells.find({s, r, c});
+    return it == cells.end() ? CellView{} : View(it->second);
+  }
+  void ForEachCell(int s, int32_t r1, int32_t c1, int32_t r2, int32_t c2, CellFn fn, void* ctx) override {
+    for (auto it = cells.lower_bound({s, r1, 0}); it != cells.end(); ++it) {
+      auto [ss, r, c] = it->first;
+      if (ss != s || r > r2) break;
+      if (c < c1 || c > c2 || it->second.IsEmpty()) continue;
+      if (!fn(ctx, r, c, View(it->second))) return;
+    }
+  }
+  void Extent(int s, int32_t& rows, int32_t& cols) override {
+    rows = cols = 0;
+    for (const auto& [k, v] : cells) {
+      if (std::get<0>(k) != s) continue;
+      rows = std::max(rows, std::get<1>(k) + 1);
+      cols = std::max(cols, std::get<2>(k) + 1);
+    }
+  }
+  double Now() override { return now; }
+};
+
+class TestResolver : public Resolver {
+ public:
+  TestNames names_;
+  std::map<uint32_t, std::shared_ptr<const Formula>> defined;
+  Names& names() override { return names_; }
+  const Formula* Name(uint32_t slot, int) override {
+    auto it = defined.find(slot);
+    return it == defined.end() ? nullptr : it->second.get();
+  }
+  bool Spill(int, int32_t, int32_t, Area&) override { return false; }
+  bool Ready(const Area&) override { return true; }
+  void Define(std::string_view name, std::string_view text) {
+    defined[names_.NameSlot(name)] = Compile(text, {}, names_);
+  }
+};
+
+bool ParseA1(std::string_view a, int& s, int32_t& r, int32_t& c) {
+  s = 0;
+  size_t bang = a.find('!');
+  if (bang != std::string_view::npos) {
+    s = a.substr(0, bang) == "Sheet2" ? 1 : 0;
+    a = a.substr(bang + 1);
+  }
+  c = 0;
+  size_t i = 0;
+  while (i < a.size() && a[i] >= 'A' && a[i] <= 'Z') c = c * 26 + (a[i++] - 'A' + 1);
+  r = std::atoi(std::string(a.substr(i)).c_str()) - 1;
+  --c;
+  return r >= 0 && c >= 0;
+}
+
+void Put(MapHost& h, std::string_view addr, Value v) {
+  int s;
+  int32_t r, c;
+  ParseA1(addr, s, r, c);
+  h.Set(s, r, c, std::move(v));
+}
+
+// The cells make_sheet_calc_cases.py gives Excel.
+void Fixture(MapHost& h) {
+  const double nums[][2] = {{0, 10}, {1, 20}, {2, 30}, {6, -5}};
+  for (auto& n : nums) h.Set(0, static_cast<int32_t>(n[0]), 0, Value::Number(n[1]));
+  Put(h, "A4", Value::Text("x"));
+  Put(h, "A5", Value::Bool(true));
+  for (int i = 0; i < 7; ++i) h.Set(0, i, 1, Value::Number(i + 1));
+  const char* fruit[] = {"apple", "Banana", "cherry", "date", "Elder"};
+  for (int i = 0; i < 5; ++i) h.Set(0, i, 2, Value::Text(fruit[i]));
+  const double dates[] = {45293, 45300, 45350.75, 45400};
+  for (int i = 0; i < 4; ++i) h.Set(0, i, 3, Value::Number(dates[i]));
+  const char* letters[] = {"a", "b", "a", "c", "a"};
+  for (int i = 0; i < 5; ++i) h.Set(0, i, 4, Value::Text(letters[i]));
+  for (int i = 0; i < 5; ++i) h.Set(0, i, 5, Value::Number((i + 1) * 100.0));
+  Put(h, "G1", Value::Text("12"));
+  Put(h, "G2", Value::Text(" 3 "));
+  const char* words[] = {"one", "three", "five", "seven"};
+  for (int i = 0; i < 4; ++i) {
+    h.Set(0, i, 7, Value::Number(2 * i + 1));
+    h.Set(0, i, 8, Value::Text(words[i]));
+  }
+  Put(h, "J1", Value::Error(Err::Div0));
+  Put(h, "J2", Value::Error(Err::NA));
+  Put(h, "Sheet2!A1", Value::Number(7));
+  Put(h, "Sheet2!A2", Value::Number(8));
+  Put(h, "Sheet2!B1", Value::Text("s2"));
+}
+
+struct ExcelCase {
+  const char* formula;
+  bool array;
+  char type;
+  double num;
+  const char* text;
+};
+const ExcelCase kExcelCases[] = {
+#include "sheet_calc_cases.inc"
+};
+
+Value Run(MapHost& h, TestResolver& res, std::string_view text, Cell at = {0, 0, 701}, bool array = false,
+          EvalResult* how = nullptr) {
+  CompileOptions o;
+  o.sheet = at.sheet, o.row = at.row, o.col = at.col, o.array = array;
+  ParseError err;
+  auto f = Compile(text, o, res.names(), &err);
+  if (!f) return Value::Text("PARSE ERROR " + err.message);
+  Evaluator ev(h, &res);
+  Value out;
+  EvalResult r = ev.Evaluate(*f, at, out);
+  if (how) *how = r;
+  if (r != EvalResult::kDone) return Value::Text(r == EvalResult::kRetry ? "RETRY" : "UNSUPPORTED");
+  return out;
+}
+
+std::string Show(const Value& v) {
+  switch (v.type()) {
+    case Type::Number: return NumberText(v.number()) + " (" + std::to_string(v.number()) + ")";
+    case Type::Text: return "\"" + std::string(v.text()) + "\"";
+    case Type::Bool: return v.boolean() ? "TRUE" : "FALSE";
+    case Type::Error: return std::string(ErrText(v.error()));
+    case Type::Array: return "{array " + std::to_string(v.array().rows()) + "x" + std::to_string(v.array().cols()) + "}";
+    default: return "(empty)";
+  }
+}
+
+}  // namespace
+
+TEST(sheet_calc_matches_excel) {
+  MapHost h;
+  Fixture(h);
+  TestResolver res;
+  int failed = 0, checked = 0, unsupported = 0;
+  int32_t row = 0;
+  for (const ExcelCase& k : kExcelCases) {
+    Cell at{0, row++, 701};  // ZZ, where Excel evaluated it
+    if (k.type == 'x') continue;
+    EvalResult how;
+    Value v = Run(h, res, k.formula, at, k.array, &how);
+    if (how == EvalResult::kUnsupported) {
+      ++unsupported;
+      continue;
+    }
+    if (v.IsArray()) v = Value(v.array().at(0, 0));
+    if (v.IsEmpty()) v = Value::Number(0);
+    bool ok = false;
+    switch (k.type) {
+      case 'n': ok = v.IsNumber() && std::fabs(v.number() - k.num) <= 1e-12 * std::max(1.0, std::fabs(k.num)); break;
+      case 's': ok = v.IsText() && v.text() == k.text; break;
+      case 'b': ok = v.IsBool() && v.boolean() == (k.num != 0); break;
+      case 'e': ok = v.IsError() && ErrText(v.error()) == k.text; break;
+    }
+    ++checked;
+    if (!ok) {
+      ++failed;
+      std::string want = k.type == 'n' ? NumberText(k.num) : k.type == 'b' ? (k.num ? "TRUE" : "FALSE") : k.text;
+      std::printf("    %s%s: got %s, Excel %s\n", k.array ? "{array} " : "", k.formula, Show(v).c_str(), want.c_str());
+    }
+  }
+  std::printf("    %d of %d match Excel\n", checked - failed, checked);
+  CHECK_EQ(failed, 0);
+}

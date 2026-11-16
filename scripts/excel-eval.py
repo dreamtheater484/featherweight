@@ -8,7 +8,10 @@ Input (JSON, a file or stdin): a list of items, in order:
   {"cell": "B1", "formula": "=A1*2"}    sets a cell's formula
   {"eval": "=A1&\\"\\""}                 evaluates a formula in a scratch cell (column ZZ)
   {"eval": "=A1:A3*2", "array": true}   as an array formula (FormulaArray)
+  {"eval": "=A1:A3*2", "dynamic": true} as a dynamic-array formula (Formula2); plain "eval" uses
+                                        Formula, which Excel reads as a pre-dynamic-array formula
   {"date1904": true}                    switches the workbook's date system (first item only)
+  {"addsheet": "Sheet2"}                adds a sheet after the others; "cell" may then be "Sheet2!A1"
 Output (JSON lines): for each "eval" (and each formula cell, after all are set): the formula,
 Excel's value and its type (number, text, bool, error, empty), and Range.Text.
 
@@ -61,9 +64,18 @@ def main():
         ws = wb.Worksheets(1)
         row = 1
         formula_cells = []
+        def cell_range(addr):
+            if "!" in addr:
+                sheet, a = addr.rsplit("!", 1)
+                return wb.Worksheets(sheet.strip("'")).Range(a)
+            return ws.Range(addr)
+
         for it in items:
-            if "cell" in it:
-                c = ws.Range(it["cell"])
+            if "addsheet" in it:
+                new = wb.Worksheets.Add(After=wb.Worksheets(wb.Worksheets.Count))
+                new.Name = it["addsheet"]
+            elif "cell" in it:
+                c = cell_range(it["cell"])
                 if "formula" in it:
                     c.Formula2 = it["formula"]
                     formula_cells.append(it["cell"])
@@ -72,9 +84,7 @@ def main():
                     if v is None:
                         c.ClearContents()
                     elif isinstance(v, str):
-                        c.NumberFormat = "@"
-                        c.Value = v
-                        c.NumberFormat = "General"
+                        c.Value = "'" + v  # the apostrophe keeps "12" text
                     else:
                         c.Value = v
             elif "eval" in it:
@@ -83,15 +93,17 @@ def main():
                 try:
                     if it.get("array"):
                         c.FormulaArray = it["eval"]
-                    else:
+                    elif it.get("dynamic"):
                         c.Formula2 = it["eval"]
-                    t, v = typed(c.Value)
+                    else:
+                        c.Formula = it["eval"]
+                    t, v = typed(c.Value2)
                     print(json.dumps({"formula": it["eval"], "type": t, "value": v, "text": c.Text}), flush=True)
                 except Exception as e:  # noqa: BLE001
                     print(json.dumps({"formula": it["eval"], "type": "rejected", "value": str(e)[:200]}), flush=True)
         for addr in formula_cells:
-            c = ws.Range(addr)
-            t, v = typed(c.Value)
+            c = cell_range(addr)
+            t, v = typed(c.Value2)
             print(json.dumps({"cell": addr, "formula": c.Formula2, "type": t, "value": v, "text": c.Text}),
                   flush=True)
         wb.Close(SaveChanges=False)
