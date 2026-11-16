@@ -92,7 +92,8 @@ class Grid {
   static constexpr int kPrintDpi = 600;
   static constexpr double kPrintStretch = 1.00025;
   static constexpr double kPrintPad = 30.58;  // dots
-  static constexpr double kPrintRowPt = 6 * 72.0 / kPrintDpi * kPrintStretch;
+  static constexpr double kPrintDotPt = 72.0 / kPrintDpi * kPrintStretch;
+  static constexpr double kPrintRowPt = 6 * kPrintDotPt;
   float PrintX(uint32_t fromCol, uint32_t toCol) const {
     const auto at = [&](uint32_t c) { return colPrint_[std::min<uint32_t>(c, kMaxCols)]; };
     return static_cast<float>((at(toCol) - at(fromCol)) * 72.0 / kPrintDpi * kPrintStretch);

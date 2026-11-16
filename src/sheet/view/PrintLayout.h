@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <utility>
 #include <string>
@@ -30,8 +31,10 @@ struct PrintInfo {
   std::wstring path;       // &Z: the folder, with a trailing backslash
   std::wstring sheetName;  // &A
   std::wstring date, time; // &D and &T, as the locale writes them
-  // The paper when the file names none, by its paperSize code; 0: the file's default (Letter).
-  uint32_t defaultPaper = 0;
+  // Printing a whole workbook is one job: every sheet on the first one's paper (by its paperSize
+  // code; each keeps its orientation), and &N counts all its pages. 0: the sheet's own.
+  uint32_t jobPaper = 0;
+  int jobPages = 0;
 };
 
 class PrintLayout {
@@ -54,7 +57,12 @@ class PrintLayout {
  private:
   void Paginate();
   void PaintHeaderFooter(draw::Painter& p, const PrintPage& page, bool header);
-  float ColsWidth(uint32_t first, uint32_t last) const;   // sheet points
+  float ColsWidth(uint32_t first, uint32_t last) const;   // sheet points, at the page's scale
+  // A column on paper at a scale, in points at 100 % (the page's scale brings it to size). Excel
+  // lays a scaled page out in the font at its scaled size: a column is as many of that font's
+  // digits wide as on screen (Calibri 11 at 84 % is 77 dots, with digits of 39).
+  float ColPt(uint32_t col, float scale);
+  float ColsAt(uint32_t first, uint32_t last, float scale);
   float RowsHeight(uint32_t first, uint32_t last) const;
   // The last column text in `used` runs into, past its last column too: Excel prints that text.
   uint32_t SpillEnd(const Range& used);
@@ -74,6 +82,8 @@ class PrintLayout {
   float scale_ = 1;
   float paperW_ = 612, paperH_ = 792;
   std::vector<Range> areas_;
+  std::vector<double> colX_;   // column lefts at the page's scale, points at 100 %
+  std::map<int, int> digits_;  // the printer's digit in dots, by scale percent
   std::optional<std::pair<uint32_t, uint32_t>> titleRows_, titleCols_;
 };
 

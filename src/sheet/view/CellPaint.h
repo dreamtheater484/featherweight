@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 
 #include "draw/Painter.h"
 #include "sheet/model/Workbook.h"
@@ -32,6 +33,12 @@ class Geometry {
   // 1 pt, thick at 3) and gridlines and hair borders as 0.2 pt hairlines. The screen draws a line in
   // the last device pixels of the cell before the edge.
   bool centered = false;
+  // Text in its cell: how far in it starts and how far before the gridline it ends (the screen:
+  // 2 px each), and how high a bottom line's baseline sits above the row's edge, per pixel of the
+  // font's descent (0: on the screen's pixels). Excel prints text 2.4 pt in and 1.5 pt from the
+  // right edge, and Calibri 11's baseline 3.18 pt up (its descent is 4 px).
+  float padStart = 1.5f, padEnd = 1.5f;
+  float descentPx = 0;
 };
 
 struct PaintOptions {
@@ -47,6 +54,11 @@ struct PaintOptions {
 using OverlayFn = std::function<void(draw::Painter&, const Sheet&, const Geometry&, const Range&)>;
 void SetOverlay(OverlayFn fn);
 const OverlayFn& Overlay();
+// The cells that layer's objects cover on a sheet (their anchors), if it has any: printing takes
+// them in, as Excel prints a picture or shape past the last cell.
+using OverlayExtentFn = std::function<std::optional<Range>(const Sheet&)>;
+void SetOverlayExtent(OverlayExtentFn fn);
+const OverlayExtentFn& OverlayExtent();
 
 // Draws the cells of `area` (rows and columns as the geometry places them): fills, gridlines,
 // borders and text, with text running into empty neighbors and merged cells drawn as one. Hidden

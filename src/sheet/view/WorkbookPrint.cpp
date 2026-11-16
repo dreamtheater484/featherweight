@@ -46,19 +46,25 @@ void WorkbookView::Paginate() {
 }
 
 void WorkbookView::ForEachSheetLayout(const std::function<void(PrintLayout&)>& fn) {
-  for (size_t i = 0; i < book_->SheetCount(); ++i) {
-    if (!SheetShown(i)) continue;
-    Sheet& s = book_->GetSheet(i);
-    if (!s.Loaded()) book_->LoadSheet(i);
-    if (i == sheet_) {
-      Paginate();
-      fn(*print_);
-      continue;
+  // One job: the first sheet's paper for all, and &N the pages of all (so paginate twice).
+  uint32_t paper = 0;
+  int pages = 0;
+  for (int pass = 0; pass < 2; ++pass) {
+    for (size_t i = 0; i < book_->SheetCount(); ++i) {
+      if (!SheetShown(i)) continue;
+      Sheet& s = book_->GetSheet(i);
+      if (!s.Loaded()) book_->LoadSheet(i);
+      if (!paper) paper = s.Page().paperSize ? s.Page().paperSize : 1;
+      PrintInfo info = InfoFor(s);
+      info.jobPaper = paper;
+      info.jobPages = pages;
+      Grid other;
+      const bool shown = i == sheet_;
+      if (!shown) other.Build(s, book_->GetStyles(), *measure_);
+      PrintLayout layout(*book_, s, i, shown ? grid_ : other, *text_, info);
+      if (pass == 0) pages += static_cast<int>(layout.PageCount());
+      else fn(layout);
     }
-    Grid grid;
-    grid.Build(s, book_->GetStyles(), *measure_);
-    PrintLayout layout(*book_, s, i, grid, *text_, InfoFor(s));
-    fn(layout);
   }
   text_->Clear();
 }

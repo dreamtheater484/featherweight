@@ -214,13 +214,13 @@ class Painting {
 
   // The text's left edge in `box` for its alignment (for one line; wrapped lines align inside).
   float AlignX(const CellText::Layout& l, const Xf& xf, const draw::Rect& box) const {
-    const float pad = 2 * g_.px, w = l.width * g_.pt, indent = Indent(xf);
-    if (l.wrapped) return box.left + pad + (l.align == HAlign::Right ? 0 : indent);
+    const float w = l.width * g_.pt, indent = Indent(xf);
+    if (l.wrapped) return box.left + g_.padStart + (l.align == HAlign::Right ? 0 : indent);
     switch (l.align) {
-      case HAlign::Right: return box.right - pad - indent - w;
+      case HAlign::Right: return box.right - g_.padEnd - indent - w;
       case HAlign::Center:
       case HAlign::CenterContinuous: return (box.left + box.right - w) / 2;
-      default: return box.left + pad + indent;
+      default: return box.left + g_.padStart + indent;
     }
   }
 
@@ -229,11 +229,10 @@ class Painting {
     const CellText::Layout& l = text_.Get(sheet_, cell, widthPx);
     if (l.lines.empty()) return;
     const Xf& xf = styles_.CellXf(cell.style);
-    const float pad = 2 * g_.px;
     Item it{&l, Inner(cell.row, cell.col, cell.row, cell.col), {}, 0, &xf};
     it.clip = it.box;
     uint32_t first = cell.col, last = cell.col;
-    const float need = l.width * g_.pt + 2 * pad + Indent(xf);
+    const float need = l.width * g_.pt + g_.padStart + g_.padEnd + Indent(xf);
     const bool runs = !l.wrapped && !l.stacked && !l.shown.number && !l.shown.fill && xf.alignment.rotation == 0 &&
                       !xf.alignment.shrinkToFit && l.align != HAlign::Fill && l.align != HAlign::Justify &&
                       l.align != HAlign::Distributed;
@@ -298,7 +297,7 @@ class Painting {
     const float blockH = l.ascent + l.descent + (n > 1 ? (n - 1) * (l.wrapped || l.stacked ? l.pitch : l.pitch) : 0);
     float scale = 1;
     if (al.shrinkToFit && !l.wrapped) {
-      const float avail = (it.box.right - it.box.left) - 4 * g_.px;
+      const float avail = (it.box.right - it.box.left) - g_.padStart - g_.padEnd;
       if (l.width * s > avail && l.width > 0) scale = std::max(0.1f, avail / (l.width * s));
     }
     const float boxH = it.box.bottom - it.box.top;
@@ -312,13 +311,12 @@ class Painting {
       const float w = l.width * s, h = blockH * s;
       const float bw = static_cast<float>(w * std::fabs(std::cos(rad)) + h * std::fabs(std::sin(rad)));
       const float bh = static_cast<float>(w * std::fabs(std::sin(rad)) + h * std::fabs(std::cos(rad)));
-      const float pad = 2 * g_.px;
       float cx;
       switch (l.align) {
-        case HAlign::Right: cx = it.box.right - pad - bw / 2; break;
+        case HAlign::Right: cx = it.box.right - g_.padEnd - bw / 2; break;
         case HAlign::Center:
         case HAlign::CenterContinuous: cx = (it.box.left + it.box.right) / 2; break;
-        default: cx = it.box.left + pad + bw / 2; break;
+        default: cx = it.box.left + g_.padStart + bw / 2; break;
       }
       float cy;
       switch (al.vertical) {
@@ -343,14 +341,17 @@ class Painting {
       case VAlign::Justify:
       case VAlign::Distributed: baseline = it.box.top + (1 + a) * rp; break;
       case VAlign::Center: baseline = it.box.top + ((boxH / rp - blockPx) / 2 + a) * rp; break;
-      default: baseline = it.box.bottom - (d + (n > 1 ? (n - 1) * pitch : 0)) * rp; break;
+      default:
+        baseline = g_.descentPx > 0 ? it.box.bottom + g_.line - d * g_.descentPx - (n > 1 ? (n - 1) * pitch * rp : 0)
+                                    : it.box.bottom - (d + (n > 1 ? (n - 1) * pitch : 0)) * rp;
+        break;
     }
     const float pitchText = pitch * rp / (s * scale);
     float x = it.x;
     if (scale != 1 && !l.wrapped) {
       const float w = l.width * s * scale;
       switch (l.align) {
-        case HAlign::Right: x = it.box.right - 2 * g_.px - w; break;
+        case HAlign::Right: x = it.box.right - g_.padEnd - w; break;
         case HAlign::Center:
         case HAlign::CenterContinuous: x = (it.box.left + it.box.right - w) / 2; break;
         default: break;
@@ -360,10 +361,10 @@ class Painting {
     if (l.align == HAlign::Fill && !l.wrapped && l.width > 0) {
       // The text repeated across the cell.
       const float w = l.width * s;
-      const int times = std::clamp(static_cast<int>((it.box.right - it.box.left - 4 * g_.px) / w), 1, 256);
+      const int times = std::clamp(static_cast<int>((it.box.right - it.box.left - g_.padStart - g_.padEnd) / w), 1, 256);
       for (int i = 0; i < times; ++i) {
         p_.Save();
-        p_.Transform(draw::Matrix::Scale(s, s) * draw::Matrix::Translate(it.box.left + 2 * g_.px + i * w, baseline));
+        p_.Transform(draw::Matrix::Scale(s, s) * draw::Matrix::Translate(it.box.left + g_.padStart + i * w, baseline));
         DrawLines(l, 0, pitchText);
         p_.Restore();
       }
@@ -684,6 +685,16 @@ OverlayFn& OverlaySlot() {
 
 void SetOverlay(OverlayFn fn) { OverlaySlot() = std::move(fn); }
 const OverlayFn& Overlay() { return OverlaySlot(); }
+
+namespace {
+OverlayExtentFn& ExtentSlot() {
+  static OverlayExtentFn fn;
+  return fn;
+}
+}  // namespace
+
+void SetOverlayExtent(OverlayExtentFn fn) { ExtentSlot() = std::move(fn); }
+const OverlayExtentFn& OverlayExtent() { return ExtentSlot(); }
 
 void PaintCells(draw::Painter& p, const Sheet& sheet, CellText& text, const Grid& grid, const Geometry& g,
                 const Range& area, const PaintOptions& options) {
