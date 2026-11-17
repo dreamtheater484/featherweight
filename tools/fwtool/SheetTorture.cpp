@@ -989,6 +989,11 @@ std::optional<Failure> CheckSave(const Original& orig, SheetTarget& target, Roun
   std::vector<uint8_t> a, b;
   for (const auto& part : orig.pkg->Parts()) {
     if (written.contains(part.name)) continue;
+    // A damaged part (a bad CRC) can't be read; the saved copy's damaged parts are the original's
+    // (checked above).
+    if (std::find(orig.damaged.begin(), orig.damaged.end(), part.name) != orig.damaged.end() ||
+        std::find(orig.damaged.begin(), orig.damaged.end(), part.name.substr(1)) != orig.damaged.end())
+      continue;
     if (!again->ReadPart(part.name, b).Ok()) return Failure{"untouched", part.name + " is missing from the saved copy"};
     if (!orig.pkg->ReadPart(part.name, a).Ok() || a != b) return Failure{"untouched", part.name + " changed"};
   }
