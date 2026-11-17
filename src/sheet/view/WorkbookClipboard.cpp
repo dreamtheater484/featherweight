@@ -193,6 +193,19 @@ void WorkbookView::Paste(PasteMode mode, bool transpose) {
         continue;
       }
       edit::CellInput in;
+      if (!h.formula.empty() && grid.hasFrom && mode != PasteMode::Values) {
+        // Another Featherweight workbook's formula: its relative references move as a copy's do.
+        calc::CompileOptions origin, dest;
+        origin.sheet = dest.sheet = sheet;
+        origin.row = static_cast<int32_t>(grid.from.row + h.row);
+        origin.col = static_cast<int32_t>(grid.from.col + h.col);
+        dest.row = static_cast<int32_t>(to.row);
+        dest.col = static_cast<int32_t>(to.col);
+        in = edit::CellInput::Formula(calc::CopyFormula(h.formula, origin, dest, Calc().engine()).substr(1));
+        if (mode == PasteMode::All && h.Styled()) in.WithStyle(styleOf(h));
+        cells.emplace_back(to, std::move(in));
+        continue;
+      }
       switch (h.type) {
         case ValueType::Number: in = edit::CellInput::Number(h.number); break;
         case ValueType::String: in = edit::CellInput::Text(WideToUtf8(h.text)); break;

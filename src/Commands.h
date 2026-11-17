@@ -327,6 +327,14 @@ enum Cmd : int {
   CmdUngroup,             // Alt+Shift+Left
   CmdAutoFitRowHeight,
   CmdAutoFitColumnWidth,  // as double-clicking the header's edge
+  CmdInsertShiftRight,    // Excel's Insert choices for cells that aren't whole rows or columns
+  CmdInsertShiftDown,
+  CmdInsertRows,
+  CmdInsertColumns,
+  CmdDeleteShiftLeft,     // and Delete's
+  CmdDeleteShiftUp,
+  CmdDeleteRows,
+  CmdDeleteColumns,
   CmdTabColor = 2100,     // + index into the tab colors (0: none)
   CmdUnhideSheet = 2200,  // + the sheet's index: a hidden sheet shown again
   CmdUnhideSheetLast = 2699,
