@@ -56,23 +56,9 @@ FileFormat WorkbookFile::FormatOf(const std::wstring& path, FileFormat current) 
   return current;
 }
 
-namespace {
-
-std::wstring FullPathOf(const std::wstring& path) {
-  wchar_t buffer[MAX_PATH * 2];
-  const DWORD n = GetFullPathNameW(path.c_str(), MAX_PATH * 2, buffer, nullptr);
-  return n && n < MAX_PATH * 2 ? std::wstring(buffer, n) : path;
-}
-
-}  // namespace
-
-bool WorkbookFile::SaveCsvCopy(const fw::sheet::Workbook& book, const std::wstring& path, std::wstring& error) const {
-  const std::wstring name = fw::FileNameOf(path);
-  if (!Path().empty() && fw::EqualsNoCase(FullPathOf(path), FullPathOf(Path()))) {
-    error = name + L" is this workbook's own file. Choose another name for the copy.";
-    return false;
-  }
-  fw::sheet::csv::Options o = csv_;
+bool WorkbookFile::SaveCsvCopy(const fw::sheet::Workbook& book, const std::wstring& path,
+                               const fw::sheet::csv::Options& options, std::wstring& error) {
+  fw::sheet::csv::Options o = options;
   o.tsv = fw::EndsWithNoCase(path, L".tsv");
   o.delimiter = 0;
   const std::string bytes = fw::sheet::csv::WriteNew(book, o);

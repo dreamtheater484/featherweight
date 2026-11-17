@@ -40,9 +40,10 @@ class WorkbookFile : public FileSession {
   // are written as they were read), or as a new CSV file when there's no file to follow.
   void SetCsvOptions(const fw::sheet::csv::Options& options) { csv_ = options; }
   // The first sheet's values as a new CSV file (UTF-8 with a byte-order mark and the region's list
-  // separator; a tab for .tsv), for "Save a copy as CSV": the tab stays on its own file. Never
-  // replaces the file the tab is.
-  bool SaveCsvCopy(const fw::sheet::Workbook& book, const std::wstring& path, std::wstring& error) const;
+  // separator; a tab for .tsv), for "Save a copy as CSV": the tab stays on its own file, which the
+  // caller makes sure `path` isn't.
+  static bool SaveCsvCopy(const fw::sheet::Workbook& book, const std::wstring& path,
+                          const fw::sheet::csv::Options& options, std::wstring& error);
   // Where Save As starts: the file, a recovered workbook's original, or "Book1.xlsx" in the
   // Documents folder.
   std::wstring SuggestedPath(const fw::sheet::Workbook& book) const;

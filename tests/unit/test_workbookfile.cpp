@@ -263,8 +263,7 @@ TEST(WorkbookFile_CsvKeepsItsWayAndAWorkbookCopiesToCsv) {
   CHECK(xed.SetCell(0, 0, 1, CellInput::Number(1.5)));
   CHECK(!xfile.StartSave(*workbook, xed, f.path + L"\\Budget.csv", nullptr, error));
   CHECK(error.find(L"Save a copy as CSV") != std::wstring::npos && !xed.Saving());
-  CHECK(xfile.SaveCsvCopy(*workbook, f.path + L"\\Budget.csv", error));
+  CHECK(WorkbookFile::SaveCsvCopy(*workbook, f.path + L"\\Budget.csv", o, error));
   CHECK(ReadAll(f.path + L"\\Budget.csv") == "\xEF\xBB\xBF" "a,b;1,5\r\n");
   CHECK(xfile.Path() == xlsxPath && xed.Modified());
-  CHECK(!xfile.SaveCsvCopy(*workbook, xlsxPath, error));
 }
