@@ -316,6 +316,30 @@ function Compare-Dumps($a, $b) {
 # the ops, so a typed ';' is written "\;". Command ids are src\Commands.h's: 2009 Rename sheet,
 # 2013 Go to, 2014/2015 Fill down/right, 2020 AutoSum, 2004 Column width, 2026 Merge cells,
 # 2028 Freeze panes.
+# A number format code as the region types it (Format Cells takes it so): the steps have the codes
+# files store, with "," for thousands and "." for decimals; outside [..], ".." and \x those become
+# the region's separators ("[$€-413] #.##0,00" in en-NL).
+function ConvertTo-RegionCode([string]$code) {
+  # The user's Windows settings, as Excel and the app read them (PowerShell's culture can differ).
+  $intl = Get-ItemProperty 'HKCU:\Control Panel\International' -ErrorAction SilentlyContinue
+  $nf = [Globalization.CultureInfo]::new($(if ($intl.LocaleName) { $intl.LocaleName } else { "en-US" }), $true).NumberFormat
+  $sb = New-Object Text.StringBuilder
+  $quote = $false; $bracket = $false; $escaped = $false
+  foreach ($ch in $code.ToCharArray()) {
+    $out = [string]$ch
+    if ($escaped) { $escaped = $false }
+    elseif ($quote) { if ($ch -eq '"') { $quote = $false } }
+    elseif ($bracket) { if ($ch -eq ']') { $bracket = $false } }
+    elseif ($ch -eq '\') { $escaped = $true }
+    elseif ($ch -eq '"') { $quote = $true }
+    elseif ($ch -eq '[') { $bracket = $true }
+    elseif ($ch -eq ',') { $out = $nf.NumberGroupSeparator }
+    elseif ($ch -eq '.') { $out = $nf.NumberDecimalSeparator }
+    [void]$sb.Append($out)
+  }
+  $sb.ToString()
+}
+
 function ConvertTo-AppScript([string]$stepsPath, [string]$target) {
   $ops = New-Object Collections.Generic.List[string]
   $ops.Add("new:workbook")
@@ -343,11 +367,13 @@ function ConvertTo-AppScript([string]$stepsPath, [string]$target) {
         Select-Ref $first
         $what = $rest.Substring($first.Length).Trim()
         switch -regex ($what) {
-          '^bold$' { $ops.Add("key:ctrl+b") }
-          '^italic$' { $ops.Add("key:ctrl+i") }
-          '^underline$' { $ops.Add("key:ctrl+u") }
-          '^numfmt=#,##0\.00$' { $ops.Add("key:ctrl+shift+1") }  # Excel's Number format key
-          '^numfmt=0%$' { $ops.Add("key:ctrl+shift+5") }
+          # (switch -regex runs every clause that matches: each ends with break)
+          '^bold$' { $ops.Add("key:ctrl+b"); break }
+          '^italic$' { $ops.Add("key:ctrl+i"); break }
+          '^underline$' { $ops.Add("key:ctrl+u"); break }
+          '^numfmt=#,##0\.00$' { $ops.Add("key:ctrl+shift+1"); break }  # Excel's Number format key
+          '^numfmt=0%$' { $ops.Add("key:ctrl+shift+5"); break }
+          '^numfmt=(.+)$' { $ops.Add("format:numfmt=" + ((ConvertTo-RegionCode $Matches[1]) -replace ';', '\;')); break }
           default { $ops.Add("format:" + ($what -replace ';', '\;')) }  # the toolbar's and Format Cells' choices
         }
       }
