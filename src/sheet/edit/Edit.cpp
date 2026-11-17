@@ -1579,6 +1579,21 @@ Result Editor::DeleteSheet(int sheet) {
   };
   for (const DefinedName& nm : book_.Names())
     if (nm.sheet != sheet && uses(nm.formula)) return Result::Fail(u"Formulas or names use this sheet.");
+  // Chart series too (their c:f formulas), until the registry updates them.
+  if (const pkg::Package* package = book_.GetPackage())
+    for (const pkg::Part& part : package->Parts()) {
+      if (part.deleted || package->ContentTypeOf(part.name).find("drawingml.chart+xml") == std::string_view::npos)
+        continue;
+      std::vector<uint8_t> bytes;
+      if (!package->ReadPart(part.name, bytes).Ok()) continue;
+      std::string_view xml(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+      for (size_t at = xml.find(":f>"); at != std::string_view::npos; at = xml.find(":f>", at + 3)) {
+        size_t end = xml.find('<', at + 3);
+        if (end == std::string_view::npos) break;
+        if (xml[at - 1] != '/' && uses(xml.substr(at + 3, end - at - 3)))
+          return Result::Fail(u"Charts use this sheet.");
+      }
+    }
   for (size_t i = 0; i < book_.SheetCount(); ++i) {
     if (static_cast<int>(i) == sheet) continue;
     Sheet& x = book_.GetSheet(i);
