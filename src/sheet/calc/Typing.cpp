@@ -493,9 +493,23 @@ class ShiftMap : public RefMap {
 
   bool Map(int sheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t abs, bool wholeRows,
            bool wholeCols) const override {
-    if (sheet != e_.sheet) return true;
-    if (e_.rows ? wholeCols : wholeRows) return true;                         // spans every line edited
-    if (e_.band1 >= 0 && (e_.rows ? wholeRows : wholeCols)) return true;      // cells: whole lines stay
+    // A reference that stays still reads from the formula's cell, which may have moved: its
+    // relative parts become offsets from the new cell (Sheet3!A5 in a cell moved down stays A5).
+    auto stay = [&]() {
+      const int32_t dr = from_.row - to_.row, dc = from_.col - to_.col;
+      if (!wholeCols) {
+        if (!(abs & kRow1)) r1 += dr;
+        if (!(abs & kRow2)) r2 += dr;
+      }
+      if (!wholeRows) {
+        if (!(abs & kCol1)) c1 += dc;
+        if (!(abs & kCol2)) c2 += dc;
+      }
+      return true;
+    };
+    if (sheet != e_.sheet) return stay();
+    if (e_.rows ? wholeCols : wholeRows) return stay();                       // spans every line edited
+    if (e_.band1 >= 0 && (e_.rows ? wholeRows : wholeCols)) return stay();    // cells: whole lines stay
     int64_t R1 = (abs & kRow1) ? r1 : int64_t{from_.row} + r1, R2 = (abs & kRow2) ? r2 : int64_t{from_.row} + r2;
     int64_t C1 = (abs & kCol1) ? c1 : int64_t{from_.col} + c1, C2 = (abs & kCol2) ? c2 : int64_t{from_.col} + c2;
     if (e_.rows ? !Moves(C1, C2) : !Moves(R1, R2)) {
