@@ -520,7 +520,11 @@ float PrintLayout::PaintNote(draw::Painter* p, const CellNote& note, float x, fl
   style.size = static_cast<float>(FontMeasure::Size(base, base));
   text::TextStyle bold = style;
   bold.bold = true;
-  const float pitch = static_cast<float>(text_.Measure().Of(base, base).rowHeight * 0.75);
+  // A line is a printed row of the default font (14.40 pt for Calibri 11), its text a pixel above
+  // where a bottom-aligned cell's would be (Excel: 82.42 pt in the first row, a cell 83.22).
+  const FontMeasure::Info& metrics = text_.Measure().Of(base, base);
+  const float pitch = static_cast<float>(metrics.rowHeight * Grid::kPrintRowPt);
+  const float sink = static_cast<float>((metrics.descent + 1) * 0.797);
   const draw::Brush ink = draw::Brush::Solid({0, 0, 0, 1});
   text::Fonts& fonts = text_.Fonts();
   // Lays `s` out `w` wide and, with a painter, draws it from `top` (right-aligned to left + w when
@@ -535,7 +539,7 @@ float PrintLayout::PaintNote(draw::Painter* p, const CellNote& note, float x, fl
     for (const text::Line& ln : lines) {
       if (p) {
         const float dx = right ? left + w - ln.contentRight : left;
-        const float baseline = top + (pitch + ln.ascent - ln.descent) / 2;
+        const float baseline = top + pitch - sink;
         for (const text::GlyphPiece& g : ln.pieces) p->DrawGlyphs({dx + g.OriginX(), baseline - g.rise}, g.Run(), ink);
       }
       top += pitch;
