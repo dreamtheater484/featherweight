@@ -117,6 +117,99 @@ void WorkbookView::ShowFilterPanel(uint32_t column) {
   host_.ViewShowPanel(filterPanel_.get());
 }
 
+// ---------------------------------------------------------------------------
+// Sort and remove duplicates
+
+Range WorkbookView::DataRange() {
+  const Range sel = Selected();
+  if (sel.firstRow != sel.lastRow || sel.firstCol != sel.lastCol) {
+    // Whole columns or rows: as far as the sheet is filled.
+    Range r = sel;
+    if (const std::optional<Range> used = Current().UsedRange()) {
+      r.lastRow = std::min(r.lastRow, std::max(used->lastRow, r.firstRow));
+      r.lastCol = std::min(r.lastCol, std::max(used->lastCol, r.firstCol));
+    }
+    return r;
+  }
+  return data::CurrentRegion(Current(), active_);
+}
+
+bool WorkbookView::MoveRows(const Range& range, const std::vector<uint32_t>& order, size_t keep, std::u16string name) {
+  if (!Ready() || range.lastRow < range.firstRow) return false;
+  const Sheet& s = Current();
+  // Until the edit API moves rows with their formulas (s2-model's SortRows), only values and formats.
+  bool formulas = false;
+  s.ForEachCell(range, [&](const CellInfo& c) {
+    formulas = c.hasFormula;
+    return !formulas;
+  });
+  if (formulas) {
+    host_.ViewMessage(BannerKind::Info, L"Featherweight can't yet sort or remove duplicates where cells have formulas.");
+    return false;
+  }
+  std::vector<std::pair<CellAddr, edit::CellInput>> cells;
+  for (size_t k = 0; k < keep && k < order.size(); ++k) {
+    const uint32_t to = range.firstRow + static_cast<uint32_t>(k), from = order[k];
+    if (to == from) continue;
+    for (uint32_t c = range.firstCol; c <= range.lastCol; ++c) {
+      const Value v = s.GetValue(from, c);
+      edit::CellInput in;
+      switch (v.type) {
+        case ValueType::Empty: break;
+        case ValueType::Number: in = edit::CellInput::Number(v.number); break;
+        case ValueType::String: in = edit::CellInput::Text(std::string(v.text)); break;
+        case ValueType::Bool: in = edit::CellInput::Bool(v.boolean); break;
+        case ValueType::Error: in = edit::CellInput::Error(v.error); break;
+      }
+      in.WithStyle(s.StyleAt(from, c));
+      cells.emplace_back(CellAddr{to, c}, std::move(in));
+    }
+  }
+  const int sheet = static_cast<int>(sheet_);
+  edit::EditGroup group(Ed(), std::move(name));
+  edit::Result r;
+  if (!cells.empty()) r = Ed().SetCells(sheet, cells);
+  if (r && keep < static_cast<size_t>(range.lastRow - range.firstRow + 1))
+    r = Ed().ClearAll(sheet, Range{range.firstRow + static_cast<uint32_t>(keep), range.firstCol, range.lastRow, range.lastCol});
+  if (EditRefused(r)) return false;
+  group.done = true;
+  host_.ViewInvalidate();
+  return true;
+}
+
+bool WorkbookView::SortRange(const Range& range, bool header, const std::vector<data::SortKey>& keys) {
+  Range rows = range;
+  if (header) ++rows.firstRow;
+  if (rows.firstRow >= rows.lastRow || keys.empty()) return false;
+  const std::vector<uint32_t> order = data::SortOrder(Current(), rows, keys);
+  bool moved = false;
+  for (size_t i = 0; i < order.size() && !moved; ++i) moved = order[i] != rows.firstRow + i;
+  return !moved || MoveRows(rows, order, order.size(), u"Sort");
+}
+
+bool WorkbookView::RemoveDuplicates(const Range& range, bool header, const std::vector<uint32_t>& columns) {
+  const std::vector<bool> dup = data::DuplicateRows(*book_, Current(), range, columns, header, text_->Locale());
+  const uint32_t first = range.firstRow + (header ? 1 : 0);
+  std::vector<uint32_t> order;
+  for (size_t i = 0; i < dup.size(); ++i)
+    if (!dup[i]) order.push_back(first + static_cast<uint32_t>(i));
+  const size_t removed = dup.size() - order.size();
+  if (removed && !MoveRows(Range{first, range.firstCol, range.lastRow, range.lastCol}, order, order.size(), u"Remove Duplicates"))
+    return false;
+  // Excel's report, in its words.
+  host_.ViewMessage(BannerKind::Info, removed ? std::to_wstring(removed) + L" duplicate values found and removed; " +
+                                                    std::to_wstring(order.size()) + L" unique values remain."
+                                              : L"No duplicate values found.");
+  return true;
+}
+
+void WorkbookView::ShowDataPanel(bool sort) {
+  if (!Ready() || preview_ || ChartSheet()) return;
+  if (!dataPanel_) dataPanel_ = std::make_unique<DataPanel>(*this);
+  dataPanel_->Open(sort);
+  host_.ViewShowPanel(dataPanel_.get());
+}
+
 bool WorkbookView::DataCommandState(int cmd, CommandState& s) {
   const bool cells = Ready() && !preview_ && !ChartSheet();
   switch (cmd) {
@@ -127,15 +220,31 @@ bool WorkbookView::DataCommandState(int cmd, CommandState& s) {
       s.checked = cells && FilterOf() != nullptr;
       return true;
     case CmdDataBox: s.label = L"Sort and filter"; s.enabled = cells; return true;
+    case CmdSortAscending: s.label = L"Sort A to Z"; s.enabled = cells; return true;
+    case CmdSortDescending: s.label = L"Sort Z to A"; s.enabled = cells; return true;
+    case CmdRemoveDuplicates: s.label = L"Remove duplicates"; s.enabled = cells; return true;
   }
   return false;
 }
 
 bool WorkbookView::DataCommand(int cmd) {
+  CommandState s;
+  if (!DataCommandState(cmd, s)) return false;
+  if (!s.enabled) return true;
   switch (cmd) {
-    case CmdFilter: ToggleFilter(); return true;
+    case CmdFilter: ToggleFilter(); break;
+    case CmdSortAscending:
+    case CmdSortDescending: {
+      // By the active cell's column, with Excel's header guess.
+      const Range r = DataRange();
+      SortRange(r, data::GuessHeader(*book_, Current(), r),
+                {{std::clamp(active_.col, r.firstCol, r.lastCol), cmd == CmdSortDescending}});
+      break;
+    }
+    case CmdRemoveDuplicates: ShowDataPanel(false); break;
+    case CmdDataBox: ShowDataPanel(true); break;
   }
-  return false;
+  return true;
 }
 
 }  // namespace fw::sheet::view

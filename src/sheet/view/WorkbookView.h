@@ -11,6 +11,7 @@
 
 #include "PagedView.h"
 #include "sheet/data/Filter.h"
+#include "sheet/data/Sort.h"
 #include "sheet/calc/Bind.h"
 #include "sheet/calc/Entry.h"
 #include "sheet/edit/Edit.h"
@@ -392,6 +393,16 @@ class WorkbookView : public PagedView {
   void ShowFilterPanel(uint32_t column);
   bool DataCommand(int cmd);
   bool DataCommandState(int cmd, CommandState& s);
+  // Sort and remove duplicates: the range they work on (the selection, or the current region).
+  Range DataRange();
+  // The data rows `range` holds rewritten in `order` (source rows), the first `keep` of them; the
+  // rest of the range emptied. One undo step.
+  bool MoveRows(const Range& range, const std::vector<uint32_t>& order, size_t keep, std::u16string name);
+  bool SortRange(const Range& range, bool header, const std::vector<data::SortKey>& keys);
+  bool RemoveDuplicates(const Range& range, bool header, const std::vector<uint32_t>& columns);
+  class DataPanel;
+  std::unique_ptr<DataPanel> dataPanel_;
+  void ShowDataPanel(bool sort);
   // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
   bool GridCommand(int cmd);
   bool GridCommandState(int cmd, CommandState& s);

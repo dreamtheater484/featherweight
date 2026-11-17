@@ -208,4 +208,126 @@ class WorkbookView::FilterPanel : public PanelContent {
   PanelButton apply_, clear_;
 };
 
+// Custom sort (up to three keys) and Remove duplicates (the columns compared), on the data range.
+class WorkbookView::DataPanel : public PanelContent {
+ public:
+  explicit DataPanel(WorkbookView& view) : v_(view) {
+    header_.text = L"My data has headers";
+    header_.toggle = true;
+    header_.onInvoke = [this] { Columns(); };
+    for (int k = 0; k < 3; ++k) {
+      keys_[k].label = k == 0 ? L"Sort by" : L"Then by";
+      orders_[k].label = L"Order";
+      orders_[k].items = {L"A to Z", L"Z to A"};
+      orders_[k].selected = 0;
+    }
+    columns_.label = L"Columns";
+    columns_.rowHeight = 28;
+    columns_.onSelect = [this](int i) {
+      if (i < 0 || toggling_ || static_cast<size_t>(i) >= checked_.size()) return;
+      checked_[static_cast<size_t>(i)] = !checked_[static_cast<size_t>(i)];
+      Columns();
+      toggling_ = true;
+      columns_.SetSelected(-1);
+      toggling_ = false;
+    };
+    apply_.onInvoke = [this] { Apply(); };
+  }
+
+  std::wstring Title() const override { return sort_ ? L"Sort" : L"Remove duplicates"; }
+
+  std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
+    ui_ = ui;
+    const float left = body.left + 16 * ui, right = body.right - 16 * ui, gap = 8 * ui;
+    float y = body.top + 12 * ui;
+    labels_.clear();
+    header_.rc = gfx::RectF(left, y, right, y + 30 * ui);
+    y += 42 * ui;
+    for (int k = 0; k < 3; ++k) {
+      keys_[k].visible = orders_[k].visible = sort_;
+      if (!sort_) continue;
+      const float w = (right - left - gap) * 0.62f;
+      labels_.push_back({k == 0 ? L"Sort by" : L"Then by", gfx::RectF(left, y, left + w, y + 16 * ui)});
+      labels_.push_back({L"Order", gfx::RectF(left + w + gap, y, right, y + 16 * ui)});
+      y += 20 * ui;
+      keys_[k].rc = gfx::RectF(left, y, left + w, y + 30 * ui);
+      orders_[k].rc = gfx::RectF(left + w + gap, y, right, y + 30 * ui);
+      y += 42 * ui;
+    }
+    columns_.visible = !sort_;
+    if (!sort_) {
+      labels_.push_back({L"Rows are duplicates when these columns match", gfx::RectF(left, y, right, y + 16 * ui)});
+      y += 20 * ui;
+      const float bottom = std::max(y + 100 * ui, body.bottom - 70 * ui);
+      columns_.rc = gfx::RectF(left, y, right, bottom);
+      y = bottom + 12 * ui;
+    }
+    apply_.text = sort_ ? L"Sort" : L"Remove duplicates";
+    apply_.rc = gfx::RectF(left, y, right, y + 30 * ui);
+    return {&header_, &keys_[0], &orders_[0], &keys_[1], &orders_[1], &keys_[2], &orders_[2], &columns_, &apply_};
+  }
+
+  void Draw(gfx::Canvas& c) override {
+    for (const auto& [text, rc] : labels_) c.Text(text, rc, theme::P().textSecondary, 12 * ui_);
+  }
+
+  void Open(bool sort) {
+    sort_ = sort;
+    range_ = v_.DataRange();
+    header_.checked = data::GuessHeader(*v_.book_, v_.Current(), range_);
+    checked_.assign(range_.lastCol - range_.firstCol + 1, true);
+    Columns();
+    for (int k = 0; k < 3; ++k) {
+      keys_[k].selected = k == 0 ? static_cast<int>(std::clamp(v_.active_.col, range_.firstCol, range_.lastCol) - range_.firstCol) + 1 : 0;
+      orders_[k].selected = 0;
+    }
+  }
+
+ private:
+  // The columns' names: the header row's texts, else "Column B".
+  void Columns() {
+    std::vector<std::wstring> names;
+    for (uint32_t c = range_.firstCol; c <= range_.lastCol; ++c) {
+      std::wstring n = header_.checked ? data::ShownText(*v_.book_, v_.Current(), range_.firstRow, c, v_.text_->Locale())
+                                       : std::wstring();
+      if (n.empty()) n = L"Column " + Utf8ToWide(ColumnName(c));
+      names.push_back(n);
+    }
+    for (int k = 0; k < 3; ++k) {
+      keys_[k].items = {k == 0 ? L"(choose a column)" : L"(none)"};
+      keys_[k].items.insert(keys_[k].items.end(), names.begin(), names.end());
+    }
+    columns_.items.clear();
+    for (size_t i = 0; i < names.size(); ++i)
+      columns_.items.push_back(std::wstring(checked_[i] ? filter_detail::kChecked : filter_detail::kUnchecked) + names[i]);
+    v_.host_.ViewInvalidate();
+  }
+
+  void Apply() {
+    if (sort_) {
+      std::vector<data::SortKey> keys;
+      for (int k = 0; k < 3; ++k)
+        if (keys_[k].selected > 0)
+          keys.push_back({range_.firstCol + static_cast<uint32_t>(keys_[k].selected - 1), orders_[k].selected == 1});
+      if (!keys.empty()) v_.SortRange(range_, header_.checked, keys);
+    } else {
+      std::vector<uint32_t> cols;
+      for (size_t i = 0; i < checked_.size(); ++i)
+        if (checked_[i]) cols.push_back(static_cast<uint32_t>(i));
+      if (!cols.empty()) v_.RemoveDuplicates(range_, header_.checked, cols);
+    }
+    v_.host_.ViewShowPanel(nullptr);
+  }
+
+  WorkbookView& v_;
+  bool sort_ = true, toggling_ = false;
+  Range range_{};
+  std::vector<bool> checked_;
+  float ui_ = 1;
+  std::vector<std::pair<std::wstring, D2D1_RECT_F>> labels_;
+  PanelButton header_, apply_;
+  Dropdown keys_[3], orders_[3];
+  ListBox columns_;
+};
+
 }  // namespace fw::sheet::view

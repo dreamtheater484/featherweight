@@ -178,6 +178,23 @@ std::vector<bool> FilterRows(const Workbook& book, const Sheet& sheet, const Ran
   return keep;
 }
 
+std::vector<bool> DuplicateRows(const Workbook& book, const Sheet& sheet, const Range& range,
+                                const std::vector<uint32_t>& columns, bool header, const NumLocale& locale) {
+  const uint32_t first = range.firstRow + (header ? 1 : 0);
+  std::vector<bool> dup(range.lastRow >= first ? range.lastRow - first + 1 : 0, false);
+  std::unordered_set<std::wstring> seen;
+  std::wstring key;
+  for (size_t i = 0; i < dup.size(); ++i) {
+    key.clear();
+    for (uint32_t c : columns) {
+      key += Lower(ShownText(book, sheet, first + static_cast<uint32_t>(i), range.firstCol + c, locale));
+      key += L'\x1F';  // between the columns' texts
+    }
+    dup[i] = !seen.insert(key).second;
+  }
+  return dup;
+}
+
 Range CurrentRegion(const Sheet& sheet, CellAddr at) {
   Range r{at.row, at.col, at.row, at.col};
   auto filled = [&](const Range& line) {

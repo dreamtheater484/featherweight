@@ -1370,6 +1370,20 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   styles.onChange = [this](const ToolValue& v) { ApplyCellStyle(v.index); };
   m.left.push_back(styles);
   m.left.push_back(toggle(CmdFormatPainter, icon::Brush, 3));
+  // Sort and filter.
+  ToolItem data;
+  data.kind = ToolKind::Dropdown;
+  data.cmd = CmdDataBox;
+  data.width = 72;
+  data.priority = 2;
+  data.text = L"Data";
+  data.tooltip = L"Sort, filter and remove duplicates";
+  data.choices = {L"Sort A to Z", L"Sort Z to A", L"Custom sort…", L"Filter (Ctrl+Shift+L)", L"Remove duplicates…"};
+  data.onChange = [this](const ToolValue& v) {
+    static constexpr int kCmds[] = {CmdSortAscending, CmdSortDescending, CmdDataBox, CmdFilter, CmdRemoveDuplicates};
+    if (v.index >= 0 && v.index < 5) DataCommand(kCmds[v.index]);
+  };
+  m.left.push_back(data);
   // Number formats, with the decimals and the panel's Number page.
   ToolItem number;
   number.kind = ToolKind::Dropdown;

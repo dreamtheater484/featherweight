@@ -72,6 +72,21 @@ TEST(SheetFilter_Conditions) {
   CHECK(data::Passes(Value::Number(12), L"12", {Op::Equal, L"1*"}));  // a pattern compares the text shown
 }
 
+TEST(SheetFilter_Duplicates) {
+  Workbook book;
+  Sheet& s = book.AddSheet("Sheet1");
+  FillSample(s);
+  s.SetValue(4, 0, Value::Text("TEA"));  // row 5: TEA, 7
+  s.SetValue(6, 0, Value::Text("tea"));  // row 7: tea, 3 (Tea, 3 is row 4)
+  s.SetValue(6, 1, Value::Number(3));
+  const NumLocale& us = EnUsLocale();
+  const Range ref{0, 0, 6, 1};
+  // By name: rows 4, 5 and 7 repeat Tea (without case).
+  CHECK(data::DuplicateRows(book, s, ref, {0}, true, us) == std::vector<bool>({false, false, true, true, false, true}));
+  // By name and amount: only row 7 repeats row 4.
+  CHECK(data::DuplicateRows(book, s, ref, {0, 1}, true, us) == std::vector<bool>({false, false, false, false, false, true}));
+}
+
 TEST(SheetFilter_CurrentRegion) {
   Workbook book;
   Sheet& s = book.AddSheet("Sheet1");

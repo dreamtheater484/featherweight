@@ -45,6 +45,12 @@ std::vector<bool> FilterRows(const Workbook& book, const Sheet& sheet, const Ran
 // Whether a cell passes one condition.
 bool Passes(const Value& value, const std::wstring& shown, const FilterCondition& c);
 
+// Remove duplicates: for each row of `range` (below its first row when `header`), whether it repeats
+// an earlier row in `columns` (within the range), compared as Excel compares them: the texts shown,
+// without case.
+std::vector<bool> DuplicateRows(const Workbook& book, const Sheet& sheet, const Range& range,
+                                const std::vector<uint32_t>& columns, bool header, const NumLocale& locale);
+
 // The block of filled cells around `at` that Ctrl+Shift+L filters (Excel's current region): grown
 // while a filled cell touches it, diagonals included.
 Range CurrentRegion(const Sheet& sheet, CellAddr at);
