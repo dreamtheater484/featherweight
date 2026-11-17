@@ -102,6 +102,14 @@ struct PrintOptions {
   int homeSheet = -1;
 };
 
+// The formula's text (A1, as stored) with the references `map` changes written as Print would
+// write them for the cell `to`, and everything else as written (spaces, case). 1: a reference
+// changed, `out` has the text; 0: none did; -1: the text has something this doesn't read (R1C1,
+// typed text, structured, external or 3-D references, #REF!A1): compile and print it instead.
+// The map is asked only about A1 references (not names or sheet prefixes).
+int MapReferenceText(std::string_view text, const CompileOptions& at, const CompileOptions& to, const Names& names,
+                     const RefMap& map, std::string& out);
+
 // The formula as text, without "=", for the cell `at` (a shared formula prints per cell).
 std::string Print(const Formula& f, const CompileOptions& at, const Names& names, const PrintOptions& how = {});
 
