@@ -755,6 +755,7 @@ struct Formatter {
     out.fill = 0;
     out.fillChar = L'#';
     out.overflow = true;
+    out.generalAt = out.generalLength = 0;
   }
 
   // Integer digits right-aligned in `n` placeholders: placeholder p (0 = leftmost) of character
@@ -915,7 +916,9 @@ struct Formatter {
       for (int w = 11; w >= 1; --w) {
         out.text.clear();
         if (v < 0) Ch(L'-');
-        if (General(v, w) && Fits()) return;
+        const bool made = General(v, w);
+        out.generalAt = 0, out.generalLength = static_cast<uint32_t>(out.text.size());
+        if (made && Fits()) return;
       }
       return Overflow();
     }
@@ -926,6 +929,7 @@ struct Formatter {
         out.text.clear();
         out.pads.clear();
         out.fill = -1;
+        out.generalAt = out.generalLength = 0;
         if (GeneralSection(s, v, w) && Fits()) return;
       }
       return Overflow();
@@ -945,7 +949,10 @@ struct Formatter {
     if (v < 0) Ch(L'-');
     for (const Token& t : s.tokens)
       if (t.kind == Token::General) {
+        // The minus belongs to General's number when nothing comes between them.
+        const size_t at = out.text.size() == 1 && v < 0 ? 0 : out.text.size();
         if (!General(v, w)) return false;
+        out.generalAt = static_cast<uint32_t>(at), out.generalLength = static_cast<uint32_t>(out.text.size() - at);
       } else {
         Common(t);
       }
@@ -1057,6 +1064,7 @@ struct Formatter {
         if (num >= den) ip += 1, num -= den;
       } else {
         num = std::floor(a * den + 0.5);
+        if (num > 32767) return Overflow();  // measured: ?/2 shows 32767/2, and #### from 16384
       }
     } else {
       const double maxDen = std::pow(10.0, std::min(s.denDigits, 9)) - 1;

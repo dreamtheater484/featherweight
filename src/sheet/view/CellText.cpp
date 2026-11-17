@@ -41,6 +41,16 @@ int ShownWidth(FontMeasure& m, const Formatted& f, const Font& font, const Font&
 
 bool Fits(void* context, const Formatted& f) {
   auto* c = static_cast<FitContext*>(context);
+  if (f.generalLength && f.generalAt + f.generalLength <= f.text.size()) {
+    // General, as Excel fits it: a digit's width a character, a leading minus as wide as it is,
+    // and room for one digit however narrow the column (measured on 400 cells of 10 widths).
+    const std::wstring_view t = f.text;
+    const int digit = c->measure->Of(*c->font, *c->base).digit;
+    int w = ShownWidth(*c->measure, f, *c->font, *c->base) - c->measure->Width(t.substr(f.generalAt, f.generalLength), *c->font, *c->base);
+    for (uint32_t i = 0; i < f.generalLength; ++i)
+      w += i == 0 && t[f.generalAt] == L'-' ? c->measure->Width(L"-", *c->font, *c->base) : digit;
+    return w <= std::max(c->avail, digit);
+  }
   return ShownWidth(*c->measure, f, *c->font, *c->base) <= c->avail;
 }
 

@@ -244,6 +244,21 @@ TEST(SheetNumFmt_TextLocal) {
   CHECK(NumberFormat::LocalToInvariant(L"[uu]:mm;Standaard;\"j,u\"", EnNlLocale(), inv) && inv == L"[hh]:mm;General;\"j,u\"");
   CHECK(NumberFormat::LocalToInvariant(L"[<1234,5]0,0", EnNlLocale(), inv) && inv == L"[<1234.5]0.0");
   CHECK(!NumberFormat::LocalToInvariant(L"[h]:mm", EnNlLocale(), inv) && inv.empty());
+  // Germany and France (from Windows' data for the region, as fwtool formulas builds it).
+  const NumLocale de = MakeLocale(ReadWinLocale(L"de-DE")), fr = MakeLocale(ReadWinLocale(L"fr-FR"));
+  FormatContext dctx;
+  dctx.locale = &de;
+  NumberFormat f;
+  Formatted out;
+  CHECK(NumberFormat::FromLocal(L"\"bis \"TT.MM.JJ", de, f));
+  f.Format(46299, dctx, out);  // 2026-10-04
+  CHECK(out.text == L"bis 04.10.26");
+  CHECK(NumberFormat::FromLocal(L"MMMM", de, f));
+  f.Format(46299, dctx, out);
+  CHECK(out.text == L"Oktober");
+  CHECK(NumberFormat::FromLocal(L"#.##0,00;Standard", de, f) && !NumberFormat::FromLocal(L"General", de, f));
+  CHECK(NumberFormat::LocalToInvariant(L"jj/mm/aaaa hh:mm", fr, inv) && inv == L"dd/mm/yyyy hh:mm");
+  CHECK(NumberFormat::LocalToInvariant(L"Standard", fr, inv) && inv == L"General");
   // en-US types the invariant codes.
   CHECK(NumberFormat::LocalToInvariant(L"yyyy h:mm #,##0.00 General", EnUsLocale(), inv) &&
         inv == L"yyyy h:mm #,##0.00 General");
@@ -263,6 +278,37 @@ TEST(SheetNumFmt_NamedLocaleTag) {
   NumberFormat(L"[$€-nl-NL]#,##0.00").Format(1.5, ctx, out);
   CHECK(out.text == L"€1,50");
   CHECK(LcidFromName(L"en-US") == 0x409 && LcidFromName(L"nl-NL") == 0x413 && LcidFromName(L"zz-ZZ") == 0);
+}
+
+// What the column's width decides, from Excel's Range.Text in narrow columns.
+TEST(SheetNumFmt_WidthRules) {
+  FormatContext ctx;
+  ctx.locale = &EnUsLocale();
+  Formatted out;
+  // A fixed denominator without a whole part: up to 32767 as the numerator (16384 -> ####).
+  NumberFormat(L"?/2").Format(16383.5, ctx, out);
+  CHECK(!out.overflow && out.text == L"32767/2");
+  NumberFormat(L"?/2").Format(16384, ctx, out);
+  CHECK(out.overflow);
+  NumberFormat(L"?/10").Format(-3276.8, ctx, out);
+  CHECK(out.overflow);
+  NumberFormat(L"# ?/2").Format(45678.5, ctx, out);
+  CHECK(!out.overflow && out.text == L"45678 1/2");
+  // General marks what it wrote, so the grid can fit it as Excel does (a digit's width a character).
+  struct Room {
+    size_t chars;
+  } room{7};
+  ctx.fits = [](void* c, const Formatted& f) {
+    CHECK(f.generalAt + f.generalLength <= f.text.size());
+    return f.generalLength <= static_cast<Room*>(c)->chars;
+  };
+  ctx.fitsContext = &room;
+  NumberFormat().Format(-3.14159265, ctx, out);
+  CHECK(out.text == L"-3.1416" && out.generalAt == 0 && out.generalLength == 7);
+  NumberFormat(L"\"x\"General").Format(-3.14159265, ctx, out);
+  CHECK(out.text == L"-x3.14159" && out.generalAt == 2 && out.generalLength == 7);
+  NumberFormat(L"0.00").Format(1.5, ctx, out);
+  CHECK(out.generalLength == 0);  // not General: the callback isn't asked about General
 }
 
 TEST(SheetNumFmt_Robust) {
