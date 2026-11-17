@@ -1097,6 +1097,30 @@ bool MoveTable(std::string& xml, const Table& before, const Table& after, int in
     SetAttr(list, "count", std::to_string(after.columns.size()));
     changed = true;
   }
+  // Columns renamed (a header typed over), their names escaped as ST_Xstring (_x000A_, _x005F_).
+  if (list)
+    for (pugi::xml_node x = list.first_child(); x; x = x.next_sibling()) {
+      if (Local(x) != "tableColumn") continue;
+      uint32_t id = ToUInt(xlsx::Attr(x, "id"), 0);
+      for (const TableColumn& was : before.columns)
+        for (const TableColumn& col : after.columns)
+          if (was.id == id && col.id == id && was.name != col.name) {
+            std::string name;
+            for (size_t i = 0; i < col.name.size(); ++i) {
+              unsigned char ch = static_cast<unsigned char>(col.name[i]);
+              bool looks = ch == '_' && i + 6 < col.name.size() && col.name[i + 1] == 'x' && col.name[i + 6] == '_';
+              if (ch < 0x20 || looks) {
+                char buf[8];
+                std::snprintf(buf, sizeof buf, "_x%04X_", ch);
+                name += buf;
+              } else {
+                name += static_cast<char>(ch);
+              }
+            }
+            SetAttr(x, "name", name);
+            changed = true;
+          }
+    }
   // Column formulas (relative ones are written for the first data row).
   if (list)
     for (pugi::xml_node x = list.first_child(); x; x = x.next_sibling()) {
@@ -1172,6 +1196,77 @@ std::string DropTableColumns(std::string_view f, std::string_view table, const s
       }
       if (gone) out += "#REF!";
       else out.append(f, i, j + 1 - i);
+      i = j + 1;
+      continue;
+    }
+    out += c;
+    ++i;
+  }
+  return out;
+}
+
+std::string RenameTableColumn(std::string_view f, std::string_view table, std::string_view from, std::string_view to) {
+  auto up = [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 32) : c; };
+  auto same = [&](std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i)
+      if (up(a[i]) != up(b[i])) return false;
+    return true;
+  };
+  auto namePart = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.' || c == '\\' ||
+           static_cast<unsigned char>(c) >= 0x80;
+  };
+  std::string escaped;  // [ ] # and ' take a ' before them
+  for (char c : to) {
+    if (c == '[' || c == ']' || c == '#' || c == '\'') escaped += '\'';
+    escaped += c;
+  }
+  // An item ("[name]" or a bare name) as it is, or the new name when it names the column.
+  auto item = [&](std::string_view s) -> std::string {
+    std::string name;
+    for (size_t k = 0; k < s.size(); ++k) name += s[k] == '\'' && k + 1 < s.size() ? s[++k] : s[k];
+    return !name.empty() && name[0] != '#' && same(name, from) ? escaped : std::string(s);
+  };
+  std::string out;
+  for (size_t i = 0; i < f.size();) {
+    char c = f[i];
+    if (c == '"' || c == '\'') {  // a string, or a quoted sheet name: as it is
+      size_t j = i + 1;
+      while (j < f.size() && !(f[j] == c && (j + 1 >= f.size() || f[j + 1] != c))) j += f[j] == c ? 2 : 1;
+      out.append(f, i, std::min(j + 1, f.size()) - i);
+      i = j + 1;
+      continue;
+    }
+    if ((i == 0 || !namePart(f[i - 1])) && i + table.size() < f.size() && f[i + table.size()] == '[' &&
+        same(f.substr(i, table.size()), table)) {
+      size_t j = i + table.size(), depth = 0;
+      for (; j < f.size(); ++j) {
+        if (f[j] == '\'') {
+          ++j;
+          continue;
+        }
+        if (f[j] == '[') ++depth;
+        else if (f[j] == ']' && --depth == 0) break;
+      }
+      if (j >= f.size()) break;
+      std::string_view inner = f.substr(i + table.size() + 1, j - i - table.size() - 1);
+      out.append(f, i, table.size() + 1);
+      if (inner.empty() || inner[0] != '[') {
+        out += item(inner);
+      } else {
+        for (size_t k = 0; k < inner.size();) {
+          if (inner[k] != '[') {
+            out += inner[k++];
+            continue;
+          }
+          size_t e = k + 1;
+          while (e < inner.size() && inner[e] != ']') e += inner[e] == '\'' ? 2 : 1;
+          out += '[' + item(inner.substr(k + 1, std::min(e, inner.size()) - k - 1)) + ']';
+          k = e + 1;
+        }
+      }
+      out += ']';
       i = j + 1;
       continue;
     }

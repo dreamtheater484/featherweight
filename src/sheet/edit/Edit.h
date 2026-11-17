@@ -26,6 +26,10 @@
 // Recalculation isn't the editor's: the engine listens (OnChange), recalculates what the change
 // dirtied and stores results with Sheet::SetValue, as it does after opening. Undo and redo report
 // their changes the same way.
+namespace fw::sheet {
+struct NumLocale;
+}
+
 namespace fw::sheet::edit {
 
 // What a change touched. Several flags may come together.
@@ -260,6 +264,8 @@ class Editor {
   bool MustWriteStrings() const;
   // The current state counts as saved, without a file (tools and tests; saving uses CommitSave).
   void MarkSaved();
+  // The region numbers typed into tables' headers are shown in, as text (default: en-US).
+  void SetLocale(const NumLocale* locale) { locale_ = locale; }
 
  private:
   struct State;
@@ -273,8 +279,13 @@ class Editor {
   void RewriteSheetRefs(int skip, const std::function<std::string(std::string_view, int)>& rewrite,
                         const std::function<bool(std::string_view)>& touches, std::string_view from = {},
                         std::string_view to = {});
+  // Header cells of tables among `cells`, after they were written: each holds its text as Excel
+  // shows it (a number as formatted; cleared: "ColumnN"), unique in its table (Excel adds 2, 3...),
+  // and its column takes that name, structured references everywhere following.
+  void FixHeaders(Sheet& s, const std::vector<CellAddr>& cells);
   Workbook& book_;
   std::unique_ptr<State> s_;
+  const NumLocale* locale_ = nullptr;
   std::vector<Listener> listeners_;
 };
 
