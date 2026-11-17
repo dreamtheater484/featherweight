@@ -6,9 +6,11 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <vector>
 
 #include "PagedView.h"
+#include "sheet/data/Filter.h"
 #include "sheet/calc/Bind.h"
 #include "sheet/calc/Entry.h"
 #include "sheet/edit/Edit.h"
@@ -373,6 +375,23 @@ class WorkbookView : public PagedView {
   };
   std::optional<Painter> painter_;
   void PaintFormats();
+  // ---- Filter (WorkbookFilter.cpp, s2-format): Ctrl+Shift+L, the header row's buttons, their panel.
+  struct ViewFilter {
+    Range ref;  // the header row and the rows it filters
+    std::vector<data::FilterCriteria> criteria;
+  };
+  std::unordered_map<const Sheet*, ViewFilter> filters_;
+  ViewFilter* FilterOf();  // the shown sheet's filter, or null
+  void ToggleFilter();
+  bool ApplyFilter();  // hides the rows its criteria leave out, shows the others
+  // The header button at (x, y): the column within the filter, and where it is.
+  bool FilterButtonAt(float x, float y, uint32_t* column, D2D1_RECT_F* rc = nullptr);
+  void DrawFilterButtons(gfx::Canvas& c);
+  class FilterPanel;
+  std::unique_ptr<FilterPanel> filterPanel_;
+  void ShowFilterPanel(uint32_t column);
+  bool DataCommand(int cmd);
+  bool DataCommandState(int cmd, CommandState& s);
   // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
   bool GridCommand(int cmd);
   bool GridCommandState(int cmd, CommandState& s);

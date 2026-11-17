@@ -10,6 +10,7 @@
 #include "pkg/Snapshot.h"
 #include "sheet/csv/Csv.h"
 #include "sheet/numfmt/NumLocale.h"
+#include "sheet/view/WorkbookFilter.h"
 #include "sheet/view/WorkbookFormat.h"
 #include "sheet/view/WorkbookPanels.h"
 #include "sheet/xlsx/Xlsx.h"
@@ -486,6 +487,7 @@ void WorkbookView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
     DrawGrid(c, dc);
     DrawStale(c);
     DrawFillHandle(c);
+    DrawFilterButtons(c);
     DrawNote(dc);
     DrawEditor(c);
     DrawHeaders(c);

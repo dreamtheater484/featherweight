@@ -342,4 +342,9 @@ enum Cmd : int {
   CmdBorderOutline,       // Ctrl+Shift+7
   CmdBorderRemove,        // Ctrl+Shift+-
   CmdCellStyles,          // the toolbar's built-in cell styles
+  CmdFilter,              // Ctrl+Shift+L: filter on or off
+  CmdDataBox,             // the toolbar's sort and filter choices
+  CmdSortAscending,
+  CmdSortDescending,
+  CmdRemoveDuplicates,
 };

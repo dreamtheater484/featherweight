@@ -199,6 +199,7 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case '5': return CmdNumPercent;
       case '6': return CmdNumScientific;
       case '7': return CmdBorderOutline;
+      case 'L': return CmdFilter;
       case VK_OEM_MINUS: return CmdBorderRemove;
     }
   }
@@ -226,6 +227,7 @@ CommandState WorkbookView::QueryCommand(int cmd) {
     return PagedView::QueryCommand(cmd);
   if (GridCommandState(cmd, s)) return s;
   if (FormatCommandState(cmd, s)) return s;
+  if (DataCommandState(cmd, s)) return s;
   const bool ready = Ready();
   size_t shown = 0;
   if (ready)
@@ -301,6 +303,7 @@ bool WorkbookView::Execute(int cmd) {
   }
   if (GridCommand(cmd)) return true;
   if (FormatCommand(cmd)) return true;
+  if (DataCommand(cmd)) return true;
   switch (cmd) {
     case CmdUndo:
     case CmdRedo:

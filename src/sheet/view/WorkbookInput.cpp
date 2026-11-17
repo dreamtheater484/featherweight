@@ -301,6 +301,11 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
   }
   if (button == 0 && gfx::Contains(cells_, fx, fy) && PointClick(x, y)) return;
   if (editor_.Active() && !CommitEdit(false)) return;
+  // A filter's button on its header row opens the column's filter.
+  if (uint32_t column = 0; button == 0 && FilterButtonAt(fx, fy, &column)) {
+    ShowFilterPanel(column);
+    return;
+  }
   // The fill handle: drag to fill, double-click to fill down beside the data.
   if (button == 0 && FillHandleAt(fx, fy)) {
     if (doubleClick) {
