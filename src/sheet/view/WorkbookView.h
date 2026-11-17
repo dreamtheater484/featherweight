@@ -13,6 +13,7 @@
 #include "sheet/model/Workbook.h"
 #include "sheet/view/CellPaint.h"
 #include "sheet/view/CellText.h"
+#include "sheet/view/CellEditor.h"
 #include "sheet/view/Grid.h"
 #include "sheet/view/PrintLayout.h"
 #include "text/Fonts.h"
@@ -60,11 +61,12 @@ class WorkbookView : public PagedView {
   void OnMouseLeave() override;
   void OnWheel(int delta, bool horizontal, UINT mods, int x, int y) override;
   bool OnKeyDown(UINT vk, UINT mods) override;
-  bool OnChar(wchar_t, UINT) override { return false; }
+  bool OnChar(wchar_t ch, UINT mods) override;
   HCURSOR CursorAt(int x, int y) override;
   std::wstring TooltipAt(int x, int y) override;
   bool Dragging() const override { return mouse_ != Mouse::None || PagedView::Dragging(); }
-  bool HasKeyFocus() const override { return false; }
+  bool HasKeyFocus() const override { return editor_.Active(); }
+  std::optional<RECT> CaretRect() override;
 
   int ShortcutFor(UINT vk, UINT mods) const override;
   CommandState QueryCommand(int cmd) override;
@@ -292,6 +294,26 @@ class WorkbookView : public PagedView {
   // Formulas that kept their cached value (a function the engine can't calculate yet): a small
   // gray mark in the cell's top left corner; the status bar says why for the active cell.
   void DrawStale(gfx::Canvas& c);
+
+  // ---- Editing a cell (s2-plan "Editing in the grid"): the text in CellEditor, drawn over the
+  // cell and in the formula bar; Enter and Tab move as Excel's do (Enter after Tabs returns to the
+  // column the Tabs started from).
+  void BeginEdit(CellEditor::Mode mode, const std::wstring& text);
+  bool EditKey(UINT vk, UINT mods);
+  void CommitEdit(bool fill);
+  void MoveAfterEntry(int dRow, int dCol);
+  void PointMove(int dRow, int dCol, bool extend);
+  struct EditBox {
+    D2D1_RECT_F rc{};
+    float size = 0, line = 0, pad = 0;  // font size, line height, inner padding (device pixels)
+  };
+  bool EditGeometry(EditBox& box);
+  void DrawEditor(gfx::Canvas& c);
+  CellEditor editor_;
+  CellAddr editCell_{};
+  size_t editSheet_ = 0;
+  CellAddr point_{}, pointEnd_{};  // point mode's reference
+  uint32_t tabStartCol_ = UINT32_MAX;
   bool Stale(uint32_t row, uint32_t col) const;
   std::optional<CellAddr> note_;  // the cell whose note shows while the mouse is over it
 

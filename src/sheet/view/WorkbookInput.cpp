@@ -165,7 +165,10 @@ bool WorkbookView::OnKeyDown(UINT vk, UINT mods) {
     }
     return NavigationKey(vk, mods);
   }
+  if (editor_.Active()) return EditKey(vk, mods);
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
+  // Enter after Tabs returns to the Tabs' first column; any other key forgets it.
+  if (vk != VK_TAB && vk != VK_RETURN && vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU) tabStartCol_ = UINT32_MAX;
   // In a right-to-left sheet column A is at the right: the arrows go where they point.
   const int left = rtl_ ? 1 : -1;
   switch (vk) {
@@ -177,11 +180,17 @@ bool WorkbookView::OnKeyDown(UINT vk, UINT mods) {
     case VK_NEXT: PageMove(vk == VK_NEXT ? 1 : -1, alt, shift); return true;
     case VK_TAB:
       if (ctrl || alt) return false;
+      if (!shift && tabStartCol_ == UINT32_MAX) tabStartCol_ = active_.col;
       MoveActive(0, shift ? -1 : 1, false, false);
       return true;
     case VK_RETURN:
       if (ctrl || alt) return false;
-      MoveActive(shift ? -1 : 1, 0, false, false);
+      if (shift) tabStartCol_ = UINT32_MAX;
+      MoveAfterEntry(shift ? -1 : 1, 0);
+      return true;
+    case VK_F2:
+      if (ctrl || shift || alt) return false;
+      BeginEdit(CellEditor::Mode::Edit, FormulaBarText());
       return true;
     case VK_HOME: {
       const CellAddr to = ctrl ? CellAddr{frozenRow1_, frozenCol1_} : CellAddr{(shift ? end_ : active_).row, frozenCol1_};
@@ -252,6 +261,17 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
     return;
   }
   const float fx = static_cast<float>(x), fy = static_cast<float>(y);
+  // A click ends the entry being typed (in point mode it will insert a reference instead).
+  if (editor_.Active()) CommitEdit(false);
+  tabStartCol_ = UINT32_MAX;
+  // Double-clicking a cell edits it there (Edit mode).
+  if (doubleClick && button == 0 && gfx::Contains(cells_, fx, fy) && !ChartSheet()) {
+    if (auto cell = CellAt(x, y)) {
+      Select(*cell, *cell);
+      BeginEdit(CellEditor::Mode::Edit, FormulaBarText());
+      return;
+    }
+  }
   const bool shift = (mods & kModShift) != 0;
   pendingLink_ = false;
   // Sheet tabs.

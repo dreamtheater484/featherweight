@@ -474,6 +474,7 @@ void WorkbookView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
     DrawGrid(c, dc);
     DrawStale(c);
     DrawNote(dc);
+    DrawEditor(c);
     DrawHeaders(c);
     DrawOutline(c);
     DrawScrollbars(c);
@@ -723,7 +724,7 @@ void WorkbookView::DrawFormulaBar(Canvas& c) {
   const D2D1_RECT_F fx = {nameBox_.right + 8 * u, formulaBar_.top, nameBox_.right + 36 * u, formulaBar_.bottom};
   c.Text(L"fx", fx, p.textSecondary, size, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center);
   c.Fill({fx.right + 4 * u, formulaBar_.top + 6 * u, fx.right + 5 * u, formulaBar_.bottom - 6 * u}, p.chromeBorder);
-  std::wstring text = FormulaBarText();
+  std::wstring text = editor_.Active() ? editor_.Text() : FormulaBarText();
   if (const size_t nl = text.find_first_of(L"\r\n"); nl != std::wstring::npos) text = text.substr(0, nl) + L" …";
   const D2D1_RECT_F box = {fx.right + 12 * u, formulaBar_.top, formulaBar_.right - 12 * u, formulaBar_.bottom};
   c.PushClip(box);
