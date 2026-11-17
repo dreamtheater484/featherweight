@@ -293,7 +293,9 @@ class WorkbookView : public PagedView {
   // Conditional formats: each sheet's rules, made when it is first painted if it has any, with the
   // formula engine they need for theirs (loaded for the first such sheet, and only then).
   condfmt::SheetRules* RulesFor(size_t index);
-  std::unique_ptr<calc::WorkbookCalc> calc_;
+  std::unique_ptr<calc::WorkbookCalc> calc_;  // see Calc()
+  bool recalc_ = false;  // a workbook (not CSV): recalculate what Excel would after opening
+  calc::WorkbookCalc& Calc();
   std::vector<std::unique_ptr<condfmt::SheetRules>> rules_;
   std::vector<bool> rulesRead_;
 };

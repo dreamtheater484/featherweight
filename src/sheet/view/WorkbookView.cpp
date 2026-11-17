@@ -106,6 +106,7 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     error = OpenError(name, st);
     return OpenResult::Failed;
   }
+  recalc_ = true;  // a workbook: at idle, recalculate what Excel would on opening
   return Opened(std::move(book), error);
 }
 
@@ -206,6 +207,13 @@ class ScreenSheetLayout : public SheetLayout {
   const Grid& grid_;
 };
 
+// The formula engine on the workbook, made when first needed (the open recalculation reads the
+// formulas a slice at a time; conditional formats only need the names it starts with).
+calc::WorkbookCalc& WorkbookView::Calc() {
+  if (!calc_) calc_ = std::make_unique<calc::WorkbookCalc>(*book_, &text_->Locale());
+  return *calc_;
+}
+
 condfmt::SheetRules* WorkbookView::RulesFor(size_t index) {
   if (!book_ || index >= rules_.size()) return nullptr;
   if (!rulesRead_[index]) {
@@ -213,13 +221,9 @@ condfmt::SheetRules* WorkbookView::RulesFor(size_t index) {
     Sheet& sheet = book_->GetSheet(index);
     if (!sheet.Loaded()) book_->LoadSheet(index);
     if (sheet.KeptXml().find("conditionalFormatting") != std::string::npos) {
-      if (!calc_) {
-        calc_ = std::make_unique<calc::WorkbookCalc>(*book_, &text_->Locale());
-        calc_->Load();
-      }
       condfmt::Options o;
       o.locale = &text_->Locale();
-      o.calc = calc_.get();
+      o.calc = &Calc();
       rules_[index] = std::make_unique<condfmt::SheetRules>(*book_, index, o);
       if (rules_[index]->Empty()) rules_[index].reset();
     }
