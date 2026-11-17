@@ -789,7 +789,7 @@ std::wstring WorkbookView::EditTextAt(const Sheet& s, uint32_t row, uint32_t col
       }
       // In the region's form (en-NL: =SUM(1;2,5)), as Excel's formula bar shows it.
       const std::wstring w = L"=" + Utf8ToWide(calc::ToLocal(text, Region()));
-      return f.kind == FormulaKind::Array ? L"{" + w + L"}" : w;
+      return f.kind == FormulaKind::Array && !f.dynamic ? L"{" + w + L"}" : w;  // a dynamic array: no braces (Excel)
     }
   }
   const Xf& xf = book_->GetStyles().CellXf(cell.style);

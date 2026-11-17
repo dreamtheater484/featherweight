@@ -90,6 +90,8 @@ class Engine : public Resolver, public Names {
   Names& names() override { return *this; }
   const Formula* Name(uint32_t slot, int sheet) override;
   bool Spill(int sheet, int32_t row, int32_t col, Area& out) override;
+  // The cells a dynamic array spilled over, when (sheet, row, col) is one of them (its anchor too).
+  bool SpillRangeAt(int sheet, int32_t row, int32_t col, Area& out);
   bool Ready(const Area& a) override;
   bool Subtotal(int sheet, int32_t row, int32_t col) override;
   bool FormulaText(int sheet, int32_t row, int32_t col, std::string& text) override;
