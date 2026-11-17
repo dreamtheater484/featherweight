@@ -10,7 +10,7 @@
   powershell -ExecutionPolicy Bypass -File scripts\sheet-torture-minimize.ps1 build\sheet-torture\saved\x.edits.txt
 #>
 param(
-  [Parameter(Mandatory = $true, Position = 0)][string[]]$Edits,
+  [Parameter(Mandatory = $true, Position = 0, ValueFromRemainingArguments = $true)][string[]]$Edits,
   [string]$Out = "build\sheet-torture\minimized",
   [string]$Fwtool = "build\tools\fwtool\Release\fwtool.exe",
   [int]$MaxTries = 60
