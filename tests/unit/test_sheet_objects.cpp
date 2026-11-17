@@ -143,6 +143,45 @@ TEST(sheet_objects_render) {
       SavePng(s, std::filesystem::path(dir) / (std::filesystem::path(name).stem().wstring() + L"-" + std::to_wstring(i) + L".png"));
     }
   }
+  // Every chart of tests/office/excel/charts.xlsx printed on its own at 100 dpi, to hold up
+  // against the same chart cut from Excel's PDF (reference/excel/charts.xlsx.pdf).
+  auto book = OpenSheetFile("office/excel/charts.xlsx");
+  if (!book) return;
+  const float scale = 100.0f / 72;
+  // Columns and rows wide enough that no chart reaches the next one.
+  struct Spaced : SheetLayout {
+    double ColumnLeft(uint32_t col) const override { return 60.0 * col; }
+    double RowTop(uint32_t row) const override { return 20.0 * row; }
+  };
+  for (size_t i = 0; i < book->SheetCount(); ++i) {
+    auto objects = SheetObjects::Load(*book, i);
+    Spaced layout;
+    objects->Place(layout);
+    const auto placed = objects->Objects();
+    for (size_t k = 0; k < placed.size(); ++k) {
+      const draw::Rect& r = placed[k].rect;
+      drawtest::Surface s(static_cast<int>(std::ceil(r.Width() * scale)), static_cast<int>(std::ceil(r.Height() * scale)));
+      {
+        draw::D2DPainter p(s.dc.Get());
+        p.Transform(draw::Matrix::Translate(-r.left, -r.top) * draw::Matrix::Scale(scale, scale));
+        SheetObjects::DrawOptions options;
+        options.printing = true;
+        objects->Draw(p, r, options);
+      }
+      CHECK(s.End());
+      SavePng(s, std::filesystem::path(dir) / (L"chart-" + std::to_wstring(i) + L"-" + std::to_wstring(k + 1) + L".png"));
+    }
+    if (objects->IsChartSheet()) {
+      drawtest::Surface s(static_cast<int>(11 * 100), static_cast<int>(8.5 * 100));
+      {
+        draw::D2DPainter p(s.dc.Get());
+        p.Transform(draw::Matrix::Scale(scale, scale));
+        objects->DrawChartSheet(p, {0, 0, 11 * 72, 8.5f * 72});
+      }
+      CHECK(s.End());
+      SavePng(s, std::filesystem::path(dir) / (L"chart-" + std::to_wstring(i) + L"-sheet.png"));
+    }
+  }
 }
 
 TEST(sheet_objects_pictures) {
@@ -199,10 +238,10 @@ TEST(sheet_objects_charts) {
   objects->Place(layout);
   const auto placed = objects->Objects();
   CHECK_EQ(placed.size(), 12u);
-  // All but the radar chart (beyond S1's types: a placeholder), the combo chart included.
+  // Every one, the combo chart and the radar chart included.
   size_t charts = 0;
   for (const auto& o : placed) charts += o.chart ? 1 : 0;
-  CHECK_EQ(charts, 11u);
+  CHECK_EQ(charts, 12u);
   drawtest::Surface s(420, 240);
   {
     draw::D2DPainter p(s.dc.Get());

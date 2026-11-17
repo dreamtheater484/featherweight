@@ -12,14 +12,14 @@
 #include "draw/Shapes.h"
 
 // fwchart (plan D5): charts shown read-only from the values their part caches (c:chartSpace):
-// column, bar, line, pie and doughnut, area and scatter, with the title, axes, gridlines, legend and
-// data labels. fwdraw reads a chart through the hook Install() sets, so charts show on screen,
+// column, bar, line, pie and doughnut, area, scatter and radar, with the title, axes, gridlines,
+// legend and data labels. fwdraw reads a chart through the hook Install() sets, so charts show on screen,
 // printed and in PDF alike. Other types stay placeholders; a chart Word stores with a picture for
 // older versions (mc:AlternateContent) shows that picture. Nothing here writes: the chart part is
 // saved as it was read.
 namespace fw::chart {
 
-enum class Type : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter };
+enum class Type : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter, Radar };
 enum class Grouping : uint8_t { Clustered, Stacked, Percent };
 
 // A fill and an outline from c:spPr: plain colors, or none.
@@ -37,8 +37,13 @@ struct Series {
   Look look;
   std::vector<std::pair<uint32_t, Look>> points;  // c:dPt: a point's own look
   std::optional<bool> marker;  // line and scatter: c:marker (nullopt: as the group has it)
+  std::string symbol;          // c:marker/c:symbol ("circle", "diamond"...; empty: Office's choice)
+  float markerSize = 5;        // c:marker/c:size, points
   bool smooth = false;         // line and scatter: c:smooth (Office smooths when it's missing)
-  std::optional<bool> labels, percent, categoryLabels;  // c:dLbls (nullopt: as the group has it)
+  // c:dLbls: values, percentages, category names, series names, legend keys (nullopt: as the
+  // group has it), and the text between them.
+  std::optional<bool> labels, percent, categoryLabels, seriesNames, keys;
+  std::optional<std::wstring> separator;
 };
 
 struct Group {
@@ -50,7 +55,9 @@ struct Group {
   double firstAngle = 0;          // pie: degrees clockwise from 12 o'clock
   bool marker = false;            // line: markers unless a series says not
   bool lines = true;              // scatter: lines between points
-  bool labels = false, percent = false, categoryLabels = false;
+  bool filled = false;            // radar: filled shapes rather than lines (c:radarStyle filled)
+  bool labels = false, percent = false, categoryLabels = false, seriesNames = false, keys = false;
+  std::optional<std::wstring> separator;  // nullopt: the user's list separator and a space
   bool secondary = false;  // on the secondary value axis
   std::vector<Series> series;
 };
@@ -66,6 +73,7 @@ struct Axis {
   bool reversed = false;  // c:scaling/c:orientation maxMin
   bool between = true;    // categories between tick marks (c:crossBetween)
   std::wstring title;
+  bool titleOverlay = false;  // the title drawn over the plot, which keeps its room
 };
 
 enum class LegendPos : uint8_t { None, Right, Left, Top, Bottom };
@@ -75,11 +83,18 @@ struct Chart {
   std::vector<Group> groups;
   Axis category, value, secondary;  // scatter: `category` is the x value axis
   LegendPos legend = LegendPos::None;
+  // c:overlay: the title or legend drawn over the plot area, which keeps the room it would take.
+  bool titleOverlay = false, legendOverlay = false;
   Look area, plot;  // the chart's and the plot area's c:spPr
   float textSize = 10, titleSize = 14;  // points (unstated: Office 2007's 10)
   std::optional<draw::Color> textColor, titleColor;  // nullopt: black
   bool titleBold = true;
+  std::wstring titleFont;  // empty: the chart's (the theme's minor font)
   bool roundedCorners = false;  // the chart area's (c:roundedCorners; Excel rounds them when it's missing)
+  // Office 2007's look, which Excel keeps for a chart without c14:style (Office 2010 and later
+  // write it): gridlines and axis lines it doesn't color black rather than gray, and a title the
+  // chart's text size. Word draws such charts in Office 2010's look.
+  bool legacy = false;
 };
 
 // Where a chart in a workbook reads its data: the cells its references (c:f) name, as they show,
@@ -96,7 +111,8 @@ class DataSource {
 };
 
 // The chart a c:chartSpace holds; false when it holds nothing Featherweight draws. Colors are
-// resolved with `colors` (the document's theme); `data`, when given, supplies the series' values.
+// resolved with `colors` (the document's theme); `data`, when given, supplies the series' values,
+// and says the chart is in a workbook, which Excel draws as it does (Chart::legacy, corners).
 bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& out, DataSource* data = nullptr);
 // A number as an Excel format code shows it (the first section: decimals, thousands separators,
 // percent, literal text, dates); "General" or empty: up to 10 significant digits.
@@ -104,6 +120,9 @@ std::wstring FormatNumber(double v, std::string_view code);
 // The decimal and thousands separators FormatNumber uses: '.' and ',' until Install() sets the
 // user's (Windows' regional settings), as Office does.
 void SetNumberSeparators(wchar_t decimal, wchar_t group);
+// What goes between the parts of a data label (series, category, value, percentage) that don't
+// state it: the list separator and a space, ", " until Install() sets the user's (Office's choice).
+void SetListSeparator(wchar_t separator);
 // The user's short date as Windows writes it ("dd/MM/yyyy"), which Excel's built-in short date
 // (m/d/yyyy) shows as; empty: m/d/yyyy as it is. Install() sets it.
 void SetShortDate(std::string_view picture);
