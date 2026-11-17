@@ -171,6 +171,7 @@ class Workbook {
 
  private:
   friend class WorkbookLoader;
+  friend class edit::Access;
   FileFormat format_ = FileFormat::Xlsx;
   std::vector<std::unique_ptr<Sheet>> sheets_;
   uint32_t activeSheet_ = 0, firstTab_ = 0;
