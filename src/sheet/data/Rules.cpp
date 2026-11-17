@@ -72,6 +72,8 @@ std::vector<std::string_view> Children(std::string_view inner, std::string_view 
   return out;
 }
 
+std::string XmlChars(std::string_view s);
+
 // Sets (or, with `remove`, takes out) an attribute in an element's start tag.
 void SetAttr(std::string& el, std::string_view name, std::string_view value, bool remove = false) {
   const size_t end = StartTagEnd(el);
@@ -90,7 +92,7 @@ void SetAttr(std::string& el, std::string_view name, std::string_view value, boo
       el.erase(at - 1, close + 1 - (at - 1));
     } else {
       std::string v;
-      pkg::AppendEscapedAttribute(v, value);
+      pkg::AppendEscapedAttribute(v, XmlChars(value));
       el.replace(q + 1, close - q - 1, v);
     }
     return;
@@ -99,7 +101,7 @@ void SetAttr(std::string& el, std::string_view name, std::string_view value, boo
   size_t insert = end - 1;
   if (insert > 0 && el[insert - 1] == '/') --insert;
   std::string a = " " + std::string(name) + "=\"";
-  pkg::AppendEscapedAttribute(a, value);
+  pkg::AppendEscapedAttribute(a, XmlChars(value));
   el.insert(insert, a + "\"");
 }
 
@@ -125,14 +127,41 @@ std::string Prefixed(std::string_view xml, const std::string& p) {
   return out;
 }
 
+// Text without what XML 1.0 can't hold (control characters, broken UTF-8, U+FFFE and U+FFFF), so a
+// rule always reads back and Excel never has to repair the part.
+std::string XmlChars(std::string_view s) {
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size();) {
+    const auto c = static_cast<unsigned char>(s[i]);
+    if (c < 0x80) {
+      if (c >= 0x20 || c == '\t' || c == '\n' || c == '\r') out += static_cast<char>(c);
+      ++i;
+      continue;
+    }
+    const size_t n = c >= 0xC2 && c <= 0xDF ? 2 : c >= 0xE0 && c <= 0xEF ? 3 : c >= 0xF0 && c <= 0xF4 ? 4 : 0;
+    bool ok = n > 0 && i + n <= s.size();
+    for (size_t k = 1; ok && k < n; ++k) ok = (static_cast<unsigned char>(s[i + k]) & 0xC0) == 0x80;
+    if (ok && n >= 3) {
+      const auto c1 = static_cast<unsigned char>(s[i + 1]);
+      if ((c == 0xE0 && c1 < 0xA0) || (c == 0xED && c1 >= 0xA0) || (c == 0xF0 && c1 < 0x90) || (c == 0xF4 && c1 >= 0x90))
+        ok = false;
+      if (n == 3 && c == 0xEF && c1 == 0xBF && static_cast<unsigned char>(s[i + 2]) >= 0xBE) ok = false;
+    }
+    if (ok) out.append(s.substr(i, n));
+    i += ok ? n : 1;
+  }
+  return out;
+}
+
 std::string Esc(std::string_view s) {
   std::string out;
-  pkg::AppendEscapedText(out, s);
+  pkg::AppendEscapedText(out, XmlChars(s));
   return out;
 }
 std::string EscAttr(std::string_view s) {
   std::string out;
-  pkg::AppendEscapedAttribute(out, s);
+  pkg::AppendEscapedAttribute(out, XmlChars(s));
   return out;
 }
 

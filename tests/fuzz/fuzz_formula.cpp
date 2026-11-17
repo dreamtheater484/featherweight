@@ -13,7 +13,10 @@
 #include "sheet/calc/Engine.h"
 #include "sheet/calc/Entry.h"
 #include "sheet/calc/Typing.h"
+#include "sheet/data/Rules.h"
 #include "sheet/edit/Edit.h"
+#include "sheet/model/Sheet.h"
+#include "sheet/xlsx/Internal.h"
 
 using namespace fw::pkg;
 namespace calc = fw::sheet::calc;
@@ -160,6 +163,44 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       if (k == 3) left.erase(left.begin());
       calc::SheetsChanged(after, from, left, 0, -1);
     }
+  }
+
+  // Conditional formats' and validations' formulas and lists (s3-data): written as the sheet's XML
+  // and read back, each formula comes back as it went in; the input as a list and as cells.
+  {
+    namespace data = fw::sheet::data;
+    const std::string f(formula);
+    std::vector<data::CfRule> rules{data::CellIsRule("A1:B3", data::CfOp::Between, f, f, 0),
+                                    data::ExpressionRule("C1", f, 1),
+                                    data::TextRule("A1:A9", data::CfText::BeginsWith, f, 0)};
+    fw::sheet::detail::PartText t;
+    std::string xml, ext;
+    data::WriteCfRules(rules, t, xml, ext);
+    fw::sheet::xlsx::PutSheetRules(t, false, xml, ext);
+    if (data::ReadCfRules(t).size() != rules.size()) std::abort();
+    data::Validation v;
+    v.type = data::Validation::Type::Custom;
+    v.f1 = f;
+    v.sqref = "A1:A3 C5";
+    v.prompt = f;
+    data::Validation list;
+    list.type = data::Validation::Type::List;
+    list.f1 = "\"" + f + "\"";
+    list.sqref = "B2";
+    data::WriteValidations({v, list}, t, xml, ext);
+    fw::sheet::xlsx::PutSheetRules(t, true, xml, ext);
+    std::vector<data::Validation> back = data::ReadValidations(t);
+    if (back.size() != 2) std::abort();
+    // XML 1.0 can't hold every character (controls, lone surrogates): only well-formed text must come back.
+    bool plainText = true;
+    for (unsigned char c : f) plainText = plainText && c >= 0x20 && c != 0x7F && c < 0x80;
+    // A formula on another sheet puts its rule in the x14 extension, read after the others.
+    const data::Validation& custom = back[0].type == data::Validation::Type::Custom ? back[0] : back[1];
+    if (plainText && (custom.f1 != f || custom.prompt != f)) std::abort();
+    data::InList(data::ListItems(&custom == &back[0] ? back[1] : back[0]), f);
+    const std::string sq = data::JoinAreas(data::ParseAreas(f));
+    if (data::JoinAreas(data::ParseAreas(sq)) != sq) std::abort();
+    data::ClearValidations(back, fw::sheet::Range{0, 0, 1, 0});
   }
 
   // The other syntaxes a reference can have.

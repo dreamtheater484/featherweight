@@ -15,6 +15,8 @@
 #include "sheet/edit/Journal.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/xlsx/Xlsx.h"
+#include "sheet/xlsx/Internal.h"
+#include "sheet/model/Sheet.h"
 
 using namespace fw::sheet;
 using edit::Editor;
@@ -221,4 +223,24 @@ TEST(SheetRules_Journal) {
   CHECK(replay.Replay(journal.All()));
   CHECK(fresh->GetSheet(0).Text().afterData == book->GetSheet(0).Text().afterData);
   CHECK(fresh->GetStyles().Dxfs().size() == book->GetStyles().Dxfs().size());
+}
+
+// What XML 1.0 can't hold (found by fuzz_formula) is left out, so the rules read back and the part
+// stays well formed.
+TEST(SheetRules_XmlChars) {
+  const std::string f = std::string("A1\x01+\xFF") + "\xEF\xBF\xBF" + "1";
+  detail::PartText t;
+  std::string xml, ext;
+  data::WriteCfRules({data::ExpressionRule("C1", f, 1), data::TextRule("A1:A9", data::CfText::BeginsWith, f, 0)}, t, xml, ext);
+  xlsx::PutSheetRules(t, false, xml, ext);
+  CHECK(data::ReadCfRules(t).size() == 2);
+  data::Validation v;
+  v.type = data::Validation::Type::Custom;
+  v.f1 = f;
+  v.prompt = f;
+  v.sqref = "A1";
+  data::WriteValidations({v}, t, xml, ext);
+  xlsx::PutSheetRules(t, true, xml, ext);
+  const std::vector<data::Validation> back = data::ReadValidations(t);
+  CHECK(back.size() == 1 && back[0].f1 == "A1+1" && back[0].prompt == "A1+1");
 }
