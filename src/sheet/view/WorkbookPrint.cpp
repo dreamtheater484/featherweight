@@ -39,7 +39,11 @@ PrintInfo WorkbookView::InfoFor(const Sheet& sheet) const {
 }
 
 void WorkbookView::Paginate() {
-  print_ = std::make_unique<PrintLayout>(*book_, Current(), sheet_, grid_, *text_, InfoFor(Current()));
+  printObjects_ = SheetObjects::Load(*book_, sheet_);
+  PrintInfo info = InfoFor(Current());
+  info.objects = printObjects_.get();
+  info.rules = RulesFor(sheet_);
+  print_ = std::make_unique<PrintLayout>(*book_, Current(), sheet_, grid_, *text_, info);
   pageSizes_.clear();
   for (size_t i = 0; i < print_->PageCount(); ++i)
     pageSizes_.push_back({print_->Page(i).width, print_->Page(i).height});
@@ -58,6 +62,10 @@ void WorkbookView::ForEachSheetLayout(const std::function<void(PrintLayout&)>& f
       PrintInfo info = InfoFor(s);
       info.jobPaper = paper;
       info.jobPages = pages;
+      // Objects of its own, placed on the printed columns.
+      std::unique_ptr<SheetObjects> objects = SheetObjects::Load(*book_, i);
+      info.objects = objects.get();
+      info.rules = RulesFor(i);
       Grid other;
       const bool shown = i == sheet_;
       if (!shown) other.Build(s, book_->GetStyles(), *measure_);

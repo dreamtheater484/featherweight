@@ -1,7 +1,10 @@
 #include "sheet/calc/Bind.h"
 
+#include <algorithm>
+#include <climits>
 #include <map>
 
+#include "sheet/calc/Bytecode.h"
 #include "sheet/calc/Fn.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/numfmt/NumFormat.h"
@@ -82,25 +85,77 @@ void WorkbookCalc::Extent(int sheet, int32_t& rows, int32_t& cols) {
 
 bool WorkbookCalc::Date1904() const { return book_.Date1904(); }
 
+bool WorkbookCalc::Table(std::string_view name, int sheet, int32_t row, int32_t col, uint8_t items,
+                         std::string_view col1, std::string_view col2, Area& out, Err& error) {
+  error = Err::Ref;
+  const sheet::Table* t = nullptr;
+  size_t ts = static_cast<size_t>(sheet);
+  if (!name.empty()) {
+    t = book_.FindTable(name, &ts);
+  } else if (sheet >= 0 && sheet < SheetCount()) {
+    t = book_.GetSheet(ts).TableAt(static_cast<uint32_t>(row), static_cast<uint32_t>(col));
+  }
+  if (!t) return false;
+  // Columns: all, one, or a span.
+  int32_t c1 = static_cast<int32_t>(t->ref.firstCol), c2 = static_cast<int32_t>(t->ref.lastCol);
+  if (!col1.empty()) {
+    int a = t->FindColumn(col1), b = col2.empty() ? a : t->FindColumn(col2);
+    if (a < 0 || b < 0) return false;
+    c1 = static_cast<int32_t>(t->ref.firstCol) + std::min(a, b);
+    c2 = static_cast<int32_t>(t->ref.firstCol) + std::max(a, b);
+  }
+  // Rows: the parts asked for (the data when none is), as one span.
+  const int32_t first = static_cast<int32_t>(t->ref.firstRow), last = static_cast<int32_t>(t->ref.lastRow);
+  const int32_t headers = static_cast<int32_t>(t->headerRows), totals = static_cast<int32_t>(t->totalsRows);
+  const int32_t d1 = first + headers, d2 = last - totals;
+  int32_t r1 = INT32_MAX, r2 = -1;
+  auto add = [&](int32_t a, int32_t b) {
+    if (a > b) return;
+    r1 = std::min(r1, a), r2 = std::max(r2, b);
+  };
+  if (items & bc::kThisRow) {
+    if (row < d1 || row > d2) return error = Err::Value, false;
+    add(row, row);
+  } else if (items & bc::kAll) {
+    add(first, last);
+  } else {
+    uint8_t parts = items ? items : static_cast<uint8_t>(bc::kData);
+    if (parts & bc::kHeaders) add(first, d1 - 1);
+    if (parts & bc::kData) add(d1, d2);
+    if (parts & bc::kTotals) add(d2 + 1, last);
+  }
+  if (r2 < 0) return false;
+  out.r1 = r1, out.r2 = r2;
+  out.c1 = static_cast<int16_t>(c1), out.c2 = static_cast<int16_t>(c2);
+  out.s1 = out.s2 = static_cast<uint16_t>(ts);
+  error = Err::None;
+  return true;
+}
+
 bool WorkbookCalc::RowHidden(int sheet, int32_t row) {
   if (sheet < 0 || sheet >= SheetCount()) return false;
   return book_.GetSheet(static_cast<size_t>(sheet)).Row(static_cast<uint32_t>(row)).hidden;
 }
 
-bool WorkbookCalc::FormatText(double value, std::string_view format, std::string& out) {
+int WorkbookCalc::FormatText(const CellView& value, std::string_view format, std::string& out) {
   auto it = formats_.find(std::string(format));
   if (it == formats_.end()) {
     if (formats_.size() > 4096) formats_.clear();
-    it = formats_.emplace(std::string(format), std::make_unique<NumberFormat>(Wide(format))).first;
+    // TEXT() reads the code as the region types it (on an en-NL PC: "jjjj", "#.##0,00").
+    auto f = std::make_unique<NumberFormat>();
+    if (!NumberFormat::FromLocal(Wide(format), locale_ ? *locale_ : EnUsLocale(), *f)) f.reset();
+    it = formats_.emplace(std::string(format), std::move(f)).first;
   }
+  if (!it->second) return -1;
   FormatContext ctx;
   ctx.locale = locale_;
   ctx.date1904 = book_.Date1904();
   Formatted f;
-  it->second->Format(value, ctx, f);
-  if (f.overflow) return false;
+  if (value.type == Type::Text) it->second->Format(Wide(value.text), ctx, f);
+  else it->second->Format(value.num, ctx, f);
+  if (f.overflow) return -1;
   out = Narrow(f.text);
-  return true;
+  return 1;
 }
 
 CalcSettings WorkbookCalc::Settings() const {
@@ -161,7 +216,7 @@ WorkbookCalc::LoadStats WorkbookCalc::Load() {
         range.r1 = static_cast<int32_t>(fi.ref.firstRow), range.r2 = static_cast<int32_t>(fi.ref.lastRow);
         range.c1 = static_cast<int16_t>(fi.ref.firstCol), range.c2 = static_cast<int16_t>(fi.ref.lastCol);
         if (range.r2 < range.r1 || range.c2 < range.c1) range.r1 = range.r2 = at.row, range.c1 = range.c2 = static_cast<int16_t>(at.col);
-        engine_->SetFormula(at, std::move(f), cached, &range);
+        engine_->SetFormula(at, std::move(f), cached, &range, fi.dynamic);
       } else {
         engine_->SetFormula(at, std::move(f), cached);
       }

@@ -700,5 +700,22 @@ try {
   if (-not $p.HasExited) { $p.CloseMainWindow() | Out-Null; if (-not $p.WaitForExit(3000)) { $p.Kill() } }
 }
 
+# ---- A workbook (S1): the grid is a data grid named after its sheet, and the sheet tabs a tab
+# control with an item for each sheet shown; selecting an item shows that sheet.
+$p, $win = Start-App @("--widget-gallery", "--theme", "light", (Join-Path $root "tests\office\excel\notes.xlsx"))
+try {
+  Step "workbook: the grid shows the first sheet" {} { Find $win $CT::DataGrid "Notes" } 10000
+  $sheets = Find $win $CT::Tab "Sheets"
+  Check "workbook: a tab for each sheet" {
+    (@(FindAll $sheets $CT::TabItem) | ForEach-Object { $_.Current.Name }) -join "|" -eq "Notes|Threaded comments"
+  }
+  Check "workbook: the first sheet's tab is selected" { (Pat (FindChild $sheets $CT::TabItem "Notes") $SelItem).Current.IsSelected }
+  Step "workbook: selecting the second tab shows its sheet" {
+    (Pat (FindChild $sheets $CT::TabItem "Threaded comments") $SelItem).Select()
+  } { Find $win $CT::DataGrid "Threaded comments" }
+} finally {
+  if (-not $p.HasExited) { $p.CloseMainWindow() | Out-Null; if (-not $p.WaitForExit(3000)) { $p.Kill() } }
+}
+
 "$($script:passed) passed, $($script:failed) failed. Trees are in $out"
 exit $script:failed

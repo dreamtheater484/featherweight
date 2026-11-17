@@ -42,6 +42,7 @@ struct Options {
   std::filesystem::path samples;    // paste-check: clipboard samples (.rtf, .html) to paste
   std::filesystem::path pngs;       // pdf-check: the pages the app drew (page-1.png, ...)
   std::wstring locale;              // formulas: the region the files were calculated in (en-US, en-NL)
+  double minMatch = -1;             // formulas: fail below this share of compared formulas matching (%)
   std::wstring password;            // encrypt, decrypt
   std::vector<std::filesystem::path> inputs;
 };

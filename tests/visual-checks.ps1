@@ -128,7 +128,19 @@ $checks = @(
   # Export PDF (D4): the drawings document exported (and its pages as the export draws them, for
   # fwtool pdf-check --pngs), then the PDF it made, with its bookmarks.
   @("doc-export", "light", "", "exportpdf:$out\doc-export.pdf;pagepngs:$out\doc-export", @("..\office\generated\drawings-dml.docx")),
-  @("doc-exported", "light", "", "view:facing;cmd:fit-page", @("..\..\build\visual\doc-export.pdf"))
+  @("doc-exported", "light", "", "view:facing;cmd:fit-page", @("..\..\build\visual\doc-export.pdf")),
+  # Workbooks (S1): borders and fills; the dark theme around merged cells and frozen panes; a note
+  # shown while the mouse is over its cell; a chart sheet; pictures; conditional formats (bars,
+  # icons, scales); print preview and the pages as printed; a CSV file.
+  @("sheet-borders", "light", "", "", @("..\office\excel\borders-fills.xlsx")),
+  @("sheet-dark", "dark", "", "", @("..\office\excel\merged-frozen.xlsx")),
+  @("sheet-note", "light", "", "move:127,170", @("..\office\excel\notes.xlsx")),
+  @("sheet-chart", "light", "", "cmd:1521", @("..\office\excel\charts.xlsx")),
+  @("sheet-pictures", "light", "", "", @("..\office\excel\pictures-shapes.xlsx")),
+  @("sheet-condfmt", "light", "", "", @("..\office\excel\conditional-formats.xlsx")),
+  @("sheet-preview", "light", "", "cmd:1500", @("..\office\excel\print-settings.xlsx")),
+  @("sheet-pages", "light", "", "pagepngs:$out\sheet-pages|100", @("..\office\excel\print-settings.xlsx")),
+  @("sheet-csv", "light", "", "", @("..\office\csv\date-like.csv"))
 )
 
 foreach ($c in $checks) {

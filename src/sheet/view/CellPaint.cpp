@@ -2,7 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 #include <vector>
+
+#include "sheet/condfmt/CondFormat.h"
+#include "sheet/model/TableStyles.h"
 
 namespace fw::sheet::view {
 
@@ -129,11 +133,309 @@ class Painting {
     PlaceText();
     if (o_.gridlines) Gridlines();
     Fills();
+    BarsAndIcons();
     Borders();
     DrawText();
   }
 
  private:
+  // ---- Tables and conditional formats
+  struct Look {
+    TableCellFormat table;  // under the cell's own format
+    bool cf = false;        // a conditional format holds:
+    condfmt::Style st;      // over it
+  };
+  bool Looks() const { return o_.rules || (o_.tables && !sheet_.Tables().empty()); }
+  const Look& LookAt(uint32_t row, uint32_t col) {
+    const uint64_t key = (uint64_t{row} << 15) | col;
+    auto it = looks_.find(key);
+    if (it != looks_.end()) return it->second;
+    Look& lk = looks_[key];
+    if (o_.tables && !sheet_.Tables().empty()) lk.table = TableFormatAt(styles_, sheet_, row, col);
+    if (o_.rules) lk.cf = o_.rules->At(row, col, lk.st);
+    return lk;
+  }
+  bool HideValue(uint32_t row, uint32_t col) {
+    if (!o_.rules) return false;
+    const Look& lk = LookAt(row, col);
+    return lk.cf && (lk.st.set & condfmt::Style::kHideValue);
+  }
+  TextLook TextLookAt(uint32_t row, uint32_t col, const Xf& xf) {
+    TextLook t;
+    if (!Looks()) return t;
+    const Look& lk = LookAt(row, col);
+    if (!lk.table.Empty()) {
+      // Bold and italic add to the cell's; the color shows where its font has the default's.
+      const Font& f = styles_.FontOf(xf);
+      if (lk.table.bold && !f.bold) t.bold = 1;
+      if (lk.table.italic && !f.italic) t.italic = 1;
+      const uint32_t def = styles_.Resolve(styles_.DefaultFont().color, 0xFF000000);
+      if (lk.table.fontColor.IsSet() && (!f.color.IsSet() || styles_.Resolve(f.color, 0xFF000000) == def))
+        t.fontColor = styles_.Resolve(lk.table.fontColor, 0xFF000000);
+    }
+    if (lk.cf) {
+      const condfmt::Style& s = lk.st;
+      if (s.set & condfmt::Style::kFontColor) {
+        t.fontColor = s.fontColor;
+        t.colorWins = true;
+      }
+      if (s.set & condfmt::Style::kBold) t.bold = s.bold ? 1 : 0;
+      if (s.set & condfmt::Style::kItalic) t.italic = s.italic ? 1 : 0;
+      if (s.set & condfmt::Style::kStrike) t.strike = s.strike ? 1 : 0;
+      if (s.set & condfmt::Style::kUnderline) t.underline = static_cast<int8_t>(s.underline);
+      if (s.set & condfmt::Style::kNumFmt) t.numFmt = s.numFmt;
+    }
+    return t;
+  }
+  // A cell's fill: a conditional format's, else its own, else its table's.
+  void FillCell(const draw::Rect& r, uint32_t row, uint32_t col, const Fill& own) {
+    const bool has = own.pattern != PatternType::None || own.gradient;
+    if (Looks()) {
+      const Look& lk = LookAt(row, col);
+      if (lk.cf && (lk.st.set & condfmt::Style::kFill)) {
+        const condfmt::Style& s = lk.st;
+        if (s.gradient) FillRect(r, *s.gradient);
+        else if (s.pattern == PatternType::Solid || (s.pattern == PatternType::None && s.fillColor))
+          p_.FillRect(r, draw::Brush::Solid(ToColor(s.fillColor)));
+        else if (s.pattern != PatternType::None)
+          p_.FillRect(r, draw::Brush::Solid(Mix(s.fillColor ? s.fillColor : 0xFFFFFFFF, s.patternColor, PatternShare(s.pattern))));
+        return;
+      }
+      if (!has && (lk.table.fill.pattern != PatternType::None || lk.table.fill.gradient)) {
+        FillRect(r, lk.table.fill);
+        return;
+      }
+    }
+    if (has) FillRect(r, own);
+  }
+  // A cell's borders: its own, its table's where it has none, a conditional format's over both.
+  Border BorderAt(uint32_t row, uint32_t col, const Border& own) {
+    if (!Looks()) return own;
+    const Look& lk = LookAt(row, col);
+    Border b = own;
+    const bool cf = lk.cf && (lk.st.set & condfmt::Style::kBorder);
+    auto side = [&](BorderSide& s, const BorderSide& table, const condfmt::Style::Side& over) {
+      if (s.style == BorderStyle::None && table.style != BorderStyle::None) s = table;
+      if (cf && over.style != BorderStyle::None) {
+        s.style = over.style;
+        s.color = Color{Color::Kind::Rgb, over.color ? over.color : 0xFF000000, 0};
+      }
+    };
+    side(b.left, lk.table.left, lk.st.left);
+    side(b.right, lk.table.right, lk.st.right);
+    side(b.top, lk.table.top, lk.st.top);
+    side(b.bottom, lk.table.bottom, lk.st.bottom);
+    return b;
+  }
+
+  // ---- Data bars and icons (conditional formats): over the fills, under the borders and text.
+  void BarsAndIcons() {
+    if (!o_.rules) return;
+    for (const RowData& rd : rows_)
+      for (uint32_t col : cols_) {
+        if (MergeAt(rd.row, col)) continue;
+        const Look& lk = LookAt(rd.row, col);
+        if (!lk.cf) continue;
+        const draw::Rect box = Inner(rd.row, col, rd.row, col);
+        if (lk.st.set & condfmt::Style::kBar) DrawBar(box, lk.st.bar);
+        if (lk.st.set & condfmt::Style::kIcon) DrawIcon(box, lk.st.iconSet, lk.st.icon);
+      }
+  }
+
+  void DrawBar(const draw::Rect& box, const condfmt::DataBar& bar) {
+    const float u = g_.px;
+    const float l = box.left + 2 * u, r = box.right - 2 * u, t = box.top + 2 * u, b = box.bottom - u;
+    if (r <= l || b <= t) return;
+    const float w = r - l;
+    auto at = [&](float f) { return bar.rightToLeft ? r - f * w : l + f * w; };
+    float x0 = at(bar.from), x1 = at(bar.to);
+    // The axis end: where the bar starts from.
+    const float base = x0;
+    if (x1 < x0) std::swap(x0, x1);
+    if (x1 > x0) {
+      const draw::Rect br{x0, t, x1, b};
+      if (bar.gradient) {
+        const float end = base == x0 ? x1 : x0;
+        p_.FillRect(br, draw::Brush::Linear({base, t}, {end, t},
+                                            {{0, ToColor(bar.fill)}, {1, Mix(bar.fill, 0xFFFFFFFF, 0.9f)}}));
+      } else {
+        p_.FillRect(br, draw::Brush::Solid(ToColor(bar.fill)));
+      }
+      if (bar.border) {
+        const draw::Color c = ToColor(bar.border);
+        const float L = std::max(g_.line * 0.75f, 0.5f);
+        Rect(x0, t, x1, t + L, c);
+        Rect(x0, b - L, x1, b, c);
+        Rect(x0, t, x0 + L, b, c);
+        Rect(x1 - L, t, x1, b, c);
+      }
+    }
+    if (bar.axis >= 0) {
+      // A dotted line between negative and positive values.
+      const float x = at(bar.axis), L = std::max(g_.line * 0.75f, 0.5f);
+      const draw::Color c = ToColor(bar.axisColor ? bar.axisColor : 0xFF000000);
+      for (float y = box.top; y < box.bottom; y += 2 * u) Rect(x - L / 2, y, x + L / 2, std::min(y + u, box.bottom), c);
+    }
+  }
+
+  // Excel's icons, drawn in a square: each set's shapes and colors, the lowest values' first.
+  void DrawIcon(const draw::Rect& box, condfmt::IconSet set, int i) {
+    using S = condfmt::IconSet;
+    constexpr uint32_t red = 0xFFE0443A, yellow = 0xFFEFBE29, green = 0xFF3E9E4F, gray = 0xFF8C8C8C,
+                       black = 0xFF404040, gold = 0xFFF0B323, blue = 0xFF4472C4, pink = 0xFFF09A9A;
+    char shape = 'o';
+    uint32_t color = gray;
+    int level = 0;
+    const uint32_t ryg[3] = {red, yellow, green};
+    switch (set) {
+      case S::Arrows3: shape = "v>^"[i % 3]; color = ryg[i % 3]; break;
+      case S::ArrowsGray3: shape = "v>^"[i % 3]; break;
+      case S::Arrows4: shape = "vn/^"[i % 4]; color = i == 0 ? red : i == 3 ? green : yellow; break;
+      case S::ArrowsGray4: shape = "vn/^"[i % 4]; break;
+      case S::Arrows5: shape = "vn>/^"[i % 5]; color = i == 0 ? red : i == 4 ? green : yellow; break;
+      case S::ArrowsGray5: shape = "vn>/^"[i % 5]; break;
+      case S::Flags3: shape = 'f'; color = ryg[i % 3]; break;
+      case S::TrafficLights3:
+      case S::TrafficLights3Rimmed: shape = 'o'; color = ryg[i % 3]; break;
+      case S::Signs3: shape = "dAo"[i % 3]; color = ryg[i % 3]; break;
+      case S::Symbols3: shape = "x!c"[i % 3]; color = ryg[i % 3]; break;
+      case S::Symbols3Plain: shape = "XIC"[i % 3]; color = ryg[i % 3]; break;
+      case S::Stars3: shape = '*'; color = gold; level = i; break;
+      case S::Triangles3: shape = "V-A"[i % 3]; color = ryg[i % 3]; break;
+      case S::RedToBlack4: shape = 'o'; color = i == 0 ? black : i == 1 ? gray : i == 2 ? pink : red; break;
+      case S::TrafficLights4: shape = 'o'; color = i == 0 ? black : ryg[(i - 1) % 3]; break;
+      case S::Rating4: shape = 'b'; color = blue; level = i + 1; break;
+      case S::Rating5: shape = 'b'; color = blue; level = i; break;
+      case S::Quarters5: shape = 'q'; color = black; level = i; break;
+      case S::Boxes5: shape = 'B'; color = blue; level = i; break;
+      default: return;
+    }
+    const float u = g_.px;
+    const float sz = std::min(box.bottom - box.top - 2 * u, 15 * u);
+    if (sz <= 2) return;
+    const float x = g_.rtl ? box.right - 2 * u - sz : box.left + 2 * u, y = box.bottom - u - sz;
+    const draw::Brush ink = draw::Brush::Solid(ToColor(color)), white = draw::Brush::Solid({1, 1, 1, 1});
+    const draw::Brush light = draw::Brush::Solid(ToColor(0xFFD9D9D9));
+    auto P = [&](float a, float b) { return draw::Point{x + a * sz, y + b * sz}; };
+    auto poly = [&](std::initializer_list<std::pair<float, float>> pts, float deg = 0) {
+      draw::Path path;
+      const double rad = deg * 3.14159265358979 / 180, c = std::cos(rad), s = std::sin(rad);
+      bool first = true;
+      for (auto [a, b] : pts) {
+        const float ra = static_cast<float>(0.5 + (a - 0.5) * c - (b - 0.5) * s);
+        const float rb = static_cast<float>(0.5 + (a - 0.5) * s + (b - 0.5) * c);
+        if (first) path.MoveTo(P(ra, rb));
+        else path.LineTo(P(ra, rb));
+        first = false;
+      }
+      path.Close();
+      return path;
+    };
+    auto stroke = [&](std::initializer_list<std::pair<float, float>> pts, const draw::Brush& b) {
+      draw::Path path;
+      bool first = true;
+      for (auto [a, c] : pts) {
+        if (first) path.MoveTo(P(a, c));
+        else path.LineTo(P(a, c));
+        first = false;
+      }
+      draw::Pen pen;
+      pen.brush = b;
+      pen.width = sz * 0.13f;
+      pen.cap = draw::LineCap::Round;
+      p_.StrokePath(path, pen);
+    };
+    auto circle = [&](const draw::Brush& b) { p_.FillPath(draw::Path::Ellipse({x, y, x + sz, y + sz}), b); };
+    auto arrow = [&](float deg) {
+      p_.FillPath(poly({{0.5f, 0.05f}, {0.95f, 0.5f}, {0.68f, 0.5f}, {0.68f, 0.95f}, {0.32f, 0.95f}, {0.32f, 0.5f}, {0.05f, 0.5f}}, deg), ink);
+    };
+    auto check = [&](const draw::Brush& b) { stroke({{0.27f, 0.52f}, {0.44f, 0.7f}, {0.75f, 0.32f}}, b); };
+    auto bang = [&](const draw::Brush& b) {
+      p_.FillRect({x + 0.44f * sz, y + 0.18f * sz, x + 0.56f * sz, y + 0.6f * sz}, b);
+      p_.FillRect({x + 0.44f * sz, y + 0.7f * sz, x + 0.56f * sz, y + 0.82f * sz}, b);
+    };
+    auto cross = [&](const draw::Brush& b) {
+      stroke({{0.32f, 0.32f}, {0.68f, 0.68f}}, b);
+      stroke({{0.68f, 0.32f}, {0.32f, 0.68f}}, b);
+    };
+    switch (shape) {
+      case '^': arrow(0); break;
+      case '/': arrow(45); break;
+      case '>': arrow(90); break;
+      case 'n': arrow(135); break;
+      case 'v': arrow(180); break;
+      case 'o': circle(ink); break;
+      case 'f':
+        p_.FillRect({x + 0.15f * sz, y + 0.05f * sz, x + 0.24f * sz, y + 0.95f * sz}, draw::Brush::Solid(ToColor(black)));
+        p_.FillPath(poly({{0.24f, 0.07f}, {0.9f, 0.3f}, {0.24f, 0.53f}}), ink);
+        break;
+      case 'd': p_.FillPath(poly({{0.5f, 0.05f}, {0.95f, 0.5f}, {0.5f, 0.95f}, {0.05f, 0.5f}}), ink); break;
+      case 'A': p_.FillPath(poly({{0.5f, 0.1f}, {0.95f, 0.88f}, {0.05f, 0.88f}}), ink); break;
+      case 'V': p_.FillPath(poly({{0.05f, 0.12f}, {0.95f, 0.12f}, {0.5f, 0.9f}}), ink); break;
+      case '-': p_.FillRect({x + 0.15f * sz, y + 0.4f * sz, x + 0.85f * sz, y + 0.6f * sz}, ink); break;
+      case 'c': circle(ink); check(white); break;
+      case '!': circle(ink); bang(white); break;
+      case 'x': circle(ink); cross(white); break;
+      case 'C': check(ink); break;
+      case 'I': bang(ink); break;
+      case 'X': cross(ink); break;
+      case '*': {
+        std::vector<std::pair<float, float>> pts;
+        for (int k = 0; k < 10; ++k) {
+          const double a = (k * 36 - 90) * 3.14159265358979 / 180, rr = k % 2 ? 0.2 : 0.48;
+          pts.push_back({static_cast<float>(0.5 + rr * std::cos(a)), static_cast<float>(0.54 + rr * std::sin(a))});
+        }
+        draw::Path star;
+        star.MoveTo(P(pts[0].first, pts[0].second));
+        for (size_t k = 1; k < pts.size(); ++k) star.LineTo(P(pts[k].first, pts[k].second));
+        star.Close();
+        if (level >= 2) {
+          p_.FillPath(star, ink);
+        } else {
+          p_.FillPath(star, light);
+          if (level == 1) {
+            p_.Save();
+            p_.ClipRect({x, y, x + sz / 2, y + sz});
+            p_.FillPath(star, ink);
+            p_.Restore();
+          }
+        }
+        break;
+      }
+      case 'b':
+        for (int k = 0; k < 4; ++k) {
+          const float h = 0.25f + 0.2f * k;
+          p_.FillRect({x + (0.08f + 0.23f * k) * sz, y + (0.95f - h) * sz, x + (0.26f + 0.23f * k) * sz, y + 0.95f * sz},
+                      k < level ? ink : light);
+        }
+        break;
+      case 'q': {
+        p_.FillPath(draw::Path::Ellipse({x, y, x + sz, y + sz}), ink);
+        p_.FillPath(draw::Path::Ellipse({x + 0.1f * sz, y + 0.1f * sz, x + 0.9f * sz, y + 0.9f * sz}), white);
+        if (level >= 4) {
+          p_.FillPath(draw::Path::Ellipse({x + 0.1f * sz, y + 0.1f * sz, x + 0.9f * sz, y + 0.9f * sz}), ink);
+        } else if (level > 0) {
+          const double a = (level * 90 - 90) * 3.14159265358979 / 180;
+          draw::Path pie;
+          pie.MoveTo(P(0.5f, 0.5f));
+          pie.LineTo(P(0.5f, 0.1f));
+          pie.ArcTo(P(static_cast<float>(0.5 + 0.4 * std::cos(a)), static_cast<float>(0.5 + 0.4 * std::sin(a))), 0.4f * sz,
+                    0.4f * sz, 0, level > 2, true);
+          pie.Close();
+          p_.FillPath(pie, ink);
+        }
+        break;
+      }
+      case 'B':
+        for (int k = 0; k < 4; ++k) {
+          const float bx = (k % 2) * 0.48f + 0.05f, by = (k / 2) * 0.48f + 0.05f;
+          p_.FillRect({x + bx * sz, y + by * sz, x + (bx + 0.42f) * sz, y + (by + 0.42f) * sz}, k < level ? ink : light);
+        }
+        break;
+      default: break;
+    }
+  }
+
   // ---- Helpers
   const Range* MergeAt(uint32_t r, uint32_t c) const {
     for (const Range* m : merges_)
@@ -158,6 +460,10 @@ class Painting {
     else rgt -= g_.line;
     return {l, g_.Top(r0), rgt, g_.Bottom(r1) - g_.line};
   }
+  // The text's pads at the cell's left and right: the start's at the left in a left-to-right
+  // sheet, at the right otherwise.
+  float PadL() const { return g_.rtl ? g_.padEnd : g_.padStart; }
+  float PadR() const { return g_.rtl ? g_.padStart : g_.padEnd; }
   draw::Rect Outer(uint32_t r0, uint32_t c0, uint32_t r1, uint32_t c1) const {
     return {std::min(g_.Left(c0), g_.Left(c1)), g_.Top(r0), std::max(g_.Right(c0), g_.Right(c1)), g_.Bottom(r1)};
   }
@@ -196,8 +502,9 @@ class Painting {
       int widthPx = 0;
       for (uint32_t c = m->firstCol; c <= m->lastCol; ++c) widthPx += grid_.ColWidth(c);
       widthPx = static_cast<int>(std::lround(widthPx * g_.widthScale));
-      if (widthPx == 0) continue;
-      const CellText::Layout& l = text_.Get(sheet_, cell, widthPx);
+      if (widthPx == 0 || HideValue(m->firstRow, m->firstCol)) continue;
+      const CellText::Layout& l =
+          text_.Get(sheet_, cell, widthPx, TextLookAt(m->firstRow, m->firstCol, styles_.CellXf(cell.style)));
       const Xf& xf = styles_.CellXf(cell.style);
       Item it{&l, Inner(m->firstRow, m->firstCol, m->lastRow, m->lastCol), {}, 0, &xf};
       it.clip = it.box;
@@ -215,18 +522,20 @@ class Painting {
   // The text's left edge in `box` for its alignment (for one line; wrapped lines align inside).
   float AlignX(const CellText::Layout& l, const Xf& xf, const draw::Rect& box) const {
     const float w = l.width * g_.pt, indent = Indent(xf);
-    if (l.wrapped) return box.left + g_.padStart + (l.align == HAlign::Right ? 0 : indent);
+    if (l.wrapped) return box.left + PadL() + (l.align == HAlign::Right ? 0 : indent);
     switch (l.align) {
-      case HAlign::Right: return box.right - g_.padEnd - indent - w;
+      case HAlign::Right: return box.right - PadR() - indent - w;
       case HAlign::Center:
       case HAlign::CenterContinuous: return (box.left + box.right - w) / 2;
-      default: return box.left + g_.padStart + indent;
+      default: return box.left + PadL() + indent;
     }
   }
 
   void PlaceCell(RowData& rd, const CellInfo& cell) {
     const int widthPx = static_cast<int>(std::lround(grid_.ColWidth(cell.col) * g_.widthScale));
-    const CellText::Layout& l = text_.Get(sheet_, cell, widthPx);
+    if (HideValue(cell.row, cell.col)) return;
+    const CellText::Layout& l =
+        text_.Get(sheet_, cell, widthPx, TextLookAt(cell.row, cell.col, styles_.CellXf(cell.style)));
     if (l.lines.empty()) return;
     const Xf& xf = styles_.CellXf(cell.style);
     Item it{&l, Inner(cell.row, cell.col, cell.row, cell.col), {}, 0, &xf};
@@ -313,10 +622,10 @@ class Painting {
       const float bh = static_cast<float>(w * std::fabs(std::sin(rad)) + h * std::fabs(std::cos(rad)));
       float cx;
       switch (l.align) {
-        case HAlign::Right: cx = it.box.right - g_.padEnd - bw / 2; break;
+        case HAlign::Right: cx = it.box.right - PadR() - bw / 2; break;
         case HAlign::Center:
         case HAlign::CenterContinuous: cx = (it.box.left + it.box.right) / 2; break;
-        default: cx = it.box.left + g_.padStart + bw / 2; break;
+        default: cx = it.box.left + PadL() + bw / 2; break;
       }
       float cy;
       switch (al.vertical) {
@@ -351,7 +660,7 @@ class Painting {
     if (scale != 1 && !l.wrapped) {
       const float w = l.width * s * scale;
       switch (l.align) {
-        case HAlign::Right: x = it.box.right - g_.padEnd - w; break;
+        case HAlign::Right: x = it.box.right - PadR() - w; break;
         case HAlign::Center:
         case HAlign::CenterContinuous: x = (it.box.left + it.box.right - w) / 2; break;
         default: break;
@@ -364,7 +673,7 @@ class Painting {
       const int times = std::clamp(static_cast<int>((it.box.right - it.box.left - g_.padStart - g_.padEnd) / w), 1, 256);
       for (int i = 0; i < times; ++i) {
         p_.Save();
-        p_.Transform(draw::Matrix::Scale(s, s) * draw::Matrix::Translate(it.box.left + g_.padStart + i * w, baseline));
+        p_.Transform(draw::Matrix::Scale(s, s) * draw::Matrix::Translate(it.box.left + PadL() + i * w, baseline));
         DrawLines(l, 0, pitchText);
         p_.Restore();
       }
@@ -512,14 +821,13 @@ class Painting {
         const uint32_t col = cols_[i];
         if (MergeAt(rd.row, col)) continue;
         const Fill& f = styles_.FillOf(styles_.CellXf(StyleAt(rd, i)));
-        if (f.pattern == PatternType::None && !f.gradient) continue;
-        FillRect(Outer(rd.row, col, rd.row, col), f);
+        if (f.pattern == PatternType::None && !f.gradient && !Looks()) continue;
+        FillCell(Outer(rd.row, col, rd.row, col), rd.row, col, f);
       }
     }
     for (const Range* m : merges_) {
       const Fill& f = styles_.FillOf(styles_.CellXf(sheet_.StyleAt(m->firstRow, m->firstCol)));
-      const draw::Rect r = Outer(m->firstRow, m->firstCol, m->lastRow, m->lastCol);
-      if (f.pattern != PatternType::None || f.gradient) FillRect(r, f);
+      FillCell(Outer(m->firstRow, m->firstCol, m->lastRow, m->lastCol), m->firstRow, m->firstCol, f);
     }
   }
 
@@ -541,7 +849,7 @@ class Painting {
     for (const RowData& rd : rows_) {
       for (size_t i = 0; i < cols_.size(); ++i) {
         const uint32_t col = cols_[i];
-        const Border& b = styles_.BorderOf(styles_.CellXf(StyleAt(rd, i)));
+        const Border b = BorderAt(rd.row, col, styles_.BorderOf(styles_.CellXf(StyleAt(rd, i))));
         const Range* m = MergeAt(rd.row, col);
         const bool top = !m || rd.row == m->firstRow, bottom = !m || rd.row == m->lastRow;
         const bool first = !m || col == m->firstCol, last = !m || col == m->lastCol;
@@ -672,29 +980,10 @@ class Painting {
   std::vector<const Range*> merges_;
   std::vector<Item> items_;
   uint32_t reachFirst_ = 0, reachLast_ = 0;
+  std::unordered_map<uint64_t, Look> looks_;
 };
 
 }  // namespace
-
-namespace {
-OverlayFn& OverlaySlot() {
-  static OverlayFn fn;
-  return fn;
-}
-}  // namespace
-
-void SetOverlay(OverlayFn fn) { OverlaySlot() = std::move(fn); }
-const OverlayFn& Overlay() { return OverlaySlot(); }
-
-namespace {
-OverlayExtentFn& ExtentSlot() {
-  static OverlayExtentFn fn;
-  return fn;
-}
-}  // namespace
-
-void SetOverlayExtent(OverlayExtentFn fn) { ExtentSlot() = std::move(fn); }
-const OverlayExtentFn& OverlayExtent() { return ExtentSlot(); }
 
 void PaintCells(draw::Painter& p, const Sheet& sheet, CellText& text, const Grid& grid, const Geometry& g,
                 const Range& area, const PaintOptions& options) {

@@ -11,6 +11,10 @@
 #include "sheet/view/Grid.h"
 #include "text/LineLayout.h"
 
+namespace fw::text {
+class Face;
+}
+
 // What a cell shows, and its text laid out (plan §7.3 "Grid view"): the value through its number
 // format at the column's width ("####" when a number doesn't fit), the font, the alignment Excel
 // resolves General to, and the lines fwtext lays out, cached by cell.
@@ -28,12 +32,22 @@ struct Shown {
   bool fill = false;      // a repeated character fills the cell (`*x`): never runs into the next
 };
 
+// What a table's style and conditional formats change in a cell's text, over its own format.
+struct TextLook {
+  uint32_t fontColor = 0;      // ARGB; 0: the cell's own
+  bool colorWins = false;      // over the number format's color ([Red]): a conditional format's
+  int8_t bold = -1, italic = -1, strike = -1;  // -1: the cell's own
+  int8_t underline = -1;       // an Underline; -1: the cell's own
+  const NumberFormat* numFmt = nullptr;  // shown in this format instead
+  bool operator==(const TextLook&) const = default;
+};
+
 class CellText {
  public:
   CellText(const Workbook& book, text::Fonts& fonts, FontMeasure& measure, const NumLocale& locale);
 
   // The cell's value as shown in `widthPx` (its column, or merged area), in its own format.
-  void Show(const Sheet& sheet, const CellInfo& cell, int widthPx, Shown& out);
+  void Show(const Sheet& sheet, const CellInfo& cell, int widthPx, Shown& out, const NumberFormat* format = nullptr);
   // A value shown with no width limit: copying, find. Empty for an empty cell.
   std::wstring Text(const Sheet& sheet, const CellInfo& cell);
   const NumberFormat& FormatOf(uint32_t numFmtId);
@@ -59,15 +73,29 @@ class CellText {
     float ascent = 10.5f, descent = 3;  // the first line's, as Excel places it (GDI pixels as points)
     float size = 11;       // the font size, points
     int widthPx = -1;      // the width it was made for
+    TextLook look;         // and the look
     bool wrapped = false, stacked = false;
   };
   // The layout for a cell `widthPx` wide (wrapped text breaks inside it), made or from the cache.
-  const Layout& Get(const Sheet& sheet, const CellInfo& cell, int widthPx);
+  const Layout& Get(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look = {});
   // Forgets the cache: another sheet, recalculated values, other column widths.
   void Clear() { cache_.clear(); }
 
  private:
-  void Make(const Sheet& sheet, const CellInfo& cell, int widthPx, Layout& out);
+  void Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look, Layout& out);
+  // Most cells' text is one line of Latin characters in one font. Cells ask for no kerning or
+  // ligatures, so shaping it is each character's glyph and advance: a table per face has them,
+  // where text::Layout's analysis and shaping cost ten times as much. False (nothing done) for
+  // other characters and for a glyph the font lacks.
+  bool LayOutSimple(std::wstring_view s, const text::TextStyle& style, Layout& out);
+  struct Glyphs {  // U+0020 to U+00FF: glyph ids (0: missing) and advances per point
+    std::wstring family;
+    bool bold = false, italic = false;
+    const text::Face* face = nullptr;
+    uint16_t id[224] = {};
+    float advance[224] = {};
+  };
+  std::vector<std::unique_ptr<Glyphs>> glyphs_;
   const Workbook& book_;
   text::Fonts& fonts_;
   FontMeasure& measure_;

@@ -207,6 +207,64 @@ TEST(SheetNumFmt_Locale) {
   CHECK(!user.decimal.empty() && !user.month[0].empty() && !user.builtin[14].empty());
 }
 
+namespace {
+struct LocalCase {
+  double value;
+  const wchar_t* code;
+  const wchar_t* text;  // "!error": #VALUE!
+};
+const LocalCase kLocalCases[] = {
+#include "sheet_text_local_table.inc"
+};
+}  // namespace
+
+// TEXT()'s codes as the region types them: every case of tests/sheet/excel_text_local.py against
+// what en-NL Excel calculated.
+TEST(SheetNumFmt_TextLocal) {
+  int failures = 0;
+  FormatContext ctx;
+  ctx.locale = &EnNlLocale();
+  for (const LocalCase& c : kLocalCases) {
+    NumberFormat f;
+    Formatted out;
+    const bool read = NumberFormat::FromLocal(c.code, EnNlLocale(), f);
+    if (read) f.Format(c.value, ctx, out);
+    const bool error = !read || out.overflow;
+    const bool ok = std::wstring_view(c.text) == L"!error" ? error : !error && out.text == c.text;
+    if (!ok && ++failures <= 40)
+      std::printf("  %s [%.17g]: want '%s' got '%s'\n", Narrow(c.code).c_str(), c.value, Narrow(c.text).c_str(),
+                  read ? Narrow(out.text).c_str() : "(refused)");
+  }
+  std::printf("  %d of %zu cases differ\n", failures, std::size(kLocalCases));
+  CHECK_EQ(failures, 0);
+  // As Excel stores them (its own escapes aside).
+  std::wstring inv;
+  CHECK(NumberFormat::LocalToInvariant(L"#.##0,00;[Red]-#.##0,00", EnNlLocale(), inv) && inv == L"#,##0.00;[Red]-#,##0.00");
+  CHECK(NumberFormat::LocalToInvariant(L"dd-mm-jjjj uu:mm:ss,00", EnNlLocale(), inv) && inv == L"dd-mm-yyyy hh:mm:ss.00");
+  CHECK(NumberFormat::LocalToInvariant(L"[uu]:mm;Standaard;\"j,u\"", EnNlLocale(), inv) && inv == L"[hh]:mm;General;\"j,u\"");
+  CHECK(NumberFormat::LocalToInvariant(L"[<1234,5]0,0", EnNlLocale(), inv) && inv == L"[<1234.5]0.0");
+  CHECK(!NumberFormat::LocalToInvariant(L"[h]:mm", EnNlLocale(), inv) && inv.empty());
+  // en-US types the invariant codes.
+  CHECK(NumberFormat::LocalToInvariant(L"yyyy h:mm #,##0.00 General", EnUsLocale(), inv) &&
+        inv == L"yyyy h:mm #,##0.00 General");
+}
+
+// A locale tag by name reads that language's names (it was read as hex: "en-US" became 0xE, Hungarian).
+TEST(SheetNumFmt_NamedLocaleTag) {
+  FormatContext ctx;
+  ctx.locale = &EnNlLocale();
+  Formatted out;
+  NumberFormat(L"[$-en-US]d-mmm-yyyy").Format(45678, ctx, out);
+  CHECK(out.text == L"21-Jan-2025");
+  NumberFormat(L"[$-409]d-mmm-yyyy").Format(45678, ctx, out);
+  CHECK(out.text == L"21-Jan-2025");
+  NumberFormat(L"[$-de-DE]mmmm").Format(45717, ctx, out);
+  CHECK(out.text == L"März");
+  NumberFormat(L"[$€-nl-NL]#,##0.00").Format(1.5, ctx, out);
+  CHECK(out.text == L"€1,50");
+  CHECK(LcidFromName(L"en-US") == 0x409 && LcidFromName(L"nl-NL") == 0x413 && LcidFromName(L"zz-ZZ") == 0);
+}
+
 TEST(SheetNumFmt_Robust) {
   // Codes Excel would refuse are read as literally as possible, without crashing.
   const wchar_t* codes[] = {L"[", L"\"", L"\\", L"_", L"*", L"[$", L"[>", L"[<=abc]0", L"0.0.0", L"E+", L"0E+",

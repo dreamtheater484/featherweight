@@ -74,6 +74,11 @@ FORMULAS = [
     "PAGEREF Intro \\h",
     "HYPERLINK \"https://example.com/\" \\l \"Intro\"",
     "#_x0000_t75",
+    "_xlfn.LET(_xlpm.x,A1:A5,_xlpm.y,_xlpm.x*2,SUM(_xlpm.y)+LET(x,1,x))",
+    "_xlfn._xlws.SORT(_xlfn.UNIQUE(_xlfn._xlws.FILTER(A1:B9,B1:B9>0,\"none\")),{2,1},{1,-1})",
+    "_xlfn.SEQUENCE(3,2,10,-0.5)+_xlfn.ANCHORARRAY(C1)",
+    "_xlfn.UNIQUE(A1:C9,TRUE,TRUE)",
+    "Table1[[#Headers],[#Data],[Qty]:[Price]]",
 ]
 
 
