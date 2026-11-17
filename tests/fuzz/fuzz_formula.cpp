@@ -13,6 +13,7 @@
 #include "sheet/calc/Engine.h"
 #include "sheet/calc/Entry.h"
 #include "sheet/calc/Typing.h"
+#include "sheet/edit/Edit.h"
 
 using namespace fw::pkg;
 namespace calc = fw::sheet::calc;
@@ -134,6 +135,17 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       e.rows = k % 2 == 0, e.at = 1 + k, e.count = k < 2 ? 2 : -2;
       if (k == 3) e.band1 = 0, e.band2 = 2;
       calc::ShiftReferences(formula, from, e, *engine);
+    }
+    fw::sheet::edit::Shift cells;  // the editor's form: cells A2:C3 deleted, moving up
+    cells.at = 1, cells.count = -2, cells.band = fw::sheet::Range{1, 0, 2, 2};
+    calc::ShiftReferences(formula, from, 0, cells, *engine);
+    // Sheets moved or deleted: what's printed compiles again.
+    static const std::vector<std::string> sheets{"Sheet1", "Sheet 2", "Sheet3"};
+    for (int k = 0; k < 4; ++k) {
+      std::string after = calc::SheetsChanged(formula, from, sheets, k % 3, k == 3 ? -1 : 2 - k);
+      std::vector<std::string> left = sheets;
+      if (k == 3) left.erase(left.begin());
+      calc::SheetsChanged(after, from, left, 0, -1);
     }
   }
 

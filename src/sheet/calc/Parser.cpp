@@ -369,7 +369,13 @@ class Parser {
       size_t len = 0;
       Err e = ParseErr(s_.substr(i_), &len);
       if (e == Err::None) return Fail("unknown error value");
+      size_t start = i_;
       i_ += len;
+      if (e == Err::Ref && RefErrTail()) {  // #REF!A1: a reference to a deleted sheet, as Excel writes it
+        Op(kExtern);
+        PutStr(s_.substr(start, i_ - start));
+        return true;
+      }
       Op(kErr);
       Op(static_cast<uint8_t>(e));
       return true;
@@ -610,6 +616,24 @@ class Parser {
       return true;
     }
     return false;
+  }
+
+  // After a #REF! operand: the reference that follows it right away (#REF!A1, #REF!$A$1:B2, R1C1's
+  // #REF!R[-1]C); true when there is one, i_ past it.
+  bool RefErrTail() {
+    size_t k = i_, n = s_.size();
+    int bracket = 0;
+    while (k < n) {
+      char c = s_[k];
+      bool alnum = IsDigit(c) || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+      if (c == '[') ++bracket;
+      else if (c == ']' && bracket > 0) --bracket;
+      else if (!alnum && c != '$' && c != ':' && !(c == '-' && bracket > 0)) break;
+      ++k;
+    }
+    if (k == i_ || bracket) return false;
+    i_ = k;
+    return true;
   }
 
   // After "Sheet!" (i_ past the "!"): the reference or name on that sheet.

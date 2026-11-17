@@ -147,9 +147,15 @@ class Printer {
   std::string Sheets(const uint8_t* p, uint8_t flags) const {
     if (!(flags & kSheet)) return {};
     int s1 = Read<uint16_t>(p);
+    int s2 = (flags & kSheet3D) ? Read<uint16_t>(p + 2) : s1;
+    if (how_.map) {
+      if (!how_.map->MapSheets(s1, s2)) return "#REF!";
+      if (s1 == s2) flags = static_cast<uint8_t>(flags & ~kSheet3D);
+      else flags |= kSheet3D;
+    }
     std::string a = names_.SheetName(s1);
     if (flags & kSheet3D) {
-      std::string b = names_.SheetName(Read<uint16_t>(p + 2));
+      std::string b = names_.SheetName(s2);
       bool quote = pkg::QuoteSheetName(a) != a || pkg::QuoteSheetName(b) != b;
       return (quote ? pkg::QuoteSheetName(a + ":" + b) : a + ":" + b) + "!";
     }

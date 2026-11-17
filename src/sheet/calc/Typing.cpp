@@ -2,6 +2,8 @@
 
 #include "sheet/calc/Typing.h"
 
+#include "sheet/edit/Edit.h"
+
 #include <algorithm>
 #include <cwctype>
 
@@ -543,6 +545,89 @@ std::string ShiftReferences(std::string_view formula, const CompileOptions& at, 
   PrintOptions how;
   how.map = &map;
   return Print(*f, to, names, how);
+}
+
+std::string ShiftReferences(std::string_view formula, const CompileOptions& at, int editedSheet, const edit::Shift& shift,
+                            Names& names, CompileOptions* moved) {
+  StructuralEdit e;
+  e.sheet = editedSheet;
+  e.rows = shift.axis == edit::Shift::Axis::Rows;
+  e.at = static_cast<int32_t>(shift.at);
+  e.count = shift.count;
+  const uint32_t b1 = e.rows ? shift.band.firstCol : shift.band.firstRow;
+  const uint32_t b2 = e.rows ? shift.band.lastCol : shift.band.lastRow;
+  if (b1 != 0 || b2 < (e.rows ? fw::sheet::kMaxCols : fw::sheet::kMaxRows) - 1)
+    e.band1 = static_cast<int32_t>(b1), e.band2 = static_cast<int32_t>(b2);
+  return ShiftReferences(formula, at, e, names, moved);
+}
+
+namespace {
+
+// The sheets before the edit, and defined names by text (they only need to print back).
+class SheetList : public Names {
+ public:
+  explicit SheetList(const std::vector<std::string>& sheets) : sheets_(sheets) {}
+  int FindSheet(std::string_view name) const override {
+    for (size_t i = 0; i < sheets_.size(); ++i)
+      if (NameEqualsNoCase(sheets_[i], name)) return static_cast<int>(i);
+    return -1;
+  }
+  std::string SheetName(int sheet) const override {
+    return sheet >= 0 && static_cast<size_t>(sheet) < sheets_.size() ? sheets_[static_cast<size_t>(sheet)] : std::string();
+  }
+  uint32_t NameSlot(std::string_view name) override {
+    for (size_t i = 0; i < names_.size(); ++i)
+      if (NameEqualsNoCase(names_[i], name)) return static_cast<uint32_t>(i);
+    names_.emplace_back(name);
+    return static_cast<uint32_t>(names_.size() - 1);
+  }
+  std::string SlotName(uint32_t slot) const override { return slot < names_.size() ? names_[slot] : std::string(); }
+
+ private:
+  const std::vector<std::string>& sheets_;
+  std::vector<std::string> names_;
+};
+
+// Sheet indexes stay those before the edit (the text has names): only which sheets a prefix names.
+class SheetMap : public RefMap {
+ public:
+  SheetMap(int sheet, int to) : sheet_(sheet), to_(to) {}
+  bool Map(int, int32_t&, int32_t&, int32_t&, int32_t&, uint8_t, bool, bool) const override { return true; }
+  bool MapSheets(int& s1, int& s2) const override {
+    if (to_ < 0) {  // deleted
+      if (s1 == sheet_ && s2 == sheet_) return false;
+      if (s1 == sheet_) ++s1;
+      else if (s2 == sheet_) --s2;
+      return true;
+    }
+    if (s1 != s2 && Position(s1) > Position(s2)) {  // an end moved past the other
+      if (s1 == sheet_) ++s1;
+      else if (s2 == sheet_) --s2;
+    }
+    return true;
+  }
+
+ private:
+  int Position(int i) const {
+    if (i == sheet_) return to_;
+    int j = i > sheet_ ? i - 1 : i;
+    return j >= to_ ? j + 1 : j;
+  }
+  int sheet_, to_;
+};
+
+}  // namespace
+
+std::string SheetsChanged(std::string_view formula, const CompileOptions& at, const std::vector<std::string>& sheets,
+                          int sheet, int to) {
+  if (sheet < 0 || static_cast<size_t>(sheet) >= sheets.size() || to == sheet) return std::string(formula);
+  SheetList names(sheets);
+  auto f = Compile(formula, at, names);
+  if (!f) return std::string(formula);
+  SheetMap map(sheet, to);
+  PrintOptions how;
+  how.map = &map;
+  return Print(*f, at, names, how);
 }
 
 }  // namespace fw::sheet::calc

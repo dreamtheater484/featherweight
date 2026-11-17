@@ -73,6 +73,12 @@ class RefMap {
   enum Abs : uint8_t { kRow1 = 1, kCol1 = 2, kRow2 = 4, kCol2 = 8 };
   virtual bool Map(int sheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t abs, bool wholeRows,
                    bool wholeCols) const = 0;
+  // A sheet prefix's sheets (first and last; the same for one sheet): changed, or false when it's
+  // gone (#REF!A1).
+  virtual bool MapSheets(int& s1, int& s2) const {
+    (void)s1, (void)s2;
+    return true;
+  }
 };
 
 struct PrintOptions {
