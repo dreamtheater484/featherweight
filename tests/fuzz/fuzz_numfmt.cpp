@@ -22,6 +22,7 @@ void Check(const Formatted& f) {
     return;
   }
   if (f.fill < -1 || f.fill > static_cast<int>(f.text.size())) std::abort();
+  if (static_cast<size_t>(f.generalAt) + f.generalLength > f.text.size()) std::abort();
   uint32_t last = 0;
   for (size_t k = 0; k < f.pads.size(); ++k) {
     const auto& p = f.pads[k];

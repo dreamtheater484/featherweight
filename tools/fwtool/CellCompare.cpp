@@ -4,9 +4,10 @@
 // (Range.Text). Here each workbook is read into the model and each of those cells formatted with
 // the number-format engine, in the locale Excel recorded, then compared.
 //
-// The 99 % target counts the visible cells. Two kinds of difference depend on the column width,
-// which the grid measures (s1-grid): "####" and General shortened to fit a narrow column. Until a
-// width measure is plugged in (FitsCell below), they're counted on their own. A `*` fill matches
+// The 99 % target counts the visible cells. Two kinds of difference depend on the column width:
+// "####" and General shortened to fit a narrow column. A number is also shown as the grid shows it
+// (s1-grid's CellText at the column's width, the installed fonts measured as Excel measures them),
+// and those cases are counted apart as well (widthSame, widthOnly). A `*` fill matches
 // when Excel's text is ours with the fill character repeated at that place. A formula without a
 // cached value needs the engine to show anything, so it's counted apart too.
 #include <cstdio>
@@ -18,11 +19,16 @@
 #include "Common.h"
 #include "core/Json.h"
 #include "core/Strings.h"
+#include "sheet/calc/Bind.h"
+#include "sheet/condfmt/CondFormat.h"
 #include "sheet/model/Sheet.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/numfmt/NumFormat.h"
 #include "sheet/numfmt/NumLocale.h"
+#include "sheet/view/CellText.h"
+#include "sheet/view/Grid.h"
 #include "sheet/xlsx/Xlsx.h"
+#include "text/Fonts.h"
 
 namespace fwtool {
 
@@ -37,13 +43,14 @@ struct Counts {
   size_t cells = 0;          // visible cells compared (the target's denominator)
   size_t same = 0;           // ... showing Excel's text
   size_t fillSame = 0;       // ... of which matched with a `*` fill
-  size_t widthOnly = 0;      // different only in what the column width decides ("####", General shortened)
+  size_t widthSame = 0;      // ... of which the column's width decides ("####", General shortened), as the grid measures it
+  size_t widthOnly = 0;      // different where the column's width decides
   size_t hidden = 0;         // in hidden rows or columns: not compared
   size_t uncalculated = 0;   // formulas without a cached value: not compared
   size_t missing = 0;        // in Excel's cells file but not in the model
   size_t recalculated = 0;   // formulas Excel recalculated on opening (volatile, stale): not compared
   void Add(const Counts& o) {
-    cells += o.cells; same += o.same; fillSame += o.fillSame; widthOnly += o.widthOnly; hidden += o.hidden;
+    cells += o.cells; same += o.same; fillSame += o.fillSame; widthSame += o.widthSame; widthOnly += o.widthOnly; hidden += o.hidden;
     uncalculated += o.uncalculated; missing += o.missing; recalculated += o.recalculated;
   }
 };
@@ -174,6 +181,26 @@ bool GeneralShortened(const sh::CellInfo& cell, const std::string& code, std::st
          excel.size() < ours.size();
 }
 
+// The cell as the grid shows it in its column (or merged area): "####" and General shortened to
+// fit, measured with the installed fonts as Excel measures them. Pads are spaces, as Range.Text has.
+std::string ShownAtWidth(const sh::Sheet& sheet, const sh::CellInfo& cell, const sh::view::Grid* grid,
+                         sh::view::CellText& text, const sh::NumberFormat* format, bool& overflow) {
+  int width = 0;
+  if (!grid) {
+    width = 0;  // any width
+  } else if (const sh::Range* m = sheet.MergeAt(cell.row, cell.col)) {
+    for (uint32_t c = m->firstCol; c <= m->lastCol; ++c) width += grid->ColWidth(c);
+  } else {
+    width = grid->ColWidth(cell.col);
+  }
+  sh::view::Shown shown;
+  text.Show(sheet, cell, width, shown, format);
+  overflow = shown.overflow;
+  for (size_t i = 0; i < shown.text.size() && i < shown.hidden.size(); ++i)
+    if (shown.hidden[i]) shown.text[i] = L' ';
+  return fw::WideToUtf8(shown.text);
+}
+
 struct WorkbookResult {
   std::string source, error;
   Counts counts;
@@ -197,6 +224,11 @@ WorkbookResult CompareWorkbook(const std::filesystem::path& file, const JsonValu
   std::map<uint32_t, sh::NumberFormat> formats;
   const JsonValue* sheets = cells.Find("sheets");
   if (!sheets) return result;
+  // Widths as the grid has them (s1-grid's fwsheetrender), for what the column's width decides.
+  static fw::text::Fonts fonts;
+  sh::view::FontMeasure measure(fonts);
+  sh::view::CellText text(*book, fonts, measure, locale);
+  std::unique_ptr<sh::calc::WorkbookCalc> calc;  // for conditional formats' expressions
   for (const JsonValue& s : sheets->array) {
     if (s.StringOr("kind") != "worksheet") continue;
     std::string name = s.StringOr("name");
@@ -208,6 +240,23 @@ WorkbookResult CompareWorkbook(const std::filesystem::path& file, const JsonValu
       continue;
     }
     const sh::Sheet& sheet = book->GetSheet(static_cast<size_t>(index));
+    sh::view::Grid grid;
+    grid.Build(sheet, book->GetStyles(), measure);
+    // As the grid shows them: zeros hidden by the sheet's view, and conditional formats that hide
+    // the value (data bars, icon sets) or give it their number format.
+    const bool showZeros = sheet.Views().empty() || sheet.Views()[0].showZeros;
+    std::unique_ptr<sh::condfmt::SheetRules> rules;
+    if (sheet.KeptXml().find("conditionalFormatting") != std::string::npos) {
+      if (!calc) {
+        calc = std::make_unique<sh::calc::WorkbookCalc>(*book, &locale);
+        calc->Load();
+      }
+      sh::condfmt::Options o;
+      o.locale = &locale;
+      o.calc = calc.get();
+      rules = std::make_unique<sh::condfmt::SheetRules>(*book, static_cast<size_t>(index), o);
+      if (rules->Empty()) rules.reset();
+    }
     std::set<uint32_t> hiddenRows = Runs(s.Find("hiddenRows"), false), hiddenCols = Runs(s.Find("hiddenColumns"), true);
     // Formulas whose value Excel changed on opening (volatile ones, stale caches): what it shows
     // isn't the cached value, so the text can't be compared before the engine runs.
@@ -244,15 +293,37 @@ WorkbookResult CompareWorkbook(const std::filesystem::path& file, const JsonValu
       wchar_t fillChar = 0;
       std::string code;
       std::string ours = Show(info, *book, ctx, locale, formats, fillAt, fillChar, code);
-      if (ours == excel) {
+      const bool number = info.value.type == sh::ValueType::Number;
+      sh::condfmt::Style cf;
+      const bool ruled = rules && rules->At(r.firstRow, r.firstCol, cf);
+      const sh::NumberFormat* cfFormat = ruled && (cf.set & sh::condfmt::Style::kNumFmt) ? cf.numFmt : nullptr;
+      bool overflow = false;
+      const bool hidden =
+          (ruled && (cf.set & sh::condfmt::Style::kHideValue)) || (!showZeros && number && info.value.number == 0);
+      if (hidden) {
+        ours.clear();
+        fillAt = -1;
+      } else if (cfFormat) {
+        ours = ShownAtWidth(sheet, info, nullptr, text, cfFormat, overflow);
+        fillAt = -1;
+      }
+      // A number's text depends on its column's width: "####", or General shortened to fit.
+      const std::string atWidth =
+          number && !hidden ? ShownAtWidth(sheet, info, &grid, text, cfFormat, overflow) : std::string();
+      const bool widthDecides = AllHashes(excel) || GeneralShortened(info, code, excel, ours) || overflow ||
+                                (fillAt >= 0 && fillChar == L'#');
+      if (ours == excel && !overflow) {
         ++result.counts.same;
-      } else if (fillAt >= 0 && fillChar != L'#' && SameWithFill(excel, ours, fillAt, fillChar)) {
+      } else if (fillAt >= 0 && fillChar != L'#' && !overflow && SameWithFill(excel, ours, fillAt, fillChar)) {
         ++result.counts.same;
         ++result.counts.fillSame;
-      } else if (AllHashes(excel) || GeneralShortened(info, code, excel, ours) || (fillAt >= 0 && fillChar == L'#')) {
-        ++result.counts.widthOnly;
-      } else if (result.differences.size() < 200) {
-        result.differences.push_back({name, ref, excel, ours, code});
+      } else if (number && widthDecides && (AllHashes(excel) ? overflow : !overflow && atWidth == excel)) {
+        ++result.counts.same;
+        ++result.counts.widthSame;
+      } else {
+        if (widthDecides) ++result.counts.widthOnly;
+        if (result.differences.size() < 400)
+          result.differences.push_back({name, ref, excel, number && widthDecides ? atWidth : ours, code});
       }
     }
   }
@@ -324,10 +395,10 @@ int RunCellCompare(const Options& options) {
   }
   double pct = Percent(total.same, total.cells);
   std::printf("\n%zu workbooks: %zu of %zu visible cells show Excel's text (%.2f %%)\n", results.size(), total.same, total.cells, pct);
-  std::printf("  %zu differ only in what the column width decides (\"####\", General shortened): not measured until the grid's widths\n"
-              "  %zu matched with a * fill; not compared: %zu hidden, %zu formulas without a cached value, %zu that\n"
-              "  Excel recalculated on opening, %zu missing from the model\n",
-              total.widthOnly, total.fillSame, total.hidden, total.uncalculated, total.recalculated, total.missing);
+  std::printf("  where the column's width decides (\"####\", General shortened, measured as the grid does): %zu the same,\n"
+              "  %zu different; %zu matched with a * fill; not compared: %zu hidden, %zu formulas without a cached\n"
+              "  value, %zu that Excel recalculated on opening, %zu missing from the model\n",
+              total.widthSame, total.widthOnly, total.fillSame, total.hidden, total.uncalculated, total.recalculated, total.missing);
   std::vector<const Difference*> shown;
   for (const auto& r : results)
     for (const auto& d : r.differences)
