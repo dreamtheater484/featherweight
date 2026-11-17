@@ -768,6 +768,7 @@ void MoveSheetXml(detail::PartText& t, int index, const Context& c) {
             bool hasCell = at && ParseRange(xlsx::TextOf(at), cell);
             CellAddr where = hasCell ? CellAddr{cell.firstRow, cell.firstCol} : CellAddr{};
             if (f) changed = RewriteText(f, index, where, c) || changed;
+            if (f && xlsx::TextOf(f) == "#REF!") s.remove_child(f);  // its data's sheet went (Excel)
             if (!edited || !hasCell) continue;
             uint32_t row = cell.firstRow, col = cell.firstCol;
             if (!m.Cell(row, col)) {
@@ -1189,6 +1190,20 @@ bool MovePivotCache(std::string& xml, const Context& c) {
         SetAttr(n, "ref", RangeName(r));
         changed = true;
       }
+    });
+  if (changed) xml = SaveDoc(d);
+  return changed;
+}
+
+bool RenamePivotSource(std::string& xml, std::string_view from, std::string_view to) {
+  pugi::xml_document d;
+  if (!LoadDoc(d, xml)) return false;
+  bool changed = false;
+  for (std::string_view kind : {"worksheetSource", "rangeSet"})
+    Each(d.document_element(), kind, [&](pugi::xml_node n) {
+      if (!SameName(xlsx::Attr(n, "sheet"), from)) return;
+      SetAttr(n, "sheet", std::string(to));
+      changed = true;
     });
   if (changed) xml = SaveDoc(d);
   return changed;
