@@ -49,6 +49,21 @@ bool Fits(void* context, const Formatted& f) {
   return ShownWidth(*c->measure, f, *c->font, *c->base) <= c->avail;
 }
 
+// The pixels of a column a value can't use: two a side and the gridline for a 7-pixel digit,
+// more for a bigger font (Arial 12's 9-pixel digit: 7, so "69.483.939" is "########" in 86).
+int PadPx(FontMeasure& m, const Font& font, const Font& base) {
+  return 2 * ((m.Of(font, base).digit + 3) / 4) + 1;
+}
+
+// As a value that doesn't fit shows: no text, the cell filled with '#'.
+void Overflow(Formatted& f) {
+  f.text.clear();
+  f.pads.clear();
+  f.overflow = true;
+  f.fill = 0;
+  f.fillChar = 0;
+}
+
 // Excel indents by three spaces of the cell's font a level.
 int IndentPx(FontMeasure& m, const Xf& xf, const Font& font, const Font& base) {
   return xf.alignment.indent ? xf.alignment.indent * 3 * m.Of(font, base).space : 0;
@@ -115,12 +130,15 @@ void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out,
   const Xf& xf = st.CellXf(cell.style);
   const Font& base = st.DefaultFont();
   const Font& font = st.FontOf(xf);
-  const int avail = std::max(0, widthPx - 5 - IndentPx(measure_, xf, font, base));
+  const int avail = std::max(0, widthPx - PadPx(measure_, font, base) - IndentPx(measure_, xf, font, base));
   FitContext fit{&measure_, &font, &base, avail};
   FormatContext ctx;
   ctx.locale = &locale_;
   ctx.date1904 = book_.Date1904();
-  if (widthPx > 0) {
+  // Shrink to fit makes the font smaller instead: never "####".
+  const bool fits = widthPx > 0 && !xf.alignment.shrinkToFit;
+  auto tooWide = [&](const Formatted& v) { return fits && measure_.Width(v.text, font, base) > avail; };
+  if (fits) {
     ctx.fits = &Fits;
     ctx.fitsContext = &fit;
   }
@@ -144,6 +162,8 @@ void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out,
     case ValueType::Error:
       f.text = Utf8ToWide(ErrorText(cell.value.error));
       out.center = true;
+      // An error too wide for the cell is "####", as a number is.
+      if (tooWide(f)) Overflow(f);
       break;
   }
   out.overflow = f.overflow;
@@ -163,8 +183,8 @@ void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out,
     const wchar_t ch = f.fillChar ? f.fillChar : L'#';
     const int one = std::max(1, measure_.Width(std::wstring_view(&ch, 1), font, base));
     const int used = f.overflow ? 0 : measure_.Width(out.text, font, base);
-    int n = std::max(0, (avail - used) / one);
-    if (f.overflow) n = std::max(n, 1);
+    // Narrower than one, the cell shows nothing.
+    const int n = std::max(0, (avail - used) / one);
     const size_t at = std::min<size_t>(static_cast<size_t>(f.fill), out.text.size());
     out.text.insert(at, static_cast<size_t>(n), ch);
     out.hidden.insert(out.hidden.begin() + at, static_cast<size_t>(n), 0);
