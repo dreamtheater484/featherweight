@@ -223,6 +223,8 @@ TEST(sheet_objects_notes) {
   CHECK(t && t->text == L"Featherweight tests: A threaded comment.\nFeatherweight tests: A reply to it.");
   const CellNote* d5 = threads->NoteAt(4, 3);
   CHECK(d5 && d5->threaded && d5->resolved);
+  CHECK(t && t->legacyText.starts_with(L"[Threaded comment]") && t->legacyText.find(L"Reply:") != std::wstring::npos);
+  CHECK(b2 && b2->legacyText.empty());
   if (t) {
     const draw::Size size = threads->NoteSize(*t);
     CHECK(size.width > 100 && size.height > 20);
