@@ -866,7 +866,13 @@ std::string ValueText(const sh::Value& v) {
     case sh::ValueType::Number: return "n " + Num(v.number);
     case sh::ValueType::String: return "s " + Quote(v.text);
     case sh::ValueType::Bool: return v.boolean ? "TRUE" : "FALSE";
-    case sh::ValueType::Error: return "e " + std::string(sh::ErrorText(v.error));
+    case sh::ValueType::Error: {
+      // Errors newer than the file format (#SPILL!, #CALC!, #FIELD!, #BLOCKED!, #CONNECT!, #BUSY!,
+      // #UNKNOWN!) are stored as #VALUE!, as Excel stores them without their rich value: the
+      // model holds the new one, the saved copy reads #VALUE!.
+      const sh::ErrorCode e = v.error >= sh::ErrorCode::Spill ? sh::ErrorCode::Value : v.error;
+      return "e " + std::string(sh::ErrorText(e));
+    }
   }
   return "?";
 }
@@ -904,10 +910,9 @@ class StyleTexts {
     if (x.border < st_.Borders().size()) {
       const sh::Border& b = st_.Borders()[x.border];
       s += " border";
-      // A side without a line draws nothing: its color isn't compared (the writer leaves it out).
+      // Each side's line and color (the writer keeps a color on a side without a line too).
       for (const sh::BorderSide* side : {&b.left, &b.right, &b.top, &b.bottom, &b.diagonal})
-        s += " " + std::to_string(static_cast<int>(side->style)) + ":" +
-             (side->style == sh::BorderStyle::None ? std::string("-") : ColorText(side->color));
+        s += " " + std::to_string(static_cast<int>(side->style)) + ":" + ColorText(side->color);
     }
     const sh::Alignment& a = x.alignment;
     s += " align " + std::to_string(static_cast<int>(a.horizontal)) + "/" + std::to_string(static_cast<int>(a.vertical)) + "/" +
