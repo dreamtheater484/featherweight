@@ -12,6 +12,7 @@
 #include "core/Layout.h"
 #include "core/Strings.h"
 #include "sheet/view/WorkbookView.h"
+#include "sheet/xlsx/Xlsx.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
 #include "ui/StatusBar.h"
@@ -402,6 +403,7 @@ void WorkbookView::UpdateStatus() {
 void WorkbookView::BuildStatusBar(StatusBarModel& m) {
   if (!Ready()) return;
   UpdateStatus();
+  if (file_->SaveRunning()) m.segments.push_back(L"Saving\u2026");  // as Excel's status bar
   if (circular_) {
     const auto [sheet, row, col] = *circular_;
     std::wstring at = Utf8ToWide(CellName(static_cast<uint32_t>(row), static_cast<uint32_t>(col)));
@@ -743,28 +745,81 @@ void WorkbookView::FollowLink(const Hyperlink& link) {
 // ---------------------------------------------------------------------------
 // File and state
 
-bool WorkbookView::Save(const std::wstring& path, std::wstring& error) {
+namespace {
+
+constexpr SaveFormat kXlsx{L"Excel workbook", L"*.xlsx", L"xlsx"};
+constexpr SaveFormat kXlsm{L"Excel macro-enabled workbook", L"*.xlsm", L"xlsm"};
+constexpr SaveFormat kXltx{L"Excel template", L"*.xltx", L"xltx"};
+constexpr SaveFormat kXltm{L"Excel macro-enabled template", L"*.xltm", L"xltm"};
+
+}  // namespace
+
+bool WorkbookView::ReadyToSave(std::wstring& error) {
   if (!Ready()) return false;
-  if (file_) {
-    // A CSV file: written its own way, or as the type the path names (WorkbookFile).
-    if (!file_->Save(*book_, Ed(), path, error)) return false;
-    path_ = file_->Path();
-    host_.ViewStateChanged();
-    return true;
-  }
-  // Nothing is changed in a workbook yet: saving elsewhere is a copy of the file as it was opened.
-  if (EqualsNoCase(path, path_)) return true;
-  const auto bytes = book_->GetPackage()->GetSnapshot().Bytes();
-  if (!util::WriteFileAtomic(path, std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()))) {
-    error = L"The workbook couldn't be saved there.";
+  // What is being typed is part of what's saved, as in Excel's Ctrl+S; a formula that can't be
+  // entered stops the save with its reason.
+  if (editor_.Active() && !renaming_ && !CommitEdit(false)) {
+    error = Title() + L" wasn't saved: finish or cancel what you're typing in the cell first.";
     return false;
   }
   return true;
 }
 
+void WorkbookView::SavedTo() {
+  path_ = file_->Path();
+  host_.ViewStateChanged();
+  host_.ViewInvalidate();
+}
+
+bool WorkbookView::Save(const std::wstring& path, std::wstring& error) {
+  if (!ReadyToSave(error)) return false;
+  if (file_->SaveRunning()) SaveDone();  // closing right after Ctrl+S: that save first
+  if (!file_->Save(*book_, Ed(), path, error)) return false;
+  SavedTo();
+  return true;
+}
+
+TabContent::SaveStart WorkbookView::StartSave(const std::wstring& path, std::wstring& error) {
+  if (!ReadyToSave(error)) return SaveStart::Failed;
+  HWND hwnd = host_.ViewHwnd();
+  const LPARAM self = reinterpret_cast<LPARAM>(this);
+  // The worker posts to the window when the file is written; SaveDone finishes on the UI thread.
+  if (!file_->StartSave(*book_, Ed(), path, [hwnd, self] { PostMessageW(hwnd, kSaveDoneMessage, 0, self); }, error))
+    return SaveStart::Failed;
+  host_.ViewStateChanged();  // "Saving..."
+  return SaveStart::Started;
+}
+
+void WorkbookView::SaveDone() {
+  if (!file_->SaveRunning()) return;
+  std::wstring error;
+  const bool ok = file_->FinishSave(error);
+  if (ok) SavedTo();
+  else host_.ViewStateChanged();
+  host_.ViewSaved(this, ok, error);
+}
+
+void WorkbookView::Autosave() {
+  if (Ready() && file_->Dirty()) file_->Autosave(*book_, Ed());
+}
+
+FileChange WorkbookView::CheckFileOnDisk() {
+  // Our own save changes the file: not another program's.
+  if (!Ready() || file_->SaveRunning()) return FileChange::None;
+  return static_cast<FileChange>(file_->CheckDisk());
+}
+
 SaveFormat WorkbookView::SaveAsFormat() const {
-  if (book_ && book_->Format() == FileFormat::Xlsm) return {L"Excel macro-enabled workbook", L"*.xlsm", L"xlsm"};
-  return {L"Excel workbook", L"*.xlsx", L"xlsx"};
+  if (book_ && (book_->Format() == FileFormat::Xlsm || book_->Format() == FileFormat::Xltm)) return kXlsm;
+  return kXlsx;
+}
+
+std::vector<SaveFormat> WorkbookView::OtherSaveFormats() const {
+  std::vector<SaveFormat> other;
+  const std::wstring_view main = SaveAsFormat().ext;
+  for (const SaveFormat& f : {kXlsx, kXlsm, kXltx, kXltm})
+    if (main != f.ext) other.push_back(f);
+  return other;
 }
 
 std::vector<SaveFormat> WorkbookView::CopyFormats() const {
@@ -784,15 +839,23 @@ bool WorkbookView::SaveCopy(const std::wstring& path, size_t format, std::wstrin
 }
 
 std::wstring WorkbookView::SuggestedSavePath() const {
+  if (!book_) return path_;
+  const std::wstring path = file_->SuggestedPath(*book_);
   // A CSV file's Save As offers a workbook beside it, as the banner suggests.
-  if (!book_ || book_->Format() != FileFormat::Csv) return path_;
-  const size_t dot = path_.rfind(L'.'), slash = path_.find_last_of(L"\\/");
+  if (book_->Format() != FileFormat::Csv) return path;
+  const size_t dot = path.rfind(L'.'), slash = path.find_last_of(L"\\/");
   const bool ext = dot != std::wstring::npos && (slash == std::wstring::npos || dot > slash);
-  return (ext ? path_.substr(0, dot) : path_) + L".xlsx";
+  return (ext ? path.substr(0, dot) : path) + L".xlsx";
 }
 
 std::wstring WorkbookView::FormatLoss(const std::wstring& path) const {
-  if (keepFormat_ || !book_ || WorkbookFile::FormatOf(path, book_->Format()) != FileFormat::Csv) return {};
+  if (keepFormat_ || !book_) return {};
+  const FileFormat to = WorkbookFile::FormatOf(path, book_->Format());
+  // Excel asks the same before saving a workbook with macros as .xlsx.
+  if ((to == FileFormat::Xlsx || to == FileFormat::Xltx) && xlsx::HasMacros(*book_))
+    return to == FileFormat::Xlsx ? L"An .xlsx workbook can't keep this workbook's macros: they would be left out."
+                                  : L"An .xltx template can't keep this workbook's macros: they would be left out.";
+  if (to != FileFormat::Csv) return {};
   return csv::Loses(*book_) ? L"CSV keeps only the values of the first sheet." : L"";
 }
 

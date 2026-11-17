@@ -63,13 +63,30 @@ D2D1_RECT_F Clip(const D2D1_RECT_F& a, const D2D1_RECT_F& b) {
 
 }  // namespace
 
-WorkbookView::WorkbookView(ViewHost& host, std::wstring path) : PagedView(host), path_(std::move(path)) {
+WorkbookView::WorkbookView(ViewHost& host, std::wstring path)
+    : PagedView(host), path_(std::move(path)), file_(std::make_unique<WorkbookFile>()) {
   zoomMode_ = fw::ZoomMode::FitPage;
 }
 
 WorkbookView::~WorkbookView() = default;
 
-std::wstring WorkbookView::Title() const { return FileNameOf(path_); }
+std::unique_ptr<WorkbookView> WorkbookView::NewWorkbook(ViewHost& host, int number) {
+  auto view = std::make_unique<WorkbookView>(host, std::wstring());
+  view->newBook_ = true;
+  view->file_->New(number);
+  return view;
+}
+
+std::unique_ptr<WorkbookView> WorkbookView::FromBytes(ViewHost& host, std::vector<uint8_t> bytes, std::wstring title,
+                                                      std::wstring suggested, bool unsaved) {
+  auto view = std::make_unique<WorkbookView>(host, std::wstring());
+  view->bytes_ = std::move(bytes);
+  view->fromBytes_ = true;
+  view->file_->Copy(std::move(title), std::move(suggested), unsaved);
+  return view;
+}
+
+std::wstring WorkbookView::Title() const { return path_.empty() ? file_->Title() : FileNameOf(path_); }
 
 // ---------------------------------------------------------------------------
 // Loading
@@ -77,8 +94,19 @@ std::wstring WorkbookView::Title() const { return FileNameOf(path_); }
 OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
   const std::wstring name = Title();
   pkg::Status st;
-  auto snapshot = pkg::Snapshot::Open(path_, {}, st);
-  if (EndsWithNoCase(path_, L".csv") || EndsWithNoCase(path_, L".tsv")) {
+  if (newBook_) {
+    std::unique_ptr<Workbook> book = xlsx::NewWorkbook(st);
+    if (!book) {
+      error = L"A new workbook couldn't be made.";
+      return OpenResult::Failed;
+    }
+    return Opened(std::move(book), error);
+  }
+  // A recovered workbook is read from its autosave, named as its tab is.
+  std::unique_ptr<pkg::Snapshot> snapshot =
+      fromBytes_ ? pkg::Snapshot::FromBytes(std::move(bytes_)) : pkg::Snapshot::Open(path_, {}, st);
+  const std::wstring& named = fromBytes_ ? name : path_;
+  if (EndsWithNoCase(named, L".csv") || EndsWithNoCase(named, L".tsv")) {
     // A text file of values: one sheet, named after the file as Excel names it.
     if (!snapshot) {
       error = OpenError(name, st);
@@ -87,7 +115,7 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     const auto bytes = snapshot->Bytes();
     csv::Options o;
     o.locale = &UserLocale();
-    o.tsv = EndsWithNoCase(path_, L".tsv");
+    o.tsv = EndsWithNoCase(named, L".tsv");
     auto csvBook = std::make_unique<Workbook>();
     std::wstring sheetName = name.substr(0, name.rfind(L'.'));
     if (sheetName.size() > 31) sheetName.resize(31);
@@ -95,8 +123,7 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     csv::Read(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), WideToUtf8(sheetName), o,
               *csvBook, source);
     // Saving reads the file again to write it its own way (WorkbookFile).
-    file_ = std::make_unique<WorkbookFile>();
-    file_->Opened(path_, snapshot->GetStamp());
+    if (!fromBytes_) file_->Opened(path_, snapshot->GetStamp());
     file_->SetCsvOptions(o);
     snapshot.reset();  // the model has the values: the file's copy goes before the grid is built
     return Opened(std::move(csvBook), error);
@@ -112,7 +139,18 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     return OpenResult::Failed;
   }
   recalc_ = true;  // a workbook: at idle, recalculate what Excel would on opening
-  return Opened(std::move(book), error);
+  if (!fromBytes_ && newNumber_ > 0) {
+    // A template: a new workbook from it, saved with Save As.
+    file_->OpenedTemplate(path_, newNumber_);
+    path_.clear();
+  } else if (!fromBytes_) {
+    file_->Opened(path_, book->GetPackage()->GetSnapshot().GetStamp());
+  }
+  const OpenResult r = Opened(std::move(book), error);
+  // Someone else has it open in Excel: changes can only be saved as a copy.
+  if (r == OpenResult::Ok)
+    if (std::wstring inUse = file_->InUseMessage(); !inUse.empty()) host_.ViewMessage(BannerKind::Warning, inUse);
+  return r;
 }
 
 OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& error) {

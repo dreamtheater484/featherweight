@@ -650,7 +650,10 @@ bool WorkbookView::CommitEdit(bool fill) {
 
 void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
   SyncEngine(changes);
-  if (file_) file_->Changed(Ed().Modified(), {});
+  // The unsaved dot and the owner file; undoing back to what was saved makes the tab clean again.
+  const bool wasDirty = file_->Dirty();
+  file_->Changed(Ed().Modified(), {});
+  if (file_->Dirty() != wasDirty) host_.ViewStateChanged();
   if (!pasting_) clip_.reset();  // an edit ends the copied cells' border, as in Excel
   bool sheets = false, layout = false;
   for (const edit::Change& c : changes) {

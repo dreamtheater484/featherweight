@@ -62,6 +62,11 @@ class WorkbookFile : public FileSession {
   // StartSave and FinishSave, waiting for the write (closing a tab, scripted commands, tests).
   bool Save(fw::sheet::Workbook& book, fw::sheet::edit::Editor& editor, const std::wstring& path, std::wstring& error);
 
+  // The window's autosave timer: unsaved changes go to the recovery folder, the workbook written as
+  // a save would write it (a CSV file's values as CSV), on the UI thread; the workbook stays as it
+  // is. Nothing while a save runs or when the recovery folder is up to date.
+  void Autosave(fw::sheet::Workbook& book, fw::sheet::edit::Editor& editor);
+
  private:
   struct Running;
   bool StartCsv(std::unique_ptr<Running> r, fw::sheet::Workbook& book, fw::sheet::edit::Editor& editor,
