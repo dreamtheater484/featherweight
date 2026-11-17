@@ -81,3 +81,40 @@ AutoSumProposal ProposeAutoSum(int32_t row, int32_t col, const std::function<Sum
 std::string CopyFormula(std::string_view formula, const CompileOptions& from, const CompileOptions& to, Names& names);
 
 }  // namespace fw::sheet::calc
+
+namespace fw::sheet::edit {
+struct Shift;
+}
+
+namespace fw::sheet::calc {
+
+// Rows or columns (or cells, in a band) inserted or deleted on a sheet.
+struct StructuralEdit {
+  int sheet = 0;
+  bool rows = true;    // rows, or cells moving down or up; else columns, or cells moving right or left
+  int32_t at = 0;      // the first row or column inserted or deleted, 0-based
+  int32_t count = 0;   // > 0 inserted, < 0 deleted
+  int32_t band1 = -1, band2 = -1;  // cells only: the columns (rows: the rows) that move; -1 whole lines
+};
+// A formula of the cell `at` after the edit, as Excel rewrites it (measured): references move,
+// grow and shrink; one deleted becomes #REF!; with cells, only references inside the band move.
+// Invariant text in and out, without "=". `moved` gets the formula's own cell after the edit.
+// Text that doesn't compile comes back unchanged.
+std::string ShiftReferences(std::string_view formula, const CompileOptions& at, const StructuralEdit& edit,
+                            Names& names, CompileOptions* moved = nullptr);
+// The same with the editor's edit::Shift on `editedSheet`: along Rows, `band`'s columns are the
+// cells that moved (all 16,384: whole rows); along Columns, its rows. 3-D references don't move
+// (Excel leaves Sheet1:Sheet3!A2 alone when rows are inserted on Sheet2).
+std::string ShiftReferences(std::string_view formula, const CompileOptions& at, int editedSheet, const edit::Shift& shift,
+                            Names& names, CompileOptions* moved = nullptr);
+
+// A formula after Editor::MoveSheet(sheet, to) (`to`: its index after the move) or DeleteSheet
+// (`to` = -1), as Excel rewrites it (measured): `sheets` are the names before. A reference to a
+// deleted sheet becomes #REF!A1. A 3-D range keeps its end sheets wherever they move; an end sheet
+// deleted, or moved past the other end, gives way to its neighbour inside the range, and one sheet
+// left is a plain reference (Sheet2:Sheet3!A1 → Sheet3!A1). Adding a sheet changes no text.
+// Invariant text in and out, without "="; `at` is the formula's cell (its sheet index before).
+std::string SheetsChanged(std::string_view formula, const CompileOptions& at, const std::vector<std::string>& sheets,
+                          int sheet, int to);
+
+}  // namespace fw::sheet::calc

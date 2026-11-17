@@ -358,3 +358,171 @@ TEST(sheet_typing_autosum) {
   f.Set("B1", N), f.Set("B2", N);
   CHECK_EQ(propose(f, 2, 1), std::string("=SUM(B1:B2)"));
 }
+
+namespace {
+struct ShiftCase {
+  const char* edit;
+  bool rows;
+  int at, count, band1, band2, sheet;
+  const char* before;
+  const char* after;
+};
+const ShiftCase kShiftCases[] = {
+#include "formula_shift_cases.inc"
+};
+}  // namespace
+
+TEST(sheet_typing_structural_edits) {
+  // Rows, columns and cells inserted and deleted on Sheet1: formulas on Sheet2 pointing at it and
+  // on Sheet1 itself (Z30, Z31...), as Excel rewrites them.
+  size_t failures = 0, n = 0;
+  std::string lastEdit;
+  int index = 0;
+  for (const ShiftCase& k : kShiftCases) {
+    if (lastEdit != k.edit) lastEdit = k.edit, index = 0;
+    const int i = index++ / 2;
+    EntryNames names;
+    CompileOptions at;
+    at.sheet = k.sheet == 0 ? 0 : 1;
+    at.row = k.sheet == 0 ? 29 + i : i;
+    at.col = k.sheet == 0 ? 25 : 0;
+    StructuralEdit e;
+    e.sheet = 0, e.rows = k.rows, e.at = k.at, e.count = k.count, e.band1 = k.band1, e.band2 = k.band2;
+    std::string got = "=" + ShiftReferences(k.before + 1, at, e, names);
+    ++n;
+    if (got != k.after) {
+      ++failures;
+      std::printf("    %s, %s: Excel %s, here %s\n", k.edit, k.before, k.after, got.c_str());
+    }
+  }
+  std::printf("    %zu of %zu as Excel\n", n - failures, n);
+  CHECK_EQ(failures, size_t{0});
+}
+
+#include "sheet/edit/Edit.h"
+
+TEST(sheet_typing_shift_from_editor) {
+  // The editor's edit::Shift: whole rows (every column in the band), cells in a band of columns.
+  // Rows inserted on Sheet2 move references to Sheet2 but not 3-D ranges through it (Excel).
+  EntryNames names;
+  names.sheets = {"Sheet1", "Sheet2", "Sheet3", "Sheet4"};
+  CompileOptions at;
+  at.sheet = 3;
+  edit::Shift rows;
+  rows.axis = edit::Shift::Axis::Rows, rows.at = 2, rows.count = 2, rows.band = Range{2, 0, 3, kMaxCols - 1};
+  CHECK_EQ(ShiftReferences("SUM(Sheet1:Sheet3!A2:A5)", at, 1, rows, names), std::string("SUM(Sheet1:Sheet3!A2:A5)"));
+  CHECK_EQ(ShiftReferences("Sheet2!A4+Sheet2!C2:C9", at, 1, rows, names), std::string("Sheet2!A6+Sheet2!C2:C11"));
+  CHECK_EQ(ShiftReferences("Sheet1!A4", at, 1, rows, names), std::string("Sheet1!A4"));
+  edit::Shift cells;  // A3:C4 deleted, cells below moving up
+  cells.axis = edit::Shift::Axis::Rows, cells.at = 2, cells.count = -2, cells.band = Range{2, 0, 3, 2};
+  CHECK_EQ(ShiftReferences("Sheet2!A6+Sheet2!D6+Sheet2!A3", at, 1, cells, names),
+           std::string("Sheet2!A4+Sheet2!D6+Sheet2!#REF!"));
+  edit::Shift cols;  // columns C:D deleted
+  cols.axis = edit::Shift::Axis::Columns, cols.at = 2, cols.count = -2, cols.band = Range{0, 2, kMaxRows - 1, 3};
+  CHECK_EQ(ShiftReferences("Sheet2!E1+Sheet2!B1:F1+Sheet2!C:D", at, 1, cols, names),
+           std::string("Sheet2!C1+Sheet2!B1:D1+Sheet2!#REF!"));
+}
+
+TEST(sheet_typing_sheets_changed) {
+  // Excel 2021 (scratchpad moves_probe.py): sheets Ka..Ke and F, formulas on F; one sheet moved
+  // (MoveSheet(sheet, to): `to` its index after) or deleted at a time.
+  const std::vector<std::string> sheets{"Ka", "Kb", "Kc", "Kd", "Ke", "F"};
+  const char* formulas[] = {"SUM(Kb:Kd!A1)", "SUM(Ka:Ke!A1)", "SUM(Kb:Kc!A1)", "Kb!A1+Kd!A1", "SUM(Kc!A1)"};
+  struct Move {
+    int sheet, to;
+    const char* after[5];
+  };
+  const Move moves[] = {
+      {3, 4, {"SUM(Kb:Kd!A1)", "SUM(Ka:Ke!A1)", "SUM(Kb:Kc!A1)", "Kb!A1+Kd!A1", "SUM(Kc!A1)"}},  // Kd after Ke
+      {3, 0, {"SUM(Kb:Kc!A1)", "SUM(Ka:Ke!A1)", "SUM(Kb:Kc!A1)", "Kb!A1+Kd!A1", "SUM(Kc!A1)"}},  // Kd before Ka
+      {3, 2, {"SUM(Kb:Kd!A1)", "SUM(Ka:Ke!A1)", "SUM(Kb:Kc!A1)", "Kb!A1+Kd!A1", "SUM(Kc!A1)"}},  // Kd before Kc
+      {1, 0, {"SUM(Kb:Kd!A1)", "SUM(Ka:Ke!A1)", "SUM(Kb:Kc!A1)", "Kb!A1+Kd!A1", "SUM(Kc!A1)"}},  // Kb before Ka
+      {1, 4, {"SUM(Kc:Kd!A1)", "SUM(Ka:Ke!A1)", "SUM(Kc!A1)", "Kb!A1+Kd!A1", "SUM(Kc!A1)"}},     // Kb after Ke
+      {1, 2, {"SUM(Kb:Kd!A1)", "SUM(Ka:Ke!A1)", "SUM(Kc!A1)", "Kb!A1+Kd!A1", "SUM(Kc!A1)"}},     // Kb after Kc
+      {2, 0, {"SUM(Kb:Kd!A1)", "SUM(Ka:Ke!A1)", "SUM(Kb!A1)", "Kb!A1+Kd!A1", "SUM(Kc!A1)"}},     // Kc before Ka
+      {2, 4, {"SUM(Kb:Kd!A1)", "SUM(Ka:Ke!A1)", "SUM(Kb:Kc!A1)", "Kb!A1+Kd!A1", "SUM(Kc!A1)"}},  // Kc after Ke
+      {0, 1, {"SUM(Kb:Kd!A1)", "SUM(Ka:Ke!A1)", "SUM(Kb:Kc!A1)", "Kb!A1+Kd!A1", "SUM(Kc!A1)"}},  // Ka after Kb
+      {4, 2, {"SUM(Kb:Kd!A1)", "SUM(Ka:Ke!A1)", "SUM(Kb:Kc!A1)", "Kb!A1+Kd!A1", "SUM(Kc!A1)"}},  // Ke before Kc
+      {4, 1, {"SUM(Kb:Kd!A1)", "SUM(Ka:Ke!A1)", "SUM(Kb:Kc!A1)", "Kb!A1+Kd!A1", "SUM(Kc!A1)"}},  // Ke before Kb
+      {0, 3, {"SUM(Kb:Kd!A1)", "SUM(Ka:Ke!A1)", "SUM(Kb:Kc!A1)", "Kb!A1+Kd!A1", "SUM(Kc!A1)"}},  // Ka after Kd
+      {2, -1, {"SUM(Kb:Kd!A1)", "SUM(Ka:Ke!A1)", "SUM(Kb!A1)", "Kb!A1+Kd!A1", "SUM(#REF!A1)"}},  // Kc deleted
+  };
+  CompileOptions at;
+  at.sheet = 5;
+  for (const Move& m : moves)
+    for (int i = 0; i < 5; ++i) CHECK_EQ(SheetsChanged(formulas[i], at, sheets, m.sheet, m.to), std::string(m.after[i]));
+  // Two sheets deleted one after the other, as Excel deletes a selection of sheets.
+  struct Twice {
+    int first, second;  // the second: its index once the first is gone
+    const char* after[5];
+  };
+  const Twice twice[] = {
+      {1, 2, {"SUM(Kc!A1)", "SUM(Ka:Ke!A1)", "SUM(Kc!A1)", "#REF!A1+#REF!A1", "SUM(Kc!A1)"}},       // Kb, Kd
+      {1, 1, {"SUM(Kd!A1)", "SUM(Ka:Ke!A1)", "SUM(#REF!A1)", "#REF!A1+Kd!A1", "SUM(#REF!A1)"}},     // Kb, Kc
+  };
+  for (const Twice& t : twice) {
+    std::vector<std::string> left = sheets;
+    left.erase(left.begin() + t.first);
+    CompileOptions at2 = at;
+    at2.sheet = 4;
+    for (int i = 0; i < 5; ++i) {
+      std::string once = SheetsChanged(formulas[i], at, sheets, t.first, -1);
+      CHECK_EQ(SheetsChanged(once, at2, left, t.second, -1), std::string(t.after[i]));
+    }
+  }
+  // A reference that's #REF! already, relative references and names print back as they were.
+  CHECK_EQ(SheetsChanged("Kc!B2:C3*Rate+B2", at, sheets, 2, -1), std::string("#REF!B2:C3*Rate+B2"));
+  CHECK_EQ(SheetsChanged("SUM(Kb:Kc!A1)", at, sheets, 5, 0), std::string("SUM(Kb:Kc!A1)"));
+  // #REF!A1 (in files too) is a reference that's gone: it compiles, is #REF!, prints back.
+  EntryNames names;
+  for (const char* gone : {"#REF!A1+1", "SUM(#REF!$A$1:B2)", "#REF!+#REF!A:A"}) {
+    auto f = Compile(gone, at, names);
+    CHECK(f != nullptr);
+    if (!f) continue;
+    CHECK_EQ(f->flags & Formula::kUnsupported, 0);
+    CHECK_EQ(Print(*f, at, names), std::string(gone));
+  }
+}
+
+TEST(sheet_typing_build_from_scratch) {
+  // s2-corpus's build-from-scratch scripts (tests/office/build/*.steps on claude/s2-corpus): the
+  // formulas typed in en-NL, and what AutoSum must propose where the scripts press Alt+=.
+  const FormulaLocale nl = MakeFormulaLocale(EnNlLocale());
+  EntryNames names;
+  CompileOptions at;
+  for (auto [typed, text] : {std::pair{"=B7-B17", "=B7-B17"}, {"=IF(B7=0;0;B16/B7)", "=IF(B7=0,0,B16/B7)"},
+                             {"=B4+30", "=B4+30"}, {"=B12*C12", "=B12*C12"}, {"=ROUND(D17*C18;2)", "=ROUND(D17*C18,2)"}}) {
+    EnteredFormula e = EnterFormula(typed, nl, at, names);
+    CHECK(e.formula != nullptr);
+    CHECK_EQ(e.text, std::string(text));
+    CHECK_EQ(e.shown, std::string(typed));
+  }
+  std::map<std::pair<int32_t, int32_t>, SumCell> cells;
+  auto set = [&](int32_t r1, int32_t c1, int32_t r2, int32_t c2, SumCell k) {
+    for (int32_t r = r1; r <= r2; ++r)
+      for (int32_t c = c1; c <= c2; ++c) cells[{r, c}] = k;
+  };
+  auto at2 = [&](int32_t r, int32_t c) {
+    auto it = cells.find({r, c});
+    return it == cells.end() ? SumCell::kEmpty : it->second;
+  };
+  // The budget: labels in A, months B3:M3, income rows 5-6, B7 its total; expenses rows 10-16.
+  set(2, 0, 2, 13, SumCell::kOther);
+  set(3, 0, 19, 0, SumCell::kOther);
+  set(4, 1, 5, 12, SumCell::kNumber);
+  CHECK_EQ(ProposeAutoSum(6, 1, at2).formula, std::string("=SUM(B5:B6)"));
+  set(6, 1, 6, 12, SumCell::kTotal);
+  set(9, 1, 15, 12, SumCell::kNumber);
+  CHECK_EQ(ProposeAutoSum(16, 1, at2).formula, std::string("=SUM(B10:B16)"));
+  set(16, 1, 16, 12, SumCell::kTotal);
+  set(18, 1, 19, 12, SumCell::kNumber);
+  CHECK_EQ(ProposeAutoSum(4, 13, at2).formula, std::string("=SUM(B5:M5)"));
+  set(4, 13, 6, 13, SumCell::kTotal);
+  CHECK_EQ(ProposeAutoSum(9, 13, at2).formula, std::string("=SUM(B10:M10)"));
+  // The invoice: header row 11, amounts D12:D15 (formulas), D16 blank, D17 the subtotal.
+  cells.clear();
+  set(10, 0, 10, 3, SumCell::kOther);
+  set(11, 0, 14, 0, SumCell::kOther);
+  set(11, 1, 14, 3, SumCell::kNumber);
+  CHECK_EQ(ProposeAutoSum(16, 3, at2).formula, std::string("=SUM(D12:D16)"));
+}

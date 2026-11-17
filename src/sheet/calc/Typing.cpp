@@ -2,6 +2,8 @@
 
 #include "sheet/calc/Typing.h"
 
+#include "sheet/edit/Edit.h"
+
 #include <algorithm>
 #include <cwctype>
 
@@ -458,6 +460,174 @@ AutoSumProposal ProposeAutoSum(int32_t row, int32_t col, const std::function<Sum
   const bool one = p.r1 == p.r2 && p.c1 == p.c2;
   p.formula = "=SUM(" + A1(p.r1, p.c1) + (one ? "" : ":" + A1(p.r2, p.c2)) + ")";
   return p;
+}
+
+}  // namespace fw::sheet::calc
+
+namespace fw::sheet::calc {
+
+namespace {
+
+class ShiftMap : public RefMap {
+ public:
+  ShiftMap(const StructuralEdit& e, const CompileOptions& from, const CompileOptions& to) : e_(e), from_(from), to_(to) {}
+
+  // One line (row or column) number after the edit, or false when it's deleted.
+  bool Along(int64_t& a1, int64_t& a2) const {
+    const int64_t max = e_.rows ? 1048576 : 16384;
+    if (e_.count > 0) {
+      if (a1 >= e_.at) a1 += e_.count, a2 += e_.count;
+      else if (a2 >= e_.at) a2 += e_.count;
+      return a2 < max;
+    }
+    const int64_t d = -static_cast<int64_t>(e_.count), d1 = e_.at, d2 = e_.at + d - 1;
+    if (a1 >= d1 && a2 <= d2) return false;
+    int64_t n1 = a1 < d1 ? a1 : (a1 > d2 ? a1 - d : d1);
+    int64_t n2 = a2 < d1 ? a2 : (a2 > d2 ? a2 - d : d1 - 1);
+    a1 = n1, a2 = n2;
+    return true;
+  }
+  bool Moves(int64_t across1, int64_t across2) const {
+    return e_.band1 < 0 || (across1 >= e_.band1 && across2 <= e_.band2);
+  }
+
+  bool Map(int sheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t abs, bool wholeRows,
+           bool wholeCols) const override {
+    if (sheet != e_.sheet) return true;
+    if (e_.rows ? wholeCols : wholeRows) return true;                         // spans every line edited
+    if (e_.band1 >= 0 && (e_.rows ? wholeRows : wholeCols)) return true;      // cells: whole lines stay
+    int64_t R1 = (abs & kRow1) ? r1 : int64_t{from_.row} + r1, R2 = (abs & kRow2) ? r2 : int64_t{from_.row} + r2;
+    int64_t C1 = (abs & kCol1) ? c1 : int64_t{from_.col} + c1, C2 = (abs & kCol2) ? c2 : int64_t{from_.col} + c2;
+    if (e_.rows ? !Moves(C1, C2) : !Moves(R1, R2)) {
+      // Unchanged, but relative parts are now offsets from the formula's new cell. Except a
+      // reference lying in deleted cells' lines with one end in the band: what's left of it.
+      int64_t& a1 = e_.rows ? R1 : C1;
+      int64_t& a2 = e_.rows ? R2 : C2;
+      int64_t& x1 = e_.rows ? C1 : R1;
+      int64_t& x2 = e_.rows ? C2 : R2;
+      const bool inDeleted = e_.count < 0 && a1 >= e_.at && a2 <= e_.at - static_cast<int64_t>(e_.count) - 1;
+      const bool overlaps = x2 >= e_.band1 && x1 <= e_.band2;
+      if (inDeleted && overlaps) {
+        if (x1 >= e_.band1) x1 = e_.band2 + 1;
+        else if (x2 <= e_.band2) x2 = e_.band1 - 1;
+      }
+    } else if (!(e_.rows ? Along(R1, R2) : Along(C1, C2))) {
+      return false;
+    }
+    r1 = static_cast<int32_t>((abs & kRow1) ? R1 : R1 - to_.row);
+    r2 = static_cast<int32_t>((abs & kRow2) ? R2 : R2 - to_.row);
+    c1 = static_cast<int32_t>((abs & kCol1) ? C1 : C1 - to_.col);
+    c2 = static_cast<int32_t>((abs & kCol2) ? C2 : C2 - to_.col);
+    return true;
+  }
+
+ private:
+  const StructuralEdit& e_;
+  const CompileOptions &from_, &to_;
+};
+
+}  // namespace
+
+std::string ShiftReferences(std::string_view formula, const CompileOptions& at, const StructuralEdit& edit, Names& names,
+                            CompileOptions* moved) {
+  CompileOptions to = at;
+  if (at.sheet == edit.sheet) {
+    // The formula's own cell moves like a cell reference to it.
+    ShiftMap own(edit, at, at);
+    int32_t r1 = at.row, c1 = at.col, r2 = at.row, c2 = at.col;
+    if (own.Map(at.sheet, r1, c1, r2, c2, RefMap::kRow1 | RefMap::kCol1 | RefMap::kRow2 | RefMap::kCol2, false, false))
+      to.row = r1, to.col = c1;
+  }
+  if (moved) *moved = to;
+  auto f = Compile(formula, at, names);
+  if (!f) return std::string(formula);
+  ShiftMap map(edit, at, to);
+  PrintOptions how;
+  how.map = &map;
+  return Print(*f, to, names, how);
+}
+
+std::string ShiftReferences(std::string_view formula, const CompileOptions& at, int editedSheet, const edit::Shift& shift,
+                            Names& names, CompileOptions* moved) {
+  StructuralEdit e;
+  e.sheet = editedSheet;
+  e.rows = shift.axis == edit::Shift::Axis::Rows;
+  e.at = static_cast<int32_t>(shift.at);
+  e.count = shift.count;
+  const uint32_t b1 = e.rows ? shift.band.firstCol : shift.band.firstRow;
+  const uint32_t b2 = e.rows ? shift.band.lastCol : shift.band.lastRow;
+  if (b1 != 0 || b2 < (e.rows ? fw::sheet::kMaxCols : fw::sheet::kMaxRows) - 1)
+    e.band1 = static_cast<int32_t>(b1), e.band2 = static_cast<int32_t>(b2);
+  return ShiftReferences(formula, at, e, names, moved);
+}
+
+namespace {
+
+// The sheets before the edit, and defined names by text (they only need to print back).
+class SheetList : public Names {
+ public:
+  explicit SheetList(const std::vector<std::string>& sheets) : sheets_(sheets) {}
+  int FindSheet(std::string_view name) const override {
+    for (size_t i = 0; i < sheets_.size(); ++i)
+      if (NameEqualsNoCase(sheets_[i], name)) return static_cast<int>(i);
+    return -1;
+  }
+  std::string SheetName(int sheet) const override {
+    return sheet >= 0 && static_cast<size_t>(sheet) < sheets_.size() ? sheets_[static_cast<size_t>(sheet)] : std::string();
+  }
+  uint32_t NameSlot(std::string_view name) override {
+    for (size_t i = 0; i < names_.size(); ++i)
+      if (NameEqualsNoCase(names_[i], name)) return static_cast<uint32_t>(i);
+    names_.emplace_back(name);
+    return static_cast<uint32_t>(names_.size() - 1);
+  }
+  std::string SlotName(uint32_t slot) const override { return slot < names_.size() ? names_[slot] : std::string(); }
+
+ private:
+  const std::vector<std::string>& sheets_;
+  std::vector<std::string> names_;
+};
+
+// Sheet indexes stay those before the edit (the text has names): only which sheets a prefix names.
+class SheetMap : public RefMap {
+ public:
+  SheetMap(int sheet, int to) : sheet_(sheet), to_(to) {}
+  bool Map(int, int32_t&, int32_t&, int32_t&, int32_t&, uint8_t, bool, bool) const override { return true; }
+  bool MapSheets(int& s1, int& s2) const override {
+    if (to_ < 0) {  // deleted
+      if (s1 == sheet_ && s2 == sheet_) return false;
+      if (s1 == sheet_) ++s1;
+      else if (s2 == sheet_) --s2;
+      return true;
+    }
+    if (s1 != s2 && Position(s1) > Position(s2)) {  // an end moved past the other
+      if (s1 == sheet_) ++s1;
+      else if (s2 == sheet_) --s2;
+    }
+    return true;
+  }
+
+ private:
+  int Position(int i) const {
+    if (i == sheet_) return to_;
+    int j = i > sheet_ ? i - 1 : i;
+    return j >= to_ ? j + 1 : j;
+  }
+  int sheet_, to_;
+};
+
+}  // namespace
+
+std::string SheetsChanged(std::string_view formula, const CompileOptions& at, const std::vector<std::string>& sheets,
+                          int sheet, int to) {
+  if (sheet < 0 || static_cast<size_t>(sheet) >= sheets.size() || to == sheet) return std::string(formula);
+  SheetList names(sheets);
+  auto f = Compile(formula, at, names);
+  if (!f) return std::string(formula);
+  SheetMap map(sheet, to);
+  PrintOptions how;
+  how.map = &map;
+  return Print(*f, at, names, how);
 }
 
 }  // namespace fw::sheet::calc
