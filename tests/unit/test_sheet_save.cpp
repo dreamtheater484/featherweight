@@ -10,6 +10,8 @@
 
 #include "SheetTestUtil.h"
 #include "pkg/Check.h"
+#include "sheet/csv/Csv.h"
+#include "sheet/numfmt/NumLocale.h"
 #include "sheet/edit/Edit.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/xlsx/Xlsx.h"
@@ -449,4 +451,68 @@ TEST(sheet_save_formats) {
   if (!again) return;
   CHECK(again->Format() == FileFormat::Xltx);
   CHECK_EQ(Text(again->GetSheet(0), 0, 0), std::string("1"));
+}
+
+// A workbook read from a CSV file has no package: it gets the smallest one (GiveBasePackage) and is
+// saved as an Excel workbook with every sheet, its formats and its strings.
+TEST(sheet_save_csv_as_xlsx) {
+  Workbook book;
+  csv::Source source;
+  csv::Options o;
+  o.locale = &EnUsLocale();
+  csv::Read("name,amount,when\nPen,12%,3/1/2024\n\"a, b\",-2,\n", "data", o, book, source);
+  CHECK(!book.GetPackage() && book.Format() == FileFormat::Csv);
+  Editor ed(book);
+  CHECK(ed.SetCell(0, 3, 0, CellInput::Text("Total")));
+  CHECK(ed.SetCell(0, 3, 1, CellInput::Formula("SUM(B2:B3)")));
+  Font bold = book.GetStyles().FontOf(book.GetStyles().CellXf(0));
+  bold.bold = true;
+  const uint32_t boldFont = ed.AddFont(bold);
+  CHECK(ed.MapStyles(0, Range{0, 0, 0, 2}, [&](uint32_t style) {
+    Xf xf = book.GetStyles().CellXf(style);
+    xf.font = boldFont;
+    xf.applyFont = true;
+    return ed.AddXf(xf);
+  }));
+  CHECK(ed.SortRows(0, Range{1, 0, 2, 2}, {1, 0}, {{1, false}}));  // by B; its state goes with the sheet
+  CHECK(ed.AddSheet(-1));
+  // Saved as CSV first (by the CSV writer): nothing is unsaved, but the .xlsx save writes it all.
+  ed.SavedOutside(FileFormat::Csv);
+  CHECK(!ed.Modified() && book.Format() == FileFormat::Csv);
+
+  CHECK(xlsx::GiveBasePackage(book).Ok());
+  std::vector<uint8_t> saved = SaveBytes(book, ed, "save-csv-as-xlsx", FileFormat::Xlsx);
+  CheckClean(saved);
+  CHECK(book.Format() == FileFormat::Xlsx && !ed.Modified());
+  CHECK(PartText(saved, "/xl/worksheets/sheet1.xml").find("<sortState ref=\"A2:C3\">") != std::string::npos);
+  // What Excel repairs: a sheetId of 0, sheetViews without a view.
+  CHECK(PartText(saved, "/xl/workbook.xml").find("sheetId=\"0\"") == std::string::npos);
+  CHECK(PartText(saved, "/xl/worksheets/sheet1.xml").find("<sheetView tabSelected=\"1\" workbookViewId=\"0\"/>") !=
+        std::string::npos);
+  auto again = OpenZip(saved);
+  if (!again) return;
+  CHECK(again->SheetCount() == 2 && again->GetSheet(0).Name() == "data");
+  const Sheet& s = again->GetSheet(0);
+  CHECK_EQ(Text(s, 0, 0), std::string("name"));
+  CHECK_EQ(Text(s, 1, 0), std::string("a, b"));  // -2 sorts first
+  CHECK_EQ(Text(s, 2, 0), std::string("Pen"));
+  CHECK_EQ(FormulaText(s, 3, 1), std::string("SUM(B2:B3)"));
+  auto formatOf = [](const Workbook& b, const Sheet& sh, uint32_t r, uint32_t c) {
+    return std::string(b.GetStyles().FormatCode(b.GetStyles().CellXf(sh.StyleAt(r, c)).numFmt));
+  };
+  CHECK_EQ(formatOf(*again, s, 2, 1), formatOf(book, book.GetSheet(0), 2, 1));
+  CHECK_EQ(formatOf(*again, s, 2, 2), formatOf(book, book.GetSheet(0), 2, 2));
+  CHECK(!formatOf(*again, s, 2, 2).empty());
+  CHECK(again->GetStyles().FontOf(again->GetStyles().CellXf(s.StyleAt(0, 1))).bold);
+  CHECK(!again->GetStyles().FontOf(again->GetStyles().CellXf(s.StyleAt(1, 0))).bold);
+
+  // Then saved like any workbook: what changed since.
+  CHECK(ed.SetCell(0, 0, 0, CellInput::Text("item")));
+  CHECK(ed.Modified());
+  std::vector<uint8_t> next = SaveBytes(book, ed, "", FileFormat::Xlsx);
+  CheckClean(next);
+  auto third = OpenZip(next);
+  if (!third) return;
+  CHECK_EQ(Text(third->GetSheet(0), 0, 0), std::string("item"));
+  CHECK(third->GetStyles().FontOf(third->GetStyles().CellXf(third->GetSheet(0).StyleAt(0, 0))).bold);
 }

@@ -17,6 +17,7 @@ constexpr std::string_view kDeclaration = "<?xml version=\"1.0\" encoding=\"UTF-
 
 // "x:" for a start tag "<x:sheetData ...>", "" without a prefix.
 std::string PrefixOf(std::string_view startTag) {
+  if (startTag.empty()) return {};
   size_t end = 1;
   while (end < startTag.size() && startTag[end] != ' ' && startTag[end] != '/' && startTag[end] != '>' &&
          startTag[end] != '\t' && startTag[end] != '\r' && startTag[end] != '\n')
@@ -232,9 +233,13 @@ class SheetWriter {
           case XmlType::B:
             out_ += c.v.index ? '1' : '0';
             break;
-          case XmlType::E:
-            out_ += ErrorText(static_cast<ErrorCode>(c.v.index));
+          case XmlType::E: {
+            // Errors newer than the format (#SPILL!, #CALC!...) as Excel stores them without their
+            // rich value: #VALUE! (Excel repairs a file with <v>#SPILL!</v>).
+            ErrorCode e = static_cast<ErrorCode>(c.v.index);
+            out_ += ErrorText(e > ErrorCode::GettingData ? ErrorCode::Value : e);
             break;
+          }
         }
       }
       Close("v");
