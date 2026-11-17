@@ -211,15 +211,39 @@ class Editor {
   using Listener = std::function<void(const std::vector<Change>&)>;
   // Called after every edit, undo and redo, with everything it changed.
   void OnChange(Listener listener) { listeners_.push_back(std::move(listener)); }
-  // Changed since opening or MarkSaved(); undoing back to the saved state clears it.
+  // Changed since opening or the last save; undoing back to the saved state clears it.
   bool Modified() const;
-  void MarkSaved();
   // For the writer: the pieces of sheet `sheet` that differ from the file (SheetPiece bits), and
   // whether the workbook part (sheets, names, active tab), the styles or the shared strings do.
   uint32_t DirtyPieces(int sheet) const;
   bool WorkbookDirty() const;
   bool StylesDirty() const;
   bool StringsDirty() const;
+
+  // ---- Saving (sheet/xlsx/Xlsx.h: PrepareSave, WriteSave on a worker thread, CommitSave)
+  // While a save runs, the workbook is read-only: edits, undo and redo are refused (view state
+  // still changes), and the engine must not write values (it checks Saving()).
+  void BeginSave();
+  bool Saving() const;
+  void EndSave();  // the save failed: everything stays as it was before BeginSave
+  // The save reached the file: the workbook now stands for it. Each sheet written gets the text
+  // the file has around its cells (and a sheet added since opening its part and relationship);
+  // a shared strings part the save added is the workbook's from now on.
+  struct Written {
+    const Sheet* sheet = nullptr;
+    std::string part, relId;
+    detail::PartText text;
+  };
+  // A save that removed sheets ends the undo history, as deleting a sheet does in Excel: their parts
+  // are no longer in the file to bring back.
+  void Saved(std::vector<Written> sheets, bool stringsWritten, std::string newStringsPart, FileFormat format,
+             bool sheetsRemoved);
+  // Parts an earlier save wrote from the model: the package still holds what the file had when
+  // it was opened, so every save writes them from the model.
+  bool MustWrite(int sheet) const;
+  bool MustWriteStrings() const;
+  // The current state counts as saved, without a file (tools and tests; saving uses CommitSave).
+  void MarkSaved();
 
  private:
   struct State;

@@ -3,6 +3,7 @@
 #include "TestHarness.h"
 
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -61,13 +62,24 @@ void Keep(const std::string& name, const std::vector<uint8_t>& bytes) {
   CHECK(test::WriteFileBytes(std::wstring(dir) + L"\\" + std::wstring(name.begin(), name.end()) + L".xlsx", bytes));
 }
 
-std::vector<uint8_t> SaveBytes(const Workbook& book, const Editor& ed, const std::string& name = {}) {
+// A save as the app makes it (Xlsx.h): BeginSave, PrepareSave, WriteSave, then CommitSave as if
+// the bytes reached the file.
+std::vector<uint8_t> SaveBytes(Workbook& book, Editor& ed, const std::string& name = {},
+                               std::optional<FileFormat> format = std::nullopt) {
+  ed.BeginSave();
   xlsx::SavePlan plan;
-  fw::pkg::Status st = xlsx::PrepareSave(book, ed, plan);
+  fw::pkg::Status st = xlsx::PrepareSave(book, ed, plan, format.value_or(book.Format()));
   if (!st.Ok()) std::printf("  PrepareSave: %s\n", st.message.c_str());
   CHECK(st.Ok());
   fw::pkg::MemorySink sink;
-  CHECK(book.GetPackage()->Save(sink, plan.changes).Ok());
+  if (st.Ok()) st = xlsx::WriteSave(book, plan, sink);
+  CHECK(st.Ok());
+  if (st.Ok()) {
+    xlsx::CommitSave(book, ed, plan);
+  } else {
+    ed.EndSave();
+  }
+  CHECK(!ed.Saving());
   Keep(name, sink.bytes);
   return sink.bytes;
 }
@@ -310,4 +322,131 @@ TEST(sheet_save_excel_files) {
     CHECK(again->ActiveSheet() == again->SheetCount() - 1);
     if (chart >= 0) CHECK(again->FindSheet(chartName) < 0);
   }
+}
+
+// Saving again after more edits: the workbook stands for the file it saved, so the second file
+// has both rounds of edits, sheets added in each, and nothing the first save wrote is lost.
+TEST(sheet_save_again) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>", "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.SetColumnWidth(0, 1, 1, 20));
+  CHECK(ed.SetCell(0, 0, 1, CellInput::Text("first")));
+  CHECK(ed.AddSheet(-1, "Added"));
+  CHECK(ed.SetCell(2, 0, 0, CellInput::Number(3)));
+  SaveBytes(*book, ed, "save-first");
+  CHECK(!ed.Modified() && ed.CanUndo() && ed.DirtyPieces(0) == 0 && !ed.WorkbookDirty());
+  CHECK(book->GetSheet(2).PartName() == "/xl/worksheets/sheet3.xml" && !book->GetSheet(2).RelId().empty());
+
+  CHECK(ed.SetCell(0, 1, 0, CellInput::Text("second")));
+  CHECK(ed.Merge(0, Range{4, 0, 4, 1}));
+  CHECK(ed.AddSheet(-1, "Another"));
+  std::vector<uint8_t> second = SaveBytes(*book, ed, "save-second");
+  CheckClean(second);
+  auto again = OpenZip(second);
+  if (!again) return;
+  CHECK(again->SheetCount() == 4 && again->GetSheet(2).Name() == "Added" && again->GetSheet(3).Name() == "Another");
+  CHECK(again->GetSheet(3).PartName() != again->GetSheet(2).PartName());
+  CHECK_EQ(Text(again->GetSheet(0), 0, 1), std::string("first"));
+  CHECK_EQ(Text(again->GetSheet(0), 1, 0), std::string("second"));
+  CHECK_EQ(Text(again->GetSheet(2), 0, 0), std::string("3"));
+  CHECK(again->GetSheet(0).Column(1).width == 20 && again->GetSheet(0).Merges().size() == 1);
+
+  // Undone back to the first edit: the added sheets go, and with them the undo history (as
+  // deleting a sheet ends it in Excel: their parts aren't in the file any more).
+  CHECK(ed.Undo(6));
+  std::vector<uint8_t> third = SaveBytes(*book, ed, "save-third");
+  CheckClean(third);
+  again = OpenZip(third);
+  if (!again) return;
+  CHECK(again->SheetCount() == 2);
+  CHECK_EQ(Text(again->GetSheet(0), 0, 1), std::string(""));
+  CHECK_EQ(Text(again->GetSheet(0), 1, 0), std::string(""));
+  CHECK(again->GetSheet(0).Column(1).width == 20 && again->GetSheet(0).Merges().empty());
+  CHECK(PartText(third, "/xl/worksheets/sheet3.xml").empty() && PartText(third, "/xl/worksheets/sheet4.xml").empty());
+  CHECK(!ed.CanUndo() && !ed.CanRedo() && !ed.Modified());
+}
+
+// Undo past a save makes the workbook differ from the file again, and redo makes it the same.
+TEST(sheet_save_undo_past_a_save) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>", "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.SetColumnWidth(0, 1, 1, 20));
+  CHECK(ed.SetTabColor(0, Color{Color::Kind::Rgb, 0xFF00FF00}));
+  SaveBytes(*book, ed);
+  CHECK(!ed.Modified() && ed.DirtyPieces(0) == 0);
+  CHECK(ed.Undo(2));
+  CHECK(ed.Modified() && (ed.DirtyPieces(0) & edit::kPieceCols) && (ed.DirtyPieces(0) & edit::kPieceProps));
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-undo-past");
+  CheckClean(saved);
+  auto again = OpenZip(saved);
+  if (!again) return;
+  CHECK(again->GetSheet(0).Columns().empty() && !again->GetSheet(0).Props().tabColor.IsSet());
+  CHECK(ed.Redo(2) && ed.Modified());
+  saved = SaveBytes(*book, ed);
+  again = OpenZip(saved);
+  if (!again) return;
+  CHECK(again->GetSheet(0).Column(1).width == 20 && again->GetSheet(0).Props().tabColor.IsSet());
+  CHECK(ed.Undo(1) && ed.Modified() && ed.Redo(1) && !ed.Modified() && ed.DirtyPieces(0) == 0);
+}
+
+// While a save writes, the workbook is read-only: edits, undo and redo are refused, the view still
+// changes (and stays to save), and a failed save leaves everything as it was.
+TEST(sheet_save_read_only_while_saving) {
+  auto book = OpenParts({"<sheetData/>", "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.SetCell(0, 0, 0, CellInput::Number(1)));
+  ed.BeginSave();
+  CHECK(ed.Saving());
+  CHECK(!ed.SetCell(0, 0, 0, CellInput::Number(2)) && !ed.Undo() && !ed.AddSheet(-1));
+  xlsx::SavePlan plan;
+  CHECK(xlsx::PrepareSave(*book, ed, plan).Ok());
+  ed.SetSelection(0, CellAddr{3, 3}, {Range::Cell(3, 3)});
+  fw::pkg::MemorySink sink;
+  CHECK(xlsx::WriteSave(*book, plan, sink).Ok());
+  xlsx::CommitSave(*book, ed, plan);
+  CHECK(!ed.Saving() && ed.Modified() && ed.DirtyPieces(0) == edit::kPieceViews);
+  CHECK(ed.SetCell(0, 0, 0, CellInput::Number(2)));
+  ed.BeginSave();
+  ed.EndSave();
+  CHECK(!ed.Saving() && ed.Modified() && (ed.DirtyPieces(0) & edit::kPieceCells));
+  CHECK(ed.Undo() && ed.DirtyPieces(0) == edit::kPieceViews);
+}
+
+// The format the file becomes: .xlsm keeps the VBA project, .xlsx leaves it out, .xltx is a
+// template; the workbook part's content type says which (Excel refuses a mismatch).
+TEST(sheet_save_formats) {
+  Parts parts = WorkbookParts({"<sheetData/>", "<sheetData/>"});
+  std::string& types = PartOf(parts, "[Content_Types].xml");
+  types.insert(types.find("<Default "), "<Default Extension=\"bin\" ContentType=\"application/vnd.ms-office.vbaProject\"/>");
+  const std::string xlsxMain = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+  types.replace(types.find(xlsxMain), xlsxMain.size(), "application/vnd.ms-excel.sheet.macroEnabled.main+xml");
+  AddPart(parts, "xl/vbaProject.bin", "VBA", "", "xl/workbook.xml", "rV",
+          "http://schemas.microsoft.com/office/2006/relationships/vbaProject", "vbaProject.bin");
+  auto book = OpenZip(test::MakeZip(parts));
+  if (!book) return;
+  CHECK(book->Format() == FileFormat::Xlsm && xlsx::HasMacros(*book));
+  Editor ed(*book);
+  CHECK(ed.SetCell(0, 0, 0, CellInput::Number(1)));
+  std::vector<uint8_t> xlsm = SaveBytes(*book, ed);
+  CHECK(PartText(xlsm, "/[Content_Types].xml").find("application/vnd.ms-excel.sheet.macroEnabled.main+xml") !=
+        std::string::npos);
+  CHECK(PartText(xlsm, "/xl/vbaProject.bin") == "VBA");
+
+  std::vector<uint8_t> xlsx = SaveBytes(*book, ed, "save-as-xlsx", FileFormat::Xlsx);
+  CheckClean(xlsx);
+  std::string xlsxTypes = PartText(xlsx, "/[Content_Types].xml");
+  CHECK(xlsxTypes.find("spreadsheetml.sheet.main+xml") != std::string::npos && xlsxTypes.find("macroEnabled") == std::string::npos);
+  CHECK(PartText(xlsx, "/xl/vbaProject.bin").empty() &&
+        PartText(xlsx, "/xl/_rels/workbook.xml.rels").find("vbaProject") == std::string::npos);
+  CHECK(book->Format() == FileFormat::Xlsx && !xlsx::HasMacros(*book));
+
+  std::vector<uint8_t> xltx = SaveBytes(*book, ed, "save-as-xltx", FileFormat::Xltx);
+  CheckClean(xltx);
+  auto again = OpenZip(xltx);
+  if (!again) return;
+  CHECK(again->Format() == FileFormat::Xltx);
+  CHECK_EQ(Text(again->GetSheet(0), 0, 0), std::string("1"));
 }
