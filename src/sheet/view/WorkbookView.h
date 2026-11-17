@@ -362,6 +362,9 @@ class WorkbookView : public PagedView {
   // Replace (Ctrl+H): every place the search's text is in a match's content, as typed.
   bool ReplacedText(const Match& m, const std::wstring& with, std::wstring& out) const;
   bool editReplaces_ = false;  // typing over the cell: the entry is written even if unchanged
+  // Typing a number over a percent cell (0%) adds the "%" after the caret, as Excel does; a "%"
+  // typed just before it steps over it.
+  bool autoPercent_ = false;
   // The model's edits (s2-model's Editor), made when first needed; Edited hears every change.
   edit::Editor& Ed();
   void Edited(const std::vector<edit::Change>& changes);
