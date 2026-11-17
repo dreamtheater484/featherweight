@@ -226,6 +226,7 @@ std::optional<std::pair<uint32_t, uint32_t>> PrintLayout::ObjectsEnd() const {
   if (!info_.objects) return std::nullopt;
   double right = -1, bottom = -1;
   for (const SheetObjects::Object& o : info_.objects->Objects()) {
+    if (!o.prints) continue;
     right = std::max(right, static_cast<double>(o.rect.right));
     bottom = std::max(bottom, static_cast<double>(o.rect.bottom));
   }
@@ -242,7 +243,8 @@ bool PrintLayout::Blank(const Range& body) {
   if (info_.objects) {
     const draw::Rect page = SheetRect(body);
     for (const SheetObjects::Object& o : info_.objects->Objects())
-      if (o.rect.left < page.right && o.rect.right > page.left && o.rect.top < page.bottom && o.rect.bottom > page.top)
+      if (o.prints && o.rect.left < page.right && o.rect.right > page.left && o.rect.top < page.bottom &&
+          o.rect.bottom > page.top)
         return false;
   }
   for (const Range& r : sparklines_)

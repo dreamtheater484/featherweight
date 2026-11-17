@@ -510,15 +510,17 @@ void WorkbookView::DrawGrid(Canvas& c, ID2D1DeviceContext* dc) {
       draw::D2DPainter painter(dc);
       painter.ClipRect({rc.left, rc.top, rc.right, rc.bottom});
       PaintCells(painter, sheet, *text_, grid_, g, area, o);
-      // Pictures, shapes, charts and the notes' marks, from sheet points to the pane. (A sheet
-      // read right to left would mirror the pictures themselves: not yet.)
-      if (SheetObjects* objects = Objects(); objects && !rtl_) {
+      // Pictures, shapes, charts and the notes' marks, from sheet points to the pane. A sheet read
+      // right to left mirrors where they go (about the pane's mirror line), not what they show.
+      if (SheetObjects* objects = Objects()) {
         const float s = static_cast<float>(k / kPtPerPx);
+        const float tx = l - static_cast<float>(pane.sx * k);
         painter.Save();
-        painter.Transform(draw::Matrix::Scale(s, s) *
-                          draw::Matrix::Translate(l - static_cast<float>(pane.sx * k), t - static_cast<float>(pane.sy * k)));
+        painter.Transform(draw::Matrix::Scale(s, s) * draw::Matrix::Translate(tx, t - static_cast<float>(pane.sy * k)));
         const float x0 = static_cast<float>(pane.sx * kPtPerPx), y0 = static_cast<float>(pane.sy * kPtPerPx);
-        objects->Draw(painter, {x0, y0, x0 + (rc.right - rc.left) / s, y0 + (rc.bottom - rc.top) / s}, {});
+        SheetObjects::DrawOptions d;
+        if (rtl_) d.mirrorX = (mirror - 2 * tx) / s;
+        objects->Draw(painter, {x0, y0, x0 + (rc.right - rc.left) / s, y0 + (rc.bottom - rc.top) / s}, d);
         painter.Restore();
       }
     }
