@@ -30,6 +30,7 @@ struct Shown {
   bool center = false;  // TRUE, FALSE and errors: centered in General
   bool overflow = false;  // "####"
   bool fill = false;      // a repeated character fills the cell (`*x`): never runs into the next
+  uint32_t fillAt = 0, fillCount = 0;  // where the fill's characters are in `text`, and how many
 };
 
 // What a table's style and conditional formats change in a cell's text, over its own format.

@@ -163,6 +163,8 @@ void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out,
     const size_t at = std::min<size_t>(static_cast<size_t>(f.fill), out.text.size());
     out.text.insert(at, static_cast<size_t>(n), ch);
     out.hidden.insert(out.hidden.begin() + at, static_cast<size_t>(n), 0);
+    out.fillAt = static_cast<uint32_t>(at);
+    out.fillCount = static_cast<uint32_t>(n);
   }
 }
 
@@ -193,6 +195,30 @@ void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const
   if (look.italic >= 0) font.italic = look.italic != 0;
   if (look.strike >= 0) font.strike = look.strike != 0;
   if (look.underline >= 0) font.underline = static_cast<Underline>(look.underline);
+  // A fill counted again with the advances the text is drawn with (the screen's pixels are
+  // narrower), and spaced out by what a whole character leaves: what comes before it at the cell's
+  // left, what comes after at its right, as Excel shows "$" and the amount apart.
+  float fillSpacing = 0;
+  if (out.shown.fill && widthPx > 0 && out.shown.fillCount > 0) {
+    Shown& s = out.shown;
+    const text::Face* face = fonts_.FaceFor(FontMeasure::Family(font, base), font.bold, font.italic);
+    const float size = static_cast<float>(FontMeasure::Size(font, base));
+    const wchar_t ch = s.text[s.fillAt];
+    const float one = face ? face->Advance(ch, size) : 0;
+    if (one > 0) {
+      float used = 0;
+      for (size_t i = 0; i < s.text.size(); ++i)
+        if (i < s.fillAt || i >= s.fillAt + s.fillCount) used += face->Advance(s.text[i], size);
+      const float avail = std::max(0, widthPx - 5 - IndentPx(measure_, xf, font, base)) * 0.75f;
+      uint32_t n = static_cast<uint32_t>(std::max(0.f, std::floor((avail - used) / one)));
+      if (s.overflow) n = std::max(n, 1u);
+      s.text.replace(s.fillAt, s.fillCount, n, ch);
+      s.hidden.erase(s.hidden.begin() + s.fillAt, s.hidden.begin() + s.fillAt + s.fillCount);
+      s.hidden.insert(s.hidden.begin() + s.fillAt, n, 0);
+      s.fillCount = n;
+      if (n > 0 && !s.overflow) fillSpacing = std::max(0.f, avail - used - n * one) / n;
+    }
+  }
   const Shown& shown = out.shown;
 
   out.align = al.horizontal;
@@ -282,6 +308,31 @@ void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const
       lengths.push_back(static_cast<uint32_t>(j - i));
       runs.push_back(runFor(font, hidden != 0));
       i = j;
+    }
+    if (fillSpacing > 0) {
+      // The fill's characters in a run of their own, spaced out.
+      std::vector<text::TextStyle> fs;
+      std::vector<uint32_t> len;
+      std::vector<Run> rn;
+      const uint32_t f0 = shown.fillAt, f1 = shown.fillAt + shown.fillCount;
+      uint32_t pos = 0;
+      for (size_t k = 0; k < lengths.size(); ++k) {
+        const uint32_t a = pos, b = pos + lengths[k];
+        auto add = [&](uint32_t from, uint32_t to, bool spaced) {
+          if (to <= from) return;
+          fs.push_back(styles[k]);
+          if (spaced) fs.back().letterSpacing = fillSpacing;
+          len.push_back(to - from);
+          rn.push_back(runs[k]);
+        };
+        add(a, std::min(b, f0), false);
+        add(std::max(a, f0), std::min(b, f1), true);
+        add(std::max(a, f1), b, false);
+        pos = b;
+      }
+      styles = std::move(fs);
+      lengths = std::move(len);
+      runs = std::move(rn);
     }
   }
   // Line breaks show only in wrapped cells; a carriage return never does.
