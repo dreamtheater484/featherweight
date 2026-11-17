@@ -26,7 +26,8 @@ struct NumLocale {
   uint32_t lcid = 0x409;
   // Format codes as the region types them (TEXT(), Excel's Format Cells box): the letters for
   // year, day and hour, and General's name. Excel takes them from the region, not the language:
-  // on an en-NL PC they are Dutch (jjjj, uu, Standaard; measured).
+  // on an en-NL PC they are Dutch (jjjj, uu, Standaard; measured) with English Office and Windows
+  // (Excel's UI and install language 1033, CountrySetting 31), so English Excel's users type jjjj.
   wchar_t yearCode = L'y', dayCode = L'd', hourCode = L'h';
   std::wstring generalName = L"General";
   // Names in another language, for a [$-407] tag: nullptr, or a locale whose names (month, day,
