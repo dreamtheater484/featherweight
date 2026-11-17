@@ -434,9 +434,8 @@ class WorkbookView : public PagedView {
   bool DataCommandState(int cmd, CommandState& s);
   // Sort and remove duplicates: the range they work on (the selection, or the current region).
   Range DataRange();
-  // The data rows `range` holds rewritten in `order` (source rows), the first `keep` of them; the
-  // rest of the range emptied. One undo step.
-  bool MoveRows(const Range& range, const std::vector<uint32_t>& order, size_t keep, std::u16string name);
+  // Through the edit layer's SortRows: formulas move as Excel moves them, one undo step; refused
+  // over merged cells or array formulas, with Excel's message.
   bool SortRange(const Range& range, bool header, const std::vector<data::SortKey>& keys);
   bool RemoveDuplicates(const Range& range, bool header, const std::vector<uint32_t>& columns);
   class DataPanel;

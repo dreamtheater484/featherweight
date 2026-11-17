@@ -134,71 +134,63 @@ Range WorkbookView::DataRange() {
   return data::CurrentRegion(Current(), active_);
 }
 
-bool WorkbookView::MoveRows(const Range& range, const std::vector<uint32_t>& order, size_t keep, std::u16string name) {
-  if (!Ready() || range.lastRow < range.firstRow) return false;
+bool WorkbookView::SortRange(const Range& range, bool header, const std::vector<data::SortKey>& keys) {
+  Range rows = range;
+  if (header) ++rows.firstRow;
+  if (!Ready() || rows.firstRow >= rows.lastRow || keys.empty()) return false;
   const Sheet& s = Current();
-  // Until the edit API moves rows with their formulas (s2-model's SortRows), only values and formats.
-  bool formulas = false;
-  s.ForEachCell(range, [&](const CellInfo& c) {
-    formulas = c.hasFormula;
-    return !formulas;
-  });
-  if (formulas) {
-    host_.ViewMessage(BannerKind::Info, L"Featherweight can't yet sort or remove duplicates where cells have formulas.");
-    return false;
-  }
-  std::vector<std::pair<CellAddr, edit::CellInput>> cells;
-  for (size_t k = 0; k < keep && k < order.size(); ++k) {
-    const uint32_t to = range.firstRow + static_cast<uint32_t>(k), from = order[k];
-    if (to == from) continue;
-    for (uint32_t c = range.firstCol; c <= range.lastCol; ++c) {
-      const Value v = s.GetValue(from, c);
-      edit::CellInput in;
-      switch (v.type) {
-        case ValueType::Empty: break;
-        case ValueType::Number: in = edit::CellInput::Number(v.number); break;
-        case ValueType::String: in = edit::CellInput::Text(std::string(v.text)); break;
-        case ValueType::Bool: in = edit::CellInput::Bool(v.boolean); break;
-        case ValueType::Error: in = edit::CellInput::Error(v.error); break;
-      }
-      in.WithStyle(s.StyleAt(from, c));
-      cells.emplace_back(CellAddr{to, c}, std::move(in));
+  const std::vector<uint32_t> sorted = data::SortOrder(s, rows, keys);
+  // SortRows' order: the row at rows.firstRow + order[i] goes to rows.firstRow + i. Under a filter,
+  // the rows it hides stay where they are and the shown rows are sorted among themselves (Excel).
+  std::vector<uint32_t> order(sorted.size());
+  const ViewFilter* f = FilterOf();
+  const bool filtered = f && !f->criteria.empty() && f->ref.firstRow < rows.lastRow && f->ref.lastRow >= rows.firstRow;
+  if (filtered) {
+    std::vector<uint32_t> shown;
+    for (const uint32_t row : sorted)
+      if (!s.Row(row).hidden) shown.push_back(row);
+    size_t k = 0;
+    for (size_t i = 0; i < order.size(); ++i) {
+      const uint32_t at = rows.firstRow + static_cast<uint32_t>(i);
+      order[i] = (s.Row(at).hidden ? at : shown[k++]) - rows.firstRow;
     }
+  } else {
+    for (size_t i = 0; i < order.size(); ++i) order[i] = sorted[i] - rows.firstRow;
   }
-  const int sheet = static_cast<int>(sheet_);
-  edit::EditGroup group(Ed(), std::move(name));
-  edit::Result r;
-  if (!cells.empty()) r = Ed().SetCells(sheet, cells);
-  if (r && keep < static_cast<size_t>(range.lastRow - range.firstRow + 1))
-    r = Ed().ClearAll(sheet, Range{range.firstRow + static_cast<uint32_t>(keep), range.firstCol, range.lastRow, range.lastCol});
-  if (EditRefused(r)) return false;
-  group.done = true;
+  // The sort's record (Excel's sortState, for Data > Reapply) lives in the sheet's XML: a workbook
+  // read from CSV has none, and a CSV file couldn't keep it.
+  std::vector<edit::Editor::SortKey> sortKeys;
+  if (book_->GetPackage())
+    for (const data::SortKey& k : keys) sortKeys.push_back({k.index, k.descending});
+  if (EditRefused(Ed().SortRows(static_cast<int>(sheet_), rows, order, sortKeys))) return false;
   host_.ViewInvalidate();
   return true;
 }
 
-bool WorkbookView::SortRange(const Range& range, bool header, const std::vector<data::SortKey>& keys) {
-  Range rows = range;
-  if (header) ++rows.firstRow;
-  if (rows.firstRow >= rows.lastRow || keys.empty()) return false;
-  const std::vector<uint32_t> order = data::SortOrder(Current(), rows, keys);
-  bool moved = false;
-  for (size_t i = 0; i < order.size() && !moved; ++i) moved = order[i] != rows.firstRow + i;
-  return !moved || MoveRows(rows, order, order.size(), u"Sort");
-}
-
 bool WorkbookView::RemoveDuplicates(const Range& range, bool header, const std::vector<uint32_t>& columns) {
+  if (!Ready()) return false;
   const std::vector<bool> dup = data::DuplicateRows(*book_, Current(), range, columns, header, text_->Locale());
   const uint32_t first = range.firstRow + (header ? 1 : 0);
+  // The unique rows move up as a sort moves them (measured: formulas copied, relative references
+  // following, absolute ones and references from elsewhere staying), and the rows left over clear.
   std::vector<uint32_t> order;
   for (size_t i = 0; i < dup.size(); ++i)
-    if (!dup[i]) order.push_back(first + static_cast<uint32_t>(i));
-  const size_t removed = dup.size() - order.size();
-  if (removed && !MoveRows(Range{first, range.firstCol, range.lastRow, range.lastCol}, order, order.size(), u"Remove Duplicates"))
-    return false;
+    if (!dup[i]) order.push_back(static_cast<uint32_t>(i));
+  const size_t unique = order.size(), removed = dup.size() - unique;
+  if (removed) {
+    for (size_t i = 0; i < dup.size(); ++i)
+      if (dup[i]) order.push_back(static_cast<uint32_t>(i));
+    const int sheet = static_cast<int>(sheet_);
+    edit::EditGroup group(Ed(), u"Remove Duplicates");
+    edit::Result r = Ed().SortRows(sheet, Range{first, range.firstCol, range.lastRow, range.lastCol}, order);
+    if (r) r = Ed().ClearAll(sheet, Range{first + static_cast<uint32_t>(unique), range.firstCol, range.lastRow, range.lastCol});
+    if (EditRefused(r)) return false;
+    group.done = true;
+    host_.ViewInvalidate();
+  }
   // Excel's report, in its words.
   host_.ViewMessage(BannerKind::Info, removed ? std::to_wstring(removed) + L" duplicate values found and removed; " +
-                                                    std::to_wstring(order.size()) + L" unique values remain."
+                                                    std::to_wstring(unique) + L" unique values remain."
                                               : L"No duplicate values found.");
   return true;
 }
