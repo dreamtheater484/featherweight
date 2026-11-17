@@ -206,6 +206,7 @@ void SheetLoader::Reset() {
   s_.mergeMaxHeight_ = 0;
   s_.views_.clear();
   s_.props_ = SheetProps();
+  s_.filter_.reset();
   s_.links_.clear();
   s_.page_ = PageSetup();
   s_.headerFooter_ = HeaderFooter();
@@ -261,7 +262,7 @@ Status SheetLoader::Load(std::string_view xml, const pkg::Limits& limits, std::s
     static constexpr std::string_view kRead[] = {"sheetPr",    "dimension",   "sheetViews", "sheetFormatPr", "cols",
                                                  "mergeCells", "hyperlinks",  "printOptions", "pageMargins", "pageSetup",
                                                  "headerFooter", "rowBreaks", "colBreaks",  "drawing",       "legacyDrawing",
-                                                 "tableParts",   "sheetCalcPr"};
+                                                 "tableParts",   "sheetCalcPr", "autoFilter"};
     bool read = main && std::find(std::begin(kRead), std::end(kRead), local) != std::end(kRead);
     std::string name(read ? local : std::string_view());
     if (!xlsx::SkipElement(pull)) return Fail();
@@ -836,6 +837,12 @@ void SheetLoader::ReadTop(std::string_view local, std::string_view xml) {
     }
   } else if (local == "sheetCalcPr") {
     s_.props_.fullCalcOnLoad = BoolAttr(n, "fullCalcOnLoad", false);
+  } else if (local == "autoFilter") {
+    SheetFilter f;
+    if (ParseRange(Attr(n, "ref"), f.ref)) {
+      f.filtered = static_cast<bool>(Child(n, "filterColumn"));
+      s_.filter_ = f;
+    }
   } else if (local == "dimension") {
     Range r;
     if (ParseRange(Attr(n, "ref"), r)) s_.dimension_ = r;

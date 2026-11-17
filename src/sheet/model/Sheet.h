@@ -176,6 +176,8 @@ struct Table {
   uint32_t headerRows = 1, totalsRows = 0;
   bool totalsRowShown = true;     // a total row was ever shown (totalsRowShown)
   bool autoFilter = false;        // has filter buttons
+  bool filtered = false;          // its autoFilter has a filterColumn (criteria): Excel's SUBTOTAL
+                                  // leaves out the rows it hides. Read only.
   std::vector<TableColumn> columns;  // left to right, one per column of `ref`
   TableStyleInfo style;
   int headerDxf = -1, dataDxf = -1, totalsDxf = -1;
@@ -198,6 +200,14 @@ struct Table {
   // formula's ' escapes undone by the caller): its index in `columns`, which is its offset from
   // ref.firstCol; -1 when there's none.
   int FindColumn(std::string_view columnName) const;
+};
+
+// The sheet's own autoFilter (a table's is in its Table): its range, and whether it has a
+// filterColumn (criteria), so that the rows it hides are filtered out rather than hidden by hand.
+// Read only.
+struct SheetFilter {
+  Range ref;
+  bool filtered = false;
 };
 
 // sheetPr, and sheetCalcPr's fullCalcOnLoad.
@@ -360,6 +370,7 @@ class Sheet {
   const Range* MergeAt(uint32_t row, uint32_t col) const;
   const std::vector<SheetView>& Views() const { return views_; }
   const SheetProps& Props() const { return props_; }
+  const std::optional<SheetFilter>& Filter() const { return filter_; }
   const std::vector<Hyperlink>& Hyperlinks() const { return links_; }
   const PageSetup& Page() const { return page_; }
   const HeaderFooter& HeadersFooters() const { return headerFooter_; }
@@ -438,6 +449,7 @@ class Sheet {
   uint32_t mergeMaxHeight_ = 0;   // the tallest merge, in rows, for MergeAt's search
   std::vector<SheetView> views_;
   SheetProps props_;
+  std::optional<SheetFilter> filter_;
   std::vector<Hyperlink> links_;
   PageSetup page_;
   HeaderFooter headerFooter_;

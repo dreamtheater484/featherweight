@@ -147,6 +147,7 @@ const std::string kSheet1 =
     "<row r=\"6\"><c r=\"A6\"><f t=\"shared\" si=\"0\"/></c><c r=\"C6\" t=\"s\"><v>3</v></c><c r=\"D6\" t=\"s\"><v>1</v></c></row>"
     "</sheetData>"
     "<sheetCalcPr fullCalcOnLoad=\"1\"/>"
+    "<autoFilter ref=\"A1:D6\"><filterColumn colId=\"1\"><filters><filter val=\"Hello\"/></filters></filterColumn></autoFilter>"
     "<mergeCells count=\"1\"><mergeCell ref=\"C3:D4\"/></mergeCells>"
     "<conditionalFormatting sqref=\"A1:A6\"><cfRule type=\"cellIs\" dxfId=\"0\" priority=\"1\" operator=\"greaterThan\"><formula>2</formula></cfRule></conditionalFormatting>"
     "<hyperlinks><hyperlink ref=\"B1\" location=\"'Sheet 2'!A1\" display=\"Go\"/></hyperlinks>"
@@ -284,6 +285,7 @@ TEST(sheet_read_layout) {
   CHECK(!s.Props().summaryBelow);
   CHECK(s.Props().tabColor.kind == Color::Kind::Rgb && s.Props().tabColor.value == 0xFF00B050);
   CHECK(s.Props().fullCalcOnLoad);
+  CHECK(s.Filter() && s.Filter()->ref == (Range{0, 0, 5, 3}) && s.Filter()->filtered);
   CHECK(s.KeptXml().find("<sheetCalcPr fullCalcOnLoad=\"1\"/>") != std::string::npos);  // written as it was
   CHECK(s.Hyperlinks().size() == 1 && s.Hyperlinks()[0].location == "'Sheet 2'!A1");
   CHECK(s.Page().paperSize == 9 && s.Page().orientation == Orientation::Landscape && s.Page().fitToHeight == 0);
@@ -301,7 +303,7 @@ TEST(sheet_read_workbook) {
   CHECK(book->Date1904());
   CHECK(book->Calc().fullCalcOnLoad && book->Calc().calcId == 191029);
   CHECK(book->Calc().calcFeatures == (std::vector<std::string>{"microsoft.com:RD", "microsoft.com:Single"}));
-  CHECK(!book->GetSheet(1).Props().fullCalcOnLoad);
+  CHECK(!book->GetSheet(1).Props().fullCalcOnLoad && !book->GetSheet(1).Filter());
   CHECK_EQ(book->ActiveSheet(), 1u);
   // Only the active sheet is read at first; the others when asked.
   CHECK(!book->GetSheet(0).Loaded());
@@ -534,6 +536,13 @@ TEST(sheet_tables) {
   CHECK(t->columns[2].name == "Tax\nrate");  // _x000a_: a line break in the header
   CHECK(t->FindColumn("TAX\nrate") == 2 && t->FindColumn("Amount") == 1 && t->FindColumn("Amount ") == -1);
   CHECK(t->All() == t->ref && t->Headers() == (Range{1, 1, 1, 3}) && t->Totals() == (Range{6, 1, 6, 3}));
+  CHECK(!t->filtered);  // filter buttons, no criteria
+  for (auto& [name, xml] : parts)
+    if (name == "xl/tables/table1.xml")
+      xml.replace(xml.find("<autoFilter ref=\"B2:D6\"/>"), 25,
+                  "<autoFilter ref=\"B2:D6\"><filterColumn colId=\"1\"><filters><filter val=\"5\"/></filters></filterColumn></autoFilter>");
+  auto filtered = Open(parts, false);
+  CHECK(filtered && filtered->FindTable("Sales") && filtered->FindTable("Sales")->filtered);
 }
 
 namespace {

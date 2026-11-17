@@ -597,7 +597,9 @@ Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::str
   t.headerDxf = IntAttr(n, "headerRowDxfId", -1);
   t.dataDxf = IntAttr(n, "dataDxfId", -1);
   t.totalsDxf = IntAttr(n, "totalsRowDxfId", -1);
-  t.autoFilter = static_cast<bool>(Child(n, "autoFilter"));
+  pugi::xml_node filter = Child(n, "autoFilter");
+  t.autoFilter = static_cast<bool>(filter);
+  t.filtered = static_cast<bool>(Child(filter, "filterColumn"));
   if (pugi::xml_node cols = Child(n, "tableColumns"))
     for (pugi::xml_node c = cols.first_child(); c; c = c.next_sibling()) {
       if (c.type() != pugi::node_element || Local(c) != "tableColumn") continue;
