@@ -2,12 +2,19 @@
 #  - fwsheetrender: headless drawing of cells and pages through draw::Painter (column widths and row
 #    heights as Excel has them, cell text, fills, borders, pagination). Tools and tests can use it.
 #  - fwsheetview: the workbook tab (a TabContent), on the app's shell; linked into the exe only.
-add_library(fwsheetrender STATIC Grid.cpp CellText.cpp CellPaint.cpp PrintLayout.cpp)
+add_library(fwsheetrender STATIC Grid.cpp CellText.cpp CellPaint.cpp PrintLayout.cpp CellEditor.cpp)
 target_link_libraries(fwsheetrender PUBLIC fwsheet fwsheetobjects fwtext fwdraw)
 target_compile_options(fwsheetrender PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
 # The tab: built against the app's shell headers (src/), and linked into the exe, which has them.
-add_library(fwsheetview STATIC WorkbookView.cpp WorkbookInput.cpp WorkbookCommands.cpp WorkbookPrint.cpp)
+add_library(fwsheetview STATIC WorkbookView.cpp WorkbookInput.cpp WorkbookCommands.cpp WorkbookPrint.cpp
+            WorkbookEdit.cpp WorkbookFunctions.cpp
+            WorkbookSheetOps.cpp WorkbookPanels.cpp WorkbookFill.cpp
+            WorkbookClipboard.cpp)
 target_include_directories(fwsheetview PRIVATE "${PROJECT_SOURCE_DIR}/src" "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(fwsheetview PUBLIC fwsheetrender)
 target_compile_options(fwsheetview PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
+if(TARGET fw_tests)
+  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_grid_edit.cpp")
+  target_link_libraries(fw_tests PRIVATE fwsheetrender)
+endif()

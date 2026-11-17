@@ -9,13 +9,20 @@
 
 #include "PagedView.h"
 #include "sheet/calc/Bind.h"
+#include "sheet/calc/Entry.h"
+#include "sheet/edit/Edit.h"
 #include "sheet/condfmt/CondFormat.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/view/CellPaint.h"
 #include "sheet/view/CellText.h"
+#include "sheet/view/CellEditor.h"
 #include "sheet/view/Grid.h"
 #include "sheet/view/PrintLayout.h"
 #include "text/Fonts.h"
+
+namespace fw::sheet::calc {
+struct FunctionHelp;
+}
 
 namespace fw::sheet::view {
 
@@ -60,11 +67,15 @@ class WorkbookView : public PagedView {
   void OnMouseLeave() override;
   void OnWheel(int delta, bool horizontal, UINT mods, int x, int y) override;
   bool OnKeyDown(UINT vk, UINT mods) override;
-  bool OnChar(wchar_t, UINT) override { return false; }
+  bool OnChar(wchar_t ch, UINT mods) override;
   HCURSOR CursorAt(int x, int y) override;
   std::wstring TooltipAt(int x, int y) override;
   bool Dragging() const override { return mouse_ != Mouse::None || PagedView::Dragging(); }
-  bool HasKeyFocus() const override { return false; }
+  bool HasKeyFocus() const override { return editor_.Active(); }
+  bool CanReplace() const override { return Ready() && !preview_ && !ChartSheet(); }
+  bool ReplaceCurrent(const std::wstring& with) override;
+  int ReplaceAll(const std::wstring& with) override;
+  std::optional<RECT> CaretRect() override;
 
   int ShortcutFor(UINT vk, UINT mods) const override;
   CommandState QueryCommand(int cmd) override;
@@ -191,6 +202,7 @@ class WorkbookView : public PagedView {
 
   // ---- Formula bar
   std::wstring FormulaBarText() const;
+  std::wstring EditTextAt(const Sheet& s, uint32_t row, uint32_t col) const;
   std::wstring ActiveName() const;
 
   // ---- Sheet tabs
@@ -251,7 +263,7 @@ class WorkbookView : public PagedView {
   float tabScroll_ = 0;
 
   // Mouse.
-  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH };
+  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag, Fill };
   Mouse mouse_ = Mouse::None;
   float thumbGrab_ = 0;
   int hoverTab_ = -1;
@@ -292,6 +304,151 @@ class WorkbookView : public PagedView {
   // Formulas that kept their cached value (a function the engine can't calculate yet): a small
   // gray mark in the cell's top left corner; the status bar says why for the active cell.
   void DrawStale(gfx::Canvas& c);
+
+  // ---- Editing a cell (s2-plan "Editing in the grid"): the text in CellEditor, drawn over the
+  // cell and in the formula bar; Enter and Tab move as Excel's do (Enter after Tabs returns to the
+  // column the Tabs started from).
+  void BeginEdit(CellEditor::Mode mode, const std::wstring& text);
+  bool EditKey(UINT vk, UINT mods);
+  // Writes the entry through the edit API (with Ctrl+Enter into every selected cell). False when
+  // it stays open: a formula Excel refuses, or an edit the model refuses (the banner says why).
+  bool CommitEdit(bool fill);
+  bool InputFor(const std::wstring& text, int sheet, CellAddr cell, edit::CellInput& in, std::string& formula,
+                std::string& message, size_t& pos);
+  // Replace (Ctrl+H): every place the search's text is in a match's content, as typed.
+  bool ReplacedText(const Match& m, const std::wstring& with, std::wstring& out) const;
+  bool editReplaces_ = false;  // typing over the cell: the entry is written even if unchanged
+  // The model's edits (s2-model's Editor), made when first needed; Edited hears every change.
+  edit::Editor& Ed();
+  void Edited(const std::vector<edit::Change>& changes);
+  void SyncEngine(const std::vector<edit::Change>& changes);
+  bool EditRefused(const edit::Result& r);  // shows why; true when it failed
+  std::unique_ptr<edit::Editor> edit_;
+  // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
+  bool GridCommand(int cmd);
+  bool GridCommandState(int cmd, CommandState& s);
+  bool WholeRows() const;     // whole rows are selected (not everything)
+  bool WholeColumns() const;
+  int ShownNeighbour(int dir) const;  // the next shown sheet left (-1) or right (1) of this one, or -1
+  void SheetsChanged();  // sheets added, deleted or moved: the view's per-sheet state follows them
+  void Restructure();    // row heights, hidden rows and columns, merges changed on this sheet
+  std::vector<const Sheet*> sheetOrder_;  // the sheets in tab order, as the view last saw them
+  class SizePanel;
+  class GoToPanel;
+  std::unique_ptr<SizePanel> sizePanel_;
+  std::unique_ptr<GoToPanel> goToPanel_;
+  void ShowSizePanel(bool rows);
+  void ShowGoTo();
+  double CurrentSize(bool rows) const;  // the active row's height (points) or column's width (characters)
+  void SetSizes(bool rows, double value);
+  bool GoTo(const std::wstring& text);  // a cell, a range, Sheet2!A1 or a defined name
+  // ---- The fill handle, Ctrl+D and Ctrl+R (WorkbookFill.cpp). `dir`: 0 down, 1 up, 2 right, 3 left.
+  bool FillCells(const Range& source, const Range& target, int dir, bool series, std::u16string name);
+  void FillDown(bool right);
+  bool FillHandleAt(float x, float y, D2D1_RECT_F* rc = nullptr);  // rc: where it is (x, y unused)
+  void DrawFillHandle(gfx::Canvas& c);
+  void FillDrag(int x, int y);
+  void FinishFill();
+  void FillToNeighbour();
+  Range fillTo_{};
+  // ---- Cut, copy and paste (WorkbookClipboard.cpp).
+  enum class PasteMode : uint8_t { All, Values, Formulas, Formats };
+  struct Clip {
+    const Sheet* sheet = nullptr;  // what Copy put on the clipboard, while it's still there
+    Range range;
+    bool cut = false;
+    DWORD seq = 0;  // the clipboard's sequence number then
+  };
+  std::optional<Clip> clip_;
+  bool pasting_ = false;  // a paste's own changes don't end the copied cells' border
+  void Cut();
+  void Paste(PasteMode mode, bool transpose = false);
+  void DrawClipBorder(gfx::Canvas& c, const Pane& pane);  // while the handle is dragged: the selection with the cells it will fill
+  // Renaming a sheet on its tab (double-click it, or Rename): the cell editor's text and keys.
+  void BeginRename(size_t sheet);
+  int renaming_ = -1;
+  void DrawEditBox(gfx::Canvas& c, const D2D1_RECT_F& clip);
+  // The region's formula separators (en-NL: "," decimal, ";" between arguments).
+  const calc::FormulaLocale& Region() const;
+  mutable std::optional<calc::FormulaLocale> region_;
+  void MoveAfterEntry(int dRow, int dCol);
+  void PointMove(int dRow, int dCol, bool extend);
+  struct EditBox {
+    D2D1_RECT_F rc{};
+    float size = 0, line = 0, pad = 0;  // font size, line height, inner padding (device pixels)
+  };
+  bool EditGeometry(EditBox& box);
+  void DrawEditor(gfx::Canvas& c);
+  // The formula bar's text box; editing there (a click in it) draws the caret there.
+  D2D1_RECT_F FormulaBox() const;
+  float FormulaBarSize() const { return 13 * ui_; }
+  void DrawBarText(gfx::Canvas& c);
+  // A click or drag in the formula bar's text or the box over the cell: true when it was there.
+  bool EditMouseDown(float x, float y, UINT mods, bool doubleClick);
+  void EditMouseMove(float x, float y);
+  int BarHit(float x);
+  int BoxHit(const EditBox& b, float x, float y);
+  // The references in the formula being typed, each distinct one with its color (index into the
+  // reference colors): outlined on the sheet and colored in the text, as Excel's are.
+  struct RefBox {
+    int at = 0, length = 0;  // in the editor's text
+    int sheet = -1;          // the sheet index; -1 none named (the edited cell's), -2 not found
+    uint32_t r0 = 0, c0 = 0, r1 = 0, c1 = 0;
+    int color = 0;
+    int refAt = 0;  // where the reference starts after its sheet
+    int kind = 0;   // 0 cells, 1 whole columns, 2 whole rows
+  };
+  const std::vector<RefBox>& Refs();
+  // Dragging a reference's border moves it; a corner's handle sizes it (from the opposite corner).
+  struct RefGrab {
+    size_t index = SIZE_MAX;
+    bool resize = false, nwse = false;  // nwse: the top-left or bottom-right handle
+    CellAddr anchor{};                  // resize: the corner that stays
+    uint32_t dRow = 0, dCol = 0;        // move: the grabbed cell from the range's top-left
+  };
+  bool RefHit(int x, int y, RefGrab& g);
+  void RefDrag(int x, int y);
+  RefGrab refGrab_;
+  void DrawRefBorders(gfx::Canvas& c, const Pane& pane);
+  // One line of the editor's text from `lineAt`, references in their colors.
+  void DrawEditLine(gfx::Canvas& c, std::wstring_view line, int lineAt, float left, float top, float bottom,
+                    float size, D2D1_COLOR_F ink);
+  // A click on a cell while a formula waits for a reference inserts it (point mode by mouse).
+  bool PointClick(int x, int y);
+  void PointDrag(int x, int y);
+  std::vector<RefBox> refs_;
+  std::wstring refsText_;
+  // AutoComplete: typing text at the end proposes the one entry in the column's run of cells
+  // (above and below, to a blank) that starts with it, the rest selected.
+  void AutoComplete();
+  std::vector<std::pair<std::wstring, std::wstring>> autoList_;  // lowercase, as entered
+  bool autoLoaded_ = false;
+  std::wstring autoText_;  // the entry proposed (its case wins when the entry is committed)
+  // Ctrl+; and Ctrl+Shift+;: today's date or the time now, as Windows writes them short.
+  void InsertNow(bool time);
+  static UINT SemicolonKey();  // the key that types ";" on this keyboard
+  // F4: the reference at the caret cycles A1, $A$1, A$1, $A1.
+  bool CycleReference();
+  // Formula AutoComplete: the functions starting with the name being typed (Tab puts one in with
+  // "("), and the argument tip inside a call (WorkbookFunctions.cpp).
+  void UpdateFormulaHelp();
+  bool FormulaHelpKey(UINT vk, bool ctrl, bool shift, bool alt);
+  bool FormulaHelpClick(float x, float y, bool doubleClick);
+  void InsertFunction(size_t i);
+  void DrawFormulaHelp(gfx::Canvas& c);
+  std::vector<const calc::FunctionHelp*> fnList_;
+  size_t fnSel_ = 0, fnTop_ = 0;
+  int fnFrom_ = -1;          // where the name being typed starts
+  bool fnClosed_ = false;    // Esc closed the list: closed until the next character
+  D2D1_RECT_F fnListRc_{};
+  float fnRowH_ = 0;
+  CellEditor editor_;
+  bool editInBar_ = false;  // the caret is in the formula bar, not over the cell
+  float barScroll_ = 0;     // the formula bar's text scrolled left to keep the caret in sight
+  CellAddr editCell_{};
+  size_t editSheet_ = 0;
+  CellAddr point_{}, pointEnd_{};  // point mode's reference
+  uint32_t tabStartCol_ = UINT32_MAX;
   bool Stale(uint32_t row, uint32_t col) const;
   std::optional<CellAddr> note_;  // the cell whose note shows while the mouse is over it
 
