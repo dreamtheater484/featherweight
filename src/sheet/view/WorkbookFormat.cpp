@@ -1409,8 +1409,12 @@ bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
       x.applyFill = true;
     });
   } else if (key == L"numfmt") {
+    // As typed in Format Cells here (the region's letters: jjjj, uu in en-NL, as Excel reads them).
     std::wstring invariant;
     ok = NumberFormat::LocalToInvariant(value, text_->Locale(), invariant) && ApplyNumberCode(invariant);
+  } else if (key == L"code") {
+    // As files store it and Excel's Range.NumberFormat takes it (English: yyyy, #,##0.00).
+    ok = !value.empty() && ApplyNumberCode(value);
   } else if (key == L"border") {
     // [double-|thick-|medium-]top, bottom, left, right; outline, all, inside; none.
     BorderSide side;
