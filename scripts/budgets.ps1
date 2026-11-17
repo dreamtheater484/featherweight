@@ -48,7 +48,8 @@ Set-Location $root
 $sizeStep = 50KB           # an increase over this needs a reason in the ledger
 # Featherweight.exe: the budget of the release being built (decision 22).
 # $exeBudget = 4MB         # until 1.1 (history)
-$exeBudget = 7MB           # 2.0, which D2 to D5 aim at
+# $exeBudget = 7MB         # 2.0, which D2 to D5 aimed at (history)
+$exeBudget = 11MB          # 3.0: from S2 on, main carries spreadsheet editing (decision 24)
 $downloadBudget = 25MB     # the installer or zip, with PDFium
 $launchMemoryBudget = 40   # MB, the private working set right after launch
 $launchBudget = 300        # ms, launch to the window drawn

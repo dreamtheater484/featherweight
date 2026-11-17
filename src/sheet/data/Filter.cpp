@@ -150,6 +150,90 @@ std::vector<std::wstring> ColumnValues(const Workbook& book, const Sheet& sheet,
   return out;
 }
 
+bool SpecialThreshold(const Sheet& sheet, const Range& ref, const FilterCriteria& c, double& limit) {
+  if (c.special == FilterCriteria::Special::None) return false;
+  const uint32_t col = ref.firstCol + c.column;
+  std::vector<double> numbers;
+  for (uint32_t row = ref.firstRow + 1; row <= ref.lastRow && ref.lastRow > ref.firstRow; ++row)
+    if (const Value v = sheet.GetValue(row, col); v.type == ValueType::Number) numbers.push_back(v.number);
+  if (numbers.empty()) return false;
+  if (c.special == FilterCriteria::Special::Top10) {
+    size_t k = c.percent ? static_cast<size_t>(std::floor(static_cast<double>(numbers.size()) * c.count / 100))
+                         : static_cast<size_t>(std::max(0.0, c.count));
+    k = std::clamp<size_t>(k, 1, numbers.size());
+    auto nth = numbers.begin() + static_cast<std::ptrdiff_t>(k - 1);
+    if (c.bottom) std::nth_element(numbers.begin(), nth, numbers.end());
+    else std::nth_element(numbers.begin(), nth, numbers.end(), std::greater<double>());
+    limit = *nth;
+    return true;
+  }
+  double sum = 0;
+  for (double n : numbers) sum += n;
+  limit = sum / static_cast<double>(numbers.size());
+  return true;
+}
+
+namespace {
+
+constexpr const char* kOpNames[] = {"equal", "notEqual", "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual"};
+
+}  // namespace
+
+FilterColumn ToFilterColumn(const Sheet& sheet, const Range& ref, const FilterCriteria& c) {
+  FilterColumn f;
+  f.colId = c.column;
+  using Special = FilterCriteria::Special;
+  if (c.special != Special::None) {
+    f.kind = c.special == Special::Top10          ? FilterColumn::Kind::Top10
+             : c.special == Special::AboveAverage ? FilterColumn::Kind::AboveAverage
+                                                  : FilterColumn::Kind::BelowAverage;
+    f.count = c.count, f.bottom = c.bottom, f.percent = c.percent;
+    SpecialThreshold(sheet, ref, c, f.threshold);
+  } else if (c.listed) {
+    f.kind = FilterColumn::Kind::Values;
+    for (const std::wstring& v : c.values) f.values.push_back(WideToUtf8(v));
+    f.blank = c.blanks;
+  } else {
+    f.kind = FilterColumn::Kind::Custom;
+    for (const FilterCondition& x : c.conditions)
+      f.conditions.push_back({kOpNames[static_cast<size_t>(x.op)], WideToUtf8(x.value)});
+    f.both = c.both;
+  }
+  return f;
+}
+
+bool FromFilterColumn(const FilterColumn& f, FilterCriteria& out) {
+  out = FilterCriteria{};
+  out.column = f.colId;
+  using Special = FilterCriteria::Special;
+  switch (f.kind) {
+    case FilterColumn::Kind::Values:
+      out.listed = true;
+      for (const std::string& v : f.values) out.values.push_back(Utf8ToWide(v));
+      out.blanks = f.blank;
+      return true;
+    case FilterColumn::Kind::Custom:
+      for (const FilterColumn::Condition& x : f.conditions) {
+        FilterCondition cond;
+        for (size_t i = 0; i < std::size(kOpNames); ++i)
+          if (x.op == kOpNames[i]) cond.op = static_cast<FilterCondition::Op>(i);
+        cond.value = Utf8ToWide(x.val);
+        out.conditions.push_back(cond);
+      }
+      out.both = f.both;
+      return true;
+    case FilterColumn::Kind::Top10:
+    case FilterColumn::Kind::AboveAverage:
+    case FilterColumn::Kind::BelowAverage:
+      out.special = f.kind == FilterColumn::Kind::Top10          ? Special::Top10
+                    : f.kind == FilterColumn::Kind::AboveAverage ? Special::AboveAverage
+                                                                 : Special::BelowAverage;
+      out.count = f.count, out.bottom = f.bottom, out.percent = f.percent;
+      return true;
+    default: return false;
+  }
+}
+
 std::vector<bool> FilterRows(const Workbook& book, const Sheet& sheet, const Range& ref,
                              const std::vector<FilterCriteria>& criteria, const NumLocale& locale) {
   const size_t rows = ref.lastRow > ref.firstRow ? ref.lastRow - ref.firstRow : 0;
@@ -162,25 +246,7 @@ std::vector<bool> FilterRows(const Workbook& book, const Sheet& sheet, const Ran
     // Top 10 and the average: a threshold over the whole column's numbers (other columns' filters
     // don't change it).
     double limit = 0;
-    if (c.special != FilterCriteria::Special::None) {
-      std::vector<double> numbers;
-      for (size_t i = 0; i < rows; ++i)
-        if (const Value v = sheet.GetValue(ref.firstRow + 1 + static_cast<uint32_t>(i), col); v.type == ValueType::Number)
-          numbers.push_back(v.number);
-      if (c.special == FilterCriteria::Special::Top10 && !numbers.empty()) {
-        size_t k = c.percent ? static_cast<size_t>(std::floor(static_cast<double>(numbers.size()) * c.count / 100))
-                             : static_cast<size_t>(std::max(0.0, c.count));
-        k = std::clamp<size_t>(k, 1, numbers.size());
-        auto nth = numbers.begin() + static_cast<std::ptrdiff_t>(k - 1);
-        if (c.bottom) std::nth_element(numbers.begin(), nth, numbers.end());
-        else std::nth_element(numbers.begin(), nth, numbers.end(), std::greater<double>());
-        limit = *nth;
-      } else if (!numbers.empty()) {
-        double sum = 0;
-        for (double n : numbers) sum += n;
-        limit = sum / static_cast<double>(numbers.size());
-      }
-    }
+    if (c.special != FilterCriteria::Special::None) SpecialThreshold(sheet, ref, c, limit);
     for (size_t i = 0; i < rows; ++i) {
       if (!keep[i]) continue;
       const uint32_t row = ref.firstRow + 1 + static_cast<uint32_t>(i);

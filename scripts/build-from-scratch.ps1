@@ -293,9 +293,12 @@ function Compare-Dumps($a, $b) {
     $x = $sa[$i]; $y = $sb[$i]
     foreach ($k in "name", "freeze") { if ("$($x.$k)" -ne "$($y.$k)") { $diffs += "sheet $($i + 1) ${k}: Excel '$($x.$k)', Featherweight '$($y.$k)'" } }
     if ((@($x.merges) -join ",") -ne (@($y.merges) -join ",")) { $diffs += "$($x.name) merges: Excel $(@($x.merges) -join ','), Featherweight $(@($y.merges) -join ',')" }
+    # Widths within a pixel at 100 % (1/7 of a character): Excel's ColumnWidth depends on how it
+    # measures the digits on this screen. Over Remote Desktop it stores 22.64453125 for 22
+    # characters where it stores 22.7109375 at the console, and shows the console's value as 22.06.
     foreach ($p in $x.widths.PSObject.Properties) {
       $w = $y.widths.($p.Name)
-      if ($null -eq $w -or [Math]::Abs([double]$w - [double]$p.Value) -gt 0.01) { $diffs += "$($x.name) column $($p.Name) width: Excel $($p.Value), Featherweight $w" }
+      if ($null -eq $w -or [Math]::Abs([double]$w - [double]$p.Value) -gt 0.15) { $diffs += "$($x.name) column $($p.Name) width: Excel $($p.Value), Featherweight $w" }
     }
     $cy = @{}; foreach ($c in $y.cells) { $cy[$c.ref] = $c }
     $refs = @($x.cells | ForEach-Object ref) + @($y.cells | ForEach-Object ref) | Select-Object -Unique

@@ -413,9 +413,13 @@ class EditApiTarget : public SheetTarget {
           }
           return done(e.arg[0] == 'r' ? ed_.SortRows(s, r, order) : ed_.SortColumns(s, r, order));
         }
-        [[fallthrough]];
-      case Op::Filter: why = "sort and filter come with s2-format's commands"; return Applied::Refused;
-      case Op::Paste: return Paste(e, why);
+        why = "sorting by a key comes with s2-format's command";
+        return Applied::Refused;
+      case Op::Filter: return Filter(s, r, e, why);
+      case Op::Paste:
+        // Cut and paste on one sheet moves the cells, references following (Editor::MoveCells).
+        if (e.arg == "cut") return done(ed_.MoveCells(s, r, sh::CellAddr{e.to.firstRow, e.to.firstCol}));
+        return Paste(e, why);
       case Op::Undo: return done(ed_.Undo(e.count));
       case Op::Redo: return done(ed_.Redo(e.count));
       case Op::Save: return Applied::Done;
@@ -513,6 +517,41 @@ class EditApiTarget : public SheetTarget {
     if (res.ok) return Applied::Done;
     why = Utf8(res.message);
     return Applied::Refused;
+  }
+
+  // The filter as Ctrl+Shift+L and the column's list set it (Editor::SetFilter), as one step: with
+  // no column, the filter on or off; with a column and a text, only the rows whose cell there shows
+  // that text stay visible (the header row always), the others hidden in the same step.
+  Applied Filter(int s, const sh::Range& r, const Edit& e, std::string& why) {
+    const sh::Sheet& sheet = book_->GetSheet(static_cast<size_t>(s));
+    sh::edit::EditGroup group(ed_, u"Filter");
+    sh::edit::Result res;
+    if (e.arg.empty()) {
+      if (sheet.Filter()) res = ed_.SetFilter(s, std::nullopt);
+      else res = ed_.SetFilter(s, sh::SheetFilter{r, false, {}});
+    } else {
+      sh::CellAddr a;
+      const uint32_t col = sh::ParseA1(e.arg + "1", a) ? a.col : UINT32_MAX;
+      if (col < r.firstCol || col > r.lastCol) {
+        why = "the column isn't in the filter's range";
+        return Applied::Refused;
+      }
+      sh::FilterColumn fc;
+      fc.colId = col - r.firstCol;
+      fc.values.push_back(e.text);
+      res = ed_.SetFilter(s, sh::SheetFilter{r, true, {fc}});
+      for (uint32_t row = r.firstRow + 1; res.ok && row <= r.lastRow; ++row) {
+        const sh::Value v = sheet.GetValue(row, col);
+        const bool shows = v.type == sh::ValueType::String && v.text == e.text;
+        res = ed_.HideRows(s, row, row, !shows);
+      }
+    }
+    if (!res.ok) {
+      why = Utf8(res.message);
+      return Applied::Refused;  // the group is cancelled: nothing changed
+    }
+    group.done = true;
+    return Applied::Done;
   }
 
   // Copy and paste as one step: all (contents and formats), values only (formulas' results), or
@@ -718,8 +757,9 @@ class Generator {
       e.range = Block(area, 3, 3);
       e.toSheet = sheets.empty() ? 0 : sheets[rng_.Below(static_cast<uint32_t>(sheets.size()))];
       e.to = Cell(area);
-      static const char* kModes[] = {"all", "all", "values", "formats"};
+      static const char* kModes[] = {"all", "all", "values", "formats", "cut"};
       e.arg = rng_.Pick(kModes);
+      if (e.arg == "cut") e.toSheet = e.sheet;  // cut and paste moves cells on one sheet
     } else if (roll < 89) {
       SheetEdit(book, e);
     } else if (roll < 95) {
@@ -943,7 +983,14 @@ std::vector<std::string> Digest(const sh::Workbook& book) {
     if (!s.Views().empty() && s.Views()[0].paneState == sh::PaneState::Frozen)
       out.push_back(at + "frozen " + Num(s.Views()[0].ySplit) + " rows " + Num(s.Views()[0].xSplit) + " columns");
     for (const sh::Range& m : s.Merges()) out.push_back(at + "merge " + sh::RangeName(m));
-    if (s.Filter()) out.push_back(at + "filter");
+    if (const auto& f = s.Filter()) {
+      std::string line = at + "filter " + sh::RangeName(f->ref) + (f->filtered ? " filtered" : "");
+      for (const sh::FilterColumn& c : f->columns) {
+        line += " col " + std::to_string(c.colId) + " kind " + std::to_string(static_cast<int>(c.kind));
+        for (const std::string& v : c.values) line += " " + Quote(v);
+      }
+      out.push_back(line);
+    }
     for (const sh::ColumnInfo& c : s.Columns())
       out.push_back(at + "cols " + sh::ColumnName(c.first) + ":" + sh::ColumnName(c.last) + " width " + Num(c.width) +
                     " style " + styleText(c.style) + (c.hidden ? " hidden" : ""));

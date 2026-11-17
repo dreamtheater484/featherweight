@@ -424,11 +424,16 @@ class WorkbookView : public PagedView {
   struct ViewFilter {
     Range ref;  // the header row and the rows it filters
     std::vector<data::FilterCriteria> criteria;
+    std::vector<FilterColumn> other;  // from the file, not edited here (colors, icons, dates): kept
   };
-  std::unordered_map<const Sheet*, ViewFilter> filters_;
-  ViewFilter* FilterOf();  // the shown sheet's filter, or null
+  ViewFilter filter_;
+  // The shown sheet's filter, read again from the model (Sheet::Filter, so undo and redo show), or
+  // null. The panel changes its criteria, then ApplyFilter.
+  ViewFilter* FilterOf();
   void ToggleFilter();
-  bool ApplyFilter();  // hides the rows its criteria leave out, shows the others
+  // filter_ into the model (Editor::SetFilter: the file's autoFilter), and the rows its criteria
+  // leave out hidden, the others shown; one undo step.
+  bool ApplyFilter();
   // The header button at (x, y): the column within the filter, and where it is.
   bool FilterButtonAt(float x, float y, uint32_t* column, D2D1_RECT_F* rc = nullptr);
   void DrawFilterButtons(gfx::Canvas& c);

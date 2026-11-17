@@ -115,6 +115,39 @@ TEST(SheetFilter_TopAndAverage) {
   CHECK(run({2, 2, 2}, Special::AboveAverage, 0, false, false).empty());
 }
 
+// The criteria as the model and the file keep them, and back: Excel's operator names, the texts
+// in UTF-8, Top 10's threshold; a kind Featherweight doesn't edit stays a FilterColumn.
+TEST(SheetFilter_ModelColumns) {
+  Workbook book;
+  Sheet& s = book.AddSheet("Sheet1");
+  FillSample(s);
+  const Range ref{0, 0, 5, 1};
+  using Op = data::FilterCondition::Op;
+  data::FilterCriteria custom;
+  custom.column = 1;
+  custom.conditions = {{Op::GreaterEqual, L"3"}, {Op::NotEqual, L"*café*"}};
+  custom.both = true;
+  FilterColumn f = data::ToFilterColumn(s, ref, custom);
+  CHECK(f.kind == FilterColumn::Kind::Custom && f.colId == 1 && f.both && f.conditions.size() == 2);
+  CHECK(f.conditions[0].op == "greaterThanOrEqual" && f.conditions[1].op == "notEqual" && f.conditions[1].val == "*caf\xC3\xA9*");
+  data::FilterCriteria back;
+  CHECK(data::FromFilterColumn(f, back) && back.conditions.size() == 2 && back.conditions[0].op == Op::GreaterEqual &&
+        back.conditions[1].value == L"*café*" && back.both);
+  data::FilterCriteria listed;
+  listed.listed = true, listed.values = {L"Tea"}, listed.blanks = true;
+  f = data::ToFilterColumn(s, ref, listed);
+  CHECK(f.kind == FilterColumn::Kind::Values && f.values == std::vector<std::string>({"Tea"}) && f.blank);
+  CHECK(data::FromFilterColumn(f, back) && back.listed && back.values == std::vector<std::wstring>({L"Tea"}) && back.blanks);
+  data::FilterCriteria top;
+  top.column = 1, top.special = data::FilterCriteria::Special::Top10, top.count = 2;
+  f = data::ToFilterColumn(s, ref, top);
+  CHECK(f.kind == FilterColumn::Kind::Top10 && f.count == 2 && !f.bottom && !f.percent && f.threshold == 7);  // 10, 7
+  CHECK(data::FromFilterColumn(f, back) && back.special == data::FilterCriteria::Special::Top10 && back.count == 2);
+  FilterColumn other;
+  other.kind = FilterColumn::Kind::Other;
+  CHECK(!data::FromFilterColumn(other, back));
+}
+
 TEST(SheetFilter_Duplicates) {
   Workbook book;
   Sheet& s = book.AddSheet("Sheet1");
