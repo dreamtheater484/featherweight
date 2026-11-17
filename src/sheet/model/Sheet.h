@@ -17,6 +17,9 @@ namespace fw::sheet {
 
 class Workbook;
 class SheetBuilder;
+namespace edit {
+class Access;  // the edit layer (sheet/edit), the only code that changes a loaded model
+}
 
 enum class SheetKind : uint8_t { Worksheet, Chartsheet, Dialogsheet, Macrosheet };
 enum class SheetState : uint8_t { Visible, Hidden, VeryHidden };
@@ -412,6 +415,7 @@ class Sheet {
   friend class SheetLoader;
   friend class Workbook;
   friend class WorkbookLoader;
+  friend class edit::Access;
 
   struct Found {
     const detail::RowBlock* block = nullptr;
