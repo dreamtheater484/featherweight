@@ -244,6 +244,21 @@ TEST(SheetNumFmt_TextLocal) {
   CHECK(NumberFormat::LocalToInvariant(L"[uu]:mm;Standaard;\"j,u\"", EnNlLocale(), inv) && inv == L"[hh]:mm;General;\"j,u\"");
   CHECK(NumberFormat::LocalToInvariant(L"[<1234,5]0,0", EnNlLocale(), inv) && inv == L"[<1234.5]0.0");
   CHECK(!NumberFormat::LocalToInvariant(L"[h]:mm", EnNlLocale(), inv) && inv.empty());
+  // Germany and France (from Windows' data for the region, as fwtool formulas builds it).
+  const NumLocale de = MakeLocale(ReadWinLocale(L"de-DE")), fr = MakeLocale(ReadWinLocale(L"fr-FR"));
+  FormatContext dctx;
+  dctx.locale = &de;
+  NumberFormat f;
+  Formatted out;
+  CHECK(NumberFormat::FromLocal(L"\"bis \"TT.MM.JJ", de, f));
+  f.Format(46299, dctx, out);  // 2026-10-04
+  CHECK(out.text == L"bis 04.10.26");
+  CHECK(NumberFormat::FromLocal(L"MMMM", de, f));
+  f.Format(46299, dctx, out);
+  CHECK(out.text == L"Oktober");
+  CHECK(NumberFormat::FromLocal(L"#.##0,00;Standard", de, f) && !NumberFormat::FromLocal(L"General", de, f));
+  CHECK(NumberFormat::LocalToInvariant(L"jj/mm/aaaa hh:mm", fr, inv) && inv == L"dd/mm/yyyy hh:mm");
+  CHECK(NumberFormat::LocalToInvariant(L"Standard", fr, inv) && inv == L"General");
   // en-US types the invariant codes.
   CHECK(NumberFormat::LocalToInvariant(L"yyyy h:mm #,##0.00 General", EnUsLocale(), inv) &&
         inv == L"yyyy h:mm #,##0.00 General");
