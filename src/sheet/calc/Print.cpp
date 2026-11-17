@@ -172,6 +172,13 @@ class Printer {
     int32_t c = abs ? v : Wrap(static_cast<int64_t>(at_.col) + v, kMaxCols);
     return (abs ? "$" : "") + ColumnName(c);
   }
+  // A relative part off the sheet at the cell printed for, when that prints #REF!.
+  bool Off(int32_t v, bool abs, int32_t at, int32_t max) const {
+    if (!how_.offSheetRef || how_.r1c1 || abs) return false;
+    int64_t x = static_cast<int64_t>(at) + v;
+    return x < 0 || x >= max;
+  }
+
   std::string CellText(int32_t r, bool rAbs, int32_t c, bool cAbs) const {
     if (how_.r1c1) return RowText(r, rAbs) + ColText(c, cAbs);
     return ColText(c, cAbs) + RowText(r, rAbs);
@@ -243,8 +250,12 @@ class Printer {
       case kRef: {
         uint8_t fl = p[1];
         const uint8_t* q = p + 2 + SheetBytes(fl);
-        stack_.push_back(Sheets(p + 2, fl) +
-                         CellText(Read<int32_t>(q), fl & kRowAbs, Read<int16_t>(q + 4), fl & kColAbs));
+        int32_t r = Read<int32_t>(q), c = Read<int16_t>(q + 4);
+        if (Off(r, fl & kRowAbs, at_.row, kMaxRows) || Off(c, fl & kColAbs, at_.col, kMaxCols)) {
+          stack_.push_back(Sheets(p + 2, fl) + "#REF!");
+          break;
+        }
+        stack_.push_back(Sheets(p + 2, fl) + CellText(r, fl & kRowAbs, c, fl & kColAbs));
         break;
       }
       case kArea: {
@@ -252,6 +263,12 @@ class Printer {
         const uint8_t* q = p + 2 + SheetBytes(fl);
         int32_t r1 = Read<int32_t>(q), r2 = Read<int32_t>(q + 6);
         int32_t c1 = Read<int16_t>(q + 4), c2 = Read<int16_t>(q + 10);
+        const bool rows = !(fl & kWholeCols), cols = !(fl & kWholeRows);
+        if ((rows && (Off(r1, fl & kRowAbs, at_.row, kMaxRows) || Off(r2, fl & kRow2Abs, at_.row, kMaxRows))) ||
+            (cols && (Off(c1, fl & kColAbs, at_.col, kMaxCols) || Off(c2, fl & kCol2Abs, at_.col, kMaxCols)))) {
+          stack_.push_back(Sheets(p + 2, fl) + "#REF!");
+          break;
+        }
         std::string a, b;
         if (fl & kWholeCols) {
           a = ColText(c1, fl & kColAbs);

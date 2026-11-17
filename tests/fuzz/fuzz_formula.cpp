@@ -1,7 +1,8 @@
 // Fuzz target: the formula scanner the reference registry uses (sheet names and cell references
 // in formulas, sqref lists, field instructions), and the formula engine (src/sheet/calc): the
-// parser, printing back and parsing again, and evaluating, as a cell and as an array formula.
-// Seeds: tests/fuzz/seeds/formula.
+// parser, printing back and parsing again, and evaluating, as a cell and as an array formula; and
+// formula entry in en-US and en-NL (what's taken shows back as text taken again as the same
+// formula). Seeds: tests/fuzz/seeds/formula.
 #include <cstdint>
 #include <cstdlib>
 #include <string>
@@ -10,6 +11,8 @@
 #include "pkg/Formula.h"
 #include "pkg/References.h"
 #include "sheet/calc/Engine.h"
+#include "sheet/calc/Entry.h"
+#include "sheet/calc/Typing.h"
 
 using namespace fw::pkg;
 namespace calc = fw::sheet::calc;
@@ -85,6 +88,47 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       calc::Value v;
       ev.Evaluate(*f, at, v);
     }
+  }
+
+  // Formula entry in the region: the conversion keeps every position; what's taken shows back as
+  // text that's taken again as the same formula.
+  if (formula.size() <= 4096) {
+    static const calc::FormulaLocale nl{',', ';', '\\', ';'};
+    for (const calc::FormulaLocale* region : {&calc::InvariantFormulaLocale(), &nl}) {
+      std::string invariant;
+      if (calc::ToInvariant(formula, *region, invariant) && invariant.size() != formula.size()) std::abort();
+      calc::CompileOptions where;
+      where.row = 2, where.col = 2;
+      calc::EnteredFormula e = calc::EnterFormula(formula, *region, where, *engine);
+      if (!e.formula) {
+        if (e.pos > formula.size() || e.message.empty()) std::abort();
+        continue;
+      }
+      calc::EnteredFormula again = calc::EnterFormula(e.shown, *region, where, *engine);
+      if (!again.formula || again.text != e.text) std::abort();
+    }
+    // While typing: references, point mode, F4, the call at the caret, at every caret position.
+    std::wstring wide(formula.begin(), formula.end());
+    for (const calc::FormulaLocale* region : {&calc::InvariantFormulaLocale(), &nl}) {
+      for (const calc::RefSpan& r : calc::ReferenceSpans(wide, *region))
+        if (r.begin >= r.end || r.end > wide.size() || r.r1 > r.r2 || r.c1 > r.c2) std::abort();
+      for (size_t caret = 0; caret <= wide.size() && caret < 64; ++caret) {
+        calc::CanPointAt(wide, caret, *region);
+        std::wstring fn;
+        int arg = 0;
+        calc::CallAt(wide, caret, *region, fn, arg);
+        std::wstring t = wide;
+        size_t a = caret, b = caret;
+        if (calc::CycleReference(t, a, b, *region) && (a > t.size() || b > t.size())) std::abort();
+      }
+      std::wstring t = wide;
+      size_t a = 0, b = t.size();
+      if (calc::CycleReference(t, a, b, *region) && (a > b || b > t.size())) std::abort();
+    }
+    calc::CompileOptions from, to;
+    from.row = 2, from.col = 2;
+    to.row = 0, to.col = 5;
+    calc::CopyFormula(formula, from, to, *engine);
   }
 
   // The other syntaxes a reference can have.
