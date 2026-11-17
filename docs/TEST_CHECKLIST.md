@@ -196,39 +196,39 @@ Featherweight shows workbooks; it doesn't edit them yet (S2). What the automated
 
 ### Opening and looking
 
-- [ ] Double-click a `.xlsx` and a `.csv` in Explorer, drag one onto the window, and open one with Ctrl+O. Each opens in its own tab next to PDFs and documents, and shows in Recent.
+- [ ] Open a `.xlsx` and a `.csv` from Explorer (Open with Featherweight), drag one onto the window, and open one with Ctrl+O. Each opens in its own tab next to PDFs and documents, and shows in Recent.
 - [ ] Open three of your own workbooks (a budget, a list, something with charts) side by side with Excel. Values, number formats (dates `dd-mm-yyyy`, € amounts, percentages), fonts, fills, borders, merged cells, column widths and row heights look the same.
-- [ ] Frozen panes stay put while scrolling; hidden rows and columns stay hidden; outline groups expand and collapse with their + and − buttons.
+- [ ] Frozen panes stay put while scrolling; hidden rows and columns stay hidden; outline groups expand and collapse with their + and − buttons and the level buttons (1, 2, …).
 - [ ] The sheet tabs at the bottom: click one, and Ctrl+PgUp/PgDn. Hidden sheets aren't listed; tab colors show.
 - [ ] A right-to-left sheet (`tests/office/excel/sheets.xlsx`) runs from the right, as in Excel.
 - [ ] Conditional formats (`conditional-formats.xlsx`): colored cells, color scales, data bars and icons as in Excel. A table (`tables.xlsx`) shows its style and banded rows.
 - [ ] Pictures, shapes and charts (`pictures-shapes.xlsx`, `charts.xlsx`) sit on the same cells as in Excel. A chart sheet shows its chart.
-- [ ] A cell with a note has a red corner; hovering shows the note. A threaded comment shows its replies.
-- [ ] Zoom with Ctrl+wheel; scrolling a big sheet with the wheel, the scroll bar and the keyboard feels smooth.
+- [ ] A cell with a note has a red corner, one with a threaded comment a purple one (`notes.xlsx`); hovering shows the note, or the comment with its replies.
+- [ ] Zoom with Ctrl+wheel, Ctrl+= and Ctrl+−, Ctrl+0 (100 %) and the status bar's slider; scrolling a big sheet with the wheel, the scroll bar and the keyboard feels smooth.
 
 ### Formulas
 
 - [ ] The formula bar shows the selected cell's formula (read-only).
 - [ ] A workbook with `=TODAY()` shows today's date shortly after opening; one set to manual calculation shows what was saved.
-- [ ] A formula Featherweight can't calculate keeps Excel's value and is marked possibly out of date.
+- [ ] A formula Featherweight can't calculate yet, when opening recalculates it (it depends on `=TODAY()`, say), keeps Excel's value and gets a small gray triangle in its top-left corner; selected, the status bar says its value is possibly out of date.
 - [ ] A workbook with macros (`.xlsm`) or links to other workbooks opens without running anything and without asking to update links.
 
 ### Selecting, copying and finding
 
-- [ ] Arrows, Ctrl+arrows, Home, Ctrl+Home, Ctrl+End, PgUp/PgDn and Shift with each select as in Excel. Click a row or column heading to select it whole.
-- [ ] The status bar shows Sum, Average and Count for a selection of numbers.
-- [ ] Copy a range (Ctrl+C) and paste it into Excel (cells, with their formats), Word (a table) and Notepad (tab-separated text).
-- [ ] Ctrl+F finds text and numbers as they're shown, on every sheet, and the count is right.
+- [ ] Arrows, Ctrl+arrows, Home, Ctrl+Home, Ctrl+End, PgUp/PgDn and Alt+PgUp/PgDn (a screen across), with and without Shift, move and select as in Excel; Tab and Enter move on, Shift+Tab and Shift+Enter back. Shift+Space selects the row, Ctrl+Space the column, Ctrl+A everything. Click a row or column heading to select it whole, the corner for all.
+- [ ] The status bar shows Average, Count and Sum (Excel's order) for two or more cells; text only, just Count.
+- [ ] Copy a range (Ctrl+C) and paste it into Excel (the values as shown, with fonts, colors, fills and alignment; not borders, column widths or merged cells), Word (a table) and Notepad (tab-separated text).
+- [ ] Ctrl+F finds text and numbers as they're shown on the sheet you're looking at (switch sheets and it searches that one), and the count is right.
 
 ### CSV
 
-- [ ] Open a comma-separated, a semicolon-separated and a tab-separated file. Columns split correctly.
+- [ ] Open a comma-separated, a semicolon-separated, a tab-separated and a pipe-separated file (`tests/office/csv/semicolon.csv`, `tab.tsv`, `pipe.csv`). Columns split correctly.
 - [ ] Nothing changes: codes with leading zeros (`00123`), long numbers (IBANs, phone numbers), and dates show exactly as in the file.
 - [ ] A file from an old Windows program (`tests/office/csv/ansi-1252.csv`) shows "Crème brûlée" and "€4,50" correctly.
 
 ### Printing
 
-- [ ] Print preview and print a workbook to the Epson, and print the same workbook from Excel. Page breaks, print area, repeated titles, fit to page, orientation, margins, headers and footers, and gridlines match.
+- [ ] Open print preview (Ctrl+F2; Esc closes it) and print (Ctrl+P) a sheet to the Epson, and print the same sheet from Excel. Featherweight prints the sheet shown, as Excel's Print Active Sheets does. Page breaks, print area, repeated titles, fit to page, orientation, margins, headers and footers, and gridlines match.
 - [ ] Print a sheet with pictures and a chart: they're on the paper where they are on screen.
 
 ### Big files and speed (record the numbers)

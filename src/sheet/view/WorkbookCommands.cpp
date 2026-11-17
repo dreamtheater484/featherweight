@@ -393,6 +393,8 @@ void WorkbookView::UpdateStatus() {
 void WorkbookView::BuildStatusBar(StatusBarModel& m) {
   if (!Ready()) return;
   UpdateStatus();
+  if (Stale(active_.row, active_.col))
+    m.segments.push_back(L"Value possibly out of date: it uses a function Featherweight can't calculate yet");
   if (totals_.count >= 2) {
     // Excel's order: average, count, sum; in the format of the first number.
     auto show = [&](double v) {
