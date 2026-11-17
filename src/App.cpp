@@ -2508,6 +2508,13 @@ void App::RunScript(const std::wstring& script) {
       TabContent* v = Active();
       if (v && v->Ready() && v->TakesPictures({arg})) v->DropPictures({arg}, -1, -1);
       else fwprintf(stderr, L"picture: %s isn't taken here\n", arg.c_str());
+    } else if (op == L"clipboard") {
+      // clipboard:<file> puts a file on the run's own clipboard (never the user's): an .html file
+      // as "HTML Format", anything else as text (UTF-8).
+      std::string data;
+      if (!util::ReadFileBytes(arg, data, 64u << 20)) fwprintf(stderr, L"clipboard: can't read %s\n", arg.c_str());
+      else if (fw::EndsWithNoCase(arg, L".html") || fw::EndsWithNoCase(arg, L".htm")) util::SetClipboardText(L"", {}, data);
+      else util::SetClipboardText(fw::Utf8ToWide(data));
     } else if (op == L"save" || op == L"saveas") {
       // save:<path> and saveas:<path> both save to that path, waiting for the write (Save As;
       // the format is the extension's). Ctrl+S (key:ctrl+s) saves in the background as in use.
