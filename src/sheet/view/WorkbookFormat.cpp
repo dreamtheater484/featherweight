@@ -1017,10 +1017,6 @@ bool WorkbookView::ApplyCellStyle(int index) {
   if (!Ready() || index < 0 || index >= static_cast<int>(gallery.size())) return false;
   const BuiltinStyle& s = gallery[static_cast<size_t>(index)];
   const Styles& st = book_->GetStyles();
-  // The workbook's own entry for the style, when it has one (Excel's files list the ones used).
-  std::optional<uint32_t> parent;
-  for (const CellStyle& cs : st.CellStyles())
-    if (cs.builtinId == s.builtinId) parent = cs.xf;
   Font font = st.DefaultFont();
   if (!st.Fonts().empty()) font = st.Fonts()[0];
   font.bold = s.bold;
@@ -1058,9 +1054,20 @@ bool WorkbookView::ApplyCellStyle(int index) {
   edit::Editor& ed = Ed();
   const uint32_t fontId = fonts ? ed.AddFont(font) : 0, fillId = fills ? ed.AddFill(fill) : 0;
   const uint32_t borderId = borders ? ed.AddBorder(border) : 0;
+  // The workbook's own entry for the style, else this one added: its format says what the style
+  // covers (Good: font and fill), as Excel writes its cellStyleXfs.
+  Xf styleXf;
+  styleXf.font = fontId, styleXf.fill = fillId, styleXf.border = borderId;
+  styleXf.numFmt = s.numFmt >= 0 ? static_cast<uint32_t>(s.numFmt) : 0;
+  styleXf.applyFont = fonts, styleXf.applyFill = fills, styleXf.applyBorder = borders, styleXf.applyNumFmt = numbers;
+  styleXf.applyAlignment = styleXf.applyProtection = normal;
+  CellStyle style;
+  style.name = WideToUtf8(s.name);
+  style.builtinId = s.builtinId;
+  const uint32_t parent = ed.AddCellStyle(style, styleXf);
   const std::u16string name(s.name.begin(), s.name.end());
   return ChangeFormat(name, [&](Xf& x) {
-    if (parent) x.parent = *parent;
+    x.parent = parent;
     if (fonts) x.font = fontId, x.applyFont = true;
     if (fills) x.fill = fillId, x.applyFill = true;
     if (borders) x.border = borderId, x.applyBorder = true;
