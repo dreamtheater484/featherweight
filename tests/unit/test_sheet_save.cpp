@@ -701,3 +701,189 @@ TEST(sheet_journal_refuses_damage) {
   std::string unknown = records + std::string("\x7f\x00", 2);
   CHECK(!replayOn(unknown, applied).first && applied == 4);
 }
+
+// A built-in cell style the workbook doesn't have yet (the styles gallery): added once, written
+// with its format, and found again by Excel's gallery as "Good".
+TEST(sheet_save_cell_style_added) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>", "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  edit::Journal journal;
+  ed.SetJournal(&journal);
+  Font green = book->GetStyles().Fonts()[0];
+  green.color = Color{Color::Kind::Rgb, 0xFF006100, 0};
+  Fill fill;
+  fill.pattern = PatternType::Solid;
+  fill.fg = Color{Color::Kind::Rgb, 0xFFC6EFCE, 0};
+  Xf styleXf;
+  styleXf.font = ed.AddFont(green);
+  styleXf.fill = ed.AddFill(fill);
+  styleXf.applyFont = styleXf.applyFill = true;
+  CellStyle good;
+  good.name = "Good";
+  good.builtinId = 26;
+  const uint32_t parent = ed.AddCellStyle(good, styleXf);
+  CHECK(parent == 1 && ed.AddCellStyle(good, styleXf) == 1 && ed.StylesDirty());
+  Xf cell = styleXf;
+  cell.parent = parent;
+  CHECK(ed.SetStyle(0, Range::Cell(0, 0), ed.AddXf(cell)));
+
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-cell-style");
+  CheckClean(saved);
+  const std::string styles = PartText(saved, "/xl/styles.xml");
+  CHECK(styles.find("<cellStyle name=\"Good\" xfId=\"1\" builtinId=\"26\"/>") != std::string::npos);
+  CHECK(InOrder(styles, {"<cellStyleXfs count=\"2\">", "<cellXfs", "<cellStyles count=\"1\">"}));
+  auto again = OpenZip(saved);
+  if (!again) return;
+  const Styles& s = again->GetStyles();
+  CHECK(s.CellStyles().size() == 1 && s.CellStyles()[0].name == "Good" && s.CellStyles()[0].xf == 1);
+  CHECK(s.CellXf(again->GetSheet(0).StyleAt(0, 0)).parent == 1);
+  CHECK(!ed.StylesDirty());
+
+  // The journal adds it again on the file as it was (which had no cell styles listed).
+  auto replayedBook = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>", "<sheetData/>"});
+  if (!replayedBook) return;
+  Editor replayed(*replayedBook);
+  CHECK(replayed.Replay(journal.All()).ok);
+  CHECK(replayedBook->GetStyles().CellStyles().size() == 1 && replayedBook->GetStyles().CellStyleXfs().size() == 2);
+}
+
+TEST(sheet_save_filter) {
+  const std::string data =
+      "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c><c r=\"B1\"><v>2</v></c><c r=\"C1\"><v>3</v></c></row>"
+      "<row r=\"2\"><c r=\"A2\"><v>4</v></c><c r=\"B2\"><v>5</v></c><c r=\"C2\"><v>6</v></c></row>"
+      "<row r=\"3\"><c r=\"A3\"><v>7</v></c><c r=\"B3\"><v>8</v></c><c r=\"C3\"><v>9</v></c></row></sheetData>";
+  auto book = OpenParts({data, "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  edit::Journal journal;
+  ed.SetJournal(&journal);
+  SheetFilter f;
+  f.ref = Range{0, 0, 2, 2};
+  FilterColumn values;
+  values.values = {"4"};
+  values.blank = true;
+  FilterColumn custom;
+  custom.colId = 1;
+  custom.kind = FilterColumn::Kind::Custom;
+  custom.conditions = {{"greaterThan", "4"}, {"lessThan", "9"}};
+  custom.both = true;
+  FilterColumn top;
+  top.colId = 2;
+  top.kind = FilterColumn::Kind::Top10;
+  top.count = 50;
+  top.percent = true;
+  top.threshold = 6;
+  f.columns = {values, custom, top};
+  CHECK(ed.SetFilter(0, f));
+  CHECK(book->GetSheet(0).Filter() && book->GetSheet(0).Filter()->filtered && book->GetSheet(0).Props().filterMode);
+  CHECK(book->Names().size() == 3 && book->Names()[2].name == "_xlnm._FilterDatabase" && book->Names()[2].hidden);
+  const std::string journaled(journal.All());
+
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-filter");
+  CheckClean(saved);
+  const std::string xml = PartText(saved, "/xl/worksheets/sheet1.xml");
+  CHECK(xml.find("<sheetPr filterMode=\"1\"/>") != std::string::npos);
+  CHECK(xml.find("<autoFilter ref=\"A1:C3\"><filterColumn colId=\"0\"><filters blank=\"1\"><filter val=\"4\"/></filters>"
+                 "</filterColumn><filterColumn colId=\"1\"><customFilters and=\"1\"><customFilter operator=\"greaterThan\" "
+                 "val=\"4\"/><customFilter operator=\"lessThan\" val=\"9\"/></customFilters></filterColumn>"
+                 "<filterColumn colId=\"2\"><top10 percent=\"1\" val=\"50\" filterVal=\"6\"/></filterColumn></autoFilter>") !=
+        std::string::npos);
+  CHECK(InOrder(xml, {"<sheetPr", "<sheetData", "<autoFilter"}));
+  CHECK(PartText(saved, "/xl/workbook.xml")
+            .find("<definedName name=\"_xlnm._FilterDatabase\" localSheetId=\"0\" hidden=\"1\">Sheet1!$A$1:$C$3</definedName>") !=
+        std::string::npos);
+
+  // Read back as set.
+  auto again = OpenZip(saved);
+  if (!again) return;
+  const std::optional<SheetFilter>& g = again->GetSheet(0).Filter();
+  CHECK(g && g->ref == f.ref && g->columns.size() == 3 && again->GetSheet(0).Props().filterMode);
+  if (g && g->columns.size() == 3) {
+    CHECK(g->columns[0].kind == FilterColumn::Kind::Values && g->columns[0].blank && g->columns[0].values == values.values);
+    CHECK(g->columns[1].kind == FilterColumn::Kind::Custom && g->columns[1].both && g->columns[1].conditions.size() == 2 &&
+          g->columns[1].conditions[1].op == "lessThan" && g->columns[1].conditions[1].val == "9");
+    CHECK(g->columns[2].kind == FilterColumn::Kind::Top10 && g->columns[2].count == 50 && g->columns[2].percent &&
+          !g->columns[2].bottom && g->columns[2].threshold == 6);
+  }
+
+  // Undone: no filter, name or filterMode.
+  CHECK(ed.Undo(1));
+  CHECK(!book->GetSheet(0).Filter() && !book->GetSheet(0).Props().filterMode && book->Names().size() == 2);
+  std::vector<uint8_t> undone = SaveBytes(*book, ed, "save-filter-undone");
+  CHECK(PartText(undone, "/xl/worksheets/sheet1.xml").find("autoFilter") == std::string::npos);
+  CHECK(PartText(undone, "/xl/worksheets/sheet1.xml").find("filterMode") == std::string::npos);
+  CHECK(PartText(undone, "/xl/workbook.xml").find("_FilterDatabase") == std::string::npos);
+
+  // Removed from a file that has one, keeping a column kind the model doesn't know (colors).
+  Editor ed2(*again);
+  SheetFilter colors = *g;
+  colors.columns.resize(1);
+  colors.columns[0].kind = FilterColumn::Kind::Other;
+  colors.columns[0].xml = "<filterColumn colId=\"0\"><colorFilter dxfId=\"0\"/></filterColumn>";
+  CHECK(ed2.SetFilter(0, colors));
+  std::vector<uint8_t> colored = SaveBytes(*again, ed2, "save-filter-other");
+  CHECK(PartText(colored, "/xl/worksheets/sheet1.xml").find("<colorFilter dxfId=\"0\"/>") != std::string::npos);
+  CHECK(ed2.SetFilter(0, std::nullopt));
+  std::vector<uint8_t> removed = SaveBytes(*again, ed2, "save-filter-removed");
+  CheckClean(removed);
+  CHECK(PartText(removed, "/xl/worksheets/sheet1.xml").find("autoFilter") == std::string::npos);
+  CHECK(PartText(removed, "/xl/worksheets/sheet1.xml").find("filterMode") == std::string::npos);
+  CHECK(PartText(removed, "/xl/workbook.xml").find("_FilterDatabase") == std::string::npos);
+
+  // The journal sets it again.
+  auto replayedBook = OpenParts({data, "<sheetData/>"});
+  if (!replayedBook) return;
+  Editor replayed(*replayedBook);
+  CHECK(replayed.Replay(journaled).ok);
+  const std::optional<SheetFilter>& r = replayedBook->GetSheet(0).Filter();
+  CHECK(r && r->columns.size() == 3 && r->columns[1].conditions.size() == 2 && r->columns[2].threshold == 6);
+  CHECK(replayedBook->Names().size() == 3);
+}
+
+TEST(sheet_save_moved_cells) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c><c r=\"B1\"><f t=\"shared\" ref=\"B1:B3\" si=\"0\">A1*2</f>"
+                         "</c><c r=\"D1\"><f>SUM(A1:A2)</f></c></row><row r=\"2\"><c r=\"A2\"><v>2</v></c><c r=\"B2\"><f t=\"shared\" "
+                         "si=\"0\"/></c></row><row r=\"3\"><c r=\"B3\"><f t=\"shared\" si=\"0\"/></c></row></sheetData>"
+                         "<mergeCells count=\"1\"><mergeCell ref=\"A5:B5\"/></mergeCells>",
+                         "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.MoveCells(0, Range{0, 0, 1, 0}, CellAddr{0, 5}));  // A1:A2 to F1:F2
+  CHECK(ed.MoveCells(0, Range{4, 0, 4, 1}, CellAddr{7, 2}));  // the merge A5:B5 to C8:D8
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-move-cells");
+  CheckClean(saved);
+  auto again = OpenZip(saved);
+  if (!again) return;
+  const Sheet& s = again->GetSheet(0);
+  CHECK(FormulaText(s, 0, 1) == "F1*2" && FormulaText(s, 1, 1) == "F2*2" && FormulaText(s, 2, 1) == "A3*2");
+  CHECK(FormulaText(s, 0, 3) == "SUM(F1:F2)" && s.Merges().size() == 1 && s.Merges()[0] == (Range{7, 2, 7, 3}));
+}
+
+// s2-corpus's registry findings: a formula in a cell kept as written (its value has xml:space) is
+// saved as rewritten; a shared formula whose cells a band of cells moves apart is split; a formula
+// nothing moved keeps its spaces.
+TEST(sheet_save_registry_findings) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row>"
+                         "<row r=\"5\"><c r=\"B5\" t=\"str\"><f>A1&amp;\" x\"</f><v xml:space=\"preserve\">1 x</v></c></row>"
+                         "<row r=\"6\"><c r=\"B6\"><f t=\"shared\" ref=\"B6:D6\" si=\"0\">$A$1+1</f><v>2</v></c>"
+                         "<c r=\"C6\"><f t=\"shared\" si=\"0\"/><v>2</v></c><c r=\"D6\"><f t=\"shared\" si=\"0\"/><v>2</v></c></row>"
+                         "</sheetData>",
+                         "<sheetData><row r=\"1\"><c r=\"A1\"><f>IF(B1=\"Sheet1\", B2, B3)</f><v>1</v></c></row></sheetData>"});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.InsertCells(0, Range{0, 2, 0, 2}, Editor::Direction::DownOrUp));  // C1 down: C6 leaves its group's row
+  CHECK(ed.InsertRows(0, 0, 1));
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-registry-findings");
+  CheckClean(saved);
+  const std::string xml = PartText(saved, "/xl/worksheets/sheet1.xml");
+  CHECK(xml.find("<f>A2&amp;\" x\"</f><v xml:space=\"preserve\">1 x</v>") != std::string::npos);
+  auto again = OpenZip(saved);
+  if (!again) return;
+  const Sheet& s = again->GetSheet(0);
+  CHECK_EQ(FormulaText(s, 5, 1), std::string("A2&\" x\""));
+  CHECK_EQ(FormulaText(s, 6, 1), std::string("$A$2+1"));
+  CHECK_EQ(FormulaText(s, 7, 2), std::string("$A$2+1"));  // C6, moved down twice, its own now
+  CHECK_EQ(FormulaText(s, 6, 3), std::string("$A$2+1"));
+  CHECK_EQ(FormulaText(again->GetSheet(1), 0, 0), std::string("IF(B1=\"Sheet1\", B2, B3)"));
+}

@@ -11,6 +11,7 @@
 #include <unordered_set>
 
 #include "pkg/Formula.h"
+#include "pkg/XmlWriter.h"
 #include "sheet/calc/Formula.h"
 #include "sheet/calc/Typing.h"
 #include "sheet/edit/Journal.h"
@@ -413,6 +414,7 @@ struct Editor::State {
   int bookDirty = 0;
   bool bookViewDirty = false;
   size_t xfsAtSave = 0, fontsAtSave = 0, fillsAtSave = 0, bordersAtSave = 0, numFmtsAtSave = 0, stringsAtSave = 0;
+  size_t cellStylesAtSave = 0, cellStylesSaving = 0;  // cell style xfs and cell styles, together
   // A save in progress (BeginSave): what it writes, so that view changes and formats added
   // meanwhile still count as unsaved after it.
   bool saving = false;
@@ -436,6 +438,7 @@ struct Editor::State {
     bordersAtSave = st.Borders().size();
     numFmtsAtSave = st.CustomFormats().size();
     stringsAtSave = b.Strings().Size();
+    cellStylesAtSave = st.CellStyleXfs().size() + st.CellStyles().size();
   }
 
   void ViewChanged(const Sheet* s) {
@@ -1475,6 +1478,28 @@ Result Editor::MapStyles(int sheet, const Range& r, const std::function<uint32_t
   return rec.Done(result);
 }
 
+uint32_t Editor::AddCellStyle(const CellStyle& style, const Xf& styleXf) {
+  Rec rec(*this, JournalOp::AddCellStyle, [&](JournalRecord& w) {
+    w.S(style.name).I(style.builtinId).I(style.outlineLevel).B(style.hidden).B(style.customBuiltin);
+    w.S(xlsx::StyleItemXml(styleXf));
+  }, true);
+  const uint32_t at = [&]() -> uint32_t {
+    StylesBuilder sb(book_.GetStyles());
+    for (const CellStyle& s : sb.CellStyles())
+      if (style.builtinId >= 0 ? s.builtinId == style.builtinId && s.outlineLevel == style.outlineLevel
+                               : NameEqualsNoCase(s.name, style.name))
+        return s.xf;
+    sb.CellStyleXfs().push_back(styleXf);
+    CellStyle added = style;
+    added.xf = static_cast<uint32_t>(sb.CellStyleXfs().size() - 1);
+    sb.CellStyles().push_back(std::move(added));
+    return static_cast<uint32_t>(sb.CellStyleXfs().size() - 1);
+  }();
+  rec.rec.U(at);
+  rec.commit = true;
+  return at;
+}
+
 uint32_t Editor::AddXf(const Xf& xf) {
   Rec rec(*this, JournalOp::AddXf, [&](JournalRecord& w) { w.S(xlsx::StyleItemXml(xf)); }, true);
   const uint32_t at = [&]() -> uint32_t {
@@ -1790,12 +1815,21 @@ FormulaPlan PlanFormulas(Sheet& x, int xi, bool edited, const std::function<bool
     const std::string& now = it == plan.texts.end() ? text : it->second;
     CellAddr master{g.master.row, g.master.col}, masterNow = master;
     bool gone = edited && !m.Cell(masterNow.row, masterNow.col);
-    bool all = gone || now.find("#REF!") != std::string::npos;
+    // The group's cells after the edit: one moved out of them (cells shifted in a band across
+    // the group) can't share any more; the master moved out, none can.
+    const FormulaRec& mr = recs[g.master.id];
+    Range ref = mr.ref;
+    if (edited && mr.hasRef) (void)m.Area(ref);
+    auto in = [&](CellAddr a) {
+      return !edited || !mr.hasRef ||
+             (a.row >= ref.firstRow && a.row <= ref.lastRow && a.col >= ref.firstCol && a.col <= ref.lastCol);
+    };
+    bool all = gone || now.find("#REF!") != std::string::npos || !in(masterNow);
     for (const FCell& f : g.followers) {
       CellAddr at{f.row, f.col}, to = at;
       if (edited && !m.Cell(to.row, to.col)) continue;
       std::string mine = shift(copy(text, xi, master, at), xi, f.row, f.col);
-      if (all || copy(now, xi, masterNow, to) != mine) plan.own.push_back({at, std::move(mine)});
+      if (all || !in(to) || copy(now, xi, masterNow, to) != mine) plan.own.push_back({at, std::move(mine)});
     }
     if (all && !gone) plan.unshare.push_back(g.master.id);
   }
@@ -1975,6 +2009,9 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
         where.col = static_cast<int32_t>(col);
         std::string out = calc::ShiftReferences(text, where, sheet, sh, names);
         for (const auto& [table, cols] : goneColumns) out = refs::DropTableColumns(out, table, cols);
+        // Nothing moved, only printed differently (spaces, case): kept as written.
+        if (out != text)
+          if (auto f = calc::Compile(text, where, names); f && calc::Print(*f, where, names) == out) return std::string(text);
         return out;
       };
       ctx.copy = [&](std::string_view text, int at, CellAddr from, CellAddr to) -> std::string {
@@ -3138,6 +3175,272 @@ void Editor::RewriteSheetRefs(int skip, const std::function<std::string(std::str
   }
 }
 
+// ---- Cut and paste
+
+namespace {
+
+// References after cells `from` of sheet `sheet` were cut and pasted over `to` (the same size, the
+// same sheet), as Excel rewrites them (measured): one wholly inside the cut cells follows them,
+// absolute or not, from any sheet or name; covered cells that weren't cut drop out of a reference
+// as deleted cells do (lines at its edges; when some are still inside, it stays as it was), and one
+// left with none is #REF!; the rest stay, whole rows and columns and 3-D references too. Formulas
+// are compiled and printed for A1, where a reference's numbers are the cells it names.
+class MoveMap : public calc::RefMap {
+ public:
+  MoveMap(int sheet, const Range& from, const Range& to) : sheet_(sheet), from_(from), to_(to) {}
+  mutable bool changed = false;
+
+  bool Map(int sheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t, bool wholeRows,
+           bool wholeCols) const override {
+    if (sheet != sheet_ || wholeRows || wholeCols || r1 < 0 || c1 < 0 || r2 < r1 || c2 < c1) return true;
+    auto range = [](int64_t a1, int64_t b1, int64_t a2, int64_t b2) {
+      return Range{static_cast<uint32_t>(a1), static_cast<uint32_t>(b1), static_cast<uint32_t>(a2), static_cast<uint32_t>(b2)};
+    };
+    int64_t t1 = r1, t2 = r2, l1 = c1, l2 = c2;
+    if (Overlaps(range(t1, l1, t2, l2), to_)) {
+      // A line of it inside `to` with none of it cut drops off.
+      auto over = [&](int64_t a1, int64_t b1, int64_t a2, int64_t b2) {
+        const Range line = range(a1, b1, a2, b2);
+        return Inside(line, to_) && !Overlaps(line, from_);
+      };
+      while (t1 <= t2 && l1 <= l2) {
+        if (over(t1, l1, t1, l2)) ++t1;
+        else if (over(t2, l1, t2, l2)) --t2;
+        else if (over(t1, l1, t2, l1)) ++l1;
+        else if (over(t1, l2, t2, l2)) --l2;
+        else break;
+      }
+      if (t1 > t2 || l1 > l2) {
+        changed = true;
+        return false;
+      }
+      const Range left = range(t1, l1, t2, l2);
+      if (Overlaps(left, to_)) {
+        const Range in{std::max(left.firstRow, to_.firstRow), std::max(left.firstCol, to_.firstCol),
+                       std::min(left.lastRow, to_.lastRow), std::min(left.lastCol, to_.lastCol)};
+        if (!Inside(in, from_)) t1 = r1, t2 = r2, l1 = c1, l2 = c2;  // covered cells still inside
+      }
+    }
+    if (Inside(range(t1, l1, t2, l2), from_)) {
+      const int64_t dr = static_cast<int64_t>(to_.firstRow) - from_.firstRow;
+      const int64_t dc = static_cast<int64_t>(to_.firstCol) - from_.firstCol;
+      t1 += dr, t2 += dr, l1 += dc, l2 += dc;
+    }
+    if (t1 != r1 || t2 != r2 || l1 != c1 || l2 != c2) changed = true;
+    r1 = static_cast<int32_t>(t1), r2 = static_cast<int32_t>(t2);
+    c1 = static_cast<int32_t>(l1), c2 = static_cast<int32_t>(l2);
+    return true;
+  }
+
+ private:
+  int sheet_;
+  Range from_, to_;
+};
+
+// Whether a shared formula's references, as they read in any cell of its group `group`, reach `a`
+// or `b` of sheet `sheet`: then a move changes them differently from cell to cell, and the group
+// can't stay shared. Printed for the group's master cell.
+class Reaches : public calc::RefMap {
+ public:
+  Reaches(int sheet, const Range& a, const Range& b, const Range& group) : sheet_(sheet), a_(a), b_(b), g_(group) {}
+  mutable bool hit = false;
+
+  bool Map(int sheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t abs, bool wholeRows,
+           bool wholeCols) const override {
+    if (sheet != sheet_ || wholeRows || wholeCols) return true;
+    // A relative part is an offset each cell of the group adds to its own row or column.
+    auto lo = [](int32_t v, bool fixed, uint32_t first) { return fixed ? int64_t{v} : int64_t{first} + v; };
+    const int64_t top = std::min(lo(r1, abs & kRow1, g_.firstRow), lo(r2, abs & kRow2, g_.firstRow));
+    const int64_t bottom = std::max(lo(r1, abs & kRow1, g_.lastRow), lo(r2, abs & kRow2, g_.lastRow));
+    const int64_t leftmost = std::min(lo(c1, abs & kCol1, g_.firstCol), lo(c2, abs & kCol2, g_.firstCol));
+    const int64_t rightmost = std::max(lo(c1, abs & kCol1, g_.lastCol), lo(c2, abs & kCol2, g_.lastCol));
+    if (bottom < 0 || rightmost < 0) return true;
+    const Range swept{static_cast<uint32_t>(std::max<int64_t>(top, 0)), static_cast<uint32_t>(std::max<int64_t>(leftmost, 0)),
+                      static_cast<uint32_t>(bottom), static_cast<uint32_t>(rightmost)};
+    hit = hit || Overlaps(swept, a_) || Overlaps(swept, b_);
+    return true;
+  }
+
+ private:
+  int sheet_;
+  Range a_, b_, g_;
+};
+
+// A cell as typed again: its value (a formula's: its result), its formula as it reads in the cell,
+// its format.
+CellInput InputOf(const CellInfo& cell, const FormulaInfo* f, int sheet, calc::Names& names) {
+  CellInput in;
+  in.type = cell.value.type;
+  in.number = cell.value.number;
+  in.boolean = cell.value.boolean;
+  in.error = cell.value.error;
+  in.text = std::string(cell.value.text);
+  if (f && f->origin.row == cell.row && f->origin.col == cell.col) {
+    in.formula = std::string(f->text);
+  } else if (f) {
+    calc::CompileOptions a, b;
+    a.sheet = b.sheet = sheet;
+    a.row = static_cast<int32_t>(f->origin.row);
+    a.col = static_cast<int32_t>(f->origin.col);
+    b.row = static_cast<int32_t>(cell.row);
+    b.col = static_cast<int32_t>(cell.col);
+    std::string out = calc::CopyFormula("=" + std::string(f->text), a, b, names);
+    in.formula = !out.empty() && out[0] == '=' ? out.substr(1) : out;
+  }
+  in.style = cell.style;
+  return in;
+}
+
+}  // namespace
+
+Result Editor::MoveCells(int sheet, const Range& from, CellAddr to, std::u16string stepName) {
+  Rec rec(*this, JournalOp::MoveCells, [&](JournalRecord& w) { w.I(sheet).R(from).A(to).S16(stepName); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!Valid(from) || to.row >= kMaxRows || to.col >= kMaxCols) return BadRange();
+    const Range dest{to.row, to.col, to.row + (from.lastRow - from.firstRow), to.col + (from.lastCol - from.firstCol)};
+    if (!Valid(dest)) return BadRange();
+    if (dest == from) return {};
+    for (size_t i = 0; i < book_.SheetCount(); ++i)
+      if (!book_.LoadSheet(i).Ok()) return Result::Fail(u"A sheet of this workbook couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet has no cells.");
+
+    // ---- What Excel refuses, and what isn't done here yet.
+    auto part = [&](const Range& x) { return (Overlaps(x, from) && !Inside(x, from)) || (Overlaps(x, dest) && !Inside(x, dest)); };
+    for (const Range& g : s.Merges())
+      if (part(g)) return Result::Fail(u"We can't do that to a merged cell.");
+    for (const Range& a : State::Arrays(s))
+      if (part(a)) return Result::Fail(u"You can't change part of an array.");
+    std::vector<Range> spills;  // dynamic arrays moving: the cells they spill into aren't typed again
+    for (const FCell& c : FormulaCellsOf(s)) {
+      if (c.id >= A::Formulas(s).size()) continue;
+      const FormulaRec& f = A::Formulas(s)[c.id];
+      if (!f.dynamic || !f.hasRef) {
+        const Range at = Range::Cell(c.row, c.col);
+        if (f.kind == FormulaKind::DataTable && (Overlaps(at, from) || Overlaps(at, dest)))
+          return Result::Fail(u"Featherweight can't move a what-if data table yet.");
+        continue;
+      }
+      if (part(f.ref)) return Result::Fail(u"You can't change part of an array.");
+      if (Inside(f.ref, from)) spills.push_back(f.ref);
+    }
+    for (const Table& t : s.Tables())
+      if (Overlaps(t.ref, from) || Overlaps(t.ref, dest))
+        return Result::Fail(u"Featherweight can't move cells into or out of a table yet.");
+    if (pkg::Package* package = book_.GetPackage(); package && !s.PartName().empty())
+      if (const pkg::RelationshipSet* rels = package->RelationshipsOf(s.PartName()))
+        for (const pkg::Relationship& rel : rels->items) {
+          std::vector<uint8_t> bytes;
+          Range where;
+          if (!rel.external && EndsWith(rel.type, "/pivotTable") && package->ReadPart(rel.targetPart, bytes).Ok() &&
+              PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
+              (Overlaps(where, from) || Overlaps(where, dest)))
+            return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
+        }
+
+    return Run(*this, stepName.empty() ? std::u16string(u"Paste") : stepName, [&]() -> Result {
+      BookNames names(book_);
+
+      // ---- Shared formulas whose cells' references would change differently: each its own.
+      for (size_t i = 0; i < book_.SheetCount(); ++i) {
+        Sheet& x = book_.GetSheet(i);
+        const int xi = static_cast<int>(i);
+        const std::vector<FCell> fcells = FormulaCellsOf(x);
+        const auto& recs = A::Formulas(x);
+        std::unordered_set<uint32_t> split;
+        for (const FCell& c : fcells) {
+          if (c.id >= recs.size()) continue;
+          const FormulaRec& f = recs[c.id];
+          if (f.kind != FormulaKind::Shared || f.text == kNone || f.sharedIndex == kNone || !f.hasRef) continue;
+          bool hit = xi == sheet && (Overlaps(f.ref, from) || Overlaps(f.ref, dest));
+          if (!hit) {
+            calc::CompileOptions at;
+            at.sheet = xi;
+            at.row = static_cast<int32_t>(c.row);
+            at.col = static_cast<int32_t>(c.col);
+            if (auto compiled = calc::Compile(A::Texts(x).Get(f.text), at, names)) {
+              Reaches probe(sheet, from, dest, f.ref);
+              calc::PrintOptions how;
+              how.map = &probe;
+              (void)calc::Print(*compiled, at, names, how);
+              hit = probe.hit;
+            }
+          }
+          if (hit) split.insert(f.sharedIndex);
+        }
+        if (split.empty()) continue;
+        std::vector<std::pair<CellAddr, CellInput>> own;
+        for (const FCell& c : fcells) {
+          if (c.id >= recs.size() || recs[c.id].kind != FormulaKind::Shared || !split.count(recs[c.id].sharedIndex)) continue;
+          FormulaInfo f;
+          CellInfo cell;
+          if (x.GetFormula(c.row, c.col, f) && x.GetCell(c.row, c.col, cell))
+            own.emplace_back(CellAddr{c.row, c.col}, InputOf(cell, &f, xi, names));
+        }
+        if (Result r = SetCells(xi, own); !r) return r;
+      }
+
+      // ---- References everywhere: cells, names, tables, rules, charts, drawings, controls.
+      const MoveMap map(sheet, from, dest);
+      RewriteSheetRefs(
+          -1,
+          [&](std::string_view text, int at) {
+            calc::CompileOptions o;
+            o.sheet = at;
+            auto f = calc::Compile(text, o, names);
+            if (!f) return std::string(text);
+            map.changed = false;
+            calc::PrintOptions how;
+            how.map = &map;
+            std::string out = calc::Print(*f, o, names, how);
+            return map.changed ? out : std::string(text);  // as written when nothing moved
+          },
+          [](std::string_view text) { return text.find_first_of("0123456789") != std::string_view::npos; });
+
+      // ---- The cut cells typed again where they go; cleared where they were and where they go.
+      const uint32_t dr = dest.firstRow - from.firstRow, dc = dest.firstCol - from.firstCol;
+      auto moved = [&](const Range& r) { return Range{r.firstRow + dr, r.firstCol + dc, r.lastRow + dr, r.lastCol + dc}; };
+      std::vector<std::pair<CellAddr, CellInput>> cells;
+      std::vector<std::pair<CellAddr, uint32_t>> styles;  // cells inside an array: their formats alone
+      std::vector<Range> merges;
+      for (const Range& g : s.Merges())
+        if (Inside(g, from)) merges.push_back(moved(g));
+      s.ForEachCell(from, [&](const CellInfo& cell) {
+        const CellAddr there{cell.row + dr, cell.col + dc};
+        FormulaInfo f;
+        const bool formula = cell.hasFormula && s.GetFormula(cell.row, cell.col, f);
+        const bool array = formula && f.kind == FormulaKind::Array && !f.dynamic;
+        const bool spilled = !formula && std::any_of(spills.begin(), spills.end(), [&](const Range& sp) {
+          return Inside(Range::Cell(cell.row, cell.col), sp);
+        });
+        if ((array && !f.master) || spilled) {
+          styles.emplace_back(there, cell.style);
+          return true;
+        }
+        CellInput in = InputOf(cell, formula ? &f : nullptr, sheet, names);
+        if (array) {
+          in.array = true;
+          in.arrayRange = moved(f.ref);
+        }
+        cells.emplace_back(there, std::move(in));
+        return true;
+      });
+      for (const Range& r : {from, dest}) {
+        if (Result x = Unmerge(sheet, r); !x) return x;
+        if (Result x = ClearAll(sheet, r); !x) return x;
+      }
+      if (Result x = SetCells(sheet, cells); !x) return x;
+      for (const auto& [at, style] : styles)
+        if (style)
+          if (Result x = SetStyle(sheet, Range::Cell(at.row, at.col), style); !x) return x;
+      for (const Range& g : merges)
+        if (Result x = Merge(sheet, g); !x) return x;
+      return Result{};
+    });
+  }());
+}
+
 // ---- Merged cells
 
 Result Editor::Merge(int sheet, const Range& r) {
@@ -3388,6 +3691,127 @@ Result Editor::DeleteSheet(int sheet) {
       if (active >= list.size()) active = 0;
       A::FirstTab(book_) = 0;
       st.Change(nullptr, kSheets, Range{});
+      return Result{};
+    });
+  }());
+}
+
+namespace {
+
+// "$A$1:$C$9"
+std::string AbsoluteName(const Range& r) {
+  auto cell = [](uint32_t row, uint32_t col) {
+    std::string name = CellName(row, col);
+    const size_t digits = name.find_first_of("0123456789");
+    return "$" + name.substr(0, digits) + "$" + name.substr(digits);
+  };
+  return cell(r.firstRow, r.firstCol) + ":" + cell(r.lastRow, r.lastCol);
+}
+
+// A filter's autoFilter element, with the sheet's prefix `p`.
+std::string FilterXml(const SheetFilter& f, const std::string& p) {
+  auto num = [](double v) {
+    char buf[48];
+    return std::string(buf, xlsx::FormatNumber(v, 0, buf));
+  };
+  auto attr = [](std::string_view name, std::string_view value) {
+    std::string out = " " + std::string(name) + "=\"";
+    pkg::AppendEscapedAttribute(out, value);
+    return out + "\"";
+  };
+  std::string out = "<" + p + "autoFilter" + attr("ref", RangeName(f.ref));
+  if (f.columns.empty()) return out + "/>";
+  out += ">";
+  for (const FilterColumn& c : f.columns) {
+    if (c.kind == FilterColumn::Kind::Other) {
+      out += c.xml;
+      continue;
+    }
+    out += "<" + p + "filterColumn" + attr("colId", std::to_string(c.colId)) + ">";
+    switch (c.kind) {
+      case FilterColumn::Kind::Values:
+        out += "<" + p + "filters" + (c.blank ? attr("blank", "1") : std::string());
+        if (c.values.empty()) {
+          out += "/>";
+          break;
+        }
+        out += ">";
+        for (const std::string& v : c.values) out += "<" + p + "filter" + attr("val", v) + "/>";
+        out += "</" + p + "filters>";
+        break;
+      case FilterColumn::Kind::Custom:
+        out += "<" + p + "customFilters" + (c.both ? attr("and", "1") : std::string()) + ">";
+        for (const FilterColumn::Condition& k : c.conditions)
+          out += "<" + p + "customFilter" + (k.op == "equal" ? std::string() : attr("operator", k.op)) + attr("val", k.val) +
+                 "/>";
+        out += "</" + p + "customFilters>";
+        break;
+      case FilterColumn::Kind::Top10:
+        out += "<" + p + "top10" + (c.bottom ? attr("top", "0") : std::string()) +
+               (c.percent ? attr("percent", "1") : std::string()) + attr("val", num(c.count)) +
+               attr("filterVal", num(c.threshold)) + "/>";
+        break;
+      default:
+        out += "<" + p + "dynamicFilter" +
+               attr("type", c.kind == FilterColumn::Kind::AboveAverage ? "aboveAverage" : "belowAverage") +
+               attr("val", num(c.threshold)) + "/>";
+        break;
+    }
+    out += "</" + p + "filterColumn>";
+  }
+  return out + "</" + p + "autoFilter>";
+}
+
+}  // namespace
+
+Result Editor::SetFilter(int sheet, const std::optional<SheetFilter>& filter) {
+  Rec rec(*this, JournalOp::SetFilter, [&](JournalRecord& w) { w.I(sheet).Filter(filter); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (filter && !Valid(filter->ref)) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (filter)
+      for (const Table& t : s.Tables())
+        if (Overlaps(t.ref, filter->ref)) return Result::Fail(u"A table has its own filter.");
+    return Run(*this, filter ? u"Filter" : u"Remove Filter", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveFilter(sv);
+      std::optional<SheetFilter> now = filter;
+      if (now) now->filtered = !now->columns.empty();
+      A::Filter(s) = now;
+      // The element in the sheet's part, which saving writes as it is.
+      st.SaveText(sv);
+      detail::PartText& t = A::Text(s);
+      xlsx::PutSheetElement(t, "autoFilter", now ? FilterXml(*now, xlsx::SheetPrefix(t)) : std::string());
+      const bool mode = now && now->filtered;
+      if (s.Props().filterMode != mode) {
+        st.SaveProps(sv);
+        A::Props(s).filterMode = mode;
+      }
+      // Excel's hidden name for the range, local to the sheet.
+      std::vector<DefinedName> names = book_.Names();
+      auto it = std::find_if(names.begin(), names.end(), [&](const DefinedName& n) {
+        return n.sheet == sheet && NameEqualsNoCase(n.name, "_xlnm._FilterDatabase");
+      });
+      if (now) {
+        DefinedName n{"_xlnm._FilterDatabase", sheet, pkg::QuoteSheetName(s.Name()) + "!" + AbsoluteName(now->ref), true};
+        if (it != names.end()) *it = n;
+        else names.push_back(n);
+      } else if (it != names.end()) {
+        names.erase(it);
+      }
+      if (names.size() != book_.Names().size() || !std::equal(names.begin(), names.end(), book_.Names().begin(),
+                                                               [](const DefinedName& a, const DefinedName& b) {
+                                                                 return a.name == b.name && a.sheet == b.sheet &&
+                                                                        a.formula == b.formula && a.hidden == b.hidden;
+                                                               })) {
+        st.SaveBook(false, true);
+        A::Names(book_) = std::move(names);
+        st.Change(nullptr, kNames, Range{});
+      }
+      st.Change(&s, kSheetProps, now ? now->ref : Range{});
       return Result{};
     });
   }());
@@ -3737,6 +4161,7 @@ void Editor::BeginSave() {
   st.bordersSaving = styles.Borders().size();
   st.numFmtsSaving = styles.CustomFormats().size();
   st.stringsSaving = book_.Strings().Size();
+  st.cellStylesSaving = styles.CellStyleXfs().size() + styles.CellStyles().size();
 }
 
 bool Editor::Saving() const { return s_->saving; }
@@ -3779,6 +4204,7 @@ void Editor::Saved(std::vector<Written> sheets, bool stringsWritten, std::string
   st.bordersAtSave = st.bordersSaving;
   st.numFmtsAtSave = st.numFmtsSaving;
   st.stringsAtSave = st.stringsSaving;
+  st.cellStylesAtSave = st.cellStylesSaving;
   st.saving = false;
 }
 
@@ -3805,7 +4231,8 @@ bool Editor::StylesDirty() const {
   const Styles& st = book_.GetStyles();
   return st.CellXfs().size() != s_->xfsAtSave || st.Fonts().size() != s_->fontsAtSave ||
          st.Fills().size() != s_->fillsAtSave || st.Borders().size() != s_->bordersAtSave ||
-         st.CustomFormats().size() != s_->numFmtsAtSave;
+         st.CustomFormats().size() != s_->numFmtsAtSave ||
+         st.CellStyleXfs().size() + st.CellStyles().size() != s_->cellStylesAtSave;
 }
 
 bool Editor::StringsDirty() const { return book_.Strings().Size() != s_->stringsAtSave; }

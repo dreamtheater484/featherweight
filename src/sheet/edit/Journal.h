@@ -65,6 +65,9 @@ enum class JournalOp : uint8_t {
   Undo = 36,
   Redo = 37,
   DropHistory = 38,  // a save that removed sheets ended the undo history
+  AddCellStyle = 39,
+  SetFilter = 40,
+  MoveCells = 41,
 };
 
 // One record being written: its kind, then its fields in the order Replay reads them.
@@ -84,6 +87,7 @@ class JournalRecord {
   JournalRecord& A(CellAddr a) { return U(a.row).U(a.col); }
   JournalRecord& C(const Color& c);
   JournalRecord& Input(const CellInput& in);
+  JournalRecord& Filter(const std::optional<SheetFilter>& f);
   // A view change: replaces the record just before it when that one has the same kind and key.
   JournalRecord& Key(int key) {
     key_ = key;

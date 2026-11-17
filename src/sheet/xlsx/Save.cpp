@@ -249,6 +249,7 @@ std::string SheetPrXml(const Sheet& s, const PartText& t, const std::string& p) 
     std::string xml = "<" + p + "tabColor" + ColorAttrs(c) + "/>";
     if (ParseSlice(cd, xml)) pr.prepend_copy(cd.document_element());
   }
+  SetAttr(pr, "filterMode", s.Props().filterMode ? "1" : "");
   if (!pr.first_child() && !pr.first_attribute()) return {};
   return Print(pr);
 }
@@ -427,7 +428,7 @@ PartText NewSheetText(const Sheet& s, bool active, bool strict) {
     PutElement(t, "pageMargins",
                "<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>");
   t.rootEnd = "</worksheet>";
-  if (s.Props().tabColor.IsSet()) PutElement(t, "sheetPr", SheetPrXml(s, t, ""));
+  if (s.Props().tabColor.IsSet() || s.Props().filterMode) PutElement(t, "sheetPr", SheetPrXml(s, t, ""));
   return t;
 }
 
@@ -547,6 +548,23 @@ std::string XfXml(const Xf& x) {
   return out + "</xf>";
 }
 
+// A cell style's format: as a cell's, without the parent cellStyleXfs entries don't have.
+std::string StyleXfXml(const Xf& x) {
+  std::string out = XfXml(x);
+  const size_t at = out.find(" xfId=\"");
+  if (at != std::string::npos) out.erase(at, out.find('"', at + 7) + 1 - at);
+  return out;
+}
+
+std::string CellStyleXml(const CellStyle& s) {
+  std::string out = "<cellStyle" + AttrXml("name", s.name) + AttrXml("xfId", std::to_string(s.xf));
+  if (s.builtinId >= 0) out += AttrXml("builtinId", std::to_string(s.builtinId));
+  if (s.outlineLevel >= 0) out += AttrXml("iLevel", std::to_string(s.outlineLevel));
+  if (s.hidden) out += AttrXml("hidden", "1");
+  if (s.customBuiltin) out += AttrXml("customBuiltin", "1");
+  return out + "/>";
+}
+
 // Appends the model's entries past what `list` (fonts, fills, ...) holds, written by `xml`.
 template <class T, class Fn>
 bool AppendNew(pugi::xml_node root, std::string_view listName, std::string_view itemName, const std::vector<T>& model,
@@ -622,6 +640,16 @@ Status StylesPart(const Workbook& book, std::vector<uint8_t>& out) {
       !AppendNew(root, "borders", "border", s.Borders(), BorderXml, p) ||
       !AppendNew(root, "cellXfs", "xf", s.CellXfs(), XfXml, p))
     return Status::Fail(Status::Code::Unsupported, "The workbook's styles can't take the new formats.");
+  // Cell styles added (Editor::AddCellStyle): their lists made where the schema puts them when the
+  // file has none (cellStyleXfs before cellXfs, cellStyles after).
+  if (pugi::xml_node xfs = Child(root, "cellXfs")) {
+    pugi::xml_node styleXfs = Child(root, "cellStyleXfs"), styles = Child(root, "cellStyles");
+    if (!styleXfs && !s.CellStyleXfs().empty()) root.insert_child_before((p + "cellStyleXfs").c_str(), xfs);
+    if (!styles && !s.CellStyles().empty()) root.insert_child_after((p + "cellStyles").c_str(), xfs);
+  }
+  if (!AppendNew(root, "cellStyleXfs", "xf", s.CellStyleXfs(), StyleXfXml, p) ||
+      !AppendNew(root, "cellStyles", "cellStyle", s.CellStyles(), CellStyleXml, p))
+    return Status::Fail(Status::Code::Unsupported, "The workbook's styles can't take the new cell styles.");
   out = Bytes(PrintDoc(doc));
   return {};
 }

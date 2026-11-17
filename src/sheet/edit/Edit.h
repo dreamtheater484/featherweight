@@ -143,6 +143,10 @@ class Editor {
   // ones alike; whole rows or columns as SetStyle.
   Result MapStyles(int sheet, const Range& r, const std::function<uint32_t(uint32_t)>& map);
   uint32_t AddXf(const Xf& xf);
+  // A cell style (Good, Heading 1...): the workbook's own with the same built-in id (or, for a
+  // custom one, name), else `style` added with `styleXf` as its format. Its cellStyleXfs index,
+  // for Xf::parent. Not undone, like the formats.
+  uint32_t AddCellStyle(const CellStyle& style, const Xf& styleXf);
   uint32_t AddFont(const Font& font);
   uint32_t AddFill(const Fill& fill);
   uint32_t AddBorder(const Border& border);
@@ -164,6 +168,14 @@ class Editor {
   Result DeleteColumns(int sheet, uint32_t first, uint32_t count);
   enum class Direction : uint8_t { RightOrLeft, DownOrUp };
   Result InsertCells(int sheet, const Range& r, Direction shift);  // Right or Down
+  // Cut and paste (or drag) on one sheet: cells `from` go to the block whose top-left cell is `to`,
+  // values, formulas, formats and merges; the cells they leave are cleared and those they cover
+  // replaced. References everywhere follow as Excel makes them (measured): one wholly inside the
+  // cut cells moves with them; covered cells that weren't cut drop out of references as deleted
+  // cells do (#REF! when nothing is left); the rest stay. Rich text, notes, hyperlinks, conditional
+  // formats and validations stay where they are (not moved yet). Refused over part of a merge or
+  // an array, and over tables, PivotTables and data tables.
+  Result MoveCells(int sheet, const Range& from, CellAddr to, std::u16string stepName = u"Paste");
   Result DeleteCells(int sheet, const Range& r, Direction shift);  // Left or Up
 
   // ---- Sorting, as Excel sorts: the rows of `r` put in `order` (the row at r.firstRow + order[i]
@@ -196,6 +208,10 @@ class Editor {
   Result SetSheetState(int sheet, SheetState state);  // the last visible sheet can't be hidden
   // Freezes `rows` rows and `cols` columns from the view's top-left cell; 0, 0 unfreezes.
   Result FreezePanes(int sheet, uint32_t rows, uint32_t cols);
+  // The sheet's filter (Ctrl+Shift+L) with its columns' criteria, or none: written as Excel writes
+  // it (autoFilter, sheetPr filterMode while a column filters, the hidden name
+  // _xlnm._FilterDatabase). The rows it hides are the caller's (HideRows, in the same group).
+  Result SetFilter(int sheet, const std::optional<SheetFilter>& filter);
   // Excel's rules for a sheet name: 1-31 characters, none of : \ / ? * [ ], not starting or
   // ending with ', not "History", and no other sheet's name (without case). Empty when valid.
   std::u16string CheckSheetName(std::string_view name, int except = -1) const;
