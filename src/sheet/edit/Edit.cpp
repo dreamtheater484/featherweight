@@ -550,7 +550,13 @@ struct Editor::State {
   void SaveProps(SheetSave& sv) { SaveList(sv, kSaveProps, kPieceProps, sv.props, A::Props(*sv.sheet)); }
   void SaveFormat(SheetSave& sv) { SaveList(sv, kSaveFormat, kPieceProps, sv.format, A::Format(*sv.sheet)); }
   void SaveLinks(SheetSave& sv) { SaveList(sv, kSaveLinks, kPieceLinks, sv.links, A::Links(*sv.sheet)); }
-  void SaveText(SheetSave& sv) { SaveList(sv, kSaveText, kPieceOther, sv.text, A::Text(*sv.sheet)); }
+  // The XML around the cells. It also holds what the writer makes from the model (sheetPr, views,
+  // cols, merges, links) as last written: the text an undo or redo puts back may be from before a
+  // save, so those are written from the model again.
+  void SaveText(SheetSave& sv) {
+    SaveList(sv, kSaveText, kPieceOther | kPieceProps | kPieceViews | kPieceCols | kPieceMerges | kPieceLinks, sv.text,
+             A::Text(*sv.sheet));
+  }
   void SaveTables(SheetSave& sv) { SaveList(sv, kSaveTables, kPieceOther, sv.tables, A::Tables(*sv.sheet)); }
   void SaveFilter(SheetSave& sv) { SaveList(sv, kSaveFilter, kPieceOther, sv.filter, A::Filter(*sv.sheet)); }
   void SaveBreaks(SheetSave& sv) {
@@ -2653,7 +2659,34 @@ void Editor::FixHeaders(Sheet& s, const std::vector<CellAddr>& cells) {
   };
   std::vector<Renamed> renamed;
   std::u16string why;
+  bool totals = false;
   for (Table& t : tables) {
+    // The totals row: a formula typed there is the column's custom total, text its label, as
+    // Excel writes them (a label beside a formula is repaired).
+    if (t.totalsRows)
+      for (const CellAddr& a : cells) {
+        if (a.row != t.ref.lastRow || a.col < t.ref.firstCol || a.col > t.ref.lastCol) continue;
+        const size_t k = a.col - t.ref.firstCol;
+        if (k >= t.columns.size()) continue;
+        TableColumn now = t.columns[k];
+        FormulaInfo f;
+        if (s.GetFormula(a.row, a.col, f) && f.kind == FormulaKind::Normal) {
+          now.totalsFunction = "custom";
+          now.totalsFormula = std::string(f.text);
+          now.totalsLabel.clear();
+        } else {
+          const Value v = s.GetValue(a.row, a.col);
+          now.totalsFunction.clear();
+          now.totalsFormula.clear();
+          now.totalsLabel = v.type == ValueType::String ? std::string(v.text) : std::string();
+        }
+        TableColumn& was = t.columns[k];
+        if (now.totalsFunction != was.totalsFunction || now.totalsFormula != was.totalsFormula ||
+            now.totalsLabel != was.totalsLabel) {
+          was = std::move(now);
+          totals = true;
+        }
+      }
     if (!t.headerRows) continue;
     for (const CellAddr& a : cells) {
       if (a.row != t.ref.firstRow || a.col < t.ref.firstCol || a.col > t.ref.lastCol) continue;
@@ -2699,7 +2732,7 @@ void Editor::FixHeaders(Sheet& s, const std::vector<CellAddr>& cells) {
       }
     }
   }
-  if (renamed.empty()) return;
+  if (renamed.empty() && !totals) return;
   st.SaveTables(st.Save(s));
   A::Tables(s) = tables;
   int index = 0;
@@ -2717,7 +2750,8 @@ void Editor::FixHeaders(Sheet& s, const std::vector<CellAddr>& cells) {
     }
   }
   // Structured references to the renamed columns, everywhere.
-  RewriteSheetRefs(
+  if (!renamed.empty())
+    RewriteSheetRefs(
       -1,
       [&](std::string_view text, int) {
         std::string out(text);

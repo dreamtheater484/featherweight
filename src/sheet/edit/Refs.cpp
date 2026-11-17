@@ -1143,6 +1143,38 @@ bool MoveTable(std::string& xml, const Table& before, const Table& after, int in
             changed = true;
           }
     }
+  // Totals typed in the totals row: the column's function, label and formula as the model has them.
+  if (list)
+    for (pugi::xml_node x = list.first_child(); x; x = x.next_sibling()) {
+      if (Local(x) != "tableColumn") continue;
+      const uint32_t id = ToUInt(xlsx::Attr(x, "id"), 0);
+      for (const TableColumn& was : before.columns)
+        for (const TableColumn& col : after.columns) {
+          if (was.id != id || col.id != id ||
+              (was.totalsFunction == col.totalsFunction && was.totalsLabel == col.totalsLabel &&
+               was.totalsFormula == col.totalsFormula))
+            continue;
+          for (const auto& [name, value] : {std::pair<const char*, const std::string*>{"totalsRowFunction", &col.totalsFunction},
+                                            std::pair<const char*, const std::string*>{"totalsRowLabel", &col.totalsLabel}}) {
+            if (value->empty()) x.remove_attribute(name);
+            else SetAttr(x, name, *value);
+          }
+          pugi::xml_node f = ChildNamed(x, "totalsRowFormula");
+          if (col.totalsFormula.empty()) {
+            if (f) x.remove_child(f);
+          } else {
+            if (!f) {
+              std::string p(x.name());
+              p = p.find(':') == std::string::npos ? std::string() : p.substr(0, p.find(':') + 1);
+              pugi::xml_node calc = ChildNamed(x, "calculatedColumnFormula");
+              f = calc ? x.insert_child_after((p + "totalsRowFormula").c_str(), calc)
+                       : x.prepend_child((p + "totalsRowFormula").c_str());
+            }
+            SetText(f, col.totalsFormula);
+          }
+          changed = true;
+        }
+    }
   // Column formulas (relative ones are written for the first data row).
   if (list)
     for (pugi::xml_node x = list.first_child(); x; x = x.next_sibling()) {
