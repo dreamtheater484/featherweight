@@ -180,9 +180,10 @@ TEST(SheetCsv_Values) {
 }
 
 TEST(SheetCsv_Parallel) {
-  // Many rows, parsed by several threads, come out in order and the same as one thread.
+  // Many rows (more than one batch), parsed by several threads, come out in order and the same as
+  // one thread; repeated values share their string.
   std::string text;
-  for (int r = 0; r < 20000; ++r) text += std::to_string(r) + ",\"q" + std::to_string(r) + "\",x" + std::to_string(r % 7) + "\n";
+  for (int r = 0; r < 70000; ++r) text += std::to_string(r) + ",\"q" + std::to_string(r) + "\",x" + std::to_string(r % 7) + "\n";
   csv::Options o;
   o.locale = &EnUsLocale();
   o.threads = 4;
@@ -191,10 +192,13 @@ TEST(SheetCsv_Parallel) {
   csv::Read(text, "S", o, a, sa);
   o.threads = 1;
   csv::Read(text, "S", o, b, sb);
-  CHECK(sa.rowStart.size() == 20000 && sa.lineEnd == csv::LineEnd::LF);
-  for (uint32_t r : {0u, 1u, 4999u, 5000u, 12345u, 19999u}) {
+  CHECK(sa.rowStart.size() == 70000 && sa.lineEnd == csv::LineEnd::LF);
+  for (uint32_t r : {0u, 1u, 4999u, 5000u, 12345u, 19999u, 65535u, 65536u, 69999u}) {
     CHECK(Shown(a, a.GetSheet(0), r, 0, EnUsLocale()) == std::to_string(r));
     CHECK(Shown(a, a.GetSheet(0), r, 1, EnUsLocale()) == "q" + std::to_string(r));
     CHECK(Shown(b, b.GetSheet(0), r, 1, EnUsLocale()) == "q" + std::to_string(r));
+    CHECK(Shown(a, a.GetSheet(0), r, 2, EnUsLocale()) == "x" + std::to_string(r % 7));
   }
+  CHECK(a.GetSheet(0).CellCount() == 210000);
+  CHECK(a.Strings().Size() < 80000);  // 70,000 q's; the x's mostly shared (140,000 unshared)
 }

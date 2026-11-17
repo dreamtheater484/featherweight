@@ -71,6 +71,7 @@ class Reader {
   std::string decoded_;
   std::string_view text_;
   std::vector<std::pair<std::string, uint32_t>> styles_;  // format code (UTF-8) -> cell style
+  size_t stringBytes_ = 0;                                  // text added to the workbook's strings
 };
 
 // The whole file as a workbook with one sheet named `sheetName` (format Csv).
