@@ -426,6 +426,13 @@ void WorkbookView::BeginRename(size_t sheet) {
 bool WorkbookView::OnChar(wchar_t ch, UINT mods) {
   if (!Ready() || preview_ || ChartSheet()) return false;
   if (editor_.Active()) {
+    if (ch == L'%' && autoPercent_ && !editor_.HasSelection() && static_cast<size_t>(editor_.Caret()) + 1 == editor_.Text().size() &&
+        editor_.Text().back() == L'%') {
+      editor_.SetText(editor_.Text(), editor_.Caret() + 1, editor_.Caret() + 1);
+      autoPercent_ = false;
+      host_.ViewInvalidate();
+      return true;
+    }
     if (editor_.OnChar(ch)) {
       fnClosed_ = false;
       AutoComplete();
@@ -439,6 +446,17 @@ bool WorkbookView::OnChar(wchar_t ch, UINT mods) {
   // Typing over a cell replaces it (Enter mode).
   BeginEdit(CellEditor::Mode::Enter, L"");
   editor_.OnChar(ch);
+  // A number typed into a percent cell is a percentage: the "%" comes with the first digit, '-'
+  // or '+', the caret before it (Excel's automatic percent entry; s2-format measured it).
+  autoPercent_ = false;
+  if (editor_.Active() && ((ch >= L'0' && ch <= L'9') || ch == L'-' || ch == L'+') && editor_.Text() == std::wstring(1, ch)) {
+    const Xf& xf = book_->GetStyles().CellXf(Current().StyleAt(active_.row, active_.col));
+    if (xf.numFmt != 0 && text_->FormatOf(xf.numFmt).HasPercent()) {
+      editor_.SetText(editor_.Text() + L"%", 1, 1);
+      autoPercent_ = true;
+      host_.ViewInvalidate();
+    }
+  }
   AutoComplete();
   UpdateFormulaHelp();
   return true;
@@ -553,12 +571,13 @@ bool WorkbookView::InputFor(const std::wstring& text, int sheet, CellAddr cell, 
       break;
     case TypedValue::Text: in = edit::CellInput::Text(WideToUtf8(tv.text)); break;
   }
-  // The format typing gives a General cell (a date, a percentage...), and an apostrophe's
-  // quotePrefix.
+  // The format typing gives (a date, a percentage...) where Excel changes the cell's (s2-format's
+  // TypedFormat: General always, a built-in currency, percent, date... only for another kind),
+  // and an apostrophe's quotePrefix.
   Xf want = xf;
   bool restyle = false;
-  if (tv.format != 0 && xf.numFmt == 0) {
-    want.numFmt = static_cast<uint32_t>(tv.format);
+  if (const uint32_t f = TypedFormat(xf.numFmt, tv.format); f != xf.numFmt) {
+    want.numFmt = f;
     want.applyNumFmt = true;
     restyle = true;
   }
