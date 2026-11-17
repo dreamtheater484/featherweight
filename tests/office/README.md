@@ -119,6 +119,16 @@ D2 is done when every corpus file, after scripted random edits and a save, has n
   - **Statuses:** `ok` opened normally, with no repair log and no "[Repaired]" caption. `repaired` opened only by repairing; the lines of Excel's repair log (`error*.xml` in TEMP) are reported, such as "Removed Records: Cell information from /xl/worksheets/sheet1.xml part". `refused` means no way of opening worked. `unchecked` means Excel's automation failed three times.
   - **Proof:** `scripts/excel-open-check-proof.ps1` makes broken copies of `excel/sheets.xlsx` (a shared string past the end, a missing style, duplicate sheet names, a truncated sheet, no workbook part, not a ZIP), checks them and compares each status with the expected one.
   - **A known repair:** Excel repairs one corpus workbook as downloaded, LibreOffice's frozen-panes test ("Repaired Records: View"). So the torture gate has to compare each saved copy with its original's status.
+- **`scripts/sheet-torture.ps1`** is S2's workbook gate. It runs `fwtool torture --workbooks` (seeded edits through the edit API, see `fwtool` help), then the validator, then `excel-open-check.ps1` on the saved copies.
+  - **Originals:** a copy Excel repairs or refuses exactly as it does the original is "original too", which passes.
+  - **Undo and redo:** after a round's edits, undoing them all must give the workbook as opened, and redoing them the edited one.
+  - **Saves:** a save is checked only when the writer can write everything that changed; otherwise the summary says what it couldn't write. `--ops` limits the edits, for example to what today's writer saves.
+  - **Defaults:** without `-Paths` it takes `sheet`, `excel`, `generated`, `edge` and, with `-Corpus`, the private corpus's `xlsx`. `-Ci` runs without Excel.
+- **`scripts/build-from-scratch.ps1`** is S2's "build from scratch" check. `build/budget.steps` and `build/invoice.steps` are a household budget and a small invoice, typed step by step in the en-NL region.
+  - **Excel's copy:** Excel plays the steps (`FormulaLocal` converts what's typed as typing does), saves, reopens its copy and dumps what it shows. The dump has, per cell, the formula, value, `Range.Text`, number format, font, fill, alignment and borders; per sheet, the column widths, merges and frozen panes.
+  - **Featherweight's copy:** with `-Saved <folder>`, Featherweight's saved copies of the same steps are dumped the same way and must match, and must open without a repair.
+  - **Number formats:** they go through the COM call with en-US. Without it, PowerShell's call carries the user's locale, and `Range.NumberFormat` takes and gives the region's codes ("dd/mm/jjjj", "Standaard"). The S1 cells files' `-CellFormats` field has those codes; nothing reads it.
+  - **AutoSum:** Excel's own AutoSum leaves a hidden Excel editing the cell, so Excel types the formula the step names, and Featherweight's AutoSum must propose it.
 - **`scripts/contract-review-check.ps1`** is D4's contract review check. It reviews `torture/review-contract.docx` in Featherweight's editor through `fwtool torture --replay`, with the operations the Review pane runs:
   - accept a replacement, reject an inserted clause, accept a changed number, and reject a deleted paragraph mark
   - reply to a comment and resolve its thread
