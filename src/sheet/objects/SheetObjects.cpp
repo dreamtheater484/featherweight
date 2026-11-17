@@ -381,6 +381,12 @@ std::vector<SheetObjects::Object> SheetObjects::Objects() const {
 
 bool SheetObjects::IsChartSheet() const { return impl_->chartSheet; }
 
+draw::Size SheetObjects::ChartSheetSize() const {
+  for (const Impl::Item& it : impl_->items)
+    if (it.chart || it.drawing) return it.anchor.kind == AnchorKind::Absolute ? it.anchor.ext : draw::Size{};
+  return {};
+}
+
 void SheetObjects::DrawChartSheet(draw::Painter& painter, const draw::Rect& rect) {
   Impl& m = *impl_;
   for (Impl::Item& it : m.items) {

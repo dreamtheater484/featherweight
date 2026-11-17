@@ -584,7 +584,17 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   const float availW = paperW_ - static_cast<float>((m.left + m.right) * 72);
   const float availH = paperH_ - static_cast<float>((m.top + m.bottom) * 72);
   if (page.chart) {
-    if (info_.objects) info_.objects->DrawChartSheet(p, {left, top, left + availW, top + availH});
+    if (info_.objects) {
+      // At its saved size from the top left margin, as Excel prints it (smaller to fit the page).
+      float w = availW, h = availH;
+      const draw::Size saved = info_.objects->ChartSheetSize();
+      if (saved.width > 1 && saved.height > 1) {
+        const float k = std::min({1.f, availW / saved.width, availH / saved.height});
+        w = saved.width * k;
+        h = saved.height * k;
+      }
+      info_.objects->DrawChartSheet(p, {left, top, left + w, top + h});
+    }
     PaintHeaderFooter(p, page, true);
     PaintHeaderFooter(p, page, false);
     return;
