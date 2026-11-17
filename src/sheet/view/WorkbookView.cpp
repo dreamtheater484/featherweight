@@ -668,6 +668,19 @@ void WorkbookView::DrawNote(ID2D1DeviceContext* dc) {
 void WorkbookView::DrawSelection(Canvas& c, const Pane& pane) {
   const Palette& p = theme::P();
   const Range sel = Selected();
+  // A dynamic array's spill range, while the active cell is in it: a thin border, as Excel's.
+  if (calc::Area a; calc_ && !editor_.Active() &&
+                    calc_->engine().SpillRangeAt(static_cast<int>(sheet_), static_cast<int32_t>(active_.row),
+                                                 static_cast<int32_t>(active_.col), a)) {
+    const uint32_t sr0 = std::max<uint32_t>(static_cast<uint32_t>(a.r1), pane.row0);
+    const uint32_t sr1 = std::min<uint32_t>(static_cast<uint32_t>(a.r2), std::min(pane.row1, kMaxRows) - 1);
+    const uint32_t sc0 = std::max<uint32_t>(static_cast<uint32_t>(a.c1), pane.col0);
+    const uint32_t sc1 = std::min<uint32_t>(static_cast<uint32_t>(a.c2), std::min(pane.col1, kMaxCols) - 1);
+    if (sr0 <= sr1 && sc0 <= sc1)
+      c.Stroke(CellRect(pane, static_cast<uint32_t>(a.r1), static_cast<uint32_t>(a.c1), static_cast<uint32_t>(a.r2),
+                        static_cast<uint32_t>(a.c2)),
+               Alpha(p.accent, 0.8f), std::max(1.f, std::round(ui_)));
+  }
   // Only the part in this pane.
   const uint32_t r0 = std::max(sel.firstRow, pane.row0), r1 = std::min(sel.lastRow, std::min(pane.row1, kMaxRows) - 1);
   const uint32_t c0 = std::max(sel.firstCol, pane.col0), c1 = std::min(sel.lastCol, std::min(pane.col1, kMaxCols) - 1);

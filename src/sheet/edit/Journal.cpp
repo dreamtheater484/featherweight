@@ -49,7 +49,7 @@ JournalRecord& JournalRecord::C(const Color& c) { return U(static_cast<uint8_t>(
 
 JournalRecord& JournalRecord::Input(const CellInput& in) {
   U(static_cast<uint8_t>(in.type)).D(in.number).B(in.boolean).U(static_cast<uint8_t>(in.error)).S(in.text).S(in.formula);
-  B(in.array).R(in.arrayRange).B(in.style.has_value());
+  U(in.array ? 1 : in.dynamic ? 2 : 0).R(in.arrayRange).B(in.style.has_value());  // 2: dynamic (older: 0, 1)
   if (in.style) U(*in.style);
   return *this;
 }
@@ -176,7 +176,9 @@ class Fields {
     in.error = static_cast<ErrorCode>(U());
     in.text = S();
     in.formula = S();
-    in.array = B();
+    const uint64_t array = U();
+    in.array = array == 1;
+    in.dynamic = array == 2;
     in.arrayRange = R();
     if (B()) in.style = U32();
     return in;

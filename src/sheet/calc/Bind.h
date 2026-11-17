@@ -61,6 +61,13 @@ class WorkbookCalc : public Host {
   // what depends on the cells becomes dirty. Manual mode: a formula entered is calculated, the rest
   // waits for F9.
   void CellsEdited(int sheet, const Range& cells);
+  // A formula typed in a cell (invariant, without "="), evaluated as Excel 365 does (in an array
+  // context): true when it gives an array of more than one value (a dynamic array), with the cells
+  // it spills over, or the cell alone when something's in the way (it shows #SPILL!).
+  bool SpillSize(std::string_view formula, int sheet, uint32_t row, uint32_t col, Range& spill);
+  // Why a dynamic array at the cell shows #SPILL!, in the words of Excel's error menu ("Spill range
+  // isn't blank"); empty when it doesn't.
+  std::wstring SpillReason(int sheet, uint32_t row, uint32_t col);
   // Sheets, names, rows or columns inserted or deleted (kSheets, kNames, kShift): every formula is
   // read again and recalculated.
   void StructureEdited();
@@ -86,6 +93,7 @@ class WorkbookCalc : public Host {
   void ForEachCell(int sheet, int32_t r1, int32_t c1, int32_t r2, int32_t c2, CellFn fn, void* context) override;
   void Store(int sheet, int32_t row, int32_t col, const Value& v) override;
   void Extent(int sheet, int32_t& rows, int32_t& cols) override;
+  bool SpillBlocked(const Area& area) override;
   bool Date1904() const override;
   int FormatText(const CellView& value, std::string_view format, std::string& out) override;
   bool Table(std::string_view name, int sheet, int32_t row, int32_t col, uint8_t items, std::string_view col1,

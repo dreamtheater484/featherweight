@@ -88,6 +88,7 @@ struct CellInput {
   std::string text;                   // a String value
   std::string formula;                // empty: no formula
   bool array = false;                 // a Ctrl+Shift+Enter formula over `arrayRange` (anchor: the cell)
+  bool dynamic = false;               // a dynamic array (Excel 365's): spills over `arrayRange` now
   Range arrayRange;
   std::optional<uint32_t> style;      // a new format (a CellXfs() index); nullopt keeps the cell's
 

@@ -1388,3 +1388,122 @@ TEST(sheet_calc_names_from_selection) {
   CHECK_EQ(RangeFormula(*book, 0, {1, 2, 1, 2}), std::string("S!$C$2"));
   CHECK_EQ(NameFromLabel("  "), std::string());
 }
+
+TEST(sheet_calc_typed_beyond_the_extent) {
+  // s3-corpus's fixture: data typed in a new sheet, then formulas over all of it. Values typed
+  // below the rows the engine had seen must be read (TEXTJOIN missed A5, lookups found nothing).
+  namespace edit = fw::sheet::edit;
+  auto book = OpenSheet("<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Region</t></is></c></row>",
+                        "<calcPr calcId=\"191029\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  edit::Editor ed(*book);
+  Follow(ed, calc);
+  auto settle = [&] {
+    while (!calc.CalcStep(8)) {
+    }
+  };
+  const char* regions[] = {"North", "South", "East", "West"};
+  for (uint32_t i = 0; i < 4; ++i) {
+    ed.SetCell(0, i + 1, 0, edit::CellInput::Text(regions[i]));
+    ed.SetCell(0, i + 1, 1, edit::CellInput::Number(100 + 25 * i));
+  }
+  settle();
+  ed.SetCell(0, 0, 4, edit::CellInput::Text("West"));
+  ed.SetCell(0, 1, 4, edit::CellInput::Formula("_xlfn.XLOOKUP(E1,A2:A5,B2:B5,\"none\")"));
+  ed.SetCell(0, 2, 4, edit::CellInput::Formula("_xlfn.TEXTJOIN(\", \",TRUE,A2:A5)"));
+  ed.SetCell(0, 3, 4, edit::CellInput::Formula("SUM(B:B)"));
+  settle();
+  CHECK_EQ(Number(*book, "E2"), 175.0);
+  fw::sheet::CellInfo c;
+  CHECK(book->GetSheet(0).GetCell(2, 4, c) && c.value.type == fw::sheet::ValueType::String &&
+        c.value.text == "North, South, East, West");
+  CHECK_EQ(Number(*book, "E4"), 550.0);
+  ed.SetCell(0, 9, 1, edit::CellInput::Number(1));  // B10, further down: the whole column sees it
+  settle();
+  CHECK_EQ(Number(*book, "E4"), 551.0);
+}
+
+TEST(sheet_calc_typed_dynamic_arrays) {
+  // A typed formula that gives an array spills from its cell (Excel 365's dynamic arrays): the
+  // grid asks SpillSize, the editor stores a dynamic array master over the cells, the engine spills.
+  namespace edit = fw::sheet::edit;
+  using fw::sheet::Range;
+  auto book = OpenSheet("<row r=\"5\"><c r=\"C5\"><v>9</v></c></row>", "<calcPr calcId=\"191029\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  edit::Editor ed(*book);
+  Follow(ed, calc);
+  auto settle = [&] {
+    while (!calc.CalcStep(8)) {
+    }
+  };
+  Range r;
+  CHECK(calc.SpillSize("_xlfn.SEQUENCE(3)", 0, 0, 0, r) && r == (Range{0, 0, 2, 0}));
+  CHECK(!calc.SpillSize("SUM(1,2)", 0, 0, 1, r));
+  CHECK(calc.SpillSize("_xlfn.SEQUENCE(1,3)", 0, 4, 0, r) && r == Range::Cell(4, 0));  // C5 is in the way
+  edit::CellInput in = edit::CellInput::Formula("_xlfn.SEQUENCE(3)");
+  in.dynamic = true;
+  in.arrayRange = Range{0, 0, 2, 0};
+  CHECK(ed.SetCell(0, 0, 0, in));
+  settle();
+  CHECK_EQ(Number(*book, "A2"), 2.0);
+  CHECK_EQ(Number(*book, "A3"), 3.0);
+  fw::sheet::FormulaInfo f;
+  CHECK(book->GetSheet(0).GetFormula(0, 0, f) && f.dynamic && f.kind == fw::sheet::FormulaKind::Array &&
+        f.ref == (Range{0, 0, 2, 0}));
+  // Blocked: #SPILL! in its cell alone.
+  in = edit::CellInput::Formula("_xlfn.SEQUENCE(1,3)");
+  in.dynamic = true;
+  in.arrayRange = Range::Cell(4, 0);
+  CHECK(ed.SetCell(0, 4, 0, in));
+  settle();
+  fw::sheet::CellInfo c;
+  CHECK(book->GetSheet(0).GetCell(4, 0, c) && c.value.type == fw::sheet::ValueType::Error &&
+        c.value.error == fw::sheet::ErrorCode::Spill);
+  CHECK(!book->GetSheet(0).GetCell(4, 1, c) || c.value.type == fw::sheet::ValueType::Empty);
+  // Undone: the spilled values go with it.
+  ed.Undo(2);
+  settle();
+  CHECK(!book->GetSheet(0).GetCell(1, 0, c) || c.value.type == fw::sheet::ValueType::Empty);
+}
+
+TEST(sheet_calc_spill_reasons) {
+  namespace edit = fw::sheet::edit;
+  using fw::sheet::Range;
+  auto book = OpenSheet("<row r=\"1\"><c r=\"B1\"><v>9</v></c></row>", "<calcPr calcId=\"191029\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  edit::Editor ed(*book);
+  Follow(ed, calc);
+  auto settle = [&] {
+    while (!calc.CalcStep(8)) {
+    }
+  };
+  auto put = [&](uint32_t row, uint32_t col, const char* formula) {
+    edit::CellInput in = edit::CellInput::Formula(formula);
+    in.dynamic = true;
+    Range r;
+    calc.SpillSize(formula, 0, row, col, r);
+    in.arrayRange = r;
+    CHECK(ed.SetCell(0, row, col, in));
+    settle();
+  };
+  put(0, 0, "_xlfn.SEQUENCE(1,3)");  // B1 holds 9
+  CHECK(calc.SpillReason(0, 0, 0) == L"Spill range isn't blank");
+  ed.Merge(0, Range{4, 4, 4, 5});  // E5:F5
+  settle();
+  put(4, 3, "_xlfn.SEQUENCE(1,3)");  // D5:F5 over the merged cells
+  CHECK(calc.SpillReason(0, 4, 3) == L"Spill range has merged cell");
+  put(20, 0, "_xlfn.SEQUENCE(2)");  // spills: no reason
+  CHECK(calc.SpillReason(0, 20, 0).empty());
+}
