@@ -162,9 +162,21 @@ class Printer {
     return pkg::QuoteSheetName(a) + "!";
   }
 
+  // A mapped reference's sheet name: as it was when it stays on its sheet, else the new sheet's
+  // (none for a reference without one that lands on the printed formula's sheet). An unnamed
+  // reference whose sheet isn't the printed formula's (a moved formula) gets its sheet's name.
+  std::string Prefix(const uint8_t* p, uint8_t flags, int from, int to) const {
+    if (to == from) {
+      if (flags & kSheet) return Sheets(p, flags);
+      return to >= 0 && to != at_.sheet ? pkg::QuoteSheetName(names_.SheetName(to)) + "!" : std::string();
+    }
+    if (!(flags & kSheet) && to == at_.sheet) return {};
+    return pkg::QuoteSheetName(names_.SheetName(to)) + "!";
+  }
+
   // The sheet a reference is on: its own, or the formula's. -1 for several sheets.
   int RefSheet(const uint8_t* p, uint8_t flags) const {
-    if (!(flags & kSheet)) return at_.sheet;
+    if (!(flags & kSheet)) return how_.homeSheet >= 0 ? how_.homeSheet : at_.sheet;
     if ((flags & kSheet3D) && Read<uint16_t>(p) != Read<uint16_t>(p + 2)) return -1;
     return Read<uint16_t>(p);
   }
@@ -264,20 +276,26 @@ class Printer {
         uint8_t fl = p[1];
         const uint8_t* q = p + 2 + SheetBytes(fl);
         int32_t r = Read<int32_t>(q), c = Read<int16_t>(q + 4);
-        if (how_.map) {
+        std::string pre;
+        if (!how_.map) {
+          pre = Sheets(p + 2, fl);
+        } else {
           int32_t r2 = r, c2 = c;
           uint8_t abs = static_cast<uint8_t>(((fl & kRowAbs) ? RefMap::kRow1 | RefMap::kRow2 : 0) |
                                              ((fl & kColAbs) ? RefMap::kCol1 | RefMap::kCol2 : 0));
-          if (!how_.map->Map(RefSheet(p + 2, fl), r, c, r2, c2, abs, false, false)) {
-            stack_.push_back(Sheets(p + 2, fl) + "#REF!");
+          int from = RefSheet(p + 2, fl), to = from;
+          bool ok = how_.map->MapTo(from, to, r, c, r2, c2, abs, false, false);
+          pre = Prefix(p + 2, fl, from, to);
+          if (!ok) {
+            stack_.push_back(pre + "#REF!");
             break;
           }
         }
         if (Off(r, fl & kRowAbs, at_.row, kMaxRows) || Off(c, fl & kColAbs, at_.col, kMaxCols)) {
-          stack_.push_back(Sheets(p + 2, fl) + "#REF!");
+          stack_.push_back(pre + "#REF!");
           break;
         }
-        stack_.push_back(Sheets(p + 2, fl) + CellText(r, fl & kRowAbs, c, fl & kColAbs));
+        stack_.push_back(pre + CellText(r, fl & kRowAbs, c, fl & kColAbs));
         break;
       }
       case kArea: {
@@ -285,18 +303,24 @@ class Printer {
         const uint8_t* q = p + 2 + SheetBytes(fl);
         int32_t r1 = Read<int32_t>(q), r2 = Read<int32_t>(q + 6);
         int32_t c1 = Read<int16_t>(q + 4), c2 = Read<int16_t>(q + 10);
-        if (how_.map) {
+        std::string pre;
+        if (!how_.map) {
+          pre = Sheets(p + 2, fl);
+        } else {
           uint8_t abs = static_cast<uint8_t>(((fl & kRowAbs) ? RefMap::kRow1 : 0) | ((fl & kColAbs) ? RefMap::kCol1 : 0) |
                                              ((fl & kRow2Abs) ? RefMap::kRow2 : 0) | ((fl & kCol2Abs) ? RefMap::kCol2 : 0));
-          if (!how_.map->Map(RefSheet(p + 2, fl), r1, c1, r2, c2, abs, fl & kWholeRows, fl & kWholeCols)) {
-            stack_.push_back(Sheets(p + 2, fl) + "#REF!");
+          int from = RefSheet(p + 2, fl), to = from;
+          bool ok = how_.map->MapTo(from, to, r1, c1, r2, c2, abs, fl & kWholeRows, fl & kWholeCols);
+          pre = Prefix(p + 2, fl, from, to);
+          if (!ok) {
+            stack_.push_back(pre + "#REF!");
             break;
           }
         }
         const bool rows = !(fl & kWholeCols), cols = !(fl & kWholeRows);
         if ((rows && (Off(r1, fl & kRowAbs, at_.row, kMaxRows) || Off(r2, fl & kRow2Abs, at_.row, kMaxRows))) ||
             (cols && (Off(c1, fl & kColAbs, at_.col, kMaxCols) || Off(c2, fl & kCol2Abs, at_.col, kMaxCols)))) {
-          stack_.push_back(Sheets(p + 2, fl) + "#REF!");
+          stack_.push_back(pre + "#REF!");
           break;
         }
         std::string a, b;
@@ -312,7 +336,7 @@ class Printer {
         }
         // R1C1 writes a single whole row or column once: R2, C[1].
         bool once = how_.r1c1 && (fl & (kWholeCols | kWholeRows)) && a == b;
-        stack_.push_back(Sheets(p + 2, fl) + (once ? a : a + ":" + b));
+        stack_.push_back(pre + (once ? a : a + ":" + b));
         break;
       }
       case kRefErr: stack_.push_back(Sheets(p + 2, p[1]) + "#REF!"); break;
