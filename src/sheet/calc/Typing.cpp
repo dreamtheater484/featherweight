@@ -540,6 +540,40 @@ class ShiftMap : public RefMap {
   const CompileOptions &from_, &to_;
 };
 
+// Another map, noting whether it changed what any reference names (printed for `to` instead of
+// `from`): when nothing did, the formula keeps its text as written.
+class Watch : public RefMap {
+ public:
+  Watch(const RefMap& map, const CompileOptions& from, const CompileOptions& to) : map_(map), from_(from), to_(to) {}
+  mutable bool changed = false;
+
+  bool Map(int sheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t abs, bool wholeRows,
+           bool wholeCols) const override {
+    const int32_t o[4] = {r1, c1, r2, c2};
+    if (!map_.Map(sheet, r1, c1, r2, c2, abs, wholeRows, wholeCols)) return changed = true, false;
+    auto line = [](int32_t v, bool fixed, int32_t at) { return fixed ? int64_t{v} : int64_t{at} + v; };
+    if (!wholeCols &&
+        (line(o[0], abs & kRow1, from_.row) != line(r1, abs & kRow1, to_.row) ||
+         line(o[2], abs & kRow2, from_.row) != line(r2, abs & kRow2, to_.row)))
+      changed = true;
+    if (!wholeRows &&
+        (line(o[1], abs & kCol1, from_.col) != line(c1, abs & kCol1, to_.col) ||
+         line(o[3], abs & kCol2, from_.col) != line(c2, abs & kCol2, to_.col)))
+      changed = true;
+    return true;
+  }
+  bool MapSheets(int& s1, int& s2) const override {
+    const int o1 = s1, o2 = s2;
+    const bool ok = map_.MapSheets(s1, s2);
+    if (!ok || s1 != o1 || s2 != o2) changed = true;
+    return ok;
+  }
+
+ private:
+  const RefMap& map_;
+  const CompileOptions &from_, &to_;
+};
+
 }  // namespace
 
 std::string ShiftReferences(std::string_view formula, const CompileOptions& at, const StructuralEdit& edit, Names& names,
@@ -553,12 +587,21 @@ std::string ShiftReferences(std::string_view formula, const CompileOptions& at, 
       to.row = r1, to.col = c1;
   }
   if (moved) *moved = to;
+  ShiftMap map(edit, at, to);
+  // Most formulas: only the references that move are rewritten, in the text as written.
+  std::string out;
+  switch (MapReferenceText(formula, at, to, names, map, out)) {
+    case 1: return out;
+    case 0: return std::string(formula);
+    default: break;
+  }
   auto f = Compile(formula, at, names);
   if (!f) return std::string(formula);
-  ShiftMap map(edit, at, to);
+  Watch watch(map, at, to);
   PrintOptions how;
-  how.map = &map;
-  return Print(*f, to, names, how);
+  how.map = &watch;
+  out = Print(*f, to, names, how);
+  return watch.changed ? out : std::string(formula);
 }
 
 std::string ShiftReferences(std::string_view formula, const CompileOptions& at, int editedSheet, const edit::Shift& shift,

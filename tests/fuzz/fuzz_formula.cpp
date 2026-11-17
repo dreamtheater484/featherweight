@@ -130,11 +130,24 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     from.row = 2, from.col = 2;
     to.row = 0, to.col = 5;
     calc::CopyFormula(formula, from, to, *engine);
-    for (int k = 0; k < 4; ++k) {  // rows or columns inserted or deleted, whole or in a band
+    // Rows or columns inserted or deleted, whole or in a band. Rewritten in the text, a formula
+    // means what compiling and printing it gives (typed text goes that way), when that reads back.
+    auto plain = calc::Compile(formula, from, *engine);
+    calc::CompileOptions typed = from;
+    typed.typed = true;
+    auto viaTyped = plain ? calc::Compile(formula, typed, *engine) : nullptr;
+    const bool same = viaTyped && calc::Print(*plain, from, *engine) == calc::Print(*viaTyped, from, *engine);
+    for (int k = 0; k < 4; ++k) {
       calc::StructuralEdit e;
       e.rows = k % 2 == 0, e.at = 1 + k, e.count = k < 2 ? 2 : -2;
       if (k == 3) e.band1 = 0, e.band2 = 2;
-      calc::ShiftReferences(formula, from, e, *engine);
+      calc::CompileOptions moved;
+      std::string fast = calc::ShiftReferences(formula, from, e, *engine, &moved);
+      if (!same) continue;
+      auto b = calc::Compile(calc::ShiftReferences(formula, typed, e, *engine), moved, *engine);
+      if (!b) continue;
+      auto a = calc::Compile(fast, moved, *engine);
+      if (!a || calc::Print(*a, moved, *engine) != calc::Print(*b, moved, *engine)) std::abort();
     }
     fw::sheet::edit::Shift cells;  // the editor's form: cells A2:C3 deleted, moving up
     cells.at = 1, cells.count = -2, cells.band = fw::sheet::Range{1, 0, 2, 2};
