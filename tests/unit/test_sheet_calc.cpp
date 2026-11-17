@@ -1150,6 +1150,76 @@ TEST(sheet_calc_iterative_after_edits) {
   }
 }
 
+TEST(sheet_calc_new_circular_reference) {
+  // Excel 2021, iteration off (scratchpad circ_probe.py): cells on a circular reference, and after
+  // one, aren't calculated; a formula just entered there shows 0; recalculating changes nothing.
+  namespace edit = fw::sheet::edit;
+  struct Step {
+    const char* cell;
+    const char* formula;  // null: the number
+    double number;
+  };
+  struct Scenario {
+    std::vector<Step> steps;
+    double a1, b1, d1;  // -999: empty
+  };
+  const Scenario scenarios[] = {
+      {{{"A1", "B1+1", 0}, {"B1", "A1", 0}}, 1, 0, -999},
+      {{{"B1", nullptr, 5}, {"A1", "B1+1", 0}, {"B1", "A1", 0}}, 6, 0, -999},
+      {{{"A1", "A1+1", 0}}, 0, -999, -999},
+      {{{"A1", nullptr, 7}, {"A1", "A1+1", 0}}, 0, -999, -999},
+      {{{"C1", nullptr, 3}, {"A1", "B1+C1", 0}, {"B1", "A1", 0}, {"C1", nullptr, 10}}, 3, 0, -999},
+      {{{"A1", "B1+1", 0}, {"B1", "A1", 0}, {"D1", "A1*2", 0}}, 1, 0, 0},
+      {{{"D1", "A1*2", 0}, {"A1", "B1+1", 0}, {"B1", "A1", 0}}, 1, 0, 2},
+  };
+  for (const Scenario& sc : scenarios) {
+    auto book = OpenSheet("", "<calcPr calcId=\"191029\"/>" + Features());
+    CHECK(book != nullptr);
+    if (!book) return;
+    WorkbookCalc calc(*book);
+    while (!calc.OpenStep(8)) {
+    }
+    edit::Editor ed(*book);
+    Follow(ed, calc);
+    for (const Step& st : sc.steps) {
+      fw::sheet::CellAddr a;
+      fw::sheet::ParseA1(st.cell, a);
+      ed.SetCell(0, a.row, a.col, st.formula ? edit::CellInput::Formula(st.formula) : edit::CellInput::Number(st.number));
+      while (!calc.CalcStep(8)) {
+      }
+    }
+    for (int pass = 0; pass < 2; ++pass) {  // as entered, then after Ctrl+Alt+F9
+      CHECK_EQ(Number(*book, "A1"), sc.a1);
+      CHECK_EQ(Number(*book, "B1"), sc.b1);
+      CHECK_EQ(Number(*book, "D1"), sc.d1);
+      int s = 0;
+      int32_t r = 0, c = 0;
+      CHECK(calc.CircularCell(s, r, c));
+      calc.CalculateFull();
+      while (!calc.CalcStep(8)) {
+      }
+    }
+  }
+  // Breaking the circle: calculated again, and no banner.
+  auto book = OpenSheet("", "<calcPr calcId=\"191029\"/>" + Features());
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  edit::Editor ed(*book);
+  Follow(ed, calc);
+  ed.SetCell(0, 0, 0, edit::CellInput::Formula("B1+1"));
+  ed.SetCell(0, 0, 1, edit::CellInput::Formula("A1"));
+  while (!calc.CalcStep(8)) {
+  }
+  ed.SetCell(0, 0, 1, edit::CellInput::Number(5));
+  while (!calc.CalcStep(8)) {
+  }
+  CHECK_EQ(Number(*book, "A1"), 6.0);
+  int s = 0;
+  int32_t r = 0, c = 0;
+  CHECK(!calc.CircularCell(s, r, c));
+}
+
 TEST(sheet_calc_edit_budget) {
   // Plan §11: < 100 ms after one edit in a 100,000-formula workbook (typing a value, entering a
   // formula), the dependency graph kept.
