@@ -115,6 +115,7 @@ class WorkbookView : public PagedView {
   SaveFormat SaveAsFormat() const override;
   std::vector<SaveFormat> OtherSaveFormats() const override;
   void Autosave() override;
+  bool ReplayEdits(std::string_view records, std::wstring& error) override;  // s2-format: WorkbookCommands.cpp
   FileChange CheckFileOnDisk() override;
   // CSV (s2-format): an Excel workbook saves a copy of its first sheet's values as CSV; a CSV file's
   // Save As suggests a workbook; saving a CSV that holds more than values asks first (the banner).

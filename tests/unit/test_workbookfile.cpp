@@ -322,3 +322,51 @@ TEST(WorkbookFile_AutosaveHoldsTheEditsAndLeavesTheWorkbookUnsaved) {
   if (recovered) CHECK_EQ(sheet_test::Text(recovered->GetSheet(0), 0, 0), std::string("42"));
   WorkbookFile::RecoverySession().End();
 }
+
+// With the editor's journal attached (the tab does it when it makes its editor), the autosave is
+// a journal: the workbook as opened, then the edits appended tick by tick, which replay on the
+// workbook opened again to the same cells. A workbook without a package (CSV) gets no journal.
+TEST(WorkbookFile_AutosaveJournalsTheEdits) {
+  Folder f;
+  fw::pkg::Status st;
+  auto book = xlsx::NewWorkbook(st);
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookFile file;
+  file.New(3);
+  Editor ed(*book);
+  ed.SetJournal(file.JournalFor(*book));
+  CHECK(ed.SetCell(0, 0, 0, CellInput::Number(42)));
+  file.Changed(ed.Modified(), {});
+  file.Autosave(*book, ed);
+  CHECK(ed.SetCell(0, 1, 0, CellInput::Text("more")));
+  file.Changed(ed.Modified(), {});
+  CHECK(file.AutosaveDue());
+  file.Autosave(*book, ed);  // appended to the same file
+  CHECK(!file.AutosaveDue() && file.Dirty() && !ed.Saving());
+  WIN32_FIND_DATAW fd;
+  HANDLE h = FindFirstFileW((WorkbookFile::Config().recovery + L"\\*.fwr").c_str(), &fd);
+  CHECK(h != INVALID_HANDLE_VALUE);
+  if (h == INVALID_HANDLE_VALUE) return;
+  FindClose(h);
+  const std::wstring name = WorkbookFile::Config().recovery + L"\\" + fd.cFileName;
+  fw::pkg::recovery::Entry entry;
+  std::vector<uint8_t> document, records;
+  CHECK(!fw::pkg::recovery::Read(name, entry, document));  // the document alone lacks the edits
+  CHECK(fw::pkg::recovery::ReadJournal(name, entry, document, records));
+  CHECK(entry.journal && entry.meta == "xlsx" && entry.title == L"Book3" && !records.empty());
+  auto pkg = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(document)), fw::pkg::Limits::Default(), st);
+  auto recovered = pkg ? xlsx::Read(std::move(pkg), st, {.loadAll = true}) : nullptr;
+  CHECK(recovered != nullptr);
+  if (recovered) {
+    CHECK(sheet_test::Text(recovered->GetSheet(0), 0, 0).empty());  // as opened
+    Editor again(*recovered);
+    CHECK(again.Replay(std::string_view(reinterpret_cast<const char*>(records.data()), records.size())));
+    CHECK_EQ(sheet_test::Text(recovered->GetSheet(0), 0, 0), std::string("42"));
+    CHECK_EQ(sheet_test::Text(recovered->GetSheet(0), 1, 0), std::string("more"));
+  }
+  WorkbookFile::RecoverySession().End();
+  Workbook packageless;
+  WorkbookFile other;
+  CHECK(other.JournalFor(packageless) == nullptr);
+}
