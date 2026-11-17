@@ -450,9 +450,15 @@ void PrintLayout::NotePages() {
   page.height = paperH_;
   page.notes = true;
   page.number = pages_.empty() ? (ps.useFirstPageNumber ? ps.firstPageNumber : 1) : pages_.back().number + 1;
+  // In the cells' order, row by row.
+  noteOrder_.resize(notes.size());
+  for (uint32_t i = 0; i < notes.size(); ++i) noteOrder_[i] = i;
+  std::stable_sort(noteOrder_.begin(), noteOrder_.end(), [&](uint32_t a, uint32_t b) {
+    return notes[a].row != notes[b].row ? notes[a].row < notes[b].row : notes[a].col < notes[b].col;
+  });
   float y = 0;
   for (uint32_t i = 0; i < notes.size(); ++i) {
-    const float h = PaintNote(nullptr, notes[i], 0, 0, availW);
+    const float h = PaintNote(nullptr, notes[noteOrder_[i]], 0, 0, availW);
     if (y > 0 && y + h > availH) {
       page.notesEnd = i;
       pages_.push_back(page);
@@ -471,39 +477,57 @@ float PrintLayout::PaintNote(draw::Painter* p, const CellNote& note, float x, fl
   text::TextStyle style;
   style.family = FontMeasure::Family(base, base);
   style.size = static_cast<float>(FontMeasure::Size(base, base));
+  text::TextStyle bold = style;
+  bold.bold = true;
   const float pitch = static_cast<float>(text_.Measure().Of(base, base).rowHeight * 0.75);
-  // "Cell: B2", then "Note: " and the note's lines (a threaded comment's: "Comment: ").
-  std::vector<std::wstring> paras{L"Cell: " + Utf8ToWide(ColumnName(note.col)) + std::to_wstring(note.row + 1)};
-  const std::wstring body = (note.threaded ? L"Comment: " : L"Note: ") + note.text;
-  std::wstring line;
-  for (wchar_t c : body) {
-    if (c == L'\r') continue;
-    if (c == L'\n') {
-      paras.push_back(line);
-      line.clear();
-    } else {
-      line += c;
-    }
-  }
-  paras.push_back(line);
   const draw::Brush ink = draw::Brush::Solid({0, 0, 0, 1});
-  const float top = y;
-  for (const std::wstring& s : paras) {
-    if (s.empty()) {
-      y += pitch;
-      continue;
-    }
+  text::Fonts& fonts = text_.Fonts();
+  // Lays `s` out `w` wide and, with a painter, draws it from `top` (right-aligned to left + w when
+  // `right`); its lines, one for an empty string.
+  auto put = [&](const std::wstring& s, const text::TextStyle& st, float left, float w, bool right, float top) {
+    if (s.empty()) return 1;
     text::Paragraph para;
     para.text = s;
-    para.runs.push_back({static_cast<uint32_t>(s.size()), &style});
-    para.markStyle = &style;
-    for (const text::Line& ln : text::Layout(text_.Fonts(), para, width)) {
+    para.runs.push_back({static_cast<uint32_t>(s.size()), &st});
+    para.markStyle = &st;
+    const std::vector<text::Line> lines = text::Layout(fonts, para, w);
+    for (const text::Line& ln : lines) {
       if (p) {
-        const float baseline = y + (pitch + ln.ascent - ln.descent) / 2;
-        for (const text::GlyphPiece& g : ln.pieces) p->DrawGlyphs({x + g.OriginX(), baseline - g.rise}, g.Run(), ink);
+        const float dx = right ? left + w - ln.contentRight : left;
+        const float baseline = top + (pitch + ln.ascent - ln.descent) / 2;
+        for (const text::GlyphPiece& g : ln.pieces) p->DrawGlyphs({dx + g.OriginX(), baseline - g.rise}, g.Run(), ink);
       }
-      y += pitch;
+      top += pitch;
     }
+    return std::max(1, static_cast<int>(lines.size()));
+  };
+  auto measure = [&](const std::wstring& s) {
+    text::Paragraph para;
+    para.text = s;
+    para.runs.push_back({static_cast<uint32_t>(s.size()), &bold});
+    para.markStyle = &bold;
+    const std::vector<text::Line> lines = text::Layout(fonts, para, 1e6f);
+    return lines.empty() ? 0.f : lines.front().contentRight;
+  };
+  // As Excel 2021 prints them: "Cell:" and "Comment:" in bold, right-aligned before the text.
+  const float labelW = std::max(measure(L"Cell:"), measure(L"Comment:"));
+  const text::Face* face = fonts.FaceFor(style.family, false, false);
+  const float gap = face ? face->Advance(L' ', style.size) : style.size / 4;
+  const float tx = x + labelW + gap, tw = std::max(1.f, width - labelW - gap);
+  const float top = y;
+  put(L"Cell:", bold, x, labelW, true, y);
+  y += pitch * put(Utf8ToWide(ColumnName(note.col)) + std::to_wstring(note.row + 1), style, tx, tw, false, y);
+  put(L"Comment:", bold, x, labelW, true, y);
+  std::wstring line;
+  for (size_t i = 0; i <= note.text.size(); ++i) {
+    const wchar_t c = i < note.text.size() ? note.text[i] : L'\n';
+    if (c == L'\r') continue;
+    if (c != L'\n') {
+      line += c;
+      continue;
+    }
+    y += pitch * put(line, style, tx, tw, false, y);
+    line.clear();
   }
   return y - top + pitch;
 }
@@ -526,8 +550,8 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
     if (info_.objects) {
       const std::vector<CellNote>& notes = info_.objects->Notes();
       float y = top;
-      for (uint32_t i = page.notesFirst; i < page.notesEnd && i < notes.size(); ++i)
-        y += PaintNote(&p, notes[i], left, y, availW);
+      for (uint32_t i = page.notesFirst; i < page.notesEnd && i < noteOrder_.size(); ++i)
+        if (noteOrder_[i] < notes.size()) y += PaintNote(&p, notes[noteOrder_[i]], left, y, availW);
     }
     PaintHeaderFooter(p, page, true);
     PaintHeaderFooter(p, page, false);
