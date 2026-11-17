@@ -778,3 +778,95 @@ TEST(sheet_calc_engine_100k_formulas) {
               "50,001 %.1f ms\n", full, few, half, all);
   CHECK(few < 100);
 }
+
+// --- the engine on a workbook model, opened as the app does ---
+
+#include "PkgTestUtil.h"
+#include "sheet/calc/Bind.h"
+#include "sheet/model/Workbook.h"
+#include "sheet/xlsx/Xlsx.h"
+
+namespace {
+
+// A one-sheet workbook from its sheetData, with `calcPr` in workbook.xml.
+std::unique_ptr<fw::sheet::Workbook> OpenSheet(const std::string& sheetData, const std::string& calcPr) {
+  const std::string ns = "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
+                         "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"";
+  std::vector<std::pair<std::string, std::string>> parts = {
+      {"[Content_Types].xml",
+       "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+       "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+       "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+       "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>"
+       "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
+       "</Types>"},
+      {"_rels/.rels",
+       "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+       "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" "
+       "Target=\"xl/workbook.xml\"/></Relationships>"},
+      {"xl/workbook.xml", "<workbook " + ns + "><sheets><sheet name=\"S\" sheetId=\"1\" r:id=\"rId1\"/></sheets>" + calcPr +
+                              "</workbook>"},
+      {"xl/_rels/workbook.xml.rels",
+       "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+       "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" "
+       "Target=\"worksheets/sheet1.xml\"/></Relationships>"},
+      {"xl/worksheets/sheet1.xml", "<worksheet " + ns + "><sheetData>" + sheetData + "</sheetData></worksheet>"},
+  };
+  fw::pkg::Status st;
+  auto pkg = test::OpenBytes(test::MakeZip(parts), st);
+  if (!pkg) return nullptr;
+  fw::sheet::xlsx::ReadOptions options;
+  return fw::sheet::xlsx::Read(std::move(pkg), st, options);
+}
+
+// A1 2; B1 =A1*3 (6); C1 =TODAY() (volatile); D1 =C1>0, cached FALSE; E1 =A1+1 without a cached
+// value; F1 =B1*2 cached 999 (wrong, but Excel doesn't recalculate it on opening); G1 an unknown
+// function of C1, cached 7.
+const char* kOpenCells =
+    "<row r=\"1\"><c r=\"A1\"><v>2</v></c><c r=\"B1\"><f>A1*3</f><v>6</v></c><c r=\"C1\"><f>TODAY()</f><v>1</v></c>"
+    "<c r=\"D1\" t=\"b\"><f>C1&gt;0</f><v>0</v></c><c r=\"E1\"><f>A1+1</f></c><c r=\"F1\"><f>B1*2</f><v>999</v></c>"
+    "<c r=\"G1\"><f>_xlfn.NOSUCHFUNCTION(C1)</f><v>7</v></c></row>";
+
+double Number(fw::sheet::Workbook& book, const char* a1) {
+  fw::sheet::CellAddr a;
+  fw::sheet::ParseA1(a1, a);
+  fw::sheet::Value v = book.GetSheet(0).GetValue(a.row, a.col);
+  return v.type == fw::sheet::ValueType::Number ? v.number : v.type == fw::sheet::ValueType::Bool ? (v.boolean ? 1 : 0) : -999;
+}
+
+}  // namespace
+
+TEST(sheet_calc_open_in_slices) {
+  // After opening, the app recalculates what Excel would, a slice at a time, then nothing.
+  auto book = OpenSheet(kOpenCells, "<calcPr calcId=\"191029\"/>");
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  CHECK(calc.Opening());
+  int slices = 0;
+  while (!calc.OpenStep(1) && slices < 1000) ++slices;
+  CHECK(!calc.Opening());
+  CHECK(calc.OpenStep(1));  // done: nothing more
+  CHECK(Number(*book, "C1") > 40000);   // TODAY() recalculated
+  CHECK_EQ(Number(*book, "D1"), 1.0);   // its dependent too
+  CHECK_EQ(Number(*book, "E1"), 3.0);   // no cached value
+  CHECK_EQ(Number(*book, "F1"), 999.0); // Excel doesn't recalculate it either
+  CHECK_EQ(Number(*book, "G1"), 7.0);   // unsupported: keeps its cached value...
+  CHECK(calc.engine().Stale(0, 0, 6));  // ...marked possibly out of date
+  CHECK(!calc.engine().Stale(0, 0, 5));
+  CHECK(calc.Changes() >= 3);
+  CHECK(!calc.engine().Pending());
+
+  // fullCalcOnLoad recalculates everything; manual mode nothing.
+  auto full = OpenSheet(kOpenCells, "<calcPr calcId=\"191029\" fullCalcOnLoad=\"1\"/>");
+  WorkbookCalc fullCalc(*full);
+  while (!fullCalc.OpenStep(8)) {
+  }
+  CHECK_EQ(Number(*full, "F1"), 12.0);
+  auto manual = OpenSheet(kOpenCells, "<calcPr calcId=\"191029\" calcMode=\"manual\"/>");
+  WorkbookCalc manualCalc(*manual);
+  while (!manualCalc.OpenStep(8)) {
+  }
+  CHECK_EQ(Number(*manual, "C1"), 1.0);
+  CHECK_EQ(manualCalc.Changes(), 0u);
+}
