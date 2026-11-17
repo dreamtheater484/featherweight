@@ -429,13 +429,13 @@ std::string Str(const char* ref, const char* text) {
 
 // Table T over A1:C4 (a, b, c; c is calculated from b); E2 =SUM(T[b]). With `spill`, H2 spills
 // =TRANSPOSE(A2:A5) down to H5 (a dynamic array: metadata.xml marks cm 1).
-std::unique_ptr<Workbook> TableBook(bool spill = false) {
+std::unique_ptr<Workbook> TableBook(bool spill = false, bool totals = false) {
   std::string data = "<sheetData>" + Row(1, Str("A1", "a") + Str("B1", "b") + Str("C1", "c"));
   for (int r = 2; r <= 5; ++r) {
     std::string n = std::to_string(r);
     std::string cells = r <= 4 ? Num(("A" + n).c_str(), r) + Num(("B" + n).c_str(), r * 10) +
                                      F(("C" + n).c_str(), "T[[#This Row],[b]]*2")
-                               : Num(("A" + n).c_str(), r);
+                               : (totals ? Str("A5", "Total") : Num(("A" + n).c_str(), r));
     if (r == 2) cells += F("E2", "SUM(T[b])");
     if (spill) cells += r == 2 ? std::string("<c r=\"H2\" cm=\"1\"><f t=\"array\" ref=\"H2:H5\">TRANSPOSE(A2:A5)</f><v>2</v></c>")
                                : "<c r=\"H" + n + "\"><v>" + n + "</v></c>";
@@ -460,8 +460,10 @@ std::unique_ptr<Workbook> TableBook(bool spill = false) {
                    "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/table\" Target=\"../tables/table1.xml\"/>"
                    "</Relationships>"});
   parts.push_back({"xl/tables/table1.xml",
-                   "<table xmlns=\"" + std::string(kMain) + "\" id=\"1\" name=\"T\" displayName=\"T\" ref=\"A1:C4\"><autoFilter ref=\"A1:C4\"/>"
-                   "<tableColumns count=\"3\"><tableColumn id=\"1\" name=\"a\"/><tableColumn id=\"2\" name=\"b\"/><tableColumn id=\"3\" name=\"c\">"
+                   "<table xmlns=\"" + std::string(kMain) + "\" id=\"1\" name=\"T\" displayName=\"T\" ref=\"" +
+                       (totals ? "A1:C5\" totalsRowCount=\"1\"" : "A1:C4\"") + "><autoFilter ref=\"A1:C4\"/>"
+                   "<tableColumns count=\"3\"><tableColumn id=\"1\" name=\"a\"" + (totals ? " totalsRowLabel=\"Total\"" : "") +
+                       "/><tableColumn id=\"2\" name=\"b\"/><tableColumn id=\"3\" name=\"c\">"
                    "<calculatedColumnFormula>T[[#This Row],[b]]*2</calculatedColumnFormula></tableColumn></tableColumns></table>"});
   parts.push_back({"xl/metadata.xml",
                    "<metadata xmlns=\"" + std::string(kMain) + "\" xmlns:xda=\"http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray\">"
@@ -669,4 +671,30 @@ TEST(sheet_shift_filter_columns) {
   CHECK(s.Filter()->filtered);
   CHECK(ed.Undo(2));
   CHECK(s.Filter()->ref == f.ref && s.Filter()->columns.size() == 2 && s.Filter()->columns[0].colId == 1);
+}
+
+// Typed in a table's totals row: a formula is the column's custom total, text its label (Excel
+// repairs a label beside a formula; s2-corpus exit gate, poi-conditionalformattingsamples).
+TEST(sheet_table_totals_typed) {
+  auto book = TableBook(false, true);
+  if (!book) return;
+  Editor ed(*book);
+  const Sheet& s = book->GetSheet(0);
+  CHECK(s.Tables().size() == 1);
+  if (s.Tables().empty() || s.Tables()[0].columns.size() < 2) return;
+  CHECK(s.Tables()[0].totalsRows == 1 && s.Tables()[0].columns[0].totalsLabel == "Total");
+  CHECK(ed.SetCell(0, 4, 1, CellInput::Formula("SUBTOTAL(109,T[b])")));
+  CHECK(s.Tables()[0].columns[1].totalsFunction == "custom" && s.Tables()[0].columns[1].totalsFormula == "SUBTOTAL(109,T[b])");
+  CHECK(TablePart(*book).find("<tableColumn id=\"2\" name=\"b\" totalsRowFunction=\"custom\"><totalsRowFormula>"
+                              "SUBTOTAL(109,T[b])</totalsRowFormula></tableColumn>") != std::string::npos);
+  CHECK(ed.SetCell(0, 4, 0, CellInput::Formula("COUNT(T[a])")));  // over the label
+  CHECK(TablePart(*book).find("<tableColumn id=\"1\" name=\"a\" totalsRowFunction=\"custom\"><totalsRowFormula>"
+                              "COUNT(T[a])</totalsRowFormula></tableColumn>") != std::string::npos);
+  CHECK(ed.SetCell(0, 4, 1, CellInput::Text("Sum")));
+  CHECK(s.Tables()[0].columns[1].totalsLabel == "Sum" && s.Tables()[0].columns[1].totalsFunction.empty());
+  CHECK(TablePart(*book).find("<tableColumn id=\"2\" name=\"b\" totalsRowLabel=\"Sum\"/>") != std::string::npos);
+  CHECK(ed.Undo(3));
+  CHECK(s.Tables()[0].columns[0].totalsLabel == "Total" && s.Tables()[0].columns[1].totalsFunction.empty() &&
+        s.Tables()[0].columns[1].totalsLabel.empty());
+  CHECK(TablePart(*book).find("totalsRowFormula") == std::string::npos);
 }
