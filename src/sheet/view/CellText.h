@@ -11,6 +11,10 @@
 #include "sheet/view/Grid.h"
 #include "text/LineLayout.h"
 
+namespace fw::text {
+class Face;
+}
+
 // What a cell shows, and its text laid out (plan §7.3 "Grid view"): the value through its number
 // format at the column's width ("####" when a number doesn't fit), the font, the alignment Excel
 // resolves General to, and the lines fwtext lays out, cached by cell.
@@ -79,6 +83,19 @@ class CellText {
 
  private:
   void Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look, Layout& out);
+  // Most cells' text is one line of Latin characters in one font. Cells ask for no kerning or
+  // ligatures, so shaping it is each character's glyph and advance: a table per face has them,
+  // where text::Layout's analysis and shaping cost ten times as much. False (nothing done) for
+  // other characters and for a glyph the font lacks.
+  bool LayOutSimple(std::wstring_view s, const text::TextStyle& style, Layout& out);
+  struct Glyphs {  // U+0020 to U+00FF: glyph ids (0: missing) and advances per point
+    std::wstring family;
+    bool bold = false, italic = false;
+    const text::Face* face = nullptr;
+    uint16_t id[224] = {};
+    float advance[224] = {};
+  };
+  std::vector<std::unique_ptr<Glyphs>> glyphs_;
   const Workbook& book_;
   text::Fonts& fonts_;
   FontMeasure& measure_;

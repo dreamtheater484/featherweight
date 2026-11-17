@@ -308,6 +308,11 @@ void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const
     lengths = std::move(lens);
   }
 
+  if (runs.size() == 1 && !out.wrapped && !out.stacked && LayOutSimple(textW, styles.front(), out)) {
+    out.runs = std::move(runs);
+    return;
+  }
+
   text::Paragraph para;
   para.text = textW;
   for (size_t i = 0; i < lengths.size(); ++i) para.runs.push_back({lengths[i], &styles[i]});
@@ -331,6 +336,69 @@ void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const
   out.lines = text::Layout(fonts_, para, width);
   out.runs = std::move(runs);
   for (const text::Line& l : out.lines) out.width = std::max(out.width, l.contentRight - l.contentLeft);
+}
+
+bool CellText::LayOutSimple(std::wstring_view s, const text::TextStyle& style, Layout& out) {
+  if (style.verticalAlign != text::VerticalAlign::Baseline || style.letterSpacing != 0 || style.scale != 1) return false;
+  // Trailing spaces aren't content: leave them to the full layout.
+  if (s.empty() || s.back() == L' ') return false;
+  for (wchar_t c : s)
+    if (c < 0x20 || (c > 0x7E && c < 0xA0) || c == 0xAD || c > 0xFF) return false;  // 0xAD: a soft hyphen
+  Glyphs* g = nullptr;
+  for (const auto& t : glyphs_)
+    if (t->bold == style.bold && t->italic == style.italic && t->family == style.family) g = t.get();
+  if (!g) {
+    auto t = std::make_unique<Glyphs>();
+    t->family = style.family;
+    t->bold = style.bold;
+    t->italic = style.italic;
+    t->face = fonts_.FaceFor(style.family, style.bold, style.italic);
+    if (t->face) {
+      UINT32 cps[224];
+      for (uint32_t i = 0; i < 224; ++i) cps[i] = 0x20 + i;
+      DWRITE_GLYPH_METRICS gm[224]{};
+      if (SUCCEEDED(t->face->Get()->GetGlyphIndices(cps, 224, t->id)) &&
+          SUCCEEDED(t->face->Get()->GetDesignGlyphMetrics(t->id, 224, gm, FALSE))) {
+        DWRITE_FONT_METRICS fm{};
+        t->face->Get()->GetMetrics(&fm);
+        for (uint32_t i = 0; i < 224; ++i)
+          t->advance[i] = t->id[i] ? static_cast<float>(gm[i].advanceWidth) / fm.designUnitsPerEm : 0;
+      } else {
+        t->face = nullptr;
+      }
+    }
+    g = t.get();
+    glyphs_.push_back(std::move(t));
+  }
+  if (!g->face) return false;
+  text::GlyphPiece piece;
+  piece.glyphs.resize(s.size());
+  piece.advances.resize(s.size());
+  float x = 0;
+  for (size_t i = 0; i < s.size(); ++i) {
+    const uint32_t k = s[i] - 0x20u;
+    if (!g->id[k]) return false;
+    piece.glyphs[i] = g->id[k];
+    piece.advances[i] = g->advance[k] * style.size;
+    x += piece.advances[i];
+  }
+  piece.face = g->face->Get();
+  piece.emSize = style.size;
+  piece.width = x;
+  piece.textEnd = static_cast<uint32_t>(s.size());
+  const text::FontMetrics m = g->face->Metrics(style.size);
+  text::Line line;
+  line.end = piece.textEnd;
+  line.ending = text::LineEnd::ParagraphEnd;
+  line.right = 1e6f;
+  line.contentRight = x;
+  line.ascent = m.ascent;
+  line.descent = m.descent;
+  line.lineGap = m.lineGap;
+  line.pieces.push_back(std::move(piece));
+  out.lines.push_back(std::move(line));
+  out.width = x;
+  return true;
 }
 
 }  // namespace fw::sheet::view
