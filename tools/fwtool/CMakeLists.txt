@@ -41,6 +41,9 @@ if(FW_BUILD_TESTS)
   # Cell text (S1): every visible cell of tests/office/excel and sheet as Excel's Range.Text has it,
   # at the column's width as the grid measures it (99.97 % now; the plan's bar is 99 %).
   add_test(NAME office_cells COMMAND fwtool compare --cells --min-cells 99.9 "${_fw_reference}")
+  # CSV (S1): every field of tests/office/csv shows as it was written, in both reference regions.
+  add_test(NAME office_csv_values_nl COMMAND fwtool csv --values --locale en-NL "${PROJECT_SOURCE_DIR}/tests/office/csv")
+  add_test(NAME office_csv_values_us COMMAND fwtool csv --values --locale en-US "${PROJECT_SOURCE_DIR}/tests/office/csv")
   # Export PDF (D4) on the public corpus: each document's PDF strictly well formed, read back by
   # PDFium with the text where it's drawn, and its pages as the screen draws them.
   add_test(NAME pdf_check COMMAND fwtool pdf-check "${PROJECT_SOURCE_DIR}/tests/office/generated"
