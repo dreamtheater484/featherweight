@@ -13,12 +13,15 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "Common.h"
+#include "core/Json.h"
 #include "core/Strings.h"
 #include "pkg/Package.h"
 #include "sheet/calc/Bind.h"
@@ -76,17 +79,20 @@ std::string Show(ValueType t, double n, bool b, ErrorCode e, std::string_view te
   }
 }
 
+// Numbers match to 15 significant digits, as Excel shows and compares them.
+bool SameNumber(double a, double b) {
+  if (a == b) return true;
+  double d = std::fabs(a - b), m = std::max(std::fabs(a), std::fabs(b));
+  return d <= m * 5e-15 || calc::Round15(a) == calc::Round15(b);
+}
+
 bool Same(const Saved& s, const Value& v) {
   if (s.type != v.type) {
     // A formula giving "" can be cached as nothing.
     return (s.type == ValueType::Empty && v.type == ValueType::String && v.text.empty());
   }
   switch (s.type) {
-    case ValueType::Number: {
-      if (s.number == v.number) return true;
-      double d = std::fabs(s.number - v.number), m = std::max(std::fabs(s.number), std::fabs(v.number));
-      return d <= m * 5e-15 || calc::Round15(s.number) == calc::Round15(v.number);
-    }
+    case ValueType::Number: return SameNumber(s.number, v.number);
     case ValueType::String: return s.text == v.text;
     case ValueType::Bool: return s.boolean == v.boolean;
     case ValueType::Error: return s.error == v.error;
@@ -238,9 +244,202 @@ Run Check(Workbook& book, const std::vector<Saved>& saved, const NumLocale* loca
   return run;
 }
 
+// --- --excel: against this PC's Excel, from the cells files of `fwtool compare --cells` (each
+// formula's [ref, formula, cached, opened, recalculated]) ---
+
+bool ReadFile(const std::filesystem::path& file, std::string& out) {
+  std::ifstream in(file, std::ios::binary);
+  if (!in) return false;
+  out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  return true;
+}
+
+// Excel's value (Range.Value2): a number, text, true/false, {"e": "#N/A"}, or null for nothing.
+bool SameAsExcel(const fw::JsonValue& x, const Value& v) {
+  using T = fw::JsonValue::Type;
+  const bool nothing = v.type == ValueType::Empty || (v.type == ValueType::String && v.text.empty());
+  switch (x.type) {
+    case T::Null: return nothing;
+    case T::Number: return v.type == ValueType::Number && SameNumber(x.number, v.number);
+    case T::String: return x.string.empty() ? nothing : v.type == ValueType::String && v.text == x.string;
+    case T::Bool: return v.type == ValueType::Bool && v.boolean == x.boolean;
+    case T::Object: return v.type == ValueType::Error && ErrorText(v.error) == x.StringOr("e");
+    default: return false;
+  }
+}
+
+std::string ShowExcel(const fw::JsonValue& x) {
+  using T = fw::JsonValue::Type;
+  switch (x.type) {
+    case T::Number: return Show(ValueType::Number, x.number, false, {}, {});
+    case T::String: return Show(ValueType::String, 0, false, {}, x.string);
+    case T::Bool: return x.boolean ? "TRUE" : "FALSE";
+    case T::Object: return x.StringOr("e");
+    default: return "(empty)";
+  }
+}
+
+struct ExcelRun {
+  size_t compared = 0, matched = 0;
+  std::vector<std::string> mismatches;  // report rows
+};
+
+// Recalculates `book` as the app does after opening (`full` false) or everything, and compares each
+// formula listed for Excel (`excel`, by "Sheet!A1") with field `field` of its row.
+void CompareWithExcel(Workbook& book, const NumLocale* locale, bool full,
+                      const std::map<std::string, const fw::JsonValue*>& excel, size_t field, const std::string& name,
+                      ExcelRun& run) {
+  // Which formulas are volatile or depend on one (or have no cached value): the report says so.
+  std::map<std::string, bool> dirty;
+  {
+    calc::WorkbookCalc probe(book, locale);
+    probe.Load();
+    probe.engine().Opened({});
+    for (size_t i = 0; i < book.SheetCount(); ++i) {
+      const Sheet& s = book.GetSheet(i);
+      s.ForEachCell(Range::All(), [&](const CellInfo& c) {
+        if (c.hasFormula &&
+            probe.engine().Dirty(static_cast<int>(i), static_cast<int32_t>(c.row), static_cast<int32_t>(c.col)))
+          dirty[s.Name() + "!" + CellName(c.row, c.col)] = true;
+        return true;
+      });
+    }
+  }
+  calc::WorkbookCalc calc(book, locale);
+  calc::Engine& e = calc.engine();
+  if (full) {
+    calc.Load();
+    e.MarkAllDirty();
+    e.Recalculate();
+  } else {
+    while (!calc.OpenStep(1e9)) {
+    }  // as the app does at idle
+  }
+  for (size_t i = 0; i < book.SheetCount(); ++i) {
+    const Sheet& s = book.GetSheet(i);
+    s.ForEachCell(Range::All(), [&](const CellInfo& c) {
+      if (!c.hasFormula) return true;
+      const std::string key = s.Name() + "!" + CellName(c.row, c.col);
+      auto it = excel.find(key);
+      if (it == excel.end() || it->second->array.size() <= field) return true;
+      ++run.compared;
+      const fw::JsonValue& x = it->second->array[field];
+      if (SameAsExcel(x, c.value)) {
+        ++run.matched;
+        return true;
+      }
+      FormulaInfo fi;
+      s.GetFormula(c.row, c.col, fi);
+      Saved shown{};
+      shown.row = c.row, shown.col = c.col, shown.formula = std::string(fi.text), shown.origin = fi.origin;
+      const int si = static_cast<int>(i);
+      const int32_t r = static_cast<int32_t>(c.row), col = static_cast<int32_t>(c.col);
+      std::string note = !e.HasFormula(si, r, col) || e.Stale(si, r, col) ? "kept as cached"
+                         : dirty.count(key)                               ? "volatile or depends on one"
+                                                                          : "";
+      run.mismatches.push_back(name + " | " + Cell(key) + " | " + ShownFormula(shown) + " | " + Cell(ShowExcel(x)) +
+                               " | " + Cell(Show(c.value.type, c.value.number, c.value.boolean, c.value.error, c.value.text)) +
+                               " | " + note);
+      return true;
+    });
+  }
+}
+
+int RunFormulasExcel(const Options& options) {
+  // The cells files by workbook name.
+  std::map<std::wstring, std::filesystem::path> cellsFiles;
+  std::error_code ec;
+  for (auto it = std::filesystem::recursive_directory_iterator(options.excel, ec);
+       it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+    const std::wstring f = it->path().filename().wstring();
+    const std::wstring tail = L".cells.json";
+    if (f.size() > tail.size() && f.compare(f.size() - tail.size(), tail.size(), tail) == 0)
+      cellsFiles[f.substr(0, f.size() - tail.size())] = it->path();
+  }
+  std::vector<std::filesystem::path> files;
+  for (const auto& f : CollectFiles(options.inputs))
+    if (IsWorkbookFile(f)) files.push_back(f);
+  ExcelRun opened, full;
+  size_t noCells = 0, failed = 0, listed = 0;
+  std::vector<std::string> fileRows;
+  for (const auto& file : files) {
+    auto c = cellsFiles.find(file.filename().wstring());
+    std::string text;
+    std::optional<fw::JsonValue> cells;
+    if (c != cellsFiles.end() && ReadFile(c->second, text)) cells = fw::ParseJson(text);
+    const fw::JsonValue* sheets = cells ? cells->Find("sheets") : nullptr;
+    if (!sheets) {
+      std::printf("%ls: no cells file\n", file.filename().c_str());
+      ++noCells;
+      continue;
+    }
+    const fw::JsonValue* loc = cells->Find("locale");
+    const std::wstring region = fw::Utf8ToWide(loc ? loc->StringOr("windowsLocaleName", "en-US") : "en-US");
+    const NumLocale* locale = LocaleFor(region);
+    std::map<std::string, const fw::JsonValue*> excel;
+    for (const fw::JsonValue& s : sheets->array)
+      if (const fw::JsonValue* list = s.Find("formulas"))
+        for (const fw::JsonValue& f : list->array)
+          if (f.array.size() >= 5) excel[s.StringOr("name") + "!" + f.array[0].string] = &f;
+    listed += excel.size();
+    const std::string name = Cell(fw::WideToUtf8(file.filename().wstring()));
+    ExcelRun o, a;
+    for (bool all : {false, true}) {
+      fw::pkg::Status status;
+      auto book = ReadWorkbook(file, status, true);
+      if (!book) {
+        std::printf("%ls: not read (%s)\n", file.filename().c_str(), status.message.c_str());
+        ++failed;
+        break;
+      }
+      CompareWithExcel(*book, locale ? locale : &EnUsLocale(), all, excel, all ? 4 : 3, name, all ? a : o);
+    }
+    std::printf("%ls: %zu formulas listed; after opening %zu of %zu match, recalculated %zu of %zu\n",
+                file.filename().c_str(), excel.size(), o.matched, o.compared, a.matched, a.compared);
+    if (!o.mismatches.empty() || !a.mismatches.empty())
+      fileRows.push_back(name + " | " + Cell(SavedBy(file)) + " | " + std::to_string(o.mismatches.size()) + " | " +
+                         std::to_string(a.mismatches.size()));
+    for (auto [from, to] : {std::pair{&o, &opened}, std::pair{&a, &full}}) {
+      to->compared += from->compared, to->matched += from->matched;
+      for (auto& m : from->mismatches) to->mismatches.push_back(std::move(m));
+    }
+  }
+  auto pct = [](const ExcelRun& r) {
+    return r.compared ? 100.0 * static_cast<double>(r.matched) / static_cast<double>(r.compared) : 100.0;
+  };
+  std::printf("\n%zu workbooks (%zu without a cells file, %zu not read), %zu formulas listed for Excel: after opening "
+              "%zu of %zu match (%.2f %%), recalculated %zu of %zu (%.2f %%)\n",
+              files.size(), noCells, failed, listed, opened.matched, opened.compared, pct(opened), full.matched,
+              full.compared, pct(full));
+  if (!options.reportOut.empty()) {
+    std::ofstream out(options.reportOut, std::ios::binary);
+    char a[32], b[32];
+    std::snprintf(a, sizeof a, "%.2f", pct(opened));
+    std::snprintf(b, sizeof b, "%.2f", pct(full));
+    out << "# fwtool formulas --excel\n\n"
+        << files.size() << " workbooks, " << listed << " formulas listed in Excel's cells files.\n\n"
+        << "- After opening (what the app recalculates, against Excel's values once it opened the file): "
+        << opened.matched << " of " << opened.compared << " match (" << a << " %).\n"
+        << "- Recalculated (everything, against Excel's full recalculation): " << full.matched << " of "
+        << full.compared << " match (" << b << " %).\n";
+    out << "\n## Workbooks with mismatches\n\nFile | Saved by | After opening | Recalculated\n---|---|---|---\n";
+    for (const auto& r : fileRows) out << r << "\n";
+    for (auto [title, r] : {std::pair{"After opening", &opened}, std::pair{"Recalculated", &full}}) {
+      out << "\n## " << title << "\n\nFile | Cell | Formula | Excel | Featherweight | Note\n---|---|---|---|---|---\n";
+      for (const auto& m : r->mismatches) out << m << "\n";
+    }
+  }
+  if (options.minMatch >= 0 && (pct(opened) < options.minMatch || pct(full) < options.minMatch)) {
+    std::printf("FAIL: below %.2f %%\n", options.minMatch);
+    return 1;
+  }
+  return failed ? 1 : 0;
+}
+
 }  // namespace
 
 int RunFormulas(const Options& options) {
+  if (!options.excel.empty()) return RunFormulasExcel(options);
   const std::wstring region = options.locale.empty() ? L"en-US" : options.locale;
   const NumLocale* locale = LocaleFor(region);
   if (!locale) {

@@ -63,6 +63,7 @@ const FuncInfo kFunctions[] = {
     {"IFS", 2, 254, L | X, "+VR", nullptr},
     {"INDEX", 2, 4, 0, "RVVV", fn::Index},
     {"INDIRECT", 1, 2, V | D, "V", fn::Indirect},
+    {"INFO", 1, 1, V, "V", fn::Info},
     {"INT", 1, 1, 0, "V", fn::Int},
     {"ISBLANK", 1, 1, 0, "V", fn::IsBlank},
     {"ISERR", 1, 1, 0, "V", fn::IsErr},

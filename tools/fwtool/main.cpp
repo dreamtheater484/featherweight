@@ -60,6 +60,9 @@ constexpr const char* kUsage =
     "      (volatile ones and their dependents aside), in the region Excel calculated in. With\n"
     "      --regions, a workbook with mismatches counts in the listed region where most of its\n"
     "      formulas match (TEXT() codes follow the saving Excel's region); the report says which.\n"
+    "      --excel <reference folder>: compares instead with the values this PC's Excel gave each\n"
+    "      formula after opening and after a full recalculation (the cells files under it), in\n"
+    "      the region it recorded: what the app recalculates on opening, and everything.\n"
     "  fwtool compare --cells [--json FILE] [--min-cells C] <reference folder>\n"
     "      Workbooks (S1): each visible cell's text as Featherweight formats it against Excel's\n"
     "      (the cells files beside the reference PDFs), in the locale Excel recorded. Differences\n"
@@ -278,6 +281,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--min-lines" && i + 1 < argc) options.minLines = _wtof(argv[++i]);
     else if (arg == L"--self-test") options.selfTest = true;
     else if (arg == L"--cells") options.cells = true;
+    else if (arg == L"--excel" && i + 1 < argc) options.excel = argv[++i];
     else if (arg == L"--values") options.values = true;
     else if (arg == L"--min-cells" && i + 1 < argc) options.minCells = _wtof(argv[++i]);
     else if (arg == L"--all") options.all = true;
