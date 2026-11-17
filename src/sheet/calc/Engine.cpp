@@ -697,6 +697,7 @@ void Engine::StoreSpill(uint32_t id, Value v) {
           break;
         }
       }
+    if (!blocked && (want.r2 > want.r1 || want.c2 > want.c1)) blocked = host_.SpillBlocked(want);
   }
   if (blocked) {
     want.r2 = want.r1, want.c2 = want.c1;

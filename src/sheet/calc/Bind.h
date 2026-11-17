@@ -93,6 +93,7 @@ class WorkbookCalc : public Host {
   void ForEachCell(int sheet, int32_t r1, int32_t c1, int32_t r2, int32_t c2, CellFn fn, void* context) override;
   void Store(int sheet, int32_t row, int32_t col, const Value& v) override;
   void Extent(int sheet, int32_t& rows, int32_t& cols) override;
+  bool SpillBlocked(const Area& area) override;
   bool Date1904() const override;
   int FormatText(const CellView& value, std::string_view format, std::string& out) override;
   bool Table(std::string_view name, int sheet, int32_t row, int32_t col, uint8_t items, std::string_view col1,

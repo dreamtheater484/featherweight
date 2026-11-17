@@ -87,6 +87,20 @@ void WorkbookCalc::Store(int sheet, int32_t row, int32_t col, const Value& v) {
   e.first = std::max(e.first, row + 1), e.second = std::max(e.second, col + 1);
 }
 
+bool WorkbookCalc::SpillBlocked(const Area& a) {
+  if (a.s1 >= book_.SheetCount()) return false;
+  const Sheet& s = book_.GetSheet(a.s1);
+  auto overlaps = [&](const Range& r) {
+    return static_cast<int64_t>(r.firstRow) <= a.r2 && static_cast<int64_t>(r.lastRow) >= a.r1 &&
+           static_cast<int64_t>(r.firstCol) <= a.c2 && static_cast<int64_t>(r.lastCol) >= a.c1;
+  };
+  for (const Range& m : s.Merges())
+    if (overlaps(m)) return true;
+  for (const auto& t : s.Tables())
+    if (overlaps(t.ref)) return true;
+  return false;
+}
+
 void WorkbookCalc::Extent(int sheet, int32_t& rows, int32_t& cols) {
   rows = cols = 0;
   if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return;

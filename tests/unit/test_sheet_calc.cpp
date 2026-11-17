@@ -1500,6 +1500,10 @@ TEST(sheet_calc_spill_reasons) {
   };
   put(0, 0, "_xlfn.SEQUENCE(1,3)");  // B1 holds 9
   CHECK(calc.SpillReason(0, 0, 0) == L"Spill range isn't blank");
+  ed.Merge(0, Range{4, 4, 4, 5});  // E5:F5
+  settle();
+  put(4, 3, "_xlfn.SEQUENCE(1,3)");  // D5:F5 over the merged cells
+  CHECK(calc.SpillReason(0, 4, 3) == L"Spill range has merged cell");
   put(20, 0, "_xlfn.SEQUENCE(2)");  // spills: no reason
   CHECK(calc.SpillReason(0, 20, 0).empty());
 }
