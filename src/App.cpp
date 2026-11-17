@@ -2377,6 +2377,7 @@ void App::RunScript(const std::wstring& script) {
         else if (part == L"del") vk = VK_DELETE;
         else if (part == L"plus") vk = VK_OEM_PLUS;
         else if (part == L"minus") vk = VK_OEM_MINUS;
+        else if (part == L"semicolon") vk = VK_OEM_1;
         else if (part.size() > 1 && part[0] == L'f') vk = VK_F1 + _wtoi(part.c_str() + 1) - 1;
         else if (part.size() == 1) vk = towupper(part[0]);
       }

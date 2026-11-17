@@ -348,6 +348,17 @@ class WorkbookView : public PagedView {
   void PointDrag(int x, int y);
   std::vector<RefBox> refs_;
   std::wstring refsText_;
+  // AutoComplete: typing text at the end proposes the one entry in the column's run of cells
+  // (above and below, to a blank) that starts with it, the rest selected.
+  void AutoComplete();
+  std::vector<std::pair<std::wstring, std::wstring>> autoList_;  // lowercase, as entered
+  bool autoLoaded_ = false;
+  std::wstring autoText_;  // the entry proposed (its case wins when the entry is committed)
+  // Ctrl+; and Ctrl+Shift+;: today's date or the time now, as Windows writes them short.
+  void InsertNow(bool time);
+  static UINT SemicolonKey();  // the key that types ";" on this keyboard
+  // F4: the reference at the caret cycles A1, $A$1, A$1, $A1.
+  bool CycleReference();
   CellEditor editor_;
   bool editInBar_ = false;  // the caret is in the formula bar, not over the cell
   float barScroll_ = 0;     // the formula bar's text scrolled left to keep the caret in sight

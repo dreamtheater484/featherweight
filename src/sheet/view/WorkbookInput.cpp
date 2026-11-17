@@ -169,6 +169,11 @@ bool WorkbookView::OnKeyDown(UINT vk, UINT mods) {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   // Enter after Tabs returns to the Tabs' first column; any other key forgets it.
   if (vk != VK_TAB && vk != VK_RETURN && vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU) tabStartCol_ = UINT32_MAX;
+  // Ctrl+; and Ctrl+Shift+; start an entry with the date or the time.
+  if (ctrl && !alt && vk == SemicolonKey() && !ChartSheet()) {
+    InsertNow(shift);
+    return true;
+  }
   // In a right-to-left sheet column A is at the right: the arrows go where they point.
   const int left = rtl_ ? 1 : -1;
   switch (vk) {

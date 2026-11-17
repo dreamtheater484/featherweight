@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cwctype>
 #include <iterator>
+#include <unordered_set>
 #include <utility>
 
 #include "Commands.h"
@@ -235,7 +236,140 @@ std::wstring RefText(std::wstring_view old, int kind, uint32_t r0, uint32_t c0, 
   return s;
 }
 
+// F4's next form of a reference: A1, $A$1, A$1, $A1 (both ends of a range alike); whole columns
+// and rows between relative and absolute.
+std::wstring CycleAbsolute(std::wstring_view ref, int kind) {
+  const size_t colon = ref.find(L':');
+  std::vector<std::wstring_view> parts{ref.substr(0, colon)};
+  if (colon != std::wstring_view::npos) parts.push_back(ref.substr(colon + 1));
+  const std::wstring_view p1 = parts[0];
+  bool absC = !p1.empty() && p1[0] == L'$', absR = p1.find(L'$', 1) != std::wstring_view::npos;
+  if (kind != 0) {
+    absC = !absC;
+  } else if (!absC && !absR) {
+    absC = absR = true;
+  } else if (absC && absR) {
+    absC = false;
+  } else if (absR) {
+    absC = true;
+    absR = false;
+  } else {
+    absC = false;
+  }
+  std::wstring out;
+  for (size_t i = 0; i < parts.size(); ++i) {
+    if (i) out += L':';
+    std::wstring bare;
+    for (wchar_t c : parts[i])
+      if (c != L'$') bare += c;
+    if (kind != 0) {
+      out += (absC ? L"$" : L"") + bare;
+      continue;
+    }
+    size_t d = 0;
+    while (d < bare.size() && !Digit(bare[d])) ++d;
+    out += (absC ? L"$" : L"") + bare.substr(0, d) + (absR ? L"$" : L"") + bare.substr(d);
+  }
+  return out;
+}
+
+std::wstring Lower(std::wstring s) {
+  for (wchar_t& c : s) c = static_cast<wchar_t>(std::towlower(c));
+  return s;
+}
+
 }  // namespace
+
+UINT WorkbookView::SemicolonKey() {
+  const SHORT k = VkKeyScanW(L';');
+  return k == -1 ? VK_OEM_1 : static_cast<UINT>(k & 0xFF);
+}
+
+void WorkbookView::AutoComplete() {
+  autoText_.clear();
+  const std::wstring& t = editor_.Text();
+  if (t.empty() || editor_.IsFormula() || editor_.HasSelection() || editor_.Caret() != static_cast<int>(t.size())) return;
+  // Numbers, dates and times don't complete: only text with a letter.
+  if (std::none_of(t.begin(), t.end(), [](wchar_t c) { return std::iswalpha(c) != 0; })) return;
+  if (!autoLoaded_) {
+    autoLoaded_ = true;
+    // The run of cells above and below in the column, to a blank: its text entries (not formulas).
+    const Sheet& sheet = Current();
+    const uint32_t row = editCell_.row, col = editCell_.col;
+    std::vector<std::wstring> run;
+    auto blank = [](const CellInfo& c) { return c.value.type == ValueType::Empty && !c.hasFormula; };
+    auto take = [&](const CellInfo& c) {
+      if (!c.hasFormula && c.value.type == ValueType::String) run.push_back(Utf8ToWide(c.value.text));
+    };
+    int64_t prev = -1;
+    if (row > 0)
+      sheet.ForEachCell({0, col, row - 1, col}, [&](const CellInfo& c) {
+        if (blank(c) || (prev >= 0 && c.row != prev + 1)) run.clear();
+        prev = blank(c) ? -1 : static_cast<int64_t>(c.row);
+        if (!blank(c)) take(c);
+        return true;
+      });
+    if (prev != static_cast<int64_t>(row) - 1) run.clear();  // the run must reach the cell
+    if (row + 1 < kMaxRows) {
+      uint32_t expect = row + 1;
+      sheet.ForEachCell({row + 1, col, kMaxRows - 1, col}, [&](const CellInfo& c) {
+        if (c.row != expect || blank(c)) return false;
+        ++expect;
+        take(c);
+        return true;
+      });
+    }
+    std::unordered_set<std::wstring> seen;
+    for (std::wstring& w : run) {
+      std::wstring low = Lower(w);
+      if (seen.insert(low).second) autoList_.emplace_back(std::move(low), std::move(w));
+    }
+  }
+  // The one entry that starts with what's typed (ignoring case); two or more propose nothing.
+  const std::wstring low = Lower(t);
+  const std::wstring* match = nullptr;
+  for (const auto& [l, w] : autoList_) {
+    if (l.size() < low.size() || l.compare(0, low.size(), low) != 0) continue;
+    if (match) return;
+    match = &w;
+  }
+  if (!match || match->size() <= t.size()) return;
+  const int typed = static_cast<int>(t.size());
+  autoText_ = *match;
+  editor_.Insert(match->substr(t.size()));
+  editor_.SetCaret(typed, false);
+  editor_.SetCaret(static_cast<int>(editor_.Text().size()), true);
+}
+
+void WorkbookView::InsertNow(bool time) {
+  SYSTEMTIME st;
+  GetLocalTime(&st);
+  wchar_t b[128] = {};
+  const int n = time ? GetTimeFormatEx(LOCALE_NAME_USER_DEFAULT, TIME_NOSECONDS, &st, nullptr, b, 128)
+                     : GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, DATE_SHORTDATE, &st, nullptr, b, 128, nullptr);
+  if (n <= 1) return;
+  if (!editor_.Active()) BeginEdit(CellEditor::Mode::Enter, L"");
+  if (!editor_.Active()) return;
+  editor_.Insert(b);
+  autoText_.clear();
+  host_.ViewInvalidate();
+}
+
+bool WorkbookView::CycleReference() {
+  if (!editor_.IsFormula()) return false;
+  const int caret = editor_.Caret();
+  for (const RefBox& r : Refs()) {
+    const int end = r.at + r.length;
+    if (caret < r.at || caret > end) continue;
+    const std::wstring next =
+        CycleAbsolute(std::wstring_view(editor_.Text()).substr(static_cast<size_t>(r.refAt), static_cast<size_t>(end - r.refAt)), r.kind);
+    const int at = r.refAt;
+    editor_.ReplaceSpan(at, end, next);
+    editor_.SetCaret(at + static_cast<int>(next.size()), false);
+    return true;
+  }
+  return false;
+}
 
 bool WorkbookView::RefHit(int x, int y, RefGrab& g) {
   if (!editor_.Active() || !editor_.IsFormula() || !gfx::Contains(cells_, static_cast<float>(x), static_cast<float>(y)))
@@ -426,6 +560,9 @@ void WorkbookView::BeginEdit(CellEditor::Mode mode, const std::wstring& text) {
   editSheet_ = sheet_;
   editInBar_ = false;
   barScroll_ = 0;
+  autoLoaded_ = false;
+  autoList_.clear();
+  autoText_.clear();
   editor_.Begin(text, mode);
   ScrollIntoView(active_);
   host_.ViewStateChanged();
@@ -435,7 +572,10 @@ void WorkbookView::BeginEdit(CellEditor::Mode mode, const std::wstring& text) {
 bool WorkbookView::OnChar(wchar_t ch, UINT mods) {
   if (!Ready() || preview_ || ChartSheet()) return false;
   if (editor_.Active()) {
-    if (editor_.OnChar(ch)) host_.ViewInvalidate();
+    if (editor_.OnChar(ch)) {
+      AutoComplete();
+      host_.ViewInvalidate();
+    }
     return true;
   }
   if (ch < 0x20 || ch == 0x7F) return false;
@@ -443,11 +583,20 @@ bool WorkbookView::OnChar(wchar_t ch, UINT mods) {
   // Typing over a cell replaces it (Enter mode).
   BeginEdit(CellEditor::Mode::Enter, L"");
   editor_.OnChar(ch);
+  AutoComplete();
   return true;
 }
 
 bool WorkbookView::EditKey(UINT vk, UINT mods) {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
+  if (ctrl && !alt && vk == SemicolonKey()) {
+    InsertNow(shift);
+    return true;
+  }
+  if (vk == VK_F4 && !ctrl && !alt && !shift) {
+    if (CycleReference()) host_.ViewInvalidate();
+    return true;
+  }
   const CellEditor::Result r = editor_.OnKey(vk, ctrl, shift, alt);
   switch (r.action) {
     case CellEditor::Action::None: return true;  // nothing else happens while a cell is edited
@@ -474,7 +623,9 @@ bool WorkbookView::EditKey(UINT vk, UINT mods) {
 
 void WorkbookView::CommitEdit(bool fill) {
   if (!editor_.Active()) return;
-  const std::wstring text = editor_.Text();
+  std::wstring text = editor_.Text();
+  // AutoComplete's entry keeps its own case.
+  if (!autoText_.empty() && Lower(text) == Lower(autoText_)) text = autoText_;
   const bool changed = editor_.Changed();
   editor_.End();
   editInBar_ = false;
