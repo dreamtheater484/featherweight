@@ -153,6 +153,8 @@ bool WorkbookCalc::RowHidden(int sheet, int32_t row) {
   return book_.GetSheet(static_cast<size_t>(sheet)).Row(static_cast<uint32_t>(row)).hidden;
 }
 
+bool WorkbookCalc::Manual() { return book_.Calc().mode == CalcMode::Manual; }
+
 int WorkbookCalc::FormatText(const CellView& value, std::string_view format, std::string& out) {
   auto it = formats_.find(std::string(format));
   if (it == formats_.end()) {

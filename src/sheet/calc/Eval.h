@@ -70,6 +70,8 @@ class Host {
     (void)sheet, (void)row;
     return false;
   }
+  // Manual calculation (INFO("recalc")).
+  virtual bool Manual() { return false; }
   // Rows a filter hides: hidden, in an autoFilter range with criteria (every SUBTOTAL leaves them
   // out; AGGREGATE doesn't tell them from other hidden rows).
   virtual bool RowFiltered(int sheet, int32_t row) {
