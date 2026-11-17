@@ -39,6 +39,21 @@ bool CycleReference(std::wstring& text, size_t& selBegin, size_t& selEnd, const 
 // argument the caret is in (0 for the first). False outside any call.
 bool CallAt(std::wstring_view typed, size_t caret, const FormulaLocale& region, std::wstring& function, int& argument);
 
+// The functions Featherweight calculates, A to Z, for AutoComplete and the argument tips: the
+// arguments as Excel names them ("number1, [number2], ...": optional ones in brackets, "..."
+// repeats) and a short description.
+struct FunctionHelp {
+  const char* name;
+  const char* args;
+  const char* about;
+};
+const FunctionHelp* FunctionHelpList(size_t& count);
+const FunctionHelp* FindFunctionHelp(std::string_view name);  // any case, _xlfn. ignored; null if none
+// "SUM(number1; [number2]; ...)" in the region's form, with the place of argument `argument`
+// (0-based; past the named ones, the repeated one) for bold.
+std::wstring ArgumentTip(const FunctionHelp& help, const FormulaLocale& region, int argument, size_t& boldBegin,
+                         size_t& boldEnd);
+
 // The formula of cell `from` as it reads in cell `to` (fill, copy and paste): relative references
 // move with it, absolute ones stay; a reference moved off the sheet becomes #REF!, as Excel makes
 // it. Invariant text in and out, with "=". Text that doesn't compile comes back unchanged.

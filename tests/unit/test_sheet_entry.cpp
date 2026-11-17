@@ -1,6 +1,7 @@
 // Formula entry in the region (decision 17), against Excel 2021 on an en-NL PC.
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -264,4 +265,54 @@ TEST(sheet_typing_copy_formula) {
     if (got != k.copied) std::printf("    %s %s->%s: %s, Excel %s\n", k.formula, k.from, k.to, got.c_str(), k.copied);
     CHECK_EQ(got, std::string(k.copied));
   }
+}
+
+#include "sheet/calc/Functions.h"
+
+TEST(sheet_typing_function_help) {
+  // Every function the engine knows has help, A to Z, with as many required arguments as it takes.
+  size_t count = 0;
+  const FunctionHelp* list = FunctionHelpList(count);
+  for (size_t i = 1; i < count; ++i) CHECK(std::strcmp(list[i - 1].name, list[i].name) < 0);
+  size_t covered = 0;
+  for (int id = 0; id < FunctionCount(); ++id) {
+    const FuncInfo& fn = Function(id);
+    if (fn.name[0] == '_') continue;  // _xlfn._LONGTEXT: files only
+    const FunctionHelp* h = FindFunctionHelp(fn.name);
+    if (!h) {
+      std::printf("    no help for %s\n", fn.name);
+      CHECK(h != nullptr);
+      continue;
+    }
+    ++covered;
+    int required = 0, listed = 0;
+    std::string args = h->args;
+    for (size_t a = 0; a < args.size();) {
+      size_t b = args.find(',', a);
+      std::string one = args.substr(a, b == std::string::npos ? std::string::npos : b - a);
+      while (!one.empty() && one[0] == ' ') one.erase(0, 1);
+      if (!one.empty() && one != "...") {
+        ++listed;
+        if (one[0] != '[') ++required;
+      }
+      if (b == std::string::npos) break;
+      a = b + 1;
+    }
+    const bool repeats = args.find("...") != std::string::npos;
+    if (required > fn.minArgs || (!repeats && listed != fn.maxArgs) || (repeats && listed > fn.maxArgs))
+      std::printf("    %s: help %d required, %d listed; takes %d to %d\n", fn.name, required, listed, fn.minArgs,
+                  fn.maxArgs);
+    CHECK(required <= fn.minArgs);
+    CHECK(repeats ? listed <= fn.maxArgs : listed == fn.maxArgs);
+  }
+  CHECK_EQ(covered, count);
+  CHECK(FindFunctionHelp("_xlfn.stdev.s") != nullptr);
+  CHECK(FindFunctionHelp("NOSUCH") == nullptr);
+  size_t b = 0, e = 0;
+  const FormulaLocale nl = MakeFormulaLocale(EnNlLocale());
+  std::wstring tip = ArgumentTip(*FindFunctionHelp("SUM"), nl, 4, b, e);
+  CHECK(tip == L"SUM(number1; [number2]; ...)");
+  CHECK(tip.substr(b, e - b) == L"[number2]");
+  tip = ArgumentTip(*FindFunctionHelp("VLOOKUP"), nl, 2, b, e);
+  CHECK(tip.substr(b, e - b) == L"col_index_num");
 }

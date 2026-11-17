@@ -14,6 +14,7 @@ target_sources(fwsheet PRIVATE
   Parser.cpp
   Print.cpp
   Typing.cpp
+  FunctionHelp.cpp
   Value.cpp
 )
 if(FW_BUILD_TESTS)
