@@ -364,6 +364,8 @@ edit::Editor& WorkbookView::Ed() {
   if (!edit_) {
     edit_ = std::make_unique<edit::Editor>(*book_);
     edit_->OnChange([this](const std::vector<edit::Change>& changes) { Edited(changes); });
+    // Crash recovery appends the edits to a journal (none for a CSV book: its autosave is whole).
+    edit_->SetJournal(file_->JournalFor(*book_));
     // A number typed into a table's header becomes its text as the region shows it. UserLocale()
     // is one object, refreshed in place, so this keeps following it.
     edit_->SetLocale(&UserLocale());
