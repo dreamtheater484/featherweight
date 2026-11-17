@@ -886,8 +886,10 @@ class StyleTexts {
     if (x.border < st_.Borders().size()) {
       const sh::Border& b = st_.Borders()[x.border];
       s += " border";
+      // A side without a line draws nothing: its color isn't compared (the writer leaves it out).
       for (const sh::BorderSide* side : {&b.left, &b.right, &b.top, &b.bottom, &b.diagonal})
-        s += " " + std::to_string(static_cast<int>(side->style)) + ":" + ColorText(side->color);
+        s += " " + std::to_string(static_cast<int>(side->style)) + ":" +
+             (side->style == sh::BorderStyle::None ? std::string("-") : ColorText(side->color));
     }
     const sh::Alignment& a = x.alignment;
     s += " align " + std::to_string(static_cast<int>(a.horizontal)) + "/" + std::to_string(static_cast<int>(a.vertical)) + "/" +
