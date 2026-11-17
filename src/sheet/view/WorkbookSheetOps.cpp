@@ -138,7 +138,10 @@ bool WorkbookView::GridCommand(int cmd) {
       if (!EditRefused(Ed().AddSheet(sheet))) ShowSheet(static_cast<size_t>(sheet));
       return true;
     case CmdDeleteSheet: EditRefused(Ed().DeleteSheet(sheet)); return true;
-    case CmdRenameSheet: BeginRename(sheet_); return true;
+    case CmdRenameSheet:
+      host_.ViewFocusPage();  // the name is typed in the tab, from a menu or a panel too
+      BeginRename(sheet_);
+      return true;
     case CmdHideSheet: EditRefused(Ed().SetSheetState(sheet, SheetState::Hidden)); return true;
     case CmdMoveSheetLeft:
     case CmdMoveSheetRight: {

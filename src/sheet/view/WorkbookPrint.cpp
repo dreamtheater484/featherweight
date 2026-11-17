@@ -28,7 +28,7 @@ namespace fw::sheet::view {
 
 PrintInfo WorkbookView::InfoFor(const Sheet& sheet) const {
   PrintInfo info;
-  info.fileName = FileNameOf(path_);
+  info.fileName = Title();  // "Book1" before it is saved, as Excel prints it
   info.path = DirOf(path_) + L"\\";
   info.sheetName = Utf8ToWide(sheet.Name());
   wchar_t buf[128];

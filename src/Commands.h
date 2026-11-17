@@ -316,6 +316,17 @@ enum Cmd : int {
   CmdCalculateNow,        // F9
   CmdCalculateSheet,      // Shift+F9
   CmdCalculateFull,       // Ctrl+Alt+F9
+  CmdMergeCenter = 2024,  // Merge & Center
+  CmdMergeAcross,         // each selected row merged on its own
+  CmdMergeCells,
+  CmdUnmerge,
+  CmdFreezePanes,         // at the active cell; Unfreeze panes when frozen
+  CmdFreezeTopRow,
+  CmdFreezeFirstColumn,
+  CmdGroup,               // Alt+Shift+Right: the selected rows, or columns
+  CmdUngroup,             // Alt+Shift+Left
+  CmdAutoFitRowHeight,
+  CmdAutoFitColumnWidth,  // as double-clicking the header's edge
   CmdTabColor = 2100,     // + index into the tab colors (0: none)
   CmdUnhideSheet = 2200,  // + the sheet's index: a hidden sheet shown again
   CmdUnhideSheetLast = 2699,

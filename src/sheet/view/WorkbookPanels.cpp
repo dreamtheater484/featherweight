@@ -27,6 +27,7 @@ bool SameText(std::wstring_view a, std::wstring_view b) {
 WorkbookView::SizePanel::SizePanel(WorkbookView& view) : v_(view) {
   size_.label = L"Size";
   size_.onChange = [this](double value) { v_.SetSizes(rows_, value); };
+  size_.onEnter = [this] { v_.host_.ViewFocusPage(); };  // the panel stays open, as Format Cells
 }
 
 std::vector<Control*> WorkbookView::SizePanel::Layout(const D2D1_RECT_F& body, float ui) {

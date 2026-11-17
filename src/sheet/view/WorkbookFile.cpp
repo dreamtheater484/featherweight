@@ -197,3 +197,28 @@ bool WorkbookFile::Save(fw::sheet::Workbook& book, fw::sheet::edit::Editor& edit
                         std::wstring& error) {
   return StartSave(book, editor, path, nullptr, error) && FinishSave(error);
 }
+
+void WorkbookFile::Autosave(fw::sheet::Workbook& book, fw::sheet::edit::Editor& editor) {
+  if (run_ || !AutosaveDue()) return;
+  try {
+    if (book.Format() == FileFormat::Csv) {
+      fw::sheet::csv::Options o = csv_;
+      o.delimiter = 0;
+      const std::string bytes = fw::sheet::csv::WriteNew(book, o);
+      WriteAutosave(std::vector<uint8_t>(bytes.begin(), bytes.end()));
+      return;
+    }
+  } catch (const std::bad_alloc&) {
+    return;
+  }
+  fw::sheet::xlsx::SavePlan plan;
+  pkg::MemorySink sink;
+  bool ok = false;
+  editor.BeginSave();
+  try {
+    ok = fw::sheet::xlsx::PrepareSave(book, editor, plan).Ok() && fw::sheet::xlsx::WriteSave(book, plan, sink).Ok();
+  } catch (const std::bad_alloc&) {
+  }
+  editor.EndSave();  // not committed: the workbook still stands for its file
+  if (ok) WriteAutosave(std::move(sink.bytes));
+}

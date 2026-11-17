@@ -719,6 +719,11 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
     case Updater::kDoneMessage:
       OnUpdaterDone();
       return 0;
+    case kSaveDoneMessage:
+      // From a tab's save worker; the tab may have closed meanwhile (it waited for the write).
+      for (auto& t : tabs_)
+        if (reinterpret_cast<LPARAM>(t.get()) == lp) t->SaveDone();
+      return 0;
     case WM_COMMAND:
       if (HIWORD(wp) == 0 && lp == 0) {
         Execute(LOWORD(wp));
@@ -1302,6 +1307,7 @@ void App::Execute(int cmd) {
   if (cmd >= CmdNewFile && cmd < CmdNewFile + fw::kFileKindCount) {
     // A new document, workbook or presentation comes with that kind's editor.
     if (cmd - CmdNewFile == static_cast<int>(fw::FileKind::Document)) NewDocument();
+    if (cmd - CmdNewFile == static_cast<int>(fw::FileKind::Workbook)) NewWorkbook();
     return;
   }
   if (cmd >= CmdNewTemplate && cmd < CmdNewTemplate + EmptyState::kTemplateCount) {
@@ -1627,7 +1633,11 @@ PdfView* App::ActivePdf() const {
 }
 
 std::unique_ptr<TabContent> App::CreateTab(const std::wstring& path) {
-  if (fw::KindOfPath(path) == fw::FileKind::Workbook) return std::make_unique<fw::sheet::view::WorkbookView>(*this, path);
+  if (fw::KindOfPath(path) == fw::FileKind::Workbook) {
+    auto view = std::make_unique<fw::sheet::view::WorkbookView>(*this, path);
+    if (WorkbookFile::IsTemplate(path)) view->OpenAsNew(++newWorkbooks_);  // as Excel: "Budget1"
+    return view;
+  }
   if (fw::KindOfPath(path) == fw::FileKind::Document) {
     auto view = std::make_unique<DocView>(*this, path);
     if (DocView::IsTemplate(path)) view->OpenAsNew(++newDocuments_);  // as Word: a new document from it
@@ -1832,7 +1842,7 @@ bool App::ConfirmClose(TabContent* view) {
   if (pressed != IDYES && pressed != kSaveAs) return false;
   for (int i = 0; i < static_cast<int>(tabs_.size()); ++i)
     if (tabs_[i].get() == view) ActivateTab(i);
-  return SaveActive(pressed == kSaveAs);
+  return SaveActive(pressed == kSaveAs, true);  // the tab closes next: saved first
 }
 
 bool App::CloseTab(int index) {
@@ -1871,47 +1881,54 @@ void App::RememberState(TabContent* view) {
   if (view && view->Ready() && !snapshot_ && !view->Path().empty()) settings_.SetState(view->Path(), view->State());
 }
 
-bool App::SaveActive(bool saveAs) {
+bool App::SaveActive(bool saveAs, bool wait) {
   TabContent* v = Active();
   if (!v || !v->Ready()) return false;
   if (!saveAs && !v->Modified() && !v->Path().empty()) return true;
   std::wstring path = v->Path();
   if (path.empty()) saveAs = true;  // a new or recovered document
   if (saveAs) {
+    // The tab's own types first (a workbook, a template), then the copies (RTF, CSV).
     const std::vector<SaveFormat> copies = v->CopyFormats();
+    std::vector<SaveFormat> types = v->OtherSaveFormats();
+    const size_t own = types.size();
+    types.insert(types.end(), copies.begin(), copies.end());
     size_t type = 0;
-    path = SaveDialog(v->SuggestedSavePath(), v->SaveAsFormat(), copies, &type);
+    path = SaveDialog(v->SuggestedSavePath(), v->SaveAsFormat(), types, &type);
     if (path.empty()) return false;
     // A name typed with another type's extension (report.rtf) is that type.
-    for (size_t i = 0; i < copies.size() && type == 0; ++i)
-      if (fw::EndsWithNoCase(path, std::wstring(L".") + copies[i].ext)) type = i + 1;
-    if (type > 0) return SaveCopy(v, path, type - 1);
+    for (size_t i = 0; i < copies.size() && type <= own; ++i)
+      if (fw::EndsWithNoCase(path, std::wstring(L".") + copies[i].ext)) type = own + i + 1;
+    if (type > own) return SaveCopy(v, path, type - own - 1);
   }
-  return SaveActiveTo(std::move(path), saveAs);
+  return SaveActiveTo(std::move(path), saveAs, wait);
 }
 
-bool App::SaveActiveTo(std::wstring path, bool saveAs) {
+bool App::SaveActiveTo(std::wstring path, bool saveAs, bool wait) {
   TabContent* v = Active();
   if (!v || !v->Ready()) return false;
   if (const std::wstring loss = v->FormatLoss(path); !loss.empty()) {
-    // Saved only after the user chooses: another type, or this one anyway.
+    // Saved only after the user chooses: the tab's own type, or this one anyway.
     keepFormatPath_ = path;
     const size_t dot = path.rfind(L'.');
     std::wstring ext = dot == std::wstring::npos ? std::wstring() : path.substr(dot + 1);
     for (wchar_t& c : ext) c = static_cast<wchar_t>(towupper(c));
     banner_.Show(BannerKind::Warning, loss,
-                 {{kActSaveAs, L"Save as .xlsx", true}, {kActKeepFormat, ext.empty() ? L"Keep it" : L"Keep " + ext}});
+                 {{kActSaveAs, std::wstring(L"Save as .") + v->SaveAsFormat().ext, true},
+                  {kActKeepFormat, ext.empty() ? L"Keep it" : L"Keep " + ext}});
     InvalidateRect(hwnd_, nullptr, FALSE);
     return false;
   }
   std::wstring error;
-  if (v->Save(path, error)) {
-    if (!snapshot_) {
-      settings_.AddRecent(v->Path());
-      settings_.Save();
-    }
-    banner_.Show(BannerKind::Success, L"Saved", {}, 1600);
-    ActivateTab(active_);
+  const TabContent::SaveStart start =
+      wait ? (v->Save(path, error) ? TabContent::SaveStart::Saved : TabContent::SaveStart::Failed)
+           : v->StartSave(path, error);
+  if (start == TabContent::SaveStart::Started) {
+    InvalidateRect(hwnd_, nullptr, FALSE);  // "Saving…" until ViewSaved
+    return true;
+  }
+  if (start == TabContent::SaveStart::Saved) {
+    Saved(v);
     return true;
   }
   if (!saveAs) {
@@ -1921,16 +1938,36 @@ bool App::SaveActiveTo(std::wstring path, bool saveAs) {
     UpdateWindow(hwnd_);
     path = SaveDialog(v->SuggestedSavePath(), v->SaveAsFormat());
     if (!path.empty() && v->Save(path, error)) {
-      settings_.AddRecent(v->Path());
-      settings_.Save();
-      banner_.Show(BannerKind::Success, L"Saved", {}, 1600);
-      ActivateTab(active_);
+      Saved(v);
       return true;
     }
     if (path.empty()) return false;
   }
   banner_.Show(BannerKind::Error, error);
   return false;
+}
+
+void App::Saved(TabContent* v) {
+  if (!snapshot_) {
+    settings_.AddRecent(v->Path());
+    settings_.Save();
+  }
+  banner_.Show(BannerKind::Success, L"Saved", {}, 1600);
+  if (Active() == v) ActivateTab(active_);  // the title: the file's name, without the unsaved dot
+  UpdateAutosaveTimer();
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::ViewSaved(TabContent* view, bool ok, const std::wstring& error) {
+  if (ok) {
+    Saved(view);
+    return;
+  }
+  // Written in the background: no dialog pops up unasked; the banner offers another place.
+  std::vector<Banner::Action> actions;
+  if (Active() == view) actions.push_back({kActSaveAs, L"Save as…", true});
+  banner_.Show(BannerKind::Error, error, std::move(actions));
+  InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void App::PrintActive() {
@@ -2439,10 +2476,12 @@ void App::RunScript(const std::wstring& script) {
         v->SetViewMode(arg == L"single" ? fw::ViewMode::Single : arg == L"facing" ? fw::ViewMode::Facing : fw::ViewMode::Continuous);
     } else if (op == L"new") {
       // new, or new:letter (a template's name) for a new document from that template.
+      // new:workbook for a new workbook ("Book1").
       int kind = 0;
       for (int i = 0; i < EmptyState::kTemplateCount; ++i)
         if (fw::EqualsNoCase(arg, EmptyState::kTemplates[i])) kind = i + 1;
-      NewDocument(kind);
+      if (fw::EqualsNoCase(arg, L"workbook")) NewWorkbook();
+      else NewDocument(kind);
     } else if (op == L"edited") {
       // Marks the document edited, as the edit session will (the dot, Save, the close prompt).
       TabContent* v = Active();
@@ -2452,7 +2491,9 @@ void App::RunScript(const std::wstring& script) {
       TabContent* v = Active();
       if (v && v->Ready() && v->TakesPictures({arg})) v->DropPictures({arg}, -1, -1);
       else fwprintf(stderr, L"picture: %s isn't taken here\n", arg.c_str());
-    } else if (op == L"save") {
+    } else if (op == L"save" || op == L"saveas") {
+      // save:<path> and saveas:<path> both save to that path, waiting for the write (Save As;
+      // the format is the extension's). Ctrl+S (key:ctrl+s) saves in the background as in use.
       if (TabContent* v = Active()) {
         std::wstring err;
         if (!v->Save(arg, err)) fwprintf(stderr, L"save failed: %s\n", err.c_str());
