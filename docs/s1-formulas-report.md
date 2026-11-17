@@ -1,6 +1,6 @@
 # fwtool formulas
 
-205 workbooks, 117231 formulas: 109629 compared, 109622 match (99.99 %), calculated in en-NL (or, when more of a workbook's formulas match there, in en-US, en-GB, de-DE). Not compared: 0 kept as cached, 7602 volatile or depending on one, 0 without a cached value.
+205 workbooks, 117231 formulas: 109629 compared, 109623 match (99.99 %), calculated in en-NL (or, when more of a workbook's formulas match there, in en-US, en-GB, de-DE). Not compared: 0 kept as cached, 7602 volatile or depending on one, 0 without a cached value.
 
 ## Read in another region
 
@@ -19,7 +19,6 @@ tudarmstadt-stundentool-wise-26-27-stundenzettel-hilfskrafte.xlsx | Microsoft Ex
 File | Saved by | Region | Mismatches
 ---|---|---|---
 libreoffice-named-ranges-global-xlsx-workbook-level-defined.xlsx | LibreOffice/3.7$Linux_X86_64 LibreOffice_project/72d3539-a01... | en-NL | 6 of 14
-poi-conditionalformattingsamples-xlsx-conditional.xlsx | Microsoft Excel 16.0300 | en-NL | 1 of 352
 
 ## Mismatches
 
@@ -31,7 +30,6 @@ libreoffice-named-ranges-global-xlsx-workbook-level-defined.xlsx | Sheet2!A5 | `
 libreoffice-named-ranges-global-xlsx-workbook-level-defined.xlsx | Sheet2!B5 | `=A4` | 5 | 1
 libreoffice-named-ranges-global-xlsx-workbook-level-defined.xlsx | Sheet2!C5 | `=A4` | 6 | 1
 libreoffice-named-ranges-global-xlsx-workbook-level-defined.xlsx | Sheet2!A6 | `=Global5` | #NAME? | 5
-poi-conditionalformattingsamples-xlsx-conditional.xlsx | Regional sales2!B13 | `=SUBTOTAL(9, Table69[Sales])` | 1469066 | 9071953
 
 ## Not implemented
 

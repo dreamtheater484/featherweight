@@ -153,6 +153,20 @@ bool WorkbookCalc::RowHidden(int sheet, int32_t row) {
   return book_.GetSheet(static_cast<size_t>(sheet)).Row(static_cast<uint32_t>(row)).hidden;
 }
 
+// Hidden in the data rows of an autoFilter with criteria: the sheet's own, or a table's.
+bool WorkbookCalc::RowFiltered(int sheet, int32_t row) {
+  if (!RowHidden(sheet, row)) return false;
+  const Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  const uint32_t r = static_cast<uint32_t>(row);
+  if (const auto& f = s.Filter(); f && f->filtered && r > f->ref.firstRow && r <= f->ref.lastRow) return true;
+  for (const fw::sheet::Table& t : s.Tables()) {
+    if (!t.filtered) continue;
+    fw::sheet::Range d = t.Data();
+    if (d.firstRow <= d.lastRow && r >= d.firstRow && r <= d.lastRow) return true;
+  }
+  return false;
+}
+
 bool WorkbookCalc::Manual() { return book_.Calc().mode == CalcMode::Manual; }
 
 int WorkbookCalc::FormatText(const CellView& value, std::string_view format, std::string& out) {
@@ -180,7 +194,15 @@ CalcSettings WorkbookCalc::Settings() const {
   const CalcProps& p = book_.Calc();
   CalcSettings s;
   s.manual = p.mode == CalcMode::Manual;
-  s.fullCalcOnLoad = p.fullCalcOnLoad;
+  // Excel (2021 here) keeps a file's cached values only from a calculation engine it trusts: calcId
+  // 191028 or later with the calc features RD, Single, FV and CNMTM listed. Anything else it
+  // recalculates in full on opening (probed with edited files, docs/s1-formulas.md).
+  bool trusted = p.calcId >= 191028;
+  for (const char* need : {"microsoft.com:RD", "microsoft.com:Single", "microsoft.com:FV", "microsoft.com:CNMTM"})
+    trusted = trusted && std::find(p.calcFeatures.begin(), p.calcFeatures.end(), need) != p.calcFeatures.end();
+  s.fullCalcOnLoad = p.fullCalcOnLoad || !trusted;
+  for (size_t i = 0; i < book_.SheetCount(); ++i)
+    if (book_.GetSheet(i).Props().fullCalcOnLoad) s.fullCalcSheets.push_back(static_cast<int>(i));
   s.iterate = p.iterate;
   s.iterateCount = static_cast<int>(p.iterateCount);
   s.iterateDelta = p.iterateDelta;

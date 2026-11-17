@@ -27,21 +27,23 @@ timesheet (de-DE).
 
 ## Result (2026-11-17)
 
-205 workbooks, 117,231 formulas: **109,629 compared, 109,622 match (99.99 %).** Not compared:
+205 workbooks, 117,231 formulas: **109,629 compared, 109,623 match (99.99 %).** Not compared:
 7,602 volatile or depending on one; none kept as cached (every function the corpus uses is
 implemented, INFO since dab4a5d); none without a cached value. The engine's own Excel cases
-(`tests/unit/sheet_calc_cases.inc`, calculated on this PC): 616 of 616.
+(`tests/unit/sheet_calc_cases.inc`, calculated on this PC): 615 of 615 compared.
 
 Earlier in the day this was 99.77 % with 244 mismatches: Apache POI's number-format tests (211:
 fractions with text around the bar, elapsed-time codes) and German TEXT() letters (27). s1-numfmt
 fixed those in its number formats (06f1305, be72038), as Windows Excel 2021 shows them.
 
-## The 7 mismatches
+## The 6 mismatches
 
 File | Saved by | Mismatches | Why
 ---|---|---|---
 libreoffice-named-ranges-global-xlsx-workbook-level-defined.xlsx | LibreOffice 3.7 | 6 of 14 | Not Excel's values: LibreOffice saved the file. Five cells it wrote as `=A4` hold its array formula's values (2..6; `=A4` is A4's value, 1), and `=Global5` names `global6`, which LibreOffice cached as #NAME? while Excel matches names case-insensitively (5, as here).
-poi-conditionalformattingsamples-xlsx-conditional.xlsx | Excel 16 | 1 of 352 | `SUBTOTAL(9,Table69[Sales])` over a table with an icon filter: SUBTOTAL leaves out rows a filter hides, whatever its function number. The engine does (a0d4767); the model doesn't yet say which hidden rows a filter hid (asked of s1-model).
+
+POI's ConditionalFormattingSamples was a seventh until SUBTOTAL left out rows a filter hides
+(below).
 
 ## Against this PC's Excel
 
@@ -54,12 +56,13 @@ Excel's value as cached, after this PC's Excel opened the file, and after a full
 This compares what the app does after opening (`WorkbookCalc::OpenStep`, as at idle) with Excel's
 values once opened, and a full recalculation with Excel's. 65,137 formulas listed (205 workbooks):
 
-- **Recalculated: 64,702 of 64,710 match (99.99 %).** The 8 others: 5 elapsed-time codes after a
-  seconds code (below), 2 `_xlfn._LONGTEXT` (Excel 2021 doesn't know it and gives #NAME?; the
-  Excel that saved the file did, and the engine gives the text), and the filtered SUBTOTAL above.
-- **After opening: 64,364 of 64,710 (99.47 %).** All 346 others are formulas Excel recalculated
-  on opening and the app didn't yet, for the rules below (6 workbooks: POI's three format tests,
-  the two US time sheets, LibreOffice's named ranges).
+- **After opening: 64,705 of 64,710 match (99.99 %).** The 5 others: elapsed-time codes after a
+  seconds code (below). Before the opening rules below were in, 64,364 (99.47 %): Excel had
+  recalculated 341 more (POI's three format tests, the two US time sheets, LibreOffice's named
+  ranges).
+- **Recalculated: 64,703 of 64,710 (99.99 %).** The 7 others: the same 5, and 2
+  `_xlfn._LONGTEXT` (Excel 2021 doesn't know it and gives #NAME?; the Excel that saved the file
+  did, and the engine gives the text).
 
 **What Excel recalculates on opening** (Excel 2021, 16.0 build 20326, probed with edited copies of
 corpus files): besides volatile functions, what depends on them, formulas without a cached value
@@ -70,8 +73,7 @@ needed, an unknown extra is fine). A sheet's own `<sheetCalcPr fullCalcOnLoad="1
 sheet's formulas. In manual mode, nothing, even with an old calcId or fullCalcOnLoad. The Mac
 `ArchID`, `fileVersion`, `date1904` and a missing calcChain make no difference. 114 of the 205
 workbooks are recalculated in full by this rule, mostly small ones (13,745 of 118,540 formulas).
-The engine takes a sheet's fullCalcOnLoad (CalcSettings::fullCalcSheets, a0d4767); both rules wait
-on the model keeping sheetCalcPr and calcFeatures (asked of s1-model).
+`WorkbookCalc::Settings()` applies it, with s1-model's sheetCalcPr and calcFeatures (3001dc3).
 
 **Elapsed codes after a seconds code** (s1-numfmt's): Windows Excel 2021 shows an elapsed code
 that follows an `s` code in the same section as the s value with its fraction, made positive, plus
@@ -83,4 +85,5 @@ for 3.14159 "53:23 @ hour 1293". The file's Mac Excel and Featherweight give the
 **SUBTOTAL and filters** (probed): rows hidden inside an autoFilter range that has criteria
 (a `filterColumn`) are filtered, and every SUBTOTAL leaves them out (9 as well as 109); with no
 criteria they count as hidden by hand. AGGREGATE doesn't tell them apart: options 0 and 4 take
-them, 5 leaves them out.
+them, 5 leaves them out. `WorkbookCalc::RowFiltered`, with s1-model's Table::filtered and
+Sheet::Filter() (f0c456a).
