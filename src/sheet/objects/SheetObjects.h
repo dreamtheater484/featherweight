@@ -93,6 +93,8 @@ class SheetObjects {
   bool IsChartSheet() const;
   // Its chart, filling `rect` (the window, or the printed page's area).
   void DrawChartSheet(draw::Painter& painter, const draw::Rect& rect);
+  // The chart's size as saved (its absolute anchor), which Excel prints it at; empty when none.
+  draw::Size ChartSheetSize() const;
 
  private:
   struct Impl;

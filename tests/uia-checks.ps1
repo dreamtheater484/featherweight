@@ -704,7 +704,11 @@ try {
 # control with an item for each sheet shown; selecting an item shows that sheet.
 $p, $win = Start-App @("--widget-gallery", "--theme", "light", (Join-Path $root "tests\office\excel\notes.xlsx"))
 try {
-  Step "workbook: the grid shows the first sheet" {} { Find $win $CT::DataGrid "Notes" } 10000
+  # The gallery opens after the file and comes to the front: show the workbook's tab first.
+  $titleBar = FindChild $win $CT::TitleBar $null
+  Step "workbook: its tab shows the grid with the first sheet" {
+    (Pat (FindChild (Find $titleBar $CT::Tab "Open files") $CT::TabItem "notes.xlsx") $SelItem).Select()
+  } { Find $win $CT::DataGrid "Notes" } 10000
   $sheets = Find $win $CT::Tab "Sheets"
   Check "workbook: a tab for each sheet" {
     (@(FindAll $sheets $CT::TabItem) | ForEach-Object { $_.Current.Name }) -join "|" -eq "Notes|Threaded comments"

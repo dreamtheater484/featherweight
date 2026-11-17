@@ -278,11 +278,13 @@ class Painting {
     }
   }
 
-  // Excel's icons, drawn in a square: each set's shapes and colors, the lowest values' first.
+  // Excel's icons, drawn in a square: each set's shapes and colors, the lowest values' first. The
+  // red, yellow, green, blue, dark gray and the rating's empty bars are the colors of the icons in
+  // Excel's printed pages.
   void DrawIcon(const draw::Rect& box, condfmt::IconSet set, int i) {
     using S = condfmt::IconSet;
-    constexpr uint32_t red = 0xFFE0443A, yellow = 0xFFEFBE29, green = 0xFF3E9E4F, gray = 0xFF8C8C8C,
-                       black = 0xFF404040, gold = 0xFFF0B323, blue = 0xFF4472C4, pink = 0xFFF09A9A;
+    constexpr uint32_t red = 0xFFD65532, yellow = 0xFFEAC282, green = 0xFF68A490, gray = 0xFF8C8C8C,
+                       black = 0xFF505050, gold = 0xFFF0B323, blue = 0xFF4A7DB1, pink = 0xFFF09A9A;
     char shape = 'o';
     uint32_t color = gray;
     int level = 0;
@@ -364,7 +366,13 @@ class Painting {
       case '>': arrow(90); break;
       case 'n': arrow(135); break;
       case 'v': arrow(180); break;
-      case 'o': circle(ink); break;
+      case 'o': {
+        // With a darker rim, a 24th of the icon.
+        circle(draw::Brush::Solid(Mix(color, 0xFF000000, 0.32f)));
+        const float r = sz / 24;
+        p_.FillPath(draw::Path::Ellipse({x + r, y + r, x + sz - r, y + sz - r}), ink);
+        break;
+      }
       case 'f':
         p_.FillRect({x + 0.15f * sz, y + 0.05f * sz, x + 0.24f * sz, y + 0.95f * sz}, draw::Brush::Solid(ToColor(black)));
         p_.FillPath(poly({{0.24f, 0.07f}, {0.9f, 0.3f}, {0.24f, 0.53f}}), ink);
@@ -406,7 +414,7 @@ class Painting {
         for (int k = 0; k < 4; ++k) {
           const float h = 0.25f + 0.2f * k;
           p_.FillRect({x + (0.08f + 0.23f * k) * sz, y + (0.95f - h) * sz, x + (0.26f + 0.23f * k) * sz, y + 0.95f * sz},
-                      k < level ? ink : light);
+                      k < level ? ink : draw::Brush::Solid(ToColor(0xFFB3B3B3)));
         }
         break;
       case 'q': {
