@@ -265,6 +265,37 @@ TEST(SheetNumFmt_NamedLocaleTag) {
   CHECK(LcidFromName(L"en-US") == 0x409 && LcidFromName(L"nl-NL") == 0x413 && LcidFromName(L"zz-ZZ") == 0);
 }
 
+// What the column's width decides, from Excel's Range.Text in narrow columns.
+TEST(SheetNumFmt_WidthRules) {
+  FormatContext ctx;
+  ctx.locale = &EnUsLocale();
+  Formatted out;
+  // A fixed denominator without a whole part: up to 32767 as the numerator (16384 -> ####).
+  NumberFormat(L"?/2").Format(16383.5, ctx, out);
+  CHECK(!out.overflow && out.text == L"32767/2");
+  NumberFormat(L"?/2").Format(16384, ctx, out);
+  CHECK(out.overflow);
+  NumberFormat(L"?/10").Format(-3276.8, ctx, out);
+  CHECK(out.overflow);
+  NumberFormat(L"# ?/2").Format(45678.5, ctx, out);
+  CHECK(!out.overflow && out.text == L"45678 1/2");
+  // General marks what it wrote, so the grid can fit it as Excel does (a digit's width a character).
+  struct Room {
+    size_t chars;
+  } room{7};
+  ctx.fits = [](void* c, const Formatted& f) {
+    CHECK(f.generalAt + f.generalLength <= f.text.size());
+    return f.generalLength <= static_cast<Room*>(c)->chars;
+  };
+  ctx.fitsContext = &room;
+  NumberFormat().Format(-3.14159265, ctx, out);
+  CHECK(out.text == L"-3.1416" && out.generalAt == 0 && out.generalLength == 7);
+  NumberFormat(L"\"x\"General").Format(-3.14159265, ctx, out);
+  CHECK(out.text == L"-x3.14159" && out.generalAt == 2 && out.generalLength == 7);
+  NumberFormat(L"0.00").Format(1.5, ctx, out);
+  CHECK(out.generalLength == 0);  // not General: the callback isn't asked about General
+}
+
 TEST(SheetNumFmt_Robust) {
   // Codes Excel would refuse are read as literally as possible, without crashing.
   const wchar_t* codes[] = {L"[", L"\"", L"\\", L"_", L"*", L"[$", L"[>", L"[<=abc]0", L"0.0.0", L"E+", L"0E+",
