@@ -211,10 +211,9 @@ void Text(Call& c) {
     d = v.IsNumber() ? v.number() : 0;
   }
   std::string out;
-  if (!c.m.host.FormatText(d, format, out)) {
-    c.m.unsupported = true;  // no number-format engine: keep the cached value
-    return c.Fail(Err::Value);
-  }
+  const int done = c.m.host.FormatText(d, format, out);
+  if (done == 0) c.m.unsupported = true;  // no number-format engine: keep the cached value
+  if (done <= 0) return c.Fail(Err::Value);
   SetText(c, out);
 }
 

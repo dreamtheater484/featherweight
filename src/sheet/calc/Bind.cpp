@@ -87,20 +87,24 @@ bool WorkbookCalc::RowHidden(int sheet, int32_t row) {
   return book_.GetSheet(static_cast<size_t>(sheet)).Row(static_cast<uint32_t>(row)).hidden;
 }
 
-bool WorkbookCalc::FormatText(double value, std::string_view format, std::string& out) {
+int WorkbookCalc::FormatText(double value, std::string_view format, std::string& out) {
   auto it = formats_.find(std::string(format));
   if (it == formats_.end()) {
     if (formats_.size() > 4096) formats_.clear();
-    it = formats_.emplace(std::string(format), std::make_unique<NumberFormat>(Wide(format))).first;
+    // TEXT() reads the code as the region types it (on an en-NL PC: "jjjj", "#.##0,00").
+    auto f = std::make_unique<NumberFormat>();
+    if (!NumberFormat::FromLocal(Wide(format), locale_ ? *locale_ : EnUsLocale(), *f)) f.reset();
+    it = formats_.emplace(std::string(format), std::move(f)).first;
   }
+  if (!it->second) return -1;
   FormatContext ctx;
   ctx.locale = locale_;
   ctx.date1904 = book_.Date1904();
   Formatted f;
   it->second->Format(value, ctx, f);
-  if (f.overflow) return false;
+  if (f.overflow) return -1;
   out = Narrow(f.text);
-  return true;
+  return 1;
 }
 
 CalcSettings WorkbookCalc::Settings() const {
