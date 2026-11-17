@@ -249,6 +249,7 @@ std::string SheetPrXml(const Sheet& s, const PartText& t, const std::string& p) 
     std::string xml = "<" + p + "tabColor" + ColorAttrs(c) + "/>";
     if (ParseSlice(cd, xml)) pr.prepend_copy(cd.document_element());
   }
+  SetAttr(pr, "filterMode", s.Props().filterMode ? "1" : "");
   if (!pr.first_child() && !pr.first_attribute()) return {};
   return Print(pr);
 }
@@ -427,7 +428,7 @@ PartText NewSheetText(const Sheet& s, bool active, bool strict) {
     PutElement(t, "pageMargins",
                "<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>");
   t.rootEnd = "</worksheet>";
-  if (s.Props().tabColor.IsSet()) PutElement(t, "sheetPr", SheetPrXml(s, t, ""));
+  if (s.Props().tabColor.IsSet() || s.Props().filterMode) PutElement(t, "sheetPr", SheetPrXml(s, t, ""));
   return t;
 }
 
