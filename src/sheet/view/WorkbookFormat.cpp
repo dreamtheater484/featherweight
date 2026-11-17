@@ -1374,7 +1374,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
 // Scripted formatting (build from scratch): the toolbar's and Format Cells' calls by name
 
 bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
-  if (op != L"format") return false;
+  if (op != L"format") return GridScriptOp(op, arg);  // s2-grid's (fill:, WorkbookFill.cpp)
   const size_t eq = arg.find(L'=');
   const std::wstring key = fw::ToLower(fw::Trim(arg.substr(0, eq)));
   const std::wstring value = eq == std::wstring::npos ? std::wstring() : fw::Trim(arg.substr(eq + 1));

@@ -2391,7 +2391,19 @@ void App::DrawSnapshotFrame() {
 }
 
 void App::RunScript(const std::wstring& script) {
-  for (const std::wstring& rawStep : fw::Split(script, L';')) {
+  // Steps are split on ';'; "\;" is a ';' inside a step (formulas such as =IF(B7=0\;0\;B16/B7)).
+  std::vector<std::wstring> steps(1);
+  for (size_t i = 0; i < script.size(); ++i) {
+    if (script[i] == L'\\' && i + 1 < script.size() && script[i + 1] == L';') {
+      steps.back() += L';';
+      ++i;
+    } else if (script[i] == L';') {
+      steps.emplace_back();
+    } else {
+      steps.back() += script[i];
+    }
+  }
+  for (const std::wstring& rawStep : steps) {
     std::wstring step = fw::Trim(rawStep);
     if (step.empty()) continue;
     size_t colon = step.find(L':');
