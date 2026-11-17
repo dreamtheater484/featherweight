@@ -1458,6 +1458,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
 
 bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
   if (op == L"rule" || op == L"valid") return DataRulesScriptOp(op, arg);  // WorkbookData.cpp
+  if (op == L"name" || op == L"names") return NamesScriptOp(op, arg);  // s3-calc's (WorkbookNames.cpp)
   if (op != L"format") return GridScriptOp(op, arg);  // s2-grid's (fill:, WorkbookFill.cpp)
   const size_t eq = arg.find(L'=');
   const std::wstring key = fw::ToLower(fw::Trim(arg.substr(0, eq)));
