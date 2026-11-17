@@ -93,6 +93,7 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     csv::Source source;
     csv::Read(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), WideToUtf8(sheetName), o,
               *csvBook, source);
+    snapshot.reset();  // the model has the values: the file's copy goes before the grid is built
     return Opened(std::move(csvBook), error);
   }
   if (snapshot && pkg::CompoundFile::HasSignature(snapshot->Bytes())) {
