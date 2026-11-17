@@ -86,6 +86,8 @@ class SheetTarget {
   // What the edits changed that Save can't write yet ("styles, workbook part"); empty when the
   // save covers everything. The save's checks are skipped while it isn't empty.
   virtual std::string Unsaved() const { return {}; }
+  // Saves only once per opened workbook (a save in the middle of a round is then skipped).
+  virtual bool SavesOnce() const { return false; }
   // The parts the last Save wrote or removed (every other part must be copied byte for byte).
   std::vector<std::string> written;
 };

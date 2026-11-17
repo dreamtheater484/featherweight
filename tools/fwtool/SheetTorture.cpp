@@ -410,11 +410,22 @@ class EditApiTarget : public SheetTarget {
     return Applied::Refused;
   }
 
+  // The writer for edited workbooks (sheet/xlsx Xlsx.h PrepareSave): what changed is written, the
+  // rest copied raw. Saved once per opened workbook: the dirty state compares with the file as
+  // opened until s2-model re-bases the workbook on the saved file (so no MarkSaved).
   fw::pkg::Status Save(std::vector<uint8_t>& out) override {
-    fw::pkg::Status st = SaveModelParts(*book_, written, out);
-    if (st.Ok()) ed_.MarkSaved();
-    return st;
+    sh::xlsx::SavePlan plan;
+    fw::pkg::Status st = sh::xlsx::PrepareSave(*book_, ed_, plan);
+    if (!st.Ok()) return st;
+    fw::pkg::MemorySink sink;
+    if (!(st = book_->GetPackage()->Save(sink, plan.changes)).Ok()) return st;
+    written.clear();
+    for (const auto& [name, bytes] : plan.changes.replace) written.push_back(name);
+    for (const std::string& name : plan.changes.leaveOut) written.push_back(name);
+    out = std::move(sink.bytes);
+    return {};
   }
+  bool SavesOnce() const override { return true; }
 
   int UndoAll() override {
     int steps = 0;
@@ -422,20 +433,6 @@ class EditApiTarget : public SheetTarget {
     return steps;
   }
   bool RedoSteps(int steps) override { return steps == 0 || ed_.Redo(static_cast<size_t>(steps)).ok; }
-
-  std::string Unsaved() const override {
-    std::string what;
-    auto add = [&](const char* s) { what += (what.empty() ? "" : ", ") + std::string(s); };
-    if (ed_.StylesDirty()) add("styles");
-    if (ed_.WorkbookDirty()) add("workbook part (sheets, names)");
-    uint32_t pieces = 0;
-    for (int i = 0; i < static_cast<int>(book_->SheetCount()); ++i) pieces |= ed_.DirtyPieces(i);
-    if (pieces & sh::edit::kPieceCols) add("columns");
-    if (pieces & sh::edit::kPieceMerges) add("merges");
-    if (pieces & sh::edit::kPieceViews) add("views");
-    if (pieces & (sh::edit::kPieceProps | sh::edit::kPieceLinks | sh::edit::kPieceOther)) add("sheet properties");
-    return what;
-  }
 
  private:
   // Format Cells as s2-format runs it: each cell's format with one thing changed.
@@ -853,7 +850,57 @@ std::string ValueText(const sh::Value& v) {
   return "?";
 }
 
+std::string ColorText(const sh::Color& c) {
+  if (!c.IsSet()) return "-";
+  char buf[48];
+  std::snprintf(buf, sizeof buf, "%d:%08X:%g", static_cast<int>(c.kind), c.value, c.tint);
+  return buf;
+}
+
+// What a cell format index stands for: the writer may renumber formats (it leaves unused ones
+// out), so a saved copy is compared by what its formats are, not their numbers.
+class StyleTexts {
+ public:
+  explicit StyleTexts(const sh::Workbook& book) : st_(book.GetStyles()) {}
+  const std::string& operator()(uint32_t index) {
+    auto [it, added] = cache_.try_emplace(index);
+    if (!added) return it->second;
+    std::string& s = it->second;
+    if (index >= st_.CellXfs().size()) return s = "xf" + std::to_string(index) + "?";
+    const sh::Xf& x = st_.CellXfs()[index];
+    std::string_view code = st_.FormatCode(x.numFmt);
+    s = "[" + (code.empty() ? "#" + std::to_string(x.numFmt) : std::string(code)) + "]";
+    if (x.font < st_.Fonts().size()) {
+      const sh::Font& f = st_.Fonts()[x.font];
+      s += " font " + f.name + " " + Num(f.size) + (f.bold ? " b" : "") + (f.italic ? " i" : "") + (f.strike ? " s" : "") +
+           " u" + std::to_string(static_cast<int>(f.underline)) + " " + ColorText(f.color);
+    }
+    if (x.fill < st_.Fills().size()) {
+      const sh::Fill& f = st_.Fills()[x.fill];
+      s += " fill " + std::to_string(static_cast<int>(f.pattern)) + " " + ColorText(f.fg) + " " + ColorText(f.bg) +
+           (f.gradient ? " gradient" : "");
+    }
+    if (x.border < st_.Borders().size()) {
+      const sh::Border& b = st_.Borders()[x.border];
+      s += " border";
+      for (const sh::BorderSide* side : {&b.left, &b.right, &b.top, &b.bottom, &b.diagonal})
+        s += " " + std::to_string(static_cast<int>(side->style)) + ":" + ColorText(side->color);
+    }
+    const sh::Alignment& a = x.alignment;
+    s += " align " + std::to_string(static_cast<int>(a.horizontal)) + "/" + std::to_string(static_cast<int>(a.vertical)) + "/" +
+         std::to_string(a.rotation) + (a.wrap ? " wrap" : "") + (a.shrinkToFit ? " shrink" : "") + " indent " +
+         std::to_string(a.indent) + (x.protection.locked ? "" : " unlocked") + (x.protection.hidden ? " hidden" : "") +
+         (x.quotePrefix ? " quote" : "");
+    return s;
+  }
+
+ private:
+  const sh::Styles& st_;
+  std::map<uint32_t, std::string> cache_;
+};
+
 std::vector<std::string> Digest(const sh::Workbook& book) {
+  StyleTexts styleText(book);
   std::vector<std::string> out;
   out.push_back("sheets " + std::to_string(book.SheetCount()) + ", 1904 " + (book.Date1904() ? "yes" : "no"));
   for (const sh::DefinedName& n : book.Names())
@@ -864,23 +911,24 @@ std::vector<std::string> Digest(const sh::Workbook& book) {
                   " state " + std::to_string(static_cast<int>(s.State())));
     if (s.Kind() != sh::SheetKind::Worksheet || !s.Loaded()) continue;
     const std::string at = "  " + std::to_string(i) + "!";
+    out.push_back(at + "tab " + ColorText(s.Props().tabColor));
+    if (!s.Views().empty() && s.Views()[0].paneState == sh::PaneState::Frozen)
+      out.push_back(at + "frozen " + Num(s.Views()[0].ySplit) + " rows " + Num(s.Views()[0].xSplit) + " columns");
     for (const sh::Range& m : s.Merges()) out.push_back(at + "merge " + sh::RangeName(m));
     if (s.Filter()) out.push_back(at + "filter");
     for (const sh::ColumnInfo& c : s.Columns())
       out.push_back(at + "cols " + sh::ColumnName(c.first) + ":" + sh::ColumnName(c.last) + " width " + Num(c.width) +
-                    " style " + std::to_string(c.style) + (c.hidden ? " hidden" : ""));
+                    " style " + styleText(c.style) + (c.hidden ? " hidden" : ""));
     if (auto used = s.UsedRange())
       s.ForEachRow(0, used->lastRow, [&](uint32_t row, const sh::RowInfo& r) {
         if (r.customHeight || r.hidden || r.customFormat || r.outlineLevel)
           out.push_back(at + "row " + std::to_string(row + 1) + " height " + Num(r.height) + (r.hidden ? " hidden" : "") +
-                        (r.customFormat ? " style " + std::to_string(r.style) : "") + " level " +
+                        (r.customFormat ? " style " + styleText(r.style) : "") + " level " +
                         std::to_string(r.outlineLevel));
         return true;
       });
-    // The style is compared by index: the S1 writer keeps the styles part as read. When S2's writer
-    // renumbers styles, compare what the index resolves to instead.
     s.ForEachCell({0, 0, 1048575, 16383}, [&](const sh::CellInfo& c) {
-      std::string line = at + sh::CellName(c.row, c.col) + " " + ValueText(c.value) + " style " + std::to_string(c.style);
+      std::string line = at + sh::CellName(c.row, c.col) + " " + ValueText(c.value) + " style " + styleText(c.style);
       if (c.hasFormula) {
         sh::FormulaInfo f;
         if (s.GetFormula(c.row, c.col, f))
@@ -1063,6 +1111,10 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
       for (const Edit& a : r.applied) cur << FormatEdit(a) << "\n";
     }
     if (e.op == Op::Save) {
+      if (target->SavesOnce()) {  // the round's last save is the one checked
+        ++r.refused;
+        continue;
+      }
       if ((r.failure = save())) return r;
       ++r.done;
       continue;
