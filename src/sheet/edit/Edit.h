@@ -264,6 +264,9 @@ class Editor {
   bool MustWriteStrings() const;
   // The current state counts as saved, without a file (tools and tests; saving uses CommitSave).
   void MarkSaved();
+  // Saved by another writer (a CSV file): Modified() is false, the book's format is `format`, and
+  // everything edited still counts as unsaved for the next .xlsx save (which writes it all anyway).
+  void SavedOutside(FileFormat format);
   // The region numbers typed into tables' headers are shown in, as text (default: en-US).
   void SetLocale(const NumLocale* locale) { locale_ = locale; }
 

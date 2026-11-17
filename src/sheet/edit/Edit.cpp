@@ -3553,6 +3553,15 @@ void Editor::MarkSaved() {
   st.Saved();
 }
 
+void Editor::SavedOutside(FileFormat format) {
+  State& st = *s_;
+  st.savedSerial = st.undo.empty() ? 0 : st.undo.back().serial;
+  st.viewDirty.clear();
+  st.bookViewDirty = false;
+  A::Format(book_) = format;
+  st.saving = false;
+}
+
 void Editor::BeginSave() {
   State& st = *s_;
   st.saving = true;
