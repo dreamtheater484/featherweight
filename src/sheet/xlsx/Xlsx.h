@@ -73,9 +73,15 @@ inline pkg::Status PrepareSave(const Workbook& book, const edit::Editor& editor,
 }
 pkg::Status WriteSave(const Workbook& book, SavePlan& plan, pkg::ByteSink& sink);
 void CommitSave(Workbook& book, edit::Editor& editor, SavePlan& plan);
+// Every part a plan writes or leaves out (before CommitSave, which empties the plan).
+std::vector<std::string> WrittenParts(const SavePlan& plan);
 
 // Whether a workbook has macros a macro-free format (.xlsx, .xltx) would leave out: a VBA
 // project or macro sheets. Save As asks first.
 bool HasMacros(const Workbook& book);
+
+// A new, empty workbook as Excel starts one: one sheet, Sheet1, in Calibri 11. It has a package of
+// its own (the smallest that Excel opens), so it is edited and saved like any other.
+std::unique_ptr<Workbook> NewWorkbook(pkg::Status& status);
 
 }  // namespace fw::sheet::xlsx

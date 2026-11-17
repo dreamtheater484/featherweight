@@ -80,7 +80,8 @@ if(FW_BUILD_TESTS)
     "${PROJECT_SOURCE_DIR}/tests/unit/test_review.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_odt.cpp"
     "${PROJECT_SOURCE_DIR}/tests/unit/test_pictures.cpp" "${PROJECT_SOURCE_DIR}/tests/unit/test_shapes.cpp"
     # The document tab's file (D2 "Files"): an app source, tested here with temporary folders.
-    "${PROJECT_SOURCE_DIR}/tests/unit/test_docfile.cpp" "${PROJECT_SOURCE_DIR}/src/word/DocFile.cpp")
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_docfile.cpp" "${PROJECT_SOURCE_DIR}/src/word/DocFile.cpp"
+    "${PROJECT_SOURCE_DIR}/src/FileSession.cpp")
   target_link_libraries(fw_tests PRIVATE fwdoc fwdoclayout fwproof fwpictures)
   set(_fw_office "${PROJECT_SOURCE_DIR}/tests/office")
   add_test(NAME office_model_roundtrip COMMAND fwtool roundtrip --model "${_fw_office}/generated" "${_fw_office}/edge"

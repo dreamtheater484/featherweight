@@ -744,8 +744,15 @@ void WorkbookView::FollowLink(const Hyperlink& link) {
 // File and state
 
 bool WorkbookView::Save(const std::wstring& path, std::wstring& error) {
-  // Nothing is changed in a workbook yet: saving elsewhere is a copy of the file as it was opened.
   if (!Ready()) return false;
+  if (file_) {
+    // A CSV file: written its own way, or as the type the path names (WorkbookFile).
+    if (!file_->Save(*book_, Ed(), path, error)) return false;
+    path_ = file_->Path();
+    host_.ViewStateChanged();
+    return true;
+  }
+  // Nothing is changed in a workbook yet: saving elsewhere is a copy of the file as it was opened.
   if (EqualsNoCase(path, path_)) return true;
   const auto bytes = book_->GetPackage()->GetSnapshot().Bytes();
   if (!util::WriteFileAtomic(path, std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()))) {
@@ -758,6 +765,35 @@ bool WorkbookView::Save(const std::wstring& path, std::wstring& error) {
 SaveFormat WorkbookView::SaveAsFormat() const {
   if (book_ && book_->Format() == FileFormat::Xlsm) return {L"Excel macro-enabled workbook", L"*.xlsm", L"xlsm"};
   return {L"Excel workbook", L"*.xlsx", L"xlsx"};
+}
+
+std::vector<SaveFormat> WorkbookView::CopyFormats() const {
+  if (!book_ || book_->Format() == FileFormat::Csv) return {};  // a CSV file: Save As .csv is the file itself
+  return {{L"CSV UTF-8 (the first sheet's values)", L"*.csv", L"csv"}};
+}
+
+bool WorkbookView::SaveCopy(const std::wstring& path, size_t format, std::wstring& error) {
+  if (!Ready() || format != 0) return false;
+  if (EqualsNoCase(util::FullPath(path), util::FullPath(path_))) {
+    error = FileNameOf(path) + L" is this workbook's own file. Choose another name for the copy.";
+    return false;
+  }
+  csv::Options o;
+  o.locale = &UserLocale();
+  return WorkbookFile::SaveCsvCopy(*book_, path, o, error);
+}
+
+std::wstring WorkbookView::SuggestedSavePath() const {
+  // A CSV file's Save As offers a workbook beside it, as the banner suggests.
+  if (!book_ || book_->Format() != FileFormat::Csv) return path_;
+  const size_t dot = path_.rfind(L'.'), slash = path_.find_last_of(L"\\/");
+  const bool ext = dot != std::wstring::npos && (slash == std::wstring::npos || dot > slash);
+  return (ext ? path_.substr(0, dot) : path_) + L".xlsx";
+}
+
+std::wstring WorkbookView::FormatLoss(const std::wstring& path) const {
+  if (keepFormat_ || !book_ || WorkbookFile::FormatOf(path, book_->Format()) != FileFormat::Csv) return {};
+  return csv::Loses(*book_) ? L"CSV keeps only the values of the first sheet." : L"";
 }
 
 FileState WorkbookView::State() const {
