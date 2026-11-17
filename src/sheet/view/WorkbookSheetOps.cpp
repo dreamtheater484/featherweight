@@ -75,6 +75,12 @@ bool WorkbookView::GridCommandState(int cmd, CommandState& s) {
     case CmdGoTo: s.label = L"Go to"; s.shortcut = L"Ctrl+G"; s.enabled = cells; return true;
     case CmdFillDown: s.label = L"Fill down"; s.shortcut = L"Ctrl+D"; s.enabled = cells; return true;
     case CmdFillRight: s.label = L"Fill right"; s.shortcut = L"Ctrl+R"; s.enabled = cells; return true;
+    case CmdCut: s.label = L"Cut"; s.shortcut = L"Ctrl+X"; s.enabled = cells; return true;
+    case CmdPaste: s.label = L"Paste"; s.shortcut = L"Ctrl+V"; s.enabled = cells; return true;
+    case CmdPasteValues: s.label = L"Paste values"; s.shortcut = L"Ctrl+Shift+V"; s.enabled = cells; return true;
+    case CmdPasteFormulas: s.label = L"Paste formulas"; s.enabled = cells; return true;
+    case CmdPasteFormats: s.label = L"Paste formats"; s.enabled = cells; return true;
+    case CmdPasteTranspose: s.label = L"Paste transposed"; s.enabled = cells; return true;
     default: return false;
   }
 }
@@ -139,6 +145,12 @@ bool WorkbookView::GridCommand(int cmd) {
     case CmdGoTo: ShowGoTo(); return true;
     case CmdFillDown:
     case CmdFillRight: FillDown(cmd == CmdFillRight); return true;
+    case CmdCut: Cut(); return true;
+    case CmdPaste: Paste(PasteMode::All); return true;
+    case CmdPasteValues: Paste(PasteMode::Values); return true;
+    case CmdPasteFormulas: Paste(PasteMode::Formulas); return true;
+    case CmdPasteFormats: Paste(PasteMode::Formats); return true;
+    case CmdPasteTranspose: Paste(PasteMode::All, true); return true;
     default: return false;
   }
 }
@@ -184,9 +196,15 @@ void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
   }
   if (!preview_ && !ChartSheet()) {
     const bool rows = WholeRows(), cols = WholeColumns();
-    AppendItem(m, CmdCut, L"Cut\tCtrl+X", false);
+    item(m, CmdCut, L"Cut\tCtrl+X");
     AppendItem(m, CmdCopy, L"Copy\tCtrl+C");
-    AppendItem(m, CmdPaste, L"Paste\tCtrl+V", false);
+    item(m, CmdPaste, L"Paste\tCtrl+V");
+    HMENU special = CreatePopupMenu();
+    item(special, CmdPasteValues, L"Values\tCtrl+Shift+V");
+    item(special, CmdPasteFormulas, L"Formulas");
+    item(special, CmdPasteFormats, L"Formats");
+    item(special, CmdPasteTranspose, L"Transposed");
+    AppendSubmenu(m, special, L"Paste special");
     AppendSeparator(m);
     item(m, CmdInsertCells, rows ? L"Insert rows\tCtrl++" : cols ? L"Insert columns\tCtrl++" : L"Insert cells\tCtrl++");
     item(m, CmdDeleteCells, rows ? L"Delete rows\tCtrl+-" : cols ? L"Delete columns\tCtrl+-" : L"Delete cells\tCtrl+-");

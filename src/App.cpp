@@ -64,6 +64,7 @@ int App::Run(const AppOptions& opts) {
   }
   if (opts.forceWarp) gpu::ForceWarp();
   snapshot_ = !opts.snapshotPath.empty();
+  if (snapshot_) util::UsePrivateClipboard();  // test runs never touch the user's clipboard
   snapshotWindow_ = snapshot_ && opts.snapshotWindow;
   sandbox_ = opts.sandbox;
   if (!sandbox_) settings_.Load();  // never loaded, settings are never saved either

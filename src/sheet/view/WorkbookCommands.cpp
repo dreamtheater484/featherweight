@@ -178,6 +178,8 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case 'Y': return editor_.Active() ? 0 : CmdRedo;
       case 'G': return editor_.Active() ? 0 : CmdGoTo;
       case 'D': return editor_.Active() ? 0 : CmdFillDown;
+      case 'X': return editor_.Active() ? 0 : CmdCut;
+      case 'V': return editor_.Active() ? 0 : CmdPaste;
       case 'R': return editor_.Active() ? 0 : CmdFillRight;
     }
   }
@@ -186,6 +188,7 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
     if (ctrl && ((shift && vk == VK_OEM_PLUS) || vk == VK_ADD)) return CmdInsertCells;
     if (ctrl && !shift && (vk == VK_OEM_MINUS || vk == VK_SUBTRACT)) return CmdDeleteCells;
     if (!ctrl && shift && vk == VK_F11) return CmdInsertSheet;
+    if (ctrl && shift && vk == 'V') return CmdPasteValues;
     if (!ctrl && !shift && vk == VK_F5) return CmdGoTo;
   }
   if (preview_ && vk == VK_ESCAPE) return CmdPrintPreview;
@@ -504,6 +507,9 @@ void WorkbookView::Copy() {
     cfHtml = header + head + html + tail;
   }
   util::SetClipboardText(text, {}, cfHtml);
+  // A paste here brings the cells themselves while the clipboard still holds this.
+  clip_ = Clip{&s, sel, false, util::ClipboardSequence()};
+  host_.ViewInvalidate();
 }
 
 std::wstring WorkbookView::SelectedText() {

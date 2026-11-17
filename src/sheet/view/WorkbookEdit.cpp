@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "Commands.h"
+#include "Util.h"
 #include "core/Strings.h"
 #include "sheet/calc/Typing.h"
 #include "sheet/numfmt/Parse.h"
@@ -455,6 +456,24 @@ bool WorkbookView::EditKey(UINT vk, UINT mods) {
     return true;
   }
   if (FormulaHelpKey(vk, ctrl, shift, alt)) return true;
+  // The clipboard while typing: the text, not the cells.
+  if (ctrl && !alt && !shift && (vk == 'C' || vk == 'X' || vk == 'V')) {
+    if (vk == 'V') {
+      std::wstring t = util::GetClipboardText();
+      while (!t.empty() && (t.back() == L'\n' || t.back() == L'\r')) t.pop_back();
+      std::wstring one;
+      for (size_t i = 0; i < t.size(); ++i)
+        if (!(t[i] == L'\r' && i + 1 < t.size() && t[i + 1] == L'\n')) one += t[i] == L'\r' ? L'\n' : t[i];
+      editor_.Insert(one);
+    } else if (editor_.HasSelection()) {
+      const int a = std::min(editor_.Caret(), editor_.Anchor()), b = std::max(editor_.Caret(), editor_.Anchor());
+      util::SetClipboardText(editor_.Text().substr(static_cast<size_t>(a), static_cast<size_t>(b - a)));
+      if (vk == 'X') editor_.Insert(L"");
+    }
+    UpdateFormulaHelp();
+    host_.ViewInvalidate();
+    return true;
+  }
   const CellEditor::Result r = editor_.OnKey(vk, ctrl, shift, alt);
   switch (r.action) {
     case CellEditor::Action::None: return true;  // nothing else happens while a cell is edited
@@ -631,6 +650,7 @@ bool WorkbookView::CommitEdit(bool fill) {
 
 void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
   SyncEngine(changes);
+  if (!pasting_) clip_.reset();  // an edit ends the copied cells' border, as in Excel
   bool sheets = false, layout = false;
   for (const edit::Change& c : changes) {
     sheets |= (c.what & edit::kSheets) != 0;
@@ -655,7 +675,11 @@ void WorkbookView::SyncEngine(const std::vector<edit::Change>& changes) {
   for (const edit::Change& c : changes) any |= (c.what & (edit::kValues | edit::kFormulas)) != 0;
   if (!any) return;
   if (!calc_ || calc_->Opening()) {
-    recalc_ = true;  // the pass Excel makes after opening reads the sheets as they are now
+    // The pass Excel makes after opening starts again from the sheets as they are now: one
+    // already under way holds the formulas as they were, and would store their results over
+    // what was just typed.
+    calc_.reset();
+    recalc_ = true;
     return;
   }
   calc::Engine& e = calc_->engine();

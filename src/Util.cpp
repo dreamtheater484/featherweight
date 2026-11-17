@@ -108,7 +108,33 @@ void PutOnClipboard(UINT format, const void* data, size_t bytes) {
 
 }  // namespace
 
+namespace {
+
+struct PrivateClipboard {
+  bool on = false;
+  unsigned long seq = 1;
+  std::wstring text;
+  std::string rtf, html;
+};
+PrivateClipboard& Private() {
+  static PrivateClipboard p;
+  return p;
+}
+
+}  // namespace
+
+void UsePrivateClipboard() { Private().on = true; }
+
+unsigned long ClipboardSequence() { return Private().on ? Private().seq : GetClipboardSequenceNumber(); }
+
 void SetClipboardText(const std::wstring& text, const std::string& rtf, const std::string& html) {
+  if (PrivateClipboard& p = Private(); p.on) {
+    p.text = text;
+    p.rtf = rtf;
+    p.html = html;
+    ++p.seq;
+    return;
+  }
   if (!OpenClipboard(nullptr)) return;
   EmptyClipboard();
   PutOnClipboard(CF_UNICODETEXT, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
@@ -120,6 +146,8 @@ void SetClipboardText(const std::wstring& text, const std::string& rtf, const st
 }
 
 std::string GetClipboardBytes(const wchar_t* format) {
+  if (const PrivateClipboard& p = Private(); p.on)
+    return std::wstring_view(format) == L"HTML Format" ? p.html : std::wstring_view(format) == L"Rich Text Format" ? p.rtf : std::string();
   std::string out;
   const UINT f = RegisterClipboardFormatW(format);
   if (!f || !IsClipboardFormatAvailable(f) || !OpenClipboard(nullptr)) return out;
@@ -135,6 +163,7 @@ std::string GetClipboardBytes(const wchar_t* format) {
 }
 
 std::wstring GetClipboardText() {
+  if (Private().on) return Private().text;
   std::wstring out;
   if (!OpenClipboard(nullptr)) return out;
   if (HANDLE h = GetClipboardData(CF_UNICODETEXT)) {

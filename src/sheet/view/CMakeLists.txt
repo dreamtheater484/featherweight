@@ -9,7 +9,8 @@ target_compile_options(fwsheetrender PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Re
 # The tab: built against the app's shell headers (src/), and linked into the exe, which has them.
 add_library(fwsheetview STATIC WorkbookView.cpp WorkbookInput.cpp WorkbookCommands.cpp WorkbookPrint.cpp
             WorkbookEdit.cpp WorkbookFunctions.cpp
-            WorkbookSheetOps.cpp WorkbookPanels.cpp WorkbookFill.cpp)
+            WorkbookSheetOps.cpp WorkbookPanels.cpp WorkbookFill.cpp
+            WorkbookClipboard.cpp)
 target_include_directories(fwsheetview PRIVATE "${PROJECT_SOURCE_DIR}/src" "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(fwsheetview PUBLIC fwsheetrender)
 target_compile_options(fwsheetview PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)

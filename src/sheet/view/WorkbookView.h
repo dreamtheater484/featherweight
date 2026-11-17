@@ -350,7 +350,20 @@ class WorkbookView : public PagedView {
   void FillDrag(int x, int y);
   void FinishFill();
   void FillToNeighbour();
-  Range fillTo_{};  // while the handle is dragged: the selection with the cells it will fill
+  Range fillTo_{};
+  // ---- Cut, copy and paste (WorkbookClipboard.cpp).
+  enum class PasteMode : uint8_t { All, Values, Formulas, Formats };
+  struct Clip {
+    const Sheet* sheet = nullptr;  // what Copy put on the clipboard, while it's still there
+    Range range;
+    bool cut = false;
+    DWORD seq = 0;  // the clipboard's sequence number then
+  };
+  std::optional<Clip> clip_;
+  bool pasting_ = false;  // a paste's own changes don't end the copied cells' border
+  void Cut();
+  void Paste(PasteMode mode, bool transpose = false);
+  void DrawClipBorder(gfx::Canvas& c, const Pane& pane);  // while the handle is dragged: the selection with the cells it will fill
   // Renaming a sheet on its tab (double-click it, or Rename): the cell editor's text and keys.
   void BeginRename(size_t sheet);
   int renaming_ = -1;

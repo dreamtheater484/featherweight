@@ -49,7 +49,12 @@ void WorkbookView::Select(CellAddr active, CellAddr end, bool scroll) {
   end.col = std::min(end.col, kMaxCols - 1);
   active_ = active;
   end_ = end;
-  if (scroll) ScrollIntoView(end);
+  if (scroll) {
+    // Whole rows (or columns) scroll only along them: their far end is XFD (or row 1048576).
+    const bool allCols = std::min(active.col, end.col) == 0 && std::max(active.col, end.col) == kMaxCols - 1;
+    const bool allRows = std::min(active.row, end.row) == 0 && std::max(active.row, end.row) == kMaxRows - 1;
+    ScrollIntoView({allRows ? active.row : end.row, allCols ? active.col : end.col});
+  }
   host_.ViewStateChanged();
   host_.ViewInvalidate();
 }
@@ -169,6 +174,12 @@ bool WorkbookView::OnKeyDown(UINT vk, UINT mods) {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   // Enter after Tabs returns to the Tabs' first column; any other key forgets it.
   if (vk != VK_TAB && vk != VK_RETURN && vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU) tabStartCol_ = UINT32_MAX;
+  // Esc takes the border off the copied cells.
+  if (vk == VK_ESCAPE && clip_) {
+    clip_.reset();
+    host_.ViewInvalidate();
+    return true;
+  }
   // Ctrl+; and Ctrl+Shift+; start an entry with the date or the time.
   if (ctrl && !alt && vk == SemicolonKey() && !ChartSheet()) {
     InsertNow(shift);
