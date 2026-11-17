@@ -200,12 +200,13 @@ struct Table {
   int FindColumn(std::string_view columnName) const;
 };
 
-// sheetPr.
+// sheetPr, and sheetCalcPr's fullCalcOnLoad.
 struct SheetProps {
   Color tabColor;
   bool summaryBelow = true, summaryRight = true, applyStyles = false, showOutlineSymbols = true;
   bool fitToPage = false, autoPageBreaks = true;
   bool filterMode = false, published = true;
+  bool fullCalcOnLoad = false;  // sheetCalcPr: Excel recalculates the sheet on opening. Read only.
   std::string codeName;
 };
 

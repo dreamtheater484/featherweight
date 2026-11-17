@@ -68,7 +68,10 @@ std::vector<std::pair<std::string, std::string>> Package(const std::vector<std::
                 {"xl/workbook.xml", "<workbook" + Ns() + ">" + workbookExtra + "<sheets>" + list + "</sheets>"
                  "<definedNames><definedName name=\"Total\">'Sheet 1'!$A$1</definedName>"
                  "<definedName name=\"_xlnm.Print_Area\" localSheetId=\"0\">'Sheet 1'!$A$1:$C$3</definedName></definedNames>"
-                 "<calcPr calcId=\"191029\" fullCalcOnLoad=\"1\"/></workbook>"},
+                 "<calcPr calcId=\"191029\" fullCalcOnLoad=\"1\"/><extLst><ext uri=\"{B58B0392-4F1F-4190-BB64-5DF3571DCE5F}\" "
+                 "xmlns:xcalcf=\"http://schemas.microsoft.com/office/spreadsheetml/2018/calcfeatures\"><xcalcf:calcFeatures>"
+                 "<xcalcf:feature name=\"microsoft.com:RD\"/><xcalcf:feature name=\"microsoft.com:Single\"/>"
+                 "</xcalcf:calcFeatures></ext></extLst></workbook>"},
                 {"xl/_rels/workbook.xml.rels", rels},
                 {"xl/styles.xml",
                  "<styleSheet xmlns=\"" + std::string(kMain) + "\">"
@@ -143,6 +146,7 @@ const std::string kSheet1 =
     "<row r=\"5\"><c r=\"A5\"><f t=\"shared\" si=\"0\"/><v>3</v></c><c r=\"B5\"><v>0.2</v></c></row>"
     "<row r=\"6\"><c r=\"A6\"><f t=\"shared\" si=\"0\"/></c><c r=\"C6\" t=\"s\"><v>3</v></c><c r=\"D6\" t=\"s\"><v>1</v></c></row>"
     "</sheetData>"
+    "<sheetCalcPr fullCalcOnLoad=\"1\"/>"
     "<mergeCells count=\"1\"><mergeCell ref=\"C3:D4\"/></mergeCells>"
     "<conditionalFormatting sqref=\"A1:A6\"><cfRule type=\"cellIs\" dxfId=\"0\" priority=\"1\" operator=\"greaterThan\"><formula>2</formula></cfRule></conditionalFormatting>"
     "<hyperlinks><hyperlink ref=\"B1\" location=\"'Sheet 2'!A1\" display=\"Go\"/></hyperlinks>"
@@ -279,6 +283,8 @@ TEST(sheet_read_layout) {
   }
   CHECK(!s.Props().summaryBelow);
   CHECK(s.Props().tabColor.kind == Color::Kind::Rgb && s.Props().tabColor.value == 0xFF00B050);
+  CHECK(s.Props().fullCalcOnLoad);
+  CHECK(s.KeptXml().find("<sheetCalcPr fullCalcOnLoad=\"1\"/>") != std::string::npos);  // written as it was
   CHECK(s.Hyperlinks().size() == 1 && s.Hyperlinks()[0].location == "'Sheet 2'!A1");
   CHECK(s.Page().paperSize == 9 && s.Page().orientation == Orientation::Landscape && s.Page().fitToHeight == 0);
   CHECK(s.Page().gridLines && s.Page().margins.top == 1);
@@ -294,6 +300,8 @@ TEST(sheet_read_workbook) {
   if (!book) return;
   CHECK(book->Date1904());
   CHECK(book->Calc().fullCalcOnLoad && book->Calc().calcId == 191029);
+  CHECK(book->Calc().calcFeatures == (std::vector<std::string>{"microsoft.com:RD", "microsoft.com:Single"}));
+  CHECK(!book->GetSheet(1).Props().fullCalcOnLoad);
   CHECK_EQ(book->ActiveSheet(), 1u);
   // Only the active sheet is read at first; the others when asked.
   CHECK(!book->GetSheet(0).Loaded());

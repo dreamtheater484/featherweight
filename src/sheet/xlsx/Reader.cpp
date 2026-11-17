@@ -867,6 +867,13 @@ std::unique_ptr<Workbook> Read(std::unique_ptr<pkg::Package> package, Status& st
       c.calcOnSave = BoolAttr(sec, "calcOnSave", true);
       c.concurrentCalc = BoolAttr(sec, "concurrentCalc", true);
       c.concurrentManualCount = UIntAttr(sec, "concurrentManualCount", 0);
+    } else if (k == "extLst") {
+      // xcalcf:calcFeatures: with RD, Single, FV and CNMTM listed and calcId 191028 or later, Excel
+      // doesn't recalculate the workbook on opening (s1-calc's probes, 2026-11-17).
+      for (pugi::xml_node ext = sec.first_child(); ext; ext = ext.next_sibling())
+        for (pugi::xml_node f = Child(ext, "calcFeatures").first_child(); f; f = f.next_sibling())
+          if (f.type() == pugi::node_element && Local(f) == "feature")
+            loader.Calc().calcFeatures.emplace_back(Attr(f, "name"));
     }
   }
   // The errors Excel writes as #VALUE! with a rich value saying which, and which array formulas

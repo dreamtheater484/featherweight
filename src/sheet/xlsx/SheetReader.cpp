@@ -261,7 +261,7 @@ Status SheetLoader::Load(std::string_view xml, const pkg::Limits& limits, std::s
     static constexpr std::string_view kRead[] = {"sheetPr",    "dimension",   "sheetViews", "sheetFormatPr", "cols",
                                                  "mergeCells", "hyperlinks",  "printOptions", "pageMargins", "pageSetup",
                                                  "headerFooter", "rowBreaks", "colBreaks",  "drawing",       "legacyDrawing",
-                                                 "tableParts"};
+                                                 "tableParts",   "sheetCalcPr"};
     bool read = main && std::find(std::begin(kRead), std::end(kRead), local) != std::end(kRead);
     std::string name(read ? local : std::string_view());
     if (!xlsx::SkipElement(pull)) return Fail();
@@ -834,6 +834,8 @@ void SheetLoader::ReadTop(std::string_view local, std::string_view xml) {
       p.fitToPage = BoolAttr(o, "fitToPage", false);
       p.autoPageBreaks = BoolAttr(o, "autoPageBreaks", true);
     }
+  } else if (local == "sheetCalcPr") {
+    s_.props_.fullCalcOnLoad = BoolAttr(n, "fullCalcOnLoad", false);
   } else if (local == "dimension") {
     Range r;
     if (ParseRange(Attr(n, "ref"), r)) s_.dimension_ = r;
