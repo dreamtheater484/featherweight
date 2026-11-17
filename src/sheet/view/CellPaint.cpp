@@ -506,12 +506,12 @@ class Painting {
     for (const Range* m : merges_) {
       CellInfo cell;
       if (!sheet_.GetCell(m->firstRow, m->firstCol, cell) || cell.value.type == ValueType::Empty) continue;
-      int widthPx = 0;
-      for (uint32_t c = m->firstCol; c <= m->lastCol; ++c) widthPx += grid_.ColWidth(c);
-      widthPx = static_cast<int>(std::lround(widthPx * g_.widthScale));
+      int screenPx = 0;
+      for (uint32_t c = m->firstCol; c <= m->lastCol; ++c) screenPx += grid_.ColWidth(c);
+      const int widthPx = static_cast<int>(std::lround(screenPx * g_.widthScale));
       if (widthPx == 0 || HideValue(m->firstRow, m->firstCol)) continue;
       const CellText::Layout& l =
-          text_.Get(sheet_, cell, widthPx, TextLookAt(m->firstRow, m->firstCol, styles_.CellXf(cell.style)));
+          text_.Get(sheet_, cell, widthPx, TextLookAt(m->firstRow, m->firstCol, styles_.CellXf(cell.style)), screenPx);
       const Xf& xf = styles_.CellXf(cell.style);
       Item it{&l, Inner(m->firstRow, m->firstCol, m->lastRow, m->lastCol), {}, 0, &xf};
       it.clip = it.box;
@@ -549,7 +549,7 @@ class Painting {
     const int widthPx = static_cast<int>(std::lround(grid_.ColWidth(cell.col) * g_.widthScale));
     if (HideValue(cell.row, cell.col)) return;
     const CellText::Layout& l =
-        text_.Get(sheet_, cell, widthPx, TextLookAt(cell.row, cell.col, styles_.CellXf(cell.style)));
+        text_.Get(sheet_, cell, widthPx, TextLookAt(cell.row, cell.col, styles_.CellXf(cell.style)), grid_.ColWidth(cell.col));
     if (l.lines.empty()) return;
     const Xf& xf = styles_.CellXf(cell.style);
     Item it{&l, Inner(cell.row, cell.col, cell.row, cell.col), {}, 0, &xf, rowDescent_};
@@ -836,12 +836,20 @@ class Painting {
       return;
     }
     if (f.pattern == PatternType::None) return;
-    const uint32_t fg = styles_.Resolve(f.fg, 0xFF000000);
+    // Indexed 64 and 65 are the system's text and window colors: black and white.
+    auto color = [&](const Color& c, uint32_t fallback) {
+      if (c.kind == Color::Kind::Indexed && (c.value == 64 || c.value == 65)) {
+        const uint32_t argb = c.value == 64 ? 0xFF000000u : 0xFFFFFFFFu;
+        return c.tint != 0 ? ApplyTint(argb, c.tint) : argb;
+      }
+      return styles_.Resolve(c, fallback);
+    };
+    const uint32_t fg = color(f.fg, 0xFF000000);
     if (f.pattern == PatternType::Solid) {
       p_.FillRect(r, draw::Brush::Solid(ToColor(fg)));
       return;
     }
-    const uint32_t bg = styles_.Resolve(f.bg, 0xFFFFFFFF);
+    const uint32_t bg = color(f.bg, 0xFFFFFFFF);
     p_.FillRect(r, draw::Brush::Solid(Mix(bg, fg, PatternShare(f.pattern))));
   }
 

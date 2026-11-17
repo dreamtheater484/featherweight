@@ -204,7 +204,7 @@ uint32_t PrintLayout::Reach(const CellInfo& c, uint32_t past) {
     return c.col;
   const int widthPx = static_cast<int>(std::lround(grid_.ColWidth(c.col) * grid_.PrintColPt() / kPtPerPx));
   if (widthPx <= 0) return c.col;
-  const CellText::Layout& l = text_.Get(sheet_, c, widthPx);
+  const CellText::Layout& l = text_.Get(sheet_, c, widthPx, {}, grid_.ColWidth(c.col));
   if (l.lines.empty() || l.wrapped || l.stacked || l.shown.number || l.shown.fill) return c.col;
   if (l.align != HAlign::Left && l.align != HAlign::Center && l.align != HAlign::CenterContinuous) return c.col;
   // How far its ink runs on paper: the text in the font's own widths (the printer's layout, which

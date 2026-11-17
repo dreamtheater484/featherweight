@@ -178,7 +178,9 @@ void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out,
   }
 }
 
-const CellText::Layout& CellText::Get(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look) {
+const CellText::Layout& CellText::Get(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look,
+                                      int textPx) {
+  if (textPx < 0) textPx = widthPx;
   if (cacheSheet_ != &sheet) {
     cache_.clear();
     cacheSheet_ = &sheet;
@@ -187,15 +189,18 @@ const CellText::Layout& CellText::Get(const Sheet& sheet, const CellInfo& cell, 
   const uint64_t key = (static_cast<uint64_t>(cell.row) << 14) | cell.col;
   auto& slot = cache_[key];
   if (!slot) slot = std::make_unique<Layout>();
-  if (slot->widthPx != widthPx || !(slot->look == look)) Make(sheet, cell, widthPx, look, *slot);
+  if (slot->widthPx != widthPx || slot->textPx != textPx || !(slot->look == look))
+    Make(sheet, cell, widthPx, look, textPx, *slot);
   return *slot;
 }
 
-void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look, Layout& out) {
+void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look, int textPx,
+                    Layout& out) {
   out = Layout{};
   out.widthPx = widthPx;
+  out.textPx = textPx;
   out.look = look;
-  Show(sheet, cell, widthPx, out.shown, look.numFmt);
+  Show(sheet, cell, textPx, out.shown, look.numFmt);
   const Styles& st = book_.GetStyles();
   const Xf& xf = st.CellXf(cell.style);
   const Alignment& al = xf.alignment;
