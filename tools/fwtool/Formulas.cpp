@@ -104,7 +104,7 @@ int RunFormulas(const Options& options) {
     if (IsWorkbookFile(f)) files.push_back(f);
   size_t formulas = 0, counted = 0, matched = 0, volatileOnes = 0, unsupported = 0, uncached = 0, failed = 0;
   std::map<std::string, size_t> missing;
-  std::vector<std::string> mismatches;
+  std::vector<std::string> mismatches, kept;
   for (const auto& file : files) {
     fw::pkg::Status status;
     auto book = ReadWorkbook(file, status, true);
@@ -148,6 +148,9 @@ int RunFormulas(const Options& options) {
       if (!e.HasFormula(s.sheet, r, c) || e.Stale(s.sheet, r, c)) {
         ++unsupported;
         Unimplemented(s.formula, missing);
+        kept.push_back(fw::WideToUtf8(file.filename().wstring()) + " | " +
+                       book->GetSheet(static_cast<size_t>(s.sheet)).Name() + "!" + CellName(s.row, s.col) + " | `=" +
+                       s.formula.substr(0, 120) + "`");
         continue;
       }
       if (excluded[k]) {
@@ -189,6 +192,12 @@ int RunFormulas(const Options& options) {
     for (const auto& m : mismatches) out << m << "\n";
     out << "\n## Not implemented\n\nFunction | Formulas\n---|---\n";
     for (const auto& [n, name] : byUse) out << name << " | " << n << "\n";
+    out << "\n## Kept as cached (not recalculated)\n\nFile | Cell | Formula\n---|---|---\n";
+    for (const auto& k : kept) out << k << "\n";
+  }
+  if (options.minMatch >= 0 && pct < options.minMatch) {
+    std::printf("FAIL: %.2f %% of compared formulas match, below %.2f %%\n", pct, options.minMatch);
+    return 1;
   }
   return failed ? 1 : 0;
 }

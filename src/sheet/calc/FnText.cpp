@@ -196,25 +196,28 @@ void Text(Call& c) {
   if (!c.Text(1, format)) return;
   const Value& v = c.arg(0);
   if (v.IsError()) return c.Fail(v.error());
-  double d;
+  CellView x;
+  x.type = Type::Number;
   if (v.IsText()) {
-    if (!c.m.host.ParseNumber(v.text(), d)) {
-      // Text goes through the format's text section; without one it stays as it is.
-      if (format.find('@') == std::string::npos && format.find(';') == std::string::npos)
-        return SetText(c, std::string(v.text()));
-      c.m.unsupported = true;
-      return c.Fail(Err::Value);
+    if (!c.m.host.ParseNumber(v.text(), x.num)) {  // text goes through the format's text section
+      x.type = Type::Text;
+      x.text = v.text();
     }
   } else if (v.IsBool()) {
     return SetText(c, v.boolean() ? "TRUE" : "FALSE");
   } else {
-    d = v.IsNumber() ? v.number() : 0;
+    x.num = v.IsNumber() ? v.number() : 0;
   }
   std::string out;
-  if (!c.m.host.FormatText(d, format, out)) {
-    c.m.unsupported = true;  // no number-format engine: keep the cached value
+  Err e = Err::None;
+  if (!c.m.host.FormatText(x, format, out, e)) {
+    // No number-format engine: text without a text section stays as it is; else keep the cached value.
+    if (x.type == Type::Text && format.find('@') == std::string::npos && format.find(';') == std::string::npos)
+      return SetText(c, std::string(v.text()));
+    c.m.unsupported = true;
     return c.Fail(Err::Value);
   }
+  if (e != Err::None) return c.Fail(e);
   SetText(c, out);
 }
 

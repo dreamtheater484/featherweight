@@ -427,7 +427,8 @@ void Engine::Collect(const uint8_t* code, size_t size, const Cell& at, std::vect
         k += l;
         std::string_view c2 = ReadStr(p + k, &l);
         Area a;
-        if (host_.Table(table, at.sheet, at.row, at.col, p[1], c1, c2, a)) out.push_back(a);
+        Err e = Err::None;
+        if (host_.Table(table, at.sheet, at.row, at.col, p[1], c1, c2, a, e)) out.push_back(a);
         break;
       }
       default: break;

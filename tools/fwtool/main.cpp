@@ -54,6 +54,9 @@ constexpr const char* kUsage =
     "  fwtool lines [--out DIR] <reference folder or PDF>...\n"
     "      Word's lines in its reference PDFs: page sizes, and each line's story, position and\n"
     "      text. With --out, writes them as layout dumps (docs/layout-dump.md).\n"
+    "  fwtool formulas [--locale en-NL] [--report FILE] [--min-match M] <workbooks or folders>...\n"
+    "      Workbooks (S1): recalculates every formula and compares it with the value Excel saved\n"
+    "      (volatile ones and their dependents aside), in the region Excel calculated in.\n"
     "  fwtool compare --cells [--json FILE] [--min-cells C] <reference folder>\n"
     "      Workbooks (S1): each visible cell's text as Featherweight formats it against Excel's\n"
     "      (the cells files beside the reference PDFs), in the locale Excel recorded. Differences\n"
@@ -257,6 +260,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--json" && i + 1 < argc) options.jsonOut = argv[++i];
     else if (arg == L"--report" && i + 1 < argc) options.reportOut = argv[++i];
     else if (arg == L"--locale" && i + 1 < argc) options.locale = argv[++i];
+    else if (arg == L"--min-match" && i + 1 < argc) options.minMatch = _wtof(argv[++i]);
     else if (arg == L"--min-pages" && i + 1 < argc) options.minPages = _wtof(argv[++i]);
     else if (arg == L"--min-lines" && i + 1 < argc) options.minLines = _wtof(argv[++i]);
     else if (arg == L"--self-test") options.selfTest = true;

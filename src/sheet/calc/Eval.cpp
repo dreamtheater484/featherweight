@@ -648,11 +648,12 @@ void Machine::Run(const uint8_t* p, const uint8_t* end, bool top) {
         k += l;
         std::string_view c2 = ReadStr(p + k, &l);
         Area a;
-        if (host.Table(table, at.sheet, at.row, at.col, items, c1, c2, a)) {
+        Err e = Err::None;
+        if (host.Table(table, at.sheet, at.row, at.col, items, c1, c2, a, e)) {
           stack.push_back(Value::Ref(a));
-        } else {  // tables the host doesn't know (yet): keep the cached value
-          unsupported = true;
-          stack.push_back(Value::Error(Err::Ref));
+        } else {
+          if (e == Err::None) unsupported = true;  // tables the host doesn't know: keep the cached value
+          stack.push_back(Value::Error(e == Err::None ? Err::Ref : e));
         }
         break;
       }
