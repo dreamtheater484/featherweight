@@ -11,6 +11,7 @@ target_sources(fwsheet PRIVATE
   FnMath.cpp
   FnFinance.cpp
   FnShape.cpp
+  FnStat.cpp
   FnTrig.cpp
   FnText.cpp
   Functions.cpp

@@ -328,6 +328,11 @@ FW_FN(Coth) FW_FN(Csc) FW_FN(Csch) FW_FN(Decimal) FW_FN(Degrees) FW_FN(Fact) FW_
 FW_FN(Lcm) FW_FN(MDeterm) FW_FN(MInverse) FW_FN(MMult) FW_FN(MUnit) FW_FN(Multinomial) FW_FN(Permut)
 FW_FN(PermutationA) FW_FN(Radians) FW_FN(Roman) FW_FN(Sec) FW_FN(Sech) FW_FN(SeriesSum) FW_FN(Sin)
 FW_FN(Sinh) FW_FN(SqrtPi) FW_FN(SumX2mY2) FW_FN(SumX2pY2) FW_FN(SumXmY2) FW_FN(Tan) FW_FN(Tanh)
+FW_FN(AveDev) FW_FN(Correl) FW_FN(CovarP) FW_FN(CovarS) FW_FN(DevSq) FW_FN(Fisher) FW_FN(FisherInv)
+FW_FN(Forecast) FW_FN(Frequency) FW_FN(GeoMean) FW_FN(Growth) FW_FN(HarMean) FW_FN(Intercept) FW_FN(Kurt)
+FW_FN(Linest) FW_FN(Logest) FW_FN(ModeMult) FW_FN(PercentRankExc) FW_FN(PercentRankInc) FW_FN(Prob)
+FW_FN(Rsq) FW_FN(Skew) FW_FN(SkewP) FW_FN(Slope) FW_FN(StDevA) FW_FN(StDevPA) FW_FN(Standardize) FW_FN(SteYX)
+FW_FN(Trend) FW_FN(TrimMean) FW_FN(VarA) FW_FN(VarPA)
 #undef FW_FN
 }  // namespace fn
 
