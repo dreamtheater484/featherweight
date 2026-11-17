@@ -669,6 +669,7 @@ bool WorkbookView::CommitEdit(bool fill) {
     r = Ed().SetCell(sheet, editCell_.row, editCell_.col, in);
   }
   if (EditRefused(r)) return false;
+  if (!fill) AutoExpandTable(sheet, editCell_);  // s3-data: the table grows, as in Excel
   finish();
   return true;
 }

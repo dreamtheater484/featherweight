@@ -1250,6 +1250,41 @@ bool WorkbookView::ConvertToRange(size_t index) {
   return true;
 }
 
+void WorkbookView::AutoExpandTable(int sheet, CellAddr cell) {
+  if (sheet != static_cast<int>(sheet_) || !Ready()) return;
+  const Sheet& s = Current();
+  if (s.GetValue(cell.row, cell.col).type == ValueType::Empty) {
+    FormulaInfo fi;
+    if (!s.GetFormula(cell.row, cell.col, fi)) return;
+  }
+  const std::vector<Table>& tables = s.Tables();
+  for (size_t i = 0; i < tables.size(); ++i) {
+    Table t = tables[i];
+    const bool below = !t.totalsRows && cell.row == t.ref.lastRow + 1 && cell.col >= t.ref.firstCol && cell.col <= t.ref.lastCol;
+    const bool right = cell.col == t.ref.lastCol + 1 && cell.row >= t.ref.firstRow && cell.row <= t.ref.lastRow;
+    if (!below && !right) continue;
+    // Excel's AutoCorrect: the table takes the new row or column, as a step of its own after the value.
+    edit::EditGroup group(Ed(), u"Table AutoExpansion");
+    if (below) {
+      ++t.ref.lastRow;
+    } else {
+      std::string name;
+      const Value h = s.GetValue(t.ref.firstRow, cell.col);
+      if (t.headerRows && h.type == ValueType::String) name = std::string(h.text);
+      for (uint32_t n = static_cast<uint32_t>(t.columns.size()) + 1; name.empty() || t.FindColumn(name) >= 0; ++n)
+        name = "Column" + std::to_string(n);
+      if (t.headerRows && !(h.type == ValueType::String && std::string(h.text) == name) &&
+          EditRefused(Ed().SetCell(sheet, t.ref.firstRow, cell.col, edit::CellInput::Text(name))))
+        return;
+      ++t.ref.lastCol;
+      t.columns.push_back(TableColumn{0, name});
+    }
+    if (EditRefused(Ed().SetTable(sheet, i, t))) return;
+    group.done = true;
+    return;
+  }
+}
+
 bool WorkbookView::TableScriptOp(const std::wstring& arg) {
   // table:create[,noheaders][,<style>]; table:total; table:style,<name>; table:option,<rows|cols|first|last|filter>;
   // table:name,<name>; table:convert. On the active cell's table (create: the selection).

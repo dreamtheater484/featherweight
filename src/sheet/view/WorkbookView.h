@@ -489,7 +489,8 @@ class WorkbookView : public PagedView {
   bool CreateTable(Range r, bool headers, const std::string& style);
   bool ChangeTable(size_t index, const std::function<void(Table&)>& change, const char16_t* name);
   bool SetTotalRow(size_t index, bool on);
-  bool ConvertToRange(size_t index);  // formulas that use the table refer to its cells instead
+  bool ConvertToRange(size_t index);
+  void AutoExpandTable(int sheet, CellAddr cell);  // a value typed just below or right of a table  // formulas that use the table refer to its cells instead
   bool TableScriptOp(const std::wstring& arg);  // table:
   // ---- Defined names (WorkbookNames.cpp): the Name Manager, Create from Selection, Paste Names.
   bool NamesCommand(int cmd);
