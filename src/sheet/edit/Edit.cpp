@@ -3179,29 +3179,38 @@ void Editor::RewriteSheetRefs(int skip, const std::function<std::string(std::str
 
 namespace {
 
-// References after cells `from` of sheet `sheet` were cut and pasted over `to` (the same size, the
-// same sheet), as Excel rewrites them (measured): one wholly inside the cut cells follows them,
-// absolute or not, from any sheet or name; covered cells that weren't cut drop out of a reference
-// as deleted cells do (lines at its edges; when some are still inside, it stays as it was), and one
-// left with none is #REF!; the rest stay, whole rows and columns and 3-D references too. Formulas
-// are compiled and printed for A1, where a reference's numbers are the cells it names.
+// References after cells `from` of sheet `fromSheet` were cut and pasted over `to` of sheet
+// `toSheet` (the same size), as Excel rewrites them (measured): one wholly inside the cut cells
+// follows them, absolute or not, from any sheet or name (to the other sheet: calc names it so);
+// covered cells that weren't cut drop out of a reference as deleted cells do (lines at its edges;
+// when some are still inside, it stays as it was), and one left with none is #REF!; the rest stay,
+// whole rows and columns and 3-D references too. Formulas are compiled and printed for A1, where a
+// reference's numbers are the cells it names.
 class MoveMap : public calc::RefMap {
  public:
-  MoveMap(int sheet, const Range& from, const Range& to) : sheet_(sheet), from_(from), to_(to) {}
+  MoveMap(int fromSheet, const Range& from, int toSheet, const Range& to)
+      : src_(fromSheet), dst_(toSheet), from_(from), to_(to) {}
   mutable bool changed = false;
 
-  bool Map(int sheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t, bool wholeRows,
+  bool Map(int sheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t abs, bool wholeRows,
            bool wholeCols) const override {
-    if (sheet != sheet_ || wholeRows || wholeCols || r1 < 0 || c1 < 0 || r2 < r1 || c2 < c1) return true;
+    int at = sheet;
+    return MapTo(sheet, at, r1, c1, r2, c2, abs, wholeRows, wholeCols);
+  }
+
+  bool MapTo(int sheet, int& toSheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t, bool wholeRows,
+             bool wholeCols) const override {
+    if ((sheet != src_ && sheet != dst_) || wholeRows || wholeCols || r1 < 0 || c1 < 0 || r2 < r1 || c2 < c1) return true;
     auto range = [](int64_t a1, int64_t b1, int64_t a2, int64_t b2) {
       return Range{static_cast<uint32_t>(a1), static_cast<uint32_t>(b1), static_cast<uint32_t>(a2), static_cast<uint32_t>(b2)};
     };
+    const bool same = src_ == dst_;
     int64_t t1 = r1, t2 = r2, l1 = c1, l2 = c2;
-    if (Overlaps(range(t1, l1, t2, l2), to_)) {
+    if (sheet == dst_ && Overlaps(range(t1, l1, t2, l2), to_)) {
       // A line of it inside `to` with none of it cut drops off.
       auto over = [&](int64_t a1, int64_t b1, int64_t a2, int64_t b2) {
         const Range line = range(a1, b1, a2, b2);
-        return Inside(line, to_) && !Overlaps(line, from_);
+        return Inside(line, to_) && !(same && Overlaps(line, from_));
       };
       while (t1 <= t2 && l1 <= l2) {
         if (over(t1, l1, t1, l2)) ++t1;
@@ -3218,36 +3227,37 @@ class MoveMap : public calc::RefMap {
       if (Overlaps(left, to_)) {
         const Range in{std::max(left.firstRow, to_.firstRow), std::max(left.firstCol, to_.firstCol),
                        std::min(left.lastRow, to_.lastRow), std::min(left.lastCol, to_.lastCol)};
-        if (!Inside(in, from_)) t1 = r1, t2 = r2, l1 = c1, l2 = c2;  // covered cells still inside
+        if (!same || !Inside(in, from_)) t1 = r1, t2 = r2, l1 = c1, l2 = c2;  // covered cells still inside
       }
     }
-    if (Inside(range(t1, l1, t2, l2), from_)) {
+    if (sheet == src_ && Inside(range(t1, l1, t2, l2), from_)) {
       const int64_t dr = static_cast<int64_t>(to_.firstRow) - from_.firstRow;
       const int64_t dc = static_cast<int64_t>(to_.firstCol) - from_.firstCol;
       t1 += dr, t2 += dr, l1 += dc, l2 += dc;
+      toSheet = dst_;
     }
-    if (t1 != r1 || t2 != r2 || l1 != c1 || l2 != c2) changed = true;
+    if (toSheet != sheet || t1 != r1 || t2 != r2 || l1 != c1 || l2 != c2) changed = true;
     r1 = static_cast<int32_t>(t1), r2 = static_cast<int32_t>(t2);
     c1 = static_cast<int32_t>(l1), c2 = static_cast<int32_t>(l2);
     return true;
   }
 
  private:
-  int sheet_;
+  int src_, dst_;
   Range from_, to_;
 };
 
-// Whether a shared formula's references, as they read in any cell of its group `group`, reach `a`
-// or `b` of sheet `sheet`: then a move changes them differently from cell to cell, and the group
-// can't stay shared. Printed for the group's master cell.
+// Whether a shared formula's references, as they read in any cell of its group `group`, reach area
+// `a` of sheet `sa` or `b` of sheet `sb`: then a move changes them differently from cell to cell,
+// and the group can't stay shared. Printed for the group's master cell.
 class Reaches : public calc::RefMap {
  public:
-  Reaches(int sheet, const Range& a, const Range& b, const Range& group) : sheet_(sheet), a_(a), b_(b), g_(group) {}
+  Reaches(int sa, const Range& a, int sb, const Range& b, const Range& group) : sa_(sa), sb_(sb), a_(a), b_(b), g_(group) {}
   mutable bool hit = false;
 
   bool Map(int sheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t abs, bool wholeRows,
            bool wholeCols) const override {
-    if (sheet != sheet_ || wholeRows || wholeCols) return true;
+    if ((sheet != sa_ && sheet != sb_) || wholeRows || wholeCols) return true;
     // A relative part is an offset each cell of the group adds to its own row or column.
     auto lo = [](int32_t v, bool fixed, uint32_t first) { return fixed ? int64_t{v} : int64_t{first} + v; };
     const int64_t top = std::min(lo(r1, abs & kRow1, g_.firstRow), lo(r2, abs & kRow2, g_.firstRow));
@@ -3257,12 +3267,12 @@ class Reaches : public calc::RefMap {
     if (bottom < 0 || rightmost < 0) return true;
     const Range swept{static_cast<uint32_t>(std::max<int64_t>(top, 0)), static_cast<uint32_t>(std::max<int64_t>(leftmost, 0)),
                       static_cast<uint32_t>(bottom), static_cast<uint32_t>(rightmost)};
-    hit = hit || Overlaps(swept, a_) || Overlaps(swept, b_);
+    hit = hit || (sheet == sa_ && Overlaps(swept, a_)) || (sheet == sb_ && Overlaps(swept, b_));
     return true;
   }
 
  private:
-  int sheet_;
+  int sa_, sb_;
   Range a_, b_, g_;
 };
 
@@ -3293,51 +3303,56 @@ CellInput InputOf(const CellInfo& cell, const FormulaInfo* f, int sheet, calc::N
 
 }  // namespace
 
-Result Editor::MoveCells(int sheet, const Range& from, CellAddr to, std::u16string stepName) {
-  Rec rec(*this, JournalOp::MoveCells, [&](JournalRecord& w) { w.I(sheet).R(from).A(to).S16(stepName); });
+Result Editor::MoveCells(int sheet, const Range& from, int toSheet, CellAddr to, std::u16string stepName) {
+  Rec rec(*this, JournalOp::MoveCells, [&](JournalRecord& w) { w.I(sheet).R(from).A(to).S16(stepName).I(toSheet); });
   return rec.Done([&]() -> Result {
-    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    const int n = static_cast<int>(book_.SheetCount());
+    if (sheet < 0 || sheet >= n || toSheet < 0 || toSheet >= n) return NoSheet();
     if (!Valid(from) || to.row >= kMaxRows || to.col >= kMaxCols) return BadRange();
     const Range dest{to.row, to.col, to.row + (from.lastRow - from.firstRow), to.col + (from.lastCol - from.firstCol)};
     if (!Valid(dest)) return BadRange();
-    if (dest == from) return {};
+    if (dest == from && toSheet == sheet) return {};
     for (size_t i = 0; i < book_.SheetCount(); ++i)
       if (!book_.LoadSheet(i).Ok()) return Result::Fail(u"A sheet of this workbook couldn't be read.");
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet has no cells.");
+    Sheet& d = book_.GetSheet(static_cast<size_t>(toSheet));
+    if (s.Kind() != SheetKind::Worksheet || d.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet has no cells.");
 
-    // ---- What Excel refuses, and what isn't done here yet.
-    auto part = [&](const Range& x) { return (Overlaps(x, from) && !Inside(x, from)) || (Overlaps(x, dest) && !Inside(x, dest)); };
-    for (const Range& g : s.Merges())
-      if (part(g)) return Result::Fail(u"We can't do that to a merged cell.");
-    for (const Range& a : State::Arrays(s))
-      if (part(a)) return Result::Fail(u"You can't change part of an array.");
+    // ---- What Excel refuses, and what isn't done here yet: on each sheet, its area.
     std::vector<Range> spills;  // dynamic arrays moving: the cells they spill into aren't typed again
-    for (const FCell& c : FormulaCellsOf(s)) {
-      if (c.id >= A::Formulas(s).size()) continue;
-      const FormulaRec& f = A::Formulas(s)[c.id];
-      if (!f.dynamic || !f.hasRef) {
-        const Range at = Range::Cell(c.row, c.col);
-        if (f.kind == FormulaKind::DataTable && (Overlaps(at, from) || Overlaps(at, dest)))
-          return Result::Fail(u"Featherweight can't move a what-if data table yet.");
-        continue;
-      }
-      if (part(f.ref)) return Result::Fail(u"You can't change part of an array.");
-      if (Inside(f.ref, from)) spills.push_back(f.ref);
-    }
-    for (const Table& t : s.Tables())
-      if (Overlaps(t.ref, from) || Overlaps(t.ref, dest))
-        return Result::Fail(u"Featherweight can't move cells into or out of a table yet.");
-    if (pkg::Package* package = book_.GetPackage(); package && !s.PartName().empty())
-      if (const pkg::RelationshipSet* rels = package->RelationshipsOf(s.PartName()))
-        for (const pkg::Relationship& rel : rels->items) {
-          std::vector<uint8_t> bytes;
-          Range where;
-          if (!rel.external && EndsWith(rel.type, "/pivotTable") && package->ReadPart(rel.targetPart, bytes).Ok() &&
-              PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
-              (Overlaps(where, from) || Overlaps(where, dest)))
-            return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
+    auto check = [&](Sheet& x, const Range& area, bool cut) -> Result {
+      auto part = [&](const Range& r) { return Overlaps(r, area) && !Inside(r, area); };
+      for (const Range& g : x.Merges())
+        if (part(g)) return Result::Fail(u"We can't do that to a merged cell.");
+      for (const Range& a : State::Arrays(x))
+        if (part(a)) return Result::Fail(u"You can't change part of an array.");
+      for (const FCell& c : FormulaCellsOf(x)) {
+        if (c.id >= A::Formulas(x).size()) continue;
+        const FormulaRec& f = A::Formulas(x)[c.id];
+        if (!f.dynamic || !f.hasRef) {
+          if (f.kind == FormulaKind::DataTable && Overlaps(Range::Cell(c.row, c.col), area))
+            return Result::Fail(u"Featherweight can't move a what-if data table yet.");
+          continue;
         }
+        if (part(f.ref)) return Result::Fail(u"You can't change part of an array.");
+        if (cut && Inside(f.ref, area)) spills.push_back(f.ref);
+      }
+      for (const Table& t : x.Tables())
+        if (Overlaps(t.ref, area)) return Result::Fail(u"Featherweight can't move cells into or out of a table yet.");
+      if (pkg::Package* package = book_.GetPackage(); package && !x.PartName().empty())
+        if (const pkg::RelationshipSet* rels = package->RelationshipsOf(x.PartName()))
+          for (const pkg::Relationship& rel : rels->items) {
+            std::vector<uint8_t> bytes;
+            Range where;
+            if (!rel.external && EndsWith(rel.type, "/pivotTable") && package->ReadPart(rel.targetPart, bytes).Ok() &&
+                PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
+                Overlaps(where, area))
+              return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
+          }
+      return Result{};
+    };
+    if (Result r = check(s, from, true); !r) return r;
+    if (Result r = check(d, dest, false); !r) return r;
 
     return Run(*this, stepName.empty() ? std::u16string(u"Paste") : stepName, [&]() -> Result {
       BookNames names(book_);
@@ -3353,14 +3368,14 @@ Result Editor::MoveCells(int sheet, const Range& from, CellAddr to, std::u16stri
           if (c.id >= recs.size()) continue;
           const FormulaRec& f = recs[c.id];
           if (f.kind != FormulaKind::Shared || f.text == kNone || f.sharedIndex == kNone || !f.hasRef) continue;
-          bool hit = xi == sheet && (Overlaps(f.ref, from) || Overlaps(f.ref, dest));
+          bool hit = (xi == sheet && Overlaps(f.ref, from)) || (xi == toSheet && Overlaps(f.ref, dest));
           if (!hit) {
             calc::CompileOptions at;
             at.sheet = xi;
             at.row = static_cast<int32_t>(c.row);
             at.col = static_cast<int32_t>(c.col);
             if (auto compiled = calc::Compile(A::Texts(x).Get(f.text), at, names)) {
-              Reaches probe(sheet, from, dest, f.ref);
+              Reaches probe(sheet, from, toSheet, dest, f.ref);
               calc::PrintOptions how;
               how.map = &probe;
               (void)calc::Print(*compiled, at, names, how);
@@ -3381,24 +3396,8 @@ Result Editor::MoveCells(int sheet, const Range& from, CellAddr to, std::u16stri
         if (Result r = SetCells(xi, own); !r) return r;
       }
 
-      // ---- References everywhere: cells, names, tables, rules, charts, drawings, controls.
-      const MoveMap map(sheet, from, dest);
-      RewriteSheetRefs(
-          -1,
-          [&](std::string_view text, int at) {
-            calc::CompileOptions o;
-            o.sheet = at;
-            auto f = calc::Compile(text, o, names);
-            if (!f) return std::string(text);
-            map.changed = false;
-            calc::PrintOptions how;
-            how.map = &map;
-            std::string out = calc::Print(*f, o, names, how);
-            return map.changed ? out : std::string(text);  // as written when nothing moved
-          },
-          [](std::string_view text) { return text.find_first_of("0123456789") != std::string_view::npos; });
-
-      // ---- The cut cells typed again where they go; cleared where they were and where they go.
+      // ---- The cut cells as they'll be typed where they go: their formulas read there.
+      const MoveMap map(sheet, from, toSheet, dest);
       const uint32_t dr = dest.firstRow - from.firstRow, dc = dest.firstCol - from.firstCol;
       auto moved = [&](const Range& r) { return Range{r.firstRow + dr, r.firstCol + dc, r.lastRow + dr, r.lastCol + dc}; };
       std::vector<std::pair<CellAddr, CellInput>> cells;
@@ -3419,6 +3418,22 @@ Result Editor::MoveCells(int sheet, const Range& from, CellAddr to, std::u16stri
           return true;
         }
         CellInput in = InputOf(cell, formula ? &f : nullptr, sheet, names);
+        if (!in.formula.empty()) {
+          calc::CompileOptions o;
+          o.sheet = sheet;
+          if (auto compiled = calc::Compile(in.formula, o, names)) {
+            map.changed = false;
+            calc::CompileOptions print;
+            print.sheet = toSheet;
+            calc::PrintOptions how;
+            how.map = &map;
+            how.homeSheet = sheet;
+            std::string out = calc::Print(*compiled, print, names, how);
+            // On its own sheet, as written when nothing moved; on another, references to cells
+            // left behind take their sheet's name.
+            if (map.changed || toSheet != sheet) in.formula = std::move(out);
+          }
+        }
         if (array) {
           in.array = true;
           in.arrayRange = moved(f.ref);
@@ -3426,16 +3441,34 @@ Result Editor::MoveCells(int sheet, const Range& from, CellAddr to, std::u16stri
         cells.emplace_back(there, std::move(in));
         return true;
       });
-      for (const Range& r : {from, dest}) {
-        if (Result x = Unmerge(sheet, r); !x) return x;
-        if (Result x = ClearAll(sheet, r); !x) return x;
+
+      // ---- References everywhere: cells, names, tables, rules, charts, drawings, controls.
+      RewriteSheetRefs(
+          -1,
+          [&](std::string_view text, int at) {
+            calc::CompileOptions o;
+            o.sheet = at;
+            auto f = calc::Compile(text, o, names);
+            if (!f) return std::string(text);
+            map.changed = false;
+            calc::PrintOptions how;
+            how.map = &map;
+            std::string out = calc::Print(*f, o, names, how);
+            return map.changed ? out : std::string(text);  // as written when nothing moved
+          },
+          [](std::string_view text) { return text.find_first_of("0123456789") != std::string_view::npos; });
+
+      // ---- Cleared where they were and where they go, then typed there.
+      for (const auto& [x, r] : {std::pair<int, Range>{sheet, from}, std::pair<int, Range>{toSheet, dest}}) {
+        if (Result e = Unmerge(x, r); !e) return e;
+        if (Result e = ClearAll(x, r); !e) return e;
       }
-      if (Result x = SetCells(sheet, cells); !x) return x;
+      if (Result x = SetCells(toSheet, cells); !x) return x;
       for (const auto& [at, style] : styles)
         if (style)
-          if (Result x = SetStyle(sheet, Range::Cell(at.row, at.col), style); !x) return x;
+          if (Result x = SetStyle(toSheet, Range::Cell(at.row, at.col), style); !x) return x;
       for (const Range& g : merges)
-        if (Result x = Merge(sheet, g); !x) return x;
+        if (Result x = Merge(toSheet, g); !x) return x;
       return Result{};
     });
   }());

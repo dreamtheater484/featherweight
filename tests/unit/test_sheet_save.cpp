@@ -858,13 +858,15 @@ TEST(sheet_save_moved_cells) {
   Editor ed(*book);
   CHECK(ed.MoveCells(0, Range{0, 0, 1, 0}, CellAddr{0, 5}));  // A1:A2 to F1:F2
   CHECK(ed.MoveCells(0, Range{4, 0, 4, 1}, CellAddr{7, 2}));  // the merge A5:B5 to C8:D8
+  CHECK(ed.MoveCells(0, Range{0, 5, 1, 5}, 1, CellAddr{1, 1}));  // F1:F2 to Sheet2!B2:B3
   std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-move-cells");
   CheckClean(saved);
   auto again = OpenZip(saved);
   if (!again) return;
   const Sheet& s = again->GetSheet(0);
-  CHECK(FormulaText(s, 0, 1) == "F1*2" && FormulaText(s, 1, 1) == "F2*2" && FormulaText(s, 2, 1) == "A3*2");
-  CHECK(FormulaText(s, 0, 3) == "SUM(F1:F2)" && s.Merges().size() == 1 && s.Merges()[0] == (Range{7, 2, 7, 3}));
+  CHECK(FormulaText(s, 0, 1) == "Sheet2!B2*2" && FormulaText(s, 1, 1) == "Sheet2!B3*2" && FormulaText(s, 2, 1) == "A3*2");
+  CHECK(FormulaText(s, 0, 3) == "SUM(Sheet2!B2:B3)" && s.Merges().size() == 1 && s.Merges()[0] == (Range{7, 2, 7, 3}));
+  CHECK(Text(again->GetSheet(1), 1, 1) == "1" && Text(again->GetSheet(1), 2, 1) == "2");
 }
 
 // s2-corpus's registry findings: a formula in a cell kept as written (its value has xml:space) is
