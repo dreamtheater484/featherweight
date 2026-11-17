@@ -161,7 +161,31 @@ void FileSession::WriteRecovery(std::span<const uint8_t> bytes) {
   if (!session.Started() && !session.Start(Config().recovery)) return;
   if (autosave_.empty()) autosave_ = session.NewFile();
   const std::wstring where = origin_ == Origin::File ? path_ : suggested_;
+  journal_ = false;  // replaced by a whole autosave
   if (!bytes.empty() && pkg::recovery::Write(autosave_, where, Title(), bytes)) autosaved_ = generation_;
+}
+
+bool FileSession::WriteJournal(std::span<const uint8_t> opened, std::string_view meta, std::string_view all,
+                               std::string_view unwritten) {
+  if (!AutosaveDue() || Protected()) return false;
+  pkg::recovery::Session& session = RecoverySession();
+  if (!session.Started() && !session.Start(Config().recovery)) return false;
+  if (autosave_.empty()) {
+    autosave_ = session.NewFile();
+    journal_ = false;
+  }
+  auto bytes = [](std::string_view s) { return std::span(reinterpret_cast<const uint8_t*>(s.data()), s.size()); };
+  bool ok;
+  if (!journal_) {
+    const std::wstring where = origin_ == Origin::File ? path_ : suggested_;
+    ok = pkg::recovery::StartJournal(autosave_, where, Title(), opened, meta) &&
+         pkg::recovery::AppendJournal(autosave_, bytes(all));
+  } else {
+    ok = pkg::recovery::AppendJournal(autosave_, bytes(unwritten));
+  }
+  journal_ = ok;  // a piece that failed may be cut short in the file: the next one starts it again
+  if (ok) autosaved_ = generation_;
+  return ok;
 }
 
 void FileSession::WriteAutosave(std::vector<uint8_t> document) {
@@ -206,5 +230,6 @@ void FileSession::Clean() {
   ownerWritten_ = false;
   if (!autosave_.empty()) pkg::recovery::Remove(autosave_);
   autosave_.clear();
+  journal_ = false;
   autosaved_ = generation_;
 }

@@ -5,12 +5,15 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <map>
+#include <new>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "pkg/Formula.h"
 #include "sheet/calc/Formula.h"
 #include "sheet/calc/Typing.h"
+#include "sheet/edit/Journal.h"
 #include "sheet/edit/Refs.h"
 #include "sheet/xlsx/Internal.h"
 #include "sheet/numfmt/NumFormat.h"
@@ -1131,6 +1134,44 @@ struct Editor::State {
 Editor::Editor(Workbook& book) : book_(book), s_(std::make_unique<State>(book)) {}
 Editor::~Editor() = default;
 
+// Records an edit in the journal (Journal.h): when it succeeds (Done) and is the outermost Editor
+// call, or with `always` whatever called it (formats added). Void calls set `commit`: recorded
+// however they return.
+struct Editor::Rec {
+  template <class Write>
+  Rec(Editor& e, JournalOp op, Write&& write, bool always = false)
+      : ed(e), on(e.journal_ && (always || e.calls_ == 0)), rec(op) {
+    ++e.calls_;
+    if (on) write(rec);
+  }
+  ~Rec() {
+    --ed.calls_;
+    if (commit) Add();
+  }
+  Rec(const Rec&) = delete;
+  Rec& operator=(const Rec&) = delete;
+  Result Done(Result r) {
+    if (r) Add();
+    return r;
+  }
+  void Add() {
+    if (!on) return;
+    try {
+      ed.journal_->Add(rec);
+    } catch (const std::bad_alloc&) {  // no room for it: recovery gets the edits before it
+    }
+  }
+  Editor& ed;
+  const bool on;
+  bool commit = false;
+  JournalRecord rec;
+};
+
+void Editor::DropHistory() {
+  s_->undo.clear();
+  s_->redo.clear();
+}
+
 bool Editor::CanEdit(std::u16string* why) const {
   (void)why;
   return true;
@@ -1224,118 +1265,124 @@ Result Editor::SetCell(int sheet, uint32_t row, uint32_t col, const CellInput& i
 }
 
 Result Editor::SetCells(int sheet, const std::vector<std::pair<CellAddr, CellInput>>& cells) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  const std::vector<Range> arrays = State::Arrays(s);
-  for (const auto& [at, in] : cells) {
-    if (at.row >= kMaxRows || at.col >= kMaxCols) return BadRange();
-    if (Result r = CheckInput(in); !r) return r;
-    // Excel would look for a workbook by that name; a file can't name a sheet it doesn't have.
-    if (!in.formula.empty())
-      if (!MissingSheet(book_, in.formula).empty())
-        return Result::Fail(u"The formula names a sheet this workbook doesn't have.");
-    if (in.array && (in.arrayRange.firstRow != at.row || in.arrayRange.firstCol != at.col)) return BadRange();
-    if (const Range* arr = State::ArrayAt(arrays, at.row, at.col); arr && !(in.array && in.arrayRange == *arr))
-      return Result::Fail(u"You can't change part of an array.");
-    // Excel turns a formula typed into a table's header into its value as text; its value isn't
-    // known here.
-    if (!in.formula.empty())
-      for (const Table& t : s.Tables())
-        if (t.headerRows && at.row == t.ref.firstRow && at.col >= t.ref.firstCol && at.col <= t.ref.lastCol)
-          return Result::Fail(u"A table's header can't hold a formula. Type its name instead.");
-  }
-  return Run(*this, u"Typing", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    std::u16string why;
-    std::vector<Range> spills;  // blocked spill ranges: their cells changed too
-    // Typing into a dynamic array's spill range blocks it, as in Excel: it shows #SPILL! in its own
-    // cell alone, and the values it spilled go (a file whose spill overlaps a cell is repaired).
-    for (const FCell& c : FormulaCellsOf(s)) {
-      auto& recs = A::Formulas(s);
-      if (c.id >= recs.size()) continue;
-      const FormulaRec f = recs[c.id];
-      if (!f.dynamic || !f.hasRef || f.text == kNone || f.ref.firstRow != c.row || f.ref.firstCol != c.col ||
-          (f.ref.lastRow == c.row && f.ref.lastCol == c.col))
-        continue;
-      bool blocked = false;
-      for (const auto& [at, in] : cells)
-        blocked = blocked || (!(at.row == c.row && at.col == c.col) && at.row >= f.ref.firstRow && at.row <= f.ref.lastRow &&
-                              at.col >= f.ref.firstCol && at.col <= f.ref.lastCol &&
-                              (in.type != ValueType::Empty || !in.formula.empty()));
-      if (!blocked) continue;
-      spills.push_back(f.ref);
-      st.SaveFormula(sv, c.id);
-      recs[c.id].ref = Range{c.row, c.col, c.row, c.col};
-      recs[c.id].attrs = EditAttrs(A::Store(s), recs[c.id].attrs, {}, RangeName(recs[c.id].ref));
-      for (const CellAddr& a : State::StoredIn(s, f.ref)) {
-        if (a.row == c.row && a.col == c.col) continue;
-        State::Loc l = State::Find(s, a.row, a.col);
-        if (l.block != kNone && State::FormulaIdOf(*A::Blocks(s)[l.block], l.cell) != kNone) continue;  // its own formula
-        if (!st.Put(sv, a.row, a.col, nullptr, true, std::nullopt, why)) return Result::Fail(why);
-      }
-      State::Loc l = State::Find(s, c.row, c.col);
-      if (l.block != kNone) {
-        RowBlock& blk = st.Writable(sv, l.block);
-        CellRec& cell = blk.cells[l.cell];
-        if (cell.type != detail::XmlType::E) cell.flags = static_cast<uint8_t>(cell.flags & ~detail::kTypePresent);
-        cell.type = detail::XmlType::E;
-        cell.v.index = static_cast<uint32_t>(ErrorCode::Spill);
-        cell.flags |= detail::kHasValue;
-        for (CellSide& sd : blk.sides)
-          if (sd.cell == l.cell) sd.valueText = kNone;
-      }
-    }
-    Range touched{kMaxRows, kMaxCols, 0, 0};
-    bool formulas = false;
+  Rec rec(*this, JournalOp::SetCells, [&](JournalRecord& w) { w.I(sheet).U(cells.size()); for (const auto& [a, in] : cells) w.A(a).Input(in); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    const std::vector<Range> arrays = State::Arrays(s);
     for (const auto& [at, in] : cells) {
-      if (!st.Put(sv, at.row, at.col, &in, false, in.style, why)) return Result::Fail(why);
-      touched.firstRow = std::min(touched.firstRow, at.row);
-      touched.firstCol = std::min(touched.firstCol, at.col);
-      touched.lastRow = std::max(touched.lastRow, at.row);
-      touched.lastCol = std::max(touched.lastCol, at.col);
-      formulas = formulas || !in.formula.empty();
-      if (in.array) {
-        // The other cells of a new array formula hold nothing of their own.
-        for (const CellAddr& a : State::StoredIn(s, in.arrayRange))
-          if (!(a == at) && !st.Put(sv, a.row, a.col, nullptr, true, std::nullopt, why)) return Result::Fail(why);
+      if (at.row >= kMaxRows || at.col >= kMaxCols) return BadRange();
+      if (Result r = CheckInput(in); !r) return r;
+      // Excel would look for a workbook by that name; a file can't name a sheet it doesn't have.
+      if (!in.formula.empty())
+        if (!MissingSheet(book_, in.formula).empty())
+          return Result::Fail(u"The formula names a sheet this workbook doesn't have.");
+      if (in.array && (in.arrayRange.firstRow != at.row || in.arrayRange.firstCol != at.col)) return BadRange();
+      if (const Range* arr = State::ArrayAt(arrays, at.row, at.col); arr && !(in.array && in.arrayRange == *arr))
+        return Result::Fail(u"You can't change part of an array.");
+      // Excel turns a formula typed into a table's header into its value as text; its value isn't
+      // known here.
+      if (!in.formula.empty())
+        for (const Table& t : s.Tables())
+          if (t.headerRows && at.row == t.ref.firstRow && at.col >= t.ref.firstCol && at.col <= t.ref.lastCol)
+            return Result::Fail(u"A table's header can't hold a formula. Type its name instead.");
+    }
+    return Run(*this, u"Typing", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      std::u16string why;
+      std::vector<Range> spills;  // blocked spill ranges: their cells changed too
+      // Typing into a dynamic array's spill range blocks it, as in Excel: it shows #SPILL! in its own
+      // cell alone, and the values it spilled go (a file whose spill overlaps a cell is repaired).
+      for (const FCell& c : FormulaCellsOf(s)) {
+        auto& recs = A::Formulas(s);
+        if (c.id >= recs.size()) continue;
+        const FormulaRec f = recs[c.id];
+        if (!f.dynamic || !f.hasRef || f.text == kNone || f.ref.firstRow != c.row || f.ref.firstCol != c.col ||
+            (f.ref.lastRow == c.row && f.ref.lastCol == c.col))
+          continue;
+        bool blocked = false;
+        for (const auto& [at, in] : cells)
+          blocked = blocked || (!(at.row == c.row && at.col == c.col) && at.row >= f.ref.firstRow && at.row <= f.ref.lastRow &&
+                                at.col >= f.ref.firstCol && at.col <= f.ref.lastCol &&
+                                (in.type != ValueType::Empty || !in.formula.empty()));
+        if (!blocked) continue;
+        spills.push_back(f.ref);
+        st.SaveFormula(sv, c.id);
+        recs[c.id].ref = Range{c.row, c.col, c.row, c.col};
+        recs[c.id].attrs = EditAttrs(A::Store(s), recs[c.id].attrs, {}, RangeName(recs[c.id].ref));
+        for (const CellAddr& a : State::StoredIn(s, f.ref)) {
+          if (a.row == c.row && a.col == c.col) continue;
+          State::Loc l = State::Find(s, a.row, a.col);
+          if (l.block != kNone && State::FormulaIdOf(*A::Blocks(s)[l.block], l.cell) != kNone) continue;  // its own formula
+          if (!st.Put(sv, a.row, a.col, nullptr, true, std::nullopt, why)) return Result::Fail(why);
+        }
+        State::Loc l = State::Find(s, c.row, c.col);
+        if (l.block != kNone) {
+          RowBlock& blk = st.Writable(sv, l.block);
+          CellRec& cell = blk.cells[l.cell];
+          if (cell.type != detail::XmlType::E) cell.flags = static_cast<uint8_t>(cell.flags & ~detail::kTypePresent);
+          cell.type = detail::XmlType::E;
+          cell.v.index = static_cast<uint32_t>(ErrorCode::Spill);
+          cell.flags |= detail::kHasValue;
+          for (CellSide& sd : blk.sides)
+            if (sd.cell == l.cell) sd.valueText = kNone;
+        }
       }
-    }
-    for (const Range& r : spills)
-      touched = Range{std::min(touched.firstRow, r.firstRow), std::min(touched.firstCol, r.firstCol),
-                      std::max(touched.lastRow, r.lastRow), std::max(touched.lastCol, r.lastCol)};
-    if (!s.Tables().empty()) {
-      std::vector<CellAddr> at;
-      for (const auto& [a, in] : cells) at.push_back(a);
-      FixHeaders(s, at);
-    }
-    if (!cells.empty())
-      st.Change(&s, kValues | kFormulas | (std::any_of(cells.begin(), cells.end(), [](const auto& c) { return c.second.style.has_value(); }) ? kStyles : 0u),
-                touched);
-    (void)formulas;
-    return Result{};
-  });
+      Range touched{kMaxRows, kMaxCols, 0, 0};
+      bool formulas = false;
+      for (const auto& [at, in] : cells) {
+        if (!st.Put(sv, at.row, at.col, &in, false, in.style, why)) return Result::Fail(why);
+        touched.firstRow = std::min(touched.firstRow, at.row);
+        touched.firstCol = std::min(touched.firstCol, at.col);
+        touched.lastRow = std::max(touched.lastRow, at.row);
+        touched.lastCol = std::max(touched.lastCol, at.col);
+        formulas = formulas || !in.formula.empty();
+        if (in.array) {
+          // The other cells of a new array formula hold nothing of their own.
+          for (const CellAddr& a : State::StoredIn(s, in.arrayRange))
+            if (!(a == at) && !st.Put(sv, a.row, a.col, nullptr, true, std::nullopt, why)) return Result::Fail(why);
+        }
+      }
+      for (const Range& r : spills)
+        touched = Range{std::min(touched.firstRow, r.firstRow), std::min(touched.firstCol, r.firstCol),
+                        std::max(touched.lastRow, r.lastRow), std::max(touched.lastCol, r.lastCol)};
+      if (!s.Tables().empty()) {
+        std::vector<CellAddr> at;
+        for (const auto& [a, in] : cells) at.push_back(a);
+        FixHeaders(s, at);
+      }
+      if (!cells.empty())
+        st.Change(&s, kValues | kFormulas | (std::any_of(cells.begin(), cells.end(), [](const auto& c) { return c.second.style.has_value(); }) ? kStyles : 0u),
+                  touched);
+      (void)formulas;
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::ClearContents(int sheet, const Range& r) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  if (!Valid(r)) return BadRange();
-  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  std::vector<CellAddr> cells = State::StoredIn(s, r);
-  for (const Range& arr : State::Arrays(s))
-    if (Overlaps(arr, r) && !Inside(arr, r)) return Result::Fail(u"You can't change part of an array.");
-  return Run(*this, u"Clear", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    std::u16string why;
-    for (const CellAddr& a : cells)
-      if (!st.Put(sv, a.row, a.col, nullptr, true, std::nullopt, why)) return Result::Fail(why);
-    if (!s.Tables().empty()) FixHeaders(s, cells);
-    st.Change(&s, kValues | kFormulas, r);
-    return Result{};
-  });
+  Rec rec(*this, JournalOp::ClearContents, [&](JournalRecord& w) { w.I(sheet).R(r); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!Valid(r)) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    std::vector<CellAddr> cells = State::StoredIn(s, r);
+    for (const Range& arr : State::Arrays(s))
+      if (Overlaps(arr, r) && !Inside(arr, r)) return Result::Fail(u"You can't change part of an array.");
+    return Run(*this, u"Clear", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      std::u16string why;
+      for (const CellAddr& a : cells)
+        if (!st.Put(sv, a.row, a.col, nullptr, true, std::nullopt, why)) return Result::Fail(why);
+      if (!s.Tables().empty()) FixHeaders(s, cells);
+      st.Change(&s, kValues | kFormulas, r);
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::ClearFormats(int sheet, const Range& r) { return MapStyles(sheet, r, [](uint32_t) { return 0u; }); }
@@ -1352,246 +1399,303 @@ Result Editor::SetStyle(int sheet, const Range& r, uint32_t style) {
 }
 
 Result Editor::MapStyles(int sheet, const Range& r, const std::function<uint32_t(uint32_t)>& map) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  if (!Valid(r)) return BadRange();
-  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  return Run(*this, u"Format Cells", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    std::u16string why;
-    auto mapped = [&](uint32_t old) {
-      uint32_t x = map(old);
-      return x < book_.GetStyles().CellXfs().size() ? x : 0u;
-    };
-    if (WholeRows(r) && !WholeCols(r)) {
-      st.EditRows(sv, r.firstRow, r.lastRow, [&](RowRec& row) {
-        uint32_t old = (row.flags & detail::kRowCustomFormat) ? row.style : 0;
-        row.style = mapped(old);
-        if (row.style) row.flags |= detail::kRowCustomFormat;
-        else row.flags = static_cast<uint8_t>(row.flags & ~detail::kRowCustomFormat);
-      });
-      for (const CellAddr& a : State::StoredIn(s, r)) {
-        CellInfo c;
-        s.GetCell(a.row, a.col, c);
-        if (!st.Put(sv, a.row, a.col, nullptr, false, mapped(c.style), why)) return Result::Fail(why);
-      }
-    } else if (WholeCols(r)) {
-      st.EditCols(sv, r.firstCol, r.lastCol, [&](ColumnInfo& c) { c.style = mapped(c.style); });
-      // Rows with a format of their own keep showing it in these columns: their cells there get the new one.
-      std::vector<std::pair<uint32_t, uint32_t>> formattedRows;  // row, its style
-      s.ForEachRow(0, kMaxRows - 1, [&](uint32_t row, const RowInfo& info) {
-        if (info.customFormat) formattedRows.push_back({row, info.style});
-        return true;
-      });
-      if (WholeRows(r)) {
-        st.EditStoredRows(sv, 0, kMaxRows - 1, [&](RowRec& row) {
-          if (row.flags & detail::kRowCustomFormat) {
-            row.style = mapped(row.style);
-            if (!row.style) row.flags = static_cast<uint8_t>(row.flags & ~detail::kRowCustomFormat);
-          }
+  Rec rec(*this, JournalOp::MapStyles, [&](JournalRecord& w) { w.I(sheet).R(r); });
+  std::map<uint32_t, uint32_t> seen;
+  const Result result = [&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!Valid(r)) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    return Run(*this, u"Format Cells", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      std::u16string why;
+      auto mapped = [&](uint32_t old) {
+        uint32_t x = map(old);
+        if (rec.on) seen.emplace(old, x);
+        return x < book_.GetStyles().CellXfs().size() ? x : 0u;
+      };
+      if (WholeRows(r) && !WholeCols(r)) {
+        st.EditRows(sv, r.firstRow, r.lastRow, [&](RowRec& row) {
+          uint32_t old = (row.flags & detail::kRowCustomFormat) ? row.style : 0;
+          row.style = mapped(old);
+          if (row.style) row.flags |= detail::kRowCustomFormat;
+          else row.flags = static_cast<uint8_t>(row.flags & ~detail::kRowCustomFormat);
         });
+        for (const CellAddr& a : State::StoredIn(s, r)) {
+          CellInfo c;
+          s.GetCell(a.row, a.col, c);
+          if (!st.Put(sv, a.row, a.col, nullptr, false, mapped(c.style), why)) return Result::Fail(why);
+        }
+      } else if (WholeCols(r)) {
+        st.EditCols(sv, r.firstCol, r.lastCol, [&](ColumnInfo& c) { c.style = mapped(c.style); });
+        // Rows with a format of their own keep showing it in these columns: their cells there get the new one.
+        std::vector<std::pair<uint32_t, uint32_t>> formattedRows;  // row, its style
+        s.ForEachRow(0, kMaxRows - 1, [&](uint32_t row, const RowInfo& info) {
+          if (info.customFormat) formattedRows.push_back({row, info.style});
+          return true;
+        });
+        if (WholeRows(r)) {
+          st.EditStoredRows(sv, 0, kMaxRows - 1, [&](RowRec& row) {
+            if (row.flags & detail::kRowCustomFormat) {
+              row.style = mapped(row.style);
+              if (!row.style) row.flags = static_cast<uint8_t>(row.flags & ~detail::kRowCustomFormat);
+            }
+          });
+        } else {
+          for (auto [row, style] : formattedRows)
+            for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
+              CellInfo c;
+              if (s.GetCell(row, col, c)) continue;  // stored cells below
+              if (!st.Put(sv, row, col, nullptr, false, mapped(style), why)) return Result::Fail(why);
+            }
+        }
+        for (const CellAddr& a : State::StoredIn(s, r)) {
+          CellInfo c;
+          s.GetCell(a.row, a.col, c);
+          if (!st.Put(sv, a.row, a.col, nullptr, false, mapped(c.style), why)) return Result::Fail(why);
+        }
       } else {
-        for (auto [row, style] : formattedRows)
+        for (uint32_t row = r.firstRow; row <= r.lastRow; ++row)
           for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
             CellInfo c;
-            if (s.GetCell(row, col, c)) continue;  // stored cells below
-            if (!st.Put(sv, row, col, nullptr, false, mapped(style), why)) return Result::Fail(why);
+            bool stored = s.GetCell(row, col, c);
+            uint32_t now = stored ? c.style : s.StyleAt(row, col), next = mapped(now);
+            if (next == now) continue;  // nothing to change, and no cell to make
+            if (!st.Put(sv, row, col, nullptr, false, next, why)) return Result::Fail(why);
           }
       }
-      for (const CellAddr& a : State::StoredIn(s, r)) {
-        CellInfo c;
-        s.GetCell(a.row, a.col, c);
-        if (!st.Put(sv, a.row, a.col, nullptr, false, mapped(c.style), why)) return Result::Fail(why);
-      }
-    } else {
-      for (uint32_t row = r.firstRow; row <= r.lastRow; ++row)
-        for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
-          CellInfo c;
-          bool stored = s.GetCell(row, col, c);
-          uint32_t now = stored ? c.style : s.StyleAt(row, col), next = mapped(now);
-          if (next == now) continue;  // nothing to change, and no cell to make
-          if (!st.Put(sv, row, col, nullptr, false, next, why)) return Result::Fail(why);
-        }
-    }
-    st.Change(&s, kStyles, r);
-    return Result{};
-  });
+      st.Change(&s, kStyles, r);
+      return Result{};
+    });
+  }();
+  // The mapping as it was used (each format once): `map` itself can't be recorded.
+  rec.rec.U(seen.size());
+  for (const auto& [from, to] : seen) rec.rec.U(from).U(to);
+  return rec.Done(result);
 }
 
 uint32_t Editor::AddXf(const Xf& xf) {
-  StylesBuilder sb(book_.GetStyles());
-  auto& xfs = sb.CellXfs();
-  auto same = [&](const Xf& a) {
-    return a.numFmt == xf.numFmt && a.font == xf.font && a.fill == xf.fill && a.border == xf.border &&
-           a.parent == xf.parent && a.alignment == xf.alignment && a.protection == xf.protection &&
-           a.applyNumFmt == xf.applyNumFmt && a.applyFont == xf.applyFont && a.applyFill == xf.applyFill &&
-           a.applyBorder == xf.applyBorder && a.applyAlignment == xf.applyAlignment &&
-           a.applyProtection == xf.applyProtection && a.quotePrefix == xf.quotePrefix && a.pivotButton == xf.pivotButton;
-  };
-  for (size_t i = 0; i < xfs.size(); ++i)
-    if (same(xfs[i])) return static_cast<uint32_t>(i);
-  xfs.push_back(xf);
-  return static_cast<uint32_t>(xfs.size() - 1);
+  Rec rec(*this, JournalOp::AddXf, [&](JournalRecord& w) { w.S(xlsx::StyleItemXml(xf)); }, true);
+  const uint32_t at = [&]() -> uint32_t {
+    StylesBuilder sb(book_.GetStyles());
+    auto& xfs = sb.CellXfs();
+    auto same = [&](const Xf& a) {
+      return a.numFmt == xf.numFmt && a.font == xf.font && a.fill == xf.fill && a.border == xf.border &&
+             a.parent == xf.parent && a.alignment == xf.alignment && a.protection == xf.protection &&
+             a.applyNumFmt == xf.applyNumFmt && a.applyFont == xf.applyFont && a.applyFill == xf.applyFill &&
+             a.applyBorder == xf.applyBorder && a.applyAlignment == xf.applyAlignment &&
+             a.applyProtection == xf.applyProtection && a.quotePrefix == xf.quotePrefix && a.pivotButton == xf.pivotButton;
+    };
+    for (size_t i = 0; i < xfs.size(); ++i)
+      if (same(xfs[i])) return static_cast<uint32_t>(i);
+    xfs.push_back(xf);
+    return static_cast<uint32_t>(xfs.size() - 1);
+  }();
+  rec.rec.U(at);
+  rec.commit = true;
+  return at;
 }
 
 uint32_t Editor::AddFont(const Font& font) {
-  StylesBuilder sb(book_.GetStyles());
-  auto& v = sb.Fonts();
-  for (size_t i = 0; i < v.size(); ++i)
-    if (v[i] == font) return static_cast<uint32_t>(i);
-  v.push_back(font);
-  return static_cast<uint32_t>(v.size() - 1);
+  Rec rec(*this, JournalOp::AddFont, [&](JournalRecord& w) { w.S(xlsx::StyleItemXml(font)); }, true);
+  const uint32_t at = [&]() -> uint32_t {
+    StylesBuilder sb(book_.GetStyles());
+    auto& v = sb.Fonts();
+    for (size_t i = 0; i < v.size(); ++i)
+      if (v[i] == font) return static_cast<uint32_t>(i);
+    v.push_back(font);
+    return static_cast<uint32_t>(v.size() - 1);
+  }();
+  rec.rec.U(at);
+  rec.commit = true;
+  return at;
 }
 
 uint32_t Editor::AddFill(const Fill& fill) {
-  StylesBuilder sb(book_.GetStyles());
-  auto& v = sb.Fills();
-  for (size_t i = 0; i < v.size(); ++i)
-    if (v[i] == fill) return static_cast<uint32_t>(i);
-  v.push_back(fill);
-  return static_cast<uint32_t>(v.size() - 1);
+  Rec rec(*this, JournalOp::AddFill, [&](JournalRecord& w) { w.S(xlsx::StyleItemXml(fill)); }, true);
+  const uint32_t at = [&]() -> uint32_t {
+    StylesBuilder sb(book_.GetStyles());
+    auto& v = sb.Fills();
+    for (size_t i = 0; i < v.size(); ++i)
+      if (v[i] == fill) return static_cast<uint32_t>(i);
+    v.push_back(fill);
+    return static_cast<uint32_t>(v.size() - 1);
+  }();
+  rec.rec.U(at);
+  rec.commit = true;
+  return at;
 }
 
 uint32_t Editor::AddBorder(const Border& border) {
-  StylesBuilder sb(book_.GetStyles());
-  auto& v = sb.Borders();
-  for (size_t i = 0; i < v.size(); ++i)
-    if (v[i] == border) return static_cast<uint32_t>(i);
-  v.push_back(border);
-  return static_cast<uint32_t>(v.size() - 1);
+  Rec rec(*this, JournalOp::AddBorder, [&](JournalRecord& w) { w.S(xlsx::StyleItemXml(border)); }, true);
+  const uint32_t at = [&]() -> uint32_t {
+    StylesBuilder sb(book_.GetStyles());
+    auto& v = sb.Borders();
+    for (size_t i = 0; i < v.size(); ++i)
+      if (v[i] == border) return static_cast<uint32_t>(i);
+    v.push_back(border);
+    return static_cast<uint32_t>(v.size() - 1);
+  }();
+  rec.rec.U(at);
+  rec.commit = true;
+  return at;
 }
 
 uint32_t Editor::AddNumFmt(std::string_view code) {
-  StylesBuilder sb(book_.GetStyles());
-  auto& fmts = sb.NumFmts();
-  for (const auto& [id, c] : fmts)
-    if (c == code) return id;
-  uint32_t id = 164;
-  for (const auto& [i, c] : fmts) id = std::max(id, i + 1);
-  fmts.emplace(id, std::string(code));
-  return id;
+  Rec rec(*this, JournalOp::AddNumFmt, [&](JournalRecord& w) { w.S(code); }, true);
+  const uint32_t at = [&]() -> uint32_t {
+    StylesBuilder sb(book_.GetStyles());
+    auto& fmts = sb.NumFmts();
+    for (const auto& [id, c] : fmts)
+      if (c == code) return id;
+    uint32_t id = 164;
+    for (const auto& [i, c] : fmts) id = std::max(id, i + 1);
+    fmts.emplace(id, std::string(code));
+    return id;
+  }();
+  rec.rec.U(at);
+  rec.commit = true;
+  return at;
 }
 
 // ---- Rows and columns
 
 Result Editor::SetRowHeight(int sheet, uint32_t first, uint32_t last, double points) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  if (first > last || last >= kMaxRows) return BadRange();
-  if (!(points >= 0 && points <= 409.5)) return Result::Fail(u"Row height must be between 0 and 409.5 points.");
-  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  return Run(*this, u"Row Height", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    auto apply = [&](RowRec& r) {
-      r.height = static_cast<float>(points);
-      if (points > 0) r.flags |= detail::kRowCustomHeight;
-      else r.flags = static_cast<uint8_t>(r.flags & ~detail::kRowCustomHeight);
-    };
-    if (first == 0 && last == kMaxRows - 1) {
-      st.SaveFormat(sv);
-      SheetFormat& f = A::Format(s);
-      f.defaultRowHeight = points > 0 ? points : 15;
-      f.customHeight = points > 0;
-      st.EditStoredRows(sv, first, last, apply);
-    } else {
-      st.EditRows(sv, first, last, apply);
-    }
-    st.Change(&s, kRowProps, Range{first, 0, last, kMaxCols - 1});
-    return Result{};
-  });
+  Rec rec(*this, JournalOp::SetRowHeight, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).D(points); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (first > last || last >= kMaxRows) return BadRange();
+    if (!(points >= 0 && points <= 409.5)) return Result::Fail(u"Row height must be between 0 and 409.5 points.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    return Run(*this, u"Row Height", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      auto apply = [&](RowRec& r) {
+        r.height = static_cast<float>(points);
+        if (points > 0) r.flags |= detail::kRowCustomHeight;
+        else r.flags = static_cast<uint8_t>(r.flags & ~detail::kRowCustomHeight);
+      };
+      if (first == 0 && last == kMaxRows - 1) {
+        st.SaveFormat(sv);
+        SheetFormat& f = A::Format(s);
+        f.defaultRowHeight = points > 0 ? points : 15;
+        f.customHeight = points > 0;
+        st.EditStoredRows(sv, first, last, apply);
+      } else {
+        st.EditRows(sv, first, last, apply);
+      }
+      st.Change(&s, kRowProps, Range{first, 0, last, kMaxCols - 1});
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::HideRows(int sheet, uint32_t first, uint32_t last, bool hidden) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  if (first > last || last >= kMaxRows) return BadRange();
-  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  return Run(*this, hidden ? u"Hide Rows" : u"Unhide Rows", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    auto apply = [&](RowRec& r) {
-      if (hidden) r.flags |= detail::kRowHidden;
-      else r.flags = static_cast<uint8_t>(r.flags & ~detail::kRowHidden);
-    };
-    if (hidden) st.EditRows(sv, first, last, apply);
-    else st.EditStoredRows(sv, first, last, apply);
-    st.Change(&s, kRowProps, Range{first, 0, last, kMaxCols - 1});
-    return Result{};
-  });
+  Rec rec(*this, JournalOp::HideRows, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).B(hidden); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (first > last || last >= kMaxRows) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    return Run(*this, hidden ? u"Hide Rows" : u"Unhide Rows", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      auto apply = [&](RowRec& r) {
+        if (hidden) r.flags |= detail::kRowHidden;
+        else r.flags = static_cast<uint8_t>(r.flags & ~detail::kRowHidden);
+      };
+      if (hidden) st.EditRows(sv, first, last, apply);
+      else st.EditStoredRows(sv, first, last, apply);
+      st.Change(&s, kRowProps, Range{first, 0, last, kMaxCols - 1});
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::SetRowOutline(int sheet, uint32_t first, uint32_t last, uint8_t level, bool collapsed) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  if (first > last || last >= kMaxRows) return BadRange();
-  if (level > 7) return Result::Fail(u"Outlines have at most 7 levels.");
-  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  return Run(*this, level ? u"Group" : u"Ungroup", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    auto apply = [&](RowRec& r) {
-      r.outlineLevel = level;
-      if (collapsed) r.flags |= detail::kRowCollapsed;
-      else r.flags = static_cast<uint8_t>(r.flags & ~detail::kRowCollapsed);
-    };
-    if (level) st.EditRows(sv, first, last, apply);
-    else st.EditStoredRows(sv, first, last, apply);
-    st.Change(&s, kRowProps, Range{first, 0, last, kMaxCols - 1});
-    return Result{};
-  });
+  Rec rec(*this, JournalOp::SetRowOutline, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).U(level).B(collapsed); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (first > last || last >= kMaxRows) return BadRange();
+    if (level > 7) return Result::Fail(u"Outlines have at most 7 levels.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    return Run(*this, level ? u"Group" : u"Ungroup", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      auto apply = [&](RowRec& r) {
+        r.outlineLevel = level;
+        if (collapsed) r.flags |= detail::kRowCollapsed;
+        else r.flags = static_cast<uint8_t>(r.flags & ~detail::kRowCollapsed);
+      };
+      if (level) st.EditRows(sv, first, last, apply);
+      else st.EditStoredRows(sv, first, last, apply);
+      st.Change(&s, kRowProps, Range{first, 0, last, kMaxCols - 1});
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::SetColumnWidth(int sheet, uint32_t first, uint32_t last, double chars) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  if (first > last || last >= kMaxCols) return BadRange();
-  if (!(chars >= 0 && chars <= 255)) return Result::Fail(u"Column width must be between 0 and 255 characters.");
-  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  return Run(*this, u"Column Width", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    st.EditCols(sv, first, last, [&](ColumnInfo& c) {
-      c.width = chars;
-      c.customWidth = chars > 0;
-      c.bestFit = false;
+  Rec rec(*this, JournalOp::SetColumnWidth, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).D(chars); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (first > last || last >= kMaxCols) return BadRange();
+    if (!(chars >= 0 && chars <= 255)) return Result::Fail(u"Column width must be between 0 and 255 characters.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    return Run(*this, u"Column Width", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.EditCols(sv, first, last, [&](ColumnInfo& c) {
+        c.width = chars;
+        c.customWidth = chars > 0;
+        c.bestFit = false;
+      });
+      st.Change(&s, kColProps, Range{0, first, kMaxRows - 1, last});
+      return Result{};
     });
-    st.Change(&s, kColProps, Range{0, first, kMaxRows - 1, last});
-    return Result{};
-  });
+  }());
 }
 
 Result Editor::HideColumns(int sheet, uint32_t first, uint32_t last, bool hidden) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  if (first > last || last >= kMaxCols) return BadRange();
-  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  return Run(*this, hidden ? u"Hide Columns" : u"Unhide Columns", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    st.EditCols(sv, first, last, [&](ColumnInfo& c) { c.hidden = hidden; });
-    st.Change(&s, kColProps, Range{0, first, kMaxRows - 1, last});
-    return Result{};
-  });
+  Rec rec(*this, JournalOp::HideColumns, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).B(hidden); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (first > last || last >= kMaxCols) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    return Run(*this, hidden ? u"Hide Columns" : u"Unhide Columns", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.EditCols(sv, first, last, [&](ColumnInfo& c) { c.hidden = hidden; });
+      st.Change(&s, kColProps, Range{0, first, kMaxRows - 1, last});
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::SetColumnOutline(int sheet, uint32_t first, uint32_t last, uint8_t level, bool collapsed) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  if (first > last || last >= kMaxCols) return BadRange();
-  if (level > 7) return Result::Fail(u"Outlines have at most 7 levels.");
-  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  return Run(*this, level ? u"Group" : u"Ungroup", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    st.EditCols(sv, first, last, [&](ColumnInfo& c) {
-      c.outlineLevel = level;
-      c.collapsed = collapsed;
+  Rec rec(*this, JournalOp::SetColumnOutline, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).U(level).B(collapsed); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (first > last || last >= kMaxCols) return BadRange();
+    if (level > 7) return Result::Fail(u"Outlines have at most 7 levels.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    return Run(*this, level ? u"Group" : u"Ungroup", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.EditCols(sv, first, last, [&](ColumnInfo& c) {
+        c.outlineLevel = level;
+        c.collapsed = collapsed;
+      });
+      st.Change(&s, kColProps, Range{0, first, kMaxRows - 1, last});
+      return Result{};
     });
-    st.Change(&s, kColProps, Range{0, first, kMaxRows - 1, last});
-    return Result{};
-  });
+  }());
 }
 
 // Structural edits arrive with the reference registry: until then they're refused, so nothing
@@ -1775,701 +1879,704 @@ Result Editor::DeleteCells(int sheet, const Range& r, Direction shift) {
 }
 
 Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  const refs::Mover m(sh);
-  if (sh.count == 0) return {};
-  if (sh.at >= m.max || (sh.count < 0 && static_cast<uint64_t>(sh.at) + m.Deleted() > m.max)) return BadRange();
-  if (!book_.LoadAll().Ok()) return Result::Fail(u"A sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet has no cells.");
-  const bool rows = m.Rows();
-  const bool whole = m.Across(0, rows ? kMaxCols - 1 : kMaxRows - 1) == 1;
-  const std::string name = s.Name();
-  pkg::Package* package = book_.GetPackage();
+  Rec rec(*this, JournalOp::ShiftCells, [&](JournalRecord& w) { w.I(sheet).U(sh.axis == Shift::Axis::Columns ? 1 : 0).U(sh.at).I(sh.count).R(sh.band).S16(stepName); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    const refs::Mover m(sh);
+    if (sh.count == 0) return {};
+    if (sh.at >= m.max || (sh.count < 0 && static_cast<uint64_t>(sh.at) + m.Deleted() > m.max)) return BadRange();
+    if (!book_.LoadAll().Ok()) return Result::Fail(u"A sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet has no cells.");
+    const bool rows = m.Rows();
+    const bool whole = m.Across(0, rows ? kMaxCols - 1 : kMaxRows - 1) == 1;
+    const std::string name = s.Name();
+    pkg::Package* package = book_.GetPackage();
 
-  // ---- What Excel refuses, and what Featherweight can't move yet.
-  auto cantYet = [](std::u16string_view what) {
-    return Result::Fail(u"Featherweight can't insert or delete cells on this sheet yet: it has " + std::u16string(what) +
-                        u".");
-  };
-  if (std::u16string what = refs::CheckSheetXml(A::Text(s)); !what.empty()) return cantYet(what);
-  std::vector<std::pair<std::string, std::string>> sheetParts;  // relationship type, part
-  if (package && !s.PartName().empty())
-    if (const pkg::RelationshipSet* rels = package->RelationshipsOf(s.PartName()))
-      for (const pkg::Relationship& r : rels->items) {
-        static constexpr std::string_view kKnown[] = {
-            "/drawing", "/vmlDrawing", "/comments", "/threadedComment", "/table", "/pivotTable", "/hyperlink",
-            "/printerSettings", "/image", "/oleObject", "/package", "/control", "/ctrlProp", "/slicer", "/timeline",
-            "/customProperty", "/webextension"};
-        if (std::none_of(std::begin(kKnown), std::end(kKnown), [&](std::string_view k) { return EndsWith(r.type, k); }))
-          return cantYet(u"parts Featherweight doesn't know");
-        if (!r.external && !r.targetPart.empty()) sheetParts.push_back({r.type, r.targetPart});
-      }
-  for (const FormulaRec& f : A::Formulas(s))
-    if (f.kind == FormulaKind::DataTable) return cantYet(u"a what-if data table");
-  for (const Range& a : State::Arrays(s))
-    if (int e = Effect(m, a); e == 1 || e == -1) return Result::Fail(u"You can't change part of an array.");
-  for (const Range& g : s.Merges())
-    if (Effect(m, g) == -1)
-      return Result::Fail(u"Part of a merged cell would move. Unmerge it first, or insert or delete whole rows or columns.");
-  for (const Table& t : s.Tables()) {
-    int e = Effect(m, t.ref);
-    if (e == -1) return Result::Fail(u"This won't work because it would move cells in a table on your worksheet.");
-    if (e == 2) return Result::Fail(u"Featherweight can't delete a whole table this way yet.");
-    if (e == 1 && rows && sh.count < 0 && t.headerRows && t.ref.firstRow >= sh.at && t.ref.firstRow < sh.at + m.Deleted())
-      return Result::Fail(u"A table's header row can't be deleted on its own.");
-  }
-  if (package)
-    for (const auto& [type, part] : sheetParts) {
-      std::vector<uint8_t> bytes;
-      Range where;
-      if (EndsWith(type, "/pivotTable") && package->ReadPart(part, bytes).Ok() &&
-          PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
-          Effect(m, where) != 0)
-        return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
-    }
-  if (sh.count > 0) {
-    // Cells with something in them would be pushed off the sheet.
-    Range end = rows ? Range{m.max - static_cast<uint32_t>(sh.count), sh.band.firstCol, m.max - 1, sh.band.lastCol}
-                     : Range{sh.band.firstRow, m.max - static_cast<uint32_t>(sh.count), sh.band.lastRow, m.max - 1};
-    bool full = false;
-    s.ForEachCell(end, [&](const CellInfo& c) {
-      full = full || c.hasFormula || c.value.type != ValueType::Empty;
-      return !full;
-    });
-    if (full) return Result::Fail(u"There's no room: cells with something in them would be pushed off the sheet.");
-  }
-
-  // Table columns deleted: structured references to them become #REF! wherever they are.
-  std::vector<std::pair<std::string, std::vector<std::string>>> goneColumns;
-  if (!rows && sh.count < 0)
+    // ---- What Excel refuses, and what Featherweight can't move yet.
+    auto cantYet = [](std::u16string_view what) {
+      return Result::Fail(u"Featherweight can't insert or delete cells on this sheet yet: it has " + std::u16string(what) +
+                          u".");
+    };
+    if (std::u16string what = refs::CheckSheetXml(A::Text(s)); !what.empty()) return cantYet(what);
+    std::vector<std::pair<std::string, std::string>> sheetParts;  // relationship type, part
+    if (package && !s.PartName().empty())
+      if (const pkg::RelationshipSet* rels = package->RelationshipsOf(s.PartName()))
+        for (const pkg::Relationship& r : rels->items) {
+          static constexpr std::string_view kKnown[] = {
+              "/drawing", "/vmlDrawing", "/comments", "/threadedComment", "/table", "/pivotTable", "/hyperlink",
+              "/printerSettings", "/image", "/oleObject", "/package", "/control", "/ctrlProp", "/slicer", "/timeline",
+              "/customProperty", "/webextension"};
+          if (std::none_of(std::begin(kKnown), std::end(kKnown), [&](std::string_view k) { return EndsWith(r.type, k); }))
+            return cantYet(u"parts Featherweight doesn't know");
+          if (!r.external && !r.targetPart.empty()) sheetParts.push_back({r.type, r.targetPart});
+        }
+    for (const FormulaRec& f : A::Formulas(s))
+      if (f.kind == FormulaKind::DataTable) return cantYet(u"a what-if data table");
+    for (const Range& a : State::Arrays(s))
+      if (int e = Effect(m, a); e == 1 || e == -1) return Result::Fail(u"You can't change part of an array.");
+    for (const Range& g : s.Merges())
+      if (Effect(m, g) == -1)
+        return Result::Fail(u"Part of a merged cell would move. Unmerge it first, or insert or delete whole rows or columns.");
     for (const Table& t : s.Tables()) {
-      std::vector<std::string> cols;
-      for (uint32_t c = std::max(t.ref.firstCol, sh.at); c <= t.ref.lastCol && c < sh.at + m.Deleted(); ++c)
-        if (c - t.ref.firstCol < t.columns.size()) cols.push_back(t.columns[c - t.ref.firstCol].name);
-      if (!cols.empty() && Effect(m, t.ref) == 1) goneColumns.push_back({t.displayName, std::move(cols)});
+      int e = Effect(m, t.ref);
+      if (e == -1) return Result::Fail(u"This won't work because it would move cells in a table on your worksheet.");
+      if (e == 2) return Result::Fail(u"Featherweight can't delete a whole table this way yet.");
+      if (e == 1 && rows && sh.count < 0 && t.headerRows && t.ref.firstRow >= sh.at && t.ref.firstRow < sh.at + m.Deleted())
+        return Result::Fail(u"A table's header row can't be deleted on its own.");
     }
-  // Whether a formula or part elsewhere may need rewriting.
-  auto touches = [&](std::string_view text) {
-    if (Mentions(text, name)) return true;
-    for (const auto& g : goneColumns)
-      if (Mentions(text, g.first)) return true;
-    return false;
-  };
-
-  return Run(*this, std::move(stepName), [&]() -> Result {
-    State& st = *s_;
-    BookNames names(book_);
-    refs::Context ctx{m, sheet, name, {}, {}};
-    ctx.formula = [&](std::string_view text, int at, uint32_t row, uint32_t col) -> std::string {
-      if (at != sheet && !touches(text)) return std::string(text);
-      calc::CompileOptions where;
-      where.sheet = at;
-      where.row = static_cast<int32_t>(row);
-      where.col = static_cast<int32_t>(col);
-      std::string out = calc::ShiftReferences(text, where, sheet, sh, names);
-      for (const auto& [table, cols] : goneColumns) out = refs::DropTableColumns(out, table, cols);
-      return out;
-    };
-    ctx.copy = [&](std::string_view text, int at, CellAddr from, CellAddr to) -> std::string {
-      if (from == to) return std::string(text);
-      calc::CompileOptions a, b;
-      a.sheet = b.sheet = at;
-      a.row = static_cast<int32_t>(from.row);
-      a.col = static_cast<int32_t>(from.col);
-      b.row = static_cast<int32_t>(to.row);
-      b.col = static_cast<int32_t>(to.col);
-      std::string out = calc::CopyFormula("=" + std::string(text), a, b, names);
-      return !out.empty() && out[0] == '=' ? out.substr(1) : out;
-    };
-
-    // ---- Formulas on every sheet (planned before any cell moves: they're read where they are).
-    std::vector<FormulaPlan> plans(book_.SheetCount());
-    for (size_t i = 0; i < book_.SheetCount(); ++i)
-      plans[i] = PlanFormulas(book_.GetSheet(i), static_cast<int>(i), static_cast<int>(i) == sheet, touches, m,
-                              ctx.formula, ctx.copy);
-    for (size_t i = 0; i < book_.SheetCount(); ++i) {
-      if (static_cast<int>(i) == sheet || plans[i].Empty()) continue;
-      Sheet& x = book_.GetSheet(i);
-      SheetSave& sv = st.Save(x);
-      st.SaveCells(sv);
-      auto& recs = A::Formulas(x);
-      for (auto& [id, text] : plans[i].texts) {
-        st.SaveFormula(sv, id);
-        recs[id].text = A::Texts(x).Add(text);
+    if (package)
+      for (const auto& [type, part] : sheetParts) {
+        std::vector<uint8_t> bytes;
+        Range where;
+        if (EndsWith(type, "/pivotTable") && package->ReadPart(part, bytes).Ok() &&
+            PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
+            Effect(m, where) != 0)
+          return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
       }
-      for (uint32_t id : plans[i].unshare) {
-        st.SaveFormula(sv, id);
-        Unshare(x, recs[id]);
-      }
-      for (auto& [at, text] : plans[i].own) {
-        State::Loc l = State::Find(x, at.row, at.col);
-        if (l.block == kNone) continue;
-        RowBlock& blk = st.Writable(sv, l.block);
-        uint32_t old = State::FormulaIdOf(blk, l.cell);
-        FormulaRec rec = OwnRecord(x, text, old != kNone ? recs[old] : FormulaRec{});
-        recs.push_back(rec);
-        State::SetFormulaId(blk, l.cell, static_cast<uint32_t>(recs.size() - 1));
-      }
-      st.Change(&x, kFormulas, Range::All());
+    if (sh.count > 0) {
+      // Cells with something in them would be pushed off the sheet.
+      Range end = rows ? Range{m.max - static_cast<uint32_t>(sh.count), sh.band.firstCol, m.max - 1, sh.band.lastCol}
+                       : Range{sh.band.firstRow, m.max - static_cast<uint32_t>(sh.count), sh.band.lastRow, m.max - 1};
+      bool full = false;
+      s.ForEachCell(end, [&](const CellInfo& c) {
+        full = full || c.hasFormula || c.value.type != ValueType::Empty;
+        return !full;
+      });
+      if (full) return Result::Fail(u"There's no room: cells with something in them would be pushed off the sheet.");
     }
 
-    // ---- The edited sheet: its formula records, then its cells and rows.
-    SheetSave& sv = st.Save(s);
-    st.SaveAllFormulas(sv);
-    st.SaveLayout(sv);
-    st.SaveKept(sv);
-    auto& recs = A::Formulas(s);
-    const FormulaPlan& plan = plans[static_cast<size_t>(sheet)];
-    for (auto& [id, text] : plan.texts) recs[id].text = A::Texts(s).Add(text);
-    for (uint32_t id : plan.unshare) Unshare(s, recs[id]);
-    for (auto& [id, r] : plan.refs) {
-      recs[id].ref = r;
-      recs[id].attrs = EditAttrs(A::Store(s), recs[id].attrs, {}, RangeName(r));
-    }
-    std::unordered_map<uint64_t, uint32_t> own;  // old cell -> its own formula record
-    auto key = [](uint32_t row, uint32_t col) { return (static_cast<uint64_t>(row) << 16) | col; };
-    for (auto& [at, text] : plan.own) {
-      State::Loc l = State::Find(s, at.row, at.col);
-      uint32_t old = l.block == kNone ? kNone : State::FormulaIdOf(*A::Blocks(s)[l.block], l.cell);
-      recs.push_back(OwnRecord(s, text, old != kNone ? recs[old] : FormulaRec{}));
-      own[key(at.row, at.col)] = static_cast<uint32_t>(recs.size() - 1);
-    }
+    // Table columns deleted: structured references to them become #REF! wherever they are.
+    std::vector<std::pair<std::string, std::vector<std::string>>> goneColumns;
+    if (!rows && sh.count < 0)
+      for (const Table& t : s.Tables()) {
+        std::vector<std::string> cols;
+        for (uint32_t c = std::max(t.ref.firstCol, sh.at); c <= t.ref.lastCol && c < sh.at + m.Deleted(); ++c)
+          if (c - t.ref.firstCol < t.columns.size()) cols.push_back(t.columns[c - t.ref.firstCol].name);
+        if (!cols.empty() && Effect(m, t.ref) == 1) goneColumns.push_back({t.displayName, std::move(cols)});
+      }
+    // Whether a formula or part elsewhere may need rewriting.
+    auto touches = [&](std::string_view text) {
+      if (Mentions(text, name)) return true;
+      for (const auto& g : goneColumns)
+        if (Mentions(text, g.first)) return true;
+      return false;
+    };
 
-    // Cells and rows, block by block. Blocks the edit doesn't reach stay as they are (shared with the
-    // undo step: writes copy them). Where lines only renumber, or cells only move along their rows,
-    // a block is rewritten in one pass; cells shifted up or down in a band of columns cross rows, so
-    // from the first block they reach on they're gathered and sorted.
-    auto& store = A::Store(s);
-    const auto& oldBlocks = A::Blocks(s);
-    const auto& oldFirst = A::FirstRows(s);
-    const bool adds = sh.count > 0 && sh.at > 0;
-    const uint32_t prev = adds ? sh.at - 1 : 0;
-    const uint32_t addCount = adds ? std::min<uint32_t>(static_cast<uint32_t>(sh.count), m.max - sh.at) : 0;
-    const uint32_t firstMoved = adds && rows ? prev : sh.at;  // rows before it keep their cells (rows axis)
-    std::vector<uint32_t> ownRows;
-    for (const auto& [at, text] : plan.own) ownRows.push_back(at.row);
-    std::sort(ownRows.begin(), ownRows.end());
-    auto formulaOf = [&](uint32_t row, uint32_t col, uint32_t id) {
-      if (!own.empty())
-        if (auto o = own.find(key(row, col)); o != own.end()) return o->second;
-      return id;
-    };
-    std::vector<std::shared_ptr<RowBlock>> blocks;
-    std::vector<uint32_t> firstRows;
-    bool open = false;  // whether the last block takes more rows
-    auto beginRow = [&](RowRec rec) -> RowBlock& {
-      if (!open || blocks.back()->rows.size() >= kBlockRows || blocks.back()->cells.size() >= SheetBuilder::kBlockCells) {
-        blocks.push_back(std::make_shared<RowBlock>());
-        firstRows.push_back(rec.row);
-        open = true;
-      }
-      RowBlock& b = *blocks.back();
-      rec.first = static_cast<uint32_t>(b.cells.size());
-      rec.count = 0;
-      b.rows.push_back(rec);
-      return b;
-    };
-    auto addCell = [](RowBlock& b, const CellRec& cell, uint32_t formula, const CellSide* side) {
-      uint32_t index = static_cast<uint32_t>(b.cells.size());
-      b.cells.push_back(cell);
-      if (formula != kNone && (cell.flags & detail::kHasFormula)) b.formulas.push_back({index, formula});
-      if (side) {
-        b.sides.push_back(*side);
-        b.sides.back().cell = index;
-      }
-      ++b.rows.back().count;
-    };
-    auto styled = [](const CellRec& c) { return (c.flags & detail::kStylePresent) && c.style != 0; };
-    auto formatOnly = [](uint32_t col, uint32_t style) {
-      CellRec c;
-      c.col = static_cast<uint16_t>(col);
-      c.style = style;
-      c.flags = detail::kStylePresent;
-      return c;
-    };
-    // One block whose cells stay in their rows: whole rows renumbered, or cells moved along rows.
-    auto rewrite = [&](const RowBlock& b) {
-      size_t fi = 0, si = 0;
-      for (const RowRec& r0 : b.rows) {
-        RowRec rr = r0;
-        if (rows && whole) {
-          rr.row = m.Line(r0.row);
-          if (rr.row == kNone) continue;  // deleted, with its cells
-        } else if (!rows && m.Across(r0.row, r0.row) != 0) {
-          rr.attrs = EditAttrs(store, rr.attrs, {"spans"});  // its cells move across columns
-        }
-        RowBlock* out = &beginRow(rr);
-        for (uint32_t k = r0.first; k < r0.first + r0.count; ++k) {
-          const CellRec& c0 = b.cells[k];
-          while (fi < b.formulas.size() && b.formulas[fi].first < k) ++fi;
-          while (si < b.sides.size() && b.sides[si].cell < k) ++si;
-          uint32_t row = r0.row, col = c0.col;
-          if (!m.Cell(row, col)) continue;
-          CellRec c = c0;
-          c.col = static_cast<uint16_t>(col);
-          const uint32_t id = fi < b.formulas.size() && b.formulas[fi].first == k ? b.formulas[fi].second : kNone;
-          CellSide side;
-          const bool hasSide = si < b.sides.size() && b.sides[si].cell == k;
-          if (hasSide) {
-            side = b.sides[si];
-            if (row != r0.row || col != c0.col) side.attrs = EditAttrs(store, side.attrs, {"r"});
-          }
-          addCell(*out, c, formulaOf(r0.row, c0.col, id), hasSide ? &side : nullptr);
-          // Columns inserted after this one take its format (Excel's "Format Same As Left").
-          if (!rows && addCount && c0.col == prev && styled(c0) && m.Across(r0.row, r0.row) == 1)
-            for (uint32_t j = 0; j < addCount; ++j) addCell(*out, formatOnly(sh.at + j, c0.style), kNone, nullptr);
-        }
-        // Rows inserted after this one take its height and format ("Format Same As Above").
-        if (rows && whole && addCount && r0.row == prev)
-          for (uint32_t j = 0; j < addCount; ++j) {
-            RowRec c = r0;
-            c.row = sh.at + j;
-            c.flags = static_cast<uint8_t>(c.flags & ~(detail::kRowHidden | detail::kRowCollapsed));
-            st.SyncRowAttrs(s, c);
-            out = &beginRow(c);
-            for (uint32_t k = r0.first; k < r0.first + r0.count; ++k)
-              if (styled(b.cells[k])) addCell(*out, formatOnly(b.cells[k].col, b.cells[k].style), kNone, nullptr);
-          }
-      }
-    };
-    // Blocks from `from` on, when cells move up or down in a band of columns: the band's cells, where
-    // they go (still in order: they all move alike), merged into the rows with the cells beside the
-    // band, which stay.
-    auto gather = [&](size_t from) {
-      struct Item {
-        uint32_t row = 0;
-        CellRec cell;
-        uint32_t formula = kNone;
-        bool hasSide = false;
-        CellSide side;
+    return Run(*this, std::move(stepName), [&]() -> Result {
+      State& st = *s_;
+      BookNames names(book_);
+      refs::Context ctx{m, sheet, name, {}, {}};
+      ctx.formula = [&](std::string_view text, int at, uint32_t row, uint32_t col) -> std::string {
+        if (at != sheet && !touches(text)) return std::string(text);
+        calc::CompileOptions where;
+        where.sheet = at;
+        where.row = static_cast<int32_t>(row);
+        where.col = static_cast<int32_t>(col);
+        std::string out = calc::ShiftReferences(text, where, sheet, sh, names);
+        for (const auto& [table, cols] : goneColumns) out = refs::DropTableColumns(out, table, cols);
+        return out;
       };
-      auto inBand = [&](uint32_t col) { return m.Across(col, col) != 0; };
-      std::vector<Item> band;
-      std::vector<CellRec> above;  // the styled band cells of the row before inserted cells
-      for (size_t bi = from; bi < oldBlocks.size(); ++bi) {
-        const RowBlock& b = *oldBlocks[bi];
+      ctx.copy = [&](std::string_view text, int at, CellAddr from, CellAddr to) -> std::string {
+        if (from == to) return std::string(text);
+        calc::CompileOptions a, b;
+        a.sheet = b.sheet = at;
+        a.row = static_cast<int32_t>(from.row);
+        a.col = static_cast<int32_t>(from.col);
+        b.row = static_cast<int32_t>(to.row);
+        b.col = static_cast<int32_t>(to.col);
+        std::string out = calc::CopyFormula("=" + std::string(text), a, b, names);
+        return !out.empty() && out[0] == '=' ? out.substr(1) : out;
+      };
+
+      // ---- Formulas on every sheet (planned before any cell moves: they're read where they are).
+      std::vector<FormulaPlan> plans(book_.SheetCount());
+      for (size_t i = 0; i < book_.SheetCount(); ++i)
+        plans[i] = PlanFormulas(book_.GetSheet(i), static_cast<int>(i), static_cast<int>(i) == sheet, touches, m,
+                                ctx.formula, ctx.copy);
+      for (size_t i = 0; i < book_.SheetCount(); ++i) {
+        if (static_cast<int>(i) == sheet || plans[i].Empty()) continue;
+        Sheet& x = book_.GetSheet(i);
+        SheetSave& sv = st.Save(x);
+        st.SaveCells(sv);
+        auto& recs = A::Formulas(x);
+        for (auto& [id, text] : plans[i].texts) {
+          st.SaveFormula(sv, id);
+          recs[id].text = A::Texts(x).Add(text);
+        }
+        for (uint32_t id : plans[i].unshare) {
+          st.SaveFormula(sv, id);
+          Unshare(x, recs[id]);
+        }
+        for (auto& [at, text] : plans[i].own) {
+          State::Loc l = State::Find(x, at.row, at.col);
+          if (l.block == kNone) continue;
+          RowBlock& blk = st.Writable(sv, l.block);
+          uint32_t old = State::FormulaIdOf(blk, l.cell);
+          FormulaRec rec = OwnRecord(x, text, old != kNone ? recs[old] : FormulaRec{});
+          recs.push_back(rec);
+          State::SetFormulaId(blk, l.cell, static_cast<uint32_t>(recs.size() - 1));
+        }
+        st.Change(&x, kFormulas, Range::All());
+      }
+
+      // ---- The edited sheet: its formula records, then its cells and rows.
+      SheetSave& sv = st.Save(s);
+      st.SaveAllFormulas(sv);
+      st.SaveLayout(sv);
+      st.SaveKept(sv);
+      auto& recs = A::Formulas(s);
+      const FormulaPlan& plan = plans[static_cast<size_t>(sheet)];
+      for (auto& [id, text] : plan.texts) recs[id].text = A::Texts(s).Add(text);
+      for (uint32_t id : plan.unshare) Unshare(s, recs[id]);
+      for (auto& [id, r] : plan.refs) {
+        recs[id].ref = r;
+        recs[id].attrs = EditAttrs(A::Store(s), recs[id].attrs, {}, RangeName(r));
+      }
+      std::unordered_map<uint64_t, uint32_t> own;  // old cell -> its own formula record
+      auto key = [](uint32_t row, uint32_t col) { return (static_cast<uint64_t>(row) << 16) | col; };
+      for (auto& [at, text] : plan.own) {
+        State::Loc l = State::Find(s, at.row, at.col);
+        uint32_t old = l.block == kNone ? kNone : State::FormulaIdOf(*A::Blocks(s)[l.block], l.cell);
+        recs.push_back(OwnRecord(s, text, old != kNone ? recs[old] : FormulaRec{}));
+        own[key(at.row, at.col)] = static_cast<uint32_t>(recs.size() - 1);
+      }
+
+      // Cells and rows, block by block. Blocks the edit doesn't reach stay as they are (shared with the
+      // undo step: writes copy them). Where lines only renumber, or cells only move along their rows,
+      // a block is rewritten in one pass; cells shifted up or down in a band of columns cross rows, so
+      // from the first block they reach on they're gathered and sorted.
+      auto& store = A::Store(s);
+      const auto& oldBlocks = A::Blocks(s);
+      const auto& oldFirst = A::FirstRows(s);
+      const bool adds = sh.count > 0 && sh.at > 0;
+      const uint32_t prev = adds ? sh.at - 1 : 0;
+      const uint32_t addCount = adds ? std::min<uint32_t>(static_cast<uint32_t>(sh.count), m.max - sh.at) : 0;
+      const uint32_t firstMoved = adds && rows ? prev : sh.at;  // rows before it keep their cells (rows axis)
+      std::vector<uint32_t> ownRows;
+      for (const auto& [at, text] : plan.own) ownRows.push_back(at.row);
+      std::sort(ownRows.begin(), ownRows.end());
+      auto formulaOf = [&](uint32_t row, uint32_t col, uint32_t id) {
+        if (!own.empty())
+          if (auto o = own.find(key(row, col)); o != own.end()) return o->second;
+        return id;
+      };
+      std::vector<std::shared_ptr<RowBlock>> blocks;
+      std::vector<uint32_t> firstRows;
+      bool open = false;  // whether the last block takes more rows
+      auto beginRow = [&](RowRec rec) -> RowBlock& {
+        if (!open || blocks.back()->rows.size() >= kBlockRows || blocks.back()->cells.size() >= SheetBuilder::kBlockCells) {
+          blocks.push_back(std::make_shared<RowBlock>());
+          firstRows.push_back(rec.row);
+          open = true;
+        }
+        RowBlock& b = *blocks.back();
+        rec.first = static_cast<uint32_t>(b.cells.size());
+        rec.count = 0;
+        b.rows.push_back(rec);
+        return b;
+      };
+      auto addCell = [](RowBlock& b, const CellRec& cell, uint32_t formula, const CellSide* side) {
+        uint32_t index = static_cast<uint32_t>(b.cells.size());
+        b.cells.push_back(cell);
+        if (formula != kNone && (cell.flags & detail::kHasFormula)) b.formulas.push_back({index, formula});
+        if (side) {
+          b.sides.push_back(*side);
+          b.sides.back().cell = index;
+        }
+        ++b.rows.back().count;
+      };
+      auto styled = [](const CellRec& c) { return (c.flags & detail::kStylePresent) && c.style != 0; };
+      auto formatOnly = [](uint32_t col, uint32_t style) {
+        CellRec c;
+        c.col = static_cast<uint16_t>(col);
+        c.style = style;
+        c.flags = detail::kStylePresent;
+        return c;
+      };
+      // One block whose cells stay in their rows: whole rows renumbered, or cells moved along rows.
+      auto rewrite = [&](const RowBlock& b) {
         size_t fi = 0, si = 0;
         for (const RowRec& r0 : b.rows) {
+          RowRec rr = r0;
+          if (rows && whole) {
+            rr.row = m.Line(r0.row);
+            if (rr.row == kNone) continue;  // deleted, with its cells
+          } else if (!rows && m.Across(r0.row, r0.row) != 0) {
+            rr.attrs = EditAttrs(store, rr.attrs, {"spans"});  // its cells move across columns
+          }
+          RowBlock* out = &beginRow(rr);
           for (uint32_t k = r0.first; k < r0.first + r0.count; ++k) {
             const CellRec& c0 = b.cells[k];
-            if (!inBand(c0.col)) continue;
             while (fi < b.formulas.size() && b.formulas[fi].first < k) ++fi;
             while (si < b.sides.size() && b.sides[si].cell < k) ++si;
             uint32_t row = r0.row, col = c0.col;
-            if (addCount && row == prev && styled(c0)) above.push_back(c0);
             if (!m.Cell(row, col)) continue;
-            Item it;
-            it.row = row;
-            it.cell = c0;
-            it.formula = formulaOf(r0.row, c0.col, fi < b.formulas.size() && b.formulas[fi].first == k ? b.formulas[fi].second : kNone);
-            if (si < b.sides.size() && b.sides[si].cell == k) {
-              it.hasSide = true;
-              it.side = b.sides[si];
-              if (row != r0.row) it.side.attrs = EditAttrs(store, it.side.attrs, {"r"});
-            }
-            band.push_back(it);
-          }
-          if (r0.row == prev && !above.empty()) {  // cells inserted below take the format of the cell above
-            for (uint32_t j = 0; j < addCount; ++j)
-              for (const CellRec& c : above) {
-                Item add;
-                add.row = sh.at + j;
-                add.cell = formatOnly(c.col, c.style);
-                band.push_back(add);
-              }
-          }
-        }
-      }
-      size_t bx = 0;
-      auto bandRow = [&](uint32_t row, RowBlock& out, uint32_t beforeCol) {
-        for (; bx < band.size() && band[bx].row == row && band[bx].cell.col < beforeCol; ++bx)
-          addCell(out, band[bx].cell, band[bx].formula, band[bx].hasSide ? &band[bx].side : nullptr);
-      };
-      auto bandOnly = [&](uint32_t before) {  // rows only band cells land in
-        while (bx < band.size() && band[bx].row < before) {
-          RowRec rec;
-          rec.row = band[bx].row;
-          bandRow(rec.row, beginRow(rec), kMaxCols);
-        }
-      };
-      for (size_t bi = from; bi < oldBlocks.size(); ++bi) {
-        const RowBlock& b = *oldBlocks[bi];
-        size_t fi = 0, si = 0;
-        for (const RowRec& r0 : b.rows) {
-          bandOnly(r0.row);
-          RowRec rr = r0;
-          rr.attrs = EditAttrs(store, rr.attrs, {"spans"});
-          RowBlock& out = beginRow(rr);
-          for (uint32_t k = r0.first; k < r0.first + r0.count; ++k) {
-            const CellRec& c0 = b.cells[k];
-            if (inBand(c0.col)) continue;
-            while (fi < b.formulas.size() && b.formulas[fi].first < k) ++fi;
-            while (si < b.sides.size() && b.sides[si].cell < k) ++si;
-            bandRow(r0.row, out, c0.col);
+            CellRec c = c0;
+            c.col = static_cast<uint16_t>(col);
             const uint32_t id = fi < b.formulas.size() && b.formulas[fi].first == k ? b.formulas[fi].second : kNone;
-            addCell(out, c0, formulaOf(r0.row, c0.col, id),
-                    si < b.sides.size() && b.sides[si].cell == k ? &b.sides[si] : nullptr);
+            CellSide side;
+            const bool hasSide = si < b.sides.size() && b.sides[si].cell == k;
+            if (hasSide) {
+              side = b.sides[si];
+              if (row != r0.row || col != c0.col) side.attrs = EditAttrs(store, side.attrs, {"r"});
+            }
+            addCell(*out, c, formulaOf(r0.row, c0.col, id), hasSide ? &side : nullptr);
+            // Columns inserted after this one take its format (Excel's "Format Same As Left").
+            if (!rows && addCount && c0.col == prev && styled(c0) && m.Across(r0.row, r0.row) == 1)
+              for (uint32_t j = 0; j < addCount; ++j) addCell(*out, formatOnly(sh.at + j, c0.style), kNone, nullptr);
           }
-          bandRow(r0.row, out, kMaxCols);
+          // Rows inserted after this one take its height and format ("Format Same As Above").
+          if (rows && whole && addCount && r0.row == prev)
+            for (uint32_t j = 0; j < addCount; ++j) {
+              RowRec c = r0;
+              c.row = sh.at + j;
+              c.flags = static_cast<uint8_t>(c.flags & ~(detail::kRowHidden | detail::kRowCollapsed));
+              st.SyncRowAttrs(s, c);
+              out = &beginRow(c);
+              for (uint32_t k = r0.first; k < r0.first + r0.count; ++k)
+                if (styled(b.cells[k])) addCell(*out, formatOnly(b.cells[k].col, b.cells[k].style), kNone, nullptr);
+            }
         }
-      }
-      bandOnly(kNone);
-    };
-    for (size_t bi = 0; bi < oldBlocks.size(); ++bi) {
-      const RowBlock& b = *oldBlocks[bi];
-      if (b.rows.empty()) continue;
-      const uint32_t first = b.rows.front().row, last = b.rows.back().row;
-      if (rows && !whole && last >= firstMoved) {
-        gather(bi);
-        break;
-      }
-      auto o = std::lower_bound(ownRows.begin(), ownRows.end(), first);
-      const bool owns = o != ownRows.end() && *o <= last;
-      const bool reached = rows ? last >= firstMoved : m.Across(first, last) != 0;
-      if (!owns && !reached) {
-        blocks.push_back(oldBlocks[bi]);
-        firstRows.push_back(oldFirst[bi]);
-        open = false;
-      } else {
-        rewrite(b);
-      }
-    }
-    size_t cellCount = 0, formulaCells = 0;
-    for (const auto& b : blocks) {
-      cellCount += b->cells.size();
-      formulaCells += b->formulas.size();
-    }
-    A::Blocks(s) = std::move(blocks);
-    A::FirstRows(s) = std::move(firstRows);
-    A::CellCount(s) = cellCount;
-    A::FormulaCells(s) = formulaCells;
-    // Shared formulas' masters, where they are now.
-    auto& masters = A::SharedMasters(s);
-    masters.clear();
-    for (const FCell& c : FormulaCellsOf(s))
-      if (c.id < recs.size() && recs[c.id].kind == FormulaKind::Shared && recs[c.id].text != kNone &&
-          recs[c.id].sharedIndex != kNone)
-        masters.push_back({recs[c.id].sharedIndex, CellAddr{c.row, c.col}});
-    std::sort(masters.begin(), masters.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    // XML kept inside sheetData.
-    std::vector<detail::Kept> kept;
-    for (detail::Kept k : A::Kept(s)) {
-      if (k.row != kNone) {
-        if (k.col != detail::Kept::kBeforeRow && k.col != detail::Kept::kRowEnd) {
-          uint32_t r = k.row, c = k.col;
-          if (!m.Cell(r, c)) continue;
-          k.row = r;
-          k.col = c;
-        } else if (rows && whole) {
-          if ((k.row = m.Line(k.row)) == kNone) continue;
-        }
-      }
-      kept.push_back(std::move(k));
-    }
-    std::stable_sort(kept.begin(), kept.end(), [](const detail::Kept& a, const detail::Kept& b) { return a.row < b.row; });
-    A::Kept(s) = std::move(kept);
-
-    // ---- Columns: widths and formats move; inserted ones take the one before's.
-    if (!rows && whole && !s.Columns().empty()) {
-      st.SaveCols(sv);
-      std::vector<ColumnInfo> out;
-      std::optional<ColumnInfo> before;
-      const uint32_t at = sh.at, d = m.Deleted();
-      for (const ColumnInfo& c : A::Cols(s)) {
-        if (sh.count > 0 && at > 0 && c.first <= at - 1 && at - 1 <= c.last) before = c;
-        if (c.last < at) {
-          out.push_back(c);
-          continue;
-        }
-        ColumnInfo a = c, b = c;
-        if (sh.count > 0) {
-          if (c.first < at) {
-            a.last = at - 1;
-            out.push_back(a);
+      };
+      // Blocks from `from` on, when cells move up or down in a band of columns: the band's cells, where
+      // they go (still in order: they all move alike), merged into the rows with the cells beside the
+      // band, which stay.
+      auto gather = [&](size_t from) {
+        struct Item {
+          uint32_t row = 0;
+          CellRec cell;
+          uint32_t formula = kNone;
+          bool hasSide = false;
+          CellSide side;
+        };
+        auto inBand = [&](uint32_t col) { return m.Across(col, col) != 0; };
+        std::vector<Item> band;
+        std::vector<CellRec> above;  // the styled band cells of the row before inserted cells
+        for (size_t bi = from; bi < oldBlocks.size(); ++bi) {
+          const RowBlock& b = *oldBlocks[bi];
+          size_t fi = 0, si = 0;
+          for (const RowRec& r0 : b.rows) {
+            for (uint32_t k = r0.first; k < r0.first + r0.count; ++k) {
+              const CellRec& c0 = b.cells[k];
+              if (!inBand(c0.col)) continue;
+              while (fi < b.formulas.size() && b.formulas[fi].first < k) ++fi;
+              while (si < b.sides.size() && b.sides[si].cell < k) ++si;
+              uint32_t row = r0.row, col = c0.col;
+              if (addCount && row == prev && styled(c0)) above.push_back(c0);
+              if (!m.Cell(row, col)) continue;
+              Item it;
+              it.row = row;
+              it.cell = c0;
+              it.formula = formulaOf(r0.row, c0.col, fi < b.formulas.size() && b.formulas[fi].first == k ? b.formulas[fi].second : kNone);
+              if (si < b.sides.size() && b.sides[si].cell == k) {
+                it.hasSide = true;
+                it.side = b.sides[si];
+                if (row != r0.row) it.side.attrs = EditAttrs(store, it.side.attrs, {"r"});
+              }
+              band.push_back(it);
+            }
+            if (r0.row == prev && !above.empty()) {  // cells inserted below take the format of the cell above
+              for (uint32_t j = 0; j < addCount; ++j)
+                for (const CellRec& c : above) {
+                  Item add;
+                  add.row = sh.at + j;
+                  add.cell = formatOnly(c.col, c.style);
+                  band.push_back(add);
+                }
+            }
           }
-          uint64_t first = std::max(c.first, at) + static_cast<uint64_t>(sh.count);
-          if (first < kMaxCols) {
-            b.first = static_cast<uint32_t>(first);
-            b.last = static_cast<uint32_t>(std::min<uint64_t>(c.last + static_cast<uint64_t>(sh.count), kMaxCols - 1));
-            out.push_back(b);
+        }
+        size_t bx = 0;
+        auto bandRow = [&](uint32_t row, RowBlock& out, uint32_t beforeCol) {
+          for (; bx < band.size() && band[bx].row == row && band[bx].cell.col < beforeCol; ++bx)
+            addCell(out, band[bx].cell, band[bx].formula, band[bx].hasSide ? &band[bx].side : nullptr);
+        };
+        auto bandOnly = [&](uint32_t before) {  // rows only band cells land in
+          while (bx < band.size() && band[bx].row < before) {
+            RowRec rec;
+            rec.row = band[bx].row;
+            bandRow(rec.row, beginRow(rec), kMaxCols);
           }
+        };
+        for (size_t bi = from; bi < oldBlocks.size(); ++bi) {
+          const RowBlock& b = *oldBlocks[bi];
+          size_t fi = 0, si = 0;
+          for (const RowRec& r0 : b.rows) {
+            bandOnly(r0.row);
+            RowRec rr = r0;
+            rr.attrs = EditAttrs(store, rr.attrs, {"spans"});
+            RowBlock& out = beginRow(rr);
+            for (uint32_t k = r0.first; k < r0.first + r0.count; ++k) {
+              const CellRec& c0 = b.cells[k];
+              if (inBand(c0.col)) continue;
+              while (fi < b.formulas.size() && b.formulas[fi].first < k) ++fi;
+              while (si < b.sides.size() && b.sides[si].cell < k) ++si;
+              bandRow(r0.row, out, c0.col);
+              const uint32_t id = fi < b.formulas.size() && b.formulas[fi].first == k ? b.formulas[fi].second : kNone;
+              addCell(out, c0, formulaOf(r0.row, c0.col, id),
+                      si < b.sides.size() && b.sides[si].cell == k ? &b.sides[si] : nullptr);
+            }
+            bandRow(r0.row, out, kMaxCols);
+          }
+        }
+        bandOnly(kNone);
+      };
+      for (size_t bi = 0; bi < oldBlocks.size(); ++bi) {
+        const RowBlock& b = *oldBlocks[bi];
+        if (b.rows.empty()) continue;
+        const uint32_t first = b.rows.front().row, last = b.rows.back().row;
+        if (rows && !whole && last >= firstMoved) {
+          gather(bi);
+          break;
+        }
+        auto o = std::lower_bound(ownRows.begin(), ownRows.end(), first);
+        const bool owns = o != ownRows.end() && *o <= last;
+        const bool reached = rows ? last >= firstMoved : m.Across(first, last) != 0;
+        if (!owns && !reached) {
+          blocks.push_back(oldBlocks[bi]);
+          firstRows.push_back(oldFirst[bi]);
+          open = false;
         } else {
-          if (c.first < at) {
-            a.last = at - 1;
-            out.push_back(a);
-          }
-          if (c.last >= at + d) {
-            b.first = std::max(c.first, at + d) - d;
-            b.last = c.last == kMaxCols - 1 ? c.last : c.last - d;
-            out.push_back(b);
-          }
+          rewrite(b);
         }
       }
-      if (before) {
-        ColumnInfo c = *before;
-        c.first = at;
-        c.last = std::min<uint32_t>(at + static_cast<uint32_t>(sh.count) - 1, kMaxCols - 1);
-        c.hidden = c.collapsed = false;
-        out.push_back(c);
+      size_t cellCount = 0, formulaCells = 0;
+      for (const auto& b : blocks) {
+        cellCount += b->cells.size();
+        formulaCells += b->formulas.size();
       }
-      std::sort(out.begin(), out.end(), [](const ColumnInfo& a, const ColumnInfo& b) { return a.first < b.first; });
-      // Neighbours that say the same are one entry (as Excel writes them).
-      std::vector<ColumnInfo> joined;
-      for (const ColumnInfo& c : out) {
-        if (!joined.empty() && joined.back().last + 1 == c.first) {
-          ColumnInfo a = joined.back(), b = c;
-          a.first = b.first = a.last = b.last = 0;
-          if (a.width == b.width && a.style == b.style && a.outlineLevel == b.outlineLevel && a.hidden == b.hidden &&
-              a.customWidth == b.customWidth && a.bestFit == b.bestFit && a.collapsed == b.collapsed &&
-              a.phonetic == b.phonetic) {
-            joined.back().last = c.last;
+      A::Blocks(s) = std::move(blocks);
+      A::FirstRows(s) = std::move(firstRows);
+      A::CellCount(s) = cellCount;
+      A::FormulaCells(s) = formulaCells;
+      // Shared formulas' masters, where they are now.
+      auto& masters = A::SharedMasters(s);
+      masters.clear();
+      for (const FCell& c : FormulaCellsOf(s))
+        if (c.id < recs.size() && recs[c.id].kind == FormulaKind::Shared && recs[c.id].text != kNone &&
+            recs[c.id].sharedIndex != kNone)
+          masters.push_back({recs[c.id].sharedIndex, CellAddr{c.row, c.col}});
+      std::sort(masters.begin(), masters.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+      // XML kept inside sheetData.
+      std::vector<detail::Kept> kept;
+      for (detail::Kept k : A::Kept(s)) {
+        if (k.row != kNone) {
+          if (k.col != detail::Kept::kBeforeRow && k.col != detail::Kept::kRowEnd) {
+            uint32_t r = k.row, c = k.col;
+            if (!m.Cell(r, c)) continue;
+            k.row = r;
+            k.col = c;
+          } else if (rows && whole) {
+            if ((k.row = m.Line(k.row)) == kNone) continue;
+          }
+        }
+        kept.push_back(std::move(k));
+      }
+      std::stable_sort(kept.begin(), kept.end(), [](const detail::Kept& a, const detail::Kept& b) { return a.row < b.row; });
+      A::Kept(s) = std::move(kept);
+
+      // ---- Columns: widths and formats move; inserted ones take the one before's.
+      if (!rows && whole && !s.Columns().empty()) {
+        st.SaveCols(sv);
+        std::vector<ColumnInfo> out;
+        std::optional<ColumnInfo> before;
+        const uint32_t at = sh.at, d = m.Deleted();
+        for (const ColumnInfo& c : A::Cols(s)) {
+          if (sh.count > 0 && at > 0 && c.first <= at - 1 && at - 1 <= c.last) before = c;
+          if (c.last < at) {
+            out.push_back(c);
             continue;
           }
-        }
-        joined.push_back(c);
-      }
-      A::Cols(s) = std::move(joined);
-    }
-
-    // ---- Merges, links, the autofilter, page breaks.
-    {
-      std::vector<Range> out;
-      bool changed = false;
-      for (Range r : s.Merges()) {
-        Range x = r;
-        if (!m.Area(x) || (x.firstRow == x.lastRow && x.firstCol == x.lastCol)) {
-          changed = true;
-          continue;
-        }
-        changed = changed || !(x == r);
-        out.push_back(x);
-      }
-      if (changed) {
-        st.SaveMerges(sv);
-        A::Merges(s) = std::move(out);
-        st.RecountMerges(s);
-      }
-    }
-    {
-      std::vector<Hyperlink> out;
-      bool changed = false;
-      for (Hyperlink h : s.Hyperlinks()) {
-        Range x = h.ref;
-        if (!m.Area(x)) {
-          changed = true;
-          continue;
-        }
-        changed = changed || !(x == h.ref);
-        h.ref = x;
-        out.push_back(std::move(h));
-      }
-      if (changed) {
-        st.SaveLinks(sv);
-        A::Links(s) = std::move(out);
-      }
-    }
-    if (const auto& f = s.Filter()) {
-      Range x = f->ref;
-      bool keep = m.Area(x);
-      if (!keep || !(x == f->ref)) {
-        st.SaveFilter(sv);
-        if (keep) A::Filter(s)->ref = x;
-        else A::Filter(s).reset();
-      }
-    }
-    if (whole) {
-      std::vector<PageBreak> out;
-      bool changed = false;
-      for (PageBreak b : A::Breaks(s, rows)) {
-        uint32_t n = m.Line(b.id);
-        changed = changed || n != b.id;
-        if (n == kNone) continue;
-        b.id = n;
-        out.push_back(b);
-      }
-      if (changed) {
-        st.SaveBreaks(sv);
-        A::Breaks(s, rows) = std::move(out);
-      }
-    }
-
-    // ---- Tables: their areas, and columns inserted or deleted inside them (named as Excel names
-    // new ones: Column1, ...), with their header cells.
-    std::vector<Table> tablesBefore = s.Tables();
-    std::vector<std::pair<CellAddr, std::string>> headers;
-    if (!tablesBefore.empty()) {
-      std::vector<Table> after = tablesBefore;
-      bool changed = false;
-      for (Table& t : after) {
-        Range x = t.ref;
-        if (!m.Area(x)) continue;
-        if (!rows && Effect(m, t.ref) == 1) {
+          ColumnInfo a = c, b = c;
           if (sh.count > 0) {
-            uint32_t nextId = 1, nextName = 1;
-            for (const TableColumn& c : t.columns) nextId = std::max(nextId, c.id + 1);
-            auto pos = t.columns.begin() + (sh.at - t.ref.firstCol);
-            for (int32_t k = 0; k < sh.count && t.columns.size() < kMaxCols; ++k) {
-              TableColumn c;
-              c.id = nextId++;
-              for (;; ++nextName) {
-                c.name = "Column" + std::to_string(nextName);
-                if (t.FindColumn(c.name) < 0) break;
-              }
-              pos = t.columns.insert(pos, c) + 1;
-              if (t.headerRows) headers.push_back({{t.ref.firstRow, sh.at + static_cast<uint32_t>(k)}, c.name});
+            if (c.first < at) {
+              a.last = at - 1;
+              out.push_back(a);
+            }
+            uint64_t first = std::max(c.first, at) + static_cast<uint64_t>(sh.count);
+            if (first < kMaxCols) {
+              b.first = static_cast<uint32_t>(first);
+              b.last = static_cast<uint32_t>(std::min<uint64_t>(c.last + static_cast<uint64_t>(sh.count), kMaxCols - 1));
+              out.push_back(b);
             }
           } else {
-            uint32_t from = std::max(sh.at, t.ref.firstCol) - t.ref.firstCol;
-            uint32_t to = std::min(sh.at + m.Deleted(), t.ref.lastCol + 1) - t.ref.firstCol;
-            t.columns.erase(t.columns.begin() + from, t.columns.begin() + to);
+            if (c.first < at) {
+              a.last = at - 1;
+              out.push_back(a);
+            }
+            if (c.last >= at + d) {
+              b.first = std::max(c.first, at + d) - d;
+              b.last = c.last == kMaxCols - 1 ? c.last : c.last - d;
+              out.push_back(b);
+            }
           }
         }
-        for (TableColumn& c : t.columns) {
-          CellAddr at{t.ref.firstRow + t.headerRows, t.ref.firstCol};
-          if (!c.calculatedFormula.empty()) c.calculatedFormula = ctx.formula(c.calculatedFormula, sheet, at.row, at.col);
-          if (!c.totalsFormula.empty()) c.totalsFormula = ctx.formula(c.totalsFormula, sheet, t.ref.lastRow, at.col);
+        if (before) {
+          ColumnInfo c = *before;
+          c.first = at;
+          c.last = std::min<uint32_t>(at + static_cast<uint32_t>(sh.count) - 1, kMaxCols - 1);
+          c.hidden = c.collapsed = false;
+          out.push_back(c);
         }
-        t.ref = x;
-        changed = true;
-      }
-      if (changed) {
-        st.SaveTables(sv);
-        A::Tables(s) = after;
-      }
-    }
-    for (const auto& [at, text] : headers) {
-      CellInput in = CellInput::Text(text);
-      std::u16string why;
-      st.Put(sv, at.row, at.col, &in, false, std::nullopt, why);
-    }
-    // Rows inserted into a table get its calculated columns' formulas (Excel fills them).
-    for (size_t k = 0; rows && sh.count > 0 && k < tablesBefore.size() && k < s.Tables().size(); ++k) {
-      const Table& t = s.Tables()[k];
-      if (Effect(m, tablesBefore[k].ref) != 1) continue;
-      for (size_t c = 0; c < t.columns.size(); ++c) {
-        if (t.columns[c].calculatedFormula.empty()) continue;
-        CellInput in = CellInput::Formula(t.columns[c].calculatedFormula);
-        for (uint32_t r = sh.at; r < sh.at + static_cast<uint32_t>(sh.count) && r <= t.ref.lastRow; ++r) {
-          std::u16string why;
-          st.Put(sv, r, t.ref.firstCol + static_cast<uint32_t>(c), &in, false, std::nullopt, why);
-        }
-      }
-    }
-
-    // ---- Names (print areas and titles among them).
-    {
-      std::vector<DefinedName> list = A::Names(book_);
-      bool changed = false;
-      for (DefinedName& n : list) {
-        if (n.sheet != sheet && !touches(n.formula)) continue;
-        std::string now = ctx.formula(n.formula, n.sheet >= 0 ? n.sheet : 0, 0, 0);
-        changed = changed || now != n.formula;
-        n.formula = std::move(now);
-      }
-      if (changed) {
-        st.SaveBook(false, true);
-        A::Names(book_) = std::move(list);
-        st.Change(nullptr, kNames, Range{});
-      }
-    }
-
-    // ---- The sheets' XML around their cells: rules, sparklines, filters, breaks...
-    for (size_t i = 0; i < book_.SheetCount(); ++i) {
-      Sheet& x = book_.GetSheet(i);
-      const detail::PartText& t = A::Text(x);
-      if (static_cast<int>(i) != sheet && !touches(t.afterData)) continue;
-      detail::PartText now = t;
-      refs::MoveSheetXml(now, static_cast<int>(i), ctx);
-      if (now.afterData == t.afterData && now.beforeData == t.beforeData) continue;
-      st.SaveText(st.Save(x));
-      A::Text(x) = std::move(now);
-    }
-
-    // ---- Parts: the sheets' drawings, notes, controls, tables and pivot tables; charts and pivot
-    // caches anywhere.
-    if (package) {
-      auto edit = [&](const std::string& part, const std::function<bool(std::string&)>& fn) {
-        std::vector<uint8_t> bytes;
-        if (!package->ReadPart(part, bytes).Ok()) return;
-        std::string xml(bytes.begin(), bytes.end());
-        if (fn(xml)) st.SetPart(part, std::move(xml));
-      };
-      refs::CacheFn cache = [&](std::string_view f, bool visibleOnly, std::vector<refs::CachePoint>& out) {
-        size_t bang = f.rfind('!');
-        if (bang == std::string_view::npos) return false;
-        std::string sn(f.substr(0, bang));
-        if (sn.size() >= 2 && sn.front() == '\'' && sn.back() == '\'') {
-          std::string u;
-          for (size_t k = 1; k + 1 < sn.size(); ++k) {
-            u += sn[k];
-            if (sn[k] == '\'' && k + 2 < sn.size() && sn[k + 1] == '\'') ++k;
+        std::sort(out.begin(), out.end(), [](const ColumnInfo& a, const ColumnInfo& b) { return a.first < b.first; });
+        // Neighbours that say the same are one entry (as Excel writes them).
+        std::vector<ColumnInfo> joined;
+        for (const ColumnInfo& c : out) {
+          if (!joined.empty() && joined.back().last + 1 == c.first) {
+            ColumnInfo a = joined.back(), b = c;
+            a.first = b.first = a.last = b.last = 0;
+            if (a.width == b.width && a.style == b.style && a.outlineLevel == b.outlineLevel && a.hidden == b.hidden &&
+                a.customWidth == b.customWidth && a.bestFit == b.bestFit && a.collapsed == b.collapsed &&
+                a.phonetic == b.phonetic) {
+              joined.back().last = c.last;
+              continue;
+            }
           }
-          sn = std::move(u);
+          joined.push_back(c);
         }
-        Range r;
-        int xi = book_.FindSheet(sn);
-        if (xi < 0 || !ParseRange(f.substr(bang + 1), r) || (r.firstRow != r.lastRow && r.firstCol != r.lastCol) ||
-            static_cast<uint64_t>(r.lastRow - r.firstRow) + (r.lastCol - r.firstCol) > 100000)
-          return false;
-        const Sheet& x = book_.GetSheet(static_cast<size_t>(xi));
-        for (uint32_t row = r.firstRow; row <= r.lastRow; ++row)
-          for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
-            if (visibleOnly && (x.Row(row).hidden || x.Column(col).hidden)) continue;
-            Value v = x.GetValue(row, col);
-            refs::CachePoint p;
-            if (v.type == ValueType::Number) p = {refs::CachePoint::Number, Number(v.number)};
-            else if (v.type == ValueType::String) p = {refs::CachePoint::Text, std::string(v.text)};
-            else if (v.type == ValueType::Bool) p = {refs::CachePoint::Text, v.boolean ? "TRUE" : "FALSE"};
-            else if (v.type == ValueType::Error) p = {refs::CachePoint::Text, "#N/A"};
-            out.push_back(std::move(p));
+        A::Cols(s) = std::move(joined);
+      }
+
+      // ---- Merges, links, the autofilter, page breaks.
+      {
+        std::vector<Range> out;
+        bool changed = false;
+        for (Range r : s.Merges()) {
+          Range x = r;
+          if (!m.Area(x) || (x.firstRow == x.lastRow && x.firstCol == x.lastCol)) {
+            changed = true;
+            continue;
           }
-        return true;
-      };
+          changed = changed || !(x == r);
+          out.push_back(x);
+        }
+        if (changed) {
+          st.SaveMerges(sv);
+          A::Merges(s) = std::move(out);
+          st.RecountMerges(s);
+        }
+      }
+      {
+        std::vector<Hyperlink> out;
+        bool changed = false;
+        for (Hyperlink h : s.Hyperlinks()) {
+          Range x = h.ref;
+          if (!m.Area(x)) {
+            changed = true;
+            continue;
+          }
+          changed = changed || !(x == h.ref);
+          h.ref = x;
+          out.push_back(std::move(h));
+        }
+        if (changed) {
+          st.SaveLinks(sv);
+          A::Links(s) = std::move(out);
+        }
+      }
+      if (const auto& f = s.Filter()) {
+        Range x = f->ref;
+        bool keep = m.Area(x);
+        if (!keep || !(x == f->ref)) {
+          st.SaveFilter(sv);
+          if (keep) A::Filter(s)->ref = x;
+          else A::Filter(s).reset();
+        }
+      }
+      if (whole) {
+        std::vector<PageBreak> out;
+        bool changed = false;
+        for (PageBreak b : A::Breaks(s, rows)) {
+          uint32_t n = m.Line(b.id);
+          changed = changed || n != b.id;
+          if (n == kNone) continue;
+          b.id = n;
+          out.push_back(b);
+        }
+        if (changed) {
+          st.SaveBreaks(sv);
+          A::Breaks(s, rows) = std::move(out);
+        }
+      }
+
+      // ---- Tables: their areas, and columns inserted or deleted inside them (named as Excel names
+      // new ones: Column1, ...), with their header cells.
+      std::vector<Table> tablesBefore = s.Tables();
+      std::vector<std::pair<CellAddr, std::string>> headers;
+      if (!tablesBefore.empty()) {
+        std::vector<Table> after = tablesBefore;
+        bool changed = false;
+        for (Table& t : after) {
+          Range x = t.ref;
+          if (!m.Area(x)) continue;
+          if (!rows && Effect(m, t.ref) == 1) {
+            if (sh.count > 0) {
+              uint32_t nextId = 1, nextName = 1;
+              for (const TableColumn& c : t.columns) nextId = std::max(nextId, c.id + 1);
+              auto pos = t.columns.begin() + (sh.at - t.ref.firstCol);
+              for (int32_t k = 0; k < sh.count && t.columns.size() < kMaxCols; ++k) {
+                TableColumn c;
+                c.id = nextId++;
+                for (;; ++nextName) {
+                  c.name = "Column" + std::to_string(nextName);
+                  if (t.FindColumn(c.name) < 0) break;
+                }
+                pos = t.columns.insert(pos, c) + 1;
+                if (t.headerRows) headers.push_back({{t.ref.firstRow, sh.at + static_cast<uint32_t>(k)}, c.name});
+              }
+            } else {
+              uint32_t from = std::max(sh.at, t.ref.firstCol) - t.ref.firstCol;
+              uint32_t to = std::min(sh.at + m.Deleted(), t.ref.lastCol + 1) - t.ref.firstCol;
+              t.columns.erase(t.columns.begin() + from, t.columns.begin() + to);
+            }
+          }
+          for (TableColumn& c : t.columns) {
+            CellAddr at{t.ref.firstRow + t.headerRows, t.ref.firstCol};
+            if (!c.calculatedFormula.empty()) c.calculatedFormula = ctx.formula(c.calculatedFormula, sheet, at.row, at.col);
+            if (!c.totalsFormula.empty()) c.totalsFormula = ctx.formula(c.totalsFormula, sheet, t.ref.lastRow, at.col);
+          }
+          t.ref = x;
+          changed = true;
+        }
+        if (changed) {
+          st.SaveTables(sv);
+          A::Tables(s) = after;
+        }
+      }
+      for (const auto& [at, text] : headers) {
+        CellInput in = CellInput::Text(text);
+        std::u16string why;
+        st.Put(sv, at.row, at.col, &in, false, std::nullopt, why);
+      }
+      // Rows inserted into a table get its calculated columns' formulas (Excel fills them).
+      for (size_t k = 0; rows && sh.count > 0 && k < tablesBefore.size() && k < s.Tables().size(); ++k) {
+        const Table& t = s.Tables()[k];
+        if (Effect(m, tablesBefore[k].ref) != 1) continue;
+        for (size_t c = 0; c < t.columns.size(); ++c) {
+          if (t.columns[c].calculatedFormula.empty()) continue;
+          CellInput in = CellInput::Formula(t.columns[c].calculatedFormula);
+          for (uint32_t r = sh.at; r < sh.at + static_cast<uint32_t>(sh.count) && r <= t.ref.lastRow; ++r) {
+            std::u16string why;
+            st.Put(sv, r, t.ref.firstCol + static_cast<uint32_t>(c), &in, false, std::nullopt, why);
+          }
+        }
+      }
+
+      // ---- Names (print areas and titles among them).
+      {
+        std::vector<DefinedName> list = A::Names(book_);
+        bool changed = false;
+        for (DefinedName& n : list) {
+          if (n.sheet != sheet && !touches(n.formula)) continue;
+          std::string now = ctx.formula(n.formula, n.sheet >= 0 ? n.sheet : 0, 0, 0);
+          changed = changed || now != n.formula;
+          n.formula = std::move(now);
+        }
+        if (changed) {
+          st.SaveBook(false, true);
+          A::Names(book_) = std::move(list);
+          st.Change(nullptr, kNames, Range{});
+        }
+      }
+
+      // ---- The sheets' XML around their cells: rules, sparklines, filters, breaks...
       for (size_t i = 0; i < book_.SheetCount(); ++i) {
         Sheet& x = book_.GetSheet(i);
-        const int xi = static_cast<int>(i);
-        const bool mine = xi == sheet;
-        const pkg::RelationshipSet* rels = x.PartName().empty() ? nullptr : package->RelationshipsOf(x.PartName());
-        if (!rels) continue;
-        for (const pkg::Relationship& r : rels->items) {
-          if (r.external || r.targetPart.empty()) continue;
-          auto ours = [&](const std::string& xml) { return mine || touches(xml); };
-          if (EndsWith(r.type, "/drawing"))
-            edit(r.targetPart, [&](std::string& xml) { return ours(xml) && refs::MoveDrawing(xml, xi, ctx); });
-          else if (EndsWith(r.type, "/vmlDrawing"))
-            edit(r.targetPart, [&](std::string& xml) { return ours(xml) && refs::MoveVml(xml, xi, ctx); });
-          else if (EndsWith(r.type, "/ctrlProp"))
-            edit(r.targetPart, [&](std::string& xml) { return ours(xml) && refs::MoveControl(xml, xi, ctx); });
-          else if (mine && (EndsWith(r.type, "/comments") || EndsWith(r.type, "/threadedComment")))
-            edit(r.targetPart, [&](std::string& xml) { return refs::MoveComments(xml, ctx); });
-          else if (mine && EndsWith(r.type, "/pivotTable"))
-            edit(r.targetPart, [&](std::string& xml) { return refs::MovePivotTable(xml, ctx); });
+        const detail::PartText& t = A::Text(x);
+        if (static_cast<int>(i) != sheet && !touches(t.afterData)) continue;
+        detail::PartText now = t;
+        refs::MoveSheetXml(now, static_cast<int>(i), ctx);
+        if (now.afterData == t.afterData && now.beforeData == t.beforeData) continue;
+        st.SaveText(st.Save(x));
+        A::Text(x) = std::move(now);
+      }
+
+      // ---- Parts: the sheets' drawings, notes, controls, tables and pivot tables; charts and pivot
+      // caches anywhere.
+      if (package) {
+        auto edit = [&](const std::string& part, const std::function<bool(std::string&)>& fn) {
+          std::vector<uint8_t> bytes;
+          if (!package->ReadPart(part, bytes).Ok()) return;
+          std::string xml(bytes.begin(), bytes.end());
+          if (fn(xml)) st.SetPart(part, std::move(xml));
+        };
+        refs::CacheFn cache = [&](std::string_view f, bool visibleOnly, std::vector<refs::CachePoint>& out) {
+          size_t bang = f.rfind('!');
+          if (bang == std::string_view::npos) return false;
+          std::string sn(f.substr(0, bang));
+          if (sn.size() >= 2 && sn.front() == '\'' && sn.back() == '\'') {
+            std::string u;
+            for (size_t k = 1; k + 1 < sn.size(); ++k) {
+              u += sn[k];
+              if (sn[k] == '\'' && k + 2 < sn.size() && sn[k + 1] == '\'') ++k;
+            }
+            sn = std::move(u);
+          }
+          Range r;
+          int xi = book_.FindSheet(sn);
+          if (xi < 0 || !ParseRange(f.substr(bang + 1), r) || (r.firstRow != r.lastRow && r.firstCol != r.lastCol) ||
+              static_cast<uint64_t>(r.lastRow - r.firstRow) + (r.lastCol - r.firstCol) > 100000)
+            return false;
+          const Sheet& x = book_.GetSheet(static_cast<size_t>(xi));
+          for (uint32_t row = r.firstRow; row <= r.lastRow; ++row)
+            for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
+              if (visibleOnly && (x.Row(row).hidden || x.Column(col).hidden)) continue;
+              Value v = x.GetValue(row, col);
+              refs::CachePoint p;
+              if (v.type == ValueType::Number) p = {refs::CachePoint::Number, Number(v.number)};
+              else if (v.type == ValueType::String) p = {refs::CachePoint::Text, std::string(v.text)};
+              else if (v.type == ValueType::Bool) p = {refs::CachePoint::Text, v.boolean ? "TRUE" : "FALSE"};
+              else if (v.type == ValueType::Error) p = {refs::CachePoint::Text, "#N/A"};
+              out.push_back(std::move(p));
+            }
+          return true;
+        };
+        for (size_t i = 0; i < book_.SheetCount(); ++i) {
+          Sheet& x = book_.GetSheet(i);
+          const int xi = static_cast<int>(i);
+          const bool mine = xi == sheet;
+          const pkg::RelationshipSet* rels = x.PartName().empty() ? nullptr : package->RelationshipsOf(x.PartName());
+          if (!rels) continue;
+          for (const pkg::Relationship& r : rels->items) {
+            if (r.external || r.targetPart.empty()) continue;
+            auto ours = [&](const std::string& xml) { return mine || touches(xml); };
+            if (EndsWith(r.type, "/drawing"))
+              edit(r.targetPart, [&](std::string& xml) { return ours(xml) && refs::MoveDrawing(xml, xi, ctx); });
+            else if (EndsWith(r.type, "/vmlDrawing"))
+              edit(r.targetPart, [&](std::string& xml) { return ours(xml) && refs::MoveVml(xml, xi, ctx); });
+            else if (EndsWith(r.type, "/ctrlProp"))
+              edit(r.targetPart, [&](std::string& xml) { return ours(xml) && refs::MoveControl(xml, xi, ctx); });
+            else if (mine && (EndsWith(r.type, "/comments") || EndsWith(r.type, "/threadedComment")))
+              edit(r.targetPart, [&](std::string& xml) { return refs::MoveComments(xml, ctx); });
+            else if (mine && EndsWith(r.type, "/pivotTable"))
+              edit(r.targetPart, [&](std::string& xml) { return refs::MovePivotTable(xml, ctx); });
+          }
+        }
+        for (size_t k = 0; k < tablesBefore.size() && k < s.Tables().size(); ++k) {
+          const Table& before = tablesBefore[k];
+          const Table& after = s.Tables()[k];
+          edit(after.part, [&](std::string& xml) { return refs::MoveTable(xml, before, after, sheet, ctx); });
+        }
+        for (const pkg::Part& part : package->Parts()) {
+          if (part.deleted) continue;
+          std::string_view ct = package->ContentTypeOf(part.name);
+          bool chart = ct == "application/vnd.openxmlformats-officedocument.drawingml.chart+xml" ||
+                       ct == "application/vnd.ms-office.chartex+xml";
+          bool pivot = ct == "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml";
+          if (chart || pivot)
+            edit(part.name, [&](std::string& xml) {
+              return touches(xml) && (chart ? refs::MoveChart(xml, 0, ctx, cache) : refs::MovePivotCache(xml, ctx));
+            });
         }
       }
-      for (size_t k = 0; k < tablesBefore.size() && k < s.Tables().size(); ++k) {
-        const Table& before = tablesBefore[k];
-        const Table& after = s.Tables()[k];
-        edit(after.part, [&](std::string& xml) { return refs::MoveTable(xml, before, after, sheet, ctx); });
-      }
-      for (const pkg::Part& part : package->Parts()) {
-        if (part.deleted) continue;
-        std::string_view ct = package->ContentTypeOf(part.name);
-        bool chart = ct == "application/vnd.openxmlformats-officedocument.drawingml.chart+xml" ||
-                     ct == "application/vnd.ms-office.chartex+xml";
-        bool pivot = ct == "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml";
-        if (chart || pivot)
-          edit(part.name, [&](std::string& xml) {
-            return touches(xml) && (chart ? refs::MoveChart(xml, 0, ctx, cache) : refs::MovePivotCache(xml, ctx));
-          });
-      }
-    }
 
-    Range moved = rows ? Range{sh.at, sh.band.firstCol, kMaxRows - 1, sh.band.lastCol}
-                       : Range{sh.band.firstRow, sh.at, sh.band.lastRow, kMaxCols - 1};
-    st.Change(&s, kShift | kValues | kFormulas | kStyles | kMerges | (rows ? kRowProps : kColProps), moved, sh);
-    return Result{};
-  });
+      Range moved = rows ? Range{sh.at, sh.band.firstCol, kMaxRows - 1, sh.band.lastCol}
+                         : Range{sh.band.firstRow, sh.at, sh.band.lastRow, kMaxCols - 1};
+      st.Change(&s, kShift | kValues | kFormulas | kStyles | kMerges | (rows ? kRowProps : kColProps), moved, sh);
+      return Result{};
+    });
+  }());
 }
 
 // ---- Tables' header cells
@@ -2615,290 +2722,293 @@ Result Editor::SortColumns(int sheet, const Range& r, const std::vector<uint32_t
 
 Result Editor::SortLines(int sheet, const Range& r, const std::vector<uint32_t>& order, const std::vector<SortKey>& keys,
                          bool rows) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  if (!Valid(r)) return BadRange();
-  const uint32_t first = rows ? r.firstRow : r.firstCol;
-  const uint32_t n = (rows ? r.lastRow : r.lastCol) - first + 1;
-  std::vector<uint32_t> dest(n, kNone);
-  bool same = true;
-  if (order.size() != n) return Result::Fail(u"The sort order doesn't fit the range.");
-  for (uint32_t i = 0; i < n; ++i) {
-    if (order[i] >= n || dest[order[i]] != kNone) return Result::Fail(u"The sort order doesn't fit the range.");
-    dest[order[i]] = i;
-    same = same && order[i] == i;
-  }
-  for (const SortKey& k : keys)
-    if (k.line < (rows ? r.firstCol : r.firstRow) || k.line > (rows ? r.lastCol : r.lastRow))
-      return Result::Fail(u"A sort key is outside the range.");
-  if (same && keys.empty()) return {};
-  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet has no cells.");
-  pkg::Package* package = book_.GetPackage();
-
-  // ---- What Excel refuses.
-  for (const Range& g : s.Merges())
-    if (Overlaps(g, r)) return Result::Fail(u"To do this, all the merged cells need to be the same size.");
-  for (const Range& a : State::Arrays(s))
-    if (Overlaps(a, r)) return Result::Fail(u"You can't change part of an array.");
-  const std::vector<FCell> fcells = FormulaCellsOf(s);
-  auto inside = [&](uint32_t row, uint32_t col) {
-    return row >= r.firstRow && row <= r.lastRow && col >= r.firstCol && col <= r.lastCol;
-  };
-  for (const FCell& c : fcells) {
-    if (!inside(c.row, c.col) || c.id >= A::Formulas(s).size()) continue;
-    const FormulaRec& f = A::Formulas(s)[c.id];
-    if (f.kind == FormulaKind::DataTable) return Result::Fail(u"Featherweight can't sort a what-if data table yet.");
-    if (f.dynamic && f.hasRef && !(f.ref.firstRow == f.ref.lastRow && f.ref.firstCol == f.ref.lastCol))
-      return Result::Fail(u"You can't change part of an array.");
-  }
-  std::vector<std::pair<std::string, std::string>> sheetParts;  // relationship type, part
-  if (package && !s.PartName().empty())
-    if (const pkg::RelationshipSet* rels = package->RelationshipsOf(s.PartName()))
-      for (const pkg::Relationship& rel : rels->items)
-        if (!rel.external && !rel.targetPart.empty()) sheetParts.push_back({rel.type, rel.targetPart});
-  if (package)
-    for (const auto& [type, part] : sheetParts) {
-      std::vector<uint8_t> bytes;
-      Range where;
-      if (EndsWith(type, "/pivotTable") && package->ReadPart(part, bytes).Ok() &&
-          PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
-          Overlaps(where, r))
-        return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
+  Rec rec(*this, JournalOp::SortLines, [&](JournalRecord& w) { w.I(sheet).R(r).U(order.size()); for (uint32_t o : order) w.U(o); w.U(keys.size()); for (const SortKey& k : keys) w.U(k.line).B(k.descending); w.B(rows); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!Valid(r)) return BadRange();
+    const uint32_t first = rows ? r.firstRow : r.firstCol;
+    const uint32_t n = (rows ? r.lastRow : r.lastCol) - first + 1;
+    std::vector<uint32_t> dest(n, kNone);
+    bool same = true;
+    if (order.size() != n) return Result::Fail(u"The sort order doesn't fit the range.");
+    for (uint32_t i = 0; i < n; ++i) {
+      if (order[i] >= n || dest[order[i]] != kNone) return Result::Fail(u"The sort order doesn't fit the range.");
+      dest[order[i]] = i;
+      same = same && order[i] == i;
     }
+    for (const SortKey& k : keys)
+      if (k.line < (rows ? r.firstCol : r.firstRow) || k.line > (rows ? r.lastCol : r.lastRow))
+        return Result::Fail(u"A sort key is outside the range.");
+    if (same && keys.empty()) return {};
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet has no cells.");
+    pkg::Package* package = book_.GetPackage();
 
-  return Run(*this, u"Sort", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    st.SaveAllFormulas(sv);
-    st.SaveLayout(sv);
-    st.SaveKept(sv);
-    Shift sh{rows ? Shift::Axis::Rows : Shift::Axis::Columns, first, 0,
-             rows ? Range{0, r.firstCol, kMaxRows - 1, r.lastCol} : Range{r.firstRow, 0, r.lastRow, kMaxCols - 1}};
-    refs::Mover m(sh);
-    m.dest = dest;
-    auto moved = [&](uint32_t row, uint32_t col) {
-      CellAddr a{row, col};
-      if (inside(row, col)) m.Cell(a.row, a.col);
-      return a;
+    // ---- What Excel refuses.
+    for (const Range& g : s.Merges())
+      if (Overlaps(g, r)) return Result::Fail(u"To do this, all the merged cells need to be the same size.");
+    for (const Range& a : State::Arrays(s))
+      if (Overlaps(a, r)) return Result::Fail(u"You can't change part of an array.");
+    const std::vector<FCell> fcells = FormulaCellsOf(s);
+    auto inside = [&](uint32_t row, uint32_t col) {
+      return row >= r.firstRow && row <= r.lastRow && col >= r.firstCol && col <= r.lastCol;
     };
-    auto key = [](uint32_t row, uint32_t col) { return (static_cast<uint64_t>(row) << 16) | col; };
-
-    // ---- Formulas: moved ones copied to their new cells, each a record of its own; shared formulas
-    // reaching into the range shared no more (Excel writes every cell's own).
-    BookNames names(book_);
-    auto& recs = A::Formulas(s);
-    TextPool& texts = A::Texts(s);
-    auto& store = A::Store(s);
-    std::unordered_map<uint32_t, std::pair<CellAddr, std::string>> masters;  // shared index -> master
-    std::unordered_set<uint32_t> unshared;
-    for (const FCell& c : fcells)
-      if (c.id < recs.size() && recs[c.id].kind == FormulaKind::Shared && recs[c.id].sharedIndex != kNone &&
-          inside(c.row, c.col))
-        unshared.insert(recs[c.id].sharedIndex);
-    for (const FCell& c : fcells)
-      if (c.id < recs.size() && recs[c.id].kind == FormulaKind::Shared && recs[c.id].text != kNone &&
-          unshared.count(recs[c.id].sharedIndex))
-        masters[recs[c.id].sharedIndex] = {CellAddr{c.row, c.col}, std::string(texts.Get(recs[c.id].text))};
-    std::unordered_map<uint64_t, uint32_t> own;  // cell (where it was) -> its new record
     for (const FCell& c : fcells) {
-      if (c.id >= recs.size()) continue;
-      const CellAddr at{c.row, c.col}, to = moved(c.row, c.col);
-      const bool moves = !(at == to);
-      const FormulaRec was = recs[c.id];
-      std::string text;
-      if (was.kind == FormulaKind::Shared && was.sharedIndex != kNone && unshared.count(was.sharedIndex)) {
-        auto mi = masters.find(was.sharedIndex);
-        if (mi == masters.end()) continue;  // a follower without its master: left as read
-        text = was.text != kNone ? mi->second.second
-                                 : [&] {
-                                     calc::CompileOptions a, b;
-                                     a.sheet = b.sheet = sheet;
-                                     a.row = static_cast<int32_t>(mi->second.first.row);
-                                     a.col = static_cast<int32_t>(mi->second.first.col);
-                                     b.row = static_cast<int32_t>(c.row);
-                                     b.col = static_cast<int32_t>(c.col);
-                                     std::string out = calc::CopyFormula("=" + mi->second.second, a, b, names);
-                                     return !out.empty() && out[0] == '=' ? out.substr(1) : out;
-                                   }();
-      } else if (!moves || was.text == kNone) {
-        continue;
-      } else {
-        text = std::string(texts.Get(was.text));
-      }
-      if (moves) text = SortedFormula(text, sheet, at, to, names);
-      FormulaRec rec = was;
-      if (rec.kind == FormulaKind::Shared) {
-        rec.kind = FormulaKind::Normal;
-        rec.sharedIndex = kNone;
-        rec.hasRef = false;
-        rec.attrs = EditAttrs(store, rec.attrs, {"t", "ref", "si"});
-      } else if (rec.hasRef && (rec.kind == FormulaKind::Array || rec.dynamic) && moves) {
-        rec.ref = Range{to.row, to.col, to.row, to.col};
-        rec.attrs = EditAttrs(store, rec.attrs, {}, RangeName(rec.ref));
-      }
-      rec.text = texts.Add(text);
-      recs.push_back(rec);
-      own[key(c.row, c.col)] = static_cast<uint32_t>(recs.size() - 1);
+      if (!inside(c.row, c.col) || c.id >= A::Formulas(s).size()) continue;
+      const FormulaRec& f = A::Formulas(s)[c.id];
+      if (f.kind == FormulaKind::DataTable) return Result::Fail(u"Featherweight can't sort a what-if data table yet.");
+      if (f.dynamic && f.hasRef && !(f.ref.firstRow == f.ref.lastRow && f.ref.firstCol == f.ref.lastCol))
+        return Result::Fail(u"You can't change part of an array.");
     }
-
-    // ---- Cells: the blocks holding the range's rows laid out again, the rest kept.
-    struct Item {
-      uint32_t row = 0;
-      CellRec cell;
-      uint32_t formula = kNone;
-      bool hasSide = false;
-      CellSide side;
-    };
-    const auto& oldBlocks = A::Blocks(s);
-    const auto& oldFirst = A::FirstRows(s);
-    std::vector<std::shared_ptr<RowBlock>> blocks;
-    std::vector<uint32_t> firstRows;
-    std::vector<Item> items;
-    std::vector<RowRec> rowRecs;
-    auto flush = [&]() {  // the gathered rows, sorted, into new blocks
-      std::stable_sort(items.begin(), items.end(),
-                       [](const Item& a, const Item& b) { return a.row != b.row ? a.row < b.row : a.cell.col < b.cell.col; });
-      bool open = false;
-      for (size_t ri = 0, ci = 0; ri < rowRecs.size() || ci < items.size();) {
-        uint32_t row = std::min(ri < rowRecs.size() ? rowRecs[ri].row : kNone, ci < items.size() ? items[ci].row : kNone);
-        RowRec rec;
-        rec.row = row;
-        if (ri < rowRecs.size() && rowRecs[ri].row == row) rec = rowRecs[ri++];
-        if (!open || blocks.back()->rows.size() >= kBlockRows || blocks.back()->cells.size() >= SheetBuilder::kBlockCells) {
-          blocks.push_back(std::make_shared<RowBlock>());
-          firstRows.push_back(row);
-          open = true;
-        }
-        RowBlock& b = *blocks.back();
-        rec.first = static_cast<uint32_t>(b.cells.size());
-        rec.count = 0;
-        for (; ci < items.size() && items[ci].row == row; ++ci) {
-          uint32_t index = static_cast<uint32_t>(b.cells.size());
-          b.cells.push_back(items[ci].cell);
-          if (items[ci].formula != kNone && (items[ci].cell.flags & detail::kHasFormula))
-            b.formulas.push_back({index, items[ci].formula});
-          if (items[ci].hasSide) {
-            b.sides.push_back(items[ci].side);
-            b.sides.back().cell = index;
-          }
-          ++rec.count;
-        }
-        b.rows.push_back(rec);
-      }
-      items.clear();
-      rowRecs.clear();
-    };
-    for (size_t bi = 0; bi < oldBlocks.size(); ++bi) {
-      const RowBlock& b = *oldBlocks[bi];
-      if (b.rows.empty() || b.rows.back().row < r.firstRow || b.rows.front().row > r.lastRow) {
-        flush();
-        blocks.push_back(oldBlocks[bi]);
-        firstRows.push_back(oldFirst[bi]);
-        continue;
-      }
-      size_t fi = 0, si = 0;
-      for (const RowRec& r0 : b.rows) {
-        for (uint32_t k = r0.first; k < r0.first + r0.count; ++k) {
-          while (fi < b.formulas.size() && b.formulas[fi].first < k) ++fi;
-          while (si < b.sides.size() && b.sides[si].cell < k) ++si;
-          const CellRec& c0 = b.cells[k];
-          const CellAddr to = moved(r0.row, c0.col);
-          Item it;
-          it.row = to.row;
-          it.cell = c0;
-          it.cell.col = static_cast<uint16_t>(to.col);
-          it.formula = fi < b.formulas.size() && b.formulas[fi].first == k ? b.formulas[fi].second : kNone;
-          if (auto o = own.find(key(r0.row, c0.col)); o != own.end()) it.formula = o->second;
-          if (si < b.sides.size() && b.sides[si].cell == k) {
-            it.hasSide = true;
-            it.side = b.sides[si];
-            if (!(to == CellAddr{r0.row, c0.col})) it.side.attrs = EditAttrs(store, it.side.attrs, {"r"});
-          }
-          items.push_back(it);
-        }
-        RowRec rr = r0;
-        if (r0.row >= r.firstRow && r0.row <= r.lastRow) rr.attrs = EditAttrs(store, rr.attrs, {"spans"});
-        rowRecs.push_back(rr);
-      }
-    }
-    flush();
-    size_t cellCount = 0, formulaCells = 0;
-    for (const auto& b : blocks) {
-      cellCount += b->cells.size();
-      formulaCells += b->formulas.size();
-    }
-    A::Blocks(s) = std::move(blocks);
-    A::FirstRows(s) = std::move(firstRows);
-    A::CellCount(s) = cellCount;
-    A::FormulaCells(s) = formulaCells;
-    std::vector<detail::Kept> kept;
-    for (detail::Kept k : A::Kept(s)) {
-      if (k.row != kNone && k.col != detail::Kept::kBeforeRow && k.col != detail::Kept::kRowEnd) {
-        CellAddr to = moved(k.row, k.col);
-        k.row = to.row;
-        k.col = to.col;
-      }
-      kept.push_back(std::move(k));
-    }
-    std::stable_sort(kept.begin(), kept.end(), [](const detail::Kept& a, const detail::Kept& b) { return a.row < b.row; });
-    A::Kept(s) = std::move(kept);
-
-    // ---- Links on cells that moved go with them.
-    {
-      std::vector<Hyperlink> links = s.Hyperlinks();
-      bool changed = false;
-      for (Hyperlink& h : links) {
-        bool one = rows ? h.ref.firstRow == h.ref.lastRow : h.ref.firstCol == h.ref.lastCol;
-        if (!one || !inside(h.ref.firstRow, h.ref.firstCol) || !inside(h.ref.lastRow, h.ref.lastCol)) continue;
-        CellAddr to = moved(h.ref.firstRow, h.ref.firstCol);
-        if (to == CellAddr{h.ref.firstRow, h.ref.firstCol}) continue;
-        h.ref = Range{to.row, to.col, to.row + (h.ref.lastRow - h.ref.firstRow), to.col + (h.ref.lastCol - h.ref.firstCol)};
-        changed = true;
-      }
-      if (changed) {
-        st.SaveLinks(sv);
-        A::Links(s) = std::move(links);
-      }
-    }
-
-    // ---- The sort's record (sortState), as Excel writes it.
-    if (!keys.empty()) {
-      st.SaveText(sv);
-      detail::PartText& t = A::Text(s);
-      const std::string p = xlsx::SheetPrefix(t);
-      std::string x = "<" + p + "sortState";
-      if (!rows) x += " columnSort=\"1\"";
-      x += " ref=\"" + RangeName(r) + "\">";
-      for (const SortKey& k : keys) {
-        Range kr = rows ? Range{r.firstRow, k.line, r.lastRow, k.line} : Range{k.line, r.firstCol, k.line, r.lastCol};
-        x += "<" + p + "sortCondition";
-        if (k.descending) x += " descending=\"1\"";
-        x += " ref=\"" + RangeName(kr) + "\"/>";
-      }
-      x += "</" + p + "sortState>";
-      xlsx::PutSheetElement(t, "sortState", x);
-    }
-
-    // ---- Notes (and threaded comments, VML boxes) and drawings inside one row go with their cells.
-    if (package) {
-      refs::Context ctx{m, sheet, s.Name(), {}, {}};
-      ctx.formula = [](std::string_view text, int, uint32_t, uint32_t) { return std::string(text); };
-      ctx.copy = [](std::string_view text, int, CellAddr, CellAddr) { return std::string(text); };
+    std::vector<std::pair<std::string, std::string>> sheetParts;  // relationship type, part
+    if (package && !s.PartName().empty())
+      if (const pkg::RelationshipSet* rels = package->RelationshipsOf(s.PartName()))
+        for (const pkg::Relationship& rel : rels->items)
+          if (!rel.external && !rel.targetPart.empty()) sheetParts.push_back({rel.type, rel.targetPart});
+    if (package)
       for (const auto& [type, part] : sheetParts) {
         std::vector<uint8_t> bytes;
-        if (!package->ReadPart(part, bytes).Ok()) continue;
-        std::string xml(bytes.begin(), bytes.end());
-        bool changed = false;
-        if (EndsWith(type, "/comments") || EndsWith(type, "/threadedComment")) changed = refs::MoveComments(xml, ctx);
-        else if (EndsWith(type, "/vmlDrawing")) changed = refs::MoveVml(xml, sheet, ctx);
-        else if (EndsWith(type, "/drawing")) changed = refs::MoveDrawing(xml, sheet, ctx);
-        if (changed) st.SetPart(part, std::move(xml));
+        Range where;
+        if (EndsWith(type, "/pivotTable") && package->ReadPart(part, bytes).Ok() &&
+            PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
+            Overlaps(where, r))
+          return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
       }
-    }
-    st.Change(&s, kValues | kFormulas | kStyles | kObjects, r);
-    return Result{};
-  });
+
+    return Run(*this, u"Sort", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveAllFormulas(sv);
+      st.SaveLayout(sv);
+      st.SaveKept(sv);
+      Shift sh{rows ? Shift::Axis::Rows : Shift::Axis::Columns, first, 0,
+               rows ? Range{0, r.firstCol, kMaxRows - 1, r.lastCol} : Range{r.firstRow, 0, r.lastRow, kMaxCols - 1}};
+      refs::Mover m(sh);
+      m.dest = dest;
+      auto moved = [&](uint32_t row, uint32_t col) {
+        CellAddr a{row, col};
+        if (inside(row, col)) m.Cell(a.row, a.col);
+        return a;
+      };
+      auto key = [](uint32_t row, uint32_t col) { return (static_cast<uint64_t>(row) << 16) | col; };
+
+      // ---- Formulas: moved ones copied to their new cells, each a record of its own; shared formulas
+      // reaching into the range shared no more (Excel writes every cell's own).
+      BookNames names(book_);
+      auto& recs = A::Formulas(s);
+      TextPool& texts = A::Texts(s);
+      auto& store = A::Store(s);
+      std::unordered_map<uint32_t, std::pair<CellAddr, std::string>> masters;  // shared index -> master
+      std::unordered_set<uint32_t> unshared;
+      for (const FCell& c : fcells)
+        if (c.id < recs.size() && recs[c.id].kind == FormulaKind::Shared && recs[c.id].sharedIndex != kNone &&
+            inside(c.row, c.col))
+          unshared.insert(recs[c.id].sharedIndex);
+      for (const FCell& c : fcells)
+        if (c.id < recs.size() && recs[c.id].kind == FormulaKind::Shared && recs[c.id].text != kNone &&
+            unshared.count(recs[c.id].sharedIndex))
+          masters[recs[c.id].sharedIndex] = {CellAddr{c.row, c.col}, std::string(texts.Get(recs[c.id].text))};
+      std::unordered_map<uint64_t, uint32_t> own;  // cell (where it was) -> its new record
+      for (const FCell& c : fcells) {
+        if (c.id >= recs.size()) continue;
+        const CellAddr at{c.row, c.col}, to = moved(c.row, c.col);
+        const bool moves = !(at == to);
+        const FormulaRec was = recs[c.id];
+        std::string text;
+        if (was.kind == FormulaKind::Shared && was.sharedIndex != kNone && unshared.count(was.sharedIndex)) {
+          auto mi = masters.find(was.sharedIndex);
+          if (mi == masters.end()) continue;  // a follower without its master: left as read
+          text = was.text != kNone ? mi->second.second
+                                   : [&] {
+                                       calc::CompileOptions a, b;
+                                       a.sheet = b.sheet = sheet;
+                                       a.row = static_cast<int32_t>(mi->second.first.row);
+                                       a.col = static_cast<int32_t>(mi->second.first.col);
+                                       b.row = static_cast<int32_t>(c.row);
+                                       b.col = static_cast<int32_t>(c.col);
+                                       std::string out = calc::CopyFormula("=" + mi->second.second, a, b, names);
+                                       return !out.empty() && out[0] == '=' ? out.substr(1) : out;
+                                     }();
+        } else if (!moves || was.text == kNone) {
+          continue;
+        } else {
+          text = std::string(texts.Get(was.text));
+        }
+        if (moves) text = SortedFormula(text, sheet, at, to, names);
+        FormulaRec rec = was;
+        if (rec.kind == FormulaKind::Shared) {
+          rec.kind = FormulaKind::Normal;
+          rec.sharedIndex = kNone;
+          rec.hasRef = false;
+          rec.attrs = EditAttrs(store, rec.attrs, {"t", "ref", "si"});
+        } else if (rec.hasRef && (rec.kind == FormulaKind::Array || rec.dynamic) && moves) {
+          rec.ref = Range{to.row, to.col, to.row, to.col};
+          rec.attrs = EditAttrs(store, rec.attrs, {}, RangeName(rec.ref));
+        }
+        rec.text = texts.Add(text);
+        recs.push_back(rec);
+        own[key(c.row, c.col)] = static_cast<uint32_t>(recs.size() - 1);
+      }
+
+      // ---- Cells: the blocks holding the range's rows laid out again, the rest kept.
+      struct Item {
+        uint32_t row = 0;
+        CellRec cell;
+        uint32_t formula = kNone;
+        bool hasSide = false;
+        CellSide side;
+      };
+      const auto& oldBlocks = A::Blocks(s);
+      const auto& oldFirst = A::FirstRows(s);
+      std::vector<std::shared_ptr<RowBlock>> blocks;
+      std::vector<uint32_t> firstRows;
+      std::vector<Item> items;
+      std::vector<RowRec> rowRecs;
+      auto flush = [&]() {  // the gathered rows, sorted, into new blocks
+        std::stable_sort(items.begin(), items.end(),
+                         [](const Item& a, const Item& b) { return a.row != b.row ? a.row < b.row : a.cell.col < b.cell.col; });
+        bool open = false;
+        for (size_t ri = 0, ci = 0; ri < rowRecs.size() || ci < items.size();) {
+          uint32_t row = std::min(ri < rowRecs.size() ? rowRecs[ri].row : kNone, ci < items.size() ? items[ci].row : kNone);
+          RowRec rec;
+          rec.row = row;
+          if (ri < rowRecs.size() && rowRecs[ri].row == row) rec = rowRecs[ri++];
+          if (!open || blocks.back()->rows.size() >= kBlockRows || blocks.back()->cells.size() >= SheetBuilder::kBlockCells) {
+            blocks.push_back(std::make_shared<RowBlock>());
+            firstRows.push_back(row);
+            open = true;
+          }
+          RowBlock& b = *blocks.back();
+          rec.first = static_cast<uint32_t>(b.cells.size());
+          rec.count = 0;
+          for (; ci < items.size() && items[ci].row == row; ++ci) {
+            uint32_t index = static_cast<uint32_t>(b.cells.size());
+            b.cells.push_back(items[ci].cell);
+            if (items[ci].formula != kNone && (items[ci].cell.flags & detail::kHasFormula))
+              b.formulas.push_back({index, items[ci].formula});
+            if (items[ci].hasSide) {
+              b.sides.push_back(items[ci].side);
+              b.sides.back().cell = index;
+            }
+            ++rec.count;
+          }
+          b.rows.push_back(rec);
+        }
+        items.clear();
+        rowRecs.clear();
+      };
+      for (size_t bi = 0; bi < oldBlocks.size(); ++bi) {
+        const RowBlock& b = *oldBlocks[bi];
+        if (b.rows.empty() || b.rows.back().row < r.firstRow || b.rows.front().row > r.lastRow) {
+          flush();
+          blocks.push_back(oldBlocks[bi]);
+          firstRows.push_back(oldFirst[bi]);
+          continue;
+        }
+        size_t fi = 0, si = 0;
+        for (const RowRec& r0 : b.rows) {
+          for (uint32_t k = r0.first; k < r0.first + r0.count; ++k) {
+            while (fi < b.formulas.size() && b.formulas[fi].first < k) ++fi;
+            while (si < b.sides.size() && b.sides[si].cell < k) ++si;
+            const CellRec& c0 = b.cells[k];
+            const CellAddr to = moved(r0.row, c0.col);
+            Item it;
+            it.row = to.row;
+            it.cell = c0;
+            it.cell.col = static_cast<uint16_t>(to.col);
+            it.formula = fi < b.formulas.size() && b.formulas[fi].first == k ? b.formulas[fi].second : kNone;
+            if (auto o = own.find(key(r0.row, c0.col)); o != own.end()) it.formula = o->second;
+            if (si < b.sides.size() && b.sides[si].cell == k) {
+              it.hasSide = true;
+              it.side = b.sides[si];
+              if (!(to == CellAddr{r0.row, c0.col})) it.side.attrs = EditAttrs(store, it.side.attrs, {"r"});
+            }
+            items.push_back(it);
+          }
+          RowRec rr = r0;
+          if (r0.row >= r.firstRow && r0.row <= r.lastRow) rr.attrs = EditAttrs(store, rr.attrs, {"spans"});
+          rowRecs.push_back(rr);
+        }
+      }
+      flush();
+      size_t cellCount = 0, formulaCells = 0;
+      for (const auto& b : blocks) {
+        cellCount += b->cells.size();
+        formulaCells += b->formulas.size();
+      }
+      A::Blocks(s) = std::move(blocks);
+      A::FirstRows(s) = std::move(firstRows);
+      A::CellCount(s) = cellCount;
+      A::FormulaCells(s) = formulaCells;
+      std::vector<detail::Kept> kept;
+      for (detail::Kept k : A::Kept(s)) {
+        if (k.row != kNone && k.col != detail::Kept::kBeforeRow && k.col != detail::Kept::kRowEnd) {
+          CellAddr to = moved(k.row, k.col);
+          k.row = to.row;
+          k.col = to.col;
+        }
+        kept.push_back(std::move(k));
+      }
+      std::stable_sort(kept.begin(), kept.end(), [](const detail::Kept& a, const detail::Kept& b) { return a.row < b.row; });
+      A::Kept(s) = std::move(kept);
+
+      // ---- Links on cells that moved go with them.
+      {
+        std::vector<Hyperlink> links = s.Hyperlinks();
+        bool changed = false;
+        for (Hyperlink& h : links) {
+          bool one = rows ? h.ref.firstRow == h.ref.lastRow : h.ref.firstCol == h.ref.lastCol;
+          if (!one || !inside(h.ref.firstRow, h.ref.firstCol) || !inside(h.ref.lastRow, h.ref.lastCol)) continue;
+          CellAddr to = moved(h.ref.firstRow, h.ref.firstCol);
+          if (to == CellAddr{h.ref.firstRow, h.ref.firstCol}) continue;
+          h.ref = Range{to.row, to.col, to.row + (h.ref.lastRow - h.ref.firstRow), to.col + (h.ref.lastCol - h.ref.firstCol)};
+          changed = true;
+        }
+        if (changed) {
+          st.SaveLinks(sv);
+          A::Links(s) = std::move(links);
+        }
+      }
+
+      // ---- The sort's record (sortState), as Excel writes it.
+      if (!keys.empty()) {
+        st.SaveText(sv);
+        detail::PartText& t = A::Text(s);
+        const std::string p = xlsx::SheetPrefix(t);
+        std::string x = "<" + p + "sortState";
+        if (!rows) x += " columnSort=\"1\"";
+        x += " ref=\"" + RangeName(r) + "\">";
+        for (const SortKey& k : keys) {
+          Range kr = rows ? Range{r.firstRow, k.line, r.lastRow, k.line} : Range{k.line, r.firstCol, k.line, r.lastCol};
+          x += "<" + p + "sortCondition";
+          if (k.descending) x += " descending=\"1\"";
+          x += " ref=\"" + RangeName(kr) + "\"/>";
+        }
+        x += "</" + p + "sortState>";
+        xlsx::PutSheetElement(t, "sortState", x);
+      }
+
+      // ---- Notes (and threaded comments, VML boxes) and drawings inside one row go with their cells.
+      if (package) {
+        refs::Context ctx{m, sheet, s.Name(), {}, {}};
+        ctx.formula = [](std::string_view text, int, uint32_t, uint32_t) { return std::string(text); };
+        ctx.copy = [](std::string_view text, int, CellAddr, CellAddr) { return std::string(text); };
+        for (const auto& [type, part] : sheetParts) {
+          std::vector<uint8_t> bytes;
+          if (!package->ReadPart(part, bytes).Ok()) continue;
+          std::string xml(bytes.begin(), bytes.end());
+          bool changed = false;
+          if (EndsWith(type, "/comments") || EndsWith(type, "/threadedComment")) changed = refs::MoveComments(xml, ctx);
+          else if (EndsWith(type, "/vmlDrawing")) changed = refs::MoveVml(xml, sheet, ctx);
+          else if (EndsWith(type, "/drawing")) changed = refs::MoveDrawing(xml, sheet, ctx);
+          if (changed) st.SetPart(part, std::move(xml));
+        }
+      }
+      st.Change(&s, kValues | kFormulas | kStyles | kObjects, r);
+      return Result{};
+    });
+  }());
 }
 
 namespace {
@@ -3031,74 +3141,80 @@ void Editor::RewriteSheetRefs(int skip, const std::function<std::string(std::str
 // ---- Merged cells
 
 Result Editor::Merge(int sheet, const Range& r) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  if (!Valid(r) || (r.firstRow == r.lastRow && r.firstCol == r.lastCol)) return BadRange();
-  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  // The merges it overlaps go into it.
-  Range m = r;
-  for (bool grew = true; grew;) {
-    grew = false;
-    for (const Range& x : s.Merges())
-      if (Overlaps(x, m) && !Inside(x, m)) {
-        m = Range{std::min(m.firstRow, x.firstRow), std::min(m.firstCol, x.firstCol), std::max(m.lastRow, x.lastRow),
-                  std::max(m.lastCol, x.lastCol)};
-        grew = true;
-      }
-  }
-  for (const Range& arr : State::Arrays(s))
-    if (Overlaps(arr, m)) return Result::Fail(u"You can't change part of an array.");
-  // Excel offers no merging in tables and pivot tables (a file with one is repaired).
-  for (const Table& t : s.Tables())
-    if (Overlaps(t.ref, m)) return Result::Fail(u"Cells in a table can't be merged.");
-  if (pkg::Package* package = book_.GetPackage(); package && !s.PartName().empty())
-    if (const pkg::RelationshipSet* rels = package->RelationshipsOf(s.PartName()))
-      for (const pkg::Relationship& rel : rels->items) {
-        std::vector<uint8_t> bytes;
-        Range where;
-        if (!rel.external && EndsWith(rel.type, "/pivotTable") && package->ReadPart(rel.targetPart, bytes).Ok() &&
-            PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
-            Overlaps(where, m))
-          return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
-      }
-  return Run(*this, u"Merge Cells", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    std::u16string why;
-    for (const CellAddr& a : State::StoredIn(s, m))
-      if (!(a.row == m.firstRow && a.col == m.firstCol) && !st.Put(sv, a.row, a.col, nullptr, true, std::nullopt, why))
-        return Result::Fail(why);
-    st.SaveMerges(sv);
-    auto& merges = A::Merges(s);
-    merges.erase(std::remove_if(merges.begin(), merges.end(), [&](const Range& x) { return Overlaps(x, m); }), merges.end());
-    merges.push_back(m);
-    st.RecountMerges(s);
-    st.Change(&s, kMerges | kValues | kFormulas, m);
-    return Result{};
-  });
+  Rec rec(*this, JournalOp::Merge, [&](JournalRecord& w) { w.I(sheet).R(r); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!Valid(r) || (r.firstRow == r.lastRow && r.firstCol == r.lastCol)) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    // The merges it overlaps go into it.
+    Range m = r;
+    for (bool grew = true; grew;) {
+      grew = false;
+      for (const Range& x : s.Merges())
+        if (Overlaps(x, m) && !Inside(x, m)) {
+          m = Range{std::min(m.firstRow, x.firstRow), std::min(m.firstCol, x.firstCol), std::max(m.lastRow, x.lastRow),
+                    std::max(m.lastCol, x.lastCol)};
+          grew = true;
+        }
+    }
+    for (const Range& arr : State::Arrays(s))
+      if (Overlaps(arr, m)) return Result::Fail(u"You can't change part of an array.");
+    // Excel offers no merging in tables and pivot tables (a file with one is repaired).
+    for (const Table& t : s.Tables())
+      if (Overlaps(t.ref, m)) return Result::Fail(u"Cells in a table can't be merged.");
+    if (pkg::Package* package = book_.GetPackage(); package && !s.PartName().empty())
+      if (const pkg::RelationshipSet* rels = package->RelationshipsOf(s.PartName()))
+        for (const pkg::Relationship& rel : rels->items) {
+          std::vector<uint8_t> bytes;
+          Range where;
+          if (!rel.external && EndsWith(rel.type, "/pivotTable") && package->ReadPart(rel.targetPart, bytes).Ok() &&
+              PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
+              Overlaps(where, m))
+            return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
+        }
+    return Run(*this, u"Merge Cells", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      std::u16string why;
+      for (const CellAddr& a : State::StoredIn(s, m))
+        if (!(a.row == m.firstRow && a.col == m.firstCol) && !st.Put(sv, a.row, a.col, nullptr, true, std::nullopt, why))
+          return Result::Fail(why);
+      st.SaveMerges(sv);
+      auto& merges = A::Merges(s);
+      merges.erase(std::remove_if(merges.begin(), merges.end(), [&](const Range& x) { return Overlaps(x, m); }), merges.end());
+      merges.push_back(m);
+      st.RecountMerges(s);
+      st.Change(&s, kMerges | kValues | kFormulas, m);
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::Unmerge(int sheet, const Range& r) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  if (!Valid(r)) return BadRange();
-  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  if (std::none_of(s.Merges().begin(), s.Merges().end(), [&](const Range& x) { return Overlaps(x, r); })) return {};
-  return Run(*this, u"Unmerge Cells", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    st.SaveMerges(sv);
-    auto& merges = A::Merges(s);
-    Range all = r;
-    for (const Range& x : merges)
-      if (Overlaps(x, r))
-        all = Range{std::min(all.firstRow, x.firstRow), std::min(all.firstCol, x.firstCol),
-                    std::max(all.lastRow, x.lastRow), std::max(all.lastCol, x.lastCol)};
-    merges.erase(std::remove_if(merges.begin(), merges.end(), [&](const Range& x) { return Overlaps(x, r); }), merges.end());
-    st.RecountMerges(s);
-    st.Change(&s, kMerges, all);
-    return Result{};
-  });
+  Rec rec(*this, JournalOp::Unmerge, [&](JournalRecord& w) { w.I(sheet).R(r); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!Valid(r)) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (std::none_of(s.Merges().begin(), s.Merges().end(), [&](const Range& x) { return Overlaps(x, r); })) return {};
+    return Run(*this, u"Unmerge Cells", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveMerges(sv);
+      auto& merges = A::Merges(s);
+      Range all = r;
+      for (const Range& x : merges)
+        if (Overlaps(x, r))
+          all = Range{std::min(all.firstRow, x.firstRow), std::min(all.firstCol, x.firstCol),
+                      std::max(all.lastRow, x.lastRow), std::max(all.lastCol, x.lastCol)};
+      merges.erase(std::remove_if(merges.begin(), merges.end(), [&](const Range& x) { return Overlaps(x, r); }), merges.end());
+      st.RecountMerges(s);
+      st.Change(&s, kMerges, all);
+      return Result{};
+    });
+  }());
 }
 
 // ---- Sheets
@@ -3117,236 +3233,259 @@ std::u16string Editor::CheckSheetName(std::string_view name, int except) const {
 }
 
 Result Editor::AddSheet(int at, std::string name) {
-  if (at < 0 || static_cast<size_t>(at) > book_.SheetCount()) at = static_cast<int>(book_.SheetCount());
-  if (name.empty()) {
-    for (size_t n = book_.SheetCount() + 1;; ++n) {
-      name = "Sheet" + std::to_string(n);
-      if (book_.FindSheet(name) < 0) break;
+  Rec rec(*this, JournalOp::AddSheet, [&](JournalRecord& w) { w.I(at).S(name); });
+  return rec.Done([&]() -> Result {
+    if (at < 0 || static_cast<size_t>(at) > book_.SheetCount()) at = static_cast<int>(book_.SheetCount());
+    if (name.empty()) {
+      for (size_t n = book_.SheetCount() + 1;; ++n) {
+        name = "Sheet" + std::to_string(n);
+        if (book_.FindSheet(name) < 0) break;
+      }
     }
-  }
-  if (std::u16string why = CheckSheetName(name); !why.empty()) return Result::Fail(why);
-  return Run(*this, u"Insert Sheet", [&]() -> Result {
-    State& st = *s_;
-    st.SaveBook(true, true);
-    uint32_t id = 0;
-    for (size_t i = 0; i < book_.SheetCount(); ++i) id = std::max(id, A::SheetId(book_.GetSheet(i)));
-    auto sheet = std::make_unique<Sheet>(book_, name);
-    WorkbookLoader::SetSheetInfo(*sheet, SheetKind::Worksheet, SheetState::Visible, id + 1, {}, {});
-    WorkbookLoader::MarkLoaded(*sheet, true);
-    SheetView view;
-    A::Views(*sheet).push_back(view);
-    Sheet* added = sheet.get();
-    auto& list = A::Sheets(book_);
-    std::vector<int> remap(list.size());
-    for (size_t i = 0; i < list.size(); ++i) remap[i] = static_cast<int>(i) + (static_cast<int>(i) >= at ? 1 : 0);
-    list.insert(list.begin() + at, std::move(sheet));
-    st.RemapNameSheets(remap);
-    uint32_t& active = A::Active(book_);
-    if (static_cast<int>(active) >= at) ++active;
-    st.SaveViews(st.Save(*added));
-    st.Change(added, kSheets, Range{});
-    return Result{};
-  });
+    if (std::u16string why = CheckSheetName(name); !why.empty()) return Result::Fail(why);
+    return Run(*this, u"Insert Sheet", [&]() -> Result {
+      State& st = *s_;
+      st.SaveBook(true, true);
+      uint32_t id = 0;
+      for (size_t i = 0; i < book_.SheetCount(); ++i) id = std::max(id, A::SheetId(book_.GetSheet(i)));
+      auto sheet = std::make_unique<Sheet>(book_, name);
+      WorkbookLoader::SetSheetInfo(*sheet, SheetKind::Worksheet, SheetState::Visible, id + 1, {}, {});
+      WorkbookLoader::MarkLoaded(*sheet, true);
+      SheetView view;
+      A::Views(*sheet).push_back(view);
+      Sheet* added = sheet.get();
+      auto& list = A::Sheets(book_);
+      std::vector<int> remap(list.size());
+      for (size_t i = 0; i < list.size(); ++i) remap[i] = static_cast<int>(i) + (static_cast<int>(i) >= at ? 1 : 0);
+      list.insert(list.begin() + at, std::move(sheet));
+      st.RemapNameSheets(remap);
+      uint32_t& active = A::Active(book_);
+      if (static_cast<int>(active) >= at) ++active;
+      st.SaveViews(st.Save(*added));
+      st.Change(added, kSheets, Range{});
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::RenameSheet(int sheet, std::string name) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  if (name == s.Name()) return {};
-  if (std::u16string why = CheckSheetName(name, sheet); !why.empty()) return Result::Fail(why);
-  if (!book_.LoadAll().Ok()) return Result::Fail(u"A sheet couldn't be read.");
-  std::string old = s.Name();
-  return Run(*this, u"Rename Sheet", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& own = st.Save(s);
-    own.dirty |= kPieceOther;
-    if (!(own.saved & kSaveName)) {
-      own.saved |= kSaveName;
-      own.name = A::Name(s);
-    }
-    A::Name(s) = name;
-    st.SaveBook(false, true);
-    // Formulas, names, rules, sparklines, charts and the rest; links to places keep their text (Excel).
-    RewriteSheetRefs(
-        -1, [&](std::string_view t, int) { return pkg::RenameSheetInFormula(t, old, name); },
-        [&](std::string_view t) { return Mentions(t, old); }, old, name);
-    st.Change(&s, kSheets | kFormulas, Range::All());
-    return Result{};
-  });
+  Rec rec(*this, JournalOp::RenameSheet, [&](JournalRecord& w) { w.I(sheet).S(name); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (name == s.Name()) return {};
+    if (std::u16string why = CheckSheetName(name, sheet); !why.empty()) return Result::Fail(why);
+    if (!book_.LoadAll().Ok()) return Result::Fail(u"A sheet couldn't be read.");
+    std::string old = s.Name();
+    return Run(*this, u"Rename Sheet", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& own = st.Save(s);
+      own.dirty |= kPieceOther;
+      if (!(own.saved & kSaveName)) {
+        own.saved |= kSaveName;
+        own.name = A::Name(s);
+      }
+      A::Name(s) = name;
+      st.SaveBook(false, true);
+      // Formulas, names, rules, sparklines, charts and the rest; links to places keep their text (Excel).
+      RewriteSheetRefs(
+          -1, [&](std::string_view t, int) { return pkg::RenameSheetInFormula(t, old, name); },
+          [&](std::string_view t) { return Mentions(t, old); }, old, name);
+      st.Change(&s, kSheets | kFormulas, Range::All());
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::MoveSheet(int sheet, int to) {
-  int n = static_cast<int>(book_.SheetCount());
-  if (sheet < 0 || sheet >= n) return NoSheet();
-  to = std::clamp(to, 0, n - 1);
-  if (to == sheet) return {};
-  return Run(*this, u"Move Sheet", [&]() -> Result {
-    State& st = *s_;
-    st.SaveBook(true, true);
-    // 3-D references whose end sheets move (before the list changes: indexes as they are).
-    std::vector<std::string> names;
-    for (size_t i = 0; i < book_.SheetCount(); ++i) names.push_back(book_.GetSheet(i).Name());
-    RewriteSheetRefs(
-        -1,
-        [&](std::string_view t, int at) {
-          calc::CompileOptions o;
-          o.sheet = at;
-          return calc::SheetsChanged(t, o, names, sheet, to);
-        },
-        [](std::string_view t) { return t.find(':') != std::string_view::npos && t.find('!') != std::string_view::npos; });
-    auto& list = A::Sheets(book_);
-    std::vector<Sheet*> before;
-    for (auto& p : list) before.push_back(p.get());
-    auto moved = std::move(list[static_cast<size_t>(sheet)]);
-    list.erase(list.begin() + sheet);
-    list.insert(list.begin() + to, std::move(moved));
-    std::vector<int> remap(before.size());
-    for (size_t i = 0; i < before.size(); ++i) remap[i] = st.IndexOf(before[i]);
-    st.RemapNameSheets(remap);
-    uint32_t& active = A::Active(book_);
-    if (active < remap.size()) active = static_cast<uint32_t>(remap[active]);
-    A::FirstTab(book_) = 0;
-    st.Change(&book_.GetSheet(static_cast<size_t>(to)), kSheets, Range{});
-    return Result{};
-  });
+  Rec rec(*this, JournalOp::MoveSheet, [&](JournalRecord& w) { w.I(sheet).I(to); });
+  return rec.Done([&]() -> Result {
+    int n = static_cast<int>(book_.SheetCount());
+    if (sheet < 0 || sheet >= n) return NoSheet();
+    to = std::clamp(to, 0, n - 1);
+    if (to == sheet) return {};
+    return Run(*this, u"Move Sheet", [&]() -> Result {
+      State& st = *s_;
+      st.SaveBook(true, true);
+      // 3-D references whose end sheets move (before the list changes: indexes as they are).
+      std::vector<std::string> names;
+      for (size_t i = 0; i < book_.SheetCount(); ++i) names.push_back(book_.GetSheet(i).Name());
+      RewriteSheetRefs(
+          -1,
+          [&](std::string_view t, int at) {
+            calc::CompileOptions o;
+            o.sheet = at;
+            return calc::SheetsChanged(t, o, names, sheet, to);
+          },
+          [](std::string_view t) { return t.find(':') != std::string_view::npos && t.find('!') != std::string_view::npos; });
+      auto& list = A::Sheets(book_);
+      std::vector<Sheet*> before;
+      for (auto& p : list) before.push_back(p.get());
+      auto moved = std::move(list[static_cast<size_t>(sheet)]);
+      list.erase(list.begin() + sheet);
+      list.insert(list.begin() + to, std::move(moved));
+      std::vector<int> remap(before.size());
+      for (size_t i = 0; i < before.size(); ++i) remap[i] = st.IndexOf(before[i]);
+      st.RemapNameSheets(remap);
+      uint32_t& active = A::Active(book_);
+      if (active < remap.size()) active = static_cast<uint32_t>(remap[active]);
+      A::FirstTab(book_) = 0;
+      st.Change(&book_.GetSheet(static_cast<size_t>(to)), kSheets, Range{});
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::DeleteSheet(int sheet) {
-  int n = static_cast<int>(book_.SheetCount());
-  if (sheet < 0 || sheet >= n) return NoSheet();
-  if (n == 1) return Result::Fail(u"A workbook needs at least one sheet.");
-  int visible = 0;
-  for (int i = 0; i < n; ++i) visible += book_.GetSheet(static_cast<size_t>(i)).State() == SheetState::Visible;
-  if (visible == 1 && book_.GetSheet(static_cast<size_t>(sheet)).State() == SheetState::Visible)
-    return Result::Fail(u"A workbook needs at least one visible sheet.");
-  if (!book_.LoadAll().Ok()) return Result::Fail(u"A sheet couldn't be read.");
-  return Run(*this, u"Delete Sheet", [&]() -> Result {
-    State& st = *s_;
-    st.SaveBook(true, true);
-    // References to it become #REF! as Excel writes them (Sheet2!A1+1 -> #REF!+1; 3-D ranges give
-    // way to the neighbour inside), and so do structured references to its tables; its charts and
-    // other parts go with it when the workbook is saved.
-    const Sheet& doomed = book_.GetSheet(static_cast<size_t>(sheet));
-    std::vector<std::string> sheetNames, tables;
-    for (size_t i = 0; i < book_.SheetCount(); ++i) sheetNames.push_back(book_.GetSheet(i).Name());
-    for (const Table& t : doomed.Tables()) tables.push_back(t.displayName);
-    const std::string goneName = doomed.Name();
-    RewriteSheetRefs(
-        sheet,
-        [&](std::string_view t, int at) {
-          calc::CompileOptions o;
-          o.sheet = at;
-          std::string r = StripRefTails(calc::SheetsChanged(t, o, sheetNames, sheet, -1));
-          for (const std::string& table : tables) r = refs::DropTableColumns(r, table, {});
-          return r;
-        },
-        [&](std::string_view t) {
-          if (Mentions(t, goneName)) return true;
-          for (const std::string& table : tables)
-            if (Mentions(t, table)) return true;
-          return false;
-        });
-    auto& list = A::Sheets(book_);
-    std::unique_ptr<Sheet> gone = std::move(list[static_cast<size_t>(sheet)]);
-    list.erase(list.begin() + sheet);
-    st.Cur().book.held.push_back(std::move(gone));
-    auto& names = A::Names(book_);
-    names.erase(std::remove_if(names.begin(), names.end(), [&](const DefinedName& x) { return x.sheet == sheet; }), names.end());
-    for (DefinedName& x : names)
-      if (x.sheet > sheet) --x.sheet;
-    uint32_t& active = A::Active(book_);
-    if (static_cast<int>(active) > sheet || static_cast<size_t>(active) >= list.size())
-      active = active > 0 ? active - 1 : 0;
-    while (active < list.size() && list[active]->State() != SheetState::Visible) ++active;
-    if (active >= list.size()) active = 0;
-    A::FirstTab(book_) = 0;
-    st.Change(nullptr, kSheets, Range{});
-    return Result{};
-  });
+  Rec rec(*this, JournalOp::DeleteSheet, [&](JournalRecord& w) { w.I(sheet); });
+  return rec.Done([&]() -> Result {
+    int n = static_cast<int>(book_.SheetCount());
+    if (sheet < 0 || sheet >= n) return NoSheet();
+    if (n == 1) return Result::Fail(u"A workbook needs at least one sheet.");
+    int visible = 0;
+    for (int i = 0; i < n; ++i) visible += book_.GetSheet(static_cast<size_t>(i)).State() == SheetState::Visible;
+    if (visible == 1 && book_.GetSheet(static_cast<size_t>(sheet)).State() == SheetState::Visible)
+      return Result::Fail(u"A workbook needs at least one visible sheet.");
+    if (!book_.LoadAll().Ok()) return Result::Fail(u"A sheet couldn't be read.");
+    return Run(*this, u"Delete Sheet", [&]() -> Result {
+      State& st = *s_;
+      st.SaveBook(true, true);
+      // References to it become #REF! as Excel writes them (Sheet2!A1+1 -> #REF!+1; 3-D ranges give
+      // way to the neighbour inside), and so do structured references to its tables; its charts and
+      // other parts go with it when the workbook is saved.
+      const Sheet& doomed = book_.GetSheet(static_cast<size_t>(sheet));
+      std::vector<std::string> sheetNames, tables;
+      for (size_t i = 0; i < book_.SheetCount(); ++i) sheetNames.push_back(book_.GetSheet(i).Name());
+      for (const Table& t : doomed.Tables()) tables.push_back(t.displayName);
+      const std::string goneName = doomed.Name();
+      RewriteSheetRefs(
+          sheet,
+          [&](std::string_view t, int at) {
+            calc::CompileOptions o;
+            o.sheet = at;
+            std::string r = StripRefTails(calc::SheetsChanged(t, o, sheetNames, sheet, -1));
+            for (const std::string& table : tables) r = refs::DropTableColumns(r, table, {});
+            return r;
+          },
+          [&](std::string_view t) {
+            if (Mentions(t, goneName)) return true;
+            for (const std::string& table : tables)
+              if (Mentions(t, table)) return true;
+            return false;
+          });
+      auto& list = A::Sheets(book_);
+      std::unique_ptr<Sheet> gone = std::move(list[static_cast<size_t>(sheet)]);
+      list.erase(list.begin() + sheet);
+      st.Cur().book.held.push_back(std::move(gone));
+      auto& names = A::Names(book_);
+      names.erase(std::remove_if(names.begin(), names.end(), [&](const DefinedName& x) { return x.sheet == sheet; }), names.end());
+      for (DefinedName& x : names)
+        if (x.sheet > sheet) --x.sheet;
+      uint32_t& active = A::Active(book_);
+      if (static_cast<int>(active) > sheet || static_cast<size_t>(active) >= list.size())
+        active = active > 0 ? active - 1 : 0;
+      while (active < list.size() && list[active]->State() != SheetState::Visible) ++active;
+      if (active >= list.size()) active = 0;
+      A::FirstTab(book_) = 0;
+      st.Change(nullptr, kSheets, Range{});
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::SetTabColor(int sheet, const Color& color) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  return Run(*this, u"Tab Color", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    st.SaveProps(sv);
-    A::Props(s).tabColor = color;
-    st.Change(&s, kSheetProps, Range{});
-    return Result{};
-  });
+  Rec rec(*this, JournalOp::SetTabColor, [&](JournalRecord& w) { w.I(sheet).C(color); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    return Run(*this, u"Tab Color", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveProps(sv);
+      A::Props(s).tabColor = color;
+      st.Change(&s, kSheetProps, Range{});
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::SetSheetState(int sheet, SheetState state) {
-  int n = static_cast<int>(book_.SheetCount());
-  if (sheet < 0 || sheet >= n) return NoSheet();
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  if (s.State() == state) return {};
-  if (state != SheetState::Visible) {
-    int visible = 0;
-    for (int i = 0; i < n; ++i) visible += book_.GetSheet(static_cast<size_t>(i)).State() == SheetState::Visible;
-    if (visible <= 1 && s.State() == SheetState::Visible)
-      return Result::Fail(u"A workbook needs at least one visible sheet.");
-  }
-  return Run(*this, state == SheetState::Visible ? u"Unhide Sheet" : u"Hide Sheet", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    st.SaveBook(false, false);
-    if (!(sv.saved & kSaveState)) {
-      sv.saved |= kSaveState;
-      sv.state = A::State(s);
+  Rec rec(*this, JournalOp::SetSheetState, [&](JournalRecord& w) { w.I(sheet).U(static_cast<uint8_t>(state)); });
+  return rec.Done([&]() -> Result {
+    int n = static_cast<int>(book_.SheetCount());
+    if (sheet < 0 || sheet >= n) return NoSheet();
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (s.State() == state) return {};
+    if (state != SheetState::Visible) {
+      int visible = 0;
+      for (int i = 0; i < n; ++i) visible += book_.GetSheet(static_cast<size_t>(i)).State() == SheetState::Visible;
+      if (visible <= 1 && s.State() == SheetState::Visible)
+        return Result::Fail(u"A workbook needs at least one visible sheet.");
     }
-    A::State(s) = state;
-    // The active tab moves off a sheet that's hidden.
-    uint32_t& active = A::Active(book_);
-    if (state != SheetState::Visible && static_cast<int>(active) == sheet) {
-      for (int i = 1; i < n; ++i) {
-        int j = (sheet + i) % n;
-        if (book_.GetSheet(static_cast<size_t>(j)).State() == SheetState::Visible) {
-          active = static_cast<uint32_t>(j);
-          break;
+    return Run(*this, state == SheetState::Visible ? u"Unhide Sheet" : u"Hide Sheet", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveBook(false, false);
+      if (!(sv.saved & kSaveState)) {
+        sv.saved |= kSaveState;
+        sv.state = A::State(s);
+      }
+      A::State(s) = state;
+      // The active tab moves off a sheet that's hidden.
+      uint32_t& active = A::Active(book_);
+      if (state != SheetState::Visible && static_cast<int>(active) == sheet) {
+        for (int i = 1; i < n; ++i) {
+          int j = (sheet + i) % n;
+          if (book_.GetSheet(static_cast<size_t>(j)).State() == SheetState::Visible) {
+            active = static_cast<uint32_t>(j);
+            break;
+          }
         }
       }
-    }
-    st.Change(&s, kSheetProps | kSheets, Range{});
-    return Result{};
-  });
+      st.Change(&s, kSheetProps | kSheets, Range{});
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::FreezePanes(int sheet, uint32_t rows, uint32_t cols) {
-  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
-  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
-  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-  return Run(*this, rows || cols ? u"Freeze Panes" : u"Unfreeze Panes", [&]() -> Result {
-    State& st = *s_;
-    SheetSave& sv = st.Save(s);
-    st.SaveViews(sv);
-    auto& views = A::Views(s);
-    if (views.empty()) views.emplace_back();
-    SheetView& v = views[0];
-    if (v.topLeft.row + rows >= kMaxRows || v.topLeft.col + cols >= kMaxCols) return BadRange();
-    if (rows == 0 && cols == 0) {
-      v.paneState = PaneState::None;
-      v.xSplit = v.ySplit = 0;
-      v.activePane = PaneId::TopLeft;
-    } else {
-      v.paneState = PaneState::Frozen;
-      v.xSplit = cols;
-      v.ySplit = rows;
-      v.paneTopLeft = {v.topLeft.row + rows, v.topLeft.col + cols};
-      v.activePane = rows && cols ? PaneId::BottomRight : rows ? PaneId::BottomLeft : PaneId::TopRight;
-    }
-    for (Selection& sel : v.selections) sel.pane = v.activePane;
-    st.Change(&s, kSheetProps, Range{});
-    return Result{};
-  });
+  Rec rec(*this, JournalOp::FreezePanes, [&](JournalRecord& w) { w.I(sheet).U(rows).U(cols); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    return Run(*this, rows || cols ? u"Freeze Panes" : u"Unfreeze Panes", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveViews(sv);
+      auto& views = A::Views(s);
+      if (views.empty()) views.emplace_back();
+      SheetView& v = views[0];
+      if (v.topLeft.row + rows >= kMaxRows || v.topLeft.col + cols >= kMaxCols) return BadRange();
+      if (rows == 0 && cols == 0) {
+        v.paneState = PaneState::None;
+        v.xSplit = v.ySplit = 0;
+        v.activePane = PaneId::TopLeft;
+      } else {
+        v.paneState = PaneState::Frozen;
+        v.xSplit = cols;
+        v.ySplit = rows;
+        v.paneTopLeft = {v.topLeft.row + rows, v.topLeft.col + cols};
+        v.activePane = rows && cols ? PaneId::BottomRight : rows ? PaneId::BottomLeft : PaneId::TopRight;
+      }
+      for (Selection& sel : v.selections) sel.pane = v.activePane;
+      st.Change(&s, kSheetProps, Range{});
+      return Result{};
+    });
+  }());
 }
 
 // ---- View state
 
 void Editor::SetActiveSheet(int sheet) {
+  Rec rec(*this, JournalOp::SetActiveSheet, [&](JournalRecord& w) { w.I(sheet).Key(0); });
+  rec.commit = true;
   if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return;
   uint32_t& active = A::Active(book_);
   if (active == static_cast<uint32_t>(sheet)) return;
@@ -3366,6 +3505,8 @@ SheetView& FirstView(Sheet& s) {
 }  // namespace
 
 void Editor::SetSelection(int sheet, CellAddr active, const std::vector<Range>& ranges) {
+  Rec rec(*this, JournalOp::SetSelection, [&](JournalRecord& w) { w.I(sheet).A(active).U(ranges.size()); for (const Range& x : ranges) w.R(x); w.Key(sheet); });
+  rec.commit = true;
   if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return;
   Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
   SheetView& v = FirstView(s);
@@ -3382,6 +3523,8 @@ void Editor::SetSelection(int sheet, CellAddr active, const std::vector<Range>& 
 }
 
 void Editor::SetTopLeft(int sheet, CellAddr topLeft) {
+  Rec rec(*this, JournalOp::SetTopLeft, [&](JournalRecord& w) { w.I(sheet).A(topLeft).Key(sheet); });
+  rec.commit = true;
   if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return;
   Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
   SheetView& v = FirstView(s);
@@ -3391,6 +3534,8 @@ void Editor::SetTopLeft(int sheet, CellAddr topLeft) {
 }
 
 void Editor::SetZoom(int sheet, uint32_t percent) {
+  Rec rec(*this, JournalOp::SetZoom, [&](JournalRecord& w) { w.I(sheet).U(percent).Key(sheet); });
+  rec.commit = true;
   if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return;
   Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
   FirstView(s).zoomScale = std::clamp(percent, 10u, 400u);
@@ -3415,46 +3560,56 @@ bool ValidName(std::string_view n) {
 }  // namespace
 
 Result Editor::SetName(const DefinedName& name) {
-  bool builtin = name.name.rfind("_xlnm.", 0) == 0;
-  if (!builtin && !ValidName(name.name)) return Result::Fail(u"That isn't a valid name.");
-  if (name.sheet >= static_cast<int>(book_.SheetCount())) return NoSheet();
-  if (name.formula.empty() || !XmlSafe(name.formula)) return Result::Fail(u"The name needs a reference or a formula.");
-  return Run(*this, u"Define Name", [&]() -> Result {
-    State& st = *s_;
-    st.SaveBook(false, true);
-    auto& names = A::Names(book_);
-    auto it = std::find_if(names.begin(), names.end(),
-                           [&](const DefinedName& x) { return x.sheet == name.sheet && NameEqualsNoCase(x.name, name.name); });
-    if (it != names.end()) *it = name;
-    else names.push_back(name);
-    st.Change(nullptr, kNames, Range{});
-    return Result{};
-  });
+  Rec rec(*this, JournalOp::SetName, [&](JournalRecord& w) { w.S(name.name).I(name.sheet).S(name.formula).B(name.hidden); });
+  return rec.Done([&]() -> Result {
+    bool builtin = name.name.rfind("_xlnm.", 0) == 0;
+    if (!builtin && !ValidName(name.name)) return Result::Fail(u"That isn't a valid name.");
+    if (name.sheet >= static_cast<int>(book_.SheetCount())) return NoSheet();
+    if (name.formula.empty() || !XmlSafe(name.formula)) return Result::Fail(u"The name needs a reference or a formula.");
+    return Run(*this, u"Define Name", [&]() -> Result {
+      State& st = *s_;
+      st.SaveBook(false, true);
+      auto& names = A::Names(book_);
+      auto it = std::find_if(names.begin(), names.end(),
+                             [&](const DefinedName& x) { return x.sheet == name.sheet && NameEqualsNoCase(x.name, name.name); });
+      if (it != names.end()) *it = name;
+      else names.push_back(name);
+      st.Change(nullptr, kNames, Range{});
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::DeleteName(std::string_view name, int sheet) {
-  auto& names = A::Names(book_);
-  auto it = std::find_if(names.begin(), names.end(),
-                         [&](const DefinedName& x) { return x.sheet == sheet && NameEqualsNoCase(x.name, name); });
-  if (it == names.end()) return Result::Fail(u"There's no such name.");
-  size_t index = static_cast<size_t>(it - names.begin());
-  return Run(*this, u"Delete Name", [&]() -> Result {
-    State& st = *s_;
-    st.SaveBook(false, true);
-    A::Names(book_).erase(A::Names(book_).begin() + static_cast<ptrdiff_t>(index));
-    st.Change(nullptr, kNames, Range{});
-    return Result{};
-  });
+  Rec rec(*this, JournalOp::DeleteName, [&](JournalRecord& w) { w.S(name).I(sheet); });
+  return rec.Done([&]() -> Result {
+    auto& names = A::Names(book_);
+    auto it = std::find_if(names.begin(), names.end(),
+                           [&](const DefinedName& x) { return x.sheet == sheet && NameEqualsNoCase(x.name, name); });
+    if (it == names.end()) return Result::Fail(u"There's no such name.");
+    size_t index = static_cast<size_t>(it - names.begin());
+    return Run(*this, u"Delete Name", [&]() -> Result {
+      State& st = *s_;
+      st.SaveBook(false, true);
+      A::Names(book_).erase(A::Names(book_).begin() + static_cast<ptrdiff_t>(index));
+      st.Change(nullptr, kNames, Range{});
+      return Result{};
+    });
+  }());
 }
 
 // ---- Steps
 
 void Editor::BeginGroup(std::u16string name) {
+  Rec rec(*this, JournalOp::BeginGroup, [&](JournalRecord& w) { w.S16(name); });
+  rec.commit = true;
   s_->open.emplace_back();
   s_->open.back().name = std::move(name);
 }
 
 void Editor::EndGroup() {
+  Rec rec(*this, JournalOp::EndGroup, [](JournalRecord&) {});
+  rec.commit = true;
   State& st = *s_;
   if (st.open.empty()) return;
   Step step = std::move(st.open.back());
@@ -3476,6 +3631,8 @@ void Editor::EndGroup() {
 }
 
 void Editor::CancelGroup() {
+  Rec rec(*this, JournalOp::CancelGroup, [](JournalRecord&) {});
+  rec.commit = true;
   State& st = *s_;
   if (st.open.empty()) return;
   Step step = std::move(st.open.back());
@@ -3501,41 +3658,47 @@ std::vector<std::u16string> Editor::RedoNames() const {
 }
 
 Result Editor::Undo(size_t steps) {
-  State& st = *s_;
-  if (st.saving) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
-  if (!st.open.empty()) return Result::Fail(u"An edit is still going on.");
-  if (st.undo.empty()) return Result::Fail(u"There's nothing to undo.");
-  std::vector<edit::Change> changes;
-  for (size_t i = 0; i < steps && !st.undo.empty(); ++i) {
-    Step step = std::move(st.undo.back());
-    st.undo.pop_back();
-    step.Swap(book_);
-    st.Count(step, -1, true);
-    auto c = st.Resolve(step, true);
-    changes.insert(changes.end(), c.begin(), c.end());
-    st.redo.push_back(std::move(step));
-  }
-  for (auto& l : listeners_) l(changes);
-  return {};
+  Rec rec(*this, JournalOp::Undo, [&](JournalRecord& w) { w.U(steps); });
+  return rec.Done([&]() -> Result {
+    State& st = *s_;
+    if (st.saving) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
+    if (!st.open.empty()) return Result::Fail(u"An edit is still going on.");
+    if (st.undo.empty()) return Result::Fail(u"There's nothing to undo.");
+    std::vector<edit::Change> changes;
+    for (size_t i = 0; i < steps && !st.undo.empty(); ++i) {
+      Step step = std::move(st.undo.back());
+      st.undo.pop_back();
+      step.Swap(book_);
+      st.Count(step, -1, true);
+      auto c = st.Resolve(step, true);
+      changes.insert(changes.end(), c.begin(), c.end());
+      st.redo.push_back(std::move(step));
+    }
+    for (auto& l : listeners_) l(changes);
+    return {};
+  }());
 }
 
 Result Editor::Redo(size_t steps) {
-  State& st = *s_;
-  if (st.saving) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
-  if (!st.open.empty()) return Result::Fail(u"An edit is still going on.");
-  if (st.redo.empty()) return Result::Fail(u"There's nothing to redo.");
-  std::vector<edit::Change> changes;
-  for (size_t i = 0; i < steps && !st.redo.empty(); ++i) {
-    Step step = std::move(st.redo.back());
-    st.redo.pop_back();
-    step.Swap(book_);
-    st.Count(step, 1, true);
-    auto c = st.Resolve(step, false);
-    changes.insert(changes.end(), c.begin(), c.end());
-    st.undo.push_back(std::move(step));
-  }
-  for (auto& l : listeners_) l(changes);
-  return {};
+  Rec rec(*this, JournalOp::Redo, [&](JournalRecord& w) { w.U(steps); });
+  return rec.Done([&]() -> Result {
+    State& st = *s_;
+    if (st.saving) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
+    if (!st.open.empty()) return Result::Fail(u"An edit is still going on.");
+    if (st.redo.empty()) return Result::Fail(u"There's nothing to redo.");
+    std::vector<edit::Change> changes;
+    for (size_t i = 0; i < steps && !st.redo.empty(); ++i) {
+      Step step = std::move(st.redo.back());
+      st.redo.pop_back();
+      step.Swap(book_);
+      st.Count(step, 1, true);
+      auto c = st.Resolve(step, false);
+      changes.insert(changes.end(), c.begin(), c.end());
+      st.undo.push_back(std::move(step));
+    }
+    for (auto& l : listeners_) l(changes);
+    return {};
+  }());
 }
 
 bool Editor::Modified() const {
@@ -3599,6 +3762,8 @@ void Editor::Saved(std::vector<Written> sheets, bool stringsWritten, std::string
   if (sheetsRemoved) {
     st.undo.clear();
     st.redo.clear();
+    Rec rec(*this, JournalOp::DropHistory, [](JournalRecord&) {});
+    rec.commit = true;
   }
   // The file holds the workbook as it was when the save began; view changes and formats added
   // since are still to save.
