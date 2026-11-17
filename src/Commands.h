@@ -319,4 +319,27 @@ enum Cmd : int {
   CmdTabColor = 2100,     // + index into the tab colors (0: none)
   CmdUnhideSheet = 2200,  // + the sheet's index: a hidden sheet shown again
   CmdUnhideSheetLast = 2699,
+  // Formats, sort and filter (S2, s2-format): 2700-2999.
+  CmdFormatCells = 2700,  // Ctrl+1
+  CmdNumberFormatBox,     // the toolbar's number formats
+  CmdIncreaseDecimal,
+  CmdDecreaseDecimal,
+  CmdMergeBox,            // the toolbar's merge choices
+  CmdMergeCenter,
+  CmdMergeAcross,
+  CmdMergeCells,
+  CmdUnmergeCells,
+  CmdBordersBox,          // the toolbar's borders; its main part repeats the last choice
+  CmdFillColor,
+  CmdStrikethrough,       // Ctrl+5
+  CmdNumGeneral,          // Ctrl+Shift+~
+  CmdNumNumber,           // Ctrl+Shift+1
+  CmdNumTime,             // Ctrl+Shift+2
+  CmdNumDate,             // Ctrl+Shift+3
+  CmdNumCurrency,         // Ctrl+Shift+4
+  CmdNumPercent,          // Ctrl+Shift+5
+  CmdNumScientific,       // Ctrl+Shift+6
+  CmdBorderOutline,       // Ctrl+Shift+7
+  CmdBorderRemove,        // Ctrl+Shift+-
+  CmdCellStyles,          // the toolbar's built-in cell styles
 };

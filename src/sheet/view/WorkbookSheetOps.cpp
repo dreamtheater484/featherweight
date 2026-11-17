@@ -231,6 +231,7 @@ void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
     item(m, CmdInsertCells, rows ? L"Insert rows\tCtrl++" : cols ? L"Insert columns\tCtrl++" : L"Insert cells\tCtrl++");
     item(m, CmdDeleteCells, rows ? L"Delete rows\tCtrl+-" : cols ? L"Delete columns\tCtrl+-" : L"Delete cells\tCtrl+-");
     item(m, CmdClearContents, L"Clear contents\tDelete");
+    item(m, CmdFormatCells, L"Format cells…\tCtrl+1");
     if (rows || cols) {
       AppendSeparator(m);
       item(m, rows ? CmdRowHeight : CmdColumnWidth, rows ? L"Row height…" : L"Column width…");

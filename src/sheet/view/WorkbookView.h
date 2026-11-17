@@ -342,6 +342,37 @@ class WorkbookView : public PagedView {
   // the workbook and its editor, so it goes first.
   std::unique_ptr<WorkbookFile> file_;
   bool keepFormat_ = false;  // "Keep CSV" chosen: no banner on the next saves
+  // ---- Formats (WorkbookFormat.cpp, s2-format): Format Cells (Ctrl+1) and the quick formats.
+  bool FormatCommand(int cmd);
+  bool FormatCommandState(int cmd, CommandState& s);
+  class FormatPanel;
+  std::unique_ptr<FormatPanel> formatPanel_;
+  void ShowFormatPanel(int page);
+  uint32_t ActiveStyle() const;  // the active cell's format (a CellXfs index)
+  // Every selected cell's format through `change`, which sets only what it changes; one undo step.
+  bool ChangeFormat(std::u16string name, const std::function<void(Xf&)>& change);
+  // The same for the cells of `r`, inside a group (Editor::BeginGroup).
+  bool ChangeFormatIn(const Range& r, const std::function<void(Xf&)>& change);
+  bool ChangeFont(std::u16string name, const std::function<void(Font&)>& change);
+  // A number format's id: a built-in format's (the code as files define it), else a custom one's.
+  uint32_t NumFmtId(const std::wstring& code);
+  std::wstring CodeOf(uint32_t numFmt) const;  // invariant
+  bool ApplyNumberCode(const std::wstring& code);  // invariant
+  bool ChangeDecimals(int delta);                  // Increase and Decrease decimal, from the active cell
+  // Borders on the selection: 0 none, 1 outline, 2 all, 3 inside, 4..7 top, bottom, left, right.
+  bool ApplyBorders(int which, const BorderSide& side);
+  bool MergeCells(int how);  // 0 merge and center, 1 merge across, 2 merge, 3 unmerge
+  void AddFormatToolbar(ToolbarModel& m);
+  D2D1_COLOR_F lastFontColor_{0.75f, 0, 0, 1}, lastFill_{1, 1, 0, 1};  // the color buttons' main parts
+  int lastBorders_ = 0;  // the borders button's choice its main part repeats
+  bool ApplyCellStyle(int index);  // one of Excel's built-in cell styles (WorkbookFormat.cpp's list)
+  // The format painter: the formats copied, painted on the next selection made with the mouse.
+  struct Painter {
+    const Sheet* sheet = nullptr;
+    Range range;
+  };
+  std::optional<Painter> painter_;
+  void PaintFormats();
   // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
   bool GridCommand(int cmd);
   bool GridCommandState(int cmd, CommandState& s);
