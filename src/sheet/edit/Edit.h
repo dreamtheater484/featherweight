@@ -216,6 +216,23 @@ class Editor {
   // it (autoFilter, sheetPr filterMode while a column filters, the hidden name
   // _xlnm._FilterDatabase). The rows it hides are the caller's (HideRows, in the same group).
   Result SetFilter(int sheet, const std::optional<SheetFilter>& filter);
+
+  // ---- Package parts, for edit operations (charts, pictures, notes, comments, tables...): call
+  // them inside the operation's group (Run, or BeginGroup and EndGroup); undo and redo take them
+  // back with its step. False or empty when they can't: no group open, a workbook without a
+  // package (opened from CSV, never saved as .xlsx), no such part.
+  // A new part with its content type, and a relationship of type `relType` to it from `source`
+  // ("/" the package, else a part: a sheet's PartName(), a drawing...): the relationship's id.
+  std::string AddPart(std::string_view source, std::string_view relType, std::string_view name,
+                      std::string_view contentType, std::string bytes);
+  // A part that exists written anew.
+  bool WritePart(std::string_view name, std::string bytes);
+  // A part gone, with every relationship to it, its content type override and its own
+  // relationships (what those point to is the caller's to remove).
+  bool RemovePart(std::string_view name);
+  // The first name "<stem><n><ext>" no part has, n from 1: NewPartName("/xl/charts/chart", ".xml").
+  std::string NewPartName(std::string_view stem, std::string_view ext) const;
+  std::string PartBytes(std::string_view name) const;  // empty when there's no such part
   // Excel's rules for a sheet name: 1-31 characters, none of : \ / ? * [ ], not starting or
   // ending with ', not "History", and no other sheet's name (without case). Empty when valid.
   std::u16string CheckSheetName(std::string_view name, int except = -1) const;

@@ -896,3 +896,54 @@ TEST(sheet_save_registry_findings) {
   CHECK_EQ(FormulaText(s, 6, 3), std::string("$A$2+1"));
   CHECK_EQ(FormulaText(again->GetSheet(1), 0, 0), std::string("IF(B1=\"Sheet1\", B2, B3)"));
 }
+
+// Parts an edit adds and removes, with their relationship and content type, undone with its step
+// (S3: charts, pictures, notes and tables add parts).
+TEST(sheet_edit_add_remove_part) {
+  auto book = OpenParts({"<sheetData/>", "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  const std::string sheetPart = book->GetSheet(0).PartName();
+  const std::string type = "application/vnd.openxmlformats-officedocument.drawing+xml";
+  const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
+  const std::string xml = "<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\"/>";
+  CHECK(ed.AddPart(sheetPart, rel, "/xl/drawings/drawing1.xml", type, xml).empty());  // no group open
+  const std::string name = ed.NewPartName("/xl/drawings/drawing", ".xml");
+  CHECK_EQ(name, std::string("/xl/drawings/drawing1.xml"));
+  ed.BeginGroup(u"Insert");
+  const std::string id = ed.AddPart(sheetPart, rel, name, type, xml);
+  ed.EndGroup();
+  CHECK(!id.empty());
+  const fw::pkg::Package& p = *book->GetPackage();
+  auto relTo = [&]() -> const fw::pkg::Relationship* {
+    if (const fw::pkg::RelationshipSet* set = p.RelationshipsOf(sheetPart))
+      for (const fw::pkg::Relationship& r : set->items)
+        if (r.id == id) return &r;
+    return nullptr;
+  };
+  CHECK(ed.PartBytes(name) == xml && p.ContentTypeOf(name) == type);
+  CHECK(relTo() && relTo()->target == "../drawings/drawing1.xml" && relTo()->type == rel);
+  CHECK(ed.NewPartName("/xl/drawings/drawing", ".xml") == "/xl/drawings/drawing2.xml");
+
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-part-added");
+  CheckClean(saved);
+  CHECK(PartText(saved, name) == xml);
+  CHECK(PartText(saved, "/[Content_Types].xml").find("PartName=\"/xl/drawings/drawing1.xml\"") != std::string::npos);
+  CHECK(PartText(saved, "/xl/worksheets/_rels/sheet1.xml.rels").find("Target=\"../drawings/drawing1.xml\"") != std::string::npos);
+
+  CHECK(ed.Undo());
+  CHECK(ed.PartBytes(name).empty() && p.ContentTypeOf(name) != type && !relTo());
+  CHECK(ed.Redo());
+  CHECK(ed.PartBytes(name) == xml && relTo() && p.ContentTypeOf(name) == type);
+
+  ed.BeginGroup(u"Delete");
+  CHECK(ed.RemovePart(name));
+  ed.EndGroup();
+  CHECK(ed.PartBytes(name).empty() && !relTo() && p.ContentTypeOf(name) != type);
+  std::vector<uint8_t> removed = SaveBytes(*book, ed, "save-part-removed");
+  CheckClean(removed);
+  CHECK(PartText(removed, name).empty());
+  CHECK(PartText(removed, "/[Content_Types].xml").find("drawing1.xml") == std::string::npos);
+  CHECK(ed.Undo());
+  CHECK(ed.PartBytes(name) == xml && relTo() && p.ContentTypeOf(name) == type);
+}

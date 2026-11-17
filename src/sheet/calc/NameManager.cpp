@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "pkg/Formula.h"
 #include "sheet/calc/Bind.h"
 #include "sheet/calc/Engine.h"
 #include "sheet/calc/Eval.h"
@@ -164,6 +165,95 @@ bool ReadRefersTo(std::string_view typed, const FormulaLocale& region, const Com
   }
   formula = e.text.substr(1);
   return true;
+}
+
+std::string RangeFormula(const Workbook& book, int sheet, const Range& cells) {
+  auto cell = [](uint32_t r, uint32_t c) { return "$" + ColumnName(static_cast<int32_t>(c)) + "$" + std::to_string(r + 1); };
+  std::string s = pkg::QuoteSheetName(book.GetSheet(static_cast<size_t>(sheet)).Name()) + "!" + cell(cells.firstRow, cells.firstCol);
+  if (cells.lastRow != cells.firstRow || cells.lastCol != cells.firstCol) s += ":" + cell(cells.lastRow, cells.lastCol);
+  return s;
+}
+
+std::string NameFromLabel(std::string_view label) {
+  auto ok = [](char ch) {
+    return AsciiLetter(ch) || Digit(ch) || ch == '_' || ch == '.' || ch == '\\' || ch == '?' ||
+           static_cast<unsigned char>(ch) >= 0x80;
+  };
+  size_t a = 0, b = label.size();
+  while (a < b && !ok(label[a])) ++a;
+  while (b > a && !ok(label[b - 1])) --b;
+  std::string s;
+  for (size_t i = a; i < b; ++i) s += ok(label[i]) ? label[i] : '_';
+  if (s.empty()) return s;
+  if (Digit(s[0]) || s[0] == '.' || s[0] == '?') s.insert(s.begin(), '_');
+  if (s.size() > 255) s.resize(255);
+  if (LooksLikeA1(s)) return s + "_";
+  if (LooksLikeR1C1(s)) return s.find_first_of("0123456789") == std::string::npos ? s + "_" : "_" + s;
+  return s;
+}
+
+namespace {
+
+std::string LabelAt(const Sheet& s, uint32_t row, uint32_t col) {
+  CellInfo c;
+  if (!s.GetCell(row, col, c) || c.value.type != ValueType::String) return {};
+  return std::string(c.value.text);
+}
+
+}  // namespace
+
+std::vector<LabelName> NamesFromLabels(const Workbook& book, int sheet, const Range& cells, bool top, bool left,
+                                       bool bottom, bool right) {
+  std::vector<LabelName> out;
+  if (sheet < 0 || static_cast<size_t>(sheet) >= book.SheetCount()) return out;
+  const Sheet& s = book.GetSheet(static_cast<size_t>(sheet));
+  // The cells the labels name: the range without its label lines.
+  Range body = cells;
+  if (top) ++body.firstRow;
+  if (bottom && body.lastRow > 0) --body.lastRow;
+  if (left) ++body.firstCol;
+  if (right && body.lastCol > 0) --body.lastCol;
+  if (body.firstRow > body.lastRow || body.firstCol > body.lastCol || body.lastRow < cells.firstRow ||
+      body.lastCol < cells.firstCol)
+    return out;
+  auto add = [&](const std::string& label, const Range& r) {
+    std::string name = NameFromLabel(label);
+    if (name.empty()) return;
+    for (auto it = out.begin(); it != out.end(); ++it)
+      if (NameEqualsNoCase(it->name, name)) {
+        out.erase(it);
+        break;
+      }
+    out.push_back({name, RangeFormula(book, sheet, r)});
+  };
+  // Where two label lines meet: the corner names the body.
+  if ((top || bottom) && (left || right)) {
+    const uint32_t r = top ? cells.firstRow : cells.lastRow, c = left ? cells.firstCol : cells.lastCol;
+    add(LabelAt(s, r, c), body);
+  }
+  for (bool first : {true, false}) {
+    if (first ? top : bottom)
+      for (uint32_t c = body.firstCol; c <= body.lastCol; ++c)
+        add(LabelAt(s, first ? cells.firstRow : cells.lastRow, c), {body.firstRow, c, body.lastRow, c});
+  }
+  for (bool first : {true, false}) {
+    if (first ? left : right)
+      for (uint32_t r = body.firstRow; r <= body.lastRow; ++r)
+        add(LabelAt(s, r, first ? cells.firstCol : cells.lastCol), {r, body.firstCol, r, body.lastCol});
+  }
+  return out;
+}
+
+void GuessLabels(const Workbook& book, int sheet, const Range& cells, bool& top, bool& left) {
+  top = left = false;
+  if (sheet < 0 || static_cast<size_t>(sheet) >= book.SheetCount()) return;
+  const Sheet& s = book.GetSheet(static_cast<size_t>(sheet));
+  if (cells.lastRow > cells.firstRow)
+    for (uint32_t c = cells.firstCol + (cells.lastCol > cells.firstCol ? 1 : 0); c <= cells.lastCol && !top; ++c)
+      top = !LabelAt(s, cells.firstRow, c).empty();
+  if (cells.lastCol > cells.firstCol)
+    for (uint32_t r = cells.firstRow + (cells.lastRow > cells.firstRow ? 1 : 0); r <= cells.lastRow && !left; ++r)
+      left = !LabelAt(s, r, cells.firstCol).empty();
 }
 
 }  // namespace fw::sheet::calc

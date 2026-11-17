@@ -362,4 +362,10 @@ enum Cmd : int {
   CmdSortAscending,
   CmdSortDescending,
   CmdRemoveDuplicates,
+
+  // Defined names (S3, s3-calc): 2970-2999.
+  CmdNameManager = 2970,  // Ctrl+F3
+  CmdDefineName,
+  CmdCreateNames,         // Ctrl+Shift+F3
+  CmdPasteNames,          // F3
 };

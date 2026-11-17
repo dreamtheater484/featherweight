@@ -1324,3 +1324,67 @@ TEST(sheet_calc_edit_budget) {
               formula, again);
   CHECK(value < 100 && formula < 100 && again < 100);
 }
+
+TEST(sheet_calc_names_from_selection) {
+  // Excel 2021 (scratchpad names_probe.py): Range.CreateNames on labels in the top row, rows 2-3 below.
+  struct Label {
+    const char* text;  // null: a number
+    const char* name;  // null: none made
+  };
+  const Label labels[] = {
+      {"Sales 2024", nullptr}, {nullptr, nullptr},      {"Net-Profit", "Net_Profit"}, {"a.b", "a.b"},
+      {"R1C1", "_R1C1"},       {"A1", "A1_"},           {"Total ", "Total"},          {"Qtr#1", "Qtr_1"},
+      {"x", "x"},              {"C", "C_"},             {"R", "R_"},                  {"_ok", "_ok"},
+      {"  lead", "lead"},      {"Tab\tx", "Tab_x"},     {"Sales 2024", "Sales_2024"}, {"abc?", "abc?"},
+      {"\\back", "\\back"},    {"Sheet1!A1", "Sheet1_A1"}, {"LOG10", "LOG10_"},       {"$A", "A"},
+      {"a b  c", "a_b__c"},    {"ZZZ99999", "ZZZ99999"}, {"Name(1)", "Name_1"},       {"12abc", "_12abc"},
+      {"R2C", "_R2C"},         {"rc", "rc_"},           {"XFD1", "XFD1_"},            {"\xC3\xA9t\xC3\xA9", "\xC3\xA9t\xC3\xA9"},
+  };
+  const size_t n = sizeof labels / sizeof labels[0];
+  std::string data = "<row r=\"1\">";
+  for (size_t i = 0; i < n; ++i) {
+    const std::string ref = ColumnName(static_cast<int32_t>(i)) + "1";
+    data += labels[i].text ? "<c r=\"" + ref + "\" t=\"inlineStr\"><is><t xml:space=\"preserve\">" + std::string(labels[i].text) + "</t></is></c>"
+                           : "<c r=\"" + ref + "\"><v>2024</v></c>";
+  }
+  data += "</row><row r=\"2\"><c r=\"A2\"><v>1</v></c></row>"
+          "<row r=\"5\"><c r=\"A5\" t=\"inlineStr\"><is><t>Corner</t></is></c><c r=\"B5\" t=\"inlineStr\"><is><t>Jan</t></is></c>"
+          "<c r=\"C5\" t=\"inlineStr\"><is><t>Feb</t></is></c></row>"
+          "<row r=\"6\"><c r=\"A6\" t=\"inlineStr\"><is><t>East</t></is></c><c r=\"B6\"><v>1</v></c></row>"
+          "<row r=\"7\"><c r=\"A7\" t=\"inlineStr\"><is><t>West</t></is></c><c r=\"B7\"><v>2</v></c></row>";
+  auto book = OpenSheet(data, "<calcPr calcId=\"191029\"/>");
+  CHECK(book != nullptr);
+  if (!book) return;
+  std::vector<LabelName> made = NamesFromLabels(*book, 0, {0, 0, 2, static_cast<uint32_t>(n - 1)}, true, false, false, false);
+  for (size_t i = 0; i < n; ++i) {
+    if (!labels[i].name) continue;
+    const std::string want = "S!$" + ColumnName(static_cast<int32_t>(i)) + "$2:$" + ColumnName(static_cast<int32_t>(i)) + "$3";
+    bool found = false;
+    for (const LabelName& m : made)
+      if (m.name == labels[i].name) {
+        found = true;
+        CHECK_EQ(m.formula, want);
+      }
+    if (!found) std::printf("  missing %s\n", labels[i].name);
+    CHECK(found);
+  }
+  CHECK_EQ(made.size(), size_t{26});  // no number label, and "Sales 2024" once (the later)
+  // Top row and left column: the corner names the cells between.
+  made = NamesFromLabels(*book, 0, {4, 0, 6, 2}, true, true, false, false);
+  const std::pair<const char*, const char*> both[] = {{"Corner", "S!$B$6:$C$7"}, {"Jan", "S!$B$6:$B$7"},
+                                                      {"Feb", "S!$C$6:$C$7"},    {"East", "S!$B$6:$C$6"},
+                                                      {"West", "S!$B$7:$C$7"}};
+  CHECK_EQ(made.size(), size_t{5});
+  for (const auto& [name, formula] : both) {
+    bool found = false;
+    for (const LabelName& m : made) found = found || (m.name == name && m.formula == formula);
+    CHECK(found);
+  }
+  bool top = false, left = false;
+  GuessLabels(*book, 0, {4, 0, 6, 2}, top, left);
+  CHECK(top && left);
+  GuessLabels(*book, 0, {5, 1, 6, 1}, top, left);  // numbers only
+  CHECK(!top && !left);
+  CHECK_EQ(RangeFormula(*book, 0, {1, 2, 1, 2}), std::string("S!$C$2"));
+  CHECK_EQ(NameFromLabel("  "), std::string());
+}

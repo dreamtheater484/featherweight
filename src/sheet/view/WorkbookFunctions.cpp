@@ -43,6 +43,31 @@ void WorkbookView::UpdateFormulaHelp() {
   const calc::FunctionHelp* all = calc::FunctionHelpList(count);
   for (size_t i = 0; i < count; ++i)
     if (std::string_view(all[i].name).substr(0, prefix.size()) == prefix) fnList_.push_back(&all[i]);
+  // Defined names in scope too, as Excel lists them among the functions (A to Z).
+  nameHelp_.clear();
+  nameTexts_.clear();
+  if (Ready()) {
+    const int sheet = static_cast<int>(editSheet_);
+    std::vector<const DefinedName*> names;
+    for (const DefinedName& n : book_->Names()) {
+      if (n.hidden || n.name.rfind("_xlnm.", 0) == 0 || (n.sheet >= 0 && n.sheet != sheet) || n.name.size() < prefix.size())
+        continue;
+      bool match = true;
+      for (size_t k = 0; k < prefix.size() && match; ++k)
+        match = std::towupper(static_cast<unsigned char>(n.name[k])) == static_cast<unsigned char>(prefix[k]);
+      if (match) names.push_back(&n);
+    }
+    nameTexts_.reserve(names.size() * 2);
+    for (const DefinedName* n : names) {
+      nameTexts_.push_back(n->name);
+      nameTexts_.push_back("Defined name: =" + n->formula);
+    }
+    for (size_t k = 0; k < names.size(); ++k) nameHelp_.push_back({nameTexts_[2 * k].c_str(), nullptr, nameTexts_[2 * k + 1].c_str()});
+    for (const calc::FunctionHelp& h : nameHelp_) fnList_.push_back(&h);
+    std::stable_sort(fnList_.begin(), fnList_.end(), [](const calc::FunctionHelp* a, const calc::FunctionHelp* b) {
+      return _stricmp(a->name, b->name) < 0;
+    });
+  }
   if (fnList_.empty()) return;
   fnFrom_ = from;
   fnSel_ = 0;
@@ -51,7 +76,7 @@ void WorkbookView::UpdateFormulaHelp() {
 
 void WorkbookView::InsertFunction(size_t i) {
   if (i >= fnList_.size() || fnFrom_ < 0) return;
-  const std::wstring name = Utf8ToWide(fnList_[i]->name) + L"(";
+  const std::wstring name = Utf8ToWide(fnList_[i]->name) + (fnList_[i]->args ? L"(" : L"");  // a name: no "("
   editor_.ReplaceSpan(fnFrom_, editor_.Caret(), name);
   editor_.SetCaret(fnFrom_ + static_cast<int>(name.size()), false);
   fnList_.clear();
