@@ -322,6 +322,12 @@ FW_FN(DollarFr) FW_FN(Effect) FW_FN(FvSchedule) FW_FN(IntRate) FW_FN(Ipmt) FW_FN
 FW_FN(Mirr) FW_FN(Nominal) FW_FN(PDuration) FW_FN(Ppmt) FW_FN(PriceDisc) FW_FN(Received) FW_FN(Rri)
 FW_FN(Sln) FW_FN(Syd) FW_FN(TBillEq) FW_FN(TBillPrice) FW_FN(TBillYield) FW_FN(Vdb) FW_FN(Xirr) FW_FN(Xnpv)
 FW_FN(YieldDisc)
+FW_FN(Acos) FW_FN(Acosh) FW_FN(Acot) FW_FN(Acoth) FW_FN(Arabic) FW_FN(Asin) FW_FN(Asinh) FW_FN(Atan)
+FW_FN(Atan2) FW_FN(Atanh) FW_FN(Base) FW_FN(CombinA) FW_FN(CombinFn) FW_FN(Cos) FW_FN(Cosh) FW_FN(Cot)
+FW_FN(Coth) FW_FN(Csc) FW_FN(Csch) FW_FN(Decimal) FW_FN(Degrees) FW_FN(Fact) FW_FN(FactDouble) FW_FN(GcdFn)
+FW_FN(Lcm) FW_FN(MDeterm) FW_FN(MInverse) FW_FN(MMult) FW_FN(MUnit) FW_FN(Multinomial) FW_FN(Permut)
+FW_FN(PermutationA) FW_FN(Radians) FW_FN(Roman) FW_FN(Sec) FW_FN(Sech) FW_FN(SeriesSum) FW_FN(Sin)
+FW_FN(Sinh) FW_FN(SqrtPi) FW_FN(SumX2mY2) FW_FN(SumX2pY2) FW_FN(SumXmY2) FW_FN(Tan) FW_FN(Tanh)
 #undef FW_FN
 }  // namespace fn
 
