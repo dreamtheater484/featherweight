@@ -247,6 +247,15 @@ class Editor {
 
  private:
   struct State;
+  // Rows, columns or cells inserted or deleted (the public calls above build `shift`).
+  Result ShiftCells(int sheet, const Shift& shift, std::u16string stepName);
+  // A sheet renamed, moved or deleted: every formula and part that names sheets (cells, names,
+  // rules, sparklines, charts, drawings, controls, tables, pivot caches) through `rewrite` (a
+  // formula's text and its sheet's index); `touches` says cheaply whether a text may need it. Sheet
+  // `skip` (one being deleted) is left out; `from` and `to` rename pivot caches' sources.
+  void RewriteSheetRefs(int skip, const std::function<std::string(std::string_view, int)>& rewrite,
+                        const std::function<bool(std::string_view)>& touches, std::string_view from = {},
+                        std::string_view to = {});
   Workbook& book_;
   std::unique_ptr<State> s_;
   std::vector<Listener> listeners_;
