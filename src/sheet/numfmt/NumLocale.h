@@ -24,6 +24,11 @@ struct NumLocale {
   std::wstring longDate, time;                // [$-F800] and [$-F400]: Windows' long date and time
   char dateOrder = 'M';                       // typed dates: 'M' (m/d/y), 'D' (d/m/y) or 'Y' (y/m/d)
   uint32_t lcid = 0x409;
+  // Format codes as the region types them (TEXT(), Excel's Format Cells box): the letters for
+  // year, day and hour, and General's name. Excel takes them from the region, not the language:
+  // on an en-NL PC they are Dutch (jjjj, uu, Standaard; measured).
+  wchar_t yearCode = L'y', dayCode = L'd', hourCode = L'h';
+  std::wstring generalName = L"General";
   // Names in another language, for a [$-407] tag: nullptr, or a locale whose names (month, day,
   // am, pm) to use. Null by default (the tag's language then shows this locale's names).
   const NumLocale* (*language)(uint32_t lcid) = nullptr;
@@ -61,6 +66,8 @@ const NumLocale& UserLocale();
 void RefreshUserLocale();
 // Names for an LCID, from Windows, cached; nullptr for an unknown LCID.
 const NumLocale* WindowsLanguage(uint32_t lcid);
+// The LCID of a locale name ("en-US", as a [$-en-US] tag has it); 0 when Windows doesn't know it.
+uint32_t LcidFromName(std::wstring_view name);
 
 // Converts a Windows date or time pattern ("dddd, d MMMM yyyy", "h:mm:ss tt") to an Excel code.
 std::wstring ExcelCodeFromPattern(std::wstring_view pattern);

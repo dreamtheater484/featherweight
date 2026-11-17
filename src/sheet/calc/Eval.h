@@ -49,13 +49,13 @@ class Host {
     (void)name, (void)sheet, (void)row, (void)col, (void)items, (void)col1, (void)col2, (void)out, (void)error;
     return false;
   }
-  // TEXT(): `value` formatted with a number format code. False when the host can't (the formula
-  // then keeps its cached value).
-  // `value` is a number, or a text (which goes through the format's text section). `error` is set
-  // (#VALUE!) when the format can't show the value, where a cell would show ####.
-  virtual bool FormatText(const CellView& value, std::string_view format, std::string& out, Err& error) {
-    (void)value, (void)format, (void)out, (void)error;
-    return false;
+  // TEXT(): `value` (a number, or a text, which goes through the format's text section) formatted
+  // with a number format code as the region types it. 1: done; 0: the host can't (the formula then
+  // keeps its cached value); -1: #VALUE! (Excel refuses the code, or the value has no section or is
+  // out of a date's range: a cell would show ####).
+  virtual int FormatText(const CellView& value, std::string_view format, std::string& out) {
+    (void)value, (void)format, (void)out;
+    return 0;
   }
   // The region's text and number conventions (Excel follows Windows' settings).
   virtual const ConvLocale& Conv() const { return EnUsConv(); }

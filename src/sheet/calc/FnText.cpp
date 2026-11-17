@@ -209,15 +209,14 @@ void Text(Call& c) {
     x.num = v.IsNumber() ? v.number() : 0;
   }
   std::string out;
-  Err e = Err::None;
-  if (!c.m.host.FormatText(x, format, out, e)) {
+  const int done = c.m.host.FormatText(x, format, out);
+  if (done == 0) {
     // No number-format engine: text without a text section stays as it is; else keep the cached value.
     if (x.type == Type::Text && format.find('@') == std::string::npos && format.find(';') == std::string::npos)
       return SetText(c, std::string(v.text()));
     c.m.unsupported = true;
-    return c.Fail(Err::Value);
   }
-  if (e != Err::None) return c.Fail(e);
+  if (done <= 0) return c.Fail(Err::Value);
   SetText(c, out);
 }
 

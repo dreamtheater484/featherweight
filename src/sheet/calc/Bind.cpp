@@ -137,21 +137,25 @@ bool WorkbookCalc::RowHidden(int sheet, int32_t row) {
   return book_.GetSheet(static_cast<size_t>(sheet)).Row(static_cast<uint32_t>(row)).hidden;
 }
 
-bool WorkbookCalc::FormatText(const CellView& value, std::string_view format, std::string& out, Err& error) {
+int WorkbookCalc::FormatText(const CellView& value, std::string_view format, std::string& out) {
   auto it = formats_.find(std::string(format));
   if (it == formats_.end()) {
     if (formats_.size() > 4096) formats_.clear();
-    it = formats_.emplace(std::string(format), std::make_unique<NumberFormat>(Wide(format))).first;
+    // TEXT() reads the code as the region types it (on an en-NL PC: "jjjj", "#.##0,00").
+    auto f = std::make_unique<NumberFormat>();
+    if (!NumberFormat::FromLocal(Wide(format), locale_ ? *locale_ : EnUsLocale(), *f)) f.reset();
+    it = formats_.emplace(std::string(format), std::move(f)).first;
   }
+  if (!it->second) return -1;
   FormatContext ctx;
   ctx.locale = locale_;
   ctx.date1904 = book_.Date1904();
   Formatted f;
   if (value.type == Type::Text) it->second->Format(Wide(value.text), ctx, f);
   else it->second->Format(value.num, ctx, f);
-  if (f.overflow) error = Err::Value;
-  else out = Narrow(f.text);
-  return true;
+  if (f.overflow) return -1;
+  out = Narrow(f.text);
+  return 1;
 }
 
 CalcSettings WorkbookCalc::Settings() const {
@@ -212,7 +216,7 @@ WorkbookCalc::LoadStats WorkbookCalc::Load() {
         range.r1 = static_cast<int32_t>(fi.ref.firstRow), range.r2 = static_cast<int32_t>(fi.ref.lastRow);
         range.c1 = static_cast<int16_t>(fi.ref.firstCol), range.c2 = static_cast<int16_t>(fi.ref.lastCol);
         if (range.r2 < range.r1 || range.c2 < range.c1) range.r1 = range.r2 = at.row, range.c1 = range.c2 = static_cast<int16_t>(at.col);
-        engine_->SetFormula(at, std::move(f), cached, &range);
+        engine_->SetFormula(at, std::move(f), cached, &range, fi.dynamic);
       } else {
         engine_->SetFormula(at, std::move(f), cached);
       }
