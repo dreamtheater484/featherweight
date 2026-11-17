@@ -53,6 +53,7 @@ bool WorkbookView::GridCommandState(int cmd, CommandState& s) {
   size_t shown = 0;
   if (Ready())
     for (size_t i = 0; i < book_->SheetCount(); ++i) shown += SheetShown(i);
+  if (ReviewCommandState(cmd, s)) return true;
   if (cmd >= CmdTabColor && cmd <= CmdTabColor + static_cast<int>(std::size(kTabColors))) {
     s.enabled = grid;
     return true;
@@ -129,6 +130,7 @@ bool WorkbookView::GridCommand(int cmd) {
   if (!state.enabled) return true;
   // A command ends the entry being typed first (unless it can't be written).
   if (editor_.Active() && !CommitEdit(false)) return true;
+  if (ReviewCommand(cmd)) return true;
   const int sheet = static_cast<int>(sheet_);
   const Range sel = Selected();
   const bool rows = WholeRows(), cols = WholeColumns();
@@ -279,6 +281,7 @@ void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
         anyHidden = true;
       }
     AppendSubmenu(m, hidden, L"Unhide", anyHidden);
+    AddReviewTabItems(m);
     AppendSeparator(m);
     for (size_t i = 0; i < book_->SheetCount() && CmdSheetPick + static_cast<int>(i) <= CmdSheetPickLast; ++i)
       if (SheetShown(i))

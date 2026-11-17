@@ -391,6 +391,7 @@ void WorkbookView::BeginEdit(CellEditor::Mode mode, const std::wstring& text) {
     host_.ViewMessage(BannerKind::Info, std::wstring(why.begin(), why.end()));
     return;
   }
+  if (LockedForTyping()) return;  // a protected sheet's locked cell: Excel's message at once
   editCell_ = active_;
   editSheet_ = sheet_;
   editInBar_ = false;

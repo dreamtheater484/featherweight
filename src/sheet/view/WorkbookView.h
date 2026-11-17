@@ -497,6 +497,21 @@ class WorkbookView : public PagedView {
   double CurrentSize(bool rows) const;  // the active row's height (points) or column's width (characters)
   void SetSizes(bool rows, double value);
   bool GoTo(const std::wstring& text);  // a cell, a range, Sheet2!A1 or a defined name
+  // ---- Review (S3, s3-review: WorkbookReview.cpp): Protect Sheet and Protect Workbook.
+  class ProtectPanel;
+  std::unique_ptr<PanelContent> protectPanel_;  // a ProtectPanel
+  bool ReviewCommandState(int cmd, CommandState& s);
+  bool ReviewCommand(int cmd);
+  void AddReviewTabItems(HMENU m);  // the sheet tab menu's
+  edit::Result UnprotectSheet();     // keeping the selection settings, as Excel does
+  // On a protected sheet, as Excel: typing into a locked cell is refused with Excel's message (true
+  // when it was), a hidden cell's content stays out of the formula bar, Tab goes to the next
+  // unlocked cell, and the cursor goes only where the protection lets it (true: handled).
+  bool LockedForTyping();
+  bool FormulaBarHidden() const;
+  bool TabToUnlocked(bool back);
+  bool ProtectedMove(int dr, int dc);
+  bool SelectionBlocked(CellAddr at) const;
   // ---- The fill handle, Ctrl+D and Ctrl+R (WorkbookFill.cpp). `dir`: 0 down, 1 up, 2 right, 3 left.
   bool FillCells(const Range& source, const Range& target, int dir, bool series, std::u16string name);
   void FillDown(bool right);

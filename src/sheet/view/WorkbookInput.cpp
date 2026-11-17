@@ -193,14 +193,19 @@ bool WorkbookView::OnKeyDown(UINT vk, UINT mods) {
   // In a right-to-left sheet column A is at the right: the arrows go where they point.
   const int left = rtl_ ? 1 : -1;
   switch (vk) {
-    case VK_LEFT: MoveActive(0, left, shift, ctrl); return true;
-    case VK_RIGHT: MoveActive(0, -left, shift, ctrl); return true;
-    case VK_UP: MoveActive(-1, 0, shift, ctrl); return true;
-    case VK_DOWN: MoveActive(1, 0, shift, ctrl); return true;
+    case VK_LEFT:
+    case VK_RIGHT:
+    case VK_UP:
+    case VK_DOWN: {
+      const int dr = vk == VK_UP ? -1 : vk == VK_DOWN ? 1 : 0, dc = vk == VK_LEFT ? left : vk == VK_RIGHT ? -left : 0;
+      if (!ProtectedMove(dr, dc)) MoveActive(dr, dc, shift, ctrl);  // a protected sheet may keep it off locked cells
+      return true;
+    }
     case VK_PRIOR:
     case VK_NEXT: PageMove(vk == VK_NEXT ? 1 : -1, alt, shift); return true;
     case VK_TAB:
       if (ctrl || alt) return false;
+      if (TabToUnlocked(shift)) return true;  // a protected sheet: the next unlocked cell
       if (!shift && tabStartCol_ == UINT32_MAX) tabStartCol_ = active_.col;
       MoveActive(0, shift ? -1 : 1, false, false);
       return true;
@@ -319,7 +324,7 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
   tabStartCol_ = UINT32_MAX;
   // Double-clicking a cell edits it there (Edit mode).
   if (doubleClick && button == 0 && gfx::Contains(cells_, fx, fy) && !ChartSheet()) {
-    if (auto cell = CellAt(x, y)) {
+    if (auto cell = CellAt(x, y); cell && !SelectionBlocked(*cell)) {
       Select(*cell, *cell);
       BeginEdit(CellEditor::Mode::Edit, FormulaBarText());
       return;
@@ -425,6 +430,7 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
   if (!gfx::Contains(cells_, fx, fy)) return;
   auto cell = CellAt(x, y);
   if (!cell) return;
+  if (SelectionBlocked(*cell)) return;  // a protected sheet's cell that can't be selected
   if (button != 0) {
     // A right click outside the selection selects the cell, as in Excel.
     if (!Selected().Contains(cell->row, cell->col)) Select(*cell, *cell, false);

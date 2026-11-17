@@ -297,6 +297,7 @@ std::vector<int> WorkbookView::Commands() {
   for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
   // The grid's own (S2), found by their labels in command search.
   for (int cmd = CmdInsertCells; cmd <= CmdDeleteColumns; ++cmd) ids.push_back(cmd);
+  for (int cmd = CmdProtectSheet; cmd <= CmdProtectWorkbook; ++cmd) ids.push_back(cmd);  // S3, s3-review
   return ids;
 }
 
@@ -763,7 +764,8 @@ void WorkbookView::ShowMatch() {
 std::wstring WorkbookView::ActiveName() const { return Ready() ? Utf8ToWide(CellName(active_.row, active_.col)) : L""; }
 
 std::wstring WorkbookView::FormulaBarText() const {
-  return Ready() ? EditTextAt(Current(), active_.row, active_.col) : std::wstring();
+  // A hidden cell on a protected sheet shows nothing there (Format cells > Protect > Hidden).
+  return Ready() && !FormulaBarHidden() ? EditTextAt(Current(), active_.row, active_.col) : std::wstring();
 }
 
 // A cell's content as typed (the formula bar's and F2's text).

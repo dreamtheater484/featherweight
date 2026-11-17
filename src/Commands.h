@@ -362,4 +362,7 @@ enum Cmd : int {
   CmdSortAscending,
   CmdSortDescending,
   CmdRemoveDuplicates,
+  // Protection, links, notes and comments (S3, s3-review): 2900-2939.
+  CmdProtectSheet = 2900,  // Protect Sheet, or Unprotect Sheet on a protected one
+  CmdProtectWorkbook,      // Protect Workbook (its structure), or Unprotect Workbook
 };

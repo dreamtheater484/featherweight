@@ -288,6 +288,8 @@ class ComboBox : public Control {
   // The applied value (ignored while the box is being edited).
   void SetText(const std::wstring& text);
   const std::wstring& Text() const { return box_.Text(); }
+  // Shows bullets for what's typed (a password box: give it no items).
+  void SetPassword(bool on) { box_.password = on; }
 
   void SetGroup(ControlGroup* g) override;
   void Draw(gfx::Canvas& c) override;
