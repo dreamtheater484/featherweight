@@ -74,6 +74,21 @@ TEST(SheetGridEdit_AltEnterAndLines) {
   CHECK(e.Caret() == 7);
 }
 
+TEST(SheetGridEdit_SelectWord) {
+  CellEditor e;
+  e.Begin(L"=SUM(Sheet1!$A$1, B2)", CellEditor::Mode::Edit);
+  e.SelectWord(2);
+  CHECK(e.Anchor() == 1 && e.Caret() == 4);  // SUM
+  e.SelectWord(14);
+  CHECK(e.Anchor() == 12 && e.Caret() == 16);  // $A$1
+  e.SelectWord(4);
+  CHECK(e.Anchor() == 1 && e.Caret() == 4);  // the word ending there
+  e.SelectWord(5);
+  CHECK(e.Anchor() == 5 && e.Caret() == 11);  // Sheet1
+  e.SelectWord(17);
+  CHECK(e.Anchor() == 17 && e.Caret() == 18);  // a space: just it
+}
+
 TEST(SheetGridEdit_PointMode) {
   CellEditor e;
   e.Begin(L"", CellEditor::Mode::Enter);

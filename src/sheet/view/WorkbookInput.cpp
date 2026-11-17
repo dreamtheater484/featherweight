@@ -261,7 +261,9 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
     return;
   }
   const float fx = static_cast<float>(x), fy = static_cast<float>(y);
-  // A click ends the entry being typed (in point mode it will insert a reference instead).
+  // The formula bar's text and the box over the cell place the caret; any other click ends the
+  // entry being typed (in point mode it will insert a reference instead).
+  if (button == 0 && !ChartSheet() && EditMouseDown(fx, fy, mods, doubleClick)) return;
   if (editor_.Active()) CommitEdit(false);
   tabStartCol_ = UINT32_MAX;
   // Double-clicking a cell edits it there (Edit mode).
@@ -394,6 +396,7 @@ void WorkbookView::OnMouseMove(int x, int y, UINT mods) {
     }
   }
   switch (mouse_) {
+    case Mouse::EditText: EditMouseMove(fx, fy); return;
     case Mouse::ThumbV: {
       const double range = Height(v.track) - Height(v.thumb);
       if (range > 0) ScrollTo(gridX_, v.min + (fy - thumbGrab_ - v.track.top) / range * (v.end - v.min - v.view));
@@ -459,6 +462,12 @@ void WorkbookView::OnMouseLeave() {
 }
 
 HCURSOR WorkbookView::CursorAt(int x, int y) {
+  if (Ready() && !preview_ && !ChartSheet()) {
+    const float fx = static_cast<float>(x), fy = static_cast<float>(y);
+    EditBox b;
+    if (gfx::Contains(FormulaBox(), fx, fy) || (EditGeometry(b) && gfx::Contains(b.rc, fx, fy)))
+      return LoadCursorW(nullptr, IDC_IBEAM);
+  }
   if (Ready() && !preview_ && gfx::Contains(cells_, static_cast<float>(x), static_cast<float>(y))) {
     Bar v, h;
     Bars(v, h);

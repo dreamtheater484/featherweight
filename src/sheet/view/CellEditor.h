@@ -56,6 +56,8 @@ class CellEditor {
   void Insert(const std::wstring& s);
   void SetCaret(int caret, bool extend);
   void SelectAll();
+  // A double-click: the word at `at` (letters, digits, "_", ".", "$"), or the one character there.
+  void SelectWord(int at);
 
   // Point mode: true when an arrow should insert or move a reference (a formula in Enter mode,
   // the caret right after an operator, a separator, "(" or "=", or on the reference it inserted).

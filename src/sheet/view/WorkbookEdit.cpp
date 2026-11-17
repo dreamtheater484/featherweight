@@ -3,6 +3,7 @@
 // The text and keys are CellEditor's; committing goes through the edit API (s2-model).
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "Commands.h"
 #include "core/Strings.h"
@@ -26,12 +27,39 @@ std::vector<std::wstring_view> Lines(const std::wstring& s) {
   }
 }
 
+// The line holding `caret`: [first, end).
+std::pair<int, int> LineAround(const std::wstring& s, int caret) {
+  const int n = static_cast<int>(s.size());
+  int a = std::clamp(caret, 0, n), b = a;
+  while (a > 0 && s[static_cast<size_t>(a) - 1] != L'\n') --a;
+  while (b < n && s[static_cast<size_t>(b)] != L'\n') ++b;
+  return {a, b};
+}
+
+// The character boundary in `line` nearest to `x` (from the line's start).
+int HitIn(Canvas& m, std::wstring_view line, float x, float size) {
+  const int n = static_cast<int>(line.size());
+  if (x <= 0 || n == 0) return 0;
+  if (m.MeasureText(line, size) <= x) return n;
+  int lo = 1, hi = n;  // the first prefix at least x wide
+  while (lo < hi) {
+    const int mid = (lo + hi) / 2;
+    if (m.MeasureText(line.substr(0, static_cast<size_t>(mid)), size) >= x) hi = mid;
+    else lo = mid + 1;
+  }
+  const float right = m.MeasureText(line.substr(0, static_cast<size_t>(lo)), size);
+  const float left = m.MeasureText(line.substr(0, static_cast<size_t>(lo) - 1), size);
+  return x - left < right - x ? lo - 1 : lo;
+}
+
 }  // namespace
 
 void WorkbookView::BeginEdit(CellEditor::Mode mode, const std::wstring& text) {
   if (!Ready() || ChartSheet() || preview_) return;
   editCell_ = active_;
   editSheet_ = sheet_;
+  editInBar_ = false;
+  barScroll_ = 0;
   editor_.Begin(text, mode);
   ScrollIntoView(active_);
   host_.ViewStateChanged();
@@ -83,6 +111,7 @@ void WorkbookView::CommitEdit(bool fill) {
   const std::wstring text = editor_.Text();
   const bool changed = editor_.Changed();
   editor_.End();
+  editInBar_ = false;
   // Writing the cell (or, with Ctrl+Enter, every selected cell) is the edit API's: s2-model's
   // operations. Until it lands the entry only ends here.
   (void)text;
@@ -156,8 +185,11 @@ void WorkbookView::DrawEditor(Canvas& c) {
   c.PushClip(cells_);
   c.Fill(b.rc, Rgb(0xFFFFFF));
   c.Stroke(b.rc, p.accent, std::max(1.f, ui_));
+  c.PushClip(b.rc);
   const std::wstring& text = editor_.Text();
   const std::vector<std::wstring_view> lines = Lines(text);
+  // With the caret in the formula bar the cell shows the text only.
+  const bool caretHere = !editInBar_;
   const int selFrom = std::min(editor_.Caret(), editor_.Anchor()), selTo = std::max(editor_.Caret(), editor_.Anchor());
   int at = 0;  // index of the line's first character
   for (size_t i = 0; i < lines.size(); ++i) {
@@ -167,29 +199,130 @@ void WorkbookView::DrawEditor(Canvas& c) {
     auto xAt = [&](int col) { return left + c.MeasureText(l.substr(0, static_cast<size_t>(col)), b.size); };
     const int len = static_cast<int>(l.size());
     const int s0 = std::clamp(selFrom - at, 0, len), s1 = std::clamp(selTo - at, 0, len);
-    if (s1 > s0) c.Fill({xAt(s0), top, xAt(s1), top + b.line}, Mix(p.accent, Rgb(0xFFFFFF), 0.7f));
-    c.Text(l, {left, top, b.rc.right - b.pad, top + b.line}, Rgb(0x000000), b.size);
+    if (caretHere && s1 > s0) c.Fill({xAt(s0), top, xAt(s1), top + b.line}, Mix(p.accent, Rgb(0xFFFFFF), 0.7f));
+    // A rectangle past the text's end, so it is clipped by the box rather than trimmed.
+    c.Text(l, {left, top, xAt(len) + b.size, top + b.line}, Rgb(0x000000), b.size);
     const int caret = editor_.Caret() - at;
-    if (caret >= 0 && caret <= len && (i + 1 == lines.size() || caret < len + 1)) {
-      if (editor_.Caret() >= at && editor_.Caret() <= at + len) {
-        const float x = std::round(xAt(caret));
-        c.Fill({x, top + 1, x + std::max(1.f, std::round(ui_)), top + b.line - 1}, Rgb(0x000000));
-      }
+    if (caretHere && caret >= 0 && caret <= len) {
+      const float x = std::round(xAt(caret));
+      c.Fill({x, top + 1, x + std::max(1.f, std::round(ui_)), top + b.line - 1}, Rgb(0x000000));
     }
     at += len + 1;
   }
   c.PopClip();
+  c.PopClip();
+}
+
+void WorkbookView::DrawBarText(Canvas& c) {
+  const Palette& p = theme::P();
+  const D2D1_RECT_F box = FormulaBox();
+  const float size = FormulaBarSize();
+  c.PushClip(box);
+  if (!editor_.Active()) {
+    std::wstring text = FormulaBarText();
+    if (const size_t nl = text.find_first_of(L"\r\n"); nl != std::wstring::npos) text = text.substr(0, nl) + L" …";
+    c.Text(text, box, p.text, size);
+    c.PopClip();
+    return;
+  }
+  // While editing, the bar shows the caret's line, scrolled to keep the caret in sight.
+  const std::wstring& text = editor_.Text();
+  const auto [from, to] = LineAround(text, editor_.Caret());
+  const std::wstring_view line = std::wstring_view(text).substr(static_cast<size_t>(from), static_cast<size_t>(to - from));
+  const int len = static_cast<int>(line.size());
+  auto xAt = [&](int i) { return c.MeasureText(line.substr(0, static_cast<size_t>(i)), size); };
+  const int caret = editor_.Caret() - from;
+  const float caretX = xAt(caret), width = Width(box);
+  if (caretX - barScroll_ > width - 2) barScroll_ = caretX - width + 2;
+  if (caretX < barScroll_) barScroll_ = caretX;
+  const float left = box.left - barScroll_;
+  const float lineH = std::ceil(size * 1.25f), top = std::round((box.top + box.bottom - lineH) / 2);
+  if (editInBar_) {
+    const int s0 = std::clamp(std::min(editor_.Caret(), editor_.Anchor()) - from, 0, len);
+    const int s1 = std::clamp(std::max(editor_.Caret(), editor_.Anchor()) - from, 0, len);
+    if (s1 > s0) c.Fill({left + xAt(s0), top, left + xAt(s1), top + lineH}, Alpha(p.accent, 0.3f));
+  }
+  c.Text(line, {left, box.top, left + xAt(len) + size, box.bottom}, p.text, size);
+  if (editInBar_) {
+    const float x = std::round(left + caretX);
+    c.Fill({x, top + 1, x + std::max(1.f, std::round(ui_)), top + lineH - 1}, p.text);
+  }
+  c.PopClip();
+}
+
+int WorkbookView::BarHit(float x) {
+  const std::wstring& text = editor_.Text();
+  const auto [from, to] = LineAround(text, editor_.Caret());
+  Canvas measure;
+  const std::wstring_view line = std::wstring_view(text).substr(static_cast<size_t>(from), static_cast<size_t>(to - from));
+  return from + HitIn(measure, line, x - FormulaBox().left + barScroll_, FormulaBarSize());
+}
+
+int WorkbookView::BoxHit(const EditBox& b, float x, float y) {
+  const std::vector<std::wstring_view> lines = Lines(editor_.Text());
+  const int last = static_cast<int>(lines.size()) - 1;
+  const int line = std::clamp(static_cast<int>(std::floor((y - b.rc.top - b.pad / 2) / b.line)), 0, last);
+  int at = 0;
+  for (int i = 0; i < line; ++i) at += static_cast<int>(lines[static_cast<size_t>(i)].size()) + 1;
+  Canvas measure;
+  return at + HitIn(measure, lines[static_cast<size_t>(line)], x - b.rc.left - b.pad, b.size);
+}
+
+bool WorkbookView::EditMouseDown(float x, float y, UINT mods, bool doubleClick) {
+  const bool shift = (mods & kModShift) != 0;
+  auto place = [&](int at) {
+    if (doubleClick) editor_.SelectWord(at);
+    else editor_.SetCaret(at, shift);
+    mouse_ = Mouse::EditText;
+    host_.ViewInvalidate();
+  };
+  if (gfx::Contains(FormulaBox(), x, y)) {
+    if (!editor_.Active()) {
+      BeginEdit(CellEditor::Mode::Edit, FormulaBarText());
+      if (!editor_.Active()) return true;
+      editor_.SetCaret(0, false);  // the bar was showing the first line
+    }
+    // Typing in the bar moves the caret with the arrows (Edit mode), as Excel's does.
+    editInBar_ = true;
+    editor_.SetMode(CellEditor::Mode::Edit);
+    place(BarHit(x));
+    return true;
+  }
+  EditBox b;
+  if (editor_.Active() && EditGeometry(b) && gfx::Contains(b.rc, x, y)) {
+    editInBar_ = false;
+    editor_.SetMode(CellEditor::Mode::Edit);
+    place(BoxHit(b, x, y));
+    return true;
+  }
+  return false;
+}
+
+void WorkbookView::EditMouseMove(float x, float y) {
+  if (!editor_.Active()) return;
+  EditBox b;
+  if (editInBar_) editor_.SetCaret(BarHit(x), true);
+  else if (EditGeometry(b)) editor_.SetCaret(BoxHit(b, x, y), true);
+  host_.ViewInvalidate();
 }
 
 std::optional<RECT> WorkbookView::CaretRect() {
-  EditBox b;
-  if (!EditGeometry(b)) return std::nullopt;
+  if (!editor_.Active()) return std::nullopt;
   const std::wstring& text = editor_.Text();
   const int caret = editor_.Caret();
-  const size_t lineStart = text.rfind(L'\n', caret > 0 ? static_cast<size_t>(caret) - 1 : 0);
-  const size_t from = caret > 0 && lineStart != std::wstring::npos ? lineStart + 1 : 0;
-  const int line = static_cast<int>(std::count(text.begin(), text.begin() + caret, L'\n'));
+  const auto [from, to] = LineAround(text, caret);
+  (void)to;
   Canvas measure;
+  if (editInBar_) {
+    const D2D1_RECT_F box = FormulaBox();
+    const float size = FormulaBarSize(), lineH = std::ceil(size * 1.25f);
+    const float x = box.left - barScroll_ + measure.MeasureText(std::wstring_view(text).substr(from, caret - from), size);
+    const float y = std::round((box.top + box.bottom - lineH) / 2);
+    return RECT{static_cast<LONG>(x), static_cast<LONG>(y), static_cast<LONG>(x + 1), static_cast<LONG>(y + lineH)};
+  }
+  EditBox b;
+  if (!EditGeometry(b)) return std::nullopt;
+  const int line = static_cast<int>(std::count(text.begin(), text.begin() + caret, L'\n'));
   const float x = b.rc.left + b.pad + measure.MeasureText(std::wstring_view(text).substr(from, caret - from), b.size);
   const float y = b.rc.top + b.pad / 2 + b.line * static_cast<float>(line);
   return RECT{static_cast<LONG>(x), static_cast<LONG>(y), static_cast<LONG>(x + 1), static_cast<LONG>(y + b.line)};

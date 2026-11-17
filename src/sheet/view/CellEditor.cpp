@@ -61,6 +61,18 @@ void CellEditor::SelectAll() {
   caret_ = static_cast<int>(text_.size());
 }
 
+void CellEditor::SelectWord(int at) {
+  const int n = static_cast<int>(text_.size());
+  at = std::clamp(at, 0, n);
+  int from = at, to = at;
+  while (from > 0 && WordChar(text_[static_cast<size_t>(from) - 1])) --from;
+  while (to < n && WordChar(text_[static_cast<size_t>(to)])) ++to;
+  if (from == to && to < n && text_[static_cast<size_t>(to)] != L'\n') ++to;
+  anchor_ = from;
+  caret_ = to;
+  point_ = Span{};
+}
+
 int CellEditor::WordLeft(int i) const {
   while (i > 0 && !WordChar(text_[static_cast<size_t>(i) - 1])) --i;
   while (i > 0 && WordChar(text_[static_cast<size_t>(i) - 1])) --i;

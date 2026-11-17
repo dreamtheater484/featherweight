@@ -719,17 +719,17 @@ void WorkbookView::DrawFormulaBar(Canvas& c) {
   c.Fill({formulaBar_.left, formulaBar_.bottom - 1, formulaBar_.right, formulaBar_.bottom}, p.chromeBorder);
   c.FillRound(nameBox_, 4 * u, p.inputBg);
   c.StrokeRound(nameBox_, 4 * u, p.inputBorder, 1);
-  const float size = 13 * u;
+  const float size = FormulaBarSize();
   c.Text(ActiveName(), Inflate(nameBox_, -8 * u, 0), p.text, size);
   const D2D1_RECT_F fx = {nameBox_.right + 8 * u, formulaBar_.top, nameBox_.right + 36 * u, formulaBar_.bottom};
   c.Text(L"fx", fx, p.textSecondary, size, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center);
   c.Fill({fx.right + 4 * u, formulaBar_.top + 6 * u, fx.right + 5 * u, formulaBar_.bottom - 6 * u}, p.chromeBorder);
-  std::wstring text = editor_.Active() ? editor_.Text() : FormulaBarText();
-  if (const size_t nl = text.find_first_of(L"\r\n"); nl != std::wstring::npos) text = text.substr(0, nl) + L" …";
-  const D2D1_RECT_F box = {fx.right + 12 * u, formulaBar_.top, formulaBar_.right - 12 * u, formulaBar_.bottom};
-  c.PushClip(box);
-  c.Text(text, box, p.text, size);
-  c.PopClip();
+  DrawBarText(c);
+}
+
+D2D1_RECT_F WorkbookView::FormulaBox() const {
+  const float u = ui_;
+  return {nameBox_.right + 48 * u, formulaBar_.top, formulaBar_.right - 12 * u, formulaBar_.bottom};
 }
 
 std::vector<WorkbookView::TabRect> WorkbookView::TabRects() const {

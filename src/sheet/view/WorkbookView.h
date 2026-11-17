@@ -253,7 +253,7 @@ class WorkbookView : public PagedView {
   float tabScroll_ = 0;
 
   // Mouse.
-  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH };
+  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText };
   Mouse mouse_ = Mouse::None;
   float thumbGrab_ = 0;
   int hoverTab_ = -1;
@@ -309,7 +309,18 @@ class WorkbookView : public PagedView {
   };
   bool EditGeometry(EditBox& box);
   void DrawEditor(gfx::Canvas& c);
+  // The formula bar's text box; editing there (a click in it) draws the caret there.
+  D2D1_RECT_F FormulaBox() const;
+  float FormulaBarSize() const { return 13 * ui_; }
+  void DrawBarText(gfx::Canvas& c);
+  // A click or drag in the formula bar's text or the box over the cell: true when it was there.
+  bool EditMouseDown(float x, float y, UINT mods, bool doubleClick);
+  void EditMouseMove(float x, float y);
+  int BarHit(float x);
+  int BoxHit(const EditBox& b, float x, float y);
   CellEditor editor_;
+  bool editInBar_ = false;  // the caret is in the formula bar, not over the cell
+  float barScroll_ = 0;     // the formula bar's text scrolled left to keep the caret in sight
   CellAddr editCell_{};
   size_t editSheet_ = 0;
   CellAddr point_{}, pointEnd_{};  // point mode's reference
