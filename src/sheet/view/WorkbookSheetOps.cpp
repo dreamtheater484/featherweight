@@ -87,6 +87,14 @@ bool WorkbookView::GridCommandState(int cmd, CommandState& s) {
     case CmdPasteTranspose: s.label = L"Paste transposed"; s.enabled = cells; return true;
     case CmdAutoSum: s.label = L"AutoSum"; s.shortcut = L"Alt+="; s.enabled = cells; return true;
     case CmdAutoFitRowHeight: s.label = L"AutoFit row height"; s.enabled = cells; return true;
+    case CmdInsertShiftRight: s.label = L"Insert cells, shift right"; s.enabled = cells; return true;
+    case CmdInsertShiftDown: s.label = L"Insert cells, shift down"; s.enabled = cells; return true;
+    case CmdInsertRows: s.label = L"Insert entire rows"; s.enabled = cells; return true;
+    case CmdInsertColumns: s.label = L"Insert entire columns"; s.enabled = cells; return true;
+    case CmdDeleteShiftLeft: s.label = L"Delete cells, shift left"; s.enabled = cells; return true;
+    case CmdDeleteShiftUp: s.label = L"Delete cells, shift up"; s.enabled = cells; return true;
+    case CmdDeleteRows: s.label = L"Delete entire rows"; s.enabled = cells; return true;
+    case CmdDeleteColumns: s.label = L"Delete entire columns"; s.enabled = cells; return true;
     case CmdMergeCenter: {
       const Range sel = Selected();
       s.label = L"Merge & Center";
@@ -140,17 +148,33 @@ bool WorkbookView::GridCommand(int cmd) {
   }
   switch (cmd) {
     case CmdInsertCells:
-      // Excel asks which way the cells go; Featherweight shifts them down (rows and columns
-      // selected whole insert rows and columns).
-      EditRefused(rows   ? Ed().InsertRows(sheet, sel.firstRow, sel.lastRow - sel.firstRow + 1)
-                  : cols ? Ed().InsertColumns(sheet, sel.firstCol, sel.lastCol - sel.firstCol + 1)
-                         : Ed().InsertCells(sheet, sel, edit::Editor::Direction::DownOrUp));
+    case CmdInsertShiftRight:
+    case CmdInsertShiftDown:
+    case CmdInsertRows:
+    case CmdInsertColumns: {
+      // Ctrl++: whole rows and columns selected insert rows and columns; other cells shift down,
+      // the default of Excel's Insert choices (the cell menu has the others).
+      const bool r = cmd == CmdInsertRows || (cmd == CmdInsertCells && rows);
+      const bool c = cmd == CmdInsertColumns || (cmd == CmdInsertCells && cols);
+      EditRefused(r   ? Ed().InsertRows(sheet, sel.firstRow, sel.lastRow - sel.firstRow + 1)
+                  : c ? Ed().InsertColumns(sheet, sel.firstCol, sel.lastCol - sel.firstCol + 1)
+                      : Ed().InsertCells(sheet, sel, cmd == CmdInsertShiftRight ? edit::Editor::Direction::RightOrLeft
+                                                                                 : edit::Editor::Direction::DownOrUp));
       return true;
+    }
     case CmdDeleteCells:
-      EditRefused(rows   ? Ed().DeleteRows(sheet, sel.firstRow, sel.lastRow - sel.firstRow + 1)
-                  : cols ? Ed().DeleteColumns(sheet, sel.firstCol, sel.lastCol - sel.firstCol + 1)
-                         : Ed().DeleteCells(sheet, sel, edit::Editor::Direction::DownOrUp));
+    case CmdDeleteShiftLeft:
+    case CmdDeleteShiftUp:
+    case CmdDeleteRows:
+    case CmdDeleteColumns: {
+      const bool r = cmd == CmdDeleteRows || (cmd == CmdDeleteCells && rows);
+      const bool c = cmd == CmdDeleteColumns || (cmd == CmdDeleteCells && cols);
+      EditRefused(r   ? Ed().DeleteRows(sheet, sel.firstRow, sel.lastRow - sel.firstRow + 1)
+                  : c ? Ed().DeleteColumns(sheet, sel.firstCol, sel.lastCol - sel.firstCol + 1)
+                      : Ed().DeleteCells(sheet, sel, cmd == CmdDeleteShiftLeft ? edit::Editor::Direction::RightOrLeft
+                                                                                : edit::Editor::Direction::DownOrUp));
       return true;
+    }
     case CmdClearContents: EditRefused(Ed().ClearContents(sheet, sel)); return true;
     case CmdHide:
     case CmdUnhide:
@@ -273,8 +297,24 @@ void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
     item(special, CmdPasteTranspose, L"Transposed");
     AppendSubmenu(m, special, L"Paste special");
     AppendSeparator(m);
-    item(m, CmdInsertCells, rows ? L"Insert rows\tCtrl++" : cols ? L"Insert columns\tCtrl++" : L"Insert cells\tCtrl++");
-    item(m, CmdDeleteCells, rows ? L"Delete rows\tCtrl+-" : cols ? L"Delete columns\tCtrl+-" : L"Delete cells\tCtrl+-");
+    if (rows || cols) {
+      item(m, CmdInsertCells, rows ? L"Insert rows\tCtrl++" : L"Insert columns\tCtrl++");
+      item(m, CmdDeleteCells, rows ? L"Delete rows\tCtrl+-" : L"Delete columns\tCtrl+-");
+    } else {
+      // Excel's Insert and Delete choices, as submenus.
+      HMENU ins = CreatePopupMenu();
+      item(ins, CmdInsertShiftDown, L"Shift cells down\tCtrl++");
+      item(ins, CmdInsertShiftRight, L"Shift cells right");
+      item(ins, CmdInsertRows, L"Entire row");
+      item(ins, CmdInsertColumns, L"Entire column");
+      AppendSubmenu(m, ins, L"Insert");
+      HMENU del = CreatePopupMenu();
+      item(del, CmdDeleteShiftUp, L"Shift cells up\tCtrl+-");
+      item(del, CmdDeleteShiftLeft, L"Shift cells left");
+      item(del, CmdDeleteRows, L"Entire row");
+      item(del, CmdDeleteColumns, L"Entire column");
+      AppendSubmenu(m, del, L"Delete");
+    }
     item(m, CmdClearContents, L"Clear contents\tDelete");
     const Range sel = Selected();
     if (MergedIn(sel)) item(m, CmdUnmerge, L"Unmerge cells");

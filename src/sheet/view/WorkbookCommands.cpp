@@ -274,7 +274,7 @@ std::vector<int> WorkbookView::Commands() {
   std::vector<int> ids;
   for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
   // The grid's own (S2), found by their labels in command search.
-  for (int cmd = CmdInsertCells; cmd <= CmdAutoFitColumnWidth; ++cmd) ids.push_back(cmd);
+  for (int cmd = CmdInsertCells; cmd <= CmdDeleteColumns; ++cmd) ids.push_back(cmd);
   return ids;
 }
 
