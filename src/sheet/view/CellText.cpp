@@ -252,6 +252,7 @@ void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const
     r.hidden = hidden;
     r.underline = f.underline != Underline::None;
     r.doubleUnderline = f.underline == Underline::Double || f.underline == Underline::DoubleAccounting;
+    r.accounting = f.underline == Underline::SingleAccounting || f.underline == Underline::DoubleAccounting;
     r.strike = f.strike;
     if (r.underline || r.strike) {
       if (const text::Face* face = fonts_.FaceFor(FontMeasure::Family(f, base), f.bold, f.italic)) {

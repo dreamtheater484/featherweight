@@ -483,10 +483,16 @@ class Painting {
     draw::Rect clip;
     float x = 0;      // the text's left edge, painter coordinates (wrapped: the wrap box's)
     const Xf* xf;
+    float rowDescent = 0;  // pixels: the row's largest font descent, which bottom-aligned text sits on
   };
 
   void PlaceText() {
     for (RowData& rd : rows_) {
+      // Excel puts a row's bottom-aligned text on one baseline: above the descent of its largest
+      // font (a 36 pt cell lifts its neighbours' text too).
+      rowDescent_ = 0;
+      for (const CellInfo& cell : rd.cells)
+        if (cell.value.type != ValueType::Empty) rowDescent_ = std::max(rowDescent_, DescentPx(styles_.FontOf(styles_.CellXf(cell.style))));
       for (const CellInfo& cell : rd.cells) {
         if (cell.value.type == ValueType::Empty) continue;
         if (!o_.showZeros && cell.value.type == ValueType::Number && cell.value.number == 0) continue;
@@ -495,6 +501,7 @@ class Painting {
         PlaceCell(rd, cell);
       }
     }
+    rowDescent_ = 0;
     // Merged areas: the first cell's text in the whole area.
     for (const Range* m : merges_) {
       CellInfo cell;
@@ -511,6 +518,13 @@ class Painting {
       it.x = AlignX(l, xf, it.box);
       items_.push_back(it);
     }
+  }
+
+  // A font's descent in pixels, as bottom-aligned text sits on it: an accounting underline's
+  // three pixels below it too.
+  float DescentPx(const Font& f) const {
+    const bool accounting = f.underline == Underline::SingleAccounting || f.underline == Underline::DoubleAccounting;
+    return static_cast<float>(text_.Measure().Of(f, styles_.DefaultFont()).descent + (accounting ? 3 : 0));
   }
 
   float Indent(const Xf& xf) const {
@@ -538,7 +552,7 @@ class Painting {
         text_.Get(sheet_, cell, widthPx, TextLookAt(cell.row, cell.col, styles_.CellXf(cell.style)));
     if (l.lines.empty()) return;
     const Xf& xf = styles_.CellXf(cell.style);
-    Item it{&l, Inner(cell.row, cell.col, cell.row, cell.col), {}, 0, &xf};
+    Item it{&l, Inner(cell.row, cell.col, cell.row, cell.col), {}, 0, &xf, rowDescent_};
     it.clip = it.box;
     uint32_t first = cell.col, last = cell.col;
     const float need = l.width * g_.pt + g_.padStart + g_.padEnd + Indent(xf);
@@ -650,10 +664,13 @@ class Painting {
       case VAlign::Justify:
       case VAlign::Distributed: baseline = it.box.top + (1 + a) * rp; break;
       case VAlign::Center: baseline = it.box.top + ((boxH / rp - blockPx) / 2 + a) * rp; break;
-      default:
-        baseline = g_.descentPx > 0 ? it.box.bottom + g_.line - d * g_.descentPx - (n > 1 ? (n - 1) * pitch * rp : 0)
-                                    : it.box.bottom - (d + (n > 1 ? (n - 1) * pitch : 0)) * rp;
+      default: {
+        const float own = d + DescentPx(styles_.FontOf(*it.xf)) * scale - l.descent / 0.75f * scale;
+        const float dr = std::max(own, it.rowDescent);
+        baseline = g_.descentPx > 0 ? it.box.bottom + g_.line - dr * g_.descentPx - (n > 1 ? (n - 1) * pitch * rp : 0)
+                                    : it.box.bottom - (dr + (n > 1 ? (n - 1) * pitch : 0)) * rp;
         break;
+      }
     }
     const float pitchText = pitch * rp / (s * scale);
     float x = it.x;
@@ -681,12 +698,14 @@ class Painting {
       return;
     }
     p_.Transform(draw::Matrix::Scale(s * scale, s * scale) * draw::Matrix::Translate(x, baseline));
-    DrawLines(l, l.wrapped || l.stacked ? 0 : 1, pitchText);
+    DrawLines(l, l.wrapped || l.stacked ? 0 : 1, pitchText, (it.box.left + PadL() - x) / (s * scale),
+              (it.box.right - x) / (s * scale));
     p_.Restore();
   }
 
   // The lines in text space: x in points from the text's left edge, y from the first baseline.
-  void DrawLines(const CellText::Layout& l, int fromContent, float pitch) {
+  // `accLeft` and `accRight`: the cell's text box, where an accounting underline runs (text space).
+  void DrawLines(const CellText::Layout& l, int fromContent, float pitch, float accLeft = 0, float accRight = 0) {
     float y = 0;
     for (const text::Line& line : l.lines) {
       const float dx = fromContent ? -line.contentLeft : 0;
@@ -706,11 +725,22 @@ class Painting {
           p_.DrawGlyphs({piece.OriginX() + dx, y - piece.rise}, gr, brush);
         }
         if (run && run->underline) {
-          const float uy = y + run->underlinePos;
-          p_.FillRect({piece.x + dx, uy, piece.x + dx + piece.width, uy + run->underlineThick}, brush);
-          if (run->doubleUnderline)
-            p_.FillRect({piece.x + dx, uy + 2 * run->underlineThick, piece.x + dx + piece.width, uy + 3 * run->underlineThick},
-                        brush);
+          // As Excel prints them: an accounting underline 1.7 pt lower and from the text's start to
+          // the cell's end; a double one as two lines 0.6 pt thick, 0.6 pt above and below.
+          float l0 = piece.x + dx, l1 = piece.x + dx + piece.width;
+          float uy = y + run->underlinePos;
+          if (run->accounting) {
+            uy += 1.7f;
+            if (accRight > accLeft) l1 = std::max(l1, accRight);
+          }
+          const float t = run->underlineThick;
+          if (!run->doubleUnderline) {
+            p_.FillRect({l0, uy, l1, uy + t}, brush);
+          } else {
+            const float t2 = t * 0.6f / 0.84f;
+            p_.FillRect({l0, uy - t2, l1, uy}, brush);
+            p_.FillRect({l0, uy + t2, l1, uy + 2 * t2}, brush);
+          }
         }
         if (run && run->strike) {
           const float sy = y - run->strikePos;
@@ -974,6 +1004,7 @@ class Painting {
   Range area_;
   const PaintOptions& o_;
   const Styles& styles_;
+  float rowDescent_ = 0;  // PlaceText's current row's (Item::rowDescent)
   std::vector<RowData> rows_;
   std::vector<uint32_t> cols_;
   std::vector<uint32_t> colStyle_;

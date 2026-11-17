@@ -62,6 +62,7 @@ class CellText {
     uint32_t color = 0xFF000000;
     bool hidden = false;  // a pad: takes room, isn't drawn
     bool underline = false, doubleUnderline = false, strike = false;
+    bool accounting = false;  // an accounting underline: lower, and across the cell
     float underlinePos = 0, underlineThick = 0, strikePos = 0, strikeThick = 0;  // points
   };
   struct Layout {
