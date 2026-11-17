@@ -136,3 +136,132 @@ TEST(sheet_entry_messages) {
   CHECK_EQ(e.text, std::string("=SUM(1,_xlfn.STDEV.S(2,3))"));
   CHECK_EQ(e.shown, std::string("=SUM(1;STDEV.S(2;3))"));
 }
+
+// --- what the grid needs while a formula is typed (sheet/calc/Typing.h) ---
+
+#include "sheet/calc/Typing.h"
+
+TEST(sheet_typing_reference_spans) {
+  const FormulaLocale nl = MakeFormulaLocale(EnNlLocale());
+  std::wstring f = L"=SUM(A1:B2;Sheet2!C3)+'My Sheet'!$D$4+a1:b2+1,5+SUM(1:3;B:C)+\"A1\"+Rate+IF(1;2)";
+  std::vector<RefSpan> spans = ReferenceSpans(f, nl);
+  CHECK_EQ(spans.size(), size_t{6});
+  if (spans.size() == 6) {
+    CHECK(f.substr(spans[0].begin, spans[0].end - spans[0].begin) == L"A1:B2");
+    CHECK_EQ(spans[0].r2, 1);
+    CHECK_EQ(spans[0].c2, 1);
+    CHECK(spans[1].sheet == L"Sheet2");
+    CHECK(f.substr(spans[2].begin, spans[2].end - spans[2].begin) == L"'My Sheet'!$D$4");
+    CHECK(spans[2].sheet == L"My Sheet");
+    CHECK_EQ(spans[3].color, spans[0].color);  // a1:b2 is A1:B2 again
+    CHECK_EQ(spans[4].r1, 0);
+    CHECK_EQ(spans[4].r2, 2);
+    CHECK_EQ(spans[4].c2, 16383);
+    CHECK_EQ(spans[5].r2, 1048575);
+    CHECK_EQ(spans[5].c1, 1);
+    CHECK_EQ(spans[4].color, 3);
+  }
+  CHECK(ReferenceSpans(L"A1+B1", nl).empty());  // not a formula
+  CHECK_EQ(ReferenceSpans(L"=SUM(A1;B", nl).size(), size_t{1});  // being typed
+}
+
+TEST(sheet_typing_point_mode) {
+  const FormulaLocale nl = MakeFormulaLocale(EnNlLocale());
+  CHECK(CanPointAt(L"=", 1, nl));
+  CHECK(CanPointAt(L"=SUM(", 5, nl));
+  CHECK(CanPointAt(L"=SUM(A1;", 8, nl));
+  CHECK(CanPointAt(L"=A1+ ", 5, nl));
+  CHECK(CanPointAt(L"=A1:", 4, nl));
+  CHECK(CanPointAt(L"=SUM()", 5, nl));
+  CHECK(!CanPointAt(L"=A1", 3, nl));
+  CHECK(!CanPointAt(L"=SUM(1,", 7, nl));  // a decimal comma here
+  CHECK(!CanPointAt(L"=\"a+", 4, nl));    // in text
+  CHECK(!CanPointAt(L"abc+", 4, nl));     // not a formula
+  CHECK(!CanPointAt(L"=+B1", 2, nl));     // B1 follows
+  CHECK(CanPointAt(L"-", 1, nl));
+}
+
+TEST(sheet_typing_f4) {
+  const FormulaLocale nl = MakeFormulaLocale(EnNlLocale());
+  std::wstring t = L"=A1+B2";
+  size_t a = 3, b = 3;
+  const wchar_t* cycle[] = {L"=$A$1+B2", L"=A$1+B2", L"=$A1+B2", L"=A1+B2"};
+  for (const wchar_t* next : cycle) {
+    CHECK(CycleReference(t, a, b, nl));
+    CHECK(t == next);
+    CHECK_EQ(a, t.find(L'+'));
+    CHECK_EQ(b, a);
+  }
+  t = L"=SUM(Sheet2!A1:B2;C3)";
+  a = 7, b = 7;
+  CHECK(CycleReference(t, a, b, nl));
+  CHECK(t == L"=SUM(Sheet2!$A$1:$B$2;C3)");
+  a = 0, b = t.size();  // the whole text selected: every reference
+  CHECK(CycleReference(t, a, b, nl));
+  CHECK(t == L"=SUM(Sheet2!A$1:B$2;C$3)");
+  t = L"=SUM(A:B)";
+  a = b = 6;
+  CHECK(CycleReference(t, a, b, nl));
+  CHECK(t == L"=SUM($A:$B)");
+  t = L"=SUM(1;2)";
+  a = b = 6;
+  CHECK(!CycleReference(t, a, b, nl));
+}
+
+TEST(sheet_typing_call_at) {
+  const FormulaLocale nl = MakeFormulaLocale(EnNlLocale());
+  std::wstring fn;
+  int arg = -1;
+  std::wstring t = L"=SUM(1;IF(A1;\"x;y\";";
+  CHECK(CallAt(t, t.size(), nl, fn, arg));
+  CHECK(fn == L"IF");
+  CHECK_EQ(arg, 2);
+  CHECK(CallAt(t, 7, nl, fn, arg));
+  CHECK(fn == L"SUM");
+  CHECK_EQ(arg, 1);
+  CHECK(CallAt(L"=SUM(1;(A1;B1);", 15, nl, fn, arg));
+  CHECK(fn == L"SUM");
+  CHECK_EQ(arg, 2);
+  CHECK(!CallAt(L"=1+2", 4, nl, fn, arg));
+  CHECK(CallAt(L"=_xlfn.STDEV.S(", 15, nl, fn, arg));
+  CHECK(fn == L"_xlfn.STDEV.S");
+}
+
+TEST(sheet_typing_copy_formula) {
+  // As Excel copies them (Range.Copy, measured).
+  EntryNames names;
+  auto at = [](const char* a1) {
+    CompileOptions o;
+    std::string s(a1);
+    size_t k = 0;
+    int32_t col = 0;
+    while (k < s.size() && s[k] >= 'A' && s[k] <= 'Z') col = col * 26 + (s[k++] - 'A' + 1);
+    o.col = col - 1;
+    o.row = std::stoi(s.substr(k)) - 1;
+    return o;
+  };
+  struct {
+    const char *formula, *from, *to, *copied;
+  } cases[] = {
+      {"=A1+$B$2+B$1+$A2", "B2", "C3", "=B2+$B$2+C$1+$A3"},
+      {"=A1", "A2", "A1", "=#REF!"},
+      {"=SUM(A1:A3)", "B2", "B1", "=SUM(#REF!)"},
+      {"=SUM(A2:A3)", "B2", "B1", "=SUM(A1:A2)"},
+      {"=Sheet2!A1", "B2", "B1", "=Sheet2!#REF!"},
+      {"=$A$1+A1", "B2", "A2", "=$A$1+#REF!"},
+      {"=SUM(A:A)", "B2", "C2", "=SUM(B:B)"},
+      {"=SUM(1:1)", "B2", "B3", "=SUM(2:2)"},
+      {"=SUM(A:A)", "B2", "A2", "=SUM(#REF!)"},
+      {"=XFD1", "A1", "B1", "=#REF!"},
+      {"=A1048576", "A1", "A2", "=#REF!"},
+      {"=SUM(A1:B2 B1:C3)", "D4", "D3", "=SUM(#REF! #REF!)"},
+      {"=(A1,A2)", "B2", "B1", "=(#REF!,A1)"},
+      {"=IF(A1>0,A1,B1)", "C2", "C1", "=IF(#REF!>0,#REF!,#REF!)"},
+      {"=A1+1", "B2", "B4", "=A3+1"},
+  };
+  for (const auto& k : cases) {
+    std::string got = CopyFormula(k.formula, at(k.from), at(k.to), names);
+    if (got != k.copied) std::printf("    %s %s->%s: %s, Excel %s\n", k.formula, k.from, k.to, got.c_str(), k.copied);
+    CHECK_EQ(got, std::string(k.copied));
+  }
+}

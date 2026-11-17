@@ -12,6 +12,7 @@
 #include "pkg/References.h"
 #include "sheet/calc/Engine.h"
 #include "sheet/calc/Entry.h"
+#include "sheet/calc/Typing.h"
 
 using namespace fw::pkg;
 namespace calc = fw::sheet::calc;
@@ -106,6 +107,28 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       calc::EnteredFormula again = calc::EnterFormula(e.shown, *region, where, *engine);
       if (!again.formula || again.text != e.text) std::abort();
     }
+    // While typing: references, point mode, F4, the call at the caret, at every caret position.
+    std::wstring wide(formula.begin(), formula.end());
+    for (const calc::FormulaLocale* region : {&calc::InvariantFormulaLocale(), &nl}) {
+      for (const calc::RefSpan& r : calc::ReferenceSpans(wide, *region))
+        if (r.begin >= r.end || r.end > wide.size() || r.r1 > r.r2 || r.c1 > r.c2) std::abort();
+      for (size_t caret = 0; caret <= wide.size() && caret < 64; ++caret) {
+        calc::CanPointAt(wide, caret, *region);
+        std::wstring fn;
+        int arg = 0;
+        calc::CallAt(wide, caret, *region, fn, arg);
+        std::wstring t = wide;
+        size_t a = caret, b = caret;
+        if (calc::CycleReference(t, a, b, *region) && (a > t.size() || b > t.size())) std::abort();
+      }
+      std::wstring t = wide;
+      size_t a = 0, b = t.size();
+      if (calc::CycleReference(t, a, b, *region) && (a > b || b > t.size())) std::abort();
+    }
+    calc::CompileOptions from, to;
+    from.row = 2, from.col = 2;
+    to.row = 0, to.col = 5;
+    calc::CopyFormula(formula, from, to, *engine);
   }
 
   // The other syntaxes a reference can have.

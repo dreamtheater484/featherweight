@@ -68,6 +68,9 @@ std::shared_ptr<const Formula> Compile(std::string_view text, const CompileOptio
 struct PrintOptions {
   bool r1c1 = false;
   bool file = true;  // as files store it (_xlfn. prefixes, _xlfn.SINGLE), else as the formula bar shows it
+  // A relative reference that falls off the sheet at the cell printed for is #REF! (a copied
+  // formula, as Excel makes it), not wrapped around to the other side (a shared formula).
+  bool offSheetRef = false;
 };
 
 // The formula as text, without "=", for the cell `at` (a shared formula prints per cell).
