@@ -225,6 +225,11 @@ class Editor {
   // ("/" the package, else a part: a sheet's PartName(), a drawing...): the relationship's id.
   std::string AddPart(std::string_view source, std::string_view relType, std::string_view name,
                       std::string_view contentType, std::string bytes);
+  // A relationship to something outside the package (TargetMode="External": a hyperlink's web
+  // address, file or e-mail), with no part behind it: its id.
+  std::string AddExternalRelationship(std::string_view source, std::string_view relType, std::string_view target);
+  // A relationship of `source` gone (an external one; a part's goes with RemovePart).
+  bool RemoveRelationship(std::string_view source, std::string_view id);
   // A part that exists written anew.
   bool WritePart(std::string_view name, std::string bytes);
   // A part gone, with every relationship to it, its content type override and its own

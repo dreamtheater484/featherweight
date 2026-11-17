@@ -3318,6 +3318,14 @@ std::string RelativeTarget(std::string_view source, std::string_view target) {
   return out;
 }
 
+// The first id rIdN a relationship set doesn't use, from its count up.
+std::string NewRelId(const pkg::RelationshipSet& set) {
+  for (size_t n = set.items.size() + 1;; ++n) {
+    std::string id = "rId" + std::to_string(n);
+    if (std::none_of(set.items.begin(), set.items.end(), [&](const pkg::Relationship& x) { return x.id == id; })) return id;
+  }
+}
+
 }  // namespace
 
 std::string Editor::AddPart(std::string_view source, std::string_view relType, std::string_view name,
@@ -3341,11 +3349,7 @@ std::string Editor::AddPart(std::string_view source, std::string_view relType, s
   pkg::RelationshipSet set;
   if (const pkg::RelationshipSet* r = package->RelationshipsOf(from)) set = *r;
   else set.source = from;
-  std::string id;
-  for (size_t n = set.items.size() + 1;; ++n) {
-    id = "rId" + std::to_string(n);
-    if (std::none_of(set.items.begin(), set.items.end(), [&](const pkg::Relationship& x) { return x.id == id; })) break;
-  }
+  const std::string id = NewRelId(set);
   pkg::Relationship rel;
   rel.id = id;
   rel.type = std::string(relType);
@@ -3353,6 +3357,43 @@ std::string Editor::AddPart(std::string_view source, std::string_view relType, s
   set.items.push_back(std::move(rel));
   package->SetRelationships(std::move(set));
   return id;
+}
+
+std::string Editor::AddExternalRelationship(std::string_view source, std::string_view relType, std::string_view target) {
+  State& st = *s_;
+  pkg::Package* package = book_.GetPackage();
+  if (st.open.empty() || !package || target.empty()) return {};
+  if (source != "/" && !package->FindPart(source)) return {};
+  const std::string from(source);
+  st.KeepTypes();  // a new relationships part gets its content type
+  st.KeepRels(from);
+  pkg::RelationshipSet set;
+  if (const pkg::RelationshipSet* r = package->RelationshipsOf(from)) set = *r;
+  else set.source = from;
+  const std::string id = NewRelId(set);
+  pkg::Relationship rel;
+  rel.id = id;
+  rel.type = std::string(relType);
+  rel.target = std::string(target);
+  rel.external = true;
+  set.items.push_back(std::move(rel));
+  package->SetRelationships(std::move(set));
+  return id;
+}
+
+bool Editor::RemoveRelationship(std::string_view source, std::string_view id) {
+  State& st = *s_;
+  pkg::Package* package = book_.GetPackage();
+  if (st.open.empty() || !package) return false;
+  const pkg::RelationshipSet* r = package->RelationshipsOf(source);
+  if (!r || std::none_of(r->items.begin(), r->items.end(), [&](const pkg::Relationship& x) { return x.id == id; }))
+    return false;
+  pkg::RelationshipSet set = *r;
+  st.KeepRels(set.source);
+  set.items.erase(std::remove_if(set.items.begin(), set.items.end(), [&](const pkg::Relationship& x) { return x.id == id; }),
+                  set.items.end());
+  package->SetRelationships(std::move(set));
+  return true;
 }
 
 bool Editor::WritePart(std::string_view name, std::string bytes) {
