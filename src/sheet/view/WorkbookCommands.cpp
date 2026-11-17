@@ -176,6 +176,7 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case '0':
       case VK_NUMPAD0: return CmdZoomActual;
       case VK_F2: return CmdPrintPreview;
+      case VK_F3: return editor_.Active() || preview_ ? 0 : CmdNameManager;
       // Undo and redo the workbook's edits (while a cell is typed in, the keys are the entry's).
       case 'Z': return editor_.Active() ? 0 : CmdUndo;
       case 'Y': return editor_.Active() ? 0 : CmdRedo;
@@ -203,6 +204,7 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case '6': return CmdNumScientific;
       case '7': return CmdBorderOutline;
       case 'L': return CmdFilter;
+      case VK_F3: return CmdCreateNames;
       case VK_OEM_MINUS: return CmdBorderRemove;
     }
   }
@@ -219,6 +221,7 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
     if (vk == VK_F9 && !ctrl) return shift ? CmdCalculateSheet : CmdCalculateNow;
     if (!ctrl && !shift && vk == VK_F5) return CmdGoTo;
   }
+  if (!ctrl && !shift && !alt && vk == VK_F3 && !preview_) return CmdPasteNames;
   if (preview_ && vk == VK_ESCAPE) return CmdPrintPreview;
   return 0;
 }
@@ -233,6 +236,7 @@ CommandState WorkbookView::QueryCommand(int cmd) {
   if (GridCommandState(cmd, s)) return s;
   if (FormatCommandState(cmd, s)) return s;
   if (DataCommandState(cmd, s)) return s;
+  if (NamesCommandState(cmd, s)) return s;
   const bool ready = Ready();
   size_t shown = 0;
   if (ready)
@@ -319,6 +323,7 @@ bool WorkbookView::Execute(int cmd) {
   if (GridCommand(cmd)) return true;
   if (FormatCommand(cmd)) return true;
   if (DataCommand(cmd)) return true;
+  if (NamesCommand(cmd)) return true;
   switch (cmd) {
     case CmdUndo:
     case CmdRedo:
@@ -760,7 +765,11 @@ void WorkbookView::ShowMatch() {
 // ---------------------------------------------------------------------------
 // Formula bar
 
-std::wstring WorkbookView::ActiveName() const { return Ready() ? Utf8ToWide(CellName(active_.row, active_.col)) : L""; }
+std::wstring WorkbookView::ActiveName() const {
+  if (!Ready()) return L"";
+  if (std::wstring name = SelectionName(); !name.empty()) return name;
+  return Utf8ToWide(CellName(active_.row, active_.col));
+}
 
 std::wstring WorkbookView::FormulaBarText() const {
   return Ready() ? EditTextAt(Current(), active_.row, active_.col) : std::wstring();
