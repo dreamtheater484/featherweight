@@ -53,6 +53,16 @@ std::vector<bool> FilterRows(const Workbook& book, const Sheet& sheet, const Ran
 // Whether a cell passes one condition.
 bool Passes(const Value& value, const std::wstring& shown, const FilterCondition& c);
 
+// Top 10's threshold (the last value kept) or the average, over the column's numbers below the
+// header; false when the column has none or `c` is neither.
+bool SpecialThreshold(const Sheet& sheet, const Range& ref, const FilterCriteria& c, double& limit);
+
+// Criteria as the model and the file store them (an autoFilter's filterColumn), and back. Top 10
+// and the average carry their threshold (filterVal), computed on `sheet`. FromFilterColumn is false
+// for a kind Featherweight doesn't edit (colors, icons, dates: FilterColumn::Kind::Other).
+FilterColumn ToFilterColumn(const Sheet& sheet, const Range& ref, const FilterCriteria& c);
+bool FromFilterColumn(const FilterColumn& f, FilterCriteria& out);
+
 // Remove duplicates: for each row of `range` (below its first row when `header`), whether it repeats
 // an earlier row in `columns` (within the range), compared as Excel compares them: the texts shown,
 // without case.

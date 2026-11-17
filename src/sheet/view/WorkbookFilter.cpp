@@ -17,21 +17,29 @@ namespace fw::sheet::view {
 
 WorkbookView::ViewFilter* WorkbookView::FilterOf() {
   if (!Ready()) return nullptr;
-  const Sheet* s = &Current();
-  if (auto it = filters_.find(s); it != filters_.end()) return &it->second;
-  if (const std::optional<SheetFilter>& f = s->Filter()) return &(filters_[s] = ViewFilter{f->ref, {}});
-  return nullptr;
+  const std::optional<SheetFilter>& f = Current().Filter();
+  if (!f) return nullptr;
+  filter_ = ViewFilter{f->ref, {}, {}};
+  for (const FilterColumn& col : f->columns) {
+    data::FilterCriteria c;
+    if (data::FromFilterColumn(col, c)) filter_.criteria.push_back(std::move(c));
+    else filter_.other.push_back(col);
+  }
+  return &filter_;
 }
 
 void WorkbookView::ToggleFilter() {
   if (!Ready() || preview_ || ChartSheet()) return;
+  const int sheet = static_cast<int>(sheet_);
   if (ViewFilter* f = FilterOf()) {
     // Off: every row it hid shows again.
     const Range ref = f->ref;
-    const bool any = !f->criteria.empty();
-    filters_.erase(&Current());
-    if (any && ref.lastRow > ref.firstRow)
-      EditRefused(Ed().HideRows(static_cast<int>(sheet_), ref.firstRow + 1, ref.lastRow, false));
+    const bool any = !f->criteria.empty() || !f->other.empty();
+    edit::EditGroup group(Ed(), u"Remove Filter");
+    edit::Result r = Ed().SetFilter(sheet, std::nullopt);
+    if (r && any && ref.lastRow > ref.firstRow) r = Ed().HideRows(sheet, ref.firstRow + 1, ref.lastRow, false);
+    if (EditRefused(r)) return;
+    group.done = true;
     if (filterPanel_ && host_.ViewShownPanel() == filterPanel_.get()) host_.ViewShowPanel(nullptr);
     host_.ViewInvalidate();
     return;
@@ -42,17 +50,40 @@ void WorkbookView::ToggleFilter() {
     host_.ViewMessage(BannerKind::Info, L"Select a cell in the table to filter, or the cells themselves.");
     return;
   }
-  filters_[&Current()] = ViewFilter{ref, {}};
+  SheetFilter on;
+  on.ref = ref;
+  if (EditRefused(Ed().SetFilter(sheet, on))) return;  // a table's range has its own filter
   host_.ViewInvalidate();
 }
 
 bool WorkbookView::ApplyFilter() {
-  ViewFilter* f = FilterOf();
-  if (!f || f->ref.lastRow <= f->ref.firstRow) return false;
-  const std::vector<bool> keep = data::FilterRows(*book_, Current(), f->ref, f->criteria, text_->Locale());
+  // filter_ as the panel left it (FilterOf would read the model's again).
+  if (!Ready() || !Current().Filter()) return false;
+  ViewFilter* f = &filter_;
+  if (f->ref.lastRow <= f->ref.firstRow) return false;
+  const Sheet& s = Current();
+  std::vector<bool> keep = data::FilterRows(*book_, s, f->ref, f->criteria, text_->Locale());
+  if (!f->other.empty()) {
+    // Rows a kept column from the file hides (a color, a date filter) stay hidden: those the
+    // model's criteria let through and that are hidden all the same.
+    std::vector<data::FilterCriteria> before;
+    for (const FilterColumn& col : s.Filter()->columns) {
+      data::FilterCriteria c;
+      if (data::FromFilterColumn(col, c)) before.push_back(std::move(c));
+    }
+    const std::vector<bool> passed = data::FilterRows(*book_, s, f->ref, before, text_->Locale());
+    for (size_t i = 0; i < keep.size(); ++i)
+      if (passed[i] && s.Row(f->ref.firstRow + 1 + static_cast<uint32_t>(i)).hidden) keep[i] = false;
+  }
+  SheetFilter model;
+  model.ref = f->ref;
+  for (const data::FilterCriteria& c : f->criteria) model.columns.push_back(data::ToFilterColumn(s, f->ref, c));
+  model.columns.insert(model.columns.end(), f->other.begin(), f->other.end());
+  std::sort(model.columns.begin(), model.columns.end(),
+            [](const FilterColumn& a, const FilterColumn& b) { return a.colId < b.colId; });
   const int sheet = static_cast<int>(sheet_);
   edit::EditGroup group(Ed(), u"Filter");
-  edit::Result r;
+  edit::Result r = Ed().SetFilter(sheet, model);
   // Runs of rows whose hidden state changes, each in one call.
   const uint32_t first = f->ref.firstRow + 1;
   for (size_t i = 0; r && i < keep.size();) {
