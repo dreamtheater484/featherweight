@@ -1032,18 +1032,17 @@ void CommitSave(Workbook& book, edit::Editor& ed, SavePlan& plan) {
   // the shared strings aren't kept: every later save writes them from the model (MustWrite).
   for (auto& [name, bytes] : plan.changes.replace) {
     std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    // The package's index learns the new relationships and content types; the part keeps the bytes
+    // the file has (not the index's own serialization), so later saves copy them unchanged.
     if (pkg::PartKey(name) == pkg::PartKey(pkg::kContentTypesPart)) {
       pkg::ContentTypes types;
       if (pkg::ParseContentTypes(text, pkg->GetLimits(), types).Ok()) pkg->SetContentTypes(std::move(types));
-      continue;
-    }
-    if (std::string source = pkg::SourceOfRelsPart(name); !source.empty()) {
+    } else if (std::string source = pkg::SourceOfRelsPart(name); !source.empty()) {
       pkg::RelationshipSet set;
       if (pkg::ParseRelationships(text, source, pkg->GetLimits(), name, set).Ok()) {
         set.relsPart = name;
         pkg->SetRelationships(std::move(set));
       }
-      continue;
     }
     pkg->SetPart(name, std::move(bytes));
   }

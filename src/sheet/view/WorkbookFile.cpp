@@ -31,6 +31,19 @@ WorkbookFile::~WorkbookFile() {
   if (run_ && run_->worker.joinable()) run_->worker.join();
 }
 
+bool WorkbookFile::IsTemplate(const std::wstring& path) {
+  return fw::EndsWithNoCase(path, L".xltx") || fw::EndsWithNoCase(path, L".xltm");
+}
+
+void WorkbookFile::OpenedTemplate(const std::wstring& path, int number) {
+  const size_t dot = path.rfind(L'.');
+  const std::wstring stem = path.substr(0, dot);
+  const std::wstring title = fw::FileNameOf(stem) + std::to_wstring(number);
+  const wchar_t* ext = fw::EndsWithNoCase(path, L".xltm") ? L".xlsm" : L".xlsx";
+  const size_t slash = stem.find_last_of(L"\\/");
+  Copy(title, (slash == std::wstring::npos ? std::wstring() : stem.substr(0, slash + 1)) + title + ext, false);
+}
+
 FileFormat WorkbookFile::FormatOf(const std::wstring& path, FileFormat current) {
   if (fw::EndsWithNoCase(path, L".xlsx")) return FileFormat::Xlsx;
   if (fw::EndsWithNoCase(path, L".xlsm")) return FileFormat::Xlsm;
