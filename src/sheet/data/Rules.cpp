@@ -5,6 +5,7 @@
 #include <random>
 
 #include "core/Strings.h"
+#include "pkg/Formula.h"
 #include "pkg/XmlWriter.h"
 #include "sheet/calc/Entry.h"
 #include "sheet/model/Sheet.h"
@@ -641,6 +642,147 @@ Validation CopyValidation(const Validation& v, const std::string& sqref, MoveFor
   if (!c.f1.empty()) c.f1 = move(ctx, c.f1);
   if (!c.f2.empty()) c.f2 = move(ctx, c.f2);
   return c;
+}
+
+// ---- Tables
+
+namespace {
+
+bool IdentChar(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.' || c == '\\' || static_cast<unsigned char>(c) >= 0x80; }
+
+// The end of a bracketed item starting at `at` ('['): one past its matching ']', ' escaping.
+size_t BracketEnd(std::string_view f, size_t at) {
+  int depth = 0;
+  for (size_t i = at; i < f.size(); ++i) {
+    if (f[i] == '\'') {
+      ++i;
+      continue;
+    }
+    if (f[i] == '[') ++depth;
+    else if (f[i] == ']' && --depth == 0) return i + 1;
+  }
+  return std::string_view::npos;
+}
+
+std::string Unescape(std::string_view s) {
+  std::string out;
+  for (size_t i = 0; i < s.size(); ++i) {
+    if (s[i] == '\'' && i + 1 < s.size()) ++i;
+    out += s[i];
+  }
+  return out;
+}
+
+// One structured reference's brackets (without the table's name) as cells; empty when it can't.
+std::string Cells(std::string_view spec, const Table& t, const std::string& sheet, uint32_t row) {
+  std::string_view in = spec.substr(1, spec.size() - 2);  // inside the outer brackets
+  bool all = false, data = false, headers = false, totals = false, thisRow = false;
+  std::string col1, col2;
+  auto item = [&](std::string_view x) {
+    x = std::string_view(x.data(), x.size());
+    while (!x.empty() && x.front() == ' ') x.remove_prefix(1);
+    while (!x.empty() && x.back() == ' ') x.remove_suffix(1);
+    if (x.size() >= 2 && x.front() == '[' && x.back() == ']' && BracketEnd(x, 0) == x.size()) x = x.substr(1, x.size() - 2);
+    if (!x.empty() && x[0] == '#') {
+      std::string k(x);
+      for (char& c : k) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      all |= k == "#all", data |= k == "#data", headers |= k == "#headers", totals |= k == "#totals";
+      thisRow |= k == "#this row";
+      return;
+    }
+    (col1.empty() ? col1 : col2) = Unescape(x);
+  };
+  if (!in.empty() && in[0] == '@') {
+    thisRow = true;
+    in.remove_prefix(1);
+    if (!in.empty()) item(in);
+  } else if (!in.empty() && in[0] == '[') {
+    // [[#X],[A]:[B]] or [[A]:[B]]: the top-level items, a colon joining two columns.
+    size_t i = 0;
+    while (i < in.size()) {
+      if (in[i] == '[') {
+        const size_t e = BracketEnd(in, i);
+        if (e == std::string_view::npos) return {};
+        item(in.substr(i, e - i));
+        i = e;
+      } else {
+        ++i;  // ',' ':' and spaces
+      }
+    }
+  } else {
+    item(in);
+  }
+  if (!data && !headers && !totals && !all && !thisRow) data = true;
+  // The rows.
+  const uint32_t dataFirst = t.ref.firstRow + t.headerRows;
+  const uint32_t dataLast = t.ref.lastRow >= t.totalsRows ? t.ref.lastRow - t.totalsRows : t.ref.firstRow;
+  uint32_t r1 = 0, r2 = 0;
+  if (all) r1 = t.ref.firstRow, r2 = t.ref.lastRow;
+  else if (thisRow) r1 = r2 = row;
+  else {
+    r1 = headers && t.headerRows ? t.ref.firstRow : data ? dataFirst : t.ref.lastRow;
+    r2 = totals && t.totalsRows ? t.ref.lastRow : data ? dataLast : t.ref.firstRow;
+    if (headers && !t.headerRows && !data) return {};
+    if (totals && !t.totalsRows && !data) return {};
+  }
+  // The columns.
+  uint32_t c1 = t.ref.firstCol, c2 = t.ref.lastCol;
+  if (!col1.empty()) {
+    const int a = t.FindColumn(col1), b = col2.empty() ? a : t.FindColumn(col2);
+    if (a < 0 || b < 0) return {};
+    c1 = t.ref.firstCol + static_cast<uint32_t>(std::min(a, b));
+    c2 = t.ref.firstCol + static_cast<uint32_t>(std::max(a, b));
+  }
+  auto cell = [&](uint32_t r, uint32_t c, bool absRow) {
+    return "$" + ColumnName(c) + (absRow ? "$" : "") + std::to_string(r + 1);
+  };
+  std::string out = pkg::QuoteSheetName(sheet) + "!" + cell(r1, c1, !thisRow);
+  if (r1 != r2 || c1 != c2) out += ":" + cell(r2, c2, !thisRow);
+  return out;
+}
+
+}  // namespace
+
+std::string Unstructure(std::string_view f, const Table& t, const std::string& sheetName, uint32_t row, bool inside) {
+  std::string out;
+  bool changed = false;
+  for (size_t i = 0; i < f.size();) {
+    if (f[i] == '"') {  // a text constant
+      size_t e = i + 1;
+      while (e < f.size() && !(f[e] == '"' && (e + 1 >= f.size() || f[e + 1] != '"'))) e += f[e] == '"' ? 2 : 1;
+      out.append(f.substr(i, e + 1 - i));
+      i = e + 1;
+      continue;
+    }
+    const bool start = i == 0 || !IdentChar(f[i - 1]);
+    if (start && NameEqualsNoCase(f.substr(i, std::min(t.name.size(), f.size() - i)), t.name) && i + t.name.size() < f.size() &&
+        f[i + t.name.size()] == '[') {
+      const size_t b = i + t.name.size(), e = BracketEnd(f, b);
+      if (e != std::string_view::npos) {
+        const std::string cells = Cells(f.substr(b, e - b), t, sheetName, row);
+        if (!cells.empty()) {
+          out += cells;
+          changed = true;
+          i = e;
+          continue;
+        }
+      }
+    }
+    if (inside && f[i] == '[' && (i == 0 || (!IdentChar(f[i - 1]) && f[i - 1] != ']' && f[i - 1] != '!'))) {
+      const size_t e = BracketEnd(f, i);
+      if (e != std::string_view::npos) {
+        const std::string cells = Cells(f.substr(i, e - i), t, sheetName, row);
+        if (!cells.empty()) {
+          out += cells;
+          changed = true;
+          i = e;
+          continue;
+        }
+      }
+    }
+    out += f[i++];
+  }
+  return changed ? out : std::string(f);
 }
 
 // ---- Data validation

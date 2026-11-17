@@ -262,6 +262,27 @@ TEST(SheetTables_AddSetRemove) {
   CHECK(s.Tables().size() == 1 && s.Text().afterData.find("tableParts") != std::string::npos);
 }
 
+// Convert to Range, as Excel 2021 rewrote these (ListObject.Unlist): table Sales on A1:C5 with a
+// header and a total row, columns Name, Amount, Twice.
+TEST(SheetTables_Unstructure) {
+  Table t;
+  t.name = "Sales";
+  t.ref = Range{0, 0, 4, 2};
+  t.totalsRows = 1;
+  t.columns = {TableColumn{1, "Name"}, TableColumn{2, "Amount"}, TableColumn{3, "Twice"}};
+  auto u = [&](const char* f, uint32_t row, bool inside) { return data::Unstructure(f, t, "Sheet1", row, inside); };
+  CHECK(u("[@Amount]*2", 1, true) == "Sheet1!$B2*2");
+  CHECK(u("[@Amount]*2", 2, true) == "Sheet1!$B3*2");
+  CHECK(u("SUBTOTAL(109,[Twice])", 4, true) == "SUBTOTAL(109,Sheet1!$C$2:$C$4)");
+  CHECK(u("SUM(Sales[Amount])", 0, false) == "SUM(Sheet1!$B$2:$B$4)");
+  CHECK(u("Sales[[#Totals],[Amount]]", 1, false) == "Sheet1!$B$5");
+  CHECK(u("COUNTA(Sales[#All])", 2, false) == "COUNTA(Sheet1!$A$1:$C$5)");
+  CHECK(u("SUM(Sales[[Amount]:[Twice]])", 3, false) == "SUM(Sheet1!$B$2:$C$4)");
+  CHECK(u("COUNTA(Sales[#Headers])", 4, false) == "COUNTA(Sheet1!$A$1:$C$1)");
+  CHECK(u("\"Sales[Amount]\"&OtherSales[x]", 0, false) == "\"Sales[Amount]\"&OtherSales[x]");
+  CHECK(data::Unstructure("SUM(Sales[Amount])", t, "My Sheet", 0, false) == "SUM('My Sheet'!$B$2:$B$4)");
+}
+
 // Pasting: the copy's cells, every formula through the move, a data bar's x14 id new.
 TEST(SheetRules_Copy) {
   auto move = [](void*, std::string_view f) { return "M(" + std::string(f) + ")"; };

@@ -14,6 +14,7 @@
 #include "sheet/model/Types.h"
 
 namespace fw::sheet {
+struct Table;
 namespace detail {
 struct PartText;
 }
@@ -97,6 +98,14 @@ void SetCfSqref(CfRule& rule, const std::string& sqref);
 // without "="; relative references re-based on the new top-left cell), a data bar's or x14 rule's id new.
 using MoveFormula = std::string (*)(void* ctx, std::string_view formula);
 CfRule CopyCfRule(const CfRule& rule, const std::string& sqref, MoveFormula move, void* ctx);
+
+// ---- Tables
+
+// A formula (invariant, without "=") at `row` of a sheet with its references to table `t` (on the
+// sheet `sheetName`) written as cells, as Excel's Convert to Range writes them: Sales[Amount] ->
+// Sheet1!$B$2:$B$4, [@Amount] -> Sheet1!$B2, Sales[[#Totals],[Amount]] -> Sheet1!$B$5. `inside`:
+// the formula is in the table, where [Amount] without the name is its. Unchanged when it has none.
+std::string Unstructure(std::string_view formula, const Table& t, const std::string& sheetName, uint32_t row, bool inside);
 
 // ---- Data validation
 

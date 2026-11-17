@@ -873,10 +873,7 @@ bool WorkbookView::RulesCommand(int cmd) {
       if (const int i = TableIndexAt(active_); i >= 0) SetTotalRow(static_cast<size_t>(i), Current().Tables()[static_cast<size_t>(i)].totalsRows == 0);
       break;
     case CmdConvertToRange:
-      if (const int i = TableIndexAt(active_); i >= 0 && !EditRefused(Ed().RemoveTable(static_cast<int>(sheet_), static_cast<size_t>(i)))) {
-        if (tablePanel_ && host_.ViewShownPanel() == tablePanel_.get()) host_.ViewShowPanel(nullptr);
-        host_.ViewInvalidate();
-      }
+      if (const int i = TableIndexAt(active_); i >= 0) ConvertToRange(static_cast<size_t>(i));
       break;
   }
   return true;
@@ -1204,6 +1201,51 @@ bool WorkbookView::SetTotalRow(size_t index, bool on) {
   }
   if (EditRefused(Ed().SetTable(sheet, index, t))) return false;
   group.done = true;
+  host_.ViewInvalidate();
+  return true;
+}
+
+bool WorkbookView::ConvertToRange(size_t index) {
+  if (index >= Current().Tables().size()) return false;
+  const Table t = Current().Tables()[index];
+  const int home = static_cast<int>(sheet_);
+  const std::string homeName = Current().Name();
+  edit::EditGroup group(Ed(), u"Convert to Range");
+  // Formulas that refer to the table refer to its cells instead, as Excel writes them.
+  for (size_t si = 0; si < book_->SheetCount(); ++si) {
+    if (!book_->GetSheet(si).Loaded() && !book_->LoadSheet(si).Ok()) continue;
+    const Sheet& s = book_->GetSheet(si);
+    const std::optional<Range> used = s.UsedRange();
+    if (!used || s.FormulaCount() == 0) continue;
+    std::vector<std::pair<CellAddr, edit::CellInput>> cells;
+    s.ForEachCell(*used, [&](const CellInfo& c) {
+      if (!c.hasFormula) return true;
+      FormulaInfo fi;
+      if (!s.GetFormula(c.row, c.col, fi) || (fi.kind != FormulaKind::Normal && fi.kind != FormulaKind::Shared)) return true;
+      const bool inside = static_cast<int>(si) == home && c.row >= t.ref.firstRow && c.row <= t.ref.lastRow &&
+                          c.col >= t.ref.firstCol && c.col <= t.ref.lastCol;
+      std::string text(fi.text);
+      if (!inside && std::search(text.begin(), text.end(), t.name.begin(), t.name.end(), [](char a, char b) {
+            return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+          }) == text.end())
+        return true;
+      if (fi.origin.row != c.row || fi.origin.col != c.col) {  // a shared formula's cell: its own text first
+        calc::CompileOptions from, to;
+        from.sheet = to.sheet = static_cast<int>(si);
+        from.row = static_cast<int32_t>(fi.origin.row), from.col = static_cast<int32_t>(fi.origin.col);
+        to.row = static_cast<int32_t>(c.row), to.col = static_cast<int32_t>(c.col);
+        text = calc::CopyFormula("=" + text, from, to, Calc().engine());
+        if (!text.empty() && text[0] == '=') text.erase(0, 1);
+      }
+      const std::string now = data::Unstructure(text, t, homeName, c.row, inside);
+      if (now != text) cells.emplace_back(CellAddr{c.row, c.col}, edit::CellInput::Formula(now));
+      return true;
+    });
+    if (!cells.empty() && EditRefused(Ed().SetCells(static_cast<int>(si), cells))) return false;
+  }
+  if (EditRefused(Ed().RemoveTable(home, index))) return false;
+  group.done = true;
+  if (tablePanel_ && host_.ViewShownPanel() == tablePanel_.get()) host_.ViewShowPanel(nullptr);
   host_.ViewInvalidate();
   return true;
 }
