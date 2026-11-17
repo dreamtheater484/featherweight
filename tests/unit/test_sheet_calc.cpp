@@ -430,6 +430,18 @@ void Fixture(MapHost& h) {
   }
   Put(h, "J1", Value::Error(Err::Div0));
   Put(h, "J2", Value::Error(Err::NA));
+  // A database (K1:M7) and criteria ranges (N:O) for DSUM and friends.
+  const char* trees[] = {"Apple", "Pear", "Cherry", "Apple", "Pear", "Apple"};
+  const double sizes[][2] = {{18, 20}, {12, 12}, {13, 14}, {14, 15}, {9, 8}, {8, 9}};
+  Put(h, "K1", Value::Text("Tree")), Put(h, "L1", Value::Text("Height")), Put(h, "M1", Value::Text("Age"));
+  for (int i = 0; i < 6; ++i) {
+    h.Set(0, i + 1, 10, Value::Text(trees[i]));
+    h.Set(0, i + 1, 11, Value::Number(sizes[i][0]));
+    h.Set(0, i + 1, 12, Value::Number(sizes[i][1]));
+  }
+  const char* crit[][2] = {{"N1", "Tree"}, {"O1", "Height"}, {"N2", "Apple"}, {"O2", ">10"}, {"N4", "Tree"},
+                           {"N5", "Pear"}, {"N7", "tree"}, {"N8", "Apple"}, {"N9", "=Pear"}, {"O4", "Height"}};
+  for (auto& k : crit) Put(h, k[0], Value::Text(k[1]));
   Put(h, "Sheet2!A1", Value::Number(7));
   Put(h, "Sheet2!A2", Value::Number(8));
   Put(h, "Sheet2!B1", Value::Text("s2"));

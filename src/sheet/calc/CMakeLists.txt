@@ -9,6 +9,7 @@ target_sources(fwsheet PRIVATE
   FnDate.cpp
   FnLookup.cpp
   FnMath.cpp
+  FnEngineering.cpp
   FnFinance.cpp
   FnShape.cpp
   FnStat.cpp

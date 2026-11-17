@@ -333,6 +333,11 @@ FW_FN(Forecast) FW_FN(Frequency) FW_FN(GeoMean) FW_FN(Growth) FW_FN(HarMean) FW_
 FW_FN(Linest) FW_FN(Logest) FW_FN(ModeMult) FW_FN(PercentRankExc) FW_FN(PercentRankInc) FW_FN(Prob)
 FW_FN(Rsq) FW_FN(Skew) FW_FN(SkewP) FW_FN(Slope) FW_FN(StDevA) FW_FN(StDevPA) FW_FN(Standardize) FW_FN(SteYX)
 FW_FN(Trend) FW_FN(TrimMean) FW_FN(VarA) FW_FN(VarPA)
+FW_FN(Bin2Dec) FW_FN(Bin2Hex) FW_FN(Bin2Oct) FW_FN(BitAnd) FW_FN(BitLShift) FW_FN(BitOr) FW_FN(BitRShift)
+FW_FN(BitXor) FW_FN(DAverage) FW_FN(DCount) FW_FN(DCountA) FW_FN(DGet) FW_FN(DMax) FW_FN(DMin)
+FW_FN(DProduct) FW_FN(DStDev) FW_FN(DStDevP) FW_FN(DSum) FW_FN(DVar) FW_FN(DVarP) FW_FN(Dec2Bin)
+FW_FN(Dec2Hex) FW_FN(Dec2Oct) FW_FN(Delta) FW_FN(Erf) FW_FN(ErfPrecise) FW_FN(Erfc) FW_FN(GeStep)
+FW_FN(Hex2Bin) FW_FN(Hex2Dec) FW_FN(Hex2Oct) FW_FN(Oct2Bin) FW_FN(Oct2Dec) FW_FN(Oct2Hex)
 #undef FW_FN
 }  // namespace fn
 
