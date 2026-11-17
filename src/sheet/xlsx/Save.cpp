@@ -678,6 +678,9 @@ std::set<std::string> Reachable(const pkg::Package& pkg, const std::set<std::str
 
 }  // namespace
 
+void PutSheetElement(PartText& t, std::string_view local, const std::string& xml) { PutElement(t, local, xml); }
+std::string SheetPrefix(const PartText& t) { return PrefixOf(t.rootStart); }
+
 // ---------- The workbook ----------
 
 Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan, FileFormat format) {
@@ -867,6 +870,39 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
   // parts nothing used to begin with stay as they are.
   if (!cut.empty()) {
     std::set<std::string> before = Reachable(*pkg, {}), after = Reachable(*pkg, cut);
+    // A pivot cache whose pivot tables all went with a deleted sheet goes too, as Excel does it;
+    // not while slicers or timelines (which name caches by id) remain.
+    bool cacheUsers = false;
+    std::set<std::string> usedKept, usedGone;  // what the parts that stay, and those that go, point to
+    for (const pkg::Part& part : pkg->Parts()) {
+      std::string key = pkg::PartKey(part.name);
+      if (part.deleted || !before.count(key) || key == pkg::PartKey(wbPart)) continue;
+      std::string_view ct = pkg->ContentTypeOf(part.name);
+      cacheUsers = cacheUsers || (after.count(key) && (ct.find("slicerCache") != std::string_view::npos ||
+                                                       ct.find("timelineCache") != std::string_view::npos));
+      if (const pkg::RelationshipSet* set = pkg->RelationshipsOf(part.name))
+        for (const pkg::Relationship& rel : set->items)
+          if (!rel.external) (after.count(key) ? usedKept : usedGone).insert(pkg::PartKey(rel.targetPart));
+    }
+    bool more = false;
+    if (wbRels && !cacheUsers)
+      for (const pkg::Relationship& rel : wbRels->items) {
+        std::string key = pkg::PartKey(rel.targetPart);
+        if (rel.external || !rel.type.ends_with("/pivotCacheDefinition") || !usedGone.count(key) || usedKept.count(key)) continue;
+        if (pugi::xml_node caches = Child(root, "pivotCaches")) {
+          for (pugi::xml_node c = caches.first_child(); c; c = c.next_sibling())
+            if (RelIdAttr(c) == rel.id) {
+              caches.remove_child(c);
+              break;
+            }
+          if (!Child(caches, "pivotCache")) root.remove_child(caches);
+        }
+        cut.insert(key);
+        dropRel(rel.id);
+        leave(rel.targetPart);
+        more = true;
+      }
+    if (more) after = Reachable(*pkg, cut);
     for (const pkg::Part& part : pkg->Parts()) {
       std::string key = pkg::PartKey(part.name);
       if (part.deleted || cut.count(key) || !before.count(key) || after.count(key)) continue;
