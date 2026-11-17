@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "pkg/Limits.h"
 #include "pkg/Status.h"
@@ -61,6 +62,13 @@ bool NumberStyle(std::string_view text, double v, uint8_t& style);
 bool ParseSlice(pugi::xml_document& doc, std::string_view xml);
 // The text of an element: its text and CDATA children, joined.
 std::string TextOf(pugi::xml_node n);
+// The top-level elements of kept XML (a part's text around sheetData): where each is and its local
+// name; comments, processing instructions and whitespace between them skipped.
+struct XmlPiece {
+  size_t begin = 0, end = 0;
+  std::string local;
+};
+std::vector<XmlPiece> TopLevel(std::string_view xml);
 
 pkg::Status ReadStyles(std::string_view xml, const pkg::Limits& limits, std::string_view label, Styles& styles);
 pkg::Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::string& part, Table& table);

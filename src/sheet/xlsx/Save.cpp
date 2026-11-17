@@ -16,6 +16,71 @@ namespace fw::sheet::xlsx {
 using detail::PartText;
 using pkg::Status;
 
+std::vector<XmlPiece> TopLevel(std::string_view x) {
+  std::vector<XmlPiece> out;
+  int depth = 0;
+  XmlPiece cur;
+  for (size_t i = x.find('<'); i != std::string_view::npos; i = x.find('<', i)) {
+    if (x.compare(i, 4, "<!--") == 0) {
+      size_t e = x.find("-->", i);
+      if (e == std::string_view::npos) break;
+      i = e + 3;
+      continue;
+    }
+    if (x.compare(i, 9, "<![CDATA[") == 0) {
+      size_t e = x.find("]]>", i);
+      if (e == std::string_view::npos) break;
+      i = e + 3;
+      continue;
+    }
+    if (x.compare(i, 2, "<?") == 0) {
+      size_t e = x.find("?>", i);
+      if (e == std::string_view::npos) break;
+      i = e + 2;
+      continue;
+    }
+    bool closing = i + 1 < x.size() && x[i + 1] == '/';
+    size_t j = i + 1;
+    char quote = 0;
+    for (; j < x.size(); ++j) {
+      char c = x[j];
+      if (quote) {
+        if (c == quote) quote = 0;
+      } else if (c == '"' || c == '\'') {
+        quote = c;
+      } else if (c == '>') {
+        break;
+      }
+    }
+    if (j >= x.size()) break;
+    if (closing) {
+      if (--depth == 0) {
+        cur.end = j + 1;
+        out.push_back(cur);
+      }
+    } else {
+      bool selfClosing = x[j - 1] == '/';
+      if (depth == 0) {
+        size_t k = i + 1;
+        while (k < j && std::strchr(" \t\r\n/>", x[k]) == nullptr) ++k;
+        std::string_view qn = x.substr(i + 1, k - i - 1);
+        size_t colon = qn.find(':');
+        cur = XmlPiece{i, 0, std::string(colon == std::string_view::npos ? qn : qn.substr(colon + 1))};
+      }
+      if (selfClosing) {
+        if (depth == 0) {
+          cur.end = j + 1;
+          out.push_back(cur);
+        }
+      } else {
+        ++depth;
+      }
+    }
+    i = j + 1;
+  }
+  return out;
+}
+
 namespace {
 
 constexpr std::string_view kDecl = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n";
@@ -101,81 +166,11 @@ int OrderOf(std::string_view local) {
   return 1000;
 }
 
-struct Piece {
-  size_t begin = 0, end = 0;
-  std::string local;
-};
-
-// The top-level elements of kept worksheet XML (comments and whitespace between them skipped).
-std::vector<Piece> TopLevel(std::string_view x) {
-  std::vector<Piece> out;
-  int depth = 0;
-  Piece cur;
-  for (size_t i = x.find('<'); i != std::string_view::npos; i = x.find('<', i)) {
-    if (x.compare(i, 4, "<!--") == 0) {
-      size_t e = x.find("-->", i);
-      if (e == std::string_view::npos) break;
-      i = e + 3;
-      continue;
-    }
-    if (x.compare(i, 9, "<![CDATA[") == 0) {
-      size_t e = x.find("]]>", i);
-      if (e == std::string_view::npos) break;
-      i = e + 3;
-      continue;
-    }
-    if (x.compare(i, 2, "<?") == 0) {
-      size_t e = x.find("?>", i);
-      if (e == std::string_view::npos) break;
-      i = e + 2;
-      continue;
-    }
-    bool closing = i + 1 < x.size() && x[i + 1] == '/';
-    size_t j = i + 1;
-    char quote = 0;
-    for (; j < x.size(); ++j) {
-      char c = x[j];
-      if (quote) {
-        if (c == quote) quote = 0;
-      } else if (c == '"' || c == '\'') {
-        quote = c;
-      } else if (c == '>') {
-        break;
-      }
-    }
-    if (j >= x.size()) break;
-    if (closing) {
-      if (--depth == 0) {
-        cur.end = j + 1;
-        out.push_back(cur);
-      }
-    } else {
-      bool selfClosing = x[j - 1] == '/';
-      if (depth == 0) {
-        size_t k = i + 1;
-        while (k < j && std::strchr(" \t\r\n/>", x[k]) == nullptr) ++k;
-        std::string_view qn = x.substr(i + 1, k - i - 1);
-        size_t colon = qn.find(':');
-        cur = Piece{i, 0, std::string(colon == std::string_view::npos ? qn : qn.substr(colon + 1))};
-      }
-      if (selfClosing) {
-        if (depth == 0) {
-          cur.end = j + 1;
-          out.push_back(cur);
-        }
-      } else {
-        ++depth;
-      }
-    }
-    i = j + 1;
-  }
-  return out;
-}
 
 // The element `local` as the kept XML has it (empty when it has none).
 std::string_view FindElement(const PartText& t, std::string_view local) {
   const std::string& seg = OrderOf(local) < OrderOf("sheetData") ? t.beforeData : t.afterData;
-  for (const Piece& p : TopLevel(seg))
+  for (const XmlPiece& p : TopLevel(seg))
     if (p.local == local) return std::string_view(seg).substr(p.begin, p.end - p.begin);
   return {};
 }
@@ -184,14 +179,14 @@ std::string_view FindElement(const PartText& t, std::string_view local) {
 void PutElement(PartText& t, std::string_view local, const std::string& xml) {
   int order = OrderOf(local);
   std::string& seg = order < OrderOf("sheetData") ? t.beforeData : t.afterData;
-  std::vector<Piece> pieces = TopLevel(seg);
-  for (const Piece& p : pieces)
+  std::vector<XmlPiece> pieces = TopLevel(seg);
+  for (const XmlPiece& p : pieces)
     if (p.local == local) {
       seg.replace(p.begin, p.end - p.begin, xml);
       return;
     }
   if (xml.empty()) return;
-  for (const Piece& p : pieces)
+  for (const XmlPiece& p : pieces)
     if (OrderOf(p.local) > order) {
       seg.insert(p.begin, xml);
       return;
@@ -1006,6 +1001,10 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
   }
   if (relsChanged) put(relsPart, Bytes(PrintDoc(rels)));
   if (typesChanged) put("/[Content_Types].xml", Bytes(PrintDoc(types)));
+  // Parts edits rewrote in the package (structural edits: drawings, charts, notes, tables...),
+  // written as the package holds them.
+  for (const pkg::Part& part : pkg->Parts())
+    if (part.modified && !part.deleted) plan.edited.push_back(part.name);
   return {};
 }
 
@@ -1058,6 +1057,8 @@ void CommitSave(Workbook& book, edit::Editor& ed, SavePlan& plan) {
 std::vector<std::string> WrittenParts(const SavePlan& plan) {
   std::vector<std::string> out;
   for (const auto& [name, bytes] : plan.changes.replace) out.push_back(name);
+  for (const std::string& name : plan.edited)
+    if (std::find(out.begin(), out.end(), name) == out.end()) out.push_back(name);
   for (const SavePlan::SheetJob& job : plan.sheets) out.push_back(job.part);
   if (plan.strings) out.push_back(plan.stringsPart);
   out.insert(out.end(), plan.changes.leaveOut.begin(), plan.changes.leaveOut.end());

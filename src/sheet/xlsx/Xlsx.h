@@ -56,6 +56,7 @@ struct SavePlan {
   bool newStringsPart = false;  // which the workbook didn't have
   bool sheetsRemoved = false;
   FileFormat format = FileFormat::Xlsx;
+  std::vector<std::string> edited;  // parts the package holds as edits changed them (written as they are)
 };
 
 // A save, in three steps so that the writing runs on a worker thread (plan §4.3):
