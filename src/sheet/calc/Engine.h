@@ -48,6 +48,15 @@ class Engine : public Resolver, public Names {
   void SetFormula(const Cell& at, std::shared_ptr<const Formula> f, bool cached = true, const Area* range = nullptr,
                   bool dynamic = false);
   void ClearFormula(const Cell& at);
+  // After an edit: every formula of `a` on `sheet` removed (the edited cells are read again).
+  void ClearFormulas(int sheet, const Area& a);
+  // A formula an edit set: calculated next.
+  void Touch(const Cell& at);
+  // A formula in a circular reference, for the status bar ("Circular References: B2").
+  bool FirstCircular(Cell& out) const;
+  // Calculates the formula at `at` now, from the values as they are (manual mode: the formula
+  // just entered; what depends on it waits for F9).
+  void CalculateCell(const Cell& at);
   // Compiles `text` at `at` with this engine's sheets and names. Null on a syntax error.
   std::shared_ptr<const Formula> CompileAt(std::string_view text, const Cell& at, bool array = false,
                                            ParseError* error = nullptr);
