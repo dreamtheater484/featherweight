@@ -110,4 +110,68 @@ FormatChoice FormatChoiceOf(std::wstring_view code, const NumLocale& locale) {
   return c;
 }
 
+namespace {
+
+// One section of a code with a decimal more (delta 1) or less (-1), as Excel's buttons change it:
+// a digit after the decimal point added or removed (the point with the last one), or ".0" after
+// the last digit when there's no point. Text, quoted or escaped, and [..] parts are skipped.
+std::wstring SectionDecimals(const std::wstring& s, int delta) {
+  size_t point = std::wstring::npos, lastDigit = std::wstring::npos, lastDecimal = std::wstring::npos;
+  bool quoted = false;
+  int bracket = 0;
+  for (size_t i = 0; i < s.size(); ++i) {
+    const wchar_t ch = s[i];
+    if (ch == L'"') quoted = !quoted;
+    if (quoted || ch == L'"') continue;
+    if (ch == L'\\' || ch == L'_' || ch == L'*') {
+      ++i;
+      continue;
+    }
+    if (ch == L'[') ++bracket;
+    else if (ch == L']') --bracket;
+    if (bracket) continue;
+    if (ch == L'E' || ch == L'e') break;  // the exponent's digits aren't decimals
+    if (ch == L'.' && point == std::wstring::npos) point = i;
+    else if (ch == L'0' || ch == L'#' || ch == L'?') {
+      lastDigit = i;
+      if (point != std::wstring::npos) lastDecimal = i;
+    }
+  }
+  std::wstring out = s;
+  if (delta > 0) {
+    if (point != std::wstring::npos) out.insert(lastDecimal != std::wstring::npos ? lastDecimal + 1 : point + 1, L"0");
+    else if (lastDigit != std::wstring::npos) out.insert(lastDigit + 1, L".0");
+  } else if (lastDecimal != std::wstring::npos) {
+    out.erase(lastDecimal, 1);
+    bool more = false;
+    for (size_t i = point + 1; i < lastDecimal; ++i) more = more || out[i] == L'0' || out[i] == L'#' || out[i] == L'?';
+    if (!more) out.erase(point, 1);
+  }
+  return out;
+}
+
+}  // namespace
+
+std::wstring FormatDecimals(std::wstring_view codeView, int delta) {
+  const std::wstring code(codeView);
+  std::wstring out;
+  size_t start = 0;
+  bool quoted = false;
+  int bracket = 0;
+  for (size_t i = 0; i <= code.size(); ++i) {
+    const wchar_t ch = i < code.size() ? code[i] : L';';
+    if (i < code.size() && ch == L'"') quoted = !quoted;
+    else if (!quoted && ch == L'\\') ++i;
+    else if (!quoted && ch == L'[') ++bracket;
+    else if (!quoted && ch == L']') --bracket;
+    else if (!quoted && !bracket && ch == L';') {
+      out += SectionDecimals(code.substr(start, i - start), delta);
+      if (i < code.size()) out += L';';
+      start = i + 1;
+    }
+  }
+  return out;
+}
+
+
 }  // namespace fw::sheet

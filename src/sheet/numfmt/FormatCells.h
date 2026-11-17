@@ -35,4 +35,9 @@ FormatChoice FormatChoiceOf(std::wstring_view code, const NumLocale& locale);
 // The listed types of Date, Time and Fraction (invariant codes); empty for the others.
 std::vector<std::wstring> FormatTypes(FormatCategory category, const NumLocale& locale);
 
+// Increase decimal (delta 1) and Decrease decimal (-1) on a number code (invariant), section by
+// section: a digit after the decimal point added or removed (the point with the last one), ".0"
+// after the last digit when there's no point. Quoted text, escapes and [..] are left alone.
+std::wstring FormatDecimals(std::wstring_view code, int delta);
+
 }  // namespace fw::sheet

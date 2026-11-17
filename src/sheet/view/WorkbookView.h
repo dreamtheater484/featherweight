@@ -6,9 +6,12 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <vector>
 
 #include "PagedView.h"
+#include "sheet/data/Filter.h"
+#include "sheet/data/Sort.h"
 #include "sheet/calc/Bind.h"
 #include "sheet/calc/Entry.h"
 #include "sheet/edit/Edit.h"
@@ -120,6 +123,9 @@ class WorkbookView : public PagedView {
   std::wstring SuggestedSavePath() const override;
   std::wstring FormatLoss(const std::wstring& path) const override;
   void KeepFormat() override { keepFormat_ = true; }
+  // format:size=14, font=, color=RRGGBB, fill=RRGGBB, numfmt=<code as typed here>, border=, align=,
+  // wrap, bold, italic: the selection, through the toolbar's and Format Cells' calls (WorkbookFormat.cpp).
+  bool ScriptOp(const std::wstring& op, const std::wstring& arg) override;
   bool CanPrint() const override { return Ready(); }
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;
   bool CanExportPdf() const override { return Ready(); }
@@ -378,6 +384,64 @@ class WorkbookView : public PagedView {
   bool ReadyToSave(std::wstring& error);  // commits the cell being edited
   void SavedTo();                         // after a save: the tab is the file written
   bool keepFormat_ = false;  // "Keep CSV" chosen: no banner on the next saves
+  // ---- Formats (WorkbookFormat.cpp, s2-format): Format Cells (Ctrl+1) and the quick formats.
+  bool FormatCommand(int cmd);
+  bool FormatCommandState(int cmd, CommandState& s);
+  class FormatPanel;
+  std::unique_ptr<FormatPanel> formatPanel_;
+  void ShowFormatPanel(int page);
+  uint32_t ActiveStyle() const;  // the active cell's format (a CellXfs index)
+  // Every selected cell's format through `change`, which sets only what it changes; one undo step.
+  bool ChangeFormat(std::u16string name, const std::function<void(Xf&)>& change);
+  // The same for the cells of `r`, inside a group (Editor::BeginGroup).
+  bool ChangeFormatIn(const Range& r, const std::function<void(Xf&)>& change);
+  bool ChangeFont(std::u16string name, const std::function<void(Font&)>& change);
+  // A number format's id: a built-in format's (the code as files define it), else a custom one's.
+  uint32_t NumFmtId(const std::wstring& code);
+  std::wstring CodeOf(uint32_t numFmt) const;  // invariant
+  bool ApplyNumberCode(const std::wstring& code);  // invariant
+  bool ChangeDecimals(int delta);                  // Increase and Decrease decimal, from the active cell
+  // Borders on the selection: 0 none, 1 outline, 2 all, 3 inside, 4..7 top, bottom, left, right.
+  bool ApplyBorders(int which, const BorderSide& side);
+  bool MergeCells(int how);  // 0 merge and center, 1 merge across, 2 merge, 3 unmerge
+  void AddFormatToolbar(ToolbarModel& m);
+  D2D1_COLOR_F lastFontColor_{0.75f, 0, 0, 1}, lastFill_{1, 1, 0, 1};  // the color buttons' main parts
+  int lastBorders_ = 0;  // the borders button's choice its main part repeats
+  bool ApplyCellStyle(int index);  // one of Excel's built-in cell styles (WorkbookFormat.cpp's list)
+  // The format painter: the formats copied, painted on the next selection made with the mouse.
+  struct Painter {
+    const Sheet* sheet = nullptr;
+    Range range;
+  };
+  std::optional<Painter> painter_;
+  void PaintFormats();
+  // ---- Filter (WorkbookFilter.cpp, s2-format): Ctrl+Shift+L, the header row's buttons, their panel.
+  struct ViewFilter {
+    Range ref;  // the header row and the rows it filters
+    std::vector<data::FilterCriteria> criteria;
+  };
+  std::unordered_map<const Sheet*, ViewFilter> filters_;
+  ViewFilter* FilterOf();  // the shown sheet's filter, or null
+  void ToggleFilter();
+  bool ApplyFilter();  // hides the rows its criteria leave out, shows the others
+  // The header button at (x, y): the column within the filter, and where it is.
+  bool FilterButtonAt(float x, float y, uint32_t* column, D2D1_RECT_F* rc = nullptr);
+  void DrawFilterButtons(gfx::Canvas& c);
+  class FilterPanel;
+  std::unique_ptr<FilterPanel> filterPanel_;
+  void ShowFilterPanel(uint32_t column);
+  bool DataCommand(int cmd);
+  bool DataCommandState(int cmd, CommandState& s);
+  // Sort and remove duplicates: the range they work on (the selection, or the current region).
+  Range DataRange();
+  // The data rows `range` holds rewritten in `order` (source rows), the first `keep` of them; the
+  // rest of the range emptied. One undo step.
+  bool MoveRows(const Range& range, const std::vector<uint32_t>& order, size_t keep, std::u16string name);
+  bool SortRange(const Range& range, bool header, const std::vector<data::SortKey>& keys);
+  bool RemoveDuplicates(const Range& range, bool header, const std::vector<uint32_t>& columns);
+  class DataPanel;
+  std::unique_ptr<DataPanel> dataPanel_;
+  void ShowDataPanel(bool sort);
   // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
   bool GridCommand(int cmd);
   bool GridCommandState(int cmd, CommandState& s);

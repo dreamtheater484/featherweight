@@ -319,6 +319,7 @@ void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
     const Range sel = Selected();
     if (MergedIn(sel)) item(m, CmdUnmerge, L"Unmerge cells");
     else if (sel.firstRow != sel.lastRow || sel.firstCol != sel.lastCol) item(m, CmdMergeCenter, L"Merge & Center");
+    item(m, CmdFormatCells, L"Format cells…\tCtrl+1");
     if (rows || cols) {
       AppendSeparator(m);
       item(m, rows ? CmdRowHeight : CmdColumnWidth, rows ? L"Row height…" : L"Column width…");
