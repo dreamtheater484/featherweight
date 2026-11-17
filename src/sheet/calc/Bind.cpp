@@ -216,6 +216,7 @@ void WorkbookCalc::StructureEdited() {
 }
 
 bool WorkbookCalc::CalcStep(double budgetMs) {
+  if (Held()) return false;
   if (Opening()) return OpenStep(budgetMs);
   return engine_->Recalculate(budgetMs);
 }
@@ -223,6 +224,7 @@ bool WorkbookCalc::CalcStep(double budgetMs) {
 bool WorkbookCalc::ManualCalc() const { return book_.Calc().mode == CalcMode::Manual; }
 
 void WorkbookCalc::CalculateNow() {
+  if (Held()) return;
   while (Opening()) OpenStep(1e9);
   CalcSettings auto_ = Settings();
   auto_.manual = false;
@@ -232,11 +234,13 @@ void WorkbookCalc::CalculateNow() {
 }
 
 void WorkbookCalc::CalculateFull() {
+  if (Held()) return;
   while (Opening()) OpenStep(1e9);
   engine_->MarkAllDirty();
 }
 
 void WorkbookCalc::CalculateSheet(int sheet) {
+  if (Held()) return;
   while (Opening()) OpenStep(1e9);
   if (sheet >= 0 && sheet < SheetCount()) engine_->CalculateSheet(sheet);
 }

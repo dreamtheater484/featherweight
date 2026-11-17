@@ -657,6 +657,11 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
           OnKeyDown(static_cast<UINT>(wp));
           return 0;
         }
+        // A workbook's Alt keys: Alt+Enter (a line break in a cell), Alt+= (AutoSum).
+        if (v && v->Kind() == TabKind::Workbook && (wp == VK_RETURN || wp == VK_OEM_PLUS)) {
+          OnKeyDown(static_cast<UINT>(wp));
+          return 0;
+        }
         break;  // Alt+F4, Alt+Space etc.
       }
       OnKeyDown(static_cast<UINT>(wp));
@@ -666,6 +671,7 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_SYSCHAR:
       if (wp == L'q' || wp == L'Q') return 0;  // Alt+Q ran a command: no menu, no beep
+      if (TabContent* v = Active(); v && v->Kind() == TabKind::Workbook && (wp == L'\r' || wp == L'=')) return 0;
       break;
     case WM_TIMER:
       switch (wp) {
@@ -1320,6 +1326,13 @@ void App::Execute(int cmd) {
         settings_.Save();
         break;
       case kActSaveAs: SaveActive(true); break;
+      case kActKeepFormat:
+        if (TabContent* tab = Active(); tab && !keepFormatPath_.empty()) {
+          tab->KeepFormat();
+          SaveActiveTo(std::move(keepFormatPath_), false);
+          keepFormatPath_.clear();
+        }
+        break;
       case kActRecover: RecoverDocuments(true); break;
       case kActDiscard: RecoverDocuments(false); break;
       case kActReload: ReloadActive(); break;
@@ -1873,6 +1886,23 @@ bool App::SaveActive(bool saveAs) {
     for (size_t i = 0; i < copies.size() && type == 0; ++i)
       if (fw::EndsWithNoCase(path, std::wstring(L".") + copies[i].ext)) type = i + 1;
     if (type > 0) return SaveCopy(v, path, type - 1);
+  }
+  return SaveActiveTo(std::move(path), saveAs);
+}
+
+bool App::SaveActiveTo(std::wstring path, bool saveAs) {
+  TabContent* v = Active();
+  if (!v || !v->Ready()) return false;
+  if (const std::wstring loss = v->FormatLoss(path); !loss.empty()) {
+    // Saved only after the user chooses: another type, or this one anyway.
+    keepFormatPath_ = path;
+    const size_t dot = path.rfind(L'.');
+    std::wstring ext = dot == std::wstring::npos ? std::wstring() : path.substr(dot + 1);
+    for (wchar_t& c : ext) c = static_cast<wchar_t>(towupper(c));
+    banner_.Show(BannerKind::Warning, loss,
+                 {{kActSaveAs, L"Save as .xlsx", true}, {kActKeepFormat, ext.empty() ? L"Keep it" : L"Keep " + ext}});
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return false;
   }
   std::wstring error;
   if (v->Save(path, error)) {

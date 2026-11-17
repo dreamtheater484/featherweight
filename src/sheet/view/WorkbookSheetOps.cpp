@@ -81,6 +81,10 @@ bool WorkbookView::GridCommandState(int cmd, CommandState& s) {
     case CmdPasteFormulas: s.label = L"Paste formulas"; s.enabled = cells; return true;
     case CmdPasteFormats: s.label = L"Paste formats"; s.enabled = cells; return true;
     case CmdPasteTranspose: s.label = L"Paste transposed"; s.enabled = cells; return true;
+    case CmdAutoSum: s.label = L"AutoSum"; s.shortcut = L"Alt+="; s.enabled = cells; return true;
+    case CmdCalculateNow: s.label = L"Calculate now"; s.shortcut = L"F9"; s.enabled = Ready(); return true;
+    case CmdCalculateSheet: s.label = L"Calculate sheet"; s.shortcut = L"Shift+F9"; s.enabled = Ready() && !ChartSheet(); return true;
+    case CmdCalculateFull: s.label = L"Calculate everything"; s.shortcut = L"Ctrl+Alt+F9"; s.enabled = Ready(); return true;
     default: return false;
   }
 }
@@ -151,6 +155,24 @@ bool WorkbookView::GridCommand(int cmd) {
     case CmdPasteFormulas: Paste(PasteMode::Formulas); return true;
     case CmdPasteFormats: Paste(PasteMode::Formats); return true;
     case CmdPasteTranspose: Paste(PasteMode::All, true); return true;
+    case CmdAutoSum: AutoSum(); return true;
+    case CmdCalculateNow:
+    case CmdCalculateFull:
+      // Then at idle until done, in manual mode too.
+      cmd == CmdCalculateNow ? Calc().CalculateNow() : Calc().CalculateFull();
+      recalc_ = calcNow_ = true;
+      host_.ViewStateChanged();
+      return true;
+    case CmdCalculateSheet:
+      Calc().CalculateSheet(sheet);  // at once
+      text_->Clear();
+      totals_ = Totals{};
+      for (auto& rules : rules_)
+        if (rules) rules->Changed();
+      CheckCircular();
+      host_.ViewStateChanged();
+      host_.ViewInvalidate();
+      return true;
     default: return false;
   }
 }
@@ -257,8 +279,7 @@ void WorkbookView::SheetsChanged() {
   rules_.clear();
   rules_.resize(n);
   rulesRead_.assign(n, false);
-  calc_.reset();
-  recalc_ = true;
+  // The engine read every formula again on the change (SyncEngine: StructureEdited).
   loadNext_ = 0;
   if (shown == SIZE_MAX) {  // the shown sheet was deleted: the next one, as in Excel
     shown = std::min(sheet_, n - 1);

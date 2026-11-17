@@ -6,6 +6,7 @@
 
 #include "TestHarness.h"
 #include "sheet/csv/Csv.h"
+#include "sheet/edit/Edit.h"
 #include "sheet/numfmt/NumLocale.h"
 
 using namespace fw::sheet;
@@ -134,4 +135,30 @@ TEST(SheetCsvWrite_Corpus) {
   }
   std::printf("  %d of %d CSV files saved untouched are the same bytes\n", same, files);
   CHECK_EQ(same, files);
+}
+
+// What CSV can't keep: formatting beyond number formats, formulas, another sheet.
+TEST(SheetCsvWrite_Loses) {
+  auto book = Open("Date;Amount\r\n17/11/2026;2,50\r\n", Opts(EnNlLocale()));
+  CHECK(!csv::Loses(*book));  // the dates' and numbers' formats show in the values written
+  edit::Editor ed(*book);
+  Font bold = book->GetStyles().FontOf(book->GetStyles().CellXf(0));
+  bold.bold = true;
+  Xf x = book->GetStyles().CellXf(0);
+  x.font = ed.AddFont(bold);
+  x.applyFont = true;
+  const uint32_t xf = ed.AddXf(x);
+  CHECK(ed.MapStyles(0, Range{0, 0, 0, 1}, [&](uint32_t) { return xf; }));
+  CHECK(csv::Loses(*book));
+  CHECK(ed.Undo());
+  CHECK(!csv::Loses(*book));  // the bold format is still listed, but no cell has it
+  CHECK(ed.SetCell(0, 2, 1, edit::CellInput::Formula("SUM(B2:B2)")));
+  CHECK(csv::Loses(*book));
+  CHECK(ed.Undo());
+  CHECK(!csv::Loses(*book));
+  CHECK(ed.SetColumnWidth(0, 0, 0, 20));
+  CHECK(csv::Loses(*book));
+  CHECK(ed.Undo());
+  CHECK(ed.AddSheet(-1));
+  CHECK(csv::Loses(*book));
 }

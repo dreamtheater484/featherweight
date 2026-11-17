@@ -19,6 +19,9 @@ struct WorkbookFile::Running {
   std::thread worker;
   SaveJob job;
   fw::sheet::xlsx::SavePlan plan;
+  bool csv = false;                   // a CSV or TSV file: csv::Write rather than the plan
+  fw::sheet::csv::Options csvOptions;
+  std::wstring follow;                // the CSV file the workbook stands for, whose way of writing is kept
   fw::sheet::Workbook* book = nullptr;
   fw::sheet::edit::Editor* editor = nullptr;
   pkg::Status written;
@@ -49,7 +52,23 @@ FileFormat WorkbookFile::FormatOf(const std::wstring& path, FileFormat current) 
   if (fw::EndsWithNoCase(path, L".xlsm")) return FileFormat::Xlsm;
   if (fw::EndsWithNoCase(path, L".xltx")) return FileFormat::Xltx;
   if (fw::EndsWithNoCase(path, L".xltm")) return FileFormat::Xltm;
+  if (fw::EndsWithNoCase(path, L".csv") || fw::EndsWithNoCase(path, L".tsv")) return FileFormat::Csv;
   return current;
+}
+
+bool WorkbookFile::SaveCsvCopy(const fw::sheet::Workbook& book, const std::wstring& path,
+                               const fw::sheet::csv::Options& options, std::wstring& error) {
+  fw::sheet::csv::Options o = options;
+  o.tsv = fw::EndsWithNoCase(path, L".tsv");
+  o.delimiter = 0;
+  const std::string bytes = fw::sheet::csv::WriteNew(book, o);
+  const pkg::SaveResult r =
+      pkg::SafeWrite(path, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
+  if (!r.Ok()) {
+    error = fw::Utf8ToWide(r.message);
+    return false;
+  }
+  return true;
 }
 
 std::wstring WorkbookFile::SuggestedPath(const fw::sheet::Workbook& book) const {
@@ -76,6 +95,7 @@ bool WorkbookFile::StartSave(fw::sheet::Workbook& book, fw::sheet::edit::Editor&
   }
   auto r = std::make_unique<Running>();
   if (!BeginSave(path, r->job, error)) return false;
+  if (FormatOf(r->job.target, book.Format()) == FileFormat::Csv) return StartCsv(std::move(r), book, editor, done, error);
   editor.BeginSave();
   pkg::Status st = fw::sheet::xlsx::PrepareSave(book, editor, r->plan, FormatOf(r->job.target, book.Format()));
   if (!st.Ok()) {
@@ -101,6 +121,48 @@ bool WorkbookFile::StartSave(fw::sheet::Workbook& book, fw::sheet::edit::Editor&
   return true;
 }
 
+bool WorkbookFile::StartCsv(std::unique_ptr<Running> r, fw::sheet::Workbook& book, fw::sheet::edit::Editor& editor,
+                            std::function<void()> done, std::wstring& error) {
+  if (book.Format() != FileFormat::Csv) {
+    // An Excel workbook keeps its own file; CSV is a copy of its first sheet's values.
+    error = r->job.name + L" would keep only the values of the first sheet. Save a copy as CSV instead.";
+    return false;
+  }
+  editor.BeginSave();
+  r->csv = true;
+  r->csvOptions = csv_;
+  // The file the workbook stands for is followed when the new one is the same kind (.csv or .tsv).
+  if (!Path().empty() && fw::EndsWithNoCase(Path(), L".tsv") == fw::EndsWithNoCase(r->job.target, L".tsv"))
+    r->follow = Path();
+  r->book = &book;
+  r->editor = &editor;
+  Running* p = r.get();
+  r->worker = std::thread([p, done = std::move(done)] {
+    try {
+      std::unique_ptr<pkg::Snapshot> original;
+      pkg::Status st;
+      if (!p->follow.empty()) original = pkg::Snapshot::Open(p->follow, {}, st);
+      std::string bytes;
+      if (original) {
+        const auto b = original->Bytes();
+        bytes = fw::sheet::csv::Write(*p->book, std::string_view(reinterpret_cast<const char*>(b.data()), b.size()),
+                                      p->csvOptions);
+      } else {
+        fw::sheet::csv::Options o = p->csvOptions;
+        o.tsv = fw::EndsWithNoCase(p->job.target, L".tsv");
+        o.delimiter = 0;
+        bytes = fw::sheet::csv::WriteNew(*p->book, o);
+      }
+      p->result = FileSession::WriteSave(p->job, std::vector<uint8_t>(bytes.begin(), bytes.end()), original.get());
+    } catch (const std::bad_alloc&) {
+      p->written = pkg::Status::Fail(pkg::Status::Code::TooLarge, "There isn't enough memory to write it.");
+    }
+    if (done) done();
+  });
+  run_ = std::move(r);
+  return true;
+}
+
 bool WorkbookFile::FinishSave(std::wstring& error) {
   if (!run_) {
     error = L"No save is running.";
@@ -108,6 +170,14 @@ bool WorkbookFile::FinishSave(std::wstring& error) {
   }
   if (run_->worker.joinable()) run_->worker.join();
   std::unique_ptr<Running> r = std::move(run_);
+  if (r->csv && r->written.Ok() && r->result.Ok()) {
+    // The file has the workbook's values; nothing else of it was the file's (Format is Csv).
+    r->editor->EndSave();
+    r->editor->MarkSaved();
+    csv_.tsv = fw::EndsWithNoCase(r->job.target, L".tsv");
+    SaveDone(r->job, r->result);
+    return true;
+  }
   if (!r->written.Ok()) {
     r->editor->EndSave();
     error = r->job.name + L" couldn't be saved. " + fw::Utf8ToWide(r->written.message);
