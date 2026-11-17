@@ -41,7 +41,10 @@ Result RoundtripFile(const std::filesystem::path& file, const Options& options) 
   Result r;
   Status st;
   auto opened = OpenPackage(file, st);
-  if (opened) st = opened->Verify();
+  // A damaged part nothing reads (a thumbnail) is kept as it is: the saved copy must have the
+  // same damaged parts, byte for byte, and no others.
+  std::vector<std::string> damaged;
+  if (opened) st = opened->Verify(&damaged);
   // --model: Word documents are read into the model, which then owns the package.
   std::unique_ptr<fw::doc::Document> doc;
   std::unique_ptr<fw::sheet::Workbook> book;
@@ -114,8 +117,10 @@ Result RoundtripFile(const std::filesystem::path& file, const Options& options) 
         .write(reinterpret_cast<const char*>(sink.bytes.data()), static_cast<std::streamsize>(sink.bytes.size()));
   }
   auto again = Package::Open(fw::pkg::Snapshot::FromBytes(std::move(sink.bytes)), pkg->GetLimits(), st);
-  if (again) st = again->Verify();
+  std::vector<std::string> damagedAgain;
+  if (again) st = again->Verify(&damagedAgain);
   if (!st.Ok()) return r.Fail("the saved copy doesn't open: " + st.message);
+  if (damagedAgain != damaged) return r.Fail("the saved copy has other damaged parts than the original");
 
   // Same entries in the same order; untouched ones identical byte for byte.
   const auto& before = pkg->Zip().Entries();
@@ -155,6 +160,7 @@ Result RoundtripFile(const std::filesystem::path& file, const Options& options) 
   }
   if (r.ok) {
     r.detail = std::to_string(copied) + (copied == 1 ? " part" : " parts") + " byte-identical";
+    if (!damaged.empty()) r.detail += " (" + std::to_string(damaged.size()) + " damaged, kept as they were)";
     if (doc) {
       r.detail += ", " + std::to_string(modelParts) + " written from the model";
       if (kept) r.detail += " (" + std::to_string(kept) + " kept as they were)";

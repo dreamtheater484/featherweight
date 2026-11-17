@@ -328,11 +328,14 @@ std::string Checker::MainPart() const {
 }
 
 void Checker::Run() {
-  Status st = pkg_.Verify();
+  std::vector<std::string> damaged;
+  Status st = pkg_.Verify(&damaged);
   if (!st.Ok()) {
     Error({}, st.message);
     return;
   }
+  for (const std::string& part : damaged)
+    Warn(part, "it's damaged (its data doesn't match its checksum); nothing reads it on opening, and saving keeps it as it is");
   format_ = FormatOf(pkg_);
   CheckRelationshipsAndTypes();
   LoadParts();
@@ -368,7 +371,11 @@ void Checker::CheckRelationshipsAndTypes() {
       if (r.id.empty()) Error(where, "a relationship has no id");
       else if (!ids.insert(r.id).second) Error(where, "id " + r.id + " is used twice");
       if (r.external) continue;
-      if (r.targetPart.empty()) Error(where, r.id + " has no target");
+      // Excel opens a workbook with an empty target and leaves it be (s1-corpus, 2026-11-17).
+      if (r.targetPart.empty()) {
+        if (format_ == DocFormat::Excel) Warn(where, r.id + " has no target");
+        else Error(where, r.id + " has no target");
+      }
       else if (!pkg_.FindPart(r.targetPart)) Error(where, r.id + " points to " + r.targetPart + ", which doesn't exist");
     }
   }
@@ -858,7 +865,9 @@ void Checker::CompareCache(const PartDom& part, std::string_view formula, pugi::
     auto have = cached.find(i);
     std::string_view w = want == sheet->values.end() ? std::string_view() : std::string_view(want->second);
     std::string_view h = have == cached.end() ? std::string_view() : std::string_view(have->second);
-    if (!SameValue(h, w)) {
+    // Excel caches an error cell (#DIV/0!, #N/A) as 0 in a chart.
+    const bool error = !w.empty() && w.front() == '#';
+    if (!SameValue(h, w) && !(error && (h.empty() || SameValue(h, "0")))) {
       Warn(part.name, "the chart's cached value " + Quote(h) + " for " + QuoteSheetName(sheet->name) + "!" + cell +
                           " doesn't match " + std::string(bookName) + " (" + Quote(w) + ")");
       return;  // one message per series
