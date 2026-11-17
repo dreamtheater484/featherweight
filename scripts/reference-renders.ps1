@@ -65,9 +65,14 @@ param(
   # workbooks are rendered only when that default is this printer. By default the one
   # tests\office\reference\manifest.json records.
   [string]$ExcelPrinter,
+  # Excel's layout also moves with the display: a disconnected Remote Desktop session lays out
+  # differently from a connected one (a blank sheet's standard width 8.29 instead of 8.43). Before
+  # anything is rendered, a blank sheet's standard width must be this; by default the manifest's
+  # excel.standardWidth (8.43 for the references made on 16 Nov 2026, the session connected).
+  [double]$ExcelStandardWidth = 0,
   # Internal: export one file in this process (the parent runs one child per file).
   [string]$Child, [string]$Source, [string]$SourceName, [string]$Pdf, [string]$ResultFile, [string]$Cells, [switch]$CellFormats,
-  [string]$PrintTo
+  [string]$PrintTo, [switch]$Probe
 )
 
 $ErrorActionPreference = "Stop"
@@ -452,6 +457,17 @@ if ($Child) {
         $blank = $office.Workbooks.Add()
         $result.printer = [string]$office.ActivePrinter
         if ($ExcelPrinter -and $result.printer -ne $ExcelPrinter) { throw "Excel lays out for $($result.printer), not $ExcelPrinter" }
+        # How Excel lays out here: a blank sheet's standard column width, which moves with the printer
+        # and the display.
+        $result.standardWidth = [Math]::Round([double]$blank.Worksheets.Item(1).StandardWidth, 4)
+        if ($ExcelStandardWidth -gt 0 -and [Math]::Abs($result.standardWidth - $ExcelStandardWidth) -gt 0.0001) {
+          throw "Excel lays out differently here: a blank sheet's standard width is $($result.standardWidth), not $ExcelStandardWidth"
+        }
+        if ($Probe) {
+          $blank.Close($false)
+          [void][Runtime.InteropServices.Marshal]::ReleaseComObject($blank)
+          break  # only the layout check (the parent's, before a run)
+        }
         # 1. Calculation manual: the file's cached formula values, nothing recalculated.
         $office.Calculation = -4135  # xlCalculationManual
         # Filename, UpdateLinks (never), ReadOnly. Automation doesn't add files to Excel's recent list.
@@ -554,9 +570,9 @@ function Get-CopyOf([string]$source, [string]$sourceRoot) {
   $null
 }
 
-if (-not $ExcelPrinter) {
-  $refManifest = Join-Path $root "tests\office\reference\manifest.json"
-  if (Test-Path $refManifest) { $ExcelPrinter = [string](Get-Content $refManifest -Raw | ConvertFrom-Json).excel.printer }
+$refManifest = Join-Path $root "tests\office\reference\manifest.json"
+if (-not $ExcelPrinter -and (Test-Path $refManifest)) {
+  $ExcelPrinter = [string](Get-Content $refManifest -Raw | ConvertFrom-Json).excel.printer
 }
 
 # Each job: the source file, its name in the manifest, and its PDF relative to the output folder.
@@ -615,12 +631,34 @@ if ($ExcelPrinter -and @($jobs | Where-Object { (Get-Kind $_.File.Extension) -eq
 if ($PrintPdf.Count -and [int](Get-ItemProperty 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Windows').LegacyDefaultPrinterMode -eq 0) {
   throw "-PrintPdf needs 'Let Windows manage my default printer' off (Settings > Bluetooth & devices > Printers & scanners): with it on, printing changes the default printer."
 }
-foreach ($dir in $clear) { if (Test-Path $dir) { Remove-Item -Recurse -Force $dir } }
 
 # One Office automation at a time on this PC (word-open-check.ps1 takes the same mutex): a second
 # one's COM could attach to the first one's Word.
 $mutex = New-Object Threading.Mutex($false, "Global\FeatherweightOfficeAutomation")
 try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] {}
+
+# Excel must lay out as it did for the references (-ExcelStandardWidth): one Excel, a blank sheet.
+if (-not $ExcelStandardWidth -and (Test-Path $refManifest)) {
+  $ExcelStandardWidth = [double](Get-Content $refManifest -Raw | ConvertFrom-Json).excel.standardWidth
+}
+if (@($jobs | Where-Object { (Get-Kind $_.File.Extension) -eq "Excel" }).Count) {
+  $probeFile = Join-Path $tmp "probe.json"
+  if (Test-Path $probeFile) { Remove-Item $probeFile }
+  $probeArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"", "-Child", "Excel", "-Probe",
+    "-ResultFile", "`"$probeFile`"", "-ExcelStandardWidth", $ExcelStandardWidth)
+  if ($ExcelPrinter) { $probeArgs += @("-ExcelPrinter", "`"$ExcelPrinter`"") }
+  $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList $probeArgs
+  $done = $p.WaitForExit(120000)
+  if (-not $done) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+  $probed = if (Test-Path $probeFile) { Get-Content $probeFile -Raw | ConvertFrom-Json } else { $null }
+  if ($probed) { Stop-Started @($probed.pid) $apps["Excel"].Exe $(if ($done) { 15000 } else { 0 }) }
+  if (-not $probed -or $probed.error) {
+    $mutex.ReleaseMutex()
+    $why = if ($probed) { $probed.error } else { "Excel didn't answer" }
+    throw "Nothing was rendered: $why. Excel lays out with the default printer and the display as they are when it starts; render with the reference printer the default and the Remote Desktop session connected, as for the references, or pass -ExcelStandardWidth to start new references."
+  }
+}
+foreach ($dir in $clear) { if (Test-Path $dir) { Remove-Item -Recurse -Force $dir } }
 $entries = @()
 $excelFacts = $null
 $n = 0
@@ -673,7 +711,7 @@ foreach ($job in $jobs) {
     $entry.app = $r.app
     if ($r.error) { $entry.error = $r.error }
     if ($r.pages) { $entry.pages = $r.pages }
-    if ($r.locale -and -not $excelFacts) { $excelFacts = [ordered]@{ locale = $r.locale; printer = $r.printer } }
+    if ($r.locale -and -not $excelFacts) { $excelFacts = [ordered]@{ locale = $r.locale; printer = $r.printer; standardWidth = $r.standardWidth } }
     if (-not $r.error -and $cellsPath -and (Test-Path $cellsPath)) {
       $entry.cells = $cellsRel
       $entry.cellCount = [int]$r.cells

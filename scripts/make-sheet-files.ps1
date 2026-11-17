@@ -171,6 +171,17 @@ try {
   $excel = Start-OwnExcel
   $version = "Excel $($excel.App.Version) (build $($excel.App.Build)), for $($excel.App.ActivePrinter)"
   if ($ExcelPrinter -and [string]$excel.App.ActivePrinter -ne $ExcelPrinter) { throw "Excel lays out for $($excel.App.ActivePrinter), not $ExcelPrinter" }
+  # Excel also lays out (and saves row heights) by the display: a disconnected Remote Desktop session
+  # differs from a connected one. A blank sheet's standard width must be the references' (8.43).
+  $refManifest = Join-Path $root "tests\office\reference\manifest.json"
+  $expected = if (Test-Path $refManifest) { [double](Get-Content $refManifest -Raw | ConvertFrom-Json).excel.standardWidth } else { 0 }
+  $blank = $excel.App.Workbooks.Add()
+  $width = [Math]::Round([double]$blank.Worksheets.Item(1).StandardWidth, 4)
+  $blank.Close($false)
+  [void][Runtime.InteropServices.Marshal]::ReleaseComObject($blank)
+  if ($expected -gt 0 -and [Math]::Abs($width - $expected) -gt 0.0001) {
+    throw "Excel lays out differently here: a blank sheet's standard width is $width, not $expected. Make the copies with the reference printer the default and the Remote Desktop session connected."
+  }
   foreach ($f in $files) {
     $dest = Join-Path $to $f.Name
     $wb = $null
