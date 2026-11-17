@@ -676,26 +676,6 @@ class Painting {
 
 }  // namespace
 
-namespace {
-OverlayFn& OverlaySlot() {
-  static OverlayFn fn;
-  return fn;
-}
-}  // namespace
-
-void SetOverlay(OverlayFn fn) { OverlaySlot() = std::move(fn); }
-const OverlayFn& Overlay() { return OverlaySlot(); }
-
-namespace {
-OverlayExtentFn& ExtentSlot() {
-  static OverlayExtentFn fn;
-  return fn;
-}
-}  // namespace
-
-void SetOverlayExtent(OverlayExtentFn fn) { ExtentSlot() = std::move(fn); }
-const OverlayExtentFn& OverlayExtent() { return ExtentSlot(); }
-
 void PaintCells(draw::Painter& p, const Sheet& sheet, CellText& text, const Grid& grid, const Geometry& g,
                 const Range& area, const PaintOptions& options) {
   Painting(p, sheet, text, grid, g, area, options).Run();

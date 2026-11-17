@@ -95,6 +95,8 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
   measure_ = std::make_unique<FontMeasure>(*fonts_);
   text_ = std::make_unique<CellText>(*book_, *fonts_, *measure_, UserLocale());
   states_.assign(book_->SheetCount(), PerSheet{});
+  objects_.clear();
+  objects_.resize(book_->SheetCount());
   size_t first = book_->ActiveSheet();
   if (first >= book_->SheetCount() || !SheetShown(first)) first = NextShownSheet(book_->SheetCount() - 1, 1);
   if (book_->SheetCount() == 0 || first >= book_->SheetCount() || !SheetShown(first)) {
@@ -110,7 +112,7 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
 bool WorkbookView::SheetShown(size_t i) const {
   if (!book_ || i >= book_->SheetCount()) return false;
   const Sheet& s = book_->GetSheet(i);
-  return s.State() == SheetState::Visible && s.Kind() == SheetKind::Worksheet;
+  return s.State() == SheetState::Visible && (s.Kind() == SheetKind::Worksheet || s.Kind() == SheetKind::Chartsheet);
 }
 
 size_t WorkbookView::NextShownSheet(size_t from, int dir) const {
@@ -156,13 +158,32 @@ void WorkbookView::ShowSheet(size_t index) {
     ApplyGroups(true);
     ApplyGroups(false);
   }
+  if (index < objects_.size() && !objects_[index]) objects_[index] = SheetObjects::Load(*book_, index);
+  note_.reset();
+  PlaceObjects();
   LoadView();
+  if (ChartSheet()) headers_ = false;  // the chart fills the window
   totals_ = Totals{};
   if (!query_.empty()) StartSearch(query_, matchCase_, wholeWords_);
   LayoutParts();
   ClampScroll();
   host_.ViewStateChanged();
   host_.ViewInvalidate();
+}
+
+// The screen's columns and rows for the objects layer: points at 100 % from A1.
+class ScreenSheetLayout : public SheetLayout {
+ public:
+  explicit ScreenSheetLayout(const Grid& grid) : grid_(grid) {}
+  double ColumnLeft(uint32_t col) const override { return grid_.ColLeft(col) * kPtPerPx; }
+  double RowTop(uint32_t row) const override { return grid_.RowTop(row) * kPtPerPx; }
+
+ private:
+  const Grid& grid_;
+};
+
+void WorkbookView::PlaceObjects() {
+  if (SheetObjects* o = Objects()) o->Place(ScreenSheetLayout(grid_));
 }
 
 void WorkbookView::LoadView() {
@@ -391,8 +412,18 @@ void WorkbookView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
     return;
   }
   c.Fill(all, p.chrome);
-  if (Ready()) {
+  if (Ready() && ChartSheet()) {
+    c.Fill(cells_, Rgb(0xFFFFFF));
+    {
+      draw::D2DPainter painter(dc);
+      painter.ClipRect({cells_.left, cells_.top, cells_.right, cells_.bottom});
+      Objects()->DrawChartSheet(painter, {cells_.left, cells_.top, cells_.right, cells_.bottom});
+    }
+    DrawFormulaBar(c);
+    DrawSheetTabs(c);
+  } else if (Ready()) {
     DrawGrid(c, dc);
+    DrawNote(dc);
     DrawHeaders(c);
     DrawOutline(c);
     DrawScrollbars(c);
@@ -434,7 +465,17 @@ void WorkbookView::DrawGrid(Canvas& c, ID2D1DeviceContext* dc) {
       draw::D2DPainter painter(dc);
       painter.ClipRect({rc.left, rc.top, rc.right, rc.bottom});
       PaintCells(painter, sheet, *text_, grid_, g, area, o);
-      if (const OverlayFn& overlay = Overlay()) overlay(painter, sheet, g, area);
+      // Pictures, shapes, charts and the notes' marks, from sheet points to the pane. (A sheet
+      // read right to left would mirror the pictures themselves: not yet.)
+      if (SheetObjects* objects = Objects(); objects && !rtl_) {
+        const float s = static_cast<float>(k / kPtPerPx);
+        painter.Save();
+        painter.Transform(draw::Matrix::Scale(s, s) *
+                          draw::Matrix::Translate(l - static_cast<float>(pane.sx * k), t - static_cast<float>(pane.sy * k)));
+        const float x0 = static_cast<float>(pane.sx * kPtPerPx), y0 = static_cast<float>(pane.sy * kPtPerPx);
+        objects->Draw(painter, {x0, y0, x0 + (rc.right - rc.left) / s, y0 + (rc.bottom - rc.top) / s}, {});
+        painter.Restore();
+      }
     }
     c.PushClip(rc);
     DrawSelection(c, pane);
@@ -447,6 +488,31 @@ void WorkbookView::DrawGrid(Canvas& c, ID2D1DeviceContext* dc) {
     c.Fill({x, cells_.top, x + 1, cells_.bottom}, edge);
   }
   if (const int fh = FrozenHeightPx(); fh > 0) c.Fill({cells_.left, cells_.top + fh - 1, cells_.right, cells_.top + fh}, edge);
+}
+
+void WorkbookView::DrawNote(ID2D1DeviceContext* dc) {
+  SheetObjects* objects = Objects();
+  if (!note_ || !objects) return;
+  const CellNote* note = objects->NoteAt(note_->row, note_->col);
+  if (!note) return;
+  // Beside the cell (or its merged area), at its top, in the pane that shows it.
+  Range at = Range::Cell(note_->row, note_->col);
+  if (const Range* m = Current().MergeAt(note_->row, note_->col)) at = *m;
+  for (const Pane& pane : Panes()) {
+    if (at.firstRow < pane.row0 || at.firstRow >= pane.row1 || at.lastCol < pane.col0 || at.firstCol >= pane.col1) continue;
+    const D2D1_RECT_F cell = CellRect(pane, at.firstRow, at.firstCol, at.lastRow, at.lastCol);
+    const float s = static_cast<float>(K() / kPtPerPx);
+    const draw::Size size = objects->NoteSize(*note);
+    float x = (rtl_ ? cell.left - 12 * s - size.width * s : cell.right + 12 * s) / s, y = cell.top / s;
+    // Kept inside the cells.
+    x = std::clamp(x, cells_.left / s, std::max(cells_.left / s, cells_.right / s - size.width));
+    y = std::clamp(y, cells_.top / s, std::max(cells_.top / s, cells_.bottom / s - size.height));
+    draw::D2DPainter painter(dc);
+    painter.ClipRect({cells_.left, cells_.top, cells_.right, cells_.bottom});
+    painter.Transform(draw::Matrix::Scale(s, s));
+    objects->DrawNote(painter, *note, {x, y, x + size.width, y + size.height});
+    return;
+  }
 }
 
 void WorkbookView::DrawSelection(Canvas& c, const Pane& pane) {
@@ -638,13 +704,22 @@ bool WorkbookView::Bars(Bar& v, Bar& h) const {
   const double viewH = (cells_.bottom - cells_.top - FrozenHeightPx()) / k;
   const double viewW = (cells_.right - cells_.left - FrozenWidthPx()) / k;
   const auto used = Current().UsedRange();
+  // Pictures and charts past the cells count too.
+  double objRight = 0, objBottom = 0;
+  if (SheetObjects* o = Objects())
+    for (const SheetObjects::Object& ob : o->Objects()) {
+      objRight = std::max(objRight, static_cast<double>(ob.rect.right) / kPtPerPx);
+      objBottom = std::max(objBottom, static_cast<double>(ob.rect.bottom) / kPtPerPx);
+    }
   v.min = static_cast<double>(grid_.RowTop(frozenRow1_));
   h.min = static_cast<double>(grid_.ColLeft(frozenCol1_));
   v.view = viewH;
   h.view = viewW;
   // The sheet as far as it's used, half a screen more, or as far as it's been scrolled.
-  v.end = std::max(gridY_ + viewH, static_cast<double>(grid_.RowTop(used ? used->lastRow + 1 : 0)) + viewH / 2);
-  h.end = std::max(gridX_ + viewW, static_cast<double>(grid_.ColLeft(used ? used->lastCol + 1 : 0)) + viewW / 2);
+  v.end = std::max(gridY_ + viewH,
+                   std::max(objBottom, static_cast<double>(grid_.RowTop(used ? used->lastRow + 1 : 0))) + viewH / 2);
+  h.end = std::max(gridX_ + viewW,
+                   std::max(objRight, static_cast<double>(grid_.ColLeft(used ? used->lastCol + 1 : 0))) + viewW / 2);
   if (v.end - v.min > viewH + 1) {
     const float top = cells_.top + FrozenHeightPx(), bottom = cells_.bottom - track;
     const float x = rtl_ ? cells_.left : cells_.right - track;

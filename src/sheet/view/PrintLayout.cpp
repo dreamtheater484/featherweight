@@ -11,6 +11,18 @@ namespace fw::sheet::view {
 
 namespace {
 
+// Printed columns and rows for the objects layer: points at 100 % from A1.
+class PrintSheetLayout : public SheetLayout {
+ public:
+  PrintSheetLayout(const std::vector<double>& colX, const Grid& grid) : colX_(colX), grid_(grid) {}
+  double ColumnLeft(uint32_t col) const override { return colX_[std::min<uint32_t>(col, kMaxCols)]; }
+  double RowTop(uint32_t row) const override { return grid_.PrintY(0, std::min<uint32_t>(row, kMaxRows)); }
+
+ private:
+  const std::vector<double>& colX_;
+  const Grid& grid_;
+};
+
 // Cells placed on a page: sheet points from the block's top-left at (x0, y0).
 class PageGeometry : public Geometry {
  public:
@@ -200,13 +212,42 @@ uint32_t PrintLayout::SpillEnd(const Range& used) {
   return end;
 }
 
+draw::Rect PrintLayout::SheetRect(const Range& r) const {
+  return {static_cast<float>(colX_[std::min<uint32_t>(r.firstCol, kMaxCols)]), grid_.PrintY(0, r.firstRow),
+          static_cast<float>(colX_[std::min<uint32_t>(r.lastCol + 1, kMaxCols)]),
+          grid_.PrintY(0, std::min<uint32_t>(r.lastRow + 1, kMaxRows))};
+}
+
+void PrintLayout::PlaceObjects() {
+  if (info_.objects) info_.objects->Place(PrintSheetLayout(colX_, grid_));
+}
+
+std::optional<std::pair<uint32_t, uint32_t>> PrintLayout::ObjectsEnd() const {
+  if (!info_.objects) return std::nullopt;
+  double right = -1, bottom = -1;
+  for (const SheetObjects::Object& o : info_.objects->Objects()) {
+    right = std::max(right, static_cast<double>(o.rect.right));
+    bottom = std::max(bottom, static_cast<double>(o.rect.bottom));
+  }
+  if (right <= 0 || bottom <= 0) return std::nullopt;
+  // The column and row holding the far edge (a picture ending on a column's left edge isn't in it).
+  const auto c = std::lower_bound(colX_.begin(), colX_.end(), right) - colX_.begin();
+  const uint32_t col = static_cast<uint32_t>(std::clamp<ptrdiff_t>(c - 1, 0, kMaxCols - 1));
+  const uint32_t row = std::min(kMaxRows - 1, grid_.RowAt(static_cast<int64_t>(std::ceil(bottom / Grid::kPrintRowPt)) - 1));
+  return std::make_pair(row, col);
+}
+
 bool PrintLayout::Blank(const Range& body) {
   const Styles& styles = book_.GetStyles();
-  if (const OverlayExtentFn& extent = OverlayExtent())
-    if (auto drawn = extent(sheet_))
-      if (drawn->firstRow <= body.lastRow && drawn->lastRow >= body.firstRow && drawn->firstCol <= body.lastCol &&
-          drawn->lastCol >= body.firstCol)
+  if (info_.objects) {
+    const draw::Rect page = SheetRect(body);
+    for (const SheetObjects::Object& o : info_.objects->Objects())
+      if (o.rect.left < page.right && o.rect.right > page.left && o.rect.top < page.bottom && o.rect.bottom > page.top)
         return false;
+  }
+  for (const Range& r : sparklines_)
+    if (r.firstRow <= body.lastRow && r.lastRow >= body.firstRow && r.firstCol <= body.lastCol && r.lastCol >= body.firstCol)
+      return false;
   bool ink = false;
   sheet_.ForEachCell(body, [&](const CellInfo& c) {
     const Xf& xf = styles.CellXf(c.style);
@@ -231,19 +272,62 @@ void PrintLayout::Paginate() {
   if (!info_.jobPaper && PaperFromText(ps.paperWidth, w) && PaperFromText(ps.paperHeight, h)) paperW_ = w, paperH_ = h;
   if (ps.orientation == Orientation::Landscape) std::swap(paperW_, paperH_);
 
+  // A chart sheet prints its chart on one page.
+  if (info_.objects && info_.objects->IsChartSheet()) {
+    // Landscape, unless the sheet says otherwise.
+    if (paperW_ < paperH_ && sheet_.KeptXml().find("orientation=\"portrait\"") == std::string::npos)
+      std::swap(paperW_, paperH_);
+    PrintPage p;
+    p.width = paperW_;
+    p.height = paperH_;
+    p.chart = true;
+    p.number = ps.useFirstPageNumber ? ps.firstPageNumber : 1;
+    pages_.push_back(p);
+    return;
+  }
+
+  // The objects on the columns as they print at 100 %, to see how far they reach.
+  colX_.assign(kMaxCols + 1, 0);
+  for (uint32_t c = 0; c < kMaxCols; ++c) colX_[c + 1] = colX_[c] + ColPt(c, 1);
+  PlaceObjects();
+
+  // Sparklines (an extension of the sheet's) are drawn in their cells, which print with the rest.
+  sparklines_.clear();
+  {
+    const std::string kept = sheet_.KeptXml();
+    const size_t from = kept.find("sparklineGroups"), to = kept.rfind("sparklineGroups>");
+    for (size_t at = kept.find(":sqref>", from); from != std::string::npos && at != std::string::npos && at < to;
+         at = kept.find(":sqref>", at + 7)) {
+      const size_t end = kept.find('<', at + 7);
+      if (end == std::string::npos) break;
+      const std::string_view list = std::string_view(kept).substr(at + 7, end - at - 7);
+      for (size_t i = 0; i < list.size();) {
+        size_t j = list.find(' ', i);
+        if (j == std::string_view::npos) j = list.size();
+        Range r;
+        if (j > i && ParseRange(list.substr(i, j - i), r)) sparklines_.push_back(r);
+        i = j + 1;
+      }
+    }
+  }
+
   // What prints: the print area, else the cells in use.
   if (const DefinedName* n = book_.FindName("_xlnm.Print_Area", static_cast<int>(index_)); n && n->sheet == static_cast<int>(index_))
     areas_ = ParseAreas(n->formula);
   if (areas_.empty()) {
     std::optional<Range> used = sheet_.UsedRange();
     if (used) used->lastCol = SpillEnd(Range{0, 0, used->lastRow, used->lastCol});
+    for (const Range& r : sparklines_) {
+      if (!used) used = r;
+      used->lastRow = std::max(used->lastRow, r.lastRow);
+      used->lastCol = std::max(used->lastCol, r.lastCol);
+    }
     // Pictures and shapes past the cells print too.
-    if (const OverlayExtentFn& extent = OverlayExtent())
-      if (auto drawn = extent(sheet_)) {
-        if (!used) used = drawn;
-        used->lastRow = std::max(used->lastRow, drawn->lastRow);
-        used->lastCol = std::max(used->lastCol, drawn->lastCol);
-      }
+    if (auto drawn = ObjectsEnd()) {
+      if (!used) used = Range{0, 0, drawn->first, drawn->second};
+      used->lastRow = std::max(used->lastRow, drawn->first);
+      used->lastCol = std::max(used->lastCol, drawn->second);
+    }
     if (used) areas_.push_back(Range{0, 0, used->lastRow, used->lastCol});  // from A1, as Excel prints
   }
   if (const DefinedName* n = book_.FindName("_xlnm.Print_Titles", static_cast<int>(index_)); n && n->sheet == static_cast<int>(index_)) {
@@ -320,6 +404,7 @@ void PrintLayout::Paginate() {
   }
   colX_.assign(kMaxCols + 1, 0);
   for (uint32_t c = 0; c < kMaxCols; ++c) colX_[c + 1] = colX_[c] + ColPt(c, scale_);
+  if (scale_ != 1) PlaceObjects();
 
   int number = ps.useFirstPageNumber ? ps.firstPageNumber : 1;
   for (const Range& a : areas_) {
@@ -355,6 +440,12 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   const float left = static_cast<float>(m.left * 72), top = static_cast<float>(m.top * 72);
   const float availW = paperW_ - static_cast<float>((m.left + m.right) * 72);
   const float availH = paperH_ - static_cast<float>((m.top + m.bottom) * 72);
+  if (page.chart) {
+    if (info_.objects) info_.objects->DrawChartSheet(p, {left, top, left + availW, top + availH});
+    PaintHeaderFooter(p, page, true);
+    PaintHeaderFooter(p, page, false);
+    return;
+  }
 
   // Headings: row numbers and column letters, in the default font.
   const Font& base = book_.GetStyles().DefaultFont();
@@ -389,7 +480,15 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
     p.ClipRect({x - 2, y - 2, x + w + 2, y + h + 2});
     const Range area{r0, c0, r1, c1};
     PaintCells(p, sheet_, text_, grid_, g, area, o);
-    if (const OverlayFn& overlay = Overlay()) overlay(p, sheet_, g, area);
+    if (info_.objects) {
+      // Pictures, shapes and charts over the cells, in the block's place.
+      const draw::Rect cells = SheetRect(area);
+      p.Transform(draw::Matrix::Translate(x - cells.left, y - cells.top));
+      SheetObjects::DrawOptions d;
+      d.printing = true;
+      d.indicators = false;
+      info_.objects->Draw(p, cells, d);
+    }
     p.Restore();
   };
   const float x1 = headW + tW, y1 = headH + tH;

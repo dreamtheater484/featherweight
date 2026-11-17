@@ -275,7 +275,17 @@ class WorkbookView : public PagedView {
   // Print preview and printing.
   bool preview_ = false;
   std::unique_ptr<PrintLayout> print_;
+  std::unique_ptr<SheetObjects> printObjects_;  // print_'s, placed on the printed columns
   std::vector<fw::PageSizePt> pageSizes_;
+
+  // Pictures, shapes, charts and notes (fwsheetobjects): each sheet's, read when first shown and
+  // placed on the screen's columns and rows.
+  std::vector<std::unique_ptr<SheetObjects>> objects_;
+  SheetObjects* Objects() const { return sheet_ < objects_.size() ? objects_[sheet_].get() : nullptr; }
+  bool ChartSheet() const { return Objects() && Objects()->IsChartSheet(); }
+  void PlaceObjects();
+  void DrawNote(ID2D1DeviceContext* dc);
+  std::optional<CellAddr> note_;  // the cell whose note shows while the mouse is over it
 };
 
 }  // namespace fw::sheet::view

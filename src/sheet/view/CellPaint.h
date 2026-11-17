@@ -48,17 +48,6 @@ struct PaintOptions {
   PrintErrors errors = PrintErrors::Displayed;  // printing: how error values print
 };
 
-// What draws over the cells: pictures, shapes, charts and notes (s1-model's drawing layer). It gets
-// the painter, the sheet, the geometry and the cells drawn (the screen's panes and printed pages
-// call it after their cells, clipped to them). Set once at startup; empty until that layer exists.
-using OverlayFn = std::function<void(draw::Painter&, const Sheet&, const Geometry&, const Range&)>;
-void SetOverlay(OverlayFn fn);
-const OverlayFn& Overlay();
-// The cells that layer's objects cover on a sheet (their anchors), if it has any: printing takes
-// them in, as Excel prints a picture or shape past the last cell.
-using OverlayExtentFn = std::function<std::optional<Range>(const Sheet&)>;
-void SetOverlayExtent(OverlayExtentFn fn);
-const OverlayExtentFn& OverlayExtent();
 
 // Draws the cells of `area` (rows and columns as the geometry places them): fills, gridlines,
 // borders and text, with text running into empty neighbors and merged cells drawn as one. Hidden

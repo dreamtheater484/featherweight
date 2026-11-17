@@ -9,6 +9,7 @@
 
 #include "draw/Painter.h"
 #include "sheet/model/Workbook.h"
+#include "sheet/objects/SheetObjects.h"
 #include "sheet/view/CellPaint.h"
 #include "sheet/view/CellText.h"
 #include "sheet/view/Grid.h"
@@ -24,6 +25,7 @@ struct PrintPage {
   Range body;                       // the cells on the page
   bool titleRows = false, titleCols = false;  // the print titles repeat on it
   int number = 1;                   // as printed (&P)
+  bool chart = false;               // a chart sheet's page: its chart fills it
 };
 
 struct PrintInfo {
@@ -35,6 +37,9 @@ struct PrintInfo {
   // code; each keeps its orientation), and &N counts all its pages. 0: the sheet's own.
   uint32_t jobPaper = 0;
   int jobPages = 0;
+  // What sits on the sheet (pictures, shapes, charts, a chart sheet's chart): an instance of the
+  // caller's own for printing, which the layout places on its printed columns and rows. May be null.
+  SheetObjects* objects = nullptr;
 };
 
 class PrintLayout {
@@ -69,8 +74,12 @@ class PrintLayout {
   // The last column a cell's text runs into (its own when it stays in its cell); `past` is a
   // column it can't reach without being long enough to get past it, to skip measuring most cells.
   uint32_t Reach(const CellInfo& c, uint32_t past);
-  // Nothing on a page: no values, fills or borders, and no text running into it.
+  // Nothing on a page: no values, fills or borders, no pictures, and no text running into it.
   bool Blank(const Range& body);
+  // The objects placed on the printed columns (colX_) and rows; the last row and column they reach.
+  void PlaceObjects();
+  std::optional<std::pair<uint32_t, uint32_t>> ObjectsEnd() const;
+  draw::Rect SheetRect(const Range& r) const;  // cells on paper, in points at 100 % from A1
 
   const Workbook& book_;
   const Sheet& sheet_;
@@ -83,6 +92,7 @@ class PrintLayout {
   float paperW_ = 612, paperH_ = 792;
   std::vector<Range> areas_;
   std::vector<double> colX_;   // column lefts at the page's scale, points at 100 %
+  std::vector<Range> sparklines_;  // the cells the sheet's sparklines are in: they print
   std::map<int, int> digits_;  // the printer's digit in dots, by scale percent
   std::optional<std::pair<uint32_t, uint32_t>> titleRows_, titleCols_;
 };
