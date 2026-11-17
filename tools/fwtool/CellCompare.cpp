@@ -311,23 +311,27 @@ WorkbookResult CompareWorkbook(const std::filesystem::path& file, const JsonValu
         ours = ShownAtWidth(sheet, info, nullptr, text, cfFormat, overflow);
         fillAt = -1;
       }
-      // A number's text depends on its column's width: "####", or General shortened to fit.
-      const std::string atWidth =
-          number && !hidden ? ShownAtWidth(sheet, info, &grid, text, cfFormat, overflow) : std::string();
+      // A number's text depends on its column's width: "####", or General shortened to fit. So do
+      // an error's and a text's with a fill ("####" when too wide).
+      const bool widthy = !hidden && (number || info.value.type == sh::ValueType::Error ||
+                                      (info.value.type == sh::ValueType::String && fillAt >= 0));
+      const std::string atWidth = widthy ? ShownAtWidth(sheet, info, &grid, text, cfFormat, overflow) : std::string();
       const bool widthDecides = AllHashes(excel) || GeneralShortened(info, code, excel, ours) || overflow ||
                                 (fillAt >= 0 && fillChar == L'#');
+      // Narrower than one '#', Excel shows nothing.
+      const bool narrow = overflow && excel.empty() && atWidth.empty();
       if (ours == excel && !overflow) {
         ++result.counts.same;
       } else if (fillAt >= 0 && fillChar != L'#' && !overflow && SameWithFill(excel, ours, fillAt, fillChar)) {
         ++result.counts.same;
         ++result.counts.fillSame;
-      } else if (number && widthDecides && (AllHashes(excel) ? overflow : !overflow && atWidth == excel)) {
+      } else if (widthy && widthDecides && (narrow || (AllHashes(excel) ? overflow : !overflow && atWidth == excel))) {
         ++result.counts.same;
         ++result.counts.widthSame;
       } else {
         if (widthDecides) ++result.counts.widthOnly;
         if (result.differences.size() < 400)
-          result.differences.push_back({name, ref, excel, number && widthDecides ? atWidth : ours, code});
+          result.differences.push_back({name, ref, excel, widthy && widthDecides ? atWidth : ours, code});
       }
     }
   }
