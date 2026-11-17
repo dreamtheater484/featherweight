@@ -179,6 +179,26 @@ TEST(SheetCsv_Values) {
   CHECK(plain.GetSheet(0).GetCell(1, 1, c) && c.value.type == ValueType::String);
 }
 
+TEST(SheetCsv_AnsiCodePage) {
+  // Not UTF-8: read in Windows' ANSI code page, never GetACP() (the app's manifest makes that
+  // UTF-8, which turned "Crème" into "Cr�me" there).
+  const uint32_t system = csv::SystemAnsiCodePage();
+  CHECK(system != 0 && system != 65001);
+  const std::string text = "Cr\xE8me br\xFBl\xE9" "e,\x80" "4\r\n";  // Windows-1252
+  csv::Options o;
+  o.locale = &EnUsLocale();
+  o.ansiCodePage = 1252;
+  csv::Reader a(text, o);
+  CHECK(a.Info().encoding == csv::Encoding::Ansi && a.Info().codePage == 1252);
+  CHECK(a.Text() == "Cr\xC3\xA8me br\xC3\xBBl\xC3\xA9" "e,\xE2\x82\xAC" "4\r\n");
+  o.ansiCodePage = 1251;  // Cyrillic: the same bytes are other letters
+  csv::Reader b(text, o);
+  CHECK(b.Info().codePage == 1251 && b.Text().substr(0, 4) == "Cr\xD0\xB8");  // "Crи"
+  o.ansiCodePage = 12345;  // not a code page: Western
+  csv::Reader c(text, o);
+  CHECK(c.Info().codePage == 1252 && c.Text() == a.Text());
+}
+
 TEST(SheetCsv_Parallel) {
   // Many rows (more than one batch), parsed by several threads, come out in order and the same as
   // one thread; repeated values share their string.

@@ -294,6 +294,15 @@ void ParseRows(std::string_view text, const Source& source, const NumLocale& loc
 
 }  // namespace
 
+uint32_t SystemAnsiCodePage() {
+  DWORD cp = 0;
+  if (GetLocaleInfoEx(LOCALE_NAME_SYSTEM_DEFAULT, LOCALE_IDEFAULTANSICODEPAGE | LOCALE_RETURN_NUMBER,
+                      reinterpret_cast<LPWSTR>(&cp), sizeof cp / sizeof(wchar_t)) == 0 ||
+      cp == 0 || cp == CP_UTF8)
+    cp = 1252;
+  return cp;
+}
+
 Reader::Reader(std::string_view bytes, const Options& options)
     : options_(options), locale_(options.locale ? options.locale : &UserLocale()) {
   Decode(bytes);
@@ -333,9 +342,13 @@ void Reader::Decode(std::string_view bytes) {
     text_ = bytes;
   } else {
     source_.encoding = Encoding::Ansi;
-    source_.codePage = GetACP();
+    source_.codePage = options_.ansiCodePage ? options_.ansiCodePage : SystemAnsiCodePage();
     if (bytes.size() < 0x7FFFFFFF) {
-      const int n = MultiByteToWideChar(source_.codePage, 0, bytes.data(), static_cast<int>(bytes.size()), nullptr, 0);
+      int n = MultiByteToWideChar(source_.codePage, 0, bytes.data(), static_cast<int>(bytes.size()), nullptr, 0);
+      if (n <= 0) {  // a code page Windows can't convert: Western
+        source_.codePage = 1252;
+        n = MultiByteToWideChar(source_.codePage, 0, bytes.data(), static_cast<int>(bytes.size()), nullptr, 0);
+      }
       std::wstring w(static_cast<size_t>(n), L'\0');
       MultiByteToWideChar(source_.codePage, 0, bytes.data(), static_cast<int>(bytes.size()), w.data(), n);
       decoded_ = WideToUtf8Big(w.data(), w.size());
