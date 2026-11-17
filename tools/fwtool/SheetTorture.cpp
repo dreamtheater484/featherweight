@@ -417,8 +417,15 @@ class EditApiTarget : public SheetTarget {
         return Applied::Refused;
       case Op::Filter: return Filter(s, r, e, why);
       case Op::Paste:
-        // Cut and paste on one sheet moves the cells, references following (Editor::MoveCells).
-        if (e.arg == "cut") return done(ed_.MoveCells(s, r, sh::CellAddr{e.to.firstRow, e.to.firstCol}));
+        // Cut and paste moves the cells, on their sheet or to another, references following
+        // (Editor::MoveCells).
+        if (e.arg == "cut") {
+          if (static_cast<int>(e.toSheet) >= static_cast<int>(count)) {
+            why = "no sheet " + std::to_string(e.toSheet);
+            return Applied::Refused;
+          }
+          return done(ed_.MoveCells(s, r, static_cast<int>(e.toSheet), sh::CellAddr{e.to.firstRow, e.to.firstCol}));
+        }
         return Paste(e, why);
       case Op::Undo: return done(ed_.Undo(e.count));
       case Op::Redo: return done(ed_.Redo(e.count));
@@ -757,9 +764,9 @@ class Generator {
       e.range = Block(area, 3, 3);
       e.toSheet = sheets.empty() ? 0 : sheets[rng_.Below(static_cast<uint32_t>(sheets.size()))];
       e.to = Cell(area);
-      static const char* kModes[] = {"all", "all", "values", "formats", "cut"};
+      static const char* kModes[] = {"all", "all", "values", "formats", "cut", "cut"};
       e.arg = rng_.Pick(kModes);
-      if (e.arg == "cut") e.toSheet = e.sheet;  // cut and paste moves cells on one sheet
+      if (e.arg == "cut" && rng_.Chance(50)) e.toSheet = e.sheet;  // half the moves stay on their sheet
     } else if (roll < 89) {
       SheetEdit(book, e);
     } else if (roll < 95) {
