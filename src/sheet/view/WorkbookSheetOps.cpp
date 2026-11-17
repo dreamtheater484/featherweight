@@ -73,6 +73,8 @@ bool WorkbookView::GridCommandState(int cmd, CommandState& s) {
     case CmdMoveSheetLeft: s.label = L"Move sheet left"; s.enabled = grid && ShownNeighbour(-1) >= 0; return true;
     case CmdMoveSheetRight: s.label = L"Move sheet right"; s.enabled = grid && ShownNeighbour(1) >= 0; return true;
     case CmdGoTo: s.label = L"Go to"; s.shortcut = L"Ctrl+G"; s.enabled = cells; return true;
+    case CmdFillDown: s.label = L"Fill down"; s.shortcut = L"Ctrl+D"; s.enabled = cells; return true;
+    case CmdFillRight: s.label = L"Fill right"; s.shortcut = L"Ctrl+R"; s.enabled = cells; return true;
     default: return false;
   }
 }
@@ -135,6 +137,8 @@ bool WorkbookView::GridCommand(int cmd) {
       return true;
     }
     case CmdGoTo: ShowGoTo(); return true;
+    case CmdFillDown:
+    case CmdFillRight: FillDown(cmd == CmdFillRight); return true;
     default: return false;
   }
 }

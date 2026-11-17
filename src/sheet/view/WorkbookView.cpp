@@ -476,6 +476,7 @@ void WorkbookView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   } else if (Ready()) {
     DrawGrid(c, dc);
     DrawStale(c);
+    DrawFillHandle(c);
     DrawNote(dc);
     DrawEditor(c);
     DrawHeaders(c);

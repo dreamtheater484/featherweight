@@ -263,7 +263,7 @@ class WorkbookView : public PagedView {
   float tabScroll_ = 0;
 
   // Mouse.
-  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag };
+  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag, Fill };
   Mouse mouse_ = Mouse::None;
   float thumbGrab_ = 0;
   int hoverTab_ = -1;
@@ -342,6 +342,15 @@ class WorkbookView : public PagedView {
   double CurrentSize(bool rows) const;  // the active row's height (points) or column's width (characters)
   void SetSizes(bool rows, double value);
   bool GoTo(const std::wstring& text);  // a cell, a range, Sheet2!A1 or a defined name
+  // ---- The fill handle, Ctrl+D and Ctrl+R (WorkbookFill.cpp). `dir`: 0 down, 1 up, 2 right, 3 left.
+  bool FillCells(const Range& source, const Range& target, int dir, bool series, std::u16string name);
+  void FillDown(bool right);
+  bool FillHandleAt(float x, float y, D2D1_RECT_F* rc = nullptr);  // rc: where it is (x, y unused)
+  void DrawFillHandle(gfx::Canvas& c);
+  void FillDrag(int x, int y);
+  void FinishFill();
+  void FillToNeighbour();
+  Range fillTo_{};  // while the handle is dragged: the selection with the cells it will fill
   // Renaming a sheet on its tab (double-click it, or Rename): the cell editor's text and keys.
   void BeginRename(size_t sheet);
   int renaming_ = -1;

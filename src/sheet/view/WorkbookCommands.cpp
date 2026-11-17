@@ -177,6 +177,8 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case 'Z': return editor_.Active() ? 0 : CmdUndo;
       case 'Y': return editor_.Active() ? 0 : CmdRedo;
       case 'G': return editor_.Active() ? 0 : CmdGoTo;
+      case 'D': return editor_.Active() ? 0 : CmdFillDown;
+      case 'R': return editor_.Active() ? 0 : CmdFillRight;
     }
   }
   // Excel's keys for rows, columns, cells and sheets (not while a cell is typed in).

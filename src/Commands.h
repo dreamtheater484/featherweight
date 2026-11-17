@@ -306,6 +306,8 @@ enum Cmd : int {
   CmdMoveSheetLeft,
   CmdMoveSheetRight,
   CmdGoTo,                // Ctrl+G, F5
+  CmdFillDown,            // Ctrl+D
+  CmdFillRight,           // Ctrl+R
   CmdTabColor = 2100,     // + index into the tab colors (0: none)
   CmdUnhideSheet = 2200,  // + the sheet's index: a hidden sheet shown again
   CmdUnhideSheetLast = 2699,

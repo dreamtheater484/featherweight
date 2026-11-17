@@ -285,6 +285,16 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
   }
   if (button == 0 && gfx::Contains(cells_, fx, fy) && PointClick(x, y)) return;
   if (editor_.Active() && !CommitEdit(false)) return;
+  // The fill handle: drag to fill, double-click to fill down beside the data.
+  if (button == 0 && FillHandleAt(fx, fy)) {
+    if (doubleClick) {
+      FillToNeighbour();
+    } else {
+      mouse_ = Mouse::Fill;
+      fillTo_ = Selected();
+    }
+    return;
+  }
   tabStartCol_ = UINT32_MAX;
   // Double-clicking a cell edits it there (Edit mode).
   if (doubleClick && button == 0 && gfx::Contains(cells_, fx, fy) && !ChartSheet()) {
@@ -427,6 +437,7 @@ void WorkbookView::OnMouseMove(int x, int y, UINT mods) {
     case Mouse::EditText: EditMouseMove(fx, fy); return;
     case Mouse::Point: PointDrag(x, y); return;
     case Mouse::RefDrag: RefDrag(x, y); return;
+    case Mouse::Fill: FillDrag(x, y); return;
     case Mouse::ThumbV: {
       const double range = Height(v.track) - Height(v.thumb);
       if (range > 0) ScrollTo(gridX_, v.min + (fy - thumbGrab_ - v.track.top) / range * (v.end - v.min - v.view));
@@ -472,6 +483,12 @@ void WorkbookView::OnMouseUp(int x, int y, int button, UINT mods) {
     drag_ = Drag::None;
     return;
   }
+  if (mouse_ == Mouse::Fill) {
+    mouse_ = Mouse::None;
+    FinishFill();
+    host_.ViewInvalidate();
+    return;
+  }
   const bool follow = pendingLink_ && mouse_ == Mouse::Cells;
   mouse_ = Mouse::None;
   pendingLink_ = false;
@@ -497,6 +514,7 @@ HCURSOR WorkbookView::CursorAt(int x, int y) {
     EditBox b;
     if (gfx::Contains(FormulaBox(), fx, fy) || (EditGeometry(b) && gfx::Contains(b.rc, fx, fy)))
       return LoadCursorW(nullptr, IDC_IBEAM);
+    if (FillHandleAt(fx, fy)) return LoadCursorW(nullptr, IDC_SIZEALL);
     if (RefGrab g; RefHit(x, y, g))
       return LoadCursorW(nullptr, !g.resize ? IDC_SIZEALL : g.nwse ? IDC_SIZENWSE : IDC_SIZENESW);
   }
