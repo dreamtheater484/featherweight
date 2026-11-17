@@ -172,6 +172,12 @@ TEST(WorkbookFile_ANewWorkbookSavesAsAnyOther) {
   CHECK_EQ(sheet_test::FormulaText(saved->GetSheet(0), 2, 1), std::string("SUM(B2:B2)"));
   CHECK(WorkbookFile::FormatOf(L"x.XLTX", FileFormat::Xlsx) == FileFormat::Xltx &&
         WorkbookFile::FormatOf(L"x.csv", FileFormat::Xlsm) == FileFormat::Xlsm);
+  // A template opens as a new workbook: Save goes to Save As, suggesting a workbook beside it.
+  WorkbookFile fromTemplate;
+  CHECK(WorkbookFile::IsTemplate(L"C:\\t\\Budget.XLTX") && !WorkbookFile::IsTemplate(L"C:\\t\\Budget.xlsx"));
+  fromTemplate.OpenedTemplate(L"C:\\t\\Budget.xltm", 1);
+  CHECK(fromTemplate.Title() == L"Budget1" && fromTemplate.GetOrigin() == FileSession::Origin::Copy);
+  CHECK(fromTemplate.SuggestedPath(*book) == L"C:\\t\\Budget1.xlsm" && fromTemplate.Path().empty());
   // For the Excel open check: FW_SAVE_OUT keeps a copy.
   wchar_t out[MAX_PATH];
   if (DWORD n = GetEnvironmentVariableW(L"FW_SAVE_OUT", out, MAX_PATH); n > 0 && n < MAX_PATH)

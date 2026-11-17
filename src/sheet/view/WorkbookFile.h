@@ -23,6 +23,12 @@ class WorkbookFile : public FileSession {
   WorkbookFile();
   ~WorkbookFile();  // waits for a save still writing
 
+  // A template (.xltx, .xltm) opens as a new workbook, as in Excel: titled after it with a number
+  // ("Budget1"), and Save goes to Save As, suggesting a workbook (.xlsx, or .xlsm from .xltm)
+  // beside the template.
+  static bool IsTemplate(const std::wstring& path);
+  void OpenedTemplate(const std::wstring& path, int number);
+
   // The format a path's extension names (.xlsx, .xlsm, .xltx, .xltm); `current` for any other.
   static fw::sheet::FileFormat FormatOf(const std::wstring& path, fw::sheet::FileFormat current);
   // Where Save As starts: the file, a recovered workbook's original, or "Book1.xlsx" in the
