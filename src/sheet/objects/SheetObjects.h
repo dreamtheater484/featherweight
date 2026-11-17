@@ -29,6 +29,9 @@ struct CellNote {
   bool shown = false;     // a note that stays shown (Show Note), drawn by Draw
   std::wstring author;    // a note's author; a thread's first person
   std::wstring text;      // the note's text; for a thread, each comment as "Name: text" on its own line
+  // A thread's note for older Excel versions ("[Threaded comment]", a notice, "Comment:" and
+  // "Reply:" lines), as Excel 2021 prints the thread at the end of the sheet; empty when there's none.
+  std::wstring legacyText;
 };
 
 // What sits on a sheet above its cells (plan §7.2): pictures, shapes, text boxes, groups and

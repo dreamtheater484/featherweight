@@ -622,6 +622,11 @@ void SheetObjects::ReadNotes() {
       if (author < authors.size()) n.author = authors[author];
       Impl::Note d;
       d.text = NoteText(xlsx::Child(c, "text"), styles, n.text);
+      // A cell with a thread: this is the note Excel writes for older versions, kept for printing.
+      if (auto t = m.noteAt.find(Key(a.row, a.col)); t != m.noteAt.end()) {
+        if (notes_[t->second].threaded) notes_[t->second].legacyText = n.text;
+        continue;
+      }
       if (auto b = boxes.find(Key(a.row, a.col)); b != boxes.end()) {
         n.shown = b->second.shown;
         d.anchored = b->second.anchored;
