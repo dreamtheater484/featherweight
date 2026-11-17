@@ -1,4 +1,4 @@
-﻿// The edit layer (S2, src/sheet/edit): operations, groups, undo and redo on the workbook model.
+// The edit layer (S2, src/sheet/edit): operations, groups, undo and redo on the workbook model.
 #include "TestHarness.h"
 
 #include <cstdio>
