@@ -259,6 +259,17 @@ TEST(sheet_objects_excel) {
   CHECK(s.End());
   CHECK(s.At(380, 180) == 0xFFFFE1);                                       // the shown note, over the group
   CHECK(drawtest::Blue(s.At(310, 60)) > 150 && drawtest::Red(s.At(310, 60)) < 120);  // the blue rectangle
+  // Printed, the shown note stays off the page: the page setup doesn't print notes.
+  drawtest::Surface printed(700, 480);
+  {
+    draw::D2DPainter p(printed.dc.Get());
+    SheetObjects::DrawOptions options;
+    options.printing = true;
+    objects->Draw(p, {0, 0, 700, 480}, options);
+  }
+  CHECK(printed.End());
+  CHECK(printed.At(380, 180) != 0xFFFFE1);
+  for (const auto& o : placed) CHECK(o.prints);
   auto chartSheet = SheetObjects::Load(*book, static_cast<size_t>(charts));
   CHECK(chartSheet->IsChartSheet());
 }

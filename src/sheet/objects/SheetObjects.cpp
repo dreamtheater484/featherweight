@@ -369,7 +369,7 @@ void SheetObjects::Draw(draw::Painter& painter, const draw::Rect& visible, const
 std::vector<SheetObjects::Object> SheetObjects::Objects() const {
   std::vector<Object> out;
   for (const Impl::Item& it : impl_->items)
-    if (!Empty(it.rect)) out.push_back({it.name, it.rect, it.chart != nullptr});
+    if (!Empty(it.rect) && !(it.drawing && it.drawing->IsHidden())) out.push_back({it.name, it.rect, it.chart != nullptr, it.prints});
   return out;
 }
 
@@ -644,7 +644,10 @@ void SheetObjects::PlaceNotes(const SheetLayout& layout) {
 
 void SheetObjects::DrawNotes(draw::Painter& painter, const draw::Rect& visible, const DrawOptions& options) {
   Impl& m = *impl_;
-  for (size_t i = 0; i < notes_.size(); ++i) {
+  // Excel prints notes as displayed only when the page setup says so.
+  const bool shownNotes =
+      !options.printing || m.book->GetSheet(m.sheet).Page().cellComments == CellComments::AsDisplayed;
+  for (size_t i = 0; i < notes_.size() && shownNotes; ++i) {
     const Impl::Note& d = m.notes[i];
     if (Empty(d.shown) || !Meets(d.shown, visible)) continue;
     // A shown note: a line from its cell's corner to the box, then the box.
