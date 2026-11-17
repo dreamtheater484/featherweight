@@ -6,11 +6,15 @@
   1. Excel plays the steps in a new workbook (typing through FormulaLocal, which converts what's
      typed as typing in the cell does: numbers, dates, percentages, currency, formulas in the
      region's form), saves it (<out>\excel\<name>.xlsx) and dumps what it shows (<name>.json).
-  2. With -Saved: Featherweight's saved copies (<saved>\<name>.xlsx, made by playing the same
-     steps through the grid's commands) are opened in Excel and dumped the same way, and compared
-     with Excel's own: per cell its formula, value, text (Range.Text), number format, font, fill,
-     alignment and borders; per sheet its name, column widths, merges and frozen panes. They must
-     also open without a repair (scripts\excel-open-check.ps1).
+  2. With -Featherweight <exe>: Featherweight plays the same steps through the grid's commands, as
+     the keyboard does them (a script for `Featherweight.exe --snapshot --script @file`: Go to,
+     typing, Enter, AutoSum, Ctrl+D/R, the fill handle, the format keys and commands, Column width,
+     Freeze panes, Rename sheet, Save As), into <out>\featherweight\<name>.xlsx (with a picture of
+     the end, <name>.png, and what it printed, <name>.log). Then as -Saved on that folder.
+  3. With -Saved: Featherweight's saved copies (<saved>\<name>.xlsx) are opened in Excel and dumped
+     the same way, and compared with Excel's own: per cell its formula, value, text (Range.Text),
+     number format, font, fill, alignment and borders; per sheet its name, column widths, merges and
+     frozen panes. They must also open without a repair (scripts\excel-open-check.ps1).
   Excel automation as in scripts\excel-open-check.ps1: a new Excel per workbook, hidden, alerts,
   events and macros off; only the Excel it started is ever ended; one at a time (a global mutex).
   The exit code is 1 when anything differs or failed.
@@ -29,12 +33,15 @@
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\build-from-scratch.ps1
 .EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\build-from-scratch.ps1 -Featherweight build\Release\Featherweight.exe
+.EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\build-from-scratch.ps1 -Saved build\from-scratch\featherweight
 #>
 param(
   [string[]]$Steps,
   [string]$Out = "build\from-scratch",
   [string]$Saved,
+  [string]$Featherweight,
   [int]$TimeoutSeconds = 180,
   # Internal: play one steps file (-Child play) or dump one workbook (-Child dump) in this process.
   [string]$Child, [string]$Source, [string]$Target, [string]$ResultFile
@@ -304,6 +311,86 @@ function Compare-Dumps($a, $b) {
   $diffs
 }
 
+# ---- Featherweight plays the steps as the keyboard does them: one script for
+# `Featherweight.exe --snapshot <png> --script @file` (App::RunScript). In a script ';' separates
+# the ops, so a typed ';' is written "\;". Command ids are src\Commands.h's: 2009 Rename sheet,
+# 2013 Go to, 2014/2015 Fill down/right, 2020 AutoSum, 2004 Column width, 2026 Merge cells,
+# 2028 Freeze panes.
+function ConvertTo-AppScript([string]$stepsPath, [string]$target) {
+  $ops = New-Object Collections.Generic.List[string]
+  $ops.Add("new:workbook")
+  function Select-Ref([string]$ref) { $ops.Add("cmd:2013"); $ops.Add("type:$ref"); $ops.Add("key:enter") }
+  function Add-Typed([string]$text) { $ops.Add("type:" + ($text -replace ';', '\;')) }
+  $n = 0
+  foreach ($line in Get-Content -LiteralPath $stepsPath -Encoding UTF8) {
+    $n++
+    $line = $line.Trim()
+    if (-not $line -or $line.StartsWith("#")) { continue }
+    if ($line -notmatch '^(\S+)\s*(.*)$') { throw "line ${n}: can't read '$line'" }
+    $op = $Matches[1]; $rest = $Matches[2]
+    $quoted = if ($rest -match '"((?:[^"\\]|\\.)*)"') { $Matches[1] -replace '\\(.)', '$1' } else { $null }
+    $first = ($rest -split '\s+')[0]
+    switch ($op) {
+      "sheet-name" { $ops.Add("cmd:2009"); Add-Typed $quoted; $ops.Add("key:enter") }
+      "enter" { Select-Ref $first; Add-Typed $quoted; $ops.Add("key:enter") }
+      # AutoSum proposes the formula; Enter takes it. The comparison checks it's the step's.
+      "autosum" { Select-Ref $first; $ops.Add("cmd:2020"); $ops.Add("key:enter") }
+      "fill-right" { Select-Ref $first; $ops.Add("cmd:2015") }
+      "fill-down" { Select-Ref $first; $ops.Add("cmd:2014") }
+      # The fill handle of the range's first cell, dragged over the range.
+      "fill-series" { Select-Ref ($first -replace ':.*$', ''); $ops.Add("fill:$first") }
+      "format" {
+        Select-Ref $first
+        $what = $rest.Substring($first.Length).Trim()
+        switch -regex ($what) {
+          '^bold$' { $ops.Add("key:ctrl+b") }
+          '^italic$' { $ops.Add("key:ctrl+i") }
+          '^underline$' { $ops.Add("key:ctrl+u") }
+          '^numfmt=#,##0\.00$' { $ops.Add("key:ctrl+shift+1") }  # Excel's Number format key
+          '^numfmt=0%$' { $ops.Add("key:ctrl+shift+5") }
+          default { $ops.Add("format:" + ($what -replace ';', '\;')) }  # the toolbar's and Format Cells' choices
+        }
+      }
+      "width" {
+        $cols = $first; if ($cols -notmatch ':') { $cols = "${cols}:$cols" }
+        Select-Ref $cols
+        $ops.Add("cmd:2004"); $ops.Add("key:ctrl+a"); $ops.Add("type:" + ($rest -split '\s+')[1]); $ops.Add("key:enter")
+      }
+      "merge" { Select-Ref $first; $ops.Add("cmd:2026") }
+      "freeze" { Select-Ref $first; $ops.Add("cmd:2028") }
+      "save" { $ops.Add("saveas:$target") }
+      default { throw "line ${n}: unknown step '$op'" }
+    }
+  }
+  $ops -join ";"
+}
+
+# Plays one steps file in a Featherweight of its own (a --snapshot run: hidden, its own settings
+# and clipboard, never Roy's instance). "" when it saved, else why not.
+function Invoke-Featherweight([string]$stepsPath, [string]$name, [string]$dir) {
+  $target = Join-Path $dir "$name.xlsx"
+  if (Test-Path $target) { Remove-Item $target }
+  $scriptPath = Join-Path $dir "$name.script.txt"
+  [IO.File]::WriteAllText($scriptPath, (ConvertTo-AppScript $stepsPath $target), [Text.UTF8Encoding]::new($false))
+  $log = Join-Path $dir "$name.log"
+  $p = Start-Process -FilePath $Featherweight -PassThru -RedirectStandardError $log -ArgumentList @(
+    "--snapshot", "`"$(Join-Path $dir "$name.png")`"", "--size", "1400x900", "--script", "`"@$scriptPath`"")
+  $null = $p.Handle  # so ExitCode is kept
+  if (-not $p.WaitForExit($TimeoutSeconds * 1000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; return "timeout" }
+  $printed = @(Get-Content $log -ErrorAction SilentlyContinue | Where-Object { $_ })
+  if ($p.ExitCode) { return "exit code $($p.ExitCode)" + $(if ($printed) { ": " + ($printed -join "; ") } else { "" }) }
+  if (-not (Test-Path $target)) { return "no saved copy" + $(if ($printed) { ": " + ($printed -join "; ") } else { "" }) }
+  ""
+}
+
+if ($Featherweight) {
+  if (-not [IO.Path]::IsPathRooted($Featherweight)) { $Featherweight = Join-Path $root $Featherweight }
+  if (-not (Test-Path $Featherweight)) { throw "Featherweight.exe not found at $Featherweight. Build it (target Featherweight)." }
+  $fwDir = Join-Path $Out "featherweight"
+  New-Item -ItemType Directory -Force $fwDir | Out-Null
+  if (-not $Saved) { $Saved = $fwDir }
+}
+
 $bad = 0
 $report = @()
 foreach ($s in $Steps) {
@@ -316,6 +403,12 @@ foreach ($s in $Steps) {
   $cellCount = (@($r.sheets) | ForEach-Object { @($_.cells).Count } | Measure-Object -Sum).Sum
   "[ ok ] $name in Excel: $cellCount cells, saved as $xlsx ($($r.locale))"
   foreach ($note in @($r.notes)) { "       $note" }
+  if ($Featherweight) {
+    $why = Invoke-Featherweight (Resolve-Path $s).Path $name $fwDir
+    if ($why) { "[FAIL] $name in Featherweight: $why"; $bad++; continue }
+    "[ ok ] $name in Featherweight: saved as $(Join-Path $fwDir "$name.xlsx")"
+    foreach ($line in @(Get-Content (Join-Path $fwDir "$name.log") -ErrorAction SilentlyContinue | Where-Object { $_ })) { "       $line" }
+  }
   if ($Saved) {
     $ours = Join-Path $Saved "$name.xlsx"
     if (-not (Test-Path $ours)) { "[FAIL] $($name): Featherweight's copy $ours is missing"; $bad++; continue }
