@@ -4,6 +4,8 @@
 // whole, so that WorkbookView's members can own one.
 
 #include <algorithm>
+#include <cstdio>
+#include <cwchar>
 #include <string>
 #include <vector>
 
@@ -16,9 +18,41 @@ namespace fw::sheet::view {
 
 namespace filter_detail {
 
-inline constexpr const wchar_t* kOps[] = {L"(no condition)", L"equals",       L"does not equal", L"is greater than",
-                                   L"is greater than or equal to", L"is less than", L"is less than or equal to",
-                                   L"begins with",  L"ends with",     L"contains",       L"does not contain"};
+// Excel's custom AutoFilter conditions (1-12: text ones as * patterns), then its other number
+// filters (13-18: Top 10 by items or percent, the average), which take the first condition's place.
+inline constexpr const wchar_t* kOps[] = {L"(no condition)",
+                                          L"equals",
+                                          L"does not equal",
+                                          L"is greater than",
+                                          L"is greater than or equal to",
+                                          L"is less than",
+                                          L"is less than or equal to",
+                                          L"begins with",
+                                          L"does not begin with",
+                                          L"ends with",
+                                          L"does not end with",
+                                          L"contains",
+                                          L"does not contain",
+                                          L"is in the top (items)",
+                                          L"is in the bottom (items)",
+                                          L"is in the top (percent)",
+                                          L"is in the bottom (percent)",
+                                          L"is above average",
+                                          L"is below average"};
+inline constexpr int kFirstSpecial = 13;
+// Conditions 1-12: the comparison and whether the value is wrapped in * (before, after).
+struct OpChoice {
+  data::FilterCondition::Op op;
+  bool lead, trail;
+};
+inline constexpr OpChoice kOpChoices[] = {
+    {data::FilterCondition::Op::Equal, false, false},    {data::FilterCondition::Op::Equal, false, false},
+    {data::FilterCondition::Op::NotEqual, false, false}, {data::FilterCondition::Op::Greater, false, false},
+    {data::FilterCondition::Op::GreaterEqual, false, false}, {data::FilterCondition::Op::Less, false, false},
+    {data::FilterCondition::Op::LessEqual, false, false}, {data::FilterCondition::Op::Equal, false, true},
+    {data::FilterCondition::Op::NotEqual, false, true},  {data::FilterCondition::Op::Equal, true, false},
+    {data::FilterCondition::Op::NotEqual, true, false},  {data::FilterCondition::Op::Equal, true, true},
+    {data::FilterCondition::Op::NotEqual, true, true}};
 inline constexpr wchar_t kChecked[] = L"\x2611  ", kUnchecked[] = L"\x2610  ";
 
 }  // namespace filter_detail
@@ -35,11 +69,26 @@ class WorkbookView::FilterPanel : public PanelContent {
       values_.SetSelected(-1);  // the same item can be clicked again
       toggling_ = false;
     };
-    op_.label = L"Condition";
-    op_.items.assign(std::begin(filter_detail::kOps), std::end(filter_detail::kOps));
-    op_.selected = 0;
-    value_.label = L"Value";
-    value_.autoComplete = false;
+    for (int k = 0; k < 2; ++k) {
+      op_[k].label = k == 0 ? L"Condition" : L"Second condition";
+      op_[k].items.assign(std::begin(filter_detail::kOps), std::end(filter_detail::kOps) - (k == 0 ? 0 : 6));
+      op_[k].selected = 0;
+      value_[k].label = L"Value";
+      value_[k].autoComplete = false;
+    }
+    and_.text = L"And";
+    or_.text = L"Or";
+    and_.toggle = or_.toggle = true;
+    or_.checked = true;
+    and_.onInvoke = [this] { and_.checked = true, or_.checked = false; };
+    or_.onInvoke = [this] { or_.checked = true, and_.checked = false; };
+    sortUp_.text = L"Sort A to Z";
+    sortDown_.text = L"Sort Z to A";
+    for (PanelButton* b : {&sortUp_, &sortDown_})
+      b->onInvoke = [this, b] {
+        if (const ViewFilter* f = v_.FilterOf())
+          v_.SortRange(f->ref, true, {{f->ref.firstCol + column_, b == &sortDown_}});
+      };
     apply_.text = L"Apply";
     apply_.onInvoke = [this] { Apply(); };
     clear_.text = L"Clear this column's filter";
@@ -63,20 +112,32 @@ class WorkbookView::FilterPanel : public PanelContent {
       labels_.push_back({text, gfx::RectF(left, y, right, y + 16 * ui)});
       y += 20 * ui;
     };
+    const float half = (right - left - 8 * ui) / 2;
+    sortUp_.rc = gfx::RectF(left, y, left + half, y + 30 * ui);
+    sortDown_.rc = gfx::RectF(left + half + 8 * ui, y, right, y + 30 * ui);
+    y += 42 * ui;
     label(L"Show the rows with these values");
-    const float listBottom = std::max(y + 120 * ui, body.bottom - 210 * ui);
+    const float listBottom = std::max(y + 100 * ui, body.bottom - 222 * ui);
     values_.rc = gfx::RectF(left, y, right, listBottom);
     y = listBottom + 14 * ui;
-    label(L"Or with a condition");
-    op_.rc = gfx::RectF(left, y, right, y + 30 * ui);
-    y += 40 * ui;
-    value_.rc = gfx::RectF(left, y, right, y + 30 * ui);
-    y += 42 * ui;
-    const float half = (right - left - 8 * ui) / 2;
+    label(L"Or with conditions");
+    // Each condition on one line: what (wider), then the value.
+    const float split = left + (right - left) * 0.58f;
+    for (int k = 0; k < 2; ++k) {
+      op_[k].rc = gfx::RectF(left, y, split - 4 * ui, y + 30 * ui);
+      value_[k].rc = gfx::RectF(split + 4 * ui, y, right, y + 30 * ui);
+      y += 40 * ui;
+      if (k == 0) {
+        and_.rc = gfx::RectF(left, y, left + half, y + 26 * ui);
+        or_.rc = gfx::RectF(left + half + 8 * ui, y, right, y + 26 * ui);
+        y += 36 * ui;
+      }
+    }
+    y += 2 * ui;
     apply_.rc = gfx::RectF(left, y, left + half, y + 30 * ui);
     clear_.rc = gfx::RectF(left + half + 8 * ui, y, right, y + 30 * ui);
     clear_.textSize = 12;
-    return {&values_, &op_, &value_, &apply_, &clear_};
+    return {&sortUp_, &sortDown_, &values_, &op_[0], &value_[0], &and_, &or_, &op_[1], &value_[1], &apply_, &clear_};
   }
 
   void Draw(gfx::Canvas& c) override {
@@ -110,9 +171,25 @@ class WorkbookView::FilterPanel : public PanelContent {
         });
       }
     }
-    op_.selected = 0;
-    value_.SetText(L"");
-    if (c && !c->conditions.empty()) ShowCondition(c->conditions.front());
+    for (int k = 0; k < 2; ++k) {
+      op_[k].selected = 0;
+      value_[k].SetText(L"");
+    }
+    and_.checked = c && c->both;
+    or_.checked = !and_.checked;
+    if (c && c->special != data::FilterCriteria::Special::None) {
+      using Special = data::FilterCriteria::Special;
+      op_[0].selected = c->special == Special::AboveAverage   ? filter_detail::kFirstSpecial + 4
+                        : c->special == Special::BelowAverage ? filter_detail::kFirstSpecial + 5
+                                                              : filter_detail::kFirstSpecial + (c->percent ? 2 : 0) + (c->bottom ? 1 : 0);
+      if (c->special == Special::Top10) {
+        wchar_t count[32];
+        std::swprintf(count, 32, L"%g", c->count);
+        value_[0].SetText(count);
+      }
+    } else if (c) {
+      for (size_t k = 0; k < c->conditions.size() && k < 2; ++k) ShowCondition(static_cast<int>(k), c->conditions[k]);
+    }
     Refresh();
   }
 
@@ -136,18 +213,42 @@ class WorkbookView::FilterPanel : public PanelContent {
     Refresh();
   }
 
-  void ShowCondition(const data::FilterCondition& c) {
+  // A stored condition as the choice that makes it: "a*" with equals is "begins with a".
+  void ShowCondition(int k, const data::FilterCondition& c) {
     using Op = data::FilterCondition::Op;
     std::wstring v = c.value;
-    int op = 1 + static_cast<int>(c.op);
+    int op = 1 + static_cast<int>(c.op);  // equals .. is less than or equal to
     const bool lead = v.size() > 1 && v.front() == L'*', trail = v.size() > 1 && v.back() == L'*';
-    if (c.op == Op::Equal || c.op == Op::NotEqual) {
-      if (lead && trail) op = c.op == Op::Equal ? 9 : 10, v = v.substr(1, v.size() - 2);
-      else if (trail && c.op == Op::Equal) op = 7, v.pop_back();
-      else if (lead && c.op == Op::Equal) op = 8, v.erase(0, 1);
+    if ((c.op == Op::Equal || c.op == Op::NotEqual) && (lead || trail)) {
+      for (int i = 7; i <= 12; ++i) {
+        const filter_detail::OpChoice& o = filter_detail::kOpChoices[i];
+        if (o.op == c.op && o.lead == lead && o.trail == trail) op = i;
+      }
+      if (trail) v.pop_back();
+      if (lead) v.erase(0, 1);
     }
-    op_.selected = op;
-    value_.SetText(v);
+    op_[k].selected = op;
+    value_[k].SetText(v);
+  }
+
+  // Condition k as chosen; false when it has none.
+  bool Condition(int k, data::FilterCondition& cond) {
+    const int op = op_[k].selected;
+    const std::wstring typed = value_[k].Text();
+    if (op <= 0 || op >= filter_detail::kFirstSpecial || typed.empty()) return false;
+    const filter_detail::OpChoice& o = filter_detail::kOpChoices[op];
+    cond.op = o.op;
+    cond.value = (o.lead ? L"*" : L"") + typed + (o.trail ? L"*" : L"");
+    if (op <= 6) {
+      // A number as the region types it is compared by value (stored invariant).
+      std::wstring number = typed;
+      const NumLocale& loc = v_.text_->Locale();
+      if (loc.decimal != L".") std::replace(number.begin(), number.end(), loc.decimal.front(), L'.');
+      wchar_t* end = nullptr;
+      std::wcstod(number.c_str(), &end);
+      if (end && *end == 0) cond.value = number;
+    }
+    return true;
   }
 
   void Apply() {
@@ -156,31 +257,23 @@ class WorkbookView::FilterPanel : public PanelContent {
     std::erase_if(f->criteria, [&](const data::FilterCriteria& c) { return c.column == column_; });
     data::FilterCriteria c;
     c.column = column_;
-    const std::wstring typed = value_.Text();
-    if (op_.selected > 0 && !typed.empty()) {
-      using Op = data::FilterCondition::Op;
-      data::FilterCondition cond;
-      cond.value = typed;
-      // A number as the region types it is compared by value (stored invariant).
-      std::wstring number = typed;
-      const NumLocale& loc = v_.text_->Locale();
-      if (loc.decimal != L".") std::replace(number.begin(), number.end(), loc.decimal.front(), L'.');
-      wchar_t* end = nullptr;
-      std::wcstod(number.c_str(), &end);
-      if (end && *end == 0 && op_.selected <= 6) cond.value = number;
-      switch (op_.selected) {
-        case 1: cond.op = Op::Equal; break;
-        case 2: cond.op = Op::NotEqual; break;
-        case 3: cond.op = Op::Greater; break;
-        case 4: cond.op = Op::GreaterEqual; break;
-        case 5: cond.op = Op::Less; break;
-        case 6: cond.op = Op::LessEqual; break;
-        case 7: cond.op = Op::Equal, cond.value = typed + L"*"; break;
-        case 8: cond.op = Op::Equal, cond.value = L"*" + typed; break;
-        case 9: cond.op = Op::Equal, cond.value = L"*" + typed + L"*"; break;
-        case 10: cond.op = Op::NotEqual, cond.value = L"*" + typed + L"*"; break;
+    const int first = op_[0].selected;
+    data::FilterCondition cond;
+    if (first >= filter_detail::kFirstSpecial) {
+      using Special = data::FilterCriteria::Special;
+      const int s = first - filter_detail::kFirstSpecial;  // top, bottom, top %, bottom %, above, below
+      c.special = s == 4 ? Special::AboveAverage : s == 5 ? Special::BelowAverage : Special::Top10;
+      c.bottom = s == 1 || s == 3;
+      c.percent = s == 2 || s == 3;
+      if (c.special == Special::Top10) {
+        const double n = std::wcstod(value_[0].Text().c_str(), nullptr);
+        c.count = n >= 1 ? std::min(n, c.percent ? 100.0 : 500.0) : 10;  // Excel's limits: 1-500 items, 1-100 %
       }
+      f->criteria.push_back(c);
+    } else if (Condition(0, cond)) {
       c.conditions.push_back(cond);
+      if (Condition(1, cond)) c.conditions.push_back(cond);
+      c.both = and_.checked && c.conditions.size() == 2;
       f->criteria.push_back(c);
     } else if (!std::all_of(checked_.begin(), checked_.end(), [](bool b) { return b; })) {
       c.listed = true;
@@ -203,9 +296,9 @@ class WorkbookView::FilterPanel : public PanelContent {
   float ui_ = 1;
   std::vector<std::pair<std::wstring, D2D1_RECT_F>> labels_;
   ListBox values_;
-  Dropdown op_;
-  ComboBox value_;
-  PanelButton apply_, clear_;
+  Dropdown op_[2];
+  ComboBox value_[2];
+  PanelButton and_, or_, sortUp_, sortDown_, apply_, clear_;
 };
 
 // Custom sort (up to three keys) and Remove duplicates (the columns compared), on the data range.

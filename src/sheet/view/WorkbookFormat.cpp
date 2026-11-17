@@ -34,7 +34,9 @@ const wchar_t* const kStyles[] = {L"Regular", L"Italic", L"Bold", L"Bold italic"
 const wchar_t* const kUnderlines[] = {L"None", L"Single", L"Double", L"Single accounting", L"Double accounting"};
 const wchar_t* const kSizes[] = {L"8",  L"9",  L"10", L"11", L"12", L"14", L"16", L"18",
                                  L"20", L"22", L"24", L"26", L"28", L"36", L"48", L"72"};
-const wchar_t* const kBorderButtons[] = {L"None", L"Outline", L"All", L"Inside", L"Top", L"Bottom", L"Left", L"Right"};
+const wchar_t* const kBorderButtons[] = {L"None", L"Outline", L"All",    L"Inside",      L"Top",
+                                        L"Bottom", L"Left",   L"Right", L"Diagonal up", L"Diagonal down"};
+const wchar_t* const kDirections[] = {L"Context", L"Left to right", L"Right to left"};  // readingOrder 0, 1, 2
 
 struct LineChoice {
   BorderStyle style;
@@ -177,7 +179,7 @@ void PanelButton::Describe(uia::Tree& t, int parent) {
 // Format Cells
 
 WorkbookView::FormatPanel::FormatPanel(WorkbookView& view) : v_(view) {
-  const wchar_t* tabNames[kPages] = {L"Number", L"Align", L"Font", L"Border", L"Fill"};
+  const wchar_t* tabNames[kPages] = {L"Number", L"Align", L"Font", L"Border", L"Fill", L"Protect"};
   for (int i = 0; i < kPages; ++i) {
     tabs_[i].text = tabNames[i];
     tabs_[i].toggle = true;
@@ -303,6 +305,15 @@ WorkbookView::FormatPanel::FormatPanel(WorkbookView& view) : v_(view) {
     v_.MergeCells(merge_.checked ? 2 : 3);
     Sync();
   };
+  direction_.label = L"Text direction";
+  direction_.items = List(kDirections, std::size(kDirections));
+  direction_.onChange = [this](int i) {
+    if (i >= 0)
+      v_.ChangeFormat(u"Text Direction", [i](Xf& x) {
+        x.alignment.readingOrder = static_cast<uint8_t>(i);
+        x.applyAlignment = true;
+      });
+  };
   // Font
   font_.label = L"Font";
   font_.onCommit = [this](const std::wstring& text, int) {
@@ -374,7 +385,7 @@ WorkbookView::FormatPanel::FormatPanel(WorkbookView& view) : v_(view) {
   lineColor_.automaticLabel = L"Automatic";
   lineColor_.automatic = true;
   color_.automaticColor = lineColor_.automaticColor = patternColor_.automaticColor = D2D1_COLOR_F{0, 0, 0, 1};
-  for (int i = 0; i < 8; ++i) {
+  for (int i = 0; i < static_cast<int>(std::size(borders_)); ++i) {
     borders_[i].text = kBorderButtons[i];
     borders_[i].textSize = 12;
     borders_[i].onInvoke = [this, i] { ApplyBorders(i); };
@@ -411,6 +422,19 @@ WorkbookView::FormatPanel::FormatPanel(WorkbookView& view) : v_(view) {
   patternColor_.label = L"Pattern color";
   patternColor_.automaticLabel = L"Automatic";
   patternColor_.onChange = [applyFill](D2D1_COLOR_F, bool) { applyFill(); };
+  // Protection
+  locked_.text = L"Locked";
+  hidden_.text = L"Hidden (formulas)";
+  for (PanelButton* b : {&locked_, &hidden_}) {
+    b->toggle = true;
+    b->onInvoke = [this, b] {
+      const bool on = b->checked, locked = b == &locked_;
+      v_.ChangeFormat(locked ? u"Locked" : u"Hidden", [on, locked](Xf& x) {
+        (locked ? x.protection.locked : x.protection.hidden) = on;
+        x.applyProtection = true;
+      });
+    };
+  }
 }
 
 void WorkbookView::FormatPanel::Open(int page) {
@@ -436,11 +460,12 @@ std::vector<Control*> WorkbookView::FormatPanel::Layout(const D2D1_RECT_F& body,
   for (PanelButton& t : tabs_) out.push_back(&t);
   for (Control* c : std::initializer_list<Control*>{&category_, &decimals_, &thousands_, &negative_, &types_, &code_,
                                                     &horizontal_, &vertical_, &indent_, &rotation_, &wrap_, &shrink_,
-                                                    &merge_, &font_, &style_, &size_, &underline_, &color_, &strike_,
-                                                    &superscript_, &subscript_, &line_, &lineColor_})
+                                                    &merge_, &direction_, &font_, &style_, &size_, &underline_, &color_,
+                                                    &strike_, &superscript_, &subscript_, &line_, &lineColor_})
     out.push_back(c);
   for (PanelButton& b : borders_) out.push_back(&b);
-  for (Control* c : std::initializer_list<Control*>{&fillColor_, &pattern_, &patternColor_}) out.push_back(c);
+  for (Control* c : std::initializer_list<Control*>{&fillColor_, &pattern_, &patternColor_, &locked_, &hidden_})
+    out.push_back(c);
   return out;
 }
 
@@ -456,9 +481,9 @@ void WorkbookView::FormatPanel::Place() {
   // Every page's controls hidden; the page's rows show theirs.
   for (Control* c : std::initializer_list<Control*>{&category_, &decimals_, &thousands_, &negative_, &types_, &code_,
                                                     &horizontal_, &vertical_, &indent_, &rotation_, &wrap_, &shrink_,
-                                                    &merge_, &font_, &style_, &size_, &underline_, &color_, &strike_,
-                                                    &superscript_, &subscript_, &line_, &lineColor_, &fillColor_,
-                                                    &pattern_, &patternColor_})
+                                                    &merge_, &direction_, &font_, &style_, &size_, &underline_, &color_,
+                                                    &strike_, &superscript_, &subscript_, &line_, &lineColor_,
+                                                    &fillColor_, &pattern_, &patternColor_, &locked_, &hidden_})
     c->visible = false;
   for (PanelButton& b : borders_) b.visible = false;
   // A row of controls side by side, each with its label above (none: nullptr).
@@ -513,6 +538,7 @@ void WorkbookView::FormatPanel::Place() {
       labeled({{L"Indent", &indent_}, {L"Orientation", &rotation_}});
       row(nullptr, {&wrap_, &shrink_});
       row(nullptr, {&merge_});
+      row(L"Text direction", {&direction_});
       break;
     case kFont:
       row(L"Font", {&font_});
@@ -524,11 +550,18 @@ void WorkbookView::FormatPanel::Place() {
       labeled({{L"Line", &line_}, {L"Line color", &lineColor_}});
       row(L"Presets", {&borders_[0], &borders_[1], &borders_[2], &borders_[3]});
       row(L"Edges", {&borders_[4], &borders_[5], &borders_[6], &borders_[7]});
+      row(L"Diagonals", {&borders_[8], &borders_[9]});
       break;
     case kFill:
       row(L"Background color", {&fillColor_});
       row(L"Pattern style", {&pattern_});
       row(L"Pattern color", {&patternColor_});
+      break;
+    case kProtection:
+      row(nullptr, {&locked_, &hidden_});
+      labels_.push_back({L"These take effect once the sheet is protected:", RectF(left, y, right, y + 16 * u)});
+      labels_.push_back({L"locked cells can't be changed, hidden formulas", RectF(left, y + 18 * u, right, y + 34 * u)});
+      labels_.push_back({L"don't show in the formula bar.", RectF(left, y + 36 * u, right, y + 52 * u)});
       break;
   }
 }
@@ -617,6 +650,9 @@ void WorkbookView::FormatPanel::Sync() {
   wrap_.checked = x.alignment.wrap;
   shrink_.checked = x.alignment.shrinkToFit;
   merge_.checked = syncMerged_;
+  direction_.selected = std::min<int>(x.alignment.readingOrder, 2);
+  locked_.checked = x.protection.locked;
+  hidden_.checked = x.protection.hidden;
   // Font
   const Font& f = st.FontOf(x);
   font_.SetText(Utf8ToWide(f.name.empty() ? st.DefaultFont().name : f.name));
@@ -724,6 +760,13 @@ bool WorkbookView::ApplyBorders(int which, const BorderSide& side) {
     case 5: apply(bottom, [&](Border& b) { b.bottom = side; }); break;
     case 6: apply(leftCol, [&](Border& b) { b.left = side; }); break;
     case 7: apply(rightCol, [&](Border& b) { b.right = side; }); break;
+    case 8:  // the diagonals, in every cell: one line style for both, as Excel stores them
+    case 9:
+      apply(sel, [&](Border& b) {
+        b.diagonal = side;
+        (which == 8 ? b.diagonalUp : b.diagonalDown) = true;
+      });
+      break;
   }
   group.done = ok;
   return ok;
@@ -1423,8 +1466,9 @@ bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
     for (const auto& [prefix, style] : {std::pair{L"double-", BorderStyle::Double}, std::pair{L"thick-", BorderStyle::Thick},
                                         std::pair{L"medium-", BorderStyle::Medium}})
       if (edge.rfind(prefix, 0) == 0) edge.erase(0, std::wcslen(prefix)), side.style = style;
-    static const wchar_t* const kEdges[] = {L"none", L"outline", L"all", L"inside", L"top", L"bottom", L"left", L"right"};
-    for (int i = 0; i < 8; ++i)
+    static const wchar_t* const kEdges[] = {L"none",   L"outline", L"all",   L"inside",      L"top",
+                                            L"bottom", L"left",    L"right", L"diagonal-up", L"diagonal-down"};
+    for (int i = 0; i < static_cast<int>(std::size(kEdges)); ++i)
       if (edge == kEdges[i]) ok = ApplyBorders(i, side);
   } else if (key == L"align") {
     const HAlign h = value == L"left" ? HAlign::Left : value == L"center" ? HAlign::Center
@@ -1442,6 +1486,12 @@ bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
       });
     else if (key == L"bold") ok = ChangeFont(u"Bold", [on](Font& f) { f.bold = on; });
     else ok = ChangeFont(u"Italic", [on](Font& f) { f.italic = on; });
+  } else if (key == L"locked" || key == L"hidden") {
+    const bool on = value != L"off" && value != L"0", locked = key == L"locked";
+    ok = ChangeFormat(locked ? u"Locked" : u"Hidden", [on, locked](Xf& x) {
+      (locked ? x.protection.locked : x.protection.hidden) = on;
+      x.applyProtection = true;
+    });
   } else if (key == L"style") {
     const auto& g = Gallery();
     for (size_t i = 0; i < g.size(); ++i)

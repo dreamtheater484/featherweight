@@ -205,8 +205,31 @@ bool WorkbookFile::Save(fw::sheet::Workbook& book, fw::sheet::edit::Editor& edit
   return StartSave(book, editor, path, nullptr, error) && FinishSave(error);
 }
 
+fw::sheet::edit::Journal* WorkbookFile::JournalFor(const fw::sheet::Workbook& book) {
+  if (!book.GetPackage() || book.Format() == FileFormat::Csv) return nullptr;
+  journaled_ = true;
+  return &edits_;
+}
+
 void WorkbookFile::Autosave(fw::sheet::Workbook& book, fw::sheet::edit::Editor& editor) {
   if (run_ || !AutosaveDue()) return;
+  // The edits since the file was opened, after the file as opened: nothing written whole.
+  if (journaled_ && !Protected() && book.GetPackage()) {
+    const pkg::Snapshot& snap = book.GetPackage()->GetSnapshot();
+    std::span<const uint8_t> opened = snap.Bytes();
+    std::vector<uint8_t> copy;  // a file kept on disk, read only to start the journal
+    if (opened.empty() && !JournalStarted()) {
+      try {
+        copy.resize(static_cast<size_t>(snap.Size()));
+      } catch (const std::bad_alloc&) {
+        return;
+      }
+      if (!snap.ReadAt(0, copy.data(), copy.size())) return;
+      opened = copy;
+    }
+    if (WriteJournal(opened, "xlsx", edits_.All(), edits_.Unwritten())) edits_.Written();
+    return;
+  }
   try {
     if (book.Format() == FileFormat::Csv) {
       fw::sheet::csv::Options o = csv_;

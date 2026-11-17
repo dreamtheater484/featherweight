@@ -238,3 +238,32 @@ Featherweight shows workbooks; it doesn't edit them yet (S2). What the automated
 - [ ] Memory with one typical workbook open (one of yours): ___ MB in Task Manager (target < 150 MB).
 - [ ] After opening a workbook, Featherweight uses no CPU while you do nothing (Task Manager).
 - [ ] Opening a PDF and a Word document is as quick as before.
+
+## Spreadsheet editing (S2)
+
+Featherweight edits workbooks. Check it next to Excel on the same file, keystroke for keystroke; every edit is one undo step. Work on copies (the S1 test files, `million-cells.xlsx` from `build\budgets`, and your own workbooks).
+
+### Editing in the grid
+
+- [ ] Typing replaces a cell; F2 edits it with the caret at the end; the formula bar edits too. Enter, Tab, Shift+Enter, Shift+Tab and the arrows move as in Excel (Enter after a run of Tabs goes back to the first column); Esc cancels; Ctrl+Enter fills the selection; Alt+Enter is a line break; Delete clears contents.
+- [ ] What you type reads as Excel reads it in your region: `1,5`, `12%`, `1-2-2024`, `12:30`, `'007`, `TRUE`. Typing into a cell that already has a format keeps it as Excel does (`1/2/2024` into 0.00 stays 0.00; `50%` into a date cell becomes a percentage); a number typed into a 0% cell gets its % (5 gives 5%).
+- [ ] AutoComplete offers the column's own entries; Ctrl+; and Ctrl+Shift+; type the date and the time.
+- [ ] A formula: clicking cells or using the arrows inserts references (point mode); each reference gets a colored border you can drag and resize; F4 cycles $A$1, A$1, $A1, A1; function names autocomplete with their argument tip. A formula that can't be entered says why and stays open.
+- [ ] The fill handle: dragging copies, or continues 1, 2 / dates / Mon / Jan / Item 1; double-click fills down beside the data; Ctrl+D and Ctrl+R. Formulas move their references.
+- [ ] Cut, copy and paste in a workbook and between two workbooks: formulas move their references; the dashed border stays until the next edit or Esc. Paste special: values (Ctrl+Shift+V), formulas, formats, transposed.
+- [ ] Copy a range in Excel, in Word (a table) and from a web page, and paste it here: values, number formats, bold, colors, fills and merged cells come along; paragraphs become rows. Copy from here into Excel: the values (not just the text shown) and formats arrive.
+- [ ] Insert and delete rows, columns and cells (Ctrl+Shift+= and Ctrl+-, and the cell menu's Insert and Delete with their choices). Formulas, merged cells, notes and links follow as in Excel; deleted references become #REF!.
+- [ ] Drag a row or column heading's edge to size it (the tooltip shows Excel's width, e.g. 8.43); double-click it to fit; Row height and Column width in the menu. Open the file in Excel: the sizes are the same.
+- [ ] Hide and unhide rows and columns; merge & center (asks before discarding values; toggles off), merge across, unmerge; group and ungroup (Alt+Shift+Right and Left) and the outline buttons; freeze panes at the active cell, top row, first column, and unfreeze.
+- [ ] Sheet tabs: Shift+F11 adds a sheet; double-click renames; drag moves; the tab menu deletes, colors, hides and unhides.
+- [ ] Find and replace (Ctrl+F, Ctrl+H, Replace all), Go to (Ctrl+G, F5, the name box: B12, A1:C5, Sheet2!A1, a name), AutoSum (Alt+=) over the numbers above or left.
+- [ ] Undo and redo (Ctrl+Z, Ctrl+Y) and their lists on the toolbar: picking a step undoes it and everything after.
+- [ ] F9, Shift+F9 and Ctrl+Alt+F9 in a workbook set to manual calculation; a circular reference warns once and shows "Circular References: B2" in the status bar.
+- [ ] Saving: the tab's dot appears with the first edit and goes when you undo back; Ctrl+S saves without freezing the window ("Saving…" in the status bar); Save As offers .xlsx, .xlsm, .xltx and .xltm and asks before dropping macros; closing asks to save. Open every saved file in Excel: no repair prompt.
+- [ ] Recovery: end Featherweight in Task Manager after editing a workbook; start it again: the workbook is offered and comes back with your edits.
+- [ ] Change the open file in Excel and save it there: Featherweight says so and offers to reload.
+- [ ] The two everyday tasks take no more steps than in Excel: **total a column** (click below the numbers, Alt+=, Enter) and **fix a value in a received workbook** (open it, click the cell or Ctrl+G to it, type the value, Enter, Ctrl+S).
+
+### Editing speed (record the numbers)
+
+- [ ] `million-cells.xlsx`: typing in a cell feels instant (measured 3.75 ms a key, 31 ms at worst; plan: under 16 and 50). Inserting a row ___ ms (measured 23–28 ms; plan: under 100 ms), and undoing it as quick.

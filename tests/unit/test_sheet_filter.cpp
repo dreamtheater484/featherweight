@@ -1,3 +1,4 @@
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -70,6 +71,48 @@ TEST(SheetFilter_Conditions) {
   CHECK(!data::Passes(text, L"Coffee beans", {Op::Greater, L"2"}));  // text isn't compared with numbers
   CHECK(data::Passes(Value::Number(12), L"12", {Op::Equal, L"12"}));
   CHECK(data::Passes(Value::Number(12), L"12", {Op::Equal, L"1*"}));  // a pattern compares the text shown
+}
+
+// Top 10 and above/below average, with the rows Excel 2021 kept (AutoFilter xlTop10Items,
+// xlTop10Percent, xlBottom10..., xlFilterDynamic; scratchpad top10_probe.py).
+TEST(SheetFilter_TopAndAverage) {
+  using Special = data::FilterCriteria::Special;
+  // One column: a header, then `values` (NaN: blank, -1e300: the text "x"); the values kept.
+  auto run = [](std::vector<double> values, Special special, double count, bool bottom, bool percent) {
+    Workbook book;
+    Sheet& s = book.AddSheet("S");
+    s.SetValue(0, 0, Value::Text("H"));
+    for (size_t i = 0; i < values.size(); ++i) {
+      const uint32_t row = static_cast<uint32_t>(i + 1);
+      if (values[i] == -1e300) s.SetValue(row, 0, Value::Text("x"));
+      else if (!std::isnan(values[i])) s.SetValue(row, 0, Value::Number(values[i]));
+    }
+    data::FilterCriteria c;
+    c.special = special, c.count = count, c.bottom = bottom, c.percent = percent;
+    const auto keep = data::FilterRows(book, s, Range{0, 0, static_cast<uint32_t>(values.size()), 0}, {c}, EnUsLocale());
+    std::vector<double> kept;
+    for (size_t i = 0; i < keep.size(); ++i)
+      if (keep[i]) kept.push_back(values[i]);
+    return kept;
+  };
+  using V = std::vector<double>;
+  const double nan = std::nan(""), text = -1e300;
+  const V seven{1, 2, 3, 4, 5, 6, 7};
+  CHECK(run(seven, Special::Top10, 3, false, false) == V({5, 6, 7}));
+  CHECK(run({5, 7, 7, 6, 7, 1, 2}, Special::Top10, 2, false, false) == V({7, 7, 7}));  // ties stay
+  CHECK(run(seven, Special::Top10, 2, true, false) == V({1, 2}));
+  CHECK(run(seven, Special::Top10, 10, false, true) == V({7}));  // 0.7 items: one
+  CHECK(run(seven, Special::Top10, 30, false, true) == V({6, 7}));
+  CHECK(run(seven, Special::Top10, 50, false, true) == V({5, 6, 7}));
+  CHECK(run(seven, Special::Top10, 60, false, true) == V({4, 5, 6, 7}));
+  CHECK(run(seven, Special::Top10, 30, true, true) == V({1, 2}));
+  CHECK(run({1, text, 3, 9, nan, 5, 7}, Special::Top10, 2, false, false) == V({9, 7}));
+  CHECK(run({1, 2, 3}, Special::Top10, 5, false, false) == V({1, 2, 3}));
+  CHECK(run({1, 2, 3, 4, 10}, Special::AboveAverage, 0, false, false) == V({10}));
+  CHECK(run({1, 2, 3, 4, 10}, Special::BelowAverage, 0, false, false) == V({1, 2, 3}));
+  CHECK(run({1, text, 3, nan, 10, 4}, Special::AboveAverage, 0, false, false) == V({10}));
+  CHECK(run({1, text, 3, nan, 10, 4}, Special::BelowAverage, 0, false, false) == V({1, 3, 4}));
+  CHECK(run({2, 2, 2}, Special::AboveAverage, 0, false, false).empty());
 }
 
 TEST(SheetFilter_Duplicates) {

@@ -100,6 +100,9 @@ class FileSession {
   // (which removes it) from `opened` and `all`. Not for a protected document: WriteAutosave.
   bool WriteJournal(std::span<const uint8_t> opened, std::string_view meta, std::string_view all,
                     std::string_view unwritten);
+  // The recovery file is a journal with the opened bytes in it: WriteJournal won't read `opened`
+  // (a tab whose file isn't in memory reads it only when this is false).
+  bool JournalStarted() const { return journal_ && !autosave_.empty(); }
 
   // A password-protected document (D5): saves, backups and autosaves stay encrypted with this key
   // (the password the file was opened with).
