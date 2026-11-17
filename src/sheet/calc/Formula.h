@@ -35,6 +35,9 @@ struct CompileOptions {
   int32_t row = 0, col = 0;
   bool r1c1 = false;   // R1C1 references instead of A1
   bool array = false;  // an array formula (entered with Ctrl+Shift+Enter, or a dynamic array)
+  // Typed in a cell, read as Excel reads typing: R1C1 references in A1 style (=RC is the cell
+  // itself), A1:A1048576 as A:A and A1:XFD1 as 1:1, and no unions of values (=(1,2)).
+  bool typed = false;
 };
 
 class Formula {

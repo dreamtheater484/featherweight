@@ -267,15 +267,31 @@ class Parser {
     return UnionExpr();
   }
 
+  // The code from `from` on is one constant (a number, text, a boolean, an error or an array), maybe
+  // in parentheses.
+  bool Constant(size_t from) const {
+    if (from >= code_.size()) return false;
+    const uint8_t op = code_[from];
+    if (op != kNum && op != kStr && op != kBool && op != kErr && op != kArray) return false;
+    size_t k = from + InstrLength(code_.data() + from);
+    while (k < code_.size() && code_[k] == kParen) ++k;
+    return k == code_.size();
+  }
+
   bool UnionExpr() {
+    const size_t unionStart = code_.size();
     if (!IsectExpr()) return false;
     for (;;) {
       if (!unionOk_) return true;
       size_t k = i_;
       while (k < s_.size() && IsSpace(s_[k])) ++k;
       if (At(k) != ',') return true;
+      // Only references join in a union: Excel refuses =(1,2) typed.
+      if (at_.typed && Constant(unionStart)) return Fail("a union takes references");
       i_ = k + 1;
+      size_t next = code_.size();
       if (!IsectExpr()) return false;
+      if (at_.typed && Constant(next)) return Fail("a union takes references");
       Binary(kUnion);
     }
   }
@@ -530,6 +546,21 @@ class Parser {
   void EmitArea(const Part& a, const Part& b, uint8_t sheetFlags, int s1, int s2) {
     uint8_t flags = sheetFlags;
     int32_t r1 = a.row, r2 = b.row, c1 = a.col, c2 = b.col;
+    if (at_.typed && a.Cell() && b.Cell()) {
+      // Typed A1:XFD1 is 1:1, A1:A1048576 is A:A (every row and column: 1:1048576), as Excel takes it.
+      auto absRow = [&](const Part& p) { return p.rowAbs ? p.row : at_.row + p.row; };
+      auto absCol = [&](const Part& p) { return p.colAbs ? p.col : at_.col + p.col; };
+      if (absCol(a) == 0 && absCol(b) == kMaxCols - 1) {
+        Part x = a, y = b;
+        x.hasCol = y.hasCol = false;
+        return EmitArea(x, y, sheetFlags, s1, s2);
+      }
+      if (absRow(a) == 0 && absRow(b) == kMaxRows - 1) {
+        Part x = a, y = b;
+        x.hasRow = y.hasRow = false;
+        return EmitArea(x, y, sheetFlags, s1, s2);
+      }
+    }
     if (a.ColOnly()) {  // A:B
       flags |= kWholeCols | kRowAbs | kRow2Abs;
       r1 = 0;
@@ -553,7 +584,7 @@ class Parser {
   }
 
   size_t ScanPart(size_t p, Part& out) const {
-    return at_.r1c1 ? ScanR1C1(s_, p, out) : ScanA1(s_, p, at_.row, at_.col, out);
+    return at_.r1c1 || r1c1Typed_ ? ScanR1C1(s_, p, out) : ScanA1(s_, p, at_.row, at_.col, out);
   }
 
   // A reference starting with `a` (length `la` at i_), with its second end if ":" follows. False
@@ -624,7 +655,7 @@ class Parser {
       if (s2 < s1) std::swap(s1, s2);
     }
     uint8_t flags = kSheet;
-    if (!last.empty()) flags |= kSheet3D;
+    if (!last.empty() && !(known && s1 == s2)) flags |= kSheet3D;  // Sheet2:Sheet2!A1 is Sheet2!A1, as Excel
     size_t mark = code_.size();
     if (!SheetTarget(flags, known ? s1 : 0, known ? s2 : 0)) return false;
     if (!known) {
@@ -714,6 +745,20 @@ class Parser {
       Part a;
       size_t la = ScanR1C1(s_, i_, a);
       if (la && At(i_ + la) != '(' && At(i_ + la) != '!' && TryReference(a, la, 0, 0, 0)) return true;
+    }
+    // Typed in A1 style, a cell in R1C1 that isn't an A1 cell (R1C1, RC, R[1]C[-1]) is one, as Excel
+    // takes it.
+    if (at_.typed && !at_.r1c1 && Upper(c) == 'R') {
+      Part a, b;
+      size_t la = ScanR1C1(s_, i_, a);
+      size_t lb = ScanA1(s_, i_, at_.row, at_.col, b);
+      if (la && a.Cell() && !(lb >= la && b.Cell()) && !IsNameChar(At(i_ + la)) && At(i_ + la) != '(' &&
+          At(i_ + la) != '!') {
+        r1c1Typed_ = true;
+        bool ok = TryReference(a, la, 0, 0, 0);
+        r1c1Typed_ = false;
+        if (ok) return true;
+      }
     }
 
     size_t e = i_;
@@ -960,7 +1005,8 @@ class Parser {
       f_.flags |= Formula::kUnsupported;
       return true;
     }
-    if (argc < fn->minArgs || argc > fn->maxArgs) return Fail("wrong number of arguments");
+    if (argc < fn->minArgs) return Fail("too few arguments");
+    if (argc > fn->maxArgs) return Fail("too many arguments");
     if (fn->flags & kFnVolatile) f_.flags |= Formula::kVolatile;
     if (!std::strcmp(fn->name, "SUBTOTAL") || !std::strcmp(fn->name, "AGGREGATE")) f_.flags |= Formula::kSubtotal;
     if (fn->flags & kFnDynRef) f_.flags |= Formula::kDynamicRefs;
@@ -995,7 +1041,8 @@ class Parser {
   std::vector<uint8_t>& code_;
   std::vector<std::string> let_;  // LET's names in scope, innermost last
   bool array_ = false;    // evaluating in an array context
-  bool unionOk_ = false;  // "," is the union operator here (inside parentheses)
+  bool unionOk_ = false;
+  bool r1c1Typed_ = false;  // reading an R1C1 reference typed in A1 style  // "," is the union operator here (inside parentheses)
   int depth_ = 0;
   bool ok_ = true;
   ParseError err_;
