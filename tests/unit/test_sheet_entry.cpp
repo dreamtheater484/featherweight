@@ -316,3 +316,45 @@ TEST(sheet_typing_function_help) {
   tip = ArgumentTip(*FindFunctionHelp("VLOOKUP"), nl, 2, b, e);
   CHECK(tip.substr(b, e - b) == L"col_index_num");
 }
+
+#include <map>
+
+TEST(sheet_typing_autosum) {
+  struct Sheet {
+    std::map<std::pair<int32_t, int32_t>, SumCell> cells;
+    void Set(const char* a1, SumCell k) {
+      int32_t col = 0;
+      size_t i = 0;
+      while (a1[i] >= 'A' && a1[i] <= 'Z') col = col * 26 + (a1[i++] - 'A' + 1);
+      cells[{std::atoi(a1 + i) - 1, col - 1}] = k;
+    }
+    SumCell operator()(int32_t r, int32_t c) const {
+      auto it = cells.find({r, c});
+      return it == cells.end() ? SumCell::kEmpty : it->second;
+    }
+  };
+  auto propose = [](const Sheet& s, int32_t row, int32_t col) {
+    return ProposeAutoSum(row, col, [&](int32_t r, int32_t c) { return s(r, c); }).formula;
+  };
+  const SumCell N = SumCell::kNumber, T = SumCell::kTotal, X = SumCell::kOther;
+  Sheet a;  // a header and numbers
+  a.Set("B1", X), a.Set("B2", N), a.Set("B3", N), a.Set("B4", N);
+  CHECK_EQ(propose(a, 4, 1), std::string("=SUM(B2:B4)"));
+  CHECK_EQ(propose(a, 6, 1), std::string("=SUM(B2:B6)"));  // blank cells right above
+  Sheet b;  // a row to the left
+  b.Set("A5", X), b.Set("B5", N), b.Set("C5", N), b.Set("D5", N);
+  CHECK_EQ(propose(b, 4, 4), std::string("=SUM(B5:D5)"));
+  Sheet c;  // numbers above and to the left: the column
+  c.Set("C1", N), c.Set("C2", N), c.Set("A3", N), c.Set("B3", N);
+  CHECK_EQ(propose(c, 2, 2), std::string("=SUM(C1:C2)"));
+  Sheet d;  // subtotals
+  d.Set("B2", N), d.Set("B3", N), d.Set("B4", T), d.Set("B5", N), d.Set("B6", N), d.Set("B7", T);
+  CHECK_EQ(propose(d, 7, 1), std::string("=SUM(B7,B4)"));
+  Sheet e;  // text in the middle
+  e.Set("B2", N), e.Set("B3", X), e.Set("B4", N);
+  CHECK_EQ(propose(e, 4, 1), std::string("=SUM(B4)"));
+  CHECK_EQ(propose(Sheet{}, 4, 1), std::string("=SUM()"));
+  Sheet f;  // the sheet's top
+  f.Set("B1", N), f.Set("B2", N);
+  CHECK_EQ(propose(f, 2, 1), std::string("=SUM(B1:B2)"));
+}

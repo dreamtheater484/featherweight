@@ -6,6 +6,7 @@
 // as typed, in the region's form, complete or not; positions are UTF-16 units.
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -53,6 +54,26 @@ const FunctionHelp* FindFunctionHelp(std::string_view name);  // any case, _xlfn
 // (0-based; past the named ones, the repeated one) for bold.
 std::wstring ArgumentTip(const FunctionHelp& help, const FormulaLocale& region, int argument, size_t& boldBegin,
                          size_t& boldEnd);
+
+// AutoSum (Alt+=): what it needs to know of a cell.
+enum class SumCell : uint8_t {
+  kEmpty,
+  kNumber,  // a number, typed or calculated
+  kTotal,   // a number from a SUM or SUBTOTAL formula
+  kOther,   // text, a boolean, an error
+};
+struct AutoSumProposal {
+  std::vector<std::pair<int32_t, int32_t>> cells;  // the totals summed, nearest first; else empty
+  int32_t r1 = 0, c1 = 0, r2 = 0, c2 = 0;           // the range summed (when `cells` is empty and `found`)
+  bool found = false;                               // false: =SUM() with nothing in it
+  std::string formula;                              // invariant, with "=": =SUM(B2:B5), =SUM(B7,B4), =SUM()
+};
+// The SUM Excel proposes for the empty cell (row, col): the numbers above it, else to its left
+// (the column when there are numbers right above, else the row when there are numbers right to
+// the left, blank cells between allowed), up to a text or blank cell; when that run holds totals
+// (SUM formulas), the totals only. Excel's documented behavior; its AutoSum can't be driven
+// without a visible window, so not measured here.
+AutoSumProposal ProposeAutoSum(int32_t row, int32_t col, const std::function<SumCell(int32_t row, int32_t col)>& cellAt);
 
 // The formula of cell `from` as it reads in cell `to` (fill, copy and paste): relative references
 // move with it, absolute ones stay; a reference moved off the sheet becomes #REF!, as Excel makes

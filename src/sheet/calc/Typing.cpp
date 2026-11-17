@@ -396,3 +396,68 @@ std::string CopyFormula(std::string_view formula, const CompileOptions& from, co
 }
 
 }  // namespace fw::sheet::calc
+
+namespace fw::sheet::calc {
+
+namespace {
+
+std::string A1(int32_t r, int32_t c) { return ColumnName(c) + std::to_string(r + 1); }
+
+// From (row, col) toward the sheet's edge (dr, dc): blank cells, then the run of numbers. The run's
+// far end, or false when there are no numbers before text, a boolean, an error or the edge.
+bool Run(int32_t row, int32_t col, int dr, int dc, const std::function<SumCell(int32_t, int32_t)>& at, int32_t& r,
+         int32_t& c) {
+  r = row + dr, c = col + dc;
+  while (r >= 0 && c >= 0 && at(r, c) == SumCell::kEmpty) r += dr, c += dc;
+  if (r < 0 || c < 0) return false;
+  SumCell k = at(r, c);
+  if (k != SumCell::kNumber && k != SumCell::kTotal) return false;
+  while (r + dr >= 0 && c + dc >= 0) {
+    SumCell n = at(r + dr, c + dc);
+    if (n != SumCell::kNumber && n != SumCell::kTotal) break;
+    r += dr, c += dc;
+  }
+  return true;
+}
+
+}  // namespace
+
+AutoSumProposal ProposeAutoSum(int32_t row, int32_t col, const std::function<SumCell(int32_t, int32_t)>& at) {
+  AutoSumProposal p;
+  auto number = [&](int32_t r, int32_t c) {
+    if (r < 0 || c < 0) return false;
+    SumCell k = at(r, c);
+    return k == SumCell::kNumber || k == SumCell::kTotal;
+  };
+  // The column when there are numbers right above (or, past blanks, above and none right left).
+  int dr = 0, dc = 0;
+  int32_t r = 0, c = 0;
+  if (number(row - 1, col)) dr = -1;
+  else if (number(row, col - 1)) dc = -1;
+  else if (Run(row, col, -1, 0, at, r, c)) dr = -1;
+  else if (Run(row, col, 0, -1, at, r, c)) dc = -1;
+  if (!dr && !dc) {
+    p.formula = "=SUM()";
+    return p;
+  }
+  Run(row, col, dr, dc, at, r, c);
+  p.found = true;
+  p.r1 = std::min(r, row + dr), p.r2 = std::max(r, row + dr);
+  p.c1 = std::min(c, col + dc), p.c2 = std::max(c, col + dc);
+  // Totals in the run: sum those only, nearest first.
+  for (int32_t k = dr ? row - 1 : col - 1; dr ? k >= p.r1 : k >= p.c1; --k) {
+    int32_t rr = dr ? k : row, cc = dr ? col : k;
+    if (at(rr, cc) == SumCell::kTotal) p.cells.emplace_back(rr, cc);
+  }
+  if (!p.cells.empty()) {
+    std::string list;
+    for (auto [rr, cc] : p.cells) list += (list.empty() ? "" : ",") + A1(rr, cc);
+    p.formula = "=SUM(" + list + ")";
+    return p;
+  }
+  const bool one = p.r1 == p.r2 && p.c1 == p.c2;
+  p.formula = "=SUM(" + A1(p.r1, p.c1) + (one ? "" : ":" + A1(p.r2, p.c2)) + ")";
+  return p;
+}
+
+}  // namespace fw::sheet::calc
