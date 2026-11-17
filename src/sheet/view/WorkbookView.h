@@ -123,8 +123,9 @@ class WorkbookView : public PagedView {
   std::wstring SuggestedSavePath() const override;
   std::wstring FormatLoss(const std::wstring& path) const override;
   void KeepFormat() override { keepFormat_ = true; }
-  // format:size=14, font=, color=RRGGBB, fill=RRGGBB, numfmt=<code as typed here>, border=, align=,
-  // wrap, bold, italic: the selection, through the toolbar's and Format Cells' calls (WorkbookFormat.cpp).
+  // format:size=14, font=, color=RRGGBB, fill=RRGGBB, numfmt=<code as typed here>, code=<English code>,
+  // border=, align=, wrap, bold, italic, locked, hidden, style=: the selection, through the toolbar's
+  // and Format Cells' calls (WorkbookFormat.cpp).
   bool ScriptOp(const std::wstring& op, const std::wstring& arg) override;
   bool CanPrint() const override { return Ready(); }
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;

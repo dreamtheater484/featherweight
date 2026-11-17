@@ -890,7 +890,7 @@ class Painting {
 
   void Borders() {
     std::vector<Segment> segs;
-    std::vector<std::pair<draw::Rect, std::pair<const Border*, uint32_t>>> diagonals;
+    std::vector<std::pair<draw::Rect, std::pair<Border, uint32_t>>> diagonals;  // a copy: `b` is the loop's
     const float L = g_.centered ? 0 : g_.line;
     for (const RowData& rd : rows_) {
       for (size_t i = 0; i < cols_.size(); ++i) {
@@ -907,7 +907,7 @@ class Painting {
         if (first) AddSide(segs, b.left, true, t - L, btm, startX, VEdge(rd.row, col));
         if (last) AddSide(segs, b.right, true, t - L, btm, endX, VEdge(rd.row, col + 1));
         if ((b.diagonalUp || b.diagonalDown) && b.diagonal.style != BorderStyle::None && !m)
-          diagonals.push_back({{l, t, r, btm}, {&b, styles_.Resolve(b.diagonal.color, 0xFF000000)}});
+          diagonals.push_back({{l, t, r, btm}, {b, styles_.Resolve(b.diagonal.color, 0xFF000000)}});
       }
     }
     // The cells just outside: their edges along the drawn ones (the row above's bottom border is
@@ -946,17 +946,17 @@ class Painting {
                      [](const Segment& a, const Segment& b) { return KindOf(a.style).weight < KindOf(b.style).weight; });
     for (const Segment& s : kept) DrawSegment(s);
     for (const auto& [r, d] : diagonals) {
-      const LineKind k = KindOf(d.first->diagonal.style);
+      const LineKind k = KindOf(d.first.diagonal.style);
       draw::Pen pen;
       pen.brush = draw::Brush::Solid(ToColor(d.second));
       pen.width = g_.centered ? k.width * g_.pt : std::max(g_.line, k.width * g_.px);
-      if (d.first->diagonalDown) {
+      if (d.first.diagonalDown) {
         draw::Path path;
         path.MoveTo({r.left, r.top});
         path.LineTo({r.right, r.bottom});
         p_.StrokePath(path, pen);
       }
-      if (d.first->diagonalUp) {
+      if (d.first.diagonalUp) {
         draw::Path path;
         path.MoveTo({r.left, r.bottom});
         path.LineTo({r.right, r.top});
