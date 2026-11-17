@@ -72,6 +72,9 @@ class WorkbookView : public PagedView {
   std::wstring TooltipAt(int x, int y) override;
   bool Dragging() const override { return mouse_ != Mouse::None || PagedView::Dragging(); }
   bool HasKeyFocus() const override { return editor_.Active(); }
+  bool CanReplace() const override { return Ready() && !preview_ && !ChartSheet(); }
+  bool ReplaceCurrent(const std::wstring& with) override;
+  int ReplaceAll(const std::wstring& with) override;
   std::optional<RECT> CaretRect() override;
 
   int ShortcutFor(UINT vk, UINT mods) const override;
@@ -199,6 +202,7 @@ class WorkbookView : public PagedView {
 
   // ---- Formula bar
   std::wstring FormulaBarText() const;
+  std::wstring EditTextAt(const Sheet& s, uint32_t row, uint32_t col) const;
   std::wstring ActiveName() const;
 
   // ---- Sheet tabs
@@ -309,6 +313,10 @@ class WorkbookView : public PagedView {
   // Writes the entry through the edit API (with Ctrl+Enter into every selected cell). False when
   // it stays open: a formula Excel refuses, or an edit the model refuses (the banner says why).
   bool CommitEdit(bool fill);
+  bool InputFor(const std::wstring& text, int sheet, CellAddr cell, edit::CellInput& in, std::string& formula,
+                std::string& message, size_t& pos);
+  // Replace (Ctrl+H): every place the search's text is in a match's content, as typed.
+  bool ReplacedText(const Match& m, const std::wstring& with, std::wstring& out) const;
   bool editReplaces_ = false;  // typing over the cell: the entry is written even if unchanged
   // The model's edits (s2-model's Editor), made when first needed; Edited hears every change.
   edit::Editor& Ed();

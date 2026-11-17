@@ -483,6 +483,74 @@ bool WorkbookView::EditKey(UINT vk, UINT mods) {
   return true;
 }
 
+// What typing `text` into a cell writes (as Excel converts it): a value in the region's form
+// (and the format typing gives a General cell), or a formula. False for a formula Excel refuses:
+// `message` says why and `pos` is where in `text`.
+bool WorkbookView::InputFor(const std::wstring& text, int sheet, CellAddr cell, edit::CellInput& in, std::string& formula,
+                            std::string& message, size_t& pos) {
+  in = edit::CellInput{};  // empty text clears the cell
+  formula.clear();
+  if (text.empty()) return true;
+  const Sheet& s = book_->GetSheet(static_cast<size_t>(sheet));
+  const Xf& xf = book_->GetStyles().CellXf(s.StyleAt(cell.row, cell.col));
+  calc::CompileOptions at;
+  at.sheet = sheet;
+  at.row = static_cast<int32_t>(cell.row);
+  at.col = static_cast<int32_t>(cell.col);
+  bool asFormula = text[0] == L'=';
+  const bool textFormat = xf.numFmt == 49;  // "@": what's typed stays text
+  TypedValue tv;
+  if (!asFormula && !textFormat) {
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    ParseTyped(text, text_->Locale(), book_->Date1904(), now.wYear, tv);
+    // "+A1" and "-A1" are formulas, "-5" a number.
+    if ((text[0] == L'+' || text[0] == L'-') && text.size() > 1 && tv.kind != TypedValue::Number) asFormula = true;
+  }
+  if (asFormula) {
+    const std::string typed = WideToUtf8(text[0] == L'=' ? text : L"=" + text);
+    const calc::EnteredFormula e = calc::EnterFormula(typed, Region(), at, Calc().engine());
+    if (!e.formula) {
+      message = e.message;
+      int caret = static_cast<int>(Utf8ToWide(std::string_view(typed).substr(0, std::min(e.pos, typed.size()))).size());
+      if (text[0] != L'=') --caret;
+      pos = static_cast<size_t>(std::max(0, caret));
+      return false;
+    }
+    formula = e.text;
+    in = edit::CellInput::Formula(e.text.substr(1));
+    return true;
+  }
+  if (textFormat) {
+    in = edit::CellInput::Text(WideToUtf8(text));
+    return true;
+  }
+  ErrorCode code{};
+  switch (tv.kind) {
+    case TypedValue::Number: in = edit::CellInput::Number(tv.number); break;
+    case TypedValue::Bool: in = edit::CellInput::Bool(tv.number != 0); break;
+    case TypedValue::Error:
+      in = sheet::ParseError(WideToUtf8(tv.text), code) ? edit::CellInput::Error(code) : edit::CellInput::Text(WideToUtf8(tv.text));
+      break;
+    case TypedValue::Text: in = edit::CellInput::Text(WideToUtf8(tv.text)); break;
+  }
+  // The format typing gives a General cell (a date, a percentage...), and an apostrophe's
+  // quotePrefix.
+  Xf want = xf;
+  bool restyle = false;
+  if (tv.format != 0 && xf.numFmt == 0) {
+    want.numFmt = static_cast<uint32_t>(tv.format);
+    want.applyNumFmt = true;
+    restyle = true;
+  }
+  if (tv.kind == TypedValue::Text && tv.quoted != xf.quotePrefix) {
+    want.quotePrefix = tv.quoted;
+    restyle = true;
+  }
+  if (restyle) in.WithStyle(Ed().AddXf(want));
+  return true;
+}
+
 bool WorkbookView::CommitEdit(bool fill) {
   if (!editor_.Active()) return true;
   if (renaming_ >= 0) {
@@ -509,67 +577,21 @@ bool WorkbookView::CommitEdit(bool fill) {
   }
   const int sheet = static_cast<int>(editSheet_);
   const Sheet& s = book_->GetSheet(editSheet_);
-  const Xf& xf = book_->GetStyles().CellXf(s.StyleAt(editCell_.row, editCell_.col));
   calc::CompileOptions at;
   at.sheet = sheet;
   at.row = static_cast<int32_t>(editCell_.row);
   at.col = static_cast<int32_t>(editCell_.col);
-  edit::CellInput in;   // empty text clears the cell
+  edit::CellInput in;
   std::string formula;  // invariant, with "="
-  if (!text.empty()) {
-    bool asFormula = text[0] == L'=';
-    const bool textFormat = xf.numFmt == 49;  // "@": what's typed stays text
-    TypedValue tv;
-    if (!asFormula && !textFormat) {
-      SYSTEMTIME now;
-      GetLocalTime(&now);
-      ParseTyped(text, text_->Locale(), book_->Date1904(), now.wYear, tv);
-      // "+A1" and "-A1" are formulas, "-5" a number.
-      if ((text[0] == L'+' || text[0] == L'-') && text.size() > 1 && tv.kind != TypedValue::Number) asFormula = true;
-    }
-    if (asFormula) {
-      const std::string typed = WideToUtf8(text[0] == L'=' ? text : L"=" + text);
-      const calc::EnteredFormula e = calc::EnterFormula(typed, Region(), at, Calc().engine());
-      if (!e.formula) {
-        // Excel's message, and the caret where it puts it.
-        host_.ViewMessage(BannerKind::Warning, Utf8ToWide(e.message));
-        int caret = static_cast<int>(Utf8ToWide(std::string_view(typed).substr(0, std::min(e.pos, typed.size()))).size());
-        if (text[0] != L'=') --caret;
-        editor_.SetMode(CellEditor::Mode::Edit);
-        editor_.SetCaret(caret, false);
-        host_.ViewInvalidate();
-        return false;
-      }
-      formula = e.text;
-      in = edit::CellInput::Formula(e.text.substr(1));
-    } else if (textFormat) {
-      in = edit::CellInput::Text(WideToUtf8(text));
-    } else {
-      ErrorCode code{};
-      switch (tv.kind) {
-        case TypedValue::Number: in = edit::CellInput::Number(tv.number); break;
-        case TypedValue::Bool: in = edit::CellInput::Bool(tv.number != 0); break;
-        case TypedValue::Error:
-          in = sheet::ParseError(WideToUtf8(tv.text), code) ? edit::CellInput::Error(code)
-                                                            : edit::CellInput::Text(WideToUtf8(tv.text));
-          break;
-        case TypedValue::Text: in = edit::CellInput::Text(WideToUtf8(tv.text)); break;
-      }
-      // The format typing gives a General cell (a date, a percentage...), and an apostrophe's
-      // quotePrefix.
-      Xf want = xf;
-      bool restyle = false;
-      if (tv.format != 0 && xf.numFmt == 0) {
-        want.numFmt = static_cast<uint32_t>(tv.format);
-        want.applyNumFmt = true;
-        restyle = true;
-      }
-      if (tv.kind == TypedValue::Text && tv.quoted != xf.quotePrefix) {
-        want.quotePrefix = tv.quoted;
-        restyle = true;
-      }
-      if (restyle) in.WithStyle(Ed().AddXf(want));
-    }
+  std::string message;
+  size_t pos = 0;
+  if (!InputFor(text, sheet, editCell_, in, formula, message, pos)) {
+    // Excel's message, and the caret where it puts it.
+    host_.ViewMessage(BannerKind::Warning, Utf8ToWide(message));
+    editor_.SetMode(CellEditor::Mode::Edit);
+    editor_.SetCaret(static_cast<int>(pos), false);
+    host_.ViewInvalidate();
+    return false;
   }
   edit::Result r;
   if (fill) {
@@ -894,6 +916,75 @@ std::optional<RECT> WorkbookView::CaretRect() {
   const float x = b.rc.left + b.pad + measure.MeasureText(std::wstring_view(text).substr(from, caret - from), b.size);
   const float y = b.rc.top + b.pad / 2 + b.line * static_cast<float>(line);
   return RECT{static_cast<LONG>(x), static_cast<LONG>(y), static_cast<LONG>(x + 1), static_cast<LONG>(y + b.line)};
+}
+
+// ---------------------------------------------------------------------------
+// Replace
+
+bool WorkbookView::ReplacedText(const Match& m, const std::wstring& with, std::wstring& out) const {
+  if (query_.empty() || m.sheet >= book_->SheetCount()) return false;
+  const std::wstring text = EditTextAt(book_->GetSheet(m.sheet), m.row, m.col);
+  const std::wstring hay = matchCase_ ? text : Lower(text), needle = matchCase_ ? query_ : Lower(query_);
+  if (wholeWords_) {  // the whole content, as Excel's "Match entire cell contents"
+    if (hay != needle) return false;
+    out = with;
+    return true;
+  }
+  out.clear();
+  size_t from = 0;
+  bool any = false;
+  for (size_t at; (at = hay.find(needle, from)) != std::wstring::npos; from = at + needle.size()) {
+    out += text.substr(from, at - from) + with;
+    any = true;
+  }
+  out += text.substr(from);
+  return any;
+}
+
+bool WorkbookView::ReplaceCurrent(const std::wstring& with) {
+  if (!CanReplace() || matchIndex_ < 0 || matchIndex_ >= static_cast<int>(matches_.size())) return false;
+  if (editor_.Active() && !CommitEdit(false)) return false;
+  const Match m = matches_[static_cast<size_t>(matchIndex_)];
+  std::wstring text;
+  if (ReplacedText(m, with, text)) {
+    edit::CellInput in;
+    std::string formula, message;
+    size_t pos = 0;
+    if (!InputFor(text, static_cast<int>(m.sheet), {m.row, m.col}, in, formula, message, pos)) {
+      host_.ViewMessage(BannerKind::Warning, Utf8ToWide(message));
+      return false;
+    }
+    if (EditRefused(Ed().SetCell(static_cast<int>(m.sheet), m.row, m.col, in))) return false;
+  }
+  // This one is done: on to the next.
+  matches_.erase(matches_.begin() + matchIndex_);
+  if (matches_.empty()) {
+    matchIndex_ = -1;
+  } else {
+    if (matchIndex_ >= static_cast<int>(matches_.size())) matchIndex_ = 0;
+    ShowMatch();
+  }
+  host_.ViewStateChanged();
+  return true;
+}
+
+int WorkbookView::ReplaceAll(const std::wstring& with) {
+  if (!CanReplace() || query_.empty()) return 0;
+  if (editor_.Active() && !CommitEdit(false)) return 0;
+  while (!searchDone_) SearchIdle(1e300);  // every match first
+  std::vector<std::pair<CellAddr, edit::CellInput>> cells;
+  for (const Match& m : matches_) {
+    std::wstring text;
+    if (m.sheet != sheet_ || !ReplacedText(m, with, text)) continue;
+    edit::CellInput in;
+    std::string formula, message;
+    size_t pos = 0;
+    if (InputFor(text, static_cast<int>(m.sheet), {m.row, m.col}, in, formula, message, pos))
+      cells.emplace_back(CellAddr{m.row, m.col}, std::move(in));
+  }
+  if (cells.empty() || EditRefused(Ed().SetCells(static_cast<int>(sheet_), cells))) return 0;
+  StartSearch(query_, matchCase_, wholeWords_);
+  return static_cast<int>(cells.size());
 }
 
 }  // namespace fw::sheet::view

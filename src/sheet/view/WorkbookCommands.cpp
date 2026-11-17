@@ -612,15 +612,18 @@ void WorkbookView::ShowMatch() {
 std::wstring WorkbookView::ActiveName() const { return Ready() ? Utf8ToWide(CellName(active_.row, active_.col)) : L""; }
 
 std::wstring WorkbookView::FormulaBarText() const {
-  if (!Ready()) return {};
-  const Sheet& s = Current();
+  return Ready() ? EditTextAt(Current(), active_.row, active_.col) : std::wstring();
+}
+
+// A cell's content as typed (the formula bar's and F2's text).
+std::wstring WorkbookView::EditTextAt(const Sheet& s, uint32_t row, uint32_t col) const {
   CellInfo cell;
-  if (!s.GetCell(active_.row, active_.col, cell)) return {};
+  if (!s.GetCell(row, col, cell)) return {};
   if (cell.hasFormula) {
     FormulaInfo f;
-    if (s.GetFormula(active_.row, active_.col, f)) {
-      std::string text = ShiftFormula(f.text, static_cast<int64_t>(active_.row) - f.origin.row,
-                                      static_cast<int64_t>(active_.col) - f.origin.col);
+    if (s.GetFormula(row, col, f)) {
+      std::string text = ShiftFormula(f.text, static_cast<int64_t>(row) - f.origin.row,
+                                      static_cast<int64_t>(col) - f.origin.col);
       for (const char* prefix : {"_xlfn._xlws.", "_xlfn.", "_xlws."}) {
         for (size_t at; (at = text.find(prefix)) != std::string::npos;) text.erase(at, std::strlen(prefix));
       }
