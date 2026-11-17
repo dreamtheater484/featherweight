@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cwctype>
 
 #include "core/Strings.h"
 #include "text/Fonts.h"
@@ -9,6 +10,16 @@
 namespace fw::sheet::view {
 
 namespace {
+
+// Whether text reads right to left by its first strong character, as Excel's "context" reading
+// order decides General alignment: Hebrew, Arabic and the like right, letters of other scripts left.
+bool StartsRightToLeft(const std::wstring& s) {
+  for (wchar_t c : s) {
+    if ((c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF)) return true;
+    if (iswalpha(c)) return false;
+  }
+  return false;
+}
 
 struct FitContext {
   FontMeasure* measure;
@@ -185,7 +196,10 @@ void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const
   const Shown& shown = out.shown;
 
   out.align = al.horizontal;
-  if (out.align == HAlign::General) out.align = shown.number ? HAlign::Right : shown.center ? HAlign::Center : HAlign::Left;
+  if (out.align == HAlign::General) {
+    const bool rtlText = al.readingOrder == 2 || (al.readingOrder == 0 && StartsRightToLeft(shown.text));
+    out.align = shown.number ? HAlign::Right : shown.center ? HAlign::Center : rtlText ? HAlign::Right : HAlign::Left;
+  }
   out.stacked = al.rotation == 255;
   out.wrapped = !shown.number && !out.stacked &&
                 (al.wrap || al.horizontal == HAlign::Justify || al.horizontal == HAlign::Distributed);

@@ -23,12 +23,14 @@ class PrintSheetLayout : public SheetLayout {
   const Grid& grid_;
 };
 
-// Cells placed on a page: sheet points from the block's top-left at (x0, y0).
+// Cells placed on a page: sheet points from the block's top-left at (x0, y0). A right-to-left
+// sheet's x becomes mirror - x.
 class PageGeometry : public Geometry {
  public:
   PageGeometry(const Grid& grid, const std::vector<double>& colX, uint32_t row0, uint32_t col0, float x0, float y0,
-               float widthScale_)
-      : grid_(grid), colX_(colX), row0_(row0), col0_(col0), x0_(x0), y0_(y0) {
+               float widthScale_, float mirror)
+      : grid_(grid), colX_(colX), row0_(row0), col0_(col0), x0_(x0), y0_(y0), mirror_(mirror) {
+    rtl = mirror != 0;
     pt = 1;
     px = 0.75f;
     line = 0.75f;
@@ -39,8 +41,8 @@ class PageGeometry : public Geometry {
     padEnd = 0.75f;  // after the gridline's 0.75
     descentPx = 0.797f;
   }
-  float Left(uint32_t c) const override { return x0_ + X(c); }
-  float Right(uint32_t c) const override { return x0_ + X(c + 1); }
+  float Left(uint32_t c) const override { return rtl ? mirror_ - x0_ - X(c + 1) : x0_ + X(c); }
+  float Right(uint32_t c) const override { return rtl ? mirror_ - x0_ - X(c) : x0_ + X(c + 1); }
   float Top(uint32_t r) const override { return y0_ + grid_.PrintY(row0_, r); }
   float Bottom(uint32_t r) const override { return y0_ + grid_.PrintY(row0_, r + 1); }
 
@@ -51,7 +53,7 @@ class PageGeometry : public Geometry {
   const Grid& grid_;
   const std::vector<double>& colX_;
   uint32_t row0_, col0_;
-  float x0_, y0_;
+  float x0_, y0_, mirror_;
 };
 
 bool PaperFromText(const std::string& s, float& pts) {
@@ -460,8 +462,13 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   const float bodyW = ColsWidth(page.body.firstCol, page.body.lastCol);
   const float bodyH = RowsHeight(page.body.firstRow, page.body.lastRow);
   const float totalW = (headW + tW + bodyW) * scale_, totalH = (headH + tH + bodyH) * scale_;
+  // A right-to-left sheet prints mirrored: column A and the row numbers at the right, against the
+  // right margin. Everything below is placed left to right and mirrored about the width.
+  const bool rtl = !sheet_.Views().empty() && sheet_.Views().front().rightToLeft;
+  const float width = headW + tW + bodyW;
   float ox = left, oy = top;
   if (ps.horizontalCentered) ox += std::max(0.f, (availW - totalW) / 2);
+  else if (rtl) ox += std::max(0.f, availW - totalW);
   if (ps.verticalCentered) oy += std::max(0.f, (availH - totalH) / 2);
 
   PaintOptions o;
@@ -477,10 +484,11 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   p.Transform(draw::Matrix::Scale(scale_, scale_) * draw::Matrix::Translate(ox, oy));
   auto block = [&](uint32_t r0, uint32_t r1, uint32_t c0, uint32_t c1, float x, float y, float w, float h) {
     if (w <= 0 || h <= 0) return;
-    PageGeometry g(grid_, colX_, r0, c0, x, y, widthScale);
+    PageGeometry g(grid_, colX_, r0, c0, x, y, widthScale, rtl ? width : 0);
     p.Save();
     // A little room around it for the borders on its edges.
-    p.ClipRect({x - 2, y - 2, x + w + 2, y + h + 2});
+    const float cl = rtl ? width - x - w : x;
+    p.ClipRect({cl - 2, y - 2, cl + w + 2, y + h + 2});
     const Range area{r0, c0, r1, c1};
     PaintCells(p, sheet_, text_, grid_, g, area, o);
     if (info_.objects) {
@@ -490,6 +498,7 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
       SheetObjects::DrawOptions d;
       d.printing = true;
       d.indicators = false;
+      if (rtl) d.mirrorX = width - 2 * (x - cells.left);
       info_.objects->Draw(p, cells, d);
     }
     p.Restore();
@@ -512,9 +521,14 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
     style.family = FontMeasure::Family(base, base);
     style.size = static_cast<float>(FontMeasure::Size(base, base));
     auto label = [&](const std::wstring& s, float l, float t, float r, float b) {
+      if (rtl) {
+        const float l0 = l;
+        l = width - r;
+        r = width - l0;
+      }
       p.FillRect({l, t, r, b}, shade);
       p.FillRect({l, b - 0.5f, r, b}, ink);
-      p.FillRect({r - 0.5f, t, r, b}, ink);
+      p.FillRect(rtl ? draw::Rect{l, t, l + 0.5f, b} : draw::Rect{r - 0.5f, t, r, b}, ink);
       text::Paragraph para;
       para.text = s;
       para.runs.push_back({static_cast<uint32_t>(s.size()), &style});

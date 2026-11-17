@@ -460,6 +460,10 @@ class Painting {
     else rgt -= g_.line;
     return {l, g_.Top(r0), rgt, g_.Bottom(r1) - g_.line};
   }
+  // The text's pads at the cell's left and right: the start's at the left in a left-to-right
+  // sheet, at the right otherwise.
+  float PadL() const { return g_.rtl ? g_.padEnd : g_.padStart; }
+  float PadR() const { return g_.rtl ? g_.padStart : g_.padEnd; }
   draw::Rect Outer(uint32_t r0, uint32_t c0, uint32_t r1, uint32_t c1) const {
     return {std::min(g_.Left(c0), g_.Left(c1)), g_.Top(r0), std::max(g_.Right(c0), g_.Right(c1)), g_.Bottom(r1)};
   }
@@ -518,12 +522,12 @@ class Painting {
   // The text's left edge in `box` for its alignment (for one line; wrapped lines align inside).
   float AlignX(const CellText::Layout& l, const Xf& xf, const draw::Rect& box) const {
     const float w = l.width * g_.pt, indent = Indent(xf);
-    if (l.wrapped) return box.left + g_.padStart + (l.align == HAlign::Right ? 0 : indent);
+    if (l.wrapped) return box.left + PadL() + (l.align == HAlign::Right ? 0 : indent);
     switch (l.align) {
-      case HAlign::Right: return box.right - g_.padEnd - indent - w;
+      case HAlign::Right: return box.right - PadR() - indent - w;
       case HAlign::Center:
       case HAlign::CenterContinuous: return (box.left + box.right - w) / 2;
-      default: return box.left + g_.padStart + indent;
+      default: return box.left + PadL() + indent;
     }
   }
 
@@ -618,10 +622,10 @@ class Painting {
       const float bh = static_cast<float>(w * std::fabs(std::sin(rad)) + h * std::fabs(std::cos(rad)));
       float cx;
       switch (l.align) {
-        case HAlign::Right: cx = it.box.right - g_.padEnd - bw / 2; break;
+        case HAlign::Right: cx = it.box.right - PadR() - bw / 2; break;
         case HAlign::Center:
         case HAlign::CenterContinuous: cx = (it.box.left + it.box.right) / 2; break;
-        default: cx = it.box.left + g_.padStart + bw / 2; break;
+        default: cx = it.box.left + PadL() + bw / 2; break;
       }
       float cy;
       switch (al.vertical) {
@@ -656,7 +660,7 @@ class Painting {
     if (scale != 1 && !l.wrapped) {
       const float w = l.width * s * scale;
       switch (l.align) {
-        case HAlign::Right: x = it.box.right - g_.padEnd - w; break;
+        case HAlign::Right: x = it.box.right - PadR() - w; break;
         case HAlign::Center:
         case HAlign::CenterContinuous: x = (it.box.left + it.box.right - w) / 2; break;
         default: break;
@@ -669,7 +673,7 @@ class Painting {
       const int times = std::clamp(static_cast<int>((it.box.right - it.box.left - g_.padStart - g_.padEnd) / w), 1, 256);
       for (int i = 0; i < times; ++i) {
         p_.Save();
-        p_.Transform(draw::Matrix::Scale(s, s) * draw::Matrix::Translate(it.box.left + g_.padStart + i * w, baseline));
+        p_.Transform(draw::Matrix::Scale(s, s) * draw::Matrix::Translate(it.box.left + PadL() + i * w, baseline));
         DrawLines(l, 0, pitchText);
         p_.Restore();
       }
