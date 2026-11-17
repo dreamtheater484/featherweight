@@ -221,12 +221,17 @@ TEST(sheet_save_prefixed_part) {
 TEST(sheet_save_sheets_names_styles) {
   Parts parts = WorkbookParts({"<sheetData/>", "<sheetData><row r=\"2\"><c r=\"B2\"><v>5</v></c></row></sheetData>",
                                "<sheetData/>"});
-  // Sheet3 alone uses only3.xml; it shares shared.xml with Sheet1.
-  AddPart(parts, "xl/extra/only3.xml", "<only/>", "", "xl/worksheets/sheet3.xml", "rX", "urn:test", "../extra/only3.xml");
-  AddPart(parts, "xl/extra/shared.xml", "<shared/>", "", "xl/worksheets/sheet3.xml", "rY", "urn:test",
-          "../extra/shared.xml");
-  AddRel(parts, "xl/worksheets/sheet1.xml", "rY", "urn:test", "../extra/shared.xml");
-  auto book = OpenZip(test::MakeZip(parts));
+  // Sheet3 alone uses only3.png; it shares shared.png with Sheet1 (pictures nothing shows, which
+  // Excel keeps).
+  std::string& types = PartOf(parts, "[Content_Types].xml");
+  types.insert(types.find("<Default "), "<Default Extension=\"png\" ContentType=\"image/png\"/>");
+  const std::string png("\x89PNG\r\n\x1a\n", 8), image = std::string(kRel) + "image";
+  AddPart(parts, "xl/media/only3.png", png, "", "xl/worksheets/sheet3.xml", "rX", image, "../media/only3.png");
+  AddPart(parts, "xl/media/shared.png", png, "", "xl/worksheets/sheet3.xml", "rY", image, "../media/shared.png");
+  AddRel(parts, "xl/worksheets/sheet1.xml", "rY", image, "../media/shared.png");
+  std::vector<uint8_t> zip = test::MakeZip(parts);
+  Keep("save-sheets-original", zip);
+  auto book = OpenZip(zip);
   if (!book) return;
   Editor ed(*book);
   CHECK(ed.AddSheet(1, "New"));
@@ -262,8 +267,8 @@ TEST(sheet_save_sheets_names_styles) {
   // Sheet3's part went, with what only it used.
   CHECK(PartText(saved, "/xl/worksheets/sheet3.xml").empty());
   CHECK(PartText(saved, "/xl/worksheets/_rels/sheet3.xml.rels").empty());
-  CHECK(PartText(saved, "/xl/extra/only3.xml").empty());
-  CHECK(!PartText(saved, "/xl/extra/shared.xml").empty());
+  CHECK(PartText(saved, "/xl/media/only3.png").empty());
+  CHECK(!PartText(saved, "/xl/media/shared.png").empty());
   CHECK(PartText(saved, "/[Content_Types].xml").find("sheet3.xml") == std::string::npos);
 }
 
