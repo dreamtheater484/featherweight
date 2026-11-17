@@ -1,0 +1,53 @@
+# S2 build from scratch: a small invoice, typed into a blank workbook in the en-NL region
+# (decimal comma, dd/MM/yyyy, ";" between arguments). See budget.steps.
+sheet-name "Invoice"
+enter A1 "INVOICE"
+format A1 bold
+format A1 size=16
+enter A3 "Invoice number"
+enter B3 "2027-014"
+enter A4 "Date"
+enter B4 "17/11/2026"
+enter A5 "Due date"
+enter B5 "=B4+30"
+format B5 numfmt=dd/mm/yyyy
+enter A7 "Bill to"
+enter B7 "Jansen B.V."
+enter B8 "Kerkstraat 12"
+enter B9 "1234 AB Utrecht"
+enter A11 "Description"
+enter B11 "Quantity"
+enter C11 "Unit price"
+enter D11 "Amount"
+format A11:D11 bold
+format A11:D11 border=bottom
+enter A12 "Consulting hours"
+enter B12 "12"
+enter C12 "85"
+enter A13 "Travel costs"
+enter B13 "1"
+enter C13 "42,50"
+enter A14 "Software licence"
+enter B14 "3"
+enter C14 "19,95"
+enter A15 "Printing"
+enter B15 "250"
+enter C15 "0,08"
+enter D12 "=B12*C12"
+fill-down D12:D15
+enter A17 "Subtotal"
+autosum D17 "=SUM(D12:D16)"
+enter A18 "VAT"
+enter C18 "21%"
+enter D18 "=ROUND(D17*C18;2)"
+enter A19 "Total"
+enter D19 "=D17+D18"
+format A19:D19 bold
+format D19 border=double-top
+format C12:D19 numfmt=[$€-413] #,##0.00
+format C18 numfmt=0%
+format B11:D11 align=right
+width A 20
+width B:C 12
+width D 14
+save
