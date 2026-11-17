@@ -1426,3 +1426,50 @@ TEST(sheet_calc_typed_beyond_the_extent) {
   settle();
   CHECK_EQ(Number(*book, "E4"), 551.0);
 }
+
+TEST(sheet_calc_typed_dynamic_arrays) {
+  // A typed formula that gives an array spills from its cell (Excel 365's dynamic arrays): the
+  // grid asks SpillSize, the editor stores a dynamic array master over the cells, the engine spills.
+  namespace edit = fw::sheet::edit;
+  using fw::sheet::Range;
+  auto book = OpenSheet("<row r=\"5\"><c r=\"C5\"><v>9</v></c></row>", "<calcPr calcId=\"191029\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  edit::Editor ed(*book);
+  Follow(ed, calc);
+  auto settle = [&] {
+    while (!calc.CalcStep(8)) {
+    }
+  };
+  Range r;
+  CHECK(calc.SpillSize("_xlfn.SEQUENCE(3)", 0, 0, 0, r) && r == (Range{0, 0, 2, 0}));
+  CHECK(!calc.SpillSize("SUM(1,2)", 0, 0, 1, r));
+  CHECK(calc.SpillSize("_xlfn.SEQUENCE(1,3)", 0, 4, 0, r) && r == Range::Cell(4, 0));  // C5 is in the way
+  edit::CellInput in = edit::CellInput::Formula("_xlfn.SEQUENCE(3)");
+  in.dynamic = true;
+  in.arrayRange = Range{0, 0, 2, 0};
+  CHECK(ed.SetCell(0, 0, 0, in));
+  settle();
+  CHECK_EQ(Number(*book, "A2"), 2.0);
+  CHECK_EQ(Number(*book, "A3"), 3.0);
+  fw::sheet::FormulaInfo f;
+  CHECK(book->GetSheet(0).GetFormula(0, 0, f) && f.dynamic && f.kind == fw::sheet::FormulaKind::Array &&
+        f.ref == (Range{0, 0, 2, 0}));
+  // Blocked: #SPILL! in its cell alone.
+  in = edit::CellInput::Formula("_xlfn.SEQUENCE(1,3)");
+  in.dynamic = true;
+  in.arrayRange = Range::Cell(4, 0);
+  CHECK(ed.SetCell(0, 4, 0, in));
+  settle();
+  fw::sheet::CellInfo c;
+  CHECK(book->GetSheet(0).GetCell(4, 0, c) && c.value.type == fw::sheet::ValueType::Error &&
+        c.value.error == fw::sheet::ErrorCode::Spill);
+  CHECK(!book->GetSheet(0).GetCell(4, 1, c) || c.value.type == fw::sheet::ValueType::Empty);
+  // Undone: the spilled values go with it.
+  ed.Undo(2);
+  settle();
+  CHECK(!book->GetSheet(0).GetCell(1, 0, c) || c.value.type == fw::sheet::ValueType::Empty);
+}

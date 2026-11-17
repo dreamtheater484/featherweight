@@ -201,6 +201,36 @@ void WorkbookCalc::CellsEdited(int sheet, const Range& cells) {
     for (const calc::Cell& at : entered) engine_->CalculateCell(at);
 }
 
+bool WorkbookCalc::SpillSize(std::string_view formula, int sheet, uint32_t row, uint32_t col, Range& spill) {
+  while (Opening()) OpenStep(1e9);
+  const calc::Cell at{sheet, static_cast<int32_t>(row), static_cast<int32_t>(col)};
+  auto f = engine_->CompileAt(formula, at, true);
+  if (!f) return false;
+  Evaluator ev(*this, engine_.get());
+  Value v;
+  ev.Evaluate(*f, at, v);
+  if (!v.IsArray() || (v.array().rows() <= 1 && v.array().cols() <= 1)) return false;
+  const uint64_t lastRow = uint64_t{row} + static_cast<uint64_t>(v.array().rows()) - 1;
+  const uint64_t lastCol = uint64_t{col} + static_cast<uint64_t>(v.array().cols()) - 1;
+  spill = Range::Cell(row, col);
+  if (lastRow > 1048575 || lastCol > 16383) return true;  // off the sheet
+  const Range want{row, col, static_cast<uint32_t>(lastRow), static_cast<uint32_t>(lastCol)};
+  // Blocked by something in the way: a value or formula, a merged cell, a table.
+  const Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  bool blocked = false;
+  s.ForEachCell(want, [&](const CellInfo& c) {
+    blocked = !(c.row == row && c.col == col) && (c.hasFormula || c.value.type != ValueType::Empty);
+    return !blocked;
+  });
+  auto overlaps = [&](const Range& r) {
+    return r.firstRow <= want.lastRow && r.lastRow >= want.firstRow && r.firstCol <= want.lastCol && r.lastCol >= want.firstCol;
+  };
+  for (const Range& m : s.Merges()) blocked = blocked || overlaps(m);
+  for (const auto& t : s.Tables()) blocked = blocked || overlaps(t.ref);
+  if (!blocked) spill = want;
+  return true;
+}
+
 void WorkbookCalc::StructureEdited() {
   while (Opening()) OpenStep(1e9);
   engine_ = std::make_unique<Engine>(*this);

@@ -61,6 +61,10 @@ class WorkbookCalc : public Host {
   // what depends on the cells becomes dirty. Manual mode: a formula entered is calculated, the rest
   // waits for F9.
   void CellsEdited(int sheet, const Range& cells);
+  // A formula typed in a cell (invariant, without "="), evaluated as Excel 365 does (in an array
+  // context): true when it gives an array of more than one value (a dynamic array), with the cells
+  // it spills over, or the cell alone when something's in the way (it shows #SPILL!).
+  bool SpillSize(std::string_view formula, int sheet, uint32_t row, uint32_t col, Range& spill);
   // Sheets, names, rows or columns inserted or deleted (kSheets, kNames, kShift): every formula is
   // read again and recalculated.
   void StructureEdited();

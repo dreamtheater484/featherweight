@@ -561,6 +561,12 @@ bool WorkbookView::InputFor(const std::wstring& text, int sheet, CellAddr cell, 
     }
     formula = e.text;
     in = edit::CellInput::Formula(e.text.substr(1));
+    // One that gives an array spills from the cell, as in Excel 365 (a dynamic array).
+    Range spill;
+    if (Calc().SpillSize(in.formula, sheet, cell.row, cell.col, spill)) {
+      in.dynamic = true;
+      in.arrayRange = spill;
+    }
     return true;
   }
   if (textFormat) {
