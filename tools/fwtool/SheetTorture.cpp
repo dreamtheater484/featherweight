@@ -470,7 +470,12 @@ class EditApiTarget : public SheetTarget {
         xf.numFmt = ed_.AddNumFmt(what.substr(7)), xf.applyNumFmt = true;
       } else if (what == "border=thin" || what == "border=none") {
         const sh::BorderStyle style = what == "border=thin" ? sh::BorderStyle::Thin : sh::BorderStyle::None;
-        for (sh::BorderSide* side : {&border.left, &border.right, &border.top, &border.bottom}) side->style = style;
+        // Each side whole, as Excel's and the app's border choices set it: the line, automatic color
+        // (No Border is Excel's bare <left/>).
+        for (sh::BorderSide* side : {&border.left, &border.right, &border.top, &border.bottom}) {
+          *side = sh::BorderSide{};
+          side->style = style;
+        }
         xf.border = ed_.AddBorder(border), xf.applyBorder = true;
       } else if (what.starts_with("align=")) {
         const std::string a = what.substr(6);
