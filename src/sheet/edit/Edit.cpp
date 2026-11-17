@@ -11,6 +11,7 @@
 #include <unordered_set>
 
 #include "pkg/Formula.h"
+#include "pkg/XmlWriter.h"
 #include "sheet/calc/Formula.h"
 #include "sheet/calc/Typing.h"
 #include "sheet/edit/Journal.h"
@@ -3412,6 +3413,127 @@ Result Editor::DeleteSheet(int sheet) {
       if (active >= list.size()) active = 0;
       A::FirstTab(book_) = 0;
       st.Change(nullptr, kSheets, Range{});
+      return Result{};
+    });
+  }());
+}
+
+namespace {
+
+// "$A$1:$C$9"
+std::string AbsoluteName(const Range& r) {
+  auto cell = [](uint32_t row, uint32_t col) {
+    std::string name = CellName(row, col);
+    const size_t digits = name.find_first_of("0123456789");
+    return "$" + name.substr(0, digits) + "$" + name.substr(digits);
+  };
+  return cell(r.firstRow, r.firstCol) + ":" + cell(r.lastRow, r.lastCol);
+}
+
+// A filter's autoFilter element, with the sheet's prefix `p`.
+std::string FilterXml(const SheetFilter& f, const std::string& p) {
+  auto num = [](double v) {
+    char buf[48];
+    return std::string(buf, xlsx::FormatNumber(v, 0, buf));
+  };
+  auto attr = [](std::string_view name, std::string_view value) {
+    std::string out = " " + std::string(name) + "=\"";
+    pkg::AppendEscapedAttribute(out, value);
+    return out + "\"";
+  };
+  std::string out = "<" + p + "autoFilter" + attr("ref", RangeName(f.ref));
+  if (f.columns.empty()) return out + "/>";
+  out += ">";
+  for (const FilterColumn& c : f.columns) {
+    if (c.kind == FilterColumn::Kind::Other) {
+      out += c.xml;
+      continue;
+    }
+    out += "<" + p + "filterColumn" + attr("colId", std::to_string(c.colId)) + ">";
+    switch (c.kind) {
+      case FilterColumn::Kind::Values:
+        out += "<" + p + "filters" + (c.blank ? attr("blank", "1") : std::string());
+        if (c.values.empty()) {
+          out += "/>";
+          break;
+        }
+        out += ">";
+        for (const std::string& v : c.values) out += "<" + p + "filter" + attr("val", v) + "/>";
+        out += "</" + p + "filters>";
+        break;
+      case FilterColumn::Kind::Custom:
+        out += "<" + p + "customFilters" + (c.both ? attr("and", "1") : std::string()) + ">";
+        for (const FilterColumn::Condition& k : c.conditions)
+          out += "<" + p + "customFilter" + (k.op == "equal" ? std::string() : attr("operator", k.op)) + attr("val", k.val) +
+                 "/>";
+        out += "</" + p + "customFilters>";
+        break;
+      case FilterColumn::Kind::Top10:
+        out += "<" + p + "top10" + (c.bottom ? attr("top", "0") : std::string()) +
+               (c.percent ? attr("percent", "1") : std::string()) + attr("val", num(c.count)) +
+               attr("filterVal", num(c.threshold)) + "/>";
+        break;
+      default:
+        out += "<" + p + "dynamicFilter" +
+               attr("type", c.kind == FilterColumn::Kind::AboveAverage ? "aboveAverage" : "belowAverage") +
+               attr("val", num(c.threshold)) + "/>";
+        break;
+    }
+    out += "</" + p + "filterColumn>";
+  }
+  return out + "</" + p + "autoFilter>";
+}
+
+}  // namespace
+
+Result Editor::SetFilter(int sheet, const std::optional<SheetFilter>& filter) {
+  Rec rec(*this, JournalOp::SetFilter, [&](JournalRecord& w) { w.I(sheet).Filter(filter); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (filter && !Valid(filter->ref)) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (filter)
+      for (const Table& t : s.Tables())
+        if (Overlaps(t.ref, filter->ref)) return Result::Fail(u"A table has its own filter.");
+    return Run(*this, filter ? u"Filter" : u"Remove Filter", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveFilter(sv);
+      std::optional<SheetFilter> now = filter;
+      if (now) now->filtered = !now->columns.empty();
+      A::Filter(s) = now;
+      // The element in the sheet's part, which saving writes as it is.
+      st.SaveText(sv);
+      detail::PartText& t = A::Text(s);
+      xlsx::PutSheetElement(t, "autoFilter", now ? FilterXml(*now, xlsx::SheetPrefix(t)) : std::string());
+      const bool mode = now && now->filtered;
+      if (s.Props().filterMode != mode) {
+        st.SaveProps(sv);
+        A::Props(s).filterMode = mode;
+      }
+      // Excel's hidden name for the range, local to the sheet.
+      std::vector<DefinedName> names = book_.Names();
+      auto it = std::find_if(names.begin(), names.end(), [&](const DefinedName& n) {
+        return n.sheet == sheet && NameEqualsNoCase(n.name, "_xlnm._FilterDatabase");
+      });
+      if (now) {
+        DefinedName n{"_xlnm._FilterDatabase", sheet, pkg::QuoteSheetName(s.Name()) + "!" + AbsoluteName(now->ref), true};
+        if (it != names.end()) *it = n;
+        else names.push_back(n);
+      } else if (it != names.end()) {
+        names.erase(it);
+      }
+      if (names.size() != book_.Names().size() || !std::equal(names.begin(), names.end(), book_.Names().begin(),
+                                                               [](const DefinedName& a, const DefinedName& b) {
+                                                                 return a.name == b.name && a.sheet == b.sheet &&
+                                                                        a.formula == b.formula && a.hidden == b.hidden;
+                                                               })) {
+        st.SaveBook(false, true);
+        A::Names(book_) = std::move(names);
+        st.Change(nullptr, kNames, Range{});
+      }
+      st.Change(&s, kSheetProps, now ? now->ref : Range{});
       return Result{};
     });
   }());

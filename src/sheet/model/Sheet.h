@@ -208,9 +208,29 @@ struct Table {
 // The sheet's own autoFilter (a table's is in its Table): its range, and whether it has a
 // filterColumn (criteria), so that the rows it hides are filtered out rather than hidden by hand.
 // Read only.
+// One column's criteria in it (a filterColumn), as Excel stores them.
+struct FilterColumn {
+  enum class Kind : uint8_t { Values, Custom, Top10, AboveAverage, BelowAverage, Other };
+  uint32_t colId = 0;  // within the filter's range
+  Kind kind = Kind::Values;
+  std::vector<std::string> values;  // Values: the texts shown that pass
+  bool blank = false;               //   and empty cells
+  struct Condition {
+    std::string op = "equal";  // Excel's names: equal, notEqual, greaterThan, greaterThanOrEqual...
+    std::string val;           // a number invariant, or text with * ? ~
+  };
+  std::vector<Condition> conditions;  // Custom: one or two
+  bool both = false;                  //   both must hold (and), else either
+  double count = 10;                  // Top10: how many (with `percent`, what percent)
+  bool bottom = false, percent = false;
+  double threshold = 0;  // Top10's filterVal; the average for Above/BelowAverage
+  std::string xml;       // Other (colors, icons, dates...): the filterColumn as the file has it
+};
+
 struct SheetFilter {
   Range ref;
-  bool filtered = false;
+  bool filtered = false;  // a column has criteria
+  std::vector<FilterColumn> columns;
 };
 
 // sheetPr, and sheetCalcPr's fullCalcOnLoad.

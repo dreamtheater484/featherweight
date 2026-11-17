@@ -200,6 +200,10 @@ class Editor {
   Result SetSheetState(int sheet, SheetState state);  // the last visible sheet can't be hidden
   // Freezes `rows` rows and `cols` columns from the view's top-left cell; 0, 0 unfreezes.
   Result FreezePanes(int sheet, uint32_t rows, uint32_t cols);
+  // The sheet's filter (Ctrl+Shift+L) with its columns' criteria, or none: written as Excel writes
+  // it (autoFilter, sheetPr filterMode while a column filters, the hidden name
+  // _xlnm._FilterDatabase). The rows it hides are the caller's (HideRows, in the same group).
+  Result SetFilter(int sheet, const std::optional<SheetFilter>& filter);
   // Excel's rules for a sheet name: 1-31 characters, none of : \ / ? * [ ], not starting or
   // ending with ', not "History", and no other sheet's name (without case). Empty when valid.
   std::u16string CheckSheetName(std::string_view name, int except = -1) const;

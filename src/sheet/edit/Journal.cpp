@@ -54,6 +54,20 @@ JournalRecord& JournalRecord::Input(const CellInput& in) {
   return *this;
 }
 
+JournalRecord& JournalRecord::Filter(const std::optional<SheetFilter>& f) {
+  B(f.has_value());
+  if (!f) return *this;
+  R(f->ref).U(f->columns.size());
+  for (const FilterColumn& c : f->columns) {
+    U(c.colId).U(static_cast<uint8_t>(c.kind)).U(c.values.size());
+    for (const std::string& v : c.values) S(v);
+    B(c.blank).U(c.conditions.size());
+    for (const FilterColumn::Condition& k : c.conditions) S(k.op).S(k.val);
+    B(c.both).D(c.count).B(c.bottom).B(c.percent).D(c.threshold).S(c.xml);
+  }
+  return *this;
+}
+
 Journal::Journal() { Add(JournalRecord(JournalOp::Version).U(kVersion)); }
 
 void Journal::Add(const JournalRecord& r) {
@@ -172,6 +186,28 @@ class Fields {
     uint64_t n = U();
     if (n > Left()) ok_ = false;
     return ok_ ? static_cast<size_t>(n) : 0;
+  }
+  std::optional<SheetFilter> Filter() {
+    if (!B()) return std::nullopt;
+    SheetFilter f;
+    f.ref = R();
+    f.columns.resize(Count());
+    for (FilterColumn& c : f.columns) {
+      c.colId = U32();
+      c.kind = static_cast<FilterColumn::Kind>(U());
+      c.values.resize(Count());
+      for (std::string& v : c.values) v = S();
+      c.blank = B();
+      c.conditions.resize(Count());
+      for (FilterColumn::Condition& k : c.conditions) k.op = S(), k.val = S();
+      c.both = B();
+      c.count = D();
+      c.bottom = B();
+      c.percent = B();
+      c.threshold = D();
+      c.xml = S();
+    }
+    return f;
   }
   // The next `n` bytes, skipped.
   std::string_view Bytes(uint64_t n) {
@@ -373,6 +409,12 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         const int sheet = f.Int();
         const auto state = static_cast<SheetState>(f.U());
         if (f.Ok()) r = SetSheetState(sheet, state);
+        break;
+      }
+      case JournalOp::SetFilter: {
+        const int sheet = f.Int();
+        const std::optional<SheetFilter> filter = f.Filter();
+        if (f.Ok()) r = SetFilter(sheet, filter);
         break;
       }
       case JournalOp::FreezePanes: {
