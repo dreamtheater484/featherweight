@@ -302,7 +302,9 @@ std::vector<int> WorkbookView::Commands() {
   for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
   // The grid's own (S2), found by their labels in command search.
   for (int cmd = CmdInsertCells; cmd <= CmdDeleteColumns; ++cmd) ids.push_back(cmd);
-  for (int cmd : {CmdProtectSheet, CmdProtectWorkbook, CmdInsertLink, CmdRemoveLink}) ids.push_back(cmd);  // S3, s3-review
+  for (int cmd : {CmdProtectSheet, CmdProtectWorkbook, CmdInsertLink, CmdRemoveLink, CmdNewNote, CmdDeleteNote, CmdShowNote,
+                  CmdShowAllNotes})  // S3, s3-review
+    ids.push_back(cmd);
   return ids;
 }
 

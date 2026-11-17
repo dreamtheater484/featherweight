@@ -365,6 +365,10 @@ enum Cmd : int {
   // Protection, links, notes and comments (S3, s3-review): 2900-2939.
   CmdProtectSheet = 2900,  // Protect Sheet, or Unprotect Sheet on a protected one
   CmdProtectWorkbook,      // Protect Workbook (its structure), or Unprotect Workbook
+  CmdNewNote,              // Shift+F2: New Note, or Edit Note on a cell with one
+  CmdDeleteNote,
+  CmdShowNote,             // Show/Hide Note
+  CmdShowAllNotes,
   // Links: the app's CmdInsertLink (Ctrl+K) and CmdRemoveLink.
 
   // Defined names (S3, s3-calc): 2970-2999.

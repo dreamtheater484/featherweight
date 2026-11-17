@@ -509,8 +509,12 @@ class WorkbookView : public PagedView {
   // ---- Review (S3, s3-review: WorkbookReview.cpp): Protect Sheet and Protect Workbook, links.
   class ProtectPanel;
   class LinkPanel;
+  class NotePanel;
   std::unique_ptr<PanelContent> protectPanel_;  // a ProtectPanel
   std::unique_ptr<PanelContent> linkPanel_;     // a LinkPanel
+  std::unique_ptr<PanelContent> notePanel_;     // a NotePanel
+  // The active cell's note (not a threaded comment), its text without the author's line.
+  const CellNote* NoteHere(std::wstring* text = nullptr) const;
   void AddReviewCellItems(HMENU m);  // the cell menu's
   bool ReviewCommandState(int cmd, CommandState& s);
   bool ReviewCommand(int cmd);

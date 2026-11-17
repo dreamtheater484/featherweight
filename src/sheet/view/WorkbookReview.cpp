@@ -352,6 +352,118 @@ class WorkbookView::LinkPanel : public PanelContent {
   bool focusWanted_ = false;
 };
 
+namespace {
+
+// The note's author: Windows' user name, as the plan says (not anything the user didn't type).
+std::string NoteAuthor() {
+  wchar_t name[257];
+  DWORD n = static_cast<DWORD>(std::size(name));
+  return GetUserNameW(name, &n) && n > 1 ? WideToUtf8(std::wstring(name, n - 1)) : std::string();
+}
+
+// The text box holds one line: a note's line breaks show as pilcrows.
+std::wstring ToBox(std::wstring s) {
+  std::replace(s.begin(), s.end(), L'\n', L'¶');
+  return s;
+}
+std::wstring FromBox(std::wstring s) {
+  std::replace(s.begin(), s.end(), L'¶', L'\n');
+  return s;
+}
+
+}  // namespace
+
+// New Note and Edit Note (Shift+F2): the note's text, shown or not; Delete.
+class WorkbookView::NotePanel : public PanelContent {
+ public:
+  explicit NotePanel(WorkbookView& view) : v_(view) {
+    text_.autoComplete = false;
+    text_.label = L"Note";
+    text_.onEnter = [this] { Apply(); };
+    shown_.toggle = true;
+    shown_.text = L"Keep shown";
+    shown_.onInvoke = [this] { shown_.checked = !shown_.checked; v_.host_.ViewInvalidate(); };
+    save_.text = L"Save";
+    save_.onInvoke = [this] { Apply(); };
+    delete_.text = L"Delete note";
+    delete_.onInvoke = [this] {
+      if (!v_.EditRefused(v_.Ed().SetNote(static_cast<int>(v_.sheet_), cell_, std::nullopt))) Close();
+    };
+  }
+  std::wstring Title() const override { return editing_ ? L"Edit note" : L"New note"; }
+
+  void Open() {
+    cell_ = v_.active_;
+    std::wstring text;
+    const CellNote* note = v_.NoteHere(&text);
+    editing_ = note != nullptr;
+    author_ = note ? WideToUtf8(note->author) : NoteAuthor();
+    text_.SetText(ToBox(text));
+    shown_.checked = note && note->shown;
+    focusWanted_ = true;
+  }
+
+  std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
+    ui_ = ui;
+    const float left = body.left + 16 * ui, right = body.right - 16 * ui;
+    labelRc_ = RectF(left, body.top + 12 * ui, right, body.top + 28 * ui);
+    text_.rc = RectF(left, body.top + 30 * ui, right, body.top + 62 * ui);
+    shown_.rc = RectF(left, body.top + 72 * ui, left + 130 * ui, body.top + 100 * ui);
+    save_.rc = RectF(left, body.top + 112 * ui, left + 100 * ui, body.top + 144 * ui);
+    delete_.rc = RectF(save_.rc.right + 8 * ui, save_.rc.top, save_.rc.right + 138 * ui, save_.rc.bottom);
+    noteRc_ = RectF(left, save_.rc.bottom + 12 * ui, right, save_.rc.bottom + 72 * ui);
+    std::vector<Control*> out = {&text_, &shown_, &save_};
+    if (editing_) out.push_back(&delete_);
+    delete_.visible = editing_;
+    return out;
+  }
+
+  void Draw(Canvas& c) override {
+    const Palette& p = theme::P();
+    const std::wstring by = author_.empty() ? std::wstring() : L" by " + Utf8ToWide(author_);
+    c.Text(L"Note on " + Utf8ToWide(CellName(cell_.row, cell_.col)) + by, labelRc_, p.textSecondary, 12 * ui_);
+    c.TextWrapped(L"Enter saves. A ¶ starts a new line in the note.", noteRc_, p.textSecondary, 12 * ui_, 3);
+    if (focusWanted_) {
+      text_.TakeFocus();
+      focusWanted_ = false;
+    }
+  }
+
+ private:
+  void Close() {
+    v_.host_.ViewShowPanel(nullptr);
+    v_.host_.ViewFocusPage();
+    v_.host_.ViewInvalidate();
+  }
+  void Apply() {
+    edit::Editor::Note n{author_, WideToUtf8(FromBox(text_.Text())), shown_.checked};
+    if (!v_.EditRefused(v_.Ed().SetNote(static_cast<int>(v_.sheet_), cell_, n))) Close();
+  }
+
+  WorkbookView& v_;
+  CellAddr cell_{};
+  bool editing_ = false;
+  std::string author_;
+  FocusComboBox text_;
+  PanelButton shown_, save_, delete_;
+  D2D1_RECT_F labelRc_{}, noteRc_{};
+  float ui_ = 1;
+  bool focusWanted_ = false;
+};
+
+const CellNote* WorkbookView::NoteHere(std::wstring* text) const {
+  const SheetObjects* o = Objects();
+  const CellNote* n = o ? o->NoteAt(active_.row, active_.col) : nullptr;
+  if (!n || n->threaded) return nullptr;
+  if (text) {
+    *text = n->text;
+    // Excel's New Note starts with "Author:" on its own line.
+    const std::wstring head = n->author + L":\n";
+    if (!n->author.empty() && text->rfind(head, 0) == 0) text->erase(0, head.size());
+  }
+  return n;
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 
@@ -397,16 +509,42 @@ bool WorkbookView::ReviewCommandState(int cmd, CommandState& s) {
       s.enabled = any;
       return true;
     }
+    case CmdNewNote:
+      s.label = grid && !ChartSheet() && NoteHere() ? L"Edit note" : L"New note";
+      s.shortcut = L"Shift+F2";
+      s.enabled = grid && !ChartSheet();
+      return true;
+    case CmdDeleteNote:
+      s.label = L"Delete note";
+      s.enabled = grid && !ChartSheet() && NoteHere();
+      return true;
+    case CmdShowNote: {
+      const CellNote* n = grid && !ChartSheet() ? NoteHere() : nullptr;
+      s.label = n && n->shown ? L"Hide note" : L"Show note";
+      s.enabled = n != nullptr;
+      return true;
+    }
+    case CmdShowAllNotes: {
+      bool any = false;
+      if (const SheetObjects* o = grid && !ChartSheet() ? Objects() : nullptr)
+        for (const CellNote& n : o->Notes()) any = any || !n.threaded;
+      s.label = L"Show all notes";
+      s.enabled = any;
+      return true;
+    }
     default: return false;
   }
 }
 
 void WorkbookView::AddReviewCellItems(HMENU m) {
-  for (int cmd : {CmdInsertLink, CmdRemoveLink}) {
+  for (int cmd : {CmdInsertLink, CmdRemoveLink, CmdNewNote, CmdDeleteNote, CmdShowNote}) {
     CommandState s;
     ReviewCommandState(cmd, s);
-    if (cmd == CmdRemoveLink && !s.enabled) continue;
-    menu::AppendItem(m, static_cast<UINT>(cmd), cmd == CmdInsertLink ? s.label + L"…\tCtrl+K" : s.label, s.enabled);
+    if ((cmd == CmdRemoveLink || cmd == CmdDeleteNote || cmd == CmdShowNote) && !s.enabled) continue;
+    std::wstring text = s.label;
+    if (cmd == CmdInsertLink) text += L"…\tCtrl+K";
+    if (cmd == CmdNewNote) text += L"…\tShift+F2";
+    menu::AppendItem(m, static_cast<UINT>(cmd), text, s.enabled);
   }
 }
 
@@ -440,6 +578,38 @@ bool WorkbookView::ReviewCommand(int cmd) {
       return true;
     }
     case CmdRemoveLink: EditRefused(Ed().SetHyperlink(static_cast<int>(sheet_), Selected(), std::nullopt)); return true;
+    case CmdNewNote: {
+      if (ChartSheet()) return true;
+      if (!notePanel_) notePanel_ = std::make_unique<NotePanel>(*this);
+      auto* panel = static_cast<NotePanel*>(notePanel_.get());
+      panel->Open();
+      host_.ViewShowPanel(panel);
+      return true;
+    }
+    case CmdDeleteNote: EditRefused(Ed().SetNote(static_cast<int>(sheet_), active_, std::nullopt)); return true;
+    case CmdShowNote:
+    case CmdShowAllNotes: {
+      // Each note again with its text, shown or hidden (all shown unless every one is).
+      const SheetObjects* o = Objects();
+      if (!o) return true;
+      std::vector<CellNote> notes;
+      bool allShown = true;
+      for (const CellNote& n : o->Notes())
+        if (!n.threaded && (cmd == CmdShowAllNotes || (n.row == active_.row && n.col == active_.col))) {
+          notes.push_back(n);
+          allShown = allShown && n.shown;
+        }
+      edit::EditGroup group(Ed(), cmd == CmdShowNote ? u"Show Note" : u"Show All Notes");
+      for (const CellNote& n : notes) {
+        std::wstring text = n.text;
+        const std::wstring head = n.author + L":\n";
+        if (!n.author.empty() && text.rfind(head, 0) == 0) text.erase(0, head.size());
+        const edit::Editor::Note note{WideToUtf8(n.author), WideToUtf8(text), cmd == CmdShowNote ? !n.shown : !allShown};
+        if (EditRefused(Ed().SetNote(static_cast<int>(sheet_), CellAddr{n.row, n.col}, note))) return true;
+      }
+      group.done = true;
+      return true;
+    }
     default: return false;
   }
 }

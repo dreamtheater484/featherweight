@@ -215,6 +215,7 @@ bool WorkbookView::OnKeyDown(UINT vk, UINT mods) {
       MoveAfterEntry(shift ? -1 : 1, 0);
       return true;
     case VK_F2:
+      if (shift && !ctrl && !alt) return ReviewCommand(CmdNewNote);  // New Note, or Edit Note
       if (ctrl || shift || alt) return false;
       BeginEdit(CellEditor::Mode::Edit, FormulaBarText());
       return true;
