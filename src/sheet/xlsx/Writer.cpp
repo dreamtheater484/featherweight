@@ -17,6 +17,7 @@ constexpr std::string_view kDeclaration = "<?xml version=\"1.0\" encoding=\"UTF-
 
 // "x:" for a start tag "<x:sheetData ...>", "" without a prefix.
 std::string PrefixOf(std::string_view startTag) {
+  if (startTag.empty()) return {};
   size_t end = 1;
   while (end < startTag.size() && startTag[end] != ' ' && startTag[end] != '/' && startTag[end] != '>' &&
          startTag[end] != '\t' && startTag[end] != '\r' && startTag[end] != '\n')

@@ -3,7 +3,9 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cwchar>
+#include <functional>
 #include <cwctype>
 #include <unordered_set>
 
@@ -153,16 +155,48 @@ std::vector<bool> FilterRows(const Workbook& book, const Sheet& sheet, const Ran
   const size_t rows = ref.lastRow > ref.firstRow ? ref.lastRow - ref.firstRow : 0;
   std::vector<bool> keep(rows, true);
   for (const FilterCriteria& c : criteria) {
-    if (!c.listed && c.conditions.empty()) continue;
+    if (!c.listed && c.conditions.empty() && c.special == FilterCriteria::Special::None) continue;
     std::unordered_set<std::wstring> values;
     for (const std::wstring& v : c.values) values.insert(Lower(v));
     const uint32_t col = ref.firstCol + c.column;
+    // Top 10 and the average: a threshold over the whole column's numbers (other columns' filters
+    // don't change it).
+    double limit = 0;
+    if (c.special != FilterCriteria::Special::None) {
+      std::vector<double> numbers;
+      for (size_t i = 0; i < rows; ++i)
+        if (const Value v = sheet.GetValue(ref.firstRow + 1 + static_cast<uint32_t>(i), col); v.type == ValueType::Number)
+          numbers.push_back(v.number);
+      if (c.special == FilterCriteria::Special::Top10 && !numbers.empty()) {
+        size_t k = c.percent ? static_cast<size_t>(std::floor(static_cast<double>(numbers.size()) * c.count / 100))
+                             : static_cast<size_t>(std::max(0.0, c.count));
+        k = std::clamp<size_t>(k, 1, numbers.size());
+        auto nth = numbers.begin() + static_cast<std::ptrdiff_t>(k - 1);
+        if (c.bottom) std::nth_element(numbers.begin(), nth, numbers.end());
+        else std::nth_element(numbers.begin(), nth, numbers.end(), std::greater<double>());
+        limit = *nth;
+      } else if (!numbers.empty()) {
+        double sum = 0;
+        for (double n : numbers) sum += n;
+        limit = sum / static_cast<double>(numbers.size());
+      }
+    }
     for (size_t i = 0; i < rows; ++i) {
       if (!keep[i]) continue;
       const uint32_t row = ref.firstRow + 1 + static_cast<uint32_t>(i);
       const Value v = sheet.GetValue(row, col);
-      const std::wstring shown = ShownText(book, sheet, row, col, locale);
       bool pass;
+      if (c.special != FilterCriteria::Special::None) {
+        const bool number = v.type == ValueType::Number;
+        switch (c.special) {
+          case FilterCriteria::Special::Top10: pass = number && (c.bottom ? v.number <= limit : v.number >= limit); break;
+          case FilterCriteria::Special::AboveAverage: pass = number && v.number > limit; break;
+          default: pass = number && v.number < limit; break;
+        }
+        keep[i] = pass;
+        continue;
+      }
+      const std::wstring shown = ShownText(book, sheet, row, col, locale);
       if (c.listed) {
         pass = v.type == ValueType::Empty ? c.blanks : values.count(Lower(shown)) > 0;
       } else {

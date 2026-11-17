@@ -934,6 +934,17 @@ void WorkbookView::Autosave() {
   if (Ready() && file_->Dirty()) file_->Autosave(*book_, Ed());
 }
 
+// A recovered journal: its edits made again through the editor (the engine follows them, and the
+// tab's own journal records them for this session's recovery file).
+bool WorkbookView::ReplayEdits(std::string_view records, std::wstring& error) {
+  if (!Ready()) return false;
+  if (records.empty()) return true;
+  const edit::Result r = Ed().Replay(records);
+  if (r) return true;
+  error = std::wstring(r.message.begin(), r.message.end());
+  return false;
+}
+
 FileChange WorkbookView::CheckFileOnDisk() {
   // Our own save changes the file: not another program's.
   if (!Ready() || file_->SaveRunning()) return FileChange::None;

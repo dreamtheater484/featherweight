@@ -6,11 +6,8 @@
 
 #include "FileSession.h"
 #include "sheet/csv/Csv.h"
+#include "sheet/edit/Journal.h"
 #include "sheet/model/Workbook.h"
-
-namespace fw::sheet::edit {
-class Editor;
-}
 
 // The file behind a workbook tab (S2 "Saving"): what FileSession does for any document (safe
 // saving with a backup of the original, Excel's ~$ owner file while there are unsaved edits,
@@ -62,9 +59,17 @@ class WorkbookFile : public FileSession {
   // StartSave and FinishSave, waiting for the write (closing a tab, scripted commands, tests).
   bool Save(fw::sheet::Workbook& book, fw::sheet::edit::Editor& editor, const std::wstring& path, std::wstring& error);
 
-  // The window's autosave timer: unsaved changes go to the recovery folder, the workbook written as
-  // a save would write it (a CSV file's values as CSV), on the UI thread; the workbook stays as it
-  // is. Nothing while a save runs or when the recovery folder is up to date.
+  // Crash recovery from the edit journal (sheet/edit/Journal.h): the journal the tab's Editor
+  // records into, attached when the Editor is made, before its first edit
+  // (editor.SetJournal(file.JournalFor(book))). nullptr for a workbook read from CSV: it has no
+  // package bytes as opened to replay on, so its autosaves stay whole files.
+  fw::sheet::edit::Journal* JournalFor(const fw::sheet::Workbook& book);
+
+  // The window's autosave timer: unsaved changes go to the recovery folder. With a journal
+  // attached, the edits' records not yet there are appended to the file as opened (the package
+  // keeps those bytes through saves); otherwise (CSV, a protected workbook) the workbook is written
+  // as a save would write it (a CSV file's values as CSV), on the UI thread. The workbook stays as
+  // it is. Nothing while a save runs or when the recovery folder is up to date.
   void Autosave(fw::sheet::Workbook& book, fw::sheet::edit::Editor& editor);
 
  private:
@@ -73,4 +78,6 @@ class WorkbookFile : public FileSession {
                 std::function<void()> done, std::wstring& error);
   std::unique_ptr<Running> run_;
   fw::sheet::csv::Options csv_;
+  fw::sheet::edit::Journal edits_;
+  bool journaled_ = false;  // an Editor records into edits_
 };

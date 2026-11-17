@@ -115,6 +115,7 @@ class WorkbookView : public PagedView {
   SaveFormat SaveAsFormat() const override;
   std::vector<SaveFormat> OtherSaveFormats() const override;
   void Autosave() override;
+  bool ReplayEdits(std::string_view records, std::wstring& error) override;  // s2-format: WorkbookCommands.cpp
   FileChange CheckFileOnDisk() override;
   // CSV (s2-format): an Excel workbook saves a copy of its first sheet's values as CSV; a CSV file's
   // Save As suggests a workbook; saving a CSV that holds more than values asks first (the banner).
@@ -123,8 +124,9 @@ class WorkbookView : public PagedView {
   std::wstring SuggestedSavePath() const override;
   std::wstring FormatLoss(const std::wstring& path) const override;
   void KeepFormat() override { keepFormat_ = true; }
-  // format:size=14, font=, color=RRGGBB, fill=RRGGBB, numfmt=<code as typed here>, border=, align=,
-  // wrap, bold, italic: the selection, through the toolbar's and Format Cells' calls (WorkbookFormat.cpp).
+  // format:size=14, font=, color=RRGGBB, fill=RRGGBB, numfmt=<code as typed here>, code=<English code>,
+  // border=, align=, wrap, bold, italic, locked, hidden, style=: the selection, through the toolbar's
+  // and Format Cells' calls (WorkbookFormat.cpp).
   bool ScriptOp(const std::wstring& op, const std::wstring& arg) override;
   bool CanPrint() const override { return Ready(); }
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;
@@ -437,9 +439,8 @@ class WorkbookView : public PagedView {
   bool DataCommandState(int cmd, CommandState& s);
   // Sort and remove duplicates: the range they work on (the selection, or the current region).
   Range DataRange();
-  // The data rows `range` holds rewritten in `order` (source rows), the first `keep` of them; the
-  // rest of the range emptied. One undo step.
-  bool MoveRows(const Range& range, const std::vector<uint32_t>& order, size_t keep, std::u16string name);
+  // Through the edit layer's SortRows: formulas move as Excel moves them, one undo step; refused
+  // over merged cells or array formulas, with Excel's message.
   bool SortRange(const Range& range, bool header, const std::vector<data::SortKey>& keys);
   bool RemoveDuplicates(const Range& range, bool header, const std::vector<uint32_t>& columns);
   class DataPanel;

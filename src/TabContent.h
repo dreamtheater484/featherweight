@@ -212,6 +212,9 @@ class TabContent {
   virtual bool ScriptOp(const std::wstring& /*op*/, const std::wstring& /*arg*/) { return false; }
   // Editors: unsaved changes go to the recovery folder now and then (the window's timer).
   virtual void Autosave() {}
+  // A recovered journal's edits (pkg/Recovery.h ReadJournal), made again on the document loaded as
+  // it was opened. False with a message when one couldn't be made: the edits before it stay.
+  virtual bool ReplayEdits(std::string_view /*records*/, std::wstring& /*error*/) { return false; }
   // Editors: whether the file changed on disk, when the window or the tab is activated. Each
   // change is reported once.
   virtual FileChange CheckFileOnDisk() { return FileChange::None; }

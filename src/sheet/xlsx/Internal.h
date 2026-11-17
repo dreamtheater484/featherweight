@@ -73,6 +73,16 @@ std::vector<XmlPiece> TopLevel(std::string_view xml);
 // schema puts it; and the prefix the sheet's elements are written with ("x:" or "").
 void PutSheetElement(detail::PartText& t, std::string_view local, const std::string& xml);
 std::string SheetPrefix(const detail::PartText& t);
+// One font, fill, border or cell format as styles.xml has it, and read back from that (the edit
+// journal records the formats added this way, as faithful as saving them).
+std::string StyleItemXml(const Font& f);
+std::string StyleItemXml(const Fill& f);
+std::string StyleItemXml(const Border& b);
+std::string StyleItemXml(const Xf& x);
+bool ReadStyleItem(std::string_view xml, Font& out);
+bool ReadStyleItem(std::string_view xml, Fill& out);
+bool ReadStyleItem(std::string_view xml, Border& out);
+bool ReadStyleItem(std::string_view xml, Xf& out);
 
 pkg::Status ReadStyles(std::string_view xml, const pkg::Limits& limits, std::string_view label, Styles& styles);
 pkg::Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::string& part, Table& table);

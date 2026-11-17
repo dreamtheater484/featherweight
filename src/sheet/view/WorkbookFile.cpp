@@ -96,6 +96,13 @@ bool WorkbookFile::StartSave(fw::sheet::Workbook& book, fw::sheet::edit::Editor&
   auto r = std::make_unique<Running>();
   if (!BeginSave(path, r->job, error)) return false;
   if (FormatOf(r->job.target, book.Format()) == FileFormat::Csv) return StartCsv(std::move(r), book, editor, done, error);
+  // A workbook read from CSV has no package yet: the smallest one, which the save fills from the model.
+  if (!book.GetPackage()) {
+    if (const pkg::Status st = fw::sheet::xlsx::GiveBasePackage(book); !st.Ok()) {
+      error = r->job.name + L" couldn't be saved. " + fw::Utf8ToWide(st.message);
+      return false;
+    }
+  }
   editor.BeginSave();
   pkg::Status st = fw::sheet::xlsx::PrepareSave(book, editor, r->plan, FormatOf(r->job.target, book.Format()));
   if (!st.Ok()) {
@@ -171,9 +178,9 @@ bool WorkbookFile::FinishSave(std::wstring& error) {
   if (run_->worker.joinable()) run_->worker.join();
   std::unique_ptr<Running> r = std::move(run_);
   if (r->csv && r->written.Ok() && r->result.Ok()) {
-    // The file has the workbook's values; nothing else of it was the file's (Format is Csv).
-    r->editor->EndSave();
-    r->editor->MarkSaved();
+    // The file has the workbook's values. Saved, but every edit still counts for a later .xlsx save
+    // (this ends the save, too).
+    r->editor->SavedOutside(FileFormat::Csv);
     csv_.tsv = fw::EndsWithNoCase(r->job.target, L".tsv");
     SaveDone(r->job, r->result);
     return true;
@@ -198,8 +205,31 @@ bool WorkbookFile::Save(fw::sheet::Workbook& book, fw::sheet::edit::Editor& edit
   return StartSave(book, editor, path, nullptr, error) && FinishSave(error);
 }
 
+fw::sheet::edit::Journal* WorkbookFile::JournalFor(const fw::sheet::Workbook& book) {
+  if (!book.GetPackage() || book.Format() == FileFormat::Csv) return nullptr;
+  journaled_ = true;
+  return &edits_;
+}
+
 void WorkbookFile::Autosave(fw::sheet::Workbook& book, fw::sheet::edit::Editor& editor) {
   if (run_ || !AutosaveDue()) return;
+  // The edits since the file was opened, after the file as opened: nothing written whole.
+  if (journaled_ && !Protected() && book.GetPackage()) {
+    const pkg::Snapshot& snap = book.GetPackage()->GetSnapshot();
+    std::span<const uint8_t> opened = snap.Bytes();
+    std::vector<uint8_t> copy;  // a file kept on disk, read only to start the journal
+    if (opened.empty() && !JournalStarted()) {
+      try {
+        copy.resize(static_cast<size_t>(snap.Size()));
+      } catch (const std::bad_alloc&) {
+        return;
+      }
+      if (!snap.ReadAt(0, copy.data(), copy.size())) return;
+      opened = copy;
+    }
+    if (WriteJournal(opened, "xlsx", edits_.All(), edits_.Unwritten())) edits_.Written();
+    return;
+  }
   try {
     if (book.Format() == FileFormat::Csv) {
       fw::sheet::csv::Options o = csv_;

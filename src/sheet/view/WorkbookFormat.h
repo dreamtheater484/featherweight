@@ -42,7 +42,7 @@ class WorkbookView::FormatPanel : public PanelContent {
   std::wstring Title() const override { return L"Format cells"; }
   std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override;
   void Draw(gfx::Canvas& c) override;
-  enum Page { kNumber, kAlignment, kFont, kBorder, kFill, kPages };
+  enum Page { kNumber, kAlignment, kFont, kBorder, kFill, kProtection, kPages };
   void Open(int page);
   // The controls show the active cell's format (when it or the workbook changed).
   void Sync();
@@ -78,7 +78,7 @@ class WorkbookView::FormatPanel : public PanelContent {
   FormatChoice choice_;
   std::vector<std::wstring> typeCodes_;
   // Alignment
-  Dropdown horizontal_, vertical_;
+  Dropdown horizontal_, vertical_, direction_;
   SpinBox indent_, rotation_;
   PanelButton wrap_, shrink_, merge_;
   // Font
@@ -89,10 +89,12 @@ class WorkbookView::FormatPanel : public PanelContent {
   // Border
   Dropdown line_;
   ColorPicker lineColor_;
-  PanelButton borders_[8];
+  PanelButton borders_[10];  // presets, edges, the two diagonals
   // Fill
   ColorPicker fillColor_, patternColor_;
   Dropdown pattern_;
+  // Protection (in effect once the sheet is protected)
+  PanelButton locked_, hidden_;
 };
 
 }  // namespace fw::sheet::view

@@ -363,3 +363,48 @@ TEST(DocFile_NewAndRecoveredDocumentsSuggestAName) {
   CHECK(recovered.Title() == L"Plan (recovered).docx");
   CHECK(recovered.SuggestedPath(*doc) == L"D:\\Docs\\Plan.docx");
 }
+
+// The journal kind of autosave (workbooks): the document as opened once, then the edits' records
+// appended; a save removes it and the next edit starts it again with every record.
+TEST(FileSession_JournalAutosaveStartsAgainAfterASave) {
+  Folder f;
+  Configure(f);
+  const std::wstring path = f.path + L"\\notes.docx";
+  const std::vector<uint8_t> opened = fw::doc::docx::BlankDocx();
+  CHECK(test::WriteFileBytes(path, opened));
+  auto doc = Open(path);
+  CHECK(doc);
+  if (!doc) return;
+  auto readBack = [&](std::vector<uint8_t>& document, std::string& records) {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((DocFile::Config().recovery + L"\\*.fwr").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    FindClose(h);
+    fw::pkg::recovery::Entry e;
+    std::vector<uint8_t> r;
+    const bool ok = fw::pkg::recovery::ReadJournal(DocFile::Config().recovery + L"\\" + fd.cFileName, e, document, r);
+    records.assign(r.begin(), r.end());
+    return ok && e.journal && e.meta == "m" && e.originalPath == path;
+  };
+  {
+    DocFile file;
+    file.Opened(path, doc->Package().GetSnapshot().GetStamp());
+    CHECK(!file.WriteJournal(opened, "m", "AB", "AB"));  // nothing unsaved
+    file.Edited(MainPart(*doc));
+    CHECK(file.WriteJournal(opened, "m", "AB", "AB"));
+    CHECK(!file.WriteJournal(opened, "m", "AB", ""));  // nothing new since
+    file.Edited(MainPart(*doc));
+    CHECK(file.WriteJournal(opened, "m", "ABC", "C"));
+    std::vector<uint8_t> document;
+    std::string records;
+    CHECK(readBack(document, records) && document == opened && records == "ABC");
+    std::wstring error;
+    CHECK(file.Save(*doc, path, error));
+    CHECK_EQ(f.Count(L"Recovery", L"*.fwr"), 0u);
+    file.Edited(MainPart(*doc));
+    CHECK(file.WriteJournal(opened, "m", "ABCD", "D"));
+    CHECK(readBack(document, records) && document == opened && records == "ABCD");
+  }
+  CHECK_EQ(f.Count(L"Recovery", L"*.fwr"), 0u);  // a clean close
+  DocFile::RecoverySession().End();
+}

@@ -111,15 +111,16 @@ void App::RecoverDocuments(bool open) {
   std::vector<recovery::Entry> entries = std::move(orphans_);
   orphans_.clear();
   int toActivate = -1;
-  size_t failed = 0;
+  size_t failed = 0, partial = 0;
   for (const recovery::Entry& e : entries) {
     if (!open) {
       recovery::Remove(e.file);
       continue;
     }
     recovery::Entry entry;
-    std::vector<uint8_t> bytes;
-    if (!recovery::Read(e.file, entry, bytes)) {
+    std::vector<uint8_t> bytes, records;
+    // A journal (a workbook's): the document as it was opened, and its edits, made again below.
+    if (!(e.journal ? recovery::ReadJournal(e.file, entry, bytes, records) : recovery::Read(e.file, entry, bytes))) {
       ++failed;
       continue;
     }
@@ -149,6 +150,9 @@ void App::RecoverDocuments(bool open) {
       ++failed;
       continue;
     }
+    if (!records.empty() &&
+        !view->ReplayEdits(std::string_view(reinterpret_cast<const char*>(records.data()), records.size()), error))
+      ++partial;  // the edits before the one that couldn't be made are back
     view->ApplyState(FileState{});
     view->Autosave();  // into this session's folder, before the old autosave goes
     recovery::Remove(e.file);
@@ -159,6 +163,9 @@ void App::RecoverDocuments(bool open) {
   if (failed)
     banner_.Show(BannerKind::Error, failed == 1 ? L"A document couldn’t be recovered." :
                                                   std::to_wstring(failed) + L" documents couldn’t be recovered.",
+                 {}, 8000);
+  else if (partial)
+    banner_.Show(BannerKind::Warning, L"The last changes to a recovered workbook couldn’t all be made again. Check it before you save.",
                  {}, 8000);
   UpdateAutosaveTimer();
   Layout();

@@ -132,8 +132,10 @@ std::string AttrXml(std::string_view name, std::string_view value) {
   return out;
 }
 
-// "x:" for a root "<x:worksheet ...>", "" without a prefix.
+// "x:" for a root "<x:worksheet ...>", "" without a prefix (or without a root: a sheet that has no
+// part yet).
 std::string PrefixOf(std::string_view startTag) {
+  if (startTag.empty()) return {};
   size_t end = 1;
   while (end < startTag.size() && std::strchr(" \t\r\n/>", startTag[end]) == nullptr) ++end;
   std::string_view name = startTag.substr(1, end - 1);
@@ -402,18 +404,30 @@ PartText EditedText(const Sheet& s, uint32_t pieces, bool active) {
   return t;
 }
 
-// A new sheet's whole part around its cells.
+// A new sheet's whole part around its cells (a sheet added, or one read from a CSV file), with what
+// edits put around them before it had a part (a sort's state).
 PartText NewSheetText(const Sheet& s, bool active, bool strict) {
   PartText t;
   t.rootStart = "<worksheet xmlns=\"" + std::string(strict ? kMainNsStrict : kMainNs) + "\" xmlns:r=\"" +
                 std::string(strict ? kRelNsStrict : kRelNs) + "\">";
-  t.beforeData = DimensionXml(s, "") + ViewsXml(s, t, "", active) + FormatPrXml(s, t, "") + ColsXml(s, "");
+  t.beforeData = s.Text().beforeData;
+  t.afterData = s.Text().afterData;
+  PutElement(t, "dimension", DimensionXml(s, ""));
+  // A sheet read from CSV has no view yet; sheetViews needs one.
+  PutElement(t, "sheetViews",
+             s.Views().empty() ? std::string("<sheetViews><sheetView") + (active ? " tabSelected=\"1\"" : "") +
+                                     " workbookViewId=\"0\"/></sheetViews>"
+                               : ViewsXml(s, t, "", active));
+  PutElement(t, "sheetFormatPr", FormatPrXml(s, t, ""));
+  PutElement(t, "cols", ColsXml(s, ""));
   t.dataStart = "<sheetData>";
   t.hasData = true;
-  t.afterData = MergesXml(s, "") +
-                "<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>";
+  PutElement(t, "mergeCells", MergesXml(s, ""));
+  if (FindElement(t, "pageMargins").empty())
+    PutElement(t, "pageMargins",
+               "<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>");
   t.rootEnd = "</worksheet>";
-  if (s.Props().tabColor.IsSet()) t.beforeData = SheetPrXml(s, t, "") + t.beforeData;
+  if (s.Props().tabColor.IsSet()) PutElement(t, "sheetPr", SheetPrXml(s, t, ""));
   return t;
 }
 
@@ -686,6 +700,28 @@ std::set<std::string> Reachable(const pkg::Package& pkg, const std::set<std::str
 
 void PutSheetElement(PartText& t, std::string_view local, const std::string& xml) { PutElement(t, local, xml); }
 std::string SheetPrefix(const PartText& t) { return PrefixOf(t.rootStart); }
+
+std::string StyleItemXml(const Font& f) { return FontXml(f); }
+std::string StyleItemXml(const Fill& f) { return FillXml(f); }
+std::string StyleItemXml(const Border& b) { return BorderXml(b); }
+std::string StyleItemXml(const Xf& x) { return XfXml(x); }
+
+namespace {
+template <class T>
+bool ReadItem(std::string_view xml, std::string_view list, const std::vector<T>& (Styles::*items)() const, T& out) {
+  const std::string doc = "<styleSheet xmlns=\"" + std::string(kMainNs) + "\"><" + std::string(list) + ">" +
+                          std::string(xml) + "</" + std::string(list) + "></styleSheet>";
+  Styles styles;
+  if (!ReadStyles(doc, pkg::Limits::Default(), "journal", styles).Ok() || (styles.*items)().size() != 1) return false;
+  out = (styles.*items)()[0];
+  return true;
+}
+}  // namespace
+
+bool ReadStyleItem(std::string_view xml, Font& out) { return ReadItem(xml, "fonts", &Styles::Fonts, out); }
+bool ReadStyleItem(std::string_view xml, Fill& out) { return ReadItem(xml, "fills", &Styles::Fills, out); }
+bool ReadStyleItem(std::string_view xml, Border& out) { return ReadItem(xml, "borders", &Styles::Borders, out); }
+bool ReadStyleItem(std::string_view xml, Xf& out) { return ReadItem(xml, "cellXfs", &Styles::CellXfs, out); }
 
 // ---------- The workbook ----------
 
@@ -1023,14 +1059,15 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
     put(wbPart, Bytes(PrintDoc(wb)));
   }
 
-  // Styles and shared strings.
-  if (ed.StylesDirty()) {
+  // Styles and shared strings (a workbook opened from CSV writes them whole: GiveBasePackage).
+  const bool fromCsv = book.Format() == FileFormat::Csv;
+  if (ed.StylesDirty() || fromCsv) {
     if (book.StylesPart().empty()) return Status::Fail(Status::Code::Unsupported, "The workbook has no styles part.");
     std::vector<uint8_t> out;
     if (!(st = StylesPart(book, out)).Ok()) return st;
     put(book.StylesPart(), std::move(out));
   }
-  if (ed.StringsDirty() || ed.MustWriteStrings()) {
+  if (ed.StringsDirty() || ed.MustWriteStrings() || fromCsv) {
     std::string part = book.StringsPart();
     plan.strings = true;
     if (part.empty()) {
@@ -1183,6 +1220,56 @@ std::unique_ptr<Workbook> NewWorkbook(pkg::Status& status) {
   if (!(status = zip.Finish()).Ok()) return nullptr;
   auto package = pkg::Package::Open(pkg::Snapshot::FromBytes(std::move(sink.bytes)), pkg::Limits::Default(), status);
   return package ? Read(std::move(package), status, {.loadAll = true}) : nullptr;
+}
+
+pkg::Status GiveBasePackage(Workbook& book) {
+  if (book.GetPackage()) return {};
+  const std::string main = std::string(kMainNs), rel = std::string(kRelNs);
+  const std::string decl(kDecl);
+  const std::pair<const char*, std::string> parts[] = {
+      {"[Content_Types].xml",
+       decl + "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+              "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+              "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+              "<Override PartName=\"/xl/workbook.xml\" ContentType=\"" + std::string(kXlsxCt) + "\"/>"
+              "<Override PartName=\"/xl/styles.xml\" "
+              "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/></Types>"},
+      {"_rels/.rels",
+       decl + "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+              "<Relationship Id=\"rId1\" Type=\"" + std::string(kRelType) + "officeDocument\" Target=\"xl/workbook.xml\"/>"
+              "</Relationships>"},
+      {"xl/workbook.xml",
+       decl + "<workbook xmlns=\"" + main + "\" xmlns:r=\"" + rel + "\"><bookViews><workbookView/></bookViews><sheets/></workbook>"},
+      {"xl/_rels/workbook.xml.rels",
+       decl + "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+              "<Relationship Id=\"rId1\" Type=\"" + std::string(kRelType) + "styles\" Target=\"styles.xml\"/>"
+              "</Relationships>"},
+      // The model's fonts, fills, borders and cell formats are appended to these lists when saved.
+      {"xl/styles.xml",
+       decl + "<styleSheet xmlns=\"" + main + "\"><fonts count=\"0\"/><fills count=\"0\"/><borders count=\"0\"/>"
+              "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>"
+              "<cellXfs count=\"0\"/><cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>"
+              "<dxfs count=\"0\"/><tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" "
+              "defaultPivotStyle=\"PivotStyleLight16\"/></styleSheet>"},
+  };
+  pkg::MemorySink sink;
+  pkg::ZipWriter zip(sink);
+  pkg::Status status;
+  for (const auto& [name, xml] : parts)
+    if (!(status = zip.Add(name, std::span(reinterpret_cast<const uint8_t*>(xml.data()), xml.size()))).Ok()) return status;
+  if (!(status = zip.Finish()).Ok()) return status;
+  auto package = pkg::Package::Open(pkg::Snapshot::FromBytes(std::move(sink.bytes)), pkg::Limits::Default(), status);
+  if (!package) return status;
+  WorkbookLoader loader(book);
+  loader.SetPackage(std::move(package));
+  loader.SetParts("/xl/workbook.xml", "/xl/styles.xml", std::string(), std::string());
+  // Sheets read without an id (CSV's) get one: Excel repairs a workbook listing sheetId 0.
+  uint32_t last = 0;
+  for (size_t i = 0; i < book.SheetCount(); ++i) last = std::max(last, book.GetSheet(i).SheetId());
+  for (size_t i = 0; i < book.SheetCount(); ++i)
+    if (Sheet& s = book.GetSheet(i); s.SheetId() == 0)
+      WorkbookLoader::SetSheetInfo(s, s.Kind(), s.State(), ++last, s.PartName(), s.RelId());
+  return {};
 }
 
 }  // namespace fw::sheet::xlsx
