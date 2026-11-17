@@ -43,6 +43,11 @@ WorkbookCalc::WorkbookCalc(Workbook& book, const NumLocale* locale)
     conv_.dateOrder = locale->dateOrder;
     conv_.currency = Narrow(locale->currency);
   }
+  // The sheets' and defined names now (cheap), so formulas compile at once (conditional formats).
+  std::vector<std::string> names;
+  for (size_t i = 0; i < book_.SheetCount(); ++i) names.push_back(book_.GetSheet(i).Name());
+  engine_->SetSheets(std::move(names));
+  for (const DefinedName& n : book_.Names()) engine_->DefineName(n.name, n.sheet, n.formula);
 }
 WorkbookCalc::~WorkbookCalc() = default;
 
@@ -185,13 +190,6 @@ double Clock() { return std::chrono::duration<double>(std::chrono::steady_clock:
 }  // namespace
 
 bool WorkbookCalc::LoadSome(double deadline) {
-  if (phase_ == Phase::kNames) {
-    std::vector<std::string> names;
-    for (size_t i = 0; i < book_.SheetCount(); ++i) names.push_back(book_.GetSheet(i).Name());
-    engine_->SetSheets(std::move(names));
-    for (const DefinedName& n : book_.Names()) engine_->DefineName(n.name, n.sheet, n.formula);
-    phase_ = Phase::kSheets, sheet_ = 0;
-  }
   if (phase_ == Phase::kSheets) {
     // Every sheet: formulas may read any. One at a time, as the view reads them at idle.
     for (; sheet_ < book_.SheetCount(); ++sheet_) {

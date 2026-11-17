@@ -66,12 +66,12 @@ class WorkbookCalc : public Host {
   const ConvLocale& Conv() const override { return conv_; }
 
  private:
-  enum class Phase : uint8_t { kNames, kSheets, kFormulas, kGraph, kRecalc, kDone };
+  enum class Phase : uint8_t { kSheets, kFormulas, kGraph, kRecalc, kDone };
   // Load()'s work until `deadline` (Seconds-like, steady clock): true once the formulas are in.
   bool LoadSome(double deadline);
 
   Workbook& book_;
-  Phase phase_ = Phase::kNames;
+  Phase phase_ = Phase::kSheets;
   size_t sheet_ = 0;                // kSheets, kFormulas: the sheet being read
   uint32_t row_ = 0, col_ = 0;      // kFormulas: the next cell
   std::map<std::pair<uint32_t, uint32_t>, std::shared_ptr<const Formula>> shared_;  // this sheet's shared formulas
