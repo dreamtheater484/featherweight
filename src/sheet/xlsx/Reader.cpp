@@ -45,6 +45,16 @@ bool SkipElement(XmlPull& pull) {
 
 std::string_view Attr(pugi::xml_node n, const char* name) { return n.attribute(name).value(); }
 
+// A numFmt's code. Excel writes one that older versions can't read twice: cut down in formatCode
+// ("[$]ggge") and whole in x16r2:formatCode16 ("[$-ja-JP-x-gannen]ggge"), which it reads first.
+std::string_view FormatCode(pugi::xml_node n) {
+  for (pugi::xml_attribute a = n.first_attribute(); a; a = a.next_attribute()) {
+    const std::string_view name = a.name();
+    if (name.size() > 13 && name.substr(name.size() - 13) == ":formatCode16") return a.value();
+  }
+  return Attr(n, "formatCode");
+}
+
 bool ParseBool(std::string_view s, bool def) {
   if (s == "1" || s == "true") return true;
   if (s == "0" || s == "false") return false;
@@ -334,7 +344,7 @@ Status ReadStyles(std::string_view xml, const pkg::Limits& limits, std::string_v
     if (k == "numFmts") {
       ForEachChild(sec, "numFmt", [&](pugi::xml_node n) {
         uint32_t id = 0;
-        if (ParseUInt(Attr(n, "numFmtId"), id)) b.NumFmts()[id] = Attr(n, "formatCode");
+        if (ParseUInt(Attr(n, "numFmtId"), id)) b.NumFmts()[id] = FormatCode(n);
       });
     } else if (k == "fonts") {
       ForEachChild(sec, "font", [&](pugi::xml_node n) { b.Fonts().push_back(ReadFont(n)); });
@@ -369,7 +379,7 @@ Status ReadStyles(std::string_view xml, const pkg::Limits& limits, std::string_v
         }
         if (pugi::xml_node f = Child(n, "numFmt")) {
           d.numFmtId = UIntAttr(f, "numFmtId", 0);
-          d.numFmtCode = Attr(f, "formatCode");
+          d.numFmtCode = FormatCode(f);
         }
         if (pugi::xml_node f = Child(n, "fill")) d.fill = ReadFill(f, true);
         if (pugi::xml_node f = Child(n, "border")) d.border = ReadBorder(f);

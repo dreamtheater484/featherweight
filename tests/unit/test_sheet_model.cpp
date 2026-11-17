@@ -71,8 +71,10 @@ std::vector<std::pair<std::string, std::string>> Package(const std::vector<std::
                  "<calcPr calcId=\"191029\" fullCalcOnLoad=\"1\"/></workbook>"},
                 {"xl/_rels/workbook.xml.rels", rels},
                 {"xl/styles.xml",
-                 "<styleSheet xmlns=\"" + std::string(kMain) + "\">"
-                 "<numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"0.000\"/></numFmts>"
+                 "<styleSheet xmlns=\"" + std::string(kMain) + "\" "
+                 "xmlns:x16r2=\"http://schemas.microsoft.com/office/spreadsheetml/2015/02/main\">"
+                 "<numFmts count=\"2\"><numFmt numFmtId=\"164\" formatCode=\"0.000\"/>"
+                 "<numFmt numFmtId=\"165\" formatCode=\"[$]ggge\" x16r2:formatCode16=\"[$-ja-JP-x-gannen]ggge\"/></numFmts>"
                  "<fonts count=\"2\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font>"
                  "<font><b/><i val=\"0\"/><u/><sz val=\"14\"/><color theme=\"4\" tint=\"-0.5\"/><name val=\"Arial\"/></font></fonts>"
                  "<fills count=\"3\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill>"
@@ -315,6 +317,7 @@ TEST(sheet_read_styles) {
   CHECK_EQ(st.CellXfs().size(), 3u);
   const Xf& xf = st.CellXf(1);
   CHECK(xf.numFmt == 164 && st.FormatCode(164) == "0.000" && st.FormatCode(14).empty());
+  CHECK(st.FormatCode(165) == "[$-ja-JP-x-gannen]ggge");  // formatCode16 is the whole code
   CHECK(xf.alignment.horizontal == HAlign::Center && xf.alignment.vertical == VAlign::Top && xf.alignment.wrap);
   CHECK(xf.alignment.rotation == 45 && xf.alignment.indent == 2);
   const Font& f = st.FontOf(xf);
