@@ -404,3 +404,39 @@ TEST(SheetNumFmt_ParseDates) {
     CHECK(!ParseExact(s, us, false, p));
   CHECK(ParseValue(L"1:45 pm", us, false, p) && std::fabs(p.number - 825 / 1440.0) < 1e-12);  // typed: yes
 }
+
+// Every code of the Excel table shown as the region types it (Format Cells) reads back as a code
+// that shows each value the same.
+TEST(SheetNumFmt_InvariantToLocal) {
+  const NumLocale& nl = EnNlLocale();
+  int failures = 0, checked = 0;
+  for (const Case& c : kCases) {
+    if (c.builtin >= 0 || !*c.code) continue;
+    const std::wstring local = NumberFormat::InvariantToLocal(c.code, nl);
+    std::wstring lower(c.code);
+    for (wchar_t& ch : lower) ch = static_cast<wchar_t>(towlower(ch));
+    if (lower.find(L"a/p") != std::wstring::npos) continue;  // A/P has no form in the region (en-NL)
+    std::wstring back;
+    ++checked;
+    bool ok = NumberFormat::LocalToInvariant(local, nl, back);
+    if (ok) {
+      FormatContext ctx;
+      ctx.locale = &nl;
+      ctx.date1904 = c.date1904;
+      Formatted a, b;
+      const NumberFormat fa(c.code), fb(back);
+      if (c.text) fa.Format(c.text, ctx, a), fb.Format(c.text, ctx, b);
+      else fa.Format(c.number, ctx, a), fb.Format(c.number, ctx, b);
+      ok = a.text == b.text && a.overflow == b.overflow;
+    }
+    if (!ok && ++failures <= 30)
+      std::printf("  '%s' -> '%s' -> '%s'\n", Narrow(c.code).c_str(), Narrow(local).c_str(), Narrow(back).c_str());
+  }
+  std::printf("  %d of %d codes don't come back from the region's form\n", failures, checked);
+  CHECK_EQ(failures, 0);
+  CHECK(NumberFormat::InvariantToLocal(L"#,##0.00;[Red]-#,##0.00", nl) == L"#.##0,00;[Red]-#.##0,00");
+  CHECK(NumberFormat::InvariantToLocal(L"dd/mm/yyyy hh:mm:ss.00", nl) == L"dd/mm/jjjj uu:mm:ss,00");
+  CHECK(NumberFormat::InvariantToLocal(L"General", nl) == L"Standaard");
+  CHECK(NumberFormat::InvariantToLocal(L"[h]:mm", nl) == L"[u]:mm");
+  CHECK(NumberFormat::InvariantToLocal(L"0.00", EnUsLocale()) == L"0.00");
+}

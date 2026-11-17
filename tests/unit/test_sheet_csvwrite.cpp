@@ -77,6 +77,7 @@ TEST(SheetCsvWrite_Untouched) {
   CHECK(RoundTrips(Utf16(L"a,b\r\n1,2\r\n", true), us));
   CHECK(RoundTrips("a,,b,\r\n,,\r\n1\r\n", us));            // ragged rows, empty fields
   CHECK(RoundTrips("", us));
+  CHECK(RoundTrips("a\r\n\"\",,\"\"\r\n", us));  // a last row of empty fields (fuzz_csv found it)
 }
 
 // An edited cell rewrites its row only; the others are copied as they were read.
