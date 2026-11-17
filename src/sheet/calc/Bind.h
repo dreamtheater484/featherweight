@@ -10,6 +10,7 @@
 //   calc.engine().Opened(calc.Settings());
 //   calc.engine().Recalculate();
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -71,6 +72,10 @@ class WorkbookCalc : public Host {
   void CalculateNow();   // F9: then CalcStep until done (dirty and volatile formulas)
   void CalculateFull();  // Ctrl+Alt+F9: every formula
   void CalculateSheet(int sheet);  // Shift+F9: the sheet's dirty and volatile formulas, at once
+  // While `busy` returns true nothing is written to the sheets: a save is reading them on its worker
+  // (calc.HoldWhile([&] { return editor.Saving(); })). CalcStep then does no work and returns
+  // false; F9, Shift+F9 and Ctrl+Alt+F9 do nothing (edits are refused meanwhile anyway).
+  void HoldWhile(std::function<bool()> busy) { busy_ = std::move(busy); }
   // A cell in a circular reference, for the banner and "Circular References: B2"; none while
   // iterative calculation is on (Excel then warns of nothing).
   bool CircularCell(int& sheet, int32_t& row, int32_t& col) const;
@@ -107,6 +112,8 @@ class WorkbookCalc : public Host {
   const NumLocale* locale_;
   ConvLocale conv_;
   std::unique_ptr<Engine> engine_;
+  std::function<bool()> busy_;
+  bool Held() const { return busy_ && busy_(); }
   std::vector<std::pair<int32_t, int32_t>> extents_;
   std::unordered_map<std::string, std::unique_ptr<NumberFormat>> formats_;
 };
