@@ -146,6 +146,9 @@ class Workbook {
   // other newer errors as <v>#VALUE!</v> with a rich value (xl/metadata.xml, xl/richData) that says
   // which. Nothing when that vm isn't an error.
   std::optional<ErrorCode> ValueError(uint32_t vm) const;
+  // Whether a cell's cell metadata (cm, from 1) makes its array formula a dynamic array (XLDAPR
+  // with fDynamic="1"). Sheet::GetFormula says it as FormulaInfo::dynamic.
+  bool DynamicArray(uint32_t cm) const { return cm >= 1 && cm <= dynamicArrays_.size() && dynamicArrays_[cm - 1]; }
 
   // ---- Building (CSV, tests)
   Sheet& AddSheet(std::string name);
@@ -172,6 +175,7 @@ class Workbook {
   CalcProps calc_;
   std::vector<DefinedName> names_;
   std::vector<uint8_t> valueErrors_;  // by vm - 1: an ErrorCode, or 0xFF
+  std::vector<uint8_t> dynamicArrays_;  // by cm - 1: 1 for a dynamic array
   Styles styles_;
   StringTable strings_;
   mutable std::shared_ptr<const draw::Theme> theme_;
@@ -193,6 +197,7 @@ class WorkbookLoader {
   CalcProps& Calc() { return b_.calc_; }
   std::vector<DefinedName>& Names() { return b_.names_; }
   std::vector<uint8_t>& ValueErrors() { return b_.valueErrors_; }
+  std::vector<uint8_t>& DynamicArrays() { return b_.dynamicArrays_; }
   void SetLoader(std::function<pkg::Status(Workbook&, size_t)> f) { b_.loader_ = std::move(f); }
   void SetTheme(std::shared_ptr<const draw::Theme> t) { b_.theme_ = std::move(t); }
   static void SetSheetInfo(Sheet& s, SheetKind kind, SheetState state, uint32_t sheetId, std::string part,

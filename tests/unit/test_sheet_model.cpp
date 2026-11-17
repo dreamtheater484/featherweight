@@ -609,4 +609,12 @@ TEST(sheet_rich_value_errors) {
   CHECK(xlsx::WritePart(*book, s.PartName(), out).Ok());
   CHECK(out.find("<c r=\"B35\" t=\"e\" cm=\"1\" vm=\"1\">") != std::string::npos);
   CHECK(out.find("<v>#VALUE!</v>") != std::string::npos && out.find("#SPILL!") == std::string::npos);
+
+  // Dynamic arrays: cm points at cell metadata of type XLDAPR with fDynamic="1"; an array formula
+  // without it is Ctrl+Shift+Enter (sheet 4).
+  CHECK(book->DynamicArray(1) && !book->DynamicArray(2) && !book->DynamicArray(0));
+  FormulaInfo f;
+  CHECK(s.GetFormula(1, 1, f) && f.kind == FormulaKind::Array && f.master && f.dynamic);
+  CHECK(s.GetFormula(34, 1, f) && f.dynamic);
+  CHECK(book->GetSheet(3).GetFormula(1, 1, f) && f.kind == FormulaKind::Array && !f.dynamic);
 }

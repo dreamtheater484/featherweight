@@ -633,11 +633,13 @@ bool TypeEndsWith(std::string_view type, std::string_view name) {
   return type.size() > name.size() && type.ends_with(name) && type[type.size() - name.size() - 1] == '/';
 }
 
-// What each value metadata block (a cell's vm) stands for when it's an error: valueMetadata's
-// <rc t v> picks an XLRICHVALUE futureMetadata block, whose xlrd:rvb names a rich value; a rich
-// value of an "_error" structure holds the error's type (MS-XLSX 2.3.6.1.4).
-void ReadValueErrors(const pkg::Package& package, const std::string& metadata, const std::string& values,
-                     const std::string& structures, std::vector<uint8_t>& out) {
+// xl/metadata.xml. What each value metadata block (a cell's vm) stands for when it's an error:
+// valueMetadata's <rc t v> picks an XLRICHVALUE futureMetadata block, whose xlrd:rvb names a rich
+// value; a rich value of an "_error" structure holds the error's type (MS-XLSX 2.3.6.1.4). And
+// which cell metadata blocks (a cell's cm) make a dynamic array: cellMetadata's <rc t v> picks an
+// XLDAPR block with xda:dynamicArrayProperties fDynamic="1".
+void ReadMetadata(const pkg::Package& package, const std::string& metadata, const std::string& values,
+                  const std::string& structures, std::vector<uint8_t>& out, std::vector<uint8_t>& dynamic) {
   // errorType -> ErrorCode
   static constexpr ErrorCode kTypes[] = {ErrorCode::Null,    ErrorCode::Div0,    ErrorCode::Value,   ErrorCode::Ref,
                                          ErrorCode::Name,    ErrorCode::Num,     ErrorCode::NA,      ErrorCode::GettingData,
@@ -651,10 +653,12 @@ void ReadValueErrors(const pkg::Package& package, const std::string& metadata, c
                      part).Ok();
   };
   pkg::XmlDom meta, rich, shapes;
-  if (!parse(metadata, meta) || !parse(values, rich) || !parse(structures, shapes)) return;
+  if (!parse(metadata, meta)) return;
+  const bool hasRich = parse(values, rich) && parse(structures, shapes);  // only errors need them
   // The structures: for an "_error" one, which of its values is the error type.
   std::vector<int> errorKey;
-  for (pugi::xml_node s = shapes.Root().first_child(); s && errorKey.size() < kMaxBlocks; s = s.next_sibling()) {
+  for (pugi::xml_node s = hasRich ? shapes.Root().first_child() : pugi::xml_node(); s && errorKey.size() < kMaxBlocks;
+       s = s.next_sibling()) {
     if (Local(s) != "s") continue;
     int key = -1, k = 0;
     if (Attr(s, "t") == "_error")
@@ -667,7 +671,8 @@ void ReadValueErrors(const pkg::Package& package, const std::string& metadata, c
   }
   // The rich values: each one's error, if it is one.
   std::vector<uint8_t> richError;
-  for (pugi::xml_node rv = rich.Root().first_child(); rv && richError.size() < kMaxBlocks; rv = rv.next_sibling()) {
+  for (pugi::xml_node rv = hasRich ? rich.Root().first_child() : pugi::xml_node(); rv && richError.size() < kMaxBlocks;
+       rv = rv.next_sibling()) {
     if (Local(rv) != "rv") continue;
     uint8_t e = 0xFF;
     const uint32_t s = UIntAttr(rv, "s", UINT32_MAX);
@@ -685,7 +690,8 @@ void ReadValueErrors(const pkg::Package& package, const std::string& metadata, c
   // The metadata: types by index (from 1), the rich value blocks, then the value blocks.
   std::vector<std::string_view> types;
   std::vector<uint32_t> richBlocks;
-  pugi::xml_node valueMetadata;
+  std::vector<uint8_t> arrayBlocks;  // XLDAPR blocks: 1 for fDynamic
+  pugi::xml_node valueMetadata, cellMetadata;
   for (pugi::xml_node sec = meta.Root().first_child(); sec; sec = sec.next_sibling()) {
     const std::string_view k = Local(sec);
     if (k == "metadataTypes") {
@@ -699,9 +705,29 @@ void ReadValueErrors(const pkg::Package& package, const std::string& metadata, c
           if (pugi::xml_node rvb = Child(ext, "rvb")) index = UIntAttr(rvb, "i", UINT32_MAX);
         richBlocks.push_back(index);
       }
+    } else if (k == "futureMetadata" && Attr(sec, "name") == "XLDAPR") {
+      for (pugi::xml_node bk = sec.first_child(); bk && arrayBlocks.size() < kMaxBlocks; bk = bk.next_sibling()) {
+        if (Local(bk) != "bk") continue;
+        bool on = false;
+        for (pugi::xml_node ext = Child(Child(bk, "extLst"), "ext"); ext; ext = ext.next_sibling())
+          if (pugi::xml_node p = Child(ext, "dynamicArrayProperties")) on = BoolAttr(p, "fDynamic", false);
+        arrayBlocks.push_back(on ? 1 : 0);
+      }
     } else if (k == "valueMetadata") {
       valueMetadata = sec;
+    } else if (k == "cellMetadata") {
+      cellMetadata = sec;
     }
+  }
+  for (pugi::xml_node bk = cellMetadata.first_child(); bk && dynamic.size() < kMaxBlocks; bk = bk.next_sibling()) {
+    if (Local(bk) != "bk") continue;
+    uint8_t on = 0;
+    for (pugi::xml_node rc = bk.first_child(); rc; rc = rc.next_sibling()) {
+      if (Local(rc) != "rc") continue;
+      const uint32_t t = UIntAttr(rc, "t", 0), v = UIntAttr(rc, "v", UINT32_MAX);
+      if (t >= 1 && t <= types.size() && types[t - 1] == "XLDAPR" && v < arrayBlocks.size()) on |= arrayBlocks[v];
+    }
+    dynamic.push_back(on);
   }
   for (pugi::xml_node bk = valueMetadata.first_child(); bk && out.size() < kMaxBlocks; bk = bk.next_sibling()) {
     if (Local(bk) != "bk") continue;
@@ -843,8 +869,9 @@ std::unique_ptr<Workbook> Read(std::unique_ptr<pkg::Package> package, Status& st
       c.concurrentManualCount = UIntAttr(sec, "concurrentManualCount", 0);
     }
   }
-  // The errors Excel writes as #VALUE! with a rich value saying which, before any sheet is read.
-  ReadValueErrors(*package, metadata, richValues, richStructures, loader.ValueErrors());
+  // The errors Excel writes as #VALUE! with a rich value saying which, and which array formulas
+  // spill, before any sheet is read.
+  ReadMetadata(*package, metadata, richValues, richStructures, loader.ValueErrors(), loader.DynamicArrays());
 
   // Tables, for every sheet: small, and structured references reach across sheets.
   for (size_t i = 0; i < book->SheetCount(); ++i) {

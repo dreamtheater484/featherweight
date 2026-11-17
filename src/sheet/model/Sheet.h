@@ -44,6 +44,9 @@ struct FormulaInfo {
   bool master = false;      // this cell holds the text of a shared or array formula
   uint32_t sharedIndex = kNone;  // si
   bool alwaysCalc = false;  // ca="1"
+  // An array formula's master that spills (a dynamic array: its cell's cm says fDynamic); else an
+  // array formula is a Ctrl+Shift+Enter one over `ref`.
+  bool dynamic = false;
   pkg::AttrSetId attrs = 0; // all of the f element's attributes (Sheet::Attributes), for data tables (r1, r2...)
 };
 
@@ -274,6 +277,7 @@ struct FormulaRec {
   pkg::AttrSetId attrs = 0;
   FormulaKind kind = FormulaKind::Normal;
   bool alwaysCalc = false;
+  bool dynamic = false;  // a dynamic array's master
   uint32_t sharedIndex = kNone;
   Range ref;
   bool hasRef = false;
