@@ -10,6 +10,8 @@
 
 #include "Commands.h"
 #include "core/Strings.h"
+#include "sheet/calc/Typing.h"
+#include "sheet/numfmt/Parse.h"
 #include "sheet/view/WorkbookView.h"
 #include "ui/Theme.h"
 
@@ -58,162 +60,6 @@ int HitIn(Canvas& m, std::wstring_view line, float x, float size) {
 // The reference colors, in the order references appear (Excel's range finder).
 constexpr uint32_t kRefColors[] = {0x1A6FD6, 0xD1342C, 0x8A3FC2, 0x2E8A3E, 0xC7621A, 0x168C9C, 0xB8336A};
 
-bool Word(wchar_t c) { return std::iswalnum(c) || c == L'_' || c == L'.' || c > 0x7F; }
-bool Letter(wchar_t c) { return (c >= L'A' && c <= L'Z') || (c >= L'a' && c <= L'z'); }
-bool Digit(wchar_t c) { return c >= L'0' && c <= L'9'; }
-
-// A column ("$AB") at `i`: its index and where it ends, or false.
-bool ScanCol(std::wstring_view s, size_t& i, uint32_t& col) {
-  size_t j = i + (i < s.size() && s[i] == L'$');
-  uint32_t v = 0;
-  size_t n = 0;
-  while (j < s.size() && Letter(s[j]) && n < 4) {
-    v = v * 26 + static_cast<uint32_t>(std::towupper(s[j]) - L'A' + 1);
-    ++j;
-    ++n;
-  }
-  if (n == 0 || n > 3 || v > kMaxCols) return false;
-  col = v - 1;
-  i = j;
-  return true;
-}
-
-bool ScanRow(std::wstring_view s, size_t& i, uint32_t& row) {
-  size_t j = i + (i < s.size() && s[i] == L'$');
-  uint64_t v = 0;
-  size_t n = 0;
-  while (j < s.size() && Digit(s[j]) && n < 8) v = v * 10 + (s[j++] - L'0'), ++n;
-  if (n == 0 || v == 0 || v > kMaxRows) return false;
-  row = static_cast<uint32_t>(v - 1);
-  i = j;
-  return true;
-}
-
-// The references in a formula being typed: A1, A1:B2, A:B, 1:2, with $ and a sheet prefix
-// (Sheet1!, 'My sheet'!). Nothing in strings; not a name followed by "(" (LOG10(). A stand-in
-// until s2-calc's reference spans land.
-struct Found {
-  size_t at, length;
-  std::wstring sheet;  // empty: none named
-  uint32_t r0, c0, r1, c1;
-  size_t refAt = 0;  // where the reference starts, after the sheet
-  int kind = 0;      // 0 cells (A1, A1:B2), 1 columns (A:B), 2 rows (1:2)
-};
-std::vector<Found> ScanReferences(std::wstring_view s) {
-  std::vector<Found> out;
-  size_t i = 1;  // after "="
-  while (i < s.size()) {
-    const wchar_t ch = s[i];
-    if (ch == L'"') {  // a string: "" is a quote inside it
-      for (++i; i < s.size(); ++i)
-        if (s[i] == L'"' && !(i + 1 < s.size() && s[i + 1] == L'"')) break;
-        else if (s[i] == L'"') ++i;
-      ++i;
-      continue;
-    }
-    if (!(Word(ch) || ch == L'$' || ch == L'\'')) {
-      ++i;
-      continue;
-    }
-    const size_t start = i;
-    std::wstring sheet;
-    size_t j = i;
-    if (ch == L'\'') {  // 'My sheet'!
-      std::wstring name;
-      for (++j; j < s.size(); ++j) {
-        if (s[j] == L'\'') {
-          if (j + 1 < s.size() && s[j + 1] == L'\'') {
-            name += L'\'';
-            ++j;
-            continue;
-          }
-          break;
-        }
-        name += s[j];
-      }
-      if (j + 1 < s.size() && s[j + 1] == L'!') {
-        sheet = name;
-        j += 2;
-      } else {
-        i = j + 1;
-        continue;
-      }
-    } else {
-      size_t k = j;
-      while (k < s.size() && Word(s[k])) ++k;
-      if (k < s.size() && s[k] == L'!' && k > j) {
-        sheet.assign(s.substr(j, k - j));
-        j = k + 1;
-      }
-    }
-    // The reference itself.
-    Found f{start, 0, sheet, 0, 0, 0, 0};
-    f.refAt = j;
-    size_t k = j;
-    bool ok = false;
-    uint32_t col = 0, row = 0;
-    if (size_t a = k; ScanCol(s, a, col)) {
-      if (size_t b = a; ScanRow(s, b, row)) {  // A1, maybe A1:B2
-        f.r0 = f.r1 = row;
-        f.c0 = f.c1 = col;
-        k = b;
-        ok = true;
-        if (k < s.size() && s[k] == L':') {
-          size_t c = k + 1;
-          uint32_t col2 = 0, row2 = 0;
-          if (ScanCol(s, c, col2) && ScanRow(s, c, row2)) {
-            f.r1 = row2;
-            f.c1 = col2;
-            k = c;
-          }
-        }
-      } else if (a < s.size() && s[a] == L':') {  // A:B
-        size_t c = a + 1;
-        uint32_t col2 = 0;
-        if (ScanCol(s, c, col2) && !(c < s.size() && (Digit(s[c]) || s[c] == L'$'))) {
-          f.c0 = col;
-          f.c1 = col2;
-          f.r0 = 0;
-          f.r1 = kMaxRows - 1;
-          f.kind = 1;
-          k = c;
-          ok = true;
-        }
-      }
-    }
-    if (!ok) {  // 1:2
-      size_t a = k;
-      uint32_t row2 = 0;
-      if (ScanRow(s, a, row) && a < s.size() && s[a] == L':') {
-        size_t c = a + 1;
-        if (ScanRow(s, c, row2)) {
-          f.r0 = row;
-          f.r1 = row2;
-          f.c0 = 0;
-          f.c1 = kMaxCols - 1;
-          f.kind = 2;
-          k = c;
-          ok = true;
-        }
-      }
-    }
-    // Not part of a longer name or number, and not a function.
-    if (ok && (start == 0 || !(Word(s[start - 1]) || s[start - 1] == L'$')) &&
-        !(k < s.size() && (Word(s[k]) || s[k] == L'(' || s[k] == L'$' || s[k] == L'!'))) {
-      if (f.r0 > f.r1) std::swap(f.r0, f.r1);
-      if (f.c0 > f.c1) std::swap(f.c0, f.c1);
-      f.length = k - start;
-      out.push_back(std::move(f));
-      i = k;
-      continue;
-    }
-    // Skip the whole word.
-    i = std::max(j, start + 1);
-    while (i < s.size() && (Word(s[i]) || s[i] == L'$')) ++i;
-  }
-  return out;
-}
-
 std::wstring ColLetters(uint32_t col) {
   std::wstring s;
   for (uint32_t v = col + 1; v > 0; v = (v - 1) / 26) s.insert(s.begin(), static_cast<wchar_t>(L'A' + (v - 1) % 26));
@@ -234,43 +80,6 @@ std::wstring RefText(std::wstring_view old, int kind, uint32_t r0, uint32_t c0, 
   std::wstring s = col(c0, absFirst(p1)) + row(r0, absRow(p1));
   if (r0 != r1 || c0 != c1) s += L":" + col(c1, absFirst(p2)) + row(r1, absRow(p2));
   return s;
-}
-
-// F4's next form of a reference: A1, $A$1, A$1, $A1 (both ends of a range alike); whole columns
-// and rows between relative and absolute.
-std::wstring CycleAbsolute(std::wstring_view ref, int kind) {
-  const size_t colon = ref.find(L':');
-  std::vector<std::wstring_view> parts{ref.substr(0, colon)};
-  if (colon != std::wstring_view::npos) parts.push_back(ref.substr(colon + 1));
-  const std::wstring_view p1 = parts[0];
-  bool absC = !p1.empty() && p1[0] == L'$', absR = p1.find(L'$', 1) != std::wstring_view::npos;
-  if (kind != 0) {
-    absC = !absC;
-  } else if (!absC && !absR) {
-    absC = absR = true;
-  } else if (absC && absR) {
-    absC = false;
-  } else if (absR) {
-    absC = true;
-    absR = false;
-  } else {
-    absC = false;
-  }
-  std::wstring out;
-  for (size_t i = 0; i < parts.size(); ++i) {
-    if (i) out += L':';
-    std::wstring bare;
-    for (wchar_t c : parts[i])
-      if (c != L'$') bare += c;
-    if (kind != 0) {
-      out += (absC ? L"$" : L"") + bare;
-      continue;
-    }
-    size_t d = 0;
-    while (d < bare.size() && !Digit(bare[d])) ++d;
-    out += (absC ? L"$" : L"") + bare.substr(0, d) + (absR ? L"$" : L"") + bare.substr(d);
-  }
-  return out;
 }
 
 std::wstring Lower(std::wstring s) {
@@ -357,18 +166,12 @@ void WorkbookView::InsertNow(bool time) {
 
 bool WorkbookView::CycleReference() {
   if (!editor_.IsFormula()) return false;
-  const int caret = editor_.Caret();
-  for (const RefBox& r : Refs()) {
-    const int end = r.at + r.length;
-    if (caret < r.at || caret > end) continue;
-    const std::wstring next =
-        CycleAbsolute(std::wstring_view(editor_.Text()).substr(static_cast<size_t>(r.refAt), static_cast<size_t>(end - r.refAt)), r.kind);
-    const int at = r.refAt;
-    editor_.ReplaceSpan(at, end, next);
-    editor_.SetCaret(at + static_cast<int>(next.size()), false);
-    return true;
-  }
-  return false;
+  std::wstring text = editor_.Text();
+  size_t from = static_cast<size_t>(std::min(editor_.Caret(), editor_.Anchor()));
+  size_t to = static_cast<size_t>(std::max(editor_.Caret(), editor_.Anchor()));
+  if (!calc::CycleReference(text, from, to, Region())) return false;
+  editor_.SetText(text, static_cast<int>(from), static_cast<int>(to));
+  return true;
 }
 
 bool WorkbookView::RefHit(int x, int y, RefGrab& g) {
@@ -450,27 +253,28 @@ const std::vector<WorkbookView::RefBox>& WorkbookView::Refs() {
     refsText_.clear();
     return refs_;
   }
-  if (editor_.Text() == refsText_ && !refs_.empty()) return refs_;
+  if (editor_.Text() == refsText_) return refs_;
   refsText_ = editor_.Text();
   refs_.clear();
-  int colors = 0;
-  for (const Found& f : ScanReferences(refsText_)) {
+  for (const calc::RefSpan& f : calc::ReferenceSpans(refsText_, Region())) {
     RefBox r;
-    r.at = static_cast<int>(f.at);
-    r.length = static_cast<int>(f.length);
+    r.at = static_cast<int>(f.begin);
+    r.length = static_cast<int>(f.end - f.begin);
     r.sheet = f.sheet.empty() ? -1 : book_->FindSheet(WideToUtf8(f.sheet));
     if (r.sheet < 0 && !f.sheet.empty()) r.sheet = -2;
-    r.r0 = f.r0;
-    r.c0 = f.c0;
-    r.r1 = f.r1;
-    r.c1 = f.c1;
-    r.refAt = static_cast<int>(f.refAt);
-    r.kind = f.kind;
-    // The same range keeps its color.
-    r.color = -1;
-    for (const RefBox& o : refs_)
-      if (o.sheet == r.sheet && o.r0 == r.r0 && o.c0 == r.c0 && o.r1 == r.r1 && o.c1 == r.c1) r.color = o.color;
-    if (r.color < 0) r.color = colors++ % static_cast<int>(std::size(kRefColors));
+    r.r0 = static_cast<uint32_t>(f.r1);
+    r.c0 = static_cast<uint32_t>(f.c1);
+    r.r1 = static_cast<uint32_t>(f.r2);
+    r.c1 = static_cast<uint32_t>(f.c2);
+    r.color = f.color % static_cast<int>(std::size(kRefColors));
+    // The reference after its sheet, and whether it is whole columns (no digits) or rows (no letters).
+    const std::wstring_view text = std::wstring_view(refsText_).substr(f.begin, f.end - f.begin);
+    const size_t bang = text.rfind(L'!');
+    r.refAt = r.at + (bang == std::wstring_view::npos ? 0 : static_cast<int>(bang) + 1);
+    const std::wstring_view ref = text.substr(bang == std::wstring_view::npos ? 0 : bang + 1);
+    const bool digits = ref.find_first_of(L"0123456789") != std::wstring_view::npos;
+    const bool letters = std::any_of(ref.begin(), ref.end(), [](wchar_t c) { return std::iswalpha(c) != 0; });
+    r.kind = !digits ? 1 : !letters ? 2 : 0;
     refs_.push_back(r);
   }
   return refs_;
@@ -554,8 +358,32 @@ void WorkbookView::DrawEditLine(Canvas& c, std::wstring_view line, int lineAt, f
   run(at, len, ink);
 }
 
+edit::Editor& WorkbookView::Ed() {
+  if (!edit_) {
+    edit_ = std::make_unique<edit::Editor>(*book_);
+    edit_->OnChange([this](const std::vector<edit::Change>& changes) { Edited(changes); });
+  }
+  return *edit_;
+}
+
+const calc::FormulaLocale& WorkbookView::Region() const {
+  if (!region_) region_ = calc::MakeFormulaLocale(text_->Locale());
+  return *region_;
+}
+
+bool WorkbookView::EditRefused(const edit::Result& r) {
+  if (r) return false;
+  host_.ViewMessage(BannerKind::Warning, std::wstring(r.message.begin(), r.message.end()));
+  return true;
+}
+
 void WorkbookView::BeginEdit(CellEditor::Mode mode, const std::wstring& text) {
   if (!Ready() || ChartSheet() || preview_) return;
+  std::u16string why;
+  if (!Ed().CanEdit(&why)) {
+    host_.ViewMessage(BannerKind::Info, std::wstring(why.begin(), why.end()));
+    return;
+  }
   editCell_ = active_;
   editSheet_ = sheet_;
   editInBar_ = false;
@@ -563,6 +391,8 @@ void WorkbookView::BeginEdit(CellEditor::Mode mode, const std::wstring& text) {
   autoLoaded_ = false;
   autoList_.clear();
   autoText_.clear();
+  editReplaces_ = mode == CellEditor::Mode::Enter && text.empty();
+  editor_.SetPointRule([this](std::wstring_view t, size_t caret) { return calc::CanPointAt(t, caret, Region()); });
   editor_.Begin(text, mode);
   ScrollIntoView(active_);
   host_.ViewStateChanged();
@@ -606,7 +436,7 @@ bool WorkbookView::EditKey(UINT vk, UINT mods) {
       host_.ViewStateChanged();
       break;
     case CellEditor::Action::Commit:
-      CommitEdit(false);
+      if (!CommitEdit(false)) break;
       if (vk == VK_TAB) {
         if (tabStartCol_ == UINT32_MAX) tabStartCol_ = active_.col;
       } else if (vk != VK_RETURN) {
@@ -621,20 +451,170 @@ bool WorkbookView::EditKey(UINT vk, UINT mods) {
   return true;
 }
 
-void WorkbookView::CommitEdit(bool fill) {
-  if (!editor_.Active()) return;
+bool WorkbookView::CommitEdit(bool fill) {
+  if (!editor_.Active()) return true;
   std::wstring text = editor_.Text();
   // AutoComplete's entry keeps its own case.
   if (!autoText_.empty() && Lower(text) == Lower(autoText_)) text = autoText_;
-  const bool changed = editor_.Changed();
-  editor_.End();
-  editInBar_ = false;
-  // Writing the cell (or, with Ctrl+Enter, every selected cell) is the edit API's: s2-model's
-  // operations. Until it lands the entry only ends here.
-  (void)text;
-  (void)changed;
-  (void)fill;
+  auto finish = [&] {
+    editor_.End();
+    editInBar_ = false;
+    host_.ViewStateChanged();
+    host_.ViewInvalidate();
+  };
+  if ((!editor_.Changed() && !editReplaces_ && !fill) || editSheet_ >= book_->SheetCount()) {
+    finish();
+    return true;
+  }
+  const int sheet = static_cast<int>(editSheet_);
+  const Sheet& s = book_->GetSheet(editSheet_);
+  const Xf& xf = book_->GetStyles().CellXf(s.StyleAt(editCell_.row, editCell_.col));
+  calc::CompileOptions at;
+  at.sheet = sheet;
+  at.row = static_cast<int32_t>(editCell_.row);
+  at.col = static_cast<int32_t>(editCell_.col);
+  edit::CellInput in;   // empty text clears the cell
+  std::string formula;  // invariant, with "="
+  if (!text.empty()) {
+    bool asFormula = text[0] == L'=';
+    const bool textFormat = xf.numFmt == 49;  // "@": what's typed stays text
+    TypedValue tv;
+    if (!asFormula && !textFormat) {
+      SYSTEMTIME now;
+      GetLocalTime(&now);
+      ParseTyped(text, text_->Locale(), book_->Date1904(), now.wYear, tv);
+      // "+A1" and "-A1" are formulas, "-5" a number.
+      if ((text[0] == L'+' || text[0] == L'-') && text.size() > 1 && tv.kind != TypedValue::Number) asFormula = true;
+    }
+    if (asFormula) {
+      const std::string typed = WideToUtf8(text[0] == L'=' ? text : L"=" + text);
+      const calc::EnteredFormula e = calc::EnterFormula(typed, Region(), at, Calc().engine());
+      if (!e.formula) {
+        // Excel's message, and the caret where it puts it.
+        host_.ViewMessage(BannerKind::Warning, Utf8ToWide(e.message));
+        int caret = static_cast<int>(Utf8ToWide(std::string_view(typed).substr(0, std::min(e.pos, typed.size()))).size());
+        if (text[0] != L'=') --caret;
+        editor_.SetMode(CellEditor::Mode::Edit);
+        editor_.SetCaret(caret, false);
+        host_.ViewInvalidate();
+        return false;
+      }
+      formula = e.text;
+      in = edit::CellInput::Formula(e.text.substr(1));
+    } else if (textFormat) {
+      in = edit::CellInput::Text(WideToUtf8(text));
+    } else {
+      ErrorCode code{};
+      switch (tv.kind) {
+        case TypedValue::Number: in = edit::CellInput::Number(tv.number); break;
+        case TypedValue::Bool: in = edit::CellInput::Bool(tv.number != 0); break;
+        case TypedValue::Error:
+          in = sheet::ParseError(WideToUtf8(tv.text), code) ? edit::CellInput::Error(code)
+                                                            : edit::CellInput::Text(WideToUtf8(tv.text));
+          break;
+        case TypedValue::Text: in = edit::CellInput::Text(WideToUtf8(tv.text)); break;
+      }
+      // The format typing gives a General cell (a date, a percentage...), and an apostrophe's
+      // quotePrefix.
+      Xf want = xf;
+      bool restyle = false;
+      if (tv.format != 0 && xf.numFmt == 0) {
+        want.numFmt = static_cast<uint32_t>(tv.format);
+        want.applyNumFmt = true;
+        restyle = true;
+      }
+      if (tv.kind == TypedValue::Text && tv.quoted != xf.quotePrefix) {
+        want.quotePrefix = tv.quoted;
+        restyle = true;
+      }
+      if (restyle) in.WithStyle(Ed().AddXf(want));
+    }
+  }
+  edit::Result r;
+  if (fill) {
+    // Ctrl+Enter: every selected cell (whole rows or columns up to the used cells, not a million),
+    // a formula's references moving as a fill moves them.
+    Range sel = Selected();
+    if (const std::optional<Range> used = s.UsedRange()) {
+      if (sel.firstRow == 0 && sel.lastRow == kMaxRows - 1) sel.lastRow = std::max(used->lastRow, editCell_.row);
+      if (sel.firstCol == 0 && sel.lastCol == kMaxCols - 1) sel.lastCol = std::max(used->lastCol, editCell_.col);
+    }
+    const uint64_t count = uint64_t{sel.lastRow - sel.firstRow + 1} * (sel.lastCol - sel.firstCol + 1);
+    if (count > 1000000) {
+      host_.ViewMessage(BannerKind::Warning, L"That's more cells than Featherweight fills at once.");
+      return false;
+    }
+    std::vector<std::pair<CellAddr, edit::CellInput>> cells;
+    cells.reserve(static_cast<size_t>(count));
+    for (uint32_t row = sel.firstRow; row <= sel.lastRow; ++row)
+      for (uint32_t col = sel.firstCol; col <= sel.lastCol; ++col) {
+        edit::CellInput c = in;
+        if (!formula.empty() && (row != editCell_.row || col != editCell_.col)) {
+          calc::CompileOptions to = at;
+          to.row = static_cast<int32_t>(row);
+          to.col = static_cast<int32_t>(col);
+          c.formula = calc::CopyFormula(formula, at, to, Calc().engine()).substr(1);
+        }
+        cells.emplace_back(CellAddr{row, col}, std::move(c));
+      }
+    r = Ed().SetCells(sheet, cells);
+  } else {
+    r = Ed().SetCell(sheet, editCell_.row, editCell_.col, in);
+  }
+  if (EditRefused(r)) return false;
+  finish();
+  return true;
+}
+
+void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
+  SyncEngine(changes);
+  if (text_) text_->Clear();  // keyed by cell: it wouldn't see the new values
+  totals_ = Totals{};
+  for (auto& r : rules_)
+    if (r) r->Changed();
   host_.ViewStateChanged();
+  host_.ViewInvalidate();
+}
+
+// The engine's formulas follow the edit and what depends on it is recalculated. A stand-in until
+// s2-calc's incremental recalculation (its step 3) takes the edit API's changes itself.
+void WorkbookView::SyncEngine(const std::vector<edit::Change>& changes) {
+  bool any = false;
+  for (const edit::Change& c : changes) any |= (c.what & (edit::kValues | edit::kFormulas)) != 0;
+  if (!any) return;
+  if (!calc_ || calc_->Opening()) {
+    recalc_ = true;  // the pass Excel makes after opening reads the sheets as they are now
+    return;
+  }
+  calc::Engine& e = calc_->engine();
+  for (const edit::Change& c : changes) {
+    if (!(c.what & (edit::kValues | edit::kFormulas)) || c.sheet < 0 || static_cast<size_t>(c.sheet) >= book_->SheetCount())
+      continue;
+    const Sheet& s = book_->GetSheet(static_cast<size_t>(c.sheet));
+    const Range& r = c.cells;
+    if ((c.what & edit::kFormulas) && uint64_t{r.lastRow - r.firstRow + 1} * (r.lastCol - r.firstCol + 1) <= 200000) {
+      for (uint32_t row = r.firstRow; row <= r.lastRow; ++row)
+        for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
+          const calc::Cell cell{c.sheet, static_cast<int32_t>(row), static_cast<int32_t>(col)};
+          FormulaInfo f;
+          if (s.GetFormula(row, col, f)) {
+            // A shared formula's text is its first cell's: compiled there, it reads the same here.
+            const calc::Cell origin{c.sheet, static_cast<int32_t>(f.origin.row), static_cast<int32_t>(f.origin.col)};
+            if (auto compiled = e.CompileAt(f.text, origin)) e.SetFormula(cell, compiled, false);
+          } else if (e.HasFormula(cell.sheet, cell.row, cell.col)) {
+            e.ClearFormula(cell);
+          }
+        }
+    }
+    calc::Area a;
+    a.r1 = static_cast<int32_t>(r.firstRow);
+    a.r2 = static_cast<int32_t>(r.lastRow);
+    a.c1 = static_cast<int16_t>(r.firstCol);
+    a.c2 = static_cast<int16_t>(r.lastCol);
+    a.s1 = a.s2 = static_cast<uint16_t>(c.sheet);
+    e.Changed(c.sheet, a);
+  }
+  e.Recalculate();
 }
 
 void WorkbookView::MoveAfterEntry(int dRow, int dCol) {

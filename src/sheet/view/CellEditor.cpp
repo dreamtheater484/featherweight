@@ -56,6 +56,14 @@ void CellEditor::SetCaret(int caret, bool extend) {
   point_ = Span{};
 }
 
+void CellEditor::SetText(const std::wstring& text, int anchor, int caret) {
+  text_ = text;
+  const int n = static_cast<int>(text_.size());
+  anchor_ = std::clamp(anchor, 0, n);
+  caret_ = std::clamp(caret, 0, n);
+  point_ = Span{};
+}
+
 void CellEditor::SelectAll() {
   anchor_ = 0;
   caret_ = static_cast<int>(text_.size());
@@ -113,6 +121,7 @@ int CellEditor::LineEnd(int i) const {
 bool CellEditor::CanPoint(bool mouse) const {
   if (!active_ || !IsFormula() || HasSelection() || (mode_ != Mode::Enter && !mouse)) return false;
   if (point_.length > 0) return caret_ == point_.at + point_.length;
+  if (pointRule_) return pointRule_(text_, static_cast<size_t>(caret_));
   if (caret_ <= 0) return false;
   // Right after an operator, a separator or an opening parenthesis (Excel's "Point" in the status
   // bar), at the end of what's typed; a click also before an operator or a closing parenthesis.

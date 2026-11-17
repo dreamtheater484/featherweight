@@ -229,7 +229,15 @@ bool WorkbookView::OnKeyDown(UINT vk, UINT mods) {
         ScrollIntoView(active_);
         return true;
       }
-      return false;
+      // Backspace empties the cell and starts typing in it, as in Excel.
+      if (!shift && !alt && !ChartSheet()) BeginEdit(CellEditor::Mode::Enter, L"");
+      return true;
+    case VK_DELETE:
+      // Delete clears the selection's contents; formats stay.
+      if (ctrl || alt || ChartSheet()) return false;
+      if (std::u16string why; !Ed().CanEdit(&why)) host_.ViewMessage(BannerKind::Info, std::wstring(why.begin(), why.end()));
+      else EditRefused(Ed().ClearContents(static_cast<int>(sheet_), Selected()));
+      return true;
     default: return false;
   }
 }
@@ -275,7 +283,7 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
     return;
   }
   if (button == 0 && gfx::Contains(cells_, fx, fy) && PointClick(x, y)) return;
-  if (editor_.Active()) CommitEdit(false);
+  if (editor_.Active() && !CommitEdit(false)) return;
   tabStartCol_ = UINT32_MAX;
   // Double-clicking a cell edits it there (Edit mode).
   if (doubleClick && button == 0 && gfx::Contains(cells_, fx, fy) && !ChartSheet()) {

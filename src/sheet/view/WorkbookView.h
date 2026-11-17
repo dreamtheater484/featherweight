@@ -9,6 +9,8 @@
 
 #include "PagedView.h"
 #include "sheet/calc/Bind.h"
+#include "sheet/calc/Entry.h"
+#include "sheet/edit/Edit.h"
 #include "sheet/condfmt/CondFormat.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/view/CellPaint.h"
@@ -300,7 +302,19 @@ class WorkbookView : public PagedView {
   // column the Tabs started from).
   void BeginEdit(CellEditor::Mode mode, const std::wstring& text);
   bool EditKey(UINT vk, UINT mods);
-  void CommitEdit(bool fill);
+  // Writes the entry through the edit API (with Ctrl+Enter into every selected cell). False when
+  // it stays open: a formula Excel refuses, or an edit the model refuses (the banner says why).
+  bool CommitEdit(bool fill);
+  bool editReplaces_ = false;  // typing over the cell: the entry is written even if unchanged
+  // The model's edits (s2-model's Editor), made when first needed; Edited hears every change.
+  edit::Editor& Ed();
+  void Edited(const std::vector<edit::Change>& changes);
+  void SyncEngine(const std::vector<edit::Change>& changes);
+  bool EditRefused(const edit::Result& r);  // shows why; true when it failed
+  std::unique_ptr<edit::Editor> edit_;
+  // The region's formula separators (en-NL: "," decimal, ";" between arguments).
+  const calc::FormulaLocale& Region() const;
+  mutable std::optional<calc::FormulaLocale> region_;
   void MoveAfterEntry(int dRow, int dCol);
   void PointMove(int dRow, int dCol, bool extend);
   struct EditBox {

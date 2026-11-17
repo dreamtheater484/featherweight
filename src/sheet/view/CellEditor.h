@@ -7,7 +7,9 @@
 // operator insert a reference (point mode). Edit mode (F2, a double-click, the formula bar): the
 // arrows move the caret. F2 switches between them.
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <string_view>
 
 namespace fw::sheet::view {
 
@@ -56,6 +58,8 @@ class CellEditor {
   void Insert(const std::wstring& s);
   void SetCaret(int caret, bool extend);
   void SelectAll();
+  // The whole text, with the selection from `anchor` to `caret` (F4's result).
+  void SetText(const std::wstring& text, int anchor, int caret);
   // Replaces [from, to) with `s`, the caret and selection staying where they were in the rest of
   // the text (a reference's border dragged).
   void ReplaceSpan(int from, int to, const std::wstring& s);
@@ -70,6 +74,9 @@ class CellEditor {
   // inserts at the caret. The tab formats the reference (A1, A1:B3, Sheet2!A1).
   void SetPointRef(const std::wstring& ref);
   bool Pointing() const { return point_.length > 0; }
+  // Where a reference may go (s2-calc's CanPointAt: after "=", an operator, "(", ":" or the list
+  // separator, outside text, no operand after the caret). Unset: a simple rule of its own.
+  void SetPointRule(std::function<bool(std::wstring_view text, size_t caret)> rule) { pointRule_ = std::move(rule); }
 
  private:
   struct Span {
@@ -86,6 +93,7 @@ class CellEditor {
   std::wstring text_, original_;
   int caret_ = 0, anchor_ = 0;
   Span point_;
+  std::function<bool(std::wstring_view, size_t)> pointRule_;
 };
 
 }  // namespace fw::sheet::view
