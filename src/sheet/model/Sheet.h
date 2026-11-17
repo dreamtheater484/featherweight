@@ -153,7 +153,7 @@ struct PageBreak {
 // structured references use (Table1[Amount]), an optional total row, and a table style.
 struct TableColumn {
   uint32_t id = 0;
-  std::string name;
+  std::string name;             // as the header cell shows it (the part's _xHHHH_ escapes undone)
   std::string totalsFunction;  // totalsRowFunction: sum, average, count, countNums, max, min, stdDev, var, custom; empty: none
   std::string totalsLabel;     // totalsRowLabel
   std::string calculatedFormula, totalsFormula;  // calculatedColumnFormula, totalsRowFormula (invariant form)
@@ -176,12 +176,24 @@ struct Table {
   std::vector<TableColumn> columns;  // left to right, one per column of `ref`
   TableStyleInfo style;
   int headerDxf = -1, dataDxf = -1, totalsDxf = -1;
-  // The data rows: `ref` without the header and total rows (empty when firstRow > lastRow).
+  // Structured references' areas (Table1[#All], [#Data], [#Headers], [#Totals]): `ref`; the data
+  // rows, without the header and total rows (empty when firstRow > lastRow); the header and the
+  // total row, nothing when the table hides it.
+  Range All() const { return ref; }
   Range Data() const {
     return {ref.firstRow + headerRows, ref.firstCol, ref.lastRow >= totalsRows ? ref.lastRow - totalsRows : 0, ref.lastCol};
   }
-  // A column by its name, without case (Table1[amount]): its index in `columns`, which is its
-  // offset from ref.firstCol; -1 when there's none.
+  std::optional<Range> Headers() const {
+    if (!headerRows) return std::nullopt;
+    return Range{ref.firstRow, ref.firstCol, ref.firstRow, ref.lastCol};
+  }
+  std::optional<Range> Totals() const {
+    if (!totalsRows) return std::nullopt;
+    return Range{ref.lastRow, ref.firstCol, ref.lastRow, ref.lastCol};
+  }
+  // A column by its name, without case (Table1[amount]), the name as the header shows it (the
+  // formula's ' escapes undone by the caller): its index in `columns`, which is its offset from
+  // ref.firstCol; -1 when there's none.
   int FindColumn(std::string_view columnName) const;
 };
 

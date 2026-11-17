@@ -507,7 +507,7 @@ TEST(sheet_tables) {
                    "<table xmlns=\"" + std::string(kMain) + "\" id=\"3\" name=\"Table3\" displayName=\"Sales\" ref=\"B2:D7\" "
                    "totalsRowCount=\"1\"><autoFilter ref=\"B2:D6\"/><tableColumns count=\"3\"><tableColumn id=\"1\" name=\"Region\" "
                    "totalsRowLabel=\"Total\"/><tableColumn id=\"2\" name=\"Amount\" totalsRowFunction=\"sum\" dataDxfId=\"0\"/>"
-                   "<tableColumn id=\"3\" name=\"Tax\"><calculatedColumnFormula>Sales[[#This Row],[Amount]]*0.21</calculatedColumnFormula>"
+                   "<tableColumn id=\"3\" name=\"Tax_x000a_rate\"><calculatedColumnFormula>Sales[[#This Row],[Amount]]*0.21</calculatedColumnFormula>"
                    "</tableColumn></tableColumns><tableStyleInfo name=\"TableStyleMedium2\" showFirstColumn=\"0\" showLastColumn=\"0\" "
                    "showRowStripes=\"1\" showColumnStripes=\"0\"/></table>"});
   auto book = Open(parts, false);
@@ -523,7 +523,9 @@ TEST(sheet_tables) {
   CHECK(t->style.name == "TableStyleMedium2" && t->style.rowStripes && !t->style.columnStripes);
   CHECK(book->GetSheet(1).TableAt(6, 3) == t && book->GetSheet(1).TableAt(7, 3) == nullptr);
   CHECK(book->FindTable("Table3") == nullptr);
-  CHECK(t->FindColumn("tax") == 2 && t->FindColumn("Amount") == 1 && t->FindColumn("Amount ") == -1);
+  CHECK(t->columns[2].name == "Tax\nrate");  // _x000a_: a line break in the header
+  CHECK(t->FindColumn("TAX\nrate") == 2 && t->FindColumn("Amount") == 1 && t->FindColumn("Amount ") == -1);
+  CHECK(t->All() == t->ref && t->Headers() == (Range{1, 1, 1, 3}) && t->Totals() == (Range{6, 1, 6, 3}));
 }
 
 namespace {

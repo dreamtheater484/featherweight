@@ -550,6 +550,35 @@ Status ReadStrings(std::string_view xml, const pkg::Limits& limits, std::string_
 
 // ---- Tables
 
+namespace {
+
+// ST_Xstring's escapes (_x000A_ for a line break, _x005F_ for "_"), as Excel writes table
+// column names.
+std::string Unescape(std::string_view s) {
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size(); ++i) {
+    unsigned v = 0;
+    if (s[i] == '_' && i + 6 < s.size() && s[i + 1] == 'x' && s[i + 6] == '_' &&
+        std::from_chars(s.data() + i + 2, s.data() + i + 6, v, 16).ptr == s.data() + i + 6 && !(v >= 0xD800 && v < 0xE000)) {
+      if (v < 0x80) {
+        out += static_cast<char>(v);
+      } else if (v < 0x800) {
+        out += static_cast<char>(0xC0 | (v >> 6)), out += static_cast<char>(0x80 | (v & 0x3F));
+      } else {
+        out += static_cast<char>(0xE0 | (v >> 12)), out += static_cast<char>(0x80 | ((v >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (v & 0x3F));
+      }
+      i += 6;
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
 Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::string& part, Table& t) {
   pkg::XmlDom dom;
   Status st = dom.Parse(xml, limits, part.substr(1));
@@ -574,7 +603,7 @@ Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::str
       if (c.type() != pugi::node_element || Local(c) != "tableColumn") continue;
       TableColumn col;
       col.id = UIntAttr(c, "id", 0);
-      col.name = Attr(c, "name");
+      col.name = Unescape(Attr(c, "name"));
       col.totalsFunction = Attr(c, "totalsRowFunction");
       if (col.totalsFunction == "none") col.totalsFunction.clear();
       col.totalsLabel = Attr(c, "totalsRowLabel");
