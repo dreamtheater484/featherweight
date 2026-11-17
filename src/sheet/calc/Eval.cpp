@@ -613,6 +613,14 @@ void Machine::Run(const uint8_t* p, const uint8_t* end, bool top) {
       case kExtern: stack.push_back(Value::Error(Err::Ref)); break;
       case kName: {
         uint32_t slot = Read<uint32_t>(p + 1);
+        if (!(p[5] & kSheet)) {
+          size_t k = locals.size();
+          while (k > localsBase && locals[k - 1].first != slot) --k;
+          if (k > localsBase) {
+            stack.push_back(locals[k - 1].second);
+            break;
+          }
+        }
         int scope = (p[5] & kSheet) ? Read<uint16_t>(p + 6) : at.sheet;
         const Formula* f = res ? res->Name(slot, scope) : nullptr;
         if (!f) {
@@ -621,7 +629,10 @@ void Machine::Run(const uint8_t* p, const uint8_t* end, bool top) {
         }
         if (f->flags & Formula::kUnsupported) unsupported = true;
         size_t before = stack.size();
+        size_t saveBase = localsBase;
+        localsBase = locals.size();
         Run(f->code.data(), f->code.data() + f->code.size(), false);
+        localsBase = saveBase;
         if (stack.size() != before + 1 && !stop) {
           stack.resize(before);
           stack.push_back(Value::Error(Err::Value));
@@ -830,7 +841,7 @@ void Machine::CallFn(int id, int argc, bool arrayMode) {
 
 const uint8_t* Machine::Lazy(const uint8_t* p) {
   static const int kIf = FnId("IF"), kIfError = FnId("IFERROR"), kIfNa = FnId("IFNA"), kChoose = FnId("CHOOSE"),
-                   kIfs = FnId("IFS"), kSwitch = FnId("SWITCH");
+                   kIfs = FnId("IFS"), kSwitch = FnId("SWITCH"), kLet = FnId("LET");
   int id = Read<uint16_t>(p + 1);
   int argc = p[3];
   bool arr = p[4] != 0;
@@ -974,6 +985,15 @@ const uint8_t* Machine::Lazy(const uint8_t* p) {
       }
       if (!found && hasDefault) result = zeroIfMissing(arg(argc - 1));
     }
+  } else if (id == kLet) {  // LET(name, value, ..., calculation): the parser made each name one kName
+    size_t base = locals.size();
+    for (int k = 0; k + 1 < argc && !stop; k += 2) {
+      uint32_t slot = Read<uint32_t>(spans[k] + 1);
+      Value v = arg(k + 1);
+      locals.emplace_back(slot, std::move(v));
+    }
+    if (!stop) result = zeroIfMissing(arg(argc - 1));
+    locals.erase(locals.begin() + static_cast<std::ptrdiff_t>(base), locals.end());
   } else {
     unsupported = true;
     result = Value::Error(Err::Name);

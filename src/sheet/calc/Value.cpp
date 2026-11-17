@@ -613,6 +613,23 @@ bool EqualText(std::string_view a, std::string_view b) {
   return CompareText(a, b) == 0;
 }
 
+std::string TextKey(std::string_view s, bool linguistic) {
+  if (!linguistic) {
+    std::string k(s);
+    for (char& c : k) c = Upper(c);
+    return k;
+  }
+  thread_local std::wstring w;
+  Widen(s, w);
+  int n = LCMapStringEx(L"en-US", LCMAP_SORTKEY | NORM_IGNORECASE, w.data(), static_cast<int>(w.size()), nullptr, 0,
+                        nullptr, nullptr, 0);
+  std::string k(static_cast<size_t>(std::max(n, 0)), '\0');
+  if (n > 0)
+    LCMapStringEx(L"en-US", LCMAP_SORTKEY | NORM_IGNORECASE, w.data(), static_cast<int>(w.size()),
+                  reinterpret_cast<wchar_t*>(k.data()), n, nullptr, nullptr, 0);
+  return k;
+}
+
 namespace {
 
 wchar_t UpperW(wchar_t c) {

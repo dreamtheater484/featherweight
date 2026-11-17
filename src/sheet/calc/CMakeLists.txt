@@ -4,6 +4,7 @@ target_sources(fwsheet PRIVATE
   Bind.cpp
   Engine.cpp
   Eval.cpp
+  FnArray.cpp
   FnDate.cpp
   FnLookup.cpp
   FnMath.cpp

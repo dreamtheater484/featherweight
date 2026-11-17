@@ -752,10 +752,40 @@ class Parser {
       Op(EqualNoCase(w, "TRUE") ? 1 : 0);
       return true;
     }
+    for (size_t k = let_.size(); k-- > 0;) {  // one of LET's names
+      if (EqualNoCase(let_[k], w)) {
+        Op(kName);
+        Put<uint32_t>(names_.NameSlot("_xlpm." + let_[k]));
+        Op(0);
+        return true;
+      }
+    }
     Op(kName);
     Put<uint32_t>(names_.NameSlot(w));
     Op(0);
     f_.flags |= Formula::kNames;
+    return true;
+  }
+
+  // LET's name arguments: a name followed by ','. Each becomes one kName for "_xlpm.name" (as files
+  // write them), and is in scope for the arguments after it.
+  bool LetName() {
+    size_t e = i_;
+    if (e >= s_.size() || !IsNameStart(s_[e])) return false;
+    while (e < s_.size() && IsNameChar(s_[e])) ++e;
+    size_t k = e;
+    while (k < s_.size() && s_[k] == ' ') ++k;
+    if (At(k) != ',') return false;
+    std::string_view w = s_.substr(i_, e - i_);
+    if (StartsNoCase(w, "_xlpm.")) w.remove_prefix(6);
+    if (w.empty() || !IsNameStart(w[0]) || EqualNoCase(w, "TRUE") || EqualNoCase(w, "FALSE")) return false;
+    Part a;
+    if (ScanPart(i_, a) == e - i_ && (a.Cell() || at_.r1c1)) return false;  // A1, R1C1: not names
+    i_ = e;
+    Op(kName);
+    Put<uint32_t>(names_.NameSlot("_xlpm." + std::string(w)));
+    Op(0);
+    let_.emplace_back(w);
     return true;
   }
 
@@ -876,6 +906,9 @@ class Parser {
     int id = FindFunction(name);
     const FuncInfo* fn = id >= 0 ? &Function(id) : nullptr;
     bool lazy = fn && (fn->flags & kFnLazy);
+    bool let = fn && EqualNoCase(name, "LET");
+    size_t letScope = let_.size();
+    int letNames = 0;
     size_t argsStart = code_.size();
     std::vector<size_t> starts;
     ++i_;
@@ -888,7 +921,9 @@ class Parser {
         SkipSpace();
         starts.push_back(code_.size());
         char d = At(i_);
-        if (d == ',' || d == ')') {
+        if (let && argc % 2 == 0 && LetName()) {
+          ++letNames;
+        } else if (d == ',' || d == ')') {
           Op(kMissing);
         } else {
           bool saveArray = array_, saveUnion = unionOk_;
@@ -912,6 +947,10 @@ class Parser {
         }
         return Fail("',' or ')' expected");
       }
+    }
+    if (let) {
+      let_.resize(letScope);
+      if (argc % 2 == 0 || letNames != argc / 2) return Fail("LET wants names with values, then a calculation");
     }
     if (!fn) {
       Op(kUnknown);
@@ -954,6 +993,7 @@ class Parser {
   Names& names_;
   Formula& f_;
   std::vector<uint8_t>& code_;
+  std::vector<std::string> let_;  // LET's names in scope, innermost last
   bool array_ = false;    // evaluating in an array context
   bool unionOk_ = false;  // "," is the union operator here (inside parentheses)
   int depth_ = 0;

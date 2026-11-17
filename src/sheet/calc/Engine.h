@@ -107,6 +107,7 @@ class Engine : public Resolver, public Names {
   void MarkDirty(uint32_t node);
   void Propagate();
   void Clean(uint32_t node);
+  void StoreSpill(uint32_t node, Value v);
   // The areas a formula reads, at its cell (names and tables resolved).
   void Precedents(const Node& n, std::vector<Area>& out, bool* volatileName = nullptr);
   void Collect(const uint8_t* code, size_t size, const Cell& at, std::vector<Area>& out, bool* volatileName, int depth);
