@@ -68,6 +68,9 @@ enum class JournalOp : uint8_t {
   AddCellStyle = 39,
   SetFilter = 40,
   MoveCells = 41,
+  // S3: each piece numbers its own (s3-review from 90), so branches don't clash.
+  SetSheetProtection = 90,
+  SetWorkbookProtection = 91,
 };
 
 // One record being written: its kind, then its fields in the order Replay reads them.

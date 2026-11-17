@@ -426,6 +426,21 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = SetFilter(sheet, filter);
         break;
       }
+      case JournalOp::SetSheetProtection: {
+        const int sheet = f.Int();
+        const std::string xml = f.S();
+        const std::optional<SheetProtection> p = ReadSheetProtection(xml);
+        if (f.Ok() && (xml.empty() || p)) r = SetSheetProtection(sheet, p);
+        else if (f.Ok()) return damaged;
+        break;
+      }
+      case JournalOp::SetWorkbookProtection: {
+        const std::string xml = f.S();
+        const std::optional<WorkbookProtection> p = ReadWorkbookProtection(xml);
+        if (f.Ok() && (xml.empty() || p)) r = SetWorkbookProtection(p);
+        else if (f.Ok()) return damaged;
+        break;
+      }
       case JournalOp::FreezePanes: {
         const int sheet = f.Int();
         const uint32_t rows = f.U32(), cols = f.U32();

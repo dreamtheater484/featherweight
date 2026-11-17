@@ -62,6 +62,7 @@ class Access {
   static std::vector<DefinedName>& Names(Workbook& b) { return b.names_; }
   static uint32_t& Active(Workbook& b) { return b.activeSheet_; }
   static uint32_t& FirstTab(Workbook& b) { return b.firstTab_; }
+  static std::string& ProtectionXml(Workbook& b) { return b.protectionXml_; }
 };
 
 namespace {
@@ -226,11 +227,12 @@ struct SheetSave {
 
 // The workbook's own state as it was: the list of sheets, the names, the active tab.
 struct BookSave {
-  bool sheets = false, names = false, active = false;
+  bool sheets = false, names = false, active = false, protection = false;
   std::vector<Sheet*> order;
   std::vector<std::unique_ptr<Sheet>> held;  // sheets of `order` the workbook doesn't hold now
   std::vector<DefinedName> nameList;
   uint32_t activeSheet = 0, firstTab = 0;
+  std::string protectionXml;
 
   void Swap(Workbook& b) {
     if (sheets) {
@@ -256,6 +258,7 @@ struct BookSave {
       std::swap(A::Active(b), activeSheet);
       std::swap(A::FirstTab(b), firstTab);
     }
+    if (protection) std::swap(A::ProtectionXml(b), protectionXml);
   }
 
   void Absorb(BookSave&& later) {
@@ -272,6 +275,10 @@ struct BookSave {
       active = true;
       activeSheet = later.activeSheet;
       firstTab = later.firstTab;
+    }
+    if (later.protection && !protection) {
+      protection = true;
+      protectionXml = std::move(later.protectionXml);
     }
   }
 };
@@ -1176,6 +1183,32 @@ struct Editor::Rec {
   JournalRecord rec;
 };
 
+// Excel's refusals on a protected sheet or workbook, for an edit's outermost call: each public
+// edit makes one before it changes anything, and checks once it knows its sheet and cells.
+struct Editor::Guard {
+  explicit Guard(Editor& e) : ed(e) { ++ed.guarded_; }
+  ~Guard() { --ed.guarded_; }
+  Guard(const Guard&) = delete;
+  Guard& operator=(const Guard&) = delete;
+  Result Check(int sheet, ProtectAct act, const Range& r = {}) const {
+    if (ed.guarded_ > 1) return {};
+    if (sheet >= 0 && static_cast<size_t>(sheet) < ed.book_.SheetCount())
+      (void)ed.book_.LoadSheet(static_cast<size_t>(sheet));  // its part says whether it's protected
+    std::u16string why = ProtectionRefusal(ed.book_, sheet, act, r);
+    return why.empty() ? Result{} : Result::Fail(std::move(why));
+  }
+  // Content into these cells (typing, pasting): each one unlocked.
+  Result CheckCells(int sheet, const std::vector<std::pair<CellAddr, CellInput>>& cells) const {
+    if (ed.guarded_ > 1 || cells.empty() || sheet < 0 || static_cast<size_t>(sheet) >= ed.book_.SheetCount()) return {};
+    const Sheet& s = ed.book_.GetSheet(static_cast<size_t>(sheet));
+    if (!SheetProtected(s)) return {};
+    for (const auto& [at, in] : cells)
+      if (CellLocked(s, ed.book_.GetStyles(), at.row, at.col)) return Check(sheet, ProtectAct::Content, Range{at.row, at.col, at.row, at.col});
+    return {};
+  }
+  Editor& ed;
+};
+
 void Editor::DropHistory() {
   s_->undo.clear();
   s_->redo.clear();
@@ -1274,6 +1307,8 @@ Result Editor::SetCell(int sheet, uint32_t row, uint32_t col, const CellInput& i
 }
 
 Result Editor::SetCells(int sheet, const std::vector<std::pair<CellAddr, CellInput>>& cells) {
+  Guard guard(*this);
+  if (Result no = guard.CheckCells(sheet, cells); !no) return no;
   Rec rec(*this, JournalOp::SetCells, [&](JournalRecord& w) { w.I(sheet).U(cells.size()); for (const auto& [a, in] : cells) w.A(a).Input(in); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1372,6 +1407,8 @@ Result Editor::SetCells(int sheet, const std::vector<std::pair<CellAddr, CellInp
 }
 
 Result Editor::ClearContents(int sheet, const Range& r) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Content, r); !no) return no;
   Rec rec(*this, JournalOp::ClearContents, [&](JournalRecord& w) { w.I(sheet).R(r); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1394,9 +1431,16 @@ Result Editor::ClearContents(int sheet, const Range& r) {
   }());
 }
 
-Result Editor::ClearFormats(int sheet, const Range& r) { return MapStyles(sheet, r, [](uint32_t) { return 0u; }); }
+Result Editor::ClearFormats(int sheet, const Range& r) {
+  // On a protected sheet, as clearing contents: unlocked cells only, whatever the permissions (Excel).
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Content, r); !no) return no;
+  return MapStyles(sheet, r, [](uint32_t) { return 0u; });
+}
 
 Result Editor::ClearAll(int sheet, const Range& r) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Content, r); !no) return no;
   return Run(*this, u"Clear All", [&]() -> Result {
     if (Result x = ClearContents(sheet, r); !x) return x;
     return ClearFormats(sheet, r);
@@ -1408,6 +1452,8 @@ Result Editor::SetStyle(int sheet, const Range& r, uint32_t style) {
 }
 
 Result Editor::MapStyles(int sheet, const Range& r, const std::function<uint32_t(uint32_t)>& map) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::FormatCells, r); !no) return no;
   Rec rec(*this, JournalOp::MapStyles, [&](JournalRecord& w) { w.I(sheet).R(r); });
   std::map<uint32_t, uint32_t> seen;
   const Result result = [&]() -> Result {
@@ -1419,10 +1465,18 @@ Result Editor::MapStyles(int sheet, const Range& r, const std::function<uint32_t
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       std::u16string why;
+      // On a protected sheet a format's Locked and Hidden stay (Excel refuses that whatever the
+      // permissions); clearing formats changes them (allowed on unlocked cells: ClearFormats).
+      const bool keepProtection = guarded_ == 1 && SheetProtected(s);
+      bool protectionChanged = false;
       auto mapped = [&](uint32_t old) {
         uint32_t x = map(old);
         if (rec.on) seen.emplace(old, x);
-        return x < book_.GetStyles().CellXfs().size() ? x : 0u;
+        const auto& xfs = book_.GetStyles().CellXfs();
+        x = x < xfs.size() ? x : 0u;
+        if (keepProtection && old < xfs.size() && x < xfs.size() && !(xfs[x].protection == xfs[old].protection))
+          protectionChanged = true;
+        return x;
       };
       if (WholeRows(r) && !WholeCols(r)) {
         st.EditRows(sv, r.firstRow, r.lastRow, [&](RowRec& row) {
@@ -1474,6 +1528,7 @@ Result Editor::MapStyles(int sheet, const Range& r, const std::function<uint32_t
             if (!st.Put(sv, row, col, nullptr, false, next, why)) return Result::Fail(why);
           }
       }
+      if (protectionChanged) return Result::Fail(LockedCellMessage());
       st.Change(&s, kStyles, r);
       return Result{};
     });
@@ -1593,6 +1648,8 @@ uint32_t Editor::AddNumFmt(std::string_view code) {
 // ---- Rows and columns
 
 Result Editor::SetRowHeight(int sheet, uint32_t first, uint32_t last, double points) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::FormatRows, Range{first, 0, std::max(first, last), kMaxCols - 1}); !no) return no;
   Rec rec(*this, JournalOp::SetRowHeight, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).D(points); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1624,6 +1681,8 @@ Result Editor::SetRowHeight(int sheet, uint32_t first, uint32_t last, double poi
 }
 
 Result Editor::HideRows(int sheet, uint32_t first, uint32_t last, bool hidden) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::FormatRows, Range{first, 0, std::max(first, last), kMaxCols - 1}); !no) return no;
   Rec rec(*this, JournalOp::HideRows, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).B(hidden); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1646,6 +1705,8 @@ Result Editor::HideRows(int sheet, uint32_t first, uint32_t last, bool hidden) {
 }
 
 Result Editor::SetRowOutline(int sheet, uint32_t first, uint32_t last, uint8_t level, bool collapsed) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   Rec rec(*this, JournalOp::SetRowOutline, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).U(level).B(collapsed); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1670,6 +1731,8 @@ Result Editor::SetRowOutline(int sheet, uint32_t first, uint32_t last, uint8_t l
 }
 
 Result Editor::SetColumnWidth(int sheet, uint32_t first, uint32_t last, double chars) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::FormatColumns, Range{0, first, kMaxRows - 1, std::max(first, last)}); !no) return no;
   Rec rec(*this, JournalOp::SetColumnWidth, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).D(chars); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1692,6 +1755,8 @@ Result Editor::SetColumnWidth(int sheet, uint32_t first, uint32_t last, double c
 }
 
 Result Editor::HideColumns(int sheet, uint32_t first, uint32_t last, bool hidden) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::FormatColumns, Range{0, first, kMaxRows - 1, std::max(first, last)}); !no) return no;
   Rec rec(*this, JournalOp::HideColumns, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).B(hidden); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1709,6 +1774,8 @@ Result Editor::HideColumns(int sheet, uint32_t first, uint32_t last, bool hidden
 }
 
 Result Editor::SetColumnOutline(int sheet, uint32_t first, uint32_t last, uint8_t level, bool collapsed) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   Rec rec(*this, JournalOp::SetColumnOutline, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).U(level).B(collapsed); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1876,20 +1943,30 @@ bool EndsWith(std::string_view s, std::string_view suffix) {
 }  // namespace
 
 Result Editor::InsertRows(int sheet, uint32_t at, uint32_t count) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::InsertRows); !no) return no;
   return ShiftCells(sheet, Shift{Shift::Axis::Rows, at, static_cast<int32_t>(count), Range::All()}, u"Insert Rows");
 }
 Result Editor::DeleteRows(int sheet, uint32_t first, uint32_t count) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::DeleteRows, Range{first, 0, count ? first + std::min(count, kMaxRows) - 1 : first, kMaxCols - 1}); !no) return no;
   return ShiftCells(sheet, Shift{Shift::Axis::Rows, first, -static_cast<int32_t>(count), Range::All()}, u"Delete Rows");
 }
 Result Editor::InsertColumns(int sheet, uint32_t at, uint32_t count) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::InsertColumns); !no) return no;
   return ShiftCells(sheet, Shift{Shift::Axis::Columns, at, static_cast<int32_t>(count), Range::All()},
                     u"Insert Columns");
 }
 Result Editor::DeleteColumns(int sheet, uint32_t first, uint32_t count) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::DeleteColumns, Range{0, first, kMaxRows - 1, count ? first + std::min(count, kMaxCols) - 1 : first}); !no) return no;
   return ShiftCells(sheet, Shift{Shift::Axis::Columns, first, -static_cast<int32_t>(count), Range::All()},
                     u"Delete Columns");
 }
 Result Editor::InsertCells(int sheet, const Range& r, Direction shift) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   if (!Valid(r)) return BadRange();
   if (shift == Direction::DownOrUp)
     return WholeRows(r) ? InsertRows(sheet, r.firstRow, r.lastRow - r.firstRow + 1)
@@ -1904,6 +1981,8 @@ Result Editor::InsertCells(int sheet, const Range& r, Direction shift) {
                                    u"Insert Cells");
 }
 Result Editor::DeleteCells(int sheet, const Range& r, Direction shift) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   if (!Valid(r)) return BadRange();
   if (shift == Direction::DownOrUp)
     return WholeRows(r) ? DeleteRows(sheet, r.firstRow, r.lastRow - r.firstRow + 1)
@@ -2810,10 +2889,14 @@ std::string SortedFormula(std::string_view text, int sheet, CellAddr from, CellA
 }  // namespace
 
 Result Editor::SortRows(int sheet, const Range& r, const std::vector<uint32_t>& order, const std::vector<SortKey>& keys) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Sort, r); !no) return no;
   return SortLines(sheet, r, order, keys, true);
 }
 Result Editor::SortColumns(int sheet, const Range& r, const std::vector<uint32_t>& order,
                            const std::vector<SortKey>& keys) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Sort, r); !no) return no;
   return SortLines(sheet, r, order, keys, false);
 }
 
@@ -3364,6 +3447,13 @@ CellInput InputOf(const CellInfo& cell, const FormulaInfo* f, int sheet, calc::N
 }  // namespace
 
 Result Editor::MoveCells(int sheet, const Range& from, int toSheet, CellAddr to, std::u16string stepName) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Content, from); !no) return no;
+  if (from.lastRow >= from.firstRow && from.lastCol >= from.firstCol)
+    if (Result no = guard.Check(toSheet, ProtectAct::Content,
+                                Range{to.row, to.col, to.row + (from.lastRow - from.firstRow), to.col + (from.lastCol - from.firstCol)});
+        !no)
+      return no;
   Rec rec(*this, JournalOp::MoveCells, [&](JournalRecord& w) { w.I(sheet).R(from).A(to).S16(stepName).I(toSheet); });
   return rec.Done([&]() -> Result {
     const int n = static_cast<int>(book_.SheetCount());
@@ -3537,6 +3627,8 @@ Result Editor::MoveCells(int sheet, const Range& from, int toSheet, CellAddr to,
 // ---- Merged cells
 
 Result Editor::Merge(int sheet, const Range& r) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   Rec rec(*this, JournalOp::Merge, [&](JournalRecord& w) { w.I(sheet).R(r); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -3588,6 +3680,8 @@ Result Editor::Merge(int sheet, const Range& r) {
 }
 
 Result Editor::Unmerge(int sheet, const Range& r) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   Rec rec(*this, JournalOp::Unmerge, [&](JournalRecord& w) { w.I(sheet).R(r); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -3629,6 +3723,8 @@ std::u16string Editor::CheckSheetName(std::string_view name, int except) const {
 }
 
 Result Editor::AddSheet(int at, std::string name) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
   Rec rec(*this, JournalOp::AddSheet, [&](JournalRecord& w) { w.I(at).S(name); });
   return rec.Done([&]() -> Result {
     if (at < 0 || static_cast<size_t>(at) > book_.SheetCount()) at = static_cast<int>(book_.SheetCount());
@@ -3665,6 +3761,8 @@ Result Editor::AddSheet(int at, std::string name) {
 }
 
 Result Editor::RenameSheet(int sheet, std::string name) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
   Rec rec(*this, JournalOp::RenameSheet, [&](JournalRecord& w) { w.I(sheet).S(name); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -3694,6 +3792,8 @@ Result Editor::RenameSheet(int sheet, std::string name) {
 }
 
 Result Editor::MoveSheet(int sheet, int to) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
   Rec rec(*this, JournalOp::MoveSheet, [&](JournalRecord& w) { w.I(sheet).I(to); });
   return rec.Done([&]() -> Result {
     int n = static_cast<int>(book_.SheetCount());
@@ -3733,6 +3833,8 @@ Result Editor::MoveSheet(int sheet, int to) {
 }
 
 Result Editor::DeleteSheet(int sheet) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
   Rec rec(*this, JournalOp::DeleteSheet, [&](JournalRecord& w) { w.I(sheet); });
   return rec.Done([&]() -> Result {
     int n = static_cast<int>(book_.SheetCount());
@@ -3893,6 +3995,11 @@ std::string FilterXml(const SheetFilter& f, const std::string& p) {
 }  // namespace
 
 Result Editor::SetFilter(int sheet, const std::optional<SheetFilter>& filter) {
+  Guard guard(*this);
+  if (sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount() && book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) {
+    const bool both = filter && book_.GetSheet(static_cast<size_t>(sheet)).Filter();
+    if (Result no = guard.Check(sheet, both ? ProtectAct::Filter : ProtectAct::Never); !no) return no;
+  }
   Rec rec(*this, JournalOp::SetFilter, [&](JournalRecord& w) { w.I(sheet).Filter(filter); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -3946,6 +4053,8 @@ Result Editor::SetFilter(int sheet, const std::optional<SheetFilter>& filter) {
 }
 
 Result Editor::SetTabColor(int sheet, const Color& color) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
   Rec rec(*this, JournalOp::SetTabColor, [&](JournalRecord& w) { w.I(sheet).C(color); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -3963,6 +4072,8 @@ Result Editor::SetTabColor(int sheet, const Color& color) {
 }
 
 Result Editor::SetSheetState(int sheet, SheetState state) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
   Rec rec(*this, JournalOp::SetSheetState, [&](JournalRecord& w) { w.I(sheet).U(static_cast<uint8_t>(state)); });
   return rec.Done([&]() -> Result {
     int n = static_cast<int>(book_.SheetCount());
@@ -4030,6 +4141,50 @@ Result Editor::FreezePanes(int sheet, uint32_t rows, uint32_t cols) {
       st.Change(&s, kSheetProps, Range{});
       return Result{};
     });
+  }());
+}
+
+// ---- Protection
+
+Result Editor::SetSheetProtection(int sheet, const std::optional<SheetProtection>& protection) {
+  const std::string xml = protection ? SheetProtectionXml(*protection) : std::string();
+  Rec rec(*this, JournalOp::SetSheetProtection, [&](JournalRecord& w) { w.I(sheet).S(xml); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"Only worksheets can be protected here.");
+    const bool on = protection && protection->sheet;
+    return Run(*this, on ? u"Protect Sheet" : u"Unprotect Sheet", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveText(sv);
+      detail::PartText& t = A::Text(s);
+      xlsx::PutSheetElement(t, "sheetProtection", protection ? SheetProtectionXml(*protection, xlsx::SheetPrefix(t)) : std::string());
+      st.Change(&s, kSheetProps, Range{});
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::SetWorkbookProtection(const std::optional<WorkbookProtection>& protection) {
+  const std::string xml = protection ? WorkbookProtectionXml(*protection) : std::string();
+  Rec rec(*this, JournalOp::SetWorkbookProtection, [&](JournalRecord& w) { w.S(xml); });
+  return rec.Done([&]() -> Result {
+    if (book_.ProtectionXml() == xml) return Result{};
+    return Run(*this, protection && protection->lockStructure ? u"Protect Workbook" : u"Unprotect Workbook",
+               [&]() -> Result {
+                 State& st = *s_;
+                 st.SaveBook(false, false);
+                 Step& step = st.Cur();
+                 if (!step.book.protection) {
+                   step.book.protection = true;
+                   step.book.protectionXml = A::ProtectionXml(book_);
+                 }
+                 A::ProtectionXml(book_) = xml;
+                 st.Change(nullptr, kSheetProps, Range{});
+                 return Result{};
+               });
   }());
 }
 

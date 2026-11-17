@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "sheet/edit/Protection.h"
 #include "sheet/model/Workbook.h"
 
 // Editing a workbook (plan §4.3 rules 4 and 5, §7.3; S2). Headless: no window, no recalculation.
@@ -44,7 +45,7 @@ enum ChangeFlag : uint32_t {
   kMerges = 1u << 5,      // merged ranges inside `cells`
   kShift = 1u << 6,       // cells moved: rows, columns or cells inserted or deleted (`shift`)
   kSheets = 1u << 7,      // sheets added, deleted, moved or renamed: sheet indexes may differ now
-  kSheetProps = 1u << 8,  // tab color, visibility, frozen panes
+  kSheetProps = 1u << 8,  // tab color, visibility, frozen panes, protection (sheet -1: the workbook's)
   kNames = 1u << 9,       // defined names
   kView = 1u << 10,       // selection, active sheet, top-left cell, zoom (not undo steps)
   kObjects = 1u << 11,    // the sheet's notes, links or drawings moved (a sort): load them again
@@ -220,6 +221,13 @@ class Editor {
   // ending with ', not "History", and no other sheet's name (without case). Empty when valid.
   std::u16string CheckSheetName(std::string_view name, int except = -1) const;
 
+  // ---- Protection (Protect Sheet, Protect Workbook: sheet/edit/Protection.h). Once a sheet or the
+  // workbook's structure is protected, the edits above are refused as Excel refuses them, with
+  // Excel's message (undo and redo aren't). The password is the caller's to check; these set what
+  // the file keeps. nullopt removes the protection.
+  Result SetSheetProtection(int sheet, const std::optional<SheetProtection>& protection);
+  Result SetWorkbookProtection(const std::optional<WorkbookProtection>& protection);
+
   // ---- View state: saved with the file, but not undo steps (as in Excel).
   void SetActiveSheet(int sheet);
   void SetSelection(int sheet, CellAddr active, const std::vector<Range>& ranges);
@@ -303,6 +311,10 @@ class Editor {
  private:
   struct State;
   struct Rec;  // records an edit in the journal (Edit.cpp)
+  // Excel's refusals on a protected sheet or workbook (Protection.h), checked by the outermost
+  // call only: what an allowed edit does inside it isn't checked again.
+  struct Guard;
+  int guarded_ = 0;
   void DropHistory();
   // Rows, columns or cells inserted or deleted (the public calls above build `shift`).
   Result ShiftCells(int sheet, const Shift& shift, std::u16string stepName);

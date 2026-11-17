@@ -1076,6 +1076,19 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
     } else if (names) {
       root.remove_child(names);
     }
+    // Protect Workbook: the model's element (the file's, unless an edit changed it), before the views.
+    if (pugi::xml_node prot = Child(root, "workbookProtection"); (prot ? EmptyElementXml(prot) : std::string()) != book.ProtectionXml()) {
+      pugi::xml_node next = prot ? prot.next_sibling() : pugi::xml_node();
+      if (prot) root.remove_child(prot);
+      pugi::xml_document add;
+      if (!book.ProtectionXml().empty() && ParseSlice(add, book.ProtectionXml())) {
+        pugi::xml_node e = add.document_element();
+        e.set_name((p + "workbookProtection").c_str());
+        if (!next) next = Child(root, "bookViews");
+        if (!next) next = sheets;
+        root.insert_copy_before(e, next);
+      }
+    }
     // The active tab, in the first workbook view (bookViews comes just before sheets).
     pugi::xml_node views = Child(root, "bookViews");
     if (!views && (book.ActiveSheet() || book.FirstVisibleTab())) views = root.insert_child_before((p + "bookViews").c_str(), sheets);
