@@ -45,6 +45,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   const std::wstring code = fw::Utf8ToWide(in.substr(0, nl));
   const std::string_view rest = nl == std::string_view::npos ? std::string_view() : in.substr(nl + 1);
   const NumberFormat f(code);
+  TypedValue typed;  // the line as typed into a cell
+  ParseTyped(code, EnNlLocale(), false, 2026, typed);
+  ParseTyped(code, EnUsLocale(), true, 2026, typed);
   const NumLocale* locales[] = {&EnUsLocale(), &EnNlLocale()};
   Formatted out;
   for (const NumLocale* loc : locales) {

@@ -25,6 +25,7 @@ struct Options {
   double minPages = -1;             // compare: fail below this share of matching page counts (%)
   bool cells = false;               // compare: workbooks' displayed cell text against Excel's cells files
   bool values = false;              // csv: every field must show its text unchanged
+  bool resave = false;              // csv: saved untouched, the same bytes
   double minCells = -1;             // compare --cells: fail below this share of cells showing Excel's text (%)
   double minLines = -1;             // compare: fail below this share of matching line breaks (%)
   bool selfTest = false;            // compare: Word's lines against themselves and known changes
@@ -40,6 +41,7 @@ struct Options {
   bool edited = false;              // save: as after an edit in every part the model owns
   uint32_t rounds = 3;              // torture: rounds per document, each from the original
   bool replay = false;              // torture: the input is a reproducer to replay
+  std::string ops;                  // torture (workbooks): only these edits, comma-separated ("value,formula,undo")
   std::filesystem::path samples;    // paste-check: clipboard samples (.rtf, .html) to paste
   std::filesystem::path pngs;       // pdf-check: the pages the app drew (page-1.png, ...)
   std::wstring locale;              // formulas: the region the files were calculated in (en-US, en-NL)

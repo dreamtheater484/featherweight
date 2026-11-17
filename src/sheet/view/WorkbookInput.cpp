@@ -49,7 +49,12 @@ void WorkbookView::Select(CellAddr active, CellAddr end, bool scroll) {
   end.col = std::min(end.col, kMaxCols - 1);
   active_ = active;
   end_ = end;
-  if (scroll) ScrollIntoView(end);
+  if (scroll) {
+    // Whole rows (or columns) scroll only along them: their far end is XFD (or row 1048576).
+    const bool allCols = std::min(active.col, end.col) == 0 && std::max(active.col, end.col) == kMaxCols - 1;
+    const bool allRows = std::min(active.row, end.row) == 0 && std::max(active.row, end.row) == kMaxRows - 1;
+    ScrollIntoView({allRows ? active.row : end.row, allCols ? active.col : end.col});
+  }
   host_.ViewStateChanged();
   host_.ViewInvalidate();
 }
@@ -165,7 +170,21 @@ bool WorkbookView::OnKeyDown(UINT vk, UINT mods) {
     }
     return NavigationKey(vk, mods);
   }
+  if (editor_.Active()) return EditKey(vk, mods);
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
+  // Enter after Tabs returns to the Tabs' first column; any other key forgets it.
+  if (vk != VK_TAB && vk != VK_RETURN && vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU) tabStartCol_ = UINT32_MAX;
+  // Esc takes the border off the copied cells.
+  if (vk == VK_ESCAPE && clip_) {
+    clip_.reset();
+    host_.ViewInvalidate();
+    return true;
+  }
+  // Ctrl+; and Ctrl+Shift+; start an entry with the date or the time.
+  if (ctrl && !alt && vk == SemicolonKey() && !ChartSheet()) {
+    InsertNow(shift);
+    return true;
+  }
   // In a right-to-left sheet column A is at the right: the arrows go where they point.
   const int left = rtl_ ? 1 : -1;
   switch (vk) {
@@ -177,11 +196,17 @@ bool WorkbookView::OnKeyDown(UINT vk, UINT mods) {
     case VK_NEXT: PageMove(vk == VK_NEXT ? 1 : -1, alt, shift); return true;
     case VK_TAB:
       if (ctrl || alt) return false;
+      if (!shift && tabStartCol_ == UINT32_MAX) tabStartCol_ = active_.col;
       MoveActive(0, shift ? -1 : 1, false, false);
       return true;
     case VK_RETURN:
       if (ctrl || alt) return false;
-      MoveActive(shift ? -1 : 1, 0, false, false);
+      if (shift) tabStartCol_ = UINT32_MAX;
+      MoveAfterEntry(shift ? -1 : 1, 0);
+      return true;
+    case VK_F2:
+      if (ctrl || shift || alt) return false;
+      BeginEdit(CellEditor::Mode::Edit, FormulaBarText());
       return true;
     case VK_HOME: {
       const CellAddr to = ctrl ? CellAddr{frozenRow1_, frozenCol1_} : CellAddr{(shift ? end_ : active_).row, frozenCol1_};
@@ -215,7 +240,15 @@ bool WorkbookView::OnKeyDown(UINT vk, UINT mods) {
         ScrollIntoView(active_);
         return true;
       }
-      return false;
+      // Backspace empties the cell and starts typing in it, as in Excel.
+      if (!shift && !alt && !ChartSheet()) BeginEdit(CellEditor::Mode::Enter, L"");
+      return true;
+    case VK_DELETE:
+      // Delete clears the selection's contents; formats stay.
+      if (ctrl || alt || ChartSheet()) return false;
+      if (std::u16string why; !Ed().CanEdit(&why)) host_.ViewMessage(BannerKind::Info, std::wstring(why.begin(), why.end()));
+      else EditRefused(Ed().ClearContents(static_cast<int>(sheet_), Selected()));
+      return true;
     default: return false;
   }
 }
@@ -252,6 +285,36 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
     return;
   }
   const float fx = static_cast<float>(x), fy = static_cast<float>(y);
+  // The formula bar's text and the box over the cell place the caret; any other click ends the
+  // entry being typed (in point mode it will insert a reference instead).
+  if (button == 0 && FormulaHelpClick(fx, fy, doubleClick)) return;
+  if (button == 0 && !ChartSheet() && EditMouseDown(fx, fy, mods, doubleClick)) return;
+  if (RefGrab g; button == 0 && RefHit(x, y, g)) {
+    refGrab_ = g;
+    mouse_ = Mouse::RefDrag;
+    return;
+  }
+  if (button == 0 && gfx::Contains(cells_, fx, fy) && PointClick(x, y)) return;
+  if (editor_.Active() && !CommitEdit(false)) return;
+  // The fill handle: drag to fill, double-click to fill down beside the data.
+  if (button == 0 && FillHandleAt(fx, fy)) {
+    if (doubleClick) {
+      FillToNeighbour();
+    } else {
+      mouse_ = Mouse::Fill;
+      fillTo_ = Selected();
+    }
+    return;
+  }
+  tabStartCol_ = UINT32_MAX;
+  // Double-clicking a cell edits it there (Edit mode).
+  if (doubleClick && button == 0 && gfx::Contains(cells_, fx, fy) && !ChartSheet()) {
+    if (auto cell = CellAt(x, y)) {
+      Select(*cell, *cell);
+      BeginEdit(CellEditor::Mode::Edit, FormulaBarText());
+      return;
+    }
+  }
   const bool shift = (mods & kModShift) != 0;
   pendingLink_ = false;
   // Sheet tabs.
@@ -263,8 +326,16 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
       Execute(CmdNextSheet);
     } else {
       for (const TabRect& t : TabRects())
-        if (gfx::Contains(t.rc, fx, fy)) ShowSheet(t.sheet);
+        if (gfx::Contains(t.rc, fx, fy)) {
+          ShowSheet(t.sheet);
+          if (doubleClick && button == 0) BeginRename(t.sheet);  // as in Excel
+        }
     }
+    return;
+  }
+  // The name box: Go to (Excel's name box takes a reference too).
+  if (button == 0 && gfx::Contains(nameBox_, fx, fy) && !ChartSheet()) {
+    ShowGoTo();
     return;
   }
   if (gfx::Contains(formulaBar_, fx, fy)) return;
@@ -374,6 +445,10 @@ void WorkbookView::OnMouseMove(int x, int y, UINT mods) {
     }
   }
   switch (mouse_) {
+    case Mouse::EditText: EditMouseMove(fx, fy); return;
+    case Mouse::Point: PointDrag(x, y); return;
+    case Mouse::RefDrag: RefDrag(x, y); return;
+    case Mouse::Fill: FillDrag(x, y); return;
     case Mouse::ThumbV: {
       const double range = Height(v.track) - Height(v.thumb);
       if (range > 0) ScrollTo(gridX_, v.min + (fy - thumbGrab_ - v.track.top) / range * (v.end - v.min - v.view));
@@ -419,6 +494,12 @@ void WorkbookView::OnMouseUp(int x, int y, int button, UINT mods) {
     drag_ = Drag::None;
     return;
   }
+  if (mouse_ == Mouse::Fill) {
+    mouse_ = Mouse::None;
+    FinishFill();
+    host_.ViewInvalidate();
+    return;
+  }
   const bool follow = pendingLink_ && mouse_ == Mouse::Cells;
   mouse_ = Mouse::None;
   pendingLink_ = false;
@@ -439,6 +520,15 @@ void WorkbookView::OnMouseLeave() {
 }
 
 HCURSOR WorkbookView::CursorAt(int x, int y) {
+  if (Ready() && !preview_ && !ChartSheet()) {
+    const float fx = static_cast<float>(x), fy = static_cast<float>(y);
+    EditBox b;
+    if (gfx::Contains(FormulaBox(), fx, fy) || (EditGeometry(b) && gfx::Contains(b.rc, fx, fy)))
+      return LoadCursorW(nullptr, IDC_IBEAM);
+    if (FillHandleAt(fx, fy)) return LoadCursorW(nullptr, IDC_SIZEALL);
+    if (RefGrab g; RefHit(x, y, g))
+      return LoadCursorW(nullptr, !g.resize ? IDC_SIZEALL : g.nwse ? IDC_SIZENWSE : IDC_SIZENESW);
+  }
   if (Ready() && !preview_ && gfx::Contains(cells_, static_cast<float>(x), static_cast<float>(y))) {
     Bar v, h;
     Bars(v, h);

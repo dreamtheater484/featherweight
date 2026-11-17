@@ -76,6 +76,9 @@ class NumberFormat {
   static bool FromLocal(std::wstring_view code, const NumLocale& locale, NumberFormat& out);
   // The code in Excel's invariant form, as Excel stores what was typed; false when refused.
   static bool LocalToInvariant(std::wstring_view code, const NumLocale& locale, std::wstring& out);
+  // The reverse: a stored code as the region types it (Format Cells shows it so; en-NL: jjjj, uu,
+  // Standaard, #.##0,00). LocalToInvariant gives the code back.
+  static std::wstring InvariantToLocal(std::wstring_view code, const NumLocale& locale);
 
   void Format(double value, const FormatContext& context, Formatted& out) const;
   void Format(std::wstring_view text, const FormatContext& context, Formatted& out) const;
