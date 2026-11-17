@@ -103,9 +103,11 @@ constexpr const char* kUsage =
     "  fwtool decrypt --password P --out DIR <file or folder>...\n"
     "      Opens each password-protected Office file as Featherweight does and saves its package\n"
     "      in DIR; checks that encrypting it again with the key from opening round-trips.\n"
-    "  fwtool csv <file>...\n"
+    "  fwtool csv [--values] <file or folder>...\n"
     "      Opens each CSV or TSV file as Featherweight does: what it detected, and how long the\n"
     "      first screen (100 rows) and the whole file took (budget: 1 s and 5 s for 100 MB).\n"
+    "      --values: every field must show exactly as the file has it (no value changes, plan §7.1);\n"
+    "      lists the first differences and fails if there are any.\n"
     "  fwtool cfb [--all] <file>...\n"
     "      Reads each compound file (.doc, protected Office files): every stream must read, and\n"
     "      writing them and reading them back must give the same bytes. --all lists the streams,\n"
@@ -265,6 +267,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--min-lines" && i + 1 < argc) options.minLines = _wtof(argv[++i]);
     else if (arg == L"--self-test") options.selfTest = true;
     else if (arg == L"--cells") options.cells = true;
+    else if (arg == L"--values") options.values = true;
     else if (arg == L"--min-cells" && i + 1 < argc) options.minCells = _wtof(argv[++i]);
     else if (arg == L"--all") options.all = true;
     else if (arg == L"--runs" && i + 1 < argc) options.runs = _wtoi(argv[++i]);

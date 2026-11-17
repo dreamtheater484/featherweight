@@ -24,6 +24,7 @@ struct Options {
   std::filesystem::path reportOut;  // compare: the Markdown report
   double minPages = -1;             // compare: fail below this share of matching page counts (%)
   bool cells = false;               // compare: workbooks' displayed cell text against Excel's cells files
+  bool values = false;              // csv: every field must show exactly as written
   double minCells = -1;             // compare --cells: fail below this share of cells showing Excel's text (%)
   double minLines = -1;             // compare: fail below this share of matching line breaks (%)
   bool selfTest = false;            // compare: Word's lines against themselves and known changes
@@ -59,8 +60,22 @@ std::string_view AsText(const std::vector<uint8_t>& bytes);
 }  // namespace fwtool
 namespace fw::sheet {
 class Workbook;
+struct CellInfo;
+struct NumLocale;
 }
 namespace fwtool {
+// What a cell shows with no column width: its value through its number format, in `locale`, as
+// Range.Text gives it (CellCompare.cpp). Keeps the parsed formats between calls.
+class CellText {
+ public:
+  CellText(const fw::sheet::Workbook& book, const fw::sheet::NumLocale& locale);
+  ~CellText();
+  std::string operator()(const fw::sheet::CellInfo& cell);
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
 bool IsWorkbookFile(const std::filesystem::path& file);
 std::unique_ptr<fw::sheet::Workbook> ReadWorkbook(const std::filesystem::path& file, fw::pkg::Status& status, bool loadAll);
 // What the model finds wrong with a workbook it read (cells naming formats or strings that don't exist).

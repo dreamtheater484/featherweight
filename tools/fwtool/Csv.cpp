@@ -6,11 +6,15 @@
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <algorithm>
 #include <string>
+#include <vector>
 
 #include "Common.h"
 #include "core/Strings.h"
 #include "sheet/csv/Csv.h"
+#include "sheet/model/Sheet.h"
+#include "sheet/numfmt/NumLocale.h"
 
 namespace fwtool {
 
@@ -50,8 +54,25 @@ bool ReadAll(const std::filesystem::path& p, std::string& out) {
 
 int RunCsv(const Options& options) {
   int failed = 0;
+  // Files, and the CSV and TSV files under folders, in a stable order.
+  std::vector<std::filesystem::path> files;
   for (const auto& in : options.inputs) {
-    const std::filesystem::path file(in);
+    std::error_code ec;
+    if (!std::filesystem::is_directory(in, ec)) {
+      files.push_back(in);
+      continue;
+    }
+    std::vector<std::filesystem::path> found;
+    for (const auto& e : std::filesystem::recursive_directory_iterator(in, ec)) {
+      std::wstring ext = e.path().extension().wstring();
+      for (auto& ch : ext) ch = static_cast<wchar_t>(towlower(ch));
+      if (e.is_regular_file() && (ext == L".csv" || ext == L".tsv")) found.push_back(e.path());
+    }
+    std::sort(found.begin(), found.end());
+    files.insert(files.end(), found.begin(), found.end());
+  }
+  size_t allFields = 0, allSame = 0, filesDiffering = 0;
+  for (const auto& file : files) {
     const auto t0 = std::chrono::steady_clock::now();
     std::string bytes;
     if (!ReadAll(file, bytes)) {
@@ -91,7 +112,38 @@ int RunCsv(const Options& options) {
     std::printf("  the sheet: %zu strings in %.0f MB, cells %.0f MB (16 bytes each)\n",
                 static_cast<size_t>(book.Strings().Size()), book.Strings().Bytes() / 1048576.0,
                 static_cast<double>(sheet.CellCount()) * 16 / 1048576.0);
+    if (!options.values) continue;
+    // Every field shows exactly as written: what the cell shows (its value through the format the
+    // reader gave it, in the locale it read with) against the field's own text.
+    const fw::sheet::NumLocale& locale = fw::sheet::UserLocale();
+    CellText show(book, locale);
+    std::vector<std::string> fields;
+    size_t count = 0, same = 0, listed = 0;
+    for (size_t r = 0; r < reader.RowCount() && r < 1048576; ++r) {
+      reader.Fields(r, fields);
+      for (size_t c = 0; c < fields.size() && c < 16384; ++c) {
+        fw::sheet::CellInfo info;
+        std::string ours = sheet.GetCell(static_cast<uint32_t>(r), static_cast<uint32_t>(c), info) ? show(info) : std::string();
+        if (fields[c].empty() && ours.empty()) continue;
+        ++count;
+        if (ours == fields[c]) {
+          ++same;
+        } else if (listed++ < 10) {
+          std::printf("  row %zu, field %zu: the file has \"%s\", Featherweight shows \"%s\"\n", r + 1, c + 1,
+                      fields[c].substr(0, 80).c_str(), ours.substr(0, 80).c_str());
+        }
+      }
+    }
+    std::printf("  values: %zu of %zu fields show as written%s\n", same, count, same == count ? "" : "  <-- differs");
+    allFields += count;
+    allSame += same;
+    if (same != count) {
+      ++filesDiffering;
+      ++failed;
+    }
   }
+  if (options.values)
+    std::printf("%zu files: %zu of %zu fields show as written; %zu files differ\n", files.size(), allSame, allFields, filesDiffering);
   return failed ? 1 : 0;
 }
 
