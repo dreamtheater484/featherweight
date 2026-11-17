@@ -2454,6 +2454,12 @@ void App::RunScript(const std::wstring& script) {
       if (v && v->Ready() && v->Kind() == TabKind::Workbook)
         written = static_cast<fw::sheet::view::WorkbookView*>(v)->RenderPagesForTesting(dir, dpi);
       if (written == 0) fwprintf(stderr, L"pagepngs failed\n");
+    } else if (op == L"workbookpdf") {
+      // workbookpdf:out.pdf exports every sheet of a workbook, as Excel's reference PDFs have them.
+      TabContent* v = Active();
+      if (!v || !v->Ready() || v->Kind() != TabKind::Workbook ||
+          !static_cast<fw::sheet::view::WorkbookView*>(v)->ExportWorkbookPdfForTesting(arg))
+        fwprintf(stderr, L"workbookpdf failed\n");
     } else if (op == L"cmd") {
       static const std::pair<const wchar_t*, int> names[] = {
           {L"find", CmdFind}, {L"next", CmdFindNext}, {L"invert", CmdToggleInvert}, {L"present", CmdPresentation},

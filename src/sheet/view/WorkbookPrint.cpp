@@ -266,6 +266,21 @@ bool WorkbookView::ExportPdf(const std::wstring& path, std::wstring& message) {
   return true;
 }
 
+bool WorkbookView::ExportWorkbookPdfForTesting(const std::wstring& path) {
+  // Every sheet's pages in one PDF, as Excel exports a workbook, so a comparison can rasterize
+  // ours and Excel's with the same renderer.
+  if (!Ready()) return false;
+  draw::PdfDocument pdf;
+  ForEachSheetLayout([&](PrintLayout& layout) {
+    for (size_t i = 0; i < layout.PageCount(); ++i) {
+      const PrintPage& page = layout.Page(i);
+      pdf.AddPage(page.width, page.height, [&](draw::Painter& painter) { layout.Paint(painter, i); });
+    }
+  });
+  const std::vector<uint8_t> bytes = pdf.Finish();
+  return util::WriteFileAtomic(path, std::string(bytes.begin(), bytes.end()));
+}
+
 int WorkbookView::RenderPagesForTesting(const std::wstring& dir, float dpi) {
   // Every sheet's pages, numbered on through the workbook, as Excel exports a workbook.
   if (!Ready()) return 0;
