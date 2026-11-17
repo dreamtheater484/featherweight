@@ -32,6 +32,8 @@ struct NumLocale;
 
 namespace fw::sheet::edit {
 
+class Journal;
+
 // What a change touched. Several flags may come together.
 enum ChangeFlag : uint32_t {
   kValues = 1u << 0,      // values typed, pasted or cleared in `cells`
@@ -270,8 +272,18 @@ class Editor {
   // The region numbers typed into tables' headers are shown in, as text (default: en-US).
   void SetLocale(const NumLocale* locale) { locale_ = locale; }
 
+  // ---- Crash recovery (Journal.h)
+  // The edits from now on are recorded in `journal` (nullptr: none).
+  void SetJournal(Journal* journal);
+  // Makes the edits a journal recorded again, in order, on the workbook reopened as it was when the
+  // journal started. Stops at the first one that can't be read or made (the edits before it stay);
+  // `applied` counts the records applied. Recorded into this editor's own journal, if it has one.
+  Result Replay(std::string_view records, size_t* applied = nullptr);
+
  private:
   struct State;
+  struct Rec;  // records an edit in the journal (Edit.cpp)
+  void DropHistory();
   // Rows, columns or cells inserted or deleted (the public calls above build `shift`).
   Result ShiftCells(int sheet, const Shift& shift, std::u16string stepName);
   Result SortLines(int sheet, const Range& r, const std::vector<uint32_t>& order, const std::vector<SortKey>& keys, bool rows);
@@ -289,6 +301,8 @@ class Editor {
   Workbook& book_;
   std::unique_ptr<State> s_;
   const NumLocale* locale_ = nullptr;
+  Journal* journal_ = nullptr;
+  int calls_ = 0;  // Editor calls under way: only the outermost records itself
   std::vector<Listener> listeners_;
 };
 

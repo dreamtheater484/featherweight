@@ -1,6 +1,6 @@
 # The edit layer (plan §4.3 rules 4 and 5, S2): operations with inverses on the copy-on-write row
 # blocks, transactions, undo and redo. The only code that changes a loaded workbook model.
-target_sources(fwsheet PRIVATE Edit.cpp Refs.cpp)
+target_sources(fwsheet PRIVATE Edit.cpp Journal.cpp Refs.cpp)
 if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_edit.cpp"
                                   "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_save.cpp"

@@ -701,6 +701,28 @@ std::set<std::string> Reachable(const pkg::Package& pkg, const std::set<std::str
 void PutSheetElement(PartText& t, std::string_view local, const std::string& xml) { PutElement(t, local, xml); }
 std::string SheetPrefix(const PartText& t) { return PrefixOf(t.rootStart); }
 
+std::string StyleItemXml(const Font& f) { return FontXml(f); }
+std::string StyleItemXml(const Fill& f) { return FillXml(f); }
+std::string StyleItemXml(const Border& b) { return BorderXml(b); }
+std::string StyleItemXml(const Xf& x) { return XfXml(x); }
+
+namespace {
+template <class T>
+bool ReadItem(std::string_view xml, std::string_view list, const std::vector<T>& (Styles::*items)() const, T& out) {
+  const std::string doc = "<styleSheet xmlns=\"" + std::string(kMainNs) + "\"><" + std::string(list) + ">" +
+                          std::string(xml) + "</" + std::string(list) + "></styleSheet>";
+  Styles styles;
+  if (!ReadStyles(doc, pkg::Limits::Default(), "journal", styles).Ok() || (styles.*items)().size() != 1) return false;
+  out = (styles.*items)()[0];
+  return true;
+}
+}  // namespace
+
+bool ReadStyleItem(std::string_view xml, Font& out) { return ReadItem(xml, "fonts", &Styles::Fonts, out); }
+bool ReadStyleItem(std::string_view xml, Fill& out) { return ReadItem(xml, "fills", &Styles::Fills, out); }
+bool ReadStyleItem(std::string_view xml, Border& out) { return ReadItem(xml, "borders", &Styles::Borders, out); }
+bool ReadStyleItem(std::string_view xml, Xf& out) { return ReadItem(xml, "cellXfs", &Styles::CellXfs, out); }
+
 // ---------- The workbook ----------
 
 Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan, FileFormat format) {

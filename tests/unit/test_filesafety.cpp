@@ -272,3 +272,50 @@ TEST(Recovery_OnlyOrphansAreOffered) {
   CHECK_EQ(CountFiles(dir), 0u);
   RemoveFolder(dir);
 }
+
+TEST(Recovery_JournalAppendsAndReadsBack) {
+  namespace recovery = fw::pkg::recovery;
+  std::wstring dir = NewFolder(L"journal");
+  recovery::Session session;
+  CHECK(session.Start(dir));
+  std::wstring file = session.NewFile();
+  const std::string opened = "PK\x03\x04 the confidential workbook as opened";
+  CHECK(recovery::StartJournal(file, L"D:\\Docs\\Budget.xlsx", L"Budget.xlsx", test::Bytes(opened), "csv;sep=;", 100));
+  CHECK(recovery::AppendJournal(file, test::Bytes("first secret edits;"), 200));
+  CHECK(recovery::AppendJournal(file, {}, 250));  // nothing new: nothing written
+  CHECK(recovery::AppendJournal(file, test::Bytes("second secret edits"), 300));
+  std::vector<uint8_t> raw(1 << 16);
+  {
+    HANDLE h = CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    DWORD got = 0;
+    CHECK(h != INVALID_HANDLE_VALUE && ReadFile(h, raw.data(), static_cast<DWORD>(raw.size()), &got, nullptr));
+    raw.resize(got);
+    CloseHandle(h);
+  }
+  CHECK(test::Text(raw).find("confidential") == std::string::npos);  // never in clear
+  CHECK(test::Text(raw).find("secret") == std::string::npos);
+
+  recovery::Entry e;
+  std::vector<uint8_t> doc, records;
+  CHECK(!recovery::Read(file, e, doc));  // the document alone would lack the edits
+  CHECK(recovery::ReadJournal(file, e, doc, records));
+  CHECK(e.journal && e.meta == "csv;sep=;" && e.title == L"Budget.xlsx" && e.originalPath == L"D:\\Docs\\Budget.xlsx");
+  CHECK(test::Text(doc) == opened);
+  CHECK(test::Text(records) == "first secret edits;second secret edits");
+  CHECK_EQ(e.savedAt, 300);
+  // A piece cut short by a crash is left out; the pieces before it count.
+  std::vector<uint8_t> cut(raw.begin(), raw.end() - 5);
+  std::wstring cutFile = dir + L"\\session-9-9-1.fwr";
+  CHECK(test::WriteFileBytes(cutFile, cut));
+  CHECK(recovery::ReadJournal(cutFile, e, doc, records));
+  CHECK(test::Text(records) == "first secret edits;" && e.savedAt == 200 && test::Text(doc) == opened);
+  // Offered after a crash like an autosave, marked as a journal; whole autosaves still read.
+  CHECK(recovery::Write(dir + L"\\session-8-8-1.fwr", L"", L"Book1", test::Bytes("whole"), 50));
+  auto orphans = recovery::FindOrphans(dir);
+  CHECK_EQ(orphans.size(), 2u);
+  if (orphans.size() == 2) CHECK(!orphans[0].journal && orphans[1].journal && orphans[1].savedAt == 200);
+  CHECK(recovery::ReadJournal(dir + L"\\session-8-8-1.fwr", e, doc, records));
+  CHECK(!e.journal && test::Text(doc) == "whole" && records.empty());
+  session.End();
+  RemoveFolder(dir);
+}
