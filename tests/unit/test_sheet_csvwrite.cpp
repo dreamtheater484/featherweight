@@ -163,13 +163,12 @@ TEST(SheetCsvWrite_Loses) {
   CHECK(csv::Loses(*book));
 }
 
-// A CSV workbook sorts like any other (the tab's Sort A to Z), without a sort record: it has no
-// sheet XML to keep one in.
+// A CSV workbook sorts like any other (the tab's Sort A to Z, with its keys); CSV loses nothing.
 TEST(SheetCsvWrite_Sorted) {
   auto book = Open("Item,Amount\r\nTea,5\r\nCoffee,9\r\nMilk,2\r\n", Opts(EnUsLocale()));
   edit::Editor ed(*book);
   const Sheet& s = book->GetSheet(0);
-  CHECK(ed.SortRows(0, Range{1, 0, 3, 1}, {1, 0, 2}));
+  CHECK(ed.SortRows(0, Range{1, 0, 3, 1}, {1, 0, 2}, {{1, true}}));
   CHECK(s.GetValue(1, 1).number == 9 && s.GetValue(2, 1).number == 5 && s.GetValue(3, 1).number == 2);
   CHECK(!csv::Loses(*book));
   CHECK(ed.Undo());

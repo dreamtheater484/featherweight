@@ -157,11 +157,9 @@ bool WorkbookView::SortRange(const Range& range, bool header, const std::vector<
   } else {
     for (size_t i = 0; i < order.size(); ++i) order[i] = sorted[i] - rows.firstRow;
   }
-  // The sort's record (Excel's sortState, for Data > Reapply) lives in the sheet's XML: a workbook
-  // read from CSV has none, and a CSV file couldn't keep it.
+  // The keys are kept as Excel's sortState (Data > Reapply); a CSV file leaves it out.
   std::vector<edit::Editor::SortKey> sortKeys;
-  if (book_->GetPackage())
-    for (const data::SortKey& k : keys) sortKeys.push_back({k.index, k.descending});
+  for (const data::SortKey& k : keys) sortKeys.push_back({k.index, k.descending});
   if (EditRefused(Ed().SortRows(static_cast<int>(sheet_), rows, order, sortKeys))) return false;
   host_.ViewInvalidate();
   return true;

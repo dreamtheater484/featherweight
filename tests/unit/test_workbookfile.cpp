@@ -249,6 +249,17 @@ TEST(WorkbookFile_CsvKeepsItsWayAndAWorkbookCopiesToCsv) {
   CHECK(file.Save(*book, ed, tsv, error));
   CHECK(ReadAll(tsv) == "\xEF\xBB\xBFItem\tPrice\r\nTea\t2,50\r\nCocoa\t3\r\n");  // 2,50 read with 0.00
   CHECK(file.Path() == tsv);
+  // Save As .xlsx (the banner's choice): an Excel workbook with the edits, sorted, and the tab is it.
+  CHECK(ed.SortRows(0, Range{1, 0, 2, 1}, {1, 0}, {{0, false}}));  // Cocoa, Tea
+  const std::wstring xlsx = f.path + L"\\Prices.xlsx";
+  CHECK(file.Save(*book, ed, xlsx, error));
+  CHECK(file.Path() == xlsx && !file.Dirty() && book->Format() == FileFormat::Xlsx);
+  auto reopened = OpenFile(xlsx);
+  CHECK(reopened && reopened->GetSheet(0).Name() == "Prices");
+  if (reopened) {
+    CHECK(reopened->GetSheet(0).GetValue(1, 0).text == "Cocoa" && reopened->GetSheet(0).GetValue(2, 1).number == 2.5);
+    CHECK(reopened->GetSheet(0).Text().afterData.find("<sortState ref=\"A2:B3\">") != std::string::npos);
+  }
 
   // An Excel workbook: Save as .csv is refused, a copy is written.
   const std::wstring xlsxPath = f.path + L"\\Budget.xlsx";
