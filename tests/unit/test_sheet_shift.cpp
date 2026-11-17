@@ -12,6 +12,7 @@
 #include "SheetTestUtil.h"
 #include "TestHarness.h"
 #include "sheet/edit/Edit.h"
+#include "sheet/edit/Journal.h"
 #include "sheet/edit/Refs.h"
 
 using namespace fw::sheet;
@@ -524,4 +525,85 @@ TEST(sheet_spill_blocked_by_typing) {
   CHECK(Text(s, 2, 7) == "" && Text(s, 3, 7) == "" && Text(s, 4, 7) == "9");
   CHECK(ed.Undo());
   CHECK(s.GetFormula(1, 7, info) && info.ref == (Range{1, 7, 4, 7}) && Text(s, 2, 7) == "3" && Text(s, 4, 7) == "5");
+}
+
+// Cut and paste on one sheet, as Excel rewrites references (measured: cutprobe.py, Range.Cut over
+// the same cells): A1:A3 moved to C1:C3.
+TEST(sheet_move_cells_references) {
+  std::string data = "<sheetData>";
+  data += Row(1, Num("A1", 1) + Num("B1", 10) + Num("C1", 100) + F("D1", "A2") + F("E1", "A1") +
+                     "<c r=\"G1\"><f t=\"shared\" ref=\"G1:G4\" si=\"0\">A1*2</f></c>");
+  data += Row(2, Num("A2", 2) + Num("B2", 20) + Num("C2", 200) + F("E2", "SUM(A1:A3)") + "<c r=\"G2\"><f t=\"shared\" si=\"0\"/></c>");
+  data += Row(3, F("A3", "A1+B1") + Num("B3", 30) + F("E3", "SUM(A1:A5)") + "<c r=\"G3\"><f t=\"shared\" si=\"0\"/></c>");
+  data += Row(4, F("E4", "A2*2") + "<c r=\"G4\"><f t=\"shared\" si=\"0\"/></c>");
+  const char* more[][2] = {{"E5", "C1"},          {"E6", "SUM(C1:C3)"},  {"E7", "SUM(B1:D1)"}, {"E8", "$A$1"},
+                           {"E9", "Sheet1!A1"},   {"E10", "SUM(A2:A3)"}, {"E11", "SUM(A3:A6)"}, {"E12", "SUM(C2:C5)"},
+                           {"E13", "SUM(A:A)"},   {"E14", "SUM(1:1)"},   {"E15", "SUM(A1:B3)"}, {"E16", "SUM(A1,A2)"},
+                           {"E18", "C3"},         {"E19", "SUM(A1:A2)"}, {"E20", "$A1"}};
+  for (const auto& m : more) data += Row(std::stoi(std::string(m[0] + 1)), F(m[0], m[1]));
+  data += "</sheetData>";
+  auto book = OpenParts({data, "<sheetData>" + Row(1, F("A1", "Sheet1!A1")) + Row(2, F("A2", "SUM(Sheet1!A1:A3)")) +
+                                   Row(3, F("A3", "Sheet1!C2")) + Row(4, F("A4", "SUM(Sheet1:Sheet2!A1)")) + "</sheetData>"});
+  if (!book) return;
+  Editor ed(*book);
+  edit::Journal journal;
+  ed.SetJournal(&journal);
+  const Sheet& s1 = book->GetSheet(0);
+  const Sheet& s2 = book->GetSheet(1);
+  CHECK(ed.MoveCells(0, Range{0, 0, 2, 0}, CellAddr{0, 2}));
+  CHECK(Text(s1, 0, 2) == "1" && Text(s1, 1, 2) == "2" && Text(s1, 0, 0) == "" && Text(s1, 1, 0) == "");
+  CHECK_EQ(FormulaText(s1, 2, 2), std::string("C1+B1"));  // the moved formula
+  CHECK_EQ(FormulaText(s1, 2, 0), std::string("-"));
+  const char* want[][2] = {{"D1", "C2"},          {"E1", "C1"},           {"E2", "SUM(C1:C3)"},  {"E3", "SUM(A1:A5)"},
+                           {"E4", "C2*2"},        {"E5", "#REF!"},        {"E6", "SUM(#REF!)"},  {"E7", "SUM(B1:D1)"},
+                           {"E8", "$C$1"},        {"E9", "Sheet1!C1"},    {"E10", "SUM(C2:C3)"}, {"E11", "SUM(A3:A6)"},
+                           {"E12", "SUM(C4:C5)"}, {"E13", "SUM(A:A)"},    {"E14", "SUM(1:1)"},   {"E15", "SUM(A1:B3)"},
+                           {"E16", "SUM(C1,C2)"}, {"E18", "#REF!"},       {"E19", "SUM(C1:C2)"}, {"E20", "$C1"},
+                           {"G1", "C1*2"},        {"G2", "C2*2"},         {"G3", "C3*2"},        {"G4", "A4*2"}};
+  for (const auto& w : want) {
+    CellAddr a;
+    CHECK(ParseA1(w[0], a));
+    if (FormulaText(s1, a.row, a.col) != w[1]) std::printf("  %s: %s\n", w[0], FormulaText(s1, a.row, a.col).c_str());
+    CHECK_EQ(FormulaText(s1, a.row, a.col), std::string(w[1]));
+  }
+  CHECK_EQ(FormulaText(s2, 0, 0), std::string("Sheet1!C1"));
+  CHECK_EQ(FormulaText(s2, 1, 0), std::string("SUM(Sheet1!C1:C3)"));
+  CHECK_EQ(FormulaText(s2, 2, 0), std::string("Sheet1!#REF!"));
+  CHECK_EQ(FormulaText(s2, 3, 0), std::string("SUM(Sheet1:Sheet2!A1)"));
+  CHECK(book->Names()[0].name == "Total" && book->Names()[0].formula == "Sheet1!$C$1");
+
+  // One step back.
+  CHECK(ed.Undo());
+  CHECK(Text(s1, 0, 0) == "1" && Text(s1, 0, 2) == "100" && FormulaText(s1, 2, 0) == "A1+B1");
+  CHECK(FormulaText(s1, 0, 4) == "A1" && FormulaText(s1, 4, 4) == "C1" && FormulaText(s2, 2, 0) == "Sheet1!C2");
+  CHECK(book->Names()[0].formula == "Sheet1!$A$1");
+
+  // The journal makes it again.
+  auto again = OpenParts({data, "<sheetData/>"});
+  if (!again) return;
+  Editor replayed(*again);
+  CHECK(replayed.Replay(journal.All()).ok);
+  CHECK(Text(again->GetSheet(0), 0, 0) == "1" && FormulaText(again->GetSheet(0), 0, 4) == "A1");  // undone there too
+}
+
+// Moved over part of themselves (A1:A3 to A2:A4), and what's refused.
+TEST(sheet_move_cells_overlapping) {
+  std::string data = "<sheetData>" + Row(1, Num("A1", 1) + F("E1", "A1")) + Row(2, Num("A2", 2) + F("E2", "SUM(A1:A3)")) +
+                     Row(3, Num("A3", 3) + F("E3", "A4")) + Row(4, Num("A4", 4) + F("E4", "SUM(A2:A4)")) +
+                     Row(5, F("E5", "A3")) + Row(6, F("E6", "SUM(A1:A4)")) + "</sheetData>" +
+                     "<mergeCells count=\"1\"><mergeCell ref=\"B1:C1\"/></mergeCells>";
+  auto book = OpenParts({data, "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  const Sheet& s = book->GetSheet(0);
+  CHECK(ed.MoveCells(0, Range{0, 0, 2, 0}, CellAddr{1, 0}));
+  CHECK(Text(s, 0, 0) == "" && Text(s, 1, 0) == "1" && Text(s, 2, 0) == "2" && Text(s, 3, 0) == "3");
+  const char* want[] = {"A2", "SUM(A2:A4)", "#REF!", "SUM(A3:A4)", "A4", "SUM(A2:A4)"};
+  for (uint32_t r = 0; r < 6; ++r) CHECK_EQ(FormulaText(s, r, 4), std::string(want[r]));
+  // A merge moves with its cells; one cut in part is refused.
+  CHECK(ed.MoveCells(0, Range{0, 1, 0, 2}, CellAddr{9, 1}));
+  CHECK(s.Merges().size() == 1 && s.Merges()[0] == (Range{9, 1, 9, 2}));
+  CHECK(!ed.MoveCells(0, Range{9, 1, 9, 1}, CellAddr{12, 1}));
+  CHECK(ed.MoveCells(0, Range{0, 0, 0, 0}, CellAddr{kMaxRows - 1, 0}));
+  CHECK(!ed.MoveCells(0, Range{0, 0, 1, 0}, CellAddr{kMaxRows - 1, 0}));
 }

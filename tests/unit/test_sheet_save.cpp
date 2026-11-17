@@ -840,3 +840,22 @@ TEST(sheet_save_filter) {
   CHECK(r && r->columns.size() == 3 && r->columns[1].conditions.size() == 2 && r->columns[2].threshold == 6);
   CHECK(replayedBook->Names().size() == 3);
 }
+
+TEST(sheet_save_moved_cells) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c><c r=\"B1\"><f t=\"shared\" ref=\"B1:B3\" si=\"0\">A1*2</f>"
+                         "</c><c r=\"D1\"><f>SUM(A1:A2)</f></c></row><row r=\"2\"><c r=\"A2\"><v>2</v></c><c r=\"B2\"><f t=\"shared\" "
+                         "si=\"0\"/></c></row><row r=\"3\"><c r=\"B3\"><f t=\"shared\" si=\"0\"/></c></row></sheetData>"
+                         "<mergeCells count=\"1\"><mergeCell ref=\"A5:B5\"/></mergeCells>",
+                         "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.MoveCells(0, Range{0, 0, 1, 0}, CellAddr{0, 5}));  // A1:A2 to F1:F2
+  CHECK(ed.MoveCells(0, Range{4, 0, 4, 1}, CellAddr{7, 2}));  // the merge A5:B5 to C8:D8
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-move-cells");
+  CheckClean(saved);
+  auto again = OpenZip(saved);
+  if (!again) return;
+  const Sheet& s = again->GetSheet(0);
+  CHECK(FormulaText(s, 0, 1) == "F1*2" && FormulaText(s, 1, 1) == "F2*2" && FormulaText(s, 2, 1) == "A3*2");
+  CHECK(FormulaText(s, 0, 3) == "SUM(F1:F2)" && s.Merges().size() == 1 && s.Merges()[0] == (Range{7, 2, 7, 3}));
+}
