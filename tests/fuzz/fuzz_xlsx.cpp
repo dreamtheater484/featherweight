@@ -1,6 +1,7 @@
 // Fuzz target: the workbook model (src/sheet/model) and its .xlsx reader and writer (S1): every
 // sheet read, everything the grid and the formula engine ask of the model, a few changes, and the
-// writer, which must give back what it read. Also what sits above the cells (src/sheet/objects):
+// writer, which must give back what it read. Then edits through the edit API (S2), undo, redo, the
+// crash-recovery journal replayed, and a save that must open again. Also what sits above the cells (src/sheet/objects):
 // drawings, charts with their data references, notes and threaded comments, read, placed and
 // drawn; and the table styles' formats.
 // Seeds: tests/fuzz/seeds/xlsx (a small workbook with every structure the model reads) and
@@ -12,6 +13,7 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -22,17 +24,22 @@
 #include <vector>
 
 #include "pkg/Canonical.h"
+#include "pkg/Check.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "pkg/Zip.h"
 #include "chart/Chart.h"
 #include "draw/D2DPainter.h"
+#include "sheet/edit/Edit.h"
+#include "sheet/edit/Journal.h"
 #include "sheet/model/TableStyles.h"
 #include "sheet/objects/SheetObjects.h"
 #include "sheet/xlsx/Xlsx.h"
 
 using namespace fw::pkg;
 using namespace fw::sheet;
+using edit::CellInput;
+using edit::Editor;
 
 namespace {
 
@@ -186,6 +193,285 @@ void DrawObjects(Workbook& book) {
   }
 }
 
+
+// ---- Edits (S2): a program a hash of the input picks, made through the edit API as the app makes
+// them, undo and redo among them. The journal replayed on the workbook read again must make every
+// edit again and save the same parts; the save must open again (and pass the package check when
+// the input did); undoing everything gives the cells back as they were read.
+
+struct Rng {
+  uint64_t s;
+  uint64_t Next() {
+    uint64_t z = (s += 0x9E3779B97F4A7C15ull);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return z ^ (z >> 31);
+  }
+  uint32_t Below(uint32_t n) { return n ? static_cast<uint32_t>(Next() % n) : 0; }
+  bool Chance(uint32_t percent) { return Below(100) < percent; }
+};
+
+uint64_t HashOf(const uint8_t* data, size_t size) {
+  uint64_t h = 1469598103934665603ull;
+  for (size_t i = 0; i < size; ++i) h = (h ^ data[i]) * 1099511628211ull;
+  return h;
+}
+
+// Every stored cell of every sheet, as text: what undoing everything must give back.
+std::string CellsOf(const Workbook& book) {
+  std::string out;
+  for (size_t i = 0; i < book.SheetCount(); ++i) {
+    const Sheet& s = book.GetSheet(i);
+    out += "#" + s.Name() + "\n";
+    s.ForEachCell(Range::All(), [&](const CellInfo& c) {
+      out += std::to_string(c.row) + "," + std::to_string(c.col) + ":" + std::to_string(static_cast<int>(c.value.type)) +
+             "/" + std::to_string(c.style) + "/";
+      if (c.value.type == ValueType::Number) out += std::to_string(c.value.number);
+      if (c.value.type == ValueType::String) out += std::string(c.value.text);
+      FormulaInfo f;
+      if (c.hasFormula && s.GetFormula(c.row, c.col, f)) out += "=" + std::string(f.text);
+      out += "\n";
+      return true;
+    });
+  }
+  return out;
+}
+
+const char* const kFormulas[] = {"A1+1", "SUM(A1:B4)", "Sheet2!A1*2", "'Sheet 1'!B2", "A1+", "#REF!", "T[b]",
+                                 "TRANSPOSE(A1:A3)", "Total*2", "Sheet1:Sheet2!A1", "B2:B4", "IF(A1>1,\"x\",1)"};
+constexpr uint32_t kFormulaCount = static_cast<uint32_t>(std::size(kFormulas));
+
+void EditOnce(Editor& ed, const Workbook& book, Rng& rng, int& groups, bool hadSheets) {
+  const int sheets = static_cast<int>(book.SheetCount());
+  const int sheet = rng.Chance(5) ? sheets : static_cast<int>(rng.Below(static_cast<uint32_t>(sheets)));
+  auto row = [&] { return rng.Below(rng.Chance(3) ? kMaxRows : 40); };
+  auto col = [&] { return rng.Below(rng.Chance(3) ? kMaxCols : 12); };
+  auto range = [&] {
+    uint32_t r = row(), c = col();
+    return Range{r, c, std::min<uint32_t>(r + rng.Below(5), kMaxRows - 1), std::min<uint32_t>(c + rng.Below(4), kMaxCols - 1)};
+  };
+  auto input = [&] {
+    switch (rng.Below(5)) {
+      case 0: return CellInput::Number(static_cast<double>(rng.Below(1000)) / 8);
+      case 1: return CellInput::Text(rng.Chance(20) ? std::string() : "t" + std::to_string(rng.Below(50)));
+      case 2: return CellInput::Bool(rng.Chance(50));
+      case 3: return CellInput::Error(static_cast<ErrorCode>(rng.Below(8)));
+      default: return CellInput::Formula(kFormulas[rng.Below(kFormulaCount)]);
+    }
+  };
+  const Styles& styles = book.GetStyles();
+  switch (rng.Below(24)) {
+    case 0:
+    case 1: ed.SetCell(sheet, row(), col(), input()); break;
+    case 2: {
+      std::vector<std::pair<CellAddr, CellInput>> cells;
+      for (uint32_t n = rng.Below(6); n > 0; --n) cells.push_back({CellAddr{row(), col()}, input()});
+      ed.SetCells(sheet, cells);
+      break;
+    }
+    case 3: ed.ClearContents(sheet, range()); break;
+    case 4: rng.Chance(50) ? ed.ClearAll(sheet, range()) : ed.ClearFormats(sheet, range()); break;
+    case 5: {
+      Font f = styles.Fonts().empty() ? Font{} : styles.Fonts()[0];
+      f.bold = rng.Chance(50);
+      f.size = 8 + rng.Below(10);
+      Xf x;
+      x.font = ed.AddFont(f);
+      x.numFmt = rng.Chance(50) ? ed.AddNumFmt(rng.Chance(50) ? "0.00%" : "[Red]#,##0;(#,##0)") : rng.Below(50);
+      x.applyFont = x.applyNumFmt = true;
+      ed.SetStyle(sheet, range(), ed.AddXf(x));
+      break;
+    }
+    case 6: {
+      Fill fill;
+      fill.pattern = PatternType::Solid;
+      fill.fg = Color{Color::Kind::Rgb, 0xFF000000u | rng.Below(0xFFFFFF), 0};
+      Border border;
+      border.top.style = BorderStyle::Thin;
+      const uint32_t fi = ed.AddFill(fill), bi = ed.AddBorder(border);
+      ed.MapStyles(sheet, range(), [&](uint32_t s) {
+        Xf x = book.GetStyles().CellXf(s);
+        x.fill = fi;
+        x.border = bi;
+        x.applyFill = x.applyBorder = true;
+        return ed.AddXf(x);
+      });
+      break;
+    }
+    case 7: {
+      const uint32_t first = row(), last = first + rng.Below(3);
+      switch (rng.Below(3)) {
+        case 0: ed.SetRowHeight(sheet, first, last, rng.Below(60)); break;
+        case 1: ed.HideRows(sheet, first, last, rng.Chance(50)); break;
+        default: ed.SetRowOutline(sheet, first, last, static_cast<uint8_t>(rng.Below(9)), rng.Chance(30)); break;
+      }
+      break;
+    }
+    case 8: {
+      const uint32_t first = col(), last = first + rng.Below(3);
+      switch (rng.Below(3)) {
+        case 0: ed.SetColumnWidth(sheet, first, last, rng.Below(40)); break;
+        case 1: ed.HideColumns(sheet, first, last, rng.Chance(50)); break;
+        default: ed.SetColumnOutline(sheet, first, last, static_cast<uint8_t>(rng.Below(9)), rng.Chance(30)); break;
+      }
+      break;
+    }
+    case 9: rng.Chance(50) ? ed.InsertRows(sheet, row(), 1 + rng.Below(3)) : ed.DeleteRows(sheet, row(), 1 + rng.Below(3)); break;
+    case 10:
+      rng.Chance(50) ? ed.InsertColumns(sheet, col(), 1 + rng.Below(3)) : ed.DeleteColumns(sheet, col(), 1 + rng.Below(3));
+      break;
+    case 11: {
+      const auto dir = rng.Chance(50) ? Editor::Direction::DownOrUp : Editor::Direction::RightOrLeft;
+      rng.Chance(50) ? ed.InsertCells(sheet, range(), dir) : ed.DeleteCells(sheet, range(), dir);
+      break;
+    }
+    case 12: {
+      const Range r = range();
+      const bool rows = rng.Chance(50);
+      std::vector<uint32_t> order(rows ? r.lastRow - r.firstRow + 1 : r.lastCol - r.firstCol + 1);
+      for (uint32_t i = 0; i < order.size(); ++i) order[i] = i;
+      for (size_t i = order.size(); i > 1; --i) std::swap(order[i - 1], order[rng.Below(static_cast<uint32_t>(i))]);
+      std::vector<Editor::SortKey> keys;
+      if (rng.Chance(50)) keys.push_back({rows ? r.firstCol : r.firstRow, rng.Chance(50)});
+      rows ? ed.SortRows(sheet, r, order, keys) : ed.SortColumns(sheet, r, order, keys);
+      break;
+    }
+    case 13: rng.Chance(60) ? ed.Merge(sheet, range()) : ed.Unmerge(sheet, range()); break;
+    case 14:
+      switch (rng.Below(4)) {
+        case 0: ed.AddSheet(static_cast<int>(rng.Below(static_cast<uint32_t>(sheets) + 1)) - 1); break;
+        case 1: ed.RenameSheet(sheet, rng.Chance(50) ? "Data & More" : "S" + std::to_string(rng.Below(9))); break;
+        case 2: ed.MoveSheet(sheet, static_cast<int>(rng.Below(static_cast<uint32_t>(sheets)))); break;
+        default: ed.DeleteSheet(sheet); break;
+      }
+      break;
+    case 15:
+      switch (rng.Below(3)) {
+        case 0: ed.SetTabColor(sheet, Color{Color::Kind::Theme, rng.Below(10), -0.25}); break;
+        case 1: ed.SetSheetState(sheet, static_cast<SheetState>(rng.Below(3))); break;
+        default: ed.FreezePanes(sheet, rng.Below(4), rng.Below(4)); break;
+      }
+      break;
+    case 16:
+      if (rng.Chance(70)) ed.SetName(DefinedName{"N" + std::to_string(rng.Below(4)), rng.Chance(30) ? sheet : -1,
+                                                 kFormulas[rng.Below(kFormulaCount)], false});
+      else ed.DeleteName("N" + std::to_string(rng.Below(4)), rng.Chance(30) ? sheet : -1);
+      break;
+    case 17:
+      switch (rng.Below(4)) {
+        case 0: ed.SetActiveSheet(sheet); break;
+        case 1: ed.SetSelection(sheet, CellAddr{row(), col()}, {range()}); break;
+        case 2: ed.SetTopLeft(sheet, CellAddr{row(), col()}); break;
+        default: ed.SetZoom(sheet, rng.Below(500)); break;
+      }
+      break;
+    case 18:
+    case 19: ed.Undo(1 + rng.Below(3)); break;
+    case 20: ed.Redo(1 + rng.Below(2)); break;
+    case 21:
+      if (groups < 2) {
+        ed.BeginGroup(u"Group");
+        ++groups;
+      }
+      break;
+    case 22:
+      if (groups > 0) {
+        rng.Chance(30) ? ed.CancelGroup() : ed.EndGroup();
+        --groups;
+      }
+      break;
+    default: {
+      CellInput in = CellInput::Formula("A1:A2*2");
+      in.array = true;
+      const uint32_t r = row(), c = col();
+      in.arrayRange = Range{r, c, std::min(r + 1, kMaxRows - 1), c};
+      ed.SetCell(sheet, r, c, in);
+      break;
+    }
+  }
+  Check(book.SheetCount() > 0 || !hadSheets);  // the last sheet is never deleted
+}
+
+// The parts of a saved file, by name: their bytes as text.
+std::vector<std::pair<std::string, std::string>> PartsOf(const std::vector<uint8_t>& zip, const Limits& limits) {
+  Status st;
+  auto pkg = Package::Open(Snapshot::FromBytes(std::vector<uint8_t>(zip)), limits, st);
+  Check(pkg != nullptr);
+  std::vector<std::pair<std::string, std::string>> out;
+  std::vector<uint8_t> bytes;
+  for (const auto& part : pkg->Parts()) {
+    Check(pkg->ReadPart(part.name, bytes).Ok());
+    out.push_back({part.name, std::string(bytes.begin(), bytes.end())});
+  }
+  return out;
+}
+
+// Saved as the app saves (BeginSave, PrepareSave, WriteSave, CommitSave); empty when refused.
+std::vector<uint8_t> Save(Workbook& book, Editor& ed) {
+  ed.BeginSave();
+  xlsx::SavePlan plan;
+  MemorySink sink;
+  if (!xlsx::PrepareSave(book, ed, plan, book.Format()).Ok() || !xlsx::WriteSave(book, plan, sink).Ok()) {
+    ed.EndSave();
+    return {};
+  }
+  xlsx::CommitSave(book, ed, plan);
+  return std::move(sink.bytes);
+}
+
+void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t seed) {
+  auto read = [&] {
+    Status st;
+    auto pkg = Package::Open(Snapshot::FromBytes(std::vector<uint8_t>(zip)), limits, st);
+    return pkg ? xlsx::Read(std::move(pkg), st, {.loadAll = true}) : nullptr;
+  };
+  std::unique_ptr<Workbook> book = read(), again = read(), fresh = read();
+  if (!book || !again || !fresh) return;
+  const std::string asRead = CellsOf(*fresh);
+  Editor ed(*book);
+  edit::Journal journal;
+  ed.SetJournal(&journal);
+  Rng rng{seed};
+  int groups = 0;
+  const uint32_t steps = 8 + rng.Below(24);
+  const bool hadSheets = book->SheetCount() > 0;
+  for (uint32_t i = 0; i < steps; ++i) EditOnce(ed, *book, rng, groups, hadSheets);
+  for (; groups > 0; --groups) ed.EndGroup();
+
+  // The journal makes every edit again, alike.
+  Editor replayed(*again);
+  size_t applied = 0;
+  edit::Result r = replayed.Replay(journal.All(), &applied);
+  if (!r) std::fprintf(stderr, "replay stopped after %zu records\n", applied);
+  Check(r.ok);
+  Check(CellsOf(*again) == CellsOf(*book));
+
+  const size_t history = ed.UndoNames().size();
+  const std::vector<uint8_t> saved = Save(*book, ed), savedAgain = Save(*again, replayed);
+  Check(saved.empty() == savedAgain.empty());
+  if (!saved.empty()) {
+    Check(PartsOf(saved, limits) == PartsOf(savedAgain, limits));
+    Status st;
+    auto pkg = Package::Open(Snapshot::FromBytes(std::vector<uint8_t>(saved)), limits, st);
+    Check(pkg != nullptr);
+    Status before;
+    auto original = Package::Open(Snapshot::FromBytes(std::vector<uint8_t>(zip)), limits, before);
+    if (original && CheckPackage(*original).Ok()) {
+      CheckReport report = CheckPackage(*pkg);
+      for (const std::string& e : report.errors) std::fprintf(stderr, "saved file: %s\n", e.c_str());
+      Check(report.Ok());
+    }
+    Check(xlsx::Read(std::move(pkg), st, {.loadAll = true}) != nullptr);
+  }
+
+  // Undoing everything gives the cells back (unless a save that removed sheets ended the history).
+  if (ed.UndoNames().size() != history) return;
+  while (ed.CanUndo()) Check(ed.Undo().ok);
+  const std::string undone = CellsOf(*book);
+  if (undone != asRead) std::fprintf(stderr, "undone:\n%s\nas read:\n%s\n", undone.c_str(), asRead.c_str());
+  Check(undone == asRead);
+}
+
 }  // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
@@ -193,6 +479,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   std::string_view input(reinterpret_cast<const char*>(data), size);
   std::vector<uint8_t> zip = input.starts_with("PK\x03\x04") ? std::vector<uint8_t>(data, data + size) : ZipFromText(input);
 
+  const std::vector<uint8_t> input0 = zip;
   Status st;
   auto pkg = Package::Open(Snapshot::FromBytes(std::move(zip)), limits, st);
   if (!pkg) return 0;
@@ -238,5 +525,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     std::string out;
     if (!s.Text().rootStart.empty()) Check(xlsx::WritePart(*book, s.PartName(), out).Ok());
   }
+
+  EditAndSave(input0, limits, HashOf(data, size));
   return 0;
 }

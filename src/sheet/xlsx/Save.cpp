@@ -117,10 +117,10 @@ std::string PrintDoc(const pugi::xml_document& d) {
 
 std::vector<uint8_t> Bytes(std::string_view s) { return std::vector<uint8_t>(s.begin(), s.end()); }
 
+// (Not std::to_chars for doubles: it brings over 100 KB of tables into the exe.)
 std::string Num(double v) {
-  char buf[32];
-  auto r = std::to_chars(buf, buf + sizeof buf, v);
-  return std::string(buf, r.ptr);
+  char buf[48];
+  return std::string(buf, FormatNumber(v, 0, buf));
 }
 
 std::string AttrXml(std::string_view name, std::string_view value) {

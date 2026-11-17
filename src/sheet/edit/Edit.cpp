@@ -362,10 +362,10 @@ std::string MissingSheet(const Workbook& b, std::string_view formula) {
   return names.missing;
 }
 
+// (Not std::to_chars for doubles: it brings over 100 KB of tables into the exe.)
 std::string Number(double v) {
-  char buf[32];
-  auto r = std::to_chars(buf, buf + sizeof buf, v);
-  return std::string(buf, r.ptr);
+  char buf[48];
+  return std::string(buf, xlsx::FormatNumber(v, 0, buf));
 }
 
 // Characters XML 1.0 can't hold (and Excel's files never do).
