@@ -25,7 +25,7 @@ bool NameChar(wchar_t c) { return std::iswalnum(c) || c == L'.' || c == L'_'; }
 void WorkbookView::UpdateFormulaHelp() {
   fnList_.clear();
   fnFrom_ = -1;
-  if (!editor_.Active() || !editor_.IsFormula() || editor_.HasSelection() || fnClosed_) return;
+  if (!editor_.Active() || !editor_.IsFormula() || editor_.HasSelection() || fnClosed_ || renaming_ >= 0) return;
   const std::wstring& t = editor_.Text();
   const int caret = editor_.Caret();
   if (caret < static_cast<int>(t.size()) && NameChar(t[static_cast<size_t>(caret)])) return;

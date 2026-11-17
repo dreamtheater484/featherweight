@@ -316,6 +316,28 @@ class WorkbookView : public PagedView {
   void SyncEngine(const std::vector<edit::Change>& changes);
   bool EditRefused(const edit::Result& r);  // shows why; true when it failed
   std::unique_ptr<edit::Editor> edit_;
+  // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
+  bool GridCommand(int cmd);
+  bool GridCommandState(int cmd, CommandState& s);
+  bool WholeRows() const;     // whole rows are selected (not everything)
+  bool WholeColumns() const;
+  int ShownNeighbour(int dir) const;  // the next shown sheet left (-1) or right (1) of this one, or -1
+  void SheetsChanged();  // sheets added, deleted or moved: the view's per-sheet state follows them
+  void Restructure();    // row heights, hidden rows and columns, merges changed on this sheet
+  std::vector<const Sheet*> sheetOrder_;  // the sheets in tab order, as the view last saw them
+  class SizePanel;
+  class GoToPanel;
+  std::unique_ptr<SizePanel> sizePanel_;
+  std::unique_ptr<GoToPanel> goToPanel_;
+  void ShowSizePanel(bool rows);
+  void ShowGoTo();
+  double CurrentSize(bool rows) const;  // the active row's height (points) or column's width (characters)
+  void SetSizes(bool rows, double value);
+  bool GoTo(const std::wstring& text);  // a cell, a range, Sheet2!A1 or a defined name
+  // Renaming a sheet on its tab (double-click it, or Rename): the cell editor's text and keys.
+  void BeginRename(size_t sheet);
+  int renaming_ = -1;
+  void DrawEditBox(gfx::Canvas& c, const D2D1_RECT_F& clip);
   // The region's formula separators (en-NL: "," decimal, ";" between arguments).
   const calc::FormulaLocale& Region() const;
   mutable std::optional<calc::FormulaLocale> region_;

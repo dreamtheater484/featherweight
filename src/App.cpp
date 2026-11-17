@@ -1274,7 +1274,9 @@ int App::AppShortcut(UINT vk, UINT mods) {
     }
   }
   switch (vk) {
-    case VK_F11: return CmdFullScreen;
+    case VK_F11:
+      if (!shift) return CmdFullScreen;
+      break;  // Shift+F11 is the tab's (a workbook inserts a sheet)
     case VK_F3: return shift ? CmdFindPrev : CmdFindNext;
   }
   return 0;

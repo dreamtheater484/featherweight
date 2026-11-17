@@ -305,8 +305,16 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
       Execute(CmdNextSheet);
     } else {
       for (const TabRect& t : TabRects())
-        if (gfx::Contains(t.rc, fx, fy)) ShowSheet(t.sheet);
+        if (gfx::Contains(t.rc, fx, fy)) {
+          ShowSheet(t.sheet);
+          if (doubleClick && button == 0) BeginRename(t.sheet);  // as in Excel
+        }
     }
+    return;
+  }
+  // The name box: Go to (Excel's name box takes a reference too).
+  if (button == 0 && gfx::Contains(nameBox_, fx, fy) && !ChartSheet()) {
+    ShowGoTo();
     return;
   }
   if (gfx::Contains(formulaBar_, fx, fy)) return;

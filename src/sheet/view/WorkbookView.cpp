@@ -10,6 +10,7 @@
 #include "pkg/Snapshot.h"
 #include "sheet/csv/Csv.h"
 #include "sheet/numfmt/NumLocale.h"
+#include "sheet/view/WorkbookPanels.h"
 #include "sheet/xlsx/Xlsx.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
@@ -117,6 +118,8 @@ OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& er
   measure_ = std::make_unique<FontMeasure>(*fonts_);
   text_ = std::make_unique<CellText>(*book_, *fonts_, *measure_, UserLocale());
   states_.assign(book_->SheetCount(), PerSheet{});
+  sheetOrder_.clear();
+  for (size_t i = 0; i < book_->SheetCount(); ++i) sheetOrder_.push_back(&book_->GetSheet(i));
   objects_.clear();
   objects_.resize(book_->SheetCount());
   rules_.clear();
@@ -480,6 +483,7 @@ void WorkbookView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
     DrawScrollbars(c);
     DrawFormulaBar(c);
     DrawSheetTabs(c);
+    if (renaming_ >= 0) DrawEditBox(c, tabs_);
     DrawFormulaHelp(c);
   }
   c.PopClip();

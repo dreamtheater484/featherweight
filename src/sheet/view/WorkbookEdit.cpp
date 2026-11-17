@@ -96,6 +96,7 @@ UINT WorkbookView::SemicolonKey() {
 
 void WorkbookView::AutoComplete() {
   autoText_.clear();
+  if (renaming_ >= 0) return;
   const std::wstring& t = editor_.Text();
   if (t.empty() || editor_.IsFormula() || editor_.HasSelection() || editor_.Caret() != static_cast<int>(t.size())) return;
   // Numbers, dates and times don't complete: only text with a letter.
@@ -248,7 +249,7 @@ void WorkbookView::RefDrag(int x, int y) {
 }
 
 const std::vector<WorkbookView::RefBox>& WorkbookView::Refs() {
-  if (!editor_.Active() || !editor_.IsFormula()) {
+  if (!editor_.Active() || !editor_.IsFormula() || renaming_ >= 0) {
     refs_.clear();
     refsText_.clear();
     return refs_;
@@ -401,6 +402,26 @@ void WorkbookView::BeginEdit(CellEditor::Mode mode, const std::wstring& text) {
   host_.ViewInvalidate();
 }
 
+void WorkbookView::BeginRename(size_t sheet) {
+  if (!Ready() || preview_ || sheet >= book_->SheetCount()) return;
+  if (editor_.Active() && !CommitEdit(false)) return;
+  std::u16string why;
+  if (!Ed().CanEdit(&why)) {
+    host_.ViewMessage(BannerKind::Info, std::wstring(why.begin(), why.end()));
+    return;
+  }
+  renaming_ = static_cast<int>(sheet);
+  editInBar_ = false;
+  editReplaces_ = false;
+  fnList_.clear();
+  autoText_.clear();
+  editor_.SetPointRule(nullptr);
+  editor_.Begin(Utf8ToWide(book_->GetSheet(sheet).Name()), CellEditor::Mode::Edit);
+  editor_.SelectAll();  // as Excel selects the whole name
+  host_.ViewStateChanged();
+  host_.ViewInvalidate();
+}
+
 bool WorkbookView::OnChar(wchar_t ch, UINT mods) {
   if (!Ready() || preview_ || ChartSheet()) return false;
   if (editor_.Active()) {
@@ -439,11 +460,13 @@ bool WorkbookView::EditKey(UINT vk, UINT mods) {
     case CellEditor::Action::None: return true;  // nothing else happens while a cell is edited
     case CellEditor::Action::Handled: break;
     case CellEditor::Action::Cancel:
+      renaming_ = -1;
       editor_.End();
       host_.ViewStateChanged();
       break;
-    case CellEditor::Action::Commit:
-      if (!CommitEdit(false)) break;
+    case CellEditor::Action::Commit: {
+      const bool renamed = renaming_ >= 0;
+      if (!CommitEdit(false) || renamed) break;
       if (vk == VK_TAB) {
         if (tabStartCol_ == UINT32_MAX) tabStartCol_ = active_.col;
       } else if (vk != VK_RETURN) {
@@ -451,6 +474,7 @@ bool WorkbookView::EditKey(UINT vk, UINT mods) {
       }
       MoveAfterEntry(r.dRow, r.dCol);
       break;
+    }
     case CellEditor::Action::CommitFill: CommitEdit(true); break;
     case CellEditor::Action::Point: PointMove(r.dRow, r.dCol, r.extend); break;
   }
@@ -461,6 +485,15 @@ bool WorkbookView::EditKey(UINT vk, UINT mods) {
 
 bool WorkbookView::CommitEdit(bool fill) {
   if (!editor_.Active()) return true;
+  if (renaming_ >= 0) {
+    // A sheet's new name (Excel's rules, and formulas that use it follow).
+    if (editor_.Changed() && EditRefused(Ed().RenameSheet(renaming_, WideToUtf8(editor_.Text())))) return false;
+    renaming_ = -1;
+    editor_.End();
+    host_.ViewStateChanged();
+    host_.ViewInvalidate();
+    return true;
+  }
   std::wstring text = editor_.Text();
   // AutoComplete's entry keeps its own case.
   if (!autoText_.empty() && Lower(text) == Lower(autoText_)) text = autoText_;
@@ -576,6 +609,15 @@ bool WorkbookView::CommitEdit(bool fill) {
 
 void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
   SyncEngine(changes);
+  bool sheets = false, layout = false;
+  for (const edit::Change& c : changes) {
+    sheets |= (c.what & edit::kSheets) != 0;
+    layout |= (c.what & (edit::kRowProps | edit::kColProps | edit::kMerges | edit::kShift)) != 0 &&
+              c.sheet == static_cast<int>(sheet_);
+  }
+  if (sheets) SheetsChanged();
+  else if (layout) Restructure();
+  if (!SheetShown(sheet_)) ShowSheet(NextShownSheet(sheet_, 1));  // hidden: the next one shows
   if (text_) text_->Clear();  // keyed by cell: it wouldn't see the new values
   totals_ = Totals{};
   for (auto& r : rules_)
@@ -657,7 +699,24 @@ void WorkbookView::PointMove(int dRow, int dCol, bool extend) {
 }
 
 bool WorkbookView::EditGeometry(EditBox& box) {
-  if (!editor_.Active() || editSheet_ != sheet_ || !Ready()) return false;
+  if (!editor_.Active() || !Ready()) return false;
+  if (renaming_ >= 0) {
+    // Over the sheet's tab, as wide as the name.
+    for (const TabRect& t : TabRects()) {
+      if (static_cast<int>(t.sheet) != renaming_) continue;
+      Canvas measure;
+      box.size = 12.5f * ui_;
+      box.line = std::ceil(box.size * 1.25f);
+      box.pad = 4 * ui_;
+      const float mid = std::round((t.rc.top + t.rc.bottom) / 2);
+      const float w = measure.MeasureText(editor_.Text(), box.size);
+      box.rc = {t.rc.left, mid - box.line / 2 - box.pad / 2, std::max(t.rc.right, t.rc.left + w + 3 * box.pad),
+                mid + box.line / 2 + box.pad / 2};
+      return true;
+    }
+    return false;
+  }
+  if (editSheet_ != sheet_) return false;
   const std::vector<Pane> panes = Panes();
   const Pane* pane = nullptr;
   for (const Pane& p : panes)
@@ -684,10 +743,14 @@ bool WorkbookView::EditGeometry(EditBox& box) {
 }
 
 void WorkbookView::DrawEditor(Canvas& c) {
+  if (renaming_ < 0) DrawEditBox(c, cells_);
+}
+
+void WorkbookView::DrawEditBox(Canvas& c, const D2D1_RECT_F& clip) {
   EditBox b;
   if (!EditGeometry(b)) return;
   const Palette& p = theme::P();
-  c.PushClip(cells_);
+  c.PushClip(clip);
   c.Fill(b.rc, Rgb(0xFFFFFF));
   c.Stroke(b.rc, p.accent, std::max(1.f, ui_));
   c.PushClip(b.rc);
@@ -722,7 +785,7 @@ void WorkbookView::DrawBarText(Canvas& c) {
   const D2D1_RECT_F box = FormulaBox();
   const float size = FormulaBarSize();
   c.PushClip(box);
-  if (!editor_.Active()) {
+  if (!editor_.Active() || renaming_ >= 0) {
     std::wstring text = FormulaBarText();
     if (const size_t nl = text.find_first_of(L"\r\n"); nl != std::wstring::npos) text = text.substr(0, nl) + L" …";
     c.Text(text, box, p.text, size);
@@ -781,7 +844,7 @@ bool WorkbookView::EditMouseDown(float x, float y, UINT mods, bool doubleClick) 
     mouse_ = Mouse::EditText;
     host_.ViewInvalidate();
   };
-  if (gfx::Contains(FormulaBox(), x, y)) {
+  if (renaming_ < 0 && gfx::Contains(FormulaBox(), x, y)) {
     if (!editor_.Active()) {
       BeginEdit(CellEditor::Mode::Edit, FormulaBarText());
       if (!editor_.Active()) return true;

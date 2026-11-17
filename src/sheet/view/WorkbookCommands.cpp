@@ -169,17 +169,22 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
     switch (vk) {
       case VK_NEXT: return CmdNextSheet;
       case VK_PRIOR: return CmdPrevSheet;
-      case VK_OEM_PLUS:
-      case VK_ADD: return CmdZoomIn;
-      case VK_OEM_MINUS:
-      case VK_SUBTRACT: return CmdZoomOut;
+      case VK_OEM_PLUS: return CmdZoomIn;
       case '0':
       case VK_NUMPAD0: return CmdZoomActual;
       case VK_F2: return CmdPrintPreview;
       // Undo and redo the workbook's edits (while a cell is typed in, the keys are the entry's).
       case 'Z': return editor_.Active() ? 0 : CmdUndo;
       case 'Y': return editor_.Active() ? 0 : CmdRedo;
+      case 'G': return editor_.Active() ? 0 : CmdGoTo;
     }
+  }
+  // Excel's keys for rows, columns, cells and sheets (not while a cell is typed in).
+  if (!editor_.Active() && !preview_ && !alt) {
+    if (ctrl && ((shift && vk == VK_OEM_PLUS) || vk == VK_ADD)) return CmdInsertCells;
+    if (ctrl && !shift && (vk == VK_OEM_MINUS || vk == VK_SUBTRACT)) return CmdDeleteCells;
+    if (!ctrl && shift && vk == VK_F11) return CmdInsertSheet;
+    if (!ctrl && !shift && vk == VK_F5) return CmdGoTo;
   }
   if (preview_ && vk == VK_ESCAPE) return CmdPrintPreview;
   return 0;
@@ -192,6 +197,7 @@ CommandState WorkbookView::QueryCommand(int cmd) {
                    cmd == CmdViewSingle || cmd == CmdViewContinuous || cmd == CmdViewFacing ||
                    (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + 50)))
     return PagedView::QueryCommand(cmd);
+  if (GridCommandState(cmd, s)) return s;
   const bool ready = Ready();
   size_t shown = 0;
   if (ready)
@@ -265,6 +271,7 @@ bool WorkbookView::Execute(int cmd) {
     if (i < presets.size()) SetZoom100(presets[i]);
     return true;
   }
+  if (GridCommand(cmd)) return true;
   switch (cmd) {
     case CmdUndo:
     case CmdRedo:
@@ -357,26 +364,6 @@ void WorkbookView::FillMenu(int which, HMENU menu) {
   for (int i = 0; i < static_cast<int>(presets.size()); ++i)
     menu::AppendItem(menu, CmdZoomPreset + i, fw::FormatPercent(presets[i]), true,
                      QueryCommand(CmdZoomPreset + i).checked, true);
-}
-
-void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
-  using menu::AppendItem;
-  using menu::AppendSeparator;
-  if (!preview_ && gfx::Contains(tabs_, static_cast<float>(x), static_cast<float>(y))) {
-    // Every sheet, to go to.
-    for (size_t i = 0; i < book_->SheetCount() && CmdSheetPick + static_cast<int>(i) <= CmdSheetPickLast; ++i)
-      if (SheetShown(i))
-        AppendItem(m, CmdSheetPick + static_cast<int>(i), Utf8ToWide(book_->GetSheet(i).Name()), true, i == sheet_, true);
-    return;
-  }
-  if (!preview_) {
-    AppendItem(m, CmdCopy, L"Copy\tCtrl+C");
-    AppendItem(m, CmdSelectAll, L"Select all\tCtrl+A");
-    AppendSeparator(m);
-  }
-  AppendItem(m, CmdFind, L"Find…\tCtrl+F");
-  AppendItem(m, CmdPrint, L"Print…\tCtrl+P");
-  AppendItem(m, CmdPrintPreview, preview_ ? L"Close print preview\tEsc" : L"Print preview\tCtrl+F2");
 }
 
 // ---------------------------------------------------------------------------

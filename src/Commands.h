@@ -291,4 +291,22 @@ enum Cmd : int {
   CmdPrevSheet,            // Ctrl+PgUp
   CmdSheetPick = 1520,     // + the sheet's index: the sheet tabs' list of every sheet
   CmdSheetPickLast = 1999,
+  // Editing spreadsheets (S2, the grid): 2000-2699.
+  CmdInsertCells = 2000,  // Ctrl++: cells, or whole rows or columns when they're selected
+  CmdDeleteCells,         // Ctrl+-
+  CmdClearContents,       // Delete
+  CmdRowHeight,           // Row height…
+  CmdColumnWidth,         // Column width…
+  CmdHide,                // the selected rows or columns
+  CmdUnhide,
+  CmdInsertSheet,         // Shift+F11
+  CmdDeleteSheet,
+  CmdRenameSheet,
+  CmdHideSheet,
+  CmdMoveSheetLeft,
+  CmdMoveSheetRight,
+  CmdGoTo,                // Ctrl+G, F5
+  CmdTabColor = 2100,     // + index into the tab colors (0: none)
+  CmdUnhideSheet = 2200,  // + the sheet's index: a hidden sheet shown again
+  CmdUnhideSheetLast = 2699,
 };
