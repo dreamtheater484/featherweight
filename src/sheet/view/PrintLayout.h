@@ -76,14 +76,19 @@ class PrintLayout {
   // lays a scaled page out in the font at its scaled size: a column is as many of that font's
   // digits wide as on screen (Calibri 11 at 84 % is 77 dots, with digits of 39).
   float ColPt(uint32_t col, float scale);
-  float PxPt(double px, float scale);  // the same for a column `px` Excel pixels wide
+  float PxPt(double px, float scale);
+  double PrintDigit(int pct);  // the default font's widest digit in printer dots at a scale  // the same for a column `px` Excel pixels wide
   // Headings (row numbers and column letters) as Excel prints them: boxed by 1 pt lines, the first
   // of them inside the margins. The row numbers' column is as wide as a column of three digits
   // (more for rows past 999); the letters' row is a default row. Points at 100 %.
   float HeadingsWidth(uint32_t lastRow, float scale);
-  float HeadingsHeight() const;
+  float HeadingsHeight(float k) const;
   float ColsAt(uint32_t first, uint32_t last, float scale);
-  float RowsHeight(uint32_t first, uint32_t last) const;
+  float RowsHeight(uint32_t first, uint32_t last) const { return RowsAt(first, last, rowK_); }
+  float RowsAt(uint32_t first, uint32_t last, float k) const;
+  // Excel prints a row's pixel as 0.72 pt at the page's scale rounded down to 0.01 pt (0.60 pt at
+  // 84 %, not 0.6048): the factor that makes rows so, in points at 100 %.
+  static float RowK(float scale);
   // The last column text in `used` runs into, past its last column too: Excel prints that text.
   uint32_t SpillEnd(const Range& used);
   // The last column a cell's text runs into (its own when it stays in its cell); `past` is a
@@ -104,6 +109,7 @@ class PrintLayout {
   PrintInfo info_;
   std::vector<PrintPage> pages_;
   float scale_ = 1;
+  float rowK_ = 1;  // RowK(scale_)
   float paperW_ = 612, paperH_ = 792;
   std::vector<Range> areas_;
   std::vector<double> colX_;   // column lefts at the page's scale, points at 100 %
