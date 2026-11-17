@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "PagedView.h"
@@ -330,6 +331,11 @@ class WorkbookView : public PagedView {
   edit::Editor& Ed();
   void Edited(const std::vector<edit::Change>& changes);
   void SyncEngine(const std::vector<edit::Change>& changes);
+  // F9 and Ctrl+Alt+F9 recalculate at idle even in manual mode until done; circular references
+  // found warn once and show in the status bar ("Circular References: B2"), as Excel's do.
+  bool calcNow_ = false;
+  std::optional<std::tuple<int, int32_t, int32_t>> circular_;  // sheet, row, col
+  void CheckCircular();
   bool EditRefused(const edit::Result& r);  // shows why; true when it failed
   std::unique_ptr<edit::Editor> edit_;
   // The tab's file, for CSV tabs so far (s2-format; s2-grid's file step gives every tab one). After
@@ -448,6 +454,8 @@ class WorkbookView : public PagedView {
   bool FormulaHelpClick(float x, float y, bool doubleClick);
   void InsertFunction(size_t i);
   void DrawFormulaHelp(gfx::Canvas& c);
+  // Alt+=: s2-calc's proposed SUM in the cell, its range pointed at, as Excel's AutoSum.
+  void AutoSum();
   std::vector<const calc::FunctionHelp*> fnList_;
   size_t fnSel_ = 0, fnTop_ = 0;
   int fnFrom_ = -1;          // where the name being typed starts
