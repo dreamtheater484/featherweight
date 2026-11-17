@@ -69,6 +69,10 @@ struct XmlPiece {
   std::string local;
 };
 std::vector<XmlPiece> TopLevel(std::string_view xml);
+// Puts `xml` (a whole element) where the sheet's element `local` is (empty removes it), or where the
+// schema puts it; and the prefix the sheet's elements are written with ("x:" or "").
+void PutSheetElement(detail::PartText& t, std::string_view local, const std::string& xml);
+std::string SheetPrefix(const detail::PartText& t);
 
 pkg::Status ReadStyles(std::string_view xml, const pkg::Limits& limits, std::string_view label, Styles& styles);
 pkg::Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::string& part, Table& table);

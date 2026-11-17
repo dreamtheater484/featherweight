@@ -12,6 +12,7 @@
 #include "sheet/calc/Formula.h"
 #include "sheet/calc/Typing.h"
 #include "sheet/edit/Refs.h"
+#include "sheet/xlsx/Internal.h"
 
 namespace fw::sheet::edit {
 
@@ -337,6 +338,24 @@ class BookNames : public calc::Names {
   const Workbook& b_;
   std::vector<std::string> slots_;
 };
+
+// The first sheet a formula names that the workbook doesn't have (another workbook's, [1]Sheet1!A1,
+// isn't asked for); empty when there's none.
+std::string MissingSheet(const Workbook& b, std::string_view formula) {
+  class Recording : public BookNames {
+   public:
+    using BookNames::BookNames;
+    int FindSheet(std::string_view name) const override {
+      int i = BookNames::FindSheet(name);
+      if (i < 0 && missing.empty()) missing = std::string(name);
+      return i;
+    }
+    mutable std::string missing;
+  } names(b);
+  calc::CompileOptions at;
+  (void)calc::Compile(formula, at, names);
+  return names.missing;
+}
 
 std::string Number(double v) {
   char buf[32];
@@ -1161,6 +1180,10 @@ Result Editor::SetCells(int sheet, const std::vector<std::pair<CellAddr, CellInp
   for (const auto& [at, in] : cells) {
     if (at.row >= kMaxRows || at.col >= kMaxCols) return BadRange();
     if (Result r = CheckInput(in); !r) return r;
+    // Excel would look for a workbook by that name; a file can't name a sheet it doesn't have.
+    if (!in.formula.empty())
+      if (!MissingSheet(book_, in.formula).empty())
+        return Result::Fail(u"The formula names a sheet this workbook doesn't have.");
     if (in.array && (in.arrayRange.firstRow != at.row || in.arrayRange.firstCol != at.col)) return BadRange();
     if (const Range* arr = State::ArrayAt(arrays, at.row, at.col); arr && !(in.array && in.arrayRange == *arr))
       return Result::Fail(u"You can't change part of an array.");
@@ -2386,6 +2409,346 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
     Range moved = rows ? Range{sh.at, sh.band.firstCol, kMaxRows - 1, sh.band.lastCol}
                        : Range{sh.band.firstRow, sh.at, sh.band.lastRow, kMaxCols - 1};
     st.Change(&s, kShift | kValues | kFormulas | kStyles | kMerges | (rows ? kRowProps : kColProps), moved, sh);
+    return Result{};
+  });
+}
+
+// ---- Sorting
+
+namespace {
+
+// How a sort copies a formula moved by (dr, dc): references without a sheet name follow the cell, as
+// a copy does; references naming a sheet, even the formula's own, stay where they were (Excel,
+// measured). Printed for the sheet kPlain, which only references without a sheet name report.
+class SortCopy : public calc::RefMap {
+ public:
+  static constexpr int kPlain = -2;
+  SortCopy(int32_t dr, int32_t dc) : dr_(dr), dc_(dc) {}
+  bool Map(int sheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t abs, bool, bool) const override {
+    if (sheet == kPlain) return true;
+    if (!(abs & kRow1)) r1 -= dr_;
+    if (!(abs & kCol1)) c1 -= dc_;
+    if (!(abs & kRow2)) r2 -= dr_;
+    if (!(abs & kCol2)) c2 -= dc_;
+    return true;
+  }
+
+ private:
+  int32_t dr_, dc_;
+};
+
+std::string SortedFormula(std::string_view text, int sheet, CellAddr from, CellAddr to, calc::Names& names) {
+  calc::CompileOptions at;
+  at.sheet = sheet;
+  at.row = static_cast<int32_t>(from.row);
+  at.col = static_cast<int32_t>(from.col);
+  auto f = calc::Compile(text, at, names);
+  if (!f) return std::string(text);
+  calc::CompileOptions print = at;
+  print.sheet = SortCopy::kPlain;
+  print.row = static_cast<int32_t>(to.row);
+  print.col = static_cast<int32_t>(to.col);
+  SortCopy map(static_cast<int32_t>(to.row) - at.row, static_cast<int32_t>(to.col) - at.col);
+  calc::PrintOptions how;
+  how.offSheetRef = true;
+  how.map = &map;
+  return calc::Print(*f, print, names, how);
+}
+
+}  // namespace
+
+Result Editor::SortRows(int sheet, const Range& r, const std::vector<uint32_t>& order, const std::vector<SortKey>& keys) {
+  return SortLines(sheet, r, order, keys, true);
+}
+Result Editor::SortColumns(int sheet, const Range& r, const std::vector<uint32_t>& order,
+                           const std::vector<SortKey>& keys) {
+  return SortLines(sheet, r, order, keys, false);
+}
+
+Result Editor::SortLines(int sheet, const Range& r, const std::vector<uint32_t>& order, const std::vector<SortKey>& keys,
+                         bool rows) {
+  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+  if (!Valid(r)) return BadRange();
+  const uint32_t first = rows ? r.firstRow : r.firstCol;
+  const uint32_t n = (rows ? r.lastRow : r.lastCol) - first + 1;
+  std::vector<uint32_t> dest(n, kNone);
+  bool same = true;
+  if (order.size() != n) return Result::Fail(u"The sort order doesn't fit the range.");
+  for (uint32_t i = 0; i < n; ++i) {
+    if (order[i] >= n || dest[order[i]] != kNone) return Result::Fail(u"The sort order doesn't fit the range.");
+    dest[order[i]] = i;
+    same = same && order[i] == i;
+  }
+  for (const SortKey& k : keys)
+    if (k.line < (rows ? r.firstCol : r.firstRow) || k.line > (rows ? r.lastCol : r.lastRow))
+      return Result::Fail(u"A sort key is outside the range.");
+  if (same && keys.empty()) return {};
+  if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet has no cells.");
+  pkg::Package* package = book_.GetPackage();
+
+  // ---- What Excel refuses.
+  for (const Range& g : s.Merges())
+    if (Overlaps(g, r)) return Result::Fail(u"To do this, all the merged cells need to be the same size.");
+  for (const Range& a : State::Arrays(s))
+    if (Overlaps(a, r)) return Result::Fail(u"You can't change part of an array.");
+  const std::vector<FCell> fcells = FormulaCellsOf(s);
+  auto inside = [&](uint32_t row, uint32_t col) {
+    return row >= r.firstRow && row <= r.lastRow && col >= r.firstCol && col <= r.lastCol;
+  };
+  for (const FCell& c : fcells) {
+    if (!inside(c.row, c.col) || c.id >= A::Formulas(s).size()) continue;
+    const FormulaRec& f = A::Formulas(s)[c.id];
+    if (f.kind == FormulaKind::DataTable) return Result::Fail(u"Featherweight can't sort a what-if data table yet.");
+    if (f.dynamic && f.hasRef && !(f.ref.firstRow == f.ref.lastRow && f.ref.firstCol == f.ref.lastCol))
+      return Result::Fail(u"You can't change part of an array.");
+  }
+  std::vector<std::pair<std::string, std::string>> sheetParts;  // relationship type, part
+  if (package && !s.PartName().empty())
+    if (const pkg::RelationshipSet* rels = package->RelationshipsOf(s.PartName()))
+      for (const pkg::Relationship& rel : rels->items)
+        if (!rel.external && !rel.targetPart.empty()) sheetParts.push_back({rel.type, rel.targetPart});
+  if (package)
+    for (const auto& [type, part] : sheetParts) {
+      std::vector<uint8_t> bytes;
+      Range where;
+      if (EndsWith(type, "/pivotTable") && package->ReadPart(part, bytes).Ok() &&
+          PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
+          Overlaps(where, r))
+        return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
+    }
+
+  return Run(*this, u"Sort", [&]() -> Result {
+    State& st = *s_;
+    SheetSave& sv = st.Save(s);
+    st.SaveAllFormulas(sv);
+    st.SaveLayout(sv);
+    st.SaveKept(sv);
+    Shift sh{rows ? Shift::Axis::Rows : Shift::Axis::Columns, first, 0,
+             rows ? Range{0, r.firstCol, kMaxRows - 1, r.lastCol} : Range{r.firstRow, 0, r.lastRow, kMaxCols - 1}};
+    refs::Mover m(sh);
+    m.dest = dest;
+    auto moved = [&](uint32_t row, uint32_t col) {
+      CellAddr a{row, col};
+      if (inside(row, col)) m.Cell(a.row, a.col);
+      return a;
+    };
+    auto key = [](uint32_t row, uint32_t col) { return (static_cast<uint64_t>(row) << 16) | col; };
+
+    // ---- Formulas: moved ones copied to their new cells, each a record of its own; shared formulas
+    // reaching into the range shared no more (Excel writes every cell's own).
+    BookNames names(book_);
+    auto& recs = A::Formulas(s);
+    TextPool& texts = A::Texts(s);
+    auto& store = A::Store(s);
+    std::unordered_map<uint32_t, std::pair<CellAddr, std::string>> masters;  // shared index -> master
+    std::unordered_set<uint32_t> unshared;
+    for (const FCell& c : fcells)
+      if (c.id < recs.size() && recs[c.id].kind == FormulaKind::Shared && recs[c.id].sharedIndex != kNone &&
+          inside(c.row, c.col))
+        unshared.insert(recs[c.id].sharedIndex);
+    for (const FCell& c : fcells)
+      if (c.id < recs.size() && recs[c.id].kind == FormulaKind::Shared && recs[c.id].text != kNone &&
+          unshared.count(recs[c.id].sharedIndex))
+        masters[recs[c.id].sharedIndex] = {CellAddr{c.row, c.col}, std::string(texts.Get(recs[c.id].text))};
+    std::unordered_map<uint64_t, uint32_t> own;  // cell (where it was) -> its new record
+    for (const FCell& c : fcells) {
+      if (c.id >= recs.size()) continue;
+      const CellAddr at{c.row, c.col}, to = moved(c.row, c.col);
+      const bool moves = !(at == to);
+      const FormulaRec was = recs[c.id];
+      std::string text;
+      if (was.kind == FormulaKind::Shared && was.sharedIndex != kNone && unshared.count(was.sharedIndex)) {
+        auto mi = masters.find(was.sharedIndex);
+        if (mi == masters.end()) continue;  // a follower without its master: left as read
+        text = was.text != kNone ? mi->second.second
+                                 : [&] {
+                                     calc::CompileOptions a, b;
+                                     a.sheet = b.sheet = sheet;
+                                     a.row = static_cast<int32_t>(mi->second.first.row);
+                                     a.col = static_cast<int32_t>(mi->second.first.col);
+                                     b.row = static_cast<int32_t>(c.row);
+                                     b.col = static_cast<int32_t>(c.col);
+                                     std::string out = calc::CopyFormula("=" + mi->second.second, a, b, names);
+                                     return !out.empty() && out[0] == '=' ? out.substr(1) : out;
+                                   }();
+      } else if (!moves || was.text == kNone) {
+        continue;
+      } else {
+        text = std::string(texts.Get(was.text));
+      }
+      if (moves) text = SortedFormula(text, sheet, at, to, names);
+      FormulaRec rec = was;
+      if (rec.kind == FormulaKind::Shared) {
+        rec.kind = FormulaKind::Normal;
+        rec.sharedIndex = kNone;
+        rec.hasRef = false;
+        rec.attrs = EditAttrs(store, rec.attrs, {"t", "ref", "si"});
+      } else if (rec.hasRef && (rec.kind == FormulaKind::Array || rec.dynamic) && moves) {
+        rec.ref = Range{to.row, to.col, to.row, to.col};
+        rec.attrs = EditAttrs(store, rec.attrs, {}, RangeName(rec.ref));
+      }
+      rec.text = texts.Add(text);
+      recs.push_back(rec);
+      own[key(c.row, c.col)] = static_cast<uint32_t>(recs.size() - 1);
+    }
+
+    // ---- Cells: the blocks holding the range's rows laid out again, the rest kept.
+    struct Item {
+      uint32_t row = 0;
+      CellRec cell;
+      uint32_t formula = kNone;
+      bool hasSide = false;
+      CellSide side;
+    };
+    const auto& oldBlocks = A::Blocks(s);
+    const auto& oldFirst = A::FirstRows(s);
+    std::vector<std::shared_ptr<RowBlock>> blocks;
+    std::vector<uint32_t> firstRows;
+    std::vector<Item> items;
+    std::vector<RowRec> rowRecs;
+    auto flush = [&]() {  // the gathered rows, sorted, into new blocks
+      std::stable_sort(items.begin(), items.end(),
+                       [](const Item& a, const Item& b) { return a.row != b.row ? a.row < b.row : a.cell.col < b.cell.col; });
+      bool open = false;
+      for (size_t ri = 0, ci = 0; ri < rowRecs.size() || ci < items.size();) {
+        uint32_t row = std::min(ri < rowRecs.size() ? rowRecs[ri].row : kNone, ci < items.size() ? items[ci].row : kNone);
+        RowRec rec;
+        rec.row = row;
+        if (ri < rowRecs.size() && rowRecs[ri].row == row) rec = rowRecs[ri++];
+        if (!open || blocks.back()->rows.size() >= kBlockRows || blocks.back()->cells.size() >= SheetBuilder::kBlockCells) {
+          blocks.push_back(std::make_shared<RowBlock>());
+          firstRows.push_back(row);
+          open = true;
+        }
+        RowBlock& b = *blocks.back();
+        rec.first = static_cast<uint32_t>(b.cells.size());
+        rec.count = 0;
+        for (; ci < items.size() && items[ci].row == row; ++ci) {
+          uint32_t index = static_cast<uint32_t>(b.cells.size());
+          b.cells.push_back(items[ci].cell);
+          if (items[ci].formula != kNone && (items[ci].cell.flags & detail::kHasFormula))
+            b.formulas.push_back({index, items[ci].formula});
+          if (items[ci].hasSide) {
+            b.sides.push_back(items[ci].side);
+            b.sides.back().cell = index;
+          }
+          ++rec.count;
+        }
+        b.rows.push_back(rec);
+      }
+      items.clear();
+      rowRecs.clear();
+    };
+    for (size_t bi = 0; bi < oldBlocks.size(); ++bi) {
+      const RowBlock& b = *oldBlocks[bi];
+      if (b.rows.empty() || b.rows.back().row < r.firstRow || b.rows.front().row > r.lastRow) {
+        flush();
+        blocks.push_back(oldBlocks[bi]);
+        firstRows.push_back(oldFirst[bi]);
+        continue;
+      }
+      size_t fi = 0, si = 0;
+      for (const RowRec& r0 : b.rows) {
+        for (uint32_t k = r0.first; k < r0.first + r0.count; ++k) {
+          while (fi < b.formulas.size() && b.formulas[fi].first < k) ++fi;
+          while (si < b.sides.size() && b.sides[si].cell < k) ++si;
+          const CellRec& c0 = b.cells[k];
+          const CellAddr to = moved(r0.row, c0.col);
+          Item it;
+          it.row = to.row;
+          it.cell = c0;
+          it.cell.col = static_cast<uint16_t>(to.col);
+          it.formula = fi < b.formulas.size() && b.formulas[fi].first == k ? b.formulas[fi].second : kNone;
+          if (auto o = own.find(key(r0.row, c0.col)); o != own.end()) it.formula = o->second;
+          if (si < b.sides.size() && b.sides[si].cell == k) {
+            it.hasSide = true;
+            it.side = b.sides[si];
+            if (!(to == CellAddr{r0.row, c0.col})) it.side.attrs = EditAttrs(store, it.side.attrs, {"r"});
+          }
+          items.push_back(it);
+        }
+        RowRec rr = r0;
+        if (r0.row >= r.firstRow && r0.row <= r.lastRow) rr.attrs = EditAttrs(store, rr.attrs, {"spans"});
+        rowRecs.push_back(rr);
+      }
+    }
+    flush();
+    size_t cellCount = 0, formulaCells = 0;
+    for (const auto& b : blocks) {
+      cellCount += b->cells.size();
+      formulaCells += b->formulas.size();
+    }
+    A::Blocks(s) = std::move(blocks);
+    A::FirstRows(s) = std::move(firstRows);
+    A::CellCount(s) = cellCount;
+    A::FormulaCells(s) = formulaCells;
+    std::vector<detail::Kept> kept;
+    for (detail::Kept k : A::Kept(s)) {
+      if (k.row != kNone && k.col != detail::Kept::kBeforeRow && k.col != detail::Kept::kRowEnd) {
+        CellAddr to = moved(k.row, k.col);
+        k.row = to.row;
+        k.col = to.col;
+      }
+      kept.push_back(std::move(k));
+    }
+    std::stable_sort(kept.begin(), kept.end(), [](const detail::Kept& a, const detail::Kept& b) { return a.row < b.row; });
+    A::Kept(s) = std::move(kept);
+
+    // ---- Links on cells that moved go with them.
+    {
+      std::vector<Hyperlink> links = s.Hyperlinks();
+      bool changed = false;
+      for (Hyperlink& h : links) {
+        bool one = rows ? h.ref.firstRow == h.ref.lastRow : h.ref.firstCol == h.ref.lastCol;
+        if (!one || !inside(h.ref.firstRow, h.ref.firstCol) || !inside(h.ref.lastRow, h.ref.lastCol)) continue;
+        CellAddr to = moved(h.ref.firstRow, h.ref.firstCol);
+        if (to == CellAddr{h.ref.firstRow, h.ref.firstCol}) continue;
+        h.ref = Range{to.row, to.col, to.row + (h.ref.lastRow - h.ref.firstRow), to.col + (h.ref.lastCol - h.ref.firstCol)};
+        changed = true;
+      }
+      if (changed) {
+        st.SaveLinks(sv);
+        A::Links(s) = std::move(links);
+      }
+    }
+
+    // ---- The sort's record (sortState), as Excel writes it.
+    if (!keys.empty()) {
+      st.SaveText(sv);
+      detail::PartText& t = A::Text(s);
+      const std::string p = xlsx::SheetPrefix(t);
+      std::string x = "<" + p + "sortState";
+      if (!rows) x += " columnSort=\"1\"";
+      x += " ref=\"" + RangeName(r) + "\">";
+      for (const SortKey& k : keys) {
+        Range kr = rows ? Range{r.firstRow, k.line, r.lastRow, k.line} : Range{k.line, r.firstCol, k.line, r.lastCol};
+        x += "<" + p + "sortCondition";
+        if (k.descending) x += " descending=\"1\"";
+        x += " ref=\"" + RangeName(kr) + "\"/>";
+      }
+      x += "</" + p + "sortState>";
+      xlsx::PutSheetElement(t, "sortState", x);
+    }
+
+    // ---- Notes (and threaded comments, VML boxes) and drawings inside one row go with their cells.
+    if (package) {
+      refs::Context ctx{m, sheet, s.Name(), {}, {}};
+      ctx.formula = [](std::string_view text, int, uint32_t, uint32_t) { return std::string(text); };
+      ctx.copy = [](std::string_view text, int, CellAddr, CellAddr) { return std::string(text); };
+      for (const auto& [type, part] : sheetParts) {
+        std::vector<uint8_t> bytes;
+        if (!package->ReadPart(part, bytes).Ok()) continue;
+        std::string xml(bytes.begin(), bytes.end());
+        bool changed = false;
+        if (EndsWith(type, "/comments") || EndsWith(type, "/threadedComment")) changed = refs::MoveComments(xml, ctx);
+        else if (EndsWith(type, "/vmlDrawing")) changed = refs::MoveVml(xml, sheet, ctx);
+        else if (EndsWith(type, "/drawing")) changed = refs::MoveDrawing(xml, sheet, ctx);
+        if (changed) st.SetPart(part, std::move(xml));
+      }
+    }
+    st.Change(&s, kValues | kFormulas | kStyles | kObjects, r);
     return Result{};
   });
 }
