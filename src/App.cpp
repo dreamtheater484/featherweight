@@ -2442,6 +2442,37 @@ void App::RunScript(const std::wstring& script) {
           SendMessageW(target, WM_CHAR, ch, 0);
         }
       }
+    } else if (op == L"typebench") {
+      // typebench:<text> times each keystroke from the key to the frame painted ('|' is Enter),
+      // as the window handles it; idle work (recalculation) runs after each, untimed. Plan §11:
+      // under 16 ms typical, 50 ms at worst.
+      LARGE_INTEGER freq, t0, t1;
+      QueryPerformanceFrequency(&freq);
+      std::vector<double> keys, enters;
+      for (wchar_t ch : arg) {
+        QueryPerformanceCounter(&t0);
+        if (ch == L'|') {
+          SendMessageW(hwnd_, WM_KEYDOWN, VK_RETURN, 0);
+          SendMessageW(hwnd_, WM_CHAR, L'\r', 0);
+        } else {
+          SendMessageW(hwnd_, WM_CHAR, ch, 0);
+        }
+        DrawSnapshotFrame();
+        QueryPerformanceCounter(&t1);
+        (ch == L'|' ? enters : keys).push_back(1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart));
+        if (TabContent* v = Active())
+          for (int guard = 0; guard < 10000 && v->HasIdleWork(); ++guard) v->IdleWork(dc_.Get(), 50);
+      }
+      auto q = [](std::vector<double> v, double p) {
+        if (v.empty()) return 0.0;
+        std::sort(v.begin(), v.end());
+        return v[std::min(v.size() - 1, static_cast<size_t>(p * static_cast<double>(v.size() - 1) + 0.5))];
+      };
+      std::vector<double> all = keys;
+      all.insert(all.end(), enters.begin(), enters.end());
+      wprintf(L"typebench: %zu keys, median %.2f ms, 90%% %.2f ms, worst %.2f ms; %zu Enter, median %.2f ms, worst %.2f ms\n",
+              keys.size(), q(keys, 0.5), q(keys, 0.9), q(all, 1.0), enters.size(), q(enters, 0.5), q(enters, 1.0));
+      fflush(stdout);
     } else if (op == L"key") {
       int mods = 0;
       UINT vk = 0;
