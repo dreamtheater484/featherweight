@@ -294,6 +294,7 @@ int RunEditCheck(const Options& options) {
 }
 
 int RunBench(const Options& options) {
+  if (options.sheetEdits) return RunSheetEditBench(options);  // S2 (SheetBench.cpp)
   std::vector<std::filesystem::path> files;
   for (const auto& f : CollectFiles(options.inputs))
     if (IsWordDocument(fw::WideToUtf8(f.filename().wstring()))) files.push_back(f);

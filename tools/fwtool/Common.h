@@ -34,6 +34,7 @@ struct Options {
   bool budgets = false;             // bench: fail when a budget is missed
   bool typing = false;              // bench: time keystrokes instead of opening
   bool scrolling = false;           // bench: time painting every page in order, and memory
+  bool sheetEdits = false;          // bench: S2's editing budgets on made workbooks (SheetBench.cpp)
   int edits = 40;                   // edit-check, torture: random edits per document (torture: per round)
   unsigned seed = 0;                // edit-check, torture: the random edits' seed (0: edit-check takes the
                                     // document's number, torture 1; torture derives one per file and round)
@@ -111,6 +112,7 @@ int RunPdfCheck(const Options& options);
 int RunBenchApp(const Options& options);
 int RunSpelling(const Options& options);
 int RunTorture(const Options& options);
+int RunSheetEditBench(const Options& options);
 // Parses its own options, from argv[2] on.
 int RunWrap(int argc, wchar_t** argv);
 

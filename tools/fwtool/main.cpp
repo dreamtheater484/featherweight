@@ -78,6 +78,9 @@ constexpr const char* kUsage =
     "  fwtool compare --self-test <reference folder>...\n"
     "      Checks the measurement: Word's lines match themselves, one moved line break costs\n"
     "      exactly one line, and an added page changes only the page count.\n"
+    "  fwtool bench --sheet-edits [--runs N] [--out DIR] [--json FILE] [--budgets] <template.xlsx>\n"
+    "      S2's editing budgets on workbooks made from the template in DIR: recalculation after\n"
+    "      one edit (100,000 formulas), inserting a row and undoing it, and saving (1,000,000 cells).\n"
     "  fwtool bench [--runs N] [--json FILE] [--budgets] [--typing | --scrolling] <file or folder>...\n"
     "      Times opening each Word document, stage by stage, against the opening budgets\n"
     "      (plan §11). With --budgets, a missed budget fails. With --typing, times keystrokes\n"
@@ -300,6 +303,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--budgets") options.budgets = true;
     else if (arg == L"--typing") options.typing = true;
     else if (arg == L"--scrolling") options.scrolling = true;
+    else if (arg == L"--sheet-edits") options.sheetEdits = true;
     else if (arg == L"--edits" && i + 1 < argc) options.edits = std::max(1, _wtoi(argv[++i]));
     else if (arg == L"--seed" && i + 1 < argc) options.seed = static_cast<unsigned>(std::wcstoul(argv[++i], nullptr, 10));
     else if (arg == L"--rounds" && i + 1 < argc) options.rounds = static_cast<uint32_t>(std::max(1, _wtoi(argv[++i])));
