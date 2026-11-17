@@ -584,3 +584,27 @@ TEST(sheet_table_styles) {
   if (failures) std::printf("    %d of %zu cells differ from Excel\n", failures, std::size(kTableCells));
   CHECK_EQ(failures, 0);
 }
+
+// Excel writes #SPILL! and #CALC! as <v>#VALUE!</v> with vm=, its rich value saying which
+// (tests/office/excel/formulas.xlsx, saved by Excel 2021); the text stays as written.
+TEST(sheet_rich_value_errors) {
+  const auto path = std::filesystem::path(__FILE__).parent_path().parent_path() / "office" / "excel" / "formulas.xlsx";
+  std::ifstream in(path, std::ios::binary);
+  std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  fw::pkg::Status st;
+  auto pkg = test::OpenBytes(std::move(bytes), st);
+  CHECK(pkg != nullptr);
+  if (!pkg) return;
+  auto book = xlsx::Read(std::move(pkg), st, xlsx::ReadOptions{true});
+  CHECK(book != nullptr);
+  if (!book) return;
+  CHECK(book->ValueError(1) == ErrorCode::Spill && book->ValueError(2) == ErrorCode::Calc && !book->ValueError(3));
+  const Sheet& s = book->GetSheet(6);
+  const Value spill = s.GetValue(34, 1), calc = s.GetValue(50, 1);
+  CHECK(spill.type == ValueType::Error && spill.error == ErrorCode::Spill);
+  CHECK(calc.type == ValueType::Error && calc.error == ErrorCode::Calc);
+  std::string out;
+  CHECK(xlsx::WritePart(*book, s.PartName(), out).Ok());
+  CHECK(out.find("<c r=\"B35\" t=\"e\" cm=\"1\" vm=\"1\">") != std::string::npos);
+  CHECK(out.find("<v>#VALUE!</v>") != std::string::npos && out.find("#SPILL!") == std::string::npos);
+}

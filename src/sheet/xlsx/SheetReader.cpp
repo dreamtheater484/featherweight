@@ -520,11 +520,12 @@ bool SheetLoader::ReadInline(std::string& out, bool& preserve, bool& odd) {
 
 bool SheetLoader::ReadCell(size_t before, uint32_t row, uint32_t rowOrd, uint32_t cellOrd) {
   XmlPull& pull = *pull_;
-  std::string_view rText, sText, tText;
+  std::string_view rText, sText, tText, vmText;
   bool hasR = false, hasS = false, hasT = false;
   attrs_.clear();
   for (const auto& a : pull.Attributes()) {
     if (a.prefix.empty()) {
+      if (a.local == "vm") vmText = a.value;  // kept with the other attributes too
       if (a.local == "r") {
         rText = a.value, hasR = true;
         continue;
@@ -729,7 +730,12 @@ bool SheetLoader::ReadCell(size_t before, uint32_t row, uint32_t rowOrd, uint32_
         break;
       case XmlType::E: {
         ErrorCode err = ErrorCode::Unknown;
-        if (!ParseError(vText_, err)) keepText(vText_);
+        const bool known = ParseError(vText_, err);
+        // #SPILL!, #CALC!...: written as #VALUE! with a rich value; the text stays as written.
+        uint32_t vm = 0;
+        const std::optional<ErrorCode> rich = !vmText.empty() && xlsx::ParseUInt(vmText, vm) ? book_.ValueError(vm) : std::nullopt;
+        if (!known || (rich && *rich != err)) keepText(vText_);
+        if (rich) err = *rich;
         c->v.index = static_cast<uint32_t>(err);
         c->flags |= kHasValue;
         break;
