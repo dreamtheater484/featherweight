@@ -934,15 +934,25 @@ bool TagText(const std::string& s, std::string_view tag, size_t& begin, size_t& 
 }
 
 // -1: the shape goes (a note on a deleted cell); 1 changed; 0 not.
+// The prefix a VML part gives Excel's elements in a shape ("x:", or another a writer chose: "ns2:").
+std::string ExcelPrefix(const std::string& shape) {
+  const size_t at = shape.find("ClientData");
+  if (at == std::string::npos) return "x:";
+  size_t lt = shape.rfind('<', at);
+  if (lt == std::string::npos || lt + 1 > at) return "x:";
+  return shape.substr(lt + 1, at - lt - 1);
+}
+
 int MoveVmlShape(std::string& shape, bool edited, int index, const Context& c) {
   const Mover& m = c.move;
+  const std::string x = ExcelPrefix(shape);
   bool changed = false;
   size_t b = 0, e = 0;
   bool note = shape.find("ObjectType=\"Note\"") != std::string::npos;
   int64_t noteDelta = 0;  // a note's box moves as far as its cell does
   if (edited && note) {
-    size_t rb, re, cb, ce;
-    if (TagText(shape, "x:Row", rb, re) && TagText(shape, "x:Column", cb, ce)) {
+    size_t rb = 0, re = 0, cb = 0, ce = 0;
+    if (TagText(shape, x + "Row", rb, re) && TagText(shape, x + "Column", cb, ce)) {
       uint32_t row0 = ToUInt(std::string_view(shape).substr(rb, re - rb), 0);
       uint32_t col0 = ToUInt(std::string_view(shape).substr(cb, ce - cb), 0);
       uint32_t row = row0, col = col0;
@@ -962,7 +972,7 @@ int MoveVmlShape(std::string& shape, bool edited, int index, const Context& c) {
       }
     }
   }
-  if (edited && TagText(shape, "x:Anchor", b, e)) {
+  if (edited && TagText(shape, x + "Anchor", b, e)) {
     // LeftColumn, LeftOffset, TopRow, TopOffset, RightColumn, RightOffset, BottomRow, BottomOffset
     uint32_t v[8];
     std::string_view s = std::string_view(shape).substr(b, e - b);
@@ -977,8 +987,8 @@ int MoveVmlShape(std::string& shape, bool edited, int index, const Context& c) {
     if (n == 8) {
       int line = m.Rows() ? 2 : 0, cross = m.Rows() ? 0 : 2;
       Corner from{v[line], v[line + 1]}, to{v[line + 4], v[line + 5]};
-      bool moveWithCells = shape.find("<x:MoveWithCells") == std::string::npos;
-      bool sizeWithCells = shape.find("<x:SizeWithCells") == std::string::npos;
+      bool moveWithCells = shape.find("<" + x + "MoveWithCells") == std::string::npos;
+      bool sizeWithCells = shape.find("<" + x + "SizeWithCells") == std::string::npos;
       Follow follow = moveWithCells && sizeWithCells ? Follow::MoveAndSize
                       : moveWithCells                ? Follow::Move
                                                      : Follow::None;
@@ -1004,7 +1014,7 @@ int MoveVmlShape(std::string& shape, bool edited, int index, const Context& c) {
       }
     }
   }
-  for (std::string_view tag : {"x:FmlaLink", "x:FmlaRange", "x:FmlaTxbx"})
+  for (const std::string& tag : {x + "FmlaLink", x + "FmlaRange", x + "FmlaTxbx"})
     if (TagText(shape, tag, b, e)) {
       std::string text = shape.substr(b, e - b);
       std::string now = c.formula(text, index, 0, 0);
@@ -1023,16 +1033,28 @@ bool MoveVml(std::string& xml, int index, const Context& c) {
   bool changed = false;
   std::string out;
   size_t pos = 0;
-  for (size_t s = xml.find("<v:shape"); s != std::string::npos; s = xml.find("<v:shape", pos)) {
-    char after = s + 8 < xml.size() ? xml[s + 8] : '>';
-    if (after != ' ' && after != '>' && after != '\r' && after != '\n' && after != '\t') {  // <v:shapetype
-      out.append(xml, pos, s + 8 - pos);
-      pos = s + 8;
+  // Shapes under any prefix (v:, or one a writer chose: ns0:), shapetypes left alone.
+  auto nameChar = [](char ch) {
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.';
+  };
+  for (size_t s = xml.find('<', pos); s != std::string::npos; s = xml.find('<', pos)) {
+    size_t n = s + 1, name = n;
+    while (n < xml.size() && nameChar(xml[n])) ++n;
+    if (n < xml.size() && xml[n] == ':') {
+      name = ++n;
+      while (n < xml.size() && nameChar(xml[n])) ++n;
+    }
+    const char after = n < xml.size() ? xml[n] : '>';
+    if (xml.compare(name, n - name, "shape") != 0 ||
+        (after != ' ' && after != '>' && after != '\r' && after != '\n' && after != '\t')) {
+      out.append(xml, pos, s + 1 - pos);
+      pos = s + 1;
       continue;
     }
-    size_t e = xml.find("</v:shape>", s);
+    const std::string close = "</" + xml.substr(s + 1, n - s - 1) + ">";
+    size_t e = xml.find(close, s);
     if (e == std::string::npos) break;
-    e += 10;
+    e += close.size();
     std::string shape = xml.substr(s, e - s);
     int r = MoveVmlShape(shape, edited, index, c);
     out.append(xml, pos, s - pos);

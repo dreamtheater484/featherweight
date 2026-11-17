@@ -276,19 +276,21 @@ Alignment ReadAlignment(pugi::xml_node n) {
 
 namespace {
 
-Xf ReadXf(pugi::xml_node n) {
+// A cell format (cellXfs), or a cell style's (cellStyleXfs, `style`): there a missing apply flag
+// means the style includes that part (Excel writes applyFont="0" for one it leaves out).
+Xf ReadXf(pugi::xml_node n, bool style = false) {
   Xf x;
   x.numFmt = UIntAttr(n, "numFmtId", 0);
   x.font = UIntAttr(n, "fontId", 0);
   x.fill = UIntAttr(n, "fillId", 0);
   x.border = UIntAttr(n, "borderId", 0);
   x.parent = UIntAttr(n, "xfId", 0);
-  x.applyNumFmt = BoolAttr(n, "applyNumberFormat", false);
-  x.applyFont = BoolAttr(n, "applyFont", false);
-  x.applyFill = BoolAttr(n, "applyFill", false);
-  x.applyBorder = BoolAttr(n, "applyBorder", false);
-  x.applyAlignment = BoolAttr(n, "applyAlignment", false);
-  x.applyProtection = BoolAttr(n, "applyProtection", false);
+  x.applyNumFmt = BoolAttr(n, "applyNumberFormat", style);
+  x.applyFont = BoolAttr(n, "applyFont", style);
+  x.applyFill = BoolAttr(n, "applyFill", style);
+  x.applyBorder = BoolAttr(n, "applyBorder", style);
+  x.applyAlignment = BoolAttr(n, "applyAlignment", style);
+  x.applyProtection = BoolAttr(n, "applyProtection", style);
   x.quotePrefix = BoolAttr(n, "quotePrefix", false);
   x.pivotButton = BoolAttr(n, "pivotButton", false);
   if (pugi::xml_node a = Child(n, "alignment")) x.alignment = ReadAlignment(a);
@@ -353,7 +355,7 @@ Status ReadStyles(std::string_view xml, const pkg::Limits& limits, std::string_v
     } else if (k == "borders") {
       ForEachChild(sec, "border", [&](pugi::xml_node n) { b.Borders().push_back(ReadBorder(n)); });
     } else if (k == "cellStyleXfs") {
-      ForEachChild(sec, "xf", [&](pugi::xml_node n) { b.CellStyleXfs().push_back(ReadXf(n)); });
+      ForEachChild(sec, "xf", [&](pugi::xml_node n) { b.CellStyleXfs().push_back(ReadXf(n, true)); });
     } else if (k == "cellXfs") {
       ForEachChild(sec, "xf", [&](pugi::xml_node n) { b.CellXfs().push_back(ReadXf(n)); });
     } else if (k == "cellStyles") {
