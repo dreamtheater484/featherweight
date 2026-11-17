@@ -39,6 +39,11 @@ class Access {
   static std::string& Name(Sheet& s) { return s.name_; }
   static SheetState& State(Sheet& s) { return s.state_; }
   static uint32_t SheetId(const Sheet& s) { return s.sheetId_; }
+  static std::string& Part(Sheet& s) { return s.part_; }
+  static std::string& RelId(Sheet& s) { return s.relId_; }
+  static detail::PartText& Text(Sheet& s) { return s.text_; }
+  static std::string& StringsPart(Workbook& b) { return b.stringsPart_; }
+  static FileFormat& Format(Workbook& b) { return b.format_; }
   static std::vector<std::unique_ptr<Sheet>>& Sheets(Workbook& b) { return b.sheets_; }
   static std::vector<DefinedName>& Names(Workbook& b) { return b.names_; }
   static uint32_t& Active(Workbook& b) { return b.activeSheet_; }
@@ -316,6 +321,15 @@ struct Editor::State {
   int bookDirty = 0;
   bool bookViewDirty = false;
   size_t xfsAtSave = 0, fontsAtSave = 0, fillsAtSave = 0, bordersAtSave = 0, numFmtsAtSave = 0, stringsAtSave = 0;
+  // A save in progress (BeginSave): what it writes, so that view changes and formats added
+  // meanwhile still count as unsaved after it.
+  bool saving = false;
+  std::unordered_set<const Sheet*> viewsWhileSaving;
+  bool bookViewWhileSaving = false;
+  size_t xfsSaving = 0, fontsSaving = 0, fillsSaving = 0, bordersSaving = 0, numFmtsSaving = 0, stringsSaving = 0;
+  // Written from the model by an earlier save (Editor::MustWrite).
+  std::unordered_set<const Sheet*> mustWrite;
+  bool mustWriteStrings = false;
   // Plain shared strings by hash, so text typed twice is stored once (Excel's own rule).
   std::unordered_multimap<size_t, uint32_t> stringIndex;
   uint32_t stringsIndexed = 0;
@@ -330,6 +344,15 @@ struct Editor::State {
     bordersAtSave = st.Borders().size();
     numFmtsAtSave = st.CustomFormats().size();
     stringsAtSave = b.Strings().Size();
+  }
+
+  void ViewChanged(const Sheet* s) {
+    viewDirty.insert(s);
+    if (saving) viewsWhileSaving.insert(s);
+  }
+  void BookViewChanged() {
+    bookViewDirty = true;
+    if (saving) bookViewWhileSaving = true;
   }
 
   Step& Cur() { return open.back(); }
@@ -358,7 +381,10 @@ struct Editor::State {
     Cur().changes.push_back(c);
   }
 
-  void Count(const Step& st, int by) {
+  // A step done (+1) or undone (-1). Dirty counts measure the distance from the file: undoing a
+  // step the file already holds moves away from it, and redoing it moves back.
+  void Count(const Step& st, int by, bool undoRedo = false) {
+    if (undoRedo && st.serial <= savedSerial) by = -by;
     for (const SheetSave& s : st.sheets)
       for (int p = 0; p < kPieces; ++p)
         if (s.dirty & (1u << p)) dirty[s.sheet][p] += by;
@@ -993,6 +1019,7 @@ namespace {
 // succeeded, CancelGroup when it didn't.
 template <class Fn>
 Result Run(Editor& ed, std::u16string name, Fn&& fn) {
+  if (ed.Saving()) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
   ed.BeginGroup(std::move(name));
   Result r = fn();
   if (r) ed.EndGroup();
@@ -1665,10 +1692,10 @@ void Editor::SetActiveSheet(int sheet) {
   if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return;
   uint32_t& active = A::Active(book_);
   if (active == static_cast<uint32_t>(sheet)) return;
-  if (active < book_.SheetCount()) s_->viewDirty.insert(&book_.GetSheet(active));
+  if (active < book_.SheetCount()) s_->ViewChanged(&book_.GetSheet(active));
   active = static_cast<uint32_t>(sheet);
-  s_->viewDirty.insert(&book_.GetSheet(active));
-  s_->bookViewDirty = true;
+  s_->ViewChanged(&book_.GetSheet(active));
+  s_->BookViewChanged();
   for (auto& l : listeners_) l({edit::Change{sheet, kView, Range{}, {}}});
 }
 
@@ -1693,7 +1720,7 @@ void Editor::SetSelection(int sheet, CellAddr active, const std::vector<Range>& 
   auto it = std::find_if(v.selections.begin(), v.selections.end(), [&](const Selection& x) { return x.pane == sel.pane; });
   if (it != v.selections.end()) *it = sel;
   else v.selections.push_back(sel);
-  s_->viewDirty.insert(&s);
+  s_->ViewChanged(&s);
 }
 
 void Editor::SetTopLeft(int sheet, CellAddr topLeft) {
@@ -1702,14 +1729,14 @@ void Editor::SetTopLeft(int sheet, CellAddr topLeft) {
   SheetView& v = FirstView(s);
   if (v.paneState == PaneState::Frozen) v.paneTopLeft = topLeft;
   else v.topLeft = topLeft;
-  s_->viewDirty.insert(&s);
+  s_->ViewChanged(&s);
 }
 
 void Editor::SetZoom(int sheet, uint32_t percent) {
   if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return;
   Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
   FirstView(s).zoomScale = std::clamp(percent, 10u, 400u);
-  s_->viewDirty.insert(&s);
+  s_->ViewChanged(&s);
 }
 
 // ---- Names
@@ -1817,6 +1844,7 @@ std::vector<std::u16string> Editor::RedoNames() const {
 
 Result Editor::Undo(size_t steps) {
   State& st = *s_;
+  if (st.saving) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
   if (!st.open.empty()) return Result::Fail(u"An edit is still going on.");
   if (st.undo.empty()) return Result::Fail(u"There's nothing to undo.");
   std::vector<edit::Change> changes;
@@ -1824,7 +1852,7 @@ Result Editor::Undo(size_t steps) {
     Step step = std::move(st.undo.back());
     st.undo.pop_back();
     step.Swap(book_);
-    st.Count(step, -1);
+    st.Count(step, -1, true);
     auto c = st.Resolve(step, true);
     changes.insert(changes.end(), c.begin(), c.end());
     st.redo.push_back(std::move(step));
@@ -1835,6 +1863,7 @@ Result Editor::Undo(size_t steps) {
 
 Result Editor::Redo(size_t steps) {
   State& st = *s_;
+  if (st.saving) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
   if (!st.open.empty()) return Result::Fail(u"An edit is still going on.");
   if (st.redo.empty()) return Result::Fail(u"There's nothing to redo.");
   std::vector<edit::Change> changes;
@@ -1842,7 +1871,7 @@ Result Editor::Redo(size_t steps) {
     Step step = std::move(st.redo.back());
     st.redo.pop_back();
     step.Swap(book_);
-    st.Count(step, 1);
+    st.Count(step, 1, true);
     auto c = st.Resolve(step, false);
     changes.insert(changes.end(), c.begin(), c.end());
     st.undo.push_back(std::move(step));
@@ -1859,10 +1888,74 @@ bool Editor::Modified() const {
 void Editor::MarkSaved() {
   State& st = *s_;
   st.savedSerial = st.undo.empty() ? 0 : st.undo.back().serial;
+  st.dirty.clear();
+  st.bookDirty = 0;
   st.viewDirty.clear();
   st.bookViewDirty = false;
   st.Saved();
 }
+
+void Editor::BeginSave() {
+  State& st = *s_;
+  st.saving = true;
+  st.viewsWhileSaving.clear();
+  st.bookViewWhileSaving = false;
+  const Styles& styles = book_.GetStyles();
+  st.xfsSaving = styles.CellXfs().size();
+  st.fontsSaving = styles.Fonts().size();
+  st.fillsSaving = styles.Fills().size();
+  st.bordersSaving = styles.Borders().size();
+  st.numFmtsSaving = styles.CustomFormats().size();
+  st.stringsSaving = book_.Strings().Size();
+}
+
+bool Editor::Saving() const { return s_->saving; }
+
+void Editor::EndSave() { s_->saving = false; }
+
+void Editor::Saved(std::vector<Written> sheets, bool stringsWritten, std::string newStringsPart, FileFormat format,
+                   bool sheetsRemoved) {
+  State& st = *s_;
+  for (Written& w : sheets) {
+    for (size_t i = 0; i < book_.SheetCount(); ++i) {
+      Sheet& s = book_.GetSheet(i);
+      if (&s != w.sheet) continue;
+      A::Part(s) = std::move(w.part);
+      A::RelId(s) = std::move(w.relId);
+      A::Text(s) = std::move(w.text);
+      st.mustWrite.insert(&s);
+    }
+  }
+  if (!newStringsPart.empty()) A::StringsPart(book_) = std::move(newStringsPart);
+  st.mustWriteStrings = st.mustWriteStrings || stringsWritten;
+  A::Format(book_) = format;
+  if (sheetsRemoved) {
+    st.undo.clear();
+    st.redo.clear();
+  }
+  // The file holds the workbook as it was when the save began; view changes and formats added
+  // since are still to save.
+  st.savedSerial = st.undo.empty() ? 0 : st.undo.back().serial;
+  st.dirty.clear();
+  st.bookDirty = 0;
+  st.viewDirty = std::move(st.viewsWhileSaving);
+  st.viewsWhileSaving.clear();
+  st.bookViewDirty = st.bookViewWhileSaving;
+  st.xfsAtSave = st.xfsSaving;
+  st.fontsAtSave = st.fontsSaving;
+  st.fillsAtSave = st.fillsSaving;
+  st.bordersAtSave = st.bordersSaving;
+  st.numFmtsAtSave = st.numFmtsSaving;
+  st.stringsAtSave = st.stringsSaving;
+  st.saving = false;
+}
+
+bool Editor::MustWrite(int sheet) const {
+  return sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount() &&
+         s_->mustWrite.count(&book_.GetSheet(static_cast<size_t>(sheet)));
+}
+
+bool Editor::MustWriteStrings() const { return s_->mustWriteStrings; }
 
 uint32_t Editor::DirtyPieces(int sheet) const {
   if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return 0;
@@ -1870,11 +1963,11 @@ uint32_t Editor::DirtyPieces(int sheet) const {
   uint32_t out = s_->viewDirty.count(s) ? kPieceViews : 0;
   if (auto it = s_->dirty.find(s); it != s_->dirty.end())
     for (int p = 0; p < kPieces; ++p)
-      if (it->second[p] > 0) out |= 1u << p;
+      if (it->second[p] != 0) out |= 1u << p;
   return out;
 }
 
-bool Editor::WorkbookDirty() const { return s_->bookDirty > 0 || s_->bookViewDirty; }
+bool Editor::WorkbookDirty() const { return s_->bookDirty != 0 || s_->bookViewDirty; }
 
 bool Editor::StylesDirty() const {
   const Styles& st = book_.GetStyles();

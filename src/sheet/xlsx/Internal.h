@@ -68,4 +68,9 @@ pkg::Status ReadStrings(std::string_view xml, const pkg::Limits& limits, std::st
 // Reads a sheet's part into it (rows, cells and what it shows).
 pkg::Status LoadSheetPart(Workbook& book, size_t index);
 
+// The writer (Writer.cpp): a sheet's part with `text` around its sheetData (Sheet::Text(), or one
+// with elements the model rewrote), and the shared strings part.
+void WriteSheet(const Sheet& sheet, const detail::PartText& text, std::string& out);
+void WriteStringsPart(const StringTable& table, std::string& out);
+
 }  // namespace fw::sheet::xlsx

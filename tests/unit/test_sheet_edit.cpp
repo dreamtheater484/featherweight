@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-#include "PkgTestUtil.h"
+#include "SheetTestUtil.h"
 #include "sheet/edit/Edit.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/xlsx/Xlsx.h"
@@ -15,72 +15,7 @@ using namespace fw::sheet;
 using edit::CellInput;
 using edit::Editor;
 
-namespace {
-
-constexpr const char* kMain = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
-
-// A workbook package with these sheets (the worksheet's content inside <worksheet>), two cell
-// formats and no shared strings.
-std::unique_ptr<Workbook> OpenParts(const std::vector<std::string>& sheets) {
-  std::string types =
-      "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
-      "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
-      "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
-      "<Override PartName=\"/xl/workbook.xml\" "
-      "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>"
-      "<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>";
-  std::string rels = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
-                     "<Relationship Id=\"rS\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>";
-  std::string list;
-  std::vector<std::pair<std::string, std::string>> parts;
-  for (size_t i = 0; i < sheets.size(); ++i) {
-    std::string n = std::to_string(i + 1);
-    types += "<Override PartName=\"/xl/worksheets/sheet" + n +
-             ".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>";
-    rels += "<Relationship Id=\"rId" + n +
-            "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet" +
-            n + ".xml\"/>";
-    list += "<sheet name=\"Sheet" + n + "\" sheetId=\"" + n + "\" r:id=\"rId" + n + "\"/>";
-    parts.push_back({"xl/worksheets/sheet" + n + ".xml", "<worksheet xmlns=\"" + std::string(kMain) + "\">" + sheets[i] + "</worksheet>"});
-  }
-  parts.insert(parts.begin(),
-               {{"[Content_Types].xml", types + "</Types>"},
-                {"_rels/.rels",
-                 "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
-                 "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" "
-                 "Target=\"xl/workbook.xml\"/></Relationships>"},
-                {"xl/workbook.xml", "<workbook xmlns=\"" + std::string(kMain) +
-                                        "\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>" +
-                                        list + "</sheets><definedNames><definedName name=\"Total\">Sheet1!$A$1</definedName>"
-                                        "<definedName name=\"Local\" localSheetId=\"1\">Sheet2!$B$2</definedName></definedNames></workbook>"},
-                {"xl/_rels/workbook.xml.rels", rels + "</Relationships>"},
-                {"xl/styles.xml", "<styleSheet xmlns=\"" + std::string(kMain) +
-                                      "\"><fonts count=\"1\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font></fonts>"
-                                      "<fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill></fills>"
-                                      "<borders count=\"1\"><border/></borders><cellStyleXfs count=\"1\"><xf/></cellStyleXfs>"
-                                      "<cellXfs count=\"2\"><xf/><xf numFmtId=\"14\" applyNumberFormat=\"1\"/></cellXfs></styleSheet>"}});
-  fw::pkg::Status st;
-  auto pkg = test::OpenBytes(test::MakeZip(parts), st);
-  CHECK(pkg != nullptr);
-  if (!pkg) return nullptr;
-  auto book = xlsx::Read(std::move(pkg), st, {.loadAll = true});
-  CHECK(book != nullptr);
-  return book;
-}
-
-std::string Text(const Sheet& s, uint32_t row, uint32_t col) {
-  Value v = s.GetValue(row, col);
-  if (v.type == ValueType::String) return std::string(v.text);
-  if (v.type == ValueType::Number) return std::to_string(static_cast<long long>(v.number));
-  return v.type == ValueType::Empty ? "" : "?";
-}
-
-std::string FormulaText(const Sheet& s, uint32_t row, uint32_t col) {
-  FormulaInfo f;
-  return s.GetFormula(row, col, f) ? std::string(f.text) : std::string("-");
-}
-
-}  // namespace
+using namespace sheet_test;
 
 TEST(sheet_edit_cells_undo_redo) {
   // Row 1 with two cells, then rows 41-80 (a second block of rows).

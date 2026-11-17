@@ -1,0 +1,1138 @@
+// Saving an edited workbook (S2): the parts an edit changed, written from the model; everything
+// else copied from the file as it was (plan §4.3 rule 1, §7.3).
+#include <algorithm>
+#include <charconv>
+#include <cstdio>
+#include <cstring>
+#include <set>
+
+#include "pkg/XmlWriter.h"
+#include "sheet/edit/Edit.h"
+#include "sheet/xlsx/Internal.h"
+#include "sheet/xlsx/Xlsx.h"
+
+namespace fw::sheet::xlsx {
+
+using detail::PartText;
+using pkg::Status;
+
+namespace {
+
+constexpr std::string_view kDecl = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n";
+constexpr std::string_view kRelNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+constexpr std::string_view kRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+constexpr std::string_view kSheetCt = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+constexpr std::string_view kStringsCt = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
+// The workbook part's content type for each format.
+constexpr std::string_view kXlsxCt = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+constexpr std::string_view kXltxCt = "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml";
+constexpr std::string_view kXlsmCt = "application/vnd.ms-excel.sheet.macroEnabled.main+xml";
+constexpr std::string_view kXltmCt = "application/vnd.ms-excel.template.macroEnabled.main+xml";
+
+struct StringWriter : pugi::xml_writer {
+  std::string s;
+  void write(const void* data, size_t size) override { s.append(static_cast<const char*>(data), size); }
+};
+
+std::string Print(pugi::xml_node n) {
+  StringWriter w;
+  n.print(w, "", pugi::format_raw);
+  return w.s;
+}
+
+std::string PrintDoc(const pugi::xml_document& d) {
+  StringWriter w;
+  d.save(w, "", pugi::format_raw | pugi::format_no_declaration);
+  return std::string(kDecl) + w.s;
+}
+
+std::vector<uint8_t> Bytes(std::string_view s) { return std::vector<uint8_t>(s.begin(), s.end()); }
+
+std::string Num(double v) {
+  char buf[32];
+  auto r = std::to_chars(buf, buf + sizeof buf, v);
+  return std::string(buf, r.ptr);
+}
+
+std::string AttrXml(std::string_view name, std::string_view value) {
+  std::string out = " ";
+  out += name;
+  out += "=\"";
+  pkg::AppendEscapedAttribute(out, value);
+  out += '"';
+  return out;
+}
+
+// "x:" for a root "<x:worksheet ...>", "" without a prefix.
+std::string PrefixOf(std::string_view startTag) {
+  size_t end = 1;
+  while (end < startTag.size() && std::strchr(" \t\r\n/>", startTag[end]) == nullptr) ++end;
+  std::string_view name = startTag.substr(1, end - 1);
+  size_t colon = name.find(':');
+  return colon == std::string_view::npos ? std::string() : std::string(name.substr(0, colon + 1));
+}
+
+// The prefix a start tag declares for `ns` ("r"), or "" when it declares none.
+std::string DeclaredPrefix(std::string_view startTag, std::string_view ns) {
+  std::string needle = "=\"" + std::string(ns) + "\"";
+  for (size_t at = startTag.find(needle); at != std::string_view::npos; at = startTag.find(needle, at + 1)) {
+    size_t start = startTag.rfind("xmlns:", at);
+    if (start == std::string_view::npos) continue;
+    std::string_view p = startTag.substr(start + 6, at - start - 6);
+    if (!p.empty() && p.find_first_of(" \t\r\n\"=") == std::string_view::npos) return std::string(p);
+  }
+  return {};
+}
+
+// ---------- The worksheet's elements around sheetData ----------
+
+// CT_Worksheet's elements, in schema order.
+constexpr std::string_view kOrder[] = {
+    "sheetPr", "dimension", "sheetViews", "sheetFormatPr", "cols", "sheetData", "sheetCalcPr", "sheetProtection",
+    "protectedRanges", "scenarios", "autoFilter", "sortState", "dataConsolidate", "customSheetViews", "mergeCells",
+    "phoneticPr", "conditionalFormatting", "dataValidations", "hyperlinks", "printOptions", "pageMargins",
+    "pageSetup", "headerFooter", "rowBreaks", "colBreaks", "customProperties", "cellWatches", "ignoredErrors",
+    "smartTags", "drawing", "legacyDrawing", "legacyDrawingHF", "drawingHF", "picture", "oleObjects", "controls",
+    "webPublishItems", "tableParts", "extLst"};
+
+int OrderOf(std::string_view local) {
+  for (size_t i = 0; i < std::size(kOrder); ++i)
+    if (kOrder[i] == local) return static_cast<int>(i);
+  return 1000;
+}
+
+struct Piece {
+  size_t begin = 0, end = 0;
+  std::string local;
+};
+
+// The top-level elements of kept worksheet XML (comments and whitespace between them skipped).
+std::vector<Piece> TopLevel(std::string_view x) {
+  std::vector<Piece> out;
+  int depth = 0;
+  Piece cur;
+  for (size_t i = x.find('<'); i != std::string_view::npos; i = x.find('<', i)) {
+    if (x.compare(i, 4, "<!--") == 0) {
+      size_t e = x.find("-->", i);
+      if (e == std::string_view::npos) break;
+      i = e + 3;
+      continue;
+    }
+    if (x.compare(i, 9, "<![CDATA[") == 0) {
+      size_t e = x.find("]]>", i);
+      if (e == std::string_view::npos) break;
+      i = e + 3;
+      continue;
+    }
+    if (x.compare(i, 2, "<?") == 0) {
+      size_t e = x.find("?>", i);
+      if (e == std::string_view::npos) break;
+      i = e + 2;
+      continue;
+    }
+    bool closing = i + 1 < x.size() && x[i + 1] == '/';
+    size_t j = i + 1;
+    char quote = 0;
+    for (; j < x.size(); ++j) {
+      char c = x[j];
+      if (quote) {
+        if (c == quote) quote = 0;
+      } else if (c == '"' || c == '\'') {
+        quote = c;
+      } else if (c == '>') {
+        break;
+      }
+    }
+    if (j >= x.size()) break;
+    if (closing) {
+      if (--depth == 0) {
+        cur.end = j + 1;
+        out.push_back(cur);
+      }
+    } else {
+      bool selfClosing = x[j - 1] == '/';
+      if (depth == 0) {
+        size_t k = i + 1;
+        while (k < j && std::strchr(" \t\r\n/>", x[k]) == nullptr) ++k;
+        std::string_view qn = x.substr(i + 1, k - i - 1);
+        size_t colon = qn.find(':');
+        cur = Piece{i, 0, std::string(colon == std::string_view::npos ? qn : qn.substr(colon + 1))};
+      }
+      if (selfClosing) {
+        if (depth == 0) {
+          cur.end = j + 1;
+          out.push_back(cur);
+        }
+      } else {
+        ++depth;
+      }
+    }
+    i = j + 1;
+  }
+  return out;
+}
+
+// The element `local` as the kept XML has it (empty when it has none).
+std::string_view FindElement(const PartText& t, std::string_view local) {
+  const std::string& seg = OrderOf(local) < OrderOf("sheetData") ? t.beforeData : t.afterData;
+  for (const Piece& p : TopLevel(seg))
+    if (p.local == local) return std::string_view(seg).substr(p.begin, p.end - p.begin);
+  return {};
+}
+
+// Puts `xml` where element `local` is (empty `xml` removes it), or where the schema puts it.
+void PutElement(PartText& t, std::string_view local, const std::string& xml) {
+  int order = OrderOf(local);
+  std::string& seg = order < OrderOf("sheetData") ? t.beforeData : t.afterData;
+  std::vector<Piece> pieces = TopLevel(seg);
+  for (const Piece& p : pieces)
+    if (p.local == local) {
+      seg.replace(p.begin, p.end - p.begin, xml);
+      return;
+    }
+  if (xml.empty()) return;
+  for (const Piece& p : pieces)
+    if (OrderOf(p.local) > order) {
+      seg.insert(p.begin, xml);
+      return;
+    }
+  seg += xml;
+}
+
+std::string ColorAttrs(const Color& c) {
+  std::string out;
+  switch (c.kind) {
+    case Color::Kind::None: return {};
+    case Color::Kind::Auto: out = AttrXml("auto", "1"); break;
+    case Color::Kind::Rgb: {
+      char buf[9];
+      std::snprintf(buf, sizeof buf, "%08X", c.value);
+      out = AttrXml("rgb", buf);
+      break;
+    }
+    case Color::Kind::Indexed: out = AttrXml("indexed", std::to_string(c.value)); break;
+    case Color::Kind::Theme: out = AttrXml("theme", std::to_string(c.value)); break;
+  }
+  if (c.tint != 0) out += AttrXml("tint", Num(c.tint));
+  return out;
+}
+
+void SetAttr(pugi::xml_node n, const char* name, const std::string& value) {
+  pugi::xml_attribute a = n.attribute(name);
+  if (value.empty()) {
+    if (a) n.remove_attribute(a);
+    return;
+  }
+  if (!a) a = n.append_attribute(name);
+  a.set_value(value.c_str());
+}
+
+// An element of the kept XML as a DOM (its prefixes undeclared: pugi doesn't mind), or a new one.
+pugi::xml_node ElementDom(pugi::xml_document& doc, const PartText& t, std::string_view local, const std::string& p) {
+  std::string_view kept = FindElement(t, local);
+  if (!kept.empty() && ParseSlice(doc, kept)) return doc.document_element();
+  doc.reset();
+  return doc.append_child((p + std::string(local)).c_str());
+}
+
+std::string SheetPrXml(const Sheet& s, const PartText& t, const std::string& p) {
+  pugi::xml_document doc;
+  pugi::xml_node pr = ElementDom(doc, t, "sheetPr", p);
+  pugi::xml_node tab = Child(pr, "tabColor");
+  const Color& c = s.Props().tabColor;
+  if (!c.IsSet()) {
+    if (tab) pr.remove_child(tab);
+  } else {
+    if (tab) pr.remove_child(tab);
+    pugi::xml_document cd;
+    std::string xml = "<" + p + "tabColor" + ColorAttrs(c) + "/>";
+    if (ParseSlice(cd, xml)) pr.prepend_copy(cd.document_element());
+  }
+  if (!pr.first_child() && !pr.first_attribute()) return {};
+  return Print(pr);
+}
+
+std::string FormatPrXml(const Sheet& s, const PartText& t, const std::string& p) {
+  // The deepest outline levels (the edits change those); the rest as the file has it.
+  uint8_t rows = 0, cols = 0;
+  s.ForEachRow(0, kMaxRows - 1, [&](uint32_t, const RowInfo& r) {
+    rows = std::max(rows, r.outlineLevel);
+    return true;
+  });
+  for (const ColumnInfo& c : s.Columns()) cols = std::max(cols, c.outlineLevel);
+  bool had = !FindElement(t, "sheetFormatPr").empty();
+  if (!had && !rows && !cols) return {};
+  pugi::xml_document doc;
+  pugi::xml_node f = ElementDom(doc, t, "sheetFormatPr", p);
+  if (!had) SetAttr(f, "defaultRowHeight", Num(s.Format().defaultRowHeight));
+  SetAttr(f, "outlineLevelRow", rows ? std::to_string(rows) : "");
+  SetAttr(f, "outlineLevelCol", cols ? std::to_string(cols) : "");
+  return Print(f);
+}
+
+std::string ColsXml(const Sheet& s, const std::string& p) {
+  if (s.Columns().empty()) return {};
+  std::string out = "<" + p + "cols>";
+  for (const ColumnInfo& c : s.Columns()) {
+    out += "<" + p + "col" + AttrXml("min", std::to_string(c.first + 1)) + AttrXml("max", std::to_string(c.last + 1));
+    if (c.width > 0) out += AttrXml("width", Num(c.width));
+    if (c.style) out += AttrXml("style", std::to_string(c.style));
+    if (c.hidden) out += AttrXml("hidden", "1");
+    if (c.bestFit) out += AttrXml("bestFit", "1");
+    if (c.customWidth && c.width > 0) out += AttrXml("customWidth", "1");
+    if (c.phonetic) out += AttrXml("phonetic", "1");
+    if (c.outlineLevel) out += AttrXml("outlineLevel", std::to_string(c.outlineLevel));
+    if (c.collapsed) out += AttrXml("collapsed", "1");
+    out += "/>";
+  }
+  return out + "</" + p + "cols>";
+}
+
+std::string MergesXml(const Sheet& s, const std::string& p) {
+  if (s.Merges().empty()) return {};
+  std::string out = "<" + p + "mergeCells" + AttrXml("count", std::to_string(s.Merges().size())) + ">";
+  for (const Range& r : s.Merges()) out += "<" + p + "mergeCell" + AttrXml("ref", RangeName(r)) + "/>";
+  return out + "</" + p + "mergeCells>";
+}
+
+std::string DimensionXml(const Sheet& s, const std::string& p) {
+  auto used = s.UsedRange();
+  return "<" + p + "dimension" + AttrXml("ref", used ? RangeName(*used) : std::string("A1")) + "/>";
+}
+
+std::string_view PaneName(PaneId id) {
+  switch (id) {
+    case PaneId::BottomRight: return "bottomRight";
+    case PaneId::TopRight: return "topRight";
+    case PaneId::BottomLeft: return "bottomLeft";
+    case PaneId::TopLeft: return "topLeft";
+  }
+  return "topLeft";
+}
+
+std::string SqrefOf(const std::vector<Range>& ranges) {
+  std::string out;
+  for (const Range& r : ranges) {
+    if (!out.empty()) out += ' ';
+    out += RangeName(r);
+  }
+  return out;
+}
+
+std::string ViewsXml(const Sheet& s, const PartText& t, const std::string& p, bool active) {
+  pugi::xml_document doc;
+  pugi::xml_node views = ElementDom(doc, t, "sheetViews", p);
+  std::vector<pugi::xml_node> nodes;
+  for (pugi::xml_node v : views.children())
+    if (v.type() == pugi::node_element && Local(v) == "sheetView") nodes.push_back(v);
+  const auto& model = s.Views();
+  for (size_t i = 0; i < model.size(); ++i) {
+    const SheetView& m = model[i];
+    pugi::xml_node v = i < nodes.size() ? nodes[i] : views.append_child((p + "sheetView").c_str());
+    if (i == 0) SetAttr(v, "tabSelected", active ? "1" : "");
+    SetAttr(v, "zoomScale", m.zoomScale != 100 ? std::to_string(m.zoomScale) : "");
+    SetAttr(v, "topLeftCell", m.topLeft.row || m.topLeft.col ? CellName(m.topLeft.row, m.topLeft.col) : "");
+    SetAttr(v, "workbookViewId", std::to_string(m.workbookViewId));
+    // pane and selection first, then whatever else the view holds (pivotSelection, extLst).
+    for (pugi::xml_node c = v.first_child(); c;) {
+      pugi::xml_node next = c.next_sibling();
+      if (c.type() == pugi::node_element && (Local(c) == "pane" || Local(c) == "selection")) v.remove_child(c);
+      c = next;
+    }
+    std::string xml;
+    if (m.paneState != PaneState::None) {
+      xml += "<" + p + "pane";
+      if (m.xSplit > 0) xml += AttrXml("xSplit", Num(m.xSplit));
+      if (m.ySplit > 0) xml += AttrXml("ySplit", Num(m.ySplit));
+      xml += AttrXml("topLeftCell", CellName(m.paneTopLeft.row, m.paneTopLeft.col));
+      xml += AttrXml("activePane", PaneName(m.activePane));
+      if (m.paneState == PaneState::Frozen) xml += AttrXml("state", "frozen");
+      if (m.paneState == PaneState::FrozenSplit) xml += AttrXml("state", "frozenSplit");
+      xml += "/>";
+    }
+    for (const Selection& sel : m.selections) {
+      if (m.paneState == PaneState::None && sel.pane != PaneId::TopLeft) continue;
+      xml += "<" + p + "selection";
+      if (sel.pane != PaneId::TopLeft) xml += AttrXml("pane", PaneName(sel.pane));
+      xml += AttrXml("activeCell", CellName(sel.active.row, sel.active.col));
+      if (sel.activeRange) xml += AttrXml("activeCellId", std::to_string(sel.activeRange));
+      xml += AttrXml("sqref", SqrefOf(sel.ranges)) + "/>";
+    }
+    pugi::xml_document add;
+    if (!xml.empty() && ParseSlice(add, "<x>" + xml + "</x>")) {
+      pugi::xml_node first = v.first_child();
+      for (pugi::xml_node c : add.document_element().children())
+        first ? v.insert_copy_before(c, first) : v.append_copy(c);
+    }
+  }
+  return Print(views);
+}
+
+std::string LinksXml(const Sheet& s, const PartText& t, const std::string& p) {
+  if (s.Hyperlinks().empty()) return {};
+  std::string r = DeclaredPrefix(t.rootStart, kRelNs);
+  std::string out = "<" + p + "hyperlinks>";
+  for (const Hyperlink& h : s.Hyperlinks()) {
+    out += "<" + p + "hyperlink" + AttrXml("ref", RangeName(h.ref));
+    if (!h.relId.empty()) {
+      if (r.empty()) return std::string(FindElement(t, "hyperlinks"));  // can't name the relationship: as it was
+      out += AttrXml(r + ":id", h.relId);
+    }
+    if (!h.location.empty()) out += AttrXml("location", h.location);
+    if (!h.tooltip.empty()) out += AttrXml("tooltip", h.tooltip);
+    if (!h.display.empty()) out += AttrXml("display", h.display);
+    out += "/>";
+  }
+  return out + "</" + p + "hyperlinks>";
+}
+
+// The sheet part's text around sheetData with what the edits changed written from the model.
+PartText EditedText(const Sheet& s, uint32_t pieces, bool active) {
+  PartText t = s.Text();
+  std::string p = PrefixOf(t.rootStart);
+  if (pieces & edit::kPieceProps) PutElement(t, "sheetPr", SheetPrXml(s, t, p));
+  if (pieces & edit::kPieceCells) PutElement(t, "dimension", DimensionXml(s, p));
+  if ((pieces & edit::kPieceViews) && !s.Views().empty()) PutElement(t, "sheetViews", ViewsXml(s, t, p, active));
+  if (pieces & edit::kPieceCols) PutElement(t, "cols", ColsXml(s, p));
+  // Outline levels on rows (cells) or columns: sheetFormatPr says the deepest.
+  if (pieces & (edit::kPieceCols | edit::kPieceCells | edit::kPieceProps))
+    PutElement(t, "sheetFormatPr", FormatPrXml(s, t, p));
+  if (pieces & edit::kPieceMerges) PutElement(t, "mergeCells", MergesXml(s, p));
+  if (pieces & edit::kPieceLinks) PutElement(t, "hyperlinks", LinksXml(s, t, p));
+  return t;
+}
+
+// A new sheet's whole part around its cells.
+PartText NewSheetText(const Sheet& s, bool active) {
+  PartText t;
+  t.rootStart = "<worksheet xmlns=\"" + std::string(kMainNs) + "\" xmlns:r=\"" + std::string(kRelNs) + "\">";
+  t.beforeData = DimensionXml(s, "") + ViewsXml(s, t, "", active) + FormatPrXml(s, t, "") + ColsXml(s, "");
+  t.dataStart = "<sheetData>";
+  t.hasData = true;
+  t.afterData = MergesXml(s, "") +
+                "<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>";
+  t.rootEnd = "</worksheet>";
+  if (s.Props().tabColor.IsSet()) t.beforeData = SheetPrXml(s, t, "") + t.beforeData;
+  return t;
+}
+
+// ---------- Styles ----------
+
+std::string FontXml(const Font& f) {
+  std::string out = "<font>";
+  if (f.bold) out += "<b/>";
+  if (f.italic) out += "<i/>";
+  if (f.strike) out += "<strike/>";
+  if (f.condense) out += "<condense/>";
+  if (f.extend) out += "<extend/>";
+  if (f.outline) out += "<outline/>";
+  if (f.shadow) out += "<shadow/>";
+  switch (f.underline) {
+    case Underline::None: break;
+    case Underline::Single: out += "<u/>"; break;
+    case Underline::Double: out += "<u val=\"double\"/>"; break;
+    case Underline::SingleAccounting: out += "<u val=\"singleAccounting\"/>"; break;
+    case Underline::DoubleAccounting: out += "<u val=\"doubleAccounting\"/>"; break;
+  }
+  if (f.vertAlign == VertAlign::Superscript) out += "<vertAlign val=\"superscript\"/>";
+  if (f.vertAlign == VertAlign::Subscript) out += "<vertAlign val=\"subscript\"/>";
+  if (f.size > 0) out += "<sz" + AttrXml("val", Num(f.size)) + "/>";
+  if (f.color.IsSet()) out += "<color" + ColorAttrs(f.color) + "/>";
+  if (!f.name.empty()) out += "<name" + AttrXml("val", f.name) + "/>";
+  if (f.family) out += "<family" + AttrXml("val", std::to_string(f.family)) + "/>";
+  if (f.charset >= 0) out += "<charset" + AttrXml("val", std::to_string(f.charset)) + "/>";
+  if (f.scheme == FontScheme::Major) out += "<scheme val=\"major\"/>";
+  if (f.scheme == FontScheme::Minor) out += "<scheme val=\"minor\"/>";
+  return out + "</font>";
+}
+
+constexpr std::string_view kPatterns[] = {
+    "none", "solid", "mediumGray", "darkGray", "lightGray", "darkHorizontal", "darkVertical", "darkDown", "darkUp",
+    "darkGrid", "darkTrellis", "lightHorizontal", "lightVertical", "lightDown", "lightUp", "lightGrid",
+    "lightTrellis", "gray125", "gray0625"};
+
+std::string FillXml(const Fill& f) {
+  if (f.gradient) {
+    std::string out = "<fill><gradientFill";
+    if (f.path) {
+      out += AttrXml("type", "path") + AttrXml("left", Num(f.left)) + AttrXml("right", Num(f.right)) + AttrXml("top", Num(f.top)) +
+             AttrXml("bottom", Num(f.bottom));
+    } else if (f.degree != 0) {
+      out += AttrXml("degree", Num(f.degree));
+    }
+    out += ">";
+    for (const GradientStop& s : f.stops)
+      out += "<stop" + AttrXml("position", Num(s.position)) + "><color" + ColorAttrs(s.color) + "/></stop>";
+    return out + "</gradientFill></fill>";
+  }
+  std::string out = "<fill><patternFill" + AttrXml("patternType", kPatterns[static_cast<size_t>(f.pattern)]);
+  if (!f.fg.IsSet() && !f.bg.IsSet()) return out + "/></fill>";
+  out += ">";
+  if (f.fg.IsSet()) out += "<fgColor" + ColorAttrs(f.fg) + "/>";
+  if (f.bg.IsSet()) out += "<bgColor" + ColorAttrs(f.bg) + "/>";
+  return out + "</patternFill></fill>";
+}
+
+constexpr std::string_view kBorderStyles[] = {
+    "none", "thin", "medium", "dashed", "dotted", "thick", "double", "hair", "mediumDashed", "dashDot",
+    "mediumDashDot", "dashDotDot", "mediumDashDotDot", "slantDashDot"};
+
+std::string SideXml(std::string_view name, const BorderSide& s) {
+  std::string out = "<" + std::string(name);
+  if (s.style == BorderStyle::None) return out + "/>";
+  out += AttrXml("style", kBorderStyles[static_cast<size_t>(s.style)]);
+  if (!s.color.IsSet()) return out + "/>";
+  return out + "><color" + ColorAttrs(s.color) + "/></" + std::string(name) + ">";
+}
+
+std::string BorderXml(const Border& b) {
+  std::string out = "<border";
+  if (b.diagonalUp) out += AttrXml("diagonalUp", "1");
+  if (b.diagonalDown) out += AttrXml("diagonalDown", "1");
+  out += ">" + SideXml("left", b.left) + SideXml("right", b.right) + SideXml("top", b.top) + SideXml("bottom", b.bottom) +
+         SideXml("diagonal", b.diagonal);
+  if (b.vertical.style != BorderStyle::None) out += SideXml("vertical", b.vertical);
+  if (b.horizontal.style != BorderStyle::None) out += SideXml("horizontal", b.horizontal);
+  return out + "</border>";
+}
+
+constexpr std::string_view kHAlign[] = {"general", "left", "center", "right", "fill", "justify", "centerContinuous", "distributed"};
+constexpr std::string_view kVAlign[] = {"bottom", "top", "center", "justify", "distributed"};
+
+std::string XfXml(const Xf& x) {
+  std::string out = "<xf" + AttrXml("numFmtId", std::to_string(x.numFmt)) + AttrXml("fontId", std::to_string(x.font)) +
+                    AttrXml("fillId", std::to_string(x.fill)) + AttrXml("borderId", std::to_string(x.border)) +
+                    AttrXml("xfId", std::to_string(x.parent));
+  if (x.quotePrefix) out += AttrXml("quotePrefix", "1");
+  if (x.pivotButton) out += AttrXml("pivotButton", "1");
+  if (x.applyNumFmt) out += AttrXml("applyNumberFormat", "1");
+  if (x.applyFont) out += AttrXml("applyFont", "1");
+  if (x.applyFill) out += AttrXml("applyFill", "1");
+  if (x.applyBorder) out += AttrXml("applyBorder", "1");
+  if (x.applyAlignment) out += AttrXml("applyAlignment", "1");
+  if (x.applyProtection) out += AttrXml("applyProtection", "1");
+  const Alignment& a = x.alignment;
+  std::string align;
+  if (a.horizontal != HAlign::General) align += AttrXml("horizontal", kHAlign[static_cast<size_t>(a.horizontal)]);
+  if (a.vertical != VAlign::Bottom) align += AttrXml("vertical", kVAlign[static_cast<size_t>(a.vertical)]);
+  if (a.rotation) align += AttrXml("textRotation", std::to_string(a.rotation));
+  if (a.wrap) align += AttrXml("wrapText", "1");
+  if (a.indent) align += AttrXml("indent", std::to_string(a.indent));
+  if (a.relativeIndent) align += AttrXml("relativeIndent", std::to_string(a.relativeIndent));
+  if (a.justifyLastLine) align += AttrXml("justifyLastLine", "1");
+  if (a.shrinkToFit) align += AttrXml("shrinkToFit", "1");
+  if (a.readingOrder) align += AttrXml("readingOrder", std::to_string(a.readingOrder));
+  std::string prot;
+  if (!x.protection.locked) prot += AttrXml("locked", "0");
+  if (x.protection.hidden) prot += AttrXml("hidden", "1");
+  if (align.empty() && prot.empty()) return out + "/>";
+  out += ">";
+  if (!align.empty()) out += "<alignment" + align + "/>";
+  if (!prot.empty()) out += "<protection" + prot + "/>";
+  return out + "</xf>";
+}
+
+// Appends the model's entries past what `list` (fonts, fills, ...) holds, written by `xml`.
+template <class T, class Fn>
+bool AppendNew(pugi::xml_node root, std::string_view listName, std::string_view itemName, const std::vector<T>& model,
+               Fn&& xml, const std::string& p) {
+  pugi::xml_node list = Child(root, listName);
+  size_t have = 0;
+  if (list)
+    for (pugi::xml_node c : list.children())
+      if (c.type() == pugi::node_element && Local(c) == itemName) ++have;
+  if (model.size() <= have) return true;
+  if (!list) return false;  // the styles part lacks the list: leave it (the reader made defaults)
+  for (size_t i = have; i < model.size(); ++i) {
+    std::string item = xml(model[i]);
+    if (!p.empty()) {  // the part writes its elements with a prefix
+      std::string pre = "<" + p, post = "</" + p;
+      std::string out;
+      for (size_t k = 0; k < item.size(); ++k) {
+        if (item[k] == '<' && k + 1 < item.size() && item[k + 1] == '/') {
+          out += post;
+          ++k;
+        } else if (item[k] == '<') {
+          out += pre;
+        } else {
+          out += item[k];
+        }
+      }
+      item = std::move(out);
+    }
+    pugi::xml_document d;
+    if (!ParseSlice(d, item)) return false;
+    list.append_copy(d.document_element());
+  }
+  SetAttr(list, "count", std::to_string(model.size()));
+  return true;
+}
+
+Status StylesPart(const Workbook& book, std::vector<uint8_t>& out) {
+  const pkg::Package* pkg = book.GetPackage();
+  std::vector<uint8_t> bytes;
+  Status st = pkg->ReadPart(book.StylesPart(), bytes);
+  if (!st.Ok()) return st;
+  pugi::xml_document doc;
+  if (!doc.load_buffer(bytes.data(), bytes.size(), pugi::parse_default | pugi::parse_ws_pcdata_single | pugi::parse_comments))
+    return Status::Fail(Status::Code::Damaged, "The styles can't be written.");
+  pugi::xml_node root = doc.document_element();
+  std::string p;
+  if (std::string_view n = root.name(); n.find(':') != std::string_view::npos) p = std::string(n.substr(0, n.find(':') + 1));
+  const Styles& s = book.GetStyles();
+  // Custom number formats the file doesn't have.
+  pugi::xml_node fmts = Child(root, "numFmts");
+  std::vector<std::pair<uint32_t, std::string>> missing;
+  for (const auto& [id, code] : s.CustomFormats()) {
+    bool have = false;
+    if (fmts)
+      for (pugi::xml_node f : fmts.children())
+        if (Local(f) == "numFmt" && UIntAttr(f, "numFmtId", kNone) == id) have = true;
+    if (!have) missing.push_back({id, code});
+  }
+  if (!missing.empty()) {
+    if (!fmts) fmts = root.prepend_child((p + "numFmts").c_str());
+    std::sort(missing.begin(), missing.end());
+    for (const auto& [id, code] : missing) {
+      pugi::xml_node f = fmts.append_child((p + "numFmt").c_str());
+      f.append_attribute("numFmtId").set_value(std::to_string(id).c_str());
+      f.append_attribute("formatCode").set_value(code.c_str());
+    }
+    size_t n = 0;
+    for (pugi::xml_node f : fmts.children()) n += Local(f) == "numFmt";
+    SetAttr(fmts, "count", std::to_string(n));
+  }
+  if (!AppendNew(root, "fonts", "font", s.Fonts(), FontXml, p) ||
+      !AppendNew(root, "fills", "fill", s.Fills(), FillXml, p) ||
+      !AppendNew(root, "borders", "border", s.Borders(), BorderXml, p) ||
+      !AppendNew(root, "cellXfs", "xf", s.CellXfs(), XfXml, p))
+    return Status::Fail(Status::Code::Unsupported, "The workbook's styles can't take the new formats.");
+  out = Bytes(PrintDoc(doc));
+  return {};
+}
+
+// ---------- Shared strings ----------
+
+std::string StringsXml(const StringTable& table) {
+  std::string out;
+  if (table.Part().rootStart.empty()) {  // the workbook had none
+    out = std::string(kDecl) + "<sst xmlns=\"" + std::string(kMainNs) + "\"" +
+          AttrXml("uniqueCount", std::to_string(table.Size())) + ">";
+    for (uint32_t id = 0; id < table.Size(); ++id) {
+      out += (table.Flags(id) & StringTable::kPreserve) ? "<si><t xml:space=\"preserve\">" : "<si><t>";
+      pkg::AppendEscapedText(out, table.Text(id));
+      out += "</t></si>";
+    }
+    return out + "</sst>";
+  }
+  WriteStringsPart(table, out);
+  // count (references) is optional and would be stale; uniqueCount is the table's size.
+  size_t root = kDecl.size() + table.Part().prolog.size();
+  size_t end = root < out.size() ? out.find('>', root) : std::string::npos;
+  if (end == std::string::npos) return out;
+  std::string tag = out.substr(0, end);
+  auto drop = [&](std::string_view name) {
+    std::string key = " " + std::string(name) + "=\"";
+    size_t at = tag.find(key);
+    if (at == std::string::npos) return;
+    size_t close = tag.find('"', at + key.size());
+    if (close != std::string::npos) tag.erase(at, close + 1 - at);
+  };
+  drop("count");
+  drop("uniqueCount");
+  size_t insertAt = tag.size();
+  if (!tag.empty() && tag.back() == '/') --insertAt;
+  tag.insert(insertAt, AttrXml("uniqueCount", std::to_string(table.Size())));
+  return tag + out.substr(end);
+}
+
+// A chart sheet's (or dialog or macro sheet's) part, which the model doesn't write: only its tab
+// selection, when that no longer matches the active tab. False when it matches.
+bool OtherSheetTab(const pkg::Package& pkg, const Sheet& s, bool active, std::vector<uint8_t>& out) {
+  std::vector<uint8_t> bytes;
+  pugi::xml_document doc;
+  if (!pkg.ReadPart(s.PartName(), bytes).Ok() ||
+      !doc.load_buffer(bytes.data(), bytes.size(), pugi::parse_default | pugi::parse_ws_pcdata_single | pugi::parse_comments))
+    return false;
+  pugi::xml_node view = Child(Child(doc.document_element(), "sheetViews"), "sheetView");
+  if (!view || BoolAttr(view, "tabSelected", false) == active) return false;
+  SetAttr(view, "tabSelected", active ? "1" : "");
+  out = Bytes(PrintDoc(doc));
+  return true;
+}
+
+// Every part the package's relationships reach from its root without going through `cut`
+// (PartKeys), as PartKeys.
+std::set<std::string> Reachable(const pkg::Package& pkg, const std::set<std::string>& cut) {
+  std::set<std::string> seen;
+  std::vector<std::string> todo{"/"};
+  while (!todo.empty()) {
+    std::string source = std::move(todo.back());
+    todo.pop_back();
+    const pkg::RelationshipSet* set = pkg.RelationshipsOf(source);
+    if (!set) continue;
+    for (const pkg::Relationship& r : set->items) {
+      if (r.external || r.targetPart.empty()) continue;
+      std::string key = pkg::PartKey(r.targetPart);
+      if (cut.count(key) || !seen.insert(key).second) continue;
+      todo.push_back(r.targetPart);
+    }
+  }
+  return seen;
+}
+
+}  // namespace
+
+// ---------- The workbook ----------
+
+Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan, FileFormat format) {
+  plan = SavePlan{};
+  plan.format = format;
+  const pkg::Package* pkg = book.GetPackage();
+  if (!pkg || format == FileFormat::Csv)
+    return Status::Fail(Status::Code::Unsupported, "This workbook can't be saved as an Excel workbook.");
+  const bool macros = format == FileFormat::Xlsm || format == FileFormat::Xltm;
+  if (!macros)
+    for (size_t i = 0; i < book.SheetCount(); ++i)
+      if (book.GetSheet(i).Kind() == SheetKind::Macrosheet || book.GetSheet(i).Kind() == SheetKind::Dialogsheet)
+        return Status::Fail(Status::Code::Unsupported,
+                            "The sheet " + book.GetSheet(i).Name() +
+                                " holds macros, which only a macro-enabled workbook (.xlsm) keeps.");
+  const std::string& wbPart = book.WorkbookPart();
+  std::vector<uint8_t> bytes;
+  auto put = [&](std::string name, std::vector<uint8_t> data) { plan.changes.replace.push_back({std::move(name), std::move(data)}); };
+
+  // What the file lists: workbook.xml and its relationships.
+  Status st = pkg->ReadPart(wbPart, bytes);
+  if (!st.Ok()) return st;
+  pugi::xml_document wb;
+  if (!wb.load_buffer(bytes.data(), bytes.size(), pugi::parse_default | pugi::parse_ws_pcdata_single | pugi::parse_comments))
+    return Status::Fail(Status::Code::Damaged, "The workbook part can't be written.");
+  pugi::xml_node root = wb.document_element();
+  std::string p;
+  if (std::string_view n = root.name(); n.find(':') != std::string_view::npos) p = std::string(n.substr(0, n.find(':') + 1));
+  std::string r;  // the prefix for relationship ids
+  for (pugi::xml_attribute a : root.attributes())
+    if (std::string_view(a.name()).rfind("xmlns:", 0) == 0 && a.value() == kRelNs) r = std::string(a.name() + 6);
+  if (r.empty()) {
+    r = "r";
+    root.append_attribute("xmlns:r").set_value(std::string(kRelNs).c_str());
+  }
+  const pkg::RelationshipSet* wbRels = pkg->RelationshipsOf(wbPart);
+  std::string relsPart = pkg::RelsPartFor(wbPart);
+  std::vector<uint8_t> relBytes;
+  pugi::xml_document rels;
+  if (pkg->ReadPart(relsPart, relBytes).Ok()) rels.load_buffer(relBytes.data(), relBytes.size());
+  pugi::xml_node relRoot = rels.document_element();
+  pugi::xml_document types;
+  std::vector<uint8_t> typeBytes;
+  if (!pkg->ReadPart("/[Content_Types].xml", typeBytes).Ok() || !types.load_buffer(typeBytes.data(), typeBytes.size()))
+    return Status::Fail(Status::Code::Damaged, "The list of contents can't be written.");
+  pugi::xml_node typesRoot = types.document_element();
+  bool relsChanged = false, typesChanged = false;
+  auto dropRel = [&](std::string_view id) {
+    for (pugi::xml_node c = relRoot.first_child(); c; c = c.next_sibling())
+      if (std::string_view(c.attribute("Id").value()) == id) {
+        relRoot.remove_child(c);
+        relsChanged = true;
+        return;
+      }
+  };
+  auto dropOverride = [&](std::string_view part) {
+    for (pugi::xml_node c = typesRoot.first_child(); c; c = c.next_sibling())
+      if (pkg::PartKey(c.attribute("PartName").value()) == pkg::PartKey(part)) {
+        typesRoot.remove_child(c);
+        typesChanged = true;
+        return;
+      }
+  };
+  auto newRelId = [&]() {
+    for (int n = 1;; ++n) {
+      std::string id = "rId" + std::to_string(n);
+      bool used = false;
+      for (pugi::xml_node c : relRoot.children()) used = used || std::string_view(c.attribute("Id").value()) == id;
+      if (!used) return id;
+    }
+  };
+
+  if (!relRoot) return Status::Fail(Status::Code::Damaged, "The workbook's relationships can't be written.");
+  // The workbook part's content type says what the file is (Excel refuses an .xlsx typed as .xlsm).
+  {
+    std::string_view want = format == FileFormat::Xlsm   ? kXlsmCt
+                            : format == FileFormat::Xltx ? kXltxCt
+                            : format == FileFormat::Xltm ? kXltmCt
+                                                         : kXlsxCt;
+    pugi::xml_node o;
+    for (pugi::xml_node c : typesRoot.children())
+      if (Local(c) == "Override" && pkg::PartKey(c.attribute("PartName").value()) == pkg::PartKey(wbPart)) o = c;
+    if (!o) {
+      o = typesRoot.append_child("Override");
+      o.append_attribute("PartName").set_value(wbPart.c_str());
+      o.append_attribute("ContentType");
+    }
+    if (std::string_view(o.attribute("ContentType").value()) != want) {
+      o.attribute("ContentType").set_value(std::string(want).c_str());
+      typesChanged = true;
+    }
+  }
+  // New parts go next to the workbook part ("/xl/"), their targets relative to it.
+  const std::string dir = wbPart.substr(0, wbPart.rfind('/') + 1);
+  auto taken = [&](const std::string& part) {
+    const std::string key = pkg::PartKey(part);
+    const pkg::Part* found = pkg->FindPart(part);
+    if (found && !found->deleted) return true;
+    for (const auto& [name, data] : plan.changes.replace)
+      if (pkg::PartKey(name) == key) return true;
+    for (const auto& job : plan.sheets)
+      if (pkg::PartKey(job.part) == key) return true;
+    for (size_t i = 0; i < book.SheetCount(); ++i)  // written from the model by an earlier save
+      if (!book.GetSheet(i).PartName().empty() && pkg::PartKey(book.GetSheet(i).PartName()) == key) return true;
+    return false;
+  };
+  // Leaves a part out of the save, with its relationships and its content type.
+  auto leave = [&](const std::string& part) {
+    plan.changes.leaveOut.push_back(part);
+    std::string partRels = pkg::RelsPartFor(part);
+    if (pkg->FindPart(partRels)) plan.changes.leaveOut.push_back(partRels);
+    dropOverride(part);
+  };
+
+  // Sheets: edited, new, and gone.
+  bool anyCells = false;
+  std::vector<std::string> keptParts;
+  for (size_t i = 0; i < book.SheetCount(); ++i) {
+    const Sheet& s = book.GetSheet(i);
+    uint32_t pieces = ed.DirtyPieces(static_cast<int>(i));
+    bool active = i == book.ActiveSheet();
+    // A tab selected in the file that isn't the active one any more (or the other way round) would
+    // group sheets in Excel.
+    if (s.Loaded() && !s.Views().empty() && s.Views()[0].tabSelected != active) pieces |= edit::kPieceViews;
+    anyCells = anyCells || (pieces & edit::kPieceCells);
+    if (s.PartName().empty()) {  // new
+      SavePlan::SheetJob job;
+      job.sheet = &s;
+      job.added = true;
+      std::string target;
+      for (int n = 1;; ++n) {
+        target = "worksheets/sheet" + std::to_string(n) + ".xml";
+        job.part = dir + target;
+        if (!taken(job.part)) break;
+      }
+      job.relId = newRelId();
+      pugi::xml_node rel = relRoot.append_child("Relationship");
+      rel.append_attribute("Id").set_value(job.relId.c_str());
+      rel.append_attribute("Type").set_value((std::string(kRelType) + "worksheet").c_str());
+      rel.append_attribute("Target").set_value(target.c_str());
+      relsChanged = true;
+      pugi::xml_node o = typesRoot.append_child("Override");
+      o.append_attribute("PartName").set_value(job.part.c_str());
+      o.append_attribute("ContentType").set_value(std::string(kSheetCt).c_str());
+      typesChanged = true;
+      job.text = NewSheetText(s, active);
+      plan.sheets.push_back(std::move(job));
+      continue;
+    }
+    keptParts.push_back(s.PartName());
+    if (s.Kind() != SheetKind::Worksheet) {
+      std::vector<uint8_t> out;
+      if (ed.WorkbookDirty() && OtherSheetTab(*pkg, s, active, out)) put(s.PartName(), std::move(out));
+      continue;
+    }
+    if (!pieces && !ed.MustWrite(static_cast<int>(i))) continue;
+    if (!s.Loaded() || s.Text().rootStart.empty())
+      return Status::Fail(Status::Code::Unsupported, "The sheet " + s.Name() + " can't be written.");
+    plan.sheets.push_back({&s, s.PartName(), s.RelId(), EditedText(s, pieces, active), false});
+  }
+  const bool added = std::any_of(plan.sheets.begin(), plan.sheets.end(), [](const auto& j) { return j.added; });
+  // Sheets the file has that the workbook doesn't any more go, and so does the calculation chain
+  // once cells or sheets changed: it lists formula cells by sheet, and Excel rebuilds it (§7.3).
+  // A macro-free format leaves out the VBA project (and its signatures, which only it uses).
+  bool dropChain = anyCells || ed.WorkbookDirty() || added;
+  std::set<std::string> cut;  // PartKeys
+  if (wbRels)
+    for (const pkg::Relationship& rel : wbRels->items) {
+      if (rel.external || rel.targetPart.empty()) continue;
+      bool sheetType = rel.type.ends_with("/worksheet") || rel.type.ends_with("/chartsheet") ||
+                       rel.type.ends_with("/dialogsheet") || rel.type.ends_with("/xlMacrosheet");
+      bool chain = rel.type.ends_with("/calcChain");
+      bool vba = rel.type.ends_with("/vbaProject");
+      if (sheetType) {
+        bool kept = std::any_of(keptParts.begin(), keptParts.end(),
+                                [&](const std::string& k) { return pkg::PartKey(k) == pkg::PartKey(rel.targetPart); });
+        if (kept) continue;
+        plan.sheetsRemoved = true;
+      } else if (!(chain && dropChain) && !(vba && !macros)) {
+        continue;
+      }
+      cut.insert(pkg::PartKey(rel.targetPart));
+      dropRel(rel.id);
+      leave(rel.targetPart);
+    }
+  // What only those parts used (a deleted sheet's drawings, tables, comments) goes with them;
+  // parts nothing used to begin with stay as they are.
+  if (!cut.empty()) {
+    std::set<std::string> before = Reachable(*pkg, {}), after = Reachable(*pkg, cut);
+    for (const pkg::Part& part : pkg->Parts()) {
+      std::string key = pkg::PartKey(part.name);
+      if (part.deleted || cut.count(key) || !before.count(key) || after.count(key)) continue;
+      leave(part.name);
+    }
+  }
+
+  // workbook.xml: sheets, names, the active tab.
+  if (ed.WorkbookDirty() || added) {
+    pugi::xml_node sheets = Child(root, "sheets");
+    if (!sheets) return Status::Fail(Status::Code::Damaged, "The workbook part lists no sheets.");
+    std::vector<pugi::xml_node> old;
+    for (pugi::xml_node c : sheets.children())
+      if (c.type() == pugi::node_element) old.push_back(c);
+    pugi::xml_document hold;
+    pugi::xml_node bin = hold.append_child("hold");
+    for (pugi::xml_node c : old) {
+      bin.append_copy(c);
+      sheets.remove_child(c);
+    }
+    const std::string idName = r + ":id";
+    for (size_t i = 0; i < book.SheetCount(); ++i) {
+      const Sheet& s = book.GetSheet(i);
+      std::string relId;
+      for (const auto& ns : plan.sheets)
+        if (ns.sheet == &s && ns.added) relId = ns.relId;
+      pugi::xml_node e;
+      if (relId.empty())  // as the file had it, found by its relationship id
+        for (pugi::xml_node c : bin.children())
+          if (!s.RelId().empty() && RelIdAttr(c) == s.RelId()) {
+            e = sheets.append_copy(c);
+            break;
+          }
+      if (!e) {
+        e = sheets.append_child((p + "sheet").c_str());
+        e.append_attribute("name");
+        e.append_attribute("sheetId").set_value(std::to_string(s.SheetId()).c_str());
+        e.append_attribute(idName.c_str()).set_value(relId.c_str());
+      }
+      SetAttr(e, "name", s.Name());
+      SetAttr(e, "state", s.State() == SheetState::Hidden ? "hidden" : s.State() == SheetState::VeryHidden ? "veryHidden" : "");
+    }
+    // Defined names, from the model when they differ from the file's.
+    pugi::xml_node names = Child(root, "definedNames");
+    pugi::xml_document oldNames;
+    if (names) oldNames.append_copy(names);
+    std::vector<DefinedName> fileNames;
+    if (names)
+      for (pugi::xml_node n : names.children()) {
+        if (n.type() != pugi::node_element || Local(n) != "definedName") continue;
+        fileNames.push_back(DefinedName{std::string(Attr(n, "name")), IntAttr(n, "localSheetId", -1), TextOf(n),
+                                        BoolAttr(n, "hidden", false)});
+      }
+    bool sameNames = fileNames.size() == book.Names().size() &&
+                     std::equal(fileNames.begin(), fileNames.end(), book.Names().begin(),
+                                [](const DefinedName& a, const DefinedName& b) {
+                                  return a.name == b.name && a.sheet == b.sheet && a.formula == b.formula &&
+                                         a.hidden == b.hidden;
+                                });
+    if (sameNames) {
+      // as they are
+    } else if (!book.Names().empty()) {
+      if (!names) {
+        pugi::xml_node after = sheets;
+        for (std::string_view prior : {"functionGroups", "externalReferences"})
+          if (pugi::xml_node x = Child(root, prior)) after = x;
+        names = root.insert_child_after((p + "definedNames").c_str(), after);
+      }
+      while (names.first_child()) names.remove_child(names.first_child());
+      for (const DefinedName& n : book.Names()) {
+        pugi::xml_node e = names.append_child((p + "definedName").c_str());
+        // Attributes the model doesn't keep (comment, function...) come from the name as it was.
+        // Matched by name and sheet, else by name alone.
+        pugi::xml_node was, byName;
+        if (pugi::xml_node list = oldNames.document_element())
+          for (pugi::xml_node o : list.children()) {
+            if (o.type() != pugi::node_element || !NameEqualsNoCase(Attr(o, "name"), n.name)) continue;
+            if (!byName) byName = o;
+            if (IntAttr(o, "localSheetId", -1) == n.sheet) {
+              was = o;
+              break;
+            }
+          }
+        if (!was) was = byName;
+        if (was)
+          for (pugi::xml_attribute a : was.attributes()) e.append_attribute(a.name()).set_value(a.value());
+        SetAttr(e, "name", n.name);
+        SetAttr(e, "localSheetId", n.sheet >= 0 ? std::to_string(n.sheet) : "");
+        SetAttr(e, "hidden", n.hidden ? "1" : "");
+        e.append_child(pugi::node_pcdata).set_value(n.formula.c_str());
+      }
+    } else if (names) {
+      root.remove_child(names);
+    }
+    // The active tab, in the first workbook view (bookViews comes just before sheets).
+    pugi::xml_node views = Child(root, "bookViews");
+    if (!views && (book.ActiveSheet() || book.FirstVisibleTab())) views = root.insert_child_before((p + "bookViews").c_str(), sheets);
+    pugi::xml_node v = views ? Child(views, "workbookView") : pugi::xml_node();
+    if (views && !v) v = views.append_child((p + "workbookView").c_str());
+    if (v) {
+      SetAttr(v, "activeTab", book.ActiveSheet() ? std::to_string(book.ActiveSheet()) : "");
+      SetAttr(v, "firstSheet", book.FirstVisibleTab() ? std::to_string(book.FirstVisibleTab()) : "");
+    }
+    put(wbPart, Bytes(PrintDoc(wb)));
+  }
+
+  // Styles and shared strings.
+  if (ed.StylesDirty()) {
+    if (book.StylesPart().empty()) return Status::Fail(Status::Code::Unsupported, "The workbook has no styles part.");
+    std::vector<uint8_t> out;
+    if (!(st = StylesPart(book, out)).Ok()) return st;
+    put(book.StylesPart(), std::move(out));
+  }
+  if (ed.StringsDirty() || ed.MustWriteStrings()) {
+    std::string part = book.StringsPart();
+    plan.strings = true;
+    if (part.empty()) {
+      part = dir + "sharedStrings.xml";
+      if (taken(part)) return Status::Fail(Status::Code::Unsupported, "The workbook's shared strings can't be added.");
+      pugi::xml_node rel = relRoot.append_child("Relationship");
+      rel.append_attribute("Id").set_value(newRelId().c_str());
+      rel.append_attribute("Type").set_value((std::string(kRelType) + "sharedStrings").c_str());
+      rel.append_attribute("Target").set_value("sharedStrings.xml");
+      relsChanged = true;
+      pugi::xml_node o = typesRoot.append_child("Override");
+      o.append_attribute("PartName").set_value(part.c_str());
+      o.append_attribute("ContentType").set_value(std::string(kStringsCt).c_str());
+      typesChanged = true;
+      plan.newStringsPart = true;
+    }
+    plan.stringsPart = part;
+  }
+  if (relsChanged) put(relsPart, Bytes(PrintDoc(rels)));
+  if (typesChanged) put("/[Content_Types].xml", Bytes(PrintDoc(types)));
+  return {};
+}
+
+Status WriteSave(const Workbook& book, SavePlan& plan, pkg::ByteSink& sink) {
+  const pkg::Package* pkg = book.GetPackage();
+  if (!pkg) return Status::Fail(Status::Code::Unsupported, "This workbook has no file to save into.");
+  // The sheets and the shared strings join the list for this write only: the plan doesn't keep them.
+  const size_t small = plan.changes.replace.size();
+  for (const SavePlan::SheetJob& job : plan.sheets) {
+    std::string xml;
+    WriteSheet(*job.sheet, job.text, xml);
+    plan.changes.replace.push_back({job.part, Bytes(xml)});
+  }
+  if (plan.strings) plan.changes.replace.push_back({plan.stringsPart, Bytes(StringsXml(book.Strings()))});
+  Status st = pkg->Save(sink, plan.changes);
+  plan.changes.replace.resize(small);
+  return st;
+}
+
+void CommitSave(Workbook& book, edit::Editor& ed, SavePlan& plan) {
+  pkg::Package* pkg = book.GetPackage();
+  if (!pkg) return ed.EndSave();
+  // The package keeps the small parts the save wrote, so the next save starts from them. Sheets and
+  // the shared strings aren't kept: every later save writes them from the model (MustWrite).
+  for (auto& [name, bytes] : plan.changes.replace) {
+    std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    if (pkg::PartKey(name) == pkg::PartKey(pkg::kContentTypesPart)) {
+      pkg::ContentTypes types;
+      if (pkg::ParseContentTypes(text, pkg->GetLimits(), types).Ok()) pkg->SetContentTypes(std::move(types));
+      continue;
+    }
+    if (std::string source = pkg::SourceOfRelsPart(name); !source.empty()) {
+      pkg::RelationshipSet set;
+      if (pkg::ParseRelationships(text, source, pkg->GetLimits(), name, set).Ok()) {
+        set.relsPart = name;
+        pkg->SetRelationships(std::move(set));
+      }
+      continue;
+    }
+    pkg->SetPart(name, std::move(bytes));
+  }
+  for (const std::string& name : plan.changes.leaveOut) pkg->DeletePart(name);
+  std::vector<edit::Editor::Written> written;
+  for (SavePlan::SheetJob& job : plan.sheets)
+    written.push_back({job.sheet, std::move(job.part), std::move(job.relId), std::move(job.text)});
+  ed.Saved(std::move(written), plan.strings, plan.newStringsPart ? plan.stringsPart : std::string(), plan.format,
+           plan.sheetsRemoved);
+  plan = SavePlan{};
+}
+
+std::vector<std::string> WrittenParts(const SavePlan& plan) {
+  std::vector<std::string> out;
+  for (const auto& [name, bytes] : plan.changes.replace) out.push_back(name);
+  for (const SavePlan::SheetJob& job : plan.sheets) out.push_back(job.part);
+  if (plan.strings) out.push_back(plan.stringsPart);
+  out.insert(out.end(), plan.changes.leaveOut.begin(), plan.changes.leaveOut.end());
+  return out;
+}
+
+bool HasMacros(const Workbook& book) {
+  for (size_t i = 0; i < book.SheetCount(); ++i)
+    if (book.GetSheet(i).Kind() == SheetKind::Macrosheet || book.GetSheet(i).Kind() == SheetKind::Dialogsheet)
+      return true;
+  const pkg::Package* pkg = book.GetPackage();
+  const pkg::RelationshipSet* rels = pkg ? pkg->RelationshipsOf(book.WorkbookPart()) : nullptr;
+  if (rels)
+    for (const pkg::Relationship& r : rels->items)
+      if (r.type.ends_with("/vbaProject")) return true;
+  return false;
+}
+
+}  // namespace fw::sheet::xlsx
+
+namespace fw::sheet::xlsx {
+
+std::unique_ptr<Workbook> NewWorkbook(pkg::Status& status) {
+  const std::string main = std::string(kMainNs), rel = std::string(kRelNs);
+  const std::string decl(kDecl);
+  const std::pair<const char*, std::string> parts[] = {
+      {"[Content_Types].xml",
+       decl + "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+              "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+              "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+              "<Override PartName=\"/xl/workbook.xml\" ContentType=\"" + std::string(kXlsxCt) + "\"/>"
+              "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"" + std::string(kSheetCt) + "\"/>"
+              "<Override PartName=\"/xl/styles.xml\" "
+              "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/></Types>"},
+      {"_rels/.rels",
+       decl + "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+              "<Relationship Id=\"rId1\" Type=\"" + std::string(kRelType) + "officeDocument\" Target=\"xl/workbook.xml\"/>"
+              "</Relationships>"},
+      {"xl/workbook.xml",
+       decl + "<workbook xmlns=\"" + main + "\" xmlns:r=\"" + rel + "\"><bookViews><workbookView/></bookViews>"
+              "<sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>"},
+      {"xl/_rels/workbook.xml.rels",
+       decl + "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+              "<Relationship Id=\"rId1\" Type=\"" + std::string(kRelType) + "worksheet\" Target=\"worksheets/sheet1.xml\"/>"
+              "<Relationship Id=\"rId2\" Type=\"" + std::string(kRelType) + "styles\" Target=\"styles.xml\"/>"
+              "</Relationships>"},
+      {"xl/worksheets/sheet1.xml",
+       decl + "<worksheet xmlns=\"" + main + "\" xmlns:r=\"" + rel + "\"><dimension ref=\"A1\"/>"
+              "<sheetViews><sheetView tabSelected=\"1\" workbookViewId=\"0\"/></sheetViews>"
+              "<sheetFormatPr defaultRowHeight=\"15\"/><sheetData/>"
+              "<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>"
+              "</worksheet>"},
+      {"xl/styles.xml",
+       decl + "<styleSheet xmlns=\"" + main + "\">"
+              "<fonts count=\"1\"><font><sz val=\"11\"/><color theme=\"1\"/><name val=\"Calibri\"/><family val=\"2\"/>"
+              "</font></fonts>"
+              "<fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill>"
+              "<fill><patternFill patternType=\"gray125\"/></fill></fills>"
+              "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>"
+              "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>"
+              "<cellXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/></cellXfs>"
+              "<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>"
+              "<dxfs count=\"0\"/><tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" "
+              "defaultPivotStyle=\"PivotStyleLight16\"/></styleSheet>"},
+  };
+  pkg::MemorySink sink;
+  pkg::ZipWriter zip(sink);
+  for (const auto& [name, xml] : parts) {
+    status = zip.Add(name, std::span(reinterpret_cast<const uint8_t*>(xml.data()), xml.size()));
+    if (!status.Ok()) return nullptr;
+  }
+  if (!(status = zip.Finish()).Ok()) return nullptr;
+  auto package = pkg::Package::Open(pkg::Snapshot::FromBytes(std::move(sink.bytes)), pkg::Limits::Default(), status);
+  return package ? Read(std::move(package), status, {.loadAll = true}) : nullptr;
+}
+
+}  // namespace fw::sheet::xlsx

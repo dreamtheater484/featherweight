@@ -70,10 +70,11 @@ std::string_view TypeName(XmlType t) {
 
 class SheetWriter {
  public:
-  SheetWriter(const Sheet& s, std::string& out) : s_(s), out_(out), kept_(s.KeptInData()) {}
+  SheetWriter(const Sheet& s, std::string& out, const PartText& text)
+      : s_(s), out_(out), kept_(s.KeptInData()), text_(text) {}
 
   void Write() {
-    const PartText& t = s_.Text();
+    const PartText& t = text_;
     out_ = kDeclaration;
     out_ += t.prolog;
     out_ += t.rootStart;
@@ -254,6 +255,7 @@ class SheetWriter {
   const Sheet& s_;
   std::string& out_;
   const std::vector<Kept>& kept_;
+  const PartText& text_;
   size_t k_ = 0;
   std::string p_;
 };
@@ -296,6 +298,9 @@ void WriteStrings(const StringTable& table, std::string& out) {
 
 }  // namespace
 
+void WriteSheet(const Sheet& sheet, const PartText& text, std::string& out) { SheetWriter(sheet, out, text).Write(); }
+void WriteStringsPart(const StringTable& table, std::string& out) { WriteStrings(table, out); }
+
 Status WritePart(const Workbook& book, std::string_view partName, std::string& out) {
   out.clear();
   if (!book.StringsPart().empty() && partName == book.StringsPart()) {
@@ -307,7 +312,7 @@ Status WritePart(const Workbook& book, std::string_view partName, std::string& o
     if (s.PartName() != partName) continue;
     if (!s.Loaded() || s.Text().rootStart.empty())
       return Status::Fail(Status::Code::NotFound, "The sheet " + s.Name() + " isn't loaded.");
-    SheetWriter(s, out).Write();
+    SheetWriter(s, out, s.Text()).Write();
     return {};
   }
   return Status::Fail(Status::Code::NotFound, "The model doesn't write " + std::string(partName) + ".");
