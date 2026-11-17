@@ -253,7 +253,7 @@ class WorkbookView : public PagedView {
   float tabScroll_ = 0;
 
   // Mouse.
-  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText };
+  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point };
   Mouse mouse_ = Mouse::None;
   float thumbGrab_ = 0;
   int hoverTab_ = -1;
@@ -318,6 +318,24 @@ class WorkbookView : public PagedView {
   void EditMouseMove(float x, float y);
   int BarHit(float x);
   int BoxHit(const EditBox& b, float x, float y);
+  // The references in the formula being typed, each distinct one with its color (index into the
+  // reference colors): outlined on the sheet and colored in the text, as Excel's are.
+  struct RefBox {
+    int at = 0, length = 0;  // in the editor's text
+    int sheet = -1;          // the sheet index; -1 none named (the edited cell's), -2 not found
+    uint32_t r0 = 0, c0 = 0, r1 = 0, c1 = 0;
+    int color = 0;
+  };
+  const std::vector<RefBox>& Refs();
+  void DrawRefBorders(gfx::Canvas& c, const Pane& pane);
+  // One line of the editor's text from `lineAt`, references in their colors.
+  void DrawEditLine(gfx::Canvas& c, std::wstring_view line, int lineAt, float left, float top, float bottom,
+                    float size, D2D1_COLOR_F ink);
+  // A click on a cell while a formula waits for a reference inserts it (point mode by mouse).
+  bool PointClick(int x, int y);
+  void PointDrag(int x, int y);
+  std::vector<RefBox> refs_;
+  std::wstring refsText_;
   CellEditor editor_;
   bool editInBar_ = false;  // the caret is in the formula bar, not over the cell
   float barScroll_ = 0;     // the formula bar's text scrolled left to keep the caret in sight

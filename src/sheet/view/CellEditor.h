@@ -61,7 +61,8 @@ class CellEditor {
 
   // Point mode: true when an arrow should insert or move a reference (a formula in Enter mode,
   // the caret right after an operator, a separator, "(" or "=", or on the reference it inserted).
-  bool CanPoint() const;
+  // `mouse`: a click on a cell, which points in Edit mode too, and before an operator or ")".
+  bool CanPoint(bool mouse = false) const;
   // Puts `ref` where the reference being pointed at goes: replaces the one inserted last, or
   // inserts at the caret. The tab formats the reference (A1, A1:B3, Sheet2!A1).
   void SetPointRef(const std::wstring& ref);

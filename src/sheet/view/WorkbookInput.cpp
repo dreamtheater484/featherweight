@@ -264,6 +264,7 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
   // The formula bar's text and the box over the cell place the caret; any other click ends the
   // entry being typed (in point mode it will insert a reference instead).
   if (button == 0 && !ChartSheet() && EditMouseDown(fx, fy, mods, doubleClick)) return;
+  if (button == 0 && gfx::Contains(cells_, fx, fy) && PointClick(x, y)) return;
   if (editor_.Active()) CommitEdit(false);
   tabStartCol_ = UINT32_MAX;
   // Double-clicking a cell edits it there (Edit mode).
@@ -397,6 +398,7 @@ void WorkbookView::OnMouseMove(int x, int y, UINT mods) {
   }
   switch (mouse_) {
     case Mouse::EditText: EditMouseMove(fx, fy); return;
+    case Mouse::Point: PointDrag(x, y); return;
     case Mouse::ThumbV: {
       const double range = Height(v.track) - Height(v.thumb);
       if (range > 0) ScrollTo(gridX_, v.min + (fy - thumbGrab_ - v.track.top) / range * (v.end - v.min - v.view));

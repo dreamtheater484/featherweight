@@ -97,14 +97,17 @@ int CellEditor::LineEnd(int i) const {
   return i;
 }
 
-bool CellEditor::CanPoint() const {
-  if (!active_ || mode_ != Mode::Enter || !IsFormula() || HasSelection()) return false;
+bool CellEditor::CanPoint(bool mouse) const {
+  if (!active_ || !IsFormula() || HasSelection() || (mode_ != Mode::Enter && !mouse)) return false;
   if (point_.length > 0) return caret_ == point_.at + point_.length;
   if (caret_ <= 0) return false;
   // Right after an operator, a separator or an opening parenthesis (Excel's "Point" in the status
-  // bar), at the end of what's typed.
+  // bar), at the end of what's typed; a click also before an operator or a closing parenthesis.
   static constexpr wchar_t kAfter[] = L"=+-*/^&(,;:<>";
-  return caret_ == static_cast<int>(text_.size()) && std::wcschr(kAfter, text_[static_cast<size_t>(caret_) - 1]);
+  if (!std::wcschr(kAfter, text_[static_cast<size_t>(caret_) - 1])) return false;
+  if (caret_ == static_cast<int>(text_.size())) return true;
+  static constexpr wchar_t kBefore[] = L")+-*/^&,;:<> ";
+  return mouse && std::wcschr(kBefore, text_[static_cast<size_t>(caret_)]) != nullptr;
 }
 
 void CellEditor::SetPointRef(const std::wstring& ref) {

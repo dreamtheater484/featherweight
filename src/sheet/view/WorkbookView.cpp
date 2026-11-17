@@ -533,6 +533,7 @@ void WorkbookView::DrawGrid(Canvas& c, ID2D1DeviceContext* dc) {
     }
     c.PushClip(rc);
     DrawSelection(c, pane);
+    DrawRefBorders(c, pane);
     c.PopClip();
   }
   // The frozen panes' edges.

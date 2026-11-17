@@ -110,4 +110,14 @@ TEST(SheetGridEdit_PointMode) {
   e.Begin(L"", CellEditor::Mode::Enter);
   Type(e, L"a+");
   CHECK(!e.CanPoint());
+  // A click points in Edit mode too, and before an operator or ")".
+  e.Begin(L"=SUM(A1,)", CellEditor::Mode::Edit);
+  CHECK(!e.CanPoint() && !e.CanPoint(true));  // the caret after ")"
+  e.SetCaret(8, false);                       // after ","
+  CHECK(!e.CanPoint() && e.CanPoint(true));
+  e.SetPointRef(L"B3");
+  CHECK(e.Text() == L"=SUM(A1,B3)");
+  CHECK(e.CanPoint(true));  // on the reference it inserted: a second click replaces it
+  e.SetCaret(2, false);     // inside "SUM"
+  CHECK(!e.CanPoint(true));
 }
