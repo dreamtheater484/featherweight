@@ -10,9 +10,11 @@
 
 #include "SheetTestUtil.h"
 #include "pkg/Check.h"
+#include "core/Strings.h"
 #include "sheet/csv/Csv.h"
 #include "sheet/numfmt/NumLocale.h"
 #include "sheet/edit/Edit.h"
+#include "sheet/edit/Journal.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/xlsx/Xlsx.h"
 
@@ -515,4 +517,187 @@ TEST(sheet_save_csv_as_xlsx) {
   if (!third) return;
   CHECK_EQ(Text(third->GetSheet(0), 0, 0), std::string("item"));
   CHECK(third->GetStyles().FontOf(third->GetStyles().CellXf(third->GetSheet(0).StyleAt(0, 0))).bold);
+}
+
+// ---- Crash recovery: the edit journal (sheet/edit/Journal.h)
+
+namespace {
+
+std::vector<uint8_t> JournalBook() {
+  return test::MakeZip(WorkbookParts(
+      {"<sheetData><row r=\"1\"><c r=\"A1\"><v>3</v></c><c r=\"B1\"><v>1</v></c></row>"
+       "<row r=\"2\"><c r=\"A2\"><v>1</v></c><c r=\"B2\"><f>A2*2</f><v>2</v></c></row>"
+       "<row r=\"3\"><c r=\"A3\"><v>2</v></c><c r=\"B3\"><f>SUM(A1:A3)</f><v>6</v></c></row></sheetData>",
+       "<sheetData><row r=\"2\"><c r=\"B2\"><f>Sheet1!A1+1</f><v>4</v></c></row></sheetData>"}));
+}
+
+// Every kind of edit the journal records, with undo and redo among them.
+void EditEverything(Workbook& book, Editor& ed) {
+  CHECK(ed.SetCell(0, 0, 2, CellInput::Text("note & <more>")));
+  CHECK(ed.SetCell(0, 3, 0, CellInput::Formula("SUM(A1:A3)")));
+  CHECK(ed.SetCells(0, {{CellAddr{4, 0}, CellInput::Number(1.5)}, {CellAddr{4, 1}, CellInput::Bool(true)},
+                        {CellAddr{4, 2}, CellInput::Error(ErrorCode::NA)}}));
+  Font bold = book.GetStyles().Fonts()[0];
+  bold.bold = true;
+  const uint32_t font = ed.AddFont(bold);
+  Fill fill;
+  fill.pattern = PatternType::Solid;
+  fill.fg = Color{Color::Kind::Rgb, 0xFFFFC000, 0};
+  const uint32_t fillId = ed.AddFill(fill);
+  Border border;
+  border.bottom.style = BorderStyle::Thin;
+  const uint32_t borderId = ed.AddBorder(border);
+  Xf xf;
+  xf.numFmt = ed.AddNumFmt("0.000");
+  xf.font = font;
+  xf.fill = fillId;
+  xf.border = borderId;
+  xf.applyNumFmt = xf.applyFont = xf.applyFill = xf.applyBorder = true;
+  xf.alignment.horizontal = HAlign::Center;
+  CHECK(ed.SetStyle(0, Range{4, 0, 4, 0}, ed.AddXf(xf)));
+  CHECK(ed.MapStyles(0, Range{0, 0, 1, 1}, [&](uint32_t style) {
+    Xf x = book.GetStyles().CellXf(style);
+    x.font = font;
+    x.applyFont = true;
+    return ed.AddXf(x);
+  }));
+  CHECK(ed.ClearContents(0, Range{4, 1, 4, 1}));
+  CHECK(ed.ClearAll(0, Range{4, 2, 4, 2}));
+  CHECK(ed.SetRowHeight(0, 1, 2, 24));
+  CHECK(ed.HideRows(0, 6, 6, true));
+  CHECK(ed.SetRowOutline(0, 7, 8, 1));
+  CHECK(ed.SetColumnWidth(0, 3, 3, 15.5));
+  CHECK(ed.HideColumns(0, 5, 5, true));
+  CHECK(ed.SetColumnOutline(0, 6, 7, 1, true));
+  CHECK(ed.InsertRows(0, 1, 2));
+  CHECK(ed.DeleteRows(0, 1, 1));
+  CHECK(ed.InsertColumns(0, 0, 1));
+  CHECK(ed.DeleteColumns(0, 0, 1));
+  CHECK(ed.InsertCells(0, Range{9, 1, 9, 2}, Editor::Direction::DownOrUp));
+  CHECK(ed.DeleteCells(0, Range{9, 1, 9, 1}, Editor::Direction::RightOrLeft));
+  CHECK(ed.SortRows(0, Range{0, 0, 3, 0}, {2, 0, 3, 1}, {{0, false}}));
+  CHECK(ed.Merge(0, Range{12, 0, 12, 2}));
+  CHECK(ed.Merge(0, Range{13, 0, 13, 2}));
+  CHECK(ed.Unmerge(0, Range{13, 0, 13, 2}));
+  CHECK(ed.AddSheet(-1));
+  CHECK(ed.AddSheet(0, "First"));
+  CHECK(ed.RenameSheet(1, "Data & More"));
+  CHECK(ed.MoveSheet(0, 3));
+  CHECK(ed.SetTabColor(0, Color{Color::Kind::Theme, 4, -0.25}));
+  CHECK(ed.SetSheetState(3, SheetState::Hidden));
+  CHECK(ed.FreezePanes(0, 1, 1));
+  ed.SetActiveSheet(1);
+  ed.SetSelection(0, CellAddr{2, 2}, {Range{2, 2, 4, 3}});
+  ed.SetTopLeft(0, CellAddr{5, 0});
+  ed.SetZoom(0, 120);
+  ed.SetZoom(0, 150);
+  CHECK(ed.SetName(DefinedName{"Rate", -1, "'Data & More'!$A$1", false}));
+  CHECK(ed.SetName(DefinedName{"Gone", 0, "1", false}));
+  CHECK(ed.DeleteName("Gone", 0));
+  ed.BeginGroup(u"Fill");
+  CHECK(ed.SetCell(0, 20, 0, CellInput::Number(1)));
+  CHECK(ed.SetCell(0, 21, 0, CellInput::Number(2)));
+  ed.EndGroup();
+  ed.BeginGroup(u"Cancelled");
+  CHECK(ed.SetCell(0, 22, 0, CellInput::Number(3)));
+  ed.CancelGroup();
+  CHECK(ed.Undo(2));
+  CHECK(ed.Redo());
+  CHECK(!ed.DeleteSheet(9));  // refused: not recorded
+  CHECK(ed.DeleteSheet(2));
+}
+
+// The parts of two saved files that differ.
+std::vector<std::string> DifferentParts(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {
+  fw::pkg::Status st;
+  auto pa = test::OpenBytes(a, st), pb = test::OpenBytes(b, st);
+  std::vector<std::string> out;
+  if (!pa || !pb) return {"(unreadable)"};
+  for (const auto& part : pa->Parts())
+    if (PartText(a, part.name) != PartText(b, part.name)) out.push_back(part.name);
+  if (pa->Parts().size() != pb->Parts().size()) out.push_back("(the parts listed)");
+  return out;
+}
+
+}  // namespace
+
+TEST(sheet_journal_replays_every_edit) {
+  const std::vector<uint8_t> original = JournalBook();
+  auto book = OpenZip(original);
+  if (!book) return;
+  Editor ed(*book);
+  edit::Journal journal;
+  ed.SetJournal(&journal);
+  CHECK(ed.SetCell(0, 0, 0, CellInput::Number(7)));
+  ed.SetZoom(0, 70);
+  // Written in pieces, as the tab appends them to its recovery file.
+  std::string records(journal.Unwritten());
+  journal.Written();
+  CHECK(journal.Unwritten().empty());
+  CHECK(ed.SetCell(0, 30, 0, CellInput::Number(1)));
+  EditEverything(*book, ed);
+  ed.SetZoom(0, 90);
+  const size_t before = journal.Size();
+  ed.SetZoom(0, 80);  // a view change right after another of its kind replaces it
+  CHECK(journal.Size() == before);
+  records += journal.Unwritten();
+  journal.Written();
+  CHECK(journal.All() == records);
+
+  auto again = OpenZip(original);
+  if (!again) return;
+  Editor replayed(*again);
+  edit::Journal second;
+  replayed.SetJournal(&second);
+  size_t applied = 0;
+  edit::Result r = replayed.Replay(records, &applied);
+  if (!r) std::printf("  replay stopped after %zu: %s\n", applied, fw::WideToUtf8(std::wstring(r.message.begin(), r.message.end())).c_str());
+  CHECK(r && applied > 60);
+  // Replaying makes the same calls, so it records the same journal.
+  CHECK(second.All() == records);
+  CHECK(replayed.UndoNames() == ed.UndoNames() && replayed.RedoNames() == ed.RedoNames());
+  CHECK(again->SheetCount() == book->SheetCount() && again->GetSheet(0).Name() == "Data & More");
+
+  const std::vector<uint8_t> a = SaveBytes(*book, ed), b = SaveBytes(*again, replayed);
+  for (const std::string& part : DifferentParts(a, b)) std::printf("  differs: %s\n", part.c_str());
+  CHECK(DifferentParts(a, b).empty());
+  CheckClean(b);
+
+  // A view record the recovery file has already isn't replaced: the next one comes after it.
+  const size_t inFile = second.Size();
+  second.Written();
+  replayed.SetZoom(0, 75);
+  CHECK(second.Size() > inFile);
+}
+
+TEST(sheet_journal_refuses_damage) {
+  const std::vector<uint8_t> original = JournalBook();
+  auto book = OpenZip(original);
+  if (!book) return;
+  Editor ed(*book);
+  edit::Journal journal;
+  ed.SetJournal(&journal);
+  CHECK(ed.SetCell(0, 0, 0, CellInput::Number(7)));
+  CHECK(ed.SetCell(0, 1, 0, CellInput::Number(8)));
+  CHECK(ed.SetCell(0, 2, 0, CellInput::Number(9)));
+  const std::string records(journal.All());
+
+  auto replayOn = [&](std::string_view bytes, size_t& applied) {
+    auto fresh = OpenZip(original);
+    Editor e(*fresh);
+    edit::Result r = e.Replay(bytes, &applied);
+    return std::make_pair(r.ok, Text(fresh->GetSheet(0), 1, 0));
+  };
+  size_t applied = 0;
+  // Cut short (a crash while appending): the edits before the cut are made.
+  auto [ok, a2] = replayOn(std::string_view(records).substr(0, records.size() - 2), applied);
+  CHECK(!ok && applied == 3 && a2 == "8");
+  // Without its version record, or from a newer version: nothing.
+  CHECK(!replayOn(std::string_view(records).substr(3), applied).first && applied == 0);
+  std::string newer = records;
+  newer[2] = 99;  // the version record: kind 1, length 1, version
+  CHECK(!replayOn(newer, applied).first && applied == 0);
+  // An unknown kind of record stops there.
+  std::string unknown = records + std::string("\x7f\x00", 2);
+  CHECK(!replayOn(unknown, applied).first && applied == 4);
 }

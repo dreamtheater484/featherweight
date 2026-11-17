@@ -4,6 +4,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "pkg/OfficeCrypto.h"
@@ -92,6 +93,13 @@ class FileSession {
   void WriteAutosave(std::vector<uint8_t> document);
   // A recovered password-protected document still waiting for its password: its file as it is.
   void AutosaveProtected(std::span<const uint8_t> file);
+  // The journal kind of autosave (pkg/Recovery.h version 2; workbooks: sheet/edit/Journal.h), when
+  // one is due: `opened` is the file as it was opened, `meta` what the tab needs to open it again,
+  // `all` every record so far and `unwritten` those the recovery file doesn't have. True when they
+  // are in the file now (the tab then marks them written). The file starts again after a save
+  // (which removes it) from `opened` and `all`. Not for a protected document: WriteAutosave.
+  bool WriteJournal(std::span<const uint8_t> opened, std::string_view meta, std::string_view all,
+                    std::string_view unwritten);
 
   // A password-protected document (D5): saves, backups and autosaves stay encrypted with this key
   // (the password the file was opened with).
@@ -128,6 +136,7 @@ class FileSession {
   std::set<uint32_t> changed_;
   uint64_t generation_ = 0, autosaved_ = 0;
   std::wstring autosave_;
+  bool journal_ = false;  // autosave_ is a journal with the document as opened in it
   fw::pkg::crypto::Key key_;
   uint64_t notifiedSize_ = 0;  // the last disk change reported
   int64_t notifiedTime_ = 0;
