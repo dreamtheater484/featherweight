@@ -606,6 +606,9 @@ class WorkbookView : public PagedView {
   // Alt+=: s2-calc's proposed SUM in the cell, its range pointed at, as Excel's AutoSum.
   void AutoSum();
   std::vector<const calc::FunctionHelp*> fnList_;
+  // Defined names in the list (args null: inserted without "("); their texts live in nameTexts_.
+  std::vector<calc::FunctionHelp> nameHelp_;
+  std::vector<std::string> nameTexts_;
   size_t fnSel_ = 0, fnTop_ = 0;
   int fnFrom_ = -1;          // where the name being typed starts
   bool fnClosed_ = false;    // Esc closed the list: closed until the next character
