@@ -859,3 +859,31 @@ TEST(sheet_save_moved_cells) {
   CHECK(FormulaText(s, 0, 1) == "F1*2" && FormulaText(s, 1, 1) == "F2*2" && FormulaText(s, 2, 1) == "A3*2");
   CHECK(FormulaText(s, 0, 3) == "SUM(F1:F2)" && s.Merges().size() == 1 && s.Merges()[0] == (Range{7, 2, 7, 3}));
 }
+
+// s2-corpus's registry findings: a formula in a cell kept as written (its value has xml:space) is
+// saved as rewritten; a shared formula whose cells a band of cells moves apart is split; a formula
+// nothing moved keeps its spaces.
+TEST(sheet_save_registry_findings) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row>"
+                         "<row r=\"5\"><c r=\"B5\" t=\"str\"><f>A1&amp;\" x\"</f><v xml:space=\"preserve\">1 x</v></c></row>"
+                         "<row r=\"6\"><c r=\"B6\"><f t=\"shared\" ref=\"B6:D6\" si=\"0\">$A$1+1</f><v>2</v></c>"
+                         "<c r=\"C6\"><f t=\"shared\" si=\"0\"/><v>2</v></c><c r=\"D6\"><f t=\"shared\" si=\"0\"/><v>2</v></c></row>"
+                         "</sheetData>",
+                         "<sheetData><row r=\"1\"><c r=\"A1\"><f>IF(B1=\"Sheet1\", B2, B3)</f><v>1</v></c></row></sheetData>"});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.InsertCells(0, Range{0, 2, 0, 2}, Editor::Direction::DownOrUp));  // C1 down: C6 leaves its group's row
+  CHECK(ed.InsertRows(0, 0, 1));
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-registry-findings");
+  CheckClean(saved);
+  const std::string xml = PartText(saved, "/xl/worksheets/sheet1.xml");
+  CHECK(xml.find("<f>A2&amp;\" x\"</f><v xml:space=\"preserve\">1 x</v>") != std::string::npos);
+  auto again = OpenZip(saved);
+  if (!again) return;
+  const Sheet& s = again->GetSheet(0);
+  CHECK_EQ(FormulaText(s, 5, 1), std::string("A2&\" x\""));
+  CHECK_EQ(FormulaText(s, 6, 1), std::string("$A$2+1"));
+  CHECK_EQ(FormulaText(s, 7, 2), std::string("$A$2+1"));  // C6, moved down twice, its own now
+  CHECK_EQ(FormulaText(s, 6, 3), std::string("$A$2+1"));
+  CHECK_EQ(FormulaText(again->GetSheet(1), 0, 0), std::string("IF(B1=\"Sheet1\", B2, B3)"));
+}

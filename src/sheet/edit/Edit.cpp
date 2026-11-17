@@ -1815,12 +1815,21 @@ FormulaPlan PlanFormulas(Sheet& x, int xi, bool edited, const std::function<bool
     const std::string& now = it == plan.texts.end() ? text : it->second;
     CellAddr master{g.master.row, g.master.col}, masterNow = master;
     bool gone = edited && !m.Cell(masterNow.row, masterNow.col);
-    bool all = gone || now.find("#REF!") != std::string::npos;
+    // The group's cells after the edit: one moved out of them (cells shifted in a band across
+    // the group) can't share any more; the master moved out, none can.
+    const FormulaRec& mr = recs[g.master.id];
+    Range ref = mr.ref;
+    if (edited && mr.hasRef) (void)m.Area(ref);
+    auto in = [&](CellAddr a) {
+      return !edited || !mr.hasRef ||
+             (a.row >= ref.firstRow && a.row <= ref.lastRow && a.col >= ref.firstCol && a.col <= ref.lastCol);
+    };
+    bool all = gone || now.find("#REF!") != std::string::npos || !in(masterNow);
     for (const FCell& f : g.followers) {
       CellAddr at{f.row, f.col}, to = at;
       if (edited && !m.Cell(to.row, to.col)) continue;
       std::string mine = shift(copy(text, xi, master, at), xi, f.row, f.col);
-      if (all || copy(now, xi, masterNow, to) != mine) plan.own.push_back({at, std::move(mine)});
+      if (all || !in(to) || copy(now, xi, masterNow, to) != mine) plan.own.push_back({at, std::move(mine)});
     }
     if (all && !gone) plan.unshare.push_back(g.master.id);
   }
@@ -2000,6 +2009,9 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
         where.col = static_cast<int32_t>(col);
         std::string out = calc::ShiftReferences(text, where, sheet, sh, names);
         for (const auto& [table, cols] : goneColumns) out = refs::DropTableColumns(out, table, cols);
+        // Nothing moved, only printed differently (spaces, case): kept as written.
+        if (out != text)
+          if (auto f = calc::Compile(text, where, names); f && calc::Print(*f, where, names) == out) return std::string(text);
         return out;
       };
       ctx.copy = [&](std::string_view text, int at, CellAddr from, CellAddr to) -> std::string {
