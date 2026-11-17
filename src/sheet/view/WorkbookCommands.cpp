@@ -233,6 +233,7 @@ CommandState WorkbookView::QueryCommand(int cmd) {
   if (GridCommandState(cmd, s)) return s;
   if (FormatCommandState(cmd, s)) return s;
   if (DataCommandState(cmd, s)) return s;
+  if (RulesCommandState(cmd, s)) return s;
   const bool ready = Ready();
   size_t shown = 0;
   if (ready)
@@ -319,6 +320,7 @@ bool WorkbookView::Execute(int cmd) {
   if (GridCommand(cmd)) return true;
   if (FormatCommand(cmd)) return true;
   if (DataCommand(cmd)) return true;
+  if (RulesCommand(cmd)) return true;
   switch (cmd) {
     case CmdUndo:
     case CmdRedo:

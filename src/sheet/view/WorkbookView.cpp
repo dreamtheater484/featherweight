@@ -526,6 +526,7 @@ void WorkbookView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
     DrawStale(c);
     DrawFillHandle(c);
     DrawFilterButtons(c);
+    DrawValidation(c);
     DrawSizeGuide(c);
     DrawTabDrop(c);
     DrawNote(dc);
