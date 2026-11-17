@@ -23,6 +23,11 @@ constexpr std::string_view kRelNs = "http://schemas.openxmlformats.org/officeDoc
 constexpr std::string_view kRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
 constexpr std::string_view kSheetCt = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
 constexpr std::string_view kStringsCt = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
+// The workbook part's content type for each format.
+constexpr std::string_view kXlsxCt = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+constexpr std::string_view kXltxCt = "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml";
+constexpr std::string_view kXlsmCt = "application/vnd.ms-excel.sheet.macroEnabled.main+xml";
+constexpr std::string_view kXltmCt = "application/vnd.ms-excel.template.macroEnabled.main+xml";
 
 struct StringWriter : pugi::xml_writer {
   std::string s;
@@ -680,10 +685,19 @@ std::set<std::string> Reachable(const pkg::Package& pkg, const std::set<std::str
 
 // ---------- The workbook ----------
 
-Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan) {
+Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan, FileFormat format) {
   plan = SavePlan{};
+  plan.format = format;
   const pkg::Package* pkg = book.GetPackage();
-  if (!pkg) return Status::Fail(Status::Code::Unsupported, "This workbook has no file to save into.");
+  if (!pkg || format == FileFormat::Csv)
+    return Status::Fail(Status::Code::Unsupported, "This workbook can't be saved as an Excel workbook.");
+  const bool macros = format == FileFormat::Xlsm || format == FileFormat::Xltm;
+  if (!macros)
+    for (size_t i = 0; i < book.SheetCount(); ++i)
+      if (book.GetSheet(i).Kind() == SheetKind::Macrosheet || book.GetSheet(i).Kind() == SheetKind::Dialogsheet)
+        return Status::Fail(Status::Code::Unsupported,
+                            "The sheet " + book.GetSheet(i).Name() +
+                                " holds macros, which only a macro-enabled workbook (.xlsm) keeps.");
   const std::string& wbPart = book.WorkbookPart();
   std::vector<uint8_t> bytes;
   auto put = [&](std::string name, std::vector<uint8_t> data) { plan.changes.replace.push_back({std::move(name), std::move(data)}); };
@@ -742,13 +756,37 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan)
   };
 
   if (!relRoot) return Status::Fail(Status::Code::Damaged, "The workbook's relationships can't be written.");
+  // The workbook part's content type says what the file is (Excel refuses an .xlsx typed as .xlsm).
+  {
+    std::string_view want = format == FileFormat::Xlsm   ? kXlsmCt
+                            : format == FileFormat::Xltx ? kXltxCt
+                            : format == FileFormat::Xltm ? kXltmCt
+                                                         : kXlsxCt;
+    pugi::xml_node o;
+    for (pugi::xml_node c : typesRoot.children())
+      if (Local(c) == "Override" && pkg::PartKey(c.attribute("PartName").value()) == pkg::PartKey(wbPart)) o = c;
+    if (!o) {
+      o = typesRoot.append_child("Override");
+      o.append_attribute("PartName").set_value(wbPart.c_str());
+      o.append_attribute("ContentType");
+    }
+    if (std::string_view(o.attribute("ContentType").value()) != want) {
+      o.attribute("ContentType").set_value(std::string(want).c_str());
+      typesChanged = true;
+    }
+  }
   // New parts go next to the workbook part ("/xl/"), their targets relative to it.
   const std::string dir = wbPart.substr(0, wbPart.rfind('/') + 1);
   auto taken = [&](const std::string& part) {
+    const std::string key = pkg::PartKey(part);
     const pkg::Part* found = pkg->FindPart(part);
     if (found && !found->deleted) return true;
     for (const auto& [name, data] : plan.changes.replace)
-      if (pkg::PartKey(name) == pkg::PartKey(part)) return true;
+      if (pkg::PartKey(name) == key) return true;
+    for (const auto& job : plan.sheets)
+      if (pkg::PartKey(job.part) == key) return true;
+    for (size_t i = 0; i < book.SheetCount(); ++i)  // written from the model by an earlier save
+      if (!book.GetSheet(i).PartName().empty() && pkg::PartKey(book.GetSheet(i).PartName()) == key) return true;
     return false;
   };
   // Leaves a part out of the save, with its relationships and its content type.
@@ -770,29 +808,28 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan)
     // group sheets in Excel.
     if (s.Loaded() && !s.Views().empty() && s.Views()[0].tabSelected != active) pieces |= edit::kPieceViews;
     anyCells = anyCells || (pieces & edit::kPieceCells);
-    std::string xml;
     if (s.PartName().empty()) {  // new
-      SavePlan::NewSheet ns;
-      ns.sheet = &s;
+      SavePlan::SheetJob job;
+      job.sheet = &s;
+      job.added = true;
       std::string target;
       for (int n = 1;; ++n) {
         target = "worksheets/sheet" + std::to_string(n) + ".xml";
-        ns.part = dir + target;
-        if (!taken(ns.part)) break;
+        job.part = dir + target;
+        if (!taken(job.part)) break;
       }
-      ns.relId = newRelId();
+      job.relId = newRelId();
       pugi::xml_node rel = relRoot.append_child("Relationship");
-      rel.append_attribute("Id").set_value(ns.relId.c_str());
+      rel.append_attribute("Id").set_value(job.relId.c_str());
       rel.append_attribute("Type").set_value((std::string(kRelType) + "worksheet").c_str());
       rel.append_attribute("Target").set_value(target.c_str());
       relsChanged = true;
       pugi::xml_node o = typesRoot.append_child("Override");
-      o.append_attribute("PartName").set_value(ns.part.c_str());
+      o.append_attribute("PartName").set_value(job.part.c_str());
       o.append_attribute("ContentType").set_value(std::string(kSheetCt).c_str());
       typesChanged = true;
-      WriteSheet(s, NewSheetText(s, active), xml);
-      put(ns.part, Bytes(xml));
-      plan.newSheets.push_back(ns);
+      job.text = NewSheetText(s, active);
+      plan.sheets.push_back(std::move(job));
       continue;
     }
     keptParts.push_back(s.PartName());
@@ -801,15 +838,16 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan)
       if (ed.WorkbookDirty() && OtherSheetTab(*pkg, s, active, out)) put(s.PartName(), std::move(out));
       continue;
     }
-    if (!pieces) continue;
+    if (!pieces && !ed.MustWrite(static_cast<int>(i))) continue;
     if (!s.Loaded() || s.Text().rootStart.empty())
       return Status::Fail(Status::Code::Unsupported, "The sheet " + s.Name() + " can't be written.");
-    WriteSheet(s, EditedText(s, pieces, active), xml);
-    put(s.PartName(), Bytes(xml));
+    plan.sheets.push_back({&s, s.PartName(), s.RelId(), EditedText(s, pieces, active), false});
   }
+  const bool added = std::any_of(plan.sheets.begin(), plan.sheets.end(), [](const auto& j) { return j.added; });
   // Sheets the file has that the workbook doesn't any more go, and so does the calculation chain
   // once cells or sheets changed: it lists formula cells by sheet, and Excel rebuilds it (§7.3).
-  bool dropChain = anyCells || ed.WorkbookDirty() || !plan.newSheets.empty();
+  // A macro-free format leaves out the VBA project (and its signatures, which only it uses).
+  bool dropChain = anyCells || ed.WorkbookDirty() || added;
   std::set<std::string> cut;  // PartKeys
   if (wbRels)
     for (const pkg::Relationship& rel : wbRels->items) {
@@ -817,11 +855,13 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan)
       bool sheetType = rel.type.ends_with("/worksheet") || rel.type.ends_with("/chartsheet") ||
                        rel.type.ends_with("/dialogsheet") || rel.type.ends_with("/xlMacrosheet");
       bool chain = rel.type.ends_with("/calcChain");
+      bool vba = rel.type.ends_with("/vbaProject");
       if (sheetType) {
         bool kept = std::any_of(keptParts.begin(), keptParts.end(),
                                 [&](const std::string& k) { return pkg::PartKey(k) == pkg::PartKey(rel.targetPart); });
         if (kept) continue;
-      } else if (!chain || !dropChain) {
+        plan.sheetsRemoved = true;
+      } else if (!(chain && dropChain) && !(vba && !macros)) {
         continue;
       }
       cut.insert(pkg::PartKey(rel.targetPart));
@@ -840,7 +880,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan)
   }
 
   // workbook.xml: sheets, names, the active tab.
-  if (ed.WorkbookDirty() || !plan.newSheets.empty()) {
+  if (ed.WorkbookDirty() || added) {
     pugi::xml_node sheets = Child(root, "sheets");
     if (!sheets) return Status::Fail(Status::Code::Damaged, "The workbook part lists no sheets.");
     std::vector<pugi::xml_node> old;
@@ -856,8 +896,8 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan)
     for (size_t i = 0; i < book.SheetCount(); ++i) {
       const Sheet& s = book.GetSheet(i);
       std::string relId;
-      for (const auto& ns : plan.newSheets)
-        if (ns.sheet == &s) relId = ns.relId;
+      for (const auto& ns : plan.sheets)
+        if (ns.sheet == &s && ns.added) relId = ns.relId;
       pugi::xml_node e;
       if (relId.empty())  // as the file had it, found by its relationship id
         for (pugi::xml_node c : bin.children())
@@ -945,8 +985,9 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan)
     if (!(st = StylesPart(book, out)).Ok()) return st;
     put(book.StylesPart(), std::move(out));
   }
-  if (ed.StringsDirty()) {
+  if (ed.StringsDirty() || ed.MustWriteStrings()) {
     std::string part = book.StringsPart();
+    plan.strings = true;
     if (part.empty()) {
       part = dir + "sharedStrings.xml";
       if (taken(part)) return Status::Fail(Status::Code::Unsupported, "The workbook's shared strings can't be added.");
@@ -959,13 +1000,72 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan)
       o.append_attribute("PartName").set_value(part.c_str());
       o.append_attribute("ContentType").set_value(std::string(kStringsCt).c_str());
       typesChanged = true;
-      plan.newStringsPart = part;
+      plan.newStringsPart = true;
     }
-    put(part, Bytes(StringsXml(book.Strings())));
+    plan.stringsPart = part;
   }
   if (relsChanged) put(relsPart, Bytes(PrintDoc(rels)));
   if (typesChanged) put("/[Content_Types].xml", Bytes(PrintDoc(types)));
   return {};
+}
+
+Status WriteSave(const Workbook& book, SavePlan& plan, pkg::ByteSink& sink) {
+  const pkg::Package* pkg = book.GetPackage();
+  if (!pkg) return Status::Fail(Status::Code::Unsupported, "This workbook has no file to save into.");
+  // The sheets and the shared strings join the list for this write only: the plan doesn't keep them.
+  const size_t small = plan.changes.replace.size();
+  for (const SavePlan::SheetJob& job : plan.sheets) {
+    std::string xml;
+    WriteSheet(*job.sheet, job.text, xml);
+    plan.changes.replace.push_back({job.part, Bytes(xml)});
+  }
+  if (plan.strings) plan.changes.replace.push_back({plan.stringsPart, Bytes(StringsXml(book.Strings()))});
+  Status st = pkg->Save(sink, plan.changes);
+  plan.changes.replace.resize(small);
+  return st;
+}
+
+void CommitSave(Workbook& book, edit::Editor& ed, SavePlan& plan) {
+  pkg::Package* pkg = book.GetPackage();
+  if (!pkg) return ed.EndSave();
+  // The package keeps the small parts the save wrote, so the next save starts from them. Sheets and
+  // the shared strings aren't kept: every later save writes them from the model (MustWrite).
+  for (auto& [name, bytes] : plan.changes.replace) {
+    std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    if (pkg::PartKey(name) == pkg::PartKey(pkg::kContentTypesPart)) {
+      pkg::ContentTypes types;
+      if (pkg::ParseContentTypes(text, pkg->GetLimits(), types).Ok()) pkg->SetContentTypes(std::move(types));
+      continue;
+    }
+    if (std::string source = pkg::SourceOfRelsPart(name); !source.empty()) {
+      pkg::RelationshipSet set;
+      if (pkg::ParseRelationships(text, source, pkg->GetLimits(), name, set).Ok()) {
+        set.relsPart = name;
+        pkg->SetRelationships(std::move(set));
+      }
+      continue;
+    }
+    pkg->SetPart(name, std::move(bytes));
+  }
+  for (const std::string& name : plan.changes.leaveOut) pkg->DeletePart(name);
+  std::vector<edit::Editor::Written> written;
+  for (SavePlan::SheetJob& job : plan.sheets)
+    written.push_back({job.sheet, std::move(job.part), std::move(job.relId), std::move(job.text)});
+  ed.Saved(std::move(written), plan.strings, plan.newStringsPart ? plan.stringsPart : std::string(), plan.format,
+           plan.sheetsRemoved);
+  plan = SavePlan{};
+}
+
+bool HasMacros(const Workbook& book) {
+  for (size_t i = 0; i < book.SheetCount(); ++i)
+    if (book.GetSheet(i).Kind() == SheetKind::Macrosheet || book.GetSheet(i).Kind() == SheetKind::Dialogsheet)
+      return true;
+  const pkg::Package* pkg = book.GetPackage();
+  const pkg::RelationshipSet* rels = pkg ? pkg->RelationshipsOf(book.WorkbookPart()) : nullptr;
+  if (rels)
+    for (const pkg::Relationship& r : rels->items)
+      if (r.type.ends_with("/vbaProject")) return true;
+  return false;
 }
 
 }  // namespace fw::sheet::xlsx

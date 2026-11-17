@@ -38,20 +38,44 @@ pkg::Status WritePart(const Workbook& book, std::string_view partName, std::stri
 // ---- Saving an edited workbook (S2)
 
 // What a save writes differently from the file the workbook was read from: the parts the edits
-// changed, written from the model, the parts left out (deleted sheets, the calculation chain), and
-// the parts added (new sheets, a shared strings part). Package::Save copies every other part raw.
+// changed, written from the model, the parts left out (deleted sheets and what only they used, the
+// calculation chain, macros in a macro-free format), and the parts added (new sheets, a shared
+// strings part). Package::Save copies every other part raw.
 struct SavePlan {
   pkg::Package::SaveChanges changes;
-  struct NewSheet {
+  // Sheets written from the model, with the text around their cells; `added` since opening.
+  struct SheetJob {
     const Sheet* sheet = nullptr;
     std::string part, relId;
+    detail::PartText text;
+    bool added = false;
   };
-  std::vector<NewSheet> newSheets;
-  std::string newStringsPart;  // when the workbook had none
+  std::vector<SheetJob> sheets;
+  bool strings = false;        // the shared strings are written from the model
+  std::string stringsPart;     // ... into this part
+  bool newStringsPart = false;  // which the workbook didn't have
+  bool sheetsRemoved = false;
+  FileFormat format = FileFormat::Xlsx;
 };
 
-// Works out a save of `book` as `editor` changed it. Reads the package, changes nothing: a worker
-// thread can then write the package with plan.changes while the workbook stays as it is.
-pkg::Status PrepareSave(const Workbook& book, const edit::Editor& editor, SavePlan& plan);
+// A save, in three steps so that the writing runs on a worker thread (plan §4.3):
+//  1. on the UI thread: editor.BeginSave(), then PrepareSave works out what changes and writes the
+//     small parts (the workbook, styles, relationships, content types);
+//  2. on any thread: WriteSave writes the sheets and the shared strings from the model and the
+//     whole package into `sink` (the workbook is read-only meanwhile: Editor::Saving);
+//  3. on the UI thread, once the bytes are safely in the file: CommitSave makes the workbook
+//     stand for the file written; on failure, editor.EndSave() instead.
+// `format` is what the file becomes: .xlsx and .xltx leave out macros (refused when the workbook
+// has macro sheets), .xlsm and .xltm keep them.
+pkg::Status PrepareSave(const Workbook& book, const edit::Editor& editor, SavePlan& plan, FileFormat format);
+inline pkg::Status PrepareSave(const Workbook& book, const edit::Editor& editor, SavePlan& plan) {
+  return PrepareSave(book, editor, plan, book.Format());
+}
+pkg::Status WriteSave(const Workbook& book, SavePlan& plan, pkg::ByteSink& sink);
+void CommitSave(Workbook& book, edit::Editor& editor, SavePlan& plan);
+
+// Whether a workbook has macros a macro-free format (.xlsx, .xltx) would leave out: a VBA
+// project or macro sheets. Save As asks first.
+bool HasMacros(const Workbook& book);
 
 }  // namespace fw::sheet::xlsx
