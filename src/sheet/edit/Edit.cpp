@@ -4188,6 +4188,46 @@ Result Editor::SetWorkbookProtection(const std::optional<WorkbookProtection>& pr
   }());
 }
 
+// ---- Links
+
+Result Editor::SetHyperlink(int sheet, const Range& r, const std::optional<Hyperlink>& link) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::InsertLink, r); !no) return no;
+  Rec rec(*this, JournalOp::SetHyperlink, [&](JournalRecord& w) {
+    w.I(sheet).R(r).B(link.has_value());
+    if (link) w.S(link->target).S(link->location).S(link->display).S(link->tooltip).S(link->relId);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!Valid(r)) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (link) {
+      if (link->target.empty() && link->location.empty()) return Result::Fail(u"Type an address, or choose a place in this workbook.");
+      for (const std::string* text : {&link->target, &link->location, &link->display, &link->tooltip})
+        if (!XmlSafe(*text)) return Result::Fail(u"The link holds characters a workbook can't store.");
+      if (Utf16Length(link->target) > 2079) return Result::Fail(u"An address can be at most 2,079 characters long.");
+      if (Utf16Length(link->tooltip) > 255) return Result::Fail(u"A ScreenTip can be at most 255 characters long.");
+    }
+    return Run(*this, link ? u"Insert Hyperlink" : u"Remove Hyperlinks", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveLinks(sv);
+      auto& links = A::Links(s);
+      links.erase(std::remove_if(links.begin(), links.end(), [&](const Hyperlink& h) { return Overlaps(h.ref, r); }),
+                  links.end());
+      if (link) {
+        Hyperlink h = *link;
+        h.ref = r;
+        if (h.target.empty()) h.relId.clear();
+        links.push_back(std::move(h));
+      }
+      st.Change(&s, kObjects, r);
+      return Result{};
+    });
+  }());
+}
+
 // ---- View state
 
 void Editor::SetActiveSheet(int sheet) {

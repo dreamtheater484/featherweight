@@ -185,6 +185,7 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case 'V': return editor_.Active() ? 0 : CmdPaste;
       case 'R': return editor_.Active() ? 0 : CmdFillRight;
       case '1': return editor_.Active() || preview_ ? 0 : CmdFormatCells;
+      case 'K': return editor_.Active() || preview_ ? 0 : CmdInsertLink;
       case 'B': return editor_.Active() || preview_ ? 0 : CmdBold;
       case 'I': return editor_.Active() || preview_ ? 0 : CmdItalic;
       case 'U': return editor_.Active() || preview_ ? 0 : CmdUnderline;
@@ -297,7 +298,7 @@ std::vector<int> WorkbookView::Commands() {
   for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
   // The grid's own (S2), found by their labels in command search.
   for (int cmd = CmdInsertCells; cmd <= CmdDeleteColumns; ++cmd) ids.push_back(cmd);
-  for (int cmd = CmdProtectSheet; cmd <= CmdProtectWorkbook; ++cmd) ids.push_back(cmd);  // S3, s3-review
+  for (int cmd : {CmdProtectSheet, CmdProtectWorkbook, CmdInsertLink, CmdRemoveLink}) ids.push_back(cmd);  // S3, s3-review
   return ids;
 }
 

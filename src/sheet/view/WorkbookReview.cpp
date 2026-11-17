@@ -6,6 +6,7 @@
 
 #include "Commands.h"
 #include "core/Strings.h"
+#include "pkg/Formula.h"
 #include "sheet/edit/Protection.h"
 #include "sheet/view/WorkbookFormat.h"
 #include "sheet/view/WorkbookPanels.h"
@@ -217,6 +218,140 @@ class WorkbookView::ProtectPanel : public PanelContent {
   bool focusWanted_ = false;
 };
 
+// Insert link (Ctrl+K) and Edit link: a web address, file or e-mail address, or a place in this
+// workbook, and the text the cell shows.
+class WorkbookView::LinkPanel : public PanelContent {
+ public:
+  explicit LinkPanel(WorkbookView& view) : v_(view) {
+    for (FocusComboBox* box : {&address_, &place_, &text_}) {
+      box->autoComplete = false;
+      box->onEnter = [this] { Apply(); };
+    }
+    place_.autoComplete = true;
+    address_.label = L"Address";
+    address_.tooltip = L"A web address (https://...), an e-mail address or a file";
+    place_.label = L"Place in this workbook";
+    text_.label = L"Text to display";
+    apply_.onInvoke = [this] { Apply(); };
+    remove_.text = L"Remove link";
+    remove_.onInvoke = [this] {
+      if (!v_.EditRefused(v_.Ed().SetHyperlink(static_cast<int>(v_.sheet_), v_.Selected(), std::nullopt))) Close();
+    };
+  }
+
+  std::wstring Title() const override { return editing_ ? L"Edit link" : L"Insert link"; }
+
+  void Open() {
+    note_.clear();
+    const Hyperlink* link = v_.LinkAt(v_.active_.row, v_.active_.col);
+    editing_ = link != nullptr;
+    old_ = link ? *link : Hyperlink{};
+    address_.SetText(Utf8ToWide(old_.target));
+    place_.SetText(Utf8ToWide(old_.location));
+    text_.SetText(Utf8ToWide(old_.display));
+    std::vector<std::wstring> places;
+    for (size_t i = 0; i < v_.book_->SheetCount(); ++i)
+      if (v_.SheetShown(i)) places.push_back(Utf8ToWide(pkg::QuoteSheetName(v_.book_->GetSheet(i).Name())) + L"!A1");
+    for (const DefinedName& n : v_.book_->Names())
+      if (!n.hidden && n.name.rfind("_xlnm.", 0) != 0) places.push_back(Utf8ToWide(n.name));
+    place_.items = std::move(places);
+    apply_.text = editing_ ? L"Update" : L"Insert";
+    focusWanted_ = true;
+  }
+
+  std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
+    ui_ = ui;
+    const float left = body.left + 16 * ui, right = body.right - 16 * ui;
+    float y = body.top + 12 * ui;
+    labels_.clear();
+    for (FocusComboBox* b : {&address_, &place_, &text_}) {
+      labels_.push_back({b->label, RectF(left, y, right, y + 16 * ui)});
+      b->rc = RectF(left, y + 18 * ui, right, y + 48 * ui);
+      y += 56 * ui;
+    }
+    apply_.rc = RectF(left, y, left + 110 * ui, y + 32 * ui);
+    remove_.rc = RectF(apply_.rc.right + 8 * ui, y, apply_.rc.right + 8 * ui + 130 * ui, y + 32 * ui);
+    remove_.visible = editing_;
+    noteRc_ = RectF(left, y + 44 * ui, right, y + 124 * ui);
+    std::vector<Control*> out = {&address_, &place_, &text_, &apply_};
+    if (editing_) out.push_back(&remove_);
+    return out;
+  }
+
+  void Draw(Canvas& c) override {
+    const Palette& p = theme::P();
+    for (const auto& [text, rc] : labels_) c.Text(text, rc, p.textSecondary, 12 * ui_);
+    c.TextWrapped(note_.empty() ? L"An address, or a place in this workbook (a cell or a name). Clicking the cell opens "
+                                  L"web and e-mail addresses."
+                                : note_,
+                  noteRc_, note_.empty() ? p.textSecondary : p.text, 12 * ui_, 4);
+    if (focusWanted_) {
+      address_.TakeFocus();
+      focusWanted_ = false;
+    }
+  }
+
+ private:
+  void Close() {
+    v_.host_.ViewShowPanel(nullptr);
+    v_.host_.ViewFocusPage();
+    v_.host_.ViewInvalidate();
+  }
+
+  void Apply() {
+    const std::wstring addr = Trim(address_.Text()), place = Trim(place_.Text());
+    if (addr.empty() && place.empty()) {
+      note_ = L"Type an address, or choose a place in this workbook.";
+      v_.host_.ViewInvalidate();
+      return;
+    }
+    Hyperlink h;
+    if (!addr.empty()) {
+      std::wstring t = addr;
+      // As Excel takes them: an e-mail address gets mailto:, a www. address http://.
+      if (t.find(L"://") == std::wstring::npos && t.rfind(L"mailto:", 0) != 0) {
+        if (t.find(L'@') != std::wstring::npos && t.find_first_of(L"\\/") == std::wstring::npos) t = L"mailto:" + t;
+        else if (t.rfind(L"www.", 0) == 0) t = L"http://" + t;
+      }
+      h.target = WideToUtf8(t);
+      if (h.target == old_.target) h.relId = old_.relId;
+    } else {
+      h.location = WideToUtf8(place[0] == L'#' ? place.substr(1) : place);
+    }
+    const int sheet = static_cast<int>(v_.sheet_);
+    const CellAddr at = v_.active_;
+    CellInfo cell;
+    const bool empty = !v_.Current().GetCell(at.row, at.col, cell) || cell.value.type == ValueType::Empty;
+    std::wstring shown = text_.Text();
+    if (shown.empty() && empty) shown = addr.empty() ? place : addr;
+    h.display = WideToUtf8(shown);
+    edit::EditGroup group(v_.Ed(), u"Insert Hyperlink");
+    // An empty cell shows the text to display, as in Excel.
+    if (empty && !shown.empty() && v_.EditRefused(v_.Ed().SetCell(sheet, at.row, at.col, edit::CellInput::Text(h.display))))
+      return;
+    if (v_.EditRefused(v_.Ed().SetHyperlink(sheet, v_.Selected(), h))) return;
+    // Excel's Hyperlink look: the theme's link color, underlined (where formatting is allowed).
+    if (!editing_ && edit::ProtectionRefusal(*v_.book_, sheet, edit::ProtectAct::FormatCells).empty())
+      v_.ChangeFont(u"Insert Hyperlink", [](Font& f) {
+        f.color = Color{Color::Kind::Theme, 10};
+        f.underline = Underline::Single;
+      });
+    group.done = true;
+    Close();
+  }
+
+  WorkbookView& v_;
+  bool editing_ = false;
+  Hyperlink old_;
+  FocusComboBox address_, place_, text_;
+  PanelButton apply_, remove_;
+  std::vector<std::pair<std::wstring, D2D1_RECT_F>> labels_;
+  std::wstring note_;
+  D2D1_RECT_F noteRc_{};
+  float ui_ = 1;
+  bool focusWanted_ = false;
+};
+
 // ---------------------------------------------------------------------------
 // Commands
 
@@ -245,7 +380,33 @@ bool WorkbookView::ReviewCommandState(int cmd, CommandState& s) {
       s.checked = Ready() && edit::StructureProtected(*book_);
       s.enabled = grid;
       return true;
+    case CmdInsertLink:
+      s.label = grid && !ChartSheet() && LinkAt(active_.row, active_.col) ? L"Edit link" : L"Insert link";
+      s.shortcut = L"Ctrl+K";
+      s.enabled = grid && !ChartSheet();
+      return true;
+    case CmdRemoveLink: {
+      bool any = false;
+      if (grid && !ChartSheet())
+        for (const Hyperlink& h : Current().Hyperlinks()) {
+          const Range sel = Selected();
+          any = any || (sel.firstRow <= h.ref.lastRow && h.ref.firstRow <= sel.lastRow && sel.firstCol <= h.ref.lastCol &&
+                        h.ref.firstCol <= sel.lastCol);
+        }
+      s.label = L"Remove link";
+      s.enabled = any;
+      return true;
+    }
     default: return false;
+  }
+}
+
+void WorkbookView::AddReviewCellItems(HMENU m) {
+  for (int cmd : {CmdInsertLink, CmdRemoveLink}) {
+    CommandState s;
+    ReviewCommandState(cmd, s);
+    if (cmd == CmdRemoveLink && !s.enabled) continue;
+    menu::AppendItem(m, static_cast<UINT>(cmd), cmd == CmdInsertLink ? s.label + L"…\tCtrl+K" : s.label, s.enabled);
   }
 }
 
@@ -271,6 +432,14 @@ bool WorkbookView::ReviewCommand(int cmd) {
       else if (!EditRefused(Ed().SetWorkbookProtection(std::nullopt))) host_.ViewStateChanged();
       return true;
     }
+    case CmdInsertLink: {
+      if (!linkPanel_) linkPanel_ = std::make_unique<LinkPanel>(*this);
+      auto* panel = static_cast<LinkPanel*>(linkPanel_.get());
+      panel->Open();
+      host_.ViewShowPanel(panel);
+      return true;
+    }
+    case CmdRemoveLink: EditRefused(Ed().SetHyperlink(static_cast<int>(sheet_), Selected(), std::nullopt)); return true;
     default: return false;
   }
 }

@@ -299,6 +299,7 @@ void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
     item(special, CmdPasteFormats, L"Formats");
     item(special, CmdPasteTranspose, L"Transposed");
     AppendSubmenu(m, special, L"Paste special");
+    AddReviewCellItems(m);
     AppendSeparator(m);
     if (rows || cols) {
       item(m, CmdInsertCells, rows ? L"Insert rows\tCtrl++" : L"Insert columns\tCtrl++");

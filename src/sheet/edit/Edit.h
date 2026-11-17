@@ -228,6 +228,12 @@ class Editor {
   Result SetSheetProtection(int sheet, const std::optional<SheetProtection>& protection);
   Result SetWorkbookProtection(const std::optional<WorkbookProtection>& protection);
 
+  // ---- Links (Insert > Link, Ctrl+K). `link` over `r` (its ref becomes `r`), in place of the links
+  // that overlap `r`; nullopt removes those. A place in the workbook is `location` ("Sheet2!A1", a
+  // name); a web address, file or e-mail address is `target` ("mailto:..."), which saving writes as
+  // an external relationship (keep `relId` only with the link's own target, unchanged).
+  Result SetHyperlink(int sheet, const Range& r, const std::optional<Hyperlink>& link);
+
   // ---- View state: saved with the file, but not undo steps (as in Excel).
   void SetActiveSheet(int sheet);
   void SetSelection(int sheet, CellAddr active, const std::vector<Range>& ranges);

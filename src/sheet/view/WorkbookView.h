@@ -497,9 +497,12 @@ class WorkbookView : public PagedView {
   double CurrentSize(bool rows) const;  // the active row's height (points) or column's width (characters)
   void SetSizes(bool rows, double value);
   bool GoTo(const std::wstring& text);  // a cell, a range, Sheet2!A1 or a defined name
-  // ---- Review (S3, s3-review: WorkbookReview.cpp): Protect Sheet and Protect Workbook.
+  // ---- Review (S3, s3-review: WorkbookReview.cpp): Protect Sheet and Protect Workbook, links.
   class ProtectPanel;
+  class LinkPanel;
   std::unique_ptr<PanelContent> protectPanel_;  // a ProtectPanel
+  std::unique_ptr<PanelContent> linkPanel_;     // a LinkPanel
+  void AddReviewCellItems(HMENU m);  // the cell menu's
   bool ReviewCommandState(int cmd, CommandState& s);
   bool ReviewCommand(int cmd);
   void AddReviewTabItems(HMENU m);  // the sheet tab menu's

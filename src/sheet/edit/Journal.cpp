@@ -441,6 +441,17 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         else if (f.Ok()) return damaged;
         break;
       }
+      case JournalOp::SetHyperlink: {
+        const int sheet = f.Int();
+        const Range at = f.R();
+        std::optional<Hyperlink> link;
+        if (f.B()) {
+          link.emplace();
+          link->target = f.S(), link->location = f.S(), link->display = f.S(), link->tooltip = f.S(), link->relId = f.S();
+        }
+        if (f.Ok()) r = SetHyperlink(sheet, at, link);
+        break;
+      }
       case JournalOp::FreezePanes: {
         const int sheet = f.Int();
         const uint32_t rows = f.U32(), cols = f.U32();

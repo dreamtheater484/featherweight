@@ -7,6 +7,7 @@ if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_edit.cpp"
                                   "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_save.cpp"
                                   "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_shift.cpp"
-                                  "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_protection.cpp")
+                                  "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_protection.cpp"
+                                  "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_links.cpp")
   target_link_libraries(fw_tests PRIVATE fwsheet)
 endif()
