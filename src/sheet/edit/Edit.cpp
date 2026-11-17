@@ -2009,10 +2009,7 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
         where.col = static_cast<int32_t>(col);
         std::string out = calc::ShiftReferences(text, where, sheet, sh, names);
         for (const auto& [table, cols] : goneColumns) out = refs::DropTableColumns(out, table, cols);
-        // Nothing moved, only printed differently (spaces, case): kept as written.
-        if (out != text)
-          if (auto f = calc::Compile(text, where, names); f && calc::Print(*f, where, names) == out) return std::string(text);
-        return out;
+        return out;  // as written where nothing moved (ShiftReferences keeps the text)
       };
       ctx.copy = [&](std::string_view text, int at, CellAddr from, CellAddr to) -> std::string {
         if (from == to) return std::string(text);
