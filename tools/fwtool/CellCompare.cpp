@@ -259,11 +259,13 @@ WorkbookResult CompareWorkbook(const std::filesystem::path& file, const JsonValu
     }
     std::set<uint32_t> hiddenRows = Runs(s.Find("hiddenRows"), false), hiddenCols = Runs(s.Find("hiddenColumns"), true);
     // Formulas whose value Excel changed on opening (volatile ones, stale caches): what it shows
-    // isn't the cached value, so the text can't be compared before the engine runs.
+    // isn't the cached value, so the text can't be compared before the engine runs. An empty text
+    // is what Excel reads for a formula without a cached value: those are counted as uncalculated.
     std::set<std::string> changedOnOpen;
     if (const JsonValue* fl = s.Find("formulas"))
       for (const JsonValue& f : fl->array)
-        if (f.array.size() >= 4 && f.array[2].type != JsonValue::Type::String && !SameJson(f.array[2], f.array[3]))
+        if (f.array.size() >= 4 && !(f.array[2].type == JsonValue::Type::String && f.array[2].string.empty()) &&
+            !SameJson(f.array[2], f.array[3]))
           changedOnOpen.insert(f.array[0].string);
     for (const JsonValue& c : list->array) {
       if (c.array.size() < 2) continue;

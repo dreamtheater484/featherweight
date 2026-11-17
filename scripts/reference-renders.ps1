@@ -214,6 +214,12 @@ function Read-Formulas($book) {
         $areas.Add(@{ Address = $a.Address($false, $false); Row = $a.Row; Col = $a.Column; Rows = $a.Rows.Count; Cols = $a.Columns.Count
                       Formulas = (Get-Grid $a "Formula2"); Values = (Get-Grid $a "Value2") })
       }
+    } elseif ($ws.ProtectContents -and [long]$ws.UsedRange.Rows.Count * $ws.UsedRange.Columns.Count -le 2000000) {
+      # SpecialCells fails on protected sheets: the whole used range, of which only the cells
+      # holding a formula are written.
+      $a = $ws.UsedRange
+      $areas.Add(@{ Address = $a.Address($false, $false); Row = $a.Row; Col = $a.Column; Rows = $a.Rows.Count; Cols = $a.Columns.Count
+                    Formulas = (Get-Grid $a "Formula2"); Values = (Get-Grid $a "Value2") })
     }
     $all[$ws.Name] = $areas
   }
@@ -364,6 +370,7 @@ function Write-WorkbookCells($xl, $book, $formulas, [string]$path, [string]$sour
         $recalc = Get-Grid $a.Com "Value2"
         for ($i = 1; $i -le $a.Rows; $i++) {
           for ($j = 1; $j -le $a.Cols; $j++) {
+            if (-not ([string]$a.Formulas[$i, $j]).StartsWith("=")) { continue }  # constants of a protected sheet's used range
             $ref = (Get-ColumnName ($a.Col + $j - 1)) + ($a.Row + $i - 1)
             $flines.Add('["' + $ref + '", ' + (ConvertTo-JsonString ([string]$a.Formulas[$i, $j])) + ', ' + (ConvertTo-JsonValue $a.Values[$i, $j]) + ', ' +
                         (ConvertTo-JsonValue $a.Opened[$i, $j]) + ', ' + (ConvertTo-JsonValue $recalc[$i, $j]) + ']')
