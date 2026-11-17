@@ -207,6 +207,9 @@ bool WorkbookCalc::LoadSome(double deadline) {
   for (; sheet_ < book_.SheetCount(); ++sheet_, row_ = col_ = 0, shared_.clear()) {
     const Sheet& s = book_.GetSheet(sheet_);
     const size_t i = sheet_;
+    // Only as far as the sheet's last formula: none to find in a sheet of values.
+    if (row_ == 0 && col_ == 0) formulasLeft_ = s.FormulaCount();
+    if (formulasLeft_ == 0) continue;
     bool stopped = false;
     uint32_t seen = 0;
     Range from = Range::All();
@@ -218,47 +221,51 @@ bool WorkbookCalc::LoadSome(double deadline) {
         return false;
       }
       if (!c.hasFormula) return true;
-      FormulaInfo fi;
-      if (!s.GetFormula(c.row, c.col, fi) || fi.text.empty()) return true;
-      if (fi.kind == FormulaKind::DataTable) {
-        ++stats_.dataTables;
-        return true;
-      }
-      calc::Cell at{static_cast<int>(i), static_cast<int32_t>(c.row), static_cast<int32_t>(c.col)};
-      calc::Cell origin{static_cast<int>(i), static_cast<int32_t>(fi.origin.row), static_cast<int32_t>(fi.origin.col)};
-      bool array = fi.kind == FormulaKind::Array;
-      std::shared_ptr<const Formula> f;
-      if (fi.kind == FormulaKind::Shared) {
-        // A shared formula compiles once, at its master: relative references are offsets, so its
-        // followers use the same bytecode.
-        auto key = std::make_pair(fi.origin.row, fi.origin.col);
-        auto it = shared_.find(key);
-        if (it == shared_.end()) it = shared_.emplace(key, engine_->CompileAt(fi.text, origin)).first;
-        f = it->second;
-      } else {
-        f = engine_->CompileAt(fi.text, at, array);
-      }
-      if (!f) {
-        ++stats_.parseErrors;
-        return true;
-      }
-      bool cached = c.value.type != ValueType::Empty;
-      if (array) {
-        Area range;
-        range.r1 = static_cast<int32_t>(fi.ref.firstRow), range.r2 = static_cast<int32_t>(fi.ref.lastRow);
-        range.c1 = static_cast<int16_t>(fi.ref.firstCol), range.c2 = static_cast<int16_t>(fi.ref.lastCol);
-        if (range.r2 < range.r1 || range.c2 < range.c1) range.r1 = range.r2 = at.row, range.c1 = range.c2 = static_cast<int16_t>(at.col);
-        engine_->SetFormula(at, std::move(f), cached, &range, fi.dynamic);
-      } else {
-        engine_->SetFormula(at, std::move(f), cached);
-      }
-      ++stats_.formulas;
-      return true;
+      AddFormula(s, i, c);
+      return --formulasLeft_ > 0;
     });
     if (stopped) return false;
   }
   phase_ = Phase::kGraph;
   return true;
+}
+
+void WorkbookCalc::AddFormula(const Sheet& s, size_t i, const CellInfo& c) {
+  FormulaInfo fi;
+  if (!s.GetFormula(c.row, c.col, fi) || fi.text.empty()) return;
+  if (fi.kind == FormulaKind::DataTable) {
+    ++stats_.dataTables;
+    return;
+  }
+  calc::Cell at{static_cast<int>(i), static_cast<int32_t>(c.row), static_cast<int32_t>(c.col)};
+  calc::Cell origin{static_cast<int>(i), static_cast<int32_t>(fi.origin.row), static_cast<int32_t>(fi.origin.col)};
+  bool array = fi.kind == FormulaKind::Array;
+  std::shared_ptr<const Formula> f;
+  if (fi.kind == FormulaKind::Shared) {
+    // A shared formula compiles once, at its master: relative references are offsets, so its
+    // followers use the same bytecode.
+    auto key = std::make_pair(fi.origin.row, fi.origin.col);
+    auto it = shared_.find(key);
+    if (it == shared_.end()) it = shared_.emplace(key, engine_->CompileAt(fi.text, origin)).first;
+    f = it->second;
+  } else {
+    f = engine_->CompileAt(fi.text, at, array);
+  }
+  if (!f) {
+    ++stats_.parseErrors;
+    return;
+  }
+  bool cached = c.value.type != ValueType::Empty;
+  if (array) {
+    Area range;
+    range.r1 = static_cast<int32_t>(fi.ref.firstRow), range.r2 = static_cast<int32_t>(fi.ref.lastRow);
+    range.c1 = static_cast<int16_t>(fi.ref.firstCol), range.c2 = static_cast<int16_t>(fi.ref.lastCol);
+    if (range.r2 < range.r1 || range.c2 < range.c1) range.r1 = range.r2 = at.row, range.c1 = range.c2 = static_cast<int16_t>(at.col);
+    engine_->SetFormula(at, std::move(f), cached, &range, fi.dynamic);
+  } else {
+    engine_->SetFormula(at, std::move(f), cached);
+  }
+  ++stats_.formulas;
 }
 
 WorkbookCalc::LoadStats WorkbookCalc::Load() {

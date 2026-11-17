@@ -20,6 +20,8 @@
 
 namespace fw::sheet {
 class Workbook;
+class Sheet;
+struct CellInfo;
 class NumberFormat;
 struct NumLocale;
 }  // namespace fw::sheet
@@ -69,11 +71,13 @@ class WorkbookCalc : public Host {
   enum class Phase : uint8_t { kSheets, kFormulas, kGraph, kRecalc, kDone };
   // Load()'s work until `deadline` (Seconds-like, steady clock): true once the formulas are in.
   bool LoadSome(double deadline);
+  void AddFormula(const Sheet& s, size_t sheet, const CellInfo& c);  // the cell's formula, to the engine
 
   Workbook& book_;
   Phase phase_ = Phase::kSheets;
   size_t sheet_ = 0;                // kSheets, kFormulas: the sheet being read
   uint32_t row_ = 0, col_ = 0;      // kFormulas: the next cell
+  size_t formulasLeft_ = 0;         // kFormulas: in this sheet
   std::map<std::pair<uint32_t, uint32_t>, std::shared_ptr<const Formula>> shared_;  // this sheet's shared formulas
   LoadStats stats_;
   uint64_t changes_ = 0;
