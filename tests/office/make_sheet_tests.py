@@ -932,6 +932,8 @@ def xlsx_notes(at_end=False):
     ws.title = "Notes"
     fill_grid(ws, 20, 8)
     ws["B2"].comment = Comment("A short note.", "Featherweight tests")
+    # A second note in row 2: printed at the end, it shows the order within a row.
+    ws["H2"].comment = Comment("A second note in row 2.", "Featherweight tests")
     c = Comment("A longer note, with a second line.\nIt is shown in a bigger box.", "Featherweight tests", width=300, height=120)
     ws["D4"].comment = c
     ws["F10"].comment = Comment("Note on a cell in a hidden row.", "Featherweight tests")
