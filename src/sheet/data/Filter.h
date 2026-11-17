@@ -28,6 +28,14 @@ struct FilterCriteria {
   bool blanks = false;               //   and empty cells
   std::vector<FilterCondition> conditions;  // else up to two custom conditions
   bool both = false;                 // both conditions must hold (and), else either (or)
+  // Else one of Excel's other number filters, over the column's numbers only (text and blanks are
+  // left out; measured): Top 10 (top10: the `count` largest, the smallest with `bottom`, ties
+  // included; with `percent` floor(numbers * count / 100) of them, at least one) or above or below
+  // the numbers' average (dynamicFilter), strictly.
+  enum class Special : uint8_t { None, Top10, AboveAverage, BelowAverage };
+  Special special = Special::None;
+  double count = 10;
+  bool bottom = false, percent = false;
 };
 
 // The text a cell shows, without a width limit, as filters compare it.
