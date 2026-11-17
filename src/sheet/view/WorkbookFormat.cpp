@@ -10,7 +10,9 @@
 #include "sheet/numfmt/NumFormat.h"
 #include "sheet/numfmt/NumLocale.h"
 #include "ui/Gfx.h"
+#include "ui/Icons.h"
 #include "ui/Theme.h"
+#include "ui/Toolbar.h"
 #include "ui/Uia.h"
 #include "word/DocFormat.h"  // the installed fonts' names
 
@@ -298,9 +300,7 @@ WorkbookView::FormatPanel::FormatPanel(WorkbookView& view) : v_(view) {
   merge_.text = L"Merge cells";
   merge_.toggle = true;
   merge_.onInvoke = [this] {
-    const Range sel = v_.Selected();
-    const int sheet = static_cast<int>(v_.sheet_);
-    v_.EditRefused(merge_.checked ? v_.Ed().Merge(sheet, sel) : v_.Ed().Unmerge(sheet, sel));
+    v_.MergeCells(merge_.checked ? 2 : 3);
     Sync();
   };
   // Font
@@ -665,21 +665,25 @@ void WorkbookView::FormatPanel::ApplyNumber() {
 }
 
 void WorkbookView::FormatPanel::ApplyBorders(int which) {
-  if (!v_.Ready()) return;
-  const Range sel = v_.Selected();
   const int li = std::clamp(line_.selected, 0, static_cast<int>(std::size(kLines)) - 1);
   BorderSide side;
   side.style = kLines[li].style;
   side.color = FromD2D(lineColor_.color, lineColor_.automatic);
+  v_.ApplyBorders(which, side);
+}
+
+bool WorkbookView::ApplyBorders(int which, const BorderSide& side) {
+  if (!Ready() || preview_ || ChartSheet()) return false;
+  const Range sel = Selected();
   const BorderSide none;
-  edit::Editor& ed = v_.Ed();
-  const Styles& st = v_.book_->GetStyles();
+  edit::Editor& ed = Ed();
+  const Styles& st = book_->GetStyles();
   edit::EditGroup group(ed, u"Borders");
   bool ok = true;
   // Sides of the cells of `r` through `fn`.
   auto apply = [&](Range r, auto&& fn) {
     if (!ok || r.firstRow > r.lastRow || r.firstCol > r.lastCol) return;
-    ok = v_.ChangeFormatIn(r, [&](Xf& x) {
+    ok = ChangeFormatIn(r, [&](Xf& x) {
       Border b = x.border < st.Borders().size() ? st.Borders()[x.border] : Border{};
       fn(b);
       x.border = ed.AddBorder(b);
@@ -722,6 +726,7 @@ void WorkbookView::FormatPanel::ApplyBorders(int which) {
     case 7: apply(rightCol, [&](Border& b) { b.right = side; }); break;
   }
   group.done = ok;
+  return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -780,19 +785,397 @@ void WorkbookView::ShowFormatPanel(int page) {
   host_.ViewShowPanel(formatPanel_.get());
 }
 
+bool WorkbookView::ApplyNumberCode(const std::wstring& code) {
+  if (!Ready() || preview_ || ChartSheet()) return false;
+  const uint32_t id = NumFmtId(code);
+  return ChangeFormat(u"Number Format", [id](Xf& x) {
+    x.numFmt = id;
+    x.applyNumFmt = true;
+  });
+}
+
+bool WorkbookView::ChangeDecimals(int delta) {
+  if (!Ready() || preview_ || ChartSheet()) return false;
+  const NumLocale& loc = text_->Locale();
+  const std::wstring code = CodeOf(book_->GetStyles().CellXf(ActiveStyle()).numFmt);
+  const FormatCategory cat = FormatChoiceOf(code, loc).category;
+  if (cat == FormatCategory::Date || cat == FormatCategory::Time || cat == FormatCategory::Text) return false;
+  std::wstring next;
+  if (cat == FormatCategory::General) {
+    // From the decimals General shows for the active cell's number.
+    int shown = 0;
+    const Value v = Current().GetValue(active_.row, active_.col);
+    if (v.type == ValueType::Number) {
+      FormatContext ctx;
+      ctx.locale = &loc;
+      Formatted f;
+      NumberFormat().Format(v.number, ctx, f);
+      const size_t dot = f.text.find(loc.decimal);
+      const size_t e = f.text.find_first_of(L"Ee");
+      if (dot != std::wstring::npos) shown = static_cast<int>((e == std::wstring::npos ? f.text.size() : e) - dot - 1);
+    }
+    const int n = std::max(0, shown + delta);
+    next = n ? L"0." + std::wstring(static_cast<size_t>(n), L'0') : L"0";
+  } else {
+    next = FormatDecimals(code, delta);
+  }
+  return next != code && ApplyNumberCode(next);
+}
+
+bool WorkbookView::MergeCells(int how) {
+  if (!Ready() || preview_ || ChartSheet()) return false;
+  const Range sel = Selected();
+  const int sheet = static_cast<int>(sheet_);
+  edit::Editor& ed = Ed();
+  if (how == 3) return !EditRefused(ed.Unmerge(sheet, sel));
+  // Merge and Center on merged cells unmerges them, as Excel's button does.
+  const Range* m = Current().MergeAt(active_.row, active_.col);
+  if (how == 0 && m && (m->lastRow > m->firstRow || m->lastCol > m->firstCol)) return !EditRefused(ed.Unmerge(sheet, sel));
+  // Excel asks before values other than the upper-left one go; Featherweight merges and says so.
+  bool loses = false;
+  Current().ForEachCell(sel, [&](const CellInfo& c) {
+    const bool corner = how == 1 ? c.col == sel.firstCol : c.row == sel.firstRow && c.col == sel.firstCol;
+    loses = !corner && c.value.type != ValueType::Empty;
+    return !loses;
+  });
+  edit::EditGroup group(ed, how == 0 ? u"Merge and Center" : how == 1 ? u"Merge Across" : u"Merge Cells");
+  bool ok = true;
+  if (how == 1) {
+    for (uint32_t r = sel.firstRow; ok && r <= sel.lastRow && sel.lastCol > sel.firstCol; ++r)
+      ok = !EditRefused(ed.Merge(sheet, Range{r, sel.firstCol, r, sel.lastCol}));
+  } else {
+    ok = !EditRefused(ed.Merge(sheet, sel));
+    if (ok && how == 0)
+      ok = ChangeFormatIn(Range{sel.firstRow, sel.firstCol, sel.firstRow, sel.firstCol}, [](Xf& x) {
+        x.alignment.horizontal = HAlign::Center;
+        x.applyAlignment = true;
+      });
+  }
+  group.done = ok;
+  if (ok && loses) host_.ViewMessage(BannerKind::Info, L"Merging kept only the upper-left value. Ctrl+Z brings the others back.");
+  return ok;
+}
+
+namespace {
+
+// The toolbar's number formats, and their codes (invariant; empty: a command).
+const wchar_t* const kNumberChoices[] = {L"General",    L"Number",    L"Currency",   L"Accounting",       L"Short date",
+                                         L"Long date",  L"Time",      L"Percentage", L"Fraction",         L"Scientific",
+                                         L"Text",       L"Increase decimal", L"Decrease decimal", L"More number formats…"};
+
+std::wstring NumberChoiceCode(int i, const NumLocale& loc) {
+  FormatChoice c;
+  c.decimals = 2;
+  switch (i) {
+    case 0: return L"General";
+    case 1: c.category = FormatCategory::Number; break;
+    case 2: c.category = FormatCategory::Currency; break;
+    case 3: c.category = FormatCategory::Accounting; break;
+    case 4: c.category = FormatCategory::Date; break;
+    case 5: c.category = FormatCategory::Date, c.type = 1; break;
+    case 6: c.category = FormatCategory::Time; break;
+    case 7: c.category = FormatCategory::Percentage; break;
+    case 8: c.category = FormatCategory::Fraction; break;
+    case 9: c.category = FormatCategory::Scientific; break;
+    case 10: return L"@";
+    default: return {};
+  }
+  return FormatCode(c, loc);
+}
+
+// The toolbar's borders: what each choice applies (FormatPanel's numbering) and with which line.
+struct BorderChoice {
+  const wchar_t* name;
+  int which;
+  BorderStyle style;
+};
+const BorderChoice kBorderChoices[] = {
+    {L"Bottom border", 5, BorderStyle::Thin},      {L"Top border", 4, BorderStyle::Thin},
+    {L"Left border", 6, BorderStyle::Thin},        {L"Right border", 7, BorderStyle::Thin},
+    {L"No border", 0, BorderStyle::Thin},          {L"All borders", 2, BorderStyle::Thin},
+    {L"Outside borders", 1, BorderStyle::Thin},    {L"Thick outside borders", 1, BorderStyle::Thick},
+    {L"Bottom double border", 5, BorderStyle::Double}, {L"Thick bottom border", 5, BorderStyle::Thick}};
+
+}  // namespace
+
 bool WorkbookView::FormatCommandState(int cmd, CommandState& s) {
   const bool cells = Ready() && !preview_ && !ChartSheet();
+  const Styles* st = Ready() ? &book_->GetStyles() : nullptr;
+  const Xf* x = st ? &st->CellXf(ActiveStyle()) : nullptr;
+  const Font* f = x ? &st->FontOf(*x) : nullptr;
+  auto set = [&](const wchar_t* label, const wchar_t* keys, bool checked = false) {
+    s.label = label;
+    s.shortcut = keys;
+    s.enabled = cells;
+    s.checked = cells && checked;
+    return true;
+  };
   switch (cmd) {
-    case CmdFormatCells: s.label = L"Format cells"; s.shortcut = L"Ctrl+1"; s.enabled = cells; return true;
+    case CmdFormatCells: return set(L"Format cells", L"Ctrl+1");
+    case CmdBold: return set(L"Bold", L"Ctrl+B", f && f->bold);
+    case CmdItalic: return set(L"Italic", L"Ctrl+I", f && f->italic);
+    case CmdUnderline: return set(L"Underline", L"Ctrl+U", f && f->underline != Underline::None);
+    case CmdStrikethrough: return set(L"Strikethrough", L"Ctrl+5", f && f->strike);
+    case CmdAlignLeft: return set(L"Align left", L"", x && x->alignment.horizontal == HAlign::Left);
+    case CmdAlignCenter: return set(L"Center", L"", x && x->alignment.horizontal == HAlign::Center);
+    case CmdAlignRight: return set(L"Align right", L"", x && x->alignment.horizontal == HAlign::Right);
+    case CmdFontColor: return set(L"Font color", L"");
+    case CmdFillColor: return set(L"Fill color", L"");
+    case CmdBordersBox: return set(L"Borders", L"");
+    case CmdMergeBox:
+    case CmdMergeCenter: return set(L"Merge and center", L"");
+    case CmdMergeAcross: return set(L"Merge across", L"");
+    case CmdMergeCells: return set(L"Merge cells", L"");
+    case CmdUnmergeCells: return set(L"Unmerge cells", L"");
+    case CmdNumberFormatBox: return set(L"Number format", L"");
+    case CmdIncreaseDecimal: return set(L"Increase decimal", L"");
+    case CmdDecreaseDecimal: return set(L"Decrease decimal", L"");
+    case CmdNumGeneral: return set(L"General format", L"Ctrl+Shift+~");
+    case CmdNumNumber: return set(L"Number format", L"Ctrl+Shift+1");
+    case CmdNumTime: return set(L"Time format", L"Ctrl+Shift+2");
+    case CmdNumDate: return set(L"Date format", L"Ctrl+Shift+3");
+    case CmdNumCurrency: return set(L"Currency format", L"Ctrl+Shift+4");
+    case CmdNumPercent: return set(L"Percent format", L"Ctrl+Shift+5");
+    case CmdNumScientific: return set(L"Scientific format", L"Ctrl+Shift+6");
+    case CmdBorderOutline: return set(L"Outline border", L"Ctrl+Shift+7");
+    case CmdBorderRemove: return set(L"Remove borders", L"Ctrl+Shift+-");
   }
   return false;
 }
 
 bool WorkbookView::FormatCommand(int cmd) {
-  switch (cmd) {
-    case CmdFormatCells: ShowFormatPanel(-1); return true;
+  if (cmd == CmdFormatCells) {
+    ShowFormatPanel(-1);
+    return true;
   }
-  return false;
+  CommandState s;
+  if (!FormatCommandState(cmd, s)) return false;
+  if (!s.enabled) return true;
+  const Styles& st = book_->GetStyles();
+  const Xf active = st.CellXf(ActiveStyle());
+  const Font activeFont = st.FontOf(active);
+  const NumLocale& loc = text_->Locale();
+  auto align = [&](HAlign h) {
+    const HAlign to = active.alignment.horizontal == h ? HAlign::General : h;  // a second click takes it off
+    ChangeFormat(u"Alignment", [to](Xf& x) {
+      x.alignment.horizontal = to;
+      x.applyAlignment = true;
+    });
+  };
+  BorderSide thin;
+  thin.style = BorderStyle::Thin;
+  switch (cmd) {
+    case CmdBold: {
+      const bool on = !activeFont.bold;  // all bold, unless the active cell is
+      ChangeFont(u"Bold", [on](Font& f) { f.bold = on; });
+      break;
+    }
+    case CmdItalic: {
+      const bool on = !activeFont.italic;
+      ChangeFont(u"Italic", [on](Font& f) { f.italic = on; });
+      break;
+    }
+    case CmdUnderline: {
+      const Underline u = activeFont.underline == Underline::None ? Underline::Single : Underline::None;
+      ChangeFont(u"Underline", [u](Font& f) { f.underline = u; });
+      break;
+    }
+    case CmdStrikethrough: {
+      const bool on = !activeFont.strike;
+      ChangeFont(u"Strikethrough", [on](Font& f) { f.strike = on; });
+      break;
+    }
+    case CmdAlignLeft: align(HAlign::Left); break;
+    case CmdAlignCenter: align(HAlign::Center); break;
+    case CmdAlignRight: align(HAlign::Right); break;
+    case CmdFontColor: {
+      const Color c = FromD2D(lastFontColor_, false);
+      ChangeFont(u"Font Color", [c](Font& f) { f.color = c; });
+      break;
+    }
+    case CmdFillColor: {
+      Fill fill;
+      fill.pattern = PatternType::Solid;
+      fill.fg = FromD2D(lastFill_, false);
+      ChangeFormat(u"Fill", [this, fill](Xf& x) {
+        x.fill = Ed().AddFill(fill);
+        x.applyFill = true;
+      });
+      break;
+    }
+    case CmdBordersBox: {
+      const BorderChoice& b = kBorderChoices[std::clamp(lastBorders_, 0, static_cast<int>(std::size(kBorderChoices)) - 1)];
+      BorderSide side;
+      side.style = b.style;
+      ApplyBorders(b.which, side);
+      break;
+    }
+    case CmdMergeBox:
+    case CmdMergeCenter: MergeCells(0); break;
+    case CmdMergeAcross: MergeCells(1); break;
+    case CmdMergeCells: MergeCells(2); break;
+    case CmdUnmergeCells: MergeCells(3); break;
+    case CmdIncreaseDecimal: ChangeDecimals(1); break;
+    case CmdDecreaseDecimal: ChangeDecimals(-1); break;
+    case CmdNumberFormatBox: ShowFormatPanel(FormatPanel::kNumber); break;
+    case CmdNumGeneral: ApplyNumberCode(L"General"); break;
+    case CmdNumNumber: ApplyNumberCode(L"#,##0.00"); break;
+    case CmdNumTime: ApplyNumberCode(L"h:mm AM/PM"); break;
+    case CmdNumDate: ApplyNumberCode(L"d-mmm-yy"); break;
+    case CmdNumCurrency: ApplyNumberCode(NumberChoiceCode(2, loc)); break;
+    case CmdNumPercent: ApplyNumberCode(L"0%"); break;
+    case CmdNumScientific: ApplyNumberCode(L"0.00E+00"); break;
+    case CmdBorderOutline: ApplyBorders(1, thin); break;
+    case CmdBorderRemove: ApplyBorders(0, thin); break;
+  }
+  return true;
+}
+
+void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
+  if (!Ready() || preview_ || ChartSheet()) return;
+  const Styles& st = book_->GetStyles();
+  const Xf& x = st.CellXf(ActiveStyle());
+  const Font& f = st.FontOf(x);
+  const NumLocale& loc = text_->Locale();
+  auto button = [&](int cmd, wchar_t glyph, int priority) {
+    CommandState q = QueryCommand(cmd);
+    ToolItem t;
+    t.cmd = cmd;
+    t.glyph = glyph;
+    t.tooltip = q.Tooltip();
+    t.enabled = q.enabled;
+    t.checked = q.checked;
+    t.priority = priority;
+    return t;
+  };
+  auto toggle = [&](int cmd, wchar_t glyph, int priority) {
+    ToolItem t = button(cmd, glyph, priority);
+    t.toggle = true;
+    return t;
+  };
+  // Font and size.
+  if (DocFormat::FontsPending()) DocFormat::ReadFonts();
+  ToolItem font;
+  font.kind = ToolKind::ComboBox;
+  font.cmd = CmdFontBox;
+  font.width = 116;
+  font.priority = 6;
+  font.tooltip = L"Font";
+  font.sepBefore = true;
+  font.choices = DocFormat::FontNames();
+  font.text = Utf8ToWide(f.name.empty() ? st.DefaultFont().name : f.name);
+  font.onChange = [this](const ToolValue& v) {
+    if (v.text.empty()) return;
+    const std::string name = WideToUtf8(v.text);
+    ChangeFont(u"Font", [&name](Font& fo) {
+      fo.name = name;
+      fo.scheme = FontScheme::None;
+    });
+  };
+  m.left.push_back(font);
+  ToolItem size;
+  size.kind = ToolKind::ComboBox;
+  size.cmd = CmdSizeBox;
+  size.width = 56;
+  size.priority = 6;
+  size.tooltip = L"Font size";
+  size.choices = List(kSizes, std::size(kSizes));
+  size.text = PointsText(f.size > 0 ? f.size : st.DefaultFont().size);
+  size.validate = [](std::wstring& text) {
+    wchar_t* end = nullptr;
+    const double v = std::wcstod(text.c_str(), &end);
+    if (end == text.c_str() || !(v >= 1 && v <= 409)) return false;
+    text = PointsText(std::round(v * 2) / 2);
+    return true;
+  };
+  size.onChange = [this](const ToolValue& v) {
+    const double s = std::wcstod(v.text.c_str(), nullptr);
+    if (s >= 1) ChangeFont(u"Font Size", [s](Font& fo) { fo.size = s; });
+  };
+  m.left.push_back(size);
+  m.left.push_back(toggle(CmdBold, icon::Bold, 9));
+  m.left.push_back(toggle(CmdItalic, icon::Italic, 9));
+  m.left.push_back(toggle(CmdUnderline, icon::Underline, 9));
+  // Colors: the main part repeats the last one, the arrow picks another.
+  auto colors = [&](int cmd, wchar_t glyph, D2D1_COLOR_F& last, const wchar_t* automaticLabel, bool fill) {
+    ToolItem t = button(cmd, glyph, 5);
+    t.kind = ToolKind::SplitButton;
+    t.width = 52;
+    t.colors = true;
+    t.color = last;
+    t.automaticLabel = automaticLabel;
+    t.automaticColor = fill ? D2D1_COLOR_F{0, 0, 0, 0} : D2D1_COLOR_F{0, 0, 0, 1};
+    t.onChange = [this, &last, fill](const ToolValue& v) {
+      if (!v.automatic) last = v.color;
+      if (fill) {
+        Fill fl;
+        if (!v.automatic) {
+          fl.pattern = PatternType::Solid;
+          fl.fg = FromD2D(v.color, false);
+        }
+        ChangeFormat(u"Fill", [this, fl](Xf& xf) {
+          xf.fill = Ed().AddFill(fl);
+          xf.applyFill = true;
+        });
+      } else {
+        const Color c = FromD2D(v.color, v.automatic);
+        ChangeFont(u"Font Color", [c](Font& fo) { fo.color = c; });
+      }
+    };
+    return t;
+  };
+  m.left.push_back(colors(CmdFontColor, icon::FontColor, lastFontColor_, L"Automatic", false));
+  m.left.push_back(colors(CmdFillColor, icon::Color, lastFill_, L"No color", true));
+  // Borders: the main part repeats the last choice.
+  ToolItem borders = button(CmdBordersBox, icon::Table, 4);
+  borders.kind = ToolKind::SplitButton;
+  borders.width = 52;
+  borders.tooltip = std::wstring(L"Borders: ") + kBorderChoices[lastBorders_].name;
+  for (const BorderChoice& b : kBorderChoices) borders.choices.push_back(b.name);
+  borders.onChange = [this](const ToolValue& v) {
+    if (v.index < 0 || v.index >= static_cast<int>(std::size(kBorderChoices))) return;
+    lastBorders_ = v.index;
+    BorderSide side;
+    side.style = kBorderChoices[v.index].style;
+    ApplyBorders(kBorderChoices[v.index].which, side);
+  };
+  m.left.push_back(borders);
+  // Alignment and merging.
+  ToolItem left = toggle(CmdAlignLeft, icon::AlignLeft, 5);
+  left.sepBefore = true;
+  m.left.push_back(left);
+  m.left.push_back(toggle(CmdAlignCenter, icon::AlignCenter, 5));
+  m.left.push_back(toggle(CmdAlignRight, icon::AlignRight, 5));
+  ToolItem merge;
+  merge.kind = ToolKind::Dropdown;
+  merge.cmd = CmdMergeBox;
+  merge.width = 84;
+  merge.priority = 3;
+  merge.text = L"Merge";
+  merge.tooltip = L"Merge and center, merge across, merge or unmerge cells";
+  merge.choices = {L"Merge and center", L"Merge across", L"Merge cells", L"Unmerge cells"};
+  merge.onChange = [this](const ToolValue& v) {
+    if (v.index >= 0 && v.index < 4) MergeCells(v.index);
+  };
+  m.left.push_back(merge);
+  // Number formats, with the decimals and the panel's Number page.
+  ToolItem number;
+  number.kind = ToolKind::Dropdown;
+  number.cmd = CmdNumberFormatBox;
+  number.width = 104;
+  number.priority = 4;
+  number.maxRows = 16;
+  number.sepBefore = true;
+  number.tooltip = L"Number format";
+  number.text = kCategories[static_cast<int>(FormatChoiceOf(CodeOf(x.numFmt), loc).category)];
+  number.choices = List(kNumberChoices, std::size(kNumberChoices));
+  number.onChange = [this](const ToolValue& v) {
+    if (v.index < 0) return;
+    if (v.index == 11 || v.index == 12) ChangeDecimals(v.index == 11 ? 1 : -1);
+    else if (v.index == 13) ShowFormatPanel(FormatPanel::kNumber);
+    else ApplyNumberCode(NumberChoiceCode(v.index, text_->Locale()));
+  };
+  m.left.push_back(number);
 }
 
 }  // namespace fw::sheet::view

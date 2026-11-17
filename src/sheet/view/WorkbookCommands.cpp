@@ -182,6 +182,24 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case 'V': return editor_.Active() ? 0 : CmdPaste;
       case 'R': return editor_.Active() ? 0 : CmdFillRight;
       case '1': return editor_.Active() || preview_ ? 0 : CmdFormatCells;
+      case 'B': return editor_.Active() || preview_ ? 0 : CmdBold;
+      case 'I': return editor_.Active() || preview_ ? 0 : CmdItalic;
+      case 'U': return editor_.Active() || preview_ ? 0 : CmdUnderline;
+      case '5': return editor_.Active() || preview_ ? 0 : CmdStrikethrough;
+    }
+  }
+  // Excel's number formats and borders by key (Ctrl+Shift+1..7, ~ and -).
+  if (ctrl && shift && !alt && !editor_.Active() && !preview_) {
+    switch (vk) {
+      case VK_OEM_3: return CmdNumGeneral;
+      case '1': return CmdNumNumber;
+      case '2': return CmdNumTime;
+      case '3': return CmdNumDate;
+      case '4': return CmdNumCurrency;
+      case '5': return CmdNumPercent;
+      case '6': return CmdNumScientific;
+      case '7': return CmdBorderOutline;
+      case VK_OEM_MINUS: return CmdBorderRemove;
     }
   }
   if (alt && !ctrl && !shift && vk == VK_OEM_PLUS && !editor_.Active() && !preview_) return CmdAutoSum;
@@ -350,6 +368,7 @@ void WorkbookView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   preview.toggle = true;
   preview.checked = preview_;
   m.left = {print, preview};
+  AddFormatToolbar(m);  // fonts, colors, borders, alignment, number formats (WorkbookFormat.cpp)
   m.pager = preview_;
   if (preview_) {
     m.page = currentPage_;

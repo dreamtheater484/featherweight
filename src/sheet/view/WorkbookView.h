@@ -357,6 +357,14 @@ class WorkbookView : public PagedView {
   // A number format's id: a built-in format's (the code as files define it), else a custom one's.
   uint32_t NumFmtId(const std::wstring& code);
   std::wstring CodeOf(uint32_t numFmt) const;  // invariant
+  bool ApplyNumberCode(const std::wstring& code);  // invariant
+  bool ChangeDecimals(int delta);                  // Increase and Decrease decimal, from the active cell
+  // Borders on the selection: 0 none, 1 outline, 2 all, 3 inside, 4..7 top, bottom, left, right.
+  bool ApplyBorders(int which, const BorderSide& side);
+  bool MergeCells(int how);  // 0 merge and center, 1 merge across, 2 merge, 3 unmerge
+  void AddFormatToolbar(ToolbarModel& m);
+  D2D1_COLOR_F lastFontColor_{0.75f, 0, 0, 1}, lastFill_{1, 1, 0, 1};  // the color buttons' main parts
+  int lastBorders_ = 0;  // the borders button's choice its main part repeats
   // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
   bool GridCommand(int cmd);
   bool GridCommandState(int cmd, CommandState& s);
