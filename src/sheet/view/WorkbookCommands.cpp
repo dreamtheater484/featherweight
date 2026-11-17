@@ -12,6 +12,8 @@
 #include "core/Layout.h"
 #include "core/Strings.h"
 #include "sheet/view/WorkbookView.h"
+#include "sheet/calc/Typing.h"
+#include "sheet/numfmt/NumFormat.h"
 #include "sheet/xlsx/Xlsx.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -499,7 +501,12 @@ void WorkbookView::Copy() {
   const Sheet& s = Current();
   const Styles& st = book_->GetStyles();
   std::wstring text;
-  std::string html = "<table border=0 cellpadding=0 cellspacing=0 style='border-collapse:collapse'>";
+  // Excel's attributes give Excel and Featherweight the values under the shown text; data-fw-f
+  // gives another Featherweight workbook each formula, written for the cell it was copied from
+  // (data-fw-from: the copy's top-left).
+  std::string html = "<table border=0 cellpadding=0 cellspacing=0 style='border-collapse:collapse' data-fw-from='" +
+                     std::to_string(sel.firstRow) + "," + std::to_string(sel.firstCol) + "'>";
+  calc::Engine* names = nullptr;
   const bool withHtml = cells <= 100000;
   std::vector<CellInfo> row;
   for (uint32_t r = sel.firstRow; r <= sel.lastRow; ++r) {
@@ -530,7 +537,11 @@ void WorkbookView::Copy() {
       if (f.italic) css += "font-style:italic;";
       if (f.underline != Underline::None) css += "text-decoration:underline;";
       if (!f.name.empty()) css += "font-family:\"" + f.name + "\";";
-      if (f.size > 0) css += "font-size:" + std::to_string(static_cast<int>(f.size)) + "pt;";
+      if (f.size > 0) {
+        char size[32];
+        std::snprintf(size, sizeof size, "font-size:%gpt;", f.size);
+        css += size;
+      }
       if (f.color.IsSet()) css += "color:" + CssColor(st.Resolve(f.color, 0xFF000000)) + ";";
       const Fill& fill = st.FillOf(xf);
       if (fill.pattern == PatternType::Solid) css += "background:" + CssColor(st.Resolve(fill.fg, 0xFFFFFFFF)) + ";";
@@ -542,7 +553,58 @@ void WorkbookView::Copy() {
           break;
         default: break;
       }
-      html += css.empty() ? "<td>" : "<td style='" + css + "'>";
+      if (xf.numFmt != 0) {
+        // The format code as CSS writes a string: quotes and backslashes escaped.
+        std::string code = std::string(st.FormatCode(xf.numFmt));
+        if (code.empty()) code = WideToUtf8(BuiltinCode(static_cast<int>(xf.numFmt), text_->Locale()));
+        std::string q;
+        for (char ch : code) {
+          if (ch == '"' || ch == '\\') q += '\\';
+          q += ch;
+        }
+        css += "mso-number-format:\"" + q + "\";";
+      }
+      std::string attrs;
+      if (!css.empty()) {
+        attrs += " style='";
+        HtmlEscape(attrs, css);
+        attrs += "'";
+      }
+      if (cell) {
+        switch (cell->value.type) {
+          case ValueType::Number: {
+            char num[40];
+            std::snprintf(num, sizeof num, "%.17g", cell->value.number);
+            attrs += std::string(" x:num=\"") + num + "\"";
+            break;
+          }
+          case ValueType::String:
+            attrs += " x:str=\"";
+            HtmlEscape(attrs, std::string(cell->value.text));
+            attrs += "\"";
+            break;
+          case ValueType::Bool: attrs += cell->value.boolean ? " x:bool=\"TRUE\"" : " x:bool=\"FALSE\""; break;
+          case ValueType::Error: attrs += " x:err=\"" + std::string(ErrorText(cell->value.error)) + "\""; break;
+          case ValueType::Empty: break;
+        }
+        FormulaInfo fi;
+        if (cell->hasFormula && s.GetFormula(r, c, fi) && fi.kind != FormulaKind::Array && fi.kind != FormulaKind::DataTable) {
+          // A shared formula is its first cell's: written for this one.
+          if (!names) names = &Calc().engine();
+          calc::CompileOptions from, to;
+          from.sheet = to.sheet = static_cast<int>(sheet_);
+          from.row = static_cast<int32_t>(fi.origin.row);
+          from.col = static_cast<int32_t>(fi.origin.col);
+          to.row = static_cast<int32_t>(r);
+          to.col = static_cast<int32_t>(c);
+          const std::string own = fi.origin == CellAddr{r, c} ? "=" + std::string(fi.text)
+                                                               : calc::CopyFormula("=" + std::string(fi.text), from, to, *names);
+          attrs += " data-fw-f=\"";
+          HtmlEscape(attrs, own);
+          attrs += "\"";
+        }
+      }
+      html += "<td" + attrs + ">";
       HtmlEscape(html, WideToUtf8(t));
       html += "</td>";
     }
@@ -552,7 +614,7 @@ void WorkbookView::Copy() {
   html += "</table>";
   std::string cfHtml;
   if (withHtml) {
-    const std::string head = "<html><body>\r\n<!--StartFragment-->";
+    const std::string head = "<html xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><body>\r\n<!--StartFragment-->";
     const std::string tail = "<!--EndFragment-->\r\n</body></html>";
     const char* const kHeader = "Version:0.9\r\nStartHTML:%010zu\r\nEndHTML:%010zu\r\nStartFragment:%010zu\r\nEndFragment:%010zu\r\n";
     char probe[160];
