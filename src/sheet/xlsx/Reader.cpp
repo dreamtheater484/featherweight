@@ -550,6 +550,35 @@ Status ReadStrings(std::string_view xml, const pkg::Limits& limits, std::string_
 
 // ---- Tables
 
+namespace {
+
+// ST_Xstring's escapes (_x000A_ for a line break, _x005F_ for "_"), as Excel writes table
+// column names.
+std::string Unescape(std::string_view s) {
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size(); ++i) {
+    unsigned v = 0;
+    if (s[i] == '_' && i + 6 < s.size() && s[i + 1] == 'x' && s[i + 6] == '_' &&
+        std::from_chars(s.data() + i + 2, s.data() + i + 6, v, 16).ptr == s.data() + i + 6 && !(v >= 0xD800 && v < 0xE000)) {
+      if (v < 0x80) {
+        out += static_cast<char>(v);
+      } else if (v < 0x800) {
+        out += static_cast<char>(0xC0 | (v >> 6)), out += static_cast<char>(0x80 | (v & 0x3F));
+      } else {
+        out += static_cast<char>(0xE0 | (v >> 12)), out += static_cast<char>(0x80 | ((v >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (v & 0x3F));
+      }
+      i += 6;
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
 Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::string& part, Table& t) {
   pkg::XmlDom dom;
   Status st = dom.Parse(xml, limits, part.substr(1));
@@ -574,7 +603,7 @@ Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::str
       if (c.type() != pugi::node_element || Local(c) != "tableColumn") continue;
       TableColumn col;
       col.id = UIntAttr(c, "id", 0);
-      col.name = Attr(c, "name");
+      col.name = Unescape(Attr(c, "name"));
       col.totalsFunction = Attr(c, "totalsRowFunction");
       if (col.totalsFunction == "none") col.totalsFunction.clear();
       col.totalsLabel = Attr(c, "totalsRowLabel");
@@ -602,6 +631,116 @@ namespace {
 
 bool TypeEndsWith(std::string_view type, std::string_view name) {
   return type.size() > name.size() && type.ends_with(name) && type[type.size() - name.size() - 1] == '/';
+}
+
+// xl/metadata.xml. What each value metadata block (a cell's vm) stands for when it's an error:
+// valueMetadata's <rc t v> picks an XLRICHVALUE futureMetadata block, whose xlrd:rvb names a rich
+// value; a rich value of an "_error" structure holds the error's type (MS-XLSX 2.3.6.1.4). And
+// which cell metadata blocks (a cell's cm) make a dynamic array: cellMetadata's <rc t v> picks an
+// XLDAPR block with xda:dynamicArrayProperties fDynamic="1".
+void ReadMetadata(const pkg::Package& package, const std::string& metadata, const std::string& values,
+                  const std::string& structures, std::vector<uint8_t>& out, std::vector<uint8_t>& dynamic) {
+  // errorType -> ErrorCode
+  static constexpr ErrorCode kTypes[] = {ErrorCode::Null,    ErrorCode::Div0,    ErrorCode::Value,   ErrorCode::Ref,
+                                         ErrorCode::Name,    ErrorCode::Num,     ErrorCode::NA,      ErrorCode::GettingData,
+                                         ErrorCode::Spill,   ErrorCode::Connect, ErrorCode::Blocked, ErrorCode::Unknown,
+                                         ErrorCode::Field,   ErrorCode::Calc};
+  constexpr size_t kMaxBlocks = 1u << 20;
+  std::vector<uint8_t> bytes;
+  auto parse = [&](const std::string& part, pkg::XmlDom& dom) {
+    if (part.empty() || !package.ReadPart(part, bytes).Ok()) return false;
+    return dom.Parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), package.GetLimits(),
+                     part).Ok();
+  };
+  pkg::XmlDom meta, rich, shapes;
+  if (!parse(metadata, meta)) return;
+  const bool hasRich = parse(values, rich) && parse(structures, shapes);  // only errors need them
+  // The structures: for an "_error" one, which of its values is the error type.
+  std::vector<int> errorKey;
+  for (pugi::xml_node s = hasRich ? shapes.Root().first_child() : pugi::xml_node(); s && errorKey.size() < kMaxBlocks;
+       s = s.next_sibling()) {
+    if (Local(s) != "s") continue;
+    int key = -1, k = 0;
+    if (Attr(s, "t") == "_error")
+      for (pugi::xml_node c = s.first_child(); c; c = c.next_sibling())
+        if (Local(c) == "k") {
+          if (Attr(c, "n") == "errorType") key = k;
+          ++k;
+        }
+    errorKey.push_back(key);
+  }
+  // The rich values: each one's error, if it is one.
+  std::vector<uint8_t> richError;
+  for (pugi::xml_node rv = hasRich ? rich.Root().first_child() : pugi::xml_node(); rv && richError.size() < kMaxBlocks;
+       rv = rv.next_sibling()) {
+    if (Local(rv) != "rv") continue;
+    uint8_t e = 0xFF;
+    const uint32_t s = UIntAttr(rv, "s", UINT32_MAX);
+    if (s < errorKey.size() && errorKey[s] >= 0) {
+      int k = 0;
+      for (pugi::xml_node v = rv.first_child(); v; v = v.next_sibling())
+        if (Local(v) == "v" && k++ == errorKey[s]) {
+          uint32_t type = 0;
+          if (ParseUInt(TextOf(v), type) && type < std::size(kTypes)) e = static_cast<uint8_t>(kTypes[type]);
+          break;
+        }
+    }
+    richError.push_back(e);
+  }
+  // The metadata: types by index (from 1), the rich value blocks, then the value blocks.
+  std::vector<std::string_view> types;
+  std::vector<uint32_t> richBlocks;
+  std::vector<uint8_t> arrayBlocks;  // XLDAPR blocks: 1 for fDynamic
+  pugi::xml_node valueMetadata, cellMetadata;
+  for (pugi::xml_node sec = meta.Root().first_child(); sec; sec = sec.next_sibling()) {
+    const std::string_view k = Local(sec);
+    if (k == "metadataTypes") {
+      for (pugi::xml_node t = sec.first_child(); t && types.size() < kMaxBlocks; t = t.next_sibling())
+        if (Local(t) == "metadataType") types.push_back(Attr(t, "name"));
+    } else if (k == "futureMetadata" && Attr(sec, "name") == "XLRICHVALUE") {
+      for (pugi::xml_node bk = sec.first_child(); bk && richBlocks.size() < kMaxBlocks; bk = bk.next_sibling()) {
+        if (Local(bk) != "bk") continue;
+        uint32_t index = UINT32_MAX;
+        for (pugi::xml_node ext = Child(Child(bk, "extLst"), "ext"); ext; ext = ext.next_sibling())
+          if (pugi::xml_node rvb = Child(ext, "rvb")) index = UIntAttr(rvb, "i", UINT32_MAX);
+        richBlocks.push_back(index);
+      }
+    } else if (k == "futureMetadata" && Attr(sec, "name") == "XLDAPR") {
+      for (pugi::xml_node bk = sec.first_child(); bk && arrayBlocks.size() < kMaxBlocks; bk = bk.next_sibling()) {
+        if (Local(bk) != "bk") continue;
+        bool on = false;
+        for (pugi::xml_node ext = Child(Child(bk, "extLst"), "ext"); ext; ext = ext.next_sibling())
+          if (pugi::xml_node p = Child(ext, "dynamicArrayProperties")) on = BoolAttr(p, "fDynamic", false);
+        arrayBlocks.push_back(on ? 1 : 0);
+      }
+    } else if (k == "valueMetadata") {
+      valueMetadata = sec;
+    } else if (k == "cellMetadata") {
+      cellMetadata = sec;
+    }
+  }
+  for (pugi::xml_node bk = cellMetadata.first_child(); bk && dynamic.size() < kMaxBlocks; bk = bk.next_sibling()) {
+    if (Local(bk) != "bk") continue;
+    uint8_t on = 0;
+    for (pugi::xml_node rc = bk.first_child(); rc; rc = rc.next_sibling()) {
+      if (Local(rc) != "rc") continue;
+      const uint32_t t = UIntAttr(rc, "t", 0), v = UIntAttr(rc, "v", UINT32_MAX);
+      if (t >= 1 && t <= types.size() && types[t - 1] == "XLDAPR" && v < arrayBlocks.size()) on |= arrayBlocks[v];
+    }
+    dynamic.push_back(on);
+  }
+  for (pugi::xml_node bk = valueMetadata.first_child(); bk && out.size() < kMaxBlocks; bk = bk.next_sibling()) {
+    if (Local(bk) != "bk") continue;
+    uint8_t e = 0xFF;
+    for (pugi::xml_node rc = bk.first_child(); rc; rc = rc.next_sibling()) {
+      if (Local(rc) != "rc") continue;
+      const uint32_t t = UIntAttr(rc, "t", 0), v = UIntAttr(rc, "v", UINT32_MAX);
+      if (t >= 1 && t <= types.size() && types[t - 1] == "XLRICHVALUE" && v < richBlocks.size() &&
+          richBlocks[v] < richError.size())
+        e = richError[richBlocks[v]];
+    }
+    out.push_back(e);
+  }
 }
 
 std::shared_ptr<const draw::Theme> ReadThemePart(const pkg::Package& pkg, const std::string& part) {
@@ -651,11 +790,14 @@ std::unique_ptr<Workbook> Read(std::unique_ptr<pkg::Package> package, Status& st
   WorkbookLoader loader(*book);
   const pkg::RelationshipSet* rels = package->RelationshipsOf(main);
   auto relOf = [&](std::string_view id) -> const pkg::Relationship* { return rels ? rels->Find(id) : nullptr; };
-  std::string styles, strings, theme;
+  std::string styles, strings, theme, metadata, richValues, richStructures;
   if (rels)
     for (const auto& r : rels->items) {
       if (r.external) continue;
-      if (TypeEndsWith(r.type, "styles") && styles.empty()) styles = r.targetPart;
+      if (TypeEndsWith(r.type, "sheetMetadata") && metadata.empty()) metadata = r.targetPart;
+      else if (TypeEndsWith(r.type, "rdRichValue") && richValues.empty()) richValues = r.targetPart;
+      else if (TypeEndsWith(r.type, "rdRichValueStructure") && richStructures.empty()) richStructures = r.targetPart;
+      else if (TypeEndsWith(r.type, "styles") && styles.empty()) styles = r.targetPart;
       else if (TypeEndsWith(r.type, "sharedStrings") && strings.empty()) strings = r.targetPart;
       else if (TypeEndsWith(r.type, "theme") && theme.empty()) theme = r.targetPart;
     }
@@ -727,6 +869,10 @@ std::unique_ptr<Workbook> Read(std::unique_ptr<pkg::Package> package, Status& st
       c.concurrentManualCount = UIntAttr(sec, "concurrentManualCount", 0);
     }
   }
+  // The errors Excel writes as #VALUE! with a rich value saying which, and which array formulas
+  // spill, before any sheet is read.
+  ReadMetadata(*package, metadata, richValues, richStructures, loader.ValueErrors(), loader.DynamicArrays());
+
   // Tables, for every sheet: small, and structured references reach across sheets.
   for (size_t i = 0; i < book->SheetCount(); ++i) {
     Sheet& sheet = book->GetSheet(i);

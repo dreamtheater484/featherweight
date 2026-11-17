@@ -89,6 +89,11 @@ bool Meets(const draw::Rect& a, const draw::Rect& b) {
 }
 bool Empty(const draw::Rect& r) { return !(r.Width() > 0 && r.Height() > 0); }
 
+// A right-to-left sheet's place for a rect (DrawOptions::mirrorX).
+draw::Rect Mirror(const draw::Rect& r, float mirrorX) {
+  return mirrorX > 0 ? draw::Rect{mirrorX - r.right, r.top, mirrorX - r.left, r.bottom} : r;
+}
+
 // ---- Placing a shape: its xfrm is set to where its anchor puts it, so it draws at its own size
 // (files from other programs often leave it out; Excel's may differ by Excel's own rounding).
 
@@ -215,7 +220,7 @@ struct SheetObjects::Impl {
   void ReadDrawing(const pkg::Package& package, const std::string& part);
   void Fit(Item& it);
   void DrawChart(draw::Painter& painter, Item& it, const draw::Rect& rect);
-  void DrawText(draw::Painter& painter, Item& it);
+  void DrawText(draw::Painter& painter, Item& it, const draw::Rect& at);
   void DrawTextIn(draw::Painter& painter, const std::vector<RichParagraph>& text, const draw::Rect& box,
                   draw::TextBox::Anchor anchor);
 };
@@ -294,7 +299,7 @@ void SheetObjects::Impl::DrawTextIn(draw::Painter& painter, const std::vector<Ri
   objects::LayoutText(Fonts(), text, box.Width(), &painter, {box.left, y});
 }
 
-void SheetObjects::Impl::DrawText(draw::Painter& painter, Item& it) {
+void SheetObjects::Impl::DrawText(draw::Painter& painter, Item& it, const draw::Rect& at) {
   const std::vector<draw::TextBox>& boxes = it.drawing->TextBoxes();
   if (boxes.empty()) return;
   const draw::ColorContext colors = Colors();
@@ -310,7 +315,7 @@ void SheetObjects::Impl::DrawText(draw::Painter& painter, Item& it) {
   for (size_t i = 0; i < boxes.size(); ++i) {
     // The boxes are relative to the drawing's top left; Fit made the drawing the anchor's size.
     painter.Save();
-    painter.Transform(boxes[i].transform * draw::Matrix::Translate(it.rect.left, it.rect.top));
+    painter.Transform(boxes[i].transform * draw::Matrix::Translate(at.left, at.top));
     DrawTextIn(painter, it.texts[i], boxes[i].rect, boxes[i].anchor);
     painter.Restore();
   }
@@ -353,14 +358,15 @@ void SheetObjects::Draw(draw::Painter& painter, const draw::Rect& visible, const
   if (m.chartSheet) return;
   for (Impl::Item& it : m.items) {
     if ((options.printing && !it.prints) || Empty(it.rect)) continue;
+    const draw::Rect rect = Mirror(it.rect, options.mirrorX);
     // Room for outlines and shadows past the box.
-    const draw::Rect reach{it.rect.left - 20, it.rect.top - 20, it.rect.right + 20, it.rect.bottom + 20};
+    const draw::Rect reach{rect.left - 20, rect.top - 20, rect.right + 20, rect.bottom + 20};
     if (!Meets(reach, visible)) continue;
     if (it.chart) {
-      m.DrawChart(painter, it, it.rect);
+      m.DrawChart(painter, it, rect);
     } else if (it.drawing && !it.drawing->IsHidden()) {
-      it.drawing->Draw(painter, it.rect);
-      m.DrawText(painter, it);
+      it.drawing->Draw(painter, rect);
+      m.DrawText(painter, it, rect);
     }
   }
   DrawNotes(painter, visible, options);
@@ -369,7 +375,7 @@ void SheetObjects::Draw(draw::Painter& painter, const draw::Rect& visible, const
 std::vector<SheetObjects::Object> SheetObjects::Objects() const {
   std::vector<Object> out;
   for (const Impl::Item& it : impl_->items)
-    if (!Empty(it.rect)) out.push_back({it.name, it.rect, it.chart != nullptr});
+    if (!Empty(it.rect) && !(it.drawing && it.drawing->IsHidden())) out.push_back({it.name, it.rect, it.chart != nullptr, it.prints});
   return out;
 }
 
@@ -514,13 +520,15 @@ void Prepare(pugi::xml_node shape) {
     }
 }
 
-void TriangleAt(draw::Painter& painter, const draw::Rect& cell, draw::Color color) {
+// A note's corner mark: the cell's top right corner, or top left on a right-to-left sheet.
+void TriangleAt(draw::Painter& painter, const draw::Rect& cell, draw::Color color, bool rtl) {
   const float s = std::min({4.5f, cell.Width(), cell.Height()});
   if (!(s > 0)) return;
+  const float x = rtl ? cell.left : cell.right, in = rtl ? s : -s;
   draw::Path p;
-  p.MoveTo({cell.right - s, cell.top});
-  p.LineTo({cell.right, cell.top});
-  p.LineTo({cell.right, cell.top + s});
+  p.MoveTo({x + in, cell.top});
+  p.LineTo({x, cell.top});
+  p.LineTo({x, cell.top + s});
   p.Close();
   painter.FillPath(p, draw::Brush::Solid(color));
 }
@@ -644,25 +652,31 @@ void SheetObjects::PlaceNotes(const SheetLayout& layout) {
 
 void SheetObjects::DrawNotes(draw::Painter& painter, const draw::Rect& visible, const DrawOptions& options) {
   Impl& m = *impl_;
-  for (size_t i = 0; i < notes_.size(); ++i) {
+  // Excel prints notes as displayed only when the page setup says so.
+  const bool shownNotes =
+      !options.printing || m.book->GetSheet(m.sheet).Page().cellComments == CellComments::AsDisplayed;
+  for (size_t i = 0; i < notes_.size() && shownNotes; ++i) {
     const Impl::Note& d = m.notes[i];
-    if (Empty(d.shown) || !Meets(d.shown, visible)) continue;
+    const bool rtl = options.mirrorX > 0;
+    const draw::Rect shown = Mirror(d.shown, options.mirrorX), cell = Mirror(d.cell, options.mirrorX);
+    if (Empty(shown) || !Meets(shown, visible)) continue;
     // A shown note: a line from its cell's corner to the box, then the box.
-    if (!Empty(d.cell)) {
+    if (!Empty(cell)) {
       draw::Path line;
-      line.MoveTo({d.cell.right, d.cell.top});
-      line.LineTo({d.shown.left, d.shown.top});
+      line.MoveTo({rtl ? cell.left : cell.right, cell.top});
+      line.LineTo({rtl ? shown.right : shown.left, shown.top});
       draw::Pen pen;
       pen.brush = draw::Brush::Solid({0, 0, 0, 1});
       pen.width = 0.75f;
       painter.StrokePath(line, pen);
     }
-    DrawNote(painter, notes_[i], d.shown);
+    DrawNote(painter, notes_[i], shown);
   }
   if (options.printing || !options.indicators) return;
   for (size_t i = 0; i < notes_.size(); ++i) {
-    const draw::Rect& cell = m.notes[i].cell;
-    if (!Empty(cell) && Meets(cell, visible)) TriangleAt(painter, cell, notes_[i].threaded ? kThreadPurple : kNoteRed);
+    const draw::Rect cell = Mirror(m.notes[i].cell, options.mirrorX);
+    if (!Empty(cell) && Meets(cell, visible))
+      TriangleAt(painter, cell, notes_[i].threaded ? kThreadPurple : kNoteRed, options.mirrorX > 0);
   }
 }
 

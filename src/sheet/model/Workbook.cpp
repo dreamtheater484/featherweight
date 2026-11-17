@@ -93,6 +93,11 @@ int Workbook::FindSheet(std::string_view name) const {
   return -1;
 }
 
+std::optional<ErrorCode> Workbook::ValueError(uint32_t vm) const {
+  if (vm == 0 || vm > valueErrors_.size() || valueErrors_[vm - 1] == 0xFF) return std::nullopt;
+  return static_cast<ErrorCode>(valueErrors_[vm - 1]);
+}
+
 const Table* Workbook::FindTable(std::string_view name, size_t* sheet) const {
   for (size_t i = 0; i < sheets_.size(); ++i)
     for (const Table& t : sheets_[i]->Tables())

@@ -507,7 +507,7 @@ TEST(sheet_tables) {
                    "<table xmlns=\"" + std::string(kMain) + "\" id=\"3\" name=\"Table3\" displayName=\"Sales\" ref=\"B2:D7\" "
                    "totalsRowCount=\"1\"><autoFilter ref=\"B2:D6\"/><tableColumns count=\"3\"><tableColumn id=\"1\" name=\"Region\" "
                    "totalsRowLabel=\"Total\"/><tableColumn id=\"2\" name=\"Amount\" totalsRowFunction=\"sum\" dataDxfId=\"0\"/>"
-                   "<tableColumn id=\"3\" name=\"Tax\"><calculatedColumnFormula>Sales[[#This Row],[Amount]]*0.21</calculatedColumnFormula>"
+                   "<tableColumn id=\"3\" name=\"Tax_x000a_rate\"><calculatedColumnFormula>Sales[[#This Row],[Amount]]*0.21</calculatedColumnFormula>"
                    "</tableColumn></tableColumns><tableStyleInfo name=\"TableStyleMedium2\" showFirstColumn=\"0\" showLastColumn=\"0\" "
                    "showRowStripes=\"1\" showColumnStripes=\"0\"/></table>"});
   auto book = Open(parts, false);
@@ -523,7 +523,9 @@ TEST(sheet_tables) {
   CHECK(t->style.name == "TableStyleMedium2" && t->style.rowStripes && !t->style.columnStripes);
   CHECK(book->GetSheet(1).TableAt(6, 3) == t && book->GetSheet(1).TableAt(7, 3) == nullptr);
   CHECK(book->FindTable("Table3") == nullptr);
-  CHECK(t->FindColumn("tax") == 2 && t->FindColumn("Amount") == 1 && t->FindColumn("Amount ") == -1);
+  CHECK(t->columns[2].name == "Tax\nrate");  // _x000a_: a line break in the header
+  CHECK(t->FindColumn("TAX\nrate") == 2 && t->FindColumn("Amount") == 1 && t->FindColumn("Amount ") == -1);
+  CHECK(t->All() == t->ref && t->Headers() == (Range{1, 1, 1, 3}) && t->Totals() == (Range{6, 1, 6, 3}));
 }
 
 namespace {
@@ -583,4 +585,36 @@ TEST(sheet_table_styles) {
   }
   if (failures) std::printf("    %d of %zu cells differ from Excel\n", failures, std::size(kTableCells));
   CHECK_EQ(failures, 0);
+}
+
+// Excel writes #SPILL! and #CALC! as <v>#VALUE!</v> with vm=, its rich value saying which
+// (tests/office/excel/formulas.xlsx, saved by Excel 2021); the text stays as written.
+TEST(sheet_rich_value_errors) {
+  const auto path = std::filesystem::path(__FILE__).parent_path().parent_path() / "office" / "excel" / "formulas.xlsx";
+  std::ifstream in(path, std::ios::binary);
+  std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  fw::pkg::Status st;
+  auto pkg = test::OpenBytes(std::move(bytes), st);
+  CHECK(pkg != nullptr);
+  if (!pkg) return;
+  auto book = xlsx::Read(std::move(pkg), st, xlsx::ReadOptions{true});
+  CHECK(book != nullptr);
+  if (!book) return;
+  CHECK(book->ValueError(1) == ErrorCode::Spill && book->ValueError(2) == ErrorCode::Calc && !book->ValueError(3));
+  const Sheet& s = book->GetSheet(6);
+  const Value spill = s.GetValue(34, 1), calc = s.GetValue(50, 1);
+  CHECK(spill.type == ValueType::Error && spill.error == ErrorCode::Spill);
+  CHECK(calc.type == ValueType::Error && calc.error == ErrorCode::Calc);
+  std::string out;
+  CHECK(xlsx::WritePart(*book, s.PartName(), out).Ok());
+  CHECK(out.find("<c r=\"B35\" t=\"e\" cm=\"1\" vm=\"1\">") != std::string::npos);
+  CHECK(out.find("<v>#VALUE!</v>") != std::string::npos && out.find("#SPILL!") == std::string::npos);
+
+  // Dynamic arrays: cm points at cell metadata of type XLDAPR with fDynamic="1"; an array formula
+  // without it is Ctrl+Shift+Enter (sheet 4).
+  CHECK(book->DynamicArray(1) && !book->DynamicArray(2) && !book->DynamicArray(0));
+  FormulaInfo f;
+  CHECK(s.GetFormula(1, 1, f) && f.kind == FormulaKind::Array && f.master && f.dynamic);
+  CHECK(s.GetFormula(34, 1, f) && f.dynamic);
+  CHECK(book->GetSheet(3).GetFormula(1, 1, f) && f.kind == FormulaKind::Array && !f.dynamic);
 }
