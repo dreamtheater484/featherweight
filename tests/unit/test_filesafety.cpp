@@ -95,6 +95,28 @@ TEST(OwnerFile_BytesAsWordWritesThem) {
   CHECK(fw::pkg::ParseOwnerFile(std::vector<uint8_t>{200, 'a'}).empty());
 }
 
+// Excel's (measured on Excel 16, scratch probe): ~$ before the whole name; 165 bytes, the name
+// padded with spaces, its UTF-16 copy from offset 55.
+TEST(OwnerFile_ExcelsNameAndBytes) {
+  using fw::pkg::OwnerStyle;
+  CHECK(fw::pkg::OwnerFilePath(L"C:\\d\\Budget 2026.xlsx", OwnerStyle::Excel) == L"C:\\d\\~$Budget 2026.xlsx");
+  auto bytes = fw::pkg::OwnerFileBytes(L"Ann", OwnerStyle::Excel);
+  CHECK_EQ(bytes.size(), 165u);
+  CHECK(bytes[0] == 3 && bytes[1] == 'A' && bytes[3] == 'n' && bytes[4] == ' ' && bytes[54] == ' ');
+  CHECK(bytes[55] == 3 && bytes[56] == 0 && bytes[57] == 'A' && bytes[58] == 0 && bytes[63] == ' ' && bytes[64] == 0);
+  CHECK(bytes[163] == ' ' && bytes[164] == 0);
+  CHECK(fw::pkg::ParseOwnerFile(bytes) == L"Ann");
+  CHECK(fw::pkg::ParseOwnerFile(fw::pkg::OwnerFileBytes(L"Zoë Ålund", OwnerStyle::Excel)) == L"Zoë Ålund");
+  std::wstring dir = NewFolder(L"owner-excel");
+  std::wstring book = dir + L"\\Budget 2026.xlsx";
+  CHECK(test::WriteFileBytes(book, test::Bytes("xlsx")));
+  CHECK(fw::pkg::WriteOwner(book, L"Me", OwnerStyle::Excel));
+  CHECK(GetFileAttributesW((dir + L"\\~$Budget 2026.xlsx").c_str()) & FILE_ATTRIBUTE_HIDDEN);
+  CHECK(fw::pkg::ReadOwner(book, OwnerStyle::Excel) == L"Me" && fw::pkg::ReadOwner(book).empty());
+  fw::pkg::RemoveOwner(book, L"Me", OwnerStyle::Excel);
+  CHECK(fw::pkg::ReadOwner(book, OwnerStyle::Excel).empty());
+}
+
 TEST(OwnerFile_WrittenReadAndRemovedOnlyWhenOurs) {
   std::wstring dir = NewFolder(L"owner");
   std::wstring doc = dir + L"\\Document1.docx";

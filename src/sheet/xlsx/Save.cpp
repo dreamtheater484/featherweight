@@ -1056,6 +1056,15 @@ void CommitSave(Workbook& book, edit::Editor& ed, SavePlan& plan) {
   plan = SavePlan{};
 }
 
+std::vector<std::string> WrittenParts(const SavePlan& plan) {
+  std::vector<std::string> out;
+  for (const auto& [name, bytes] : plan.changes.replace) out.push_back(name);
+  for (const SavePlan::SheetJob& job : plan.sheets) out.push_back(job.part);
+  if (plan.strings) out.push_back(plan.stringsPart);
+  out.insert(out.end(), plan.changes.leaveOut.begin(), plan.changes.leaveOut.end());
+  return out;
+}
+
 bool HasMacros(const Workbook& book) {
   for (size_t i = 0; i < book.SheetCount(); ++i)
     if (book.GetSheet(i).Kind() == SheetKind::Macrosheet || book.GetSheet(i).Kind() == SheetKind::Dialogsheet)
@@ -1066,6 +1075,64 @@ bool HasMacros(const Workbook& book) {
     for (const pkg::Relationship& r : rels->items)
       if (r.type.ends_with("/vbaProject")) return true;
   return false;
+}
+
+}  // namespace fw::sheet::xlsx
+
+namespace fw::sheet::xlsx {
+
+std::unique_ptr<Workbook> NewWorkbook(pkg::Status& status) {
+  const std::string main = std::string(kMainNs), rel = std::string(kRelNs);
+  const std::string decl(kDecl);
+  const std::pair<const char*, std::string> parts[] = {
+      {"[Content_Types].xml",
+       decl + "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+              "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+              "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+              "<Override PartName=\"/xl/workbook.xml\" ContentType=\"" + std::string(kXlsxCt) + "\"/>"
+              "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"" + std::string(kSheetCt) + "\"/>"
+              "<Override PartName=\"/xl/styles.xml\" "
+              "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/></Types>"},
+      {"_rels/.rels",
+       decl + "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+              "<Relationship Id=\"rId1\" Type=\"" + std::string(kRelType) + "officeDocument\" Target=\"xl/workbook.xml\"/>"
+              "</Relationships>"},
+      {"xl/workbook.xml",
+       decl + "<workbook xmlns=\"" + main + "\" xmlns:r=\"" + rel + "\"><bookViews><workbookView/></bookViews>"
+              "<sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>"},
+      {"xl/_rels/workbook.xml.rels",
+       decl + "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+              "<Relationship Id=\"rId1\" Type=\"" + std::string(kRelType) + "worksheet\" Target=\"worksheets/sheet1.xml\"/>"
+              "<Relationship Id=\"rId2\" Type=\"" + std::string(kRelType) + "styles\" Target=\"styles.xml\"/>"
+              "</Relationships>"},
+      {"xl/worksheets/sheet1.xml",
+       decl + "<worksheet xmlns=\"" + main + "\" xmlns:r=\"" + rel + "\"><dimension ref=\"A1\"/>"
+              "<sheetViews><sheetView tabSelected=\"1\" workbookViewId=\"0\"/></sheetViews>"
+              "<sheetFormatPr defaultRowHeight=\"15\"/><sheetData/>"
+              "<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>"
+              "</worksheet>"},
+      {"xl/styles.xml",
+       decl + "<styleSheet xmlns=\"" + main + "\">"
+              "<fonts count=\"1\"><font><sz val=\"11\"/><color theme=\"1\"/><name val=\"Calibri\"/><family val=\"2\"/>"
+              "</font></fonts>"
+              "<fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill>"
+              "<fill><patternFill patternType=\"gray125\"/></fill></fills>"
+              "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>"
+              "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>"
+              "<cellXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/></cellXfs>"
+              "<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>"
+              "<dxfs count=\"0\"/><tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" "
+              "defaultPivotStyle=\"PivotStyleLight16\"/></styleSheet>"},
+  };
+  pkg::MemorySink sink;
+  pkg::ZipWriter zip(sink);
+  for (const auto& [name, xml] : parts) {
+    status = zip.Add(name, std::span(reinterpret_cast<const uint8_t*>(xml.data()), xml.size()));
+    if (!status.Ok()) return nullptr;
+  }
+  if (!(status = zip.Finish()).Ok()) return nullptr;
+  auto package = pkg::Package::Open(pkg::Snapshot::FromBytes(std::move(sink.bytes)), pkg::Limits::Default(), status);
+  return package ? Read(std::move(package), status, {.loadAll = true}) : nullptr;
 }
 
 }  // namespace fw::sheet::xlsx
