@@ -1,6 +1,12 @@
 // Rows, columns and cells inserted and deleted through the reference registry (S2 step 4):
 // formulas, names, merges, links, rules and the rest follow, as Excel does to the same file
 // (measured with scratchpad probes; Refs.h has the facts), and undo puts everything back.
+#include <windows.h>
+
+#include <chrono>
+#include <cstdio>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 #include "SheetTestUtil.h"
@@ -176,4 +182,115 @@ TEST(sheet_shift_saves_clean) {
   // J1 is H4 after three rows and two columns; its A5 became A8, then A10 under the cells shifted down in A.
   CHECK_EQ(FormulaText(again->GetSheet(0), 3, 7), FormulaText(book->GetSheet(0), 3, 7));
   CHECK_EQ(FormulaText(again->GetSheet(0), 3, 7), std::string("A10"));
+}
+
+// ---- Sheet operations (measured against Excel with scratchpad probe run3)
+
+namespace {
+
+// Sheet1: A1 =Sheet2!A1+1, A2 =SUM(Sheet1:Sheet3!A1), A3 =SUM(Sheet2:Sheet3!A1); a link to Sheet2!A1
+// in B1; a sparkline on Sheet2!A1:A3. Sheet2 and Sheet3: numbers in A1.
+std::unique_ptr<Workbook> ThreeSheets() {
+  std::string sparkline =
+      "<extLst><ext uri=\"{05C60535-1F16-4fd2-B633-F4F36F0B64E0}\" "
+      "xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:sparklineGroups "
+      "xmlns:xm=\"http://schemas.microsoft.com/office/excel/2006/main\"><x14:sparklineGroup><x14:sparklines><x14:sparkline>"
+      "<xm:f>Sheet2!A1:A3</xm:f><xm:sqref>K25</xm:sqref></x14:sparkline></x14:sparklines></x14:sparklineGroup>"
+      "</x14:sparklineGroups></ext></extLst>";
+  return OpenParts({"<sheetData>" + Row(1, F("A1", "Sheet2!A1+1")) + Row(2, F("A2", "SUM(Sheet1:Sheet3!A1)")) +
+                        Row(3, F("A3", "SUM(Sheet2:Sheet3!A1)")) + "</sheetData><hyperlinks><hyperlink ref=\"B1\" "
+                        "location=\"Sheet2!A1\" display=\"to two\"/></hyperlinks>" + sparkline,
+                    "<sheetData>" + Row(1, Num("A1", 2)) + "</sheetData>", "<sheetData>" + Row(1, Num("A1", 3)) + "</sheetData>"});
+}
+
+}  // namespace
+
+TEST(sheet_ops_delete_sheet_refs) {
+  auto book = ThreeSheets();
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.SetName(DefinedName{"OnTwo", -1, "Sheet2!$A$1:$A$3", false}));
+  CHECK(ed.DeleteSheet(1));
+  const Sheet& s1 = book->GetSheet(0);
+  CHECK_EQ(FormulaText(s1, 0, 0), std::string("#REF!+1"));
+  CHECK_EQ(FormulaText(s1, 1, 0), std::string("SUM(Sheet1:Sheet3!A1)"));  // a 3-D end that goes gives way
+  CHECK_EQ(FormulaText(s1, 2, 0), std::string("SUM(Sheet3!A1)"));
+  CHECK(book->FindName("OnTwo") && book->FindName("OnTwo")->formula == "#REF!");
+  CHECK(!book->FindName("Local", 1) && !book->FindName("Local", 0));  // its own names go with it
+  CHECK(book->FindName("Total") && book->FindName("Total")->formula == "Sheet1!$A$1");
+  CHECK(s1.Hyperlinks().size() == 1 && s1.Hyperlinks()[0].location == "Sheet2!A1");  // Excel leaves it
+  CHECK(s1.Text().afterData.find("<xm:sqref>K25</xm:sqref>") != std::string::npos);
+  CHECK(s1.Text().afterData.find("<xm:f>") == std::string::npos);  // the sparkline's data is gone
+  CHECK(ed.Undo());
+  CHECK(book->SheetCount() == 3 && book->GetSheet(1).Name() == "Sheet2");
+  CHECK_EQ(FormulaText(book->GetSheet(0), 0, 0), std::string("Sheet2!A1+1"));
+  CHECK_EQ(FormulaText(book->GetSheet(0), 2, 0), std::string("SUM(Sheet2:Sheet3!A1)"));
+  CHECK(book->FindName("OnTwo")->formula == "Sheet2!$A$1:$A$3" && book->FindName("Local", 1));
+  CHECK(book->GetSheet(0).Text().afterData.find("<xm:f>Sheet2!A1:A3</xm:f>") != std::string::npos);
+  CHECK(ed.Redo());
+  CHECK_EQ(FormulaText(book->GetSheet(0), 0, 0), std::string("#REF!+1"));
+}
+
+TEST(sheet_ops_move_sheet_3d) {
+  auto book = ThreeSheets();
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.MoveSheet(0, 2));  // Sheet1 last: Sheet2, Sheet3, Sheet1
+  const Sheet& s1 = book->GetSheet(2);
+  CHECK(s1.Name() == "Sheet1");
+  CHECK_EQ(FormulaText(s1, 0, 0), std::string("Sheet2!A1+1"));
+  CHECK_EQ(FormulaText(s1, 1, 0), std::string("SUM(Sheet2:Sheet3!A1)"));  // its end moved out of the span
+  CHECK_EQ(FormulaText(s1, 2, 0), std::string("SUM(Sheet2:Sheet3!A1)"));
+  CHECK(book->FindName("Local", 0) != nullptr);  // Sheet2's own name follows it
+  CHECK(ed.Undo());
+  CHECK_EQ(FormulaText(book->GetSheet(0), 1, 0), std::string("SUM(Sheet1:Sheet3!A1)"));
+  CHECK(ed.MoveSheet(2, 0));  // Sheet3 first; an end moved out of the span shrinks it
+  CHECK_EQ(FormulaText(book->GetSheet(1), 1, 0), std::string("SUM(Sheet1:Sheet2!A1)"));
+  CHECK_EQ(FormulaText(book->GetSheet(1), 2, 0), std::string("SUM(Sheet2!A1)"));
+}
+
+TEST(sheet_ops_rename_everywhere_but_links) {
+  auto book = ThreeSheets();
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.RenameSheet(1, "Data & More"));
+  const Sheet& s1 = book->GetSheet(0);
+  CHECK_EQ(FormulaText(s1, 0, 0), std::string("'Data & More'!A1+1"));
+  CHECK_EQ(FormulaText(s1, 2, 0), std::string("SUM('Data & More:Sheet3'!A1)"));
+  CHECK(s1.Text().afterData.find("<xm:f>'Data &amp; More'!A1:A3</xm:f>") != std::string::npos);
+  CHECK(s1.Hyperlinks()[0].location == "Sheet2!A1");
+  CHECK(book->FindName("Local", 1)->formula == "'Data & More'!$B$2");
+  CHECK(ed.Undo());
+  CHECK(book->GetSheet(0).Text().afterData.find("<xm:f>Sheet2!A1:A3</xm:f>") != std::string::npos);
+}
+
+// With FW_SHIFT_BENCH set to an .xlsx (build\budgets\million-cells.xlsx), prints how long the
+// structural edits take on its first sheet (plan section 11: 100 ms for inserting a row).
+TEST(sheet_shift_timing) {
+  wchar_t path[MAX_PATH];
+  DWORD n = GetEnvironmentVariableW(L"FW_SHIFT_BENCH", path, MAX_PATH);
+  if (n == 0 || n >= MAX_PATH) return;
+  std::ifstream in(path, std::ios::binary);
+  auto book = OpenZip(std::vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()));
+  if (!book) return;
+  Editor ed(*book);
+  auto time = [&](const char* what, const std::function<bool()>& fn) {
+    auto t0 = std::chrono::steady_clock::now();
+    bool ok = fn();
+    double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("  %-28s %8.1f ms%s\n", what, ms, ok ? "" : " (refused)");
+  };
+  std::printf("  %zu cells on the first sheet\n", book->GetSheet(0).CellCount());
+  for (int round = 0; round < 2; ++round) {
+    time("insert a row at 100", [&] { return static_cast<bool>(ed.InsertRows(0, 99, 1)); });
+    time("undo", [&] { return static_cast<bool>(ed.Undo()); });
+    time("delete a row at 100", [&] { return static_cast<bool>(ed.DeleteRows(0, 99, 1)); });
+    time("undo", [&] { return static_cast<bool>(ed.Undo()); });
+    time("insert a column at C", [&] { return static_cast<bool>(ed.InsertColumns(0, 2, 1)); });
+    time("undo", [&] { return static_cast<bool>(ed.Undo()); });
+    time("shift cells down at B100:C100", [&] {
+      return static_cast<bool>(ed.InsertCells(0, Range{99, 1, 99, 2}, Editor::Direction::DownOrUp));
+    });
+    time("undo", [&] { return static_cast<bool>(ed.Undo()); });
+  }
 }
