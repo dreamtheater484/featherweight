@@ -28,15 +28,10 @@ struct FitContext {
   int avail;  // pixels
 };
 
-// The width of a formatted value as the cell would show it: pads as wide as their characters,
-// fills at no width.
+// The width of a formatted value as Excel fits it to the cell: pads as spaces (an accounting
+// format's "_(" and "_)" don't make 45.678,68 "####" in 70 pixels), fills at no width.
 int ShownWidth(FontMeasure& m, const Formatted& f, const Font& font, const Font& base) {
-  int w = m.Width(f.text, font, base);
-  if (!f.pads.empty()) {
-    const int space = m.Width(L" ", font, base);
-    for (const Formatted::Pad& p : f.pads) w += m.Width(std::wstring_view(&p.as, 1), font, base) - space;
-  }
-  return w;
+  return m.Width(f.text, font, base);
 }
 
 bool Fits(void* context, const Formatted& f) {
