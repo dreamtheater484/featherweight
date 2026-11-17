@@ -267,6 +267,18 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         r = same(AddBorder(x));
         break;
       }
+      case JournalOp::AddCellStyle: {
+        CellStyle style;
+        style.name = f.S();
+        style.builtinId = f.Int();
+        style.outlineLevel = f.Int();
+        style.hidden = f.B();
+        style.customBuiltin = f.B();
+        Xf x;
+        if (!xlsx::ReadStyleItem(f.S(), x)) return damaged;
+        r = same(AddCellStyle(style, x));
+        break;
+      }
       case JournalOp::AddNumFmt: {
         const std::string code = f.S();
         r = same(AddNumFmt(code));

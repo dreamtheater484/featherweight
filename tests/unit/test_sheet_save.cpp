@@ -701,3 +701,49 @@ TEST(sheet_journal_refuses_damage) {
   std::string unknown = records + std::string("\x7f\x00", 2);
   CHECK(!replayOn(unknown, applied).first && applied == 4);
 }
+
+// A built-in cell style the workbook doesn't have yet (the styles gallery): added once, written
+// with its format, and found again by Excel's gallery as "Good".
+TEST(sheet_save_cell_style_added) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>", "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  edit::Journal journal;
+  ed.SetJournal(&journal);
+  Font green = book->GetStyles().Fonts()[0];
+  green.color = Color{Color::Kind::Rgb, 0xFF006100, 0};
+  Fill fill;
+  fill.pattern = PatternType::Solid;
+  fill.fg = Color{Color::Kind::Rgb, 0xFFC6EFCE, 0};
+  Xf styleXf;
+  styleXf.font = ed.AddFont(green);
+  styleXf.fill = ed.AddFill(fill);
+  styleXf.applyFont = styleXf.applyFill = true;
+  CellStyle good;
+  good.name = "Good";
+  good.builtinId = 26;
+  const uint32_t parent = ed.AddCellStyle(good, styleXf);
+  CHECK(parent == 1 && ed.AddCellStyle(good, styleXf) == 1 && ed.StylesDirty());
+  Xf cell = styleXf;
+  cell.parent = parent;
+  CHECK(ed.SetStyle(0, Range::Cell(0, 0), ed.AddXf(cell)));
+
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-cell-style");
+  CheckClean(saved);
+  const std::string styles = PartText(saved, "/xl/styles.xml");
+  CHECK(styles.find("<cellStyle name=\"Good\" xfId=\"1\" builtinId=\"26\"/>") != std::string::npos);
+  CHECK(InOrder(styles, {"<cellStyleXfs count=\"2\">", "<cellXfs", "<cellStyles count=\"1\">"}));
+  auto again = OpenZip(saved);
+  if (!again) return;
+  const Styles& s = again->GetStyles();
+  CHECK(s.CellStyles().size() == 1 && s.CellStyles()[0].name == "Good" && s.CellStyles()[0].xf == 1);
+  CHECK(s.CellXf(again->GetSheet(0).StyleAt(0, 0)).parent == 1);
+  CHECK(!ed.StylesDirty());
+
+  // The journal adds it again on the file as it was (which had no cell styles listed).
+  auto replayedBook = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>", "<sheetData/>"});
+  if (!replayedBook) return;
+  Editor replayed(*replayedBook);
+  CHECK(replayed.Replay(journal.All()).ok);
+  CHECK(replayedBook->GetStyles().CellStyles().size() == 1 && replayedBook->GetStyles().CellStyleXfs().size() == 2);
+}

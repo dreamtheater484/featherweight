@@ -413,6 +413,7 @@ struct Editor::State {
   int bookDirty = 0;
   bool bookViewDirty = false;
   size_t xfsAtSave = 0, fontsAtSave = 0, fillsAtSave = 0, bordersAtSave = 0, numFmtsAtSave = 0, stringsAtSave = 0;
+  size_t cellStylesAtSave = 0, cellStylesSaving = 0;  // cell style xfs and cell styles, together
   // A save in progress (BeginSave): what it writes, so that view changes and formats added
   // meanwhile still count as unsaved after it.
   bool saving = false;
@@ -436,6 +437,7 @@ struct Editor::State {
     bordersAtSave = st.Borders().size();
     numFmtsAtSave = st.CustomFormats().size();
     stringsAtSave = b.Strings().Size();
+    cellStylesAtSave = st.CellStyleXfs().size() + st.CellStyles().size();
   }
 
   void ViewChanged(const Sheet* s) {
@@ -1473,6 +1475,28 @@ Result Editor::MapStyles(int sheet, const Range& r, const std::function<uint32_t
   rec.rec.U(seen.size());
   for (const auto& [from, to] : seen) rec.rec.U(from).U(to);
   return rec.Done(result);
+}
+
+uint32_t Editor::AddCellStyle(const CellStyle& style, const Xf& styleXf) {
+  Rec rec(*this, JournalOp::AddCellStyle, [&](JournalRecord& w) {
+    w.S(style.name).I(style.builtinId).I(style.outlineLevel).B(style.hidden).B(style.customBuiltin);
+    w.S(xlsx::StyleItemXml(styleXf));
+  }, true);
+  const uint32_t at = [&]() -> uint32_t {
+    StylesBuilder sb(book_.GetStyles());
+    for (const CellStyle& s : sb.CellStyles())
+      if (style.builtinId >= 0 ? s.builtinId == style.builtinId && s.outlineLevel == style.outlineLevel
+                               : NameEqualsNoCase(s.name, style.name))
+        return s.xf;
+    sb.CellStyleXfs().push_back(styleXf);
+    CellStyle added = style;
+    added.xf = static_cast<uint32_t>(sb.CellStyleXfs().size() - 1);
+    sb.CellStyles().push_back(std::move(added));
+    return static_cast<uint32_t>(sb.CellStyleXfs().size() - 1);
+  }();
+  rec.rec.U(at);
+  rec.commit = true;
+  return at;
 }
 
 uint32_t Editor::AddXf(const Xf& xf) {
@@ -3737,6 +3761,7 @@ void Editor::BeginSave() {
   st.bordersSaving = styles.Borders().size();
   st.numFmtsSaving = styles.CustomFormats().size();
   st.stringsSaving = book_.Strings().Size();
+  st.cellStylesSaving = styles.CellStyleXfs().size() + styles.CellStyles().size();
 }
 
 bool Editor::Saving() const { return s_->saving; }
@@ -3779,6 +3804,7 @@ void Editor::Saved(std::vector<Written> sheets, bool stringsWritten, std::string
   st.bordersAtSave = st.bordersSaving;
   st.numFmtsAtSave = st.numFmtsSaving;
   st.stringsAtSave = st.stringsSaving;
+  st.cellStylesAtSave = st.cellStylesSaving;
   st.saving = false;
 }
 
@@ -3805,7 +3831,8 @@ bool Editor::StylesDirty() const {
   const Styles& st = book_.GetStyles();
   return st.CellXfs().size() != s_->xfsAtSave || st.Fonts().size() != s_->fontsAtSave ||
          st.Fills().size() != s_->fillsAtSave || st.Borders().size() != s_->bordersAtSave ||
-         st.CustomFormats().size() != s_->numFmtsAtSave;
+         st.CustomFormats().size() != s_->numFmtsAtSave ||
+         st.CellStyleXfs().size() + st.CellStyles().size() != s_->cellStylesAtSave;
 }
 
 bool Editor::StringsDirty() const { return book_.Strings().Size() != s_->stringsAtSave; }

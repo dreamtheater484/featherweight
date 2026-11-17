@@ -65,6 +65,7 @@ enum class JournalOp : uint8_t {
   Undo = 36,
   Redo = 37,
   DropHistory = 38,  // a save that removed sheets ended the undo history
+  AddCellStyle = 39,
 };
 
 // One record being written: its kind, then its fields in the order Replay reads them.

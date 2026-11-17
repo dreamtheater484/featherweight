@@ -143,6 +143,10 @@ class Editor {
   // ones alike; whole rows or columns as SetStyle.
   Result MapStyles(int sheet, const Range& r, const std::function<uint32_t(uint32_t)>& map);
   uint32_t AddXf(const Xf& xf);
+  // A cell style (Good, Heading 1...): the workbook's own with the same built-in id (or, for a
+  // custom one, name), else `style` added with `styleXf` as its format. Its cellStyleXfs index,
+  // for Xf::parent. Not undone, like the formats.
+  uint32_t AddCellStyle(const CellStyle& style, const Xf& styleXf);
   uint32_t AddFont(const Font& font);
   uint32_t AddFill(const Fill& fill);
   uint32_t AddBorder(const Border& border);
