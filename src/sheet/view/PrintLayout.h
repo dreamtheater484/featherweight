@@ -26,7 +26,7 @@ struct PrintPage {
   bool titleRows = false, titleCols = false;  // the print titles repeat on it
   int number = 1;                   // as printed (&P)
   bool chart = false;               // a chart sheet's page: its chart fills it
-  // A page of the notes printed at the end of the sheet: PrintInfo::objects' Notes()[first, end).
+  // A page of the notes printed at the end of the sheet: [first, end) of them in the cells' order.
   bool notes = false;
   uint32_t notesFirst = 0, notesEnd = 0;
 };
@@ -103,6 +103,7 @@ class PrintLayout {
   std::vector<double> colX_;   // column lefts at the page's scale, points at 100 %
   std::vector<Range> sparklines_;  // the cells the sheet's sparklines are in: they print
   std::map<int, int> digits_;  // the printer's digit in dots, by scale percent
+  std::vector<uint32_t> noteOrder_;  // the notes printed at the end, as indexes into Notes()
   std::optional<std::pair<uint32_t, uint32_t>> titleRows_, titleCols_;
 };
 
