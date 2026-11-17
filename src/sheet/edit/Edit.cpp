@@ -3710,56 +3710,91 @@ std::string AbsoluteName(const Range& r) {
 
 // A filter's autoFilter element, with the sheet's prefix `p`.
 std::string FilterXml(const SheetFilter& f, const std::string& p) {
-  auto num = [](double v) {
-    char buf[48];
-    return std::string(buf, xlsx::FormatNumber(v, 0, buf));
+  std::string out;
+  auto open = [&](const char* name) {
+    out += '<';
+    out += p;
+    out += name;
   };
-  auto attr = [](std::string_view name, std::string_view value) {
-    std::string out = " " + std::string(name) + "=\"";
+  auto close = [&](const char* name) {
+    out += "</";
+    out += p;
+    out += name;
+    out += '>';
+  };
+  auto attr = [&](const char* name, std::string_view value) {
+    out += ' ';
+    out += name;
+    out += "=\"";
     pkg::AppendEscapedAttribute(out, value);
-    return out + "\"";
+    out += '"';
   };
-  std::string out = "<" + p + "autoFilter" + attr("ref", RangeName(f.ref));
-  if (f.columns.empty()) return out + "/>";
-  out += ">";
+  auto num = [&](const char* name, double v) {
+    char buf[48];
+    attr(name, std::string_view(buf, xlsx::FormatNumber(v, 0, buf)));
+  };
+  open("autoFilter");
+  attr("ref", RangeName(f.ref));
+  if (f.columns.empty()) {
+    out += "/>";
+    return out;
+  }
+  out += '>';
   for (const FilterColumn& c : f.columns) {
     if (c.kind == FilterColumn::Kind::Other) {
       out += c.xml;
       continue;
     }
-    out += "<" + p + "filterColumn" + attr("colId", std::to_string(c.colId)) + ">";
+    open("filterColumn");
+    attr("colId", std::to_string(c.colId));
+    out += '>';
     switch (c.kind) {
       case FilterColumn::Kind::Values:
-        out += "<" + p + "filters" + (c.blank ? attr("blank", "1") : std::string());
+        open("filters");
+        if (c.blank) attr("blank", "1");
         if (c.values.empty()) {
           out += "/>";
           break;
         }
-        out += ">";
-        for (const std::string& v : c.values) out += "<" + p + "filter" + attr("val", v) + "/>";
-        out += "</" + p + "filters>";
+        out += '>';
+        for (const std::string& v : c.values) {
+          open("filter");
+          attr("val", v);
+          out += "/>";
+        }
+        close("filters");
         break;
       case FilterColumn::Kind::Custom:
-        out += "<" + p + "customFilters" + (c.both ? attr("and", "1") : std::string()) + ">";
-        for (const FilterColumn::Condition& k : c.conditions)
-          out += "<" + p + "customFilter" + (k.op == "equal" ? std::string() : attr("operator", k.op)) + attr("val", k.val) +
-                 "/>";
-        out += "</" + p + "customFilters>";
+        open("customFilters");
+        if (c.both) attr("and", "1");
+        out += '>';
+        for (const FilterColumn::Condition& k : c.conditions) {
+          open("customFilter");
+          if (k.op != "equal") attr("operator", k.op);
+          attr("val", k.val);
+          out += "/>";
+        }
+        close("customFilters");
         break;
       case FilterColumn::Kind::Top10:
-        out += "<" + p + "top10" + (c.bottom ? attr("top", "0") : std::string()) +
-               (c.percent ? attr("percent", "1") : std::string()) + attr("val", num(c.count)) +
-               attr("filterVal", num(c.threshold)) + "/>";
+        open("top10");
+        if (c.bottom) attr("top", "0");
+        if (c.percent) attr("percent", "1");
+        num("val", c.count);
+        num("filterVal", c.threshold);
+        out += "/>";
         break;
       default:
-        out += "<" + p + "dynamicFilter" +
-               attr("type", c.kind == FilterColumn::Kind::AboveAverage ? "aboveAverage" : "belowAverage") +
-               attr("val", num(c.threshold)) + "/>";
+        open("dynamicFilter");
+        attr("type", c.kind == FilterColumn::Kind::AboveAverage ? "aboveAverage" : "belowAverage");
+        num("val", c.threshold);
+        out += "/>";
         break;
     }
-    out += "</" + p + "filterColumn>";
+    close("filterColumn");
   }
-  return out + "</" + p + "autoFilter>";
+  close("autoFilter");
+  return out;
 }
 
 }  // namespace
