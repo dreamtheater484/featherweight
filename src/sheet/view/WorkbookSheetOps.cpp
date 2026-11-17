@@ -82,6 +82,8 @@ bool WorkbookView::GridCommandState(int cmd, CommandState& s) {
     case CmdPasteFormats: s.label = L"Paste formats"; s.enabled = cells; return true;
     case CmdPasteTranspose: s.label = L"Paste transposed"; s.enabled = cells; return true;
     case CmdAutoSum: s.label = L"AutoSum"; s.shortcut = L"Alt+="; s.enabled = cells; return true;
+    case CmdAutoFitRowHeight: s.label = L"AutoFit row height"; s.enabled = cells; return true;
+    case CmdAutoFitColumnWidth: s.label = L"AutoFit column width"; s.enabled = cells; return true;
     case CmdCalculateNow: s.label = L"Calculate now"; s.shortcut = L"F9"; s.enabled = Ready(); return true;
     case CmdCalculateSheet: s.label = L"Calculate sheet"; s.shortcut = L"Shift+F9"; s.enabled = Ready() && !ChartSheet(); return true;
     case CmdCalculateFull: s.label = L"Calculate everything"; s.shortcut = L"Ctrl+Alt+F9"; s.enabled = Ready(); return true;
@@ -159,6 +161,14 @@ bool WorkbookView::GridCommand(int cmd) {
     case CmdPasteFormats: Paste(PasteMode::Formats); return true;
     case CmdPasteTranspose: Paste(PasteMode::All, true); return true;
     case CmdAutoSum: AutoSum(); return true;
+    case CmdAutoFitRowHeight:
+    case CmdAutoFitColumnWidth: {
+      // Fitted to the selected cells, as Excel's; whole rows or columns to all their cells.
+      const Range sel = Selected();
+      if (cmd == CmdAutoFitRowHeight) AutoFit(true, sel.firstRow, sel.lastRow, WholeRows() ? nullptr : &sel);
+      else AutoFit(false, sel.firstCol, sel.lastCol, WholeColumns() ? nullptr : &sel);
+      return true;
+    }
     case CmdCalculateNow:
     case CmdCalculateFull:
       // Then at idle until done, in manual mode too.

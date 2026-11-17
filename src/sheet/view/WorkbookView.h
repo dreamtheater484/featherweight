@@ -286,7 +286,7 @@ class WorkbookView : public PagedView {
   float tabScroll_ = 0;
 
   // Mouse.
-  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag, Fill };
+  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag, Fill, Size };
   Mouse mouse_ = Mouse::None;
   float thumbGrab_ = 0;
   int hoverTab_ = -1;
@@ -366,6 +366,27 @@ class WorkbookView : public PagedView {
   // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
   bool GridCommand(int cmd);
   bool GridCommandState(int cmd, CommandState& s);
+  // ---- Sizes from the headers' edges (WorkbookPanels.cpp): drag to size, double-click to fit, as
+  // in Excel; the selected whole rows or columns all take the size when the edge is one of theirs.
+  struct SizeEdge {
+    bool rows = false;
+    uint32_t index = 0;  // the row above the edge, or the column before it
+    float start = 0;     // that row's top or column's left on screen (left to right)
+    float edge = 0;      // and the edge, where the drag started
+  };
+  std::optional<SizeEdge> SizeEdgeAt(int x, int y) const;
+  std::optional<SizeEdge> sizing_;
+  float sizeTo_ = 0;  // the edge while dragging
+  void FinishSizing();
+  void FitAtEdge(const SizeEdge& e);
+  void DrawSizeGuide(gfx::Canvas& c);
+  // The rows or columns first..last fitted to their cells (only those in `within`, when given).
+  void AutoFit(bool rows, uint32_t first, uint32_t last, const Range* within);
+  // Sizes in the file's units (points; characters with padding), 0 hiding, as one undo step.
+  void ApplySize(bool rows, uint32_t first, uint32_t last, double value, const char16_t* name);
+  // Excel's column width as it shows it (8.43) from pixels, and the file's width for it (9.140625).
+  double DisplayWidth(int px) const;
+  double FileWidth(double display) const;
   bool WholeRows() const;     // whole rows are selected (not everything)
   bool WholeColumns() const;
   int ShownNeighbour(int dir) const;  // the next shown sheet left (-1) or right (1) of this one, or -1
