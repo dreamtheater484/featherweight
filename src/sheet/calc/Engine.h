@@ -5,7 +5,8 @@
 // Ranges are tracked as ranges (SUM(A:A) is one dependency). A change marks the formulas that
 // depend on it dirty; recalculation then calculates them precedents first, time-sliced. After a
 // workbook opens, it calculates only what Excel would (volatile functions and what depends on them,
-// formulas without a cached value, everything with fullCalcOnLoad); manual mode is respected. A
+// formulas without a cached value, everything with fullCalcOnLoad or from an older calculation
+// engine, a sheet with its own fullCalcOnLoad); manual mode is respected. A
 // formula with something the engine can't calculate keeps its cached value, marked stale.
 
 #include <cstdint>
@@ -22,7 +23,10 @@ namespace fw::sheet::calc {
 
 struct CalcSettings {
   bool manual = false;          // calcPr calcMode="manual"
-  bool fullCalcOnLoad = false;  // calcPr fullCalcOnLoad="1"
+  // Everything is recalculated on opening: calcPr fullCalcOnLoad="1", or a file Excel doesn't take
+  // its cached values from (WorkbookCalc::Settings).
+  bool fullCalcOnLoad = false;
+  std::vector<int> fullCalcSheets;  // sheets with sheetCalcPr fullCalcOnLoad="1"
   bool iterate = false;         // calcPr iterate="1"
   int iterateCount = 100;
   double iterateDelta = 0.001;

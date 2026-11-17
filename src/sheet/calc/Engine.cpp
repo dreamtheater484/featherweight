@@ -510,7 +510,9 @@ void Engine::Opened(const CalcSettings& settings) {
     const Node& n = nodes_[id];
     if (n.flags & kFree) continue;
     bool vol = (n.f->flags & Formula::kVolatile) || (n.flags & kVolatileNode);
-    if (settings.fullCalcOnLoad || !(n.flags & kCached) || vol) MarkDirty(id);
+    bool sheet = std::find(settings.fullCalcSheets.begin(), settings.fullCalcSheets.end(), n.at.sheet) !=
+                 settings.fullCalcSheets.end();
+    if (settings.fullCalcOnLoad || sheet || !(n.flags & kCached) || vol) MarkDirty(id);
   }
   Propagate();
 }

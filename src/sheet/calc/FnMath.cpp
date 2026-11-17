@@ -388,7 +388,8 @@ void Subtotal(Call& c) {
           bool failed = false;
           static bool Cell(void* p, int32_t r, int32_t col, const CellView& cv) {
             auto* x = static_cast<Ctx*>(p);
-            if (x->skipHidden && x->c->m.host.RowHidden(x->sheet, r)) return true;
+            // 101-111 leave out hidden rows; every SUBTOTAL leaves out rows a filter hides.
+            if (x->skipHidden ? x->c->m.host.RowHidden(x->sheet, r) : x->c->m.host.RowFiltered(x->sheet, r)) return true;
             if (x->c->m.res && x->c->m.res->Subtotal(x->sheet, r, col)) return true;
             if (cv.type == Type::Error) {
               x->c->Fail(cv.err);

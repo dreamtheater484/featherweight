@@ -362,8 +362,10 @@ class MapHost : public Host {
   }
   double Now() override { return now; }
   void Store(int s, int32_t r, int32_t c, const Value& v) override { cells[{s, r, c}] = v; }
-  std::set<int32_t> hiddenRows;  // on every sheet
+  std::set<int32_t> hiddenRows;    // on every sheet
+  std::set<int32_t> filteredRows;  // hidden by a filter (also in hiddenRows)
   bool RowHidden(int, int32_t r) override { return hiddenRows.count(r) != 0; }
+  bool RowFiltered(int, int32_t r) override { return filteredRows.count(r) != 0; }
 };
 
 class TestResolver : public Resolver {
@@ -602,6 +604,18 @@ TEST(sheet_calc_engine_on_open) {
   m.engine.Opened(manual);
   CHECK(!m.engine.Pending());
   CHECK_EQ(m.Num("A1"), 0.0);
+  // A sheet with its own fullCalcOnLoad: its formulas, and what depends on them.
+  EngineFixture s;
+  s.Formula("Sheet2!A1", "5*2", 999);
+  s.Formula("A1", "Sheet2!A1+1", 999);
+  s.Formula("B1", "3*2", 999);
+  CalcSettings sheet;
+  sheet.fullCalcSheets = {1};
+  s.engine.Opened(sheet);
+  s.engine.Recalculate();
+  CHECK_EQ(s.Num("Sheet2!A1"), 10.0);
+  CHECK_EQ(s.Num("A1"), 11.0);
+  CHECK_EQ(s.Num("B1"), 999.0);
 }
 
 TEST(sheet_calc_engine_circular_and_iterative) {
@@ -705,6 +719,29 @@ TEST(sheet_calc_engine_aggregate) {
   CHECK(v.type == Type::Error && v.err == Err::Num);
   CHECK_EQ(f.Num("B7"), 1.0);
   CHECK_EQ(f.Num("B8"), 1.0);
+}
+
+TEST(sheet_calc_engine_subtotal_filtered) {
+  // Every SUBTOTAL leaves out rows a filter hides; AGGREGATE takes them as other hidden rows
+  // (measured in Excel 2021 on POI's ConditionalFormattingSamples, a table with an icon filter).
+  EngineFixture f;
+  f.Number("A1", 1);
+  f.Number("A2", 2);  // hidden by hand
+  f.Number("A3", 4);  // filtered
+  f.host.hiddenRows = {1, 2};
+  f.host.filteredRows = {2};
+  f.Formula("B1", "SUBTOTAL(9,A1:A3)");
+  f.Formula("B2", "SUBTOTAL(109,A1:A3)");
+  f.Formula("B3", "SUBTOTAL(3,A1:A3)");
+  f.Formula("B4", "_xlfn.AGGREGATE(9,4,A1:A3)");
+  f.Formula("B5", "_xlfn.AGGREGATE(9,5,A1:A3)");
+  f.engine.Opened(Full());
+  f.engine.Recalculate();
+  CHECK_EQ(f.Num("B1"), 3.0);
+  CHECK_EQ(f.Num("B2"), 1.0);
+  CHECK_EQ(f.Num("B3"), 2.0);
+  CHECK_EQ(f.Num("B4"), 7.0);
+  CHECK_EQ(f.Num("B5"), 1.0);
 }
 
 namespace {
