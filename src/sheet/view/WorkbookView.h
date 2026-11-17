@@ -18,6 +18,7 @@
 #include "sheet/view/CellEditor.h"
 #include "sheet/view/Grid.h"
 #include "sheet/view/PrintLayout.h"
+#include "sheet/view/WorkbookFile.h"
 #include "text/Fonts.h"
 
 namespace fw::sheet::calc {
@@ -51,7 +52,7 @@ class WorkbookView : public PagedView {
   bool Ready() const override { return book_ != nullptr; }
   const std::wstring& Path() const override { return path_; }
   std::wstring Title() const override;
-  bool Modified() const override { return false; }
+  bool Modified() const override { return file_ && file_->Dirty(); }
   PagedView* Paged() override { return preview_ ? this : nullptr; }
 
   void SetViewport(const RECT& rc, float ui) override;
@@ -97,6 +98,13 @@ class WorkbookView : public PagedView {
 
   bool Save(const std::wstring& path, std::wstring& error) override;
   SaveFormat SaveAsFormat() const override;
+  // CSV (s2-format): an Excel workbook saves a copy of its first sheet's values as CSV; a CSV file's
+  // Save As suggests a workbook; saving a CSV that holds more than values asks first (the banner).
+  std::vector<SaveFormat> CopyFormats() const override;
+  bool SaveCopy(const std::wstring& path, size_t format, std::wstring& error) override;
+  std::wstring SuggestedSavePath() const override;
+  std::wstring FormatLoss(const std::wstring& path) const override;
+  void KeepFormat() override { keepFormat_ = true; }
   bool CanPrint() const override { return Ready(); }
   PrintOutcome Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) override;
   bool CanExportPdf() const override { return Ready(); }
@@ -324,6 +332,10 @@ class WorkbookView : public PagedView {
   void SyncEngine(const std::vector<edit::Change>& changes);
   bool EditRefused(const edit::Result& r);  // shows why; true when it failed
   std::unique_ptr<edit::Editor> edit_;
+  // The tab's file, for CSV tabs so far (s2-format; s2-grid's file step gives every tab one). After
+  // the workbook and its editor, so it goes first.
+  std::unique_ptr<WorkbookFile> file_;
+  bool keepFormat_ = false;  // "Keep CSV" chosen: no banner on the next saves
   // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
   bool GridCommand(int cmd);
   bool GridCommandState(int cmd, CommandState& s);

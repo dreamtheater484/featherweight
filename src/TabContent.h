@@ -183,6 +183,11 @@ class TabContent {
   virtual bool SaveCopy(const std::wstring& /*path*/, size_t /*format*/, std::wstring& /*error*/) { return false; }
   // Where Save As starts: the file, or for a tab without one (a new document) a suggested name.
   virtual std::wstring SuggestedSavePath() const { return Path(); }
+  // What saving to `path` would leave out, for a banner before saving (a workbook with formulas or
+  // formats saved as CSV); empty when nothing is lost, or once the user chose to keep the format.
+  virtual std::wstring FormatLoss(const std::wstring& /*path*/) const { return {}; }
+  // The user chose to keep the format anyway (the banner's "Keep CSV"): FormatLoss is empty now.
+  virtual void KeepFormat() {}
   // Editors: unsaved changes go to the recovery folder now and then (the window's timer).
   virtual void Autosave() {}
   // Editors: whether the file changed on disk, when the window or the tab is activated. Each

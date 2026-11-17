@@ -156,6 +156,8 @@ class App : public PdfHost, public DropHost {
   bool CloseTab(int index);
   bool ConfirmClose(TabContent* view);
   bool SaveActive(bool saveAs);
+  // Saves the active tab to `path`, after the banner when its format loses something (CSV).
+  bool SaveActiveTo(std::wstring path, bool saveAs);
   void PrintActive();
   // Export PDF: asks where, then writes the tab's pages there.
   void ExportPdfActive();
@@ -295,8 +297,9 @@ class App : public PdfHost, public DropHost {
   std::wstring bannerUpdateVersion_;
   enum BannerActions {
     kActUpdate = 1, kActDownload, kActSkip, kActNotNow = 5, kActSaveAs, kActRecover, kActDiscard, kActReload,
-    kActMakeDefault = 20
+    kActKeepFormat, kActMakeDefault = 20
   };
+  std::wstring keepFormatPath_;  // the save the "Keep CSV" banner waits on
   // (kActMakeDefault + fw::FileKind: the default-app offer for that kind of file)
 
   // Files

@@ -650,6 +650,7 @@ bool WorkbookView::CommitEdit(bool fill) {
 
 void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
   SyncEngine(changes);
+  if (file_) file_->Changed(Ed().Modified(), {});
   if (!pasting_) clip_.reset();  // an edit ends the copied cells' border, as in Excel
   bool sheets = false, layout = false;
   for (const edit::Change& c : changes) {
