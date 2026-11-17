@@ -57,6 +57,10 @@ class SheetObjects {
     // from Notes()).
     bool printing = false;
     bool indicators = true;  // the notes' and comments' corner marks
+    // A right-to-left sheet: where objects, notes and indicators go is mirrored, x becoming
+    // mirrorX - x (the sheet's width, or whatever the caller mirrors about); what they show isn't
+    // flipped, and indicators sit in the cells' top left corners. 0: left to right.
+    float mirrorX = 0;
   };
   // Draws, in their order, the objects that meet `visible` (sheet points), then the shown notes
   // and the indicators. The painter's transform maps sheet points to the device; the caller clips

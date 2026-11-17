@@ -125,6 +125,17 @@ TEST(sheet_objects_pictures) {
   CHECK(s.End());
   CHECK(s.At(100, 60) != 0xFFFFFF);  // the one-cell picture
   CHECK(s.At(390, 290) == 0xFFFFFF);
+
+  // A right-to-left sheet 400 points wide: the one-cell picture moves to 232-352.
+  drawtest::Surface rtl(400, 300);
+  {
+    draw::D2DPainter p(rtl.dc.Get());
+    SheetObjects::DrawOptions options;
+    options.mirrorX = 400;
+    objects->Draw(p, {0, 0, 400, 300}, options);
+  }
+  CHECK(rtl.End());
+  CHECK(rtl.At(300, 60) != 0xFFFFFF && rtl.At(60, 60) == 0xFFFFFF);
 }
 
 TEST(sheet_objects_charts) {
