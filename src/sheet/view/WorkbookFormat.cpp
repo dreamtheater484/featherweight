@@ -1064,8 +1064,23 @@ bool WorkbookView::ApplyCellStyle(int index) {
   CellStyle style;
   style.name = WideToUtf8(s.name);
   style.builtinId = s.builtinId;
+  // The workbook's own style, when it had one before (a file from Excel may define it its way):
+  // the cell takes the parts that one covers, as Excel applies it.
+  std::optional<Xf> own;
+  for (const CellStyle& cs : st.CellStyles())
+    if (cs.builtinId == s.builtinId && cs.xf < st.CellStyleXfs().size()) own = st.CellStyleXfs()[cs.xf];
   const uint32_t parent = ed.AddCellStyle(style, styleXf);
   const std::u16string name(s.name.begin(), s.name.end());
+  if (own)
+    return ChangeFormat(name, [&](Xf& x) {
+      x.parent = parent;
+      if (own->applyFont) x.font = own->font, x.applyFont = true;
+      if (own->applyFill) x.fill = own->fill, x.applyFill = true;
+      if (own->applyBorder) x.border = own->border, x.applyBorder = true;
+      if (own->applyNumFmt) x.numFmt = own->numFmt, x.applyNumFmt = own->numFmt != 0;
+      if (own->applyAlignment) x.alignment = own->alignment, x.applyAlignment = false;
+      if (own->applyProtection) x.protection = own->protection, x.applyProtection = false;
+    });
   return ChangeFormat(name, [&](Xf& x) {
     x.parent = parent;
     if (fonts) x.font = fontId, x.applyFont = true;
