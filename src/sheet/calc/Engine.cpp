@@ -596,7 +596,8 @@ bool Engine::Ready(const Area& a) {
   if (dirtyCells_->count == 0) return true;
   bool ready = true;
   uint32_t self = stack_.empty() ? UINT32_MAX : stack_.back().node;
-  for (int s = a.s1; s <= a.s2 && ready; ++s)
+  for (int s = a.s1; s <= a.s2 && ready; ++s) {
+    if (onlySheet_ >= 0 && s != onlySheet_) continue;
     dirtyCells_->Each(s, a, [&](int32_t r, int32_t c) {
       uint32_t id = NodeAt(s, r, c);
       if (id == UINT32_MAX || id == self) {
@@ -616,6 +617,7 @@ bool Engine::Ready(const Area& a) {
       }
       return true;
     });
+  }
   return ready;
 }
 
@@ -755,7 +757,9 @@ bool Engine::Recalculate(double budgetMs) {
   std::vector<Area> areas;
   for (;;) {
     if (stack_.empty()) {
-      while (!pending_.empty() && nodes_[pending_.back()].state != kDirty) pending_.pop_back();
+      while (!pending_.empty() && (nodes_[pending_.back()].state != kDirty ||
+                                   (onlySheet_ >= 0 && nodes_[pending_.back()].at.sheet != onlySheet_)))
+        pending_.pop_back();
       if (pending_.empty()) {
         if (settings_.iterate && !circularNodes_.empty()) Iterate();
         circularNodes_.clear();
@@ -778,7 +782,8 @@ bool Engine::Recalculate(double budgetMs) {
         areas.clear();
         Precedents(n, areas);
         for (const Area& a : areas)
-          for (int s = a.s1; s <= a.s2; ++s)
+          for (int s = a.s1; s <= a.s2; ++s) {
+            if (onlySheet_ >= 0 && s != onlySheet_) continue;
             dirtyCells_->Each(s, a, [&](int32_t r, int32_t c) {
               uint32_t m = NodeAt(s, r, c);
               if (m == UINT32_MAX || m == id) {
@@ -799,6 +804,7 @@ bool Engine::Recalculate(double budgetMs) {
               }
               return true;
             });
+          }
       }
       continue;
     }
@@ -823,6 +829,22 @@ bool Engine::Recalculate(double budgetMs) {
       if ((Seconds() - start) * 1000 > budgetMs) return false;
     }
   }
+}
+
+void Engine::CalculateSheet(int sheet) {
+  Propagate();
+  for (uint32_t id = 0; id < nodes_.size(); ++id) {
+    const Node& n = nodes_[id];
+    if (n.at.sheet == sheet && !(n.flags & kFree) && ((n.f->flags & Formula::kVolatile) || (n.flags & kVolatileNode)))
+      MarkDirty(id);
+  }
+  Propagate();
+  onlySheet_ = sheet;
+  Recalculate(1e300);
+  onlySheet_ = -1;
+  pending_.clear();  // the other sheets' dirty formulas, for F9
+  for (uint32_t id = 0; id < nodes_.size(); ++id)
+    if (nodes_[id].state == kDirty) pending_.push_back(id);
 }
 
 void Engine::CalculateCell(const Cell& at) {
