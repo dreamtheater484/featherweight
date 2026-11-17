@@ -28,16 +28,16 @@ As S1 and S2: Excel 2021 on this PC, Windows' regional format en-NL. Excel autom
 
 Integration branch: `claude/s3-int`, made from `claude/s2-int` (S2's merged state) plus `claude/s3-calc`. Each session works on its own branch from it, pushes, and says in its turn-end report what's ready to merge. **The coordinator integrates:** merges into `claude/s3-int`, builds, runs ctest, pushes; at the end one PR into `main`, which the coordinator merges. Sessions merge only `origin/claude/s3-int`, never each other's branches.
 
-S3 runs with fresh sessions: the S2 sessions' contexts are full. Their state notes and the git history are the hand-over.
+The S2 sessions carry on (renamed), each with the piece closest to what it built; their contexts compact as they fill, and the state notes and the git history carry the work over.
 
 | Piece | Session | Weight | Size budget |
 |---|---|---|---|
-| Charts created and edited; pictures and shapes inserted | s3-charts | 24 % | 400 KB |
-| Tables, conditional formatting, data validation | s3-data | 22 % | 350 KB |
-| Notes and comments written, hyperlinks, protection | s3-review | 14 % | 200 KB |
-| Page setup, print preview, Export PDF | s3-print | 12 % | 150 KB |
-| Functions, dynamic arrays while editing, names | s3-calc | 10 % (about 7 % done) | 250 KB (170.5 KB used) |
-| Torture gate extended, "created as Excel shows it", budgets, checklist | s3-corpus | 13 % | 0 (tools only) |
+| Charts created and edited; pictures and shapes inserted | s3-charts (was s2-model) | 24 % | 400 KB |
+| Tables, conditional formatting, data validation | s3-data (was s2-format) | 22 % | 350 KB |
+| Notes and comments written, hyperlinks, protection | s3-review (was s2-grid) | 14 % | 200 KB |
+| Page setup, print preview, Export PDF | s3-calc, after its own piece | 12 % | 150 KB |
+| Functions, dynamic arrays while editing, names | s3-calc (was s2-calc) | 10 % (about 7 % done) | 250 KB (170.5 KB used) |
+| Torture gate extended, "created as Excel shows it", budgets, checklist | s3-corpus (was s2-corpus) | 13 % | 0 (tools only) |
 | Final gate | coordinator | 5 % | 0 |
 
 The size budgets add up to 1.35 MB; each piece measures with the linker-map method and records it in `tests/budgets/ledger.json` with a reason.
