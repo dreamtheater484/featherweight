@@ -4,10 +4,13 @@
 // the model and writes recalculated values back with Sheet::SetValue.
 //
 //   WorkbookCalc calc(book);
-//   calc.Load();                     // every formula, the defined names and calcPr
+//   while (!calc.OpenStep(8)) { /* the next idle slice */ }  // the app, after opening
+//
+//   calc.Load();                     // tools: every formula and the defined names at once
 //   calc.engine().Opened(calc.Settings());
-//   while (!calc.engine().Recalculate(8)) { /* the next idle slice */ }
+//   calc.engine().Recalculate();
 
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -39,6 +42,16 @@ class WorkbookCalc : public Host {
   CalcSettings Settings() const;
   Engine& engine() { return *engine_; }
 
+  // After opening (the app, at idle, once the shown sheet is on screen): what Load() does, then the
+  // dependency graph, then the recalculation Excel does when it opens a file (volatile functions
+  // and what depends on them, formulas without a cached value, everything with fullCalcOnLoad;
+  // nothing in manual mode), about `budgetMs` at a time. True once done; nothing runs after that
+  // until an edit. A formula with an unsupported function keeps its cached value: engine().Stale().
+  bool OpenStep(double budgetMs);
+  bool Opening() const { return phase_ != Phase::kDone; }
+  // Counts the recalculated values that differ from what their cells showed (repaint when it moves).
+  uint64_t Changes() const { return changes_; }
+
   // Host
   int SheetCount() const override;
   CellView Cell(int sheet, int32_t row, int32_t col) override;
@@ -53,7 +66,17 @@ class WorkbookCalc : public Host {
   const ConvLocale& Conv() const override { return conv_; }
 
  private:
+  enum class Phase : uint8_t { kSheets, kFormulas, kGraph, kRecalc, kDone };
+  // Load()'s work until `deadline` (Seconds-like, steady clock): true once the formulas are in.
+  bool LoadSome(double deadline);
+
   Workbook& book_;
+  Phase phase_ = Phase::kSheets;
+  size_t sheet_ = 0;                // kSheets, kFormulas: the sheet being read
+  uint32_t row_ = 0, col_ = 0;      // kFormulas: the next cell
+  std::map<std::pair<uint32_t, uint32_t>, std::shared_ptr<const Formula>> shared_;  // this sheet's shared formulas
+  LoadStats stats_;
+  uint64_t changes_ = 0;
   const NumLocale* locale_;
   ConvLocale conv_;
   std::unique_ptr<Engine> engine_;

@@ -171,17 +171,19 @@ class Engine::DirtyCells {
 
 class Engine::Graph {
  public:
-  void Build(Engine& e) {
-    *this = Graph();
-    struct KeyHash {
-      size_t operator()(const std::pair<uint64_t, uint64_t>& k) const {
-        return std::hash<uint64_t>()(k.first * 0x9E3779B97F4A7C15ull ^ k.second);
-      }
-    };
-    std::unordered_map<std::pair<uint64_t, uint64_t>, uint32_t, KeyHash> ids;
-    std::vector<std::pair<uint32_t, uint32_t>> edges;  // range, node
+  // Builds the graph from the engine's formulas, until `deadline` (Seconds()): true once built,
+  // false to go on in the next call. Abandon() makes the next call start over.
+  bool Build(Engine& e, double deadline = 1e300) {
+    if (!building_) {
+      *this = Graph();
+      building_ = true;
+    }
+    auto& ids = ids_;
+    auto& edges = edges_;
     std::vector<Area> areas;
-    for (uint32_t n = 0; n < e.nodes_.size(); ++n) {
+    const bool started = next_ < e.nodes_.size();
+    for (uint32_t& n = next_; n < e.nodes_.size(); ++n) {
+      if ((n & 255) == 0 && n && Seconds() > deadline) return false;
       Node& node = e.nodes_[n];
       if (node.flags & kFree) continue;
       areas.clear();
@@ -200,6 +202,11 @@ class Engine::Graph {
           edges.emplace_back(it->second, n);
         }
     }
+    // Indexing takes a slice of its own (a few ms for 50,000 formulas).
+    if (started && deadline < 1e300 && e.nodes_.size() > 4096) return false;
+    building_ = false;
+    next_ = 0;
+    ids = {};
     std::sort(edges.begin(), edges.end());
     edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
     start_.assign(ranges_.size() + 1, 0);
@@ -207,6 +214,7 @@ class Engine::Graph {
     for (size_t i = 1; i < start_.size(); ++i) start_[i] += start_[i - 1];
     deps_.resize(edges.size());
     for (size_t i = 0; i < edges.size(); ++i) deps_[i] = edges[i].second;
+    edges = {};
     seen_.assign(ranges_.size(), 0);
     // Index the ranges.
     for (uint32_t id = 0; id < ranges_.size(); ++id) {
@@ -226,7 +234,9 @@ class Engine::Graph {
     }
     for (auto& v : narrowCols_) std::sort(v.begin(), v.end());
     for (auto& iv : wide_) iv.Build();
+    return true;
   }
+  void Abandon() { building_ = false; }
 
   // fn(node) for each formula reading a cell of `a` (on sheet s); a node can come more than once.
   template <class F>
@@ -252,6 +262,16 @@ class Engine::Graph {
   }
 
  private:
+  struct KeyHash {
+    size_t operator()(const std::pair<uint64_t, uint64_t>& k) const {
+      return std::hash<uint64_t>()(k.first * 0x9E3779B97F4A7C15ull ^ k.second);
+    }
+  };
+  // While building: the next node, each range's id, the (range, node) edges.
+  bool building_ = false;
+  uint32_t next_ = 0;
+  std::unordered_map<std::pair<uint64_t, uint64_t>, uint32_t, KeyHash> ids_;
+  std::vector<std::pair<uint32_t, uint32_t>> edges_;
   std::vector<Area> ranges_;
   std::vector<uint32_t> start_, deps_;
   std::unordered_map<uint32_t, Intervals> narrow_;
@@ -297,11 +317,11 @@ bool Engine::DefineName(std::string_view name, int scope, std::string_view text)
   for (auto& [s, def] : scopes)
     if (s == scope) {
       def = std::move(f);
-      graphStale_ = true;
+      GraphChanged();
       return true;
     }
   scopes.emplace_back(scope, std::move(f));
-  graphStale_ = true;
+  GraphChanged();
   return true;
 }
 
@@ -350,7 +370,7 @@ void Engine::SetFormula(const Cell& at, std::shared_ptr<const Formula> f, bool c
   n.flags = static_cast<uint8_t>((cached ? kCached : 0) | (dynamic ? kDynamicArray : 0));
   for (int32_t r = n.out.r1; r <= n.out.r2; ++r)
     for (int32_t c = n.out.c1; c <= n.out.c2; ++c) at_[Key(at.sheet, r, c)] = id;
-  graphStale_ = true;
+  GraphChanged();
 }
 
 void Engine::ClearFormula(const Cell& at) {
@@ -363,13 +383,25 @@ void Engine::ClearFormula(const Cell& at) {
   n = Node();
   n.flags = kFree;
   free_.push_back(id);
+  GraphChanged();
+}
+
+void Engine::GraphChanged() {
   graphStale_ = true;
+  graph_->Abandon();
 }
 
 void Engine::EnsureGraph() {
   if (!graphStale_) return;
   graph_->Build(*this);
   graphStale_ = false;
+}
+
+bool Engine::BuildGraph(double budgetMs) {
+  if (!graphStale_) return true;
+  if (!graph_->Build(*this, Seconds() + budgetMs / 1000)) return false;
+  graphStale_ = false;
+  return true;
 }
 
 void Engine::Collect(const uint8_t* code, size_t size, const Cell& at, std::vector<Area>& out, bool* volatileName,

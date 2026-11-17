@@ -1,4 +1,4 @@
-// The dynamic-array functions: SEQUENCE, FILTER, UNIQUE, SORT. Their results are arrays, which a
+// The dynamic-array functions: SEQUENCE, FILTER, UNIQUE, SORT, SORTBY. Their results are arrays, which a
 // spilling formula shows across its range. Behavior checked against Excel 2021 (see the cases in
 // tests/unit/make_sheet_calc_cases.py).
 
@@ -250,6 +250,48 @@ void Sort(Call& c) {
   std::stable_sort(lines.begin(), lines.end(), [&](int32_t x, int32_t y) {
     for (const Key& k : keys) {
       int r = CompareForSort(Elem(a, x, k.line, byCol), Elem(a, y, k.line, byCol), k.descending);
+      if (r) return r < 0;
+    }
+    return false;
+  });
+  c.out = Pick(a, lines, byCol);
+}
+
+// SORTBY(array, by1, [order1], by2, [order2], ...): the array's rows in the order of the by-arrays,
+// each one column as tall as the array (or its columns, by rows as wide as it; all one way).
+void SortBy(Call& c) {
+  Value arr;
+  if (!AsArray(c, 0, arr)) return;
+  const Array& a = arr.array();
+  struct Key {
+    Value by;
+    bool descending;
+  };
+  std::vector<Key> keys;
+  int dir = 0;  // 1: by columns (sorts rows), 2: by rows (sorts columns)
+  for (int i = 1; i < c.argc; i += 2) {
+    if (!c.Has(i)) return c.Fail(Err::Value);
+    Key k;
+    if (!AsArray(c, i, k.by)) return;
+    double o = 1;
+    if (i + 1 < c.argc && !c.Number(i + 1, o, 1)) return;
+    if (o != 1 && o != -1) return c.Fail(Err::Value);
+    k.descending = o == -1;
+    const Array& b = k.by.array();
+    int d = b.cols() == 1 && b.rows() == a.rows() ? 1 : b.rows() == 1 && b.cols() == a.cols() ? 2 : 0;
+    if (d == 1 && dir == 2 && b.rows() == 1 && b.cols() == a.cols()) d = 2;  // 1 x 1 goes either way
+    if (d == 0 || (dir && d != dir)) return c.Fail(Err::Value);
+    dir = d;
+    keys.push_back(std::move(k));
+  }
+  const bool byCol = dir == 2;
+  int32_t n = byCol ? a.cols() : a.rows();
+  std::vector<int32_t> lines(static_cast<size_t>(n));
+  for (int32_t i = 0; i < n; ++i) lines[static_cast<size_t>(i)] = i;
+  std::stable_sort(lines.begin(), lines.end(), [&](int32_t x, int32_t y) {
+    for (const Key& k : keys) {
+      const Array& b = k.by.array();
+      int r = CompareForSort(b.data()[x], b.data()[y], k.descending);
       if (r) return r < 0;
     }
     return false;

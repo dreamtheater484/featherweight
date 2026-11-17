@@ -1,6 +1,7 @@
 #include "sheet/calc/Bind.h"
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
 #include <map>
 
@@ -42,6 +43,11 @@ WorkbookCalc::WorkbookCalc(Workbook& book, const NumLocale* locale)
     conv_.dateOrder = locale->dateOrder;
     conv_.currency = Narrow(locale->currency);
   }
+  // The sheets' and defined names now (cheap), so formulas compile at once (conditional formats).
+  std::vector<std::string> names;
+  for (size_t i = 0; i < book_.SheetCount(); ++i) names.push_back(book_.GetSheet(i).Name());
+  engine_->SetSheets(std::move(names));
+  for (const DefinedName& n : book_.Names()) engine_->DefineName(n.name, n.sheet, n.formula);
 }
 WorkbookCalc::~WorkbookCalc() = default;
 
@@ -71,14 +77,24 @@ void WorkbookCalc::Store(int sheet, int32_t row, int32_t col, const Value& v) {
     case Type::Error: m = sheet::Value::Error(ToModel(v.error())); break;
     default: break;
   }
-  book_.GetSheet(static_cast<size_t>(sheet)).SetValue(static_cast<uint32_t>(row), static_cast<uint32_t>(col), m);
+  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  const sheet::Value old = s.GetValue(static_cast<uint32_t>(row), static_cast<uint32_t>(col));
+  if (old.type != m.type || old.number != m.number || old.boolean != m.boolean || old.error != m.error ||
+      (m.type == ValueType::String && old.text != m.text))
+    ++changes_;
+  s.SetValue(static_cast<uint32_t>(row), static_cast<uint32_t>(col), m);
   auto& e = extents_[static_cast<size_t>(sheet)];
   e.first = std::max(e.first, row + 1), e.second = std::max(e.second, col + 1);
 }
 
 void WorkbookCalc::Extent(int sheet, int32_t& rows, int32_t& cols) {
   rows = cols = 0;
-  if (sheet < 0 || static_cast<size_t>(sheet) >= extents_.size()) return;
+  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return;
+  if (static_cast<size_t>(sheet) >= extents_.size()) {  // still opening: as far as the sheet is read
+    if (auto used = book_.GetSheet(static_cast<size_t>(sheet)).UsedRange())
+      rows = static_cast<int32_t>(used->lastRow) + 1, cols = static_cast<int32_t>(used->lastCol) + 1;
+    return;
+  }
   rows = extents_[static_cast<size_t>(sheet)].first;
   cols = extents_[static_cast<size_t>(sheet)].second;
 }
@@ -169,29 +185,43 @@ CalcSettings WorkbookCalc::Settings() const {
   return s;
 }
 
-WorkbookCalc::LoadStats WorkbookCalc::Load() {
-  LoadStats stats;
-  book_.LoadAll();
-  std::vector<std::string> names;
-  extents_.assign(book_.SheetCount(), {0, 0});
-  for (size_t i = 0; i < book_.SheetCount(); ++i) {
-    const Sheet& s = book_.GetSheet(i);
-    names.push_back(s.Name());
-    if (auto used = s.UsedRange()) extents_[i] = {static_cast<int32_t>(used->lastRow) + 1, static_cast<int32_t>(used->lastCol) + 1};
+namespace {
+double Clock() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+}  // namespace
+
+bool WorkbookCalc::LoadSome(double deadline) {
+  if (phase_ == Phase::kSheets) {
+    // Every sheet: formulas may read any. One at a time, as the view reads them at idle.
+    for (; sheet_ < book_.SheetCount(); ++sheet_) {
+      if (book_.GetSheet(sheet_).Loaded()) continue;
+      if (Clock() > deadline) return false;
+      book_.LoadSheet(sheet_);
+    }
+    extents_.assign(book_.SheetCount(), {0, 0});
+    for (size_t i = 0; i < book_.SheetCount(); ++i)
+      if (auto used = book_.GetSheet(i).UsedRange())
+        extents_[i] = {static_cast<int32_t>(used->lastRow) + 1, static_cast<int32_t>(used->lastCol) + 1};
+    phase_ = Phase::kFormulas, sheet_ = 0, row_ = col_ = 0;
+    shared_.clear();
   }
-  engine_->SetSheets(std::move(names));
-  for (const DefinedName& n : book_.Names()) engine_->DefineName(n.name, n.sheet, n.formula);
-  for (size_t i = 0; i < book_.SheetCount(); ++i) {
-    const Sheet& s = book_.GetSheet(i);
-    // A shared formula compiles once, at its master: relative references are offsets, so its
-    // followers use the same bytecode.
-    std::map<std::pair<uint32_t, uint32_t>, std::shared_ptr<const Formula>> shared;
-    s.ForEachCell(Range::All(), [&](const CellInfo& c) {
+  for (; sheet_ < book_.SheetCount(); ++sheet_, row_ = col_ = 0, shared_.clear()) {
+    const Sheet& s = book_.GetSheet(sheet_);
+    const size_t i = sheet_;
+    bool stopped = false;
+    uint32_t seen = 0;
+    Range from = Range::All();
+    from.firstRow = row_;
+    s.ForEachCell(from, [&](const CellInfo& c) {
+      if (c.row == row_ && c.col < col_) return true;  // done in the last slice
+      if ((++seen & 255) == 0 && Clock() > deadline) {
+        row_ = c.row, col_ = c.col, stopped = true;
+        return false;
+      }
       if (!c.hasFormula) return true;
       FormulaInfo fi;
       if (!s.GetFormula(c.row, c.col, fi) || fi.text.empty()) return true;
       if (fi.kind == FormulaKind::DataTable) {
-        ++stats.dataTables;
+        ++stats_.dataTables;
         return true;
       }
       calc::Cell at{static_cast<int>(i), static_cast<int32_t>(c.row), static_cast<int32_t>(c.col)};
@@ -199,15 +229,17 @@ WorkbookCalc::LoadStats WorkbookCalc::Load() {
       bool array = fi.kind == FormulaKind::Array;
       std::shared_ptr<const Formula> f;
       if (fi.kind == FormulaKind::Shared) {
+        // A shared formula compiles once, at its master: relative references are offsets, so its
+        // followers use the same bytecode.
         auto key = std::make_pair(fi.origin.row, fi.origin.col);
-        auto it = shared.find(key);
-        if (it == shared.end()) it = shared.emplace(key, engine_->CompileAt(fi.text, origin)).first;
+        auto it = shared_.find(key);
+        if (it == shared_.end()) it = shared_.emplace(key, engine_->CompileAt(fi.text, origin)).first;
         f = it->second;
       } else {
         f = engine_->CompileAt(fi.text, at, array);
       }
       if (!f) {
-        ++stats.parseErrors;
+        ++stats_.parseErrors;
         return true;
       }
       bool cached = c.value.type != ValueType::Empty;
@@ -220,11 +252,33 @@ WorkbookCalc::LoadStats WorkbookCalc::Load() {
       } else {
         engine_->SetFormula(at, std::move(f), cached);
       }
-      ++stats.formulas;
+      ++stats_.formulas;
       return true;
     });
+    if (stopped) return false;
   }
-  return stats;
+  phase_ = Phase::kGraph;
+  return true;
+}
+
+WorkbookCalc::LoadStats WorkbookCalc::Load() {
+  if (phase_ < Phase::kGraph) LoadSome(1e300);
+  return stats_;
+}
+
+bool WorkbookCalc::OpenStep(double budgetMs) {
+  const double deadline = Clock() + budgetMs / 1000;
+  if (phase_ < Phase::kGraph && !LoadSome(deadline)) return false;
+  if (phase_ == Phase::kGraph) {
+    if (!engine_->BuildGraph((deadline - Clock()) * 1000)) return false;
+    engine_->Opened(Settings());
+    phase_ = Phase::kRecalc;
+  }
+  if (phase_ == Phase::kRecalc) {
+    if (!engine_->Recalculate(std::max(0.0, (deadline - Clock()) * 1000))) return false;
+    phase_ = Phase::kDone;
+  }
+  return true;
 }
 
 }  // namespace fw::sheet::calc
