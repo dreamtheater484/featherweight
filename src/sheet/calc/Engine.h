@@ -100,7 +100,11 @@ class Engine : public Resolver, public Names {
 
  private:
   enum State : uint8_t { kClean, kDirty, kVisiting };
-  enum NodeFlag : uint8_t { kCached = 1, kStale = 2, kCircularNode = 4, kDynamicArray = 8, kVolatileNode = 16, kFree = 32 };
+  // kFresh: entered, not calculated yet. kAfterCircular: depends on a circular reference.
+  enum NodeFlag : uint8_t {
+    kCached = 1, kStale = 2, kCircularNode = 4, kDynamicArray = 8, kVolatileNode = 16, kFree = 32, kFresh = 64,
+    kAfterCircular = 128
+  };
   struct Node {
     std::shared_ptr<const Formula> f;
     Cell at;
@@ -156,6 +160,8 @@ class Engine : public Resolver, public Names {
   CalcSettings settings_;
   size_t evaluations_ = 0;
   std::vector<uint32_t> circularNodes_;
+  std::vector<uint32_t> loopNodes_;  // nodes flagged circular or after one (some flags may be gone)
+  bool AfterLoop(const Node& n, uint32_t id, std::vector<Area>& areas);
 };
 
 }  // namespace fw::sheet::calc
