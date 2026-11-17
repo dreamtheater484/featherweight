@@ -46,7 +46,9 @@ class WorkbookCalc : public Host {
   void Store(int sheet, int32_t row, int32_t col, const Value& v) override;
   void Extent(int sheet, int32_t& rows, int32_t& cols) override;
   bool Date1904() const override;
-  int FormatText(double value, std::string_view format, std::string& out) override;
+  bool FormatText(const CellView& value, std::string_view format, std::string& out, Err& error) override;
+  bool Table(std::string_view name, int sheet, int32_t row, int32_t col, uint8_t items, std::string_view col1,
+             std::string_view col2, Area& out, Err& error) override;
   bool RowHidden(int sheet, int32_t row) override;
   const ConvLocale& Conv() const override { return conv_; }
 

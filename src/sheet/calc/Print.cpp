@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -270,7 +271,9 @@ class Printer {
       case kRefErr: stack_.push_back(Sheets(p + 2, p[1]) + "#REF!"); break;
       case kName: {
         uint8_t fl = p[5];
-        stack_.push_back(Sheets(p + 6, fl) + names_.SlotName(Read<uint32_t>(p + 1)));
+        std::string name = names_.SlotName(Read<uint32_t>(p + 1));
+        if (!how_.file && name.size() > 6 && _strnicmp(name.c_str(), "_xlpm.", 6) == 0) name.erase(0, 6);  // LET's names
+        stack_.push_back(Sheets(p + 6, fl) + name);
         break;
       }
       case kExtern: stack_.push_back(std::string(ReadStr(p + 1, &len))); break;

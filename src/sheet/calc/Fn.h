@@ -26,6 +26,10 @@ struct Machine {
   bool unsupported = false;  // something the engine can't do: keep the cached value
   int depth = 0;
   std::vector<Value>& stack;
+  // LET's names in scope (name slot, value), innermost last; a defined name's formula sees only
+  // those from `localsBase` on (none).
+  std::vector<std::pair<uint32_t, Value>> locals;
+  size_t localsBase = 0;
 
   Machine(Evaluator& e, const Cell& c)
       : ev(e), host(e.host()), res(e.resolver()), at(c), date1904(e.host().Date1904()),
@@ -186,7 +190,7 @@ FW_FN(Abs) FW_FN(Address) FW_FN(And) FW_FN(Average) FW_FN(AverageA) FW_FN(Averag
 FW_FN(Ceiling) FW_FN(CeilingMath) FW_FN(Char) FW_FN(Clean) FW_FN(Code) FW_FN(Column) FW_FN(Columns)
 FW_FN(Concat) FW_FN(Concatenate) FW_FN(Count) FW_FN(CountA) FW_FN(CountBlank) FW_FN(CountIf) FW_FN(CountIfs)
 FW_FN(Date) FW_FN(DateDif) FW_FN(DateValue) FW_FN(Day) FW_FN(Days) FW_FN(Dollar) FW_FN(EDate) FW_FN(EOMonth)
-FW_FN(ErrorType) FW_FN(Even) FW_FN(Exact) FW_FN(Exp) FW_FN(False) FW_FN(Find) FW_FN(Fixed) FW_FN(Floor)
+FW_FN(ErrorType) FW_FN(Even) FW_FN(Exact) FW_FN(Exp) FW_FN(False) FW_FN(Filter) FW_FN(Find) FW_FN(Fixed) FW_FN(Floor)
 FW_FN(FloorMath) FW_FN(Fv) FW_FN(HLookup) FW_FN(Hour) FW_FN(Hyperlink) FW_FN(Index) FW_FN(Indirect) FW_FN(Int)
 FW_FN(IsBlank) FW_FN(IsErr) FW_FN(IsError) FW_FN(IsEven) FW_FN(IsLogical) FW_FN(IsNA) FW_FN(IsNonText)
 FW_FN(IsNumber) FW_FN(IsOdd) FW_FN(IsoWeekNum) FW_FN(IsRef) FW_FN(IsText) FW_FN(Large) FW_FN(Left) FW_FN(Len)
@@ -196,10 +200,10 @@ FW_FN(MRound) FW_FN(N) FW_FN(NA) FW_FN(NetworkDays) FW_FN(NetworkDaysIntl) FW_FN
 FW_FN(Npv) FW_FN(NumberValue) FW_FN(Odd) FW_FN(Offset) FW_FN(Or) FW_FN(Percentile) FW_FN(Pi) FW_FN(Pmt)
 FW_FN(Power) FW_FN(Product) FW_FN(Proper) FW_FN(Pv) FW_FN(Quartile) FW_FN(Quotient) FW_FN(Rand)
 FW_FN(RandBetween) FW_FN(Rank) FW_FN(RankAvg) FW_FN(Rate) FW_FN(Replace) FW_FN(Rept) FW_FN(Right) FW_FN(Round)
-FW_FN(RoundDown) FW_FN(RoundUp) FW_FN(Row) FW_FN(Rows) FW_FN(Search) FW_FN(Second) FW_FN(Sign) FW_FN(Small)
+FW_FN(RoundDown) FW_FN(RoundUp) FW_FN(Row) FW_FN(Rows) FW_FN(Search) FW_FN(Second) FW_FN(Sequence) FW_FN(Sign) FW_FN(Small) FW_FN(Sort)
 FW_FN(Sqrt) FW_FN(StDev) FW_FN(StDevP) FW_FN(Substitute) FW_FN(Subtotal) FW_FN(Sum) FW_FN(SumIf) FW_FN(SumIfs)
 FW_FN(SumProduct) FW_FN(SumSq) FW_FN(T) FW_FN(Text) FW_FN(TextJoin) FW_FN(Time) FW_FN(TimeValue) FW_FN(Today)
-FW_FN(Transpose) FW_FN(Trim) FW_FN(True) FW_FN(Trunc) FW_FN(TypeFn) FW_FN(Upper) FW_FN(ValueFn) FW_FN(Var)
+FW_FN(Transpose) FW_FN(Trim) FW_FN(True) FW_FN(Trunc) FW_FN(TypeFn) FW_FN(Unique) FW_FN(Upper) FW_FN(ValueFn) FW_FN(Var)
 FW_FN(VarP) FW_FN(VLookup) FW_FN(Weekday) FW_FN(WeekNum) FW_FN(Workday) FW_FN(WorkdayIntl) FW_FN(XLookup)
 FW_FN(XMatch) FW_FN(Xor) FW_FN(Year) FW_FN(YearFrac)
 #undef FW_FN
