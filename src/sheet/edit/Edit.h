@@ -251,6 +251,15 @@ class Editor {
   // an external relationship (keep `relId` only with the link's own target, unchanged).
   Result SetHyperlink(int sheet, const Range& r, const std::optional<Hyperlink>& link);
 
+  // ---- Notes (New Note, Shift+F2: Excel's older comments). The note on `cell`: its author's name,
+  // its text and whether it stays shown; nullopt deletes it. Written as Excel writes them
+  // (sheet/edit/Notes.h): the sheet's comments part and VML drawing, added when it has none.
+  struct Note {
+    std::string author, text;
+    bool shown = false;
+  };
+  Result SetNote(int sheet, CellAddr cell, const std::optional<Note>& note);
+
   // ---- View state: saved with the file, but not undo steps (as in Excel).
   void SetActiveSheet(int sheet);
   void SetSelection(int sheet, CellAddr active, const std::vector<Range>& ranges);

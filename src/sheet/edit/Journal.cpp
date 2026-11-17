@@ -452,6 +452,17 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = SetHyperlink(sheet, at, link);
         break;
       }
+      case JournalOp::SetNote: {
+        const int sheet = f.Int();
+        const CellAddr cell = f.A();
+        std::optional<Note> note;
+        if (f.B()) {
+          note.emplace();
+          note->author = f.S(), note->text = f.S(), note->shown = f.B();
+        }
+        if (f.Ok()) r = SetNote(sheet, cell, note);
+        break;
+      }
       case JournalOp::FreezePanes: {
         const int sheet = f.Int();
         const uint32_t rows = f.U32(), cols = f.U32();

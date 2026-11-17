@@ -114,3 +114,39 @@ TEST(sheet_links_set_save_reopen) {
   CHECK(ed.SetSheetProtection(0, edit::SheetProtection{}));
   CHECK(!ed.SetHyperlink(0, Range{4, 0, 4, 0}, Web("https://example.com/", "x")));
 }
+
+// Notes (Shift+F2) as Excel writes them: comments part, VML drawing, the sheet's legacyDrawing.
+TEST(sheet_notes_set_save_delete) {
+  auto parts = WorkbookParts({"<sheetData><row r=\"2\"><c r=\"B2\"><v>1</v></c></row></sheetData>"});
+  for (auto& [name, xml] : parts)
+    if (name.find("worksheets/sheet") != std::string::npos)
+      xml.replace(xml.find("<worksheet "), 11,
+                  "<worksheet xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" ");
+  auto book = OpenZip(test::MakeZip(parts));
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.SetNote(0, CellAddr{1, 1}, Editor::Note{"Roy", "first note", false}));
+  CHECK(ed.SetNote(0, CellAddr{4, 3}, Editor::Note{"Roy", "line one\nline two", true}));
+  CHECK(ed.UndoName() == u"Edit Note");
+  std::vector<uint8_t> zip = SaveLinks(*book, ed);
+  const std::string comments = Part(zip, "/xl/comments1.xml"), vml = Part(zip, "/xl/drawings/vmlDrawing1.vml");
+  const std::string sheet = Part(zip, "/xl/worksheets/sheet1.xml"), types = Part(zip, "/[Content_Types].xml");
+  CHECK(comments.find("<authors><author>Roy</author></authors><commentList><comment ref=\"B2\" authorId=\"0\" shapeId=\"0\">") !=
+        std::string::npos);
+  CHECK(comments.find("<t>Roy:</t>") != std::string::npos && comments.find("<comment ref=\"D5\"") > comments.find("ref=\"B2\""));
+  CHECK(vml.find("<x:Anchor>2, 10, 0, 12, 4, 20, 4, 17</x:Anchor>") != std::string::npos);
+  CHECK(vml.find("<x:Row>4</x:Row><x:Column>3</x:Column><x:Visible/>") != std::string::npos);
+  CHECK(sheet.find("<legacyDrawing r:id=\"rId") != std::string::npos);
+  CHECK(types.find("spreadsheetml.comments+xml") != std::string::npos && types.find("vmlDrawing") != std::string::npos);
+  // Edited in place, then both deleted: the parts and the legacyDrawing go.
+  CHECK(ed.SetNote(0, CellAddr{1, 1}, Editor::Note{"Ann", "changed", false}));
+  CHECK(ed.PartBytes("/xl/comments1.xml").find("<author>Ann</author>") != std::string::npos);
+  CHECK(ed.SetNote(0, CellAddr{1, 1}, std::nullopt) && ed.SetNote(0, CellAddr{4, 3}, std::nullopt));
+  CHECK(ed.PartBytes("/xl/comments1.xml").empty() && ed.PartBytes("/xl/drawings/vmlDrawing1.vml").empty());
+  zip = SaveLinks(*book, ed);
+  CHECK(Part(zip, "/xl/worksheets/sheet1.xml").find("legacyDrawing") == std::string::npos);
+  CHECK(Part(zip, "/xl/comments1.xml").empty());
+  CHECK(ed.Undo(3) && ed.PartBytes("/xl/comments1.xml").find("<author>Roy</author>") != std::string::npos);
+  // On a protected sheet: only with Edit objects allowed (Excel).
+  CHECK(ed.SetSheetProtection(0, edit::SheetProtection{}) && !ed.SetNote(0, CellAddr{0, 0}, Editor::Note{"Roy", "x"}));
+}

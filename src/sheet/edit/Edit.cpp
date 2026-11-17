@@ -15,6 +15,7 @@
 #include "sheet/calc/Formula.h"
 #include "sheet/calc/Typing.h"
 #include "sheet/edit/Journal.h"
+#include "sheet/edit/Notes.h"
 #include "sheet/edit/Refs.h"
 #include "sheet/xlsx/Internal.h"
 #include "sheet/numfmt/NumFormat.h"
@@ -4404,6 +4405,76 @@ Result Editor::SetHyperlink(int sheet, const Range& r, const std::optional<Hyper
         links.push_back(std::move(h));
       }
       st.Change(&s, kObjects, r);
+      return Result{};
+    });
+  }());
+}
+
+// ---- Notes
+
+Result Editor::SetNote(int sheet, CellAddr cell, const std::optional<Note>& note) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::SetNote, [&](JournalRecord& w) {
+    w.I(sheet).A(cell).B(note.has_value());
+    if (note) w.S(note->author).S(note->text).B(note->shown);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (cell.row >= kMaxRows || cell.col >= kMaxCols) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    pkg::Package* package = book_.GetPackage();
+    if (!package || s.PartName().empty() || s.Kind() != SheetKind::Worksheet)
+      return Result::Fail(u"Notes can be added to this sheet once the workbook is saved.");
+    if (note && (!XmlSafe(note->text) || !XmlSafe(note->author)))
+      return Result::Fail(u"The note holds characters a workbook can't store.");
+    if (note && Utf16Length(note->text) > 32767) return Result::Fail(u"A note can hold at most 32,767 characters.");
+    // The parts the sheet has: its comments, and its VML drawing (the legacyDrawing's).
+    std::string commentsPart, vmlPart;
+    if (const pkg::RelationshipSet* set = package->RelationshipsOf(s.PartName()))
+      for (const pkg::Relationship& r : set->items) {
+        if (r.external) continue;
+        if (EndsWith(r.type, "/comments") && commentsPart.empty()) commentsPart = r.targetPart;
+        if (EndsWith(r.type, "/vmlDrawing") && (vmlPart.empty() || r.id == s.LegacyDrawingRelId())) vmlPart = r.targetPart;
+      }
+    const std::string comments = commentsPart.empty() ? std::string() : PartBytes(commentsPart);
+    const std::string vml = vmlPart.empty() ? std::string() : PartBytes(vmlPart);
+    std::string newComments, newVml;
+    std::optional<notes::NoteText> text;
+    if (note) text = notes::NoteText{note->author, note->text, note->shown};
+    if (!notes::Edit(comments, vml, cell, text, newComments, newVml)) return Result::Fail(u"This sheet's notes couldn't be read.");
+    if (newComments == comments && newVml == vml) return Result{};
+    return Run(*this, note ? u"Edit Note" : u"Delete Note", [&]() -> Result {
+      const Result failed = Result::Fail(u"The note couldn't be stored in the workbook.");
+      const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+      if (newComments.empty()) {
+        if (!commentsPart.empty() && !RemovePart(commentsPart)) return failed;
+      } else if (commentsPart.empty()) {
+        if (AddPart(s.PartName(), rel + "comments", NewPartName("/xl/comments", ".xml"),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml", newComments)
+                .empty())
+          return failed;
+      } else if (!WritePart(commentsPart, newComments)) {
+        return failed;
+      }
+      State& st = *s_;
+      if (newVml.empty() || vmlPart.empty()) {
+        // The sheet's legacyDrawing names the VML drawing (or goes with it).
+        std::string id;
+        if (!newVml.empty() &&
+            (id = AddPart(s.PartName(), rel + "vmlDrawing", NewPartName("/xl/drawings/vmlDrawing", ".vml"),
+                          "application/vnd.openxmlformats-officedocument.vmlDrawing", newVml))
+                .empty())
+          return failed;
+        if (newVml.empty() && !vmlPart.empty() && !RemovePart(vmlPart)) return failed;
+        st.SaveText(st.Save(s));
+        detail::PartText& t = A::Text(s);
+        xlsx::PutSheetElement(t, "legacyDrawing", id.empty() ? std::string() : "<" + xlsx::SheetPrefix(t) + "legacyDrawing r:id=\"" + id + "\"/>");
+      } else if (!WritePart(vmlPart, newVml)) {
+        return failed;
+      }
+      st.Change(&s, kObjects, Range{cell.row, cell.col, cell.row, cell.col});
       return Result{};
     });
   }());
