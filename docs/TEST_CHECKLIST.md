@@ -189,3 +189,52 @@ Test documents: `tests/office/doc/`, `tests/office/odt/`, `tests/office/dotx/`, 
 
 - [ ] Typing in the 300-page document never stutters, also at its start.
 - [ ] Opening a Word document, switching tabs and opening menus feel instant.
+
+## Spreadsheets (S1)
+
+Featherweight shows workbooks; it doesn't edit them yet (S2). What the automated checks can't judge: how it looks and feels next to Excel, real input devices, and paper. Test files: `tests/office/sheet/`, `tests/office/excel/`, `tests/office/csv/`, the real-world corpus in `D:\Documents\Codex\FeatherweightCorpus\xlsx` and `csv`, and your own workbooks. Make the two big files with `.venv\Scripts\python tests/office/make_budget_files.py` (into `build\budgets`).
+
+### Opening and looking
+
+- [ ] Double-click a `.xlsx` and a `.csv` in Explorer, drag one onto the window, and open one with Ctrl+O. Each opens in its own tab next to PDFs and documents, and shows in Recent.
+- [ ] Open three of your own workbooks (a budget, a list, something with charts) side by side with Excel. Values, number formats (dates `dd-mm-yyyy`, € amounts, percentages), fonts, fills, borders, merged cells, column widths and row heights look the same.
+- [ ] Frozen panes stay put while scrolling; hidden rows and columns stay hidden; outline groups expand and collapse with their + and − buttons.
+- [ ] The sheet tabs at the bottom: click one, and Ctrl+PgUp/PgDn. Hidden sheets aren't listed; tab colors show.
+- [ ] A right-to-left sheet (`tests/office/excel/sheets.xlsx`) runs from the right, as in Excel.
+- [ ] Conditional formats (`conditional-formats.xlsx`): colored cells, color scales, data bars and icons as in Excel. A table (`tables.xlsx`) shows its style and banded rows.
+- [ ] Pictures, shapes and charts (`pictures-shapes.xlsx`, `charts.xlsx`) sit on the same cells as in Excel. A chart sheet shows its chart.
+- [ ] A cell with a note has a red corner; hovering shows the note. A threaded comment shows its replies.
+- [ ] Zoom with Ctrl+wheel; scrolling a big sheet with the wheel, the scroll bar and the keyboard feels smooth.
+
+### Formulas
+
+- [ ] The formula bar shows the selected cell's formula (read-only).
+- [ ] A workbook with `=TODAY()` shows today's date shortly after opening; one set to manual calculation shows what was saved.
+- [ ] A formula Featherweight can't calculate keeps Excel's value and is marked possibly out of date.
+- [ ] A workbook with macros (`.xlsm`) or links to other workbooks opens without running anything and without asking to update links.
+
+### Selecting, copying and finding
+
+- [ ] Arrows, Ctrl+arrows, Home, Ctrl+Home, Ctrl+End, PgUp/PgDn and Shift with each select as in Excel. Click a row or column heading to select it whole.
+- [ ] The status bar shows Sum, Average and Count for a selection of numbers.
+- [ ] Copy a range (Ctrl+C) and paste it into Excel (cells, with their formats), Word (a table) and Notepad (tab-separated text).
+- [ ] Ctrl+F finds text and numbers as they're shown, on every sheet, and the count is right.
+
+### CSV
+
+- [ ] Open a comma-separated, a semicolon-separated and a tab-separated file. Columns split correctly.
+- [ ] Nothing changes: codes with leading zeros (`00123`), long numbers (IBANs, phone numbers), and dates show exactly as in the file.
+- [ ] A file from an old Windows program (`tests/office/csv/ansi-1252.csv`) shows "Crème brûlée" and "€4,50" correctly.
+
+### Printing
+
+- [ ] Print preview and print a workbook to the Epson, and print the same workbook from Excel. Page breaks, print area, repeated titles, fit to page, orientation, margins, headers and footers, and gridlines match.
+- [ ] Print a sheet with pictures and a chart: they're on the paper where they are on screen.
+
+### Big files and speed (record the numbers)
+
+- [ ] `million-cells.xlsx`: first screen in ___ s (target < 1.5 s). Ctrl+End and scrolling feel instant.
+- [ ] `100mb.csv`: first screen in ___ s (target < 1 s), fully loaded in ___ s (target < 5 s).
+- [ ] Memory with one typical workbook open (one of yours): ___ MB in Task Manager (target < 150 MB).
+- [ ] After opening a workbook, Featherweight uses no CPU while you do nothing (Task Manager).
+- [ ] Opening a PDF and a Word document is as quick as before.
