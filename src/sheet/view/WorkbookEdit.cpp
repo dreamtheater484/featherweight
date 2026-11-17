@@ -392,6 +392,8 @@ void WorkbookView::BeginEdit(CellEditor::Mode mode, const std::wstring& text) {
   autoList_.clear();
   autoText_.clear();
   editReplaces_ = mode == CellEditor::Mode::Enter && text.empty();
+  fnClosed_ = false;
+  fnList_.clear();
   editor_.SetPointRule([this](std::wstring_view t, size_t caret) { return calc::CanPointAt(t, caret, Region()); });
   editor_.Begin(text, mode);
   ScrollIntoView(active_);
@@ -403,7 +405,9 @@ bool WorkbookView::OnChar(wchar_t ch, UINT mods) {
   if (!Ready() || preview_ || ChartSheet()) return false;
   if (editor_.Active()) {
     if (editor_.OnChar(ch)) {
+      fnClosed_ = false;
       AutoComplete();
+      UpdateFormulaHelp();
       host_.ViewInvalidate();
     }
     return true;
@@ -414,6 +418,7 @@ bool WorkbookView::OnChar(wchar_t ch, UINT mods) {
   BeginEdit(CellEditor::Mode::Enter, L"");
   editor_.OnChar(ch);
   AutoComplete();
+  UpdateFormulaHelp();
   return true;
 }
 
@@ -425,8 +430,10 @@ bool WorkbookView::EditKey(UINT vk, UINT mods) {
   }
   if (vk == VK_F4 && !ctrl && !alt && !shift) {
     if (CycleReference()) host_.ViewInvalidate();
+    UpdateFormulaHelp();
     return true;
   }
+  if (FormulaHelpKey(vk, ctrl, shift, alt)) return true;
   const CellEditor::Result r = editor_.OnKey(vk, ctrl, shift, alt);
   switch (r.action) {
     case CellEditor::Action::None: return true;  // nothing else happens while a cell is edited
@@ -447,6 +454,7 @@ bool WorkbookView::EditKey(UINT vk, UINT mods) {
     case CellEditor::Action::CommitFill: CommitEdit(true); break;
     case CellEditor::Action::Point: PointMove(r.dRow, r.dCol, r.extend); break;
   }
+  UpdateFormulaHelp();
   host_.ViewInvalidate();
   return true;
 }
@@ -769,6 +777,7 @@ bool WorkbookView::EditMouseDown(float x, float y, UINT mods, bool doubleClick) 
   auto place = [&](int at) {
     if (doubleClick) editor_.SelectWord(at);
     else editor_.SetCaret(at, shift);
+    UpdateFormulaHelp();
     mouse_ = Mouse::EditText;
     host_.ViewInvalidate();
   };

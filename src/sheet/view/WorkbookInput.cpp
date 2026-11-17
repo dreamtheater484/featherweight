@@ -276,6 +276,7 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
   const float fx = static_cast<float>(x), fy = static_cast<float>(y);
   // The formula bar's text and the box over the cell place the caret; any other click ends the
   // entry being typed (in point mode it will insert a reference instead).
+  if (button == 0 && FormulaHelpClick(fx, fy, doubleClick)) return;
   if (button == 0 && !ChartSheet() && EditMouseDown(fx, fy, mods, doubleClick)) return;
   if (RefGrab g; button == 0 && RefHit(x, y, g)) {
     refGrab_ = g;

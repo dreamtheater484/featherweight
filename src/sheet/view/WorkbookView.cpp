@@ -480,6 +480,7 @@ void WorkbookView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
     DrawScrollbars(c);
     DrawFormulaBar(c);
     DrawSheetTabs(c);
+    DrawFormulaHelp(c);
   }
   c.PopClip();
 }

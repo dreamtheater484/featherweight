@@ -20,6 +20,10 @@
 #include "sheet/view/PrintLayout.h"
 #include "text/Fonts.h"
 
+namespace fw::sheet::calc {
+struct FunctionHelp;
+}
+
 namespace fw::sheet::view {
 
 // An outline group: rows (or columns) at one level, which collapse into their summary row.
@@ -373,6 +377,19 @@ class WorkbookView : public PagedView {
   static UINT SemicolonKey();  // the key that types ";" on this keyboard
   // F4: the reference at the caret cycles A1, $A$1, A$1, $A1.
   bool CycleReference();
+  // Formula AutoComplete: the functions starting with the name being typed (Tab puts one in with
+  // "("), and the argument tip inside a call (WorkbookFunctions.cpp).
+  void UpdateFormulaHelp();
+  bool FormulaHelpKey(UINT vk, bool ctrl, bool shift, bool alt);
+  bool FormulaHelpClick(float x, float y, bool doubleClick);
+  void InsertFunction(size_t i);
+  void DrawFormulaHelp(gfx::Canvas& c);
+  std::vector<const calc::FunctionHelp*> fnList_;
+  size_t fnSel_ = 0, fnTop_ = 0;
+  int fnFrom_ = -1;          // where the name being typed starts
+  bool fnClosed_ = false;    // Esc closed the list: closed until the next character
+  D2D1_RECT_F fnListRc_{};
+  float fnRowH_ = 0;
   CellEditor editor_;
   bool editInBar_ = false;  // the caret is in the formula bar, not over the cell
   float barScroll_ = 0;     // the formula bar's text scrolled left to keep the caret in sight
