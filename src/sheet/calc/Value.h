@@ -209,6 +209,9 @@ std::string ValueText(const Value& v, char decimal = '.');
 // Case-insensitive comparison of text as Excel orders it: -1, 0 or 1.
 int CompareText(std::string_view a, std::string_view b);
 bool EqualText(std::string_view a, std::string_view b);
+// A key that is the same for texts EqualText finds equal: upper case for plain ASCII, else (when
+// `linguistic`) the linguistic sort key. Use one kind for all keys that are compared.
+std::string TextKey(std::string_view s, bool linguistic);
 // Wildcard match (* ? and ~ escapes), case-insensitive, of the whole text.
 bool WildcardMatch(std::string_view pattern, std::string_view text);
 

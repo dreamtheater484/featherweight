@@ -427,7 +427,8 @@ void Engine::Collect(const uint8_t* code, size_t size, const Cell& at, std::vect
         k += l;
         std::string_view c2 = ReadStr(p + k, &l);
         Area a;
-        if (host_.Table(table, at.sheet, at.row, at.col, p[1], c1, c2, a)) out.push_back(a);
+        Err e = Err::None;
+        if (host_.Table(table, at.sheet, at.row, at.col, p[1], c1, c2, a, e)) out.push_back(a);
         break;
       }
       default: break;
@@ -547,27 +548,95 @@ bool Engine::Subtotal(int sheet, int32_t row, int32_t col) {
 void Engine::Store(uint32_t id, Value v) {
   const Node& n = nodes_[id];
   int s = n.at.sheet;
+  if (n.flags & kDynamicArray) return StoreSpill(id, std::move(v));
   auto shown = [](Value x) { return x.IsEmpty() || x.IsMissing() ? Value::Number(0) : x; };
   if (n.out.r1 == n.out.r2 && n.out.c1 == n.out.c2) {
     if (v.IsArray()) v = Value(v.array().at(0, 0));
     host_.Store(s, n.at.row, n.at.col, shown(std::move(v)));
     return;
   }
-  bool dynamic = (n.flags & kDynamicArray) != 0;
+  // Ctrl+Shift+Enter over a range: one row or column repeats, cells past the result show #N/A.
   for (int32_t r = n.out.r1; r <= n.out.r2; ++r)
     for (int32_t c = n.out.c1; c <= n.out.c2; ++c) {
       int32_t i = r - n.out.r1, j = c - n.out.c1;
       Value x;
       if (v.IsArray()) {
         const Array& a = v.array();
-        int32_t ii = (!dynamic && a.rows() == 1) ? 0 : i, jj = (!dynamic && a.cols() == 1) ? 0 : j;
-        if (ii < a.rows() && jj < a.cols()) x = shown(a.at(ii, jj));
-        else x = dynamic ? Value() : Value::Error(Err::NA);
+        int32_t ii = a.rows() == 1 ? 0 : i, jj = a.cols() == 1 ? 0 : j;
+        x = ii < a.rows() && jj < a.cols() ? shown(a.at(ii, jj)) : Value::Error(Err::NA);
       } else {
-        x = (dynamic && (i || j)) ? Value() : shown(v);
+        x = shown(v);
       }
       host_.Store(s, r, c, x);
     }
+}
+
+namespace {
+
+bool Inside(const Area& a, int32_t r, int32_t c) { return r >= a.r1 && r <= a.r2 && c >= a.c1 && c <= a.c2; }
+
+}  // namespace
+
+// A dynamic array's result spills from its cell over as many cells as it has values, when those are
+// free (no value, no other formula); otherwise the cell shows #SPILL! alone. Cells it no longer
+// covers are cleared, and formulas reading the cells it covers now or did before are recalculated.
+void Engine::StoreSpill(uint32_t id, Value v) {
+  Node& n = nodes_[id];
+  const int s = n.at.sheet;
+  auto shown = [](const Value& x) { return x.IsEmpty() || x.IsMissing() ? Value::Number(0) : x; };
+  int32_t rows = 1, cols = 1;
+  if (v.IsArray()) rows = v.array().rows(), cols = v.array().cols();
+  Area want = n.out;
+  want.r1 = want.r2 = n.at.row;
+  want.c1 = want.c2 = static_cast<int16_t>(n.at.col);
+  bool blocked = n.at.row + static_cast<int64_t>(rows) > kMaxRows || n.at.col + static_cast<int64_t>(cols) > kMaxCols;
+  if (!blocked) {
+    want.r2 = n.at.row + rows - 1;
+    want.c2 = static_cast<int16_t>(n.at.col + cols - 1);
+    for (int32_t r = want.r1; r <= want.r2 && !blocked; ++r)
+      for (int32_t c = want.c1; c <= want.c2; ++c) {
+        if (Inside(n.out, r, c)) continue;
+        if (NodeAt(s, r, c) != UINT32_MAX || host_.Cell(s, r, c).type != Type::Empty) {
+          blocked = true;
+          break;
+        }
+      }
+  }
+  if (blocked) {
+    want.r2 = want.r1, want.c2 = want.c1;
+    v = Value::Error(Err::Spill);
+  }
+  const Area old = n.out;
+  bool moved = old.r1 != want.r1 || old.r2 != want.r2 || old.c1 != want.c1 || old.c2 != want.c2;
+  if (moved) {
+    bool dirty = n.state != kClean;
+    for (int32_t r = old.r1; r <= old.r2; ++r)
+      for (int32_t c = old.c1; c <= old.c2; ++c) {
+        if (dirty) dirtyCells_->Set(s, r, c, false);
+        if (Inside(want, r, c)) continue;
+        at_.erase(Key(s, r, c));
+        host_.Store(s, r, c, Value());
+      }
+    for (int32_t r = want.r1; r <= want.r2; ++r)
+      for (int32_t c = want.c1; c <= want.c2; ++c) {
+        if (dirty) dirtyCells_->Set(s, r, c, true);
+        at_[Key(s, r, c)] = id;
+      }
+    n.out = want;
+  }
+  for (int32_t r = want.r1; r <= want.r2; ++r)
+    for (int32_t c = want.c1; c <= want.c2; ++c) {
+      int32_t i = r - want.r1, j = c - want.c1;
+      Value x = v.IsArray() ? shown(v.array().at(i, j)) : (i || j) ? Value() : shown(v);
+      host_.Store(s, r, c, x);
+    }
+  if (moved) {
+    Area u = want;
+    u.r1 = std::min(old.r1, want.r1), u.r2 = std::max(old.r2, want.r2);
+    u.c1 = std::min(old.c1, want.c1), u.c2 = std::max(old.c2, want.c2);
+    changed_.push_back(u);
+    Propagate();
+  }
 }
 
 bool Engine::Iterate() {

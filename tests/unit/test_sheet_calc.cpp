@@ -112,6 +112,12 @@ TEST(sheet_calc_parse_print) {
   CHECK_EQ(RoundTrip("Table1[[#This Row],[Col]]", {}, true), "Table1[@Col]");
   CHECK_EQ(RoundTrip("Table1[Price '[USD']]"), "Table1[Price '[USD']]");
   CHECK_EQ(RoundTrip("_xlfn.XLOOKUP(A1,B:B,C:C)", {}, true), "XLOOKUP(A1,B:B,C:C)");
+  // LET: files write its names with _xlpm.; the formula bar without.
+  CHECK_EQ(RoundTrip("_xlfn.LET(_xlpm.x,5,_xlpm.y,_xlpm.x+1,_xlpm.x*_xlpm.y)"),
+           "_xlfn.LET(_xlpm.x,5,_xlpm.y,_xlpm.x+1,_xlpm.x*_xlpm.y)");
+  CHECK_EQ(RoundTrip("LET(x,5,x*2)"), "_xlfn.LET(_xlpm.x,5,_xlpm.x*2)");
+  CHECK_EQ(RoundTrip("_xlfn.LET(_xlpm.x,5,_xlpm.x*2)", {}, true), "LET(x,5,x*2)");
+  CHECK_EQ(RoundTrip("LET(x,1,LET(x,2,x)+x)+x"), "_xlfn.LET(_xlpm.x,1,_xlfn.LET(_xlpm.x,2,_xlpm.x)+_xlpm.x)+x");
   CHECK_EQ(RoundTrip("XLOOKUP(A1,B:B,C:C)"), "_xlfn.XLOOKUP(A1,B:B,C:C)");
   CHECK_EQ(RoundTrip("_xlfn.SINGLE(A1:A10)", {}, true), "@A1:A10");
   CHECK_EQ(RoundTrip("A1#", {}, true), "A1#");
@@ -139,7 +145,7 @@ TEST(sheet_calc_parse_flags) {
 TEST(sheet_calc_parse_errors) {
   const char* bad[] = {"SUM(", "1+", "(1", "{1,2;3}", "A1:", "\"abc", "'Sheet", "SUM(1,2", "#FOO!",
                        "Table1[[#Bad]]", "1 2 +", "$A", "A$", "IF(1)", "ROUND(1)", "{A1}", "1+*2", ")",
-                       "SUM(1,2))", "Sheet1!", "'Sheet1'A1"};
+                       "SUM(1,2))", "Sheet1!", "'Sheet1'A1", "LET(x,1)", "LET(x,1,y,2)", "LET(A1,1,A1)", "LET(1,2,3)"};
   for (const char* f : bad) {
     TestNames names;
     ParseError err;
@@ -575,7 +581,7 @@ TEST(sheet_calc_engine_on_open) {
   f.Formula("B1", "A1+1", 0);                             // depends on a volatile one: recalculated
   f.Formula("C1", "5*2", 999);                            // cached: kept, as Excel keeps it
   f.Formula("D1", "C1*2", 0, false);                      // no cached value: calculated
-  f.Formula("E1", "_xlfn._xlws.FILTER(C1,TRUE)+A1", 7);  // unsupported: keeps 7, stale
+  f.Formula("E1", "_xlfn.TAKE(C1,1)+A1", 7);              // unsupported: keeps 7, stale
   f.engine.Opened({});
   f.engine.Recalculate();
   CHECK_EQ(f.Num("A1"), 45293.0);
@@ -636,6 +642,36 @@ TEST(sheet_calc_engine_dynamic_refs_names_arrays) {
   CHECK_EQ(f.Num("B1"), 80.0);
   CHECK_EQ(f.Num("D1"), 408.0);
   CHECK_EQ(f.Num("E2"), 8.0);
+}
+
+TEST(sheet_calc_engine_spills) {
+  // A dynamic array spills as far as its result reaches; cells in the way make it #SPILL!.
+  EngineFixture f;
+  f.Number("A1", 1);
+  Cell c1 = f.At("C1");
+  Area out;
+  out.r1 = out.r2 = 0, out.c1 = out.c2 = 2;  // as the file cached it: C1 alone
+  f.engine.SetFormula(c1, f.engine.CompileAt("_xlfn.SEQUENCE(A1)", c1, true), true, &out, true);
+  f.Formula("D1", "SUM(C1:C5)");
+  f.Formula("D2", "ROWS(_xlfn.ANCHORARRAY(C1))");
+  f.engine.Opened(Full());
+  f.engine.Recalculate();
+  CHECK_EQ(f.Num("C1"), 1.0);
+  CHECK_EQ(f.Num("D2"), 1.0);
+  f.Edit("A1", 3);  // grows into C2:C3
+  CHECK_EQ(f.Num("C3"), 3.0);
+  CHECK_EQ(f.Num("D1"), 6.0);
+  CHECK_EQ(f.Num("D2"), 3.0);
+  f.Number("C5", 9);
+  f.Edit("A1", 5);  // C5 is in the way
+  CellView v = f.host.Cell(0, 0, 2);
+  CHECK(v.type == Type::Error && v.err == Err::Spill);
+  CHECK(f.host.Cell(0, 1, 2).type == Type::Empty);
+  CHECK_EQ(f.Num("D2"), 1.0);
+  f.Edit("A1", 2);  // fits again
+  CHECK_EQ(f.Num("C2"), 2.0);
+  CHECK(f.host.Cell(0, 2, 2).type == Type::Empty);
+  CHECK_EQ(f.Num("D1"), 12.0);
 }
 
 namespace {

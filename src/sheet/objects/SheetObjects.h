@@ -29,6 +29,9 @@ struct CellNote {
   bool shown = false;     // a note that stays shown (Show Note), drawn by Draw
   std::wstring author;    // a note's author; a thread's first person
   std::wstring text;      // the note's text; for a thread, each comment as "Name: text" on its own line
+  // A thread's note for older Excel versions ("[Threaded comment]", a notice, "Comment:" and
+  // "Reply:" lines), as Excel 2021 prints the thread at the end of the sheet; empty when there's none.
+  std::wstring legacyText;
 };
 
 // What sits on a sheet above its cells (plan §7.2): pictures, shapes, text boxes, groups and
@@ -52,19 +55,28 @@ class SheetObjects {
   void Place(const SheetLayout& layout);
 
   struct DrawOptions {
-    bool printing = false;   // leave out what doesn't print: objects set not to, indicators
+    // Leave out what doesn't print: objects set not to, the indicators, and shown notes unless the
+    // sheet's page setup prints notes as displayed (notes printed at the end are the caller's,
+    // from Notes()).
+    bool printing = false;
     bool indicators = true;  // the notes' and comments' corner marks
+    // A right-to-left sheet: where objects, notes and indicators go is mirrored, x becoming
+    // mirrorX - x (the sheet's width, or whatever the caller mirrors about); what they show isn't
+    // flipped, and indicators sit in the cells' top left corners. 0: left to right.
+    float mirrorX = 0;
   };
   // Draws, in their order, the objects that meet `visible` (sheet points), then the shown notes
   // and the indicators. The painter's transform maps sheet points to the device; the caller clips
   // each pane and sets the zoom.
   void Draw(draw::Painter& painter, const draw::Rect& visible, const DrawOptions& options);
 
-  // The placed objects (sheet points), for the scroll extent and, later, selection.
+  // The placed objects (sheet points) that show, for the scroll extent, the print range and, later,
+  // selection. Hidden ones are left out.
   struct Object {
     std::string name;
     draw::Rect rect;
     bool chart = false;
+    bool prints = true;  // false: set not to print (xdr:clientData fPrintsWithSheet="0")
   };
   std::vector<Object> Objects() const;
 
@@ -73,6 +85,7 @@ class SheetObjects {
   // The note or thread on a cell (any cell of a merged area finds the area's); null when none.
   const CellNote* NoteAt(uint32_t row, uint32_t col) const;
   // A note popping up beside its cell (hover): its size in points, and drawing it into `box`.
+  // `note` must be this object's own (from its Notes() or NoteAt()).
   draw::Size NoteSize(const CellNote& note);
   void DrawNote(draw::Painter& painter, const CellNote& note, const draw::Rect& box);
 

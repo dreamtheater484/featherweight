@@ -11,12 +11,26 @@ namespace fw::sheet::view {
 
 namespace {
 
-// Cells placed on a page: sheet points from the block's top-left at (x0, y0).
+// Printed columns and rows for the objects layer: points at 100 % from A1.
+class PrintSheetLayout : public SheetLayout {
+ public:
+  PrintSheetLayout(const std::vector<double>& colX, const Grid& grid) : colX_(colX), grid_(grid) {}
+  double ColumnLeft(uint32_t col) const override { return colX_[std::min<uint32_t>(col, kMaxCols)]; }
+  double RowTop(uint32_t row) const override { return grid_.PrintY(0, std::min<uint32_t>(row, kMaxRows)); }
+
+ private:
+  const std::vector<double>& colX_;
+  const Grid& grid_;
+};
+
+// Cells placed on a page: sheet points from the block's top-left at (x0, y0). A right-to-left
+// sheet's x becomes mirror - x.
 class PageGeometry : public Geometry {
  public:
   PageGeometry(const Grid& grid, const std::vector<double>& colX, uint32_t row0, uint32_t col0, float x0, float y0,
-               float widthScale_)
-      : grid_(grid), colX_(colX), row0_(row0), col0_(col0), x0_(x0), y0_(y0) {
+               float widthScale_, float mirror)
+      : grid_(grid), colX_(colX), row0_(row0), col0_(col0), x0_(x0), y0_(y0), mirror_(mirror) {
+    rtl = mirror != 0;
     pt = 1;
     px = 0.75f;
     line = 0.75f;
@@ -27,8 +41,8 @@ class PageGeometry : public Geometry {
     padEnd = 0.75f;  // after the gridline's 0.75
     descentPx = 0.797f;
   }
-  float Left(uint32_t c) const override { return x0_ + X(c); }
-  float Right(uint32_t c) const override { return x0_ + X(c + 1); }
+  float Left(uint32_t c) const override { return rtl ? mirror_ - x0_ - X(c + 1) : x0_ + X(c); }
+  float Right(uint32_t c) const override { return rtl ? mirror_ - x0_ - X(c) : x0_ + X(c + 1); }
   float Top(uint32_t r) const override { return y0_ + grid_.PrintY(row0_, r); }
   float Bottom(uint32_t r) const override { return y0_ + grid_.PrintY(row0_, r + 1); }
 
@@ -39,7 +53,7 @@ class PageGeometry : public Geometry {
   const Grid& grid_;
   const std::vector<double>& colX_;
   uint32_t row0_, col0_;
-  float x0_, y0_;
+  float x0_, y0_, mirror_;
 };
 
 bool PaperFromText(const std::string& s, float& pts) {
@@ -116,6 +130,7 @@ PrintLayout::PrintLayout(const Workbook& book, const Sheet& sheet, size_t sheetI
                          CellText& text, PrintInfo info)
     : book_(book), sheet_(sheet), index_(sheetIndex), grid_(grid), text_(text), info_(std::move(info)) {
   Paginate();
+  NotePages();
 }
 
 float PrintLayout::ColsWidth(uint32_t first, uint32_t last) const {
@@ -200,13 +215,44 @@ uint32_t PrintLayout::SpillEnd(const Range& used) {
   return end;
 }
 
+draw::Rect PrintLayout::SheetRect(const Range& r) const {
+  return {static_cast<float>(colX_[std::min<uint32_t>(r.firstCol, kMaxCols)]), grid_.PrintY(0, r.firstRow),
+          static_cast<float>(colX_[std::min<uint32_t>(r.lastCol + 1, kMaxCols)]),
+          grid_.PrintY(0, std::min<uint32_t>(r.lastRow + 1, kMaxRows))};
+}
+
+void PrintLayout::PlaceObjects() {
+  if (info_.objects) info_.objects->Place(PrintSheetLayout(colX_, grid_));
+}
+
+std::optional<std::pair<uint32_t, uint32_t>> PrintLayout::ObjectsEnd() const {
+  if (!info_.objects) return std::nullopt;
+  double right = -1, bottom = -1;
+  for (const SheetObjects::Object& o : info_.objects->Objects()) {
+    if (!o.prints) continue;
+    right = std::max(right, static_cast<double>(o.rect.right));
+    bottom = std::max(bottom, static_cast<double>(o.rect.bottom));
+  }
+  if (right <= 0 || bottom <= 0) return std::nullopt;
+  // The column and row holding the far edge (a picture ending on a column's left edge isn't in it).
+  const auto c = std::lower_bound(colX_.begin(), colX_.end(), right) - colX_.begin();
+  const uint32_t col = static_cast<uint32_t>(std::clamp<ptrdiff_t>(c - 1, 0, kMaxCols - 1));
+  const uint32_t row = std::min(kMaxRows - 1, grid_.RowAt(static_cast<int64_t>(std::ceil(bottom / Grid::kPrintRowPt)) - 1));
+  return std::make_pair(row, col);
+}
+
 bool PrintLayout::Blank(const Range& body) {
   const Styles& styles = book_.GetStyles();
-  if (const OverlayExtentFn& extent = OverlayExtent())
-    if (auto drawn = extent(sheet_))
-      if (drawn->firstRow <= body.lastRow && drawn->lastRow >= body.firstRow && drawn->firstCol <= body.lastCol &&
-          drawn->lastCol >= body.firstCol)
+  if (info_.objects) {
+    const draw::Rect page = SheetRect(body);
+    for (const SheetObjects::Object& o : info_.objects->Objects())
+      if (o.prints && o.rect.left < page.right && o.rect.right > page.left && o.rect.top < page.bottom &&
+          o.rect.bottom > page.top)
         return false;
+  }
+  for (const Range& r : sparklines_)
+    if (r.firstRow <= body.lastRow && r.lastRow >= body.firstRow && r.firstCol <= body.lastCol && r.lastCol >= body.firstCol)
+      return false;
   bool ink = false;
   sheet_.ForEachCell(body, [&](const CellInfo& c) {
     const Xf& xf = styles.CellXf(c.style);
@@ -231,19 +277,62 @@ void PrintLayout::Paginate() {
   if (!info_.jobPaper && PaperFromText(ps.paperWidth, w) && PaperFromText(ps.paperHeight, h)) paperW_ = w, paperH_ = h;
   if (ps.orientation == Orientation::Landscape) std::swap(paperW_, paperH_);
 
+  // A chart sheet prints its chart on one page.
+  if (info_.objects && info_.objects->IsChartSheet()) {
+    // Landscape, unless the sheet says otherwise.
+    if (paperW_ < paperH_ && sheet_.KeptXml().find("orientation=\"portrait\"") == std::string::npos)
+      std::swap(paperW_, paperH_);
+    PrintPage p;
+    p.width = paperW_;
+    p.height = paperH_;
+    p.chart = true;
+    p.number = ps.useFirstPageNumber ? ps.firstPageNumber : 1;
+    pages_.push_back(p);
+    return;
+  }
+
+  // The objects on the columns as they print at 100 %, to see how far they reach.
+  colX_.assign(kMaxCols + 1, 0);
+  for (uint32_t c = 0; c < kMaxCols; ++c) colX_[c + 1] = colX_[c] + ColPt(c, 1);
+  PlaceObjects();
+
+  // Sparklines (an extension of the sheet's) are drawn in their cells, which print with the rest.
+  sparklines_.clear();
+  {
+    const std::string kept = sheet_.KeptXml();
+    const size_t from = kept.find("sparklineGroups"), to = kept.rfind("sparklineGroups>");
+    for (size_t at = kept.find(":sqref>", from); from != std::string::npos && at != std::string::npos && at < to;
+         at = kept.find(":sqref>", at + 7)) {
+      const size_t end = kept.find('<', at + 7);
+      if (end == std::string::npos) break;
+      const std::string_view list = std::string_view(kept).substr(at + 7, end - at - 7);
+      for (size_t i = 0; i < list.size();) {
+        size_t j = list.find(' ', i);
+        if (j == std::string_view::npos) j = list.size();
+        Range r;
+        if (j > i && ParseRange(list.substr(i, j - i), r)) sparklines_.push_back(r);
+        i = j + 1;
+      }
+    }
+  }
+
   // What prints: the print area, else the cells in use.
   if (const DefinedName* n = book_.FindName("_xlnm.Print_Area", static_cast<int>(index_)); n && n->sheet == static_cast<int>(index_))
     areas_ = ParseAreas(n->formula);
   if (areas_.empty()) {
     std::optional<Range> used = sheet_.UsedRange();
     if (used) used->lastCol = SpillEnd(Range{0, 0, used->lastRow, used->lastCol});
+    for (const Range& r : sparklines_) {
+      if (!used) used = r;
+      used->lastRow = std::max(used->lastRow, r.lastRow);
+      used->lastCol = std::max(used->lastCol, r.lastCol);
+    }
     // Pictures and shapes past the cells print too.
-    if (const OverlayExtentFn& extent = OverlayExtent())
-      if (auto drawn = extent(sheet_)) {
-        if (!used) used = drawn;
-        used->lastRow = std::max(used->lastRow, drawn->lastRow);
-        used->lastCol = std::max(used->lastCol, drawn->lastCol);
-      }
+    if (auto drawn = ObjectsEnd()) {
+      if (!used) used = Range{0, 0, drawn->first, drawn->second};
+      used->lastRow = std::max(used->lastRow, drawn->first);
+      used->lastCol = std::max(used->lastCol, drawn->second);
+    }
     if (used) areas_.push_back(Range{0, 0, used->lastRow, used->lastCol});  // from A1, as Excel prints
   }
   if (const DefinedName* n = book_.FindName("_xlnm.Print_Titles", static_cast<int>(index_)); n && n->sheet == static_cast<int>(index_)) {
@@ -320,6 +409,7 @@ void PrintLayout::Paginate() {
   }
   colX_.assign(kMaxCols + 1, 0);
   for (uint32_t c = 0; c < kMaxCols; ++c) colX_[c + 1] = colX_[c] + ColPt(c, scale_);
+  if (scale_ != 1) PlaceObjects();
 
   int number = ps.useFirstPageNumber ? ps.firstPageNumber : 1;
   for (const Range& a : areas_) {
@@ -347,6 +437,103 @@ void PrintLayout::Paginate() {
   while (pages_.size() > 1 && Blank(pages_.back().body)) pages_.pop_back();
 }
 
+void PrintLayout::NotePages() {
+  const PageSetup& ps = sheet_.Page();
+  if (ps.cellComments != CellComments::AtEnd || !info_.objects) return;
+  const std::vector<CellNote>& notes = info_.objects->Notes();
+  if (notes.empty()) return;
+  const PageMargins& m = ps.margins;
+  const float availW = std::max(36.f, paperW_ - static_cast<float>((m.left + m.right) * 72));
+  const float availH = std::max(36.f, paperH_ - static_cast<float>((m.top + m.bottom) * 72));
+  PrintPage page;
+  page.width = paperW_;
+  page.height = paperH_;
+  page.notes = true;
+  page.number = pages_.empty() ? (ps.useFirstPageNumber ? ps.firstPageNumber : 1) : pages_.back().number + 1;
+  // In the cells' order, row by row.
+  noteOrder_.resize(notes.size());
+  for (uint32_t i = 0; i < notes.size(); ++i) noteOrder_[i] = i;
+  std::stable_sort(noteOrder_.begin(), noteOrder_.end(), [&](uint32_t a, uint32_t b) {
+    return notes[a].row != notes[b].row ? notes[a].row < notes[b].row : notes[a].col < notes[b].col;
+  });
+  float y = 0;
+  for (uint32_t i = 0; i < notes.size(); ++i) {
+    const float h = PaintNote(nullptr, notes[noteOrder_[i]], 0, 0, availW);
+    if (y > 0 && y + h > availH) {
+      page.notesEnd = i;
+      pages_.push_back(page);
+      page.notesFirst = i;
+      ++page.number;
+      y = 0;
+    }
+    y += h;
+  }
+  page.notesEnd = static_cast<uint32_t>(notes.size());
+  pages_.push_back(page);
+}
+
+float PrintLayout::PaintNote(draw::Painter* p, const CellNote& note, float x, float y, float width) {
+  const Font& base = book_.GetStyles().DefaultFont();
+  text::TextStyle style;
+  style.family = FontMeasure::Family(base, base);
+  style.size = static_cast<float>(FontMeasure::Size(base, base));
+  text::TextStyle bold = style;
+  bold.bold = true;
+  const float pitch = static_cast<float>(text_.Measure().Of(base, base).rowHeight * 0.75);
+  const draw::Brush ink = draw::Brush::Solid({0, 0, 0, 1});
+  text::Fonts& fonts = text_.Fonts();
+  // Lays `s` out `w` wide and, with a painter, draws it from `top` (right-aligned to left + w when
+  // `right`); its lines, one for an empty string.
+  auto put = [&](const std::wstring& s, const text::TextStyle& st, float left, float w, bool right, float top) {
+    if (s.empty()) return 1;
+    text::Paragraph para;
+    para.text = s;
+    para.runs.push_back({static_cast<uint32_t>(s.size()), &st});
+    para.markStyle = &st;
+    const std::vector<text::Line> lines = text::Layout(fonts, para, w);
+    for (const text::Line& ln : lines) {
+      if (p) {
+        const float dx = right ? left + w - ln.contentRight : left;
+        const float baseline = top + (pitch + ln.ascent - ln.descent) / 2;
+        for (const text::GlyphPiece& g : ln.pieces) p->DrawGlyphs({dx + g.OriginX(), baseline - g.rise}, g.Run(), ink);
+      }
+      top += pitch;
+    }
+    return std::max(1, static_cast<int>(lines.size()));
+  };
+  auto measure = [&](const std::wstring& s) {
+    text::Paragraph para;
+    para.text = s;
+    para.runs.push_back({static_cast<uint32_t>(s.size()), &bold});
+    para.markStyle = &bold;
+    const std::vector<text::Line> lines = text::Layout(fonts, para, 1e6f);
+    return lines.empty() ? 0.f : lines.front().contentRight;
+  };
+  // As Excel 2021 prints them: "Cell:" and "Comment:" in bold, right-aligned before the text.
+  const float labelW = std::max(measure(L"Cell:"), measure(L"Comment:"));
+  const text::Face* face = fonts.FaceFor(style.family, false, false);
+  const float gap = face ? face->Advance(L' ', style.size) : style.size / 4;
+  const float tx = x + labelW + gap, tw = std::max(1.f, width - labelW - gap);
+  const float top = y;
+  put(L"Cell:", bold, x, labelW, true, y);
+  y += pitch * put(Utf8ToWide(ColumnName(note.col)) + std::to_wstring(note.row + 1), style, tx, tw, false, y);
+  put(L"Comment:", bold, x, labelW, true, y);
+  // A thread prints as the note Excel writes for older versions, when it has one.
+  const std::wstring& text = note.legacyText.empty() ? note.text : note.legacyText;
+  std::wstring line;
+  for (size_t i = 0; i <= text.size(); ++i) {
+    const wchar_t c = i < text.size() ? text[i] : L'\n';
+    if (c == L'\r') continue;
+    if (c != L'\n') {
+      line += c;
+      continue;
+    }
+    y += pitch * put(line, style, tx, tw, false, y);
+    line.clear();
+  }
+  return y - top + pitch;
+}
+
 void PrintLayout::Paint(draw::Painter& p, size_t index) {
   if (index >= pages_.size()) return;
   const PrintPage& page = pages_[index];
@@ -355,6 +542,23 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   const float left = static_cast<float>(m.left * 72), top = static_cast<float>(m.top * 72);
   const float availW = paperW_ - static_cast<float>((m.left + m.right) * 72);
   const float availH = paperH_ - static_cast<float>((m.top + m.bottom) * 72);
+  if (page.chart) {
+    if (info_.objects) info_.objects->DrawChartSheet(p, {left, top, left + availW, top + availH});
+    PaintHeaderFooter(p, page, true);
+    PaintHeaderFooter(p, page, false);
+    return;
+  }
+  if (page.notes) {
+    if (info_.objects) {
+      const std::vector<CellNote>& notes = info_.objects->Notes();
+      float y = top;
+      for (uint32_t i = page.notesFirst; i < page.notesEnd && i < noteOrder_.size(); ++i)
+        if (noteOrder_[i] < notes.size()) y += PaintNote(&p, notes[noteOrder_[i]], left, y, availW);
+    }
+    PaintHeaderFooter(p, page, true);
+    PaintHeaderFooter(p, page, false);
+    return;
+  }
 
   // Headings: row numbers and column letters, in the default font.
   const Font& base = book_.GetStyles().DefaultFont();
@@ -367,14 +571,20 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   const float bodyW = ColsWidth(page.body.firstCol, page.body.lastCol);
   const float bodyH = RowsHeight(page.body.firstRow, page.body.lastRow);
   const float totalW = (headW + tW + bodyW) * scale_, totalH = (headH + tH + bodyH) * scale_;
+  // A right-to-left sheet prints mirrored: column A and the row numbers at the right, against the
+  // right margin. Everything below is placed left to right and mirrored about the width.
+  const bool rtl = !sheet_.Views().empty() && sheet_.Views().front().rightToLeft;
+  const float width = headW + tW + bodyW;
   float ox = left, oy = top;
   if (ps.horizontalCentered) ox += std::max(0.f, (availW - totalW) / 2);
+  else if (rtl) ox += std::max(0.f, availW - totalW);
   if (ps.verticalCentered) oy += std::max(0.f, (availH - totalH) / 2);
 
   PaintOptions o;
   o.gridlines = ps.gridLines;
   o.gridColor = 0xFF000000;
   o.errors = ps.errors;
+  o.rules = info_.rules;
 
   // Text wraps and shows "####" in the printed columns: wider than the screen's by the digit.
   const float widthScale = static_cast<float>(digits_[static_cast<int>(std::lround(scale_ * 100))] * Grid::kPrintDotPt /
@@ -383,13 +593,23 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   p.Transform(draw::Matrix::Scale(scale_, scale_) * draw::Matrix::Translate(ox, oy));
   auto block = [&](uint32_t r0, uint32_t r1, uint32_t c0, uint32_t c1, float x, float y, float w, float h) {
     if (w <= 0 || h <= 0) return;
-    PageGeometry g(grid_, colX_, r0, c0, x, y, widthScale);
+    PageGeometry g(grid_, colX_, r0, c0, x, y, widthScale, rtl ? width : 0);
     p.Save();
     // A little room around it for the borders on its edges.
-    p.ClipRect({x - 2, y - 2, x + w + 2, y + h + 2});
+    const float cl = rtl ? width - x - w : x;
+    p.ClipRect({cl - 2, y - 2, cl + w + 2, y + h + 2});
     const Range area{r0, c0, r1, c1};
     PaintCells(p, sheet_, text_, grid_, g, area, o);
-    if (const OverlayFn& overlay = Overlay()) overlay(p, sheet_, g, area);
+    if (info_.objects) {
+      // Pictures, shapes and charts over the cells, in the block's place.
+      const draw::Rect cells = SheetRect(area);
+      p.Transform(draw::Matrix::Translate(x - cells.left, y - cells.top));
+      SheetObjects::DrawOptions d;
+      d.printing = true;
+      d.indicators = false;
+      if (rtl) d.mirrorX = width - 2 * (x - cells.left);
+      info_.objects->Draw(p, cells, d);
+    }
     p.Restore();
   };
   const float x1 = headW + tW, y1 = headH + tH;
@@ -410,9 +630,14 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
     style.family = FontMeasure::Family(base, base);
     style.size = static_cast<float>(FontMeasure::Size(base, base));
     auto label = [&](const std::wstring& s, float l, float t, float r, float b) {
+      if (rtl) {
+        const float l0 = l;
+        l = width - r;
+        r = width - l0;
+      }
       p.FillRect({l, t, r, b}, shade);
       p.FillRect({l, b - 0.5f, r, b}, ink);
-      p.FillRect({r - 0.5f, t, r, b}, ink);
+      p.FillRect(rtl ? draw::Rect{l, t, l + 0.5f, b} : draw::Rect{r - 0.5f, t, r, b}, ink);
       text::Paragraph para;
       para.text = s;
       para.runs.push_back({static_cast<uint32_t>(s.size()), &style});

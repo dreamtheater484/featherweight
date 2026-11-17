@@ -41,17 +41,21 @@ class Host {
   // The workbook's date system (date1904).
   virtual bool Date1904() const { return false; }
   // A structured reference: table `name` (or, when empty, the table holding the cell), with the
-  // items (bc::TableItem) and columns asked for. False: no such table or column (#REF!).
+  // items (bc::TableItem) and columns asked for. False with `error` set when there's no such table,
+  // column or row (#REF!, #VALUE! for a #This Row outside the data), or left Err::None when the host
+  // doesn't know tables (the formula keeps its cached value).
   virtual bool Table(std::string_view name, int sheet, int32_t row, int32_t col, uint8_t items, std::string_view col1,
-                     std::string_view col2, Area& out) {
-    (void)name, (void)sheet, (void)row, (void)col, (void)items, (void)col1, (void)col2, (void)out;
+                     std::string_view col2, Area& out, Err& error) {
+    (void)name, (void)sheet, (void)row, (void)col, (void)items, (void)col1, (void)col2, (void)out, (void)error;
     return false;
   }
-  // TEXT(): `value` formatted with a number format code. False when the host can't (the formula
-  // then keeps its cached value).
-  virtual bool FormatText(double value, std::string_view format, std::string& out) {
+  // TEXT(): `value` (a number, or a text, which goes through the format's text section) formatted
+  // with a number format code as the region types it. 1: done; 0: the host can't (the formula then
+  // keeps its cached value); -1: #VALUE! (Excel refuses the code, or the value has no section or is
+  // out of a date's range: a cell would show ####).
+  virtual int FormatText(const CellView& value, std::string_view format, std::string& out) {
     (void)value, (void)format, (void)out;
-    return false;
+    return 0;
   }
   // The region's text and number conventions (Excel follows Windows' settings).
   virtual const ConvLocale& Conv() const { return EnUsConv(); }

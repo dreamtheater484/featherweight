@@ -15,6 +15,7 @@ namespace fw::sheet::csv {
 namespace {
 
 constexpr size_t kMaxRows = 1048576, kMaxCols = 16384;
+constexpr size_t kBatchRows = 65536;  // rows parsed before they go to the model
 
 bool ValidUtf8(std::string_view s) {
   const auto* p = reinterpret_cast<const unsigned char*>(s.data());
@@ -148,15 +149,22 @@ bool IsDigit(char c) { return c >= '0' && c <= '9'; }
 
 // A value as the sheet stores it.
 struct Cell {
-  uint32_t row, col;
-  enum Kind : uint8_t { Text, Number, Bool, Error } kind;
-  uint8_t error;
-  uint32_t code;    // index into the chunk's codes (+1; 0: General)
   double number;
+  uint32_t row, col;
+  uint32_t code;    // index into the chunk's codes (+1; 0: General)
   uint32_t offset;  // text: in the chunk's arena, or (inText) in the file's text
   uint32_t length;
+  uint32_t hash;    // text: for sharing repeated strings
+  enum Kind : uint8_t { Text, Number, Bool, Error } kind;
+  uint8_t error;
   bool inText;
 };
+
+uint32_t HashText(std::string_view text) {
+  uint32_t h = 2166136261u;  // FNV-1a
+  for (unsigned char ch : text) h = (h ^ ch) * 16777619u;
+  return h ^ (h >> 16);
+}
 
 struct Chunk {
   std::vector<Cell> cells;
@@ -222,7 +230,78 @@ void Classify(std::string_view f, const NumLocale& loc, bool convert, Chunk& chu
   }
 }
 
+// A text cell's string id: a string seen recently (one slot per hash, so a column of repeated
+// values such as a status or a country is stored once) is shared, anything else is added.
+constexpr size_t kRecentStrings = 65536;
+constexpr uint32_t kNoString = 0xFFFFFFFF;
+uint32_t StringId(StringTable& strings, std::vector<uint32_t>& recent, std::string_view text, uint32_t hash,
+                  size_t& bytesAdded) {
+  uint32_t& slot = recent[hash & (kRecentStrings - 1)];
+  if (slot != kNoString && strings.Text(slot) == text) return slot;
+  slot = strings.Add(text);
+  bytesAdded += text.size();
+  return slot;
+}
+
+// Rows [first, last) parsed into `threads` chunks, one worker thread each.
+void ParseRows(std::string_view text, const Source& source, const NumLocale& locale, bool convert,
+               std::vector<Chunk>& chunks, unsigned threads, size_t first, size_t last) {
+  const size_t per = (last - first + threads - 1) / threads;
+  auto work = [&](unsigned k) {
+    Chunk& chunk = chunks[k];
+    std::unordered_map<std::wstring, uint32_t> codeIndex;
+    std::string scratch;
+    std::wstring wide;
+    const size_t from = std::min(last, first + k * per), to = std::min(last, from + per);
+    for (size_t r = from; r < to; ++r) {
+      const std::string_view row =
+          text.substr(source.rowStart[r], source.rowEnd[r] - source.rowStart[r]);
+      uint32_t col = 0;
+      SplitRow(row, source.delimiter, scratch, [&](std::string_view f, bool quoted) {
+        const uint32_t c = col++;
+        if (f.empty()) return;
+        if (c >= kMaxCols) {
+          chunk.tooManyColumns = true;
+          return;
+        }
+        Cell cell{};
+        cell.row = static_cast<uint32_t>(r);
+        cell.col = c;
+        Classify(f, locale, convert, chunk, cell, codeIndex, wide);
+        if (cell.kind == Cell::Text) {
+          if (quoted) {
+            cell.offset = static_cast<uint32_t>(chunk.arena.size());
+            chunk.arena.append(f);
+          } else {
+            cell.offset = static_cast<uint32_t>(f.data() - text.data());
+            cell.inText = true;
+          }
+          cell.length = static_cast<uint32_t>(f.size());
+          cell.hash = HashText(f);
+        }
+        chunk.cells.push_back(cell);
+      });
+    }
+  };
+  if (threads == 1) {
+    work(0);
+  } else {
+    std::vector<std::thread> pool;
+    for (unsigned k = 0; k < threads; ++k) pool.emplace_back(work, k);
+    for (auto& t : pool) t.join();
+  }
+}
+
 }  // namespace
+
+uint32_t SystemAnsiCodePage() {
+  DWORD cp = 0;
+  if (GetLocaleInfoEx(LOCALE_NAME_SYSTEM_DEFAULT, LOCALE_IDEFAULTANSICODEPAGE | LOCALE_RETURN_NUMBER,
+                      reinterpret_cast<LPWSTR>(&cp), sizeof cp / sizeof(wchar_t)) == 0 ||
+      cp == 0 || cp == CP_UTF8)
+    cp = 1252;
+  return cp;
+}
 
 Reader::Reader(std::string_view bytes, const Options& options)
     : options_(options), locale_(options.locale ? options.locale : &UserLocale()) {
@@ -263,9 +342,13 @@ void Reader::Decode(std::string_view bytes) {
     text_ = bytes;
   } else {
     source_.encoding = Encoding::Ansi;
-    source_.codePage = GetACP();
+    source_.codePage = options_.ansiCodePage ? options_.ansiCodePage : SystemAnsiCodePage();
     if (bytes.size() < 0x7FFFFFFF) {
-      const int n = MultiByteToWideChar(source_.codePage, 0, bytes.data(), static_cast<int>(bytes.size()), nullptr, 0);
+      int n = MultiByteToWideChar(source_.codePage, 0, bytes.data(), static_cast<int>(bytes.size()), nullptr, 0);
+      if (n <= 0) {  // a code page Windows can't convert: Western
+        source_.codePage = 1252;
+        n = MultiByteToWideChar(source_.codePage, 0, bytes.data(), static_cast<int>(bytes.size()), nullptr, 0);
+      }
       std::wstring w(static_cast<size_t>(n), L'\0');
       MultiByteToWideChar(source_.codePage, 0, bytes.data(), static_cast<int>(bytes.size()), w.data(), n);
       decoded_ = WideToUtf8Big(w.data(), w.size());
@@ -334,53 +417,10 @@ void Reader::Fields(size_t row, std::vector<std::string>& out) const {
 void Reader::AddRows(Workbook& book, SheetBuilder& builder, size_t first, size_t last) {
   last = std::min({last, RowCount(), kMaxRows});
   if (first >= last) return;
-  unsigned threads = options_.threads ? options_.threads : std::min(8u, std::max(1u, std::thread::hardware_concurrency()));
-  if (last - first < 4096) threads = 1;
-  std::vector<Chunk> chunks(threads);
-  const size_t per = (last - first + threads - 1) / threads;
-  auto work = [&](unsigned k) {
-    Chunk& chunk = chunks[k];
-    std::unordered_map<std::wstring, uint32_t> codeIndex;
-    std::string scratch;
-    std::wstring wide;
-    const size_t from = first + k * per, to = std::min(last, from + per);
-    for (size_t r = from; r < to; ++r) {
-      const std::string_view row =
-          text_.substr(source_.rowStart[r], source_.rowEnd[r] - source_.rowStart[r]);
-      uint32_t col = 0;
-      SplitRow(row, source_.delimiter, scratch, [&](std::string_view f, bool quoted) {
-        const uint32_t c = col++;
-        if (f.empty()) return;
-        if (c >= kMaxCols) {
-          chunk.tooManyColumns = true;
-          return;
-        }
-        Cell cell{};
-        cell.row = static_cast<uint32_t>(r);
-        cell.col = c;
-        Classify(f, *locale_, options_.convert, chunk, cell, codeIndex, wide);
-        if (cell.kind == Cell::Text) {
-          if (quoted) {
-            cell.offset = static_cast<uint32_t>(chunk.arena.size());
-            chunk.arena.append(f);
-          } else {
-            cell.offset = static_cast<uint32_t>(f.data() - text_.data());
-            cell.inText = true;
-          }
-          cell.length = static_cast<uint32_t>(f.size());
-        }
-        chunk.cells.push_back(cell);
-      });
-    }
-  };
-  if (threads == 1) {
-    work(0);
-  } else {
-    std::vector<std::thread> pool;
-    for (unsigned k = 0; k < threads; ++k) pool.emplace_back(work, k);
-    for (auto& t : pool) t.join();
-  }
-  // Styles for the formats values were read with, then the cells, in order.
+  const unsigned most =
+      options_.threads ? options_.threads : std::min(8u, std::max(1u, std::thread::hardware_concurrency()));
+  std::vector<Chunk> chunks(most);
+  // Styles for the formats values were read with.
   StylesBuilder sb(book.GetStyles());
   if (sb.CellXfs().empty()) sb.CellXfs().push_back(Xf{});
   auto styleOf = [&](const std::string& code) {
@@ -395,25 +435,50 @@ void Reader::AddRows(Workbook& book, SheetBuilder& builder, size_t first, size_t
     styles_.emplace_back(code, static_cast<uint32_t>(sb.CellXfs().size() - 1));
     return styles_.back().second;
   };
+  // A batch of rows at a time: parsed in parallel, then handed to the model in order, so only one
+  // batch's cells are held (all of them at once doubled the peak memory of a 100 MB file).
   int64_t currentRow = -1;
-  for (const Chunk& chunk : chunks) {
-    if (chunk.tooManyColumns) source_.tooManyColumns = true;
-    std::vector<uint32_t> styles(chunk.codes.size() + 1, 0);
-    for (size_t k = 0; k < chunk.codes.size(); ++k) styles[k + 1] = styleOf(chunk.codes[k]);
-    for (const Cell& c : chunk.cells) {
-      if (c.row != currentRow) {
-        builder.StartRow(c.row);
-        currentRow = c.row;
+  std::vector<uint32_t> recent(kRecentStrings, kNoString);
+  const size_t strings0 = book.Strings().Size(), bytes0 = stringBytes_;
+  for (size_t batchFirst = first; batchFirst < last; batchFirst += kBatchRows) {
+    const size_t batchLast = std::min(last, batchFirst + kBatchRows);
+    const unsigned threads = batchLast - batchFirst < 4096 ? 1 : most;
+    for (Chunk& c : chunks) {
+      c.cells.clear();
+      c.arena.clear();
+      c.codes.clear();
+    }
+    ParseRows(text_, source_, *locale_, options_.convert, chunks, threads, batchFirst, batchLast);
+    for (unsigned k = 0; k < threads; ++k) {
+      const Chunk& chunk = chunks[k];
+      if (chunk.tooManyColumns) source_.tooManyColumns = true;
+      std::vector<uint32_t> styles(chunk.codes.size() + 1, 0);
+      for (size_t j = 0; j < chunk.codes.size(); ++j) styles[j + 1] = styleOf(chunk.codes[j]);
+      for (const Cell& c : chunk.cells) {
+        if (c.row != currentRow) {
+          builder.StartRow(c.row);
+          currentRow = c.row;
+        }
+        switch (c.kind) {
+          case Cell::Number: builder.AddNumber(c.col, c.number, styles[c.code]); break;
+          case Cell::Bool: builder.AddBool(c.col, c.number != 0); break;
+          case Cell::Error: builder.AddError(c.col, static_cast<ErrorCode>(c.error)); break;
+          default: {
+            const std::string_view text = c.inText ? text_.substr(c.offset, c.length)
+                                                   : std::string_view(chunk.arena).substr(c.offset, c.length);
+            builder.AddSharedString(c.col, StringId(book.Strings(), recent, text, c.hash, stringBytes_));
+            break;
+          }
+        }
       }
-      switch (c.kind) {
-        case Cell::Number: builder.AddNumber(c.col, c.number, styles[c.code]); break;
-        case Cell::Bool: builder.AddBool(c.col, c.number != 0); break;
-        case Cell::Error: builder.AddError(c.col, static_cast<ErrorCode>(c.error)); break;
-        default:
-          builder.AddString(c.col, c.inText ? text_.substr(c.offset, c.length)
-                                            : std::string_view(chunk.arena).substr(c.offset, c.length));
-          break;
-      }
+    }
+    // After the first batch, room for the rest of the strings at the same rate: growing the pool
+    // as it fills copies it each time (40 MB more at the peak for a 100 MB file).
+    if (batchFirst == first && batchLast < last) {
+      StringTable& pool = book.Strings();
+      const double more = static_cast<double>(last - batchLast) / static_cast<double>(batchLast - first) * 1.05;
+      pool.Reserve(pool.Size() + static_cast<size_t>((pool.Size() - strings0) * more),
+                   stringBytes_ + static_cast<size_t>(static_cast<double>(stringBytes_ - bytes0) * more));
     }
   }
 }
