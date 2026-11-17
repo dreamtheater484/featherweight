@@ -1388,3 +1388,41 @@ TEST(sheet_calc_names_from_selection) {
   CHECK_EQ(RangeFormula(*book, 0, {1, 2, 1, 2}), std::string("S!$C$2"));
   CHECK_EQ(NameFromLabel("  "), std::string());
 }
+
+TEST(sheet_calc_typed_beyond_the_extent) {
+  // s3-corpus's fixture: data typed in a new sheet, then formulas over all of it. Values typed
+  // below the rows the engine had seen must be read (TEXTJOIN missed A5, lookups found nothing).
+  namespace edit = fw::sheet::edit;
+  auto book = OpenSheet("<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Region</t></is></c></row>",
+                        "<calcPr calcId=\"191029\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  edit::Editor ed(*book);
+  Follow(ed, calc);
+  auto settle = [&] {
+    while (!calc.CalcStep(8)) {
+    }
+  };
+  const char* regions[] = {"North", "South", "East", "West"};
+  for (uint32_t i = 0; i < 4; ++i) {
+    ed.SetCell(0, i + 1, 0, edit::CellInput::Text(regions[i]));
+    ed.SetCell(0, i + 1, 1, edit::CellInput::Number(100 + 25 * i));
+  }
+  settle();
+  ed.SetCell(0, 0, 4, edit::CellInput::Text("West"));
+  ed.SetCell(0, 1, 4, edit::CellInput::Formula("_xlfn.XLOOKUP(E1,A2:A5,B2:B5,\"none\")"));
+  ed.SetCell(0, 2, 4, edit::CellInput::Formula("_xlfn.TEXTJOIN(\", \",TRUE,A2:A5)"));
+  ed.SetCell(0, 3, 4, edit::CellInput::Formula("SUM(B:B)"));
+  settle();
+  CHECK_EQ(Number(*book, "E2"), 175.0);
+  fw::sheet::CellInfo c;
+  CHECK(book->GetSheet(0).GetCell(2, 4, c) && c.value.type == fw::sheet::ValueType::String &&
+        c.value.text == "North, South, East, West");
+  CHECK_EQ(Number(*book, "E4"), 550.0);
+  ed.SetCell(0, 9, 1, edit::CellInput::Number(1));  // B10, further down: the whole column sees it
+  settle();
+  CHECK_EQ(Number(*book, "E4"), 551.0);
+}

@@ -180,7 +180,14 @@ void WorkbookCalc::CellsEdited(int sheet, const Range& cells) {
   const Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
   std::vector<calc::Cell> entered;
   shared_.clear();
+  // Ranges are read as far as the sheet's extent: cells typed beyond it widen it (else =SUM(A2:A5)
+  // wouldn't see a value just typed in A5).
+  std::pair<int32_t, int32_t>* extent = static_cast<size_t>(sheet) < extents_.size() ? &extents_[static_cast<size_t>(sheet)] : nullptr;
   s.ForEachCell(cells, [&](const CellInfo& c) {
+    if (extent && (c.hasFormula || c.value.type != ValueType::Empty)) {
+      extent->first = std::max(extent->first, static_cast<int32_t>(c.row) + 1);
+      extent->second = std::max(extent->second, static_cast<int32_t>(c.col) + 1);
+    }
     if (!c.hasFormula) return true;
     AddFormula(s, static_cast<size_t>(sheet), c);
     calc::Cell at{sheet, static_cast<int32_t>(c.row), static_cast<int32_t>(c.col)};
