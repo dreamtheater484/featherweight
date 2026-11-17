@@ -229,7 +229,8 @@ def read_cases(path):
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.rstrip("\r\n")
-            if not line or line.startswith("#"):
+            # A comment has no tab: "#,##0<tab>1234.5" is a case.
+            if not line or (line.startswith("#") and "\t" not in line):
                 continue
             fields = line.split("\t")
             code, value = fields[0], fields[1]

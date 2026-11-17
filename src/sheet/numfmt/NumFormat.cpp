@@ -21,10 +21,12 @@
 // - An automatic minus goes in front of everything, and only when the shown digits aren't all
 //   zero (-0.3 in "0" shows "0"); fractions and elapsed times keep it ("-0    ").
 // - Fractions are the last continued-fraction convergent whose denominator fits, computed in
-//   doubles (0.3 shows 2/7 with one digit, because 1/0.3 isn't exactly 10/3).
+//   doubles (0.3 shows 2/7 with one digit, because 1/0.3 isn't exactly 10/3). The numerator is
+//   the placeholders right before the bar, text may stand on both sides of it, and the integer's
+//   are all placeholders before the numerator, with the text among them.
 // - Times round to the second (or the shown decimals of one), then each field is truncated.
 //   Dates outside 0..9999-12-31 show "####", except a lone elapsed unit ([h]), which shows any
-//   value, negative ones too.
+//   value, negative ones too. A plain unit after its elapsed one ([h] h) shows the elapsed count.
 // - General shows at most 11 characters (a minus not counted): fixed-point unless that shows
 //   fewer significant digits than scientific notation would (1.23456789E-05).
 
@@ -581,20 +583,30 @@ struct Compiler {
     auto digitLiteral = [&](const Token& x) {
       return x.kind == Token::Literal && x.b == 1 && code[x.a] >= '1' && code[x.a] <= '9';
     };
-    size_t sl = 0;
-    for (; sl < t.size(); ++sl)
-      if (t[sl].kind == Token::Slash && sl > 0 && t[sl - 1].kind == Token::Digit && sl + 1 < t.size() &&
-          (t[sl + 1].kind == Token::Digit || digitLiteral(t[sl + 1])))
+    // Text may stand between the numerator and the bar and between the bar and the denominator
+    // (measured: # ?_)/? shows " 3 /4", |#\:#=/=#| "|23:3=/=4|").
+    auto between = [&](const Token& x) {
+      return (x.kind == Token::Literal && !digitLiteral(x)) || x.kind == Token::Pad || x.kind == Token::Fill ||
+             x.kind == Token::Percent;
+    };
+    size_t sl = 0, ne = 0, k = 0;
+    for (; sl < t.size(); ++sl) {
+      if (t[sl].kind != Token::Slash) continue;
+      for (ne = sl; ne > 0 && between(t[ne - 1]);) --ne;
+      for (k = sl + 1; k < t.size() && between(t[k]);) ++k;
+      if (ne > 0 && t[ne - 1].kind == Token::Digit && k < t.size() && (t[k].kind == Token::Digit || digitLiteral(t[k])))
         break;
+    }
     if (sl == t.size()) return false;
     s.kind = Section::Fraction;
-    size_t ns = sl;
+    // The numerator is the placeholders right before the bar; any before them are the integer's,
+    // with the text among them (|#\:? ?=/=#| shows 23.75 as "|2:3 3=/=4|").
+    size_t ns = ne;
     while (ns > 0 && t[ns - 1].kind == Token::Digit) --ns;
-    s.numDigits = static_cast<int>(sl - ns);
+    s.numDigits = static_cast<int>(ne - ns);
     size_t ie = 0;
-    for (size_t k = 0; k < ns; ++k)
-      if (t[k].kind == Token::Digit) ie = k + 1, s.intDigits++;
-    size_t k = sl + 1;
+    for (size_t j = 0; j < ns; ++j)
+      if (t[j].kind == Token::Digit) ie = j + 1, s.intDigits++;
     if (digitLiteral(t[k])) {
       uint64_t den = 0;
       const size_t first = k;
@@ -615,7 +627,6 @@ struct Compiler {
     for (size_t j = 0; j < t.size(); ++j) {
       Token& x = t[j];
       if (x.kind == Token::Percent) s.scale += 2;
-      else if (x.kind == Token::Digit && j >= k) ToLiteral(x);
       else if (x.kind == Token::Comma && j >= ie) ToLiteral(x);
       else if (x.kind == Token::Slash && j != sl) ToLiteral(x);
       else if (x.kind != Token::Digit && x.kind != Token::Comma && x.kind != Token::Slash &&
@@ -639,15 +650,20 @@ struct Compiler {
         if (IsDateToken(t[k].kind) && t[k].kind != Token::Era) return &t[k];
       return nullptr;
     };
+    // m is minutes after an hour or before a second, and after an earlier second while no minute
+    // has come yet (measured: ss:mm, s m and ss d m show minutes; mm:ss m and ss m mm the month).
+    bool second = false, minute = false;
     for (size_t k = 0; k < t.size(); ++k) {
       Token& x = t[k];
       if (x.kind == Token::Month && x.b <= 2) {
         const Token* p = prevDate(k);
         const Token* q = nextDate(k);
         if ((p && (p->kind == Token::Hour || (p->kind == Token::Elapsed && p->ch == 'h'))) ||
-            (q && (q->kind == Token::Second || (q->kind == Token::Elapsed && q->ch == 's'))))
+            (q && (q->kind == Token::Second || (q->kind == Token::Elapsed && q->ch == 's'))) || (second && !minute))
           x.kind = Token::Minute;
       }
+      second = second || x.kind == Token::Second || (x.kind == Token::Elapsed && x.ch == 's');
+      minute = minute || x.kind == Token::Minute || (x.kind == Token::Elapsed && x.ch == 'm');
     }
     for (size_t k = 0; k < t.size(); ++k) {
       Token& x = t[k];
@@ -678,6 +694,18 @@ struct Compiler {
       else if (IsDateToken(x.kind) && x.kind != Token::Era) ++units;
     }
     s.elapsedOnly = elapsed == 1 && units == 0 && !s.system;
+    // After an elapsed unit, the same plain unit shows the elapsed count too (measured: [h] hh shows
+    // 75 75 for 3 days 3 hours, [s] ss 271433 271433).
+    bool eh = false, em = false, es = false;
+    for (Token& x : t) {
+      const wchar_t unit = x.kind == Token::Hour ? L'h' : x.kind == Token::Minute ? L'm' : x.kind == Token::Second ? L's' : 0;
+      if (unit && (unit == 'h' ? eh : unit == 'm' ? em : es)) {
+        x.kind = Token::Elapsed;
+        x.ch = unit;
+        x.b = x.b >= 2 ? 4 : 3;
+      }
+      if (x.kind == Token::Elapsed) (x.ch == 'h' ? eh : x.ch == 'm' ? em : es) = true;
+    }
   }
 };
 
@@ -755,6 +783,7 @@ struct Formatter {
     out.fill = 0;
     out.fillChar = L'#';
     out.overflow = true;
+    out.generalAt = out.generalLength = 0;
   }
 
   // Integer digits right-aligned in `n` placeholders: placeholder p (0 = leftmost) of character
@@ -915,7 +944,9 @@ struct Formatter {
       for (int w = 11; w >= 1; --w) {
         out.text.clear();
         if (v < 0) Ch(L'-');
-        if (General(v, w) && Fits()) return;
+        const bool made = General(v, w);
+        out.generalAt = 0, out.generalLength = static_cast<uint32_t>(out.text.size());
+        if (made && Fits()) return;
       }
       return Overflow();
     }
@@ -926,6 +957,7 @@ struct Formatter {
         out.text.clear();
         out.pads.clear();
         out.fill = -1;
+        out.generalAt = out.generalLength = 0;
         if (GeneralSection(s, v, w) && Fits()) return;
       }
       return Overflow();
@@ -945,7 +977,10 @@ struct Formatter {
     if (v < 0) Ch(L'-');
     for (const Token& t : s.tokens)
       if (t.kind == Token::General) {
+        // The minus belongs to General's number when nothing comes between them.
+        const size_t at = out.text.size() == 1 && v < 0 ? 0 : out.text.size();
         if (!General(v, w)) return false;
+        out.generalAt = static_cast<uint32_t>(at), out.generalLength = static_cast<uint32_t>(out.text.size() - at);
       } else {
         Common(t);
       }
@@ -1057,6 +1092,7 @@ struct Formatter {
         if (num >= den) ip += 1, num -= den;
       } else {
         num = std::floor(a * den + 0.5);
+        if (num > 32767) return Overflow();  // measured: ?/2 shows 32767/2, and #### from 16384
       }
     } else {
       const double maxDen = std::pow(10.0, std::min(s.denDigits, 9)) - 1;
@@ -1075,36 +1111,45 @@ struct Formatter {
     if (v < 0) Ch(L'-');
     const auto& t = s.tokens;
     bool numZero = false, anyQ = false;
-    for (uint32_t k = s.numStart; k < s.denEnd && k < t.size(); ++k) {
+    int denZeros = 0;  // the denominator's leading 0 placeholders
+    bool denLead = true;
+    for (uint32_t k = 0; k < s.denEnd && k < t.size(); ++k) {
       if (t[k].kind != Token::Digit) continue;
-      if (k < s.slash && t[k].ch == '0') numZero = true;
+      if (k >= s.numStart && k < s.slash && t[k].ch == '0') numZero = true;
       if (t[k].ch == '?') anyQ = true;
+      if (k > s.slash) {
+        denLead = denLead && t[k].ch == '0';
+        if (denLead) ++denZeros;
+      }
     }
-    const bool blank = mixed && num == 0 && !numZero;
-    const std::string I = blank && ip == 0 ? std::string("0") : ip == 0 ? std::string() : IntDigits(ip);
-    const std::string N = IntDigits(num), D = IntDigits(den);
     const wchar_t firstNum = s.numStart < t.size() ? t[s.numStart].ch : L'#';
+    const wchar_t lastInt = mixed && s.intEnd > 0 ? t[s.intEnd - 1].ch : L'#';
+    const bool blank = mixed && num == 0 && !numZero;
+    // A zero integer shows "0" when the fraction is blank, or when the integer ends in ? (measured:
+    // ?\:0/? shows 0 as "0:0/1", #\:0/? as "0/1").
+    const bool zero = ip == 0 && (blank || (num == 0 && lastInt == '?'));
+    const std::string I = zero ? std::string("0") : ip == 0 ? std::string() : IntDigits(ip);
+    const std::string N = IntDigits(num), D = IntDigits(den);
+    // A short denominator fills its leading 0 placeholders first (measured: ?/00 shows 1/02, ?/?0 3/40).
+    const int dpad = std::clamp(s.denDigits - static_cast<int>(D.size()), 0, denZeros);
     int p = 0, np = 0, dp = 0;
-    size_t intStart = out.text.size(), intVisibleEnd = 0;
-    bool intVisible = false;
+    bool intShown = false, intVisible = false;
     for (uint32_t k = 0; k < t.size(); ++k) {
       const Token& x = t[k];
       if (blank && k >= s.intEnd && k < s.denEnd) {
         if (!anyQ) continue;
         if (x.kind == Token::Literal) out.text.append(x.b, L' ');
-        else if (x.kind == Token::Digit || x.kind == Token::Slash || x.kind == Token::Pad) Ch(L' ');
+        else if (x.kind == Token::Digit || x.kind == Token::Slash || x.kind == Token::Pad || x.kind == Token::Percent) Ch(L' ');
         else if (x.kind == Token::FixedDen) out.text.append(D.size(), L' ');
         continue;
       }
       if (mixed && k >= s.intEnd && k < s.numStart) {
-        if (k == s.intEnd) {
-          intVisibleEnd = out.text.size();
-          for (size_t c = intStart; c < intVisibleEnd; ++c) intVisible = intVisible || out.text[c] != L' ';
-        }
+        // Text between the integer and the numerator: dropped when the integer shows no digit, or
+        // blanked when either side's placeholder is ? (#\:#/# shows 0.75 as "3/4", ?\:#/# "  3/4").
         if (!intVisible) {
-          if (firstNum != '?') continue;
+          if (firstNum != '?' && lastInt != '?') continue;
           if (x.kind == Token::Literal) out.text.append(x.b, L' ');
-          else if (x.kind == Token::Pad) Ch(L' ');
+          else if (x.kind == Token::Pad || x.kind == Token::Percent) Ch(L' ');
           continue;
         }
         Common(x);
@@ -1112,15 +1157,25 @@ struct Formatter {
       }
       if (x.kind == Token::Digit) {
         if (k < s.intEnd) {
+          const size_t at = out.text.size();
           IntDigit(p++, s.intDigits, x.ch, I.data(), static_cast<int>(I.size()), s.group);
+          for (size_t c = at; c < out.text.size(); ++c) intShown = intShown || (out.text[c] >= L'0' && out.text[c] <= L'9');
+          if (k + 1 == s.intEnd) intVisible = intShown;
         } else if (k < s.slash) {
           IntDigit(np++, s.numDigits, x.ch, N.data(), static_cast<int>(N.size()), false);
+        } else if (k >= s.denEnd) {
+          // Placeholders after the denominator show as unfilled ones (# ?/? ? shows " 3/4  ").
+          if (x.ch == '0') Ch(L'0');
+          else if (x.ch == '?') Ch(L' ');
         } else {
-          if (dp < static_cast<int>(D.size())) {
+          const int at = dp - dpad;
+          if (dp < dpad) {
+            Ch(L'0');
+          } else if (at < static_cast<int>(D.size())) {
             if (dp == s.denDigits - 1)
-              for (size_t c = static_cast<size_t>(dp); c < D.size(); ++c) Digit(D[c]);
+              for (size_t c = static_cast<size_t>(at); c < D.size(); ++c) Digit(D[c]);
             else
-              Digit(D[static_cast<size_t>(dp)]);
+              Digit(D[static_cast<size_t>(at)]);
           } else if (x.ch == '0') {
             Ch(L'0');
           } else if (x.ch == '?') {

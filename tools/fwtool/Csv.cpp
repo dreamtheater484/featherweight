@@ -1,16 +1,21 @@
 // fwtool csv: opens CSV and TSV files as the app does (plan §7.1) and times it against the budget
-// (§11: a 100 MB CSV shows its first screen in < 1 s and is fully loaded in < 5 s, in < 150 MB).
+// (§11: a 100 MB CSV shows its first screen in < 1 s and is fully loaded in < 5 s); --values checks
+// that every field shows as it was written (§7.1).
 #include <windows.h>
 #include <psapi.h>
 
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <map>
+#include <memory>
 #include <string>
 
 #include "Common.h"
 #include "core/Strings.h"
 #include "sheet/csv/Csv.h"
+#include "sheet/numfmt/NumFormat.h"
+#include "sheet/numfmt/NumLocale.h"
 
 namespace fwtool {
 
@@ -46,12 +51,87 @@ bool ReadAll(const std::filesystem::path& p, std::string& out) {
   return done == out.size();
 }
 
+// The cell's text as the app shows it in a wide enough column, in its format.
+std::string Shown(const fw::sheet::Workbook& book, const fw::sheet::CellInfo& cell, const fw::sheet::NumLocale& locale,
+                  std::map<uint32_t, std::unique_ptr<fw::sheet::NumberFormat>>& formats) {
+  namespace sh = fw::sheet;
+  const sh::Styles& st = book.GetStyles();
+  const uint32_t id = st.CellXf(cell.style).numFmt;
+  auto& f = formats[id];
+  if (!f) {
+    const std::string_view code = st.FormatCode(id);
+    f = std::make_unique<sh::NumberFormat>(code.empty() ? sh::NumberFormat::Builtin(static_cast<int>(id), locale)
+                                                        : sh::NumberFormat(fw::Utf8ToWide(code)));
+  }
+  sh::FormatContext ctx;
+  ctx.locale = &locale;
+  ctx.date1904 = book.Date1904();
+  sh::Formatted out;
+  switch (cell.value.type) {
+    case sh::ValueType::Number: f->Format(cell.value.number, ctx, out); break;
+    case sh::ValueType::String:
+      if (f->IsGeneral()) return std::string(cell.value.text);
+      f->Format(fw::Utf8ToWide(cell.value.text), ctx, out);
+      break;
+    case sh::ValueType::Bool: return cell.value.boolean ? "TRUE" : "FALSE";
+    case sh::ValueType::Error: return std::string(sh::ErrorText(cell.value.error));
+    default: return {};
+  }
+  return out.overflow ? "####" : fw::WideToUtf8(out.text);
+}
+
+// Every field must show exactly as it was written (plan §7.1: no value changes). Returns how many don't.
+size_t CheckValues(const fw::sheet::csv::Reader& reader, const fw::sheet::Workbook& book, const fw::sheet::Sheet& sheet,
+                   const fw::sheet::NumLocale& locale) {
+  std::map<uint32_t, std::unique_ptr<fw::sheet::NumberFormat>> formats;
+  std::vector<std::string> fields;
+  size_t checked = 0, changed = 0;
+  const size_t rows = std::min<size_t>(reader.RowCount(), 1048576);
+  for (size_t r = 0; r < rows; ++r) {
+    reader.Fields(r, fields);
+    for (size_t c = 0; c < fields.size() && c < 16384; ++c) {
+      fw::sheet::CellInfo cell;
+      const bool has = sheet.GetCell(static_cast<uint32_t>(r), static_cast<uint32_t>(c), cell);
+      if (!has && fields[c].empty()) continue;
+      ++checked;
+      const std::string shown = has ? Shown(book, cell, locale, formats) : std::string();
+      if (shown == fields[c]) continue;
+      if (++changed <= 12)
+        std::printf("    row %zu, column %zu: \"%s\" shows as \"%s\"\n", r + 1, c + 1, fields[c].substr(0, 60).c_str(),
+                    shown.substr(0, 60).c_str());
+    }
+  }
+  std::printf("  values: %zu fields, %zu changed\n", checked, changed);
+  return changed;
+}
+
 }  // namespace
 
 int RunCsv(const Options& options) {
   int failed = 0;
+  const fw::sheet::NumLocale& locale = options.locale == L"en-NL"   ? fw::sheet::EnNlLocale()
+                                       : options.locale == L"en-US" ? fw::sheet::EnUsLocale()
+                                                                    : fw::sheet::UserLocale();
+  // Files as given, and a folder's .csv, .tsv and .txt files (sorted).
+  std::vector<std::filesystem::path> files;
+  auto isText = [](const std::filesystem::path& f) {
+    const std::wstring ext = f.extension().wstring();
+    return _wcsicmp(ext.c_str(), L".csv") == 0 || _wcsicmp(ext.c_str(), L".tsv") == 0 || _wcsicmp(ext.c_str(), L".txt") == 0;
+  };
   for (const auto& in : options.inputs) {
-    const std::filesystem::path file(in);
+    std::error_code ec;
+    if (!std::filesystem::is_directory(in, ec)) {
+      files.push_back(in);
+      continue;
+    }
+    std::vector<std::filesystem::path> found;
+    for (auto it = std::filesystem::recursive_directory_iterator(in, ec); !ec && it != std::filesystem::end(it); it.increment(ec))
+      if (it->is_regular_file(ec) && isText(it->path())) found.push_back(it->path());
+    std::sort(found.begin(), found.end());
+    files.insert(files.end(), found.begin(), found.end());
+  }
+  size_t changedFiles = 0;
+  for (const auto& file : files) {
     const auto t0 = std::chrono::steady_clock::now();
     std::string bytes;
     if (!ReadAll(file, bytes)) {
@@ -62,7 +142,8 @@ int RunCsv(const Options& options) {
     const auto t1 = std::chrono::steady_clock::now();
     const double mbBytes = PrivateMb(false);
     fw::sheet::csv::Options o;
-    o.tsv = file.extension() == L".tsv";
+    o.locale = &locale;
+    o.tsv = _wcsicmp(file.extension().c_str(), L".tsv") == 0;
     fw::sheet::csv::Reader reader(bytes, o);
     const auto t2 = std::chrono::steady_clock::now();
     const double mbRows = PrivateMb(false);
@@ -91,8 +172,10 @@ int RunCsv(const Options& options) {
     std::printf("  the sheet: %zu strings in %.0f MB, cells %.0f MB (16 bytes each)\n",
                 static_cast<size_t>(book.Strings().Size()), book.Strings().Bytes() / 1048576.0,
                 static_cast<double>(sheet.CellCount()) * 16 / 1048576.0);
+    if (options.values && CheckValues(reader, book, sheet, locale)) ++changedFiles;
   }
-  return failed ? 1 : 0;
+  if (options.values) std::printf("\n%zu files, %zu with a changed value\n", files.size(), changedFiles);
+  return failed || changedFiles ? 1 : 0;
 }
 
 }  // namespace fwtool

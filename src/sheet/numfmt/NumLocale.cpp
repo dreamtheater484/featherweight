@@ -285,11 +285,20 @@ NumLocale MakeLocale(const WinLocaleInfo& w) {
   const wchar_t* name = w.name.c_str();
   l.lcid = w.name.empty() ? 0x409 : LocaleNameToLCID(name, 0);
   // The codes the region types (Application.International's year, day and hour codes and General
-  // name). Only the Netherlands is measured (en-NL); other regions keep the English codes.
+  // name), by region: the Netherlands measured (en-NL); Germany and Austria from a German Excel's
+  // cached TEXT() ("TT.MM.JJ"); France as French Excel types them ("jj/mm/aaaa", "Standard").
+  // Other regions keep the English codes.
   const size_t dash = w.name.rfind(L'-');
-  if (dash != std::wstring::npos && w.name.compare(dash + 1, std::wstring::npos, L"NL") == 0) {
+  const std::wstring region = dash == std::wstring::npos ? std::wstring() : w.name.substr(dash + 1);
+  if (region == L"NL") {
     l.yearCode = L'j', l.hourCode = L'u';
     l.generalName = L"Standaard";
+  } else if (region == L"DE" || region == L"AT") {
+    l.yearCode = L'j', l.dayCode = L't';
+    l.generalName = L"Standard";
+  } else if (region == L"FR") {
+    l.yearCode = L'a', l.dayCode = L'j';
+    l.generalName = L"Standard";
   }
   return l;
 }

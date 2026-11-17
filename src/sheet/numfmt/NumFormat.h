@@ -34,6 +34,10 @@ struct Formatted {
   // The value can't be shown ("####": a date out of range, no section for it, or too wide for the
   // cell): text is empty and the fill is '#' at 0, so the cell fills with '#'.
   bool overflow = false;
+  // The part of `text` that General wrote (with its minus sign), for a width check: Excel gives
+  // each of its characters a digit's width, except a leading minus, which is as wide as it is
+  // (measured: 0,333333 doesn't fit where -3,14159 does). generalLength 0: none.
+  uint32_t generalAt = 0, generalLength = 0;
 
   void Clear() {
     text.clear();
@@ -42,6 +46,7 @@ struct Formatted {
     fillChar = 0;
     color = 0;
     overflow = false;
+    generalAt = generalLength = 0;
   }
 };
 
