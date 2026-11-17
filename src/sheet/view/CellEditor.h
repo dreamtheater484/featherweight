@@ -56,6 +56,9 @@ class CellEditor {
   void Insert(const std::wstring& s);
   void SetCaret(int caret, bool extend);
   void SelectAll();
+  // Replaces [from, to) with `s`, the caret and selection staying where they were in the rest of
+  // the text (a reference's border dragged).
+  void ReplaceSpan(int from, int to, const std::wstring& s);
   // A double-click: the word at `at` (letters, digits, "_", ".", "$"), or the one character there.
   void SelectWord(int at);
 

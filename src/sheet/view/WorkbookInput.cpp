@@ -264,6 +264,11 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
   // The formula bar's text and the box over the cell place the caret; any other click ends the
   // entry being typed (in point mode it will insert a reference instead).
   if (button == 0 && !ChartSheet() && EditMouseDown(fx, fy, mods, doubleClick)) return;
+  if (RefGrab g; button == 0 && RefHit(x, y, g)) {
+    refGrab_ = g;
+    mouse_ = Mouse::RefDrag;
+    return;
+  }
   if (button == 0 && gfx::Contains(cells_, fx, fy) && PointClick(x, y)) return;
   if (editor_.Active()) CommitEdit(false);
   tabStartCol_ = UINT32_MAX;
@@ -399,6 +404,7 @@ void WorkbookView::OnMouseMove(int x, int y, UINT mods) {
   switch (mouse_) {
     case Mouse::EditText: EditMouseMove(fx, fy); return;
     case Mouse::Point: PointDrag(x, y); return;
+    case Mouse::RefDrag: RefDrag(x, y); return;
     case Mouse::ThumbV: {
       const double range = Height(v.track) - Height(v.thumb);
       if (range > 0) ScrollTo(gridX_, v.min + (fy - thumbGrab_ - v.track.top) / range * (v.end - v.min - v.view));
@@ -469,6 +475,8 @@ HCURSOR WorkbookView::CursorAt(int x, int y) {
     EditBox b;
     if (gfx::Contains(FormulaBox(), fx, fy) || (EditGeometry(b) && gfx::Contains(b.rc, fx, fy)))
       return LoadCursorW(nullptr, IDC_IBEAM);
+    if (RefGrab g; RefHit(x, y, g))
+      return LoadCursorW(nullptr, !g.resize ? IDC_SIZEALL : g.nwse ? IDC_SIZENWSE : IDC_SIZENESW);
   }
   if (Ready() && !preview_ && gfx::Contains(cells_, static_cast<float>(x), static_cast<float>(y))) {
     Bar v, h;

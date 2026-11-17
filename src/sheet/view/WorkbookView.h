@@ -253,7 +253,7 @@ class WorkbookView : public PagedView {
   float tabScroll_ = 0;
 
   // Mouse.
-  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point };
+  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag };
   Mouse mouse_ = Mouse::None;
   float thumbGrab_ = 0;
   int hoverTab_ = -1;
@@ -325,8 +325,20 @@ class WorkbookView : public PagedView {
     int sheet = -1;          // the sheet index; -1 none named (the edited cell's), -2 not found
     uint32_t r0 = 0, c0 = 0, r1 = 0, c1 = 0;
     int color = 0;
+    int refAt = 0;  // where the reference starts after its sheet
+    int kind = 0;   // 0 cells, 1 whole columns, 2 whole rows
   };
   const std::vector<RefBox>& Refs();
+  // Dragging a reference's border moves it; a corner's handle sizes it (from the opposite corner).
+  struct RefGrab {
+    size_t index = SIZE_MAX;
+    bool resize = false, nwse = false;  // nwse: the top-left or bottom-right handle
+    CellAddr anchor{};                  // resize: the corner that stays
+    uint32_t dRow = 0, dCol = 0;        // move: the grabbed cell from the range's top-left
+  };
+  bool RefHit(int x, int y, RefGrab& g);
+  void RefDrag(int x, int y);
+  RefGrab refGrab_;
   void DrawRefBorders(gfx::Canvas& c, const Pane& pane);
   // One line of the editor's text from `lineAt`, references in their colors.
   void DrawEditLine(gfx::Canvas& c, std::wstring_view line, int lineAt, float left, float top, float bottom,

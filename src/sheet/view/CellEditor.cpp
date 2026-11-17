@@ -61,6 +61,19 @@ void CellEditor::SelectAll() {
   caret_ = static_cast<int>(text_.size());
 }
 
+void CellEditor::ReplaceSpan(int from, int to, const std::wstring& s) {
+  const int n = static_cast<int>(text_.size());
+  from = std::clamp(from, 0, n);
+  to = std::clamp(to, from, n);
+  const int delta = static_cast<int>(s.size()) - (to - from);
+  auto keep = [&](int i) { return i >= to ? i + delta : i > from ? from + static_cast<int>(s.size()) : i; };
+  const int caret = keep(caret_), anchor = keep(anchor_);
+  text_.replace(static_cast<size_t>(from), static_cast<size_t>(to - from), s);
+  caret_ = caret;
+  anchor_ = anchor;
+  point_ = Span{};
+}
+
 void CellEditor::SelectWord(int at) {
   const int n = static_cast<int>(text_.size());
   at = std::clamp(at, 0, n);

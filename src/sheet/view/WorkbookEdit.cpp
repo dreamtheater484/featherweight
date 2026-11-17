@@ -95,6 +95,8 @@ struct Found {
   size_t at, length;
   std::wstring sheet;  // empty: none named
   uint32_t r0, c0, r1, c1;
+  size_t refAt = 0;  // where the reference starts, after the sheet
+  int kind = 0;      // 0 cells (A1, A1:B2), 1 columns (A:B), 2 rows (1:2)
 };
 std::vector<Found> ScanReferences(std::wstring_view s) {
   std::vector<Found> out;
@@ -145,6 +147,7 @@ std::vector<Found> ScanReferences(std::wstring_view s) {
     }
     // The reference itself.
     Found f{start, 0, sheet, 0, 0, 0, 0};
+    f.refAt = j;
     size_t k = j;
     bool ok = false;
     uint32_t col = 0, row = 0;
@@ -171,6 +174,7 @@ std::vector<Found> ScanReferences(std::wstring_view s) {
           f.c1 = col2;
           f.r0 = 0;
           f.r1 = kMaxRows - 1;
+          f.kind = 1;
           k = c;
           ok = true;
         }
@@ -186,6 +190,7 @@ std::vector<Found> ScanReferences(std::wstring_view s) {
           f.r1 = row2;
           f.c0 = 0;
           f.c1 = kMaxCols - 1;
+          f.kind = 2;
           k = c;
           ok = true;
         }
@@ -208,7 +213,102 @@ std::vector<Found> ScanReferences(std::wstring_view s) {
   return out;
 }
 
+std::wstring ColLetters(uint32_t col) {
+  std::wstring s;
+  for (uint32_t v = col + 1; v > 0; v = (v - 1) / 26) s.insert(s.begin(), static_cast<wchar_t>(L'A' + (v - 1) % 26));
+  return s;
+}
+
+// A reference for the range, with the $ signs `old` had (A1, $A$1:B2, $A:B, 1:$2).
+std::wstring RefText(std::wstring_view old, int kind, uint32_t r0, uint32_t c0, uint32_t r1, uint32_t c1) {
+  const size_t colon = old.find(L':');
+  const std::wstring_view p1 = old.substr(0, colon);
+  const std::wstring_view p2 = colon == std::wstring_view::npos ? p1 : old.substr(colon + 1);
+  auto absFirst = [](std::wstring_view p) { return !p.empty() && p[0] == L'$'; };
+  auto absRow = [](std::wstring_view p) { return p.find(L'$', 1) != std::wstring_view::npos; };
+  auto col = [](uint32_t c, bool abs) { return (abs ? L"$" : L"") + ColLetters(c); };
+  auto row = [](uint32_t r, bool abs) { return (abs ? L"$" : L"") + std::to_wstring(r + 1); };
+  if (kind == 1) return col(c0, absFirst(p1)) + L":" + col(c1, absFirst(p2));
+  if (kind == 2) return row(r0, absFirst(p1)) + L":" + row(r1, absFirst(p2));
+  std::wstring s = col(c0, absFirst(p1)) + row(r0, absRow(p1));
+  if (r0 != r1 || c0 != c1) s += L":" + col(c1, absFirst(p2)) + row(r1, absRow(p2));
+  return s;
+}
+
 }  // namespace
+
+bool WorkbookView::RefHit(int x, int y, RefGrab& g) {
+  if (!editor_.Active() || !editor_.IsFormula() || !gfx::Contains(cells_, static_cast<float>(x), static_cast<float>(y)))
+    return false;
+  const std::vector<Pane> panes = Panes();
+  const Pane* pane = nullptr;
+  for (const Pane& p : panes)
+    if (x >= p.rc.left && x < p.rc.right && y >= p.rc.top && y < p.rc.bottom) pane = &p;
+  if (!pane) return false;
+  const float fx = static_cast<float>(x), fy = static_cast<float>(y);
+  const float h = std::round(5 * ui_) / 2 + 1, slop = std::max(3.f, std::round(3 * ui_));
+  const std::vector<RefBox>& refs = Refs();
+  for (size_t i = refs.size(); i-- > 0;) {  // the last drawn is on top
+    const RefBox& r = refs[i];
+    if ((r.sheet == -1 ? static_cast<int>(editSheet_) : r.sheet) != static_cast<int>(sheet_)) continue;
+    const D2D1_RECT_F f = CellRect(*pane, r.r0, r.c0, r.r1, r.c1);
+    const float right = f.right - 1, bottom = f.bottom - 1;
+    for (const bool left : {true, false})
+      for (const bool top : {true, false}) {
+        if (std::fabs(fx - (left ? f.left : right)) > h || std::fabs(fy - (top ? f.top : bottom)) > h) continue;
+        g.index = i;
+        g.resize = true;
+        g.nwse = left == top;
+        // The opposite corner stays (on a sheet read right to left the first column is on the right).
+        g.anchor = {top ? r.r1 : r.r0, (left != rtl_) ? r.c1 : r.c0};
+        return true;
+      }
+    const bool onV = (std::fabs(fx - f.left) <= slop || std::fabs(fx - right) <= slop) && fy >= f.top - slop && fy <= bottom + slop;
+    const bool onH = (std::fabs(fy - f.top) <= slop || std::fabs(fy - bottom) <= slop) && fx >= f.left - slop && fx <= right + slop;
+    if (!onV && !onH) continue;
+    auto cell = CellAt(x, y);
+    if (!cell) continue;
+    g.index = i;
+    g.resize = false;
+    g.dRow = std::clamp(cell->row, r.r0, r.r1) - r.r0;
+    g.dCol = std::clamp(cell->col, r.c0, r.c1) - r.c0;
+    return true;
+  }
+  return false;
+}
+
+void WorkbookView::RefDrag(int x, int y) {
+  const std::vector<RefBox>& refs = Refs();
+  if (refGrab_.index >= refs.size()) return;
+  const RefBox r = refs[refGrab_.index];
+  const int px = static_cast<int>(std::clamp(static_cast<float>(x), cells_.left, cells_.right - 1));
+  const int py = static_cast<int>(std::clamp(static_cast<float>(y), cells_.top, cells_.bottom - 1));
+  auto cell = CellAt(px, py);
+  if (!cell) return;
+  uint32_t r0, c0, r1, c1;
+  if (refGrab_.resize) {
+    r0 = std::min(refGrab_.anchor.row, cell->row);
+    r1 = std::max(refGrab_.anchor.row, cell->row);
+    c0 = std::min(refGrab_.anchor.col, cell->col);
+    c1 = std::max(refGrab_.anchor.col, cell->col);
+  } else {
+    const uint32_t h = r.r1 - r.r0, w = r.c1 - r.c0;
+    r0 = std::min(cell->row - std::min(cell->row, refGrab_.dRow), kMaxRows - 1 - h);
+    c0 = std::min(cell->col - std::min(cell->col, refGrab_.dCol), kMaxCols - 1 - w);
+    r1 = r0 + h;
+    c1 = c0 + w;
+  }
+  // Whole columns stay whole columns, whole rows whole rows.
+  if (r.kind == 1) r0 = 0, r1 = kMaxRows - 1;
+  if (r.kind == 2) c0 = 0, c1 = kMaxCols - 1;
+  if (r0 == r.r0 && c0 == r.c0 && r1 == r.r1 && c1 == r.c1) return;
+  const std::wstring& text = editor_.Text();
+  const int end = r.at + r.length;
+  const std::wstring old = text.substr(static_cast<size_t>(r.refAt), static_cast<size_t>(end - r.refAt));
+  editor_.ReplaceSpan(r.refAt, end, RefText(old, r.kind, r0, c0, r1, c1));
+  ScrollIntoView(*cell);
+  host_.ViewInvalidate();
+}
 
 const std::vector<WorkbookView::RefBox>& WorkbookView::Refs() {
   if (!editor_.Active() || !editor_.IsFormula()) {
@@ -230,6 +330,8 @@ const std::vector<WorkbookView::RefBox>& WorkbookView::Refs() {
     r.c0 = f.c0;
     r.r1 = f.r1;
     r.c1 = f.c1;
+    r.refAt = static_cast<int>(f.refAt);
+    r.kind = f.kind;
     // The same range keeps its color.
     r.color = -1;
     for (const RefBox& o : refs_)

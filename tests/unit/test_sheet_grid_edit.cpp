@@ -89,6 +89,16 @@ TEST(SheetGridEdit_SelectWord) {
   CHECK(e.Anchor() == 17 && e.Caret() == 18);  // a space: just it
 }
 
+TEST(SheetGridEdit_ReplaceSpanKeepsTheCaret) {
+  CellEditor e;
+  e.Begin(L"=A1+B2", CellEditor::Mode::Enter);
+  e.ReplaceSpan(1, 3, L"$C$10");  // the caret was at the end
+  CHECK(e.Text() == L"=$C$10+B2" && e.Caret() == 9);
+  e.SetCaret(1, false);
+  e.ReplaceSpan(7, 9, L"D4:E5");  // after the caret: it stays
+  CHECK(e.Text() == L"=$C$10+D4:E5" && e.Caret() == 1);
+}
+
 TEST(SheetGridEdit_PointMode) {
   CellEditor e;
   e.Begin(L"", CellEditor::Mode::Enter);
