@@ -13,7 +13,9 @@
 #include "TestHarness.h"
 #include "pkg/Check.h"
 #include "pkg/OwnerFile.h"
+#include "sheet/csv/Csv.h"
 #include "sheet/edit/Edit.h"
+#include "sheet/numfmt/NumLocale.h"
 #include "sheet/view/WorkbookFile.h"
 #include "sheet/xlsx/Xlsx.h"
 
@@ -171,7 +173,8 @@ TEST(WorkbookFile_ANewWorkbookSavesAsAnyOther) {
   CHECK_EQ(sheet_test::Text(saved->GetSheet(0), 1, 1), std::string("950"));
   CHECK_EQ(sheet_test::FormulaText(saved->GetSheet(0), 2, 1), std::string("SUM(B2:B2)"));
   CHECK(WorkbookFile::FormatOf(L"x.XLTX", FileFormat::Xlsx) == FileFormat::Xltx &&
-        WorkbookFile::FormatOf(L"x.csv", FileFormat::Xlsm) == FileFormat::Xlsm);
+        WorkbookFile::FormatOf(L"x.txt", FileFormat::Xlsm) == FileFormat::Xlsm &&
+        WorkbookFile::FormatOf(L"x.CSV", FileFormat::Xlsx) == FileFormat::Csv);
   // A template opens as a new workbook: Save goes to Save As, suggesting a workbook beside it.
   WorkbookFile fromTemplate;
   CHECK(WorkbookFile::IsTemplate(L"C:\\t\\Budget.XLTX") && !WorkbookFile::IsTemplate(L"C:\\t\\Budget.xlsx"));
@@ -182,4 +185,86 @@ TEST(WorkbookFile_ANewWorkbookSavesAsAnyOther) {
   wchar_t out[MAX_PATH];
   if (DWORD n = GetEnvironmentVariableW(L"FW_SAVE_OUT", out, MAX_PATH); n > 0 && n < MAX_PATH)
     CopyFileW(path.c_str(), (std::wstring(out) + L"\\new-book.xlsm").c_str(), FALSE);
+}
+
+namespace {
+
+std::vector<uint8_t> Bytes(std::string_view s) { return std::vector<uint8_t>(s.begin(), s.end()); }
+
+std::string ReadAll(const std::wstring& path) {
+  fw::pkg::Status st;
+  auto snap = fw::pkg::Snapshot::Open(path, {}, st);
+  if (!snap) return {};
+  const auto b = snap->Bytes();
+  return std::string(reinterpret_cast<const char*>(b.data()), b.size());
+}
+
+std::unique_ptr<Workbook> OpenCsv(const std::wstring& path, const csv::Options& o, fw::pkg::Snapshot::Stamp& stamp) {
+  fw::pkg::Status st;
+  auto snap = fw::pkg::Snapshot::Open(path, {}, st);
+  if (!snap) return nullptr;
+  stamp = snap->GetStamp();
+  const auto b = snap->Bytes();
+  auto book = std::make_unique<Workbook>();
+  csv::Source source;
+  csv::Read(std::string_view(reinterpret_cast<const char*>(b.data()), b.size()), "Prices", o, *book, source);
+  return book;
+}
+
+}  // namespace
+
+// A CSV file saved keeps its own way of writing (no byte-order mark, ';', LF here); only the row
+// edited is written anew; Save As .tsv writes a new tab-separated file; an Excel workbook saves
+// CSV only as a copy.
+TEST(WorkbookFile_CsvKeepsItsWayAndAWorkbookCopiesToCsv) {
+  Folder f;
+  const std::wstring path = f.path + L"\\Prices.csv";
+  const std::string original = "Item;Price\n\"Tea\";2,50\nCoffee;3\n";
+  CHECK(test::WriteFileBytes(path, Bytes(original)));
+  csv::Options o;
+  o.locale = &EnNlLocale();  // decimal comma, ";" between fields
+  fw::pkg::Snapshot::Stamp stamp;
+  auto book = OpenCsv(path, o, stamp);
+  if (!book) return;
+  CHECK(book->Format() == FileFormat::Csv);
+  Editor ed(*book);
+  WorkbookFile file;
+  file.Opened(path, stamp);
+  file.SetCsvOptions(o);
+  ed.OnChange([&](const std::vector<edit::Change>&) { file.Changed(ed.Modified(), {}); });
+  std::wstring error;
+  // Untouched: the same bytes.
+  CHECK(file.Save(*book, ed, path, error));
+  CHECK(ReadAll(path) == original);
+  // One row edited: the others as they were.
+  CHECK(ed.SetCell(0, 2, 0, CellInput::Text("Cocoa")));
+  CHECK(file.Dirty() && ed.Modified());
+  CHECK(file.Save(*book, ed, path, error));
+  CHECK(ReadAll(path) == "Item;Price\n\"Tea\";2,50\nCocoa;3\n");
+  CHECK(!file.Dirty() && !ed.Modified() && book->Format() == FileFormat::Csv);
+  CHECK_EQ(f.Count(L"Backups"), 1u);
+  // Save As .tsv: a new file in Excel's way for it, and the tab is that file.
+  const std::wstring tsv = f.path + L"\\Prices.tsv";
+  CHECK(file.Save(*book, ed, tsv, error));
+  CHECK(ReadAll(tsv) == "\xEF\xBB\xBFItem\tPrice\r\nTea\t2,50\r\nCocoa\t3\r\n");  // 2,50 read with 0.00
+  CHECK(file.Path() == tsv);
+
+  // An Excel workbook: Save as .csv is refused, a copy is written.
+  const std::wstring xlsxPath = f.path + L"\\Budget.xlsx";
+  CHECK(test::WriteFileBytes(xlsxPath, test::MakeZip(sheet_test::WorkbookParts({"<sheetData/>"}))));
+  fw::pkg::Snapshot::Stamp xStamp;
+  auto workbook = OpenFile(xlsxPath, &xStamp);
+  if (!workbook) return;
+  Editor xed(*workbook);
+  WorkbookFile xfile;
+  xfile.Opened(xlsxPath, xStamp);
+  xfile.SetCsvOptions(o);
+  CHECK(xed.SetCell(0, 0, 0, CellInput::Text("a,b")));
+  CHECK(xed.SetCell(0, 0, 1, CellInput::Number(1.5)));
+  CHECK(!xfile.StartSave(*workbook, xed, f.path + L"\\Budget.csv", nullptr, error));
+  CHECK(error.find(L"Save a copy as CSV") != std::wstring::npos && !xed.Saving());
+  CHECK(xfile.SaveCsvCopy(*workbook, f.path + L"\\Budget.csv", error));
+  CHECK(ReadAll(f.path + L"\\Budget.csv") == "\xEF\xBB\xBF" "a,b;1,5\r\n");
+  CHECK(xfile.Path() == xlsxPath && xed.Modified());
+  CHECK(!xfile.SaveCsvCopy(*workbook, xlsxPath, error));
 }
