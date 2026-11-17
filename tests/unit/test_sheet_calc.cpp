@@ -2,6 +2,7 @@
 // functions and the dependency graph.
 
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -492,7 +493,12 @@ TEST(sheet_calc_matches_excel) {
     if (v.IsEmpty()) v = Value::Number(0);
     bool ok = false;
     switch (k.type) {
-      case 'n': ok = v.IsNumber() && std::fabs(v.number() - k.num) <= 1e-12 * std::max(1.0, std::fabs(k.num)); break;
+      case 'n': {
+        // XIRR iterates to Excel's documented accuracy, 0.000001 %: its digits after that differ.
+        double tolerance = std::strstr(k.formula, "XIRR(") ? 1e-8 : 1e-12;
+        ok = v.IsNumber() && std::fabs(v.number() - k.num) <= tolerance * std::max(1.0, std::fabs(k.num));
+        break;
+      }
       case 's': ok = v.IsText() && v.text() == k.text; break;
       case 'b': ok = v.IsBool() && v.boolean() == (k.num != 0); break;
       case 'e': ok = v.IsError() && ErrText(v.error()) == k.text; break;

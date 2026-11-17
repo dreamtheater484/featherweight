@@ -3,6 +3,7 @@
 // Internal to the formula engine: the machine that runs bytecode, the helpers functions use to
 // read their arguments, and the function implementations (Fn*.cpp).
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <string_view>
@@ -189,6 +190,108 @@ namespace fn {
 // reach), a single value as 1 x 1. False (with c.out set) when it can't be read.
 bool ArgArray(Call& c, int i, Value& out);
 
+// SUM's rules for its arguments [from, to): numbers in references and arrays (text, booleans and
+// blanks there are skipped); values given directly count, booleans as 1 and 0, text converted.
+// The first error ends it, in c.out.
+template <class F>
+bool EachNumber(Call& c, int from, int to, F&& fn) {
+  for (int i = from; i < to; ++i) {
+    if (c.arg(i).IsMissing()) continue;
+    bool ok = EachItem(c.m, c.arg(i), [&](const CellView& v, From from) {
+      if (v.type == Type::Error) {
+        c.Fail(v.err);
+        return false;
+      }
+      if (v.type == Type::Number) {
+        fn(v.num);
+        return true;
+      }
+      if (from != From::kDirect) return true;
+      double d;
+      Err e = Err::None;
+      if (!ToNumber(c.m, v, d, e)) {
+        c.Fail(e);
+        return false;
+      }
+      fn(d);
+      return true;
+    });
+    if (!ok) {
+      if (c.m.stop || !c.out.IsError()) c.Fail(Err::Value);
+      return false;
+    }
+  }
+  return true;
+}
+
+// The "A" functions' rules: in references, text counts as 0 and booleans as 1 or 0.
+template <class F>
+bool EachNumberA(Call& c, int from, int to, F&& fn) {
+  for (int i = from; i < to; ++i) {
+    if (c.arg(i).IsMissing()) continue;
+    bool ok = EachItem(c.m, c.arg(i), [&](const CellView& v, From from) {
+      if (v.type == Type::Error) {
+        c.Fail(v.err);
+        return false;
+      }
+      if (v.type == Type::Number || v.type == Type::Bool) {
+        fn(v.num);
+        return true;
+      }
+      if (v.type == Type::Text) {
+        double d;
+        Err e = Err::None;
+        if (from != From::kDirect) {
+          fn(0);
+          return true;
+        }
+        if (!ToNumber(c.m, v, d, e)) {
+          c.Fail(e);
+          return false;
+        }
+        fn(d);
+      }
+      return true;
+    });
+    if (!ok) {
+      if (!c.out.IsError()) c.Fail(Err::Value);
+      return false;
+    }
+  }
+  return true;
+}
+
+inline bool Numbers(Call& c, int from, int to, std::vector<double>& out) {
+  return EachNumber(c, from, to, [&](double d) { out.push_back(d); });
+}
+
+// Adds as Excel's SUM does: a total that cancels to a rounding error becomes 0.
+struct Summer {
+  double sum = 0;
+  void Add(double d) {
+    double r = sum + d;
+    if (r != 0 && std::fabs(r) <= std::max(std::fabs(sum), std::fabs(d)) * 8.8817841970012523e-16) r = 0;
+    sum = r;
+  }
+};
+
+inline double Mean(const std::vector<double>& v) {
+  Summer s;
+  for (double d : v) s.Add(d);
+  return s.sum / static_cast<double>(v.size());
+}
+
+inline double SquaredDeviations(const std::vector<double>& v) {
+  double m = Mean(v), s = 0;
+  for (double d : v) s += (d - m) * (d - m);
+  return s;
+}
+
+// YEARFRAC's year fraction between two serials (any order) by day-count basis 0-4.
+double YearFracOf(double a, double b, int basis, bool date1904);
+// A serial argument: numbers, or text read as a date; negative or past 9999 is #NUM!.
+bool SerialArg(Call& c, int i, double& s);
+
 #define FW_FN(name) void name(Call& c);
 FW_FN(Abs) FW_FN(Address) FW_FN(Aggregate) FW_FN(And) FW_FN(Average) FW_FN(AverageA) FW_FN(AverageIf) FW_FN(AverageIfs)
 FW_FN(Ceiling) FW_FN(CeilingMath) FW_FN(Char) FW_FN(Clean) FW_FN(Code) FW_FN(Column) FW_FN(Columns)
@@ -214,6 +317,11 @@ FW_FN(VStack) FW_FN(HStack) FW_FN(Take) FW_FN(Drop) FW_FN(ChooseRows) FW_FN(Choo
 FW_FN(WrapRows) FW_FN(WrapCols) FW_FN(Expand) FW_FN(RandArray) FW_FN(TextSplit) FW_FN(TextBefore) FW_FN(TextAfter)
 FW_FN(ValueToText) FW_FN(ArrayToText) FW_FN(UniChar) FW_FN(Unicode) FW_FN(IsFormula) FW_FN(FormulaText)
 FW_FN(Sheet) FW_FN(Sheets) FW_FN(Areas) FW_FN(CellInfo)
+FW_FN(CumIpmt) FW_FN(CumPrinc) FW_FN(Days360) FW_FN(Db) FW_FN(Ddb) FW_FN(Disc) FW_FN(DollarDe)
+FW_FN(DollarFr) FW_FN(Effect) FW_FN(FvSchedule) FW_FN(IntRate) FW_FN(Ipmt) FW_FN(Irr) FW_FN(IsPmt)
+FW_FN(Mirr) FW_FN(Nominal) FW_FN(PDuration) FW_FN(Ppmt) FW_FN(PriceDisc) FW_FN(Received) FW_FN(Rri)
+FW_FN(Sln) FW_FN(Syd) FW_FN(TBillEq) FW_FN(TBillPrice) FW_FN(TBillYield) FW_FN(Vdb) FW_FN(Xirr) FW_FN(Xnpv)
+FW_FN(YieldDisc)
 #undef FW_FN
 }  // namespace fn
 
