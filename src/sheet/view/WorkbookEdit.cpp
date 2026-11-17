@@ -682,6 +682,19 @@ void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
   }
   if (sheets) SheetsChanged();
   else if (layout) Restructure();
+  // Notes and drawings that moved (inserted or deleted cells, a sort): read again, the shown
+  // sheet's now and the others' when they are shown.
+  if (!sheets)
+    for (const edit::Change& c : changes) {
+      if (!(c.what & (edit::kShift | edit::kObjects)) || c.sheet < 0 || static_cast<size_t>(c.sheet) >= objects_.size())
+        continue;
+      objects_[static_cast<size_t>(c.sheet)].reset();
+      if (c.sheet == static_cast<int>(sheet_)) {
+        objects_[sheet_] = SheetObjects::Load(*book_, sheet_);
+        note_.reset();
+        PlaceObjects();
+      }
+    }
   // Frozen panes (Freeze panes, or undoing it): the view follows the file's.
   for (const edit::Change& c : changes)
     if ((c.what & edit::kSheetProps) && c.sheet == static_cast<int>(sheet_) && !sheets) {
