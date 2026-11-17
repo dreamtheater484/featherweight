@@ -8,6 +8,7 @@
 #include "pkg/CompoundFile.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
+#include "sheet/csv/Csv.h"
 #include "sheet/numfmt/NumLocale.h"
 #include "sheet/xlsx/Xlsx.h"
 #include "ui/Icons.h"
@@ -74,12 +75,26 @@ std::wstring WorkbookView::Title() const { return FileNameOf(path_); }
 
 OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
   const std::wstring name = Title();
-  if (EndsWithNoCase(path_, L".csv") || EndsWithNoCase(path_, L".tsv")) {
-    error = name + L" couldn't be opened — CSV files open in a later version of Featherweight.";
-    return OpenResult::Failed;
-  }
   pkg::Status st;
   auto snapshot = pkg::Snapshot::Open(path_, {}, st);
+  if (EndsWithNoCase(path_, L".csv") || EndsWithNoCase(path_, L".tsv")) {
+    // A text file of values: one sheet, named after the file as Excel names it.
+    if (!snapshot) {
+      error = OpenError(name, st);
+      return OpenResult::Failed;
+    }
+    const auto bytes = snapshot->Bytes();
+    csv::Options o;
+    o.locale = &UserLocale();
+    o.tsv = EndsWithNoCase(path_, L".tsv");
+    auto csvBook = std::make_unique<Workbook>();
+    std::wstring sheetName = name.substr(0, name.rfind(L'.'));
+    if (sheetName.size() > 31) sheetName.resize(31);
+    csv::Source source;
+    csv::Read(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), WideToUtf8(sheetName), o,
+              *csvBook, source);
+    return Opened(std::move(csvBook), error);
+  }
   if (snapshot && pkg::CompoundFile::HasSignature(snapshot->Bytes())) {
     error = name + L" couldn't be opened — it is protected with a password, which workbooks don't support yet.";
     return OpenResult::Failed;
@@ -90,6 +105,11 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     error = OpenError(name, st);
     return OpenResult::Failed;
   }
+  return Opened(std::move(book), error);
+}
+
+OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& error) {
+  const std::wstring name = Title();
   book_ = std::move(book);
   fonts_ = std::make_unique<text::Fonts>();
   measure_ = std::make_unique<FontMeasure>(*fonts_);

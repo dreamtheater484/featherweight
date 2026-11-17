@@ -120,6 +120,7 @@ class WorkbookView : public PagedView {
   Sheet& Current() const { return book_->GetSheet(sheet_); }
   const fw::sheet::SheetView* ViewOf() const;  // the file's view of the sheet
   void LoadView();  // the sheet's view from the file: panes, zoom, selection
+  OpenResult Opened(std::unique_ptr<Workbook> book, std::wstring& error);  // the rest of loading, once the file is read
 
   // ---- Layout: the formula bar, the grid with its headers, the sheet tabs.
   void LayoutParts();
