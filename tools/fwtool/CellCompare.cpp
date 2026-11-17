@@ -260,13 +260,14 @@ WorkbookResult CompareWorkbook(const std::filesystem::path& file, const JsonValu
     std::set<uint32_t> hiddenRows = Runs(s.Find("hiddenRows"), false), hiddenCols = Runs(s.Find("hiddenColumns"), true);
     // Formulas whose value Excel changed on opening (volatile ones, stale caches): what it shows
     // isn't the cached value, so the text can't be compared before the engine runs. An empty text
-    // is what Excel reads for a formula without a cached value: those are counted as uncalculated.
-    std::set<std::string> changedOnOpen;
+    // is also what Excel reads for a formula without a cached value: those whose cell has no value
+    // in the model are counted as uncalculated instead.
+    std::set<std::string> changedOnOpen, changedFromEmpty;
     if (const JsonValue* fl = s.Find("formulas"))
       for (const JsonValue& f : fl->array)
-        if (f.array.size() >= 4 && !(f.array[2].type == JsonValue::Type::String && f.array[2].string.empty()) &&
-            !SameJson(f.array[2], f.array[3]))
-          changedOnOpen.insert(f.array[0].string);
+        if (f.array.size() >= 4 && !SameJson(f.array[2], f.array[3]))
+          (f.array[2].type == JsonValue::Type::String && f.array[2].string.empty() ? changedFromEmpty : changedOnOpen)
+              .insert(f.array[0].string);
     for (const JsonValue& c : list->array) {
       if (c.array.size() < 2) continue;
       const std::string& ref = c.array[0].string;
@@ -282,7 +283,8 @@ WorkbookResult CompareWorkbook(const std::filesystem::path& file, const JsonValu
         ++result.counts.missing;
         continue;
       }
-      if (info.hasFormula && changedOnOpen.count(ref)) {
+      if (info.hasFormula && (changedOnOpen.count(ref) ||
+                              (changedFromEmpty.count(ref) && info.value.type != sh::ValueType::Empty))) {
         ++result.counts.recalculated;
         continue;
       }
