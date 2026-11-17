@@ -978,3 +978,135 @@ TEST(sheet_calc_subtotal_filter) {
   CHECK_EQ(Number(*buttons, "A6"), 7.0);
   CHECK_EQ(Number(*buttons, "B6"), 5.0);
 }
+
+#include <chrono>
+
+#include "sheet/edit/Edit.h"
+
+namespace {
+
+// The app's wiring: the editor's notifications drive the calculation.
+void Follow(fw::sheet::edit::Editor& ed, WorkbookCalc& calc) {
+  namespace edit = fw::sheet::edit;
+  ed.OnChange([&calc](const std::vector<edit::Change>& changes) {
+    for (const edit::Change& c : changes) {
+      if (c.what & (edit::kSheets | edit::kNames | edit::kShift)) calc.StructureEdited();
+      else if (c.what & (edit::kValues | edit::kFormulas)) calc.CellsEdited(c.sheet, c.cells);
+    }
+  });
+}
+
+}  // namespace
+
+TEST(sheet_calc_after_edits) {
+  namespace edit = fw::sheet::edit;
+  auto book = OpenSheet("<row r=\"1\"><c r=\"A1\"><v>2</v></c><c r=\"B1\"><f>A1*3</f><v>6</v></c>"
+                        "<c r=\"C1\"><f>B1+1</f><v>7</v></c></row>",
+                        "<calcPr calcId=\"191029\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  edit::Editor ed(*book);
+  Follow(ed, calc);
+  auto settle = [&] {
+    while (!calc.CalcStep(8)) {
+    }
+  };
+  ed.SetCell(0, 0, 0, edit::CellInput::Number(5));
+  CHECK(calc.Calculating());
+  settle();
+  CHECK(!calc.Calculating());
+  CHECK_EQ(Number(*book, "B1"), 15.0);
+  CHECK_EQ(Number(*book, "C1"), 16.0);
+  ed.SetCell(0, 0, 3, edit::CellInput::Formula("C1*2"));  // D1, a new formula
+  settle();
+  CHECK_EQ(Number(*book, "D1"), 32.0);
+  ed.SetCell(0, 0, 0, edit::CellInput::Number(1));  // its precedents are followed
+  settle();
+  CHECK_EQ(Number(*book, "D1"), 8.0);
+  ed.SetCell(0, 0, 1, edit::CellInput::Formula("A1*10"));  // a formula changed
+  settle();
+  CHECK_EQ(Number(*book, "D1"), 22.0);
+  ed.Undo(1);  // undo follows too
+  settle();
+  CHECK_EQ(Number(*book, "B1"), 3.0);
+  CHECK_EQ(Number(*book, "D1"), 8.0);
+  int s = -1;
+  int32_t r = -1, c = -1;
+  CHECK(!calc.CircularCell(s, r, c));
+  ed.SetCell(0, 0, 0, edit::CellInput::Formula("D1"));  // A1 = D1: circular
+  settle();
+  CHECK(calc.CircularCell(s, r, c));
+  ed.ClearContents(0, fw::sheet::Range{0, 0, 0, 0});  // gone: the others are calculated again
+  settle();
+  CHECK_EQ(Number(*book, "D1"), 2.0);
+  ed.AddSheet(1, "");  // structure: everything read again
+  settle();
+  ed.SetCell(0, 0, 0, edit::CellInput::Number(10));
+  settle();
+  CHECK_EQ(Number(*book, "D1"), 62.0);
+}
+
+TEST(sheet_calc_after_edits_manual) {
+  // Manual mode: a value's dependents wait for F9; a formula entered is calculated at once.
+  namespace edit = fw::sheet::edit;
+  auto book = OpenSheet("<row r=\"1\"><c r=\"A1\"><v>2</v></c><c r=\"B1\"><f>A1*3</f><v>6</v></c></row>",
+                        "<calcPr calcId=\"191029\" calcMode=\"manual\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  CHECK(calc.ManualCalc());
+  edit::Editor ed(*book);
+  Follow(ed, calc);
+  ed.SetCell(0, 0, 0, edit::CellInput::Number(5));
+  CHECK_EQ(Number(*book, "B1"), 6.0);
+  ed.SetCell(0, 0, 2, edit::CellInput::Formula("A1+1"));  // C1
+  CHECK_EQ(Number(*book, "C1"), 6.0);
+  calc.CalculateNow();  // F9
+  while (!calc.CalcStep(8)) {
+  }
+  CHECK_EQ(Number(*book, "B1"), 15.0);
+}
+
+TEST(sheet_calc_edit_budget) {
+  // Plan §11: < 100 ms after one edit in a 100,000-formula workbook (typing a value, entering a
+  // formula), the dependency graph kept.
+  namespace edit = fw::sheet::edit;
+  std::string cells;
+  cells.reserve(6 << 20);
+  for (int r = 1; r <= 50000; ++r) {
+    std::string n = std::to_string(r);
+    cells += "<row r=\"" + n + "\"><c r=\"A" + n + "\"><v>" + n + "</v></c><c r=\"B" + n + "\"><f>A" + n + "*2</f><v>" +
+             std::to_string(r * 2) + "</v></c><c r=\"C" + n + "\"><f>B" + n + "+1</f><v>" + std::to_string(r * 2 + 1) +
+             "</v></c></row>";
+  }
+  auto book = OpenSheet(cells, "<calcPr calcId=\"191029\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  CHECK_EQ(calc.engine().FormulaCount(), size_t{100000});
+  edit::Editor ed(*book);
+  Follow(ed, calc);
+  auto timed = [&](auto&& edit) {
+    auto t0 = std::chrono::steady_clock::now();
+    edit();
+    while (!calc.CalcStep(8)) {
+    }
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  };
+  double value = timed([&] { ed.SetCell(0, 99, 0, edit::CellInput::Number(7)); });
+  CHECK_EQ(Number(*book, "C100"), 15.0);
+  double formula = timed([&] { ed.SetCell(0, 199, 1, edit::CellInput::Formula("A200*3")); });
+  CHECK_EQ(Number(*book, "C200"), 601.0);
+  double again = timed([&] { ed.SetCell(0, 199, 0, edit::CellInput::Number(1)); });
+  CHECK_EQ(Number(*book, "C200"), 4.0);
+  std::printf("    one edit in 100,000 formulas: a value %.1f ms, a formula %.1f ms, its precedent %.1f ms\n", value,
+              formula, again);
+  CHECK(value < 100 && formula < 100 && again < 100);
+}

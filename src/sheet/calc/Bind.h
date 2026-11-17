@@ -22,6 +22,7 @@ namespace fw::sheet {
 class Workbook;
 class Sheet;
 struct CellInfo;
+struct Range;
 class NumberFormat;
 struct NumLocale;
 }  // namespace fw::sheet
