@@ -20,6 +20,7 @@ target_sources(fwsheet PRIVATE
   Print.cpp
   Typing.cpp
   FunctionHelp.cpp
+  NameManager.cpp
   Value.cpp
 )
 if(FW_BUILD_TESTS)

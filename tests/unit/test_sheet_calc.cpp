@@ -1232,6 +1232,60 @@ TEST(sheet_calc_new_circular_reference) {
   CHECK(!calc.CircularCell(s, r, c));
 }
 
+#include "sheet/calc/NameManager.h"
+#include "sheet/numfmt/NumLocale.h"
+
+TEST(sheet_calc_name_manager) {
+  // The Name Manager's list in en-NL, Excel's rules for a name, and a typed "Refers to".
+  auto book = OpenSheet("<row r=\"1\"><c r=\"A1\"><v>1</v></c><c r=\"B1\"><v>0.05</v></c></row>"
+                        "<row r=\"2\"><c r=\"A2\"><v>2</v></c></row><row r=\"3\"><c r=\"A3\"><v>3</v></c></row>",
+                        "<definedNames><definedName name=\"Rate\">S!$B$1</definedName>"
+                        "<definedName name=\"data\">S!$A$1:$A$3</definedName>"
+                        "<definedName name=\"Tax\" localSheetId=\"0\">0.21</definedName>"
+                        "<definedName name=\"_xlnm.Print_Area\" localSheetId=\"0\">S!$A$1:$B$3</definedName>"
+                        "<definedName name=\"Bad\">#REF!</definedName></definedNames>"
+                        "<calcPr calcId=\"191029\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  const FormulaLocale nl = MakeFormulaLocale(fw::sheet::EnNlLocale());
+  std::vector<NameRow> rows = ListNames(*book, calc, nl);
+  CHECK_EQ(rows.size(), size_t{5});
+  if (rows.size() == 5) {
+    CHECK_EQ(rows[0].name, std::string("Bad"));
+    CHECK_EQ(rows[0].value, std::string("#REF!"));
+    CHECK_EQ(rows[1].name, std::string("data"));
+    CHECK_EQ(rows[1].refersTo, std::string("=S!$A$1:$A$3"));
+    CHECK_EQ(rows[1].value, std::string("{1;2;3}"));
+    CHECK_EQ(rows[2].name, std::string("Print_Area"));
+    CHECK(rows[2].builtIn);
+    CHECK_EQ(rows[2].scope, 0);
+    CHECK_EQ(rows[3].name, std::string("Rate"));
+    CHECK_EQ(rows[3].value, std::string("0,05"));
+    CHECK_EQ(rows[4].name, std::string("Tax"));
+    CHECK_EQ(rows[4].refersTo, std::string("=0,21"));
+    CHECK_EQ(rows[4].value, std::string("0,21"));
+  }
+  for (const char* bad : {"A1", "xfd1048576", "R1C1", "r", "C", "RC", "R12", "1abc", "my name", "a-b", ""})
+    CHECK(!CheckName(*book, bad, -1).empty());
+  for (const char* good : {"XFE1", "ABCD1", "_x", "\\x", "Total.Q1", "Q?", "Tax"}) CHECK(CheckName(*book, good, -1).empty());
+  CHECK(!CheckName(*book, "RATE", -1).empty());  // already there, any case
+  CHECK(CheckName(*book, "RATE", -1, "Rate").empty());  // renaming it
+  CHECK(!CheckName(*book, "tax", 0).empty());
+  std::string formula, message;
+  CompileOptions at;
+  CHECK(ReadRefersTo("=SUM(S!$A$1:$A$3;2,5)", nl, at, calc.engine(), formula, message));
+  CHECK_EQ(formula, std::string("SUM(S!$A$1:$A$3,2.5)"));
+  CHECK(ReadRefersTo("12,5", nl, at, calc.engine(), formula, message));
+  CHECK_EQ(formula, std::string("12.5"));
+  CHECK(ReadRefersTo("say \"hi\"", nl, at, calc.engine(), formula, message));
+  CHECK_EQ(formula, std::string("\"say \"\"hi\"\"\""));
+  CHECK(!ReadRefersTo("=1+", nl, at, calc.engine(), formula, message));
+  CHECK(!message.empty());
+}
+
 TEST(sheet_calc_edit_budget) {
   // Plan §11: < 100 ms after one edit in a 100,000-formula workbook (typing a value, entering a
   // formula), the dependency graph kept.
