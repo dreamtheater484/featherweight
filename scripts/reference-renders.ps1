@@ -214,6 +214,12 @@ function Read-Formulas($book) {
         $areas.Add(@{ Address = $a.Address($false, $false); Row = $a.Row; Col = $a.Column; Rows = $a.Rows.Count; Cols = $a.Columns.Count
                       Formulas = (Get-Grid $a "Formula2"); Values = (Get-Grid $a "Value2") })
       }
+    } elseif ($ws.ProtectContents -and [long]$ws.UsedRange.Rows.Count * $ws.UsedRange.Columns.Count -le 2000000) {
+      # SpecialCells fails on protected sheets: the whole used range, of which only the cells
+      # holding a formula are written.
+      $a = $ws.UsedRange
+      $areas.Add(@{ Address = $a.Address($false, $false); Row = $a.Row; Col = $a.Column; Rows = $a.Rows.Count; Cols = $a.Columns.Count
+                    Formulas = (Get-Grid $a "Formula2"); Values = (Get-Grid $a "Value2") })
     }
     $all[$ws.Name] = $areas
   }
@@ -249,6 +255,23 @@ function ConvertTo-JsonObject($map) {
   }) -join ", ") + '}'
 }
 
+# Adds to $seen the rows (or columns) from $first to $last that aren't hidden. For protected
+# sheets, where SpecialCells fails: Hidden of a span is true or false when all its rows agree and
+# null when they don't, so mixed spans are split in two.
+function Add-ShownLines($sh, [int]$first, [int]$last, [bool]$columns, $seen) {
+  $span = if ($columns) { $sh.Range($sh.Cells.Item(1, $first), $sh.Cells.Item(1, $last)).EntireColumn }
+          else { $sh.Range($sh.Cells.Item($first, 1), $sh.Cells.Item($last, 1)).EntireRow }
+  $h = $span.Hidden
+  if ($first -ge $last -and -not ($h -is [bool])) { $h = $false }
+  if ($h -is [bool]) {
+    if (-not $h) { for ($i = $first; $i -le $last; $i++) { [void]$seen.Add($i) } }
+    return
+  }
+  $mid = [int][math]::Floor(($first + $last) / 2)
+  Add-ShownLines $sh $first $mid $columns $seen
+  Add-ShownLines $sh ($mid + 1) $last $columns $seen
+}
+
 # Reads what Excel shows of the workbook opened normally (cell text, values, formula values as
 # opened), then has Excel recalculate everything and reads the formulas' values again. $formulas
 # comes from Read-Formulas on the same file opened with calculation manual. Writes the cells file;
@@ -282,6 +305,10 @@ function Write-WorkbookCells($xl, $book, $formulas, [string]$path, [string]$sour
         for ($r = $a.Row; $r -lt $a.Row + $a.Rows.Count; $r++) { [void]$rowsSeen.Add($r) }
         for ($c = $a.Column; $c -lt $a.Column + $a.Columns.Count; $c++) { [void]$colsSeen.Add($c) }
       }
+    } elseif ($sh.ProtectContents) {
+      # SpecialCells fails on protected sheets: ask the rows and columns themselves.
+      Add-ShownLines $sh $r0 ($r0 + $nr - 1) $false $rowsSeen
+      Add-ShownLines $sh $c0 ($c0 + $nc - 1) $true $colsSeen
     }
     $hiddenRows = [int[]]@(for ($r = $r0; $r -lt $r0 + $nr; $r++) { if (-not $rowsSeen.Contains($r)) { $r } })
     $hiddenCols = [int[]]@(for ($c = $c0; $c -lt $c0 + $nc; $c++) { if (-not $colsSeen.Contains($c)) { $c } })
@@ -343,6 +370,7 @@ function Write-WorkbookCells($xl, $book, $formulas, [string]$path, [string]$sour
         $recalc = Get-Grid $a.Com "Value2"
         for ($i = 1; $i -le $a.Rows; $i++) {
           for ($j = 1; $j -le $a.Cols; $j++) {
+            if (-not ([string]$a.Formulas[$i, $j]).StartsWith("=")) { continue }  # constants of a protected sheet's used range
             $ref = (Get-ColumnName ($a.Col + $j - 1)) + ($a.Row + $i - 1)
             $flines.Add('["' + $ref + '", ' + (ConvertTo-JsonString ([string]$a.Formulas[$i, $j])) + ', ' + (ConvertTo-JsonValue $a.Values[$i, $j]) + ', ' +
                         (ConvertTo-JsonValue $a.Opened[$i, $j]) + ', ' + (ConvertTo-JsonValue $recalc[$i, $j]) + ']')

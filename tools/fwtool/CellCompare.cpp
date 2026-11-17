@@ -259,12 +259,15 @@ WorkbookResult CompareWorkbook(const std::filesystem::path& file, const JsonValu
     }
     std::set<uint32_t> hiddenRows = Runs(s.Find("hiddenRows"), false), hiddenCols = Runs(s.Find("hiddenColumns"), true);
     // Formulas whose value Excel changed on opening (volatile ones, stale caches): what it shows
-    // isn't the cached value, so the text can't be compared before the engine runs.
-    std::set<std::string> changedOnOpen;
+    // isn't the cached value, so the text can't be compared before the engine runs. An empty text
+    // is also what Excel reads for a formula without a cached value: those whose cell has no value
+    // in the model are counted as uncalculated instead.
+    std::set<std::string> changedOnOpen, changedFromEmpty;
     if (const JsonValue* fl = s.Find("formulas"))
       for (const JsonValue& f : fl->array)
-        if (f.array.size() >= 4 && f.array[2].type != JsonValue::Type::String && !SameJson(f.array[2], f.array[3]))
-          changedOnOpen.insert(f.array[0].string);
+        if (f.array.size() >= 4 && !SameJson(f.array[2], f.array[3]))
+          (f.array[2].type == JsonValue::Type::String && f.array[2].string.empty() ? changedFromEmpty : changedOnOpen)
+              .insert(f.array[0].string);
     for (const JsonValue& c : list->array) {
       if (c.array.size() < 2) continue;
       const std::string& ref = c.array[0].string;
@@ -280,7 +283,8 @@ WorkbookResult CompareWorkbook(const std::filesystem::path& file, const JsonValu
         ++result.counts.missing;
         continue;
       }
-      if (info.hasFormula && changedOnOpen.count(ref)) {
+      if (info.hasFormula && (changedOnOpen.count(ref) ||
+                              (changedFromEmpty.count(ref) && info.value.type != sh::ValueType::Empty))) {
         ++result.counts.recalculated;
         continue;
       }
@@ -307,23 +311,27 @@ WorkbookResult CompareWorkbook(const std::filesystem::path& file, const JsonValu
         ours = ShownAtWidth(sheet, info, nullptr, text, cfFormat, overflow);
         fillAt = -1;
       }
-      // A number's text depends on its column's width: "####", or General shortened to fit.
-      const std::string atWidth =
-          number && !hidden ? ShownAtWidth(sheet, info, &grid, text, cfFormat, overflow) : std::string();
+      // A number's text depends on its column's width: "####", or General shortened to fit. So do
+      // an error's and a text's with a fill ("####" when too wide).
+      const bool widthy = !hidden && (number || info.value.type == sh::ValueType::Error ||
+                                      (info.value.type == sh::ValueType::String && fillAt >= 0));
+      const std::string atWidth = widthy ? ShownAtWidth(sheet, info, &grid, text, cfFormat, overflow) : std::string();
       const bool widthDecides = AllHashes(excel) || GeneralShortened(info, code, excel, ours) || overflow ||
                                 (fillAt >= 0 && fillChar == L'#');
+      // Narrower than one '#', Excel shows nothing.
+      const bool narrow = overflow && excel.empty() && atWidth.empty();
       if (ours == excel && !overflow) {
         ++result.counts.same;
       } else if (fillAt >= 0 && fillChar != L'#' && !overflow && SameWithFill(excel, ours, fillAt, fillChar)) {
         ++result.counts.same;
         ++result.counts.fillSame;
-      } else if (number && widthDecides && (AllHashes(excel) ? overflow : !overflow && atWidth == excel)) {
+      } else if (widthy && widthDecides && (narrow || (AllHashes(excel) ? overflow : !overflow && atWidth == excel))) {
         ++result.counts.same;
         ++result.counts.widthSame;
       } else {
         if (widthDecides) ++result.counts.widthOnly;
         if (result.differences.size() < 400)
-          result.differences.push_back({name, ref, excel, number && widthDecides ? atWidth : ours, code});
+          result.differences.push_back({name, ref, excel, widthy && widthDecides ? atWidth : ours, code});
       }
     }
   }
