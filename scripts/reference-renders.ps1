@@ -38,6 +38,8 @@
   powershell -ExecutionPolicy Bypass -File scripts\reference-renders.ps1 -Folders tests\office\layout
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\reference-renders.ps1 -Corpus $env:FW_CORPUS
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\reference-renders.ps1 -Folders tests\office\sheet,tests\office\excel -PrintPdf conditional-formats.xlsx,charts.xlsx
 #>
 param(
   [string[]]$Folders = @("tests\office\generated", "tests\office\edge", "tests\office\layout"),
@@ -50,13 +52,28 @@ param(
   # At most this many cells' text per workbook (about 1 ms each); the rest is left out and the
   # cells file says so.
   [int]$MaxCells = 100000,
+  # Workbooks (file names, or sources such as excel/charts.xlsx) that Excel also prints through
+  # Microsoft Print to PDF, into <name>.print.pdf beside the export. On this PC Excel's PDF export
+  # stops drawing a page at a data bar, an icon set or a sparkline (the rest of the page, or all of
+  # it, is left empty); printing draws them. With "Let Windows manage my default printer" on,
+  # printing makes Microsoft Print to PDF Windows' default printer until the next print elsewhere,
+  # and workbooks can't be rendered again until the reference printer is the default (-ExcelPrinter).
+  # So only with that setting off, or with whoever owns the PC agreeing.
+  [string[]]$PrintPdf = @(),
+  # The reference printer. Excel lays out for Windows' default printer as it is when Excel starts
+  # (page breaks, column widths, row heights) and doesn't lay out again for another one, so
+  # workbooks are rendered only when that default is this printer. By default the one
+  # tests\office\reference\manifest.json records.
+  [string]$ExcelPrinter,
   # Internal: export one file in this process (the parent runs one child per file).
-  [string]$Child, [string]$Source, [string]$SourceName, [string]$Pdf, [string]$ResultFile, [string]$Cells, [switch]$CellFormats
+  [string]$Child, [string]$Source, [string]$SourceName, [string]$Pdf, [string]$ResultFile, [string]$Cells, [switch]$CellFormats,
+  [string]$PrintTo
 )
 
 $ErrorActionPreference = "Stop"
 # powershell -File passes "a,b" as one string.
 $Folders = @($Folders | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+$PrintPdf = @($PrintPdf | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $apps = @{
   Word = @{ Exe = "WINWORD"; ProgId = "Word.Application"; Ext = @(".docx", ".docm", ".dotx", ".dotm", ".doc", ".odt") }
   Excel = @{ Exe = "EXCEL"; ProgId = "Excel.Application"; Ext = @(".xlsx", ".xlsm", ".xltx", ".xltm") }
@@ -431,9 +448,10 @@ if ($Child) {
         $office.EnableEvents = $false
         $office.ScreenUpdating = $false
         $result.locale = Get-ExcelLocale $office
-        $result.printer = [string]$office.ActivePrinter
         # Calculation can only be set with a workbook open: a blank one, kept open throughout.
         $blank = $office.Workbooks.Add()
+        $result.printer = [string]$office.ActivePrinter
+        if ($ExcelPrinter -and $result.printer -ne $ExcelPrinter) { throw "Excel lays out for $($result.printer), not $ExcelPrinter" }
         # 1. Calculation manual: the file's cached formula values, nothing recalculated.
         $office.Calculation = -4135  # xlCalculationManual
         # Filename, UpdateLinks (never), ReadOnly. Automation doesn't add files to Excel's recent list.
@@ -454,6 +472,32 @@ if ($Child) {
           $result.pdfError = $_.Exception.Message
         }
         if ($Cells) { $result.cells = Write-WorkbookCells $office $doc $formulas $Cells $SourceName $result $MaxCells $CellFormats.IsPresent }
+        if ($PrintTo) {
+          # Printed as well: Excel's export leaves out data bars, icon sets and sparklines here. After
+          # the cells: Excel's column widths follow its printer, which this switches for a moment.
+          $device = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Devices' -ErrorAction SilentlyContinue).'Microsoft Print to PDF'
+          if (-not $device) { throw "Microsoft Print to PDF isn't installed" }
+          $was = $office.ActivePrinter  # only Excel's, and only this Excel's; set with a workbook open
+          $office.ActivePrinter = "Microsoft Print to PDF on $(($device -split ',')[1])"
+          try {
+            # From, To, Copies, Preview, ActivePrinter, PrintToFile, Collate, PrToFileName, IgnorePrintAreas
+            $doc.PrintOut($missing, $missing, 1, $false, $missing, $true, $missing, $PrintTo, $false)
+          } finally {
+            $office.ActivePrinter = $was
+          }
+          # The printer writes the file once the spooler has the job: wait until it's complete.
+          $size = -1
+          for ($i = 0; $i -lt 120; $i++) {
+            Start-Sleep -Milliseconds 500
+            if (-not (Test-Path -LiteralPath $PrintTo)) { continue }
+            $now = (Get-Item -LiteralPath $PrintTo).Length
+            if ($now -gt 0 -and $now -eq $size) {
+              try { [IO.File]::Open($PrintTo, 'Open', 'Read', 'None').Dispose(); break } catch {}
+            }
+            $size = $now
+          }
+          if (-not (Test-Path -LiteralPath $PrintTo)) { $result.printError = "Microsoft Print to PDF wrote nothing" }
+        }
         $doc.Close($false)
         $blank.Close($false)
         [void][Runtime.InteropServices.Marshal]::ReleaseComObject($blank)
@@ -510,8 +554,14 @@ function Get-CopyOf([string]$source, [string]$sourceRoot) {
   $null
 }
 
+if (-not $ExcelPrinter) {
+  $refManifest = Join-Path $root "tests\office\reference\manifest.json"
+  if (Test-Path $refManifest) { $ExcelPrinter = [string](Get-Content $refManifest -Raw | ConvertFrom-Json).excel.printer }
+}
+
 # Each job: the source file, its name in the manifest, and its PDF relative to the output folder.
 $jobs = @()
+$clear = @()
 $kept = @()
 $old = @()
 $previousFiles = @()
@@ -545,13 +595,22 @@ if ($Corpus) {
   }
   foreach ($folder in $Folders) {
     $name = Split-Path -Leaf $folder
-    $dir = Join-Path $outRoot $name
-    if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+    $clear += Join-Path $outRoot $name  # emptied once the run is sure to go ahead
     foreach ($f in Get-ChildItem (Join-Path $root $folder) -File | Sort-Object Name) {
       if (Get-Kind $f.Extension) { $jobs += @{ File = $f; Source = "$name/$($f.Name)"; Pdf = "$name/$($f.Name).pdf" } }
     }
   }
 }
+
+# Workbooks only for the reference printer (-ExcelPrinter): stop before anything starts otherwise.
+if ($ExcelPrinter -and @($jobs | Where-Object { (Get-Kind $_.File.Extension) -eq "Excel" }).Count) {
+  $device = @(([string](Get-ItemProperty 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Windows').Device) -split ',')
+  $default = if ($device.Count -ge 3) { "$($device[0]) on $($device[2])" } else { "" }
+  if ($default -ne $ExcelPrinter) {
+    throw "Windows' default printer is '$default', but workbooks are rendered for the reference printer '$ExcelPrinter'. Make that the default again (with 'Let Windows manage my default printer' on, print something on it), or pass -ExcelPrinter."
+  }
+}
+foreach ($dir in $clear) { if (Test-Path $dir) { Remove-Item -Recurse -Force $dir } }
 
 # One Office automation at a time on this PC (word-open-check.ps1 takes the same mutex): a second
 # one's COM could attach to the first one's Word.
@@ -570,8 +629,12 @@ foreach ($job in $jobs) {
   # A workbook's cells file sits beside its PDF.
   $cellsRel = if ($kind -eq "Excel") { $job.Pdf -replace '\.pdf$', '.cells.json' } else { $null }
   $cellsPath = if ($cellsRel) { Join-Path $outRoot ($cellsRel -replace '/', '\') } else { $null }
+  # Printed through Microsoft Print to PDF too (-PrintPdf)?
+  $printRel = if ($kind -eq "Excel" -and ($PrintPdf -contains $f.Name -or $PrintPdf -contains $job.Source)) { $job.Pdf -replace '\.pdf$', '.print.pdf' } else { $null }
+  $printPath = if ($printRel) { Join-Path $outRoot ($printRel -replace '/', '\') } else { $null }
   $previous = $old | Where-Object { $_.source -eq $job.Source -and $_.sha256 -eq $entry.sha256 -and ($_.pdf -or $_.cells) -and -not $_.error -and ($kind -ne "Excel" -or $_.cells) } | Select-Object -First 1
-  if ($previous -and (-not $previous.pdf -or (Test-Path $pdfPath)) -and (-not $cellsPath -or (Test-Path $cellsPath))) {
+  if ($previous -and (-not $previous.pdf -or (Test-Path $pdfPath)) -and (-not $cellsPath -or (Test-Path $cellsPath)) -and
+      (-not $printPath -or ($previous.printPdf -and (Test-Path $printPath)))) {
     $entries += $previous
     $reused++
     continue
@@ -584,6 +647,11 @@ foreach ($job in $jobs) {
   if ($cellsPath) {
     $childArgs += @("-Cells", "`"$cellsPath`"", "-MaxCells", $MaxCells)
     if (-not $Corpus) { $childArgs += "-CellFormats" }  # the public files also record each cell's number format
+  }
+  if ($kind -eq "Excel" -and $ExcelPrinter) { $childArgs += @("-ExcelPrinter", "`"$ExcelPrinter`"") }
+  if ($printPath) {
+    if (Test-Path $printPath) { Remove-Item $printPath }
+    $childArgs += @("-PrintTo", "`"$printPath`"")
   }
   $limit = if ($kind -eq "Excel") { $ExcelTimeoutSeconds } else { $TimeoutSeconds }
   $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList $childArgs
@@ -613,7 +681,14 @@ foreach ($job in $jobs) {
     $entry.pdf = $job.Pdf
     if (-not $entry.pages) { $entry.pages = $facts.pages }
     $entry.fonts = $facts.fonts
+    if ($printPath -and (Test-Path $printPath)) {
+      $entry.printPdf = $printRel
+      $entry.printPages = (Get-PdfFacts $printPath).pages
+    } elseif ($printPath) {
+      $entry.printError = if ($r.printError) { $r.printError } else { "not printed" }
+    }
     $more = if ($entry.cells) { "  $($entry.cellCount) cells" } else { "" }
+    if ($entry.printPdf) { $more += "  printed: $($entry.printPages) pages" }
     "[{0}/{1}] {2,-45} {3,3} pages  {4}{5}" -f $n, $jobs.Count, $entry.source, $entry.pages, ($facts.fonts -join ", "), $more
   } elseif (-not $entry.error -and $entry.cells -and $r.pdfError) {
     # Nothing to print (Excel exports no PDF), but the cells are recorded.

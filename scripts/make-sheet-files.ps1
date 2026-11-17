@@ -30,7 +30,11 @@
 param(
   [string]$From = "tests\office\sheet",
   [string]$To = "tests\office\excel",
-  [string[]]$Only
+  [string[]]$Only,
+  # The reference printer. Excel lays out and saves for Windows' default printer as it is when Excel
+  # starts (it decides row heights and column widths), so the script stops unless that is this
+  # printer. By default the one tests\office\reference\manifest.json records.
+  [string]$ExcelPrinter
 )
 
 $ErrorActionPreference = "Stop"
@@ -144,8 +148,20 @@ function Add-ExcelOnly($wb, [string]$name) {
 }
 
 $files = @(Get-ChildItem $from -Filter *.xlsx | Sort-Object Name)
+$Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })  # powershell -File passes "a,b" as one string
 if ($Only) { $files = @($files | Where-Object { $Only -contains $_.Name }) }
 if (-not $files.Count) { throw "No workbooks in $from. Run tests\office\make_sheet_tests.py first." }
+if (-not $ExcelPrinter) {
+  $refManifest = Join-Path $root "tests\office\reference\manifest.json"
+  if (Test-Path $refManifest) { $ExcelPrinter = [string](Get-Content $refManifest -Raw | ConvertFrom-Json).excel.printer }
+}
+if ($ExcelPrinter) {
+  $device = @(([string](Get-ItemProperty 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Windows').Device) -split ',')
+  $default = if ($device.Count -ge 3) { "$($device[0]) on $($device[2])" } else { "" }
+  if ($default -ne $ExcelPrinter) {
+    throw "Windows' default printer is '$default', but the copies are made for the reference printer '$ExcelPrinter'. Make that the default again (with 'Let Windows manage my default printer' on, print something on it), or pass -ExcelPrinter."
+  }
+}
 
 $mutex = New-Object Threading.Mutex($false, "Global\FeatherweightOfficeAutomation")
 try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] {}
@@ -153,7 +169,8 @@ $excel = $null
 $made = @(); $failed = @()
 try {
   $excel = Start-OwnExcel
-  $version = "Excel $($excel.App.Version) (build $($excel.App.Build))"
+  $version = "Excel $($excel.App.Version) (build $($excel.App.Build)), for $($excel.App.ActivePrinter)"
+  if ($ExcelPrinter -and [string]$excel.App.ActivePrinter -ne $ExcelPrinter) { throw "Excel lays out for $($excel.App.ActivePrinter), not $ExcelPrinter" }
   foreach ($f in $files) {
     $dest = Join-Path $to $f.Name
     $wb = $null
