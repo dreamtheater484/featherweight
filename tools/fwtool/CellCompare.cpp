@@ -330,6 +330,31 @@ WorkbookResult CompareWorkbook(const std::filesystem::path& file, const JsonValu
   return result;
 }
 
+}  // namespace
+
+struct CellText::Impl {
+  const sh::Workbook& book;
+  const sh::NumLocale& locale;
+  sh::FormatContext ctx;
+  std::map<uint32_t, sh::NumberFormat> formats;
+  Impl(const sh::Workbook& b, const sh::NumLocale& l) : book(b), locale(l) {
+    ctx.locale = &locale;
+    ctx.date1904 = book.Date1904();
+  }
+};
+
+CellText::CellText(const sh::Workbook& book, const sh::NumLocale& locale) : impl_(std::make_unique<Impl>(book, locale)) {}
+CellText::~CellText() = default;
+
+std::string CellText::operator()(const sh::CellInfo& cell) {
+  int fillAt = -1;
+  wchar_t fillChar = 0;
+  std::string code;
+  return Show(cell, impl_->book, impl_->ctx, impl_->locale, impl_->formats, fillAt, fillChar, code);
+}
+
+namespace {
+
 double Percent(size_t a, size_t b) { return b ? 100.0 * static_cast<double>(a) / static_cast<double>(b) : 100.0; }
 
 std::string JsonString(std::string_view s) {

@@ -33,7 +33,8 @@
                                  "windowss2359":  "pm",
                                  "windowssYearMonth":  "MMMM yyyy"
                              },
-                  "printer":  "EPSON523955 (ET-4750 Series) on Ne02:"
+                  "printer":  "EPSON523955 (ET-4750 Series) on Ne02:",
+                  "standardWidth":  8.43
               },
     "files":  [
                   {

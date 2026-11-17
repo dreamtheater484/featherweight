@@ -628,12 +628,20 @@ $xlTagCounts = @{
 }
 
 # Strips text literals ("..." with "" inside) from a formula, so only its code is looked at.
-function Remove-FormulaStrings([string]$f) { [regex]::Replace($f, '"(?:[^"]|"")*"', '""') }
+# A formula's code without what isn't code: text literals, bracketed parts (structured references
+# such as Tb[[#This Row],[Bijdrage in natura (overige)]], external workbook numbers such as [1])
+# and quoted sheet names ('Calcul-Subv-GS (2)'!C24), which otherwise read as calls.
+function Remove-FormulaStrings([string]$f) {
+  $code = [regex]::Replace($f, '"(?:[^"]|"")*"', '""')
+  do { $before = $code; $code = [regex]::Replace($code, '\[[^\[\]]*\]', '') } while ($code -ne $before)
+  [regex]::Replace($code, "'(?:[^']|'')*'", "''")
+}
 
-# The functions a formula calls: names before "(" outside text literals, without _xlfn./_xlws.
+# The functions a formula calls: names right before "(" (with a space between, it's an
+# intersection), outside the parts above, without _xlfn./_xlws.
 function Get-FormulaFunctions([string]$f) {
   $code = Remove-FormulaStrings $f
-  @([regex]::Matches($code, "(?<![A-Za-z0-9_.\]'!])((?:_xlfn\.|_xlws\.|_xlpm\.)*[A-Za-z][A-Za-z0-9_.]*)\s*\(") |
+  @([regex]::Matches($code, "(?<![A-Za-z0-9_.\]'!])((?:_xlfn\.|_xlws\.|_xlpm\.)*[A-Za-z][A-Za-z0-9_.]*)\(") |
     ForEach-Object { ($_.Groups[1].Value -replace '^(_xlfn\.|_xlws\.)+', '').ToUpperInvariant() } | Where-Object { $_ -notmatch '^_XLPM\.' } | Select-Object -Unique)
 }
 

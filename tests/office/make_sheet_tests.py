@@ -924,17 +924,22 @@ def xlsx_pictures():
     return finish(wb, "Pictures and shapes")
 
 
-def xlsx_notes():
+def xlsx_notes(at_end=False):
+    """Notes and threaded comments. at_end: both sheets print them after the sheet (Page Setup >
+    Sheet > Comments and notes: At end of sheet), each as its cell and text."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Notes"
     fill_grid(ws, 20, 8)
     ws["B2"].comment = Comment("A short note.", "Featherweight tests")
+    # A second note in row 2: printed at the end, it shows the order within a row.
+    ws["H2"].comment = Comment("A second note in row 2.", "Featherweight tests")
     c = Comment("A longer note, with a second line.\nIt is shown in a bigger box.", "Featherweight tests", width=300, height=120)
     ws["D4"].comment = c
     ws["F10"].comment = Comment("Note on a cell in a hidden row.", "Featherweight tests")
     ws.row_dimensions[10].hidden = True
-    ws["A15"].comment = Comment("Ünïcödé nötë: 東京 😀", "Featherweight tests")
+    # Printed at the end, an emoji would embed Segoe UI Emoji (4 MB) in Excel's PDF.
+    ws["A15"].comment = Comment("Ünïcödé nötë: 東京 " + ("𝄞" if at_end else "😀"), "Featherweight tests")
     ws = wb.create_sheet("Threaded comments")
     fill_grid(ws, 10, 5)
     ws["A12"] = "Threaded comments on B2 (with a reply) and D5 (resolved), as Excel 365 writes them, each with its note for older Excel."
@@ -943,7 +948,10 @@ def xlsx_notes():
         for i, (_, text, _) in enumerate(thread):
             lines += ["Comment:" if i == 0 else "Reply:", "    " + text]
         ws[ref].comment = Comment("\n".join(lines), f"tc={cid}", width=240, height=110)
-    set_core(wb.properties, "Notes and comments")
+    if at_end:
+        for sheet in wb.worksheets:
+            sheet.page_setup.cellComments = "atEnd"
+    set_core(wb.properties, "Notes and comments" + (", printed at the end" if at_end else ""))
     return normalize(write_zip(add_threads(read_entries(to_bytes(wb)))))
 
 
@@ -1088,7 +1096,18 @@ def xlsx_charts():
     big.title = "A chart on its own sheet"
     cs.add_chart(big)
     wb.create_sheet("Sparklines")["A1"] = "Excel adds sparklines here (scripts/make-sheet-files.ps1)."
-    return finish(wb, "Charts")
+    set_core(wb.properties, "Charts")
+    # openpyxl anchors a chart sheet's chart at 0 x 0 EMU, which Excel shows and prints as an empty
+    # page; Excel itself writes the page's size (letter landscape, its default margins).
+    sized = b'<absoluteAnchor><pos x="0" y="0"/><ext cx="8666922" cy="6293304"/>'
+
+    def size_chartsheet(name, body):
+        if not name.startswith("xl/drawings/drawing") or not name.endswith(".xml"):
+            return body
+        return body.replace(b'<absoluteAnchor><pos x="0" y="0"/><ext cx="0" cy="0"/>', sized)
+    entries = [(n, size_chartsheet(n, b)) for n, b in read_entries(to_bytes(wb))]
+    assert any(sized in b for _, b in entries), "no chart sheet anchor to size"
+    return normalize(write_zip(entries))
 
 
 def xlsx_print():
@@ -1344,7 +1363,8 @@ def main():
                      ("rows-columns.xlsx", xlsx_rows_columns), ("text.xlsx", xlsx_text), ("borders-fills.xlsx", xlsx_borders_fills),
                      ("sheets.xlsx", xlsx_sheets), ("functions.xlsx", xlsx_functions), ("formulas.xlsx", xlsx_formulas),
                      ("conditional-formats.xlsx", xlsx_conditional), ("tables.xlsx", xlsx_tables),
-                     ("pictures-shapes.xlsx", xlsx_pictures), ("notes.xlsx", xlsx_notes), ("charts.xlsx", xlsx_charts),
+                     ("pictures-shapes.xlsx", xlsx_pictures), ("notes.xlsx", xlsx_notes),
+                     ("notes-at-end.xlsx", lambda: xlsx_notes(True)), ("charts.xlsx", xlsx_charts),
                      ("print-settings.xlsx", xlsx_print)]:
         save(SHEET, name, fn())
     print("CSV:")
