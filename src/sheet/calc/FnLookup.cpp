@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "pkg/Formula.h"
+#include "sheet/calc/Entry.h"
 #include "sheet/calc/Fn.h"
 
 namespace fw::sheet::calc::fn {
@@ -576,6 +577,112 @@ void MinIfs(Call& c) {
   Conditions k;
   if (!MakeConditions(c, 1, k)) return;
   Aggregate(c, 0, k, Agg::kMin);
+}
+
+
+// --- Information about references (measured in Excel 2021): ISFORMULA, FORMULATEXT, SHEET,
+// SHEETS, AREAS, CELL.
+
+namespace {
+
+bool TopLeft(const Value& v, int& sheet, int32_t& row, int32_t& col) {
+  if (v.type() == Type::Ref) {
+    sheet = v.area().s1, row = v.area().r1, col = v.area().c1;
+    return true;
+  }
+  if (v.type() == Type::RefList && !v.areas().empty()) {
+    sheet = v.areas()[0].s1, row = v.areas()[0].r1, col = v.areas()[0].c1;
+    return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+void IsFormula(Call& c) {
+  int s;
+  int32_t r, k;
+  if (c.arg(0).IsError()) return c.Fail(c.arg(0).error());
+  if (!TopLeft(c.arg(0), s, r, k)) return c.Fail(Err::Value);
+  std::string text;
+  c.out = Value::Bool(c.m.res && c.m.res->FormulaText(s, r, k, text));
+}
+
+// The formula as the formula bar shows it: in the region's form.
+void FormulaText(Call& c) {
+  int s;
+  int32_t r, k;
+  if (c.arg(0).IsError()) return c.Fail(c.arg(0).error());
+  if (!TopLeft(c.arg(0), s, r, k)) return c.Fail(Err::NA);
+  std::string text;
+  if (!c.m.res || !c.m.res->FormulaText(s, r, k, text)) return c.Fail(Err::NA);
+  FormulaLocale region;
+  if (c.m.decimal == ',') region = FormulaLocale{',', ';', '\\', ';'};
+  c.out = Value::Text(ToLocal(text, region));
+}
+
+void Sheet(Call& c) {
+  if (!c.Has(0)) return c.SetNumber(c.m.at.sheet + 1);
+  const Value& v = c.arg(0);
+  int s;
+  int32_t r, k;
+  if (TopLeft(v, s, r, k)) return c.SetNumber(s + 1);
+  if (v.IsError()) return c.Fail(v.error());
+  if (v.IsText() && c.m.res) {
+    int found = c.m.res->names().FindSheet(v.text());
+    if (found >= 0) return c.SetNumber(found + 1);
+  }
+  c.Fail(Err::NA);
+}
+
+void Sheets(Call& c) {
+  if (!c.Has(0)) return c.SetNumber(c.m.host.SheetCount());
+  const Value& v = c.arg(0);
+  if (v.type() == Type::Ref) return c.SetNumber(v.area().s2 - v.area().s1 + 1);
+  if (v.type() == Type::RefList) {
+    int lo = 65535, hi = -1;
+    for (const Area& a : v.areas()) lo = std::min<int>(lo, a.s1), hi = std::max<int>(hi, a.s2);
+    return c.SetNumber(hi >= lo ? hi - lo + 1 : 0);
+  }
+  if (v.IsError()) return c.Fail(v.error());
+  c.Fail(Err::NA);
+}
+
+void Areas(Call& c) {
+  const Value& v = c.arg(0);
+  if (v.type() == Type::Ref) return c.SetNumber(1);
+  if (v.type() == Type::RefList) return c.SetNumber(static_cast<double>(v.areas().size()));
+  if (v.IsError()) return c.Fail(v.error());
+  c.Fail(Err::Value);
+}
+
+// CELL(info_type, [reference]): what doesn't need the file's path, formats or the active cell.
+void CellInfo(Call& c) {
+  std::string what;
+  if (!c.Text(0, what)) return;
+  for (char& ch : what) ch = static_cast<char>(ch >= 'A' && ch <= 'Z' ? ch + 32 : ch);
+  static const char* const kKnown[] = {"address", "col", "color", "contents", "filename", "format",
+                                       "parentheses", "prefix", "protect", "row", "type", "width"};
+  bool known = false;
+  for (const char* k : kKnown) known = known || what == k;
+  if (!known) return c.Fail(Err::Value);
+  int s;
+  int32_t r, k;
+  if (!c.Has(1) || !TopLeft(c.arg(1), s, r, k) ||
+      (what != "address" && what != "col" && what != "row" && what != "contents" && what != "type") ||
+      (what == "address" && s != c.m.at.sheet)) {
+    c.m.unsupported = true;  // the active cell, the file's name, formats: kept as Excel left them
+    return c.Fail(Err::NA);
+  }
+  if (what == "col") return c.SetNumber(k + 1);
+  if (what == "row") return c.SetNumber(r + 1);
+  if (what == "address") return void(c.out = Value::Text("$" + ColumnName(k) + "$" + std::to_string(r + 1)));
+  Area one;
+  one.s1 = one.s2 = static_cast<uint16_t>(s), one.r1 = one.r2 = r, one.c1 = one.c2 = static_cast<int16_t>(k);
+  if (!c.m.Ready(Value::Ref(one, c.arg(1).dynamic()))) return c.Fail(Err::Value);
+  Value v = c.m.CellValue(s, r, k);
+  if (what == "contents") return void(c.out = v.IsEmpty() ? Value::Number(0) : v);
+  c.out = Value::Text(v.IsEmpty() ? "b" : v.IsText() ? "l" : "v");
 }
 
 }  // namespace fw::sheet::calc::fn

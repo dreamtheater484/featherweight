@@ -92,6 +92,12 @@ class Resolver {
   virtual bool Spill(int sheet, int32_t row, int32_t col, Area& out) = 0;
   // False when a cell in `a` must be calculated first: evaluation stops and is retried later.
   virtual bool Ready(const Area& a) = 0;
+  // The formula of a cell ("=A1+1", "{=...}" for a legacy array formula's cells), invariant; false
+  // when it holds none (a dynamic array's spilled cells hold none). ISFORMULA, FORMULATEXT.
+  virtual bool FormulaText(int sheet, int32_t row, int32_t col, std::string& text) {
+    (void)sheet, (void)row, (void)col, (void)text;
+    return false;
+  }
   // Whether the cell holds a SUBTOTAL formula (SUBTOTAL leaves those out).
   virtual bool Subtotal(int sheet, int32_t row, int32_t col) {
     (void)sheet, (void)row, (void)col;

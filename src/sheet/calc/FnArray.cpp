@@ -299,4 +299,6 @@ void SortBy(Call& c) {
   c.out = Pick(a, lines, byCol);
 }
 
+bool ArgArray(Call& c, int i, Value& out) { return AsArray(c, i, out); }
+
 }  // namespace fw::sheet::calc::fn

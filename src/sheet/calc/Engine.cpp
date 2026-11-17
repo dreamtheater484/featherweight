@@ -865,6 +865,21 @@ void Engine::CalculateCell(const Cell& at) {
   if (n.state != kClean) Clean(id);
 }
 
+bool Engine::FormulaText(int sheet, int32_t row, int32_t col, std::string& text) {
+  uint32_t id = NodeAt(sheet, row, col);
+  if (id == UINT32_MAX) return false;
+  const Node& n = nodes_[id];
+  if (n.flags & kFree) return false;
+  const bool anchor = n.at.sheet == sheet && n.at.row == row && n.at.col == col;
+  if (!anchor && (n.flags & kDynamicArray)) return false;
+  CompileOptions o;
+  o.sheet = n.at.sheet, o.row = n.at.row, o.col = n.at.col;
+  o.array = (n.f->flags & Formula::kArray) != 0;
+  text = "=" + Print(*n.f, o, *this);
+  if (o.array && !(n.flags & kDynamicArray)) text = "{" + text + "}";
+  return true;
+}
+
 bool Engine::Stale(int sheet, int32_t row, int32_t col) const {
   uint32_t id = NodeAt(sheet, row, col);
   return id != UINT32_MAX && (nodes_[id].flags & kStale);

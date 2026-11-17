@@ -185,6 +185,10 @@ bool EachItem(Machine& m, const Value& v, F&& fn) {
 // --- the functions ---
 
 namespace fn {
+// An argument as an array: a reference's values (whole columns as far as the workbook's cells
+// reach), a single value as 1 x 1. False (with c.out set) when it can't be read.
+bool ArgArray(Call& c, int i, Value& out);
+
 #define FW_FN(name) void name(Call& c);
 FW_FN(Abs) FW_FN(Address) FW_FN(Aggregate) FW_FN(And) FW_FN(Average) FW_FN(AverageA) FW_FN(AverageIf) FW_FN(AverageIfs)
 FW_FN(Ceiling) FW_FN(CeilingMath) FW_FN(Char) FW_FN(Clean) FW_FN(Code) FW_FN(Column) FW_FN(Columns)
@@ -206,6 +210,10 @@ FW_FN(SumProduct) FW_FN(SumSq) FW_FN(T) FW_FN(Text) FW_FN(TextJoin) FW_FN(Time) 
 FW_FN(Transpose) FW_FN(Trim) FW_FN(True) FW_FN(Trunc) FW_FN(TypeFn) FW_FN(Unique) FW_FN(Upper) FW_FN(ValueFn) FW_FN(Var)
 FW_FN(VarP) FW_FN(VLookup) FW_FN(Weekday) FW_FN(WeekNum) FW_FN(Workday) FW_FN(WorkdayIntl) FW_FN(XLookup)
 FW_FN(XMatch) FW_FN(Xor) FW_FN(Year) FW_FN(YearFrac)
+FW_FN(VStack) FW_FN(HStack) FW_FN(Take) FW_FN(Drop) FW_FN(ChooseRows) FW_FN(ChooseCols) FW_FN(ToCol) FW_FN(ToRow)
+FW_FN(WrapRows) FW_FN(WrapCols) FW_FN(Expand) FW_FN(RandArray) FW_FN(TextSplit) FW_FN(TextBefore) FW_FN(TextAfter)
+FW_FN(ValueToText) FW_FN(ArrayToText) FW_FN(UniChar) FW_FN(Unicode) FW_FN(IsFormula) FW_FN(FormulaText)
+FW_FN(Sheet) FW_FN(Sheets) FW_FN(Areas) FW_FN(CellInfo)
 #undef FW_FN
 }  // namespace fn
 

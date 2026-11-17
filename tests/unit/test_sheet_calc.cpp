@@ -586,7 +586,7 @@ TEST(sheet_calc_engine_on_open) {
   f.Formula("B1", "A1+1", 0);                             // depends on a volatile one: recalculated
   f.Formula("C1", "5*2", 999);                            // cached: kept, as Excel keeps it
   f.Formula("D1", "C1*2", 0, false);                      // no cached value: calculated
-  f.Formula("E1", "_xlfn.TAKE(C1,1)+A1", 7);              // unsupported: keeps 7, stale
+  f.Formula("E1", "_xlfn.WEBSERVICE(C1)+A1", 7);          // unsupported: keeps 7, stale
   f.engine.Opened({});
   f.engine.Recalculate();
   CHECK_EQ(f.Num("A1"), 45293.0);

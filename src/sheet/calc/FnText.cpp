@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "sheet/calc/Fn.h"
 
@@ -445,6 +446,230 @@ void Hyperlink(Call& c) {
   const Value& v = c.arg(i);
   if (v.IsMissing() || v.IsEmpty()) return c.SetNumber(0);
   c.out = v;
+}
+
+
+// --- Excel 365's text functions: TEXTSPLIT, TEXTBEFORE, TEXTAFTER (from Microsoft's documentation;
+// Excel 2021 lacks them), VALUETOTEXT, ARRAYTOTEXT, UNICHAR, UNICODE (measured).
+
+namespace {
+
+std::wstring Folded(const std::wstring& w) {
+  std::wstring f = w;
+  if (!f.empty()) CharLowerBuffW(f.data(), static_cast<DWORD>(f.size()));
+  return f;
+}
+
+// The delimiters an argument lists (one or an array of them).
+bool Delimiters(Call& c, int i, bool fold, std::vector<std::wstring>& out) {
+  if (!c.Has(i)) return true;
+  Value v;
+  if (!ArgArray(c, i, v)) return false;
+  const Array& a = v.array();
+  for (int32_t k = 0; k < a.size(); ++k) {
+    const Value& e = a.data()[k];
+    if (e.IsError()) return c.Fail(e.error()), false;
+    std::wstring w = Wide(ValueText(e, c.m.decimal));
+    out.push_back(fold ? Folded(w) : w);
+  }
+  return true;
+}
+
+// The first delimiter at or after `from` (the longest when several start there): its position and
+// length, or false. Empty delimiters are skipped unless `empty` (TEXTBEFORE's "").
+bool NextDelimiter(const std::wstring& s, size_t from, const std::vector<std::wstring>& ds, bool empty, size_t& at,
+                   size_t& len) {
+  for (size_t p = from; p <= s.size(); ++p) {
+    bool found = false;
+    for (const std::wstring& d : ds) {
+      if (d.empty() && !empty) continue;
+      if (p + d.size() <= s.size() && s.compare(p, d.size(), d) == 0 && (!found || d.size() > len))
+        found = true, len = d.size();
+    }
+    if (found) return at = p, true;
+  }
+  return false;
+}
+
+// The last delimiter ending at or before `to`.
+bool PrevDelimiter(const std::wstring& s, size_t to, const std::vector<std::wstring>& ds, size_t& at, size_t& len) {
+  for (size_t e = to + 1; e-- > 0;) {
+    bool found = false;
+    for (const std::wstring& d : ds)
+      if (d.size() <= e && s.compare(e - d.size(), d.size(), d) == 0 && (!found || d.size() > len))
+        found = true, len = d.size();
+    if (found) return at = e - len, true;
+  }
+  return false;
+}
+
+// `s` split where `key` (s, or s in lower case) has a delimiter.
+std::vector<std::wstring> SplitBy(const std::wstring& s, const std::wstring& key, const std::vector<std::wstring>& ds,
+                                  bool ignoreEmpty) {
+  std::vector<std::wstring> out;
+  size_t from = 0, at = 0, len = 0;
+  while (NextDelimiter(key, from, ds, false, at, len)) {
+    if (!(ignoreEmpty && at == from)) out.push_back(s.substr(from, at - from));
+    from = at + len;
+  }
+  if (!(ignoreEmpty && from == s.size())) out.push_back(s.substr(from));
+  return out;
+}
+
+bool AllEmpty(const std::vector<std::wstring>& ds) {
+  for (const auto& d : ds)
+    if (!d.empty()) return false;
+  return true;
+}
+
+// A value as ARRAYTOTEXT and VALUETOTEXT show it; strict: text in quotes.
+std::string Shown(const Value& v, bool strict, char decimal) {
+  if (v.IsText() && strict) {
+    std::string q = "\"";
+    for (char ch : v.text()) q += ch == '"' ? std::string("\"\"") : std::string(1, ch);
+    return q + "\"";
+  }
+  if (v.IsError()) return std::string(ErrText(v.error()));
+  return ValueText(v, decimal);
+}
+
+bool StrictFormat(Call& c, int i, bool& strict) {
+  double f;
+  if (!c.Number(i, f, 0)) return false;
+  f = std::trunc(f);
+  if (f != 0 && f != 1) return c.Fail(Err::Value), false;
+  strict = f == 1;
+  return true;
+}
+
+}  // namespace
+
+// TEXTSPLIT(text, col_delimiter, [row_delimiter], [ignore_empty], [match_mode], [pad_with]).
+void TextSplit(Call& c) {
+  std::string text;
+  bool ignoreEmpty;
+  double mode;
+  if (!c.Text(0, text) || !c.Boolean(3, ignoreEmpty) || !c.Number(4, mode, 0)) return;
+  bool fold = std::trunc(mode) == 1;
+  std::vector<std::wstring> cols, rows;
+  if (!Delimiters(c, 1, fold, cols) || !Delimiters(c, 2, fold, rows)) return;
+  if (AllEmpty(cols) && AllEmpty(rows)) return c.Fail(Err::Value);
+  std::wstring s = Wide(text), key = fold ? Folded(s) : s;
+  std::vector<std::wstring> lines = SplitBy(s, key, rows, ignoreEmpty);
+  std::vector<std::wstring> lineKeys = SplitBy(key, key, rows, ignoreEmpty);
+  std::vector<std::vector<std::wstring>> grid;
+  size_t width = 0;
+  for (size_t i = 0; i < lines.size(); ++i) {
+    grid.push_back(SplitBy(lines[i], lineKeys[i], cols, ignoreEmpty));
+    width = std::max(width, grid.back().size());
+  }
+  if (grid.empty() || width == 0) return c.Fail(Err::Calc);
+  if (grid.size() * width > 16'000'000) return c.Fail(Err::Num);
+  Value pad = c.Has(5) ? c.arg(5) : Value::Error(Err::NA);
+  Array* out = Array::Make(static_cast<int32_t>(grid.size()), static_cast<int32_t>(width));
+  for (size_t i = 0; i < grid.size(); ++i)
+    for (size_t j = 0; j < width; ++j)
+      out->at(static_cast<int32_t>(i), static_cast<int32_t>(j)) =
+          j < grid[i].size() ? Value::Text(Narrow(grid[i][j])) : pad;
+  c.out = Value::Adopt(out);
+}
+
+// TEXTBEFORE / TEXTAFTER(text, delimiter, [instance_num], [match_mode], [match_end], [if_not_found]).
+static void TextAround(Call& c, bool before) {
+  std::string text;
+  double n, mode, end;
+  if (!c.Text(0, text) || !c.Number(2, n, 1) || !c.Number(3, mode, 0) || !c.Number(4, end, 0)) return;
+  n = std::trunc(n);
+  bool fold = std::trunc(mode) == 1, matchEnd = end != 0;
+  std::vector<std::wstring> ds;
+  if (!Delimiters(c, 1, fold, ds)) return;
+  if (!c.Has(1)) ds.emplace_back();
+  std::wstring s = Wide(text), key = fold ? Folded(s) : s;
+  if (n == 0 || std::fabs(n) > static_cast<double>(std::max<size_t>(s.size(), 1))) return c.Fail(Err::Value);
+  size_t want = static_cast<size_t>(std::fabs(n)), count = 0, at = 0, len = 0;
+  bool found = false;
+  if (n > 0) {
+    size_t from = 0;
+    while (count < want && from <= s.size() && NextDelimiter(key, from, ds, true, at, len)) {
+      if (++count == want) found = true;
+      else from = at + std::max<size_t>(len, 1);
+    }
+    if (!found && matchEnd && count + 1 == want) found = true, at = s.size(), len = 0;
+  } else {
+    size_t to = s.size();
+    while (count < want && PrevDelimiter(key, to, ds, at, len)) {
+      if (++count == want) found = true;
+      else if (at == 0) break;
+      else to = len ? at : at - 1;
+    }
+    if (!found && matchEnd && count + 1 == want) found = true, at = 0, len = 0;
+  }
+  if (!found) {
+    c.out = c.Has(5) ? c.arg(5) : Value::Error(Err::NA);
+    if (c.out.IsArray()) c.out = Value(c.out.array().at(0, 0));
+    return;
+  }
+  SetWide(c, before ? s.substr(0, at) : s.substr(at + len));
+}
+void TextBefore(Call& c) { TextAround(c, true); }
+void TextAfter(Call& c) { TextAround(c, false); }
+
+// VALUETOTEXT(value, [format]): errors are shown, not passed on.
+void ValueToText(Call& c) {
+  bool strict;
+  if (!StrictFormat(c, 1, strict)) return;
+  SetText(c, Shown(c.arg(0), strict, c.m.decimal));
+}
+
+// ARRAYTOTEXT(array, [format]): concise "1; a" with the region's list separator, strict with its
+// array separators ({1\"a";TRUE\2,5} on this PC).
+void ArrayToText(Call& c) {
+  bool strict;
+  if (!StrictFormat(c, 1, strict)) return;
+  Value arr;
+  if (!ArgArray(c, 0, arr)) return;
+  const Array& a = arr.array();
+  const bool comma = c.m.decimal == ',';
+  const std::string list = comma ? "; " : ", ";
+  const std::string col = comma ? "\\" : ",";
+  std::string out = strict ? "{" : "";
+  for (int32_t i = 0; i < a.rows(); ++i)
+    for (int32_t j = 0; j < a.cols(); ++j) {
+      if (i || j) out += !strict ? list : j ? col : std::string(";");
+      out += Shown(a.at(i, j), strict, c.m.decimal);
+      if (out.size() > kMaxText * 3) return c.Fail(Err::Value);
+    }
+  if (strict) out += "}";
+  SetText(c, out);
+}
+
+void UniChar(Call& c) {
+  double n;
+  if (!c.Number(0, n)) return;
+  n = std::trunc(n);
+  if (n < 1 || n > 0x10FFFF) return c.Fail(Err::Value);
+  uint32_t u = static_cast<uint32_t>(n);
+  if ((u >= 0xD800 && u <= 0xDFFF) || (u & 0xFFFE) == 0xFFFE) return c.Fail(Err::NA);
+  std::wstring w;
+  if (u < 0x10000) {
+    w.push_back(static_cast<wchar_t>(u));
+  } else {
+    u -= 0x10000;
+    w.push_back(static_cast<wchar_t>(0xD800 + (u >> 10)));
+    w.push_back(static_cast<wchar_t>(0xDC00 + (u & 0x3FF)));
+  }
+  SetWide(c, w);
+}
+
+void Unicode(Call& c) {
+  std::string text;
+  if (!c.Text(0, text)) return;
+  std::wstring w = Wide(text);
+  if (w.empty()) return c.Fail(Err::Value);
+  uint32_t u = w[0];
+  if (u >= 0xD800 && u <= 0xDBFF && w.size() > 1 && w[1] >= 0xDC00 && w[1] <= 0xDFFF)
+    u = 0x10000 + ((u - 0xD800) << 10) + (w[1] - 0xDC00);
+  c.SetNumber(u);
 }
 
 }  // namespace fw::sheet::calc::fn
