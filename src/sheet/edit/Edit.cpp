@@ -2288,6 +2288,133 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
   });
 }
 
+namespace {
+
+// "#REF!A1", "#REF!$A$1:$B$2" (a reference to a deleted sheet as SheetsChanged writes it) become
+// "#REF!", as Excel writes them in the file.
+std::string StripRefTails(const std::string& s) {
+  std::string out;
+  size_t i = 0;
+  auto ref = [&](size_t k) {
+    if (k < s.size() && s[k] == '$') ++k;
+    while (k < s.size() && std::isalpha(static_cast<unsigned char>(s[k]))) ++k;
+    if (k < s.size() && s[k] == '$') ++k;
+    while (k < s.size() && std::isdigit(static_cast<unsigned char>(s[k]))) ++k;
+    return k;
+  };
+  for (size_t at = s.find("#REF!"); at != std::string::npos; at = s.find("#REF!", i)) {
+    out.append(s, i, at + 5 - i);
+    size_t j = at + 5, e = ref(j);
+    if (e > j && e < s.size() && s[e] == ':') {
+      size_t e2 = ref(e + 1);
+      if (e2 > e + 1) e = e2;
+    }
+    bool name = e < s.size() && (std::isalnum(static_cast<unsigned char>(s[e])) || s[e] == '_' || s[e] == '(');
+    i = e > j && !name ? e : j;
+  }
+  out.append(s, i, std::string::npos);
+  return out;
+}
+
+}  // namespace
+
+void Editor::RewriteSheetRefs(int skip, const std::function<std::string(std::string_view, int)>& rewrite,
+                              const std::function<bool(std::string_view)>& touches, std::string_view from,
+                              std::string_view to) {
+  State& st = *s_;
+  refs::Context ctx{refs::Mover(Shift{}), -1, std::string(), {}, {}};
+  ctx.formula = [&](std::string_view text, int at, uint32_t, uint32_t) {
+    return touches(text) ? rewrite(text, at) : std::string(text);
+  };
+  ctx.copy = [](std::string_view text, int, CellAddr, CellAddr) { return std::string(text); };
+  pkg::Package* package = book_.GetPackage();
+  auto edit = [&](const std::string& part, const std::function<bool(std::string&)>& fn) {
+    std::vector<uint8_t> bytes;
+    if (!package || !package->ReadPart(part, bytes).Ok()) return;
+    std::string xml(bytes.begin(), bytes.end());
+    if (touches(xml) && fn(xml)) st.SetPart(part, std::move(xml));
+  };
+  for (size_t i = 0; i < book_.SheetCount(); ++i) {
+    if (static_cast<int>(i) == skip) continue;
+    Sheet& x = book_.GetSheet(i);
+    const int xi = static_cast<int>(i);
+    auto& recs = A::Formulas(x);
+    SheetSave* sv = nullptr;
+    for (uint32_t id = 0; id < recs.size(); ++id) {
+      if (recs[id].text == kNone) continue;
+      std::string_view text = A::Texts(x).Get(recs[id].text);
+      if (!touches(text)) continue;
+      std::string now = rewrite(text, xi);
+      if (now == text) continue;
+      if (!sv) {
+        sv = &st.Save(x);
+        st.SaveCells(*sv);
+      }
+      st.SaveFormula(*sv, id);
+      recs[id].text = A::Texts(x).Add(now);
+    }
+    if (sv) st.Change(&x, kFormulas, Range::All());
+    std::vector<Table> tables = x.Tables();
+    bool tablesChanged = false;
+    for (Table& t : tables)
+      for (TableColumn& c : t.columns)
+        for (std::string* f : {&c.calculatedFormula, &c.totalsFormula})
+          if (!f->empty() && touches(*f)) {
+            std::string now = rewrite(*f, xi);
+            tablesChanged = tablesChanged || now != *f;
+            *f = std::move(now);
+          }
+    if (tablesChanged) {
+      st.SaveTables(st.Save(x));
+      A::Tables(x) = tables;
+    }
+    for (const Table& t : x.Tables())
+      edit(t.part, [&](std::string& xml) { return refs::MoveTable(xml, t, t, xi, ctx); });
+    if (touches(A::Text(x).afterData)) {
+      detail::PartText now = A::Text(x);
+      refs::MoveSheetXml(now, xi, ctx);
+      if (now.afterData != A::Text(x).afterData) {
+        st.SaveText(st.Save(x));
+        A::Text(x) = std::move(now);
+      }
+    }
+    const pkg::RelationshipSet* rels = package && !x.PartName().empty() ? package->RelationshipsOf(x.PartName()) : nullptr;
+    if (rels)
+      for (const pkg::Relationship& r : rels->items) {
+        if (r.external || r.targetPart.empty()) continue;
+        if (EndsWith(r.type, "/drawing"))
+          edit(r.targetPart, [&](std::string& xml) { return refs::MoveDrawing(xml, xi, ctx); });
+        else if (EndsWith(r.type, "/vmlDrawing"))
+          edit(r.targetPart, [&](std::string& xml) { return refs::MoveVml(xml, xi, ctx); });
+        else if (EndsWith(r.type, "/ctrlProp"))
+          edit(r.targetPart, [&](std::string& xml) { return refs::MoveControl(xml, xi, ctx); });
+      }
+  }
+  std::vector<DefinedName> names = A::Names(book_);
+  bool namesChanged = false;
+  for (DefinedName& n : names)
+    if (touches(n.formula)) {
+      std::string now = rewrite(n.formula, n.sheet >= 0 ? n.sheet : 0);
+      namesChanged = namesChanged || now != n.formula;
+      n.formula = std::move(now);
+    }
+  if (namesChanged) {
+    st.SaveBook(false, true);
+    A::Names(book_) = std::move(names);
+    st.Change(nullptr, kNames, Range{});
+  }
+  if (!package) return;
+  for (const pkg::Part& part : package->Parts()) {
+    if (part.deleted) continue;
+    std::string_view ct = package->ContentTypeOf(part.name);
+    if (ct == "application/vnd.openxmlformats-officedocument.drawingml.chart+xml" ||
+        ct == "application/vnd.ms-office.chartex+xml")
+      edit(part.name, [&](std::string& xml) { return refs::MoveChart(xml, 0, ctx, {}); });
+    else if (!from.empty() && ct == "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml")
+      edit(part.name, [&](std::string& xml) { return refs::RenamePivotSource(xml, from, to); });
+  }
+}
+
 // ---- Merged cells
 
 Result Editor::Merge(int sheet, const Range& r) {
@@ -2413,33 +2540,10 @@ Result Editor::RenameSheet(int sheet, std::string name) {
     }
     A::Name(s) = name;
     st.SaveBook(false, true);
-    for (DefinedName& n : A::Names(book_)) n.formula = pkg::RenameSheetInFormula(n.formula, old, name);
-    // Formulas on every sheet, and links to places in the workbook.
-    for (size_t i = 0; i < book_.SheetCount(); ++i) {
-      Sheet& x = book_.GetSheet(i);
-      auto& formulas = A::Formulas(x);
-      SheetSave* sv = nullptr;
-      for (uint32_t id = 0; id < formulas.size(); ++id) {
-        if (formulas[id].text == kNone) continue;
-        bool changed = false;
-        std::string text = pkg::RenameSheetInFormula(A::Texts(x).Get(formulas[id].text), old, name, &changed);
-        if (!changed) continue;
-        if (!sv) sv = &st.Save(x);
-        st.SaveCells(*sv);
-        st.SaveFormula(*sv, id);
-        formulas[id].text = A::Texts(x).Add(text);
-      }
-      bool links = std::any_of(x.Hyperlinks().begin(), x.Hyperlinks().end(), [&](const Hyperlink& h) {
-        bool changed = false;
-        pkg::RenameSheetInFormula(h.location, old, name, &changed);
-        return changed;
-      });
-      if (links) {
-        SheetSave& lsv = st.Save(x);
-        st.SaveLinks(lsv);
-        for (Hyperlink& h : A::Links(x)) h.location = pkg::RenameSheetInFormula(h.location, old, name);
-      }
-    }
+    // Formulas, names, rules, sparklines, charts and the rest; links to places keep their text (Excel).
+    RewriteSheetRefs(
+        -1, [&](std::string_view t, int) { return pkg::RenameSheetInFormula(t, old, name); },
+        [&](std::string_view t) { return Mentions(t, old); }, old, name);
     st.Change(&s, kSheets | kFormulas, Range::All());
     return Result{};
   });
@@ -2453,6 +2557,17 @@ Result Editor::MoveSheet(int sheet, int to) {
   return Run(*this, u"Move Sheet", [&]() -> Result {
     State& st = *s_;
     st.SaveBook(true, true);
+    // 3-D references whose end sheets move (before the list changes: indexes as they are).
+    std::vector<std::string> names;
+    for (size_t i = 0; i < book_.SheetCount(); ++i) names.push_back(book_.GetSheet(i).Name());
+    RewriteSheetRefs(
+        -1,
+        [&](std::string_view t, int at) {
+          calc::CompileOptions o;
+          o.sheet = at;
+          return calc::SheetsChanged(t, o, names, sheet, to);
+        },
+        [](std::string_view t) { return t.find(':') != std::string_view::npos && t.find('!') != std::string_view::npos; });
     auto& list = A::Sheets(book_);
     std::vector<Sheet*> before;
     for (auto& p : list) before.push_back(p.get());
@@ -2478,56 +2593,33 @@ Result Editor::DeleteSheet(int sheet) {
   for (int i = 0; i < n; ++i) visible += book_.GetSheet(static_cast<size_t>(i)).State() == SheetState::Visible;
   if (visible == 1 && book_.GetSheet(static_cast<size_t>(sheet)).State() == SheetState::Visible)
     return Result::Fail(u"A workbook needs at least one visible sheet.");
-  // Until the reference registry turns them into #REF!, a sheet other formulas use stays.
   if (!book_.LoadAll().Ok()) return Result::Fail(u"A sheet couldn't be read.");
-  const std::string& gone = book_.GetSheet(static_cast<size_t>(sheet)).Name();
-  auto uses = [&](std::string_view formula) {
-    bool found = false;
-    pkg::ForEachSheetToken(formula, [&](const pkg::SheetToken& t) {
-      found = found || NameEqualsNoCase(t.first, gone) || (!t.last.empty() && NameEqualsNoCase(t.last, gone));
-    });
-    return found;
-  };
-  for (const DefinedName& nm : book_.Names())
-    if (nm.sheet != sheet && uses(nm.formula)) return Result::Fail(u"Formulas or names use this sheet.");
-  // Anything else in the file that names it (chart series, x14 extensions' xm:f, hyperlink
-  // locations, ...), until the registry updates those: Sheet1! or 'My sheet'! in any XML part but
-  // the sheet's own, the workbook part and the shared strings.
-  if (const pkg::Package* package = book_.GetPackage()) {
-    auto lower = [](std::string s) {
-      for (char& c : s) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
-      return s;
-    };
-    std::string quoted = "'";
-    for (char c : gone) quoted += c == '\'' ? std::string("''") : std::string(1, c);
-    const std::string plain = lower(gone) + "!", inQuotes = lower(quoted) + "'!";
-    const std::string own = pkg::PartKey(book_.GetSheet(static_cast<size_t>(sheet)).PartName());
-    for (const pkg::Part& part : package->Parts()) {
-      std::string key = pkg::PartKey(part.name);
-      if (part.deleted || key == own || key == pkg::PartKey(book_.WorkbookPart()) ||
-          key == pkg::PartKey(book_.StringsPart()) || !package->IsXmlPart(part.name) ||
-          package->ContentTypeOf(part.name).find("extended-properties") != std::string_view::npos)
-        continue;  // (docProps/app.xml lists names as "Sheet1!Print_Area": text, not references)
-      std::vector<uint8_t> bytes;
-      if (!package->ReadPart(part.name, bytes).Ok()) continue;
-      const std::string xml = lower(std::string(bytes.begin(), bytes.end()));
-      bool named = xml.find(inQuotes) != std::string::npos;
-      for (size_t at = xml.find(plain); !named && at != std::string::npos; at = xml.find(plain, at + 1)) {
-        char before = at ? xml[at - 1] : '>';
-        named = !(std::isalnum(static_cast<unsigned char>(before)) || before == '_' || before == '.' || before == '\'');
-      }
-      if (named) return Result::Fail(u"Other parts of the workbook use this sheet.");
-    }
-  }
-  for (size_t i = 0; i < book_.SheetCount(); ++i) {
-    if (static_cast<int>(i) == sheet) continue;
-    Sheet& x = book_.GetSheet(i);
-    for (const FormulaRec& f : A::Formulas(x))
-      if (f.text != kNone && uses(A::Texts(x).Get(f.text))) return Result::Fail(u"Formulas or names use this sheet.");
-  }
   return Run(*this, u"Delete Sheet", [&]() -> Result {
     State& st = *s_;
     st.SaveBook(true, true);
+    // References to it become #REF! as Excel writes them (Sheet2!A1+1 -> #REF!+1; 3-D ranges give
+    // way to the neighbour inside), and so do structured references to its tables; its charts and
+    // other parts go with it when the workbook is saved.
+    const Sheet& doomed = book_.GetSheet(static_cast<size_t>(sheet));
+    std::vector<std::string> sheetNames, tables;
+    for (size_t i = 0; i < book_.SheetCount(); ++i) sheetNames.push_back(book_.GetSheet(i).Name());
+    for (const Table& t : doomed.Tables()) tables.push_back(t.displayName);
+    const std::string goneName = doomed.Name();
+    RewriteSheetRefs(
+        sheet,
+        [&](std::string_view t, int at) {
+          calc::CompileOptions o;
+          o.sheet = at;
+          std::string r = StripRefTails(calc::SheetsChanged(t, o, sheetNames, sheet, -1));
+          for (const std::string& table : tables) r = refs::DropTableColumns(r, table, {});
+          return r;
+        },
+        [&](std::string_view t) {
+          if (Mentions(t, goneName)) return true;
+          for (const std::string& table : tables)
+            if (Mentions(t, table)) return true;
+          return false;
+        });
     auto& list = A::Sheets(book_);
     std::unique_ptr<Sheet> gone = std::move(list[static_cast<size_t>(sheet)]);
     list.erase(list.begin() + sheet);

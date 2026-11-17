@@ -89,6 +89,8 @@ bool MoveTable(std::string& xml, const Table& before, const Table& after, int in
 bool MoveControl(std::string& xml, int index, const Context& c);
 //  - a pivot cache's worksheet source; a pivot table's location (on the edited sheet)
 bool MovePivotCache(std::string& xml, const Context& c);
+// A pivot cache whose source is on a renamed sheet: its sheet attributes follow.
+bool RenamePivotSource(std::string& xml, std::string_view from, std::string_view to);
 
 // A formula after columns of table `table` were deleted: structured references naming one of
 // `columns` (Table1[[#This Row],[n]]) become #REF!, as Excel makes them.

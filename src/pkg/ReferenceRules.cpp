@@ -226,7 +226,9 @@ void AddExcelRules(ReferenceRegistry& r) {
   // Formulas name sheets and cells.
   for (const RefSite& site :
        {Text(X, "f"), Text(X, "definedName"), Text(X, "formula"), Text(X, "formula1"), Text(X, "formula2"), Text(Xm, "f"),
-        Text(C, "f"), Text(C15, "f"), Plain(X, "hyperlink", "location")}) {
+        Text(C, "f"), Text(C15, "f"),
+        // Excel never rewrites a hyperlink's location: renaming or deleting its sheet leaves it stale.
+        Lenient(Plain(X, "hyperlink", "location"))}) {
     RefSite s = site;
     s.syntax = RefSyntax::Formula;
     sheet.sites.push_back(s);
