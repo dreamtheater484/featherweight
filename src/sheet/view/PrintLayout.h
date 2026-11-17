@@ -26,6 +26,9 @@ struct PrintPage {
   bool titleRows = false, titleCols = false;  // the print titles repeat on it
   int number = 1;                   // as printed (&P)
   bool chart = false;               // a chart sheet's page: its chart fills it
+  // A page of the notes printed at the end of the sheet: PrintInfo::objects' Notes()[first, end).
+  bool notes = false;
+  uint32_t notesFirst = 0, notesEnd = 0;
 };
 
 struct PrintInfo {
@@ -62,6 +65,11 @@ class PrintLayout {
 
  private:
   void Paginate();
+  // The notes printed at the end of the sheet: pages of their own after the cells'.
+  void NotePages();
+  // A note as printed there, at (x, y) and `width` wide: its cell, then its text. Draws it when
+  // `p` isn't null; its height, with the blank line after it.
+  float PaintNote(draw::Painter* p, const CellNote& note, float x, float y, float width);
   void PaintHeaderFooter(draw::Painter& p, const PrintPage& page, bool header);
   float ColsWidth(uint32_t first, uint32_t last) const;   // sheet points, at the page's scale
   // A column on paper at a scale, in points at 100 % (the page's scale brings it to size). Excel

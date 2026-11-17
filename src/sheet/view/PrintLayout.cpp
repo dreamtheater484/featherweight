@@ -130,6 +130,7 @@ PrintLayout::PrintLayout(const Workbook& book, const Sheet& sheet, size_t sheetI
                          CellText& text, PrintInfo info)
     : book_(book), sheet_(sheet), index_(sheetIndex), grid_(grid), text_(text), info_(std::move(info)) {
   Paginate();
+  NotePages();
 }
 
 float PrintLayout::ColsWidth(uint32_t first, uint32_t last) const {
@@ -436,6 +437,77 @@ void PrintLayout::Paginate() {
   while (pages_.size() > 1 && Blank(pages_.back().body)) pages_.pop_back();
 }
 
+void PrintLayout::NotePages() {
+  const PageSetup& ps = sheet_.Page();
+  if (ps.cellComments != CellComments::AtEnd || !info_.objects) return;
+  const std::vector<CellNote>& notes = info_.objects->Notes();
+  if (notes.empty()) return;
+  const PageMargins& m = ps.margins;
+  const float availW = std::max(36.f, paperW_ - static_cast<float>((m.left + m.right) * 72));
+  const float availH = std::max(36.f, paperH_ - static_cast<float>((m.top + m.bottom) * 72));
+  PrintPage page;
+  page.width = paperW_;
+  page.height = paperH_;
+  page.notes = true;
+  page.number = pages_.empty() ? (ps.useFirstPageNumber ? ps.firstPageNumber : 1) : pages_.back().number + 1;
+  float y = 0;
+  for (uint32_t i = 0; i < notes.size(); ++i) {
+    const float h = PaintNote(nullptr, notes[i], 0, 0, availW);
+    if (y > 0 && y + h > availH) {
+      page.notesEnd = i;
+      pages_.push_back(page);
+      page.notesFirst = i;
+      ++page.number;
+      y = 0;
+    }
+    y += h;
+  }
+  page.notesEnd = static_cast<uint32_t>(notes.size());
+  pages_.push_back(page);
+}
+
+float PrintLayout::PaintNote(draw::Painter* p, const CellNote& note, float x, float y, float width) {
+  const Font& base = book_.GetStyles().DefaultFont();
+  text::TextStyle style;
+  style.family = FontMeasure::Family(base, base);
+  style.size = static_cast<float>(FontMeasure::Size(base, base));
+  const float pitch = static_cast<float>(text_.Measure().Of(base, base).rowHeight * 0.75);
+  // "Cell: B2", then "Note: " and the note's lines (a threaded comment's: "Comment: ").
+  std::vector<std::wstring> paras{L"Cell: " + Utf8ToWide(ColumnName(note.col)) + std::to_wstring(note.row + 1)};
+  const std::wstring body = (note.threaded ? L"Comment: " : L"Note: ") + note.text;
+  std::wstring line;
+  for (wchar_t c : body) {
+    if (c == L'\r') continue;
+    if (c == L'\n') {
+      paras.push_back(line);
+      line.clear();
+    } else {
+      line += c;
+    }
+  }
+  paras.push_back(line);
+  const draw::Brush ink = draw::Brush::Solid({0, 0, 0, 1});
+  const float top = y;
+  for (const std::wstring& s : paras) {
+    if (s.empty()) {
+      y += pitch;
+      continue;
+    }
+    text::Paragraph para;
+    para.text = s;
+    para.runs.push_back({static_cast<uint32_t>(s.size()), &style});
+    para.markStyle = &style;
+    for (const text::Line& ln : text::Layout(text_.Fonts(), para, width)) {
+      if (p) {
+        const float baseline = y + (pitch + ln.ascent - ln.descent) / 2;
+        for (const text::GlyphPiece& g : ln.pieces) p->DrawGlyphs({x + g.OriginX(), baseline - g.rise}, g.Run(), ink);
+      }
+      y += pitch;
+    }
+  }
+  return y - top + pitch;
+}
+
 void PrintLayout::Paint(draw::Painter& p, size_t index) {
   if (index >= pages_.size()) return;
   const PrintPage& page = pages_[index];
@@ -446,6 +518,17 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   const float availH = paperH_ - static_cast<float>((m.top + m.bottom) * 72);
   if (page.chart) {
     if (info_.objects) info_.objects->DrawChartSheet(p, {left, top, left + availW, top + availH});
+    PaintHeaderFooter(p, page, true);
+    PaintHeaderFooter(p, page, false);
+    return;
+  }
+  if (page.notes) {
+    if (info_.objects) {
+      const std::vector<CellNote>& notes = info_.objects->Notes();
+      float y = top;
+      for (uint32_t i = page.notesFirst; i < page.notesEnd && i < notes.size(); ++i)
+        y += PaintNote(&p, notes[i], left, y, availW);
+    }
     PaintHeaderFooter(p, page, true);
     PaintHeaderFooter(p, page, false);
     return;
