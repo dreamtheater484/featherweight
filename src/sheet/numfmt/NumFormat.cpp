@@ -26,7 +26,9 @@
 //   are all placeholders before the numerator, with the text among them.
 // - Times round to the second (or the shown decimals of one), then each field is truncated.
 //   Dates outside 0..9999-12-31 show "####", except a lone elapsed unit ([h]), which shows any
-//   value, negative ones too. A plain unit after its elapsed one ([h] h) shows the elapsed count.
+//   value, negative ones too. With an elapsed code, the largest time unit is the elapsed one ([h] h
+//   shows the count twice, [m] h:mm a plain minute); after another date code, it shows Windows
+//   Excel's odd count, the seconds field plus a half read as days (s [h]: 3.14159 shows 1293).
 // - General shows at most 11 characters (a minus not counted): fixed-point unless that shows
 //   fewer significant digits than scientific notation would (1.23456789E-05).
 // - A tag's high byte is a digit system ([$-3000401]: Persian), the first section's for the
@@ -759,17 +761,33 @@ struct Compiler {
       else if (IsDateToken(x.kind) && x.kind != Token::Era) ++units;
     }
     s.elapsedOnly = elapsed == 1 && units == 0 && !s.system;
-    // After an elapsed unit, the same plain unit shows the elapsed count too (measured: [h] hh shows
-    // 75 75 for 3 days 3 hours, [s] ss 271433 271433).
-    bool eh = false, em = false, es = false;
+    if (!elapsed) return;
+    // With an elapsed code, the largest time unit is the elapsed one, each of its codes, and a
+    // smaller elapsed one is plain (measured: [h] hh shows 75 75 for 3 days 3 hours, [s] ss 271433
+    // 271433, [m] h:mm 23 75:23).
+    auto rank = [](const Token& x) {
+      if (x.kind == Token::Elapsed) return x.ch == 'h' ? 2 : x.ch == 'm' ? 1 : 0;
+      return x.kind == Token::Hour ? 2 : x.kind == Token::Minute ? 1 : x.kind == Token::Second ? 0 : -1;
+    };
+    int largest = -1;
+    for (const Token& x : t) largest = std::max(largest, rank(x));
+    const wchar_t unit = largest == 2 ? L'h' : largest == 1 ? L'm' : L's';
     for (Token& x : t) {
-      const wchar_t unit = x.kind == Token::Hour ? L'h' : x.kind == Token::Minute ? L'm' : x.kind == Token::Second ? L's' : 0;
-      if (unit && (unit == 'h' ? eh : unit == 'm' ? em : es)) {
+      if (x.kind != Token::Elapsed && rank(x) == largest) {
         x.kind = Token::Elapsed;
         x.ch = unit;
         x.b = x.b >= 2 ? 4 : 3;
+      } else if (x.kind == Token::Elapsed && rank(x) < largest) {
+        x.kind = rank(x) == 1 ? Token::Minute : Token::Second;
+        x.b = std::min<uint32_t>(x.b - 2, 2);
       }
-      if (x.kind == Token::Elapsed) (x.ch == 'h' ? eh : x.ch == 'm' ? em : es) = true;
+    }
+    // An elapsed code after another date code (not its own unit's) shows Windows Excel's odd count,
+    // marked by an upper-case unit (Formatter::DateTime).
+    bool other = false;
+    for (Token& x : t) {
+      if (x.kind == Token::Elapsed && other) x.ch = static_cast<wchar_t>(x.ch - 32);
+      other = other || (IsDateToken(x.kind) && x.kind != Token::Era && x.kind != Token::Elapsed);
     }
   }
 };
@@ -1361,8 +1379,19 @@ struct Formatter {
         case Token::Minute: num(minute, t.b >= 2 ? 2 : 1); break;
         case Token::Second: num(second, t.b >= 2 ? 2 : 1); break;
         case Token::Elapsed: {
-          const double unit = t.ch == 'h' ? 3600 : t.ch == 'm' ? 60 : 1;
-          num(std::floor(std::floor(total / perSecond) / unit), static_cast<int>(t.b > 2 ? t.b - 2 : 1));
+          const wchar_t u = Lower(t.ch);
+          const double unit = u == 'h' ? 3600 : u == 'm' ? 60 : 1;
+          const int width = static_cast<int>(t.b > 2 ? t.b - 2 : 1);
+          if (t.ch == u) {
+            num(std::floor(std::floor(total / perSecond) / unit), width);
+          } else {
+            // After another date code, Windows Excel shows the seconds field before rounding (in the
+            // shown decimals' unit) plus a half, read as days (measured: s [h] shows 3.14159 as
+            // "53 1293", (53.376 + 0.5) * 24; Mac Excel shows 75).
+            const double field = std::round((a - std::floor(a)) * 86400.0 * perSecond * 1e6) / 1e6;
+            const double x = std::fmod(field + 0.5, s.secDigits ? perSecond : 60.0);
+            num(std::floor(x * 86400.0 / unit + 1e-9), width);
+          }
           break;
         }
         case Token::AmPm: {

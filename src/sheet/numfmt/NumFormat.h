@@ -108,7 +108,7 @@ class NumberFormat {
       Hour,
       Minute,
       Second,
-      Elapsed,   // [h], [mm], [ss]: ch 'h', 'm' or 's'; b: width
+      Elapsed,   // [h], [mm], [ss]: ch 'h', 'm' or 's' ('H', 'M', 'S' after another date code); b: width + 2
       AmPm,      // ch 0: AM/PM; otherwise A/P: a, b are the letters' cases ('A' or 'a', 'P' or 'p')
       FracSec,   // b digits of seconds
       Era,       // g: b letters; Japan's era in its calendar, otherwise nothing
