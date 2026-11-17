@@ -77,6 +77,20 @@ void WorkbookView::Paste(PasteMode mode, bool transpose) {
   if (clip_ && util::ClipboardSequence() == clip_->seq)
     for (size_t i = 0; i < book_->SheetCount(); ++i)
       if (&book_->GetSheet(i) == clip_->sheet) from = clip_->sheet;
+  if (from && clip_->cut && from == &Current() && mode == PasteMode::All && !transpose) {
+    // A cut pasted on its own sheet moves the cells, and references to them follow as in Excel
+    // (s2-model's MoveCells; one step). Another sheet keeps the copy-and-clear path below.
+    const Range src = clip_->range;
+    const CellAddr to{sel.firstRow, sel.firstCol};
+    pasting_ = true;
+    const edit::Result moved = Ed().MoveCells(sheet, src, to);
+    pasting_ = false;
+    if (EditRefused(moved)) return;
+    clip_.reset();  // a cut pastes once
+    Select(to, {to.row + (src.lastRow - src.firstRow), to.col + (src.lastCol - src.firstCol)}, false);
+    host_.ViewInvalidate();
+    return;
+  }
   if (from) {
     const Range src = clip_->range;
     const int fromSheet = static_cast<int>(std::find(sheetOrder_.begin(), sheetOrder_.end(), from) - sheetOrder_.begin());
