@@ -410,22 +410,25 @@ class EditApiTarget : public SheetTarget {
     return Applied::Refused;
   }
 
-  // The writer for edited workbooks (sheet/xlsx Xlsx.h PrepareSave): what changed is written, the
-  // rest copied raw. Saved once per opened workbook: the dirty state compares with the file as
-  // opened until s2-model re-bases the workbook on the saved file (so no MarkSaved).
+  // The writer for edited workbooks, as the app saves (sheet/xlsx Xlsx.h): what changed is written,
+  // the rest copied raw; after CommitSave the workbook stands for the saved file, so a round can
+  // save again and undo past a save (unless the save removed sheets, which ends the history).
   fw::pkg::Status Save(std::vector<uint8_t>& out) override {
+    ed_.BeginSave();
     sh::xlsx::SavePlan plan;
     fw::pkg::Status st = sh::xlsx::PrepareSave(*book_, ed_, plan);
-    if (!st.Ok()) return st;
     fw::pkg::MemorySink sink;
-    if (!(st = book_->GetPackage()->Save(sink, plan.changes)).Ok()) return st;
-    written.clear();
-    for (const auto& [name, bytes] : plan.changes.replace) written.push_back(name);
-    for (const std::string& name : plan.changes.leaveOut) written.push_back(name);
+    if (st.Ok()) st = sh::xlsx::WriteSave(*book_, plan, sink);
+    written = sh::xlsx::WrittenParts(plan);
+    if (!st.Ok()) {
+      ed_.EndSave();
+      return st;
+    }
+    sh::xlsx::CommitSave(*book_, ed_, plan);
     out = std::move(sink.bytes);
     return {};
   }
-  bool SavesOnce() const override { return true; }
+  bool CanUndo() const override { return ed_.CanUndo(); }
 
   int UndoAll() override {
     int steps = 0;
@@ -1018,7 +1021,9 @@ struct Original {
   std::vector<std::string> damaged, checkErrors, modelProblems;
 };
 
-std::optional<Failure> CheckSave(const Original& orig, SheetTarget& target, Round& r) {
+// After a save that passes, the saved file is what the next save is measured against (its parts
+// the next save doesn't write must be the saved file's); errors and problems stay the original's.
+std::optional<Failure> CheckSave(Original& orig, SheetTarget& target, Round& r) {
   std::vector<uint8_t> bytes;
   if (fw::pkg::Status st = target.Save(bytes); !st.Ok()) return Failure{"save", st.message};
   r.written = target.written;
@@ -1061,6 +1066,7 @@ std::optional<Failure> CheckSave(const Original& orig, SheetTarget& target, Roun
     r.edited = Joined(edited), r.readBack = Joined(readBack);
     return Failure{"readback", diff};
   }
+  if (auto saved = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(r.saved), orig.pkg->GetLimits(), st)) orig.pkg = std::move(saved);
   return std::nullopt;
 }
 
@@ -1090,7 +1096,7 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
     r.failure = Failure{"open", st.message};
     return r;
   }
-  const std::vector<std::string> asOpened = Digest(target->Book());
+  std::vector<std::string> undoBase = Digest(target->Book());  // where undoing everything leads
   // A save is checked when it can write everything the edits changed; until the writer for edited
   // workbooks lands, what it can't write is noted instead (Round::unsaved).
   auto save = [&]() -> std::optional<Failure> {
@@ -1111,11 +1117,9 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
       for (const Edit& a : r.applied) cur << FormatEdit(a) << "\n";
     }
     if (e.op == Op::Save) {
-      if (target->SavesOnce()) {  // the round's last save is the one checked
-        ++r.refused;
-        continue;
-      }
       if ((r.failure = save())) return r;
+      // A save that ended the undo history: undoing everything gets back to here.
+      if (!target->CanUndo()) undoBase = Digest(target->Book());
       ++r.done;
       continue;
     }
@@ -1134,7 +1138,7 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
   if (r.done < 90) {
     const int steps = target->UndoAll();
     if (steps >= 0) {
-      if (std::string diff = FirstDifference(asOpened, Digest(target->Book())); !diff.empty()) {
+      if (std::string diff = FirstDifference(undoBase, Digest(target->Book())); !diff.empty()) {
         r.failure = Failure{"undo", "after undoing " + std::to_string(steps) + " steps: " + diff};
         return r;
       }

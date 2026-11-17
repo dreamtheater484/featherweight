@@ -240,9 +240,8 @@ $files = foreach ($p in $Paths) {
 }
 if (-not $files) { throw "Give the workbooks or folders to check." }
 # One Office automation at a time on this PC (reference-renders.ps1 and word-open-check.ps1 take
-# the same mutex).
+# the same mutex), held per file so that another check can take its turn between files.
 $mutex = New-Object Threading.Mutex($false, "Global\FeatherweightOfficeAutomation")
-try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] {}  # a check that died still let go
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "fw-excel-open-check-$PID"
 New-Item -ItemType Directory -Force $tmp | Out-Null
 $resultPath = Join-Path $tmp "result.json"
@@ -252,6 +251,7 @@ $entries = @()
 $n = 0
 foreach ($f in @($files)) {
   $n++
+  try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] {}  # a check that died still let go
   for ($attempt = 1; ; $attempt++) {
     if (Test-Path $resultPath) { Remove-Item $resultPath }
     $entry = [ordered]@{ file = $f.FullName; status = $null; load = $null; repairs = @(); dialogs = @(); error = $null }
@@ -308,6 +308,7 @@ foreach ($f in @($files)) {
     if ($attempt -ge 3) { $entry.status = "unchecked"; break }  # Excel's automation failed three times
     Start-Sleep -Seconds 5
   }
+  $mutex.ReleaseMutex()
   $what = if ($entry.repairs.Count) { $entry.repairs -join " || " }
           elseif ($entry.dialogs.Count) { ($entry.dialogs | ForEach-Object { "$($_.title): $($_.text)" }) -join " || " }
           elseif ($entry.error) { $entry.error }
@@ -327,7 +328,6 @@ if ($Json) {
     files = $entries
   }) ([IO.Path]::GetFullPath($Json))
 }
-$mutex.ReleaseMutex()
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 "$($entries.Count - $bad.Count) of $($entries.Count) opened in Excel without a repair or error."
 exit $(if ($bad.Count) { 1 } else { 0 })
