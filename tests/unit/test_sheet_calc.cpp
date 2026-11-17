@@ -2,6 +2,7 @@
 // functions and the dependency graph.
 
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -429,6 +430,18 @@ void Fixture(MapHost& h) {
   }
   Put(h, "J1", Value::Error(Err::Div0));
   Put(h, "J2", Value::Error(Err::NA));
+  // A database (K1:M7) and criteria ranges (N:O) for DSUM and friends.
+  const char* trees[] = {"Apple", "Pear", "Cherry", "Apple", "Pear", "Apple"};
+  const double sizes[][2] = {{18, 20}, {12, 12}, {13, 14}, {14, 15}, {9, 8}, {8, 9}};
+  Put(h, "K1", Value::Text("Tree")), Put(h, "L1", Value::Text("Height")), Put(h, "M1", Value::Text("Age"));
+  for (int i = 0; i < 6; ++i) {
+    h.Set(0, i + 1, 10, Value::Text(trees[i]));
+    h.Set(0, i + 1, 11, Value::Number(sizes[i][0]));
+    h.Set(0, i + 1, 12, Value::Number(sizes[i][1]));
+  }
+  const char* crit[][2] = {{"N1", "Tree"}, {"O1", "Height"}, {"N2", "Apple"}, {"O2", ">10"}, {"N4", "Tree"},
+                           {"N5", "Pear"}, {"N7", "tree"}, {"N8", "Apple"}, {"N9", "=Pear"}, {"O4", "Height"}};
+  for (auto& k : crit) Put(h, k[0], Value::Text(k[1]));
   Put(h, "Sheet2!A1", Value::Number(7));
   Put(h, "Sheet2!A2", Value::Number(8));
   Put(h, "Sheet2!B1", Value::Text("s2"));
@@ -492,7 +505,12 @@ TEST(sheet_calc_matches_excel) {
     if (v.IsEmpty()) v = Value::Number(0);
     bool ok = false;
     switch (k.type) {
-      case 'n': ok = v.IsNumber() && std::fabs(v.number() - k.num) <= 1e-12 * std::max(1.0, std::fabs(k.num)); break;
+      case 'n': {
+        // XIRR iterates to Excel's documented accuracy, 0.000001 %: its digits after that differ.
+        double tolerance = std::strstr(k.formula, "XIRR(") ? 1e-8 : 1e-12;
+        ok = v.IsNumber() && std::fabs(v.number() - k.num) <= tolerance * std::max(1.0, std::fabs(k.num));
+        break;
+      }
       case 's': ok = v.IsText() && v.text() == k.text; break;
       case 'b': ok = v.IsBool() && v.boolean() == (k.num != 0); break;
       case 'e': ok = v.IsError() && ErrText(v.error()) == k.text; break;
@@ -586,7 +604,7 @@ TEST(sheet_calc_engine_on_open) {
   f.Formula("B1", "A1+1", 0);                             // depends on a volatile one: recalculated
   f.Formula("C1", "5*2", 999);                            // cached: kept, as Excel keeps it
   f.Formula("D1", "C1*2", 0, false);                      // no cached value: calculated
-  f.Formula("E1", "_xlfn.TAKE(C1,1)+A1", 7);              // unsupported: keeps 7, stale
+  f.Formula("E1", "_xlfn.WEBSERVICE(C1)+A1", 7);          // unsupported: keeps 7, stale
   f.engine.Opened({});
   f.engine.Recalculate();
   CHECK_EQ(f.Num("A1"), 45293.0);
@@ -1212,6 +1230,60 @@ TEST(sheet_calc_new_circular_reference) {
   int s = 0;
   int32_t r = 0, c = 0;
   CHECK(!calc.CircularCell(s, r, c));
+}
+
+#include "sheet/calc/NameManager.h"
+#include "sheet/numfmt/NumLocale.h"
+
+TEST(sheet_calc_name_manager) {
+  // The Name Manager's list in en-NL, Excel's rules for a name, and a typed "Refers to".
+  auto book = OpenSheet("<row r=\"1\"><c r=\"A1\"><v>1</v></c><c r=\"B1\"><v>0.05</v></c></row>"
+                        "<row r=\"2\"><c r=\"A2\"><v>2</v></c></row><row r=\"3\"><c r=\"A3\"><v>3</v></c></row>",
+                        "<definedNames><definedName name=\"Rate\">S!$B$1</definedName>"
+                        "<definedName name=\"data\">S!$A$1:$A$3</definedName>"
+                        "<definedName name=\"Tax\" localSheetId=\"0\">0.21</definedName>"
+                        "<definedName name=\"_xlnm.Print_Area\" localSheetId=\"0\">S!$A$1:$B$3</definedName>"
+                        "<definedName name=\"Bad\">#REF!</definedName></definedNames>"
+                        "<calcPr calcId=\"191029\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  const FormulaLocale nl = MakeFormulaLocale(fw::sheet::EnNlLocale());
+  std::vector<NameRow> rows = ListNames(*book, calc, nl);
+  CHECK_EQ(rows.size(), size_t{5});
+  if (rows.size() == 5) {
+    CHECK_EQ(rows[0].name, std::string("Bad"));
+    CHECK_EQ(rows[0].value, std::string("#REF!"));
+    CHECK_EQ(rows[1].name, std::string("data"));
+    CHECK_EQ(rows[1].refersTo, std::string("=S!$A$1:$A$3"));
+    CHECK_EQ(rows[1].value, std::string("{1;2;3}"));
+    CHECK_EQ(rows[2].name, std::string("Print_Area"));
+    CHECK(rows[2].builtIn);
+    CHECK_EQ(rows[2].scope, 0);
+    CHECK_EQ(rows[3].name, std::string("Rate"));
+    CHECK_EQ(rows[3].value, std::string("0,05"));
+    CHECK_EQ(rows[4].name, std::string("Tax"));
+    CHECK_EQ(rows[4].refersTo, std::string("=0,21"));
+    CHECK_EQ(rows[4].value, std::string("0,21"));
+  }
+  for (const char* bad : {"A1", "xfd1048576", "R1C1", "r", "C", "RC", "R12", "1abc", "my name", "a-b", ""})
+    CHECK(!CheckName(*book, bad, -1).empty());
+  for (const char* good : {"XFE1", "ABCD1", "_x", "\\x", "Total.Q1", "Q?", "Tax"}) CHECK(CheckName(*book, good, -1).empty());
+  CHECK(!CheckName(*book, "RATE", -1).empty());  // already there, any case
+  CHECK(CheckName(*book, "RATE", -1, "Rate").empty());  // renaming it
+  CHECK(!CheckName(*book, "tax", 0).empty());
+  std::string formula, message;
+  CompileOptions at;
+  CHECK(ReadRefersTo("=SUM(S!$A$1:$A$3;2,5)", nl, at, calc.engine(), formula, message));
+  CHECK_EQ(formula, std::string("SUM(S!$A$1:$A$3,2.5)"));
+  CHECK(ReadRefersTo("12,5", nl, at, calc.engine(), formula, message));
+  CHECK_EQ(formula, std::string("12.5"));
+  CHECK(ReadRefersTo("say \"hi\"", nl, at, calc.engine(), formula, message));
+  CHECK_EQ(formula, std::string("\"say \"\"hi\"\"\""));
+  CHECK(!ReadRefersTo("=1+", nl, at, calc.engine(), formula, message));
+  CHECK(!message.empty());
 }
 
 TEST(sheet_calc_edit_budget) {

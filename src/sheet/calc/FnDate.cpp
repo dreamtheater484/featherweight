@@ -12,17 +12,6 @@ namespace {
 
 bool IsLeap(int y) { return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0; }
 
-// A serial argument: numbers, or text read as a date. Negative or past 9999 is #NUM!.
-bool SerialArg(Call& c, int i, double& s) {
-  if (!c.Number(i, s)) return false;
-  int y, m, d;
-  if (!SerialDate(s, c.m.date1904, y, m, d)) {
-    c.Fail(Err::Num);
-    return false;
-  }
-  return true;
-}
-
 // Day of the week, 0 = Sunday.
 int Dow(double serial, bool date1904) {
   int64_t n = static_cast<int64_t>(std::floor(serial));
@@ -319,45 +308,80 @@ void TimeValue(Call& c) {
   c.SetNumber(d - std::floor(d));
 }
 
-void YearFrac(Call& c) {
-  double a, b, basis;
-  if (!SerialArg(c, 0, a) || !SerialArg(c, 1, b) || !c.Integer(2, basis)) return;
-  if (basis < 0 || basis > 4) return c.Fail(Err::Num);
+bool SerialArg(Call& c, int i, double& s) {
+  if (!c.Number(i, s)) return false;
+  int y, m, d;
+  if (!SerialDate(s, c.m.date1904, y, m, d)) {
+    c.Fail(Err::Num);
+    return false;
+  }
+  return true;
+}
+
+double YearFracOf(double a, double b, int basis, bool date1904) {
   a = std::floor(a), b = std::floor(b);
   if (a > b) std::swap(a, b);
   int y1, m1, d1, y2, m2, d2;
-  SerialDate(a, c.m.date1904, y1, m1, d1);
-  SerialDate(b, c.m.date1904, y2, m2, d2);
-  switch (static_cast<int>(basis)) {
+  SerialDate(a, date1904, y1, m1, d1);
+  SerialDate(b, date1904, y2, m2, d2);
+  switch (basis) {
     case 0: {  // US 30/360
       bool lastFeb1 = m1 == 2 && d1 == DaysInMonth(y1, 2), lastFeb2 = m2 == 2 && d2 == DaysInMonth(y2, 2);
       if (lastFeb1 && lastFeb2) d2 = 30;
       if (lastFeb1) d1 = 30;
       if (d2 == 31 && d1 >= 30) d2 = 30;
       if (d1 == 31) d1 = 30;
-      return c.SetNumber(((y2 - y1) * 360.0 + (m2 - m1) * 30.0 + (d2 - d1)) / 360);
+      return ((y2 - y1) * 360.0 + (m2 - m1) * 30.0 + (d2 - d1)) / 360;
     }
     case 1: {  // actual/actual
       double days = b - a;
-      if (y1 == y2) return c.SetNumber(days / (IsLeap(y1) ? 366 : 365));
+      if (y1 == y2) return days / (IsLeap(y1) ? 366 : 365);
       double oneYear;
-      bool within = DateSerial(y1 + 1, m1, d1, c.m.date1904, oneYear) && b <= oneYear;
+      bool within = DateSerial(y1 + 1, m1, d1, date1904, oneYear) && b <= oneYear;
       if (within) {
         bool leap = (IsLeap(y1) && (m1 < 3)) || (IsLeap(y2) && (m2 > 2 || (m2 == 2 && d2 == 29)));
-        return c.SetNumber(days / (leap ? 366 : 365));
+        return days / (leap ? 366 : 365);
       }
       double total = 0;
       for (int y = y1; y <= y2; ++y) total += IsLeap(y) ? 366 : 365;
-      return c.SetNumber(days / (total / (y2 - y1 + 1)));
+      return days / (total / (y2 - y1 + 1));
     }
-    case 2: return c.SetNumber((b - a) / 360);
-    case 3: return c.SetNumber((b - a) / 365);
+    case 2: return (b - a) / 360;
+    case 3: return (b - a) / 365;
     default: {  // European 30/360
       if (d1 == 31) d1 = 30;
       if (d2 == 31) d2 = 30;
-      return c.SetNumber(((y2 - y1) * 360.0 + (m2 - m1) * 30.0 + (d2 - d1)) / 360);
+      return ((y2 - y1) * 360.0 + (m2 - m1) * 30.0 + (d2 - d1)) / 360;
     }
   }
+}
+
+void YearFrac(Call& c) {
+  double a, b, basis;
+  if (!SerialArg(c, 0, a) || !SerialArg(c, 1, b) || !c.Integer(2, basis)) return;
+  if (basis < 0 || basis > 4) return c.Fail(Err::Num);
+  c.SetNumber(YearFracOf(a, b, static_cast<int>(basis), c.m.date1904));
+}
+
+// DAYS360(start_date, end_date, [method]): FALSE the US (NASD) method, TRUE the European one.
+void Days360(Call& c) {
+  double a, b;
+  bool europe;
+  if (!SerialArg(c, 0, a) || !SerialArg(c, 1, b) || !c.Boolean(2, europe)) return;
+  int y1, m1, d1, y2, m2, d2;
+  SerialDate(std::floor(a), c.m.date1904, y1, m1, d1);
+  SerialDate(std::floor(b), c.m.date1904, y2, m2, d2);
+  if (europe) {
+    if (d1 == 31) d1 = 30;
+    if (d2 == 31) d2 = 30;
+  } else {
+    if (d1 == 31 || (m1 == 2 && d1 == DaysInMonth(y1, 2))) d1 = 30;
+    if (d2 == 31) {
+      if (d1 < 30) d2 = 1, m2 += 1;
+      else d2 = 30;
+    }
+  }
+  c.SetNumber((y2 - y1) * 360.0 + (m2 - m1) * 30.0 + (d2 - d1));
 }
 
 }  // namespace fw::sheet::calc::fn

@@ -92,6 +92,7 @@ class Engine : public Resolver, public Names {
   bool Spill(int sheet, int32_t row, int32_t col, Area& out) override;
   bool Ready(const Area& a) override;
   bool Subtotal(int sheet, int32_t row, int32_t col) override;
+  bool FormulaText(int sheet, int32_t row, int32_t col, std::string& text) override;
   // Names
   int FindSheet(std::string_view name) const override;
   std::string SheetName(int sheet) const override;
