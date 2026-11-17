@@ -99,6 +99,9 @@ struct CalcProps {
        concurrentCalc = true, r1c1 = false;
   uint32_t iterateCount = 100, concurrentManualCount = 0;
   double iterateDelta = 0.001;
+  // The calculation features the workbook's extLst lists (xcalcf:feature), names as written:
+  // "microsoft.com:RD", "microsoft.com:Single", ... Read only.
+  std::vector<std::string> calcFeatures;
 };
 
 enum class FileFormat : uint8_t { Xlsx, Xlsm, Xltx, Xltm, Csv };
