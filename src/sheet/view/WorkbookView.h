@@ -342,6 +342,21 @@ class WorkbookView : public PagedView {
   // the workbook and its editor, so it goes first.
   std::unique_ptr<WorkbookFile> file_;
   bool keepFormat_ = false;  // "Keep CSV" chosen: no banner on the next saves
+  // ---- Formats (WorkbookFormat.cpp, s2-format): Format Cells (Ctrl+1) and the quick formats.
+  bool FormatCommand(int cmd);
+  bool FormatCommandState(int cmd, CommandState& s);
+  class FormatPanel;
+  std::unique_ptr<FormatPanel> formatPanel_;
+  void ShowFormatPanel(int page);
+  uint32_t ActiveStyle() const;  // the active cell's format (a CellXfs index)
+  // Every selected cell's format through `change`, which sets only what it changes; one undo step.
+  bool ChangeFormat(std::u16string name, const std::function<void(Xf&)>& change);
+  // The same for the cells of `r`, inside a group (Editor::BeginGroup).
+  bool ChangeFormatIn(const Range& r, const std::function<void(Xf&)>& change);
+  bool ChangeFont(std::u16string name, const std::function<void(Font&)>& change);
+  // A number format's id: a built-in format's (the code as files define it), else a custom one's.
+  uint32_t NumFmtId(const std::wstring& code);
+  std::wstring CodeOf(uint32_t numFmt) const;  // invariant
   // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
   bool GridCommand(int cmd);
   bool GridCommandState(int cmd, CommandState& s);

@@ -181,6 +181,7 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case 'X': return editor_.Active() ? 0 : CmdCut;
       case 'V': return editor_.Active() ? 0 : CmdPaste;
       case 'R': return editor_.Active() ? 0 : CmdFillRight;
+      case '1': return editor_.Active() || preview_ ? 0 : CmdFormatCells;
     }
   }
   if (alt && !ctrl && !shift && vk == VK_OEM_PLUS && !editor_.Active() && !preview_) return CmdAutoSum;
@@ -206,6 +207,7 @@ CommandState WorkbookView::QueryCommand(int cmd) {
                    (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + 50)))
     return PagedView::QueryCommand(cmd);
   if (GridCommandState(cmd, s)) return s;
+  if (FormatCommandState(cmd, s)) return s;
   const bool ready = Ready();
   size_t shown = 0;
   if (ready)
@@ -280,6 +282,7 @@ bool WorkbookView::Execute(int cmd) {
     return true;
   }
   if (GridCommand(cmd)) return true;
+  if (FormatCommand(cmd)) return true;
   switch (cmd) {
     case CmdUndo:
     case CmdRedo:

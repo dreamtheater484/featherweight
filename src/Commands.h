@@ -319,4 +319,6 @@ enum Cmd : int {
   CmdTabColor = 2100,     // + index into the tab colors (0: none)
   CmdUnhideSheet = 2200,  // + the sheet's index: a hidden sheet shown again
   CmdUnhideSheetLast = 2699,
+  // Formats, sort and filter (S2, s2-format): 2700-2999.
+  CmdFormatCells = 2700,  // Ctrl+1
 };
