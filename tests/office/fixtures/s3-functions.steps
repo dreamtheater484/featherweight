@@ -1,0 +1,51 @@
+# S3 fixture ("created as Excel shows it"): functions S3 added (Excel 2021), typed in the en-NL
+# region (";" between arguments), saved with Featherweight's results; Excel reads back the formulas
+# in its English form and shows the stored results. See formatted-cells.steps.
+sheet-name "Functions"
+enter A1 "Region"
+enter B1 "Sales"
+enter A2 "North"
+enter B2 "120"
+enter A3 "South"
+enter B3 "80"
+enter A4 "East"
+enter B4 "150"
+enter A5 "West"
+enter B5 "95"
+enter D1 "Find"
+enter E1 "East"
+enter D2 "XLOOKUP"
+enter E2 "=XLOOKUP(E1;A2:A5;B2:B5;\"none\")"
+enter D3 "XMATCH"
+enter E3 "=XMATCH(E1;A2:A5)"
+enter D4 "LET"
+enter E4 "=LET(t;SUM(B2:B5);t/COUNT(B2:B5))"
+enter D5 "TEXTJOIN"
+enter E5 "=TEXTJOIN(\", \";TRUE;A2:A5)"
+enter D6 "IFS"
+enter E6 "=IFS(E2>100;\"high\";E2>50;\"mid\";TRUE;\"low\")"
+enter D7 "SWITCH"
+enter E7 "=SWITCH(E3;1;\"one\";3;\"three\";\"other\")"
+enter D8 "MAXIFS"
+enter E8 "=MAXIFS(B2:B5;B2:B5;\"<150\")"
+enter D9 "MINIFS"
+enter E9 "=MINIFS(B2:B5;A2:A5;\"<>North\")"
+enter D10 "CONCAT"
+enter E10 "=CONCAT(A2;\"-\";B2)"
+format D1:D10 bold
+width D 12
+width E 24
+save
+expect cell Functions!E2 formula =XLOOKUP(E1,A2:A5,B2:B5,"none")
+expect cell Functions!E2 text 150
+expect cell Functions!E3 formula =XMATCH(E1,A2:A5)
+expect cell Functions!E3 text 3
+expect cell Functions!E4 formula =LET(t,SUM(B2:B5),t/COUNT(B2:B5))
+expect cell Functions!E4 text 111,25
+expect cell Functions!E5 formula =TEXTJOIN(", ",TRUE,A2:A5)
+expect cell Functions!E5 text North, South, East, West
+expect cell Functions!E6 text high
+expect cell Functions!E7 text three
+expect cell Functions!E8 text 120
+expect cell Functions!E9 text 80
+expect cell Functions!E10 text North-120
