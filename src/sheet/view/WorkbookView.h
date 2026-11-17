@@ -480,6 +480,16 @@ class WorkbookView : public PagedView {
   // (and with `validations` its validations) in place of their own, as in Excel; `pasted` holds
   // whole copies of `src`.
   edit::Result PasteRules(int fromSheet, const Range& src, int sheet, const Range& pasted, bool validations);
+  // Tables (WorkbookData.cpp): Insert > Table and the table's design, through Editor::AddTable,
+  // SetTable and RemoveTable.
+  class TablePanel;
+  std::shared_ptr<PanelContent> tablePanel_;
+  int TableIndexAt(CellAddr at);  // the shown sheet's table holding the cell, or -1
+  void ShowTablePanel();
+  bool CreateTable(Range r, bool headers, const std::string& style);
+  bool ChangeTable(size_t index, const std::function<void(Table&)>& change, const char16_t* name);
+  bool SetTotalRow(size_t index, bool on);
+  bool TableScriptOp(const std::wstring& arg);  // table:
   // ---- Defined names (WorkbookNames.cpp): the Name Manager, Create from Selection, Paste Names.
   bool NamesCommand(int cmd);
   bool NamesCommandState(int cmd, CommandState& s);

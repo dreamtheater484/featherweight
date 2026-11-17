@@ -372,6 +372,10 @@ enum Cmd : int {
   CmdCircleInvalid,
   CmdClearCircles,
   CmdValidationList,      // Alt+Down on a cell with a list: its choices
+  CmdCreateTable,         // Ctrl+T, Ctrl+L
+  CmdTableDesign,
+  CmdConvertToRange,
+  CmdTableTotalRow,
 
   // Defined names (S3, s3-calc): 2970-2999.
   CmdNameManager = 2970,  // Ctrl+F3

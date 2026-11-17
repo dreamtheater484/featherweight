@@ -801,6 +801,10 @@ bool WorkbookView::RulesCommandState(int cmd, CommandState& s) {
     case CmdCircleInvalid: s.label = L"Circle invalid data"; break;
     case CmdClearCircles: s.label = L"Clear validation circles"; s.enabled = !circles_.empty(); return true;
     case CmdValidationList: s.label = L"Pick from the list"; s.shortcut = L"Alt+Down"; break;
+    case CmdCreateTable: s.label = L"Table…"; s.shortcut = L"Ctrl+T"; break;
+    case CmdTableDesign: s.label = L"Table design…"; s.enabled = cells && TableIndexAt(active_) >= 0; return true;
+    case CmdConvertToRange: s.label = L"Convert to range"; s.enabled = cells && TableIndexAt(active_) >= 0; return true;
+    case CmdTableTotalRow: s.label = L"Total row"; s.enabled = cells && TableIndexAt(active_) >= 0; return true;
     default: return false;
   }
   s.enabled = cells;
@@ -808,7 +812,7 @@ bool WorkbookView::RulesCommandState(int cmd, CommandState& s) {
 }
 
 bool WorkbookView::RulesCommand(int cmd) {
-  if (cmd < CmdCondFormat || cmd > CmdValidationList) return false;
+  if (cmd < CmdCondFormat || cmd > CmdTableTotalRow) return false;
   if (!Ready() || preview_ || ChartSheet()) return true;
   switch (cmd) {
     case CmdCondFormat:
@@ -863,8 +867,379 @@ bool WorkbookView::RulesCommand(int cmd) {
       host_.ViewInvalidate();
       break;
     case CmdValidationList: ShowValidationList(); break;
+    case CmdCreateTable:
+    case CmdTableDesign: ShowTablePanel(); break;
+    case CmdTableTotalRow:
+      if (const int i = TableIndexAt(active_); i >= 0) SetTotalRow(static_cast<size_t>(i), Current().Tables()[static_cast<size_t>(i)].totalsRows == 0);
+      break;
+    case CmdConvertToRange:
+      if (const int i = TableIndexAt(active_); i >= 0 && !EditRefused(Ed().RemoveTable(static_cast<int>(sheet_), static_cast<size_t>(i)))) {
+        if (tablePanel_ && host_.ViewShownPanel() == tablePanel_.get()) host_.ViewShowPanel(nullptr);
+        host_.ViewInvalidate();
+      }
+      break;
   }
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Tables: Insert > Table (Ctrl+T, Ctrl+L) and the table's design
+
+namespace {
+
+// Excel's built-in styles in its gallery's order; "" is None.
+std::vector<std::string> TableStyleNames() {
+  std::vector<std::string> out{""};
+  for (int i = 1; i <= 21; ++i) out.push_back("TableStyleLight" + std::to_string(i));
+  for (int i = 1; i <= 28; ++i) out.push_back("TableStyleMedium" + std::to_string(i));
+  for (int i = 1; i <= 11; ++i) out.push_back("TableStyleDark" + std::to_string(i));
+  return out;
+}
+std::wstring StyleLabel(const std::string& name) {
+  if (name.empty()) return L"None";
+  std::wstring w = Utf8ToWide(name.rfind("TableStyle", 0) == 0 ? name.substr(10) : name);
+  for (size_t i = 1; i < w.size(); ++i)
+    if (iswdigit(w[i]) && !iswdigit(w[i - 1])) {
+      w.insert(i, L" ");
+      break;
+    }
+  return w;
+}
+
+// A table's name as Excel allows it: a letter, _ or \ first, then letters, digits, _ and .; not a
+// cell's name, not R or C.
+bool TableNameOk(const std::string& n) {
+  if (n.empty() || n.size() > 255) return false;
+  const auto first = static_cast<unsigned char>(n[0]);
+  if (!(std::isalpha(first) || first == '_' || first == '\\' || first >= 0x80)) return false;
+  for (unsigned char c : n)
+    if (!(std::isalnum(c) || c == '_' || c == '.' || c == '\\' || c >= 0x80)) return false;
+  CellAddr a;
+  return !ParseA1(n, a) && n != "R" && n != "r" && n != "C" && n != "c";
+}
+
+}  // namespace
+
+class WorkbookView::TablePanel : public PanelContent {
+ public:
+  explicit TablePanel(WorkbookView& view) : v_(view) {
+    styles_ = TableStyleNames();
+    style_.label = L"Table style";
+    for (const std::string& s : styles_) style_.items.push_back(StyleLabel(s));
+    style_.onChange = [this](int i) {
+      if (index_ >= 0 && i >= 0) Change([&](Table& t) { t.style.name = styles_[static_cast<size_t>(i)]; });
+    };
+    range_.autoComplete = name_.autoComplete = false;
+    headers_.text = L"My table has headers";
+    headers_.toggle = true;
+    create_.text = L"Create table";
+    create_.onInvoke = [this] {
+      Range r;
+      std::string sq = SqrefOf(range_.Text());
+      if (sq.empty() || !ParseRange(sq, r)) {
+        v_.host_.ViewMessage(BannerKind::Warning, L"Type the table's cells, such as A1:D20.");
+        return;
+      }
+      if (v_.CreateTable(r, headers_.checked, styles_[static_cast<size_t>(std::max(0, style_.selected))])) Open();
+    };
+    name_.onCommit = [this](const std::wstring& text, int) {
+      const std::string n = WideToUtf8(Trim(text));
+      if (index_ < 0 || n.empty()) return;
+      if (!TableNameOk(n)) {
+        v_.host_.ViewMessage(BannerKind::Warning, L"The name isn't valid: start with a letter or _, and use no spaces.");
+        return;
+      }
+      Change([&](Table& t) { t.name = t.displayName = n; });
+    };
+    const wchar_t* texts[] = {L"Total row", L"Banded rows", L"Banded columns", L"First column", L"Last column", L"Filter button"};
+    for (int i = 0; i < 6; ++i) {
+      option_[i].text = texts[i];
+      option_[i].toggle = true;
+      option_[i].onInvoke = [this, i] { Option(i, option_[i].checked); };
+    }
+    convert_.text = L"Convert to range";
+    convert_.onInvoke = [this] { v_.RulesCommand(CmdConvertToRange); };
+  }
+
+  std::wstring Title() const override { return index_ >= 0 ? L"Table design" : L"Create table"; }
+
+  std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
+    body_ = body;
+    ui_ = ui;
+    Place();
+    std::vector<Control*> out{&range_, &headers_, &create_, &name_, &style_};
+    for (PanelButton& b : option_) out.push_back(&b);
+    out.push_back(&convert_);
+    return out;
+  }
+
+  void Draw(Canvas& c) override {
+    for (const auto& [text, rc] : labels_) c.Text(text, rc, theme::P().textSecondary, 12 * ui_);
+  }
+
+  // The active cell's table, or a new one over the selection (or the region around the cell).
+  void Open() {
+    index_ = v_.TableIndexAt(v_.active_);
+    if (index_ >= 0) {
+      const Table& t = v_.Current().Tables()[static_cast<size_t>(index_)];
+      name_.SetText(Utf8ToWide(t.name));
+      const auto it = std::find(styles_.begin(), styles_.end(), t.style.name);
+      style_.selected = it == styles_.end() ? -1 : static_cast<int>(it - styles_.begin());
+      const bool on[] = {t.totalsRows != 0, t.style.rowStripes, t.style.columnStripes, t.style.firstColumn,
+                         t.style.lastColumn, t.autoFilter};
+      for (int i = 0; i < 6; ++i) option_[i].checked = on[i];
+    } else {
+      const Range r = v_.DataRange();
+      range_.SetText(Utf8ToWide(RangeName(r)));
+      headers_.checked = data::GuessHeader(*v_.book_, v_.Current(), r);
+      style_.selected = static_cast<int>(std::find(styles_.begin(), styles_.end(), "TableStyleMedium2") - styles_.begin());
+    }
+    Place();
+  }
+
+ private:
+  void Place() {
+    const float u = ui_, left = body_.left + 16 * u, right = body_.right - 16 * u, gap = 8 * u;
+    const float half = (right - left - gap) / 2;
+    float y = body_.top + 10 * u;
+    labels_.clear();
+    auto label = [&](const wchar_t* text) {
+      labels_.push_back({text, RectF(left, y, right, y + 16 * u)});
+      y += 20 * u;
+    };
+    const bool design = index_ >= 0;
+    range_.visible = headers_.visible = create_.visible = !design;
+    name_.visible = convert_.visible = design;
+    for (PanelButton& b : option_) b.visible = design;
+    if (!design) {
+      label(L"Where is the data for your table?");
+      range_.rc = RectF(left, y, right, y + 30 * u);
+      y += 38 * u;
+      headers_.rc = RectF(left, y, right, y + 28 * u);
+      y += 38 * u;
+    } else {
+      label(L"Table name");
+      name_.rc = RectF(left, y, right, y + 30 * u);
+      y += 40 * u;
+    }
+    label(L"Style");
+    style_.rc = RectF(left, y, right, y + 30 * u);
+    y += 42 * u;
+    if (!design) {
+      create_.rc = RectF(left, y, left + half, y + 30 * u);
+    } else {
+      label(L"Table style options");
+      for (int i = 0; i < 6; ++i) {
+        const float x = i % 2 ? left + half + gap : left;
+        option_[i].rc = RectF(x, y, x + half, y + 28 * u);
+        if (i % 2) y += 36 * u;
+      }
+      y += 8 * u;
+      convert_.rc = RectF(left, y, left + half, y + 30 * u);
+    }
+    v_.host_.ViewInvalidate();
+  }
+
+  void Change(const std::function<void(Table&)>& change) {
+    if (index_ < 0) return;
+    v_.ChangeTable(static_cast<size_t>(index_), change, u"Table");
+    Open();
+  }
+
+  void Option(int i, bool on) {
+    if (index_ < 0) return;
+    if (i == 0) {
+      v_.SetTotalRow(static_cast<size_t>(index_), on);
+      Open();
+      return;
+    }
+    Change([&](Table& t) {
+      switch (i) {
+        case 1: t.style.rowStripes = on; break;
+        case 2: t.style.columnStripes = on; break;
+        case 3: t.style.firstColumn = on; break;
+        case 4: t.style.lastColumn = on; break;
+        default: t.autoFilter = on; break;
+      }
+    });
+  }
+
+  WorkbookView& v_;
+  D2D1_RECT_F body_{};
+  float ui_ = 1;
+  int index_ = -1;
+  std::vector<std::string> styles_;
+  ComboBox range_, name_;
+  Dropdown style_;
+  PanelButton headers_, create_, option_[6], convert_;
+  std::vector<std::pair<const wchar_t*, D2D1_RECT_F>> labels_;
+};
+
+int WorkbookView::TableIndexAt(CellAddr at) {
+  if (!Ready()) return -1;
+  const std::vector<Table>& tables = Current().Tables();
+  for (size_t i = 0; i < tables.size(); ++i) {
+    const Range& r = tables[i].ref;
+    if (at.row >= r.firstRow && at.row <= r.lastRow && at.col >= r.firstCol && at.col <= r.lastCol) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+void WorkbookView::ShowTablePanel() {
+  if (!Ready() || preview_ || ChartSheet()) return;
+  if (!tablePanel_) tablePanel_ = std::make_shared<TablePanel>(*this);
+  static_cast<TablePanel*>(tablePanel_.get())->Open();
+  host_.ViewShowPanel(tablePanel_.get());
+}
+
+bool WorkbookView::CreateTable(Range r, bool headers, const std::string& style) {
+  const int sheet = static_cast<int>(sheet_);
+  if (TableIndexAt({r.firstRow, r.firstCol}) >= 0 || r.lastCol - r.firstCol >= 16384) return false;
+  edit::EditGroup group(Ed(), u"Create Table");
+  // The sheet's filter goes, as in Excel, its hidden rows shown.
+  if (const std::optional<SheetFilter>& f = Current().Filter();
+      f && !(f->ref.lastRow < r.firstRow || f->ref.firstRow > r.lastRow || f->ref.lastCol < r.firstCol || f->ref.firstCol > r.lastCol)) {
+    const Range fr = f->ref;
+    if (EditRefused(Ed().SetFilter(sheet, std::nullopt)) || EditRefused(Ed().HideRows(sheet, fr.firstRow, fr.lastRow, false))) return false;
+  }
+  const Sheet& s = Current();
+  std::vector<std::pair<CellAddr, edit::CellInput>> cells;
+  if (!headers) {
+    // A row of headers above the data: the table's columns move down one row.
+    if (EditRefused(Ed().InsertCells(sheet, Range{r.firstRow, r.firstCol, r.firstRow, r.lastCol}, edit::Editor::Direction::DownOrUp)))
+      return false;
+    ++r.lastRow;
+  }
+  // The headers: text, unique without case, Excel's ColumnN for an empty one.
+  Table t;
+  t.ref = r;
+  t.autoFilter = true;
+  t.totalsRowShown = false;
+  t.style = TableStyleInfo{style, false, false, true, false};
+  std::vector<std::string> names;
+  for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
+    const Value v = s.GetValue(r.firstRow, col);
+    std::string n;
+    if (headers && v.type == ValueType::String) n = std::string(v.text);
+    else if (headers && v.type == ValueType::Number) {
+      char buf[40];
+      std::snprintf(buf, sizeof buf, "%.15g", v.number);
+      n = buf;
+    }
+    else if (headers && v.type == ValueType::Bool) n = v.boolean ? "TRUE" : "FALSE";
+    if (n.empty()) n = "Column" + std::to_string(col - r.firstCol + 1);
+    const std::string base = n;
+    for (int k = 2; std::any_of(names.begin(), names.end(), [&](const std::string& x) { return NameEqualsNoCase(x, n); }); ++k)
+      n = base + std::to_string(k);
+    names.push_back(n);
+    if (!(v.type == ValueType::String && std::string(v.text) == n)) cells.emplace_back(CellAddr{r.firstRow, col}, edit::CellInput::Text(n));
+    t.columns.push_back(TableColumn{0, n});
+  }
+  if (!cells.empty() && EditRefused(Ed().SetCells(sheet, cells))) return false;
+  if (EditRefused(Ed().AddTable(sheet, t))) return false;
+  group.done = true;
+  host_.ViewInvalidate();
+  return true;
+}
+
+bool WorkbookView::ChangeTable(size_t index, const std::function<void(Table&)>& change, const char16_t* name) {
+  if (index >= Current().Tables().size()) return false;
+  Table t = Current().Tables()[index];
+  change(t);
+  edit::EditGroup group(Ed(), name);
+  if (EditRefused(Ed().SetTable(static_cast<int>(sheet_), index, t))) return false;
+  group.done = true;
+  host_.ViewInvalidate();
+  return true;
+}
+
+bool WorkbookView::SetTotalRow(size_t index, bool on) {
+  if (index >= Current().Tables().size()) return false;
+  const int sheet = static_cast<int>(sheet_);
+  Table t = Current().Tables()[index];
+  if ((t.totalsRows != 0) == on) return true;
+  edit::EditGroup group(Ed(), u"Total Row");
+  const Sheet& s = Current();
+  if (on) {
+    const uint32_t row = t.ref.lastRow + 1;
+    if (row >= kMaxRows) return false;
+    bool filled = false;
+    for (uint32_t col = t.ref.firstCol; col <= t.ref.lastCol && !filled; ++col) filled = s.GetValue(row, col).type != ValueType::Empty;
+    if (filled) {  // the cells below move down to make room, as in Excel
+      if (EditRefused(Ed().InsertCells(sheet, Range{row, t.ref.firstCol, row, t.ref.lastCol}, edit::Editor::Direction::DownOrUp)))
+        return false;
+    }
+    // Excel's: "Total" in the first column, the last one's sum (a count when it isn't numbers).
+    const size_t last = t.columns.size() - 1;
+    bool numbers = false;
+    for (uint32_t r = t.ref.firstRow + t.headerRows; r <= t.ref.lastRow && !numbers; ++r)
+      numbers = s.GetValue(r, t.ref.lastCol).type == ValueType::Number;
+    std::string col = t.columns[last].name;
+    std::string quoted;
+    for (char c : col) {
+      if (c == '[' || c == ']' || c == '#' || c == '\'') quoted += '\'';
+      quoted += c;
+    }
+    std::vector<std::pair<CellAddr, edit::CellInput>> cells;
+    if (last > 0) cells.emplace_back(CellAddr{row, t.ref.firstCol}, edit::CellInput::Text("Total"));
+    cells.emplace_back(CellAddr{row, t.ref.lastCol},
+                       edit::CellInput::Formula("SUBTOTAL(" + std::string(numbers ? "109" : "103") + "," + t.name + "[" + quoted + "])"));
+    if (EditRefused(Ed().SetCells(sheet, cells))) return false;
+    t = Current().Tables()[index];  // the cells' bookkeeping may have touched the columns
+    t.ref.lastRow = row;
+    t.totalsRows = 1;
+    t.totalsRowShown = true;
+    if (last > 0) t.columns[0].totalsLabel = "Total";
+    t.columns[last].totalsFunction = numbers ? "sum" : "count";
+    t.columns[last].totalsFormula.clear();
+  } else {
+    const uint32_t row = t.ref.lastRow;
+    t.ref.lastRow = row - 1;
+    t.totalsRows = 0;
+    if (EditRefused(Ed().SetTable(sheet, index, t))) return false;
+    if (EditRefused(Ed().ClearAll(sheet, Range{row, t.ref.firstCol, row, t.ref.lastCol}))) return false;
+    group.done = true;
+    host_.ViewInvalidate();
+    return true;
+  }
+  if (EditRefused(Ed().SetTable(sheet, index, t))) return false;
+  group.done = true;
+  host_.ViewInvalidate();
+  return true;
+}
+
+bool WorkbookView::TableScriptOp(const std::wstring& arg) {
+  // table:create[,noheaders][,<style>]; table:total; table:style,<name>; table:option,<rows|cols|first|last|filter>;
+  // table:name,<name>; table:convert. On the active cell's table (create: the selection).
+  std::vector<std::wstring> a;
+  for (size_t i = 0;;) {
+    const size_t e = arg.find(L',', i);
+    a.push_back(arg.substr(i, e == std::wstring::npos ? std::wstring::npos : e - i));
+    if (e == std::wstring::npos) break;
+    i = e + 1;
+  }
+  while (a.size() < 3) a.emplace_back();
+  if (a[0] == L"create") {
+    const bool headers = a[1] != L"noheaders";
+    const std::wstring style = a[1].rfind(L"TableStyle", 0) == 0 ? a[1] : a[2];
+    return CreateTable(DataRange(), headers, style.empty() ? "TableStyleMedium2" : WideToUtf8(style));
+  }
+  const int index = TableIndexAt(active_);
+  if (index < 0) return false;
+  const size_t i = static_cast<size_t>(index);
+  if (a[0] == L"total") return SetTotalRow(i, Current().Tables()[i].totalsRows == 0);
+  if (a[0] == L"convert") return RulesCommand(CmdConvertToRange);
+  if (a[0] == L"style") return ChangeTable(i, [&](Table& t) { t.style.name = WideToUtf8(a[1]); }, u"Table");
+  if (a[0] == L"name") return TableNameOk(WideToUtf8(a[1])) && ChangeTable(i, [&](Table& t) { t.name = t.displayName = WideToUtf8(a[1]); }, u"Table");
+  if (a[0] == L"option")
+    return ChangeTable(i, [&](Table& t) {
+      if (a[1] == L"rows") t.style.rowStripes = !t.style.rowStripes;
+      else if (a[1] == L"cols") t.style.columnStripes = !t.style.columnStripes;
+      else if (a[1] == L"first") t.style.firstColumn = !t.style.firstColumn;
+      else if (a[1] == L"last") t.style.lastColumn = !t.style.lastColumn;
+      else t.autoFilter = !t.autoFilter;
+    }, u"Table");
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1188,6 +1563,7 @@ void WorkbookView::DrawValidation(Canvas& c) {
 
 bool WorkbookView::DataRulesScriptOp(const std::wstring& op, const std::wstring& arg) {
   if (!Ready()) return false;
+  if (op == L"table") return TableScriptOp(arg);
   std::vector<std::wstring> a;
   for (size_t i = 0;;) {
     const size_t e = arg.find(L',', i);

@@ -190,6 +190,8 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case 'I': return editor_.Active() || preview_ ? 0 : CmdItalic;
       case 'U': return editor_.Active() || preview_ ? 0 : CmdUnderline;
       case '5': return editor_.Active() || preview_ ? 0 : CmdStrikethrough;
+      case 'T':
+      case 'L': return editor_.Active() || preview_ ? 0 : CmdCreateTable;  // s3-data
     }
   }
   // Excel's number formats and borders by key (Ctrl+Shift+1..7, ~ and -).
@@ -209,6 +211,7 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
     }
   }
   if (alt && !ctrl && !shift && vk == VK_OEM_PLUS && !editor_.Active() && !preview_) return CmdAutoSum;
+  if (alt && !ctrl && !shift && vk == VK_DOWN && !editor_.Active() && !preview_) return CmdValidationList;  // s3-data
   if (ctrl && alt && !shift && vk == VK_F9 && !editor_.Active()) return CmdCalculateFull;
   if (alt && shift && !ctrl && !editor_.Active() && !preview_ && (vk == VK_RIGHT || vk == VK_LEFT))
     return vk == VK_RIGHT ? CmdGroup : CmdUngroup;
