@@ -100,6 +100,9 @@ bool RenamePivotSource(std::string& xml, std::string_view from, std::string_view
 // A formula after columns of table `table` were deleted: structured references naming one of
 // `columns` (Table1[[#This Row],[n]]) become #REF!, as Excel makes them.
 std::string DropTableColumns(std::string_view formula, std::string_view table, const std::vector<std::string>& columns);
+// A formula after column `from` of table `table` was renamed `to` (its header typed over):
+// structured references to it follow, escaped as Excel writes them (Table1[x'[1']]).
+std::string RenameTableColumn(std::string_view formula, std::string_view table, std::string_view from, std::string_view to);
 bool MovePivotTable(std::string& xml, const Context& c);
 
 }  // namespace fw::sheet::edit::refs

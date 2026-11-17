@@ -54,6 +54,7 @@ struct SavePlan {
   bool strings = false;        // the shared strings are written from the model
   std::string stringsPart;     // ... into this part
   bool newStringsPart = false;  // which the workbook didn't have
+  bool strict = false;          // the workbook is Strict Open XML: new parts are written in its namespaces
   bool sheetsRemoved = false;
   FileFormat format = FileFormat::Xlsx;
   std::vector<std::string> edited;  // parts the package holds as edits changed them (written as they are)
@@ -84,5 +85,11 @@ bool HasMacros(const Workbook& book);
 // A new, empty workbook as Excel starts one: one sheet, Sheet1, in Calibri 11. It has a package of
 // its own (the smallest that Excel opens), so it is edited and saved like any other.
 std::unique_ptr<Workbook> NewWorkbook(pkg::Status& status);
+
+// A workbook with no package (one opened from a CSV file) gets the smallest one, with no sheets
+// and empty style lists, so it is saved as an Excel workbook like any other: PrepareSave writes
+// every sheet, the styles and the strings from the model while its format is still CSV. A book
+// that has a package keeps it.
+pkg::Status GiveBasePackage(Workbook& book);
 
 }  // namespace fw::sheet::xlsx

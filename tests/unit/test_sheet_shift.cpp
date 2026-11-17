@@ -401,3 +401,127 @@ TEST(sheet_sort_refusals) {
   CHECK(!r && r.message == u"You can't change part of an array.");
   CHECK(ea.SortRows(0, Range{0, 0, 1, 0}, {1, 0}));
 }
+
+TEST(sheet_edit_formula_naming_missing_sheet) {
+  auto book = OpenParts({"<sheetData/>", "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  CellInput in;
+  in.formula = "Nowhere!A1+1";  // Excel would look for a workbook called Nowhere
+  edit::Result r = ed.SetCell(0, 0, 0, in);
+  CHECK(!r && r.message == u"The formula names a sheet this workbook doesn't have.");
+  in.formula = "SUM(Sheet1:Nowhere!A1)";
+  CHECK(!ed.SetCell(0, 0, 0, in));
+  in.formula = "'sheet2'!A1+1";
+  CHECK(ed.SetCell(0, 0, 0, in));
+  in.formula = "[1]Sheet1!A1";  // another workbook's: not this check's business
+  CHECK(ed.SetCell(0, 0, 1, in));
+}
+
+// ---- Tables' headers typed over, and spills blocked (measured: scratchpad probes header1, spill1)
+
+namespace {
+
+std::string Str(const char* ref, const char* text) {
+  return std::string("<c r=\"") + ref + "\" t=\"inlineStr\"><is><t>" + text + "</t></is></c>";
+}
+
+// Table T over A1:C4 (a, b, c; c is calculated from b); E2 =SUM(T[b]). With `spill`, H2 spills
+// =TRANSPOSE(A2:A5) down to H5 (a dynamic array: metadata.xml marks cm 1).
+std::unique_ptr<Workbook> TableBook(bool spill = false) {
+  std::string data = "<sheetData>" + Row(1, Str("A1", "a") + Str("B1", "b") + Str("C1", "c"));
+  for (int r = 2; r <= 5; ++r) {
+    std::string n = std::to_string(r);
+    std::string cells = r <= 4 ? Num(("A" + n).c_str(), r) + Num(("B" + n).c_str(), r * 10) +
+                                     F(("C" + n).c_str(), "T[[#This Row],[b]]*2")
+                               : Num(("A" + n).c_str(), r);
+    if (r == 2) cells += F("E2", "SUM(T[b])");
+    if (spill) cells += r == 2 ? std::string("<c r=\"H2\" cm=\"1\"><f t=\"array\" ref=\"H2:H5\">TRANSPOSE(A2:A5)</f><v>2</v></c>")
+                               : "<c r=\"H" + n + "\"><v>" + n + "</v></c>";
+    data += Row(r, cells);
+  }
+  data += "</sheetData><tableParts count=\"1\"><tablePart r:id=\"rT\"/></tableParts>";
+  auto parts = WorkbookParts({data, "<sheetData/>"});
+  for (auto& [name, xml] : parts) {
+    if (name == "[Content_Types].xml")
+      xml.insert(xml.find("</Types>"),
+                 "<Override PartName=\"/xl/tables/table1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml\"/>"
+                 "<Override PartName=\"/xl/metadata.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml\"/>");
+    if (name == "xl/_rels/workbook.xml.rels")
+      xml.insert(xml.find("</Relationships>"),
+                 "<Relationship Id=\"rM\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata\" Target=\"metadata.xml\"/>");
+    if (name == "xl/worksheets/sheet1.xml")
+      xml.replace(0, xml.find('>'), "<worksheet xmlns=\"" + std::string(kMain) +
+                                        "\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"");
+  }
+  parts.push_back({"xl/worksheets/_rels/sheet1.xml.rels",
+                   "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rT\" "
+                   "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/table\" Target=\"../tables/table1.xml\"/>"
+                   "</Relationships>"});
+  parts.push_back({"xl/tables/table1.xml",
+                   "<table xmlns=\"" + std::string(kMain) + "\" id=\"1\" name=\"T\" displayName=\"T\" ref=\"A1:C4\"><autoFilter ref=\"A1:C4\"/>"
+                   "<tableColumns count=\"3\"><tableColumn id=\"1\" name=\"a\"/><tableColumn id=\"2\" name=\"b\"/><tableColumn id=\"3\" name=\"c\">"
+                   "<calculatedColumnFormula>T[[#This Row],[b]]*2</calculatedColumnFormula></tableColumn></tableColumns></table>"});
+  parts.push_back({"xl/metadata.xml",
+                   "<metadata xmlns=\"" + std::string(kMain) + "\" xmlns:xda=\"http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray\">"
+                   "<metadataTypes count=\"1\"><metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" "
+                   "pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" "
+                   "coerce=\"1\" cellMeta=\"1\"/></metadataTypes><futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext "
+                   "uri=\"{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/></ext>"
+                   "</extLst></bk></futureMetadata><cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata></metadata>"});
+  return OpenZip(test::MakeZip(parts));
+}
+
+std::string TablePart(Workbook& book) {
+  std::vector<uint8_t> bytes;
+  if (!book.GetPackage() || !book.GetPackage()->ReadPart("/xl/tables/table1.xml", bytes).Ok()) return {};
+  return std::string(bytes.begin(), bytes.end());
+}
+
+}  // namespace
+
+TEST(sheet_table_header_typed_over) {
+  auto book = TableBook();
+  if (!book) return;
+  Editor ed(*book);
+  const Sheet& s = book->GetSheet(0);
+  CHECK(s.Tables().size() == 1);
+  if (s.Tables().empty()) return;
+  CHECK(ed.SetCell(0, 0, 1, CellInput::Text("new")));
+  CHECK(s.Tables()[0].columns[1].name == "new");
+  CHECK_EQ(FormulaText(s, 1, 4), std::string("SUM(T[new])"));
+  CHECK_EQ(FormulaText(s, 1, 2), std::string("T[[#This Row],[new]]*2"));
+  CHECK(s.Tables()[0].columns[2].calculatedFormula == "T[[#This Row],[new]]*2");
+  CHECK(TablePart(*book).find("name=\"new\"") != std::string::npos);
+  CHECK(ed.Undo());
+  CHECK(s.Tables()[0].columns[1].name == "b" && Text(s, 0, 1) == "b");
+  CHECK_EQ(FormulaText(s, 1, 4), std::string("SUM(T[b])"));
+  CHECK(TablePart(*book).find("name=\"b\"") != std::string::npos);
+  // A number shows as text; a taken name gets 2 (ignoring case); cleared, it's ColumnN.
+  CHECK(ed.SetCell(0, 0, 1, CellInput::Number(2024)));
+  CHECK(Text(s, 0, 1) == "2024" && s.GetValue(0, 1).type == ValueType::String && s.Tables()[0].columns[1].name == "2024");
+  CHECK(ed.SetCell(0, 0, 1, CellInput::Text("A")));
+  CHECK(Text(s, 0, 1) == "A2" && s.Tables()[0].columns[1].name == "A2");
+  CHECK(ed.ClearContents(0, Range{0, 1, 0, 1}));
+  CHECK(Text(s, 0, 1) == "Column1" && s.Tables()[0].columns[1].name == "Column1");
+  CHECK(ed.SetCell(0, 0, 1, CellInput::Text("x[1]#'y")));
+  CHECK_EQ(FormulaText(s, 1, 4), std::string("SUM(T[x'[1']'#''y])"));
+  CellInput f;
+  f.formula = "1+1";
+  CHECK(!ed.SetCell(0, 0, 1, f));  // Excel would keep its value as text
+}
+
+TEST(sheet_spill_blocked_by_typing) {
+  auto book = TableBook(true);
+  if (!book) return;
+  Editor ed(*book);
+  const Sheet& s = book->GetSheet(0);
+  FormulaInfo info;
+  CHECK(s.GetFormula(1, 7, info) && info.dynamic && info.ref == (Range{1, 7, 4, 7}));
+  CHECK(ed.SetCell(0, 4, 7, CellInput::Number(9)));  // into H5, inside the spill
+  CHECK(s.GetFormula(1, 7, info) && info.ref == (Range{1, 7, 1, 7}));
+  CHECK(s.GetValue(1, 7).type == ValueType::Error && s.GetValue(1, 7).error == ErrorCode::Spill);
+  CHECK(Text(s, 2, 7) == "" && Text(s, 3, 7) == "" && Text(s, 4, 7) == "9");
+  CHECK(ed.Undo());
+  CHECK(s.GetFormula(1, 7, info) && info.ref == (Range{1, 7, 4, 7}) && Text(s, 2, 7) == "3" && Text(s, 4, 7) == "5");
+}
