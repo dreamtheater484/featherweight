@@ -213,7 +213,11 @@ class ScreenSheetLayout : public SheetLayout {
 // The formula engine on the workbook, made when first needed (the open recalculation reads the
 // formulas a slice at a time; conditional formats only need the names it starts with).
 calc::WorkbookCalc& WorkbookView::Calc() {
-  if (!calc_) calc_ = std::make_unique<calc::WorkbookCalc>(*book_, &text_->Locale());
+  if (!calc_) {
+    calc_ = std::make_unique<calc::WorkbookCalc>(*book_, &text_->Locale());
+    // A save reads the sheets on a worker thread: nothing is recalculated into them meanwhile.
+    calc_->HoldWhile([this] { return edit_ && edit_->Saving(); });
+  }
   return *calc_;
 }
 
