@@ -10,7 +10,11 @@
 #include "core/Strings.h"
 #include "pkg/Backups.h"
 #include "pkg/Recovery.h"
+#include "sheet/view/WorkbookView.h"
 #include "word/DocView.h"
+
+#include <algorithm>
+#include <string_view>
 
 namespace recovery = fw::pkg::recovery;
 namespace backups = fw::pkg::backups;
@@ -24,6 +28,12 @@ std::wstring Tagged(const std::wstring& name, const wchar_t* tag) {
   const size_t dot = name.rfind(L'.');
   if (dot == std::wstring::npos || dot == 0) return name + L" (" + tag + L")";
   return name.substr(0, dot) + L" (" + tag + L")" + name.substr(dot);
+}
+
+// An autosave of a workbook never saved ("Book1") has no extension to tell: its package does.
+bool WorkbookPackage(const std::vector<uint8_t>& bytes) {
+  constexpr std::string_view kPart = "xl/workbook.";
+  return std::search(bytes.begin(), bytes.end(), kPart.begin(), kPart.end()) != bytes.end();
 }
 
 }  // namespace
@@ -72,6 +82,21 @@ void App::NewDocument(int kind) {
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
+void App::NewWorkbook() {
+  auto view = fw::sheet::view::WorkbookView::NewWorkbook(*this, ++newWorkbooks_);
+  view->SetViewport(DocRect(), ui_);
+  std::wstring error;
+  if (view->Load(L"", error) == OpenResult::Failed) {
+    banner_.Show(BannerKind::Error, error, {}, 8000);
+    return;
+  }
+  view->ApplyState(FileState{});
+  tabs_.push_back(std::move(view));
+  ActivateTab(static_cast<int>(tabs_.size()) - 1);
+  Layout();
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
 void App::OfferRecovery() {
   orphans_ = recovery::FindOrphans(DocFile::Config().recovery);
   if (orphans_.empty()) return;
@@ -100,7 +125,10 @@ void App::RecoverDocuments(bool open) {
     }
     // Saved with Save As, starting where the document was: the original is never replaced unasked.
     std::wstring name = entry.title;
-    if (fw::KindOfPath(name) != fw::FileKind::Document) name += L".docx";
+    const fw::FileKind kind = fw::KindOfPath(name);
+    const bool workbook = kind == fw::FileKind::Workbook || (kind != fw::FileKind::Document && WorkbookPackage(bytes));
+    if (workbook && kind != fw::FileKind::Workbook) name += L".xlsx";
+    if (!workbook && kind != fw::FileKind::Document) name += L".docx";
     std::wstring suggested = entry.originalPath;
     if (suggested.empty()) {  // never saved: the Documents folder, as for a new document
       PWSTR docs = nullptr;
@@ -110,7 +138,11 @@ void App::RecoverDocuments(bool open) {
       }
       suggested += name;
     }
-    auto view = DocView::FromBytes(*this, std::move(bytes), Tagged(name, L"recovered"), suggested, true);
+    std::unique_ptr<TabContent> view;
+    if (workbook)
+      view = fw::sheet::view::WorkbookView::FromBytes(*this, std::move(bytes), Tagged(name, L"recovered"), suggested, true);
+    else
+      view = DocView::FromBytes(*this, std::move(bytes), Tagged(name, L"recovered"), suggested, true);
     view->SetViewport(DocRect(), ui_);
     std::wstring error;
     if (view->Load(L"", error) == OpenResult::Failed) {

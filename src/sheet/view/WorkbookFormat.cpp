@@ -823,37 +823,11 @@ bool WorkbookView::ChangeDecimals(int delta) {
 }
 
 bool WorkbookView::MergeCells(int how) {
-  if (!Ready() || preview_ || ChartSheet()) return false;
-  const Range sel = Selected();
-  const int sheet = static_cast<int>(sheet_);
-  edit::Editor& ed = Ed();
-  if (how == 3) return !EditRefused(ed.Unmerge(sheet, sel));
-  // Merge and Center on merged cells unmerges them, as Excel's button does.
-  const Range* m = Current().MergeAt(active_.row, active_.col);
-  if (how == 0 && m && (m->lastRow > m->firstRow || m->lastCol > m->firstCol)) return !EditRefused(ed.Unmerge(sheet, sel));
-  // Excel asks before values other than the upper-left one go; Featherweight merges and says so.
-  bool loses = false;
-  Current().ForEachCell(sel, [&](const CellInfo& c) {
-    const bool corner = how == 1 ? c.col == sel.firstCol : c.row == sel.firstRow && c.col == sel.firstCol;
-    loses = !corner && c.value.type != ValueType::Empty;
-    return !loses;
-  });
-  edit::EditGroup group(ed, how == 0 ? u"Merge and Center" : how == 1 ? u"Merge Across" : u"Merge Cells");
-  bool ok = true;
-  if (how == 1) {
-    for (uint32_t r = sel.firstRow; ok && r <= sel.lastRow && sel.lastCol > sel.firstCol; ++r)
-      ok = !EditRefused(ed.Merge(sheet, Range{r, sel.firstCol, r, sel.lastCol}));
-  } else {
-    ok = !EditRefused(ed.Merge(sheet, sel));
-    if (ok && how == 0)
-      ok = ChangeFormatIn(Range{sel.firstRow, sel.firstCol, sel.firstRow, sel.firstCol}, [](Xf& x) {
-        x.alignment.horizontal = HAlign::Center;
-        x.applyAlignment = true;
-      });
-  }
-  group.done = ok;
-  if (ok && loses) host_.ViewMessage(BannerKind::Info, L"Merging kept only the upper-left value. Ctrl+Z brings the others back.");
-  return ok;
+  // s2-grid's merging (Excel's ask about the other values, Merge & Center toggling off).
+  static constexpr int kCmds[] = {CmdMergeCenter, CmdMergeAcross, CmdMergeCells, CmdUnmerge};
+  if (how < 0 || how > 3) return false;
+  MergeSelection(kCmds[how]);
+  return true;
 }
 
 namespace {
@@ -1113,11 +1087,7 @@ bool WorkbookView::FormatCommandState(int cmd, CommandState& s) {
     case CmdFontColor: return set(L"Font color", L"");
     case CmdFillColor: return set(L"Fill color", L"");
     case CmdBordersBox: return set(L"Borders", L"");
-    case CmdMergeBox:
-    case CmdMergeCenter: return set(L"Merge and center", L"");
-    case CmdMergeAcross: return set(L"Merge across", L"");
-    case CmdMergeCells: return set(L"Merge cells", L"");
-    case CmdUnmergeCells: return set(L"Unmerge cells", L"");
+    case CmdMergeBox: return set(L"Merge", L"");
     case CmdNumberFormatBox: return set(L"Number format", L"");
     case CmdIncreaseDecimal: return set(L"Increase decimal", L"");
     case CmdDecreaseDecimal: return set(L"Decrease decimal", L"");
@@ -1204,11 +1174,7 @@ bool WorkbookView::FormatCommand(int cmd) {
       ApplyBorders(b.which, side);
       break;
     }
-    case CmdMergeBox:
-    case CmdMergeCenter: MergeCells(0); break;
-    case CmdMergeAcross: MergeCells(1); break;
-    case CmdMergeCells: MergeCells(2); break;
-    case CmdUnmergeCells: MergeCells(3); break;
+    case CmdMergeBox: MergeCells(0); break;
     case CmdIncreaseDecimal: ChangeDecimals(1); break;
     case CmdDecreaseDecimal: ChangeDecimals(-1); break;
     case CmdNumberFormatBox: ShowFormatPanel(FormatPanel::kNumber); break;

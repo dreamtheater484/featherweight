@@ -3,6 +3,7 @@
 // The workbook tab's side panels (S2): row height and column width, and Go to (Ctrl+G, F5).
 // Each is a WorkbookView member and changes the workbook through the edit API.
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,14 @@ namespace fw::sheet::view {
 class FocusSpinBox : public SpinBox {
  public:
   using SpinBox::TakeFocus;
+  // After Enter applied what was typed (the size panel: the keyboard goes back to the grid).
+  std::function<void()> onEnter;
+  bool OnKeyDown(UINT vk, bool ctrl, bool shift, bool alt) override {
+    const bool handled = SpinBox::OnKeyDown(vk, ctrl, shift, alt);
+    if (vk != VK_RETURN || !onEnter) return handled;
+    onEnter();
+    return true;
+  }
 };
 class FocusComboBox : public ComboBox {
  public:

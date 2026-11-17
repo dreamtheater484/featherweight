@@ -49,6 +49,13 @@ class WorkbookView : public PagedView {
  public:
   WorkbookView(ViewHost& host, std::wstring path);
   ~WorkbookView() override;
+  // A new workbook, "Book<number>" (File > New), and a workbook that isn't its file: a recovered
+  // one (`unsaved` changes) or a copy. Both save with Save As, starting at `suggested`.
+  static std::unique_ptr<WorkbookView> NewWorkbook(ViewHost& host, int number);
+  static std::unique_ptr<WorkbookView> FromBytes(ViewHost& host, std::vector<uint8_t> bytes, std::wstring title,
+                                                 std::wstring suggested, bool unsaved);
+  // A template (.xltx, .xltm) opens as a new workbook from it, as in Excel: "Budget1".
+  void OpenAsNew(int number) { newNumber_ = number; }
 
   // ---- TabContent ----
   TabKind Kind() const override { return TabKind::Workbook; }
@@ -100,8 +107,15 @@ class WorkbookView : public PagedView {
   bool SearchDone() const override { return searchDone_; }
   std::wstring SelectedText() override;
 
+  // Saving goes through the tab's WorkbookFile: Ctrl+S and Save As write in the background
+  // (StartSave; the workbook is read-only until SaveDone), closing and scripts wait (Save).
   bool Save(const std::wstring& path, std::wstring& error) override;
+  SaveStart StartSave(const std::wstring& path, std::wstring& error) override;
+  void SaveDone() override;
   SaveFormat SaveAsFormat() const override;
+  std::vector<SaveFormat> OtherSaveFormats() const override;
+  void Autosave() override;
+  FileChange CheckFileOnDisk() override;
   // CSV (s2-format): an Excel workbook saves a copy of its first sheet's values as CSV; a CSV file's
   // Save As suggests a workbook; saving a CSV that holds more than values asks first (the banner).
   std::vector<SaveFormat> CopyFormats() const override;
@@ -275,7 +289,22 @@ class WorkbookView : public PagedView {
   float tabScroll_ = 0;
 
   // Mouse.
-  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag, Fill };
+  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag, Fill, Size, TabDrag };
+  // A sheet tab dragged to move the sheet: where it would go (before that sheet; SheetCount() for
+  // the end), shown once the mouse has moved a few pixels.
+  struct TabDrag {
+    size_t sheet = 0;
+    float x0 = 0;
+    bool moving = false;
+    size_t before = 0;
+  };
+  std::optional<TabDrag> tabDrag_;
+  void TabDragMove(float x);
+  void FinishTabDrag();
+  void DrawTabDrop(gfx::Canvas& c);
+  // Undo and redo with their lists (split buttons: the arrow lists the steps, newest first).
+  void AddUndoToolbar(ToolbarModel& m);
+  double calcSince_ = 0;  // anim::Now() when the recalculation under way began; 0: none
   Mouse mouse_ = Mouse::None;
   float thumbGrab_ = 0;
   int hoverTab_ = -1;
@@ -341,9 +370,16 @@ class WorkbookView : public PagedView {
   void CheckCircular();
   bool EditRefused(const edit::Result& r);  // shows why; true when it failed
   std::unique_ptr<edit::Editor> edit_;
-  // The tab's file, for CSV tabs so far (s2-format; s2-grid's file step gives every tab one). After
-  // the workbook and its editor, so it goes first.
+  // The tab's file (saving, the unsaved dot, the owner file, recovery, changes on disk). After the
+  // workbook and its editor, so it goes first; there from the start.
   std::unique_ptr<WorkbookFile> file_;
+  // Where Load reads from: path_ (a template when newNumber_ is set), a new workbook, or bytes.
+  int newNumber_ = 0;
+  bool newBook_ = false;
+  std::vector<uint8_t> bytes_;
+  bool fromBytes_ = false;
+  bool ReadyToSave(std::wstring& error);  // commits the cell being edited
+  void SavedTo();                         // after a save: the tab is the file written
   bool keepFormat_ = false;  // "Keep CSV" chosen: no banner on the next saves
   // ---- Formats (WorkbookFormat.cpp, s2-format): Format Cells (Ctrl+1) and the quick formats.
   bool FormatCommand(int cmd);
@@ -406,6 +442,34 @@ class WorkbookView : public PagedView {
   // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
   bool GridCommand(int cmd);
   bool GridCommandState(int cmd, CommandState& s);
+  // ---- Sizes from the headers' edges (WorkbookPanels.cpp): drag to size, double-click to fit, as
+  // in Excel; the selected whole rows or columns all take the size when the edge is one of theirs.
+  struct SizeEdge {
+    bool rows = false;
+    uint32_t index = 0;  // the row above the edge, or the column before it
+    float start = 0;     // that row's top or column's left on screen (left to right)
+    float edge = 0;      // and the edge, where the drag started
+  };
+  std::optional<SizeEdge> SizeEdgeAt(int x, int y) const;
+  std::optional<SizeEdge> sizing_;
+  float sizeTo_ = 0;  // the edge while dragging
+  void FinishSizing();
+  void FitAtEdge(const SizeEdge& e);
+  void DrawSizeGuide(gfx::Canvas& c);
+  // The rows or columns first..last fitted to their cells (only those in `within`, when given).
+  void AutoFit(bool rows, uint32_t first, uint32_t last, const Range* within);
+  // Sizes in the file's units (points; characters with padding), 0 hiding, as one undo step.
+  void ApplySize(bool rows, uint32_t first, uint32_t last, double value, const char16_t* name);
+  // Excel's column width as it shows it (8.43) from pixels, and the file's width for it (9.140625).
+  double DisplayWidth(int px) const;
+  double FileWidth(double display) const;
+  // ---- Merge, freeze panes, group (WorkbookSheetOps.cpp).
+  bool MergedIn(const Range& r) const;  // a merged area overlaps r
+  void MergeSelection(int cmd);         // CmdMergeCenter, CmdMergeAcross, CmdMergeCells, CmdUnmerge
+  bool Frozen() const { return frozenRow1_ > frozenRow0_ || frozenCol1_ > frozenCol0_; }
+  void Freeze(int cmd);                 // CmdFreezePanes (or unfreeze), CmdFreezeTopRow, CmdFreezeFirstColumn
+  void PanesChanged();                  // the sheet's frozen panes changed (an edit, undo, redo)
+  void GroupSelection(bool in);         // Alt+Shift+Right and Left
   bool WholeRows() const;     // whole rows are selected (not everything)
   bool WholeColumns() const;
   int ShownNeighbour(int dir) const;  // the next shown sheet left (-1) or right (1) of this one, or -1

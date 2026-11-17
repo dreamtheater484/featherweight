@@ -10,7 +10,7 @@ target_compile_options(fwsheetrender PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Re
 add_library(fwsheetview STATIC WorkbookView.cpp WorkbookInput.cpp WorkbookCommands.cpp WorkbookPrint.cpp
             WorkbookEdit.cpp WorkbookFunctions.cpp
             WorkbookSheetOps.cpp WorkbookPanels.cpp WorkbookFill.cpp
-            WorkbookClipboard.cpp WorkbookFile.cpp WorkbookFormat.cpp WorkbookFilter.cpp)
+            WorkbookClipboard.cpp WorkbookFile.cpp ClipHtml.cpp WorkbookFormat.cpp WorkbookFilter.cpp)
 target_include_directories(fwsheetview PRIVATE "${PROJECT_SOURCE_DIR}/src" "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(fwsheetview PUBLIC fwsheetrender)
 target_compile_options(fwsheetview PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
@@ -19,5 +19,7 @@ target_compile_options(fwsheetview PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Rele
 if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_grid_edit.cpp"
                                   WorkbookFile.cpp "${PROJECT_SOURCE_DIR}/tests/unit/test_workbookfile.cpp")
+  # Pasting HTML from Excel, Word and the web (the reader alone).
+  target_sources(fw_tests PRIVATE ClipHtml.cpp "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_clip_html.cpp")
   target_link_libraries(fw_tests PRIVATE fwsheetrender)
 endif()
