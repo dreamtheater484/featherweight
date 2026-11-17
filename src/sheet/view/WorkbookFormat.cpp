@@ -823,37 +823,11 @@ bool WorkbookView::ChangeDecimals(int delta) {
 }
 
 bool WorkbookView::MergeCells(int how) {
-  if (!Ready() || preview_ || ChartSheet()) return false;
-  const Range sel = Selected();
-  const int sheet = static_cast<int>(sheet_);
-  edit::Editor& ed = Ed();
-  if (how == 3) return !EditRefused(ed.Unmerge(sheet, sel));
-  // Merge and Center on merged cells unmerges them, as Excel's button does.
-  const Range* m = Current().MergeAt(active_.row, active_.col);
-  if (how == 0 && m && (m->lastRow > m->firstRow || m->lastCol > m->firstCol)) return !EditRefused(ed.Unmerge(sheet, sel));
-  // Excel asks before values other than the upper-left one go; Featherweight merges and says so.
-  bool loses = false;
-  Current().ForEachCell(sel, [&](const CellInfo& c) {
-    const bool corner = how == 1 ? c.col == sel.firstCol : c.row == sel.firstRow && c.col == sel.firstCol;
-    loses = !corner && c.value.type != ValueType::Empty;
-    return !loses;
-  });
-  edit::EditGroup group(ed, how == 0 ? u"Merge and Center" : how == 1 ? u"Merge Across" : u"Merge Cells");
-  bool ok = true;
-  if (how == 1) {
-    for (uint32_t r = sel.firstRow; ok && r <= sel.lastRow && sel.lastCol > sel.firstCol; ++r)
-      ok = !EditRefused(ed.Merge(sheet, Range{r, sel.firstCol, r, sel.lastCol}));
-  } else {
-    ok = !EditRefused(ed.Merge(sheet, sel));
-    if (ok && how == 0)
-      ok = ChangeFormatIn(Range{sel.firstRow, sel.firstCol, sel.firstRow, sel.firstCol}, [](Xf& x) {
-        x.alignment.horizontal = HAlign::Center;
-        x.applyAlignment = true;
-      });
-  }
-  group.done = ok;
-  if (ok && loses) host_.ViewMessage(BannerKind::Info, L"Merging kept only the upper-left value. Ctrl+Z brings the others back.");
-  return ok;
+  // s2-grid's merging (Excel's ask about the other values, Merge & Center toggling off).
+  static constexpr int kCmds[] = {CmdMergeCenter, CmdMergeAcross, CmdMergeCells, CmdUnmerge};
+  if (how < 0 || how > 3) return false;
+  MergeSelection(kCmds[how]);
+  return true;
 }
 
 namespace {
@@ -1113,11 +1087,7 @@ bool WorkbookView::FormatCommandState(int cmd, CommandState& s) {
     case CmdFontColor: return set(L"Font color", L"");
     case CmdFillColor: return set(L"Fill color", L"");
     case CmdBordersBox: return set(L"Borders", L"");
-    case CmdMergeBox:
-    case CmdMergeCenter: return set(L"Merge and center", L"");
-    case CmdMergeAcross: return set(L"Merge across", L"");
-    case CmdMergeCells: return set(L"Merge cells", L"");
-    case CmdUnmergeCells: return set(L"Unmerge cells", L"");
+    case CmdMergeBox: return set(L"Merge", L"");
     case CmdNumberFormatBox: return set(L"Number format", L"");
     case CmdIncreaseDecimal: return set(L"Increase decimal", L"");
     case CmdDecreaseDecimal: return set(L"Decrease decimal", L"");
@@ -1204,11 +1174,7 @@ bool WorkbookView::FormatCommand(int cmd) {
       ApplyBorders(b.which, side);
       break;
     }
-    case CmdMergeBox:
-    case CmdMergeCenter: MergeCells(0); break;
-    case CmdMergeAcross: MergeCells(1); break;
-    case CmdMergeCells: MergeCells(2); break;
-    case CmdUnmergeCells: MergeCells(3); break;
+    case CmdMergeBox: MergeCells(0); break;
     case CmdIncreaseDecimal: ChangeDecimals(1); break;
     case CmdDecreaseDecimal: ChangeDecimals(-1); break;
     case CmdNumberFormatBox: ShowFormatPanel(FormatPanel::kNumber); break;
@@ -1370,6 +1336,20 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   styles.onChange = [this](const ToolValue& v) { ApplyCellStyle(v.index); };
   m.left.push_back(styles);
   m.left.push_back(toggle(CmdFormatPainter, icon::Brush, 3));
+  // Sort and filter.
+  ToolItem data;
+  data.kind = ToolKind::Dropdown;
+  data.cmd = CmdDataBox;
+  data.width = 72;
+  data.priority = 2;
+  data.text = L"Data";
+  data.tooltip = L"Sort, filter and remove duplicates";
+  data.choices = {L"Sort A to Z", L"Sort Z to A", L"Custom sort…", L"Filter (Ctrl+Shift+L)", L"Remove duplicates…"};
+  data.onChange = [this](const ToolValue& v) {
+    static constexpr int kCmds[] = {CmdSortAscending, CmdSortDescending, CmdDataBox, CmdFilter, CmdRemoveDuplicates};
+    if (v.index >= 0 && v.index < 5) DataCommand(kCmds[v.index]);
+  };
+  m.left.push_back(data);
   // Number formats, with the decimals and the panel's Number page.
   ToolItem number;
   number.kind = ToolKind::Dropdown;
@@ -1388,6 +1368,83 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
     else ApplyNumberCode(NumberChoiceCode(v.index, text_->Locale()));
   };
   m.left.push_back(number);
+}
+
+// ---------------------------------------------------------------------------
+// Scripted formatting (build from scratch): the toolbar's and Format Cells' calls by name
+
+bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
+  if (op != L"format") return false;
+  const size_t eq = arg.find(L'=');
+  const std::wstring key = fw::ToLower(fw::Trim(arg.substr(0, eq)));
+  const std::wstring value = eq == std::wstring::npos ? std::wstring() : fw::Trim(arg.substr(eq + 1));
+  auto rgb = [&](Color& out) {
+    wchar_t* end = nullptr;
+    const unsigned long v = std::wcstoul(value.c_str(), &end, 16);
+    if (value.size() != 6 || !end || *end) return false;
+    out = RgbColor(0xFF000000u | static_cast<uint32_t>(v));
+    return true;
+  };
+  bool ok = false;
+  if (key == L"size") {
+    const double s = std::wcstod(value.c_str(), nullptr);
+    ok = s >= 1 && s <= 409 && ChangeFont(u"Font Size", [s](Font& f) { f.size = s; });
+  } else if (key == L"font") {
+    const std::string name = WideToUtf8(value);
+    ok = !name.empty() && ChangeFont(u"Font", [&name](Font& f) {
+      f.name = name;
+      f.scheme = FontScheme::None;
+    });
+  } else if (key == L"color") {
+    Color c;
+    ok = rgb(c) && ChangeFont(u"Font Color", [c](Font& f) { f.color = c; });
+  } else if (key == L"fill") {
+    Fill fill;
+    if (value != L"none") {
+      fill.pattern = PatternType::Solid;
+      if (!rgb(fill.fg)) return fwprintf(stderr, L"format: no color in %s\n", arg.c_str()), true;
+    }
+    ok = ChangeFormat(u"Fill", [this, fill](Xf& x) {
+      x.fill = Ed().AddFill(fill);
+      x.applyFill = true;
+    });
+  } else if (key == L"numfmt") {
+    std::wstring invariant;
+    ok = NumberFormat::LocalToInvariant(value, text_->Locale(), invariant) && ApplyNumberCode(invariant);
+  } else if (key == L"border") {
+    // [double-|thick-|medium-]top, bottom, left, right; outline, all, inside; none.
+    BorderSide side;
+    side.style = BorderStyle::Thin;
+    std::wstring edge = value;
+    for (const auto& [prefix, style] : {std::pair{L"double-", BorderStyle::Double}, std::pair{L"thick-", BorderStyle::Thick},
+                                        std::pair{L"medium-", BorderStyle::Medium}})
+      if (edge.rfind(prefix, 0) == 0) edge.erase(0, std::wcslen(prefix)), side.style = style;
+    static const wchar_t* const kEdges[] = {L"none", L"outline", L"all", L"inside", L"top", L"bottom", L"left", L"right"};
+    for (int i = 0; i < 8; ++i)
+      if (edge == kEdges[i]) ok = ApplyBorders(i, side);
+  } else if (key == L"align") {
+    const HAlign h = value == L"left" ? HAlign::Left : value == L"center" ? HAlign::Center
+                     : value == L"right" ? HAlign::Right : HAlign::General;
+    ok = ChangeFormat(u"Alignment", [h](Xf& x) {
+      x.alignment.horizontal = h;
+      x.applyAlignment = true;
+    });
+  } else if (key == L"wrap" || key == L"bold" || key == L"italic") {
+    const bool on = value != L"off" && value != L"0";
+    if (key == L"wrap")
+      ok = ChangeFormat(u"Wrap Text", [on](Xf& x) {
+        x.alignment.wrap = on;
+        x.applyAlignment = true;
+      });
+    else if (key == L"bold") ok = ChangeFont(u"Bold", [on](Font& f) { f.bold = on; });
+    else ok = ChangeFont(u"Italic", [on](Font& f) { f.italic = on; });
+  } else if (key == L"style") {
+    const auto& g = Gallery();
+    for (size_t i = 0; i < g.size(); ++i)
+      if (fw::ToLower(g[i].name) == fw::ToLower(value)) ok = ApplyCellStyle(static_cast<int>(i));
+  }
+  if (!ok) fwprintf(stderr, L"format failed: %s\n", arg.c_str());
+  return true;
 }
 
 }  // namespace fw::sheet::view

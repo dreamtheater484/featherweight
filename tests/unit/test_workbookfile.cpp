@@ -13,6 +13,7 @@
 #include "TestHarness.h"
 #include "pkg/Check.h"
 #include "pkg/OwnerFile.h"
+#include "pkg/Recovery.h"
 #include "sheet/csv/Csv.h"
 #include "sheet/edit/Edit.h"
 #include "sheet/numfmt/NumLocale.h"
@@ -266,4 +267,47 @@ TEST(WorkbookFile_CsvKeepsItsWayAndAWorkbookCopiesToCsv) {
   CHECK(WorkbookFile::SaveCsvCopy(*workbook, f.path + L"\\Budget.csv", o, error));
   CHECK(ReadAll(f.path + L"\\Budget.csv") == "\xEF\xBB\xBF" "a,b;1,5\r\n");
   CHECK(xfile.Path() == xlsxPath && xed.Modified());
+}
+
+// The autosave timer (s2-grid's tab): unsaved edits go to the recovery folder as a save would
+// write them, the workbook stays unsaved and editable, and the autosave reads back as the workbook
+// with the edits, titled as the tab ("Book2").
+TEST(WorkbookFile_AutosaveHoldsTheEditsAndLeavesTheWorkbookUnsaved) {
+  Folder f;
+  fw::pkg::Status st;
+  auto book = xlsx::NewWorkbook(st);
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookFile file;
+  file.New(2);
+  Editor ed(*book);
+  const std::wstring pattern = WorkbookFile::Config().recovery + L"\\*.fwr";
+  auto first = [&](std::wstring& name) {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(pattern.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    FindClose(h);
+    name = WorkbookFile::Config().recovery + L"\\" + fd.cFileName;
+    return true;
+  };
+  std::wstring name;
+  file.Autosave(*book, ed);
+  CHECK(!first(name));  // nothing unsaved yet
+  CHECK(ed.SetCell(0, 0, 0, CellInput::Number(42)));
+  file.Changed(ed.Modified(), {});
+  CHECK(file.Dirty() && file.AutosaveDue());
+  file.Autosave(*book, ed);
+  CHECK(!file.AutosaveDue() && file.Dirty() && ed.Modified() && !ed.Saving());
+  CHECK(ed.SetCell(0, 0, 1, CellInput::Number(7)));  // still editable
+  CHECK(first(name));
+  fw::pkg::recovery::Entry entry;
+  std::vector<uint8_t> bytes;
+  CHECK(fw::pkg::recovery::Read(name, entry, bytes));
+  CHECK(entry.title == L"Book2" && entry.originalPath.empty());
+  auto snap = fw::pkg::Snapshot::FromBytes(std::move(bytes));
+  auto pkg = fw::pkg::Package::Open(std::move(snap), fw::pkg::Limits::Default(), st);
+  auto recovered = pkg ? xlsx::Read(std::move(pkg), st, {.loadAll = true}) : nullptr;
+  CHECK(recovered != nullptr);
+  if (recovered) CHECK_EQ(sheet_test::Text(recovered->GetSheet(0), 0, 0), std::string("42"));
+  WorkbookFile::RecoverySession().End();
 }

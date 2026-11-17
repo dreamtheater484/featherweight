@@ -301,6 +301,11 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
   }
   if (button == 0 && gfx::Contains(cells_, fx, fy) && PointClick(x, y)) return;
   if (editor_.Active() && !CommitEdit(false)) return;
+  // A filter's button on its header row opens the column's filter.
+  if (uint32_t column = 0; button == 0 && FilterButtonAt(fx, fy, &column)) {
+    ShowFilterPanel(column);
+    return;
+  }
   // The fill handle: drag to fill, double-click to fill down beside the data.
   if (button == 0 && FillHandleAt(fx, fy)) {
     if (doubleClick) {
@@ -333,7 +338,12 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
       for (const TabRect& t : TabRects())
         if (gfx::Contains(t.rc, fx, fy)) {
           ShowSheet(t.sheet);
-          if (doubleClick && button == 0) BeginRename(t.sheet);  // as in Excel
+          if (doubleClick && button == 0) {
+            BeginRename(t.sheet);  // as in Excel
+          } else if (button == 0) {
+            tabDrag_ = TabDrag{t.sheet, fx, false, t.sheet};  // dragged: the sheet moves
+            mouse_ = Mouse::TabDrag;
+          }
         }
     }
     return;
@@ -377,6 +387,19 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
     Select({0, 0}, {kMaxRows - 1, kMaxCols - 1}, false);
     return;
   }
+  // A header's edge: drag to size the row or column, double-click to fit it.
+  if (button == 0)
+    if (auto e = SizeEdgeAt(x, y)) {
+      if (doubleClick) {
+        FitAtEdge(*e);
+      } else {
+        sizing_ = e;
+        sizeTo_ = e->edge;
+        mouse_ = Mouse::Size;
+      }
+      host_.ViewInvalidate();
+      return;
+    }
   auto clamped = [&](float px, float py) {
     px = std::clamp(px, cells_.left, cells_.right - 1);
     py = std::clamp(py, cells_.top, cells_.bottom - 1);
@@ -454,6 +477,13 @@ void WorkbookView::OnMouseMove(int x, int y, UINT mods) {
     case Mouse::Point: PointDrag(x, y); return;
     case Mouse::RefDrag: RefDrag(x, y); return;
     case Mouse::Fill: FillDrag(x, y); return;
+    case Mouse::TabDrag: TabDragMove(fx); return;
+    case Mouse::Size:
+      if (sizing_) {
+        sizeTo_ = std::max(sizing_->start, sizing_->rows ? fy : Mirror(fx));
+        host_.ViewInvalidate();
+      }
+      return;
     case Mouse::ThumbV: {
       const double range = Height(v.track) - Height(v.thumb);
       if (range > 0) ScrollTo(gridX_, v.min + (fy - thumbGrab_ - v.track.top) / range * (v.end - v.min - v.view));
@@ -505,6 +535,18 @@ void WorkbookView::OnMouseUp(int x, int y, int button, UINT mods) {
     host_.ViewInvalidate();
     return;
   }
+  if (mouse_ == Mouse::Size) {
+    mouse_ = Mouse::None;
+    FinishSizing();
+    host_.ViewInvalidate();
+    return;
+  }
+  if (mouse_ == Mouse::TabDrag) {
+    mouse_ = Mouse::None;
+    FinishTabDrag();
+    host_.ViewInvalidate();
+    return;
+  }
   const bool follow = pendingLink_ && mouse_ == Mouse::Cells && !painter_;
   const bool paint = painter_ && mouse_ == Mouse::Cells;  // the format painter's cells are chosen
   mouse_ = Mouse::None;
@@ -533,6 +575,8 @@ HCURSOR WorkbookView::CursorAt(int x, int y) {
     if (gfx::Contains(FormulaBox(), fx, fy) || (EditGeometry(b) && gfx::Contains(b.rc, fx, fy)))
       return LoadCursorW(nullptr, IDC_IBEAM);
     if (FillHandleAt(fx, fy)) return LoadCursorW(nullptr, IDC_SIZEALL);
+    if (mouse_ == Mouse::Size && sizing_) return LoadCursorW(nullptr, sizing_->rows ? IDC_SIZENS : IDC_SIZEWE);
+    if (auto e = SizeEdgeAt(x, y)) return LoadCursorW(nullptr, e->rows ? IDC_SIZENS : IDC_SIZEWE);
     if (RefGrab g; RefHit(x, y, g))
       return LoadCursorW(nullptr, !g.resize ? IDC_SIZEALL : g.nwse ? IDC_SIZENWSE : IDC_SIZENESW);
   }
