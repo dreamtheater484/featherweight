@@ -125,6 +125,17 @@ TEST(sheet_objects_pictures) {
   CHECK(s.End());
   CHECK(s.At(100, 60) != 0xFFFFFF);  // the one-cell picture
   CHECK(s.At(390, 290) == 0xFFFFFF);
+
+  // A right-to-left sheet 400 points wide: the one-cell picture moves to 232-352.
+  drawtest::Surface rtl(400, 300);
+  {
+    draw::D2DPainter p(rtl.dc.Get());
+    SheetObjects::DrawOptions options;
+    options.mirrorX = 400;
+    objects->Draw(p, {0, 0, 400, 300}, options);
+  }
+  CHECK(rtl.End());
+  CHECK(rtl.At(300, 60) != 0xFFFFFF && rtl.At(60, 60) == 0xFFFFFF);
 }
 
 TEST(sheet_objects_charts) {
@@ -259,6 +270,17 @@ TEST(sheet_objects_excel) {
   CHECK(s.End());
   CHECK(s.At(380, 180) == 0xFFFFE1);                                       // the shown note, over the group
   CHECK(drawtest::Blue(s.At(310, 60)) > 150 && drawtest::Red(s.At(310, 60)) < 120);  // the blue rectangle
+  // Printed, the shown note stays off the page: the page setup doesn't print notes.
+  drawtest::Surface printed(700, 480);
+  {
+    draw::D2DPainter p(printed.dc.Get());
+    SheetObjects::DrawOptions options;
+    options.printing = true;
+    objects->Draw(p, {0, 0, 700, 480}, options);
+  }
+  CHECK(printed.End());
+  CHECK(printed.At(380, 180) != 0xFFFFE1);
+  for (const auto& o : placed) CHECK(o.prints);
   auto chartSheet = SheetObjects::Load(*book, static_cast<size_t>(charts));
   CHECK(chartSheet->IsChartSheet());
 }
