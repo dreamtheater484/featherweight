@@ -1416,7 +1416,6 @@
         "MATCH",
         "MAX",
         "MIN",
-        "NATURA",
         "OFFSET",
         "OR",
         "PRODUCT",
@@ -1430,7 +1429,6 @@
         "SUMIFS",
         "SUMPRODUCT",
         "SWITCH",
-        "TARIEF",
         "TEXT",
         "TRANSPOSE",
         "UNIQUE",
@@ -1991,7 +1989,7 @@
         "sparklines",
         "tables"
       ],
-      "functions": ["AND", "AVERAGE", "COUNT", "COUNTA", "EDATE", "IF", "IFERROR", "LENGTH", "PMT", "SUBTOTAL", "TODAY"]
+      "functions": ["AND", "AVERAGE", "COUNT", "COUNTA", "EDATE", "IF", "IFERROR", "PMT", "SUBTOTAL", "TODAY"]
     },
     {
       "id": "edu-the-ultimate-personal-finance-tool",
@@ -2307,7 +2305,6 @@
       "functions": [
         "CONCAT",
         "DATE",
-        "GS",
         "IF",
         "INDEX",
         "LEFT",
