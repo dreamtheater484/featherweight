@@ -322,6 +322,7 @@ TEST(sheet_calc_text_compare) {
 // --- evaluation ---
 
 #include <map>
+#include <set>
 #include <memory>
 #include <tuple>
 
@@ -361,6 +362,8 @@ class MapHost : public Host {
   }
   double Now() override { return now; }
   void Store(int s, int32_t r, int32_t c, const Value& v) override { cells[{s, r, c}] = v; }
+  std::set<int32_t> hiddenRows;  // on every sheet
+  bool RowHidden(int, int32_t r) override { return hiddenRows.count(r) != 0; }
 };
 
 class TestResolver : public Resolver {
@@ -672,6 +675,36 @@ TEST(sheet_calc_engine_spills) {
   CHECK_EQ(f.Num("C2"), 2.0);
   CHECK(f.host.Cell(0, 2, 2).type == Type::Empty);
   CHECK_EQ(f.Num("D1"), 12.0);
+}
+
+TEST(sheet_calc_engine_aggregate) {
+  // SUBTOTAL leaves out cells that call SUBTOTAL or AGGREGATE; so does AGGREGATE with options 0..3,
+  // and options 1, 3, 5, 7 leave out hidden rows (measured in Excel 2021).
+  EngineFixture f;
+  f.Number("A1", 1);
+  f.Formula("A2", "_xlfn.AGGREGATE(9,4,A1)");
+  f.Formula("A3", "SUBTOTAL(9,A1)");
+  f.Number("A4", 5);
+  f.host.hiddenRows.insert(3);  // row 4
+  f.Formula("B1", "SUBTOTAL(9,A1:A3)");
+  f.Formula("B2", "_xlfn.AGGREGATE(9,0,A1:A3)");
+  f.Formula("B3", "_xlfn.AGGREGATE(9,4,A1:A3)");
+  f.Formula("B4", "_xlfn.AGGREGATE(9,5,A1:A4)");
+  f.Formula("B5", "_xlfn.AGGREGATE(9,4,A1:A4)");
+  f.Formula("B6", "_xlfn.AGGREGATE(15,2,A2:A3,1)");
+  f.Formula("B7", "SUBTOTAL(109,A1:A4)");
+  f.Formula("B8", "_xlfn.AGGREGATE(14,7,A1:A4,1)");
+  f.engine.Opened(Full());
+  f.engine.Recalculate();
+  CHECK_EQ(f.Num("B1"), 1.0);
+  CHECK_EQ(f.Num("B2"), 1.0);
+  CHECK_EQ(f.Num("B3"), 3.0);
+  CHECK_EQ(f.Num("B4"), 3.0);
+  CHECK_EQ(f.Num("B5"), 8.0);
+  CellView v = f.host.Cell(0, 5, 1);
+  CHECK(v.type == Type::Error && v.err == Err::Num);
+  CHECK_EQ(f.Num("B7"), 1.0);
+  CHECK_EQ(f.Num("B8"), 1.0);
 }
 
 namespace {
