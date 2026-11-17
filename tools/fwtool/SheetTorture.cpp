@@ -401,6 +401,19 @@ class EditApiTarget : public SheetTarget {
       case Op::Merge: return done(ed_.Merge(s, r));
       case Op::Unmerge: return done(ed_.Unmerge(s, r));
       case Op::Sort:
+        // "rows 2 0 1" / "cols 2 0 1": the lines in that order (Editor::SortRows, SortColumns), for
+        // replaying Excel's sorts; sorting by a key comes with s2-format's command.
+        if (e.arg.rfind("rows ", 0) == 0 || e.arg.rfind("cols ", 0) == 0) {
+          std::vector<uint32_t> order;
+          for (size_t i = 5; i < e.arg.size();) {
+            size_t j = e.arg.find(' ', i);
+            if (j == std::string::npos) j = e.arg.size();
+            if (j > i) order.push_back(static_cast<uint32_t>(std::strtoul(e.arg.substr(i, j - i).c_str(), nullptr, 10)));
+            i = j + 1;
+          }
+          return done(e.arg[0] == 'r' ? ed_.SortRows(s, r, order) : ed_.SortColumns(s, r, order));
+        }
+        [[fallthrough]];
       case Op::Filter: why = "sort and filter come with s2-format's commands"; return Applied::Refused;
       case Op::Paste: return Paste(e, why);
       case Op::Undo: return done(ed_.Undo(e.count));

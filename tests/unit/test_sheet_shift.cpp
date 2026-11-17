@@ -294,3 +294,110 @@ TEST(sheet_shift_timing) {
     time("undo", [&] { return static_cast<bool>(ed.Undo()); });
   }
 }
+
+// ---- Sorting (measured against Excel with scratchpad probes sort1 and sort2)
+
+namespace {
+
+// Rows 1-4: A ids 1..4, B 30 10 40 20, C =B*2, D =B of the next row, E =Sheet1!B (a sheet name),
+// F2 =A1, G shared =A+1; H1 =B2 outside; a link on B2; A2 formatted.
+std::unique_ptr<Workbook> SortBook(const std::string& extra = {}) {
+  const int b[] = {30, 10, 40, 20};
+  std::string data = "<sheetData>";
+  for (int r = 1; r <= 4; ++r) {
+    std::string n = std::to_string(r), next = std::to_string(r + 1);
+    std::string cells = "<c r=\"A" + n + "\"" + (r == 2 ? " s=\"1\"" : "") + "><v>" + n + "</v></c>" +
+                        "<c r=\"B" + n + "\"><v>" + std::to_string(b[r - 1]) + "</v></c>" + F(("C" + n).c_str(), ("B" + n + "*2").c_str()) +
+                        F(("D" + n).c_str(), ("B" + next).c_str()) + F(("E" + n).c_str(), ("Sheet1!B" + n).c_str());
+    if (r == 2) cells += F("F2", "A1");
+    cells += r == 1 ? std::string("<c r=\"G1\"><f t=\"shared\" ref=\"G1:G4\" si=\"0\">A1+1</f></c>")
+                    : "<c r=\"G" + n + "\"><f t=\"shared\" si=\"0\"/></c>";
+    if (r == 1) cells += F("H1", "B2");
+    data += Row(r, cells);
+  }
+  data += "</sheetData>" + extra + "<hyperlinks><hyperlink ref=\"B2\" location=\"Sheet2!A1\" display=\"x\"/></hyperlinks>";
+  return OpenParts({data, "<sheetData/>"});
+}
+
+}  // namespace
+
+TEST(sheet_sort_rows_as_excel) {
+  auto book = SortBook();
+  if (!book) return;
+  Editor ed(*book);
+  const Sheet& s = book->GetSheet(0);
+  CHECK(ed.SortRows(0, Range{0, 0, 3, 6}, {1, 3, 0, 2}));  // by B, ascending
+  CHECK(Text(s, 0, 0) == "2" && Text(s, 1, 0) == "4" && Text(s, 2, 0) == "1" && Text(s, 3, 0) == "3");
+  CHECK_EQ(Text(s, 0, 1), std::string("10"));
+  CHECK_EQ(FormulaText(s, 0, 2), std::string("B1*2"));    // copied to its new row
+  CHECK_EQ(FormulaText(s, 1, 3), std::string("B3"));      // was B5 on row 4
+  CHECK_EQ(FormulaText(s, 2, 3), std::string("B4"));      // was B2 on row 1
+  CHECK_EQ(FormulaText(s, 0, 4), std::string("Sheet1!B2"));  // a sheet name: it stays
+  CHECK_EQ(FormulaText(s, 0, 5), std::string("#REF!"));     // A1 from row 2 to row 1: off the sheet
+  CHECK_EQ(FormulaText(s, 0, 6), std::string("A1+1"));
+  FormulaInfo info;
+  CHECK(s.GetFormula(2, 6, info) && info.kind == FormulaKind::Normal);  // no longer shared
+  CHECK_EQ(FormulaText(s, 0, 7), std::string("B2"));  // references from outside don't follow
+  CHECK(s.StyleAt(0, 0) == 1 && s.StyleAt(1, 0) == 0);  // the format went with A2
+  CHECK(s.Hyperlinks().size() == 1 && s.Hyperlinks()[0].ref == Range::Cell(0, 1));
+  CHECK(ed.Undo());
+  CHECK(Text(s, 0, 0) == "1" && Text(s, 0, 1) == "30");
+  CHECK_EQ(FormulaText(s, 0, 3), std::string("B2"));
+  CHECK_EQ(FormulaText(s, 1, 5), std::string("A1"));
+  CHECK(s.GetFormula(2, 6, info) && info.kind == FormulaKind::Shared);
+  CHECK(s.Hyperlinks()[0].ref == Range::Cell(1, 1) && s.StyleAt(1, 0) == 1);
+  CHECK(ed.Redo());
+  CHECK_EQ(FormulaText(s, 1, 3), std::string("B3"));
+}
+
+TEST(sheet_sort_columns_and_keys) {
+  auto book = OpenParts({"<sheetData>" + Row(1, Num("A1", 3) + Num("B1", 1) + Num("C1", 2)) +
+                         Row(2, F("A2", "A1*10") + F("B2", "B1*10") + F("C2", "C1*10")) + "</sheetData>",
+                         "<sheetData/>"});  // two sheets: the fixture's name Local is on the second
+  if (!book) return;
+  Editor ed(*book);
+  const Sheet& s = book->GetSheet(0);
+  CHECK(ed.SortColumns(0, Range{0, 0, 1, 2}, {1, 2, 0}, {{0, false}}));
+  CHECK(Text(s, 0, 0) == "1" && Text(s, 0, 1) == "2" && Text(s, 0, 2) == "3");
+  CHECK_EQ(FormulaText(s, 1, 0), std::string("A1*10"));
+  CHECK_EQ(FormulaText(s, 1, 2), std::string("C1*10"));
+  CHECK(s.Text().afterData.find("<sortState columnSort=\"1\" ref=\"A1:C2\"><sortCondition ref=\"A1:C1\"/></sortState>") !=
+        std::string::npos);
+  CHECK(ed.Undo());
+  CHECK(s.Text().afterData.find("sortState") == std::string::npos && Text(s, 0, 0) == "3");
+  CHECK(ed.SortRows(0, Range{0, 0, 1, 2}, {0, 1}, {{1, true}}));  // the order as it is: only the record
+  CHECK(s.Text().afterData.find("<sortCondition descending=\"1\" ref=\"B1:B2\"/>") != std::string::npos);
+  // Saved and read again, the record is there (FW_SAVE_OUT=<folder> keeps the file, for Excel).
+  ed.BeginSave();
+  xlsx::SavePlan plan;
+  fw::pkg::Status st = xlsx::PrepareSave(*book, ed, plan);
+  fw::pkg::MemorySink sink;
+  if (st.Ok()) st = xlsx::WriteSave(*book, plan, sink);
+  CHECK(st.Ok());
+  if (st.Ok()) xlsx::CommitSave(*book, ed, plan);
+  else ed.EndSave();
+  auto again = OpenZip(sink.bytes);
+  CHECK(again && again->GetSheet(0).Text().afterData.find("<sortState ref=\"A1:C2\">") != std::string::npos);
+  wchar_t dir[MAX_PATH];
+  DWORD n = GetEnvironmentVariableW(L"FW_SAVE_OUT", dir, MAX_PATH);
+  if (n > 0 && n < MAX_PATH) CHECK(test::WriteFileBytes(std::wstring(dir) + L"\\sort-keys.xlsx", sink.bytes));
+}
+
+TEST(sheet_sort_refusals) {
+  auto merged = SortBook("<mergeCells count=\"1\"><mergeCell ref=\"C3:D3\"/></mergeCells>");
+  if (!merged) return;
+  Editor ed(*merged);
+  edit::Result r = ed.SortRows(0, Range{0, 0, 3, 6}, {3, 2, 1, 0});
+  CHECK(!r && r.message == u"To do this, all the merged cells need to be the same size.");
+  CHECK(!ed.SortRows(0, Range{0, 0, 3, 6}, {0, 1, 2}));     // too few
+  CHECK(!ed.SortRows(0, Range{0, 0, 3, 6}, {0, 1, 1, 2}));  // not a permutation
+  CHECK(!ed.SortRows(0, Range{0, 0, 3, 6}, {3, 2, 1, 0}, {{9, false}}));  // the key outside
+  CHECK(ed.SortRows(0, Range{0, 0, 3, 1}, {3, 2, 1, 0}));  // beside the merge
+  auto arrays = OpenParts({"<sheetData>" + Row(1, Num("A1", 1) + "<c r=\"B1\"><f t=\"array\" ref=\"B1:B2\">A1:A2*2</f><v>2</v></c>") +
+                           Row(2, Num("A2", 2) + "<c r=\"B2\"><v>4</v></c>") + "</sheetData>"});
+  if (!arrays) return;
+  Editor ea(*arrays);
+  r = ea.SortRows(0, Range{0, 0, 1, 1}, {1, 0});
+  CHECK(!r && r.message == u"You can't change part of an array.");
+  CHECK(ea.SortRows(0, Range{0, 0, 1, 0}, {1, 0}));
+}

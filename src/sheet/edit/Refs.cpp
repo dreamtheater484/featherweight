@@ -383,6 +383,17 @@ enum class Follow : uint8_t { MoveAndSize, Move, None };
 // that moves and sizes with its cells moves when its middle is in the band (Excel, measured), one
 // that only moves when its top-left cell is.
 bool MoveBox(const Mover& m, Follow follow, Corner& from, Corner* to, uint32_t crossFrom, uint32_t crossTo) {
+  if (m.Sorting()) {
+    // An object inside one line of the sorted cells goes with it, however it follows cells; one
+    // over several lines stays (Excel, measured).
+    bool one = !to || to->line == from.line || (to->line == from.line + 1 && to->off == 0);
+    if (!one || m.Across(crossFrom, std::max(crossFrom, crossTo)) != 1) return false;
+    uint32_t n = m.Line(from.line);
+    if (n == from.line) return false;
+    if (to) to->line = n + (to->line - from.line);
+    from.line = n;
+    return true;
+  }
   if (follow == Follow::None) return false;
   uint32_t probe = follow == Follow::MoveAndSize ? (crossFrom + crossTo) / 2 : crossFrom;
   if (m.Across(probe, probe) != 1) return false;
@@ -484,6 +495,7 @@ Mover::Mover(const Shift& s) : sh(s), max(s.axis == Shift::Axis::Rows ? kMaxRows
 
 uint32_t Mover::Line(uint32_t line) const {
   if (line < sh.at) return line;
+  if (Sorting()) return line - sh.at < dest.size() ? sh.at + dest[line - sh.at] : line;
   if (sh.count >= 0) {
     uint64_t n = static_cast<uint64_t>(line) + static_cast<uint64_t>(sh.count);
     return n < max ? static_cast<uint32_t>(n) : kNone;
@@ -493,7 +505,7 @@ uint32_t Mover::Line(uint32_t line) const {
 }
 
 bool Mover::Span(uint32_t& first, uint32_t& last) const {
-  if (last < sh.at || (first == 0 && last == max - 1)) return true;  // before the edit; whole lines
+  if (Sorting() || last < sh.at || (first == 0 && last == max - 1)) return true;  // before the edit; whole lines
   bool toEnd = last == max - 1;
   if (sh.count > 0) {
     if (first >= sh.at) {
@@ -542,6 +554,7 @@ bool Mover::Area(Range& r) const {
 }
 
 std::vector<Range> Mover::Areas(const std::vector<Range>& in) const {
+  if (Sorting()) return in;
   std::vector<Range> out, moved;
   for (Range r : in) {
     uint32_t last = Rows() ? r.lastRow : r.lastCol;

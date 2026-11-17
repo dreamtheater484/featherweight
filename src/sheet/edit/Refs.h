@@ -18,9 +18,14 @@ namespace fw::sheet::edit::refs {
 struct Mover {
   Shift sh;
   uint32_t max = 0;  // lines on the sheet along the axis
+  // A sort instead of a shift (Editor::SortRows, SortColumns; sh.count 0): inside the band, line
+  // sh.at + i goes to sh.at + dest[i]. Nothing that refers to cells follows a sort (Span, Area and
+  // Areas leave them); cells, notes and objects inside one line move with it.
+  std::vector<uint32_t> dest;
 
   explicit Mover(const Shift& s);
   bool Rows() const { return sh.axis == Shift::Axis::Rows; }
+  bool Sorting() const { return !dest.empty(); }
   uint32_t Deleted() const { return sh.count < 0 ? static_cast<uint32_t>(-sh.count) : 0; }
   // A line after the edit; kNone when it's deleted or pushed off the sheet.
   uint32_t Line(uint32_t line) const;

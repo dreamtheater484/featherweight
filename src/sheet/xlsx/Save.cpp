@@ -678,6 +678,9 @@ std::set<std::string> Reachable(const pkg::Package& pkg, const std::set<std::str
 
 }  // namespace
 
+void PutSheetElement(PartText& t, std::string_view local, const std::string& xml) { PutElement(t, local, xml); }
+std::string SheetPrefix(const PartText& t) { return PrefixOf(t.rootStart); }
+
 // ---------- The workbook ----------
 
 Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan, FileFormat format) {

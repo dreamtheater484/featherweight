@@ -41,6 +41,7 @@ enum ChangeFlag : uint32_t {
   kSheetProps = 1u << 8,  // tab color, visibility, frozen panes
   kNames = 1u << 9,       // defined names
   kView = 1u << 10,       // selection, active sheet, top-left cell, zoom (not undo steps)
+  kObjects = 1u << 11,    // the sheet's notes, links or drawings moved (a sort): load them again
 };
 
 // Cells inserted or deleted (kShift): along `axis`, `count` rows or columns at `at` (> 0 inserted
@@ -159,6 +160,21 @@ class Editor {
   Result InsertCells(int sheet, const Range& r, Direction shift);  // Right or Down
   Result DeleteCells(int sheet, const Range& r, Direction shift);  // Left or Up
 
+  // ---- Sorting, as Excel sorts: the rows of `r` put in `order` (the row at r.firstRow + order[i]
+  // goes to r.firstRow + i); SortColumns the same for its columns. Only `r`'s cells move: values,
+  // formats, links and notes with them, and drawings inside one row. Moved formulas are copied:
+  // references without a sheet name follow (off the sheet: #REF!), ones naming a sheet stay, and
+  // references from elsewhere don't follow. Validation, conditional formats and row heights stay.
+  // Refused like Excel over merged cells or an array formula. `keys` go into the sheet's
+  // sortState, Excel's record of the sort (Data > Reapply); none: it's left as it was.
+  struct SortKey {
+    uint32_t line = 0;  // the key's column (its row, for SortColumns)
+    bool descending = false;
+  };
+  Result SortRows(int sheet, const Range& r, const std::vector<uint32_t>& order, const std::vector<SortKey>& keys = {});
+  Result SortColumns(int sheet, const Range& r, const std::vector<uint32_t>& order,
+                     const std::vector<SortKey>& keys = {});
+
   // ---- Merged cells. Merging keeps the top-left cell's content and clears the others' (Excel
   // asks first; the grid does). Merges that overlap `r` are taken into it.
   Result Merge(int sheet, const Range& r);
@@ -249,6 +265,7 @@ class Editor {
   struct State;
   // Rows, columns or cells inserted or deleted (the public calls above build `shift`).
   Result ShiftCells(int sheet, const Shift& shift, std::u16string stepName);
+  Result SortLines(int sheet, const Range& r, const std::vector<uint32_t>& order, const std::vector<SortKey>& keys, bool rows);
   // A sheet renamed, moved or deleted: every formula and part that names sheets (cells, names,
   // rules, sparklines, charts, drawings, controls, tables, pivot caches) through `rewrite` (a
   // formula's text and its sheet's index); `touches` says cheaply whether a text may need it. Sheet
