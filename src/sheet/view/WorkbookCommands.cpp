@@ -226,9 +226,17 @@ CommandState WorkbookView::QueryCommand(int cmd) {
       break;
     case CmdNextSheet:
     case CmdPrevSheet: s.enabled = ready && shown > 1; break;
-    case CmdSave: s.enabled = false; break;
-    case CmdUndo: s.enabled = ready && edit_ && edit_->CanUndo(); break;
-    case CmdRedo: s.enabled = ready && edit_ && edit_->CanRedo(); break;
+    case CmdSave: s.enabled = ready; break;
+    case CmdUndo:
+    case CmdRedo: {
+      // "Undo merge cells", as the list's newest step.
+      s.enabled = ready && edit_ && (cmd == CmdUndo ? edit_->CanUndo() : edit_->CanRedo());
+      s.shortcut = cmd == CmdUndo ? L"Ctrl+Z" : L"Ctrl+Y";
+      const std::u16string name = s.enabled ? (cmd == CmdUndo ? edit_->UndoName() : edit_->RedoName()) : u"";
+      s.label = (cmd == CmdUndo ? L"Undo" : L"Redo") +
+                (name.empty() ? std::wstring() : L" " + fw::ToLower(std::wstring(name.begin(), name.end())));
+      break;
+    }
     case CmdRotateLeft:
     case CmdRotateRight:
     case CmdToggleCover:
@@ -352,6 +360,7 @@ void WorkbookView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   preview.toggle = true;
   preview.checked = preview_;
   m.left = {print, preview};
+  AddUndoToolbar(m);
   m.pager = preview_;
   if (preview_) {
     m.page = currentPage_;
@@ -366,6 +375,33 @@ void WorkbookView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   ToolItem full = item(CmdFullScreen, ctx.fullscreen ? icon::BackToWindow : icon::FullScreen);
   full.priority = 2;
   m.right = {find, full};
+}
+
+void WorkbookView::AddUndoToolbar(ToolbarModel& m) {
+  if (!Ready() || preview_) return;
+  for (const int cmd : {CmdUndo, CmdRedo}) {
+    const CommandState q = QueryCommand(cmd);
+    ToolItem t;
+    t.kind = ToolKind::SplitButton;
+    t.cmd = cmd;
+    t.glyph = cmd == CmdUndo ? icon::Undo : icon::Redo;
+    t.tooltip = q.Tooltip();
+    t.enabled = q.enabled;
+    t.priority = cmd == CmdUndo ? 8 : 7;
+    t.sepBefore = cmd == CmdUndo;
+    // The list: picking a step undoes (or redoes) it and every newer one, as Excel's.
+    if (edit_)
+      for (const std::u16string& name : cmd == CmdUndo ? edit_->UndoNames() : edit_->RedoNames()) {
+        if (t.choices.size() >= 30) break;
+        t.choices.push_back(std::wstring(name.begin(), name.end()));
+      }
+    t.onChange = [this, cmd](const ToolValue& v) {
+      if (v.index < 0 || !edit_ || editor_.Active()) return;
+      const size_t steps = static_cast<size_t>(v.index) + 1;
+      EditRefused(cmd == CmdUndo ? edit_->Undo(steps) : edit_->Redo(steps));
+    };
+    m.left.push_back(std::move(t));
+  }
 }
 
 void WorkbookView::FillMenu(int which, HMENU menu) {
@@ -408,6 +444,10 @@ void WorkbookView::BuildStatusBar(StatusBarModel& m) {
   if (!Ready()) return;
   UpdateStatus();
   if (file_->SaveRunning()) m.segments.push_back(L"Saving\u2026");  // as Excel's status bar
+  // A long recalculation, and in manual mode what is waiting for F9, as Excel's status bar.
+  if (calcSince_ > 0 && anim::Now() - calcSince_ > 300) m.segments.push_back(L"Calculating\u2026");
+  else if (calc_ && !calc_->Opening() && calc_->ManualCalc() && calc_->Calculating() && !calcNow_)
+    m.segments.push_back(L"Calculate");
   if (circular_) {
     const auto [sheet, row, col] = *circular_;
     std::wstring at = Utf8ToWide(CellName(static_cast<uint32_t>(row), static_cast<uint32_t>(col)));
@@ -928,8 +968,13 @@ bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   calc::WorkbookCalc& calc = Calc();
   const uint64_t before = calc.Changes();
   const double budget = std::max(1.0, deadlineMs - anim::Now());
+  if (calcSince_ == 0) calcSince_ = anim::Now();
   const bool done = calc.Opening() ? calc.OpenStep(budget) : calc.CalcStep(budget);
   const bool changed = calc.Changes() != before;
+  if (done && !calc.Opening()) {
+    if (anim::Now() - calcSince_ > 300) host_.ViewStateChanged();  // "Calculating…" goes
+    calcSince_ = 0;
+  }
   if (done && !calc.Opening()) {
     calcNow_ = false;
     CheckCircular();

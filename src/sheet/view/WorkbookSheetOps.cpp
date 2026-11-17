@@ -2,6 +2,7 @@
 // cells", "Sheets"), its context menus, and keeping the view in step when the edit API changes
 // the sheets or their layout. Every change goes through the edit API.
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 
 #include "Commands.h"
@@ -9,6 +10,9 @@
 #include "sheet/view/WorkbookPanels.h"
 #include "sheet/view/WorkbookView.h"
 #include "ui/Menu.h"
+#include "ui/Theme.h"
+
+using namespace gfx;
 
 namespace fw::sheet::view {
 
@@ -466,6 +470,53 @@ void WorkbookView::GroupSelection(bool in) {
   if (EditRefused(r)) return;
   if (!changed && !in) host_.ViewMessage(BannerKind::Info, cols ? L"These columns aren't grouped." : L"These rows aren't grouped.");
   group.done = changed;
+}
+
+// ---------------------------------------------------------------------------
+// Moving a sheet by dragging its tab
+
+void WorkbookView::TabDragMove(float x) {
+  if (!tabDrag_) return;
+  TabDrag& d = *tabDrag_;
+  if (!d.moving && std::abs(x - d.x0) < 6 * ui_) return;
+  d.moving = true;
+  // Before the first tab whose middle is past the mouse; the end after the last.
+  d.before = book_->SheetCount();
+  for (const TabRect& t : TabRects()) {
+    const float mid = (t.rc.left + t.rc.right) / 2;
+    if (rtl_ ? x > mid : x < mid) {
+      d.before = t.sheet;
+      break;
+    }
+  }
+  host_.ViewInvalidate();
+}
+
+void WorkbookView::FinishTabDrag() {
+  if (!tabDrag_) return;
+  const TabDrag d = *tabDrag_;
+  tabDrag_.reset();
+  if (!d.moving) return;
+  const size_t n = book_->SheetCount();
+  const size_t to = d.before >= n ? n - 1 : d.before > d.sheet ? d.before - 1 : d.before;
+  if (to != d.sheet) EditRefused(Ed().MoveSheet(static_cast<int>(d.sheet), static_cast<int>(to)));
+}
+
+void WorkbookView::DrawTabDrop(Canvas& c) {
+  if (mouse_ != Mouse::TabDrag || !tabDrag_ || !tabDrag_->moving) return;
+  const std::vector<TabRect> tabs = TabRects();
+  if (tabs.empty()) return;
+  float x = rtl_ ? tabs.back().rc.left : tabs.back().rc.right;
+  for (const TabRect& t : tabs)
+    if (t.sheet == tabDrag_->before) {
+      x = rtl_ ? t.rc.right : t.rc.left;
+      break;
+    }
+  // A small arrow over the gap, as Excel's.
+  const Palette& p = theme::P();
+  const float u = ui_, top = tabs_.top + 2 * u;
+  c.Fill(D2D1_RECT_F{x - 1 * u, top, x + 1 * u, tabs_.bottom - 4 * u}, p.accent);
+  c.Fill(D2D1_RECT_F{x - 4 * u, top, x + 4 * u, top + 2 * u}, p.accent);
 }
 
 void WorkbookView::Restructure() {

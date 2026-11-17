@@ -286,7 +286,22 @@ class WorkbookView : public PagedView {
   float tabScroll_ = 0;
 
   // Mouse.
-  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag, Fill, Size };
+  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag, Fill, Size, TabDrag };
+  // A sheet tab dragged to move the sheet: where it would go (before that sheet; SheetCount() for
+  // the end), shown once the mouse has moved a few pixels.
+  struct TabDrag {
+    size_t sheet = 0;
+    float x0 = 0;
+    bool moving = false;
+    size_t before = 0;
+  };
+  std::optional<TabDrag> tabDrag_;
+  void TabDragMove(float x);
+  void FinishTabDrag();
+  void DrawTabDrop(gfx::Canvas& c);
+  // Undo and redo with their lists (split buttons: the arrow lists the steps, newest first).
+  void AddUndoToolbar(ToolbarModel& m);
+  double calcSince_ = 0;  // anim::Now() when the recalculation under way began; 0: none
   Mouse mouse_ = Mouse::None;
   float thumbGrab_ = 0;
   int hoverTab_ = -1;
