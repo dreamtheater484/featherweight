@@ -138,15 +138,29 @@ Look LookOf(pugi::xml_node spPr, const draw::ColorContext& colors) {
   return l;
 }
 
-void LabelsOf(pugi::xml_node dLbls, std::optional<bool>& val, std::optional<bool>& pct, std::optional<bool>& cat) {
-  if (!dLbls) return;
+// What a c:dLbls shows; what it doesn't say stays nullopt.
+struct LabelParts {
+  std::optional<bool> val, pct, cat, ser, key;
+  std::optional<std::wstring> separator;
+};
+
+LabelParts LabelsOf(pugi::xml_node dLbls) {
+  LabelParts l;
+  if (!dLbls) return l;
   if (On(dLbls, "delete", false)) {
-    val = pct = cat = false;
-    return;
+    l.val = l.pct = l.cat = l.ser = l.key = false;
+    return l;
   }
-  if (C(dLbls, "showVal")) val = On(dLbls, "showVal", false);
-  if (C(dLbls, "showPercent")) pct = On(dLbls, "showPercent", false);
-  if (C(dLbls, "showCatName")) cat = On(dLbls, "showCatName", false);
+  const auto flag = [&](const char* name, std::optional<bool>& out) {
+    if (C(dLbls, name)) out = On(dLbls, name, false);
+  };
+  flag("showVal", l.val);
+  flag("showPercent", l.pct);
+  flag("showCatName", l.cat);
+  flag("showSerName", l.ser);
+  flag("showLegendKey", l.key);
+  if (pugi::xml_node s = C(dLbls, "separator")) l.separator = Wide(s.text().get());
+  return l;
 }
 
 Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors, size_t& budget, DataSource* source) {
@@ -193,9 +207,16 @@ Series SeriesOf(pugi::xml_node ser, Type type, const draw::ColorContext& colors,
   s.values.resize(n);
   if (s.xs.size() > n) s.xs.resize(n);
   budget -= n;
-  if (pugi::xml_node m = C(ser, "marker")) s.marker = Val(C(m, "symbol")) != "none";
+  if (pugi::xml_node m = C(ser, "marker")) {
+    s.symbol = Val(C(m, "symbol"));
+    if (s.symbol.size() > 16) s.symbol.clear();
+    if (pugi::xml_node c = C(m, "symbol")) s.marker = s.symbol != "none";
+    s.markerSize = static_cast<float>(std::clamp(Number(C(m, "size"), "val", 5), 2.0, 72.0));
+  }
   s.smooth = (type == Type::Line || scatter) && On(ser, "smooth", true);
-  LabelsOf(C(ser, "dLbls"), s.labels, s.percent, s.categoryLabels);
+  const LabelParts l = LabelsOf(C(ser, "dLbls"));
+  s.labels = l.val, s.percent = l.pct, s.categoryLabels = l.cat, s.seriesNames = l.ser, s.keys = l.key;
+  s.separator = l.separator;
   return s;
 }
 
@@ -228,8 +249,24 @@ Axis AxisOf(pugi::xml_node ax, const std::string& source, const draw::ColorConte
   if (a.max && !(*a.max == *a.max)) a.max.reset();
   a.reversed = Val(C(scaling, "orientation")) == "maxMin";
   if (pugi::xml_node cb = C(ax, "crossBetween")) a.between = Val(cb) != "midCat";
-  if (pugi::xml_node t = C(ax, "title")) a.title = TextOf(C(t, "tx"));
+  if (pugi::xml_node t = C(ax, "title")) {
+    a.title = TextOf(C(t, "tx"));
+    a.titleOverlay = On(t, "overlay", false);
+  }
   return a;
+}
+
+// Office 2010 and later write c14:style in an mc:AlternateContent (c:style its fallback); a chart
+// without it keeps Office 2007's look.
+bool HasC14Style(pugi::xml_node chartSpace) {
+  constexpr std::string_view kC14 = "http://schemas.microsoft.com/office/drawing/2007/8/2/chart";
+  for (pugi::xml_node ac = chartSpace.first_child(); ac; ac = ac.next_sibling()) {
+    if (!IsElement(ac, fw::pkg::mce::kNamespace, "AlternateContent")) continue;
+    for (pugi::xml_node choice = ac.first_child(); choice; choice = choice.next_sibling())
+      for (pugi::xml_node s = choice.first_child(); s; s = s.next_sibling())
+        if (s.type() == pugi::node_element && LocalNameOf(s) == "style" && NamespaceOf(s) == kC14) return true;
+  }
+  return false;
 }
 
 }  // namespace
@@ -241,10 +278,14 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
   pugi::xml_node plot = C(chart, "plotArea");
   if (!plot) return false;
   out.area = LookOf(C(chartSpace, "spPr"), colors);
-  out.roundedCorners = On(chartSpace, "roundedCorners", true);
+  // In a workbook (where `data` comes from), Excel rounds the corners when the chart doesn't say,
+  // and keeps Office 2007's look for a chart without c14:style; Word does neither (their PDFs).
+  out.roundedCorners = On(chartSpace, "roundedCorners", data != nullptr);
+  out.legacy = data && !HasC14Style(chartSpace);
   out.plot = LookOf(C(plot, "spPr"), colors);
   float size = -1;  // stated by the chart, or else (below) by its axes or legend
   TextLook(C(chartSpace, "txPr"), colors, &size, &out.textColor);
+  const float spaceSize = size;
   const std::optional<draw::Color> spaceColor = out.textColor;
 
   // The chart groups, and the axes by id.
@@ -267,8 +308,9 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     else if (k == "doughnutChart") g.type = Type::Doughnut;
     else if (k == "areaChart" || k == "area3DChart") g.type = Type::Area;
     else if (k == "scatterChart") g.type = Type::Scatter;
+    else if (k == "radarChart" && out.groups.empty()) g.type = Type::Radar;
     else {
-      unknown = true;  // radar, stock, bubble, surface…
+      unknown = true;  // stock, bubble, surface…
       return false;
     }
     if (out.groups.size() >= 16) return true;
@@ -280,13 +322,20 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     g.hole = std::clamp(Number(C(c, "holeSize"), "val", 50), 1.0, 90.0);
     g.firstAngle = std::clamp(Number(C(c, "firstSliceAng"), "val", 0), 0.0, 360.0);
     g.marker = On(c, "marker", false);
+    if (g.type == Type::Radar) {
+      const std::string_view radar = Val(C(c, "radarStyle"));
+      g.marker = radar == "marker";
+      g.filled = radar == "filled";
+    }
     const std::string_view style = Val(C(c, "scatterStyle"));
     g.lines = style != "marker" && style != "none";
-    std::optional<bool> val, pct, cat;
-    LabelsOf(C(c, "dLbls"), val, pct, cat);
-    g.labels = val.value_or(false);
-    g.percent = pct.value_or(false);
-    g.categoryLabels = cat.value_or(false);
+    const LabelParts l = LabelsOf(C(c, "dLbls"));
+    g.labels = l.val.value_or(false);
+    g.percent = l.pct.value_or(false);
+    g.categoryLabels = l.cat.value_or(false);
+    g.seriesNames = l.ser.value_or(false);
+    g.keys = l.key.value_or(false);
+    g.separator = l.separator;
     std::vector<std::string> ids;
     ForEachChild(c, [&](pugi::xml_node s) {
       if (NamespaceOf(s) != kChart) return true;
@@ -353,14 +402,30 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
     else if (out.groups.size() == 1 && out.groups.front().series.size() == 1) out.title = out.groups.front().series.front().name;
     if (out.title.empty() && !tx) out.title = L"Chart Title";
     // Bold and in the chart's text color unless its own text (or else its c:txPr) says otherwise.
-    out.titleSize = size > 0 ? size * 14 / 9 : 14;
+    // Unstated, Office 2007's look (Excel's PDFs) makes it the chart's text size, or 1.2 times
+    // what the chart's c:txPr states; Office 2010's, 18 points; Office 2013 and later state theirs.
+    if (out.legacy) out.titleSize = spaceSize > 0 ? spaceSize * 1.2f : 10;
+    else out.titleSize = size > 0 ? size * 14 / 9 : 18;
     out.titleColor = spaceColor;
-    if (pugi::xml_node rich = C(tx, "rich")) TextLook(rich, colors, &out.titleSize, &out.titleColor, &out.titleBold);
-    else TextLook(C(t, "txPr"), colors, &out.titleSize, &out.titleColor, &out.titleBold);
+    out.titleOverlay = On(t, "overlay", false);
+    if (pugi::xml_node rich = C(tx, "rich")) {
+      // Text with no properties at all (no a:pPr, a:rPr) is DrawingML's own default in Office
+      // 2007's look: 18-point Arial, not bold (Excel).
+      pugi::xml_node p = A(rich, "p");
+      if (out.legacy && !A(p, "pPr") && !A(A(p, "r"), "rPr")) {
+        out.titleSize = 18;
+        out.titleBold = false;
+        out.titleFont = L"Arial";
+      }
+      TextLook(rich, colors, &out.titleSize, &out.titleColor, &out.titleBold);
+    } else {
+      TextLook(C(t, "txPr"), colors, &out.titleSize, &out.titleColor, &out.titleBold);
+    }
   }
   if (pugi::xml_node legend = C(chart, "legend")) {
     const std::string_view pos = Val(C(legend, "legendPos"));
     out.legend = pos == "b" ? LegendPos::Bottom : pos == "t" ? LegendPos::Top : pos == "l" ? LegendPos::Left : LegendPos::Right;
+    out.legendOverlay = On(legend, "overlay", false);
   }
   return true;
 }

@@ -1,7 +1,10 @@
 #include "TestHarness.h"
 
+#include <algorithm>
+
 #include "PkgTestUtil.h"
 #include "pkg/Canonical.h"
+#include "pkg/Check.h"
 #include "pkg/Mce.h"
 #include "pkg/Package.h"
 #include "pkg/References.h"
@@ -90,6 +93,34 @@ TEST(Package_OpenRefusesBrokenPackages) {
   auto pkg = OpenBytes(MakeZip(parts), st);
   CHECK(pkg && st.Ok());  // only read on demand...
   CHECK_EQ(pkg->Verify().code, Status::Code::Rejected);  // ...or by Verify
+}
+
+TEST(Package_DamagedPictureIsKeptAsItIs) {
+  // A part nothing reads on opening (a thumbnail, here a picture) whose data doesn't match its
+  // checksum: the file opens, as in Office; Verify lists it when asked; check warns; saving
+  // copies it as it is.
+  auto zip = MakeZip(MiniPackage(), ZipWriter::Compression::Store);
+  const std::string run(100, '\x07');
+  auto at = std::search(zip.begin(), zip.end(), run.begin(), run.end());
+  CHECK(at != zip.end());
+  if (at == zip.end()) return;
+  *(at + 50) = 0x08;
+  Status st;
+  auto pkg = OpenBytes(zip, st);
+  CHECK(pkg && st.Ok());
+  if (!pkg) return;
+  CHECK_EQ(pkg->Verify().code, Status::Code::Damaged);
+  std::vector<std::string> damaged;
+  CHECK(pkg->Verify(&damaged).Ok());
+  CHECK(damaged == std::vector<std::string>{"/word/media/a b.png"});
+  const CheckReport report = CheckPackage(*pkg);
+  bool warned = false;
+  for (const auto& w : report.warnings) warned |= w.find("a b.png") != std::string::npos && w.find("damaged") != std::string::npos;
+  for (const auto& e : report.errors) CHECK(e.find("damaged") == std::string::npos);
+  CHECK(warned);
+  MemorySink sink;
+  CHECK(pkg->Save(sink).Ok());
+  CHECK(sink.bytes == zip);
 }
 
 // ---------- Saving ----------

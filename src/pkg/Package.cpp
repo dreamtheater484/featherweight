@@ -349,11 +349,15 @@ void Package::SetRelationships(RelationshipSet set) {
   rels_.push_back(std::move(set));
 }
 
-Status Package::Verify() const {
+Status Package::Verify(std::vector<std::string>* damaged) const {
   std::vector<uint8_t> bytes;
   for (const auto& part : parts_) {
     if (part.deleted) continue;
     Status s = ReadPart(part.name, bytes);
+    if (!s.Ok() && damaged && s.code == Status::Code::Damaged && !IsXmlPart(part.name)) {
+      damaged->push_back(part.name);
+      continue;
+    }
     if (!s.Ok()) return s;
     if (IsXmlPart(part.name)) {
       s = XmlPull::Check(AsText(bytes), limits_, ZipNameOf(part.name));
