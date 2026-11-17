@@ -149,6 +149,7 @@ bool Sheet::GetFormula(uint32_t row, uint32_t col, FormulaInfo& out) const {
   out = FormulaInfo{};
   out.kind = rec.kind;
   out.alwaysCalc = rec.alwaysCalc;
+  out.dynamic = rec.dynamic;
   out.sharedIndex = rec.sharedIndex;
   out.attrs = rec.attrs;
   out.origin = {row, col};

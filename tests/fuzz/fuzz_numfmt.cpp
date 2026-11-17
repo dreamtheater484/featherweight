@@ -63,6 +63,19 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       }
     }
   }
+  // The code as en-NL types it (TEXT()): read or refused, and the same reading twice.
+  {
+    std::wstring inv, again;
+    NumberFormat local;
+    const bool read = NumberFormat::LocalToInvariant(code, EnNlLocale(), inv);
+    if (read != NumberFormat::FromLocal(code, EnNlLocale(), local)) std::abort();
+    if (!read && !inv.empty()) std::abort();
+    if (NumberFormat::LocalToInvariant(code, EnNlLocale(), again) != read || again != inv) std::abort();
+    if (!NumberFormat::LocalToInvariant(code, EnUsLocale(), again) || again != code) std::abort();
+    FormatContext ctx;
+    ctx.locale = &EnNlLocale();
+    for (double v : {0.0, -1.0, 1234.5678, 45000.75, 1e300}) local.Format(v, ctx, out), Check(out);
+  }
   // Each later line: a text value, and typed text.
   size_t start = 0;
   for (int lines = 0; start <= rest.size() && lines < 16; ++lines) {

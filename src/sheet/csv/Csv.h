@@ -43,7 +43,12 @@ struct Options {
   bool tsv = false;                    // the file is .tsv: a tab wins a tie
   bool convert = true;                 // false: every field stays text
   unsigned threads = 0;                // 0: the PC's cores (up to 8)
+  uint32_t ansiCodePage = 0;           // a file that isn't UTF-8 or UTF-16; 0: Windows' (SystemAnsiCodePage)
 };
+
+// Windows' ANSI code page, which Excel reads such a file in (1252 on a Western PC). Not GetACP():
+// the app's manifest makes that UTF-8 (65001).
+uint32_t SystemAnsiCodePage();
 
 class Reader {
  public:
@@ -71,6 +76,7 @@ class Reader {
   std::string decoded_;
   std::string_view text_;
   std::vector<std::pair<std::string, uint32_t>> styles_;  // format code (UTF-8) -> cell style
+  size_t stringBytes_ = 0;                                  // text added to the workbook's strings
 };
 
 // The whole file as a workbook with one sheet named `sheetName` (format Csv).

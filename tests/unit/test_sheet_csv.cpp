@@ -179,10 +179,31 @@ TEST(SheetCsv_Values) {
   CHECK(plain.GetSheet(0).GetCell(1, 1, c) && c.value.type == ValueType::String);
 }
 
+TEST(SheetCsv_AnsiCodePage) {
+  // Not UTF-8: read in Windows' ANSI code page, never GetACP() (the app's manifest makes that
+  // UTF-8, which turned "Crème" into "Cr�me" there).
+  const uint32_t system = csv::SystemAnsiCodePage();
+  CHECK(system != 0 && system != 65001);
+  const std::string text = "Cr\xE8me br\xFBl\xE9" "e,\x80" "4\r\n";  // Windows-1252
+  csv::Options o;
+  o.locale = &EnUsLocale();
+  o.ansiCodePage = 1252;
+  csv::Reader a(text, o);
+  CHECK(a.Info().encoding == csv::Encoding::Ansi && a.Info().codePage == 1252);
+  CHECK(a.Text() == "Cr\xC3\xA8me br\xC3\xBBl\xC3\xA9" "e,\xE2\x82\xAC" "4\r\n");
+  o.ansiCodePage = 1251;  // Cyrillic: the same bytes are other letters
+  csv::Reader b(text, o);
+  CHECK(b.Info().codePage == 1251 && b.Text().substr(0, 4) == "Cr\xD0\xB8");  // "Crи"
+  o.ansiCodePage = 12345;  // not a code page: Western
+  csv::Reader c(text, o);
+  CHECK(c.Info().codePage == 1252 && c.Text() == a.Text());
+}
+
 TEST(SheetCsv_Parallel) {
-  // Many rows, parsed by several threads, come out in order and the same as one thread.
+  // Many rows (more than one batch), parsed by several threads, come out in order and the same as
+  // one thread; repeated values share their string.
   std::string text;
-  for (int r = 0; r < 20000; ++r) text += std::to_string(r) + ",\"q" + std::to_string(r) + "\",x" + std::to_string(r % 7) + "\n";
+  for (int r = 0; r < 70000; ++r) text += std::to_string(r) + ",\"q" + std::to_string(r) + "\",x" + std::to_string(r % 7) + "\n";
   csv::Options o;
   o.locale = &EnUsLocale();
   o.threads = 4;
@@ -191,10 +212,13 @@ TEST(SheetCsv_Parallel) {
   csv::Read(text, "S", o, a, sa);
   o.threads = 1;
   csv::Read(text, "S", o, b, sb);
-  CHECK(sa.rowStart.size() == 20000 && sa.lineEnd == csv::LineEnd::LF);
-  for (uint32_t r : {0u, 1u, 4999u, 5000u, 12345u, 19999u}) {
+  CHECK(sa.rowStart.size() == 70000 && sa.lineEnd == csv::LineEnd::LF);
+  for (uint32_t r : {0u, 1u, 4999u, 5000u, 12345u, 19999u, 65535u, 65536u, 69999u}) {
     CHECK(Shown(a, a.GetSheet(0), r, 0, EnUsLocale()) == std::to_string(r));
     CHECK(Shown(a, a.GetSheet(0), r, 1, EnUsLocale()) == "q" + std::to_string(r));
     CHECK(Shown(b, b.GetSheet(0), r, 1, EnUsLocale()) == "q" + std::to_string(r));
+    CHECK(Shown(a, a.GetSheet(0), r, 2, EnUsLocale()) == "x" + std::to_string(r % 7));
   }
+  CHECK(a.GetSheet(0).CellCount() == 210000);
+  CHECK(a.Strings().Size() < 80000);  // 70,000 q's; the x's mostly shared (140,000 unshared)
 }
