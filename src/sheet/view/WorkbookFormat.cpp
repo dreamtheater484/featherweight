@@ -898,6 +898,197 @@ const BorderChoice kBorderChoices[] = {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// Cell styles: Excel's built-in gallery (Office 2013 and later theme)
+
+namespace {
+
+constexpr uint32_t kNoRgb = 0;
+struct BuiltinStyle {
+  std::wstring name;
+  int builtinId = 0;
+  // Font: bold, italic, size (0: keep the default), color (ARGB, else theme `fontTheme` >= 0).
+  bool bold = false, italic = false;
+  double size = 0;
+  uint32_t fontRgb = kNoRgb;
+  int fontTheme = -1;
+  bool major = false;  // the theme's headings font
+  // Fill: ARGB, else theme `fillTheme` >= 0 with `tint`.
+  uint32_t fillRgb = kNoRgb;
+  int fillTheme = -1;
+  double tint = 0;
+  // Borders: every side (all), or the bottom and top only.
+  BorderStyle all = BorderStyle::None, bottom = BorderStyle::None, top = BorderStyle::None;
+  uint32_t borderRgb = kNoRgb;
+  int borderTheme = -1;
+  double borderTint = 0;
+  int numFmt = -1;  // a built-in number format
+};
+
+std::vector<BuiltinStyle> MakeStyles() {
+  std::vector<BuiltinStyle> v;
+  auto add = [&](std::wstring name, int id) -> BuiltinStyle& {
+    v.push_back({});
+    v.back().name = name;
+    v.back().builtinId = id;
+    return v.back();
+  };
+  add(L"Normal", 0);
+  { auto& s = add(L"Good", 26); s.fontRgb = 0xFF006100; s.fillRgb = 0xFFC6EFCE; }
+  { auto& s = add(L"Bad", 27); s.fontRgb = 0xFF9C0006; s.fillRgb = 0xFFFFC7CE; }
+  { auto& s = add(L"Neutral", 28); s.fontRgb = 0xFF9C5700; s.fillRgb = 0xFFFFEB9C; }
+  { auto& s = add(L"Calculation", 22); s.bold = true; s.fontRgb = 0xFFFA7D00; s.fillRgb = 0xFFF2F2F2; s.all = BorderStyle::Thin; s.borderRgb = 0xFF7F7F7F; }
+  { auto& s = add(L"Check cell", 23); s.bold = true; s.fontTheme = 0; s.fillRgb = 0xFFA5A5A5; s.all = BorderStyle::Double; s.borderRgb = 0xFF3F3F3F; }
+  { auto& s = add(L"Explanatory text", 53); s.italic = true; s.fontRgb = 0xFF7F7F7F; }
+  { auto& s = add(L"Input", 20); s.fontRgb = 0xFF3F3F76; s.fillRgb = 0xFFFFCC99; s.all = BorderStyle::Thin; s.borderRgb = 0xFF7F7F7F; }
+  { auto& s = add(L"Linked cell", 24); s.fontRgb = 0xFFFA7D00; s.bottom = BorderStyle::Double; s.borderRgb = 0xFFFF8001; }
+  { auto& s = add(L"Note", 10); s.fillRgb = 0xFFFFFFCC; s.all = BorderStyle::Thin; s.borderRgb = 0xFFB2B2B2; }
+  { auto& s = add(L"Output", 21); s.bold = true; s.fontRgb = 0xFF3F3F3F; s.fillRgb = 0xFFF2F2F2; s.all = BorderStyle::Thin; s.borderRgb = 0xFF3F3F3F; }
+  { auto& s = add(L"Warning text", 11); s.fontRgb = 0xFFFF0000; }
+  { auto& s = add(L"Title", 15); s.size = 18; s.fontTheme = 3; s.major = true; }
+  { auto& s = add(L"Heading 1", 16); s.bold = true; s.size = 15; s.fontTheme = 3; s.bottom = BorderStyle::Thick; s.borderTheme = 4; }
+  { auto& s = add(L"Heading 2", 17); s.bold = true; s.size = 13; s.fontTheme = 3; s.bottom = BorderStyle::Thick; s.borderTheme = 4; s.borderTint = 0.4999; }
+  { auto& s = add(L"Heading 3", 18); s.bold = true; s.size = 11; s.fontTheme = 3; s.bottom = BorderStyle::Medium; s.borderTheme = 4; s.borderTint = 0.3999; }
+  { auto& s = add(L"Heading 4", 19); s.bold = true; s.size = 11; s.fontTheme = 3; }
+  { auto& s = add(L"Total", 25); s.bold = true; s.fontTheme = 1; s.top = BorderStyle::Thin; s.bottom = BorderStyle::Double; s.borderTheme = 4; }
+  static const wchar_t* const kAccents[] = {L"Accent1", L"Accent2", L"Accent3", L"Accent4", L"Accent5", L"Accent6"};
+  for (int a = 0; a < 6; ++a) {
+    static const double kTints[] = {0.7999, 0.5999, 0.3999};
+    static const wchar_t* const kShares[] = {L"20% - ", L"40% - ", L"60% - "};
+    for (int t = 0; t < 3; ++t) {
+      auto& s = add(std::wstring(kShares[t]) + kAccents[a], 30 + a * 4 + t);
+      s.fontTheme = t == 2 ? 0 : 1;
+      s.fillTheme = 4 + a;
+      s.tint = kTints[t];
+    }
+    auto& s = add(kAccents[a], 29 + a * 4);
+    s.fontTheme = 0;
+    s.fillTheme = 4 + a;
+  }
+  { auto& s = add(L"Comma", 3); s.numFmt = 43; }
+  { auto& s = add(L"Comma [0]", 6); s.numFmt = 41; }
+  { auto& s = add(L"Currency", 4); s.numFmt = 44; }
+  { auto& s = add(L"Currency [0]", 7); s.numFmt = 42; }
+  { auto& s = add(L"Percent", 5); s.numFmt = 9; }
+  return v;
+}
+
+const std::vector<BuiltinStyle>& Gallery() {
+  static const std::vector<BuiltinStyle> styles = MakeStyles();
+  return styles;
+}
+
+Color ThemeColor(int theme, double tint) {
+  Color c;
+  c.kind = Color::Kind::Theme;
+  c.value = static_cast<uint32_t>(theme);
+  c.tint = tint;
+  return c;
+}
+
+Color RgbColor(uint32_t argb) {
+  Color c;
+  c.kind = Color::Kind::Rgb;
+  c.value = argb;
+  return c;
+}
+
+}  // namespace
+
+bool WorkbookView::ApplyCellStyle(int index) {
+  const auto& gallery = Gallery();
+  if (!Ready() || index < 0 || index >= static_cast<int>(gallery.size())) return false;
+  const BuiltinStyle& s = gallery[static_cast<size_t>(index)];
+  const Styles& st = book_->GetStyles();
+  // The workbook's own entry for the style, when it has one (Excel's files list the ones used).
+  std::optional<uint32_t> parent;
+  for (const CellStyle& cs : st.CellStyles())
+    if (cs.builtinId == s.builtinId) parent = cs.xf;
+  Font font = st.DefaultFont();
+  if (!st.Fonts().empty()) font = st.Fonts()[0];
+  font.bold = s.bold;
+  font.italic = s.italic;
+  if (s.size > 0) font.size = s.size;
+  if (s.fontRgb != kNoRgb) font.color = RgbColor(s.fontRgb);
+  else if (s.fontTheme >= 0) font.color = ThemeColor(s.fontTheme, 0);
+  if (s.major) {
+    font.name = "Calibri Light";
+    font.scheme = FontScheme::Major;
+  }
+  Fill fill;
+  if (s.fillRgb != kNoRgb || s.fillTheme >= 0) {
+    fill.pattern = PatternType::Solid;
+    fill.fg = s.fillRgb != kNoRgb ? RgbColor(s.fillRgb) : ThemeColor(s.fillTheme, s.tint);
+    fill.bg.kind = Color::Kind::Indexed;
+    fill.bg.value = 64;
+  }
+  Border border;
+  BorderSide side;
+  side.color = s.borderRgb != kNoRgb ? RgbColor(s.borderRgb) : ThemeColor(std::max(0, s.borderTheme), s.borderTint);
+  auto with = [&](BorderStyle style) {
+    BorderSide b = side;
+    b.style = style;
+    return b;
+  };
+  if (s.all != BorderStyle::None) border.left = border.right = border.top = border.bottom = with(s.all);
+  if (s.bottom != BorderStyle::None) border.bottom = with(s.bottom);
+  if (s.top != BorderStyle::None) border.top = with(s.top);
+  const bool normal = s.builtinId == 0;
+  const bool fonts = normal || s.bold || s.italic || s.size > 0 || s.fontRgb != kNoRgb || s.fontTheme >= 0;
+  const bool fills = normal || s.fillRgb != kNoRgb || s.fillTheme >= 0;
+  const bool borders = normal || s.all != BorderStyle::None || s.bottom != BorderStyle::None || s.top != BorderStyle::None;
+  const bool numbers = normal || s.numFmt >= 0;
+  edit::Editor& ed = Ed();
+  const uint32_t fontId = fonts ? ed.AddFont(font) : 0, fillId = fills ? ed.AddFill(fill) : 0;
+  const uint32_t borderId = borders ? ed.AddBorder(border) : 0;
+  const std::u16string name(s.name.begin(), s.name.end());
+  return ChangeFormat(name, [&](Xf& x) {
+    if (parent) x.parent = *parent;
+    if (fonts) x.font = fontId, x.applyFont = true;
+    if (fills) x.fill = fillId, x.applyFill = true;
+    if (borders) x.border = borderId, x.applyBorder = true;
+    if (numbers) x.numFmt = s.numFmt >= 0 ? static_cast<uint32_t>(s.numFmt) : 0, x.applyNumFmt = s.numFmt >= 0;
+    if (normal) x.alignment = Alignment{}, x.applyAlignment = false;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// The format painter
+
+void WorkbookView::PaintFormats() {
+  if (!painter_ || !Ready()) return;
+  const Painter p = *painter_;
+  painter_.reset();
+  const Sheet* from = nullptr;
+  for (size_t i = 0; i < book_->SheetCount(); ++i)
+    if (&book_->GetSheet(i) == p.sheet) from = p.sheet;
+  if (!from) return;
+  const Range src = p.range;
+  Range to = Selected();
+  const uint32_t h = src.lastRow - src.firstRow + 1, w = src.lastCol - src.firstCol + 1;
+  // One cell picked: the copied cells' shape from there, as Excel paints.
+  if (to.firstRow == to.lastRow && to.firstCol == to.lastCol) {
+    to.lastRow = std::min<uint32_t>(kMaxRows - 1, to.firstRow + h - 1);
+    to.lastCol = std::min<uint32_t>(kMaxCols - 1, to.firstCol + w - 1);
+  }
+  if (uint64_t{to.lastRow - to.firstRow + 1} * (to.lastCol - to.firstCol + 1) > 200000) {
+    host_.ViewMessage(BannerKind::Warning, L"That's more cells than the format painter paints at once.");
+    return;
+  }
+  const int sheet = static_cast<int>(sheet_);
+  edit::EditGroup group(Ed(), u"Format Painter");
+  edit::Result r;
+  for (uint32_t row = to.firstRow; r && row <= to.lastRow; ++row)
+    for (uint32_t col = to.firstCol; r && col <= to.lastCol; ++col) {
+      const uint32_t style = from->StyleAt(src.firstRow + (row - to.firstRow) % h, src.firstCol + (col - to.firstCol) % w);
+      if (Current().StyleAt(row, col) != style) r = Ed().SetStyle(sheet, Range::Cell(row, col), style);
+    }
+  if (EditRefused(r)) return;
+  group.done = true;
+  Select({to.firstRow, to.firstCol}, {to.lastRow, to.lastCol}, false);
+  host_.ViewInvalidate();
+}
+
 bool WorkbookView::FormatCommandState(int cmd, CommandState& s) {
   const bool cells = Ready() && !preview_ && !ChartSheet();
   const Styles* st = Ready() ? &book_->GetStyles() : nullptr;
@@ -939,6 +1130,9 @@ bool WorkbookView::FormatCommandState(int cmd, CommandState& s) {
     case CmdNumScientific: return set(L"Scientific format", L"Ctrl+Shift+6");
     case CmdBorderOutline: return set(L"Outline border", L"Ctrl+Shift+7");
     case CmdBorderRemove: return set(L"Remove borders", L"Ctrl+Shift+-");
+    case CmdCellStyles: return set(L"Cell styles", L"");
+    case CmdFormatPainter: return set(L"Format painter: copy these cells' formats to the cells you select next", L"",
+                                      painter_.has_value());
   }
   return false;
 }
@@ -1027,6 +1221,11 @@ bool WorkbookView::FormatCommand(int cmd) {
     case CmdNumScientific: ApplyNumberCode(L"0.00E+00"); break;
     case CmdBorderOutline: ApplyBorders(1, thin); break;
     case CmdBorderRemove: ApplyBorders(0, thin); break;
+    case CmdFormatPainter:
+      if (painter_) painter_.reset();
+      else painter_ = Painter{&Current(), Selected()};
+      host_.ViewStateChanged();
+      break;
   }
   return true;
 }
@@ -1158,6 +1357,19 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
     if (v.index >= 0 && v.index < 4) MergeCells(v.index);
   };
   m.left.push_back(merge);
+  // Cell styles and the format painter.
+  ToolItem styles;
+  styles.kind = ToolKind::Dropdown;
+  styles.cmd = CmdCellStyles;
+  styles.width = 92;
+  styles.priority = 2;
+  styles.maxRows = 20;
+  styles.text = L"Styles";
+  styles.tooltip = L"Cell styles";
+  for (const BuiltinStyle& s : Gallery()) styles.choices.push_back(s.name);
+  styles.onChange = [this](const ToolValue& v) { ApplyCellStyle(v.index); };
+  m.left.push_back(styles);
+  m.left.push_back(toggle(CmdFormatPainter, icon::Brush, 3));
   // Number formats, with the decimals and the panel's Number page.
   ToolItem number;
   number.kind = ToolKind::Dropdown;

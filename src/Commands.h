@@ -341,4 +341,5 @@ enum Cmd : int {
   CmdNumScientific,       // Ctrl+Shift+6
   CmdBorderOutline,       // Ctrl+Shift+7
   CmdBorderRemove,        // Ctrl+Shift+-
+  CmdCellStyles,          // the toolbar's built-in cell styles
 };

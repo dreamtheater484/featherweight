@@ -174,7 +174,12 @@ bool WorkbookView::OnKeyDown(UINT vk, UINT mods) {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   // Enter after Tabs returns to the Tabs' first column; any other key forgets it.
   if (vk != VK_TAB && vk != VK_RETURN && vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU) tabStartCol_ = UINT32_MAX;
-  // Esc takes the border off the copied cells.
+  // Esc puts the format painter down, and takes the border off the copied cells.
+  if (vk == VK_ESCAPE && painter_) {
+    painter_.reset();
+    host_.ViewStateChanged();
+    return true;
+  }
   if (vk == VK_ESCAPE && clip_) {
     clip_.reset();
     host_.ViewInvalidate();
@@ -500,9 +505,11 @@ void WorkbookView::OnMouseUp(int x, int y, int button, UINT mods) {
     host_.ViewInvalidate();
     return;
   }
-  const bool follow = pendingLink_ && mouse_ == Mouse::Cells;
+  const bool follow = pendingLink_ && mouse_ == Mouse::Cells && !painter_;
+  const bool paint = painter_ && mouse_ == Mouse::Cells;  // the format painter's cells are chosen
   mouse_ = Mouse::None;
   pendingLink_ = false;
+  if (paint) PaintFormats();
   if (follow) {
     auto cell = CellAt(x, y);
     if (cell && *cell == active_)

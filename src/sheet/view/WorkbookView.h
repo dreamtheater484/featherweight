@@ -365,6 +365,14 @@ class WorkbookView : public PagedView {
   void AddFormatToolbar(ToolbarModel& m);
   D2D1_COLOR_F lastFontColor_{0.75f, 0, 0, 1}, lastFill_{1, 1, 0, 1};  // the color buttons' main parts
   int lastBorders_ = 0;  // the borders button's choice its main part repeats
+  bool ApplyCellStyle(int index);  // one of Excel's built-in cell styles (WorkbookFormat.cpp's list)
+  // The format painter: the formats copied, painted on the next selection made with the mouse.
+  struct Painter {
+    const Sheet* sheet = nullptr;
+    Range range;
+  };
+  std::optional<Painter> painter_;
+  void PaintFormats();
   // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
   bool GridCommand(int cmd);
   bool GridCommandState(int cmd, CommandState& s);
