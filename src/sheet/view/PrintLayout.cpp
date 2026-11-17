@@ -11,16 +11,19 @@ namespace fw::sheet::view {
 
 namespace {
 
+constexpr float kHeadingLine = 1;  // the printed headings' lines, points
+
 // Printed columns and rows for the objects layer: points at 100 % from A1.
 class PrintSheetLayout : public SheetLayout {
  public:
-  PrintSheetLayout(const std::vector<double>& colX, const Grid& grid) : colX_(colX), grid_(grid) {}
+  PrintSheetLayout(const std::vector<double>& colX, const Grid& grid, float rowK) : colX_(colX), grid_(grid), rowK_(rowK) {}
   double ColumnLeft(uint32_t col) const override { return colX_[std::min<uint32_t>(col, kMaxCols)]; }
-  double RowTop(uint32_t row) const override { return grid_.PrintY(0, std::min<uint32_t>(row, kMaxRows)); }
+  double RowTop(uint32_t row) const override { return grid_.PrintY(0, std::min<uint32_t>(row, kMaxRows)) * rowK_; }
 
  private:
   const std::vector<double>& colX_;
   const Grid& grid_;
+  float rowK_;
 };
 
 // Cells placed on a page: sheet points from the block's top-left at (x0, y0). A right-to-left
@@ -28,14 +31,14 @@ class PrintSheetLayout : public SheetLayout {
 class PageGeometry : public Geometry {
  public:
   PageGeometry(const Grid& grid, const std::vector<double>& colX, uint32_t row0, uint32_t col0, float x0, float y0,
-               float widthScale_, float mirror)
-      : grid_(grid), colX_(colX), row0_(row0), col0_(col0), x0_(x0), y0_(y0), mirror_(mirror) {
+               float widthScale_, float mirror, float rowK)
+      : grid_(grid), colX_(colX), row0_(row0), col0_(col0), x0_(x0), y0_(y0), mirror_(mirror), rowK_(rowK) {
     rtl = mirror != 0;
     pt = 1;
     px = 0.75f;
     line = 0.75f;
     widthScale = widthScale_;
-    rowPx = static_cast<float>(Grid::kPrintRowPt);
+    rowPx = static_cast<float>(Grid::kPrintRowPt * rowK);
     centered = true;
     padStart = 2.4f;
     padEnd = 0.75f;  // after the gridline's 0.75
@@ -43,8 +46,8 @@ class PageGeometry : public Geometry {
   }
   float Left(uint32_t c) const override { return rtl ? mirror_ - x0_ - X(c + 1) : x0_ + X(c); }
   float Right(uint32_t c) const override { return rtl ? mirror_ - x0_ - X(c) : x0_ + X(c + 1); }
-  float Top(uint32_t r) const override { return y0_ + grid_.PrintY(row0_, r); }
-  float Bottom(uint32_t r) const override { return y0_ + grid_.PrintY(row0_, r + 1); }
+  float Top(uint32_t r) const override { return y0_ + grid_.PrintY(row0_, r) * rowK_; }
+  float Bottom(uint32_t r) const override { return y0_ + grid_.PrintY(row0_, r + 1) * rowK_; }
 
  private:
   float X(uint32_t c) const {
@@ -53,7 +56,7 @@ class PageGeometry : public Geometry {
   const Grid& grid_;
   const std::vector<double>& colX_;
   uint32_t row0_, col0_;
-  float x0_, y0_, mirror_;
+  float x0_, y0_, mirror_, rowK_;
 };
 
 bool PaperFromText(const std::string& s, float& pts) {
@@ -139,16 +142,44 @@ float PrintLayout::ColsWidth(uint32_t first, uint32_t last) const {
 
 float PrintLayout::ColPt(uint32_t col, float scale) {
   const int px = grid_.ColWidth(col);
-  if (px <= 0) return 0;
-  const int pct = static_cast<int>(std::lround(scale * 100));
+  return px <= 0 ? 0 : PxPt(px, scale);
+}
+
+double PrintLayout::PrintDigit(int pct) {
   auto it = digits_.find(pct);
   if (it == digits_.end()) {
     const Font& base = book_.GetStyles().DefaultFont();
     it = digits_.emplace(pct, text_.Measure().DigitAt(base, base, Grid::kPrintDpi * pct / 100)).first;
   }
-  const double digit = it->second, mdw = grid_.MaxDigit(), pad = Grid::kPrintPad * pct / 100;
-  const double dots = px < mdw + 5 ? px * (digit + pad) / (mdw + 5) : (px - 5.0) / mdw * digit + pad;
+  return it->second;
+}
+
+float PrintLayout::PxPt(double px, float scale) {
+  const int pct = static_cast<int>(std::lround(scale * 100));
+  const double digit = PrintDigit(pct), mdw = grid_.MaxDigit(), pad = Grid::kPrintPad * pct / 100;
+  // In proportion to the screen's pixels, at what a default column (8.43 digits) prints at: 426.7
+  // dots for 64 pixels of Calibri 11, 1213.5 for 182.
+  const double px0 = mdw * 59 / 7 + 5;
+  const double dots = px * ((px0 - 5) / mdw * digit + pad) / px0;
   return static_cast<float>(dots * Grid::kPrintDotPt * 100 / pct);
+}
+
+float PrintLayout::HeadingsWidth(uint32_t lastRow, float scale) {
+  const int digits = std::max(3, static_cast<int>(std::to_string(lastRow + 1).size()));
+  // The printer's digits and a column's pad (171.6 dots for three at 100 %).
+  const int pct = static_cast<int>(std::lround(scale * 100));
+  const double dots = digits * PrintDigit(pct) + Grid::kPrintPad * pct / 100;
+  return static_cast<float>(kHeadingLine / 2 + dots * Grid::kPrintDotPt * 100 / pct);
+}
+
+float PrintLayout::HeadingsHeight(float k) const {
+  return static_cast<float>(kHeadingLine / 2 + grid_.DefaultRowPx() * Grid::kPrintRowPt * k);
+}
+
+float PrintLayout::RowK(float scale) {
+  const int pct = static_cast<int>(std::lround(scale * 100));
+  if (pct == 100 || pct <= 0) return 1;
+  return static_cast<float>(std::floor(72.0 * pct / 100 + 1e-9) / (72.0 * pct / 100));
 }
 
 float PrintLayout::ColsAt(uint32_t first, uint32_t last, float scale) {
@@ -157,8 +188,8 @@ float PrintLayout::ColsAt(uint32_t first, uint32_t last, float scale) {
   return w;
 }
 
-float PrintLayout::RowsHeight(uint32_t first, uint32_t last) const {
-  return last < first ? 0 : grid_.PrintY(first, last + 1);
+float PrintLayout::RowsAt(uint32_t first, uint32_t last, float k) const {
+  return last < first ? 0 : grid_.PrintY(first, last + 1) * k;
 }
 
 uint32_t PrintLayout::Reach(const CellInfo& c, uint32_t past) {
@@ -173,7 +204,7 @@ uint32_t PrintLayout::Reach(const CellInfo& c, uint32_t past) {
     return c.col;
   const int widthPx = static_cast<int>(std::lround(grid_.ColWidth(c.col) * grid_.PrintColPt() / kPtPerPx));
   if (widthPx <= 0) return c.col;
-  const CellText::Layout& l = text_.Get(sheet_, c, widthPx);
+  const CellText::Layout& l = text_.Get(sheet_, c, widthPx, {}, grid_.ColWidth(c.col));
   if (l.lines.empty() || l.wrapped || l.stacked || l.shown.number || l.shown.fill) return c.col;
   if (l.align != HAlign::Left && l.align != HAlign::Center && l.align != HAlign::CenterContinuous) return c.col;
   // How far its ink runs on paper: the text in the font's own widths (the printer's layout, which
@@ -216,13 +247,13 @@ uint32_t PrintLayout::SpillEnd(const Range& used) {
 }
 
 draw::Rect PrintLayout::SheetRect(const Range& r) const {
-  return {static_cast<float>(colX_[std::min<uint32_t>(r.firstCol, kMaxCols)]), grid_.PrintY(0, r.firstRow),
+  return {static_cast<float>(colX_[std::min<uint32_t>(r.firstCol, kMaxCols)]), grid_.PrintY(0, r.firstRow) * rowK_,
           static_cast<float>(colX_[std::min<uint32_t>(r.lastCol + 1, kMaxCols)]),
-          grid_.PrintY(0, std::min<uint32_t>(r.lastRow + 1, kMaxRows))};
+          grid_.PrintY(0, std::min<uint32_t>(r.lastRow + 1, kMaxRows)) * rowK_};
 }
 
 void PrintLayout::PlaceObjects() {
-  if (info_.objects) info_.objects->Place(PrintSheetLayout(colX_, grid_));
+  if (info_.objects) info_.objects->Place(PrintSheetLayout(colX_, grid_, rowK_));
 }
 
 std::optional<std::pair<uint32_t, uint32_t>> PrintLayout::ObjectsEnd() const {
@@ -237,7 +268,7 @@ std::optional<std::pair<uint32_t, uint32_t>> PrintLayout::ObjectsEnd() const {
   // The column and row holding the far edge (a picture ending on a column's left edge isn't in it).
   const auto c = std::lower_bound(colX_.begin(), colX_.end(), right) - colX_.begin();
   const uint32_t col = static_cast<uint32_t>(std::clamp<ptrdiff_t>(c - 1, 0, kMaxCols - 1));
-  const uint32_t row = std::min(kMaxRows - 1, grid_.RowAt(static_cast<int64_t>(std::ceil(bottom / Grid::kPrintRowPt)) - 1));
+  const uint32_t row = std::min(kMaxRows - 1, grid_.RowAt(static_cast<int64_t>(std::ceil(bottom / (Grid::kPrintRowPt * rowK_))) - 1));
   return std::make_pair(row, col);
 }
 
@@ -346,15 +377,16 @@ void PrintLayout::Paginate() {
   const PageMargins& m = ps.margins;
   const float availW = std::max(36.f, paperW_ - static_cast<float>((m.left + m.right) * 72));
   const float availH = std::max(36.f, paperH_ - static_cast<float>((m.top + m.bottom) * 72));
-  const float titleH = titleRows_ ? RowsHeight(titleRows_->first, titleRows_->second) : 0;
   const bool fit = sheet_.Props().fitToPage;
 
   // Bands of columns (or rows) that fit across a page at a scale; manual breaks start new ones.
+  uint32_t lastRow = 0;  // the headings' row numbers are as wide as the last one's
+  for (const Range& r : areas_) lastRow = std::max(lastRow, r.lastRow);
   auto bands = [&](uint32_t first, uint32_t last, bool cols, float scale, bool manual) {
     std::vector<std::pair<uint32_t, uint32_t>> out;
     const std::vector<PageBreak>& breaks = cols ? sheet_.ColBreaks() : sheet_.RowBreaks();
     auto size = [&](uint32_t i) {
-      return cols ? ColPt(i, scale) : grid_.PrintY(i, i + 1);
+      return cols ? ColPt(i, scale) : grid_.PrintY(i, i + 1) * RowK(scale);
     };
     auto manualAt = [&](uint32_t i) {
       if (!manual) return false;
@@ -369,7 +401,9 @@ void PrintLayout::Paginate() {
       if (start > last) break;
       const auto& titles = cols ? titleCols_ : titleRows_;
       const float titleW = cols && titles ? ColsAt(titles->first, titles->second, scale) : 0;
-      const float room = (cols ? availW : availH) / scale - (titles && start > titles->second ? (cols ? titleW : titleH) : 0);
+      const float heads = !ps.headings ? 0 : cols ? HeadingsWidth(lastRow, scale) : HeadingsHeight(RowK(scale));
+      const float room =
+          (cols ? availW : availH) / scale - heads - (titles && start > titles->second ? (cols ? titleW : RowsAt(titles->first, titles->second, RowK(scale))) : 0);
       float used = 0;
       uint32_t end = start;
       while (end <= last) {
@@ -407,6 +441,7 @@ void PrintLayout::Paginate() {
     }
     scale_ = pct / 100.f;
   }
+  rowK_ = RowK(scale_);
   colX_.assign(kMaxCols + 1, 0);
   for (uint32_t c = 0; c < kMaxCols; ++c) colX_[c + 1] = colX_[c] + ColPt(c, scale_);
   if (scale_ != 1) PlaceObjects();
@@ -562,9 +597,8 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
 
   // Headings: row numbers and column letters, in the default font.
   const Font& base = book_.GetStyles().DefaultFont();
-  const float headH = ps.headings ? static_cast<float>(grid_.DefaultRowPx() * Grid::kPrintRowPt) : 0;
-  const int digits = static_cast<int>(std::to_string(page.body.lastRow + 1).size());
-  const float headW = ps.headings ? (std::max(digits, 1) * grid_.MaxDigit() + 8) * 0.75f : 0;
+  const float headH = ps.headings ? HeadingsHeight(rowK_) : 0;
+  const float headW = ps.headings ? HeadingsWidth(page.body.lastRow, scale_) : 0;
 
   const float tW = page.titleCols ? ColsWidth(titleCols_->first, titleCols_->second) : 0;
   const float tH = page.titleRows ? RowsHeight(titleRows_->first, titleRows_->second) : 0;
@@ -593,7 +627,7 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   p.Transform(draw::Matrix::Scale(scale_, scale_) * draw::Matrix::Translate(ox, oy));
   auto block = [&](uint32_t r0, uint32_t r1, uint32_t c0, uint32_t c1, float x, float y, float w, float h) {
     if (w <= 0 || h <= 0) return;
-    PageGeometry g(grid_, colX_, r0, c0, x, y, widthScale, rtl ? width : 0);
+    PageGeometry g(grid_, colX_, r0, c0, x, y, widthScale, rtl ? width : 0, rowK_);
     p.Save();
     // A little room around it for the borders on its edges.
     const float cl = rtl ? width - x - w : x;
@@ -622,22 +656,25 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   block(page.body.firstRow, page.body.lastRow, page.body.firstCol, page.body.lastCol, x1, y1, bodyW, bodyH);
 
   if (ps.headings) {
-    // Boxes with the column letters across the top and the row numbers down the side.
+    // Boxes with the column letters across the top and the row numbers down the side: 1 pt lines
+    // centred on their edges, the text centred on a cell's baseline.
     const draw::Brush ink = draw::Brush::Solid({0, 0, 0, 1});
-    const draw::Brush shade = draw::Brush::Solid({0.85f, 0.85f, 0.85f, 1});
     text::Fonts& fonts = text_.Fonts();
     text::TextStyle style;
     style.family = FontMeasure::Family(base, base);
     style.size = static_cast<float>(FontMeasure::Size(base, base));
+    const float descent = static_cast<float>(text_.Measure().Of(base, base).descent * 0.797);
+    const float h = kHeadingLine / 2;
     auto label = [&](const std::wstring& s, float l, float t, float r, float b) {
       if (rtl) {
         const float l0 = l;
         l = width - r;
         r = width - l0;
       }
-      p.FillRect({l, t, r, b}, shade);
-      p.FillRect({l, b - 0.5f, r, b}, ink);
-      p.FillRect(rtl ? draw::Rect{l, t, l + 0.5f, b} : draw::Rect{r - 0.5f, t, r, b}, ink);
+      p.FillRect({l - h, t - h, r + h, t + h}, ink);
+      p.FillRect({l - h, b - h, r + h, b + h}, ink);
+      p.FillRect({l - h, t - h, l + h, b + h}, ink);
+      p.FillRect({r - h, t - h, r + h, b + h}, ink);
       text::Paragraph para;
       para.text = s;
       para.runs.push_back({static_cast<uint32_t>(s.size()), &style});
@@ -646,7 +683,7 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
       if (lines.empty()) return;
       const text::Line& ln = lines.front();
       const float w = ln.contentRight - ln.contentLeft;
-      const float baseline = (t + b) / 2 + (ln.ascent - ln.descent) / 2;
+      const float baseline = b - descent;
       for (const text::GlyphPiece& g : ln.pieces)
         p.DrawGlyphs({(l + r - w) / 2 + g.OriginX() - ln.contentLeft, baseline - g.rise}, g.Run(), ink);
     };
@@ -654,17 +691,17 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
       for (uint32_t c = c0; c <= c1; ++c) {
         if (grid_.ColHidden(c)) continue;
         const float l = x + ColsWidth(c0, c - 1);
-        label(Utf8ToWide(ColumnName(c)), l, 0, l + ColsWidth(c, c), headH);
+        label(Utf8ToWide(ColumnName(c)), l, h, l + ColsWidth(c, c), headH);
       }
     };
     auto rows = [&](uint32_t r0, uint32_t r1, float y) {
       for (uint32_t r = r0; r <= r1; ++r) {
         if (grid_.RowHidden(r)) continue;
-        const float t = y + grid_.PrintY(r0, r);
-        label(std::to_wstring(r + 1), 0, t, headW, t + grid_.PrintY(r, r + 1));
+        const float t = y + grid_.PrintY(r0, r) * rowK_;
+        label(std::to_wstring(r + 1), h, t, headW, t + grid_.PrintY(r, r + 1) * rowK_);
       }
     };
-    label(L"", 0, 0, headW, headH);
+    label(L"", h, h, headW, headH);
     if (page.titleCols) cols(titleCols_->first, titleCols_->second, headW);
     cols(page.body.firstCol, page.body.lastCol, x1);
     if (page.titleRows) rows(titleRows_->first, titleRows_->second, headH);

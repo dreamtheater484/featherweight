@@ -99,6 +99,7 @@ class WorkbookView : public PagedView {
   PrintOutcome PrintToFile(const std::wstring& path, std::wstring& message);
   // Each printed page as a PNG (page-1.png...) in `dir` at `dpi`, for comparing with Excel's PDFs.
   int RenderPagesForTesting(const std::wstring& dir, float dpi);
+  bool ExportWorkbookPdfForTesting(const std::wstring& path);  // every sheet's pages, one PDF
   // The cell shown at a point, for tests; nullopt outside the cells.
   std::optional<CellAddr> CellAtForTesting(int x, int y) const { return CellAt(x, y); }
 

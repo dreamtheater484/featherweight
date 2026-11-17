@@ -30,6 +30,7 @@ struct Shown {
   bool center = false;  // TRUE, FALSE and errors: centered in General
   bool overflow = false;  // "####"
   bool fill = false;      // a repeated character fills the cell (`*x`): never runs into the next
+  uint32_t fillAt = 0, fillCount = 0;  // where the fill's characters are in `text`, and how many
 };
 
 // What a table's style and conditional formats change in a cell's text, over its own format.
@@ -61,6 +62,7 @@ class CellText {
     uint32_t color = 0xFF000000;
     bool hidden = false;  // a pad: takes room, isn't drawn
     bool underline = false, doubleUnderline = false, strike = false;
+    bool accounting = false;  // an accounting underline: lower, and across the cell
     float underlinePos = 0, underlineThick = 0, strikePos = 0, strikeThick = 0;  // points
   };
   struct Layout {
@@ -73,16 +75,19 @@ class CellText {
     float ascent = 10.5f, descent = 3;  // the first line's, as Excel places it (GDI pixels as points)
     float size = 11;       // the font size, points
     int widthPx = -1;      // the width it was made for
+    int textPx = -1;       // and the width its text was decided at
     TextLook look;         // and the look
     bool wrapped = false, stacked = false;
   };
   // The layout for a cell `widthPx` wide (wrapped text breaks inside it), made or from the cache.
-  const Layout& Get(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look = {});
+  // `textPx`: the screen's width, which decides what the cell shows ("####", how General
+  // shortens) when printing lays it out wider; -1: `widthPx`. Excel prints the screen's text.
+  const Layout& Get(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look = {}, int textPx = -1);
   // Forgets the cache: another sheet, recalculated values, other column widths.
   void Clear() { cache_.clear(); }
 
  private:
-  void Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look, Layout& out);
+  void Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look, int textPx, Layout& out);
   // Most cells' text is one line of Latin characters in one font. Cells ask for no kerning or
   // ligatures, so shaping it is each character's glyph and advance: a table per face has them,
   // where text::Layout's analysis and shaping cost ten times as much. False (nothing done) for
