@@ -272,6 +272,14 @@ int RunSheetEditBench(const Options& options) {
     sh::edit::Editor ed(*book);
     std::vector<double> insert, undo;
     std::string refused;
+    // Row 50,001's A before, after the insert (moved down a row) and after the undo (back): what
+    // was timed must have happened.
+    const sh::Sheet& sheet = book->GetSheet(0);
+    auto valueAt = [&](uint32_t row) {
+      const sh::Value v = sheet.GetValue(row, 0);
+      return v.type == sh::ValueType::Number ? v.number : -1.0;
+    };
+    const double before = valueAt(50000);
     for (int i = 0; i < runs && refused.empty(); ++i) {
       auto t = Clock::now();
       sh::edit::Result r = ed.InsertRows(0, 50000, 1);
@@ -280,8 +288,12 @@ int RunSheetEditBench(const Options& options) {
         break;
       }
       insert.push_back(Since(t));
+      if (valueAt(50000) != -1.0 || valueAt(50001) != before)
+        return std::fprintf(stderr, "Inserting a row at 50,001 didn't move the cells below it.\n"), 1;
       t = Clock::now();
-      ed.Undo(1);
+      r = ed.Undo(1);
+      if (!r.ok || valueAt(50000) != before)
+        return std::fprintf(stderr, "Undoing the inserted row didn't bring the cells back.\n"), 1;
       undo.push_back(Since(t));
     }
     if (refused.empty()) {
