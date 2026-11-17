@@ -289,6 +289,10 @@ class WorkbookView : public PagedView {
   bool ChartSheet() const { return Objects() && Objects()->IsChartSheet(); }
   void PlaceObjects();
   void DrawNote(ID2D1DeviceContext* dc);
+  // Formulas that kept their cached value (a function the engine can't calculate yet): a small
+  // gray mark in the cell's top left corner; the status bar says why for the active cell.
+  void DrawStale(gfx::Canvas& c);
+  bool Stale(uint32_t row, uint32_t col) const;
   std::optional<CellAddr> note_;  // the cell whose note shows while the mouse is over it
 
   // Conditional formats: each sheet's rules, made when it is first painted if it has any, with the

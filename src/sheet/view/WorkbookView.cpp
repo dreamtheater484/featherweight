@@ -472,6 +472,7 @@ void WorkbookView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
     DrawSheetTabs(c);
   } else if (Ready()) {
     DrawGrid(c, dc);
+    DrawStale(c);
     DrawNote(dc);
     DrawHeaders(c);
     DrawOutline(c);
@@ -540,6 +541,41 @@ void WorkbookView::DrawGrid(Canvas& c, ID2D1DeviceContext* dc) {
     c.Fill({x, cells_.top, x + 1, cells_.bottom}, edge);
   }
   if (const int fh = FrozenHeightPx(); fh > 0) c.Fill({cells_.left, cells_.top + fh - 1, cells_.right, cells_.top + fh}, edge);
+}
+
+bool WorkbookView::Stale(uint32_t row, uint32_t col) const {
+  return calc_ && calc_->engine().StaleCount() > 0 &&
+         calc_->engine().Stale(static_cast<int>(sheet_), static_cast<int32_t>(row), static_cast<int32_t>(col));
+}
+
+void WorkbookView::DrawStale(Canvas& c) {
+  if (!calc_ || calc_->engine().StaleCount() == 0) return;
+  const double k = K();
+  const float u = static_cast<float>(std::max(1.0, std::floor(k + 0.01)));
+  const D2D1_COLOR_F gray = Rgb(0x808080);
+  for (const Pane& pane : Panes()) {
+    if (pane.rc.right <= pane.rc.left || pane.rc.bottom <= pane.rc.top) continue;
+    Range area;
+    area.firstRow = std::max(pane.row0, grid_.RowAt(static_cast<int64_t>(pane.sy)));
+    area.lastRow = std::min(std::min(pane.row1, kMaxRows) - 1,
+                            grid_.RowAt(static_cast<int64_t>(pane.sy + (pane.rc.bottom - pane.rc.top) / k)));
+    area.firstCol = std::max(pane.col0, grid_.ColAt(static_cast<int64_t>(pane.sx)));
+    area.lastCol = std::min(std::min(pane.col1, kMaxCols) - 1,
+                            grid_.ColAt(static_cast<int64_t>(pane.sx + (pane.rc.right - pane.rc.left) / k)));
+    if (area.firstRow > area.lastRow || area.firstCol > area.lastCol) continue;
+    c.PushClip(RectF(pane.rc));
+    Current().ForEachCell(area, [&](const CellInfo& cell) {
+      if (!cell.hasFormula || !Stale(cell.row, cell.col)) return true;
+      const D2D1_RECT_F r = CellRect(pane, cell.row, cell.col, cell.row, cell.col);
+      // A small triangle in the corner where the text starts.
+      for (int i = 0; i < 5; ++i) {
+        const float y = r.top + 1 + i * u, w = (5 - i) * u;
+        c.Fill(rtl_ ? D2D1::RectF(r.right - 1 - w, y, r.right - 1, y + u) : D2D1::RectF(r.left + 1, y, r.left + 1 + w, y + u), gray);
+      }
+      return true;
+    });
+    c.PopClip();
+  }
 }
 
 void WorkbookView::DrawNote(ID2D1DeviceContext* dc) {
