@@ -86,6 +86,10 @@ namespace {
 constexpr std::string_view kDecl = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n";
 constexpr std::string_view kRelNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 constexpr std::string_view kRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+// Strict Open XML (ISO/IEC 29500 Strict) names the same things in its own namespaces.
+constexpr std::string_view kRelNsStrict = "http://purl.oclc.org/ooxml/officeDocument/relationships";
+constexpr std::string_view kRelTypeStrict = "http://purl.oclc.org/ooxml/officeDocument/relationships/";
+constexpr std::string_view kMainNsStrict = "http://purl.oclc.org/ooxml/spreadsheetml/main";
 constexpr std::string_view kSheetCt = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
 constexpr std::string_view kStringsCt = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
 // The workbook part's content type for each format.
@@ -366,6 +370,7 @@ std::string ViewsXml(const Sheet& s, const PartText& t, const std::string& p, bo
 std::string LinksXml(const Sheet& s, const PartText& t, const std::string& p) {
   if (s.Hyperlinks().empty()) return {};
   std::string r = DeclaredPrefix(t.rootStart, kRelNs);
+  if (r.empty()) r = DeclaredPrefix(t.rootStart, kRelNsStrict);
   std::string out = "<" + p + "hyperlinks>";
   for (const Hyperlink& h : s.Hyperlinks()) {
     out += "<" + p + "hyperlink" + AttrXml("ref", RangeName(h.ref));
@@ -398,9 +403,10 @@ PartText EditedText(const Sheet& s, uint32_t pieces, bool active) {
 }
 
 // A new sheet's whole part around its cells.
-PartText NewSheetText(const Sheet& s, bool active) {
+PartText NewSheetText(const Sheet& s, bool active, bool strict) {
   PartText t;
-  t.rootStart = "<worksheet xmlns=\"" + std::string(kMainNs) + "\" xmlns:r=\"" + std::string(kRelNs) + "\">";
+  t.rootStart = "<worksheet xmlns=\"" + std::string(strict ? kMainNsStrict : kMainNs) + "\" xmlns:r=\"" +
+                std::string(strict ? kRelNsStrict : kRelNs) + "\">";
   t.beforeData = DimensionXml(s, "") + ViewsXml(s, t, "", active) + FormatPrXml(s, t, "") + ColsXml(s, "");
   t.dataStart = "<sheetData>";
   t.hasData = true;
@@ -472,10 +478,10 @@ constexpr std::string_view kBorderStyles[] = {
     "none", "thin", "medium", "dashed", "dotted", "thick", "double", "hair", "mediumDashed", "dashDot",
     "mediumDashDot", "dashDotDot", "mediumDashDotDot", "slantDashDot"};
 
+// A side with no line keeps its color when it has one (files from other programs write them so).
 std::string SideXml(std::string_view name, const BorderSide& s) {
   std::string out = "<" + std::string(name);
-  if (s.style == BorderStyle::None) return out + "/>";
-  out += AttrXml("style", kBorderStyles[static_cast<size_t>(s.style)]);
+  if (s.style != BorderStyle::None) out += AttrXml("style", kBorderStyles[static_cast<size_t>(s.style)]);
   if (!s.color.IsSet()) return out + "/>";
   return out + "><color" + ColorAttrs(s.color) + "/></" + std::string(name) + ">";
 }
@@ -486,8 +492,8 @@ std::string BorderXml(const Border& b) {
   if (b.diagonalDown) out += AttrXml("diagonalDown", "1");
   out += ">" + SideXml("left", b.left) + SideXml("right", b.right) + SideXml("top", b.top) + SideXml("bottom", b.bottom) +
          SideXml("diagonal", b.diagonal);
-  if (b.vertical.style != BorderStyle::None) out += SideXml("vertical", b.vertical);
-  if (b.horizontal.style != BorderStyle::None) out += SideXml("horizontal", b.horizontal);
+  if (b.vertical.style != BorderStyle::None || b.vertical.color.IsSet()) out += SideXml("vertical", b.vertical);
+  if (b.horizontal.style != BorderStyle::None || b.horizontal.color.IsSet()) out += SideXml("horizontal", b.horizontal);
   return out + "</border>";
 }
 
@@ -608,10 +614,10 @@ Status StylesPart(const Workbook& book, std::vector<uint8_t>& out) {
 
 // ---------- Shared strings ----------
 
-std::string StringsXml(const StringTable& table) {
+std::string StringsXml(const StringTable& table, bool strict) {
   std::string out;
   if (table.Part().rootStart.empty()) {  // the workbook had none
-    out = std::string(kDecl) + "<sst xmlns=\"" + std::string(kMainNs) + "\"" +
+    out = std::string(kDecl) + "<sst xmlns=\"" + std::string(strict ? kMainNsStrict : kMainNs) + "\"" +
           AttrXml("uniqueCount", std::to_string(table.Size())) + ">";
     for (uint32_t id = 0; id < table.Size(); ++id) {
       out += (table.Flags(id) & StringTable::kPreserve) ? "<si><t xml:space=\"preserve\">" : "<si><t>";
@@ -709,12 +715,20 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
   pugi::xml_node root = wb.document_element();
   std::string p;
   if (std::string_view n = root.name(); n.find(':') != std::string_view::npos) p = std::string(n.substr(0, n.find(':') + 1));
+  // A Strict workbook gets new parts and relationships in Strict's namespaces.
+  const std::string mainAttr = p.empty() ? std::string("xmlns") : "xmlns:" + p.substr(0, p.size() - 1);
+  const bool strict = std::string_view(root.attribute(mainAttr.c_str()).value()) == kMainNsStrict;
+  const std::string relType(strict ? kRelTypeStrict : kRelType);
+  plan.strict = strict;
   std::string r;  // the prefix for relationship ids
   for (pugi::xml_attribute a : root.attributes())
-    if (std::string_view(a.name()).rfind("xmlns:", 0) == 0 && a.value() == kRelNs) r = std::string(a.name() + 6);
-  if (r.empty()) {
+    if (std::string_view(a.name()).rfind("xmlns:", 0) == 0 &&
+        (std::string_view(a.value()) == kRelNs || std::string_view(a.value()) == kRelNsStrict))
+      r = std::string(a.name() + 6);
+  if (r.empty()) {  // declared under a prefix of its own (one the root doesn't use yet)
     r = "r";
-    root.append_attribute("xmlns:r").set_value(std::string(kRelNs).c_str());
+    while (root.attribute(("xmlns:" + r).c_str())) r += "r";
+    root.append_attribute(("xmlns:" + r).c_str()).set_value(std::string(strict ? kRelNsStrict : kRelNs).c_str());
   }
   const pkg::RelationshipSet* wbRels = pkg->RelationshipsOf(wbPart);
   std::string relsPart = pkg::RelsPartFor(wbPart);
@@ -819,14 +833,14 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
       job.relId = newRelId();
       pugi::xml_node rel = relRoot.append_child("Relationship");
       rel.append_attribute("Id").set_value(job.relId.c_str());
-      rel.append_attribute("Type").set_value((std::string(kRelType) + "worksheet").c_str());
+      rel.append_attribute("Type").set_value((relType + "worksheet").c_str());
       rel.append_attribute("Target").set_value(target.c_str());
       relsChanged = true;
       pugi::xml_node o = typesRoot.append_child("Override");
       o.append_attribute("PartName").set_value(job.part.c_str());
       o.append_attribute("ContentType").set_value(std::string(kSheetCt).c_str());
       typesChanged = true;
-      job.text = NewSheetText(s, active);
+      job.text = NewSheetText(s, active, strict);
       plan.sheets.push_back(std::move(job));
       continue;
     }
@@ -1024,7 +1038,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
       if (taken(part)) return Status::Fail(Status::Code::Unsupported, "The workbook's shared strings can't be added.");
       pugi::xml_node rel = relRoot.append_child("Relationship");
       rel.append_attribute("Id").set_value(newRelId().c_str());
-      rel.append_attribute("Type").set_value((std::string(kRelType) + "sharedStrings").c_str());
+      rel.append_attribute("Type").set_value((relType + "sharedStrings").c_str());
       rel.append_attribute("Target").set_value("sharedStrings.xml");
       relsChanged = true;
       pugi::xml_node o = typesRoot.append_child("Override");
@@ -1054,7 +1068,7 @@ Status WriteSave(const Workbook& book, SavePlan& plan, pkg::ByteSink& sink) {
     WriteSheet(*job.sheet, job.text, xml);
     plan.changes.replace.push_back({job.part, Bytes(xml)});
   }
-  if (plan.strings) plan.changes.replace.push_back({plan.stringsPart, Bytes(StringsXml(book.Strings()))});
+  if (plan.strings) plan.changes.replace.push_back({plan.stringsPart, Bytes(StringsXml(book.Strings(), plan.strict))});
   Status st = pkg->Save(sink, plan.changes);
   plan.changes.replace.resize(small);
   return st;

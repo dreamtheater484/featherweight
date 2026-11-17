@@ -54,6 +54,7 @@ struct SavePlan {
   bool strings = false;        // the shared strings are written from the model
   std::string stringsPart;     // ... into this part
   bool newStringsPart = false;  // which the workbook didn't have
+  bool strict = false;          // the workbook is Strict Open XML: new parts are written in its namespaces
   bool sheetsRemoved = false;
   FileFormat format = FileFormat::Xlsx;
   std::vector<std::string> edited;  // parts the package holds as edits changed them (written as they are)
