@@ -183,6 +183,7 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case 'R': return editor_.Active() ? 0 : CmdFillRight;
     }
   }
+  if (alt && !ctrl && !shift && vk == VK_OEM_PLUS && !editor_.Active() && !preview_) return CmdAutoSum;
   // Excel's keys for rows, columns, cells and sheets (not while a cell is typed in).
   if (!editor_.Active() && !preview_ && !alt) {
     if (ctrl && ((shift && vk == VK_OEM_PLUS) || vk == VK_ADD)) return CmdInsertCells;

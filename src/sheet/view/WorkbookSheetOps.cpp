@@ -81,6 +81,7 @@ bool WorkbookView::GridCommandState(int cmd, CommandState& s) {
     case CmdPasteFormulas: s.label = L"Paste formulas"; s.enabled = cells; return true;
     case CmdPasteFormats: s.label = L"Paste formats"; s.enabled = cells; return true;
     case CmdPasteTranspose: s.label = L"Paste transposed"; s.enabled = cells; return true;
+    case CmdAutoSum: s.label = L"AutoSum"; s.shortcut = L"Alt+="; s.enabled = cells; return true;
     default: return false;
   }
 }
@@ -151,6 +152,7 @@ bool WorkbookView::GridCommand(int cmd) {
     case CmdPasteFormulas: Paste(PasteMode::Formulas); return true;
     case CmdPasteFormats: Paste(PasteMode::Formats); return true;
     case CmdPasteTranspose: Paste(PasteMode::All, true); return true;
+    case CmdAutoSum: AutoSum(); return true;
     default: return false;
   }
 }

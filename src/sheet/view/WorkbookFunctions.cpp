@@ -3,6 +3,7 @@
 // closes the list); inside a call, the tip with its arguments, the one the caret is in in bold.
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <cwctype>
 
 #include "core/Strings.h"
@@ -162,6 +163,45 @@ void WorkbookView::DrawFormulaHelp(Canvas& c) {
   c.Text(v.substr(b0, b1 - b0), {x, box.top, x + w1 + size, box.bottom}, p.text, size, DWRITE_FONT_WEIGHT_BOLD);
   x += w1;
   c.Text(v.substr(b1), {x, box.top, x + w2 + size, box.bottom}, p.text, size);
+}
+
+void WorkbookView::AutoSum() {
+  if (!Ready() || preview_ || ChartSheet()) return;
+  const Sheet& s = Current();
+  // What AutoSum needs to know of a cell: empty, a number (from a SUM or SUBTOTAL: a total), or
+  // anything else.
+  const calc::AutoSumProposal p = calc::ProposeAutoSum(
+      static_cast<int32_t>(active_.row), static_cast<int32_t>(active_.col), [&](int32_t r, int32_t c) {
+        CellInfo ci;
+        if (r < 0 || c < 0 || static_cast<uint32_t>(r) >= kMaxRows || static_cast<uint32_t>(c) >= kMaxCols ||
+            !s.GetCell(static_cast<uint32_t>(r), static_cast<uint32_t>(c), ci) ||
+            (ci.value.type == ValueType::Empty && !ci.hasFormula))
+          return calc::SumCell::kEmpty;
+        if (ci.value.type != ValueType::Number) return calc::SumCell::kOther;
+        FormulaInfo f;
+        if (ci.hasFormula && s.GetFormula(static_cast<uint32_t>(r), static_cast<uint32_t>(c), f)) {
+          std::string t(f.text);
+          for (char& ch : t) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+          if (t.rfind("SUM(", 0) == 0 || t.rfind("SUBTOTAL(", 0) == 0) return calc::SumCell::kTotal;
+        }
+        return calc::SumCell::kNumber;
+      });
+  BeginEdit(CellEditor::Mode::Enter, L"");
+  if (!editor_.Active()) return;
+  const std::wstring text = Utf8ToWide(calc::ToLocal(p.formula, Region()));
+  const size_t open = text.find(L'('), close = text.rfind(L')');
+  editor_.SetText(text, static_cast<int>(text.size()), static_cast<int>(text.size()));
+  if (open != std::wstring::npos && close != std::wstring::npos && close > open) {
+    if (p.found && p.cells.empty() && close > open + 1) {
+      editor_.SetPointSpan(static_cast<int>(open) + 1, static_cast<int>(close - open - 1));
+      point_ = {static_cast<uint32_t>(p.r1), static_cast<uint32_t>(p.c1)};
+      pointEnd_ = {static_cast<uint32_t>(p.r2), static_cast<uint32_t>(p.c2)};
+    } else {
+      editor_.SetCaret(static_cast<int>(close), false);  // =SUM(|): the range is the user's to give
+    }
+  }
+  UpdateFormulaHelp();
+  host_.ViewInvalidate();
 }
 
 }  // namespace fw::sheet::view

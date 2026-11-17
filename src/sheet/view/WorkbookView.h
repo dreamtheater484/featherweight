@@ -436,6 +436,8 @@ class WorkbookView : public PagedView {
   bool FormulaHelpClick(float x, float y, bool doubleClick);
   void InsertFunction(size_t i);
   void DrawFormulaHelp(gfx::Canvas& c);
+  // Alt+=: s2-calc's proposed SUM in the cell, its range pointed at, as Excel's AutoSum.
+  void AutoSum();
   std::vector<const calc::FunctionHelp*> fnList_;
   size_t fnSel_ = 0, fnTop_ = 0;
   int fnFrom_ = -1;          // where the name being typed starts

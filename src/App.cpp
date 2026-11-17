@@ -657,6 +657,11 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
           OnKeyDown(static_cast<UINT>(wp));
           return 0;
         }
+        // A workbook's Alt keys: Alt+Enter (a line break in a cell), Alt+= (AutoSum).
+        if (v && v->Kind() == TabKind::Workbook && (wp == VK_RETURN || wp == VK_OEM_PLUS)) {
+          OnKeyDown(static_cast<UINT>(wp));
+          return 0;
+        }
         break;  // Alt+F4, Alt+Space etc.
       }
       OnKeyDown(static_cast<UINT>(wp));
@@ -666,6 +671,7 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_SYSCHAR:
       if (wp == L'q' || wp == L'Q') return 0;  // Alt+Q ran a command: no menu, no beep
+      if (TabContent* v = Active(); v && v->Kind() == TabKind::Workbook && (wp == L'\r' || wp == L'=')) return 0;
       break;
     case WM_TIMER:
       switch (wp) {
