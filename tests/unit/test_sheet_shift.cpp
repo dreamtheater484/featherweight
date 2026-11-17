@@ -401,3 +401,19 @@ TEST(sheet_sort_refusals) {
   CHECK(!r && r.message == u"You can't change part of an array.");
   CHECK(ea.SortRows(0, Range{0, 0, 1, 0}, {1, 0}));
 }
+
+TEST(sheet_edit_formula_naming_missing_sheet) {
+  auto book = OpenParts({"<sheetData/>", "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  CellInput in;
+  in.formula = "Nowhere!A1+1";  // Excel would look for a workbook called Nowhere
+  edit::Result r = ed.SetCell(0, 0, 0, in);
+  CHECK(!r && r.message == u"The formula names a sheet this workbook doesn't have.");
+  in.formula = "SUM(Sheet1:Nowhere!A1)";
+  CHECK(!ed.SetCell(0, 0, 0, in));
+  in.formula = "'sheet2'!A1+1";
+  CHECK(ed.SetCell(0, 0, 0, in));
+  in.formula = "[1]Sheet1!A1";  // another workbook's: not this check's business
+  CHECK(ed.SetCell(0, 0, 1, in));
+}

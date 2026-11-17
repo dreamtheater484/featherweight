@@ -339,6 +339,24 @@ class BookNames : public calc::Names {
   std::vector<std::string> slots_;
 };
 
+// The first sheet a formula names that the workbook doesn't have (another workbook's, [1]Sheet1!A1,
+// isn't asked for); empty when there's none.
+std::string MissingSheet(const Workbook& b, std::string_view formula) {
+  class Recording : public BookNames {
+   public:
+    using BookNames::BookNames;
+    int FindSheet(std::string_view name) const override {
+      int i = BookNames::FindSheet(name);
+      if (i < 0 && missing.empty()) missing = std::string(name);
+      return i;
+    }
+    mutable std::string missing;
+  } names(b);
+  calc::CompileOptions at;
+  (void)calc::Compile(formula, at, names);
+  return names.missing;
+}
+
 std::string Number(double v) {
   char buf[32];
   auto r = std::to_chars(buf, buf + sizeof buf, v);
@@ -1162,6 +1180,10 @@ Result Editor::SetCells(int sheet, const std::vector<std::pair<CellAddr, CellInp
   for (const auto& [at, in] : cells) {
     if (at.row >= kMaxRows || at.col >= kMaxCols) return BadRange();
     if (Result r = CheckInput(in); !r) return r;
+    // Excel would look for a workbook by that name; a file can't name a sheet it doesn't have.
+    if (!in.formula.empty())
+      if (!MissingSheet(book_, in.formula).empty())
+        return Result::Fail(u"The formula names a sheet this workbook doesn't have.");
     if (in.array && (in.arrayRange.firstRow != at.row || in.arrayRange.firstCol != at.col)) return BadRange();
     if (const Range* arr = State::ArrayAt(arrays, at.row, at.col); arr && !(in.array && in.arrayRange == *arr))
       return Result::Fail(u"You can't change part of an array.");
