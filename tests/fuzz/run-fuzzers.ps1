@@ -31,7 +31,7 @@ $clipboard = Join-Path $PSScriptRoot '..\clipboard'
 
 # Each target, its seed folders (regressions included) and the longest input worth trying.
 $all = [ordered]@{
-  fuzz_zip     = @{ Seeds = @("$office\generated", "$office\edge", "$office\malicious", "$office\broken", "$regressions\zip"); MaxLen = 200000 }
+  fuzz_zip     = @{ Seeds = @("$office\generated", "$office\edge", "$office\malicious", "$office\broken", "$seeds\zip", "$regressions\zip"); MaxLen = 200000 }
   fuzz_xml     = @{ Seeds = @("$seeds\xml", "$regressions\xml"); MaxLen = 65536 }
   fuzz_opc     = @{ Seeds = @("$seeds\opc", "$regressions\opc"); MaxLen = 16384 }
   fuzz_check   = @{ Seeds = @("$seeds\package", "$regressions\check"); MaxLen = 65536 }

@@ -10,6 +10,8 @@
   seeds/picture/  a tiny picture in each format a picture can be inserted from (fuzz_picture),
                   and one it refuses
   seeds/font/     tiny TrueType, collection and CFF fonts for the PDF font subsetter (fuzz_sfnt)
+  seeds/zip/      a small workbook with its crc and sizes in data descriptors, in 4 and in 8 bytes
+                  (fuzz_zip, which also reads every corpus file)
 
 Uses only the standard library. From the repository root:
   python tests/fuzz/make_seeds.py
@@ -20,6 +22,7 @@ import posixpath
 import re
 import struct
 import zipfile
+import zlib
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 OFFICE = os.path.join(ROOT, "..", "office")
@@ -338,6 +341,40 @@ def embedded_font_docx(ttf):
     return out.getvalue()
 
 
+def descriptor_zip(path, wide):
+    """The package with each entry's crc and sizes in a data descriptor after its data (the local
+    header has zeros), as streaming writers do. With `wide` the sizes take 8 bytes without the entry
+    being zip64, as INE's workbooks are written; Excel opens both. A directory entry first gives an
+    empty entry, whose descriptor reads correctly with either size."""
+    with zipfile.ZipFile(path) as z:
+        entries = [("xl/", b"")] + [(i.filename, z.read(i.filename)) for i in z.infolist()]
+    version, size = (45, "Q") if wide else (20, "I")
+    body, central = bytearray(), bytearray()
+    for name, data in entries:
+        raw = name.encode("utf-8")
+        method = 8 if data else 0
+        if data:
+            deflate = zlib.compressobj(9, zlib.DEFLATED, -15)
+            packed = deflate.compress(data) + deflate.flush()
+        else:
+            packed = b""
+        crc = zlib.crc32(data)
+        offset = len(body)
+        body += struct.pack("<IHHHHHIIIHH", 0x04034B50, version, 8, method, 0, 0x21, 0, 0, 0, len(raw), 0) + raw + packed
+        body += struct.pack("<II" + size + size, 0x08074B50, crc, len(packed), len(data))
+        central += struct.pack("<IHHHHHHIIIHHHHHII", 0x02014B50, version, version, 8, method, 0, 0x21, crc, len(packed),
+                               len(data), len(raw), 0, 0, 0, 0, 0x10 if name.endswith("/") else 0, offset) + raw
+    start = len(body)
+    body += central + struct.pack("<IHHHHIIH", 0x06054B50, 0, 0, len(entries), len(entries), len(central), start, 0)
+    return bytes(body)
+
+
+def zip_seeds():
+    source = os.path.join(OFFICE, "sheet", "text.xlsx")
+    write(os.path.join(SEEDS, "zip"), "descriptors-text-xlsx.xlsx", descriptor_zip(source, False))
+    write(os.path.join(SEEDS, "zip"), "descriptors-8-byte-sizes-text-xlsx.xlsx", descriptor_zip(source, True))
+
+
 def main():
     for source, part, name in OPC:
         with zipfile.ZipFile(os.path.join(OFFICE, source)) as z:
@@ -361,6 +398,7 @@ def main():
     for name, data in fonts.items():
         write(os.path.join(SEEDS, "font"), name, data)
     write(os.path.join(SEEDS, "docx"), "embedded-font.docx", embedded_font_docx(fonts["tiny.ttf"]))
+    zip_seeds()
 
 
 if __name__ == "__main__":
