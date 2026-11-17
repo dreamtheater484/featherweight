@@ -119,6 +119,9 @@ void WriteValidations(const std::vector<Validation>& rules, const detail::PartTe
 const Validation* ValidationAt(const std::vector<Validation>& rules, uint32_t row, uint32_t col);
 // A typed list's items ("\"a,b,c\"" -> a, b, c); empty when the list is a reference or formula.
 std::vector<std::string> ListItems(const Validation& v);
+// Whether a value (as General shows it) is one of a typed list's items, as Excel 2021 checks it:
+// with case, spaces around the item or the value ignored.
+bool InList(const std::vector<std::string>& items, std::string_view value);
 // Clear All from the cells of `cut`.
 void ClearValidations(std::vector<Validation>& rules, const Range& cut);
 

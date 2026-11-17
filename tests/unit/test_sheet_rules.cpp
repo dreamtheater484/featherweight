@@ -191,6 +191,18 @@ TEST(SheetRules_Validations) {
   CHECK(xml.find("<formula1>10</formula1>") != std::string::npos);
 }
 
+// Measured on Excel 2021 (Validation.Value): a typed list "Red; Green; Blue;10".
+TEST(SheetRules_ListMatch) {
+  data::Validation v;
+  v.type = data::Validation::Type::List;
+  v.f1 = "\"Red,Green, Blue,10\"";
+  const std::vector<std::string> items = data::ListItems(v);
+  CHECK(data::InList(items, "Red") && data::InList(items, "Blue") && data::InList(items, " Blue"));
+  CHECK(data::InList(items, "10"));
+  CHECK(!data::InList(items, "red") && !data::InList(items, "RED") && !data::InList(items, "Gre"));
+  CHECK(!data::InList(items, "1e1"));
+}
+
 TEST(SheetRules_Journal) {
   auto book = OpenParts({kSheet, "<sheetData/>"});
   if (!book) return;

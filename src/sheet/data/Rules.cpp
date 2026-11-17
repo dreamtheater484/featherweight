@@ -723,6 +723,16 @@ std::vector<std::string> ListItems(const Validation& v) {
   return out;
 }
 
+bool InList(const std::vector<std::string>& items, std::string_view value) {
+  auto trim = [](std::string_view s) {
+    while (!s.empty() && s.front() == ' ') s.remove_prefix(1);
+    while (!s.empty() && s.back() == ' ') s.remove_suffix(1);
+    return s;
+  };
+  const std::string_view v = trim(value);
+  return std::any_of(items.begin(), items.end(), [&](const std::string& i) { return trim(i) == v; });
+}
+
 void ClearValidations(std::vector<Validation>& rules, const Range& cut) {
   for (Validation& v : rules) {
     const std::vector<Range> areas = ParseAreas(v.sqref);

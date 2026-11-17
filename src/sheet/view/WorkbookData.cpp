@@ -885,7 +885,8 @@ bool Compare(CfOp op, double x, double a, double b) {
   return true;
 }
 
-bool SameText(std::string_view a, std::string_view b) { return ToLower(Utf8ToWide(a)) == ToLower(Utf8ToWide(b)); }
+// As Excel 2021 compares a value with a list's items: with case, spaces around either ignored.
+bool SameText(std::string_view a, std::string_view b) { return Trim(a) == Trim(b); }
 
 // A rule's formula worked out at a cell: a number, text or a range's values (lists).
 bool EvalAt(calc::WorkbookCalc& calc, const std::string& formula, int sheet, CellAddr at, calc::Value& out) {
@@ -945,7 +946,7 @@ bool WorkbookView::ValidateValue(const data::Validation& v, int sheet, CellAddr 
       const std::string text = TextOfInput(in);
       if (v.f1.size() >= 2 && v.f1.front() == '"') {
         const std::vector<std::string> items = data::ListItems(v);
-        return std::any_of(items.begin(), items.end(), [&](const std::string& i) { return SameText(Trim(i), text); });
+        return data::InList(items, text);
       }
       calc::Value r;
       if (!EvalAt(Calc(), v.f1, sheet, cell, r)) return true;
