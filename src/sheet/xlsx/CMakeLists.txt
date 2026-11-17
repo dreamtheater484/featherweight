@@ -18,8 +18,18 @@ if(FW_BUILD_TESTS)
       endif()
     endif()
   endforeach()
+  # Excel-made workbooks of the S1 pieces' own (tests/sheet) too.
+  list(APPEND _fw_workbook_dirs "${PROJECT_SOURCE_DIR}/tests/sheet")
+  list(APPEND _fw_workbook_check_dirs "${PROJECT_SOURCE_DIR}/tests/sheet")
   add_test(NAME office_workbook_roundtrip COMMAND fwtool roundtrip --model --workbooks ${_fw_workbook_dirs})
   add_test(NAME office_workbook_reserialize COMMAND fwtool roundtrip --model --reserialize-all --workbooks ${_fw_workbook_dirs})
   add_test(NAME office_workbook_check COMMAND fwtool check --model --workbooks ${_fw_workbook_check_dirs})
+  # The Open XML SDK validator on what the model writes back, where .NET is installed.
+  find_program(FW_DOTNET dotnet)
+  if(FW_DOTNET)
+    add_test(NAME office_workbook_validate COMMAND ${CMAKE_COMMAND} -DFWTOOL=$<TARGET_FILE:fwtool>
+             -DSOURCE=${PROJECT_SOURCE_DIR} -DBINARY=${PROJECT_BINARY_DIR} "-DDIRS=${_fw_workbook_check_dirs}"
+             -P "${CMAKE_CURRENT_SOURCE_DIR}/ValidateWorkbooks.cmake")
+  endif()
   add_test(NAME office_workbook_malicious COMMAND fwtool roundtrip --model --expect-reject --workbooks "${_fw_office}/malicious")
 endif()

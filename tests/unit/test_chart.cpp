@@ -2,6 +2,7 @@
 // their parts kept as they were when the document is saved.
 #include <windows.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -131,23 +132,51 @@ TEST(Chart_PieSlicesAndPercentLabels) {
   REQUIRE(c.groups.size() == 1u);
   CHECK(c.groups[0].type == Type::Pie && c.groups[0].varyColors && c.groups[0].percent);
   const draw::Art art = Draw(c, {300, 200}, Colors(), L"Calibri");
-  for (const char* accent : {"accent1", "accent2", "accent3", "accent4"})
-    CHECK_EQ(Filled(art, *draw::SchemeColor(accent, Colors())), 2u);  // a slice and its legend swatch
+  // Office shades a slice's accent (76 %), with no outline between slices (Excel's PDFs).
+  for (const char* accent : {"accent1", "accent2", "accent3", "accent4"}) {
+    draw::Color slice = *draw::SchemeColor(accent, Colors());
+    draw::ApplyColorTransform(slice, "shade", 76000);
+    CHECK_EQ(Filled(art, slice), 2u);  // a slice and its legend swatch
+  }
+  for (const auto& m : art.marks) CHECK(m.fill.kind != draw::Fill::Kind::Solid || m.line.fill.kind == draw::Fill::Kind::None || m.path.Bounds().right - m.path.Bounds().left > 290);
 }
 
 TEST(Chart_WhatAChartDoesntSayIsAsOffice2007DrawsIt) {
-  // A chart without c:spPr or c:txPr (LibreOffice, Office 2007): 10-point text, and a border,
-  // gridlines, axis lines and ticks in gray, as Word draws them (FW_CORPUS features, Word's PDFs).
-  Parsed p(ColumnChart());
+  // A chart without c:spPr or c:txPr: 10-point text and a gray border. Office 2010's look
+  // (c14:style, which LibreOffice and Office 2010 and later write) draws the gridlines, axis lines
+  // and ticks gray too (Word's PDFs of FW_CORPUS features); without c14:style Office keeps 2007's
+  // look, where they're black (Excel's PDFs).
+  const auto strokes = [](const draw::Art& art, uint32_t rgb) {
+    size_t n = 0;
+    for (const auto& m : art.marks) n += m.line.fill.kind == draw::Fill::Kind::Solid && Same(m.line.fill.color, draw::Rgb(rgb));
+    return n;
+  };
+  std::string modern = ColumnChart();
+  modern.insert(modern.find("<c:chart>"),
+                "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice"
+                " Requires=\"c14\" xmlns:c14=\"http://schemas.microsoft.com/office/drawing/2007/8/2/chart\"><c14:style"
+                " val=\"102\"/></mc:Choice><mc:Fallback><c:style val=\"2\"/></mc:Fallback></mc:AlternateContent>");
+  Parsed p(modern);
   Chart c;
   REQUIRE(Read(p.Root(), Colors(), c));
+  CHECK(!c.legacy);
   CHECK_EQ(c.textSize, 10.0f);
   CHECK(c.value.ticks == Axis::Tick::Cross && !c.value.line.line && !c.value.grid.noLine);
-  const draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
-  const draw::Color gray = draw::Rgb(0x868686);
-  size_t lines = 0;
-  for (const auto& m : art.marks) lines += m.line.fill.kind == draw::Fill::Kind::Solid && Same(m.line.fill.color, gray);
-  CHECK(lines >= 10);  // the border, 6 gridlines, 2 axis lines and their ticks
+  draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
+  CHECK(strokes(art, 0x868686) >= 10);  // the border, 6 gridlines, 2 axis lines and their ticks
+  // Word draws a chart without c14:style in Office 2010's look too; Excel, in a workbook, in 2007's.
+  Parsed old(ColumnChart());
+  REQUIRE(Read(old.Root(), Colors(), c));
+  CHECK(!c.legacy && !c.roundedCorners && c.titleSize == 18 && c.titleBold);
+  struct Workbook : DataSource {
+    bool Cells(std::string_view, std::vector<std::string>&, std::vector<double>&, std::string*) override { return false; }
+  } book;
+  REQUIRE(Read(old.Root(), Colors(), c, &book));
+  // Its title's text states nothing at all: DrawingML's own 18-point Arial (Excel's PDFs).
+  CHECK(c.legacy && c.roundedCorners && c.titleSize == 18 && !c.titleBold && c.titleFont == L"Arial");
+  art = Draw(c, {360, 216}, Colors(), L"Calibri");
+  CHECK_EQ(strokes(art, 0x868686), 1u);  // the border
+  CHECK(strokes(art, 0x000000) >= 9);
   // What a chart states wins: Office 2013 and later's 9 points on the axes, no value axis line.
   std::string stated = ColumnChart();
   const std::string valAx = "<c:valAx><c:axId val=\"2\"/>";
@@ -185,12 +214,64 @@ TEST(Chart_StackedSeriesListedAsTheyStack) {
 }
 
 TEST(Chart_OtherTypesStayPlaceholders) {
-  Parsed radar(std::string("<c:chartSpace") + kNs + "><c:chart><c:plotArea><c:radarChart>" + Ser(0, "S", {"a"}, {"1"}) +
-               "</c:radarChart></c:plotArea></c:chart></c:chartSpace>");
+  Parsed bubble(std::string("<c:chartSpace") + kNs + "><c:chart><c:plotArea><c:bubbleChart>" + Ser(0, "S", {"a"}, {"1"}) +
+                "</c:bubbleChart></c:plotArea></c:chart></c:chartSpace>");
   Chart c;
-  CHECK(!Read(radar.Root(), Colors(), c));
+  CHECK(!Read(bubble.Root(), Colors(), c));
   Parsed empty(std::string("<c:chartSpace") + kNs + "><c:chart><c:plotArea/></c:chart></c:chartSpace>");
   CHECK(!Read(empty.Root(), Colors(), c));
+}
+
+TEST(Chart_RadarSpokesAndLines) {
+  // A spoke a category, the series closed lines through their values (Excel's look).
+  Parsed radar(std::string("<c:chartSpace") + kNs + "><c:chart><c:plotArea><c:radarChart><c:radarStyle val=\"marker\"/>" +
+               Ser(0, "North", {"a", "b", "c"}, {"10", "20", "15"}) +
+               "<c:axId val=\"1\"/><c:axId val=\"2\"/></c:radarChart><c:catAx><c:axId val=\"1\"/><c:crossAx val=\"2\"/></c:catAx>"
+               "<c:valAx><c:axId val=\"2\"/><c:majorGridlines/><c:crossAx val=\"1\"/></c:valAx></c:plotArea>"
+               "<c:legend><c:legendPos val=\"r\"/></c:legend></c:chart></c:chartSpace>");
+  Chart c;
+  REQUIRE(Read(radar.Root(), Colors(), c));
+  REQUIRE(c.groups.size() == 1u && c.groups[0].type == Type::Radar && c.groups[0].marker);
+  const draw::Art art = Draw(c, {360, 216}, Colors(), L"Calibri");
+  const draw::Color accent = *draw::SchemeColor("accent1", Colors());
+  size_t lines = 0;
+  for (const auto& m : art.marks) lines += m.line.fill.kind == draw::Fill::Kind::Solid && Same(m.line.fill.color, accent);
+  CHECK(lines >= 5);  // the series' line, its 3 markers' outlines, the legend's key
+}
+
+TEST(Chart_LabelPartsKeysAndOverlay) {
+  // Data labels with the series and category names (Excel's order and separator, a legend key
+  // before them); a title and legend over the plot, which keeps its room.
+  std::string xml = ColumnChart();
+  xml.replace(xml.find("<c:gapWidth"), 0,
+              "<c:dLbls><c:showLegendKey val=\"1\"/><c:showVal val=\"1\"/><c:showCatName val=\"1\"/>"
+              "<c:showSerName val=\"1\"/><c:separator>; </c:separator></c:dLbls>");
+  Parsed p(xml);
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  const Group& g = c.groups[0];
+  CHECK(g.seriesNames && g.categoryLabels && g.labels && g.keys && g.separator && *g.separator == L"; ");
+  CHECK(!c.titleOverlay && !c.legendOverlay);
+  const auto plotTop = [](const draw::Art& art) {
+    float top = 1e9f;
+    for (const auto& m : art.marks)
+      if (m.fill.kind == draw::Fill::Kind::Solid && m.path.Bounds().right - m.path.Bounds().left > 10 &&
+          m.path.Bounds().bottom - m.path.Bounds().top > 20 && m.path.Bounds().right - m.path.Bounds().left < 100)
+        top = std::min(top, m.path.Bounds().top);  // the tallest bar
+    return top;
+  };
+  const float apart = plotTop(Draw(c, {360, 216}, Colors(), L"Calibri"));
+  c.titleOverlay = c.legendOverlay = true;
+  const float over = plotTop(Draw(c, {360, 216}, Colors(), L"Calibri"));
+  CHECK(over < apart - 10);  // the bars reach higher with the title over them
+  // Without c:separator, the user's list separator and a space.
+  SetListSeparator(L';');
+  std::string plain = ColumnChart();
+  plain.replace(plain.find("<c:gapWidth"), 0, "<c:dLbls><c:showVal val=\"1\"/><c:showSerName val=\"1\"/></c:dLbls>");
+  Parsed q(plain);
+  REQUIRE(Read(q.Root(), Colors(), c));
+  CHECK(!c.groups[0].separator && c.groups[0].seriesNames);
+  SetListSeparator(L',');
 }
 
 TEST(Chart_NumbersAsTheirFormatCodesShowThem) {

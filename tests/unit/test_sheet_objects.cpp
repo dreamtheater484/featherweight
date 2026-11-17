@@ -76,6 +76,47 @@ void SavePng(drawtest::Surface& s, const std::wstring& path) {
 
 // With FW_SHEET_PNG set to a folder: every sheet's objects of tests/office/sheet's workbooks drawn
 // there on Excel's default grid, a point to a pixel, to hold up against Excel's reference PDFs.
+// With FW_SHEET_CORPUS set to a folder: every workbook in it (and below) opened, and every sheet's
+// objects read, placed and drawn (the real-world corpus: no crash, no hang). Prints a summary.
+TEST(sheet_objects_corpus) {
+  wchar_t root[MAX_PATH];
+  if (!GetEnvironmentVariableW(L"FW_SHEET_CORPUS", root, MAX_PATH)) return;
+  fw::chart::Install();
+  size_t files = 0, opened = 0, objects = 0, charts = 0, notes = 0;
+  for (const auto& e : std::filesystem::recursive_directory_iterator(root)) {
+    const std::wstring ext = e.path().extension().wstring();
+    if (!e.is_regular_file() || (ext != L".xlsx" && ext != L".xlsm")) continue;
+    ++files;
+    std::ifstream in(e.path(), std::ios::binary);
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    fw::pkg::Status st;
+    auto pkg = test::OpenBytes(std::move(bytes), st);
+    auto book = pkg ? xlsx::Read(std::move(pkg), st, xlsx::ReadOptions{true}) : nullptr;
+    if (!book) {
+      std::printf("    not opened: %ls: %s\n", e.path().c_str(), st.message.c_str());
+      continue;
+    }
+    ++opened;
+    for (size_t i = 0; i < book->SheetCount(); ++i) {
+      auto o = SheetObjects::Load(*book, i);
+      DefaultLayout layout;
+      o->Place(layout);
+      for (const auto& x : o->Objects()) ++objects, charts += x.chart ? 1 : 0;
+      notes += o->Notes().size();
+      drawtest::Surface s(160, 120);
+      {
+        draw::D2DPainter p(s.dc.Get());
+        p.Transform(draw::Matrix::Scale(0.1f, 0.1f));
+        if (o->IsChartSheet()) o->DrawChartSheet(p, {0, 0, 1600, 1200});
+        o->Draw(p, {0, 0, 1600, 1200}, {});
+      }
+      s.End();
+    }
+  }
+  std::printf("    %zu workbooks, %zu opened; %zu objects (%zu charts), %zu notes\n", files, opened, objects, charts, notes);
+  CHECK_EQ(opened, files);
+}
+
 TEST(sheet_objects_render) {
   wchar_t dir[MAX_PATH];
   if (!GetEnvironmentVariableW(L"FW_SHEET_PNG", dir, MAX_PATH)) return;
@@ -100,6 +141,45 @@ TEST(sheet_objects_render) {
       }
       CHECK(s.End());
       SavePng(s, std::filesystem::path(dir) / (std::filesystem::path(name).stem().wstring() + L"-" + std::to_wstring(i) + L".png"));
+    }
+  }
+  // Every chart of tests/office/excel/charts.xlsx printed on its own at 100 dpi, to hold up
+  // against the same chart cut from Excel's PDF (reference/excel/charts.xlsx.pdf).
+  auto book = OpenSheetFile("office/excel/charts.xlsx");
+  if (!book) return;
+  const float scale = 100.0f / 72;
+  // Columns and rows wide enough that no chart reaches the next one.
+  struct Spaced : SheetLayout {
+    double ColumnLeft(uint32_t col) const override { return 60.0 * col; }
+    double RowTop(uint32_t row) const override { return 20.0 * row; }
+  };
+  for (size_t i = 0; i < book->SheetCount(); ++i) {
+    auto objects = SheetObjects::Load(*book, i);
+    Spaced layout;
+    objects->Place(layout);
+    const auto placed = objects->Objects();
+    for (size_t k = 0; k < placed.size(); ++k) {
+      const draw::Rect& r = placed[k].rect;
+      drawtest::Surface s(static_cast<int>(std::ceil(r.Width() * scale)), static_cast<int>(std::ceil(r.Height() * scale)));
+      {
+        draw::D2DPainter p(s.dc.Get());
+        p.Transform(draw::Matrix::Translate(-r.left, -r.top) * draw::Matrix::Scale(scale, scale));
+        SheetObjects::DrawOptions options;
+        options.printing = true;
+        objects->Draw(p, r, options);
+      }
+      CHECK(s.End());
+      SavePng(s, std::filesystem::path(dir) / (L"chart-" + std::to_wstring(i) + L"-" + std::to_wstring(k + 1) + L".png"));
+    }
+    if (objects->IsChartSheet()) {
+      drawtest::Surface s(static_cast<int>(11 * 100), static_cast<int>(8.5 * 100));
+      {
+        draw::D2DPainter p(s.dc.Get());
+        p.Transform(draw::Matrix::Scale(scale, scale));
+        objects->DrawChartSheet(p, {0, 0, 11 * 72, 8.5f * 72});
+      }
+      CHECK(s.End());
+      SavePng(s, std::filesystem::path(dir) / (L"chart-" + std::to_wstring(i) + L"-sheet.png"));
     }
   }
 }
@@ -158,10 +238,10 @@ TEST(sheet_objects_charts) {
   objects->Place(layout);
   const auto placed = objects->Objects();
   CHECK_EQ(placed.size(), 12u);
-  // All but the radar chart (beyond S1's types: a placeholder), the combo chart included.
+  // Every one, the combo chart and the radar chart included.
   size_t charts = 0;
   for (const auto& o : placed) charts += o.chart ? 1 : 0;
-  CHECK_EQ(charts, 11u);
+  CHECK_EQ(charts, 12u);
   drawtest::Surface s(420, 240);
   {
     draw::D2DPainter p(s.dc.Get());
