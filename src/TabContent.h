@@ -82,7 +82,7 @@ struct SaveFormat {
   const wchar_t* ext;      // e.g. "pdf"
 };
 
-enum class TabKind { Pdf, Document, Gallery };
+enum class TabKind { Pdf, Document, Workbook, Gallery };
 
 // What happened to a tab's file on disk since it was opened or saved.
 enum class FileChange { None, Changed, Missing };

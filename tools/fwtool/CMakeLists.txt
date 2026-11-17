@@ -7,8 +7,8 @@ target_link_libraries(fwfidelity PUBLIC fwcore)
 target_compile_options(fwfidelity PRIVATE ${FW_COMPILE_OPTIONS})
 
 add_executable(fwtool main.cpp Roundtrip.cpp Save.cpp Inspect.cpp Model.cpp Print.cpp Render.cpp Reference.cpp Compare.cpp Bench.cpp
-  BenchApp.cpp Crypt.cpp DrawingPlaces.cpp Export.cpp LayoutHook.cpp Paste.cpp PdfCheck.cpp Spelling.cpp Torture.cpp Wrap.cpp)
-target_link_libraries(fwtool PRIVATE fwpkg fwdoc fwdoclayout fwdraw fwchart fwproof fwtext fwfidelity pdfium delayimp ole32 windowscodecs)
+  BenchApp.cpp CellCompare.cpp Crypt.cpp Csv.cpp DrawingPlaces.cpp Export.cpp Formulas.cpp LayoutHook.cpp Paste.cpp PdfCheck.cpp Spelling.cpp Torture.cpp Workbook.cpp Wrap.cpp)
+target_link_libraries(fwtool PRIVATE fwpkg fwdoc fwsheet fwsheetrender fwdoclayout fwdraw fwchart fwproof fwtext fwfidelity pdfium delayimp ole32 windowscodecs)
 # Picture editing (D3), for fwtool torture.
 if(TARGET fwpictures)
   target_link_libraries(fwtool PRIVATE fwpictures)
@@ -38,6 +38,12 @@ if(FW_BUILD_TESTS)
     --min-pages 100 --min-lines 100 --json "${_fw_fidelity}/word.json" --report "${_fw_fidelity}/word.md")
   set_tests_properties(fidelity_word_lines PROPERTIES FIXTURES_SETUP fidelity_word)
   set_tests_properties(fidelity_word_vs_word PROPERTIES FIXTURES_REQUIRED fidelity_word)
+  # Cell text (S1): every visible cell of tests/office/excel and sheet as Excel's Range.Text has it,
+  # at the column's width as the grid measures it (99.97 % now; the plan's bar is 99 %).
+  add_test(NAME office_cells COMMAND fwtool compare --cells --min-cells 99.9 "${_fw_reference}")
+  # CSV (S1): every field of tests/office/csv shows as it was written, in both reference regions.
+  add_test(NAME office_csv_values_nl COMMAND fwtool csv --values --locale en-NL "${PROJECT_SOURCE_DIR}/tests/office/csv")
+  add_test(NAME office_csv_values_us COMMAND fwtool csv --values --locale en-US "${PROJECT_SOURCE_DIR}/tests/office/csv")
   # Export PDF (D4) on the public corpus: each document's PDF strictly well formed, read back by
   # PDFium with the text where it's drawn, and its pages as the screen draws them.
   add_test(NAME pdf_check COMMAND fwtool pdf-check "${PROJECT_SOURCE_DIR}/tests/office/generated"

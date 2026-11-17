@@ -7,3 +7,5 @@
 tests/clipboard/*.rtf -text
 tests/clipboard/*.html -text
 tests/clipboard/*.txt -text
+# S1's CSV test files are byte for byte what make_sheet_tests.py wrote (encodings, byte-order marks, line ends).
+tests/office/csv/** -text

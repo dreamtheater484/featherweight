@@ -20,29 +20,32 @@ constexpr const char* kUsage =
     "      Converts OpenDocument text files (.odt, .ott) and Word templates (.dotx, .dotm, to a new\n"
     "      document) as the app opens them, checks the .docx and reads it into the model; with\n"
     "      --out the converted documents are kept there.\n"
-    "  fwtool roundtrip [--model] [--reserialize-all] [--expect-reject] [--out DIR] <file or folder>...\n"
+    "  fwtool roundtrip [--model] [--workbooks] [--reserialize-all] [--expect-reject] [--out DIR] <file or folder>...\n"
     "      Opens and saves each file without edits. Untouched parts must be byte-identical;\n"
     "      with --reserialize-all every XML part is rewritten through the DOM and must equal\n"
     "      the original after canonicalization. With --expect-reject every file must be\n"
     "      refused with a plain message (malicious files). With --model Word documents are\n"
-    "      read into the document model, which writes back every part it owns; those parts\n"
-    "      must equal the originals after canonicalization, and the saved copy must pass check.\n"
+    "      read into the document model, and workbooks into the workbook model (every sheet), which\n"
+    "      write back every part they own; those parts must equal the originals after\n"
+    "      canonicalization, and the saved copy must pass check. --workbooks: workbooks only.\n"
     "  fwtool save [--edited] [--out DIR] <file or folder>...\n"
     "      Saves each Word document as Featherweight's Save does (the document model's save, then\n"
     "      safe saving) into DIR (default: a temporary folder, removed afterwards). With no edits\n"
     "      the saved file must be identical to the original; with --edited every part the model\n"
     "      owns is rewritten and the document properties updated, as after an edit. Either way the\n"
     "      saved file must open and have no new fwtool check errors. Prints each save's time.\n"
-    "  fwtool dump [--model | --layout [--out DIR]] <file>...\n"
+    "  fwtool dump [--model [--workbooks] | --layout [--out DIR]] <file>...\n"
     "      Lists parts, relationships and content types; with --model, what the document\n"
-    "      model reads from a Word document (stories, paragraphs, labels, fields); with\n"
+    "      model reads from a Word document (stories, paragraphs, labels, fields) or the workbook\n"
+    "      model from a workbook (sheets, names, the first cells and their formulas); with\n"
     "      --layout, the lines on each page Featherweight lays out, or with --out, its layout\n"
     "      dumps (docs/layout-dump.md) in DIR.\n"
-    "  fwtool check [--expect-reject] <file or folder>...\n"
+    "  fwtool check [--expect-reject] [--model] [--workbooks] <file or folder>...\n"
     "      Checks each file against the reference registry: every reference resolves, ids\n"
     "      are unique, pairs are complete, and derived data (the calculation chain, chart\n"
     "      caches) matches its sources. With --expect-reject every file must fail (the\n"
-    "      broken files).\n"
+    "      broken files). With --model each workbook is also read into the workbook model, every\n"
+    "      sheet, and its cells must name formats and strings the workbook has.\n"
     "  fwtool render --out DIR [--scale N] [--pictures] <file or folder>...\n"
     "      Draws the pictures and shapes with fwdraw to PNG files in DIR, N pixels per point\n"
     "      (default 2): each Word drawing at its own size, each slide's shapes on a slide-sized\n"
@@ -51,6 +54,19 @@ constexpr const char* kUsage =
     "  fwtool lines [--out DIR] <reference folder or PDF>...\n"
     "      Word's lines in its reference PDFs: page sizes, and each line's story, position and\n"
     "      text. With --out, writes them as layout dumps (docs/layout-dump.md).\n"
+    "  fwtool formulas [--locale en-NL] [--regions R,...] [--report FILE] [--min-match M]\n"
+    "                  <workbooks or folders>...\n"
+    "      Workbooks (S1): recalculates every formula and compares it with the value Excel saved\n"
+    "      (volatile ones and their dependents aside), in the region Excel calculated in. With\n"
+    "      --regions, a workbook with mismatches counts in the listed region where most of its\n"
+    "      formulas match (TEXT() codes follow the saving Excel's region); the report says which.\n"
+    "      --excel <reference folder>: compares instead with the values this PC's Excel gave each\n"
+    "      formula after opening and after a full recalculation (the cells files under it), in\n"
+    "      the region it recorded: what the app recalculates on opening, and everything.\n"
+    "  fwtool compare --cells [--json FILE] [--min-cells C] <reference folder>\n"
+    "      Workbooks (S1): each visible cell's text as Featherweight formats it against Excel's\n"
+    "      (the cells files beside the reference PDFs), in the locale Excel recorded. Differences\n"
+    "      that only the column width decides (\"####\", General shortened) are counted apart.\n"
     "  fwtool compare [--dumps DIR] [--json FILE] [--report FILE] [--min-pages P] [--min-lines L]\n"
     "                 <reference folder>...\n"
     "      Layout fidelity (plan §10): for each Word document in the reference manifest, does\n"
@@ -93,6 +109,11 @@ constexpr const char* kUsage =
     "  fwtool decrypt --password P --out DIR <file or folder>...\n"
     "      Opens each password-protected Office file as Featherweight does and saves its package\n"
     "      in DIR; checks that encrypting it again with the key from opening round-trips.\n"
+    "  fwtool csv [--values] [--locale en-US|en-NL] <file or folder>...\n"
+    "      Opens each CSV or TSV file as Featherweight does: what it detected, and how long the\n"
+    "      first screen (100 rows) and the whole file took (budget: 1 s and 5 s for 100 MB).\n"
+    "      --values: every field must show exactly its text (no value changes), in the locale\n"
+    "      (default: this PC's region, as the app reads it).\n"
     "  fwtool cfb [--all] <file>...\n"
     "      Reads each compound file (.doc, protected Office files): every stream must read, and\n"
     "      writing them and reading them back must give the same bytes. --all lists the streams,\n"
@@ -153,6 +174,12 @@ std::vector<std::filesystem::path> CollectFiles(const std::vector<std::filesyste
       files.push_back(in);
     }
   }
+  return files;
+}
+
+std::vector<std::filesystem::path> CollectFiles(const Options& options) {
+  auto files = CollectFiles(options.inputs);
+  if (options.workbooks) std::erase_if(files, [](const std::filesystem::path& f) { return !IsWorkbookFile(f); });
   return files;
 }
 
@@ -228,6 +255,7 @@ int wmain(int argc, wchar_t** argv) {
     std::wstring arg = argv[i];
     if (arg == L"--reserialize-all") options.reserializeAll = true;
     else if (arg == L"--model") options.model = true;
+    else if (arg == L"--workbooks") options.workbooks = true;
     else if (arg == L"--layout") options.layout = true;
     else if (arg == L"--expect-reject") options.expectReject = true;
     else if (arg == L"--out" && i + 1 < argc) options.outDir = argv[++i];
@@ -239,9 +267,23 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--dumps" && i + 1 < argc) options.dumps = argv[++i];
     else if (arg == L"--json" && i + 1 < argc) options.jsonOut = argv[++i];
     else if (arg == L"--report" && i + 1 < argc) options.reportOut = argv[++i];
+    else if (arg == L"--locale" && i + 1 < argc) options.locale = argv[++i];
+    else if (arg == L"--regions" && i + 1 < argc) {
+      std::wstring list = argv[++i];
+      for (size_t a = 0; a <= list.size();) {
+        size_t b = std::min(list.find(L',', a), list.size());
+        if (b > a) options.regions.push_back(list.substr(a, b - a));
+        a = b + 1;
+      }
+    }
+    else if (arg == L"--min-match" && i + 1 < argc) options.minMatch = _wtof(argv[++i]);
     else if (arg == L"--min-pages" && i + 1 < argc) options.minPages = _wtof(argv[++i]);
     else if (arg == L"--min-lines" && i + 1 < argc) options.minLines = _wtof(argv[++i]);
     else if (arg == L"--self-test") options.selfTest = true;
+    else if (arg == L"--cells") options.cells = true;
+    else if (arg == L"--excel" && i + 1 < argc) options.excel = argv[++i];
+    else if (arg == L"--values") options.values = true;
+    else if (arg == L"--min-cells" && i + 1 < argc) options.minCells = _wtof(argv[++i]);
     else if (arg == L"--all") options.all = true;
     else if (arg == L"--runs" && i + 1 < argc) options.runs = _wtoi(argv[++i]);
     else if (arg == L"--budgets") options.budgets = true;
@@ -265,13 +307,14 @@ int wmain(int argc, wchar_t** argv) {
   }
   if (command == L"roundtrip") return fwtool::RunRoundtrip(options);
   if (command == L"dump") return fwtool::RunDump(options);
+  if (command == L"formulas") return fwtool::RunFormulas(options);
   if (command == L"save") return fwtool::RunSave(options);
   if (command == L"check") return fwtool::RunCheck(options);
   if (command == L"odt") return fwtool::RunOdt(options);
   if (command == L"print-sample") return fwtool::RunPrintSample(options);
   if (command == L"render") return fwtool::RunRender(options);
   if (command == L"lines") return fwtool::RunLines(options);
-  if (command == L"compare") return fwtool::RunCompare(options);
+  if (command == L"compare") return options.cells ? fwtool::RunCellCompare(options) : fwtool::RunCompare(options);
   if (command == L"bench") return fwtool::RunBench(options);
   if (command == L"bench-app") return fwtool::RunBenchApp(options);
   if (command == L"edit-check") return fwtool::RunEditCheck(options);
@@ -282,6 +325,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"encrypt") return fwtool::RunCrypt(options, true);
   if (command == L"decrypt") return fwtool::RunCrypt(options, false);
   if (command == L"cfb") return fwtool::RunCfb(options);
+  if (command == L"csv") return fwtool::RunCsv(options);
   if (command == L"pdf-check") return fwtool::RunPdfCheck(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;

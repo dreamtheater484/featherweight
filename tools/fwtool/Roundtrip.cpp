@@ -10,6 +10,7 @@
 #include "pkg/Canonical.h"
 #include "pkg/Check.h"
 #include "pkg/XmlDom.h"
+#include "sheet/xlsx/Xlsx.h"
 
 namespace fwtool {
 namespace {
@@ -40,12 +41,18 @@ Result RoundtripFile(const std::filesystem::path& file, const Options& options) 
   Result r;
   Status st;
   auto opened = OpenPackage(file, st);
-  if (opened) st = opened->Verify();
+  // A damaged part nothing reads (a thumbnail) is kept as it is: the saved copy must have the
+  // same damaged parts, byte for byte, and no others.
+  std::vector<std::string> damaged;
+  if (opened) st = opened->Verify(&damaged);
   // --model: Word documents are read into the model, which then owns the package.
   std::unique_ptr<fw::doc::Document> doc;
+  std::unique_ptr<fw::sheet::Workbook> book;
   if (st.Ok() && options.model && fw::pkg::FormatOf(*opened) == fw::pkg::DocFormat::Word)
     doc = fw::doc::docx::Read(std::move(opened), st);
-  Package* pkg = doc ? &doc->Package() : opened.get();
+  else if (st.Ok() && options.model && fw::pkg::FormatOf(*opened) == fw::pkg::DocFormat::Excel)
+    book = fw::sheet::xlsx::Read(std::move(opened), st, {.loadAll = true});
+  Package* pkg = doc ? &doc->Package() : book ? book->GetPackage() : opened.get();
   if (options.expectReject) {
     if (st.Ok()) r.Fail("opened, but it should have been refused");
     else r.detail = "refused: " + st.message;
@@ -60,7 +67,7 @@ Result RoundtripFile(const std::filesystem::path& file, const Options& options) 
   std::vector<uint8_t> bytes;
   // What fwtool check says about the original: through the model, the saved file may have no new errors.
   std::vector<std::string> knownErrors;
-  if (doc) knownErrors = fw::pkg::CheckPackage(*pkg).errors;
+  if (doc || book) knownErrors = fw::pkg::CheckPackage(*pkg).errors;
   // The model writes every part it owns.
   size_t modelParts = 0, kept = 0;
   for (uint32_t i = 0; doc && i < doc->Parts().size(); ++i) {
@@ -75,6 +82,16 @@ Result RoundtripFile(const std::filesystem::path& file, const Options& options) 
       return r.Fail(st.message);
     if (!(st = fw::doc::docx::WritePart(*doc, i, out)).Ok()) return r.Fail(st.message);
     pkg->SetPart(part.name, std::vector<uint8_t>(out.begin(), out.end()));
+    ++modelParts;
+  }
+  // The workbook model writes the shared strings and every sheet.
+  for (const std::string& name : book ? fw::sheet::xlsx::ModelParts(*book) : std::vector<std::string>()) {
+    std::string label = name.substr(1), out;
+    if (!(st = pkg->ReadPart(name, bytes)).Ok()) return r.Fail(st.message);
+    if (!(st = fw::pkg::CanonicalizeXml(AsText(bytes), canonical[name], pkg->GetLimits(), label)).Ok())
+      return r.Fail(st.message);
+    if (!(st = fw::sheet::xlsx::WritePart(*book, name, out)).Ok()) return r.Fail(st.message);
+    pkg->SetPart(name, std::vector<uint8_t>(out.begin(), out.end()));
     ++modelParts;
   }
   // Re-serialize all: every other XML part through the DOM, compared after canonicalization.
@@ -100,8 +117,10 @@ Result RoundtripFile(const std::filesystem::path& file, const Options& options) 
         .write(reinterpret_cast<const char*>(sink.bytes.data()), static_cast<std::streamsize>(sink.bytes.size()));
   }
   auto again = Package::Open(fw::pkg::Snapshot::FromBytes(std::move(sink.bytes)), pkg->GetLimits(), st);
-  if (again) st = again->Verify();
+  std::vector<std::string> damagedAgain;
+  if (again) st = again->Verify(&damagedAgain);
   if (!st.Ok()) return r.Fail("the saved copy doesn't open: " + st.message);
+  if (damagedAgain != damaged) return r.Fail("the saved copy has other damaged parts than the original");
 
   // Same entries in the same order; untouched ones identical byte for byte.
   const auto& before = pkg->Zip().Entries();
@@ -132,7 +151,7 @@ Result RoundtripFile(const std::filesystem::path& file, const Options& options) 
       ++copied;
   }
   // Through the model, the saved file must also stay consistent.
-  if (doc && r.ok) {
+  if ((doc || book) && r.ok) {
     for (const auto& e : fw::pkg::CheckPackage(*again).errors)
       if (std::find(knownErrors.begin(), knownErrors.end(), e) == knownErrors.end()) {
         r.Fail("the saved copy fails fwtool check: " + e);
@@ -141,6 +160,7 @@ Result RoundtripFile(const std::filesystem::path& file, const Options& options) 
   }
   if (r.ok) {
     r.detail = std::to_string(copied) + (copied == 1 ? " part" : " parts") + " byte-identical";
+    if (!damaged.empty()) r.detail += " (" + std::to_string(damaged.size()) + " damaged, kept as they were)";
     if (doc) {
       r.detail += ", " + std::to_string(modelParts) + " written from the model";
       if (kept) r.detail += " (" + std::to_string(kept) + " kept as they were)";
@@ -152,6 +172,13 @@ Result RoundtripFile(const std::filesystem::path& file, const Options& options) 
       r.detail += ", store " + std::to_string(model ? store * 100 / model : 0) + "% of the model";
       if (!knownErrors.empty()) r.detail += " (" + std::to_string(knownErrors.size()) + " check errors in the original)";
     }
+    if (book) {
+      size_t cells = 0;
+      for (size_t i = 0; i < book->SheetCount(); ++i) cells += book->GetSheet(i).CellCount();
+      r.detail += ", " + std::to_string(modelParts) + " written from the workbook model (" + std::to_string(cells) +
+                  " cells, model " + std::to_string(book->ModelBytes() / 1024) + " KB)";
+      if (!knownErrors.empty()) r.detail += " (" + std::to_string(knownErrors.size()) + " check errors in the original)";
+    }
     if (options.reserializeAll)
       r.detail += ", " + std::to_string(canonical.size() - modelParts) + " XML rewritten and equal after canonicalization";
   }
@@ -161,7 +188,7 @@ Result RoundtripFile(const std::filesystem::path& file, const Options& options) 
 }  // namespace
 
 int RunRoundtrip(const Options& options) {
-  auto files = CollectFiles(options.inputs);
+  auto files = CollectFiles(options);
   if (files.empty()) {
     std::fprintf(stderr, "No Office files found.\n");
     return 1;

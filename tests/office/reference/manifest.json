@@ -1,7 +1,41 @@
 {
-    "made":  "2026-11-06",
+    "made":  "2026-11-17",
     "computer":  "Office reference PC (decision 19)",
-    "export":  "Word (safe mode, no add-ins, macros forced off, links not updated, read-only): the document without markup, for print, tagged; Excel: print areas; PowerPoint: slides",
+    "export":  "Word (safe mode, no add-ins, macros forced off, links not updated, read-only): the document without markup, for print, tagged; Excel (macros forced off, links not updated, read-only): print areas, and a cells file per workbook (each non-empty cell\u0027s text and value, formulas with their cached, opened and recalculated values); PowerPoint: slides",
+    "excel":  {
+                  "locale":  {
+                                 "decimalSeparator":  ",",
+                                 "thousandsSeparator":  ".",
+                                 "listSeparator":  ";",
+                                 "dateOrder":  "DMY",
+                                 "dateSeparator":  "/",
+                                 "timeSeparator":  ":",
+                                 "clock24":  true,
+                                 "dayLeadingZero":  true,
+                                 "monthLeadingZero":  true,
+                                 "fourDigitYears":  true,
+                                 "timeLeadingZero":  true,
+                                 "currencySymbol":  "â‚¬",
+                                 "currencyBefore":  true,
+                                 "currencySpace":  true,
+                                 "currencyDigits":  2,
+                                 "currencyNegative":  2,
+                                 "countryCode":  1,
+                                 "countrySetting":  31,
+                                 "useSystemSeparators":  true,
+                                 "generalFormatName":  "Standaard",
+                                 "windowsLocaleName":  "en-NL",
+                                 "windowssShortDate":  "dd/MM/yyyy",
+                                 "windowssLongDate":  "dddd, d MMMM yyyy",
+                                 "windowssTimeFormat":  "HH:mm:ss",
+                                 "windowssShortTime":  "HH:mm",
+                                 "windowss1159":  "am",
+                                 "windowss2359":  "pm",
+                                 "windowssYearMonth":  "MMMM yyyy"
+                             },
+                  "printer":  "EPSON523955 (ET-4750 Series) on Ne02:",
+                  "standardWidth":  8.43
+              },
     "files":  [
                   {
                       "source":  "generated/drawings-dml.docx",
@@ -834,6 +868,482 @@
                       "fonts":  [
                                     "ArialMT",
                                     "Calibri"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/borders-fills.xlsx",
+                      "sha256":  "f0c49c841c29635dcf44a2903ae73f69518e0ea3872796416b165c2fa543ad1e",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/borders-fills.xlsx.cells.json",
+                      "cellCount":  197,
+                      "pdf":  "sheet/borders-fills.xlsx.pdf",
+                      "pages":  6,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/charts.xlsx",
+                      "sha256":  "5c014a450059818260523f2f93ef68b60a7533007a3c4e7c2a6c0d035a5c1f77",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/charts.xlsx.cells.json",
+                      "cellCount":  29,
+                      "pdf":  "sheet/charts.xlsx.pdf",
+                      "pages":  8,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ],
+                      "printPdf":  "sheet/charts.xlsx.print.pdf",
+                      "printPages":  8
+                  },
+                  {
+                      "source":  "sheet/conditional-formats.xlsx",
+                      "sha256":  "3dd4e8f074f4e1d0d6dc44bf121ae11a77ba8b335bd39fde9243270733690895",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/conditional-formats.xlsx.cells.json",
+                      "cellCount":  254,
+                      "pdf":  "sheet/conditional-formats.xlsx.pdf",
+                      "pages":  3,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ],
+                      "printPdf":  "sheet/conditional-formats.xlsx.print.pdf",
+                      "printPages":  3
+                  },
+                  {
+                      "source":  "sheet/dates-1900.xlsx",
+                      "sha256":  "4881989bbbd838256435641258c3cf79f5a40145b9d005f0c223dee193350fd6",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/dates-1900.xlsx.cells.json",
+                      "cellCount":  433,
+                      "pdf":  "sheet/dates-1900.xlsx.pdf",
+                      "pages":  11,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/dates-1904.xlsx",
+                      "sha256":  "710f34f9f85a724fa98fc1853dea87a2149b33827dc0c6e80b718cee34a93d27",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/dates-1904.xlsx.cells.json",
+                      "cellCount":  433,
+                      "pdf":  "sheet/dates-1904.xlsx.pdf",
+                      "pages":  11,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/formulas.xlsx",
+                      "sha256":  "127b482e9120449f4dfc13d0a9a82723f8af48bfd45e471da28ec9e3fc31ab19",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/formulas.xlsx.cells.json",
+                      "cellCount":  658,
+                      "pdf":  "sheet/formulas.xlsx.pdf",
+                      "pages":  26,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/functions.xlsx",
+                      "sha256":  "013eb87d6a6fe615bcab8a6d73a0680bf1dac0ca6d0a5474437ae193e8a21b38",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/functions.xlsx.cells.json",
+                      "cellCount":  5136,
+                      "pdf":  "sheet/functions.xlsx.pdf",
+                      "pages":  64,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold",
+                                    "SansSerifCollection"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/merged-frozen.xlsx",
+                      "sha256":  "b44fb1c213be023796e97dc1307da565eebb38b73756baed7c86cd497ae76a9e",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/merged-frozen.xlsx.cells.json",
+                      "cellCount":  4496,
+                      "pdf":  "sheet/merged-frozen.xlsx.pdf",
+                      "pages":  22,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/notes.xlsx",
+                      "sha256":  "7b0fb36f2ed9b7fa65aad657df6c308d8a3e89749810118f6bba5ebc201dc08e",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/notes.xlsx.cells.json",
+                      "cellCount":  211,
+                      "pdf":  "sheet/notes.xlsx.pdf",
+                      "pages":  3,
+                      "fonts":  [
+                                    "Calibri"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/notes-at-end.xlsx",
+                      "sha256":  "38baaadcff2b0cf3d4d61fe00a1fe568cc95c27d2fd19de6f08871c22d1834c7",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/notes-at-end.xlsx.cells.json",
+                      "cellCount":  211,
+                      "pdf":  "sheet/notes-at-end.xlsx.pdf",
+                      "pages":  5,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold",
+                                    "MS-Gothic",
+                                    "SansSerifCollection"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/numfmt.xlsx",
+                      "sha256":  "602ffc3168629dc7e5c9be3b91b33a737416d6ea97047a8fb9a2406313eee880",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/numfmt.xlsx.cells.json",
+                      "cellCount":  1974,
+                      "pdf":  "sheet/numfmt.xlsx.pdf",
+                      "pages":  21,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold",
+                                    "MS-Gothic"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/pictures-shapes.xlsx",
+                      "sha256":  "334fed3f63426fb78ac8c5fee0791d169587bc0252e0faa77c7b878abb4c1b7b",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/pictures-shapes.xlsx.cells.json",
+                      "cellCount":  481,
+                      "pdf":  "sheet/pictures-shapes.xlsx.pdf",
+                      "pages":  3,
+                      "fonts":  [
+                                    "Calibri"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/print-settings.xlsx",
+                      "sha256":  "5bbea12999f92b0d5a2dd3794c4d9b3491d487bceafa9753b75a5450e0a7abd6",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/print-settings.xlsx.cells.json",
+                      "cellCount":  7907,
+                      "pdf":  "sheet/print-settings.xlsx.pdf",
+                      "pages":  25,
+                      "fonts":  [
+                                    "Arial-BoldMT",
+                                    "Calibri",
+                                    "Calibri-Bold",
+                                    "SegoeUI"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/rows-columns.xlsx",
+                      "sha256":  "8e8199065261cbab80085780e0cd31bf3114dbd512a044ceb6dc4cba824e57fa",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/rows-columns.xlsx.cells.json",
+                      "cellCount":  1014,
+                      "pdf":  "sheet/rows-columns.xlsx.pdf",
+                      "pages":  11,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/sheets.xlsx",
+                      "sha256":  "9e05a972e4392b402f4439ebb7361e1668cbadbb54748068edd8b0ba950b403f",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/sheets.xlsx.cells.json",
+                      "cellCount":  746,
+                      "pdf":  "sheet/sheets.xlsx.pdf",
+                      "pages":  8,
+                      "fonts":  [
+                                    "Calibri"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/tables.xlsx",
+                      "sha256":  "b17de5a4f81a2ae6fe907d5d2b65ff390784e27a0d793eebcc70941075074c51",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/tables.xlsx.cells.json",
+                      "cellCount":  126,
+                      "pdf":  "sheet/tables.xlsx.pdf",
+                      "pages":  2,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/text.xlsx",
+                      "sha256":  "01b9195180ff898f93ad9416008ac403dbdaec3a7f59320cc72be3a8b6caa669",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/text.xlsx.cells.json",
+                      "cellCount":  131,
+                      "pdf":  "sheet/text.xlsx.pdf",
+                      "pages":  6,
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri",
+                                    "Calibri-Bold",
+                                    "Calibri-BoldItalic",
+                                    "Calibri-Italic",
+                                    "Cambria",
+                                    "CourierNewPSMT",
+                                    "MalgunGothic",
+                                    "MS-Gothic",
+                                    "SansSerifCollection",
+                                    "SegoeUI",
+                                    "TimesNewRomanPSMT"
+                                ]
+                  },
+                  {
+                      "source":  "excel/borders-fills.xlsx",
+                      "sha256":  "9b05f6c9577cf4bc30d1f9f508b264beb9c62bb2388e8cd4a8f489551e4bf85a",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/borders-fills.xlsx.cells.json",
+                      "cellCount":  197,
+                      "pdf":  "excel/borders-fills.xlsx.pdf",
+                      "pages":  6,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "excel/charts.xlsx",
+                      "sha256":  "6d8dc2fc73e937127c32bf53a53351d9c232ee8d15c8abf10f4cdc45db72ca09",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/charts.xlsx.cells.json",
+                      "cellCount":  50,
+                      "pdf":  "excel/charts.xlsx.pdf",
+                      "pages":  9,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ],
+                      "printPdf":  "excel/charts.xlsx.print.pdf",
+                      "printPages":  9
+                  },
+                  {
+                      "source":  "excel/conditional-formats.xlsx",
+                      "sha256":  "f1cf23722e5c29669156807d6b037b67c77cdc425f1745014e9171c4a76741f0",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/conditional-formats.xlsx.cells.json",
+                      "cellCount":  254,
+                      "pdf":  "excel/conditional-formats.xlsx.pdf",
+                      "pages":  3,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ],
+                      "printPdf":  "excel/conditional-formats.xlsx.print.pdf",
+                      "printPages":  3
+                  },
+                  {
+                      "source":  "excel/dates-1900.xlsx",
+                      "sha256":  "5fda050ab475e85699dc5c7a6037e4c2205e3ce81ad22d0b791b1e8fcbb91806",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/dates-1900.xlsx.cells.json",
+                      "cellCount":  433,
+                      "pdf":  "excel/dates-1900.xlsx.pdf",
+                      "pages":  11,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "excel/dates-1904.xlsx",
+                      "sha256":  "cc9af1356dda7a6148a004a14527f021b81cd7664fa974d96f6698ba16d1fa95",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/dates-1904.xlsx.cells.json",
+                      "cellCount":  433,
+                      "pdf":  "excel/dates-1904.xlsx.pdf",
+                      "pages":  11,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "excel/formulas.xlsx",
+                      "sha256":  "11ba578536726f0e2c719ebd7992beafcf01be98b2a7f704a5a99a58f3113763",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/formulas.xlsx.cells.json",
+                      "cellCount":  763,
+                      "pdf":  "excel/formulas.xlsx.pdf",
+                      "pages":  28,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "excel/functions.xlsx",
+                      "sha256":  "ac5d5cd377d3729c95be00a60faac9e60b26f6570fed46a69bb223f91f60f705",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/functions.xlsx.cells.json",
+                      "cellCount":  5136,
+                      "pdf":  "excel/functions.xlsx.pdf",
+                      "pages":  64,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold",
+                                    "SansSerifCollection"
+                                ]
+                  },
+                  {
+                      "source":  "excel/merged-frozen.xlsx",
+                      "sha256":  "14fab6a708531eb8cb3621dabcaecd7f1cb995f6fcfbe689067c34cc1dfa2691",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/merged-frozen.xlsx.cells.json",
+                      "cellCount":  4496,
+                      "pdf":  "excel/merged-frozen.xlsx.pdf",
+                      "pages":  22,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "excel/notes.xlsx",
+                      "sha256":  "cb45d389a7ca0f824f7cbf1efe7ac0e7db8de47096407aa32bf2f39e98708a51",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/notes.xlsx.cells.json",
+                      "cellCount":  211,
+                      "pdf":  "excel/notes.xlsx.pdf",
+                      "pages":  3,
+                      "fonts":  [
+                                    "Calibri"
+                                ]
+                  },
+                  {
+                      "source":  "excel/notes-at-end.xlsx",
+                      "sha256":  "a290094d6f7aae0cbace66db61907f6f9e4b32d1979f925520ccbd1f7f6e28f7",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/notes-at-end.xlsx.cells.json",
+                      "cellCount":  211,
+                      "pdf":  "excel/notes-at-end.xlsx.pdf",
+                      "pages":  5,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold",
+                                    "MS-Gothic",
+                                    "SansSerifCollection"
+                                ]
+                  },
+                  {
+                      "source":  "excel/numfmt.xlsx",
+                      "sha256":  "b708a6dc317502e3c7ac41a6a92803e8f5f5ff3170a5de739c60d1e8bbb5eac2",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/numfmt.xlsx.cells.json",
+                      "cellCount":  1974,
+                      "pdf":  "excel/numfmt.xlsx.pdf",
+                      "pages":  21,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold",
+                                    "MS-Gothic"
+                                ]
+                  },
+                  {
+                      "source":  "excel/pictures-shapes.xlsx",
+                      "sha256":  "3db97d6f7cbb8718849933a0a10745d2ff093b18b2413e7413162fc6576203c0",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/pictures-shapes.xlsx.cells.json",
+                      "cellCount":  481,
+                      "pdf":  "excel/pictures-shapes.xlsx.pdf",
+                      "pages":  4,
+                      "fonts":  [
+                                    "Calibri"
+                                ]
+                  },
+                  {
+                      "source":  "excel/print-settings.xlsx",
+                      "sha256":  "f8b73f414682fcd5115d31f3312819a252b77f7900f3f2b46ed87b8816cc4e14",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/print-settings.xlsx.cells.json",
+                      "cellCount":  7907,
+                      "pdf":  "excel/print-settings.xlsx.pdf",
+                      "pages":  25,
+                      "fonts":  [
+                                    "Arial-BoldMT",
+                                    "Calibri",
+                                    "Calibri-Bold",
+                                    "SegoeUI"
+                                ]
+                  },
+                  {
+                      "source":  "excel/rows-columns.xlsx",
+                      "sha256":  "f841b0a054b3ad1482da8ae5da5493c7d4ca2e24f582ed10bbac3b13fee1563f",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/rows-columns.xlsx.cells.json",
+                      "cellCount":  1014,
+                      "pdf":  "excel/rows-columns.xlsx.pdf",
+                      "pages":  11,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "excel/sheets.xlsx",
+                      "sha256":  "319a663acf8f5bb435502f549353df28eddd39b65841b34da2adce2b0d2683d1",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/sheets.xlsx.cells.json",
+                      "cellCount":  746,
+                      "pdf":  "excel/sheets.xlsx.pdf",
+                      "pages":  8,
+                      "fonts":  [
+                                    "Calibri"
+                                ]
+                  },
+                  {
+                      "source":  "excel/tables.xlsx",
+                      "sha256":  "1a74697fec8c661def088bc8c75f4b81e06dc3301f9fd20e251427218b09eb15",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/tables.xlsx.cells.json",
+                      "cellCount":  126,
+                      "pdf":  "excel/tables.xlsx.pdf",
+                      "pages":  2,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold"
+                                ]
+                  },
+                  {
+                      "source":  "excel/text.xlsx",
+                      "sha256":  "ca9fe4df194996d0e17220e3ee9d0375ba0e49a9e22adabf835ddff83102d6b0",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/text.xlsx.cells.json",
+                      "cellCount":  131,
+                      "pdf":  "excel/text.xlsx.pdf",
+                      "pages":  6,
+                      "fonts":  [
+                                    "ArialMT",
+                                    "Calibri",
+                                    "Calibri-Bold",
+                                    "Calibri-BoldItalic",
+                                    "Calibri-Italic",
+                                    "Cambria",
+                                    "CourierNewPSMT",
+                                    "MalgunGothic",
+                                    "MS-Gothic",
+                                    "SansSerifCollection",
+                                    "SegoeUI",
+                                    "TimesNewRomanPSMT"
                                 ]
                   }
               ]

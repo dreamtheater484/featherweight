@@ -24,6 +24,7 @@
 #include "ui/Menu.h"
 #include "ui/Theme.h"
 #include "pkg/Backups.h"
+#include "sheet/view/WorkbookView.h"
 #include "word/DocView.h"
 
 #pragma comment(lib, "imm32.lib")
@@ -1127,6 +1128,10 @@ void App::OnKeyDown(UINT vk) {
     // Shift+F3 in a document being edited changes case, as in Word (in the search box it finds back).
     if (vk == VK_F3 && shift && v && v->HasKeyFocus())
       if (int cmd = v->ShortcutFor(vk, mods)) return cmd;
+    // In a workbook Ctrl+Page Up and Down go through its sheets, as in Excel (Ctrl+Tab still goes
+    // through the tabs).
+    if (v && v->Kind() == TabKind::Workbook && (vk == VK_NEXT || vk == VK_PRIOR) && ctrl && !shift)
+      if (int cmd = v->ShortcutFor(vk, mods)) return cmd;
     if (int cmd = AppShortcut(vk, mods)) return cmd;
     return v ? v->ShortcutFor(vk, mods) : PdfView::Shortcut(vk, mods);
   };
@@ -1606,6 +1611,7 @@ PdfView* App::ActivePdf() const {
 }
 
 std::unique_ptr<TabContent> App::CreateTab(const std::wstring& path) {
+  if (fw::KindOfPath(path) == fw::FileKind::Workbook) return std::make_unique<fw::sheet::view::WorkbookView>(*this, path);
   if (fw::KindOfPath(path) == fw::FileKind::Document) {
     auto view = std::make_unique<DocView>(*this, path);
     if (DocView::IsTemplate(path)) view->OpenAsNew(++newDocuments_);  // as Word: a new document from it
@@ -1663,19 +1669,21 @@ void App::OpenDialog() {
   ComPtr<IFileOpenDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return;
   // Everything the viewers open first, then each kind on its own.
-  std::wstring all, docs;
+  std::wstring all, docs, books;
   for (const fw::FileKindInfo& k : fw::FileKinds()) {
     if (!k.viewer) continue;
     for (const wchar_t* ext : k.extensions) {
       all += (all.empty() ? L"*" : L";*") + std::wstring(ext);
       if (k.kind == fw::FileKind::Document) docs += (docs.empty() ? L"*" : L";*") + std::wstring(ext);
+      if (k.kind == fw::FileKind::Workbook) books += (books.empty() ? L"*" : L";*") + std::wstring(ext);
     }
   }
   COMDLG_FILTERSPEC filters[] = {{L"Files Featherweight opens", all.c_str()},
                                  {L"PDF documents", L"*.pdf"},
                                  {L"Word documents", docs.c_str()},
+                                 {L"Excel workbooks", books.c_str()},
                                  {L"All files", L"*.*"}};
-  dlg->SetFileTypes(4, filters);
+  dlg->SetFileTypes(5, filters);
   DWORD opts = 0;
   dlg->GetOptions(&opts);
   dlg->SetOptions(opts | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
@@ -2422,6 +2430,10 @@ void App::RunScript(const std::wstring& script) {
         std::wstring message;
         if (static_cast<DocView*>(v)->PrintToFile(arg, message) != PrintOutcome::Printed)
           fwprintf(stderr, L"print failed: %s\n", message.c_str());
+      } else if (v && v->Kind() == TabKind::Workbook && v->Ready()) {
+        std::wstring message;
+        if (static_cast<fw::sheet::view::WorkbookView*>(v)->PrintToFile(arg, message) != PrintOutcome::Printed)
+          fwprintf(stderr, L"print failed: %s\n", message.c_str());
       }
     } else if (op == L"exportpdf") {
       // exportpdf:out.pdf is File > Export PDF without the dialog.
@@ -2437,8 +2449,17 @@ void App::RunScript(const std::wstring& script) {
         dpi = std::clamp(static_cast<float>(_wtof(dir.c_str() + bar + 1)), 24.f, 600.f);
         dir.resize(bar);
       }
-      if (!v || v->Kind() != TabKind::Document || !v->Ready() || static_cast<DocView*>(v)->RenderPagesForTesting(dir, dpi) == 0)
-        fwprintf(stderr, L"pagepngs failed\n");
+      int written = 0;
+      if (v && v->Ready() && v->Kind() == TabKind::Document) written = static_cast<DocView*>(v)->RenderPagesForTesting(dir, dpi);
+      if (v && v->Ready() && v->Kind() == TabKind::Workbook)
+        written = static_cast<fw::sheet::view::WorkbookView*>(v)->RenderPagesForTesting(dir, dpi);
+      if (written == 0) fwprintf(stderr, L"pagepngs failed\n");
+    } else if (op == L"workbookpdf") {
+      // workbookpdf:out.pdf exports every sheet of a workbook, as Excel's reference PDFs have them.
+      TabContent* v = Active();
+      if (!v || !v->Ready() || v->Kind() != TabKind::Workbook ||
+          !static_cast<fw::sheet::view::WorkbookView*>(v)->ExportWorkbookPdfForTesting(arg))
+        fwprintf(stderr, L"workbookpdf failed\n");
     } else if (op == L"cmd") {
       static const std::pair<const wchar_t*, int> names[] = {
           {L"find", CmdFind}, {L"next", CmdFindNext}, {L"invert", CmdToggleInvert}, {L"present", CmdPresentation},

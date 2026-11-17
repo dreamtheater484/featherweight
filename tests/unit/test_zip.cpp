@@ -143,6 +143,67 @@ TEST(Zip_DamageIsDetected) {
   }
 }
 
+// The zip with each entry's crc and sizes in a data descriptor after its data instead of in its
+// local header; with `wide`, the sizes take 8 bytes, without a zip64 field (as INE writes them).
+static std::vector<uint8_t> WithDescriptors(const std::vector<uint8_t>& zip, bool wide) {
+  auto snap = Snapshot::FromBytes(zip);
+  ZipReader reader;
+  if (!reader.Open(*snap).Ok()) return {};
+  std::string body, cd;
+  // Little-endian fields: value, bytes.
+  auto put = [](std::string& s, std::initializer_list<std::pair<uint64_t, int>> fields) {
+    for (auto [v, n] : fields)
+      for (int i = 0; i < n; ++i) s += static_cast<char>((v >> (8 * i)) & 0xFF);
+  };
+  const uint16_t version = wide ? 45 : 20;
+  const int sizes = wide ? 8 : 4;
+  for (const auto& e : reader.Entries()) {
+    const uint64_t offset = body.size();
+    put(body, {{0x04034b50, 4}, {version, 2}, {e.flags | 8u, 2}, {e.method, 2}, {e.modTime, 2}, {e.modDate, 2},
+               {0, 4}, {0, 4}, {0, 4}, {e.name.size(), 2}, {0, 2}});
+    body += e.name;
+    body.append(zip.begin() + static_cast<ptrdiff_t>(e.dataOffset),
+                zip.begin() + static_cast<ptrdiff_t>(e.dataOffset + e.compressedSize));
+    put(body, {{0x08074b50, 4}, {e.crc32, 4}, {e.compressedSize, sizes}, {e.uncompressedSize, sizes}});
+    put(cd, {{0x02014b50, 4}, {version, 2}, {version, 2}, {e.flags | 8u, 2}, {e.method, 2}, {e.modTime, 2},
+             {e.modDate, 2}, {e.crc32, 4}, {e.compressedSize, 4}, {e.uncompressedSize, 4}, {e.name.size(), 2},
+             {0, 2}, {0, 2}, {0, 2}, {e.internalAttrs, 2}, {e.externalAttrs, 4}, {offset, 4}});
+    cd += e.name;
+  }
+  const uint64_t count = reader.Entries().size();
+  const uint64_t cdOffset = body.size();
+  body += cd;
+  put(body, {{0x06054b50, 4}, {0, 2}, {0, 2}, {count, 2}, {count, 2}, {cd.size(), 4}, {cdOffset, 4}, {0, 2}});
+  return std::vector<uint8_t>(body.begin(), body.end());
+}
+
+TEST(Zip_DataDescriptors) {
+  // An empty entry reads correctly with either size of descriptor: the record must still cover
+  // the whole descriptor, or copying it would drop bytes.
+  auto plain = MakeZip({{"a.xml", "<a/>"}, {"empty", ""}, {"b.txt", std::string(3000, 'b')}});
+  for (bool wide : {false, true}) {
+    auto zip = WithDescriptors(plain, wide);
+    auto snap = Snapshot::FromBytes(zip);
+    ZipReader reader;
+    CHECK(reader.Open(*snap).Ok());
+    if (reader.Entries().size() != 3) continue;
+    std::vector<uint8_t> out;
+    CHECK(reader.Read(*reader.Find("b.txt"), out).Ok() && Text(out) == std::string(3000, 'b'));
+    CHECK(reader.Read(*reader.Find("empty"), out).Ok() && out.empty());
+    MemorySink sink;
+    ZipWriter writer(sink);
+    for (const auto& e : reader.Entries()) CHECK(writer.CopyRaw(reader, e).Ok());
+    CHECK(writer.Finish(reader.Comment()).Ok());
+    CHECK(sink.bytes == zip);
+    // A descriptor that doesn't match its central record is damage.
+    auto bad = zip;
+    bad[static_cast<size_t>(reader.Find("a.xml")->dataOffset + reader.Find("a.xml")->compressedSize) + 8] ^= 1;
+    auto badSnap = Snapshot::FromBytes(bad);
+    ZipReader badReader;
+    CHECK_EQ(badReader.Open(*badSnap).code, Status::Code::Damaged);
+  }
+}
+
 TEST(Zip_DuplicateNamesAreRefused) {
   auto zip = MakeZip({{"a", "1"}, {"a", "2"}});
   auto snap = Snapshot::FromBytes(zip);

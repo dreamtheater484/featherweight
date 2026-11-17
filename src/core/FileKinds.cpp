@@ -20,7 +20,7 @@ const FileKindInfo kKinds[] = {
     {FileKind::Document, L"Document", L"document", L"documents", L"Featherweight.Document", L"Document", L"Documents",
      kDocument, kDocumentLater, 1, true, true},
     {FileKind::Workbook, L"Workbook", L"spreadsheet", L"spreadsheets", L"Featherweight.Workbook", L"Spreadsheet",
-     L"Spreadsheets", kWorkbook, kWorkbookLater, 2, false, false},
+     L"Spreadsheets", kWorkbook, kWorkbookLater, 2, true, false},
     {FileKind::Presentation, L"Presentation", L"presentation", L"presentations", L"Featherweight.Presentation",
      L"Presentation", L"Presentations", kPresentation, kPresentationLater, 3, false, false},
 };

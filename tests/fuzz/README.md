@@ -2,7 +2,7 @@
 
 One target per parser (plan §10). So far:
 
-- `fuzz_zip`: the zip reader and writer, and the package on top of them. Seeds: `tests/office`.
+- `fuzz_zip`: the zip reader and writer, and the package on top of them. Seeds: `tests/office`, and `seeds/zip`, a small workbook with its checksums and sizes in data descriptors after each part's data, in 4 bytes and in 8 bytes without zip64 (as INE writes its workbooks).
 - `fuzz_xml`: `XmlPull`, the DOM and the canonical form. Seeds: `seeds/xml`, small parts taken from the corpus.
 - `fuzz_opc`: the relationships and content types parsers, and the part-name helpers. Seeds: `seeds/opc`.
 - `fuzz_check`: `fwtool check`'s path over a package: the reference registry, the consistency checker, the id renewer and the extension query. Seeds: `seeds/package`, corpus files written as text (see below), so the fuzzer can change the XML inside them.
@@ -18,8 +18,12 @@ One target per parser (plan §10). So far:
 - `fuzz_sfnt`: Export PDF's font subsetter (`src/draw/Sfnt.cpp`, D4): a font read as the export reads it, subset to glyphs a hash of the input picks, and embedded whole as a CFF font is. A subset must read back with the same glyph count, have right checksums, and subset again to the same bytes. Seeds: `seeds/font` (tiny TrueType, collection and CFF fonts), and locally up to 40 fonts of 256 KB or less from `C:\Windows\Fonts`, which `run-fuzzers.ps1` copies into the work folder (fonts' licences keep them out of the repository).
 - `fuzz_chart`: charts (`src/chart`, D5): a chart part (c:chartSpace) read from its cached values and laid out at a roomy, a small and a flat size. Every mark must be finite and near the chart, and their number within fwchart's cap. Seeds: `seeds/chart` (each chart type as Word writes it, from `tests/office/make_chart_tests.py`, and `word-chart*.xml`, the parts of `tests/office/script/charts.docx`, which Word wrote).
 - `fuzz_odt`: OpenDocument text import (`src/doc/odf`, D5): an `.odt` converted to a Word document, which must open, pass the check and be read by the model; otherwise the converter refuses it. Seeds: `seeds/odt`, a small hand-written document with every structure the converter reads. Inputs are read like `fuzz_check`'s.
+- `fuzz_xlsx`: the workbook model (`src/sheet`, S1): the .xlsx reader with every sheet, what the grid and the formula engine ask of the model (cells in order, formats, rich text, formulas, rows, columns, merges), the writer, and changes as recalculation makes them; what sits above the cells (`src/sheet/objects`: drawings, charts reading their cells, chart sheets, notes, threaded comments) read, placed and drawn on a software surface; and the table styles' formats. Seeds: `seeds/xlsx`, a small hand-written workbook with every structure the model reads (and odd content it keeps as written), Excel's objects workbook (`tests/sheet/objects.xlsx`), the corpus's notes and tables workbooks as text, and `seeds/package`. Inputs are read like `fuzz_check`'s.
+- `fuzz_numfmt`: number formats and value parsing (`src/sheet/numfmt`, S1): the input's first line is a format code, shown for a set of numbers and for every 8 bytes after it as a double, in en-US and en-NL, with and without a cell width; each later line is shown as text and parsed as typed text. Pads, fills and "####" must stay inside the text, and a value read exactly (CSV's rule) must show back as written. Seeds: `seeds/numfmt`, one per code of `tests/sheet/numfmt_cases.txt` (`python tests/fuzz/make_numfmt_seeds.py`).
+- `fuzz_csv`: CSV and TSV (`src/sheet/csv`, S1): a file read with its delimiter detected and given, with values converted and not, on one thread and several. Rows must lie in order inside the text, the same file must give the same cells on any number of threads, and every cell must show exactly its field (a value is never changed). Seeds: `tests/office/csv`.
+- `fuzz_condfmt`: conditional formats (`src/sheet/condfmt`, S1): the input is a worksheet part, put in a workbook with a second sheet and differential formats; the first cells and every stored cell are evaluated with the formula engine and without, then again after an edit. Data bars must stay inside the cell, icons inside their set, and a cell must give the same answer twice. Seeds: `seeds/condfmt`, from Excel's cases and the conditional-format workbooks of tests/office (`python tests/fuzz/make_condfmt_seeds.py`).
 
-`make_seeds.py` makes `seeds/opc`, `seeds/package`, `seeds/formula`, `seeds/drawing` and `seeds/picture` from the corpus (standard library only): `python tests/fuzz/make_seeds.py`.
+`make_seeds.py` makes `seeds/opc`, `seeds/package`, `seeds/formula`, `seeds/drawing`, `seeds/picture` and `seeds/zip` from the corpus (standard library only): `python tests/fuzz/make_seeds.py`.
 
 Besides crashes and AddressSanitizer reports, each target aborts when an invariant breaks:
 
@@ -30,6 +34,7 @@ Besides crashes and AddressSanitizer reports, each target aborts when an invaria
 - Relationships and content types that Featherweight writes read back the same.
 - Renaming references and renewing ids leaves a document that still parses.
 - Every part the document model writes back equals what it read, after canonicalization; runs and inline items stay inside their paragraph's text.
+- Every part the workbook model writes back equals what it read, after canonicalization; cells come in order, each is found again where it was walked, and rich text runs stay inside their string.
 - Pagination ends, within its page cap; every page has a size, and hit tests and carets land on the page and in the text.
 - A drawing's extent, ink bounds, wrap outline and text boxes are finite, and a decoded picture stays within its limits.
 - A picture is inserted or refused with a reason and nothing changed; one inserted is a picture the tools change; the saved file opens without package errors and has the pictures, each one the tools change; undoing everything gives the new document back (no picture, no media part), and redoing gives the pictures back.
@@ -66,10 +71,10 @@ cmake -S . -B build-fuzz -DFW_FUZZ=ON
 ```
 
 ```bash
-cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing fuzz_layout fuzz_picture fuzz_rtf fuzz_html fuzz_clip fuzz_sfnt fuzz_chart fuzz_cfb fuzz_doc fuzz_odt
+cmake --build build-fuzz --config RelWithDebInfo --parallel --target fuzz_zip fuzz_xml fuzz_opc fuzz_check fuzz_formula fuzz_docx fuzz_drawing fuzz_layout fuzz_picture fuzz_rtf fuzz_html fuzz_clip fuzz_sfnt fuzz_chart fuzz_cfb fuzz_doc fuzz_odt fuzz_xlsx
 ```
 
-`FW_FUZZ` instruments `fwcore`, `fwpkg`, `fwdoc`, `fwdraw`, miniz and pugixml with AddressSanitizer and coverage, so keep it out of normal builds.
+`FW_FUZZ` instruments `fwcore`, `fwpkg`, `fwdoc`, `fwsheet`, `fwdraw`, miniz and pugixml with AddressSanitizer and coverage, so keep it out of normal builds.
 
 ### Toolchains
 

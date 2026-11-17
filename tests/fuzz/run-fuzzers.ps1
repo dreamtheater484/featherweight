@@ -31,7 +31,7 @@ $clipboard = Join-Path $PSScriptRoot '..\clipboard'
 
 # Each target, its seed folders (regressions included) and the longest input worth trying.
 $all = [ordered]@{
-  fuzz_zip     = @{ Seeds = @("$office\generated", "$office\edge", "$office\malicious", "$office\broken", "$regressions\zip"); MaxLen = 200000 }
+  fuzz_zip     = @{ Seeds = @("$office\generated", "$office\edge", "$office\malicious", "$office\broken", "$seeds\zip", "$regressions\zip"); MaxLen = 200000 }
   fuzz_xml     = @{ Seeds = @("$seeds\xml", "$regressions\xml"); MaxLen = 65536 }
   fuzz_opc     = @{ Seeds = @("$seeds\opc", "$regressions\opc"); MaxLen = 16384 }
   fuzz_check   = @{ Seeds = @("$seeds\package", "$regressions\check"); MaxLen = 65536 }
@@ -60,6 +60,14 @@ $all = [ordered]@{
   fuzz_chart   = @{ Seeds = @("$seeds\chart", "$regressions\chart"); MaxLen = 65536 }
   # OpenDocument text import (D5): every .odt converts to a document that opens and passes the check, or is refused.
   fuzz_odt     = @{ Seeds = @("$seeds\odt", "$regressions\odt"); MaxLen = 65536 }
+  # Workbooks (S1): the model and its .xlsx reader; every part it writes back says what it said.
+  fuzz_xlsx    = @{ Seeds = @("$seeds\xlsx", "$seeds\package", "$regressions\xlsx"); MaxLen = 65536 }
+  # Number formats and value parsing (S1): spans stay inside the text; an exact parse shows as written.
+  fuzz_numfmt  = @{ Seeds = @("$seeds\numfmt", "$regressions\numfmt"); MaxLen = 4096 }
+  # CSV and TSV (S1): rows in order, and every cell shows exactly its field, on one thread or several.
+  fuzz_csv     = @{ Seeds = @("$office\csv", "$regressions\csv"); MaxLen = 16384 }
+  # Conditional formats (S1): a worksheet's rules evaluated with the formula engine and without.
+  fuzz_condfmt = @{ Seeds = @("$seeds\condfmt", "$regressions\condfmt"); MaxLen = 16384 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 

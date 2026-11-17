@@ -84,8 +84,10 @@ class Package {
   void SetRelationships(RelationshipSet set);
 
   // Reads every part, checking sizes and CRCs, and checks that every XML part is well-formed and
-  // within the limits. Opening only reads what it needs; this reads everything.
-  Status Verify() const;
+  // within the limits. Opening only reads what it needs; this reads everything. With `damaged`,
+  // a part that isn't XML (a thumbnail, a picture) and is damaged is listed there rather than
+  // failing: nothing reads it on opening, Office opens such files, and saving copies it as it is.
+  Status Verify(std::vector<std::string>* damaged = nullptr) const;
 
   // What one save writes differently, leaving the package as it is: parts left out, and parts
   // written with other bytes (docx::Serialize leaves out pictures nothing uses any more, which

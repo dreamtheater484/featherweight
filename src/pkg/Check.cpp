@@ -223,6 +223,17 @@ struct Sheet {
   bool loaded = false;
   std::unordered_map<std::string, std::string> values;  // "B2" -> the value as stored
   std::set<std::string> formulas;                         // cells with a formula
+  // Multi-cell array formulas: only the first cell has the f element, but Excel's calculation
+  // chain lists every cell of the array.
+  struct Area { uint32_t c1, r1, c2, r2; };
+  std::vector<Area> arrays;
+  bool InArray(std::string_view ref) const {
+    uint32_t col = 0, row = 0;
+    if (!ParseCellRef(ref, col, row)) return false;
+    for (const Area& a : arrays)
+      if (col >= a.c1 && col <= a.c2 && row >= a.r1 && row <= a.r2) return true;
+    return false;
+  }
 };
 
 struct Workbook {
@@ -284,6 +295,7 @@ class Checker {
   }
 
   void CheckRelationshipsAndTypes();
+  void ReportMissingTargets();
   void LoadParts();
   void AssignScopes();
   void CheckRules();
@@ -307,6 +319,8 @@ class Checker {
   std::unordered_map<std::string, PartDom*> index_;  // PartKey -> part
   Workbook book_;
   std::map<std::string, Embedded> embedded_;  // PartKey -> package
+  std::vector<std::pair<std::string, const Relationship*>> missing_;  // relationships part, one to a missing part
+  std::set<const Relationship*> used_;                                 // relationships a part names (r:id)
 };
 
 std::string Checker::MainPart() const {
@@ -317,16 +331,20 @@ std::string Checker::MainPart() const {
 }
 
 void Checker::Run() {
-  Status st = pkg_.Verify();
+  std::vector<std::string> damaged;
+  Status st = pkg_.Verify(&damaged);
   if (!st.Ok()) {
     Error({}, st.message);
     return;
   }
+  for (const std::string& part : damaged)
+    Warn(part, "it's damaged (its data doesn't match its checksum); nothing reads it on opening, and saving keeps it as it is");
   format_ = FormatOf(pkg_);
   CheckRelationshipsAndTypes();
   LoadParts();
   AssignScopes();
   CheckRules();
+  ReportMissingTargets();
   if (format_ == DocFormat::Word) CheckWordTables();
   if (format_ == DocFormat::Excel) {
     LoadWorkbook();
@@ -357,16 +375,45 @@ void Checker::CheckRelationshipsAndTypes() {
       if (r.id.empty()) Error(where, "a relationship has no id");
       else if (!ids.insert(r.id).second) Error(where, "id " + r.id + " is used twice");
       if (r.external) continue;
-      if (r.targetPart.empty()) Error(where, r.id + " has no target");
-      else if (!pkg_.FindPart(r.targetPart)) Error(where, r.id + " points to " + r.targetPart + ", which doesn't exist");
+      // Excel opens a workbook with an empty target and leaves it be (s1-corpus, 2026-11-17).
+      if (r.targetPart.empty()) {
+        if (format_ == DocFormat::Excel) Warn(where, r.id + " has no target");
+        else Error(where, r.id + " has no target");
+      }
+      else if (!pkg_.FindPart(r.targetPart)) missing_.push_back({where, &r});  // see ReportMissingTargets
     }
   }
   for (const auto& part : pkg_.Parts()) {
-    if (part.deleted || part.name == kContentTypesPart) continue;
-    if (pkg_.ContentTypeOf(part.name).empty()) Error(part.name, "it has no content type");
+    if (part.deleted || part.name == kContentTypesPart || !pkg_.ContentTypeOf(part.name).empty()) continue;
+    // Office keeps parts it removed while saving in place as [trash]/0000.dat, with no content
+    // type; Excel opens such workbooks, but refuses one with any other part that has no content type.
+    if (format_ == DocFormat::Excel && LowerAscii(part.name).starts_with("/[trash]/"))
+      Warn(part.name, "it has no content type (Office's leftover from saving in place); nothing reads it, and saving keeps it as it is");
+    else
+      Error(part.name, "it has no content type");
   }
   for (const auto& [name, type] : pkg_.Types().overrides)
     if (!pkg_.FindPart(name)) Warn({}, "a content type is given for " + name + ", which doesn't exist");
+}
+
+// A relationship to a part that doesn't exist. Excel opens a workbook in which nothing uses such a
+// relationship to a drawing, VML drawing, picture or printer settings (insee's), to notes'
+// comments (dropping the notes), to threaded comments, or of a type that isn't Office's; it
+// refuses one when a part uses it, or when it's a table's (probed with a separate Excel on
+// 2026-11-17; other types weren't tried, and stay errors).
+void Checker::ReportMissingTargets() {
+  for (const auto& [where, r] : missing_) {
+    std::string msg = r->id + " points to " + r->targetPart + ", which doesn't exist";
+    bool skipped = false;
+    if (format_ == DocFormat::Excel && !used_.contains(r)) {
+      skipped = !r->type.starts_with("http://schemas.openxmlformats.org/") &&
+                !r->type.starts_with("http://schemas.microsoft.com/") && !r->type.starts_with("http://purl.oclc.org/");
+      for (std::string_view type : {"drawing", "vmlDrawing", "image", "printerSettings", "comments", "threadedComment"})
+        skipped |= TypeIs(r->type, type);
+    }
+    if (skipped) Warn(where, msg + "; nothing uses it, and Excel opens such files");
+    else Error(where, msg);
+  }
 }
 
 // ---------- Parts and documents ----------
@@ -482,8 +529,10 @@ void Checker::CheckRules() {
       size_t ri = static_cast<size_t>(&rule - rules.data());
       bool lenient = rule.lenient || site.lenient;
       if (rule.kind == RefKind::RelationshipId) {
-        if (rels && rels->Find(ref.Value())) ++rep_.references;
-        else Issue(lenient, p->name, std::string(ref.attr.name()) + "=" + Quote(ref.Value()) + " doesn't match any of its relationships");
+        if (const Relationship* r = rels ? rels->Find(ref.Value()) : nullptr) {
+          ++rep_.references;
+          used_.insert(r);
+        } else Issue(lenient, p->name, std::string(ref.attr.name()) + "=" + Quote(ref.Value()) + " doesn't match any of its relationships");
         continue;
       }
       if (rule.nested) {
@@ -680,7 +729,15 @@ void Checker::LoadSheet(Sheet& sheet) {
       if (!IsElement(c, kX, "c")) continue;
       std::string ref = NormalCell(c.attribute("r").value());
       if (ref.empty()) continue;  // cells without r: TODO(S1), with the sheet reader
-      if (Child(c, kX, "f")) sheet.formulas.insert(ref);
+      if (auto f = Child(c, kX, "f")) {
+        sheet.formulas.insert(ref);
+        std::string_view range = f.attribute("ref").value();
+        size_t colon = range.find(':');
+        uint32_t c1 = 0, r1 = 0, c2 = 0, r2 = 0;
+        if (std::string_view(f.attribute("t").value()) == "array" && colon != std::string_view::npos &&
+            ParseCellRef(range.substr(0, colon), c1, r1) && ParseCellRef(range.substr(colon + 1), c2, r2) && c1 <= c2 && r1 <= r2)
+          sheet.arrays.push_back({c1, r1, c2, r2});
+      }
       std::string_view type = c.attribute("t").value();
       std::string value;
       if (type == "inlineStr") {
@@ -718,7 +775,7 @@ void Checker::CheckCalcChain() {
       }
       LoadSheet(*sheet);
       std::string ref = NormalCell(c.attribute("r").value());
-      if (sheet->formulas.count(ref)) ++rep_.derived;
+      if (sheet->formulas.count(ref) || sheet->InArray(ref)) ++rep_.derived;
       else Error(chain->name, "the calculation chain is stale: " + QuoteSheetName(sheet->name) + "!" + std::string(c.attribute("r").value()) + " has no formula");
     }
   }
@@ -839,7 +896,9 @@ void Checker::CompareCache(const PartDom& part, std::string_view formula, pugi::
     auto have = cached.find(i);
     std::string_view w = want == sheet->values.end() ? std::string_view() : std::string_view(want->second);
     std::string_view h = have == cached.end() ? std::string_view() : std::string_view(have->second);
-    if (!SameValue(h, w)) {
+    // Excel caches an error cell (#DIV/0!, #N/A) as 0 in a chart.
+    const bool error = !w.empty() && w.front() == '#';
+    if (!SameValue(h, w) && !(error && (h.empty() || SameValue(h, "0")))) {
       Warn(part.name, "the chart's cached value " + Quote(h) + " for " + QuoteSheetName(sheet->name) + "!" + cell +
                           " doesn't match " + std::string(bookName) + " (" + Quote(w) + ")");
       return;  // one message per series

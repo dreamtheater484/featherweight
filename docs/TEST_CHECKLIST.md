@@ -189,3 +189,52 @@ Test documents: `tests/office/doc/`, `tests/office/odt/`, `tests/office/dotx/`, 
 
 - [ ] Typing in the 300-page document never stutters, also at its start.
 - [ ] Opening a Word document, switching tabs and opening menus feel instant.
+
+## Spreadsheets (S1)
+
+Featherweight shows workbooks; it doesn't edit them yet (S2). What the automated checks can't judge: how it looks and feels next to Excel, real input devices, and paper. Test files: `tests/office/sheet/`, `tests/office/excel/`, `tests/office/csv/`, the real-world corpus in `D:\Documents\Codex\FeatherweightCorpus\xlsx` and `csv`, and your own workbooks. Make the two big files with `.venv\Scripts\python tests/office/make_budget_files.py` (into `build\budgets`).
+
+### Opening and looking
+
+- [ ] Open a `.xlsx` and a `.csv` from Explorer (Open with Featherweight), drag one onto the window, and open one with Ctrl+O. Each opens in its own tab next to PDFs and documents, and shows in Recent.
+- [ ] Open three of your own workbooks (a budget, a list, something with charts) side by side with Excel. Values, number formats (dates `dd-mm-yyyy`, € amounts, percentages), fonts, fills, borders, merged cells, column widths and row heights look the same.
+- [ ] Frozen panes stay put while scrolling; hidden rows and columns stay hidden; outline groups expand and collapse with their + and − buttons and the level buttons (1, 2, …).
+- [ ] The sheet tabs at the bottom: click one, and Ctrl+PgUp/PgDn. Hidden sheets aren't listed; tab colors show.
+- [ ] A right-to-left sheet (`tests/office/excel/sheets.xlsx`) runs from the right, as in Excel.
+- [ ] Conditional formats (`conditional-formats.xlsx`): colored cells, color scales, data bars and icons as in Excel. A table (`tables.xlsx`) shows its style and banded rows.
+- [ ] Pictures, shapes and charts (`pictures-shapes.xlsx`, `charts.xlsx`) sit on the same cells as in Excel. A chart sheet shows its chart.
+- [ ] A cell with a note has a red corner, one with a threaded comment a purple one (`notes.xlsx`); hovering shows the note, or the comment with its replies.
+- [ ] Zoom with Ctrl+wheel, Ctrl+= and Ctrl+−, Ctrl+0 (100 %) and the status bar's slider; scrolling a big sheet with the wheel, the scroll bar and the keyboard feels smooth.
+
+### Formulas
+
+- [ ] The formula bar shows the selected cell's formula (read-only).
+- [ ] A workbook with `=TODAY()` shows today's date shortly after opening; one set to manual calculation shows what was saved.
+- [ ] A formula Featherweight can't calculate yet, when opening recalculates it (it depends on `=TODAY()`, say), keeps Excel's value and gets a small gray triangle in its top-left corner; selected, the status bar says its value is possibly out of date.
+- [ ] A workbook with macros (`.xlsm`) or links to other workbooks opens without running anything and without asking to update links.
+
+### Selecting, copying and finding
+
+- [ ] Arrows, Ctrl+arrows, Home, Ctrl+Home, Ctrl+End, PgUp/PgDn and Alt+PgUp/PgDn (a screen across), with and without Shift, move and select as in Excel; Tab and Enter move on, Shift+Tab and Shift+Enter back. Shift+Space selects the row, Ctrl+Space the column, Ctrl+A everything. Click a row or column heading to select it whole, the corner for all.
+- [ ] The status bar shows Average, Count and Sum (Excel's order) for two or more cells; text only, just Count.
+- [ ] Copy a range (Ctrl+C) and paste it into Excel (the values as shown, with fonts, colors, fills and alignment; not borders, column widths or merged cells), Word (a table) and Notepad (tab-separated text).
+- [ ] Ctrl+F finds text and numbers as they're shown on the sheet you're looking at (switch sheets and it searches that one), and the count is right.
+
+### CSV
+
+- [ ] Open a comma-separated, a semicolon-separated, a tab-separated and a pipe-separated file (`tests/office/csv/semicolon.csv`, `tab.tsv`, `pipe.csv`). Columns split correctly.
+- [ ] Nothing changes: codes with leading zeros (`00123`), long numbers (IBANs, phone numbers), and dates show exactly as in the file.
+- [ ] A file from an old Windows program (`tests/office/csv/ansi-1252.csv`) shows "Crème brûlée" and "€4,50" correctly.
+
+### Printing
+
+- [ ] Open print preview (Ctrl+F2; Esc closes it) and print (Ctrl+P) a sheet to the Epson, and print the same sheet from Excel. Featherweight prints the sheet shown, as Excel's Print Active Sheets does. Page breaks, print area, repeated titles, fit to page, orientation, margins, headers and footers, and gridlines match.
+- [ ] Print a sheet with pictures and a chart: they're on the paper where they are on screen.
+
+### Big files and speed (record the numbers)
+
+- [ ] `million-cells.xlsx`: first screen in ___ s (target < 1.5 s). Ctrl+End and scrolling feel instant.
+- [ ] `100mb.csv`: first screen in ___ s (target < 1 s), fully loaded in ___ s (target < 5 s).
+- [ ] Memory with one typical workbook open (one of yours): ___ MB in Task Manager (target < 150 MB).
+- [ ] After opening a workbook, Featherweight uses no CPU while you do nothing (Task Manager).
+- [ ] Opening a PDF and a Word document is as quick as before.
