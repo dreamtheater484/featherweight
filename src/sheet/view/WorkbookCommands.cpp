@@ -184,12 +184,14 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
     }
   }
   if (alt && !ctrl && !shift && vk == VK_OEM_PLUS && !editor_.Active() && !preview_) return CmdAutoSum;
+  if (ctrl && alt && !shift && vk == VK_F9 && !editor_.Active()) return CmdCalculateFull;
   // Excel's keys for rows, columns, cells and sheets (not while a cell is typed in).
   if (!editor_.Active() && !preview_ && !alt) {
     if (ctrl && ((shift && vk == VK_OEM_PLUS) || vk == VK_ADD)) return CmdInsertCells;
     if (ctrl && !shift && (vk == VK_OEM_MINUS || vk == VK_SUBTRACT)) return CmdDeleteCells;
     if (!ctrl && shift && vk == VK_F11) return CmdInsertSheet;
     if (ctrl && shift && vk == 'V') return CmdPasteValues;
+    if (vk == VK_F9 && !ctrl) return shift ? CmdCalculateSheet : CmdCalculateNow;
     if (!ctrl && !shift && vk == VK_F5) return CmdGoTo;
   }
   if (preview_ && vk == VK_ESCAPE) return CmdPrintPreview;
@@ -400,6 +402,13 @@ void WorkbookView::UpdateStatus() {
 void WorkbookView::BuildStatusBar(StatusBarModel& m) {
   if (!Ready()) return;
   UpdateStatus();
+  if (circular_) {
+    const auto [sheet, row, col] = *circular_;
+    std::wstring at = Utf8ToWide(CellName(static_cast<uint32_t>(row), static_cast<uint32_t>(col)));
+    if (sheet != static_cast<int>(sheet_) && static_cast<size_t>(sheet) < book_->SheetCount())
+      at = Utf8ToWide(book_->GetSheet(static_cast<size_t>(sheet)).Name()) + L"!" + at;
+    m.segments.push_back(L"Circular References: " + at);
+  }
   if (Stale(active_.row, active_.col))
     m.segments.push_back(L"Value possibly out of date: it uses a function Featherweight can't calculate yet");
   if (totals_.count >= 2) {
@@ -795,7 +804,7 @@ bool WorkbookView::HasIdleWork() const {
   for (size_t i = loadNext_; i < book_->SheetCount(); ++i)
     if (!book_->GetSheet(i).Loaded()) return true;
   // Then what edits left dirty (not in manual mode); then nothing: no idle CPU.
-  return recalc_ && (!calc_ || calc_->Opening() || (calc_->Calculating() && !calc_->ManualCalc()));
+  return recalc_ && (!calc_ || calc_->Opening() || (calc_->Calculating() && (!calc_->ManualCalc() || calcNow_)));
 }
 
 bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
@@ -812,12 +821,16 @@ bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   }
   // Then what Excel recalculates when it opens the file, a slice at a time (plan §7.3 "Cached
   // values"); the cached values show until then.
-  if (!recalc_ || (calc_ && !calc_->Opening() && (!calc_->Calculating() || calc_->ManualCalc()))) return false;
+  if (!recalc_ || (calc_ && !calc_->Opening() && (!calc_->Calculating() || (calc_->ManualCalc() && !calcNow_)))) return false;
   calc::WorkbookCalc& calc = Calc();
   const uint64_t before = calc.Changes();
   const double budget = std::max(1.0, deadlineMs - anim::Now());
   const bool done = calc.Opening() ? calc.OpenStep(budget) : calc.CalcStep(budget);
   const bool changed = calc.Changes() != before;
+  if (done && !calc.Opening()) {
+    calcNow_ = false;
+    CheckCircular();
+  }
   if (!changed && !done) return false;
   if (changed) {
     text_->Clear();  // keyed by cell: it wouldn't see the new values

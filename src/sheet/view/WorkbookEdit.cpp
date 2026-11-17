@@ -668,6 +668,23 @@ void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
   host_.ViewInvalidate();
 }
 
+void WorkbookView::CheckCircular() {
+  if (!calc_ || calc_->Opening()) return;
+  int sheet = 0;
+  int32_t row = 0, col = 0;
+  std::optional<std::tuple<int, int32_t, int32_t>> now;
+  if (calc_->CircularCell(sheet, row, col)) now = std::make_tuple(sheet, row, col);
+  // Excel's warning, once when one appears (none while iterative calculation is on).
+  if (now && !circular_)
+    host_.ViewMessage(BannerKind::Warning,
+                      L"Circular reference: a formula refers to its own cell, directly or indirectly. It may calculate "
+                      L"incorrectly.");
+  if (now != circular_) {
+    circular_ = now;
+    host_.ViewStateChanged();
+  }
+}
+
 // The engine follows the edit (s2-calc's incremental recalculation): what the edit dirtied is
 // recalculated at idle, a slice at a time (WorkbookView::IdleWork).
 void WorkbookView::SyncEngine(const std::vector<edit::Change>& changes) {

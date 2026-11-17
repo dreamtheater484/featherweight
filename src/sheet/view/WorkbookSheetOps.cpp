@@ -82,6 +82,9 @@ bool WorkbookView::GridCommandState(int cmd, CommandState& s) {
     case CmdPasteFormats: s.label = L"Paste formats"; s.enabled = cells; return true;
     case CmdPasteTranspose: s.label = L"Paste transposed"; s.enabled = cells; return true;
     case CmdAutoSum: s.label = L"AutoSum"; s.shortcut = L"Alt+="; s.enabled = cells; return true;
+    case CmdCalculateNow: s.label = L"Calculate now"; s.shortcut = L"F9"; s.enabled = Ready(); return true;
+    case CmdCalculateSheet: s.label = L"Calculate sheet"; s.shortcut = L"Shift+F9"; s.enabled = Ready() && !ChartSheet(); return true;
+    case CmdCalculateFull: s.label = L"Calculate everything"; s.shortcut = L"Ctrl+Alt+F9"; s.enabled = Ready(); return true;
     default: return false;
   }
 }
@@ -153,6 +156,23 @@ bool WorkbookView::GridCommand(int cmd) {
     case CmdPasteFormats: Paste(PasteMode::Formats); return true;
     case CmdPasteTranspose: Paste(PasteMode::All, true); return true;
     case CmdAutoSum: AutoSum(); return true;
+    case CmdCalculateNow:
+    case CmdCalculateFull:
+      // Then at idle until done, in manual mode too.
+      cmd == CmdCalculateNow ? Calc().CalculateNow() : Calc().CalculateFull();
+      recalc_ = calcNow_ = true;
+      host_.ViewStateChanged();
+      return true;
+    case CmdCalculateSheet:
+      Calc().CalculateSheet(sheet);  // at once
+      text_->Clear();
+      totals_ = Totals{};
+      for (auto& rules : rules_)
+        if (rules) rules->Changed();
+      CheckCircular();
+      host_.ViewStateChanged();
+      host_.ViewInvalidate();
+      return true;
     default: return false;
   }
 }

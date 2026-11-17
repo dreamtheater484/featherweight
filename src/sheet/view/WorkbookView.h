@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "PagedView.h"
@@ -322,6 +323,11 @@ class WorkbookView : public PagedView {
   edit::Editor& Ed();
   void Edited(const std::vector<edit::Change>& changes);
   void SyncEngine(const std::vector<edit::Change>& changes);
+  // F9 and Ctrl+Alt+F9 recalculate at idle even in manual mode until done; circular references
+  // found warn once and show in the status bar ("Circular References: B2"), as Excel's do.
+  bool calcNow_ = false;
+  std::optional<std::tuple<int, int32_t, int32_t>> circular_;  // sheet, row, col
+  void CheckCircular();
   bool EditRefused(const edit::Result& r);  // shows why; true when it failed
   std::unique_ptr<edit::Editor> edit_;
   // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
