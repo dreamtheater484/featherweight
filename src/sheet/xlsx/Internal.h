@@ -73,6 +73,15 @@ std::vector<XmlPiece> TopLevel(std::string_view xml);
 // schema puts it; and the prefix the sheet's elements are written with ("x:" or "").
 void PutSheetElement(detail::PartText& t, std::string_view local, const std::string& xml);
 std::string SheetPrefix(const detail::PartText& t);
+// The sheet's conditional formats (`validations` false: every conditionalFormatting element and the
+// x14 extension {78C0D931-...}) or validations (the dataValidations element and the extension
+// {CCE6A557-...}), as written: `xml` the top-level elements, `ext` the extension element's content.
+// Put replaces them (empty removes them; an extLst left empty goes too).
+void GetSheetRules(const detail::PartText& t, bool validations, std::string& xml, std::string& ext);
+void PutSheetRules(detail::PartText& t, bool validations, const std::string& xml, const std::string& ext);
+// A differential format (dxfs) as styles.xml has it, and read back.
+std::string StyleItemXml(const Dxf& d);
+bool ReadStyleItem(std::string_view xml, Dxf& out);
 // One font, fill, border or cell format as styles.xml has it, and read back from that (the edit
 // journal records the formats added this way, as faithful as saving them).
 std::string StyleItemXml(const Font& f);

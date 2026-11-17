@@ -420,6 +420,20 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = MoveCells(sheet, from, toSheet, to, std::move(name));
         break;
       }
+      case JournalOp::SetSheetRules: {
+        const int sheet = f.Int();
+        const uint32_t ruleKind = f.U32();
+        std::string xml(f.S()), ext(f.S());
+        std::u16string name = f.S16();
+        if (f.Ok()) r = SetSheetRules(sheet, ruleKind ? RuleKind::Validations : RuleKind::ConditionalFormats, xml, ext, std::move(name));
+        break;
+      }
+      case JournalOp::AddDxf: {
+        Dxf x;
+        if (!xlsx::ReadStyleItem(f.S(), x)) return damaged;
+        r = same(AddDxf(x));
+        break;
+      }
       case JournalOp::SetFilter: {
         const int sheet = f.Int();
         const std::optional<SheetFilter> filter = f.Filter();

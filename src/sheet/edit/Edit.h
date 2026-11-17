@@ -48,6 +48,7 @@ enum ChangeFlag : uint32_t {
   kNames = 1u << 9,       // defined names
   kView = 1u << 10,       // selection, active sheet, top-left cell, zoom (not undo steps)
   kObjects = 1u << 11,    // the sheet's notes, links or drawings moved (a sort): load them again
+  kRules = 1u << 12,      // the sheet's conditional formats or validations changed: read them again
 };
 
 // Cells inserted or deleted (kShift): along `axis`, `count` rows or columns at `at` (> 0 inserted
@@ -151,6 +152,7 @@ class Editor {
   uint32_t AddFill(const Fill& fill);
   uint32_t AddBorder(const Border& border);
   uint32_t AddNumFmt(std::string_view code);  // a custom format's id (164 on), or the built-in id
+  uint32_t AddDxf(const Dxf& dxf);  // a differential format (conditional formats): its dxfs index
 
   // ---- Rows and columns. first..last, both included.
   Result SetRowHeight(int sheet, uint32_t first, uint32_t last, double points);  // 0: the default
@@ -216,6 +218,11 @@ class Editor {
   // it (autoFilter, sheetPr filterMode while a column filters, the hidden name
   // _xlnm._FilterDatabase). The rows it hides are the caller's (HideRows, in the same group).
   Result SetFilter(int sheet, const std::optional<SheetFilter>& filter);
+  // The sheet's conditional formats or validations, as XML in Excel's form (sheet/data/Rules builds
+  // it): `xml` every top-level conditionalFormatting element (or the dataValidations element), `ext`
+  // the content of Excel's x14 extension for them; empty removes them. The rest of the part is kept.
+  enum class RuleKind : uint8_t { ConditionalFormats, Validations };
+  Result SetSheetRules(int sheet, RuleKind kind, const std::string& xml, const std::string& ext, std::u16string stepName);
   // Excel's rules for a sheet name: 1-31 characters, none of : \ / ? * [ ], not starting or
   // ending with ', not "History", and no other sheet's name (without case). Empty when valid.
   std::u16string CheckSheetName(std::string_view name, int except = -1) const;

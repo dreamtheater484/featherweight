@@ -438,7 +438,7 @@ struct Editor::State {
     bordersAtSave = st.Borders().size();
     numFmtsAtSave = st.CustomFormats().size();
     stringsAtSave = b.Strings().Size();
-    cellStylesAtSave = st.CellStyleXfs().size() + st.CellStyles().size();
+    cellStylesAtSave = st.CellStyleXfs().size() + st.CellStyles().size() + st.Dxfs().size();
   }
 
   void ViewChanged(const Sheet* s) {
@@ -1584,6 +1584,22 @@ uint32_t Editor::AddNumFmt(std::string_view code) {
     for (const auto& [i, c] : fmts) id = std::max(id, i + 1);
     fmts.emplace(id, std::string(code));
     return id;
+  }();
+  rec.rec.U(at);
+  rec.commit = true;
+  return at;
+}
+
+uint32_t Editor::AddDxf(const Dxf& dxf) {
+  const std::string xml = xlsx::StyleItemXml(dxf);
+  Rec rec(*this, JournalOp::AddDxf, [&](JournalRecord& w) { w.S(xml); }, true);
+  const uint32_t at = [&]() -> uint32_t {
+    StylesBuilder sb(book_.GetStyles());
+    auto& v = sb.Dxfs();
+    for (size_t i = 0; i < v.size(); ++i)
+      if (xlsx::StyleItemXml(v[i]) == xml) return static_cast<uint32_t>(i);
+    v.push_back(dxf);
+    return static_cast<uint32_t>(v.size() - 1);
   }();
   rec.rec.U(at);
   rec.commit = true;
@@ -3945,6 +3961,31 @@ Result Editor::SetFilter(int sheet, const std::optional<SheetFilter>& filter) {
   }());
 }
 
+Result Editor::SetSheetRules(int sheet, RuleKind kind, const std::string& xml, const std::string& ext,
+                             std::u16string stepName) {
+  Rec rec(*this, JournalOp::SetSheetRules,
+          [&](JournalRecord& w) { w.I(sheet).U(static_cast<uint8_t>(kind)).S(xml).S(ext).S16(stepName); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (s.Kind() != SheetKind::Worksheet || s.PartName().empty())
+      return Result::Fail(u"Only a worksheet of an Excel workbook keeps these rules.");
+    const bool validations = kind == RuleKind::Validations;
+    std::string oldXml, oldExt;
+    xlsx::GetSheetRules(A::Text(s), validations, oldXml, oldExt);
+    if (oldXml == xml && oldExt == ext) return Result{};
+    return Run(*this, std::move(stepName), [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveText(sv);
+      xlsx::PutSheetRules(A::Text(s), validations, xml, ext);
+      st.Change(&s, kRules, Range{});
+      return Result{};
+    });
+  }());
+}
+
 Result Editor::SetTabColor(int sheet, const Color& color) {
   Rec rec(*this, JournalOp::SetTabColor, [&](JournalRecord& w) { w.I(sheet).C(color); });
   return rec.Done([&]() -> Result {
@@ -4289,7 +4330,7 @@ void Editor::BeginSave() {
   st.bordersSaving = styles.Borders().size();
   st.numFmtsSaving = styles.CustomFormats().size();
   st.stringsSaving = book_.Strings().Size();
-  st.cellStylesSaving = styles.CellStyleXfs().size() + styles.CellStyles().size();
+  st.cellStylesSaving = styles.CellStyleXfs().size() + styles.CellStyles().size() + styles.Dxfs().size();
 }
 
 bool Editor::Saving() const { return s_->saving; }
@@ -4360,7 +4401,7 @@ bool Editor::StylesDirty() const {
   return st.CellXfs().size() != s_->xfsAtSave || st.Fonts().size() != s_->fontsAtSave ||
          st.Fills().size() != s_->fillsAtSave || st.Borders().size() != s_->bordersAtSave ||
          st.CustomFormats().size() != s_->numFmtsAtSave ||
-         st.CellStyleXfs().size() + st.CellStyles().size() != s_->cellStylesAtSave;
+         st.CellStyleXfs().size() + st.CellStyles().size() + st.Dxfs().size() != s_->cellStylesAtSave;
 }
 
 bool Editor::StringsDirty() const { return book_.Strings().Size() != s_->stringsAtSave; }
