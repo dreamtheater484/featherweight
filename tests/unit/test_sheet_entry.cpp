@@ -612,3 +612,60 @@ TEST(sheet_typing_cut_to_another_sheet) {
     }
   }
 }
+
+TEST(sheet_typing_shift_keeps_text_as_written) {
+  EntryNames names;
+  StructuralEdit row2;  // a row inserted at 2
+  row2.at = 1;
+  row2.count = 1;
+  CompileOptions at;
+  at.row = 9, at.col = 5;
+  // Only the references that move are rewritten; spaces, line breaks and case stay.
+  CHECK_EQ(ShiftReferences("SUM( a1 ,\nA3:b4 )  +  Sheet2!A5 + 'My Sheet'!$B$7&\"A3\"", at, row2, names),
+           std::string("SUM( a1 ,\nA4:B5 )  +  Sheet2!A5 + 'My Sheet'!$B$7&\"A3\""));
+  CHECK_EQ(ShiftReferences("if( a1>0 , sheet1!A2:a9 , 1E+3 % )", at, row2, names),
+           std::string("if( a1>0 , sheet1!A3:A10 , 1E+3 % )"));
+  CHECK_EQ(ShiftReferences("Sheet1!A2 + A2#", at, StructuralEdit{0, true, 1, -1}, names),
+           std::string("Sheet1!#REF! + #REF!#"));
+  // Nothing moved: as written, also through the printer (a 3-D reference).
+  CHECK_EQ(ShiftReferences(" A1 + 1", at, StructuralEdit{0, true, 5, 1}, names), std::string(" A1 + 1"));
+  CHECK_EQ(ShiftReferences("SUM( Sheet1:Sheet2!A1 ) + a1", at, row2, names), std::string("SUM( Sheet1:Sheet2!A1 ) + a1"));
+  CHECK_EQ(ShiftReferences("SUM( Sheet1:Sheet2!A1 ) + a9", at, row2, names), std::string("SUM(Sheet1:Sheet2!A1)+A10"));
+
+  // The same as compiling and printing (typed text goes that way): formulas x edits x cells.
+  std::vector<std::string> formulas = {
+      "A1",           "$A$1+B$2*$C3",    "SUM(A1:C3)",          "SUM(A:A)+SUM($2:$4)",  "A1:B2:C3",
+      "A1: B2",       "INDEX(A:A,3):B5", "LOG10(A2)+ATAN2(B3,C4)", "Sheet2!B2+'My Sheet'!C3:D4", "Sheet1!2:3",
+      "(A1,B2:C3)",   "-A5%",            "@A1:A9",              "\"A1\"&B2&{1,\"x\";2,3}", "#N/A+#DIV/0!",
+      "IF(TRUE,X5,Y6)", "Rate*A1",        "_xlfn.XLOOKUP(A1,B:B,C:C)", "SUM(Sheet2!A:B)",  "1.5E-3*D10",
+      "A1048576+XFD1", "$XFD$1048576",   "LET(x,A1,x*B2)",       "Sheet1!Rate+Sheet2!#REF!", "Nope!A1+B1",
+  };
+  for (const EntryCase& k : kEntryCases)
+    if (k.ok) formulas.emplace_back(k.invariant[0] == '=' ? k.invariant + 1 : k.invariant);
+  std::vector<StructuralEdit> edits = {
+      {0, true, 0, 2},  {0, true, 2, -3}, {0, false, 1, 1}, {0, false, 0, -2},
+      {0, true, 3, 1, 1, 3},  {0, false, 2, -1, 0, 4}, {1, true, 1, 2}, {0, true, 1048575, -1},
+  };
+  const CompileOptions cells[] = {{0, 4, 2}, {0, 0, 0}, {1, 6, 6}, {0, 20, 30}};
+  int compared = 0;
+  for (const std::string& f : formulas)
+    for (const StructuralEdit& e : edits)
+      for (const CompileOptions& cell : cells) {
+        CompileOptions typed = cell;
+        typed.typed = true;
+        auto plain = Compile(f, cell, names), viaTyped = Compile(f, typed, names);
+        if (!plain || !viaTyped || Print(*plain, cell, names) != Print(*viaTyped, cell, names)) continue;
+        CompileOptions to, toTyped;
+        const std::string fast = ShiftReferences(f, cell, e, names, &to);
+        const std::string printed = ShiftReferences(f, typed, e, names, &toTyped);
+        auto a = Compile(fast, to, names), b = Compile(printed, to, names);
+        if (!b) continue;  // #REF!:#REF! (A1:B2 with both gone) doesn't read back either way
+        CHECK(a != nullptr);
+        if (!a) continue;
+        if (Print(*a, to, names) != Print(*b, to, names))
+          std::printf("  %s at %d,%d,%d: %s vs %s\n", f.c_str(), cell.sheet, cell.row, cell.col, fast.c_str(), printed.c_str());
+        CHECK_EQ(Print(*a, to, names), Print(*b, to, names));
+        ++compared;
+      }
+  CHECK(compared > 3000);
+}

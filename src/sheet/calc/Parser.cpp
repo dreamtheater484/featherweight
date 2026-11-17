@@ -1083,4 +1083,275 @@ std::shared_ptr<const Formula> Compile(std::string_view text, const CompileOptio
   return f;
 }
 
+namespace {
+
+// Reads a formula's text as the parser does, but only far enough to find its A1 references, and
+// writes the ones `map` changes where they stand (as the printer writes them for the cell `to`).
+class TextMapper {
+ public:
+  TextMapper(std::string_view s, const CompileOptions& at, const CompileOptions& to, const Names& names,
+             const RefMap& map)
+      : s_(s), at_(at), to_(to), names_(names), map_(map) {}
+
+  // 1: a reference changed (`out` has the text), 0: none did, -1: something it doesn't read.
+  int Run(std::string& out) {
+    if (at_.r1c1 || at_.typed) return -1;
+    const size_t n = s_.size();
+    while (i_ < n) {
+      const char c = s_[i_];
+      if (IsSpace(c)) {
+        ++i_;
+        continue;
+      }
+      switch (c) {
+        case '+': case '-': case '*': case '/': case '^': case '&': case '=': case '<': case '>': case '%':
+        case ',': case '(': case ')': case ':': case '@':
+          ++i_;
+          continue;
+        case '"':
+          if (!SkipString()) return -1;
+          continue;
+        case '{':  // constants only
+          ++i_;
+          while (i_ < n && s_[i_] != '}') {
+            if (s_[i_] == '"') {
+              if (!SkipString()) return -1;
+            } else {
+              ++i_;
+            }
+          }
+          if (i_ >= n) return -1;
+          ++i_;
+          continue;
+        case '#': {
+          size_t len = 0;
+          const Err e = ParseErr(s_.substr(i_), &len);
+          if (e == Err::None) {  // A1#, a spill
+            if (IsLetter(At(i_ + 1)) || At(i_ + 1) == '/') return -1;
+            ++i_;
+            continue;
+          }
+          i_ += len;
+          // #REF!A1 (a deleted sheet's reference) is printed as written; let the parser read it.
+          if (e == Err::Ref && (IsLetter(At(i_)) || IsDigit(At(i_)) || At(i_) == '$' || At(i_) == '[')) return -1;
+          continue;
+        }
+        case '\'':
+          if (!Quoted()) return -1;
+          continue;
+        default:
+          if (IsDigit(c) || c == '.') {
+            if (!Number()) return -1;
+          } else if (c == '$' || IsNameStart(c)) {
+            if (!Word()) return -1;
+          } else {
+            return -1;
+          }
+      }
+    }
+    if (!changed_) return 0;
+    out_.append(s_.substr(copied_));
+    out = std::move(out_);
+    return 1;
+  }
+
+ private:
+  char At(size_t k) const { return k < s_.size() ? s_[k] : '\0'; }
+
+  bool SkipString() {  // at the opening quote
+    for (++i_; i_ < s_.size(); ++i_)
+      if (s_[i_] == '"') {
+        if (At(i_ + 1) != '"') {
+          ++i_;
+          return true;
+        }
+        ++i_;
+      }
+    return false;
+  }
+
+  // A number, or whole rows (1:3).
+  bool Number() {
+    Part a, b;
+    size_t la = ScanA1(s_, i_, at_.row, at_.col, a);
+    if (la && a.RowOnly() && At(i_ + la) == ':') {
+      size_t lb = ScanA1(s_, i_ + la + 1, at_.row, at_.col, b);
+      if (lb && b.RowOnly()) return Reference(i_, la, a, &b, lb, at_.sheet);
+    }
+    const size_t start = i_, n = s_.size();
+    while (i_ < n && IsDigit(s_[i_])) ++i_;
+    if (i_ < n && s_[i_] == '.') {
+      ++i_;
+      while (i_ < n && IsDigit(s_[i_])) ++i_;
+    }
+    if (i_ == start + 1 && s_[start] == '.') return false;
+    if (i_ < n && (s_[i_] == 'e' || s_[i_] == 'E')) {
+      size_t k = i_ + 1;
+      if (k < n && (s_[k] == '+' || s_[k] == '-')) ++k;
+      if (k < n && IsDigit(s_[k])) {
+        while (k < n && IsDigit(s_[k])) ++k;
+        i_ = k;
+      }
+    }
+    return !(i_ < n && (IsNameChar(s_[i_]) || s_[i_] == '$'));
+  }
+
+  // 'My sheet'!A1: one sheet of this workbook only.
+  bool Quoted() {
+    std::string name;
+    for (++i_;;) {
+      if (i_ >= s_.size()) return false;
+      char d = s_[i_++];
+      if (d == '\'') {
+        if (At(i_) != '\'') break;
+        ++i_;
+      }
+      name += d;
+    }
+    if (At(i_) != '!' || name.find_first_of("[]:") != std::string::npos) return false;
+    ++i_;
+    return Target(names_.FindSheet(name));
+  }
+
+  bool Word() {
+    const size_t start = i_, n = s_.size();
+    size_t e = i_;
+    bool dollar = false;
+    for (; e < n && (IsNameChar(s_[e]) || s_[e] == '$'); ++e)
+      if (s_[e] == '$') dollar = true;
+    const char next = At(e);
+    if (!dollar) {
+      if (next == '(') {  // a function
+        i_ = e;
+        return true;
+      }
+      if (next == '!') {
+        i_ = e + 1;
+        return Target(names_.FindSheet(s_.substr(start, e - start)));
+      }
+      if (next == '[') return false;  // a table's columns
+      if (next == ':') {              // Sheet1:Sheet3!A1
+        size_t k = e + 1;
+        while (k < n && IsNameChar(s_[k])) ++k;
+        if (k > e + 1 && At(k) == '!') return false;
+      }
+    }
+    Part a;
+    size_t la = ScanA1(s_, i_, at_.row, at_.col, a);
+    if (la && Reference(i_, la, a)) return true;
+    if (dollar || !IsNameStart(s_[start])) return false;
+    i_ = e;  // a name, TRUE or FALSE
+    return true;
+  }
+
+  // After "Sheet!" (i_ past the "!"): the reference or name on that sheet (-1: not one of this
+  // workbook's, kept as written).
+  bool Target(int sheet) {
+    const char c = At(i_);
+    if (c == '#') {
+      size_t len = 0;
+      if (ParseErr(s_.substr(i_), &len) != Err::Ref) return false;
+      i_ += len;
+      return true;
+    }
+    Part a;
+    size_t la = ScanA1(s_, i_, at_.row, at_.col, a);
+    if (la == 0 && IsDigit(c)) return false;
+    if (la && Reference(i_, la, a, nullptr, 0, sheet < 0 ? -2 : sheet)) return true;
+    size_t e = i_;
+    while (e < s_.size() && IsNameChar(s_[e])) ++e;
+    if (e == i_ || !IsNameStart(c)) return false;
+    i_ = e;
+    return true;
+  }
+
+  // The reference at `p` (its first end `a`, `la` long; with `b` given, the area a:b already
+  // read), on `sheet` (-1: the formula's; -2: another workbook's). False when `a` alone isn't one.
+  bool Reference(size_t p, size_t la, const Part& a, const Part* given = nullptr, size_t lb = 0, int sheet = -1) {
+    Part b;
+    bool area = given != nullptr;
+    if (area) {
+      b = *given;
+    } else if (At(p + la) == ':') {
+      lb = ScanA1(s_, p + la + 1, at_.row, at_.col, b);
+      area = lb && ((a.Cell() && b.Cell()) || (a.RowOnly() && b.RowOnly()) || (a.ColOnly() && b.ColOnly()));
+    }
+    if (!area && !a.Cell()) return false;
+    const size_t end = p + la + (area ? 1 + lb : 0);
+    i_ = end;
+    if (sheet == -2) return true;
+    if (sheet == -1) sheet = at_.sheet;
+    // As the parser stores it (EmitRef, EmitArea) and the printer maps it.
+    const bool wholeCols = area && a.ColOnly(), wholeRows = area && a.RowOnly();
+    int32_t r1 = a.row, c1 = a.col, r2 = area ? b.row : a.row, c2 = area ? b.col : a.col;
+    bool rAbs1 = a.rowAbs, cAbs1 = a.colAbs, rAbs2 = area ? b.rowAbs : a.rowAbs, cAbs2 = area ? b.colAbs : a.colAbs;
+    if (wholeCols) r1 = 0, r2 = kMaxRows - 1, rAbs1 = rAbs2 = true;
+    if (wholeRows) c1 = 0, c2 = kMaxCols - 1, cAbs1 = cAbs2 = true;
+    const uint8_t abs = static_cast<uint8_t>((rAbs1 ? RefMap::kRow1 : 0) | (cAbs1 ? RefMap::kCol1 : 0) |
+                                             (rAbs2 ? RefMap::kRow2 : 0) | (cAbs2 ? RefMap::kCol2 : 0));
+    const int32_t o1 = r1, o2 = r2, p1 = c1, p2 = c2;
+    if (!map_.Map(sheet, r1, c1, r2, c2, abs, wholeRows, wholeCols)) {
+      Replace(p, end, "#REF!");
+      return true;
+    }
+    // Unchanged when every part printed names the same row or column as before.
+    auto same = [](int32_t before, int32_t after, bool isAbs, int32_t from, int32_t to, int32_t max) {
+      return isAbs ? before == after : int64_t{from} + before == WrapLine(int64_t{to} + after, max);
+    };
+    const bool rowsSame = wholeCols || (same(o1, r1, rAbs1, at_.row, to_.row, kMaxRows) &&
+                                        same(o2, r2, rAbs2, at_.row, to_.row, kMaxRows));
+    const bool colsSame = wholeRows || (same(p1, c1, cAbs1, at_.col, to_.col, kMaxCols) &&
+                                        same(p2, c2, cAbs2, at_.col, to_.col, kMaxCols));
+    if (rowsSame && colsSame) return true;
+    std::string t;
+    auto row = [&](int32_t v, bool isAbs) {
+      if (isAbs) t += '$';
+      t += std::to_string((isAbs ? v : WrapLine(int64_t{to_.row} + v, kMaxRows)) + 1);
+    };
+    auto col = [&](int32_t v, bool isAbs) {
+      if (isAbs) t += '$';
+      t += ColumnName(isAbs ? v : WrapLine(int64_t{to_.col} + v, kMaxCols));
+    };
+    if (wholeCols) {
+      col(c1, cAbs1), t += ':', col(c2, cAbs2);
+    } else if (wholeRows) {
+      row(r1, rAbs1), t += ':', row(r2, rAbs2);
+    } else {
+      col(c1, cAbs1), row(r1, rAbs1);
+      if (area) t += ':', col(c2, cAbs2), row(r2, rAbs2);
+    }
+    Replace(p, end, t);
+    return true;
+  }
+
+  static int32_t WrapLine(int64_t v, int32_t max) {
+    int64_t r = v % max;
+    return static_cast<int32_t>(r < 0 ? r + max : r);
+  }
+
+  void Replace(size_t from, size_t to, std::string_view with) {
+    if (!changed_) out_.reserve(s_.size() + 16);
+    changed_ = true;
+    out_.append(s_.substr(copied_, from - copied_));
+    out_.append(with);
+    copied_ = to;
+  }
+
+  std::string_view s_;
+  const CompileOptions& at_;
+  const CompileOptions& to_;
+  const Names& names_;
+  const RefMap& map_;
+  size_t i_ = 0, copied_ = 0;
+  bool changed_ = false;
+  std::string out_;
+};
+
+}  // namespace
+
+int MapReferenceText(std::string_view text, const CompileOptions& at, const CompileOptions& to, const Names& names,
+                     const RefMap& map, std::string& out) {
+  return TextMapper(text, at, to, names, map).Run(out);
+}
+
 }  // namespace fw::sheet::calc

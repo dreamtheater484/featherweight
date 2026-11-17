@@ -99,7 +99,8 @@ struct StructuralEdit {
 // A formula of the cell `at` after the edit, as Excel rewrites it (measured): references move,
 // grow and shrink; one deleted becomes #REF!; with cells, only references inside the band move.
 // Invariant text in and out, without "=". `moved` gets the formula's own cell after the edit.
-// Text that doesn't compile comes back unchanged.
+// Text that doesn't compile, and a formula nothing in it moved for, comes back as written; only the
+// references that move are rewritten, the rest keeps its spaces and case.
 std::string ShiftReferences(std::string_view formula, const CompileOptions& at, const StructuralEdit& edit,
                             Names& names, CompileOptions* moved = nullptr);
 // The same with the editor's edit::Shift on `editedSheet`: along Rows, `band`'s columns are the

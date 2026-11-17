@@ -168,14 +168,18 @@ class Editor {
   Result DeleteColumns(int sheet, uint32_t first, uint32_t count);
   enum class Direction : uint8_t { RightOrLeft, DownOrUp };
   Result InsertCells(int sheet, const Range& r, Direction shift);  // Right or Down
-  // Cut and paste (or drag) on one sheet: cells `from` go to the block whose top-left cell is `to`,
-  // values, formulas, formats and merges; the cells they leave are cleared and those they cover
-  // replaced. References everywhere follow as Excel makes them (measured): one wholly inside the
-  // cut cells moves with them; covered cells that weren't cut drop out of references as deleted
-  // cells do (#REF! when nothing is left); the rest stay. Rich text, notes, hyperlinks, conditional
-  // formats and validations stay where they are (not moved yet). Refused over part of a merge or
-  // an array, and over tables, PivotTables and data tables.
-  Result MoveCells(int sheet, const Range& from, CellAddr to, std::u16string stepName = u"Paste");
+  // Cut and paste (or drag): cells `from` of `sheet` go to the block whose top-left cell is `to` on
+  // sheet `toSheet`, values, formulas, formats and merges; the cells they leave are cleared and
+  // those they cover replaced. References everywhere follow as Excel makes them (measured): one
+  // wholly inside the cut cells moves with them (named with the other sheet when they go there);
+  // covered cells that weren't cut drop out of references as deleted cells do (#REF! when nothing
+  // is left); the rest stay. Rich text, notes, hyperlinks, conditional formats and validations
+  // stay where they are (not moved yet). Refused over part of a merge or an array, and over
+  // tables, PivotTables and data tables.
+  Result MoveCells(int sheet, const Range& from, int toSheet, CellAddr to, std::u16string stepName = u"Paste");
+  Result MoveCells(int sheet, const Range& from, CellAddr to, std::u16string stepName = u"Paste") {
+    return MoveCells(sheet, from, sheet, to, std::move(stepName));
+  }
   Result DeleteCells(int sheet, const Range& r, Direction shift);  // Left or Up
 
   // ---- Sorting, as Excel sorts: the rows of `r` put in `order` (the row at r.firstRow + order[i]

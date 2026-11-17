@@ -607,3 +607,66 @@ TEST(sheet_move_cells_overlapping) {
   CHECK(ed.MoveCells(0, Range{0, 0, 0, 0}, CellAddr{kMaxRows - 1, 0}));
   CHECK(!ed.MoveCells(0, Range{0, 0, 1, 0}, CellAddr{kMaxRows - 1, 0}));
 }
+
+// Cut on Sheet1 and pasted on Sheet2 (measured: cutprobe.py's third case, A1:A3 to Sheet2!C1).
+TEST(sheet_move_cells_to_another_sheet) {
+  const std::string one = "<sheetData>" + Row(1, Num("A1", 1) + Num("B1", 10) + F("E1", "A1")) +
+                          Row(2, Num("A2", 2) + F("E2", "SUM(A1:A3)")) + Row(3, F("A3", "A1+B1")) + "</sheetData>";
+  const std::string two = "<sheetData>" + Row(1, F("A1", "Sheet1!A1")) + Row(2, F("A2", "C1") + Num("C2", 5)) + "</sheetData>";
+  auto book = OpenParts({one, two});
+  if (!book) return;
+  Editor ed(*book);
+  edit::Journal journal;
+  ed.SetJournal(&journal);
+  const Sheet& s1 = book->GetSheet(0);
+  const Sheet& s2 = book->GetSheet(1);
+  CHECK(ed.MoveCells(0, Range{0, 0, 2, 0}, 1, CellAddr{0, 2}));
+  CHECK(Text(s1, 0, 0) == "" && Text(s1, 1, 0) == "" && FormulaText(s1, 2, 0) == "-");
+  CHECK(Text(s2, 0, 2) == "1" && Text(s2, 1, 2) == "2");
+  CHECK_EQ(FormulaText(s2, 2, 2), std::string("C1+Sheet1!B1"));
+  CHECK_EQ(FormulaText(s1, 0, 4), std::string("Sheet2!C1"));
+  CHECK_EQ(FormulaText(s1, 1, 4), std::string("SUM(Sheet2!C1:C3)"));
+  CHECK_EQ(FormulaText(s2, 0, 0), std::string("Sheet2!C1"));
+  CHECK_EQ(FormulaText(s2, 1, 0), std::string("#REF!"));
+  CHECK(book->Names()[0].formula == "Sheet2!$C$1");  // Total: Sheet1!$A$1
+  CHECK(ed.Undo());
+  CHECK(Text(s1, 0, 0) == "1" && Text(s2, 1, 2) == "5" && FormulaText(s1, 0, 4) == "A1" && FormulaText(s2, 1, 0) == "C1");
+
+  auto again = OpenParts({one, two});
+  if (!again) return;
+  Editor replayed(*again);
+  const std::string records(journal.All());
+  CHECK(replayed.Replay(records).ok);
+  CHECK(Text(again->GetSheet(0), 0, 0) == "1");  // undone there too
+  CHECK(ed.Redo());
+  CHECK_EQ(FormulaText(s2, 2, 2), std::string("C1+Sheet1!B1"));
+}
+
+// A filter's columns follow columns inserted and deleted, in the model as in the file (s2-corpus:
+// filter-*.txt).
+TEST(sheet_shift_filter_columns) {
+  auto book = OpenParts({"<sheetData/>", "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  SheetFilter f;
+  f.ref = Range{1, 1, 4, 4};  // B2:E5
+  FilterColumn c;
+  c.colId = 1;  // C
+  c.values = {"x"};
+  FilterColumn other;
+  other.colId = 3;  // E
+  other.kind = FilterColumn::Kind::Other;
+  other.xml = "<filterColumn colId=\"3\"><colorFilter dxfId=\"0\"/></filterColumn>";
+  f.columns = {c, other};
+  CHECK(ed.SetFilter(0, f));
+  const Sheet& s = book->GetSheet(0);
+  CHECK(ed.InsertColumns(0, 2, 1));  // before C
+  CHECK(s.Filter()->ref == (Range{1, 1, 4, 5}) && s.Filter()->columns.size() == 2);
+  CHECK(s.Filter()->columns[0].colId == 2 && s.Filter()->columns[1].colId == 4);
+  CHECK(s.Filter()->columns[1].xml == "<filterColumn colId=\"4\"><colorFilter dxfId=\"0\"/></filterColumn>");
+  CHECK(ed.DeleteColumns(0, 3, 1));  // D, the filtered one
+  CHECK(s.Filter()->ref == (Range{1, 1, 4, 4}) && s.Filter()->columns.size() == 1 && s.Filter()->columns[0].colId == 3);
+  CHECK(s.Filter()->filtered);
+  CHECK(ed.Undo(2));
+  CHECK(s.Filter()->ref == f.ref && s.Filter()->columns.size() == 2 && s.Filter()->columns[0].colId == 1);
+}
