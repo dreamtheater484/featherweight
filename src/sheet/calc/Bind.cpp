@@ -231,6 +231,35 @@ bool WorkbookCalc::SpillSize(std::string_view formula, int sheet, uint32_t row, 
   return true;
 }
 
+std::wstring WorkbookCalc::SpillReason(int sheet, uint32_t row, uint32_t col) {
+  if (sheet < 0 || sheet >= SheetCount()) return {};
+  const Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  CellInfo c;
+  FormulaInfo fi;
+  if (!s.GetCell(row, col, c) || c.value.type != ValueType::Error || c.value.error != ErrorCode::Spill ||
+      !s.GetFormula(row, col, fi) || !fi.dynamic)
+    return {};
+  const calc::Cell at{sheet, static_cast<int32_t>(row), static_cast<int32_t>(col)};
+  auto f = engine_->CompileAt(fi.text, at, true);
+  if (!f) return {};
+  Evaluator ev(*this, engine_.get());
+  Value v;
+  ev.Evaluate(*f, at, v);
+  if (!v.IsArray()) return L"Spill range is unknown";
+  const uint64_t lastRow = uint64_t{row} + static_cast<uint64_t>(v.array().rows()) - 1;
+  const uint64_t lastCol = uint64_t{col} + static_cast<uint64_t>(v.array().cols()) - 1;
+  if (lastRow > 1048575 || lastCol > 16383) return L"Spill range is too big";
+  const Range want{row, col, static_cast<uint32_t>(lastRow), static_cast<uint32_t>(lastCol)};
+  auto overlaps = [&](const Range& r) {
+    return r.firstRow <= want.lastRow && r.lastRow >= want.firstRow && r.firstCol <= want.lastCol && r.lastCol >= want.firstCol;
+  };
+  for (const auto& t : s.Tables())
+    if (overlaps(t.ref)) return L"Spill range in table";
+  for (const Range& m : s.Merges())
+    if (overlaps(m)) return L"Spill range has merged cell";
+  return L"Spill range isn't blank";
+}
+
 void WorkbookCalc::StructureEdited() {
   while (Opening()) OpenStep(1e9);
   engine_ = std::make_unique<Engine>(*this);

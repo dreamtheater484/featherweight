@@ -489,6 +489,9 @@ void WorkbookView::BuildStatusBar(StatusBarModel& m) {
   }
   if (Stale(active_.row, active_.col))
     m.segments.push_back(L"Value possibly out of date: it uses a function Featherweight can't calculate yet");
+  if (calc_ && !calc_->Opening())  // a dynamic array that can't spill: why, as Excel's error menu says it
+    if (std::wstring why = calc_->SpillReason(static_cast<int>(sheet_), active_.row, active_.col); !why.empty())
+      m.segments.push_back(L"#SPILL!: " + why);
   if (totals_.count >= 2) {
     // Excel's order: average, count, sum; in the format of the first number.
     auto show = [&](double v) {

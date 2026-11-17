@@ -1473,3 +1473,33 @@ TEST(sheet_calc_typed_dynamic_arrays) {
   settle();
   CHECK(!book->GetSheet(0).GetCell(1, 0, c) || c.value.type == fw::sheet::ValueType::Empty);
 }
+
+TEST(sheet_calc_spill_reasons) {
+  namespace edit = fw::sheet::edit;
+  using fw::sheet::Range;
+  auto book = OpenSheet("<row r=\"1\"><c r=\"B1\"><v>9</v></c></row>", "<calcPr calcId=\"191029\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  edit::Editor ed(*book);
+  Follow(ed, calc);
+  auto settle = [&] {
+    while (!calc.CalcStep(8)) {
+    }
+  };
+  auto put = [&](uint32_t row, uint32_t col, const char* formula) {
+    edit::CellInput in = edit::CellInput::Formula(formula);
+    in.dynamic = true;
+    Range r;
+    calc.SpillSize(formula, 0, row, col, r);
+    in.arrayRange = r;
+    CHECK(ed.SetCell(0, row, col, in));
+    settle();
+  };
+  put(0, 0, "_xlfn.SEQUENCE(1,3)");  // B1 holds 9
+  CHECK(calc.SpillReason(0, 0, 0) == L"Spill range isn't blank");
+  put(20, 0, "_xlfn.SEQUENCE(2)");  // spills: no reason
+  CHECK(calc.SpillReason(0, 20, 0).empty());
+}

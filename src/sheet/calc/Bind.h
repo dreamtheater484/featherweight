@@ -65,6 +65,9 @@ class WorkbookCalc : public Host {
   // context): true when it gives an array of more than one value (a dynamic array), with the cells
   // it spills over, or the cell alone when something's in the way (it shows #SPILL!).
   bool SpillSize(std::string_view formula, int sheet, uint32_t row, uint32_t col, Range& spill);
+  // Why a dynamic array at the cell shows #SPILL!, in the words of Excel's error menu ("Spill range
+  // isn't blank"); empty when it doesn't.
+  std::wstring SpillReason(int sheet, uint32_t row, uint32_t col);
   // Sheets, names, rows or columns inserted or deleted (kSheets, kNames, kShift): every formula is
   // read again and recalculated.
   void StructureEdited();
