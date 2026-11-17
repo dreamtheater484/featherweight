@@ -7,6 +7,9 @@
 
 #include "core/Strings.h"
 
+// Run once a paste: small code over fast code.
+#pragma optimize("s", on)
+
 namespace fw::sheet::view {
 
 namespace {
