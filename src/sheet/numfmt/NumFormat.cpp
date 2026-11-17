@@ -26,9 +26,14 @@
 //   are all placeholders before the numerator, with the text among them.
 // - Times round to the second (or the shown decimals of one), then each field is truncated.
 //   Dates outside 0..9999-12-31 show "####", except a lone elapsed unit ([h]), which shows any
-//   value, negative ones too. A plain unit after its elapsed one ([h] h) shows the elapsed count.
+//   value, negative ones too. With an elapsed code, the largest time unit is the elapsed one ([h] h
+//   shows the count twice, [m] h:mm a plain minute); after another date code, it shows Windows
+//   Excel's odd count, the seconds field plus a half read as days (s [h]: 3.14159 shows 1293).
 // - General shows at most 11 characters (a minus not counted): fixed-point unless that shows
 //   fewer significant digits than scientific notation would (1.23456789E-05).
+// - A tag's high byte is a digit system ([$-3000401]: Persian), the first section's for the
+//   whole format; quoted digits, text and a blank fraction's 0 stay ASCII. Its next byte is the
+//   calendar: 3, like a Japanese tag, shows Japan's eras for g and e.
 
 namespace fw::sheet {
 
@@ -220,6 +225,55 @@ bool EastAsian(uint32_t lcid) {
   return primary == 0x04 || primary == 0x11 || primary == 0x12;  // Chinese, Japanese, Korean
 }
 
+// Japan's eras from 1868: the first day (yyyymmdd), the name and its letter.
+struct JapaneseEra {
+  int start;
+  const wchar_t* name;
+  wchar_t letter;
+};
+constexpr JapaneseEra kJapaneseEras[] = {{18680101, L"\u660E\u6CBB", L'M'}, {19120730, L"\u5927\u6B63", L'T'},
+                                         {19261225, L"\u662D\u548C", L'S'}, {19890108, L"\u5E73\u6210", L'H'},
+                                         {20190501, L"\u4EE4\u548C", L'R'}};
+
+// Digits 0..9 of the digit system a tag's high byte names ([$-3000401]: 03, Persian's), as Excel
+// shows them; nullptr: ASCII.
+constexpr const wchar_t* kDigitSystems[] = {
+    nullptr,  // 00
+    nullptr,  // 01
+    L"\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669",  // 02 Arabic-Indic
+    L"\u06F0\u06F1\u06F2\u06F3\u06F4\u06F5\u06F6\u06F7\u06F8\u06F9",  // 03 Extended Arabic-Indic
+    L"\u0966\u0967\u0968\u0969\u096A\u096B\u096C\u096D\u096E\u096F",  // 04 Devanagari
+    L"\u09E6\u09E7\u09E8\u09E9\u09EA\u09EB\u09EC\u09ED\u09EE\u09EF",  // 05 Bengali
+    L"\u0A66\u0A67\u0A68\u0A69\u0A6A\u0A6B\u0A6C\u0A6D\u0A6E\u0A6F",  // 06 Gurmukhi
+    L"\u0AE6\u0AE7\u0AE8\u0AE9\u0AEA\u0AEB\u0AEC\u0AED\u0AEE\u0AEF",  // 07 Gujarati
+    L"\u0B66\u0B67\u0B68\u0B69\u0B6A\u0B6B\u0B6C\u0B6D\u0B6E\u0B6F",  // 08 Oriya
+    L"0\u0BE7\u0BE8\u0BE9\u0BEA\u0BEB\u0BEC\u0BED\u0BEE\u0BEF",  // 09 Tamil
+    L"\u0C66\u0C67\u0C68\u0C69\u0C6A\u0C6B\u0C6C\u0C6D\u0C6E\u0C6F",  // 0A Telugu
+    L"\u0CE6\u0CE7\u0CE8\u0CE9\u0CEA\u0CEB\u0CEC\u0CED\u0CEE\u0CEF",  // 0B Kannada
+    L"\u0D66\u0D67\u0D68\u0D69\u0D6A\u0D6B\u0D6C\u0D6D\u0D6E\u0D6F",  // 0C Malayalam
+    L"\u0E50\u0E51\u0E52\u0E53\u0E54\u0E55\u0E56\u0E57\u0E58\u0E59",  // 0D Thai
+    L"\u0ED0\u0ED1\u0ED2\u0ED3\u0ED4\u0ED5\u0ED6\u0ED7\u0ED8\u0ED9",  // 0E Lao
+    L"\u0F20\u0F21\u0F22\u0F23\u0F24\u0F25\u0F26\u0F27\u0F28\u0F29",  // 0F Tibetan
+    L"\u1040\u1041\u1042\u1043\u1044\u1045\u1046\u1047\u1048\u1049",  // 10 Myanmar
+    L"0\u1369\u136A\u136B\u136C\u136D\u136E\u136F\u1370\u1371",  // 11 Ethiopic
+    L"\u17E0\u17E1\u17E2\u17E3\u17E4\u17E5\u17E6\u17E7\u17E8\u17E9",  // 12 Khmer
+    L"\u1810\u1811\u1812\u1813\u1814\u1815\u1816\u1817\u1818\u1819",  // 13 Mongolian
+    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,    // 14..1A
+    L"\u3007\u4E00\u4E8C\u4E09\u56DB\u4E94\u516D\u4E03\u516B\u4E5D",  // 1B
+    L"\u3007\u58F1\u5F10\u53C2\u56DB\u4F0D\u516D\u4E03\u516B\u4E5D",  // 1C
+    L"\uFF10\uFF11\uFF12\uFF13\uFF14\uFF15\uFF16\uFF17\uFF18\uFF19",  // 1D
+    L"\u25CB\u4E00\u4E8C\u4E09\u56DB\u4E94\u516D\u4E03\u516B\u4E5D",  // 1E
+    L"\u96F6\u58F9\u8D30\u53C1\u8086\u4F0D\u9646\u67D2\u634C\u7396",  // 1F
+    L"\uFF10\uFF11\uFF12\uFF13\uFF14\uFF15\uFF16\uFF17\uFF18\uFF19",  // 20
+    L"\u25CB\u4E00\u4E8C\u4E09\u56DB\u4E94\u516D\u4E03\u516B\u4E5D",  // 21
+    L"\u96F6\u58F9\u8CB3\u53C3\u8086\u4F0D\u9678\u67D2\u634C\u7396",  // 22
+    L"\uFF10\uFF11\uFF12\uFF13\uFF14\uFF15\uFF16\uFF17\uFF18\uFF19",  // 23
+    L"\uFF10\u4E00\u4E8C\u4E09\u56DB\u4E94\uF9D1\u4E03\u516B\u4E5D",  // 24
+    L"\uF9B2\u58F9\u8CB3\uF96B\u56DB\u4F0D\uF9D1\u4E03\u516B\u4E5D",  // 25
+    L"\uFF10\uFF11\uFF12\uFF13\uFF14\uFF15\uFF16\uFF17\uFF18\uFF19",  // 26
+    L"\uC601\uC77C\uC774\uC0BC\uC0AC\uC624\uC721\uCE60\uD314\uAD6C",  // 27
+};
+
 }  // namespace
 
 // ---- Compiling ----
@@ -368,12 +422,25 @@ struct Compiler {
             v = v * 16 + static_cast<uint32_t>(digit);
           }
           // Hex ("409", "F800", "1010409") or a name ("en-US", "nl-NL"), as some files have.
+          // The hex's high byte is the digits, the next the calendar.
           const size_t nameEnd = std::min(tag.find(','), tag.size());
-          if (k < nameEnd) v = LcidFromName(tag.substr(0, nameEnd));
+          if (k < nameEnd) {
+            std::wstring_view name = tag.substr(0, nameEnd);
+            constexpr std::wstring_view kGannen = L"-x-gannen";  // Excel's formatCode16
+            if (name.size() > kGannen.size() && StartsNoCase(name, name.size() - kGannen.size(), kGannen)) {
+              s.gannen = true;
+              name.remove_suffix(kGannen.size());
+            }
+            v = LcidFromName(name);
+          }
           const uint32_t low = v & 0xFFFF;
           if (low == 0xF800) s.system = 'D';
           else if (low == 0xF400) s.system = 'T';
           else if (low) s.lcid = low;
+          s.calendar = static_cast<uint8_t>(v >> 16);
+          const uint32_t digits = v >> 24;  // the first section's, for the whole format
+          if (f.sections_.empty() && digits < std::size(kDigitSystems) && kDigitSystems[digits])
+            f.digits_ = static_cast<uint8_t>(digits);
         }
       }
       return e + 1;
@@ -694,17 +761,33 @@ struct Compiler {
       else if (IsDateToken(x.kind) && x.kind != Token::Era) ++units;
     }
     s.elapsedOnly = elapsed == 1 && units == 0 && !s.system;
-    // After an elapsed unit, the same plain unit shows the elapsed count too (measured: [h] hh shows
-    // 75 75 for 3 days 3 hours, [s] ss 271433 271433).
-    bool eh = false, em = false, es = false;
+    if (!elapsed) return;
+    // With an elapsed code, the largest time unit is the elapsed one, each of its codes, and a
+    // smaller elapsed one is plain (measured: [h] hh shows 75 75 for 3 days 3 hours, [s] ss 271433
+    // 271433, [m] h:mm 23 75:23).
+    auto rank = [](const Token& x) {
+      if (x.kind == Token::Elapsed) return x.ch == 'h' ? 2 : x.ch == 'm' ? 1 : 0;
+      return x.kind == Token::Hour ? 2 : x.kind == Token::Minute ? 1 : x.kind == Token::Second ? 0 : -1;
+    };
+    int largest = -1;
+    for (const Token& x : t) largest = std::max(largest, rank(x));
+    const wchar_t unit = largest == 2 ? L'h' : largest == 1 ? L'm' : L's';
     for (Token& x : t) {
-      const wchar_t unit = x.kind == Token::Hour ? L'h' : x.kind == Token::Minute ? L'm' : x.kind == Token::Second ? L's' : 0;
-      if (unit && (unit == 'h' ? eh : unit == 'm' ? em : es)) {
+      if (x.kind != Token::Elapsed && rank(x) == largest) {
         x.kind = Token::Elapsed;
         x.ch = unit;
         x.b = x.b >= 2 ? 4 : 3;
+      } else if (x.kind == Token::Elapsed && rank(x) < largest) {
+        x.kind = rank(x) == 1 ? Token::Minute : Token::Second;
+        x.b = std::min<uint32_t>(x.b - 2, 2);
       }
-      if (x.kind == Token::Elapsed) (x.ch == 'h' ? eh : x.ch == 'm' ? em : es) = true;
+    }
+    // An elapsed code after another date code (not its own unit's) shows Windows Excel's odd count,
+    // marked by an upper-case unit (Formatter::DateTime).
+    bool other = false;
+    for (Token& x : t) {
+      if (x.kind == Token::Elapsed && other) x.ch = static_cast<wchar_t>(x.ch - 32);
+      other = other || (IsDateToken(x.kind) && x.kind != Token::Era && x.kind != Token::Elapsed);
     }
   }
 };
@@ -723,7 +806,8 @@ NumberFormat::NumberFormat(std::wstring_view code) : pool_(code) {
   }
   Compiler{*this, pool_}.Run();
   const Section& s = sections_[0];
-  general_ = sections_.size() == 1 && s.kind == Section::General && s.tokens.size() == 1 && !s.color && !s.op;
+  general_ = sections_.size() == 1 && s.kind == Section::General && s.tokens.size() == 1 && !s.color && !s.op &&
+             !digits_;
 }
 
 bool NumberFormat::IsDateTime() const { return !sections_.empty() && sections_[0].kind == Section::DateTime; }
@@ -738,13 +822,20 @@ struct Formatter {
   const NumLocale& loc;
   Formatted& out;
   std::string digits;  // scratch
+  size_t digitsShown = 0;
+  bool ascii = false;  // Digit() writes ASCII whatever the digit system
 
   std::wstring_view Pool(const Token& t) const {
     return std::wstring_view(f.pool_).substr(std::min<size_t>(t.a, f.pool_.size()), t.b);
   }
   void Ch(wchar_t c) { out.text += c; }
   void Str(std::wstring_view s) { out.text += s; }
-  void Digit(char d) { out.text += static_cast<wchar_t>(d); }
+  // A digit the number shows, in the format's digit system (a literal "5" stays ASCII).
+  void Digit(char d) {
+    ++digitsShown;
+    const bool mapped = f.digits_ && !ascii && d >= '0' && d <= '9';
+    out.text += mapped ? kDigitSystems[f.digits_][d - '0'] : static_cast<wchar_t>(d);
+  }
 
   bool Common(const Token& t) {
     switch (t.kind) {
@@ -812,13 +903,13 @@ struct Formatter {
   bool General(double v, int w) {
     Decimal x = ToDecimal(v);
     if (!x.n) {
-      Ch(L'0');
+      Digit('0');
       return true;
     }
     auto emitFixed = [&](int L) {
       size_t end = digits.size();
       while (end > static_cast<size_t>(L) && digits[end - 1] == '0') --end;
-      if (L == 0) Ch(L'0');
+      if (L == 0) Digit('0');
       for (int k = 0; k < L; ++k) Digit(digits[k]);
       if (end > static_cast<size_t>(L)) {
         Str(loc.decimal);
@@ -847,7 +938,7 @@ struct Formatter {
       }
     } else {
       const int L = Fixed(x, 0, digits);
-      Ch(L ? L'1' : L'0');
+      Digit(L ? '1' : '0');
       return true;
     }
     for (int pass = 0; pass < 2; ++pass) {
@@ -870,8 +961,8 @@ struct Formatter {
       Ch(L'E');
       Ch(x.e < 0 ? L'-' : L'+');
       const int ae = std::abs(x.e);
-      if (ae < 10) Ch(L'0');
-      Str(std::to_wstring(ae));
+      if (ae < 10) Digit('0');
+      for (char c : std::to_string(ae)) Digit(c);
       return true;
     }
     return false;
@@ -1014,7 +1105,7 @@ struct Formatter {
           IntDigit(p++, s.intDigits, t.ch, I.data(), L, s.group);
         } else {
           if (q < static_cast<int>(F.size()) && q <= lastNonZero) Digit(F[q]);
-          else if (t.ch == '0') Ch(L'0');
+          else if (t.ch == '0') Digit('0');
           else if (t.ch == '?') Ch(L' ');
           ++q;
         }
@@ -1061,7 +1152,7 @@ struct Formatter {
           ++p;
         } else if (phase == 1) {
           if (q < static_cast<int>(F.size()) && q <= lastNonZero) Digit(F[q]);
-          else if (t.ch == '0') Ch(L'0');
+          else if (t.ch == '0') Digit('0');
           else if (t.ch == '?') Ch(L' ');
           ++q;
         } else {
@@ -1157,27 +1248,29 @@ struct Formatter {
       }
       if (x.kind == Token::Digit) {
         if (k < s.intEnd) {
-          const size_t at = out.text.size();
+          const size_t before = digitsShown;
+          ascii = zero && blank;  // that "0" is ASCII in any digit system ([$-3000401]# ?/? shows 0 as "0")
           IntDigit(p++, s.intDigits, x.ch, I.data(), static_cast<int>(I.size()), s.group);
-          for (size_t c = at; c < out.text.size(); ++c) intShown = intShown || (out.text[c] >= L'0' && out.text[c] <= L'9');
+          ascii = false;
+          intShown = intShown || digitsShown > before;
           if (k + 1 == s.intEnd) intVisible = intShown;
         } else if (k < s.slash) {
           IntDigit(np++, s.numDigits, x.ch, N.data(), static_cast<int>(N.size()), false);
         } else if (k >= s.denEnd) {
           // Placeholders after the denominator show as unfilled ones (# ?/? ? shows " 3/4  ").
-          if (x.ch == '0') Ch(L'0');
+          if (x.ch == '0') Digit('0');
           else if (x.ch == '?') Ch(L' ');
         } else {
           const int at = dp - dpad;
           if (dp < dpad) {
-            Ch(L'0');
+            Digit('0');
           } else if (at < static_cast<int>(D.size())) {
             if (dp == s.denDigits - 1)
               for (size_t c = static_cast<size_t>(at); c < D.size(); ++c) Digit(D[c]);
             else
               Digit(D[static_cast<size_t>(at)]);
           } else if (x.ch == '0') {
-            Ch(L'0');
+            Digit('0');
           } else if (x.ch == '?') {
             Ch(L' ');
           }
@@ -1231,15 +1324,38 @@ struct Formatter {
     if (negative) Ch(L'-');
     auto num = [&](double value, int width) {
       const std::string d = IntDigits(value);
-      if (static_cast<int>(d.size()) < width) out.text.append(static_cast<size_t>(width) - d.size(), L'0');
+      for (int k = static_cast<int>(d.size()); k < width; ++k) Digit('0');
       for (char c : d) Digit(c);
+    };
+    // Japan's eras (measured): g shows the era (R, 令, 令和 for g, gg, ggg) and e its year (ee: two
+    // digits) in Japanese or the Japanese calendar ([$-30409]); the calendar's y is that year in two
+    // digits too, and Japanese's y after a g. Elsewhere g shows nothing and e is the year.
+    const bool japan = s.calendar == 3 || (s.lcid & 0x3FF) == 0x11;
+    const JapaneseEra* era = &kJapaneseEras[0];
+    bool kanji = false, afterEra = false;
+    if (japan) {
+      for (const JapaneseEra& x : kJapaneseEras)
+        if (y * 10000 + mo * 100 + d >= x.start) era = &x;
+      for (const Token& t : s.tokens) kanji = kanji || (t.kind == Token::Era && t.b >= 2);
+    }
+    auto eraYear = [&](int width) {
+      const int ey = y - era->start / 10000 + 1;
+      if (ey == 1 && s.gannen && kanji) Ch(L'\u5143');  // 元年: the first year, with the era in kanji
+      else num(ey, width);
     };
     for (const Token& t : s.tokens) {
       switch (t.kind) {
         case Token::Year:
-          if (t.ch == 'b') num(t.b > 2 ? y + 543 : (y + 543) % 100, t.b > 2 ? 1 : 2);
-          else if (t.ch == 'e' || t.b > 2) num(y, 1);
-          else num(y % 100, 2);
+          if (japan && (t.ch == 'e' || (!t.ch && (s.calendar == 3 || afterEra)))) {
+            eraYear(t.ch == 'e' && t.b < 2 ? 1 : 2);
+          } else if (t.ch == 'b') {
+            const int by = s.lcid ? y : y + 543;  // a language tag shows the year itself
+            num(t.b > 2 ? by : by % 100, t.b > 2 ? 1 : 2);
+          } else if (t.ch == 'e' || t.b > 2) {
+            num(y, 1);
+          } else {
+            num(y % 100, 2);
+          }
           break;
         case Token::Month:
           if (t.b <= 2) num(mo, static_cast<int>(t.b));
@@ -1263,8 +1379,19 @@ struct Formatter {
         case Token::Minute: num(minute, t.b >= 2 ? 2 : 1); break;
         case Token::Second: num(second, t.b >= 2 ? 2 : 1); break;
         case Token::Elapsed: {
-          const double unit = t.ch == 'h' ? 3600 : t.ch == 'm' ? 60 : 1;
-          num(std::floor(std::floor(total / perSecond) / unit), static_cast<int>(t.b > 2 ? t.b - 2 : 1));
+          const wchar_t u = Lower(t.ch);
+          const double unit = u == 'h' ? 3600 : u == 'm' ? 60 : 1;
+          const int width = static_cast<int>(t.b > 2 ? t.b - 2 : 1);
+          if (t.ch == u) {
+            num(std::floor(std::floor(total / perSecond) / unit), width);
+          } else {
+            // After another date code, Windows Excel shows the seconds field before rounding (in the
+            // shown decimals' unit) plus a half, read as days (measured: s [h] shows 3.14159 as
+            // "53 1293", (53.376 + 0.5) * 24; Mac Excel shows 75).
+            const double field = std::round((a - std::floor(a)) * 86400.0 * perSecond * 1e6) / 1e6;
+            const double x = std::fmod(field + 0.5, s.secDigits ? perSecond : 60.0);
+            num(std::floor(x * 86400.0 / unit + 1e-9), width);
+          }
           break;
         }
         case Token::AmPm: {
@@ -1284,12 +1411,19 @@ struct Formatter {
           Str(loc.decimal);
           std::wstring fd = std::to_wstring(static_cast<long long>(frac));
           if (static_cast<int>(fd.size()) < s.secDigits) fd.insert(0, static_cast<size_t>(s.secDigits) - fd.size(), L'0');
-          Str(std::wstring_view(fd).substr(0, t.b));
+          for (wchar_t c : std::wstring_view(fd).substr(0, t.b)) Digit(static_cast<char>(c));
           break;
         }
         case Token::Slash: Str(loc.dateSep); break;
         case Token::Colon: Str(loc.timeSep); break;
-        case Token::Era: break;
+        case Token::Era:
+          if (japan) {
+            if (t.b == 1) Ch(era->letter);
+            else if (t.b == 2) Ch(era->name[0]);
+            else Str(era->name);
+            afterEra = true;
+          }
+          break;
         default: Common(t); break;
       }
     }

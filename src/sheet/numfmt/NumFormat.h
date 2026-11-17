@@ -108,10 +108,10 @@ class NumberFormat {
       Hour,
       Minute,
       Second,
-      Elapsed,   // [h], [mm], [ss]: ch 'h', 'm' or 's'; b: width
+      Elapsed,   // [h], [mm], [ss]: ch 'h', 'm' or 's' ('H', 'M', 'S' after another date code); b: width + 2
       AmPm,      // ch 0: AM/PM; otherwise A/P: a, b are the letters' cases ('A' or 'a', 'P' or 'p')
       FracSec,   // b digits of seconds
-      Era,       // shown as nothing
+      Era,       // g: b letters; Japan's era in its calendar, otherwise nothing
       Comma,     // resolved when compiled: grouping, scaling or a literal
     } kind;
     wchar_t ch = 0;
@@ -125,6 +125,8 @@ class NumberFormat {
     uint8_t color = 0;
     char system = 0;       // 'D': Windows' long date ([$-F800]), 'T': its time ([$-F400])
     uint32_t lcid = 0;     // [$-407]: names in that language
+    uint8_t calendar = 0;  // [$-30409]: the tag's calendar (3: Japan's eras)
+    bool gannen = false;   // [$-ja-JP-x-gannen]: an era's first year shows as 元
     // Numbers: integer and decimal placeholders (mantissa's for scientific), grouping, and the
     // power of ten the value is multiplied by (2 per %, -3 per scaling comma).
     int intDigits = 0, fracDigits = 0, expDigits = 0, scale = 0;
@@ -146,6 +148,7 @@ class NumberFormat {
   std::wstring pool_;  // literal text
   bool general_ = true;
   bool localAmPm_ = false;  // AM/PM shows the locale's designators (built-ins 18 and 19)
+  uint8_t digits_ = 0;      // [$-3000401]: the first section's digit system, for every number; 0: ASCII
   friend struct Formatter;
   friend struct Compiler;
   friend struct FormatAccess;
