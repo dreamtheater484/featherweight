@@ -387,6 +387,13 @@ class WorkbookView : public PagedView {
   // Excel's column width as it shows it (8.43) from pixels, and the file's width for it (9.140625).
   double DisplayWidth(int px) const;
   double FileWidth(double display) const;
+  // ---- Merge, freeze panes, group (WorkbookSheetOps.cpp).
+  bool MergedIn(const Range& r) const;  // a merged area overlaps r
+  void MergeSelection(int cmd);         // CmdMergeCenter, CmdMergeAcross, CmdMergeCells, CmdUnmerge
+  bool Frozen() const { return frozenRow1_ > frozenRow0_ || frozenCol1_ > frozenCol0_; }
+  void Freeze(int cmd);                 // CmdFreezePanes (or unfreeze), CmdFreezeTopRow, CmdFreezeFirstColumn
+  void PanesChanged();                  // the sheet's frozen panes changed (an edit, undo, redo)
+  void GroupSelection(bool in);         // Alt+Shift+Right and Left
   bool WholeRows() const;     // whole rows are selected (not everything)
   bool WholeColumns() const;
   int ShownNeighbour(int dir) const;  // the next shown sheet left (-1) or right (1) of this one, or -1

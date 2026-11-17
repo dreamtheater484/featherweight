@@ -663,6 +663,17 @@ void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
   }
   if (sheets) SheetsChanged();
   else if (layout) Restructure();
+  // Frozen panes (Freeze panes, or undoing it): the view follows the file's.
+  for (const edit::Change& c : changes)
+    if ((c.what & edit::kSheetProps) && c.sheet == static_cast<int>(sheet_) && !sheets) {
+      const SheetView* v = ViewOf();
+      const bool frozen = v && (v->paneState == PaneState::Frozen || v->paneState == PaneState::FrozenSplit) &&
+                          (v->xSplit > 0 || v->ySplit > 0);
+      const uint32_t rows = frozen ? static_cast<uint32_t>(std::max(0.0, v->ySplit)) : 0;
+      const uint32_t cols = frozen ? static_cast<uint32_t>(std::max(0.0, v->xSplit)) : 0;
+      if (frozen != Frozen() || rows != frozenRow1_ - frozenRow0_ || cols != frozenCol1_ - frozenCol0_) PanesChanged();
+      break;
+    }
   if (!SheetShown(sheet_)) ShowSheet(NextShownSheet(sheet_, 1));  // hidden: the next one shows
   if (text_) text_->Clear();  // keyed by cell: it wouldn't see the new values
   totals_ = Totals{};

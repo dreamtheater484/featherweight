@@ -57,6 +57,9 @@ class ViewHost {
   // A save that ran in the background (TabContent::StartSave) is done: what the window does after
   // a save, or the reason it failed.
   virtual void ViewSaved(TabContent* /*view*/, bool /*ok*/, const std::wstring& /*error*/) {}
+  // Asks before something Excel asks about too ("Merging cells only keeps the upper-left value…"):
+  // true to go ahead with `ok`. Scripted runs (snapshots) go ahead.
+  virtual bool ViewConfirm(const std::wstring& /*text*/, const std::wstring& /*ok*/) { return true; }
 };
 
 // Posted to the window by a tab's save worker when the file is written; lParam is the tab, whose

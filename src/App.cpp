@@ -1970,6 +1970,23 @@ void App::ViewSaved(TabContent* view, bool ok, const std::wstring& error) {
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
+bool App::ViewConfirm(const std::wstring& text, const std::wstring& ok) {
+  if (snapshot_) return true;  // scripted: as if confirmed
+  TASKDIALOG_BUTTON buttons[] = {{IDOK, ok.c_str()}};
+  TASKDIALOGCONFIG cfg{sizeof(cfg)};
+  cfg.hwndParent = hwnd_;
+  cfg.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW | TDF_ALLOW_DIALOG_CANCELLATION;
+  cfg.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+  cfg.pszWindowTitle = L"Featherweight";
+  cfg.pszMainInstruction = text.c_str();
+  cfg.pButtons = buttons;
+  cfg.cButtons = 1;
+  cfg.nDefaultButton = IDOK;
+  int pressed = IDCANCEL;
+  HideTooltip();
+  return SUCCEEDED(TaskDialogIndirect(&cfg, &pressed, nullptr, nullptr)) && pressed == IDOK;
+}
+
 void App::PrintActive() {
   TabContent* v = Active();
   if (!v || !v->Ready()) return;

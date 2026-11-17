@@ -186,6 +186,8 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
   }
   if (alt && !ctrl && !shift && vk == VK_OEM_PLUS && !editor_.Active() && !preview_) return CmdAutoSum;
   if (ctrl && alt && !shift && vk == VK_F9 && !editor_.Active()) return CmdCalculateFull;
+  if (alt && shift && !ctrl && !editor_.Active() && !preview_ && (vk == VK_RIGHT || vk == VK_LEFT))
+    return vk == VK_RIGHT ? CmdGroup : CmdUngroup;
   // Excel's keys for rows, columns, cells and sheets (not while a cell is typed in).
   if (!editor_.Active() && !preview_ && !alt) {
     if (ctrl && ((shift && vk == VK_OEM_PLUS) || vk == VK_ADD)) return CmdInsertCells;
@@ -261,6 +263,8 @@ CommandState WorkbookView::QueryCommand(int cmd) {
 std::vector<int> WorkbookView::Commands() {
   std::vector<int> ids;
   for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
+  // The grid's own (S2), found by their labels in command search.
+  for (int cmd = CmdInsertCells; cmd <= CmdAutoFitColumnWidth; ++cmd) ids.push_back(cmd);
   return ids;
 }
 
