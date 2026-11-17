@@ -364,6 +364,9 @@ edit::Editor& WorkbookView::Ed() {
   if (!edit_) {
     edit_ = std::make_unique<edit::Editor>(*book_);
     edit_->OnChange([this](const std::vector<edit::Change>& changes) { Edited(changes); });
+    // A number typed into a table's header becomes its text as the region shows it. UserLocale()
+    // is one object, refreshed in place, so this keeps following it.
+    edit_->SetLocale(&UserLocale());
   }
   return *edit_;
 }
