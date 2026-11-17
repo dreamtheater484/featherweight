@@ -22,6 +22,7 @@ namespace fw::sheet {
 class Workbook;
 class Sheet;
 struct CellInfo;
+struct Range;
 class NumberFormat;
 struct NumLocale;
 }  // namespace fw::sheet
@@ -53,6 +54,24 @@ class WorkbookCalc : public Host {
   bool Opening() const { return phase_ != Phase::kDone; }
   // Counts the recalculated values that differ from what their cells showed (repaint when it moves).
   uint64_t Changes() const { return changes_; }
+
+  // After an edit (s2-model's change notifications, the model already changed):
+  // values or formulas in `cells` of `sheet` (kValues, kFormulas): its formulas are read again and
+  // what depends on the cells becomes dirty. Manual mode: a formula entered is calculated, the rest
+  // waits for F9.
+  void CellsEdited(int sheet, const Range& cells);
+  // Sheets, names, rows or columns inserted or deleted (kSheets, kNames, kShift): every formula is
+  // read again and recalculated.
+  void StructureEdited();
+  // Recalculates what edits left dirty, about `budgetMs` at a time (at idle): true when nothing is
+  // left, and nothing runs after that. Not called in manual mode until F9.
+  bool CalcStep(double budgetMs);
+  bool Calculating() const { return engine_->Pending(); }  // "Calculating…" while a step leaves work
+  bool ManualCalc() const;                                  // calcPr calcMode="manual"
+  void CalculateNow();   // F9: then CalcStep until done (dirty and volatile formulas)
+  void CalculateFull();  // Ctrl+Alt+F9: every formula
+  // A cell in a circular reference, for the banner and "Circular References: B2".
+  bool CircularCell(int& sheet, int32_t& row, int32_t& col) const;
 
   // Host
   int SheetCount() const override;
