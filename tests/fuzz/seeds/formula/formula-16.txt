@@ -1,0 +1,1 @@
+_xlfn.LET(_xlpm.x,A1:A5,_xlpm.y,_xlpm.x*2,SUM(_xlpm.y)+LET(x,1,x))
