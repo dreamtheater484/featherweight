@@ -2,7 +2,7 @@
 
 One target per parser (plan §10). So far:
 
-- `fuzz_zip`: the zip reader and writer, and the package on top of them. Seeds: `tests/office`.
+- `fuzz_zip`: the zip reader and writer, and the package on top of them. Seeds: `tests/office`, and `seeds/zip`, a small workbook with its checksums and sizes in data descriptors after each part's data, in 4 bytes and in 8 bytes without zip64 (as INE writes its workbooks).
 - `fuzz_xml`: `XmlPull`, the DOM and the canonical form. Seeds: `seeds/xml`, small parts taken from the corpus.
 - `fuzz_opc`: the relationships and content types parsers, and the part-name helpers. Seeds: `seeds/opc`.
 - `fuzz_check`: `fwtool check`'s path over a package: the reference registry, the consistency checker, the id renewer and the extension query. Seeds: `seeds/package`, corpus files written as text (see below), so the fuzzer can change the XML inside them.
@@ -23,7 +23,7 @@ One target per parser (plan §10). So far:
 - `fuzz_csv`: CSV and TSV (`src/sheet/csv`, S1): a file read with its delimiter detected and given, with values converted and not, on one thread and several. Rows must lie in order inside the text, the same file must give the same cells on any number of threads, and every cell must show exactly its field (a value is never changed). Seeds: `tests/office/csv`.
 - `fuzz_condfmt`: conditional formats (`src/sheet/condfmt`, S1): the input is a worksheet part, put in a workbook with a second sheet and differential formats; the first cells and every stored cell are evaluated with the formula engine and without, then again after an edit. Data bars must stay inside the cell, icons inside their set, and a cell must give the same answer twice. Seeds: `seeds/condfmt`, from Excel's cases and the conditional-format workbooks of tests/office (`python tests/fuzz/make_condfmt_seeds.py`).
 
-`make_seeds.py` makes `seeds/opc`, `seeds/package`, `seeds/formula`, `seeds/drawing` and `seeds/picture` from the corpus (standard library only): `python tests/fuzz/make_seeds.py`.
+`make_seeds.py` makes `seeds/opc`, `seeds/package`, `seeds/formula`, `seeds/drawing`, `seeds/picture` and `seeds/zip` from the corpus (standard library only): `python tests/fuzz/make_seeds.py`.
 
 Besides crashes and AddressSanitizer reports, each target aborts when an invariant breaks:
 

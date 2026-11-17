@@ -1,5 +1,5 @@
 // Fuzz target: the zip reader and writer, and the package on top of them.
-// Seeds: tests/office (every file).
+// Seeds: tests/office (every file) and seeds/zip.
 #include <cstdint>
 #include <cstdlib>
 #include <vector>

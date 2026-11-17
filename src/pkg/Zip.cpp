@@ -263,20 +263,30 @@ Status ZipReader::Open(const Snapshot& snapshot, const Limits& limits) {
     uint64_t dataEnd = z.dataOffset + z.compressedSize;
     uint64_t descriptor = 0;
     if (U16(lh + 6) & kFlagDescriptor) {
-      // [signature] crc, compressed and uncompressed size; the sizes are 8 bytes in zip64 entries.
-      bool wide = HasZip64Field(std::string_view(reinterpret_cast<const char*>(var.data()) + nameLen, extraLen));
-      uint64_t sizes = wide ? 16 : 8;
-      uint8_t d[24] = {};
+      // [signature] crc, compressed and uncompressed size. The sizes are 8 bytes in zip64 entries,
+      // and some writers use 8 bytes without making the entry zip64 (INE's workbooks; Excel opens
+      // them). Where more than one reading fits (an empty entry), the one the next record follows wins.
+      bool zip64 = HasZip64Field(std::string_view(reinterpret_cast<const char*>(var.data()) + nameLen, extraLen));
+      uint8_t d[28] = {};
       size_t avail = static_cast<size_t>(std::min<uint64_t>(sizeof(d), cdOffset - dataEnd));
       if (!snapshot.ReadAt(dataEnd, d, avail)) return DamagedEntry(z.name);
-      auto matches = [&](const uint8_t* q, uint64_t room) {
-        if (room < 4 + sizes || U32(q) != z.crc32) return false;
-        uint64_t c = wide ? U64(q + 4) : U32(q + 4), u = wide ? U64(q + 12) : U32(q + 8);
-        return c == z.compressedSize && u == z.uncompressedSize;
+      auto followed = [&](uint64_t size) {
+        return size == cdOffset - dataEnd || (size + 2 <= avail && d[size] == 'P' && d[size + 1] == 'K');
       };
-      if (avail >= 4 && U32(d) == kDescriptorSig && matches(d + 4, avail - 4)) descriptor = 4 + 4 + sizes;
-      else if (matches(d, avail)) descriptor = 4 + sizes;
-      else return DamagedEntry(z.name);
+      bool settled = false;
+      for (bool wide : {zip64, !zip64}) {
+        for (uint64_t sig : {uint64_t{4}, uint64_t{0}}) {
+          uint64_t size = sig + 4 + (wide ? 16 : 8);
+          if (size > avail || (sig && U32(d) != kDescriptorSig) || U32(d + sig) != z.crc32) continue;
+          const uint8_t* q = d + sig + 4;
+          if ((wide ? U64(q) : U32(q)) != z.compressedSize || (wide ? U64(q + 8) : U32(q + 4)) != z.uncompressedSize)
+            continue;
+          if (descriptor && (settled || !followed(size))) continue;
+          descriptor = size;
+          settled = followed(size);
+        }
+      }
+      if (!descriptor) return DamagedEntry(z.name);
     }
     z.recordSize = dataEnd + descriptor - z.localOffset;
   }

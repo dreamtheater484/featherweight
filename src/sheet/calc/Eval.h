@@ -65,8 +65,16 @@ class Host {
   virtual double Now();
   // RAND(): [0, 1).
   virtual double Random();
-  // Hidden rows (SUBTOTAL 101-111 leaves them out).
+  // Hidden rows (SUBTOTAL 101-111 and AGGREGATE's odd options leave them out).
   virtual bool RowHidden(int sheet, int32_t row) {
+    (void)sheet, (void)row;
+    return false;
+  }
+  // Manual calculation (INFO("recalc")).
+  virtual bool Manual() { return false; }
+  // Rows a filter hides: hidden, in an autoFilter range with criteria (every SUBTOTAL leaves them
+  // out; AGGREGATE doesn't tell them from other hidden rows).
+  virtual bool RowFiltered(int sheet, int32_t row) {
     (void)sheet, (void)row;
     return false;
   }

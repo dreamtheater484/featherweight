@@ -362,8 +362,10 @@ class MapHost : public Host {
   }
   double Now() override { return now; }
   void Store(int s, int32_t r, int32_t c, const Value& v) override { cells[{s, r, c}] = v; }
-  std::set<int32_t> hiddenRows;  // on every sheet
+  std::set<int32_t> hiddenRows;    // on every sheet
+  std::set<int32_t> filteredRows;  // hidden by a filter (also in hiddenRows)
   bool RowHidden(int, int32_t r) override { return hiddenRows.count(r) != 0; }
+  bool RowFiltered(int, int32_t r) override { return filteredRows.count(r) != 0; }
 };
 
 class TestResolver : public Resolver {
@@ -602,6 +604,18 @@ TEST(sheet_calc_engine_on_open) {
   m.engine.Opened(manual);
   CHECK(!m.engine.Pending());
   CHECK_EQ(m.Num("A1"), 0.0);
+  // A sheet with its own fullCalcOnLoad: its formulas, and what depends on them.
+  EngineFixture s;
+  s.Formula("Sheet2!A1", "5*2", 999);
+  s.Formula("A1", "Sheet2!A1+1", 999);
+  s.Formula("B1", "3*2", 999);
+  CalcSettings sheet;
+  sheet.fullCalcSheets = {1};
+  s.engine.Opened(sheet);
+  s.engine.Recalculate();
+  CHECK_EQ(s.Num("Sheet2!A1"), 10.0);
+  CHECK_EQ(s.Num("A1"), 11.0);
+  CHECK_EQ(s.Num("B1"), 999.0);
 }
 
 TEST(sheet_calc_engine_circular_and_iterative) {
@@ -707,6 +721,29 @@ TEST(sheet_calc_engine_aggregate) {
   CHECK_EQ(f.Num("B8"), 1.0);
 }
 
+TEST(sheet_calc_engine_subtotal_filtered) {
+  // Every SUBTOTAL leaves out rows a filter hides; AGGREGATE takes them as other hidden rows
+  // (measured in Excel 2021 on POI's ConditionalFormattingSamples, a table with an icon filter).
+  EngineFixture f;
+  f.Number("A1", 1);
+  f.Number("A2", 2);  // hidden by hand
+  f.Number("A3", 4);  // filtered
+  f.host.hiddenRows = {1, 2};
+  f.host.filteredRows = {2};
+  f.Formula("B1", "SUBTOTAL(9,A1:A3)");
+  f.Formula("B2", "SUBTOTAL(109,A1:A3)");
+  f.Formula("B3", "SUBTOTAL(3,A1:A3)");
+  f.Formula("B4", "_xlfn.AGGREGATE(9,4,A1:A3)");
+  f.Formula("B5", "_xlfn.AGGREGATE(9,5,A1:A3)");
+  f.engine.Opened(Full());
+  f.engine.Recalculate();
+  CHECK_EQ(f.Num("B1"), 3.0);
+  CHECK_EQ(f.Num("B2"), 1.0);
+  CHECK_EQ(f.Num("B3"), 2.0);
+  CHECK_EQ(f.Num("B4"), 7.0);
+  CHECK_EQ(f.Num("B5"), 1.0);
+}
+
 namespace {
 
 // One sheet of dense columns, fast enough to time the engine rather than a map.
@@ -788,8 +825,10 @@ TEST(sheet_calc_engine_100k_formulas) {
 
 namespace {
 
-// A one-sheet workbook from its sheetData, with `calcPr` in workbook.xml.
-std::unique_ptr<fw::sheet::Workbook> OpenSheet(const std::string& sheetData, const std::string& calcPr) {
+// A one-sheet workbook from its sheetData, with `calcPr` (and what follows it) in workbook.xml and
+// `after` after sheetData.
+std::unique_ptr<fw::sheet::Workbook> OpenSheet(const std::string& sheetData, const std::string& calcPr,
+                                               const std::string& after = {}) {
   const std::string ns = "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
                          "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"";
   std::vector<std::pair<std::string, std::string>> parts = {
@@ -810,7 +849,7 @@ std::unique_ptr<fw::sheet::Workbook> OpenSheet(const std::string& sheetData, con
        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" "
        "Target=\"worksheets/sheet1.xml\"/></Relationships>"},
-      {"xl/worksheets/sheet1.xml", "<worksheet " + ns + "><sheetData>" + sheetData + "</sheetData></worksheet>"},
+      {"xl/worksheets/sheet1.xml", "<worksheet " + ns + "><sheetData>" + sheetData + "</sheetData>" + after + "</worksheet>"},
   };
   fw::pkg::Status st;
   auto pkg = test::OpenBytes(test::MakeZip(parts), st);
@@ -827,6 +866,23 @@ const char* kOpenCells =
     "<c r=\"D1\" t=\"b\"><f>C1&gt;0</f><v>0</v></c><c r=\"E1\"><f>A1+1</f></c><c r=\"F1\"><f>B1*2</f><v>999</v></c>"
     "<c r=\"G1\"><f>_xlfn.NOSUCHFUNCTION(C1)</f><v>7</v></c></row>";
 
+// The calc features Excel 2021 needs to keep a file's cached values (with calcId 191028 or later).
+std::string Features(const char* names = "RD Single FV CNMTM") {
+  std::string out = "<extLst><ext uri=\"{B58B0392-4F1F-4190-BB64-5DF3571DCE5F}\" "
+                    "xmlns:xcalcf=\"http://schemas.microsoft.com/office/spreadsheetml/2018/calcfeatures\"><xcalcf:calcFeatures>";
+  std::string n;
+  for (const char* p = names;; ++p) {
+    if (*p && *p != ' ') {
+      n += *p;
+      continue;
+    }
+    if (!n.empty()) out += "<xcalcf:feature name=\"microsoft.com:" + n + "\"/>";
+    n.clear();
+    if (!*p) break;
+  }
+  return out + "</xcalcf:calcFeatures></ext></extLst>";
+}
+
 double Number(fw::sheet::Workbook& book, const char* a1) {
   fw::sheet::CellAddr a;
   fw::sheet::ParseA1(a1, a);
@@ -838,7 +894,7 @@ double Number(fw::sheet::Workbook& book, const char* a1) {
 
 TEST(sheet_calc_open_in_slices) {
   // After opening, the app recalculates what Excel would, a slice at a time, then nothing.
-  auto book = OpenSheet(kOpenCells, "<calcPr calcId=\"191029\"/>");
+  auto book = OpenSheet(kOpenCells, "<calcPr calcId=\"191029\"/>" + Features());
   CHECK(book != nullptr);
   if (!book) return;
   WorkbookCalc calc(*book);
@@ -857,16 +913,68 @@ TEST(sheet_calc_open_in_slices) {
   CHECK(calc.Changes() >= 3);
   CHECK(!calc.engine().Pending());
 
-  // fullCalcOnLoad recalculates everything; manual mode nothing.
-  auto full = OpenSheet(kOpenCells, "<calcPr calcId=\"191029\" fullCalcOnLoad=\"1\"/>");
-  WorkbookCalc fullCalc(*full);
-  while (!fullCalc.OpenStep(8)) {
+  // Everything is recalculated with fullCalcOnLoad, a sheet's own fullCalcOnLoad, and from a
+  // calculation engine Excel 2021 doesn't trust (measured): calcId before 191028, none, or a
+  // calc feature missing (LET_WF isn't needed). Manual mode: nothing, even then.
+  struct Case {
+    std::string calcPr, after;
+    double f1;
+  } cases[] = {
+      {"<calcPr calcId=\"191029\" fullCalcOnLoad=\"1\"/>" + Features(), "", 12},
+      {"<calcPr calcId=\"191029\"/>" + Features(), "<sheetCalcPr fullCalcOnLoad=\"1\"/>", 12},
+      {"<calcPr calcId=\"191027\"/>" + Features(), "", 12},
+      {"<calcPr calcId=\"191028\"/>" + Features(), "", 999},
+      {"<calcPr calcId=\"162913\"/>", "", 12},
+      {"<calcPr/>" + Features(), "", 12},
+      {"", "", 12},
+      {"<calcPr calcId=\"191029\"/>", "", 12},
+      {"<calcPr calcId=\"191029\"/>" + Features("RD Single FV"), "", 12},
+      {"<calcPr calcId=\"191029\"/>" + Features("RD Single FV CNMTM LET_WF LAMBDA_WF NEW"), "", 999},
+  };
+  for (const Case& k : cases) {
+    auto b = OpenSheet(kOpenCells, k.calcPr, k.after);
+    CHECK(b != nullptr);
+    if (!b) continue;
+    WorkbookCalc c(*b);
+    while (!c.OpenStep(8)) {
+    }
+    CHECK_EQ(Number(*b, "F1"), k.f1);
   }
-  CHECK_EQ(Number(*full, "F1"), 12.0);
-  auto manual = OpenSheet(kOpenCells, "<calcPr calcId=\"191029\" calcMode=\"manual\"/>");
-  WorkbookCalc manualCalc(*manual);
-  while (!manualCalc.OpenStep(8)) {
+  for (const char* calcPr : {"<calcPr calcId=\"191029\" calcMode=\"manual\"/>",
+                             "<calcPr calcId=\"162913\" calcMode=\"manual\"/>",
+                             "<calcPr calcId=\"191029\" calcMode=\"manual\" fullCalcOnLoad=\"1\"/>"}) {
+    auto manual = OpenSheet(kOpenCells, calcPr);
+    WorkbookCalc manualCalc(*manual);
+    while (!manualCalc.OpenStep(8)) {
+    }
+    CHECK_EQ(Number(*manual, "C1"), 1.0);
+    CHECK_EQ(manualCalc.Changes(), 0u);
   }
-  CHECK_EQ(Number(*manual, "C1"), 1.0);
-  CHECK_EQ(manualCalc.Changes(), 0u);
+}
+
+TEST(sheet_calc_subtotal_filter) {
+  // Rows a filter hides (an autoFilter with criteria) are left out by SUBTOTAL 9 too; with no
+  // criteria, a hidden row counts as hidden by hand (measured in Excel 2021).
+  const char* cells =
+      "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>n</t></is></c></row><row r=\"2\"><c r=\"A2\"><v>1</v></c></row>"
+      "<row r=\"3\" hidden=\"1\"><c r=\"A3\"><v>2</v></c></row><row r=\"4\"><c r=\"A4\"><v>4</v></c></row>"
+      "<row r=\"6\"><c r=\"A6\"><f>SUBTOTAL(9,A2:A4)</f><v>0</v></c><c r=\"B6\"><f>SUBTOTAL(109,A2:A4)</f><v>0</v></c>"
+      "<c r=\"C6\"><f>_xlfn.AGGREGATE(9,4,A2:A4)</f><v>0</v></c></row>";
+  const std::string calcPr = "<calcPr calcId=\"191029\" fullCalcOnLoad=\"1\"/>";
+  auto filtered = OpenSheet(cells, calcPr,
+                            "<autoFilter ref=\"A1:A4\"><filterColumn colId=\"0\"><filters><filter val=\"1\"/>"
+                            "<filter val=\"4\"/></filters></filterColumn></autoFilter>");
+  auto buttons = OpenSheet(cells, calcPr, "<autoFilter ref=\"A1:A4\"/>");
+  CHECK(filtered && buttons);
+  if (!filtered || !buttons) return;
+  for (auto* b : {filtered.get(), buttons.get()}) {
+    WorkbookCalc c(*b);
+    while (!c.OpenStep(8)) {
+    }
+  }
+  CHECK_EQ(Number(*filtered, "A6"), 5.0);
+  CHECK_EQ(Number(*filtered, "B6"), 5.0);
+  CHECK_EQ(Number(*filtered, "C6"), 7.0);
+  CHECK_EQ(Number(*buttons, "A6"), 7.0);
+  CHECK_EQ(Number(*buttons, "B6"), 5.0);
 }

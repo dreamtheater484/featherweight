@@ -541,6 +541,38 @@ TEST(Check_ExcelCalcChainCellsAndNotes) {
   CHECK(Has(rep.warnings, "a note on C5 has no comment"));
 }
 
+// What Excel opens is a warning, what it refuses an error (probed with copies of
+// tests/office/sheet/tables.xlsx in a separate Excel, 2026-11-17).
+TEST(Check_WhatExcelOpensIsOnlyAWarning) {
+  const std::string sheetRels = "xl/worksheets/_rels/sheet1.xml.rels";
+  const std::string dangling =
+      Rel("rId1", "drawing", "../drawings/drawing9.xml") + Rel("rIdvml", "vmlDrawing", "../drawings/vmlDrawing9.vml");
+  // Relationships nothing uses, to a drawing and a VML drawing that don't exist (insee's workbooks).
+  auto rep = CheckParts(Excel("<sheetData/>", {}, {{sheetRels, Rels(dangling)}}));
+  CHECK(rep.Ok());
+  CHECK(Has(rep.warnings, "rIdvml points to /xl/drawings/vmlDrawing9.vml, which doesn't exist; nothing uses it"));
+  // Notes' comments (Excel drops the notes) and a type that isn't Office's.
+  rep = CheckParts(Excel("<sheetData/>", {}, {{sheetRels, Rels(Rel("rId1", "comments", "../comments9.xml") +
+                                                                "<Relationship Id=\"rId2\" Type=\"urn:example:other\" "
+                                                                "Target=\"../other.bin\"/>")}}));
+  CHECK(rep.Ok());
+  CHECK(Has(rep.warnings, "rId2 points to /xl/other.bin, which doesn't exist; nothing uses it"));
+  // The sheet uses the drawing, or the relationship is a table's: Excel refuses the file.
+  rep = CheckParts(Excel("<sheetData/><drawing r:id=\"rId1\"/>", {}, {{sheetRels, Rels(dangling)}}));
+  CHECK(Has(rep.errors, "rId1 points to /xl/drawings/drawing9.xml, which doesn't exist"));
+  CHECK(!Has(rep.errors, "rIdvml"));
+  rep = CheckParts(Excel("<sheetData/>", {}, {{sheetRels, Rels(Rel("rId1", "table", "../tables/table9.xml"))}}));
+  CHECK(Has(rep.errors, "rId1 points to /xl/tables/table9.xml, which doesn't exist"));
+  // In a Word document it stays an error: Word wasn't asked.
+  CHECK(Has(CheckParts(Word("<w:p/>", Rel("rId5", "image", "media/none.png"))).errors, "rId5 points to"));
+
+  // Office's leftover from saving in place has no content type; any other part needs one.
+  rep = CheckParts(Excel("<sheetData/>", {}, {{"[trash]/0000.dat", std::string(4, '\xFF') + std::string(60, '\0')}}));
+  CHECK(rep.Ok());
+  CHECK(Has(rep.warnings, "[trash]/0000.dat: it has no content type"));
+  CHECK(Has(CheckParts(Excel("<sheetData/>", {}, {{"xl/extra.dat", "x"}})).errors, "xl/extra.dat: it has no content type"));
+}
+
 TEST(Check_ChartCachesMatchTheirWorkbook) {
   auto chart = [](const char* cached, const char* externalData) {
     return std::string("<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:r=\"" R_NS

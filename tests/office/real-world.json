@@ -2809,6 +2809,28 @@
       "functions": []
     },
     {
+      "id": "libreoffice-different-column-width-excel2010-xlsx-column",
+      "file": "xlsx/features/libreoffice-different-column-width-excel2010-xlsx-column.xlsx",
+      "category": "features",
+      "language": "en",
+      "title": "different-column-width-excel2010.xlsx - column widths as saved by Excel 2010",
+      "publisher": "The Document Foundation (LibreOffice)",
+      "url": "https://raw.githubusercontent.com/LibreOffice/core/55c3e860bdb6b182553d1830447af93e18092aef/sc/qa/unit/data/xlsx/different-column-width-excel2010.xlsx",
+      "landing": "https://github.com/LibreOffice/core/tree/55c3e860bdb6b182553d1830447af93e18092aef/sc/qa/unit/data/xlsx",
+      "terms": "MPL-2.0",
+      "termsUrl": "https://github.com/LibreOffice/core/blob/55c3e860bdb6b182553d1830447af93e18092aef/COPYING.MPL",
+      "sha256": "8360cf592f6e79a75995b5356837ac35f2fa57cc74c0707e939158d5f552ffcb",
+      "size": 5818,
+      "retrieved": "2026-11-17",
+      "modified": "2016-07-30",
+      "producer": "Microsoft Excel 14.0300",
+      "sheets": 1,
+      "cells": 0,
+      "formulas": 0,
+      "tags": ["headers-footers"],
+      "functions": []
+    },
+    {
       "id": "libreoffice-dkvert-vertical-east-asian-text",
       "file": "docx/features/libreoffice-dkvert-vertical-east-asian-text.docx",
       "category": "features",
@@ -4118,6 +4140,46 @@
       "formulas": 0,
       "tags": ["notes", "page-setup"],
       "functions": []
+    },
+    {
+      "id": "poi-conditionalformattingsamples-xlsx-conditional",
+      "file": "xlsx/features/poi-conditionalformattingsamples-xlsx-conditional.xlsx",
+      "category": "features",
+      "language": "en",
+      "title": "ConditionalFormattingSamples.xlsx - conditional formatting samples incl. data bars, icon sets, colour scales",
+      "publisher": "The Apache Software Foundation (Apache POI)",
+      "url": "https://raw.githubusercontent.com/apache/poi/47dcff769bb395034dddfd59c4609659b6dbc6a4/test-data/spreadsheet/ConditionalFormattingSamples.xlsx",
+      "landing": "https://github.com/apache/poi/tree/47dcff769bb395034dddfd59c4609659b6dbc6a4/test-data/spreadsheet",
+      "terms": "Apache-2.0",
+      "termsUrl": "https://github.com/apache/poi/blob/47dcff769bb395034dddfd59c4609659b6dbc6a4/legal/LICENSE",
+      "sha256": "8dfa997a642c00a1da8c0750c371f204553a98c537ca046028b052f9b424a074",
+      "size": 654688,
+      "retrieved": "2026-11-17",
+      "modified": "2017-02-10",
+      "producer": "Microsoft Excel 16.0300",
+      "sheets": 18,
+      "cells": 2273,
+      "formulas": 352,
+      "tags": [
+        "color-scales",
+        "conditional-formats",
+        "data-bars",
+        "data-validation",
+        "filters",
+        "formulas",
+        "headers-footers",
+        "hidden-rows",
+        "icon-sets",
+        "merged-cells",
+        "page-breaks",
+        "page-setup",
+        "pictures",
+        "rich-text",
+        "shapes",
+        "shared-formulas",
+        "tables"
+      ],
+      "functions": ["AVERAGE", "COUNTIFS", "IF", "MONTH", "NOT", "SUBTOTAL", "SUM"]
     },
     {
       "id": "poi-dateformattests-xlsx-date-number-formats",
@@ -5541,6 +5603,42 @@
       "formulas": 0,
       "tags": ["hidden-columns", "merged-cells"],
       "functions": []
+    },
+    {
+      "id": "jcyl-cuaderno-del-profesor-ies-ramos-del-manzano",
+      "file": "xlsx/grades/jcyl-cuaderno-del-profesor-ies-ramos-del-manzano.xlsx",
+      "category": "grades",
+      "language": "es",
+      "title": "Cuaderno del profesor (IES Ramos del Manzano)",
+      "publisher": "Junta de Castilla y León (Portal de Educación, CROL)",
+      "url": "https://www.educa.jcyl.es/crol/es/recursos-educativos/cuaderno-profesor.ficheros/1469378-Cuaderno%20del%20profesor.%20IES%20RAMOS%20DEL%20MANZANO.xlsx",
+      "landing": "https://www.educa.jcyl.es/crol/es/recursos-educativos/cuaderno-profesor",
+      "terms": "no licence stated (page says 'Sin Licencia')",
+      "termsUrl": "https://www.educa.jcyl.es/crol/es/recursos-educativos/cuaderno-profesor",
+      "sha256": "4644922147240ed602a9063fc3a85c0a6d98eedd4a52581e927ead6c6e0c666e",
+      "size": 1005641,
+      "retrieved": "2026-11-17",
+      "modified": "2021-06-02",
+      "producer": "Microsoft Excel Online 16.0300",
+      "sheets": 52,
+      "cells": 148048,
+      "formulas": 2283,
+      "tags": [
+        "conditional-formats",
+        "formulas",
+        "hidden-columns",
+        "hidden-sheets",
+        "hyperlinks",
+        "merged-cells",
+        "page-breaks",
+        "page-setup",
+        "pictures",
+        "protection",
+        "rich-text",
+        "shapes",
+        "shared-formulas"
+      ],
+      "functions": ["AVERAGE", "IFERROR", "SUM"]
     },
     {
       "id": "jcyl-hoja-de-evaluacion-por-competencias-cra",
@@ -7704,6 +7802,103 @@
       "formulas": 132,
       "tags": ["formulas", "merged-cells", "page-setup", "protection", "rich-text", "shared-formulas"],
       "functions": ["SUM"]
+    },
+    {
+      "id": "edu-biweekly-time-sheet-state-student-assistants",
+      "file": "xlsx/schedules/edu-biweekly-time-sheet-state-student-assistants.xlsx",
+      "category": "schedules",
+      "language": "en",
+      "title": "Biweekly time sheet, state student assistants",
+      "publisher": "University at Buffalo (SUNY)",
+      "url": "https://www.buffalo.edu/content/dam/www/administrative-services/forms/Human%20Resources/StateTimeSheets/Student%20Assistant%20Time%20Sheet.xlsx",
+      "landing": "https://www.buffalo.edu/administrative-services/forms-catalog/hr/timesheet-biweek-state-sa.html",
+      "terms": "free form, see site terms",
+      "termsUrl": "https://www.buffalo.edu/administrative-services/forms-catalog/hr/timesheet-biweek-state-sa.html",
+      "sha256": "046ba29819bd3c3eb7c97ff71bd85e7c179a4d7eedf4df9fd5374ee26a4f6df3",
+      "size": 45961,
+      "retrieved": "2026-11-17",
+      "modified": "2019-04-15",
+      "producer": "Microsoft Excel 16.0300",
+      "sheets": 2,
+      "cells": 1143,
+      "formulas": 327,
+      "tags": [
+        "controls",
+        "data-validation",
+        "form-controls",
+        "formulas",
+        "headers-footers",
+        "hidden-columns",
+        "notes",
+        "page-setup",
+        "pictures",
+        "protection",
+        "rich-text",
+        "shapes"
+      ],
+      "functions": [
+        "AND",
+        "CHAR",
+        "IF",
+        "INFO",
+        "INT",
+        "ISBLANK",
+        "ISERROR",
+        "LEFT",
+        "MATCH",
+        "OR",
+        "RIGHT",
+        "SUM",
+        "TEXT",
+        "VLOOKUP",
+        "WEEKDAY"
+      ]
+    },
+    {
+      "id": "edu-time-sheet-state-hourly-paid-employees",
+      "file": "xlsx/schedules/edu-time-sheet-state-hourly-paid-employees.xlsx",
+      "category": "schedules",
+      "language": "en",
+      "title": "Time sheet, state hourly-paid employees",
+      "publisher": "University at Buffalo (SUNY)",
+      "url": "https://www.buffalo.edu/content/dam/www/administrative-services/forms/Human%20Resources/StateTimeSheets/Hourly%20Timesheet%20-%20State.xlsx",
+      "landing": "https://www.buffalo.edu/administrative-services/forms-catalog/hr/timesheet-state-hourly-paid.html",
+      "terms": "free form, see site terms",
+      "termsUrl": "https://www.buffalo.edu/administrative-services/forms-catalog/hr/timesheet-state-hourly-paid.html",
+      "sha256": "978f358fd5fc5b30eaa9ff1b19e14a9d592b09d352e4c86b8b907ee89ecc15a4",
+      "size": 42765,
+      "retrieved": "2026-11-17",
+      "modified": "2019-04-23",
+      "producer": "Microsoft Excel 16.0300",
+      "sheets": 2,
+      "cells": 1148,
+      "formulas": 325,
+      "tags": [
+        "data-validation",
+        "formulas",
+        "headers-footers",
+        "hidden-columns",
+        "page-setup",
+        "pictures",
+        "protection",
+        "rich-text"
+      ],
+      "functions": [
+        "AND",
+        "CHAR",
+        "IF",
+        "INFO",
+        "INT",
+        "ISBLANK",
+        "ISERROR",
+        "LEFT",
+        "MATCH",
+        "OR",
+        "RIGHT",
+        "SUM",
+        "TEXT",
+        "VLOOKUP"
+      ]
     },
     {
       "id": "govuk-school-term-and-holiday-dates-calendar-2025-26",
@@ -11576,26 +11771,6 @@
       "date": "2026-11-17"
     },
     {
-      "url": "https://www.buffalo.edu/content/dam/www/administrative-services/forms/Human%20Resources/StateTimeSheets/Student%20Assistant%20Time%20Sheet.xlsx",
-      "publisher": "University at Buffalo (SUNY)",
-      "category": "schedules",
-      "language": "en",
-      "reasons": [
-        "fwtool check failed: [FAIL] ../../../../FeatherweightCorpus/quarantine/0020/edu-biweekly-time-sheet-state-student-assistants.xlsx: 21 relationships, 1510 references, 12 ids, 0 pairs, 327 derived values | error: xl/drawings/_rels/drawing1.xml.rels: rId1 has no target | error: xl/drawings/_rels/drawing2.xml.rels: rId1 has no target"
-      ],
-      "date": "2026-11-17"
-    },
-    {
-      "url": "https://www.buffalo.edu/content/dam/www/administrative-services/forms/Human%20Resources/StateTimeSheets/Hourly%20Timesheet%20-%20State.xlsx",
-      "publisher": "University at Buffalo (SUNY)",
-      "category": "schedules",
-      "language": "en",
-      "reasons": [
-        "fwtool check failed: [FAIL] ../../../../FeatherweightCorpus/quarantine/0021/edu-time-sheet-state-hourly-paid-employees.xlsx: 18 relationships, 1506 references, 7 ids, 0 pairs, 325 derived values | error: xl/drawings/_rels/drawing1.xml.rels: rId1 has no target | error: xl/drawings/_rels/drawing2.xml.rels: rId1 has no target"
-      ],
-      "date": "2026-11-17"
-    },
-    {
       "url": "https://www.buffalo.edu/content/dam/www/administrative-services/forms/Human%20Resources/StateTimeSheets/MC%20Professional%20Monthly%20Time%20Sheet.xlsx",
       "publisher": "University at Buffalo (SUNY)",
       "category": "schedules",
@@ -11845,16 +12020,6 @@
       "date": "2026-11-17"
     },
     {
-      "url": "https://www.educa.jcyl.es/crol/es/recursos-educativos/cuaderno-profesor.ficheros/1469378-Cuaderno%20del%20profesor.%20IES%20RAMOS%20DEL%20MANZANO.xlsx",
-      "publisher": "Junta de Castilla y León (Portal de Educación, CROL)",
-      "category": "grades",
-      "language": "es",
-      "reasons": [
-        "fwtool check failed: [FAIL] ../../../../FeatherweightCorpus/quarantine/0121/jcyl-cuaderno-del-profesor-ies-ramos-del-manzano.xlsx: 171 relationships, 153498 references, 267 ids, 0 pairs, 2283 derived values | error: xl/drawings/_rels/drawing4.xml.rels: rId1 has no target | error: xl/drawings/_rels/drawing5.xml.rels: rId2 has no target"
-      ],
-      "date": "2026-11-17"
-    },
-    {
       "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/populationandmigration/populationestimates/datasets/populationestimatesforukenglandandwalesscotlandandnorthernireland/mid2011tomid2022/myebtablesuk20112022.xlsx",
       "publisher": "Office for National Statistics (UK)",
       "category": "statistics",
@@ -12060,32 +12225,12 @@
       "date": "2026-11-17"
     },
     {
-      "url": "https://raw.githubusercontent.com/LibreOffice/core/55c3e860bdb6b182553d1830447af93e18092aef/sc/qa/unit/data/xlsx/different-column-width-excel2010.xlsx",
-      "publisher": "The Document Foundation (LibreOffice)",
-      "category": "features",
-      "language": "en",
-      "reasons": [
-        "fwtool check failed: [FAIL] ../../../../FeatherweightCorpus/quarantine/0239/libreoffice-different-column-width-excel2010-xlsx-column.xlsx: 0 relationships, 0 references, 0 ids, 0 pairs, 0 derived values | error: Part docProps/thumbnail.wmf is damaged. | 1 files, 1 failed"
-      ],
-      "date": "2026-11-17"
-    },
-    {
       "url": "https://raw.githubusercontent.com/LibreOffice/core/55c3e860bdb6b182553d1830447af93e18092aef/sc/qa/unit/data/xlsx/chart_hyperlink.xlsx",
       "publisher": "The Document Foundation (LibreOffice)",
       "category": "features",
       "language": "en",
       "reasons": [
         "hyperlink that isn't http, https or mailto: a local file path (xl/drawings/_rels/drawing1.xml.rels)"
-      ],
-      "date": "2026-11-17"
-    },
-    {
-      "url": "https://raw.githubusercontent.com/apache/poi/47dcff769bb395034dddfd59c4609659b6dbc6a4/test-data/spreadsheet/ConditionalFormattingSamples.xlsx",
-      "publisher": "The Apache Software Foundation (Apache POI)",
-      "category": "features",
-      "language": "en",
-      "reasons": [
-        "fwtool check failed: [FAIL] ../../../../FeatherweightCorpus/quarantine/0275/poi-conditionalformattingsamples-xlsx-conditional.xlsx: 143 relationships, 2902 references, 110 ids, 0 pairs, 352 derived values | error: xl/drawings/_rels/drawing11.xml.rels: rId1 has no target | error: xl/drawings/_rels/drawing10.xml.rels: rId1 has no target"
       ],
       "date": "2026-11-17"
     }

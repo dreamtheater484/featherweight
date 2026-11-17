@@ -1,5 +1,5 @@
 {
-    "made":  "2026-11-16",
+    "made":  "2026-11-17",
     "computer":  "Office reference PC (decision 19)",
     "export":  "Word (safe mode, no add-ins, macros forced off, links not updated, read-only): the document without markup, for print, tagged; Excel (macros forced off, links not updated, read-only): print areas, and a cells file per workbook (each non-empty cell\u0027s text and value, formulas with their cached, opened and recalculated values); PowerPoint: slides",
     "excel":  {
@@ -885,7 +885,7 @@
                   },
                   {
                       "source":  "sheet/charts.xlsx",
-                      "sha256":  "0216ba577c87b5c72f7f52e8808e9a922229a5d9f0a535fd895d8cf3f320978b",
+                      "sha256":  "5c014a450059818260523f2f93ef68b60a7533007a3c4e7c2a6c0d035a5c1f77",
                       "app":  "Excel 16.0 (build 20326)",
                       "cells":  "sheet/charts.xlsx.cells.json",
                       "cellCount":  29,
@@ -894,7 +894,9 @@
                       "fonts":  [
                                     "Calibri",
                                     "Calibri-Bold"
-                                ]
+                                ],
+                      "printPdf":  "sheet/charts.xlsx.print.pdf",
+                      "printPages":  8
                   },
                   {
                       "source":  "sheet/conditional-formats.xlsx",
@@ -907,7 +909,9 @@
                       "fonts":  [
                                     "Calibri",
                                     "Calibri-Bold"
-                                ]
+                                ],
+                      "printPdf":  "sheet/conditional-formats.xlsx.print.pdf",
+                      "printPages":  3
                   },
                   {
                       "source":  "sheet/dates-1900.xlsx",
@@ -977,7 +981,7 @@
                   },
                   {
                       "source":  "sheet/notes.xlsx",
-                      "sha256":  "213cf9e303b33976ebe1f5b8cb79aa18b0ff9d2e62754fd5674a812ca7e43b7f",
+                      "sha256":  "7b0fb36f2ed9b7fa65aad657df6c308d8a3e89749810118f6bba5ebc201dc08e",
                       "app":  "Excel 16.0 (build 20326)",
                       "cells":  "sheet/notes.xlsx.cells.json",
                       "cellCount":  211,
@@ -985,6 +989,21 @@
                       "pages":  3,
                       "fonts":  [
                                     "Calibri"
+                                ]
+                  },
+                  {
+                      "source":  "sheet/notes-at-end.xlsx",
+                      "sha256":  "38baaadcff2b0cf3d4d61fe00a1fe568cc95c27d2fd19de6f08871c22d1834c7",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "sheet/notes-at-end.xlsx.cells.json",
+                      "cellCount":  211,
+                      "pdf":  "sheet/notes-at-end.xlsx.pdf",
+                      "pages":  5,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold",
+                                    "MS-Gothic",
+                                    "SansSerifCollection"
                                 ]
                   },
                   {
@@ -1104,7 +1123,7 @@
                   },
                   {
                       "source":  "excel/charts.xlsx",
-                      "sha256":  "2ab5f549d415bfba7bc95095717f035a50b59408a1f27a231ab54c25ffc992ef",
+                      "sha256":  "6d8dc2fc73e937127c32bf53a53351d9c232ee8d15c8abf10f4cdc45db72ca09",
                       "app":  "Excel 16.0 (build 20326)",
                       "cells":  "excel/charts.xlsx.cells.json",
                       "cellCount":  50,
@@ -1113,7 +1132,9 @@
                       "fonts":  [
                                     "Calibri",
                                     "Calibri-Bold"
-                                ]
+                                ],
+                      "printPdf":  "excel/charts.xlsx.print.pdf",
+                      "printPages":  9
                   },
                   {
                       "source":  "excel/conditional-formats.xlsx",
@@ -1126,7 +1147,9 @@
                       "fonts":  [
                                     "Calibri",
                                     "Calibri-Bold"
-                                ]
+                                ],
+                      "printPdf":  "excel/conditional-formats.xlsx.print.pdf",
+                      "printPages":  3
                   },
                   {
                       "source":  "excel/dates-1900.xlsx",
@@ -1196,7 +1219,7 @@
                   },
                   {
                       "source":  "excel/notes.xlsx",
-                      "sha256":  "3c609e4af91e026aebe01016ed3e050ea47833dfbdbd6edd6bcd0dca17038928",
+                      "sha256":  "cb45d389a7ca0f824f7cbf1efe7ac0e7db8de47096407aa32bf2f39e98708a51",
                       "app":  "Excel 16.0 (build 20326)",
                       "cells":  "excel/notes.xlsx.cells.json",
                       "cellCount":  211,
@@ -1204,6 +1227,21 @@
                       "pages":  3,
                       "fonts":  [
                                     "Calibri"
+                                ]
+                  },
+                  {
+                      "source":  "excel/notes-at-end.xlsx",
+                      "sha256":  "a290094d6f7aae0cbace66db61907f6f9e4b32d1979f925520ccbd1f7f6e28f7",
+                      "app":  "Excel 16.0 (build 20326)",
+                      "cells":  "excel/notes-at-end.xlsx.cells.json",
+                      "cellCount":  211,
+                      "pdf":  "excel/notes-at-end.xlsx.pdf",
+                      "pages":  5,
+                      "fonts":  [
+                                    "Calibri",
+                                    "Calibri-Bold",
+                                    "MS-Gothic",
+                                    "SansSerifCollection"
                                 ]
                   },
                   {

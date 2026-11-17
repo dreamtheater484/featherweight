@@ -45,6 +45,7 @@ struct Options {
   std::wstring locale;              // formulas: the region the files were calculated in (en-US, en-NL)
   std::vector<std::wstring> regions;  // formulas: other regions to try a workbook with mismatches in
   double minMatch = -1;             // formulas: fail below this share of compared formulas matching (%)
+  std::filesystem::path excel;      // formulas: compare with Excel's values in the cells files under it
   std::wstring password;            // encrypt, decrypt
   std::vector<std::filesystem::path> inputs;
 };

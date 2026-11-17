@@ -367,6 +367,29 @@ void LongText(Call& c) {
   SetText(c, std::move(out));
 }
 
+// INFO(type): what Excel 2021 answers on Windows (measured); "origin" is the top-left cell as the
+// sheet opens, "directory" the current folder.
+void Info(Call& c) {
+  std::string s;
+  if (!c.Text(0, s)) return;
+  std::wstring w = MapCase(Wide(s), LCMAP_LOWERCASE);
+  if (w == L"system") return SetText(c, "pcdos");
+  if (w == L"release") return SetText(c, "16.0");
+  if (w == L"osversion") return SetText(c, "Windows (64-bit) NT 10.00");
+  if (w == L"recalc") return SetText(c, c.m.host.Manual() ? "Manual" : "Automatic");
+  if (w == L"numfile") return c.SetNumber(c.m.host.SheetCount());
+  if (w == L"origin") return SetText(c, "$A:$A$1");
+  if (w == L"directory") {
+    wchar_t dir[MAX_PATH + 1];
+    DWORD n = GetCurrentDirectoryW(MAX_PATH, dir);
+    std::wstring d(dir, n > 0 && n < MAX_PATH ? n : 0);
+    if (d.empty() || d.back() != L'\\') d += L'\\';
+    return SetWide(c, d);
+  }
+  if (w == L"memavail" || w == L"memused" || w == L"totmem") return c.Fail(Err::NA);
+  c.Fail(Err::Value);
+}
+
 void Fixed(Call& c) {
   double x, d;
   bool noCommas;

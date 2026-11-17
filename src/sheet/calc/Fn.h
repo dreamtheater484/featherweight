@@ -191,7 +191,7 @@ FW_FN(Ceiling) FW_FN(CeilingMath) FW_FN(Char) FW_FN(Clean) FW_FN(Code) FW_FN(Col
 FW_FN(Concat) FW_FN(Concatenate) FW_FN(Count) FW_FN(CountA) FW_FN(CountBlank) FW_FN(CountIf) FW_FN(CountIfs)
 FW_FN(Date) FW_FN(DateDif) FW_FN(DateValue) FW_FN(Day) FW_FN(Days) FW_FN(Dollar) FW_FN(EDate) FW_FN(EOMonth)
 FW_FN(ErrorType) FW_FN(Even) FW_FN(Exact) FW_FN(Exp) FW_FN(False) FW_FN(Filter) FW_FN(Find) FW_FN(Fixed) FW_FN(Floor)
-FW_FN(FloorMath) FW_FN(Fv) FW_FN(HLookup) FW_FN(Hour) FW_FN(Hyperlink) FW_FN(Index) FW_FN(Indirect) FW_FN(Int)
+FW_FN(FloorMath) FW_FN(Fv) FW_FN(HLookup) FW_FN(Hour) FW_FN(Hyperlink) FW_FN(Index) FW_FN(Indirect) FW_FN(Info) FW_FN(Int)
 FW_FN(IsBlank) FW_FN(IsErr) FW_FN(IsError) FW_FN(IsEven) FW_FN(IsLogical) FW_FN(IsNA) FW_FN(IsNonText)
 FW_FN(IsNumber) FW_FN(IsOdd) FW_FN(IsoWeekNum) FW_FN(IsRef) FW_FN(IsText) FW_FN(Large) FW_FN(Left) FW_FN(Len)
 FW_FN(Ln) FW_FN(Log) FW_FN(Log10) FW_FN(Lookup) FW_FN(Lower) FW_FN(Match) FW_FN(Max) FW_FN(MaxA) FW_FN(MaxIfs)

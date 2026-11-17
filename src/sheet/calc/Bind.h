@@ -65,6 +65,8 @@ class WorkbookCalc : public Host {
   bool Table(std::string_view name, int sheet, int32_t row, int32_t col, uint8_t items, std::string_view col1,
              std::string_view col2, Area& out, Err& error) override;
   bool RowHidden(int sheet, int32_t row) override;
+  bool RowFiltered(int sheet, int32_t row) override;
+  bool Manual() override;
   const ConvLocale& Conv() const override { return conv_; }
 
  private:
