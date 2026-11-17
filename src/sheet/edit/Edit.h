@@ -223,6 +223,15 @@ class Editor {
   // the content of Excel's x14 extension for them; empty removes them. The rest of the part is kept.
   enum class RuleKind : uint8_t { ConditionalFormats, Validations };
   Result SetSheetRules(int sheet, RuleKind kind, const std::string& xml, const std::string& ext, std::u16string stepName);
+  // ---- Tables (Insert > Table, Ctrl+T; s3-data). AddTable: `t` over its ref, its id, name and part
+  // chosen when not given (unique in the workbook, Excel's "TableN"), written as Excel writes it and
+  // listed in the sheet's tableParts; the header cells are the caller's, in the same group. SetTable:
+  // the sheet's table `index` changed to `t` (name, size, header and total rows, filter buttons,
+  // style and its options, columns), its part updated with the rest kept. RemoveTable: Convert to
+  // Range (the cells stay).
+  Result AddTable(int sheet, Table t);
+  Result SetTable(int sheet, size_t index, const Table& t);
+  Result RemoveTable(int sheet, size_t index);
 
   // ---- Package parts, for edit operations (charts, pictures, notes, comments, tables...): call
   // them inside the operation's group (Run, or BeginGroup and EndGroup); undo and redo take them

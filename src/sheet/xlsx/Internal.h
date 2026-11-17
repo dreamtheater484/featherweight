@@ -79,6 +79,12 @@ std::string SheetPrefix(const detail::PartText& t);
 // Put replaces them (empty removes them; an extLst left empty goes too).
 void GetSheetRules(const detail::PartText& t, bool validations, std::string& xml, std::string& ext);
 void PutSheetRules(detail::PartText& t, bool validations, const std::string& xml, const std::string& ext);
+// Tables (TableWrite.cpp): a new table's part as Excel writes it; an existing part with the table's
+// name, size, rows, filter, columns and style set from `t`, the rest kept (false: not a table);
+// the sheet's tableParts with the relationship `relId` added or taken out.
+std::string TableXml(const Table& t);
+bool UpdateTableXml(std::string& xml, const Table& t);
+void PutTablePart(detail::PartText& t, const std::string& relId, bool add);
 // A differential format (dxfs) as styles.xml has it, and read back.
 std::string StyleItemXml(const Dxf& d);
 bool ReadStyleItem(std::string_view xml, Dxf& out);

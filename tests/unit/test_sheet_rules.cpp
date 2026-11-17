@@ -24,7 +24,7 @@ using namespace sheet_test;
 
 namespace {
 
-std::vector<uint8_t> Save(Workbook& book, Editor& ed) {
+std::vector<uint8_t> Save(Workbook& book, Editor& ed, const wchar_t* name = L"rules") {
   ed.BeginSave();
   xlsx::SavePlan plan;
   fw::pkg::Status st = xlsx::PrepareSave(book, ed, plan, book.Format());
@@ -36,7 +36,7 @@ std::vector<uint8_t> Save(Workbook& book, Editor& ed) {
   else ed.EndSave();
   wchar_t dir[MAX_PATH];
   DWORD n = GetEnvironmentVariableW(L"FW_SAVE_OUT", dir, MAX_PATH);
-  if (n && n < MAX_PATH) CHECK(test::WriteFileBytes(std::wstring(dir) + L"\\rules.xlsx", sink.bytes));
+  if (n && n < MAX_PATH) CHECK(test::WriteFileBytes(std::wstring(dir) + L"\\" + name + L".xlsx", sink.bytes));
   return sink.bytes;
 }
 
@@ -191,6 +191,75 @@ TEST(SheetRules_Validations) {
   data::WriteValidations(v, again->GetSheet(0).Text(), xml, ext);
   CHECK(xml.find("sqref=\"A1 A3\"") != std::string::npos);
   CHECK(xml.find("<formula1>10</formula1>") != std::string::npos);
+}
+
+// Tables: created (the part, its relationship and content type, the sheet's tableParts), changed
+// (a total row), converted to a range, undone, replayed from the journal, saved and read again.
+TEST(SheetTables_AddSetRemove) {
+  const char* data =
+      "<sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Name</t></is></c><c r=\"B1\" t=\"inlineStr\"><is><t>Amount</t></is></c></row>"
+      "<row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>a</t></is></c><c r=\"B2\"><v>5</v></c></row>"
+      "<row r=\"3\"><c r=\"A3\" t=\"inlineStr\"><is><t>b</t></is></c><c r=\"B3\"><v>7</v></c></row></sheetData>"
+      "<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>";
+  auto book = OpenParts({data, "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  edit::Journal journal;
+  ed.SetJournal(&journal);
+  Table t;
+  t.ref = Range{0, 0, 2, 1};
+  t.autoFilter = true;
+  t.totalsRowShown = false;
+  t.style = TableStyleInfo{"TableStyleMedium2", false, false, true, false};
+  t.columns = {TableColumn{0, "Name"}, TableColumn{0, "Amount"}};
+  CHECK(ed.AddTable(0, t));
+  const Sheet& s = book->GetSheet(0);
+  CHECK(s.Tables().size() == 1 && s.Tables()[0].name == "Table1" && s.Tables()[0].part == "/xl/tables/table1.xml");
+  CHECK(!ed.AddTable(0, t));  // overlapping
+  Table total = s.Tables()[0];
+  total.ref.lastRow = 3;
+  total.totalsRows = 1;
+  total.columns[0].totalsLabel = "Total";
+  total.columns[1].totalsFunction = "sum";
+  // The cells first: a formula typed in a total row is the column's custom total, as in Excel; the
+  // total row's own "Sum" is the table's.
+  CHECK(ed.SetCells(0, {{CellAddr{3, 0}, edit::CellInput::Text("Total")},
+                        {CellAddr{3, 1}, edit::CellInput::Formula("SUBTOTAL(109,Table1[Amount])")}}));
+  CHECK(ed.SetTable(0, 0, total));
+  ed.SetJournal(nullptr);
+  std::vector<uint8_t> saved = Save(*book, ed, L"table");
+  Clean(saved);
+  const std::string part = Part(saved, "/xl/tables/table1.xml");
+  CHECK(part.find("<table xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" id=\"1\" name=\"Table1\" "
+                  "displayName=\"Table1\" ref=\"A1:B4\" totalsRowCount=\"1\">") != std::string::npos);
+  CHECK(part.find("<autoFilter ref=\"A1:B3\"/>") != std::string::npos);
+  CHECK(part.find("<tableColumn id=\"2\" name=\"Amount\" totalsRowFunction=\"sum\"/>") != std::string::npos);
+  CHECK(part.find("<tableStyleInfo name=\"TableStyleMedium2\" showFirstColumn=\"0\" showLastColumn=\"0\" "
+                  "showRowStripes=\"1\" showColumnStripes=\"0\"/>") != std::string::npos);
+  const std::string sheet = Part(saved, "/xl/worksheets/sheet1.xml");
+  CHECK(sheet.find("<tableParts count=\"1\"><tablePart r:id=\"rId1\"/></tableParts>") != std::string::npos);
+  CHECK(Part(saved, "/[Content_Types].xml").find("/xl/tables/table1.xml") != std::string::npos);
+  auto again = OpenZip(saved);
+  if (again) {
+    const Sheet& s2 = again->GetSheet(0);
+    CHECK(s2.Tables().size() == 1 && s2.Tables()[0].ref == (Range{0, 0, 3, 1}) && s2.Tables()[0].totalsRows == 1);
+    CHECK(s2.Tables()[0].style.rowStripes && s2.Tables()[0].columns[1].totalsFunction == "sum");
+  }
+  // The journal makes the same table on the file as it was opened.
+  auto fresh = OpenParts({data, "<sheetData/>"});
+  if (fresh) {
+    Editor replay(*fresh);
+    CHECK(replay.Replay(journal.All()));
+    CHECK(fresh->GetSheet(0).Tables().size() == 1 && fresh->GetSheet(0).Tables()[0].totalsRows == 1);
+  }
+  // Convert to Range, then undo it.
+  CHECK(ed.RemoveTable(0, 0));
+  CHECK(s.Tables().empty() && s.Text().afterData.find("tableParts") == std::string::npos);
+  std::vector<uint8_t> plain = Save(*book, ed);
+  Clean(plain);
+  CHECK(Part(plain, "/xl/tables/table1.xml").empty());
+  ed.Undo();
+  CHECK(s.Tables().size() == 1 && s.Text().afterData.find("tableParts") != std::string::npos);
 }
 
 // Pasting: the copy's cells, every formula through the move, a data bar's x14 id new.

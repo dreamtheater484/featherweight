@@ -428,6 +428,26 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = SetSheetRules(sheet, ruleKind ? RuleKind::Validations : RuleKind::ConditionalFormats, xml, ext, std::move(name));
         break;
       }
+      case JournalOp::AddTable:
+      case JournalOp::SetTable: {
+        const int sheet = f.Int();
+        const uint64_t index = op == JournalOp::SetTable ? f.U() : 0;
+        Table t;
+        const std::string xml(f.S());
+        const std::string part(f.S());
+        // A new table's part is chosen when it's added: read it under a stand-in name.
+        if (!f.Ok() || !xlsx::ReadTable(xml, pkg::Limits::Default(), part.empty() ? "/xl/tables/new.xml" : part, t).Ok())
+          return damaged;
+        t.part = part;
+        r = op == JournalOp::AddTable ? AddTable(sheet, std::move(t)) : SetTable(sheet, static_cast<size_t>(index), t);
+        break;
+      }
+      case JournalOp::RemoveTable: {
+        const int sheet = f.Int();
+        const uint64_t index = f.U();
+        if (f.Ok()) r = RemoveTable(sheet, static_cast<size_t>(index));
+        break;
+      }
       case JournalOp::AddDxf: {
         Dxf x;
         if (!xlsx::ReadStyleItem(f.S(), x)) return damaged;
