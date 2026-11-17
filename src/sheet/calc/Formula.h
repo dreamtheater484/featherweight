@@ -47,7 +47,7 @@ class Formula {
     kNames = 16,        // uses defined names
     kTables = 32,       // uses structured references
     kSpills = 64,       // uses # (ANCHORARRAY)
-    kSubtotal = 128,    // calls SUBTOTAL (other SUBTOTALs leave this cell out)
+    kSubtotal = 128,    // calls SUBTOTAL or AGGREGATE (SUBTOTALs and some AGGREGATEs leave this cell out)
   };
   std::vector<uint8_t> code;
   uint16_t flags = 0;

@@ -186,7 +186,7 @@ bool EachItem(Machine& m, const Value& v, F&& fn) {
 
 namespace fn {
 #define FW_FN(name) void name(Call& c);
-FW_FN(Abs) FW_FN(Address) FW_FN(And) FW_FN(Average) FW_FN(AverageA) FW_FN(AverageIf) FW_FN(AverageIfs)
+FW_FN(Abs) FW_FN(Address) FW_FN(Aggregate) FW_FN(And) FW_FN(Average) FW_FN(AverageA) FW_FN(AverageIf) FW_FN(AverageIfs)
 FW_FN(Ceiling) FW_FN(CeilingMath) FW_FN(Char) FW_FN(Clean) FW_FN(Code) FW_FN(Column) FW_FN(Columns)
 FW_FN(Concat) FW_FN(Concatenate) FW_FN(Count) FW_FN(CountA) FW_FN(CountBlank) FW_FN(CountIf) FW_FN(CountIfs)
 FW_FN(Date) FW_FN(DateDif) FW_FN(DateValue) FW_FN(Day) FW_FN(Days) FW_FN(Dollar) FW_FN(EDate) FW_FN(EOMonth)
@@ -197,11 +197,11 @@ FW_FN(IsNumber) FW_FN(IsOdd) FW_FN(IsoWeekNum) FW_FN(IsRef) FW_FN(IsText) FW_FN(
 FW_FN(Ln) FW_FN(Log) FW_FN(Log10) FW_FN(Lookup) FW_FN(Lower) FW_FN(Match) FW_FN(Max) FW_FN(MaxA) FW_FN(MaxIfs)
 FW_FN(Median) FW_FN(Mid) FW_FN(Min) FW_FN(MinA) FW_FN(MinIfs) FW_FN(Minute) FW_FN(Mod) FW_FN(Mode) FW_FN(Month)
 FW_FN(MRound) FW_FN(N) FW_FN(NA) FW_FN(NetworkDays) FW_FN(NetworkDaysIntl) FW_FN(Not) FW_FN(Now) FW_FN(NPer)
-FW_FN(Npv) FW_FN(NumberValue) FW_FN(Odd) FW_FN(Offset) FW_FN(Or) FW_FN(Percentile) FW_FN(Pi) FW_FN(Pmt)
-FW_FN(Power) FW_FN(Product) FW_FN(Proper) FW_FN(Pv) FW_FN(Quartile) FW_FN(Quotient) FW_FN(Rand)
+FW_FN(Npv) FW_FN(NumberValue) FW_FN(Odd) FW_FN(Offset) FW_FN(Or) FW_FN(Percentile) FW_FN(PercentileExc) FW_FN(Pi) FW_FN(Pmt)
+FW_FN(Power) FW_FN(Product) FW_FN(Proper) FW_FN(Pv) FW_FN(Quartile) FW_FN(QuartileExc) FW_FN(Quotient) FW_FN(Rand)
 FW_FN(RandBetween) FW_FN(Rank) FW_FN(RankAvg) FW_FN(Rate) FW_FN(Replace) FW_FN(Rept) FW_FN(Right) FW_FN(Round)
-FW_FN(RoundDown) FW_FN(RoundUp) FW_FN(Row) FW_FN(Rows) FW_FN(Search) FW_FN(Second) FW_FN(Sequence) FW_FN(Sign) FW_FN(Small) FW_FN(Sort)
-FW_FN(Sqrt) FW_FN(StDev) FW_FN(StDevP) FW_FN(Substitute) FW_FN(Subtotal) FW_FN(Sum) FW_FN(SumIf) FW_FN(SumIfs)
+FW_FN(RoundDown) FW_FN(RoundUp) FW_FN(Row) FW_FN(Rows) FW_FN(Search) FW_FN(Second) FW_FN(Sequence) FW_FN(Sign) FW_FN(Small) FW_FN(Sort) FW_FN(SortBy)
+FW_FN(LongText) FW_FN(Sqrt) FW_FN(StDev) FW_FN(StDevP) FW_FN(Substitute) FW_FN(Subtotal) FW_FN(Sum) FW_FN(SumIf) FW_FN(SumIfs)
 FW_FN(SumProduct) FW_FN(SumSq) FW_FN(T) FW_FN(Text) FW_FN(TextJoin) FW_FN(Time) FW_FN(TimeValue) FW_FN(Today)
 FW_FN(Transpose) FW_FN(Trim) FW_FN(True) FW_FN(Trunc) FW_FN(TypeFn) FW_FN(Unique) FW_FN(Upper) FW_FN(ValueFn) FW_FN(Var)
 FW_FN(VarP) FW_FN(VLookup) FW_FN(Weekday) FW_FN(WeekNum) FW_FN(Workday) FW_FN(WorkdayIntl) FW_FN(XLookup)

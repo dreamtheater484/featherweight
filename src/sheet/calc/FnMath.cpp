@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 #include <vector>
 
 #include "sheet/calc/Fn.h"
@@ -287,6 +288,39 @@ void Quartile(Call& c) {
   PercentileOf(c, q / 4);
 }
 
+namespace {
+// PERCENTILE.EXC of sorted numbers: rank k * (n + 1), which must fall within 1..n.
+Err PercentileExcOf(const std::vector<double>& v, double k, double& out) {
+  double pos = k * static_cast<double>(v.size() + 1);
+  if (v.empty() || k <= 0 || k >= 1 || pos < 1 || pos > static_cast<double>(v.size())) return Err::Num;
+  size_t lo = static_cast<size_t>(std::floor(pos));
+  double frac = pos - static_cast<double>(lo);
+  out = lo < v.size() ? v[lo - 1] + frac * (v[lo] - v[lo - 1]) : v[lo - 1];
+  return Err::None;
+}
+}  // namespace
+
+static void PercentileExcFn(Call& c, double k) {
+  std::vector<double> v;
+  if (!Numbers(c, 0, 1, v)) return;
+  std::sort(v.begin(), v.end());
+  double r;
+  Err e = PercentileExcOf(v, k, r);
+  if (e != Err::None) return c.Fail(e);
+  c.SetNumber(r);
+}
+void PercentileExc(Call& c) {
+  double k;
+  if (c.Number(1, k)) PercentileExcFn(c, k);
+}
+void QuartileExc(Call& c) {
+  double q;
+  if (!c.Number(1, q)) return;
+  q = std::trunc(q);
+  if (q <= 0 || q >= 4) return c.Fail(Err::Num);
+  PercentileExcFn(c, q / 4);
+}
+
 static void RankOf(Call& c, bool average) {
   double x, order;
   if (!c.Number(0, x) || !c.Number(2, order)) return;
@@ -392,6 +426,173 @@ void Subtotal(Call& c) {
     }
     default: return c.SetNumber(sum.sum);
   }
+}
+
+namespace {
+// AGGREGATE's calculation `kind` (1..19) of the numbers `v` (sorted for 12 and 14..19), `counta` values in
+// all, `k` for 14..19.
+Err AggregateOf(int kind, const std::vector<double>& v, double counta, double k, double& out) {
+  const double n = static_cast<double>(v.size());
+  switch (kind) {
+    case 1:
+      if (v.empty()) return Err::Div0;
+      out = Mean(v);
+      return Err::None;
+    case 2: out = n; return Err::None;
+    case 3: out = counta; return Err::None;
+    case 4: out = v.empty() ? 0 : *std::max_element(v.begin(), v.end()); return Err::None;
+    case 5: out = v.empty() ? 0 : *std::min_element(v.begin(), v.end()); return Err::None;
+    case 6: {
+      double p = 1;
+      for (double d : v) p *= d;
+      out = v.empty() ? 0 : p;
+      return Err::None;
+    }
+    case 7: case 8: case 10: case 11: {
+      bool sample = kind == 7 || kind == 10;
+      if (v.size() < (sample ? 2u : 1u)) return Err::Div0;
+      double var = SquaredDeviations(v) / (n - (sample ? 1 : 0));
+      out = kind <= 8 ? std::sqrt(var) : var;
+      return Err::None;
+    }
+    case 9: {
+      Summer s;
+      for (double d : v) s.Add(d);
+      out = s.sum;
+      return Err::None;
+    }
+    case 12:
+      if (v.empty()) return Err::Num;
+      out = v.size() % 2 ? v[v.size() / 2] : (v[v.size() / 2 - 1] + v[v.size() / 2]) / 2;
+      return Err::None;
+    case 13: {  // the most frequent, the first of them in the values' order
+      std::unordered_map<double, size_t> count;
+      for (double d : v) ++count[d];
+      size_t best = 1;
+      for (double d : v)
+        if (count[d] > best) best = count[d], out = d;
+      return best < 2 ? Err::NA : Err::None;
+    }
+    case 14: case 15:
+      k = std::ceil(k);
+      if (v.empty() || k < 1 || k > n) return Err::Num;
+      out = kind == 14 ? v[v.size() - static_cast<size_t>(k)] : v[static_cast<size_t>(k) - 1];
+      return Err::None;
+    case 16: case 17: {
+      if (kind == 17) {
+        k = std::trunc(k);
+        if (k < 0 || k > 4) return Err::Num;
+        k /= 4;
+      }
+      if (v.empty() || k < 0 || k > 1) return Err::Num;
+      double pos = k * (n - 1);
+      size_t lo = static_cast<size_t>(std::floor(pos));
+      out = lo + 1 < v.size() ? v[lo] + (pos - static_cast<double>(lo)) * (v[lo + 1] - v[lo]) : v[lo];
+      return Err::None;
+    }
+    default:  // 18, 19
+      if (kind == 19) {
+        k = std::trunc(k);
+        if (k <= 0 || k >= 4) return Err::Num;
+        k /= 4;
+      }
+      return PercentileExcOf(v, k, out);
+  }
+}
+}  // namespace
+
+// AGGREGATE(function, options, ref1, ...) for 1..13, AGGREGATE(function, options, array, k) for
+// 14..19. Options 0..3 leave out cells with SUBTOTAL or AGGREGATE; 1, 3, 5, 7 hidden rows; 2, 3,
+// 6, 7 error values in cells and arrays (an error given directly is the result, whatever the
+// option). The reference form takes only references (#VALUE! for arrays); COUNT and COUNTA count
+// past errors. Checked against Excel 2021.
+void Aggregate(Call& c) {
+  double f, o;
+  if (!c.Integer(0, f) || !c.Integer(1, o)) return;
+  if (f < 1 || f > 19 || o < 0 || o > 7) return c.Fail(Err::Value);
+  const int kind = static_cast<int>(f), opt = static_cast<int>(o);
+  const bool arrayForm = kind >= 14;
+  if (arrayForm ? c.argc != 4 : c.argc < 3) return c.Fail(Err::Value);
+  struct Ctx {
+    Call* c;
+    int sheet, kind;
+    bool skipHidden, skipNested, skipErrors;
+    std::vector<double>* v;
+    double* counta;
+    bool failed = false;
+    // A value of a cell or array element; false (with c->out set) for an error that ends it.
+    bool Take(const CellView& cv) {
+      if (cv.type == Type::Error) {
+        if (kind == 2 || skipErrors) return true;
+        if (kind == 3) return ++*counta, true;
+        c->Fail(cv.err);
+        failed = true;
+        return false;
+      }
+      if (cv.type == Type::Empty) return true;
+      ++*counta;
+      if (cv.type == Type::Number) v->push_back(cv.num);
+      return true;
+    }
+    static bool Cell(void* p, int32_t r, int32_t col, const CellView& cv) {
+      auto* x = static_cast<Ctx*>(p);
+      if (x->skipHidden && x->c->m.host.RowHidden(x->sheet, r)) return true;
+      if (x->skipNested && x->c->m.res && x->c->m.res->Subtotal(x->sheet, r, col)) return true;
+      return x->Take(cv);
+    }
+  };
+  std::vector<double> v;
+  double counta = 0;
+  Ctx ctx{&c, 0, kind, (opt & 1) != 0, opt <= 3, opt == 2 || opt == 3 || opt >= 6, &v, &counta};
+  for (int i = 2; i < (arrayForm ? 3 : c.argc); ++i) {
+    const Value& a = c.arg(i);
+    if (a.IsMissing()) continue;
+    if (a.IsError()) return c.Fail(a.error());
+    if (a.IsRef()) {
+      if (!c.m.Ready(a)) return c.Fail(Err::Value);
+      std::vector<Area> areas = a.type() == Type::Ref ? std::vector<Area>{a.area()} : a.areas();
+      for (const Area& ar : areas)
+        for (int s = ar.s1; s <= ar.s2; ++s) {
+          ctx.sheet = s;
+          c.m.host.ForEachCell(s, ar.r1, ar.c1, ar.r2, ar.c2, &Ctx::Cell, &ctx);
+          if (ctx.failed) return;
+        }
+    } else if (arrayForm && a.IsArray()) {
+      const Array& arr = a.array();
+      for (int32_t k = 0, n = arr.size(); k < n; ++k) {
+        CellView e = View(arr.data()[k]);
+        if (e.type != Type::Number && e.type != Type::Error) continue;  // text and booleans aren't counted
+        if (!ctx.Take(e)) return;
+      }
+    } else if (arrayForm && a.IsNumber()) {
+      v.push_back(a.number());
+    } else {
+      return c.Fail(Err::Value);
+    }
+  }
+  if (kind == 12 || kind >= 14) std::sort(v.begin(), v.end());
+  // k: one number, or an array of them (the result is then an array of the same shape).
+  Value kv = arrayForm ? c.arg(3) : Value::Number(0);
+  if (kv.IsRef()) kv = c.arrayMode ? c.m.RefArray(kv) : c.m.Intersect(kv);
+  auto one = [&](const Value& k, Value& out) {
+    double d = 0, r = 0;
+    Err e = Err::None;
+    if (!ToNumber(c.m, k, d, e) || (e = AggregateOf(kind, v, counta, d, r)) != Err::None) {
+      out = Value::Error(e);
+    } else {
+      out = std::isfinite(r) ? Value::Number(r) : Value::Error(Err::Num);
+    }
+  };
+  if (!kv.IsArray()) {
+    if (kv.IsError()) return c.Fail(kv.error());
+    one(kv, c.out);
+    return;
+  }
+  const Array& ka = kv.array();
+  Array* out = Array::Make(ka.rows(), ka.cols());
+  for (int32_t r = 0; r < ka.rows(); ++r)
+    for (int32_t k = 0; k < ka.cols(); ++k) one(ka.at(r, k), out->at(r, k));
+  c.out = Value::Adopt(out);
 }
 
 // --- math ---
@@ -648,8 +849,10 @@ void Pmt(Call& c) {
   type = type != 0 ? 1 : 0;
   if (n == 0) return c.Fail(Err::Num);
   if (r == 0) return c.SetNumber(-(pv + fv) / n);
-  double g = std::pow(1 + r, n);
-  c.SetNumber(-(pv * g + fv) * r / ((1 + r * type) * (g - 1)));
+  if (r <= -1) return c.Fail(Err::Num);
+  // As Excel: with 1 - (1+r)^-n from expm1 (the plain form is off in the 15th digit).
+  double ln = n * std::log1p(r);
+  c.SetNumber(-(pv + fv * std::exp(-ln)) * r / ((1 + r * type) * -std::expm1(-ln)));
 }
 void Fv(Call& c) {
   double r, n, pmt, pv, type;

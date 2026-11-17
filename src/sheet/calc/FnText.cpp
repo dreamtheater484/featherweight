@@ -208,6 +208,10 @@ void Text(Call& c) {
   } else {
     x.num = v.IsNumber() ? v.number() : 0;
   }
+  if (format.empty()) {  // one empty section: text as it is, a negative number its minus sign
+    if (x.type == Type::Text) return SetText(c, std::string(v.text()));
+    return SetText(c, x.num < 0 ? "-" : "");
+  }
   std::string out;
   const int done = c.m.host.FormatText(x, format, out);
   if (done == 0) {
@@ -351,6 +355,16 @@ void T(Call& c) {
   const Value& v = c.arg(0);
   if (v.IsError()) return c.Fail(v.error());
   c.out = v.IsText() ? v : Value::Text("");
+}
+
+// _xlfn._LONGTEXT("...", "..."): files write a text constant over 255 characters in pieces.
+void LongText(Call& c) {
+  std::string out, s;
+  for (int i = 0; i < c.argc; ++i) {
+    if (!c.Text(i, s)) return;
+    out += s;
+  }
+  SetText(c, std::move(out));
 }
 
 void Fixed(Call& c) {

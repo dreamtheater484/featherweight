@@ -14,6 +14,7 @@ constexpr uint8_t V = kFnVolatile, L = kFnLazy, D = kFnDynRef, X = kFnXlfn, W = 
 const FuncInfo kFunctions[] = {
     {"ABS", 1, 1, 0, "V", fn::Abs},
     {"ADDRESS", 2, 5, 0, "V", fn::Address},
+    {"AGGREGATE", 3, 255, X, "VVA", fn::Aggregate},
     {"AND", 1, 255, 0, "R", fn::And},
     {"AVERAGE", 1, 255, 0, "R", fn::Average},
     {"AVERAGEA", 1, 255, 0, "R", fn::AverageA},
@@ -113,6 +114,7 @@ const FuncInfo kFunctions[] = {
     {"OFFSET", 3, 5, V | D, "RV", fn::Offset},
     {"OR", 1, 255, 0, "R", fn::Or},
     {"PERCENTILE", 2, 2, 0, "RV", fn::Percentile},
+    {"PERCENTILE.EXC", 2, 2, X, "RV", fn::PercentileExc},
     {"PERCENTILE.INC", 2, 2, X, "RV", fn::Percentile},
     {"PI", 0, 0, 0, "V", fn::Pi},
     {"PMT", 3, 5, 0, "V", fn::Pmt},
@@ -121,6 +123,7 @@ const FuncInfo kFunctions[] = {
     {"PROPER", 1, 1, 0, "V", fn::Proper},
     {"PV", 3, 5, 0, "V", fn::Pv},
     {"QUARTILE", 2, 2, 0, "RV", fn::Quartile},
+    {"QUARTILE.EXC", 2, 2, X, "RV", fn::QuartileExc},
     {"QUARTILE.INC", 2, 2, X, "RV", fn::Quartile},
     {"QUOTIENT", 2, 2, 0, "V", fn::Quotient},
     {"RAND", 0, 0, V, "V", fn::Rand},
@@ -143,6 +146,7 @@ const FuncInfo kFunctions[] = {
     {"SIGN", 1, 1, 0, "V", fn::Sign},
     {"SMALL", 2, 2, 0, "RV", fn::Small},
     {"SORT", 1, 4, W, "AAAV", fn::Sort},
+    {"SORTBY", 2, 254, X, "A+AV", fn::SortBy},
     {"SQRT", 1, 1, 0, "V", fn::Sqrt},
     {"STDEV", 1, 255, 0, "R", fn::StDev},
     {"STDEV.P", 1, 255, X, "R", fn::StDevP},
@@ -184,6 +188,7 @@ const FuncInfo kFunctions[] = {
     {"XOR", 1, 255, X, "R", fn::Xor},
     {"YEAR", 1, 1, 0, "V", fn::Year},
     {"YEARFRAC", 2, 3, 0, "V", fn::YearFrac},
+    {"_LONGTEXT", 1, 255, X, "V", fn::LongText},  // a text constant over 255 characters, as files write it
 };
 
 char Upper(char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 32) : c; }

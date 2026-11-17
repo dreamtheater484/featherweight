@@ -778,7 +778,7 @@ bool WorkbookView::HasIdleWork() const {
   if (!searchDone_) return true;
   for (size_t i = loadNext_; i < book_->SheetCount(); ++i)
     if (!book_->GetSheet(i).Loaded()) return true;
-  return false;
+  return recalc_ && (!calc_ || calc_->Opening());  // then nothing: no idle CPU
 }
 
 bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
@@ -789,8 +789,27 @@ bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   }
   // One sheet a turn: the others are read once the shown one is on screen.
   while (loadNext_ < book_->SheetCount() && book_->GetSheet(loadNext_).Loaded()) ++loadNext_;
-  if (loadNext_ < book_->SheetCount()) book_->LoadSheet(loadNext_++);
-  return false;
+  if (loadNext_ < book_->SheetCount()) {
+    book_->LoadSheet(loadNext_++);
+    return false;
+  }
+  // Then what Excel recalculates when it opens the file, a slice at a time (plan §7.3 "Cached
+  // values"); the cached values show until then.
+  if (!recalc_ || (calc_ && !calc_->Opening())) return false;
+  calc::WorkbookCalc& calc = Calc();
+  const uint64_t before = calc.Changes();
+  const bool done = calc.OpenStep(std::max(1.0, deadlineMs - anim::Now()));
+  const bool changed = calc.Changes() != before;
+  if (!changed && !done) return false;
+  if (changed) {
+    text_->Clear();  // keyed by cell: it wouldn't see the new values
+    totals_ = Totals{};
+    host_.ViewStateChanged();
+  }
+  // Conditional formats see the new values (and, once done, sheets read after they were worked out).
+  for (auto& r : rules_)
+    if (r) r->Changed();
+  return true;
 }
 
 void WorkbookView::OnDeactivated() {

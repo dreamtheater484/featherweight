@@ -56,6 +56,9 @@ class Engine : public Resolver, public Names {
   void MarkAllDirty();
   // Calculates dirty formulas for at most `budgetMs` (UI time slices). True when nothing is left.
   bool Recalculate(double budgetMs = 1e300);
+  // Builds the dependency graph about `budgetMs` at a time (the app, after opening): true once it
+  // is built. Opened, Changed and Recalculate build what is left at once.
+  bool BuildGraph(double budgetMs);
   bool Pending() const { return dirtyCount_ > 0; }
 
   // --- what happened ---
@@ -113,6 +116,7 @@ class Engine : public Resolver, public Names {
   void Collect(const uint8_t* code, size_t size, const Cell& at, std::vector<Area>& out, bool* volatileName, int depth);
   void Store(uint32_t node, Value v);
   void EnsureGraph();
+  void GraphChanged();  // formulas or names changed: the graph is built again when needed
   bool Iterate();
 
   Host& host_;

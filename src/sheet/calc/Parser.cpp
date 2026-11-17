@@ -962,7 +962,7 @@ class Parser {
     }
     if (argc < fn->minArgs || argc > fn->maxArgs) return Fail("wrong number of arguments");
     if (fn->flags & kFnVolatile) f_.flags |= Formula::kVolatile;
-    if (EqualNoCase(name, "SUBTOTAL")) f_.flags |= Formula::kSubtotal;
+    if (!std::strcmp(fn->name, "SUBTOTAL") || !std::strcmp(fn->name, "AGGREGATE")) f_.flags |= Formula::kSubtotal;
     if (fn->flags & kFnDynRef) f_.flags |= Formula::kDynamicRefs;
     if (!fn->impl && !lazy) f_.flags |= Formula::kUnsupported;
     if (lazy) {
