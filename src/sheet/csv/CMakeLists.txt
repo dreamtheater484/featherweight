@@ -1,5 +1,6 @@
 # CSV and TSV (plan §7.1): read without changing any value, the source's details kept for saving.
-target_sources(fwsheet PRIVATE Csv.cpp)
+target_sources(fwsheet PRIVATE Csv.cpp CsvWrite.cpp)
 if(TARGET fw_tests)
-  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_csv.cpp")
+  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_csv.cpp"
+                                  "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_csvwrite.cpp")
 endif()

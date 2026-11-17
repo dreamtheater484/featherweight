@@ -314,6 +314,7 @@ Reader::Reader(std::string_view bytes, const Options& options)
     size_t skip = 5;
     if (skip < text_.size() && text_[skip] == '\r') ++skip;
     if (skip < text_.size() && text_[skip] == '\n') ++skip;
+    source_.sepText = std::string(text_.substr(0, skip));
     text_.remove_prefix(skip);
   } else {
     source_.delimiter = options.delimiter ? options.delimiter : DetectDelimiter(text_, options.tsv);
