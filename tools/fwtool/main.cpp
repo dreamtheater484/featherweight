@@ -127,7 +127,7 @@ constexpr const char* kUsage =
     "  fwtool spelling <file or folder>...\n"
     "      Checks each Word document's spelling with Windows' spell checker and counts its words,\n"
     "      as the app does in idle time, and times both (plan §6.2, §11).\n"
-    "  fwtool torture [--seed S] [--edits N] [--rounds R] [--out DIR] [--json FILE] <file or folder>...\n"
+    "  fwtool torture [--seed S] [--edits N] [--rounds R] [--workbooks] [--out DIR] [--json FILE] <file or folder>...\n"
     "      The open, edit and save test (plan §10, D2): R rounds of N seeded random edits per Word\n"
     "      document through the editor (typing, deletes and replacements across fields, bookmarks,\n"
     "      comments, content controls, tables and tracked changes, splits, joins, run, paragraph and\n"
@@ -136,6 +136,15 @@ constexpr const char* kUsage =
     "      edited document. A failure is shrunk to the fewest edits that still fail, kept in\n"
     "      DIR/repro (default DIR: build/torture). DIR/saved and DIR/pairs.tsv hold a saved copy of\n"
     "      each document for the validator and Word (scripts/torture.ps1).\n"
+    "      Workbooks (S2): seeded edits through the edit API (values and formulas typed in en-NL\n"
+    "      and en-US, formats, rows, columns, cells and sheets inserted, deleted, renamed and\n"
+    "      moved, merges, sort, filter, paste, undo, redo), then save: the saved file must open,\n"
+    "      pass check and the model's checks with no new errors, read back as the edited workbook,\n"
+    "      and keep every part the save didn't write byte for byte. Without the edit API in the\n"
+    "      build, every edit is refused and the save writes the model's parts. --workbooks: only\n"
+    "      the workbooks among the inputs (scripts/sheet-torture.ps1). --ops value,formula,...:\n"
+    "      only those edits (names as reproducers write them). After the edits, undoing them all\n"
+    "      must give the workbook as opened and redoing them the workbook as edited.\n"
     "  fwtool torture --replay <reproducer.txt> [--out DIR]\n"
     "      Applies a reproducer's edits again and reports what happens and which parts the save\n"
     "      wrote. The file it makes goes next to the reproducer as <name>-replay.docx, or into DIR,\n"
@@ -295,6 +304,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--seed" && i + 1 < argc) options.seed = static_cast<unsigned>(std::wcstoul(argv[++i], nullptr, 10));
     else if (arg == L"--rounds" && i + 1 < argc) options.rounds = static_cast<uint32_t>(std::max(1, _wtoi(argv[++i])));
     else if (arg == L"--replay") options.replay = true;
+    else if (arg == L"--ops" && i + 1 < argc) options.ops = fw::WideToUtf8(argv[++i]);
     else if (arg == L"--edited") options.edited = true;
     else if (arg == L"--samples" && i + 1 < argc) options.samples = argv[++i];
     else if (arg == L"--pngs" && i + 1 < argc) options.pngs = argv[++i];

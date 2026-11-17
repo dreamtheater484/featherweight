@@ -94,7 +94,8 @@ class Package {
   // undo may still bring back).
   struct SaveChanges {
     std::vector<std::string> leaveOut;                                  // part names
-    std::vector<std::pair<std::string, std::vector<uint8_t>>> replace;  // part name, its bytes
+    // Part name, its bytes; a part the package doesn't have is added after the others.
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> replace;
   };
   // Writes the package: parts in their original order, unchanged ones copied raw, changed ones
   // deflated in their place, new ones at the end.

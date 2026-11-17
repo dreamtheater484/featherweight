@@ -7,7 +7,7 @@ target_link_libraries(fwfidelity PUBLIC fwcore)
 target_compile_options(fwfidelity PRIVATE ${FW_COMPILE_OPTIONS})
 
 add_executable(fwtool main.cpp Roundtrip.cpp Save.cpp Inspect.cpp Model.cpp Print.cpp Render.cpp Reference.cpp Compare.cpp Bench.cpp
-  BenchApp.cpp CellCompare.cpp Crypt.cpp Csv.cpp DrawingPlaces.cpp Export.cpp Formulas.cpp LayoutHook.cpp Paste.cpp PdfCheck.cpp Spelling.cpp Torture.cpp Workbook.cpp Wrap.cpp)
+  BenchApp.cpp CellCompare.cpp Crypt.cpp Csv.cpp DrawingPlaces.cpp Export.cpp Formulas.cpp LayoutHook.cpp Paste.cpp PdfCheck.cpp SheetTorture.cpp Spelling.cpp Torture.cpp Workbook.cpp Wrap.cpp)
 target_link_libraries(fwtool PRIVATE fwpkg fwdoc fwsheet fwsheetrender fwdoclayout fwdraw fwchart fwproof fwtext fwfidelity pdfium delayimp ole32 windowscodecs)
 # Picture editing (D3), for fwtool torture.
 if(TARGET fwpictures)

@@ -1,0 +1,70 @@
+# S2 build from scratch: a household budget, typed into a blank workbook in the en-NL region
+# (decimal comma, dd/MM/yyyy, ";" between arguments), as someone does with the keyboard and mouse.
+# scripts\build-from-scratch.ps1 plays it in Excel; Featherweight plays it through the grid's
+# commands. Each line: a step, as tests\office\README.md ("Build from scratch") describes them.
+sheet-name "Budget 2027"
+enter A1 "Household budget 2027"
+format A1 bold
+format A1 size=14
+enter A3 "Category"
+enter B3 "Jan"
+fill-series B3:M3
+enter N3 "Total"
+format A3:N3 bold
+format A3:N3 fill=DDEBF7
+enter A4 "Income"
+format A4 bold
+enter A5 "Salary"
+enter B5 "3250"
+fill-right B5:M5
+enter A6 "Other income"
+enter B6 "120,50"
+fill-right B6:M6
+enter A7 "Total income"
+autosum B7 "=SUM(B5:B6)"
+fill-right B7:M7
+enter A9 "Expenses"
+format A9 bold
+enter A10 "Rent"
+enter B10 "1150"
+enter A11 "Energy"
+enter B11 "145,75"
+enter A12 "Groceries"
+enter B12 "520"
+enter A13 "Insurance"
+enter B13 "210,40"
+enter A14 "Transport"
+enter B14 "95"
+enter A15 "Phone & internet"
+enter B15 "62,99"
+enter A16 "Savings"
+enter B16 "300"
+fill-right B10:M16
+enter A17 "Total expenses"
+autosum B17 "=SUM(B10:B16)"
+fill-right B17:M17
+enter A19 "Balance"
+enter B19 "=B7-B17"
+fill-right B19:M19
+enter A20 "Savings rate"
+enter B20 "=IF(B7=0;0;B16/B7)"
+fill-right B20:M20
+autosum N5 "=SUM(B5:M5)"
+fill-down N5:N7
+autosum N10 "=SUM(B10:M10)"
+fill-down N10:N17
+enter N19 "=N7-N17"
+enter N20 "=IF(N7=0;0;N16/N7)"
+format B5:N19 numfmt=#,##0.00
+format B20:N20 numfmt=0.0%
+format A7:N7 bold
+format A17:N17 bold
+format A19:N19 bold
+format B7:N7 border=top
+format B17:N17 border=top
+width A 22
+width B:N 11
+freeze B4
+enter A22 "Made on"
+enter B22 "17/11/2026"
+save

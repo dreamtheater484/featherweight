@@ -399,6 +399,13 @@ Status Package::Save(ByteSink& sink, const SaveChanges& changes) const {
     Status s = writer.Add(ZipNameOf(part.name), bytes ? *bytes : part.data);
     if (!s.Ok()) return s;
   }
+  // Replacements for parts the package doesn't have: new parts, after the others.
+  for (const auto& [name, bytes] : changes.replace) {
+    const Part* existing = FindPart(name);
+    if (existing && !existing->deleted) continue;
+    Status s = writer.Add(ZipNameOf(name), bytes);
+    if (!s.Ok()) return s;
+  }
   return writer.Finish(zip_.Comment());
 }
 

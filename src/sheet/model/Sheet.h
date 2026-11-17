@@ -335,6 +335,9 @@ class Sheet {
   SheetState State() const { return state_; }
   bool Loaded() const { return loaded_; }
   const std::string& PartName() const { return part_; }  // "/xl/worksheets/sheet1.xml"; empty for CSV
+  // The workbook part's sheetId and r:id for it; 0 and empty for a sheet added since opening.
+  uint32_t SheetId() const { return sheetId_; }
+  const std::string& RelId() const { return relId_; }
 
   // ---- Cells
   // The stored cell at (row, col); false when there is none.
