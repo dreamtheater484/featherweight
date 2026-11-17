@@ -814,6 +814,13 @@ bool NumberFormat::IsDateTime() const { return !sections_.empty() && sections_[0
 
 bool NumberFormat::IsText() const { return !sections_.empty() && sections_[0].kind == Section::Text; }
 
+bool NumberFormat::HasPercent() const {
+  for (const Section& s : sections_)
+    for (const Token& t : s.tokens)
+      if (t.kind == Token::Percent) return true;
+  return false;
+}
+
 // ---- Formatting ----
 
 struct Formatter {

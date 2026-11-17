@@ -12,6 +12,8 @@
 #include "core/Layout.h"
 #include "core/Strings.h"
 #include "sheet/view/WorkbookView.h"
+#include "sheet/calc/Typing.h"
+#include "sheet/numfmt/NumFormat.h"
 #include "sheet/xlsx/Xlsx.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -182,10 +184,32 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case 'X': return editor_.Active() ? 0 : CmdCut;
       case 'V': return editor_.Active() ? 0 : CmdPaste;
       case 'R': return editor_.Active() ? 0 : CmdFillRight;
+      case '1': return editor_.Active() || preview_ ? 0 : CmdFormatCells;
+      case 'B': return editor_.Active() || preview_ ? 0 : CmdBold;
+      case 'I': return editor_.Active() || preview_ ? 0 : CmdItalic;
+      case 'U': return editor_.Active() || preview_ ? 0 : CmdUnderline;
+      case '5': return editor_.Active() || preview_ ? 0 : CmdStrikethrough;
+    }
+  }
+  // Excel's number formats and borders by key (Ctrl+Shift+1..7, ~ and -).
+  if (ctrl && shift && !alt && !editor_.Active() && !preview_) {
+    switch (vk) {
+      case VK_OEM_3: return CmdNumGeneral;
+      case '1': return CmdNumNumber;
+      case '2': return CmdNumTime;
+      case '3': return CmdNumDate;
+      case '4': return CmdNumCurrency;
+      case '5': return CmdNumPercent;
+      case '6': return CmdNumScientific;
+      case '7': return CmdBorderOutline;
+      case 'L': return CmdFilter;
+      case VK_OEM_MINUS: return CmdBorderRemove;
     }
   }
   if (alt && !ctrl && !shift && vk == VK_OEM_PLUS && !editor_.Active() && !preview_) return CmdAutoSum;
   if (ctrl && alt && !shift && vk == VK_F9 && !editor_.Active()) return CmdCalculateFull;
+  if (alt && shift && !ctrl && !editor_.Active() && !preview_ && (vk == VK_RIGHT || vk == VK_LEFT))
+    return vk == VK_RIGHT ? CmdGroup : CmdUngroup;
   // Excel's keys for rows, columns, cells and sheets (not while a cell is typed in).
   if (!editor_.Active() && !preview_ && !alt) {
     if (ctrl && ((shift && vk == VK_OEM_PLUS) || vk == VK_ADD)) return CmdInsertCells;
@@ -207,6 +231,8 @@ CommandState WorkbookView::QueryCommand(int cmd) {
                    (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + 50)))
     return PagedView::QueryCommand(cmd);
   if (GridCommandState(cmd, s)) return s;
+  if (FormatCommandState(cmd, s)) return s;
+  if (DataCommandState(cmd, s)) return s;
   const bool ready = Ready();
   size_t shown = 0;
   if (ready)
@@ -224,9 +250,17 @@ CommandState WorkbookView::QueryCommand(int cmd) {
       break;
     case CmdNextSheet:
     case CmdPrevSheet: s.enabled = ready && shown > 1; break;
-    case CmdSave: s.enabled = false; break;
-    case CmdUndo: s.enabled = ready && edit_ && edit_->CanUndo(); break;
-    case CmdRedo: s.enabled = ready && edit_ && edit_->CanRedo(); break;
+    case CmdSave: s.enabled = ready; break;
+    case CmdUndo:
+    case CmdRedo: {
+      // "Undo merge cells", as the list's newest step.
+      s.enabled = ready && edit_ && (cmd == CmdUndo ? edit_->CanUndo() : edit_->CanRedo());
+      s.shortcut = cmd == CmdUndo ? L"Ctrl+Z" : L"Ctrl+Y";
+      const std::u16string name = s.enabled ? (cmd == CmdUndo ? edit_->UndoName() : edit_->RedoName()) : u"";
+      s.label = (cmd == CmdUndo ? L"Undo" : L"Redo") +
+                (name.empty() ? std::wstring() : L" " + fw::ToLower(std::wstring(name.begin(), name.end())));
+      break;
+    }
     case CmdRotateLeft:
     case CmdRotateRight:
     case CmdToggleCover:
@@ -261,6 +295,8 @@ CommandState WorkbookView::QueryCommand(int cmd) {
 std::vector<int> WorkbookView::Commands() {
   std::vector<int> ids;
   for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
+  // The grid's own (S2), found by their labels in command search.
+  for (int cmd = CmdInsertCells; cmd <= CmdDeleteColumns; ++cmd) ids.push_back(cmd);
   return ids;
 }
 
@@ -281,6 +317,8 @@ bool WorkbookView::Execute(int cmd) {
     return true;
   }
   if (GridCommand(cmd)) return true;
+  if (FormatCommand(cmd)) return true;
+  if (DataCommand(cmd)) return true;
   switch (cmd) {
     case CmdUndo:
     case CmdRedo:
@@ -348,6 +386,8 @@ void WorkbookView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   preview.toggle = true;
   preview.checked = preview_;
   m.left = {print, preview};
+  AddUndoToolbar(m);    // s2-grid: Undo and Redo with their lists
+  AddFormatToolbar(m);  // fonts, colors, borders, alignment, number formats (WorkbookFormat.cpp)
   m.pager = preview_;
   if (preview_) {
     m.page = currentPage_;
@@ -362,6 +402,33 @@ void WorkbookView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   ToolItem full = item(CmdFullScreen, ctx.fullscreen ? icon::BackToWindow : icon::FullScreen);
   full.priority = 2;
   m.right = {find, full};
+}
+
+void WorkbookView::AddUndoToolbar(ToolbarModel& m) {
+  if (!Ready() || preview_) return;
+  for (const int cmd : {CmdUndo, CmdRedo}) {
+    const CommandState q = QueryCommand(cmd);
+    ToolItem t;
+    t.kind = ToolKind::SplitButton;
+    t.cmd = cmd;
+    t.glyph = cmd == CmdUndo ? icon::Undo : icon::Redo;
+    t.tooltip = q.Tooltip();
+    t.enabled = q.enabled;
+    t.priority = cmd == CmdUndo ? 8 : 7;
+    t.sepBefore = cmd == CmdUndo;
+    // The list: picking a step undoes (or redoes) it and every newer one, as Excel's.
+    if (edit_)
+      for (const std::u16string& name : cmd == CmdUndo ? edit_->UndoNames() : edit_->RedoNames()) {
+        if (t.choices.size() >= 30) break;
+        t.choices.push_back(std::wstring(name.begin(), name.end()));
+      }
+    t.onChange = [this, cmd](const ToolValue& v) {
+      if (v.index < 0 || !edit_ || editor_.Active()) return;
+      const size_t steps = static_cast<size_t>(v.index) + 1;
+      EditRefused(cmd == CmdUndo ? edit_->Undo(steps) : edit_->Redo(steps));
+    };
+    m.left.push_back(std::move(t));
+  }
 }
 
 void WorkbookView::FillMenu(int which, HMENU menu) {
@@ -404,6 +471,10 @@ void WorkbookView::BuildStatusBar(StatusBarModel& m) {
   if (!Ready()) return;
   UpdateStatus();
   if (file_->SaveRunning()) m.segments.push_back(L"Saving\u2026");  // as Excel's status bar
+  // A long recalculation, and in manual mode what is waiting for F9, as Excel's status bar.
+  if (calcSince_ > 0 && anim::Now() - calcSince_ > 300) m.segments.push_back(L"Calculating\u2026");
+  else if (calc_ && !calc_->Opening() && calc_->ManualCalc() && calc_->Calculating() && !calcNow_)
+    m.segments.push_back(L"Calculate");
   if (circular_) {
     const auto [sheet, row, col] = *circular_;
     std::wstring at = Utf8ToWide(CellName(static_cast<uint32_t>(row), static_cast<uint32_t>(col)));
@@ -455,7 +526,12 @@ void WorkbookView::Copy() {
   const Sheet& s = Current();
   const Styles& st = book_->GetStyles();
   std::wstring text;
-  std::string html = "<table border=0 cellpadding=0 cellspacing=0 style='border-collapse:collapse'>";
+  // Excel's attributes give Excel and Featherweight the values under the shown text; data-fw-f
+  // gives another Featherweight workbook each formula, written for the cell it was copied from
+  // (data-fw-from: the copy's top-left).
+  std::string html = "<table border=0 cellpadding=0 cellspacing=0 style='border-collapse:collapse' data-fw-from='" +
+                     std::to_string(sel.firstRow) + "," + std::to_string(sel.firstCol) + "'>";
+  calc::Engine* names = nullptr;
   const bool withHtml = cells <= 100000;
   std::vector<CellInfo> row;
   for (uint32_t r = sel.firstRow; r <= sel.lastRow; ++r) {
@@ -486,7 +562,11 @@ void WorkbookView::Copy() {
       if (f.italic) css += "font-style:italic;";
       if (f.underline != Underline::None) css += "text-decoration:underline;";
       if (!f.name.empty()) css += "font-family:\"" + f.name + "\";";
-      if (f.size > 0) css += "font-size:" + std::to_string(static_cast<int>(f.size)) + "pt;";
+      if (f.size > 0) {
+        char size[32];
+        std::snprintf(size, sizeof size, "font-size:%gpt;", f.size);
+        css += size;
+      }
       if (f.color.IsSet()) css += "color:" + CssColor(st.Resolve(f.color, 0xFF000000)) + ";";
       const Fill& fill = st.FillOf(xf);
       if (fill.pattern == PatternType::Solid) css += "background:" + CssColor(st.Resolve(fill.fg, 0xFFFFFFFF)) + ";";
@@ -498,7 +578,58 @@ void WorkbookView::Copy() {
           break;
         default: break;
       }
-      html += css.empty() ? "<td>" : "<td style='" + css + "'>";
+      if (xf.numFmt != 0) {
+        // The format code as CSS writes a string: quotes and backslashes escaped.
+        std::string code = std::string(st.FormatCode(xf.numFmt));
+        if (code.empty()) code = WideToUtf8(BuiltinCode(static_cast<int>(xf.numFmt), text_->Locale()));
+        std::string q;
+        for (char ch : code) {
+          if (ch == '"' || ch == '\\') q += '\\';
+          q += ch;
+        }
+        css += "mso-number-format:\"" + q + "\";";
+      }
+      std::string attrs;
+      if (!css.empty()) {
+        attrs += " style='";
+        HtmlEscape(attrs, css);
+        attrs += "'";
+      }
+      if (cell) {
+        switch (cell->value.type) {
+          case ValueType::Number: {
+            char num[40];
+            std::snprintf(num, sizeof num, "%.17g", cell->value.number);
+            attrs += std::string(" x:num=\"") + num + "\"";
+            break;
+          }
+          case ValueType::String:
+            attrs += " x:str=\"";
+            HtmlEscape(attrs, std::string(cell->value.text));
+            attrs += "\"";
+            break;
+          case ValueType::Bool: attrs += cell->value.boolean ? " x:bool=\"TRUE\"" : " x:bool=\"FALSE\""; break;
+          case ValueType::Error: attrs += " x:err=\"" + std::string(ErrorText(cell->value.error)) + "\""; break;
+          case ValueType::Empty: break;
+        }
+        FormulaInfo fi;
+        if (cell->hasFormula && s.GetFormula(r, c, fi) && fi.kind != FormulaKind::Array && fi.kind != FormulaKind::DataTable) {
+          // A shared formula is its first cell's: written for this one.
+          if (!names) names = &Calc().engine();
+          calc::CompileOptions from, to;
+          from.sheet = to.sheet = static_cast<int>(sheet_);
+          from.row = static_cast<int32_t>(fi.origin.row);
+          from.col = static_cast<int32_t>(fi.origin.col);
+          to.row = static_cast<int32_t>(r);
+          to.col = static_cast<int32_t>(c);
+          const std::string own = fi.origin == CellAddr{r, c} ? "=" + std::string(fi.text)
+                                                               : calc::CopyFormula("=" + std::string(fi.text), from, to, *names);
+          attrs += " data-fw-f=\"";
+          HtmlEscape(attrs, own);
+          attrs += "\"";
+        }
+      }
+      html += "<td" + attrs + ">";
       HtmlEscape(html, WideToUtf8(t));
       html += "</td>";
     }
@@ -508,7 +639,7 @@ void WorkbookView::Copy() {
   html += "</table>";
   std::string cfHtml;
   if (withHtml) {
-    const std::string head = "<html><body>\r\n<!--StartFragment-->";
+    const std::string head = "<html xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><body>\r\n<!--StartFragment-->";
     const std::string tail = "<!--EndFragment-->\r\n</body></html>";
     const char* const kHeader = "Version:0.9\r\nStartHTML:%010zu\r\nEndHTML:%010zu\r\nStartFragment:%010zu\r\nEndFragment:%010zu\r\n";
     char probe[160];
@@ -924,8 +1055,13 @@ bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   calc::WorkbookCalc& calc = Calc();
   const uint64_t before = calc.Changes();
   const double budget = std::max(1.0, deadlineMs - anim::Now());
+  if (calcSince_ == 0) calcSince_ = anim::Now();
   const bool done = calc.Opening() ? calc.OpenStep(budget) : calc.CalcStep(budget);
   const bool changed = calc.Changes() != before;
+  if (done && !calc.Opening()) {
+    if (anim::Now() - calcSince_ > 300) host_.ViewStateChanged();  // "Calculating…" goes
+    calcSince_ = 0;
+  }
   if (done && !calc.Opening()) {
     calcNow_ = false;
     CheckCircular();

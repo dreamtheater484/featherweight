@@ -57,6 +57,9 @@ class ViewHost {
   // A save that ran in the background (TabContent::StartSave) is done: what the window does after
   // a save, or the reason it failed.
   virtual void ViewSaved(TabContent* /*view*/, bool /*ok*/, const std::wstring& /*error*/) {}
+  // Asks before something Excel asks about too ("Merging cells only keeps the upper-left value…"):
+  // true to go ahead with `ok`. Scripted runs (snapshots) go ahead.
+  virtual bool ViewConfirm(const std::wstring& /*text*/, const std::wstring& /*ok*/) { return true; }
 };
 
 // Posted to the window by a tab's save worker when the file is written; lParam is the tab, whose
@@ -205,6 +208,8 @@ class TabContent {
   virtual std::wstring FormatLoss(const std::wstring& /*path*/) const { return {}; }
   // The user chose to keep the format anyway (the banner's "Keep CSV"): FormatLoss is empty now.
   virtual void KeepFormat() {}
+  // A scripted run's step the window doesn't know (--script "op:arg"), for the tab: true when used.
+  virtual bool ScriptOp(const std::wstring& /*op*/, const std::wstring& /*arg*/) { return false; }
   // Editors: unsaved changes go to the recovery folder now and then (the window's timer).
   virtual void Autosave() {}
   // Editors: whether the file changed on disk, when the window or the tab is activated. Each

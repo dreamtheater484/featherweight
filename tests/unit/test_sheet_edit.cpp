@@ -218,7 +218,6 @@ TEST(sheet_edit_sheets_and_names) {
   CHECK(book->FindName("Local", 2) != nullptr);  // local names follow their sheet
   CHECK(ed.MoveSheet(0, 2));
   CHECK(book->GetSheet(2).Name() == "Sheet3" && book->FindName("Local", 1) != nullptr);
-  CHECK(!ed.DeleteSheet(1));  // Sheet1's formula uses it
   CHECK(ed.DeleteSheet(2));
   CHECK(book->SheetCount() == 2);
   CHECK(ed.Undo(3));

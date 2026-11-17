@@ -740,4 +740,29 @@ void ParseTyped(std::wstring_view s, const NumLocale& loc, bool date1904, int ye
   out.format = v.format == 11 ? 11 : 0;  // a number too big keeps its text, formatted as Excel does
 }
 
+namespace {
+
+// The kind of a built-in format, for TypedFormat: 0 for one that typing never changes (or replaces
+// with, for a typed format: a grouped number's 3 and 4).
+int BuiltinKind(uint32_t id) {
+  if (id >= 5 && id <= 8) return 1;                           // currency
+  if (id >= 41 && id <= 44) return 2;                         // accounting
+  if (id == 9 || id == 10) return 3;                          // percent
+  if (id == 11 || id == 48) return 4;                         // scientific
+  if (id == 12 || id == 13) return 5;                         // fraction
+  if ((id >= 14 && id <= 17) || id == 22) return 6;           // date
+  if ((id >= 18 && id <= 21) || (id >= 45 && id <= 47)) return 7;  // time
+  return 0;
+}
+
+}  // namespace
+
+uint32_t TypedFormat(uint32_t cellFormat, int typedFormat) {
+  if (typedFormat <= 0) return cellFormat;
+  const uint32_t typed = static_cast<uint32_t>(typedFormat);
+  if (cellFormat == 0) return typed;
+  const int cell = BuiltinKind(cellFormat), kind = BuiltinKind(typed);
+  return cell != 0 && kind != 0 && kind != cell ? typed : cellFormat;
+}
+
 }  // namespace fw::sheet

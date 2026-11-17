@@ -1970,6 +1970,23 @@ void App::ViewSaved(TabContent* view, bool ok, const std::wstring& error) {
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
+bool App::ViewConfirm(const std::wstring& text, const std::wstring& ok) {
+  if (snapshot_) return true;  // scripted: as if confirmed
+  TASKDIALOG_BUTTON buttons[] = {{IDOK, ok.c_str()}};
+  TASKDIALOGCONFIG cfg{sizeof(cfg)};
+  cfg.hwndParent = hwnd_;
+  cfg.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW | TDF_ALLOW_DIALOG_CANCELLATION;
+  cfg.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+  cfg.pszWindowTitle = L"Featherweight";
+  cfg.pszMainInstruction = text.c_str();
+  cfg.pButtons = buttons;
+  cfg.cButtons = 1;
+  cfg.nDefaultButton = IDOK;
+  int pressed = IDCANCEL;
+  HideTooltip();
+  return SUCCEEDED(TaskDialogIndirect(&cfg, &pressed, nullptr, nullptr)) && pressed == IDOK;
+}
+
 void App::PrintActive() {
   TabContent* v = Active();
   if (!v || !v->Ready()) return;
@@ -2374,7 +2391,19 @@ void App::DrawSnapshotFrame() {
 }
 
 void App::RunScript(const std::wstring& script) {
-  for (const std::wstring& rawStep : fw::Split(script, L';')) {
+  // Steps are split on ';'; "\;" is a ';' inside a step (formulas such as =IF(B7=0\;0\;B16/B7)).
+  std::vector<std::wstring> steps(1);
+  for (size_t i = 0; i < script.size(); ++i) {
+    if (script[i] == L'\\' && i + 1 < script.size() && script[i + 1] == L';') {
+      steps.back() += L';';
+      ++i;
+    } else if (script[i] == L';') {
+      steps.emplace_back();
+    } else {
+      steps.back() += script[i];
+    }
+  }
+  for (const std::wstring& rawStep : steps) {
     std::wstring step = fw::Trim(rawStep);
     if (step.empty()) continue;
     size_t colon = step.find(L':');
@@ -2425,6 +2454,51 @@ void App::RunScript(const std::wstring& script) {
           SendMessageW(target, WM_CHAR, ch, 0);
         }
       }
+    } else if (op == L"typebench") {
+      // typebench:<text> times each keystroke from the key to the frame painted ('|' is Enter),
+      // as the window handles it; idle work (recalculation) runs after each, untimed. Plan §11:
+      // under 16 ms typical, 50 ms at worst.
+      LARGE_INTEGER freq, t0, t1;
+      QueryPerformanceFrequency(&freq);
+      std::vector<double> keys, enters;
+      for (wchar_t ch : arg) {
+        QueryPerformanceCounter(&t0);
+        if (ch == L'|') {
+          SendMessageW(hwnd_, WM_KEYDOWN, VK_RETURN, 0);
+          SendMessageW(hwnd_, WM_CHAR, L'\r', 0);
+        } else {
+          SendMessageW(hwnd_, WM_CHAR, ch, 0);
+        }
+        DrawSnapshotFrame();
+        QueryPerformanceCounter(&t1);
+        (ch == L'|' ? enters : keys).push_back(1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart));
+        if (TabContent* v = Active())
+          for (int guard = 0; guard < 10000 && v->HasIdleWork(); ++guard) v->IdleWork(dc_.Get(), 50);
+      }
+      auto q = [](std::vector<double> v, double p) {
+        if (v.empty()) return 0.0;
+        std::sort(v.begin(), v.end());
+        return v[std::min(v.size() - 1, static_cast<size_t>(p * static_cast<double>(v.size() - 1) + 0.5))];
+      };
+      std::vector<double> all = keys;
+      all.insert(all.end(), enters.begin(), enters.end());
+      wprintf(L"typebench: %zu keys, median %.2f ms, 90%% %.2f ms, worst %.2f ms; %zu Enter, median %.2f ms, worst %.2f ms\n",
+              keys.size(), q(keys, 0.5), q(keys, 0.9), q(all, 1.0), enters.size(), q(enters, 0.5), q(enters, 1.0));
+      fflush(stdout);
+    } else if (op == L"timecmd") {
+      // timecmd:<id> times a command from running it to the frame painted (plan §11: inserting a
+      // row in the million-cell workbook under 100 ms, undo as fast); idle work after, untimed.
+      LARGE_INTEGER freq, t0, t1;
+      QueryPerformanceFrequency(&freq);
+      QueryPerformanceCounter(&t0);
+      Execute(_wtoi(arg.c_str()));
+      DrawSnapshotFrame();
+      QueryPerformanceCounter(&t1);
+      wprintf(L"timecmd %s: %.2f ms\n", arg.c_str(),
+              1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart));
+      fflush(stdout);
+      if (TabContent* v = Active())
+        for (int guard = 0; guard < 10000 && v->HasIdleWork(); ++guard) v->IdleWork(dc_.Get(), 50);
     } else if (op == L"key") {
       int mods = 0;
       UINT vk = 0;
@@ -2491,6 +2565,13 @@ void App::RunScript(const std::wstring& script) {
       TabContent* v = Active();
       if (v && v->Ready() && v->TakesPictures({arg})) v->DropPictures({arg}, -1, -1);
       else fwprintf(stderr, L"picture: %s isn't taken here\n", arg.c_str());
+    } else if (op == L"clipboard") {
+      // clipboard:<file> puts a file on the run's own clipboard (never the user's): an .html file
+      // as "HTML Format", anything else as text (UTF-8).
+      std::string data;
+      if (!util::ReadFileBytes(arg, data, 64u << 20)) fwprintf(stderr, L"clipboard: can't read %s\n", arg.c_str());
+      else if (fw::EndsWithNoCase(arg, L".html") || fw::EndsWithNoCase(arg, L".htm")) util::SetClipboardText(L"", {}, data);
+      else util::SetClipboardText(fw::Utf8ToWide(data));
     } else if (op == L"save" || op == L"saveas") {
       // save:<path> and saveas:<path> both save to that path, waiting for the write (Save As;
       // the format is the extension's). Ctrl+S (key:ctrl+s) saves in the background as in use.
@@ -2636,6 +2717,8 @@ void App::RunScript(const std::wstring& script) {
     } else if (op == L"devicelost") {
       // As if the graphics driver had been reset: everything made with the device is recreated.
       gpu::DeviceLost();
+    } else if (TabContent* v = Active(); v && v->ScriptOp(op, arg)) {
+      // The tab's own operations (a workbook's format:size=14...).
     }
     PumpUntilIdle(1500);
   }

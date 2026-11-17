@@ -1,12 +1,15 @@
 // Cut, copy and paste (s2-plan "Clipboard"): what Copy puts on the clipboard is remembered, so a
-// paste in this workbook brings formulas (references moved) and formats; text from anywhere else
-// is read as typed, cell by cell. Paste special: values, formulas, formats, transposed. The copied
-// cells keep a dashed border until the next edit or Esc. Every paste is one step.
+// paste in this workbook brings formulas (references moved) and formats; from Excel, Word and the
+// web, the clipboard's HTML tables bring their values and formats (ClipHtml); other text is read as
+// typed, cell by cell. Paste special: values, formulas, formats, transposed. The copied cells keep
+// a dashed border until the next edit or Esc. Every paste is one step.
 #include <algorithm>
+#include <map>
 
 #include "Util.h"
 #include "core/Strings.h"
 #include "sheet/calc/Typing.h"
+#include "sheet/view/ClipHtml.h"
 #include "sheet/view/WorkbookView.h"
 #include "ui/Theme.h"
 
@@ -66,7 +69,9 @@ void WorkbookView::Paste(PasteMode mode, bool transpose) {
   const Range sel = Selected();
   std::vector<std::pair<CellAddr, edit::CellInput>> cells;
   std::vector<std::pair<CellAddr, uint32_t>> formats;  // paste formats only
+  std::vector<Range> merges;                          // from HTML: its spans
   Range pasted{};
+  HtmlGrid grid;
   // This workbook's own copy: the cells themselves.
   const Sheet* from = nullptr;
   if (clip_ && util::ClipboardSequence() == clip_->seq)
@@ -129,6 +134,104 @@ void WorkbookView::Paste(PasteMode mode, bool transpose) {
             cells.emplace_back(to, std::move(in));
           }
     pasted = {sel.firstRow, sel.firstCol, sel.firstRow + th * ny - 1, sel.firstCol + tw * nx - 1};
+  } else if (const std::string html = util::GetClipboardBytes(L"HTML Format"); !html.empty() && ReadClipHtml(html, grid)) {
+    // Excel, Word or a web page: the HTML's cells, with their formats.
+    const uint32_t th = transpose ? grid.cols : grid.rows, tw = transpose ? grid.rows : grid.cols;
+    if (uint64_t{sel.firstRow} + th > kMaxRows || uint64_t{sel.firstCol} + tw > kMaxCols) {
+      host_.ViewMessage(BannerKind::Warning, L"The cells don't fit there: there aren't enough rows or columns.");
+      return;
+    }
+    auto place = [&](uint32_t r, uint32_t c) {
+      return CellAddr{sel.firstRow + (transpose ? c : r), sel.firstCol + (transpose ? r : c)};
+    };
+    // Each look once: a font, a fill, a number format and the alignment on the workbook's default.
+    const Styles& styles = book_->GetStyles();
+    std::map<std::wstring, uint32_t> made;
+    auto styleOf = [&](const HtmlCell& h) -> uint32_t {
+      std::wstring key = Utf8ToWide(h.numFmt + "|" + h.font) + L"|" + std::to_wstring(h.bold) + std::to_wstring(h.italic) +
+                         std::to_wstring(h.underline) + std::to_wstring(h.strike) + std::to_wstring(h.wrap) + L"|" +
+                         std::to_wstring(h.color) + L"|" + std::to_wstring(h.fill) + L"|" + std::to_wstring(h.size) + L"|" +
+                         std::to_wstring(static_cast<int>(h.align));
+      if (auto it = made.find(key); it != made.end()) return it->second;
+      Xf xf = styles.CellXf(0);
+      Font font = styles.FontOf(xf);
+      font.bold = font.bold || h.bold;
+      font.italic = font.italic || h.italic;
+      if (h.underline) font.underline = Underline::Single;
+      font.strike = font.strike || h.strike;
+      if (h.color) font.color = Color{Color::Kind::Rgb, h.color};
+      if (h.size > 0) font.size = h.size;
+      if (!h.font.empty()) font.name = h.font;
+      if (!(font == styles.FontOf(xf))) {
+        xf.font = Ed().AddFont(font);
+        xf.applyFont = true;
+      }
+      if (h.fill) {
+        Fill fill;
+        fill.pattern = PatternType::Solid;
+        fill.fg = Color{Color::Kind::Rgb, h.fill};
+        xf.fill = Ed().AddFill(fill);
+        xf.applyFill = true;
+      }
+      if (!h.numFmt.empty()) {
+        xf.numFmt = Ed().AddNumFmt(h.numFmt);
+        xf.applyNumFmt = true;
+      }
+      if (h.align != HAlign::General || h.wrap) {
+        xf.alignment.horizontal = h.align;
+        xf.alignment.wrap = h.wrap;
+        xf.applyAlignment = true;
+      }
+      const uint32_t id = Ed().AddXf(xf);
+      made.emplace(std::move(key), id);
+      return id;
+    };
+    for (const HtmlCell& h : grid.cells) {
+      const CellAddr to = place(h.row, h.col);
+      if (mode == PasteMode::Formats) {
+        if (h.Styled()) formats.emplace_back(to, styleOf(h));
+        continue;
+      }
+      edit::CellInput in;
+      if (!h.formula.empty() && grid.hasFrom && mode != PasteMode::Values) {
+        // Another Featherweight workbook's formula: its relative references move as a copy's do.
+        calc::CompileOptions origin, dest;
+        origin.sheet = dest.sheet = sheet;
+        origin.row = static_cast<int32_t>(grid.from.row + h.row);
+        origin.col = static_cast<int32_t>(grid.from.col + h.col);
+        dest.row = static_cast<int32_t>(to.row);
+        dest.col = static_cast<int32_t>(to.col);
+        in = edit::CellInput::Formula(calc::CopyFormula(h.formula, origin, dest, Calc().engine()).substr(1));
+        if (mode == PasteMode::All && h.Styled()) in.WithStyle(styleOf(h));
+        cells.emplace_back(to, std::move(in));
+        continue;
+      }
+      switch (h.type) {
+        case ValueType::Number: in = edit::CellInput::Number(h.number); break;
+        case ValueType::String: in = edit::CellInput::Text(WideToUtf8(h.text)); break;
+        case ValueType::Bool: in = edit::CellInput::Bool(h.boolean); break;
+        case ValueType::Error: {
+          ErrorCode e = ErrorCode::Unknown;
+          in = ParseError(h.error, e) ? edit::CellInput::Error(e) : edit::CellInput::Text(h.error);
+          break;
+        }
+        case ValueType::Empty: {
+          std::string formula, message;
+          size_t pos = 0;
+          // As typed there; a formula that doesn't read stays as its text.
+          if (!InputFor(h.text, sheet, to, in, formula, message, pos)) in = edit::CellInput::Text(WideToUtf8(h.text));
+          break;
+        }
+      }
+      if (mode == PasteMode::All && h.Styled()) in.WithStyle(styleOf(h));
+      cells.emplace_back(to, std::move(in));
+    }
+    if (mode == PasteMode::All || mode == PasteMode::Formats)
+      for (const Range& m : grid.merges) {
+        const CellAddr a = place(m.firstRow, m.firstCol), b = place(m.lastRow, m.lastCol);
+        merges.push_back(Range{a.row, a.col, b.row, b.col});
+      }
+    pasted = {sel.firstRow, sel.firstCol, sel.firstRow + th - 1, sel.firstCol + tw - 1};
   } else {
     // Text from anywhere: each cell as if typed there.
     const std::vector<std::vector<std::wstring>> rows = ParseTsv(util::GetClipboardText());
@@ -163,6 +266,8 @@ void WorkbookView::Paste(PasteMode mode, bool transpose) {
   if (r && !cells.empty()) r = Ed().SetCells(sheet, cells);
   for (const auto& [at, style] : formats)
     if (r) r = Ed().SetStyle(sheet, Range::Cell(at.row, at.col), style);
+  for (const Range& m : merges)
+    if (r) r = Ed().Merge(sheet, m);
   pasting_ = false;
   if (EditRefused(r)) return;
   group.done = true;

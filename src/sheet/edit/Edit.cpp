@@ -10,6 +10,8 @@
 
 #include "pkg/Formula.h"
 #include "sheet/calc/Formula.h"
+#include "sheet/calc/Typing.h"
+#include "sheet/edit/Refs.h"
 
 namespace fw::sheet::edit {
 
@@ -36,6 +38,11 @@ class Access {
   static SheetProps& Props(Sheet& s) { return s.props_; }
   static SheetFormat& Format(Sheet& s) { return s.format_; }
   static std::vector<Hyperlink>& Links(Sheet& s) { return s.links_; }
+  static std::vector<Table>& Tables(Sheet& s) { return s.tables_; }
+  static std::optional<SheetFilter>& Filter(Sheet& s) { return s.filter_; }
+  static std::vector<PageBreak>& Breaks(Sheet& s, bool rows) { return rows ? s.rowBreaks_ : s.colBreaks_; }
+  static std::vector<detail::Kept>& Kept(Sheet& s) { return s.kept_; }
+  static std::vector<std::pair<uint32_t, CellAddr>>& SharedMasters(Sheet& s) { return s.sharedMasters_; }
   static std::string& Name(Sheet& s) { return s.name_; }
   static SheetState& State(Sheet& s) { return s.state_; }
   static uint32_t SheetId(const Sheet& s) { return s.sheetId_; }
@@ -66,6 +73,13 @@ enum SaveBit : uint32_t {
   kSaveLinks = 1u << 6,
   kSaveName = 1u << 7,
   kSaveState = 1u << 8,
+  // Structural edits (the reference registry): what they move besides cells.
+  kSaveText = 1u << 9,      // the part's text around sheetData
+  kSaveTables = 1u << 10,
+  kSaveFilter = 1u << 11,
+  kSaveBreaks = 1u << 12,   // row and column page breaks
+  kSaveKept = 1u << 13,     // XML kept inside sheetData, and shared formulas' masters
+  kSaveFormulas = 1u << 14, // every formula record (else `formulas` holds the ones changed in place)
 };
 constexpr int kPieces = 7;  // SheetPiece bits
 
@@ -90,6 +104,13 @@ struct SheetSave {
   std::vector<Hyperlink> links;
   std::string name;
   SheetState state = SheetState::Visible;
+  detail::PartText text;
+  std::vector<Table> tables;
+  std::optional<SheetFilter> filter;
+  std::vector<PageBreak> rowBreaks, colBreaks;
+  std::vector<detail::Kept> kept;
+  std::vector<std::pair<uint32_t, CellAddr>> masters;
+  std::vector<FormulaRec> allFormulas;
 
   void Swap() {
     Sheet& s = *sheet;
@@ -104,6 +125,18 @@ struct SheetSave {
       std::swap(A::FormulaCells(s), formulaCells);
     }
     for (auto& [id, rec] : formulas) std::swap(A::Formulas(s)[id], rec);
+    if (saved & kSaveFormulas) std::swap(A::Formulas(s), allFormulas);
+    if (saved & kSaveText) std::swap(A::Text(s), text);
+    if (saved & kSaveTables) std::swap(A::Tables(s), tables);
+    if (saved & kSaveFilter) std::swap(A::Filter(s), filter);
+    if (saved & kSaveBreaks) {
+      std::swap(A::Breaks(s, true), rowBreaks);
+      std::swap(A::Breaks(s, false), colBreaks);
+    }
+    if (saved & kSaveKept) {
+      std::swap(A::Kept(s), kept);
+      std::swap(A::SharedMasters(s), masters);
+    }
     if (saved & kSaveCols) std::swap(A::Cols(s), cols);
     if (saved & kSaveMerges) {
       std::swap(A::Merges(s), merges);
@@ -141,9 +174,19 @@ struct SheetSave {
             touched.push_back(std::move(t));
       }
     }
-    for (auto& f : later.formulas)
-      if (std::none_of(formulas.begin(), formulas.end(), [&](const auto& x) { return x.first == f.first; }))
-        formulas.push_back(std::move(f));
+    if (later.saved & kSaveFormulas) {
+      if (!(saved & kSaveFormulas)) {
+        // The later step kept every record as this one left them: put back the ones it changed.
+        allFormulas = std::move(later.allFormulas);
+        for (auto& [id, rec] : formulas)
+          if (id < allFormulas.size()) allFormulas[id] = std::move(rec);
+        formulas.clear();
+      }
+    } else if (!(saved & kSaveFormulas)) {
+      for (auto& f : later.formulas)
+        if (std::none_of(formulas.begin(), formulas.end(), [&](const auto& x) { return x.first == f.first; }))
+          formulas.push_back(std::move(f));
+    }
     auto take = [&](uint32_t bit, auto& mine, auto& theirs) {
       if ((later.saved & bit) && !(saved & bit)) mine = std::move(theirs);
     };
@@ -158,6 +201,17 @@ struct SheetSave {
     take(kSaveLinks, links, later.links);
     take(kSaveName, name, later.name);
     take(kSaveState, state, later.state);
+    take(kSaveText, text, later.text);
+    take(kSaveTables, tables, later.tables);
+    take(kSaveFilter, filter, later.filter);
+    if ((later.saved & kSaveBreaks) && !(saved & kSaveBreaks)) {
+      rowBreaks = std::move(later.rowBreaks);
+      colBreaks = std::move(later.colBreaks);
+    }
+    if ((later.saved & kSaveKept) && !(saved & kSaveKept)) {
+      kept = std::move(later.kept);
+      masters = std::move(later.masters);
+    }
     saved |= later.saved;
     dirty |= later.dirty;
   }
@@ -226,14 +280,25 @@ struct Step {
   BookSave book;
   bool bookDirty = false;
   std::vector<InChange> changes;
+  // Package parts a structural edit rewrote (drawings, charts, notes, tables, pivot caches), as they were.
+  std::vector<std::pair<std::string, std::vector<uint8_t>>> parts;
   uint64_t serial = 0;
 
-  bool Empty() const { return sheets.empty() && !book.sheets && !book.names && !book.active && changes.empty(); }
+  bool Empty() const {
+    return sheets.empty() && !book.sheets && !book.names && !book.active && changes.empty() && parts.empty();
+  }
 
   // Undo or redo: everything back the other way.
   void Swap(Workbook& b) {
     for (auto it = sheets.rbegin(); it != sheets.rend(); ++it) it->Swap();
     book.Swap(b);
+    if (pkg::Package* package = b.GetPackage())
+      for (auto& [part, bytes] : parts) {
+        std::vector<uint8_t> now;
+        package->ReadPart(part, now);
+        package->SetPart(part, std::move(bytes));
+        bytes = std::move(now);
+      }
   }
 
   void Absorb(Step&& later) {
@@ -245,6 +310,9 @@ struct Step {
     book.Absorb(std::move(later.book));
     bookDirty = bookDirty || later.bookDirty;
     for (auto& c : later.changes) changes.push_back(std::move(c));
+    for (auto& p : later.parts)
+      if (std::none_of(parts.begin(), parts.end(), [&](const auto& x) { return x.first == p.first; }))
+        parts.push_back(std::move(p));
   }
 };
 
@@ -434,6 +502,7 @@ struct Editor::State {
   }
 
   void SaveFormula(SheetSave& sv, uint32_t id) {
+    if (sv.saved & kSaveFormulas) return;
     if (std::none_of(sv.formulas.begin(), sv.formulas.end(), [&](const auto& f) { return f.first == id; }))
       sv.formulas.push_back({id, A::Formulas(*sv.sheet)[id]});
   }
@@ -454,6 +523,39 @@ struct Editor::State {
   void SaveProps(SheetSave& sv) { SaveList(sv, kSaveProps, kPieceProps, sv.props, A::Props(*sv.sheet)); }
   void SaveFormat(SheetSave& sv) { SaveList(sv, kSaveFormat, kPieceProps, sv.format, A::Format(*sv.sheet)); }
   void SaveLinks(SheetSave& sv) { SaveList(sv, kSaveLinks, kPieceLinks, sv.links, A::Links(*sv.sheet)); }
+  void SaveText(SheetSave& sv) { SaveList(sv, kSaveText, kPieceOther, sv.text, A::Text(*sv.sheet)); }
+  void SaveTables(SheetSave& sv) { SaveList(sv, kSaveTables, kPieceOther, sv.tables, A::Tables(*sv.sheet)); }
+  void SaveFilter(SheetSave& sv) { SaveList(sv, kSaveFilter, kPieceOther, sv.filter, A::Filter(*sv.sheet)); }
+  void SaveBreaks(SheetSave& sv) {
+    if (!(sv.saved & kSaveBreaks)) sv.colBreaks = A::Breaks(*sv.sheet, false);
+    SaveList(sv, kSaveBreaks, kPieceOther, sv.rowBreaks, A::Breaks(*sv.sheet, true));
+  }
+  void SaveKept(SheetSave& sv) {
+    if (!(sv.saved & kSaveKept)) sv.masters = A::SharedMasters(*sv.sheet);
+    SaveList(sv, kSaveKept, kPieceCells, sv.kept, A::Kept(*sv.sheet));
+  }
+  // Every formula record, before many change (the ones already saved one by one are put back).
+  void SaveAllFormulas(SheetSave& sv) {
+    SaveCells(sv);
+    if (sv.saved & kSaveFormulas) return;
+    sv.saved |= kSaveFormulas;
+    sv.allFormulas = A::Formulas(*sv.sheet);
+    for (auto& [id, rec] : sv.formulas)
+      if (id < sv.allFormulas.size()) sv.allFormulas[id] = std::move(rec);
+    sv.formulas.clear();
+  }
+  // A package part rewritten: the step keeps what it was.
+  void SetPart(const std::string& name, std::string bytes) {
+    pkg::Package* package = b.GetPackage();
+    if (!package) return;
+    Step& st = Cur();
+    if (std::none_of(st.parts.begin(), st.parts.end(), [&](const auto& x) { return x.first == name; })) {
+      std::vector<uint8_t> old;
+      package->ReadPart(name, old);
+      st.parts.push_back({name, std::move(old)});
+    }
+    package->SetPart(name, std::vector<uint8_t>(bytes.begin(), bytes.end()));
+  }
 
   void SaveBook(bool sheets, bool names) {
     Step& st = Cur();
@@ -1367,15 +1469,1053 @@ Result Editor::SetColumnOutline(int sheet, uint32_t first, uint32_t last, uint8_
 
 // Structural edits arrive with the reference registry: until then they're refused, so nothing
 // half-done ever reaches a file.
-static Result NotYet() {
-  return Result::Fail(u"Inserting and deleting rows, columns and cells isn't available yet.");
+// ---- Structural edits (S2 step 4, the reference registry). sheet/edit/Refs.h rewrites what the
+// file says about positions; this moves the model: cells and rows, columns, formulas everywhere,
+// names, merges, links, tables, the autofilter, page breaks. Excel's behavior, measured: see Refs.h.
+
+namespace {
+
+// Whether `text` may name the sheet `name`: it holds the name's longest run of letters and digits
+// (without case; XML escapes and quoting don't touch those). A cheap test before a costly one.
+bool Mentions(std::string_view text, std::string_view name) {
+  size_t best = 0, len = 0;
+  for (size_t i = 0; i < name.size();) {
+    size_t j = i;
+    while (j < name.size() && (std::isalnum(static_cast<unsigned char>(name[j])) || static_cast<unsigned char>(name[j]) >= 0x80)) ++j;
+    if (j - i > len) best = i, len = j - i;
+    i = j == i ? i + 1 : j;
+  }
+  if (len == 0) return true;
+  std::string_view key = name.substr(best, len);
+  auto up = [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 32) : c; };
+  for (size_t i = 0; i + key.size() <= text.size(); ++i) {
+    size_t k = 0;
+    while (k < key.size() && up(text[i + k]) == up(key[k])) ++k;
+    if (k == key.size()) return true;
+  }
+  return false;
 }
-Result Editor::InsertRows(int, uint32_t, uint32_t) { return NotYet(); }
-Result Editor::DeleteRows(int, uint32_t, uint32_t) { return NotYet(); }
-Result Editor::InsertColumns(int, uint32_t, uint32_t) { return NotYet(); }
-Result Editor::DeleteColumns(int, uint32_t, uint32_t) { return NotYet(); }
-Result Editor::InsertCells(int, const Range&, Direction) { return NotYet(); }
-Result Editor::DeleteCells(int, const Range&, Direction) { return NotYet(); }
+
+// What the edit does to an area: 0 nothing, or moves it whole; 1 grows or shrinks it (lines inserted
+// inside, some deleted); 2 deletes all of it; -1 moves part of it (cells shifted in a band that holds
+// some of its columns or rows).
+int Effect(const refs::Mover& m, const Range& r) {
+  const bool rows = m.Rows();
+  uint32_t first = rows ? r.firstRow : r.firstCol, last = rows ? r.lastRow : r.lastCol;
+  int across = m.Across(rows ? r.firstCol : r.firstRow, rows ? r.lastCol : r.lastRow);
+  if (last < m.sh.at || across == 0) return 0;
+  if (across < 0) return -1;
+  if (m.sh.count > 0) return first < m.sh.at ? 1 : 0;
+  uint32_t end = m.sh.at + m.Deleted();
+  if (first >= end) return 0;
+  return first >= m.sh.at && last < end ? 2 : 1;
+}
+
+struct FCell {
+  uint32_t row = kNone, col = 0, id = 0;
+};
+
+// A sheet's formula cells and their records, in order.
+std::vector<FCell> FormulaCellsOf(Sheet& s) {
+  std::vector<FCell> out;
+  for (const auto& bp : A::Blocks(s)) {
+    const RowBlock& b = *bp;
+    size_t ri = 0;
+    for (const auto& [cell, id] : b.formulas) {
+      while (ri < b.rows.size() && b.rows[ri].first + b.rows[ri].count <= cell) ++ri;
+      if (ri == b.rows.size()) break;
+      out.push_back({b.rows[ri].row, b.cells[cell].col, id});
+    }
+  }
+  return out;
+}
+
+// Attributes without the ones in `drop`, `ref` set to `ref` when given.
+pkg::AttrSetId EditAttrs(pkg::RoundTripStore& store, pkg::AttrSetId id, std::initializer_list<std::string_view> drop,
+                         const std::string& ref = {}) {
+  if (id == 0) return id;
+  bool any = false;
+  for (const auto& a : store.Attributes(id))
+    any = any || (a.nsUri.empty() && (std::find(drop.begin(), drop.end(), std::string_view(a.qname)) != drop.end() ||
+                                      (!ref.empty() && a.qname == "ref" && a.value != ref)));
+  if (!any) return id;
+  std::vector<pkg::XmlAttr> out;
+  bool changed = false;
+  for (const auto& a : store.Attributes(id)) {
+    bool plain = a.nsUri.empty();
+    if (plain && std::find(drop.begin(), drop.end(), std::string_view(a.qname)) != drop.end()) {
+      changed = true;
+      continue;
+    }
+    out.push_back(a);
+    if (plain && !ref.empty() && a.qname == "ref" && a.value != ref) {
+      out.back().value = ref;
+      changed = true;
+    }
+  }
+  return changed ? store.Intern(std::move(out)) : id;
+}
+
+// The formulas of one sheet after the edit.
+struct FormulaPlan {
+  std::unordered_map<uint32_t, std::string> texts;   // record -> its new text
+  std::vector<std::pair<uint32_t, Range>> refs;      // record -> its new ref (arrays, shared masters)
+  std::vector<std::pair<CellAddr, std::string>> own;  // a cell sharing a formula that gets its own
+  std::vector<uint32_t> unshare;                     // shared masters that become plain formulas
+  bool Empty() const { return texts.empty() && refs.empty() && own.empty() && unshare.empty(); }
+};
+
+// A shared formula stays shared where every cell's formula still follows from the master's; a cell
+// whose doesn't gets its own, and when the master's has #REF! none is shared any more (Excel).
+FormulaPlan PlanFormulas(Sheet& x, int xi, bool edited, const std::function<bool(std::string_view)>& touches,
+                         const refs::Mover& m, const refs::FormulaFn& shift, const refs::CopyFn& copy) {
+  FormulaPlan plan;
+  const auto& recs = A::Formulas(x);
+  const TextPool& texts = A::Texts(x);
+  struct Group {
+    FCell master;
+    std::vector<FCell> followers;
+  };
+  std::unordered_map<uint32_t, Group> groups;
+  for (const FCell& c : FormulaCellsOf(x)) {
+    if (c.id >= recs.size()) continue;
+    const FormulaRec& f = recs[c.id];
+    if (f.kind == FormulaKind::Shared && f.sharedIndex != kNone) {
+      Group& g = groups[f.sharedIndex];
+      if (f.text != kNone) g.master = c;
+      else g.followers.push_back(c);
+    }
+    if (f.text == kNone) continue;
+    std::string_view text = texts.Get(f.text);
+    if (edited || touches(text)) {
+      std::string now = shift(text, xi, c.row, c.col);
+      if (now != text) plan.texts[c.id] = std::move(now);
+    }
+    if (edited && f.hasRef && (f.kind == FormulaKind::Array || f.kind == FormulaKind::Shared || f.dynamic)) {
+      Range r = f.ref;
+      if (m.Area(r) && !(r == f.ref)) plan.refs.push_back({c.id, r});
+    }
+  }
+  for (auto& [si, g] : groups) {
+    if (g.master.row == kNone || g.followers.empty()) continue;
+    std::string text(texts.Get(recs[g.master.id].text));
+    if (!edited && !touches(text)) continue;
+    auto it = plan.texts.find(g.master.id);
+    const std::string& now = it == plan.texts.end() ? text : it->second;
+    CellAddr master{g.master.row, g.master.col}, masterNow = master;
+    bool gone = edited && !m.Cell(masterNow.row, masterNow.col);
+    bool all = gone || now.find("#REF!") != std::string::npos;
+    for (const FCell& f : g.followers) {
+      CellAddr at{f.row, f.col}, to = at;
+      if (edited && !m.Cell(to.row, to.col)) continue;
+      std::string mine = shift(copy(text, xi, master, at), xi, f.row, f.col);
+      if (all || copy(now, xi, masterNow, to) != mine) plan.own.push_back({at, std::move(mine)});
+    }
+    if (all && !gone) plan.unshare.push_back(g.master.id);
+  }
+  return plan;
+}
+
+FormulaRec OwnRecord(Sheet& x, const std::string& text, const FormulaRec& was) {
+  FormulaRec rec;
+  rec.text = A::Texts(x).Add(text);
+  rec.alwaysCalc = was.alwaysCalc;
+  if (rec.alwaysCalc) rec.attrs = A::Store(x).Intern({{"ca", "", "1"}});
+  return rec;
+}
+
+void Unshare(Sheet& x, FormulaRec& rec) {
+  rec.kind = FormulaKind::Normal;
+  rec.sharedIndex = kNone;
+  rec.hasRef = false;
+  rec.attrs = EditAttrs(A::Store(x), rec.attrs, {"t", "ref", "si"});
+}
+
+// The location of a pivot table part's table (its <location ref>), read as text.
+bool PivotLocation(std::string_view xml, Range& out) {
+  for (size_t at = xml.find("location"); at != std::string_view::npos; at = xml.find("location", at + 1)) {
+    if (at == 0 || (xml[at - 1] != '<' && xml[at - 1] != ':')) continue;
+    size_t end = xml.find('>', at), ref = xml.find(" ref=\"", at);
+    if (ref == std::string_view::npos || ref > end) continue;
+    size_t q = xml.find('"', ref + 6);
+    return q != std::string_view::npos && ParseRange(xml.substr(ref + 6, q - ref - 6), out);
+  }
+  return false;
+}
+
+bool EndsWith(std::string_view s, std::string_view suffix) {
+  return s.size() >= suffix.size() && s.substr(s.size() - suffix.size()) == suffix;
+}
+
+}  // namespace
+
+Result Editor::InsertRows(int sheet, uint32_t at, uint32_t count) {
+  return ShiftCells(sheet, Shift{Shift::Axis::Rows, at, static_cast<int32_t>(count), Range::All()}, u"Insert Rows");
+}
+Result Editor::DeleteRows(int sheet, uint32_t first, uint32_t count) {
+  return ShiftCells(sheet, Shift{Shift::Axis::Rows, first, -static_cast<int32_t>(count), Range::All()}, u"Delete Rows");
+}
+Result Editor::InsertColumns(int sheet, uint32_t at, uint32_t count) {
+  return ShiftCells(sheet, Shift{Shift::Axis::Columns, at, static_cast<int32_t>(count), Range::All()},
+                    u"Insert Columns");
+}
+Result Editor::DeleteColumns(int sheet, uint32_t first, uint32_t count) {
+  return ShiftCells(sheet, Shift{Shift::Axis::Columns, first, -static_cast<int32_t>(count), Range::All()},
+                    u"Delete Columns");
+}
+Result Editor::InsertCells(int sheet, const Range& r, Direction shift) {
+  if (!Valid(r)) return BadRange();
+  if (shift == Direction::DownOrUp)
+    return WholeRows(r) ? InsertRows(sheet, r.firstRow, r.lastRow - r.firstRow + 1)
+                        : ShiftCells(sheet,
+                                     Shift{Shift::Axis::Rows, r.firstRow, static_cast<int32_t>(r.lastRow - r.firstRow + 1),
+                                           Range{0, r.firstCol, kMaxRows - 1, r.lastCol}},
+                                     u"Insert Cells");
+  return WholeCols(r) ? InsertColumns(sheet, r.firstCol, r.lastCol - r.firstCol + 1)
+                      : ShiftCells(sheet,
+                                   Shift{Shift::Axis::Columns, r.firstCol, static_cast<int32_t>(r.lastCol - r.firstCol + 1),
+                                         Range{r.firstRow, 0, r.lastRow, kMaxCols - 1}},
+                                   u"Insert Cells");
+}
+Result Editor::DeleteCells(int sheet, const Range& r, Direction shift) {
+  if (!Valid(r)) return BadRange();
+  if (shift == Direction::DownOrUp)
+    return WholeRows(r) ? DeleteRows(sheet, r.firstRow, r.lastRow - r.firstRow + 1)
+                        : ShiftCells(sheet,
+                                     Shift{Shift::Axis::Rows, r.firstRow, -static_cast<int32_t>(r.lastRow - r.firstRow + 1),
+                                           Range{0, r.firstCol, kMaxRows - 1, r.lastCol}},
+                                     u"Delete Cells");
+  return WholeCols(r) ? DeleteColumns(sheet, r.firstCol, r.lastCol - r.firstCol + 1)
+                      : ShiftCells(sheet,
+                                   Shift{Shift::Axis::Columns, r.firstCol, -static_cast<int32_t>(r.lastCol - r.firstCol + 1),
+                                         Range{r.firstRow, 0, r.lastRow, kMaxCols - 1}},
+                                   u"Delete Cells");
+}
+
+Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
+  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+  const refs::Mover m(sh);
+  if (sh.count == 0) return {};
+  if (sh.at >= m.max || (sh.count < 0 && static_cast<uint64_t>(sh.at) + m.Deleted() > m.max)) return BadRange();
+  if (!book_.LoadAll().Ok()) return Result::Fail(u"A sheet couldn't be read.");
+  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet has no cells.");
+  const bool rows = m.Rows();
+  const bool whole = m.Across(0, rows ? kMaxCols - 1 : kMaxRows - 1) == 1;
+  const std::string name = s.Name();
+  pkg::Package* package = book_.GetPackage();
+
+  // ---- What Excel refuses, and what Featherweight can't move yet.
+  auto cantYet = [](std::u16string_view what) {
+    return Result::Fail(u"Featherweight can't insert or delete cells on this sheet yet: it has " + std::u16string(what) +
+                        u".");
+  };
+  if (std::u16string what = refs::CheckSheetXml(A::Text(s)); !what.empty()) return cantYet(what);
+  std::vector<std::pair<std::string, std::string>> sheetParts;  // relationship type, part
+  if (package && !s.PartName().empty())
+    if (const pkg::RelationshipSet* rels = package->RelationshipsOf(s.PartName()))
+      for (const pkg::Relationship& r : rels->items) {
+        static constexpr std::string_view kKnown[] = {
+            "/drawing", "/vmlDrawing", "/comments", "/threadedComment", "/table", "/pivotTable", "/hyperlink",
+            "/printerSettings", "/image", "/oleObject", "/package", "/control", "/ctrlProp", "/slicer", "/timeline",
+            "/customProperty", "/webextension"};
+        if (std::none_of(std::begin(kKnown), std::end(kKnown), [&](std::string_view k) { return EndsWith(r.type, k); }))
+          return cantYet(u"parts Featherweight doesn't know");
+        if (!r.external && !r.targetPart.empty()) sheetParts.push_back({r.type, r.targetPart});
+      }
+  for (const FormulaRec& f : A::Formulas(s))
+    if (f.kind == FormulaKind::DataTable) return cantYet(u"a what-if data table");
+  for (const Range& a : State::Arrays(s))
+    if (int e = Effect(m, a); e == 1 || e == -1) return Result::Fail(u"You can't change part of an array.");
+  for (const Range& g : s.Merges())
+    if (Effect(m, g) == -1)
+      return Result::Fail(u"Part of a merged cell would move. Unmerge it first, or insert or delete whole rows or columns.");
+  for (const Table& t : s.Tables()) {
+    int e = Effect(m, t.ref);
+    if (e == -1) return Result::Fail(u"This won't work because it would move cells in a table on your worksheet.");
+    if (e == 2) return Result::Fail(u"Featherweight can't delete a whole table this way yet.");
+    if (e == 1 && rows && sh.count < 0 && t.headerRows && t.ref.firstRow >= sh.at && t.ref.firstRow < sh.at + m.Deleted())
+      return Result::Fail(u"A table's header row can't be deleted on its own.");
+  }
+  if (package)
+    for (const auto& [type, part] : sheetParts) {
+      std::vector<uint8_t> bytes;
+      Range where;
+      if (EndsWith(type, "/pivotTable") && package->ReadPart(part, bytes).Ok() &&
+          PivotLocation(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), where) &&
+          Effect(m, where) != 0)
+        return Result::Fail(u"We can't make this change for the selected cells because it will affect a PivotTable.");
+    }
+  if (sh.count > 0) {
+    // Cells with something in them would be pushed off the sheet.
+    Range end = rows ? Range{m.max - static_cast<uint32_t>(sh.count), sh.band.firstCol, m.max - 1, sh.band.lastCol}
+                     : Range{sh.band.firstRow, m.max - static_cast<uint32_t>(sh.count), sh.band.lastRow, m.max - 1};
+    bool full = false;
+    s.ForEachCell(end, [&](const CellInfo& c) {
+      full = full || c.hasFormula || c.value.type != ValueType::Empty;
+      return !full;
+    });
+    if (full) return Result::Fail(u"There's no room: cells with something in them would be pushed off the sheet.");
+  }
+
+  // Table columns deleted: structured references to them become #REF! wherever they are.
+  std::vector<std::pair<std::string, std::vector<std::string>>> goneColumns;
+  if (!rows && sh.count < 0)
+    for (const Table& t : s.Tables()) {
+      std::vector<std::string> cols;
+      for (uint32_t c = std::max(t.ref.firstCol, sh.at); c <= t.ref.lastCol && c < sh.at + m.Deleted(); ++c)
+        if (c - t.ref.firstCol < t.columns.size()) cols.push_back(t.columns[c - t.ref.firstCol].name);
+      if (!cols.empty() && Effect(m, t.ref) == 1) goneColumns.push_back({t.displayName, std::move(cols)});
+    }
+  // Whether a formula or part elsewhere may need rewriting.
+  auto touches = [&](std::string_view text) {
+    if (Mentions(text, name)) return true;
+    for (const auto& g : goneColumns)
+      if (Mentions(text, g.first)) return true;
+    return false;
+  };
+
+  return Run(*this, std::move(stepName), [&]() -> Result {
+    State& st = *s_;
+    BookNames names(book_);
+    refs::Context ctx{m, sheet, name, {}, {}};
+    ctx.formula = [&](std::string_view text, int at, uint32_t row, uint32_t col) -> std::string {
+      if (at != sheet && !touches(text)) return std::string(text);
+      calc::CompileOptions where;
+      where.sheet = at;
+      where.row = static_cast<int32_t>(row);
+      where.col = static_cast<int32_t>(col);
+      std::string out = calc::ShiftReferences(text, where, sheet, sh, names);
+      for (const auto& [table, cols] : goneColumns) out = refs::DropTableColumns(out, table, cols);
+      return out;
+    };
+    ctx.copy = [&](std::string_view text, int at, CellAddr from, CellAddr to) -> std::string {
+      if (from == to) return std::string(text);
+      calc::CompileOptions a, b;
+      a.sheet = b.sheet = at;
+      a.row = static_cast<int32_t>(from.row);
+      a.col = static_cast<int32_t>(from.col);
+      b.row = static_cast<int32_t>(to.row);
+      b.col = static_cast<int32_t>(to.col);
+      std::string out = calc::CopyFormula("=" + std::string(text), a, b, names);
+      return !out.empty() && out[0] == '=' ? out.substr(1) : out;
+    };
+
+    // ---- Formulas on every sheet (planned before any cell moves: they're read where they are).
+    std::vector<FormulaPlan> plans(book_.SheetCount());
+    for (size_t i = 0; i < book_.SheetCount(); ++i)
+      plans[i] = PlanFormulas(book_.GetSheet(i), static_cast<int>(i), static_cast<int>(i) == sheet, touches, m,
+                              ctx.formula, ctx.copy);
+    for (size_t i = 0; i < book_.SheetCount(); ++i) {
+      if (static_cast<int>(i) == sheet || plans[i].Empty()) continue;
+      Sheet& x = book_.GetSheet(i);
+      SheetSave& sv = st.Save(x);
+      st.SaveCells(sv);
+      auto& recs = A::Formulas(x);
+      for (auto& [id, text] : plans[i].texts) {
+        st.SaveFormula(sv, id);
+        recs[id].text = A::Texts(x).Add(text);
+      }
+      for (uint32_t id : plans[i].unshare) {
+        st.SaveFormula(sv, id);
+        Unshare(x, recs[id]);
+      }
+      for (auto& [at, text] : plans[i].own) {
+        State::Loc l = State::Find(x, at.row, at.col);
+        if (l.block == kNone) continue;
+        RowBlock& blk = st.Writable(sv, l.block);
+        uint32_t old = State::FormulaIdOf(blk, l.cell);
+        FormulaRec rec = OwnRecord(x, text, old != kNone ? recs[old] : FormulaRec{});
+        recs.push_back(rec);
+        State::SetFormulaId(blk, l.cell, static_cast<uint32_t>(recs.size() - 1));
+      }
+      st.Change(&x, kFormulas, Range::All());
+    }
+
+    // ---- The edited sheet: its formula records, then its cells and rows.
+    SheetSave& sv = st.Save(s);
+    st.SaveAllFormulas(sv);
+    st.SaveLayout(sv);
+    st.SaveKept(sv);
+    auto& recs = A::Formulas(s);
+    const FormulaPlan& plan = plans[static_cast<size_t>(sheet)];
+    for (auto& [id, text] : plan.texts) recs[id].text = A::Texts(s).Add(text);
+    for (uint32_t id : plan.unshare) Unshare(s, recs[id]);
+    for (auto& [id, r] : plan.refs) {
+      recs[id].ref = r;
+      recs[id].attrs = EditAttrs(A::Store(s), recs[id].attrs, {}, RangeName(r));
+    }
+    std::unordered_map<uint64_t, uint32_t> own;  // old cell -> its own formula record
+    auto key = [](uint32_t row, uint32_t col) { return (static_cast<uint64_t>(row) << 16) | col; };
+    for (auto& [at, text] : plan.own) {
+      State::Loc l = State::Find(s, at.row, at.col);
+      uint32_t old = l.block == kNone ? kNone : State::FormulaIdOf(*A::Blocks(s)[l.block], l.cell);
+      recs.push_back(OwnRecord(s, text, old != kNone ? recs[old] : FormulaRec{}));
+      own[key(at.row, at.col)] = static_cast<uint32_t>(recs.size() - 1);
+    }
+
+    // Cells and rows, block by block. Blocks the edit doesn't reach stay as they are (shared with the
+    // undo step: writes copy them). Where lines only renumber, or cells only move along their rows,
+    // a block is rewritten in one pass; cells shifted up or down in a band of columns cross rows, so
+    // from the first block they reach on they're gathered and sorted.
+    auto& store = A::Store(s);
+    const auto& oldBlocks = A::Blocks(s);
+    const auto& oldFirst = A::FirstRows(s);
+    const bool adds = sh.count > 0 && sh.at > 0;
+    const uint32_t prev = adds ? sh.at - 1 : 0;
+    const uint32_t addCount = adds ? std::min<uint32_t>(static_cast<uint32_t>(sh.count), m.max - sh.at) : 0;
+    const uint32_t firstMoved = adds && rows ? prev : sh.at;  // rows before it keep their cells (rows axis)
+    std::vector<uint32_t> ownRows;
+    for (const auto& [at, text] : plan.own) ownRows.push_back(at.row);
+    std::sort(ownRows.begin(), ownRows.end());
+    auto formulaOf = [&](uint32_t row, uint32_t col, uint32_t id) {
+      if (!own.empty())
+        if (auto o = own.find(key(row, col)); o != own.end()) return o->second;
+      return id;
+    };
+    std::vector<std::shared_ptr<RowBlock>> blocks;
+    std::vector<uint32_t> firstRows;
+    bool open = false;  // whether the last block takes more rows
+    auto beginRow = [&](RowRec rec) -> RowBlock& {
+      if (!open || blocks.back()->rows.size() >= kBlockRows || blocks.back()->cells.size() >= SheetBuilder::kBlockCells) {
+        blocks.push_back(std::make_shared<RowBlock>());
+        firstRows.push_back(rec.row);
+        open = true;
+      }
+      RowBlock& b = *blocks.back();
+      rec.first = static_cast<uint32_t>(b.cells.size());
+      rec.count = 0;
+      b.rows.push_back(rec);
+      return b;
+    };
+    auto addCell = [](RowBlock& b, const CellRec& cell, uint32_t formula, const CellSide* side) {
+      uint32_t index = static_cast<uint32_t>(b.cells.size());
+      b.cells.push_back(cell);
+      if (formula != kNone && (cell.flags & detail::kHasFormula)) b.formulas.push_back({index, formula});
+      if (side) {
+        b.sides.push_back(*side);
+        b.sides.back().cell = index;
+      }
+      ++b.rows.back().count;
+    };
+    auto styled = [](const CellRec& c) { return (c.flags & detail::kStylePresent) && c.style != 0; };
+    auto formatOnly = [](uint32_t col, uint32_t style) {
+      CellRec c;
+      c.col = static_cast<uint16_t>(col);
+      c.style = style;
+      c.flags = detail::kStylePresent;
+      return c;
+    };
+    // One block whose cells stay in their rows: whole rows renumbered, or cells moved along rows.
+    auto rewrite = [&](const RowBlock& b) {
+      size_t fi = 0, si = 0;
+      for (const RowRec& r0 : b.rows) {
+        RowRec rr = r0;
+        if (rows && whole) {
+          rr.row = m.Line(r0.row);
+          if (rr.row == kNone) continue;  // deleted, with its cells
+        } else if (!rows && m.Across(r0.row, r0.row) != 0) {
+          rr.attrs = EditAttrs(store, rr.attrs, {"spans"});  // its cells move across columns
+        }
+        RowBlock* out = &beginRow(rr);
+        for (uint32_t k = r0.first; k < r0.first + r0.count; ++k) {
+          const CellRec& c0 = b.cells[k];
+          while (fi < b.formulas.size() && b.formulas[fi].first < k) ++fi;
+          while (si < b.sides.size() && b.sides[si].cell < k) ++si;
+          uint32_t row = r0.row, col = c0.col;
+          if (!m.Cell(row, col)) continue;
+          CellRec c = c0;
+          c.col = static_cast<uint16_t>(col);
+          const uint32_t id = fi < b.formulas.size() && b.formulas[fi].first == k ? b.formulas[fi].second : kNone;
+          CellSide side;
+          const bool hasSide = si < b.sides.size() && b.sides[si].cell == k;
+          if (hasSide) {
+            side = b.sides[si];
+            if (row != r0.row || col != c0.col) side.attrs = EditAttrs(store, side.attrs, {"r"});
+          }
+          addCell(*out, c, formulaOf(r0.row, c0.col, id), hasSide ? &side : nullptr);
+          // Columns inserted after this one take its format (Excel's "Format Same As Left").
+          if (!rows && addCount && c0.col == prev && styled(c0) && m.Across(r0.row, r0.row) == 1)
+            for (uint32_t j = 0; j < addCount; ++j) addCell(*out, formatOnly(sh.at + j, c0.style), kNone, nullptr);
+        }
+        // Rows inserted after this one take its height and format ("Format Same As Above").
+        if (rows && whole && addCount && r0.row == prev)
+          for (uint32_t j = 0; j < addCount; ++j) {
+            RowRec c = r0;
+            c.row = sh.at + j;
+            c.flags = static_cast<uint8_t>(c.flags & ~(detail::kRowHidden | detail::kRowCollapsed));
+            st.SyncRowAttrs(s, c);
+            out = &beginRow(c);
+            for (uint32_t k = r0.first; k < r0.first + r0.count; ++k)
+              if (styled(b.cells[k])) addCell(*out, formatOnly(b.cells[k].col, b.cells[k].style), kNone, nullptr);
+          }
+      }
+    };
+    // Blocks from `from` on, when cells move up or down in a band of columns: the band's cells, where
+    // they go (still in order: they all move alike), merged into the rows with the cells beside the
+    // band, which stay.
+    auto gather = [&](size_t from) {
+      struct Item {
+        uint32_t row = 0;
+        CellRec cell;
+        uint32_t formula = kNone;
+        bool hasSide = false;
+        CellSide side;
+      };
+      auto inBand = [&](uint32_t col) { return m.Across(col, col) != 0; };
+      std::vector<Item> band;
+      std::vector<CellRec> above;  // the styled band cells of the row before inserted cells
+      for (size_t bi = from; bi < oldBlocks.size(); ++bi) {
+        const RowBlock& b = *oldBlocks[bi];
+        size_t fi = 0, si = 0;
+        for (const RowRec& r0 : b.rows) {
+          for (uint32_t k = r0.first; k < r0.first + r0.count; ++k) {
+            const CellRec& c0 = b.cells[k];
+            if (!inBand(c0.col)) continue;
+            while (fi < b.formulas.size() && b.formulas[fi].first < k) ++fi;
+            while (si < b.sides.size() && b.sides[si].cell < k) ++si;
+            uint32_t row = r0.row, col = c0.col;
+            if (addCount && row == prev && styled(c0)) above.push_back(c0);
+            if (!m.Cell(row, col)) continue;
+            Item it;
+            it.row = row;
+            it.cell = c0;
+            it.formula = formulaOf(r0.row, c0.col, fi < b.formulas.size() && b.formulas[fi].first == k ? b.formulas[fi].second : kNone);
+            if (si < b.sides.size() && b.sides[si].cell == k) {
+              it.hasSide = true;
+              it.side = b.sides[si];
+              if (row != r0.row) it.side.attrs = EditAttrs(store, it.side.attrs, {"r"});
+            }
+            band.push_back(it);
+          }
+          if (r0.row == prev && !above.empty()) {  // cells inserted below take the format of the cell above
+            for (uint32_t j = 0; j < addCount; ++j)
+              for (const CellRec& c : above) {
+                Item add;
+                add.row = sh.at + j;
+                add.cell = formatOnly(c.col, c.style);
+                band.push_back(add);
+              }
+          }
+        }
+      }
+      size_t bx = 0;
+      auto bandRow = [&](uint32_t row, RowBlock& out, uint32_t beforeCol) {
+        for (; bx < band.size() && band[bx].row == row && band[bx].cell.col < beforeCol; ++bx)
+          addCell(out, band[bx].cell, band[bx].formula, band[bx].hasSide ? &band[bx].side : nullptr);
+      };
+      auto bandOnly = [&](uint32_t before) {  // rows only band cells land in
+        while (bx < band.size() && band[bx].row < before) {
+          RowRec rec;
+          rec.row = band[bx].row;
+          bandRow(rec.row, beginRow(rec), kMaxCols);
+        }
+      };
+      for (size_t bi = from; bi < oldBlocks.size(); ++bi) {
+        const RowBlock& b = *oldBlocks[bi];
+        size_t fi = 0, si = 0;
+        for (const RowRec& r0 : b.rows) {
+          bandOnly(r0.row);
+          RowRec rr = r0;
+          rr.attrs = EditAttrs(store, rr.attrs, {"spans"});
+          RowBlock& out = beginRow(rr);
+          for (uint32_t k = r0.first; k < r0.first + r0.count; ++k) {
+            const CellRec& c0 = b.cells[k];
+            if (inBand(c0.col)) continue;
+            while (fi < b.formulas.size() && b.formulas[fi].first < k) ++fi;
+            while (si < b.sides.size() && b.sides[si].cell < k) ++si;
+            bandRow(r0.row, out, c0.col);
+            const uint32_t id = fi < b.formulas.size() && b.formulas[fi].first == k ? b.formulas[fi].second : kNone;
+            addCell(out, c0, formulaOf(r0.row, c0.col, id),
+                    si < b.sides.size() && b.sides[si].cell == k ? &b.sides[si] : nullptr);
+          }
+          bandRow(r0.row, out, kMaxCols);
+        }
+      }
+      bandOnly(kNone);
+    };
+    for (size_t bi = 0; bi < oldBlocks.size(); ++bi) {
+      const RowBlock& b = *oldBlocks[bi];
+      if (b.rows.empty()) continue;
+      const uint32_t first = b.rows.front().row, last = b.rows.back().row;
+      if (rows && !whole && last >= firstMoved) {
+        gather(bi);
+        break;
+      }
+      auto o = std::lower_bound(ownRows.begin(), ownRows.end(), first);
+      const bool owns = o != ownRows.end() && *o <= last;
+      const bool reached = rows ? last >= firstMoved : m.Across(first, last) != 0;
+      if (!owns && !reached) {
+        blocks.push_back(oldBlocks[bi]);
+        firstRows.push_back(oldFirst[bi]);
+        open = false;
+      } else {
+        rewrite(b);
+      }
+    }
+    size_t cellCount = 0, formulaCells = 0;
+    for (const auto& b : blocks) {
+      cellCount += b->cells.size();
+      formulaCells += b->formulas.size();
+    }
+    A::Blocks(s) = std::move(blocks);
+    A::FirstRows(s) = std::move(firstRows);
+    A::CellCount(s) = cellCount;
+    A::FormulaCells(s) = formulaCells;
+    // Shared formulas' masters, where they are now.
+    auto& masters = A::SharedMasters(s);
+    masters.clear();
+    for (const FCell& c : FormulaCellsOf(s))
+      if (c.id < recs.size() && recs[c.id].kind == FormulaKind::Shared && recs[c.id].text != kNone &&
+          recs[c.id].sharedIndex != kNone)
+        masters.push_back({recs[c.id].sharedIndex, CellAddr{c.row, c.col}});
+    std::sort(masters.begin(), masters.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    // XML kept inside sheetData.
+    std::vector<detail::Kept> kept;
+    for (detail::Kept k : A::Kept(s)) {
+      if (k.row != kNone) {
+        if (k.col != detail::Kept::kBeforeRow && k.col != detail::Kept::kRowEnd) {
+          uint32_t r = k.row, c = k.col;
+          if (!m.Cell(r, c)) continue;
+          k.row = r;
+          k.col = c;
+        } else if (rows && whole) {
+          if ((k.row = m.Line(k.row)) == kNone) continue;
+        }
+      }
+      kept.push_back(std::move(k));
+    }
+    std::stable_sort(kept.begin(), kept.end(), [](const detail::Kept& a, const detail::Kept& b) { return a.row < b.row; });
+    A::Kept(s) = std::move(kept);
+
+    // ---- Columns: widths and formats move; inserted ones take the one before's.
+    if (!rows && whole && !s.Columns().empty()) {
+      st.SaveCols(sv);
+      std::vector<ColumnInfo> out;
+      std::optional<ColumnInfo> before;
+      const uint32_t at = sh.at, d = m.Deleted();
+      for (const ColumnInfo& c : A::Cols(s)) {
+        if (sh.count > 0 && at > 0 && c.first <= at - 1 && at - 1 <= c.last) before = c;
+        if (c.last < at) {
+          out.push_back(c);
+          continue;
+        }
+        ColumnInfo a = c, b = c;
+        if (sh.count > 0) {
+          if (c.first < at) {
+            a.last = at - 1;
+            out.push_back(a);
+          }
+          uint64_t first = std::max(c.first, at) + static_cast<uint64_t>(sh.count);
+          if (first < kMaxCols) {
+            b.first = static_cast<uint32_t>(first);
+            b.last = static_cast<uint32_t>(std::min<uint64_t>(c.last + static_cast<uint64_t>(sh.count), kMaxCols - 1));
+            out.push_back(b);
+          }
+        } else {
+          if (c.first < at) {
+            a.last = at - 1;
+            out.push_back(a);
+          }
+          if (c.last >= at + d) {
+            b.first = std::max(c.first, at + d) - d;
+            b.last = c.last == kMaxCols - 1 ? c.last : c.last - d;
+            out.push_back(b);
+          }
+        }
+      }
+      if (before) {
+        ColumnInfo c = *before;
+        c.first = at;
+        c.last = std::min<uint32_t>(at + static_cast<uint32_t>(sh.count) - 1, kMaxCols - 1);
+        c.hidden = c.collapsed = false;
+        out.push_back(c);
+      }
+      std::sort(out.begin(), out.end(), [](const ColumnInfo& a, const ColumnInfo& b) { return a.first < b.first; });
+      // Neighbours that say the same are one entry (as Excel writes them).
+      std::vector<ColumnInfo> joined;
+      for (const ColumnInfo& c : out) {
+        if (!joined.empty() && joined.back().last + 1 == c.first) {
+          ColumnInfo a = joined.back(), b = c;
+          a.first = b.first = a.last = b.last = 0;
+          if (a.width == b.width && a.style == b.style && a.outlineLevel == b.outlineLevel && a.hidden == b.hidden &&
+              a.customWidth == b.customWidth && a.bestFit == b.bestFit && a.collapsed == b.collapsed &&
+              a.phonetic == b.phonetic) {
+            joined.back().last = c.last;
+            continue;
+          }
+        }
+        joined.push_back(c);
+      }
+      A::Cols(s) = std::move(joined);
+    }
+
+    // ---- Merges, links, the autofilter, page breaks.
+    {
+      std::vector<Range> out;
+      bool changed = false;
+      for (Range r : s.Merges()) {
+        Range x = r;
+        if (!m.Area(x) || (x.firstRow == x.lastRow && x.firstCol == x.lastCol)) {
+          changed = true;
+          continue;
+        }
+        changed = changed || !(x == r);
+        out.push_back(x);
+      }
+      if (changed) {
+        st.SaveMerges(sv);
+        A::Merges(s) = std::move(out);
+        st.RecountMerges(s);
+      }
+    }
+    {
+      std::vector<Hyperlink> out;
+      bool changed = false;
+      for (Hyperlink h : s.Hyperlinks()) {
+        Range x = h.ref;
+        if (!m.Area(x)) {
+          changed = true;
+          continue;
+        }
+        changed = changed || !(x == h.ref);
+        h.ref = x;
+        out.push_back(std::move(h));
+      }
+      if (changed) {
+        st.SaveLinks(sv);
+        A::Links(s) = std::move(out);
+      }
+    }
+    if (const auto& f = s.Filter()) {
+      Range x = f->ref;
+      bool keep = m.Area(x);
+      if (!keep || !(x == f->ref)) {
+        st.SaveFilter(sv);
+        if (keep) A::Filter(s)->ref = x;
+        else A::Filter(s).reset();
+      }
+    }
+    if (whole) {
+      std::vector<PageBreak> out;
+      bool changed = false;
+      for (PageBreak b : A::Breaks(s, rows)) {
+        uint32_t n = m.Line(b.id);
+        changed = changed || n != b.id;
+        if (n == kNone) continue;
+        b.id = n;
+        out.push_back(b);
+      }
+      if (changed) {
+        st.SaveBreaks(sv);
+        A::Breaks(s, rows) = std::move(out);
+      }
+    }
+
+    // ---- Tables: their areas, and columns inserted or deleted inside them (named as Excel names
+    // new ones: Column1, ...), with their header cells.
+    std::vector<Table> tablesBefore = s.Tables();
+    std::vector<std::pair<CellAddr, std::string>> headers;
+    if (!tablesBefore.empty()) {
+      std::vector<Table> after = tablesBefore;
+      bool changed = false;
+      for (Table& t : after) {
+        Range x = t.ref;
+        if (!m.Area(x)) continue;
+        if (!rows && Effect(m, t.ref) == 1) {
+          if (sh.count > 0) {
+            uint32_t nextId = 1, nextName = 1;
+            for (const TableColumn& c : t.columns) nextId = std::max(nextId, c.id + 1);
+            auto pos = t.columns.begin() + (sh.at - t.ref.firstCol);
+            for (int32_t k = 0; k < sh.count && t.columns.size() < kMaxCols; ++k) {
+              TableColumn c;
+              c.id = nextId++;
+              for (;; ++nextName) {
+                c.name = "Column" + std::to_string(nextName);
+                if (t.FindColumn(c.name) < 0) break;
+              }
+              pos = t.columns.insert(pos, c) + 1;
+              if (t.headerRows) headers.push_back({{t.ref.firstRow, sh.at + static_cast<uint32_t>(k)}, c.name});
+            }
+          } else {
+            uint32_t from = std::max(sh.at, t.ref.firstCol) - t.ref.firstCol;
+            uint32_t to = std::min(sh.at + m.Deleted(), t.ref.lastCol + 1) - t.ref.firstCol;
+            t.columns.erase(t.columns.begin() + from, t.columns.begin() + to);
+          }
+        }
+        for (TableColumn& c : t.columns) {
+          CellAddr at{t.ref.firstRow + t.headerRows, t.ref.firstCol};
+          if (!c.calculatedFormula.empty()) c.calculatedFormula = ctx.formula(c.calculatedFormula, sheet, at.row, at.col);
+          if (!c.totalsFormula.empty()) c.totalsFormula = ctx.formula(c.totalsFormula, sheet, t.ref.lastRow, at.col);
+        }
+        t.ref = x;
+        changed = true;
+      }
+      if (changed) {
+        st.SaveTables(sv);
+        A::Tables(s) = after;
+      }
+    }
+    for (const auto& [at, text] : headers) {
+      CellInput in = CellInput::Text(text);
+      std::u16string why;
+      st.Put(sv, at.row, at.col, &in, false, std::nullopt, why);
+    }
+    // Rows inserted into a table get its calculated columns' formulas (Excel fills them).
+    for (size_t k = 0; rows && sh.count > 0 && k < tablesBefore.size() && k < s.Tables().size(); ++k) {
+      const Table& t = s.Tables()[k];
+      if (Effect(m, tablesBefore[k].ref) != 1) continue;
+      for (size_t c = 0; c < t.columns.size(); ++c) {
+        if (t.columns[c].calculatedFormula.empty()) continue;
+        CellInput in = CellInput::Formula(t.columns[c].calculatedFormula);
+        for (uint32_t r = sh.at; r < sh.at + static_cast<uint32_t>(sh.count) && r <= t.ref.lastRow; ++r) {
+          std::u16string why;
+          st.Put(sv, r, t.ref.firstCol + static_cast<uint32_t>(c), &in, false, std::nullopt, why);
+        }
+      }
+    }
+
+    // ---- Names (print areas and titles among them).
+    {
+      std::vector<DefinedName> list = A::Names(book_);
+      bool changed = false;
+      for (DefinedName& n : list) {
+        if (n.sheet != sheet && !touches(n.formula)) continue;
+        std::string now = ctx.formula(n.formula, n.sheet >= 0 ? n.sheet : 0, 0, 0);
+        changed = changed || now != n.formula;
+        n.formula = std::move(now);
+      }
+      if (changed) {
+        st.SaveBook(false, true);
+        A::Names(book_) = std::move(list);
+        st.Change(nullptr, kNames, Range{});
+      }
+    }
+
+    // ---- The sheets' XML around their cells: rules, sparklines, filters, breaks...
+    for (size_t i = 0; i < book_.SheetCount(); ++i) {
+      Sheet& x = book_.GetSheet(i);
+      const detail::PartText& t = A::Text(x);
+      if (static_cast<int>(i) != sheet && !touches(t.afterData)) continue;
+      detail::PartText now = t;
+      refs::MoveSheetXml(now, static_cast<int>(i), ctx);
+      if (now.afterData == t.afterData && now.beforeData == t.beforeData) continue;
+      st.SaveText(st.Save(x));
+      A::Text(x) = std::move(now);
+    }
+
+    // ---- Parts: the sheets' drawings, notes, controls, tables and pivot tables; charts and pivot
+    // caches anywhere.
+    if (package) {
+      auto edit = [&](const std::string& part, const std::function<bool(std::string&)>& fn) {
+        std::vector<uint8_t> bytes;
+        if (!package->ReadPart(part, bytes).Ok()) return;
+        std::string xml(bytes.begin(), bytes.end());
+        if (fn(xml)) st.SetPart(part, std::move(xml));
+      };
+      refs::CacheFn cache = [&](std::string_view f, bool visibleOnly, std::vector<refs::CachePoint>& out) {
+        size_t bang = f.rfind('!');
+        if (bang == std::string_view::npos) return false;
+        std::string sn(f.substr(0, bang));
+        if (sn.size() >= 2 && sn.front() == '\'' && sn.back() == '\'') {
+          std::string u;
+          for (size_t k = 1; k + 1 < sn.size(); ++k) {
+            u += sn[k];
+            if (sn[k] == '\'' && k + 2 < sn.size() && sn[k + 1] == '\'') ++k;
+          }
+          sn = std::move(u);
+        }
+        Range r;
+        int xi = book_.FindSheet(sn);
+        if (xi < 0 || !ParseRange(f.substr(bang + 1), r) || (r.firstRow != r.lastRow && r.firstCol != r.lastCol) ||
+            static_cast<uint64_t>(r.lastRow - r.firstRow) + (r.lastCol - r.firstCol) > 100000)
+          return false;
+        const Sheet& x = book_.GetSheet(static_cast<size_t>(xi));
+        for (uint32_t row = r.firstRow; row <= r.lastRow; ++row)
+          for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
+            if (visibleOnly && (x.Row(row).hidden || x.Column(col).hidden)) continue;
+            Value v = x.GetValue(row, col);
+            refs::CachePoint p;
+            if (v.type == ValueType::Number) p = {refs::CachePoint::Number, Number(v.number)};
+            else if (v.type == ValueType::String) p = {refs::CachePoint::Text, std::string(v.text)};
+            else if (v.type == ValueType::Bool) p = {refs::CachePoint::Text, v.boolean ? "TRUE" : "FALSE"};
+            else if (v.type == ValueType::Error) p = {refs::CachePoint::Text, "#N/A"};
+            out.push_back(std::move(p));
+          }
+        return true;
+      };
+      for (size_t i = 0; i < book_.SheetCount(); ++i) {
+        Sheet& x = book_.GetSheet(i);
+        const int xi = static_cast<int>(i);
+        const bool mine = xi == sheet;
+        const pkg::RelationshipSet* rels = x.PartName().empty() ? nullptr : package->RelationshipsOf(x.PartName());
+        if (!rels) continue;
+        for (const pkg::Relationship& r : rels->items) {
+          if (r.external || r.targetPart.empty()) continue;
+          auto ours = [&](const std::string& xml) { return mine || touches(xml); };
+          if (EndsWith(r.type, "/drawing"))
+            edit(r.targetPart, [&](std::string& xml) { return ours(xml) && refs::MoveDrawing(xml, xi, ctx); });
+          else if (EndsWith(r.type, "/vmlDrawing"))
+            edit(r.targetPart, [&](std::string& xml) { return ours(xml) && refs::MoveVml(xml, xi, ctx); });
+          else if (EndsWith(r.type, "/ctrlProp"))
+            edit(r.targetPart, [&](std::string& xml) { return ours(xml) && refs::MoveControl(xml, xi, ctx); });
+          else if (mine && (EndsWith(r.type, "/comments") || EndsWith(r.type, "/threadedComment")))
+            edit(r.targetPart, [&](std::string& xml) { return refs::MoveComments(xml, ctx); });
+          else if (mine && EndsWith(r.type, "/pivotTable"))
+            edit(r.targetPart, [&](std::string& xml) { return refs::MovePivotTable(xml, ctx); });
+        }
+      }
+      for (size_t k = 0; k < tablesBefore.size() && k < s.Tables().size(); ++k) {
+        const Table& before = tablesBefore[k];
+        const Table& after = s.Tables()[k];
+        edit(after.part, [&](std::string& xml) { return refs::MoveTable(xml, before, after, sheet, ctx); });
+      }
+      for (const pkg::Part& part : package->Parts()) {
+        if (part.deleted) continue;
+        std::string_view ct = package->ContentTypeOf(part.name);
+        bool chart = ct == "application/vnd.openxmlformats-officedocument.drawingml.chart+xml" ||
+                     ct == "application/vnd.ms-office.chartex+xml";
+        bool pivot = ct == "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml";
+        if (chart || pivot)
+          edit(part.name, [&](std::string& xml) {
+            return touches(xml) && (chart ? refs::MoveChart(xml, 0, ctx, cache) : refs::MovePivotCache(xml, ctx));
+          });
+      }
+    }
+
+    Range moved = rows ? Range{sh.at, sh.band.firstCol, kMaxRows - 1, sh.band.lastCol}
+                       : Range{sh.band.firstRow, sh.at, sh.band.lastRow, kMaxCols - 1};
+    st.Change(&s, kShift | kValues | kFormulas | kStyles | kMerges | (rows ? kRowProps : kColProps), moved, sh);
+    return Result{};
+  });
+}
+
+namespace {
+
+// "#REF!A1", "#REF!$A$1:$B$2" (a reference to a deleted sheet as SheetsChanged writes it) become
+// "#REF!", as Excel writes them in the file.
+std::string StripRefTails(const std::string& s) {
+  std::string out;
+  size_t i = 0;
+  auto ref = [&](size_t k) {
+    if (k < s.size() && s[k] == '$') ++k;
+    while (k < s.size() && std::isalpha(static_cast<unsigned char>(s[k]))) ++k;
+    if (k < s.size() && s[k] == '$') ++k;
+    while (k < s.size() && std::isdigit(static_cast<unsigned char>(s[k]))) ++k;
+    return k;
+  };
+  for (size_t at = s.find("#REF!"); at != std::string::npos; at = s.find("#REF!", i)) {
+    out.append(s, i, at + 5 - i);
+    size_t j = at + 5, e = ref(j);
+    if (e > j && e < s.size() && s[e] == ':') {
+      size_t e2 = ref(e + 1);
+      if (e2 > e + 1) e = e2;
+    }
+    bool name = e < s.size() && (std::isalnum(static_cast<unsigned char>(s[e])) || s[e] == '_' || s[e] == '(');
+    i = e > j && !name ? e : j;
+  }
+  out.append(s, i, std::string::npos);
+  return out;
+}
+
+}  // namespace
+
+void Editor::RewriteSheetRefs(int skip, const std::function<std::string(std::string_view, int)>& rewrite,
+                              const std::function<bool(std::string_view)>& touches, std::string_view from,
+                              std::string_view to) {
+  State& st = *s_;
+  refs::Context ctx{refs::Mover(Shift{}), -1, std::string(), {}, {}};
+  ctx.formula = [&](std::string_view text, int at, uint32_t, uint32_t) {
+    return touches(text) ? rewrite(text, at) : std::string(text);
+  };
+  ctx.copy = [](std::string_view text, int, CellAddr, CellAddr) { return std::string(text); };
+  pkg::Package* package = book_.GetPackage();
+  auto edit = [&](const std::string& part, const std::function<bool(std::string&)>& fn) {
+    std::vector<uint8_t> bytes;
+    if (!package || !package->ReadPart(part, bytes).Ok()) return;
+    std::string xml(bytes.begin(), bytes.end());
+    if (touches(xml) && fn(xml)) st.SetPart(part, std::move(xml));
+  };
+  for (size_t i = 0; i < book_.SheetCount(); ++i) {
+    if (static_cast<int>(i) == skip) continue;
+    Sheet& x = book_.GetSheet(i);
+    const int xi = static_cast<int>(i);
+    auto& recs = A::Formulas(x);
+    SheetSave* sv = nullptr;
+    for (uint32_t id = 0; id < recs.size(); ++id) {
+      if (recs[id].text == kNone) continue;
+      std::string_view text = A::Texts(x).Get(recs[id].text);
+      if (!touches(text)) continue;
+      std::string now = rewrite(text, xi);
+      if (now == text) continue;
+      if (!sv) {
+        sv = &st.Save(x);
+        st.SaveCells(*sv);
+      }
+      st.SaveFormula(*sv, id);
+      recs[id].text = A::Texts(x).Add(now);
+    }
+    if (sv) st.Change(&x, kFormulas, Range::All());
+    std::vector<Table> tables = x.Tables();
+    bool tablesChanged = false;
+    for (Table& t : tables)
+      for (TableColumn& c : t.columns)
+        for (std::string* f : {&c.calculatedFormula, &c.totalsFormula})
+          if (!f->empty() && touches(*f)) {
+            std::string now = rewrite(*f, xi);
+            tablesChanged = tablesChanged || now != *f;
+            *f = std::move(now);
+          }
+    if (tablesChanged) {
+      st.SaveTables(st.Save(x));
+      A::Tables(x) = tables;
+    }
+    for (const Table& t : x.Tables())
+      edit(t.part, [&](std::string& xml) { return refs::MoveTable(xml, t, t, xi, ctx); });
+    if (touches(A::Text(x).afterData)) {
+      detail::PartText now = A::Text(x);
+      refs::MoveSheetXml(now, xi, ctx);
+      if (now.afterData != A::Text(x).afterData) {
+        st.SaveText(st.Save(x));
+        A::Text(x) = std::move(now);
+      }
+    }
+    const pkg::RelationshipSet* rels = package && !x.PartName().empty() ? package->RelationshipsOf(x.PartName()) : nullptr;
+    if (rels)
+      for (const pkg::Relationship& r : rels->items) {
+        if (r.external || r.targetPart.empty()) continue;
+        if (EndsWith(r.type, "/drawing"))
+          edit(r.targetPart, [&](std::string& xml) { return refs::MoveDrawing(xml, xi, ctx); });
+        else if (EndsWith(r.type, "/vmlDrawing"))
+          edit(r.targetPart, [&](std::string& xml) { return refs::MoveVml(xml, xi, ctx); });
+        else if (EndsWith(r.type, "/ctrlProp"))
+          edit(r.targetPart, [&](std::string& xml) { return refs::MoveControl(xml, xi, ctx); });
+      }
+  }
+  std::vector<DefinedName> names = A::Names(book_);
+  bool namesChanged = false;
+  for (DefinedName& n : names)
+    if (touches(n.formula)) {
+      std::string now = rewrite(n.formula, n.sheet >= 0 ? n.sheet : 0);
+      namesChanged = namesChanged || now != n.formula;
+      n.formula = std::move(now);
+    }
+  if (namesChanged) {
+    st.SaveBook(false, true);
+    A::Names(book_) = std::move(names);
+    st.Change(nullptr, kNames, Range{});
+  }
+  if (!package) return;
+  for (const pkg::Part& part : package->Parts()) {
+    if (part.deleted) continue;
+    std::string_view ct = package->ContentTypeOf(part.name);
+    if (ct == "application/vnd.openxmlformats-officedocument.drawingml.chart+xml" ||
+        ct == "application/vnd.ms-office.chartex+xml")
+      edit(part.name, [&](std::string& xml) { return refs::MoveChart(xml, 0, ctx, {}); });
+    else if (!from.empty() && ct == "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml")
+      edit(part.name, [&](std::string& xml) { return refs::RenamePivotSource(xml, from, to); });
+  }
+}
 
 // ---- Merged cells
 
@@ -1502,33 +2642,10 @@ Result Editor::RenameSheet(int sheet, std::string name) {
     }
     A::Name(s) = name;
     st.SaveBook(false, true);
-    for (DefinedName& n : A::Names(book_)) n.formula = pkg::RenameSheetInFormula(n.formula, old, name);
-    // Formulas on every sheet, and links to places in the workbook.
-    for (size_t i = 0; i < book_.SheetCount(); ++i) {
-      Sheet& x = book_.GetSheet(i);
-      auto& formulas = A::Formulas(x);
-      SheetSave* sv = nullptr;
-      for (uint32_t id = 0; id < formulas.size(); ++id) {
-        if (formulas[id].text == kNone) continue;
-        bool changed = false;
-        std::string text = pkg::RenameSheetInFormula(A::Texts(x).Get(formulas[id].text), old, name, &changed);
-        if (!changed) continue;
-        if (!sv) sv = &st.Save(x);
-        st.SaveCells(*sv);
-        st.SaveFormula(*sv, id);
-        formulas[id].text = A::Texts(x).Add(text);
-      }
-      bool links = std::any_of(x.Hyperlinks().begin(), x.Hyperlinks().end(), [&](const Hyperlink& h) {
-        bool changed = false;
-        pkg::RenameSheetInFormula(h.location, old, name, &changed);
-        return changed;
-      });
-      if (links) {
-        SheetSave& lsv = st.Save(x);
-        st.SaveLinks(lsv);
-        for (Hyperlink& h : A::Links(x)) h.location = pkg::RenameSheetInFormula(h.location, old, name);
-      }
-    }
+    // Formulas, names, rules, sparklines, charts and the rest; links to places keep their text (Excel).
+    RewriteSheetRefs(
+        -1, [&](std::string_view t, int) { return pkg::RenameSheetInFormula(t, old, name); },
+        [&](std::string_view t) { return Mentions(t, old); }, old, name);
     st.Change(&s, kSheets | kFormulas, Range::All());
     return Result{};
   });
@@ -1542,6 +2659,17 @@ Result Editor::MoveSheet(int sheet, int to) {
   return Run(*this, u"Move Sheet", [&]() -> Result {
     State& st = *s_;
     st.SaveBook(true, true);
+    // 3-D references whose end sheets move (before the list changes: indexes as they are).
+    std::vector<std::string> names;
+    for (size_t i = 0; i < book_.SheetCount(); ++i) names.push_back(book_.GetSheet(i).Name());
+    RewriteSheetRefs(
+        -1,
+        [&](std::string_view t, int at) {
+          calc::CompileOptions o;
+          o.sheet = at;
+          return calc::SheetsChanged(t, o, names, sheet, to);
+        },
+        [](std::string_view t) { return t.find(':') != std::string_view::npos && t.find('!') != std::string_view::npos; });
     auto& list = A::Sheets(book_);
     std::vector<Sheet*> before;
     for (auto& p : list) before.push_back(p.get());
@@ -1567,56 +2695,33 @@ Result Editor::DeleteSheet(int sheet) {
   for (int i = 0; i < n; ++i) visible += book_.GetSheet(static_cast<size_t>(i)).State() == SheetState::Visible;
   if (visible == 1 && book_.GetSheet(static_cast<size_t>(sheet)).State() == SheetState::Visible)
     return Result::Fail(u"A workbook needs at least one visible sheet.");
-  // Until the reference registry turns them into #REF!, a sheet other formulas use stays.
   if (!book_.LoadAll().Ok()) return Result::Fail(u"A sheet couldn't be read.");
-  const std::string& gone = book_.GetSheet(static_cast<size_t>(sheet)).Name();
-  auto uses = [&](std::string_view formula) {
-    bool found = false;
-    pkg::ForEachSheetToken(formula, [&](const pkg::SheetToken& t) {
-      found = found || NameEqualsNoCase(t.first, gone) || (!t.last.empty() && NameEqualsNoCase(t.last, gone));
-    });
-    return found;
-  };
-  for (const DefinedName& nm : book_.Names())
-    if (nm.sheet != sheet && uses(nm.formula)) return Result::Fail(u"Formulas or names use this sheet.");
-  // Anything else in the file that names it (chart series, x14 extensions' xm:f, hyperlink
-  // locations, ...), until the registry updates those: Sheet1! or 'My sheet'! in any XML part but
-  // the sheet's own, the workbook part and the shared strings.
-  if (const pkg::Package* package = book_.GetPackage()) {
-    auto lower = [](std::string s) {
-      for (char& c : s) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
-      return s;
-    };
-    std::string quoted = "'";
-    for (char c : gone) quoted += c == '\'' ? std::string("''") : std::string(1, c);
-    const std::string plain = lower(gone) + "!", inQuotes = lower(quoted) + "'!";
-    const std::string own = pkg::PartKey(book_.GetSheet(static_cast<size_t>(sheet)).PartName());
-    for (const pkg::Part& part : package->Parts()) {
-      std::string key = pkg::PartKey(part.name);
-      if (part.deleted || key == own || key == pkg::PartKey(book_.WorkbookPart()) ||
-          key == pkg::PartKey(book_.StringsPart()) || !package->IsXmlPart(part.name) ||
-          package->ContentTypeOf(part.name).find("extended-properties") != std::string_view::npos)
-        continue;  // (docProps/app.xml lists names as "Sheet1!Print_Area": text, not references)
-      std::vector<uint8_t> bytes;
-      if (!package->ReadPart(part.name, bytes).Ok()) continue;
-      const std::string xml = lower(std::string(bytes.begin(), bytes.end()));
-      bool named = xml.find(inQuotes) != std::string::npos;
-      for (size_t at = xml.find(plain); !named && at != std::string::npos; at = xml.find(plain, at + 1)) {
-        char before = at ? xml[at - 1] : '>';
-        named = !(std::isalnum(static_cast<unsigned char>(before)) || before == '_' || before == '.' || before == '\'');
-      }
-      if (named) return Result::Fail(u"Other parts of the workbook use this sheet.");
-    }
-  }
-  for (size_t i = 0; i < book_.SheetCount(); ++i) {
-    if (static_cast<int>(i) == sheet) continue;
-    Sheet& x = book_.GetSheet(i);
-    for (const FormulaRec& f : A::Formulas(x))
-      if (f.text != kNone && uses(A::Texts(x).Get(f.text))) return Result::Fail(u"Formulas or names use this sheet.");
-  }
   return Run(*this, u"Delete Sheet", [&]() -> Result {
     State& st = *s_;
     st.SaveBook(true, true);
+    // References to it become #REF! as Excel writes them (Sheet2!A1+1 -> #REF!+1; 3-D ranges give
+    // way to the neighbour inside), and so do structured references to its tables; its charts and
+    // other parts go with it when the workbook is saved.
+    const Sheet& doomed = book_.GetSheet(static_cast<size_t>(sheet));
+    std::vector<std::string> sheetNames, tables;
+    for (size_t i = 0; i < book_.SheetCount(); ++i) sheetNames.push_back(book_.GetSheet(i).Name());
+    for (const Table& t : doomed.Tables()) tables.push_back(t.displayName);
+    const std::string goneName = doomed.Name();
+    RewriteSheetRefs(
+        sheet,
+        [&](std::string_view t, int at) {
+          calc::CompileOptions o;
+          o.sheet = at;
+          std::string r = StripRefTails(calc::SheetsChanged(t, o, sheetNames, sheet, -1));
+          for (const std::string& table : tables) r = refs::DropTableColumns(r, table, {});
+          return r;
+        },
+        [&](std::string_view t) {
+          if (Mentions(t, goneName)) return true;
+          for (const std::string& table : tables)
+            if (Mentions(t, table)) return true;
+          return false;
+        });
     auto& list = A::Sheets(book_);
     std::unique_ptr<Sheet> gone = std::move(list[static_cast<size_t>(sheet)]);
     list.erase(list.begin() + sheet);
