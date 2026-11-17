@@ -733,10 +733,17 @@ TEST(sheet_save_cell_style_added) {
   const std::string styles = PartText(saved, "/xl/styles.xml");
   CHECK(styles.find("<cellStyle name=\"Good\" xfId=\"1\" builtinId=\"26\"/>") != std::string::npos);
   CHECK(InOrder(styles, {"<cellStyleXfs count=\"2\">", "<cellXfs", "<cellStyles count=\"1\">"}));
+  // As Excel writes a style's parts: "0" for those it leaves out, nothing for those it includes.
+  const std::string styleXfs = styles.substr(styles.find("<cellStyleXfs"), styles.find("<cellXfs") - styles.find("<cellStyleXfs"));
+  CHECK(styleXfs.find("applyNumberFormat=\"0\" applyBorder=\"0\" applyAlignment=\"0\" applyProtection=\"0\"/>") != std::string::npos);
+  CHECK(styleXfs.find("applyFont") == std::string::npos && styleXfs.find("applyFill") == std::string::npos);
   auto again = OpenZip(saved);
   if (!again) return;
   const Styles& s = again->GetStyles();
   CHECK(s.CellStyles().size() == 1 && s.CellStyles()[0].name == "Good" && s.CellStyles()[0].xf == 1);
+  const Xf& read = s.CellStyleXfs()[1];
+  CHECK(read.applyFont && read.applyFill && !read.applyNumFmt && !read.applyBorder && !read.applyAlignment &&
+        !read.applyProtection);
   CHECK(s.CellXf(again->GetSheet(0).StyleAt(0, 0)).parent == 1);
   CHECK(!ed.StylesDirty());
 
