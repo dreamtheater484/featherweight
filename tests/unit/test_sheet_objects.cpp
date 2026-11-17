@@ -278,7 +278,9 @@ TEST(sheet_objects_notes) {
   auto book = OpenSheetFile("office/sheet/notes.xlsx");
   if (!book) return;
   auto notes = SheetObjects::Load(*book, 0);
-  CHECK(notes->Notes().size() == 4);
+  CHECK(notes->Notes().size() == 5);  // H2 is the second note in row 2 (the order printed at the end)
+  const CellNote* h2 = notes->NoteAt(1, 7);
+  CHECK(h2 && !h2->threaded && h2->text == L"A second note in row 2.");
   const CellNote* b2 = notes->NoteAt(1, 1);
   CHECK(b2 && !b2->threaded && b2->text == L"A short note." && b2->author == L"Featherweight tests");
   CHECK(notes->NoteAt(1, 2) == nullptr);
