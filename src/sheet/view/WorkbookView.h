@@ -495,6 +495,9 @@ class WorkbookView : public PagedView {
   void DrawFillHandle(gfx::Canvas& c);
   void FillDrag(int x, int y);
   void FinishFill();
+  // Snapshot script ops of the grid's (s2-format's ScriptOp hands them on): fill:<range> drags the
+  // selection's fill handle until the selection covers the range ("fill:B3:M3"), as the mouse does.
+  bool GridScriptOp(const std::wstring& op, const std::wstring& arg);
   void FillToNeighbour();
   Range fillTo_{};
   // ---- Cut, copy and paste (WorkbookClipboard.cpp).

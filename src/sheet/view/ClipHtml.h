@@ -24,6 +24,9 @@ struct HtmlCell {
   double number = 0;
   bool boolean = false;
   std::string error;  // "#DIV/0!"
+  // Another Featherweight workbook's copy: the formula (invariant, with "="), written for the cell
+  // it was copied from (HtmlGrid::from plus this cell's place).
+  std::string formula;
   // The format: what the HTML says; nothing set means the cell's own.
   std::string numFmt;  // Excel's mso-number-format, as a format code
   bool bold = false, italic = false, underline = false, strike = false;
@@ -42,7 +45,9 @@ struct HtmlGrid {
   uint32_t rows = 0, cols = 0;
   std::vector<HtmlCell> cells;  // by row, then column
   std::vector<Range> merges;    // from the paste's top-left
-  bool excel = false;           // written by Excel
+  bool excel = false;           // written by Excel (or Featherweight, as Excel writes it)
+  bool hasFrom = false;         // Featherweight's copy: where its top-left cell was
+  CellAddr from;
 };
 
 // `cfHtml`: the clipboard's bytes (CF_HTML: a header with offsets, then UTF-8 HTML), or plain HTML.

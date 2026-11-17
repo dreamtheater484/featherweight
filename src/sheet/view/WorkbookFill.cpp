@@ -310,4 +310,31 @@ void WorkbookView::FillToNeighbour() {
   if (FillCells(sel, target, 0, true, u"AutoFill")) Select({sel.firstRow, sel.firstCol}, {last, sel.lastCol}, false);
 }
 
+bool WorkbookView::GridScriptOp(const std::wstring& op, const std::wstring& arg) {
+  if (op != L"fill") return false;
+  if (!Ready() || preview_ || ChartSheet()) return true;
+  if (editor_.Active() && !CommitEdit(false)) return true;
+  // The range as a reference reads ("B3:M3"; one cell is fine too).
+  const std::wstring f = L"=" + arg;
+  const std::vector<calc::RefSpan> spans = calc::ReferenceSpans(f, Region());
+  if (spans.size() != 1 || spans[0].begin != 1 || spans[0].end != f.size() || !spans[0].sheet.empty()) {
+    host_.ViewMessage(BannerKind::Warning, L"fill: needs a range on this sheet, as B3:M3.");
+    return true;
+  }
+  const calc::RefSpan& r = spans[0];
+  const Range to{static_cast<uint32_t>(std::min(r.r1, r.r2)), static_cast<uint32_t>(std::min(r.c1, r.c2)),
+                 static_cast<uint32_t>(std::max(r.r1, r.r2)), static_cast<uint32_t>(std::max(r.c1, r.c2))};
+  // As a drag ends: the selection grown along one side to the range (which must hold it).
+  const Range sel = Selected();
+  if (to.firstRow > sel.firstRow || to.firstCol > sel.firstCol || to.lastRow < sel.lastRow || to.lastCol < sel.lastCol) {
+    host_.ViewMessage(BannerKind::Warning, L"fill: the range must take in the selection.");
+    return true;
+  }
+  fillTo_ = to;
+  FinishFill();
+  fillTo_ = Selected();
+  host_.ViewInvalidate();
+  return true;
+}
+
 }  // namespace fw::sheet::view

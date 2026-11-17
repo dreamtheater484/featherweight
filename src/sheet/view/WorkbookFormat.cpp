@@ -1374,7 +1374,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
 // Scripted formatting (build from scratch): the toolbar's and Format Cells' calls by name
 
 bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
-  if (op != L"format") return false;
+  if (op != L"format") return GridScriptOp(op, arg);  // s2-grid's (fill:, WorkbookFill.cpp)
   const size_t eq = arg.find(L'=');
   const std::wstring key = fw::ToLower(fw::Trim(arg.substr(0, eq)));
   const std::wstring value = eq == std::wstring::npos ? std::wstring() : fw::Trim(arg.substr(eq + 1));
@@ -1409,8 +1409,12 @@ bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
       x.applyFill = true;
     });
   } else if (key == L"numfmt") {
+    // As typed in Format Cells here (the region's letters: jjjj, uu in en-NL, as Excel reads them).
     std::wstring invariant;
     ok = NumberFormat::LocalToInvariant(value, text_->Locale(), invariant) && ApplyNumberCode(invariant);
+  } else if (key == L"code") {
+    // As files store it and Excel's Range.NumberFormat takes it (English: yyyy, #,##0.00).
+    ok = !value.empty() && ApplyNumberCode(value);
   } else if (key == L"border") {
     // [double-|thick-|medium-]top, bottom, left, right; outline, all, inside; none.
     BorderSide side;

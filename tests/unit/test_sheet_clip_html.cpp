@@ -124,3 +124,19 @@ TEST(SheetClipHtml_WordParagraphsAndNothing) {
   CHECK(!ReadClipHtml(Clip("<html><body><!--StartFragment--><!--EndFragment--></body></html>"), g));
   CHECK(!ReadClipHtml("", g));
 }
+
+// Another Featherweight workbook's copy: Excel's value attributes, and each formula with the
+// copy's top-left, so a paste moves its relative references.
+TEST(SheetClipHtml_FeatherweightCopyCarriesFormulas) {
+  HtmlGrid g;
+  CHECK(ReadClipHtml(Clip("<html xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><body><!--StartFragment-->"
+                          "<table data-fw-from='4,2'><tr><td x:num=\"5\">5</td></tr>"
+                          "<tr><td style='mso-number-format:\"0.0\"' x:num=\"10\" data-fw-f=\"=C5*2\">10.0</td></tr>"
+                          "</table><!--EndFragment--></body></html>"),
+                     g));
+  CHECK(g.hasFrom && g.from == (CellAddr{4, 2}) && g.excel);
+  const HtmlCell* f = At(g, 1, 0);
+  CHECK(f && f->formula == "=C5*2" && f->numFmt == "0.0" && f->type == ValueType::Number && f->number == 10);
+  const HtmlCell* v = At(g, 0, 0);
+  CHECK(v && v->formula.empty() && v->number == 5);
+}

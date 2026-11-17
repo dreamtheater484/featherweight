@@ -7,6 +7,9 @@
 
 #include "core/Strings.h"
 
+// Run once a paste: small code over fast code.
+#pragma optimize("s", on)
+
 namespace fw::sheet::view {
 
 namespace {
@@ -513,6 +516,15 @@ bool ReadClipHtml(std::string_view cf, HtmlGrid& out, size_t maxCells) {
         if (tableDepth == 0) {
           flushPara();
           spanned.clear();
+          // Featherweight's own copy says where it came from (its formulas are written for there).
+          if (const std::string from = t.get("data-fw-from"); !from.empty() && !out.hasFrom && cells.empty()) {
+            const size_t comma = from.find(',');
+            if (comma != std::string::npos) {
+              out.hasFrom = true;
+              out.from = CellAddr{static_cast<uint32_t>(std::strtoul(from.c_str(), nullptr, 10)),
+                                  static_cast<uint32_t>(std::strtoul(from.c_str() + comma + 1, nullptr, 10))};
+            }
+          }
         } else {
           appendText(" ");
         }
@@ -603,6 +615,7 @@ bool ReadClipHtml(std::string_view cf, HtmlGrid& out, size_t maxCells) {
         o.cell.type = ValueType::Error;
         o.cell.error = t.get("x:err");
       }
+      if (t.has("data-fw-f")) o.cell.formula = t.get("data-fw-f");
       if (cs > 1 || rs > 1)
         out.merges.push_back(Range{tableRow, col, tableRow + rs - 1, col + cs - 1});
       if (rs > 1)

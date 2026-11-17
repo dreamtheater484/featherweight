@@ -61,6 +61,13 @@ TEST(SheetFormatCells_RoundTrip) {
   CHECK_EQ(failures, 0);
 }
 
+// Codes typed in en-NL's form (Format Cells, format:numfmt=): its year letter is j, as Excel reads it.
+TEST(SheetFormatCells_RegionLetters) {
+  std::wstring out;
+  CHECK(NumberFormat::LocalToInvariant(L"dd/mm/jjjj", EnNlLocale(), out) && out == L"dd/mm/yyyy");
+  CHECK(NumberFormat::LocalToInvariant(L"#.##0,00", EnNlLocale(), out) && out == L"#,##0.00");
+}
+
 // Increase and Decrease decimal, section by section.
 TEST(SheetFormatCells_Decimals) {
   CHECK(FormatDecimals(L"0.00", 1) == L"0.000");
