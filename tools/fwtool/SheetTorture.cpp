@@ -26,6 +26,15 @@
 #include "pkg/Zip.h"
 #include "sheet/model/Sheet.h"
 #include "sheet/xlsx/Xlsx.h"
+// s2-model's edit API (S2); without it every edit is refused.
+#if __has_include("sheet/edit/Edit.h")
+#include <cstring>
+
+#include "sheet/edit/Edit.h"
+#define FW_SHEET_EDIT 1
+#else
+#define FW_SHEET_EDIT 0
+#endif
 
 namespace fwtool {
 namespace sheettorture {
@@ -241,7 +250,24 @@ bool ParseEdit(std::string_view line, Edit& e) {
 
 namespace {
 
-// ---- The target without the edit API: every edit refused; Save writes the model's parts.
+// The save until the writer for edited workbooks lands: the parts the model owns (the shared
+// strings and every sheet), through the S1 writer, which writes edited cells and rows.
+fw::pkg::Status SaveModelParts(sh::Workbook& book, std::vector<std::string>& written, std::vector<uint8_t>& out) {
+  fw::pkg::Package* pkg = book.GetPackage();
+  if (!pkg) return fw::pkg::Status::Fail(fw::pkg::Status::Code::NotFound, "the workbook has no package");
+  written = sh::xlsx::ModelParts(book);
+  for (const std::string& name : written) {
+    std::string xml;
+    if (fw::pkg::Status st = sh::xlsx::WritePart(book, name, xml); !st.Ok()) return st;
+    pkg->SetPart(name, std::vector<uint8_t>(xml.begin(), xml.end()));
+  }
+  fw::pkg::MemorySink sink;
+  if (fw::pkg::Status st = pkg->Save(sink); !st.Ok()) return st;
+  out = std::move(sink.bytes);
+  return {};
+}
+
+// ---- The target without the edit API: every edit refused.
 
 class ModelOnlyTarget : public SheetTarget {
  public:
@@ -252,32 +278,294 @@ class ModelOnlyTarget : public SheetTarget {
     why = "no edit API in this build";
     return Applied::Refused;
   }
-  fw::pkg::Status Save(std::vector<uint8_t>& out) override {
-    fw::pkg::Package* pkg = book_->GetPackage();
-    if (!pkg) return fw::pkg::Status::Fail(fw::pkg::Status::Code::NotFound, "the workbook has no package");
-    written = sh::xlsx::ModelParts(*book_);
-    for (const std::string& name : written) {
-      std::string xml;
-      if (fw::pkg::Status st = sh::xlsx::WritePart(*book_, name, xml); !st.Ok()) return st;
-      pkg->SetPart(name, std::vector<uint8_t>(xml.begin(), xml.end()));
-    }
-    fw::pkg::MemorySink sink;
-    if (fw::pkg::Status st = pkg->Save(sink); !st.Ok()) return st;
-    out = std::move(sink.bytes);
-    return {};
-  }
+  fw::pkg::Status Save(std::vector<uint8_t>& out) override { return SaveModelParts(*book_, written, out); }
 
  private:
   std::unique_ptr<sh::Workbook> book_;
 };
 
+#if FW_SHEET_EDIT
+// ---- What's typed into a cell, until s2-format's and s2-calc's entry conversion is in the build:
+// the region's numbers, percentages, currency, dates and booleans, and formulas in the region's
+// form turned into the invariant one.
+
+double DaysFrom1900(int y, int m, int d) {  // Excel's serial date (1900 system)
+  auto days = [](int yy, unsigned mm, unsigned dd) {
+    yy -= mm <= 2;
+    const int era = (yy >= 0 ? yy : yy - 399) / 400;
+    const unsigned yoe = static_cast<unsigned>(yy - era * 400);
+    const unsigned doy = (153 * (mm + (mm > 2 ? -3 : 9)) + 2) / 5 + dd - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + static_cast<int>(doe) - 719468;
+  };
+  return static_cast<double>(days(y, static_cast<unsigned>(m), static_cast<unsigned>(d)) - days(1899, 12, 30));
+}
+
+bool ParseNumber(std::string s, bool nl, double& v) {
+  std::string t;
+  for (char c : s) {
+    if (c == (nl ? '.' : ',')) continue;  // thousands
+    t += c == (nl ? ',' : '.') ? '.' : c;
+  }
+  if (t.empty()) return false;
+  char* end = nullptr;
+  v = std::strtod(t.c_str(), &end);
+  return end && *end == 0;
+}
+
+// "17/11/2026", "17-11-2026 14:30" (nl: day first), "11/17/2026 2:30 PM" (us), "1/2" (this year).
+bool ParseDate(const std::string& s, bool nl, double& v) {
+  int a = 0, b = 0, y = 2026, h = 0, mi = 0;
+  char sep1 = 0, sep2 = 0, ampm[3] = {};
+  int n = sscanf_s(s.c_str(), "%d%c%d%c%d %d:%d %2s", &a, &sep1, 1u, &b, &sep2, 1u, &y, &h, &mi, ampm,
+                   static_cast<unsigned>(sizeof ampm));
+  if (n < 3 || (sep1 != '/' && sep1 != '-')) return false;
+  if (n == 3) y = 2026;
+  else if (n < 5 || sep2 != sep1) return false;
+  const int d = nl ? a : b, m = nl ? b : a;
+  if (m < 1 || m > 12 || d < 1 || d > 31 || y < 1900 || y > 9999) return false;
+  if (n >= 8 && (ampm[0] == 'P' || ampm[0] == 'p') && h < 12) h += 12;
+  v = DaysFrom1900(y, m, d) + (h * 60 + mi) / 1440.0;
+  return true;
+}
+
+sh::edit::CellInput TypedInput(const std::string& typed, bool nl) {
+  using In = sh::edit::CellInput;
+  if (typed.empty()) return In::Empty();
+  if (typed.front() == '\'') return In::Text(typed.substr(1));
+  if (typed.front() == '=') {
+    std::string f;
+    bool quoted = false;
+    for (size_t i = 1; i < typed.size(); ++i) {
+      char c = typed[i];
+      if (c == '"') quoted = !quoted;
+      if (nl && !quoted) c = c == ';' ? ',' : c == ',' ? '.' : c;
+      f += c;
+    }
+    return In::Formula(f);
+  }
+  if (typed == "TRUE" || typed == "FALSE") return In::Bool(typed == "TRUE");
+  double v = 0;
+  std::string s = typed;
+  for (const char* currency : {"\xE2\x82\xAC ", "\xE2\x82\xAC", "$"})
+    if (s.starts_with(currency)) s = s.substr(std::strlen(currency));
+  if (s.size() > 1 && s.back() == '%' && ParseNumber(s.substr(0, s.size() - 1), nl, v)) return In::Number(v / 100);
+  if (ParseNumber(s, nl, v)) return In::Number(v);
+  if (ParseDate(typed, nl, v)) return In::Number(v);
+  return In::Text(typed);
+}
+
+std::string Utf8(const std::u16string& s) { return fw::WideToUtf8(std::wstring(s.begin(), s.end())); }
+
+// ---- The target with the edit API: each edit as the grid's command runs it.
+
+class EditApiTarget : public SheetTarget {
+ public:
+  explicit EditApiTarget(std::unique_ptr<sh::Workbook> book) : book_(std::move(book)), ed_(*book_) {}
+  const char* Name() const override { return "the edit API (sheet/edit/Edit.h)"; }
+  const sh::Workbook& Book() const override { return *book_; }
+
+  Applied Apply(const Edit& e, std::string& why) override {
+    auto done = [&](const sh::edit::Result& r) {
+      if (r.ok) return Applied::Done;
+      why = Utf8(r.message);
+      return Applied::Refused;
+    };
+    const int count = static_cast<int>(book_->SheetCount());
+    const bool needsSheet = e.op != Op::AddSheet && e.op != Op::Undo && e.op != Op::Redo && e.op != Op::Save;
+    if (needsSheet && static_cast<int>(e.sheet) >= count) {
+      why = "no sheet " + std::to_string(e.sheet);
+      return Applied::Refused;
+    }
+    const int s = static_cast<int>(e.sheet);
+    const sh::Range& r = e.range;
+    switch (e.op) {
+      case Op::Value:
+      case Op::Formula: return done(ed_.SetCell(s, r.firstRow, r.firstCol, TypedInput(e.text, e.arg == "nl")));
+      case Op::Clear: return done(ed_.ClearContents(s, r));
+      case Op::Format: return Format(s, r, e.arg, why);
+      case Op::InsertRows: return done(ed_.InsertRows(s, r.firstRow, r.lastRow - r.firstRow + 1));
+      case Op::DeleteRows: return done(ed_.DeleteRows(s, r.firstRow, r.lastRow - r.firstRow + 1));
+      case Op::InsertCols: return done(ed_.InsertColumns(s, r.firstCol, r.lastCol - r.firstCol + 1));
+      case Op::DeleteCols: return done(ed_.DeleteColumns(s, r.firstCol, r.lastCol - r.firstCol + 1));
+      case Op::InsertCells:
+        return done(ed_.InsertCells(s, r, e.arg == "down" ? sh::edit::Editor::Direction::DownOrUp
+                                                           : sh::edit::Editor::Direction::RightOrLeft));
+      case Op::DeleteCells:
+        return done(ed_.DeleteCells(s, r, e.arg == "up" ? sh::edit::Editor::Direction::DownOrUp
+                                                         : sh::edit::Editor::Direction::RightOrLeft));
+      case Op::AddSheet: return done(ed_.AddSheet(static_cast<int>(std::min<uint32_t>(e.sheet, count)), e.text));
+      case Op::RenameSheet: return done(ed_.RenameSheet(s, e.text));
+      case Op::MoveSheet: return done(ed_.MoveSheet(s, static_cast<int>(e.toSheet)));
+      case Op::DeleteSheet: return done(ed_.DeleteSheet(s));
+      case Op::Merge: return done(ed_.Merge(s, r));
+      case Op::Unmerge: return done(ed_.Unmerge(s, r));
+      case Op::Sort:
+      case Op::Filter: why = "sort and filter come with s2-format's commands"; return Applied::Refused;
+      case Op::Paste: return Paste(e, why);
+      case Op::Undo: return done(ed_.Undo(e.count));
+      case Op::Redo: return done(ed_.Redo(e.count));
+      case Op::Save: return Applied::Done;
+    }
+    return Applied::Refused;
+  }
+
+  fw::pkg::Status Save(std::vector<uint8_t>& out) override {
+    fw::pkg::Status st = SaveModelParts(*book_, written, out);
+    if (st.Ok()) ed_.MarkSaved();
+    return st;
+  }
+
+  int UndoAll() override {
+    int steps = 0;
+    while (ed_.CanUndo() && ed_.Undo(1).ok) ++steps;
+    return steps;
+  }
+  bool RedoSteps(int steps) override { return steps == 0 || ed_.Redo(static_cast<size_t>(steps)).ok; }
+
+  std::string Unsaved() const override {
+    std::string what;
+    auto add = [&](const char* s) { what += (what.empty() ? "" : ", ") + std::string(s); };
+    if (ed_.StylesDirty()) add("styles");
+    if (ed_.WorkbookDirty()) add("workbook part (sheets, names)");
+    uint32_t pieces = 0;
+    for (int i = 0; i < static_cast<int>(book_->SheetCount()); ++i) pieces |= ed_.DirtyPieces(i);
+    if (pieces & sh::edit::kPieceCols) add("columns");
+    if (pieces & sh::edit::kPieceMerges) add("merges");
+    if (pieces & sh::edit::kPieceViews) add("views");
+    if (pieces & (sh::edit::kPieceProps | sh::edit::kPieceLinks | sh::edit::kPieceOther)) add("sheet properties");
+    return what;
+  }
+
+ private:
+  // Format Cells as s2-format runs it: each cell's format with one thing changed.
+  Applied Format(int sheet, const sh::Range& r, const std::string& what, std::string& why) {
+    std::map<uint32_t, uint32_t> mapped;
+    bool known = true;
+    auto map = [&](uint32_t old) -> uint32_t {
+      if (auto it = mapped.find(old); it != mapped.end()) return it->second;
+      const sh::Styles& st = book_->GetStyles();
+      sh::Xf xf = old < st.CellXfs().size() ? st.CellXfs()[old] : sh::Xf{};
+      sh::Font font = xf.font < st.Fonts().size() ? st.Fonts()[xf.font] : sh::Font{};
+      sh::Border border = xf.border < st.Borders().size() ? st.Borders()[xf.border] : sh::Border{};
+      auto rgb = [](const std::string& hex) {
+        sh::Color c;
+        c.kind = sh::Color::Kind::Rgb;
+        c.value = 0xFF000000u | static_cast<uint32_t>(std::strtoul(hex.c_str(), nullptr, 16));
+        return c;
+      };
+      bool fontChanged = false;
+      if (what == "bold") font.bold = true, fontChanged = true;
+      else if (what == "italic") font.italic = true, fontChanged = true;
+      else if (what == "underline") font.underline = sh::Underline::Single, fontChanged = true;
+      else if (what.starts_with("size=")) font.size = std::strtod(what.c_str() + 5, nullptr), fontChanged = true;
+      else if (what.starts_with("font=")) font.name = what.substr(5), fontChanged = true;
+      else if (what.starts_with("color=")) font.color = rgb(what.substr(6)), fontChanged = true;
+      else if (what.starts_with("fill=")) {
+        sh::Fill fill;
+        fill.pattern = sh::PatternType::Solid;
+        fill.fg = rgb(what.substr(5));
+        xf.fill = ed_.AddFill(fill), xf.applyFill = true;
+      } else if (what.starts_with("numfmt=")) {
+        xf.numFmt = ed_.AddNumFmt(what.substr(7)), xf.applyNumFmt = true;
+      } else if (what == "border=thin" || what == "border=none") {
+        const sh::BorderStyle style = what == "border=thin" ? sh::BorderStyle::Thin : sh::BorderStyle::None;
+        for (sh::BorderSide* side : {&border.left, &border.right, &border.top, &border.bottom}) side->style = style;
+        xf.border = ed_.AddBorder(border), xf.applyBorder = true;
+      } else if (what.starts_with("align=")) {
+        const std::string a = what.substr(6);
+        xf.alignment.horizontal = a == "left" ? sh::HAlign::Left : a == "center" ? sh::HAlign::Center : sh::HAlign::Right;
+        xf.applyAlignment = true;
+      } else if (what == "wrap") {
+        xf.alignment.wrap = true, xf.applyAlignment = true;
+      } else {
+        known = false;
+        return old;
+      }
+      if (fontChanged) xf.font = ed_.AddFont(font), xf.applyFont = true;
+      const uint32_t now = ed_.AddXf(xf);
+      mapped[old] = now;
+      return now;
+    };
+    sh::edit::Result res = ed_.MapStyles(sheet, r, map);
+    if (!known) {
+      why = "unknown format " + what;
+      return Applied::Refused;
+    }
+    if (res.ok) return Applied::Done;
+    why = Utf8(res.message);
+    return Applied::Refused;
+  }
+
+  // Copy and paste as one step: all (contents and formats), values only (formulas' results), or
+  // formats only. Formulas are pasted as their text: shifting their references is s2-calc's.
+  Applied Paste(const Edit& e, std::string& why) {
+    const int count = static_cast<int>(book_->SheetCount());
+    if (static_cast<int>(e.toSheet) >= count) {
+      why = "no sheet " + std::to_string(e.toSheet);
+      return Applied::Refused;
+    }
+    const sh::Sheet& from = book_->GetSheet(e.sheet);
+    const sh::Range& src = e.range;
+    if (e.to.firstRow + (src.lastRow - src.firstRow) > 1048575 || e.to.firstCol + (src.lastCol - src.firstCol) > 16383) {
+      why = "the paste area runs off the sheet";
+      return Applied::Refused;
+    }
+    std::vector<std::pair<sh::CellAddr, sh::edit::CellInput>> cells;
+    std::vector<std::pair<sh::CellAddr, uint32_t>> styles;
+    for (uint32_t row = src.firstRow; row <= src.lastRow; ++row)
+      for (uint32_t col = src.firstCol; col <= src.lastCol; ++col) {
+        const sh::CellAddr at{e.to.firstRow + (row - src.firstRow), e.to.firstCol + (col - src.firstCol)};
+        sh::CellInfo info;
+        const bool stored = from.GetCell(row, col, info);
+        if (e.arg == "formats") {
+          styles.push_back({at, stored ? info.style : 0u});
+          continue;
+        }
+        sh::edit::CellInput in;
+        if (stored) {
+          in.type = info.value.type;
+          in.number = info.value.number;
+          in.boolean = info.value.boolean;
+          in.error = info.value.error;
+          in.text = std::string(info.value.text);
+          sh::FormulaInfo f;
+          if (e.arg == "all" && info.hasFormula && from.GetFormula(row, col, f) && f.kind == sh::FormulaKind::Normal)
+            in.formula = std::string(f.text);
+          if (e.arg == "all") in.style = info.style;
+        }
+        cells.push_back({at, std::move(in)});
+      }
+    sh::edit::EditGroup group(ed_, u"Paste");
+    const int to = static_cast<int>(e.toSheet);
+    if (!cells.empty())
+      if (sh::edit::Result res = ed_.SetCells(to, cells); !res.ok) {
+        why = Utf8(res.message);
+        return Applied::Refused;  // the group is cancelled: nothing changed
+      }
+    for (const auto& [at, style] : styles)
+      if (sh::edit::Result res = ed_.SetStyle(to, {at.row, at.col, at.row, at.col}, style); !res.ok) {
+        why = Utf8(res.message);
+        return Applied::Refused;
+      }
+    group.done = true;
+    return Applied::Done;
+  }
+
+  std::unique_ptr<sh::Workbook> book_;
+  sh::edit::Editor ed_;
+};
+#endif
+
 }  // namespace
 
-// s2-model's edit API plugs in here when it lands (src/sheet/edit): an EditApiTarget that applies
-// each Op through the same commands the grid runs.
 std::unique_ptr<SheetTarget> OpenSheetTarget(std::unique_ptr<sh::Workbook> book, fw::pkg::Status& status) {
   status = {};
+#if FW_SHEET_EDIT
+  return std::make_unique<EditApiTarget>(std::move(book));
+#else
   return std::make_unique<ModelOnlyTarget>(std::move(book));
+#endif
 }
 
 namespace {
@@ -318,9 +606,17 @@ std::string SheetRef(const std::string& name) {
 
 class Generator {
  public:
-  explicit Generator(uint64_t seed) : rng_(seed) {}
+  // `only`: these edits only (empty: all).
+  Generator(uint64_t seed, std::set<Op> only) : rng_(seed), only_(std::move(only)) {}
 
   Edit Next(const sh::Workbook& book) {
+    for (int tries = 0; tries < 2000; ++tries)
+      if (Edit e = Any(book); only_.empty() || only_.contains(e.op)) return e;
+    return Edit{Op::Save};
+  }
+
+ private:
+  Edit Any(const sh::Workbook& book) {
     std::vector<uint32_t> sheets;
     for (uint32_t i = 0; i < book.SheetCount(); ++i)
       if (book.GetSheet(i).Kind() == sh::SheetKind::Worksheet && book.GetSheet(i).Loaded()) sheets.push_back(i);
@@ -423,7 +719,6 @@ class Generator {
     return e;
   }
 
- private:
   sh::Range Cell(const sh::Range& a) {
     uint32_t r = a.firstRow + rng_.Below(a.lastRow - a.firstRow + 1), c = a.firstCol + rng_.Below(a.lastCol - a.firstCol + 1);
     return {r, c, r, c};
@@ -515,7 +810,29 @@ class Generator {
   }
 
   Rng rng_;
+  std::set<Op> only_;
 };
+
+// "value,formula,undo" -> those ops; false with the unknown name in `bad`.
+bool ParseOps(const std::string& list, std::set<Op>& ops, std::string& bad) {
+  size_t start = 0;
+  while (start <= list.size()) {
+    size_t comma = list.find(',', start);
+    std::string name = list.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+    if (!name.empty()) {
+      bool known = false;
+      for (const auto& o : kOps)
+        if (name == o.name) ops.insert(o.op), known = true;
+      if (!known) {
+        bad = name;
+        return false;
+      }
+    }
+    if (comma == std::string::npos) break;
+    start = comma + 1;
+  }
+  return true;
+}
 
 // ---- What a workbook holds, line by line: what the saved copy must read back as.
 
@@ -644,6 +961,7 @@ struct Round {
   std::vector<uint8_t> saved;
   std::vector<std::string> written;
   std::string edited, readBack;  // the digests, when they differ
+  std::string unsaved;           // what the save couldn't write yet (its checks were skipped)
 };
 
 // What the original holds that a saved copy is measured against.
@@ -695,7 +1013,8 @@ std::optional<Failure> CheckSave(const Original& orig, SheetTarget& target, Roun
 
 // `replay`: apply these edits instead of generating `edits` of them. `current`: the edits so far,
 // rewritten before each one, so that a crash leaves them behind.
-Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::vector<Edit>* replay, const fs::path& current) {
+Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::vector<Edit>* replay, const fs::path& current,
+               const std::set<Op>& only = {}) {
   Round r;
   Original orig;
   fw::pkg::Status st;
@@ -718,7 +1037,17 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
     r.failure = Failure{"open", st.message};
     return r;
   }
-  Generator gen(seed);
+  const std::vector<std::string> asOpened = Digest(target->Book());
+  // A save is checked when it can write everything the edits changed; until the writer for edited
+  // workbooks lands, what it can't write is noted instead (Round::unsaved).
+  auto save = [&]() -> std::optional<Failure> {
+    if (std::string what = target->Unsaved(); !what.empty()) {
+      r.unsaved = what;
+      return std::nullopt;
+    }
+    return CheckSave(orig, *target, r);
+  };
+  Generator gen(seed, only);
   const size_t count = replay ? replay->size() : edits;
   for (size_t i = 0; i < count; ++i) {
     Edit e = replay ? (*replay)[i] : gen.Next(target->Book());
@@ -729,7 +1058,7 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
       for (const Edit& a : r.applied) cur << FormatEdit(a) << "\n";
     }
     if (e.op == Op::Save) {
-      if ((r.failure = CheckSave(orig, *target, r))) return r;
+      if ((r.failure = save())) return r;
       ++r.done;
       continue;
     }
@@ -742,7 +1071,27 @@ Round RunRound(const fs::path& file, uint64_t seed, uint32_t edits, const std::v
       return r;
     }
   }
-  r.failure = CheckSave(orig, *target, r);
+  // Undo everything: the workbook as opened; redo it all: the workbook as edited. (Up to the
+  // editor's 100 steps: a round with more doesn't get back to the start.)
+  const std::vector<std::string> edited = Digest(target->Book());
+  if (r.done < 90) {
+    const int steps = target->UndoAll();
+    if (steps >= 0) {
+      if (std::string diff = FirstDifference(asOpened, Digest(target->Book())); !diff.empty()) {
+        r.failure = Failure{"undo", "after undoing " + std::to_string(steps) + " steps: " + diff};
+        return r;
+      }
+      if (!target->RedoSteps(steps)) {
+        r.failure = Failure{"redo", "redoing " + std::to_string(steps) + " steps failed"};
+        return r;
+      }
+      if (std::string diff = FirstDifference(edited, Digest(target->Book())); !diff.empty()) {
+        r.failure = Failure{"redo", "after redoing " + std::to_string(steps) + " steps: " + diff};
+        return r;
+      }
+    }
+  }
+  r.failure = save();
   return r;
 }
 
@@ -881,6 +1230,11 @@ int RunSheetTorture(const Options& options, const std::vector<std::filesystem::p
   const uint64_t baseSeed = options.seed ? options.seed : 1;
   const uint32_t edits = static_cast<uint32_t>(options.edits), rounds = options.rounds;
   const fs::path out = options.outDir.empty() ? fs::path("build") / "torture" : options.outDir;
+  std::set<Op> only;
+  if (std::string bad; !ParseOps(options.ops, only, bad)) {
+    std::fprintf(stderr, "--ops: no edit called \"%s\"\n", bad.c_str());
+    return 2;
+  }
   std::error_code ec;
   fs::create_directories(out / "saved", ec);
   fs::create_directories(out / "repro", ec);
@@ -889,19 +1243,20 @@ int RunSheetTorture(const Options& options, const std::vector<std::filesystem::p
   std::string json = "{\n  \"kind\": \"workbooks\", \"seed\": " + std::to_string(baseSeed) + ", \"edits\": " +
                      std::to_string(edits) + ", \"rounds\": " + std::to_string(rounds) + ",\n  \"files\": [";
   int failedFiles = 0, unreadFiles = 0;
-  uint64_t totalDone = 0, totalRefused = 0;
+  uint64_t totalDone = 0, totalRefused = 0, totalUnsaved = 0;
   std::string targetName;
   for (size_t fi = 0; fi < files.size(); ++fi) {
     const fs::path& file = files[fi];
     const std::string name = Display(file);
     std::string fileJson = "\n    {\"file\": " + JsonText(fw::WideToUtf8(fs::absolute(file).generic_wstring())) + ", \"failures\": [";
-    uint32_t done = 0, refused = 0, failures = 0;
+    uint32_t done = 0, refused = 0, failures = 0, unsavedRounds = 0;
     bool unread = false;
-    std::string note, savedPath;
+    std::string note, savedPath, unsaved;
     for (uint32_t round = 0; round < rounds; ++round) {
       const uint64_t seed = RoundSeed(baseSeed, fw::WideToUtf8(file.filename().wstring()), round);
-      Round r = RunRound(file, seed, edits, nullptr, out / "current-edits.txt");
+      Round r = RunRound(file, seed, edits, nullptr, out / "current-edits.txt", only);
       done += r.done, refused += r.refused;
+      if (!r.unsaved.empty()) ++unsavedRounds, unsaved = r.unsaved;
       if (r.failure && r.failure->category == "open") {
         unread = true;  // the model doesn't read the original: S1's reader, not an editing failure
         note = r.failure->message;
@@ -939,12 +1294,17 @@ int RunSheetTorture(const Options& options, const std::vector<std::filesystem::p
       ++unreadFiles;
       std::printf("[skip] %s: %s\n", name.c_str(), note.c_str());
     } else if (!failures) {
-      std::printf("[ ok ] %s: %u rounds, %u edits done, %u refused\n", name.c_str(), rounds, done, refused);
+      std::printf("[ ok ] %s: %u rounds, %u edits done, %u refused%s\n", name.c_str(), rounds, done, refused,
+                  unsavedRounds ? (", save not checked in " + std::to_string(unsavedRounds) + " (the writer: " + unsaved + ")").c_str()
+                                : "");
     } else {
       ++failedFiles;
     }
+    totalUnsaved += unsavedRounds;
     fileJson += std::string(failures ? "\n    " : "") + "], \"done\": " + std::to_string(done) + ", \"refused\": " +
-                std::to_string(refused) + ", \"skipped\": " + (unread ? JsonText(note) : "null") +
+                std::to_string(refused) + ", \"unsavedRounds\": " + std::to_string(unsavedRounds) +
+                ", \"unsaved\": " + (unsaved.empty() ? "null" : JsonText(unsaved)) +
+                ", \"skipped\": " + (unread ? JsonText(note) : "null") +
                 ", \"saved\": " + (savedPath.empty() ? "null" : JsonText(savedPath)) + "}";
     json += fileJson + (fi + 1 < files.size() ? "," : "");
   }
@@ -953,9 +1313,11 @@ int RunSheetTorture(const Options& options, const std::vector<std::filesystem::p
   if (!jsonPath.empty() && appendPairs) jsonPath.replace_filename(jsonPath.stem().wstring() + L"-workbooks.json");
   if (!jsonPath.empty()) std::ofstream(jsonPath, std::ios::trunc) << json;
   fs::remove(out / "current-edits.txt", ec);
-  std::printf("\n%zu workbooks, %d failed, %d not read by the model; %llu edits done, %llu refused (edits through: %s)\n",
+  std::printf("\n%zu workbooks, %d failed, %d not read by the model; %llu edits done, %llu refused; %llu rounds' saves "
+              "not checked (the writer can't save their edits yet) (edits through: %s)\n",
               files.size(), failedFiles, unreadFiles, static_cast<unsigned long long>(totalDone),
-              static_cast<unsigned long long>(totalRefused), targetName.empty() ? "?" : targetName.c_str());
+              static_cast<unsigned long long>(totalRefused), static_cast<unsigned long long>(totalUnsaved),
+              targetName.empty() ? "?" : targetName.c_str());
   return failedFiles == 0 ? 0 : 1;
 }
 

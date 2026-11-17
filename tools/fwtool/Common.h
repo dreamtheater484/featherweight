@@ -40,6 +40,7 @@ struct Options {
   bool edited = false;              // save: as after an edit in every part the model owns
   uint32_t rounds = 3;              // torture: rounds per document, each from the original
   bool replay = false;              // torture: the input is a reproducer to replay
+  std::string ops;                  // torture (workbooks): only these edits, comma-separated ("value,formula,undo")
   std::filesystem::path samples;    // paste-check: clipboard samples (.rtf, .html) to paste
   std::filesystem::path pngs;       // pdf-check: the pages the app drew (page-1.png, ...)
   std::wstring locale;              // formulas: the region the files were calculated in (en-US, en-NL)

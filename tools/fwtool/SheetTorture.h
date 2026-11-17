@@ -78,12 +78,21 @@ class SheetTarget {
   virtual Applied Apply(const Edit& edit, std::string& why) = 0;
   // Saves as the app saves: the bytes of the file it would write.
   virtual fw::pkg::Status Save(std::vector<uint8_t>& out) = 0;
+  // Undoes every step it can and says how many (-1: this target has no undo); RedoSteps redoes
+  // that many. The harness checks that undoing everything gives the workbook as opened, and
+  // redoing it the workbook as edited.
+  virtual int UndoAll() { return -1; }
+  virtual bool RedoSteps(int steps) { return steps == 0; }
+  // What the edits changed that Save can't write yet ("styles, workbook part"); empty when the
+  // save covers everything. The save's checks are skipped while it isn't empty.
+  virtual std::string Unsaved() const { return {}; }
   // The parts the last Save wrote or removed (every other part must be copied byte for byte).
   std::vector<std::string> written;
 };
 
-// Opens a read workbook for editing. Until s2-model's edit API is in the build, every edit is
-// refused and Save writes the parts the model owns (the shared strings and the sheets) as read.
+// Opens a read workbook for editing through s2-model's edit API (sheet/edit/Edit.h). Built without
+// it, every edit is refused. Either way Save writes the parts the model owns (the shared strings and
+// the sheets) until the writer for edited workbooks lands.
 std::unique_ptr<SheetTarget> OpenSheetTarget(std::unique_ptr<fw::sheet::Workbook> book, fw::pkg::Status& status);
 
 }  // namespace fwtool::sheettorture

@@ -141,7 +141,9 @@ constexpr const char* kUsage =
     "      pass check and the model's checks with no new errors, read back as the edited workbook,\n"
     "      and keep every part the save didn't write byte for byte. Without the edit API in the\n"
     "      build, every edit is refused and the save writes the model's parts. --workbooks: only\n"
-    "      the workbooks among the inputs (scripts/sheet-torture.ps1).\n"
+    "      the workbooks among the inputs (scripts/sheet-torture.ps1). --ops value,formula,...:\n"
+    "      only those edits (names as reproducers write them). After the edits, undoing them all\n"
+    "      must give the workbook as opened and redoing them the workbook as edited.\n"
     "  fwtool torture --replay <reproducer.txt> [--out DIR]\n"
     "      Applies a reproducer's edits again and reports what happens and which parts the save\n"
     "      wrote. The file it makes goes next to the reproducer as <name>-replay.docx, or into DIR,\n"
@@ -300,6 +302,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--seed" && i + 1 < argc) options.seed = static_cast<unsigned>(std::wcstoul(argv[++i], nullptr, 10));
     else if (arg == L"--rounds" && i + 1 < argc) options.rounds = static_cast<uint32_t>(std::max(1, _wtoi(argv[++i])));
     else if (arg == L"--replay") options.replay = true;
+    else if (arg == L"--ops" && i + 1 < argc) options.ops = fw::WideToUtf8(argv[++i]);
     else if (arg == L"--edited") options.edited = true;
     else if (arg == L"--samples" && i + 1 < argc) options.samples = argv[++i];
     else if (arg == L"--pngs" && i + 1 < argc) options.pngs = argv[++i];
