@@ -641,3 +641,32 @@ TEST(sheet_move_cells_to_another_sheet) {
   CHECK(ed.Redo());
   CHECK_EQ(FormulaText(s2, 2, 2), std::string("C1+Sheet1!B1"));
 }
+
+// A filter's columns follow columns inserted and deleted, in the model as in the file (s2-corpus:
+// filter-*.txt).
+TEST(sheet_shift_filter_columns) {
+  auto book = OpenParts({"<sheetData/>", "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  SheetFilter f;
+  f.ref = Range{1, 1, 4, 4};  // B2:E5
+  FilterColumn c;
+  c.colId = 1;  // C
+  c.values = {"x"};
+  FilterColumn other;
+  other.colId = 3;  // E
+  other.kind = FilterColumn::Kind::Other;
+  other.xml = "<filterColumn colId=\"3\"><colorFilter dxfId=\"0\"/></filterColumn>";
+  f.columns = {c, other};
+  CHECK(ed.SetFilter(0, f));
+  const Sheet& s = book->GetSheet(0);
+  CHECK(ed.InsertColumns(0, 2, 1));  // before C
+  CHECK(s.Filter()->ref == (Range{1, 1, 4, 5}) && s.Filter()->columns.size() == 2);
+  CHECK(s.Filter()->columns[0].colId == 2 && s.Filter()->columns[1].colId == 4);
+  CHECK(s.Filter()->columns[1].xml == "<filterColumn colId=\"4\"><colorFilter dxfId=\"0\"/></filterColumn>");
+  CHECK(ed.DeleteColumns(0, 3, 1));  // D, the filtered one
+  CHECK(s.Filter()->ref == (Range{1, 1, 4, 4}) && s.Filter()->columns.size() == 1 && s.Filter()->columns[0].colId == 3);
+  CHECK(s.Filter()->filtered);
+  CHECK(ed.Undo(2));
+  CHECK(s.Filter()->ref == f.ref && s.Filter()->columns.size() == 2 && s.Filter()->columns[0].colId == 1);
+}

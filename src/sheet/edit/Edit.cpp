@@ -2412,10 +2412,39 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
       if (const auto& f = s.Filter()) {
         Range x = f->ref;
         bool keep = m.Area(x);
-        if (!keep || !(x == f->ref)) {
+        // Its columns are counted from the range's first column, as in the written autoFilter
+        // (MoveSheetXml): they follow columns inserted and deleted; a deleted one goes.
+        std::vector<FilterColumn> cols = f->columns;
+        bool colsChanged = false;
+        if (keep && !m.Rows() && m.Across(f->ref.firstRow, f->ref.lastRow) == 1) {
+          std::vector<FilterColumn> out;
+          for (FilterColumn& c : cols) {
+            const uint32_t col = m.Line(f->ref.firstCol + c.colId);
+            if (col == kNone || col < x.firstCol || col > x.lastCol) {
+              colsChanged = true;
+              continue;
+            }
+            if (col - x.firstCol != c.colId) {
+              c.colId = col - x.firstCol;
+              if (const size_t a = c.xml.find("colId=\""); a != std::string::npos)  // Other: as the file has it
+                if (const size_t b = c.xml.find('"', a + 7); b != std::string::npos)
+                  c.xml.replace(a + 7, b - a - 7, std::to_string(c.colId));
+              colsChanged = true;
+            }
+            out.push_back(std::move(c));
+          }
+          cols = std::move(out);
+        }
+        if (!keep || !(x == f->ref) || colsChanged) {
           st.SaveFilter(sv);
-          if (keep) A::Filter(s)->ref = x;
-          else A::Filter(s).reset();
+          if (keep) {
+            SheetFilter& now = *A::Filter(s);
+            now.ref = x;
+            now.columns = std::move(cols);
+            now.filtered = !now.columns.empty();
+          } else {
+            A::Filter(s).reset();
+          }
         }
       }
       if (whole) {
