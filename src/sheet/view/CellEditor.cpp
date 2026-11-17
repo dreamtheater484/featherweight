@@ -119,8 +119,9 @@ int CellEditor::LineEnd(int i) const {
 }
 
 bool CellEditor::CanPoint(bool mouse) const {
-  if (!active_ || !IsFormula() || HasSelection() || (mode_ != Mode::Enter && !mouse)) return false;
-  if (point_.length > 0) return caret_ == point_.at + point_.length;
+  if (!active_ || !IsFormula() || (mode_ != Mode::Enter && !mouse)) return false;
+  if (point_.length > 0) return caret_ == point_.at + point_.length && (anchor_ == caret_ || anchor_ == point_.at);
+  if (HasSelection()) return false;
   if (pointRule_) return pointRule_(text_, static_cast<size_t>(caret_));
   if (caret_ <= 0) return false;
   // Right after an operator, a separator or an opening parenthesis (Excel's "Point" in the status
@@ -130,6 +131,14 @@ bool CellEditor::CanPoint(bool mouse) const {
   if (caret_ == static_cast<int>(text_.size())) return true;
   static constexpr wchar_t kBefore[] = L")+-*/^&,;:<> ";
   return mouse && std::wcschr(kBefore, text_[static_cast<size_t>(caret_)]) != nullptr;
+}
+
+void CellEditor::SetPointSpan(int at, int length) {
+  const int n = static_cast<int>(text_.size());
+  point_.at = std::clamp(at, 0, n);
+  point_.length = std::clamp(length, 0, n - point_.at);
+  anchor_ = point_.at;
+  caret_ = point_.at + point_.length;
 }
 
 void CellEditor::SetPointRef(const std::wstring& ref) {

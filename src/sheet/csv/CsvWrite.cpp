@@ -140,6 +140,45 @@ std::string NewFile(const Workbook& book, const Options& options) {
 
 std::string WriteNew(const Workbook& book, const Options& options) { return NewFile(book, options); }
 
+bool Loses(const Workbook& book) {
+  if (book.SheetCount() != 1) return book.SheetCount() > 1;
+  const Sheet& sheet = book.GetSheet(0);
+  if (sheet.FormulaCount() || !sheet.Merges().empty() || !sheet.Hyperlinks().empty() || sheet.Filter()) return true;
+  for (const ColumnInfo& c : sheet.Columns())
+    if (c.customWidth || c.hidden || c.outlineLevel || c.style) return true;
+  // Formats that show more than a number format does, by style index (most CSV books have none).
+  const Styles& st = book.GetStyles();
+  const std::vector<Xf>& xfs = st.CellXfs();
+  if (xfs.empty()) return false;
+  const Xf& base = xfs[0];
+  std::vector<uint8_t> formatted(xfs.size());
+  bool any = false;
+  for (size_t i = 1; i < xfs.size(); ++i) {
+    const Xf& x = xfs[i];
+    formatted[i] = x.parent != base.parent || !(st.FontOf(x) == st.FontOf(base)) ||
+                   (x.fill != base.fill && x.fill < st.Fills().size() && base.fill < st.Fills().size() &&
+                    !(st.Fills()[x.fill] == st.Fills()[base.fill])) ||
+                   (x.border != base.border && x.border < st.Borders().size() && base.border < st.Borders().size() &&
+                    !(st.Borders()[x.border] == st.Borders()[base.border])) ||
+                   !(x.alignment == base.alignment);
+    any = any || formatted[i];
+  }
+  const std::optional<Range> used = sheet.UsedRange();
+  bool loses = false;
+  if (used) {
+    sheet.ForEachRow(0, used->lastRow, [&](uint32_t, const RowInfo& r) {
+      loses = r.customHeight || r.hidden || r.outlineLevel || (r.customFormat && r.style);
+      return !loses;
+    });
+    if (!loses && any)
+      sheet.ForEachCell(*used, [&](const CellInfo& c) {
+        loses = c.style < formatted.size() && formatted[c.style];
+        return !loses;
+      });
+  }
+  return loses;
+}
+
 std::string Write(const Workbook& book, std::string_view original, const Options& options) {
   const NumLocale& loc = options.locale ? *options.locale : UserLocale();
   Reader reader(original, options);

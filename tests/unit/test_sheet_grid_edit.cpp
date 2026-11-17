@@ -130,4 +130,14 @@ TEST(SheetGridEdit_PointMode) {
   CHECK(e.CanPoint(true));  // on the reference it inserted: a second click replaces it
   e.SetCaret(2, false);     // inside "SUM"
   CHECK(!e.CanPoint(true));
+  // AutoSum: its range selected and pointed at; an arrow moves it, typing replaces it.
+  e.Begin(L"=SUM(B2:B5)", CellEditor::Mode::Enter);
+  e.SetPointSpan(5, 5);
+  CHECK(e.Anchor() == 5 && e.Caret() == 10 && e.CanPoint());
+  CHECK(e.OnKey(kUp, false, false, false).action == Action::Point);
+  e.SetPointRef(L"B1");
+  CHECK(e.Text() == L"=SUM(B1)");
+  e.SetPointSpan(5, 2);
+  Type(e, L"C9");
+  CHECK(e.Text() == L"=SUM(C9)");
 }

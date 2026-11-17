@@ -312,6 +312,10 @@ enum Cmd : int {
   CmdPasteFormulas,
   CmdPasteFormats,
   CmdPasteTranspose,
+  CmdAutoSum,             // Alt+=
+  CmdCalculateNow,        // F9
+  CmdCalculateSheet,      // Shift+F9
+  CmdCalculateFull,       // Ctrl+Alt+F9
   CmdTabColor = 2100,     // + index into the tab colors (0: none)
   CmdUnhideSheet = 2200,  // + the sheet's index: a hidden sheet shown again
   CmdUnhideSheetLast = 2699,

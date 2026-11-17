@@ -183,12 +183,15 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case 'R': return editor_.Active() ? 0 : CmdFillRight;
     }
   }
+  if (alt && !ctrl && !shift && vk == VK_OEM_PLUS && !editor_.Active() && !preview_) return CmdAutoSum;
+  if (ctrl && alt && !shift && vk == VK_F9 && !editor_.Active()) return CmdCalculateFull;
   // Excel's keys for rows, columns, cells and sheets (not while a cell is typed in).
   if (!editor_.Active() && !preview_ && !alt) {
     if (ctrl && ((shift && vk == VK_OEM_PLUS) || vk == VK_ADD)) return CmdInsertCells;
     if (ctrl && !shift && (vk == VK_OEM_MINUS || vk == VK_SUBTRACT)) return CmdDeleteCells;
     if (!ctrl && shift && vk == VK_F11) return CmdInsertSheet;
     if (ctrl && shift && vk == 'V') return CmdPasteValues;
+    if (vk == VK_F9 && !ctrl) return shift ? CmdCalculateSheet : CmdCalculateNow;
     if (!ctrl && !shift && vk == VK_F5) return CmdGoTo;
   }
   if (preview_ && vk == VK_ESCAPE) return CmdPrintPreview;
@@ -399,6 +402,13 @@ void WorkbookView::UpdateStatus() {
 void WorkbookView::BuildStatusBar(StatusBarModel& m) {
   if (!Ready()) return;
   UpdateStatus();
+  if (circular_) {
+    const auto [sheet, row, col] = *circular_;
+    std::wstring at = Utf8ToWide(CellName(static_cast<uint32_t>(row), static_cast<uint32_t>(col)));
+    if (sheet != static_cast<int>(sheet_) && static_cast<size_t>(sheet) < book_->SheetCount())
+      at = Utf8ToWide(book_->GetSheet(static_cast<size_t>(sheet)).Name()) + L"!" + at;
+    m.segments.push_back(L"Circular References: " + at);
+  }
   if (Stale(active_.row, active_.col))
     m.segments.push_back(L"Value possibly out of date: it uses a function Featherweight can't calculate yet");
   if (totals_.count >= 2) {
@@ -734,8 +744,15 @@ void WorkbookView::FollowLink(const Hyperlink& link) {
 // File and state
 
 bool WorkbookView::Save(const std::wstring& path, std::wstring& error) {
-  // Nothing is changed in a workbook yet: saving elsewhere is a copy of the file as it was opened.
   if (!Ready()) return false;
+  if (file_) {
+    // A CSV file: written its own way, or as the type the path names (WorkbookFile).
+    if (!file_->Save(*book_, Ed(), path, error)) return false;
+    path_ = file_->Path();
+    host_.ViewStateChanged();
+    return true;
+  }
+  // Nothing is changed in a workbook yet: saving elsewhere is a copy of the file as it was opened.
   if (EqualsNoCase(path, path_)) return true;
   const auto bytes = book_->GetPackage()->GetSnapshot().Bytes();
   if (!util::WriteFileAtomic(path, std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()))) {
@@ -748,6 +765,35 @@ bool WorkbookView::Save(const std::wstring& path, std::wstring& error) {
 SaveFormat WorkbookView::SaveAsFormat() const {
   if (book_ && book_->Format() == FileFormat::Xlsm) return {L"Excel macro-enabled workbook", L"*.xlsm", L"xlsm"};
   return {L"Excel workbook", L"*.xlsx", L"xlsx"};
+}
+
+std::vector<SaveFormat> WorkbookView::CopyFormats() const {
+  if (!book_ || book_->Format() == FileFormat::Csv) return {};  // a CSV file: Save As .csv is the file itself
+  return {{L"CSV UTF-8 (the first sheet's values)", L"*.csv", L"csv"}};
+}
+
+bool WorkbookView::SaveCopy(const std::wstring& path, size_t format, std::wstring& error) {
+  if (!Ready() || format != 0) return false;
+  if (EqualsNoCase(util::FullPath(path), util::FullPath(path_))) {
+    error = FileNameOf(path) + L" is this workbook's own file. Choose another name for the copy.";
+    return false;
+  }
+  csv::Options o;
+  o.locale = &UserLocale();
+  return WorkbookFile::SaveCsvCopy(*book_, path, o, error);
+}
+
+std::wstring WorkbookView::SuggestedSavePath() const {
+  // A CSV file's Save As offers a workbook beside it, as the banner suggests.
+  if (!book_ || book_->Format() != FileFormat::Csv) return path_;
+  const size_t dot = path_.rfind(L'.'), slash = path_.find_last_of(L"\\/");
+  const bool ext = dot != std::wstring::npos && (slash == std::wstring::npos || dot > slash);
+  return (ext ? path_.substr(0, dot) : path_) + L".xlsx";
+}
+
+std::wstring WorkbookView::FormatLoss(const std::wstring& path) const {
+  if (keepFormat_ || !book_ || WorkbookFile::FormatOf(path, book_->Format()) != FileFormat::Csv) return {};
+  return csv::Loses(*book_) ? L"CSV keeps only the values of the first sheet." : L"";
 }
 
 FileState WorkbookView::State() const {
@@ -793,7 +839,8 @@ bool WorkbookView::HasIdleWork() const {
   if (!searchDone_) return true;
   for (size_t i = loadNext_; i < book_->SheetCount(); ++i)
     if (!book_->GetSheet(i).Loaded()) return true;
-  return recalc_ && (!calc_ || calc_->Opening());  // then nothing: no idle CPU
+  // Then what edits left dirty (not in manual mode); then nothing: no idle CPU.
+  return recalc_ && (!calc_ || calc_->Opening() || (calc_->Calculating() && (!calc_->ManualCalc() || calcNow_)));
 }
 
 bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
@@ -810,11 +857,16 @@ bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   }
   // Then what Excel recalculates when it opens the file, a slice at a time (plan §7.3 "Cached
   // values"); the cached values show until then.
-  if (!recalc_ || (calc_ && !calc_->Opening())) return false;
+  if (!recalc_ || (calc_ && !calc_->Opening() && (!calc_->Calculating() || (calc_->ManualCalc() && !calcNow_)))) return false;
   calc::WorkbookCalc& calc = Calc();
   const uint64_t before = calc.Changes();
-  const bool done = calc.OpenStep(std::max(1.0, deadlineMs - anim::Now()));
+  const double budget = std::max(1.0, deadlineMs - anim::Now());
+  const bool done = calc.Opening() ? calc.OpenStep(budget) : calc.CalcStep(budget);
   const bool changed = calc.Changes() != before;
+  if (done && !calc.Opening()) {
+    calcNow_ = false;
+    CheckCircular();
+  }
   if (!changed && !done) return false;
   if (changed) {
     text_->Clear();  // keyed by cell: it wouldn't see the new values

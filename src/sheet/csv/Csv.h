@@ -90,6 +90,12 @@ std::string Write(const Workbook& book, std::string_view original, const Options
 // for `tsv`), CRLF after each row.
 std::string WriteNew(const Workbook& book, const Options& options);
 
+// Whether saving as CSV loses something the workbook holds (S2 plan: the "CSV keeps only the values
+// of the first sheet" banner): another sheet, a formula, formatting beyond number formats (fonts,
+// fills, borders, alignment, cell styles), merged cells, column widths or row heights, hidden rows
+// or columns, hyperlinks, a filter. Number formats aren't: the values are written as shown.
+bool Loses(const Workbook& book);
+
 // The whole file as a workbook with one sheet named `sheetName` (format Csv).
 void Read(std::string_view bytes, const std::string& sheetName, const Options& options, Workbook& book,
           Source& source);

@@ -74,6 +74,9 @@ class CellEditor {
   // inserts at the caret. The tab formats the reference (A1, A1:B3, Sheet2!A1).
   void SetPointRef(const std::wstring& ref);
   bool Pointing() const { return point_.length > 0; }
+  // The reference at [at, at + length) is the one being pointed at, selected (AutoSum's range):
+  // typing replaces it, the arrows and a click move it.
+  void SetPointSpan(int at, int length);
   // Where a reference may go (s2-calc's CanPointAt: after "=", an operator, "(", ":" or the list
   // separator, outside text, no operand after the caret). Unset: a simple rule of its own.
   void SetPointRule(std::function<bool(std::wstring_view text, size_t caret)> rule) { pointRule_ = std::move(rule); }

@@ -1104,6 +1104,12 @@ TEST(sheet_calc_shift_f9) {
   calc.CalculateSheet(0);
   CHECK_EQ(Number(*book, "B1"), 15.0);
   CHECK_EQ(t(1), 7.0);
+  bool saving = true;  // a save on its worker: nothing written
+  calc.HoldWhile([&] { return saving; });
+  calc.CalculateNow();
+  CHECK(!calc.CalcStep(8));
+  CHECK_EQ(t(1), 7.0);
+  saving = false;
   calc.CalculateNow();  // F9
   while (!calc.CalcStep(8)) {
   }
