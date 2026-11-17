@@ -26,6 +26,10 @@ std::wstring GetClipboardText();
 // The bytes of a clipboard format registered by name ("Rich Text Format", "HTML Format"), up to
 // its first NUL; empty when the clipboard has none.
 std::string GetClipboardBytes(const wchar_t* format);
+// The clipboard's sequence number (GetClipboardSequenceNumber), to tell whether it changed.
+unsigned long ClipboardSequence();
+// Test runs (--snapshot) keep a clipboard of their own, so they never touch the user's.
+void UsePrivateClipboard();
 
 int64_t UnixNow();
 

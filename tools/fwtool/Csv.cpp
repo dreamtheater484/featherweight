@@ -130,7 +130,7 @@ int RunCsv(const Options& options) {
     std::sort(found.begin(), found.end());
     files.insert(files.end(), found.begin(), found.end());
   }
-  size_t changedFiles = 0;
+  size_t changedFiles = 0, resaveChanged = 0;
   for (const auto& file : files) {
     const auto t0 = std::chrono::steady_clock::now();
     std::string bytes;
@@ -173,9 +173,17 @@ int RunCsv(const Options& options) {
                 static_cast<size_t>(book.Strings().Size()), book.Strings().Bytes() / 1048576.0,
                 static_cast<double>(sheet.CellCount()) * 16 / 1048576.0);
     if (options.values && CheckValues(reader, book, sheet, locale)) ++changedFiles;
+    if (options.resave) {  // saved untouched: the same bytes (S2)
+      const auto t5 = std::chrono::steady_clock::now();
+      const bool same = fw::sheet::csv::Write(book, bytes, o) == bytes;
+      std::printf("  saved untouched in %.0f ms: %s\n", Ms(t5, std::chrono::steady_clock::now()),
+                  same ? "the same bytes" : "CHANGED");
+      if (!same) ++resaveChanged;
+    }
   }
   if (options.values) std::printf("\n%zu files, %zu with a changed value\n", files.size(), changedFiles);
-  return failed || changedFiles ? 1 : 0;
+  if (options.resave) std::printf("\n%zu files saved untouched, %zu changed\n", files.size(), resaveChanged);
+  return failed || changedFiles || resaveChanged ? 1 : 0;
 }
 
 }  // namespace fwtool

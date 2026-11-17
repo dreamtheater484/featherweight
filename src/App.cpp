@@ -64,6 +64,7 @@ int App::Run(const AppOptions& opts) {
   }
   if (opts.forceWarp) gpu::ForceWarp();
   snapshot_ = !opts.snapshotPath.empty();
+  if (snapshot_) util::UsePrivateClipboard();  // test runs never touch the user's clipboard
   snapshotWindow_ = snapshot_ && opts.snapshotWindow;
   sandbox_ = opts.sandbox;
   if (!sandbox_) settings_.Load();  // never loaded, settings are never saved either
@@ -1274,7 +1275,9 @@ int App::AppShortcut(UINT vk, UINT mods) {
     }
   }
   switch (vk) {
-    case VK_F11: return CmdFullScreen;
+    case VK_F11:
+      if (!shift) return CmdFullScreen;
+      break;  // Shift+F11 is the tab's (a workbook inserts a sheet)
     case VK_F3: return shift ? CmdFindPrev : CmdFindNext;
   }
   return 0;
@@ -2377,6 +2380,7 @@ void App::RunScript(const std::wstring& script) {
         else if (part == L"del") vk = VK_DELETE;
         else if (part == L"plus") vk = VK_OEM_PLUS;
         else if (part == L"minus") vk = VK_OEM_MINUS;
+        else if (part == L"semicolon") vk = VK_OEM_1;
         else if (part.size() > 1 && part[0] == L'f') vk = VK_F1 + _wtoi(part.c_str() + 1) - 1;
         else if (part.size() == 1) vk = towupper(part[0]);
       }

@@ -25,6 +25,7 @@ struct Options {
   double minPages = -1;             // compare: fail below this share of matching page counts (%)
   bool cells = false;               // compare: workbooks' displayed cell text against Excel's cells files
   bool values = false;              // csv: every field must show its text unchanged
+  bool resave = false;              // csv: saved untouched, the same bytes
   double minCells = -1;             // compare --cells: fail below this share of cells showing Excel's text (%)
   double minLines = -1;             // compare: fail below this share of matching line breaks (%)
   bool selfTest = false;            // compare: Word's lines against themselves and known changes

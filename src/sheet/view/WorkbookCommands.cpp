@@ -169,14 +169,27 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
     switch (vk) {
       case VK_NEXT: return CmdNextSheet;
       case VK_PRIOR: return CmdPrevSheet;
-      case VK_OEM_PLUS:
-      case VK_ADD: return CmdZoomIn;
-      case VK_OEM_MINUS:
-      case VK_SUBTRACT: return CmdZoomOut;
+      case VK_OEM_PLUS: return CmdZoomIn;
       case '0':
       case VK_NUMPAD0: return CmdZoomActual;
       case VK_F2: return CmdPrintPreview;
+      // Undo and redo the workbook's edits (while a cell is typed in, the keys are the entry's).
+      case 'Z': return editor_.Active() ? 0 : CmdUndo;
+      case 'Y': return editor_.Active() ? 0 : CmdRedo;
+      case 'G': return editor_.Active() ? 0 : CmdGoTo;
+      case 'D': return editor_.Active() ? 0 : CmdFillDown;
+      case 'X': return editor_.Active() ? 0 : CmdCut;
+      case 'V': return editor_.Active() ? 0 : CmdPaste;
+      case 'R': return editor_.Active() ? 0 : CmdFillRight;
     }
+  }
+  // Excel's keys for rows, columns, cells and sheets (not while a cell is typed in).
+  if (!editor_.Active() && !preview_ && !alt) {
+    if (ctrl && ((shift && vk == VK_OEM_PLUS) || vk == VK_ADD)) return CmdInsertCells;
+    if (ctrl && !shift && (vk == VK_OEM_MINUS || vk == VK_SUBTRACT)) return CmdDeleteCells;
+    if (!ctrl && shift && vk == VK_F11) return CmdInsertSheet;
+    if (ctrl && shift && vk == 'V') return CmdPasteValues;
+    if (!ctrl && !shift && vk == VK_F5) return CmdGoTo;
   }
   if (preview_ && vk == VK_ESCAPE) return CmdPrintPreview;
   return 0;
@@ -189,6 +202,7 @@ CommandState WorkbookView::QueryCommand(int cmd) {
                    cmd == CmdViewSingle || cmd == CmdViewContinuous || cmd == CmdViewFacing ||
                    (cmd >= CmdZoomPreset && cmd < CmdZoomPreset + 50)))
     return PagedView::QueryCommand(cmd);
+  if (GridCommandState(cmd, s)) return s;
   const bool ready = Ready();
   size_t shown = 0;
   if (ready)
@@ -207,6 +221,8 @@ CommandState WorkbookView::QueryCommand(int cmd) {
     case CmdNextSheet:
     case CmdPrevSheet: s.enabled = ready && shown > 1; break;
     case CmdSave: s.enabled = false; break;
+    case CmdUndo: s.enabled = ready && edit_ && edit_->CanUndo(); break;
+    case CmdRedo: s.enabled = ready && edit_ && edit_->CanRedo(); break;
     case CmdRotateLeft:
     case CmdRotateRight:
     case CmdToggleCover:
@@ -260,7 +276,17 @@ bool WorkbookView::Execute(int cmd) {
     if (i < presets.size()) SetZoom100(presets[i]);
     return true;
   }
+  if (GridCommand(cmd)) return true;
   switch (cmd) {
+    case CmdUndo:
+    case CmdRedo:
+      if (editor_.Active()) {
+        editor_.End();
+        host_.ViewStateChanged();
+      } else if (edit_) {
+        EditRefused(cmd == CmdUndo ? edit_->Undo() : edit_->Redo());
+      }
+      return true;
     case CmdCopy: Copy(); return true;
     case CmdSelectAll: Select({0, 0}, {kMaxRows - 1, kMaxCols - 1}, false); return true;
     case CmdPrintPreview: TogglePreview(); return true;
@@ -343,26 +369,6 @@ void WorkbookView::FillMenu(int which, HMENU menu) {
   for (int i = 0; i < static_cast<int>(presets.size()); ++i)
     menu::AppendItem(menu, CmdZoomPreset + i, fw::FormatPercent(presets[i]), true,
                      QueryCommand(CmdZoomPreset + i).checked, true);
-}
-
-void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
-  using menu::AppendItem;
-  using menu::AppendSeparator;
-  if (!preview_ && gfx::Contains(tabs_, static_cast<float>(x), static_cast<float>(y))) {
-    // Every sheet, to go to.
-    for (size_t i = 0; i < book_->SheetCount() && CmdSheetPick + static_cast<int>(i) <= CmdSheetPickLast; ++i)
-      if (SheetShown(i))
-        AppendItem(m, CmdSheetPick + static_cast<int>(i), Utf8ToWide(book_->GetSheet(i).Name()), true, i == sheet_, true);
-    return;
-  }
-  if (!preview_) {
-    AppendItem(m, CmdCopy, L"Copy\tCtrl+C");
-    AppendItem(m, CmdSelectAll, L"Select all\tCtrl+A");
-    AppendSeparator(m);
-  }
-  AppendItem(m, CmdFind, L"Find…\tCtrl+F");
-  AppendItem(m, CmdPrint, L"Print…\tCtrl+P");
-  AppendItem(m, CmdPrintPreview, preview_ ? L"Close print preview\tEsc" : L"Print preview\tCtrl+F2");
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +507,9 @@ void WorkbookView::Copy() {
     cfHtml = header + head + html + tail;
   }
   util::SetClipboardText(text, {}, cfHtml);
+  // A paste here brings the cells themselves while the clipboard still holds this.
+  clip_ = Clip{&s, sel, false, util::ClipboardSequence()};
+  host_.ViewInvalidate();
 }
 
 std::wstring WorkbookView::SelectedText() {
@@ -611,19 +620,23 @@ void WorkbookView::ShowMatch() {
 std::wstring WorkbookView::ActiveName() const { return Ready() ? Utf8ToWide(CellName(active_.row, active_.col)) : L""; }
 
 std::wstring WorkbookView::FormulaBarText() const {
-  if (!Ready()) return {};
-  const Sheet& s = Current();
+  return Ready() ? EditTextAt(Current(), active_.row, active_.col) : std::wstring();
+}
+
+// A cell's content as typed (the formula bar's and F2's text).
+std::wstring WorkbookView::EditTextAt(const Sheet& s, uint32_t row, uint32_t col) const {
   CellInfo cell;
-  if (!s.GetCell(active_.row, active_.col, cell)) return {};
+  if (!s.GetCell(row, col, cell)) return {};
   if (cell.hasFormula) {
     FormulaInfo f;
-    if (s.GetFormula(active_.row, active_.col, f)) {
-      std::string text = ShiftFormula(f.text, static_cast<int64_t>(active_.row) - f.origin.row,
-                                      static_cast<int64_t>(active_.col) - f.origin.col);
+    if (s.GetFormula(row, col, f)) {
+      std::string text = ShiftFormula(f.text, static_cast<int64_t>(row) - f.origin.row,
+                                      static_cast<int64_t>(col) - f.origin.col);
       for (const char* prefix : {"_xlfn._xlws.", "_xlfn.", "_xlws."}) {
         for (size_t at; (at = text.find(prefix)) != std::string::npos;) text.erase(at, std::strlen(prefix));
       }
-      const std::wstring w = L"=" + Utf8ToWide(text);
+      // In the region's form (en-NL: =SUM(1;2,5)), as Excel's formula bar shows it.
+      const std::wstring w = L"=" + Utf8ToWide(calc::ToLocal(text, Region()));
       return f.kind == FormulaKind::Array ? L"{" + w + L"}" : w;
     }
   }

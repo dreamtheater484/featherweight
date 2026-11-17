@@ -1,0 +1,1 @@
+SUM(Sheet1:Sheet3!A1:B2)+#REF!A1+'Sheet 2'!B2-Sheet3:Sheet1!C3

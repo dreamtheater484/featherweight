@@ -10,6 +10,7 @@
 #include "pkg/Snapshot.h"
 #include "sheet/csv/Csv.h"
 #include "sheet/numfmt/NumLocale.h"
+#include "sheet/view/WorkbookPanels.h"
 #include "sheet/xlsx/Xlsx.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
@@ -117,6 +118,8 @@ OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& er
   measure_ = std::make_unique<FontMeasure>(*fonts_);
   text_ = std::make_unique<CellText>(*book_, *fonts_, *measure_, UserLocale());
   states_.assign(book_->SheetCount(), PerSheet{});
+  sheetOrder_.clear();
+  for (size_t i = 0; i < book_->SheetCount(); ++i) sheetOrder_.push_back(&book_->GetSheet(i));
   objects_.clear();
   objects_.resize(book_->SheetCount());
   rules_.clear();
@@ -473,12 +476,16 @@ void WorkbookView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   } else if (Ready()) {
     DrawGrid(c, dc);
     DrawStale(c);
+    DrawFillHandle(c);
     DrawNote(dc);
+    DrawEditor(c);
     DrawHeaders(c);
     DrawOutline(c);
     DrawScrollbars(c);
     DrawFormulaBar(c);
     DrawSheetTabs(c);
+    if (renaming_ >= 0) DrawEditBox(c, tabs_);
+    DrawFormulaHelp(c);
   }
   c.PopClip();
 }
@@ -532,6 +539,8 @@ void WorkbookView::DrawGrid(Canvas& c, ID2D1DeviceContext* dc) {
     }
     c.PushClip(rc);
     DrawSelection(c, pane);
+    DrawRefBorders(c, pane);
+    DrawClipBorder(c, pane);
     c.PopClip();
   }
   // The frozen panes' edges.
@@ -718,17 +727,17 @@ void WorkbookView::DrawFormulaBar(Canvas& c) {
   c.Fill({formulaBar_.left, formulaBar_.bottom - 1, formulaBar_.right, formulaBar_.bottom}, p.chromeBorder);
   c.FillRound(nameBox_, 4 * u, p.inputBg);
   c.StrokeRound(nameBox_, 4 * u, p.inputBorder, 1);
-  const float size = 13 * u;
+  const float size = FormulaBarSize();
   c.Text(ActiveName(), Inflate(nameBox_, -8 * u, 0), p.text, size);
   const D2D1_RECT_F fx = {nameBox_.right + 8 * u, formulaBar_.top, nameBox_.right + 36 * u, formulaBar_.bottom};
   c.Text(L"fx", fx, p.textSecondary, size, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center);
   c.Fill({fx.right + 4 * u, formulaBar_.top + 6 * u, fx.right + 5 * u, formulaBar_.bottom - 6 * u}, p.chromeBorder);
-  std::wstring text = FormulaBarText();
-  if (const size_t nl = text.find_first_of(L"\r\n"); nl != std::wstring::npos) text = text.substr(0, nl) + L" …";
-  const D2D1_RECT_F box = {fx.right + 12 * u, formulaBar_.top, formulaBar_.right - 12 * u, formulaBar_.bottom};
-  c.PushClip(box);
-  c.Text(text, box, p.text, size);
-  c.PopClip();
+  DrawBarText(c);
+}
+
+D2D1_RECT_F WorkbookView::FormulaBox() const {
+  const float u = ui_;
+  return {nameBox_.right + 48 * u, formulaBar_.top, formulaBar_.right - 12 * u, formulaBar_.bottom};
 }
 
 std::vector<WorkbookView::TabRect> WorkbookView::TabRects() const {
