@@ -81,3 +81,22 @@ AutoSumProposal ProposeAutoSum(int32_t row, int32_t col, const std::function<Sum
 std::string CopyFormula(std::string_view formula, const CompileOptions& from, const CompileOptions& to, Names& names);
 
 }  // namespace fw::sheet::calc
+
+namespace fw::sheet::calc {
+
+// Rows or columns (or cells, in a band) inserted or deleted on a sheet.
+struct StructuralEdit {
+  int sheet = 0;
+  bool rows = true;    // rows, or cells moving down or up; else columns, or cells moving right or left
+  int32_t at = 0;      // the first row or column inserted or deleted, 0-based
+  int32_t count = 0;   // > 0 inserted, < 0 deleted
+  int32_t band1 = -1, band2 = -1;  // cells only: the columns (rows: the rows) that move; -1 whole lines
+};
+// A formula of the cell `at` after the edit, as Excel rewrites it (measured): references move,
+// grow and shrink; one deleted becomes #REF!; with cells, only references inside the band move.
+// Invariant text in and out, without "=". `moved` gets the formula's own cell after the edit.
+// Text that doesn't compile comes back unchanged.
+std::string ShiftReferences(std::string_view formula, const CompileOptions& at, const StructuralEdit& edit,
+                            Names& names, CompileOptions* moved = nullptr);
+
+}  // namespace fw::sheet::calc

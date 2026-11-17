@@ -156,6 +156,13 @@ class Printer {
     return pkg::QuoteSheetName(a) + "!";
   }
 
+  // The sheet a reference is on: its own, or the formula's. -1 for several sheets.
+  int RefSheet(const uint8_t* p, uint8_t flags) const {
+    if (!(flags & kSheet)) return at_.sheet;
+    if ((flags & kSheet3D) && Read<uint16_t>(p) != Read<uint16_t>(p + 2)) return -1;
+    return Read<uint16_t>(p);
+  }
+
   std::string RowText(int32_t v, bool abs) const {
     if (how_.r1c1) {
       if (abs) return "R" + std::to_string(v + 1);
@@ -251,6 +258,15 @@ class Printer {
         uint8_t fl = p[1];
         const uint8_t* q = p + 2 + SheetBytes(fl);
         int32_t r = Read<int32_t>(q), c = Read<int16_t>(q + 4);
+        if (how_.map) {
+          int32_t r2 = r, c2 = c;
+          uint8_t abs = static_cast<uint8_t>(((fl & kRowAbs) ? RefMap::kRow1 | RefMap::kRow2 : 0) |
+                                             ((fl & kColAbs) ? RefMap::kCol1 | RefMap::kCol2 : 0));
+          if (!how_.map->Map(RefSheet(p + 2, fl), r, c, r2, c2, abs, false, false)) {
+            stack_.push_back(Sheets(p + 2, fl) + "#REF!");
+            break;
+          }
+        }
         if (Off(r, fl & kRowAbs, at_.row, kMaxRows) || Off(c, fl & kColAbs, at_.col, kMaxCols)) {
           stack_.push_back(Sheets(p + 2, fl) + "#REF!");
           break;
@@ -263,6 +279,14 @@ class Printer {
         const uint8_t* q = p + 2 + SheetBytes(fl);
         int32_t r1 = Read<int32_t>(q), r2 = Read<int32_t>(q + 6);
         int32_t c1 = Read<int16_t>(q + 4), c2 = Read<int16_t>(q + 10);
+        if (how_.map) {
+          uint8_t abs = static_cast<uint8_t>(((fl & kRowAbs) ? RefMap::kRow1 : 0) | ((fl & kColAbs) ? RefMap::kCol1 : 0) |
+                                             ((fl & kRow2Abs) ? RefMap::kRow2 : 0) | ((fl & kCol2Abs) ? RefMap::kCol2 : 0));
+          if (!how_.map->Map(RefSheet(p + 2, fl), r1, c1, r2, c2, abs, fl & kWholeRows, fl & kWholeCols)) {
+            stack_.push_back(Sheets(p + 2, fl) + "#REF!");
+            break;
+          }
+        }
         const bool rows = !(fl & kWholeCols), cols = !(fl & kWholeRows);
         if ((rows && (Off(r1, fl & kRowAbs, at_.row, kMaxRows) || Off(r2, fl & kRow2Abs, at_.row, kMaxRows))) ||
             (cols && (Off(c1, fl & kColAbs, at_.col, kMaxCols) || Off(c2, fl & kCol2Abs, at_.col, kMaxCols)))) {

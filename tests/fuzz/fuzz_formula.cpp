@@ -129,6 +129,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     from.row = 2, from.col = 2;
     to.row = 0, to.col = 5;
     calc::CopyFormula(formula, from, to, *engine);
+    for (int k = 0; k < 4; ++k) {  // rows or columns inserted or deleted, whole or in a band
+      calc::StructuralEdit e;
+      e.rows = k % 2 == 0, e.at = 1 + k, e.count = k < 2 ? 2 : -2;
+      if (k == 3) e.band1 = 0, e.band2 = 2;
+      calc::ShiftReferences(formula, from, e, *engine);
+    }
   }
 
   // The other syntaxes a reference can have.

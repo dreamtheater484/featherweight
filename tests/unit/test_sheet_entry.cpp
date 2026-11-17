@@ -358,3 +358,43 @@ TEST(sheet_typing_autosum) {
   f.Set("B1", N), f.Set("B2", N);
   CHECK_EQ(propose(f, 2, 1), std::string("=SUM(B1:B2)"));
 }
+
+namespace {
+struct ShiftCase {
+  const char* edit;
+  bool rows;
+  int at, count, band1, band2, sheet;
+  const char* before;
+  const char* after;
+};
+const ShiftCase kShiftCases[] = {
+#include "formula_shift_cases.inc"
+};
+}  // namespace
+
+TEST(sheet_typing_structural_edits) {
+  // Rows, columns and cells inserted and deleted on Sheet1: formulas on Sheet2 pointing at it and
+  // on Sheet1 itself (Z30, Z31...), as Excel rewrites them.
+  size_t failures = 0, n = 0;
+  std::string lastEdit;
+  int index = 0;
+  for (const ShiftCase& k : kShiftCases) {
+    if (lastEdit != k.edit) lastEdit = k.edit, index = 0;
+    const int i = index++ / 2;
+    EntryNames names;
+    CompileOptions at;
+    at.sheet = k.sheet == 0 ? 0 : 1;
+    at.row = k.sheet == 0 ? 29 + i : i;
+    at.col = k.sheet == 0 ? 25 : 0;
+    StructuralEdit e;
+    e.sheet = 0, e.rows = k.rows, e.at = k.at, e.count = k.count, e.band1 = k.band1, e.band2 = k.band2;
+    std::string got = "=" + ShiftReferences(k.before + 1, at, e, names);
+    ++n;
+    if (got != k.after) {
+      ++failures;
+      std::printf("    %s, %s: Excel %s, here %s\n", k.edit, k.before, k.after, got.c_str());
+    }
+  }
+  std::printf("    %zu of %zu as Excel\n", n - failures, n);
+  CHECK_EQ(failures, size_t{0});
+}
