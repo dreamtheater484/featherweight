@@ -518,9 +518,11 @@ float PrintLayout::PaintNote(draw::Painter* p, const CellNote& note, float x, fl
   put(L"Cell:", bold, x, labelW, true, y);
   y += pitch * put(Utf8ToWide(ColumnName(note.col)) + std::to_wstring(note.row + 1), style, tx, tw, false, y);
   put(L"Comment:", bold, x, labelW, true, y);
+  // A thread prints as the note Excel writes for older versions, when it has one.
+  const std::wstring& text = note.legacyText.empty() ? note.text : note.legacyText;
   std::wstring line;
-  for (size_t i = 0; i <= note.text.size(); ++i) {
-    const wchar_t c = i < note.text.size() ? note.text[i] : L'\n';
+  for (size_t i = 0; i <= text.size(); ++i) {
+    const wchar_t c = i < text.size() ? text[i] : L'\n';
     if (c == L'\r') continue;
     if (c != L'\n') {
       line += c;
