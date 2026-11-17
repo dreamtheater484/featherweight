@@ -236,9 +236,14 @@ void WorkbookCalc::CalculateFull() {
   engine_->MarkAllDirty();
 }
 
+void WorkbookCalc::CalculateSheet(int sheet) {
+  while (Opening()) OpenStep(1e9);
+  if (sheet >= 0 && sheet < SheetCount()) engine_->CalculateSheet(sheet);
+}
+
 bool WorkbookCalc::CircularCell(int& sheet, int32_t& row, int32_t& col) const {
   calc::Cell at;
-  if (!engine_->Circular() || !engine_->FirstCircular(at)) return false;
+  if (Settings().iterate || !engine_->Circular() || !engine_->FirstCircular(at)) return false;
   sheet = at.sheet, row = at.row, col = at.col;
   return true;
 }

@@ -1072,6 +1072,72 @@ TEST(sheet_calc_after_edits_manual) {
   CHECK_EQ(Number(*book, "B1"), 15.0);
 }
 
+TEST(sheet_calc_shift_f9) {
+  // Manual mode, Shift+F9: the active sheet's dirty formulas, from the other sheet's values as they
+  // are; F9 then the rest.
+  namespace edit = fw::sheet::edit;
+  auto book = OpenSheet("<row r=\"1\"><c r=\"A1\"><v>2</v></c><c r=\"B1\"><f>A1*3</f><v>6</v></c></row>",
+                        "<calcPr calcId=\"191029\" calcMode=\"manual\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  edit::Editor ed(*book);
+  Follow(ed, calc);
+  ed.AddSheet(1, "T");
+  ed.SetCell(1, 0, 0, edit::CellInput::Formula("S!A1*10"));  // T!A1, calculated as entered
+  ed.SetCell(1, 0, 1, edit::CellInput::Formula("S!B1+1"));   // T!B1
+  auto t = [&](uint32_t col) {
+    fw::sheet::Value v = book->GetSheet(1).GetValue(0, col);
+    return v.type == fw::sheet::ValueType::Number ? v.number : -999;
+  };
+  CHECK_EQ(t(0), 20.0);
+  CHECK_EQ(t(1), 7.0);
+  ed.SetCell(0, 0, 0, edit::CellInput::Number(5));
+  CHECK_EQ(Number(*book, "B1"), 6.0);
+  calc.CalculateSheet(1);  // T: S!B1 is still 6
+  CHECK_EQ(t(0), 50.0);
+  CHECK_EQ(t(1), 7.0);
+  CHECK_EQ(Number(*book, "B1"), 6.0);
+  CHECK(calc.Calculating());
+  calc.CalculateSheet(0);
+  CHECK_EQ(Number(*book, "B1"), 15.0);
+  CHECK_EQ(t(1), 7.0);
+  calc.CalculateNow();  // F9
+  while (!calc.CalcStep(8)) {
+  }
+  CHECK_EQ(t(1), 16.0);
+  CHECK(!calc.Calculating());
+}
+
+TEST(sheet_calc_iterative_after_edits) {
+  // calcPr iterate: a circular reference after an edit settles (A1 = A1/2 + C1 → 2*C1), and
+  // there's no circular-reference banner; without it, there is one.
+  namespace edit = fw::sheet::edit;
+  const std::string cells = "<row r=\"1\"><c r=\"A1\"><f>B1/2+C1</f><v>2</v></c><c r=\"B1\"><f>A1</f><v>2</v></c>"
+                            "<c r=\"C1\"><v>1</v></c></row>";
+  for (bool iterate : {true, false}) {
+    auto book = OpenSheet(cells, std::string("<calcPr calcId=\"191029\"") +
+                                     (iterate ? " iterate=\"1\" iterateCount=\"100\" iterateDelta=\"0.0001\"" : "") +
+                                     "/>" + Features());
+    CHECK(book != nullptr);
+    if (!book) return;
+    WorkbookCalc calc(*book);
+    while (!calc.OpenStep(8)) {
+    }
+    edit::Editor ed(*book);
+    Follow(ed, calc);
+    ed.SetCell(0, 0, 2, edit::CellInput::Number(3));
+    while (!calc.CalcStep(8)) {
+    }
+    int s = 0;
+    int32_t r = 0, c = 0;
+    CHECK_EQ(calc.CircularCell(s, r, c), !iterate);
+    if (iterate) CHECK(std::fabs(Number(*book, "A1") - 6) < 0.001);
+  }
+}
+
 TEST(sheet_calc_edit_budget) {
   // Plan §11: < 100 ms after one edit in a 100,000-formula workbook (typing a value, entering a
   // formula), the dependency graph kept.

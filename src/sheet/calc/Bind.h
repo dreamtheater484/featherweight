@@ -70,7 +70,9 @@ class WorkbookCalc : public Host {
   bool ManualCalc() const;                                  // calcPr calcMode="manual"
   void CalculateNow();   // F9: then CalcStep until done (dirty and volatile formulas)
   void CalculateFull();  // Ctrl+Alt+F9: every formula
-  // A cell in a circular reference, for the banner and "Circular References: B2".
+  void CalculateSheet(int sheet);  // Shift+F9: the sheet's dirty and volatile formulas, at once
+  // A cell in a circular reference, for the banner and "Circular References: B2"; none while
+  // iterative calculation is on (Excel then warns of nothing).
   bool CircularCell(int& sheet, int32_t& row, int32_t& col) const;
 
   // Host
