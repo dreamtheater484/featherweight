@@ -12,6 +12,7 @@
 #include "core/Strings.h"
 #include "sheet/calc/Bind.h"
 #include "sheet/calc/Entry.h"
+#include "sheet/calc/Typing.h"
 #include "sheet/numfmt/Parse.h"
 #include "sheet/view/WorkbookFormat.h"
 #include "sheet/xlsx/Internal.h"
@@ -864,6 +865,111 @@ bool WorkbookView::RulesCommand(int cmd) {
     case CmdValidationList: ShowValidationList(); break;
   }
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Pasting
+
+namespace {
+struct Rebase {
+  calc::Engine* engine;
+  calc::CompileOptions from, to;
+};
+std::string RebaseFormula(void* ctx, std::string_view f) {
+  auto* r = static_cast<Rebase*>(ctx);
+  std::string out = calc::CopyFormula("=" + std::string(f), r->from, r->to, *r->engine);
+  if (!out.empty() && out[0] == '=') out.erase(0, 1);
+  return out.empty() ? std::string(f) : out;
+}
+bool SameRules(const std::vector<data::CfRule>& a, const std::vector<data::CfRule>& b) {
+  return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](const data::CfRule& x, const data::CfRule& y) {
+           return x.sqref == y.sqref && x.xml == y.xml && x.ext == y.ext;
+         });
+}
+}  // namespace
+
+edit::Result WorkbookView::PasteRules(int fromSheet, const Range& src, int sheet, const Range& pasted, bool validations) {
+  if (fromSheet < 0 || static_cast<size_t>(fromSheet) >= book_->SheetCount() || book_->GetSheet(static_cast<size_t>(sheet)).PartName().empty())
+    return {};
+  const Sheet& fs = book_->GetSheet(static_cast<size_t>(fromSheet));
+  const Sheet& ds = book_->GetSheet(static_cast<size_t>(sheet));
+  const uint32_t h = src.lastRow - src.firstRow + 1, w = src.lastCol - src.firstCol + 1;
+  // The copies' top-left corners.
+  std::vector<CellAddr> corners;
+  for (uint32_t r = pasted.firstRow; r + h - 1 <= pasted.lastRow; r += h)
+    for (uint32_t c = pasted.firstCol; c + w - 1 <= pasted.lastCol; c += w) corners.push_back({r, c});
+  // A source area's part inside the copied cells, moved to a copy.
+  auto inside = [&](const std::vector<Range>& areas) {
+    std::vector<Range> out;
+    for (const Range& a : areas) {
+      const Range i{std::max(a.firstRow, src.firstRow), std::max(a.firstCol, src.firstCol), std::min(a.lastRow, src.lastRow),
+                    std::min(a.lastCol, src.lastCol)};
+      if (i.firstRow <= i.lastRow && i.firstCol <= i.lastCol) out.push_back(i);
+    }
+    return out;
+  };
+  auto moved = [&](const std::vector<Range>& parts, CellAddr corner) {
+    std::vector<Range> out;
+    for (Range p : parts) {
+      p.firstRow = p.firstRow - src.firstRow + corner.row, p.lastRow = p.lastRow - src.firstRow + corner.row;
+      p.firstCol = p.firstCol - src.firstCol + corner.col, p.lastCol = p.lastCol - src.firstCol + corner.col;
+      out.push_back(p);
+    }
+    return out;
+  };
+  Rebase rb{&Calc().engine(), {}, {}};
+  auto rebase = [&](const std::vector<Range>& from, const std::vector<Range>& to) {
+    rb.from.sheet = fromSheet, rb.from.row = static_cast<int32_t>(from[0].firstRow), rb.from.col = static_cast<int32_t>(from[0].firstCol);
+    rb.to.sheet = sheet, rb.to.row = static_cast<int32_t>(to[0].firstRow), rb.to.col = static_cast<int32_t>(to[0].firstCol);
+  };
+  edit::Result r;
+  // Conditional formats: the source's rules come first, as new rules do.
+  {
+    const std::vector<data::CfRule> before = data::ReadCfRules(ds.Text());
+    std::vector<data::CfRule> rules = before, copies;
+    data::ClearCfRules(rules, pasted);
+    for (const data::CfRule& rule : data::ReadCfRules(fs.Text())) {
+      const std::vector<Range> areas = data::ParseAreas(rule.sqref), parts = inside(areas);
+      if (parts.empty()) continue;
+      std::vector<Range> all;
+      for (CellAddr corner : corners) {
+        const std::vector<Range> m = moved(parts, corner);
+        all.insert(all.end(), m.begin(), m.end());
+      }
+      // Relative references in a rule are from its cells' top-left: the original's, then the copy's.
+      rebase(areas, all);
+      copies.push_back(data::CopyCfRule(rule, data::JoinAreas(all), RebaseFormula, &rb));
+    }
+    rules.insert(rules.begin(), copies.begin(), copies.end());
+    if (!SameRules(rules, before)) {
+      std::string xml, ext;
+      data::WriteCfRules(rules, ds.Text(), xml, ext);
+      r = Ed().SetSheetRules(sheet, edit::Editor::RuleKind::ConditionalFormats, xml, ext, u"Paste");
+      if (!r) return r;
+    }
+  }
+  if (!validations) return r;
+  const std::vector<data::Validation> before = data::ReadValidations(ds.Text());
+  std::vector<data::Validation> rules = before;
+  data::ClearValidations(rules, pasted);
+  bool changed = rules.size() != before.size() ||
+                 !std::equal(rules.begin(), rules.end(), before.begin(), [](const data::Validation& a, const data::Validation& b) { return a.sqref == b.sqref; });
+  for (const data::Validation& v : data::ReadValidations(fs.Text())) {
+    const std::vector<Range> areas = data::ParseAreas(v.sqref), parts = inside(areas);
+    if (parts.empty()) continue;
+    std::vector<Range> all;
+    for (CellAddr corner : corners) {
+      const std::vector<Range> m = moved(parts, corner);
+      all.insert(all.end(), m.begin(), m.end());
+    }
+    rebase(areas, all);
+    rules.push_back(data::CopyValidation(v, data::JoinAreas(all), RebaseFormula, &rb));
+    changed = true;
+  }
+  if (!changed) return r;
+  std::string xml, ext;
+  data::WriteValidations(rules, ds.Text(), xml, ext);
+  return Ed().SetSheetRules(sheet, edit::Editor::RuleKind::Validations, xml, ext, u"Paste");
 }
 
 // ---------------------------------------------------------------------------

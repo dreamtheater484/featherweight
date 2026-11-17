@@ -93,6 +93,10 @@ std::wstring DescribeCf(const CfRule& rule, const calc::FormulaLocale& region);
 void ClearCfRules(std::vector<CfRule>& rules, const Range& cut);
 // A copy of the rule applying to `sqref` (Applies to).
 void SetCfSqref(CfRule& rule, const std::string& sqref);
+// A rule copied to other cells (pasting): its cells `sqref`, each formula through `move` (invariant,
+// without "="; relative references re-based on the new top-left cell), a data bar's or x14 rule's id new.
+using MoveFormula = std::string (*)(void* ctx, std::string_view formula);
+CfRule CopyCfRule(const CfRule& rule, const std::string& sqref, MoveFormula move, void* ctx);
 
 // ---- Data validation
 
@@ -124,5 +128,7 @@ std::vector<std::string> ListItems(const Validation& v);
 bool InList(const std::vector<std::string>& items, std::string_view value);
 // Clear All from the cells of `cut`.
 void ClearValidations(std::vector<Validation>& rules, const Range& cut);
+// A rule copied to other cells (pasting), as CopyCfRule.
+Validation CopyValidation(const Validation& v, const std::string& sqref, MoveFormula move, void* ctx);
 
 }  // namespace fw::sheet::data

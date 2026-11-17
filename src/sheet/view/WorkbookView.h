@@ -476,6 +476,10 @@ class WorkbookView : public PagedView {
   bool ValidationButtonAt(float x, float y);
   void ShowValidationList();
   bool DataRulesScriptOp(const std::wstring& op, const std::wstring& arg);  // rule: and valid:
+  // Pasting copied cells (all, or formats): the pasted cells take the source's conditional formats
+  // (and with `validations` its validations) in place of their own, as in Excel; `pasted` holds
+  // whole copies of `src`.
+  edit::Result PasteRules(int fromSheet, const Range& src, int sheet, const Range& pasted, bool validations);
   // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
   bool GridCommand(int cmd);
   bool GridCommandState(int cmd, CommandState& s);

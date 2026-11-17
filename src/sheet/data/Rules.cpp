@@ -585,6 +585,64 @@ void ClearCfRules(std::vector<CfRule>& rules, const Range& cut) {
 
 void SetCfSqref(CfRule& rule, const std::string& sqref) { rule.sqref = sqref; }
 
+namespace {
+// The element's formulas (formula, xm:f) through `move`; false when it doesn't parse.
+bool MoveFormulas(std::string& el, const std::string& oldId, const std::string& newId, MoveFormula move, void* ctx) {
+  if (el.empty()) return true;
+  pugi::xml_document d;
+  if (!xlsx::ParseSlice(d, el)) return false;
+  std::vector<pugi::xml_node> todo{d.document_element()};
+  while (!todo.empty()) {
+    pugi::xml_node n = todo.back();
+    todo.pop_back();
+    const std::string_view local = LocalOf(n.name());
+    if (local == "formula" || local == "f") {
+      const std::string moved = move(ctx, xlsx::TextOf(n));
+      while (n.first_child()) n.remove_child(n.first_child());
+      n.append_child(pugi::node_pcdata).set_value(moved.c_str());
+      continue;
+    }
+    if ((local == "id" && !oldId.empty() && xlsx::TextOf(n) == oldId)) {
+      while (n.first_child()) n.remove_child(n.first_child());
+      n.append_child(pugi::node_pcdata).set_value(newId.c_str());
+    }
+    if (pugi::xml_attribute a = n.attribute("id"); a && !oldId.empty() && oldId == a.value()) a.set_value(newId.c_str());
+    for (pugi::xml_node c = n.first_child(); c; c = c.next_sibling())
+      if (c.type() == pugi::node_element) todo.push_back(c);
+  }
+  struct Out : pugi::xml_writer {
+    std::string s;
+    void write(const void* data, size_t size) override { s.append(static_cast<const char*>(data), size); }
+  } out;
+  d.document_element().print(out, "", pugi::format_raw);
+  el = std::move(out.s);
+  return true;
+}
+}  // namespace
+
+CfRule CopyCfRule(const CfRule& rule, const std::string& sqref, MoveFormula move, void* ctx) {
+  CfRule r = rule;
+  r.sqref = sqref;
+  std::string oldId;
+  if (!r.ext.empty()) {
+    pugi::xml_document d;
+    if (xlsx::ParseSlice(d, r.ext)) oldId = AttrOf(d.document_element(), "id");
+  }
+  const std::string newId = oldId.empty() ? std::string() : NewGuid();
+  MoveFormulas(r.xml, oldId, newId, move, ctx);
+  MoveFormulas(r.ext, oldId, newId, move, ctx);
+  return r;
+}
+
+Validation CopyValidation(const Validation& v, const std::string& sqref, MoveFormula move, void* ctx) {
+  Validation c = v;
+  c.sqref = sqref;
+  c.xml.clear();  // written again from the fields
+  if (!c.f1.empty()) c.f1 = move(ctx, c.f1);
+  if (!c.f2.empty()) c.f2 = move(ctx, c.f2);
+  return c;
+}
+
 // ---- Data validation
 
 namespace {

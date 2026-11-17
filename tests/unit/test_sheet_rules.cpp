@@ -193,6 +193,27 @@ TEST(SheetRules_Validations) {
   CHECK(xml.find("<formula1>10</formula1>") != std::string::npos);
 }
 
+// Pasting: the copy's cells, every formula through the move, a data bar's x14 id new.
+TEST(SheetRules_Copy) {
+  auto move = [](void*, std::string_view f) { return "M(" + std::string(f) + ")"; };
+  const data::CfRule bar = data::DataBarRule("A1:A3", 0, "{00000000-0000-4000-8000-000000000009}");
+  const data::CfRule c = data::CopyCfRule(bar, "C5:C7", move, nullptr);
+  CHECK(c.sqref == "C5:C7" && c.type == "dataBar");
+  CHECK(c.xml.find("{00000000-0000-4000-8000-000000000009}") == std::string::npos);
+  const size_t at = c.xml.find("<x14:id>");
+  CHECK(at != std::string::npos && c.ext.find(c.xml.substr(at + 8, 38)) != std::string::npos);
+  const data::CfRule e = data::CopyCfRule(data::ExpressionRule("A1", "$A1>B1", 0), "B2", move, nullptr);
+  CHECK(e.xml.find("<formula>M($A1&gt;B1)</formula>") != std::string::npos);
+  data::Validation v;
+  v.type = data::Validation::Type::Decimal;
+  v.f1 = "A1";
+  v.f2 = "\"x\"";
+  v.sqref = "A1";
+  v.xml = "<dataValidation/>";
+  const data::Validation w = data::CopyValidation(v, "D4", move, nullptr);
+  CHECK(w.sqref == "D4" && w.f1 == "M(A1)" && w.f2 == "M(\"x\")" && w.xml.empty());
+}
+
 // Measured on Excel 2021 (Validation.Value): a typed list "Red; Green; Blue;10".
 TEST(SheetRules_ListMatch) {
   data::Validation v;
