@@ -366,4 +366,10 @@ enum Cmd : int {
   CmdProtectSheet = 2900,  // Protect Sheet, or Unprotect Sheet on a protected one
   CmdProtectWorkbook,      // Protect Workbook (its structure), or Unprotect Workbook
   // Links: the app's CmdInsertLink (Ctrl+K) and CmdRemoveLink.
+
+  // Defined names (S3, s3-calc): 2970-2999.
+  CmdNameManager = 2970,  // Ctrl+F3
+  CmdDefineName,
+  CmdCreateNames,         // Ctrl+Shift+F3
+  CmdPasteNames,          // F3
 };

@@ -68,7 +68,7 @@ void WorkbookView::SizePanel::Open(bool rows) {
 
 WorkbookView::GoToPanel::GoToPanel(WorkbookView& view) : v_(view) {
   ref_.label = L"Reference";
-  ref_.tooltip = L"A cell (B12), a range (A1:C5), another sheet's (Sheet2!A1) or a name";
+  ref_.tooltip = L"A cell (B12), a range (A1:C5), another sheet's (Sheet2!A1) or a name; a new name names the selection";
   ref_.onEnter = [this] {
     if (v_.GoTo(ref_.Text())) {
       note_.clear();
@@ -346,7 +346,7 @@ bool WorkbookView::GoTo(const std::wstring& typed) {
     }
   const std::wstring f = L"=" + text;
   const std::vector<calc::RefSpan> spans = calc::ReferenceSpans(f, Region());
-  if (spans.size() != 1 || spans[0].begin != 1 || spans[0].end != f.size()) return false;
+  if (spans.size() != 1 || spans[0].begin != 1 || spans[0].end != f.size()) return DefineFromNameBox(text);
   const calc::RefSpan& s = spans[0];
   size_t target = sheet_;
   if (!s.sheet.empty()) {

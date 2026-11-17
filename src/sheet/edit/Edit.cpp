@@ -294,25 +294,57 @@ struct Step {
   BookSave book;
   bool bookDirty = false;
   std::vector<InChange> changes;
-  // Package parts a structural edit rewrote (drawings, charts, notes, tables, pivot caches), as they were.
-  std::vector<std::pair<std::string, std::vector<uint8_t>>> parts;
+  // Package parts the step rewrote, added or removed (drawings, charts, notes, tables...), as they
+  // were; the content types and the relationship sets (by source; none: it had none) likewise.
+  struct PartWas {
+    std::string name;
+    bool existed = false;
+    std::vector<uint8_t> bytes;
+  };
+  std::vector<PartWas> parts;
+  std::optional<pkg::ContentTypes> types;
+  std::vector<std::pair<std::string, std::optional<pkg::RelationshipSet>>> rels;
   uint64_t serial = 0;
 
   bool Empty() const {
-    return sheets.empty() && !book.sheets && !book.names && !book.active && changes.empty() && parts.empty();
+    return sheets.empty() && !book.sheets && !book.names && !book.active && changes.empty() && parts.empty() &&
+           !types && rels.empty();
   }
 
   // Undo or redo: everything back the other way.
   void Swap(Workbook& b) {
     for (auto it = sheets.rbegin(); it != sheets.rend(); ++it) it->Swap();
     book.Swap(b);
-    if (pkg::Package* package = b.GetPackage())
-      for (auto& [part, bytes] : parts) {
-        std::vector<uint8_t> now;
-        package->ReadPart(part, now);
-        package->SetPart(part, std::move(bytes));
-        bytes = std::move(now);
+    pkg::Package* package = b.GetPackage();
+    if (!package) return;
+    // Relationships first: one put back may add its content type, which the types then settle.
+    for (auto& [source, set] : rels) {
+      std::optional<pkg::RelationshipSet> now;
+      if (const pkg::RelationshipSet* r = package->RelationshipsOf(source)) now = *r;
+      if (set) {
+        package->SetRelationships(*set);
+      } else if (now) {
+        pkg::RelationshipSet none = *now;
+        none.items.clear();
+        package->SetRelationships(none);
+        package->DeletePart(none.relsPart);
       }
+      set = std::move(now);
+    }
+    if (types) {
+      pkg::ContentTypes now = package->Types();
+      package->SetContentTypes(std::move(*types));
+      types = std::move(now);
+    }
+    for (PartWas& p : parts) {
+      const bool exists = package->FindPart(p.name) != nullptr;
+      std::vector<uint8_t> now;
+      if (exists) package->ReadPart(p.name, now);
+      if (p.existed) package->SetPart(p.name, std::move(p.bytes));
+      else if (exists) package->DeletePart(p.name);
+      p.existed = exists;
+      p.bytes = std::move(now);
+    }
   }
 
   void Absorb(Step&& later) {
@@ -325,8 +357,12 @@ struct Step {
     bookDirty = bookDirty || later.bookDirty;
     for (auto& c : later.changes) changes.push_back(std::move(c));
     for (auto& p : later.parts)
-      if (std::none_of(parts.begin(), parts.end(), [&](const auto& x) { return x.first == p.first; }))
+      if (std::none_of(parts.begin(), parts.end(), [&](const PartWas& x) { return x.name == p.name; }))
         parts.push_back(std::move(p));
+    if (!types) types = std::move(later.types);
+    for (auto& r : later.rels)
+      if (std::none_of(rels.begin(), rels.end(), [&](const auto& x) { return x.first == r.first; }))
+        rels.push_back(std::move(r));
   }
 };
 
@@ -588,13 +624,30 @@ struct Editor::State {
   void SetPart(const std::string& name, std::string bytes) {
     pkg::Package* package = b.GetPackage();
     if (!package) return;
-    Step& st = Cur();
-    if (std::none_of(st.parts.begin(), st.parts.end(), [&](const auto& x) { return x.first == name; })) {
-      std::vector<uint8_t> old;
-      package->ReadPart(name, old);
-      st.parts.push_back({name, std::move(old)});
-    }
+    KeepPart(name);
     package->SetPart(name, std::vector<uint8_t>(bytes.begin(), bytes.end()));
+  }
+  // The step keeps a part (whether it was there, and its bytes), the content types, a source's
+  // relationships, as they were before its first change.
+  void KeepPart(const std::string& name) {
+    Step& st = Cur();
+    if (std::any_of(st.parts.begin(), st.parts.end(), [&](const Step::PartWas& x) { return x.name == name; })) return;
+    Step::PartWas was;
+    was.name = name;
+    was.existed = b.GetPackage()->FindPart(name) != nullptr;
+    if (was.existed) b.GetPackage()->ReadPart(name, was.bytes);
+    st.parts.push_back(std::move(was));
+  }
+  void KeepTypes() {
+    Step& st = Cur();
+    if (!st.types) st.types = b.GetPackage()->Types();
+  }
+  void KeepRels(const std::string& source) {
+    Step& st = Cur();
+    if (std::any_of(st.rels.begin(), st.rels.end(), [&](const auto& x) { return x.first == source; })) return;
+    std::optional<pkg::RelationshipSet> was;
+    if (const pkg::RelationshipSet* r = b.GetPackage()->RelationshipsOf(source)) was = *r;
+    st.rels.push_back({source, std::move(was)});
   }
 
   void SaveBook(bool sheets, bool names) {
@@ -3316,6 +3369,134 @@ void Editor::RewriteSheetRefs(int skip, const std::function<std::string(std::str
     else if (!from.empty() && ct == "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml")
       edit(part.name, [&](std::string& xml) { return refs::RenamePivotSource(xml, from, to); });
   }
+}
+
+// ---- Package parts
+
+namespace {
+
+// `target` as a relationship from `source` names it: relative to the source's folder, as Excel
+// writes them ("../drawings/drawing1.xml"); from the package ("/"), without the leading slash.
+std::string RelativeTarget(std::string_view source, std::string_view target) {
+  auto split = [](std::string_view s) {
+    std::vector<std::string_view> out;
+    for (size_t at = 0; at < s.size();) {
+      size_t slash = s.find('/', at);
+      if (slash == std::string_view::npos) slash = s.size();
+      if (slash > at) out.push_back(s.substr(at, slash - at));
+      at = slash + 1;
+    }
+    return out;
+  };
+  std::vector<std::string_view> from = split(source), to = split(target);
+  if (!from.empty()) from.pop_back();  // the source's own name
+  size_t common = 0;
+  while (common < from.size() && common + 1 < to.size() && from[common] == to[common]) ++common;
+  std::string out;
+  for (size_t i = common; i < from.size(); ++i) out += "../";
+  for (size_t i = common; i < to.size(); ++i) {
+    out += to[i];
+    if (i + 1 < to.size()) out += '/';
+  }
+  return out;
+}
+
+}  // namespace
+
+std::string Editor::AddPart(std::string_view source, std::string_view relType, std::string_view name,
+                            std::string_view contentType, std::string bytes) {
+  State& st = *s_;
+  pkg::Package* package = book_.GetPackage();
+  if (st.open.empty() || !package || name.empty() || name[0] != '/' || package->FindPart(name)) return {};
+  if (source != "/" && !package->FindPart(source)) return {};
+  const std::string part(name), from(source);
+  st.KeepPart(part);
+  st.KeepTypes();
+  st.KeepRels(from);
+  package->SetPart(part, std::vector<uint8_t>(bytes.begin(), bytes.end()));
+  if (package->ContentTypeOf(part) != contentType) {
+    pkg::ContentTypes types = package->Types();
+    auto& o = types.overrides;
+    o.erase(std::remove_if(o.begin(), o.end(), [&](const auto& x) { return x.first == part; }), o.end());
+    o.emplace_back(part, std::string(contentType));
+    package->SetContentTypes(std::move(types));
+  }
+  pkg::RelationshipSet set;
+  if (const pkg::RelationshipSet* r = package->RelationshipsOf(from)) set = *r;
+  else set.source = from;
+  std::string id;
+  for (size_t n = set.items.size() + 1;; ++n) {
+    id = "rId" + std::to_string(n);
+    if (std::none_of(set.items.begin(), set.items.end(), [&](const pkg::Relationship& x) { return x.id == id; })) break;
+  }
+  pkg::Relationship rel;
+  rel.id = id;
+  rel.type = std::string(relType);
+  rel.target = RelativeTarget(from, part);
+  set.items.push_back(std::move(rel));
+  package->SetRelationships(std::move(set));
+  return id;
+}
+
+bool Editor::WritePart(std::string_view name, std::string bytes) {
+  State& st = *s_;
+  pkg::Package* package = book_.GetPackage();
+  if (st.open.empty() || !package || !package->FindPart(name)) return false;
+  st.SetPart(std::string(name), std::move(bytes));
+  return true;
+}
+
+bool Editor::RemovePart(std::string_view name) {
+  State& st = *s_;
+  pkg::Package* package = book_.GetPackage();
+  if (st.open.empty() || !package || !package->FindPart(name)) return false;
+  const std::string part(name);
+  // Relationships to it, from anywhere.
+  std::vector<pkg::RelationshipSet> sets;
+  for (const pkg::RelationshipSet& set : package->Relationships())
+    if (std::any_of(set.items.begin(), set.items.end(),
+                    [&](const pkg::Relationship& r) { return !r.external && NameEqualsNoCase(r.targetPart, part); }))
+      sets.push_back(set);
+  for (pkg::RelationshipSet& set : sets) {
+    st.KeepRels(set.source);
+    auto& items = set.items;
+    items.erase(std::remove_if(items.begin(), items.end(),
+                               [&](const pkg::Relationship& r) { return !r.external && NameEqualsNoCase(r.targetPart, part); }),
+                items.end());
+    package->SetRelationships(std::move(set));
+  }
+  // Its own relationships.
+  if (const pkg::RelationshipSet* own = package->RelationshipsOf(part)) {
+    st.KeepRels(part);
+    pkg::RelationshipSet none = *own;
+    none.items.clear();
+    package->SetRelationships(none);
+    package->DeletePart(none.relsPart);
+  }
+  st.KeepTypes();
+  pkg::ContentTypes types = package->Types();
+  auto& o = types.overrides;
+  const size_t before = o.size();
+  o.erase(std::remove_if(o.begin(), o.end(), [&](const auto& x) { return NameEqualsNoCase(x.first, part); }), o.end());
+  if (o.size() != before) package->SetContentTypes(std::move(types));
+  st.KeepPart(part);
+  package->DeletePart(part);
+  return true;
+}
+
+std::string Editor::NewPartName(std::string_view stem, std::string_view ext) const {
+  const pkg::Package* package = book_.GetPackage();
+  for (size_t n = 1;; ++n) {
+    std::string name = std::string(stem) + std::to_string(n) + std::string(ext);
+    if (!package || !package->FindPart(name)) return name;
+  }
+}
+
+std::string Editor::PartBytes(std::string_view name) const {
+  const pkg::Package* package = book_.GetPackage();
+  std::vector<uint8_t> bytes;
+  if (!package || !package->ReadPart(name, bytes).Ok()) return {};
+  return std::string(bytes.begin(), bytes.end());
 }
 
 // ---- Cut and paste
