@@ -76,6 +76,12 @@ class PrintLayout {
   // lays a scaled page out in the font at its scaled size: a column is as many of that font's
   // digits wide as on screen (Calibri 11 at 84 % is 77 dots, with digits of 39).
   float ColPt(uint32_t col, float scale);
+  float PxPt(double px, float scale);  // the same for a column `px` Excel pixels wide
+  // Headings (row numbers and column letters) as Excel prints them: boxed by 1 pt lines, the first
+  // of them inside the margins. The row numbers' column is as wide as a column of three digits
+  // (more for rows past 999); the letters' row is a default row. Points at 100 %.
+  float HeadingsWidth(uint32_t lastRow, float scale);
+  float HeadingsHeight() const;
   float ColsAt(uint32_t first, uint32_t last, float scale);
   float RowsHeight(uint32_t first, uint32_t last) const;
   // The last column text in `used` runs into, past its last column too: Excel prints that text.
