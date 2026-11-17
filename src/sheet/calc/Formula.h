@@ -73,6 +73,15 @@ class RefMap {
   enum Abs : uint8_t { kRow1 = 1, kCol1 = 2, kRow2 = 4, kCol2 = 8 };
   virtual bool Map(int sheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t abs, bool wholeRows,
                    bool wholeCols) const = 0;
+  // Map, and the sheet the reference is on after the edit (a cut pasted onto another sheet takes
+  // references to its cells there): `toSheet` starts as `sheet`. Moved to another sheet, the
+  // reference is printed with that sheet's name (quoted as needed), except one without a name that
+  // lands on the printed formula's own sheet, as Excel writes them.
+  virtual bool MapTo(int sheet, int& toSheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t abs,
+                     bool wholeRows, bool wholeCols) const {
+    (void)toSheet;
+    return Map(sheet, r1, c1, r2, c2, abs, wholeRows, wholeCols);
+  }
   // A sheet prefix's sheets (first and last; the same for one sheet): changed, or false when it's
   // gone (#REF!A1).
   virtual bool MapSheets(int& s1, int& s2) const {
@@ -88,6 +97,9 @@ struct PrintOptions {
   // formula, as Excel makes it), not wrapped around to the other side (a shared formula).
   bool offSheetRef = false;
   const RefMap* map = nullptr;
+  // With a map: the sheet references without a sheet name are on (the formula's sheet before it
+  // moved to another sheet); -1: the printed cell's.
+  int homeSheet = -1;
 };
 
 // The formula as text, without "=", for the cell `at` (a shared formula prints per cell).

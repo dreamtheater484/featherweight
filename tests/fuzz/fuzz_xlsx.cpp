@@ -260,7 +260,34 @@ void EditOnce(Editor& ed, const Workbook& book, Rng& rng, int& groups, bool hadS
     }
   };
   const Styles& styles = book.GetStyles();
-  switch (rng.Below(24)) {
+  switch (rng.Below(26)) {
+    case 24: {  // cut and paste
+      const Range from = range();
+      ed.MoveCells(sheet, from, CellAddr{row(), col()});
+      break;
+    }
+    case 25: {
+      if (rng.Chance(30)) {
+        ed.SetFilter(sheet, std::nullopt);
+        break;
+      }
+      SheetFilter f;
+      f.ref = range();
+      if (rng.Chance(60)) {
+        FilterColumn c;
+        c.colId = rng.Below(f.ref.lastCol - f.ref.firstCol + 1);
+        c.kind = static_cast<FilterColumn::Kind>(rng.Below(5));
+        c.values = {"t" + std::to_string(rng.Below(9))};
+        c.blank = rng.Chance(50);
+        c.conditions = {{rng.Chance(50) ? "greaterThan" : "equal", std::to_string(rng.Below(100))}};
+        c.both = rng.Chance(50);
+        c.count = 1 + rng.Below(20);
+        c.percent = rng.Chance(30);
+        f.columns.push_back(std::move(c));
+      }
+      ed.SetFilter(sheet, f);
+      break;
+    }
     case 0:
     case 1: ed.SetCell(sheet, row(), col(), input()); break;
     case 2: {

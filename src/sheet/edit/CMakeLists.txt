@@ -2,7 +2,7 @@
 # blocks, transactions, undo and redo. The only code that changes a loaded workbook model.
 target_sources(fwsheet PRIVATE Edit.cpp Journal.cpp Refs.cpp)
 # Run once per edit or save, never per cell: compiled for size (the S2 size budget).
-set_source_files_properties(Journal.cpp Refs.cpp TARGET_DIRECTORY fwsheet PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
+set_source_files_properties(Edit.cpp Journal.cpp Refs.cpp TARGET_DIRECTORY fwsheet PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_edit.cpp"
                                   "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_save.cpp"

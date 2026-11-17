@@ -526,3 +526,89 @@ TEST(sheet_typing_build_from_scratch) {
   set(11, 1, 14, 3, SumCell::kNumber);
   CHECK_EQ(ProposeAutoSum(16, 3, at2).formula, std::string("=SUM(D12:D16)"));
 }
+
+namespace {
+
+// A cut of `cut` on sheet 0 pasted with its top left at (sheet `to`, +3 rows, +3 columns), as
+// s2-model's MoveCells maps it: references wholly inside the cut cells go along (whole rows and
+// columns stay), references to pasted-over cells on `to` are #REF!. `was` and `now` are the printed
+// formula's cell before and after (relative parts are offsets from them).
+class CutMap : public RefMap {
+ public:
+  int to = 1;
+  CompileOptions was, now;
+  static constexpr int32_t kR1 = 0, kC1 = 0, kR2 = 1, kC2 = 1, kDr = 3, kDc = 3;
+  bool MapTo(int sheet, int& toSheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t abs, bool wholeRows,
+             bool wholeCols) const override {
+    int64_t R1 = (abs & kRow1) ? r1 : int64_t{was.row} + r1, R2 = (abs & kRow2) ? r2 : int64_t{was.row} + r2;
+    int64_t C1 = (abs & kCol1) ? c1 : int64_t{was.col} + c1, C2 = (abs & kCol2) ? c2 : int64_t{was.col} + c2;
+    const bool cells = !wholeRows && !wholeCols;
+    if (cells && sheet == 0 && R1 >= kR1 && R2 <= kR2 && C1 >= kC1 && C2 <= kC2) {
+      R1 += kDr, R2 += kDr, C1 += kDc, C2 += kDc;
+      toSheet = to;
+    } else if (cells && sheet == to && R1 >= kR1 + kDr && R2 <= kR2 + kDr && C1 >= kC1 + kDc && C2 <= kC2 + kDc) {
+      return false;
+    }
+    r1 = static_cast<int32_t>((abs & kRow1) ? R1 : R1 - now.row);
+    r2 = static_cast<int32_t>((abs & kRow2) ? R2 : R2 - now.row);
+    c1 = static_cast<int32_t>((abs & kCol1) ? C1 : C1 - now.col);
+    c2 = static_cast<int32_t>((abs & kCol2) ? C2 : C2 - now.col);
+    return true;
+  }
+  bool Map(int sheet, int32_t& r1, int32_t& c1, int32_t& r2, int32_t& c2, uint8_t abs, bool wholeRows,
+           bool wholeCols) const override {
+    int t = sheet;
+    return MapTo(sheet, t, r1, c1, r2, c2, abs, wholeRows, wholeCols);
+  }
+};
+
+}  // namespace
+
+TEST(sheet_typing_cut_to_another_sheet) {
+  // Excel 2021 (scratchpad cut_probe.py): Sheet1!A1:B2 cut and pasted onto Sheet2!D4, then onto
+  // 'My Sheet'!D4. References to the moved cells, from every sheet, follow to the new sheet with its
+  // name (quoted as needed); a reference that had a sheet name keeps one even on its own sheet; a
+  // moved formula's references to cells left behind get their sheet's name.
+  struct Case {
+    int sheet, row, col;  // the formula's cell before
+    const char* formula;
+    const char* after[2];  // pasted onto Sheet2, onto 'My Sheet'
+  };
+  const Case cases[] = {
+      {0, 0, 4, "A1", {"Sheet2!D4", "'My Sheet'!D4"}},
+      {0, 1, 4, "SUM(A1:B2)", {"SUM(Sheet2!D4:E5)", "SUM('My Sheet'!D4:E5)"}},
+      {0, 2, 4, "SUM(A1:C3)", {"SUM(A1:C3)", "SUM(A1:C3)"}},
+      {0, 3, 4, "SUM(A1:A2)", {"SUM(Sheet2!D4:D5)", "SUM('My Sheet'!D4:D5)"}},
+      {0, 4, 4, "$B$2*2", {"Sheet2!$E$5*2", "'My Sheet'!$E$5*2"}},
+      {0, 5, 4, "SUM(A:A)", {"SUM(A:A)", "SUM(A:A)"}},
+      {0, 1, 1, "A1+C1+Sheet2!Z1", {"D4+Sheet1!C1+Sheet2!Z1", "D4+Sheet1!C1+Sheet2!Z1"}},  // moved to E5
+      {0, 0, 1, "A2*2", {"D5*2", "D5*2"}},                                                 // moved to E4
+      {1, 0, 0, "Sheet1!A1", {"Sheet2!D4", "'My Sheet'!D4"}},
+      {1, 1, 0, "SUM(Sheet1!A1:B2)", {"SUM(Sheet2!D4:E5)", "SUM('My Sheet'!D4:E5)"}},
+      {1, 2, 0, "D4+E5", {"#REF!+#REF!", "D4+E5"}},
+      {1, 3, 0, "SUM(Sheet1:Sheet2!A1)", {"SUM(Sheet1:Sheet2!A1)", "SUM(Sheet1:Sheet2!A1)"}},
+      {1, 4, 0, "Sheet1!C3", {"Sheet1!C3", "Sheet1!C3"}},
+      {2, 0, 0, "Sheet1!A1", {"Sheet2!D4", "'My Sheet'!D4"}},
+      {2, 1, 0, "Sheet1!A2:B2", {"Sheet2!D5:E5", "'My Sheet'!D5:E5"}},
+  };
+  EntryNames names;
+  for (int t = 0; t < 2; ++t) {
+    CutMap map;
+    map.to = t + 1;
+    for (const Case& k : cases) {
+      map.was.sheet = k.sheet, map.was.row = k.row, map.was.col = k.col;
+      map.now = map.was;
+      if (k.sheet == 0 && k.row <= CutMap::kR2 && k.col <= CutMap::kC2) {
+        map.now.sheet = map.to;
+        map.now.row += CutMap::kDr, map.now.col += CutMap::kDc;
+      }
+      auto f = Compile(k.formula, map.was, names);
+      CHECK(f != nullptr);
+      if (!f) continue;
+      PrintOptions how;
+      how.map = &map;
+      how.homeSheet = map.was.sheet;
+      CHECK_EQ(Print(*f, map.now, names, how), std::string(k.after[t]));
+    }
+  }
+}

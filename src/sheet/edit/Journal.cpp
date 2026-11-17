@@ -416,7 +416,8 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         const Range from = f.R();
         const CellAddr to = f.A();
         std::u16string name = f.S16();
-        if (f.Ok()) r = MoveCells(sheet, from, to, std::move(name));
+        const int toSheet = f.AtEnd() ? sheet : f.Int();  // the same sheet in the first records
+        if (f.Ok()) r = MoveCells(sheet, from, toSheet, to, std::move(name));
         break;
       }
       case JournalOp::SetFilter: {

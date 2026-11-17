@@ -515,18 +515,24 @@ std::string BorderXml(const Border& b) {
 constexpr std::string_view kHAlign[] = {"general", "left", "center", "right", "fill", "justify", "centerContinuous", "distributed"};
 constexpr std::string_view kVAlign[] = {"bottom", "top", "center", "justify", "distributed"};
 
-std::string XfXml(const Xf& x) {
+// A cell format (cellXfs: apply flags written when set), or a cell style's (cellStyleXfs, `style`:
+// no xfId, and the flags written as Excel does, "0" for each part the style leaves out, since a
+// missing one there means included).
+std::string XfXml(const Xf& x, bool style = false) {
   std::string out = "<xf" + AttrXml("numFmtId", std::to_string(x.numFmt)) + AttrXml("fontId", std::to_string(x.font)) +
-                    AttrXml("fillId", std::to_string(x.fill)) + AttrXml("borderId", std::to_string(x.border)) +
-                    AttrXml("xfId", std::to_string(x.parent));
+                    AttrXml("fillId", std::to_string(x.fill)) + AttrXml("borderId", std::to_string(x.border));
+  if (!style) out += AttrXml("xfId", std::to_string(x.parent));
   if (x.quotePrefix) out += AttrXml("quotePrefix", "1");
   if (x.pivotButton) out += AttrXml("pivotButton", "1");
-  if (x.applyNumFmt) out += AttrXml("applyNumberFormat", "1");
-  if (x.applyFont) out += AttrXml("applyFont", "1");
-  if (x.applyFill) out += AttrXml("applyFill", "1");
-  if (x.applyBorder) out += AttrXml("applyBorder", "1");
-  if (x.applyAlignment) out += AttrXml("applyAlignment", "1");
-  if (x.applyProtection) out += AttrXml("applyProtection", "1");
+  auto flag = [&](const char* name, bool on) {
+    if (on != style) out += AttrXml(name, on ? "1" : "0");
+  };
+  flag("applyNumberFormat", x.applyNumFmt);
+  flag("applyFont", x.applyFont);
+  flag("applyFill", x.applyFill);
+  flag("applyBorder", x.applyBorder);
+  flag("applyAlignment", x.applyAlignment);
+  flag("applyProtection", x.applyProtection);
   const Alignment& a = x.alignment;
   std::string align;
   if (a.horizontal != HAlign::General) align += AttrXml("horizontal", kHAlign[static_cast<size_t>(a.horizontal)]);
@@ -548,13 +554,8 @@ std::string XfXml(const Xf& x) {
   return out + "</xf>";
 }
 
-// A cell style's format: as a cell's, without the parent cellStyleXfs entries don't have.
-std::string StyleXfXml(const Xf& x) {
-  std::string out = XfXml(x);
-  const size_t at = out.find(" xfId=\"");
-  if (at != std::string::npos) out.erase(at, out.find('"', at + 7) + 1 - at);
-  return out;
-}
+// A cell style's format (a cellStyleXfs entry).
+std::string StyleXfXml(const Xf& x) { return XfXml(x, true); }
 
 std::string CellStyleXml(const CellStyle& s) {
   std::string out = "<cellStyle" + AttrXml("name", s.name) + AttrXml("xfId", std::to_string(s.xf));
@@ -638,7 +639,7 @@ Status StylesPart(const Workbook& book, std::vector<uint8_t>& out) {
   if (!AppendNew(root, "fonts", "font", s.Fonts(), FontXml, p) ||
       !AppendNew(root, "fills", "fill", s.Fills(), FillXml, p) ||
       !AppendNew(root, "borders", "border", s.Borders(), BorderXml, p) ||
-      !AppendNew(root, "cellXfs", "xf", s.CellXfs(), XfXml, p))
+      !AppendNew(root, "cellXfs", "xf", s.CellXfs(), [](const Xf& x) { return XfXml(x); }, p))
     return Status::Fail(Status::Code::Unsupported, "The workbook's styles can't take the new formats.");
   // Cell styles added (Editor::AddCellStyle): their lists made where the schema puts them when the
   // file has none (cellStyleXfs before cellXfs, cellStyles after).
