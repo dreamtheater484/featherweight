@@ -259,8 +259,7 @@ void WorkbookView::SheetsChanged() {
   rules_.clear();
   rules_.resize(n);
   rulesRead_.assign(n, false);
-  calc_.reset();
-  recalc_ = true;
+  // The engine read every formula again on the change (SyncEngine: StructureEdited).
   loadNext_ = 0;
   if (shown == SIZE_MAX) {  // the shown sheet was deleted: the next one, as in Excel
     shown = std::min(sheet_, n - 1);

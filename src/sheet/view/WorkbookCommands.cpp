@@ -794,7 +794,8 @@ bool WorkbookView::HasIdleWork() const {
   if (!searchDone_) return true;
   for (size_t i = loadNext_; i < book_->SheetCount(); ++i)
     if (!book_->GetSheet(i).Loaded()) return true;
-  return recalc_ && (!calc_ || calc_->Opening());  // then nothing: no idle CPU
+  // Then what edits left dirty (not in manual mode); then nothing: no idle CPU.
+  return recalc_ && (!calc_ || calc_->Opening() || (calc_->Calculating() && !calc_->ManualCalc()));
 }
 
 bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
@@ -811,10 +812,11 @@ bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   }
   // Then what Excel recalculates when it opens the file, a slice at a time (plan §7.3 "Cached
   // values"); the cached values show until then.
-  if (!recalc_ || (calc_ && !calc_->Opening())) return false;
+  if (!recalc_ || (calc_ && !calc_->Opening() && (!calc_->Calculating() || calc_->ManualCalc()))) return false;
   calc::WorkbookCalc& calc = Calc();
   const uint64_t before = calc.Changes();
-  const bool done = calc.OpenStep(std::max(1.0, deadlineMs - anim::Now()));
+  const double budget = std::max(1.0, deadlineMs - anim::Now());
+  const bool done = calc.Opening() ? calc.OpenStep(budget) : calc.CalcStep(budget);
   const bool changed = calc.Changes() != before;
   if (!changed && !done) return false;
   if (changed) {

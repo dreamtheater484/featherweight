@@ -668,49 +668,23 @@ void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
   host_.ViewInvalidate();
 }
 
-// The engine's formulas follow the edit and what depends on it is recalculated. A stand-in until
-// s2-calc's incremental recalculation (its step 3) takes the edit API's changes itself.
+// The engine follows the edit (s2-calc's incremental recalculation): what the edit dirtied is
+// recalculated at idle, a slice at a time (WorkbookView::IdleWork).
 void WorkbookView::SyncEngine(const std::vector<edit::Change>& changes) {
-  bool any = false;
-  for (const edit::Change& c : changes) any |= (c.what & (edit::kValues | edit::kFormulas)) != 0;
-  if (!any) return;
-  if (!calc_ || calc_->Opening()) {
-    // The pass Excel makes after opening starts again from the sheets as they are now: one
-    // already under way holds the formulas as they were, and would store their results over
-    // what was just typed.
-    calc_.reset();
-    recalc_ = true;
+  bool structure = false, cells = false;
+  for (const edit::Change& c : changes) {
+    structure |= (c.what & (edit::kSheets | edit::kNames | edit::kShift)) != 0;
+    cells |= (c.what & (edit::kValues | edit::kFormulas)) != 0;
+  }
+  if (!structure && !cells) return;
+  calc::WorkbookCalc& calc = Calc();
+  recalc_ = true;
+  if (structure) {
+    calc.StructureEdited();
     return;
   }
-  calc::Engine& e = calc_->engine();
-  for (const edit::Change& c : changes) {
-    if (!(c.what & (edit::kValues | edit::kFormulas)) || c.sheet < 0 || static_cast<size_t>(c.sheet) >= book_->SheetCount())
-      continue;
-    const Sheet& s = book_->GetSheet(static_cast<size_t>(c.sheet));
-    const Range& r = c.cells;
-    if ((c.what & edit::kFormulas) && uint64_t{r.lastRow - r.firstRow + 1} * (r.lastCol - r.firstCol + 1) <= 200000) {
-      for (uint32_t row = r.firstRow; row <= r.lastRow; ++row)
-        for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
-          const calc::Cell cell{c.sheet, static_cast<int32_t>(row), static_cast<int32_t>(col)};
-          FormulaInfo f;
-          if (s.GetFormula(row, col, f)) {
-            // A shared formula's text is its first cell's: compiled there, it reads the same here.
-            const calc::Cell origin{c.sheet, static_cast<int32_t>(f.origin.row), static_cast<int32_t>(f.origin.col)};
-            if (auto compiled = e.CompileAt(f.text, origin)) e.SetFormula(cell, compiled, false);
-          } else if (e.HasFormula(cell.sheet, cell.row, cell.col)) {
-            e.ClearFormula(cell);
-          }
-        }
-    }
-    calc::Area a;
-    a.r1 = static_cast<int32_t>(r.firstRow);
-    a.r2 = static_cast<int32_t>(r.lastRow);
-    a.c1 = static_cast<int16_t>(r.firstCol);
-    a.c2 = static_cast<int16_t>(r.lastCol);
-    a.s1 = a.s2 = static_cast<uint16_t>(c.sheet);
-    e.Changed(c.sheet, a);
-  }
-  e.Recalculate();
+  for (const edit::Change& c : changes)
+    if (c.what & (edit::kValues | edit::kFormulas)) calc.CellsEdited(c.sheet, c.cells);
 }
 
 void WorkbookView::MoveAfterEntry(int dRow, int dCol) {
