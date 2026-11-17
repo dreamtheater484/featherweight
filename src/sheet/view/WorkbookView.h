@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "PagedView.h"
+#include "sheet/calc/Bind.h"
+#include "sheet/condfmt/CondFormat.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/view/CellPaint.h"
 #include "sheet/view/CellText.h"
@@ -286,6 +288,13 @@ class WorkbookView : public PagedView {
   void PlaceObjects();
   void DrawNote(ID2D1DeviceContext* dc);
   std::optional<CellAddr> note_;  // the cell whose note shows while the mouse is over it
+
+  // Conditional formats: each sheet's rules, made when it is first painted if it has any, with the
+  // formula engine they need for theirs (loaded for the first such sheet, and only then).
+  condfmt::SheetRules* RulesFor(size_t index);
+  std::unique_ptr<calc::WorkbookCalc> calc_;
+  std::vector<std::unique_ptr<condfmt::SheetRules>> rules_;
+  std::vector<bool> rulesRead_;
 };
 
 }  // namespace fw::sheet::view

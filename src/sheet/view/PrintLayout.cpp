@@ -466,6 +466,7 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   o.gridlines = ps.gridLines;
   o.gridColor = 0xFF000000;
   o.errors = ps.errors;
+  o.rules = info_.rules;
 
   // Text wraps and shows "####" in the printed columns: wider than the screen's by the digit.
   const float widthScale = static_cast<float>(digits_[static_cast<int>(std::lround(scale_ * 100))] * Grid::kPrintDotPt /

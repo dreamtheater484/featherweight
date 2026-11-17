@@ -9,6 +9,10 @@
 #include "sheet/view/CellText.h"
 #include "sheet/view/Grid.h"
 
+namespace fw::sheet::condfmt {
+class SheetRules;
+}
+
 // Drawing cells through draw::Painter (plan §4.5): the same code draws the screen, printed pages
 // and print preview, so they look alike.
 namespace fw::sheet::view {
@@ -46,6 +50,9 @@ struct PaintOptions {
   uint32_t gridColor = 0xFFD9D9D9;  // ARGB
   bool showZeros = true;
   PrintErrors errors = PrintErrors::Displayed;  // printing: how error values print
+  // Conditional formats over the cells' own formats (null: none); table styles under them.
+  condfmt::SheetRules* rules = nullptr;
+  bool tables = true;
 };
 
 

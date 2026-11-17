@@ -40,6 +40,7 @@ struct PrintInfo {
   // What sits on the sheet (pictures, shapes, charts, a chart sheet's chart): an instance of the
   // caller's own for printing, which the layout places on its printed columns and rows. May be null.
   SheetObjects* objects = nullptr;
+  condfmt::SheetRules* rules = nullptr;  // the sheet's conditional formats; null: none
 };
 
 class PrintLayout {

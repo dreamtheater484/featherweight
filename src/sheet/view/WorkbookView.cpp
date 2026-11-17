@@ -97,6 +97,9 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
   states_.assign(book_->SheetCount(), PerSheet{});
   objects_.clear();
   objects_.resize(book_->SheetCount());
+  rules_.clear();
+  rules_.resize(book_->SheetCount());
+  rulesRead_.assign(book_->SheetCount(), false);
   size_t first = book_->ActiveSheet();
   if (first >= book_->SheetCount() || !SheetShown(first)) first = NextShownSheet(book_->SheetCount() - 1, 1);
   if (book_->SheetCount() == 0 || first >= book_->SheetCount() || !SheetShown(first)) {
@@ -181,6 +184,27 @@ class ScreenSheetLayout : public SheetLayout {
  private:
   const Grid& grid_;
 };
+
+condfmt::SheetRules* WorkbookView::RulesFor(size_t index) {
+  if (!book_ || index >= rules_.size()) return nullptr;
+  if (!rulesRead_[index]) {
+    rulesRead_[index] = true;
+    Sheet& sheet = book_->GetSheet(index);
+    if (!sheet.Loaded()) book_->LoadSheet(index);
+    if (sheet.KeptXml().find("conditionalFormatting") != std::string::npos) {
+      if (!calc_) {
+        calc_ = std::make_unique<calc::WorkbookCalc>(*book_, &text_->Locale());
+        calc_->Load();
+      }
+      condfmt::Options o;
+      o.locale = &text_->Locale();
+      o.calc = calc_.get();
+      rules_[index] = std::make_unique<condfmt::SheetRules>(*book_, index, o);
+      if (rules_[index]->Empty()) rules_[index].reset();
+    }
+  }
+  return rules_[index].get();
+}
 
 void WorkbookView::PlaceObjects() {
   if (SheetObjects* o = Objects()) o->Place(ScreenSheetLayout(grid_));
@@ -440,6 +464,7 @@ void WorkbookView::DrawGrid(Canvas& c, ID2D1DeviceContext* dc) {
   o.gridlines = gridlines_;
   o.gridColor = gridColor_;
   o.showZeros = showZeros_;
+  o.rules = RulesFor(sheet_);
   const double k = K();
   const float mirror = cells_.left + cells_.right;
   for (const Pane& pane : Panes()) {

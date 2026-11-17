@@ -93,7 +93,7 @@ std::wstring CellText::Text(const Sheet&, const CellInfo& cell) {
   return f.overflow ? std::wstring() : f.text;
 }
 
-void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out) {
+void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out, const NumberFormat* format) {
   out = Shown{};
   const Styles& st = book_.GetStyles();
   const Xf& xf = st.CellXf(cell.style);
@@ -112,11 +112,11 @@ void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out)
   switch (cell.value.type) {
     case ValueType::Empty: return;
     case ValueType::Number:
-      FormatOf(xf.numFmt).Format(cell.value.number, ctx, f);
+      (format ? *format : FormatOf(xf.numFmt)).Format(cell.value.number, ctx, f);
       out.number = true;
       break;
     case ValueType::String: {
-      const NumberFormat& nf = FormatOf(xf.numFmt);
+      const NumberFormat& nf = format ? *format : FormatOf(xf.numFmt);
       if (nf.IsGeneral()) f.text = Utf8ToWide(cell.value.text);
       else nf.Format(Utf8ToWide(cell.value.text), ctx, f);
       break;
@@ -155,7 +155,7 @@ void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out)
   }
 }
 
-const CellText::Layout& CellText::Get(const Sheet& sheet, const CellInfo& cell, int widthPx) {
+const CellText::Layout& CellText::Get(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look) {
   if (cacheSheet_ != &sheet) {
     cache_.clear();
     cacheSheet_ = &sheet;
@@ -164,19 +164,24 @@ const CellText::Layout& CellText::Get(const Sheet& sheet, const CellInfo& cell, 
   const uint64_t key = (static_cast<uint64_t>(cell.row) << 14) | cell.col;
   auto& slot = cache_[key];
   if (!slot) slot = std::make_unique<Layout>();
-  if (slot->widthPx != widthPx) Make(sheet, cell, widthPx, *slot);
+  if (slot->widthPx != widthPx || !(slot->look == look)) Make(sheet, cell, widthPx, look, *slot);
   return *slot;
 }
 
-void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, Layout& out) {
+void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look, Layout& out) {
   out = Layout{};
   out.widthPx = widthPx;
-  Show(sheet, cell, widthPx, out.shown);
+  out.look = look;
+  Show(sheet, cell, widthPx, out.shown, look.numFmt);
   const Styles& st = book_.GetStyles();
   const Xf& xf = st.CellXf(cell.style);
   const Alignment& al = xf.alignment;
   const Font& base = st.DefaultFont();
-  const Font& font = st.FontOf(xf);
+  Font font = st.FontOf(xf);
+  if (look.bold >= 0) font.bold = look.bold != 0;
+  if (look.italic >= 0) font.italic = look.italic != 0;
+  if (look.strike >= 0) font.strike = look.strike != 0;
+  if (look.underline >= 0) font.underline = static_cast<Underline>(look.underline);
   const Shown& shown = out.shown;
 
   out.align = al.horizontal;
@@ -200,7 +205,10 @@ void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, Layou
   auto runFor = [&](const Font& f, bool hidden) {
     Run r;
     r.color = st.Resolve(f.color, 0xFF000000);
+    // A table's font color, under the number format's ([Red]); a conditional format's, over it.
+    if (look.fontColor && !look.colorWins) r.color = look.fontColor;
     if (shown.color && !hidden) r.color = shown.color;
+    if (look.fontColor && look.colorWins) r.color = look.fontColor;
     r.hidden = hidden;
     r.underline = f.underline != Underline::None;
     r.doubleUnderline = f.underline == Underline::Double || f.underline == Underline::DoubleAccounting;
