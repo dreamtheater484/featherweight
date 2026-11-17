@@ -223,12 +223,21 @@ void Grid::Build(const Sheet& sheet, const Styles& styles, FontMeasure& measure)
     return need;
   };
 
+  // When no format can make a row taller (a bigger font, wrapped or turned text), rows without a
+  // height are the default's without looking at their cells: CSV files and most exports.
+  bool mayGrow = false;
+  for (uint32_t s = 0; s < styles.CellXfs().size() && !mayGrow; ++s) {
+    const Xf& xf = styles.CellXf(s);
+    mayGrow = xf.alignment.wrap || xf.alignment.rotation != 0 || styleHeight(s) > defaultRow_;
+  }
+
   rowsStored_.clear();
   rows_.clear();
   sheet.ForEachRow(0, kMaxRows - 1, [&](uint32_t row, const RowInfo& info) {
     int px = info.height > 0 ? static_cast<int>(std::lround(info.height * 96.0 / 72.0))
              : zero          ? 0
-                             : fitRow(row);
+             : mayGrow       ? fitRow(row)
+                             : defaultRow_;
     if (px != defaultRow_) rowsStored_.push_back({row, px});
     const int shown = info.hidden ? 0 : px;
     if (shown != (zero ? 0 : defaultRow_)) rows_.push_back({row, shown});

@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "PagedView.h"
+#include "sheet/calc/Bind.h"
+#include "sheet/condfmt/CondFormat.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/view/CellPaint.h"
 #include "sheet/view/CellText.h"
@@ -118,6 +120,7 @@ class WorkbookView : public PagedView {
   Sheet& Current() const { return book_->GetSheet(sheet_); }
   const fw::sheet::SheetView* ViewOf() const;  // the file's view of the sheet
   void LoadView();  // the sheet's view from the file: panes, zoom, selection
+  OpenResult Opened(std::unique_ptr<Workbook> book, std::wstring& error);  // the rest of loading, once the file is read
 
   // ---- Layout: the formula bar, the grid with its headers, the sheet tabs.
   void LayoutParts();
@@ -275,7 +278,24 @@ class WorkbookView : public PagedView {
   // Print preview and printing.
   bool preview_ = false;
   std::unique_ptr<PrintLayout> print_;
+  std::unique_ptr<SheetObjects> printObjects_;  // print_'s, placed on the printed columns
   std::vector<fw::PageSizePt> pageSizes_;
+
+  // Pictures, shapes, charts and notes (fwsheetobjects): each sheet's, read when first shown and
+  // placed on the screen's columns and rows.
+  std::vector<std::unique_ptr<SheetObjects>> objects_;
+  SheetObjects* Objects() const { return sheet_ < objects_.size() ? objects_[sheet_].get() : nullptr; }
+  bool ChartSheet() const { return Objects() && Objects()->IsChartSheet(); }
+  void PlaceObjects();
+  void DrawNote(ID2D1DeviceContext* dc);
+  std::optional<CellAddr> note_;  // the cell whose note shows while the mouse is over it
+
+  // Conditional formats: each sheet's rules, made when it is first painted if it has any, with the
+  // formula engine they need for theirs (loaded for the first such sheet, and only then).
+  condfmt::SheetRules* RulesFor(size_t index);
+  std::unique_ptr<calc::WorkbookCalc> calc_;
+  std::vector<std::unique_ptr<condfmt::SheetRules>> rules_;
+  std::vector<bool> rulesRead_;
 };
 
 }  // namespace fw::sheet::view

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cwctype>
 
 #include "core/Strings.h"
 #include "text/Fonts.h"
@@ -9,6 +10,16 @@
 namespace fw::sheet::view {
 
 namespace {
+
+// Whether text reads right to left by its first strong character, as Excel's "context" reading
+// order decides General alignment: Hebrew, Arabic and the like right, letters of other scripts left.
+bool StartsRightToLeft(const std::wstring& s) {
+  for (wchar_t c : s) {
+    if ((c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF)) return true;
+    if (iswalpha(c)) return false;
+  }
+  return false;
+}
 
 struct FitContext {
   FontMeasure* measure;
@@ -93,7 +104,7 @@ std::wstring CellText::Text(const Sheet&, const CellInfo& cell) {
   return f.overflow ? std::wstring() : f.text;
 }
 
-void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out) {
+void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out, const NumberFormat* format) {
   out = Shown{};
   const Styles& st = book_.GetStyles();
   const Xf& xf = st.CellXf(cell.style);
@@ -112,11 +123,11 @@ void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out)
   switch (cell.value.type) {
     case ValueType::Empty: return;
     case ValueType::Number:
-      FormatOf(xf.numFmt).Format(cell.value.number, ctx, f);
+      (format ? *format : FormatOf(xf.numFmt)).Format(cell.value.number, ctx, f);
       out.number = true;
       break;
     case ValueType::String: {
-      const NumberFormat& nf = FormatOf(xf.numFmt);
+      const NumberFormat& nf = format ? *format : FormatOf(xf.numFmt);
       if (nf.IsGeneral()) f.text = Utf8ToWide(cell.value.text);
       else nf.Format(Utf8ToWide(cell.value.text), ctx, f);
       break;
@@ -155,7 +166,7 @@ void CellText::Show(const Sheet&, const CellInfo& cell, int widthPx, Shown& out)
   }
 }
 
-const CellText::Layout& CellText::Get(const Sheet& sheet, const CellInfo& cell, int widthPx) {
+const CellText::Layout& CellText::Get(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look) {
   if (cacheSheet_ != &sheet) {
     cache_.clear();
     cacheSheet_ = &sheet;
@@ -164,23 +175,31 @@ const CellText::Layout& CellText::Get(const Sheet& sheet, const CellInfo& cell, 
   const uint64_t key = (static_cast<uint64_t>(cell.row) << 14) | cell.col;
   auto& slot = cache_[key];
   if (!slot) slot = std::make_unique<Layout>();
-  if (slot->widthPx != widthPx) Make(sheet, cell, widthPx, *slot);
+  if (slot->widthPx != widthPx || !(slot->look == look)) Make(sheet, cell, widthPx, look, *slot);
   return *slot;
 }
 
-void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, Layout& out) {
+void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look, Layout& out) {
   out = Layout{};
   out.widthPx = widthPx;
-  Show(sheet, cell, widthPx, out.shown);
+  out.look = look;
+  Show(sheet, cell, widthPx, out.shown, look.numFmt);
   const Styles& st = book_.GetStyles();
   const Xf& xf = st.CellXf(cell.style);
   const Alignment& al = xf.alignment;
   const Font& base = st.DefaultFont();
-  const Font& font = st.FontOf(xf);
+  Font font = st.FontOf(xf);
+  if (look.bold >= 0) font.bold = look.bold != 0;
+  if (look.italic >= 0) font.italic = look.italic != 0;
+  if (look.strike >= 0) font.strike = look.strike != 0;
+  if (look.underline >= 0) font.underline = static_cast<Underline>(look.underline);
   const Shown& shown = out.shown;
 
   out.align = al.horizontal;
-  if (out.align == HAlign::General) out.align = shown.number ? HAlign::Right : shown.center ? HAlign::Center : HAlign::Left;
+  if (out.align == HAlign::General) {
+    const bool rtlText = al.readingOrder == 2 || (al.readingOrder == 0 && StartsRightToLeft(shown.text));
+    out.align = shown.number ? HAlign::Right : shown.center ? HAlign::Center : rtlText ? HAlign::Right : HAlign::Left;
+  }
   out.stacked = al.rotation == 255;
   out.wrapped = !shown.number && !out.stacked &&
                 (al.wrap || al.horizontal == HAlign::Justify || al.horizontal == HAlign::Distributed);
@@ -200,7 +219,10 @@ void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, Layou
   auto runFor = [&](const Font& f, bool hidden) {
     Run r;
     r.color = st.Resolve(f.color, 0xFF000000);
+    // A table's font color, under the number format's ([Red]); a conditional format's, over it.
+    if (look.fontColor && !look.colorWins) r.color = look.fontColor;
     if (shown.color && !hidden) r.color = shown.color;
+    if (look.fontColor && look.colorWins) r.color = look.fontColor;
     r.hidden = hidden;
     r.underline = f.underline != Underline::None;
     r.doubleUnderline = f.underline == Underline::Double || f.underline == Underline::DoubleAccounting;
@@ -286,6 +308,11 @@ void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, Layou
     lengths = std::move(lens);
   }
 
+  if (runs.size() == 1 && !out.wrapped && !out.stacked && LayOutSimple(textW, styles.front(), out)) {
+    out.runs = std::move(runs);
+    return;
+  }
+
   text::Paragraph para;
   para.text = textW;
   for (size_t i = 0; i < lengths.size(); ++i) para.runs.push_back({lengths[i], &styles[i]});
@@ -309,6 +336,69 @@ void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, Layou
   out.lines = text::Layout(fonts_, para, width);
   out.runs = std::move(runs);
   for (const text::Line& l : out.lines) out.width = std::max(out.width, l.contentRight - l.contentLeft);
+}
+
+bool CellText::LayOutSimple(std::wstring_view s, const text::TextStyle& style, Layout& out) {
+  if (style.verticalAlign != text::VerticalAlign::Baseline || style.letterSpacing != 0 || style.scale != 1) return false;
+  // Trailing spaces aren't content: leave them to the full layout.
+  if (s.empty() || s.back() == L' ') return false;
+  for (wchar_t c : s)
+    if (c < 0x20 || (c > 0x7E && c < 0xA0) || c == 0xAD || c > 0xFF) return false;  // 0xAD: a soft hyphen
+  Glyphs* g = nullptr;
+  for (const auto& t : glyphs_)
+    if (t->bold == style.bold && t->italic == style.italic && t->family == style.family) g = t.get();
+  if (!g) {
+    auto t = std::make_unique<Glyphs>();
+    t->family = style.family;
+    t->bold = style.bold;
+    t->italic = style.italic;
+    t->face = fonts_.FaceFor(style.family, style.bold, style.italic);
+    if (t->face) {
+      UINT32 cps[224];
+      for (uint32_t i = 0; i < 224; ++i) cps[i] = 0x20 + i;
+      DWRITE_GLYPH_METRICS gm[224]{};
+      if (SUCCEEDED(t->face->Get()->GetGlyphIndices(cps, 224, t->id)) &&
+          SUCCEEDED(t->face->Get()->GetDesignGlyphMetrics(t->id, 224, gm, FALSE))) {
+        DWRITE_FONT_METRICS fm{};
+        t->face->Get()->GetMetrics(&fm);
+        for (uint32_t i = 0; i < 224; ++i)
+          t->advance[i] = t->id[i] ? static_cast<float>(gm[i].advanceWidth) / fm.designUnitsPerEm : 0;
+      } else {
+        t->face = nullptr;
+      }
+    }
+    g = t.get();
+    glyphs_.push_back(std::move(t));
+  }
+  if (!g->face) return false;
+  text::GlyphPiece piece;
+  piece.glyphs.resize(s.size());
+  piece.advances.resize(s.size());
+  float x = 0;
+  for (size_t i = 0; i < s.size(); ++i) {
+    const uint32_t k = s[i] - 0x20u;
+    if (!g->id[k]) return false;
+    piece.glyphs[i] = g->id[k];
+    piece.advances[i] = g->advance[k] * style.size;
+    x += piece.advances[i];
+  }
+  piece.face = g->face->Get();
+  piece.emSize = style.size;
+  piece.width = x;
+  piece.textEnd = static_cast<uint32_t>(s.size());
+  const text::FontMetrics m = g->face->Metrics(style.size);
+  text::Line line;
+  line.end = piece.textEnd;
+  line.ending = text::LineEnd::ParagraphEnd;
+  line.right = 1e6f;
+  line.contentRight = x;
+  line.ascent = m.ascent;
+  line.descent = m.descent;
+  line.lineGap = m.lineGap;
+  line.pieces.push_back(std::move(piece));
+  out.lines.push_back(std::move(line));
+  out.width = x;
+  return true;
 }
 
 }  // namespace fw::sheet::view

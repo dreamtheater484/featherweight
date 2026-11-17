@@ -363,6 +363,16 @@ void WorkbookView::OnMouseMove(int x, int y, UINT mods) {
     return (v.shown && gfx::Contains(v.track, (float)p.x, (float)p.y)) || (h.shown && gfx::Contains(h.track, (float)p.x, (float)p.y));
   };
   if (hot(was) != hot(hover_)) host_.ViewInvalidate();
+  // A note shows while the mouse is over its cell.
+  if (mouse_ == Mouse::None) {
+    std::optional<CellAddr> note;
+    if (SheetObjects* o = Objects(); o && gfx::Contains(cells_, fx, fy) && !hot(hover_))
+      if (auto cell = CellAt(x, y); cell && o->NoteAt(cell->row, cell->col)) note = cell;
+    if (note != note_) {
+      note_ = note;
+      host_.ViewInvalidate();
+    }
+  }
   switch (mouse_) {
     case Mouse::ThumbV: {
       const double range = Height(v.track) - Height(v.thumb);
@@ -422,6 +432,7 @@ void WorkbookView::OnMouseUp(int x, int y, int button, UINT mods) {
 
 void WorkbookView::OnMouseLeave() {
   hover_ = {-1, -1};
+  note_.reset();
   hoverTab_ = -1;
   if (preview_) ScrollbarMouseLeave();
   host_.ViewInvalidate();
@@ -511,6 +522,7 @@ void WorkbookView::ApplyGroups(bool rows) {
   for (const Group* g : order)
     if (g->collapsed) rows ? grid_.SetRowsHidden(g->first, g->last, true) : grid_.SetColsHidden(g->first, g->last, true);
   if (!rows) text_->Clear();  // widths changed
+  PlaceObjects();
   states_[sheet_].rowGroups = rowGroups_;
   states_[sheet_].colGroups = colGroups_;
   states_[sheet_].groupsKept = true;
