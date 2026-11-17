@@ -284,6 +284,13 @@ NumLocale MakeLocale(const WinLocaleInfo& w) {
   l.time = ExcelCodeFromPattern(w.sTimeFormat.empty() ? L"h:mm:ss tt" : w.sTimeFormat);
   const wchar_t* name = w.name.c_str();
   l.lcid = w.name.empty() ? 0x409 : LocaleNameToLCID(name, 0);
+  // The codes the region types (Application.International's year, day and hour codes and General
+  // name). Only the Netherlands is measured (en-NL); other regions keep the English codes.
+  const size_t dash = w.name.rfind(L'-');
+  if (dash != std::wstring::npos && w.name.compare(dash + 1, std::wstring::npos, L"NL") == 0) {
+    l.yearCode = L'j', l.hourCode = L'u';
+    l.generalName = L"Standaard";
+  }
   return l;
 }
 
@@ -359,6 +366,13 @@ const NumLocale* WindowsLanguage(uint32_t lcid) {
   const NumLocale* result = l.get();
   cache.emplace(lcid, std::move(l));
   return result;
+}
+
+uint32_t LcidFromName(std::wstring_view name) {
+  if (name.empty() || name.size() >= LOCALE_NAME_MAX_LENGTH) return 0;
+  const std::wstring n(name);
+  const LCID lcid = LocaleNameToLCID(n.c_str(), 0);
+  return lcid == LOCALE_CUSTOM_UNSPECIFIED || lcid == LOCALE_CUSTOM_DEFAULT ? 0 : lcid;
 }
 
 }  // namespace fw::sheet

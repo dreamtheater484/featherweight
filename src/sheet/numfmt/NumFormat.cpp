@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <cwchar>
 #include <string>
 
 // How Excel shows values, as measured on Excel 2021 (tests/sheet/excel_numfmt.py asks Excel; the
@@ -319,6 +320,7 @@ struct Compiler {
     switch (lc) {
       case 'y': kind = Token::Year; break;
       case 'e': kind = Token::Year; break;
+      case 'b': kind = Token::Year; break;  // Buddhist: the year + 543
       case 'm': kind = Token::Month; break;
       case 'd': kind = Token::Day; break;
       case 'h': kind = Token::Hour; break;
@@ -331,7 +333,7 @@ struct Compiler {
       return i + 1;
     }
     const size_t len = run();
-    Push(s, kind, lc == 'e' ? L'e' : 0, i, len);
+    Push(s, kind, lc == 'e' || lc == 'b' ? lc : 0, i, len);
     return i + len;
   }
 
@@ -363,6 +365,9 @@ struct Compiler {
             if (digit < 0) break;
             v = v * 16 + static_cast<uint32_t>(digit);
           }
+          // Hex ("409", "F800", "1010409") or a name ("en-US", "nl-NL"), as some files have.
+          const size_t nameEnd = std::min(tag.find(','), tag.size());
+          if (k < nameEnd) v = LcidFromName(tag.substr(0, nameEnd));
           const uint32_t low = v & 0xFFFF;
           if (low == 0xF800) s.system = 'D';
           else if (low == 0xF400) s.system = 'T';
@@ -449,6 +454,8 @@ struct Compiler {
       if (inInt && digitIn(partBegin, k) && digitIn(k + 1, partEnd)) {
         s.group = true;
         Erase(t[k]);
+      } else if (!inInt && digitIn(k + 1, partEnd)) {  // among the decimals: ignored (#.##0,00 is #.##000)
+        Erase(t[k]);
       } else if (afterDigit && !digitIn(k + 1, partEnd)) {
         s.scale -= 3;
         Erase(t[k]);
@@ -464,7 +471,10 @@ struct Compiler {
     for (const Token& k : t) {
       switch (k.kind) {
         case Token::Year:
-          (k.ch == 'e' ? eYear : date) = true;
+          (k.ch ? eYear : date) = true;  // e and b years and eras make a date when there are no digits
+          break;
+        case Token::Era:
+          eYear = true;
           break;
         case Token::Month:
         case Token::Day:
@@ -512,7 +522,7 @@ struct Compiler {
       Token& x = t[k];
       if (x.kind == Token::Point) {
         if (point == t.size()) point = k, s.hasPoint = true;
-        else ToLiteral(x);
+        else x.ch = 0;  // another point: the separator again, the decimals go on (0.0.0 shows 1234.5.7)
       } else if (x.kind == Token::Digit) {
         (point == t.size() ? s.intDigits : s.fracDigits)++;
       } else if (x.kind == Token::Percent) {
@@ -527,7 +537,8 @@ struct Compiler {
   void FinishScientific(Section& s) {
     s.kind = Section::Scientific;
     auto& t = s.tokens;
-    size_t xi = t.size(), point = t.size();
+    size_t xi = t.size(), point = t.size(), firstInt = t.size();
+    bool comma = false;
     for (size_t k = 0; k < t.size(); ++k) {
       Token& x = t[k];
       if (x.kind == Token::Exp) {
@@ -537,15 +548,31 @@ struct Compiler {
         if (point == t.size()) point = k, s.hasPoint = true;
         else ToLiteral(x);
       } else if (x.kind == Token::Digit) {
-        if (k > xi) s.expDigits++;
-        else (point == t.size() ? s.intDigits : s.fracDigits)++;
+        if (k > xi) {
+          s.expDigits++;
+        } else if (point == t.size()) {
+          if (comma) s.group = true;
+          if (!s.intDigits++) firstInt = k;
+        } else {
+          s.fracDigits++;
+        }
       } else if (x.kind == Token::Percent) {
         // Shown, but in scientific notation it doesn't multiply (measured: 0.5 shows 5.0E-1%).
       } else if (x.kind == Token::Comma && k < xi) {
+        comma = comma || (s.intDigits && point == t.size());
         Erase(x);
       } else {
         ToLiteral(x);
       }
+    }
+    // A grouped mantissa has at least four places (measured: 0,0E+00 is #,#00E+00, so 1234.5 shows
+    // 1,235E+00 and 7 shows 07E+00).
+    if (s.group && s.intDigits < 4) {
+      Token pad{};
+      pad.kind = Token::Digit;
+      pad.ch = '#';
+      t.insert(t.begin() + static_cast<std::ptrdiff_t>(firstInt), static_cast<size_t>(4 - s.intDigits), pad);
+      s.intDigits = 4;
     }
   }
 
@@ -957,7 +984,7 @@ struct Formatter {
           ++q;
         }
       } else if (t.kind == Token::Point) {
-        if (s.intDigits == 0)
+        if (s.intDigits == 0 && t.ch)
           for (int k = 0; k < L; ++k) Digit(I[k]);
         Str(loc.decimal);
         past = true;
@@ -994,8 +1021,8 @@ struct Formatter {
       if (Common(t)) continue;
       if (t.kind == Token::Digit) {
         if (phase == 0) {
-          if (!x.n) Ch(L'0');  // zero shows every integer placeholder as 0
-          else IntDigit(p, ni, t.ch, I.data(), L, false);
+          if (!x.n) IntDigit(p, ni, '0', "", 0, s.group);  // zero shows every integer placeholder as 0
+          else IntDigit(p, ni, t.ch, I.data(), L, s.group);
           ++p;
         } else if (phase == 1) {
           if (q < static_cast<int>(F.size()) && q <= lastNonZero) Digit(F[q]);
@@ -1155,7 +1182,8 @@ struct Formatter {
     for (const Token& t : s.tokens) {
       switch (t.kind) {
         case Token::Year:
-          if (t.ch == 'e' || t.b > 2) num(y, 1);
+          if (t.ch == 'b') num(t.b > 2 ? y + 543 : (y + 543) % 100, t.b > 2 ? 1 : 2);
+          else if (t.ch == 'e' || t.b > 2) num(y, 1);
           else num(y % 100, 2);
           break;
         case Token::Month:
@@ -1270,6 +1298,191 @@ int BuiltinBase(int id) {
   return 0;
 }
 
+// --- Codes as the region types them (TEXT(), measured on en-NL) ---
+
+bool Localized(const NumLocale& l) {
+  return l.decimal != L"." || l.group != L"," || l.yearCode != L'y' || l.dayCode != L'd' || l.hourCode != L'h' ||
+         l.generalName != L"General";
+}
+
+bool At(std::wstring_view s, size_t i, std::wstring_view w) { return !w.empty() && s.substr(i, w.size()) == w; }
+
+bool AtNoCase(std::wstring_view s, size_t i, std::wstring_view w) {
+  if (w.empty() || i + w.size() > s.size()) return false;
+  for (size_t k = 0; k < w.size(); ++k)
+    if (Lower(s[i + k]) != Lower(w[k])) return false;
+  return true;
+}
+
+// The end of a quoted string, an escape, a pad or fill and its character, or a bracket at i; i
+// when there is none.
+size_t SkipPart(std::wstring_view s, size_t i) {
+  const wchar_t c = s[i];
+  if (c == '"') {
+    const size_t e = s.find('"', i + 1);
+    return e == std::wstring_view::npos ? s.size() : e + 1;
+  }
+  if (c == '\\' || c == '_' || c == '*') return std::min(i + 2, s.size());
+  if (c == '[') {
+    const size_t e = s.find(']', i + 1);
+    return e == std::wstring_view::npos ? s.size() : e + 1;
+  }
+  return i;
+}
+
+// A bracket's letter when it is elapsed time ([uu], [mm], [ss]); 0 otherwise.
+wchar_t ElapsedLetter(std::wstring_view in) {
+  if (in.empty()) return 0;
+  const wchar_t c = Lower(in[0]);
+  for (wchar_t x : in)
+    if (Lower(x) != c) return 0;
+  return c;
+}
+
+// A section is a date or time when it has one of the region's codes (a digit placeholder in it
+// then makes Excel refuse the code).
+bool LocalDateSection(std::wstring_view s, const NumLocale& l, wchar_t year, wchar_t day, wchar_t hour) {
+  for (size_t i = 0; i < s.size();) {
+    const size_t e = SkipPart(s, i);
+    if (e != i) {
+      if (s[i] == '[' && e - i >= 3) {
+        const wchar_t c = ElapsedLetter(s.substr(i + 1, e - i - 2));
+        if (c && (c == hour || c == 'm' || c == 's')) return true;
+      }
+      i = e;
+      continue;
+    }
+    if (AtNoCase(s, i, l.generalName)) {
+      i += l.generalName.size();
+      continue;
+    }
+    if (AtNoCase(s, i, L"am/pm")) return true;
+    if (s[i] == 'E' && i + 1 < s.size() && (s[i + 1] == '+' || s[i + 1] == '-')) {
+      i += 2;
+      continue;
+    }
+    const wchar_t c = Lower(s[i]);
+    if (c == year || c == day || c == hour || c == 'm' || c == 's' || c == 'e' || c == 'b' || c == 'g') return true;
+    ++i;
+  }
+  return false;
+}
+
+// A bracket's content: elapsed hours in the region's letter, a condition's number with its decimal
+// separator (Excel ignores what follows a thousands separator there), anything else as it is.
+bool LocalBracket(std::wstring_view in, const NumLocale& l, wchar_t hour, std::wstring& out) {
+  const wchar_t c = ElapsedLetter(in);
+  if (c == hour) {
+    out.append(in.size(), L'h');
+    return true;
+  }
+  if (c == 'h') return false;  // [h] is no code here
+  if (!in.empty() && (in[0] == '<' || in[0] == '>' || in[0] == '=')) {
+    for (size_t k = 0; k < in.size();) {
+      if (At(in, k, l.decimal)) {
+        out += L'.';
+        k += l.decimal.size();
+      } else if (At(in, k, l.group)) {
+        break;
+      } else {
+        out += in[k++];
+      }
+    }
+    return true;
+  }
+  out.append(in);
+  return true;
+}
+
+bool LocalSection(std::wstring_view s, const NumLocale& l, std::wstring& out) {
+  const wchar_t year = Lower(l.yearCode), day = Lower(l.dayCode), hour = Lower(l.hourCode);
+  const bool date = LocalDateSection(s, l, year, day, hour);
+  bool afterCode = false, decimals = false;  // dates: a decimal separator after a code starts seconds' decimals
+  bool point = false, fraction = false;      // numbers
+  for (size_t i = 0; i < s.size();) {
+    const wchar_t c = s[i];
+    const size_t e = SkipPart(s, i);
+    if (e != i) {
+      afterCode = decimals = false;
+      if (c == '[' && s[e - 1] == ']') {
+        const std::wstring_view in = s.substr(i + 1, e - i - 2);
+        out += L'[';
+        if (!LocalBracket(in, l, hour, out)) return false;
+        out += L']';
+        afterCode = ElapsedLetter(in) != 0;
+      } else {
+        out.append(s.substr(i, e - i));
+      }
+      i = e;
+      continue;
+    }
+    if (AtNoCase(s, i, l.generalName)) {
+      out += L"General";
+      i += l.generalName.size();
+      continue;
+    }
+    if (AtNoCase(s, i, L"general")) return false;  // English's name isn't the region's
+    const wchar_t lc = Lower(c);
+    if (date) {
+      const bool wasCode = afterCode;
+      afterCode = false;
+      if (AtNoCase(s, i, L"am/pm")) {
+        out += L"AM/PM";
+        i += 5;
+        continue;
+      }
+      if (lc == 'a' && i + 2 < s.size() && s[i + 1] == '/' && Lower(s[i + 2]) == 'p') {  // A/P is no code here
+        out += L'\\', out += c, out += L"/\\", out += s[i + 2];
+        i += 3;
+        continue;
+      }
+      if (lc == year || lc == day || lc == hour || lc == 'm' || lc == 's' || lc == 'e' || lc == 'b' || lc == 'g') {
+        out += lc == year ? L'y' : lc == day ? L'd' : lc == hour ? L'h' : lc;
+        afterCode = true;
+        decimals = false;
+        ++i;
+        continue;
+      }
+      if (c == '0' && decimals) {
+        out += c;
+        afterCode = true;  // more decimals may follow
+        ++i;
+        continue;
+      }
+      if (c == '0' || c == '#' || c == '?') return false;
+      if (wasCode && At(s, i, l.decimal) && i + l.decimal.size() < s.size() && s[i + l.decimal.size()] == '0') {
+        out += L'.';
+        i += l.decimal.size();
+        afterCode = decimals = true;
+        continue;
+      }
+      decimals = false;
+      if (lc == 'y' || lc == 'd' || lc == 'h' || c == '.' || c == ',') {  // English codes and separators: text
+        out += L'\\';
+      }
+      out += c;
+      ++i;
+      continue;
+    }
+    if (At(s, i, l.decimal)) {
+      out += L'.';
+      i += l.decimal.size();
+      point = true;
+      continue;
+    }
+    if (At(s, i, l.group)) {
+      out += L',';
+      i += l.group.size();
+      continue;
+    }
+    if (c == '/' && i + 1 < s.size() && wcschr(L"0123456789#?", s[i + 1])) fraction = true;
+    if (lc == 'y' || lc == 'd' || lc == 'h' || lc == 'm' || lc == 's' || c == '.' || c == ',') out += L'\\';
+    out += c;
+    ++i;
+  }
+  return !(point && fraction);  // decimals and a fraction: refused
+}
+
 }  // namespace
 
 std::wstring BuiltinCode(int id, const NumLocale& locale) {
@@ -1283,6 +1496,38 @@ NumberFormat NumberFormat::Builtin(int id, const NumLocale& locale) {
   NumberFormat f(locale.builtin[static_cast<size_t>(base)]);
   f.localAmPm_ = base == 18 || base == 19;
   return f;
+}
+
+bool NumberFormat::LocalToInvariant(std::wstring_view code, const NumLocale& locale, std::wstring& out) {
+  out.clear();
+  if (!Localized(locale)) {
+    out.assign(code);
+    return true;
+  }
+  size_t start = 0;
+  for (;;) {
+    size_t end = start;
+    while (end < code.size() && code[end] != ';') {
+      const size_t e = SkipPart(code, end);
+      end = e == end ? end + 1 : e;
+    }
+    if (!LocalSection(code.substr(start, end - start), locale, out)) {
+      out.clear();
+      return false;
+    }
+    if (end >= code.size()) return true;
+    out += L';';
+    start = end + 1;
+  }
+}
+
+bool NumberFormat::FromLocal(std::wstring_view code, const NumLocale& locale, NumberFormat& out) {
+  std::wstring invariant;
+  if (!LocalToInvariant(code, locale, invariant)) return false;
+  out = NumberFormat(invariant);
+  // AM/PM typed in the region shows its designators ("pm" on en-NL); under a locale tag, English.
+  out.localAmPm_ = std::none_of(out.sections_.begin(), out.sections_.end(), [](const Section& s) { return s.lcid != 0; });
+  return true;
 }
 
 uint32_t PaletteColor(int index) {

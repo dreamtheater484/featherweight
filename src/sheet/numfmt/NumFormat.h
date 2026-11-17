@@ -63,6 +63,14 @@ class NumberFormat {
   explicit NumberFormat(std::wstring_view code);
   // A built-in format by id (0..163) as the locale shows it; an id without a format is General.
   static NumberFormat Builtin(int id, const NumLocale& locale);
+  // A code as the region types it (TEXT()'s format, the Format Cells box): its letters for year,
+  // day and hour ("jjjj", "uu" in the Netherlands), its name for General ("Standaard") and its
+  // separators (decimal comma, thousands point there). False when Excel refuses the code (TEXT()
+  // gives #VALUE!): a digit placeholder in a date, an English code the region doesn't have ([h],
+  // "General"). AM/PM then shows the region's designators, unless the code has a locale tag.
+  static bool FromLocal(std::wstring_view code, const NumLocale& locale, NumberFormat& out);
+  // The code in Excel's invariant form, as Excel stores what was typed; false when refused.
+  static bool LocalToInvariant(std::wstring_view code, const NumLocale& locale, std::wstring& out);
 
   void Format(double value, const FormatContext& context, Formatted& out) const;
   void Format(std::wstring_view text, const FormatContext& context, Formatted& out) const;
