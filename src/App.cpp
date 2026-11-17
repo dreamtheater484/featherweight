@@ -2691,6 +2691,8 @@ void App::RunScript(const std::wstring& script) {
     } else if (op == L"devicelost") {
       // As if the graphics driver had been reset: everything made with the device is recreated.
       gpu::DeviceLost();
+    } else if (TabContent* v = Active(); v && v->ScriptOp(op, arg)) {
+      // The tab's own operations (a workbook's format:size=14...).
     }
     PumpUntilIdle(1500);
   }

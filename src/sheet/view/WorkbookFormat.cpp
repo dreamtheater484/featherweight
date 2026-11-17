@@ -1370,4 +1370,81 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   m.left.push_back(number);
 }
 
+// ---------------------------------------------------------------------------
+// Scripted formatting (build from scratch): the toolbar's and Format Cells' calls by name
+
+bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
+  if (op != L"format") return false;
+  const size_t eq = arg.find(L'=');
+  const std::wstring key = fw::ToLower(fw::Trim(arg.substr(0, eq)));
+  const std::wstring value = eq == std::wstring::npos ? std::wstring() : fw::Trim(arg.substr(eq + 1));
+  auto rgb = [&](Color& out) {
+    wchar_t* end = nullptr;
+    const unsigned long v = std::wcstoul(value.c_str(), &end, 16);
+    if (value.size() != 6 || !end || *end) return false;
+    out = RgbColor(0xFF000000u | static_cast<uint32_t>(v));
+    return true;
+  };
+  bool ok = false;
+  if (key == L"size") {
+    const double s = std::wcstod(value.c_str(), nullptr);
+    ok = s >= 1 && s <= 409 && ChangeFont(u"Font Size", [s](Font& f) { f.size = s; });
+  } else if (key == L"font") {
+    const std::string name = WideToUtf8(value);
+    ok = !name.empty() && ChangeFont(u"Font", [&name](Font& f) {
+      f.name = name;
+      f.scheme = FontScheme::None;
+    });
+  } else if (key == L"color") {
+    Color c;
+    ok = rgb(c) && ChangeFont(u"Font Color", [c](Font& f) { f.color = c; });
+  } else if (key == L"fill") {
+    Fill fill;
+    if (value != L"none") {
+      fill.pattern = PatternType::Solid;
+      if (!rgb(fill.fg)) return fwprintf(stderr, L"format: no color in %s\n", arg.c_str()), true;
+    }
+    ok = ChangeFormat(u"Fill", [this, fill](Xf& x) {
+      x.fill = Ed().AddFill(fill);
+      x.applyFill = true;
+    });
+  } else if (key == L"numfmt") {
+    std::wstring invariant;
+    ok = NumberFormat::LocalToInvariant(value, text_->Locale(), invariant) && ApplyNumberCode(invariant);
+  } else if (key == L"border") {
+    // [double-|thick-|medium-]top, bottom, left, right; outline, all, inside; none.
+    BorderSide side;
+    side.style = BorderStyle::Thin;
+    std::wstring edge = value;
+    for (const auto& [prefix, style] : {std::pair{L"double-", BorderStyle::Double}, std::pair{L"thick-", BorderStyle::Thick},
+                                        std::pair{L"medium-", BorderStyle::Medium}})
+      if (edge.rfind(prefix, 0) == 0) edge.erase(0, std::wcslen(prefix)), side.style = style;
+    static const wchar_t* const kEdges[] = {L"none", L"outline", L"all", L"inside", L"top", L"bottom", L"left", L"right"};
+    for (int i = 0; i < 8; ++i)
+      if (edge == kEdges[i]) ok = ApplyBorders(i, side);
+  } else if (key == L"align") {
+    const HAlign h = value == L"left" ? HAlign::Left : value == L"center" ? HAlign::Center
+                     : value == L"right" ? HAlign::Right : HAlign::General;
+    ok = ChangeFormat(u"Alignment", [h](Xf& x) {
+      x.alignment.horizontal = h;
+      x.applyAlignment = true;
+    });
+  } else if (key == L"wrap" || key == L"bold" || key == L"italic") {
+    const bool on = value != L"off" && value != L"0";
+    if (key == L"wrap")
+      ok = ChangeFormat(u"Wrap Text", [on](Xf& x) {
+        x.alignment.wrap = on;
+        x.applyAlignment = true;
+      });
+    else if (key == L"bold") ok = ChangeFont(u"Bold", [on](Font& f) { f.bold = on; });
+    else ok = ChangeFont(u"Italic", [on](Font& f) { f.italic = on; });
+  } else if (key == L"style") {
+    const auto& g = Gallery();
+    for (size_t i = 0; i < g.size(); ++i)
+      if (fw::ToLower(g[i].name) == fw::ToLower(value)) ok = ApplyCellStyle(static_cast<int>(i));
+  }
+  if (!ok) fwprintf(stderr, L"format failed: %s\n", arg.c_str());
+  return true;
+}
+
 }  // namespace fw::sheet::view

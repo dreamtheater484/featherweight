@@ -208,6 +208,8 @@ class TabContent {
   virtual std::wstring FormatLoss(const std::wstring& /*path*/) const { return {}; }
   // The user chose to keep the format anyway (the banner's "Keep CSV"): FormatLoss is empty now.
   virtual void KeepFormat() {}
+  // A scripted run's step the window doesn't know (--script "op:arg"), for the tab: true when used.
+  virtual bool ScriptOp(const std::wstring& /*op*/, const std::wstring& /*arg*/) { return false; }
   // Editors: unsaved changes go to the recovery folder now and then (the window's timer).
   virtual void Autosave() {}
   // Editors: whether the file changed on disk, when the window or the tab is activated. Each
