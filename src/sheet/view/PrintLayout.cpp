@@ -154,6 +154,12 @@ double PrintLayout::PrintDigit(int pct) {
   return it->second;
 }
 
+// Known difference, scaled pages: a default column prints in Excel 42.40 pt at 84 % (this gives
+// 42.54), 38.41 at 75 % (38.16) and 25.01 at 49 % (25.07). Neither proportional widths (43.0, 38.4,
+// 25.1, which would make the fit-to-width page 83 %) nor a scale rounded down to 1/64 or 1/256 fits
+// all three; the scaled font's digit is the closest found. Centered, Excel's page also sits 1.0 pt
+// further left and 0.72 pt higher (75 %), as if the block were 2 pt wider and 1.44 pt taller.
+// print-settings pages 5-7, 9 and 10 fail on these (SSIM 0.80-0.93); the rows match.
 float PrintLayout::PxPt(double px, float scale) {
   const int pct = static_cast<int>(std::lround(scale * 100));
   const double digit = PrintDigit(pct), mdw = grid_.MaxDigit(), pad = Grid::kPrintPad * pct / 100;
