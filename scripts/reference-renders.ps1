@@ -610,6 +610,11 @@ if ($ExcelPrinter -and @($jobs | Where-Object { (Get-Kind $_.File.Extension) -eq
     throw "Windows' default printer is '$default', but workbooks are rendered for the reference printer '$ExcelPrinter'. Make that the default again (with 'Let Windows manage my default printer' on, print something on it), or pass -ExcelPrinter."
   }
 }
+# Printing while Windows manages the default printer would make Microsoft Print to PDF the default
+# halfway through the run, and every workbook after it would be laid out for that printer.
+if ($PrintPdf.Count -and [int](Get-ItemProperty 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Windows').LegacyDefaultPrinterMode -eq 0) {
+  throw "-PrintPdf needs 'Let Windows manage my default printer' off (Settings > Bluetooth & devices > Printers & scanners): with it on, printing changes the default printer."
+}
 foreach ($dir in $clear) { if (Test-Path $dir) { Remove-Item -Recurse -Force $dir } }
 
 # One Office automation at a time on this PC (word-open-check.ps1 takes the same mutex): a second
