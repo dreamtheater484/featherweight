@@ -1533,6 +1533,12 @@ std::vector<FCell> FormulaCellsOf(Sheet& s) {
 // Attributes without the ones in `drop`, `ref` set to `ref` when given.
 pkg::AttrSetId EditAttrs(pkg::RoundTripStore& store, pkg::AttrSetId id, std::initializer_list<std::string_view> drop,
                          const std::string& ref = {}) {
+  if (id == 0) return id;
+  bool any = false;
+  for (const auto& a : store.Attributes(id))
+    any = any || (a.nsUri.empty() && (std::find(drop.begin(), drop.end(), std::string_view(a.qname)) != drop.end() ||
+                                      (!ref.empty() && a.qname == "ref" && a.value != ref)));
+  if (!any) return id;
   std::vector<pkg::XmlAttr> out;
   bool changed = false;
   for (const auto& a : store.Attributes(id)) {
@@ -1848,117 +1854,213 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
       own[key(at.row, at.col)] = static_cast<uint32_t>(recs.size() - 1);
     }
 
-    struct Item {
-      uint32_t row = 0;
-      CellRec cell;
-      uint32_t formula = kNone;
-      bool hasSide = false;
-      CellSide side;
-    };
-    std::vector<RowRec> rowRecs;
-    std::vector<Item> items;
+    // Cells and rows, block by block. Blocks the edit doesn't reach stay as they are (shared with the
+    // undo step: writes copy them). Where lines only renumber, or cells only move along their rows,
+    // a block is rewritten in one pass; cells shifted up or down in a band of columns cross rows, so
+    // from the first block they reach on they're gathered and sorted.
     auto& store = A::Store(s);
-    for (const auto& bp : A::Blocks(s)) {
-      const RowBlock& b = *bp;
-      for (size_t ri = 0; ri < b.rows.size(); ++ri) {
-        RowRec rr = b.rows[ri];
-        bool rowGoes = false;
-        if (rows && whole) {
-          uint32_t n = m.Line(rr.row);
-          rowGoes = n == kNone;
-          rr.row = n;
-        }
-        for (uint32_t k = b.rows[ri].first; k < b.rows[ri].first + b.rows[ri].count; ++k) {
-          uint32_t row = b.rows[ri].row, col = b.cells[k].col;
-          if (!m.Cell(row, col)) continue;
-          Item it;
-          it.row = row;
-          it.cell = b.cells[k];
-          it.cell.col = static_cast<uint16_t>(col);
-          it.formula = State::FormulaIdOf(b, k);
-          if (auto o = own.find(key(b.rows[ri].row, b.cells[k].col)); o != own.end()) it.formula = o->second;
-          auto sd = std::lower_bound(b.sides.begin(), b.sides.end(), k, [](const CellSide& x, uint32_t v) { return x.cell < v; });
-          if (sd != b.sides.end() && sd->cell == k) {
-            it.hasSide = true;
-            it.side = *sd;
-            if (row != b.rows[ri].row || col != b.cells[k].col) it.side.attrs = EditAttrs(store, it.side.attrs, {"r"});
-          }
-          items.push_back(it);
-        }
-        if (!rowGoes) {
-          rr.first = rr.count = 0;
-          if (!(rows && whole)) rr.attrs = EditAttrs(store, rr.attrs, {"spans"});  // cells moved across columns
-          rowRecs.push_back(rr);
-        }
-      }
-    }
-    // Inserted cells take the formats of the line before them (Excel's "Format Same As Above"), and
-    // inserted rows its height and format.
-    if (sh.count > 0 && sh.at > 0) {
-      const uint32_t prev = sh.at - 1, n = std::min<uint32_t>(static_cast<uint32_t>(sh.count), m.max - sh.at);
-      std::vector<Item> adds;
-      for (const Item& it : items) {
-        uint32_t line = rows ? it.row : it.cell.col, cross = rows ? it.cell.col : it.row;
-        if (line != prev || !(it.cell.flags & detail::kStylePresent) || it.cell.style == 0 || m.Across(cross, cross) != 1)
-          continue;
-        for (uint32_t k = 0; k < n; ++k) {
-          Item add;
-          add.row = rows ? sh.at + k : it.row;
-          add.cell.col = static_cast<uint16_t>(rows ? it.cell.col : sh.at + k);
-          add.cell.style = it.cell.style;
-          add.cell.flags = detail::kStylePresent;
-          adds.push_back(add);
-        }
-      }
-      items.insert(items.end(), adds.begin(), adds.end());
-      if (rows && whole)
-        for (const RowRec& r : std::vector<RowRec>(rowRecs))
-          if (r.row == prev)
-            for (uint32_t k = 0; k < n; ++k) {
-              RowRec c = r;
-              c.row = sh.at + k;
-              c.flags = static_cast<uint8_t>(c.flags & ~(detail::kRowHidden | detail::kRowCollapsed));
-              st.SyncRowAttrs(s, c);
-              rowRecs.push_back(c);
-            }
-    }
-    std::stable_sort(items.begin(), items.end(),
-                     [](const Item& a, const Item& b) { return a.row != b.row ? a.row < b.row : a.cell.col < b.cell.col; });
-    std::stable_sort(rowRecs.begin(), rowRecs.end(), [](const RowRec& a, const RowRec& b) { return a.row < b.row; });
+    const auto& oldBlocks = A::Blocks(s);
+    const auto& oldFirst = A::FirstRows(s);
+    const bool adds = sh.count > 0 && sh.at > 0;
+    const uint32_t prev = adds ? sh.at - 1 : 0;
+    const uint32_t addCount = adds ? std::min<uint32_t>(static_cast<uint32_t>(sh.count), m.max - sh.at) : 0;
+    const uint32_t firstMoved = adds && rows ? prev : sh.at;  // rows before it keep their cells (rows axis)
+    std::vector<uint32_t> ownRows;
+    for (const auto& [at, text] : plan.own) ownRows.push_back(at.row);
+    std::sort(ownRows.begin(), ownRows.end());
+    auto formulaOf = [&](uint32_t row, uint32_t col, uint32_t id) {
+      if (!own.empty())
+        if (auto o = own.find(key(row, col)); o != own.end()) return o->second;
+      return id;
+    };
     std::vector<std::shared_ptr<RowBlock>> blocks;
     std::vector<uint32_t> firstRows;
-    size_t formulaCells = 0;
-    for (size_t ri = 0, ci = 0; ri < rowRecs.size() || ci < items.size();) {
-      uint32_t row = std::min(ri < rowRecs.size() ? rowRecs[ri].row : kNone, ci < items.size() ? items[ci].row : kNone);
-      RowRec rec;
-      rec.row = row;
-      if (ri < rowRecs.size() && rowRecs[ri].row == row) rec = rowRecs[ri++];
-      if (blocks.empty() || blocks.back()->rows.size() >= kBlockRows ||
-          blocks.back()->cells.size() >= SheetBuilder::kBlockCells) {
+    bool open = false;  // whether the last block takes more rows
+    auto beginRow = [&](RowRec rec) -> RowBlock& {
+      if (!open || blocks.back()->rows.size() >= kBlockRows || blocks.back()->cells.size() >= SheetBuilder::kBlockCells) {
         blocks.push_back(std::make_shared<RowBlock>());
-        firstRows.push_back(row);
+        firstRows.push_back(rec.row);
+        open = true;
       }
       RowBlock& b = *blocks.back();
       rec.first = static_cast<uint32_t>(b.cells.size());
       rec.count = 0;
-      for (; ci < items.size() && items[ci].row == row; ++ci) {
-        uint32_t index = static_cast<uint32_t>(b.cells.size());
-        b.cells.push_back(items[ci].cell);
-        if (items[ci].formula != kNone && (items[ci].cell.flags & detail::kHasFormula)) {
-          b.formulas.push_back({index, items[ci].formula});
-          ++formulaCells;
-        }
-        if (items[ci].hasSide) {
-          b.sides.push_back(items[ci].side);
-          b.sides.back().cell = index;
-        }
-        ++rec.count;
-      }
       b.rows.push_back(rec);
+      return b;
+    };
+    auto addCell = [](RowBlock& b, const CellRec& cell, uint32_t formula, const CellSide* side) {
+      uint32_t index = static_cast<uint32_t>(b.cells.size());
+      b.cells.push_back(cell);
+      if (formula != kNone && (cell.flags & detail::kHasFormula)) b.formulas.push_back({index, formula});
+      if (side) {
+        b.sides.push_back(*side);
+        b.sides.back().cell = index;
+      }
+      ++b.rows.back().count;
+    };
+    auto styled = [](const CellRec& c) { return (c.flags & detail::kStylePresent) && c.style != 0; };
+    auto formatOnly = [](uint32_t col, uint32_t style) {
+      CellRec c;
+      c.col = static_cast<uint16_t>(col);
+      c.style = style;
+      c.flags = detail::kStylePresent;
+      return c;
+    };
+    // One block whose cells stay in their rows: whole rows renumbered, or cells moved along rows.
+    auto rewrite = [&](const RowBlock& b) {
+      size_t fi = 0, si = 0;
+      for (const RowRec& r0 : b.rows) {
+        RowRec rr = r0;
+        if (rows && whole) {
+          rr.row = m.Line(r0.row);
+          if (rr.row == kNone) continue;  // deleted, with its cells
+        } else if (!rows && m.Across(r0.row, r0.row) != 0) {
+          rr.attrs = EditAttrs(store, rr.attrs, {"spans"});  // its cells move across columns
+        }
+        RowBlock* out = &beginRow(rr);
+        for (uint32_t k = r0.first; k < r0.first + r0.count; ++k) {
+          const CellRec& c0 = b.cells[k];
+          while (fi < b.formulas.size() && b.formulas[fi].first < k) ++fi;
+          while (si < b.sides.size() && b.sides[si].cell < k) ++si;
+          uint32_t row = r0.row, col = c0.col;
+          if (!m.Cell(row, col)) continue;
+          CellRec c = c0;
+          c.col = static_cast<uint16_t>(col);
+          const uint32_t id = fi < b.formulas.size() && b.formulas[fi].first == k ? b.formulas[fi].second : kNone;
+          CellSide side;
+          const bool hasSide = si < b.sides.size() && b.sides[si].cell == k;
+          if (hasSide) {
+            side = b.sides[si];
+            if (row != r0.row || col != c0.col) side.attrs = EditAttrs(store, side.attrs, {"r"});
+          }
+          addCell(*out, c, formulaOf(r0.row, c0.col, id), hasSide ? &side : nullptr);
+          // Columns inserted after this one take its format (Excel's "Format Same As Left").
+          if (!rows && addCount && c0.col == prev && styled(c0) && m.Across(r0.row, r0.row) == 1)
+            for (uint32_t j = 0; j < addCount; ++j) addCell(*out, formatOnly(sh.at + j, c0.style), kNone, nullptr);
+        }
+        // Rows inserted after this one take its height and format ("Format Same As Above").
+        if (rows && whole && addCount && r0.row == prev)
+          for (uint32_t j = 0; j < addCount; ++j) {
+            RowRec c = r0;
+            c.row = sh.at + j;
+            c.flags = static_cast<uint8_t>(c.flags & ~(detail::kRowHidden | detail::kRowCollapsed));
+            st.SyncRowAttrs(s, c);
+            out = &beginRow(c);
+            for (uint32_t k = r0.first; k < r0.first + r0.count; ++k)
+              if (styled(b.cells[k])) addCell(*out, formatOnly(b.cells[k].col, b.cells[k].style), kNone, nullptr);
+          }
+      }
+    };
+    // Blocks from `from` on, when cells move up or down in a band of columns: the band's cells, where
+    // they go (still in order: they all move alike), merged into the rows with the cells beside the
+    // band, which stay.
+    auto gather = [&](size_t from) {
+      struct Item {
+        uint32_t row = 0;
+        CellRec cell;
+        uint32_t formula = kNone;
+        bool hasSide = false;
+        CellSide side;
+      };
+      auto inBand = [&](uint32_t col) { return m.Across(col, col) != 0; };
+      std::vector<Item> band;
+      std::vector<CellRec> above;  // the styled band cells of the row before inserted cells
+      for (size_t bi = from; bi < oldBlocks.size(); ++bi) {
+        const RowBlock& b = *oldBlocks[bi];
+        size_t fi = 0, si = 0;
+        for (const RowRec& r0 : b.rows) {
+          for (uint32_t k = r0.first; k < r0.first + r0.count; ++k) {
+            const CellRec& c0 = b.cells[k];
+            if (!inBand(c0.col)) continue;
+            while (fi < b.formulas.size() && b.formulas[fi].first < k) ++fi;
+            while (si < b.sides.size() && b.sides[si].cell < k) ++si;
+            uint32_t row = r0.row, col = c0.col;
+            if (addCount && row == prev && styled(c0)) above.push_back(c0);
+            if (!m.Cell(row, col)) continue;
+            Item it;
+            it.row = row;
+            it.cell = c0;
+            it.formula = formulaOf(r0.row, c0.col, fi < b.formulas.size() && b.formulas[fi].first == k ? b.formulas[fi].second : kNone);
+            if (si < b.sides.size() && b.sides[si].cell == k) {
+              it.hasSide = true;
+              it.side = b.sides[si];
+              if (row != r0.row) it.side.attrs = EditAttrs(store, it.side.attrs, {"r"});
+            }
+            band.push_back(it);
+          }
+          if (r0.row == prev && !above.empty()) {  // cells inserted below take the format of the cell above
+            for (uint32_t j = 0; j < addCount; ++j)
+              for (const CellRec& c : above) {
+                Item add;
+                add.row = sh.at + j;
+                add.cell = formatOnly(c.col, c.style);
+                band.push_back(add);
+              }
+          }
+        }
+      }
+      size_t bx = 0;
+      auto bandRow = [&](uint32_t row, RowBlock& out, uint32_t beforeCol) {
+        for (; bx < band.size() && band[bx].row == row && band[bx].cell.col < beforeCol; ++bx)
+          addCell(out, band[bx].cell, band[bx].formula, band[bx].hasSide ? &band[bx].side : nullptr);
+      };
+      auto bandOnly = [&](uint32_t before) {  // rows only band cells land in
+        while (bx < band.size() && band[bx].row < before) {
+          RowRec rec;
+          rec.row = band[bx].row;
+          bandRow(rec.row, beginRow(rec), kMaxCols);
+        }
+      };
+      for (size_t bi = from; bi < oldBlocks.size(); ++bi) {
+        const RowBlock& b = *oldBlocks[bi];
+        size_t fi = 0, si = 0;
+        for (const RowRec& r0 : b.rows) {
+          bandOnly(r0.row);
+          RowRec rr = r0;
+          rr.attrs = EditAttrs(store, rr.attrs, {"spans"});
+          RowBlock& out = beginRow(rr);
+          for (uint32_t k = r0.first; k < r0.first + r0.count; ++k) {
+            const CellRec& c0 = b.cells[k];
+            if (inBand(c0.col)) continue;
+            while (fi < b.formulas.size() && b.formulas[fi].first < k) ++fi;
+            while (si < b.sides.size() && b.sides[si].cell < k) ++si;
+            bandRow(r0.row, out, c0.col);
+            const uint32_t id = fi < b.formulas.size() && b.formulas[fi].first == k ? b.formulas[fi].second : kNone;
+            addCell(out, c0, formulaOf(r0.row, c0.col, id),
+                    si < b.sides.size() && b.sides[si].cell == k ? &b.sides[si] : nullptr);
+          }
+          bandRow(r0.row, out, kMaxCols);
+        }
+      }
+      bandOnly(kNone);
+    };
+    for (size_t bi = 0; bi < oldBlocks.size(); ++bi) {
+      const RowBlock& b = *oldBlocks[bi];
+      if (b.rows.empty()) continue;
+      const uint32_t first = b.rows.front().row, last = b.rows.back().row;
+      if (rows && !whole && last >= firstMoved) {
+        gather(bi);
+        break;
+      }
+      auto o = std::lower_bound(ownRows.begin(), ownRows.end(), first);
+      const bool owns = o != ownRows.end() && *o <= last;
+      const bool reached = rows ? last >= firstMoved : m.Across(first, last) != 0;
+      if (!owns && !reached) {
+        blocks.push_back(oldBlocks[bi]);
+        firstRows.push_back(oldFirst[bi]);
+        open = false;
+      } else {
+        rewrite(b);
+      }
+    }
+    size_t cellCount = 0, formulaCells = 0;
+    for (const auto& b : blocks) {
+      cellCount += b->cells.size();
+      formulaCells += b->formulas.size();
     }
     A::Blocks(s) = std::move(blocks);
     A::FirstRows(s) = std::move(firstRows);
-    A::CellCount(s) = items.size();
+    A::CellCount(s) = cellCount;
     A::FormulaCells(s) = formulaCells;
     // Shared formulas' masters, where they are now.
     auto& masters = A::SharedMasters(s);
