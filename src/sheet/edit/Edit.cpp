@@ -1579,21 +1579,35 @@ Result Editor::DeleteSheet(int sheet) {
   };
   for (const DefinedName& nm : book_.Names())
     if (nm.sheet != sheet && uses(nm.formula)) return Result::Fail(u"Formulas or names use this sheet.");
-  // Chart series too (their c:f formulas), until the registry updates them.
-  if (const pkg::Package* package = book_.GetPackage())
+  // Anything else in the file that names it (chart series, x14 extensions' xm:f, hyperlink
+  // locations, ...), until the registry updates those: Sheet1! or 'My sheet'! in any XML part but
+  // the sheet's own, the workbook part and the shared strings.
+  if (const pkg::Package* package = book_.GetPackage()) {
+    auto lower = [](std::string s) {
+      for (char& c : s) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
+      return s;
+    };
+    std::string quoted = "'";
+    for (char c : gone) quoted += c == '\'' ? std::string("''") : std::string(1, c);
+    const std::string plain = lower(gone) + "!", inQuotes = lower(quoted) + "'!";
+    const std::string own = pkg::PartKey(book_.GetSheet(static_cast<size_t>(sheet)).PartName());
     for (const pkg::Part& part : package->Parts()) {
-      if (part.deleted || package->ContentTypeOf(part.name).find("drawingml.chart+xml") == std::string_view::npos)
-        continue;
+      std::string key = pkg::PartKey(part.name);
+      if (part.deleted || key == own || key == pkg::PartKey(book_.WorkbookPart()) ||
+          key == pkg::PartKey(book_.StringsPart()) || !package->IsXmlPart(part.name) ||
+          package->ContentTypeOf(part.name).find("extended-properties") != std::string_view::npos)
+        continue;  // (docProps/app.xml lists names as "Sheet1!Print_Area": text, not references)
       std::vector<uint8_t> bytes;
       if (!package->ReadPart(part.name, bytes).Ok()) continue;
-      std::string_view xml(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-      for (size_t at = xml.find(":f>"); at != std::string_view::npos; at = xml.find(":f>", at + 3)) {
-        size_t end = xml.find('<', at + 3);
-        if (end == std::string_view::npos) break;
-        if (xml[at - 1] != '/' && uses(xml.substr(at + 3, end - at - 3)))
-          return Result::Fail(u"Charts use this sheet.");
+      const std::string xml = lower(std::string(bytes.begin(), bytes.end()));
+      bool named = xml.find(inQuotes) != std::string::npos;
+      for (size_t at = xml.find(plain); !named && at != std::string::npos; at = xml.find(plain, at + 1)) {
+        char before = at ? xml[at - 1] : '>';
+        named = !(std::isalnum(static_cast<unsigned char>(before)) || before == '_' || before == '.' || before == '\'');
       }
+      if (named) return Result::Fail(u"Other parts of the workbook use this sheet.");
     }
+  }
   for (size_t i = 0; i < book_.SheetCount(); ++i) {
     if (static_cast<int>(i) == sheet) continue;
     Sheet& x = book_.GetSheet(i);
