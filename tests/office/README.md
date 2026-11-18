@@ -130,6 +130,10 @@ D2 is done when every corpus file, after scripted random edits and a save, has n
   - **Comparing:** Featherweight's copies (or a folder of them, with `-Saved <folder>`) are dumped the same way and must match, and must open without a repair.
   - **Number formats:** they go through the COM call with en-US. Without it, PowerShell's call carries the user's locale, and `Range.NumberFormat` takes and gives the region's codes ("dd/mm/jjjj", "Standaard"). The S1 cells files' `-CellFormats` field has those codes; nothing reads it.
   - **AutoSum:** Excel's own AutoSum leaves a hidden Excel editing the cell, so Excel types the formula the step names, and Featherweight's AutoSum must propose it.
+  - **Fixtures (S3, "created as Excel shows it"):** `-Fixtures -Featherweight <exe>` plays `fixtures/*.steps` in Featherweight only. Each fixture is saved and its active sheet goes through Export PDF.
+    - **Results:** Excel opens the file without recalculating and records Featherweight's results, then recalculates. Any cell whose text changes is a failure.
+    - **Objects:** Excel lists what it reads as fact lines (`<out>\<name>.facts.txt`): cells, names, charts and series, tables, conditional formats, validations, notes, comments, links and page setup. Each `expect <fact>` line in the fixture must be among them.
+    - **Pixels:** Excel's PDF of the same sheet is compared with ours by `fwtool pdf-compare`: SSIM per page at 100 dpi, passing at 0.95. It also prints SSIM inside the ink, since blank paper inflates the whole-page score.
 - **`scripts/contract-review-check.ps1`** is D4's contract review check. It reviews `torture/review-contract.docx` in Featherweight's editor through `fwtool torture --replay`, with the operations the Review pane runs:
   - accept a replacement, reject an inserted clause, accept a changed number, and reject a deleted paragraph mark
   - reply to a comment and resolve its thread

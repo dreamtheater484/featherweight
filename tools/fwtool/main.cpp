@@ -98,6 +98,9 @@ constexpr const char* kUsage =
     "  fwtool pdf-check --pngs DIR <exported.pdf>\n"
     "      The same for a PDF the app exported (script ops exportpdf: and pagepngs:), against the\n"
     "      pages in DIR; lists its links, bookmarks, title and author.\n"
+    "  fwtool pdf-compare [--out DIR] [--json FILE] <reference.pdf> <ours.pdf>\n"
+    "      Pixels (S3, plan §10): both PDFs rendered at 100 dpi, page origins aligned, each page compared\n"
+    "      by SSIM; a page passes at >= 0.95. --out writes failing pages side by side with the difference.\n"
     "  fwtool paste-check [--samples DIR] [--out DIR] <file or folder>...\n"
     "      Copies each Word document's main story as RTF and HTML and pastes it back (the HTML\n"
     "      over the story, the RTF at its end), and pastes each clipboard sample in --samples at\n"
@@ -343,6 +346,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"cfb") return fwtool::RunCfb(options);
   if (command == L"csv") return fwtool::RunCsv(options);
   if (command == L"pdf-check") return fwtool::RunPdfCheck(options);
+  if (command == L"pdf-compare") return fwtool::RunPdfCompare(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }

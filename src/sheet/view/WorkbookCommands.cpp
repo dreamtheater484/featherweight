@@ -495,6 +495,9 @@ void WorkbookView::BuildStatusBar(StatusBarModel& m) {
   }
   if (Stale(active_.row, active_.col))
     m.segments.push_back(L"Value possibly out of date: it uses a function Featherweight can't calculate yet");
+  if (calc_ && !calc_->Opening())  // a dynamic array that can't spill: why, as Excel's error menu says it
+    if (std::wstring why = calc_->SpillReason(static_cast<int>(sheet_), active_.row, active_.col); !why.empty())
+      m.segments.push_back(L"#SPILL!: " + why);
   if (totals_.count >= 2) {
     // Excel's order: average, count, sum; in the format of the first number.
     auto show = [&](double v) {
@@ -796,7 +799,7 @@ std::wstring WorkbookView::EditTextAt(const Sheet& s, uint32_t row, uint32_t col
       }
       // In the region's form (en-NL: =SUM(1;2,5)), as Excel's formula bar shows it.
       const std::wstring w = L"=" + Utf8ToWide(calc::ToLocal(text, Region()));
-      return f.kind == FormulaKind::Array ? L"{" + w + L"}" : w;
+      return f.kind == FormulaKind::Array && !f.dynamic ? L"{" + w + L"}" : w;  // a dynamic array: no braces (Excel)
     }
   }
   const Xf& xf = book_->GetStyles().CellXf(cell.style);

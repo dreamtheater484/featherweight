@@ -562,6 +562,12 @@ bool WorkbookView::InputFor(const std::wstring& text, int sheet, CellAddr cell, 
     }
     formula = e.text;
     in = edit::CellInput::Formula(e.text.substr(1));
+    // One that gives an array spills from the cell, as in Excel 365 (a dynamic array).
+    Range spill;
+    if (Calc().SpillSize(in.formula, sheet, cell.row, cell.col, spill)) {
+      in.dynamic = true;
+      in.arrayRange = spill;
+    }
     return true;
   }
   if (textFormat) {
@@ -877,8 +883,15 @@ void WorkbookView::DrawBarText(Canvas& c) {
   c.PushClip(box);
   if (!editor_.Active() || renaming_ >= 0) {
     std::wstring text = FormulaBarText();
+    bool spilled = false;  // a cell a dynamic array spilled into: its anchor's formula, greyed (Excel)
+    if (calc::Area a; calc_ && calc_->engine().SpillRangeAt(static_cast<int>(sheet_), static_cast<int32_t>(active_.row),
+                                                          static_cast<int32_t>(active_.col), a) &&
+                      !(static_cast<uint32_t>(a.r1) == active_.row && static_cast<uint32_t>(a.c1) == active_.col)) {
+      text = EditTextAt(Current(), static_cast<uint32_t>(a.r1), static_cast<uint32_t>(a.c1));
+      spilled = true;
+    }
     if (const size_t nl = text.find_first_of(L"\r\n"); nl != std::wstring::npos) text = text.substr(0, nl) + L" …";
-    c.Text(text, box, p.text, size);
+    c.Text(text, box, spilled ? p.textSecondary : p.text, size);
     c.PopClip();
     return;
   }

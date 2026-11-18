@@ -1,0 +1,51 @@
+# S3 fixture ("created as Excel shows it"): formatted cells, typed and formatted through the grid's
+# commands in the en-NL region. scripts\build-from-scratch.ps1 -Fixtures plays it in Featherweight,
+# has Excel read it back (each "expect" line is a fact Excel must report) and compares Excel's PDF
+# of the sheet with Featherweight's Export PDF.
+sheet-name "Formats"
+enter A1 "Quarterly report"
+format A1 bold
+format A1 italic
+format A1 size=14
+enter A3 "Item"
+enter B3 "Amount"
+enter C3 "Share"
+format A3:C3 bold
+format A3:C3 fill=DDEBF7
+format A3:C3 border=bottom
+format B3:C3 align=right
+enter A4 "North"
+enter B4 "1234,5"
+enter A5 "South"
+enter B5 "987,25"
+enter A6 "Total"
+autosum B6 "=SUM(B4:B5)"
+enter C4 "=B4/$B$6"
+fill-down C4:C5
+format B4:B6 numfmt=#,##0.00
+format C4:C5 numfmt=0.0%
+format A6:B6 bold
+format B6 border=double-top
+enter A8 "Wrapped text in a narrow column"
+format A8 wrap
+format A8 color=C00000
+width A 14
+width B:C 12
+save
+expect cell Formats!A1 text Quarterly report
+expect cell Formats!A1 font Calibri 14 bold italic
+expect cell Formats!A3 fill DDEBF7
+expect cell Formats!A3 bottom 1/2
+expect cell Formats!C3 bottom 1/2
+expect cell Formats!B3 align -4152
+expect cell Formats!B4 text 1.234,50
+expect cell Formats!B4 numfmt #,##0.00
+expect cell Formats!B6 formula =SUM(B4:B5)
+expect cell Formats!B6 text 2.221,75
+expect cell Formats!B6 font Calibri 11 bold
+expect cell Formats!B6 top -4119/4
+expect cell Formats!C4 formula =B4/$B$6
+expect cell Formats!C4 text 55,6%
+expect cell Formats!C5 formula =B5/$B$6
+expect cell Formats!C5 numfmt 0.0%
+expect cell Formats!A8 wrap

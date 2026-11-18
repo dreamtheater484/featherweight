@@ -976,8 +976,9 @@ struct Editor::State {
       if (formula) {
         FormulaRec rec;
         rec.text = A::Texts(s).Add(content->formula);
-        if (content->array) {
+        if (content->array || content->dynamic) {
           rec.kind = FormulaKind::Array;
+          rec.dynamic = content->dynamic;
           rec.hasRef = true;
           rec.ref = content->arrayRange;
           rec.attrs = A::Store(s).Intern({{"t", "", "array"}, {"ref", "", RangeName(content->arrayRange)}});
@@ -1355,7 +1356,7 @@ static Result CheckInput(const CellInput& in) {
     if (Utf16Length(in.formula) > 8192) return Result::Fail(u"A formula can be at most 8,192 characters long.");
     if (!XmlSafe(in.formula)) return Result::Fail(u"The formula holds characters a workbook can't store.");
   }
-  if (in.array && !Valid(in.arrayRange)) return BadRange();
+  if ((in.array || in.dynamic) && !Valid(in.arrayRange)) return BadRange();
   return {};
 }
 
@@ -1379,7 +1380,8 @@ Result Editor::SetCells(int sheet, const std::vector<std::pair<CellAddr, CellInp
       if (!in.formula.empty())
         if (!MissingSheet(book_, in.formula).empty())
           return Result::Fail(u"The formula names a sheet this workbook doesn't have.");
-      if (in.array && (in.arrayRange.firstRow != at.row || in.arrayRange.firstCol != at.col)) return BadRange();
+      if ((in.array || in.dynamic) && (in.arrayRange.firstRow != at.row || in.arrayRange.firstCol != at.col))
+        return BadRange();
       if (const Range* arr = State::ArrayAt(arrays, at.row, at.col); arr && !(in.array && in.arrayRange == *arr))
         return Result::Fail(u"You can't change part of an array.");
       // Excel turns a formula typed into a table's header into its value as text; its value isn't
