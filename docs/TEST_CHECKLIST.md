@@ -289,3 +289,9 @@ Check next to Excel on copies of your own workbooks. Every change is one undo st
 
 - [ ] Shift+F2 adds a note to the cell (with your Windows user name in bold, as Excel shows it); the red corner appears; hovering shows the note. Shift+F2 on it edits the text; Delete note removes it; Show note / Show all notes keep them shown. A ¶ in the box is a line break.
 - [ ] Saved, Excel opens the file without a repair and shows the same notes, in the same place, shown or hidden as set here.
+- [ ] The note panel's width and height (points) resize the box: it moves beside the cell at the new size, here and in Excel. Editing the text of a note made or resized in Excel keeps its box where it was.
+
+### Threaded comments
+
+- [ ] Ctrl+Alt+M (or New comment in the cell menu) on a cell: type, Enter. The purple corner appears; hovering shows "Name: text". Ctrl+Alt+M again (or Shift+F2) opens the thread: type a reply and Enter; pick a comment in the list to edit it (Save) or delete it (Delete reply; the first one deletes the thread); Resolve and Reopen. A cell with a note offers no New comment, and a cell with a thread no New note.
+- [ ] Saved, the file opens in Excel without a repair. Excel 365 shows the thread with its replies and authors, resolved as set here; Excel 2021 shows it as a note starting "[Threaded comment]", as for a file Excel 365 saved.
