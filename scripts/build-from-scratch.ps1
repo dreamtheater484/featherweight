@@ -306,6 +306,12 @@ if ($Child) {
               $ws.Range($cols).ColumnWidth = [double](($rest -split '\s+')[1])
             }
             "merge" { [void]$ws.Range($first).Merge() }
+            "name" { [void]$wb.Names.Add($first, $quoted) }  # name Rate "=Sheet!$B$2"
+            "delete-name" { $wb.Names.Item($first).Delete() }
+            "names-create" {  # names-create A1:B5 top,left: Create from Selection
+              $sides = (($rest -split '\s+')[1]) -split ','
+              [void]$ws.Range($first).CreateNames($sides -contains 'top', $sides -contains 'left', $sides -contains 'bottom', $sides -contains 'right')
+            }
             "freeze" {
               $win = $wb.Windows.Item(1)
               $win.FreezePanes = $false
@@ -453,6 +459,10 @@ function ConvertTo-AppScript([string]$stepsPath, [string]$target, [string]$pdf) 
         $ops.Add("cmd:2004"); $ops.Add("key:ctrl+a"); $ops.Add("type:" + ($rest -split '\s+')[1]); $ops.Add("key:enter")
       }
       "merge" { Select-Ref $first; $ops.Add("cmd:2026") }
+      # Names (s3-calc's script ops, WorkbookNames.h): define or save, delete, Create from Selection.
+      "name" { $ops.Add("name:$first=" + (($quoted -replace '^=', '') -replace ';', '\;')) }
+      "delete-name" { $ops.Add("name:-$first") }
+      "names-create" { Select-Ref $first; $ops.Add("names:create=" + ($rest -split '\s+')[1]) }
       "freeze" { Select-Ref $first; $ops.Add("cmd:2028") }
       "save" { $ops.Add("saveas:$target") }
       "expect" { }  # a fixture's fact, checked in Excel's read-back

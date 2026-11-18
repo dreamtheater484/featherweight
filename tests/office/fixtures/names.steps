@@ -1,0 +1,32 @@
+# S3 fixture ("created as Excel shows it"): defined names, through the Name Manager's script ops
+# (Define Name, Delete, Create from Selection), used in formulas typed in the en-NL region.
+sheet-name "Names"
+enter A1 "Rate"
+enter B1 "0,21"
+enter A3 "Item"
+enter B3 "Net"
+enter A4 "Desk"
+enter B4 "250"
+enter A5 "Chair"
+enter B5 "120"
+enter A6 "Lamp"
+enter B6 "35"
+name Rate "=Names!$B$1"
+name Scratch "=Names!$D$1"
+delete-name Scratch
+names-create B3:B6 top
+enter D3 "Gross"
+enter D4 "=B4*(1+Rate)"
+fill-down D4:D6
+enter D8 "=SUM(Net)"
+enter D9 "=ROUND(SUM(Net)*Rate;2)"
+save
+expect name Rate =Names!$B$1
+expect name Net =Names!$B$4:$B$6
+expect cell Names!D4 formula =B4*(1+Rate)
+expect cell Names!D4 text 302,5
+expect cell Names!D6 formula =B6*(1+Rate)
+expect cell Names!D8 formula =SUM(Net)
+expect cell Names!D8 text 405
+expect cell Names!D9 formula =ROUND(SUM(Net)*Rate,2)
+expect cell Names!D9 text 85,05
