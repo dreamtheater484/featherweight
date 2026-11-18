@@ -26,6 +26,7 @@ struct Source {
   uint32_t codePage = 65001;   // Ansi: the code page it was read with
   char delimiter = ',';
   bool sepLine = false;        // it starts with Excel's "sep=;" line, which isn't a row
+  std::string sepText;         // that line with its line end, as UTF-8
   LineEnd lineEnd = LineEnd::CRLF;  // the most common one
   bool mixedLineEnds = false;
   bool finalLineEnd = true;    // the last row ends with a line end
@@ -78,6 +79,22 @@ class Reader {
   std::vector<std::pair<std::string, uint32_t>> styles_;  // format code (UTF-8) -> cell style
   size_t stringBytes_ = 0;                                  // text added to the workbook's strings
 };
+
+// The first sheet as the CSV file it was opened from (plan §7.1): `original` is that file, read again
+// with the options it was opened with. Its encoding, byte-order mark, sep= line, delimiter, quoting
+// and line ends are kept, and a row whose values read as they did is written as it was read (the
+// file unchanged gives the same bytes; columns and rows past the sheet's edge are kept).
+std::string Write(const Workbook& book, std::string_view original, const Options& options);
+// The first sheet as a new CSV file, as Excel writes it from the used range, but UTF-8 with a
+// byte-order mark and the region's list separator (`options.delimiter`, else the locale's; a tab
+// for `tsv`), CRLF after each row.
+std::string WriteNew(const Workbook& book, const Options& options);
+
+// Whether saving as CSV loses something the workbook holds (S2 plan: the "CSV keeps only the values
+// of the first sheet" banner): another sheet, a formula, formatting beyond number formats (fonts,
+// fills, borders, alignment, cell styles), merged cells, column widths or row heights, hidden rows
+// or columns, hyperlinks, a filter. Number formats aren't: the values are written as shown.
+bool Loses(const Workbook& book);
 
 // The whole file as a workbook with one sheet named `sheetName` (format Csv).
 void Read(std::string_view bytes, const std::string& sheetName, const Options& options, Workbook& book,

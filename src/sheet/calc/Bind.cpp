@@ -167,6 +167,91 @@ bool WorkbookCalc::RowFiltered(int sheet, int32_t row) {
   return false;
 }
 
+void WorkbookCalc::CellsEdited(int sheet, const Range& cells) {
+  while (Opening()) OpenStep(1e9);  // an edit while opening: finish that first
+  if (sheet < 0 || sheet >= SheetCount()) return;
+  Area a;
+  a.s1 = a.s2 = static_cast<uint16_t>(sheet);
+  a.r1 = static_cast<int32_t>(std::min<uint32_t>(cells.firstRow, 1048575));
+  a.r2 = static_cast<int32_t>(std::min<uint32_t>(cells.lastRow, 1048575));
+  a.c1 = static_cast<int16_t>(std::min<uint32_t>(cells.firstCol, 16383));
+  a.c2 = static_cast<int16_t>(std::min<uint32_t>(cells.lastCol, 16383));
+  engine_->ClearFormulas(sheet, a);
+  const Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  std::vector<calc::Cell> entered;
+  shared_.clear();
+  s.ForEachCell(cells, [&](const CellInfo& c) {
+    if (!c.hasFormula) return true;
+    AddFormula(s, static_cast<size_t>(sheet), c);
+    calc::Cell at{sheet, static_cast<int32_t>(c.row), static_cast<int32_t>(c.col)};
+    engine_->Touch(at);
+    entered.push_back(at);
+    return true;
+  });
+  shared_.clear();
+  engine_->Changed(sheet, a);
+  if (ManualCalc())
+    for (const calc::Cell& at : entered) engine_->CalculateCell(at);
+}
+
+void WorkbookCalc::StructureEdited() {
+  while (Opening()) OpenStep(1e9);
+  engine_ = std::make_unique<Engine>(*this);
+  extents_.clear();
+  shared_.clear();
+  sheet_ = 0, row_ = col_ = 0, formulasLeft_ = 0;
+  phase_ = Phase::kSheets;
+  // Every formula read again (the model's values are current), then all of them recalculated.
+  std::vector<std::string> names;
+  for (size_t i = 0; i < book_.SheetCount(); ++i) names.push_back(book_.GetSheet(i).Name());
+  engine_->SetSheets(std::move(names));
+  for (const DefinedName& n : book_.Names()) engine_->DefineName(n.name, n.sheet, n.formula);
+  LoadSome(1e300);
+  phase_ = Phase::kDone;
+  CalcSettings settings = Settings();
+  settings.fullCalcOnLoad = false;
+  settings.fullCalcSheets.clear();
+  engine_->Opened(settings);  // what's volatile
+  if (!settings.manual) engine_->MarkAllDirty();
+}
+
+bool WorkbookCalc::CalcStep(double budgetMs) {
+  if (Held()) return false;
+  if (Opening()) return OpenStep(budgetMs);
+  return engine_->Recalculate(budgetMs);
+}
+
+bool WorkbookCalc::ManualCalc() const { return book_.Calc().mode == CalcMode::Manual; }
+
+void WorkbookCalc::CalculateNow() {
+  if (Held()) return;
+  while (Opening()) OpenStep(1e9);
+  CalcSettings auto_ = Settings();
+  auto_.manual = false;
+  auto_.fullCalcOnLoad = false;
+  auto_.fullCalcSheets.clear();
+  engine_->Opened(auto_);  // volatile formulas and what depends on them, and those without a value
+}
+
+void WorkbookCalc::CalculateFull() {
+  if (Held()) return;
+  while (Opening()) OpenStep(1e9);
+  engine_->MarkAllDirty();
+}
+
+void WorkbookCalc::CalculateSheet(int sheet) {
+  if (Held()) return;
+  while (Opening()) OpenStep(1e9);
+  if (sheet >= 0 && sheet < SheetCount()) engine_->CalculateSheet(sheet);
+}
+
+bool WorkbookCalc::CircularCell(int& sheet, int32_t& row, int32_t& col) const {
+  calc::Cell at;
+  if (Settings().iterate || !engine_->Circular() || !engine_->FirstCircular(at)) return false;
+  sheet = at.sheet, row = at.row, col = at.col;
+  return true;
+}
+
 bool WorkbookCalc::Manual() { return book_.Calc().mode == CalcMode::Manual; }
 
 int WorkbookCalc::FormatText(const CellView& value, std::string_view format, std::string& out) {

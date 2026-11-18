@@ -840,8 +840,49 @@ void SheetLoader::ReadTop(std::string_view local, std::string_view xml) {
   } else if (local == "autoFilter") {
     SheetFilter f;
     if (ParseRange(Attr(n, "ref"), f.ref)) {
-      f.filtered = static_cast<bool>(Child(n, "filterColumn"));
-      s_.filter_ = f;
+      for (pugi::xml_node c = n.first_child(); c; c = c.next_sibling()) {
+        if (c.type() != pugi::node_element || Local(c) != "filterColumn") continue;
+        FilterColumn col;
+        col.colId = UIntAttr(c, "colId", 0);
+        pugi::xml_node k = c.first_child();
+        while (k && k.type() != pugi::node_element) k = k.next_sibling();
+        const std::string_view kind = k ? Local(k) : std::string_view();
+        const bool plain = !c.attribute("hiddenButton") && !c.attribute("showButton");
+        if (plain && kind == "filters" && !Child(k, "dateGroupItem")) {
+          col.blank = BoolAttr(k, "blank", false);
+          for (pugi::xml_node v = k.first_child(); v; v = v.next_sibling())
+            if (v.type() == pugi::node_element && Local(v) == "filter") col.values.emplace_back(Attr(v, "val"));
+        } else if (plain && kind == "customFilters") {
+          col.kind = FilterColumn::Kind::Custom;
+          col.both = BoolAttr(k, "and", false);
+          for (pugi::xml_node v = k.first_child(); v; v = v.next_sibling())
+            if (v.type() == pugi::node_element && Local(v) == "customFilter") {
+              std::string_view op = Attr(v, "operator");
+              col.conditions.push_back({op.empty() ? std::string("equal") : std::string(op), std::string(Attr(v, "val"))});
+            }
+        } else if (plain && kind == "top10") {
+          col.kind = FilterColumn::Kind::Top10;
+          col.count = NumAttr(k, "val", 10);
+          col.bottom = !BoolAttr(k, "top", true);
+          col.percent = BoolAttr(k, "percent", false);
+          col.threshold = NumAttr(k, "filterVal", 0);
+        } else if (plain && kind == "dynamicFilter" &&
+                   (Attr(k, "type") == "aboveAverage" || Attr(k, "type") == "belowAverage")) {
+          col.kind = Attr(k, "type") == "aboveAverage" ? FilterColumn::Kind::AboveAverage : FilterColumn::Kind::BelowAverage;
+          col.threshold = NumAttr(k, "val", 0);
+        } else {
+          col.kind = FilterColumn::Kind::Other;
+          struct Out : pugi::xml_writer {
+            std::string s;
+            void write(const void* d, size_t size) override { s.append(static_cast<const char*>(d), size); }
+          } out;
+          c.print(out, "", pugi::format_raw);
+          col.xml = std::move(out.s);
+        }
+        f.columns.push_back(std::move(col));
+      }
+      f.filtered = !f.columns.empty();
+      s_.filter_ = std::move(f);
     }
   } else if (local == "dimension") {
     Range r;

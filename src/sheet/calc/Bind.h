@@ -10,6 +10,7 @@
 //   calc.engine().Opened(calc.Settings());
 //   calc.engine().Recalculate();
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -22,6 +23,7 @@ namespace fw::sheet {
 class Workbook;
 class Sheet;
 struct CellInfo;
+struct Range;
 class NumberFormat;
 struct NumLocale;
 }  // namespace fw::sheet
@@ -53,6 +55,30 @@ class WorkbookCalc : public Host {
   bool Opening() const { return phase_ != Phase::kDone; }
   // Counts the recalculated values that differ from what their cells showed (repaint when it moves).
   uint64_t Changes() const { return changes_; }
+
+  // After an edit (s2-model's change notifications, the model already changed):
+  // values or formulas in `cells` of `sheet` (kValues, kFormulas): its formulas are read again and
+  // what depends on the cells becomes dirty. Manual mode: a formula entered is calculated, the rest
+  // waits for F9.
+  void CellsEdited(int sheet, const Range& cells);
+  // Sheets, names, rows or columns inserted or deleted (kSheets, kNames, kShift): every formula is
+  // read again and recalculated.
+  void StructureEdited();
+  // Recalculates what edits left dirty, about `budgetMs` at a time (at idle): true when nothing is
+  // left, and nothing runs after that. Not called in manual mode until F9.
+  bool CalcStep(double budgetMs);
+  bool Calculating() const { return engine_->Pending(); }  // "Calculating…" while a step leaves work
+  bool ManualCalc() const;                                  // calcPr calcMode="manual"
+  void CalculateNow();   // F9: then CalcStep until done (dirty and volatile formulas)
+  void CalculateFull();  // Ctrl+Alt+F9: every formula
+  void CalculateSheet(int sheet);  // Shift+F9: the sheet's dirty and volatile formulas, at once
+  // While `busy` returns true nothing is written to the sheets: a save is reading them on its worker
+  // (calc.HoldWhile([&] { return editor.Saving(); })). CalcStep then does no work and returns
+  // false; F9, Shift+F9 and Ctrl+Alt+F9 do nothing (edits are refused meanwhile anyway).
+  void HoldWhile(std::function<bool()> busy) { busy_ = std::move(busy); }
+  // A cell in a circular reference, for the banner and "Circular References: B2"; none while
+  // iterative calculation is on (Excel then warns of nothing).
+  bool CircularCell(int& sheet, int32_t& row, int32_t& col) const;
 
   // Host
   int SheetCount() const override;
@@ -86,6 +112,8 @@ class WorkbookCalc : public Host {
   const NumLocale* locale_;
   ConvLocale conv_;
   std::unique_ptr<Engine> engine_;
+  std::function<bool()> busy_;
+  bool Held() const { return busy_ && busy_(); }
   std::vector<std::pair<int32_t, int32_t>> extents_;
   std::unordered_map<std::string, std::unique_ptr<NumberFormat>> formats_;
 };

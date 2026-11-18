@@ -25,6 +25,7 @@ struct Options {
   double minPages = -1;             // compare: fail below this share of matching page counts (%)
   bool cells = false;               // compare: workbooks' displayed cell text against Excel's cells files
   bool values = false;              // csv: every field must show its text unchanged
+  bool resave = false;              // csv: saved untouched, the same bytes
   double minCells = -1;             // compare --cells: fail below this share of cells showing Excel's text (%)
   double minLines = -1;             // compare: fail below this share of matching line breaks (%)
   bool selfTest = false;            // compare: Word's lines against themselves and known changes
@@ -33,6 +34,7 @@ struct Options {
   bool budgets = false;             // bench: fail when a budget is missed
   bool typing = false;              // bench: time keystrokes instead of opening
   bool scrolling = false;           // bench: time painting every page in order, and memory
+  bool sheetEdits = false;          // bench: S2's editing budgets on made workbooks (SheetBench.cpp)
   int edits = 40;                   // edit-check, torture: random edits per document (torture: per round)
   unsigned seed = 0;                // edit-check, torture: the random edits' seed (0: edit-check takes the
                                     // document's number, torture 1; torture derives one per file and round)
@@ -40,6 +42,7 @@ struct Options {
   bool edited = false;              // save: as after an edit in every part the model owns
   uint32_t rounds = 3;              // torture: rounds per document, each from the original
   bool replay = false;              // torture: the input is a reproducer to replay
+  std::string ops;                  // torture (workbooks): only these edits, comma-separated ("value,formula,undo")
   std::filesystem::path samples;    // paste-check: clipboard samples (.rtf, .html) to paste
   std::filesystem::path pngs;       // pdf-check: the pages the app drew (page-1.png, ...)
   std::wstring locale;              // formulas: the region the files were calculated in (en-US, en-NL)
@@ -109,6 +112,7 @@ int RunPdfCheck(const Options& options);
 int RunBenchApp(const Options& options);
 int RunSpelling(const Options& options);
 int RunTorture(const Options& options);
+int RunSheetEditBench(const Options& options);
 // Parses its own options, from argv[2] on.
 int RunWrap(int argc, wchar_t** argv);
 

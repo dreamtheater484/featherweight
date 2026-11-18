@@ -64,6 +64,8 @@ class App : public PdfHost, public DropHost {
   void ViewInvalidate() override;
   void ViewStateChanged() override;
   void ViewMessage(BannerKind kind, const std::wstring& text) override;
+  void ViewSaved(TabContent* view, bool ok, const std::wstring& error) override;
+  bool ViewConfirm(const std::wstring& text, const std::wstring& ok) override;
   HWND ViewHwnd() override { return hwnd_; }
   void ViewRequestPrint() override;
   void ViewFocusTextBox(TextBox* box) override;
@@ -155,7 +157,13 @@ class App : public PdfHost, public DropHost {
   void ActivateTab(int index);
   bool CloseTab(int index);
   bool ConfirmClose(TabContent* view);
-  bool SaveActive(bool saveAs);
+  // `wait`: done when this returns (closing the tab next); otherwise a workbook is written in the
+  // background and ViewSaved follows.
+  bool SaveActive(bool saveAs, bool wait = false);
+  // Saves the active tab to `path`, after the banner when its format loses something (CSV).
+  bool SaveActiveTo(std::wstring path, bool saveAs, bool wait = false);
+  // After a save: the recent files, "Saved", the title.
+  void Saved(TabContent* view);
   void PrintActive();
   // Export PDF: asks where, then writes the tab's pages there.
   void ExportPdfActive();
@@ -176,6 +184,7 @@ class App : public PdfHost, public DropHost {
   // Where backups and recovery autosaves go, and who saves; `userFolders` false keeps them off.
   void InitFiles(bool userFolders);
   void NewDocument(int kind = 0);  // fw::doc::docx::Template
+  void NewWorkbook();               // "Book1"
   // At startup: documents a crash left unsaved, offered in a banner.
   void OfferRecovery();
   void RecoverDocuments(bool open);  // Recover, or Discard
@@ -295,13 +304,15 @@ class App : public PdfHost, public DropHost {
   std::wstring bannerUpdateVersion_;
   enum BannerActions {
     kActUpdate = 1, kActDownload, kActSkip, kActNotNow = 5, kActSaveAs, kActRecover, kActDiscard, kActReload,
-    kActMakeDefault = 20
+    kActKeepFormat, kActMakeDefault = 20
   };
+  std::wstring keepFormatPath_;  // the save the "Keep CSV" banner waits on
   // (kActMakeDefault + fw::FileKind: the default-app offer for that kind of file)
 
   // Files
   std::vector<fw::pkg::recovery::Entry> orphans_;  // offered for recovery
   int newDocuments_ = 0;
+  int newWorkbooks_ = 0;  // Book1, Book2, and workbooks from templates (Budget1)
   bool autosaveTimer_ = false;
 
   // Input state

@@ -10,6 +10,9 @@
 #include "pkg/Snapshot.h"
 #include "sheet/csv/Csv.h"
 #include "sheet/numfmt/NumLocale.h"
+#include "sheet/view/WorkbookFilter.h"
+#include "sheet/view/WorkbookFormat.h"
+#include "sheet/view/WorkbookPanels.h"
 #include "sheet/xlsx/Xlsx.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
@@ -62,13 +65,30 @@ D2D1_RECT_F Clip(const D2D1_RECT_F& a, const D2D1_RECT_F& b) {
 
 }  // namespace
 
-WorkbookView::WorkbookView(ViewHost& host, std::wstring path) : PagedView(host), path_(std::move(path)) {
+WorkbookView::WorkbookView(ViewHost& host, std::wstring path)
+    : PagedView(host), path_(std::move(path)), file_(std::make_unique<WorkbookFile>()) {
   zoomMode_ = fw::ZoomMode::FitPage;
 }
 
 WorkbookView::~WorkbookView() = default;
 
-std::wstring WorkbookView::Title() const { return FileNameOf(path_); }
+std::unique_ptr<WorkbookView> WorkbookView::NewWorkbook(ViewHost& host, int number) {
+  auto view = std::make_unique<WorkbookView>(host, std::wstring());
+  view->newBook_ = true;
+  view->file_->New(number);
+  return view;
+}
+
+std::unique_ptr<WorkbookView> WorkbookView::FromBytes(ViewHost& host, std::vector<uint8_t> bytes, std::wstring title,
+                                                      std::wstring suggested, bool unsaved) {
+  auto view = std::make_unique<WorkbookView>(host, std::wstring());
+  view->bytes_ = std::move(bytes);
+  view->fromBytes_ = true;
+  view->file_->Copy(std::move(title), std::move(suggested), unsaved);
+  return view;
+}
+
+std::wstring WorkbookView::Title() const { return path_.empty() ? file_->Title() : FileNameOf(path_); }
 
 // ---------------------------------------------------------------------------
 // Loading
@@ -76,8 +96,19 @@ std::wstring WorkbookView::Title() const { return FileNameOf(path_); }
 OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
   const std::wstring name = Title();
   pkg::Status st;
-  auto snapshot = pkg::Snapshot::Open(path_, {}, st);
-  if (EndsWithNoCase(path_, L".csv") || EndsWithNoCase(path_, L".tsv")) {
+  if (newBook_) {
+    std::unique_ptr<Workbook> book = xlsx::NewWorkbook(st);
+    if (!book) {
+      error = L"A new workbook couldn't be made.";
+      return OpenResult::Failed;
+    }
+    return Opened(std::move(book), error);
+  }
+  // A recovered workbook is read from its autosave, named as its tab is.
+  std::unique_ptr<pkg::Snapshot> snapshot =
+      fromBytes_ ? pkg::Snapshot::FromBytes(std::move(bytes_)) : pkg::Snapshot::Open(path_, {}, st);
+  const std::wstring& named = fromBytes_ ? name : path_;
+  if (EndsWithNoCase(named, L".csv") || EndsWithNoCase(named, L".tsv")) {
     // A text file of values: one sheet, named after the file as Excel names it.
     if (!snapshot) {
       error = OpenError(name, st);
@@ -86,13 +117,16 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     const auto bytes = snapshot->Bytes();
     csv::Options o;
     o.locale = &UserLocale();
-    o.tsv = EndsWithNoCase(path_, L".tsv");
+    o.tsv = EndsWithNoCase(named, L".tsv");
     auto csvBook = std::make_unique<Workbook>();
     std::wstring sheetName = name.substr(0, name.rfind(L'.'));
     if (sheetName.size() > 31) sheetName.resize(31);
     csv::Source source;
     csv::Read(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), WideToUtf8(sheetName), o,
               *csvBook, source);
+    // Saving reads the file again to write it its own way (WorkbookFile).
+    if (!fromBytes_) file_->Opened(path_, snapshot->GetStamp());
+    file_->SetCsvOptions(o);
     snapshot.reset();  // the model has the values: the file's copy goes before the grid is built
     return Opened(std::move(csvBook), error);
   }
@@ -107,7 +141,18 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     return OpenResult::Failed;
   }
   recalc_ = true;  // a workbook: at idle, recalculate what Excel would on opening
-  return Opened(std::move(book), error);
+  if (!fromBytes_ && newNumber_ > 0) {
+    // A template: a new workbook from it, saved with Save As.
+    file_->OpenedTemplate(path_, newNumber_);
+    path_.clear();
+  } else if (!fromBytes_) {
+    file_->Opened(path_, book->GetPackage()->GetSnapshot().GetStamp());
+  }
+  const OpenResult r = Opened(std::move(book), error);
+  // Someone else has it open in Excel: changes can only be saved as a copy.
+  if (r == OpenResult::Ok)
+    if (std::wstring inUse = file_->InUseMessage(); !inUse.empty()) host_.ViewMessage(BannerKind::Warning, inUse);
+  return r;
 }
 
 OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& error) {
@@ -117,6 +162,8 @@ OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& er
   measure_ = std::make_unique<FontMeasure>(*fonts_);
   text_ = std::make_unique<CellText>(*book_, *fonts_, *measure_, UserLocale());
   states_.assign(book_->SheetCount(), PerSheet{});
+  sheetOrder_.clear();
+  for (size_t i = 0; i < book_->SheetCount(); ++i) sheetOrder_.push_back(&book_->GetSheet(i));
   objects_.clear();
   objects_.resize(book_->SheetCount());
   rules_.clear();
@@ -210,7 +257,11 @@ class ScreenSheetLayout : public SheetLayout {
 // The formula engine on the workbook, made when first needed (the open recalculation reads the
 // formulas a slice at a time; conditional formats only need the names it starts with).
 calc::WorkbookCalc& WorkbookView::Calc() {
-  if (!calc_) calc_ = std::make_unique<calc::WorkbookCalc>(*book_, &text_->Locale());
+  if (!calc_) {
+    calc_ = std::make_unique<calc::WorkbookCalc>(*book_, &text_->Locale());
+    // A save reads the sheets on a worker thread: nothing is recalculated into them meanwhile.
+    calc_->HoldWhile([this] { return edit_ && edit_->Saving(); });
+  }
   return *calc_;
 }
 
@@ -473,12 +524,19 @@ void WorkbookView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   } else if (Ready()) {
     DrawGrid(c, dc);
     DrawStale(c);
+    DrawFillHandle(c);
+    DrawFilterButtons(c);
+    DrawSizeGuide(c);
+    DrawTabDrop(c);
     DrawNote(dc);
+    DrawEditor(c);
     DrawHeaders(c);
     DrawOutline(c);
     DrawScrollbars(c);
     DrawFormulaBar(c);
     DrawSheetTabs(c);
+    if (renaming_ >= 0) DrawEditBox(c, tabs_);
+    DrawFormulaHelp(c);
   }
   c.PopClip();
 }
@@ -532,6 +590,8 @@ void WorkbookView::DrawGrid(Canvas& c, ID2D1DeviceContext* dc) {
     }
     c.PushClip(rc);
     DrawSelection(c, pane);
+    DrawRefBorders(c, pane);
+    DrawClipBorder(c, pane);
     c.PopClip();
   }
   // The frozen panes' edges.
@@ -718,17 +778,17 @@ void WorkbookView::DrawFormulaBar(Canvas& c) {
   c.Fill({formulaBar_.left, formulaBar_.bottom - 1, formulaBar_.right, formulaBar_.bottom}, p.chromeBorder);
   c.FillRound(nameBox_, 4 * u, p.inputBg);
   c.StrokeRound(nameBox_, 4 * u, p.inputBorder, 1);
-  const float size = 13 * u;
+  const float size = FormulaBarSize();
   c.Text(ActiveName(), Inflate(nameBox_, -8 * u, 0), p.text, size);
   const D2D1_RECT_F fx = {nameBox_.right + 8 * u, formulaBar_.top, nameBox_.right + 36 * u, formulaBar_.bottom};
   c.Text(L"fx", fx, p.textSecondary, size, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center);
   c.Fill({fx.right + 4 * u, formulaBar_.top + 6 * u, fx.right + 5 * u, formulaBar_.bottom - 6 * u}, p.chromeBorder);
-  std::wstring text = FormulaBarText();
-  if (const size_t nl = text.find_first_of(L"\r\n"); nl != std::wstring::npos) text = text.substr(0, nl) + L" …";
-  const D2D1_RECT_F box = {fx.right + 12 * u, formulaBar_.top, formulaBar_.right - 12 * u, formulaBar_.bottom};
-  c.PushClip(box);
-  c.Text(text, box, p.text, size);
-  c.PopClip();
+  DrawBarText(c);
+}
+
+D2D1_RECT_F WorkbookView::FormulaBox() const {
+  const float u = ui_;
+  return {nameBox_.right + 48 * u, formulaBar_.top, formulaBar_.right - 12 * u, formulaBar_.bottom};
 }
 
 std::vector<WorkbookView::TabRect> WorkbookView::TabRects() const {

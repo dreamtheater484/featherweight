@@ -76,6 +76,9 @@ class NumberFormat {
   static bool FromLocal(std::wstring_view code, const NumLocale& locale, NumberFormat& out);
   // The code in Excel's invariant form, as Excel stores what was typed; false when refused.
   static bool LocalToInvariant(std::wstring_view code, const NumLocale& locale, std::wstring& out);
+  // The reverse: a stored code as the region types it (Format Cells shows it so; en-NL: jjjj, uu,
+  // Standaard, #.##0,00). LocalToInvariant gives the code back.
+  static std::wstring InvariantToLocal(std::wstring_view code, const NumLocale& locale);
 
   void Format(double value, const FormatContext& context, Formatted& out) const;
   void Format(std::wstring_view text, const FormatContext& context, Formatted& out) const;
@@ -86,6 +89,11 @@ class NumberFormat {
   bool IsDateTime() const;
   // The first section is text (@): typing into such a cell keeps the text.
   bool IsText() const;
+  // A section has a % placeholder ("0%", "0;0%"; not a quoted "%"). Excel's automatic percent
+  // entry: typing into such a cell starting with a digit, '-' or '+' adds a "%" after the caret
+  // (5 gives 5%, 0,5 gives 0,5%, 12:30 the text "12:30%"); a "%" typed just before it steps over
+  // it. Measured on Excel 2021, whose AutoPercentEntry is on by default.
+  bool HasPercent() const;
 
   // The compiled code (internal to the engine).
   struct Token {

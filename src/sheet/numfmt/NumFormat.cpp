@@ -814,6 +814,13 @@ bool NumberFormat::IsDateTime() const { return !sections_.empty() && sections_[0
 
 bool NumberFormat::IsText() const { return !sections_.empty() && sections_[0].kind == Section::Text; }
 
+bool NumberFormat::HasPercent() const {
+  for (const Section& s : sections_)
+    for (const Token& t : s.tokens)
+      if (t.kind == Token::Percent) return true;
+  return false;
+}
+
 // ---- Formatting ----
 
 struct Formatter {
@@ -1705,6 +1712,88 @@ bool NumberFormat::LocalToInvariant(std::wstring_view code, const NumLocale& loc
       return false;
     }
     if (end >= code.size()) return true;
+    out += L';';
+    start = end + 1;
+  }
+}
+
+std::wstring NumberFormat::InvariantToLocal(std::wstring_view code, const NumLocale& l) {
+  if (!Localized(l)) return std::wstring(code);
+  const wchar_t year = Lower(l.yearCode), day = Lower(l.dayCode), hour = Lower(l.hourCode);
+  std::wstring out;
+  size_t start = 0;
+  for (;;) {
+    size_t end = start;
+    while (end < code.size() && code[end] != ';') {
+      const size_t e = SkipPart(code, end);
+      end = e == end ? end + 1 : e;
+    }
+    const std::wstring_view s = code.substr(start, end - start);
+    const bool date = LocalDateSection(s, EnUsLocale(), L'y', L'd', L'h');
+    bool afterCode = false, decimals = false;  // after a date code; in seconds' decimals
+    for (size_t i = 0; i < s.size();) {
+      const wchar_t c = s[i];
+      const size_t e = SkipPart(s, i);
+      if (e != i) {
+        const std::wstring_view part = s.substr(i, e - i);
+        const wchar_t elapsed = c == '[' && part.size() >= 3 ? ElapsedLetter(part.substr(1, part.size() - 2)) : 0;
+        if (elapsed == 'h') {
+          out += L'[';
+          out.append(part.size() - 2, l.hourCode);
+          out += L']';
+        } else if (c == '[' && part.size() > 2 && (part[1] == '<' || part[1] == '>' || part[1] == '=')) {
+          for (wchar_t x : part) x == '.' ? out.append(l.decimal) : out.append(1, x);
+        } else {
+          out.append(part);
+        }
+        afterCode = elapsed != 0, decimals = false;
+        i = e;
+        continue;
+      }
+      if (AtNoCase(s, i, L"general")) {
+        out += l.generalName;
+        i += 7;
+        continue;
+      }
+      const wchar_t lc = Lower(c);
+      if (date) {
+        if (AtNoCase(s, i, L"am/pm") || AtNoCase(s, i, L"a/p")) {
+          const size_t n = AtNoCase(s, i, L"am/pm") ? 5 : 3;
+          out.append(s.substr(i, n));
+          i += n;
+          continue;
+        }
+        if (lc == 'y' || lc == 'd' || lc == 'h' || lc == 'm' || lc == 's' || lc == 'e' || lc == 'b' || lc == 'g') {
+          out += lc == 'y' ? year : lc == 'd' ? day : lc == 'h' ? hour : c;
+          afterCode = true, decimals = false;
+          ++i;
+          continue;
+        }
+        if (c == '.' && afterCode && i + 1 < s.size() && s[i + 1] == '0') {  // seconds' decimals
+          out += l.decimal;
+          decimals = true;
+          ++i;
+          continue;
+        }
+        if (c == '0' && decimals) {
+          out += c;
+          ++i;
+          continue;
+        }
+        afterCode = decimals = false;
+        // A letter that is a code in the region (en-NL's j, u), or a digit placeholder, is text here.
+        if (lc == year || lc == day || lc == hour || c == '0' || c == '#' || c == '?') out += L'\\';
+        out += c;
+        ++i;
+        continue;
+      }
+      if (c == '.') out += l.decimal;
+      else if (c == ',') out += l.group;
+      else if (At(l.decimal, 0, std::wstring_view(&c, 1)) || At(l.group, 0, std::wstring_view(&c, 1))) out += L'\\', out += c;
+      else out += c;
+      ++i;
+    }
+    if (end >= code.size()) return out;
     out += L';';
     start = end + 1;
   }

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "pkg/Limits.h"
 #include "pkg/Status.h"
@@ -61,11 +62,37 @@ bool NumberStyle(std::string_view text, double v, uint8_t& style);
 bool ParseSlice(pugi::xml_document& doc, std::string_view xml);
 // The text of an element: its text and CDATA children, joined.
 std::string TextOf(pugi::xml_node n);
+// The top-level elements of kept XML (a part's text around sheetData): where each is and its local
+// name; comments, processing instructions and whitespace between them skipped.
+struct XmlPiece {
+  size_t begin = 0, end = 0;
+  std::string local;
+};
+std::vector<XmlPiece> TopLevel(std::string_view xml);
+// Puts `xml` (a whole element) where the sheet's element `local` is (empty removes it), or where the
+// schema puts it; and the prefix the sheet's elements are written with ("x:" or "").
+void PutSheetElement(detail::PartText& t, std::string_view local, const std::string& xml);
+std::string SheetPrefix(const detail::PartText& t);
+// One font, fill, border or cell format as styles.xml has it, and read back from that (the edit
+// journal records the formats added this way, as faithful as saving them).
+std::string StyleItemXml(const Font& f);
+std::string StyleItemXml(const Fill& f);
+std::string StyleItemXml(const Border& b);
+std::string StyleItemXml(const Xf& x);
+bool ReadStyleItem(std::string_view xml, Font& out);
+bool ReadStyleItem(std::string_view xml, Fill& out);
+bool ReadStyleItem(std::string_view xml, Border& out);
+bool ReadStyleItem(std::string_view xml, Xf& out);
 
 pkg::Status ReadStyles(std::string_view xml, const pkg::Limits& limits, std::string_view label, Styles& styles);
 pkg::Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::string& part, Table& table);
 pkg::Status ReadStrings(std::string_view xml, const pkg::Limits& limits, std::string_view label, StringTable& table);
 // Reads a sheet's part into it (rows, cells and what it shows).
 pkg::Status LoadSheetPart(Workbook& book, size_t index);
+
+// The writer (Writer.cpp): a sheet's part with `text` around its sheetData (Sheet::Text(), or one
+// with elements the model rewrote), and the shared strings part.
+void WriteSheet(const Sheet& sheet, const detail::PartText& text, std::string& out);
+void WriteStringsPart(const StringTable& table, std::string& out);
 
 }  // namespace fw::sheet::xlsx

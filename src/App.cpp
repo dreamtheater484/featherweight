@@ -64,6 +64,7 @@ int App::Run(const AppOptions& opts) {
   }
   if (opts.forceWarp) gpu::ForceWarp();
   snapshot_ = !opts.snapshotPath.empty();
+  if (snapshot_) util::UsePrivateClipboard();  // test runs never touch the user's clipboard
   snapshotWindow_ = snapshot_ && opts.snapshotWindow;
   sandbox_ = opts.sandbox;
   if (!sandbox_) settings_.Load();  // never loaded, settings are never saved either
@@ -656,6 +657,11 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
           OnKeyDown(static_cast<UINT>(wp));
           return 0;
         }
+        // A workbook's Alt keys: Alt+Enter (a line break in a cell), Alt+= (AutoSum).
+        if (v && v->Kind() == TabKind::Workbook && (wp == VK_RETURN || wp == VK_OEM_PLUS)) {
+          OnKeyDown(static_cast<UINT>(wp));
+          return 0;
+        }
         break;  // Alt+F4, Alt+Space etc.
       }
       OnKeyDown(static_cast<UINT>(wp));
@@ -665,6 +671,7 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_SYSCHAR:
       if (wp == L'q' || wp == L'Q') return 0;  // Alt+Q ran a command: no menu, no beep
+      if (TabContent* v = Active(); v && v->Kind() == TabKind::Workbook && (wp == L'\r' || wp == L'=')) return 0;
       break;
     case WM_TIMER:
       switch (wp) {
@@ -711,6 +718,11 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
     }
     case Updater::kDoneMessage:
       OnUpdaterDone();
+      return 0;
+    case kSaveDoneMessage:
+      // From a tab's save worker; the tab may have closed meanwhile (it waited for the write).
+      for (auto& t : tabs_)
+        if (reinterpret_cast<LPARAM>(t.get()) == lp) t->SaveDone();
       return 0;
     case WM_COMMAND:
       if (HIWORD(wp) == 0 && lp == 0) {
@@ -1274,7 +1286,9 @@ int App::AppShortcut(UINT vk, UINT mods) {
     }
   }
   switch (vk) {
-    case VK_F11: return CmdFullScreen;
+    case VK_F11:
+      if (!shift) return CmdFullScreen;
+      break;  // Shift+F11 is the tab's (a workbook inserts a sheet)
     case VK_F3: return shift ? CmdFindPrev : CmdFindNext;
   }
   return 0;
@@ -1293,6 +1307,7 @@ void App::Execute(int cmd) {
   if (cmd >= CmdNewFile && cmd < CmdNewFile + fw::kFileKindCount) {
     // A new document, workbook or presentation comes with that kind's editor.
     if (cmd - CmdNewFile == static_cast<int>(fw::FileKind::Document)) NewDocument();
+    if (cmd - CmdNewFile == static_cast<int>(fw::FileKind::Workbook)) NewWorkbook();
     return;
   }
   if (cmd >= CmdNewTemplate && cmd < CmdNewTemplate + EmptyState::kTemplateCount) {
@@ -1317,6 +1332,13 @@ void App::Execute(int cmd) {
         settings_.Save();
         break;
       case kActSaveAs: SaveActive(true); break;
+      case kActKeepFormat:
+        if (TabContent* tab = Active(); tab && !keepFormatPath_.empty()) {
+          tab->KeepFormat();
+          SaveActiveTo(std::move(keepFormatPath_), false);
+          keepFormatPath_.clear();
+        }
+        break;
       case kActRecover: RecoverDocuments(true); break;
       case kActDiscard: RecoverDocuments(false); break;
       case kActReload: ReloadActive(); break;
@@ -1611,7 +1633,11 @@ PdfView* App::ActivePdf() const {
 }
 
 std::unique_ptr<TabContent> App::CreateTab(const std::wstring& path) {
-  if (fw::KindOfPath(path) == fw::FileKind::Workbook) return std::make_unique<fw::sheet::view::WorkbookView>(*this, path);
+  if (fw::KindOfPath(path) == fw::FileKind::Workbook) {
+    auto view = std::make_unique<fw::sheet::view::WorkbookView>(*this, path);
+    if (WorkbookFile::IsTemplate(path)) view->OpenAsNew(++newWorkbooks_);  // as Excel: "Budget1"
+    return view;
+  }
   if (fw::KindOfPath(path) == fw::FileKind::Document) {
     auto view = std::make_unique<DocView>(*this, path);
     if (DocView::IsTemplate(path)) view->OpenAsNew(++newDocuments_);  // as Word: a new document from it
@@ -1816,7 +1842,7 @@ bool App::ConfirmClose(TabContent* view) {
   if (pressed != IDYES && pressed != kSaveAs) return false;
   for (int i = 0; i < static_cast<int>(tabs_.size()); ++i)
     if (tabs_[i].get() == view) ActivateTab(i);
-  return SaveActive(pressed == kSaveAs);
+  return SaveActive(pressed == kSaveAs, true);  // the tab closes next: saved first
 }
 
 bool App::CloseTab(int index) {
@@ -1855,30 +1881,54 @@ void App::RememberState(TabContent* view) {
   if (view && view->Ready() && !snapshot_ && !view->Path().empty()) settings_.SetState(view->Path(), view->State());
 }
 
-bool App::SaveActive(bool saveAs) {
+bool App::SaveActive(bool saveAs, bool wait) {
   TabContent* v = Active();
   if (!v || !v->Ready()) return false;
   if (!saveAs && !v->Modified() && !v->Path().empty()) return true;
   std::wstring path = v->Path();
   if (path.empty()) saveAs = true;  // a new or recovered document
   if (saveAs) {
+    // The tab's own types first (a workbook, a template), then the copies (RTF, CSV).
     const std::vector<SaveFormat> copies = v->CopyFormats();
+    std::vector<SaveFormat> types = v->OtherSaveFormats();
+    const size_t own = types.size();
+    types.insert(types.end(), copies.begin(), copies.end());
     size_t type = 0;
-    path = SaveDialog(v->SuggestedSavePath(), v->SaveAsFormat(), copies, &type);
+    path = SaveDialog(v->SuggestedSavePath(), v->SaveAsFormat(), types, &type);
     if (path.empty()) return false;
     // A name typed with another type's extension (report.rtf) is that type.
-    for (size_t i = 0; i < copies.size() && type == 0; ++i)
-      if (fw::EndsWithNoCase(path, std::wstring(L".") + copies[i].ext)) type = i + 1;
-    if (type > 0) return SaveCopy(v, path, type - 1);
+    for (size_t i = 0; i < copies.size() && type <= own; ++i)
+      if (fw::EndsWithNoCase(path, std::wstring(L".") + copies[i].ext)) type = own + i + 1;
+    if (type > own) return SaveCopy(v, path, type - own - 1);
+  }
+  return SaveActiveTo(std::move(path), saveAs, wait);
+}
+
+bool App::SaveActiveTo(std::wstring path, bool saveAs, bool wait) {
+  TabContent* v = Active();
+  if (!v || !v->Ready()) return false;
+  if (const std::wstring loss = v->FormatLoss(path); !loss.empty()) {
+    // Saved only after the user chooses: the tab's own type, or this one anyway.
+    keepFormatPath_ = path;
+    const size_t dot = path.rfind(L'.');
+    std::wstring ext = dot == std::wstring::npos ? std::wstring() : path.substr(dot + 1);
+    for (wchar_t& c : ext) c = static_cast<wchar_t>(towupper(c));
+    banner_.Show(BannerKind::Warning, loss,
+                 {{kActSaveAs, std::wstring(L"Save as .") + v->SaveAsFormat().ext, true},
+                  {kActKeepFormat, ext.empty() ? L"Keep it" : L"Keep " + ext}});
+    InvalidateRect(hwnd_, nullptr, FALSE);
+    return false;
   }
   std::wstring error;
-  if (v->Save(path, error)) {
-    if (!snapshot_) {
-      settings_.AddRecent(v->Path());
-      settings_.Save();
-    }
-    banner_.Show(BannerKind::Success, L"Saved", {}, 1600);
-    ActivateTab(active_);
+  const TabContent::SaveStart start =
+      wait ? (v->Save(path, error) ? TabContent::SaveStart::Saved : TabContent::SaveStart::Failed)
+           : v->StartSave(path, error);
+  if (start == TabContent::SaveStart::Started) {
+    InvalidateRect(hwnd_, nullptr, FALSE);  // "Saving…" until ViewSaved
+    return true;
+  }
+  if (start == TabContent::SaveStart::Saved) {
+    Saved(v);
     return true;
   }
   if (!saveAs) {
@@ -1888,16 +1938,53 @@ bool App::SaveActive(bool saveAs) {
     UpdateWindow(hwnd_);
     path = SaveDialog(v->SuggestedSavePath(), v->SaveAsFormat());
     if (!path.empty() && v->Save(path, error)) {
-      settings_.AddRecent(v->Path());
-      settings_.Save();
-      banner_.Show(BannerKind::Success, L"Saved", {}, 1600);
-      ActivateTab(active_);
+      Saved(v);
       return true;
     }
     if (path.empty()) return false;
   }
   banner_.Show(BannerKind::Error, error);
   return false;
+}
+
+void App::Saved(TabContent* v) {
+  if (!snapshot_) {
+    settings_.AddRecent(v->Path());
+    settings_.Save();
+  }
+  banner_.Show(BannerKind::Success, L"Saved", {}, 1600);
+  if (Active() == v) ActivateTab(active_);  // the title: the file's name, without the unsaved dot
+  UpdateAutosaveTimer();
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void App::ViewSaved(TabContent* view, bool ok, const std::wstring& error) {
+  if (ok) {
+    Saved(view);
+    return;
+  }
+  // Written in the background: no dialog pops up unasked; the banner offers another place.
+  std::vector<Banner::Action> actions;
+  if (Active() == view) actions.push_back({kActSaveAs, L"Save as…", true});
+  banner_.Show(BannerKind::Error, error, std::move(actions));
+  InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+bool App::ViewConfirm(const std::wstring& text, const std::wstring& ok) {
+  if (snapshot_) return true;  // scripted: as if confirmed
+  TASKDIALOG_BUTTON buttons[] = {{IDOK, ok.c_str()}};
+  TASKDIALOGCONFIG cfg{sizeof(cfg)};
+  cfg.hwndParent = hwnd_;
+  cfg.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW | TDF_ALLOW_DIALOG_CANCELLATION;
+  cfg.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+  cfg.pszWindowTitle = L"Featherweight";
+  cfg.pszMainInstruction = text.c_str();
+  cfg.pButtons = buttons;
+  cfg.cButtons = 1;
+  cfg.nDefaultButton = IDOK;
+  int pressed = IDCANCEL;
+  HideTooltip();
+  return SUCCEEDED(TaskDialogIndirect(&cfg, &pressed, nullptr, nullptr)) && pressed == IDOK;
 }
 
 void App::PrintActive() {
@@ -2304,7 +2391,19 @@ void App::DrawSnapshotFrame() {
 }
 
 void App::RunScript(const std::wstring& script) {
-  for (const std::wstring& rawStep : fw::Split(script, L';')) {
+  // Steps are split on ';'; "\;" is a ';' inside a step (formulas such as =IF(B7=0\;0\;B16/B7)).
+  std::vector<std::wstring> steps(1);
+  for (size_t i = 0; i < script.size(); ++i) {
+    if (script[i] == L'\\' && i + 1 < script.size() && script[i + 1] == L';') {
+      steps.back() += L';';
+      ++i;
+    } else if (script[i] == L';') {
+      steps.emplace_back();
+    } else {
+      steps.back() += script[i];
+    }
+  }
+  for (const std::wstring& rawStep : steps) {
     std::wstring step = fw::Trim(rawStep);
     if (step.empty()) continue;
     size_t colon = step.find(L':');
@@ -2355,6 +2454,51 @@ void App::RunScript(const std::wstring& script) {
           SendMessageW(target, WM_CHAR, ch, 0);
         }
       }
+    } else if (op == L"typebench") {
+      // typebench:<text> times each keystroke from the key to the frame painted ('|' is Enter),
+      // as the window handles it; idle work (recalculation) runs after each, untimed. Plan §11:
+      // under 16 ms typical, 50 ms at worst.
+      LARGE_INTEGER freq, t0, t1;
+      QueryPerformanceFrequency(&freq);
+      std::vector<double> keys, enters;
+      for (wchar_t ch : arg) {
+        QueryPerformanceCounter(&t0);
+        if (ch == L'|') {
+          SendMessageW(hwnd_, WM_KEYDOWN, VK_RETURN, 0);
+          SendMessageW(hwnd_, WM_CHAR, L'\r', 0);
+        } else {
+          SendMessageW(hwnd_, WM_CHAR, ch, 0);
+        }
+        DrawSnapshotFrame();
+        QueryPerformanceCounter(&t1);
+        (ch == L'|' ? enters : keys).push_back(1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart));
+        if (TabContent* v = Active())
+          for (int guard = 0; guard < 10000 && v->HasIdleWork(); ++guard) v->IdleWork(dc_.Get(), 50);
+      }
+      auto q = [](std::vector<double> v, double p) {
+        if (v.empty()) return 0.0;
+        std::sort(v.begin(), v.end());
+        return v[std::min(v.size() - 1, static_cast<size_t>(p * static_cast<double>(v.size() - 1) + 0.5))];
+      };
+      std::vector<double> all = keys;
+      all.insert(all.end(), enters.begin(), enters.end());
+      wprintf(L"typebench: %zu keys, median %.2f ms, 90%% %.2f ms, worst %.2f ms; %zu Enter, median %.2f ms, worst %.2f ms\n",
+              keys.size(), q(keys, 0.5), q(keys, 0.9), q(all, 1.0), enters.size(), q(enters, 0.5), q(enters, 1.0));
+      fflush(stdout);
+    } else if (op == L"timecmd") {
+      // timecmd:<id> times a command from running it to the frame painted (plan §11: inserting a
+      // row in the million-cell workbook under 100 ms, undo as fast); idle work after, untimed.
+      LARGE_INTEGER freq, t0, t1;
+      QueryPerformanceFrequency(&freq);
+      QueryPerformanceCounter(&t0);
+      Execute(_wtoi(arg.c_str()));
+      DrawSnapshotFrame();
+      QueryPerformanceCounter(&t1);
+      wprintf(L"timecmd %s: %.2f ms\n", arg.c_str(),
+              1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart));
+      fflush(stdout);
+      if (TabContent* v = Active())
+        for (int guard = 0; guard < 10000 && v->HasIdleWork(); ++guard) v->IdleWork(dc_.Get(), 50);
     } else if (op == L"key") {
       int mods = 0;
       UINT vk = 0;
@@ -2377,6 +2521,7 @@ void App::RunScript(const std::wstring& script) {
         else if (part == L"del") vk = VK_DELETE;
         else if (part == L"plus") vk = VK_OEM_PLUS;
         else if (part == L"minus") vk = VK_OEM_MINUS;
+        else if (part == L"semicolon") vk = VK_OEM_1;
         else if (part.size() > 1 && part[0] == L'f') vk = VK_F1 + _wtoi(part.c_str() + 1) - 1;
         else if (part.size() == 1) vk = towupper(part[0]);
       }
@@ -2405,10 +2550,12 @@ void App::RunScript(const std::wstring& script) {
         v->SetViewMode(arg == L"single" ? fw::ViewMode::Single : arg == L"facing" ? fw::ViewMode::Facing : fw::ViewMode::Continuous);
     } else if (op == L"new") {
       // new, or new:letter (a template's name) for a new document from that template.
+      // new:workbook for a new workbook ("Book1").
       int kind = 0;
       for (int i = 0; i < EmptyState::kTemplateCount; ++i)
         if (fw::EqualsNoCase(arg, EmptyState::kTemplates[i])) kind = i + 1;
-      NewDocument(kind);
+      if (fw::EqualsNoCase(arg, L"workbook")) NewWorkbook();
+      else NewDocument(kind);
     } else if (op == L"edited") {
       // Marks the document edited, as the edit session will (the dot, Save, the close prompt).
       TabContent* v = Active();
@@ -2418,7 +2565,16 @@ void App::RunScript(const std::wstring& script) {
       TabContent* v = Active();
       if (v && v->Ready() && v->TakesPictures({arg})) v->DropPictures({arg}, -1, -1);
       else fwprintf(stderr, L"picture: %s isn't taken here\n", arg.c_str());
-    } else if (op == L"save") {
+    } else if (op == L"clipboard") {
+      // clipboard:<file> puts a file on the run's own clipboard (never the user's): an .html file
+      // as "HTML Format", anything else as text (UTF-8).
+      std::string data;
+      if (!util::ReadFileBytes(arg, data, 64u << 20)) fwprintf(stderr, L"clipboard: can't read %s\n", arg.c_str());
+      else if (fw::EndsWithNoCase(arg, L".html") || fw::EndsWithNoCase(arg, L".htm")) util::SetClipboardText(L"", {}, data);
+      else util::SetClipboardText(fw::Utf8ToWide(data));
+    } else if (op == L"save" || op == L"saveas") {
+      // save:<path> and saveas:<path> both save to that path, waiting for the write (Save As;
+      // the format is the extension's). Ctrl+S (key:ctrl+s) saves in the background as in use.
       if (TabContent* v = Active()) {
         std::wstring err;
         if (!v->Save(arg, err)) fwprintf(stderr, L"save failed: %s\n", err.c_str());
@@ -2561,6 +2717,8 @@ void App::RunScript(const std::wstring& script) {
     } else if (op == L"devicelost") {
       // As if the graphics driver had been reset: everything made with the device is recreated.
       gpu::DeviceLost();
+    } else if (TabContent* v = Active(); v && v->ScriptOp(op, arg)) {
+      // The tab's own operations (a workbook's format:size=14...).
     }
     PumpUntilIdle(1500);
   }

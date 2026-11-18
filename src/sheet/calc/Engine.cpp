@@ -234,9 +234,27 @@ class Engine::Graph {
     }
     for (auto& v : narrowCols_) std::sort(v.begin(), v.end());
     for (auto& iv : wide_) iv.Build();
+    built_ = true;
     return true;
   }
-  void Abandon() { building_ = false; }
+  void Abandon() { building_ = false, built_ = false; }
+
+  // A formula set after the graph was built (an edit): its precedents go to a list searched as
+  // well, until there are so many that rebuilding is cheaper. False when the graph must be rebuilt.
+  bool Add(Engine& e, uint32_t node) {
+    if (!built_ || extra_.size() > 4096) return false;
+    std::vector<Area> areas;
+    bool volatileName = false;
+    e.Precedents(e.nodes_[node], areas, &volatileName);
+    if (volatileName) e.nodes_[node].flags |= kVolatileNode;
+    for (const Area& a0 : areas)
+      for (int s = a0.s1; s <= a0.s2; ++s) {
+        Area a = a0;
+        a.s1 = a.s2 = static_cast<uint16_t>(s);
+        extra_.emplace_back(a, node);
+      }
+    return true;
+  }
 
   // fn(node) for each formula reading a cell of `a` (on sheet s); a node can come more than once.
   template <class F>
@@ -259,6 +277,8 @@ class Engine::Graph {
         narrow_.at((static_cast<uint32_t>(s) << 16) | static_cast<uint32_t>(*ci)).Query(a.r1, a.r2, range);
     }
     if (static_cast<size_t>(s) < wide_.size()) wide_[static_cast<size_t>(s)].Query(a.r1, a.r2, range);
+    for (const auto& [r, node] : extra_)
+      if (r.s1 == s && r.r1 <= a.r2 && r.r2 >= a.r1 && r.c1 <= a.c2 && r.c2 >= a.c1) fn(node);
   }
 
  private:
@@ -278,6 +298,8 @@ class Engine::Graph {
   std::vector<std::vector<int32_t>> narrowCols_;
   std::vector<Intervals> wide_;
   std::vector<uint32_t> seen_;
+  bool built_ = false;
+  std::vector<std::pair<Area, uint32_t>> extra_;  // formulas set since the build: (precedent, node)
   uint32_t epoch_ = 0;
 };
 
@@ -367,10 +389,10 @@ void Engine::SetFormula(const Cell& at, std::shared_ptr<const Formula> f, bool c
     n.out.c1 = n.out.c2 = static_cast<int16_t>(at.col);
   }
   n.out.s1 = n.out.s2 = static_cast<uint16_t>(at.sheet);
-  n.flags = static_cast<uint8_t>((cached ? kCached : 0) | (dynamic ? kDynamicArray : 0));
+  n.flags = static_cast<uint8_t>((cached ? kCached : kFresh) | (dynamic ? kDynamicArray : 0));
   for (int32_t r = n.out.r1; r <= n.out.r2; ++r)
     for (int32_t c = n.out.c1; c <= n.out.c2; ++c) at_[Key(at.sheet, r, c)] = id;
-  GraphChanged();
+  if (graphStale_ || !graph_->Add(*this, id)) GraphChanged();
 }
 
 void Engine::ClearFormula(const Cell& at) {
@@ -383,7 +405,37 @@ void Engine::ClearFormula(const Cell& at) {
   n = Node();
   n.flags = kFree;
   free_.push_back(id);
-  GraphChanged();
+  // The graph still names it; a freed node is never marked dirty, and one reused gets its own edges.
+  if (graphStale_) GraphChanged();
+}
+
+void Engine::ClearFormulas(int sheet, const Area& a) {
+  const int64_t cells = static_cast<int64_t>(a.Rows()) * a.Cols();
+  if (cells <= static_cast<int64_t>(nodes_.size())) {
+    for (int32_t r = a.r1; r <= a.r2; ++r)
+      for (int32_t c = a.c1; c <= a.c2; ++c) ClearFormula({sheet, r, c});
+    return;
+  }
+  std::vector<Cell> found;
+  for (const Node& n : nodes_)
+    if (!(n.flags & kFree) && n.at.sheet == sheet && n.at.row >= a.r1 && n.at.row <= a.r2 && n.at.col >= a.c1 &&
+        n.at.col <= a.c2)
+      found.push_back(n.at);
+  for (const Cell& at : found) ClearFormula(at);
+}
+
+void Engine::Touch(const Cell& at) {
+  uint32_t id = NodeAt(at.sheet, at.row, at.col);
+  if (id != UINT32_MAX) MarkDirty(id);
+}
+
+bool Engine::FirstCircular(Cell& out) const {
+  for (const Node& n : nodes_)
+    if (!(n.flags & kFree) && (n.flags & kCircularNode)) {
+      out = n.at;
+      return true;
+    }
+  return false;
 }
 
 void Engine::GraphChanged() {
@@ -544,7 +596,8 @@ bool Engine::Ready(const Area& a) {
   if (dirtyCells_->count == 0) return true;
   bool ready = true;
   uint32_t self = stack_.empty() ? UINT32_MAX : stack_.back().node;
-  for (int s = a.s1; s <= a.s2 && ready; ++s)
+  for (int s = a.s1; s <= a.s2 && ready; ++s) {
+    if (onlySheet_ >= 0 && s != onlySheet_) continue;
     dirtyCells_->Each(s, a, [&](int32_t r, int32_t c) {
       uint32_t id = NodeAt(s, r, c);
       if (id == UINT32_MAX || id == self) {
@@ -561,9 +614,11 @@ bool Engine::Ready(const Area& a) {
       if (self != UINT32_MAX) {
         nodes_[self].flags |= kCircularNode;
         circularNodes_.push_back(self);
+        loopNodes_.push_back(self);
       }
       return true;
     });
+  }
   return ready;
 }
 
@@ -673,6 +728,40 @@ void Engine::StoreSpill(uint32_t id, Value v) {
   }
 }
 
+// Whether a precedent of `n` is on or after a circular reference: its precedents' cells looked up,
+// or the flagged nodes checked against them, whichever is fewer.
+bool Engine::AfterLoop(const Node& n, uint32_t id, std::vector<Area>& areas) {
+  areas.clear();
+  Precedents(n, areas);
+  auto flagged = [&](uint32_t m) {
+    return m != UINT32_MAX && m != id && !(nodes_[m].flags & kFree) && (nodes_[m].flags & (kCircularNode | kAfterCircular));
+  };
+  int64_t cells = 0;
+  for (const Area& a : areas) cells += static_cast<int64_t>(a.Rows()) * a.Cols() * (a.s2 - a.s1 + 1);
+  if (cells <= static_cast<int64_t>(loopNodes_.size())) {
+    for (const Area& a : areas)
+      for (int s = a.s1; s <= a.s2; ++s)
+        for (int32_t r = a.r1; r <= a.r2; ++r)
+          for (int32_t c = a.c1; c <= a.c2; ++c)
+            if (flagged(NodeAt(s, r, c))) return true;
+    return false;
+  }
+  std::sort(loopNodes_.begin(), loopNodes_.end());
+  loopNodes_.erase(std::unique(loopNodes_.begin(), loopNodes_.end()), loopNodes_.end());
+  size_t keep = 0;
+  for (uint32_t m : loopNodes_)
+    if (flagged(m) || m == id) loopNodes_[keep++] = m;
+  loopNodes_.resize(keep);
+  for (uint32_t m : loopNodes_) {
+    if (!flagged(m)) continue;
+    const Cell& c = nodes_[m].at;
+    for (const Area& a : areas)
+      if (c.sheet >= a.s1 && c.sheet <= a.s2 && c.row >= a.r1 && c.row <= a.r2 && c.col >= a.c1 && c.col <= a.c2)
+        return true;
+  }
+  return false;
+}
+
 bool Engine::Iterate() {
   // Iterative calculation (calcPr iterate): the cells on circular references again and again,
   // each from the others' last values, until they change by less than the delta.
@@ -703,7 +792,9 @@ bool Engine::Recalculate(double budgetMs) {
   std::vector<Area> areas;
   for (;;) {
     if (stack_.empty()) {
-      while (!pending_.empty() && nodes_[pending_.back()].state != kDirty) pending_.pop_back();
+      while (!pending_.empty() && (nodes_[pending_.back()].state != kDirty ||
+                                   (onlySheet_ >= 0 && nodes_[pending_.back()].at.sheet != onlySheet_)))
+        pending_.pop_back();
       if (pending_.empty()) {
         if (settings_.iterate && !circularNodes_.empty()) Iterate();
         circularNodes_.clear();
@@ -722,17 +813,20 @@ bool Engine::Recalculate(double budgetMs) {
       // First its dirty precedents.
       stack_.back().evaluating = true;
       n.state = kVisiting;
+      n.flags &= static_cast<uint8_t>(~(kCircularNode | kAfterCircular));
       if (dirtyCells_->count > 0) {
         areas.clear();
         Precedents(n, areas);
         for (const Area& a : areas)
-          for (int s = a.s1; s <= a.s2; ++s)
+          for (int s = a.s1; s <= a.s2; ++s) {
+            if (onlySheet_ >= 0 && s != onlySheet_) continue;
             dirtyCells_->Each(s, a, [&](int32_t r, int32_t c) {
               uint32_t m = NodeAt(s, r, c);
               if (m == UINT32_MAX || m == id) {
                 if (m == id && !(n.flags & kCircularNode)) {  // reads its own cell
                   n.flags |= kCircularNode;
                   circularNodes_.push_back(id);
+                  loopNodes_.push_back(id);
                   circular_ = true;
                 }
                 return true;
@@ -744,16 +838,32 @@ bool Engine::Recalculate(double budgetMs) {
                 circular_ = true;
                 if (!(n.flags & kCircularNode)) n.flags |= kCircularNode, circularNodes_.push_back(id);
                 if (!(p.flags & kCircularNode)) p.flags |= kCircularNode, circularNodes_.push_back(m);
+                loopNodes_.push_back(id), loopNodes_.push_back(m);
               }
               return true;
             });
+          }
       }
       continue;
+    }
+    if (!settings_.iterate) {
+      // Excel, iteration off: cells on a circular reference, and after one, aren't calculated;
+      // they keep their values, and one just entered shows 0 (measured).
+      if (!(n.flags & (kCircularNode | kAfterCircular)) && !loopNodes_.empty() && AfterLoop(n, id, areas))
+        n.flags |= kAfterCircular, loopNodes_.push_back(id);
+      if (n.flags & (kCircularNode | kAfterCircular)) {
+        stack_.pop_back();
+        if (n.flags & kFresh) Store(id, Value::Number(0));
+        n.flags &= static_cast<uint8_t>(~kFresh);
+        Clean(id);
+        continue;
+      }
     }
     Value v;
     needed_ = UINT32_MAX;
     EvalResult r = ev_.Evaluate(*n.f, n.at, v);
     ++evaluations_;
+    n.flags &= static_cast<uint8_t>(~kFresh);
     if (r == EvalResult::kRetry && needed_ != UINT32_MAX && nodes_[needed_].state == kDirty) {
       stack_.push_back({needed_, false});
       continue;
@@ -771,6 +881,41 @@ bool Engine::Recalculate(double budgetMs) {
       if ((Seconds() - start) * 1000 > budgetMs) return false;
     }
   }
+}
+
+void Engine::CalculateSheet(int sheet) {
+  Propagate();
+  for (uint32_t id = 0; id < nodes_.size(); ++id) {
+    const Node& n = nodes_[id];
+    if (n.at.sheet == sheet && !(n.flags & kFree) && ((n.f->flags & Formula::kVolatile) || (n.flags & kVolatileNode)))
+      MarkDirty(id);
+  }
+  Propagate();
+  onlySheet_ = sheet;
+  Recalculate(1e300);
+  onlySheet_ = -1;
+  pending_.clear();  // the other sheets' dirty formulas, for F9
+  for (uint32_t id = 0; id < nodes_.size(); ++id)
+    if (nodes_[id].state == kDirty) pending_.push_back(id);
+}
+
+void Engine::CalculateCell(const Cell& at) {
+  uint32_t id = NodeAt(at.sheet, at.row, at.col);
+  if (id == UINT32_MAX) return;
+  Node& n = nodes_[id];
+  Value v;
+  needed_ = UINT32_MAX;
+  EvalResult r = ev_.Evaluate(*n.f, n.at, v);
+  ++evaluations_;
+  n.flags &= static_cast<uint8_t>(~kFresh);
+  if (r == EvalResult::kRetry) return;  // waits for what it needs
+  if (r == EvalResult::kDone) {
+    n.flags &= static_cast<uint8_t>(~kStale);
+    Store(id, std::move(v));
+  } else {
+    n.flags |= kStale;
+  }
+  if (n.state != kClean) Clean(id);
 }
 
 bool Engine::Stale(int sheet, int32_t row, int32_t col) const {

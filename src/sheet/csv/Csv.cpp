@@ -17,6 +17,22 @@ namespace {
 constexpr size_t kMaxRows = 1048576, kMaxCols = 16384;
 constexpr size_t kBatchRows = 65536;  // rows parsed before they go to the model
 
+// The tables a new Excel workbook starts with: font 0 Calibri 11, fills none and gray125, an empty
+// border, the Normal style, and cell format 0 on them. Formats added later (bold, a fill) then never
+// take index 0, which every cell without a format uses.
+void DefaultStyles(Workbook& book) {
+  StylesBuilder sb(book.GetStyles());
+  if (sb.Fonts().empty()) sb.Fonts().push_back(book.GetStyles().DefaultFont());
+  if (sb.Fills().empty()) {
+    sb.Fills().push_back(Fill{});
+    sb.Fills().push_back(Fill{.pattern = PatternType::Gray125});
+  }
+  if (sb.Borders().empty()) sb.Borders().push_back(Border{});
+  if (sb.CellStyleXfs().empty()) sb.CellStyleXfs().push_back(Xf{});
+  if (sb.CellStyles().empty()) sb.CellStyles().push_back(CellStyle{.name = "Normal", .xf = 0, .builtinId = 0});
+  if (sb.CellXfs().empty()) sb.CellXfs().push_back(Xf{});
+}
+
 bool ValidUtf8(std::string_view s) {
   const auto* p = reinterpret_cast<const unsigned char*>(s.data());
   const auto* e = p + s.size();
@@ -314,6 +330,7 @@ Reader::Reader(std::string_view bytes, const Options& options)
     size_t skip = 5;
     if (skip < text_.size() && text_[skip] == '\r') ++skip;
     if (skip < text_.size() && text_[skip] == '\n') ++skip;
+    source_.sepText = std::string(text_.substr(0, skip));
     text_.remove_prefix(skip);
   } else {
     source_.delimiter = options.delimiter ? options.delimiter : DetectDelimiter(text_, options.tsv);
@@ -422,7 +439,7 @@ void Reader::AddRows(Workbook& book, SheetBuilder& builder, size_t first, size_t
   std::vector<Chunk> chunks(most);
   // Styles for the formats values were read with.
   StylesBuilder sb(book.GetStyles());
-  if (sb.CellXfs().empty()) sb.CellXfs().push_back(Xf{});
+  DefaultStyles(book);
   auto styleOf = [&](const std::string& code) {
     for (const auto& s : styles_)
       if (s.first == code) return s.second;
@@ -487,6 +504,7 @@ void Read(std::string_view bytes, const std::string& sheetName, const Options& o
           Source& source) {
   Reader reader(bytes, options);
   book.SetFormat(FileFormat::Csv);
+  DefaultStyles(book);
   Sheet& sheet = book.AddSheet(sheetName);
   {
     SheetBuilder builder(sheet);

@@ -17,6 +17,7 @@ constexpr std::string_view kDeclaration = "<?xml version=\"1.0\" encoding=\"UTF-
 
 // "x:" for a start tag "<x:sheetData ...>", "" without a prefix.
 std::string PrefixOf(std::string_view startTag) {
+  if (startTag.empty()) return {};
   size_t end = 1;
   while (end < startTag.size() && startTag[end] != ' ' && startTag[end] != '/' && startTag[end] != '>' &&
          startTag[end] != '\t' && startTag[end] != '\r' && startTag[end] != '\n')
@@ -70,10 +71,11 @@ std::string_view TypeName(XmlType t) {
 
 class SheetWriter {
  public:
-  SheetWriter(const Sheet& s, std::string& out) : s_(s), out_(out), kept_(s.KeptInData()) {}
+  SheetWriter(const Sheet& s, std::string& out, const PartText& text)
+      : s_(s), out_(out), kept_(s.KeptInData()), text_(text) {}
 
   void Write() {
-    const PartText& t = s_.Text();
+    const PartText& t = text_;
     out_ = kDeclaration;
     out_ += t.prolog;
     out_ += t.rootStart;
@@ -157,6 +159,71 @@ class SheetWriter {
     Close("sheetData");
   }
 
+  void WriteF(const FormulaRec& formula, const TextPool& texts) {
+    Open("f");
+    WriteAttrs(out_, s_.Attributes(formula.attrs));
+    if (formula.text != kNone && !texts.Get(formula.text).empty()) {
+      out_ += '>';
+      pkg::AppendEscapedText(out_, texts.Get(formula.text));
+      Close("f");
+    } else {
+      out_ += "/>";
+    }
+  }
+
+  // XML text with the predefined entities read, to compare two writings of an element.
+  static std::string Plain(std::string_view s) {
+    static constexpr std::pair<std::string_view, char> kEntities[] = {
+        {"&lt;", '<'}, {"&gt;", '>'}, {"&amp;", '&'}, {"&quot;", '"'}, {"&apos;", '\''}};
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size();) {
+      bool done = false;
+      if (s[i] == '&')
+        for (const auto& [name, ch] : kEntities)
+          if (s.substr(i, name.size()) == name) {
+            out += ch;
+            i += name.size();
+            done = true;
+            break;
+          }
+      if (!done) out += s[i++];
+    }
+    return out;
+  }
+
+  // The f element in a cell's content as written: [begin, end).
+  static bool FindF(std::string_view s, size_t& begin, size_t& end) {
+    auto nameChar = [](char ch) {
+      return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' ||
+             ch == '.';
+    };
+    for (size_t at = s.find('<'); at != std::string_view::npos; at = s.find('<', at + 1)) {
+      size_t n = at + 1, name = n;
+      while (n < s.size() && nameChar(s[n])) ++n;
+      if (n < s.size() && s[n] == ':') {
+        name = ++n;
+        while (n < s.size() && nameChar(s[n])) ++n;
+      }
+      if (n - name != 1 || s[name] != 'f' || n >= s.size() ||
+          !(s[n] == ' ' || s[n] == '>' || s[n] == '/' || s[n] == '\t' || s[n] == '\r' || s[n] == '\n'))
+        continue;
+      const size_t gt = s.find('>', n);
+      if (gt == std::string_view::npos) return false;
+      begin = at;
+      if (s[gt - 1] == '/') {
+        end = gt + 1;
+        return true;
+      }
+      const std::string close = "</" + std::string(s.substr(at + 1, n - at - 1)) + ">";
+      const size_t c = s.find(close, gt);
+      if (c == std::string_view::npos) return false;
+      end = c + close.size();
+      return true;
+    }
+    return false;
+  }
+
   void WriteCell(const RowBlock& b, const RowRec& r, uint32_t index, size_t& f, size_t& side) {
     const CellRec& c = b.cells[index];
     while (side < b.sides.size() && b.sides[side].cell < index) ++side;
@@ -186,8 +253,26 @@ class SheetWriter {
     }
     if (sd) WriteAttrs(out_, s_.Attributes(sd->attrs));
     if (sd && sd->inner != kNone) {
+      // The content as written, but the formula from the model: edits rewrite formulas (references
+      // moved, a shared group split) without writing the cell again.
       out_ += '>';
-      out_ += texts.Get(sd->inner);
+      std::string_view inner = texts.Get(sd->inner);
+      size_t fb = 0, fe = 0;
+      if (formula && FindF(inner, fb, fe)) {
+        const size_t at = out_.size();
+        out_.append(inner.substr(0, fb));
+        const size_t f0 = out_.size();
+        WriteF(*formula, texts);
+        // Unchanged (escaped differently at most): as written.
+        if (Plain(std::string_view(out_).substr(f0)) == Plain(inner.substr(fb, fe - fb))) {
+          out_.resize(at);
+          out_.append(inner);
+        } else {
+          out_.append(inner.substr(fe));
+        }
+      } else {
+        out_.append(inner);
+      }
       Close("c");
       return;
     }
@@ -199,17 +284,7 @@ class SheetWriter {
       return;
     }
     out_ += '>';
-    if (formula) {
-      Open("f");
-      WriteAttrs(out_, s_.Attributes(formula->attrs));
-      if (formula->text != kNone && !texts.Get(formula->text).empty()) {
-        out_ += '>';
-        pkg::AppendEscapedText(out_, texts.Get(formula->text));
-        Close("f");
-      } else {
-        out_ += "/>";
-      }
-    }
+    if (formula) WriteF(*formula, texts);
     if (v) {
       Open("v");
       out_ += '>';
@@ -231,9 +306,13 @@ class SheetWriter {
           case XmlType::B:
             out_ += c.v.index ? '1' : '0';
             break;
-          case XmlType::E:
-            out_ += ErrorText(static_cast<ErrorCode>(c.v.index));
+          case XmlType::E: {
+            // Errors newer than the format (#SPILL!, #CALC!...) as Excel stores them without their
+            // rich value: #VALUE! (Excel repairs a file with <v>#SPILL!</v>).
+            ErrorCode e = static_cast<ErrorCode>(c.v.index);
+            out_ += ErrorText(e > ErrorCode::GettingData ? ErrorCode::Value : e);
             break;
+          }
         }
       }
       Close("v");
@@ -254,6 +333,7 @@ class SheetWriter {
   const Sheet& s_;
   std::string& out_;
   const std::vector<Kept>& kept_;
+  const PartText& text_;
   size_t k_ = 0;
   std::string p_;
 };
@@ -296,6 +376,9 @@ void WriteStrings(const StringTable& table, std::string& out) {
 
 }  // namespace
 
+void WriteSheet(const Sheet& sheet, const PartText& text, std::string& out) { SheetWriter(sheet, out, text).Write(); }
+void WriteStringsPart(const StringTable& table, std::string& out) { WriteStrings(table, out); }
+
 Status WritePart(const Workbook& book, std::string_view partName, std::string& out) {
   out.clear();
   if (!book.StringsPart().empty() && partName == book.StringsPart()) {
@@ -307,7 +390,7 @@ Status WritePart(const Workbook& book, std::string_view partName, std::string& o
     if (s.PartName() != partName) continue;
     if (!s.Loaded() || s.Text().rootStart.empty())
       return Status::Fail(Status::Code::NotFound, "The sheet " + s.Name() + " isn't loaded.");
-    SheetWriter(s, out).Write();
+    SheetWriter(s, out, s.Text()).Write();
     return {};
   }
   return Status::Fail(Status::Code::NotFound, "The model doesn't write " + std::string(partName) + ".");

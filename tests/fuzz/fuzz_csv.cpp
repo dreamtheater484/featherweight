@@ -67,6 +67,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       if (cells != SIZE_MAX && cells != sheet.CellCount()) std::abort();
       cells = sheet.CellCount();
     }
+    // Saved untouched, the file is the same bytes (S2).
+    if (csv::Write(book, bytes, o) != bytes) std::abort();
     std::vector<std::string> fields;
     for (size_t r = 0; r < reader.RowCount() && r < 64; ++r) {
       reader.Fields(r, fields);

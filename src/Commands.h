@@ -291,4 +291,75 @@ enum Cmd : int {
   CmdPrevSheet,            // Ctrl+PgUp
   CmdSheetPick = 1520,     // + the sheet's index: the sheet tabs' list of every sheet
   CmdSheetPickLast = 1999,
+  // Editing spreadsheets (S2, the grid): 2000-2699.
+  CmdInsertCells = 2000,  // Ctrl++: cells, or whole rows or columns when they're selected
+  CmdDeleteCells,         // Ctrl+-
+  CmdClearContents,       // Delete
+  CmdRowHeight,           // Row height…
+  CmdColumnWidth,         // Column width…
+  CmdHide,                // the selected rows or columns
+  CmdUnhide,
+  CmdInsertSheet,         // Shift+F11
+  CmdDeleteSheet,
+  CmdRenameSheet,
+  CmdHideSheet,
+  CmdMoveSheetLeft,
+  CmdMoveSheetRight,
+  CmdGoTo,                // Ctrl+G, F5
+  CmdFillDown,            // Ctrl+D
+  CmdFillRight,           // Ctrl+R
+  CmdPasteValues,         // Ctrl+Shift+V
+  CmdPasteFormulas,
+  CmdPasteFormats,
+  CmdPasteTranspose,
+  CmdAutoSum,             // Alt+=
+  CmdCalculateNow,        // F9
+  CmdCalculateSheet,      // Shift+F9
+  CmdCalculateFull,       // Ctrl+Alt+F9
+  CmdMergeCenter = 2024,  // Merge & Center
+  CmdMergeAcross,         // each selected row merged on its own
+  CmdMergeCells,
+  CmdUnmerge,
+  CmdFreezePanes,         // at the active cell; Unfreeze panes when frozen
+  CmdFreezeTopRow,
+  CmdFreezeFirstColumn,
+  CmdGroup,               // Alt+Shift+Right: the selected rows, or columns
+  CmdUngroup,             // Alt+Shift+Left
+  CmdAutoFitRowHeight,
+  CmdAutoFitColumnWidth,  // as double-clicking the header's edge
+  CmdInsertShiftRight,    // Excel's Insert choices for cells that aren't whole rows or columns
+  CmdInsertShiftDown,
+  CmdInsertRows,
+  CmdInsertColumns,
+  CmdDeleteShiftLeft,     // and Delete's
+  CmdDeleteShiftUp,
+  CmdDeleteRows,
+  CmdDeleteColumns,
+  CmdTabColor = 2100,     // + index into the tab colors (0: none)
+  CmdUnhideSheet = 2200,  // + the sheet's index: a hidden sheet shown again
+  CmdUnhideSheetLast = 2699,
+  // Formats, sort and filter (S2, s2-format): 2700-2999.
+  CmdFormatCells = 2700,  // Ctrl+1
+  CmdNumberFormatBox,     // the toolbar's number formats
+  CmdIncreaseDecimal,
+  CmdDecreaseDecimal,
+  CmdMergeBox,            // the toolbar's merge choices (s2-grid's merge commands)
+  CmdBordersBox,          // the toolbar's borders; its main part repeats the last choice
+  CmdFillColor,
+  CmdStrikethrough,       // Ctrl+5
+  CmdNumGeneral,          // Ctrl+Shift+~
+  CmdNumNumber,           // Ctrl+Shift+1
+  CmdNumTime,             // Ctrl+Shift+2
+  CmdNumDate,             // Ctrl+Shift+3
+  CmdNumCurrency,         // Ctrl+Shift+4
+  CmdNumPercent,          // Ctrl+Shift+5
+  CmdNumScientific,       // Ctrl+Shift+6
+  CmdBorderOutline,       // Ctrl+Shift+7
+  CmdBorderRemove,        // Ctrl+Shift+-
+  CmdCellStyles,          // the toolbar's built-in cell styles
+  CmdFilter,              // Ctrl+Shift+L: filter on or off
+  CmdDataBox,             // the toolbar's sort and filter choices
+  CmdSortAscending,
+  CmdSortDescending,
+  CmdRemoveDuplicates,
 };
