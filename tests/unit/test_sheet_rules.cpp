@@ -283,6 +283,33 @@ TEST(SheetTables_Unstructure) {
   CHECK(data::Unstructure("SUM(Sales[Amount])", t, "My Sheet", 0, false) == "SUM('My Sheet'!$B$2:$B$4)");
 }
 
+// On a protected sheet Excel refuses tables and validations always, conditional formats unless
+// formatting cells is allowed.
+TEST(SheetRules_Protected) {
+  auto book = OpenParts({kSheet, "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.SetSheetProtection(0, edit::SheetProtection{}));
+  std::string xml, ext;
+  data::WriteCfRules({data::DuplicateRule("A1:A3", false, 0)}, book->GetSheet(0).Text(), xml, ext);
+  CHECK(!ed.SetSheetRules(0, Editor::RuleKind::ConditionalFormats, xml, ext, u"New Rule"));
+  data::Validation v;
+  v.type = data::Validation::Type::Whole;
+  v.f1 = "1";
+  v.sqref = "A1";
+  data::WriteValidations({v}, book->GetSheet(0).Text(), xml, ext);
+  CHECK(!ed.SetSheetRules(0, Editor::RuleKind::Validations, xml, ext, u"Data Validation"));
+  Table t;
+  t.ref = Range{0, 0, 2, 1};
+  t.columns = {TableColumn{0, "A"}, TableColumn{0, "B"}};
+  CHECK(!ed.AddTable(0, t));
+  edit::SheetProtection formats;
+  formats.formatCells = false;  // false: allowed
+  CHECK(ed.SetSheetProtection(0, formats));
+  data::WriteCfRules({data::DuplicateRule("A1:A3", false, 0)}, book->GetSheet(0).Text(), xml, ext);
+  CHECK(ed.SetSheetRules(0, Editor::RuleKind::ConditionalFormats, xml, ext, u"New Rule"));
+}
+
 // Pasting: the copy's cells, every formula through the move, a data bar's x14 id new.
 TEST(SheetRules_Copy) {
   auto move = [](void*, std::string_view f) { return "M(" + std::string(f) + ")"; };
