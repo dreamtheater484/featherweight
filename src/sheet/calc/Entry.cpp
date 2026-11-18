@@ -179,6 +179,11 @@ EnteredFormula EnterFormula(std::string_view typed, const FormulaLocale& region,
     e.message = std::move(message);
     return e;
   };
+  // Nothing typed holds a NUL or another control character but tabs and line breaks.
+  for (size_t k = 0; k < typed.size(); ++k) {
+    const unsigned char c = static_cast<unsigned char>(typed[k]);
+    if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') return refuse(k, kProblem);
+  }
   std::string text;
   size_t bad = 0;
   int open = 0;

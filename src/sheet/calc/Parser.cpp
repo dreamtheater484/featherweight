@@ -1158,8 +1158,11 @@ class TextMapper {
             continue;
           }
           i_ += len;
-          // #REF!A1 (a deleted sheet's reference) is printed as written; let the parser read it.
-          if (e == Err::Ref && (IsLetter(At(i_)) || IsDigit(At(i_)) || At(i_) == '$' || At(i_) == '[')) return -1;
+          // #REF!A1 (a deleted sheet's reference) is printed as written; let the parser read it. Its
+          // tail can start with ':' too (#REF!:A1, read with it as RefErrTail does).
+          if (e == Err::Ref &&
+              (IsLetter(At(i_)) || IsDigit(At(i_)) || At(i_) == '$' || At(i_) == '[' || At(i_) == ':'))
+            return -1;
           continue;
         }
         case '\'':
