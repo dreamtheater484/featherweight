@@ -252,6 +252,23 @@ class Editor {
   // The first name "<stem><n><ext>" no part has, n from 1: NewPartName("/xl/charts/chart", ".xml").
   std::string NewPartName(std::string_view stem, std::string_view ext) const;
   std::string PartBytes(std::string_view name) const;  // empty when there's no such part
+
+  // ---- Charts (s3-charts)
+  enum class ChartKind : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter };
+  struct NewChart {
+    ChartKind kind = ChartKind::Column;
+    Range data;              // the cells charted (the selection)
+    CellAddr at;             // the chart's top-left cell
+    uint32_t cols = 8, rows = 15;  // its size in cells (Excel's default chart is about 8 x 15)
+    std::string title;       // empty: Excel's (a lone series' name, else none)
+  };
+  // Inserts a chart of `data` as Excel does (Insert > Chart, Alt+F1): series and categories guessed
+  // from the cells (a header row of text names the series, a first column of text the categories;
+  // series down the columns when there are at least as many rows as columns), written as Excel
+  // writes a new chart (its drawing, chart part, relationships and content types). Refused on a
+  // protected sheet without "Edit objects", in a workbook without a package (CSV) or on a sheet
+  // not saved yet.
+  Result InsertChart(int sheet, const NewChart& chart);
   // Excel's rules for a sheet name: 1-31 characters, none of : \ / ? * [ ], not starting or
   // ending with ', not "History", and no other sheet's name (without case). Empty when valid.
   std::u16string CheckSheetName(std::string_view name, int except = -1) const;

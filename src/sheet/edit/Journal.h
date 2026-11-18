@@ -68,6 +68,7 @@ enum class JournalOp : uint8_t {
   AddCellStyle = 39,
   SetFilter = 40,
   MoveCells = 41,
+  InsertChart = 50,  // s3-charts: 50-59
   // s3-data's operations: 60-69.
   SetSheetRules = 60,
   AddDxf = 61,

@@ -947,3 +947,45 @@ TEST(sheet_edit_add_remove_part) {
   CHECK(ed.Undo());
   CHECK(ed.PartBytes(name) == xml && relTo() && p.ContentTypeOf(name) == type);
 }
+
+// Insert > Chart (s3-charts): series guessed from the selection as Excel guesses them, written as
+// Excel writes a new chart, undone with its parts.
+TEST(sheet_insert_chart) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"B1\" t=\"inlineStr\"><is><t>Sales</t></is></c>"
+                         "<c r=\"C1\" t=\"inlineStr\"><is><t>Costs</t></is></c></row>"
+                         "<row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>Jan</t></is></c><c r=\"B2\"><v>10</v></c><c r=\"C2\"><v>7</v></c></row>"
+                         "<row r=\"3\"><c r=\"A3\" t=\"inlineStr\"><is><t>Feb</t></is></c><c r=\"B3\"><v>12</v></c><c r=\"C3\"><v>8</v></c></row>"
+                         "<row r=\"4\"><c r=\"A4\" t=\"inlineStr\"><is><t>Mar</t></is></c><c r=\"B4\"><v>15</v></c><c r=\"C4\"><v>9.5</v></c></row>"
+                         "</sheetData>",
+                         "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Editor::NewChart c;
+  c.data = Range{0, 0, 3, 2};  // A1:C4
+  c.at = CellAddr{5, 1};
+  CHECK(ed.InsertChart(0, c));
+  const std::string chart = ed.PartBytes("/xl/charts/chart1.xml");
+  CHECK(chart.find("<c:barDir val=\"col\"/>") != std::string::npos);
+  CHECK(InOrder(chart, {"<c:f>Sheet1!$B$1</c:f>", "<c:f>Sheet1!$A$2:$A$4</c:f>", "<c:f>Sheet1!$B$2:$B$4</c:f>",
+                        "<c:f>Sheet1!$C$1</c:f>", "<c:f>Sheet1!$C$2:$C$4</c:f>", "<c:legendPos val=\"b\"/>"}));
+  CHECK(chart.find("<c:pt idx=\"2\"><c:v>9.5</c:v></c:pt>") != std::string::npos && chart.find("<c:v>Mar</c:v>") != std::string::npos);
+  CHECK(ed.PartBytes("/xl/drawings/drawing1.xml").find("<xdr:row>5</xdr:row>") != std::string::npos);
+  // A second chart joins the same drawing.
+  c.kind = Editor::ChartKind::Pie;
+  c.data = Range{0, 0, 3, 1};
+  c.at = CellAddr{5, 10};
+  CHECK(ed.InsertChart(0, c));
+  CHECK(ed.PartBytes("/xl/charts/chart2.xml").find("<c:pieChart>") != std::string::npos);
+  CHECK(ed.PartBytes("/xl/drawings/drawing2.xml").empty());
+
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-insert-chart");
+  CheckClean(saved);
+  CHECK(PartText(saved, "/xl/worksheets/sheet1.xml").find("drawing") != std::string::npos);
+  auto again = OpenZip(saved);
+  if (!again) return;
+  CHECK(ed.Undo(2));
+  CHECK(ed.PartBytes("/xl/charts/chart1.xml").empty() && ed.PartBytes("/xl/drawings/drawing1.xml").empty());
+  std::vector<uint8_t> undone = SaveBytes(*book, ed, "save-insert-chart-undone");
+  CheckClean(undone);
+  CHECK(PartText(undone, "/xl/worksheets/sheet1.xml").find("drawing") == std::string::npos);
+}
