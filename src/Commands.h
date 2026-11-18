@@ -362,6 +362,20 @@ enum Cmd : int {
   CmdSortAscending,
   CmdSortDescending,
   CmdRemoveDuplicates,
+  // Conditional formatting and data validation (S3, s3-data): 2850-2899.
+  CmdCondFormat = 2850,   // the Conditional formatting panel: a new rule
+  CmdCfManage,            // its list of the sheet's rules
+  CmdCfClearSelection,
+  CmdCfClearSheet,
+  CmdCondFormatBox,       // the toolbar's conditional formatting choices
+  CmdDataValidation,      // Data > Data validation
+  CmdCircleInvalid,
+  CmdClearCircles,
+  CmdValidationList,      // Alt+Down on a cell with a list: its choices
+  CmdCreateTable,         // Ctrl+T, Ctrl+L
+  CmdTableDesign,
+  CmdConvertToRange,
+  CmdTableTotalRow,
 
   // Defined names (S3, s3-calc): 2970-2999.
   CmdNameManager = 2970,  // Ctrl+F3

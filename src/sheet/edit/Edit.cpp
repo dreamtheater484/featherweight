@@ -474,7 +474,7 @@ struct Editor::State {
     bordersAtSave = st.Borders().size();
     numFmtsAtSave = st.CustomFormats().size();
     stringsAtSave = b.Strings().Size();
-    cellStylesAtSave = st.CellStyleXfs().size() + st.CellStyles().size();
+    cellStylesAtSave = st.CellStyleXfs().size() + st.CellStyles().size() + st.Dxfs().size();
   }
 
   void ViewChanged(const Sheet* s) {
@@ -1639,6 +1639,22 @@ uint32_t Editor::AddNumFmt(std::string_view code) {
     for (const auto& [i, c] : fmts) id = std::max(id, i + 1);
     fmts.emplace(id, std::string(code));
     return id;
+  }();
+  rec.rec.U(at);
+  rec.commit = true;
+  return at;
+}
+
+uint32_t Editor::AddDxf(const Dxf& dxf) {
+  const std::string xml = xlsx::StyleItemXml(dxf);
+  Rec rec(*this, JournalOp::AddDxf, [&](JournalRecord& w) { w.S(xml); }, true);
+  const uint32_t at = [&]() -> uint32_t {
+    StylesBuilder sb(book_.GetStyles());
+    auto& v = sb.Dxfs();
+    for (size_t i = 0; i < v.size(); ++i)
+      if (xlsx::StyleItemXml(v[i]) == xml) return static_cast<uint32_t>(i);
+    v.push_back(dxf);
+    return static_cast<uint32_t>(v.size() - 1);
   }();
   rec.rec.U(at);
   rec.commit = true;
@@ -4128,6 +4144,168 @@ Result Editor::SetFilter(int sheet, const std::optional<SheetFilter>& filter) {
   }());
 }
 
+Result Editor::SetSheetRules(int sheet, RuleKind kind, const std::string& xml, const std::string& ext,
+                             std::u16string stepName) {
+  Rec rec(*this, JournalOp::SetSheetRules,
+          [&](JournalRecord& w) { w.I(sheet).U(static_cast<uint8_t>(kind)).S(xml).S(ext).S16(stepName); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (s.Kind() != SheetKind::Worksheet || s.PartName().empty())
+      return Result::Fail(u"Only a worksheet of an Excel workbook keeps these rules.");
+    const bool validations = kind == RuleKind::Validations;
+    std::string oldXml, oldExt;
+    xlsx::GetSheetRules(A::Text(s), validations, oldXml, oldExt);
+    if (oldXml == xml && oldExt == ext) return Result{};
+    return Run(*this, std::move(stepName), [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveText(sv);
+      xlsx::PutSheetRules(A::Text(s), validations, xml, ext);
+      st.Change(&s, kRules, Range{});
+      return Result{};
+    });
+  }());
+}
+
+namespace {
+constexpr std::string_view kTableRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
+constexpr std::string_view kTableType = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
+
+// A table on the sheet that `ref` overlaps, other than `except`, as Excel's message names it.
+Result TableOverlap(const Sheet& s, const Range& ref, size_t except) {
+  for (size_t i = 0; i < s.Tables().size(); ++i)
+    if (i != except && Overlaps(s.Tables()[i].ref, ref)) return Result::Fail(u"A table can't overlap another table.");
+  for (const Range& m : s.Merges())
+    if (Overlaps(m, ref)) return Result::Fail(u"A table can't overlap a range that contains merged cells.");
+  if (s.Filter() && Overlaps(s.Filter()->ref, ref)) return Result::Fail(u"A table can't overlap the sheet's filter.");
+  return {};
+}
+
+Result TableShape(const Table& t) {
+  if (!Valid(t.ref)) return BadRange();
+  if (t.ref.lastRow < t.ref.firstRow + t.headerRows + t.totalsRows) return Result::Fail(u"A table needs a row of data.");
+  if (t.columns.size() != t.ref.lastCol - t.ref.firstCol + 1) return Result::Fail(u"A table needs a name for each column.");
+  return {};
+}
+}  // namespace
+
+Result Editor::AddTable(int sheet, Table t) {
+  Rec rec(*this, JournalOp::AddTable, [&](JournalRecord& w) { w.I(sheet).S(xlsx::TableXml(t)).S(t.part); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (s.Kind() != SheetKind::Worksheet || s.PartName().empty() || !book_.GetPackage())
+      return Result::Fail(u"Tables need an Excel workbook: save this one as .xlsx first.");
+    if (Result r = TableShape(t); !r) return r;
+    if (Result r = TableOverlap(s, t.ref, SIZE_MAX); !r) return r;
+    return Run(*this, u"Create Table", [&]() -> Result {
+      State& st = *s_;
+      // Ids and names unique in the workbook: Excel's "Table1", "Table2"...
+      uint32_t maxId = 0;
+      bool idTaken = false;
+      std::vector<std::string> names;
+      for (size_t i = 0; i < book_.SheetCount(); ++i)
+        for (const Table& x : book_.GetSheet(i).Tables()) {
+          maxId = std::max(maxId, x.id);
+          idTaken |= x.id == t.id;
+          names.push_back(x.name);
+        }
+      for (const DefinedName& n : book_.Names()) names.push_back(n.name);
+      auto taken = [&](const std::string& name) {
+        return std::any_of(names.begin(), names.end(), [&](const std::string& x) { return NameEqualsNoCase(x, name); });
+      };
+      if (t.id == 0 || idTaken) t.id = maxId + 1;
+      if (t.name.empty() || taken(t.name))
+        for (uint32_t n = 1;; ++n)
+          if (!taken(t.name = "Table" + std::to_string(n))) break;
+      t.displayName = t.name;
+      for (size_t i = 0; i < t.columns.size(); ++i)
+        if (t.columns[i].id == 0) t.columns[i].id = static_cast<uint32_t>(i + 1);
+      t.part = NewPartName("/xl/tables/table", ".xml");
+      const std::string id = AddPart(s.PartName(), kTableRel, t.part, kTableType, xlsx::TableXml(t));
+      if (id.empty()) return Result::Fail(u"The table couldn't be added to the workbook.");
+      SheetSave& sv = st.Save(s);
+      st.SaveText(sv);
+      xlsx::PutTablePart(A::Text(s), id, true);
+      st.SaveTables(sv);
+      A::Tables(s).push_back(t);
+      st.Change(&s, kStyles | kRules, t.ref);
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::SetTable(int sheet, size_t index, const Table& t) {
+  Rec rec(*this, JournalOp::SetTable, [&](JournalRecord& w) { w.I(sheet).U(index).S(xlsx::TableXml(t)).S(t.part); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (index >= s.Tables().size()) return Result::Fail(u"There's no such table.");
+    if (Result r = TableShape(t); !r) return r;
+    if (Result r = TableOverlap(s, t.ref, index); !r) return r;
+    const Table before = s.Tables()[index];
+    if (!t.name.empty() && !NameEqualsNoCase(t.name, before.name)) {
+      for (size_t i = 0; i < book_.SheetCount(); ++i)
+        for (const Table& x : book_.GetSheet(i).Tables())
+          if (NameEqualsNoCase(x.name, t.name)) return Result::Fail(u"The name entered already exists. Enter a unique name.");
+      for (const DefinedName& n : book_.Names())
+        if (NameEqualsNoCase(n.name, t.name)) return Result::Fail(u"The name entered already exists. Enter a unique name.");
+    }
+    return Run(*this, u"Table", [&]() -> Result {
+      State& st = *s_;
+      Table now = t;
+      now.part = before.part;
+      now.id = before.id;
+      if (now.name.empty()) now.name = before.name;
+      now.displayName = now.name;
+      uint32_t maxId = 0;
+      for (const TableColumn& c : before.columns) maxId = std::max(maxId, c.id);
+      for (size_t i = 0; i < now.columns.size(); ++i)
+        if (now.columns[i].id == 0) now.columns[i].id = ++maxId;
+      std::string xml = PartBytes(before.part);
+      if (xml.empty() || !xlsx::UpdateTableXml(xml, now) || !WritePart(before.part, std::move(xml)))
+        return Result::Fail(u"The table's part couldn't be written.");
+      SheetSave& sv = st.Save(s);
+      st.SaveTables(sv);
+      A::Tables(s)[index] = now;
+      const Range all{std::min(before.ref.firstRow, now.ref.firstRow), std::min(before.ref.firstCol, now.ref.firstCol),
+                      std::max(before.ref.lastRow, now.ref.lastRow), std::max(before.ref.lastCol, now.ref.lastCol)};
+      st.Change(&s, kStyles | kRules, all);
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::RemoveTable(int sheet, size_t index) {
+  Rec rec(*this, JournalOp::RemoveTable, [&](JournalRecord& w) { w.I(sheet).U(index); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (index >= s.Tables().size() || !book_.GetPackage()) return Result::Fail(u"There's no such table.");
+    return Run(*this, u"Convert to Range", [&]() -> Result {
+      State& st = *s_;
+      const Table t = s.Tables()[index];
+      std::string relId;
+      if (const pkg::RelationshipSet* set = book_.GetPackage()->RelationshipsOf(s.PartName()))
+        for (const pkg::Relationship& r : set->items)
+          if (!r.external && NameEqualsNoCase(r.targetPart, t.part)) relId = r.id;
+      if (!RemovePart(t.part)) return Result::Fail(u"The table's part couldn't be removed.");
+      SheetSave& sv = st.Save(s);
+      st.SaveText(sv);
+      if (!relId.empty()) xlsx::PutTablePart(A::Text(s), relId, false);
+      st.SaveTables(sv);
+      A::Tables(s).erase(A::Tables(s).begin() + static_cast<ptrdiff_t>(index));
+      st.Change(&s, kStyles | kRules, t.ref);
+      return Result{};
+    });
+  }());
+}
+
 Result Editor::SetTabColor(int sheet, const Color& color) {
   Rec rec(*this, JournalOp::SetTabColor, [&](JournalRecord& w) { w.I(sheet).C(color); });
   return rec.Done([&]() -> Result {
@@ -4472,7 +4650,7 @@ void Editor::BeginSave() {
   st.bordersSaving = styles.Borders().size();
   st.numFmtsSaving = styles.CustomFormats().size();
   st.stringsSaving = book_.Strings().Size();
-  st.cellStylesSaving = styles.CellStyleXfs().size() + styles.CellStyles().size();
+  st.cellStylesSaving = styles.CellStyleXfs().size() + styles.CellStyles().size() + styles.Dxfs().size();
 }
 
 bool Editor::Saving() const { return s_->saving; }
@@ -4543,7 +4721,7 @@ bool Editor::StylesDirty() const {
   return st.CellXfs().size() != s_->xfsAtSave || st.Fonts().size() != s_->fontsAtSave ||
          st.Fills().size() != s_->fillsAtSave || st.Borders().size() != s_->bordersAtSave ||
          st.CustomFormats().size() != s_->numFmtsAtSave ||
-         st.CellStyleXfs().size() + st.CellStyles().size() != s_->cellStylesAtSave;
+         st.CellStyleXfs().size() + st.CellStyles().size() + st.Dxfs().size() != s_->cellStylesAtSave;
 }
 
 bool Editor::StringsDirty() const { return book_.Strings().Size() != s_->stringsAtSave; }

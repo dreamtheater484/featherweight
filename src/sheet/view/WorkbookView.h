@@ -11,6 +11,7 @@
 
 #include "PagedView.h"
 #include "sheet/data/Filter.h"
+#include "sheet/data/Rules.h"
 #include "sheet/data/Sort.h"
 #include "sheet/calc/Bind.h"
 #include "sheet/calc/Entry.h"
@@ -451,6 +452,46 @@ class WorkbookView : public PagedView {
   class DataPanel;
   std::unique_ptr<DataPanel> dataPanel_;
   void ShowDataPanel(bool sort);
+  // ---- Conditional formatting and data validation (s3-data, WorkbookData.cpp).
+  class RulesPanel;
+  class ValidationPanel;
+  class ListPanel;
+  std::shared_ptr<PanelContent> rulesPanel_, validationPanel_, listPanel_;
+  bool RulesCommand(int cmd);
+  bool RulesCommandState(int cmd, CommandState& s);
+  void RulesEdited(const std::vector<edit::Change>& changes);  // rules read again after an edit
+  void ShowRulesPanel(bool manage);
+  bool ApplyCfRules(const std::vector<data::CfRule>& rules, const char16_t* name);
+  bool ApplyValidations(const std::vector<data::Validation>& rules, const char16_t* name);
+  const std::vector<data::Validation>& Validations();  // the shown sheet's
+  std::vector<data::Validation> validations_;
+  int validationsSheet_ = -1;
+  // A value typed into a cell with a validation: Excel's alert (stop, warning, information); false
+  // when the value isn't entered.
+  bool ValidateEntry(int sheet, CellAddr cell, const edit::CellInput& in);
+  // Whether the rule allows the value (`typed`: as typed, so an emptied cell is allowed).
+  bool ValidateValue(const data::Validation& v, int sheet, CellAddr cell, const edit::CellInput& in, bool typed);
+  std::vector<CellAddr> circles_;  // Circle Invalid Data, on the shown sheet
+  void DrawValidation(gfx::Canvas& c);  // the input message, the list's button, the circles
+  bool ValidationButtonAt(float x, float y);
+  void ShowValidationList();
+  bool DataRulesScriptOp(const std::wstring& op, const std::wstring& arg);  // rule: and valid:
+  // Pasting copied cells (all, or formats): the pasted cells take the source's conditional formats
+  // (and with `validations` its validations) in place of their own, as in Excel; `pasted` holds
+  // whole copies of `src`.
+  edit::Result PasteRules(int fromSheet, const Range& src, int sheet, const Range& pasted, bool validations);
+  // Tables (WorkbookData.cpp): Insert > Table and the table's design, through Editor::AddTable,
+  // SetTable and RemoveTable.
+  class TablePanel;
+  std::shared_ptr<PanelContent> tablePanel_;
+  int TableIndexAt(CellAddr at);  // the shown sheet's table holding the cell, or -1
+  void ShowTablePanel();
+  bool CreateTable(Range r, bool headers, const std::string& style);
+  bool ChangeTable(size_t index, const std::function<void(Table&)>& change, const char16_t* name);
+  bool SetTotalRow(size_t index, bool on);
+  bool ConvertToRange(size_t index);
+  void AutoExpandTable(int sheet, CellAddr cell);  // a value typed just below or right of a table  // formulas that use the table refer to its cells instead
+  bool TableScriptOp(const std::wstring& arg);  // table:
   // ---- Defined names (WorkbookNames.cpp): the Name Manager, Create from Selection, Paste Names.
   bool NamesCommand(int cmd);
   bool NamesCommandState(int cmd, CommandState& s);

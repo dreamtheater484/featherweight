@@ -642,6 +642,7 @@ bool WorkbookView::CommitEdit(bool fill) {
     host_.ViewInvalidate();
     return false;
   }
+  if (!ValidateEntry(sheet, editCell_, in)) return false;  // s3-data: the cell's data validation
   edit::Result r;
   if (fill) {
     // Ctrl+Enter: every selected cell (whole rows or columns up to the used cells, not a million),
@@ -674,6 +675,7 @@ bool WorkbookView::CommitEdit(bool fill) {
     r = Ed().SetCell(sheet, editCell_.row, editCell_.col, in);
   }
   if (EditRefused(r)) return false;
+  if (!fill) AutoExpandTable(sheet, editCell_);  // s3-data: the table grows, as in Excel
   finish();
   return true;
 }
@@ -693,6 +695,7 @@ void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
   }
   if (sheets) SheetsChanged();
   else if (layout) Restructure();
+  RulesEdited(changes);  // s3-data: conditional formats and validations read again
   // Notes and drawings that moved (inserted or deleted cells, a sort): read again, the shown
   // sheet's now and the others' when they are shown.
   if (!sheets)

@@ -283,6 +283,9 @@ void WorkbookView::Paste(PasteMode mode, bool transpose) {
     if (r) r = Ed().SetStyle(sheet, Range::Cell(at.row, at.col), style);
   for (const Range& m : merges)
     if (r) r = Ed().Merge(sheet, m);
+  if (r && from && !cut && !transpose && (mode == PasteMode::All || mode == PasteMode::Formats))  // s3-data
+    r = PasteRules(static_cast<int>(std::find(sheetOrder_.begin(), sheetOrder_.end(), from) - sheetOrder_.begin()),
+                   clip_->range, sheet, pasted, mode == PasteMode::All);
   pasting_ = false;
   if (EditRefused(r)) return;
   group.done = true;

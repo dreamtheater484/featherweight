@@ -1409,12 +1409,30 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   data.priority = 2;
   data.text = L"Data";
   data.tooltip = L"Sort, filter and remove duplicates";
-  data.choices = {L"Sort A to Z", L"Sort Z to A", L"Custom sort…", L"Filter (Ctrl+Shift+L)", L"Remove duplicates…"};
+  data.choices = {L"Sort A to Z",        L"Sort Z to A",          L"Custom sort…",
+                  L"Filter (Ctrl+Shift+L)", L"Remove duplicates…", L"Data validation…",
+                  L"Circle invalid data", L"Clear validation circles", L"Table… (Ctrl+T)"};
   data.onChange = [this](const ToolValue& v) {
-    static constexpr int kCmds[] = {CmdSortAscending, CmdSortDescending, CmdDataBox, CmdFilter, CmdRemoveDuplicates};
+    static constexpr int kCmds[] = {CmdSortAscending, CmdSortDescending,   CmdDataBox,       CmdFilter,
+                                    CmdRemoveDuplicates, CmdDataValidation, CmdCircleInvalid, CmdClearCircles, CmdCreateTable};
     if (v.index >= 0 && v.index < 5) DataCommand(kCmds[v.index]);
+    else if (v.index >= 5 && v.index < 9) RulesCommand(kCmds[v.index]);
   };
   m.left.push_back(data);
+  // Conditional formatting (WorkbookData.cpp).
+  ToolItem rules;
+  rules.kind = ToolKind::Dropdown;
+  rules.cmd = CmdCondFormatBox;
+  rules.width = 104;
+  rules.priority = 3;
+  rules.text = L"Conditional";
+  rules.tooltip = L"Conditional formatting";
+  rules.choices = {L"New rule…", L"Manage rules…", L"Clear rules from selected cells", L"Clear rules from entire sheet"};
+  rules.onChange = [this](const ToolValue& v) {
+    static constexpr int kCmds[] = {CmdCondFormat, CmdCfManage, CmdCfClearSelection, CmdCfClearSheet};
+    if (v.index >= 0 && v.index < 4) RulesCommand(kCmds[v.index]);
+  };
+  m.left.push_back(rules);
   // Number formats, with the decimals and the panel's Number page.
   ToolItem number;
   number.kind = ToolKind::Dropdown;
@@ -1439,6 +1457,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
 // Scripted formatting (build from scratch): the toolbar's and Format Cells' calls by name
 
 bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
+  if (op == L"rule" || op == L"valid" || op == L"table") return DataRulesScriptOp(op, arg);  // WorkbookData.cpp
   if (op == L"name" || op == L"names") return NamesScriptOp(op, arg);  // s3-calc's (WorkbookNames.cpp)
   if (op != L"format") return GridScriptOp(op, arg);  // s2-grid's (fill:, WorkbookFill.cpp)
   const size_t eq = arg.find(L'=');
