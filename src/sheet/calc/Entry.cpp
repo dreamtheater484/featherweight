@@ -194,6 +194,23 @@ EnteredFormula EnterFormula(std::string_view typed, const FormulaLocale& region,
   PrintOptions file;
   e.text = "=" + Print(*e.formula, at, names, file);
   e.shown = ShowFormula(*e.formula, at, names, region);
+  // What the bar shows must be taken again as the same formula. Where the printer's text isn't
+  // (odd names next to ':' or '!' that read back as a sheet range, say), it shows what was typed,
+  // with the calls closed.
+  auto taken = [&](std::string_view shown) {
+    std::string t;
+    int closes = 0;
+    if (!ToInvariant(shown, region, t, nullptr, &closes) || closes < 0) return std::string();
+    t.append(static_cast<size_t>(closes), ')');
+    auto g = Compile(t, typedAt, names, nullptr);
+    return g ? "=" + Print(*g, at, names, file) : std::string();
+  };
+  if (taken(e.shown) != e.text) {
+    std::string own(typed);
+    own.append(static_cast<size_t>(open), ')');
+    if (own.empty() || own[0] != '=') own.insert(0, "=");
+    if (taken(own) == e.text) e.shown = std::move(own);
+  }
   return e;
 }
 

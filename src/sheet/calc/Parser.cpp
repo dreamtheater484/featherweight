@@ -596,11 +596,17 @@ class Parser {
   // A reference starting with `a` (length `la` at i_), with its second end if ":" follows. False
   // (nothing consumed) when it isn't a reference on its own: in A1, "A" or "1" alone.
   bool TryReference(const Part& a, size_t la, uint8_t sheetFlags, int s1, int s2) {
-    if (At(i_ + la) == ':') {
+    // Spaces around the ':' of a reference don't change it: "A: E" is A:E, as it prints, not a
+    // range between names A and E that would read back as the columns.
+    size_t colon = i_ + la;
+    while (At(colon) == ' ') ++colon;
+    if (At(colon) == ':') {
+      size_t m = colon + 1;
+      while (At(m) == ' ') ++m;
       Part b;
-      size_t lb = ScanPart(i_ + la + 1, b);
+      size_t lb = ScanPart(m, b);
       if (lb && ((a.Cell() && b.Cell()) || (a.RowOnly() && b.RowOnly()) || (a.ColOnly() && b.ColOnly()))) {
-        i_ += la + 1 + lb;
+        i_ = m + lb;
         EmitArea(a, b, sheetFlags, s1, s2);
         return true;
       }
@@ -1120,8 +1126,12 @@ class TextMapper {
         continue;
       }
       switch (c) {
+        case ':':  // "A1 : B2" is one reference to the parser: the printer's path writes it
+          if (i_ > 0 && (IsSpace(s_[i_ - 1]) || IsSpace(At(i_ + 1)))) return -1;
+          ++i_;
+          continue;
         case '+': case '-': case '*': case '/': case '^': case '&': case '=': case '<': case '>': case '%':
-        case ',': case '(': case ')': case ':': case '@':
+        case ',': case '(': case ')': case '@':
           ++i_;
           continue;
         case '"':
