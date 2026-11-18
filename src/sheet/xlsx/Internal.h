@@ -62,6 +62,9 @@ bool NumberStyle(std::string_view text, double v, uint8_t& style);
 bool ParseSlice(pugi::xml_document& doc, std::string_view xml);
 // The text of an element: its text and CDATA children, joined.
 std::string TextOf(pugi::xml_node n);
+// An element without its children, with its attributes as they are: "<name a="v"/>" (the workbook
+// keeps workbookProtection so, and saving compares it with the file's).
+std::string EmptyElementXml(pugi::xml_node n);
 // The top-level elements of kept XML (a part's text around sheetData): where each is and its local
 // name; comments, processing instructions and whitespace between them skipped.
 struct XmlPiece {

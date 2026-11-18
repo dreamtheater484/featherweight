@@ -462,6 +462,58 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = SetFilter(sheet, filter);
         break;
       }
+      case JournalOp::SetSheetProtection: {
+        const int sheet = f.Int();
+        const std::string xml = f.S();
+        const std::optional<SheetProtection> p = ReadSheetProtection(xml);
+        if (f.Ok() && (xml.empty() || p)) r = SetSheetProtection(sheet, p);
+        else if (f.Ok()) return damaged;
+        break;
+      }
+      case JournalOp::SetWorkbookProtection: {
+        const std::string xml = f.S();
+        const std::optional<WorkbookProtection> p = ReadWorkbookProtection(xml);
+        if (f.Ok() && (xml.empty() || p)) r = SetWorkbookProtection(p);
+        else if (f.Ok()) return damaged;
+        break;
+      }
+      case JournalOp::SetHyperlink: {
+        const int sheet = f.Int();
+        const Range at = f.R();
+        std::optional<Hyperlink> link;
+        if (f.B()) {
+          link.emplace();
+          link->target = f.S(), link->location = f.S(), link->display = f.S(), link->tooltip = f.S(), link->relId = f.S();
+        }
+        if (f.Ok()) r = SetHyperlink(sheet, at, link);
+        break;
+      }
+      case JournalOp::SetNote: {
+        const int sheet = f.Int();
+        const CellAddr cell = f.A();
+        std::optional<Note> note;
+        if (f.B()) {
+          note.emplace();
+          note->author = f.S(), note->text = f.S(), note->shown = f.B();
+          note->width = f.D(), note->height = f.D();
+          for (uint32_t& v : note->anchor) v = f.U32();
+        }
+        if (f.Ok()) r = SetNote(sheet, cell, note);
+        break;
+      }
+      case JournalOp::SetThread: {
+        const int sheet = f.Int();
+        const CellAddr cell = f.A();
+        std::optional<Thread> thread;
+        if (f.B()) {
+          thread.emplace();
+          thread->comments.resize(f.Count());
+          for (ThreadComment& c : thread->comments) c.author = f.S(), c.text = f.S(), c.id = f.S(), c.date = f.S();
+          thread->resolved = f.B();
+        }
+        if (f.Ok()) r = SetThread(sheet, cell, thread);
+        break;
+      }
       case JournalOp::FreezePanes: {
         const int sheet = f.Int();
         const uint32_t rows = f.U32(), cols = f.U32();

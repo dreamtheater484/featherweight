@@ -267,3 +267,25 @@ Featherweight edits workbooks. Check it next to Excel on the same file, keystrok
 ### Editing speed (record the numbers)
 
 - [ ] `million-cells.xlsx`: typing in a cell feels instant (measured 3.75 ms a key, 31 ms at worst; plan: under 16 and 50). Inserting a row ___ ms (measured 23–28 ms; plan: under 100 ms), and undoing it as quick.
+
+## Protection, links and notes (S3)
+
+Check next to Excel on copies of your own workbooks. Every change is one undo step.
+
+### Protecting
+
+- [ ] Right-click a sheet tab, **Protect sheet…**: a password (optional) typed twice, and the list of what everyone may still do (Excel's: select locked and unlocked cells, format cells, columns and rows, insert and delete columns and rows, links, sort, AutoFilter, PivotTables, objects, scenarios). Two different passwords: Excel's "Confirmation password is not identical."
+- [ ] On the protected sheet, typing into a locked cell (every cell is, until Format cells › Protect › Locked is cleared) shows Excel's message at once; unlocked cells take typing, pasting and Delete. Merging, inserting cells, grouping and turning the filter on are refused with Excel's other message; formatting, column widths, row heights, inserting and deleting rows and columns, links, notes and sorting work only when allowed (deleting rows and sorting only over unlocked cells).
+- [ ] A cell marked Hidden (Format cells › Protect) shows nothing in the formula bar while the sheet is protected. Tab goes to the next unlocked cell. Without "Select locked cells", the cursor stays off them.
+- [ ] **Unprotect sheet…** asks for the password; a wrong one gives Excel's "The password you supplied is not correct…". Without a password it unprotects at once.
+- [ ] **Protect workbook…** (password twice): sheets can't be added, deleted, moved, renamed, hidden or recolored until it's unprotected. Saved, the file opens in Excel protected the same way, and the same passwords unprotect it there; a file protected in Excel is protected here too.
+
+### Links
+
+- [ ] Ctrl+K on an empty cell: type `www.example.com` (or an e-mail address, or pick a place like `Sheet2!A1`), Enter. The cell shows the text, blue and underlined. Clicking a web or e-mail link opens it; a place in the workbook goes there; other kinds aren't opened.
+- [ ] Ctrl+K on a link edits it (Update) or removes it (Remove link); the cell menu has Insert/Edit link and Remove link. Saved, Excel opens the file without a repair and follows the same links.
+
+### Notes
+
+- [ ] Shift+F2 adds a note to the cell (with your Windows user name in bold, as Excel shows it); the red corner appears; hovering shows the note. Shift+F2 on it edits the text; Delete note removes it; Show note / Show all notes keep them shown. A ¶ in the box is a line break.
+- [ ] Saved, Excel opens the file without a repair and shows the same notes, in the same place, shown or hidden as set here.

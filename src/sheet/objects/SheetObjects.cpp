@@ -640,6 +640,7 @@ void SheetObjects::ReadNotes() {
         Prepare(b->second.shape);
         d.box = draw::Drawing::FromVml(b->second.shape, *m.vmlResources);
         if (d.box) d.styleRect = d.box->Bounds();
+        if (d.box) n.width = d.styleRect.Width(), n.height = d.styleRect.Height();
       }
       if (!add(std::move(n), std::move(d)) && notes_.size() >= kMaxNotes) break;
     }

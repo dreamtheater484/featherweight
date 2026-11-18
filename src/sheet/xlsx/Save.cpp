@@ -370,16 +370,19 @@ std::string ViewsXml(const Sheet& s, const PartText& t, const std::string& p, bo
   return Print(views);
 }
 
-std::string LinksXml(const Sheet& s, const PartText& t, const std::string& p) {
+// `ids`: each link's relationship id (NewLinkRels), else its own.
+std::string LinksXml(const Sheet& s, const PartText& t, const std::string& p, const std::vector<std::string>& ids) {
   if (s.Hyperlinks().empty()) return {};
   std::string r = DeclaredPrefix(t.rootStart, kRelNs);
   if (r.empty()) r = DeclaredPrefix(t.rootStart, kRelNsStrict);
   std::string out = "<" + p + "hyperlinks>";
-  for (const Hyperlink& h : s.Hyperlinks()) {
+  for (size_t i = 0; i < s.Hyperlinks().size(); ++i) {
+    const Hyperlink& h = s.Hyperlinks()[i];
+    const std::string& id = i < ids.size() ? ids[i] : h.relId;
     out += "<" + p + "hyperlink" + AttrXml("ref", RangeName(h.ref));
-    if (!h.relId.empty()) {
+    if (!id.empty()) {
       if (r.empty()) return std::string(FindElement(t, "hyperlinks"));  // can't name the relationship: as it was
-      out += AttrXml(r + ":id", h.relId);
+      out += AttrXml(r + ":id", id);
     }
     if (!h.location.empty()) out += AttrXml("location", h.location);
     if (!h.tooltip.empty()) out += AttrXml("tooltip", h.tooltip);
@@ -389,8 +392,67 @@ std::string LinksXml(const Sheet& s, const PartText& t, const std::string& p) {
   return out + "</" + p + "hyperlinks>";
 }
 
+// Links an edit added to a web address, a file or an e-mail address (a target without a
+// relationship id): each gets an external relationship in the sheet's rels, the file's own plus
+// these, as Excel writes them. The package keeps the file's rels, so every save numbers them the
+// same way. `ids` gets each link's id (empty: none); `rels` the new rels part, when there are new ones.
+bool NewLinkRels(const pkg::Package& pkg, const Sheet& s, const std::string& part, std::vector<std::string>& ids,
+                 std::vector<uint8_t>& rels) {
+  const auto& links = s.Hyperlinks();
+  ids.assign(links.size(), {});
+  bool any = false;
+  for (size_t i = 0; i < links.size(); ++i) {
+    ids[i] = links[i].relId;
+    any = any || (links[i].relId.empty() && !links[i].target.empty());
+  }
+  if (!any) return false;
+  const pkg::RelationshipSet* set = part.empty() ? nullptr : pkg.RelationshipsOf(part);
+  // One the rels have already (an earlier save wrote it) and no other link uses: that one.
+  if (set) {
+    bool more = false;
+    for (size_t i = 0; i < links.size(); ++i) {
+      if (!ids[i].empty() || links[i].target.empty()) continue;
+      for (const pkg::Relationship& r : set->items)
+        if (r.external && r.type.ends_with("/hyperlink") && r.target == links[i].target &&
+            std::find(ids.begin(), ids.end(), r.id) == ids.end()) {
+          ids[i] = r.id;
+          break;
+        }
+      more = more || ids[i].empty();
+    }
+    if (!more) return false;
+  }
+  auto used = [&](const std::string& id) {
+    if (set)
+      for (const pkg::Relationship& r : set->items)
+        if (r.id == id) return true;
+    return std::find(ids.begin(), ids.end(), id) != ids.end();
+  };
+  pugi::xml_document doc;
+  std::vector<uint8_t> old;
+  if (!set || !pkg.ReadPart(pkg::RelsPartFor(part), old).Ok() || !doc.load_buffer(old.data(), old.size()) ||
+      !doc.document_element()) {
+    doc.reset();
+    doc.append_child("Relationships").append_attribute("xmlns").set_value(std::string(pkg::kRelationshipsNs).c_str());
+  }
+  pugi::xml_node root = doc.document_element();
+  int n = 1;
+  for (size_t i = 0; i < links.size(); ++i) {
+    if (!ids[i].empty() || links[i].target.empty()) continue;
+    while (used("rId" + std::to_string(n))) ++n;
+    ids[i] = "rId" + std::to_string(n);
+    pugi::xml_node rel = root.append_child("Relationship");
+    rel.append_attribute("Id").set_value(ids[i].c_str());
+    rel.append_attribute("Type").set_value((std::string(kRelNs) + "/hyperlink").c_str());
+    rel.append_attribute("Target").set_value(links[i].target.c_str());
+    rel.append_attribute("TargetMode").set_value("External");
+  }
+  rels = Bytes(PrintDoc(doc));
+  return true;
+}
+
 // The sheet part's text around sheetData with what the edits changed written from the model.
-PartText EditedText(const Sheet& s, uint32_t pieces, bool active) {
+PartText EditedText(const Sheet& s, uint32_t pieces, bool active, const std::vector<std::string>& linkIds) {
   PartText t = s.Text();
   std::string p = PrefixOf(t.rootStart);
   if (pieces & edit::kPieceProps) PutElement(t, "sheetPr", SheetPrXml(s, t, p));
@@ -401,13 +463,13 @@ PartText EditedText(const Sheet& s, uint32_t pieces, bool active) {
   if (pieces & (edit::kPieceCols | edit::kPieceCells | edit::kPieceProps))
     PutElement(t, "sheetFormatPr", FormatPrXml(s, t, p));
   if (pieces & edit::kPieceMerges) PutElement(t, "mergeCells", MergesXml(s, p));
-  if (pieces & edit::kPieceLinks) PutElement(t, "hyperlinks", LinksXml(s, t, p));
+  if (pieces & edit::kPieceLinks) PutElement(t, "hyperlinks", LinksXml(s, t, p, linkIds));
   return t;
 }
 
 // A new sheet's whole part around its cells (a sheet added, or one read from a CSV file), with what
 // edits put around them before it had a part (a sort's state).
-PartText NewSheetText(const Sheet& s, bool active, bool strict) {
+PartText NewSheetText(const Sheet& s, bool active, bool strict, const std::vector<std::string>& linkIds) {
   PartText t;
   t.rootStart = "<worksheet xmlns=\"" + std::string(strict ? kMainNsStrict : kMainNs) + "\" xmlns:r=\"" +
                 std::string(strict ? kRelNsStrict : kRelNs) + "\">";
@@ -424,6 +486,7 @@ PartText NewSheetText(const Sheet& s, bool active, bool strict) {
   t.dataStart = "<sheetData>";
   t.hasData = true;
   PutElement(t, "mergeCells", MergesXml(s, ""));
+  PutElement(t, "hyperlinks", LinksXml(s, t, "", linkIds));
   if (FindElement(t, "pageMargins").empty())
     PutElement(t, "pageMargins",
                "<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>");
@@ -1087,7 +1150,10 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
       o.append_attribute("PartName").set_value(job.part.c_str());
       o.append_attribute("ContentType").set_value(std::string(kSheetCt).c_str());
       typesChanged = true;
-      job.text = NewSheetText(s, active, strict);
+      std::vector<std::string> linkIds;
+      std::vector<uint8_t> linkRels;
+      if (NewLinkRels(*pkg, s, std::string(), linkIds, linkRels)) put(pkg::RelsPartFor(job.part), std::move(linkRels));
+      job.text = NewSheetText(s, active, strict, linkIds);
       plan.sheets.push_back(std::move(job));
       continue;
     }
@@ -1100,7 +1166,14 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
     if (!pieces && !ed.MustWrite(static_cast<int>(i))) continue;
     if (!s.Loaded() || s.Text().rootStart.empty())
       return Status::Fail(Status::Code::Unsupported, "The sheet " + s.Name() + " can't be written.");
-    plan.sheets.push_back({&s, s.PartName(), s.RelId(), EditedText(s, pieces, active), false});
+    // Links added to web addresses, files and e-mail addresses: their relationships.
+    std::vector<std::string> linkIds;
+    std::vector<uint8_t> linkRels;
+    if (NewLinkRels(*pkg, s, s.PartName(), linkIds, linkRels)) {
+      put(pkg::RelsPartFor(s.PartName()), std::move(linkRels));
+      pieces |= edit::kPieceLinks;
+    }
+    plan.sheets.push_back({&s, s.PartName(), s.RelId(), EditedText(s, pieces, active, linkIds), false});
   }
   const bool added = std::any_of(plan.sheets.begin(), plan.sheets.end(), [](const auto& j) { return j.added; });
   // Sheets the file has that the workbook doesn't any more go, and so does the calculation chain
@@ -1257,6 +1330,19 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
       }
     } else if (names) {
       root.remove_child(names);
+    }
+    // Protect Workbook: the model's element (the file's, unless an edit changed it), before the views.
+    if (pugi::xml_node prot = Child(root, "workbookProtection"); (prot ? EmptyElementXml(prot) : std::string()) != book.ProtectionXml()) {
+      pugi::xml_node next = prot ? prot.next_sibling() : pugi::xml_node();
+      if (prot) root.remove_child(prot);
+      pugi::xml_document add;
+      if (!book.ProtectionXml().empty() && ParseSlice(add, book.ProtectionXml())) {
+        pugi::xml_node e = add.document_element();
+        e.set_name((p + "workbookProtection").c_str());
+        if (!next) next = Child(root, "bookViews");
+        if (!next) next = sheets;
+        root.insert_copy_before(e, next);
+      }
     }
     // The active tab, in the first workbook view (bookViews comes just before sheets).
     pugi::xml_node views = Child(root, "bookViews");

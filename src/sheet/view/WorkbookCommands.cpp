@@ -168,6 +168,8 @@ std::string ShiftFormula(std::string_view f, int64_t dr, int64_t dc) {
 
 int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
+  // New Comment, as in Word (S3, s3-review).
+  if (ctrl && alt && !shift && vk == 'M') return editor_.Active() || preview_ ? 0 : CmdNewComment;
   if (ctrl && !alt && !shift) {
     switch (vk) {
       case VK_NEXT: return CmdNextSheet;
@@ -186,6 +188,7 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case 'V': return editor_.Active() ? 0 : CmdPaste;
       case 'R': return editor_.Active() ? 0 : CmdFillRight;
       case '1': return editor_.Active() || preview_ ? 0 : CmdFormatCells;
+      case 'K': return editor_.Active() || preview_ ? 0 : CmdInsertLink;
       case 'B': return editor_.Active() || preview_ ? 0 : CmdBold;
       case 'I': return editor_.Active() || preview_ ? 0 : CmdItalic;
       case 'U': return editor_.Active() || preview_ ? 0 : CmdUnderline;
@@ -305,6 +308,9 @@ std::vector<int> WorkbookView::Commands() {
   for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
   // The grid's own (S2), found by their labels in command search.
   for (int cmd = CmdInsertCells; cmd <= CmdDeleteColumns; ++cmd) ids.push_back(cmd);
+  for (int cmd : {CmdProtectSheet, CmdProtectWorkbook, CmdInsertLink, CmdRemoveLink, CmdNewNote, CmdDeleteNote, CmdShowNote,
+                  CmdShowAllNotes, CmdNewComment, CmdDeleteThread})  // S3, s3-review
+    ids.push_back(cmd);
   return ids;
 }
 
@@ -780,7 +786,8 @@ std::wstring WorkbookView::ActiveName() const {
 }
 
 std::wstring WorkbookView::FormulaBarText() const {
-  return Ready() ? EditTextAt(Current(), active_.row, active_.col) : std::wstring();
+  // A hidden cell on a protected sheet shows nothing there (Format cells > Protect > Hidden).
+  return Ready() && !FormulaBarHidden() ? EditTextAt(Current(), active_.row, active_.col) : std::wstring();
 }
 
 // A cell's content as typed (the formula bar's and F2's text).

@@ -46,6 +46,17 @@ Key NewKey(std::wstring_view password);
 // cryptography fails.
 std::vector<uint8_t> Encrypt(std::span<const uint8_t> package, const Key& key);
 
+// The password hash Excel keeps for a protected sheet or workbook (sheetProtection,
+// workbookProtection: ECMA-376 Part 1 §18.3.1.85): H(salt + password in UTF-16LE), then `spins`
+// times H(previous + the iteration as 4 bytes little-endian), in base64. `algorithm` as the file
+// names it ("SHA-512"). Empty when Windows doesn't have that hash or the salt isn't base64.
+std::string ProtectionHash(std::string_view algorithm, std::string_view saltBase64, std::wstring_view password,
+                           uint32_t spins);
+// A new salt for it: 16 random bytes in base64, as Excel makes them.
+std::string NewProtectionSalt();
+// A new random id as Office writes them: "{8-4-4-4-12}" in upper-case hex, version 4.
+std::string NewGuid();
+
 // Password-protected .doc files: RC4 (Word 97) or RC4 CryptoAPI (Word 2002 and later), in
 // 512-byte blocks. Decrypted, the streams are a .doc without a password, as the .doc reader
 // (msdoc::ToDocx) takes them: the FIB's fEncrypted flag and lKey are cleared, and the table stream
