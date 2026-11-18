@@ -463,6 +463,19 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = SetNote(sheet, cell, note);
         break;
       }
+      case JournalOp::SetThread: {
+        const int sheet = f.Int();
+        const CellAddr cell = f.A();
+        std::optional<Thread> thread;
+        if (f.B()) {
+          thread.emplace();
+          thread->comments.resize(f.Count());
+          for (ThreadComment& c : thread->comments) c.author = f.S(), c.text = f.S(), c.id = f.S(), c.date = f.S();
+          thread->resolved = f.B();
+        }
+        if (f.Ok()) r = SetThread(sheet, cell, thread);
+        break;
+      }
       case JournalOp::FreezePanes: {
         const int sheet = f.Int();
         const uint32_t rows = f.U32(), cols = f.U32();

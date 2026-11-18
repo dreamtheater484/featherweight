@@ -290,6 +290,11 @@ class ComboBox : public Control {
   const std::wstring& Text() const { return box_.Text(); }
   // Shows bullets for what's typed (a password box: give it no items).
   void SetPassword(bool on) { box_.password = on; }
+  // Sets the text even while it's focused: a box that posts what's typed and starts afresh.
+  void ReplaceText(const std::wstring& text) {
+    committed_ = text;
+    box_.SetText(text);
+  }
 
   void SetGroup(ControlGroup* g) override;
   void Draw(gfx::Canvas& c) override;

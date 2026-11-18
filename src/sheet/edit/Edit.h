@@ -259,6 +259,20 @@ class Editor {
     bool shown = false;
   };
   Result SetNote(int sheet, CellAddr cell, const std::optional<Note>& note);
+  // Threaded comments (New Comment: Excel 365's). The thread on `cell` as a whole: its first comment
+  // and the replies, each with its author's name and text (an id and time are made for new ones:
+  // leave them empty), and whether it's resolved; nullopt deletes it. Written as Excel 365 writes
+  // them, with the note older versions read (sheet/edit/Notes.h). A cell has a note or a thread.
+  struct ThreadComment {
+    std::string author, text, id, date;
+  };
+  struct Thread {
+    std::vector<ThreadComment> comments;
+    bool resolved = false;
+  };
+  Result SetThread(int sheet, CellAddr cell, const std::optional<Thread>& thread);
+  // The thread on `cell`, if it has one.
+  std::optional<Thread> ThreadAt(int sheet, CellAddr cell) const;
 
   // ---- View state: saved with the file, but not undo steps (as in Excel).
   void SetActiveSheet(int sheet);

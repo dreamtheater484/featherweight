@@ -168,6 +168,8 @@ std::string ShiftFormula(std::string_view f, int64_t dr, int64_t dc) {
 
 int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
+  // New Comment, as in Word (S3, s3-review).
+  if (ctrl && alt && !shift && vk == 'M') return editor_.Active() || preview_ ? 0 : CmdNewComment;
   if (ctrl && !alt && !shift) {
     switch (vk) {
       case VK_NEXT: return CmdNextSheet;
@@ -303,7 +305,7 @@ std::vector<int> WorkbookView::Commands() {
   // The grid's own (S2), found by their labels in command search.
   for (int cmd = CmdInsertCells; cmd <= CmdDeleteColumns; ++cmd) ids.push_back(cmd);
   for (int cmd : {CmdProtectSheet, CmdProtectWorkbook, CmdInsertLink, CmdRemoveLink, CmdNewNote, CmdDeleteNote, CmdShowNote,
-                  CmdShowAllNotes})  // S3, s3-review
+                  CmdShowAllNotes, CmdNewComment, CmdDeleteThread})  // S3, s3-review
     ids.push_back(cmd);
   return ids;
 }

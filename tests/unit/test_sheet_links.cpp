@@ -150,3 +150,61 @@ TEST(sheet_notes_set_save_delete) {
   // On a protected sheet: only with Edit objects allowed (Excel).
   CHECK(ed.SetSheetProtection(0, edit::SheetProtection{}) && !ed.SetNote(0, CellAddr{0, 0}, Editor::Note{"Roy", "x"}));
 }
+
+TEST(sheet_threads_set_reply_resolve_delete) {
+  auto parts = WorkbookParts({"<sheetData><row r=\"2\"><c r=\"B2\"><v>1</v></c></row></sheetData>"});
+  for (auto& [name, xml] : parts)
+    if (name.find("worksheets/sheet") != std::string::npos)
+      xml.replace(xml.find("<worksheet "), 11,
+                  "<worksheet xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" ");
+  auto book = OpenZip(test::MakeZip(parts));
+  if (!book) return;
+  Editor ed(*book);
+  Editor::Thread t;
+  t.comments.push_back({"Roy", "first comment", {}, {}});
+  CHECK(ed.SetThread(0, CellAddr{1, 1}, t));
+  CHECK(ed.UndoName() == u"New Comment");
+  std::optional<Editor::Thread> got = ed.ThreadAt(0, CellAddr{1, 1});
+  CHECK(got && got->comments.size() == 1 && got->comments[0].author == "Roy" && got->comments[0].id.size() == 38);
+  if (!got) return;
+  // A reply, then resolved: the first comment keeps its id and time.
+  got->comments.push_back({"Ann", "a reply", {}, {}});
+  got->resolved = true;
+  CHECK(ed.SetThread(0, CellAddr{1, 1}, *got));
+  CHECK(ed.UndoName() == u"Edit Comment");
+  // A note can't go on it, nor a thread on a note's cell.
+  CHECK(!ed.SetNote(0, CellAddr{1, 1}, Editor::Note{"Roy", "x"}));
+  CHECK(ed.SetNote(0, CellAddr{4, 3}, Editor::Note{"Roy", "a note"}) && !ed.SetThread(0, CellAddr{4, 3}, t));
+  std::vector<uint8_t> zip = SaveLinks(*book, ed);
+  const std::string threads = Part(zip, "/xl/threadedComments/threadedComment1.xml"), persons = Part(zip, "/xl/persons/person.xml");
+  const std::string comments = Part(zip, "/xl/comments1.xml"), types = Part(zip, "/[Content_Types].xml");
+  const std::string first = got->comments[0].id;
+  CHECK(threads.find("<threadedComment ref=\"B2\" dT=\"" + got->comments[0].date + "\" personId=\"{") != std::string::npos);
+  CHECK(threads.find("id=\"" + first + "\" done=\"1\"><text>first comment</text>") != std::string::npos);
+  CHECK(threads.find("parentId=\"" + first + "\"><text>a reply</text>") != std::string::npos);
+  CHECK(persons.find("<person displayName=\"Roy\" id=\"{") != std::string::npos &&
+        persons.find("userId=\"Ann\" providerId=\"None\"/>") != std::string::npos);
+  CHECK(comments.find("<author>tc=" + first + "</author>") != std::string::npos);
+  CHECK(comments.find("xr:uid=\"" + first + "\"><text><t>[Threaded comment]") != std::string::npos);
+  CHECK(comments.find("Comment:\n    first comment\nReply:\n    a reply</t>") != std::string::npos);
+  CHECK(comments.find("mc:Ignorable=\"xr\"") != std::string::npos && comments.find("<comment ref=\"D5\"") > comments.find("ref=\"B2\""));
+  CHECK(types.find("application/vnd.ms-excel.threadedcomments+xml") != std::string::npos &&
+        types.find("application/vnd.ms-excel.person+xml") != std::string::npos);
+  CHECK(Part(zip, "/xl/_rels/workbook.xml.rels").find("relationships/person") != std::string::npos);
+  CHECK(Part(zip, "/xl/worksheets/_rels/sheet1.xml.rels").find("relationships/threadedComment") != std::string::npos);
+  // Reopened: the same thread, resolved.
+  auto again = OpenZip(zip);
+  if (again) {
+    Editor ed2(*again);
+    std::optional<Editor::Thread> back = ed2.ThreadAt(0, CellAddr{1, 1});
+    CHECK(back && back->resolved && back->comments.size() == 2 && back->comments[1].author == "Ann" &&
+          back->comments[1].text == "a reply" && back->comments[0].id == first);
+  }
+  // Deleted: the thread and its note go; the other note and the persons stay.
+  CHECK(ed.SetThread(0, CellAddr{1, 1}, std::nullopt) && ed.UndoName() == u"Delete Comment");
+  CHECK(ed.PartBytes("/xl/threadedComments/threadedComment1.xml").empty());
+  CHECK(ed.PartBytes("/xl/comments1.xml").find("tc=") == std::string::npos &&
+        ed.PartBytes("/xl/comments1.xml").find("<comment ref=\"D5\" authorId=\"0\"") != std::string::npos);
+  CHECK(!ed.PartBytes("/xl/persons/person.xml").empty());
+  CHECK(ed.Undo() && ed.ThreadAt(0, CellAddr{1, 1}).has_value());
+}

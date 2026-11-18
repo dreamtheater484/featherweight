@@ -73,6 +73,7 @@ enum class JournalOp : uint8_t {
   SetWorkbookProtection = 91,
   SetHyperlink = 92,
   SetNote = 93,
+  SetThread = 94,
 };
 
 // One record being written: its kind, then its fields in the order Replay reads them.

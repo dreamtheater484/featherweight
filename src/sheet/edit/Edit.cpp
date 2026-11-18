@@ -4,13 +4,16 @@
 #include <array>
 #include <cctype>
 #include <charconv>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <map>
 #include <new>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "pkg/Formula.h"
+#include "pkg/OfficeCrypto.h"
 #include "pkg/XmlWriter.h"
 #include "sheet/calc/Formula.h"
 #include "sheet/calc/Typing.h"
@@ -4412,6 +4415,175 @@ Result Editor::SetHyperlink(int sheet, const Range& r, const std::optional<Hyper
 
 // ---- Notes
 
+namespace {
+
+// The parts a sheet's notes and threads are in: its comments, its VML drawing (the
+// legacyDrawing's) and its threaded comments.
+struct NoteParts {
+  std::string comments, vml, threads;
+};
+
+NoteParts NotePartsOf(const pkg::Package& package, const Sheet& s) {
+  NoteParts p;
+  if (const pkg::RelationshipSet* set = package.RelationshipsOf(s.PartName()))
+    for (const pkg::Relationship& r : set->items) {
+      if (r.external) continue;
+      if (EndsWith(r.type, "/comments") && p.comments.empty()) p.comments = r.targetPart;
+      if (EndsWith(r.type, "/vmlDrawing") && (p.vml.empty() || r.id == s.LegacyDrawingRelId())) p.vml = r.targetPart;
+      if (EndsWith(r.type, "/threadedComment") && p.threads.empty()) p.threads = r.targetPart;
+    }
+  return p;
+}
+
+std::string PersonsPartOf(const pkg::Package& package, const std::string& workbookPart) {
+  if (const pkg::RelationshipSet* set = package.RelationshipsOf(workbookPart))
+    for (const pkg::Relationship& r : set->items)
+      if (!r.external && EndsWith(r.type, "/person")) return r.targetPart;
+  return {};
+}
+
+// Now in UTC as threaded comments keep their times: "2026-11-18T09:25:49.80".
+std::string ThreadTime() {
+  using namespace std::chrono;
+  const auto now = system_clock::now();
+  const auto day = floor<days>(now);
+  const year_month_day ymd{day};
+  const hh_mm_ss t{floor<milliseconds>(now - day)};
+  char buf[40];
+  std::snprintf(buf, sizeof buf, "%04d-%02u-%02uT%02d:%02d:%02d.%02d", static_cast<int>(ymd.year()),
+                static_cast<unsigned>(ymd.month()), static_cast<unsigned>(ymd.day()), static_cast<int>(t.hours().count()),
+                static_cast<int>(t.minutes().count()), static_cast<int>(t.seconds().count()),
+                static_cast<int>(t.subseconds().count() / 10));
+  return buf;
+}
+
+}  // namespace
+
+std::optional<Editor::Thread> Editor::ThreadAt(int sheet, CellAddr cell) const {
+  const pkg::Package* package = book_.GetPackage();
+  if (!package || sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return std::nullopt;
+  const Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  if (s.PartName().empty()) return std::nullopt;
+  const NoteParts parts = NotePartsOf(*package, s);
+  if (parts.threads.empty()) return std::nullopt;
+  const std::string persons = PersonsPartOf(*package, book_.WorkbookPart());
+  std::optional<notes::ThreadText> t =
+      notes::ReadThread(PartBytes(parts.threads), persons.empty() ? std::string() : PartBytes(persons), cell);
+  if (!t) return std::nullopt;
+  Thread out;
+  out.resolved = t->resolved;
+  for (notes::ThreadEntry& e : t->comments) out.comments.push_back({std::move(e.author), std::move(e.text), std::move(e.id), std::move(e.date)});
+  return out;
+}
+
+Result Editor::SetThread(int sheet, CellAddr cell, const std::optional<Thread>& in) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  // New comments get their id and time here, so the journal replays the same file.
+  std::optional<Thread> thread = in;
+  if (thread)
+    for (ThreadComment& c : thread->comments) {
+      if (c.id.empty()) c.id = pkg::crypto::NewGuid();
+      if (c.date.empty()) c.date = ThreadTime();
+    }
+  Rec rec(*this, JournalOp::SetThread, [&](JournalRecord& w) {
+    w.I(sheet).A(cell).B(thread.has_value());
+    if (thread) {
+      w.U(thread->comments.size());
+      for (const ThreadComment& c : thread->comments) w.S(c.author).S(c.text).S(c.id).S(c.date);
+      w.B(thread->resolved);
+    }
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (cell.row >= kMaxRows || cell.col >= kMaxCols) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    pkg::Package* package = book_.GetPackage();
+    if (!package || s.PartName().empty() || s.Kind() != SheetKind::Worksheet)
+      return Result::Fail(u"Comments can be added to this sheet once the workbook is saved.");
+    if (thread) {
+      if (thread->comments.empty()) return Result::Fail(u"A comment thread needs a comment.");
+      for (const ThreadComment& c : thread->comments) {
+        if (c.text.empty() || c.id.empty()) return Result::Fail(u"Type a comment first.");
+        for (const std::string* t : {&c.author, &c.text, &c.id, &c.date})
+          if (!XmlSafe(*t)) return Result::Fail(u"The comment holds characters a workbook can't store.");
+        if (Utf16Length(c.text) > 32767) return Result::Fail(u"A comment can hold at most 32,767 characters.");
+      }
+    }
+    const NoteParts parts = NotePartsOf(*package, s);
+    const std::string personsPart = PersonsPartOf(*package, book_.WorkbookPart());
+    notes::ThreadParts old, now;
+    old.threads = parts.threads.empty() ? std::string() : PartBytes(parts.threads);
+    old.persons = personsPart.empty() ? std::string() : PartBytes(personsPart);
+    old.comments = parts.comments.empty() ? std::string() : PartBytes(parts.comments);
+    old.vml = parts.vml.empty() ? std::string() : PartBytes(parts.vml);
+    const bool had = notes::ReadThread(old.threads, {}, cell).has_value();
+    if (!had && !thread) return Result{};
+    if (!had && notes::HasEntry(old.comments, cell))
+      return Result::Fail(u"This cell has a note. Edit or delete the note first.");
+    std::optional<notes::ThreadText> text;
+    if (thread) {
+      text.emplace();
+      text->resolved = thread->resolved;
+      for (const ThreadComment& c : thread->comments) text->comments.push_back({c.author, c.text, c.id, c.date});
+    }
+    if (!notes::EditThread(old, cell, text, now)) return Result::Fail(u"This sheet's comments couldn't be read.");
+    if (now.threads == old.threads && now.persons == old.persons && now.comments == old.comments && now.vml == old.vml)
+      return Result{};
+    return Run(*this, !thread ? u"Delete Comment" : had ? u"Edit Comment" : u"New Comment", [&]() -> Result {
+      const Result failed = Result::Fail(u"The comment couldn't be stored in the workbook.");
+      const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+      const std::string ms = "http://schemas.microsoft.com/office/2017/10/relationships/";
+      // A part written, added (from `source`) or removed as its new bytes say.
+      auto put = [&](const std::string& part, const std::string& was, const std::string& bytes, std::string_view source,
+                     const std::string& type, const std::string& name, std::string_view contentType) -> std::string {
+        if (bytes == was) return part.empty() ? std::string() : "same";
+        if (bytes.empty()) return part.empty() || RemovePart(part) ? "gone" : std::string();
+        if (!part.empty()) return WritePart(part, bytes) ? "written" : std::string();
+        return AddPart(source, type, name, contentType, bytes);
+      };
+      if (now.persons != old.persons &&
+          put(personsPart, old.persons, now.persons, book_.WorkbookPart(), ms + "person",
+              PartBytes("/xl/persons/person.xml").empty() ? "/xl/persons/person.xml" : NewPartName("/xl/persons/person", ".xml"),
+              "application/vnd.ms-excel.person+xml")
+              .empty())
+        return failed;
+      if (now.threads != old.threads &&
+          put(parts.threads, old.threads, now.threads, s.PartName(), ms + "threadedComment",
+              NewPartName("/xl/threadedComments/threadedComment", ".xml"), "application/vnd.ms-excel.threadedcomments+xml")
+              .empty())
+        return failed;
+      if (now.comments != old.comments &&
+          put(parts.comments, old.comments, now.comments, s.PartName(), rel + "comments", NewPartName("/xl/comments", ".xml"),
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml")
+              .empty())
+        return failed;
+      State& st = *s_;
+      if (now.vml != old.vml) {
+        if (now.vml.empty() || parts.vml.empty()) {
+          // The sheet's legacyDrawing names the VML drawing (or goes with it).
+          std::string id;
+          if (!now.vml.empty() &&
+              (id = AddPart(s.PartName(), rel + "vmlDrawing", NewPartName("/xl/drawings/vmlDrawing", ".vml"),
+                            "application/vnd.openxmlformats-officedocument.vmlDrawing", now.vml))
+                  .empty())
+            return failed;
+          if (now.vml.empty() && !parts.vml.empty() && !RemovePart(parts.vml)) return failed;
+          st.SaveText(st.Save(s));
+          detail::PartText& t = A::Text(s);
+          xlsx::PutSheetElement(t, "legacyDrawing",
+                                id.empty() ? std::string() : "<" + xlsx::SheetPrefix(t) + "legacyDrawing r:id=\"" + id + "\"/>");
+        } else if (!WritePart(parts.vml, now.vml)) {
+          return failed;
+        }
+      }
+      st.Change(&s, kObjects, Range{cell.row, cell.col, cell.row, cell.col});
+      return Result{};
+    });
+  }());
+}
+
 Result Editor::SetNote(int sheet, CellAddr cell, const std::optional<Note>& note) {
   Guard guard(*this);
   if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
@@ -4430,14 +4602,10 @@ Result Editor::SetNote(int sheet, CellAddr cell, const std::optional<Note>& note
     if (note && (!XmlSafe(note->text) || !XmlSafe(note->author)))
       return Result::Fail(u"The note holds characters a workbook can't store.");
     if (note && Utf16Length(note->text) > 32767) return Result::Fail(u"A note can hold at most 32,767 characters.");
-    // The parts the sheet has: its comments, and its VML drawing (the legacyDrawing's).
-    std::string commentsPart, vmlPart;
-    if (const pkg::RelationshipSet* set = package->RelationshipsOf(s.PartName()))
-      for (const pkg::Relationship& r : set->items) {
-        if (r.external) continue;
-        if (EndsWith(r.type, "/comments") && commentsPart.empty()) commentsPart = r.targetPart;
-        if (EndsWith(r.type, "/vmlDrawing") && (vmlPart.empty() || r.id == s.LegacyDrawingRelId())) vmlPart = r.targetPart;
-      }
+    const NoteParts parts = NotePartsOf(*package, s);
+    const std::string &commentsPart = parts.comments, &vmlPart = parts.vml;
+    if (!parts.threads.empty() && notes::ReadThread(PartBytes(parts.threads), {}, cell))
+      return Result::Fail(u"This cell has a comment thread. Reply to it, or delete it first.");
     const std::string comments = commentsPart.empty() ? std::string() : PartBytes(commentsPart);
     const std::string vml = vmlPart.empty() ? std::string() : PartBytes(vmlPart);
     std::string newComments, newVml;

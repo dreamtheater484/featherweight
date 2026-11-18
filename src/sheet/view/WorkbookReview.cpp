@@ -397,7 +397,8 @@ class WorkbookView::NotePanel : public PanelContent {
     std::wstring text;
     const CellNote* note = v_.NoteHere(&text);
     editing_ = note != nullptr;
-    author_ = note ? WideToUtf8(note->author) : NoteAuthor();
+    const std::wstring reviewer = v_.host_.ViewReviewer();
+    author_ = note ? WideToUtf8(note->author) : reviewer.empty() ? NoteAuthor() : WideToUtf8(reviewer);
     text_.SetText(ToBox(text));
     shown_.checked = note && note->shown;
     focusWanted_ = true;
@@ -450,6 +451,151 @@ class WorkbookView::NotePanel : public PanelContent {
   float ui_ = 1;
   bool focusWanted_ = false;
 };
+
+// New Comment, a thread's replies (Excel 365's threaded comments): post a comment or a reply,
+// pick one to edit or delete (the first deletes the thread), resolve or reopen.
+class WorkbookView::CommentPanel : public PanelContent {
+ public:
+  explicit CommentPanel(WorkbookView& view) : v_(view) {
+    pick_.autoComplete = false;
+    pick_.label = L"Comment";
+    pick_.onCommit = [this](const std::wstring&, int i) { Pick(i); };
+    text_.autoComplete = false;
+    text_.onEnter = [this] { Post(); };
+    post_.onInvoke = [this] { Post(); };
+    resolve_.onInvoke = [this] {
+      if (!thread_) return;
+      edit::Editor::Thread t = *thread_;
+      t.resolved = !t.resolved;
+      Set(t);
+    };
+    delete_.onInvoke = [this] {
+      if (!thread_) return;
+      if (editing_ <= 0) {
+        Set(std::nullopt);
+      } else {
+        edit::Editor::Thread t = *thread_;
+        t.comments.erase(t.comments.begin() + editing_);
+        Set(t);
+      }
+    };
+  }
+  std::wstring Title() const override { return thread_ ? L"Comments" : L"New comment"; }
+
+  void Open() {
+    cell_ = v_.active_;
+    // The name Word's comments use (set in the menu), else Windows' user name.
+    const std::wstring reviewer = v_.host_.ViewReviewer();
+    author_ = reviewer.empty() ? NoteAuthor() : WideToUtf8(reviewer);
+    Reload(-1);
+  }
+
+  std::vector<Control*> Layout(const D2D1_RECT_F& body, float ui) override {
+    ui_ = ui;
+    const float left = body.left + 16 * ui, right = body.right - 16 * ui;
+    labelRc_ = RectF(left, body.top + 12 * ui, right, body.top + 28 * ui);
+    threadRc_ = RectF(left, body.top + 32 * ui, right, body.top + 112 * ui);
+    float y = thread_ ? threadRc_.bottom + 8 * ui : body.top + 32 * ui;
+    pick_.rc = RectF(left, y, right, y + 32 * ui);
+    if (thread_) y = pick_.rc.bottom + 10 * ui;
+    text_.rc = RectF(left, y, right, y + 32 * ui);
+    post_.rc = RectF(left, text_.rc.bottom + 12 * ui, left + 72 * ui, text_.rc.bottom + 44 * ui);
+    resolve_.rc = RectF(post_.rc.right + 8 * ui, post_.rc.top, post_.rc.right + 92 * ui, post_.rc.bottom);
+    delete_.rc = RectF(resolve_.rc.right + 8 * ui, post_.rc.top, std::min(right, resolve_.rc.right + 124 * ui), post_.rc.bottom);
+    noteRc_ = RectF(left, post_.rc.bottom + 12 * ui, right, post_.rc.bottom + 60 * ui);
+    std::vector<Control*> out = {&text_, &post_};
+    if (thread_) out = {&pick_, &text_, &post_, &resolve_, &delete_};
+    pick_.visible = resolve_.visible = delete_.visible = thread_.has_value();
+    return out;
+  }
+
+  void Draw(Canvas& c) override {
+    const Palette& p = theme::P();
+    std::wstring head = L"Comment on " + Utf8ToWide(CellName(cell_.row, cell_.col));
+    if (thread_ && thread_->resolved) head += L" · resolved";
+    c.Text(head, labelRc_, p.textSecondary, 12 * ui_);
+    if (thread_) {
+      // The latest comments that fit, each "Name: text".
+      std::wstring all;
+      for (const auto& m : thread_->comments)
+        all += (all.empty() ? L"" : L"\n") + Utf8ToWide(m.author.empty() ? m.text : m.author + ": " + m.text);
+      c.TextWrapped(all, threadRc_, p.text, 12 * ui_, 5);
+    }
+    c.TextWrapped(L"Enter posts. A ¶ starts a new line.", noteRc_, p.textSecondary, 12 * ui_, 2);
+    if (focusWanted_) {
+      text_.TakeFocus();
+      focusWanted_ = false;
+    }
+  }
+
+ private:
+  // The thread as the file has it now; `edit` the comment being edited (-1: a reply or a new one).
+  void Reload(int edit) {
+    thread_ = v_.Ed().ThreadAt(static_cast<int>(v_.sheet_), cell_);
+    pick_.items.clear();
+    if (thread_) {
+      pick_.items.push_back(L"Reply");
+      for (size_t i = 0; i < thread_->comments.size(); ++i) {
+        const auto& m = thread_->comments[i];
+        std::wstring t = std::to_wstring(i + 1) + L". " + Utf8ToWide(m.author) + L": " + ToBox(Utf8ToWide(m.text));
+        if (t.size() > 60) t = t.substr(0, 59) + L"…";
+        pick_.items.push_back(std::move(t));
+      }
+    }
+    Pick(edit < 0 ? 0 : edit + 1);
+  }
+  void Pick(int i) {
+    if (!thread_ || i < 0 || static_cast<size_t>(i) > thread_->comments.size()) i = 0;
+    editing_ = i - 1;
+    pick_.ReplaceText(thread_ ? pick_.items[static_cast<size_t>(i)] : std::wstring());
+    text_.label = !thread_ ? L"Comment" : editing_ < 0 ? L"Reply" : L"Edit";
+    text_.ReplaceText(editing_ < 0 ? std::wstring() : ToBox(Utf8ToWide(thread_->comments[static_cast<size_t>(editing_)].text)));
+    post_.text = editing_ < 0 ? L"Post" : L"Save";
+    resolve_.text = thread_ && thread_->resolved ? L"Reopen" : L"Resolve";
+    delete_.text = editing_ <= 0 ? L"Delete thread" : L"Delete reply";
+    focusWanted_ = true;
+    v_.host_.ViewInvalidate();
+  }
+  void Close() {
+    v_.host_.ViewShowPanel(nullptr);
+    v_.host_.ViewFocusPage();
+    v_.host_.ViewInvalidate();
+  }
+  void Set(const std::optional<edit::Editor::Thread>& t) {
+    if (v_.EditRefused(v_.Ed().SetThread(static_cast<int>(v_.sheet_), cell_, t))) return;
+    if (!t) return Close();
+    Reload(-1);
+  }
+  void Post() {
+    const std::string text = WideToUtf8(FromBox(text_.Text()));
+    if (text.empty()) return;
+    edit::Editor::Thread t = thread_.value_or(edit::Editor::Thread{});
+    if (editing_ >= 0) {
+      t.comments[static_cast<size_t>(editing_)].text = text;
+    } else {
+      t.comments.push_back({author_, text, {}, {}});
+      t.resolved = false;  // a reply reopens a resolved thread, as in Excel
+    }
+    Set(t);
+  }
+
+  WorkbookView& v_;
+  CellAddr cell_{};
+  std::string author_;
+  std::optional<edit::Editor::Thread> thread_;
+  int editing_ = -1;
+  FocusComboBox pick_, text_;
+  PanelButton post_, resolve_, delete_;
+  D2D1_RECT_F labelRc_{}, threadRc_{}, noteRc_{};
+  float ui_ = 1;
+  bool focusWanted_ = false;
+};
+
+bool WorkbookView::ThreadHere() const {
+  const SheetObjects* o = Objects();
+  const CellNote* n = o ? o->NoteAt(active_.row, active_.col) : nullptr;
+  return n && n->threaded;
+}
 
 const CellNote* WorkbookView::NoteHere(std::wstring* text) const {
   const SheetObjects* o = Objects();
@@ -512,7 +658,16 @@ bool WorkbookView::ReviewCommandState(int cmd, CommandState& s) {
     case CmdNewNote:
       s.label = grid && !ChartSheet() && NoteHere() ? L"Edit note" : L"New note";
       s.shortcut = L"Shift+F2";
-      s.enabled = grid && !ChartSheet();
+      s.enabled = grid && !ChartSheet() && !ThreadHere();  // a cell has a note or a thread
+      return true;
+    case CmdNewComment:
+      s.label = grid && !ChartSheet() && ThreadHere() ? L"Reply to comment" : L"New comment";
+      s.shortcut = L"Ctrl+Alt+M";
+      s.enabled = grid && !ChartSheet() && !NoteHere();
+      return true;
+    case CmdDeleteThread:
+      s.label = L"Delete comment";
+      s.enabled = grid && !ChartSheet() && ThreadHere();
       return true;
     case CmdDeleteNote:
       s.label = L"Delete note";
@@ -537,13 +692,15 @@ bool WorkbookView::ReviewCommandState(int cmd, CommandState& s) {
 }
 
 void WorkbookView::AddReviewCellItems(HMENU m) {
-  for (int cmd : {CmdInsertLink, CmdRemoveLink, CmdNewNote, CmdDeleteNote, CmdShowNote}) {
+  for (int cmd : {CmdInsertLink, CmdRemoveLink, CmdNewComment, CmdDeleteThread, CmdNewNote, CmdDeleteNote, CmdShowNote}) {
     CommandState s;
     ReviewCommandState(cmd, s);
-    if ((cmd == CmdRemoveLink || cmd == CmdDeleteNote || cmd == CmdShowNote) && !s.enabled) continue;
+    if ((cmd == CmdRemoveLink || cmd == CmdDeleteNote || cmd == CmdShowNote || cmd == CmdDeleteThread) && !s.enabled)
+      continue;
     std::wstring text = s.label;
     if (cmd == CmdInsertLink) text += L"…\tCtrl+K";
     if (cmd == CmdNewNote) text += L"…\tShift+F2";
+    if (cmd == CmdNewComment) text += L"…\tCtrl+Alt+M";
     menu::AppendItem(m, static_cast<UINT>(cmd), text, s.enabled);
   }
 }
@@ -580,6 +737,7 @@ bool WorkbookView::ReviewCommand(int cmd) {
     case CmdRemoveLink: EditRefused(Ed().SetHyperlink(static_cast<int>(sheet_), Selected(), std::nullopt)); return true;
     case CmdNewNote: {
       if (ChartSheet()) return true;
+      if (ThreadHere()) return ReviewCommand(CmdNewComment);  // Shift+F2 on a thread: its replies
       if (!notePanel_) notePanel_ = std::make_unique<NotePanel>(*this);
       auto* panel = static_cast<NotePanel*>(notePanel_.get());
       panel->Open();
@@ -587,6 +745,17 @@ bool WorkbookView::ReviewCommand(int cmd) {
       return true;
     }
     case CmdDeleteNote: EditRefused(Ed().SetNote(static_cast<int>(sheet_), active_, std::nullopt)); return true;
+    case CmdNewComment: {
+      if (ChartSheet() || NoteHere()) return true;
+      if (!commentPanel_) commentPanel_ = std::make_unique<CommentPanel>(*this);
+      auto* panel = static_cast<CommentPanel*>(commentPanel_.get());
+      panel->Open();
+      host_.ViewShowPanel(panel);
+      return true;
+    }
+    case CmdDeleteThread:
+      if (ThreadHere()) EditRefused(Ed().SetThread(static_cast<int>(sheet_), active_, std::nullopt));
+      return true;
     case CmdShowNote:
     case CmdShowAllNotes: {
       // Each note again with its text, shown or hidden (all shown unless every one is).

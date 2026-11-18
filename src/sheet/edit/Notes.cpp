@@ -67,7 +67,65 @@ bool ParseRef(std::string_view ref, CellAddr& a) {
 
 // ---- The comments part
 
-bool EditComments(std::string_view in, CellAddr cell, const std::optional<NoteText>& note, std::string& out) {
+// One entry: a note (the author's name in bold, then the text, in runs), or a thread's note for
+// older versions (`uid` set: the author "tc={id}", plain text).
+struct Entry {
+  std::string author, text, uid;
+};
+
+// The prefix the root gives `ns`, declaring it as `want` when it hasn't one.
+std::string Declare(pugi::xml_node root, const char* ns, const char* want) {
+  for (pugi::xml_attribute a : root.attributes()) {
+    std::string_view n = a.name();
+    if (n.rfind("xmlns:", 0) == 0 && std::string_view(a.value()) == ns) return std::string(n.substr(6)) + ":";
+  }
+  root.append_attribute((std::string("xmlns:") + want).c_str()).set_value(ns);
+  return std::string(want) + ":";
+}
+
+// xr:uid needs the revision namespace, ignorable for readers that don't know it (as Excel writes).
+std::string RevisionPrefix(pugi::xml_node root) {
+  const std::string mc = Declare(root, "http://schemas.openxmlformats.org/markup-compatibility/2006", "mc");
+  const std::string xr = Declare(root, "http://schemas.microsoft.com/office/spreadsheetml/2014/revision", "xr");
+  const std::string token = xr.substr(0, xr.size() - 1);
+  pugi::xml_attribute ign = root.attribute((mc + "Ignorable").c_str());
+  if (!ign) {
+    root.append_attribute((mc + "Ignorable").c_str()).set_value(token.c_str());
+  } else {
+    std::string v = ign.value();
+    if ((" " + v + " ").find(" " + token + " ") == std::string::npos) ign.set_value((v.empty() ? token : v + " " + token).c_str());
+  }
+  return xr;
+}
+
+// Authors no comment names go, and the comments' authorIds follow.
+void DropUnusedAuthors(pugi::xml_node authors, pugi::xml_node list) {
+  std::vector<pugi::xml_node> nodes;
+  for (pugi::xml_node a = authors.first_child(); a; a = a.next_sibling())
+    if (a.type() == pugi::node_element && xlsx::Local(a) == "author") nodes.push_back(a);
+  std::vector<int> map(nodes.size(), -1);
+  for (pugi::xml_node c = list.first_child(); c; c = c.next_sibling()) {
+    const int id = xlsx::IntAttr(c, "authorId", -1);
+    if (id >= 0 && static_cast<size_t>(id) < map.size()) map[static_cast<size_t>(id)] = 0;
+  }
+  int next = 0;
+  bool dropped = false;
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    if (map[i] < 0) {
+      authors.remove_child(nodes[i]);
+      dropped = true;
+    } else {
+      map[i] = next++;
+    }
+  }
+  if (!dropped) return;
+  for (pugi::xml_node c = list.first_child(); c; c = c.next_sibling()) {
+    const int id = xlsx::IntAttr(c, "authorId", -1);
+    if (id >= 0 && static_cast<size_t>(id) < map.size()) c.attribute("authorId").set_value(map[static_cast<size_t>(id)]);
+  }
+}
+
+bool EditComments(std::string_view in, CellAddr cell, const Entry* note, std::string& out) {
   pugi::xml_document doc;
   if (in.empty()) {
     if (!note) {
@@ -111,9 +169,14 @@ bool EditComments(std::string_view in, CellAddr cell, const std::optional<NoteTe
     c.append_attribute("ref").set_value(ref.c_str());
     c.append_attribute("authorId").set_value(authorId);
     c.append_attribute("shapeId").set_value("0");
+    if (!note->uid.empty()) c.append_attribute((RevisionPrefix(root) + "uid").c_str()).set_value(note->uid.c_str());
     pugi::xml_node text = c.append_child((p + "text").c_str());
     // As Excel's New Note: the author's name in bold, then the text on the next line.
-    if (!note->author.empty()) {
+    if (!note->uid.empty()) {
+      pugi::xml_node t = text.append_child((p + "t").c_str());
+      if (!note->text.empty() && note->text.back() == ' ') t.append_attribute("xml:space").set_value("preserve");
+      t.text().set(note->text.c_str());
+    } else if (!note->author.empty()) {
       AddRun(text, p, true, note->author + ":");
       AddRun(text, p, false, "\n" + note->text);
     } else {
@@ -127,6 +190,7 @@ bool EditComments(std::string_view in, CellAddr cell, const std::optional<NoteTe
     out.clear();
     return true;
   }
+  DropUnusedAuthors(authors, list);
   out = kDeclaration + Print(doc);
   return true;
 }
@@ -235,7 +299,210 @@ bool EditVml(std::string_view in, CellAddr cell, const std::optional<NoteText>& 
 
 bool Edit(std::string_view comments, std::string_view vml, CellAddr cell, const std::optional<NoteText>& note,
           std::string& commentsOut, std::string& vmlOut) {
-  return EditComments(comments, cell, note, commentsOut) && EditVml(vml, cell, note, vmlOut);
+  std::optional<Entry> e;
+  if (note) e = Entry{note->author, note->text, {}};
+  return EditComments(comments, cell, e ? &*e : nullptr, commentsOut) && EditVml(vml, cell, note, vmlOut);
+}
+
+bool HasEntry(std::string_view comments, CellAddr cell) {
+  pugi::xml_document doc;
+  if (comments.empty() || !Load(doc, comments)) return false;
+  for (pugi::xml_node c = xlsx::Child(doc.document_element(), "commentList").first_child(); c; c = c.next_sibling()) {
+    CellAddr a;
+    if (c.type() == pugi::node_element && xlsx::Local(c) == "comment" && ParseRef(xlsx::Attr(c, "ref"), a) &&
+        a.row == cell.row && a.col == cell.col)
+      return true;
+  }
+  return false;
+}
+
+// ---- Threaded comments
+
+namespace {
+
+constexpr const char* kThreads = "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments";
+
+bool OnCell(pugi::xml_node c, CellAddr cell) {
+  CellAddr a;
+  return ParseRef(xlsx::Attr(c, "ref"), a) && a.row == cell.row && a.col == cell.col;
+}
+
+pugi::xml_node NewRoot(pugi::xml_document& doc, const char* name) {
+  pugi::xml_node root = doc.append_child(name);
+  root.append_attribute("xmlns").set_value(kThreads);
+  root.append_attribute("xmlns:x").set_value(kMain);
+  return root;
+}
+
+// A person's id when the persons part hasn't one for the name: the same for the same name, so
+// replaying an edit gives the same file (Excel's are random; any GUID does).
+std::string PersonId(const std::string& name) {
+  uint64_t h[2] = {1469598103934665603ull, 1099511628211ull * 31};
+  for (int k = 0; k < 2; ++k)
+    for (unsigned char ch : name) h[k] = (h[k] ^ ch) * 1099511628211ull;
+  uint8_t b[16];
+  for (int i = 0; i < 16; ++i) b[i] = static_cast<uint8_t>(h[i / 8] >> (8 * (i % 8)));
+  b[6] = static_cast<uint8_t>((b[6] & 0x0F) | 0x50);
+  b[8] = static_cast<uint8_t>((b[8] & 0x3F) | 0x80);
+  std::string s = "{";
+  for (int i = 0; i < 16; ++i) {
+    if (i == 4 || i == 6 || i == 8 || i == 10) s += '-';
+    s += "0123456789ABCDEF"[b[i] >> 4];
+    s += "0123456789ABCDEF"[b[i] & 15];
+  }
+  return s + "}";
+}
+
+// The persons part with each author in it: their ids in `ids`, in the thread's order.
+bool EditPersons(std::string_view in, const ThreadText& t, std::vector<std::string>& ids, std::string& out) {
+  pugi::xml_document doc;
+  if (in.empty()) NewRoot(doc, "personList");
+  else if (!Load(doc, in) || xlsx::Local(doc.document_element()) != "personList") return false;
+  pugi::xml_node root = doc.document_element();
+  const std::string p = PrefixOf(root);
+  bool changed = in.empty();
+  for (const ThreadEntry& e : t.comments) {
+    std::string id;
+    for (pugi::xml_node q = root.first_child(); q && id.empty(); q = q.next_sibling())
+      if (q.type() == pugi::node_element && xlsx::Local(q) == "person" && e.author == xlsx::Attr(q, "displayName"))
+        id = xlsx::Attr(q, "id");
+    if (id.empty()) {
+      id = PersonId(e.author);
+      pugi::xml_node q = root.append_child((p + "person").c_str());
+      q.append_attribute("displayName").set_value(e.author.c_str());
+      q.append_attribute("id").set_value(id.c_str());
+      q.append_attribute("userId").set_value(e.author.c_str());
+      q.append_attribute("providerId").set_value("None");
+      changed = true;
+    }
+    ids.push_back(id);
+  }
+  out = changed ? kDeclaration + Print(doc) : std::string(in);
+  return true;
+}
+
+bool EditThreads(std::string_view in, CellAddr cell, const std::optional<ThreadText>& t, const std::vector<std::string>& people,
+                 std::string& out) {
+  pugi::xml_document doc;
+  if (in.empty()) {
+    if (!t) {
+      out.clear();
+      return true;
+    }
+    NewRoot(doc, "ThreadedComments");
+  } else if (!Load(doc, in) || xlsx::Local(doc.document_element()) != "ThreadedComments") {
+    return false;
+  }
+  pugi::xml_node root = doc.document_element();
+  const std::string p = PrefixOf(root);
+  // The cell's comments go (kept aside, so ones that don't change are written back as they were,
+  // with what else they hold); the new ones take their place, or their place in row order.
+  pugi::xml_document old;
+  pugi::xml_node before;
+  bool removed = false;
+  for (pugi::xml_node c = root.first_child(); c;) {
+    pugi::xml_node next = c.next_sibling();
+    if (c.type() == pugi::node_element && xlsx::Local(c) == "threadedComment") {
+      CellAddr a;
+      if (OnCell(c, cell)) {
+        old.append_copy(c);
+        root.remove_child(c);
+        removed = true;
+      } else if (!before && ParseRef(xlsx::Attr(c, "ref"), a) &&
+                 (removed || a.row > cell.row || (a.row == cell.row && a.col > cell.col))) {
+        before = c;
+      }
+    }
+    c = next;
+  }
+  if (t) {
+    const std::string ref = CellName(cell.row, cell.col), first = t->comments.empty() ? std::string() : t->comments[0].id;
+    for (size_t i = 0; i < t->comments.size(); ++i) {
+      const ThreadEntry& e = t->comments[i];
+      pugi::xml_node kept;
+      for (pugi::xml_node o = old.first_child(); o && !kept; o = o.next_sibling())
+        if (e.id == xlsx::Attr(o, "id") && e.text == xlsx::Child(o, "text").text().get() && people[i] == xlsx::Attr(o, "personId"))
+          kept = o;
+      pugi::xml_node c;
+      if (kept) {
+        c = before ? root.insert_copy_before(kept, before) : root.append_copy(kept);
+        c.remove_attribute("parentId");
+        c.remove_attribute("done");
+      } else {
+        c = before ? root.insert_child_before((p + "threadedComment").c_str(), before)
+                   : root.append_child((p + "threadedComment").c_str());
+        c.append_attribute("ref").set_value(ref.c_str());
+        c.append_attribute("dT").set_value(e.date.c_str());
+        c.append_attribute("personId").set_value(people[i].c_str());
+        c.append_attribute("id").set_value(e.id.c_str());
+        c.append_child((p + "text").c_str()).text().set(e.text.c_str());
+      }
+      if (i) c.insert_attribute_after("parentId", c.attribute("id")).set_value(first.c_str());
+      else if (t->resolved) c.insert_attribute_after("done", c.attribute("id")).set_value("1");
+    }
+  }
+  bool any = false;
+  for (pugi::xml_node c = root.first_child(); c && !any; c = c.next_sibling())
+    any = c.type() == pugi::node_element && xlsx::Local(c) == "threadedComment";
+  if (!any) {
+    out.clear();
+    return true;
+  }
+  out = kDeclaration + Print(doc);
+  return true;
+}
+
+// The note Excel 365 writes for older versions (measured in files it saved).
+std::string LegacyText(const ThreadText& t) {
+  std::string s =
+      "[Threaded comment]\n\nYour version of Excel allows you to read this threaded comment; however, any edits to it will "
+      "get removed if the file is opened in a newer version of Excel. Learn more: "
+      "https://go.microsoft.com/fwlink/?linkid=870924\n\n";
+  for (size_t i = 0; i < t.comments.size(); ++i) s += (i ? "\nReply:\n    " : "Comment:\n    ") + t.comments[i].text;
+  return s;
+}
+
+}  // namespace
+
+std::optional<ThreadText> ReadThread(std::string_view threads, std::string_view persons, CellAddr cell) {
+  pugi::xml_document doc, people;
+  if (threads.empty() || !Load(doc, threads)) return std::nullopt;
+  auto name = [&](std::string_view id) -> std::string {
+    if (!people.document_element() && (persons.empty() || !Load(people, persons))) return {};
+    for (pugi::xml_node q = people.document_element().first_child(); q; q = q.next_sibling())
+      if (xlsx::Local(q) == "person" && xlsx::Attr(q, "id") == id) return std::string(xlsx::Attr(q, "displayName"));
+    return {};
+  };
+  std::optional<ThreadText> t;
+  std::string first;
+  for (pugi::xml_node c = doc.document_element().first_child(); c; c = c.next_sibling()) {
+    if (c.type() != pugi::node_element || xlsx::Local(c) != "threadedComment") continue;
+    const std::string_view parent = xlsx::Attr(c, "parentId");
+    if (t ? parent != first : (!parent.empty() || !OnCell(c, cell))) continue;
+    if (!t) {
+      t.emplace();
+      first = xlsx::Attr(c, "id");
+      t->resolved = xlsx::BoolAttr(c, "done", false);
+    }
+    t->comments.push_back({name(xlsx::Attr(c, "personId")), xlsx::Child(c, "text").text().get(),
+                           std::string(xlsx::Attr(c, "id")), std::string(xlsx::Attr(c, "dT"))});
+  }
+  return t;
+}
+
+bool EditThread(const ThreadParts& in, CellAddr cell, const std::optional<ThreadText>& thread, ThreadParts& out) {
+  if (thread && (thread->comments.empty() ||
+                 std::any_of(thread->comments.begin(), thread->comments.end(), [](const ThreadEntry& e) { return e.id.empty(); })))
+    return false;
+  std::vector<std::string> people;
+  if (!thread) out.persons = in.persons;
+  else if (!EditPersons(in.persons, *thread, people, out.persons)) return false;
+  std::optional<Entry> e;
+  if (thread) e = Entry{"tc=" + thread->comments[0].id, LegacyText(*thread), thread->comments[0].id};
+  std::optional<NoteText> box;
+  if (thread) box = NoteText{};
+  return EditThreads(in.threads, cell, thread, people, out.threads) &&
+         EditComments(in.comments, cell, e ? &*e : nullptr, out.comments) && EditVml(in.vml, cell, box, out.vml);
 }
 
 }  // namespace fw::sheet::edit::notes

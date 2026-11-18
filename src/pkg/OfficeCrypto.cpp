@@ -518,6 +518,20 @@ std::string ProtectionHash(std::string_view algorithm, std::string_view saltBase
 
 std::string NewProtectionSalt() { return ToBase64(Random(16)); }
 
+std::string NewGuid() {
+  Bytes b = Random(16);
+  if (b.size() != 16) return {};
+  b[6] = static_cast<uint8_t>((b[6] & 0x0F) | 0x40);
+  b[8] = static_cast<uint8_t>((b[8] & 0x3F) | 0x80);
+  std::string s = "{";
+  for (size_t i = 0; i < 16; ++i) {
+    if (i == 4 || i == 6 || i == 8 || i == 10) s += '-';
+    s += "0123456789ABCDEF"[b[i] >> 4];
+    s += "0123456789ABCDEF"[b[i] & 15];
+  }
+  return s + "}";
+}
+
 bool IsEncryptedPackage(const CompoundFile& file) {
   const auto streams = file.Streams();
   auto has = [&](std::string_view name) {

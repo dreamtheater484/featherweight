@@ -54,6 +54,8 @@ std::string ProtectionHash(std::string_view algorithm, std::string_view saltBase
                            uint32_t spins);
 // A new salt for it: 16 random bytes in base64, as Excel makes them.
 std::string NewProtectionSalt();
+// A new random id as Office writes them: "{8-4-4-4-12}" in upper-case hex, version 4.
+std::string NewGuid();
 
 // Password-protected .doc files: RC4 (Word 97) or RC4 CryptoAPI (Word 2002 and later), in
 // 512-byte blocks. Decrypted, the streams are a .doc without a password, as the .doc reader

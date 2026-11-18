@@ -513,8 +513,11 @@ class WorkbookView : public PagedView {
   std::unique_ptr<PanelContent> protectPanel_;  // a ProtectPanel
   std::unique_ptr<PanelContent> linkPanel_;     // a LinkPanel
   std::unique_ptr<PanelContent> notePanel_;     // a NotePanel
+  class CommentPanel;
+  std::unique_ptr<PanelContent> commentPanel_;  // a CommentPanel
   // The active cell's note (not a threaded comment), its text without the author's line.
   const CellNote* NoteHere(std::wstring* text = nullptr) const;
+  bool ThreadHere() const;  // whether the active cell has a threaded comment
   void AddReviewCellItems(HMENU m);  // the cell menu's
   bool ReviewCommandState(int cmd, CommandState& s);
   bool ReviewCommand(int cmd);

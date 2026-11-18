@@ -369,6 +369,7 @@ enum Cmd : int {
   CmdDeleteNote,
   CmdShowNote,             // Show/Hide Note
   CmdShowAllNotes,
+  CmdDeleteThread,  // Delete Thread (New Comment, Ctrl+Alt+M, is the app's CmdNewComment)
   // Links: the app's CmdInsertLink (Ctrl+K) and CmdRemoveLink.
 
   // Defined names (S3, s3-calc): 2970-2999.
