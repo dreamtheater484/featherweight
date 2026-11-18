@@ -596,11 +596,17 @@ class Parser {
   // A reference starting with `a` (length `la` at i_), with its second end if ":" follows. False
   // (nothing consumed) when it isn't a reference on its own: in A1, "A" or "1" alone.
   bool TryReference(const Part& a, size_t la, uint8_t sheetFlags, int s1, int s2) {
-    if (At(i_ + la) == ':') {
+    // Spaces around the ':' of a reference don't change it: "A: E" is A:E, as it prints, not a
+    // range between names A and E that would read back as the columns.
+    size_t colon = i_ + la;
+    while (At(colon) == ' ') ++colon;
+    if (At(colon) == ':') {
+      size_t m = colon + 1;
+      while (At(m) == ' ') ++m;
       Part b;
-      size_t lb = ScanPart(i_ + la + 1, b);
+      size_t lb = ScanPart(m, b);
       if (lb && ((a.Cell() && b.Cell()) || (a.RowOnly() && b.RowOnly()) || (a.ColOnly() && b.ColOnly()))) {
-        i_ += la + 1 + lb;
+        i_ = m + lb;
         EmitArea(a, b, sheetFlags, s1, s2);
         return true;
       }
@@ -746,7 +752,13 @@ class Parser {
             if (k == i_) return Fail("name expected");
             std::string_view name = s_.substr(i_, k - i_);
             i_ = k;
-            if (local) {
+            // A name never looks like a cell (Excel's rule), so [0]!NTR1 isn't one of this
+            // workbook's names: it's kept as written, as another workbook's name is, rather than
+            // shown back as "NTR1", which is a cell.
+            Part cell;
+            bool cellLike = (ScanA1(name, 0, 0, 0, cell) == name.size() && cell.Cell()) ||
+                            ScanR1C1(name, 0, cell) == name.size();
+            if (local && !cellLike) {
               Op(kName);
               Put<uint32_t>(names_.NameSlot(name));
               Op(0);
@@ -821,13 +833,23 @@ class Parser {
       Op(EqualNoCase(w, "TRUE") ? 1 : 0);
       return true;
     }
+    std::string_view bare = StartsNoCase(w, "_xlpm.") ? w.substr(6) : w;  // as files write them
     for (size_t k = let_.size(); k-- > 0;) {  // one of LET's names
-      if (EqualNoCase(let_[k], w)) {
+      if (EqualNoCase(let_[k], bare)) {
         Op(kName);
         Put<uint32_t>(names_.NameSlot("_xlpm." + let_[k]));
         Op(0);
         return true;
       }
+    }
+    if (StartsNoCase(w, "_xlpm.")) {
+      // A parameter name outside a LET Featherweight knows (LAMBDA's, or a function it doesn't
+      // know): kept as written, so the formula bar doesn't show it as a plain name that would be
+      // taken back as another one.
+      Op(kExtern);
+      PutStr(w);
+      f_.flags |= Formula::kUnsupported;
+      return true;
     }
     Op(kName);
     Put<uint32_t>(names_.NameSlot(w));
@@ -1104,8 +1126,12 @@ class TextMapper {
         continue;
       }
       switch (c) {
+        case ':':  // "A1 : B2" is one reference to the parser: the printer's path writes it
+          if (i_ > 0 && (IsSpace(s_[i_ - 1]) || IsSpace(At(i_ + 1)))) return -1;
+          ++i_;
+          continue;
         case '+': case '-': case '*': case '/': case '^': case '&': case '=': case '<': case '>': case '%':
-        case ',': case '(': case ')': case ':': case '@':
+        case ',': case '(': case ')': case '@':
           ++i_;
           continue;
         case '"':
@@ -1132,8 +1158,11 @@ class TextMapper {
             continue;
           }
           i_ += len;
-          // #REF!A1 (a deleted sheet's reference) is printed as written; let the parser read it.
-          if (e == Err::Ref && (IsLetter(At(i_)) || IsDigit(At(i_)) || At(i_) == '$' || At(i_) == '[')) return -1;
+          // #REF!A1 (a deleted sheet's reference) is printed as written; let the parser read it. Its
+          // tail can start with ':' too (#REF!:A1, read with it as RefErrTail does).
+          if (e == Err::Ref &&
+              (IsLetter(At(i_)) || IsDigit(At(i_)) || At(i_) == '$' || At(i_) == '[' || At(i_) == ':'))
+            return -1;
           continue;
         }
         case '\'':

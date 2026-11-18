@@ -96,6 +96,26 @@ std::string StringLiteral(std::string_view t) {
   return s + "\"";
 }
 
+// Whether printed text is one operand (a reference, name, literal, function call or bracketed
+// expression), so "@" or "#" written on it applies to all of it: no operator outside quotes,
+// brackets and parentheses.
+bool OneOperand(std::string_view s) {
+  int depth = 0;
+  for (size_t i = 0; i < s.size(); ++i) {
+    const char c = s[i];
+    if (c == '"' || c == '\'') {
+      for (++i; i < s.size() && s[i] != c; ++i) {}
+    } else if (c == '(' || c == '[' || c == '{') {
+      ++depth;
+    } else if (c == ')' || c == ']' || c == '}') {
+      --depth;
+    } else if (depth == 0 && std::strchr("+-*/^&=<>,;% ", c)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 int32_t Wrap(int64_t v, int32_t max) {
   int64_t r = v % max;
   return static_cast<int32_t>(r < 0 ? r + max : r);
@@ -392,8 +412,14 @@ class Printer {
           case kNeg: stack_.push_back("-" + a); break;
           case kPlus: stack_.push_back("+" + a); break;
           case kPercent: stack_.push_back(a + "%"); break;
-          case kImplicit: stack_.push_back(how_.file ? "_xlfn.SINGLE(" + a + ")" : "@" + a); break;
-          case kSpill: stack_.push_back(how_.file ? "_xlfn.ANCHORARRAY(" + a + ")" : a + "#"); break;
+          // The bar's "@A1" and "A1#" only on one operand; on more, the function form keeps the
+          // grouping ("A1+B1#" would spill only B1).
+          case kImplicit:
+            stack_.push_back(how_.file || !OneOperand(a) ? "_xlfn.SINGLE(" + a + ")" : "@" + a);
+            break;
+          case kSpill:
+            stack_.push_back(how_.file || !OneOperand(a) ? "_xlfn.ANCHORARRAY(" + a + ")" : a + "#");
+            break;
           default: stack_.push_back(a); break;
         }
         break;

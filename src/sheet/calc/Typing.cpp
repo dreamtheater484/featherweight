@@ -590,17 +590,32 @@ std::string ShiftReferences(std::string_view formula, const CompileOptions& at, 
   ShiftMap map(edit, at, to);
   // Most formulas: only the references that move are rewritten, in the text as written.
   std::string out;
+  auto refErrors = [](std::string_view s) {
+    size_t count = 0;
+    for (size_t p = s.find("#REF!"); p != std::string_view::npos; p = s.find("#REF!", p + 5)) ++count;
+    return count;
+  };
+  std::string text;  // the rewrite in the text, when a reference in it became #REF!
   switch (MapReferenceText(formula, at, to, names, map, out)) {
-    case 1: return out;
+    case 1:
+      if (refErrors(out) == refErrors(formula)) return out;
+      text = std::move(out);
+      break;
     case 0: return std::string(formula);
     default: break;
   }
   auto f = Compile(formula, at, names);
-  if (!f) return std::string(formula);
+  if (!f) return text.empty() ? std::string(formula) : text;
   Watch watch(map, at, to);
   PrintOptions how;
   how.map = &watch;
   out = Print(*f, to, names, how);
+  if (!text.empty()) {
+    // A #REF! can change how the text around it reads (after "#REF!:" a cell-like word such as
+    // SUM01 reads as a name): the text as written only when it still means what the printer's does.
+    auto a = Compile(text, to, names), b = Compile(out, to, names);
+    return a && b && Print(*a, to, names) == Print(*b, to, names) ? text : out;
+  }
   return watch.changed ? out : std::string(formula);
 }
 
