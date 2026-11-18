@@ -42,6 +42,10 @@ param(
   [string]$Out = "build\from-scratch",
   [string]$Saved,
   [string]$Featherweight,
+  # S3's "created as Excel shows it": tests\office\fixtures\*.steps, played in Featherweight only
+  # (-Featherweight is needed), then Excel reads the objects back and exports the active sheet.
+  [switch]$Fixtures,
+  [string]$Fwtool = "build\tools\fwtool\Release\fwtool.exe",
   [int]$TimeoutSeconds = 180,
   # Internal: play one steps file (-Child play) or dump one workbook (-Child dump) in this process.
   [string]$Child, [string]$Source, [string]$Target, [string]$ResultFile
@@ -115,6 +119,67 @@ function Get-Dump($xl, $wb) {
   $sheets
 }
 
+# ---- What Excel reads back of a fixture, one fact per line, for the fixtures' "expect <fact>"
+# lines: cells (from the dump), names, charts and their series, tables, conditional formats,
+# validations, notes, threaded comments, hyperlinks and page setup. Formulas as Excel's English
+# form (Formula2, RefersTo); colors as RRGGBB.
+function Get-Facts($wb, $sheets) {
+  $hex = { param($bgr) if ($null -eq $bgr) { "" } else { "{0:X2}{1:X2}{2:X2}" -f ($bgr -band 0xFF), (($bgr -shr 8) -band 0xFF), (($bgr -shr 16) -band 0xFF) } }
+  foreach ($s in @($sheets)) {
+    foreach ($c in @($s.cells)) {
+      $at = "$($s.name)!$($c.ref)"
+      "cell $at text $($c.text)"
+      if ($c.formula -like "=*") { "cell $at formula $($c.formula)" }
+      "cell $at numfmt $($c.numfmt)"
+      "cell $at font $($c.font) $($c.size)$(if ($c.bold) { ' bold' })$(if ($c.italic) { ' italic' })$(if ($c.underline -ne -4142) { ' underline' })"
+      if ($null -ne $c.fill) { "cell $at fill $(& $hex $c.fill)" }
+      if ($c.align -ne 1) { "cell $at align $($c.align)" }
+      if ($c.wrap) { "cell $at wrap" }
+      if ($c.top -notlike "-4142/*") { "cell $at top $($c.top)" }
+      if ($c.bottom -notlike "-4142/*") { "cell $at bottom $($c.bottom)" }
+    }
+    "sheet $($s.name) widths $(($s.widths.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ' ')"
+    if ($s.freeze) { "sheet $($s.name) freeze $($s.freeze)" }
+    foreach ($m in @($s.merges)) { "sheet $($s.name) merge $m" }
+  }
+  foreach ($n in $wb.Names) { "name $($n.Name) $($n.RefersTo)" }
+  foreach ($ws in $wb.Worksheets) {
+    $sn = $ws.Name
+    $i = 0
+    foreach ($co in $ws.ChartObjects()) {
+      $i++
+      $ch = $co.Chart
+      "chart $sn $i type $($ch.ChartType) series $($ch.SeriesCollection().Count)"
+      $j = 0
+      foreach ($se in $ch.SeriesCollection()) { $j++; "chart $sn $i series $j $($se.Formula)" }
+    }
+    foreach ($lo in $ws.ListObjects) {
+      $style = try { $lo.TableStyle.Name } catch { "" }
+      "table $($lo.Name) $sn!$($lo.Range.Address($false, $false)) style $style totals $($lo.ShowTotals)"
+    }
+    $fcs = $ws.Cells.FormatConditions
+    for ($k = 1; $k -le $fcs.Count; $k++) {
+      $fc = $fcs.Item($k)
+      $op = try { " operator $($fc.Operator)" } catch { "" }
+      "rule $sn!$($fc.AppliesTo.Address($false, $false)) type $($fc.Type)$op"
+    }
+    $valid = try { $ws.Cells.SpecialCells(-4174) } catch { $null }  # xlCellTypeAllValidation
+    if ($valid) {
+      foreach ($area in $valid.Areas) {
+        $v = $area.Cells.Item(1, 1).Validation
+        $f1 = try { [string][System.__ComObject].InvokeMember("Formula1", [Reflection.BindingFlags]::GetProperty, $null, $v, $null, $null, $enUS, $null) } catch { "" }
+        "validation $sn!$($area.Address($false, $false)) type $($v.Type) $f1"
+      }
+    }
+    foreach ($cm in $ws.Comments) { "note $sn!$($cm.Parent.Address($false, $false)) $($cm.Text())" }
+    $threads = try { $ws.CommentsThreaded } catch { $null }
+    if ($threads) { foreach ($t in $threads) { "comment $sn!$($t.Parent.Address($false, $false)) $($t.Text()) replies $($t.Replies.Count)" } }
+    foreach ($h in $ws.Hyperlinks) { "link $sn!$($h.Range.Address($false, $false)) $($h.Address) $($h.SubAddress)" }
+    $ps = $ws.PageSetup
+    "pagesetup $sn orientation $($ps.Orientation) zoom $($ps.Zoom) wide $($ps.FitToPagesWide) tall $($ps.FitToPagesTall) titlerows $($ps.PrintTitleRows) titlecols $($ps.PrintTitleColumns) area $($ps.PrintArea)"
+  }
+}
+
 # Range.NumberFormat through PowerShell's COM calls takes and gives the region's codes ("dd/mm/jjjj",
 # "Standaard" here: the call carries the user's locale). With en-US on the call it is the invariant
 # code files store, as for Featherweight's.
@@ -155,8 +220,32 @@ if ($Child) {
     $result.app = "Excel $($xl.Version) (build $($xl.Build))"
     $result.locale = "decimal '$($xl.International(3))', list '$($xl.International(5))'"
     if ($Child -eq "dump") {
+      if ($Target) {
+        # Fixtures: opened without recalculating (manual calculation, set on a blank workbook first),
+        # so the cells show the results Featherweight saved; then Excel recalculates, and a cell
+        # whose text changes is one Featherweight calculated differently.
+        $blank = $xl.Workbooks.Add()
+        $xl.Calculation = -4135  # xlCalculationManual
+      }
       $wb = $xl.Workbooks.Open($Source, 0, $true)
+      $active = $wb.ActiveSheet
       $result.sheets = Get-Dump $xl $wb
+      if ($Target) {
+        $ours = @{}
+        foreach ($s in @($result.sheets)) { foreach ($c in @($s.cells)) { $ours["$($s.name)!$($c.ref)"] = $c.text } }
+        $xl.CalculateFull()
+        $result.sheets = Get-Dump $xl $wb
+        $result.recalc = @(foreach ($s in @($result.sheets)) {
+          foreach ($c in @($s.cells)) {
+            $was = $ours["$($s.name)!$($c.ref)"]
+            if ($null -ne $was -and $was -ne $c.text) { "$($s.name)!$($c.ref): Featherweight '$was', Excel '$($c.text)'" }
+          }
+        })
+        # The objects as Excel reads them, and its PDF of the sheet the file opens on.
+        $result.facts = @(Get-Facts $wb $result.sheets)
+        $active.Activate()
+        $active.ExportAsFixedFormat(0, $Target)  # xlTypePDF
+      }
       $wb.Close($false)
     } else {
       $wb = $xl.Workbooks.Add()
@@ -321,7 +410,7 @@ function Compare-Dumps($a, $b) {
 # 2028 Freeze panes. Number format codes go as the steps have them, in the English form files store
 # (format:code=, as Excel's player sets Range.NumberFormat); format:numfmt= would read them in the
 # region's form, as typed into Format Cells here (Dutch date letters, "#.##0,00").
-function ConvertTo-AppScript([string]$stepsPath, [string]$target) {
+function ConvertTo-AppScript([string]$stepsPath, [string]$target, [string]$pdf) {
   $ops = New-Object Collections.Generic.List[string]
   $ops.Add("new:workbook")
   function Select-Ref([string]$ref) { $ops.Add("cmd:2013"); $ops.Add("type:$ref"); $ops.Add("key:enter") }
@@ -366,19 +455,22 @@ function ConvertTo-AppScript([string]$stepsPath, [string]$target) {
       "merge" { Select-Ref $first; $ops.Add("cmd:2026") }
       "freeze" { Select-Ref $first; $ops.Add("cmd:2028") }
       "save" { $ops.Add("saveas:$target") }
+      "expect" { }  # a fixture's fact, checked in Excel's read-back
       default { throw "line ${n}: unknown step '$op'" }
     }
   }
+  if ($pdf) { $ops.Add("exportpdf:$pdf") }  # File > Export PDF: the active sheet
   $ops -join ";"
 }
 
 # Plays one steps file in a Featherweight of its own (a --snapshot run: hidden, its own settings
 # and clipboard, never Roy's instance). "" when it saved, else why not.
-function Invoke-Featherweight([string]$stepsPath, [string]$name, [string]$dir) {
+function Invoke-Featherweight([string]$stepsPath, [string]$name, [string]$dir, [string]$pdf) {
   $target = Join-Path $dir "$name.xlsx"
   if (Test-Path $target) { Remove-Item $target }
+  if ($pdf -and (Test-Path $pdf)) { Remove-Item $pdf }
   $scriptPath = Join-Path $dir "$name.script.txt"
-  [IO.File]::WriteAllText($scriptPath, (ConvertTo-AppScript $stepsPath $target), [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText($scriptPath, (ConvertTo-AppScript $stepsPath $target $pdf), [Text.UTF8Encoding]::new($false))
   $log = Join-Path $dir "$name.log"
   $p = Start-Process -FilePath $Featherweight -PassThru -RedirectStandardError $log -ArgumentList @(
     "--snapshot", "`"$(Join-Path $dir "$name.png")`"", "--size", "1400x900", "--script", "`"@$scriptPath`"")
@@ -400,6 +492,56 @@ if ($Featherweight) {
 
 $bad = 0
 $report = @()
+if ($Fixtures) {
+  # Each fixture: played in Featherweight (saved, and its active sheet exported as PDF), opened in
+  # Excel, which reads back the objects (every "expect <fact>" line must be among its facts) and
+  # exports the same sheet; then the two PDFs page by page (fwtool pdf-compare, SSIM >= 0.95).
+  if (-not $Featherweight) { throw "-Fixtures needs -Featherweight <exe>" }
+  if (-not [IO.Path]::IsPathRooted($Fwtool)) { $Fwtool = Join-Path $root $Fwtool }
+  if (-not (Test-Path $Fwtool)) { throw "fwtool.exe not found at $Fwtool. Build it, or pass -Fwtool." }
+  if (-not $PSBoundParameters.ContainsKey("Steps")) { $Steps = @(Get-ChildItem (Join-Path $root "tests\office\fixtures") -Filter *.steps | ForEach-Object FullName) }
+  New-Item -ItemType Directory -Force (Join-Path $Out "pdf") | Out-Null
+  foreach ($s in $Steps) {
+    $name = [IO.Path]::GetFileNameWithoutExtension($s)
+    $ourPdf = Join-Path $Out "pdf\$name.featherweight.pdf"
+    $excelPdf = Join-Path $Out "pdf\$name.excel.pdf"
+    $why = Invoke-Featherweight (Resolve-Path $s).Path $name $fwDir $ourPdf
+    if ($why) { "[FAIL] $name in Featherweight: $why"; $bad++; continue }
+    if (-not (Test-Path $ourPdf)) { "[FAIL] $($name): Featherweight's Export PDF wrote nothing"; $bad++; continue }
+    "[ ok ] $name in Featherweight: $(Join-Path $fwDir "$name.xlsx"), $ourPdf"
+    if (Test-Path $excelPdf) { Remove-Item $excelPdf }
+    $d = Invoke-Child "dump" (Resolve-Path (Join-Path $fwDir "$name.xlsx")).Path $excelPdf
+    if ($d.error) { "[FAIL] $($name): Excel didn't read Featherweight's copy: $($d.error)"; $bad++; continue }
+    $facts = @($d.facts)
+    [IO.File]::WriteAllLines((Join-Path $Out "$name.facts.txt"), [string[]]$facts, [Text.UTF8Encoding]::new($false))
+    $expected = @(Get-Content -LiteralPath $s -Encoding UTF8 | ForEach-Object { $_.Trim() } | Where-Object { $_ -like "expect *" } | ForEach-Object { $_.Substring(7) })
+    $have = New-Object 'Collections.Generic.HashSet[string]' (, [string[]]$facts)
+    $missing = @($expected | Where-Object { -not $have.Contains($_) })
+    if ($missing.Count) {
+      $bad++
+      "[FAIL] $($name): $($missing.Count) of $($expected.Count) expected facts not in Excel's read-back ($name.facts.txt)"
+      foreach ($m in $missing | Select-Object -First 15) {
+        $key = ($m -split ' ')[0..1] -join ' '
+        "       want: $m"
+        $near = @($facts | Where-Object { $_ -like "$key *" } | Select-Object -First 2)
+        foreach ($x in $near) { "       Excel: $x" }
+      }
+    } else { "[ ok ] $($name): Excel reads back all $($expected.Count) expected facts" }
+    $recalc = @($d.recalc | Where-Object { $_ })
+    if ($recalc.Count) {
+      $bad++
+      "[FAIL] $($name): $($recalc.Count) cells show another result once Excel recalculates"
+      $recalc | Select-Object -First 15 | ForEach-Object { "       $_" }
+    } else { "[ ok ] $($name): Excel's recalculation gives Featherweight's results" }
+    $pdfOut = & $Fwtool pdf-compare --out (Join-Path $Out "pdf") --json (Join-Path $Out "pdf\$name.json") $excelPdf $ourPdf 2>&1
+    $pdfOk = $LASTEXITCODE -eq 0
+    if (-not $pdfOk) { $bad++ }
+    "[$(if ($pdfOk) { ' ok ' } else { 'FAIL' })] $($name) PDF: $(@($pdfOut)[-1])"
+    if (-not $pdfOk) { @($pdfOut) | Where-Object { $_ -match 'FAILS' } | Select-Object -First 5 | ForEach-Object { "       $_" } }
+    $report += [ordered]@{ name = $name; missing = $missing; recalc = $recalc; pdf = "$(@($pdfOut)[-1])" }
+  }
+  $Steps = @()  # the build-from-scratch loop below has nothing left to do
+}
 foreach ($s in $Steps) {
   $name = [IO.Path]::GetFileNameWithoutExtension($s)
   $xlsx = Join-Path $Out "excel\$name.xlsx"

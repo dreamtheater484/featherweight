@@ -38,6 +38,8 @@ class Host {
   virtual void Store(int sheet, int32_t row, int32_t col, const Value& v) { (void)sheet, (void)row, (void)col, (void)v; }
   // How far the sheet's cells reach: one past the last used row and column (0 when empty).
   virtual void Extent(int sheet, int32_t& rows, int32_t& cols) = 0;
+  // Whether a merged cell or a table lies in `area` (a dynamic array can't spill there).
+  virtual bool SpillBlocked(const Area& area) { (void)area; return false; }
   // The workbook's date system (date1904).
   virtual bool Date1904() const { return false; }
   // A structured reference: table `name` (or, when empty, the table holding the cell), with the
