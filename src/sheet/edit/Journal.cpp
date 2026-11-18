@@ -456,6 +456,18 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         r = same(AddDxf(x));
         break;
       }
+      case JournalOp::InsertChart: {
+        Editor::NewChart c;
+        const int sheet = f.Int();
+        c.kind = static_cast<Editor::ChartKind>(f.U());
+        c.data = f.R();
+        c.at = f.A();
+        c.cols = f.U32();
+        c.rows = f.U32();
+        c.title = f.S();
+        if (f.Ok()) r = InsertChart(sheet, c);
+        break;
+      }
       case JournalOp::SetFilter: {
         const int sheet = f.Int();
         const std::optional<SheetFilter> filter = f.Filter();
