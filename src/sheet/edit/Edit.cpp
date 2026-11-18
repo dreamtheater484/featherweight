@@ -4522,6 +4522,9 @@ Result Editor::SetFilter(int sheet, const std::optional<SheetFilter>& filter) {
 
 Result Editor::SetSheetRules(int sheet, RuleKind kind, const std::string& xml, const std::string& ext,
                              std::u16string stepName) {
+  Guard guard(*this);
+  if (sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount())
+    if (Result no = guard.Check(sheet, kind == RuleKind::Validations ? ProtectAct::Never : ProtectAct::FormatCells); !no) return no;
   Rec rec(*this, JournalOp::SetSheetRules,
           [&](JournalRecord& w) { w.I(sheet).U(static_cast<uint8_t>(kind)).S(xml).S(ext).S16(stepName); });
   return rec.Done([&]() -> Result {
@@ -4568,6 +4571,9 @@ Result TableShape(const Table& t) {
 }  // namespace
 
 Result Editor::AddTable(int sheet, Table t) {
+  Guard guard(*this);
+  if (sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount())
+    if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   Rec rec(*this, JournalOp::AddTable, [&](JournalRecord& w) { w.I(sheet).S(xlsx::TableXml(t)).S(t.part); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -4615,6 +4621,9 @@ Result Editor::AddTable(int sheet, Table t) {
 }
 
 Result Editor::SetTable(int sheet, size_t index, const Table& t) {
+  Guard guard(*this);
+  if (sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount())
+    if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   Rec rec(*this, JournalOp::SetTable, [&](JournalRecord& w) { w.I(sheet).U(index).S(xlsx::TableXml(t)).S(t.part); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -4657,6 +4666,9 @@ Result Editor::SetTable(int sheet, size_t index, const Table& t) {
 }
 
 Result Editor::RemoveTable(int sheet, size_t index) {
+  Guard guard(*this);
+  if (sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount())
+    if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   Rec rec(*this, JournalOp::RemoveTable, [&](JournalRecord& w) { w.I(sheet).U(index); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();

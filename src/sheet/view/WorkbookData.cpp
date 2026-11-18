@@ -1258,6 +1258,43 @@ void WorkbookView::AutoExpandTable(int sheet, CellAddr cell) {
     if (!s.GetFormula(cell.row, cell.col, fi)) return;
   }
   const std::vector<Table>& tables = s.Tables();
+  // A formula typed in an empty column of a table fills the column: Excel's calculated column, a
+  // step of its own after the formula.
+  if (FormulaInfo typed; s.GetFormula(cell.row, cell.col, typed) && typed.kind == FormulaKind::Normal)
+    for (size_t i = 0; i < tables.size(); ++i) {
+      const Table& t = tables[i];
+      const Range data = t.Data();
+      if (cell.row < data.firstRow || cell.row > data.lastRow || cell.col < data.firstCol || cell.col > data.lastCol ||
+          data.firstRow == data.lastRow)
+        continue;
+      bool empty = true;
+      for (uint32_t r = data.firstRow; r <= data.lastRow && empty; ++r)
+        if (r != cell.row) {
+          FormulaInfo f;
+          empty = s.GetValue(r, cell.col).type == ValueType::Empty && !s.GetFormula(r, cell.col, f);
+        }
+      if (!empty) return;
+      const std::string text(typed.text);
+      edit::EditGroup group(Ed(), u"Calculated Column");
+      std::vector<std::pair<CellAddr, edit::CellInput>> cells;
+      calc::CompileOptions from;
+      from.sheet = sheet, from.row = static_cast<int32_t>(cell.row), from.col = static_cast<int32_t>(cell.col);
+      auto at = [&](uint32_t r) {
+        calc::CompileOptions to = from;
+        to.row = static_cast<int32_t>(r);
+        std::string f = calc::CopyFormula("=" + text, from, to, Calc().engine());
+        if (!f.empty() && f[0] == '=') f.erase(0, 1);
+        return f;
+      };
+      for (uint32_t r = data.firstRow; r <= data.lastRow; ++r)
+        if (r != cell.row) cells.emplace_back(CellAddr{r, cell.col}, edit::CellInput::Formula(at(r)));
+      if (EditRefused(Ed().SetCells(sheet, cells))) return;
+      Table now = Current().Tables()[i];
+      now.columns[cell.col - t.ref.firstCol].calculatedFormula = cell.row == data.firstRow ? text : at(data.firstRow);  // as the first row reads it
+      if (EditRefused(Ed().SetTable(sheet, i, now))) return;
+      group.done = true;
+      return;
+    }
   for (size_t i = 0; i < tables.size(); ++i) {
     Table t = tables[i];
     const bool below = !t.totalsRows && cell.row == t.ref.lastRow + 1 && cell.col >= t.ref.firstCol && cell.col <= t.ref.lastCol;

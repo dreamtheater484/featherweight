@@ -1,3 +1,4 @@
+#include "sheet/edit/Protection.h"
 #include "sheet/view/WorkbookFormat.h"
 
 #include <algorithm>
@@ -653,6 +654,8 @@ void WorkbookView::FormatPanel::Sync() {
   direction_.selected = std::min<int>(x.alignment.readingOrder, 2);
   locked_.checked = x.protection.locked;
   hidden_.checked = x.protection.hidden;
+  // Excel never changes them on a protected sheet (the edit layer refuses it): greyed out.
+  locked_.enabled = hidden_.enabled = !edit::SheetProtected(v_.Current());
   // Font
   const Font& f = st.FontOf(x);
   font_.SetText(Utf8ToWide(f.name.empty() ? st.DefaultFont().name : f.name));
