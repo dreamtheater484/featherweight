@@ -32,6 +32,7 @@ struct CellNote {
   // A thread's note for older Excel versions ("[Threaded comment]", a notice, "Comment:" and
   // "Reply:" lines), as Excel 2021 prints the thread at the end of the sheet; empty when there's none.
   std::wstring legacyText;
+  float width = 0, height = 0;  // a note's box in points, from its drawing (0: none)
 };
 
 // What sits on a sheet above its cells (plan §7.2): pictures, shapes, text boxes, groups and

@@ -4589,7 +4589,10 @@ Result Editor::SetNote(int sheet, CellAddr cell, const std::optional<Note>& note
   if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
   Rec rec(*this, JournalOp::SetNote, [&](JournalRecord& w) {
     w.I(sheet).A(cell).B(note.has_value());
-    if (note) w.S(note->author).S(note->text).B(note->shown);
+    if (note) {
+      w.S(note->author).S(note->text).B(note->shown).D(note->width).D(note->height);
+      for (uint32_t v : note->anchor) w.U(v);
+    }
   });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -4610,7 +4613,7 @@ Result Editor::SetNote(int sheet, CellAddr cell, const std::optional<Note>& note
     const std::string vml = vmlPart.empty() ? std::string() : PartBytes(vmlPart);
     std::string newComments, newVml;
     std::optional<notes::NoteText> text;
-    if (note) text = notes::NoteText{note->author, note->text, note->shown};
+    if (note) text = notes::NoteText{note->author, note->text, note->shown, note->width, note->height, note->anchor};
     if (!notes::Edit(comments, vml, cell, text, newComments, newVml)) return Result::Fail(u"This sheet's notes couldn't be read.");
     if (newComments == comments && newVml == vml) return Result{};
     return Run(*this, note ? u"Edit Note" : u"Delete Note", [&]() -> Result {

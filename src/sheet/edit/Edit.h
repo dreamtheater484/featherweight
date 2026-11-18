@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -257,6 +258,11 @@ class Editor {
   struct Note {
     std::string author, text;
     bool shown = false;
+    // The box: `width` by `height` points at `anchor` (the VML anchor: column, x offset, row, y
+    // offset of its top left, then of its bottom right, offsets in pixels). Width 0 keeps the box
+    // the note has (a new note: Excel's, beside the cell).
+    double width = 0, height = 0;
+    std::array<uint32_t, 8> anchor{};
   };
   Result SetNote(int sheet, CellAddr cell, const std::optional<Note>& note);
   // Threaded comments (New Comment: Excel 365's). The thread on `cell` as a whole: its first comment

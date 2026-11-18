@@ -147,6 +147,15 @@ TEST(sheet_notes_set_save_delete) {
   CHECK(Part(zip, "/xl/worksheets/sheet1.xml").find("legacyDrawing") == std::string::npos);
   CHECK(Part(zip, "/xl/comments1.xml").empty());
   CHECK(ed.Undo(3) && ed.PartBytes("/xl/comments1.xml").find("<author>Roy</author>") != std::string::npos);
+  // Resized: the anchor and size given; edited again without a size, the box stays.
+  Editor::Note big{"Roy", "bigger", false, 200, 100, {2, 10, 0, 12, 6, 13, 7, 1}};
+  CHECK(ed.SetNote(0, CellAddr{1, 1}, big));
+  std::string v = ed.PartBytes("/xl/drawings/vmlDrawing1.vml");
+  CHECK(v.find("width:200pt;height:100pt") != std::string::npos && v.find("<x:Anchor>2, 10, 0, 12, 6, 13, 7, 1</x:Anchor>") != std::string::npos);
+  CHECK(ed.SetNote(0, CellAddr{1, 1}, Editor::Note{"Roy", "text only", true}));
+  v = ed.PartBytes("/xl/drawings/vmlDrawing1.vml");
+  CHECK(v.find("width:200pt;height:100pt;z-index:") != std::string::npos && v.find("<x:Anchor>2, 10, 0, 12, 6, 13, 7, 1</x:Anchor>") != std::string::npos);
+  CHECK(v.find("visibility:visible") != std::string::npos && v.find("<x:Row>1</x:Row><x:Column>1</x:Column><x:Visible/>") != std::string::npos);
   // On a protected sheet: only with Edit objects allowed (Excel).
   CHECK(ed.SetSheetProtection(0, edit::SheetProtection{}) && !ed.SetNote(0, CellAddr{0, 0}, Editor::Note{"Roy", "x"}));
 }

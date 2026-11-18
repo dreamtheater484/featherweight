@@ -459,6 +459,8 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.B()) {
           note.emplace();
           note->author = f.S(), note->text = f.S(), note->shown = f.B();
+          note->width = f.D(), note->height = f.D();
+          for (uint32_t& v : note->anchor) v = f.U32();
         }
         if (f.Ok()) r = SetNote(sheet, cell, note);
         break;

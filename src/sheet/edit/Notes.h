@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,6 +18,10 @@ namespace fw::sheet::edit::notes {
 struct NoteText {
   std::string author, text;
   bool shown = false;
+  // The box (width 0: the shape's own, or Excel's beside the cell for a new note): its size in
+  // points and its VML anchor (top left, bottom right: column, x pixels, row, y pixels).
+  double width = 0, height = 0;
+  std::array<uint32_t, 8> anchor{};
 };
 
 // `comments` and `vml` changed for the note on `cell` (nullopt: deleted): either may be empty, for

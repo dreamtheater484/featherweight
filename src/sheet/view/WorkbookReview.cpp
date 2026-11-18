@@ -2,6 +2,9 @@
 // protected sheet behaves in the grid. Links, notes and comments come here too. Every change goes
 // through the edit API (sheet/edit/Protection.h has Excel's rules).
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cwchar>
 #include <iterator>
 
 #include "Commands.h"
@@ -385,6 +388,17 @@ class WorkbookView::NotePanel : public PanelContent {
     shown_.onInvoke = [this] { shown_.checked = !shown_.checked; v_.host_.ViewInvalidate(); };
     save_.text = L"Save";
     save_.onInvoke = [this] { Apply(); };
+    for (FocusComboBox* b : {&width_, &height_}) {
+      b->autoComplete = false;
+      b->onEnter = [this] { Apply(); };
+      b->validate = [](std::wstring& t) {
+        wchar_t* end = nullptr;
+        const double v = std::wcstod(t.c_str(), &end);
+        return end && *end == 0 && v >= 10 && v <= 2000;
+      };
+    }
+    width_.label = L"Width (pt)";
+    height_.label = L"Height (pt)";
     delete_.text = L"Delete note";
     delete_.onInvoke = [this] {
       if (!v_.EditRefused(v_.Ed().SetNote(static_cast<int>(v_.sheet_), cell_, std::nullopt))) Close();
@@ -401,6 +415,11 @@ class WorkbookView::NotePanel : public PanelContent {
     author_ = note ? WideToUtf8(note->author) : reviewer.empty() ? NoteAuthor() : WideToUtf8(reviewer);
     text_.SetText(ToBox(text));
     shown_.checked = note && note->shown;
+    // The box's size: the note's, or Excel's for a new one (104 by 61.5 points).
+    width0_ = note && note->width > 0 ? note->width : 104;
+    height0_ = note && note->height > 0 ? note->height : 61.5;
+    width_.SetText(Points(width0_));
+    height_.SetText(Points(height0_));
     focusWanted_ = true;
   }
 
@@ -410,10 +429,14 @@ class WorkbookView::NotePanel : public PanelContent {
     labelRc_ = RectF(left, body.top + 12 * ui, right, body.top + 28 * ui);
     text_.rc = RectF(left, body.top + 30 * ui, right, body.top + 62 * ui);
     shown_.rc = RectF(left, body.top + 72 * ui, left + 130 * ui, body.top + 100 * ui);
-    save_.rc = RectF(left, body.top + 112 * ui, left + 100 * ui, body.top + 144 * ui);
+    const float mid = (left + right) / 2;
+    sizeRc_ = RectF(left, body.top + 108 * ui, right, body.top + 124 * ui);
+    width_.rc = RectF(left, body.top + 126 * ui, mid - 4 * ui, body.top + 158 * ui);
+    height_.rc = RectF(mid + 4 * ui, width_.rc.top, right, width_.rc.bottom);
+    save_.rc = RectF(left, width_.rc.bottom + 14 * ui, left + 100 * ui, width_.rc.bottom + 46 * ui);
     delete_.rc = RectF(save_.rc.right + 8 * ui, save_.rc.top, save_.rc.right + 138 * ui, save_.rc.bottom);
     noteRc_ = RectF(left, save_.rc.bottom + 12 * ui, right, save_.rc.bottom + 72 * ui);
-    std::vector<Control*> out = {&text_, &shown_, &save_};
+    std::vector<Control*> out = {&text_, &shown_, &width_, &height_, &save_};
     if (editing_) out.push_back(&delete_);
     delete_.visible = editing_;
     return out;
@@ -423,7 +446,9 @@ class WorkbookView::NotePanel : public PanelContent {
     const Palette& p = theme::P();
     const std::wstring by = author_.empty() ? std::wstring() : L" by " + Utf8ToWide(author_);
     c.Text(L"Note on " + Utf8ToWide(CellName(cell_.row, cell_.col)) + by, labelRc_, p.textSecondary, 12 * ui_);
-    c.TextWrapped(L"Enter saves. A ¶ starts a new line in the note.", noteRc_, p.textSecondary, 12 * ui_, 3);
+    c.Text(L"Box width and height, in points", sizeRc_, p.textSecondary, 12 * ui_);
+    c.TextWrapped(L"Enter saves. A ¶ starts a new line in the note. A new size puts the box beside the cell.", noteRc_,
+                  p.textSecondary, 12 * ui_, 3);
     if (focusWanted_) {
       text_.TakeFocus();
       focusWanted_ = false;
@@ -438,16 +463,34 @@ class WorkbookView::NotePanel : public PanelContent {
   }
   void Apply() {
     edit::Editor::Note n{author_, WideToUtf8(FromBox(text_.Text())), shown_.checked};
+    // A new size: the box beside the cell as Excel puts a new one, that big (the grid's pixels).
+    const double w = std::wcstod(width_.Text().c_str(), nullptr), h = std::wcstod(height_.Text().c_str(), nullptr);
+    if (w >= 10 && h >= 10 && (std::abs(w - width0_) > 0.01 || std::abs(h - height0_) > 0.01)) {
+      const Grid& g = v_.grid_;
+      const uint32_t top = cell_.row ? cell_.row - 1 : 0, dy = cell_.row ? 12 : 2;
+      const int64_t x0 = g.ColLeft(cell_.col + 1) + 10, y0 = g.RowTop(top) + dy;
+      const int64_t x1 = x0 + std::llround(w / 0.75), y1 = y0 + std::llround(h / 0.75);
+      const uint32_t c1 = g.ColAt(x1), r1 = g.RowAt(y1);
+      n.width = w, n.height = h;
+      n.anchor = {cell_.col + 1, 10, top, dy, c1, static_cast<uint32_t>(std::max<int64_t>(0, x1 - g.ColLeft(c1))), r1,
+                  static_cast<uint32_t>(std::max<int64_t>(0, y1 - g.RowTop(r1)))};
+    }
     if (!v_.EditRefused(v_.Ed().SetNote(static_cast<int>(v_.sheet_), cell_, n))) Close();
+  }
+  static std::wstring Points(double v) {
+    wchar_t buf[32];
+    std::swprintf(buf, 32, L"%g", std::round(v * 100) / 100);
+    return buf;
   }
 
   WorkbookView& v_;
   CellAddr cell_{};
   bool editing_ = false;
   std::string author_;
-  FocusComboBox text_;
+  FocusComboBox text_, width_, height_;
+  double width0_ = 0, height0_ = 0;
   PanelButton shown_, save_, delete_;
-  D2D1_RECT_F labelRc_{}, noteRc_{};
+  D2D1_RECT_F labelRc_{}, noteRc_{}, sizeRc_{};
   float ui_ = 1;
   bool focusWanted_ = false;
 };

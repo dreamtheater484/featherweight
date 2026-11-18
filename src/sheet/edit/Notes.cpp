@@ -214,6 +214,27 @@ std::string Num(double v) {
   return buf;
 }
 
+// One property of a VML style ("visibility:hidden;width:104pt"), replaced or added.
+void SetStyle(pugi::xml_node shape, std::string_view key, const std::string& value) {
+  pugi::xml_attribute a = shape.attribute("style");
+  if (!a) a = shape.append_attribute("style");
+  std::string style = a.value();
+  for (size_t at = 0; at <= style.size();) {
+    size_t end = style.find(';', at);
+    if (end == std::string::npos) end = style.size();
+    size_t from = at;
+    while (from < end && style[from] == ' ') ++from;
+    if (std::string_view(style).substr(from, end - from).starts_with(std::string(key) + ":")) {
+      style.replace(from, end - from, std::string(key) + ":" + value);
+      a.set_value(style.c_str());
+      return;
+    }
+    at = end + 1;
+  }
+  if (!style.empty() && style.back() != ';') style += ';';
+  a.set_value((style + std::string(key) + ":" + value).c_str());
+}
+
 bool EditVml(std::string_view in, CellAddr cell, const std::optional<NoteText>& note, std::string& out) {
   pugi::xml_document doc;
   if (in.empty()) {
@@ -236,13 +257,15 @@ bool EditVml(std::string_view in, CellAddr cell, const std::optional<NoteText>& 
   pugi::xml_node root = doc.document_element();
   uint32_t maxId = 1024;
   bool hasType = false;
+  pugi::xml_node existing;
   for (pugi::xml_node s = root.first_child(); s;) {
     pugi::xml_node next = s.next_sibling();
     CellAddr at;
     if (s.type() == pugi::node_element) {
       if (xlsx::Local(s) == "shapetype" && std::string_view(s.attribute("id").value()) == "_x0000_t202") hasType = true;
       if (IsNoteShape(s, &at) && at.row == cell.row && at.col == cell.col) {
-        root.remove_child(s);
+        if (note && !existing) existing = s;  // edited in place: its box stays as Excel (or the user) left it
+        else root.remove_child(s);
       } else if (xlsx::Local(s) == "shape") {
         std::string_view id = s.attribute("id").value();
         if (id.rfind("_x0000_s", 0) == 0) maxId = std::max(maxId, static_cast<uint32_t>(std::strtoul(id.data() + 8, nullptr, 10)));
@@ -250,7 +273,27 @@ bool EditVml(std::string_view in, CellAddr cell, const std::optional<NoteText>& 
     }
     s = next;
   }
-  if (note) {
+  const std::string anchorText =
+      note && note->width > 0
+          ? std::to_string(note->anchor[0]) + ", " + std::to_string(note->anchor[1]) + ", " + std::to_string(note->anchor[2]) + ", " +
+                std::to_string(note->anchor[3]) + ", " + std::to_string(note->anchor[4]) + ", " + std::to_string(note->anchor[5]) +
+                ", " + std::to_string(note->anchor[6]) + ", " + std::to_string(note->anchor[7])
+          : std::string();
+  if (existing) {
+    SetStyle(existing, "visibility", note->shown ? "visible" : "hidden");
+    pugi::xml_node data = xlsx::Child(existing, "ClientData");
+    const std::string px = PrefixOf(data);
+    pugi::xml_node visible = xlsx::Child(data, "Visible");
+    if (note->shown && !visible) data.append_child((px + "Visible").c_str());
+    if (!note->shown && visible) data.remove_child(visible);
+    if (note->width > 0) {
+      SetStyle(existing, "width", Num(note->width) + "pt");
+      SetStyle(existing, "height", Num(note->height) + "pt");
+      pugi::xml_node a = xlsx::Child(data, "Anchor");
+      if (!a) a = data.prepend_child((px + "Anchor").c_str());
+      a.text().set(anchorText.c_str());
+    }
+  } else if (note) {
     if (!hasType) {
       pugi::xml_document t;
       const char* type =
@@ -265,11 +308,15 @@ bool EditVml(std::string_view in, CellAddr cell, const std::optional<NoteText>& 
     }
     // Excel's box: two columns right of the cell, from the row above, 104 by 61.5 points (measured).
     const uint32_t top = cell.row ? cell.row - 1 : 0, topOffset = cell.row ? 12 : 2;
-    const std::string anchor = std::to_string(cell.col + 1) + ", 10, " + std::to_string(top) + ", " + std::to_string(topOffset) +
-                               ", " + std::to_string(cell.col + 3) + ", 20, " + std::to_string(top + 4) + ", 17";
+    const std::string anchor = note->width > 0 ? anchorText
+                                               : std::to_string(cell.col + 1) + ", 10, " + std::to_string(top) + ", " +
+                                                     std::to_string(topOffset) + ", " + std::to_string(cell.col + 3) + ", 20, " +
+                                                     std::to_string(top + 4) + ", 17";
+    const std::string size = note->width > 0 ? "width:" + Num(note->width) + "pt;height:" + Num(note->height) + "pt"
+                                             : std::string("width:104pt;height:61.5pt");
     const std::string style = "position:absolute;margin-left:" + Num((cell.col + 1) * 48.0 + 7.5) +
-                              "pt;margin-top:" + Num(top * 15.0 + topOffset * 0.75) +
-                              "pt;width:104pt;height:61.5pt;z-index:" + std::to_string(maxId - 1023) +
+                              "pt;margin-top:" + Num(top * 15.0 + topOffset * 0.75) + "pt;" + size +
+                              ";z-index:" + std::to_string(maxId - 1023) +
                               ";visibility:" + (note->shown ? "visible" : "hidden");
     const std::string id = "_x0000_s" + std::to_string(maxId + 1);
     std::string shape =
