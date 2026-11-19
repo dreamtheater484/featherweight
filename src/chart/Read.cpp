@@ -73,8 +73,11 @@ bool FromCells(pugi::xml_node ref, DataSource* source, std::vector<std::string>&
 
 std::vector<double> Numbers(pugi::xml_node data, DataSource* source) {
   std::vector<double> out;
-  std::vector<std::string> texts;
-  if (FromCells(C(data, "numRef"), source, texts, out)) return out;
+  if (pugi::xml_node f = C(C(data, "numRef"), "f"); source && f && source->Numbers(f.text().get(), out)) {
+    if (out.size() > kMaxPoints) out.resize(kMaxPoints);
+    return out;
+  }
+  out.clear();
   for (const std::string& t : CachedText(CacheOf(data, "numRef", "numCache", "numLit")))
     out.push_back(t.empty() ? kNaN : Number(t, kNaN));
   return out;
