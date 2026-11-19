@@ -4,7 +4,11 @@ compared with (fwtool pdf-compare, SSIM >= 0.95 a page).
   python tests/office/make_sparkline_tests.py [folder]   (default: tests/office/sparklines)
 
 Writes sparklines.xlsx (the "Sparklines" sheet, active: one case a row, the label in A and the
-sparkline in B; the data on "Data") and sparklines.xlsx.pdf, Excel's Export PDF of every sheet.
+sparkline in B, which alone prints; the data on "Data") and sparklines.xlsx.print.pdf, the sheet
+as Excel prints it to "Microsoft Print to PDF". Excel's Export PDF from automation leaves a sheet
+with sparklines blank (2021, measured), and its printer path draws each sparkline as a 600 dpi
+bitmap the size of its cell, 0.67 % larger than Export PDF lays the page out (row pitch 34.80
+against 34.57 pt), which tests/office/compare_sparklines.py allows for.
 Always a new, separate Excel instance (DispatchEx), with alerts, events, link updates and macros
 off; only that instance is ended.
 """
@@ -57,7 +61,7 @@ CASES = [
 def make(out):
     os.makedirs(out, exist_ok=True)
     xlsx = os.path.abspath(os.path.join(out, "sparklines.xlsx"))
-    pdf = xlsx + ".pdf"
+    pdf = xlsx + ".print.pdf"
     pythoncom.CoInitialize()
     xl = win32com.client.DispatchEx("Excel.Application")
     pid = None
@@ -118,8 +122,10 @@ def make(out):
         ws.PageSetup.PrintArea = "$B$1:$B$%d" % len(CASES)
         ws.Activate()
         wb.SaveAs(xlsx, 51)  # xlOpenXMLWorkbook
-        # Every sheet, as the reference PDFs have them (Featherweight: script op workbookpdf:).
-        wb.ExportAsFixedFormat(0, pdf)
+        if os.path.exists(pdf):
+            os.remove(pdf)
+        ws.PrintOut(From=1, To=1, Copies=1, Preview=False, ActivePrinter="Microsoft Print to PDF", PrintToFile=True,
+                    Collate=True, PrToFileName=pdf, IgnorePrintAreas=False)
         wb.Close(SaveChanges=False)
     finally:
         try:

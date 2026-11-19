@@ -26,4 +26,6 @@ if(TARGET fw_tests)
   # Pasting HTML from Excel, Word and the web (the reader alone).
   target_sources(fw_tests PRIVATE ClipHtml.cpp "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_clip_html.cpp")
   target_link_libraries(fw_tests PRIVATE fwsheetrender)
+  # Sparklines (S4): the Excel-made fixture read and drawn.
+  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_sparklines.cpp")
 endif()
