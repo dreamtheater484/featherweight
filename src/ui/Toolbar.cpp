@@ -182,6 +182,25 @@ Toolbar::Toolbar() {
   pageBox_.align = Align::Center;
 }
 
+float Toolbar::WidthOf(const ToolItem& item) {
+  if (!item.fitText || item.text.empty() || item.kind != ToolKind::Dropdown) return item.width;
+  if (textUi_ != ui_) {
+    textWidths_.clear();
+    textUi_ = ui_;
+  }
+  auto [it, added] = textWidths_.try_emplace(item.text, 0.f);
+  if (added) {  // measured as the dropdown draws it: 13 DIPs, at this scale (its hinting)
+    IDWriteTextFormat* fmt = Canvas::Format(13 * ui_, DWRITE_FONT_WEIGHT_REGULAR, false);
+    ComPtr<IDWriteTextLayout> layout;
+    DWrite()->CreateTextLayout(item.text.c_str(), static_cast<UINT32>(item.text.size()), fmt, 10000, 100, &layout);
+    DWRITE_TEXT_METRICS tm{};
+    if (layout) layout->GetMetrics(&tm);
+    it->second = std::ceil(tm.widthIncludingTrailingWhitespace) / ui_;
+  }
+  // Dropdown::Draw: 11 DIPs before the text (and a glyph's 24), the chevron's 28 after it, and 2 to spare.
+  return std::max(item.width, std::ceil(11 + (item.glyph ? 24 : 0) + it->second + 2 + 28));
+}
+
 void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
   rc_ = rc;
   ui_ = ui;
@@ -217,10 +236,10 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
   for (const ToolItem& item : m.left) left.push_back(&item);
   float keepRight = (kBtn + kGap) * u + 16 * u;
   for (const ToolItem& item : m.right)
-    if (item.priority >= 5) keepRight += (item.width + kGap + (item.sepBefore ? kSep : 0)) * u;
+    if (item.priority >= 5) keepRight += (WidthOf(item) + kGap + (item.sepBefore ? kSep : 0)) * u;
   auto leftWidth = [&]() {
     float w = 0;
-    for (const ToolItem* it : left) w += (it->width + (it->joinNext ? 0 : kGap) + (it->sepBefore ? kSep : 0)) * u;
+    for (const ToolItem* it : left) w += (WidthOf(*it) + (it->joinNext ? 0 : kGap) + (it->sepBefore ? kSep : 0)) * u;
     return w;
   };
   auto fits = [&]() { return x + leftWidth() + (left.size() < m.left.size() ? overflowW : 0) + keepRight <= rc.right; };
@@ -249,14 +268,15 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
       separators_.push_back(RectF(x + kSep * u / 2 - kGap * u / 2, top + 7 * u, x + kSep * u / 2 - kGap * u / 2 + 1, top + h - 7 * u));
       x += kSep * u;
     }
+    const float w = WidthOf(item);
     if (item.kind == ToolKind::Button) {
-      place(ItemButton(item), x, item.width * u);
+      place(ItemButton(item), x, w * u);
     } else {
       Control& c = ItemControl(item);
-      placeControl(c, item.kind, x, item.width * u);
+      placeControl(c, item.kind, x, w * u);
       shown_.push_back(&c);
     }
-    x += (item.width + (item.joinNext ? 0 : kGap)) * u;
+    x += (w + (item.joinNext ? 0 : kGap)) * u;
   }
   if (leftOverflow) {
     place(overflowButton_, x, kBtn * u);
@@ -277,9 +297,9 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
   std::vector<Item> right;
   for (const ToolItem& item : m.right) {
     if (item.kind == ToolKind::Button)
-      right.push_back({&ItemButton(item), nullptr, item.kind, item.width * u, item.priority, item.sepBefore, &item});
+      right.push_back({&ItemButton(item), nullptr, item.kind, WidthOf(item) * u, item.priority, item.sepBefore, &item});
     else
-      right.push_back({nullptr, &ItemControl(item), item.kind, item.width * u, item.priority, item.sepBefore, &item});
+      right.push_back({nullptr, &ItemControl(item), item.kind, WidthOf(item) * u, item.priority, item.sepBefore, &item});
   }
   right.push_back({&more_, nullptr, ToolKind::Button, kBtn * u, 9, false, nullptr});
 
