@@ -234,6 +234,7 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
 
 CommandState WorkbookView::QueryCommand(int cmd) {
   CommandState s;
+  if (PageSetupCommandState(cmd, s)) return s;  // s3-print (in print preview too)
   if (preview_ && (cmd == CmdNextPage || cmd == CmdPrevPage || cmd == CmdFirstPage || cmd == CmdLastPage ||
                    cmd == CmdZoomAuto || cmd == CmdZoomFitPage || cmd == CmdZoomFitWidth || cmd == CmdZoomActual ||
                    cmd == CmdViewSingle || cmd == CmdViewContinuous || cmd == CmdViewFacing ||
@@ -311,11 +312,14 @@ std::vector<int> WorkbookView::Commands() {
   for (int cmd : {CmdProtectSheet, CmdProtectWorkbook, CmdInsertLink, CmdRemoveLink, CmdNewNote, CmdDeleteNote, CmdShowNote,
                   CmdShowAllNotes, CmdNewComment, CmdDeleteThread})  // S3, s3-review
     ids.push_back(cmd);
+  ids.push_back(CmdPageSetup);  // s3-print
+  for (int cmd = CmdSetPrintArea; cmd <= CmdPrintSelection; ++cmd) ids.push_back(cmd);
   return ids;
 }
 
 bool WorkbookView::Execute(int cmd) {
   if (!Ready()) return false;
+  if (PageSetupCommand(cmd)) return true;  // s3-print (in print preview too)
   if (preview_ && cmd != CmdPrintPreview && cmd != CmdCopy && cmd != CmdNextSheet && cmd != CmdPrevSheet &&
       !(cmd >= CmdSheetPick && cmd <= CmdSheetPickLast))
     return PagedView::Execute(cmd);
@@ -402,6 +406,7 @@ void WorkbookView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   preview.toggle = true;
   preview.checked = preview_;
   m.left = {print, preview};
+  if (preview_) m.left.push_back(item(CmdPageSetup, icon::Settings, L"Page setup"));  // s3-print
   AddUndoToolbar(m);    // s2-grid: Undo and Redo with their lists
   AddFormatToolbar(m);  // fonts, colors, borders, alignment, number formats (WorkbookFormat.cpp)
   m.pager = preview_;

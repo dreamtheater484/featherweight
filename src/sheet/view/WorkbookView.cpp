@@ -217,7 +217,7 @@ void WorkbookView::ShowSheet(size_t index) {
   shown_ = true;
   if (preview_) {
     preview_ = false;
-    print_.reset();
+    prints_.clear();
   }
   sheet_ = index;
   Sheet& sheet = book_->GetSheet(index);
@@ -529,6 +529,7 @@ void WorkbookView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
     DrawFillHandle(c);
     DrawFilterButtons(c);
     DrawValidation(c);
+    DrawPageBreakPreview(c);  // s3-print
     DrawSizeGuide(c);
     DrawTabDrop(c);
     DrawNote(dc);

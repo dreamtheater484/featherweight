@@ -329,6 +329,7 @@ class Editor {
   void SetSelection(int sheet, CellAddr active, const std::vector<Range>& ranges);
   void SetTopLeft(int sheet, CellAddr topLeft);
   void SetZoom(int sheet, uint32_t percent);
+  void SetViewMode(int sheet, ViewMode mode);  // Normal, Page Break Preview (s3-print)
 
   // ---- Defined names. Adds the name, or replaces the one with the same name and scope.
   Result SetName(const DefinedName& name);

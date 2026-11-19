@@ -5295,6 +5295,15 @@ void Editor::SetZoom(int sheet, uint32_t percent) {
   s_->ViewChanged(&s);
 }
 
+void Editor::SetViewMode(int sheet, ViewMode mode) {
+  Rec rec(*this, JournalOp::SetViewMode, [&](JournalRecord& w) { w.I(sheet).U(static_cast<uint8_t>(mode)).Key(sheet); });
+  rec.commit = true;
+  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return;
+  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  FirstView(s).view = mode;
+  s_->ViewChanged(&s);
+}
+
 // ---- Names
 
 namespace {

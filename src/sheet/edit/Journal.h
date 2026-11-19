@@ -83,6 +83,7 @@ enum class JournalOp : uint8_t {
   SetThread = 94,
   SetPageSetup = 95,
   SetPageBreaks = 96,
+  SetViewMode = 97,
 };
 
 // One record being written: its kind, then its fields in the order Replay reads them.
