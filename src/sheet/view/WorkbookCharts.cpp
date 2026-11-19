@@ -110,8 +110,11 @@ bool WorkbookView::ObjectMouseDown(float x, float y, bool doubleClick) {
       if (std::abs(c.x - at->x) <= reach && std::abs(c.y - at->y) <= reach) return grab(*sel, i);
     }
   const std::vector<SheetObjects::Object> all = objects->Objects();
-  for (auto it = all.rbegin(); it != all.rend(); ++it)  // the top one
-    if (it->id && Inside(it->rect, *at)) {
+  for (auto it = all.rbegin(); it != all.rend(); ++it) {  // the top one
+    draw::Rect r = it->rect;  // a line without width or height: within reach of it
+    if (r.Width() < reach) r.left -= reach, r.right += reach;
+    if (r.Height() < reach) r.top -= reach, r.bottom += reach;
+    if (it->id && Inside(r, *at)) {
       grab(*it, -1);
       if (doubleClick && it->chart) {
         mouse_ = Mouse::None;
@@ -119,6 +122,7 @@ bool WorkbookView::ObjectMouseDown(float x, float y, bool doubleClick) {
       }
       return true;
     }
+  }
   if (object_) {
     object_ = 0;
     host_.ViewInvalidate();

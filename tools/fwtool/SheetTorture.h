@@ -57,7 +57,8 @@ enum class Op : uint8_t {
   Validation,   // data validation on `range`, replacing what's there; arg: list, list-ref, whole,
                 // decimal, length, custom (text: the list or formula), clear
   Chart,        // Insert > Chart of `range` at `to`'s cell; arg: column, bar, line, pie, doughnut, area, scatter
-  Object,       // the drawing's object with shape id `count`; arg: delete, move (to `range`'s first cell)
+  Object,       // the drawing's object with shape id `count`; arg: delete, move (to `range`'s first cell),
+                // copy (pasted at `range`'s first cell), type-line, type-bar, title (its chart edited)
   PageSetup,    // Page Setup on `sheet`, one thing changed; arg: portrait, landscape, a4, letter,
                 // scale=<percent>, fit=<wide>,<tall>, nofit, margins=narrow|wide, center, header,
                 // gridlines, headings, order

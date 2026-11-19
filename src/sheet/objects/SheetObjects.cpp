@@ -88,6 +88,8 @@ bool Meets(const draw::Rect& a, const draw::Rect& b) {
   return a.left <= b.right && b.left <= a.right && a.top <= b.bottom && b.top <= a.bottom;
 }
 bool Empty(const draw::Rect& r) { return !(r.Width() > 0 && r.Height() > 0); }
+// A shape needs one side: a horizontal or vertical line has no height or no width.
+bool Flat(const draw::Rect& r) { return !(r.Width() >= 0 && r.Height() >= 0 && (r.Width() > 0 || r.Height() > 0)); }
 
 // A right-to-left sheet's place for a rect (DrawOptions::mirrorX).
 draw::Rect Mirror(const draw::Rect& r, float mirrorX) {
@@ -280,7 +282,7 @@ void SheetObjects::Impl::ReadDrawing(const pkg::Package& package, const std::str
 }
 
 void SheetObjects::Impl::Fit(Item& it) {
-  if (!it.drawing || Empty(it.rect) || Near(it.drawing->Bounds(), it.rect)) return;
+  if (!it.drawing || Flat(it.rect) || Near(it.drawing->Bounds(), it.rect)) return;
   SetXfrm(it.node, it.rect);
   if (auto d = draw::Drawing::FromShapeTree(it.node, *resources)) it.drawing = std::move(d);
 }
@@ -373,7 +375,7 @@ void SheetObjects::Draw(draw::Painter& painter, const draw::Rect& visible, const
   Impl& m = *impl_;
   if (m.chartSheet) return;
   for (Impl::Item& it : m.items) {
-    if ((options.printing && !it.prints) || Empty(it.rect)) continue;
+    if ((options.printing && !it.prints) || (it.chart ? Empty(it.rect) : Flat(it.rect))) continue;
     const draw::Rect rect = Mirror(it.rect, options.mirrorX);
     // Room for outlines and shadows past the box.
     const draw::Rect reach{rect.left - 20, rect.top - 20, rect.right + 20, rect.bottom + 20};
@@ -391,7 +393,8 @@ void SheetObjects::Draw(draw::Painter& painter, const draw::Rect& visible, const
 std::vector<SheetObjects::Object> SheetObjects::Objects() const {
   std::vector<Object> out;
   for (const Impl::Item& it : impl_->items)
-    if (!Empty(it.rect) && !(it.drawing && it.drawing->IsHidden())) out.push_back({it.name, it.rect, it.chart != nullptr, it.prints, it.id});
+    if (!(it.chart ? Empty(it.rect) : Flat(it.rect)) && !(it.drawing && it.drawing->IsHidden()))
+      out.push_back({it.name, it.rect, it.chart != nullptr, it.prints, it.id});
   return out;
 }
 

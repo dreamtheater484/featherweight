@@ -603,6 +603,12 @@ class EditApiTarget : public SheetTarget {
       }
       case Op::Object: {
         if (e.arg == "delete") return done(ed_.DeleteObjects(s, {e.count}));
+        if (e.arg == "type-line" || e.arg == "type-bar" || e.arg == "title") {
+          sh::edit::ChartEdit edit;
+          if (e.arg == "title") edit.title = sh::edit::ChartText{true, "Torture"}, edit.legend = 'r', edit.labels = true;
+          else edit.kind = e.arg == "type-line" ? sh::edit::ChartKind::Line : sh::edit::ChartKind::Bar;
+          return done(ed_.EditChart(s, e.count, edit));
+        }
         // Dragged so that its top left is at the cell: about five columns by twelve rows.
         namespace dr = sh::edit::drawing;
         constexpr int64_t kEmuPx = 9525;
@@ -611,6 +617,7 @@ class EditApiTarget : public SheetTarget {
         p.to = dr::Marker{r.firstCol + 5, r.firstRow + 12, 0, 0};
         p.x = static_cast<int64_t>(r.firstCol) * 64 * kEmuPx, p.y = static_cast<int64_t>(r.firstRow) * 20 * kEmuPx;
         p.cx = 5 * 64 * kEmuPx, p.cy = 12 * 20 * kEmuPx;
+        if (e.arg == "copy") return done(ed_.PasteObject(s, ed_.CopyObject(s, e.count), p));
         return done(ed_.MoveObject(s, e.count, p));
       }
       case Op::PageSetup: return PageSetup(s, e.arg, why);
@@ -1504,7 +1511,8 @@ class Generator {
 #else
       (void)book;
 #endif
-      e.arg = rng_.Chance(40) ? "delete" : "move";
+      static const char* kObjectEdits[] = {"delete", "delete", "move", "move", "move", "copy", "type-line", "type-bar", "title"};
+      e.arg = rng_.Pick(kObjectEdits);
     } else if (roll < 17) {
       e.op = Op::PageSetup;
       static const char* kWhat[] = {"portrait", "landscape", "a4", "letter", "scale=75", "fit=1,0", "fit=1,1", "nofit",

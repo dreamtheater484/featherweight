@@ -1119,7 +1119,7 @@ TEST(sheet_chart_caches_follow_cells) {
   const std::string chart = PartText(saved, "/xl/charts/chart1.xml");
   CHECK(chart.find("<c:pt idx=\"1\"><c:v>0.25</c:v></c:pt>") != std::string::npos && chart.find("<c:v>2</c:v>") == std::string::npos);
   CHECK(PartText(saved, "/xl/charts/chart2.xml") == other);
-  CHECK(ed.PartBytes("/xl/charts/chart1.xml").find("<c:v>2</c:v>") != std::string::npos);  // the package keeps the file's
+  CHECK(ed.PartBytes("/xl/charts/chart1.xml").find("<c:v>0.25</c:v>") != std::string::npos);  // the package keeps what it wrote
 }
 
 // A drawing part's objects (s3-charts): found by shape id with their bytes, placed, and the

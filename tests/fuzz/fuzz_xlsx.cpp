@@ -260,7 +260,39 @@ void EditOnce(Editor& ed, const Workbook& book, Rng& rng, int& groups, bool hadS
     }
   };
   const Styles& styles = book.GetStyles();
-  switch (rng.Below(26)) {
+  switch (rng.Below(28)) {
+    case 26: {  // a chart (s3-charts)
+      Editor::NewChart c;
+      c.kind = static_cast<edit::ChartKind>(rng.Below(7));
+      c.data = range();
+      c.at = CellAddr{row(), col()};
+      ed.InsertChart(sheet, c);
+      break;
+    }
+    case 27: {  // the sheet's last chart, picture or shape: moved, deleted, copied, edited
+      const std::vector<edit::drawing::Object> objects = edit::drawing::Objects(ed.PartBytes(ed.SheetDrawing(sheet, false)));
+      if (objects.empty()) break;
+      const uint32_t id = objects.back().id;
+      edit::drawing::Place p;
+      p.from = {col(), row(), static_cast<int64_t>(rng.Below(50000)), 0};
+      p.to = {p.from.col + rng.Below(8), p.from.row + rng.Below(15), 0, static_cast<int64_t>(rng.Below(50000))};
+      switch (rng.Below(4)) {
+        case 0: ed.MoveObject(sheet, id, p); break;
+        case 1: ed.DeleteObjects(sheet, {id}); break;
+        case 2: ed.PasteObject(sheet, ed.CopyObject(sheet, id), p); break;
+        default: {
+          edit::ChartEdit e;
+          if (rng.Chance(50)) e.kind = static_cast<edit::ChartKind>(rng.Below(7));
+          if (rng.Chance(50)) e.title = edit::ChartText{rng.Chance(80), rng.Chance(50) ? "T & <t>" : ""};
+          if (rng.Chance(50)) e.xTitle = edit::ChartText{rng.Chance(80), "x"};
+          if (rng.Chance(50)) e.legend = " brtl"[rng.Below(5)];
+          if (rng.Chance(50)) e.labels = rng.Chance(50);
+          if (rng.Chance(30)) e.colors = {{rng.Below(3), rng.Chance(50) ? -1 : static_cast<int32_t>(rng.Below(4)), rng.Below(0xFFFFFF)}};
+          ed.EditChart(sheet, id, e);
+        }
+      }
+      break;
+    }
     case 24: {  // cut and paste
       const Range from = range();
       ed.MoveCells(sheet, from, CellAddr{row(), col()});
