@@ -39,6 +39,7 @@ PrintInfo WorkbookView::InfoFor(const Sheet& sheet) const {
 }
 
 void WorkbookView::Paginate() {
+  if (bigLoad_) WorkDone();  // a large file still being read: its pages are all of it
   prints_.clear();
   pageSizes_.clear();
   auto add = [&](size_t i, PrintInfo info) {
@@ -231,6 +232,7 @@ PrintOutcome WorkbookView::Print(HWND owner, const std::function<void(int, int)>
 PrintOutcome WorkbookView::PrintToFile(const std::wstring& path, std::wstring& message) {
   // Every sheet, as Excel exports a workbook (the reference renders).
   if (!Ready()) return PrintOutcome::Failed;
+  if (bigLoad_) WorkDone();
   ComPtr<IStream> stream;
   if (FAILED(SHCreateStreamOnFileEx(path.c_str(), STGM_CREATE | STGM_WRITE | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL,
                                     TRUE, nullptr, &stream))) {

@@ -328,6 +328,7 @@ std::vector<int> WorkbookView::Commands() {
 
 bool WorkbookView::Execute(int cmd) {
   if (!Ready()) return false;
+  if (bigLoad_) WorkDone();  // a large file still being read: all of it first (print, find, sort...)
   if (PageSetupCommand(cmd)) return true;  // s3-print (in print preview too)
   if (preview_ && cmd != CmdPrintPreview && cmd != CmdCopy && cmd != CmdNextSheet && cmd != CmdPrevSheet &&
       !(cmd >= CmdSheetPick && cmd <= CmdSheetPickLast))
@@ -929,6 +930,7 @@ constexpr SaveFormat kXltm{L"Excel macro-enabled template", L"*.xltm", L"xltm"};
 
 bool WorkbookView::ReadyToSave(std::wstring& error) {
   if (!Ready()) return false;
+  if (bigLoad_) WorkDone();
   if (partial_) {
     error = Title() + L" can't be saved: it couldn't be read in full.";
     return false;
