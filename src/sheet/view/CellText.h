@@ -98,6 +98,9 @@ class CellText {
   const Layout& Get(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look = {}, int textPx = -1);
   // Forgets the cache: another sheet, recalculated values, other column widths.
   void Clear() { cache_.clear(); }
+  // While held (a paint between placing text and drawing it), Get keeps every layout it gave
+  // out: a full cache isn't emptied under them.
+  void Hold(bool on) { held_ = on; }
 
  private:
   void Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const TextLook& look, int textPx, Layout& out);
@@ -121,6 +124,7 @@ class CellText {
   std::unordered_map<uint32_t, std::unique_ptr<NumberFormat>> formats_;
   std::unordered_map<uint64_t, std::unique_ptr<Layout>> cache_;
   const Sheet* cacheSheet_ = nullptr;
+  bool held_ = false;
 };
 
 // A color from the format's palette index (1..56), through the workbook's palette, as ARGB.
