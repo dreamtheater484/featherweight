@@ -528,6 +528,31 @@ TEST(SheetTables_ConvertKeepsLook) {
   CHECK(s.Tables().size() == 1 && s.StyleAt(0, 0) == before);
 }
 
+// A cell whose type or style the file wrote in a form the reader keeps as written (t="inlineSt2",
+// s="01"): an edit writes its own and drops the kept one, so the attribute isn't there twice (a
+// save fuzz_xlsx found that didn't read); unedited cells keep theirs.
+TEST(SheetSave_KeptTypeAndStyleDropped) {
+  const char* data =
+      "<sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineSt2\"><v>1</v></c><c r=\"B1\" s=\"01\"><v>2</v></c>"
+      "<c r=\"C1\" t=\"inlineSt2\"><v>3</v></c></row></sheetData>";
+  auto book = OpenParts({data, "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.SetCell(0, 0, 0, edit::CellInput::Text("x")));
+  Font bold;
+  bold.bold = true;
+  Xf x;
+  x.font = ed.AddFont(bold);
+  x.applyFont = true;
+  CHECK(ed.SetStyle(0, Range::Cell(0, 1), ed.AddXf(x)));
+  std::vector<uint8_t> saved = Save(*book, ed, L"kept");
+  const std::string sheet = Part(saved, "/xl/worksheets/sheet1.xml");
+  CHECK(sheet.find("<c r=\"A1\" t=\"s\">") != std::string::npos);
+  CHECK(sheet.find("s=\"01\"") == std::string::npos);
+  CHECK(sheet.find("<c r=\"C1\" t=\"inlineSt2\">") != std::string::npos);  // not edited: as written
+  CHECK(OpenZip(saved) != nullptr);
+}
+
 // On a protected sheet Excel refuses tables and validations always, conditional formats unless
 // formatting cells is allowed.
 TEST(SheetRules_Protected) {

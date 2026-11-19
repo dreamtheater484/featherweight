@@ -76,9 +76,13 @@ std::vector<uint8_t> ZipFromText(std::string_view text) {
   return std::move(sink.bytes);
 }
 
-void Check(bool ok) {
-  if (!ok) std::abort();
+void CheckAt(bool ok, int line) {
+  if (!ok) {
+    std::fprintf(stderr, "fuzz_xlsx.cpp:%d: check failed\n", line);
+    std::abort();
+  }
 }
+#define Check(ok) CheckAt((ok), __LINE__)
 
 // What the grid, the number formats and the formula engine read.
 void ReadEverything(const Workbook& book) {
@@ -715,7 +719,17 @@ void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t
       for (const std::string& e : report.errors) std::fprintf(stderr, "saved file: %s\n", e.c_str());
       Check(report.Ok());
     }
-    Check(xlsx::Read(std::move(pkg), st, {.loadAll = true}) != nullptr);
+    const bool reads = xlsx::Read(std::move(pkg), st, {.loadAll = true}) != nullptr;
+    if (!reads) {
+      std::fprintf(stderr, "the save doesn't read: %s\n", st.message.c_str());
+      if (std::getenv("FUZZ_XLSX_DUMP")) {
+        if (FILE* f = std::fopen(std::getenv("FUZZ_XLSX_DUMP"), "wb")) {
+          std::fwrite(saved.data(), 1, saved.size(), f);
+          std::fclose(f);
+        }
+      }
+    }
+    Check(reads);
   }
 
   // Undoing everything gives the cells back (unless a save that removed sheets ended the history).
