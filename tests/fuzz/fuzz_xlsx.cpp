@@ -855,7 +855,9 @@ void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t
   ed.SetJournal(&journal);
   Rng rng{seed};
   int groups = 0;
-  const uint32_t steps = 8 + rng.Below(24);
+  uint32_t steps = 8 + rng.Below(24);
+  // FUZZ_XLSX_STEPS=n: only the first n edits (the same ones), to find the one a finding needs.
+  if (const char* most = std::getenv("FUZZ_XLSX_STEPS")) steps = std::min<uint32_t>(steps, static_cast<uint32_t>(std::atoi(most)));
   const bool hadSheets = book->SheetCount() > 0;
   for (uint32_t i = 0; i < steps; ++i) EditOnce(ed, *book, rng, groups, hadSheets);
   for (; groups > 0; --groups) ed.EndGroup();
@@ -864,7 +866,22 @@ void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t
   Editor replayed(*again);
   size_t applied = 0;
   edit::Result r = replayed.Replay(journal.All(), &applied);
-  if (!r) std::fprintf(stderr, "replay stopped after %zu records\n", applied);
+  if (std::getenv("FUZZ_XLSX_TRACE")) {  // what protects each sheet, edited and replayed
+    for (const Workbook* w : {book.get(), again.get()})
+      for (size_t i = 0; i < w->SheetCount(); ++i) {
+        const auto p = edit::SheetProtectionOf(w->GetSheet(i));
+        std::fprintf(stderr, "%s sheet %zu: %s\n", w == book.get() ? "edited" : "replayed", i, p ? edit::SheetProtectionXml(*p).c_str() : "-");
+        std::string cols;
+        for (const ColumnInfo& c : w->GetSheet(i).Columns())
+          cols += " " + std::to_string(c.first) + "-" + std::to_string(c.last) + ":" + std::to_string(c.style);
+        std::fprintf(stderr, "  columns%s\n", cols.c_str());
+      }
+  }
+  if (!r) {
+    std::string why;
+    for (char16_t c : r.message) why += c < 0x80 ? static_cast<char>(c) : '?';
+    std::fprintf(stderr, "replay stopped after %zu records: %s\n", applied, why.c_str());
+  }
   Check(r.ok);
   const std::string edited = CellsOf(*book), remade = CellsOf(*again);
   if (edited != remade) {

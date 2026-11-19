@@ -1891,7 +1891,10 @@ Result Editor::ClearFormats(int sheet, const Range& r) {
   // On a protected sheet, as clearing contents: unlocked cells only, whatever the permissions (Excel).
   Guard guard(*this);
   if (Result no = guard.Check(sheet, ProtectAct::Content, r); !no) return no;
-  return MapStyles(sheet, r, [](uint32_t) { return 0u; });
+  // Recorded as itself: a replay of the MapStyles inside would be checked as Format Cells and
+  // refused on a sheet that doesn't allow that (fuzz_xlsx).
+  Rec rec(*this, JournalOp::ClearFormats, [&](JournalRecord& w) { w.I(sheet).R(r); });
+  return rec.Done(MapStyles(sheet, r, [](uint32_t) { return 0u; }));
 }
 
 Result Editor::ClearAll(int sheet, const Range& r) {

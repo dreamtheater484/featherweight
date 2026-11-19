@@ -266,6 +266,12 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = ClearContents(sheet, range);
         break;
       }
+      case JournalOp::ClearFormats: {
+        const int sheet = f.Int();
+        const Range range = f.R();
+        if (f.Ok()) r = ClearFormats(sheet, range);
+        break;
+      }
       case JournalOp::MapStyles: {
         const int sheet = f.Int();
         const Range range = f.R();

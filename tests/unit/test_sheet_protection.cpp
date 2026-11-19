@@ -294,3 +294,22 @@ TEST(sheet_protection_journal) {
   auto readP = edit::SheetProtectionOf(again->GetSheet(1));
   CHECK(readP && *readP == p && edit::StructureProtected(*again));
 }
+
+// Every permission, as Protect Sheet sets it, reads back from the XML the journal records
+// (fuzz_xlsx: a replay found the sheet protected otherwise).
+TEST(sheet_protection_xml_round_trip) {
+  for (uint32_t bits = 0; bits < (1u << 17); bits += 1 + (bits % 7)) {
+    SheetProtection p;
+    bool* flags[] = {&p.sheet, &p.objects, &p.scenarios, &p.formatCells, &p.formatColumns, &p.formatRows, &p.insertColumns,
+                     &p.insertRows, &p.insertHyperlinks, &p.deleteColumns, &p.deleteRows, &p.selectLockedCells, &p.sort,
+                     &p.autoFilter, &p.pivotTables, &p.selectUnlockedCells};
+    for (size_t i = 0; i < std::size(flags); ++i) *flags[i] = (bits >> i) & 1;
+    if (bits & (1u << 16)) p.password.legacy = "CC1A";
+    const std::optional<SheetProtection> back = edit::ReadSheetProtection(edit::SheetProtectionXml(p));
+    if (!back || !(*back == p)) {
+      std::fprintf(stderr, "bits %u: %s\n", bits, edit::SheetProtectionXml(p).c_str());
+      CHECK(false);
+      return;
+    }
+  }
+}
