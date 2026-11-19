@@ -274,6 +274,52 @@ TEST(Chart_LabelPartsKeysAndOverlay) {
   SetListSeparator(L',');
 }
 
+TEST(Chart_LongTitleWrapsAsExcelDoes) {
+  // Excel (a 355 x 211-point chart, 14-point title): a title wider than about 80 % of the chart
+  // wraps at spaces, a word too wide for a line alone is broken, each line after the first takes
+  // 1.22 times the size from the plot; a 92-point one keeps to one line. fuzz_chart found a title
+  // of 92 points drawn far outside a 60-point chart.
+  Parsed p(ColumnChart());
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  c.titleSize = 14;
+  const draw::Color red = draw::Rgb(0xFF0000);
+  c.titleColor = red;
+  // The title's lines (the marks in its color): left, baseline, right.
+  struct Line {
+    float left, baseline, right;
+  };
+  const auto lines = [&](draw::Size size) {
+    const draw::Art art = Draw(c, size, Colors(), L"Calibri");
+    std::vector<Line> out;
+    for (const draw::Art::Mark& m : art.marks) {
+      if (m.fill.kind != draw::Fill::Kind::Solid || !Same(m.fill.color, red)) continue;
+      const draw::Rect b = m.path.Bounds();
+      const draw::Point a = m.transform.Apply({b.left, b.top}), z = m.transform.Apply({b.right, b.bottom});
+      out.push_back({a.x, m.transform.Apply({0, 0}).y, z.x});
+    }
+    return out;
+  };
+  CHECK_EQ(lines({355, 211}).size(), 1u);  // "Sales"
+  c.title = L"Quarterly revenue by region for the fiscal year two thousand twenty six and beyond";
+  std::vector<Line> two = lines({355, 211});
+  REQUIRE(two.size() == 2u);
+  CHECK(std::abs(two[1].baseline - two[0].baseline - 1.22f * 14) < 0.01f);
+  for (const Line& l : two) CHECK(l.left >= 0.1f * 355 - 0.5f && l.right <= 0.9f * 355 + 0.5f);
+  c.title = L"Supercalifragilisticexpialidocious";
+  c.title += c.title + c.title;
+  CHECK_EQ(lines({355, 211}).size(), 3u);
+  c.title = L"Lines with markers";
+  CHECK_EQ(lines({55, 211}).size(), 4u);
+  c.titleSize = 92;
+  CHECK_EQ(lines({355, 211}).size(), 1u);
+  for (const draw::Size s : {draw::Size{60, 40}, draw::Size{1500, 8}}) {
+    const std::vector<Line> one = lines(s);
+    REQUIRE(one.size() == 1u);
+    CHECK(one[0].left > -s.width && one[0].right < 2 * s.width);
+  }
+}
+
 TEST(Chart_NumbersAsTheirFormatCodesShowThem) {
   SetNumberSeparators(L'.', L',');
   SetShortDate("");
