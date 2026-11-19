@@ -92,8 +92,7 @@ Result InsertPivotIn(Editor& ed, Workbook& book, const Editor::NewPivotTable& p)
     return Result::Fail(u"This sheet couldn't be read.");
   const Sheet& from = book.GetSheet(static_cast<size_t>(srcSheet));
   const Sheet& to = book.GetSheet(static_cast<size_t>(p.sheet));
-  if (to.Kind() != SheetKind::Worksheet || to.PartName().empty() || !package->FindPart(to.PartName()))
-    return Result::Fail(u"Save the workbook first: a PivotTable goes on a sheet the file has.");
+  if (to.Kind() != SheetKind::Worksheet) return Result::Fail(u"A PivotTable goes on a worksheet.");
   if (src.lastRow <= src.firstRow || src.lastCol - src.firstCol >= 16384 || src.lastRow >= kMaxRows)
     return Result::Fail(u"The PivotTable needs a header row and at least one row of data.");
   // Its fields: the header's names (one used twice gets 2, 3...), each with its first value's format.
@@ -158,6 +157,8 @@ Result InsertPivotIn(Editor& ed, Workbook& book, const Editor::NewPivotTable& p)
   const pivot::Table table = pivot::NewTable(cache, spec, name, cacheId, p.at);
 
   EditGroup group(ed, u"PivotTable");
+  // A sheet added since opening gets its part first (s4 friction W7).
+  if (ed.SheetPart(p.sheet, true).empty()) return Failed();
   const std::string cachePart = ed.NewPartName("/xl/pivotCache/pivotCacheDefinition", ".xml");
   const std::string wbRel = ed.AddPart(wbPart, std::string(kRel) + "pivotCacheDefinition", cachePart,
                                        std::string(kCt) + "pivotCacheDefinition+xml", pivot::NewCacheXml(cache));
