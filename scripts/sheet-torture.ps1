@@ -37,7 +37,10 @@ param(
   [string]$Out = "build\sheet-torture",
   [string]$Fwtool = "build\tools\fwtool\Release\fwtool.exe",
   [switch]$Ci,
-  [switch]$NoExcel
+  [switch]$NoExcel,
+  # Keep the torture results already in -Out (torture.json, saved\, repro\) and run only the validator,
+  # Excel and the summary again (after one of those failed or changed).
+  [switch]$Reuse
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,15 +62,17 @@ if (-not [IO.Path]::IsPathRooted($Out)) { $Out = Join-Path $root $Out }
 if (-not [IO.Path]::IsPathRooted($Fwtool)) { $Fwtool = Join-Path $root $Fwtool }
 if (-not (Test-Path $Fwtool)) { throw "fwtool.exe not found at $Fwtool. Build it, or pass -Fwtool." }
 # This run's output only.
-foreach ($old in "saved", "repro") { if (Test-Path (Join-Path $Out $old)) { Remove-Item -Recurse -Force (Join-Path $Out $old) } }
+if (-not $Reuse) { foreach ($old in "saved", "repro") { if (Test-Path (Join-Path $Out $old)) { Remove-Item -Recurse -Force (Join-Path $Out $old) } } }
 New-Item -ItemType Directory -Force $Out | Out-Null
 
 function Read-Json([string]$path) { if (Test-Path $path) { Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json } }
 
 # 1. Edits, save, check, read back.
 "== fwtool torture --workbooks: seed $Seed, $Rounds rounds of $Edits edits"
+if (-not $Reuse) {
 & $Fwtool torture --workbooks --seed $Seed --edits $Edits --rounds $Rounds --out $Out --json (Join-Path $Out "torture.json") @Paths |
   Tee-Object -FilePath (Join-Path $Out "torture.log")
+}
 $torture = Read-Json (Join-Path $Out "torture.json")
 if (-not $torture) { throw "fwtool torture wrote no results." }
 $pairsFile = Join-Path $Out "pairs.tsv"
@@ -89,7 +94,9 @@ if ($pairs.Count) {
 $convertedErrors = @{}  # converted copy -> its validator errors
 if ($converted.Count) {
   "== Validator: the converted workbooks' Save As .xlsx with no edits"
-  & $validator --json (Join-Path $Out "validate-converted.json") @converted | Where-Object { $_ -match '^\[FAIL\]|^\s{4}|files' }
+  $list = Join-Path $Out "converted.txt"  # a list file: 200 paths are more than a command line holds
+  [IO.File]::WriteAllLines($list, [string[]]$converted, [Text.UTF8Encoding]::new($false))
+  & $validator --json (Join-Path $Out "validate-converted.json") --files $list | Where-Object { $_ -match '^\[FAIL\]|^\s{4}|files' }
   foreach ($f in (Read-Json (Join-Path $Out "validate-converted.json")).files) {
     $convertedErrors[[IO.Path]::GetFullPath($f.file)] = @($f.errors | Where-Object { $_ })
   }
