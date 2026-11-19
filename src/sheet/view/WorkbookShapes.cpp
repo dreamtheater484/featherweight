@@ -339,6 +339,21 @@ edit::Result WorkbookView::KeepSizes(const std::vector<HeldSize>& held) {
   return {};
 }
 
+bool WorkbookView::AspectLocked(uint32_t id, const draw::Rect& start) {
+  AspectSeen& s = aspectSeen_;
+  if (s.id == id && s.start.left == start.left && s.start.top == start.top && s.start.right == start.right &&
+      s.start.bottom == start.bottom)
+    return s.locked;
+  s = {id, start, false};
+  const std::string drawing = Ready() && !ChartSheet() ? Ed().SheetDrawing(static_cast<int>(sheet_), false) : std::string();
+  if (drawing.empty()) return false;
+  // The object's own locks (xdr:cNvPicPr/a:picLocks, cNvSpPr/a:spLocks...), the first one's.
+  const std::string a = Ed().AnchorXml(drawing, id);
+  const size_t at = a.find("noChangeAspect=");
+  s.locked = at != std::string::npos && at + 16 < a.size() && (a[at + 16] == '1' || a.compare(at + 16, 4, "true") == 0);
+  return s.locked;
+}
+
 bool WorkbookView::InsertPictureFiles(const std::vector<std::wstring>& files) {
   bool any = false;
   for (const std::wstring& path : files) {

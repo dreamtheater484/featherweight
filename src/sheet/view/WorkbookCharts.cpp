@@ -149,8 +149,9 @@ void WorkbookView::ObjectMouseMove(float x, float y, UINT mods) {
     if (h >= 2 && h <= 4) r.right = std::max(r.right + dx, r.left + least);
     if (h <= 2) r.top = std::min(r.top + dy, r.bottom - least);
     if (h >= 4 && h <= 6) r.bottom = std::max(r.bottom + dy, r.top + least);
-    // Shift on a corner keeps the shape's proportions, from the opposite corner.
-    if ((mods & kModShift) && h % 2 == 0 && d.start.Width() > 0 && d.start.Height() > 0) {
+    // Shift on a corner keeps the shape's proportions, from the opposite corner; a picture's corner
+    // always does (its aspect ratio locked, as Excel inserts it: s3-data's AspectLocked).
+    if (((mods & kModShift) || AspectLocked(object_, d.start)) && h % 2 == 0 && d.start.Width() > 0 && d.start.Height() > 0) {
       const float s = std::max(r.Width() / d.start.Width(), r.Height() / d.start.Height());
       const float w = d.start.Width() * s, ht = d.start.Height() * s;
       if (h == 0 || h == 6) r.left = r.right - w;
