@@ -321,6 +321,10 @@ class Editor {
   std::string ChartPart(int sheet, uint32_t id) const;
   // A chart's type, titles, legend, data labels, colors or series changed (Charts.h: ChartEdit).
   Result EditChart(int sheet, uint32_t id, const ChartEdit& edit);
+  // Move Chart > New sheet (journal 55): the chart goes to a chart sheet of its own, inserted
+  // before `sheet` and made the active sheet, named `name` (empty: "Chart1", "Chart2"...). Its
+  // chart part stays; the sheet's drawing loses the object as Delete does.
+  Result MoveChartToSheet(int sheet, uint32_t id, std::string name = {});
 
   // ---- Charts (s3-charts)
   using ChartKind = edit::ChartKind;

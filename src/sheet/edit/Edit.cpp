@@ -4124,6 +4124,88 @@ Result Editor::EditChart(int sheet, uint32_t id, const ChartEdit& e) {
   }());
 }
 
+Result Editor::MoveChartToSheet(int sheet, uint32_t id, std::string name) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::MoveChartToSheet, [&](JournalRecord& w) { w.I(sheet).U(id).S(name); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    const std::string chart = ChartPart(sheet, id);
+    if (chart.empty()) return Result::Fail(u"Only a chart can move to a chart sheet.");
+    // Its graphic frame, declaring the prefixes the drawing declares (CopyObject puts them on the
+    // anchor).
+    const std::string anchor = CopyObject(sheet, id).anchor;
+    const size_t nameEnd = anchor.find_first_of(" />", 1);
+    const size_t colon = anchor.find(':');
+    const std::string p = colon != std::string::npos && colon < nameEnd ? anchor.substr(1, colon) : std::string();
+    const size_t begin = anchor.find("<" + p + "graphicFrame");
+    const std::string close = "</" + p + "graphicFrame>";
+    const size_t end = begin == std::string::npos ? begin : anchor.find(close, begin);
+    if (end == std::string::npos) return Result::Fail(u"Only a chart can move to a chart sheet.");
+    std::string frame = anchor.substr(begin, end + close.size() - begin);
+    const std::vector<std::string> rels = drawing::RelIds(frame);
+    if (rels.size() != 1) return Result::Fail(u"This chart can't move to a chart sheet.");
+    std::string decls;
+    const std::string_view tag = std::string_view(anchor).substr(0, anchor.find('>'));
+    for (size_t at = tag.find(" xmlns"); at != std::string_view::npos; at = tag.find(" xmlns", at + 1)) {
+      const size_t q = tag.find('"', at), q2 = q == std::string_view::npos ? q : tag.find('"', q + 1);
+      if (q2 == std::string_view::npos) break;
+      decls += tag.substr(at, q2 + 1 - at);
+    }
+    frame.insert(1 + p.size() + std::string_view("graphicFrame").size(), decls);
+    if (name.empty())
+      for (size_t n = 1;; ++n) {
+        name = "Chart" + std::to_string(n);
+        if (book_.FindSheet(name) < 0) break;
+      }
+    if (std::u16string why = CheckSheetName(name); !why.empty()) return Result::Fail(why);
+    return Run(*this, u"Move Chart", [&]() -> Result {
+      State& st = *s_;
+      const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+      const std::string part = NewPartName("/xl/chartsheets/sheet", ".xml");
+      const std::string relId = AddPart(book_.WorkbookPart(), rel + "chartsheet", part,
+                                        "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml", std::string());
+      const std::string d = NewPartName("/xl/drawings/drawing", ".xml");
+      const std::string drawingId =
+          relId.empty() ? relId : AddPart(part, rel + "drawing", d, "application/vnd.openxmlformats-officedocument.drawing+xml", std::string());
+      const std::string chartId = drawingId.empty() ? drawingId : AddRelationship(d, rel + "chart", chart);
+      if (chartId.empty()) return Result::Fail(u"The chart sheet can't be added to this workbook.");
+      if (const size_t at = frame.find("=\"" + rels[0] + "\""); at != std::string::npos) frame.replace(at + 2, rels[0].size(), chartId);
+      // As Excel writes a chart sheet: the chart filling the page (its size as Excel saves one).
+      WritePart(d, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<xdr:wsDr xmlns:xdr=\""
+                   "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/"
+                   "drawingml/2006/main\"><xdr:absoluteAnchor><xdr:pos x=\"0\" y=\"0\"/><xdr:ext cx=\"8666922\" cy=\"6293304\"/>" +
+                       frame + "<xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>");
+      WritePart(part, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<chartsheet xmlns=\""
+                      "http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"" + std::string(kRelNs) +
+                          "\"><sheetPr/><sheetViews><sheetView workbookViewId=\"0\" zoomToFit=\"1\"/></sheetViews><pageMargins "
+                          "left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/><drawing r:id=\"" +
+                          drawingId + "\"/></chartsheet>");
+      // The sheet, before the chart's, and active (Excel's).
+      st.SaveBook(true, true);
+      uint32_t sheetId = 0;
+      for (size_t i = 0; i < book_.SheetCount(); ++i) sheetId = std::max(sheetId, A::SheetId(book_.GetSheet(i)));
+      auto made = std::make_unique<Sheet>(book_, name);
+      WorkbookLoader::SetSheetInfo(*made, SheetKind::Chartsheet, SheetState::Visible, sheetId + 1, {}, {});
+      WorkbookLoader::MarkLoaded(*made, true);
+      A::Part(*made) = part;
+      A::RelId(*made) = relId;
+      Sheet* added = made.get();
+      auto& list = A::Sheets(book_);
+      std::vector<int> remap(list.size());
+      for (size_t i = 0; i < list.size(); ++i) remap[i] = static_cast<int>(i) + (static_cast<int>(i) >= sheet ? 1 : 0);
+      list.insert(list.begin() + sheet, std::move(made));
+      st.RemapNameSheets(remap);
+      A::Active(book_) = static_cast<uint32_t>(sheet);
+      st.Save(*added);
+      st.Change(added, kSheets, Range{});
+      // Gone from its sheet as Delete takes it; the chart part stays (the chart sheet uses it).
+      return DeleteObjects(sheet + 1, {id});
+    });
+  }());
+}
+
 Result Editor::DeleteObjects(int sheet, const std::vector<uint32_t>& ids) {
   Guard guard(*this);
   if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
