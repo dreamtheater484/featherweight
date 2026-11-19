@@ -328,15 +328,31 @@ struct Step {
   // Once the step is done (Settle), the content types and relationships it changed, entry by entry
   // (before, after), so that undo and redo leave alone what changed since: a save adds content
   // types and relationships of its own (shared strings, links, sheets).
+  // `beforeAt`/`afterAt`: the entry's place in its list, so that one put back goes where it was
+  // (the part's bytes as they were).
   struct TypeDiff {
     bool isDefault = false;
     std::string key;  // the part name, or a default's extension
     std::optional<std::string> before, after;
+    size_t beforeAt = 0, afterAt = 0;
   };
   struct RelDiff {
     std::string source, id;
     std::optional<pkg::Relationship> before, after;
+    size_t beforeAt = 0, afterAt = 0;
   };
+  // An entry back the other way in its list, in its place.
+  template <class List, class Same, class Make>
+  static void Put(List& list, Same same, bool now, Make make, size_t at) {
+    auto it = std::find_if(list.begin(), list.end(), same);
+    if (!now) {
+      if (it != list.end()) list.erase(it);
+    } else if (it != list.end()) {
+      *it = make();
+    } else {
+      list.insert(list.begin() + static_cast<std::ptrdiff_t>(std::min(at, list.size())), make());
+    }
+  }
   std::vector<TypeDiff> typeDiffs;
   std::vector<RelDiff> relDiffs;
   uint64_t serial = 0;
@@ -352,9 +368,9 @@ struct Step {
       for (bool isDefault : {false, true}) {
         const auto& was = isDefault ? types->defaults : types->overrides;
         const auto& is = isDefault ? now.defaults : now.overrides;
-        auto find = [&](const auto& list, const std::string& key) -> std::optional<std::string> {
-          for (const auto& [k, v] : list)
-            if (NameEqualsNoCase(k, key)) return v;
+        auto find = [&](const auto& list, const std::string& key, size_t& at) -> std::optional<std::string> {
+          for (at = 0; at < list.size(); ++at)
+            if (NameEqualsNoCase(list[at].first, key)) return list[at].second;
           return std::nullopt;
         };
         std::vector<std::string> keys;
@@ -363,7 +379,9 @@ struct Step {
         for (const std::string& k : keys) {
           if (std::any_of(typeDiffs.begin(), typeDiffs.end(), [&](const TypeDiff& d) { return d.isDefault == isDefault && NameEqualsNoCase(d.key, k); }))
             continue;
-          TypeDiff d{isDefault, k, find(was, k), find(is, k)};
+          TypeDiff d{isDefault, k, std::nullopt, std::nullopt};
+          d.before = find(was, k, d.beforeAt);
+          d.after = find(is, k, d.afterAt);
           if (d.before != d.after) typeDiffs.push_back(std::move(d));
         }
       }
@@ -382,8 +400,16 @@ struct Step {
       for (const std::string& id : ids) {
         if (std::any_of(relDiffs.begin(), relDiffs.end(), [&](const RelDiff& d) { return d.source == source && d.id == id; })) continue;
         RelDiff d{source, id, std::nullopt, std::nullopt};
-        if (const pkg::Relationship* r = set ? set->Find(id) : nullptr) d.before = *r;
-        if (const pkg::Relationship* r = now ? now->Find(id) : nullptr) d.after = *r;
+        auto place = [&](const pkg::RelationshipSet* s, std::optional<pkg::Relationship>& out, size_t& at) {
+          if (!s) return;
+          for (at = 0; at < s->items.size(); ++at)
+            if (s->items[at].id == id) {
+              out = s->items[at];
+              return;
+            }
+        };
+        place(set ? &*set : nullptr, d.before, d.beforeAt);
+        place(now, d.after, d.afterAt);
         if (d.before.has_value() != d.after.has_value() || (d.before && !same(*d.before, *d.after))) relDiffs.push_back(std::move(d));
       }
     }
@@ -406,10 +432,10 @@ struct Step {
       else set.source = source;
       for (RelDiff& d : relDiffs) {
         if (d.source != source) continue;
-        auto& items = set.items;
-        items.erase(std::remove_if(items.begin(), items.end(), [&](const pkg::Relationship& r) { return r.id == d.id; }), items.end());
-        if (d.before) items.push_back(*d.before);
+        Put(set.items, [&](const pkg::Relationship& r) { return r.id == d.id; }, d.before.has_value(),
+            [&] { return *d.before; }, d.beforeAt);
         std::swap(d.before, d.after);
+        std::swap(d.beforeAt, d.afterAt);
       }
       const std::string relsPart = set.relsPart;
       const bool empty = set.items.empty();
@@ -420,9 +446,11 @@ struct Step {
       pkg::ContentTypes t = package->Types();
       for (TypeDiff& d : typeDiffs) {
         auto& list = d.isDefault ? t.defaults : t.overrides;
-        list.erase(std::remove_if(list.begin(), list.end(), [&](const auto& x) { return NameEqualsNoCase(x.first, d.key); }), list.end());
-        if (d.before) list.emplace_back(d.key, *d.before);
+        using Entry = typename std::remove_reference_t<decltype(list)>::value_type;
+        Put(list, [&](const Entry& x) { return NameEqualsNoCase(x.first, d.key); }, d.before.has_value(),
+            [&] { return Entry(d.key, *d.before); }, d.beforeAt);
         std::swap(d.before, d.after);
+        std::swap(d.beforeAt, d.afterAt);
       }
       package->SetContentTypes(std::move(t));
     }
