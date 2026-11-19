@@ -27,6 +27,7 @@ struct Options {
   bool values = false;              // csv: every field must show its text unchanged
   bool resave = false;              // csv: saved untouched, the same bytes
   double minCells = -1;             // compare --cells: fail below this share of cells showing Excel's text (%)
+  std::string folders;              // compare --cells: only the manifest's sources in these top folders ("xls,ods")
   double minLines = -1;             // compare: fail below this share of matching line breaks (%)
   bool selfTest = false;            // compare: Word's lines against themselves and known changes
   bool all = false;                 // compare (one document): list every difference

@@ -45,12 +45,15 @@ static class Program {
           string[] cols = line.Split('\t');
           if (cols.Length == 2) inputs.AddRange(cols);
         }
+      } else if (args[i] == "--files" && i + 1 < args.Length) {
+        // One file per line: more files than a command line holds.
+        foreach (string line in File.ReadAllLines(args[++i])) if (line.Trim().Length > 0) inputs.Add(line.Trim());
       } else inputs.Add(args[i]);
     }
     if (inputs.Count == 0 || (compare && inputs.Count % 2 != 0)) {
       Console.Error.WriteLine("Usage: fwvalidate --saved <folder> <original file or folder>...\n" +
                               "       fwvalidate --compare [--json FILE] (<original> <saved>... | --pairs FILE)\n" +
-                              "       fwvalidate [--json FILE] <file>...");
+                              "       fwvalidate [--json FILE] (<file>... | --files LIST)");
       return 2;
     }
     if (saved != null) return SavedFolder(saved, inputs);

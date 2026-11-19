@@ -68,10 +68,12 @@ constexpr const char* kUsage =
     "      --excel <reference folder>: compares instead with the values this PC's Excel gave each\n"
     "      formula after opening and after a full recalculation (the cells files under it), in\n"
     "      the region it recorded: what the app recalculates on opening, and everything.\n"
-    "  fwtool compare --cells [--json FILE] [--min-cells C] <reference folder>\n"
+    "  fwtool compare --cells [--json FILE] [--min-cells C] [--folders xls,ods] <reference folder>\n"
     "      Workbooks (S1): each visible cell's text as Featherweight formats it against Excel's\n"
     "      (the cells files beside the reference PDFs), in the locale Excel recorded. Differences\n"
     "      that only the column width decides (\"####\", General shortened) are counted apart.\n"
+    "      --folders: only the workbooks in those top folders of the manifest (S4: Excel's .xls\n"
+    "      and .ods copies of the corpus are xls/ and ods/).\n"
     "  fwtool compare [--dumps DIR] [--json FILE] [--report FILE] [--min-pages P] [--min-lines L]\n"
     "                 <reference folder>...\n"
     "      Layout fidelity (plan §10): for each Word document in the reference manifest, does\n"
@@ -322,6 +324,7 @@ int wmain(int argc, wchar_t** argv) {
     else if (arg == L"--values") options.values = true;
     else if (arg == L"--resave") options.resave = true;
     else if (arg == L"--min-cells" && i + 1 < argc) options.minCells = _wtof(argv[++i]);
+    else if (arg == L"--folders" && i + 1 < argc) options.folders = fw::WideToUtf8(argv[++i]);
     else if (arg == L"--all") options.all = true;
     else if (arg == L"--runs" && i + 1 < argc) options.runs = _wtoi(argv[++i]);
     else if (arg == L"--budgets") options.budgets = true;
