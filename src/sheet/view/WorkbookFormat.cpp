@@ -1385,6 +1385,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   merge.width = 84;
   merge.priority = 3;
   merge.text = merge.menuLabel = L"Merge";
+  merge.fitText = true;
   merge.tooltip = L"Merge and center, merge across, merge or unmerge cells";
   merge.choices = {L"Merge and center", L"Merge across", L"Merge cells", L"Unmerge cells"};
   merge.onChange = [this](const ToolValue& v) {
@@ -1399,6 +1400,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   styles.priority = 2;
   styles.maxRows = 20;
   styles.text = L"Styles";
+  styles.fitText = true;
   styles.tooltip = L"Cell styles";
   for (const BuiltinStyle& s : Gallery()) styles.choices.push_back(s.name);
   styles.onChange = [this](const ToolValue& v) { ApplyCellStyle(v.index); };
@@ -1411,6 +1413,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   data.width = 72;
   data.priority = 2;
   data.text = data.menuLabel = L"Data";
+  data.fitText = true;
   data.tooltip = L"Sort, filter and remove duplicates";
   data.choices = {L"Sort A to Z",        L"Sort Z to A",          L"Custom sort…",
                   L"Filter (Ctrl+Shift+L)", L"Remove duplicates…", L"Data validation…",
@@ -1432,6 +1435,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   rules.width = 104;
   rules.priority = 3;
   rules.text = L"Conditional";
+  rules.fitText = true;
   rules.tooltip = L"Conditional formatting";
   rules.choices = {L"New rule…", L"Manage rules…", L"Clear rules from selected cells", L"Clear rules from entire sheet"};
   rules.onChange = [this](const ToolValue& v) {

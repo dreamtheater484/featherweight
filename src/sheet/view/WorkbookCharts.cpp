@@ -392,6 +392,7 @@ void WorkbookView::AddChartTools(ToolbarModel& m) {
   chart.width = 64;
   chart.priority = 3;
   chart.text = chart.menuLabel = L"Chart";
+  chart.fitText = true;
   chart.tooltip = L"Insert a chart of the selected cells";
   chart.choices = {L"Column (Alt+F1)", L"Bar", L"Line", L"Pie", L"Doughnut", L"Area", L"Scatter", L"Combo"};
   chart.onChange = [this](const ToolValue& v) {
