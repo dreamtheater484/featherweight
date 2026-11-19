@@ -502,8 +502,11 @@ class Editor {
                         const std::function<bool(std::string_view)>& touches, std::string_view from = {},
                         std::string_view to = {});
   // Convert to Range (s3-data): table `t`'s style written into its cells' own formats, as Excel
-  // keeps the look; inside RemoveTable's step.
-  Result KeepTableLook(Sheet& s, const Table& t);
+  // keeps the look; inside RemoveTable's step. `baked` gets each changed cell's new format; when
+  // `given`, those are put as they are (the journal's, so a replay doesn't compute them again).
+  using BakedStyles = std::vector<std::pair<CellAddr, uint32_t>>;
+  Result KeepTableLook(Sheet& s, const Table& t, BakedStyles& baked, bool given);
+  Result RemoveTableAs(int sheet, size_t index, const BakedStyles* given);
   // Header cells of tables among `cells`, after they were written: each holds its text as Excel
   // shows it (a number as formatted; cleared: "ColumnN"), unique in its table (Excel adds 2, 3...),
   // and its column takes that name, structured references everywhere following.
