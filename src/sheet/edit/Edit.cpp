@@ -5153,7 +5153,7 @@ Result Editor::SetPageSetup(int sheet, PageSetup page, const HeaderFooter& hf, b
     detail::PartText& t = A::Text(s);
     const std::string p = xlsx::SheetPrefix(t);
     const std::pair<const char*, std::string> parts[] = {
-        {"pageMargins", pagexml::Margins(m, p)},
+        {"pageMargins", pagexml::Margins(m, xlsx::SheetElement(t, "pageMargins"), p)},
         {"pageSetup", pagexml::Setup(page, xlsx::SheetElement(t, "pageSetup"), p)},
         {"headerFooter", pagexml::HeadersFooters(hf, xlsx::SheetElement(t, "headerFooter"), p)},
         {"printOptions", chart ? std::string() : pagexml::PrintOptions(page, xlsx::SheetElement(t, "printOptions"), p)},

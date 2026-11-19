@@ -250,12 +250,16 @@ TEST(sheet_page_setup_corpus_findings) {
   auto again = OpenZip(zip);
   CHECK(again && again->SheetCount() == 2);
   if (again) CHECK(again->GetSheet(1).Name() == "Plain" && again->GetSheet(1).Page().orientation != Orientation::Landscape);
-  // Paper only: the margins as read.
+  // Paper only: the margins as read, as the file wrote them; the same setup again: no step.
   const PageMargins before = book->GetSheet(0).Page().margins;
   PageSetup a4 = book->GetSheet(0).Page();
   a4.paperSize = 9;
   CHECK(ed.SetPageSetup(0, a4, book->GetSheet(0).HeadersFooters(), false));
-  auto third = OpenZip(SavePage(*book, ed));
+  const std::vector<uint8_t> saved = SavePage(*book, ed);
+  const size_t steps = ed.UndoNames().size();
+  CHECK(ed.SetPageSetup(0, a4, book->GetSheet(0).HeadersFooters(), false) && ed.UndoNames().size() == steps && !ed.Modified());
+  CHECK(Has(PartText(saved, "/xl/worksheets/sheet1.xml"), "left=\"0.74803149606299213\" right=\"0.75000000000000011\""));
+  auto third = OpenZip(saved);
   if (!third) return;
   const PageMargins& m = third->GetSheet(0).Page().margins;
   CHECK(m.left == before.left && m.right == before.right && m.top == 0.75 && third->GetSheet(0).Page().paperSize == 9);
