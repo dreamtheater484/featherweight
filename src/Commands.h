@@ -387,6 +387,16 @@ enum Cmd : int {
   CmdTableDesign,
   CmdConvertToRange,
   CmdTableTotalRow,
+  // Pictures and shapes (S3, s3-data): 2880-2899.
+  CmdObjectsBox = 2880,   // the toolbar's Insert choices
+  CmdObjectPicture,       // Insert > Pictures: files
+  CmdObjectRectangle,     // Insert > Shapes, at the active cell
+  CmdObjectRoundRect,
+  CmdObjectOval,
+  CmdObjectLine,
+  CmdObjectArrow,
+  CmdObjectTextBox,
+  CmdFormatObject,        // the Format panel of the selected picture or shape
   // Protection, links, notes and comments (S3, s3-review): 2900-2939.
   CmdProtectSheet = 2900,  // Protect Sheet, or Unprotect Sheet on a protected one
   CmdProtectWorkbook,      // Protect Workbook (its structure), or Unprotect Workbook

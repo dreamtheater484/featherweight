@@ -245,6 +245,7 @@ CommandState WorkbookView::QueryCommand(int cmd) {
   if (FormatCommandState(cmd, s)) return s;
   if (DataCommandState(cmd, s)) return s;
   if (RulesCommandState(cmd, s)) return s;
+  if (ShapesCommandState(cmd, s)) return s;  // s3-data: pictures and shapes
   if (NamesCommandState(cmd, s)) return s;
   if (ChartsCommandState(cmd, s)) return s;  // s3-charts
   const bool ready = Ready();
@@ -317,6 +318,7 @@ std::vector<int> WorkbookView::Commands() {
   ids.push_back(CmdPageSetup);  // s3-print
   for (int cmd = CmdSetPrintArea; cmd <= CmdPrintSelection; ++cmd) ids.push_back(cmd);
   for (int cmd = CmdInsertChart; cmd <= CmdChartScatter; ++cmd) ids.push_back(cmd);  // s3-charts
+  for (int cmd = CmdObjectPicture; cmd <= CmdFormatObject; ++cmd) ids.push_back(cmd);  // s3-data
   return ids;
 }
 
@@ -341,6 +343,7 @@ bool WorkbookView::Execute(int cmd) {
   if (FormatCommand(cmd)) return true;
   if (DataCommand(cmd)) return true;
   if (RulesCommand(cmd)) return true;
+  if (ShapesCommand(cmd)) return true;  // s3-data: pictures and shapes
   if (NamesCommand(cmd)) return true;
   if (ChartsCommand(cmd)) return true;  // s3-charts
   switch (cmd) {

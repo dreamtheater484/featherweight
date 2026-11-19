@@ -124,6 +124,7 @@ PrivateClipboard& Private() {
 }  // namespace
 
 void UsePrivateClipboard() { Private().on = true; }
+bool UsingPrivateClipboard() { return Private().on; }
 
 unsigned long ClipboardSequence() { return Private().on ? Private().seq : GetClipboardSequenceNumber(); }
 

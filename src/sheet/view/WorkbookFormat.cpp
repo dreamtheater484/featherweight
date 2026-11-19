@@ -1437,6 +1437,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   };
   m.left.push_back(rules);
   AddChartTools(m);  // s3-charts: Insert Chart
+  AddShapeTools(m);  // pictures and shapes (WorkbookShapes.cpp)
   // Number formats, with the decimals and the panel's Number page.
   ToolItem number;
   number.kind = ToolKind::Dropdown;
@@ -1462,6 +1463,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
 
 bool WorkbookView::ScriptOp(const std::wstring& op, const std::wstring& arg) {
   if (op == L"rule" || op == L"valid" || op == L"table") return DataRulesScriptOp(op, arg);  // WorkbookData.cpp
+  if (op == L"object") return ShapesScriptOp(arg);  // WorkbookShapes.cpp
   if (op == L"name" || op == L"names") return NamesScriptOp(op, arg);  // s3-calc's (WorkbookNames.cpp)
   if (op == L"pagesetup") return PageScriptOp(arg);  // s3-print's (WorkbookPageSetup.cpp)
   if (op != L"format") return GridScriptOp(op, arg);  // s2-grid's (fill:, WorkbookFill.cpp)
