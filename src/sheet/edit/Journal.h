@@ -98,6 +98,7 @@ enum class JournalOp : uint8_t {
   ClearFormats = 100,  // its own record: on a protected sheet it's allowed where MapStyles isn't
   // s4-pivot from 110.
   RefreshPivots = 110,
+  InsertPivot = 111,
 };
 
 // One record being written: its kind, then its fields in the order Replay reads them.

@@ -732,6 +732,22 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok() && which <= 2) r = RefreshPivots(static_cast<PivotRefresh>(which), sheet, cell);
         break;
       }
+      case JournalOp::InsertPivot: {
+        NewPivotTable p;
+        p.sourceSheet = f.Int();
+        p.source = f.R();
+        p.table = f.S();
+        p.sheet = f.Int();
+        p.at = f.A();
+        for (auto* list : {&p.rows, &p.cols, &p.filters}) {
+          list->resize(f.Count());
+          for (uint32_t& c : *list) c = f.U32();
+        }
+        p.values.resize(f.Count());
+        for (NewPivotTable::Value& v : p.values) v.column = f.U32(), v.func = static_cast<uint8_t>(f.U32());
+        if (f.Ok()) r = InsertPivot(p);
+        break;
+      }
       case JournalOp::FreezePanes: {
         const int sheet = f.Int();
         const uint32_t rows = f.U32(), cols = f.U32();

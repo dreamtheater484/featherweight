@@ -148,6 +148,10 @@ bool RefreshCache(Workbook& book, Cache& cache, const std::vector<bool>& axisFie
         break;
       }
   }
+  // A field whose name no header has: its column by position, when that one isn't another's (two
+  // columns with one name, which Excel's fields call "Sales" and "Sales2").
+  for (size_t f = 0; f < cache.fields.size(); ++f)
+    if (column[f] == SIZE_MAX && f < n && std::find(column.begin(), column.end(), f) == column.end()) column[f] = f;
   for (size_t f = 0; f < cache.fields.size(); ++f)
     if (column[f] == SIZE_MAX || cache.fields[f].kept) {
       why = u"The PivotTable's source no longer has the column “" + std::u16string(cache.fields[f].name.begin(), cache.fields[f].name.end()) +

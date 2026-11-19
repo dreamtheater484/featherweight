@@ -186,7 +186,7 @@ TEST(Pivot_CorpusRefresh) {
 
 namespace {
 
-std::vector<uint8_t> SavePivotBook(Workbook& book, fw::sheet::edit::Editor& ed) {
+std::vector<uint8_t> SavePivotBook(Workbook& book, fw::sheet::edit::Editor& ed, const char* keepName = "pivots-featherweight") {
   ed.BeginSave();
   xlsx::SavePlan plan;
   fw::pkg::Status st = xlsx::PrepareSave(book, ed, plan);
@@ -199,7 +199,7 @@ std::vector<uint8_t> SavePivotBook(Workbook& book, fw::sheet::edit::Editor& ed) 
   char* keep = nullptr;
   size_t len = 0;
   if (_dupenv_s(&keep, &len, "FW_KEEP_PIVOTS") == 0 && keep) {  // for Excel's open check
-    std::ofstream out(std::string(keep) + "/pivots-featherweight.xlsx", std::ios::binary);
+    std::ofstream out(std::string(keep) + "/" + keepName + ".xlsx", std::ios::binary);
     out.write(reinterpret_cast<const char*>(sink.bytes.data()), static_cast<std::streamsize>(sink.bytes.size()));
   }
   std::free(keep);
@@ -251,4 +251,44 @@ TEST(Pivot_EditorRefreshUndoSave) {
   CHECK_EQ(sameCells(*again, *refreshed), 0);
   auto copy = sheet_test::OpenZip(bytes);
   CHECK_EQ(CheckBook(*again, *copy, false), 0);
+}
+
+// Insert > PivotTable on the fixtures' Data sheet: rows, a column field, a filter and three values;
+// the table laid out as Excel lays it out, one undo step, saved parts that read and lay out again.
+TEST(Pivot_InsertPivot) {
+  auto book = sheet_test::OpenZip(sheet_test::TestFile("office/sheet/pivots/pivots-fresh.xlsx"));
+  if (!book) return;
+  fw::sheet::edit::Editor ed(*book);
+  const int data = book->FindSheet("Data");
+  CHECK(data >= 0);
+  fw::sheet::edit::Editor::NewPivotTable p;
+  p.sourceSheet = data;
+  p.source = {0, 0, 20, 5};  // A1:F21
+  p.sheet = data;
+  p.at = {1, 8};  // I2: the filter there, the table at I4
+  p.rows = {0};
+  p.cols = {2};
+  p.filters = {3};
+  p.values = {{4, 0}, {5, 1}, {5, 2}};
+  auto r = ed.InsertPivot(p);
+  if (!r.ok) std::printf("  %s\n", std::string(r.message.begin(), r.message.end()).c_str());
+  CHECK(r.ok);
+  if (!r.ok) return;
+  CHECK(ed.UndoName() == u"PivotTable");
+  const Sheet& s = book->GetSheet(static_cast<size_t>(data));
+  CHECK(sheet_test::Text(s, 1, 8) == "Year");
+  CHECK(sheet_test::Text(s, 1, 9) == "(All)");
+  // Three values: the caption row, the quarters, the values' names with "Row Labels", then the regions.
+  CHECK(sheet_test::Text(s, 3, 9) == "Column Labels");
+  CHECK(sheet_test::Text(s, 4, 9) == "Q1");
+  CHECK(sheet_test::Text(s, 5, 8) == "Row Labels");
+  CHECK(sheet_test::Text(s, 5, 9) == "Sum of Sales");
+  CHECK(sheet_test::Text(s, 6, 8) == "East");
+  std::vector<uint8_t> bytes = SavePivotBook(*book, ed, "pivots-inserted");
+  auto again = sheet_test::OpenZip(bytes);
+  auto copy = sheet_test::OpenZip(bytes);
+  CHECK(again && copy);
+  if (again && copy) CHECK_EQ(CheckBook(*again, *copy, false), 0);
+  CHECK(ed.Undo().ok);
+  CHECK(sheet_test::Text(book->GetSheet(static_cast<size_t>(data)), 1, 8).empty());
 }

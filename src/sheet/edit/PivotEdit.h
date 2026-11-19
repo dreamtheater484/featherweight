@@ -7,5 +7,6 @@
 namespace fw::sheet::edit {
 
 Result RefreshPivotsIn(Editor& ed, Workbook& book, Editor::PivotRefresh which, int sheet, CellAddr cell);
+Result InsertPivotIn(Editor& ed, Workbook& book, const Editor::NewPivotTable& p);
 
 }  // namespace fw::sheet::edit

@@ -6541,4 +6541,22 @@ Result Editor::RefreshPivots(PivotRefresh which, int sheet, CellAddr cell) {
   }());
 }
 
+Result Editor::InsertPivot(const NewPivotTable& p) {
+  Guard guard(*this);
+  if (Result no = guard.Check(p.sheet, ProtectAct::Never); !no) return no;
+  Rec rec(*this, JournalOp::InsertPivot, [&](JournalRecord& w) {
+    w.I(p.sourceSheet).R(p.source).S(p.table).I(p.sheet).A(p.at);
+    for (const auto* list : {&p.rows, &p.cols, &p.filters}) {
+      w.U(list->size());
+      for (uint32_t c : *list) w.U(c);
+    }
+    w.U(p.values.size());
+    for (const NewPivotTable::Value& v : p.values) w.U(v.column).U(v.func);
+  });
+  return rec.Done([&]() -> Result {
+    if (Saving()) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
+    return InsertPivotIn(*this, book_, p);
+  }());
+}
+
 }  // namespace fw::sheet::edit
