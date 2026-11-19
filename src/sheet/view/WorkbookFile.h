@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 
 #include "FileSession.h"
@@ -41,6 +42,11 @@ class WorkbookFile : public FileSession {
   // caller makes sure `path` isn't.
   static bool SaveCsvCopy(const fw::sheet::Workbook& book, const std::wstring& path,
                           const fw::sheet::csv::Options& options, std::wstring& error);
+  // A CSV file's autosave is a workbook package when its tab held more than CSV keeps (Autosave):
+  // it is recovered as an unsaved .xlsx named after the file, Save As starting beside it, so the
+  // CSV file is never replaced by a workbook. Then `name` (the tab's title, "data.csv") and
+  // `suggested` (the original's path) name the .xlsx, and it's true; else nothing changes.
+  static bool RecoveredAsWorkbook(std::span<const uint8_t> bytes, std::wstring& name, std::wstring& suggested);
   // Where Save As starts: the file, a recovered workbook's original, or "Book1.xlsx" in the
   // Documents folder.
   std::wstring SuggestedPath(const fw::sheet::Workbook& book) const;
@@ -68,8 +74,9 @@ class WorkbookFile : public FileSession {
   // The window's autosave timer: unsaved changes go to the recovery folder. With a journal
   // attached, the edits' records not yet there are appended to the file as opened (the package
   // keeps those bytes through saves); otherwise (CSV, a protected workbook) the workbook is written
-  // as a save would write it (a CSV file's values as CSV), on the UI thread. The workbook stays as
-  // it is. Nothing while a save runs or when the recovery folder is up to date.
+  // as a save would write it (a CSV file's values as CSV; one holding more than CSV keeps as an
+  // .xlsx: RecoveredAsWorkbook), on the UI thread. The workbook stays as it is. Nothing while a
+  // save runs or when the recovery folder is up to date.
   void Autosave(fw::sheet::Workbook& book, fw::sheet::edit::Editor& editor);
 
  private:
