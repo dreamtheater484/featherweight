@@ -94,6 +94,8 @@ enum class JournalOp : uint8_t {
   SetPageSetup = 95,
   SetPageBreaks = 96,
   SetViewMode = 97,
+  // s3-calc from 100.
+  ClearFormats = 100,  // its own record: on a protected sheet it's allowed where MapStyles isn't
 };
 
 // One record being written: its kind, then its fields in the order Replay reads them.
