@@ -321,3 +321,129 @@ std::string WriteTable(std::string_view oldXml, const Table& t) {
 }
 
 }  // namespace fw::sheet::pivot
+
+namespace fw::sheet::pivot {
+
+namespace {
+
+constexpr std::string_view kMainNs = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+constexpr std::string_view kRelNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+std::string Attr(std::string_view name, std::string_view value) {
+  std::string out = " ";
+  out += name;
+  out += "=\"";
+  Escape(out, value);
+  out += '"';
+  return out;
+}
+
+}  // namespace
+
+std::string NewCacheXml(const Cache& cache) {
+  std::string x = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<pivotCacheDefinition";
+  x += Attr("xmlns", kMainNs) + Attr("xmlns:r", kRelNs) + Attr("r:id", "rId1");
+  x += " refreshedDate=\"0\" createdVersion=\"6\" refreshedVersion=\"6\" minRefreshableVersion=\"3\" recordCount=\"0\">";
+  x += "<cacheSource type=\"worksheet\"><worksheetSource";
+  if (!cache.name.empty()) x += Attr("name", cache.name);
+  else x += Attr("ref", cache.ref) + Attr("sheet", cache.sheet);
+  x += "/></cacheSource><cacheFields count=\"" + std::to_string(cache.fields.size()) + "\">";
+  for (const CacheField& f : cache.fields)
+    x += "<cacheField" + Attr("name", f.name) + " numFmtId=\"" + std::to_string(f.numFmtId) + "\"><sharedItems/></cacheField>";
+  x += "</cacheFields></pivotCacheDefinition>";
+  return x;
+}
+
+Table NewTable(const Cache& cache, const NewPivot& spec, std::string name, uint32_t cacheId, CellAddr at) {
+  Table t;
+  t.name = std::move(name);
+  t.cacheId = cacheId;
+  t.compact = true, t.compactData = true, t.outline = true, t.outlineData = true;
+  t.style = "PivotStyleLight16";
+  t.fields.resize(cache.fields.size());
+  for (Field& f : t.fields) f.showAll = false;
+  for (uint32_t c : spec.rows)
+    if (c < t.fields.size()) t.fields[c].axis = Axis::Row, t.rowFields.push_back(static_cast<int32_t>(c));
+  for (uint32_t c : spec.cols)
+    if (c < t.fields.size()) t.fields[c].axis = Axis::Col, t.colFields.push_back(static_cast<int32_t>(c));
+  for (uint32_t c : spec.pages)
+    if (c < t.fields.size()) t.fields[c].axis = Axis::Page, t.pageFields.push_back(PageField{c, -1});
+  std::vector<std::string> names;
+  for (const NewPivot::Value& v : spec.values) {
+    if (v.field >= t.fields.size()) continue;
+    t.fields[v.field].dataField = true;
+    DataField d;
+    d.field = v.field;
+    d.func = v.func;
+    const std::string base = std::string(FuncName(v.func)) + " of " + cache.fields[v.field].name;
+    d.name = base;
+    // Unique, and not a field's own name: Excel adds 2, 3...
+    auto taken = [&](const std::string& s) {
+      for (const std::string& n : names)
+        if (TextEqual(n, s)) return true;
+      for (const CacheField& f : cache.fields)
+        if (TextEqual(f.name, s)) return true;
+      return false;
+    };
+    for (int n = 2; taken(d.name); ++n) d.name = base + std::to_string(n);
+    names.push_back(d.name);
+    t.dataFields.push_back(std::move(d));
+  }
+  if (t.dataFields.size() > 1) t.colFields.push_back(-2);
+  const uint32_t pages = static_cast<uint32_t>(t.pageFields.size());
+  const uint32_t top = at.row + (pages ? pages + 1 : 0);
+  t.location = {top, at.col, top, at.col};
+  return t;
+}
+
+std::string NewTableXml(const Table& t) {
+  std::string x = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<pivotTableDefinition";
+  x += Attr("xmlns", kMainNs) + Attr("name", t.name) + " cacheId=\"" + std::to_string(t.cacheId) + "\"";
+  x += " applyNumberFormats=\"0\" applyBorderFormats=\"0\" applyFontFormats=\"0\" applyPatternFormats=\"0\""
+       " applyAlignmentFormats=\"0\" applyWidthHeightFormats=\"1\" dataCaption=\"Values\" updatedVersion=\"6\""
+       " minRefreshableVersion=\"3\" useAutoFormatting=\"1\" itemPrintTitles=\"1\" createdVersion=\"6\" indent=\"0\""
+       " outline=\"1\" outlineData=\"1\" multipleFieldFilters=\"0\">";
+  x += "<location" + Attr("ref", RangeName(t.location)) + " firstHeaderRow=\"1\" firstDataRow=\"1\" firstDataCol=\"1\"/>";
+  x += "<pivotFields count=\"" + std::to_string(t.fields.size()) + "\">";
+  for (const Field& f : t.fields) {
+    x += "<pivotField";
+    if (f.axis == Axis::Row) x += " axis=\"axisRow\"";
+    else if (f.axis == Axis::Col) x += " axis=\"axisCol\"";
+    else if (f.axis == Axis::Page) x += " axis=\"axisPage\"";
+    if (f.dataField) x += " dataField=\"1\"";
+    x += " showAll=\"0\"/>";
+  }
+  x += "</pivotFields>";
+  auto fields = [&](const char* tag, const std::vector<int32_t>& list) {
+    if (list.empty()) return;
+    x += std::string("<") + tag + " count=\"" + std::to_string(list.size()) + "\">";
+    for (int32_t f : list) x += "<field x=\"" + std::to_string(f) + "\"/>";
+    x += std::string("</") + tag + ">";
+  };
+  fields("rowFields", t.rowFields);
+  x += "<rowItems count=\"1\"><i/></rowItems>";
+  fields("colFields", t.colFields);
+  x += "<colItems count=\"1\"><i/></colItems>";
+  if (!t.pageFields.empty()) {
+    x += "<pageFields count=\"" + std::to_string(t.pageFields.size()) + "\">";
+    for (const PageField& p : t.pageFields) x += "<pageField fld=\"" + std::to_string(p.field) + "\" hier=\"-1\"/>";
+    x += "</pageFields>";
+  }
+  if (!t.dataFields.empty()) {
+    static constexpr const char* kSub[] = {"average", "count", "countNums", "max", "min", "product",
+                                           "stdDev", "stdDevp", "sum", "var", "varp"};
+    x += "<dataFields count=\"" + std::to_string(t.dataFields.size()) + "\">";
+    for (const DataField& d : t.dataFields) {
+      x += "<dataField" + Attr("name", d.name) + " fld=\"" + std::to_string(d.field) + "\"";
+      if (d.func != Func::Sum) x += std::string(" subtotal=\"") + kSub[static_cast<size_t>(d.func)] + "\"";
+      x += " baseField=\"0\" baseItem=\"0\"/>";
+    }
+    x += "</dataFields>";
+  }
+  x += "<pivotTableStyleInfo" + Attr("name", t.style) +
+       " showRowHeaders=\"1\" showColHeaders=\"1\" showRowStripes=\"0\" showColStripes=\"0\" showLastColumn=\"1\"/>";
+  x += "</pivotTableDefinition>";
+  return x;
+}
+
+}  // namespace fw::sheet::pivot
