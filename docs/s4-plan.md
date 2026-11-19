@@ -69,3 +69,4 @@ As S3 (`docs/s3-plan.md`, "Rules"): through the edit API only; never damage a fi
   - W8 (Filter by mouse, one click more than Excel) is accepted as it is. W9 and W10 are by design.
 - **2026-11-19, the spreadsheet editor ships in 3.0:** S4 turns its "shipped" flag on, so File → New offers workbooks (W13).
 - **2026-11-19:** the 5-hour usage stop is 98 % (Roy).
+- **2026-11-19, .ods page setup:** the .ods reader also brings each sheet's page setup across (paper, orientation, margins, scaling, print ranges and titles, headers and footers, breaks), because the printed-pages target needs it. It may go about 20 KB over s4-ods's 200 KB budget, with the reason in the ledger.
