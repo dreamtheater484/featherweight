@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "sheet/edit/Drawing.h"
 #include "sheet/edit/Protection.h"
 #include "sheet/model/Workbook.h"
 
@@ -267,6 +268,18 @@ class Editor {
   // Appends an anchor to a drawing: an xdr:twoCellAnchor, oneCellAnchor or absoluteAnchor that
   // declares the xdr: and a: prefixes (and r: when it has relationships) on itself.
   bool AddAnchor(std::string_view drawing, std::string_view anchorXml);
+  // The object with shape id `id` (its first cNvPr's): its bytes, an anchor or an
+  // mc:AlternateContent; empty when the drawing has none.
+  std::string AnchorXml(std::string_view drawing, uint32_t id) const;
+  // That object's bytes replaced by `xml` (empty removes it, leaving its parts). Inside a group.
+  bool ReplaceAnchor(std::string_view drawing, uint32_t id, std::string_view xml);
+
+  // ---- Objects in a sheet's drawing (charts, pictures, shapes), by shape id (s3-charts)
+  // Moved or resized: the anchor's cells and offsets, the shape's own position and size.
+  Result MoveObject(int sheet, uint32_t id, const drawing::Place& place);
+  // Deleted, with the parts nothing else uses any more (a chart and its own parts, a picture
+  // used once); the drawing and the sheet's reference to it go with the last object.
+  Result DeleteObjects(int sheet, const std::vector<uint32_t>& ids);
 
   // ---- Charts (s3-charts)
   enum class ChartKind : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter };

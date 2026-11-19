@@ -17,6 +17,7 @@
 #include "pkg/XmlWriter.h"
 #include "sheet/calc/Formula.h"
 #include "sheet/calc/Typing.h"
+#include "sheet/edit/Drawing.h"
 #include "sheet/edit/Journal.h"
 #include "sheet/edit/Notes.h"
 #include "sheet/edit/Refs.h"
@@ -3760,16 +3761,7 @@ std::string Editor::SheetDrawing(int sheet, bool create) {
   return drawing;
 }
 
-uint32_t Editor::NextShapeId(std::string_view drawing) const {
-  const std::string xml = PartBytes(drawing);
-  uint32_t id = 1;
-  for (size_t at = xml.find("cNvPr"); at != std::string::npos; at = xml.find("cNvPr", at + 5)) {
-    const size_t q = xml.find("id=\"", at);
-    if (q != std::string::npos && q < xml.find('>', at))
-      id = std::max<uint32_t>(id, static_cast<uint32_t>(std::strtoul(xml.c_str() + q + 4, nullptr, 10)));
-  }
-  return id + 1;
-}
+uint32_t Editor::NextShapeId(std::string_view drawing) const { return drawing::NextShapeId(PartBytes(drawing)); }
 
 bool Editor::AddAnchor(std::string_view drawing, std::string_view anchorXml) {
   std::string xml = PartBytes(drawing);
@@ -3777,6 +3769,127 @@ bool Editor::AddAnchor(std::string_view drawing, std::string_view anchorXml) {
   if (xml.empty() || end == std::string::npos) return false;
   xml.insert(end, anchorXml);
   return WritePart(drawing, std::move(xml));
+}
+
+std::string Editor::AnchorXml(std::string_view drawing, uint32_t id) const {
+  const std::string xml = PartBytes(drawing);
+  const std::vector<drawing::Object> objects = drawing::Objects(xml);
+  const drawing::Object* o = drawing::Find(objects, id);
+  return o ? xml.substr(o->begin, o->end - o->begin) : std::string();
+}
+
+bool Editor::ReplaceAnchor(std::string_view drawing, uint32_t id, std::string_view anchorXml) {
+  std::string xml = PartBytes(drawing);
+  const std::vector<drawing::Object> objects = drawing::Objects(xml);
+  const drawing::Object* o = drawing::Find(objects, id);
+  if (!o) return false;
+  xml.replace(o->begin, o->end - o->begin, anchorXml);
+  return WritePart(drawing, std::move(xml));
+}
+
+Result Editor::MoveObject(int sheet, uint32_t id, const drawing::Place& p) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::MoveObject, [&](JournalRecord& w) {
+    w.I(sheet).U(id);
+    for (const drawing::Marker* m : {&p.from, &p.to}) w.U(m->col).U(m->row).I(m->colOff).I(m->rowOff);
+    w.I(p.x).I(p.y).I(p.cx).I(p.cy);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (p.from.col >= kMaxCols || p.to.col >= kMaxCols || p.from.row >= kMaxRows || p.to.row >= kMaxRows ||
+        p.to.col < p.from.col || p.to.row < p.from.row || p.cx < 0 || p.cy < 0)
+      return BadRange();
+    const std::string d = SheetDrawing(sheet, false);
+    const std::string anchor = d.empty() ? std::string() : AnchorXml(d, id);
+    if (anchor.empty()) return Result::Fail(u"The object isn't on this sheet any more.");
+    const std::string placed = drawing::Placed(anchor, p);
+    if (placed.empty()) return Result::Fail(u"This object can't be moved.");
+    return Run(*this, u"Move Object", [&]() -> Result {
+      if (!ReplaceAnchor(d, id, placed)) return Result::Fail(u"This object can't be moved.");
+      s_->Change(&book_.GetSheet(static_cast<size_t>(sheet)), kObjects, Range{p.from.row, p.from.col, p.to.row, p.to.col});
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::DeleteObjects(int sheet, const std::vector<uint32_t>& ids) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::DeleteObjects, [&](JournalRecord& w) {
+    w.I(sheet).U(ids.size());
+    for (uint32_t id : ids) w.U(id);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    const std::string d = SheetDrawing(sheet, false);
+    std::string xml = d.empty() ? std::string() : PartBytes(d);
+    const std::vector<drawing::Object> objects = drawing::Objects(xml);
+    std::vector<const drawing::Object*> gone;
+    for (uint32_t id : ids)
+      if (const drawing::Object* o = drawing::Find(objects, id); o && std::find(gone.begin(), gone.end(), o) == gone.end()) gone.push_back(o);
+    if (gone.empty()) return Result::Fail(u"The object isn't on this sheet any more.");
+    return Run(*this, u"Delete", [&]() -> Result {
+      State& st = *s_;
+      pkg::Package& package = *book_.GetPackage();
+      Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+      std::vector<std::string> rels;
+      std::sort(gone.begin(), gone.end(), [](auto* a, auto* b) { return a->begin > b->begin; });
+      for (const drawing::Object* o : gone) {
+        for (std::string& r : drawing::RelIds(std::string_view(xml).substr(o->begin, o->end - o->begin))) rels.push_back(std::move(r));
+        xml.erase(o->begin, o->end - o->begin);
+      }
+      // A part nothing refers to any more goes, and then what only it referred to.
+      auto unused = [&](const std::string& part) {
+        for (const pkg::RelationshipSet& set : package.Relationships())
+          for (const pkg::Relationship& r : set.items)
+            if (!r.external && NameEqualsNoCase(r.targetPart, part)) return false;
+        return true;
+      };
+      auto ownTargets = [&](const std::string& part) {
+        std::vector<std::string> own;
+        if (const pkg::RelationshipSet* set = package.RelationshipsOf(part))
+          for (const pkg::Relationship& r : set->items)
+            if (!r.external) own.push_back(r.targetPart);
+        return own;
+      };
+      auto drop = [&](auto&& self, const std::string& part) -> void {
+        if (!package.FindPart(part) || !unused(part)) return;
+        const std::vector<std::string> own = ownTargets(part);
+        RemovePart(part);
+        for (const std::string& o : own) self(self, o);
+      };
+      if (drawing::Objects(xml).empty()) {
+        // The last object: the drawing goes, with the sheet's <drawing r:id>.
+        st.SaveText(st.Save(s));
+        xlsx::PutSheetElement(A::Text(s), "drawing", {});
+        const std::vector<std::string> own = ownTargets(d);
+        RemovePart(d);
+        for (const std::string& o : own) drop(drop, o);
+      } else {
+        WritePart(d, xml);
+        const std::vector<std::string> left = drawing::RelIds(xml);
+        if (const pkg::RelationshipSet* set = package.RelationshipsOf(d)) {
+          pkg::RelationshipSet kept = *set;
+          std::vector<std::string> targets;
+          auto& items = kept.items;
+          items.erase(std::remove_if(items.begin(), items.end(), [&](const pkg::Relationship& r) {
+                        const bool off = std::find(rels.begin(), rels.end(), r.id) != rels.end() &&
+                                         std::find(left.begin(), left.end(), r.id) == left.end();
+                        if (off && !r.external) targets.push_back(r.targetPart);
+                        return off;
+                      }), items.end());
+          if (items.size() != set->items.size()) {
+            st.KeepRels(d);
+            package.SetRelationships(std::move(kept));
+            for (const std::string& t : targets) drop(drop, t);
+          }
+        }
+      }
+      st.Change(&s, kObjects, Range{});
+      return Result{};
+    });
+  }());
 }
 
 Result Editor::InsertChart(int sheet, const NewChart& c) {
