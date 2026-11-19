@@ -2727,35 +2727,7 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
           if (fn(xml)) st.SetPart(part, std::move(xml));
         };
         refs::CacheFn cache = [&](std::string_view f, bool visibleOnly, std::vector<refs::CachePoint>& out) {
-          size_t bang = f.rfind('!');
-          if (bang == std::string_view::npos) return false;
-          std::string sn(f.substr(0, bang));
-          if (sn.size() >= 2 && sn.front() == '\'' && sn.back() == '\'') {
-            std::string u;
-            for (size_t k = 1; k + 1 < sn.size(); ++k) {
-              u += sn[k];
-              if (sn[k] == '\'' && k + 2 < sn.size() && sn[k + 1] == '\'') ++k;
-            }
-            sn = std::move(u);
-          }
-          Range r;
-          int xi = book_.FindSheet(sn);
-          if (xi < 0 || !ParseRange(f.substr(bang + 1), r) || (r.firstRow != r.lastRow && r.firstCol != r.lastCol) ||
-              static_cast<uint64_t>(r.lastRow - r.firstRow) + (r.lastCol - r.firstCol) > 100000)
-            return false;
-          const Sheet& x = book_.GetSheet(static_cast<size_t>(xi));
-          for (uint32_t row = r.firstRow; row <= r.lastRow; ++row)
-            for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
-              if (visibleOnly && (x.Row(row).hidden || x.Column(col).hidden)) continue;
-              Value v = x.GetValue(row, col);
-              refs::CachePoint p;
-              if (v.type == ValueType::Number) p = {refs::CachePoint::Number, Number(v.number)};
-              else if (v.type == ValueType::String) p = {refs::CachePoint::Text, std::string(v.text)};
-              else if (v.type == ValueType::Bool) p = {refs::CachePoint::Text, v.boolean ? "TRUE" : "FALSE"};
-              else if (v.type == ValueType::Error) p = {refs::CachePoint::Text, "#N/A"};
-              out.push_back(std::move(p));
-            }
-          return true;
+          return charts::CachePoints(book_, f, visibleOnly, out);
         };
         for (size_t i = 0; i < book_.SheetCount(); ++i) {
           Sheet& x = book_.GetSheet(i);

@@ -6,7 +6,9 @@
 
 #include "pkg/Formula.h"
 #include "pkg/XmlWriter.h"
+#include "sheet/edit/Refs.h"
 #include "sheet/model/Sheet.h"
+#include "sheet/model/Workbook.h"
 #include "sheet/xlsx/Internal.h"
 
 namespace fw::sheet::edit::charts {
@@ -256,6 +258,51 @@ std::string ChartXml(const Sheet& s, const Plan& plan, ChartKind kind, const std
 std::string NewChartXml(const Sheet& s, const Range& data, ChartKind kind, const std::string& title) {
   const Plan plan = PlanSeries(s, data);
   return plan.series.empty() ? std::string() : ChartXml(s, plan, kind, title);
+}
+
+bool CachePoints(const Workbook& book, std::string_view f, bool visibleOnly, std::vector<refs::CachePoint>& out) {
+  const size_t bang = f.rfind('!');
+  if (bang == std::string_view::npos) return false;
+  std::string sn(f.substr(0, bang));
+  if (sn.size() >= 2 && sn.front() == '\'' && sn.back() == '\'') {
+    std::string u;
+    for (size_t k = 1; k + 1 < sn.size(); ++k) {
+      u += sn[k];
+      if (sn[k] == '\'' && k + 2 < sn.size() && sn[k + 1] == '\'') ++k;
+    }
+    sn = std::move(u);
+  }
+  Range r;
+  const int xi = book.FindSheet(sn);
+  if (xi < 0 || !ParseRange(f.substr(bang + 1), r) || (r.firstRow != r.lastRow && r.firstCol != r.lastCol) ||
+      static_cast<uint64_t>(r.lastRow - r.firstRow) + (r.lastCol - r.firstCol) > 100000)
+    return false;
+  const Sheet& x = book.GetSheet(static_cast<size_t>(xi));
+  if (!x.Loaded()) return false;
+  for (uint32_t row = r.firstRow; row <= r.lastRow; ++row)
+    for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
+      if (visibleOnly && (x.Row(row).hidden || x.Column(col).hidden)) continue;
+      const Value v = x.GetValue(row, col);
+      refs::CachePoint p;
+      if (v.type == ValueType::Number) {
+        char buf[48];
+        p = {refs::CachePoint::Number, std::string(buf, xlsx::FormatNumber(v.number, 0, buf))};
+      } else if (v.type == ValueType::String) {
+        p = {refs::CachePoint::Text, std::string(v.text)};
+      } else if (v.type == ValueType::Bool) {
+        p = {refs::CachePoint::Text, v.boolean ? "TRUE" : "FALSE"};
+      } else if (v.type == ValueType::Error) {
+        p = {refs::CachePoint::Text, "#N/A"};
+      }
+      out.push_back(std::move(p));
+    }
+  return true;
+}
+
+bool RefreshCaches(const Workbook& book, std::string& xml) {
+  return refs::RefreshChart(xml, [&](std::string_view f, bool visibleOnly, std::vector<refs::CachePoint>& out) {
+    return CachePoints(book, f, visibleOnly, out);
+  });
 }
 
 std::string ChartAnchor(CellAddr from, CellAddr to, const std::string& rel, uint32_t id) {

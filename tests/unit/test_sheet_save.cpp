@@ -957,6 +957,29 @@ TEST(sheet_edit_add_remove_part) {
   CHECK(ed.PartBytes(name) == xml && relTo() && p.ContentTypeOf(name) == type);
 }
 
+// Charts' caches follow the cells at a save (s3-charts); a chart whose cells hold what it caches
+// is saved byte for byte.
+TEST(sheet_chart_caches_follow_cells) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c><c r=\"B1\"><v>5</v></c></row>"
+                         "<row r=\"2\"><c r=\"A2\"><v>2</v></c><c r=\"B2\"><v>6</v></c></row></sheetData>",
+                         "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Editor::NewChart c;
+  c.data = Range{0, 0, 1, 0};  // A1:A2
+  CHECK(ed.InsertChart(0, c));
+  c.data = Range{0, 1, 1, 1};  // B1:B2
+  CHECK(ed.InsertChart(0, c));
+  const std::string other = ed.PartBytes("/xl/charts/chart2.xml");
+  CHECK(ed.SetCell(0, 1, 0, CellInput::Number(0.25)));
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-chart-caches");
+  CheckClean(saved);
+  const std::string chart = PartText(saved, "/xl/charts/chart1.xml");
+  CHECK(chart.find("<c:pt idx=\"1\"><c:v>0.25</c:v></c:pt>") != std::string::npos && chart.find("<c:v>2</c:v>") == std::string::npos);
+  CHECK(PartText(saved, "/xl/charts/chart2.xml") == other);
+  CHECK(ed.PartBytes("/xl/charts/chart1.xml").find("<c:v>2</c:v>") != std::string::npos);  // the package keeps the file's
+}
+
 // A drawing part's objects (s3-charts): found by shape id with their bytes, placed, and the
 // relationships they use.
 TEST(sheet_drawing_objects) {
