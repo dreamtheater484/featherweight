@@ -154,10 +154,12 @@ double WorkbookView::CurrentSize(bool rows) const {
 void WorkbookView::ApplySize(bool rows, uint32_t first, uint32_t last, double value, const char16_t* name) {
   const int sheet = static_cast<int>(sheet_);
   edit::EditGroup group(Ed(), name);
+  const std::vector<HeldSize> held = HeldSizes();  // s3-data: pictures keep their size
   // 0 hides them, as in Excel; another size shows them again.
   edit::Result r = rows ? Ed().HideRows(sheet, first, last, value <= 0) : Ed().HideColumns(sheet, first, last, value <= 0);
   if (r && value > 0)
     r = rows ? Ed().SetRowHeight(sheet, first, last, value) : Ed().SetColumnWidth(sheet, first, last, value);
+  if (r) r = KeepSizes(held);
   if (EditRefused(r)) return;
   group.done = true;
 }
@@ -282,6 +284,7 @@ void WorkbookView::AutoFit(bool rows, uint32_t first, uint32_t last, const Range
   text_->Clear();  // laid out at other widths
   const int sheet = static_cast<int>(sheet_);
   edit::EditGroup group(Ed(), rows ? u"AutoFit Row Height" : u"AutoFit Column Width");
+  const std::vector<HeldSize> held = HeldSizes();  // s3-data: pictures keep their size
   edit::Result res;
   for (uint32_t i = first; i <= last && res; ++i) {
     const double n = need[i - first];
@@ -300,6 +303,7 @@ void WorkbookView::AutoFit(bool rows, uint32_t first, uint32_t last, const Range
       if (res) res = Ed().SetColumnWidth(sheet, i, i, FileWidth(display));
     }
   }
+  if (res) res = KeepSizes(held);
   if (EditRefused(res)) return;
   group.done = true;
 }

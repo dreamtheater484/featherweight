@@ -1,0 +1,91 @@
+# S3 fixture ("created as Excel shows it"): conditional formatting through s3-data's New Rule (its
+# script op on the selection: Excel's rule kinds, its galleries by number, its preset formats by
+# number: 0 light red fill with dark red text, 1 yellow fill with dark yellow text, 2 green fill with
+# dark green text, 3 light red fill, 4 red text, 5 bold). Cell value comparisons, text, duplicates,
+# dates, top and above average, a formula, data bars, a color scale and icons; values typed in the
+# en-NL region.
+sheet-name "Rules"
+enter A1 "Name"
+enter B1 "Score"
+enter C1 "Team"
+enter D1 "Due"
+enter E1 "Sales"
+enter F1 "Growth"
+enter G1 "Hours"
+enter A2 "Ann"
+enter A3 "Bob"
+enter A4 "Cy"
+enter A5 "Ann"
+enter A6 "Dee"
+enter A7 "Bob"
+enter B2 "45"
+enter B3 "92"
+enter B4 "8"
+enter B5 "55"
+enter B6 "71"
+enter B7 "30"
+enter C2 "North"
+enter C3 "South"
+enter C4 "North-East"
+enter C5 "West"
+enter C6 "Southwest"
+enter C7 "East"
+enter D2 "2-1-2026"
+enter D3 "15-3-2026"
+enter D4 "30-6-2026"
+enter D5 "1-9-2026"
+enter D6 "24-12-2026"
+enter D7 "31-12-2026"
+enter E2 "120"
+enter E3 "340"
+enter E4 "95"
+enter E5 "410"
+enter E6 "60"
+enter E7 "260"
+enter F2 "5"
+enter F3 "-2"
+enter F4 "12"
+enter F5 "7"
+enter F6 "0"
+enter F7 "3"
+enter G2 "38"
+enter G3 "40"
+enter G4 "36"
+enter G5 "45"
+enter G6 "41"
+enter G7 "39"
+rule B2:B7 between "40" "60" format=1
+rule B2:B7 icons choice=7
+rule E2:E7 greater "200" format=2
+rule E2:E7 bar choice=1
+rule C2:C7 contains "North" format=0
+rule A2:A7 duplicate format=3
+rule A2:A7 formula "=$B2>90" format=5
+rule D2:D7 date choice=3 format=0
+rule F2:F7 scale choice=0
+rule F2:F7 top "2" format=4
+rule G2:G7 above format=2
+save
+expect rule Rules!B2:B7 type 1 operator 1
+expect rule Rules!B2:B7 formula =40
+expect rule Rules!B2:B7 formula2 =60
+expect rule Rules!B2:B7 fill FFEB9C
+expect rule Rules!B2:B7 font 9C5700
+expect rule Rules!B2:B7 icons 4
+expect rule Rules!E2:E7 type 1 operator 5
+expect rule Rules!E2:E7 formula =200
+expect rule Rules!E2:E7 fill C6EFCE
+expect rule Rules!E2:E7 font 006100
+expect rule Rules!E2:E7 bar 63C384
+expect rule Rules!C2:C7 text 0 North
+expect rule Rules!C2:C7 fill FFC7CE
+expect rule Rules!C2:C7 font 9C0006
+expect rule Rules!A2:A7 unique 1
+expect rule Rules!A2:A7 fill FFC7CE
+expect rule Rules!A2:A7 formula =$B2>90
+expect rule Rules!D2:D7 period 2
+expect rule Rules!F2:F7 scale 3
+expect rule Rules!F2:F7 top 1 rank 2 percent False
+expect rule Rules!F2:F7 font 9C0006
+expect rule Rules!G2:G7 average 0
+expect rule Rules!G2:G7 fill C6EFCE

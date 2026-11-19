@@ -215,6 +215,7 @@ constexpr float kLabelMiddle = 0.36f;  // the same for data labels
 constexpr float kTitleGap = 8.2f;    // points: the title's (or a legend's) line to the room below
 constexpr float kAxisTitle = 6.1f, kAxisTitleGap = 5.07f;  // points: an axis title from the room's edge; to its labels
 constexpr float kKey = 0.549f;       // a legend key's square
+constexpr size_t kOutlinedLabels = 64;  // a category axis whose labels are all outlined at once (more: when drawn)
 
 struct Label {
   Path path;
@@ -284,6 +285,12 @@ class Builder {
       k -= std::max<size_t>(1, k / 8);
     if (s[k] >= 0xDC00 && s[k] < 0xE000) k = k > 1 ? k - 1 : k + 1;
     return k;
+  }
+  // A label's width only, from its glyphs' advances (no outline: Text makes it when it's drawn).
+  Label Measure(const std::wstring& s, float size) const {
+    Label l;
+    if (!s.empty() && size > 0) l.width = draw::TextAdvance(s.substr(0, 255), font_, false, false, size);
+    return l;
   }
   // `align`: 0 starts at x, 1 centers on it, 2 ends at it; turned `degrees` about (x, baseline).
   void Place(const Label& l, float x, float baseline, int align, Color c, float degrees = 0) {
@@ -401,17 +408,19 @@ double NiceStep(double lo, double hi, int most) {
 }
 
 // Excel's automatic scale: from zero unless the values sit in a narrow band far from it, 5% of the
-// values' range past the extremes, round major units; the axis's own minimum and maximum win.
+// axis's range (from zero, when it starts there) past the extremes that aren't zero, round major
+// units; the axis's own minimum and maximum win. (Excel's PDFs: a scatter of 55..86 up to 100, of
+// 160..190 from 155; columns of 95..175 up to 200.)
 Scale MakeScale(double lo, double hi, const Axis& axis, bool zero, bool pad, int most = 10) {
   if (!std::isfinite(lo) || !std::isfinite(hi) || lo > hi) lo = 0, hi = 1;
-  const double spread = hi - lo;
+  const bool narrow = hi > lo;  // a band of values: its far side keeps its room, a single value doesn't
   if (lo > 0 && (zero || hi - lo >= hi / 6)) lo = 0;
   if (hi < 0 && (zero || hi - lo >= -lo / 6)) hi = 0;
   if (hi == lo) hi = lo + (lo == 0 ? 1 : std::fabs(lo) / 2);
   if (pad) {
-    const double room = (spread > 0 ? spread : hi - lo) * 0.05;
-    if (hi > 0) hi += room;
-    if (lo < 0) lo -= room;
+    const double room = (hi - lo) * 0.05;
+    if (hi > 0 || (hi < 0 && narrow)) hi += room;
+    if (lo < 0 || (lo > 0 && narrow)) lo -= room;
   }
   if (axis.min) lo = *axis.min;
   if (axis.max) hi = *axis.max;
@@ -1051,8 +1060,9 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     cats.n = std::max(cats.n, n);
   }
   cats.n = std::max<size_t>(1, std::max(cats.n, names.size()));
-  // A value axis up the side has room for a label every 1.6 lines or so.
-  const int most = bar ? 10 : static_cast<int>((r.bottom - r.top - ts * 3) / (ts * 1.6f));
+  // A value axis up the side has room for a label every 1.6 lines or so in Word, 1.2 in Excel
+  // (Excel's PDFs: ten intervals on a 133-point plot of 9-point labels).
+  const int most = bar ? 10 : static_cast<int>((r.bottom - r.top - ts * 3) / (ts * (ch.workbook ? 1.2f : 1.6f)));
   const Scale vs = MakeScale(lo[0], hi[0], ch.value, zero[0] || percent, !percent, most);
   const Scale ss = MakeScale(lo[1], hi[1], ch.secondary, zero[1], true, most);
   const Scale xscale = MakeScale(xlo, xhi, ch.category, false, true);
@@ -1064,7 +1074,8 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   float vw = 0, sw = 0, cw = 0;
   // Labels up a side no wider than the room the plot leaves them, across the bottom no wider than
   // the chart (more is cut).
-  const float sideRoom = (r.right - r.left) * 0.4f;
+  const float sideRoom = (r.right - r.left) * 0.4f, catRoom = bar ? sideRoom : W;
+  const auto catName = [&](size_t i) { return i < names.size() ? names[i] : std::to_wstring(i + 1); };
   if (ch.value.shown)
     for (double v : vticks) vlabels.push_back(b.Fit(FormatNumber(v, vformat), ts, bar ? W : sideRoom)), vw = std::max(vw, vlabels.back().width);
   if (secondary && ch.secondary.shown)
@@ -1074,8 +1085,17 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     if (scatter)
       for (double v : xticks) clabels.push_back(b.Fit(FormatNumber(v, ch.category.format), ts, W)), cw = std::max(cw, clabels.back().width);
     else
-      for (size_t i = 0; i < cats.n && i < 4096; ++i)
-        clabels.push_back(b.Fit(i < names.size() ? names[i] : std::to_wstring(i + 1), ts, bar ? sideRoom : W)), cw = std::max(cw, clabels.back().width);
+      // Hundreds of categories, of which only every so many labels show: the others measured by
+      // their advances, their outlines made only when they're drawn (a redraw stays within a
+      // keystroke). The first and last, which the plot's edges allow for, are outlined. Each no
+      // wider than `catRoom`: an outlined one cut now, a measured one counted as cut and cut
+      // when it's drawn.
+      for (size_t i = 0, n = std::min<size_t>(cats.n, 4096); i < n; ++i) {
+        const bool outline = n <= kOutlinedLabels || i == 0 || i + 1 == n;
+        clabels.push_back(outline ? b.Fit(catName(i), ts, catRoom) : b.Measure(catName(i), ts));
+        if (!outline) clabels.back().width = std::min(clabels.back().width, catRoom);
+        cw = std::max(cw, clabels.back().width);
+      }
   }
 
   // Axis titles, bold, at the room's edges (up the sides, turned): they take their room unless
@@ -1199,8 +1219,9 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     const size_t every = room > 0 ? std::max<size_t>(1, static_cast<size_t>(std::ceil(need / room))) : 1;
     for (size_t i = 0; i < clabels.size(); i += every) {
       const Point at = p.At(cats.Center(i), 0);
-      if (bar) b.Place(clabels[i], P.left - kValueGap * ts, at.y + kMiddle * ts, 2, text);
-      else b.Place(clabels[i], at.x, below, 1, text);
+      const Label l = clabels[i].path.Empty() && clabels[i].width > 0 ? b.Fit(catName(i), ts, catRoom) : clabels[i];
+      if (bar) b.Place(l, P.left - kValueGap * ts, at.y + kMiddle * ts, 2, text);
+      else b.Place(l, at.x, below, 1, text);
     }
   }
   // The axis titles: up the sides centred on the plot, or under it.

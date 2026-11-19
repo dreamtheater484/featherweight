@@ -1406,8 +1406,24 @@ void WorkbookView::AutoExpandTable(int sheet, CellAddr cell) {
     if (!below && !right) continue;
     // Excel's AutoCorrect: the table takes the new row or column, as a step of its own after the value.
     edit::EditGroup group(Ed(), u"Table AutoExpansion");
+    std::vector<std::pair<CellAddr, edit::CellInput>> fills;
     if (below) {
       ++t.ref.lastRow;
+      // The calculated columns' formulas fill the new row's empty cells, as Excel's.
+      calc::CompileOptions from, to;
+      from.sheet = to.sheet = sheet;
+      from.row = static_cast<int32_t>(t.ref.firstRow + t.headerRows);
+      to.row = static_cast<int32_t>(t.ref.lastRow);
+      for (size_t k = 0; k < t.columns.size(); ++k) {
+        const std::string& f = t.columns[k].calculatedFormula;
+        const uint32_t col = t.ref.firstCol + static_cast<uint32_t>(k);
+        FormulaInfo had;
+        if (f.empty() || s.GetValue(t.ref.lastRow, col).type != ValueType::Empty || s.GetFormula(t.ref.lastRow, col, had)) continue;
+        from.col = to.col = static_cast<int32_t>(col);
+        std::string g = calc::CopyFormula("=" + f, from, to, Calc().engine());
+        if (!g.empty() && g[0] == '=') g.erase(0, 1);
+        if (!g.empty()) fills.emplace_back(CellAddr{t.ref.lastRow, col}, edit::CellInput::Formula(g));
+      }
     } else {
       const Value h = t.headerRows ? s.GetValue(t.ref.firstRow, cell.col) : Value{};
       const std::string name = NewColumnName(h, [&](const std::string& n) { return t.FindColumn(n) >= 0; });
@@ -1418,6 +1434,7 @@ void WorkbookView::AutoExpandTable(int sheet, CellAddr cell) {
       t.columns.push_back(TableColumn{0, name});
     }
     if (EditRefused(Ed().SetTable(sheet, i, t))) return;
+    if (!fills.empty() && EditRefused(Ed().SetCells(sheet, fills))) return;
     group.done = true;
     return;
   }

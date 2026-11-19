@@ -24,6 +24,7 @@
 #include "sheet/edit/Notes.h"
 #include "sheet/edit/PageSetupXml.h"
 #include "sheet/edit/Refs.h"
+#include "sheet/model/TableStyles.h"
 #include "sheet/xlsx/Internal.h"
 #include "sheet/numfmt/NumFormat.h"
 #include "core/Strings.h"
@@ -5231,9 +5232,91 @@ Result Editor::SetTable(int sheet, size_t index, const Table& t) {
       const Range all{std::min(before.ref.firstRow, now.ref.firstRow), std::min(before.ref.firstCol, now.ref.firstCol),
                       std::max(before.ref.lastRow, now.ref.lastRow), std::max(before.ref.lastCol, now.ref.lastCol)};
       st.Change(&s, kStyles | kRules | kTables, all);
+      // Renamed: formulas everywhere that name it follow (Table1[Qty] -> Orders[Qty]), as in Excel.
+      if (before.name != now.name) {
+        const std::string from = before.name, to = now.name;
+        RewriteSheetRefs(
+            -1, [&](std::string_view text, int) { return refs::RenameTable(text, from, to); },
+            [&](std::string_view text) { return Mentions(text, from); });
+      }
       return Result{};
     });
   }());
+}
+
+Result Editor::KeepTableLook(Sheet& s, const Table& t) {
+  // As the grid paints a table under the cells' own formats (TableStyles.h): a fill where the cell
+  // has none, the style's font color where the cell's is the default font's, bold and italic added,
+  // a border on each side the cell leaves empty.
+  const Styles& styles = book_.GetStyles();
+  const TableStyle* style = FindTableStyle(styles, t.style.name);
+  if (!style) return {};
+  struct Made {
+    uint32_t old;
+    TableCellFormat look;
+    uint32_t xf;
+  };
+  std::vector<Made> made;
+  auto same = [](const TableCellFormat& a, const TableCellFormat& b) {
+    return a.fill == b.fill && a.fontColor == b.fontColor && a.bold == b.bold && a.italic == b.italic && a.left == b.left &&
+           a.top == b.top && a.bottom == b.bottom && a.right == b.right;
+  };
+  auto baked = [&](uint32_t old, const TableCellFormat& look) {
+    for (const Made& m : made)
+      if (m.old == old && same(m.look, look)) return m.xf;
+    const Styles& now = book_.GetStyles();  // Add* may grow its lists
+    Xf xf = old < now.CellXfs().size() ? now.CellXfs()[old] : Xf{};
+    Font font = now.FontOf(xf);
+    bool fontChanged = false;
+    if (look.bold && !font.bold) font.bold = fontChanged = true;
+    if (look.italic && !font.italic) font.italic = fontChanged = true;
+    const uint32_t def = now.Resolve(now.DefaultFont().color, 0xFF000000);
+    if (look.fontColor.IsSet() && (!font.color.IsSet() || now.Resolve(font.color, 0xFF000000) == def) && !(font.color == look.fontColor)) {
+      font.color = look.fontColor;
+      fontChanged = true;
+    }
+    if (fontChanged) {
+      xf.font = AddFont(font);
+      xf.applyFont = true;
+    }
+    const Fill own = xf.fill < now.Fills().size() ? now.Fills()[xf.fill] : Fill{};
+    const bool fillChanged =
+        own.pattern == PatternType::None && !own.gradient && (look.fill.pattern != PatternType::None || look.fill.gradient);
+    if (fillChanged) {
+      Fill fill = look.fill;
+      if (fill.pattern == PatternType::Solid && !fill.bg.IsSet()) fill.bg = fill.fg;  // as Excel writes it
+      xf.fill = AddFill(fill);
+      xf.applyFill = true;
+    }
+    Border border = xf.border < now.Borders().size() ? now.Borders()[xf.border] : Border{};
+    bool borderChanged = false;
+    for (auto [mine, theirs] : {std::pair<BorderSide*, const BorderSide*>{&border.left, &look.left}, {&border.top, &look.top},
+                                {&border.bottom, &look.bottom}, {&border.right, &look.right}})
+      if (mine->style == BorderStyle::None && theirs->style != BorderStyle::None) {
+        *mine = *theirs;
+        borderChanged = true;
+      }
+    if (borderChanged) {
+      xf.border = AddBorder(border);
+      xf.applyBorder = true;
+    }
+    const uint32_t x = fontChanged || fillChanged || borderChanged ? AddXf(xf) : old;
+    made.push_back({old, look, x});
+    return x;
+  };
+  State& st = *s_;
+  SheetSave& sv = st.Save(s);
+  std::u16string why;
+  for (uint32_t row = t.ref.firstRow; row <= t.ref.lastRow; ++row)
+    for (uint32_t col = t.ref.firstCol; col <= t.ref.lastCol; ++col) {
+      const TableCellFormat look = TableFormat(*style, t, row, col);
+      if (look.Empty()) continue;
+      const uint32_t old = s.StyleAt(row, col);
+      const uint32_t x = baked(old, look);
+      if (x != old && !st.Put(sv, row, col, nullptr, false, x, why)) return Result::Fail(why);
+    }
+  st.Change(&s, kStyles, t.ref);
+  return {};
 }
 
 Result Editor::RemoveTable(int sheet, size_t index) {
@@ -5249,6 +5332,7 @@ Result Editor::RemoveTable(int sheet, size_t index) {
     return Run(*this, u"Convert to Range", [&]() -> Result {
       State& st = *s_;
       const Table t = s.Tables()[index];
+      if (Result r = KeepTableLook(s, t); !r) return r;
       std::string relId;
       if (const pkg::RelationshipSet* set = book_.GetPackage()->RelationshipsOf(s.PartName()))
         for (const pkg::Relationship& r : set->items)

@@ -1375,6 +1375,60 @@ std::string RenameTableColumn(std::string_view f, std::string_view table, std::s
   return out;
 }
 
+std::string RenameTable(std::string_view f, std::string_view from, std::string_view to) {
+  auto up = [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 32) : c; };
+  auto same = [&](std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i)
+      if (up(a[i]) != up(b[i])) return false;
+    return true;
+  };
+  auto namePart = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.' || c == '\\' ||
+           static_cast<unsigned char>(c) >= 0x80;
+  };
+  if (from.empty()) return std::string(f);
+  std::string out;
+  for (size_t i = 0; i < f.size();) {
+    const char c = f[i];
+    if (c == '"' || c == '\'') {  // a string, or a quoted sheet name: as it is
+      size_t j = i + 1;
+      while (j < f.size() && !(f[j] == c && (j + 1 >= f.size() || f[j + 1] != c))) j += f[j] == c ? 2 : 1;
+      out.append(f, i, std::min(j + 1, f.size()) - i);
+      i = j + 1;
+      continue;
+    }
+    if (c == '[') {  // a structured reference's items (nested, ' escaping), or an external book: as they are
+      size_t j = i, depth = 0;
+      for (; j < f.size(); ++j) {
+        if (f[j] == '\'') {
+          ++j;
+          continue;
+        }
+        if (f[j] == '[') ++depth;
+        else if (f[j] == ']' && --depth == 0) break;
+      }
+      out.append(f, i, std::min(j + 1, f.size()) - i);
+      i = j + 1;
+      continue;
+    }
+    // The table's name on its own (Table1[Qty], ROWS(Table1)); not a function's, a sheet's or a
+    // longer name's.
+    if ((i == 0 || !namePart(f[i - 1])) && i + from.size() <= f.size() && same(f.substr(i, from.size()), from)) {
+      const size_t e = i + from.size();
+      const char next = e < f.size() ? f[e] : '\0';
+      if (!namePart(next) && next != '(' && next != '!') {
+        out += to;
+        i = e;
+        continue;
+      }
+    }
+    out += c;
+    ++i;
+  }
+  return out;
+}
+
 bool MoveControl(std::string& xml, int index, const Context& c) {
   pugi::xml_document d;
   if (!LoadDoc(d, xml)) return false;

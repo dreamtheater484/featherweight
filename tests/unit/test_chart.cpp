@@ -355,14 +355,20 @@ TEST(Chart_LongLegendEntryWrapsAsExcelDoes) {
 TEST(Chart_TextFarTooLongForItsPlaceIsCut) {
   // Category names, axis titles and data labels hundreds of characters long are cut to their
   // room, so nothing lands far outside the chart (fuzz_chart's check); bars stay where they were.
+  // With 100 categories most labels are only measured, and cut when they're drawn (a bar chart's
+  // labels up the side show every few).
   const std::wstring longName(200, L'W');
-  for (const bool bar : {false, true}) {
+  for (const int kind : {0, 1, 2, 3}) {
+    const bool bar = kind % 2 == 1;
     Parsed p(ColumnChart());
     Chart c;
     REQUIRE(Read(p.Root(), Colors(), c));
     Group& g = c.groups[0];
     if (bar) g.type = Type::Bar;
-    for (Series& s : g.series) s.categories[1] = longName, s.name = longName;
+    for (Series& s : g.series) {
+      if (kind >= 2) s.categories.assign(100, longName), s.values.assign(100, 1.0);
+      s.categories[1] = longName, s.name = longName;
+    }
     g.seriesNames = true;
     c.value.title = c.category.title = longName;
     for (const draw::Size size : {draw::Size{432, 252}, draw::Size{120, 90}}) {

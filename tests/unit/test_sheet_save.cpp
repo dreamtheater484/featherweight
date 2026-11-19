@@ -1070,6 +1070,16 @@ TEST(sheet_edit_chart) {
   CHECK(info.kind == edit::ChartKind::Line && info.xTitle.text == "Month" && info.labels && info.series.size() == 2);
   CHECK(xml.find("<c:barChart>") == std::string::npos && xml.find("<a:ln w=\"28575\" cap=\"rnd\"><a:solidFill><a:srgbClr val=\"FF0000\"/>") != std::string::npos);
   CheckClean(SaveBytes(*book, ed, "save-chart-line"));
+  // A combo: the first series as columns, the last as a line, on the same axes; titles and colors stay.
+  e.kind = edit::ChartKind::Combo;
+  CHECK(ed.EditChart(0, 2, e));
+  xml = ed.PartBytes(part);
+  info = edit::charts::Info(xml);
+  CHECK(info.kind == edit::ChartKind::Combo && info.xTitle.text == "Month" && info.labels && info.series.size() == 2);
+  CHECK(InOrder(xml, {"<c:barChart>", "Sheet1!$B$1", "<c:axId val=\"", "</c:barChart>", "<c:lineChart>", "Sheet1!$C$1",
+                      "</c:lineChart>", "<c:catAx>", "<c:valAx>"}));
+  CHECK(xml.find("<a:ln w=\"28575\" cap=\"rnd\"><a:solidFill><a:srgbClr val=\"FF0000\"/>") != std::string::npos);
+  CheckClean(SaveBytes(*book, ed, "save-chart-combo"));
   // A pie: no axes.
   e.kind = edit::ChartKind::Pie;
   CHECK(ed.EditChart(0, 2, e));
@@ -1095,7 +1105,7 @@ TEST(sheet_edit_chart) {
 
   std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-chart-edited");
   CheckClean(saved);
-  CHECK(ed.Undo(5));
+  CHECK(ed.Undo(6));
   CHECK(ed.PartBytes(part) == original);
 }
 
