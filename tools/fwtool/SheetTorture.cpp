@@ -588,7 +588,8 @@ class EditApiTarget : public SheetTarget {
         using K = sh::edit::Editor::ChartKind;
         static const std::pair<const char*, K> kKinds[] = {{"column", K::Column}, {"bar", K::Bar},   {"line", K::Line},
                                                            {"pie", K::Pie},       {"doughnut", K::Doughnut},
-                                                           {"area", K::Area},     {"scatter", K::Scatter}};
+                                                           {"area", K::Area},     {"scatter", K::Scatter},
+                                                           {"combo", K::Combo}};
         sh::edit::Editor::NewChart nc;
         nc.data = r;
         nc.at = {e.to.firstRow, e.to.firstCol};
@@ -604,10 +605,12 @@ class EditApiTarget : public SheetTarget {
       case Op::Object: {
         if (e.arg == "delete") return done(ed_.DeleteObjects(s, {e.count}));
         if (e.arg == "tosheet") return done(ed_.MoveChartToSheet(s, e.count));
-        if (e.arg == "type-line" || e.arg == "type-bar" || e.arg == "title") {
+        if (e.arg == "type-line" || e.arg == "type-bar" || e.arg == "type-combo" || e.arg == "title") {
           sh::edit::ChartEdit edit;
           if (e.arg == "title") edit.title = sh::edit::ChartText{true, "Torture"}, edit.legend = 'r', edit.labels = true;
-          else edit.kind = e.arg == "type-line" ? sh::edit::ChartKind::Line : sh::edit::ChartKind::Bar;
+          else edit.kind = e.arg == "type-line" ? sh::edit::ChartKind::Line
+                           : e.arg == "type-bar" ? sh::edit::ChartKind::Bar
+                                                 : sh::edit::ChartKind::Combo;
           return done(ed_.EditChart(s, e.count, edit));
         }
         // Dragged so that its top left is at the cell: about five columns by twelve rows.
@@ -1499,7 +1502,7 @@ class Generator {
       e.toSheet = e.sheet;
       e.to = Cell(area);
       e.to.firstCol = e.to.lastCol = std::min<uint32_t>(e.range.lastCol + 2, 16380);
-      static const char* kKinds[] = {"column", "column", "bar", "line", "pie", "doughnut", "area", "scatter"};
+      static const char* kKinds[] = {"column", "column", "bar", "line", "pie", "doughnut", "area", "scatter", "combo"};
       e.arg = rng_.Pick(kKinds);
     } else if (roll < 12) {
       e.op = Op::Object;
@@ -1512,7 +1515,7 @@ class Generator {
 #else
       (void)book;
 #endif
-      static const char* kObjectEdits[] = {"delete", "delete", "move", "move", "move", "copy", "type-line", "type-bar", "title", "tosheet"};
+      static const char* kObjectEdits[] = {"delete", "delete", "move", "move", "move", "copy", "type-line", "type-bar", "type-combo", "title", "tosheet"};
       e.arg = rng_.Pick(kObjectEdits);
     } else if (roll < 17) {
       e.op = Op::PageSetup;
