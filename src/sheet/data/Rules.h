@@ -25,6 +25,10 @@ struct FormulaLocale;
 
 namespace fw::sheet::data {
 
+// Text without what XML 1.0 can't hold (control characters, broken UTF-8, U+FFFE and U+FFFF), so
+// what's written always reads back and Excel never has to repair the part.
+std::string XmlChars(std::string_view s);
+
 // ---- Sqrefs: space-separated areas ("A1:B5 D2").
 std::vector<Range> ParseAreas(std::string_view sqref);
 std::string JoinAreas(const std::vector<Range>& areas);
