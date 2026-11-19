@@ -1443,10 +1443,11 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
   if (typesChanged) put("/[Content_Types].xml", Bytes(PrintDoc(types)));
   // Parts edits rewrote in the package (structural edits: drawings, charts, notes, tables...),
   // written as the package holds them. Parts edits removed (an undo can remove one an earlier save
-  // wrote) are left out, and the plan says so (WrittenParts).
+  // wrote) are left out, and the plan says so (WrittenParts); not a name a new part took again.
   for (const pkg::Part& part : pkg->Parts()) {
     if (part.modified && !part.deleted) plan.edited.push_back(part.name);
-    else if (part.deleted && std::find(plan.changes.leaveOut.begin(), plan.changes.leaveOut.end(), part.name) == plan.changes.leaveOut.end())
+    else if (part.deleted && !pkg->FindPart(part.name) &&
+             std::find(plan.changes.leaveOut.begin(), plan.changes.leaveOut.end(), part.name) == plan.changes.leaveOut.end())
       plan.changes.leaveOut.push_back(part.name);
   }
   return {};
