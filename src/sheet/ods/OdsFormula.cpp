@@ -189,6 +189,10 @@ bool Reference(std::string_view s, std::string& out, int rows, int cols, const S
   auto mapped = [&](const std::string& n) { return names && *names ? (*names)(n) : n; };
   if (a.hasSheet) {
     std::string sheet = mapped(a.sheet);
+    if (sheet.empty() || (range && b.hasSheet && mapped(b.sheet).empty())) {  // a sheet the workbook doesn't have
+      out += "#REF!";
+      return true;
+    }
     if (range && b.hasSheet && b.sheet != a.sheet) {
       const std::string both = sheet + ":" + mapped(b.sheet);
       // Quoted as one: 'Sheet 1:Sheet 3'!A1

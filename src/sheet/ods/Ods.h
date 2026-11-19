@@ -25,7 +25,7 @@ pkg::Status OdsToXlsx(std::span<const uint8_t> ods, std::vector<uint8_t>& xlsx,
 // An OpenFormula expression as ODF stores it ("of:=SUM([.A1:.B2];[Sheet2.C3])") as Excel's formula
 // text in a file ("SUM(A1:B2,Sheet2!C3)", with _xlfn. prefixes). Relative references move by
 // `rows` and `cols` (a formula repeated over several cells is written once). `sheet` maps an ODF
-// sheet name to the name it has in the workbook (null: unchanged). False when the expression
+// sheet name to the name it has in the workbook, or "" when it has none (#REF!); null: unchanged. False when the expression
 // can't be read; `out` is then unusable.
 using SheetNames = std::function<std::string(std::string_view)>;
 bool TranslateFormula(std::string_view formula, std::string& out, int rows = 0, int cols = 0,

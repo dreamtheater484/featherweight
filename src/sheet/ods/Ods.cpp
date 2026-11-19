@@ -27,7 +27,6 @@ constexpr std::string_view kMain = "http://schemas.openxmlformats.org/spreadshee
 constexpr std::string_view kRelNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 constexpr std::string_view kRelType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
 constexpr int kMaxRow = 1048576, kMaxCol = 16384;
-constexpr uint64_t kMaxCells = 20'000'000;  // cells written in all: a file that repeats more is cut there
 constexpr int kMaxDepth = 32;               // nested spans in a cell, nested row groups
 
 std::string_view Attr(xml_node n, const char* name) { return n.attribute(name).value(); }
@@ -273,7 +272,8 @@ class Converter {
   std::string activeSheet_;
   bool date1904_ = false;
   double nullDate_ = 0;  // days from 1970 of the date 0
-  uint64_t cells_ = 0;
+  // Repeats multiply a small file: cells written and cells looked at stop at these (from the limits).
+  uint64_t cells_ = 0, maxCells_ = 0, work_ = 0, maxWork_ = 0;
 
   // The sheet being written.
   std::vector<int> colXf_;
@@ -293,7 +293,7 @@ int Converter::Shared(const std::string& s) {
 
 std::string Converter::SheetName(std::string_view odf) const {
   auto it = sheetNames_.find(std::string(odf));
-  return it == sheetNames_.end() ? std::string(odf) : it->second;
+  return it == sheetNames_.end() ? std::string() : it->second;  // unknown: #REF!
 }
 
 void Converter::ReadSettings() {
@@ -431,6 +431,7 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
     xml_node node;
     int col, count, xf;
     bool content;
+    bool formatted = false;  // empty, but some of its cells are formatted unlike their column
   };
   std::vector<Item> items;
   int col = 0;
@@ -446,23 +447,26 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
     const bool has = !c.attribute("office:value-type").empty() || !c.attribute("table:formula").empty() ||
                      c.child("text:p") || c.child("text:h");
     if (!has && xf >= 0 && col + count >= kMaxCol && count > 256) rowFormat = xf;
-    else items.push_back({c, col, count, xf, has});
+    else items.push_back({c, col, count, xf, has, false});
     content |= has;
     col += count;
   }
   const bool special = hidden || level > 0 || custom || std::abs(height - defaultHeight_) > 0.01 || rowFormat >= 0;
-  if (!content && !special) {
-    // Empty: only cells formatted unlike their column are written, and not over huge repeats.
-    bool formatted = false;
-    for (const Item& it : items)
-      for (int k = 0; k < it.count && !formatted; ++k) formatted = it.xf >= 0 && it.xf != colXf_[it.col + k];
-    if (!formatted) return;
+  // Empty cells are written only where formatted unlike their column.
+  bool formatted = false;
+  for (Item& it : items) {
+    if (it.content || it.xf < 0) continue;
+    for (int k = 0; k < it.count && !it.formatted && work_ < maxWork_; ++k, ++work_) it.formatted = it.xf != colXf_[it.col + k];
+    formatted |= it.formatted;
   }
+  if (!content && !special && !formatted) return;
   if (!content && repeat > 1000) {
-    if (hidden && index + repeat >= kMaxRow && repeat > 10000) hiddenFrom_ = index;
-    if (!hidden || hiddenFrom_ == index) return;  // a formatted or hidden block too big to write row by row
+    // A hidden block to (nearly) the end: zeroHeight. Other big empty blocks are left as they are.
+    if (hidden && index + repeat >= kMaxRow - 1024 && repeat > 10000) hiddenFrom_ = index;
+    if (!hidden || hiddenFrom_ == index) return;
   }
-  for (int k = 0; k < repeat && cells_ < kMaxCells; ++k) {
+  for (int k = 0; k < repeat && cells_ < maxCells_ && work_ < maxWork_; ++k) {
+    ++work_;
     const int r = index + k;
     std::string xml = "<row r=\"" + std::to_string(r + 1) + "\"";
     if (rowFormat >= 0) xml += " s=\"" + std::to_string(rowFormat) + "\" customFormat=\"1\"";
@@ -472,7 +476,9 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
     if (level > 0) xml += " outlineLevel=\"" + std::to_string(std::min(level, 7)) + "\"";
     std::string cellsXml;
     for (const Item& it : items) {
-      for (int j = 0; j < it.count && cells_ < kMaxCells; ++j) {
+      if (!it.content && !it.formatted && rowFormat < 0) continue;
+      for (int j = 0; j < it.count && cells_ < maxCells_ && work_ < maxWork_; ++j) {
+        ++work_;
         const int c = it.col + j;
         const int xf = it.xf >= 0 ? it.xf : colXf_[c];
         if (!it.content) {
@@ -704,6 +710,8 @@ pkg::Status Converter::Run(std::vector<uint8_t>& xlsx) {
   xml_node book = content_.Root().child("office:body").child("office:spreadsheet");
   if (!book) return pkg::Status::Fail(pkg::Status::Code::Unsupported, "This OpenDocument file isn't a spreadsheet.");
   st_.Read(styles_.Root(), content_.Root());
+  maxCells_ = std::clamp<uint64_t>(limits_.maxTotalSize / 32, 100000, 8000000);
+  maxWork_ = maxCells_ * 16;
   st_.Resolve("");  // the default format is cell format 0
   ReadSettings();
 
