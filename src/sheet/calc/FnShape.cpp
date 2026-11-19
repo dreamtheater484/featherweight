@@ -11,7 +11,6 @@
 namespace fw::sheet::calc::fn {
 namespace {
 
-constexpr int64_t kMaxCells = 16'000'000;
 
 // A whole-number argument (truncated), or `def` when it's missing.
 bool Count(Call& c, int i, double& out, double def) {
@@ -43,7 +42,7 @@ void Stack(Call& c, bool vertical) {
     along += vertical ? a.rows() : a.cols();
     across = std::max(across, vertical ? a.cols() : a.rows());
   }
-  if (along * across > kMaxCells || along > (vertical ? 1048576 : 16384)) return c.Fail(Err::Num);
+  if (!c.m.Fits(static_cast<double>(along), across) || along > (vertical ? 1048576 : 16384)) return c.Fail(Err::Num);
   int32_t n = static_cast<int32_t>(along);
   Array* out = vertical ? Array::Make(n, across) : Array::Make(across, n);
   int32_t at = 0;
@@ -115,6 +114,7 @@ void Choose(Call& c, bool rows) {
     }
   }
   int32_t n = static_cast<int32_t>(pick.size());
+  if (!c.m.Fits(n, rows ? a.cols() : a.rows())) return c.Fail(Err::Num);  // a row picked again and again
   Array* out = rows ? Array::Make(n, a.cols()) : Array::Make(a.rows(), n);
   for (int32_t k = 0; k < n; ++k)
     if (rows)
@@ -193,7 +193,7 @@ void Expand(Call& c) {
   double rows, cols;
   if (!Count(c, 1, rows, a.rows()) || !Count(c, 2, cols, a.cols())) return;
   if (rows < a.rows() || cols < a.cols()) return c.Fail(Err::Value);
-  if (rows > 1048576 || cols > 16384 || rows * cols > static_cast<double>(kMaxCells)) return c.Fail(Err::Num);
+  if (rows > 1048576 || cols > 16384 || !c.m.Fits(rows, cols)) return c.Fail(Err::Num);
   Value pad = Pad(c, 3);
   int32_t nr = static_cast<int32_t>(rows), nc = static_cast<int32_t>(cols);
   Array* out = Array::Make(nr, nc);
@@ -211,7 +211,7 @@ void RandArray(Call& c) {
     return;
   if (rows < 0 || cols < 0 || lo > hi) return c.Fail(Err::Value);
   if (rows == 0 || cols == 0) return c.Fail(Err::Calc);
-  if (rows > 1048576 || cols > 16384 || rows * cols > static_cast<double>(kMaxCells)) return c.Fail(Err::Num);
+  if (rows > 1048576 || cols > 16384 || !c.m.Fits(rows, cols)) return c.Fail(Err::Num);
   if (whole && (lo != std::floor(lo) || hi != std::floor(hi))) return c.Fail(Err::Value);
   int32_t nr = static_cast<int32_t>(rows), nc = static_cast<int32_t>(cols);
   Array* out = Array::Make(nr, nc);

@@ -576,6 +576,29 @@ CalcSettings Full() {
 
 }  // namespace
 
+TEST(sheet_calc_array_cells_capped) {
+  // An array past Host::MaxArrayCells is #NUM! wherever it's built, not only a range read as one:
+  // a column times a row, a function run for each element, IF and CHOOSE element by element,
+  // MMULT, MUNIT (fuzz_formula: SS:G/1:1*19111:1 built 19111 x 507 for each operator after it).
+  struct Small : MapHost {
+    int64_t MaxArrayCells() const override { return 100; }
+  } h;
+  TestResolver res;
+  auto num = [](const Value& v) { return v.IsError() && v.error() == Err::Num; };
+  for (const char* text : {"A1:J11+0", "ROW(1:20)*COLUMN(A:J)", "ROUND(ROW(1:20),COLUMN(A:J))",
+                           "IF(ROW(1:20)>0,COLUMN(A:J))", "CHOOSE(ROW(1:20)^0,COLUMN(A:J))",
+                           "MMULT(ROW(1:20),COLUMN(A:J))", "MUNIT(11)", "_xlfn.SEQUENCE(11,10)",
+                           "_xlfn.CHOOSEROWS(COLUMN(A:J),_xlfn.SEQUENCE(11)^0)"})
+    if (!num(Run(h, res, text, {0, 0, 701}, true))) test::Fail(__FILE__, __LINE__, text);
+  for (const char* text : {"A1:J10+0", "ROW(1:10)*COLUMN(A:J)", "IF(ROW(1:10)>0,COLUMN(A:J))", "MUNIT(10)"}) {
+    Value v = Run(h, res, text, {0, 0, 701}, true);
+    if (!v.IsArray() || v.array().size() != 100) test::Fail(__FILE__, __LINE__, text);
+  }
+  // The workbook's limit, 16 million cells: 65536 x 1024 isn't allocated.
+  MapHost big;
+  CHECK(num(Run(big, res, "ROW(1:65536)*COLUMN(A:AMJ)", {0, 0, 701}, true)));
+}
+
 TEST(sheet_calc_engine_order_and_edits) {
   EngineFixture f;
   f.Number("A1", 1);

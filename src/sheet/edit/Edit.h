@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "sheet/edit/Charts.h"
+#include "sheet/data/Shapes.h"
 #include "sheet/edit/Drawing.h"
 #include "sheet/edit/Protection.h"
 #include "sheet/model/Workbook.h"
@@ -242,6 +243,21 @@ class Editor {
   // the total row). The rows it hides are the caller's (HideRows), in the same group.
   Result SetTableFilter(int sheet, size_t index, const SheetFilter& f);
 
+  // ---- Pictures and shapes (Insert > Pictures, Shapes; s3-data). Their XML: sheet/data/Shapes.h;
+  // placed as drawing::Placed places them. Refused on a protected sheet without "Edit objects", in a
+  // workbook without a package (CSV) or on a sheet not saved yet.
+  // A picture (PNG, JPEG, GIF or BMP, the type read from its bytes) as Excel inserts it: moves but
+  // doesn't size with cells, its aspect ratio locked, with its alt text. Stored once: a picture the
+  // package has already with the same bytes is used again. `*id` gets its shape id.
+  Result InsertPicture(int sheet, const std::string& bytes, const drawing::Place& place, const std::string& altText,
+                       uint32_t* id = nullptr);
+  // A shape as Excel inserts it (data::ShapeAnchor), with `text` in it.
+  Result InsertShape(int sheet, data::ShapeKind kind, const drawing::Place& place, const std::string& text,
+                     uint32_t* id = nullptr);
+  // Object `id`'s bytes replaced by `xml` (its fill, outline, text or alt text: data::FormatObject),
+  // which must read and keep the object's id; the rest of the drawing as it is.
+  Result SetObjectXml(int sheet, uint32_t id, const std::string& xml, std::u16string stepName);
+
   // ---- Package parts, for edit operations (charts, pictures, notes, comments, tables...): call
   // them inside the operation's group (Run, or BeginGroup and EndGroup); undo and redo take them
   // back with its step. False or empty when they can't: no group open, a workbook without a
@@ -285,6 +301,10 @@ class Editor {
   // Deleted, with the parts nothing else uses any more (a chart and its own parts, a picture
   // used once); the drawing and the sheet's reference to it go with the last object.
   Result DeleteObjects(int sheet, const std::vector<uint32_t>& ids);
+  // The chart part of the object with shape id `id` on the sheet; empty when it isn't a chart.
+  std::string ChartPart(int sheet, uint32_t id) const;
+  // A chart's type, titles, legend, data labels, colors or series changed (Charts.h: ChartEdit).
+  Result EditChart(int sheet, uint32_t id, const ChartEdit& edit);
 
   // ---- Charts (s3-charts)
   using ChartKind = edit::ChartKind;

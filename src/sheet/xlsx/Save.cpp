@@ -7,6 +7,7 @@
 #include <set>
 
 #include "pkg/XmlWriter.h"
+#include "sheet/edit/Charts.h"
 #include "sheet/edit/Edit.h"
 #include "sheet/xlsx/Internal.h"
 #include "sheet/xlsx/Xlsx.h"
@@ -372,16 +373,16 @@ std::string ViewsXml(const Sheet& s, const PartText& t, const std::string& p, bo
 }
 
 // `ids`: each link's relationship id (NewLinkRels), else its own.
-std::string LinksXml(const Sheet& s, const PartText& t, const std::string& p, const std::vector<std::string>& ids) {
+std::string LinksXml(const Sheet& s, PartText& t, const std::string& p, const std::vector<std::string>& ids) {
   if (s.Hyperlinks().empty()) return {};
-  std::string r = DeclaredPrefix(t.rootStart, kRelNs);
-  if (r.empty()) r = DeclaredPrefix(t.rootStart, kRelNsStrict);
+  std::string r;  // declared on the root when a link needs it (s3-corpus: openpyxl's sheets)
   std::string out = "<" + p + "hyperlinks>";
   for (size_t i = 0; i < s.Hyperlinks().size(); ++i) {
     const Hyperlink& h = s.Hyperlinks()[i];
     const std::string& id = i < ids.size() ? ids[i] : h.relId;
     out += "<" + p + "hyperlink" + AttrXml("ref", RangeName(h.ref));
     if (!id.empty()) {
+      if (r.empty()) r = RelPrefix(t);
       if (r.empty()) return std::string(FindElement(t, "hyperlinks"));  // can't name the relationship: as it was
       out += AttrXml(r + ":id", id);
     }
@@ -829,6 +830,16 @@ std::set<std::string> Reachable(const pkg::Package& pkg, const std::set<std::str
 void PutSheetElement(PartText& t, std::string_view local, const std::string& xml) { PutElement(t, local, xml); }
 std::string SheetPrefix(const PartText& t) { return PrefixOf(t.rootStart); }
 std::string SheetElement(const PartText& t, std::string_view local) { return std::string(FindElement(t, local)); }
+std::string RelPrefix(PartText& t) {
+  std::string r = DeclaredPrefix(t.rootStart, kRelNs);
+  if (r.empty()) r = DeclaredPrefix(t.rootStart, kRelNsStrict);
+  if (!r.empty()) return r;
+  const size_t end = t.rootStart.rfind('>');
+  if (end == std::string::npos) return {};
+  const bool strict = t.rootStart.find(kMainNsStrict) != std::string::npos;
+  t.rootStart.insert(end, " xmlns:r=\"" + std::string(strict ? kRelNsStrict : kRelNs) + "\"");
+  return "r";
+}
 
 namespace {
 // Excel's extensions for x14 conditional formats and validations.
@@ -1174,7 +1185,19 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
     std::vector<std::string> linkIds;
     std::vector<uint8_t> linkRels;
     if (NewLinkRels(*pkg, s, s.PartName(), linkIds, linkRels)) {
-      put(pkg::RelsPartFor(s.PartName()), std::move(linkRels));
+      // A package that lists each rels part instead of a Default for .rels (LibreOffice) gets this one too.
+      const std::string relsPart = pkg::RelsPartFor(s.PartName());
+      bool typed = false;
+      for (pugi::xml_node c : typesRoot.children())
+        typed = typed || (Local(c) == "Default" && _stricmp(c.attribute("Extension").value(), "rels") == 0) ||
+                (Local(c) == "Override" && pkg::PartKey(c.attribute("PartName").value()) == pkg::PartKey(relsPart));
+      if (!typed) {
+        pugi::xml_node o = typesRoot.append_child("Override");
+        o.append_attribute("PartName").set_value(relsPart.c_str());
+        o.append_attribute("ContentType").set_value("application/vnd.openxmlformats-package.relationships+xml");
+        typesChanged = true;
+      }
+      put(relsPart, std::move(linkRels));
       pieces |= edit::kPieceLinks;
     }
     plan.sheets.push_back({&s, s.PartName(), s.RelId(), EditedText(s, pieces, active, linkIds), false});
@@ -1407,6 +1430,17 @@ Status WriteSave(const Workbook& book, SavePlan& plan, pkg::ByteSink& sink) {
     plan.changes.replace.push_back({job.part, Bytes(xml)});
   }
   if (plan.strings) plan.changes.replace.push_back({plan.stringsPart, Bytes(StringsXml(book.Strings(), plan.strict))});
+  // Charts' caches follow the cells (s3-charts); a chart whose cells hold what it caches is copied.
+  for (const pkg::Part& part : pkg->Parts()) {
+    if (part.deleted || pkg->ContentTypeOf(part.name) != "application/vnd.openxmlformats-officedocument.drawingml.chart+xml") continue;
+    if (std::any_of(plan.changes.replace.begin(), plan.changes.replace.end(), [&](const auto& r) { return r.first == part.name; }) ||
+        std::find(plan.changes.leaveOut.begin(), plan.changes.leaveOut.end(), part.name) != plan.changes.leaveOut.end())
+      continue;
+    std::vector<uint8_t> bytes;
+    if (!pkg->ReadPart(part.name, bytes).Ok()) continue;
+    std::string xml(bytes.begin(), bytes.end());
+    if (edit::charts::RefreshCaches(book, xml)) plan.changes.replace.push_back({part.name, Bytes(xml)});
+  }
   Status st = pkg->Save(sink, plan.changes);
   plan.changes.replace.resize(small);
   return st;
