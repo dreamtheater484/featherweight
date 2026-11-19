@@ -698,3 +698,25 @@ TEST(sheet_table_totals_typed) {
         s.Tables()[0].columns[1].totalsLabel.empty());
   CHECK(TablePart(*book).find("totalsRowFormula") == std::string::npos);
 }
+
+// A number typed in a table's totals row is its column's label, as text, as Excel writes it (Excel
+// repairs a number there with neither a label nor a function; s3-corpus's S3 gate,
+// libreoffice-totalsrowfunction-xlsx-table-totals-row).
+TEST(sheet_table_totals_typed_number) {
+  auto book = TableBook(false, true);
+  if (!book) return;
+  Editor ed(*book);
+  const Sheet& s = book->GetSheet(0);
+  if (s.Tables().empty() || s.Tables()[0].columns.size() < 2) return;
+  CHECK(ed.SetCell(0, 4, 0, CellInput::Number(12.5)));  // over the label "Total"
+  CHECK(s.GetValue(4, 0).type == ValueType::String && s.GetValue(4, 0).text == "12.5");
+  CHECK(s.Tables()[0].columns[0].totalsLabel == "12.5" && s.Tables()[0].columns[0].totalsFunction.empty());
+  CHECK(TablePart(*book).find("<tableColumn id=\"1\" name=\"a\" totalsRowLabel=\"12.5\"/>") != std::string::npos);
+  CHECK(ed.SetCell(0, 4, 1, CellInput::Bool(true)));
+  CHECK(s.GetValue(4, 1).type == ValueType::String && s.Tables()[0].columns[1].totalsLabel == "TRUE");
+  CHECK(ed.SetCell(0, 4, 1, CellInput::Empty()));
+  CHECK(s.GetValue(4, 1).type == ValueType::Empty && s.Tables()[0].columns[1].totalsLabel.empty());
+  CHECK(ed.Undo(3));
+  CHECK(s.GetValue(4, 0).type == ValueType::String && s.GetValue(4, 0).text == "Total");
+  CHECK(s.Tables()[0].columns[0].totalsLabel == "Total" && s.Tables()[0].columns[1].totalsLabel.empty());
+}

@@ -1190,7 +1190,10 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
       for (int n = 1;; ++n) {
         target = "worksheets/sheet" + std::to_string(n) + ".xml";
         job.part = dir + target;
-        if (!taken(job.part)) break;
+        // Nor a name with a leftover relationships part (its sheet missing): the new sheet would get
+        // its tables and drawings (found by fuzz_xlsx).
+        const pkg::Part* leftover = pkg->FindPart(pkg::RelsPartFor(job.part));
+        if (!taken(job.part) && !(leftover && !leftover->deleted)) break;
       }
       job.relId = newRelId();
       pugi::xml_node rel = relRoot.append_child("Relationship");
