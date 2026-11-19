@@ -183,6 +183,7 @@ struct SheetObjects::Impl {
     draw::Rect rect;
     bool prints = true;
     std::string name;
+    uint32_t id = 0;
   };
   struct Note {
     std::vector<RichParagraph> text;
@@ -256,6 +257,7 @@ void SheetObjects::Impl::ReadDrawing(const pkg::Package& package, const std::str
       return true;
     });
     if (!it.node) return true;
+    it.id = a.find_node([](pugi::xml_node n) { return LocalNameOf(n) == "cNvPr"; }).attribute("id").as_uint();
     if (LocalNameOf(it.node) == "graphicFrame") {
       it.name = Child(Child(it.node, kXdr, "nvGraphicFramePr"), kXdr, "cNvPr").attribute("name").value();
       pugi::xml_node c = Child(A(A(it.node, "graphic"), "graphicData"), kChart, "chart");
@@ -389,7 +391,7 @@ void SheetObjects::Draw(draw::Painter& painter, const draw::Rect& visible, const
 std::vector<SheetObjects::Object> SheetObjects::Objects() const {
   std::vector<Object> out;
   for (const Impl::Item& it : impl_->items)
-    if (!Empty(it.rect) && !(it.drawing && it.drawing->IsHidden())) out.push_back({it.name, it.rect, it.chart != nullptr, it.prints});
+    if (!Empty(it.rect) && !(it.drawing && it.drawing->IsHidden())) out.push_back({it.name, it.rect, it.chart != nullptr, it.prints, it.id});
   return out;
 }
 

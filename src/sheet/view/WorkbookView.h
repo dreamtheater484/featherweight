@@ -295,7 +295,7 @@ class WorkbookView : public PagedView {
   float tabScroll_ = 0;
 
   // Mouse.
-  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag, Fill, Size, TabDrag };
+  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag, Fill, Size, TabDrag, Object };
   // A sheet tab dragged to move the sheet: where it would go (before that sheet; SheetCount() for
   // the end), shown once the mouse has moved a few pixels.
   struct TabDrag {
@@ -615,6 +615,28 @@ class WorkbookView : public PagedView {
   // The active cell's note (not a threaded comment), its text without the author's line.
   const CellNote* NoteHere(std::wstring* text = nullptr) const;
   bool ThreadHere() const;  // whether the active cell has a threaded comment
+  // ---- Charts and the objects in the sheet's drawing (S3, s3-charts; WorkbookCharts.cpp): Insert
+  // Chart, and an object selected, dragged to move or by a handle to resize, deleted.
+  struct ObjectDrag {
+    int handle = -1;         // -1 moves it; 0-7 a handle, clockwise from the top left
+    draw::Rect start, now;   // sheet points
+    draw::Point from;        // where the mouse went down (sheet points)
+    bool moved = false;
+  };
+  uint32_t object_ = 0;      // the selected object's shape id (0: none)
+  size_t objectSheet_ = 0;   // on this sheet
+  ObjectDrag objectDrag_;
+  bool ChartsCommandState(int cmd, CommandState& s);
+  bool ChartsCommand(int cmd);
+  void AddChartTools(ToolbarModel& m);
+  std::optional<SheetObjects::Object> SelectedObject() const;
+  std::optional<draw::Point> SheetPointAt(float x, float y) const;  // client to sheet points
+  edit::drawing::Place PlaceFor(const draw::Rect& r) const;
+  bool ObjectMouseDown(float x, float y);
+  void ObjectMouseMove(float x, float y, UINT mods);
+  void ObjectMouseUp();
+  bool ObjectKey(UINT vk, UINT mods);
+  void DrawObjectSelection(draw::Painter& painter, float scale, float mirrorX);
   void AddReviewCellItems(HMENU m);  // the cell menu's
   bool ReviewCommandState(int cmd, CommandState& s);
   bool ReviewCommand(int cmd);

@@ -215,6 +215,7 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
   }
   if (alt && !ctrl && !shift && vk == VK_OEM_PLUS && !editor_.Active() && !preview_) return CmdAutoSum;
   if (alt && !ctrl && !shift && vk == VK_DOWN && !editor_.Active() && !preview_) return CmdValidationList;  // s3-data
+  if (alt && !ctrl && !shift && vk == VK_F1 && !editor_.Active() && !preview_) return CmdInsertChart;  // s3-charts
   if (ctrl && alt && !shift && vk == VK_F9 && !editor_.Active()) return CmdCalculateFull;
   if (alt && shift && !ctrl && !editor_.Active() && !preview_ && (vk == VK_RIGHT || vk == VK_LEFT))
     return vk == VK_RIGHT ? CmdGroup : CmdUngroup;
@@ -245,6 +246,7 @@ CommandState WorkbookView::QueryCommand(int cmd) {
   if (DataCommandState(cmd, s)) return s;
   if (RulesCommandState(cmd, s)) return s;
   if (NamesCommandState(cmd, s)) return s;
+  if (ChartsCommandState(cmd, s)) return s;  // s3-charts
   const bool ready = Ready();
   size_t shown = 0;
   if (ready)
@@ -314,6 +316,7 @@ std::vector<int> WorkbookView::Commands() {
     ids.push_back(cmd);
   ids.push_back(CmdPageSetup);  // s3-print
   for (int cmd = CmdSetPrintArea; cmd <= CmdPrintSelection; ++cmd) ids.push_back(cmd);
+  for (int cmd = CmdInsertChart; cmd <= CmdChartScatter; ++cmd) ids.push_back(cmd);  // s3-charts
   return ids;
 }
 
@@ -339,6 +342,7 @@ bool WorkbookView::Execute(int cmd) {
   if (DataCommand(cmd)) return true;
   if (RulesCommand(cmd)) return true;
   if (NamesCommand(cmd)) return true;
+  if (ChartsCommand(cmd)) return true;  // s3-charts
   switch (cmd) {
     case CmdUndo:
     case CmdRedo:
