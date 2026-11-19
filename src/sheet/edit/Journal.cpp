@@ -530,6 +530,39 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = EditChart(sheet, id, e);
         break;
       }
+      case JournalOp::PasteObject: {
+        const int sheet = f.Int();
+        Editor::ObjectClip clip;
+        clip.anchor = f.S();
+        clip.book = f.U() ? &book_ : nullptr;
+        auto parts = [&](auto&& self, std::vector<Editor::ObjectClip::Part>& out, int depth) -> void {
+          out.resize(depth > 4 ? 0 : std::min<size_t>(f.U32(), f.Left()));
+          for (Editor::ObjectClip::Part& p : out) {
+            p.rel = f.S();
+            p.type = f.S();
+            p.name = f.S();
+            p.contentType = f.S();
+            p.bytes = f.S();
+            p.external = f.U() != 0;
+            p.target = f.S();
+            self(self, p.parts, depth + 1);
+          }
+        };
+        parts(parts, clip.parts, 0);
+        drawing::Place p;
+        for (drawing::Marker* m : {&p.from, &p.to}) {
+          m->col = f.U32();
+          m->row = f.U32();
+          m->colOff = f.I();
+          m->rowOff = f.I();
+        }
+        p.x = f.I();
+        p.y = f.I();
+        p.cx = f.I();
+        p.cy = f.I();
+        if (f.Ok()) r = PasteObject(sheet, clip, p);
+        break;
+      }
       case JournalOp::DeleteObjects: {
         const int sheet = f.Int();
         std::vector<uint32_t> ids(std::min<size_t>(f.U32(), f.Left()));

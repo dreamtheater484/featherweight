@@ -8,6 +8,7 @@
 #include <cmath>
 
 #include "Commands.h"
+#include "Util.h"
 #include "core/Strings.h"
 #include "sheet/calc/Typing.h"
 #include "sheet/data/Filter.h"
@@ -222,6 +223,55 @@ void WorkbookView::DrawObjectSelection(draw::Painter& painter, float scale, floa
     painter.FillPath(dot, white);
     painter.StrokePath(dot, pen);
   }
+}
+
+// ---- The clipboard: an object copied (in any tab), pasted while the clipboard still holds it
+
+namespace {
+
+struct ObjectCopy {
+  edit::Editor::ObjectClip clip;
+  draw::Size size;  // points
+  unsigned long seq = 0;
+};
+std::optional<ObjectCopy>& Copied() {
+  static std::optional<ObjectCopy> copied;
+  return copied;
+}
+
+}  // namespace
+
+bool WorkbookView::CopyObject(bool cut) {
+  const std::optional<SheetObjects::Object> sel = SelectedObject();
+  if (!sel) return false;
+  edit::Editor::ObjectClip clip = Ed().CopyObject(static_cast<int>(sheet_), object_);
+  if (clip.anchor.empty()) return true;
+  util::SetClipboardText(Utf8ToWide(sel->name));
+  Copied() = ObjectCopy{std::move(clip), {sel->rect.Width(), sel->rect.Height()}, util::ClipboardSequence()};
+  clip_.reset();  // no cells copied any more
+  if (cut && !EditRefused(Ed().DeleteObjects(static_cast<int>(sheet_), {object_}))) object_ = 0;
+  host_.ViewInvalidate();
+  host_.ViewStateChanged();
+  return true;
+}
+
+bool WorkbookView::PasteObjectClip() {
+  const std::optional<ObjectCopy>& c = Copied();
+  if (!c || util::ClipboardSequence() != c->seq) return false;
+  // At the active cell, at its size.
+  const float x = static_cast<float>(grid_.ColLeft(active_.col) * kPtPerPx), y = static_cast<float>(grid_.RowTop(active_.row) * kPtPerPx);
+  if (EditRefused(Ed().PasteObject(static_cast<int>(sheet_), c->clip, PlaceFor({x, y, x + c->size.width, y + c->size.height}))))
+    return true;
+  if (const SheetObjects* objects = Objects()) {
+    const std::vector<SheetObjects::Object> all = objects->Objects();
+    if (!all.empty()) {
+      object_ = all.back().id;
+      objectSheet_ = sheet_;
+    }
+  }
+  host_.ViewInvalidate();
+  host_.ViewStateChanged();
+  return true;
 }
 
 // ---- Commands

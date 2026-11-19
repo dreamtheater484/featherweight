@@ -281,6 +281,22 @@ class Editor {
   // Deleted, with the parts nothing else uses any more (a chart and its own parts, a picture
   // used once); the drawing and the sheet's reference to it go with the last object.
   Result DeleteObjects(int sheet, const std::vector<uint32_t>& ids);
+  // The clipboard's objects: one copied with every part it uses (its chart and the chart's own
+  // parts, its picture, an external link's target), pasted as a copy.
+  struct ObjectClip {
+    struct Part {
+      std::string rel, type, name, contentType, bytes, target;  // `target`: an external one's
+      bool external = false;
+      std::vector<Part> parts;  // its own
+    };
+    std::string anchor;  // its bytes, declaring the prefixes it uses
+    std::vector<Part> parts;
+    const void* book = nullptr;  // the workbook it came from
+  };
+  ObjectClip CopyObject(int sheet, uint32_t id) const;
+  // A copy at `place` (journal 54): new parts for a chart, a picture this workbook has stored
+  // used again; a chart from another workbook keeps its values, not its references.
+  Result PasteObject(int sheet, const ObjectClip& clip, const drawing::Place& place);
   // The chart part of the object with shape id `id` on the sheet; empty when it isn't a chart.
   std::string ChartPart(int sheet, uint32_t id) const;
   // A chart's type, titles, legend, data labels, colors or series changed (Charts.h: ChartEdit).

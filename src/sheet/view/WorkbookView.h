@@ -581,6 +581,8 @@ class WorkbookView : public PagedView {
   void ObjectMouseUp();
   bool ObjectKey(UINT vk, UINT mods);
   void DrawObjectSelection(draw::Painter& painter, float scale, float mirrorX);
+  bool CopyObject(bool cut);  // the selected object onto the clipboard (false: none selected)
+  bool PasteObjectClip();     // an object copied, while the clipboard still holds it
   class ChartPanel;
   std::unique_ptr<PanelContent> chartPanel_;
   void ShowChartPanel();
