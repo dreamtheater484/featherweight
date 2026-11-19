@@ -55,6 +55,6 @@ The size budgets add up to 1.05 MB (S3 ended about 1.28 MB over S2's 7.91 MB; 3.
 
 As S3 (`docs/s3-plan.md`, "Rules"): through the edit API only; never damage a file; nothing active; lightweight (ledger entry with a reason); Excel automation rules; Roy's Featherweight never closed; Playwright's own headless Chromium only.
 
-- **Usage:** check `get_usage` before each step. Stop gracefully at **92 % of the 5-hour window** and at **98 % weekly**: no new step, commit and push (a WIP commit is fine), state note exact, end the turn. The coordinator resumes everyone after the reset.
+- **Usage:** check `get_usage` before each step. Stop gracefully at **98 % of the 5-hour window** (Roy, 2026-11-19; it was 92 %) and at **98 % weekly**: no new step, commit and push (a WIP commit is fine), state note exact, end the turn. The coordinator resumes everyone after the reset.
 - **Notes:** `D:\Documents\Codex\FeatherweightNotes\s4\<piece>-state.md`, current at every turn end.
 - **Commits:** small, on your branch, no Co-Authored-By trailer. Push and say what's ready to merge.
