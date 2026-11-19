@@ -67,8 +67,13 @@ TEST(sheet_ods_converts_a_spreadsheet) {
       "<number:date-style style:name=\"N1\"><number:era number:calendar=\"gengou\" number:style=\"long\"/>"
       "<number:year number:calendar=\"gengou\"/><number:text>/</number:text><number:month/></number:date-style>"
       "<style:style style:name=\"ce2\" style:family=\"table-cell\" style:data-style-name=\"N1\"/>"
-      "</office:automatic-styles><office:body><office:spreadsheet>"
-      "<table:table table:name=\"Data\"><table:table-column table:number-columns-repeated=\"3\"/>"
+      "<style:style style:name=\"ta1\" style:family=\"table\" style:master-page-name=\"mp1\"/>"
+      "<style:page-layout style:name=\"pm1\"><style:page-layout-properties fo:page-width=\"29.7cm\" fo:page-height=\"21cm\" "
+      "style:print-orientation=\"landscape\" style:scale-to-X=\"1\" style:table-centering=\"horizontal\"/></style:page-layout>"
+      "</office:automatic-styles><office:master-styles><style:master-page style:name=\"mp1\" style:page-layout-name=\"pm1\">"
+      "<style:footer><text:p>Page <text:page-number>1</text:page-number> of <text:page-count>2</text:page-count> &amp; more"
+      "</text:p></style:footer></style:master-page></office:master-styles><office:body><office:spreadsheet>"
+      "<table:table table:name=\"Data\" table:style-name=\"ta1\"><table:table-column table:number-columns-repeated=\"3\"/>"
       "<table:table-row><table:table-cell office:value-type=\"string\"><text:p>Total_x0041_</text:p></table:table-cell>"
       "<table:table-cell table:style-name=\"ce1\" office:value-type=\"float\" office:value=\"2.5\"><text:p>2.5</text:p>"
       "</table:table-cell>"
@@ -123,6 +128,12 @@ TEST(sheet_ods_converts_a_spreadsheet) {
   CHECK(sheet.find("<conditionalFormatting sqref=\"B1\"><cfRule type=\"cellIs\" operator=\"greaterThan\" dxfId=\"0\"") !=
         std::string::npos);
   CHECK(sheet.find("<formula>2</formula>") != std::string::npos);
+  // The page setup from the table's master page.
+  CHECK(sheet.find("<sheetPr><pageSetUpPr fitToPage=\"1\"/></sheetPr>") != std::string::npos);
+  CHECK(sheet.find("<printOptions horizontalCentered=\"1\"/>") != std::string::npos);
+  CHECK(sheet.find("<pageSetup paperSize=\"9\" fitToWidth=\"1\" fitToHeight=\"0\" orientation=\"landscape\"/>") !=
+        std::string::npos);
+  CHECK(sheet.find("<oddFooter>&amp;CPage &amp;P of &amp;N &amp;&amp; more</oddFooter>") != std::string::npos);
   CHECK(styles.find("formatCode=\"[$-411]ggge/m\"") != std::string::npos);  // Japan's eras
   CHECK(styles.find("<dxfs count=\"1\"><dxf><font><color rgb=\"FFFF0000\"/></font></dxf></dxfs>") != std::string::npos);
   const std::string comments = part("/xl/comments1.xml");
