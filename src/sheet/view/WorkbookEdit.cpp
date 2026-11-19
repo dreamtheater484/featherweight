@@ -753,7 +753,7 @@ void WorkbookView::SyncEngine(const std::vector<edit::Change>& changes) {
   bool structure = false, cells = false;
   for (const edit::Change& c : changes) {
     structure |= (c.what & (edit::kSheets | edit::kNames | edit::kShift)) != 0;
-    cells |= (c.what & (edit::kValues | edit::kFormulas)) != 0;
+    cells |= (c.what & (edit::kValues | edit::kFormulas | edit::kRowProps | edit::kTables)) != 0;
   }
   if (!structure && !cells) return;
   for (auto& o : objects_)  // charts read typed values again (a recalculation may change nothing)
@@ -764,8 +764,27 @@ void WorkbookView::SyncEngine(const std::vector<edit::Change>& changes) {
     calc.StructureEdited();
     return;
   }
-  for (const edit::Change& c : changes)
+  for (const edit::Change& c : changes) {
     if (c.what & (edit::kValues | edit::kFormulas)) calc.CellsEdited(c.sheet, c.cells);
+    // s3-data: rows hidden or shown (a filter, undo): SUBTOTAL and AGGREGATE over them again.
+    if ((c.what & edit::kRowProps) && c.sheet >= 0 && !calc.Opening()) {
+      calc::Area rows;
+      rows.r1 = static_cast<int32_t>(std::min<uint32_t>(c.cells.firstRow, kMaxRows - 1));
+      rows.r2 = static_cast<int32_t>(std::min<uint32_t>(c.cells.lastRow, kMaxRows - 1));
+      rows.c2 = static_cast<int16_t>(kMaxCols - 1);
+      calc.engine().Changed(c.sheet, rows);
+    }
+    // s3-data: a table resized, added or removed: what refers to it, over its old and new cells.
+    if ((c.what & edit::kTables) && c.sheet >= 0 && !calc.Opening()) {
+      calc::Area t;
+      t.r1 = static_cast<int32_t>(std::min<uint32_t>(c.cells.firstRow, kMaxRows - 1));
+      t.r2 = static_cast<int32_t>(std::min<uint32_t>(c.cells.lastRow, kMaxRows - 1));
+      t.c1 = static_cast<int16_t>(std::min<uint32_t>(c.cells.firstCol, kMaxCols - 1));
+      t.c2 = static_cast<int16_t>(std::min<uint32_t>(c.cells.lastCol, kMaxCols - 1));
+      calc.engine().TablesChanged();
+      calc.engine().Changed(c.sheet, t);
+    }
+  }
 }
 
 void WorkbookView::MoveAfterEntry(int dRow, int dCol) {

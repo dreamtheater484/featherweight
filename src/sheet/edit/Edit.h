@@ -52,6 +52,7 @@ enum ChangeFlag : uint32_t {
   kView = 1u << 10,       // selection, active sheet, top-left cell, zoom (not undo steps)
   kObjects = 1u << 11,    // the sheet's notes, links or drawings moved (a sort): load them again
   kRules = 1u << 12,      // the sheet's conditional formats or validations changed: read them again
+  kTables = 1u << 13,     // a table added, removed, resized or renamed: structured references' areas differ
 };
 
 // Cells inserted or deleted (kShift): along `axis`, `count` rows or columns at `at` (> 0 inserted
@@ -236,6 +237,9 @@ class Editor {
   Result AddTable(int sheet, Table t);
   Result SetTable(int sheet, size_t index, const Table& t);
   Result RemoveTable(int sheet, size_t index);
+  // The criteria of table `index`'s filter buttons (its autoFilter; `f.ref` is the table's, without
+  // the total row). The rows it hides are the caller's (HideRows), in the same group.
+  Result SetTableFilter(int sheet, size_t index, const SheetFilter& f);
 
   // ---- Package parts, for edit operations (charts, pictures, notes, comments, tables...): call
   // them inside the operation's group (Run, or BeginGroup and EndGroup); undo and redo take them

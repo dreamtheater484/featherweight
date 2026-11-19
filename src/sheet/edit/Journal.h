@@ -77,6 +77,7 @@ enum class JournalOp : uint8_t {
   AddTable = 62,
   SetTable = 63,
   RemoveTable = 64,
+  SetTableFilter = 65,
   // S3: each piece numbers its own (s3-review from 90), so branches don't clash.
   SetSheetProtection = 90,
   SetWorkbookProtection = 91,

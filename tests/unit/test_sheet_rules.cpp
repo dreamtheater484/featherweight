@@ -262,6 +262,86 @@ TEST(SheetTables_AddSetRemove) {
   CHECK(s.Tables().size() == 1 && s.Text().afterData.find("tableParts") != std::string::npos);
 }
 
+// A table's filter buttons: their criteria in the table's part (Excel's autoFilter there), the
+// model's, undo, a size change keeping them, and the journal.
+TEST(SheetTables_Filter) {
+  const char* data =
+      "<sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Name</t></is></c><c r=\"B1\" t=\"inlineStr\"><is><t>Amount</t></is></c></row>"
+      "<row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>a</t></is></c><c r=\"B2\"><v>5</v></c></row>"
+      "<row r=\"3\"><c r=\"A3\" t=\"inlineStr\"><is><t>b</t></is></c><c r=\"B3\"><v>7</v></c></row></sheetData>";
+  auto book = OpenParts({data, "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  edit::Journal journal;
+  ed.SetJournal(&journal);
+  Table t;
+  t.ref = Range{0, 0, 2, 1};
+  t.autoFilter = true;
+  t.style = TableStyleInfo{"TableStyleMedium2", false, false, true, false};
+  t.columns = {TableColumn{0, "Name"}, TableColumn{0, "Amount"}};
+  CHECK(ed.AddTable(0, t));
+  const Sheet& s = book->GetSheet(0);
+  SheetFilter f;
+  FilterColumn c;
+  c.colId = 0;
+  c.values = {"a"};
+  f.columns.push_back(c);
+  FilterColumn beyond;  // past the table's columns: left out
+  beyond.colId = 5;
+  f.columns.push_back(beyond);
+  CHECK(ed.SetTableFilter(0, 0, f));
+  CHECK(s.Tables()[0].filtered && s.Tables()[0].criteria.size() == 1 && s.Tables()[0].criteria[0].values[0] == "a");
+  CHECK(!s.Filter());  // the sheet's own stays off
+  // A total row added keeps the criteria; the filter's range leaves it out.
+  Table total = s.Tables()[0];
+  total.ref.lastRow = 3;
+  total.totalsRows = 1;
+  CHECK(ed.SetTable(0, 0, total));
+  CHECK(s.Tables()[0].criteria.size() == 1);
+  ed.SetJournal(nullptr);
+  std::vector<uint8_t> saved = Save(*book, ed, L"tablefilter");
+  Clean(saved);
+  const std::string part = Part(saved, "/xl/tables/table1.xml");
+  CHECK(part.find("<autoFilter ref=\"A1:B3\"><filterColumn colId=\"0\"><filters><filter val=\"a\"/></filters></filterColumn></autoFilter>"
+                  "<tableColumns") != std::string::npos);
+  auto again = OpenZip(saved);
+  if (again) {
+    const Table& t2 = again->GetSheet(0).Tables()[0];
+    CHECK(t2.filtered && t2.criteria.size() == 1 && t2.criteria[0].values == std::vector<std::string>{"a"});
+  }
+  auto fresh = OpenParts({data, "<sheetData/>"});
+  if (fresh) {
+    Editor replay(*fresh);
+    CHECK(replay.Replay(journal.All()));
+    CHECK(fresh->GetSheet(0).Tables().size() == 1 && fresh->GetSheet(0).Tables()[0].criteria.size() == 1);
+  }
+  // Undo: the total row, then the criteria.
+  ed.Undo();
+  ed.Undo();
+  CHECK(!s.Tables()[0].filtered && s.Tables()[0].criteria.empty());
+  CHECK(ed.PartBytes("/xl/tables/table1.xml").find("filterColumn") == std::string::npos);
+  ed.Redo();
+  CHECK(s.Tables()[0].criteria.size() == 1 && ed.PartBytes("/xl/tables/table1.xml").find("filterColumn") != std::string::npos);
+  // Without buttons there's nothing to filter.
+  Table plain = s.Tables()[0];
+  plain.autoFilter = false;
+  CHECK(ed.SetTable(0, 0, plain));
+  CHECK(s.Tables()[0].criteria.empty() && !ed.SetTableFilter(0, 0, f));
+}
+
+// A table part with a prefix keeps it on the filter's elements.
+TEST(SheetTables_FilterPrefix) {
+  std::string xml =
+      "<?xml version=\"1.0\"?><x:table xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" id=\"1\" "
+      "name=\"T\" displayName=\"T\" ref=\"A1:B3\"><x:autoFilter ref=\"A1:B3\"/><x:tableColumns count=\"2\">"
+      "<x:tableColumn id=\"1\" name=\"A\"/><x:tableColumn id=\"2\" name=\"B\"/></x:tableColumns></x:table>";
+  CHECK(xlsx::PutTableFilter(xml, "<autoFilter ref=\"A1:B3\"><filterColumn colId=\"1\"><filters blank=\"1\"/></filterColumn></autoFilter>"));
+  CHECK(xml.find("<x:autoFilter ref=\"A1:B3\"><x:filterColumn colId=\"1\"><x:filters blank=\"1\"/></x:filterColumn></x:autoFilter><x:tableColumns") !=
+        std::string::npos);
+  SheetFilter f;
+  CHECK(xlsx::ReadTableFilter(xml, f) && f.columns.size() == 1 && f.columns[0].colId == 1 && f.columns[0].blank);
+}
+
 // Convert to Range, as Excel 2021 rewrote these (ListObject.Unlist): table Sales on A1:C5 with a
 // header and a total row, columns Name, Amount, Twice.
 TEST(SheetTables_Unstructure) {
