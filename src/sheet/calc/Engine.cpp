@@ -999,7 +999,7 @@ namespace fw::sheet::calc {
 namespace {
 constexpr size_t kParallelMin = 4096;  // fewer dirty formulas: the serial walk alone
 constexpr size_t kLevelMin = 512;      // a smaller level is calculated on the calling thread
-constexpr size_t kChunk = 32768;       // formulas between deadline checks
+constexpr size_t kChunk = 65536;       // formulas between deadline checks
 constexpr uint8_t kStoreHere = 200;    // a result the workers couldn't store
 thread_local bool tWorker = false;     // calculating in the parallel phase
 thread_local bool tBlocked = false;    // ...and the formula asked Ready (it then goes serial)
@@ -1013,7 +1013,7 @@ struct Engine::Plan {
   size_t next = 0, level = 0;   // the next formula and its level
   std::vector<Value> values;    // the chunk's results
   std::vector<uint8_t> results;
-  std::vector<uint32_t> cleaned;  // calculated, their cells still marked dirty (Flush)
+  size_t flushed = 0;            // order[flushed, next): calculated, cells still marked dirty (Flush)
   // The dirty formulas the plan was made for: the same ones dirty again, with no formula, name or
   // spill changed since (`reusable`), follow the same plan (F9 again, the same cell edited again).
   std::vector<uint32_t> made;
@@ -1039,7 +1039,7 @@ void Engine::SetThreads(int n) {
 bool Engine::BuildPlan() {
   Plan& p = *plan_;
   p.valid = false;
-  p.next = p.level = 0;
+  p.next = p.level = p.flushed = 0;
   std::vector<uint32_t> dirty;
   dirty.reserve(dirtyCount_);
   for (uint32_t id = 0; id < nodes_.size(); ++id)
@@ -1188,7 +1188,8 @@ void Engine::RunChunk(size_t begin, size_t end) {
   const bool many = n >= kLevelMin && workers_->Count() > 1;
   if (many) workers_->Run(n, 64, calc);
   else calc(0, 0, n);
-  // Stores from the workers: one cell each (what the host can take that way).
+  // The results: flags, and the values stored from the workers where the host can take them that
+  // way (one cell each); the rest here.
   if (many) {
     std::vector<std::pair<int32_t, int32_t>> span(sheets_.size() + 1, {INT32_MAX, -1});
     for (size_t k = 0; k < n; ++k) {
@@ -1201,51 +1202,61 @@ void Engine::RunChunk(size_t begin, size_t end) {
     }
     for (size_t s = 0; s < span.size(); ++s)
       if (span[s].second >= 0) host_.BeginShared(static_cast<int>(s), span[s].first, span[s].second);
-    std::atomic<size_t> changed{0};
-    workers_->Run(n, 256, [&](int, size_t b, size_t e) {
-      size_t mine = 0;
-      for (size_t k = b; k < e; ++k) {
-        const Node& nd = nodes_[p.order[begin + k]];
-        if (p.results[k] != static_cast<uint8_t>(EvalResult::kDone) || !single(nd)) continue;
+  }
+  std::atomic<size_t> changed{0}, done{0};
+  auto finish = [&](int, size_t b, size_t e) {
+    size_t mine = 0, cleaned = 0;
+    for (size_t k = b; k < e; ++k) {
+      const uint8_t r = p.results[k];
+      if (r == static_cast<uint8_t>(EvalResult::kRetry)) continue;  // stays dirty: the serial walk
+      Node& nd = nodes_[p.order[begin + k]];
+      nd.flags &= static_cast<uint8_t>(~kFresh);
+      if (r == static_cast<uint8_t>(EvalResult::kUnsupported)) {
+        nd.flags |= kStale;  // keeps its cached value
+      } else {
+        nd.flags &= static_cast<uint8_t>(~kStale);
         Value& v = p.values[k];
-        if (v.IsArray()) v = Value(v.array().at(0, 0));
-        if (v.IsEmpty() || v.IsMissing()) v = Value::Number(0);
-        const int r = host_.StoreShared(nd.at.sheet, nd.at.row, nd.at.col, v);
-        if (r < 0) {
+        if (!many || !single(nd)) {
           p.results[k] = kStoreHere;
           continue;
         }
-        mine += static_cast<size_t>(r);
+        if (v.IsArray()) v = Value(v.array().at(0, 0));
+        if (v.IsEmpty() || v.IsMissing()) v = Value::Number(0);
+        const int st = host_.StoreShared(nd.at.sheet, nd.at.row, nd.at.col, v);
+        if (st < 0) {
+          p.results[k] = kStoreHere;
+          continue;
+        }
+        mine += static_cast<size_t>(st);
         v = Value();
       }
-      changed.fetch_add(mine, std::memory_order_relaxed);
-    });
+      nd.state = kClean;  // its cells' dirty marks go in Flush, all at once when nothing is left
+      ++cleaned;
+    }
+    changed.fetch_add(mine, std::memory_order_relaxed);
+    done.fetch_add(cleaned, std::memory_order_relaxed);
+  };
+  if (many) {
+    workers_->Run(n, 256, finish);
     host_.EndShared(changed.load());
+  } else {
+    finish(0, 0, n);
   }
-  // The rest here, and the formulas marked calculated.
-  bool retry = false;
+  size_t cleaned = done.load(), retries = 0;
   for (size_t k = 0; k < n; ++k) {
-    const uint32_t id = p.order[begin + k];
-    Node& nd = nodes_[id];
-    const uint8_t r = p.results[k];
-    if (r == static_cast<uint8_t>(EvalResult::kRetry)) {
-      retry = true;  // stays dirty: it and what follows go to the serial walk
-      continue;
+    if (p.results[k] == static_cast<uint8_t>(EvalResult::kRetry)) {
+      ++retries;
+    } else if (p.results[k] == kStoreHere) {
+      const uint32_t id = p.order[begin + k];
+      Store(id, std::move(p.values[k]));
+      p.values[k] = Value();
+      nodes_[id].state = kClean;
+      ++cleaned;
     }
-    nd.flags &= static_cast<uint8_t>(~kFresh);
-    if (r == static_cast<uint8_t>(EvalResult::kUnsupported)) {
-      nd.flags |= kStale;
-    } else {
-      nd.flags &= static_cast<uint8_t>(~kStale);
-      if (r == kStoreHere || !many) Store(id, std::move(p.values[k]));
-    }
-    p.values[k] = Value();
-    ++evaluations_, ++parallelEvaluations_;
-    nd.state = kClean;  // its cells' dirty marks go in Flush, all at once when nothing is left
-    --dirtyCount_;
-    p.cleaned.push_back(id);
   }
-  if (retry) p.valid = p.retry = p.reusable = false;
+  dirtyCount_ -= cleaned;
+  evaluations_ += n - retries, parallelEvaluations_ += n - retries;
+  if (retries) p.valid = p.retry = p.reusable = false;
 }
 
 void Engine::Flush() {
@@ -1253,13 +1264,14 @@ void Engine::Flush() {
   if (dirtyCount_ == 0) {
     dirtyCells_->Reset();
   } else {
-    for (uint32_t id : p.cleaned) {
-      const Node& n = nodes_[id];
+    for (size_t k = p.flushed; k < p.next; ++k) {
+      const Node& n = nodes_[p.order[k]];
+      if (n.state != kClean) continue;  // asked Ready: still dirty
       for (int32_t r = n.out.r1; r <= n.out.r2; ++r)
         for (int32_t c = n.out.c1; c <= n.out.c2; ++c) dirtyCells_->Set(n.at.sheet, r, c, false);
     }
   }
-  p.cleaned.clear();
+  p.flushed = p.next;
 }
 
 bool Engine::Parallel(double deadline) {
