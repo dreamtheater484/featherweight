@@ -722,7 +722,7 @@ class Painting {
         const CellText::Run* run = piece.run < l.runs.size() ? &l.runs[piece.run] : nullptr;
         if (run && run->hidden) continue;
         const draw::Brush brush = draw::Brush::Solid(ToColor(run ? run->color : 0xFF000000));
-        const draw::GlyphRun gr = piece.Run();
+        const draw::GlyphRun gr = ShownRun(piece, l.text);
         if (piece.scale != 1) {
           p_.Save();
           p_.Transform(draw::Matrix::Translate(-piece.OriginX(), 0) * draw::Matrix::Scale(piece.scale, 1) *

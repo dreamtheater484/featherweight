@@ -232,6 +232,33 @@ TEST(sheet_page_fit_width_keeps_row_breaks) {
   CHECK(fitted.PageCount() == 1);
 }
 
+// Printed and exported text can be searched and copied: each glyph run says what it shows, for the
+// simple layout (one line, Latin) and the full one (wrapped).
+TEST(sheet_page_runs_carry_text) {
+  auto book = OpenZip(test::MakeZip(WorkbookParts(
+      {"<sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Hello world</t></is></c>"
+       "<c r=\"B1\" t=\"inlineStr\"><is><t>Gr\xC3\xBC\xC3\x9F" "e \xE2\x86\x92 \xCE\xB1\xCE\xB2</t></is></c></row></sheetData>"})));
+  if (!book) return;
+  static fw::text::Fonts fonts;
+  view::FontMeasure measure(fonts);
+  NumLocale locale;
+  view::CellText text(*book, fonts, measure, locale);
+  const Sheet& s = book->GetSheet(0);
+  for (uint32_t col : {0u, 1u}) {
+    CellInfo c;
+    CHECK(s.GetCell(0, col, c));
+    const view::CellText::Layout& l = text.Get(s, c, 400);
+    std::u16string shown;
+    for (const fw::text::Line& line : l.lines)
+      for (const fw::text::GlyphPiece& g : line.pieces) {
+        const auto r = view::ShownRun(g, l.text);
+        CHECK(r.text != nullptr || g.glyphs.empty());
+        if (r.text) shown.append(r.text, r.textLength);
+      }
+    CHECK(shown == (col ? u"Grüße → αβ" : u"Hello world"));
+  }
+}
+
 TEST(sheet_page_break_preview_saved) {
   auto book = OpenZip(test::MakeZip(WorkbookParts({"<sheetViews><sheetView workbookViewId=\"0\"/></sheetViews><sheetData/>"})));
   if (!book) return;

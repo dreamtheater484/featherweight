@@ -390,6 +390,7 @@ void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const
     lengths = std::move(lens);
   }
 
+  out.text = textW;
   if (runs.size() == 1 && !out.wrapped && !out.stacked && LayOutSimple(textW, styles.front(), out)) {
     out.runs = std::move(runs);
     return;
