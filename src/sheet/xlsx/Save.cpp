@@ -859,8 +859,23 @@ std::string RelPrefix(PartText& t) {
   const size_t end = t.rootStart.rfind('>');
   if (end == std::string::npos) return {};
   const bool strict = t.rootStart.find(kMainNsStrict) != std::string::npos;
-  t.rootStart.insert(end, " xmlns:r=\"" + std::string(strict ? kRelNsStrict : kRelNs) + "\"");
-  return "r";
+  // "r", or "r1", "r2"... when the root binds "r" to something else already (declaring it twice
+  // would be an attribute twice: the file wouldn't open).
+  const auto declared = [&](const std::string& p) {
+    const std::string needle = "xmlns:" + p;
+    constexpr std::string_view space = " \t\r\n";
+    for (size_t at = t.rootStart.find(needle); at != std::string::npos; at = t.rootStart.find(needle, at + 1)) {
+      const size_t after = at + needle.size();
+      if (at > 0 && space.find(t.rootStart[at - 1]) != std::string_view::npos && after < t.rootStart.size() &&
+          (t.rootStart[after] == '=' || space.find(t.rootStart[after]) != std::string_view::npos))
+        return true;
+    }
+    return false;
+  };
+  std::string prefix = "r";
+  for (int n = 1; declared(prefix); ++n) prefix = "r" + std::to_string(n);
+  t.rootStart.insert(end, " xmlns:" + prefix + "=\"" + std::string(strict ? kRelNsStrict : kRelNs) + "\"");
+  return prefix;
 }
 
 namespace {

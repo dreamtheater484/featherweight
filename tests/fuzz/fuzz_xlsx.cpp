@@ -326,6 +326,8 @@ void EditOnce(Editor& ed, const Workbook& book, Rng& rng, int& groups, bool hadS
   const uint32_t pick = rng.Below(36);
   // FUZZ_XLSX_SKIP=n leaves out edit n (narrowing a finding down by hand).
   if (const char* skip = std::getenv("FUZZ_XLSX_SKIP"); skip && std::atoi(skip) == static_cast<int>(pick)) return;
+  // FUZZ_XLSX_TRACE: each edit picked, and on which sheet.
+  if (std::getenv("FUZZ_XLSX_TRACE")) std::fprintf(stderr, "edit %u on sheet %d of %d\n", pick, sheet, sheets);
   switch (pick) {
     case 28: {  // a table (s3-data): added over a range, renamed, a total row, resized, filtered, converted
       static const std::vector<Table> none;
@@ -878,7 +880,32 @@ void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t
   const std::vector<uint8_t> saved = Save(*book, ed), savedAgain = Save(*again, replayed);
   Check(saved.empty() == savedAgain.empty());
   if (!saved.empty()) {
-    Check(PartsOf(saved, limits) == PartsOf(savedAgain, limits));
+    const auto parts = PartsOf(saved, limits), partsAgain = PartsOf(savedAgain, limits);
+    for (size_t i = 0; i < std::max(parts.size(), partsAgain.size()) && parts != partsAgain; ++i) {
+      if (i < parts.size() && i < partsAgain.size() && parts[i] == partsAgain[i]) continue;
+      if (i >= parts.size() || i >= partsAgain.size() || parts[i].first != partsAgain[i].first) {
+        std::fprintf(stderr, "the replay's save has other parts: %s / %s\n", i < parts.size() ? parts[i].first.c_str() : "-",
+                     i < partsAgain.size() ? partsAgain[i].first.c_str() : "-");
+        break;
+      }
+      const std::string& x = parts[i].second;
+      const std::string& y = partsAgain[i].second;
+      size_t at = 0;
+      while (at < x.size() && at < y.size() && x[at] == y[at]) ++at;
+      const size_t from = at > 120 ? at - 120 : 0;
+      std::fprintf(stderr, "the replay saves %s otherwise at %zu:\n  edited:   %s\n  replayed: %s\n", parts[i].first.c_str(), at,
+                   x.substr(from, 240).c_str(), y.substr(from, 240).c_str());
+      break;
+    }
+    if (parts != partsAgain && std::getenv("FUZZ_XLSX_DUMP")) {  // both saves, the replay's with ".replayed" added
+      for (const auto& [bytes, suffix] : {std::pair{&saved, ""}, std::pair{&savedAgain, ".replayed"}}) {
+        if (FILE* f = std::fopen((std::string(std::getenv("FUZZ_XLSX_DUMP")) + suffix).c_str(), "wb")) {
+          std::fwrite(bytes->data(), 1, bytes->size(), f);
+          std::fclose(f);
+        }
+      }
+    }
+    Check(parts == partsAgain);
     Status st;
     auto pkg = Package::Open(Snapshot::FromBytes(std::vector<uint8_t>(saved)), limits, st);
     Check(pkg != nullptr);

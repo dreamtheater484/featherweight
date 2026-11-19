@@ -356,6 +356,37 @@ struct Step {
   }
   std::vector<TypeDiff> typeDiffs;
   std::vector<RelDiff> relDiffs;
+  // A source's relationships part as the step found it and as it left it: its bytes, and what they
+  // list. Undo and redo put those bytes back when the relationships come back to either, so a
+  // file's own way of writing them stays (an attribute Serialize doesn't write, a relationship
+  // without an Id): fuzz_xlsx found an undone edit leaving them otherwise than a journal replay,
+  // which never made it.
+  struct RelBytes {
+    std::string source;
+    std::optional<std::vector<uint8_t>> before, after;
+    std::vector<pkg::Relationship> beforeItems, afterItems;
+  };
+  std::vector<RelBytes> relBytes;
+  static std::string RelsPartOf(const pkg::RelationshipSet& set) {
+    return set.relsPart.empty() ? pkg::RelsPartFor(set.source) : set.relsPart;
+  }
+  // The bytes the source's relationships part had when it listed what it lists now, if the step
+  // has them.
+  void PutRelBytesBack(pkg::Package& package, const std::string& source) const {
+    const pkg::RelationshipSet* now = package.RelationshipsOf(source);
+    if (!now || now->items.empty()) return;
+    const auto same = [](const std::vector<pkg::Relationship>& a, const std::vector<pkg::Relationship>& b) {
+      return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](const pkg::Relationship& x, const pkg::Relationship& y) {
+        return x.id == y.id && x.type == y.type && x.target == y.target && x.external == y.external;
+      });
+    };
+    for (const RelBytes& r : relBytes) {
+      if (r.source != source) continue;
+      const std::optional<std::vector<uint8_t>>& bytes = same(now->items, r.beforeItems) ? r.before : r.after;
+      if (bytes && (same(now->items, r.beforeItems) || same(now->items, r.afterItems))) package.SetPart(RelsPartOf(*now), *bytes);
+      return;
+    }
+  }
   uint64_t serial = 0;
 
   bool Empty() const {
@@ -413,6 +444,13 @@ struct Step {
         place(now, d.after, d.afterAt);
         if (d.before.has_value() != d.after.has_value() || (d.before && !same(*d.before, *d.after))) relDiffs.push_back(std::move(d));
       }
+      for (RelBytes& r : relBytes) {
+        if (r.source != source) continue;
+        r.after.reset();
+        r.afterItems.clear();
+        std::vector<uint8_t> bytes;
+        if (now && p.ReadPart(RelsPartOf(*now), bytes).Ok()) r.after = std::move(bytes), r.afterItems = now->items;
+      }
     }
     rels.clear();
   }
@@ -442,6 +480,7 @@ struct Step {
       const bool empty = set.items.empty();
       package->SetRelationships(std::move(set));
       if (empty && !relsPart.empty()) package->DeletePart(relsPart);
+      else PutRelBytesBack(*package, source);
     }
     if (!typeDiffs.empty()) {
       pkg::ContentTypes t = package->Types();
@@ -461,6 +500,7 @@ struct Step {
       if (const pkg::RelationshipSet* r = package->RelationshipsOf(source)) now = *r;
       if (set) {
         package->SetRelationships(*set);
+        PutRelBytesBack(*package, source);
       } else if (now) {
         pkg::RelationshipSet none = *now;
         none.items.clear();
@@ -501,6 +541,9 @@ struct Step {
     for (auto& r : later.rels)
       if (std::none_of(rels.begin(), rels.end(), [&](const auto& x) { return x.first == r.first; }))
         rels.push_back(std::move(r));
+    for (auto& r : later.relBytes)
+      if (std::none_of(relBytes.begin(), relBytes.end(), [&](const RelBytes& x) { return x.source == r.source; }))
+        relBytes.push_back(std::move(r));
   }
 };
 
@@ -789,6 +832,12 @@ struct Editor::State {
     if (std::any_of(st.rels.begin(), st.rels.end(), [&](const auto& x) { return x.first == source; })) return;
     std::optional<pkg::RelationshipSet> was;
     if (const pkg::RelationshipSet* r = b.GetPackage()->RelationshipsOf(source)) was = *r;
+    if (was && std::none_of(st.relBytes.begin(), st.relBytes.end(), [&](const Step::RelBytes& x) { return x.source == source; })) {
+      Step::RelBytes kept{source, std::nullopt, std::nullopt, was->items, {}};
+      std::vector<uint8_t> bytes;
+      if (b.GetPackage()->ReadPart(Step::RelsPartOf(*was), bytes).Ok()) kept.before = std::move(bytes);
+      st.relBytes.push_back(std::move(kept));
+    }
     st.rels.push_back({source, std::move(was)});
   }
 
