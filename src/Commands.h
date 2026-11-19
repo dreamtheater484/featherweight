@@ -438,4 +438,7 @@ enum Cmd : int {
   // Pivot tables (S4, s4-pivot): 3040-3079.
   CmdPivotRefresh = 3040,  // Alt+F5: the PivotTable at the active cell
   CmdPivotRefreshAll,      // Ctrl+Alt+F5
+
+  // The toolbar in a narrow window (S4, s4-friction): 3100-3119.
+  CmdToolbarOverflow = 3100,  // the menu of the items that don't fit
 };

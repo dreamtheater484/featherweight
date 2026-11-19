@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "ui/Icons.h"
+#include "ui/Menu.h"
 #include "ui/Theme.h"
 
 using namespace gfx;
@@ -172,6 +173,8 @@ Toolbar::Toolbar() {
   Make(zoom_, CmdZoomMenu, 0, L"Zoom");
   Make(zoomIn_, CmdZoomIn, icon::ZoomIn, L"Zoom in (Ctrl+=)");
   Make(more_, CmdMoreMenu, icon::More, L"More");
+  Make(overflowButton_, CmdToolbarOverflow, icon::ChevronRight, L"More tools");
+  overflowButton_.glyphSize = 14;
   zoom_.dropdown = true;
   prev_.glyphSize = next_.glyphSize = 14;
   pageBox_.digitsOnly = true;
@@ -204,10 +207,12 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
   shown_.clear();
 
   // Left group: Open, then the tab's own items. When they don't fit beside More and the right
-  // group's important items (priority 5 and up), items below priority 9 go, the lowest first.
+  // group's important items (priority 5 and up), items below priority 9 go, the lowest first, into
+  // the overflow menu; its button (>) takes the place after the last item that stays.
   float x = rc.left + 8 * u;
   place(open_, x, kBtn * u);
   x += (kBtn + kGap) * u;
+  const float overflowW = (kBtn + kGap) * u;
   std::vector<const ToolItem*> left;
   for (const ToolItem& item : m.left) left.push_back(&item);
   float keepRight = (kBtn + kGap) * u + 16 * u;
@@ -218,12 +223,26 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
     for (const ToolItem* it : left) w += (it->width + (it->joinNext ? 0 : kGap) + (it->sepBefore ? kSep : 0)) * u;
     return w;
   };
-  while (x + leftWidth() + keepRight > rc.right) {
+  auto fits = [&]() { return x + leftWidth() + (left.size() < m.left.size() ? overflowW : 0) + keepRight <= rc.right; };
+  std::vector<const ToolItem*> dropped;
+  while (!fits()) {
     auto victim = std::min_element(left.begin(), left.end(),
                                    [](const ToolItem* a, const ToolItem* b) { return a->priority < b->priority; });
     if (victim == left.end() || (*victim)->priority >= 9) break;
+    dropped.push_back(*victim);
     left.erase(victim);
   }
+  // A wide box gone can leave room for smaller items dropped before it: they come back.
+  for (auto d = dropped.rbegin(); d != dropped.rend(); ++d) {
+    auto at = left.begin();
+    while (at != left.end() && *at < *d) ++at;  // the bar's order (the items are m.left's)
+    at = left.insert(at, *d);
+    if (!fits()) left.erase(at);
+  }
+  overflow_.clear();
+  for (const ToolItem& item : m.left)
+    if (std::find(left.begin(), left.end(), &item) == left.end()) overflow_.push_back(item);
+  const bool leftOverflow = !overflow_.empty();
   for (const ToolItem* it : left) {
     const ToolItem& item = *it;
     if (item.sepBefore) {
@@ -239,6 +258,10 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
     }
     x += (item.width + (item.joinNext ? 0 : kGap)) * u;
   }
+  if (leftOverflow) {
+    place(overflowButton_, x, kBtn * u);
+    x += overflowW;
+  }
   const float leftEnd = x;
 
   // Right group, dropping less important items when space is tight.
@@ -249,15 +272,16 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
     float w;
     int priority;  // lower = dropped first
     bool sepBefore;
+    const ToolItem* src;  // null for More
   };
   std::vector<Item> right;
   for (const ToolItem& item : m.right) {
     if (item.kind == ToolKind::Button)
-      right.push_back({&ItemButton(item), nullptr, item.kind, item.width * u, item.priority, item.sepBefore});
+      right.push_back({&ItemButton(item), nullptr, item.kind, item.width * u, item.priority, item.sepBefore, &item});
     else
-      right.push_back({nullptr, &ItemControl(item), item.kind, item.width * u, item.priority, item.sepBefore});
+      right.push_back({nullptr, &ItemControl(item), item.kind, item.width * u, item.priority, item.sepBefore, &item});
   }
-  right.push_back({&more_, nullptr, ToolKind::Button, kBtn * u, 9, false});
+  right.push_back({&more_, nullptr, ToolKind::Button, kBtn * u, 9, false, nullptr});
 
   // Center group width.
   pageLabelText_ = m.pageCount > 0 ? L"of " + std::to_wstring(m.pageCount) : L"";
@@ -286,11 +310,18 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
     return w;
   };
   float available = static_cast<float>(rc.right - rc.left) - (leftEnd - rc.left) - 8 * u;
-  while (rightWidth() + centerW + 16 * u > available && right.size() > 1) {
+  // What goes here joins the overflow menu too; its button comes before the right group when the
+  // left group kept everything.
+  std::vector<const ToolItem*> droppedRight;
+  auto rightOverflowW = [&]() { return !leftOverflow && !droppedRight.empty() ? overflowW : 0; };
+  while (rightWidth() + rightOverflowW() + centerW + 16 * u > available && right.size() > 1) {
     auto victim = std::min_element(right.begin(), right.end(),
                                    [](const Item& a, const Item& b) { return a.priority < b.priority; });
+    if (victim->src) droppedRight.push_back(victim->src);
     right.erase(victim);
   }
+  for (const ToolItem& item : m.right)
+    if (std::find(droppedRight.begin(), droppedRight.end(), &item) != droppedRight.end()) overflow_.push_back(item);
   for (const Item& it : right)
     if (it.c) shown_.push_back(it.c);
   float rx = rc.right - 8 * u;
@@ -303,6 +334,16 @@ void Toolbar::Layout(const RECT& rc, float ui, const ToolbarModel& m) {
       separators_.push_back(RectF(rx - kSep * u / 2, top + 7 * u, rx - kSep * u / 2 + 1, top + h - 7 * u));
       rx -= kSep * u;
     }
+  }
+  if (!leftOverflow && !overflow_.empty()) {
+    rx -= kBtn * u;
+    place(overflowButton_, rx, kBtn * u);
+    rx -= kGap * u;
+  }
+  if (!overflow_.empty()) {
+    std::wstring names;
+    for (const ToolItem& item : overflow_) names += (names.empty() ? L"" : L", ") + MenuName(item);
+    overflowButton_.tooltip = L"More tools: " + names;
   }
   const float rightStart = rx;
 
@@ -413,8 +454,100 @@ std::wstring Toolbar::TooltipAt(int x, int y) const {
 
 D2D1_RECT_F Toolbar::ButtonRect(int cmd) const {
   for (Button* b : all_)
-    if (b->id == cmd) return b->rc;
-  return {};
+    if (b->id == cmd && b->visible) return b->rc;
+  // A button in the overflow menu (Page layout): its own menu opens under the overflow button.
+  return overflowButton_.visible ? overflowButton_.rc : D2D1_RECT_F{};
+}
+
+std::wstring Toolbar::MenuName(const ToolItem& item) {
+  if (!item.menuLabel.empty()) return item.menuLabel;
+  // "Borders: Bottom border", "Font color (Ctrl+...)": the name before the detail and the keys.
+  std::wstring name = uia::SplitShortcut(item.tooltip).first;
+  if (const size_t colon = name.find(L':'); colon != std::wstring::npos) name.resize(colon);
+  return name.empty() ? item.text : name;
+}
+
+namespace {
+// Menus take & as the next letter's underline: a name's own & is doubled.
+std::wstring MenuText(const std::wstring& s) {
+  std::wstring out;
+  for (wchar_t c : s) {
+    if (c == L'&') out += L'&';
+    out += c;
+  }
+  return out;
+}
+}  // namespace
+
+void Toolbar::FillOverflowMenu(HMENU menu) {
+  using menu::AppendItem;
+  using menu::AppendSeparator;
+  // The items as they are now: the bar lays out again while the menu is open.
+  menuItems_ = overflow_;
+  menuPicks_.clear();
+  auto id = [&](MenuPick::What what, size_t item, int choice = -1, D2D1_COLOR_F color = {}) {
+    menuPicks_.push_back({what, item, choice, color});
+    return static_cast<UINT>(kOverflowFirst + menuPicks_.size() - 1);
+  };
+  for (size_t i = 0; i < menuItems_.size(); ++i) {
+    const ToolItem& it = menuItems_[i];
+    const std::wstring name = MenuText(MenuName(it));
+    const std::wstring keys = uia::SplitShortcut(it.tooltip).second;
+    const std::wstring withKeys = name + (keys.empty() ? L"" : L"\t" + keys);
+    // A button, or a tab's own control (Word's table grid): its command (the grid's opens the
+    // Table panel).
+    if (it.kind == ToolKind::Button || it.kind == ToolKind::Custom) {
+      AppendItem(menu, id(MenuPick::Run, i), withKeys, it.enabled, it.checked);
+      continue;
+    }
+    if (it.kind == ToolKind::SpinBox) continue;  // none of the tabs has one on the bar
+    HMENU sub = CreatePopupMenu();
+    if (it.kind == ToolKind::SplitButton) {  // its main part, then its list
+      AppendItem(sub, id(MenuPick::Run, i), withKeys, it.enabled);
+      if (it.colors || !it.choices.empty()) AppendSeparator(sub);
+    }
+    if (it.colors || it.kind == ToolKind::ColorPicker) {
+      if (!it.automaticLabel.empty()) AppendItem(sub, id(MenuPick::Automatic, i), MenuText(it.automaticLabel), it.enabled);
+      for (const NamedColor& c : it.theme.empty() ? ColorPalette::DefaultTheme() : it.theme)
+        AppendItem(sub, id(MenuPick::Color, i, -1, c.color), MenuText(c.name), it.enabled);
+      AppendSeparator(sub);
+      for (const NamedColor& c : ColorPalette::StandardColors())
+        AppendItem(sub, id(MenuPick::Color, i, -1, c.color), MenuText(c.name), it.enabled);
+      AppendSeparator(sub);
+      AppendItem(sub, id(MenuPick::MoreColors, i), L"More colors\u2026", it.enabled);
+    } else {
+      for (size_t k = 0; k < it.choices.size(); ++k) {
+        const bool chosen = it.kind == ToolKind::ComboBox ? it.choices[k] == it.text : static_cast<int>(k) == it.choice;
+        AppendItem(sub, id(MenuPick::Choice, i, static_cast<int>(k)), MenuText(it.choices[k]), it.enabled, chosen,
+                   it.kind != ToolKind::SplitButton);
+      }
+    }
+    menu::AppendSubmenu(menu, sub, name, it.enabled);
+  }
+}
+
+int Toolbar::OverflowChoice(int id) {
+  if (id < kOverflowFirst || static_cast<size_t>(id - kOverflowFirst) >= menuPicks_.size()) return id;
+  const MenuPick pick = menuPicks_[static_cast<size_t>(id - kOverflowFirst)];
+  const ToolItem& it = menuItems_[pick.item];
+  ToolValue v;
+  switch (pick.what) {
+    case MenuPick::Run: return it.cmd;
+    case MenuPick::Choice:
+      v.index = pick.choice;
+      v.text = it.choices[static_cast<size_t>(pick.choice)];
+      break;
+    case MenuPick::Automatic:
+      v.automatic = true;
+      v.color = it.automaticColor;
+      break;
+    case MenuPick::Color: v.color = pick.color; break;
+    case MenuPick::MoreColors:
+      if (!ColorPalette::ChooseMore(group_.hwnd, it.automatic ? D2D1::ColorF(0, 0, 0) : it.color, v.color)) return 0;
+      break;
+  }
+  if (it.onChange) it.onChange(v);
+  return 0;
 }
 
 void Toolbar::Describe(uia::Tree& t, int parent, const std::function<bool(int)>& isMenu, int openMenu,

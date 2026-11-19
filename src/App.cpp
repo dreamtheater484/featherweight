@@ -1421,6 +1421,7 @@ void App::Execute(int cmd) {
     case CmdZoomMenu:
     case CmdViewMenu:
     case CmdSaveMenu:
+    case CmdToolbarOverflow:
     case CmdMoreMenu: ShowMenu(cmd); break;
     case CmdToggleCover:
       settings_.coverAlone = !settings_.coverAlone;
@@ -1585,6 +1586,8 @@ void App::ShowMenu(int which) {
     if (!fileassoc::IsDefault()) AppendItem(m, CmdMakeDefault, L"Make Featherweight the default PDF app");
     AppendSeparator(m);
     AppendItem(m, CmdAbout, L"About Featherweight");
+  } else if (which == CmdToolbarOverflow) {
+    toolbar_.FillOverflowMenu(m);  // what doesn't fit a narrow window
   } else if (ready) {
     v->FillMenu(which, m);  // zoom, page layout
   }
@@ -1596,6 +1599,7 @@ void App::ShowMenu(int which) {
     int cmd = TrackMenu(m, anchor, alignRight);
     openMenu_ = 0;
     title_.SetNewTabMenu(fw::AnyEditorShipped(), false);
+    if (cmd && which == CmdToolbarOverflow) cmd = toolbar_.OverflowChoice(cmd);
     if (cmd) Execute(cmd);
   }
   DestroyMenu(m);
@@ -2660,6 +2664,28 @@ void App::RunScript(const std::wstring& script) {
         ImmReleaseContext(hwnd_, imc);
       }
       fwprintf(stderr, L"caret: %d,%d ime: %d,%d\n", caret.x, caret.y, cf.ptCurrentPos.x, cf.ptCurrentPos.y);
+    } else if (op == L"dumptoolbar") {
+      // The toolbar as laid out: each item of the tab's that shows, then those in the overflow menu
+      // (the window too narrow), for checks.
+      const ToolbarModel tm = CurrentToolbar();
+      auto inOverflow = [&](const ToolItem& it) {
+        return std::any_of(toolbar_.Overflow().begin(), toolbar_.Overflow().end(),
+                           [&](const ToolItem& o) { return o.cmd == it.cmd; });
+      };
+      for (const std::vector<ToolItem>* items : {&tm.left, &tm.right})
+        for (const ToolItem& it : *items)
+          if (!inOverflow(it)) fwprintf(stderr, L"toolbar: shown %d %s\n", it.cmd, Toolbar::MenuName(it).c_str());
+      for (const ToolItem& it : toolbar_.Overflow())
+        fwprintf(stderr, L"toolbar: overflow %d %s (%d choices)\n", it.cmd, Toolbar::MenuName(it).c_str(),
+                 static_cast<int>(it.choices.size()));
+    } else if (op == L"dumpcommands") {
+      // What command search (Alt+Q) lists for `arg`, best first, as "label|shortcut|enabled".
+      std::vector<std::pair<int, CommandEntry>> found;
+      for (const CommandEntry& e : SearchableCommands())
+        if (const int score = CommandSearch::Match(e.label, arg); score >= 0) found.push_back({score, e});
+      std::stable_sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+      for (const auto& [score, e] : found)
+        fwprintf(stderr, L"commands[%s]: %s|%s|%d\n", arg.c_str(), e.label.c_str(), e.shortcut.c_str(), e.enabled ? 1 : 0);
     } else if (op == L"dumpselection") {
       // The selected text, as copying would give it (without touching the clipboard).
       if (TabContent* v = Active()) fwprintf(stderr, L"selection: [%s]\n", v->SelectedText().c_str());

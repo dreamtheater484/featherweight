@@ -13,6 +13,7 @@
 #include "sheet/calc/Bind.h"
 #include "sheet/calc/Entry.h"
 #include "sheet/calc/Typing.h"
+#include "sheet/model/TableStyles.h"
 #include "sheet/numfmt/Parse.h"
 #include "sheet/view/WorkbookFormat.h"
 #include "sheet/xlsx/Internal.h"
@@ -792,10 +793,10 @@ void WorkbookView::ShowRulesPanel(bool manage) {
 bool WorkbookView::RulesCommandState(int cmd, CommandState& s) {
   const bool cells = Ready() && !preview_ && !ChartSheet() && !Current().PartName().empty();
   switch (cmd) {
-    case CmdCondFormat: s.label = L"New rule…"; break;
-    case CmdCfManage: s.label = L"Manage rules…"; break;
-    case CmdCfClearSelection: s.label = L"Clear rules from selected cells"; break;
-    case CmdCfClearSheet: s.label = L"Clear rules from entire sheet"; break;
+    case CmdCondFormat: s.label = L"Conditional formatting: new rule…"; break;
+    case CmdCfManage: s.label = L"Conditional formatting: manage rules…"; break;
+    case CmdCfClearSelection: s.label = L"Conditional formatting: clear rules from selected cells"; break;
+    case CmdCfClearSheet: s.label = L"Conditional formatting: clear rules from entire sheet"; break;
     case CmdCondFormatBox: s.label = L"Conditional formatting"; break;
     case CmdDataValidation: s.label = L"Data validation…"; break;
     case CmdCircleInvalid: s.label = L"Circle invalid data"; break;
@@ -903,6 +904,250 @@ std::wstring StyleLabel(const std::string& name) {
   return w;
 }
 
+// Excel's table style gallery: each style as a small table under Light, Medium and Dark, drawn
+// by the grid's own table-style code (TableFormat) in the workbook's theme colors. A click, or the
+// arrows, picks one.
+class TableStyleGallery : public Control {
+ public:
+  std::vector<std::string> names;    // TableStyleNames()
+  std::vector<std::wstring> labels;  // their names, for tooltips and screen readers
+  int selected = -1;
+  const Styles* styles = nullptr;  // the workbook's: theme colors, and its own styles by name
+  TableStyleInfo options;          // what the previews show: banded rows, first column...
+  std::function<void(int)> onPick;
+
+  // The height that shows every style (the panel gives less when it has less: the rest scrolls).
+  float ContentHeight() const {
+    Arrange();
+    return contentH_;
+  }
+
+  void Draw(Canvas& c) override {
+    const Palette& p = theme::P();
+    const float u = Ui();
+    Arrange();
+    if (showSelected_) {  // once laid out at its size
+      showSelected_ = false;
+      EnsureVisible(selected);
+    }
+    ClampScroll();
+    c.PushClip(rc);
+    for (const auto& [text, y] : heads_)
+      c.Text(text, RectF(rc.left + 2 * u, y - scroll_, rc.right, y - scroll_ + 16 * u), p.textSecondary, 12 * u);
+    for (size_t i = 0; i < cells_.size(); ++i) {
+      const D2D1_RECT_F r = Cell(i);
+      if (r.bottom < rc.top || r.top > rc.bottom) continue;
+      Preview(c, i, r);
+      if (static_cast<int>(i) == selected) c.StrokeRound(Inflate(r, 2 * u, 2 * u), 3 * u, p.accent, 2 * u);
+      else if (static_cast<int>(i) == hover_) c.StrokeRound(Inflate(r, 2 * u, 2 * u), 3 * u, p.textSecondary, 1 * u);
+    }
+    if (FocusVisible() && selected >= 0) ctl::DrawFocusRing(c, Inflate(Cell(static_cast<size_t>(selected)), 4 * u, 4 * u), u);
+    c.PopClip();
+    if (const float max = MaxScroll(); max > 0) {  // where the view is in the list
+      const float h = rc.bottom - rc.top, thumbH = std::max(24 * u, h * h / contentH_);
+      const float top = rc.top + (h - thumbH) * scroll_ / max;
+      c.FillRound(RectF(rc.right - 3 * u, top, rc.right, top + thumbH), 1.5f * u, p.scrollThumb);
+    }
+  }
+
+  bool OnMouseMove(float x, float y) override {
+    const int was = hover_;
+    hover_ = ItemAt(x, y);
+    return hover_ != was;
+  }
+  void OnMouseLeave() override { hover_ = pressed_ = -1; }
+  void OnMouseDown(float x, float y, bool, bool) override {
+    TakeFocus();
+    pressed_ = ItemAt(x, y);
+  }
+  void OnMouseUp(float x, float y) override {
+    const int i = ItemAt(x, y);
+    if (i >= 0 && i == pressed_) Pick(i);
+    pressed_ = -1;
+  }
+  bool OnWheel(int delta, float, float) override {
+    const float was = scroll_;
+    scroll_ -= delta / 120.f * 3 * kCellH * Ui();
+    ClampScroll();
+    return scroll_ != was;
+  }
+  bool OnKeyDown(UINT vk, bool ctrl, bool, bool alt) override {
+    if (ctrl || alt || names.empty()) return false;
+    const int n = static_cast<int>(names.size()), at = std::max(selected, 0);
+    int to = -1;
+    switch (vk) {
+      case VK_LEFT: to = at - 1; break;
+      case VK_RIGHT: to = at + 1; break;
+      case VK_UP: to = at - cols_; break;
+      case VK_DOWN: to = at + cols_; break;
+      case VK_HOME: to = 0; break;
+      case VK_END: to = n - 1; break;
+      default: return false;
+    }
+    Pick(std::clamp(to, 0, n - 1));
+    return true;
+  }
+  std::wstring TooltipAt(float x, float y) const override {
+    const int i = ItemAt(x, y);
+    return i >= 0 && static_cast<size_t>(i) < labels.size() ? labels[static_cast<size_t>(i)] : tooltip;
+  }
+  void Describe(uia::Tree& t, int parent) override {
+    const int list = t.Add(parent, id, UIA_ListControlTypeId, Name(), rc);
+    t[list].selectionContainer = true;
+    t[list].focusable = true;
+    t[list].focus = [this] { TakeFocus(); };
+    t[list].focused = Focused() && selected < 0;
+    for (size_t i = 0; i < names.size() && i < labels.size(); ++i) {
+      const D2D1_RECT_F r = Cell(i);
+      const bool inView = r.bottom > rc.top && r.top < rc.bottom;
+      const int item = t.Add(list, static_cast<int64_t>(i), UIA_ListItemControlTypeId, labels[i], inView ? r : D2D1_RECT_F{});
+      uia::Node& node = t[item];
+      const int k = static_cast<int>(i);
+      node.offscreen = !inView;
+      node.selectable = node.focusable = true;
+      node.selected = node.focused = k == selected;
+      node.focused = node.focused && Focused();
+      node.positionInSet = k + 1;
+      node.sizeOfSet = static_cast<int>(names.size());
+      node.select = node.focus = [this, k] {
+        TakeFocus();
+        Pick(k);
+      };
+      node.scrollIntoView = [this, k] { EnsureVisible(k); };
+    }
+  }
+
+  // From the top, with the chosen style in view once the gallery is drawn at its size.
+  void ShowSelected() {
+    scroll_ = 0;
+    showSelected_ = true;
+  }
+
+  void EnsureVisible(int i) {
+    if (i < 0 || static_cast<size_t>(i) >= names.size()) return;
+    Arrange();
+    const float top = cells_[static_cast<size_t>(i)].top - rc.top, bottom = cells_[static_cast<size_t>(i)].bottom - rc.top;
+    const float h = rc.bottom - rc.top, u = Ui();
+    if (top - kHead * u < scroll_) scroll_ = std::max(0.f, top - kHead * u);  // a section's heading too
+    else if (bottom + 4 * u > scroll_ + h) scroll_ = bottom + 4 * u - h;
+    ClampScroll();
+  }
+
+ private:
+  static constexpr float kCellW = 40, kCellH = 28, kHead = 20;  // DIPs, the gaps included
+
+  void Pick(int i) {
+    EnsureVisible(i);
+    if (i == selected) return;
+    selected = i;
+    if (onPick) onPick(i);
+    if (group_) group_->Invalidate();
+  }
+
+  // The previews' places and the headings, from the top of the content (scrolling not applied).
+  void Arrange() const {
+    const float u = Ui(), w = rc.right - rc.left;
+    cols_ = std::max(1, static_cast<int>((w + 4 * u) / (kCellW * u)));  // the last needs no gap
+    const float left = rc.left + std::max(0.f, (w - (cols_ * kCellW - 4) * u) / 2);
+    cells_.assign(names.size(), {});
+    heads_.clear();
+    float y = 0;
+    int col = 0;
+    const wchar_t* section = nullptr;
+    for (size_t i = 0; i < names.size(); ++i) {
+      const std::string& n = names[i];
+      const wchar_t* sec = n.rfind("TableStyleMedium", 0) == 0 ? L"Medium" : n.rfind("TableStyleDark", 0) == 0 ? L"Dark"
+                           : n.rfind("TableStyleLight", 0) == 0 || n.empty()                     ? L"Light"
+                                                                                                 : L"Custom";
+      if (sec != section) {
+        if (section) y += kCellH * u;  // past the last row of the one before
+        heads_.push_back({sec, rc.top + y});
+        y += kHead * u;
+        section = sec;
+        col = 0;
+      } else if (col == cols_) {
+        y += kCellH * u;
+        col = 0;
+      }
+      const float x = left + col * kCellW * u;
+      cells_[i] = RectF(x, rc.top + y + 2 * u, x + (kCellW - 4) * u, rc.top + y + 2 * u + (kCellH - 4) * u);
+      ++col;
+    }
+    contentH_ = names.empty() ? 0 : y + kCellH * u;
+  }
+  D2D1_RECT_F Cell(size_t i) const {
+    D2D1_RECT_F r = cells_[i];
+    r.top -= scroll_;
+    r.bottom -= scroll_;
+    return r;
+  }
+  float MaxScroll() const { return std::max(0.f, contentH_ - (rc.bottom - rc.top)); }
+  void ClampScroll() { scroll_ = std::clamp(scroll_, 0.f, MaxScroll()); }
+  int ItemAt(float x, float y) const {
+    if (!Hit(x, y)) return -1;
+    Arrange();
+    for (size_t i = 0; i < cells_.size(); ++i)
+      if (gfx::Contains(Inflate(Cell(i), 2 * Ui(), 2 * Ui()), x, y)) return static_cast<int>(i);
+    return -1;
+  }
+
+  // A table of five rows and five columns in the style: a header row, then data rows, each cell's
+  // fill, borders and a dash of text in its font color, as the grid would paint them.
+  void Preview(Canvas& c, size_t i, const D2D1_RECT_F& r) const {
+    const TableStyle* style = names[i].empty() ? nullptr : styles ? FindTableStyle(*styles, names[i]) : BuiltInTableStyle(names[i]);
+    Table t;
+    t.ref = Range{0, 0, 4, 4};
+    t.style = options;
+    t.style.name = names[i];
+    auto color = [&](const Color& col, uint32_t fallback) {
+      return gfx::Rgb((styles ? styles->Resolve(col, fallback) : fallback) & 0xFFFFFF);
+    };
+    const float u = Ui(), cw = (r.right - r.left) / 5, ch = (r.bottom - r.top) / 5;
+    c.Fill(r, gfx::Rgb(0xFFFFFF));
+    TableCellFormat f[5][5];
+    for (uint32_t row = 0; row < 5; ++row)
+      for (uint32_t col = 0; col < 5; ++col) {
+        if (style) f[row][col] = TableFormat(*style, t, row, col);
+        const TableCellFormat& x = f[row][col];
+        const D2D1_RECT_F cell = RectF(r.left + col * cw, r.top + row * ch, r.left + (col + 1) * cw, r.top + (row + 1) * ch);
+        if (x.fill.pattern == PatternType::Solid) c.Fill(cell, color(x.fill.fg, 0xFF000000));
+        else if (x.fill.pattern != PatternType::None) c.Fill(cell, gfx::Alpha(color(x.fill.fg, 0xFF000000), 0.5f));
+        const float cy = (cell.top + cell.bottom) / 2, half = (x.bold ? 0.75f : 0.5f) * u;
+        c.Fill(RectF(cell.left + cw * 0.25f, cy - half, cell.right - cw * 0.25f, cy + half),
+               x.fontColor.IsSet() ? color(x.fontColor, 0xFF000000) : gfx::Rgb(0x000000, 0.75f));
+      }
+    // The lines over the fills: a cell's right and bottom, and the table's left and top.
+    auto line = [&](const BorderSide& b, float x1, float y1, float x2, float y2) {
+      if (b.style == BorderStyle::None) return;
+      const bool heavy = b.style == BorderStyle::Medium || b.style == BorderStyle::Thick || b.style == BorderStyle::Double;
+      c.Line(x1, y1, x2, y2, color(b.color, 0xFF000000), (heavy ? 1.5f : 1.f) * u);
+    };
+    for (uint32_t row = 0; row < 5; ++row)
+      for (uint32_t col = 0; col < 5; ++col) {
+        const TableCellFormat& x = f[row][col];
+        const float l = r.left + col * cw, tp = r.top + row * ch, rt = l + cw, bt = tp + ch;
+        if (!style) {  // None: the sheet's gridlines
+          c.Line(rt, tp, rt, bt, gfx::Rgb(0xD9D9D9), u);
+          c.Line(l, bt, rt, bt, gfx::Rgb(0xD9D9D9), u);
+          continue;
+        }
+        line(x.right, rt, tp, rt, bt);
+        line(x.bottom, l, bt, rt, bt);
+        if (col == 0) line(x.left, l, tp, l, bt);
+        if (row == 0) line(x.top, l, tp, rt, tp);
+      }
+    c.Stroke(r, theme::P().inputBorder, u);
+  }
+
+  mutable std::vector<D2D1_RECT_F> cells_;
+  mutable std::vector<std::pair<const wchar_t*, float>> heads_;
+  mutable float contentH_ = 0;
+  mutable int cols_ = 1;
+  float scroll_ = 0;
+  bool showSelected_ = false;
+  int hover_ = -1, pressed_ = -1;
+};
+
 // A table's name as Excel allows it: a letter, _ or \ first, then letters, digits, _ and .; not a
 // cell's name, not R or C.
 bool TableNameOk(const std::string& n) {
@@ -922,8 +1167,9 @@ class WorkbookView::TablePanel : public PanelContent {
   explicit TablePanel(WorkbookView& view) : v_(view) {
     styles_ = TableStyleNames();
     style_.label = L"Table style";
-    for (const std::string& s : styles_) style_.items.push_back(StyleLabel(s));
-    style_.onChange = [this](int i) {
+    style_.names = styles_;
+    for (const std::string& s : styles_) style_.labels.push_back(StyleLabel(s));
+    style_.onPick = [this](int i) {
       if (index_ >= 0 && i >= 0) Change([&](Table& t) { t.style.name = styles_[static_cast<size_t>(i)]; });
     };
     range_.autoComplete = name_.autoComplete = false;
@@ -976,10 +1222,12 @@ class WorkbookView::TablePanel : public PanelContent {
     body_ = body;
     ui_ = ui;
     Place();
-    std::vector<Control*> out{&range_, &headers_, &create_, &name_, &style_};
+    std::vector<Control*> out{&range_, &headers_, &name_};
     for (PanelButton& b : option_) out.push_back(&b);
-    out.push_back(&convert_);
     out.push_back(&resize_);
+    out.push_back(&convert_);
+    out.push_back(&style_);
+    out.push_back(&create_);
     return out;
   }
 
@@ -990,9 +1238,13 @@ class WorkbookView::TablePanel : public PanelContent {
   // The active cell's table, or a new one over the selection (or the region around the cell).
   void Open() {
     index_ = v_.TableIndexAt(v_.active_);
+    style_.styles = &v_.book_->GetStyles();
+    style_.options = TableStyleInfo{};
+    style_.options.rowStripes = true;  // as Excel's gallery shows a new table
     if (index_ >= 0) {
       const Table& t = v_.Current().Tables()[static_cast<size_t>(index_)];
       name_.SetText(Utf8ToWide(t.name));
+      style_.options = t.style;  // the table's own banding and columns
       const auto it = std::find(styles_.begin(), styles_.end(), t.style.name);
       style_.selected = it == styles_.end() ? -1 : static_cast<int>(it - styles_.begin());
       const bool on[] = {t.totalsRows != 0, t.style.rowStripes, t.style.columnStripes, t.style.firstColumn,
@@ -1006,6 +1258,7 @@ class WorkbookView::TablePanel : public PanelContent {
       style_.selected = static_cast<int>(std::find(styles_.begin(), styles_.end(), "TableStyleMedium2") - styles_.begin());
     }
     Place();
+    style_.ShowSelected();
   }
 
  private:
@@ -1033,10 +1286,16 @@ class WorkbookView::TablePanel : public PanelContent {
       name_.rc = RectF(left, y, right, y + 30 * u);
       y += 40 * u;
     }
-    label(L"Style");
-    style_.rc = RectF(left, y, right, y + 30 * u);
-    y += 42 * u;
+    // The styles' previews take the room that's left, above Create table (they scroll in less).
+    auto gallery = [&](float reserve) {
+      label(L"Style");
+      const float bottom = std::max(y + 90 * u, std::min(y + style_.ContentHeight(), body_.bottom - reserve));
+      style_.rc = RectF(left, y, right, bottom);
+      y = bottom + 12 * u;
+    };
     if (!design) {
+      style_.rc = RectF(left, y, right, y);  // its width, for ContentHeight
+      gallery(54 * u);
       create_.rc = RectF(left, y, left + half, y + 30 * u);
     } else {
       label(L"Table style options");
@@ -1051,6 +1310,9 @@ class WorkbookView::TablePanel : public PanelContent {
       resize_.rc = RectF(left + half + gap, y, right, y + 30 * u);
       y += 42 * u;
       convert_.rc = RectF(left, y, left + half, y + 30 * u);
+      y += 42 * u;
+      style_.rc = RectF(left, y, right, y);
+      gallery(12 * u);
     }
     v_.host_.ViewInvalidate();
   }
@@ -1089,7 +1351,7 @@ class WorkbookView::TablePanel : public PanelContent {
   int index_ = -1;
   std::vector<std::string> styles_;
   ComboBox range_, name_;
-  Dropdown style_;
+  TableStyleGallery style_;
   PanelButton resize_;
   PanelButton headers_, create_, option_[6], convert_;
   std::vector<std::pair<const wchar_t*, D2D1_RECT_F>> labels_;

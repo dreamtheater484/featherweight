@@ -468,7 +468,7 @@ void WorkbookView::AddShapeTools(ToolbarModel& m) {
   insert.cmd = CmdObjectsBox;
   insert.width = 64;
   insert.priority = 3;
-  insert.text = L"Insert";
+  insert.text = insert.menuLabel = L"Insert";
   insert.tooltip = L"Insert a picture or a shape";
   insert.choices = {L"Pictures…", L"Rectangle", L"Rounded rectangle", L"Oval", L"Line", L"Arrow", L"Text box", L"Format object…"};
   insert.onChange = [this](const ToolValue& v) {
