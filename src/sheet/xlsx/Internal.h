@@ -66,6 +66,12 @@ std::string TextOf(pugi::xml_node n);
 // CR (_x000D_), other control characters, U+FFFE/U+FFFF, and the "_" of a literal "_xHHHH_" (_x005F_).
 std::string DecodeXstring(std::string_view s);
 std::string EncodeXstring(std::string_view s);
+// The same for text read into a string (left as it is when it holds no "_x"), and text written as an
+// element's content (XML's escapes too), without copies when there's nothing to escape.
+inline void DecodeXstringIn(std::string& s) {
+  if (s.find("_x") != std::string::npos) s = DecodeXstring(s);
+}
+void AppendXstringText(std::string& out, std::string_view s);
 // An element without its children, with its attributes as they are: "<name a="v"/>" (the workbook
 // keeps workbookProtection so, and saving compares it with the file's).
 std::string EmptyElementXml(pugi::xml_node n);

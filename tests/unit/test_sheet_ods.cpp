@@ -58,7 +58,7 @@ TEST(sheet_ods_converts_a_spreadsheet) {
       "xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" "
       "xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"><office:body><office:spreadsheet>"
       "<table:table table:name=\"Data\"><table:table-column table:number-columns-repeated=\"3\"/>"
-      "<table:table-row><table:table-cell office:value-type=\"string\"><text:p>Total</text:p></table:table-cell>"
+      "<table:table-row><table:table-cell office:value-type=\"string\"><text:p>Total_x0041_</text:p></table:table-cell>"
       "<table:table-cell office:value-type=\"float\" office:value=\"2.5\"><text:p>2.5</text:p></table:table-cell>"
       "<table:table-cell office:value-type=\"date\" office:date-value=\"2000-01-01T12:00:00\"><text:p>x</text:p></table:table-cell>"
       "</table:table-row>"
@@ -87,7 +87,7 @@ TEST(sheet_ods_converts_a_spreadsheet) {
   if (!book) return;
   CHECK(book->SheetCount() == 1 && book->GetSheet(0).Name() == "Data");
   const Sheet& s = book->GetSheet(0);
-  CHECK(s.GetValue(0, 0).type == ValueType::String && s.GetValue(0, 0).text == "Total");
+  CHECK(s.GetValue(0, 0).type == ValueType::String && s.GetValue(0, 0).text == "Total_x0041_");  // not "TotalA" (ST_Xstring)
   CHECK(s.GetValue(0, 1).number == 2.5);
   CHECK_NEAR(s.GetValue(0, 2).number, 36526.5, 1e-9);  // 2000-01-01 noon
   FormulaInfo f;

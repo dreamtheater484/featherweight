@@ -5184,7 +5184,7 @@ std::string FilterXml(const SheetFilter& f, const std::string& p) {
         out += '>';
         for (const std::string& v : c.values) {
           open("filter");
-          attr("val", v);
+          attr("val", xlsx::EncodeXstring(v));  // ST_Xstring, as a cell's text
           out += "/>";
         }
         close("filters");
@@ -5196,7 +5196,7 @@ std::string FilterXml(const SheetFilter& f, const std::string& p) {
         for (const FilterColumn::Condition& k : c.conditions) {
           open("customFilter");
           if (k.op != "equal") attr("operator", k.op);
-          attr("val", k.val);
+          attr("val", xlsx::EncodeXstring(k.val));
           out += "/>";
         }
         close("customFilters");
