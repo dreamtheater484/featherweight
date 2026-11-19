@@ -73,11 +73,11 @@ class WorkbookView::ProtectPanel : public PanelContent {
       allow_[i].toggle = true;
       allow_[i].text = kPermissions[i].label;
       allow_[i].textSize = 12;
-      allow_[i].onInvoke = [this, i] { allow_[i].checked = !allow_[i].checked; v_.host_.ViewInvalidate(); };
+      allow_[i].onInvoke = [this] { v_.host_.ViewInvalidate(); };  // (a toggle flips itself)
     }
     structure_.toggle = true;
     structure_.text = L"Structure";
-    structure_.onInvoke = [this] { structure_.checked = !structure_.checked; v_.host_.ViewInvalidate(); };
+    structure_.onInvoke = [this] { v_.host_.ViewInvalidate(); };
     apply_.onInvoke = [this] { Apply(); };
   }
 
@@ -385,7 +385,7 @@ class WorkbookView::NotePanel : public PanelContent {
     text_.onEnter = [this] { Apply(); };
     shown_.toggle = true;
     shown_.text = L"Keep shown";
-    shown_.onInvoke = [this] { shown_.checked = !shown_.checked; v_.host_.ViewInvalidate(); };
+    shown_.onInvoke = [this] { v_.host_.ViewInvalidate(); };  // (a toggle flips itself)
     save_.text = L"Save";
     save_.onInvoke = [this] { Apply(); };
     for (FocusComboBox* b : {&width_, &height_}) {

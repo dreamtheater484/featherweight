@@ -1,0 +1,43 @@
+# S3 fixture ("created as Excel shows it"): the Sheet tab's print options through s3-print's Page
+# Setup (pagesetup: script op): black and white (fills not printed, colored text black), notes at the
+# end of the sheet, cell errors printed as "--", a two-area print area, landscape, fit to one page
+# wide (any number tall), wide margins, centered both ways. Letter.
+sheet-name "Options"
+enter A1 "Region"
+enter B1 "Target"
+enter C1 "Actual"
+enter D1 "Ratio"
+enter A2 "North"
+enter B2 "400"
+enter C2 "380"
+enter A3 "South"
+enter B3 "0"
+enter C3 "120"
+enter A4 "East"
+enter B4 "250"
+enter C4 "300"
+enter D2 "=C2/B2"
+fill-down D2:D4
+enter A6 "Notes kept apart"
+enter A7 "Checked"
+format A1:D1 bold
+format A1:D1 fill=4472C4
+format A1:D1 color=FFFFFF
+format C2:C4 fill=FFF2CC
+format D2:D4 color=C00000
+note B3 "No target set yet"
+pagesetup orientation=landscape
+pagesetup paper=1
+pagesetup fit=1,0
+pagesetup margins=wide
+pagesetup center=hv
+pagesetup bw=1
+pagesetup notes=end
+pagesetup errors=dash
+pagesetup area=A1:D4,A6:A7
+save
+expect cell Options!D3 text #DIV/0!
+expect note Options!B3 *:\nNo target set yet
+expect pagesetup Options orientation 2 zoom False wide 1 tall False titlerows  titlecols  area $A$1:$D$4;$A$6:$A$7
+expect pagemargins Options left 72 right 72 top 72 bottom 72 header 36 footer 36 center True True
+expect pageoptions Options paper 1 first -4105 order 1 gridlines False headings False bw True draft False notes 1 errors 2

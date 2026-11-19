@@ -274,7 +274,7 @@ Check next to Excel on copies of your own workbooks. Every change is one undo st
 
 ### Protecting
 
-- [ ] Right-click a sheet tab, **Protect sheet…**: a password (optional) typed twice, and the list of what everyone may still do (Excel's: select locked and unlocked cells, format cells, columns and rows, insert and delete columns and rows, links, sort, AutoFilter, PivotTables, objects, scenarios). Two different passwords: Excel's "Confirmation password is not identical."
+- [ ] Right-click a sheet tab, **Protect sheet…**: a password (optional) typed twice, and the list of what everyone may still do (Excel's: select locked and unlocked cells, format cells, columns and rows, insert and delete columns and rows, links, sort, AutoFilter, PivotTables, objects, scenarios). Two different passwords: Excel's "Confirmation password is not identical." Clicking a permission (or Space on it) turns it on and off once per press; the ones turned on are what Excel's Protect Sheet shows ticked for the saved file.
 - [ ] On the protected sheet, typing into a locked cell (every cell is, until Format cells › Protect › Locked is cleared) shows Excel's message at once; unlocked cells take typing, pasting and Delete. Merging, inserting cells, grouping and turning the filter on are refused with Excel's other message; formatting, column widths, row heights, inserting and deleting rows and columns, links, notes and sorting work only when allowed (deleting rows and sorting only over unlocked cells).
 - [ ] A cell marked Hidden (Format cells › Protect) shows nothing in the formula bar while the sheet is protected. Tab goes to the next unlocked cell. Without "Select locked cells", the cursor stays off them.
 - [ ] **Unprotect sheet…** asks for the password; a wrong one gives Excel's "The password you supplied is not correct…". Without a password it unprotects at once.
@@ -287,7 +287,7 @@ Check next to Excel on copies of your own workbooks. Every change is one undo st
 
 ### Notes
 
-- [ ] Shift+F2 adds a note to the cell (with your Windows user name in bold, as Excel shows it); the red corner appears; hovering shows the note. Shift+F2 on it edits the text; Delete note removes it; Show note / Show all notes keep them shown. A ¶ in the box is a line break.
+- [ ] Shift+F2 adds a note to the cell (with your Windows user name in bold, as Excel shows it); the red corner appears; hovering shows the note. Shift+F2 on it edits the text; Delete note removes it; Show note / Show all notes keep them shown, and so does the panel's **Keep shown** (one press turns it on). A ¶ in the box is a line break.
 - [ ] Saved, Excel opens the file without a repair and shows the same notes, in the same place, shown or hidden as set here.
 - [ ] The note panel's width and height (points) resize the box: it moves beside the cell at the new size, here and in Excel. Editing the text of a note made or resized in Excel keeps its box where it was.
 

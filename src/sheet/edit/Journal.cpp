@@ -447,7 +447,17 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
       case JournalOp::RemoveTable: {
         const int sheet = f.Int();
         const uint64_t index = f.U();
-        if (f.Ok()) r = RemoveTable(sheet, static_cast<size_t>(index));
+        if (!f.Ok()) break;
+        // The look's formats the step put (Convert to Range), when the record has them.
+        BakedStyles baked;
+        const uint64_t n = f.U();
+        bool given = f.Ok();
+        for (uint64_t k = 0; given && k < n; ++k) {
+          const uint64_t row = f.U(), col = f.U(), xf = f.U();
+          given = f.Ok() && row < kMaxRows && col < kMaxCols && xf <= UINT32_MAX;
+          if (given) baked.push_back({CellAddr{static_cast<uint32_t>(row), static_cast<uint32_t>(col)}, static_cast<uint32_t>(xf)});
+        }
+        r = RemoveTableAs(sheet, static_cast<size_t>(index), given ? &baked : nullptr);
         break;
       }
       case JournalOp::InsertPicture:

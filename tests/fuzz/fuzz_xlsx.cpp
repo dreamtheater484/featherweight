@@ -321,7 +321,10 @@ void EditOnce(Editor& ed, const Workbook& book, Rng& rng, int& groups, bool hadS
     }
   };
   const Styles& styles = book.GetStyles();
-  switch (rng.Below(36)) {
+  const uint32_t pick = rng.Below(36);
+  // FUZZ_XLSX_SKIP=n leaves out edit n (narrowing a finding down by hand).
+  if (const char* skip = std::getenv("FUZZ_XLSX_SKIP"); skip && std::atoi(skip) == static_cast<int>(pick)) return;
+  switch (pick) {
     case 28: {  // a table (s3-data): added over a range, renamed, a total row, resized, filtered, converted
       static const std::vector<Table> none;
       const std::vector<Table>& tables = sheet < sheets ? book.GetSheet(static_cast<size_t>(sheet)).Tables() : none;
@@ -336,7 +339,9 @@ void EditOnce(Editor& ed, const Workbook& book, Rng& rng, int& groups, bool hadS
       }
       const size_t i = rng.Below(static_cast<uint32_t>(tables.size()));
       Table t = tables[i];
-      switch (rng.Below(5)) {
+      const uint32_t op = rng.Below(5);
+      if (const char* skip = std::getenv("FUZZ_XLSX_SKIP_TABLE"); skip && std::atoi(skip) == static_cast<int>(op)) break;
+      switch (op) {
         case 0: t.name = t.displayName = "T" + std::to_string(rng.Below(5)); ed.SetTable(sheet, i, t); break;
         case 1:
           if (t.totalsRows) {
@@ -857,7 +862,15 @@ void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t
   edit::Result r = replayed.Replay(journal.All(), &applied);
   if (!r) std::fprintf(stderr, "replay stopped after %zu records\n", applied);
   Check(r.ok);
-  Check(CellsOf(*again) == CellsOf(*book));
+  const std::string edited = CellsOf(*book), remade = CellsOf(*again);
+  if (edited != remade) {
+    size_t at = 0;
+    while (at < edited.size() && at < remade.size() && edited[at] == remade[at]) ++at;
+    const size_t from = edited.rfind('\n', at) == std::string::npos ? 0 : edited.rfind('\n', at) + 1;
+    std::fprintf(stderr, "the journal remade other cells:\n  edited: %s\n  remade: %s\n", edited.substr(from, 120).c_str(),
+                 remade.substr(from, 120).c_str());
+  }
+  Check(edited == remade);
 
   const size_t history = ed.UndoNames().size();
   const std::vector<uint8_t> saved = Save(*book, ed), savedAgain = Save(*again, replayed);
