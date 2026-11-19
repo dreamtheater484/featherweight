@@ -29,6 +29,7 @@
 #include "sheet/view/WorkbookFile.h"
 #include "text/Fonts.h"
 
+
 namespace fw::sheet::calc {
 struct FunctionHelp;
 }
@@ -839,11 +840,22 @@ class WorkbookView : public PagedView {
   // Conditional formats: each sheet's rules, made when it is first painted if it has any, with the
   // formula engine they need for theirs (loaded for the first such sheet, and only then).
   condfmt::SheetRules* RulesFor(size_t index);
+  // The sheet's sparklines (S4), read again whenever its conditional formats are (RulesFor).
+  const Sparklines* SparklinesFor(size_t index);
   std::unique_ptr<calc::WorkbookCalc> calc_;  // see Calc()
   bool recalc_ = false;  // a workbook (not CSV): recalculate what Excel would after opening
+  // A large file (S4, plan §11: a 100 MB CSV, a 50 MB workbook): the rows of its first megabytes
+  // are shown at once while a worker reads the whole file into a workbook of its own, whose cells
+  // (a workbook: whose active sheet) then take their place (WorkDone). An edit or a save (Ed())
+  // waits for it first; nothing runs at idle meanwhile.
+  struct BigLoad;
+  std::unique_ptr<BigLoad> bigLoad_;
+  void WorkDone() override;
+  bool partial_ = false;  // the worker couldn't read the file whole: only its first rows, never saved
   calc::WorkbookCalc& Calc();
   std::vector<std::unique_ptr<condfmt::SheetRules>> rules_;
   std::vector<bool> rulesRead_;
+  std::vector<std::unique_ptr<Sparklines>> sparklines_;
 };
 
 }  // namespace fw::sheet::view

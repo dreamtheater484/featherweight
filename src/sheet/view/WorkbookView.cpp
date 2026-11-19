@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
@@ -12,6 +13,7 @@
 #include "sheet/csv/Csv.h"
 #include "sheet/numfmt/NumLocale.h"
 #include "sheet/ods/Ods.h"
+#include "sheet/view/Sparklines.h"
 #include "sheet/view/WorkbookFilter.h"
 #include "sheet/view/WorkbookFormat.h"
 #include "sheet/view/WorkbookPanels.h"
@@ -19,6 +21,7 @@
 #include "sheet/calc/Typing.h"
 #include "sheet/xls/Xls.h"
 #include "sheet/xlsx/Xlsx.h"
+#include "ui/Anim.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 
@@ -76,7 +79,58 @@ WorkbookView::WorkbookView(ViewHost& host, std::wstring path)
   zoomMode_ = fw::ZoomMode::FitPage;
 }
 
-WorkbookView::~WorkbookView() = default;
+struct WorkbookView::BigLoad {
+  std::unique_ptr<pkg::Snapshot> snapshot;  // CSV: the file's bytes, which the worker reads
+  Workbook book;                            // CSV: the whole file, once the worker is done
+  std::unique_ptr<Workbook> full;           // a workbook: read again, its sheet `sheet` whole
+  size_t sheet = SIZE_MAX;                  // a workbook: the sheet shown from its first rows
+  std::thread worker;
+};
+
+WorkbookView::~WorkbookView() {
+  if (bigLoad_ && bigLoad_->worker.joinable()) bigLoad_->worker.join();
+}
+
+// The worker read the whole file: its cells (a workbook: its sheet's) take the place of the first
+// rows shown (the same values, so the screen stays as it is), at once; the scroll bars now reach
+// the last row.
+void WorkbookView::WorkDone() {
+  if (!bigLoad_) return;
+  if (bigLoad_->worker.joinable()) bigLoad_->worker.join();
+  std::unique_ptr<BigLoad> load = std::move(bigLoad_);
+  const size_t i = load->sheet;
+  if (i == SIZE_MAX) {
+    book_->SwapCells(load->book);
+  } else if (load->full && i < book_->SheetCount() && i < load->full->SheetCount()) {
+    book_->SwapSheet(i, *load->full);
+    // What was worked out from the first rows is worked out again: the engine (it waited), the
+    // conditional formats and sparklines (they point at it), the sheet's objects and rules.
+    for (auto& r : rules_) r.reset();
+    rulesRead_.assign(rulesRead_.size(), false);
+    calc_.reset();
+    breakPages_.reset();
+    if (i < objects_.size()) objects_[i].reset();
+    validationsSheet_ = -1;
+    circles_.clear();
+    if (i == sheet_) {
+      grid_.Build(book_->GetSheet(i), book_->GetStyles(), *measure_);
+      BuildGroups();
+      if (i < objects_.size()) objects_[i] = SheetObjects::Load(*book_, i);
+      PlaceObjects();
+      LayoutParts();
+      ClampScroll();
+    }
+  } else {
+    partial_ = true;
+    host_.ViewMessage(BannerKind::Error,
+                      Title() + L" couldn't be read in full: only its first rows show, and it can't be saved.");
+  }
+  load.reset();
+  text_->Clear();
+  totals_ = Totals{};
+  host_.ViewStateChanged();
+  host_.ViewInvalidate();
+}
 
 std::unique_ptr<WorkbookView> WorkbookView::NewWorkbook(ViewHost& host, int number) {
   auto view = std::make_unique<WorkbookView>(host, std::wstring());
@@ -129,13 +183,42 @@ OpenResult WorkbookView::Load(const std::wstring& password, std::wstring& error)
     auto csvBook = std::make_unique<Workbook>();
     std::wstring sheetName = name.substr(0, name.rfind(L'.'));
     if (sheetName.size() > 31) sheetName.resize(31);
-    csv::Source source;
-    csv::Read(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), WideToUtf8(sheetName), o,
-              *csvBook, source);
+    const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    const std::string utf8Name = WideToUtf8(sheetName);
+    // A large file: the rows of its first megabyte now (the last, perhaps cut, left out), the whole
+    // file on a worker, which then takes their place (WorkDone).
+    constexpr size_t kLarge = 4u << 20, kPrefix = 1u << 20;
+    bool background = false;
+    if (text.size() > kLarge) {
+      csv::Reader first(text.substr(0, kPrefix), o);
+      if (first.RowCount() > 1) {
+        Sheet& sheet = csv::NewSheet(*csvBook, utf8Name);
+        SheetBuilder builder(sheet);
+        first.AddRows(*csvBook, builder, 0, first.RowCount() - 1);
+        background = true;
+      }
+    }
+    if (!background) {
+      csv::Source source;
+      csv::Read(text, utf8Name, o, *csvBook, source);
+    }
     // Saving reads the file again to write it its own way (WorkbookFile).
     if (!fromBytes_) file_->Opened(path_, snapshot->GetStamp());
     file_->SetCsvOptions(o);
-    snapshot.reset();  // the model has the values: the file's copy goes before the grid is built
+    if (background) {
+      bigLoad_ = std::make_unique<BigLoad>();
+      BigLoad* load = bigLoad_.get();
+      load->snapshot = std::move(snapshot);
+      HWND hwnd = host_.ViewHwnd();
+      const LPARAM self = reinterpret_cast<LPARAM>(this);
+      load->worker = std::thread([load, text, o, utf8Name, hwnd, self] {
+        csv::Source source;
+        csv::Read(text, utf8Name, o, load->book, source);
+        PostMessageW(hwnd, kWorkDoneMessage, 0, self);
+      });
+    } else {
+      snapshot.reset();  // the model has the values: the file's copy goes before the grid is built
+    }
     return Opened(std::move(csvBook), error);
   }
   // A password-protected workbook (an encrypted .xlsx) and an Excel 97-2003 workbook (.xls) are
@@ -179,8 +262,28 @@ OpenResult WorkbookView::Load(const std::wstring& password, std::wstring& error)
       path_.clear();
     }
   }
+  // A large workbook (S4): its active sheet's first rows now, the whole of it on a worker (WorkDone).
+  const bool large = !fromBytes_ && newNumber_ == 0 && !locked && imported_.empty() && snapshot &&
+                     snapshot->Size() > (16u << 20) && (EndsWithNoCase(path_, L".xlsx") || EndsWithNoCase(path_, L".xlsm"));
+  xlsx::ReadOptions readOptions;
+  bool partial = false;
+  if (large) readOptions.firstBytes = 4u << 20, readOptions.partial = &partial;
   auto package = snapshot ? pkg::Package::Open(std::move(snapshot), pkg::Limits::Default(), st) : nullptr;
-  std::unique_ptr<Workbook> book = package ? xlsx::Read(std::move(package), st) : nullptr;
+  std::unique_ptr<Workbook> book = package ? xlsx::Read(std::move(package), st, readOptions) : nullptr;
+  if (book && partial) {
+    bigLoad_ = std::make_unique<BigLoad>();
+    BigLoad* load = bigLoad_.get();
+    load->sheet = book->ActiveSheet();
+    HWND hwnd = host_.ViewHwnd();
+    const LPARAM self = reinterpret_cast<LPARAM>(this);
+    load->worker = std::thread([load, path = path_, hwnd, self] {
+      pkg::Status s;
+      auto snap = pkg::Snapshot::Open(path, {}, s);
+      auto whole = snap ? pkg::Package::Open(std::move(snap), pkg::Limits::Default(), s) : nullptr;
+      load->full = whole ? xlsx::Read(std::move(whole), s) : nullptr;
+      PostMessageW(hwnd, kWorkDoneMessage, 0, self);
+    });
+  }
   if (!book) {
     error = OpenError(name, st);
     return OpenResult::Failed;
@@ -407,13 +510,25 @@ calc::WorkbookCalc& WorkbookView::Calc() {
   return *calc_;
 }
 
+const Sparklines* WorkbookView::SparklinesFor(size_t index) {
+  RulesFor(index);
+  return index < sparklines_.size() ? sparklines_[index].get() : nullptr;
+}
+
 condfmt::SheetRules* WorkbookView::RulesFor(size_t index) {
   if (!book_ || index >= rules_.size()) return nullptr;
   if (!rulesRead_[index]) {
     rulesRead_[index] = true;
     Sheet& sheet = book_->GetSheet(index);
     if (!sheet.Loaded()) book_->LoadSheet(index);
-    if (sheet.KeptXml().find("conditionalFormatting") != std::string::npos) {
+    const std::string kept = sheet.KeptXml();
+    if (sparklines_.size() < rules_.size()) sparklines_.resize(rules_.size());
+    sparklines_[index].reset();
+    if (kept.find("sparklineGroups") != std::string::npos) {
+      sparklines_[index] = std::make_unique<Sparklines>(*book_, index);
+      if (sparklines_[index]->Empty()) sparklines_[index].reset();
+    }
+    if (kept.find("conditionalFormatting") != std::string::npos) {
       condfmt::Options o;
       o.locale = &text_->Locale();
       o.calc = &Calc();
@@ -700,6 +815,7 @@ void WorkbookView::DrawGrid(Canvas& c, ID2D1DeviceContext* dc) {
   o.gridColor = gridColor_;
   o.showZeros = showZeros_;
   o.rules = RulesFor(sheet_);
+  o.sparklines = SparklinesFor(sheet_);
   o.pivots = PivotLooksFor(sheet_);  // s4-pivot
   const double k = K();
   const float mirror = cells_.left + cells_.right;

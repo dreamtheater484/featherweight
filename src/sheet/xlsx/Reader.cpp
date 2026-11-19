@@ -984,7 +984,13 @@ std::unique_ptr<Workbook> Read(std::unique_ptr<pkg::Package> package, Status& st
   loader.SetPackage(std::move(package));
   loader.SetLoader([](Workbook& b, size_t i) { return LoadSheetPart(b, i); });
   // The active sheet now; the others when asked.
-  if (count && !(status = book->LoadSheet(book->ActiveSheet())).Ok()) return nullptr;
+  if (count) {
+    bool cut = false;
+    if (options.firstBytes && !(status = LoadSheetStart(*book, book->ActiveSheet(), options.firstBytes, cut)).Ok())
+      return nullptr;
+    if (!cut && !(status = book->LoadSheet(book->ActiveSheet())).Ok()) return nullptr;
+    if (options.partial) *options.partial = cut;
+  }
   if (options.loadAll && !(status = book->LoadAll()).Ok()) return nullptr;
   return book;
 }

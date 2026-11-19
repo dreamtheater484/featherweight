@@ -22,6 +22,8 @@ class SheetRules;
 // and print preview, so they look alike.
 namespace fw::sheet::view {
 
+class Sparklines;
+
 // Where cells go in the painter's coordinates. The screen gives whole device pixels at the zoom;
 // a printed page gives points. In a right-to-left sheet column A is at the right.
 class Geometry {
@@ -59,6 +61,7 @@ struct PaintOptions {
   // Conditional formats over the cells' own formats (null: none); table styles under them.
   condfmt::SheetRules* rules = nullptr;
   bool tables = true;
+  const Sparklines* sparklines = nullptr;  // the sheet's sparklines (S4); null: none
   const std::vector<pivot::Look>* pivots = nullptr;  // the sheet's PivotTables' styles, like tables'
 };
 
