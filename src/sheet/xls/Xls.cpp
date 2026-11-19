@@ -143,7 +143,7 @@ void Esc(std::string& o, std::string_view s) {
       case '"': o += "&quot;"; break;
       case '\t': o += "&#9;"; break;
       case '\n': o += "&#10;"; break;
-      case '\r': o += "&#13;"; break;
+      case '\r': o += "_x000D_"; break;  // as Excel writes it (a character reference reads back as LF in some readers)
       case '_':
         if (i + 6 < s.size() && s[i + 1] == 'x' && s[i + 6] == '_' &&
             std::all_of(s.begin() + i + 2, s.begin() + i + 6, [](char h) { return std::isxdigit(static_cast<unsigned char>(h)); }))
