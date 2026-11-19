@@ -6,7 +6,8 @@
   - the page count
   - the fonts Office actually drew with, from each PDF
   - the source file's hash
-  - for a format copy (D5: doc\, odt\, dotx\, protected\, made by scripts\make-test-files.ps1),
+  - for a format copy (D5: doc\, odt\, dotx\, protected\, made by scripts\make-test-files.ps1;
+    S4: xls\ and ods\, Excel's copies of the workbooks, made by scripts\make-sheet-copies.ps1),
     "copyOf": the original's source in the same manifest, so fidelity counts each document once
     and measures the copies as a set of their own
   - for a password-protected copy, "password": its test password (Get-TestPassword)
@@ -81,7 +82,7 @@ $Folders = @($Folders | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $PrintPdf = @($PrintPdf | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $apps = @{
   Word = @{ Exe = "WINWORD"; ProgId = "Word.Application"; Ext = @(".docx", ".docm", ".dotx", ".dotm", ".doc", ".odt") }
-  Excel = @{ Exe = "EXCEL"; ProgId = "Excel.Application"; Ext = @(".xlsx", ".xlsm", ".xltx", ".xltm") }
+  Excel = @{ Exe = "EXCEL"; ProgId = "Excel.Application"; Ext = @(".xlsx", ".xlsm", ".xltx", ".xltm", ".xls", ".ods") }
   PowerPoint = @{ Exe = "POWERPNT"; ProgId = "PowerPoint.Application"; Ext = @(".pptx", ".pptm", ".potx", ".potm", ".ppsx", ".ppsm") }
 }
 
@@ -484,7 +485,9 @@ if ($Child) {
         # Calculation can only be set with a workbook open: a blank one, kept open throughout.
         $blank = $office.Workbooks.Add()
         $result.printer = [string]$office.ActivePrinter
-        if ($ExcelPrinter -and $result.printer -ne $ExcelPrinter) { throw "Excel lays out for $($result.printer), not $ExcelPrinter" }
+        # The printer by name: Excel numbers network ports its own way, and differently after a
+      # restart ("on Ne01:" for Windows' "on Ne02:"); the parent checked Windows' default printer.
+      if ($ExcelPrinter -and ($result.printer -replace ' on [^ ]+$', '') -ne ($ExcelPrinter -replace ' on [^ ]+$', '')) { throw "Excel lays out for $($result.printer), not $ExcelPrinter" }
         # How Excel lays out here: a blank sheet's standard column width, which moves with the printer
         # and the display.
         $result.standardWidth = [Math]::Round([double]$blank.Worksheets.Item(1).StandardWidth, 4)
@@ -588,12 +591,14 @@ function Get-Kind([string]$ext) {
 }
 
 # A format copy's original: the .docx it was made from (private: docx\<category>\, the same name;
-# public: generated\ or torture\, the name without "-protected"). Null for anything else.
+# public: generated\ or torture\, the name without "-protected"), or for xls\ and ods\ the .xlsx
+# (private: xlsx\<category>\). Null for anything else.
 function Get-CopyOf([string]$source, [string]$sourceRoot) {
   $parts = $source -split '/'
-  if ($parts.Count -lt 2 -or @("doc", "odt", "dotx", "protected") -notcontains $parts[0]) { return $null }
+  if ($parts.Count -lt 2 -or @("doc", "odt", "dotx", "protected", "xls", "ods") -notcontains $parts[0]) { return $null }
   $stem = (($parts[1..($parts.Count - 1)] -join '/') -replace '\.[^./]+$', '') -replace '-protected$', ''
-  $candidates = if ($Corpus) { @("docx/$stem.docx") } else { @("generated/$stem.docx", "torture/$stem.docx") }
+  $candidates = if (@("xls", "ods") -contains $parts[0]) { @("xlsx/$stem.xlsx") }
+                elseif ($Corpus) { @("docx/$stem.docx") } else { @("generated/$stem.docx", "torture/$stem.docx") }
   foreach ($c in $candidates) { if (Test-Path -LiteralPath (Join-Path $sourceRoot $c)) { return $c } }
   $null
 }
@@ -619,8 +624,9 @@ if ($Corpus) {
   $manifestPath = Join-Path $outRoot "manifest.json"
   if ((Test-Path $manifestPath) -and -not $Force) { $old = @((Get-Content $manifestPath -Raw | ConvertFrom-Json).files) }
   # docx, xlsx, pptx: screened downloads; doc, odt, dotx, protected: Word's copies of them (D5,
-  # scripts\make-test-files.ps1).
-  $screened = @("docx", "xlsx", "pptx", "doc", "odt", "dotx", "protected") | ForEach-Object { Join-Path $corpusRoot $_ } | Where-Object { Test-Path $_ }
+  # scripts\make-test-files.ps1); xls, ods: Excel's copies of the workbooks (S4,
+  # scripts\make-sheet-copies.ps1).
+  $screened = @("docx", "xlsx", "pptx", "doc", "odt", "dotx", "protected", "xls", "ods") | ForEach-Object { Join-Path $corpusRoot $_ } | Where-Object { Test-Path $_ }
   if (-not $screened) { throw "$corpusRoot has no docx, xlsx or pptx folder (see scripts\fetch-corpus.ps1)." }
   foreach ($f in $screened | ForEach-Object { Get-ChildItem $_ -File -Recurse } | Sort-Object FullName) {
     if ((Test-Inside $f.FullName $outRoot) -or -not (Get-Kind $f.Extension)) { continue }
@@ -686,7 +692,45 @@ if (@($jobs | Where-Object { (Get-Kind $_.File.Extension) -eq "Excel" }).Count) 
     throw "Nothing was rendered: $why. Excel lays out with the default printer and the display as they are when it starts; render with the reference printer the default and the Remote Desktop session connected, as for the references, or pass -ExcelStandardWidth to start new references."
   }
 }
+# From here the mutex is taken per file, so other checks (open checks, fixtures) run in between a
+# long render.
+$mutex.ReleaseMutex()
 foreach ($dir in $clear) { if (Test-Path $dir) { Remove-Item -Recurse -Force $dir } }
+
+# The manifest: the kept entries and this run's. Until the run ends (-not $final), the previous
+# entries of the files it hasn't reached yet stay in it too, so a run that stops loses nothing.
+function Write-Manifest([bool]$final) {
+  $manifest = [ordered]@{
+    made = (Get-Date).ToString("yyyy-MM-dd")
+    computer = "Office reference PC (decision 19)"
+    export = "Word (safe mode, no add-ins, macros forced off, links not updated, read-only): the document without markup, for print, tagged; Excel (macros forced off, links not updated, read-only): print areas, and a cells file per workbook (each non-empty cell's text and value, formulas with their cached, opened and recalculated values); PowerPoint: slides"
+  }
+  # The locale and printer Excel formatted and laid out with; kept from the last run that rendered workbooks.
+  $facts = $script:excelFacts
+  if (-not $facts -and (Test-Path $manifestPath)) { $facts = (Get-Content $manifestPath -Raw | ConvertFrom-Json).excel }
+  if ($facts) { $manifest.excel = $facts }
+  if ($Corpus) { $manifest.corpus = $corpusRoot }  # fwtool compare finds the documents here
+  $done = @{}
+  foreach ($e in $script:entries) { $done[$e.source] = $true }
+  $pending = if ($final) { @() } else {
+    $left = @{}
+    foreach ($j in $jobs) { if (-not $done.ContainsKey($j.Source)) { $left[$j.Source] = $true } }
+    @($old | Where-Object { $left.ContainsKey($_.source) })
+  }
+  # Folders stay in the order the manifest had them, new folders after them; files by name.
+  $groups = @(@($previousFiles) + @($script:entries) | ForEach-Object { ($_.source -split '/')[0] } | Select-Object -Unique)
+  $manifest.files = @(@($kept) + @($script:entries) + @($pending) | Sort-Object { if ($Corpus) { 0 } else { [array]::IndexOf($groups, ($_.source -split '/')[0]) } }, { $_.source })
+  # Every entry, kept ones too, says which original it copies (the coordinator's D5 decision).
+  $sourceRoot = if ($Corpus) { $corpusRoot } else { Join-Path $root "tests\office" }
+  foreach ($e in $manifest.files) {
+    $c = Get-CopyOf $e.source $sourceRoot
+    if ($c) { $e | Add-Member -NotePropertyName copyOf -NotePropertyValue $c -Force }
+    $p = Get-TestPassword $e.source
+    if ($p) { $e | Add-Member -NotePropertyName password -NotePropertyValue $p -Force }
+  }
+  Write-Json $manifest $manifestPath
+}
+
 $entries = @()
 $excelFacts = $null
 $n = 0
@@ -725,14 +769,19 @@ foreach ($job in $jobs) {
     $childArgs += @("-PrintTo", "`"$printPath`"")
   }
   $limit = if ($kind -eq "Excel") { $ExcelTimeoutSeconds } else { $TimeoutSeconds }
-  $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList $childArgs
-  $finished = $p.WaitForExit($limit * 1000)
-  # Office is stuck, usually on a prompt: end the child.
-  if (-not $finished) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-  $r = if (Test-Path $resultPath) { Get-Content $resultPath -Raw | ConvertFrom-Json } else { $null }
-  # The child ends the Office it started; if it hung or died, that's done here, so no hidden Office
-  # is left to block the next file.
-  if ($r) { Stop-Started @($r.pid) $apps[$kind].Exe $(if ($finished) { 15000 } else { 0 }) }
+  try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] {}
+  try {
+    $p = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList $childArgs
+    $finished = $p.WaitForExit($limit * 1000)
+    # Office is stuck, usually on a prompt: end the child.
+    if (-not $finished) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    $r = if (Test-Path $resultPath) { Get-Content $resultPath -Raw | ConvertFrom-Json } else { $null }
+    # The child ends the Office it started; if it hung or died, that's done here, so no hidden Office
+    # is left to block the next file.
+    if ($r) { Stop-Started @($r.pid) $apps[$kind].Exe $(if ($finished) { 15000 } else { 0 }) }
+  } finally {
+    $mutex.ReleaseMutex()
+  }
   if (-not $finished) {
     $entry.error = "$kind didn't finish within $limit s"
   } elseif ($r) {
@@ -770,29 +819,9 @@ foreach ($job in $jobs) {
     "[{0}/{1}] {2,-45} FAILED: {3}" -f $n, $jobs.Count, $entry.source, $entry.error
   }
   $entries += [pscustomobject]$entry
+  Write-Manifest $false  # after every file: a run that stops keeps what it rendered
 }
 
-$manifest = [ordered]@{
-  made = (Get-Date).ToString("yyyy-MM-dd")
-  computer = "Office reference PC (decision 19)"
-  export = "Word (safe mode, no add-ins, macros forced off, links not updated, read-only): the document without markup, for print, tagged; Excel (macros forced off, links not updated, read-only): print areas, and a cells file per workbook (each non-empty cell's text and value, formulas with their cached, opened and recalculated values); PowerPoint: slides"
-}
-# The locale and printer Excel formatted and laid out with; kept from the last run that rendered workbooks.
-if (-not $excelFacts -and (Test-Path $manifestPath)) { $excelFacts = (Get-Content $manifestPath -Raw | ConvertFrom-Json).excel }
-if ($excelFacts) { $manifest.excel = $excelFacts }
-if ($Corpus) { $manifest.corpus = $corpusRoot }  # fwtool compare finds the documents here
-# Folders stay in the order the manifest had them, new folders after them; files by name.
-$groups = @(@($previousFiles) + @($entries) | ForEach-Object { ($_.source -split '/')[0] } | Select-Object -Unique)
-$manifest.files = @(@($kept) + @($entries) | Sort-Object { if ($Corpus) { 0 } else { [array]::IndexOf($groups, ($_.source -split '/')[0]) } }, { $_.source })
-# Every entry, kept ones too, says which original it copies (the coordinator's D5 decision).
-$sourceRoot = if ($Corpus) { $corpusRoot } else { Join-Path $root "tests\office" }
-foreach ($e in $manifest.files) {
-  $c = Get-CopyOf $e.source $sourceRoot
-  if ($c) { $e | Add-Member -NotePropertyName copyOf -NotePropertyValue $c -Force }
-  $p = Get-TestPassword $e.source
-  if ($p) { $e | Add-Member -NotePropertyName password -NotePropertyValue $p -Force }
-}
-Write-Json $manifest $manifestPath
-$mutex.ReleaseMutex()
+Write-Manifest $true
 $unchanged = if ($reused) { ", $reused of them unchanged since the last run" } else { "" }
 "$(@($entries | Where-Object { -not $_.error }).Count) of $($entries.Count) exported$unchanged. The PDFs and manifest.json are in $outRoot"
