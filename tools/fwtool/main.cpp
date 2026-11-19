@@ -55,6 +55,9 @@ constexpr const char* kUsage =
     "  fwtool lines [--out DIR] <reference folder or PDF>...\n"
     "      Word's lines in its reference PDFs: page sizes, and each line's story, position and\n"
     "      text. With --out, writes them as layout dumps (docs/layout-dump.md).\n"
+    "  fwtool formulas --threads [--locale en-NL] <file or folder>...\n"
+    "      S4: each workbook recalculated in full on one thread and on four (the parallel phase\n"
+    "      forced however few formulas it has; NOW and RAND fixed); fails when a value differs.\n"
     "  fwtool formulas [--locale en-NL] [--regions R,...] [--report FILE] [--min-match M]\n"
     "                  <workbooks or folders>...\n"
     "      Workbooks (S1): recalculates every formula and compares it with the value Excel saved\n"
@@ -302,6 +305,7 @@ int wmain(int argc, wchar_t** argv) {
       }
     }
     else if (arg == L"--min-match" && i + 1 < argc) options.minMatch = _wtof(argv[++i]);
+    else if (arg == L"--threads") options.threads = true;
     else if (arg == L"--min-pages" && i + 1 < argc) options.minPages = _wtof(argv[++i]);
     else if (arg == L"--min-lines" && i + 1 < argc) options.minLines = _wtof(argv[++i]);
     else if (arg == L"--self-test") options.selfTest = true;

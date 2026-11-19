@@ -3,6 +3,7 @@
 target_sources(fwsheet PRIVATE
   Bind.cpp
   Engine.cpp
+  Workers.cpp
   Entry.cpp
   Eval.cpp
   FnArray.cpp
@@ -30,5 +31,7 @@ if(FW_BUILD_TESTS)
   target_link_libraries(fw_tests PRIVATE fwsheet)
   # Every formula of the Excel-saved test workbooks recalculated and compared with Excel's values
   # (this PC's Excel is en-NL: a decimal comma and day-first dates).
+  # S4: multi-threaded recalculation gives exactly what one thread gives.
+  add_test(NAME office_formulas_threads COMMAND fwtool formulas --threads --locale en-NL "${PROJECT_SOURCE_DIR}/tests/office/excel")
   add_test(NAME office_formulas COMMAND fwtool formulas --locale en-NL --min-match 100 "${PROJECT_SOURCE_DIR}/tests/office/excel")
 endif()
