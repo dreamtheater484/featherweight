@@ -613,6 +613,12 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) SetTopLeft(sheet, topLeft);
         break;
       }
+      case JournalOp::SetViewMode: {
+        const int sheet = f.Int();
+        const uint32_t mode = f.U32();
+        if (f.Ok() && mode <= static_cast<uint32_t>(ViewMode::PageLayout)) SetViewMode(sheet, static_cast<ViewMode>(mode));
+        break;
+      }
       case JournalOp::SetZoom: {
         const int sheet = f.Int();
         const uint32_t percent = f.U32();

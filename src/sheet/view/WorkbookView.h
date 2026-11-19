@@ -337,8 +337,17 @@ class WorkbookView : public PagedView {
 
   // Print preview and printing.
   bool preview_ = false;
-  std::unique_ptr<PrintLayout> print_;
-  std::unique_ptr<SheetObjects> printObjects_;  // print_'s, placed on the printed columns
+  // The preview's pages: a layout per sheet it prints (printWhat_: the active sheet, every sheet, or
+  // the selection), each with its objects (placed on its printed columns) and another sheet's grid.
+  struct PrintSheet {
+    std::unique_ptr<Grid> grid;
+    std::unique_ptr<SheetObjects> objects;
+    std::unique_ptr<PrintLayout> layout;
+    size_t first = 0;  // its first page among the preview's
+  };
+  std::vector<PrintSheet> prints_;
+  int printWhat_ = 0;  // 0 the active sheet, 1 the entire workbook, 2 the selection (s3-print)
+  PrintLayout* LayoutAt(int page, size_t& local) const;
   std::vector<fw::PageSizePt> pageSizes_;
 
   // Pictures, shapes, charts and notes (fwsheetobjects): each sheet's, read when first shown and
@@ -569,6 +578,39 @@ class WorkbookView : public PagedView {
   std::unique_ptr<PanelContent> linkPanel_;     // a LinkPanel
   std::unique_ptr<PanelContent> notePanel_;     // a NotePanel
   class CommentPanel;
+  // ---- Page setup (S3, s3-print: WorkbookPageSetup.cpp): the Page Setup panel, the print area and
+  // titles, page breaks, what print preview prints, Page Break Preview.
+  class PageSetupPanel;
+  std::unique_ptr<PanelContent> pageSetupPanel_;
+  bool PageSetupCommandState(int cmd, CommandState& s);
+  bool PageSetupCommand(int cmd);
+  void AddPageSetupTabItems(HMENU m);
+  void AddPageSetupCellItems(HMENU m);
+  edit::Result ApplyPageSetup(const std::function<void(PageSetup&, HeaderFooter&, bool&)>& change);
+  void AfterPageChange();  // the preview and Page Break Preview paginate again
+  void RefreshPreview();
+  edit::Result SetPrintArea(const std::vector<Range>& areas);  // empty: cleared
+  std::optional<std::pair<uint32_t, uint32_t>> TitleRows() const;
+  std::optional<std::pair<uint32_t, uint32_t>> TitleCols() const;
+  edit::Result SetPrintTitles(std::optional<std::pair<uint32_t, uint32_t>> rows, std::optional<std::pair<uint32_t, uint32_t>> cols);
+  bool BreakHere(bool& row, bool& col) const;  // manual breaks above and left of the active cell
+  edit::Result ChangeBreaks(int cmd);
+  bool BreakPreviewOn() const;
+  void TogglePageBreakPreview();
+  void DrawPageBreakPreview(gfx::Canvas& c);
+  struct BreakDrag {
+    bool rows = false;
+    uint32_t from = 0, to = 0;  // the row or column the break is before
+  };
+  std::optional<BreakDrag> breakDrag_;
+  std::unique_ptr<PrintSheet> breakPages_;  // Page Break Preview's pages (`first`: their sheet)
+  const PrintLayout* BreakPages();
+  bool BreakEdgeAt(float x, float y, bool& rows, uint32_t& at);
+  bool BreakDragStart(float x, float y);
+  bool BreakDragMove(int x, int y);
+  bool BreakDragEnd(int x, int y);
+  HCURSOR BreakCursor(float x, float y);  // null: no break there
+  bool PageScriptOp(const std::wstring& arg);  // pagesetup:
   std::unique_ptr<PanelContent> commentPanel_;  // a CommentPanel
   // The active cell's note (not a threaded comment), its text without the author's line.
   const CellNote* NoteHere(std::wstring* text = nullptr) const;

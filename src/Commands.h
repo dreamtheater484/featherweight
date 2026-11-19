@@ -386,6 +386,24 @@ enum Cmd : int {
   CmdDeleteThread,  // Delete Thread (New Comment, Ctrl+Alt+M, is the app's CmdNewComment)
   // Links: the app's CmdInsertLink (Ctrl+K) and CmdRemoveLink.
 
+  // Page setup, print preview and Export PDF (S3, s3-print): 2940-2969.
+  // The Page Setup panel is the app's CmdPageSetup.
+  CmdSetPrintArea = 2940,  // the selection
+  CmdAddToPrintArea,
+  CmdClearPrintArea,
+  CmdPrintTitles,       // the panel's Sheet tab
+  CmdInsertPageBreak,   // above and left of the active cell
+  CmdRemovePageBreak,
+  CmdResetPageBreaks,
+  CmdPageBreakPreview,  // the sheet's pages over its cells (on and off)
+  CmdNoScaling,         // print preview's scaling shortcuts, in this order
+  CmdFitSheetOnePage,
+  CmdFitColumnsOnePage,
+  CmdFitRowsOnePage,
+  CmdPrintActiveSheet,  // what print preview shows, prints and exports, in this order
+  CmdPrintWorkbook,
+  CmdPrintSelection,
+
   // Defined names (S3, s3-calc): 2970-2999.
   CmdNameManager = 2970,  // Ctrl+F3
   CmdDefineName,
