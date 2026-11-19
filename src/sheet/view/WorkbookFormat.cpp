@@ -1144,7 +1144,7 @@ bool WorkbookView::FormatCommandState(int cmd, CommandState& s) {
     return true;
   };
   switch (cmd) {
-    case CmdFormatCells: return set(L"Format cells", L"Ctrl+1");
+    case CmdFormatCells: return set(L"Format cells…", L"Ctrl+1");
     case CmdBold: return set(L"Bold", L"Ctrl+B", f && f->bold);
     case CmdItalic: return set(L"Italic", L"Ctrl+I", f && f->italic);
     case CmdUnderline: return set(L"Underline", L"Ctrl+U", f && f->underline != Underline::None);
@@ -1156,7 +1156,7 @@ bool WorkbookView::FormatCommandState(int cmd, CommandState& s) {
     case CmdFillColor: return set(L"Fill color", L"");
     case CmdBordersBox: return set(L"Borders", L"");
     case CmdMergeBox: return set(L"Merge", L"");
-    case CmdNumberFormatBox: return set(L"Number format", L"");
+    case CmdNumberFormatBox: return set(L"More number formats…", L"");  // Format cells' Number page
     case CmdIncreaseDecimal: return set(L"Increase decimal", L"");
     case CmdDecreaseDecimal: return set(L"Decrease decimal", L"");
     case CmdNumGeneral: return set(L"General format", L"Ctrl+Shift+~");
@@ -1384,7 +1384,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   merge.cmd = CmdMergeBox;
   merge.width = 84;
   merge.priority = 3;
-  merge.text = L"Merge";
+  merge.text = merge.menuLabel = L"Merge";
   merge.tooltip = L"Merge and center, merge across, merge or unmerge cells";
   merge.choices = {L"Merge and center", L"Merge across", L"Merge cells", L"Unmerge cells"};
   merge.onChange = [this](const ToolValue& v) {
@@ -1410,7 +1410,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   data.cmd = CmdDataBox;
   data.width = 72;
   data.priority = 2;
-  data.text = L"Data";
+  data.text = data.menuLabel = L"Data";
   data.tooltip = L"Sort, filter and remove duplicates";
   data.choices = {L"Sort A to Z",        L"Sort Z to A",          L"Custom sort…",
                   L"Filter (Ctrl+Shift+L)", L"Remove duplicates…", L"Data validation…",

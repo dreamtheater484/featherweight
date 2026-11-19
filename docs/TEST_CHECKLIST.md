@@ -268,6 +268,15 @@ Featherweight edits workbooks. Check it next to Excel on the same file, keystrok
 
 - [ ] `million-cells.xlsx`: typing in a cell feels instant (measured 3.75 ms a key, 31 ms at worst; plan: under 16 and 50). Inserting a row ___ ms (measured 23–28 ms; plan: under 100 ms), and undoing it as quick.
 
+### Fewer steps (S4's friction fixes)
+
+`tests\workbook-friction-checks.ps1` checks these off-screen; the menus are Windows' own, so try them by hand too.
+
+- [ ] Narrow the window to about 1366, 1280 and 1024 pixels: the toolbar ends in **›** where items no longer fit. Its menu has each of them: Merge, Styles and Data with their choices, the colors (Automatic, the theme's, the standard ones, More colors…), the format painter. Each works as on the bar. In a document the same: Insert table opens the Table panel, Page layout's menu opens under **›**.
+- [ ] Alt+Q finds Sort, Filter, Table, Conditional formatting, Data validation, Format cells, Name Manager and Refresh PivotTable, with their shortcuts.
+- [ ] A filter's **Condition** picked from its list puts the caret in the Value box; type the number and press Enter: the filter applies, without a click on Apply.
+- [ ] Ctrl+T, and in a table **Table design…**: the styles show as small tables under Light, Medium and Dark, as Excel's gallery (in the workbook's theme colors); a click picks one, the arrows move between them, and the wheel scrolls when the panel is short.
+
 ## Protection, links and notes (S3)
 
 Check next to Excel on copies of your own workbooks. Every change is one undo step.

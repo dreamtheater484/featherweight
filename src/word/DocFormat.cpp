@@ -871,7 +871,7 @@ void DocFormat::AddToolbar(ToolbarModel& m) {
   insert.priority = 4;  // after change case, the indents, ¶, the painter and Highlight (friction review)
   insert.maxRows = 24;
   insert.glyph = icon::Add;
-  insert.text = L"Insert";
+  insert.text = insert.menuLabel = L"Insert";
   insert.tooltip = L"Insert a picture, a break, the date or the time";
   insert.enabled = on;
   insert.sepBefore = true;

@@ -321,8 +321,20 @@ std::vector<int> WorkbookView::Commands() {
   ids.push_back(CmdPageSetup);  // s3-print
   for (int cmd = CmdSetPrintArea; cmd <= CmdPrintSelection; ++cmd) ids.push_back(cmd);
   for (int cmd = CmdInsertChart; cmd <= CmdChartScatter; ++cmd) ids.push_back(cmd);  // s3-charts
-  ids.push_back(CmdChartCombo);
+  for (int cmd : {CmdChartCombo, CmdDeleteObject, CmdChartPanel, CmdMoveChart}) ids.push_back(cmd);
   for (int cmd = CmdObjectPicture; cmd <= CmdFormatObject; ++cmd) ids.push_back(cmd);  // s3-data
+  // Editing, formats, sort and filter, conditional formats, validation, tables, names and pivots
+  // (S2-S4), as Word's list has its own. The toolbar's boxes that only open their list, or repeat
+  // one of these, aren't commands of their own here.
+  for (int cmd : {CmdUndo, CmdRedo, CmdCut, CmdPaste, CmdBold, CmdItalic, CmdUnderline, CmdAlignLeft, CmdAlignCenter,
+                  CmdAlignRight, CmdFontColor, CmdFormatPainter})
+    ids.push_back(cmd);
+  for (int cmd = CmdFormatCells; cmd <= CmdRemoveDuplicates; ++cmd)
+    if (cmd != CmdMergeBox && cmd != CmdBordersBox && cmd != CmdCellStyles) ids.push_back(cmd);
+  for (int cmd = CmdCondFormat; cmd <= CmdTableTotalRow; ++cmd)
+    if (cmd != CmdCondFormatBox) ids.push_back(cmd);
+  for (int cmd = CmdNameManager; cmd <= CmdPasteNames; ++cmd) ids.push_back(cmd);
+  for (int cmd = CmdPivotRefresh; cmd <= CmdPivotRefreshAll; ++cmd) ids.push_back(cmd);
   return ids;
 }
 

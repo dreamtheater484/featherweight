@@ -245,6 +245,9 @@ class Dropdown : public Control {
   wchar_t glyph = 0;
   int maxRows = 12;  // rows the list shows before it scrolls (it's never taller than the window)
   std::function<void(int)> onChange;
+  // After onChange, when the choice was made in the open list (a click, Enter), not with the
+  // arrows on the closed box: a panel can move the keyboard on, to the box the choice needs.
+  std::function<void(int)> onPicked;
 
   void SetGroup(ControlGroup* g) override;
   void Draw(gfx::Canvas& c) override;
@@ -354,6 +357,10 @@ class ColorPalette : public Control {
   static std::vector<NamedColor> DefaultTheme();
   // Custom colors chosen with More colors…, newest first, shared by every palette.
   static std::vector<NamedColor>& Recent();
+  // Office's ten standard colors (Dark Red to Purple).
+  static const std::vector<NamedColor>& StandardColors();
+  // Windows' color dialog, from `start`: false when it was cancelled. The color joins Recent().
+  static bool ChooseMore(HWND owner, D2D1_COLOR_F start, D2D1_COLOR_F& picked);
   // A readable name for a color: the palette's own name, or its red, green and blue.
   std::wstring NameOf(D2D1_COLOR_F c, bool automatic) const;
   // Which of `theme`'s cells a picked color is: the index of its base color, and for a tint or

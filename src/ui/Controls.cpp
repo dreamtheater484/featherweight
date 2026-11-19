@@ -692,9 +692,12 @@ void Dropdown::SetGroup(ControlGroup* g) {
 
 void Dropdown::Pick(int i) {
   SetOpen(false);
-  if (i < 0 || i >= static_cast<int>(items.size()) || i == selected) return;
-  selected = i;
-  if (onChange) onChange(i);
+  if (i < 0 || i >= static_cast<int>(items.size())) return;
+  if (i != selected) {
+    selected = i;
+    if (onChange) onChange(i);
+  }
+  if (onPicked) onPicked(i);
 }
 
 void Dropdown::SetOpen(bool open) {
