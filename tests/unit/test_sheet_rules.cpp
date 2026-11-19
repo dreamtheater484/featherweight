@@ -553,6 +553,27 @@ TEST(SheetSave_KeptTypeAndStyleDropped) {
   CHECK(OpenZip(saved) != nullptr);
 }
 
+// A new sheet's part never takes a name whose relationships part is left over in the package (its
+// own part missing): the sheet would get those tables (found by fuzz_xlsx; a damaged table there made
+// the saved file unreadable).
+TEST(SheetSave_NewSheetSkipsLeftoverRels) {
+  auto parts = WorkbookParts({"<sheetData/>"});
+  parts.push_back({"xl/worksheets/_rels/sheet2.xml.rels",
+                   "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+                   "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/table\" "
+                   "Target=\"/xl/tables/table9.xml\"/></Relationships>"});
+  parts.push_back({"xl/tables/table9.xml", "<table id=\"9\" name=\"T\" displayName=\"T\" ref=\"A1:A2\" broken"});
+  auto book = OpenZip(test::MakeZip(parts));
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.AddSheet(1, "New"));
+  CHECK(ed.SetCell(1, 0, 0, edit::CellInput::Number(1)));
+  std::vector<uint8_t> saved = Save(*book, ed, L"leftover");
+  CHECK(Part(saved, "/xl/worksheets/sheet2.xml").empty());
+  CHECK(Part(saved, "/xl/worksheets/sheet3.xml").find("<c r=\"A1\"") != std::string::npos);
+  CHECK(OpenZip(saved) != nullptr);
+}
+
 // On a protected sheet Excel refuses tables and validations always, conditional formats unless
 // formatting cells is allowed.
 TEST(SheetRules_Protected) {
