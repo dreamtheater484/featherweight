@@ -38,6 +38,24 @@ enum class Op : uint8_t {
   Undo,         // count steps
   Redo,
   Save,         // a save in the middle: checked as the last one is, then the edits go on
+  // S3's objects
+  Name,         // arg: the name; text: what it refers to (invariant, without "="), empty: delete it;
+                // sheetScope: it belongs to `sheet`, else to the workbook
+  Protect,      // Protect Sheet on `sheet`; arg: on, pw (with a password), lax (formatting and inserting
+                // allowed), off
+  ProtectBook,  // Protect Workbook (its structure); arg: on, pw, off
+  Link,         // a link over `range`; arg: web (text: the address), tip (the same with a ScreenTip),
+                // place (text: "Sheet2!A1" or a name), remove
+  Note,         // the note on `range`'s first cell; arg: set, shown (text: the note), delete
+  Thread,       // the comment thread on `range`'s first cell; arg: comment (text: a new thread, or a
+                // reply to the one there), resolve (resolved or reopened), delete
+  Table,        // arg: add (a table over `range`, its first row the headers), remove, totals (the
+                // total row on or off), style=<name>: the table at `range`'s first cell
+  Rule,         // a conditional format over `range`, Excel's newest first; arg: greater, between,
+                // expression, contains (text: the value or formula), duplicate, top, above, scale,
+                // bar, icons, clear (the rules there go)
+  Validation,   // data validation on `range`, replacing what's there; arg: list, list-ref, whole,
+                // decimal, length, custom (text: the list or formula), clear
 };
 
 // One edit, as reproducers keep it. Sheets are tab indexes at the moment the edit is applied (names
@@ -51,6 +69,7 @@ struct Edit {
   std::string text;      // UTF-8
   std::string arg;
   uint32_t count = 1;    // Undo, Redo
+  bool sheetScope = false;  // Name: the name belongs to `sheet`
   std::string target;    // what it aims at, for people: "a formula", "a merged area", "a table"
 };
 
@@ -59,7 +78,13 @@ struct Edit {
 //   insert-rows 0!5:6 / delete-cols 0!C:D / insert-cells 0!B2:C3 down / add-sheet 2 "Name" /
 //   rename-sheet 1 "Name" / move-sheet 1 3 / delete-sheet 2 / merge 0!A1:C1 / unmerge 0!A1:C1 /
 //   sort 0!A2:D20 "B desc" / filter 0!A1:D20 / filter 0!A1:D20 "B" "x" / paste 0!A1:B2 1!D5 values /
-//   undo 2 / redo 1 / save, each optionally followed by "# target".
+//   undo 2 / redo 1 / save /
+//   name book Rate "Sheet1!$B$2" / name 1 Print_Area "Sheet2!$A$1:$D$9" / name book Rate - /
+//   protect 0 on / protect-book off / link 0!B2:C3 web "https://example.com" / link 0!B2 remove /
+//   note 0!B2 set "text" / note 0!B2 delete / thread 0!B2 comment "text" / thread 0!B2 resolve /
+//   table 0!A1:D9 add / table 0!A1 style=TableStyleLight9 / rule 0!A1:C5 greater "5" /
+//   rule 0!A1:C5 clear / validation 0!A1:A5 list "\"a,b,c\"",
+//   each optionally followed by "# target".
 std::string FormatEdit(const Edit& edit);
 bool ParseEdit(std::string_view line, Edit& edit);
 
