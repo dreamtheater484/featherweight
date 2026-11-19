@@ -501,6 +501,9 @@ class Editor {
   void RewriteSheetRefs(int skip, const std::function<std::string(std::string_view, int)>& rewrite,
                         const std::function<bool(std::string_view)>& touches, std::string_view from = {},
                         std::string_view to = {});
+  // Convert to Range (s3-data): table `t`'s style written into its cells' own formats, as Excel
+  // keeps the look; inside RemoveTable's step.
+  Result KeepTableLook(Sheet& s, const Table& t);
   // Header cells of tables among `cells`, after they were written: each holds its text as Excel
   // shows it (a number as formatted; cleared: "ColumnN"), unique in its table (Excel adds 2, 3...),
   // and its column takes that name, structured references everywhere following.
