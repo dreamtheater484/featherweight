@@ -3434,7 +3434,6 @@ std::string Editor::AddPart(std::string_view source, std::string_view relType, s
   const std::string part(name), from(source);
   st.KeepPart(part);
   st.KeepTypes();
-  st.KeepRels(from);
   package->SetPart(part, std::vector<uint8_t>(bytes.begin(), bytes.end()));
   if (package->ContentTypeOf(part) != contentType) {
     pkg::ContentTypes types = package->Types();
@@ -3443,6 +3442,16 @@ std::string Editor::AddPart(std::string_view source, std::string_view relType, s
     o.emplace_back(part, std::string(contentType));
     package->SetContentTypes(std::move(types));
   }
+  return AddRelationship(from, relType, part);
+}
+
+std::string Editor::AddRelationship(std::string_view source, std::string_view relType, std::string_view target) {
+  State& st = *s_;
+  pkg::Package* package = book_.GetPackage();
+  if (st.open.empty() || !package || !package->FindPart(target)) return {};
+  if (source != "/" && !package->FindPart(source)) return {};
+  const std::string from(source);
+  st.KeepRels(from);
   pkg::RelationshipSet set;
   if (const pkg::RelationshipSet* r = package->RelationshipsOf(from)) set = *r;
   else set.source = from;
@@ -3454,7 +3463,7 @@ std::string Editor::AddPart(std::string_view source, std::string_view relType, s
   pkg::Relationship rel;
   rel.id = id;
   rel.type = std::string(relType);
-  rel.target = RelativeTarget(from, part);
+  rel.target = RelativeTarget(from, target);
   set.items.push_back(std::move(rel));
   package->SetRelationships(std::move(set));
   return id;
@@ -3725,6 +3734,51 @@ std::string ChartAnchor(const Editor::NewChart& c, const std::string& rel, uint3
 
 }  // namespace
 
+std::string Editor::SheetDrawing(int sheet, bool create) {
+  State& st = *s_;
+  pkg::Package* package = book_.GetPackage();
+  if (!package || sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return {};
+  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  const std::string sheetPart = s.PartName();
+  if (sheetPart.empty() || !package->FindPart(sheetPart)) return {};
+  const std::string type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
+  if (const pkg::RelationshipSet* rels = package->RelationshipsOf(sheetPart))
+    for (const pkg::Relationship& r : rels->items)
+      if (!r.external && r.type == type && package->FindPart(r.targetPart)) return r.targetPart;
+  if (!create || st.open.empty()) return {};
+  const std::string drawing = NewPartName("/xl/drawings/drawing", ".xml");
+  const std::string id = AddPart(sheetPart, type, drawing, "application/vnd.openxmlformats-officedocument.drawing+xml",
+                                 "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<xdr:wsDr "
+                                 "xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" "
+                                 "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"></xdr:wsDr>");
+  if (id.empty()) return {};
+  SheetSave& sv = st.Save(s);
+  st.SaveText(sv);
+  detail::PartText& t = A::Text(s);
+  xlsx::PutSheetElement(t, "drawing", "<" + xlsx::SheetPrefix(t) + "drawing xmlns:r=\"" + std::string(kRelNs) + "\" r:id=\"" + id + "\"/>");
+  st.Change(&s, kObjects, Range{});
+  return drawing;
+}
+
+uint32_t Editor::NextShapeId(std::string_view drawing) const {
+  const std::string xml = PartBytes(drawing);
+  uint32_t id = 1;
+  for (size_t at = xml.find("cNvPr"); at != std::string::npos; at = xml.find("cNvPr", at + 5)) {
+    const size_t q = xml.find("id=\"", at);
+    if (q != std::string::npos && q < xml.find('>', at))
+      id = std::max<uint32_t>(id, static_cast<uint32_t>(std::strtoul(xml.c_str() + q + 4, nullptr, 10)));
+  }
+  return id + 1;
+}
+
+bool Editor::AddAnchor(std::string_view drawing, std::string_view anchorXml) {
+  std::string xml = PartBytes(drawing);
+  const size_t end = xml.rfind("</");
+  if (xml.empty() || end == std::string::npos) return false;
+  xml.insert(end, anchorXml);
+  return WritePart(drawing, std::move(xml));
+}
+
 Result Editor::InsertChart(int sheet, const NewChart& c) {
   Guard guard(*this);
   if (Result no = guard.Check(sheet, ProtectAct::Objects, c.data); !no) return no;
@@ -3742,45 +3796,14 @@ Result Editor::InsertChart(int sheet, const NewChart& c) {
     const ChartPlan plan = PlanSeries(s, c.data);
     if (plan.series.empty()) return Result::Fail(u"Select the cells with the numbers to chart.");
     return Run(*this, u"Insert Chart", [&]() -> Result {
-      State& st = *s_;
-      const std::string sheetPart = s.PartName();
-      const std::string drawingRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
-      // The sheet's drawing, or a new one it refers to.
-      std::string drawing;
-      if (const pkg::RelationshipSet* rels = package->RelationshipsOf(sheetPart))
-        for (const pkg::Relationship& r : rels->items)
-          if (!r.external && r.type == drawingRel && package->FindPart(r.targetPart)) drawing = r.targetPart;
-      std::string drawingXml;
-      if (drawing.empty()) {
-        drawing = NewPartName("/xl/drawings/drawing", ".xml");
-        drawingXml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<xdr:wsDr "
-                     "xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" "
-                     "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"></xdr:wsDr>";
-        const std::string id = AddPart(sheetPart, drawingRel, drawing, "application/vnd.openxmlformats-officedocument.drawing+xml", drawingXml);
-        if (id.empty()) return Result::Fail(u"The chart couldn't be added to this sheet.");
-        SheetSave& sv = st.Save(s);
-        st.SaveText(sv);
-        detail::PartText& t = A::Text(s);
-        const std::string p = xlsx::SheetPrefix(t);
-        xlsx::PutSheetElement(t, "drawing", "<" + p + "drawing xmlns:r=\"" + std::string(kRelNs) + "\" r:id=\"" + id + "\"/>");
-      } else {
-        drawingXml = PartBytes(drawing);
-      }
+      const std::string drawing = SheetDrawing(sheet, true);
+      if (drawing.empty()) return Result::Fail(u"The chart couldn't be added to this sheet.");
       const std::string chartPart = NewPartName("/xl/charts/chart", ".xml");
       const std::string rel = AddPart(drawing, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart", chartPart,
                                       "application/vnd.openxmlformats-officedocument.drawingml.chart+xml", ChartXml(s, plan, c.kind, c.title));
-      if (rel.empty()) return Result::Fail(u"The chart couldn't be added to this sheet.");
-      // A shape id the drawing doesn't use.
-      uint32_t id = 1;
-      for (size_t at = drawingXml.find("cNvPr"); at != std::string::npos; at = drawingXml.find("cNvPr", at + 5)) {
-        const size_t q = drawingXml.find("id=\"", at);
-        if (q != std::string::npos && q < drawingXml.find('>', at)) id = std::max<uint32_t>(id, static_cast<uint32_t>(std::strtoul(drawingXml.c_str() + q + 4, nullptr, 10)));
-      }
-      const size_t end = drawingXml.rfind("</");
-      if (end == std::string::npos) return Result::Fail(u"The sheet's drawing couldn't be read.");
-      drawingXml.insert(end, ChartAnchor(c, rel, id + 1));
-      WritePart(drawing, std::move(drawingXml));
-      st.Change(&s, kObjects, Range{c.at.row, c.at.col, c.at.row + c.rows, c.at.col + c.cols});
+      if (rel.empty() || !AddAnchor(drawing, ChartAnchor(c, rel, NextShapeId(drawing))))
+        return Result::Fail(u"The chart couldn't be added to this sheet.");
+      s_->Change(&s, kObjects, Range{c.at.row, c.at.col, c.at.row + c.rows, c.at.col + c.cols});
       return Result{};
     });
   }());
