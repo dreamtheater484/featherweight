@@ -16,6 +16,7 @@
 #include "sheet/view/WorkbookPanels.h"
 #include "sheet/view/WorkbookNames.h"
 #include "sheet/calc/Typing.h"
+#include "sheet/xls/Xls.h"
 #include "sheet/xlsx/Xlsx.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
@@ -151,9 +152,24 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
       path_.clear();
     }
   }
+  // An Excel 97-2003 workbook (.xls): read into an .xlsx in memory, and the tab is a copy that Save
+  // As saves as an .xlsx beside it; the .xls is never written (plan §7.1).
+  std::wstring imported;
   if (snapshot && pkg::CompoundFile::HasSignature(snapshot->Bytes())) {
-    error = name + L" couldn't be opened — it is protected with a password, which workbooks don't support yet.";
-    return OpenResult::Failed;
+    auto cf = pkg::CompoundFile::Open(snapshot->Bytes());
+    const xls::StreamFn streams = [&cf](std::string_view n) { return cf->Stream(n); };
+    if (!cf || !xls::IsWorkbook(streams)) {
+      error = name + L" couldn't be opened — it is protected with a password, which workbooks don't support yet.";
+      return OpenResult::Failed;
+    }
+    std::vector<uint8_t> xlsx = xls::ToXlsx(streams, st);
+    if (xlsx.empty()) {
+      error = name + L" couldn't be opened — " + Utf8ToWide(st.message);
+      return OpenResult::Failed;
+    }
+    cf.reset();
+    snapshot = pkg::Snapshot::FromBytes(std::move(xlsx));
+    imported = name;
   }
   auto package = snapshot ? pkg::Package::Open(std::move(snapshot), pkg::Limits::Default(), st) : nullptr;
   std::unique_ptr<Workbook> book = package ? xlsx::Read(std::move(package), st) : nullptr;
@@ -162,6 +178,19 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     return OpenResult::Failed;
   }
   recalc_ = true;  // a workbook: at idle, recalculate what Excel would on opening
+  if (!imported.empty() && !fromBytes_) {
+    const size_t dot = path_.find_last_of(L'.');
+    file_->Copy(imported, (dot == std::wstring::npos ? path_ : path_.substr(0, dot)) + L".xlsx", false);
+    path_.clear();  // Save is Save As
+    const OpenResult r = Opened(std::move(book), error);
+    if (r == OpenResult::Ok) {
+      const size_t d = imported.find_last_of(L'.');
+      host_.ViewMessage(BannerKind::Info, imported + L" is an Excel 97–2003 workbook. Saving makes a new " +
+                                              (d == std::wstring::npos ? imported : imported.substr(0, d)) +
+                                              L".xlsx and leaves it as it is.");
+    }
+    return r;
+  }
   if (!fromBytes_ && newNumber_ > 0) {
     // A template: a new workbook from it, saved with Save As.
     file_->OpenedTemplate(path_, newNumber_);

@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -373,6 +374,50 @@ int RunSheetEditBench(const Options& options) {
   std::string json;
   int over = 0;
   std::printf("  %-52s %9s %9s\n", "", "typical", "worst");
+
+  {  // S4: full recalculation (Ctrl+Alt+F9) of the 100,000 formulas on one thread and on four, at
+     // least 3x faster on four, with every value identical (bit for bit).
+    fw::pkg::Status st;
+    auto one = ReadWorkbook(formulas, st, true), four = ReadWorkbook(formulas, st, true);
+    if (!one || !four) return std::fprintf(stderr, "%s: %s\n", Display(formulas).c_str(), st.message.c_str()), 1;
+    auto full = [&](sh::Workbook& book, int threads, std::vector<double>& ms) {
+      sh::calc::WorkbookCalc calc(book);
+      calc.Load();
+      calc.engine().SetThreads(threads);
+      calc.engine().Opened(calc.Settings());
+      calc.engine().Recalculate();
+      for (int i = 0; i < runs; ++i) {
+        auto t = Clock::now();
+        calc.engine().MarkAllDirty();
+        calc.engine().Recalculate();
+        ms.push_back(Since(t));
+      }
+      return calc.engine().ParallelEvaluations();
+    };
+    std::vector<double> t1, t4;
+    full(*one, 1, t1);
+    const size_t parallel = full(*four, 4, t4);
+    size_t differ = 0, cells = 0;
+    const sh::Sheet& a = one->GetSheet(0);
+    const sh::Sheet& b = four->GetSheet(0);
+    a.ForEachCell(sh::Range{0, 0, 100000, 2}, [&](const sh::CellInfo& c) {
+      const sh::Value x = c.value, y = b.GetValue(c.row, c.col);
+      ++cells;
+      if (x.type != y.type || std::memcmp(&x.number, &y.number, sizeof x.number) || x.boolean != y.boolean ||
+          x.error != y.error || x.text != y.text)
+        ++differ;
+      return true;
+    });
+    Line(json, "fullRecalc1", "full recalculation, 100,000 formulas, 1 thread", t1, 0, over);
+    Line(json, "fullRecalc4", "full recalculation, 100,000 formulas, 4 threads", t4, 0, over);
+    const double speedup = Quantile(t1, 0.5) / std::max(1e-9, Quantile(t4, 0.5));
+    const bool missed = speedup < 3 || differ > 0 || parallel == 0;
+    if (missed) ++over;
+    std::printf("  %-52s %8.2fx            %s (>= 3x; %zu of %zu values differ)\n", "speed-up on 4 threads", speedup,
+                missed ? "MISSED" : "met", differ, cells);
+    json += ",\n    \"fullRecalcSpeedup\": {\"typical\": " + std::to_string(speedup) + ", \"differ\": " +
+            std::to_string(differ) + ", \"budget\": 3}";
+  }
 
   {  // Recalculation after one edit: the edit, the engine told, the dirty formulas calculated.
     fw::pkg::Status st;
