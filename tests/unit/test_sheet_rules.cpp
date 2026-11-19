@@ -142,6 +142,44 @@ TEST(SheetRules_ConditionalFormats) {
   CHECK(reopened->GetSheet(0).Text().afterData.find("pageMargins") != std::string::npos);
 }
 
+// Edits on a sheet whose extLst already holds x14 rules (s3-corpus: the ext's closing tag was
+// lost, a file Excel refused): data bars three times, then a validation listing another sheet.
+TEST(SheetRules_ExtAgain) {
+  auto book = OpenParts({kSheet, "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  for (int round = 0; round < 3; ++round) {
+    std::vector<data::CfRule> rules = data::ReadCfRules(book->GetSheet(0).Text());
+    rules.insert(rules.begin(), data::DataBarRule("A1:A3", 0, "{00000000-0000-4000-8000-00000000000" + std::to_string(round + 1) + "}"));
+    if (round == 2) rules.insert(rules.begin(), data::ExpressionRule("A1:A3", "A1>1", 0));
+    std::string xml, ext;
+    data::WriteCfRules(rules, book->GetSheet(0).Text(), xml, ext);
+    CHECK(ed.SetSheetRules(0, Editor::RuleKind::ConditionalFormats, xml, ext, u"New Rule"));
+  }
+  for (int round = 0; round < 2; ++round) {
+    data::Validation other;
+    other.type = data::Validation::Type::List;
+    other.f1 = "Sheet2!$A$1:$A$3";
+    other.sqref = round ? "C1" : "B1";
+    std::vector<data::Validation> all = data::ReadValidations(book->GetSheet(0).Text());
+    all.push_back(other);
+    std::string xml, ext;
+    data::WriteValidations(all, book->GetSheet(0).Text(), xml, ext);
+    CHECK(ed.SetSheetRules(0, Editor::RuleKind::Validations, xml, ext, u"Data Validation"));
+  }
+  const std::string& after = book->GetSheet(0).Text().afterData;
+  size_t opened = 0, closed = 0;
+  for (size_t at = after.find("<ext "); at != std::string::npos; at = after.find("<ext ", at + 1)) ++opened;
+  for (size_t at = after.find("</ext>"); at != std::string::npos; at = after.find("</ext>", at + 1)) ++closed;
+  CHECK(opened >= 2 && opened == closed);  // the two extensions, and each data bar's link to its x14 part
+  std::vector<uint8_t> saved = Save(*book, ed, L"extagain");
+  Clean(saved);
+  auto again = OpenZip(saved);
+  if (!again) return;
+  CHECK(data::ReadCfRules(again->GetSheet(0).Text()).size() == 5);
+  CHECK(data::ReadValidations(again->GetSheet(0).Text()).size() == 2);
+}
+
 TEST(SheetRules_Validations) {
   auto book = OpenParts({kSheet, "<sheetData/>"});
   if (!book) return;

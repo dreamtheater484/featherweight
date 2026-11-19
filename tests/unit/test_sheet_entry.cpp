@@ -470,6 +470,10 @@ TEST(sheet_typing_sheets_changed) {
       CHECK_EQ(SheetsChanged(once, at2, left, t.second, -1), std::string(t.after[i]));
     }
   }
+  // A sheet after a name and ':' keeps its quotes (s3-corpus: else it reads as a 3-D reference).
+  CHECK_EQ(SheetsChanged("COUNTIF(Rate:'Kb'!$E$21,\"?*\")", at, sheets, 4, 0),
+           std::string("COUNTIF(Rate:'Kb'!$E$21,\"?*\")"));
+  CHECK_EQ(SheetsChanged("SUM(A1:'Kc'!B2)", at, sheets, 4, 0), std::string("SUM(A1:'Kc'!B2)"));
   // A reference that's #REF! already, relative references and names print back as they were.
   CHECK_EQ(SheetsChanged("Kc!B2:C3*Rate+B2", at, sheets, 2, -1), std::string("#REF!B2:C3*Rate+B2"));
   CHECK_EQ(SheetsChanged("SUM(Kb:Kc!A1)", at, sheets, 5, 0), std::string("SUM(Kb:Kc!A1)"));
