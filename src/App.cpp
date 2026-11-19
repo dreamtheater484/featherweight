@@ -2509,6 +2509,7 @@ void App::RunScript(const std::wstring& script) {
         else if (part == L"tab") vk = VK_TAB;
         else if (part == L"enter") vk = VK_RETURN;
         else if (part == L"esc") vk = VK_ESCAPE;
+        else if (part == L"space") vk = VK_SPACE;
         else if (part == L"pgdn") vk = VK_NEXT;
         else if (part == L"pgup") vk = VK_PRIOR;
         else if (part == L"home") vk = VK_HOME;

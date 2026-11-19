@@ -190,7 +190,10 @@ TEST(sheet_page_setup_new_sheet_and_journal) {
         replayBook->GetSheet(1).HeadersFooters().firstHeader == "&CFirst" && replayBook->GetSheet(1).RowBreaks().size() == 1);
   // Saved (after the replay: a save starts the journal afresh).
   const std::string sheet2 = PartText(SavePage(*book, ed), "/xl/worksheets/sheet2.xml");
-  CHECK(Has(sheet2, "<pageSetup scale=\"85\"/><headerFooter differentFirst=\"1\"><firstHeader>&amp;CFirst</firstHeader></headerFooter>"
+  // The printer's default orientation is written as portrait, as Excel writes it (without it Excel
+  // reads Orientation 0 until it paginates).
+  CHECK(replayBook->GetSheet(1).Page().orientation == Orientation::Portrait);
+  CHECK(Has(sheet2, "<pageSetup scale=\"85\" orientation=\"portrait\"/><headerFooter differentFirst=\"1\"><firstHeader>&amp;CFirst</firstHeader></headerFooter>"
                     "<rowBreaks count=\"1\" manualBreakCount=\"1\"><brk id=\"5\" max=\"16383\" man=\"1\"/></rowBreaks>"));
 }
 
