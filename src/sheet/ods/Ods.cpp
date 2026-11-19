@@ -192,6 +192,54 @@ std::string CellText(xml_node cell, std::string* link) {
   return out;
 }
 
+// A cell's text as rich text runs (a shared string's <r>s) where text:spans change its font: the
+// same text as CellText. False when no span does.
+struct Run {
+  std::string props, text;
+};
+void Runs(xml_node n, const std::string& props, detail::Styles& st, int xf, std::vector<Run>& runs, int depth) {
+  auto add = [&](std::string_view s) {
+    if (runs.empty() || runs.back().props != props) runs.push_back({props, {}});
+    runs.back().text += s;
+  };
+  for (xml_node c : n.children()) {
+    if (c.type() == pugi::node_pcdata || c.type() == pugi::node_cdata) {
+      add(c.value());
+      continue;
+    }
+    const std::string_view name = c.name();
+    if (name == "text:s") add(std::string(std::clamp(std::atoi(std::string(Attr(c, "text:c")).c_str()), 1, 1000), ' '));
+    else if (name == "text:tab") add(" ");
+    else if (name == "text:line-break") add("\n");
+    else if (name == "office:annotation" || name == "text:note" || name == "draw:frame" || name == "text:ruby-text") continue;
+    else if (depth < kMaxDepth)
+      Runs(c, name == "text:span" ? st.RunProps(Attr(c, "text:style-name"), xf) : props, st, xf, runs, depth + 1);
+  }
+}
+
+bool RichText(xml_node cell, detail::Styles& st, int xf, std::string& si) {
+  bool spans = false;
+  for (xml_node p : cell.children("text:p")) spans |= static_cast<bool>(p.child("text:span"));
+  if (!spans) return false;
+  std::vector<Run> runs;
+  for (xml_node p : cell.children()) {
+    if (p.name() != std::string_view("text:p") && p.name() != std::string_view("text:h")) continue;
+    if (p.previous_sibling("text:p") || p.previous_sibling("text:h")) {
+      if (runs.empty()) runs.push_back({{}, {}});
+      runs.back().text += '\n';
+    }
+    Runs(p, {}, st, xf, runs, 0);
+  }
+  if (runs.size() < 2 && (runs.empty() || runs[0].props.empty())) return false;
+  size_t length = 0;
+  for (const Run& r : runs) {
+    length += r.text.size();
+    if (length > 32767 || r.text.empty()) return false;
+    si += "<r>" + r.props + "<t xml:space=\"preserve\">" + Escape(xlsx::EncodeXstring(r.text)) + "</t></r>";
+  }
+  return true;
+}
+
 // A header or footer region's paragraphs as Excel's codes: fields as &A &P &N &D &T &F, & doubled.
 void HeaderText(xml_node n, std::string& out, int depth) {
   for (xml_node c : n.children()) {
@@ -627,7 +675,10 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
           const std::string_view b = Attr(cell, "office:boolean-value");
           t = "b", v = b == "true" || b == "1" ? "1" : "0";
         } else if (formula.empty()) {
-          if (!text.empty() || type == "string") t = "s", v = std::to_string(Shared(text));
+          // Rich text (spans changing the font) as runs: marked "\x01", which XML text can't hold.
+          std::string si = "\x01";
+          if (!text.empty() || type == "string")
+            t = "s", v = std::to_string(Shared(RichText(cell, st_, xf, si) ? si : text.starts_with('\x01') ? text.substr(1) : text));
         } else {
           std::string s = cell.attribute("office:string-value").empty() ? text : std::string(Attr(cell, "office:string-value"));
           if (IsError(s)) t = "e", v = s;
@@ -1183,6 +1234,10 @@ pkg::Status Converter::Run(std::vector<uint8_t>& xlsx) {
   std::string sst = std::string(kDecl) + "<sst xmlns=\"" + std::string(kMain) + "\" count=\"" + std::to_string(strings_.size()) +
                     "\" uniqueCount=\"" + std::to_string(strings_.size()) + "\">";
   for (const std::string& s : strings_) {
+    if (s.starts_with('\x01')) {  // rich text runs
+      sst += "<si>" + s.substr(1) + "</si>";
+      continue;
+    }
     const bool keep = !s.empty() && (s.front() == ' ' || s.back() == ' ' || s.find('\n') != std::string::npos || s.find('\t') != std::string::npos);
     sst += keep ? "<si><t xml:space=\"preserve\">" : "<si><t>";
     sst += Escape(xlsx::EncodeXstring(s)) + "</t></si>";  // ST_Xstring: the text _x0041_ as _x005F_x0041_

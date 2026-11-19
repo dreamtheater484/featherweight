@@ -59,6 +59,11 @@ FontMeasure::Face& FontMeasure::Get(const Font& f, const Font& base) {
 
 const FontMeasure::Info& FontMeasure::Of(const Font& f, const Font& base) { return Get(f, base).info; }
 
+std::wstring ExcelFontSubstitute(std::wstring_view family) {
+  const std::wstring_view look = text::Fonts::BuiltInSubstitute(family);
+  return std::wstring(look.empty() ? std::wstring_view(L"Arial") : look);
+}
+
 int FontMeasure::DigitAt(const Font& f, const Font& base, int dpi) {
   const int ppem = std::max(1, static_cast<int>(std::lround(Size(f, base) * dpi / 72.0)));
   const text::Face* face = fonts_.FaceFor(Family(f, base), f.bold, f.italic);

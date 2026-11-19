@@ -528,6 +528,28 @@ std::string Styles::NumberCode(xml_node style) {
 
 // ---------- styles.xml ----------
 
+// A font as styles.xml's <font> (name: "name") or a rich text run's <rPr> ("rFont").
+std::string Styles::FontXml(const Xf& x, const char* tag, const char* name) {
+  std::string font = std::string("<") + tag + ">";
+  if (x.bold) font += "<b/>";
+  if (x.italic) font += "<i/>";
+  if (x.strike) font += "<strike/>";
+  if (x.underline) font += x.underline == 2 ? "<u val=\"double\"/>" : "<u/>";
+  if (x.position) font += x.position == 1 ? "<vertAlign val=\"superscript\"/>" : "<vertAlign val=\"subscript\"/>";
+  font += "<sz val=\"" + Number(x.size) + "\"/>";
+  if (!x.color.empty()) font += "<color rgb=\"FF" + x.color + "\"/>";
+  return font + "<" + name + " val=\"" + Escape(x.font) + "\"/><family val=\"2\"/></" + tag + ">";
+}
+
+std::string Styles::RunProps(std::string_view textStyle, int xf) {
+  const xml_node s = Find("text", textStyle);
+  if (!s || xf < 0 || xf >= static_cast<int>(xfs_.size())) return {};
+  Xf x = xfs_[xf];
+  Apply(s, x);
+  std::string run = FontXml(x, "rPr", "rFont");
+  return run == FontXml(xfs_[xf], "rPr", "rFont") ? std::string() : run;
+}
+
 std::string Styles::Xml() const {
   std::vector<std::string> fonts, fills = {"<fill><patternFill patternType=\"none\"/></fill>",
                                            "<fill><patternFill patternType=\"gray125\"/></fill>"},
@@ -551,16 +573,7 @@ std::string Styles::Xml() const {
   };
   std::string xfs;
   for (const Xf& x : xfs_) {
-    std::string font = "<font>";
-    if (x.bold) font += "<b/>";
-    if (x.italic) font += "<i/>";
-    if (x.strike) font += "<strike/>";
-    if (x.underline) font += x.underline == 2 ? "<u val=\"double\"/>" : "<u/>";
-    if (x.position) font += x.position == 1 ? "<vertAlign val=\"superscript\"/>" : "<vertAlign val=\"subscript\"/>";
-    font += "<sz val=\"" + Number(x.size) + "\"/>";
-    if (!x.color.empty()) font += "<color rgb=\"FF" + x.color + "\"/>";
-    font += "<name val=\"" + Escape(x.font) + "\"/><family val=\"2\"/></font>";
-    const int fontId = id(fontIds, fonts, font);
+    const int fontId = id(fontIds, fonts, FontXml(x, "font", "name"));
     const int fillId = x.fill.empty() ? 0
                                       : id(fillIds, fills, "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF" + x.fill +
                                                                "\"/><bgColor indexed=\"64\"/></patternFill></fill>");

@@ -242,7 +242,7 @@ OpenResult WorkbookView::Load(const std::wstring& password, std::wstring& error)
     std::vector<uint8_t> xlsx;
     st = ods::OdsToXlsx(snapshot->Bytes(), xlsx, pkg::Limits::Default(), [](const std::string& family, double points) {
       // The default font's widest digit as the grid measures it, so column widths come back as ODF's.
-      fw::text::Fonts fonts;
+      fw::text::Fonts fonts(fw::sheet::view::ExcelFontSubstitute);
       fw::sheet::view::FontMeasure measure(fonts);
       fw::sheet::Font f;
       f.name = family;
@@ -402,7 +402,7 @@ void WorkbookView::SubmitPassword(const std::wstring& password) {
 OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& error) {
   const std::wstring name = Title();
   book_ = std::move(book);
-  fonts_ = std::make_unique<text::Fonts>();
+  fonts_ = std::make_unique<text::Fonts>(ExcelFontSubstitute);
   measure_ = std::make_unique<FontMeasure>(*fonts_);
   text_ = std::make_unique<CellText>(*book_, *fonts_, *measure_, UserLocale());
   states_.assign(book_->SheetCount(), PerSheet{});
