@@ -144,7 +144,7 @@ void Esc(std::string& o, std::string_view s) {
       case '"': o += "&quot;"; break;
       case '\t': o += "&#9;"; break;
       case '\n': o += "&#10;"; break;
-      case '\r': o += "&#13;"; break;  // shared strings aren't read as ST_Xstring: a character reference keeps it
+      case '\r': o += "_x000D_"; break;  // as Excel writes it; the reader decodes ST_Xstring
       case '_':
         if (i + 6 < s.size() && s[i + 1] == 'x' && s[i + 6] == '_' &&
             std::all_of(s.begin() + i + 2, s.begin() + i + 6, [](char h) { return std::isxdigit(static_cast<unsigned char>(h)); }))
