@@ -1188,10 +1188,14 @@ struct Editor::State {
       if (CellSide* sd = SideOf(blk, index)) {
         sd->valueText = kNone;
         sd->inner = kNone;
-        DropSideAttrs(s, *sd, {"cm", "vm"});
+        // A type the reader kept as written (one it doesn't know) goes with the value: the new one
+        // writes its own t (two would make the sheet unreadable; fuzz_xlsx).
+        DropSideAttrs(s, *sd, {"cm", "vm", "t"});
       }
     }
     if (style) {
+      // A style index kept as written ("01") goes: the cell writes its new one.
+      if (CellSide* sd = SideOf(blk, index)) DropSideAttrs(s, *sd, {"s"});
       c.style = *style;
       if (*style) c.flags |= detail::kStylePresent;
       else c.flags = static_cast<uint8_t>(c.flags & ~detail::kStylePresent);

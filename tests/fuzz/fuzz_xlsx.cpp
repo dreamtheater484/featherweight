@@ -30,10 +30,13 @@
 #include "pkg/Zip.h"
 #include "chart/Chart.h"
 #include "draw/D2DPainter.h"
+#include "sheet/data/Rules.h"
+#include "sheet/data/Shapes.h"
 #include "sheet/edit/Edit.h"
 #include "sheet/edit/Journal.h"
 #include "sheet/model/TableStyles.h"
 #include "sheet/objects/SheetObjects.h"
+#include "sheet/xlsx/Internal.h"
 #include "sheet/xlsx/Xlsx.h"
 
 using namespace fw::pkg;
@@ -73,9 +76,13 @@ std::vector<uint8_t> ZipFromText(std::string_view text) {
   return std::move(sink.bytes);
 }
 
-void Check(bool ok) {
-  if (!ok) std::abort();
+void CheckAt(bool ok, int line) {
+  if (!ok) {
+    std::fprintf(stderr, "fuzz_xlsx.cpp:%d: check failed\n", line);
+    std::abort();
+  }
 }
+#define Check(ok) CheckAt((ok), __LINE__)
 
 // What the grid, the number formats and the formula engine read.
 void ReadEverything(const Workbook& book) {
@@ -193,6 +200,60 @@ void DrawObjects(Workbook& book) {
   }
 }
 
+// What the conditional formatting, validation, table and Format panels read (s3-data): every
+// sheet's rules and validations, written back as the panels write them; each table's filter from
+// its part; each drawing object's format, written back with every part changed; each picture
+// part's type.
+void ReadRulesAndObjects(const Workbook& book) {
+  const Package* package = book.GetPackage();
+  std::vector<uint8_t> bytes;
+  for (size_t i = 0; i < book.SheetCount(); ++i) {
+    const Sheet& s = book.GetSheet(i);
+    std::string xml, ext;
+    const std::vector<data::CfRule> rules = data::ReadCfRules(s.Text());
+    for (const data::CfRule& r : rules) data::ParseAreas(r.sqref);
+    data::WriteCfRules(rules, s.Text(), xml, ext);
+    const std::vector<data::Validation> valid = data::ReadValidations(s.Text());
+    for (const data::Validation& v : valid) {
+      data::ListItems(v);
+      data::ParseAreas(v.sqref);
+    }
+    data::ValidationAt(valid, 1, 1);
+    data::WriteValidations(valid, s.Text(), xml, ext);
+    for (const Table& t : s.Tables()) {
+      SheetFilter f;
+      if (package && !t.part.empty() && package->ReadPart(t.part, bytes).Ok())
+        xlsx::ReadTableFilter(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), f);
+    }
+  }
+  if (!package) return;
+  for (const auto& part : package->Parts()) {
+    if (part.deleted || !package->ReadPart(part.name, bytes).Ok()) continue;
+    const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    if (part.name.starts_with("/xl/media/")) {
+      std::string extension, type;
+      data::PictureType(text, extension, type);
+    } else if (part.name.starts_with("/xl/drawings/") && part.name.ends_with(".xml") && part.name.find("/_rels/") == std::string::npos) {
+      for (const edit::drawing::Object& o : edit::drawing::Objects(text)) {
+        const std::string_view anchor = text.substr(o.begin, o.end - o.begin);
+        data::ObjectFormat f = data::ReadObjectFormat(anchor);
+        f.fill = data::ObjectFormat::Paint::Solid;
+        f.fillRgb = 0x123456;
+        f.line = data::ObjectFormat::Paint::None;
+        f.lineWidth = 1.5;
+        f.text = "a\nb & <c>";
+        f.altText = "alt \"x\"";
+        data::FormatObject(anchor, f, data::kFormatFill | data::kFormatLine | data::kFormatText | data::kFormatAltText);
+      }
+    }
+  }
+}
+
+// A 1 x 1 PNG, for Insert > Pictures.
+const uint8_t kPng[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00,
+                        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00,
+                        0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01,
+                        0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
 
 // ---- Edits (S2): a program a hash of the input picks, made through the edit API as the app makes
 // them, undo and redo among them. The journal replayed on the workbook read again must make every
@@ -260,7 +321,145 @@ void EditOnce(Editor& ed, const Workbook& book, Rng& rng, int& groups, bool hadS
     }
   };
   const Styles& styles = book.GetStyles();
-  switch (rng.Below(28)) {
+  switch (rng.Below(31)) {
+    case 28: {  // a table (s3-data): added over a range, renamed, a total row, resized, filtered, converted
+      static const std::vector<Table> none;
+      const std::vector<Table>& tables = sheet < sheets ? book.GetSheet(static_cast<size_t>(sheet)).Tables() : none;
+      if (tables.empty() || rng.Chance(30)) {
+        Table t;
+        t.ref = range();
+        t.autoFilter = rng.Chance(80);
+        t.style = TableStyleInfo{rng.Chance(50) ? "TableStyleMedium2" : "TableStyleLight9", false, false, true, rng.Chance(30)};
+        for (uint32_t c = t.ref.firstCol; c <= t.ref.lastCol; ++c) t.columns.push_back(TableColumn{0, "C" + std::to_string(c - t.ref.firstCol + 1)});
+        ed.AddTable(sheet, t);
+        break;
+      }
+      const size_t i = rng.Below(static_cast<uint32_t>(tables.size()));
+      Table t = tables[i];
+      switch (rng.Below(5)) {
+        case 0: t.name = t.displayName = "T" + std::to_string(rng.Below(5)); ed.SetTable(sheet, i, t); break;
+        case 1:
+          if (t.totalsRows) {
+            t.totalsRows = 0;
+            if (t.ref.lastRow > t.ref.firstRow + 1) --t.ref.lastRow;
+          } else if (t.ref.lastRow + 1 < kMaxRows && !t.columns.empty()) {
+            t.totalsRows = 1;
+            ++t.ref.lastRow;
+            t.columns.front().totalsLabel = "Total";
+            t.columns.back().totalsFunction = rng.Chance(50) ? "sum" : "count";
+          }
+          ed.SetTable(sheet, i, t);
+          break;
+        case 2:
+          t.ref.lastRow = std::min<uint32_t>(t.ref.firstRow + 1 + rng.Below(8), kMaxRows - 1);
+          if (rng.Chance(50) && t.ref.lastCol + 1 < kMaxCols) {
+            ++t.ref.lastCol;
+            t.columns.push_back(TableColumn{0, "N" + std::to_string(rng.Below(9))});
+          } else if (t.columns.size() > 1) {
+            --t.ref.lastCol;
+            t.columns.pop_back();
+          }
+          ed.SetTable(sheet, i, t);
+          break;
+        case 3: {
+          SheetFilter f;
+          f.ref = t.ref;
+          if (rng.Chance(70) && !t.columns.empty()) {
+            FilterColumn c;
+            c.colId = rng.Below(static_cast<uint32_t>(t.columns.size()));
+            c.kind = static_cast<FilterColumn::Kind>(rng.Below(5));
+            c.values = {"t" + std::to_string(rng.Below(9))};
+            c.conditions = {{"greaterThan", std::to_string(rng.Below(100))}};
+            c.count = 1 + rng.Below(20);
+            f.columns.push_back(std::move(c));
+          }
+          ed.SetTableFilter(sheet, i, f);
+          break;
+        }
+        default: ed.RemoveTable(sheet, i); break;
+      }
+      break;
+    }
+    case 29: {  // conditional formats and validation (s3-data), as the panels write them
+      if (sheet >= sheets) break;
+      const Sheet& s = book.GetSheet(static_cast<size_t>(sheet));
+      const Range r = range();
+      const std::string sq = data::JoinAreas({r});
+      std::string xml, ext;
+      if (rng.Chance(60)) {
+        std::vector<data::CfRule> rules = data::ReadCfRules(s.Text());
+        if (!rules.empty() && rng.Chance(30)) {
+          data::ClearCfRules(rules, r);
+        } else {
+          const uint32_t dxf = ed.AddDxf(data::CfPreset(static_cast<int>(rng.Below(6))));
+          const std::string id = "{00000000-0000-0000-0000-00000000000" + std::to_string(rng.Below(10)) + "}";
+          data::CfRule n;
+          switch (rng.Below(9)) {
+            case 0: n = data::CellIsRule(sq, static_cast<data::CfOp>(rng.Below(8)), "5", "10", dxf); break;
+            case 1: n = data::ExpressionRule(sq, kFormulas[rng.Below(kFormulaCount)], dxf); break;
+            case 2: n = data::TextRule(sq, static_cast<data::CfText>(rng.Below(4)), "t1", dxf); break;
+            case 3: n = data::TopRule(sq, 1 + rng.Below(10), rng.Chance(50), rng.Chance(50), dxf); break;
+            case 4: n = data::DuplicateRule(sq, rng.Chance(50), dxf); break;
+            case 5: n = data::DateRule(sq, static_cast<int>(rng.Below(10)), dxf); break;
+            case 6: n = data::DataBarRule(sq, static_cast<int>(rng.Below(12)), id); break;
+            case 7: n = data::IconSetRule(sq, static_cast<int>(rng.Below(20)), id); break;
+            default: n = data::ColorScaleRule(sq, static_cast<int>(rng.Below(12))); break;
+          }
+          rules.insert(rules.begin(), std::move(n));
+        }
+        data::WriteCfRules(rules, s.Text(), xml, ext);
+        ed.SetSheetRules(sheet, Editor::RuleKind::ConditionalFormats, xml, ext, u"New Rule");
+      } else {
+        std::vector<data::Validation> rules = data::ReadValidations(s.Text());
+        data::ClearValidations(rules, r);
+        if (rng.Chance(70)) {
+          data::Validation v;
+          v.type = static_cast<data::Validation::Type>(rng.Below(8));
+          v.op = static_cast<data::CfOp>(rng.Below(8));
+          v.f1 = v.type == data::Validation::Type::List ? (rng.Chance(50) ? "\"a,b,c\"" : "Sheet2!$A$1:$A$3")
+                 : v.type == data::Validation::Type::Custom ? kFormulas[rng.Below(kFormulaCount)]
+                                                            : "1";
+          v.f2 = "9";
+          v.alert = static_cast<data::Validation::Alert>(rng.Below(3));
+          v.prompt = rng.Chance(50) ? "Enter <a> & b" : "";
+          v.sqref = sq;
+          rules.push_back(std::move(v));
+        }
+        data::WriteValidations(rules, s.Text(), xml, ext);
+        ed.SetSheetRules(sheet, Editor::RuleKind::Validations, xml, ext, u"Data Validation");
+      }
+      break;
+    }
+    case 30: {  // pictures and shapes (s3-data): inserted, formatted
+      edit::drawing::Place p;
+      p.from = {col(), row(), 0, 0};
+      p.to = {p.from.col + 1 + rng.Below(4), p.from.row + rng.Below(6), static_cast<int64_t>(rng.Below(50000)), 0};
+      p.cx = 914400;
+      p.cy = rng.Chance(30) ? 0 : 685800;
+      switch (rng.Below(3)) {
+        case 0: ed.InsertPicture(sheet, std::string(reinterpret_cast<const char*>(kPng), sizeof kPng), p, rng.Chance(50) ? "alt & <x>" : ""); break;
+        case 1: ed.InsertShape(sheet, static_cast<data::ShapeKind>(rng.Below(6)), p, rng.Chance(50) ? "t & <x>" : ""); break;
+        default: {
+          const std::string drawing = ed.SheetDrawing(sheet, false);
+          if (drawing.empty()) break;
+          const std::vector<edit::drawing::Object> objects = edit::drawing::Objects(ed.PartBytes(drawing));
+          if (objects.empty()) break;
+          const uint32_t id = objects[rng.Below(static_cast<uint32_t>(objects.size()))].id;
+          const std::string anchor = ed.AnchorXml(drawing, id);
+          data::ObjectFormat f = data::ReadObjectFormat(anchor);
+          f.fill = static_cast<data::ObjectFormat::Paint>(rng.Below(3));
+          f.fillRgb = rng.Below(0xFFFFFF);
+          f.line = static_cast<data::ObjectFormat::Paint>(rng.Below(3));
+          f.lineRgb = rng.Below(0xFFFFFF);
+          f.lineWidth = rng.Below(8);
+          f.text = rng.Chance(50) ? "x\ny & <z>" : "";
+          f.altText = "a \"b\"";
+          const std::string xml = data::FormatObject(anchor, f, 1u + rng.Below(15));
+          if (!xml.empty()) ed.SetObjectXml(sheet, id, xml, u"Format Object");
+        }
+      }
+      break;
+    }
     case 26: {  // a chart (s3-charts)
       Editor::NewChart c;
       c.kind = static_cast<edit::ChartKind>(rng.Below(7));
@@ -520,7 +719,17 @@ void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t
       for (const std::string& e : report.errors) std::fprintf(stderr, "saved file: %s\n", e.c_str());
       Check(report.Ok());
     }
-    Check(xlsx::Read(std::move(pkg), st, {.loadAll = true}) != nullptr);
+    const bool reads = xlsx::Read(std::move(pkg), st, {.loadAll = true}) != nullptr;
+    if (!reads) {
+      std::fprintf(stderr, "the save doesn't read: %s\n", st.message.c_str());
+      if (std::getenv("FUZZ_XLSX_DUMP")) {
+        if (FILE* f = std::fopen(std::getenv("FUZZ_XLSX_DUMP"), "wb")) {
+          std::fwrite(saved.data(), 1, saved.size(), f);
+          std::fclose(f);
+        }
+      }
+    }
+    Check(reads);
   }
 
   // Undoing everything gives the cells back (unless a save that removed sheets ended the history).
@@ -546,6 +755,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   if (!book) return 0;
   ReadEverything(*book);
   DrawObjects(*book);
+  ReadRulesAndObjects(*book);
 
   // The never-damage bar: every part the model writes, written back, says what it said.
   std::vector<uint8_t> bytes;
