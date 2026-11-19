@@ -3,11 +3,16 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <vector>
 
 #include "draw/Painter.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/view/CellText.h"
 #include "sheet/view/Grid.h"
+
+namespace fw::sheet::pivot {
+struct Look;
+}
 
 namespace fw::sheet::condfmt {
 class SheetRules;
@@ -57,6 +62,7 @@ struct PaintOptions {
   condfmt::SheetRules* rules = nullptr;
   bool tables = true;
   const Sparklines* sparklines = nullptr;  // the sheet's sparklines (S4); null: none
+  const std::vector<pivot::Look>* pivots = nullptr;  // the sheet's PivotTables' styles, like tables'
 };
 
 

@@ -11,6 +11,8 @@
 #include "doc/msdoc/MsDoc.h"
 #include "pkg/CompoundFile.h"
 #include "sheet/ods/Ods.h"
+#include "sheet/view/Grid.h"
+#include "text/Fonts.h"
 #include "sheet/xls/Xls.h"
 
 namespace fwtool {
@@ -249,7 +251,17 @@ std::unique_ptr<fw::pkg::Package> OpenPackage(const std::filesystem::path& file,
     // S4: an OpenDocument spreadsheet, converted as the app converts it.
     auto source = fw::pkg::Snapshot::Open(file.wstring(), {}, status);
     std::vector<uint8_t> xlsx;
-    if (!source || !(status = fw::sheet::ods::OdsToXlsx(source->Bytes(), xlsx)).Ok()) return nullptr;
+    const fw::sheet::ods::DigitWidth digit = [](const std::string& family, double points) {
+    // The default font's widest digit as the grid measures it, so column widths come back as ODF's.
+    fw::text::Fonts fonts;
+    fw::sheet::view::FontMeasure measure(fonts);
+    fw::sheet::Font f;
+    f.name = family;
+    f.size = points;
+    return measure.Of(f, f).digit;
+  };
+    if (!source || !(status = fw::sheet::ods::OdsToXlsx(source->Bytes(), xlsx, fw::pkg::Limits::Default(), digit)).Ok())
+      return nullptr;
     return fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(xlsx)), fw::pkg::Limits::Default(), status);
   }
   fw::pkg::Snapshot::Options options;

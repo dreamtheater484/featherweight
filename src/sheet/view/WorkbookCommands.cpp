@@ -321,8 +321,20 @@ std::vector<int> WorkbookView::Commands() {
   ids.push_back(CmdPageSetup);  // s3-print
   for (int cmd = CmdSetPrintArea; cmd <= CmdPrintSelection; ++cmd) ids.push_back(cmd);
   for (int cmd = CmdInsertChart; cmd <= CmdChartScatter; ++cmd) ids.push_back(cmd);  // s3-charts
-  ids.push_back(CmdChartCombo);
+  for (int cmd : {CmdChartCombo, CmdDeleteObject, CmdChartPanel, CmdMoveChart}) ids.push_back(cmd);
   for (int cmd = CmdObjectPicture; cmd <= CmdFormatObject; ++cmd) ids.push_back(cmd);  // s3-data
+  // Editing, formats, sort and filter, conditional formats, validation, tables, names and pivots
+  // (S2-S4), as Word's list has its own. The toolbar's boxes that only open their list, or repeat
+  // one of these, aren't commands of their own here.
+  for (int cmd : {CmdUndo, CmdRedo, CmdCut, CmdPaste, CmdBold, CmdItalic, CmdUnderline, CmdAlignLeft, CmdAlignCenter,
+                  CmdAlignRight, CmdFontColor, CmdFormatPainter})
+    ids.push_back(cmd);
+  for (int cmd = CmdFormatCells; cmd <= CmdRemoveDuplicates; ++cmd)
+    if (cmd != CmdMergeBox && cmd != CmdBordersBox && cmd != CmdCellStyles) ids.push_back(cmd);
+  for (int cmd = CmdCondFormat; cmd <= CmdTableTotalRow; ++cmd)
+    if (cmd != CmdCondFormatBox) ids.push_back(cmd);
+  for (int cmd = CmdNameManager; cmd <= CmdPasteNames; ++cmd) ids.push_back(cmd);
+  for (int cmd = CmdPivotRefresh; cmd <= CmdPivotRefreshAll; ++cmd) ids.push_back(cmd);
   return ids;
 }
 
@@ -419,7 +431,7 @@ void WorkbookView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   preview.toggle = true;
   preview.checked = preview_;
   m.left = {print, preview};
-  if (preview_) m.left.push_back(item(CmdPageSetup, icon::Settings, L"Page setup"));  // s3-print
+  AddPageSetupToolbar(m);  // s3-print: in the grid too (W3)
   AddUndoToolbar(m);    // s2-grid: Undo and Redo with their lists
   AddFormatToolbar(m);  // fonts, colors, borders, alignment, number formats (WorkbookFormat.cpp)
   m.pager = preview_;
@@ -980,6 +992,7 @@ void WorkbookView::SaveDone() {
 
 void WorkbookView::Autosave() {
   if (Ready() && file_->Dirty()) file_->Autosave(*book_, Ed());
+  else if (!Ready() && !protected_.empty()) file_->AutosaveProtected(protected_);  // recovered, still locked
 }
 
 // A recovered journal: its edits made again through the editor (the engine follows them, and the
@@ -1065,6 +1078,7 @@ void WorkbookView::ApplyState(const FileState& s) {
 }
 
 void WorkbookView::DescribeUia(uia::Tree& t, int parent) {
+  if (needPassword_) pw_.DescribeUia(t, parent);
   if (!Ready()) return;
   const int grid = t.Add(parent, 1, UIA_DataGridControlTypeId, Utf8ToWide(Current().Name()), cells_);
   t[grid].hasValue = true;

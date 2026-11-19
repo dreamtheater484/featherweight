@@ -10,7 +10,7 @@
 #   pivots-refreshed.xlsx  the same after Excel's own Refresh All: what refreshing the stale file must give
 # Excel runs in a new instance of its own (DispatchEx), alerts, events and macros off, and only that
 # instance is ended.
-import os, re, sys, zipfile
+import json, os, re, sys, zipfile
 import pythoncom, win32api, win32con, win32event, win32process
 import win32com.client
 
@@ -40,6 +40,31 @@ def fill(ws, top, rows):
         for c, v in enumerate(row):
             if v is not None:
                 ws.Cells(top + r, c + 1).Value = v
+
+
+def looks(wb, path):
+    """What Excel shows in every cell of every styled pivot (page fields too): the fill as 0xRRGGBB
+    (none: -1), bold, and which sides have a line, as pivots-refreshed-styles.json."""
+    out = []
+    for ws in wb.Worksheets:
+        for pt in ws.PivotTables():
+            if not pt.TableStyle2 or str(pt.TableStyle2) in ("", chr(0)):
+                continue
+            rng = pt.TableRange2
+            for r in range(1, rng.Rows.Count + 1):
+                for c in range(1, rng.Columns.Count + 1):
+                    cell = rng.Cells(r, c)
+                    d = cell.DisplayFormat
+                    fill = -1
+                    if d.Interior.Pattern != -4142 and d.Interior.ColorIndex != -4142:
+                        bgr = int(d.Interior.Color)
+                        fill = ((bgr & 0xFF) << 16) | (bgr & 0xFF00) | ((bgr >> 16) & 0xFF)
+                    sides = "".join(ch for ch, b in (("l", 7), ("t", 8), ("b", 9), ("r", 10))
+                                    if d.Borders(b).LineStyle not in (-4142, None))
+                    out.append({"sheet": ws.Name, "cell": cell.Address.replace("$", ""), "fill": fill,
+                                "bold": bool(d.Font.Bold), "sides": sides})
+    with open(path, "w", encoding="utf-8", newline=chr(10)) as f:
+        json.dump(out, f, indent=0)
 
 
 def make(xl, path_fresh, path_stale, path_refreshed):
@@ -129,6 +154,10 @@ def make(xl, path_fresh, path_stale, path_refreshed):
     pt2.PivotFields("Quarter").Orientation = xlRowField
     data_field(pt2, "Sales", xlCount)
 
+    # Built-in PivotTable styles on some of them (the rest have none, as pivots made by code do).
+    for sheet, style in (("Pages", "PivotStyleLight16"), ("Outline", "PivotStyleDark2"), ("Filters", "PivotStyleMedium2"),
+                         ("DataOnRows", "PivotStyleLight9"), ("Shared", "PivotStyleMedium15")):
+        wb.Worksheets(sheet).PivotTables(1).TableStyle2 = style
     wb.Worksheets("Compact").Activate()
     wb.SaveAs(os.path.abspath(path_fresh), 51)
     # The source changes: values, a region renamed (a new item, one gone), a blank filled, the table grows.
@@ -146,6 +175,7 @@ def make(xl, path_fresh, path_stale, path_refreshed):
     wb.SaveAs(os.path.abspath(path_stale), 51)
     wb.RefreshAll()
     wb.SaveAs(os.path.abspath(path_refreshed), 51)
+    looks(wb, os.path.join(os.path.dirname(path_refreshed), "pivots-refreshed-styles.json"))
     wb.Close(False)
 
 

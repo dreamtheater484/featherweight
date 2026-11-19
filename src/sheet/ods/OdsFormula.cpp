@@ -207,7 +207,7 @@ bool Reference(std::string_view s, std::string& out, int rows, int cols, const S
     out += '!';
   }
   out += Cell(a);
-  if (range) out += ":" + Cell(b);
+  if (range && (a.row < 0 || a.col < 0 || Cell(b) != Cell(a))) out += ":" + Cell(b);  // A1:A1 is A1, A:A stays
   return true;
 }
 
@@ -232,7 +232,7 @@ std::string FunctionName(std::string_view written) {
     return name;
   }
   if (name == "SINGLE" || name == "ANCHORARRAY") return "_xlfn." + name;
-  return microsoft ? "_xlfn." + name : std::string(written);
+  return microsoft ? "_xlfn." + name : name;  // one the engine doesn't have: as Excel names it
 }
 
 constexpr std::string_view kErrors[] = {"#NULL!", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#GETTING_DATA"};

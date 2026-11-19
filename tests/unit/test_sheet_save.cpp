@@ -12,6 +12,9 @@
 #include "pkg/Check.h"
 #include "core/Strings.h"
 #include "sheet/csv/Csv.h"
+#include "sheet/data/Rules.h"
+#include "sheet/data/Shapes.h"
+#include "sheet/edit/Drawing.h"
 #include "sheet/numfmt/NumLocale.h"
 #include "sheet/edit/Edit.h"
 #include "sheet/edit/Journal.h"
@@ -518,6 +521,105 @@ TEST(sheet_save_csv_as_xlsx) {
   if (!third) return;
   CHECK_EQ(Text(third->GetSheet(0), 0, 0), std::string("item"));
   CHECK(third->GetStyles().FontOf(third->GetStyles().CellXf(third->GetSheet(0).StyleAt(0, 0))).bold);
+}
+
+// A workbook read from CSV takes charts, tables, rules, shapes and notes as Excel's does (s4
+// friction W7): its sheet gets a part when the first of them needs one, undone with it. Saved as
+// CSV it is still the file's rows as they were (csv::Loses has the banner ask first); saved as
+// .xlsx it has them all.
+TEST(sheet_csv_takes_objects) {
+  const std::string file = "name,amount\r\nPen,12\r\nInk,3\r\n\"a, b\",-2\r\n";
+  Workbook book;
+  csv::Source source;
+  csv::Options o;
+  o.locale = &EnUsLocale();
+  csv::Read(file, "data", o, book, source);
+  Editor ed(book);
+  const Sheet& s = book.GetSheet(0);
+  CHECK(!book.GetPackage() && !csv::Loses(book));
+  Editor::NewChart c;
+  c.data = Range{0, 0, 3, 1};
+  CHECK(ed.InsertChart(0, c));
+  CHECK(book.GetPackage() && !s.PartName().empty() && !ed.SheetDrawing(0, false).empty());
+  CHECK(csv::Loses(book) && book.Format() == FileFormat::Csv);
+  // Undone: no part again, nothing CSV can't hold; redone: the chart is back.
+  CHECK(ed.Undo());
+  CHECK(s.PartName().empty() && s.RelId().empty() && ed.SheetDrawing(0, false).empty() && !csv::Loses(book));
+  CHECK(ed.Redo());
+  CHECK(!s.PartName().empty() && !ed.SheetDrawing(0, false).empty() && csv::Loses(book));
+  // A table, a rule, a shape and a note.
+  Table t;
+  t.ref = Range{0, 0, 3, 1};
+  t.style = TableStyleInfo{"TableStyleMedium2", false, false, true, false};
+  t.columns = {TableColumn{0, "name"}, TableColumn{0, "amount"}};
+  CHECK(ed.AddTable(0, t));
+  const uint32_t dxf = ed.AddDxf(data::CfPreset(0));
+  std::string xml, ext;
+  data::WriteCfRules({data::CellIsRule("B2:B4", data::CfOp::Between, "2", "3", dxf)}, s.Text(), xml, ext);
+  CHECK(ed.SetSheetRules(0, Editor::RuleKind::ConditionalFormats, xml, ext, u"New Rule"));
+  edit::drawing::Place at;
+  at.from = {4, 1, 0, 0};
+  at.to = {6, 4, 0, 0};
+  at.x = 2438400, at.y = 190500, at.cx = 1219200, at.cy = 571500;
+  CHECK(ed.InsertShape(0, data::ShapeKind::Rectangle, at, "Check"));
+  CHECK(ed.SetNote(0, CellAddr{1, 0}, Editor::Note{"Ann", "a pen", false}));
+  // The CSV writer: the values only, the file's rows as they were.
+  CHECK_EQ(csv::Write(book, file, o), file);
+
+  // Saved as .xlsx: the cells and everything around them.
+  std::vector<uint8_t> saved = SaveBytes(book, ed, "csv-objects", FileFormat::Xlsx);
+  CheckClean(saved);
+  const std::string part = s.PartName(), text = PartText(saved, part);
+  for (const char* what : {"<drawing ", "<legacyDrawing ", "<tableParts", "<conditionalFormatting", "<sheetData>"})
+    CHECK(text.find(what) != std::string::npos);
+  CHECK(!PartText(saved, "/xl/charts/chart1.xml").empty() && !PartText(saved, "/xl/tables/table1.xml").empty());
+  auto again = OpenZip(saved);
+  if (!again) return;
+  CHECK(again->SheetCount() == 1 && again->GetSheet(0).Tables().size() == 1);
+  CHECK_EQ(Text(again->GetSheet(0), 3, 0), std::string("a, b"));
+  CHECK_EQ(Text(again->GetSheet(0), 2, 1), std::string("3"));
+  // And edited on as any workbook: another chart, saved again.
+  CHECK(ed.InsertChart(0, c));
+  std::vector<uint8_t> next = SaveBytes(book, ed, "", FileFormat::Xlsx);
+  CheckClean(next);
+  CHECK(!PartText(next, "/xl/charts/chart2.xml").empty());
+  CHECK_EQ(Text(OpenZip(next)->GetSheet(0), 1, 0), std::string("Pen"));
+}
+
+// A sheet that has no part yet: one read from CSV and saved as .xlsx (the save writes it without the
+// package keeping it), and one added to a workbook since it was opened. A chart gets each one its
+// part, and a save writes them whole.
+TEST(sheet_part_given_to_unsaved_sheets) {
+  Workbook book;
+  csv::Source source;
+  csv::Options o;
+  o.locale = &EnUsLocale();
+  csv::Read("x,y\r\n1,2\r\n3,4\r\n", "data", o, book, source);
+  Editor ed(book);
+  CHECK(xlsx::GiveBasePackage(book).Ok());
+  CheckClean(SaveBytes(book, ed, "", FileFormat::Xlsx));
+  const std::string part = book.GetSheet(0).PartName();
+  CHECK(!part.empty() && !book.GetPackage()->FindPart(part));
+  Editor::NewChart c;
+  c.data = Range{0, 0, 2, 1};
+  CHECK(ed.InsertChart(0, c));
+  CHECK(book.GetSheet(0).PartName() == part && book.GetPackage()->FindPart(part));
+  // A new sheet beside it, with a chart of its own.
+  CHECK(ed.AddSheet(-1));
+  CHECK(ed.SetCell(1, 0, 0, CellInput::Number(5)) && ed.SetCell(1, 1, 0, CellInput::Number(6)));
+  c.data = Range{0, 0, 1, 0};
+  CHECK(ed.InsertChart(1, c));
+  const std::string added = book.GetSheet(1).PartName();
+  CHECK(!added.empty() && added != part);
+  std::vector<uint8_t> saved = SaveBytes(book, ed, "unsaved-sheets", FileFormat::Xlsx);
+  CheckClean(saved);
+  CHECK(PartText(saved, part).find("<drawing ") != std::string::npos);
+  CHECK(PartText(saved, added).find("<drawing ") != std::string::npos);
+  auto again = OpenZip(saved);
+  if (!again) return;
+  CHECK(again->SheetCount() == 2);
+  CHECK_EQ(Text(again->GetSheet(0), 2, 1), std::string("4"));
+  CHECK_EQ(Text(again->GetSheet(1), 1, 0), std::string("6"));
 }
 
 // ---- Crash recovery: the edit journal (sheet/edit/Journal.h)

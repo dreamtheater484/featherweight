@@ -244,8 +244,8 @@ class Editor {
   Result SetTableFilter(int sheet, size_t index, const SheetFilter& f);
 
   // ---- Pictures and shapes (Insert > Pictures, Shapes; s3-data). Their XML: sheet/data/Shapes.h;
-  // placed as drawing::Placed places them. Refused on a protected sheet without "Edit objects", in a
-  // workbook without a package (CSV) or on a sheet not saved yet.
+  // placed as drawing::Placed places them. Refused on a protected sheet without "Edit objects". A
+  // worksheet read from CSV or not saved yet gets its part (SheetPart).
   // A picture (PNG, JPEG, GIF or BMP, the type read from its bytes) as Excel inserts it: moves but
   // doesn't size with cells, its aspect ratio locked, with its alt text. Stored once: a picture the
   // package has already with the same bytes is used again. `*id` gets its shape id.
@@ -280,9 +280,16 @@ class Editor {
 
   // ---- Drawings: charts, pictures and shapes sit in the sheet's drawing part. Changes go inside
   // a group (Run, or BeginGroup/EndGroup).
+  // The sheet's part (/xl/worksheets/sheetN.xml). A worksheet that has none (read from CSV, or
+  // added since the workbook was opened) gets one when `create`, as a save would give it: the
+  // part, its relationship and content type, the text around its cells; it is then always written
+  // whole from the model. A workbook read from CSV gets its package first (kept), and the CSV
+  // writer still writes only the values (s4 friction W7). The step keeps what it was: undone,
+  // the sheet has no part again. Empty when it can't (not a worksheet; creating needs an open group).
+  std::string SheetPart(int sheet, bool create);
   // The sheet's drawing (/xl/drawings/drawingN.xml); when it has none and `create`, a new one with
-  // its relationship, content type and the sheet's <drawing r:id> element. Empty when it can't
-  // (no package, a sheet not saved yet; creating needs an open group).
+  // its relationship, content type and the sheet's <drawing r:id> element (and the sheet's part,
+  // SheetPart). Empty when it can't (not a worksheet; creating needs an open group).
   std::string SheetDrawing(int sheet, bool create);
   // A shape id (cNvPr id) the drawing doesn't use yet: one past the highest.
   uint32_t NextShapeId(std::string_view drawing) const;
@@ -342,8 +349,8 @@ class Editor {
   // from the cells (a header row of text names the series, a first column of text the categories;
   // series down the columns when there are at least as many rows as columns), written as Excel
   // writes a new chart (its drawing, chart part, relationships and content types). Refused on a
-  // protected sheet without "Edit objects", in a workbook without a package (CSV) or on a sheet
-  // not saved yet.
+  // protected sheet without "Edit objects". A worksheet read from CSV or not saved yet gets its part
+  // (SheetPart).
   Result InsertChart(int sheet, const NewChart& chart);
   // Excel's rules for a sheet name: 1-31 characters, none of : \ / ? * [ ], not starting or
   // ending with ', not "History", and no other sheet's name (without case). Empty when valid.

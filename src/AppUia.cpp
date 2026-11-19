@@ -44,7 +44,8 @@ void App::DescribeUia(uia::Tree& t) {
   const int toolbarFirst = t.Size();
   if (!presentation_ && (!fullscreen_ || toolbarReveal_.V() > 0.01f)) {
     auto isMenu = [](int cmd) {
-      return cmd == CmdZoomMenu || cmd == CmdViewMenu || cmd == CmdSaveMenu || cmd == CmdMoreMenu;
+      return cmd == CmdZoomMenu || cmd == CmdViewMenu || cmd == CmdSaveMenu || cmd == CmdMoreMenu ||
+             cmd == CmdToolbarOverflow;
     };
     toolbar_.Describe(t, 0, isMenu, openMenu_, [this](TextBox* box) { FocusBox(box); });
   }

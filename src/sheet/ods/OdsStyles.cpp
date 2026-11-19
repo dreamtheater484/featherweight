@@ -287,10 +287,14 @@ int Styles::Resolve(std::string_view name) {
 }
 
 double Styles::ColumnChars(double points) {
-  const double size = Default().size;
-  const int digit = std::max(5, static_cast<int>(std::lround(size * 96 / 72 * 0.5)));
+  if (digitPx_ == 0) {
+    const Xf& d = Default();
+    digitPx_ = digit ? digit(d.font, d.size) : 0;
+    if (digitPx_ < 1 || digitPx_ > 200) digitPx_ = std::max(5, static_cast<int>(std::lround(d.size * 96 / 72 * 0.5)));
+  }
+  // Excel's width for a column of `px` pixels: whole pixels over the digit, in 1/256 characters.
   const double px = std::round(points * 96 / 72);
-  return std::floor(px / digit * 256) / 256;
+  return std::ceil(px / digitPx_ * 256) / 256;
 }
 
 // ---------- Number formats ----------

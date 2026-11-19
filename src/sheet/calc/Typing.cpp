@@ -462,6 +462,87 @@ AutoSumProposal ProposeAutoSum(int32_t row, int32_t col, const std::function<Sum
   return p;
 }
 
+std::vector<AutoSumCell> ProposeAutoSums(int32_t r1, int32_t c1, int32_t r2, int32_t c2, int32_t lastRow,
+                                         int32_t lastCol, const std::function<SumCell(int32_t, int32_t)>& at) {
+  std::vector<AutoSumCell> out;
+  if (r1 > r2 || c1 > c2 || r1 < 0 || c1 < 0) return out;
+  auto empty = [&](int32_t ra, int32_t ca, int32_t rb, int32_t cb) {
+    for (int32_t r = ra; r <= rb; ++r)
+      for (int32_t c = ca; c <= cb; ++c)
+        if (at(r, c) != SumCell::kEmpty) return false;
+    return true;
+  };
+  if (empty(r1, c1, r2, c2)) {
+    for (int32_t r = r1; r <= r2; ++r)
+      for (int32_t c = c1; c <= c2; ++c)
+        if (AutoSumProposal p = ProposeAutoSum(r, c, at); p.found) out.push_back({r, c, std::move(p.formula)});
+    return out;
+  }
+  // One line's total (column c rows ra-rb, or row r columns ca-cb): its totals only when it holds
+  // some, nearest the total first; else the whole line.
+  struct Line {
+    bool number = false;
+    std::string formula;
+  };
+  auto line = [&](int32_t ra, int32_t ca, int32_t rb, int32_t cb) {
+    Line l;
+    std::string totals;
+    for (int32_t r = rb, c = cb; r >= ra && c >= ca; ra == rb ? --c : --r) {
+      const SumCell k = at(r, c);
+      l.number |= k == SumCell::kNumber || k == SumCell::kTotal;
+      if (k == SumCell::kTotal) totals += (totals.empty() ? "" : ",") + A1(r, c);
+    }
+    const bool one = ra == rb && ca == cb;
+    l.formula = "=SUM(" + (!totals.empty() ? totals : A1(ra, ca) + (one ? "" : ":" + A1(rb, cb))) + ")";
+    return l;
+  };
+  // The columns' totals in row `to` (data rows ra-rb, columns ca-cb), under those holding a number.
+  auto columns = [&](int32_t ra, int32_t rb, int32_t ca, int32_t cb, std::vector<AutoSumCell>& cells) {
+    for (int32_t c = ca; c <= cb; ++c)
+      if (Line l = line(ra, c, rb, c); l.number) cells.push_back({rb + 1, c, std::move(l.formula)});
+    if (cells.empty())
+      for (int32_t c = ca; c <= cb; ++c) cells.push_back({rb + 1, c, line(ra, c, rb, c).formula});
+  };
+  auto rows = [&](int32_t ra, int32_t rb, int32_t ca, int32_t cb, std::vector<AutoSumCell>& cells) {
+    for (int32_t r = ra; r <= rb; ++r)
+      if (Line l = line(r, ca, r, cb); l.number) cells.push_back({r, cb + 1, std::move(l.formula)});
+    if (cells.empty())
+      for (int32_t r = ra; r <= rb; ++r) cells.push_back({r, cb + 1, line(r, ca, r, cb).formula});
+  };
+  const bool lastRowEmpty = r2 > r1 && empty(r2, c1, r2, c2);
+  const bool lastColEmpty = c2 > c1 && empty(r1, c2, r2, c2);
+  if (lastRowEmpty || lastColEmpty) {
+    const int32_t dr = lastRowEmpty ? r2 - 1 : r2, dc = lastColEmpty ? c2 - 1 : c2;
+    if (lastRowEmpty) columns(r1, dr, c1, dc, out);
+    std::vector<AutoSumCell> side;
+    if (lastColEmpty) rows(r1, dr, c1, dc, side);
+    out.insert(out.end(), side.begin(), side.end());
+    if (lastRowEmpty && lastColEmpty)
+      out.push_back({r2, c2, "=SUM(" + A1(r1, c2) + (dr > r1 ? ":" + A1(dr, c2) : "") + ")"});
+    return out;
+  }
+  if (r1 == r2) {
+    // One row: right of it, in the first empty cell.
+    for (int32_t c = c2 + 1; c <= lastCol; ++c)
+      if (at(r1, c) == SumCell::kEmpty) {
+        out.push_back({r1, c, line(r1, c1, r1, c2).formula});
+        return out;
+      }
+    return out;
+  }
+  // Under each column, in the first row below whose cells (under the columns totalled) are empty.
+  std::vector<AutoSumCell> cells;
+  columns(r1, r2, c1, c2, cells);
+  for (int32_t r = r2 + 1; r <= lastRow; ++r) {
+    bool free = true;
+    for (const AutoSumCell& t : cells) free = free && at(r, t.col) == SumCell::kEmpty;
+    if (!free) continue;
+    for (AutoSumCell& t : cells) t.row = r;
+    return cells;
+  }
+  return out;
+}
+
 }  // namespace fw::sheet::calc
 
 namespace fw::sheet::calc {

@@ -268,6 +268,15 @@ Featherweight edits workbooks. Check it next to Excel on the same file, keystrok
 
 - [ ] `million-cells.xlsx`: typing in a cell feels instant (measured 3.75 ms a key, 31 ms at worst; plan: under 16 and 50). Inserting a row ___ ms (measured 23–28 ms; plan: under 100 ms), and undoing it as quick.
 
+### Fewer steps (S4's friction fixes)
+
+`tests\workbook-friction-checks.ps1` checks these off-screen; the menus are Windows' own, so try them by hand too.
+
+- [ ] Narrow the window to about 1366, 1280 and 1024 pixels: the toolbar ends in **›** where items no longer fit. Its menu has each of them: Merge, Styles and Data with their choices, the colors (Automatic, the theme's, the standard ones, More colors…), the format painter. Each works as on the bar. In a document the same: Insert table opens the Table panel, Page layout's menu opens under **›**.
+- [ ] Alt+Q finds Sort, Filter, Table, Conditional formatting, Data validation, Format cells, Name Manager and Refresh PivotTable, with their shortcuts.
+- [ ] A filter's **Condition** picked from its list puts the caret in the Value box; type the number and press Enter: the filter applies, without a click on Apply.
+- [ ] Ctrl+T, and in a table **Table design…**: the styles show as small tables under Light, Medium and Dark, as Excel's gallery (in the workbook's theme colors); a click picks one, the arrows move between them, and the wheel scrolls when the panel is short.
+
 ## Protection, links and notes (S3)
 
 Check next to Excel on copies of your own workbooks. Every change is one undo step.
@@ -301,6 +310,8 @@ Check next to Excel on copies of your own workbooks. Every change is one undo st
 Check next to Excel on copies of your own workbooks, with sheets long and wide enough for several pages.
 
 - [ ] Right-click a sheet tab, **Page setup…** (or the gear in print preview): the Page tab (portrait or landscape, paper size, no scaling or fit sheet, all columns or all rows on one page, adjust to %, fit to pages wide by tall, first page number), Margins (Normal, Wide, Narrow, or each margin in your units, centered horizontally and vertically), Header (Excel's presets, or left, center and right with &[Page], &[Pages], &[Date], &[File], &[Tab]; different odd and even, different first page) and Sheet (print area, rows and columns to repeat, gridlines, headings, page order). Each change shows at once in print preview beside it; each is one undo step.
+- [ ] From the sheet (no print preview): the toolbar's gear beside Print opens Page setup, and its arrow offers No scaling, Fit sheet on one page, Fit all columns on one page and Fit all rows on one page, the sheet's own marked; ⋯ › Page setup… and Alt+Q ("fit all", "page setup") reach the same. Fit all columns on one page, then Ctrl+P, Print: the columns print on one page wide.
+- [ ] A header or footer holding a carriage return (Excel writes it as `_x000D_`; some .xls files have one): opened, set up (say landscape) and saved, Excel shows the same header text; print preview never shows "_x000D_".
 - [ ] In print preview, Print: Active sheet, Entire workbook (one job: page numbers and &[Pages] through all sheets) or Selection; printing and Export PDF follow the choice and the setup.
 - [ ] Set print area, Add to print area, Clear print area (cell menu and command search); Insert page break above and left of the active cell, Remove page break, Reset all page breaks.
 - [ ] Page break preview (sheet tab menu): what doesn't print is grey, each page shows "Page N", automatic breaks are dashed blue lines and manual ones solid; dragging a break moves it (it becomes manual). Saved, Excel opens in Page Break Preview with the same pages.

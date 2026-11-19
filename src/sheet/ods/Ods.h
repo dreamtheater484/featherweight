@@ -19,8 +19,12 @@
 // workbook opened from one is saved with Save As, as an .xlsx.
 namespace fw::sheet::ods {
 
+// Column widths are in Excel's characters, the widest digit of the workbook's default font: the
+// grid measures it (sheet/view's FontMeasure), so the caller that can passes the same measure, in
+// pixels at 96 dpi, for widths that come back as the pixels ODF gives. Without it, an estimate.
+using DigitWidth = std::function<int(const std::string& family, double points)>;
 pkg::Status OdsToXlsx(std::span<const uint8_t> ods, std::vector<uint8_t>& xlsx,
-                      const pkg::Limits& limits = pkg::Limits::Default());
+                      const pkg::Limits& limits = pkg::Limits::Default(), const DigitWidth& digit = {});
 
 // An OpenFormula expression as ODF stores it ("of:=SUM([.A1:.B2];[Sheet2.C3])") as Excel's formula
 // text in a file ("SUM(A1:B2,Sheet2!C3)", with _xlfn. prefixes). Relative references move by

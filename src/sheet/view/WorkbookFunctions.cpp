@@ -195,22 +195,73 @@ void WorkbookView::AutoSum() {
   const Sheet& s = Current();
   // What AutoSum needs to know of a cell: empty, a number (from a SUM or SUBTOTAL: a total), or
   // anything else.
-  const calc::AutoSumProposal p = calc::ProposeAutoSum(
-      static_cast<int32_t>(active_.row), static_cast<int32_t>(active_.col), [&](int32_t r, int32_t c) {
-        CellInfo ci;
-        if (r < 0 || c < 0 || static_cast<uint32_t>(r) >= kMaxRows || static_cast<uint32_t>(c) >= kMaxCols ||
-            !s.GetCell(static_cast<uint32_t>(r), static_cast<uint32_t>(c), ci) ||
-            (ci.value.type == ValueType::Empty && !ci.hasFormula))
-          return calc::SumCell::kEmpty;
-        if (ci.value.type != ValueType::Number) return calc::SumCell::kOther;
-        FormulaInfo f;
-        if (ci.hasFormula && s.GetFormula(static_cast<uint32_t>(r), static_cast<uint32_t>(c), f)) {
-          std::string t(f.text);
-          for (char& ch : t) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
-          if (t.rfind("SUM(", 0) == 0 || t.rfind("SUBTOTAL(", 0) == 0) return calc::SumCell::kTotal;
-        }
-        return calc::SumCell::kNumber;
-      });
+  auto kind = [&](int32_t r, int32_t c) {
+    CellInfo ci;
+    if (r < 0 || c < 0 || static_cast<uint32_t>(r) >= kMaxRows || static_cast<uint32_t>(c) >= kMaxCols ||
+        !s.GetCell(static_cast<uint32_t>(r), static_cast<uint32_t>(c), ci) ||
+        (ci.value.type == ValueType::Empty && !ci.hasFormula))
+      return calc::SumCell::kEmpty;
+    if (ci.value.type != ValueType::Number) return calc::SumCell::kOther;
+    FormulaInfo f;
+    if (ci.hasFormula && s.GetFormula(static_cast<uint32_t>(r), static_cast<uint32_t>(c), f)) {
+      std::string t(f.text);
+      for (char& ch : t) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+      if (t.rfind("SUM(", 0) == 0 || t.rfind("SUBTOTAL(", 0) == 0) return calc::SumCell::kTotal;
+    }
+    return calc::SumCell::kNumber;
+  };
+  // Several cells selected: their totals at once, under the columns (or beside a row), with no cell
+  // being edited and one undo step, as Excel does (s4 friction W5). Entering the total in the first
+  // number, as from one cell, would replace it on Enter.
+  Range sel = Selected();
+  if (sel != Expand(Range{active_.row, active_.col, active_.row, active_.col})) {
+    if (editor_.Active() && !CommitEdit(false)) return;
+    // Whole rows or columns: up to the last cells in use in them.
+    const bool wholeCols = sel.firstRow == 0 && sel.lastRow == kMaxRows - 1;
+    const bool wholeRows = sel.firstCol == 0 && sel.lastCol == kMaxCols - 1;
+    if (wholeCols || wholeRows) {
+      const std::optional<Range> used = s.UsedRange();
+      if (!used) return;
+      if (wholeCols) sel.lastRow = std::max(used->lastRow, sel.firstRow);
+      if (wholeRows) sel.lastCol = std::max(used->lastCol, sel.firstCol);
+    }
+    if (uint64_t{sel.lastRow - sel.firstRow + 1} * (sel.lastCol - sel.firstCol + 1) > 1000000) {
+      host_.ViewMessage(BannerKind::Warning, L"That's more cells than Featherweight totals at once.");
+      return;
+    }
+    auto lineEmpty = [&](bool row, uint32_t at) {
+      for (uint32_t i = row ? sel.firstCol : sel.firstRow; i <= (row ? sel.lastCol : sel.lastRow); ++i)
+        if (kind(static_cast<int32_t>(row ? at : i), static_cast<int32_t>(row ? i : at)) != calc::SumCell::kEmpty)
+          return false;
+      return true;
+    };
+    // The empty rows and columns at the end of whole ones aren't the selection's own.
+    if (wholeCols)
+      while (sel.lastRow > sel.firstRow && lineEmpty(true, sel.lastRow)) --sel.lastRow;
+    if (wholeRows)
+      while (sel.lastCol > sel.firstCol && lineEmpty(false, sel.lastCol)) --sel.lastCol;
+    const std::vector<calc::AutoSumCell> sums = calc::ProposeAutoSums(
+        static_cast<int32_t>(sel.firstRow), static_cast<int32_t>(sel.firstCol), static_cast<int32_t>(sel.lastRow),
+        static_cast<int32_t>(sel.lastCol), static_cast<int32_t>(kMaxRows - 1), static_cast<int32_t>(kMaxCols - 1),
+        kind);
+    if (!sums.empty()) {
+      std::vector<std::pair<CellAddr, edit::CellInput>> cells;
+      for (const calc::AutoSumCell& t : sums)
+        cells.emplace_back(CellAddr{static_cast<uint32_t>(t.row), static_cast<uint32_t>(t.col)},
+                           edit::CellInput::Formula(t.formula.substr(1)));
+      EditRefused(Ed().SetCells(static_cast<int>(sheet_), cells));
+      host_.ViewInvalidate();
+      return;
+    }
+    // Nothing to total: from an empty active cell, as from one cell (=SUM() to be given a range);
+    // never by editing a cell that holds something.
+    if (kind(static_cast<int32_t>(active_.row), static_cast<int32_t>(active_.col)) != calc::SumCell::kEmpty) {
+      host_.ViewMessage(BannerKind::Warning, L"There's no empty cell left on the sheet for the total.");
+      return;
+    }
+  }
+  const calc::AutoSumProposal p =
+      calc::ProposeAutoSum(static_cast<int32_t>(active_.row), static_cast<int32_t>(active_.col), kind);
   BeginEdit(CellEditor::Mode::Enter, L"");
   if (!editor_.Active()) return;
   const std::wstring text = Utf8ToWide(calc::ToLocal(p.formula, Region()));
