@@ -637,7 +637,8 @@ class Parser {
       else if (!alnum && c != '$' && c != ':' && !(c == '-' && bracket > 0)) break;
       ++k;
     }
-    if (k == i_ || bracket) return false;
+    // ':' alone is the range operator: #REF!:#REF! (A1:B2 with both ends gone), #REF!:B2.
+    if (k == i_ || bracket || s_.find_first_not_of(':', i_) >= k) return false;
     i_ = k;
     return true;
   }
