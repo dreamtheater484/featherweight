@@ -6,7 +6,8 @@
   - the page count
   - the fonts Office actually drew with, from each PDF
   - the source file's hash
-  - for a format copy (D5: doc\, odt\, dotx\, protected\, made by scripts\make-test-files.ps1),
+  - for a format copy (D5: doc\, odt\, dotx\, protected\, made by scripts\make-test-files.ps1;
+    S4: xls\ and ods\, Excel's copies of the workbooks, made by scripts\make-sheet-copies.ps1),
     "copyOf": the original's source in the same manifest, so fidelity counts each document once
     and measures the copies as a set of their own
   - for a password-protected copy, "password": its test password (Get-TestPassword)
@@ -81,7 +82,7 @@ $Folders = @($Folders | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $PrintPdf = @($PrintPdf | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $apps = @{
   Word = @{ Exe = "WINWORD"; ProgId = "Word.Application"; Ext = @(".docx", ".docm", ".dotx", ".dotm", ".doc", ".odt") }
-  Excel = @{ Exe = "EXCEL"; ProgId = "Excel.Application"; Ext = @(".xlsx", ".xlsm", ".xltx", ".xltm") }
+  Excel = @{ Exe = "EXCEL"; ProgId = "Excel.Application"; Ext = @(".xlsx", ".xlsm", ".xltx", ".xltm", ".xls", ".ods") }
   PowerPoint = @{ Exe = "POWERPNT"; ProgId = "PowerPoint.Application"; Ext = @(".pptx", ".pptm", ".potx", ".potm", ".ppsx", ".ppsm") }
 }
 
@@ -588,12 +589,14 @@ function Get-Kind([string]$ext) {
 }
 
 # A format copy's original: the .docx it was made from (private: docx\<category>\, the same name;
-# public: generated\ or torture\, the name without "-protected"). Null for anything else.
+# public: generated\ or torture\, the name without "-protected"), or for xls\ and ods\ the .xlsx
+# (private: xlsx\<category>\). Null for anything else.
 function Get-CopyOf([string]$source, [string]$sourceRoot) {
   $parts = $source -split '/'
-  if ($parts.Count -lt 2 -or @("doc", "odt", "dotx", "protected") -notcontains $parts[0]) { return $null }
+  if ($parts.Count -lt 2 -or @("doc", "odt", "dotx", "protected", "xls", "ods") -notcontains $parts[0]) { return $null }
   $stem = (($parts[1..($parts.Count - 1)] -join '/') -replace '\.[^./]+$', '') -replace '-protected$', ''
-  $candidates = if ($Corpus) { @("docx/$stem.docx") } else { @("generated/$stem.docx", "torture/$stem.docx") }
+  $candidates = if (@("xls", "ods") -contains $parts[0]) { @("xlsx/$stem.xlsx") }
+                elseif ($Corpus) { @("docx/$stem.docx") } else { @("generated/$stem.docx", "torture/$stem.docx") }
   foreach ($c in $candidates) { if (Test-Path -LiteralPath (Join-Path $sourceRoot $c)) { return $c } }
   $null
 }
@@ -619,8 +622,9 @@ if ($Corpus) {
   $manifestPath = Join-Path $outRoot "manifest.json"
   if ((Test-Path $manifestPath) -and -not $Force) { $old = @((Get-Content $manifestPath -Raw | ConvertFrom-Json).files) }
   # docx, xlsx, pptx: screened downloads; doc, odt, dotx, protected: Word's copies of them (D5,
-  # scripts\make-test-files.ps1).
-  $screened = @("docx", "xlsx", "pptx", "doc", "odt", "dotx", "protected") | ForEach-Object { Join-Path $corpusRoot $_ } | Where-Object { Test-Path $_ }
+  # scripts\make-test-files.ps1); xls, ods: Excel's copies of the workbooks (S4,
+  # scripts\make-sheet-copies.ps1).
+  $screened = @("docx", "xlsx", "pptx", "doc", "odt", "dotx", "protected", "xls", "ods") | ForEach-Object { Join-Path $corpusRoot $_ } | Where-Object { Test-Path $_ }
   if (-not $screened) { throw "$corpusRoot has no docx, xlsx or pptx folder (see scripts\fetch-corpus.ps1)." }
   foreach ($f in $screened | ForEach-Object { Get-ChildItem $_ -File -Recurse } | Sort-Object FullName) {
     if ((Test-Inside $f.FullName $outRoot) -or -not (Get-Kind $f.Extension)) { continue }
