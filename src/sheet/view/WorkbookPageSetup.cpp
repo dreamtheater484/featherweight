@@ -324,6 +324,10 @@ class WorkbookView::PageSetupPanel : public PanelContent {
            [this] { Change([](PageSetup&, HeaderFooter& h, bool&) { h.differentOddEven = !h.differentOddEven; }); });
     Toggle(firstDiff_, L"Different first page",
            [this] { Change([](PageSetup&, HeaderFooter& h, bool&) { h.differentFirst = !h.differentFirst; }); });
+    Toggle(scaleDoc_, L"Scale with document",
+           [this] { Change([](PageSetup&, HeaderFooter& h, bool&) { h.scaleWithDoc = !h.scaleWithDoc; }); });
+    Toggle(alignMargins_, L"Align with margins",
+           [this] { Change([](PageSetup&, HeaderFooter& h, bool&) { h.alignWithMargins = !h.alignWithMargins; }); });
     // Sheet
     for (FocusComboBox* b : {&area_, &rows_, &cols_}) {
       b->autoComplete = false;
@@ -444,6 +448,8 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     }
     oddEven_.checked = h.differentOddEven;
     firstDiff_.checked = h.differentFirst;
+    scaleDoc_.checked = h.scaleWithDoc;
+    alignMargins_.checked = h.alignWithMargins;
     const DefinedName* area = NameOf(*v_.book_, "_xlnm.Print_Area", v_.sheet_);
     area_.ReplaceText(area ? AreasText(PrintLayout::ParseAreas(area->formula)) : std::wstring());
     const auto rows = v_.TitleRows(), cols = v_.TitleCols();
@@ -572,6 +578,7 @@ class WorkbookView::PageSetupPanel : public PanelContent {
         }
         full(oddEven_);
         full(firstDiff_);
+        pair(scaleDoc_, alignMargins_);
         hintRc_ = RectF(left, y, right, y + 40 * ui);
         break;
       case kTabSheet:
@@ -644,7 +651,7 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     std::vector<Control*> all = {&which_,    &what_,     &portrait_, &landscape_, &paper_,     &scaling_,   &scale_,   &fitW_,
                                  &fitH_,     &first_,    &preset_,    &centerH_,   &centerV_,   &oddEven_, &firstDiff_,
                                  &area_,     &rows_,     &cols_,      &gridlines_, &headings_,  &down_,    &over_,
-                                 &bw_,       &draft_,    &notes_,     &errors_};
+                                 &bw_,       &draft_,    &notes_,     &errors_,    &scaleDoc_,  &alignMargins_};
     for (auto& b : margin_) all.push_back(&b);
     for (int f = 0; f < 2; ++f) {
       all.push_back(&hfPreset_[f]);
@@ -659,7 +666,7 @@ class WorkbookView::PageSetupPanel : public PanelContent {
   PanelButton tabs_[kTabs];
   FocusComboBox what_, paper_, scaling_, scale_, fitW_, fitH_, first_, preset_, margin_[6], hfPreset_[2], section_[2][3],
       area_, rows_, cols_, which_, notes_, errors_;
-  PanelButton bw_, draft_;
+  PanelButton bw_, draft_, scaleDoc_, alignMargins_;
   int hfWhich_ = 0;           // the header and footer shown: 0 the odd (or other) pages', 1 the even, 2 the first page's
   std::vector<int> whichOf_;  // which_'s items as hfWhich_ values
   PanelButton portrait_, landscape_, centerH_, centerV_, oddEven_, firstDiff_, gridlines_, headings_, down_, over_;
