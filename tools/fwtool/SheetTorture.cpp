@@ -1682,20 +1682,20 @@ void ObjectLines(const sh::Workbook& book, size_t i, const std::string& at, std:
   std::string drawingPart;
   const std::string drawing = RelatedPart(book, s.PartName(), "/drawing", &drawingPart);
   if (!drawing.empty()) {
-    std::string line = at + "objects";
-    for (const sh::edit::drawing::Object& o : sh::edit::drawing::Objects(drawing)) line += " " + std::to_string(o.id);
-    out.push_back(std::move(line));
+    std::string ids = at + "objects";
+    for (const sh::edit::drawing::Object& o : sh::edit::drawing::Objects(drawing)) ids += " " + std::to_string(o.id);
+    out.push_back(std::move(ids));
     for (size_t n = 0;; ++n) {
       std::string chartPart;
       const std::string chart = RelatedPart(book, drawingPart, "/chart", &chartPart, n);
       if (chart.empty()) break;
-      std::string line = at + "chart " + chartPart;
-      for (size_t i = chart.find("<c:f>"); i != std::string::npos; i = chart.find("<c:f>", i + 5)) {
-        const size_t end = chart.find("</c:f>", i);
+      std::string formulas = at + "chart " + chartPart;
+      for (size_t f = chart.find("<c:f>"); f != std::string::npos; f = chart.find("<c:f>", f + 5)) {
+        const size_t end = chart.find("</c:f>", f);
         if (end == std::string::npos) break;
-        line += " " + chart.substr(i + 5, end - i - 5);
+        formulas += " " + chart.substr(f + 5, end - f - 5);
       }
-      out.push_back(std::move(line));
+      out.push_back(std::move(formulas));
     }
   }
   // Notes and threads: only on sheets whose part has them (reading a sheet's objects is slower).
