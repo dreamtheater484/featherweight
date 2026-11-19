@@ -422,6 +422,13 @@ class Sheet {
   // `result`: a formula's, in its cell or spilled from a dynamic array: text is written t="str"
   // with <v>, as Excel writes it (an inline string there reads as #VALUE! until recalculated).
   void SetValue(uint32_t row, uint32_t col, const Value& v, bool result = false);
+  // Multi-threaded recalculation (S4): OwnBlocks makes the blocks holding rows [first, last] the
+  // sheet's own (copy on write); then SetResultShared may be called from several threads at once,
+  // for different cells, while nothing else reads or changes the sheet. It stores a formula's
+  // result as SetValue(..., true) does, into a cell that exists, for a value other than text: 1
+  // when the value changed, 0 when not, -1 when it can't (SetValue then).
+  void OwnBlocks(uint32_t first, uint32_t last);
+  int SetResultShared(uint32_t row, uint32_t col, const Value& v);
   // A dynamic array's formula at (row, col) spills over `ref` now (recalculated, as SetValue).
   void SetSpillRef(uint32_t row, uint32_t col, const Range& ref);
 

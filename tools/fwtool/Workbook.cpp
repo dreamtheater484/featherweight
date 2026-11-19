@@ -47,7 +47,7 @@ const char* KindName(fw::sheet::SheetKind k) {
 
 bool IsWorkbookFile(const std::filesystem::path& file) {
   std::wstring ext = fw::ToLower(file.extension().wstring());
-  return ext == L".xlsx" || ext == L".xlsm" || ext == L".xltx" || ext == L".xltm";
+  return ext == L".xlsx" || ext == L".xlsm" || ext == L".xltx" || ext == L".xltm" || ext == L".xls";
 }
 
 std::unique_ptr<Workbook> ReadWorkbook(const std::filesystem::path& file, fw::pkg::Status& status, bool loadAll) {

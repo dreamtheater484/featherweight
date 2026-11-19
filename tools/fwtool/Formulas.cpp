@@ -12,6 +12,7 @@
 // application (docProps/app.xml), and what was kept as cached.
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -438,7 +439,67 @@ int RunFormulasExcel(const Options& options) {
 
 }  // namespace
 
+// --threads (S4): every workbook recalculated in full on one thread and on four, with the parallel
+// phase forced for any number of formulas, and every cell compared bit for bit, both ways.
+int RunFormulasThreads(const Options& options) {
+  const NumLocale* locale = LocaleFor(options.locale.empty() ? L"en-US" : options.locale);
+  struct Fixed : calc::WorkbookCalc {
+    using WorkbookCalc::WorkbookCalc;
+    double Now() override { return 46000.5; }
+    double Random() override { return 0.25; }
+  };
+  size_t books = 0, cells = 0, differ = 0, parallel = 0, failed = 0;
+  for (const auto& file : CollectFiles(options.inputs)) {
+    if (!IsWorkbookFile(file)) continue;
+    fw::pkg::Status st;
+    auto one = ReadWorkbook(file, st, true);
+    auto four = ReadWorkbook(file, st, true);
+    if (!one || !four) {
+      std::printf("%ls: not read (%s)\n", file.filename().c_str(), st.message.c_str());
+      ++failed;
+      continue;
+    }
+    auto full = [&](Workbook& book, int threads) {
+      Fixed c(book, locale);
+      c.Load();
+      c.engine().SetThreads(threads);
+      c.engine().SetParallelThresholds(1, 1);
+      c.engine().Opened(c.Settings());
+      c.engine().MarkAllDirty();
+      c.engine().Recalculate();
+      return c.engine().ParallelEvaluations();
+    };
+    full(*one, 1);
+    parallel += full(*four, 4);
+    ++books;
+    size_t here = 0;
+    auto same = [](const Value& x, const Value& y) {
+      return x.type == y.type && !std::memcmp(&x.number, &y.number, sizeof x.number) && x.boolean == y.boolean &&
+             x.error == y.error && x.text == y.text;
+    };
+    for (size_t s = 0; s < one->SheetCount() && s < four->SheetCount(); ++s) {
+      const Sheet& a = one->GetSheet(s);
+      const Sheet& b = four->GetSheet(s);
+      for (auto [x, y] : {std::pair{&a, &b}, std::pair{&b, &a}}) {
+        auto used = x->UsedRange();
+        if (!used) continue;
+        x->ForEachCell(*used, [&](const CellInfo& c) {
+          ++cells;
+          if (!same(c.value, y->GetValue(c.row, c.col))) ++here;
+          return true;
+        });
+      }
+    }
+    if (here) std::printf("%ls: %zu values differ\n", file.filename().c_str(), here);
+    differ += here;
+  }
+  std::printf("%zu workbooks, %zu cells compared (both ways), %zu formulas calculated in parallel: %zu differ\n",
+              books, cells, parallel, differ);
+  return differ || failed || !parallel ? 1 : 0;
+}
+
 int RunFormulas(const Options& options) {
+  if (options.threads) return RunFormulasThreads(options);
   if (!options.excel.empty()) return RunFormulasExcel(options);
   const std::wstring region = options.locale.empty() ? L"en-US" : options.locale;
   const NumLocale* locale = LocaleFor(region);

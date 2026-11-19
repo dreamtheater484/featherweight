@@ -360,6 +360,55 @@ void Sheet::SetValue(uint32_t row, uint32_t col, const Value& v, bool result) {
   if (cell.type != oldType) cell.flags &= static_cast<uint8_t>(~kTypePresent);
 }
 
+void Sheet::OwnBlocks(uint32_t first, uint32_t last) {
+  auto it = std::upper_bound(blockFirstRow_.begin(), blockFirstRow_.end(), first);
+  size_t bi = it == blockFirstRow_.begin() ? 0 : static_cast<size_t>(it - blockFirstRow_.begin()) - 1;
+  for (; bi < blocks_.size() && blockFirstRow_[bi] <= last; ++bi) MutableBlock(bi);
+}
+
+int Sheet::SetResultShared(uint32_t row, uint32_t col, const Value& v) {
+  if (v.type == ValueType::String || v.type == ValueType::Empty) return -1;
+  auto it = std::upper_bound(blockFirstRow_.begin(), blockFirstRow_.end(), row);
+  if (it == blockFirstRow_.begin()) return -1;
+  const size_t bi = static_cast<size_t>(it - blockFirstRow_.begin()) - 1;
+  if (blocks_[bi].use_count() != 1) return -1;
+  RowBlock& b = *blocks_[bi];
+  auto r = std::lower_bound(b.rows.begin(), b.rows.end(), row, [](const RowRec& x, uint32_t val) { return x.row < val; });
+  if (r == b.rows.end() || r->row != row) return -1;
+  auto first = b.cells.begin() + r->first, last = first + r->count;
+  auto c = std::lower_bound(first, last, col, [](const CellRec& x, uint32_t val) { return x.col < val; });
+  if (c == last || c->col != col) return -1;
+  const uint32_t index = static_cast<uint32_t>(c - b.cells.begin());
+  CellRec& cell = *c;
+  const XmlType oldType = cell.type;
+  const bool had = (cell.flags & kHasValue) != 0;
+  bool same = false;
+  switch (v.type) {
+    case ValueType::Number:
+      same = had && (oldType == XmlType::N || oldType == XmlType::D) && cell.v.number == v.number;
+      cell.type = oldType == XmlType::D ? XmlType::D : XmlType::N;
+      cell.numStyle = 0;
+      cell.v.number = v.number;
+      break;
+    case ValueType::Bool:
+      same = had && oldType == XmlType::B && cell.v.index == (v.boolean ? 1u : 0u);
+      cell.type = XmlType::B;
+      cell.v.index = v.boolean ? 1 : 0;
+      break;
+    case ValueType::Error:
+      same = had && oldType == XmlType::E && cell.v.index == static_cast<uint32_t>(v.error);
+      cell.type = XmlType::E;
+      cell.v.index = static_cast<uint32_t>(v.error);
+      break;
+    default: return -1;
+  }
+  for (auto& s : b.sides)
+    if (s.cell == index) s.valueText = kNone;
+  cell.flags = static_cast<uint8_t>((cell.flags & ~kPreserve) | kComputed | kHasValue);
+  if (cell.type != oldType) cell.flags &= static_cast<uint8_t>(~kTypePresent);
+  return same ? 0 : 1;
+}
+
 size_t Sheet::ModelBytes() const {
   size_t n = sizeof(Sheet) + blocks_.capacity() * sizeof(blocks_[0]) + blockFirstRow_.capacity() * 4 +
              formulas_.capacity() * sizeof(FormulaRec) + sharedMasters_.capacity() * sizeof(sharedMasters_[0]) +

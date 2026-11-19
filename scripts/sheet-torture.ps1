@@ -13,8 +13,15 @@
      the original the same way) isn't the editor's doing, and the summary says so.
   The summary goes to <out>\summary.md and summary.json. The exit code is 1 when anything failed.
 
+  A workbook read through a converter (S4: .xls, .ods) is saved as .xlsx. fwtool torture also saves
+  it with no edits (<name>.converted.xlsx, what Save As .xlsx gives): that copy must have no
+  validator errors and open in Excel cleanly itself, and it is what the edited copies' validator
+  errors are measured against. Excel's "the original too" still opens the .xls or .ods.
+
   Without -Paths: tests\office's workbooks (sheet, excel, generated, edge) and, with -Corpus (or
-  FW_CORPUS), the private corpus's xlsx folder. -Ci: the public workbooks only, fewer edits, no Excel.
+  FW_CORPUS), the private corpus's xlsx folder, and its xls and ods folders (Excel's copies, made by
+  scripts\make-sheet-copies.ps1) once they exist. -Ci: the public workbooks only, fewer edits, no
+  Excel.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\sheet-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus
@@ -44,7 +51,9 @@ if ($Ci) {
 $Paths = @($Paths | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 if (-not $Paths) {
   $Paths = @("tests\office\sheet", "tests\office\excel", "tests\office\generated", "tests\office\edge")
-  if (-not $Ci -and $Corpus -and (Test-Path (Join-Path $Corpus "xlsx"))) { $Paths += Join-Path $Corpus "xlsx" }
+  if (-not $Ci -and $Corpus) {
+    foreach ($kind in "xlsx", "xls", "ods") { if (Test-Path (Join-Path $Corpus $kind)) { $Paths += Join-Path $Corpus $kind } }
+  }
 }
 if (-not [IO.Path]::IsPathRooted($Out)) { $Out = Join-Path $root $Out }
 if (-not [IO.Path]::IsPathRooted($Fwtool)) { $Fwtool = Join-Path $root $Fwtool }
@@ -62,11 +71,9 @@ function Read-Json([string]$path) { if (Test-Path $path) { Get-Content $path -Ra
 $torture = Read-Json (Join-Path $Out "torture.json")
 if (-not $torture) { throw "fwtool torture wrote no results." }
 $pairsFile = Join-Path $Out "pairs.tsv"
-$pairs = @{}  # saved copy -> original
-foreach ($line in @(Get-Content $pairsFile -Encoding UTF8 -ErrorAction SilentlyContinue)) {
-  $cols = $line -split "`t"
-  if ($cols.Count -eq 2) { $pairs[[IO.Path]::GetFullPath($cols[1])] = [IO.Path]::GetFullPath($cols[0]) }
-}
+$pairs = @{}  # saved copy -> original (a converted workbook's: the .xls or .ods itself)
+foreach ($f in $torture.files) { if ($f.saved) { $pairs[[IO.Path]::GetFullPath($f.saved)] = [IO.Path]::GetFullPath($f.file) } }
+$converted = @($torture.files | Where-Object { $_.converted } | ForEach-Object { [IO.Path]::GetFullPath($_.converted) })
 
 # 2. The validator: no new errors in any saved copy.
 "== Validator (Open XML SDK): saved copies against their originals"
@@ -77,6 +84,15 @@ $newErrors = @{}  # saved copy -> new validator errors
 if ($pairs.Count) {
   & $validator --pairs $pairsFile --json (Join-Path $Out "validate.json") | Where-Object { $_ -match '^\[FAIL\]|^\s{4}|files,' }
   foreach ($f in (Read-Json (Join-Path $Out "validate.json")).files) { $newErrors[[IO.Path]::GetFullPath($f.saved)] = @($f.newErrors | Where-Object { $_ }) }
+}
+# A converted workbook's Save As with no edits: every validator error counts (its own baseline).
+$convertedErrors = @{}  # converted copy -> its validator errors
+if ($converted.Count) {
+  "== Validator: the converted workbooks' Save As .xlsx with no edits"
+  & $validator --json (Join-Path $Out "validate-converted.json") @converted | Where-Object { $_ -match '^\[FAIL\]|^\s{4}|files' }
+  foreach ($f in (Read-Json (Join-Path $Out "validate-converted.json")).files) {
+    $convertedErrors[[IO.Path]::GetFullPath($f.file)] = @($f.errors | Where-Object { $_ })
+  }
 }
 
 # 3. Excel: each saved copy opens cleanly; the originals of those that don't, too.
@@ -106,6 +122,9 @@ foreach ($f in $torture.files) {
   # repairs, or both refused).
   $same = $x -and $b -and $b.status -eq $x.status -and (@($b.repairs) -join "|") -eq (@($x.repairs) -join "|")
   $excelStatus = if (-not $x) { $null } elseif ($x.status -in "ok", "unchecked") { $x.status } elseif ($same) { "original too" } else { $x.status }
+  # A converted workbook's Save As with no edits: its own validator errors and Excel's verdict.
+  $conv = if ($f.converted) { [IO.Path]::GetFullPath($f.converted) } else { $null }
+  $cx = if ($conv) { $excel[$conv] } else { $null }
   $rows += [pscustomobject][ordered]@{
     file = $f.file
     skipped = $f.skipped
@@ -117,10 +136,17 @@ foreach ($f in $torture.files) {
     excelDetail = if ($x -and $x.status -ne "ok") {
       (@($x.repairs) + @($x.dialogs | ForEach-Object { $_.text }) + @($x.error) | Where-Object { $_ }) -join " / "
     } else { $null }
+    converted = $f.converted
+    convertedValidatorErrors = @(if ($conv -and $convertedErrors.ContainsKey($conv)) { $convertedErrors[$conv] })
+    convertedExcel = if ($cx) { $cx.status } else { $null }
+    convertedExcelDetail = if ($cx -and $cx.status -ne "ok") {
+      (@($cx.repairs) + @($cx.dialogs | ForEach-Object { $_.text }) + @($cx.error) | Where-Object { $_ }) -join " / "
+    } else { $null }
   }
 }
 $excelPasses = "ok", "original too", "unchecked"  # unchecked has its own row: Excel's automation, not the file
-$failed = @($rows | Where-Object { $_.failures.Count -or $_.newValidatorErrors.Count -or ($_.excel -and $_.excel -notin $excelPasses) })
+$failed = @($rows | Where-Object { $_.failures.Count -or $_.newValidatorErrors.Count -or ($_.excel -and $_.excel -notin $excelPasses) -or
+                                   $_.convertedValidatorErrors.Count -or ($_.convertedExcel -and $_.convertedExcel -notin "ok", "unchecked") })
 $through = Select-String -Path (Join-Path $Out "torture.log") -Pattern 'edits through: (.*)\)$' | Select-Object -Last 1
 $through = if ($through) { $through.Matches[0].Groups[1].Value } else { "?" }
 $md = @("# Workbook torture test", "",
@@ -133,7 +159,10 @@ $md = @("# Workbook torture test", "",
   "| New validator errors | $(@($rows | Where-Object { $_.newValidatorErrors.Count }).Count) |",
   "| Excel: repaired or refused | $(if ($NoExcel) { 'not run' } else { @($rows | Where-Object { $_.excel -and $_.excel -notin $excelPasses }).Count }) |",
   "| Excel: the original is repaired or refused the same way | $(if ($NoExcel) { 'not run' } else { @($rows | Where-Object { $_.excel -eq 'original too' }).Count }) |",
-  "| Excel: couldn't check (its automation failed three times; run again) | $(if ($NoExcel) { 'not run' } else { @($rows | Where-Object { $_.excel -eq 'unchecked' }).Count }) |", "")
+  "| Excel: couldn't check (its automation failed three times; run again) | $(if ($NoExcel) { 'not run' } else { @($rows | Where-Object { $_.excel -eq 'unchecked' }).Count }) |",
+  "| Converted (.xls, .ods): Save As .xlsx with no edits made | $(@($rows | Where-Object converted).Count) |",
+  "| Converted: their Save As has validator errors | $(@($rows | Where-Object { $_.convertedValidatorErrors.Count }).Count) |",
+  "| Converted: Excel repairs or refuses their Save As | $(if ($NoExcel) { 'not run' } else { @($rows | Where-Object { $_.convertedExcel -and $_.convertedExcel -notin 'ok', 'unchecked' }).Count }) |", "")
 if ($failed.Count) {
   $md += "## Failures", ""
   foreach ($r in $failed) {
@@ -141,13 +170,15 @@ if ($failed.Count) {
     foreach ($x in $r.failures) { $md += "- round $($x.round): $($x.category): $($x.message) ($($x.edits) edits: ``$($x.reproducer)``)" }
     foreach ($x in $r.newValidatorErrors | Select-Object -First 5) { $md += "- validator: $($x.Part) $($x.Path): $($x.Description) ($($x.Id))" }
     if ($r.excel -and $r.excel -notin $excelPasses) { $md += "- Excel: $($r.excel): $($r.excelDetail)" }
+    foreach ($x in $r.convertedValidatorErrors | Select-Object -First 5) { $md += "- converted, no edits: validator: $($x.Part) $($x.Path): $($x.Description) ($($x.Id))" }
+    if ($r.convertedExcel -and $r.convertedExcel -notin "ok", "unchecked") { $md += "- converted, no edits: Excel: $($r.convertedExcel): $($r.convertedExcelDetail)" }
     $md += ""
   }
 }
 [IO.File]::WriteAllText((Join-Path $Out "summary.md"), ($md -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $Out "summary.json"), ([ordered]@{ seed = $Seed; edits = $Edits; rounds = $Rounds; excel = -not $NoExcel; files = $rows } | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
 ""
-$md[4..13] -join "`n"
+$md[4..16] -join "`n"
 "Summary: $(Join-Path $Out 'summary.md')"
 $unchecked = @($rows | Where-Object { $_.excel -eq "unchecked" })
 if ($unchecked.Count) { "Excel couldn't check $($unchecked.Count) saved copies: run again." }
