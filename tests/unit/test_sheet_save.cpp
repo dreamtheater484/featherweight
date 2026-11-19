@@ -16,6 +16,7 @@
 #include "sheet/edit/Edit.h"
 #include "sheet/edit/Journal.h"
 #include "sheet/model/Workbook.h"
+#include "sheet/xlsx/Internal.h"
 #include "sheet/xlsx/Xlsx.h"
 
 using namespace fw::sheet;
@@ -1405,4 +1406,17 @@ TEST(sheet_save_typed_dynamic_array) {
     std::vector<uint8_t> saved = SaveBytes(*book, ed);
     CHECK(PartText(saved, "/xl/worksheets/sheet1.xml").find("<c r=\"A1\" cm=\"1\">") != npos);
   }
+}
+
+// A file whose worksheet binds "r" to something else: the relationships' prefix is another one, not
+// "r" declared twice (an attribute twice: the save wouldn't open; fuzz_xlsx).
+TEST(sheet_save_rel_prefix_taken) {
+  detail::PartText t;
+  t.rootStart = "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"urn:other\" xmlns:r1=\"urn:x\">";
+  CHECK(xlsx::RelPrefix(t) == "r2");
+  CHECK(t.rootStart.find(" xmlns:r2=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">") != std::string::npos);
+  CHECK(xlsx::RelPrefix(t) == "r2");  // declared now
+  detail::PartText plain;
+  plain.rootStart = "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">";
+  CHECK(xlsx::RelPrefix(plain) == "r");
 }
