@@ -58,3 +58,14 @@ As S3 (`docs/s3-plan.md`, "Rules"): through the edit API only; never damage a fi
 - **Usage:** check `get_usage` before each step. Stop gracefully at **98 % of the 5-hour window** (Roy, 2026-11-19; it was 92 %) and at **98 % weekly**: no new step, commit and push (a WIP commit is fine), state note exact, end the turn. The coordinator resumes everyone after the reset.
 - **Notes:** `D:\Documents\Codex\FeatherweightNotes\s4\<piece>-state.md`, current at every turn end.
 - **Commits:** small, on your branch, no Co-Authored-By trailer. Push and say what's ready to merge.
+
+## Decisions during S4
+
+- **2026-11-19, the friction review** (`docs/friction-review.md`, "Workbooks (S4)", by s4-corpus) has these owners:
+  - W1 (the toolbar at 1366 px), W2 (command search lists S2–S4's workbook commands), W4 (the filter value box gets the keyboard, Enter applies) and W6 (table style previews): the S3 tables session, on its own branch from s4-int, with command ids 3100–3119.
+  - W5 (AutoSum over a selection, as Excel does) and W7 (charts, tables and rules allowed in a workbook opened from `.csv`; saving to `.csv` asks once, keep as `.xlsx` or save the data only): the S3 formulas session, with command ids 3120–3129.
+  - W3 (Page setup reachable from the sheet): the S3 page setup session, with its header carriage-return fix.
+  - W13 (File → New: a blank workbook and the templates folder): s4-ods.
+  - W8 (Filter by mouse, one click more than Excel) is accepted as it is. W9 and W10 are by design.
+- **2026-11-19, the spreadsheet editor ships in 3.0:** S4 turns its "shipped" flag on, so File → New offers workbooks (W13).
+- **2026-11-19:** the 5-hour usage stop is 98 % (Roy).
