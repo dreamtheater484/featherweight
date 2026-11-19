@@ -2231,6 +2231,13 @@ int ReplaySheet(const std::filesystem::path& repro, const std::filesystem::path&
   return r.failure ? 1 : 0;
 }
 
+// A workbook that isn't an Office Open XML package: read through a converter (S4: .xls, .ods; the
+// readers hook into OpenPackage), saved as .xlsx.
+bool IsConvertedWorkbook(const fs::path& file) {
+  const std::wstring ext = fw::ToLower(file.extension().wstring());
+  return ext == L".xls" || ext == L".ods";
+}
+
 int RunSheetTorture(const Options& options, const std::vector<std::filesystem::path>& files, bool appendPairs) {
   const uint64_t baseSeed = options.seed ? options.seed : 1;
   const uint32_t edits = static_cast<uint32_t>(options.edits), rounds = options.rounds;
@@ -2256,8 +2263,33 @@ int RunSheetTorture(const Options& options, const std::vector<std::filesystem::p
     std::string fileJson = "\n    {\"file\": " + JsonText(fw::WideToUtf8(fs::absolute(file).generic_wstring())) + ", \"failures\": [";
     uint32_t done = 0, refused = 0, failures = 0, unsavedRounds = 0;
     bool unread = false;
-    std::string note, savedPath, unsaved;
-    for (uint32_t round = 0; round < rounds; ++round) {
+    std::string note, savedPath, unsaved, convertedPath;
+    // A workbook read through a converter (S4: .xls, .ods) is saved as .xlsx. Its Save As with no
+    // edits is the baseline the edited copies are measured against (the validator can't read the
+    // original), and a file of its own for Excel's open check.
+    const bool converted = IsConvertedWorkbook(file);
+    if (converted) {
+      const std::vector<Edit> none;
+      Round base = RunRound(file, 0, 0, &none, {});
+      if (base.failure && base.failure->category == "open") {
+        unread = true;
+        note = base.failure->message;
+      } else if (base.failure) {
+        const fs::path repro = out / "repro" / (SafeName(file) + "-converted.txt");
+        WriteEdits(repro, file, 0, 0, base.failure->category + ": " + base.failure->message, {});
+        std::printf("[FAIL] %s: Save As .xlsx with no edits: %s: %s\n       reproducer (0 edits): %s\n", name.c_str(),
+                    base.failure->category.c_str(), base.failure->message.c_str(), Display(repro).c_str());
+        fileJson += "\n      {\"round\": 0, \"seed\": 0, \"category\": " + JsonText("converted " + base.failure->category) +
+                    ", \"message\": " + JsonText(base.failure->message) + ", \"edits\": 0, \"reproducer\": " +
+                    JsonText(fw::WideToUtf8(fs::absolute(repro).generic_wstring())) + "}";
+        ++failures;
+      } else if (!base.saved.empty()) {
+        const fs::path c = out / "saved" / (SafeName(file) + ".converted.xlsx");
+        WriteBytes(c, base.saved);
+        convertedPath = fw::WideToUtf8(fs::absolute(c).generic_wstring());
+      }
+    }
+    for (uint32_t round = 0; round < rounds && !unread; ++round) {
       const uint64_t seed = RoundSeed(baseSeed, fw::WideToUtf8(file.filename().wstring()), round);
       Round r = RunRound(file, seed, edits, nullptr, out / "current-edits.txt", only);
       done += r.done, refused += r.refused;
@@ -2273,13 +2305,15 @@ int RunSheetTorture(const Options& options, const std::vector<std::filesystem::p
           if (auto book = sh::xlsx::Read(std::move(pkg), st)) targetName = OpenSheetTarget(std::move(book), st)->Name();
       }
       if (!r.saved.empty() && savedPath.empty()) {
-        const fs::path saved = out / "saved" / (SafeName(file) + file.extension().string());
+        const fs::path saved = out / "saved" / (SafeName(file) + (converted ? std::string(".xlsx") : file.extension().string()));
         WriteBytes(saved, r.saved);
         // Its edits, so that what the validator or Excel finds in it can be replayed.
         WriteEdits(out / "saved" / (SafeName(file) + ".edits.txt"), file, seed, round,
                    r.failure ? r.failure->category + ": " + r.failure->message : "none", r.applied);
         savedPath = fw::WideToUtf8(fs::absolute(saved).generic_wstring());
-        pairs << fw::WideToUtf8(fs::absolute(file).generic_wstring()) << "\t" << savedPath << "\n";
+        // original (a converted one: its Save As with no edits), saved copy: for the validator.
+        if (!converted || !convertedPath.empty())
+          pairs << (converted ? convertedPath : fw::WideToUtf8(fs::absolute(file).generic_wstring())) << "\t" << savedPath << "\n";
       }
       if (!r.failure) continue;
       std::vector<Edit> kept = Minimize(file, seed, r.applied, r.failure->category);
@@ -2310,7 +2344,8 @@ int RunSheetTorture(const Options& options, const std::vector<std::filesystem::p
                 std::to_string(refused) + ", \"unsavedRounds\": " + std::to_string(unsavedRounds) +
                 ", \"unsaved\": " + (unsaved.empty() ? "null" : JsonText(unsaved)) +
                 ", \"skipped\": " + (unread ? JsonText(note) : "null") +
-                ", \"saved\": " + (savedPath.empty() ? "null" : JsonText(savedPath)) + "}";
+                ", \"saved\": " + (savedPath.empty() ? "null" : JsonText(savedPath)) +
+                ", \"converted\": " + (convertedPath.empty() ? "null" : JsonText(convertedPath)) + "}";
     json += fileJson + (fi + 1 < files.size() ? "," : "");
   }
   json += "\n  ]\n}\n";
