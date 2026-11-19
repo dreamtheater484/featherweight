@@ -144,7 +144,7 @@ void Esc(std::string& o, std::string_view s) {
       case '"': o += "&quot;"; break;
       case '\t': o += "&#9;"; break;
       case '\n': o += "&#10;"; break;
-      case '\r': o += "&#13;"; break;  // shared strings aren't read as ST_Xstring: a character reference keeps it
+      case '\r': o += "_x000D_"; break;  // as Excel writes it; the reader decodes ST_Xstring
       case '_':
         if (i + 6 < s.size() && s[i + 1] == 'x' && s[i + 6] == '_' &&
             std::all_of(s.begin() + i + 2, s.begin() + i + 6, [](char h) { return std::isxdigit(static_cast<unsigned char>(h)); }))
@@ -1728,6 +1728,151 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
         dxfs_.push_back(std::move(dxf));
         break;
       }
+      case 0x0879: {  // CONDFMT12: the ranges of the CF12 records that follow
+        b.Skip(12);     // FrtRefHeaderU
+        const uint16_t count = b.U16();
+        b.Skip(2 + 8);
+        flushCond();
+        condRange = readSqref(b, condRow, condCol);
+        condLeft = condRange.empty() ? 0 : count;
+        break;
+      }
+      case 0x087A: {  // CF12: color scales, data bars and icon sets (other kinds come as CF records too)
+        if (condLeft <= 0) break;
+        --condLeft;
+        b.Skip(12);  // FrtRefHeader
+        const uint8_t ct = b.U8(), cp = b.U8();
+        const uint16_t cce1 = b.U16(), cce2 = b.U16();
+        const uint32_t cbDxf = b.U32();  // DXFN12: a DXFN and its XFExtNoFRT, or 2 reserved bytes
+        Bytes dxfBytes(cbDxf ? b.Take(cbDxf) : std::span<const uint8_t>());
+        if (!cbDxf) b.Skip(2);
+        const auto rgce1 = b.Take(cce1), rgce2 = b.Take(cce2);
+        b.Skip(b.U16());  // fmlaActive
+        b.Skip(1 + 2 + 2);  // flags, ipriority, icfTemplate
+        b.U8();      // cbTemplateParm
+        b.Skip(16);  // rgbTemplateParms, always 16 bytes
+        if (!b.Ok()) break;
+        if (ct == 1 || ct == 2 || ct == 5) {
+          // A cell value or formula rule (the newer kinds, above average, text, dates, duplicates,
+          // come as ct 2 with the formula they stand for), or top/bottom N (CFFilter).
+          std::string dxf = cbDxf ? DxfXml(dxfBytes) : std::string("<dxf/>");
+          if (dxf.empty()) dxf = "<dxf/>";
+          std::string rule = "<cfRule";
+          if (ct == 5) {
+            // CFFilter as Excel writes it: cbFilter, a byte, then fTop and fPercent, and the rank.
+            const uint16_t cbFilter = b.U16();
+            if (cbFilter) b.U8();
+            const uint8_t flags = cbFilter ? b.U8() : 1;
+            const uint16_t rank = cbFilter ? b.U16() : 10;
+            if (!b.Ok() || rank == 0) break;
+            rule += " type=\"top10\" dxfId=\"" + std::to_string(dxfs_.size()) + "\" priority=\"" + std::to_string(++priority) +
+                    "\"" + ((flags & 2) ? " percent=\"1\"" : "") + ((flags & 1) ? "" : " bottom=\"1\"") + " rank=\"" +
+                    std::to_string(rank) + "\"/>";
+          } else {
+            static const char* const kOps[] = {"", "between", "notBetween", "equal", "notEqual", "greaterThan", "lessThan",
+                                               "greaterThanOrEqual", "lessThanOrEqual"};
+            std::string f1, f2;
+            if ((ct == 1 && (cp < 1 || cp > 8)) || !detail::Decompile(ctx_, rgce1, {}, condRow, condCol, f1)) break;
+            if (cce2 && !detail::Decompile(ctx_, rgce2, {}, condRow, condCol, f2)) break;
+            rule += " type=\"" + std::string(ct == 1 ? "cellIs" : "expression") + "\" dxfId=\"" + std::to_string(dxfs_.size()) +
+                    "\" priority=\"" + std::to_string(++priority) + "\"" +
+                    (ct == 1 ? std::string(" operator=\"") + kOps[cp] + "\"" : std::string()) + "><formula>" + Esc(f1) +
+                    "</formula>" + (ct == 1 && (cp == 1 || cp == 2) && !f2.empty() ? "<formula>" + Esc(f2) + "</formula>" : "") +
+                    "</cfRule>";
+          }
+          dxfs_.push_back(std::move(dxf));
+          condRules += rule;
+          break;
+        }
+        if (ct != 3 && ct != 4 && ct != 6) break;
+        b.Skip(3);  // unused, reserved
+        // A CFVO: its type, a formula, and a number when there's neither formula nor min/max.
+        auto cfvo = [&](std::string& out) {
+          static const char* const kTypes[] = {"", "num", "min", "max", "percent", "percentile", "", "formula"};
+          const uint8_t type = b.U8();
+          const uint16_t cce = b.U16();
+          const auto rgce = b.Take(cce);
+          if (type == 0 || type == 6 || type > 7) return false;
+          out = std::string("<cfvo type=\"") + kTypes[type] + "\"";
+          if (cce) {
+            std::string f;
+            if (!detail::Decompile(ctx_, rgce, {}, condRow, condCol, f)) return false;
+            out += " val=\"" + Esc(f) + "\"";
+          } else if (type != 2 && type != 3) {
+            const double v = b.F64();
+            if (!std::isfinite(v)) return false;
+            out += " val=\"";
+            AppendNumber(out, v);
+            out += "\"";
+          }
+          out += "/>";
+          return b.Ok();
+        };
+        // A CFColor: kind, value, tint.
+        auto cfColor = [&]() {
+          const uint32_t kind = b.U32(), value = b.U32();
+          const double tint = b.F64();
+          ExtColor c;
+          if (kind == 2) c.kind = ExtColor::Rgb, c.value = (value & 0xFF) << 16 | (value & 0xFF00) | (value >> 16 & 0xFF);
+          if (kind == 3) c.kind = ExtColor::Theme, c.value = value, c.tint = std::isfinite(tint) ? tint : 0;
+          std::string a = palette_.Attrs(kind == 1 ? value : 0x7FFF, &c);
+          return "<color" + (a.empty() ? std::string(" rgb=\"FF000000\"") : a) + "/>";
+        };
+        std::string rule;
+        if (ct == 3) {  // CFGradient
+          const uint8_t interp = b.U8(), curves = b.U8();
+          b.U8();
+          if (interp < 2 || interp > 3 || curves != interp) break;
+          std::string v, colors;
+          bool ok = true;
+          for (uint8_t i = 0; i < interp && ok; ++i) {
+            std::string one;
+            ok = cfvo(one);
+            b.Skip(8);  // numDomain
+            v += one;
+          }
+          for (uint8_t i = 0; i < curves && ok; ++i) {
+            b.Skip(8);  // numGrange
+            colors += cfColor();
+          }
+          if (!ok || !b.Ok()) break;
+          rule = "<cfRule type=\"colorScale\" priority=\"" + std::to_string(++priority) + "\"><colorScale>" + v + colors +
+                 "</colorScale></cfRule>";
+        } else if (ct == 4) {  // CFDatabar
+          const uint8_t flags = b.U8(), minLength = b.U8(), maxLength = b.U8();
+          const std::string color = cfColor();
+          std::string lo, hi;
+          if (!cfvo(lo) || !cfvo(hi) || !b.Ok()) break;
+          rule = "<cfRule type=\"dataBar\" priority=\"" + std::to_string(++priority) + "\"><dataBar";
+          if (flags & 2) rule += " showValue=\"0\"";  // Excel writes 0 for values shown
+          if (minLength != 10 && minLength <= 100) rule += " minLength=\"" + std::to_string(minLength) + "\"";
+          if (maxLength != 90 && maxLength <= 100) rule += " maxLength=\"" + std::to_string(maxLength) + "\"";
+          rule += ">" + lo + hi + color + "</dataBar></cfRule>";
+        } else {  // CFMultistate
+          static const char* const kSets[] = {"3Arrows", "3ArrowsGray", "3Flags", "3TrafficLights1", "3TrafficLights2",
+                                              "3Signs", "3Symbols", "3Symbols2", "4Arrows", "4ArrowsGray", "4RedToBlack",
+                                              "4Rating", "4TrafficLights", "5Arrows", "5ArrowsGray", "5Rating", "5Quarters"};
+          const uint8_t states = b.U8(), set = b.U8(), flags = b.U8();
+          if (set > 16 || states < 3 || states > 5 || states != kSets[set][0] - '0') break;
+          std::string v;
+          bool ok = true;
+          for (uint8_t i = 0; i < states && ok; ++i) {
+            std::string one;
+            ok = cfvo(one);
+            const uint8_t equal = b.U8();
+            b.Skip(4);
+            if (ok && !equal) one.insert(one.size() - 2, " gte=\"0\"");
+            v += one;
+          }
+          if (!ok || !b.Ok()) break;
+          rule = "<cfRule type=\"iconSet\" priority=\"" + std::to_string(++priority) + "\"><iconSet iconSet=\"" + kSets[set] + "\"";
+          if (flags & 1) rule += " showValue=\"0\"";
+          if (flags & 4) rule += " reverse=\"1\"";
+          rule += ">" + v + "</iconSet></cfRule>";
+        }
+        condRules += rule;
+        break;
+      }
       case 0x01BE: {  // DV: a validation
         const uint32_t flags = b.U32();
         std::string text[4];  // prompt title, error title, prompt, error
@@ -2176,13 +2321,43 @@ std::string Converter::DxfXml(Bytes& b) {
   const uint32_t f1 = b.U32();
   const uint16_t f2 = b.U16();
   if (!b.Ok()) return {};
-  std::string font, border, fill;
-  if (f1 & (1u << 25)) {  // number format
+  std::string font, border, fill, numFmt;
+  if (f1 & (1u << 25)) {  // number format: a code of its own (DXFNumUsr) or a format's index (DXFNumIfmt)
+    std::string code;
+    int id = -1;
     if (f2 & 1) {
       const uint16_t cb = b.U16();
-      b.Skip(cb >= 2 ? cb - 2 : 0);
+      Bytes s(b.Take(cb >= 2 ? cb - 2 : 0));
+      if (!detail::ReadString(s, code)) code.clear();
     } else {
-      b.Skip(2);
+      b.U8();
+      id = b.U8();
+      // The built-in codes that don't depend on the locale ([MS-XLS] 2.4.126); the others come from
+      // the file's FORMAT records.
+      static const std::pair<int, const char*> kBuiltin[] = {
+          {0, "General"}, {1, "0"}, {2, "0.00"}, {3, "#,##0"}, {4, "#,##0.00"}, {9, "0%"}, {10, "0.00%"},
+          {11, "0.00E+00"}, {12, "# ?/?"}, {13, "# ??/??"}, {14, "mm-dd-yy"}, {15, "d-mmm-yy"}, {16, "d-mmm"},
+          {17, "mmm-yy"}, {18, "h:mm AM/PM"}, {19, "h:mm:ss AM/PM"}, {20, "h:mm"}, {21, "h:mm:ss"},
+          {22, "m/d/yy h:mm"}, {37, "#,##0 ;(#,##0)"}, {38, "#,##0 ;[Red](#,##0)"}, {39, "#,##0.00;(#,##0.00)"},
+          {40, "#,##0.00;[Red](#,##0.00)"}, {45, "mm:ss"}, {46, "[h]:mm:ss"}, {47, "mmss.0"}, {48, "##0.0E+0"}, {49, "@"}};
+      for (const auto& [n, c] : formats_)
+        if (n == id) code = c;
+      for (const auto& [n, c] : kBuiltin)
+        if (n == id && code.empty()) code = c;
+    }
+    if (!code.empty()) {
+      if (id < 0) {
+        // A code of its own: the FORMAT record's id when the file has the same code, else an id
+        // past every format's.
+        for (const auto& [n, c] : formats_)
+          if (c == code) id = n;
+        if (id < 0) {
+          int next = 164;
+          for (const auto& [n, c] : formats_) next = std::max(next, n + 1);
+          id = next + static_cast<int>(dxfs_.size());
+        }
+      }
+      numFmt = "<numFmt numFmtId=\"" + std::to_string(id) + "\" formatCode=\"" + Esc(code) + "\"/>";
     }
   }
   if (f1 & (1u << 26)) {  // DXFFntD: 118 bytes
@@ -2241,7 +2416,7 @@ std::string Converter::DxfXml(Bytes& b) {
     if (!pf.empty() || !inner.empty()) fill = "<fill><patternFill" + pf + (inner.empty() ? "/>" : ">" + inner + "</patternFill>") + "</fill>";
   }
   if (f1 & (1u << 30)) b.Skip(2);  // protection
-  return "<dxf>" + (font.empty() ? std::string() : "<font>" + font + "</font>") + fill +
+  return "<dxf>" + (font.empty() ? std::string() : "<font>" + font + "</font>") + numFmt + fill +
          (border.empty() ? std::string() : "<border>" + border + "</border>") + "</dxf>";
 }
 

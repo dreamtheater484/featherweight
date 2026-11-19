@@ -651,6 +651,7 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   o.errors = ps.errors;
   o.blackAndWhite = ps.blackAndWhite;
   o.rules = info_.rules;
+  o.pivots = info_.pivots;
   o.sparklines = info_.sparklines;
 
   // Text wraps and shows "####" in the printed columns: wider than the screen's by the digit.

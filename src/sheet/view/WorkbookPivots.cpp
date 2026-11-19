@@ -3,6 +3,7 @@
 // is one undo step.
 #include <algorithm>
 #include <cstdio>
+#include <cwchar>
 #include <string_view>
 #include <vector>
 
@@ -25,6 +26,7 @@ namespace {
 enum Role : int { kNone, kRows, kColumns, kFilters, kSum, kCount, kAverage };
 constexpr const wchar_t* kRoles[] = {L"—", L"Rows", L"Columns", L"Filters", L"Sum", L"Count", L"Average"};
 constexpr size_t kMaxFields = 14;  // the panel's list; a wider source keeps its first ones
+constexpr const wchar_t* kNewSheet = L"New worksheet";  // the place: a new sheet, as Excel's default
 
 std::wstring Trim(std::wstring s) {
   while (!s.empty() && (s.back() == L' ' || s.back() == L'=')) s.pop_back();
@@ -79,7 +81,7 @@ class WorkbookView::PivotPanel : public PanelContent {
   }
 
   // The source: the table at the active cell, else the selection or the region around the cell;
-  // the place: two columns right of it, at its first row.
+  // the place: a new worksheet, as in Excel, or (listed) two columns right of it, at its first row.
   void Open() {
     const int t = v_.TableIndexAt(v_.active_);
     Range r = v_.DataRange();
@@ -90,7 +92,8 @@ class WorkbookView::PivotPanel : public PanelContent {
     } else {
       source_.SetText(Utf8ToWide(RangeName(r)));
     }
-    place_.SetText(Utf8ToWide(CellName(r.firstRow, std::min<uint32_t>(kMaxCols - 1, r.lastCol + 2))));
+    place_.items = {kNewSheet, Utf8ToWide(CellName(r.firstRow, std::min<uint32_t>(kMaxCols - 1, r.lastCol + 2)))};
+    place_.SetText(kNewSheet);
     ReadFields();
   }
 
@@ -140,11 +143,14 @@ class WorkbookView::PivotPanel : public PanelContent {
       return;
     }
     p.source = r;
-    if (!ParsePlace(*v_.book_, v_.sheet_, place_.Text(), p.sheet, at)) {
-      v_.host_.ViewMessage(BannerKind::Warning, L"Type the cell for the PivotTable, such as H1 or Sheet2!A3.");
-      return;
+    const bool newSheet = _wcsicmp(Trim(place_.Text()).c_str(), kNewSheet) == 0;
+    if (!newSheet) {
+      if (!ParsePlace(*v_.book_, v_.sheet_, place_.Text(), p.sheet, at)) {
+        v_.host_.ViewMessage(BannerKind::Warning, L"Type the cell for the PivotTable, such as H1 or Sheet2!A3, or choose New worksheet.");
+        return;
+      }
+      p.at = {at.firstRow, at.firstCol};
     }
-    p.at = {at.firstRow, at.firstCol};
     for (size_t i = 0; i < names_.size(); ++i) {
       const uint32_t c = static_cast<uint32_t>(i);
       switch (roles_[i].selected) {
@@ -157,7 +163,23 @@ class WorkbookView::PivotPanel : public PanelContent {
         default: break;
       }
     }
-    if (v_.EditRefused(v_.Ed().InsertPivot(p))) return;
+    if (!newSheet) {
+      if (v_.EditRefused(v_.Ed().InsertPivot(p))) return;
+    } else {
+      // A new sheet before the active one, as Excel adds it, with the pivot at A3 (its filters
+      // above it, from A1): one undo step with the pivot.
+      const int sheet = static_cast<int>(v_.sheet_);
+      {
+        edit::EditGroup group(v_.Ed(), u"PivotTable");
+        if (v_.EditRefused(v_.Ed().AddSheet(sheet))) return;
+        if (p.sourceSheet >= sheet) ++p.sourceSheet;
+        p.sheet = sheet;
+        p.at = p.filters.empty() ? CellAddr{2, 0} : CellAddr{0, 0};
+        if (v_.EditRefused(v_.Ed().InsertPivot(p))) return;
+        group.done = true;
+      }
+      v_.ShowSheet(static_cast<size_t>(sheet));
+    }
     v_.host_.ViewShowPanel(nullptr);
     v_.host_.ViewFocusPage();
   }

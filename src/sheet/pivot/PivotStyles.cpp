@@ -197,8 +197,8 @@ TableCellFormat LookFormat(const Look& l, uint32_t row, uint32_t col) {
         case kColStripe2:
           if (l.colStripes && column >= 0 && (column % 2 == 0) == (e == kColStripe1)) add(e, colBand);
           break;
-        case kFirstColumn:
-          if (l.rowHeaders && l.firstDataCol && line >= 0) add(e, {dataTop, left, loc.lastRow, dataLeft - 1});
+        case kFirstColumn:  // the row labels' columns, the header row's cells too (Light9's line)
+          if (l.rowHeaders && l.firstDataCol) add(e, {top, left, loc.lastRow, dataLeft - 1});
           break;
         case kHeaderRow:
           if (l.colHeaders && l.firstDataRow) add(e, {top, left, dataTop - 1, loc.lastCol});
@@ -219,7 +219,7 @@ TableCellFormat LookFormat(const Look& l, uint32_t row, uint32_t col) {
             if ((rowKind & Look::kSubtotal) && rowKind != Look::kGrand && (rowKind & 3) == e - kSubtotalRow1) add(e, rowBand);
           } else if (e >= kRowSubheading1 && e < kRowSubheading1 + 3) {
             const uint32_t level = e - kRowSubheading1;
-            if ((rowKind & Look::kHeading) && (rowKind & 3) == level) add(e, rowBand);
+            if ((rowKind & Look::kHeading) && static_cast<uint32_t>(rowKind & 3) == level) add(e, rowBand);
             // A tabular or outline outer field's column, down its items' lines (not their totals).
             const size_t n = l.levelCol.size();
             if (line >= 0 && !(rowKind & (Look::kSubtotal | Look::kGrand)) && n > 1)
@@ -234,21 +234,22 @@ TableCellFormat LookFormat(const Look& l, uint32_t row, uint32_t col) {
           break;
       }
     }
-  } else {
-    for (uint8_t e : {uint8_t(kPageLabels), uint8_t(kPageValues)}) (void)e;
   }
   bool fill = false, font = false, bold = false, italic = false;
   const BorderSide* sides[4] = {};
   for (int i = count - 1; i >= 0; --i) {
     const TableStyleElement& e = (*style)[hits[i].element];
     const Range& a = hits[i].area;
-    if (!fill && (e.fill.pattern != PatternType::None || e.fill.gradient)) f.fill = e.fill, fill = true;
+    // The whole table's lines don't show under another element's fill (Medium15's header and
+    // grand total rows, as Excel draws them).
+    const bool wholeHidden = hits[i].element == kWhole && fill;
+    if (!fill &&(e.fill.pattern != PatternType::None || e.fill.gradient)) f.fill = e.fill, fill = true;
     if (!font && e.fontColor.IsSet()) f.fontColor = e.fontColor, font = true;
     if (!bold && e.bold) f.bold = *e.bold, bold = true;
     if (!italic && e.italic) f.italic = *e.italic, italic = true;
     const BorderSide* mine[4] = {a.firstCol == col ? &e.left : &e.vertical, a.firstRow == row ? &e.top : &e.horizontal,
                                  a.lastRow == row ? &e.bottom : &e.horizontal, a.lastCol == col ? &e.right : &e.vertical};
-    for (int s = 0; s < 4; ++s)
+    for (int s = 0; s < 4 && !wholeHidden; ++s)
       if (!sides[s] && mine[s]->style != BorderStyle::None) sides[s] = mine[s];
   }
   if (sides[0]) f.left = *sides[0];
