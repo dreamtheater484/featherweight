@@ -725,6 +725,13 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = SetPageBreaks(sheet, lists[0], lists[1]);
         break;
       }
+      case JournalOp::RefreshPivots: {
+        const uint32_t which = f.U32();
+        const int sheet = f.Int();
+        const CellAddr cell = f.A();
+        if (f.Ok() && which <= 2) r = RefreshPivots(static_cast<PivotRefresh>(which), sheet, cell);
+        break;
+      }
       case JournalOp::FreezePanes: {
         const int sheet = f.Int();
         const uint32_t rows = f.U32(), cols = f.U32();

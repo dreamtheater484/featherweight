@@ -402,6 +402,16 @@ class Editor {
   // its new page.
   Result SetPageBreaks(int sheet, const std::vector<PageBreak>& rows, const std::vector<PageBreak>& cols);
 
+  // ---- Pivot tables (S4 s4-pivot; sheet/pivot/Pivot.h). Refresh (journal 110): the caches read
+  // again from their source cells and every pivot table on them laid out again, as Excel does it:
+  // the cells (the old ones cleared), the cache, its records and the table's part. `which`: the
+  // pivot at `cell` of `sheet` (Refresh), every pivot (Refresh All), or the caches whose file asks
+  // for it (refreshOnLoad, after opening). Refused, nothing changed, for a pivot with features
+  // Featherweight keeps but doesn't refresh, a source it can't use, a pivot that would cover other
+  // cells, or a protected sheet.
+  enum class PivotRefresh : uint8_t { AtCell, All, OnLoad };
+  Result RefreshPivots(PivotRefresh which, int sheet = -1, CellAddr cell = {});
+
   // ---- View state: saved with the file, but not undo steps (as in Excel).
   void SetActiveSheet(int sheet);
   void SetSelection(int sheet, CellAddr active, const std::vector<Range>& ranges);

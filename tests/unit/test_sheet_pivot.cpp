@@ -5,10 +5,13 @@
 #include <cstdio>
 #include <filesystem>
 #include <map>
+#include <cstdlib>
+#include <fstream>
 #include <set>
 
 #include "SheetTestUtil.h"
 #include "pkg/Package.h"
+#include "sheet/edit/Edit.h"
 #include "sheet/pivot/Pivot.h"
 
 using namespace fw::sheet;
@@ -179,4 +182,73 @@ TEST(Pivot_CorpusRefresh) {
   auto same = sheet_test::OpenZip(bytes);
   if (!book || !same) return;
   CHECK_EQ(CheckBook(*book, *same, true), 0);
+}
+
+namespace {
+
+std::vector<uint8_t> SavePivotBook(Workbook& book, fw::sheet::edit::Editor& ed) {
+  ed.BeginSave();
+  xlsx::SavePlan plan;
+  fw::pkg::Status st = xlsx::PrepareSave(book, ed, plan);
+  CHECK(st.Ok());
+  fw::pkg::MemorySink sink;
+  if (st.Ok()) st = xlsx::WriteSave(book, plan, sink);
+  CHECK(st.Ok());
+  if (st.Ok()) xlsx::CommitSave(book, ed, plan);
+  else ed.EndSave();
+  char* keep = nullptr;
+  size_t len = 0;
+  if (_dupenv_s(&keep, &len, "FW_KEEP_PIVOTS") == 0 && keep) {  // for Excel's open check
+    std::ofstream out(std::string(keep) + "/pivots-featherweight.xlsx", std::ios::binary);
+    out.write(reinterpret_cast<const char*>(sink.bytes.data()), static_cast<std::streamsize>(sink.bytes.size()));
+  }
+  std::free(keep);
+  return sink.bytes;
+}
+
+}  // namespace
+
+// Refresh All through the editor: the cells Excel shows, one undo step that brings the stale ones
+// back, and a saved file whose parts lay out to the same cells again.
+TEST(Pivot_EditorRefreshUndoSave) {
+  auto book = sheet_test::OpenZip(sheet_test::TestFile("office/sheet/pivots/pivots-stale.xlsx"));
+  auto stale = sheet_test::OpenZip(sheet_test::TestFile("office/sheet/pivots/pivots-stale.xlsx"));
+  auto refreshed = sheet_test::OpenZip(sheet_test::TestFile("office/sheet/pivots/pivots-refreshed.xlsx"));
+  if (!book || !stale || !refreshed) return;
+  fw::sheet::edit::Editor ed(*book);
+  auto r = ed.RefreshPivots(fw::sheet::edit::Editor::PivotRefresh::All);
+  CHECK(r.ok);
+  if (!r.ok) return;
+  CHECK(ed.UndoName() == u"Refresh All");
+  // Every refreshed pivot's sheet shows Excel's cells.
+  auto sameCells = [](const Workbook& a, const Workbook& b) {
+    int bad = 0;
+    for (size_t i = 0; i < b.SheetCount(); ++i) {
+      const Sheet& want = b.GetSheet(i);
+      const int k = a.FindSheet(want.Name());
+      if (k < 0) return -1;
+      const Sheet& got = a.GetSheet(static_cast<size_t>(k));
+      for (uint32_t row = 0; row < 60; ++row)
+        for (uint32_t col = 0; col < 12; ++col) {
+          Value x = got.GetValue(row, col), y = want.GetValue(row, col);
+          bool same = x.type == y.type && (x.type != ValueType::String || x.text == y.text) &&
+                      (x.type != ValueType::Number || std::fabs(x.number - y.number) <= 1e-12 * std::max(1.0, std::fabs(y.number)));
+          if (!same && ++bad <= 8) std::printf("  %s!%s differs\n", want.Name().c_str(), CellName(row, col).c_str());
+        }
+    }
+    return bad;
+  };
+  CHECK_EQ(sameCells(*book, *refreshed), 0);
+  CHECK(ed.Undo().ok);
+  CHECK_EQ(sameCells(*book, *stale), 0);
+  CHECK(ed.Redo().ok);
+  CHECK_EQ(sameCells(*book, *refreshed), 0);
+  // Saved and opened again: the parts lay out to what the cells show.
+  std::vector<uint8_t> bytes = SavePivotBook(*book, ed);
+  auto again = sheet_test::OpenZip(bytes);
+  CHECK(again != nullptr);
+  if (!again) return;
+  CHECK_EQ(sameCells(*again, *refreshed), 0);
+  auto copy = sheet_test::OpenZip(bytes);
+  CHECK_EQ(CheckBook(*again, *copy, false), 0);
 }

@@ -20,6 +20,7 @@
 #include "sheet/calc/Typing.h"
 #include "sheet/edit/Charts.h"
 #include "sheet/edit/Drawing.h"
+#include "sheet/edit/PivotEdit.h"
 #include "sheet/edit/Journal.h"
 #include "sheet/edit/Notes.h"
 #include "sheet/edit/PageSetupXml.h"
@@ -6526,5 +6527,18 @@ bool Editor::StylesDirty() const {
 }
 
 bool Editor::StringsDirty() const { return book_.Strings().Size() != s_->stringsAtSave; }
+
+// ---- Pivot tables (S4 s4-pivot): the work is in Pivots.cpp.
+Result Editor::RefreshPivots(PivotRefresh which, int sheet, CellAddr cell) {
+  Guard guard(*this);
+  for (size_t i = 0; i < book_.SheetCount(); ++i)
+    if (Result no = guard.Check(static_cast<int>(i), ProtectAct::Never); !no && (which != PivotRefresh::AtCell || static_cast<int>(i) == sheet))
+      return no;
+  Rec rec(*this, JournalOp::RefreshPivots, [&](JournalRecord& w) { w.U(static_cast<uint8_t>(which)).I(sheet).A(cell); });
+  return rec.Done([&]() -> Result {
+    if (Saving()) return Result::Fail(u"The workbook is being saved. Try again in a moment.");
+    return RefreshPivotsIn(*this, book_, which, sheet, cell);
+  }());
+}
 
 }  // namespace fw::sheet::edit
