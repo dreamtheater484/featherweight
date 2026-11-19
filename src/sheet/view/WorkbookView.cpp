@@ -16,6 +16,7 @@
 #include "sheet/view/WorkbookNames.h"
 #include "sheet/calc/Typing.h"
 #include "sheet/xlsx/Xlsx.h"
+#include "ui/Anim.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 
@@ -74,6 +75,24 @@ WorkbookView::WorkbookView(ViewHost& host, std::wstring path)
 
 WorkbookView::~WorkbookView() = default;
 
+void WorkbookView::CsvRest(double deadlineMs) {
+  if (!csvReader_) return;
+  const size_t rows = csvReader_->RowCount();
+  {
+    SheetBuilder builder(book_->GetSheet(0));
+    do {
+      const size_t end = std::min(rows, csvNext_ + 16384);
+      csvReader_->AddRows(*book_, builder, csvNext_, end);
+      csvNext_ = end;
+    } while (csvNext_ < rows && (deadlineMs <= 0 || anim::Now() < deadlineMs));
+  }
+  if (csvNext_ < rows) return;  // the screen shows the first rows already: nothing to paint yet
+  csvReader_.reset();
+  csvSnapshot_.reset();
+  totals_ = Totals{};  // the status bar's sums may cover rows read now
+  host_.ViewStateChanged();  // the scroll bars reach the last row
+}
+
 std::unique_ptr<WorkbookView> WorkbookView::NewWorkbook(ViewHost& host, int number) {
   auto view = std::make_unique<WorkbookView>(host, std::wstring());
   view->newBook_ = true;
@@ -123,13 +142,27 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     auto csvBook = std::make_unique<Workbook>();
     std::wstring sheetName = name.substr(0, name.rfind(L'.'));
     if (sheetName.size() > 31) sheetName.resize(31);
-    csv::Source source;
-    csv::Read(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), WideToUtf8(sheetName), o,
-              *csvBook, source);
+    // The first screen's rows now, the rest at idle (CsvRest).
+    auto reader = std::make_unique<csv::Reader>(
+        std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), o);
+    Sheet& sheet = csv::NewSheet(*csvBook, WideToUtf8(sheetName));
+    constexpr size_t kFirstRows = 2000;
+    const size_t first = std::min(reader->RowCount(), kFirstRows);
+    {
+      SheetBuilder builder(sheet);
+      reader->AddRows(*csvBook, builder, 0, first);
+    }
     // Saving reads the file again to write it its own way (WorkbookFile).
     if (!fromBytes_) file_->Opened(path_, snapshot->GetStamp());
     file_->SetCsvOptions(o);
-    snapshot.reset();  // the model has the values: the file's copy goes before the grid is built
+    if (first < reader->RowCount()) {
+      csvReader_ = std::move(reader);
+      csvSnapshot_ = std::move(snapshot);
+      csvNext_ = first;
+    } else {
+      reader.reset();
+      snapshot.reset();  // the model has the values: the file's copy goes before the grid is built
+    }
     return Opened(std::move(csvBook), error);
   }
   if (snapshot && pkg::CompoundFile::HasSignature(snapshot->Bytes())) {
