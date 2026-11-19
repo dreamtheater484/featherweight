@@ -14,14 +14,16 @@
 //
 // Errors are compared by id, part and description, not by path (the model may write namespace
 // prefixes differently, and an edit moves what follows it) and not by count: an error the original
-// has isn't new when an edit repeats it.
+// has isn't new when an edit repeats it. The part's number doesn't count either ("chart#.xml"): a
+// copied chart, or parts renumbered after a delete, keep their original's errors under a new name.
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 
 record Problem(string Id, string Part, string Path, string Description) {
-  public string Key => $"{Id} in {Part}: {Description}";
+  public string Key => $"{Id} in {Regex.Replace(Part, @"\d+(?=\.\w+$)", "#")}: {Description}";
 }
 
 static class Program {
