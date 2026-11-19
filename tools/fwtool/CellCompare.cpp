@@ -225,7 +225,7 @@ WorkbookResult CompareWorkbook(const std::filesystem::path& file, const JsonValu
   const JsonValue* sheets = cells.Find("sheets");
   if (!sheets) return result;
   // Widths as the grid has them (s1-grid's fwsheetrender), for what the column's width decides.
-  static fw::text::Fonts fonts;
+  static fw::text::Fonts fonts(sh::view::ExcelFontSubstitute);  // as the app's grid
   sh::view::FontMeasure measure(fonts);
   sh::view::CellText text(*book, fonts, measure, locale);
   std::unique_ptr<sh::calc::WorkbookCalc> calc;  // for conditional formats' expressions
