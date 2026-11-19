@@ -536,7 +536,12 @@ bool RefXml(const Workbook& book, const std::string& f, bool numbers, std::strin
 }  // namespace
 
 std::string NewChartXml(const Sheet& s, const Range& data, ChartKind kind, const std::string& title) {
-  const Plan plan = PlanSeries(s, data);
+  Plan plan = PlanSeries(s, data);
+  // A scatter's X values: the first series when there are no category labels (Excel's guess).
+  if (kind == ChartKind::Scatter && !plan.categories && plan.series.size() >= 2) {
+    plan.categories = plan.series.front().values;
+    plan.series.erase(plan.series.begin());
+  }
   return plan.series.empty() ? std::string() : ChartXml(s, plan, kind, title);
 }
 
