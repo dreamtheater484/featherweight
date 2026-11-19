@@ -20,6 +20,7 @@
 #include "sheet/edit/Drawing.h"
 #include "sheet/edit/Journal.h"
 #include "sheet/edit/Notes.h"
+#include "sheet/edit/PageSetupXml.h"
 #include "sheet/edit/Refs.h"
 #include "sheet/xlsx/Internal.h"
 #include "sheet/numfmt/NumFormat.h"
@@ -53,6 +54,8 @@ class Access {
   static std::vector<Table>& Tables(Sheet& s) { return s.tables_; }
   static std::optional<SheetFilter>& Filter(Sheet& s) { return s.filter_; }
   static std::vector<PageBreak>& Breaks(Sheet& s, bool rows) { return rows ? s.rowBreaks_ : s.colBreaks_; }
+  static PageSetup& Page(Sheet& s) { return s.page_; }
+  static HeaderFooter& HF(Sheet& s) { return s.headerFooter_; }
   static std::vector<detail::Kept>& Kept(Sheet& s) { return s.kept_; }
   static std::vector<std::pair<uint32_t, CellAddr>>& SharedMasters(Sheet& s) { return s.sharedMasters_; }
   static std::string& Name(Sheet& s) { return s.name_; }
@@ -93,6 +96,7 @@ enum SaveBit : uint32_t {
   kSaveBreaks = 1u << 12,   // row and column page breaks
   kSaveKept = 1u << 13,     // XML kept inside sheetData, and shared formulas' masters
   kSaveFormulas = 1u << 14, // every formula record (else `formulas` holds the ones changed in place)
+  kSavePage = 1u << 24,     // page setup and headers and footers (s3-print)
 };
 constexpr int kPieces = 7;  // SheetPiece bits
 
@@ -121,6 +125,8 @@ struct SheetSave {
   std::vector<Table> tables;
   std::optional<SheetFilter> filter;
   std::vector<PageBreak> rowBreaks, colBreaks;
+  PageSetup page;
+  HeaderFooter headerFooter;
   std::vector<detail::Kept> kept;
   std::vector<std::pair<uint32_t, CellAddr>> masters;
   std::vector<FormulaRec> allFormulas;
@@ -149,6 +155,10 @@ struct SheetSave {
     if (saved & kSaveKept) {
       std::swap(A::Kept(s), kept);
       std::swap(A::SharedMasters(s), masters);
+    }
+    if (saved & kSavePage) {
+      std::swap(A::Page(s), page);
+      std::swap(A::HF(s), headerFooter);
     }
     if (saved & kSaveCols) std::swap(A::Cols(s), cols);
     if (saved & kSaveMerges) {
@@ -224,6 +234,10 @@ struct SheetSave {
     if ((later.saved & kSaveKept) && !(saved & kSaveKept)) {
       kept = std::move(later.kept);
       masters = std::move(later.masters);
+    }
+    if ((later.saved & kSavePage) && !(saved & kSavePage)) {
+      page = std::move(later.page);
+      headerFooter = std::move(later.headerFooter);
     }
     saved |= later.saved;
     dirty |= later.dirty;
@@ -610,6 +624,10 @@ struct Editor::State {
   void SaveBreaks(SheetSave& sv) {
     if (!(sv.saved & kSaveBreaks)) sv.colBreaks = A::Breaks(*sv.sheet, false);
     SaveList(sv, kSaveBreaks, kPieceOther, sv.rowBreaks, A::Breaks(*sv.sheet, true));
+  }
+  void SavePage(SheetSave& sv) {
+    if (!(sv.saved & kSavePage)) sv.headerFooter = A::HF(*sv.sheet);
+    SaveList(sv, kSavePage, kPieceOther, sv.page, A::Page(*sv.sheet));
   }
   void SaveKept(SheetSave& sv) {
     if (!(sv.saved & kSaveKept)) sv.masters = A::SharedMasters(*sv.sheet);
@@ -5276,6 +5294,114 @@ Result Editor::SetNote(int sheet, CellAddr cell, const std::optional<Note>& note
         return failed;
       }
       st.Change(&s, kObjects, Range{cell.row, cell.col, cell.row, cell.col});
+      return Result{};
+    });
+  }());
+}
+
+// ---- Page setup
+
+Result Editor::SetPageSetup(int sheet, const PageSetup& page, const HeaderFooter& hf, bool fitToPage) {
+  Rec rec(*this, JournalOp::SetPageSetup, [&](JournalRecord& w) {
+    w.I(sheet).U(page.paperSize).S(page.paperWidth).S(page.paperHeight).U(page.scale).U(page.fitToWidth);
+    w.U(page.fitToHeight).I(page.firstPageNumber).B(page.useFirstPageNumber).U(static_cast<uint8_t>(page.orientation));
+    w.U(static_cast<uint8_t>(page.pageOrder)).B(page.blackAndWhite).B(page.draft).B(page.usePrinterDefaults);
+    w.U(static_cast<uint8_t>(page.cellComments)).U(static_cast<uint8_t>(page.errors)).U(page.horizontalDpi);
+    w.U(page.verticalDpi).U(page.copies).B(page.horizontalCentered).B(page.verticalCentered).B(page.headings);
+    w.B(page.gridLines).B(page.gridLinesSet);
+    const PageMargins& m = page.margins;
+    w.D(m.left).D(m.right).D(m.top).D(m.bottom).D(m.header).D(m.footer);
+    w.B(hf.differentOddEven).B(hf.differentFirst).B(hf.scaleWithDoc).B(hf.alignWithMargins).S(hf.oddHeader);
+    w.S(hf.oddFooter).S(hf.evenHeader).S(hf.evenFooter).S(hf.firstHeader).S(hf.firstFooter).B(fitToPage);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"A chart sheet's page setup can't be changed yet.");
+    // Excel's limits (its Page Setup refuses the rest).
+    if (page.scale < 10 || page.scale > 400) return Result::Fail(u"The scale must be between 10 and 400 percent.");
+    if (page.fitToWidth > 32767 || page.fitToHeight > 32767) return Result::Fail(u"Fit to: at most 32,767 pages.");
+    const PageMargins& m = page.margins;
+    for (double v : {m.left, m.right, m.top, m.bottom, m.header, m.footer})
+      if (!(v >= 0 && v < 49)) return Result::Fail(u"Margins must be between 0 and 49 inches.");
+    if (page.firstPageNumber < -32765 || page.firstPageNumber > 32767) return Result::Fail(u"The first page number is too large.");
+    for (const std::string* t : {&hf.oddHeader, &hf.oddFooter, &hf.evenHeader, &hf.evenFooter, &hf.firstHeader, &hf.firstFooter}) {
+      if (!XmlSafe(*t)) return Result::Fail(u"The header or footer holds characters a workbook can't store.");
+      if (Utf16Length(*t) > 255)
+        return Result::Fail(u"The text string you entered is too long. Reduce the number of characters used.");
+    }
+    for (const std::string* t : {&page.paperWidth, &page.paperHeight})
+      if (!XmlSafe(*t)) return Result::Fail(u"The paper size can't be stored.");
+    detail::PartText& t = A::Text(s);
+    const std::string p = xlsx::SheetPrefix(t);
+    const std::pair<const char*, std::string> parts[] = {
+        {"printOptions", pagexml::PrintOptions(page, xlsx::SheetElement(t, "printOptions"), p)},
+        {"pageMargins", pagexml::Margins(m, p)},
+        {"pageSetup", pagexml::Setup(page, xlsx::SheetElement(t, "pageSetup"), p)},
+        {"headerFooter", pagexml::HeadersFooters(hf, xlsx::SheetElement(t, "headerFooter"), p)},
+        {"sheetPr", pagexml::SheetPrFit(xlsx::SheetElement(t, "sheetPr"), fitToPage, p)}};
+    bool same = s.Props().fitToPage == fitToPage;
+    for (const auto& [local, xml] : parts) same = same && xml == xlsx::SheetElement(t, local);
+    if (same) return Result{};
+    return Run(*this, u"Page Setup", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SavePage(sv);
+      st.SaveText(sv);
+      st.SaveProps(sv);
+      A::Page(s) = page;
+      A::HF(s) = hf;
+      A::Props(s).fitToPage = fitToPage;
+      for (const auto& [local, xml] : parts) xlsx::PutSheetElement(A::Text(s), local, xml);
+      st.Change(&s, kSheetProps, Range{});
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::SetPageBreaks(int sheet, const std::vector<PageBreak>& rowsIn, const std::vector<PageBreak>& colsIn) {
+  Rec rec(*this, JournalOp::SetPageBreaks, [&](JournalRecord& w) {
+    w.I(sheet);
+    for (const auto* list : {&rowsIn, &colsIn}) {
+      w.U(list->size());
+      for (const PageBreak& b : *list) w.U(b.id).U(b.min).U(b.max).B(b.manual).B(b.pivot);
+    }
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (s.Kind() != SheetKind::Worksheet) return NoSheet();
+    // In order, one per row or column, and only where a page can start (not before the first).
+    std::vector<PageBreak> rows = rowsIn, cols = colsIn;
+    for (auto* list : {&rows, &cols}) {
+      const uint32_t limit = list == &rows ? kMaxRows : kMaxCols;
+      std::sort(list->begin(), list->end(), [](const PageBreak& a, const PageBreak& b) { return a.id < b.id; });
+      list->erase(std::unique(list->begin(), list->end(), [](const PageBreak& a, const PageBreak& b) { return a.id == b.id; }),
+                  list->end());
+      for (const PageBreak& b : *list)
+        if (b.id == 0 || b.id >= limit) return BadRange();
+      if (list->size() > 1026) return Result::Fail(u"A sheet can have at most 1,026 page breaks each way.");
+    }
+    const auto same = [](const std::vector<PageBreak>& a, const std::vector<PageBreak>& b) {
+      return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](const PageBreak& x, const PageBreak& y) {
+        return x.id == y.id && x.min == y.min && x.max == y.max && x.manual == y.manual && x.pivot == y.pivot;
+      });
+    };
+    if (same(rows, s.RowBreaks()) && same(cols, s.ColBreaks())) return Result{};
+    return Run(*this, u"Page Breaks", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveBreaks(sv);
+      st.SaveText(sv);
+      A::Breaks(s, true) = std::move(rows);
+      A::Breaks(s, false) = std::move(cols);
+      detail::PartText& t = A::Text(s);
+      const std::string p = xlsx::SheetPrefix(t);
+      xlsx::PutSheetElement(t, "rowBreaks", pagexml::Breaks(s.RowBreaks(), true, p));
+      xlsx::PutSheetElement(t, "colBreaks", pagexml::Breaks(s.ColBreaks(), false, p));
+      st.Change(&s, kSheetProps, Range{});
       return Result{};
     });
   }());

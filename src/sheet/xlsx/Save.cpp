@@ -827,6 +827,7 @@ std::set<std::string> Reachable(const pkg::Package& pkg, const std::set<std::str
 
 void PutSheetElement(PartText& t, std::string_view local, const std::string& xml) { PutElement(t, local, xml); }
 std::string SheetPrefix(const PartText& t) { return PrefixOf(t.rootStart); }
+std::string SheetElement(const PartText& t, std::string_view local) { return std::string(FindElement(t, local)); }
 
 namespace {
 // Excel's extensions for x14 conditional formats and validations.
