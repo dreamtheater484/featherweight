@@ -468,6 +468,30 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = InsertChart(sheet, c);
         break;
       }
+      case JournalOp::MoveObject: {
+        const int sheet = f.Int();
+        const uint32_t id = f.U32();
+        drawing::Place p;
+        for (drawing::Marker* m : {&p.from, &p.to}) {
+          m->col = f.U32();
+          m->row = f.U32();
+          m->colOff = f.I();
+          m->rowOff = f.I();
+        }
+        p.x = f.I();
+        p.y = f.I();
+        p.cx = f.I();
+        p.cy = f.I();
+        if (f.Ok()) r = MoveObject(sheet, id, p);
+        break;
+      }
+      case JournalOp::DeleteObjects: {
+        const int sheet = f.Int();
+        std::vector<uint32_t> ids(std::min<size_t>(f.U32(), f.Left()));
+        for (uint32_t& id : ids) id = f.U32();
+        if (f.Ok()) r = DeleteObjects(sheet, ids);
+        break;
+      }
       case JournalOp::SetFilter: {
         const int sheet = f.Int();
         const std::optional<SheetFilter> filter = f.Filter();
