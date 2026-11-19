@@ -450,6 +450,35 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = RemoveTable(sheet, static_cast<size_t>(index));
         break;
       }
+      case JournalOp::InsertPicture:
+      case JournalOp::InsertShape: {
+        const int sheet = f.Int();
+        const uint64_t shape = op == JournalOp::InsertShape ? f.U() : 0;
+        const std::string bytes = f.S();
+        drawing::Place p;
+        for (drawing::Marker* m : {&p.from, &p.to}) {
+          m->col = f.U32();
+          m->row = f.U32();
+          m->colOff = f.I();
+          m->rowOff = f.I();
+        }
+        p.x = f.I();
+        p.y = f.I();
+        p.cx = f.I();
+        p.cy = f.I();
+        if (!f.Ok() || shape > static_cast<uint64_t>(data::ShapeKind::TextBox)) return damaged;
+        r = op == JournalOp::InsertPicture ? InsertPicture(sheet, bytes, p, f.S())
+                                           : InsertShape(sheet, static_cast<data::ShapeKind>(shape), p, bytes);
+        break;
+      }
+      case JournalOp::SetObjectXml: {
+        const int sheet = f.Int();
+        const uint32_t id = f.U32();
+        const std::string xml = f.S();
+        const std::u16string name = f.S16();
+        if (f.Ok()) r = SetObjectXml(sheet, id, xml, name);
+        break;
+      }
       case JournalOp::SetTableFilter: {
         const int sheet = f.Int();
         const uint64_t index = f.U();
