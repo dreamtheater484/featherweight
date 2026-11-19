@@ -90,7 +90,8 @@ void PutSheetRules(detail::PartText& t, bool validations, const std::string& xml
 // Tables (TableWrite.cpp): a new table's part as Excel writes it; an existing part with the table's
 // name, size, rows, filter, columns and style set from `t`, the rest kept (false: not a table);
 // the sheet's tableParts with the relationship `relId` added or taken out.
-std::string TableXml(const Table& t);
+// `strict`: in Strict Open XML's namespace (a Strict workbook's new table).
+std::string TableXml(const Table& t, bool strict = false);
 // A table's filter as its part has it (false: none), and the part with its autoFilter element
 // replaced by `autoFilter` (Editor's FilterXml); an autoFilter element (a sheet's or a table's) read.
 bool ReadTableFilter(std::string_view tableXml, SheetFilter& f);

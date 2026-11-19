@@ -367,6 +367,37 @@ TEST(SheetTables_Filter) {
   CHECK(s.Tables()[0].criteria.empty() && !ed.SetTableFilter(0, 0, f));
 }
 
+// The sheet's tableParts in a Strict workbook (s3-corpus: a second xmlns:r made the sheet
+// unreadable): Strict's relationships prefix used, or bound in Strict's namespace; a prefix "r"
+// taken by something else leaves it alone.
+TEST(SheetTables_StrictPrefix) {
+  const std::string strictRoot =
+      "<worksheet xmlns=\"http://purl.oclc.org/ooxml/spreadsheetml/main\" "
+      "xmlns:r=\"http://purl.oclc.org/ooxml/officeDocument/relationships\">";
+  detail::PartText t;
+  t.rootStart = strictRoot;
+  xlsx::PutTablePart(t, "rId5", true);
+  CHECK(t.rootStart == strictRoot);
+  CHECK(t.afterData.find("<tableParts count=\"1\"><tablePart r:id=\"rId5\"/></tableParts>") != std::string::npos);
+  detail::PartText bare;
+  bare.rootStart = "<worksheet xmlns=\"http://purl.oclc.org/ooxml/spreadsheetml/main\">";
+  xlsx::PutTablePart(bare, "rId1", true);
+  CHECK(bare.rootStart == "<worksheet xmlns=\"http://purl.oclc.org/ooxml/spreadsheetml/main\" "
+                          "xmlns:r=\"http://purl.oclc.org/ooxml/officeDocument/relationships\">");
+  detail::PartText other;
+  other.rootStart = "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"urn:else\">";
+  xlsx::PutTablePart(other, "rId2", true);
+  CHECK(other.rootStart.find(" xmlns:r1=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">") != std::string::npos);
+  CHECK(other.afterData.find("<tablePart r1:id=\"rId2\"/>") != std::string::npos);
+  Table table;
+  table.id = 1;
+  table.name = "T";
+  table.ref = Range{0, 0, 1, 0};
+  table.columns = {TableColumn{1, "A"}};
+  CHECK(xlsx::TableXml(table, true).find("<table xmlns=\"http://purl.oclc.org/ooxml/spreadsheetml/main\"") != std::string::npos);
+  CHECK(xlsx::TableXml(table).find("<table xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"") != std::string::npos);
+}
+
 // A table part with a prefix keeps it on the filter's elements.
 TEST(SheetTables_FilterPrefix) {
   std::string xml =
