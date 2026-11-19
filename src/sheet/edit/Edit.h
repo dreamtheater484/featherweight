@@ -314,6 +314,16 @@ class Editor {
   // The thread on `cell`, if it has one.
   std::optional<Thread> ThreadAt(int sheet, CellAddr cell) const;
 
+  // ---- Page setup (Page Setup, print preview's settings; S3 s3-print). The worksheet's page setup,
+  // headers and footers, and Fit to (`fitToPage`: scaled by fitToWidth and fitToHeight, else by
+  // `scale`), written as Excel writes them (sheet/edit/PageSetupXml.h). The print area and titles are
+  // names (_xlnm.Print_Area, _xlnm.Print_Titles: SetName). Allowed on a protected sheet, as in Excel.
+  Result SetPageSetup(int sheet, const PageSetup& page, const HeaderFooter& headerFooter, bool fitToPage);
+  // The worksheet's page breaks (Insert Page Break, Remove Page Break, Reset All Page Breaks, or
+  // dragged in Page Break Preview), rows and columns: each break's id is the first row or column on
+  // its new page.
+  Result SetPageBreaks(int sheet, const std::vector<PageBreak>& rows, const std::vector<PageBreak>& cols);
+
   // ---- View state: saved with the file, but not undo steps (as in Excel).
   void SetActiveSheet(int sheet);
   void SetSelection(int sheet, CellAddr active, const std::vector<Range>& ranges);
