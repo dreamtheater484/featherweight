@@ -2404,6 +2404,28 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
     const std::string name = s.Name();
     pkg::Package* package = book_.GetPackage();
 
+    // ---- A table's data rows all deleted (its header kept): as Excel, the first stays, its table
+    // cells emptied, and the rows after it go (measured: Rows("12:14").Delete under a header in 11
+    // keeps 12, A table needs a data row, and Excel repairs one without).
+    if (rows && sh.count < 0) {
+      std::vector<Range> emptied;
+      for (const Table& t : s.Tables()) {
+        const uint32_t first = t.ref.firstRow + t.headerRows, last = t.ref.lastRow - t.totalsRows;
+        if (t.headerRows && first <= last && first == sh.at && last < sh.at + m.Deleted() &&
+            m.Across(t.ref.firstCol, t.ref.lastCol) == 1)
+          emptied.push_back(Range{first, t.ref.firstCol, first, t.ref.lastCol});
+      }
+      if (!emptied.empty())
+        return Run(*this, stepName, [&]() -> Result {
+          for (const Range& r : emptied)
+            if (Result x = ClearContents(sheet, r); !x) return x;
+          Shift rest = sh;
+          rest.at += 1;
+          rest.count += 1;
+          return rest.count < 0 ? ShiftCells(sheet, rest, stepName) : Result{};
+        });
+    }
+
     // ---- What Excel refuses, and what Featherweight can't move yet.
     auto cantYet = [](std::u16string_view what) {
       return Result::Fail(u"Featherweight can't insert or delete cells on this sheet yet: it has " + std::u16string(what) +
@@ -2950,6 +2972,11 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
         for (Table& t : after) {
           Range x = t.ref;
           if (!m.Area(x)) continue;
+          // Its totals row deleted: the table has none any more (Excel).
+          if (rows && t.totalsRows && m.Line(t.ref.lastRow) == kNone && m.Across(t.ref.firstCol, t.ref.lastCol) == 1) {
+            t.totalsRows = 0;
+            t.totalsRowShown = false;
+          }
           if (!rows && Effect(m, t.ref) == 1) {
             if (sh.count > 0) {
               uint32_t nextId = 1, nextName = 1;

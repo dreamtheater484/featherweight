@@ -699,6 +699,44 @@ TEST(sheet_table_totals_typed) {
   CHECK(TablePart(*book).find("totalsRowFormula") == std::string::npos);
 }
 
+// Rows deleted that hold all of a table's data rows: as Excel, the first stays with its table cells
+// emptied (cells beside the table kept) and the rows after it go; with its totals row, the table has
+// none any more (measured; Excel repairs a table without a data row; s3-corpus's S3 gate).
+TEST(sheet_table_rows_all_deleted) {
+  {
+    auto book = TableBook();
+    if (!book) return;
+    Editor ed(*book);
+    const Sheet& s = book->GetSheet(0);
+    CHECK(ed.DeleteRows(0, 1, 3));  // rows 2:4
+    CHECK(s.Tables()[0].ref == (Range{0, 0, 1, 2}));
+    CHECK(s.GetValue(1, 0).type == ValueType::Empty && s.GetValue(1, 1).type == ValueType::Empty);
+    CHECK(FormulaText(s, 1, 2) == "-");
+    CHECK(FormulaText(s, 1, 4) == "SUM(T[b])");  // beside the table: its row stayed
+    CHECK(Text(s, 2, 0) == "5");                 // A5, two rows up
+    CHECK(TablePart(*book).find("ref=\"A1:C2\"><autoFilter ref=\"A1:C2\"/>") != std::string::npos);
+    CHECK(ed.UndoNames().size() == 1 && ed.Undo());
+    CHECK(s.Tables()[0].ref == (Range{0, 0, 3, 2}) && Text(s, 1, 0) == "2" && Text(s, 4, 0) == "5");
+    CHECK(TablePart(*book).find("ref=\"A1:C4\"><autoFilter ref=\"A1:C4\"/>") != std::string::npos);
+  }
+  {
+    auto book = TableBook(false, true);
+    if (!book) return;
+    Editor ed(*book);
+    const Sheet& s = book->GetSheet(0);
+    CHECK(ed.DeleteRows(0, 1, 3));  // the data rows: the totals row follows
+    CHECK(s.Tables()[0].ref == (Range{0, 0, 2, 2}) && s.Tables()[0].totalsRows == 1 && Text(s, 2, 0) == "Total");
+    CHECK(TablePart(*book).find("ref=\"A1:C3\" totalsRowCount=\"1\"><autoFilter ref=\"A1:C2\"/>") != std::string::npos);
+    CHECK(ed.Undo());
+    CHECK(ed.DeleteRows(0, 1, 4));  // and the totals row
+    CHECK(s.Tables()[0].ref == (Range{0, 0, 1, 2}) && s.Tables()[0].totalsRows == 0);
+    const std::string part = TablePart(*book);
+    CHECK(part.find("totalsRowCount") == std::string::npos && part.find("totalsRowShown=\"0\"") != std::string::npos);
+    CHECK(ed.Undo());
+    CHECK(s.Tables()[0].ref == (Range{0, 0, 4, 2}) && s.Tables()[0].totalsRows == 1);
+  }
+}
+
 // A number typed in a table's totals row is its column's label, as text, as Excel writes it (Excel
 // repairs a number there with neither a label nor a function; s3-corpus's S3 gate,
 // libreoffice-totalsrowfunction-xlsx-table-totals-row).
