@@ -497,11 +497,13 @@ bool SheetLoader::ReadInline(std::string& out, bool& preserve, bool& odd) {
             else odd = true;
           }
           if (!ReadText(piece, odd)) return false;
+          xlsx::DecodeXstringIn(piece);
           out += piece;
         } else if (main && local == "r" && pull.Depth() == depth + 1) {
           odd = true;  // runs: read their text, keep them as written
         } else if (main && local == "t" && pull.Depth() == depth + 2) {
           if (!ReadText(piece, odd)) return false;
+          xlsx::DecodeXstringIn(piece);
           out += piece;
         } else {
           odd = true;
@@ -651,6 +653,7 @@ bool SheetLoader::ReadCell(size_t before, uint32_t row, uint32_t rowOrd, uint32_
             }
             fSet = Intern(attrs_);
             if (!ReadText(fText_, odd)) return false;
+            xlsx::DecodeXstringIn(fText_);  // ST_Formula: Excel writes the text _x0041_ as _x005F_x0041_
           } else if (main && local == "v" && order < 2) {
             order = 2;
             hasV = true;
@@ -688,10 +691,11 @@ bool SheetLoader::ReadCell(size_t before, uint32_t row, uint32_t rowOrd, uint32_
   auto keepText = [&](std::string_view t) { b_->Side().valueText = texts.Add(t); };
   if (type == XmlType::InlineStr) {
     if (hasIs) {
-      c->v.index = texts.Add(isText_);
+      c->v.index = texts.Add(isText_);  // decoded by ReadInline
       c->flags |= kHasValue;
       if (preserve) c->flags |= kPreserve;
     } else if (hasV) {
+      xlsx::DecodeXstringIn(vText_);
       c->v.index = texts.Add(vText_);
       c->flags |= kHasValue;
     }
@@ -717,8 +721,9 @@ bool SheetLoader::ReadCell(size_t before, uint32_t row, uint32_t rowOrd, uint32_
         if (!canonical || !(c->flags & kHasValue)) keepText(vText_);
         break;
       }
-      case XmlType::Str:
-        c->v.index = texts.Add(vText_);
+      case XmlType::Str:  // a formula's text: Excel writes a CR as _x000D_
+        xlsx::DecodeXstringIn(vText_);
+      c->v.index = texts.Add(vText_);
         c->flags |= kHasValue;
         break;
       case XmlType::B:
@@ -1042,14 +1047,14 @@ bool ReadAutoFilter(pugi::xml_node n, SheetFilter& f) {
     if (plain && kind == "filters" && !Child(k, "dateGroupItem")) {
       col.blank = BoolAttr(k, "blank", false);
       for (pugi::xml_node v = k.first_child(); v; v = v.next_sibling())
-        if (v.type() == pugi::node_element && Local(v) == "filter") col.values.emplace_back(Attr(v, "val"));
+        if (v.type() == pugi::node_element && Local(v) == "filter") col.values.emplace_back(DecodeXstring(Attr(v, "val")));
     } else if (plain && kind == "customFilters") {
       col.kind = FilterColumn::Kind::Custom;
       col.both = BoolAttr(k, "and", false);
       for (pugi::xml_node v = k.first_child(); v; v = v.next_sibling())
         if (v.type() == pugi::node_element && Local(v) == "customFilter") {
           std::string_view op = Attr(v, "operator");
-          col.conditions.push_back({op.empty() ? std::string("equal") : std::string(op), std::string(Attr(v, "val"))});
+          col.conditions.push_back({op.empty() ? std::string("equal") : std::string(op), DecodeXstring(Attr(v, "val"))});
         }
     } else if (plain && kind == "top10") {
       col.kind = FilterColumn::Kind::Top10;
