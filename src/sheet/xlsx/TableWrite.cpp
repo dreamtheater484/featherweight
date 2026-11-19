@@ -63,9 +63,9 @@ std::string Prefix(pugi::xml_node n) {
 
 }  // namespace
 
-std::string TableXml(const Table& t) {
+std::string TableXml(const Table& t, bool strict) {
   std::string out(kDeclaration);
-  out += "<table xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"" + A("id", std::to_string(t.id)) +
+  out += "<table" + A("xmlns", strict ? kStrictMainNs : kMainNs) + A("id", std::to_string(t.id)) +
          A("name", t.name) + A("displayName", t.displayName.empty() ? t.name : t.displayName) + A("ref", RangeName(t.ref));
   if (!t.headerRows) out += A("headerRowCount", "0");
   if (t.totalsRows) out += A("totalsRowCount", "1");
@@ -227,21 +227,31 @@ bool PutTableFilter(std::string& xml, const std::string& autoFilter) {
 }
 
 void PutTablePart(detail::PartText& t, const std::string& relId, bool add) {
-  // The prefix the sheet's root binds to the relationships' namespace ("r"), bound when it has none.
+  // The prefix the sheet's root binds to the relationships' namespace, Transitional's or Strict's
+  // ("r"); bound when it has none, in the sheet's own flavour.
   constexpr std::string_view kRelNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  constexpr std::string_view kRelNsStrict = "http://purl.oclc.org/ooxml/officeDocument/relationships";
   std::string r;
+  std::vector<std::string> taken;
   for (size_t at = t.rootStart.find("xmlns:"); at != std::string::npos; at = t.rootStart.find("xmlns:", at + 6)) {
     const size_t eq = t.rootStart.find('=', at);
     if (eq == std::string::npos) break;
+    taken.push_back(t.rootStart.substr(at + 6, eq - at - 6));
     const size_t q = eq + 1 < t.rootStart.size() ? eq + 1 : eq;
-    if (t.rootStart.compare(q + 1, kRelNs.size(), kRelNs) == 0 && q + 1 + kRelNs.size() < t.rootStart.size() &&
-        t.rootStart[q + 1 + kRelNs.size()] == t.rootStart[q])
-      r = t.rootStart.substr(at + 6, eq - at - 6);
+    for (std::string_view ns : {kRelNs, kRelNsStrict})
+      if (t.rootStart.compare(q + 1, ns.size(), ns) == 0 && q + 1 + ns.size() < t.rootStart.size() &&
+          t.rootStart[q + 1 + ns.size()] == t.rootStart[q])
+        r = taken.back();
   }
   if (r.empty()) {
+    // A free prefix: r, else r1, r2...
     r = "r";
+    for (int n = 1; std::find(taken.begin(), taken.end(), r) != taken.end(); ++n) r = "r" + std::to_string(n);
+    const bool strict = t.rootStart.find(kStrictMainNs) != std::string::npos;
     const size_t end = t.rootStart.rfind('>');
-    if (end != std::string::npos) t.rootStart.insert(end, " xmlns:r=\"" + std::string(kRelNs) + "\"");
+    if (end != std::string::npos)
+      t.rootStart.insert(end - (end > 0 && t.rootStart[end - 1] == '/' ? 1 : 0),
+                         " xmlns:" + r + "=\"" + std::string(strict ? kRelNsStrict : kRelNs) + "\"");
   }
   std::vector<std::string> ids;
   for (const XmlPiece& p : TopLevel(t.afterData)) {

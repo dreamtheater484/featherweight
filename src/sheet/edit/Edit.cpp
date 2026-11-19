@@ -4510,6 +4510,7 @@ Result Editor::SetSheetRules(int sheet, RuleKind kind, const std::string& xml, c
 
 namespace {
 constexpr std::string_view kTableRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
+constexpr std::string_view kTableRelStrict = "http://purl.oclc.org/ooxml/officeDocument/relationships/table";
 constexpr std::string_view kTableType = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
 
 // A table on the sheet that `ref` overlaps, other than `except`, as Excel's message names it.
@@ -4567,7 +4568,8 @@ Result Editor::AddTable(int sheet, Table t) {
       for (size_t i = 0; i < t.columns.size(); ++i)
         if (t.columns[i].id == 0) t.columns[i].id = static_cast<uint32_t>(i + 1);
       t.part = NewPartName("/xl/tables/table", ".xml");
-      const std::string id = AddPart(s.PartName(), kTableRel, t.part, kTableType, xlsx::TableXml(t));
+      const bool strict = A::Text(s).rootStart.find(xlsx::kStrictMainNs) != std::string::npos;
+      const std::string id = AddPart(s.PartName(), strict ? kTableRelStrict : kTableRel, t.part, kTableType, xlsx::TableXml(t, strict));
       if (id.empty()) return Result::Fail(u"The table couldn't be added to the workbook.");
       SheetSave& sv = st.Save(s);
       st.SaveText(sv);
