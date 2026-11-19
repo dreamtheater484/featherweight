@@ -6,6 +6,7 @@
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
 #include "pkg/CompoundFile.h"
+#include "pkg/OfficeCrypto.h"
 #include "pkg/Package.h"
 #include "pkg/Snapshot.h"
 #include "sheet/csv/Csv.h"
@@ -70,7 +71,8 @@ D2D1_RECT_F Clip(const D2D1_RECT_F& a, const D2D1_RECT_F& b) {
 }  // namespace
 
 WorkbookView::WorkbookView(ViewHost& host, std::wstring path)
-    : PagedView(host), path_(std::move(path)), file_(std::make_unique<WorkbookFile>()) {
+    : PagedView(host), path_(std::move(path)), file_(std::make_unique<WorkbookFile>()),
+      pw_(host, [this](const std::wstring& p) { SubmitPassword(p); }) {
   zoomMode_ = fw::ZoomMode::FitPage;
 }
 
@@ -97,7 +99,7 @@ std::wstring WorkbookView::Title() const { return path_.empty() ? file_->Title()
 // ---------------------------------------------------------------------------
 // Loading
 
-OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
+OpenResult WorkbookView::Load(const std::wstring& password, std::wstring& error) {
   const std::wstring name = Title();
   pkg::Status st;
   if (newBook_) {
@@ -110,7 +112,9 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
   }
   // A recovered workbook is read from its autosave, named as its tab is.
   std::unique_ptr<pkg::Snapshot> snapshot =
-      fromBytes_ ? pkg::Snapshot::FromBytes(std::move(bytes_)) : pkg::Snapshot::Open(path_, {}, st);
+      !protected_.empty() ? nullptr  // asked for its password: read already
+      : fromBytes_        ? pkg::Snapshot::FromBytes(std::move(bytes_))
+                          : pkg::Snapshot::Open(path_, {}, st);
   const std::wstring& named = fromBytes_ ? name : path_;
   if (EndsWithNoCase(named, L".csv") || EndsWithNoCase(named, L".tsv")) {
     // A text file of values: one sheet, named after the file as Excel names it.
@@ -134,9 +138,24 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     snapshot.reset();  // the model has the values: the file's copy goes before the grid is built
     return Opened(std::move(csvBook), error);
   }
-  // An OpenDocument spreadsheet is converted, and the tab is a copy that Save As saves as an .xlsx:
-  // the file itself is never written to. A template (.ots) makes a new workbook.
-  if (!fromBytes_ && snapshot && (EndsWithNoCase(path_, L".ods") || EndsWithNoCase(path_, L".ots"))) {
+  // A password-protected workbook (an encrypted .xlsx) and an Excel 97-2003 workbook (.xls) are
+  // compound files: read whole, then decrypted or converted (Unlock). Without a password, or with a
+  // wrong one, the tab shows the password card.
+  bool locked = !protected_.empty();
+  if (!locked && snapshot && pkg::CompoundFile::HasSignature(snapshot->Bytes())) {
+    const auto bytes = snapshot->Bytes();
+    protected_.assign(bytes.begin(), bytes.end());
+    protectedStamp_ = snapshot->GetStamp();
+    locked = true;
+  }
+  if (locked) {
+    snapshot.reset();
+    std::vector<uint8_t> plain;
+    if (OpenResult r = Unlock(password, plain, error); r != OpenResult::Ok) return r;
+    snapshot = pkg::Snapshot::FromBytes(std::move(plain));
+  } else if (!fromBytes_ && snapshot && (EndsWithNoCase(path_, L".ods") || EndsWithNoCase(path_, L".ots"))) {
+    // An OpenDocument spreadsheet is converted, and the tab is a copy that Save As saves as an
+    // .xlsx: the file itself is never written to. A template (.ots) makes a new workbook.
     std::vector<uint8_t> xlsx;
     st = ods::OdsToXlsx(snapshot->Bytes(), xlsx);
     if (!st.Ok()) {
@@ -152,25 +171,6 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
       path_.clear();
     }
   }
-  // An Excel 97-2003 workbook (.xls): read into an .xlsx in memory, and the tab is a copy that Save
-  // As saves as an .xlsx beside it; the .xls is never written (plan §7.1).
-  std::wstring imported;
-  if (snapshot && pkg::CompoundFile::HasSignature(snapshot->Bytes())) {
-    auto cf = pkg::CompoundFile::Open(snapshot->Bytes());
-    const xls::StreamFn streams = [&cf](std::string_view n) { return cf->Stream(n); };
-    if (!cf || !xls::IsWorkbook(streams)) {
-      error = name + L" couldn't be opened — it is protected with a password, which workbooks don't support yet.";
-      return OpenResult::Failed;
-    }
-    std::vector<uint8_t> xlsx = xls::ToXlsx(streams, st);
-    if (xlsx.empty()) {
-      error = name + L" couldn't be opened — " + Utf8ToWide(st.message);
-      return OpenResult::Failed;
-    }
-    cf.reset();
-    snapshot = pkg::Snapshot::FromBytes(std::move(xlsx));
-    imported = name;
-  }
   auto package = snapshot ? pkg::Package::Open(std::move(snapshot), pkg::Limits::Default(), st) : nullptr;
   std::unique_ptr<Workbook> book = package ? xlsx::Read(std::move(package), st) : nullptr;
   if (!book) {
@@ -178,34 +178,114 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     return OpenResult::Failed;
   }
   recalc_ = true;  // a workbook: at idle, recalculate what Excel would on opening
-  if (!imported.empty() && !fromBytes_) {
-    const size_t dot = path_.find_last_of(L'.');
-    file_->Copy(imported, (dot == std::wstring::npos ? path_ : path_.substr(0, dot)) + L".xlsx", false);
-    path_.clear();  // Save is Save As
-    const OpenResult r = Opened(std::move(book), error);
-    if (r == OpenResult::Ok) {
-      const size_t d = imported.find_last_of(L'.');
-      host_.ViewMessage(BannerKind::Info, imported + L" is an Excel 97–2003 workbook. Saving makes a new " +
-                                              (d == std::wstring::npos ? imported : imported.substr(0, d)) +
-                                              L".xlsx and leaves it as it is.");
-    }
-    return r;
-  }
   if (!fromBytes_ && newNumber_ > 0) {
     // A template: a new workbook from it, saved with Save As.
     file_->OpenedTemplate(path_, newNumber_);
     path_.clear();
   } else if (!fromBytes_ && imported_.empty()) {
-    file_->Opened(path_, book->GetPackage()->GetSnapshot().GetStamp());
+    // A protected file stands for the encrypted file on disk, not its decrypted package.
+    file_->Opened(path_, locked ? protectedStamp_ : book->GetPackage()->GetSnapshot().GetStamp());
   }
+  protected_.clear();  // open: the file as read isn't needed any more
+  protected_.shrink_to_fit();
   const OpenResult r = Opened(std::move(book), error);
   // Someone else has it open in Excel: changes can only be saved as a copy.
   if (r == OpenResult::Ok)
     if (std::wstring inUse = file_->InUseMessage(); !inUse.empty()) host_.ViewMessage(BannerKind::Warning, inUse);
-  if (r == OpenResult::Ok && !imported_.empty())
-    host_.ViewMessage(BannerKind::Info, imported_ + L" is an OpenDocument spreadsheet. Saving makes a new " +
-                                            imported_.substr(0, imported_.size() - 4) + L".xlsx and leaves it as it is.");
+  // An imported file says where saving goes.
+  if (r == OpenResult::Ok && !imported_.empty()) {
+    const bool odf = EndsWithNoCase(imported_, L".ods") || EndsWithNoCase(imported_, L".ots");
+    const size_t dot = imported_.find_last_of(L'.');
+    host_.ViewMessage(BannerKind::Info,
+                      imported_ + (odf ? L" is an OpenDocument spreadsheet" : L" is an Excel 97–2003 workbook") +
+                          L". Saving makes a new " + (dot == std::wstring::npos ? imported_ : imported_.substr(0, dot)) +
+                          L".xlsx and leaves it as it is.");
+  }
   return r;
+}
+
+// A compound file: a password-protected .xlsx (decrypted with the password, and saved again with
+// it) or an Excel 97-2003 workbook (converted: the tab is a copy saved as an .xlsx, encrypted with
+// the .xls's password when it had one, as Word does for a .doc).
+OpenResult WorkbookView::Unlock(const std::wstring& password, std::vector<uint8_t>& plain, std::wstring& error) {
+  namespace crypto = pkg::crypto;
+  const std::wstring name = Title();
+  auto cf = pkg::CompoundFile::Open(protected_);
+  if (!cf) {
+    error = name + L" couldn't be opened — it seems to be damaged or isn't an Excel workbook.";
+    return OpenResult::Failed;
+  }
+  crypto::Key key;
+  const xls::StreamFn streams = [&cf](std::string_view n) { return cf->Stream(n); };
+  if (xls::IsWorkbook(streams)) {
+    const bool locked = xls::NeedsPassword(streams);
+    if (locked && password.empty()) {
+      needPassword_ = true;
+      return OpenResult::NeedPassword;
+    }
+    pkg::Status st;
+    plain = xls::ToXlsx(streams, st, locked ? std::wstring_view(password) : std::wstring_view());
+    if (plain.empty()) {
+      if (locked && st.code == pkg::Status::Code::Rejected) {
+        needPassword_ = true;
+        return OpenResult::WrongPassword;
+      }
+      error = name + L" couldn't be opened — " + Utf8ToWide(st.message);
+      return OpenResult::Failed;
+    }
+    if (locked) key = crypto::NewKey(password);  // the .xlsx it's saved as keeps its password
+    if (!fromBytes_ && newNumber_ == 0) {
+      const size_t dot = path_.find_last_of(L'.');
+      file_->Copy(name, (dot == std::wstring::npos ? path_ : path_.substr(0, dot)) + L".xlsx", false);
+      imported_ = name;
+      path_.clear();  // Save is Save As
+    }
+  } else if (crypto::IsEncryptedPackage(*cf)) {
+    if (password.empty()) {
+      needPassword_ = true;
+      return OpenResult::NeedPassword;
+    }
+    switch (crypto::Decrypt(*cf, password, plain, key)) {
+      case crypto::Result::Ok:
+        if (!plain.empty()) break;
+        [[fallthrough]];  // an empty package
+      case crypto::Result::Damaged:
+        error = name + L" couldn't be opened — it seems to be damaged.";
+        return OpenResult::Failed;
+      case crypto::Result::WrongPassword:
+        needPassword_ = true;
+        return OpenResult::WrongPassword;
+      case crypto::Result::Unsupported:
+        error = name + L" couldn't be opened — it's protected in a way Featherweight doesn't support.";
+        return OpenResult::Failed;
+    }
+  } else {
+    error = name + L" couldn't be opened — it isn't an Excel workbook Featherweight can open.";
+    return OpenResult::Failed;
+  }
+  needPassword_ = false;
+  if (!key.Empty()) file_->Protect(std::move(key));
+  return OpenResult::Ok;
+}
+
+void WorkbookView::SubmitPassword(const std::wstring& password) {
+  if (password.empty()) {
+    pw_.Wrong();
+    host_.ViewInvalidate();
+    return;
+  }
+  std::wstring error;
+  const OpenResult r = Load(password, error);
+  if (r == OpenResult::Ok) {
+    pw_.Accepted();
+    host_.ViewPasswordAccepted(this);
+  } else if (r == OpenResult::WrongPassword || r == OpenResult::NeedPassword) {
+    pw_.Wrong();
+  } else {
+    needPassword_ = true;  // the card stays, with why
+    pw_.Failed(error);
+  }
+  host_.ViewInvalidate();
 }
 
 OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& error) {
@@ -558,6 +638,13 @@ std::optional<CellAddr> WorkbookView::CellAt(int x, int y) const {
 void WorkbookView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   const Palette& p = theme::P();
   const D2D1_RECT_F all = RectF(full_);
+  if (needPassword_) {  // the password card until the file opens
+    c.PushClip(all);
+    c.Fill(all, p.docBg);
+    pw_.Draw(c, full_, ui_, Title());
+    c.PopClip();
+    return;
+  }
   c.PushClip(all);
   if (preview_) {
     DrawPreview(c, dc);

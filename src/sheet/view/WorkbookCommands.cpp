@@ -970,6 +970,7 @@ void WorkbookView::SaveDone() {
 
 void WorkbookView::Autosave() {
   if (Ready() && file_->Dirty()) file_->Autosave(*book_, Ed());
+  else if (!Ready() && !protected_.empty()) file_->AutosaveProtected(protected_);  // recovered, still locked
 }
 
 // A recovered journal: its edits made again through the editor (the engine follows them, and the
@@ -1055,6 +1056,7 @@ void WorkbookView::ApplyState(const FileState& s) {
 }
 
 void WorkbookView::DescribeUia(uia::Tree& t, int parent) {
+  if (needPassword_) pw_.DescribeUia(t, parent);
   if (!Ready()) return;
   const int grid = t.Add(parent, 1, UIA_DataGridControlTypeId, Utf8ToWide(Current().Name()), cells_);
   t[grid].hasValue = true;
