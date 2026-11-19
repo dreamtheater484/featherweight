@@ -320,6 +320,65 @@ TEST(Chart_LongTitleWrapsAsExcelDoes) {
   }
 }
 
+TEST(Chart_LongLegendEntryWrapsAsExcelDoes) {
+  // Excel: a series name of 110 characters in a bottom legend wraps to 3 lines in a 355-point
+  // chart, to 5 in a 195-point one; at the side it wraps too. fuzz_chart found such a name drawn
+  // far outside a small chart.
+  Parsed p(ColumnChart());
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  c.title.clear();
+  c.value.shown = c.category.shown = false;
+  const draw::Color red = draw::Rgb(0xFF0000);
+  c.textColor = red;  // the legend's text is all the text there is
+  c.groups[0].series[1].name = L"Series" + std::wstring(108, L'O') + L" 3";
+  const auto lines = [&](draw::Size size) {
+    const draw::Art art = Draw(c, size, Colors(), L"Calibri");
+    size_t n = 0;
+    for (const draw::Art::Mark& m : art.marks) {
+      const draw::Rect b = m.path.Bounds();
+      for (const draw::Point corner : {draw::Point{b.left, b.top}, draw::Point{b.right, b.bottom}}) {
+        const draw::Point at = m.transform.Apply(corner);
+        CHECK(at.x >= -0.5f && at.x <= size.width + 0.5f && at.y >= -0.5f && at.y <= size.height + 0.5f);
+      }
+      n += m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, red);
+    }
+    return n - 1;  // "North" is one line
+  };
+  CHECK_EQ(lines({355, 211}), 3u);
+  CHECK_EQ(lines({195, 211}), 5u);
+  c.legend = LegendPos::Right;
+  CHECK(lines({355, 211}) > 3u);
+  CHECK(lines({195, 211}) > 5u);
+}
+
+TEST(Chart_TextFarTooLongForItsPlaceIsCut) {
+  // Category names, axis titles and data labels hundreds of characters long are cut to their
+  // room, so nothing lands far outside the chart (fuzz_chart's check); bars stay where they were.
+  const std::wstring longName(200, L'W');
+  for (const bool bar : {false, true}) {
+    Parsed p(ColumnChart());
+    Chart c;
+    REQUIRE(Read(p.Root(), Colors(), c));
+    Group& g = c.groups[0];
+    if (bar) g.type = Type::Bar;
+    for (Series& s : g.series) s.categories[1] = longName, s.name = longName;
+    g.seriesNames = true;
+    c.value.title = c.category.title = longName;
+    for (const draw::Size size : {draw::Size{432, 252}, draw::Size{120, 90}}) {
+      const draw::Art art = Draw(c, size, Colors(), L"Calibri");
+      if (size.width > 400) CHECK(Filled(art, *draw::SchemeColor("accent1", Colors())) >= 3u);  // the bars are still drawn
+      for (const draw::Art::Mark& m : art.marks) {
+        const draw::Rect b = m.path.Bounds();
+        for (const draw::Point corner : {draw::Point{b.left, b.top}, draw::Point{b.right, b.bottom}}) {
+          const draw::Point at = m.transform.Apply(corner);
+          CHECK(at.x > -size.width && at.x < 2 * size.width && at.y > -size.height && at.y < 2 * size.height);
+        }
+      }
+    }
+  }
+}
+
 TEST(Chart_NumbersAsTheirFormatCodesShowThem) {
   SetNumberSeparators(L'.', L',');
   SetShortDate("");
