@@ -125,6 +125,13 @@ bool UpdateTableXml(std::string& xml, const Table& t) {
       filter = cols ? n.insert_child_before((p + "autoFilter").c_str(), cols) : n.prepend_child((p + "autoFilter").c_str());
     }
     Set(filter, "ref", RangeName(FilterRange(t)));
+    // Criteria for columns the table no longer has go.
+    for (pugi::xml_node c = filter.first_child(); c;) {
+      pugi::xml_node next = c.next_sibling();
+      if (c.type() == pugi::node_element && Local(c) == "filterColumn" && UIntAttr(c, "colId", 0) >= t.columns.size())
+        filter.remove_child(c);
+      c = next;
+    }
   } else if (filter) {
     n.remove_child(filter);
   }
@@ -166,6 +173,50 @@ bool UpdateTableXml(std::string& xml, const Table& t) {
   Set(style, "showLastColumn", t.style.lastColumn ? "1" : "0");
   Set(style, "showRowStripes", t.style.rowStripes ? "1" : "0");
   Set(style, "showColumnStripes", t.style.columnStripes ? "1" : "0");
+  struct W : pugi::xml_writer {
+    std::string s;
+    void write(const void* data, size_t size) override { s.append(static_cast<const char*>(data), size); }
+  } w;
+  doc.save(w, "", pugi::format_raw | pugi::format_no_declaration);
+  xml = std::string(kDeclaration) + w.s;
+  return true;
+}
+
+bool ReadTableFilter(std::string_view tableXml, SheetFilter& f) {
+  pugi::xml_document doc;
+  if (!doc.load_buffer(tableXml.data(), tableXml.size())) return false;
+  pugi::xml_node filter = ChildOf(doc.document_element(), "autoFilter");
+  return filter && ReadAutoFilter(filter, f);
+}
+
+bool PutTableFilter(std::string& xml, const std::string& autoFilter) {
+  pugi::xml_document doc, piece;
+  if (!doc.load_buffer(xml.data(), xml.size(), pugi::parse_default | pugi::parse_ws_pcdata_single | pugi::parse_comments) ||
+      !piece.load_buffer(autoFilter.data(), autoFilter.size()))
+    return false;
+  pugi::xml_node n = doc.document_element();
+  if (Local(n) != "table" || Local(piece.document_element()) != "autoFilter") return false;
+  pugi::xml_node have = ChildOf(n, "autoFilter"), now;
+  if (have) {
+    now = n.insert_copy_after(piece.document_element(), have);
+    n.remove_child(have);
+  } else {
+    pugi::xml_node cols = ChildOf(n, "tableColumns");
+    now = cols ? n.insert_copy_before(piece.document_element(), cols) : n.prepend_copy(piece.document_element());
+  }
+  // The table's prefix on the new elements (a criterion kept as it was has its own).
+  if (const std::string p = Prefix(n); !p.empty()) {
+    struct Walk : pugi::xml_tree_walker {
+      std::string p;
+      bool for_each(pugi::xml_node& e) override {
+        if (e.type() == pugi::node_element && std::string_view(e.name()).find(':') == std::string_view::npos) e.set_name((p + e.name()).c_str());
+        return true;
+      }
+    } walk;
+    walk.p = p;
+    if (std::string_view(now.name()).find(':') == std::string_view::npos) now.set_name((p + now.name()).c_str());
+    now.traverse(walk);
+  }
   struct W : pugi::xml_writer {
     std::string s;
     void write(const void* data, size_t size) override { s.append(static_cast<const char*>(data), size); }

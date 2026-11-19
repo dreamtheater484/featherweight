@@ -295,3 +295,13 @@ Check next to Excel on copies of your own workbooks. Every change is one undo st
 
 - [ ] Ctrl+Alt+M (or New comment in the cell menu) on a cell: type, Enter. The purple corner appears; hovering shows "Name: text". Ctrl+Alt+M again (or Shift+F2) opens the thread: type a reply and Enter; pick a comment in the list to edit it (Save) or delete it (Delete reply; the first one deletes the thread); Resolve and Reopen. A cell with a note offers no New comment, and a cell with a thread no New note.
 - [ ] Saved, the file opens in Excel without a repair. Excel 365 shows the thread with its replies and authors, resolved as set here; Excel 2021 shows it as a note starting "[Threaded comment]", as for a file Excel 365 saved.
+
+## Page setup, print preview and Export PDF (S3)
+
+Check next to Excel on copies of your own workbooks, with sheets long and wide enough for several pages.
+
+- [ ] Right-click a sheet tab, **Page setup…** (or the gear in print preview): the Page tab (portrait or landscape, paper size, no scaling or fit sheet, all columns or all rows on one page, adjust to %, fit to pages wide by tall, first page number), Margins (Normal, Wide, Narrow, or each margin in your units, centered horizontally and vertically), Header (Excel's presets, or left, center and right with &[Page], &[Pages], &[Date], &[File], &[Tab]; different odd and even, different first page) and Sheet (print area, rows and columns to repeat, gridlines, headings, page order). Each change shows at once in print preview beside it; each is one undo step.
+- [ ] In print preview, Print: Active sheet, Entire workbook (one job: page numbers and &[Pages] through all sheets) or Selection; printing and Export PDF follow the choice and the setup.
+- [ ] Set print area, Add to print area, Clear print area (cell menu and command search); Insert page break above and left of the active cell, Remove page break, Reset all page breaks.
+- [ ] Page break preview (sheet tab menu): what doesn't print is grey, each page shows "Page N", automatic breaks are dashed blue lines and manual ones solid; dragging a break moves it (it becomes manual). Saved, Excel opens in Page Break Preview with the same pages.
+- [ ] Saved, Excel opens the file without a repair and shows the same page setup (File › Print, Page Setup), print area, print titles and breaks; its PDF export has the same pages as Featherweight's Export PDF (on this PC Excel exports on Letter even for A4 sheets).

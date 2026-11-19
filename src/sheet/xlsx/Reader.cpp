@@ -626,6 +626,7 @@ Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::str
   pugi::xml_node filter = Child(n, "autoFilter");
   t.autoFilter = static_cast<bool>(filter);
   t.filtered = static_cast<bool>(Child(filter, "filterColumn"));
+  if (SheetFilter f; filter && ReadAutoFilter(filter, f)) t.criteria = std::move(f.columns);
   if (pugi::xml_node cols = Child(n, "tableColumns"))
     for (pugi::xml_node c = cols.first_child(); c; c = c.next_sibling()) {
       if (c.type() != pugi::node_element || Local(c) != "tableColumn") continue;

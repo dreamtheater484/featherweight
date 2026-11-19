@@ -362,6 +362,17 @@ enum Cmd : int {
   CmdSortAscending,
   CmdSortDescending,
   CmdRemoveDuplicates,
+  // Charts and the objects in a sheet's drawing (S3, s3-charts): 2800-2849.
+  CmdInsertChart = 2800,  // Alt+F1: the default chart (clustered column) of the selection
+  CmdChartColumn,         // Insert > Chart by type, in ChartKind's order
+  CmdChartBar,
+  CmdChartLine,
+  CmdChartPie,
+  CmdChartDoughnut,
+  CmdChartArea,
+  CmdChartScatter,
+  CmdChartBox,            // the toolbar's chart choices
+  CmdDeleteObject,        // the selected chart, picture or shape
   // Conditional formatting and data validation (S3, s3-data): 2850-2899.
   CmdCondFormat = 2850,   // the Conditional formatting panel: a new rule
   CmdCfManage,            // its list of the sheet's rules
@@ -385,6 +396,24 @@ enum Cmd : int {
   CmdShowAllNotes,
   CmdDeleteThread,  // Delete Thread (New Comment, Ctrl+Alt+M, is the app's CmdNewComment)
   // Links: the app's CmdInsertLink (Ctrl+K) and CmdRemoveLink.
+
+  // Page setup, print preview and Export PDF (S3, s3-print): 2940-2969.
+  // The Page Setup panel is the app's CmdPageSetup.
+  CmdSetPrintArea = 2940,  // the selection
+  CmdAddToPrintArea,
+  CmdClearPrintArea,
+  CmdPrintTitles,       // the panel's Sheet tab
+  CmdInsertPageBreak,   // above and left of the active cell
+  CmdRemovePageBreak,
+  CmdResetPageBreaks,
+  CmdPageBreakPreview,  // the sheet's pages over its cells (on and off)
+  CmdNoScaling,         // print preview's scaling shortcuts, in this order
+  CmdFitSheetOnePage,
+  CmdFitColumnsOnePage,
+  CmdFitRowsOnePage,
+  CmdPrintActiveSheet,  // what print preview shows, prints and exports, in this order
+  CmdPrintWorkbook,
+  CmdPrintSelection,
 
   // Defined names (S3, s3-calc): 2970-2999.
   CmdNameManager = 2970,  // Ctrl+F3

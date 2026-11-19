@@ -924,6 +924,15 @@ TEST(sheet_edit_add_remove_part) {
   CHECK(ed.PartBytes(name) == xml && p.ContentTypeOf(name) == type);
   CHECK(relTo() && relTo()->target == "../drawings/drawing1.xml" && relTo()->type == rel);
   CHECK(ed.NewPartName("/xl/drawings/drawing", ".xml") == "/xl/drawings/drawing2.xml");
+  // A second relationship to the same part, from the other sheet.
+  ed.BeginGroup(u"Reuse");
+  const std::string sheet2 = book->GetSheet(1).PartName();
+  const std::string again = ed.AddRelationship(sheet2, rel, name);
+  CHECK(ed.AddRelationship(sheet2, rel, "/xl/drawings/nothing.xml").empty());
+  ed.EndGroup();
+  CHECK(!again.empty() && p.RelationshipsOf(sheet2) && p.RelationshipsOf(sheet2)->items.back().targetPart == name);
+  CHECK(ed.Undo());
+  CHECK(!p.RelationshipsOf(sheet2) || p.RelationshipsOf(sheet2)->items.empty() || p.RelationshipsOf(sheet2)->items.back().targetPart != name);
 
   std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-part-added");
   CheckClean(saved);
@@ -946,6 +955,48 @@ TEST(sheet_edit_add_remove_part) {
   CHECK(PartText(removed, "/[Content_Types].xml").find("drawing1.xml") == std::string::npos);
   CHECK(ed.Undo());
   CHECK(ed.PartBytes(name) == xml && relTo() && p.ContentTypeOf(name) == type);
+}
+
+// A drawing part's objects (s3-charts): found by shape id with their bytes, placed, and the
+// relationships they use.
+TEST(sheet_drawing_objects) {
+  namespace dr = edit::drawing;
+  const std::string xml =
+      "<?xml version=\"1.0\"?>\r\n<xdr:wsDr xmlns:xdr=\"x\" xmlns:a=\"a\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+      "<!-- <xdr:twoCellAnchor> -->"
+      "<xdr:twoCellAnchor editAs=\"oneCell\"><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>"
+      "<xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>"
+      "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"7\" name=\"a &gt; b\"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm>"
+      "<a:off x=\"1\" y=\"2\"/><a:ext cx=\"3\" cy=\"4\"/></a:xfrm></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>"
+      "<mc:AlternateContent xmlns:mc=\"m\"><mc:Choice Requires=\"a14\"><xdr:twoCellAnchor><xdr:sp><xdr:nvSpPr><xdr:cNvPr id=\"12\" name=\"x\"/>"
+      "</xdr:nvSpPr></xdr:sp></xdr:twoCellAnchor></mc:Choice></mc:AlternateContent>"
+      "<xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>"
+      "<xdr:ext cx=\"10\" cy=\"20\"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"9\" name=\"p\"/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"rId4\"/>"
+      "</xdr:blipFill></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>";
+  const std::vector<dr::Object> objects = dr::Objects(xml);
+  CHECK_EQ(objects.size(), size_t(3));
+  if (objects.size() != 3) return;
+  CHECK(objects[0].id == 7 && objects[1].id == 12 && objects[1].alternate && objects[2].id == 9);
+  CHECK(xml.compare(objects[0].begin, 30, "<xdr:twoCellAnchor editAs=\"one") == 0);
+  CHECK(xml.compare(objects[2].end - 20, 20, "</xdr:oneCellAnchor>") == 0);
+  CHECK_EQ(dr::NextShapeId(xml), 13u);
+  CHECK(dr::Find(objects, 9) == &objects[2] && !dr::Find(objects, 8) && !dr::Find(objects, 0));
+  CHECK(dr::Objects("<a><b>").empty() && dr::Objects("<a/><b/>").empty());
+
+  dr::Place p;
+  p.from = {5, 6, 100, 200};
+  p.to = {7, 8, 0, 0};
+  p.x = 1000, p.y = 2000, p.cx = 3000, p.cy = 4000;
+  const std::string two = dr::Placed(std::string_view(xml).substr(objects[0].begin, objects[0].end - objects[0].begin), p);
+  CHECK(two.find("<xdr:from><xdr:col>5</xdr:col><xdr:colOff>100</xdr:colOff><xdr:row>6</xdr:row><xdr:rowOff>200</xdr:rowOff></xdr:from>") != std::string::npos);
+  CHECK(two.find("<xdr:to><xdr:col>7</xdr:col>") != std::string::npos && two.find("<a:off x=\"1000\" y=\"2000\"/><a:ext cx=\"3000\" cy=\"4000\"/>") != std::string::npos);
+  CHECK(two.find("name=\"a > b\"") != std::string::npos);  // pugixml escapes only & and < there
+  const std::string one = dr::Placed(std::string_view(xml).substr(objects[2].begin, objects[2].end - objects[2].begin), p);
+  CHECK(one.find("<xdr:ext cx=\"3000\" cy=\"4000\"/>") != std::string::npos && one.find("<xdr:col>5</xdr:col>") != std::string::npos);
+  CHECK(dr::Placed(std::string_view(xml).substr(objects[1].begin, objects[1].end - objects[1].begin), p).empty());
+  const std::vector<std::string> rels = dr::RelIds(std::string_view(xml).substr(objects[2].begin, objects[2].end - objects[2].begin));
+  CHECK(rels.size() == 1 && rels[0] == "rId4");
+  CHECK(dr::RelIds(xml).size() == 1);
 }
 
 // Insert > Chart (s3-charts): series guessed from the selection as Excel guesses them, written as
@@ -977,13 +1028,51 @@ TEST(sheet_insert_chart) {
   CHECK(ed.InsertChart(0, c));
   CHECK(ed.PartBytes("/xl/charts/chart2.xml").find("<c:pieChart>") != std::string::npos);
   CHECK(ed.PartBytes("/xl/drawings/drawing2.xml").empty());
+  // The drawing API pictures and shapes use (s3-data): a rectangle joins the drawing too.
+  const std::string drawing = ed.SheetDrawing(0, false);
+  CHECK_EQ(drawing, std::string("/xl/drawings/drawing1.xml"));
+  CHECK(ed.SheetDrawing(1, false).empty());
+  CHECK_EQ(ed.NextShapeId(drawing), 4u);
+  CHECK(!ed.AddAnchor(drawing, "<xdr:absoluteAnchor/>"));  // no group open
+  ed.BeginGroup(u"Insert Shape");
+  CHECK(ed.AddAnchor(drawing,
+                     "<xdr:twoCellAnchor xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" "
+                     "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff>"
+                     "<xdr:row>22</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff>"
+                     "<xdr:row>26</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr>"
+                     "<xdr:cNvPr id=\"4\" name=\"Rectangle 3\"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst=\"rect\">"
+                     "<a:avLst/></a:prstGeom></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>"));
+  ed.EndGroup();
+  CHECK_EQ(ed.NextShapeId(drawing), 5u);
 
   std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-insert-chart");
   CheckClean(saved);
   CHECK(PartText(saved, "/xl/worksheets/sheet1.xml").find("drawing") != std::string::npos);
   auto again = OpenZip(saved);
   if (!again) return;
+  // Moved and resized, then the pie deleted with its part.
+  edit::drawing::Place place;
+  place.from = {2, 30, 12700, 0};
+  place.to = {9, 44, 0, 25400};
+  CHECK(ed.MoveObject(0, 2, place));
+  CHECK(ed.AnchorXml(drawing, 2).find("<xdr:row>30</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>") != std::string::npos);
+  CHECK(ed.AnchorXml(drawing, 2).find("<xdr:colOff>12700</xdr:colOff>") != std::string::npos);
+  CHECK(!ed.MoveObject(0, 99, place));
+  CHECK(ed.DeleteObjects(0, {3}));
+  CHECK(ed.PartBytes("/xl/charts/chart2.xml").empty() && ed.AnchorXml(drawing, 3).empty());
+  CHECK(!ed.AnchorXml(drawing, 2).empty() && !ed.PartBytes("/xl/charts/chart1.xml").empty());
+  CHECK(PartText(SaveBytes(*book, ed, "save-chart-moved"), "/xl/drawings/_rels/drawing1.xml.rels").find("chart2") == std::string::npos);
+  // The last ones: the drawing goes too.
+  CHECK(ed.DeleteObjects(0, {2, 4}));
+  CHECK(ed.PartBytes(drawing).empty() && ed.PartBytes("/xl/charts/chart1.xml").empty() && ed.SheetDrawing(0, false).empty());
+  std::vector<uint8_t> none = SaveBytes(*book, ed, "save-chart-deleted");
+  CheckClean(none);
+  CHECK(PartText(none, "/xl/worksheets/sheet1.xml").find("drawing") == std::string::npos);
+  CHECK(PartText(none, "/[Content_Types].xml").find("chart") == std::string::npos);
   CHECK(ed.Undo(2));
+  CHECK(ed.AnchorXml(drawing, 3).find("<c:chart") != std::string::npos && !ed.PartBytes("/xl/charts/chart2.xml").empty());
+
+  CHECK(ed.Undo(4));
   CHECK(ed.PartBytes("/xl/charts/chart1.xml").empty() && ed.PartBytes("/xl/drawings/drawing1.xml").empty());
   std::vector<uint8_t> undone = SaveBytes(*book, ed, "save-insert-chart-undone");
   CheckClean(undone);

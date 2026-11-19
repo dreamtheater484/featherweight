@@ -282,6 +282,7 @@ void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
       }
     AppendSubmenu(m, hidden, L"Unhide", anyHidden);
     AddReviewTabItems(m);
+    AddPageSetupTabItems(m);  // s3-print
     AppendSeparator(m);
     for (size_t i = 0; i < book_->SheetCount() && CmdSheetPick + static_cast<int>(i) <= CmdSheetPickLast; ++i)
       if (SheetShown(i))
@@ -300,6 +301,7 @@ void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
     item(special, CmdPasteTranspose, L"Transposed");
     AppendSubmenu(m, special, L"Paste special");
     AddReviewCellItems(m);
+    AddPageSetupCellItems(m);  // s3-print
     AppendSeparator(m);
     if (rows || cols) {
       item(m, CmdInsertCells, rows ? L"Insert rows\tCtrl++" : L"Insert columns\tCtrl++");
