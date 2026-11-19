@@ -14,6 +14,7 @@
 
 #include "pkg/Formula.h"
 #include "pkg/OfficeCrypto.h"
+#include "pkg/XmlDom.h"
 #include "pkg/XmlWriter.h"
 #include "sheet/calc/Formula.h"
 #include "sheet/calc/Typing.h"
@@ -826,6 +827,28 @@ struct Editor::State {
     if (keep.size() != store.Attributes(sd.attrs).size()) sd.attrs = store.Intern(std::move(keep));
   }
 
+  // One side attribute of a stored cell set (cm for a dynamic array).
+  void SetSideAttr(SheetSave& sv, uint32_t row, uint32_t col, std::string_view name, std::string_view value) {
+    Sheet& s = *sv.sheet;
+    Loc l = Find(s, row, col);
+    if (l.block == kNone) return;
+    RowBlock& blk = Writable(sv, l.block);
+    auto it = std::lower_bound(blk.sides.begin(), blk.sides.end(), l.cell,
+                               [](const CellSide& x, uint32_t v) { return x.cell < v; });
+    if (it == blk.sides.end() || it->cell != l.cell) {
+      CellSide sd;
+      sd.cell = l.cell;
+      it = blk.sides.insert(it, sd);
+    }
+    auto& store = A::Store(s);
+    std::vector<pkg::XmlAttr> attrs;
+    if (it->attrs)
+      for (const auto& a : store.Attributes(it->attrs))
+        if (a.qname != name) attrs.push_back(a);
+    attrs.push_back({std::string(name), "", std::string(value)});
+    it->attrs = store.Intern(std::move(attrs));
+  }
+
   uint32_t SharedString(std::string_view text) {
     StringTable& t = b.Strings();
     for (; stringsIndexed < t.Size(); ++stringsIndexed)
@@ -1380,6 +1403,153 @@ static Result CheckInput(const CellInput& in) {
   return {};
 }
 
+namespace {
+
+// xl/metadata.xml with a cell metadata block that makes an array formula a dynamic array, as Excel
+// writes it: cellMetadata's <bk><rc t v/></bk> picks block v of futureMetadata "XLDAPR", whose
+// xda:dynamicArrayProperties has fDynamic="1"; t is XLDAPR's place among the metadataTypes. Blocks
+// are only added, so the cm numbers cells have keep their meaning. Empty `xml`: a new part. `cm`:
+// the block's number (from 1). False when `xml` isn't metadata.
+bool DynamicArrayBlock(std::string& xml, uint32_t& cm) {
+  if (xml.empty())
+    xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<metadata "
+          "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"/>";
+  pkg::XmlDom dom;
+  if (!dom.Parse(xml).Ok()) return false;
+  pugi::xml_node root = dom.Root();
+  if (pkg::LocalNameOf(root) != "metadata") return false;
+  const std::string_view qname = root.name();
+  const std::string p(qname.substr(0, qname.size() - pkg::LocalNameOf(root).size()));  // "x:" or ""
+  bool changed = false;
+  auto named = [](pugi::xml_node n, std::string_view local) { return n.type() == pugi::node_element && pkg::LocalNameOf(n) == local; };
+  auto add = [&](pugi::xml_node parent, std::string_view local) {
+    changed = true;
+    return parent.append_child((p + std::string(local)).c_str());
+  };
+  auto count = [](pugi::xml_node n) {
+    uint32_t k = 0;
+    for (pugi::xml_node c : n.children()) k += c.type() == pugi::node_element;
+    (n.attribute("count") ? n.attribute("count") : n.append_attribute("count")).set_value(k);
+  };
+  // A section where the schema puts it: after the last one that comes before it (or is one).
+  auto section = [&](std::string_view local) {
+    static constexpr std::string_view kOrder[] = {"metadataTypes", "metadataStrings", "mdxMetadata", "futureMetadata",
+                                                  "cellMetadata", "valueMetadata", "extLst"};
+    auto rank = [](std::string_view s) { return std::find(std::begin(kOrder), std::end(kOrder), s) - std::begin(kOrder); };
+    pugi::xml_node after;
+    for (pugi::xml_node c : root.children())
+      if (c.type() == pugi::node_element && rank(pkg::LocalNameOf(c)) <= rank(local)) after = c;
+    changed = true;
+    pugi::xml_node n = after ? root.insert_child_after(pugi::node_element, after) : root.prepend_child(pugi::node_element);
+    n.set_name((p + std::string(local)).c_str());
+    return n;
+  };
+  auto child = [&](std::string_view local, std::string_view name = {}) {
+    for (pugi::xml_node c : root.children())
+      if (named(c, local) && (name.empty() || name == c.attribute("name").value())) return c;
+    return pugi::xml_node();
+  };
+  // The type.
+  pugi::xml_node types = child("metadataTypes");
+  if (!types) types = section("metadataTypes");
+  uint32_t t = 0, k = 0;
+  for (pugi::xml_node c : types.children())
+    if (named(c, "metadataType") && (++k, std::string_view(c.attribute("name").value()) == "XLDAPR")) t = k;
+  if (!t) {
+    pugi::xml_node n = add(types, "metadataType");
+    n.append_attribute("name").set_value("XLDAPR");
+    n.append_attribute("minSupportedVersion").set_value("120000");
+    for (const char* a : {"copy", "pasteAll", "pasteValues", "merge", "splitFirst", "rowColShift", "clearFormats",
+                          "clearComments", "assign", "coerce", "cellMeta"})
+      n.append_attribute(a).set_value("1");
+    t = k + 1;
+    count(types);
+  }
+  // The block that says "dynamic".
+  pugi::xml_node future = child("futureMetadata", "XLDAPR");
+  if (!future) {
+    future = section("futureMetadata");
+    future.append_attribute("name").set_value("XLDAPR");
+  }
+  uint32_t v = UINT32_MAX, b = 0;
+  for (pugi::xml_node bk : future.children()) {
+    if (!named(bk, "bk")) continue;
+    for (pugi::xml_node lst : bk.children()) {
+      if (!named(lst, "extLst")) continue;
+      for (pugi::xml_node ext : lst.children())
+        for (pugi::xml_node prop : ext.children()) {
+          const std::string_view on = prop.attribute("fDynamic").value();
+          if (named(prop, "dynamicArrayProperties") && v == UINT32_MAX && (on == "1" || on == "true")) v = b;
+        }
+    }
+    ++b;
+  }
+  if (v == UINT32_MAX) {
+    pugi::xml_node ext = add(add(add(future, "bk"), "extLst"), "ext");
+    ext.append_attribute("uri").set_value("{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}");
+    pugi::xml_node prop = ext.append_child("xda:dynamicArrayProperties");
+    prop.append_attribute("xmlns:xda").set_value("http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray");
+    prop.append_attribute("fDynamic").set_value("1");
+    prop.append_attribute("fCollapsed").set_value("0");
+    v = b;
+    count(future);
+  }
+  // The cell metadata block: <rc t v/> alone.
+  pugi::xml_node cells = child("cellMetadata");
+  if (!cells) cells = section("cellMetadata");
+  cm = 0;
+  uint32_t n = 0;
+  for (pugi::xml_node bk : cells.children()) {
+    if (!named(bk, "bk")) continue;
+    ++n;
+    pugi::xml_node rc = bk.find_child([&](pugi::xml_node c) { return named(c, "rc"); });
+    if (rc && !rc.next_sibling() && rc.attribute("t").as_uint() == t && rc.attribute("v").as_uint(UINT32_MAX) == v) {
+      cm = n;
+      break;
+    }
+  }
+  if (!cm) {
+    pugi::xml_node rc = add(add(cells, "bk"), "rc");
+    rc.append_attribute("t").set_value(t);
+    rc.append_attribute("v").set_value(v);
+    cm = n + 1;
+    count(cells);
+  }
+  if (changed) xml = dom.Serialize();
+  return true;
+}
+
+// The cm that makes a cell's array formula a dynamic array in this workbook (DynamicArrayBlock),
+// adding xl/metadata.xml, or blocks to it, in the open group. Empty when it can't (no package).
+std::string DynamicArrayCm(Editor& ed, const Workbook& book) {
+  const pkg::Package* package = book.GetPackage();
+  const std::string& wb = book.WorkbookPart();
+  if (!package || wb.empty() || !package->FindPart(wb)) return {};
+  std::string part;
+  if (const pkg::RelationshipSet* rels = package->RelationshipsOf(wb))
+    for (const pkg::Relationship& r : rels->items)
+      if (!r.external && r.type.ends_with("/sheetMetadata") && package->FindPart(r.targetPart)) {
+        part = r.targetPart;
+        break;
+      }
+  std::string xml = part.empty() ? std::string() : ed.PartBytes(part);
+  const std::string before = xml;
+  uint32_t cm = 0;
+  if (!DynamicArrayBlock(xml, cm)) return {};
+  if (part.empty()) {
+    part = package->FindPart("/xl/metadata.xml") ? ed.NewPartName("/xl/metadata", ".xml") : "/xl/metadata.xml";
+    if (ed.AddPart(wb, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata", part,
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml", xml)
+            .empty())
+      return {};
+  } else if (xml != before && !ed.WritePart(part, xml)) {
+    return {};
+  }
+  return std::to_string(cm);
+}
+
+}  // namespace
+
 Result Editor::SetCell(int sheet, uint32_t row, uint32_t col, const CellInput& in) {
   return SetCells(sheet, {{CellAddr{row, col}, in}});
 }
@@ -1455,8 +1625,14 @@ Result Editor::SetCells(int sheet, const std::vector<std::pair<CellAddr, CellInp
       }
       Range touched{kMaxRows, kMaxCols, 0, 0};
       bool formulas = false;
+      // A dynamic array's cell names the cell metadata that makes it one (cm), as Excel's do:
+      // without it Excel opens the formula as a legacy {=...} array.
+      std::string cm;
+      if (std::any_of(cells.begin(), cells.end(), [](const auto& c) { return c.second.dynamic && !c.second.formula.empty(); }))
+        cm = DynamicArrayCm(*this, book_);
       for (const auto& [at, in] : cells) {
         if (!st.Put(sv, at.row, at.col, &in, false, in.style, why)) return Result::Fail(why);
+        if (in.dynamic && !in.formula.empty() && !cm.empty()) st.SetSideAttr(sv, at.row, at.col, "cm", cm);
         touched.firstRow = std::min(touched.firstRow, at.row);
         touched.firstCol = std::min(touched.firstCol, at.col);
         touched.lastRow = std::max(touched.lastRow, at.row);

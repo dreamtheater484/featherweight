@@ -957,6 +957,97 @@ TEST(sheet_edit_add_remove_part) {
   CHECK(ed.PartBytes(name) == xml && relTo() && p.ContentTypeOf(name) == type);
 }
 
+TEST(sheet_save_typed_dynamic_array) {
+  // A typed formula that spills saves as Excel 365 writes a dynamic array: the cell's cm names a
+  // cellMetadata block whose <rc> picks an XLDAPR block with fDynamic="1", in xl/metadata.xml
+  // (added when the workbook has none, extended when it has one without it). Without cm, Excel
+  // opens it as a legacy {=...} array.
+  const std::string meta = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata";
+  const std::string metaType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml";
+  auto type = [](Editor& ed, uint32_t col) {
+    CellInput in = CellInput::Formula("_xlfn.SEQUENCE(3)");
+    in.type = ValueType::Number, in.number = 1;
+    in.dynamic = true;
+    in.arrayRange = Range{0, col, 2, col};
+    return ed.SetCell(0, 0, col, in);
+  };
+  auto dynamicAt = [](Workbook& book, uint32_t col) {
+    FormulaInfo f;
+    return book.GetSheet(0).GetFormula(0, col, f) && f.kind == FormulaKind::Array && f.dynamic;
+  };
+  const size_t npos = std::string::npos;
+  {
+    auto book = OpenParts({"<sheetData/>", "<sheetData/>"});
+    if (!book) return;
+    Editor ed(*book);
+    CHECK(type(ed, 0) && type(ed, 2));  // the second uses the same block
+    std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-dynamic-array");
+    CheckClean(saved);
+    const std::string m = PartText(saved, "/xl/metadata.xml");
+    CHECK(m.find("<metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" "
+                 "merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" "
+                 "coerce=\"1\" cellMeta=\"1\"/>") != npos &&
+          m.find("fDynamic=\"1\"") != npos &&
+          m.find("<cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata>") != npos);
+    CHECK(PartText(saved, "/[Content_Types].xml").find(metaType) != npos);
+    const std::string rels = PartText(saved, "/xl/_rels/workbook.xml.rels");
+    CHECK(rels.find(meta) != npos && rels.find("Target=\"metadata.xml\"") != npos);
+    const std::string sheet = PartText(saved, "/xl/worksheets/sheet1.xml");
+    CHECK(sheet.find("<c r=\"A1\" cm=\"1\">") != npos && sheet.find("<c r=\"C1\" cm=\"1\">") != npos);
+    auto back = OpenZip(saved);
+    CHECK(back && dynamicAt(*back, 0) && dynamicAt(*back, 2));
+    CHECK(ed.Undo() && ed.Undo());
+    CHECK(ed.PartBytes("/xl/metadata.xml").empty());
+    std::vector<uint8_t> none = SaveBytes(*book, ed);
+    CHECK(PartText(none, "/xl/metadata.xml").empty() && PartText(none, "/xl/worksheets/sheet1.xml").find("cm=") == npos);
+  }
+  {
+    // A metadata part without XLDAPR (one that declares rich values only): the type, the block and
+    // the cell metadata are added after what's there.
+    Parts parts = WorkbookParts({"<sheetData/>", "<sheetData/>"});
+    AddPart(parts, "xl/metadata.xml",
+            "<metadata xmlns=\"" + std::string(kMain) +
+                "\"><metadataTypes count=\"1\"><metadataType name=\"XLRICHVALUE\" minSupportedVersion=\"120000\" "
+                "copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" "
+                "clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\"/></metadataTypes></metadata>",
+            metaType, "xl/workbook.xml", "rM", meta, "metadata.xml");
+    auto book = OpenZip(test::MakeZip(parts));
+    if (!book) return;
+    Editor ed(*book);
+    CHECK(type(ed, 1));
+    std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-dynamic-array-meta");
+    CheckClean(saved);
+    const std::string m = PartText(saved, "/xl/metadata.xml");
+    const size_t rich = m.find("<metadataType name=\"XLRICHVALUE\""), type2 = m.find("<metadataType name=\"XLDAPR\""),
+                 dap = m.find("</metadataTypes><futureMetadata name=\"XLDAPR\" count=\"1\"><bk>"),
+                 cells = m.find("</futureMetadata><cellMetadata count=\"1\"><bk><rc t=\"2\" v=\"0\"/></bk></cellMetadata></metadata>");
+    CHECK(m.find("<metadataTypes count=\"2\">") != npos && rich < type2 && type2 < dap && dap < cells && cells != npos);
+    CHECK(PartText(saved, "/xl/worksheets/sheet1.xml").find("<c r=\"B1\" cm=\"1\">") != npos);
+    auto back = OpenZip(saved);
+    CHECK(back && dynamicAt(*back, 1));
+  }
+  {
+    // Excel's own: its block is used, the part stays as it was.
+    const std::string xml =
+        "<metadata xmlns=\"" + std::string(kMain) +
+        "\" xmlns:xda=\"http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray\"><metadataTypes count=\"1\">"
+        "<metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" "
+        "merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\" "
+        "cellMeta=\"1\"/></metadataTypes><futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext "
+        "uri=\"{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/>"
+        "</ext></extLst></bk></futureMetadata><cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata></metadata>";
+    Parts parts = WorkbookParts({"<sheetData/>", "<sheetData/>"});
+    AddPart(parts, "xl/metadata.xml", xml, metaType, "xl/workbook.xml", "rM", meta, "metadata.xml");
+    auto book = OpenZip(test::MakeZip(parts));
+    if (!book) return;
+    Editor ed(*book);
+    CHECK(type(ed, 0));
+    CHECK(ed.PartBytes("/xl/metadata.xml") == xml);
+    std::vector<uint8_t> saved = SaveBytes(*book, ed);
+    CHECK(PartText(saved, "/xl/worksheets/sheet1.xml").find("<c r=\"A1\" cm=\"1\">") != npos);
+  }
+}
+
 // A drawing part's objects (s3-charts): found by shape id with their bytes, placed, and the
 // relationships they use.
 TEST(sheet_drawing_objects) {
