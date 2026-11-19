@@ -546,7 +546,7 @@ void Engine::Precedents(const Node& n, std::vector<Area>& out, bool* volatileNam
 void Engine::MarkDirty(uint32_t id) {
   Node& n = nodes_[id];
   if (n.state != kClean || (n.flags & kFree)) return;
-  PlanChanged();
+  PlanChanged(false);
   n.state = kDirty;
   ++dirtyCount_;
   for (int32_t r = n.out.r1; r <= n.out.r2; ++r)
@@ -933,7 +933,7 @@ void Engine::CalculateSheet(int sheet) {
 void Engine::CalculateCell(const Cell& at) {
   uint32_t id = NodeAt(at.sheet, at.row, at.col);
   if (id == UINT32_MAX) return;
-  PlanChanged();
+  PlanChanged(false);
   Node& n = nodes_[id];
   Value v;
   needed_ = UINT32_MAX;
@@ -1014,13 +1014,19 @@ struct Engine::Plan {
   std::vector<Value> values;    // the chunk's results
   std::vector<uint8_t> results;
   std::vector<uint32_t> cleaned;  // calculated, their cells still marked dirty (Flush)
+  // The dirty formulas the plan was made for: the same ones dirty again, with no formula, name or
+  // spill changed since (`reusable`), follow the same plan (F9 again, the same cell edited again).
+  std::vector<uint32_t> made;
+  bool reusable = false;
 };
 
 bool Engine::InWorker() { return tWorker; }
 void Engine::Blocked() { tBlocked = true; }
 
-void Engine::PlanChanged() {
-  if (plan_) plan_->valid = false, plan_->retry = true;
+void Engine::PlanChanged(bool structure) {
+  if (!plan_) return;
+  plan_->valid = false, plan_->retry = true;
+  if (structure) plan_->reusable = false;
 }
 
 void Engine::SetThreads(int n) {
@@ -1033,8 +1039,6 @@ void Engine::SetThreads(int n) {
 bool Engine::BuildPlan() {
   Plan& p = *plan_;
   p.valid = false;
-  p.order.clear();
-  p.levels.clear();
   p.next = p.level = 0;
   std::vector<uint32_t> dirty;
   dirty.reserve(dirtyCount_);
@@ -1042,6 +1046,11 @@ bool Engine::BuildPlan() {
     if (nodes_[id].state == kDirty && !(nodes_[id].flags & kFree)) dirty.push_back(id);
   const size_t n = dirty.size();
   if (n < kParallelMin) return false;
+  if (p.reusable && dirty == p.made) return !p.order.empty();
+  p.reusable = false;
+  p.made = dirty;
+  p.order.clear();
+  p.levels.clear();
   std::vector<uint32_t> slot(nodes_.size(), UINT32_MAX);
   for (size_t i = 0; i < n; ++i) slot[dirty[i]] = static_cast<uint32_t>(i);
   // Each formula's dirty precedents, on the workers (reading only).
@@ -1049,6 +1058,16 @@ bool Engine::BuildPlan() {
   std::vector<std::vector<std::pair<uint32_t, uint32_t>>> edges(w);  // (precedent, formula)
   std::vector<std::vector<Area>> areas(w);
   std::vector<uint8_t> eligible(n, 0);
+  // Areas of many rows (SUM(B:B) over a column of dirty formulas) are scanned in slabs afterwards,
+  // on all the workers, rather than by the one worker that has the formula.
+  struct Heavy {
+    uint32_t i;
+    int s;
+    Area a;
+  };
+  constexpr int32_t kSlab = 8192;
+  std::vector<std::vector<Heavy>> heavy(w);
+  std::vector<std::vector<uint32_t>> bad(w);
   const size_t cap = std::max<size_t>(4'000'000, 8 * n);
   std::atomic<size_t> total{0};
   std::atomic<bool> tooMany{false};
@@ -1066,7 +1085,11 @@ bool Engine::BuildPlan() {
         ar.clear();
         Precedents(nd, ar);
         for (const Area& a : ar)
-          for (int s = a.s1; s <= a.s2 && ok; ++s)
+          for (int s = a.s1; s <= a.s2 && ok; ++s) {
+            if (a.Rows() > kSlab) {
+              heavy[static_cast<size_t>(wk)].push_back({static_cast<uint32_t>(i), s, a});
+              continue;
+            }
             dirtyCells_->Each(s, a, [&](int32_t r, int32_t c) {
               const uint32_t m = NodeAt(s, r, c);
               if (m == UINT32_MAX) return true;
@@ -1074,13 +1097,43 @@ bool Engine::BuildPlan() {
               out.emplace_back(slot[m], static_cast<uint32_t>(i));
               return true;
             });
+          }
       }
       eligible[i] = ok;
       const size_t added = out.size() - before;
       if (added && total.fetch_add(added, std::memory_order_relaxed) + added > cap) tooMany = true;
     }
   });
+  std::vector<Heavy> slabs;
+  for (const auto& v : heavy)
+    for (const Heavy& h : v)
+      for (int64_t r = h.a.r1; r <= h.a.r2; r += kSlab) {
+        Heavy part = h;
+        part.a.r1 = static_cast<int32_t>(r);
+        part.a.r2 = static_cast<int32_t>(std::min<int64_t>(h.a.r2, r + kSlab - 1));
+        slabs.push_back(part);
+      }
+  if (!tooMany && !slabs.empty())
+    workers_->Run(slabs.size(), 1, [&](int wk, size_t b, size_t e) {
+      auto& out = edges[static_cast<size_t>(wk)];
+      for (size_t k = b; k < e && !tooMany.load(std::memory_order_relaxed); ++k) {
+        const Heavy& h = slabs[k];
+        const uint32_t id = dirty[h.i];
+        const size_t before = out.size();
+        dirtyCells_->Each(h.s, h.a, [&](int32_t r, int32_t c) {
+          const uint32_t m = NodeAt(h.s, r, c);
+          if (m == UINT32_MAX) return true;
+          if (m == id || slot[m] == UINT32_MAX) return bad[static_cast<size_t>(wk)].push_back(h.i), false;
+          out.emplace_back(slot[m], h.i);
+          return true;
+        });
+        const size_t added = out.size() - before;
+        if (added && total.fetch_add(added, std::memory_order_relaxed) + added > cap) tooMany = true;
+      }
+    });
   if (tooMany) return false;
+  for (const auto& v : bad)
+    for (uint32_t i : v) eligible[i] = 0;
   // Levels.
   std::vector<uint32_t> start(n + 1, 0), indeg(n, 0);
   for (const auto& v : edges)
@@ -1107,9 +1160,9 @@ bool Engine::BuildPlan() {
     lb = le;
   }
   p.levels.push_back(order.size());
-  if (order.size() < kParallelMin) return false;
   for (uint32_t& o : order) o = dirty[o];
-  return true;
+  p.reusable = true;
+  return order.size() >= kParallelMin;
 }
 
 void Engine::RunChunk(size_t begin, size_t end) {
@@ -1192,7 +1245,7 @@ void Engine::RunChunk(size_t begin, size_t end) {
     --dirtyCount_;
     p.cleaned.push_back(id);
   }
-  if (retry) p.valid = p.retry = false;
+  if (retry) p.valid = p.retry = p.reusable = false;
 }
 
 void Engine::Flush() {

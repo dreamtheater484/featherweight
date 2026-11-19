@@ -191,7 +191,8 @@ class Engine : public Resolver, public Names {
   std::vector<std::unique_ptr<Evaluator>> evaluators_;  // one per worker
   std::unique_ptr<Plan> plan_;
   size_t parallelEvaluations_ = 0;
-  void PlanChanged();
+  // The planned order no longer holds; `structure`: formulas, names or spills changed too.
+  void PlanChanged(bool structure = true);
 };
 
 }  // namespace fw::sheet::calc
