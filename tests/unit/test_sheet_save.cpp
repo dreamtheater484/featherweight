@@ -924,6 +924,15 @@ TEST(sheet_edit_add_remove_part) {
   CHECK(ed.PartBytes(name) == xml && p.ContentTypeOf(name) == type);
   CHECK(relTo() && relTo()->target == "../drawings/drawing1.xml" && relTo()->type == rel);
   CHECK(ed.NewPartName("/xl/drawings/drawing", ".xml") == "/xl/drawings/drawing2.xml");
+  // A second relationship to the same part, from the other sheet.
+  ed.BeginGroup(u"Reuse");
+  const std::string sheet2 = book->GetSheet(1).PartName();
+  const std::string again = ed.AddRelationship(sheet2, rel, name);
+  CHECK(ed.AddRelationship(sheet2, rel, "/xl/drawings/nothing.xml").empty());
+  ed.EndGroup();
+  CHECK(!again.empty() && p.RelationshipsOf(sheet2) && p.RelationshipsOf(sheet2)->items.back().targetPart == name);
+  CHECK(ed.Undo());
+  CHECK(!p.RelationshipsOf(sheet2) || p.RelationshipsOf(sheet2)->items.empty() || p.RelationshipsOf(sheet2)->items.back().targetPart != name);
 
   std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-part-added");
   CheckClean(saved);

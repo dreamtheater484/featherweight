@@ -3434,7 +3434,6 @@ std::string Editor::AddPart(std::string_view source, std::string_view relType, s
   const std::string part(name), from(source);
   st.KeepPart(part);
   st.KeepTypes();
-  st.KeepRels(from);
   package->SetPart(part, std::vector<uint8_t>(bytes.begin(), bytes.end()));
   if (package->ContentTypeOf(part) != contentType) {
     pkg::ContentTypes types = package->Types();
@@ -3443,6 +3442,16 @@ std::string Editor::AddPart(std::string_view source, std::string_view relType, s
     o.emplace_back(part, std::string(contentType));
     package->SetContentTypes(std::move(types));
   }
+  return AddRelationship(from, relType, part);
+}
+
+std::string Editor::AddRelationship(std::string_view source, std::string_view relType, std::string_view target) {
+  State& st = *s_;
+  pkg::Package* package = book_.GetPackage();
+  if (st.open.empty() || !package || !package->FindPart(target)) return {};
+  if (source != "/" && !package->FindPart(source)) return {};
+  const std::string from(source);
+  st.KeepRels(from);
   pkg::RelationshipSet set;
   if (const pkg::RelationshipSet* r = package->RelationshipsOf(from)) set = *r;
   else set.source = from;
@@ -3454,7 +3463,7 @@ std::string Editor::AddPart(std::string_view source, std::string_view relType, s
   pkg::Relationship rel;
   rel.id = id;
   rel.type = std::string(relType);
-  rel.target = RelativeTarget(from, part);
+  rel.target = RelativeTarget(from, target);
   set.items.push_back(std::move(rel));
   package->SetRelationships(std::move(set));
   return id;

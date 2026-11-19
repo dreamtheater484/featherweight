@@ -245,6 +245,9 @@ class Editor {
   std::string AddPart(std::string_view source, std::string_view relType, std::string_view name,
                       std::string_view contentType, std::string bytes);
   // A part that exists written anew.
+  // A relationship from `source` to a part that exists already (a picture stored once, used
+  // again); returns its id, empty when it can't.
+  std::string AddRelationship(std::string_view source, std::string_view relType, std::string_view target);
   bool WritePart(std::string_view name, std::string bytes);
   // A part gone, with every relationship to it, its content type override and its own
   // relationships (what those point to is the caller's to remove).
