@@ -1,0 +1,23 @@
+# S3 fixture ("created as Excel shows it", s3-charts): a clustered bar chart of two series.
+# Built through Insert > Chart on the selection; Excel reads back the type and series.
+sheet-name "Bar"
+enter A1 "Quarter"
+enter B1 "North"
+enter C1 "South"
+enter A2 "Q1"
+enter B2 "120"
+enter C2 "80"
+enter A3 "Q2"
+enter B3 "150"
+enter C3 "110"
+enter A4 "Q3"
+enter B4 "90"
+enter C4 "130"
+enter A5 "Q4"
+enter B5 "200"
+enter C5 "160"
+chart A1:C5 bar
+save
+expect chart Bar 1 type 57 series 2
+expect chart Bar 1 series 1 =SERIES(Bar!$B$1,Bar!$A$2:$A$5,Bar!$B$2:$B$5,1)
+expect chart Bar 1 series 2 =SERIES(Bar!$C$1,Bar!$A$2:$A$5,Bar!$C$2:$C$5,2)

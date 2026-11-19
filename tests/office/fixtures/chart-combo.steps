@@ -1,0 +1,31 @@
+# S3 fixture ("created as Excel shows it", s3-charts): a combo (clustered column and line): the last series a line, on the same axes.
+# Built through Insert > Chart on the selection; Excel reads back the type and series.
+sheet-name "Combo"
+enter A1 "Month"
+enter B1 "Units"
+enter C1 "Price"
+enter A2 "Jan"
+enter B2 "120"
+enter C2 "95"
+enter A3 "Feb"
+enter B3 "135"
+enter C3 "102"
+enter A4 "Mar"
+enter B4 "150"
+enter C4 "110"
+enter A5 "Apr"
+enter B5 "142"
+enter C5 "98"
+enter A6 "May"
+enter B6 "160"
+enter C6 "120"
+enter A7 "Jun"
+enter B7 "175"
+enter C7 "125"
+chart A1:C7 combo
+save
+expect chart Combo 1 type -4111 series 2
+expect chart Combo 1 series 1 =SERIES(Combo!$B$1,Combo!$A$2:$A$7,Combo!$B$2:$B$7,1)
+expect chart Combo 1 series 1 type 51
+expect chart Combo 1 series 2 =SERIES(Combo!$C$1,Combo!$A$2:$A$7,Combo!$C$2:$C$7,2)
+expect chart Combo 1 series 2 type 4

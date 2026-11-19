@@ -314,10 +314,10 @@ int S3Timings(const fs::path& tmpl, int runs, std::string& json, int& over) {
     readRules();
     text.Clear();
 
-    // Insert > Chart (a column chart) of the first 30 rows, beside the data.
+    // Insert > Chart (a column chart) of the selection, beside it.
     t = Clock::now();
     sh::edit::Editor::NewChart nc;
-    nc.data = {0, 0, 30, 2};
+    nc.data = data;
     nc.at = {1, 5};
     if (sh::edit::Result r = ed.InsertChart(0, nc); !r.ok) {
       failed("a chart", r);
@@ -328,11 +328,12 @@ int S3Timings(const fs::path& tmpl, int runs, std::string& json, int& over) {
     chart.push_back(Since(t));
     if (const auto placed = objects->Objects(); placed.size() != 1 || !placed[0].chart)
       return std::fprintf(stderr, "The chart timed isn't on the sheet.\n"), 1;
-    // The chart drawn again after an edit to its data: the tab paints its cells and the objects
-    // (the chart reads the cells when it draws).
+    // The chart drawn again after an edit to its data: the tab paints its cells and the objects;
+    // the chart reads the cells again when it draws (marked stale as the tab marks it, SyncEngine).
     for (int k = 0; k < 4; ++k) {
       t = Clock::now();
       ed.SetCell(0, 1 + static_cast<uint32_t>(k), 1, sh::edit::CellInput::Number(900.0 - k * 50 - i));
+      objects->ValuesChanged();
       calc.CellsEdited(0, {1u + static_cast<uint32_t>(k), 1, 1u + static_cast<uint32_t>(k), 1});
       while (!calc.CalcStep(1e9)) {}
       text.Clear();
@@ -350,7 +351,7 @@ int S3Timings(const fs::path& tmpl, int runs, std::string& json, int& over) {
   }
   Line(json, "createTable", "S3: a table from 1,000 rows, to screen", table, 100, over);
   Line(json, "createRule", "S3: a conditional format over them, to screen", rule, 100, over);
-  Line(json, "createChart", "S3: a chart of 30 rows, to screen", chart, 100, over);
+  Line(json, "createChart", "S3: a chart of them, to screen", chart, 100, over);
   Line(json, "chartRedraw", "S3: the chart drawn again after a data edit", redraw, 16, over, 50);
   return 0;
 }
