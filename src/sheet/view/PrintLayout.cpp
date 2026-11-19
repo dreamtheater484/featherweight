@@ -739,8 +739,12 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
 
 void PrintLayout::PaintHeaderFooter(draw::Painter& p, const PrintPage& page, bool header) {
   const HeaderFooter& hf = sheet_.HeadersFooters();
-  const bool first = hf.differentFirst && &page == &pages_.front() && page.number == 1;
-  const bool even = hf.differentOddEven && page.number % 2 == 0;
+  // By the page's place in the sheet's printout, not its number: Excel prints the first page's header
+  // on the first page whatever number it starts from, and the even pages' on the second, fourth...
+  // (measured, s3-print: first page number 2 prints FIRST 2, EVEN 3, ODD 4, EVEN 5).
+  const size_t at = static_cast<size_t>(&page - pages_.data());
+  const bool first = hf.differentFirst && at == 0;
+  const bool even = hf.differentOddEven && at % 2 == 1;
   const std::string& code = first ? (header ? hf.firstHeader : hf.firstFooter)
                             : even ? (header ? hf.evenHeader : hf.evenFooter)
                                    : (header ? hf.oddHeader : hf.oddFooter);

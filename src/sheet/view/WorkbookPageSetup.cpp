@@ -203,6 +203,12 @@ const DefinedName* NameOf(const Workbook& book, const char* name, size_t sheet) 
   return n && n->sheet == static_cast<int>(sheet) ? n : nullptr;
 }
 
+// The header (`f` 0) or footer (1) of the odd pages (`which` 0), the even (1) or the first page (2).
+template <class H>
+auto& HfField(H& h, int which, int f) {
+  return which == 2 ? (f ? h.firstFooter : h.firstHeader) : which == 1 ? (f ? h.evenFooter : h.evenHeader) : (f ? h.oddFooter : h.oddHeader);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -292,12 +298,16 @@ class WorkbookView::PageSetupPanel : public PanelContent {
            [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.horizontalCentered = !p.horizontalCentered; }); });
     Toggle(centerV_, L"Vertically",
            [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.verticalCentered = !p.verticalCentered; }); });
-    // Header and footer
+    // Header and footer (the odd pages', or the even or first page's when those differ)
+    Choice(which_, [this](int i) {
+      if (i >= 0 && static_cast<size_t>(i) < whichOf_.size()) hfWhich_ = whichOf_[static_cast<size_t>(i)];
+      Refresh();
+    });
     for (int f = 0; f < 2; ++f) {
       Choice(hfPreset_[f], [this, f](int i) {
         const std::vector<HfPreset> presets = Presets(Utf8ToWide(v_.Current().Name()), v_.Title());
         if (i < 0 || static_cast<size_t>(i) >= presets.size()) return;
-        Change([&](PageSetup&, HeaderFooter& h, bool&) { (f ? h.oddFooter : h.oddHeader) = presets[static_cast<size_t>(i)].code; });
+        Change([&](PageSetup&, HeaderFooter& h, bool&) { HfField(h, hfWhich_, f) = presets[static_cast<size_t>(i)].code; });
       });
       for (int s = 0; s < 3; ++s) {
         FocusComboBox& b = section_[f][s];
@@ -306,7 +316,7 @@ class WorkbookView::PageSetupPanel : public PanelContent {
           std::array<std::wstring, 3> parts;
           for (int k = 0; k < 3; ++k) parts[k] = section_[f][k].Text();
           const std::string code = Join(parts);
-          Change([&](PageSetup&, HeaderFooter& h, bool&) { (f ? h.oddFooter : h.oddHeader) = code; });
+          Change([&](PageSetup&, HeaderFooter& h, bool&) { HfField(h, hfWhich_, f) = code; });
         };
       }
     }
@@ -394,9 +404,24 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     preset_.ReplaceText(preset);
     centerH_.checked = p.horizontalCentered;
     centerV_.checked = p.verticalCentered;
+    // Which pages' header and footer the boxes show, when the first or even pages have their own.
+    which_.items.clear();
+    whichOf_.clear();
+    auto pages = [&](const wchar_t* name, int which) {
+      which_.items.push_back(name);
+      whichOf_.push_back(which);
+    };
+    if (h.differentOddEven || h.differentFirst) {
+      pages(h.differentOddEven ? L"Odd pages" : L"Other pages", 0);
+      if (h.differentOddEven) pages(L"Even pages", 1);
+      if (h.differentFirst) pages(L"First page", 2);
+    }
+    const auto shownPages = std::find(whichOf_.begin(), whichOf_.end(), hfWhich_);
+    if (shownPages == whichOf_.end()) hfWhich_ = 0;
+    else which_.ReplaceText(which_.items[static_cast<size_t>(shownPages - whichOf_.begin())]);
     const std::vector<HfPreset> presets = Presets(Utf8ToWide(s.Name()), v_.Title());
     for (int f = 0; f < 2; ++f) {
-      const std::string& code = f ? h.oddFooter : h.oddHeader;
+      const std::string& code = HfField(h, hfWhich_, f);
       hfPreset_[f].items.clear();
       std::wstring shown = L"Custom";
       for (const HfPreset& x : presets) {
@@ -506,19 +531,30 @@ class WorkbookView::PageSetupPanel : public PanelContent {
         break;
       }
       case kTabHeader:
+        if (!whichOf_.empty()) {
+          label(L"Header and footer for");
+          y += 18 * ui;
+          full(which_);
+        }
         for (int f = 0; f < 2; ++f) {
           label(f ? L"Footer" : L"Header");
           y += 18 * ui;
+          y -= 4 * ui;
           full(hfPreset_[f]);
-          const float w3 = (right - left - 2 * gap) / 3;
+          // Left, center and right, a row each: wide enough for "Page &[Page] of &[Pages]".
+          const wchar_t* sides[] = {L"Left", L"Center", L"Right"};
+          const float labelW = 52 * ui;
+          y -= 4 * ui;
           for (int k = 0; k < 3; ++k) {
-            section_[f][k].rc = RectF(left + k * (w3 + gap), y, left + k * (w3 + gap) + w3, y + rowH);
+            y += 7 * ui;
+            label(sides[k], left, left + labelW);
+            y -= 7 * ui;
+            section_[f][k].rc = RectF(left + labelW, y, right, y + rowH);
             section_[f][k].visible = true;
             out.push_back(&section_[f][k]);
+            y += rowH + 4 * ui;
           }
-          y += rowH + 4 * ui;
-          label(L"Left, center and right", left, right);
-          y += 24 * ui;
+          y += 10 * ui;
         }
         full(oddEven_);
         full(firstDiff_);
@@ -588,7 +624,7 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     };
   }
   std::vector<Control*> All() {
-    std::vector<Control*> all = {&what_,     &portrait_, &landscape_, &paper_,     &scaling_,   &scale_,   &fitW_,
+    std::vector<Control*> all = {&which_,    &what_,     &portrait_, &landscape_, &paper_,     &scaling_,   &scale_,   &fitW_,
                                  &fitH_,     &first_,    &preset_,    &centerH_,   &centerV_,   &oddEven_, &firstDiff_,
                                  &area_,     &rows_,     &cols_,      &gridlines_, &headings_,  &down_,    &over_};
     for (auto& b : margin_) all.push_back(&b);
@@ -604,7 +640,9 @@ class WorkbookView::PageSetupPanel : public PanelContent {
   Tab tab_ = kTabPage;
   PanelButton tabs_[kTabs];
   FocusComboBox what_, paper_, scaling_, scale_, fitW_, fitH_, first_, preset_, margin_[6], hfPreset_[2], section_[2][3],
-      area_, rows_, cols_;
+      area_, rows_, cols_, which_;
+  int hfWhich_ = 0;           // the header and footer shown: 0 the odd (or other) pages', 1 the even, 2 the first page's
+  std::vector<int> whichOf_;  // which_'s items as hfWhich_ values
   PanelButton portrait_, landscape_, centerH_, centerV_, oddEven_, firstDiff_, gridlines_, headings_, down_, over_;
   std::vector<std::pair<std::wstring, D2D1_RECT_F>> labels_;
   D2D1_RECT_F hintRc_{};
@@ -1155,6 +1193,15 @@ bool WorkbookView::PageScriptOp(const std::wstring& arg) {
     });
   if (key == L"header" || key == L"footer")
     return set([&](PageSetup&, HeaderFooter& h, bool&) { (key == L"header" ? h.oddHeader : h.oddFooter) = WideToUtf8(value); });
+  // evenheader, evenfooter, firstheader, firstfooter: those pages get their own (differentOddEven or
+  // differentFirst on).
+  for (int which = 1; which <= 2; ++which)
+    for (int f = 0; f < 2; ++f)
+      if (key == std::wstring(which == 1 ? L"even" : L"first") + (f ? L"footer" : L"header"))
+        return set([&](PageSetup&, HeaderFooter& h, bool&) {
+          (which == 1 ? h.differentOddEven : h.differentFirst) = true;
+          HfField(h, which, f) = WideToUtf8(value);
+        });
   if (key == L"gridlines" || key == L"headings")
     return set([&](PageSetup& p, HeaderFooter&, bool&) { (key == L"gridlines" ? p.gridLines : p.headings) = value == L"1"; });
   if (key == L"order")
