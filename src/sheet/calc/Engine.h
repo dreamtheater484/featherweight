@@ -70,6 +70,9 @@ class Engine : public Resolver, public Names {
   // A value cell changed (an edit): its dependents become dirty. Volatile formulas too, as Excel.
   void Changed(int sheet, const Area& cells);
   void MarkAllDirty();
+  // Tables resized, added or removed (s3-data): structured references cover other cells, so the
+  // graph is built again when needed.
+  void TablesChanged() { GraphChanged(); }
   // Calculates dirty formulas for at most `budgetMs` (UI time slices). True when nothing is left.
   bool Recalculate(double budgetMs = 1e300);
   // Builds the dependency graph about `budgetMs` at a time (the app, after opening): true once it

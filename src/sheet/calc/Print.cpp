@@ -428,6 +428,17 @@ class Printer {
         static const char* kOps[] = {"+", "-", "*", "/", "^", "&", "=", "<>", "<", "<=", ">", ">=", ":", ",", " "};
         std::string b = Pop(), a = Pop();
         uint8_t op = p[1] & ~kArrayMode;
+        // After ':' a sheet's name is quoted, as Excel writes it: Kosten_1:Kostentypen!$E$21 would read
+        // as a 3-D reference from a sheet Kosten_1.
+        if (op == kRange && !b.empty() && b[0] != '\'') {
+          auto nameChar = [](char c) {
+            return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' ||
+                   c == '.' || c == '\\' || c == '?' || c == ':' || static_cast<unsigned char>(c) >= 0x80;
+          };
+          size_t k = 0;
+          while (k < b.size() && nameChar(b[k])) ++k;
+          if (k > 0 && k < b.size() && b[k] == '!') b = "'" + b.substr(0, k) + "'" + b.substr(k);
+        }
         stack_.push_back(a + (op < std::size(kOps) ? kOps[op] : "?") + b);
         break;
       }
