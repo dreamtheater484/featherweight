@@ -7,8 +7,6 @@
 #include "Common.h"
 #include "core/Strings.h"
 #include "pkg/Check.h"
-#include "pkg/Snapshot.h"
-#include "sheet/ods/Ods.h"
 #include "sheet/xlsx/Xlsx.h"
 
 namespace fwtool {
@@ -53,16 +51,7 @@ bool IsWorkbookFile(const std::filesystem::path& file) {
 }
 
 std::unique_ptr<Workbook> ReadWorkbook(const std::filesystem::path& file, fw::pkg::Status& status, bool loadAll) {
-  std::unique_ptr<fw::pkg::Package> pkg;
-  const std::wstring ext = fw::ToLower(file.extension().wstring());
-  if (ext == L".ods" || ext == L".ots") {  // S4: converted as the app converts it
-    auto source = fw::pkg::Snapshot::Open(file.wstring(), {}, status);
-    std::vector<uint8_t> xlsx;
-    if (!source || !(status = fw::sheet::ods::OdsToXlsx(source->Bytes(), xlsx)).Ok()) return nullptr;
-    pkg = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(xlsx)), fw::pkg::Limits::Default(), status);
-  } else {
-    pkg = OpenPackage(file, status);
-  }
+  auto pkg = OpenPackage(file, status);  // .ods converted there
   if (!pkg) return nullptr;
   fw::sheet::xlsx::ReadOptions options;
   options.loadAll = loadAll;

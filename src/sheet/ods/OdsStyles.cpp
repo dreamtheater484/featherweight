@@ -378,8 +378,7 @@ std::string Styles::Section(xml_node style, bool& text) {
       out += "AM/PM";
     }
   }
-  if (out.empty() && kind == Kind::Text) out = "@", text = true;
-  return color + out;
+  return color + out;  // empty: the section shows nothing
 }
 
 std::string Styles::NumberCode(xml_node style) {
@@ -410,7 +409,7 @@ std::string Styles::NumberCode(xml_node style) {
       code = maps[0].code + ";" + main;
     } else if (!text && maps.size() == 2 && is(0, ">") && is(1, "<")) {
       code = maps[0].code + ";" + maps[1].code + ";" + main;
-    } else if (text && maps.size() == 3 && is(0, ">") && is(1, "<") && is(2, "=")) {
+    } else if (maps.size() == 3 && is(0, ">") && is(1, "<") && is(2, "=")) {
       code = maps[0].code + ";" + maps[1].code + ";" + maps[2].code + ";" + main;
     } else if (text) {
       std::vector<std::string> s;
