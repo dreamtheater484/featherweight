@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "sheet/edit/Drawing.h"
 #include "sheet/edit/Protection.h"
 #include "sheet/model/Workbook.h"
 
@@ -51,6 +52,7 @@ enum ChangeFlag : uint32_t {
   kView = 1u << 10,       // selection, active sheet, top-left cell, zoom (not undo steps)
   kObjects = 1u << 11,    // the sheet's notes, links or drawings moved (a sort): load them again
   kRules = 1u << 12,      // the sheet's conditional formats or validations changed: read them again
+  kTables = 1u << 13,     // a table added, removed, resized or renamed: structured references' areas differ
 };
 
 // Cells inserted or deleted (kShift): along `axis`, `count` rows or columns at `at` (> 0 inserted
@@ -235,6 +237,9 @@ class Editor {
   Result AddTable(int sheet, Table t);
   Result SetTable(int sheet, size_t index, const Table& t);
   Result RemoveTable(int sheet, size_t index);
+  // The criteria of table `index`'s filter buttons (its autoFilter; `f.ref` is the table's, without
+  // the total row). The rows it hides are the caller's (HideRows), in the same group.
+  Result SetTableFilter(int sheet, size_t index, const SheetFilter& f);
 
   // ---- Package parts, for edit operations (charts, pictures, notes, comments, tables...): call
   // them inside the operation's group (Run, or BeginGroup and EndGroup); undo and redo take them
@@ -245,6 +250,9 @@ class Editor {
   std::string AddPart(std::string_view source, std::string_view relType, std::string_view name,
                       std::string_view contentType, std::string bytes);
   // A part that exists written anew.
+  // A relationship from `source` to a part that exists already (a picture stored once, used
+  // again); returns its id, empty when it can't.
+  std::string AddRelationship(std::string_view source, std::string_view relType, std::string_view target);
   bool WritePart(std::string_view name, std::string bytes);
   // A part gone, with every relationship to it, its content type override and its own
   // relationships (what those point to is the caller's to remove).
@@ -252,6 +260,30 @@ class Editor {
   // The first name "<stem><n><ext>" no part has, n from 1: NewPartName("/xl/charts/chart", ".xml").
   std::string NewPartName(std::string_view stem, std::string_view ext) const;
   std::string PartBytes(std::string_view name) const;  // empty when there's no such part
+
+  // ---- Drawings: charts, pictures and shapes sit in the sheet's drawing part. Changes go inside
+  // a group (Run, or BeginGroup/EndGroup).
+  // The sheet's drawing (/xl/drawings/drawingN.xml); when it has none and `create`, a new one with
+  // its relationship, content type and the sheet's <drawing r:id> element. Empty when it can't
+  // (no package, a sheet not saved yet; creating needs an open group).
+  std::string SheetDrawing(int sheet, bool create);
+  // A shape id (cNvPr id) the drawing doesn't use yet: one past the highest.
+  uint32_t NextShapeId(std::string_view drawing) const;
+  // Appends an anchor to a drawing: an xdr:twoCellAnchor, oneCellAnchor or absoluteAnchor that
+  // declares the xdr: and a: prefixes (and r: when it has relationships) on itself.
+  bool AddAnchor(std::string_view drawing, std::string_view anchorXml);
+  // The object with shape id `id` (its first cNvPr's): its bytes, an anchor or an
+  // mc:AlternateContent; empty when the drawing has none.
+  std::string AnchorXml(std::string_view drawing, uint32_t id) const;
+  // That object's bytes replaced by `xml` (empty removes it, leaving its parts). Inside a group.
+  bool ReplaceAnchor(std::string_view drawing, uint32_t id, std::string_view xml);
+
+  // ---- Objects in a sheet's drawing (charts, pictures, shapes), by shape id (s3-charts)
+  // Moved or resized: the anchor's cells and offsets, the shape's own position and size.
+  Result MoveObject(int sheet, uint32_t id, const drawing::Place& place);
+  // Deleted, with the parts nothing else uses any more (a chart and its own parts, a picture
+  // used once); the drawing and the sheet's reference to it go with the last object.
+  Result DeleteObjects(int sheet, const std::vector<uint32_t>& ids);
 
   // ---- Charts (s3-charts)
   enum class ChartKind : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter };

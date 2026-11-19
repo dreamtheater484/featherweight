@@ -88,6 +88,11 @@ void PutSheetRules(detail::PartText& t, bool validations, const std::string& xml
 // name, size, rows, filter, columns and style set from `t`, the rest kept (false: not a table);
 // the sheet's tableParts with the relationship `relId` added or taken out.
 std::string TableXml(const Table& t);
+// A table's filter as its part has it (false: none), and the part with its autoFilter element
+// replaced by `autoFilter` (Editor's FilterXml); an autoFilter element (a sheet's or a table's) read.
+bool ReadTableFilter(std::string_view tableXml, SheetFilter& f);
+bool PutTableFilter(std::string& tableXml, const std::string& autoFilter);
+bool ReadAutoFilter(pugi::xml_node n, SheetFilter& f);
 bool UpdateTableXml(std::string& xml, const Table& t);
 void PutTablePart(detail::PartText& t, const std::string& relId, bool add);
 // A differential format (dxfs) as styles.xml has it, and read back.

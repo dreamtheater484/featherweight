@@ -450,6 +450,14 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = RemoveTable(sheet, static_cast<size_t>(index));
         break;
       }
+      case JournalOp::SetTableFilter: {
+        const int sheet = f.Int();
+        const uint64_t index = f.U();
+        const std::optional<SheetFilter> filter = f.Filter();
+        if (f.Ok() && filter) r = SetTableFilter(sheet, static_cast<size_t>(index), *filter);
+        else if (f.Ok()) return damaged;
+        break;
+      }
       case JournalOp::AddDxf: {
         Dxf x;
         if (!xlsx::ReadStyleItem(f.S(), x)) return damaged;
@@ -466,6 +474,30 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         c.rows = f.U32();
         c.title = f.S();
         if (f.Ok()) r = InsertChart(sheet, c);
+        break;
+      }
+      case JournalOp::MoveObject: {
+        const int sheet = f.Int();
+        const uint32_t id = f.U32();
+        drawing::Place p;
+        for (drawing::Marker* m : {&p.from, &p.to}) {
+          m->col = f.U32();
+          m->row = f.U32();
+          m->colOff = f.I();
+          m->rowOff = f.I();
+        }
+        p.x = f.I();
+        p.y = f.I();
+        p.cx = f.I();
+        p.cy = f.I();
+        if (f.Ok()) r = MoveObject(sheet, id, p);
+        break;
+      }
+      case JournalOp::DeleteObjects: {
+        const int sheet = f.Int();
+        std::vector<uint32_t> ids(std::min<size_t>(f.U32(), f.Left()));
+        for (uint32_t& id : ids) id = f.U32();
+        if (f.Ok()) r = DeleteObjects(sheet, ids);
         break;
       }
       case JournalOp::SetFilter: {

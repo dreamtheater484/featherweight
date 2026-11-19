@@ -1115,6 +1115,9 @@ bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   // Conditional formats see the new values (and, once done, sheets read after they were worked out).
   for (auto& r : rules_)
     if (r) r->Changed();
+  if (changed)  // and charts (any sheet's: a chart may show another sheet's cells)
+    for (auto& o : objects_)
+      if (o) o->ValuesChanged();
   return true;
 }
 
