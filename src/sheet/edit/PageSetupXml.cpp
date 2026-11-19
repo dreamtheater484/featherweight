@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 
 #include <pugixml.hpp>
 
@@ -29,9 +30,14 @@ pugi::xml_node Dom(pugi::xml_document& doc, std::string_view existing, const std
   return doc.append_child((p + local).c_str());
 }
 
+// The shortest form that reads back as `v`: Excel's 0.74803149606299213 stays that number, 0.7 stays
+// "0.7" (s3-corpus: 15 digits changed 13 of 205 workbooks' margins).
 std::string Num(double v) {
   char buf[32];
-  std::snprintf(buf, sizeof buf, "%.15g", v);
+  for (int digits = 15; digits <= 17; ++digits) {
+    std::snprintf(buf, sizeof buf, "%.*g", digits, v);
+    if (std::strtod(buf, nullptr) == v) break;
+  }
   return buf;
 }
 

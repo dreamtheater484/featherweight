@@ -232,6 +232,35 @@ TEST(sheet_page_fit_width_keeps_row_breaks) {
   CHECK(fitted.PageCount() == 1);
 }
 
+// s3-corpus's findings: a page setup on a sheet added since opening, saved, then undone, saves again
+// (the undo takes its text back to before its first save); margins the edit didn't change keep
+// their value (Excel's 17 digits).
+TEST(sheet_page_setup_corpus_findings) {
+  auto book = OpenParts({"<sheetData/><pageMargins left=\"0.74803149606299213\" right=\"0.75000000000000011\" top=\"0.75\" "
+                         "bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>"});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.AddSheet(1, "Plain"));
+  PageSetup p;
+  p.orientation = Orientation::Landscape;
+  CHECK(ed.SetPageSetup(1, p, HeaderFooter{}, false));
+  SavePage(*book, ed);
+  CHECK(ed.Undo(1));
+  const std::vector<uint8_t> zip = SavePage(*book, ed);
+  auto again = OpenZip(zip);
+  CHECK(again && again->SheetCount() == 2);
+  if (again) CHECK(again->GetSheet(1).Name() == "Plain" && again->GetSheet(1).Page().orientation != Orientation::Landscape);
+  // Paper only: the margins as read.
+  const PageMargins before = book->GetSheet(0).Page().margins;
+  PageSetup a4 = book->GetSheet(0).Page();
+  a4.paperSize = 9;
+  CHECK(ed.SetPageSetup(0, a4, book->GetSheet(0).HeadersFooters(), false));
+  auto third = OpenZip(SavePage(*book, ed));
+  if (!third) return;
+  const PageMargins& m = third->GetSheet(0).Page().margins;
+  CHECK(m.left == before.left && m.right == before.right && m.top == 0.75 && third->GetSheet(0).Page().paperSize == 9);
+}
+
 // The Sheet tab's Black and white, Draft quality, Notes and Cell errors as: written where Excel puts
 // them in pageSetup, read back.
 TEST(sheet_page_setup_print_quality_notes_errors) {

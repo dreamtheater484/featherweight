@@ -1206,8 +1206,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
       continue;
     }
     if (!pieces && !ed.MustWrite(static_cast<int>(i))) continue;
-    if (!s.Loaded() || s.Text().rootStart.empty())
-      return Status::Fail(Status::Code::Unsupported, "The sheet " + s.Name() + " can't be written.");
+    if (!s.Loaded()) return Status::Fail(Status::Code::Unsupported, "The sheet " + s.Name() + " can't be written.");
     // Links added to web addresses, files and e-mail addresses: their relationships.
     std::vector<std::string> linkIds;
     std::vector<uint8_t> linkRels;
@@ -1227,7 +1226,11 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
       put(linkRelsPart, std::move(linkRels));
       pieces |= edit::kPieceLinks;
     }
-    plan.sheets.push_back({&s, s.PartName(), s.RelId(), EditedText(s, pieces, active, linkIds), false});
+    // A sheet added since opening whose text an undo took back to before its first save (no root
+    // yet): written whole, as a new sheet is, at the part that save gave it (s3-corpus finding).
+    plan.sheets.push_back({&s, s.PartName(), s.RelId(),
+                           s.Text().rootStart.empty() ? NewSheetText(s, active, strict, linkIds) : EditedText(s, pieces, active, linkIds),
+                           false});
   }
   const bool added = std::any_of(plan.sheets.begin(), plan.sheets.end(), [](const auto& j) { return j.added; });
   // Sheets the file has that the workbook doesn't any more go, and so does the calculation chain
