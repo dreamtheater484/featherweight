@@ -92,6 +92,8 @@ class SheetObjects {
 
   // ---- A chart sheet
   bool IsChartSheet() const;
+  // Cell values changed (an edit, a recalculation): charts read their data again when next drawn.
+  void ValuesChanged();
   // Its chart, filling `rect` (the window, or the printed page's area).
   void DrawChartSheet(draw::Painter& painter, const draw::Rect& rect);
   // The chart's size as saved (its absolute anchor), which Excel prints it at; empty when none.
