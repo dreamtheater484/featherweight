@@ -11,6 +11,7 @@
 
 #include "PagedView.h"
 #include "sheet/data/Filter.h"
+#include "sheet/data/Shapes.h"
 #include "sheet/data/Rules.h"
 #include "sheet/data/Sort.h"
 #include "sheet/calc/Bind.h"
@@ -503,6 +504,22 @@ class WorkbookView : public PagedView {
   // SetTable and RemoveTable.
   class TablePanel;
   std::shared_ptr<PanelContent> tablePanel_;
+  // ---- Pictures and shapes (WorkbookShapes.cpp, s3-data): Insert > Pictures and Shapes, a picture
+  // pasted from the clipboard, the Format panel of the selected object.
+  class ShapePanel;
+  std::shared_ptr<PanelContent> shapePanel_;
+  draw::Rect NewObjectRect(double width, double height) const;  // sheet points, at the active cell
+  void SelectNewObject(uint32_t id);
+  bool InsertPictureBytes(const std::string& bytes, const std::string& altText);
+  bool InsertShapeOf(data::ShapeKind kind, const std::string& text);
+  bool InsertPictureFiles(const std::vector<std::wstring>& files);
+  void InsertPictureDialog();
+  bool PastePicture();  // true when the clipboard held a picture (and not cells or text)
+  void ShowShapePanel();
+  bool ShapesCommandState(int cmd, CommandState& s);
+  bool ShapesCommand(int cmd);
+  void AddShapeTools(ToolbarModel& m);
+  bool ShapesScriptOp(const std::wstring& arg);
   int TableIndexAt(CellAddr at);  // the shown sheet's table holding the cell, or -1
   void ShowTablePanel();
   bool CreateTable(Range r, bool headers, const std::string& style);
