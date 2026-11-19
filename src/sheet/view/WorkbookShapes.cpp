@@ -291,13 +291,52 @@ bool WorkbookView::InsertPictureBytes(const std::string& bytes, const std::strin
 bool WorkbookView::InsertShapeOf(data::ShapeKind kind, const std::string& text) {
   if (!Ready() || preview_ || ChartSheet()) return false;
   if (editor_.Active() && !CommitEdit(false)) return false;
-  // An inch, as Excel's shape put in with a click; a line or an arrow an inch each way (one with no
-  // height isn't drawn or picked yet: SheetObjects skips empty boxes); a text box a line high.
-  const draw::Rect r = NewObjectRect(kind == ShapeKind::TextBox ? 108 : 72, kind == ShapeKind::TextBox ? 28 : 72);
+  // An inch, as Excel's shape put in with a click; a line or an arrow an inch across, flat; a text
+  // box a line high.
+  const bool line = kind == ShapeKind::Line || kind == ShapeKind::Arrow;
+  const draw::Rect r = NewObjectRect(kind == ShapeKind::TextBox ? 108 : 72, kind == ShapeKind::TextBox ? 28 : line ? 0 : 72);
   uint32_t id = 0;
   if (EditRefused(Ed().InsertShape(static_cast<int>(sheet_), kind, PlaceFor(r), text, &id))) return false;
   SelectNewObject(id);
   return true;
+}
+
+// ---- Sizes kept
+
+std::vector<WorkbookView::HeldSize> WorkbookView::HeldSizes() {
+  std::vector<HeldSize> out;
+  const SheetObjects* objects = Ready() && !ChartSheet() ? Objects() : nullptr;
+  if (!objects) return out;
+  const std::vector<SheetObjects::Object> all = objects->Objects();
+  if (all.empty()) return out;
+  const std::string drawing = Ed().SheetDrawing(static_cast<int>(sheet_), false);
+  if (drawing.empty()) return out;
+  for (const SheetObjects::Object& o : all) {
+    const std::string a = Ed().AnchorXml(drawing, o.id);
+    const std::string_view start = std::string_view(a).substr(0, a.find('>'));  // its start tag
+    if (start.find("twoCellAnchor") == std::string_view::npos ||
+        (start.find("editAs=\"oneCell\"") == std::string_view::npos && start.find("editAs='oneCell'") == std::string_view::npos))
+      continue;
+    out.push_back({o.id, o.rect.Width(), o.rect.Height()});
+  }
+  return out;
+}
+
+edit::Result WorkbookView::KeepSizes(const std::vector<HeldSize>& held) {
+  if (held.empty()) return {};
+  // The grid as the change left it (the group's end lays it out again).
+  grid_.Build(Current(), book_->GetStyles(), *measure_);
+  PlaceObjects();
+  const SheetObjects* objects = Objects();
+  if (!objects) return {};
+  const std::vector<SheetObjects::Object> all = objects->Objects();
+  for (const HeldSize& h : held)
+    for (const SheetObjects::Object& o : all)
+      if (o.id == h.id && (std::abs(o.rect.Width() - h.width) > 0.05f || std::abs(o.rect.Height() - h.height) > 0.05f)) {
+        const draw::Rect r{o.rect.left, o.rect.top, o.rect.left + h.width, o.rect.top + h.height};
+        if (edit::Result res = Ed().MoveObject(static_cast<int>(sheet_), o.id, PlaceFor(r)); !res) return res;
+      }
+  return {};
 }
 
 bool WorkbookView::InsertPictureFiles(const std::vector<std::wstring>& files) {
