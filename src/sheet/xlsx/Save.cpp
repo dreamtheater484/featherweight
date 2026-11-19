@@ -854,7 +854,9 @@ void ContentOf(std::string_view seg, const XmlPiece& p, size_t& from, size_t& to
     return;
   }
   from = j + 1;
-  to = seg.rfind("</", p.end);
+  // Its own closing tag: the last "</" that starts inside it (one at p.end is the next element's,
+  // as </extLst> after an ext).
+  to = seg.rfind("</", p.end - 1);
   if (to == std::string_view::npos || to < from) to = from;
 }
 
