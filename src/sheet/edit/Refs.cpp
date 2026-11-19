@@ -1123,6 +1123,11 @@ bool MoveTable(std::string& xml, const Table& before, const Table& after, int in
     SetAttr(root, "ref", RangeName(after.ref));
     changed = true;
   }
+  if (before.totalsRows && !after.totalsRows) {  // its totals row deleted (as Excel writes it)
+    root.remove_attribute("totalsRowCount");
+    if (!after.totalsRowShown) SetAttr(root, "totalsRowShown", "0");
+    changed = true;
+  }
   for (pugi::xml_node part : {ChildNamed(root, "autoFilter"), ChildNamed(root, "sortState")}) {
     if (!part) continue;
     Range r;
