@@ -19,6 +19,12 @@ namespace fw::sheet::xlsx {
 struct ReadOptions {
   // Read every sheet now instead of the active one only (tools, tests, fuzzing).
   bool loadAll = false;
+  // S4, a large workbook's first screen: the active sheet is read from its part's first
+  // `firstBytes` only, cut after the last whole row (a sheet that fits is read whole). `*partial`
+  // tells whether it was cut: such a workbook is for showing only (never saved), until the sheet
+  // is read in full elsewhere (Workbook::SwapSheet).
+  size_t firstBytes = 0;
+  bool* partial = nullptr;
 };
 
 // Reads a workbook (.xlsx, .xlsm, .xltx, .xltm) from an opened package: the workbook part, the

@@ -1090,5 +1090,44 @@ Status LoadSheetPart(Workbook& book, size_t index) {
   return st;
 }
 
+Status LoadSheetStart(Workbook& book, size_t index, size_t bytes, bool& cut) {
+  cut = false;
+  Sheet& sheet = book.GetSheet(index);
+  const pkg::Package* pkg = book.GetPackage();
+  if (sheet.Loaded() || !pkg || sheet.PartName().empty()) return {};
+  std::vector<uint8_t> data;
+  Status st = pkg->ReadPartPrefix(sheet.PartName(), bytes, data);
+  if (!st.Ok()) return st;
+  if (data.size() < bytes) return LoadSheetPart(book, index);  // it fits: read whole
+  std::string_view xml(reinterpret_cast<const char*>(data.data()), data.size());
+  // The root's and sheetData's names as written (a prefix, x:sheetData, is kept), to close them
+  // after the last whole row.
+  size_t at = 0;
+  while ((at = xml.find('<', at)) != std::string_view::npos && at + 1 < xml.size() &&
+         (xml[at + 1] == '?' || xml[at + 1] == '!'))
+    ++at;
+  if (at == std::string_view::npos) return LoadSheetPart(book, index);
+  const size_t rootEnd = xml.find_first_of(" \t\r\n/>", at + 1);
+  const size_t data0 = xml.find("sheetData", at);
+  if (rootEnd == std::string_view::npos || data0 == std::string_view::npos) return LoadSheetPart(book, index);
+  const size_t dataLt = xml.rfind('<', data0);
+  const std::string root(xml.substr(at + 1, rootEnd - at - 1));
+  const std::string prefix(xml.substr(dataLt + 1, data0 - dataLt - 1));
+  const std::string rowEnd = "</" + prefix + "row>";
+  const size_t last = xml.rfind(rowEnd);
+  // A comment or CDATA section could hide a "</row>", and the cut would land inside it: read whole.
+  if (last == std::string_view::npos || last < data0 || prefix.find_first_of("/ ") != std::string::npos ||
+      xml.find("<!--", data0) != std::string_view::npos || xml.find("<![CDATA[", data0) != std::string_view::npos)
+    return LoadSheetPart(book, index);
+  std::string closed(xml.substr(0, last + rowEnd.size()));
+  closed += "</" + prefix + "sheetData></" + root + ">";
+  std::vector<uint8_t>().swap(data);
+  SheetLoader loader(book, sheet);
+  st = loader.Load(closed, pkg->GetLimits(), sheet.PartName().substr(1));
+  WorkbookLoader::MarkLoaded(sheet, st.Ok());
+  cut = st.Ok();
+  return st;
+}
+
 }  // namespace xlsx
 }  // namespace fw::sheet

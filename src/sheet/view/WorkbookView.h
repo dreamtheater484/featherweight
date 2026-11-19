@@ -824,12 +824,14 @@ class WorkbookView : public PagedView {
   const Sparklines* SparklinesFor(size_t index);
   std::unique_ptr<calc::WorkbookCalc> calc_;  // see Calc()
   bool recalc_ = false;  // a workbook (not CSV): recalculate what Excel would after opening
-  // A large CSV file (S4, plan §11: 100 MB, first screen < 1 s): the rows of its first megabyte are
-  // shown at once while a worker reads the whole file into a workbook of its own, whose cells then
-  // take their place (WorkDone). An edit or a save (Ed()) waits for it first.
-  struct CsvLoad;
-  std::unique_ptr<CsvLoad> csvLoad_;
+  // A large file (S4, plan §11: a 100 MB CSV, a 50 MB workbook): the rows of its first megabytes
+  // are shown at once while a worker reads the whole file into a workbook of its own, whose cells
+  // (a workbook: whose active sheet) then take their place (WorkDone). An edit or a save (Ed())
+  // waits for it first; nothing runs at idle meanwhile.
+  struct BigLoad;
+  std::unique_ptr<BigLoad> bigLoad_;
   void WorkDone() override;
+  bool partial_ = false;  // the worker couldn't read the file whole: only its first rows, never saved
   calc::WorkbookCalc& Calc();
   std::vector<std::unique_ptr<condfmt::SheetRules>> rules_;
   std::vector<bool> rulesRead_;

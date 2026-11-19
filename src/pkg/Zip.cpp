@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <numeric>
 #include <unordered_set>
 
@@ -335,6 +336,36 @@ Status ZipReader::Read(const ZipEntry& entry, std::vector<uint8_t>& out) const {
     out.clear();
     return DamagedEntry(entry.name);
   }
+  return Status{};
+}
+
+Status ZipReader::ReadPrefix(const ZipEntry& entry, size_t max, std::vector<uint8_t>& out) const {
+  if (max >= entry.uncompressedSize) return Read(entry, out);
+  std::span<const uint8_t> all = snapshot_->Bytes();
+  std::vector<uint8_t> buffer;
+  std::span<const uint8_t> data;
+  if (!all.empty()) {
+    data = all.subspan(static_cast<size_t>(entry.dataOffset), static_cast<size_t>(entry.compressedSize));
+  } else {
+    if (!ReadBytes(*snapshot_, entry.dataOffset, static_cast<size_t>(entry.compressedSize), buffer))
+      return DamagedEntry(entry.name);
+    data = buffer;
+  }
+  if (entry.method == 0) {
+    out.assign(data.begin(), data.begin() + static_cast<std::ptrdiff_t>(std::min(max, data.size())));
+    return Status{};
+  }
+  out.resize(max);
+  auto d = std::make_unique<tinfl_decompressor>();
+  tinfl_init(d.get());
+  size_t in = data.size(), made = max;
+  const tinfl_status s =
+      tinfl_decompress(d.get(), data.data(), &in, out.data(), out.data(), &made, TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+  if (s < 0) {
+    out.clear();
+    return DamagedEntry(entry.name);
+  }
+  out.resize(made);
   return Status{};
 }
 

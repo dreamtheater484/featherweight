@@ -929,6 +929,10 @@ constexpr SaveFormat kXltm{L"Excel macro-enabled template", L"*.xltm", L"xltm"};
 
 bool WorkbookView::ReadyToSave(std::wstring& error) {
   if (!Ready()) return false;
+  if (partial_) {
+    error = Title() + L" can't be saved: it couldn't be read in full.";
+    return false;
+  }
   // What is being typed is part of what's saved, as in Excel's Ctrl+S; a formula that can't be
   // entered stops the save with its reason.
   if (editor_.Active() && !renaming_ && !CommitEdit(false)) {
@@ -1082,7 +1086,7 @@ void WorkbookView::DescribeUia(uia::Tree& t, int parent) {
 // Idle work: the other sheets, and find
 
 bool WorkbookView::HasIdleWork() const {
-  if (!Ready()) return false;
+  if (!Ready() || bigLoad_) return false;  // a large file still being read: nothing until it is
   if (!searchDone_) return true;
   for (size_t i = loadNext_; i < book_->SheetCount(); ++i)
     if (!book_->GetSheet(i).Loaded()) return true;
@@ -1091,7 +1095,7 @@ bool WorkbookView::HasIdleWork() const {
 }
 
 bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
-  if (!Ready()) return false;
+  if (!Ready() || bigLoad_) return false;
   if (!searchDone_) {
     SearchIdle(deadlineMs);
     return true;

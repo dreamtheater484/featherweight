@@ -118,6 +118,9 @@ pkg::Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std
 pkg::Status ReadStrings(std::string_view xml, const pkg::Limits& limits, std::string_view label, StringTable& table);
 // Reads a sheet's part into it (rows, cells and what it shows).
 pkg::Status LoadSheetPart(Workbook& book, size_t index);
+// The sheet's first rows only, from the part's first `bytes` (ReadOptions::firstBytes); `cut`
+// false when the part was read whole.
+pkg::Status LoadSheetStart(Workbook& book, size_t index, size_t bytes, bool& cut);
 
 // The writer (Writer.cpp): a sheet's part with `text` around its sheetData (Sheet::Text(), or one
 // with elements the model rewrote), and the shared strings part.

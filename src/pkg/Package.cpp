@@ -295,6 +295,16 @@ Status Package::ReadPart(std::string_view name, std::vector<uint8_t>& out) const
   return zip_.Read(zip_.Entries()[p->entry], out);
 }
 
+Status Package::ReadPartPrefix(std::string_view name, size_t max, std::vector<uint8_t>& out) const {
+  const Part* p = FindPart(name);
+  if (!p) return Status::Fail(Status::Code::NotFound, "Part " + std::string(ZipNameOf(name)) + " is missing.");
+  if (p->modified || p->entry == Part::kNoEntry) {
+    out.assign(p->data.begin(), p->data.begin() + static_cast<std::ptrdiff_t>(std::min(max, p->data.size())));
+    return Status{};
+  }
+  return zip_.ReadPrefix(zip_.Entries()[p->entry], max, out);
+}
+
 bool Package::IsXmlPart(std::string_view partName) const {
   std::string_view type = ContentTypeOf(partName);
   if (!type.empty()) return type.ends_with("+xml") || type == "application/xml" || type == "text/xml";

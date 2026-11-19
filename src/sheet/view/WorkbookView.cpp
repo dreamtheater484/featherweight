@@ -77,23 +77,53 @@ WorkbookView::WorkbookView(ViewHost& host, std::wstring path)
   zoomMode_ = fw::ZoomMode::FitPage;
 }
 
-struct WorkbookView::CsvLoad {
-  std::unique_ptr<pkg::Snapshot> snapshot;  // the file's bytes, which the worker reads
-  Workbook book;                            // the whole file, once the worker is done
+struct WorkbookView::BigLoad {
+  std::unique_ptr<pkg::Snapshot> snapshot;  // CSV: the file's bytes, which the worker reads
+  Workbook book;                            // CSV: the whole file, once the worker is done
+  std::unique_ptr<Workbook> full;           // a workbook: read again, its sheet `sheet` whole
+  size_t sheet = SIZE_MAX;                  // a workbook: the sheet shown from its first rows
   std::thread worker;
 };
 
 WorkbookView::~WorkbookView() {
-  if (csvLoad_ && csvLoad_->worker.joinable()) csvLoad_->worker.join();
+  if (bigLoad_ && bigLoad_->worker.joinable()) bigLoad_->worker.join();
 }
 
-// The worker read the whole CSV file: its cells take the place of the first rows shown (the same
-// values, so the screen stays as it is), at once; the scroll bars now reach the last row.
+// The worker read the whole file: its cells (a workbook: its sheet's) take the place of the first
+// rows shown (the same values, so the screen stays as it is), at once; the scroll bars now reach
+// the last row.
 void WorkbookView::WorkDone() {
-  if (!csvLoad_) return;
-  if (csvLoad_->worker.joinable()) csvLoad_->worker.join();
-  book_->SwapCells(csvLoad_->book);
-  csvLoad_.reset();
+  if (!bigLoad_) return;
+  if (bigLoad_->worker.joinable()) bigLoad_->worker.join();
+  std::unique_ptr<BigLoad> load = std::move(bigLoad_);
+  const size_t i = load->sheet;
+  if (i == SIZE_MAX) {
+    book_->SwapCells(load->book);
+  } else if (load->full && i < book_->SheetCount() && i < load->full->SheetCount()) {
+    book_->SwapSheet(i, *load->full);
+    // What was worked out from the first rows is worked out again: the engine (it waited), the
+    // conditional formats and sparklines (they point at it), the sheet's objects and rules.
+    for (auto& r : rules_) r.reset();
+    rulesRead_.assign(rulesRead_.size(), false);
+    calc_.reset();
+    breakPages_.reset();
+    if (i < objects_.size()) objects_[i].reset();
+    validationsSheet_ = -1;
+    circles_.clear();
+    if (i == sheet_) {
+      grid_.Build(book_->GetSheet(i), book_->GetStyles(), *measure_);
+      BuildGroups();
+      if (i < objects_.size()) objects_[i] = SheetObjects::Load(*book_, i);
+      PlaceObjects();
+      LayoutParts();
+      ClampScroll();
+    }
+  } else {
+    partial_ = true;
+    host_.ViewMessage(BannerKind::Error,
+                      Title() + L" couldn't be read in full: only its first rows show, and it can't be saved.");
+  }
+  load.reset();
   text_->Clear();
   totals_ = Totals{};
   host_.ViewStateChanged();
@@ -172,8 +202,8 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     if (!fromBytes_) file_->Opened(path_, snapshot->GetStamp());
     file_->SetCsvOptions(o);
     if (background) {
-      csvLoad_ = std::make_unique<CsvLoad>();
-      CsvLoad* load = csvLoad_.get();
+      bigLoad_ = std::make_unique<BigLoad>();
+      BigLoad* load = bigLoad_.get();
       load->snapshot = std::move(snapshot);
       HWND hwnd = host_.ViewHwnd();
       const LPARAM self = reinterpret_cast<LPARAM>(this);
@@ -224,8 +254,28 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     snapshot = pkg::Snapshot::FromBytes(std::move(xlsx));
     imported = name;
   }
+  // A large workbook (S4): its active sheet's first rows now, the whole of it on a worker (WorkDone).
+  const bool large = !fromBytes_ && newNumber_ == 0 && imported.empty() && snapshot && snapshot->Size() > (16u << 20) &&
+                     (EndsWithNoCase(path_, L".xlsx") || EndsWithNoCase(path_, L".xlsm"));
+  xlsx::ReadOptions readOptions;
+  bool partial = false;
+  if (large) readOptions.firstBytes = 4u << 20, readOptions.partial = &partial;
   auto package = snapshot ? pkg::Package::Open(std::move(snapshot), pkg::Limits::Default(), st) : nullptr;
-  std::unique_ptr<Workbook> book = package ? xlsx::Read(std::move(package), st) : nullptr;
+  std::unique_ptr<Workbook> book = package ? xlsx::Read(std::move(package), st, readOptions) : nullptr;
+  if (book && partial) {
+    bigLoad_ = std::make_unique<BigLoad>();
+    BigLoad* load = bigLoad_.get();
+    load->sheet = book->ActiveSheet();
+    HWND hwnd = host_.ViewHwnd();
+    const LPARAM self = reinterpret_cast<LPARAM>(this);
+    load->worker = std::thread([load, path = path_, hwnd, self] {
+      pkg::Status s;
+      auto snap = pkg::Snapshot::Open(path, {}, s);
+      auto whole = snap ? pkg::Package::Open(std::move(snap), pkg::Limits::Default(), s) : nullptr;
+      load->full = whole ? xlsx::Read(std::move(whole), s) : nullptr;
+      PostMessageW(hwnd, kWorkDoneMessage, 0, self);
+    });
+  }
   if (!book) {
     error = OpenError(name, st);
     return OpenResult::Failed;

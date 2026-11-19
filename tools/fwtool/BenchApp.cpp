@@ -262,8 +262,9 @@ struct Run {
   // Read from the CPU cycles of its UI thread, which asking doesn't disturb. Other threads are
   // Windows' (the thread pool, the graphics driver) and stay busy, or retire, on their own clock.
   double readyMs = -1;
-  // The last burst of work in any of its threads (S4: a large CSV file is read on a worker after its
-  // first screen shows): fully loaded. Bursts of several busy threads, which Windows' own don't make.
+  // The last burst of work in any of its threads (S4: a large file is read on a worker after its
+  // first screen shows): fully loaded. More than half a core busy for a while, which Windows' own
+  // threads don't keep up once the window is drawn.
   double loadedMs = -1;
   // The window first looking the way it settles on screen. This includes Windows' own animation of
   // a window opening, which runs alongside the app's work.
@@ -321,10 +322,11 @@ Run RunOnce(const std::filesystem::path& exe, const std::wstring& version, const
   auto watchCpu = [&] {
     if (QueryThreadCycleTime(pi.hThread, &cycles) && cycles - lastCycles > kBusyCycles) busyUntil = MsSince(t0);
     lastCycles = cycles;
-    // All threads: more than about two cores' worth of a millisecond per millisecond since the last look.
+    // All threads: more than about half a core's worth of a millisecond per millisecond since the
+    // last look (one worker reading a large workbook, even on a busy PC).
     const double now = MsSince(t0);
     if (QueryProcessCycleTime(pi.hProcess, &all) && lastAll &&
-        static_cast<double>(all - lastAll) > 4.0 * kBusyCycles * std::max(1.0, now - lastLook))
+        static_cast<double>(all - lastAll) > 1.2 * kBusyCycles * std::max(1.0, now - lastLook))
       loadedUntil = now;
     lastAll = all, lastLook = now;
   };

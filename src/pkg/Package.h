@@ -70,6 +70,8 @@ class Package {
   // Part names compare case-insensitively (ASCII) and with %-escapes decoded, as OPC says.
   const Part* FindPart(std::string_view name) const;
   Status ReadPart(std::string_view name, std::vector<uint8_t>& out) const;
+  // The part's first `max` bytes (all of it when it is no longer), for reading a large part's start.
+  Status ReadPartPrefix(std::string_view name, size_t max, std::vector<uint8_t>& out) const;
   const ContentTypes& Types() const { return types_; }
   std::string_view ContentTypeOf(std::string_view partName) const;
   bool IsXmlPart(std::string_view partName) const;
