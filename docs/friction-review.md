@@ -2,6 +2,8 @@
 
 The friction review (plan §11, "Zero friction") writes each core flow down step by step, in Word and in Featherweight, so that a flow never gains a step without a reason in the plan. D3 is done when it passes for writing a letter, formatting a CV and fixing a table in a received document (plan §6.4). D5 adds the rest of the Word flows, D3's to D5's (flows 4 to 15).
 
+S4 adds the workbook flows (plan §7, the S4 row; s2-plan's "total a column" and "fix a value in a received workbook"): see [Workbooks (S4)](#workbooks-s4).
+
 `tests/friction-checks.ps1` runs the flows that can be scripted through Featherweight's `--script` mode, off-screen. It checks what the saved file says and counts the steps against this review's budget (see [Scripted checks](#scripted-checks)).
 
 ## How steps are counted
@@ -271,3 +273,206 @@ powershell -ExecutionPolicy Bypass -File tests\friction-checks.ps1 [-Workarounds
 - **Click coordinates** (the style box and its list, the table's cells and the Table panel's Column width box) are for that window size. A toolbar change that moves them makes the check fail, and it's fixed here.
 
 The checks open Featherweight's own window off-screen, and nothing else. They aren't in CI, like `visual-checks.ps1`.
+
+## Workbooks (S4)
+
+This is the spreadsheet part of the friction review (plan §11, "Zero friction"; s2-plan: "total a column" and "fix a value in a received workbook", never more steps than Excel's; S4 plan: the friction review for spreadsheets). It uses the Word part's rules (`docs/friction-review.md`, "How steps are counted").
+
+- **C** is a click (or a drag), **K** is a key or a chord, and **D** is a decision (a name, a place, a format). Typing the content isn't counted, and neither is the Enter that ends a cell entry. A scroll in a list counts as a step.
+- **Excel** means Excel for Microsoft 365 on Windows, with the default ribbon, in a window at least 1366 px wide. Excel's steps come from its standard UI and weren't measured here. Two of them are marked *(check in Excel)*.
+- **Featherweight** means `claude/s4-corpus` 18c7831 (worktree `s1-corpus-aa316c`), read from the code. The app wasn't run. Each step cites the code. For flows 10 and 11 the S4 branches were also read: `claude/s4-int` 3d550f5 (the .ods reader merged) and `claude/s4-ods-e4ae8e` cc6e522 (password-protected workbooks, not yet on s4-int).
+- **The workbook toolbar** is counted with every item shown. That needs a window at least 1557 px wide at 100 % scaling (the sum of the item widths, `Toolbar.cpp:206-226`). At 1366 px some items drop out (W1): a snapshot of the workbook tab 1366 pixels wide (`Featherweight.exe --snapshot --size 1366x400`) shows no Merge, Styles or Data box, and one 1600 pixels wide shows all three.
+- When a step has a mouse way and a keyboard way, the table gives the one most people use, and the other in brackets.
+
+### Summary
+
+| Flow | Excel | Featherweight | Notes |
+|---|---|---|---|
+| 1. Open and read a workbook | 7 C | 6 C | Passes. Freezing the top row is one click fewer. |
+| 2. Find a value | 3 K | 2 K | Passes. The first match is selected as you type, and there's no dialog to close. |
+| 3. Total a column | 1 C + 2 K | 1 C + 2 K | Passes (s2-plan flow). There's no AutoSum button. Selecting the numbers and then AutoSum doesn't work: W5. |
+| 4. Fix a value in a received workbook and save | 3 C + 1 K | 2 C + 1 K | Passes (s2-plan flow). There's no Protected View, and saving an .xlsx asks nothing. A .csv that now holds more than values asks once (W9, by design). |
+| 5. Sort and filter a list | 11 C + 1 K | 14 C | **+2**: the number filter (W4) and Filter on by mouse (W8, accepted?). At 1366 px, Data ▾ isn't on the toolbar (W1). |
+| 6. Make a chart of a range | 1 C + 1 K (mouse: 4 C) | 1 C + 1 K (mouse: 3 C) | Passes. In a workbook opened from a .csv, it's refused until saved as .xlsx (W7). |
+| 7. Make a table | 1 C + 2 K | 2 C + 1 K | Passes with the default style. A chosen style takes 2 clicks more by mouse (W6). |
+| 8. Conditional formatting: values above X | 1 drag + 3 C + 1 K | 1 drag + 4 C | Passes (5 = 5). |
+| 9. Print, fit to one page wide; Export PDF | Print 1 K + 3 C; PDF 4 C | Print 2 K + 4 C; PDF 2 C + 1 K | Print is **+2** (W3). Export PDF passes. |
+| 10. Open an .xls or .ods and save it | 1 C, then 1 K | .xls: 1 C, then 2 K | Saving an .xls is one key more (W10, by design, as F17). .ods isn't in this build (W12); it's on s4-int with the same steps as .xls. |
+| 11. A password-protected workbook | 1 C + 1 K, 1 D | Refused in this build | W11. cc6e522 (s4-ods) gives Excel's count. To be counted once it lands. |
+| 12. A workbook from a template (.xltx) | 1 C, then 2 K, 2 D | 1 C, then 2 K, 1 D | Passes from Explorer. There's no template list inside the app (W13). |
+
+### Where Featherweight needs more than Excel
+
+| # | Flow, step | Excel | Featherweight | Area | File:line | Status |
+|---|---|---|---|---|---|---|
+| W1 | 5 and 7, in a 1366 px window (100 % scaling) | The Data tab is always there | Data ▾ (priority 2) drops out of the toolbar below about 1463 px, after Styles (below 1557 px). Merge drops below 1389 px. Sort, Custom sort, Remove duplicates, Data validation and Table… are then gone from the toolbar. Sort can only be reached through the filter's panel: Ctrl+Shift+L, the column's button, Sort A to Z (the filter stays on). Data validation and Remove duplicates can't be reached at all. At 150 % on a 1920 px screen (1280 DIPs), the format painter drops too. These widths are computed from the code; the 1366-pixel snapshot shows it. | s2-format (toolbar priorities) | WorkbookFormat.cpp:1395-1424, Toolbar.cpp:206-226 | Open: s3-data (2026-11-19) |
+| W2 | Any flow whose toolbar box has dropped out (the Word review's fallback, F5) | Alt+Q finds every command | Alt+Q finds the grid, print, chart and picture commands. It doesn't find Sort, Filter, Table, Conditional formatting, Data validation, Format Cells or the number formats: ids 2700-2799 and 2850-2879 aren't in `Commands()`. | s2-grid (WorkbookCommands), with s2-format and s3-data | WorkbookCommands.cpp:310-324, AppShell.cpp:129-141 | Open: s3-data (2026-11-19) |
+| W3 | 9: print with all columns on one page | Ctrl+P, Scaling ▾, Fit All Columns on One Page, Print: 1 K + 3 C | Ctrl+F2, Page setup, Scaling ▾, Fit all columns on one page, Ctrl+P, Print in Windows' dialog: 2 K + 4 C. **+2**. Page setup is on the toolbar only in print preview. Outside it, Page setup is on the sheet tab's menu or Alt+Q; the ⋯ menu's Page setup… is only for documents. | s3-print | WorkbookCommands.cpp:412-417, WorkbookPageSetup.cpp:243-244 and 884-892, WorkbookPrint.cpp:175-193, App.cpp:1552-1560 | Open: the S3 print session, after the header CR fix (2026-11-19) |
+| W4 | 5: a number filter (greater than X) | Number Filters, Greater Than…, type (the box has the keyboard), Enter: 3 C + 1 K | Condition ▾, "is greater than", the Value box, type, Apply: 4 C. **+1**: picking a condition doesn't move the keyboard to the box, and Enter there doesn't apply. | s2-format (filter panel) | WorkbookFilter.h:72-78 and 92-93, Controls.cpp:1068-1080 | Open: s3-data (2026-11-19) |
+| W5 | 3: AutoSum with the numbers selected | Select them, Alt+=: the total goes under them, with no Enter: 1 drag + 1 K | AutoSum works from the active cell only. With the numbers selected, it starts `=SUM(…)` in the selection's first number, and Enter would replace that number. You have to click the cell below first: 1 C + 2 K. **+1**, and a trap. | s2-calc (AutoSum) | WorkbookFunctions.cpp:193-230 (198-199, 214) | Open: s3-calc (2026-11-19) |
+| W6 | 7: a table in a chosen style, by mouse | Home, Format as Table, a style (with previews), OK: 3 C | Data ▾, Table…, Style ▾, the style, Create table: 5 C, plus a scroll. **+2**. The style list has 61 names and no previews. | s3-data | WorkbookData.cpp:887-894 and 920-1009 | Open: s3-data (2026-11-19) |
+| W7 | 6, 7 and 8 in a workbook opened from a .csv | They work (lost when saved as CSV; Excel's bar warns) | Refused, each with its own message. A chart: "Save the workbook as an Excel workbook first, then insert the chart." A table: "Tables need an Excel workbook: save this one as .xlsx first." A rule: "Only a worksheet of an Excel workbook keeps these rules." The menus also show them disabled. Ctrl+Shift+S and Enter come first: **+2 K, 1 D**. | s3-charts, s3-data (edit layer) | Edit.cpp:4452-4454, 5217-5218 and 5266-5267 (src/sheet/edit), WorkbookCharts.cpp:288, WorkbookData.cpp:793, WorkbookShapes.cpp:448, Sheet.h:358 ("empty for CSV") | Open: s3-calc (2026-11-19) |
+| W8 | 5: Filter on, by mouse | Filter, with the Data tab open after sorting: 1 C | Data ▾, Filter: 2 C. **+1**. Ctrl+Shift+L is 1 K in both. | s2-format | WorkbookFormat.cpp:1415-1421 | Accepted (the coordinator, 2026-11-19): one toolbar row (plan §5.2), as F4 |
+| W9 | 4: saving a .csv that now holds more than values (a formula, a width, formatting, another sheet) | Ctrl+S saves. Excel 365 shows a "Possible data loss" bar and doesn't ask *(check in Excel)* | A banner asks: Save as .xlsx or Keep CSV. **+1 C**, once per tab. | | App.cpp:1910-1921 and 1335-1341, WorkbookCommands.cpp:1031-1040, CsvWrite.cpp:143-185 | By design (s2-plan, WorkbookView.h:122-123) |
+| W10 | 10: saving an .xls (and an .ods on s4-int) | Ctrl+S keeps the format (Compatibility Mode): 1 K | Ctrl+S, then Enter in Save As, with `<name>.xlsx` beside it suggested: 2 K. **+1 K** | | WorkbookView.cpp:136-173, App.cpp:1887-1897 | By design (plan §7.1: the .xls is never written), as F17 |
+| W11 | 11: a password-protected .xlsx or .xls | Password, Enter | Refused with "…it is protected with a password, which workbooks don't support yet" (.xlsx), or "…it is protected with a password" (.xls) | s4-ods | WorkbookView.cpp:139-150, Xls.cpp:585-590 | Done on `claude/s4-ods-e4ae8e` cc6e522, not merged |
+| W12 | 10: opening an .ods | Double-click: 1 C | Not offered: .ods is on the "later" list, so it's not in the Open dialog's filter and not registered with Explorer. Opened anyway, it fails as "…isn't an Excel workbook". | s4-ods | FileKinds.cpp:11-12, App.cpp:1698-1712, FileAssoc.cpp:66, WorkbookView.cpp:155-160 | Done on `claude/s4-int` 3d550f5 |
+| W13 | 12: a template from inside the app | File, New, Personal, the template: 4 C | No list. New from template has only Word's Letter, CV and Report. New workbook isn't offered either while the workbook editor isn't marked as shipped. Ctrl+O and double-clicking the .xltx works (1 K + 1 C, plus browsing). | s4-ods (S4 plan line 15: "File → New offers the user's own templates folder"), plus the release flag | App.cpp:1497-1503 and 1510-1523, FileKinds.cpp:22-23, EmptyState.cpp:100-103 | Open: s4-ods (2026-11-19). Decided: the spreadsheet editor ships in 3.0, so S4 turns its flag on and File → New offers a blank workbook and the templates |
+
+These don't change the counts but are worth a look:
+
+- **AutoSum has no toolbar button.** By mouse it's Alt+Q, "autosum", Enter (WorkbookFormat.cpp:1267-1459 has no AutoSum item; WorkbookCommands.cpp:314 puts it in command search).
+- **The Create table and Conditional formatting panels don't take the keyboard** (AppShell.cpp:170-178). Ctrl+T then Enter doesn't create the table: it's a click on Create table. The rule's Value box needs a click. The counts tie with Excel, but the hand goes to the mouse.
+- **The Conditional formatting panel keeps the last rule kind** (WorkbookData.cpp:244). The first time it's "Greater than". After another kind, it's 2 clicks to choose again.
+- **Find searches the shown text** (WorkbookCommands.cpp:728). Excel's default looks in formulas: a value shown as "1,234.50" is found by "1,234.50" here and by "1234.5" in Excel.
+
+### Where Featherweight needs less
+
+- **A received workbook** opens ready to edit. Excel opens attachments and downloads in Protected View, with Enable Editing first.
+- **Find** selects the first match as you type, and Esc goes back to the cell: 2 K against Excel's 3.
+- **Freeze the top row**: right-click A2, Freeze panes (2 C), against View, Freeze Panes, Freeze Top Row (3 C).
+- **A chart by mouse**: Chart ▾, then a type (2 C), against Insert, the type's gallery, a subtype (3 C).
+- **Export PDF**: ⋯, Export PDF…, Enter (2 C + 1 K), against File, Export, Create PDF/XPS, Publish (4 C).
+- **Saving a workbook made from a template**: `Budget1.xlsx` beside the template is suggested, so there's one decision (the name) against Excel's two.
+
+### 1. Open and read a workbook
+
+A received .xlsx with three sheets and a long list, whose header row is to stay in view.
+
+| # | Step | Excel | Featherweight |
+|---|---|---|---|
+| 1 | Open it | Double-click: 1 C (reading works in Protected View) | Double-click: 1 C (App.cpp:1635-1639 and 1649-1692). The file's active sheet, zoom and selection show (WorkbookView.cpp:189-213). |
+| 2 | The next sheet | Click its tab: 1 C (Ctrl+PgDn: 1 K) | The same (WorkbookInput.cpp:341-357. Ctrl+PgDn: WorkbookCommands.cpp:175-176, and App.cpp:1143-1146 gives it to the workbook rather than the app's tabs) |
+| 3 | A sheet whose tab doesn't show | Right-click the tab arrows, double-click it in Activate: 2 C | Right-click the tabs, then the sheet in the list: 2 C (WorkbookSheetOps.cpp:293-295) |
+| 4 | The file's frozen panes | As saved: 0 | As saved: 0 (WorkbookView.cpp:267, 340-345) |
+| 5 | Freeze the top row | View, Freeze Panes, Freeze Top Row: 3 C | Right-click A2 (that selects it), Freeze panes: 2 C (WorkbookInput.cpp:439-442, WorkbookSheetOps.cpp:343 and 456-483). Alt+Q, "freeze top row", Enter: 2 K (WorkbookCommands.cpp:314, WorkbookSheetOps.cpp:115). |
+| | **Total** | **7 C** | **6 C** |
+
+### 2. Find a value
+
+| # | Step | Excel | Featherweight |
+|---|---|---|---|
+| 1 | Find | Ctrl+F: 1 K | Ctrl+F: 1 K (App.cpp:1284 and 2043-2059. The active cell's text is filled in and selected, so typing replaces it.) |
+| 2 | The value | Typed | Typed. The first match from the active cell is selected as you type (App.cpp:157-160, WorkbookCommands.cpp:701-750). |
+| 3 | The first match | Enter (Find Next): 1 K | 0 |
+| 4 | Back in the sheet, to change it | Esc closes the dialog: 1 K | Esc: 1 K. The match stays selected (App.cpp:163 and 2061-2068). |
+| | **Total** | **3 K** | **2 K** |
+
+The next match is Enter or F3 in Featherweight (App.cpp:162 and 1292, WorkbookCommands.cpp:761-784). Both search the active sheet only (WorkbookCommands.cpp:712).
+
+### 3. Total a column
+
+| # | Step | Excel | Featherweight |
+|---|---|---|---|
+| 1 | The cell under the numbers | Click: 1 C | Click: 1 C |
+| 2 | AutoSum | Alt+=: 1 K (or Home, AutoSum: 1 C) | Alt+=: 1 K (WorkbookCommands.cpp:216, App.cpp:660-663, WorkbookSheetOps.cpp:219). `=SUM(B2:B9)` is proposed as Excel picks it, with the range in point mode (WorkbookFunctions.cpp:193-230). There's no toolbar button: otherwise it's Alt+Q, "autosum", Enter. |
+| 3 | Accept | Enter: 1 K | Enter: 1 K |
+| | **Total** | **1 C + 2 K** | **1 C + 2 K** |
+
+Two related cases:
+
+- **Reading a total without a formula** is the same in both: select the column, and the status bar shows Average, Count and Sum (WorkbookCommands.cpp:519-535).
+- **Selecting the numbers and then AutoSum** (1 drag + 1 K in Excel) doesn't work in Featherweight: W5.
+
+### 4. Fix a value in a received workbook and save
+
+| # | Step | Excel | Featherweight |
+|---|---|---|---|
+| 1 | Open the attachment | Double-click, then Enable Editing in Protected View: 2 C | Double-click: 1 C. It opens ready to edit. |
+| 2 | Go to the cell | Click it: 1 C (or Find: flow 2) | The same |
+| 3 | The new value | Typed | Typed |
+| 4 | Save | Ctrl+S: 1 K | Ctrl+S: 1 K (App.cpp:1277 and 1884-1959). An .xlsx asks nothing: only macros saved into .xlsx, or more than values into CSV, ask (WorkbookCommands.cpp:1031-1040). What's being typed is entered first (WorkbookCommands.cpp:926-935). The file is written in the background, "Saved" shows, and the original is kept as a backup with no step (WorkbookFile.h:12-16). |
+| | **Total** | **3 C + 1 K** | **2 C + 1 K** |
+| 4b | Save, when the file is a .csv | Ctrl+S: 1 K. Excel 365 saves as CSV and shows a "Possible data loss" bar *(check in Excel)* | Ctrl+S: 1 K while the sheet holds only values. If it now holds more (a formula, a column width, formatting, another sheet; CsvWrite.cpp:143-185), a banner asks "CSV keeps only the values of the first sheet." with Save as .xlsx and Keep CSV: +1 C, once per tab (App.cpp:1910-1921 and 1335-1341). W9, by design. |
+
+### 5. Sort and filter a list
+
+A list with a header row. Sort it by one column, turn the filter on, show one value of a column, then rows above a number in another.
+
+| # | Step | Excel | Featherweight |
+|---|---|---|---|
+| 1 | Sort by a column | Click a cell in it, Data, Sort A to Z: 3 C | Click a cell in it, Data ▾, Sort A to Z: 3 C (WorkbookFormat.cpp:1407-1424, WorkbookFilter.cpp:229-241 and 337-343: the region around the cell, Excel's header guess) |
+| 2 | Filter on | Filter (the Data tab is open): 1 C (Ctrl+Shift+L: 1 K) | Data ▾, Filter: 2 C (Ctrl+Shift+L: 1 K) (WorkbookCommands.cpp:211, WorkbookFilter.cpp:82-116). W8. |
+| 3 | Only one value | The column's button, (Select All), the value, OK: 4 C | The column's button, (Select all), the value, Apply: 4 C (WorkbookInput.cpp:315-316, WorkbookFilter.h:197-214 and 254-288) |
+| 4 | Values greater than X | The button, Number Filters, Greater Than…, type, Enter: 3 C + 1 K | The button, Condition ▾, "is greater than", the Value box, type, Apply: 5 C (WorkbookFilter.h:23-41, 72-78 and 92-93). W4. |
+| | **Total** | **11 C + 1 K** | **14 C** (12 C + 1 K with Ctrl+Shift+L) |
+
+In a 1366 px window, Data ▾ isn't on the toolbar (W1). Sorting then goes through the filter's panel: Ctrl+Shift+L, the column's button, Sort A to Z (WorkbookFilter.h:85-91).
+
+### 6. Make a chart of a range
+
+| # | Step | Excel | Featherweight |
+|---|---|---|---|
+| 1 | The data | Click in it: 1 C (or drag over it) | The same. One cell takes the region around it, as Excel does (WorkbookCharts.cpp:361-363). |
+| 2 | A column chart | Alt+F1: 1 K (or Insert, Column or Bar Chart, Clustered Column: 3 C) | Alt+F1: 1 K (WorkbookCommands.cpp:218) (or Chart ▾, Column: 2 C; WorkbookCharts.cpp:388-402). The chart is placed in the middle of the window and selected (WorkbookCharts.cpp:364-381). |
+| | **Total** | **1 C + 1 K** (mouse: 4 C) | **1 C + 1 K** (mouse: 3 C) |
+
+Another type works the same way: Insert, the gallery, a subtype (3 C) against Chart ▾, then the type (2 C). In a workbook opened from a .csv, Featherweight refuses the chart until the workbook is saved as .xlsx (W7).
+
+### 7. Make a table (Ctrl+T)
+
+| # | Step | Excel | Featherweight |
+|---|---|---|---|
+| 1 | The data | Click in it: 1 C | The same |
+| 2 | Make it a table | Ctrl+T, then Enter in Create Table (the range and the headers are guessed): 2 K | Ctrl+T (WorkbookCommands.cpp:196-197), then Create table in the panel (the range and the headers are guessed, style Medium 2 as Excel's): 1 K + 1 C (WorkbookData.cpp:870-871, 932-941, 991-1007 and 1108-1113). The panel doesn't take the keyboard, so Enter isn't OK. |
+| | **Total** | **1 C + 2 K** | **2 C + 1 K** |
+| 2b | By mouse, in a chosen style | Home, Format as Table, a style, OK: 3 C | Data ▾, Table…, Style ▾, the style (61 names: a scroll), Create table: 5 C + 1 scroll. W6. |
+
+### 8. Conditional formatting: highlight values above X
+
+| # | Step | Excel | Featherweight |
+|---|---|---|---|
+| 1 | The cells | Drag over them: 1 drag | The same |
+| 2 | The rule | Home, Conditional Formatting, Highlight Cells Rules, Greater Than…: 3 C | Conditional ▾, New rule…: 2 C (WorkbookFormat.cpp:1425-1438, WorkbookData.cpp:784-790). The panel opens with "Greater than", "Light Red Fill with Dark Red Text" and the selection filled in (WorkbookData.cpp:193-195, 240-247 and 349-354; Rules.h:56-58). |
+| 3 | The value | Type it (the box has the keyboard), Enter: 1 K | The Value box: 1 C, type, Add rule: 1 C (WorkbookData.cpp:213-214) |
+| | **Total** | **1 drag + 3 C + 1 K** | **1 drag + 4 C** |
+
+### 9. Print a sheet, and Export PDF
+
+The sheet printed with all its columns on one page wide, then a PDF of it.
+
+| # | Step | Excel | Featherweight |
+|---|---|---|---|
+| 1 | See it as it prints | Ctrl+P (the preview is beside the settings): 1 K | Ctrl+F2 (or the toolbar's preview button): 1 K (WorkbookCommands.cpp:180 and 412-416, WorkbookPrint.cpp:124-145) |
+| 2 | All columns on one page | Scaling ▾, Fit All Columns on One Page: 2 C | Page setup (on the toolbar in preview), Scaling ▾, Fit all columns on one page: 3 C (WorkbookCommands.cpp:417, WorkbookPageSetup.cpp:243-244, 869 and 884-892) |
+| 3 | Print | Print: 1 C | Ctrl+P, then Print in Windows' dialog: 1 K + 1 C (App.cpp:1278 and 1990-2011, WorkbookPrint.cpp:175-227) |
+| | **Total** | **1 K + 3 C** | **2 K + 4 C** (W3) |
+| 4 | A PDF beside the workbook | File, Export, Create PDF/XPS, Publish (the name is suggested): 4 C | ⋯, Export PDF…, Enter (`<name>.pdf` is suggested): 2 C + 1 K (App.cpp:1541 and 2013-2041, WorkbookPrint.cpp:290-313). It exports the pages print preview shows: the active sheet, with the scaling set. |
+
+Printing as it is takes the same in both: Ctrl+P, Print (1 K + 1 C).
+
+### 10. Opening other formats (.xls, .ods)
+
+| # | Step | Excel | Featherweight |
+|---|---|---|---|
+| 1 | Open an .xls | Double-click: 1 C (Compatibility Mode; Enable Editing when it was downloaded: +1 C) | Double-click: 1 C. A banner says "… is an Excel 97–2003 workbook. Saving makes a new `<name>`.xlsx and leaves it as it is." (WorkbookView.cpp:136-173) |
+| 2 | Save it | Ctrl+S keeps the .xls: 1 K (the Compatibility Checker asks first when newer features would be lost: +1 C) | Ctrl+S, then Enter in Save As, with `<name>.xlsx` beside it suggested: 2 K (WorkbookView.cpp:162-165, App.cpp:1887-1897, WorkbookFile.cpp:74-76). W10, by design. |
+| 3 | Open an .ods | Double-click: 1 C | Not in this build (W12). On `claude/s4-int` 3d550f5: double-click: 1 C, with the same banner ("… is an OpenDocument spreadsheet…"), and the tab is a copy. |
+| 4 | Save an .ods | Ctrl+S, then keep the format in Excel's question: 1 K + 1 C *(check in Excel)* | s4-int: Ctrl+S, Enter: 2 K. To be counted once s4-int is the build reviewed. |
+
+### 11. A password-protected workbook
+
+| # | Step | Excel | Featherweight |
+|---|---|---|---|
+| 1 | Open it | Double-click, type the password, Enter: 1 C + 1 K, 1 D | This build refuses it with a banner. An encrypted .xlsx: "…it is protected with a password, which workbooks don't support yet" (WorkbookView.cpp:139-145). An .xls with its own password: "…it is protected with a password" (WorkbookView.cpp:146-150, Xls.cpp:585-590). On `claude/s4-ods-e4ae8e` cc6e522: the password card, as for documents: double-click, the password in the tab, Enter: 1 C + 1 K, 1 D. |
+| 2 | A wrong password | An error, OK, then open it again: +2 C | cc6e522: the card stays |
+| 3 | Save | Ctrl+S, with the same password: 1 K | cc6e522: an .xlsx is saved encrypted with its password: 1 K. An .xls becomes a new .xlsx encrypted with its password: Ctrl+S, Enter: 2 K. |
+
+These are to be counted once cc6e522 lands.
+
+### 12. A workbook from a template (.xltx)
+
+| # | Step | Excel | Featherweight |
+|---|---|---|---|
+| 1 | A new workbook from the template | Double-click the .xltx: 1 C ("Budget1") | Double-click: 1 C ("Budget1"; the template isn't touched) (App.cpp:1635-1639, WorkbookFile.cpp:37-48, WorkbookView.cpp:175-178) |
+| 1b | From inside the app | File, New, Personal, the template: 4 C (from the start screen: the template, Create: 2 C) | Not offered (W13). Ctrl+O, double-click the .xltx: 1 K + 1 C, plus browsing (App.cpp:1694-1737) |
+| 2 | Save | Ctrl+S, the name and the place, Enter: 2 K, 2 D | Ctrl+S, the name (`Budget1.xlsx` beside the template is suggested, or Documents if that folder can't be written), Enter: 2 K, 1 D (App.cpp:1884-1897 and 1767-1774, WorkbookFile.cpp:41-48) |
+| | **Total (from Explorer)** | **1 C + 2 K, 2 D** | **1 C + 2 K, 1 D** |
+
+### Not checked
+
+- The flows were read from the code, not played. Checked against the app or the code since: W1 on a 1366-pixel snapshot (above); W2 (`WorkbookView::Commands()` lists no id from CmdFormatCells 2700 on, nor CmdCondFormat 2850 on); W5 (`WorkbookView::AutoSum` proposes from the active cell only and starts editing it).
+- Double-clicking a workbook in Explorer opens Featherweight only when it's the default app for that type. Featherweight registers itself under "Open with" (FileAssoc.cpp:66).
+- None of these flows is scripted yet. `tests/friction-checks.ps1` has only the Word flows. Flows 3, 4 and 8 could be scripted the same way through `--script`.
+
+Owners (the coordinator, 2026-11-19): W1, W2, W4 and W6 s3-data; W5 and W7 s3-calc; W3 the S3 print session; W13 s4-ods. W8 is accepted; W9 and W10 are by design; W11 and W12 are s4-ods's (done on its branch and on s4-int). Each finding is marked fixed when its fix is in `claude/s4-int`.
