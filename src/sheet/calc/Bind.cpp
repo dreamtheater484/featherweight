@@ -82,7 +82,7 @@ void WorkbookCalc::Store(int sheet, int32_t row, int32_t col, const Value& v) {
   if (old.type != m.type || old.number != m.number || old.boolean != m.boolean || old.error != m.error ||
       (m.type == ValueType::String && old.text != m.text))
     ++changes_;
-  s.SetValue(static_cast<uint32_t>(row), static_cast<uint32_t>(col), m);
+  s.SetValue(static_cast<uint32_t>(row), static_cast<uint32_t>(col), m, true);
   auto& e = extents_[static_cast<size_t>(sheet)];
   e.first = std::max(e.first, row + 1), e.second = std::max(e.second, col + 1);
 }
