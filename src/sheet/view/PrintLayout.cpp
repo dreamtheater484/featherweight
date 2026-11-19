@@ -543,7 +543,7 @@ float PrintLayout::PaintNote(draw::Painter* p, const CellNote& note, float x, fl
       if (p) {
         const float dx = right ? left + w - ln.contentRight : left;
         const float baseline = top + pitch - sink;
-        for (const text::GlyphPiece& g : ln.pieces) p->DrawGlyphs({dx + g.OriginX(), baseline - g.rise}, g.Run(), ink);
+        for (const text::GlyphPiece& g : ln.pieces) p->DrawGlyphs({dx + g.OriginX(), baseline - g.rise}, ShownRun(g, s), ink);
       }
       top += pitch;
     }
@@ -639,9 +639,10 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   if (ps.verticalCentered) oy += std::max(0.f, (availH - totalH) / 2);
 
   PaintOptions o;
-  o.gridlines = ps.gridLines;
+  o.gridlines = ps.gridLines && !ps.draft;  // Draft quality: no gridlines and no graphics, as in Excel
   o.gridColor = 0xFF000000;
   o.errors = ps.errors;
+  o.blackAndWhite = ps.blackAndWhite;
   o.rules = info_.rules;
 
   // Text wraps and shows "####" in the printed columns: wider than the screen's by the digit.
@@ -658,7 +659,7 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
     p.ClipRect({cl - 2, y - 2, cl + w + 2, y + h + 2});
     const Range area{r0, c0, r1, c1};
     PaintCells(p, sheet_, text_, grid_, g, area, o);
-    if (info_.objects) {
+    if (info_.objects && !ps.draft) {
       // Pictures, shapes and charts over the cells, in the block's place.
       const draw::Rect cells = SheetRect(area);
       p.Transform(draw::Matrix::Translate(x - cells.left, y - cells.top));
@@ -709,7 +710,7 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
       const float w = ln.contentRight - ln.contentLeft;
       const float baseline = b - descent;
       for (const text::GlyphPiece& g : ln.pieces)
-        p.DrawGlyphs({(l + r - w) / 2 + g.OriginX() - ln.contentLeft, baseline - g.rise}, g.Run(), ink);
+        p.DrawGlyphs({(l + r - w) / 2 + g.OriginX() - ln.contentLeft, baseline - g.rise}, ShownRun(g, s), ink);
     };
     auto cols = [&](uint32_t c0, uint32_t c1, float x) {
       for (uint32_t c = c0; c <= c1; ++c) {
@@ -878,7 +879,7 @@ void PrintLayout::PaintHeaderFooter(draw::Painter& p, const PrintPage& page, boo
       for (const text::GlyphPiece& g : ln.pieces) {
         const HfRun& run = sections[sec][std::min<size_t>(g.run, sections[sec].size() - 1)];
         const draw::Brush brush = draw::Brush::Solid(ToColor(run.color));
-        p.DrawGlyphs({l + g.OriginX(), baseline - g.rise}, g.Run(), brush);
+        p.DrawGlyphs({l + g.OriginX(), baseline - g.rise}, ShownRun(g, all), brush);
         if (run.underline) p.FillRect({l + g.x, baseline + 1.5f, l + g.x + g.width, baseline + 2.1f}, brush);
         if (run.strike) p.FillRect({l + g.x, baseline - g.emSize * 0.3f, l + g.x + g.width, baseline - g.emSize * 0.3f + 0.6f}, brush);
       }

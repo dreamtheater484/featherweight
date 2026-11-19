@@ -50,6 +50,7 @@ struct PaintOptions {
   uint32_t gridColor = 0xFFD9D9D9;  // ARGB
   bool showZeros = true;
   PrintErrors errors = PrintErrors::Displayed;  // printing: how error values print
+  bool blackAndWhite = false;  // printing (Excel's Black and white): no fills, text and borders black
   // Conditional formats over the cells' own formats (null: none); table styles under them.
   condfmt::SheetRules* rules = nullptr;
   bool tables = true;

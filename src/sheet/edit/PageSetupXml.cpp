@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 
 #include <pugixml.hpp>
 
@@ -29,9 +30,14 @@ pugi::xml_node Dom(pugi::xml_document& doc, std::string_view existing, const std
   return doc.append_child((p + local).c_str());
 }
 
+// The shortest form that reads back as `v`: Excel's 0.74803149606299213 stays that number, 0.7 stays
+// "0.7" (s3-corpus: 15 digits changed 13 of 205 workbooks' margins).
 std::string Num(double v) {
   char buf[32];
-  std::snprintf(buf, sizeof buf, "%.15g", v);
+  for (int digits = 15; digits <= 17; ++digits) {
+    std::snprintf(buf, sizeof buf, "%.*g", digits, v);
+    if (std::strtod(buf, nullptr) == v) break;
+  }
   return buf;
 }
 
@@ -91,7 +97,13 @@ std::string Setup(const PageSetup& s, std::string_view existing, const std::stri
   Set(n, "orientation", s.orientation == Orientation::Landscape  ? "landscape"
                         : s.orientation == Orientation::Portrait ? "portrait"
                                                                  : "");
+  Set(n, "blackAndWhite", Flag(s.blackAndWhite));
+  Set(n, "draft", Flag(s.draft));
+  Set(n, "cellComments", s.cellComments == CellComments::AtEnd         ? "atEnd"
+                         : s.cellComments == CellComments::AsDisplayed ? "asDisplayed"
+                                                                       : "");
   Set(n, "useFirstPageNumber", Flag(s.useFirstPageNumber));
+  Set(n, "errors", s.errors == PrintErrors::Blank ? "blank" : s.errors == PrintErrors::Dash ? "dash" : s.errors == PrintErrors::NA ? "NA" : "");
   Reorder(n, {"paperSize", "paperHeight", "paperWidth", "scale", "firstPageNumber", "fitToWidth", "fitToHeight", "pageOrder",
               "orientation", "usePrinterDefaults", "blackAndWhite", "draft", "cellComments", "useFirstPageNumber", "errors",
               "horizontalDpi", "verticalDpi", "copies"});

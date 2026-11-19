@@ -232,6 +232,83 @@ TEST(sheet_page_fit_width_keeps_row_breaks) {
   CHECK(fitted.PageCount() == 1);
 }
 
+// s3-corpus's findings: a page setup on a sheet added since opening, saved, then undone, saves again
+// (the undo takes its text back to before its first save); margins the edit didn't change keep
+// their value (Excel's 17 digits).
+TEST(sheet_page_setup_corpus_findings) {
+  auto book = OpenParts({"<sheetData/><pageMargins left=\"0.74803149606299213\" right=\"0.75000000000000011\" top=\"0.75\" "
+                         "bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>"});
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.AddSheet(1, "Plain"));
+  PageSetup p;
+  p.orientation = Orientation::Landscape;
+  CHECK(ed.SetPageSetup(1, p, HeaderFooter{}, false));
+  SavePage(*book, ed);
+  CHECK(ed.Undo(1));
+  const std::vector<uint8_t> zip = SavePage(*book, ed);
+  auto again = OpenZip(zip);
+  CHECK(again && again->SheetCount() == 2);
+  if (again) CHECK(again->GetSheet(1).Name() == "Plain" && again->GetSheet(1).Page().orientation != Orientation::Landscape);
+  // Paper only: the margins as read.
+  const PageMargins before = book->GetSheet(0).Page().margins;
+  PageSetup a4 = book->GetSheet(0).Page();
+  a4.paperSize = 9;
+  CHECK(ed.SetPageSetup(0, a4, book->GetSheet(0).HeadersFooters(), false));
+  auto third = OpenZip(SavePage(*book, ed));
+  if (!third) return;
+  const PageMargins& m = third->GetSheet(0).Page().margins;
+  CHECK(m.left == before.left && m.right == before.right && m.top == 0.75 && third->GetSheet(0).Page().paperSize == 9);
+}
+
+// The Sheet tab's Black and white, Draft quality, Notes and Cell errors as: written where Excel puts
+// them in pageSetup, read back.
+TEST(sheet_page_setup_print_quality_notes_errors) {
+  auto book = OpenParts({"<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  PageSetup p;
+  p.blackAndWhite = p.draft = true;
+  p.cellComments = CellComments::AtEnd;
+  p.errors = PrintErrors::Dash;
+  p.orientation = Orientation::Landscape;
+  CHECK(ed.SetPageSetup(0, p, HeaderFooter{}, false));
+  const std::vector<uint8_t> zip = SavePage(*book, ed);
+  CHECK(Has(PartText(zip, "/xl/worksheets/sheet1.xml"),
+            "<pageSetup orientation=\"landscape\" blackAndWhite=\"1\" draft=\"1\" cellComments=\"atEnd\" errors=\"dash\"/>"));
+  auto again = OpenZip(zip);
+  if (!again) return;
+  const PageSetup& q = again->GetSheet(0).Page();
+  CHECK(q.blackAndWhite && q.draft && q.cellComments == CellComments::AtEnd && q.errors == PrintErrors::Dash);
+}
+
+// Printed and exported text can be searched and copied: each glyph run says what it shows, for the
+// simple layout (one line, Latin) and the full one (wrapped).
+TEST(sheet_page_runs_carry_text) {
+  auto book = OpenZip(test::MakeZip(WorkbookParts(
+      {"<sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Hello world</t></is></c>"
+       "<c r=\"B1\" t=\"inlineStr\"><is><t>Gr\xC3\xBC\xC3\x9F" "e \xE2\x86\x92 \xCE\xB1\xCE\xB2</t></is></c></row></sheetData>"})));
+  if (!book) return;
+  static fw::text::Fonts fonts;
+  view::FontMeasure measure(fonts);
+  NumLocale locale;
+  view::CellText text(*book, fonts, measure, locale);
+  const Sheet& s = book->GetSheet(0);
+  for (uint32_t col : {0u, 1u}) {
+    CellInfo c;
+    CHECK(s.GetCell(0, col, c));
+    const view::CellText::Layout& l = text.Get(s, c, 400);
+    std::u16string shown;
+    for (const fw::text::Line& line : l.lines)
+      for (const fw::text::GlyphPiece& g : line.pieces) {
+        const auto r = view::ShownRun(g, l.text);
+        CHECK(r.text != nullptr || g.glyphs.empty());
+        if (r.text) shown.append(r.text, r.textLength);
+      }
+    CHECK(shown == (col ? u"Grüße → αβ" : u"Hello world"));
+  }
+}
+
 TEST(sheet_page_break_preview_saved) {
   auto book = OpenZip(test::MakeZip(WorkbookParts({"<sheetViews><sheetView workbookViewId=\"0\"/></sheetViews><sheetData/>"})));
   if (!book) return;
