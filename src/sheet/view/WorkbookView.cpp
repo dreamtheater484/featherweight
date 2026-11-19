@@ -180,6 +180,7 @@ OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& er
   }
   sheet_ = first;
   ShowSheet(first);
+  RefreshPivotsOnOpen();  // s4-pivot: the caches whose file asks for it (refreshOnLoad)
   return OpenResult::Ok;
 }
 
