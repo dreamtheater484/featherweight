@@ -1,0 +1,40 @@
+# S3 fixture ("created as Excel shows it"): a table with a total row, conditional formats and data
+# validation, through s3-data's Insert > Table, Conditional formatting and Data Validation (their
+# script ops on the selection), values typed in the en-NL region. Excel shows a total row's formula
+# without the table's name ([OK]), and a list's items with the region's separator (Yes;No).
+sheet-name "Sales"
+enter A1 "Region"
+enter B1 "Q1"
+enter C1 "Q2"
+enter D1 "OK"
+enter A2 "North"
+enter B2 "120"
+enter C2 "340"
+enter A3 "South"
+enter B3 "80"
+enter C3 "95"
+enter A4 "East"
+enter B4 "260"
+enter C4 "410"
+enter A5 "West"
+enter B5 "150"
+enter C5 "60"
+table A1:D5 TableStyleMedium9
+table-total A1
+rule B2:C5 greater "200"
+rule C2:C5 bar
+rule A2:A5 formula "=$C2<100"
+validation D2:D5 list "Yes|No"
+validation B2:B5 whole between "0" "1000"
+enter D2 "Yes"
+enter D4 "No"
+save
+expect table Table1 Sales!A1:D6 style TableStyleMedium9 totals True
+expect cell Sales!A6 text Total
+expect cell Sales!D6 formula =SUBTOTAL(103,[OK])
+expect cell Sales!D6 text 2
+expect rule Sales!B2:C5 type 1 operator 5
+expect rule Sales!C2:C5 type 4
+expect rule Sales!A2:A5 type 2 operator
+expect validation Sales!D2:D5 type 3 Yes;No
+expect validation Sales!B2:B5 type 1 0

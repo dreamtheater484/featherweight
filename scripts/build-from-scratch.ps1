@@ -138,11 +138,14 @@ function Get-Facts($wb, $sheets) {
       if ($c.top -notlike "-4142/*") { "cell $at top $($c.top)" }
       if ($c.bottom -notlike "-4142/*") { "cell $at bottom $($c.bottom)" }
     }
-    "sheet $($s.name) widths $(($s.widths.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ' ')"
+    $widths = if ($s.widths -is [Collections.IDictionary]) { $s.widths.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" } }
+              else { $s.widths.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value)" } }
+    "sheet $($s.name) widths $(@($widths) -join ' ')"
     if ($s.freeze) { "sheet $($s.name) freeze $($s.freeze)" }
     foreach ($m in @($s.merges)) { "sheet $($s.name) merge $m" }
   }
   foreach ($n in $wb.Names) { "name $($n.Name) $($n.RefersTo)" }
+  if ($wb.ProtectStructure) { "protect-book structure" }
   foreach ($ws in $wb.Worksheets) {
     $sn = $ws.Name
     $i = 0
@@ -163,18 +166,26 @@ function Get-Facts($wb, $sheets) {
       $op = try { " operator $($fc.Operator)" } catch { "" }
       "rule $sn!$($fc.AppliesTo.Address($false, $false)) type $($fc.Type)$op"
     }
-    $valid = try { $ws.Cells.SpecialCells(-4174) } catch { $null }  # xlCellTypeAllValidation
+    # Assigned inside the try: `$x = try { range }` would unroll the range into its cells.
+    $valid = $null
+    try { $valid = $ws.Cells.SpecialCells(-4174) } catch { }  # xlCellTypeAllValidation
     if ($valid) {
-      foreach ($area in $valid.Areas) {
+      # Each area by its address ("B2:B5,D2:D5"). Formula1 comes in the region's form (a list
+      # "Yes;No" in en-NL), whatever culture the call carries.
+      foreach ($a in $valid.Address($false, $false) -split ',') {
+        $area = $ws.Range($a)
         $v = $area.Cells.Item(1, 1).Validation
         $f1 = try { [string][System.__ComObject].InvokeMember("Formula1", [Reflection.BindingFlags]::GetProperty, $null, $v, $null, $null, $enUS, $null) } catch { "" }
         "validation $sn!$($area.Address($false, $false)) type $($v.Type) $f1"
       }
     }
-    foreach ($cm in $ws.Comments) { "note $sn!$($cm.Parent.Address($false, $false)) $($cm.Text())" }
+    # Texts on one line: a line break as \n. A thread's older-versions note is its own fact.
+    $line = { param($t) ([string]$t) -replace "`r`n|`r|`n", '\n' }
+    foreach ($cm in $ws.Comments) { "note $sn!$($cm.Parent.Address($false, $false)) $(& $line $cm.Text())" }
     $threads = try { $ws.CommentsThreaded } catch { $null }
-    if ($threads) { foreach ($t in $threads) { "comment $sn!$($t.Parent.Address($false, $false)) $($t.Text()) replies $($t.Replies.Count)" } }
-    foreach ($h in $ws.Hyperlinks) { "link $sn!$($h.Range.Address($false, $false)) $($h.Address) $($h.SubAddress)" }
+    if ($threads) { foreach ($t in $threads) { "comment $sn!$($t.Parent.Address($false, $false)) $(& $line $t.Text()) replies $($t.Replies.Count)" } }
+    foreach ($h in $ws.Hyperlinks) { "link $sn!$($h.Range.Address($false, $false)) address $($h.Address) place $($h.SubAddress) text $($h.TextToDisplay)".TrimEnd() }
+    if ($ws.ProtectContents) { "protect $sn contents formatcells $($ws.Protection.AllowFormattingCells) insertrows $($ws.Protection.AllowInsertingRows)" }
     $ps = $ws.PageSetup
     "pagesetup $sn orientation $($ps.Orientation) zoom $($ps.Zoom) wide $($ps.FitToPagesWide) tall $($ps.FitToPagesTall) titlerows $($ps.PrintTitleRows) titlecols $($ps.PrintTitleColumns) area $($ps.PrintArea)"
   }
@@ -321,6 +332,9 @@ if ($Child) {
               $win.FreezePanes = $true
             }
             "save" { $wb.SaveAs($Target, 51) }  # xlOpenXMLWorkbook
+            { $_ -in "table", "table-total", "rule", "validation", "note", "comment", "link", "link-place", "protect" } {
+              throw "line ${n}: '$op' is a fixture step (played in Featherweight only: -Fixtures)"
+            }
             default { throw "line ${n}: unknown step '$op'" }
           }
         } catch {
@@ -355,6 +369,7 @@ if ($Child) {
 
 # ---- Parent
 $root = Split-Path -Parent $PSScriptRoot
+$Steps = @($Steps | ForEach-Object { $_ -split ',' } | Where-Object { $_ })  # -File passes "a,b" as one
 if (-not $Steps) { $Steps = @(Get-ChildItem (Join-Path $root "tests\office\build") -Filter *.steps | ForEach-Object FullName) }
 if (-not [IO.Path]::IsPathRooted($Out)) { $Out = Join-Path $root $Out }
 New-Item -ItemType Directory -Force (Join-Path $Out "excel") | Out-Null
@@ -429,6 +444,7 @@ function ConvertTo-AppScript([string]$stepsPath, [string]$target, [string]$pdf) 
     if ($line -notmatch '^(\S+)\s*(.*)$') { throw "line ${n}: can't read '$line'" }
     $op = $Matches[1]; $rest = $Matches[2]
     $quoted = if ($rest -match '"((?:[^"\\]|\\.)*)"') { $Matches[1] -replace '\\(.)', '$1' } else { $null }
+    $quotes = @([regex]::Matches($rest, '"((?:[^"\\]|\\.)*)"') | ForEach-Object { $_.Groups[1].Value -replace '\\(.)', '$1' })
     $first = ($rest -split '\s+')[0]
     switch ($op) {
       "sheet-name" { $ops.Add("cmd:2009"); Add-Typed $quoted; $ops.Add("key:enter") }
@@ -464,6 +480,32 @@ function ConvertTo-AppScript([string]$stepsPath, [string]$target, [string]$pdf) 
       "delete-name" { $ops.Add("name:-$first") }
       "names-create" { Select-Ref $first; $ops.Add("names:create=" + ($rest -split '\s+')[1]) }
       "freeze" { Select-Ref $first; $ops.Add("cmd:2028") }
+      # S3's objects (fixtures). Tables, rules and validation: s3-data's script ops on the selection
+      # (WorkbookData.cpp: table:, rule:, valid:), values in the region's form.
+      "table" {  # table A1:C5 [TableStyleMedium9]: Insert > Table, the first row the headers
+        Select-Ref $first
+        $style = ($rest -split '\s+')[1]
+        $ops.Add("table:create" + $(if ($style) { ",$style" } else { "" }))
+      }
+      "table-total" { Select-Ref $first; $ops.Add("table:total") }  # the Total Row of the table at the cell
+      "rule" {  # rule D2:D6 greater "200" / rule D2:D6 bar / rule A2:C6 formula "=$C2>100"
+        Select-Ref $first
+        $v = @($quotes) + @("", "")
+        $ops.Add("rule:" + ($rest -split '\s+')[1] + "," + ($v[0] -replace ';', '\;') + "," + ($v[1] -replace ';', '\;') + ",0,0")
+      }
+      "validation" {  # validation E2:E6 list "Yes|No" / validation F2:F6 whole between "1" "10"
+        Select-Ref $first
+        $words = $rest -split '\s+'
+        $v = @($quotes) + @("", "")
+        if ($words[1] -eq "list" -or $words[1] -eq "custom") { $ops.Add("valid:$($words[1])," + ($v[0] -replace ';', '\;')) }
+        else { $ops.Add("valid:$($words[1]),$($words[2]),$($v[0]),$($v[1])") }
+      }
+      # Notes, comments, links and protection: s3-review's panels, as typed (WorkbookReview.cpp).
+      "note" { Select-Ref $first; $ops.Add("cmd:2902"); Add-Typed $quoted; $ops.Add("key:enter") }  # New Note (Shift+F2)
+      "comment" { Select-Ref $first; $ops.Add("key:ctrl+alt+m"); Add-Typed $quoted; $ops.Add("key:enter") }  # New Comment, Post
+      "link" { Select-Ref $first; $ops.Add("key:ctrl+k"); Add-Typed $quoted; $ops.Add("key:enter") }  # an address
+      "link-place" { Select-Ref $first; $ops.Add("key:ctrl+k"); $ops.Add("key:tab"); Add-Typed $quoted; $ops.Add("key:enter") }
+      "protect" { $ops.Add("cmd:2900"); $ops.Add("key:enter") }  # Protect Sheet, no password, Excel's permissions
       "save" { $ops.Add("saveas:$target") }
       "expect" { }  # a fixture's fact, checked in Excel's read-back
       default { throw "line ${n}: unknown step '$op'" }
@@ -522,11 +564,12 @@ if ($Fixtures) {
     if (Test-Path $excelPdf) { Remove-Item $excelPdf }
     $d = Invoke-Child "dump" (Resolve-Path (Join-Path $fwDir "$name.xlsx")).Path $excelPdf
     if ($d.error) { "[FAIL] $($name): Excel didn't read Featherweight's copy: $($d.error)"; $bad++; continue }
-    $facts = @($d.facts)
+    $facts = @($d.facts | ForEach-Object { "$_".TrimEnd() })
     [IO.File]::WriteAllLines((Join-Path $Out "$name.facts.txt"), [string[]]$facts, [Text.UTF8Encoding]::new($false))
     $expected = @(Get-Content -LiteralPath $s -Encoding UTF8 | ForEach-Object { $_.Trim() } | Where-Object { $_ -like "expect *" } | ForEach-Object { $_.Substring(7) })
     $have = New-Object 'Collections.Generic.HashSet[string]' (, [string[]]$facts)
-    $missing = @($expected | Where-Object { -not $have.Contains($_) })
+    # An expect with * matches as a wildcard (a note's author is the Windows user's name).
+    $missing = @($expected | Where-Object { $want = $_; if ($want.Contains('*')) { -not ($facts | Where-Object { $_ -like $want }) } else { -not $have.Contains($want) } })
     if ($missing.Count) {
       $bad++
       "[FAIL] $($name): $($missing.Count) of $($expected.Count) expected facts not in Excel's read-back ($name.facts.txt)"
