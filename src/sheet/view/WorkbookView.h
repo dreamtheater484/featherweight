@@ -601,11 +601,13 @@ class WorkbookView : public PagedView {
   struct BreakDrag {
     bool rows = false;
     uint32_t from = 0, to = 0;  // the row or column the break is before
+    bool outer = false;         // the print area's edge: dragging it sets the print area
   };
   std::optional<BreakDrag> breakDrag_;
   std::unique_ptr<PrintSheet> breakPages_;  // Page Break Preview's pages (`first`: their sheet)
   const PrintLayout* BreakPages();
-  bool BreakEdgeAt(float x, float y, bool& rows, uint32_t& at);
+  std::optional<Range> PrintedArea();  // Page Break Preview's printed cells, when one area
+  bool BreakEdgeAt(float x, float y, bool& rows, uint32_t& at, bool& outer);
   bool BreakDragStart(float x, float y);
   bool BreakDragMove(int x, int y);
   bool BreakDragEnd(int x, int y);

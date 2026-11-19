@@ -5416,7 +5416,7 @@ Result Editor::SetNote(int sheet, CellAddr cell, const std::optional<Note>& note
 
 // ---- Page setup
 
-Result Editor::SetPageSetup(int sheet, const PageSetup& page, const HeaderFooter& hf, bool fitToPage) {
+Result Editor::SetPageSetup(int sheet, PageSetup page, const HeaderFooter& hf, bool fitToPage) {
   Rec rec(*this, JournalOp::SetPageSetup, [&](JournalRecord& w) {
     w.I(sheet).U(page.paperSize).S(page.paperWidth).S(page.paperHeight).U(page.scale).U(page.fitToWidth);
     w.U(page.fitToHeight).I(page.firstPageNumber).B(page.useFirstPageNumber).U(static_cast<uint8_t>(page.orientation));
@@ -5433,7 +5433,18 @@ Result Editor::SetPageSetup(int sheet, const PageSetup& page, const HeaderFooter
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"A chart sheet's page setup can't be changed yet.");
+    const bool chart = s.Kind() == SheetKind::Chartsheet;
+    if (!chart && s.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet's page setup can't be changed.");
+    if (chart && A::Text(s).rootStart.empty()) return Result::Fail(u"This chart sheet couldn't be read.");
+    // A chart sheet prints its chart on one page: no scaling, page order, gridlines or headings
+    // (its part has no place for them).
+    if (chart) {
+      const PageSetup none;
+      page.scale = none.scale, page.fitToWidth = none.fitToWidth, page.fitToHeight = none.fitToHeight;
+      page.pageOrder = none.pageOrder, page.cellComments = none.cellComments, page.errors = none.errors;
+      page.horizontalCentered = page.verticalCentered = page.headings = page.gridLines = page.gridLinesSet = false;
+      fitToPage = false;
+    }
     // Excel's limits (its Page Setup refuses the rest).
     if (page.scale < 10 || page.scale > 400) return Result::Fail(u"The scale must be between 10 and 400 percent.");
     if (page.fitToWidth > 32767 || page.fitToHeight > 32767) return Result::Fail(u"Fit to: at most 32,767 pages.");
@@ -5451,11 +5462,11 @@ Result Editor::SetPageSetup(int sheet, const PageSetup& page, const HeaderFooter
     detail::PartText& t = A::Text(s);
     const std::string p = xlsx::SheetPrefix(t);
     const std::pair<const char*, std::string> parts[] = {
-        {"printOptions", pagexml::PrintOptions(page, xlsx::SheetElement(t, "printOptions"), p)},
         {"pageMargins", pagexml::Margins(m, p)},
         {"pageSetup", pagexml::Setup(page, xlsx::SheetElement(t, "pageSetup"), p)},
         {"headerFooter", pagexml::HeadersFooters(hf, xlsx::SheetElement(t, "headerFooter"), p)},
-        {"sheetPr", pagexml::SheetPrFit(xlsx::SheetElement(t, "sheetPr"), fitToPage, p)}};
+        {"printOptions", chart ? std::string() : pagexml::PrintOptions(page, xlsx::SheetElement(t, "printOptions"), p)},
+        {"sheetPr", chart ? xlsx::SheetElement(t, "sheetPr") : pagexml::SheetPrFit(xlsx::SheetElement(t, "sheetPr"), fitToPage, p)}};
     bool same = s.Props().fitToPage == fitToPage;
     for (const auto& [local, xml] : parts) same = same && xml == xlsx::SheetElement(t, local);
     if (same) return Result{};

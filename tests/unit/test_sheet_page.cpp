@@ -116,6 +116,52 @@ TEST(sheet_page_setup_save_reopen_undo) {
   CHECK(!ed.SetPageBreaks(0, {PageBreak{0}}, {}));
 }
 
+// A chart sheet's page setup (Excel's chart sheet Page Setup: page, margins, header and footer): what
+// it has a place for written into its part, the rest left out; read back, written again by the next
+// save, undone.
+TEST(sheet_page_setup_chart_sheet) {
+  const std::vector<uint8_t> original = TestFile("sheet/objects.xlsx");
+  auto book = OpenZip(original);
+  if (!book) return;
+  Editor ed(*book);
+  int chart = -1;
+  for (size_t i = 0; i < book->SheetCount(); ++i)
+    if (chart < 0 && book->GetSheet(i).Kind() == SheetKind::Chartsheet) chart = static_cast<int>(i);
+  CHECK(chart >= 0);
+  if (chart < 0) return;
+  const std::string part = book->GetSheet(static_cast<size_t>(chart)).PartName();
+  PageSetup p = book->GetSheet(static_cast<size_t>(chart)).Page();
+  HeaderFooter h;
+  SetUp(p, h);  // scaling, centering, gridlines and page order too: a chart sheet has none
+  p.scale = 50;
+  CHECK(ed.SetPageSetup(chart, p, h, true));
+  CHECK(ed.UndoName() == u"Page Setup");
+  const Sheet& cs = book->GetSheet(static_cast<size_t>(chart));
+  CHECK(cs.Page().scale == 100 && cs.Page().fitToHeight == 1 && !cs.Page().gridLines && !cs.Props().fitToPage);
+  const std::string saved = PartText(SavePage(*book, ed), part);
+  if (!Has(saved, "<sheetViews><sheetView")) std::printf("%s\n", saved.c_str());
+  CHECK(Has(saved, "<pageMargins left=\"0.5\" right=\"0.4\" top=\"1\" bottom=\"0.9\" header=\"0.2\" footer=\"0.25\"/>"
+                   "<pageSetup paperSize=\"9\" firstPageNumber=\"3\" orientation=\"landscape\" useFirstPageNumber=\"1\"/>"
+                   "<headerFooter><oddHeader>&amp;C&amp;A</oddHeader><oddFooter>&amp;RPage &amp;P of &amp;N</oddFooter></headerFooter>"
+                   "<drawing r:id=\"rId1\"/></chartsheet>"));
+  CHECK(saved.find("printOptions") == std::string::npos && saved.find("fitTo") == std::string::npos &&
+        saved.find("scale=") == std::string::npos && saved.find("pageOrder") == std::string::npos);
+  // The next save writes it again (the package kept the part as the file had it).
+  const std::vector<uint8_t> second = SavePage(*book, ed);
+  CHECK(Has(PartText(second, part), "<pageSetup paperSize=\"9\" firstPageNumber=\"3\""));
+  auto again = OpenZip(second);
+  if (again) {
+    const Sheet& s = again->GetSheet(static_cast<size_t>(chart));
+    CHECK(s.Kind() == SheetKind::Chartsheet && s.Page().orientation == Orientation::Landscape && s.Page().paperSize == 9);
+    CHECK(s.Page().margins.left == 0.5 && s.HeadersFooters().oddHeader == "&C&A" && s.Page().firstPageNumber == 3);
+  }
+  // Undone: as the file had it.
+  CHECK(ed.Undo(1));
+  const std::string before = PartText(SavePage(*book, ed), part);
+  CHECK(Has(before, "<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>"
+                    "<drawing r:id=\"rId1\"/>"));
+}
+
 TEST(sheet_page_setup_new_sheet_and_journal) {
   auto parts = WorkbookParts({"<sheetData/>"});
   const std::vector<uint8_t> zip = test::MakeZip(parts);
