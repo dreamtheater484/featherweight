@@ -21,6 +21,8 @@
 
 namespace fw::sheet::calc {
 
+class Workers;
+
 struct CalcSettings {
   bool manual = false;          // calcPr calcMode="manual"
   // Everything is recalculated on opening: calcPr fullCalcOnLoad="1", or a file Excel doesn't take
@@ -79,6 +81,11 @@ class Engine : public Resolver, public Names {
   // is built. Opened, Changed and Recalculate build what is left at once.
   bool BuildGraph(double budgetMs);
   bool Pending() const { return dirtyCount_ > 0; }
+  // Threads for recalculation (S4): 0, the default, as many as the machine has, up to 8; 1 calculates
+  // on the calling thread only, as before.
+  void SetThreads(int n);
+  // Formulas calculated by the parallel phase since the engine was made (tests, the bench).
+  size_t ParallelEvaluations() const { return parallelEvaluations_; }
 
   // --- what happened ---
   bool Stale(int sheet, int32_t row, int32_t col) const;  // kept its cached value: unsupported
@@ -168,6 +175,23 @@ class Engine : public Resolver, public Names {
   std::vector<uint32_t> circularNodes_;
   std::vector<uint32_t> loopNodes_;  // nodes flagged circular or after one (some flags may be gone)
   bool AfterLoop(const Node& n, uint32_t id, std::vector<Area>& areas);
+
+  // --- multi-threaded recalculation (the end of Engine.cpp) ---
+  struct Plan;
+  static bool InWorker();  // this thread calculates in the parallel phase
+  static void Blocked();   // ...and its formula asked Ready: it goes to the serial walk
+  // The dirty formulas that can be calculated on several threads, level by level, until
+  // `deadline`: false when it stopped for the deadline (the rest waits for the next call).
+  bool Parallel(double deadline);
+  bool BuildPlan();
+  void RunChunk(size_t begin, size_t end);
+  void Flush();  // the planned formulas calculated so far: their cells unmarked
+  int threads_ = 0;
+  std::unique_ptr<Workers> workers_;
+  std::vector<std::unique_ptr<Evaluator>> evaluators_;  // one per worker
+  std::unique_ptr<Plan> plan_;
+  size_t parallelEvaluations_ = 0;
+  void PlanChanged();
 };
 
 }  // namespace fw::sheet::calc

@@ -92,6 +92,9 @@ class WorkbookCalc : public Host {
   CellView Cell(int sheet, int32_t row, int32_t col) override;
   void ForEachCell(int sheet, int32_t r1, int32_t c1, int32_t r2, int32_t c2, CellFn fn, void* context) override;
   void Store(int sheet, int32_t row, int32_t col, const Value& v) override;
+  void BeginShared(int sheet, int32_t r1, int32_t r2) override;
+  int StoreShared(int sheet, int32_t row, int32_t col, const Value& v) override;
+  void EndShared(size_t changed) override { changes_ += changed; }
   void SpillMoved(int sheet, int32_t row, int32_t col, const Area& out) override;
   void Extent(int sheet, int32_t& rows, int32_t& cols) override;
   bool SpillBlocked(const Area& area) override;
@@ -125,6 +128,7 @@ class WorkbookCalc : public Host {
   bool Held() const { return busy_ && busy_(); }
   std::vector<std::pair<int32_t, int32_t>> extents_;
   std::unordered_map<std::string, std::unique_ptr<NumberFormat>> formats_;
+  void* formatsLock_ = nullptr;  // an SRWLOCK: TEXT() from recalculation's workers
 };
 
 }  // namespace fw::sheet::calc

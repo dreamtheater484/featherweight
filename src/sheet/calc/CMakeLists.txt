@@ -3,6 +3,7 @@
 target_sources(fwsheet PRIVATE
   Bind.cpp
   Engine.cpp
+  Workers.cpp
   Entry.cpp
   Eval.cpp
   FnArray.cpp
