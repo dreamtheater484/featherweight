@@ -215,6 +215,7 @@ constexpr float kLabelMiddle = 0.36f;  // the same for data labels
 constexpr float kTitleGap = 8.2f;    // points: the title's (or a legend's) line to the room below
 constexpr float kAxisTitle = 6.1f, kAxisTitleGap = 5.07f;  // points: an axis title from the room's edge; to its labels
 constexpr float kKey = 0.549f;       // a legend key's square
+constexpr size_t kOutlinedLabels = 64;  // a category axis whose labels are all outlined at once (more: when drawn)
 
 struct Label {
   Path path;
@@ -260,6 +261,12 @@ class Builder {
     if (s.empty() || !(size > 0)) return l;
     l.path = draw::TextOutline(s.substr(0, 255), font.empty() ? font_ : font, bold, false, size);
     if (!l.path.Empty()) l.width = std::max(0.0f, l.path.Bounds().right);
+    return l;
+  }
+  // A label's width only, from its glyphs' advances (no outline: Text makes it when it's drawn).
+  Label Measure(const std::wstring& s, float size) const {
+    Label l;
+    if (!s.empty() && size > 0) l.width = draw::TextAdvance(s.substr(0, 255), font_, false, false, size);
     return l;
   }
   // `align`: 0 starts at x, 1 centers on it, 2 ends at it; turned `degrees` about (x, baseline).
@@ -963,6 +970,7 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   const std::vector<double> vticks = Ticks(vs), sticks = secondary ? Ticks(ss) : std::vector<double>();
   std::vector<Label> vlabels, slabels, clabels;
   float vw = 0, sw = 0, cw = 0;
+  const auto catName = [&](size_t i) { return i < names.size() ? names[i] : std::to_wstring(i + 1); };
   if (ch.value.shown)
     for (double v : vticks) vlabels.push_back(b.Text(FormatNumber(v, vformat), ts)), vw = std::max(vw, vlabels.back().width);
   if (secondary && ch.secondary.shown)
@@ -972,8 +980,14 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     if (scatter)
       for (double v : xticks) clabels.push_back(b.Text(FormatNumber(v, ch.category.format), ts)), cw = std::max(cw, clabels.back().width);
     else
-      for (size_t i = 0; i < cats.n && i < 4096; ++i)
-        clabels.push_back(b.Text(i < names.size() ? names[i] : std::to_wstring(i + 1), ts)), cw = std::max(cw, clabels.back().width);
+      // Hundreds of categories, of which only every so many labels show: the others measured by
+      // their advances, their outlines made only when they're drawn (a redraw stays within a
+      // keystroke). The first and last, which the plot's edges allow for, are outlined.
+      for (size_t i = 0, n = std::min<size_t>(cats.n, 4096); i < n; ++i) {
+        const bool outline = n <= kOutlinedLabels || i == 0 || i + 1 == n;
+        clabels.push_back(outline ? b.Text(catName(i), ts) : b.Measure(catName(i), ts));
+        cw = std::max(cw, clabels.back().width);
+      }
   }
 
   // Axis titles, bold, at the room's edges (up the sides, turned): they take their room unless
@@ -1097,8 +1111,9 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     const size_t every = room > 0 ? std::max<size_t>(1, static_cast<size_t>(std::ceil(need / room))) : 1;
     for (size_t i = 0; i < clabels.size(); i += every) {
       const Point at = p.At(cats.Center(i), 0);
-      if (bar) b.Place(clabels[i], P.left - kValueGap * ts, at.y + kMiddle * ts, 2, text);
-      else b.Place(clabels[i], at.x, below, 1, text);
+      const Label l = clabels[i].path.Empty() && clabels[i].width > 0 ? b.Text(catName(i), ts) : clabels[i];
+      if (bar) b.Place(l, P.left - kValueGap * ts, at.y + kMiddle * ts, 2, text);
+      else b.Place(l, at.x, below, 1, text);
     }
   }
   // The axis titles: up the sides centred on the plot, or under it.

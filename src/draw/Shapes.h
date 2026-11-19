@@ -163,6 +163,8 @@ uint8_t PatternIndex(std::string_view name);
 std::shared_ptr<const Bitmap> PatternBitmap(uint8_t pattern, Color foreground, Color background);
 // Glyph outlines for `text` in `font`, as one path, with the baseline at y = 0 (DirectWrite).
 Path TextOutline(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size);
+// The width of `text`'s glyphs' advances, as TextOutline lays them out; far cheaper than its outline.
+float TextAdvance(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size);
 
 // ---- Readers (DrawingML.cpp, Vml.cpp) ----
 
