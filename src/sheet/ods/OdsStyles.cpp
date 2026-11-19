@@ -174,7 +174,7 @@ void Styles::Read(xml_node stylesRoot, xml_node contentRoot) {
       if (family.empty()) family = Attr(f, "style:name");
       faces_[std::string(Attr(f, "style:name"))] = family;
     }
-    for (const char* group : {"office:styles", "office:automatic-styles"}) {
+    for (const char* group : {"office:styles", "office:automatic-styles", "office:master-styles"}) {
       for (xml_node s : root.child(group).children()) {
         const std::string_view n = s.name();
         const std::string name(Attr(s, "style:name"));
@@ -185,6 +185,8 @@ void Styles::Read(xml_node stylesRoot, xml_node contentRoot) {
           else other_[std::string(Attr(s, "style:family")) + "\x1f" + name] = s;
         } else if (n.starts_with("number:") && n.ends_with("-style")) {
           data_[name] = s;
+        } else if (n == "style:page-layout" || n == "style:master-page") {  // Find("page-layout" / "master-page")
+          other_[std::string(n.substr(6)) + "\x1f" + name] = s;
         }
       }
     }

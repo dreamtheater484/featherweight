@@ -192,6 +192,53 @@ std::string CellText(xml_node cell, std::string* link) {
   return out;
 }
 
+// A header or footer region's paragraphs as Excel's codes: fields as &A &P &N &D &T &F, & doubled.
+void HeaderText(xml_node n, std::string& out, int depth) {
+  for (xml_node c : n.children()) {
+    if (c.type() == pugi::node_pcdata) {
+      for (const char* p = c.value(); *p; ++p) out += *p == '&' ? std::string("&&") : std::string(1, *p);
+      continue;
+    }
+    const std::string_view name = c.name();
+    if (name == "text:p") {
+      if (c.previous_sibling("text:p")) out += '\n';
+      HeaderText(c, out, depth + 1);
+    } else if (name == "text:sheet-name") out += "&A";
+    else if (name == "text:page-number") out += "&P";
+    else if (name == "text:page-count") out += "&N";
+    else if (name == "text:date") out += "&D";
+    else if (name == "text:time") out += "&T";
+    else if (name == "text:file-name") out += Attr(c, "text:display") == "full" ? "&Z&F" : "&F";
+    else if (name == "text:s") out.append(std::clamp(std::atoi(std::string(Attr(c, "text:c")).c_str()), 1, 100), ' ');
+    else if (name == "text:tab") out += ' ';
+    else if (name == "text:line-break") out += '\n';
+    else if (depth < kMaxDepth) HeaderText(c, out, depth + 1);
+  }
+}
+
+// style:header or style:footer -> "&L...&C...&R..." (no regions: centered), at most 255 characters.
+std::string HeaderFooter(xml_node h) {
+  if (!h || Attr(h, "style:display") == "false") return {};
+  std::string out;
+  if (h.child("style:region-left") || h.child("style:region-center") || h.child("style:region-right")) {
+    for (auto [region, code] : {std::pair{"style:region-left", "&L"}, {"style:region-center", "&C"}, {"style:region-right", "&R"}}) {
+      std::string s;
+      HeaderText(h.child(region), s, 0);
+      if (!s.empty()) out += code + s;
+    }
+  } else {
+    HeaderText(h, out, 0);
+    if (!out.empty()) out = "&C" + out;
+  }
+  if (out.size() > 255) {
+    out.resize(255);
+    while (!out.empty() && (static_cast<unsigned char>(out.back()) & 0xC0) == 0x80) out.pop_back();
+    if (!out.empty() && (static_cast<unsigned char>(out.back()) & 0x80)) out.pop_back();
+    while (!out.empty() && out.back() == '&') out.pop_back();
+  }
+  return out;
+}
+
 bool ValidName(std::string_view n) {
   if (n.empty() || n.size() > 255) return false;
   if (!(std::isalpha(static_cast<unsigned char>(n[0])) || n[0] == '_' || n[0] == '\\' || (n[0] & 0x80))) return false;
@@ -293,6 +340,11 @@ class Converter {
   std::vector<std::pair<CellAddr, edit::notes::NoteText>> notes_;
   std::string comments_, vml_;
   std::string ConditionalFormats();
+  std::string PageSetup(xml_node table, bool& fit);
+  std::vector<int> rowBreaks_, colBreaks_;  // manual page breaks: before these rows and columns
+  // Per column, the merged area over it: its last row and its first cell's format, which Excel
+  // gives the whole area (its covered cells: the borders around it).
+  std::vector<std::pair<int, int>> span_;
   struct Merge {
     int r1, c1, r2, c2;
   };
@@ -396,9 +448,11 @@ void Converter::Columns(xml_node parent, std::vector<ColRun>& runs, int& col, in
       const int count = std::min(Repeat(c, "table:number-columns-repeated"), kMaxCol - col);
       if (count <= 0) return;
       ColRun r{col, col + count - 1, st_.Resolve(Attr(c, "table:default-cell-style-name")), 0, false, level};
-      if (xml_node s = st_.Find("table-column", Attr(c, "table:style-name")))
-        if (auto w = pkg::odf::Points(Attr(s.child("style:table-column-properties"), "style:column-width")); w && *w >= 0)
-          r.width = st_.ColumnChars(*w);
+      if (xml_node s = st_.Find("table-column", Attr(c, "table:style-name"))) {
+        xml_node p = s.child("style:table-column-properties");
+        if (auto w = pkg::odf::Points(Attr(p, "style:column-width")); w && *w >= 0) r.width = st_.ColumnChars(*w);
+        if (Attr(p, "fo:break-before") == "page" && col > 0 && colBreaks_.size() < 1023) colBreaks_.push_back(col);
+      }
       r.hidden = Attr(c, "table:visibility") == "collapse" || Attr(c, "table:visibility") == "filter";
       runs.push_back(r);
       for (int i = col; i < col + count; ++i) colXf_[i] = r.xf, colStyle_[i] = c.attribute("table:default-cell-style-name").value();
@@ -440,6 +494,7 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
     xml_node p = s.child("style:table-row-properties");
     if (auto h = pkg::odf::Points(Attr(p, "style:row-height")); h && *h >= 0) height = std::min(409.5, std::round(*h * 4) / 4);
     custom = Attr(p, "style:use-optimal-row-height") == "false";
+    if (Attr(p, "fo:break-before") == "page" && index > 0 && rowBreaks_.size() < 1023) rowBreaks_.push_back(index);
   }
   const bool hidden = Attr(row, "table:visibility") == "collapse" || Attr(row, "table:visibility") == "filter";
   const std::string_view rowStyle = Attr(row, "table:default-cell-style-name");
@@ -462,7 +517,14 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
     if (col >= kMaxCol) break;
     const int count = std::min(Repeat(c, "table:number-columns-repeated"), kMaxCol - col);
     const std::string_view style = Attr(c, "table:style-name");
-    const int xf = !style.empty() ? st_.Resolve(style) : rowXf;  // -1: the column's
+    int xf = !style.empty() ? st_.Resolve(style) : rowXf;  // -1: the column's
+    if (n == "table:covered-table-cell") {
+      if (span_[col].first >= index) xf = span_[col].second;
+    } else if (c.attribute("table:number-columns-spanned") || c.attribute("table:number-rows-spanned")) {
+      const int sc = std::min(Repeat(c, "table:number-columns-spanned"), kMaxCol - col);
+      const int sr = std::min(Repeat(c, "table:number-rows-spanned"), kMaxRow - index);
+      for (int k = 0; k < sc && (sc > 1 || sr > 1); ++k, ++work_) span_[col + k] = {index + sr - 1, xf >= 0 ? xf : colXf_[col]};
+    }
     const bool has = !c.attribute("office:value-type").empty() || !c.attribute("table:formula").empty() ||
                      c.child("text:p") || c.child("text:h") || c.child("office:annotation");
     if (!has && xf >= 0 && col + count >= kMaxCol && count > 256) rowFormat = xf;
@@ -606,6 +668,88 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
 
 // ODF's conditions on cell styles (style:map: the first that holds applies its style) as Excel's
 // conditional formats over the cells with that style, each stopping the others when it holds.
+// The table's master page and its page layout as Excel reads them: printOptions, pageMargins,
+// pageSetup, headerFooter and the manual breaks. `fit`: fit to pages (sheetPr's pageSetUpPr).
+std::string Converter::PageSetup(xml_node table, bool& fit) {
+  xml_node master = st_.Find("master-page", Attr(st_.Find("table", Attr(table, "table:style-name")), "style:master-page-name"));
+  if (!master) master = st_.Find("master-page", "Default");
+  xml_node layout = st_.Find("page-layout", Attr(master, "style:page-layout-name"));
+  xml_node p = layout.child("style:page-layout-properties");
+  auto inches = [](xml_node n, const char* name, double def) {
+    auto v = pkg::odf::Points(Attr(n, name));
+    return v && *v >= 0 && *v < 72 * 49 ? std::round(*v / 72 * 10000) / 10000 : def;
+  };
+  auto attr = [&](const char* name) {
+    std::string_view v = Attr(p, (std::string("style:") + name).c_str());
+    return v.empty() ? Attr(p, (std::string("loext:") + name).c_str()) : v;
+  };
+  std::string out;
+  const std::string_view print = Attr(p, "style:print"), center = Attr(p, "style:table-centering");
+  const bool grid = print.find("grid") != std::string_view::npos, headings = print.find("headers") != std::string_view::npos;
+  const bool across = center == "horizontal" || center == "both", down = center == "vertical" || center == "both";
+  if (grid || headings || across || down) {
+    out += "<printOptions";
+    if (across) out += " horizontalCentered=\"1\"";
+    if (down) out += " verticalCentered=\"1\"";
+    if (headings) out += " headings=\"1\"";
+    if (grid) out += " gridLines=\"1\"";
+    out += "/>";
+  }
+  // Margins: Excel's top and bottom are below the header and above the footer, which start at
+  // the page's margins.
+  xml_node header = master.child("style:header"), footer = master.child("style:footer");
+  const std::string head = HeaderFooter(header), foot = HeaderFooter(footer);
+  const double top = inches(p, "fo:margin-top", 0.75), bottom = inches(p, "fo:margin-bottom", 0.75);
+  auto band = [&](const char* style, const char* gap, bool on) {
+    xml_node hf = layout.child(style).child("style:header-footer-properties");
+    return on && hf ? inches(hf, "fo:min-height", 0) + inches(hf, gap, 0) : 0.0;
+  };
+  const bool hasHead = header && Attr(header, "style:display") != "false";
+  const bool hasFoot = footer && Attr(footer, "style:display") != "false";
+  out += "<pageMargins left=\"" + Num(inches(p, "fo:margin-left", 0.7)) + "\" right=\"" + Num(inches(p, "fo:margin-right", 0.7)) +
+         "\" top=\"" + Num(top + band("style:header-style", "fo:margin-bottom", hasHead)) + "\" bottom=\"" +
+         Num(bottom + band("style:footer-style", "fo:margin-top", hasFoot)) + "\" header=\"" + Num(hasHead ? top : 0.3) +
+         "\" footer=\"" + Num(hasFoot ? bottom : 0.3) + "\"/>";
+  // Paper: the size nearest the page's (within 2 mm), either way round.
+  std::string setup;
+  if (auto w = pkg::odf::Points(Attr(p, "fo:page-width")), h = pkg::odf::Points(Attr(p, "fo:page-height")); w && h) {
+    const double a = std::min(*w, *h) * 25.4 / 72, b = std::max(*w, *h) * 25.4 / 72;
+    static constexpr struct { double a, b; int code; } kPapers[] = {
+        {215.9, 279.4, 1}, {215.9, 355.6, 5}, {297, 420, 8}, {210, 297, 9}, {148, 210, 11}, {257, 364, 12}, {182, 257, 13}};
+    for (const auto& paper : kPapers)
+      if (std::abs(a - paper.a) < 2 && std::abs(b - paper.b) < 2) setup += " paperSize=\"" + std::to_string(paper.code) + "\"";
+  }
+  const int scale = std::atoi(std::string(attr("scale-to")).c_str());
+  if (scale >= 10 && scale <= 400 && scale != 100) setup += " scale=\"" + std::to_string(scale) + "\"";
+  if (int first = std::atoi(std::string(Attr(p, "style:first-page-number")).c_str()); first > 0 && first < 32768)
+    setup += " firstPageNumber=\"" + std::to_string(first) + "\" useFirstPageNumber=\"1\"";
+  const int pages = std::atoi(std::string(attr("scale-to-pages")).c_str());
+  const int x = pages > 0 ? pages : std::atoi(std::string(attr("scale-to-X")).c_str());
+  const int y = pages > 0 ? pages : std::atoi(std::string(attr("scale-to-Y")).c_str());
+  if ((x > 0 || y > 0) && x < 32768 && y < 32768) {
+    fit = true;
+    setup += " fitToWidth=\"" + std::to_string(std::max(x, 0)) + "\" fitToHeight=\"" + std::to_string(std::max(y, 0)) + "\"";
+  }
+  if (Attr(p, "style:print-page-order") == "ltr") setup += " pageOrder=\"overThenDown\"";
+  if (const std::string_view o = Attr(p, "style:print-orientation"); o == "landscape" || o == "portrait")
+    setup += " orientation=\"" + std::string(o) + "\"";
+  if (!setup.empty()) out += "<pageSetup" + setup + "/>";
+  if (!head.empty() || !foot.empty()) {
+    out += "<headerFooter>";
+    if (!head.empty()) out += "<oddHeader>" + Escape(xlsx::EncodeXstring(head)) + "</oddHeader>";
+    if (!foot.empty()) out += "<oddFooter>" + Escape(xlsx::EncodeXstring(foot)) + "</oddFooter>";
+    out += "</headerFooter>";
+  }
+  for (auto [breaks, tag, max] : {std::tuple{&rowBreaks_, "rowBreaks", "16383"}, {&colBreaks_, "colBreaks", "1048575"}}) {
+    if (breaks->empty()) continue;
+    const std::string n = std::to_string(breaks->size());
+    out += std::string("<") + tag + " count=\"" + n + "\" manualBreakCount=\"" + n + "\">";
+    for (int b : *breaks) out += "<brk id=\"" + std::to_string(b) + "\" max=\"" + max + "\" man=\"1\"/>";
+    out += std::string("</") + tag + ">";
+  }
+  return out;
+}
+
 std::string Converter::ConditionalFormats() {
   std::string out;
   for (auto& [name, rows] : conditional_) {
@@ -706,6 +850,9 @@ std::string Converter::WriteSheet(size_t index) {
   vml_.clear();
   merges_.clear();
   links_.clear();
+  rowBreaks_.clear();
+  colBreaks_.clear();
+  span_.assign(kMaxCol, {-1, 0});
   headerRowFirst_ = headerRowLast_ = -1;
   minRow_ = kMaxRow, maxRow_ = -1, minCol_ = kMaxCol, maxCol_ = -1;
   hiddenFrom_ = -1;
@@ -737,9 +884,16 @@ std::string Converter::WriteSheet(size_t index) {
   std::vector<Row> rows;
   int row = 0;
   Rows(table, index, rows, row, 0, 0, false);
+  bool fit = false;
+  const std::string page = PageSetup(table, fit);
 
   std::string out = std::string(kDecl) + "<worksheet xmlns=\"" + std::string(kMain) + "\" xmlns:r=\"" + std::string(kRelNs) + "\">";
-  if (!sheet.tabColor.empty()) out += "<sheetPr><tabColor rgb=\"FF" + sheet.tabColor + "\"/></sheetPr>";
+  if (!sheet.tabColor.empty() || fit) {
+    out += "<sheetPr>";
+    if (!sheet.tabColor.empty()) out += "<tabColor rgb=\"FF" + sheet.tabColor + "\"/>";
+    if (fit) out += "<pageSetUpPr fitToPage=\"1\"/>";
+    out += "</sheetPr>";
+  }
   out += "<dimension ref=\"" + (maxRow_ < 0 ? std::string("A1") : Ref(minRow_, minCol_) + ":" + Ref(maxRow_, maxCol_)) + "\"/>";
   // The view: frozen panes, gridlines, zoom, the active cell.
   View view;
@@ -829,7 +983,7 @@ std::string Converter::WriteSheet(size_t index) {
     }
     out += "</hyperlinks>";
   }
-  out += "<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>";
+  out += page;
   for (const auto& [cell, note] : notes_) {
     std::string comments, vml;
     if (edit::notes::Edit(comments_, vml_, cell, note, comments, vml)) comments_.swap(comments), vml_.swap(vml);
