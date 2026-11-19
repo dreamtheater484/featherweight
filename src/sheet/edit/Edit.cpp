@@ -17,6 +17,7 @@
 #include "pkg/XmlWriter.h"
 #include "sheet/calc/Formula.h"
 #include "sheet/calc/Typing.h"
+#include "sheet/edit/Charts.h"
 #include "sheet/edit/Drawing.h"
 #include "sheet/edit/Journal.h"
 #include "sheet/edit/Notes.h"
@@ -3531,207 +3532,11 @@ std::string Editor::PartBytes(std::string_view name) const {
   return std::string(bytes.begin(), bytes.end());
 }
 
-// ---- Charts
+// ---- Drawings and charts
 
 namespace {
 
-constexpr std::string_view kChartNs = "http://schemas.openxmlformats.org/drawingml/2006/chart";
 constexpr std::string_view kRelNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-
-std::string Esc(std::string_view s) {
-  std::string out;
-  pkg::AppendEscapedText(out, s);
-  return out;
-}
-
-// "Sheet1!$A$2:$A$5" (one cell: "Sheet1!$A$2").
-std::string AbsRef(const std::string& sheet, const Range& r) {
-  auto cell = [](uint32_t row, uint32_t col) {
-    std::string name = CellName(row, col);
-    const size_t digits = name.find_first_of("0123456789");
-    return "$" + name.substr(0, digits) + "$" + name.substr(digits);
-  };
-  std::string out = pkg::QuoteSheetName(sheet) + "!" + cell(r.firstRow, r.firstCol);
-  if (r.lastRow != r.firstRow || r.lastCol != r.firstCol) out += ":" + cell(r.lastRow, r.lastCol);
-  return out;
-}
-
-// A cache of cells' values: numbers (numCache, invariant) or text (strCache, as the cells show).
-std::string Cache(const Sheet& s, const Range& r, bool numbers) {
-  std::string pts;
-  uint32_t idx = 0, count = 0;
-  for (uint32_t row = r.firstRow; row <= r.lastRow; ++row)
-    for (uint32_t col = r.firstCol; col <= r.lastCol; ++col, ++idx) {
-      ++count;
-      const Value v = s.GetValue(row, col);
-      std::string text;
-      if (v.type == ValueType::Number) {
-        char buf[48];
-        text.assign(buf, xlsx::FormatNumber(v.number, 0, buf));
-      } else if (v.type == ValueType::String && !numbers) {
-        text = std::string(v.text);
-      } else if (v.type == ValueType::Bool && !numbers) {
-        text = v.boolean ? "TRUE" : "FALSE";
-      } else {
-        continue;
-      }
-      pts += "<c:pt idx=\"" + std::to_string(idx) + "\"><c:v>" + Esc(text) + "</c:v></c:pt>";
-    }
-  std::string head = numbers ? "<c:numCache><c:formatCode>General</c:formatCode>" : "<c:strCache>";
-  return head + "<c:ptCount val=\"" + std::to_string(count) + "\"/>" + pts + (numbers ? "</c:numCache>" : "</c:strCache>");
-}
-
-bool AllNumbers(const Sheet& s, const Range& r) {
-  for (uint32_t row = r.firstRow; row <= r.lastRow; ++row)
-    for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
-      const ValueType t = s.GetValue(row, col).type;
-      if (t != ValueType::Number && t != ValueType::Empty) return false;
-    }
-  return true;
-}
-
-// Excel's guess for a new chart's series. Each: its name's cell (or none), its values; the
-// categories shared (or none).
-struct ChartPlan {
-  struct One {
-    std::optional<Range> name;
-    Range values;
-  };
-  std::vector<One> series;
-  std::optional<Range> categories;
-};
-
-ChartPlan PlanSeries(const Sheet& s, const Range& d) {
-  auto text = [&](uint32_t row, uint32_t col) {
-    const ValueType t = s.GetValue(row, col).type;
-    return t == ValueType::String || t == ValueType::Empty;
-  };
-  const bool many = d.lastRow > d.firstRow && d.lastCol > d.firstCol;
-  bool headerRow = many && text(d.firstRow, d.firstCol), headerCol = headerRow;
-  if (many) {
-    // A header row: text across the top (past the corner); a header column: text down the left.
-    headerRow = true;
-    for (uint32_t c = d.firstCol + 1; c <= d.lastCol && headerRow; ++c) headerRow = s.GetValue(d.firstRow, c).type == ValueType::String;
-    headerCol = true;
-    for (uint32_t r = d.firstRow + 1; r <= d.lastRow && headerCol; ++r) headerCol = text(r, d.firstCol) && s.GetValue(r, d.firstCol).type != ValueType::Empty;
-    if (!text(d.firstRow, d.firstCol)) headerRow = headerCol = false;
-  }
-  const Range body{d.firstRow + (headerRow ? 1u : 0u), d.firstCol + (headerCol ? 1u : 0u), d.lastRow, d.lastCol};
-  ChartPlan plan;
-  if (body.firstRow > body.lastRow || body.firstCol > body.lastCol) return plan;
-  const bool byCols = body.lastRow - body.firstRow >= body.lastCol - body.firstCol;
-  if (byCols) {
-    if (headerCol) plan.categories = Range{body.firstRow, d.firstCol, body.lastRow, d.firstCol};
-    for (uint32_t c = body.firstCol; c <= body.lastCol; ++c)
-      plan.series.push_back({headerRow ? std::optional<Range>(Range::Cell(d.firstRow, c)) : std::nullopt,
-                             Range{body.firstRow, c, body.lastRow, c}});
-  } else {
-    if (headerRow) plan.categories = Range{d.firstRow, body.firstCol, d.firstRow, body.lastCol};
-    for (uint32_t r = body.firstRow; r <= body.lastRow; ++r)
-      plan.series.push_back({headerCol ? std::optional<Range>(Range::Cell(r, d.firstCol)) : std::nullopt,
-                             Range{r, body.firstCol, r, body.lastCol}});
-  }
-  return plan;
-}
-
-// The chart part as Excel writes a new chart of the plan.
-std::string ChartXml(const Sheet& s, const ChartPlan& plan, Editor::ChartKind kind, const std::string& title) {
-  using K = Editor::ChartKind;
-  const std::string name = s.Name();
-  const bool round = kind == K::Pie || kind == K::Doughnut;
-  const bool scatter = kind == K::Scatter;
-  std::string sers;
-  for (size_t i = 0; i < plan.series.size(); ++i) {
-    const ChartPlan::One& one = plan.series[i];
-    sers += "<c:ser><c:idx val=\"" + std::to_string(i) + "\"/><c:order val=\"" + std::to_string(i) + "\"/>";
-    if (one.name)
-      sers += "<c:tx><c:strRef><c:f>" + Esc(AbsRef(name, *one.name)) + "</c:f>" + Cache(s, *one.name, false) + "</c:strRef></c:tx>";
-    if (kind == K::Line) sers += "<c:marker><c:symbol val=\"none\"/></c:marker>";
-    if (scatter) sers += "<c:spPr><a:ln w=\"25400\" cap=\"rnd\"><a:noFill/><a:round/></a:ln></c:spPr><c:marker><c:symbol val=\"circle\"/><c:size val=\"5\"/></c:marker>";
-    if (kind == K::Column || kind == K::Bar) sers += "<c:invertIfNegative val=\"0\"/>";
-    if (plan.categories) {
-      const bool nums = AllNumbers(s, *plan.categories);
-      const std::string ref = nums ? "numRef" : "strRef";
-      sers += std::string(scatter ? "<c:xVal>" : "<c:cat>") + "<c:" + ref + "><c:f>" + Esc(AbsRef(name, *plan.categories)) + "</c:f>" +
-              Cache(s, *plan.categories, nums) + "</c:" + ref + ">" + (scatter ? "</c:xVal>" : "</c:cat>");
-    }
-    sers += std::string(scatter ? "<c:yVal>" : "<c:val>") + "<c:numRef><c:f>" + Esc(AbsRef(name, one.values)) + "</c:f>" +
-            Cache(s, one.values, true) + "</c:numRef>" + (scatter ? "</c:yVal>" : "</c:val>");
-    if (kind == K::Line || scatter) sers += "<c:smooth val=\"0\"/>";
-    sers += "</c:ser>";
-  }
-  const std::string axIds = "<c:axId val=\"500000001\"/><c:axId val=\"500000002\"/>";
-  std::string group;
-  switch (kind) {
-    case K::Column:
-    case K::Bar:
-      group = std::string("<c:barChart><c:barDir val=\"") + (kind == K::Bar ? "bar" : "col") +
-              "\"/><c:grouping val=\"clustered\"/><c:varyColors val=\"0\"/>" + sers +
-              "<c:gapWidth val=\"219\"/><c:overlap val=\"-27\"/>" + axIds + "</c:barChart>";
-      break;
-    case K::Line:
-      group = "<c:lineChart><c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>" + sers + "<c:marker val=\"1\"/>" + axIds + "</c:lineChart>";
-      break;
-    case K::Area:
-      group = "<c:areaChart><c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>" + sers + axIds + "</c:areaChart>";
-      break;
-    case K::Pie:
-      group = "<c:pieChart><c:varyColors val=\"1\"/>" + sers + "<c:firstSliceAng val=\"0\"/></c:pieChart>";
-      break;
-    case K::Doughnut:
-      group = "<c:doughnutChart><c:varyColors val=\"1\"/>" + sers + "<c:firstSliceAng val=\"0\"/><c:holeSize val=\"75\"/></c:doughnutChart>";
-      break;
-    case K::Scatter:
-      group = "<c:scatterChart><c:scatterStyle val=\"lineMarker\"/><c:varyColors val=\"0\"/>" + sers + axIds + "</c:scatterChart>";
-      break;
-  }
-  auto axis = [](const char* el, const char* id, const char* cross, const char* pos, bool grid, const char* tail) {
-    return std::string("<c:") + el + "><c:axId val=\"" + id + "\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling>"
-           "<c:delete val=\"0\"/><c:axPos val=\"" + pos + "\"/>" + (grid ? "<c:majorGridlines/>" : "") +
-           "<c:numFmt formatCode=\"General\" sourceLinked=\"1\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/>"
-           "<c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"" + cross + "\"/><c:crosses val=\"autoZero\"/>" + tail + "</c:" + el + ">";
-  };
-  std::string axes;
-  if (scatter) {
-    axes = axis("valAx", "500000001", "500000002", "b", false, "<c:crossBetween val=\"midCat\"/>") +
-           axis("valAx", "500000002", "500000001", "l", true, "<c:crossBetween val=\"midCat\"/>");
-  } else if (!round) {
-    const bool bar = kind == K::Bar;
-    axes = axis("catAx", "500000001", "500000002", bar ? "l" : "b", false,
-                "<c:auto val=\"1\"/><c:lblAlgn val=\"ctr\"/><c:lblOffset val=\"100\"/><c:noMultiLvlLbl val=\"0\"/>") +
-           axis("valAx", "500000002", "500000001", bar ? "b" : "l", true, "<c:crossBetween val=\"between\"/>");
-  }
-  std::string head;
-  if (!title.empty())
-    head = "<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>" + Esc(title) +
-           "</a:t></a:r></a:p></c:rich></c:tx><c:overlay val=\"0\"/></c:title><c:autoTitleDeleted val=\"0\"/>";
-  else if (plan.series.size() == 1)
-    head = "<c:title><c:overlay val=\"0\"/></c:title><c:autoTitleDeleted val=\"0\"/>";
-  else
-    head = "<c:autoTitleDeleted val=\"1\"/>";
-  const std::string legend =
-      plan.series.size() > 1 || round ? "<c:legend><c:legendPos val=\"b\"/><c:overlay val=\"0\"/></c:legend>" : "";
-  return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<c:chartSpace xmlns:c=\"" + std::string(kChartNs) +
-         "\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"" + std::string(kRelNs) +
-         "\"><c:date1904 val=\"0\"/><c:roundedCorners val=\"0\"/><c:chart>" + head + "<c:plotArea><c:layout/>" + group + axes +
-         "</c:plotArea>" + legend + "<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>";
-}
-
-// A drawing's anchor for a chart (relationship `rel`), cells `at` to `at` + size, shape id `id`.
-std::string ChartAnchor(const Editor::NewChart& c, const std::string& rel, uint32_t id) {
-  auto corner = [](const char* el, uint32_t row, uint32_t col) {
-    return std::string("<xdr:") + el + "><xdr:col>" + std::to_string(col) + "</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>" +
-           std::to_string(row) + "</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:" + el + ">";
-  };
-  return "<xdr:twoCellAnchor xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" "
-         "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">" +
-         corner("from", c.at.row, c.at.col) + corner("to", c.at.row + c.rows, c.at.col + c.cols) +
-         "<xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"" + std::to_string(id) + "\" name=\"Chart " +
-         std::to_string(id - 1) + "\"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x=\"0\" y=\"0\"/>"
-         "<a:ext cx=\"0\" cy=\"0\"/></xdr:xfrm><a:graphic><a:graphicData uri=\"" + std::string(kChartNs) + "\"><c:chart xmlns:c=\"" +
-         std::string(kChartNs) + "\" xmlns:r=\"" + std::string(kRelNs) + "\" r:id=\"" + rel +
-         "\"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>";
-}
 
 }  // namespace
 
@@ -3906,15 +3711,16 @@ Result Editor::InsertChart(int sheet, const NewChart& c) {
     pkg::Package* package = book_.GetPackage();
     if (!package || s.PartName().empty() || !package->FindPart(s.PartName()))
       return Result::Fail(u"Save the workbook as an Excel workbook first, then insert the chart.");
-    const ChartPlan plan = PlanSeries(s, c.data);
-    if (plan.series.empty()) return Result::Fail(u"Select the cells with the numbers to chart.");
+    std::string xml = charts::NewChartXml(s, c.data, c.kind, c.title);
+    if (xml.empty()) return Result::Fail(u"Select the cells with the numbers to chart.");
     return Run(*this, u"Insert Chart", [&]() -> Result {
       const std::string drawing = SheetDrawing(sheet, true);
       if (drawing.empty()) return Result::Fail(u"The chart couldn't be added to this sheet.");
       const std::string chartPart = NewPartName("/xl/charts/chart", ".xml");
       const std::string rel = AddPart(drawing, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart", chartPart,
-                                      "application/vnd.openxmlformats-officedocument.drawingml.chart+xml", ChartXml(s, plan, c.kind, c.title));
-      if (rel.empty() || !AddAnchor(drawing, ChartAnchor(c, rel, NextShapeId(drawing))))
+                                      "application/vnd.openxmlformats-officedocument.drawingml.chart+xml", std::move(xml));
+      const CellAddr to{std::min(c.at.row + c.rows, kMaxRows - 1), std::min(c.at.col + c.cols, kMaxCols - 1)};
+      if (rel.empty() || !AddAnchor(drawing, charts::ChartAnchor(c.at, to, rel, NextShapeId(drawing))))
         return Result::Fail(u"The chart couldn't be added to this sheet.");
       s_->Change(&s, kObjects, Range{c.at.row, c.at.col, c.at.row + c.rows, c.at.col + c.cols});
       return Result{};

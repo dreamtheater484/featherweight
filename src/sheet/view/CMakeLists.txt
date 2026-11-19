@@ -11,7 +11,7 @@ add_library(fwsheetview STATIC WorkbookView.cpp WorkbookInput.cpp WorkbookComman
             WorkbookEdit.cpp WorkbookFunctions.cpp
             WorkbookSheetOps.cpp WorkbookPanels.cpp WorkbookFill.cpp
             WorkbookClipboard.cpp WorkbookFile.cpp ClipHtml.cpp WorkbookFormat.cpp WorkbookFilter.cpp
-            WorkbookData.cpp WorkbookReview.cpp WorkbookNames.cpp)
+            WorkbookData.cpp WorkbookReview.cpp WorkbookNames.cpp WorkbookCharts.cpp)
 target_include_directories(fwsheetview PRIVATE "${PROJECT_SOURCE_DIR}/src" "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(fwsheetview PUBLIC fwsheetrender)
 target_compile_options(fwsheetview PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)

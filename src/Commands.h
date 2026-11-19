@@ -362,6 +362,17 @@ enum Cmd : int {
   CmdSortAscending,
   CmdSortDescending,
   CmdRemoveDuplicates,
+  // Charts and the objects in a sheet's drawing (S3, s3-charts): 2800-2849.
+  CmdInsertChart = 2800,  // Alt+F1: the default chart (clustered column) of the selection
+  CmdChartColumn,         // Insert > Chart by type, in ChartKind's order
+  CmdChartBar,
+  CmdChartLine,
+  CmdChartPie,
+  CmdChartDoughnut,
+  CmdChartArea,
+  CmdChartScatter,
+  CmdChartBox,            // the toolbar's chart choices
+  CmdDeleteObject,        // the selected chart, picture or shape
   // Conditional formatting and data validation (S3, s3-data): 2850-2899.
   CmdCondFormat = 2850,   // the Conditional formatting panel: a new rule
   CmdCfManage,            // its list of the sheet's rules

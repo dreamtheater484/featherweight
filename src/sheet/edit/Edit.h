@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "sheet/edit/Charts.h"
 #include "sheet/edit/Drawing.h"
 #include "sheet/edit/Protection.h"
 #include "sheet/model/Workbook.h"
@@ -282,7 +283,7 @@ class Editor {
   Result DeleteObjects(int sheet, const std::vector<uint32_t>& ids);
 
   // ---- Charts (s3-charts)
-  enum class ChartKind : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter };
+  using ChartKind = edit::ChartKind;
   struct NewChart {
     ChartKind kind = ChartKind::Column;
     Range data;              // the cells charted (the selection)

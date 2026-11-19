@@ -1436,6 +1436,7 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
     if (v.index >= 0 && v.index < 4) RulesCommand(kCmds[v.index]);
   };
   m.left.push_back(rules);
+  AddChartTools(m);  // s3-charts: Insert Chart
   // Number formats, with the decimals and the panel's Number page.
   ToolItem number;
   number.kind = ToolKind::Dropdown;

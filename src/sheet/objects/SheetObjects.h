@@ -78,6 +78,7 @@ class SheetObjects {
     draw::Rect rect;
     bool chart = false;
     bool prints = true;  // false: set not to print (xdr:clientData fPrintsWithSheet="0")
+    uint32_t id = 0;     // its shape id (the anchor's first cNvPr id), which edits name it by
   };
   std::vector<Object> Objects() const;
 

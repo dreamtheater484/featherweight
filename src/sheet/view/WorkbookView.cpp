@@ -588,6 +588,7 @@ void WorkbookView::DrawGrid(Canvas& c, ID2D1DeviceContext* dc) {
         SheetObjects::DrawOptions d;
         if (rtl_) d.mirrorX = (mirror - 2 * tx) / s;
         objects->Draw(painter, {x0, y0, x0 + (rc.right - rc.left) / s, y0 + (rc.bottom - rc.top) / s}, d);
+        DrawObjectSelection(painter, s, d.mirrorX);  // s3-charts
         painter.Restore();
       }
     }
