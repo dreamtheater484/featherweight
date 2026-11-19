@@ -147,6 +147,12 @@ function Get-Facts($wb, $sheets) {
     foreach ($m in @($s.merges)) { "sheet $($s.name) merge $m" }
   }
   foreach ($n in $wb.Names) { "name $($n.Name) $($n.RefersTo)" }
+  # Chart sheets: the chart's type and series, as for a chart on a sheet.
+  foreach ($cs in $wb.Charts) {
+    "chartsheet $($cs.Name) type $($cs.ChartType) series $($cs.SeriesCollection().Count)"
+    $j = 0
+    foreach ($se in $cs.SeriesCollection()) { $j++; "chartsheet $($cs.Name) series $j $($se.Formula)"; "chartsheet $($cs.Name) series $j type $($se.ChartType)" }
+  }
   if ($wb.ProtectStructure) { "protect-book structure" }
   foreach ($ws in $wb.Worksheets) {
     $sn = $ws.Name
@@ -156,7 +162,7 @@ function Get-Facts($wb, $sheets) {
       $ch = $co.Chart
       "chart $sn $i type $($ch.ChartType) series $($ch.SeriesCollection().Count)"
       $j = 0
-      foreach ($se in $ch.SeriesCollection()) { $j++; "chart $sn $i series $j $($se.Formula)" }
+      foreach ($se in $ch.SeriesCollection()) { $j++; "chart $sn $i series $j $($se.Formula)"; "chart $sn $i series $j type $($se.ChartType)" }
     }
     foreach ($lo in $ws.ListObjects) {
       $style = try { $lo.TableStyle.Name } catch { "" }
@@ -334,7 +340,7 @@ if ($Child) {
               $win.FreezePanes = $true
             }
             "save" { $wb.SaveAs($Target, 51) }  # xlOpenXMLWorkbook
-            { $_ -in "table", "table-total", "rule", "validation", "note", "comment", "link", "link-place", "protect", "chart", "pagesetup" } {
+            { $_ -in "table", "table-total", "rule", "validation", "note", "comment", "link", "link-place", "protect", "chart", "move-chart", "pagesetup" } {
               throw "line ${n}: '$op' is a fixture step (played in Featherweight only: -Fixtures)"
             }
             default { throw "line ${n}: unknown step '$op'" }
@@ -508,13 +514,15 @@ function ConvertTo-AppScript([string]$stepsPath, [string]$target, [string]$pdf) 
       "link" { Select-Ref $first; $ops.Add("key:ctrl+k"); Add-Typed $quoted; $ops.Add("key:enter") }  # an address
       "link-place" { Select-Ref $first; $ops.Add("key:ctrl+k"); $ops.Add("key:tab"); Add-Typed $quoted; $ops.Add("key:enter") }
       "protect" { $ops.Add("cmd:2900"); $ops.Add("key:enter") }  # Protect Sheet, no password, Excel's permissions
-      # Charts: s3-charts' Insert > Chart commands on the selection (2800 Alt+F1, 2801-2807 by type).
-      "chart" {  # chart A1:C5 [column|bar|line|pie|doughnut|area|scatter]
+      # Charts: s3-charts' Insert > Chart commands on the selection (2800 Alt+F1, 2801-2807 by type,
+      # 2812 combo: clustered column and line). The new chart is selected.
+      "chart" {  # chart A1:C5 [column|bar|line|pie|doughnut|area|scatter|combo]
         Select-Ref $first
-        $kinds = @{ column = 2801; bar = 2802; line = 2803; pie = 2804; doughnut = 2805; area = 2806; scatter = 2807 }
+        $kinds = @{ column = 2801; bar = 2802; line = 2803; pie = 2804; doughnut = 2805; area = 2806; scatter = 2807; combo = 2812 }
         $kind = ($rest -split '\s+')[1]
         $ops.Add("cmd:" + $(if ($kind) { $kinds[$kind] } else { 2800 }))
       }
+      "move-chart" { $ops.Add("cmd:2811") }  # Move Chart > New sheet: the selected chart on a chart sheet, which shows
       # Page setup: s3-print's script op (WorkbookPageSetup.cpp), key=value as it takes them.
       "pagesetup" { $ops.Add("pagesetup:" + ($rest.Trim() -replace ';', '\;')) }
       "save" { $ops.Add("saveas:$target") }
