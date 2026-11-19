@@ -88,9 +88,12 @@ bool Same(const draw::Color& a, const draw::Color& b) {
   return std::abs(a.r - b.r) < 0.002f && std::abs(a.g - b.g) < 0.002f && std::abs(a.b - b.b) < 0.002f;
 }
 
+// The shapes filled in `c`: each mark's figures (a series' bars are one mark, a figure a bar).
 size_t Filled(const draw::Art& art, const draw::Color& c) {
   size_t n = 0;
-  for (const auto& m : art.marks) n += m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, c);
+  for (const auto& m : art.marks)
+    if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, c))
+      for (const draw::Path::Segment& s : m.path.Segments()) n += s.kind == draw::Path::Kind::Move;
   return n;
 }
 
@@ -254,10 +257,14 @@ TEST(Chart_LabelPartsKeysAndOverlay) {
   CHECK(!c.titleOverlay && !c.legendOverlay);
   const auto plotTop = [](const draw::Art& art) {
     float top = 1e9f;
-    for (const auto& m : art.marks)
-      if (m.fill.kind == draw::Fill::Kind::Solid && m.path.Bounds().right - m.path.Bounds().left > 10 &&
-          m.path.Bounds().bottom - m.path.Bounds().top > 20 && m.path.Bounds().right - m.path.Bounds().left < 100)
-        top = std::min(top, m.path.Bounds().top);  // the tallest bar
+    for (const auto& m : art.marks) {
+      if (m.fill.kind != draw::Fill::Kind::Solid) continue;
+      for (const draw::Path::Polygon& f : m.path.Flatten(0.25f)) {  // each bar of a series' mark
+        float l = 1e9f, t = 1e9f, r = -1e9f, b = -1e9f;
+        for (const draw::Point& pt : f.points) l = std::min(l, pt.x), t = std::min(t, pt.y), r = std::max(r, pt.x), b = std::max(b, pt.y);
+        if (r - l > 10 && b - t > 20 && r - l < 100) top = std::min(top, t);  // the tallest bar
+      }
+    }
     return top;
   };
   const float apart = plotTop(Draw(c, {360, 216}, Colors(), L"Calibri"));
