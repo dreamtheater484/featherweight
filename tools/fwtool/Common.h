@@ -47,6 +47,7 @@ struct Options {
   std::filesystem::path pngs;       // pdf-check: the pages the app drew (page-1.png, ...)
   std::wstring locale;              // formulas: the region the files were calculated in (en-US, en-NL)
   std::vector<std::wstring> regions;  // formulas: other regions to try a workbook with mismatches in
+  bool threads = false;              // formulas: one thread against four, every value compared (S4)
   double minMatch = -1;             // formulas: fail below this share of compared formulas matching (%)
   std::filesystem::path excel;      // formulas: compare with Excel's values in the cells files under it
   std::wstring password;            // encrypt, decrypt

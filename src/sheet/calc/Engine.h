@@ -84,6 +84,9 @@ class Engine : public Resolver, public Names {
   // Threads for recalculation (S4): 0, the default, as many as the machine has, up to 8; 1 calculates
   // on the calling thread only, as before.
   void SetThreads(int n);
+  // When the parallel phase runs: at least `minDirty` dirty formulas, and levels of at least
+  // `minLevel` go to the workers (defaults 4096 and 512; tests lower them to 1).
+  void SetParallelThresholds(size_t minDirty, size_t minLevel) { parallelMin_ = minDirty, levelMin_ = minLevel; }
   // Formulas calculated by the parallel phase since the engine was made (tests, the bench).
   size_t ParallelEvaluations() const { return parallelEvaluations_; }
 
@@ -187,6 +190,7 @@ class Engine : public Resolver, public Names {
   void RunChunk(size_t begin, size_t end);
   void Flush();  // the planned formulas calculated so far: their cells unmarked
   int threads_ = 0;
+  size_t parallelMin_ = 4096, levelMin_ = 512;
   std::unique_ptr<Workers> workers_;
   std::vector<std::unique_ptr<Evaluator>> evaluators_;  // one per worker
   std::unique_ptr<Plan> plan_;

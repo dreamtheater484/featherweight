@@ -997,8 +997,6 @@ size_t Engine::StaleCount() const {
 namespace fw::sheet::calc {
 
 namespace {
-constexpr size_t kParallelMin = 4096;  // fewer dirty formulas: the serial walk alone
-constexpr size_t kLevelMin = 512;      // a smaller level is calculated on the calling thread
 constexpr size_t kChunk = 65536;       // formulas between deadline checks
 constexpr uint8_t kStoreHere = 200;    // a result the workers couldn't store
 thread_local bool tWorker = false;     // calculating in the parallel phase
@@ -1045,7 +1043,7 @@ bool Engine::BuildPlan() {
   for (uint32_t id = 0; id < nodes_.size(); ++id)
     if (nodes_[id].state == kDirty && !(nodes_[id].flags & kFree)) dirty.push_back(id);
   const size_t n = dirty.size();
-  if (n < kParallelMin) return false;
+  if (n < parallelMin_) return false;
   if (p.reusable && dirty == p.made) return !p.order.empty();
   p.reusable = false;
   p.made = dirty;
@@ -1162,7 +1160,7 @@ bool Engine::BuildPlan() {
   p.levels.push_back(order.size());
   for (uint32_t& o : order) o = dirty[o];
   p.reusable = true;
-  return order.size() >= kParallelMin;
+  return order.size() >= parallelMin_;
 }
 
 void Engine::RunChunk(size_t begin, size_t end) {
@@ -1185,7 +1183,7 @@ void Engine::RunChunk(size_t begin, size_t end) {
     }
     tWorker = false;
   };
-  const bool many = n >= kLevelMin && workers_->Count() > 1;
+  const bool many = n >= levelMin_ && workers_->Count() > 1;
   if (many) workers_->Run(n, 64, calc);
   else calc(0, 0, n);
   // The results: flags, and the values stored from the workers where the host can take them that
@@ -1275,7 +1273,7 @@ void Engine::Flush() {
 }
 
 bool Engine::Parallel(double deadline) {
-  if (threads_ == 1 || onlySheet_ >= 0 || !stack_.empty() || dirtyCount_ < kParallelMin || !loopNodes_.empty())
+  if (threads_ == 1 || onlySheet_ >= 0 || !stack_.empty() || dirtyCount_ < parallelMin_ || !loopNodes_.empty())
     return true;
   if (!plan_) plan_ = std::make_unique<Plan>();
   Plan& p = *plan_;
