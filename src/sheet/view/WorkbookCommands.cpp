@@ -430,7 +430,7 @@ void WorkbookView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   preview.toggle = true;
   preview.checked = preview_;
   m.left = {print, preview};
-  if (preview_) m.left.push_back(item(CmdPageSetup, icon::Settings, L"Page setup"));  // s3-print
+  AddPageSetupToolbar(m);  // s3-print: in the grid too (W3)
   AddUndoToolbar(m);    // s2-grid: Undo and Redo with their lists
   AddFormatToolbar(m);  // fonts, colors, borders, alignment, number formats (WorkbookFormat.cpp)
   m.pager = preview_;
