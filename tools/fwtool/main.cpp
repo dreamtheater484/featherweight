@@ -10,6 +10,7 @@
 #include "core/Strings.h"
 #include "doc/msdoc/MsDoc.h"
 #include "pkg/CompoundFile.h"
+#include "sheet/xls/Xls.h"
 
 namespace fwtool {
 namespace {
@@ -162,8 +163,8 @@ constexpr const char* kUsage =
     "      with <name>-replay-edited.txt and -readback.txt when the text differs. Its document is\n"
     "      found by its recorded path or, from another checkout, by the tail of that path.\n"
     "  fwtool convert <file.doc> <file.docx>\n"
-    "      Writes the .docx a Word 97-2003 document is read as. Every other command reads .doc\n"
-    "      files this way too.\n"
+    "      Writes the .docx a Word 97-2003 document is read as (or the .xlsx an Excel 97-2003\n"
+    "      workbook, .xls, is read as). Every other command reads .doc and .xls files this way too.\n"
     "  fwtool wrap [options] (--file <file> | <text>...)\n"
     "      Lays out paragraphs with fwtext and prints their lines, to compare line breaks with\n"
     "      Word's. Run it without text for its options.\n";
@@ -175,7 +176,7 @@ std::vector<std::filesystem::path> CollectSorted(const std::filesystem::path& di
        it.increment(ec)) {
     if (!it->is_regular_file(ec)) continue;
     std::wstring ext = fw::ToLower(it->path().extension().wstring());
-    for (const wchar_t* known : {L".docx", L".docm", L".dotx", L".dotm", L".doc", L".xlsx", L".xlsm", L".xltx", L".xltm",
+    for (const wchar_t* known : {L".docx", L".docm", L".dotx", L".dotm", L".doc", L".xlsx", L".xlsm", L".xltx", L".xltm", L".xls",
                                  L".pptx", L".pptm", L".potx", L".potm", L".ppsx", L".ppsm"})
       if (ext == known) files.push_back(it->path());
   }
@@ -222,15 +223,18 @@ std::vector<uint8_t> ConvertDoc(const std::filesystem::path& file, fw::pkg::Stat
     std::fclose(f);
   }
   auto cf = fw::pkg::CompoundFile::Open(bytes);
+  // An Excel 97-2003 workbook: the .xlsx it's read as.
+  if (cf && fw::sheet::xls::IsWorkbook([&cf](std::string_view name) { return cf->Stream(name); }))
+    return fw::sheet::xls::ToXlsx([&cf](std::string_view name) { return cf->Stream(name); }, status);
   if (!cf || !cf->Stream("WordDocument")) {
-    status = fw::pkg::Status::Fail(fw::pkg::Status::Code::Unsupported, "not a Word 97-2003 document");
+    status = fw::pkg::Status::Fail(fw::pkg::Status::Code::Unsupported, "not a Word 97-2003 document or Excel 97-2003 workbook");
     return {};
   }
   return fw::doc::msdoc::ToDocx([&cf](std::string_view name) { return cf->Stream(name); }, status);
 }
 
 std::unique_ptr<fw::pkg::Package> OpenPackage(const std::filesystem::path& file, fw::pkg::Status& status) {
-  if (fw::ToLower(file.extension().wstring()) == L".doc") {
+  if (fw::ToLower(file.extension().wstring()) == L".doc" || fw::ToLower(file.extension().wstring()) == L".xls") {
     std::vector<uint8_t> docx = ConvertDoc(file, status);
     if (docx.empty()) return nullptr;
     return fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(docx)), fw::pkg::Limits::Default(), status);

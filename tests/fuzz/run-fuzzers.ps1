@@ -68,6 +68,8 @@ $all = [ordered]@{
   fuzz_csv     = @{ Seeds = @("$office\csv", "$regressions\csv"); MaxLen = 16384 }
   # Conditional formats (S1): a worksheet's rules evaluated with the formula engine and without.
   fuzz_condfmt = @{ Seeds = @("$seeds\condfmt", "$regressions\condfmt"); MaxLen = 16384 }
+  # Excel 97-2003 workbooks (S4): every .xls converts to an .xlsx that opens, passes the check and reads, or is refused.
+  fuzz_xls     = @{ Seeds = @("$seeds\xls", "$regressions\xls"); MaxLen = 131072 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 
