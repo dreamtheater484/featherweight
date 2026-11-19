@@ -4,6 +4,8 @@
 #include "sheet/ods/Ods.h"
 
 #include <algorithm>
+#include <array>
+#include <tuple>
 #include <charconv>
 #include <cmath>
 #include <map>
@@ -14,6 +16,7 @@
 #include "pkg/Snapshot.h"
 #include "pkg/XmlDom.h"
 #include "pkg/Zip.h"
+#include "sheet/edit/Notes.h"
 #include "sheet/ods/OdsStyles.h"
 
 namespace fw::sheet::ods {
@@ -279,6 +282,15 @@ class Converter {
 
   // The sheet being written.
   std::vector<int> colXf_;
+  std::vector<const char*> colStyle_;  // each column's default cell style name ("" none)
+  // Cells whose style has conditions: per style name, rows (r) by column spans [c1, c2].
+  std::map<std::string, std::vector<std::array<int, 3>>> conditional_;
+  int priority_ = 0;
+  // Notes (office:annotation): the cells and their text, then the comments part and VML drawing
+  // Excel writes for them (edit::notes, as the grid makes notes).
+  std::vector<std::pair<CellAddr, edit::notes::NoteText>> notes_;
+  std::string comments_, vml_;
+  std::string ConditionalFormats();
   struct Merge {
     int r1, c1, r2, c2;
   };
@@ -387,7 +399,7 @@ void Converter::Columns(xml_node parent, std::vector<ColRun>& runs, int& col, in
           r.width = st_.ColumnChars(*w);
       r.hidden = Attr(c, "table:visibility") == "collapse" || Attr(c, "table:visibility") == "filter";
       runs.push_back(r);
-      for (int i = col; i < col + count; ++i) colXf_[i] = r.xf;
+      for (int i = col; i < col + count; ++i) colXf_[i] = r.xf, colStyle_[i] = c.attribute("table:default-cell-style-name").value();
       if (header) {
         if (headerFirst < 0) headerFirst = col;
         headerLast = col + count - 1;
@@ -450,7 +462,7 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
     const std::string_view style = Attr(c, "table:style-name");
     const int xf = !style.empty() ? st_.Resolve(style) : rowXf;  // -1: the column's
     const bool has = !c.attribute("office:value-type").empty() || !c.attribute("table:formula").empty() ||
-                     c.child("text:p") || c.child("text:h");
+                     c.child("text:p") || c.child("text:h") || c.child("office:annotation");
     if (!has && xf >= 0 && col + count >= kMaxCol && count > 256) rowFormat = xf;
     else items.push_back({c, col, count, xf, has, false});
     content |= has;
@@ -481,6 +493,29 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
     if (level > 0) xml += " outlineLevel=\"" + std::to_string(std::min(level, 7)) + "\"";
     std::string cellsXml;
     for (const Item& it : items) {
+      // A note on the cell (written once, on the first of repeated cells).
+      if (k == 0 && notes_.size() < 10000)
+        if (xml_node a = it.node.child("office:annotation")) {
+          edit::notes::NoteText note;
+          note.author = a.child("dc:creator").text().get();
+          for (xml_node p : a.children("text:p")) {
+            if (!note.text.empty()) note.text += '\n';
+            Inline(p, note.text, 0, nullptr);
+          }
+          note.shown = Attr(a, "office:display") == "true";
+          if (note.text.size() > 32767) note.text.resize(32767);
+          notes_.push_back({CellAddr{static_cast<uint32_t>(r), static_cast<uint32_t>(it.col)}, std::move(note)});
+        }
+      // Conditional formats follow the cell's style (its own, the row's or the column's).
+      {
+        std::string_view style = Attr(it.node, "table:style-name");
+        if (style.empty()) style = rowStyle;
+        if (style.empty()) style = colStyle_[it.col];
+        if (!style.empty() && st_.Conditional(style)) {
+          auto& spans = conditional_[std::string(style)];
+          if (spans.size() < 20000) spans.push_back({r, it.col, it.col + it.count - 1});
+        }
+      }
       if (!it.content && !it.formatted && rowFormat < 0) continue;
       for (int j = 0; j < it.count && cells_ < maxCells_ && work_ < maxWork_; ++j) {
         ++work_;
@@ -567,10 +602,106 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
   }
 }
 
+// ODF's conditions on cell styles (style:map: the first that holds applies its style) as Excel's
+// conditional formats over the cells with that style, each stopping the others when it holds.
+std::string Converter::ConditionalFormats() {
+  std::string out;
+  for (auto& [name, rows] : conditional_) {
+    xml_node style = st_.Conditional(name);
+    // The cells as ranges: the same columns on consecutive rows are one range.
+    std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) {
+      return std::tie(a[1], a[2], a[0]) < std::tie(b[1], b[2], b[0]);
+    });
+    std::vector<std::array<int, 4>> ranges;  // r1, c1, r2, c2
+    for (const auto& [r, c1, c2] : rows) {
+      if (!ranges.empty() && ranges.back()[1] == c1 && ranges.back()[3] == c2 && ranges.back()[2] + 1 >= r)
+        ranges.back()[2] = std::max(ranges.back()[2], r);
+      else
+        ranges.push_back({r, c1, r, c2});
+    }
+    std::sort(ranges.begin(), ranges.end());
+    std::string sqref;
+    for (const auto& g : ranges)
+      sqref += (sqref.empty() ? "" : " ") + Ref(g[0], g[1]) + (g[0] == g[2] && g[1] == g[3] ? "" : ":" + Ref(g[2], g[3]));
+    const int top = ranges.front()[0], left = ranges.front()[1];
+    std::string rules;
+    for (xml_node m : style.children("style:map")) {
+      const int dxf = st_.Dxf(Attr(m, "style:apply-style-name"));
+      std::string_view cond = Attr(m, "style:condition");
+      if (dxf < 0 || cond.empty()) continue;
+      if (const size_t colon = cond.find(':'); colon != std::string_view::npos && colon < 6 && cond.find('(') > colon)
+        cond.remove_prefix(colon + 1);  // "of:"
+      // Relative references are written for the base cell; Excel's for the range's first cell.
+      int dr = 0, dc = 0;
+      std::string base;
+      if (TranslateAddress(Attr(m, "style:base-cell-address"), base, &mapNames_)) {
+        const size_t bang = base.rfind('!');
+        int br = 0, bc = 0, i = static_cast<int>(bang == std::string::npos ? 0 : bang + 1);
+        for (; i < static_cast<int>(base.size()) && std::isalpha(static_cast<unsigned char>(base[i])); ++i)
+          bc = bc * 26 + (std::toupper(static_cast<unsigned char>(base[i])) - 'A' + 1);
+        br = std::atoi(base.c_str() + i);
+        if (bc > 0 && br > 0) dr = top - (br - 1), dc = left - (bc - 1);
+      }
+      auto formula = [&](std::string_view expr, std::string& f) {
+        return TranslateFormula("of:=" + std::string(expr), f, dr, dc, &mapNames_);
+      };
+      std::string rule = "<cfRule type=\"";
+      std::vector<std::string> formulas(1);
+      bool ok = false;
+      if (cond.starts_with("is-true-formula(") && cond.ends_with(")")) {
+        rule += "expression\"";
+        ok = formula(cond.substr(16, cond.size() - 17), formulas[0]);
+      } else if ((cond.starts_with("cell-content-is-between(") || cond.starts_with("cell-content-is-not-between(")) &&
+                 cond.ends_with(")")) {
+        const bool between = cond.starts_with("cell-content-is-between(");
+        const std::string_view args = cond.substr(between ? 24 : 28, cond.size() - (between ? 25 : 29));
+        // The two values, split at the separator outside strings and parentheses.
+        int depth = 0;
+        bool quoted = false;
+        size_t split = std::string_view::npos;
+        for (size_t i = 0; i < args.size() && split == std::string_view::npos; ++i) {
+          const char ch = args[i];
+          if (ch == '"') quoted = !quoted;
+          else if (!quoted && (ch == '(' || ch == '[')) ++depth;
+          else if (!quoted && (ch == ')' || ch == ']')) --depth;
+          else if (!quoted && depth == 0 && (ch == ',' || ch == ';')) split = i;
+        }
+        formulas.resize(2);
+        rule += std::string("cellIs\" operator=\"") + (between ? "between" : "notBetween") + "\"";
+        ok = split != std::string_view::npos && formula(args.substr(0, split), formulas[0]) &&
+             formula(args.substr(split + 1), formulas[1]);
+      } else if (cond.starts_with("cell-content()")) {
+        std::string_view rest = cond.substr(14);
+        static const std::pair<std::string_view, const char*> kOps[] = {
+            {"<=", "lessThanOrEqual"}, {">=", "greaterThanOrEqual"}, {"!=", "notEqual"}, {"<>", "notEqual"},
+            {"<", "lessThan"}, {">", "greaterThan"}, {"=", "equal"}};
+        for (const auto& [op, xl] : kOps) {
+          if (!rest.starts_with(op)) continue;
+          rule += std::string("cellIs\" operator=\"") + xl + "\"";
+          ok = formula(rest.substr(op.size()), formulas[0]);
+          break;
+        }
+      }
+      if (!ok || priority_ >= 65000) continue;
+      rule += " dxfId=\"" + std::to_string(dxf) + "\" priority=\"" + std::to_string(++priority_) + "\" stopIfTrue=\"1\">";
+      for (const std::string& f : formulas) rule += "<formula>" + Escape(f) + "</formula>";
+      rules += rule + "</cfRule>";
+    }
+    if (!rules.empty()) out += "<conditionalFormatting sqref=\"" + sqref + "\">" + rules + "</conditionalFormatting>";
+  }
+  return out;
+}
+
 std::string Converter::WriteSheet(size_t index) {
   Sheet& sheet = sheets_[index];
   xml_node table = sheet.table;
   colXf_.assign(kMaxCol, 0);
+  colStyle_.assign(kMaxCol, "");
+  conditional_.clear();
+  priority_ = 0;
+  notes_.clear();
+  comments_.clear();
+  vml_.clear();
   merges_.clear();
   links_.clear();
   headerRowFirst_ = headerRowLast_ = -1;
@@ -681,6 +812,7 @@ std::string Converter::WriteSheet(size_t index) {
     for (const std::string& m : kept) out += "<mergeCell ref=\"" + m + "\"/>";
     out += "</mergeCells>";
   }
+  out += ConditionalFormats();
   if (!links_.empty()) {
     out += "<hyperlinks>";
     int id = 0;
@@ -695,7 +827,14 @@ std::string Converter::WriteSheet(size_t index) {
     }
     out += "</hyperlinks>";
   }
-  out += "<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/></worksheet>";
+  out += "<pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>";
+  for (const auto& [cell, note] : notes_) {
+    std::string comments, vml;
+    if (edit::notes::Edit(comments_, vml_, cell, note, comments, vml)) comments_.swap(comments), vml_.swap(vml);
+  }
+  if (!comments_.empty() && !vml_.empty()) out += "<legacyDrawing r:id=\"rIdVml\"/>";
+  else comments_.clear(), vml_.clear();
+  out += "</worksheet>";
   // Print titles from the header rows and columns.
   std::string titles;
   const std::string prefix = [&] {
@@ -829,6 +968,7 @@ pkg::Status Converter::Run(std::vector<uint8_t>& xlsx) {
                       "<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>"
                       "<Override PartName=\"/xl/sharedStrings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/>";
   std::string bookRels = relStart, sheetsXml;
+  bool vml = false;
   int active = 0;
   for (size_t i = 0; i < sheets_.size(); ++i) {
     const std::string n = std::to_string(i + 1);
@@ -840,6 +980,16 @@ pkg::Status Converter::Run(std::vector<uint8_t>& xlsx) {
       if (!target.starts_with("#"))
         rels += "<Relationship Id=\"rId" + std::to_string(++id) + "\" Type=\"" + std::string(kRelType) +
                 "hyperlink\" Target=\"" + Escape(target) + "\" TargetMode=\"External\"/>";
+    if (!comments_.empty()) {
+      put("xl/comments" + n + ".xml", comments_);
+      put("xl/drawings/vmlDrawing" + n + ".vml", vml_);
+      rels += "<Relationship Id=\"rIdComments\" Type=\"" + std::string(kRelType) + "comments\" Target=\"../comments" + n +
+              ".xml\"/><Relationship Id=\"rIdVml\" Type=\"" + std::string(kRelType) +
+              "vmlDrawing\" Target=\"../drawings/vmlDrawing" + n + ".vml\"/>";
+      types += "<Override PartName=\"/xl/comments" + n +
+               ".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml\"/>";
+      vml = true;
+    }
     if (!rels.empty()) put("xl/worksheets/_rels/sheet" + n + ".xml.rels", relStart + rels + "</Relationships>");
     types += "<Override PartName=\"/xl/worksheets/sheet" + n + ".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>";
     bookRels += "<Relationship Id=\"rId" + n + "\" Type=\"" + std::string(kRelType) + "worksheet\" Target=\"worksheets/sheet" + n + ".xml\"/>";
@@ -882,6 +1032,7 @@ pkg::Status Converter::Run(std::vector<uint8_t>& xlsx) {
     sst += Escape(s) + "</t></si>";
   }
   sst += "</sst>";
+  if (vml) types += "<Default Extension=\"vml\" ContentType=\"application/vnd.openxmlformats-officedocument.vmlDrawing\"/>";
   types += "</Types>";
   put("[Content_Types].xml", types);
   put("_rels/.rels", relStart + "<Relationship Id=\"rId1\" Type=\"" + std::string(kRelType) +
