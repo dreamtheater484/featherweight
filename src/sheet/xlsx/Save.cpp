@@ -1105,6 +1105,21 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
         return;
       }
   };
+  // A sheet's link relationships part: typed, in a package that lists each rels part instead of a
+  // Default for .rels (LibreOffice's), for an existing sheet and an added one alike.
+  auto putRels = [&](const std::string& relsPart, std::vector<uint8_t> data) {
+    bool typed = false;
+    for (pugi::xml_node c : typesRoot.children())
+      typed = typed || (Local(c) == "Default" && _stricmp(c.attribute("Extension").value(), "rels") == 0) ||
+              (Local(c) == "Override" && pkg::PartKey(c.attribute("PartName").value()) == pkg::PartKey(relsPart));
+    if (!typed) {
+      pugi::xml_node o = typesRoot.append_child("Override");
+      o.append_attribute("PartName").set_value(relsPart.c_str());
+      o.append_attribute("ContentType").set_value("application/vnd.openxmlformats-package.relationships+xml");
+      typesChanged = true;
+    }
+    put(relsPart, std::move(data));
+  };
   auto newRelId = [&]() {
     for (int n = 1;; ++n) {
       std::string id = "rId" + std::to_string(n);
@@ -1189,7 +1204,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
       typesChanged = true;
       std::vector<std::string> linkIds;
       std::vector<uint8_t> linkRels;
-      if (NewLinkRels(*pkg, s, std::string(), linkIds, linkRels)) put(pkg::RelsPartFor(job.part), std::move(linkRels));
+      if (NewLinkRels(*pkg, s, std::string(), linkIds, linkRels)) putRels(pkg::RelsPartFor(job.part), std::move(linkRels));
       job.text = NewSheetText(s, active, strict, linkIds);
       plan.sheets.push_back(std::move(job));
       continue;
@@ -1212,19 +1227,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
     std::vector<std::string> linkIds;
     std::vector<uint8_t> linkRels;
     if (NewLinkRels(*pkg, s, s.PartName(), linkIds, linkRels)) {
-      // A package that lists each rels part instead of a Default for .rels (LibreOffice) gets this one too.
-      const std::string linkRelsPart = pkg::RelsPartFor(s.PartName());
-      bool typed = false;
-      for (pugi::xml_node c : typesRoot.children())
-        typed = typed || (Local(c) == "Default" && _stricmp(c.attribute("Extension").value(), "rels") == 0) ||
-                (Local(c) == "Override" && pkg::PartKey(c.attribute("PartName").value()) == pkg::PartKey(linkRelsPart));
-      if (!typed) {
-        pugi::xml_node o = typesRoot.append_child("Override");
-        o.append_attribute("PartName").set_value(linkRelsPart.c_str());
-        o.append_attribute("ContentType").set_value("application/vnd.openxmlformats-package.relationships+xml");
-        typesChanged = true;
-      }
-      put(linkRelsPart, std::move(linkRels));
+      putRels(pkg::RelsPartFor(s.PartName()), std::move(linkRels));
       pieces |= edit::kPieceLinks;
     }
     // A sheet added since opening whose text an undo took back to before its first save (no root

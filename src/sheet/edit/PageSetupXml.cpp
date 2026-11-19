@@ -78,7 +78,21 @@ std::string PrintOptions(const PageSetup& page, std::string_view existing, const
   return n.first_attribute() ? Print(n) : std::string();
 }
 
-std::string Margins(const PageMargins& m, const std::string& p) {
+std::string Margins(const PageMargins& m, std::string_view existing, const std::string& p) {
+  // As the file has them while they're the same numbers (Excel writes 17 digits): an edit of the
+  // paper alone leaves them as they were, and setting what's there already changes nothing.
+  pugi::xml_document doc;
+  if (!existing.empty() && xlsx::ParseSlice(doc, existing)) {
+    const pugi::xml_node n = doc.document_element();
+    const std::pair<const char*, double> sides[] = {{"left", m.left},     {"right", m.right},   {"top", m.top},
+                                                    {"bottom", m.bottom}, {"header", m.header}, {"footer", m.footer}};
+    bool same = true;
+    for (const auto& [name, v] : sides) {
+      const pugi::xml_attribute a = n.attribute(name);
+      same = same && a && std::strtod(a.value(), nullptr) == v;
+    }
+    if (same) return std::string(existing);
+  }
   return "<" + p + "pageMargins left=\"" + Num(m.left) + "\" right=\"" + Num(m.right) + "\" top=\"" + Num(m.top) +
          "\" bottom=\"" + Num(m.bottom) + "\" header=\"" + Num(m.header) + "\" footer=\"" + Num(m.footer) + "\"/>";
 }

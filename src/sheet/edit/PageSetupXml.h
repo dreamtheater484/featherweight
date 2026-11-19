@@ -15,7 +15,7 @@
 namespace fw::sheet::edit::pagexml {
 
 std::string PrintOptions(const PageSetup& page, std::string_view existing, const std::string& p);
-std::string Margins(const PageMargins& m, const std::string& p);
+std::string Margins(const PageMargins& m, std::string_view existing, const std::string& p);
 std::string Setup(const PageSetup& page, std::string_view existing, const std::string& p);
 std::string HeadersFooters(const HeaderFooter& hf, std::string_view existing, const std::string& p);
 // rowBreaks (`rows`) or colBreaks.
