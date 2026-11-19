@@ -648,6 +648,51 @@ std::wstring Wrapped(Builder& b, const std::vector<std::wstring>& parts, float w
   return out + line;
 }
 
+// A title on lines as Excel wraps one wider than `width`: at spaces, and within a word too wide for
+// a line of its own; at most `most` lines (the rest isn't shown). One that fits stays as it is.
+std::vector<Label> TitleLines(const Builder& b, std::wstring_view s, float size, bool bold, const std::wstring& font,
+                              float width, size_t most) {
+  s = s.substr(0, 255);
+  const auto text = [&](std::wstring_view t) { return b.Text(std::wstring(t), size, bold, font); };
+  if (Label all = text(s); all.width <= width) return {std::move(all)};
+  std::vector<Label> lines;
+  std::wstring line;
+  const auto flush = [&] {
+    if (!line.empty() && lines.size() < most) lines.push_back(text(line));
+    line.clear();
+  };
+  for (size_t at = 0; at < s.size() && lines.size() < most;) {
+    size_t end = s.find(L' ', at);
+    if (end == std::wstring_view::npos) end = s.size();
+    std::wstring word(s.substr(at, end - at));
+    at = end + 1;
+    if (word.empty()) continue;
+    if (!line.empty()) {
+      if (text(line + L' ' + word).width <= width) {
+        line += L' ' + word;
+        continue;
+      }
+      flush();
+    }
+    // Alone on its line: a word too wide even so is broken where it stops fitting (whole
+    // characters, at least one a line).
+    while (lines.size() < most && word.size() > 1 && text(word).width > width) {
+      size_t lo = 1, hi = word.size() - 1;
+      while (lo < hi) {
+        const size_t mid = (lo + hi + 1) / 2;
+        if (text(std::wstring_view(word).substr(0, mid)).width <= width) lo = mid;
+        else hi = mid - 1;
+      }
+      if (word[lo] >= 0xDC00 && word[lo] < 0xE000) lo = lo > 1 ? lo - 1 : lo + 1;  // not inside a surrogate pair
+      lines.push_back(text(std::wstring_view(word).substr(0, lo)));
+      word.erase(0, lo);
+    }
+    line = std::move(word);
+  }
+  flush();
+  return lines;
+}
+
 // A pie (its first series) or a doughnut (a ring a series, the first innermost), in the room `r`.
 void DrawPie(Builder& b, const Group& g, Rect r, float ts, Color text, const draw::ColorContext& colors, float W, float H) {
   const float m = kMargin * ts;
@@ -1214,9 +1259,15 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
   const Rect inner = r;
   // A title or legend over the plot is drawn after it, on top.
   const auto title = [&] {
-    const float top = kPad + 1 + 0.206f * tts;  // the top of the title's line (Excel's PDFs)
-    b.Place(b.Text(ch.title, tts, ch.titleBold, ch.titleFont), W / 2, top + kAscent * tts, 1, ch.titleColor.value_or(kText));
-    return top + tts + kTitleGap;
+    const float top = kPad + 1 + 0.206f * tts;  // the top of the title's first line (Excel's PDFs)
+    // Excel wraps a title wider than about 80 % of the chart, and keeps it to about half its
+    // height; each line after the first takes a line's room from the plot.
+    const float pitch = kLine * tts;
+    const size_t most = std::max<size_t>(1, static_cast<size_t>(H / 2 / pitch));
+    const std::vector<Label> lines = TitleLines(b, ch.title, tts, ch.titleBold, ch.titleFont, 0.8f * W, most);
+    for (size_t k = 0; k < lines.size(); ++k)
+      b.Place(lines[k], W / 2, top + kAscent * tts + k * pitch, 1, ch.titleColor.value_or(kText));
+    return top + tts + kTitleGap + (lines.empty() ? 0 : lines.size() - 1) * pitch;
   };
   if (!ch.title.empty() && !ch.titleOverlay) r.top = title();
   const std::vector<Entry> entries = ch.legend != LegendPos::None ? Entries(ch, colors) : std::vector<Entry>();
