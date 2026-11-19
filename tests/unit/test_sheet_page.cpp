@@ -190,7 +190,10 @@ TEST(sheet_page_setup_new_sheet_and_journal) {
         replayBook->GetSheet(1).HeadersFooters().firstHeader == "&CFirst" && replayBook->GetSheet(1).RowBreaks().size() == 1);
   // Saved (after the replay: a save starts the journal afresh).
   const std::string sheet2 = PartText(SavePage(*book, ed), "/xl/worksheets/sheet2.xml");
-  CHECK(Has(sheet2, "<pageSetup scale=\"85\"/><headerFooter differentFirst=\"1\"><firstHeader>&amp;CFirst</firstHeader></headerFooter>"
+  // The printer's default orientation is written as portrait, as Excel writes it (without it Excel
+  // reads Orientation 0 until it paginates).
+  CHECK(replayBook->GetSheet(1).Page().orientation == Orientation::Portrait);
+  CHECK(Has(sheet2, "<pageSetup scale=\"85\" orientation=\"portrait\"/><headerFooter differentFirst=\"1\"><firstHeader>&amp;CFirst</firstHeader></headerFooter>"
                     "<rowBreaks count=\"1\" manualBreakCount=\"1\"><brk id=\"5\" max=\"16383\" man=\"1\"/></rowBreaks>"));
 }
 
@@ -230,6 +233,34 @@ TEST(sheet_page_fit_width_keeps_row_breaks) {
   CHECK(ed.SetPageSetup(0, p, HeaderFooter{}, true));
   view::PrintLayout fitted(*book, s, 0, grid, text, view::PrintInfo{});
   CHECK(fitted.PageCount() == 1);
+}
+
+// Rows at a scale as Excel 2021 prints them (the page-headers fixture): a default row is 72 dots at
+// 360 dpi rounded to whole dots, so at 90 % on Letter with 1" and 0.8" margins page 1 holds rows 1-50
+// (13.00 pt each; truncating the dots gave 12.8 pt and 51 rows).
+TEST(sheet_page_scaled_rows_as_excel) {
+  std::string data = "<sheetData>";
+  for (int r = 1; r <= 120; ++r)
+    data += "<row r=\"" + std::to_string(r) + "\"><c r=\"A" + std::to_string(r) + "\"><v>" + std::to_string(r) + "</v></c></row>";
+  data += "</sheetData>";
+  auto book = OpenZip(test::MakeZip(WorkbookParts({data})));
+  if (!book) return;
+  Editor ed(*book);
+  PageSetup p;
+  p.paperSize = 1;
+  p.scale = 90;
+  p.margins = {0.6, 0.6, 1, 0.8, 0.4, 0.3};
+  CHECK(ed.SetPageSetup(0, p, HeaderFooter{}, false));
+  static fw::text::Fonts fonts;
+  view::FontMeasure measure(fonts);
+  NumLocale locale;
+  view::CellText text(*book, fonts, measure, locale);
+  const Sheet& s = book->GetSheet(0);
+  view::Grid grid;
+  grid.Build(s, book->GetStyles(), measure);
+  view::PrintLayout layout(*book, s, 0, grid, text, view::PrintInfo{});
+  CHECK(layout.PageCount() == 3);
+  if (layout.PageCount() == 3) CHECK(layout.Page(0).body.lastRow == 49 && layout.Page(1).body.lastRow == 99);
 }
 
 // s3-corpus's findings: a page setup on a sheet added since opening, saved, then undone, saves again

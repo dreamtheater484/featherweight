@@ -154,6 +154,8 @@ function Get-Facts($wb, $sheets) {
     foreach ($se in $cs.SeriesCollection()) { $j++; "chartsheet $($cs.Name) series $j $($se.Formula)"; "chartsheet $($cs.Name) series $j type $($se.ChartType)" }
   }
   if ($wb.ProtectStructure) { "protect-book structure" }
+  # The sheet the file opens on, and its view (1 normal, 2 Page Break Preview, 3 Page Layout).
+  try { "view $($wb.ActiveSheet.Name) $($wb.Windows.Item(1).View)" } catch { }
   foreach ($ws in $wb.Worksheets) {
     $sn = $ws.Name
     $i = 0
@@ -208,24 +210,56 @@ function Get-Facts($wb, $sheets) {
     }
     # Texts on one line: a line break as \n. A thread's older-versions note is its own fact.
     $line = { param($t) ([string]$t) -replace "`r`n|`r|`n", '\n' }
-    foreach ($cm in $ws.Comments) { "note $sn!$($cm.Parent.Address($false, $false)) $(& $line $cm.Text())" }
-    $threads = try { $ws.CommentsThreaded } catch { $null }
-    if ($threads) { foreach ($t in $threads) { "comment $sn!$($t.Parent.Address($false, $false)) $(& $line $t.Text()) replies $($t.Replies.Count)" } }
-    foreach ($h in $ws.Hyperlinks) { "link $sn!$($h.Range.Address($false, $false)) address $($h.Address) place $($h.SubAddress) text $($h.TextToDisplay)".TrimEnd() }
-    # Pictures and shapes (msoShapeType: 1 a shape, 9 a line, 13 a picture, 17 a text box), not
-    # charts (3, above) or notes (4): where, fill, outline and its weight, text, alt text.
-    foreach ($sp in $ws.Shapes) {
-      $type = $sp.Type
-      if ($type -eq 3 -or $type -eq 4) { continue }
-      $fill = try { if ($sp.Fill.Visible) { & $hex $sp.Fill.ForeColor.RGB } else { "none" } } catch { "-" }
-      $outline = try { if ($sp.Line.Visible) { "$(& $hex $sp.Line.ForeColor.RGB) $($sp.Line.Weight)" } else { "none" } } catch { "-" }
-      $text = try { if ($sp.TextFrame2.HasText) { & $line $sp.TextFrame2.TextRange.Text } else { "" } } catch { "" }
-      $kind = try { $sp.AutoShapeType } catch { "-" }
-      "shape $sn $($sp.Name) type $type autoshape $kind at $($sp.TopLeftCell.Address($false, $false)) fill $fill line $outline text $text alt $(& $line $sp.AlternativeText)".TrimEnd()
+    foreach ($cm in $ws.Comments) {
+      $at = "$sn!$($cm.Parent.Address($false, $false))"
+      "note $at $(& $line $cm.Text())"
+      if ($cm.Visible) { "note $at shown" }
     }
-    if ($ws.ProtectContents) { "protect $sn contents formatcells $($ws.Protection.AllowFormattingCells) insertrows $($ws.Protection.AllowInsertingRows)" }
+    $threads = try { $ws.CommentsThreaded } catch { $null }
+    if ($threads) {
+      foreach ($t in $threads) {
+        $at = "$sn!$($t.Parent.Address($false, $false))"
+        "comment $at $(& $line $t.Text()) replies $($t.Replies.Count)"
+        foreach ($r in $t.Replies) { "comment $at reply $(& $line $r.Text())" }
+        try { if ($t.Resolved) { "comment $at resolved" } } catch { }
+      }
+    }
+    foreach ($h in $ws.Hyperlinks) { "link $sn!$($h.Range.Address($false, $false)) address $($h.Address) place $($h.SubAddress) text $($h.TextToDisplay)".TrimEnd() }
+    if ($ws.ProtectContents) {
+      $p = $ws.Protection
+      "protect $sn contents formatcells $($p.AllowFormattingCells) insertrows $($p.AllowInsertingRows)"
+      $allowed = @(foreach ($k in "FormattingCells", "FormattingColumns", "FormattingRows", "InsertingColumns", "InsertingRows", "InsertingHyperlinks", "DeletingColumns", "DeletingRows", "Sorting", "Filtering", "UsingPivotTables") { if ($p."Allow$k") { $k } })
+      "protect $sn allow $($allowed -join ',')".TrimEnd()
+      # Selection: 0 any cell, 1 unlocked cells only, -4142 none. Objects: drawings protected.
+      "protect $sn select $($ws.EnableSelection) objects $($ws.ProtectDrawingObjects)"
+      foreach ($c in @($sheets | Where-Object { $_.name -eq $sn } | ForEach-Object { $_.cells })) {
+        if (-not $ws.Range($c.ref).Locked) { "cell $sn!$($c.ref) unlocked" }
+      }
+    }
     $ps = $ws.PageSetup
     "pagesetup $sn orientation $($ps.Orientation) zoom $($ps.Zoom) wide $($ps.FitToPagesWide) tall $($ps.FitToPagesTall) titlerows $($ps.PrintTitleRows) titlecols $($ps.PrintTitleColumns) area $($ps.PrintArea)"
+    # Margins in points (2 decimals); first page -4105 = automatic; order 1 down then over, 2 over
+    # then down; notes -4142 none, 1 at the end, 16 as displayed; errors 0 displayed, 1 blank,
+    # 2 "--", 3 #N/A.
+    $pt = { param($v) [Math]::Round([double]$v, 2) }
+    "pagemargins $sn left $(& $pt $ps.LeftMargin) right $(& $pt $ps.RightMargin) top $(& $pt $ps.TopMargin) bottom $(& $pt $ps.BottomMargin) header $(& $pt $ps.HeaderMargin) footer $(& $pt $ps.FooterMargin) center $($ps.CenterHorizontally) $($ps.CenterVertically)"
+    "pageoptions $sn paper $($ps.PaperSize) first $($ps.FirstPageNumber) order $($ps.Order) gridlines $($ps.PrintGridlines) headings $($ps.PrintHeadings) bw $($ps.BlackAndWhite) draft $($ps.Draft) notes $($ps.PrintComments) errors $($ps.PrintErrors)"
+    "pageheaders $sn differentfirst $($ps.DifferentFirstPageHeaderFooter) oddeven $($ps.OddAndEvenPagesHeaderFooter) scale $($ps.ScaleWithDocHeaderFooter) align $($ps.AlignMarginsHeaderFooter)"
+    # Each header and footer section with text: the odd (every) page's, then the first and even
+    # pages' own.
+    foreach ($part in "Header", "Footer") {
+      foreach ($side in "Left", "Center", "Right") {
+        $t = $ps."$side$part"
+        if ($t) { "pageheader $sn $($part.ToLower()) $($side.ToLower()) $t" }
+        foreach ($which in "First", "Even") {
+          $t = try { $ps."${which}Page"."$side$part".Text } catch { "" }
+          if ($t) { "pageheader $sn $($which.ToLower()) $($part.ToLower()) $($side.ToLower()) $t" }
+        }
+      }
+    }
+    # Manual page breaks (Type xlPageBreakManual), by the row or column they come before.
+    try { foreach ($b in $ws.HPageBreaks) { if ($b.Type -eq -4135) { "pagebreak $sn row $($b.Location.Row)" } } } catch { }
+    try { foreach ($b in $ws.VPageBreaks) { if ($b.Type -eq -4135) { "pagebreak $sn col $($b.Location.Column)" } } } catch { }
     # s3-data: pictures and shapes (charts and notes are above): Type (1 a shape or line, 13 a
     # picture, 17 a text box), Placement (1 move and size with cells, 2 move only), cells, size in
     # points; fill, outline, text and alt text.
@@ -239,6 +273,18 @@ function Get-Facts($wb, $sheets) {
       try { if ($sh.TextFrame2.HasText) { "$at text $(& $line $sh.TextFrame2.TextRange.Text)" } } catch { }
       if ($sh.AlternativeText) { "$at alt $(& $line $sh.AlternativeText)" }
     }
+    # The password Excel takes to unprotect (the fixtures use "fixture"): none, fixture or other.
+    # Last for the sheet: it leaves the sheet unprotected (the copy is read-only; printing is the same).
+    if ($ws.ProtectContents) {
+      $pw = "other"
+      foreach ($try in "", "fixture") { try { $ws.Unprotect($try); $pw = if ($try) { $try } else { "none" }; break } catch { } }
+      "protect $sn password $pw"
+    }
+  }
+  if ($wb.ProtectStructure) {
+    $pw = "other"
+    foreach ($try in "", "fixture") { try { $wb.Unprotect($try); $pw = if ($try) { $try } else { "none" }; break } catch { } }
+    "protect-book password $pw"
   }
 }
 
@@ -411,7 +457,7 @@ if ($Child) {
               $win.FreezePanes = $true
             }
             "save" { $wb.SaveAs($Target, 51) }  # xlOpenXMLWorkbook
-            { $_ -in "table", "table-total", "rule", "validation", "note", "comment", "link", "link-place", "protect", "chart", "move-chart", "pagesetup",
+            { $_ -in "table", "table-total", "rule", "validation", "note", "comment", "reply", "resolve", "link", "link-place", "unlink", "unlock", "protect", "protect-book", "select", "chart", "move-chart", "pagesetup",
                      "table-style", "table-option", "table-name", "table-resize", "table-convert", "picture", "shape", "object-fill",
                      "object-outline", "object-text", "object-alt", "row-height" } {
               throw "line ${n}: '$op' is a fixture step (played in Featherweight only: -Fixtures)"
@@ -592,11 +638,53 @@ function ConvertTo-AppScript([string]$stepsPath, [string]$target, [string]$pdf) 
         else { $ops.Add("valid:$($words[1]),$($words[2]),$($v[0]),$($v[1])") }
       }
       # Notes, comments, links and protection: s3-review's panels, as typed (WorkbookReview.cpp).
-      "note" { Select-Ref $first; $ops.Add("cmd:2902"); Add-Typed $quoted; $ops.Add("key:enter") }  # New Note (Shift+F2)
+      # note B2 "text" [shown]: New Note (Shift+F2); a ¶ in the text is a line break. "shown" turns on
+      # Keep shown (the button after the text: Tab, Space), then Enter in the width box saves.
+      "note" {
+        Select-Ref $first; $ops.Add("cmd:2902"); Add-Typed $quoted
+        if ($rest -match '"\s+shown$') { $ops.Add("key:tab"); $ops.Add("key:space"); $ops.Add("key:tab") }
+        $ops.Add("key:enter")
+      }
       "comment" { Select-Ref $first; $ops.Add("key:ctrl+alt+m"); Add-Typed $quoted; $ops.Add("key:enter") }  # New Comment, Post
-      "link" { Select-Ref $first; $ops.Add("key:ctrl+k"); Add-Typed $quoted; $ops.Add("key:enter") }  # an address
+      # Ctrl+Alt+M on a thread opens its replies, the reply box focused: type, Enter posts.
+      "reply" { Select-Ref $first; $ops.Add("key:ctrl+alt+m"); Add-Typed $quoted; $ops.Add("key:enter") }
+      # Resolve: from the reply box, Tab to Post, Tab to Resolve, Space; Esc closes the panel.
+      "resolve" { Select-Ref $first; $ops.Add("key:ctrl+alt+m"); $ops.Add("key:tab"); $ops.Add("key:tab"); $ops.Add("key:space"); $ops.Add("key:esc") }
+      # link A5 "address" ["text to display"]: Insert link (Ctrl+K), the text two boxes on.
+      "link" {
+        Select-Ref $first; $ops.Add("key:ctrl+k"); Add-Typed $quotes[0]
+        if ($quotes.Count -gt 1) { $ops.Add("key:tab"); $ops.Add("key:tab"); Add-Typed $quotes[1] }
+        $ops.Add("key:enter")
+      }
       "link-place" { Select-Ref $first; $ops.Add("key:ctrl+k"); $ops.Add("key:tab"); Add-Typed $quoted; $ops.Add("key:enter") }
-      "protect" { $ops.Add("cmd:2900"); $ops.Add("key:enter") }  # Protect Sheet, no password, Excel's permissions
+      "unlink" { Select-Ref $first; $ops.Add("cmd:1108") }  # Remove link (CmdRemoveLink)
+      "unlock" { Select-Ref $first; $ops.Add("format:locked=0") }  # Format Cells > Protection: Locked off
+      # protect [password=pw] [allow=formatcells,insertrows,...]: Protect Sheet. The panel's boxes in
+      # Tab order: password, confirm, the 15 permissions (Excel's order), Protect. allow= flips the
+      # permissions named (all start off but the two "select" ones, as in Excel's dialog).
+      "protect" {
+        $ops.Add("cmd:2900")
+        $pw = if ($rest -match 'password=(\S+)') { $Matches[1] } else { "" }
+        $allow = if ($rest -match 'allow=(\S+)') { $Matches[1] -split ',' } else { @() }
+        $order = "selectlocked", "selectunlocked", "formatcells", "formatcolumns", "formatrows", "insertcolumns",
+                 "insertrows", "insertlinks", "deletecolumns", "deleterows", "sort", "autofilter", "pivottables", "objects", "scenarios"
+        $at = 0
+        if ($pw) { Add-Typed $pw; $ops.Add("key:tab"); Add-Typed $pw; $at = 1 }
+        if ($allow) {
+          foreach ($i in @($allow | ForEach-Object { $k = [array]::IndexOf($order, $_); if ($k -lt 0) { throw "line ${n}: unknown permission '$_'" }; $k + 2 } | Sort-Object)) {
+            for (; $at -lt $i; $at++) { $ops.Add("key:tab") }
+            $ops.Add("key:space")
+          }
+          for (; $at -lt 17; $at++) { $ops.Add("key:tab") }  # to Protect
+        }
+        $ops.Add("key:enter")
+      }
+      # protect-book [password=pw]: Protect Workbook (its structure); Enter in the confirm box protects.
+      "protect-book" {
+        $ops.Add("cmd:2901")
+        if ($rest -match 'password=(\S+)') { Add-Typed $Matches[1]; $ops.Add("key:tab"); Add-Typed $Matches[1] }
+        $ops.Add("key:enter")
+      }
       # Charts: s3-charts' Insert > Chart commands on the selection (2800 Alt+F1, 2801-2807 by type,
       # 2812 combo: clustered column and line). The new chart is selected.
       "chart" {  # chart A1:C5 [column|bar|line|pie|doughnut|area|scatter|combo]

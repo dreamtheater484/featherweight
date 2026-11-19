@@ -1,0 +1,46 @@
+# S3 fixture ("created as Excel shows it"): s3-review's panels as typed. A note kept shown and one
+# with two lines (¶ in the note box), a comment thread with two replies and one resolved thread
+# (Excel 2021 reads threads as their notes: "[Threaded comment]... Comment: ... Reply: ..."), links
+# with their text to display (a web address, an e-mail address), one link removed again, input
+# cells unlocked, the sheet protected with a password and two permissions, the workbook's
+# structure protected with a password. The password is "fixture": the read-back checks that Excel
+# takes it.
+sheet-name "Budget"
+enter A1 "Item"
+enter B1 "Amount"
+enter A2 "Rent"
+enter B2 "950"
+enter A3 "Power"
+enter B3 "120"
+enter A4 "Total"
+enter B4 "=SUM(B2:B3)"
+note A2 "Due on the 1st" shown
+note A3 "Estimate¶Check the meter"
+comment B2 "Is this the new rent?"
+reply B2 "Yes, from March"
+reply B2 "Thanks"
+comment B3 "Ask for the bill"
+resolve B3
+link A6 "https://example.com/rent" "Rent contract"
+link A7 "someone@example.com" "Mail the landlord"
+link A8 "https://example.com/old"
+unlink A8
+unlock B2:B3
+protect password=fixture allow=formatcells,insertrows
+protect-book password=fixture
+save
+expect cell Budget!B4 text 1070
+expect note Budget!A2 *:\nDue on the 1st
+expect note Budget!A2 shown
+expect note Budget!A3 *:\nEstimate\nCheck the meter
+expect note Budget!B2 [[]Threaded comment]*Comment:\n    Is this the new rent?\nReply:\n    Yes, from March\nReply:\n    Thanks
+expect note Budget!B3 [[]Threaded comment]*Comment:\n    Ask for the bill
+expect link Budget!A6 address https://example.com/rent place  text Rent contract
+expect link Budget!A7 address mailto:someone@example.com place  text Mail the landlord
+expect cell Budget!B2 unlocked
+expect cell Budget!B3 unlocked
+expect protect Budget allow FormattingCells,InsertingRows
+expect protect Budget select 0 objects True
+expect protect Budget password fixture
+expect protect-book structure
+expect protect-book password fixture

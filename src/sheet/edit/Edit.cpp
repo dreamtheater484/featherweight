@@ -5989,15 +5989,26 @@ Result Editor::SetPageSetup(int sheet, PageSetup page, const HeaderFooter& hf, b
       if (!XmlSafe(*t)) return Result::Fail(u"The paper size can't be stored.");
     detail::PartText& t = A::Text(s);
     const std::string p = xlsx::SheetPrefix(t);
-    const std::pair<const char*, std::string> parts[] = {
+    std::pair<const char*, std::string> parts[] = {
         {"pageMargins", pagexml::Margins(m, xlsx::SheetElement(t, "pageMargins"), p)},
         {"pageSetup", pagexml::Setup(page, xlsx::SheetElement(t, "pageSetup"), p)},
         {"headerFooter", pagexml::HeadersFooters(hf, xlsx::SheetElement(t, "headerFooter"), p)},
         {"printOptions", chart ? std::string() : pagexml::PrintOptions(page, xlsx::SheetElement(t, "printOptions"), p)},
         {"sheetPr", chart ? xlsx::SheetElement(t, "sheetPr") : pagexml::SheetPrFit(xlsx::SheetElement(t, "sheetPr"), fitToPage, p)}};
-    bool same = s.Props().fitToPage == fitToPage;
-    for (const auto& [local, xml] : parts) same = same && xml == xlsx::SheetElement(t, local);
-    if (same) return Result{};
+    auto same = [&] {
+      bool all = s.Props().fitToPage == fitToPage;
+      for (const auto& [local, xml] : parts) all = all && xml == xlsx::SheetElement(t, local);
+      return all;
+    };
+    if (same()) return Result{};
+    // Excel writes the orientation with every page setup it writes (portrait when the printer's
+    // default was never changed); without it, Excel reads Orientation as 0 until it paginates.
+    // (The same setup again, now portrait, is still no step.)
+    if (!chart && page.orientation == Orientation::Default) {
+      page.orientation = Orientation::Portrait;
+      parts[1].second = pagexml::Setup(page, xlsx::SheetElement(t, "pageSetup"), p);
+      if (same()) return Result{};
+    }
     return Run(*this, u"Page Setup", [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);
