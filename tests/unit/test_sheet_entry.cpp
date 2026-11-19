@@ -531,6 +531,67 @@ TEST(sheet_typing_build_from_scratch) {
   CHECK_EQ(ProposeAutoSum(16, 3, at2).formula, std::string("=SUM(D12:D16)"));
 }
 
+// AutoSum with the numbers selected (s4 friction W5): the totals go in at once, under the columns
+// or right of a row, never over a cell that holds something.
+TEST(sheet_typing_autosum_selection) {
+  std::map<std::pair<int32_t, int32_t>, SumCell> cells;
+  auto set = [&](const char* a, const char* b, SumCell k) {  // "B2", "D4": the cells from a to b
+    for (int32_t r = std::atoi(a + 1) - 1; r <= std::atoi(b + 1) - 1; ++r)
+      for (int32_t c = a[0] - 'A'; c <= b[0] - 'A'; ++c) cells[{r, c}] = k;
+  };
+  auto at = [&](int32_t r, int32_t c) {
+    auto it = cells.find({r, c});
+    return it == cells.end() ? SumCell::kEmpty : it->second;
+  };
+  // The cells filled, as "B6=SUM(B2:B5)" joined by spaces, for the selection a:b.
+  auto sums = [&](const char* a, const char* b, int32_t lastRow = 1048575) {
+    std::string out;
+    for (const AutoSumCell& t : ProposeAutoSums(std::atoi(a + 1) - 1, a[0] - 'A', std::atoi(b + 1) - 1, b[0] - 'A',
+                                                lastRow, 16383, at))
+      out += (out.empty() ? "" : " ") + std::string(1, static_cast<char>('A' + t.col)) + std::to_string(t.row + 1) +
+             t.formula;
+    return out;
+  };
+  const SumCell N = SumCell::kNumber, T = SumCell::kTotal, X = SumCell::kOther;
+  // A column under its header: the total under it, nothing being edited.
+  set("B1", "B1", X), set("B2", "B5", N);
+  CHECK_EQ(sums("B2", "B5"), std::string("B6=SUM(B2:B5)"));
+  CHECK_EQ(sums("B1", "B5"), std::string("B6=SUM(B1:B5)"));
+  // Something under it: the first free row below.
+  set("B6", "B6", X);
+  CHECK_EQ(sums("B2", "B5"), std::string("B7=SUM(B2:B5)"));
+  // A block with a label column: totals under the columns with numbers, in one row.
+  cells.clear();
+  set("A2", "A4", X), set("B2", "C4", N), set("C5", "C5", X);
+  CHECK_EQ(sums("A2", "C4"), std::string("B6=SUM(B2:B4) C6=SUM(C2:C4)"));
+  CHECK_EQ(sums("B2", "B4"), std::string("B5=SUM(B2:B4)"));
+  // One row: right of it.
+  cells.clear();
+  set("B2", "D2", N), set("E2", "E2", X);
+  CHECK_EQ(sums("B2", "D2"), std::string("F2=SUM(B2:D2)"));
+  // An empty last row, an empty last column, and both: the totals there, the corner's the total of
+  // the row totals.
+  cells.clear();
+  set("B2", "C4", N);
+  CHECK_EQ(sums("B2", "C5"), std::string("B5=SUM(B2:B4) C5=SUM(C2:C4)"));
+  CHECK_EQ(sums("B2", "D4"), std::string("D2=SUM(B2:C2) D3=SUM(B3:C3) D4=SUM(B4:C4)"));
+  CHECK_EQ(sums("B2", "D5"),
+           std::string("B5=SUM(B2:B4) C5=SUM(C2:C4) D2=SUM(B2:C2) D3=SUM(B3:C3) D4=SUM(B4:C4) D5=SUM(D2:D4)"));
+  // Only empty cells: each its own proposal (a row of totals under a block, a column beside it).
+  CHECK_EQ(sums("B5", "C5"), std::string("B5=SUM(B2:B4) C5=SUM(C2:C4)"));
+  CHECK_EQ(sums("D2", "D3"), std::string("D2=SUM(B2:C2) D3=SUM(B3:C3)"));
+  CHECK_EQ(sums("F8", "G9"), std::string());  // no numbers near
+  // Subtotals in a column: the grand total sums those only.
+  cells.clear();
+  set("B2", "B3", N), set("B4", "B4", T), set("B5", "B6", N), set("B7", "B7", T);
+  CHECK_EQ(sums("B2", "B7"), std::string("B8=SUM(B7,B4)"));
+  // Text only: totals under every column (0, as Excel's); no room left on the sheet: nothing.
+  cells.clear();
+  set("B2", "C3", X);
+  CHECK_EQ(sums("B2", "C3"), std::string("B4=SUM(B2:B3) C4=SUM(C2:C3)"));
+  CHECK_EQ(sums("B2", "C3", 2), std::string());
+}
+
 namespace {
 
 // A cut of `cut` on sheet 0 pasted with its top left at (sheet `to`, +3 rows, +3 columns), as

@@ -285,7 +285,7 @@ bool WorkbookView::ChartsCommandState(int cmd, CommandState& s) {
   if (cmd < CmdInsertChart || cmd > CmdChartCombo) return false;
   static const wchar_t* const kNames[] = {L"Column chart",   L"Bar chart",  L"Line chart",    L"Pie chart",
                                           L"Doughnut chart", L"Area chart", L"Scatter chart", L"Combo chart"};
-  s.enabled = Ready() && !preview_ && !ChartSheet() && !Current().PartName().empty();
+  s.enabled = Ready() && !preview_ && !ChartSheet() && (Current().Kind() == SheetKind::Worksheet || !Current().PartName().empty());
   if (cmd == CmdMoveChart && ChartSheet()) {  // Move Chart > Object in
     s.label = L"Move chart onto a sheet";
     s.enabled = Ready() && !preview_ && FirstWorksheet() >= 0;

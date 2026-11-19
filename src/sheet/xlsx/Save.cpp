@@ -1667,4 +1667,9 @@ pkg::Status GiveBasePackage(Workbook& book) {
   return {};
 }
 
+detail::PartText NewSheetPartText(const Sheet& s, bool strict) {
+  // Not the selected tab: the save marks the active sheet's (a stale mark would group the tabs).
+  return NewSheetText(s, false, strict, {});
+}
+
 }  // namespace fw::sheet::xlsx
