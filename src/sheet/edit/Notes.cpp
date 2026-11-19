@@ -71,7 +71,24 @@ bool ParseRef(std::string_view ref, CellAddr& a) {
 // older versions (`uid` set: the author "tc={id}", plain text).
 struct Entry {
   std::string author, text, uid;
+  // The note's VML shape: its number (_x0000_s1026 -> 1026) and anchor (columns, rows and pixel offsets).
+  uint32_t shape = 0;
+  std::array<uint32_t, 8> anchor{};
 };
+
+constexpr const char* kStrictMain = "http://purl.oclc.org/ooxml/spreadsheetml/main";
+constexpr const char* kStrictDrawing = "http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing";
+constexpr const char* kVml = "urn:schemas-microsoft-com:vml";
+
+// The namespace an element's own prefix (or the default) stands for, looked up through its ancestors.
+std::string NamespaceOf(pugi::xml_node n) {
+  const std::string_view name = n.name();
+  const size_t colon = name.find(':');
+  const std::string attr = colon == std::string_view::npos ? "xmlns" : "xmlns:" + std::string(name.substr(0, colon));
+  for (pugi::xml_node at = n; at; at = at.parent())
+    if (pugi::xml_attribute a = at.attribute(attr.c_str())) return a.value();
+  return {};
+}
 
 // The prefix the root gives `ns`, declaring it as `want` when it hasn't one.
 std::string Declare(pugi::xml_node root, const char* ns, const char* want) {
@@ -168,7 +185,10 @@ bool EditComments(std::string_view in, CellAddr cell, const Entry* note, std::st
     pugi::xml_node c = before ? list.insert_child_before((p + "comment").c_str(), before) : list.append_child((p + "comment").c_str());
     c.append_attribute("ref").set_value(ref.c_str());
     c.append_attribute("authorId").set_value(authorId);
-    c.append_attribute("shapeId").set_value("0");
+    // In a Strict file Excel reads a comment only with its shape's number and the anchor fallback
+    // below (s3-corpus's S3 gate: comments removed otherwise); Transitional files take shapeId 0.
+    const bool strict = NamespaceOf(root) == kStrictMain;
+    c.append_attribute("shapeId").set_value(strict && note->shape ? note->shape : 0u);
     if (!note->uid.empty()) c.append_attribute((RevisionPrefix(root) + "uid").c_str()).set_value(note->uid.c_str());
     pugi::xml_node text = c.append_child((p + "text").c_str());
     // As Excel's New Note: the author's name in bold, then the text on the next line.
@@ -181,6 +201,29 @@ bool EditComments(std::string_view in, CellAddr cell, const Entry* note, std::st
       AddRun(text, p, false, "\n" + note->text);
     } else {
       AddRun(text, p, false, note->text);
+    }
+    if (strict && note->shape) {
+      // Excel's own Strict save: <mc:AlternateContent><mc:Choice Requires="v"/><mc:Fallback><commentPr
+      // ...><anchor><from>..</from><to>..</to></anchor></commentPr></mc:Fallback></mc:AlternateContent>,
+      // the anchor's pixel offsets in EMUs (9525 a pixel).
+      const std::string v = Declare(root, kVml, "v");
+      const std::string xdr = Declare(root, kStrictDrawing, "xdr");
+      pugi::xml_node alt = c.append_child("mc:AlternateContent");
+      alt.append_attribute("xmlns:mc").set_value("http://schemas.openxmlformats.org/markup-compatibility/2006");
+      alt.append_child("mc:Choice").append_attribute("Requires").set_value(v.substr(0, v.size() - 1).c_str());
+      pugi::xml_node pr = alt.append_child("mc:Fallback").append_child((p + "commentPr").c_str());
+      pr.append_attribute("defaultSize").set_value("0");
+      pr.append_attribute("autoFill").set_value("0");
+      pr.append_attribute("autoLine").set_value("0");
+      pugi::xml_node anchor = pr.append_child((p + "anchor").c_str());
+      for (int end = 0; end < 2; ++end) {
+        pugi::xml_node at = anchor.append_child((p + (end ? "to" : "from")).c_str());
+        const uint32_t* a = note->anchor.data() + end * 4;
+        at.append_child((xdr + "col").c_str()).text().set(a[0]);
+        at.append_child((xdr + "colOff").c_str()).text().set(static_cast<unsigned long long>(a[1]) * 9525);
+        at.append_child((xdr + "row").c_str()).text().set(a[2]);
+        at.append_child((xdr + "rowOff").c_str()).text().set(static_cast<unsigned long long>(a[3]) * 9525);
+      }
     }
   }
   bool any = false;
@@ -235,7 +278,31 @@ void SetStyle(pugi::xml_node shape, std::string_view key, const std::string& val
   a.set_value((style + std::string(key) + ":" + value).c_str());
 }
 
-bool EditVml(std::string_view in, CellAddr cell, const std::optional<NoteText>& note, std::string& out) {
+// A shape's number: _x0000_s1025 in its id, or in o:spid (LibreOffice: id="shape_0" o:spid="_x0000_s1025").
+uint32_t ShapeNumber(pugi::xml_node s) {
+  uint32_t n = 0;
+  for (pugi::xml_attribute a : s.attributes()) {
+    const std::string_view name = a.name(), v = a.value();
+    const bool spid = name == "spid" || (name.size() > 5 && name.substr(name.size() - 5) == ":spid");
+    if ((name == "id" || spid) && v.rfind("_x0000_s", 0) == 0) n = std::max(n, static_cast<uint32_t>(std::strtoul(v.data() + 8, nullptr, 10)));
+  }
+  return n;
+}
+
+bool ParseAnchor(const char* text, std::array<uint32_t, 8>& a) {
+  const char* p = text;
+  for (uint32_t& v : a) {
+    char* end = nullptr;
+    v = static_cast<uint32_t>(std::strtoul(p, &end, 10));
+    if (end == p) return false;
+    p = end;
+    while (*p == ',' || *p == ' ') ++p;
+  }
+  return true;
+}
+
+// `placed`: the note's shape number and anchor, for the comment (Strict files need them).
+bool EditVml(std::string_view in, CellAddr cell, const std::optional<NoteText>& note, std::string& out, Entry* placed = nullptr) {
   pugi::xml_document doc;
   if (in.empty()) {
     if (!note) {
@@ -255,6 +322,14 @@ bool EditVml(std::string_view in, CellAddr cell, const std::optional<NoteText>& 
     return false;
   }
   pugi::xml_node root = doc.document_element();
+  // The shapes written below use the v:, o: and x: prefixes: a file that declares its namespaces on
+  // each element instead (openpyxl's ns0:shape) gets them on the root (Excel removes the notes else).
+  if (note) {
+    const std::pair<const char*, const char*> prefixes[] = {
+        {"xmlns:v", kVml}, {"xmlns:o", "urn:schemas-microsoft-com:office:office"}, {"xmlns:x", "urn:schemas-microsoft-com:office:excel"}};
+    for (const auto& [attr, ns] : prefixes)
+      if (!root.attribute(attr)) root.append_attribute(attr).set_value(ns);
+  }
   uint32_t maxId = 1024;
   bool hasType = false;
   pugi::xml_node existing;
@@ -267,8 +342,7 @@ bool EditVml(std::string_view in, CellAddr cell, const std::optional<NoteText>& 
         if (note && !existing) existing = s;  // edited in place: its box stays as Excel (or the user) left it
         else root.remove_child(s);
       } else if (xlsx::Local(s) == "shape") {
-        std::string_view id = s.attribute("id").value();
-        if (id.rfind("_x0000_s", 0) == 0) maxId = std::max(maxId, static_cast<uint32_t>(std::strtoul(id.data() + 8, nullptr, 10)));
+        maxId = std::max(maxId, ShapeNumber(s));
       }
     }
     s = next;
@@ -293,6 +367,7 @@ bool EditVml(std::string_view in, CellAddr cell, const std::optional<NoteText>& 
       if (!a) a = data.prepend_child((px + "Anchor").c_str());
       a.text().set(anchorText.c_str());
     }
+    if (placed && ParseAnchor(xlsx::Child(data, "Anchor").text().get(), placed->anchor)) placed->shape = ShapeNumber(existing);
   } else if (note) {
     if (!hasType) {
       pugi::xml_document t;
@@ -330,6 +405,7 @@ bool EditVml(std::string_view in, CellAddr cell, const std::optional<NoteText>& 
     pugi::xml_document s;
     if (!s.load_string(shape.c_str())) return false;
     root.append_copy(s.document_element());
+    if (placed && ParseAnchor(anchor.c_str(), placed->anchor)) placed->shape = maxId + 1;
   }
   bool any = false;
   for (pugi::xml_node s = root.first_child(); s && !any; s = s.next_sibling())
@@ -348,7 +424,8 @@ bool Edit(std::string_view comments, std::string_view vml, CellAddr cell, const 
           std::string& commentsOut, std::string& vmlOut) {
   std::optional<Entry> e;
   if (note) e = Entry{note->author, note->text, {}};
-  return EditComments(comments, cell, e ? &*e : nullptr, commentsOut) && EditVml(vml, cell, note, vmlOut);
+  // The drawing first: the comment takes its shape's number and anchor.
+  return EditVml(vml, cell, note, vmlOut, e ? &*e : nullptr) && EditComments(comments, cell, e ? &*e : nullptr, commentsOut);
 }
 
 bool HasEntry(std::string_view comments, CellAddr cell) {
@@ -548,8 +625,8 @@ bool EditThread(const ThreadParts& in, CellAddr cell, const std::optional<Thread
   if (thread) e = Entry{"tc=" + thread->comments[0].id, LegacyText(*thread), thread->comments[0].id};
   std::optional<NoteText> box;
   if (thread) box = NoteText{};
-  return EditThreads(in.threads, cell, thread, people, out.threads) &&
-         EditComments(in.comments, cell, e ? &*e : nullptr, out.comments) && EditVml(in.vml, cell, box, out.vml);
+  return EditThreads(in.threads, cell, thread, people, out.threads) && EditVml(in.vml, cell, box, out.vml, e ? &*e : nullptr) &&
+         EditComments(in.comments, cell, e ? &*e : nullptr, out.comments);
 }
 
 }  // namespace fw::sheet::edit::notes

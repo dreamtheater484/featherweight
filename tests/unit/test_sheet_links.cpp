@@ -8,6 +8,7 @@
 #include "SheetTestUtil.h"
 #include "sheet/edit/Edit.h"
 #include "sheet/edit/Journal.h"
+#include "sheet/edit/Notes.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/xlsx/Xlsx.h"
 
@@ -261,4 +262,46 @@ TEST(sheet_links_notes_root_without_r_prefix) {
   CHECK(sheet.find("<legacyDrawing r:id=\"rId") != std::string::npos);
   auto again = OpenZip(zip);
   CHECK(again && again->GetSheet(0).Hyperlinks().size() == 1 && again->GetSheet(0).Hyperlinks()[0].target == "https://example.com/");
+}
+
+// s3-corpus's S3 gate: Excel removed the notes (1) of a sheet whose VML declares its namespaces on
+// each element (openpyxl's ns0:shape) when a note was added (the new shape's v:, o:, x: undeclared), and
+// (2) of a Strict workbook: the new shape repeated LibreOffice's o:spid number, and a Strict comment
+// needs its shape's number and Excel's anchor fallback (Excel's own Strict save, repro folder).
+TEST(sheet_notes_vml_namespaces_and_strict) {
+  using edit::notes::NoteText;
+  const std::string comments =
+      "<comments xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><authors><author>A</author></authors>"
+      "<commentList><comment ref=\"A1\" authorId=\"0\"><text><t>Old</t></text></comment></commentList></comments>";
+  const std::string perElement =
+      "<xml><ns0:shape xmlns:ns0=\"urn:schemas-microsoft-com:vml\" id=\"_x0000_s1025\"><ns1:ClientData "
+      "xmlns:ns1=\"urn:schemas-microsoft-com:office:excel\" ObjectType=\"Note\"><ns1:Row>0</ns1:Row><ns1:Column>0</ns1:Column>"
+      "</ns1:ClientData></ns0:shape></xml>";
+  NoteText note{"Me", "New"};
+  std::string c1, v1;
+  CHECK(edit::notes::Edit(comments, perElement, CellAddr{2, 2}, note, c1, v1));
+  CHECK(v1.find("xmlns:v=\"urn:schemas-microsoft-com:vml\"") != std::string::npos);
+  CHECK(v1.find("xmlns:o=\"urn:schemas-microsoft-com:office:office\"") != std::string::npos);
+  CHECK(v1.find("xmlns:x=\"urn:schemas-microsoft-com:office:excel\"") != std::string::npos);
+  CHECK(v1.find("id=\"_x0000_s1026\"") != std::string::npos);
+  CHECK(c1.find("ref=\"C3\" authorId=\"1\" shapeId=\"0\"") != std::string::npos && c1.find("AlternateContent") == std::string::npos);
+
+  const std::string strictComments =
+      "<comments xmlns=\"http://purl.oclc.org/ooxml/spreadsheetml/main\"><authors><author/></authors><commentList>"
+      "<comment ref=\"H3\" authorId=\"0\" shapeId=\"1025\"><text><t>Test</t></text></comment></commentList></comments>";
+  const std::string libreVml =
+      "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" "
+      "xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><v:shape id=\"shape_0\" o:spid=\"_x0000_s1025\"><x:ClientData "
+      "ObjectType=\"Note\"><x:Row>2</x:Row><x:Column>7</x:Column></x:ClientData></v:shape></xml>";
+  std::string c2, v2;
+  CHECK(edit::notes::Edit(strictComments, libreVml, CellAddr{4, 2}, note, c2, v2));
+  CHECK(v2.find("id=\"_x0000_s1026\"") != std::string::npos);
+  CHECK(c2.find("ref=\"C5\" authorId=\"1\" shapeId=\"1026\"") != std::string::npos);
+  CHECK(c2.find("xmlns:v=\"urn:schemas-microsoft-com:vml\"") != std::string::npos);
+  CHECK(c2.find("xmlns:xdr=\"http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing\"") != std::string::npos);
+  // Excel's new box: from column D (+10 px) and row 4 (+12 px) to column F (+20 px) and row 8 (+17 px).
+  CHECK(c2.find("<mc:Choice Requires=\"v\"/><mc:Fallback><commentPr defaultSize=\"0\" autoFill=\"0\" autoLine=\"0\"><anchor>"
+                "<from><xdr:col>3</xdr:col><xdr:colOff>95250</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>114300</xdr:rowOff></from>"
+                "<to><xdr:col>5</xdr:col><xdr:colOff>190500</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>161925</xdr:rowOff></to>") !=
+        std::string::npos);
 }
