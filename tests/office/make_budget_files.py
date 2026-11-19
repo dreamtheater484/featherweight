@@ -5,6 +5,8 @@ big for the repository:
                        and a formula column (cached values included, as Excel writes them)
   100mb.csv            about 100 MB of UTF-8 CSV: 1.1 million rows of ids, names, amounts,
                        dates and codes with leading zeros, some fields quoted
+  fifty-mb.xlsx        S4's very large workbook (docs/s4-plan.md, "Scale"): the million-cell
+                       workbook's rows, 384,000 of them (7.68 million cells), about 50 MB
 
 Output goes to the folder given (default: build/budgets, which git ignores):
   .venv\\Scripts\\python tests/office/make_budget_files.py [folder]
@@ -23,11 +25,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 WORDS = ["apple", "pear", "plum", "cherry", "grape", "melon", "lemon", "kiwi", "mango", "peach", "Café", "Straße", "naïve"]
 
 
-def million_cells(path):
-    rows, cols = 50_000, 20
+def million_cells(path, rows=50_000, title="One million cells"):
+    cols = 20
     rnd = random.Random(1)
     wb = xlsxwriter.Workbook(path, {"constant_memory": True, "strings_to_numbers": False})
-    wb.set_properties({"title": "One million cells", "author": "Featherweight tests", "created": datetime(2026, 1, 1)})
+    wb.set_properties({"title": title, "author": "Featherweight tests", "created": datetime(2026, 1, 1)})
     ws = wb.add_worksheet("Data")
     bold = wb.add_format({"bold": True})
     money = wb.add_format({"num_format": "#,##0.00"})
@@ -82,6 +84,9 @@ def main():
     c = os.path.join(out, "100mb.csv")
     rows = big_csv(c)
     print(f"  {c}  ({os.path.getsize(c):,} bytes, {rows:,} rows)")
+    f = os.path.join(out, "fifty-mb.xlsx")
+    million_cells(f, rows=384_000, title="About 50 MB")
+    print(f"  {f}  ({os.path.getsize(f):,} bytes, 7,680,000 cells)")
 
 
 if __name__ == "__main__":
