@@ -756,6 +756,8 @@ void WorkbookView::SyncEngine(const std::vector<edit::Change>& changes) {
     cells |= (c.what & (edit::kValues | edit::kFormulas)) != 0;
   }
   if (!structure && !cells) return;
+  for (auto& o : objects_)  // charts read typed values again (a recalculation may change nothing)
+    if (o) o->ValuesChanged();
   calc::WorkbookCalc& calc = Calc();
   recalc_ = true;
   if (structure) {
