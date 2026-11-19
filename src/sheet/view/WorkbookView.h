@@ -625,6 +625,7 @@ class WorkbookView : public PagedView {
   bool PageSetupCommand(int cmd);
   void AddPageSetupTabItems(HMENU m);
   void AddPageSetupCellItems(HMENU m);
+  void AddPageSetupToolbar(ToolbarModel& m);  // Page setup ▾, the scaling shortcuts
   edit::Result ApplyPageSetup(const std::function<void(PageSetup&, HeaderFooter&, bool&)>& change);
   void AfterPageChange();  // the preview and Page Break Preview paginate again
   void RefreshPreview();

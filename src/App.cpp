@@ -1539,6 +1539,10 @@ void App::ShowMenu(int which) {
       AppendItem(m, CmdRestoreOriginal, L"Restore original", !LatestBackup().empty());
     AppendItem(m, CmdPrint, L"Print…\tCtrl+P", ready && v->CanPrint());
     if (ready && v->CanExportPdf()) AppendItem(m, CmdExportPdf, L"Export PDF…");
+    if (ready && v->Kind() == TabKind::Workbook) {  // a document's is with its Paragraph… below
+      const CommandState setup = v->QueryCommand(CmdPageSetup);
+      if (setup.visible) AppendItem(m, CmdPageSetup, L"Page setup…", setup.enabled);
+    }
     AppendSeparator(m);
     AppendItem(m, CmdPresentation, L"Present\tF5", ready);
     AppendItem(m, CmdFullScreen, fullscreen_ ? L"Exit full screen\tF11" : L"Full screen\tF11");

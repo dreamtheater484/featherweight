@@ -18,8 +18,10 @@
 #include "sheet/view/WorkbookFormat.h"
 #include "sheet/view/WorkbookPanels.h"
 #include "sheet/view/WorkbookView.h"
+#include "ui/Icons.h"
 #include "ui/Menu.h"
 #include "ui/Theme.h"
+#include "ui/Toolbar.h"
 
 using namespace gfx;
 
@@ -47,6 +49,16 @@ constexpr MarginPreset kMargins[] = {{L"Normal", 0.75, 0.75, 0.7, 0.7, 0.3, 0.3}
 // The scaling shortcuts of Excel's print preview.
 constexpr const wchar_t* kScalings[] = {L"No scaling", L"Fit sheet on one page", L"Fit all columns on one page",
                                         L"Fit all rows on one page"};
+
+// Which of them the sheet has (-1: a scale or a fit of its own).
+int ScalingOf(const Sheet& s) {
+  const PageSetup& p = s.Page();
+  if (!s.Props().fitToPage) return p.scale == 100 ? 0 : -1;
+  return p.fitToWidth == 1 && p.fitToHeight == 1   ? 1
+         : p.fitToWidth == 1 && p.fitToHeight == 0 ? 2
+         : p.fitToWidth == 0 && p.fitToHeight == 1 ? 3
+                                                   : -1;
+}
 
 // Header and footer codes as Excel's custom header shows them, and as the file has them.
 constexpr std::pair<wchar_t, const wchar_t*> kCodes[] = {{L'P', L"&[Page]"}, {L'N', L"&[Pages]"}, {L'D', L"&[Date]"},
@@ -387,7 +399,6 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     const Sheet& s = v_.Current();
     const PageSetup& p = s.Page();
     const HeaderFooter& h = s.HeadersFooters();
-    const bool fit = s.Props().fitToPage;
     if (v_.ChartSheet() && tab_ == kTabSheet) tab_ = kTabPage;
     for (int i = 0; i < kTabs; ++i) tabs_[i].checked = i == tab_;
     what_.ReplaceText(what_.items[static_cast<size_t>(std::clamp(v_.printWhat_, 0, 2))]);
@@ -398,11 +409,7 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     paper_.ReplaceText(!p.paperWidth.empty() ? Utf8ToWide(p.paperWidth + " x " + p.paperHeight)
                        : paper != std::end(kPapers) ? paper->name
                                                      : L"Paper " + std::to_wstring(p.paperSize));
-    int scaling = !fit ? (p.scale == 100 ? 0 : -1)
-                  : p.fitToWidth == 1 && p.fitToHeight == 1 ? 1
-                  : p.fitToWidth == 1 && p.fitToHeight == 0 ? 2
-                  : p.fitToWidth == 0 && p.fitToHeight == 1 ? 3
-                                                            : -1;
+    const int scaling = ScalingOf(s);
     scaling_.ReplaceText(scaling < 0 ? std::wstring(L"Custom") : kScalings[scaling]);
     scale_.ReplaceText(std::to_wstring(p.scale));
     fitW_.ReplaceText(std::to_wstring(p.fitToWidth));
@@ -904,6 +911,28 @@ bool WorkbookView::PageSetupCommand(int cmd) {
   if (pageSetupPanel_ && host_.ViewShownPanel() == pageSetupPanel_.get() && cmd != CmdPageSetup && cmd != CmdPrintTitles)
     static_cast<PageSetupPanel*>(pageSetupPanel_.get())->Refresh();
   return true;
+}
+
+// The toolbar's print group: Page setup, its arrow the scaling shortcuts of Excel's print screen, from
+// the sheet as from print preview (s4-corpus's W3: all columns on one page took two steps more).
+void WorkbookView::AddPageSetupToolbar(ToolbarModel& m) {
+  ToolItem t;
+  t.cmd = CmdPageSetup;
+  t.glyph = icon::Settings;
+  t.tooltip = L"Page setup";
+  t.enabled = Ready();
+  t.priority = 6;
+  if (Ready() && !ChartSheet()) {
+    t.kind = ToolKind::SplitButton;
+    t.width = 52;
+    t.tooltip = L"Page setup and scaling";
+    t.choices.assign(std::begin(kScalings), std::end(kScalings));
+    t.choice = ScalingOf(Current());
+    t.onChange = [this](const ToolValue& v) {
+      if (v.index >= 0 && v.index < static_cast<int>(std::size(kScalings))) PageSetupCommand(CmdNoScaling + v.index);
+    };
+  }
+  m.left.push_back(t);
 }
 
 void WorkbookView::AddPageSetupTabItems(HMENU m) {
