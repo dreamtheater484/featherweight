@@ -3,6 +3,8 @@
 target_sources(fwsheet PRIVATE Edit.cpp Journal.cpp Refs.cpp Protection.cpp Notes.cpp Drawing.cpp PageSetupXml.cpp Charts.cpp)
 # Run once per edit or save, never per cell: compiled for size (the S2 size budget).
 set_source_files_properties(Edit.cpp Journal.cpp Refs.cpp Protection.cpp Notes.cpp Drawing.cpp PageSetupXml.cpp Charts.cpp TARGET_DIRECTORY fwsheet PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
+# Edit.cpp's sections pass COFF's 65,279 in the instrumented fuzz build.
+set_property(SOURCE Edit.cpp TARGET_DIRECTORY fwsheet APPEND PROPERTY COMPILE_OPTIONS /bigobj)
 if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_edit.cpp"
                                   "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_save.cpp"
