@@ -285,6 +285,11 @@ bool WorkbookView::ChartsCommandState(int cmd, CommandState& s) {
   static const wchar_t* const kNames[] = {L"Column chart", L"Bar chart",  L"Line chart",   L"Pie chart",
                                           L"Doughnut chart", L"Area chart", L"Scatter chart"};
   s.enabled = Ready() && !preview_ && !ChartSheet() && !Current().PartName().empty();
+  if (cmd == CmdMoveChart && ChartSheet()) {  // Move Chart > Object in
+    s.label = L"Move chart onto a sheet";
+    s.enabled = Ready() && !preview_ && FirstWorksheet() >= 0;
+    return true;
+  }
   if (cmd == CmdInsertChart) {
     s.label = L"Insert chart";
     s.shortcut = L"Alt+F1";
@@ -304,6 +309,14 @@ bool WorkbookView::ChartsCommandState(int cmd, CommandState& s) {
   return true;
 }
 
+// The first worksheet (a chart sheet's chart goes back onto it); -1 when there's none.
+int WorkbookView::FirstWorksheet() const {
+  for (size_t i = 0; i < book_->SheetCount(); ++i)
+    if (book_->GetSheet(i).Kind() == SheetKind::Worksheet && book_->GetSheet(i).State() == SheetState::Visible)
+      return static_cast<int>(i);
+  return -1;
+}
+
 // Move Chart > New sheet: the chart on a chart sheet before this one, which shows (Excel's).
 void WorkbookView::MoveChartToSheet(uint32_t id) {
   const size_t at = sheet_;
@@ -315,6 +328,15 @@ void WorkbookView::MoveChartToSheet(uint32_t id) {
 
 bool WorkbookView::ChartsCommand(int cmd) {
   if (cmd < CmdInsertChart || cmd > CmdMoveChart) return false;
+  if (cmd == CmdMoveChart && ChartSheet() && Ready() && !preview_) {
+    // Onto the first worksheet, at B2 (Excel's dialog defaults to the first sheet), which shows.
+    const int to = FirstWorksheet();
+    if (to < 0) return true;
+    const size_t from = sheet_;
+    if (EditRefused(Ed().MoveChartToObject(static_cast<int>(from), to, CellAddr{1, 1}))) return true;
+    ShowSheet(static_cast<size_t>(to > static_cast<int>(from) ? to - 1 : to));
+    return true;
+  }
   if (!Ready() || preview_ || ChartSheet()) return true;
   if (cmd == CmdChartPanel) {
     ShowChartPanel();

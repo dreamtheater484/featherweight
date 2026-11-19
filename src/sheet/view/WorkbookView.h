@@ -659,6 +659,7 @@ class WorkbookView : public PagedView {
   bool CopyObject(bool cut);  // the selected object onto the clipboard (false: none selected)
   bool PasteObjectClip();     // an object copied, while the clipboard still holds it
   void MoveChartToSheet(uint32_t id);  // the chart with shape id `id` on this sheet
+  int FirstWorksheet() const;
   class ChartPanel;
   std::unique_ptr<PanelContent> chartPanel_;
   void ShowChartPanel();
