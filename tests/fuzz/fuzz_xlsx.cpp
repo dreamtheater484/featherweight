@@ -321,7 +321,7 @@ void EditOnce(Editor& ed, const Workbook& book, Rng& rng, int& groups, bool hadS
     }
   };
   const Styles& styles = book.GetStyles();
-  switch (rng.Below(31)) {
+  switch (rng.Below(36)) {
     case 28: {  // a table (s3-data): added over a range, renamed, a total row, resized, filtered, converted
       static const std::vector<Table> none;
       const std::vector<Table>& tables = sheet < sheets ? book.GetSheet(static_cast<size_t>(sheet)).Tables() : none;
@@ -490,6 +490,161 @@ void EditOnce(Editor& ed, const Workbook& book, Rng& rng, int& groups, bool hadS
           ed.EditChart(sheet, id, e);
         }
       }
+      break;
+    }
+    case 31: {  // links (Insert > Link, Ctrl+K; s3-review): a place, a web or mail address, or removed
+      if (rng.Chance(25)) {
+        ed.SetHyperlink(sheet, range(), std::nullopt);
+        break;
+      }
+      Hyperlink link;
+      switch (rng.Below(4)) {
+        case 0: link.location = rng.Chance(50) ? "Sheet2!A1" : "N" + std::to_string(rng.Below(4)); break;
+        case 1: link.target = "https://example.com/a?b=1&c=<d>#e"; break;
+        case 2: link.target = "mailto:someone@example.com?subject=a%20b"; break;
+        default: link.target = rng.Chance(50) ? "..\\files\\a b.xlsx" : "file:///C:/x/\"y\".txt"; break;
+      }
+      if (rng.Chance(50)) link.display = "Go & <see>";
+      if (rng.Chance(30)) link.tooltip = "tip \"t\"";
+      ed.SetHyperlink(sheet, range(), link);
+      break;
+    }
+    case 32: {  // notes and threaded comments (New Note, New Comment; s3-review): added, replied to, resolved, deleted
+      const CellAddr at{row(), col()};
+      if (rng.Chance(50)) {
+        if (rng.Chance(25)) {
+          ed.SetNote(sheet, at, std::nullopt);
+          break;
+        }
+        Editor::Note n;
+        n.author = rng.Chance(50) ? "Roy" : "";
+        n.text = rng.Chance(50) ? "Note & <b>\nline 2" : std::string(rng.Below(300), 'n');
+        n.shown = rng.Chance(30);
+        if (rng.Chance(40)) {
+          n.width = rng.Below(400);
+          n.height = rng.Below(300);
+          for (uint32_t& a : n.anchor) a = rng.Below(rng.Chance(10) ? 20000 : 30);
+        }
+        ed.SetNote(sheet, at, n);
+        break;
+      }
+      std::optional<Editor::Thread> t = sheet < sheets ? ed.ThreadAt(sheet, at) : std::nullopt;
+      if (t && rng.Chance(25)) {
+        ed.SetThread(sheet, at, std::nullopt);
+        break;
+      }
+      if (!t || rng.Chance(30)) t = Editor::Thread{};
+      if (rng.Chance(30)) t->resolved = !t->resolved;
+      if (t->comments.empty() || rng.Chance(70)) t->comments.push_back({rng.Chance(50) ? "A & B" : "C", "Reply <" + std::to_string(rng.Below(9)) + ">", "", ""});
+      ed.SetThread(sheet, at, t);
+      break;
+    }
+    case 33: {  // protection (Protect Sheet, Protect Workbook, Format Cells > Protection; s3-review)
+      edit::ProtectionPassword pw;
+      if (rng.Chance(30)) pw.legacy = "CC1A";
+      else if (rng.Chance(20)) pw = edit::ProtectionPassword{"SHA-512", "aGFzaA==", "c2FsdA==", 100000, ""};  // not made here: hashing is slow
+      switch (rng.Below(4)) {
+        case 0: {
+          if (rng.Chance(30)) {
+            ed.SetSheetProtection(sheet, std::nullopt);
+            break;
+          }
+          edit::SheetProtection p;
+          p.objects = rng.Chance(50);
+          p.formatCells = rng.Chance(50);
+          p.insertRows = rng.Chance(50);
+          p.deleteColumns = rng.Chance(50);
+          p.sort = rng.Chance(50);
+          p.autoFilter = rng.Chance(50);
+          p.selectLockedCells = rng.Chance(20);
+          p.password = pw;
+          ed.SetSheetProtection(sheet, p);
+          break;
+        }
+        case 1: {
+          if (rng.Chance(40)) {
+            ed.SetWorkbookProtection(std::nullopt);
+            break;
+          }
+          edit::WorkbookProtection p;
+          p.lockWindows = rng.Chance(30);
+          p.password = pw;
+          ed.SetWorkbookProtection(p);
+          break;
+        }
+        default: {
+          const bool locked = rng.Chance(30), hidden = rng.Chance(30);
+          ed.MapStyles(sheet, range(), [&](uint32_t s) {
+            Xf x = book.GetStyles().CellXf(s);
+            x.protection.locked = locked;
+            x.protection.hidden = hidden;
+            x.applyProtection = true;
+            return ed.AddXf(x);
+          });
+        }
+      }
+      break;
+    }
+    case 34: {  // page setup (Page Setup, print preview; s3-print)
+      if (sheet >= sheets) break;
+      const Sheet& s = book.GetSheet(static_cast<size_t>(sheet));
+      PageSetup p = s.Page();
+      HeaderFooter hf = s.HeadersFooters();
+      static const char* const kCodes[] = {"", "&L&\"Arial,Bold\"&12Page &P of &N", "&C&A & &F", "&R&D &T", "&L<x> & \"y\"",
+                                           "&C&G", "&&&", "&L&K00FF00green&R&B&I&U&S&Xa&Yb"};
+      switch (rng.Below(4)) {
+        case 0:
+          p.orientation = static_cast<Orientation>(rng.Below(3));
+          p.paperSize = rng.Chance(80) ? 1 + rng.Below(10) : rng.Below(200);
+          p.scale = rng.Chance(80) ? 10 + rng.Below(391) : rng.Below(1000);
+          p.fitToWidth = rng.Below(4);
+          p.fitToHeight = rng.Below(4);
+          p.firstPageNumber = static_cast<int>(rng.Below(20)) - 5;
+          p.useFirstPageNumber = rng.Chance(50);
+          p.pageOrder = static_cast<PageOrder>(rng.Below(2));
+          p.blackAndWhite = rng.Chance(30);
+          p.draft = rng.Chance(20);
+          p.cellComments = static_cast<CellComments>(rng.Below(3));
+          p.errors = static_cast<PrintErrors>(rng.Below(4));
+          break;
+        case 1:
+          p.margins.left = rng.Below(30) / 10.0;
+          p.margins.right = rng.Below(30) / 10.0;
+          p.margins.top = rng.Below(30) / 10.0;
+          p.margins.bottom = rng.Below(30) / 10.0;
+          p.margins.header = rng.Below(20) / 10.0;
+          p.margins.footer = rng.Below(20) / 10.0;
+          p.horizontalCentered = rng.Chance(50);
+          p.verticalCentered = rng.Chance(50);
+          p.headings = rng.Chance(50);
+          p.gridLines = rng.Chance(50);
+          break;
+        default:
+          hf.differentOddEven = rng.Chance(30);
+          hf.differentFirst = rng.Chance(30);
+          hf.scaleWithDoc = rng.Chance(70);
+          hf.alignWithMargins = rng.Chance(70);
+          hf.oddHeader = kCodes[rng.Below(static_cast<uint32_t>(std::size(kCodes)))];
+          hf.oddFooter = kCodes[rng.Below(static_cast<uint32_t>(std::size(kCodes)))];
+          if (hf.differentOddEven) hf.evenHeader = kCodes[rng.Below(static_cast<uint32_t>(std::size(kCodes)))];
+          if (hf.differentFirst) hf.firstFooter = kCodes[rng.Below(static_cast<uint32_t>(std::size(kCodes)))];
+      }
+      ed.SetPageSetup(sheet, p, hf, rng.Chance(30));
+      break;
+    }
+    case 35: {  // page breaks, print area and titles (s3-print)
+      if (rng.Chance(60)) {
+        std::vector<PageBreak> rows, cols;
+        for (uint32_t n = rng.Below(4); n > 0; --n) rows.push_back(PageBreak{1 + row() % (kMaxRows - 1), 0, kMaxCols - 1, true, false});
+        for (uint32_t n = rng.Below(3); n > 0; --n) cols.push_back(PageBreak{1 + col() % (kMaxCols - 1), 0, kMaxRows - 1, true, false});
+        ed.SetPageBreaks(sheet, rows, cols);
+        break;
+      }
+      static const char* const kAreas[] = {"Sheet1!$A$1:$C$9", "'Sheet 1'!$B$2:$D$4,'Sheet 1'!$F$1:$F$3", "Sheet1!$1:$2",
+                                           "Sheet1!$A:$B,Sheet1!$1:$1", "#REF!"};
+      const bool area = rng.Chance(50);
+      if (rng.Chance(25)) ed.DeleteName(area ? "_xlnm.Print_Area" : "_xlnm.Print_Titles", sheet);
+      else ed.SetName(DefinedName{area ? "_xlnm.Print_Area" : "_xlnm.Print_Titles", sheet, kAreas[rng.Below(static_cast<uint32_t>(std::size(kAreas)))], false});
       break;
     }
     case 24: {  // cut and paste
