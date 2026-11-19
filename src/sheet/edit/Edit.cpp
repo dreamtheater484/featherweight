@@ -5248,7 +5248,19 @@ Result Editor::SetTable(int sheet, size_t index, const Table& t) {
   }());
 }
 
-Result Editor::KeepTableLook(Sheet& s, const Table& t) {
+Result Editor::KeepTableLook(Sheet& s, const Table& t, BakedStyles& baked, bool given) {
+  State& st0 = *s_;
+  if (given) {
+    SheetSave& sv = st0.Save(s);
+    std::u16string why;
+    const size_t count = book_.GetStyles().CellXfs().size();
+    for (const auto& [a, x] : baked)
+      if (x < count && a.row <= t.ref.lastRow && a.col <= t.ref.lastCol && s.StyleAt(a.row, a.col) != x &&
+          !st0.Put(sv, a.row, a.col, nullptr, false, x, why))
+        return Result::Fail(why);
+    st0.Change(&s, kStyles, t.ref);
+    return {};
+  }
   // As the grid paints a table under the cells' own formats (TableStyles.h): a fill where the cell
   // has none, the style's font color where the cell's is the default font's, bold and italic added,
   // a border on each side the cell leaves empty.
@@ -5265,7 +5277,7 @@ Result Editor::KeepTableLook(Sheet& s, const Table& t) {
     return a.fill == b.fill && a.fontColor == b.fontColor && a.bold == b.bold && a.italic == b.italic && a.left == b.left &&
            a.top == b.top && a.bottom == b.bottom && a.right == b.right;
   };
-  auto baked = [&](uint32_t old, const TableCellFormat& look) {
+  auto bake = [&](uint32_t old, const TableCellFormat& look) {
     for (const Made& m : made)
       if (m.old == old && same(m.look, look)) return m.xf;
     const Styles& now = book_.GetStyles();  // Add* may grow its lists
@@ -5316,19 +5328,33 @@ Result Editor::KeepTableLook(Sheet& s, const Table& t) {
       const TableCellFormat look = TableFormat(*style, t, row, col);
       if (look.Empty()) continue;
       const uint32_t old = s.StyleAt(row, col);
-      const uint32_t x = baked(old, look);
-      if (x != old && !st.Put(sv, row, col, nullptr, false, x, why)) return Result::Fail(why);
+      const uint32_t x = bake(old, look);
+      if (x == old) continue;
+      if (!st.Put(sv, row, col, nullptr, false, x, why)) return Result::Fail(why);
+      baked.push_back({CellAddr{row, col}, x});
     }
   st.Change(&s, kStyles, t.ref);
   return {};
 }
 
-Result Editor::RemoveTable(int sheet, size_t index) {
+Result Editor::RemoveTable(int sheet, size_t index) { return RemoveTableAs(sheet, index, nullptr); }
+
+Result Editor::RemoveTableAs(int sheet, size_t index, const BakedStyles* given) {
   Guard guard(*this);
   if (sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount())
     if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   Rec rec(*this, JournalOp::RemoveTable, [&](JournalRecord& w) { w.I(sheet).U(index); });
-  return rec.Done([&]() -> Result {
+  BakedStyles baked = given ? *given : BakedStyles{};
+  // The look's formats follow in the record, so a replay puts the same ones (AddXf's record of a
+  // format may not give it back exactly).
+  auto withLook = [&](Result r) {
+    if (r && rec.on) {
+      rec.rec.U(baked.size());
+      for (const auto& [a, x] : baked) rec.rec.U(a.row).U(a.col).U(x);
+    }
+    return r;
+  };
+  return rec.Done(withLook([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
@@ -5336,7 +5362,7 @@ Result Editor::RemoveTable(int sheet, size_t index) {
     return Run(*this, u"Convert to Range", [&]() -> Result {
       State& st = *s_;
       const Table t = s.Tables()[index];
-      if (Result r = KeepTableLook(s, t); !r) return r;
+      if (Result r = KeepTableLook(s, t, baked, given != nullptr); !r) return r;
       std::string relId;
       if (const pkg::RelationshipSet* set = book_.GetPackage()->RelationshipsOf(s.PartName()))
         for (const pkg::Relationship& r : set->items)
@@ -5350,7 +5376,7 @@ Result Editor::RemoveTable(int sheet, size_t index) {
       st.Change(&s, kStyles | kRules | kTables, t.ref);
       return Result{};
     });
-  }());
+  }()));
 }
 
 Result Editor::SetTableFilter(int sheet, size_t index, const SheetFilter& f) {
