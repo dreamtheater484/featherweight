@@ -217,3 +217,21 @@ TEST(sheet_threads_set_reply_resolve_delete) {
   CHECK(!ed.PartBytes("/xl/persons/person.xml").empty());
   CHECK(ed.Undo() && ed.ThreadAt(0, CellAddr{1, 1}).has_value());
 }
+// s3-corpus's torture: sheets whose root doesn't declare the relationships namespace (openpyxl's).
+// A web link and a note on one: the root gets xmlns:r, and both keep their relationships.
+TEST(sheet_links_notes_root_without_r_prefix) {
+  auto book = OpenZip(test::MakeZip(WorkbookParts({"<sheetData><row r=\"2\"><c r=\"B2\"><v>1</v></c></row></sheetData>"})));
+  if (!book) return;
+  Editor ed(*book);
+  Hyperlink h;
+  h.target = "https://example.com/";
+  CHECK(ed.SetHyperlink(0, Range::Cell(1, 1), h));
+  CHECK(ed.SetNote(0, CellAddr{3, 3}, Editor::Note{"Roy", "a note"}));
+  const std::vector<uint8_t> zip = SaveLinks(*book, ed);
+  const std::string sheet = Part(zip, "/xl/worksheets/sheet1.xml");
+  CHECK(sheet.find("xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"") != std::string::npos);
+  CHECK(sheet.find("<hyperlink ref=\"B2\" r:id=\"rId") != std::string::npos);
+  CHECK(sheet.find("<legacyDrawing r:id=\"rId") != std::string::npos);
+  auto again = OpenZip(zip);
+  CHECK(again && again->GetSheet(0).Hyperlinks().size() == 1 && again->GetSheet(0).Hyperlinks()[0].target == "https://example.com/");
+}

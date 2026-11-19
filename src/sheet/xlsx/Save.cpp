@@ -373,16 +373,16 @@ std::string ViewsXml(const Sheet& s, const PartText& t, const std::string& p, bo
 }
 
 // `ids`: each link's relationship id (NewLinkRels), else its own.
-std::string LinksXml(const Sheet& s, const PartText& t, const std::string& p, const std::vector<std::string>& ids) {
+std::string LinksXml(const Sheet& s, PartText& t, const std::string& p, const std::vector<std::string>& ids) {
   if (s.Hyperlinks().empty()) return {};
-  std::string r = DeclaredPrefix(t.rootStart, kRelNs);
-  if (r.empty()) r = DeclaredPrefix(t.rootStart, kRelNsStrict);
+  std::string r;  // declared on the root when a link needs it (s3-corpus: openpyxl's sheets)
   std::string out = "<" + p + "hyperlinks>";
   for (size_t i = 0; i < s.Hyperlinks().size(); ++i) {
     const Hyperlink& h = s.Hyperlinks()[i];
     const std::string& id = i < ids.size() ? ids[i] : h.relId;
     out += "<" + p + "hyperlink" + AttrXml("ref", RangeName(h.ref));
     if (!id.empty()) {
+      if (r.empty()) r = RelPrefix(t);
       if (r.empty()) return std::string(FindElement(t, "hyperlinks"));  // can't name the relationship: as it was
       out += AttrXml(r + ":id", id);
     }
@@ -830,6 +830,16 @@ std::set<std::string> Reachable(const pkg::Package& pkg, const std::set<std::str
 void PutSheetElement(PartText& t, std::string_view local, const std::string& xml) { PutElement(t, local, xml); }
 std::string SheetPrefix(const PartText& t) { return PrefixOf(t.rootStart); }
 std::string SheetElement(const PartText& t, std::string_view local) { return std::string(FindElement(t, local)); }
+std::string RelPrefix(PartText& t) {
+  std::string r = DeclaredPrefix(t.rootStart, kRelNs);
+  if (r.empty()) r = DeclaredPrefix(t.rootStart, kRelNsStrict);
+  if (!r.empty()) return r;
+  const size_t end = t.rootStart.rfind('>');
+  if (end == std::string::npos) return {};
+  const bool strict = t.rootStart.find(kMainNsStrict) != std::string::npos;
+  t.rootStart.insert(end, " xmlns:r=\"" + std::string(strict ? kRelNsStrict : kRelNs) + "\"");
+  return "r";
+}
 
 namespace {
 // Excel's extensions for x14 conditional formats and validations.
@@ -1175,7 +1185,19 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
     std::vector<std::string> linkIds;
     std::vector<uint8_t> linkRels;
     if (NewLinkRels(*pkg, s, s.PartName(), linkIds, linkRels)) {
-      put(pkg::RelsPartFor(s.PartName()), std::move(linkRels));
+      // A package that lists each rels part instead of a Default for .rels (LibreOffice) gets this one too.
+      const std::string relsPart = pkg::RelsPartFor(s.PartName());
+      bool typed = false;
+      for (pugi::xml_node c : typesRoot.children())
+        typed = typed || (Local(c) == "Default" && _stricmp(c.attribute("Extension").value(), "rels") == 0) ||
+                (Local(c) == "Override" && pkg::PartKey(c.attribute("PartName").value()) == pkg::PartKey(relsPart));
+      if (!typed) {
+        pugi::xml_node o = typesRoot.append_child("Override");
+        o.append_attribute("PartName").set_value(relsPart.c_str());
+        o.append_attribute("ContentType").set_value("application/vnd.openxmlformats-package.relationships+xml");
+        typesChanged = true;
+      }
+      put(relsPart, std::move(linkRels));
       pieces |= edit::kPieceLinks;
     }
     plan.sheets.push_back({&s, s.PartName(), s.RelId(), EditedText(s, pieces, active, linkIds), false});
