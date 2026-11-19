@@ -6094,11 +6094,10 @@ Result Editor::SetPageSetup(int sheet, PageSetup page, const HeaderFooter& hf, b
     for (double v : {m.left, m.right, m.top, m.bottom, m.header, m.footer})
       if (!(v >= 0 && v < 49)) return Result::Fail(u"Margins must be between 0 and 49 inches.");
     if (page.firstPageNumber < -32765 || page.firstPageNumber > 32767) return Result::Fail(u"The first page number is too large.");
-    for (const std::string* t : {&hf.oddHeader, &hf.oddFooter, &hf.evenHeader, &hf.evenFooter, &hf.firstHeader, &hf.firstFooter}) {
-      if (!XmlSafe(*t)) return Result::Fail(u"The header or footer holds characters a workbook can't store.");
+    // Any character: written as Excel does, a control character as _xHHHH_ (one read from a file comes back so).
+    for (const std::string* t : {&hf.oddHeader, &hf.oddFooter, &hf.evenHeader, &hf.evenFooter, &hf.firstHeader, &hf.firstFooter})
       if (Utf16Length(*t) > 255)
         return Result::Fail(u"The text string you entered is too long. Reduce the number of characters used.");
-    }
     for (const std::string* t : {&page.paperWidth, &page.paperHeight})
       if (!XmlSafe(*t)) return Result::Fail(u"The paper size can't be stored.");
     detail::PartText& t = A::Text(s);

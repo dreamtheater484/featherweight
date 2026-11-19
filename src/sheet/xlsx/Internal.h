@@ -62,6 +62,10 @@ bool NumberStyle(std::string_view text, double v, uint8_t& style);
 bool ParseSlice(pugi::xml_document& doc, std::string_view xml);
 // The text of an element: its text and CDATA children, joined.
 std::string TextOf(pugi::xml_node n);
+// ST_Xstring (table column names, headers and footers): _xHHHH_ for a character, as Excel writes a
+// CR (_x000D_), other control characters, U+FFFE/U+FFFF, and the "_" of a literal "_xHHHH_" (_x005F_).
+std::string DecodeXstring(std::string_view s);
+std::string EncodeXstring(std::string_view s);
 // An element without its children, with its attributes as they are: "<name a="v"/>" (the workbook
 // keeps workbookProtection so, and saving compares it with the file's).
 std::string EmptyElementXml(pugi::xml_node n);

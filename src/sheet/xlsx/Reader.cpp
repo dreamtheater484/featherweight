@@ -1,6 +1,7 @@
 // The .xlsx reader: the workbook part, styles, theme and shared strings (plan §7.3). Sheets are
 // read by SheetReader.cpp.
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstring>
@@ -574,13 +575,9 @@ Status ReadStrings(std::string_view xml, const pkg::Limits& limits, std::string_
   return {};
 }
 
-// ---- Tables
+// ---- ST_Xstring
 
-namespace {
-
-// ST_Xstring's escapes (_x000A_ for a line break, _x005F_ for "_"), as Excel writes table
-// column names.
-std::string Unescape(std::string_view s) {
+std::string DecodeXstring(std::string_view s) {
   std::string out;
   out.reserve(s.size());
   for (size_t i = 0; i < s.size(); ++i) {
@@ -603,7 +600,34 @@ std::string Unescape(std::string_view s) {
   return out;
 }
 
-}  // namespace
+std::string EncodeXstring(std::string_view s) {
+  static constexpr char kHex[] = "0123456789ABCDEF";
+  auto escape = [&](std::string& out, unsigned v) {
+    out += "_x";
+    for (int shift = 12; shift >= 0; shift -= 4) out += kHex[(v >> shift) & 15];
+    out += '_';
+  };
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size(); ++i) {
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+    if (c == '_' && i + 6 < s.size() && s[i + 1] == 'x' && s[i + 6] == '_' &&
+        std::all_of(s.begin() + i + 2, s.begin() + i + 6, [](char h) { return std::isxdigit(static_cast<unsigned char>(h)); })) {
+      escape(out, '_');  // "_x0041_" as text: its "_" escaped, so it doesn't read back as "A"
+    } else if (c < 0x20 && c != '\t' && c != '\n') {
+      escape(out, c);  // XML can't hold it, or reads a CR back as a line feed
+    } else if (c == 0xEF && i + 2 < s.size() && static_cast<unsigned char>(s[i + 1]) == 0xBF &&
+               (static_cast<unsigned char>(s[i + 2]) & 0xFE) == 0xBE) {
+      escape(out, 0xFFFE + (static_cast<unsigned char>(s[i + 2]) - 0xBE));  // U+FFFE, U+FFFF: not XML characters
+      i += 2;
+    } else {
+      out += static_cast<char>(c);
+    }
+  }
+  return out;
+}
+
+// ---- Tables
 
 Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::string& part, Table& t) {
   pkg::XmlDom dom;
@@ -632,7 +656,7 @@ Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::str
       if (c.type() != pugi::node_element || Local(c) != "tableColumn") continue;
       TableColumn col;
       col.id = UIntAttr(c, "id", 0);
-      col.name = Unescape(Attr(c, "name"));
+      col.name = DecodeXstring(Attr(c, "name"));
       col.totalsFunction = Attr(c, "totalsRowFunction");
       if (col.totalsFunction == "none") col.totalsFunction.clear();
       col.totalsLabel = Attr(c, "totalsRowLabel");
