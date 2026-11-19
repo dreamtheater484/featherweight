@@ -340,10 +340,19 @@ Check next to Excel on copies of your own workbooks, in your region (`1,5`, `;` 
 - [ ] Type a new name in the Name Box with cells selected: it's defined. Ctrl+Shift+F3 (**Create names from selection**) with a header row: each column gets its header's name. F3 pastes a name into a formula; Paste list writes them all out.
 - [ ] Formulas using names (`=B4*(1+Rate)`, `=SUM(Net)`) calculate; a deleted name gives #NAME?. Saved, Excel's Name Manager shows the same names, scopes and references.
 
+## Charts and objects (S3)
+
+Check next to Excel on copies of your own workbooks.
+
+- [ ] Select a block with a header row and a first column of text, Alt+F1: a clustered column chart of it appears beside the selection, its series named by the headers and its categories from the first column, as Excel guesses them (series down the columns when there are at least as many rows as columns). The toolbar's **Chart** list makes a column, bar, line, pie, doughnut, area or scatter chart instead.
+- [ ] Click a chart, picture or shape to select it: drag it to move it; drag its handles to resize it (Shift keeps a corner's proportions); the arrow keys nudge it; Delete removes it. Each is one undo step.
+- [ ] Change a value the chart shows: the chart follows at once. Insert or delete rows above it: it moves with its cells.
+- [ ] Saved, Excel opens the file without a repair and shows the same charts, in the same place and size, with the same series (Select Data) and look.
+
 ## S3's gate (record the numbers)
 
-- [ ] `scripts\build-from-scratch.ps1 -Fixtures -Featherweight build\Release\Featherweight.exe` passes: every fixture in `tests\office\fixtures` (formatted cells, S3's functions, names, tables and rules, notes, comments, links and protection) is built through the app's commands, Excel reads back every expected object, gives the same results when it recalculates, its PDF matches Featherweight's (SSIM ≥ 0.95), and opens the file without a repair.
-- [ ] `scripts\sheet-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus`: the 246 workbooks, with S3's edits (names, protection, links, notes, comments, tables, rules, validation) mixed in: ___ failures (target 0), ___ new validator errors (target 0), ___ Excel repairs (target 0).
+- [ ] `scripts\build-from-scratch.ps1 -Fixtures -Featherweight build\Release\Featherweight.exe` passes: every fixture in `tests\office\fixtures` (formatted cells, S3's functions, names, tables and rules, notes, comments, links and protection, charts, page setup) is built through the app's commands, Excel reads back every expected object, gives the same results when it recalculates, its PDF matches Featherweight's (SSIM ≥ 0.95), and opens the file without a repair.
+- [ ] `scripts\sheet-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus`: the 246 workbooks, with S3's edits (names, protection, links, notes, comments, tables, rules, validation, charts and objects, page setup and breaks) mixed in: ___ failures (target 0), ___ new validator errors (target 0), ___ Excel repairs (target 0).
 - [ ] `fwtool bench --sheet-edits --runs 12 tests\office\generated\simple.xlsx`: a table, a rule and a chart from 1,000 rows each to screen in ___ / ___ / ___ ms (target < 100); the chart drawn again after an edit to its data in ___ ms typical, ___ ms worst (target < 16 and < 50). S2's lines all "met".
 - [ ] `fwtool bench-app build\Release\Featherweight.exe build\budgets\million-cells.xlsx build\budgets\100mb.csv` on a quiet PC: million-cells ready in ___ ms (< 1,500), 100mb.csv ready in ___ ms (< 1,000).
 - [ ] Make a workbook with a table, a chart, a few rules, a list validation, a note, a comment, a link, a name and a protected sheet; save it; open it in Excel: no repair, and everything is there and looks the same.

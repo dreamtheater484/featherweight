@@ -332,7 +332,7 @@ if ($Child) {
               $win.FreezePanes = $true
             }
             "save" { $wb.SaveAs($Target, 51) }  # xlOpenXMLWorkbook
-            { $_ -in "table", "table-total", "rule", "validation", "note", "comment", "link", "link-place", "protect" } {
+            { $_ -in "table", "table-total", "rule", "validation", "note", "comment", "link", "link-place", "protect", "chart", "pagesetup" } {
               throw "line ${n}: '$op' is a fixture step (played in Featherweight only: -Fixtures)"
             }
             default { throw "line ${n}: unknown step '$op'" }
@@ -506,6 +506,15 @@ function ConvertTo-AppScript([string]$stepsPath, [string]$target, [string]$pdf) 
       "link" { Select-Ref $first; $ops.Add("key:ctrl+k"); Add-Typed $quoted; $ops.Add("key:enter") }  # an address
       "link-place" { Select-Ref $first; $ops.Add("key:ctrl+k"); $ops.Add("key:tab"); Add-Typed $quoted; $ops.Add("key:enter") }
       "protect" { $ops.Add("cmd:2900"); $ops.Add("key:enter") }  # Protect Sheet, no password, Excel's permissions
+      # Charts: s3-charts' Insert > Chart commands on the selection (2800 Alt+F1, 2801-2807 by type).
+      "chart" {  # chart A1:C5 [column|bar|line|pie|doughnut|area|scatter]
+        Select-Ref $first
+        $kinds = @{ column = 2801; bar = 2802; line = 2803; pie = 2804; doughnut = 2805; area = 2806; scatter = 2807 }
+        $kind = ($rest -split '\s+')[1]
+        $ops.Add("cmd:" + $(if ($kind) { $kinds[$kind] } else { 2800 }))
+      }
+      # Page setup: s3-print's script op (WorkbookPageSetup.cpp), key=value as it takes them.
+      "pagesetup" { $ops.Add("pagesetup:" + ($rest.Trim() -replace ';', '\;')) }
       "save" { $ops.Add("saveas:$target") }
       "expect" { }  # a fixture's fact, checked in Excel's read-back
       default { throw "line ${n}: unknown step '$op'" }

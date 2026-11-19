@@ -1,0 +1,25 @@
+# S3 fixture ("created as Excel shows it"): page setup through s3-print's Page Setup (its script
+# op): landscape on Letter (Excel on this PC exports A4 sheets on Letter), fit to one page, narrow
+# margins, centered, a header and a footer, print titles, a print area and gridlines.
+sheet-name "Print"
+enter A1 "Month"
+enter B1 "Sales"
+enter A2 "Jan"
+fill-series A2:A13
+enter B2 "1200"
+enter B3 "=B2+150"
+fill-down B3:B13
+pagesetup orientation=landscape
+pagesetup paper=1
+pagesetup fit=1,1
+pagesetup margins=narrow
+pagesetup center=h
+pagesetup header=&CSales report
+pagesetup footer=&CPage &P of &N
+pagesetup rows=1:1
+pagesetup area=A1:B13
+pagesetup gridlines=1
+save
+expect pagesetup Print orientation 2 zoom False wide 1 tall 1 titlerows $1:$1 titlecols  area $A$1:$B$13
+expect cell Print!A13 text Dec
+expect cell Print!B13 text 2850
