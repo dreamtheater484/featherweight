@@ -375,16 +375,19 @@ TEST(SheetTables_StrictPrefix) {
       "<worksheet xmlns=\"http://purl.oclc.org/ooxml/spreadsheetml/main\" "
       "xmlns:r=\"http://purl.oclc.org/ooxml/officeDocument/relationships\">";
   detail::PartText t;
+  t.hasData = true;  // a worksheet's part
   t.rootStart = strictRoot;
   xlsx::PutTablePart(t, "rId5", true);
   CHECK(t.rootStart == strictRoot);
   CHECK(t.afterData.find("<tableParts count=\"1\"><tablePart r:id=\"rId5\"/></tableParts>") != std::string::npos);
   detail::PartText bare;
+  bare.hasData = true;  // a worksheet's part
   bare.rootStart = "<worksheet xmlns=\"http://purl.oclc.org/ooxml/spreadsheetml/main\">";
   xlsx::PutTablePart(bare, "rId1", true);
   CHECK(bare.rootStart == "<worksheet xmlns=\"http://purl.oclc.org/ooxml/spreadsheetml/main\" "
                           "xmlns:r=\"http://purl.oclc.org/ooxml/officeDocument/relationships\">");
   detail::PartText other;
+  other.hasData = true;  // a worksheet's part
   other.rootStart = "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"urn:else\">";
   xlsx::PutTablePart(other, "rId2", true);
   CHECK(other.rootStart.find(" xmlns:r1=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">") != std::string::npos);
