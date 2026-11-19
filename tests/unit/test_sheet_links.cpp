@@ -219,6 +219,33 @@ TEST(sheet_threads_set_reply_resolve_delete) {
 }
 // s3-corpus's torture: sheets whose root doesn't declare the relationships namespace (openpyxl's).
 // A web link and a note on one: the root gets xmlns:r, and both keep their relationships.
+// A package that types each rels part with an Override instead of a Default for .rels
+// (LibreOffice's): a new link rels part gets its Override, on a sheet the file has and on one added
+// since opening (s3-corpus findings 4 and 6).
+TEST(sheet_links_rels_typed_without_default) {
+  auto parts = WorkbookParts({"<sheetData/>"});
+  const std::string rt = "application/vnd.openxmlformats-package.relationships+xml";
+  std::string& types = parts[0].second;
+  const std::string def = "<Default Extension=\"rels\" ContentType=\"" + rt + "\"/>";
+  types.replace(types.find(def), def.size(),
+                "<Override PartName=\"/_rels/.rels\" ContentType=\"" + rt + "\"/>"
+                "<Override PartName=\"/xl/_rels/workbook.xml.rels\" ContentType=\"" + rt + "\"/>");
+  auto book = OpenZip(test::MakeZip(parts));
+  if (!book) return;
+  Editor ed(*book);
+  CHECK(ed.AddSheet(1, "Added"));
+  Hyperlink h;
+  h.target = "mailto:someone@example.com?subject=Hi there";
+  CHECK(ed.SetHyperlink(0, Range::Cell(0, 0), h));
+  CHECK(ed.SetHyperlink(1, Range{9, 4, 9, 5}, h));
+  const std::vector<uint8_t> zip = SaveLinks(*book, ed);
+  const std::string saved = Part(zip, "/[Content_Types].xml");
+  for (const char* rels : {"/xl/worksheets/_rels/sheet1.xml.rels", "/xl/worksheets/_rels/sheet2.xml.rels"}) {
+    CHECK(!Part(zip, rels).empty());
+    CHECK(saved.find("<Override PartName=\"" + std::string(rels) + "\" ContentType=\"" + rt + "\"/>") != std::string::npos);
+  }
+}
+
 TEST(sheet_links_notes_root_without_r_prefix) {
   auto book = OpenZip(test::MakeZip(WorkbookParts({"<sheetData><row r=\"2\"><c r=\"B2\"><v>1</v></c></row></sheetData>"})));
   if (!book) return;
