@@ -51,6 +51,7 @@ struct TextLook {
   int8_t bold = -1, italic = -1, strike = -1;  // -1: the cell's own
   int8_t underline = -1;       // an Underline; -1: the cell's own
   const NumberFormat* numFmt = nullptr;  // shown in this format instead
+  PrintErrors errors = PrintErrors::Displayed;  // printing: an error shown as Page Setup's "Cell errors as"
   bool operator==(const TextLook&) const = default;
 };
 

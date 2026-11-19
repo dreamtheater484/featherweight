@@ -91,7 +91,13 @@ std::string Setup(const PageSetup& s, std::string_view existing, const std::stri
   Set(n, "orientation", s.orientation == Orientation::Landscape  ? "landscape"
                         : s.orientation == Orientation::Portrait ? "portrait"
                                                                  : "");
+  Set(n, "blackAndWhite", Flag(s.blackAndWhite));
+  Set(n, "draft", Flag(s.draft));
+  Set(n, "cellComments", s.cellComments == CellComments::AtEnd         ? "atEnd"
+                         : s.cellComments == CellComments::AsDisplayed ? "asDisplayed"
+                                                                       : "");
   Set(n, "useFirstPageNumber", Flag(s.useFirstPageNumber));
+  Set(n, "errors", s.errors == PrintErrors::Blank ? "blank" : s.errors == PrintErrors::Dash ? "dash" : s.errors == PrintErrors::NA ? "NA" : "");
   Reorder(n, {"paperSize", "paperHeight", "paperWidth", "scale", "firstPageNumber", "fitToWidth", "fitToHeight", "pageOrder",
               "orientation", "usePrinterDefaults", "blackAndWhite", "draft", "cellComments", "useFirstPageNumber", "errors",
               "horizontalDpi", "verticalDpi", "copies"});

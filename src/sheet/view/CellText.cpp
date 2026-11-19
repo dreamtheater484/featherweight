@@ -216,6 +216,12 @@ void CellText::Make(const Sheet& sheet, const CellInfo& cell, int widthPx, const
   out.textPx = textPx;
   out.look = look;
   Show(sheet, cell, textPx, out.shown, look.numFmt);
+  if (look.errors != PrintErrors::Displayed && cell.value.type == ValueType::Error) {
+    // Printed as Excel's Page Setup says: blank, "--" or "#N/A" (centered, as errors are).
+    out.shown.text = look.errors == PrintErrors::Dash ? L"--" : look.errors == PrintErrors::NA ? L"#N/A" : L"";
+    out.shown.hidden.assign(out.shown.text.size(), 0);
+    out.shown.overflow = false;
+  }
   const Styles& st = book_.GetStyles();
   const Xf& xf = st.CellXf(cell.style);
   const Alignment& al = xf.alignment;

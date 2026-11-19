@@ -232,6 +232,27 @@ TEST(sheet_page_fit_width_keeps_row_breaks) {
   CHECK(fitted.PageCount() == 1);
 }
 
+// The Sheet tab's Black and white, Draft quality, Notes and Cell errors as: written where Excel puts
+// them in pageSetup, read back.
+TEST(sheet_page_setup_print_quality_notes_errors) {
+  auto book = OpenParts({"<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  PageSetup p;
+  p.blackAndWhite = p.draft = true;
+  p.cellComments = CellComments::AtEnd;
+  p.errors = PrintErrors::Dash;
+  p.orientation = Orientation::Landscape;
+  CHECK(ed.SetPageSetup(0, p, HeaderFooter{}, false));
+  const std::vector<uint8_t> zip = SavePage(*book, ed);
+  CHECK(Has(PartText(zip, "/xl/worksheets/sheet1.xml"),
+            "<pageSetup orientation=\"landscape\" blackAndWhite=\"1\" draft=\"1\" cellComments=\"atEnd\" errors=\"dash\"/>"));
+  auto again = OpenZip(zip);
+  if (!again) return;
+  const PageSetup& q = again->GetSheet(0).Page();
+  CHECK(q.blackAndWhite && q.draft && q.cellComments == CellComments::AtEnd && q.errors == PrintErrors::Dash);
+}
+
 // Printed and exported text can be searched and copied: each glyph run says what it shows, for the
 // simple layout (one line, Latin) and the full one (wrapped).
 TEST(sheet_page_runs_carry_text) {

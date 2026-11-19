@@ -355,6 +355,16 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     }
     Toggle(gridlines_, L"Gridlines", [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.gridLines = !p.gridLines; }); });
     Toggle(headings_, L"Headings", [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.headings = !p.headings; }); });
+    Toggle(bw_, L"Black and white", [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.blackAndWhite = !p.blackAndWhite; }); });
+    Toggle(draft_, L"Draft quality", [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.draft = !p.draft; }); });
+    notes_.items = {L"(none)", L"At end of sheet", L"As displayed on sheet"};
+    Choice(notes_, [this](int i) {
+      Change([&](PageSetup& p, HeaderFooter&, bool&) {
+        p.cellComments = i == 1 ? CellComments::AtEnd : i == 2 ? CellComments::AsDisplayed : CellComments::None;
+      });
+    });
+    errors_.items = {L"displayed", L"<blank>", L"--", L"#N/A"};  // PrintErrors' order
+    Choice(errors_, [this](int i) { Change([&](PageSetup& p, HeaderFooter&, bool&) { p.errors = static_cast<PrintErrors>(i); }); });
     Toggle(down_, L"Down, then over",
            [this] { Change([](PageSetup& p, HeaderFooter&, bool&) { p.pageOrder = PageOrder::DownThenOver; }); });
     Toggle(over_, L"Over, then down",
@@ -441,6 +451,10 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     cols_.ReplaceText(cols ? AreasText({Range{0, cols->first, kMaxRows - 1, cols->second}}) : std::wstring());
     gridlines_.checked = p.gridLines;
     headings_.checked = p.headings;
+    bw_.checked = p.blackAndWhite;
+    draft_.checked = p.draft;
+    notes_.ReplaceText(notes_.items[p.cellComments == CellComments::AtEnd ? 1 : p.cellComments == CellComments::AsDisplayed ? 2 : 0]);
+    errors_.ReplaceText(errors_.items[std::min<size_t>(static_cast<size_t>(p.errors), 3)]);
     down_.checked = p.pageOrder == PageOrder::DownThenOver;
     over_.checked = p.pageOrder == PageOrder::OverThenDown;
     v_.host_.ViewInvalidate();
@@ -573,6 +587,9 @@ class WorkbookView::PageSetupPanel : public PanelContent {
         label(L"Print");
         y += 18 * ui;
         pair(gridlines_, headings_);
+        pair(bw_, draft_);
+        labelled(L"Notes", L"Cell errors as");
+        pair(notes_, errors_);
         label(L"Page order");
         y += 18 * ui;
         pair(down_, over_);
@@ -626,7 +643,8 @@ class WorkbookView::PageSetupPanel : public PanelContent {
   std::vector<Control*> All() {
     std::vector<Control*> all = {&which_,    &what_,     &portrait_, &landscape_, &paper_,     &scaling_,   &scale_,   &fitW_,
                                  &fitH_,     &first_,    &preset_,    &centerH_,   &centerV_,   &oddEven_, &firstDiff_,
-                                 &area_,     &rows_,     &cols_,      &gridlines_, &headings_,  &down_,    &over_};
+                                 &area_,     &rows_,     &cols_,      &gridlines_, &headings_,  &down_,    &over_,
+                                 &bw_,       &draft_,    &notes_,     &errors_};
     for (auto& b : margin_) all.push_back(&b);
     for (int f = 0; f < 2; ++f) {
       all.push_back(&hfPreset_[f]);
@@ -640,7 +658,8 @@ class WorkbookView::PageSetupPanel : public PanelContent {
   Tab tab_ = kTabPage;
   PanelButton tabs_[kTabs];
   FocusComboBox what_, paper_, scaling_, scale_, fitW_, fitH_, first_, preset_, margin_[6], hfPreset_[2], section_[2][3],
-      area_, rows_, cols_, which_;
+      area_, rows_, cols_, which_, notes_, errors_;
+  PanelButton bw_, draft_;
   int hfWhich_ = 0;           // the header and footer shown: 0 the odd (or other) pages', 1 the even, 2 the first page's
   std::vector<int> whichOf_;  // which_'s items as hfWhich_ values
   PanelButton portrait_, landscape_, centerH_, centerV_, oddEven_, firstDiff_, gridlines_, headings_, down_, over_;
@@ -1204,6 +1223,16 @@ bool WorkbookView::PageScriptOp(const std::wstring& arg) {
         });
   if (key == L"gridlines" || key == L"headings")
     return set([&](PageSetup& p, HeaderFooter&, bool&) { (key == L"gridlines" ? p.gridLines : p.headings) = value == L"1"; });
+  if (key == L"bw" || key == L"draft")
+    return set([&](PageSetup& p, HeaderFooter&, bool&) { (key == L"bw" ? p.blackAndWhite : p.draft) = value == L"1"; });
+  if (key == L"notes")  // none, end, displayed
+    return set([&](PageSetup& p, HeaderFooter&, bool&) {
+      p.cellComments = value == L"end" ? CellComments::AtEnd : value == L"displayed" ? CellComments::AsDisplayed : CellComments::None;
+    });
+  if (key == L"errors")  // displayed, blank, dash, na
+    return set([&](PageSetup& p, HeaderFooter&, bool&) {
+      p.errors = value == L"blank" ? PrintErrors::Blank : value == L"dash" ? PrintErrors::Dash : value == L"na" ? PrintErrors::NA : PrintErrors::Displayed;
+    });
   if (key == L"order")
     return set([&](PageSetup& p, HeaderFooter&, bool&) { p.pageOrder = value == L"over" ? PageOrder::OverThenDown : PageOrder::DownThenOver; });
   if (key == L"first")
