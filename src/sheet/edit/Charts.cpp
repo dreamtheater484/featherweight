@@ -558,6 +558,15 @@ bool RefreshCaches(const Workbook& book, std::string& xml) {
   });
 }
 
+std::vector<ChartSeries> SeriesFor(const Sheet& s, const Range& data) {
+  const Plan plan = PlanSeries(s, data);
+  std::vector<ChartSeries> out;
+  for (const Plan::One& one : plan.series)
+    out.push_back({one.name ? AbsRef(s.Name(), *one.name) : std::string(), AbsRef(s.Name(), one.values),
+                   plan.categories ? AbsRef(s.Name(), *plan.categories) : std::string()});
+  return out;
+}
+
 ChartInfo Info(std::string_view xml) {
   ChartInfo info;
   pugi::xml_document d;
@@ -583,6 +592,10 @@ ChartInfo Info(std::string_view xml) {
     cs.values = FormulaIn(Kid(s, "val") ? Kid(s, "val") : Kid(s, "yVal"));
     cs.categories = FormulaIn(Kid(s, "cat") ? Kid(s, "cat") : Kid(s, "xVal"));
     info.series.push_back(std::move(cs));
+    info.points.push_back(static_cast<uint32_t>(PartsOf(s).points));
+    pugi::xml_node tx = Kid(s, "tx");
+    pugi::xml_node v = Kid(tx, "v") ? Kid(tx, "v") : Kid(Kid(Kid(Kid(tx, "strRef"), "strCache"), "pt"), "v");
+    info.names.push_back(xlsx::TextOf(v));
   }
   return info;
 }
