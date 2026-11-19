@@ -1,0 +1,40 @@
+# S3 fixture ("created as Excel shows it"): headers and footers through s3-print's Page Setup (its
+# pagesetup: script op): a different first page and different odd and even pages, each with its own
+# header and footer, the sheet name (&A) and page numbers (&P, &N), custom margins (inches: top,
+# bottom, left, right, header, footer), centered on the page, scaled to 90 %. Letter, portrait.
+# 120 rows: three pages, so the first, an even and an odd page each print.
+sheet-name "Headers"
+enter A1 "Line"
+enter B1 "Amount"
+enter C1 "Running total"
+enter A2 "Line 1"
+fill-series A2:A120
+enter B2 "=MOD(ROW()*37;100)"
+fill-down B2:B120
+enter C2 "=SUM($B$2:B2)"
+fill-down C2:C120
+format B1:C1 bold
+pagesetup paper=1
+pagesetup scale=90
+pagesetup margins=1,0.8,0.6,0.6,0.4,0.3
+pagesetup center=h
+pagesetup header=&L&A&RPrinted copy
+pagesetup footer=&CPage &P of &N
+pagesetup firstheader=&CFirst page header
+pagesetup firstfooter=&RFirst page &P
+pagesetup evenheader=&L&A&REven page
+pagesetup evenfooter=&LPage &P (even)
+save
+expect cell Headers!A120 text Line 119
+expect cell Headers!C120 formula =SUM($B$2:B120)
+expect pagesetup Headers orientation 1 zoom 90 wide 1 tall 1 titlerows  titlecols  area
+expect pagemargins Headers left 43.2 right 43.2 top 72 bottom 57.6 header 28.8 footer 21.6 center True False
+expect pageheaders Headers differentfirst True oddeven True scale True align True
+expect pageheader Headers header left &A
+expect pageheader Headers header right Printed copy
+expect pageheader Headers footer center Page &P of &N
+expect pageheader Headers first header center First page header
+expect pageheader Headers first footer right First page &P
+expect pageheader Headers even header left &A
+expect pageheader Headers even header right Even page
+expect pageheader Headers even footer left Page &P (even)

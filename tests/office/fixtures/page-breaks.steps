@@ -1,0 +1,37 @@
+# S3 fixture ("created as Excel shows it"): page breaks and print titles through s3-print's commands
+# (Insert Page Break on the active cell, pagesetup: script op): a row break before row 22, a column
+# break before column F, rows 1 and columns A repeated, pages over then down from page 3, gridlines
+# and headings printed, footer "Page &P of &N", Page Break Preview on. Letter, portrait (Excel's
+# PDF export on this PC is Letter). Four pages: A-E x 1-21, A,F-J x 1-21, then rows 22-40.
+sheet-name "Breaks"
+enter A1 "Item"
+enter B1 "Week 1"
+fill-series B1:J1
+enter A2 "Item 1"
+fill-series A2:A40
+enter B2 "=ROW()*COLUMN()"
+fill-down B2:B40
+fill-right B2:J40
+pagesetup paper=1
+pagesetup rows=1:1
+pagesetup cols=A:A
+pagesetup order=over
+pagesetup first=3
+pagesetup gridlines=1
+pagesetup headings=1
+pagesetup footer=&CPage &P of &N
+select A22
+pagesetup break=insert
+select F1
+pagesetup break=insert
+pagesetup breakpreview=on
+save
+expect cell Breaks!J1 text Week 9
+expect cell Breaks!A40 text Item 39
+expect cell Breaks!J40 text 400
+expect pagesetup Breaks orientation 1 zoom 100 wide 1 tall 1 titlerows $1:$1 titlecols $A:$A area
+expect pageoptions Breaks paper 1 first 3 order 2 gridlines True headings True bw False draft False notes -4142 errors 0
+expect pageheader Breaks footer center Page &P of &N
+expect pagebreak Breaks row 22
+expect pagebreak Breaks col 6
+expect view Breaks 2
