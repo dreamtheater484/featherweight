@@ -815,6 +815,8 @@ class WorkbookView : public PagedView {
   // Conditional formats: each sheet's rules, made when it is first painted if it has any, with the
   // formula engine they need for theirs (loaded for the first such sheet, and only then).
   condfmt::SheetRules* RulesFor(size_t index);
+  // The sheet's sparklines (S4), read again whenever its conditional formats are (RulesFor).
+  const Sparklines* SparklinesFor(size_t index);
   std::unique_ptr<calc::WorkbookCalc> calc_;  // see Calc()
   bool recalc_ = false;  // a workbook (not CSV): recalculate what Excel would after opening
   // A large CSV file (S4, plan §11: 100 MB, first screen < 1 s): the rows of its first megabyte are
@@ -826,6 +828,7 @@ class WorkbookView : public PagedView {
   calc::WorkbookCalc& Calc();
   std::vector<std::unique_ptr<condfmt::SheetRules>> rules_;
   std::vector<bool> rulesRead_;
+  std::vector<std::unique_ptr<Sparklines>> sparklines_;
 };
 
 }  // namespace fw::sheet::view

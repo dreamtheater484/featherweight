@@ -11,6 +11,7 @@
 #include "pkg/Snapshot.h"
 #include "sheet/csv/Csv.h"
 #include "sheet/numfmt/NumLocale.h"
+#include "sheet/view/Sparklines.h"
 #include "sheet/view/WorkbookFilter.h"
 #include "sheet/view/WorkbookFormat.h"
 #include "sheet/view/WorkbookPanels.h"
@@ -348,13 +349,25 @@ calc::WorkbookCalc& WorkbookView::Calc() {
   return *calc_;
 }
 
+const Sparklines* WorkbookView::SparklinesFor(size_t index) {
+  RulesFor(index);
+  return index < sparklines_.size() ? sparklines_[index].get() : nullptr;
+}
+
 condfmt::SheetRules* WorkbookView::RulesFor(size_t index) {
   if (!book_ || index >= rules_.size()) return nullptr;
   if (!rulesRead_[index]) {
     rulesRead_[index] = true;
     Sheet& sheet = book_->GetSheet(index);
     if (!sheet.Loaded()) book_->LoadSheet(index);
-    if (sheet.KeptXml().find("conditionalFormatting") != std::string::npos) {
+    const std::string kept = sheet.KeptXml();
+    if (sparklines_.size() < rules_.size()) sparklines_.resize(rules_.size());
+    sparklines_[index].reset();
+    if (kept.find("sparklineGroups") != std::string::npos) {
+      sparklines_[index] = std::make_unique<Sparklines>(*book_, index);
+      if (sparklines_[index]->Empty()) sparklines_[index].reset();
+    }
+    if (kept.find("conditionalFormatting") != std::string::npos) {
       condfmt::Options o;
       o.locale = &text_->Locale();
       o.calc = &Calc();
@@ -634,6 +647,7 @@ void WorkbookView::DrawGrid(Canvas& c, ID2D1DeviceContext* dc) {
   o.gridColor = gridColor_;
   o.showZeros = showZeros_;
   o.rules = RulesFor(sheet_);
+  o.sparklines = SparklinesFor(sheet_);
   const double k = K();
   const float mirror = cells_.left + cells_.right;
   for (const Pane& pane : Panes()) {
