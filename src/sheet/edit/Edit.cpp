@@ -3103,9 +3103,27 @@ void Editor::FixHeaders(Sheet& s, const std::vector<CellAddr>& cells) {
   std::vector<Renamed> renamed;
   std::u16string why;
   bool totals = false;
+  // A value as the cell shows it, as text (Excel's header names and totals-row labels).
+  auto shown = [&](const Value& v, uint32_t row, uint32_t col) {
+    if (v.type == ValueType::String) return std::string(v.text);
+    if (v.type == ValueType::Bool) return std::string(v.boolean ? "TRUE" : "FALSE");
+    if (v.type == ValueType::Error) return std::string(ErrorText(v.error));
+    if (v.type != ValueType::Number) return std::string();
+    const Styles& styles = book_.GetStyles();
+    const uint32_t fmt = styles.CellXf(s.StyleAt(row, col)).numFmt;
+    const std::string_view code = styles.FormatCode(fmt);
+    const NumLocale& loc = locale_ ? *locale_ : EnUsLocale();
+    NumberFormat nf = code.empty() ? NumberFormat::Builtin(static_cast<int>(fmt), loc) : NumberFormat(Utf8ToWide(code));
+    FormatContext context;
+    context.locale = &loc;
+    context.date1904 = book_.Date1904();
+    Formatted out;
+    nf.Format(v.number, context, out);
+    return WideToUtf8(out.text);
+  };
   for (Table& t : tables) {
-    // The totals row: a formula typed there is the column's custom total, text its label, as
-    // Excel writes them (a label beside a formula is repaired).
+    // The totals row: a formula typed there is the column's custom total, anything else its label,
+    // as text, as Excel writes them (a label beside a formula, or a number with neither, is repaired).
     if (t.totalsRows)
       for (const CellAddr& a : cells) {
         if (a.row != t.ref.lastRow || a.col < t.ref.firstCol || a.col > t.ref.lastCol) continue;
@@ -3121,7 +3139,11 @@ void Editor::FixHeaders(Sheet& s, const std::vector<CellAddr>& cells) {
           const Value v = s.GetValue(a.row, a.col);
           now.totalsFunction.clear();
           now.totalsFormula.clear();
-          now.totalsLabel = v.type == ValueType::String ? std::string(v.text) : std::string();
+          now.totalsLabel = shown(v, a.row, a.col);
+          if (v.type != ValueType::String && v.type != ValueType::Empty) {
+            CellInput in = CellInput::Text(now.totalsLabel);
+            st.Put(st.Save(s), a.row, a.col, &in, false, std::nullopt, why);
+          }
         }
         TableColumn& was = t.columns[k];
         if (now.totalsFunction != was.totalsFunction || now.totalsFormula != was.totalsFormula ||
@@ -3137,26 +3159,7 @@ void Editor::FixHeaders(Sheet& s, const std::vector<CellAddr>& cells) {
       if (k >= t.columns.size()) continue;
       // The header as Excel makes it: always text, the value as the cell shows it.
       Value v = s.GetValue(a.row, a.col);
-      std::string text;
-      if (v.type == ValueType::String) {
-        text = std::string(v.text);
-      } else if (v.type == ValueType::Bool) {
-        text = v.boolean ? "TRUE" : "FALSE";
-      } else if (v.type == ValueType::Error) {
-        text = std::string(ErrorText(v.error));
-      } else if (v.type == ValueType::Number) {
-        const Styles& styles = book_.GetStyles();
-        const uint32_t fmt = styles.CellXf(s.StyleAt(a.row, a.col)).numFmt;
-        const std::string_view code = styles.FormatCode(fmt);
-        const NumLocale& loc = locale_ ? *locale_ : EnUsLocale();
-        NumberFormat nf = code.empty() ? NumberFormat::Builtin(static_cast<int>(fmt), loc) : NumberFormat(Utf8ToWide(code));
-        FormatContext context;
-        context.locale = &loc;
-        context.date1904 = book_.Date1904();
-        Formatted shown;
-        nf.Format(v.number, context, shown);
-        text = WideToUtf8(shown.text);
-      }
+      std::string text = shown(v, a.row, a.col);
       // Unique in the table, ignoring case: an empty one is the next "ColumnN", a taken one gets 2, 3...
       auto taken = [&](std::string_view name) {
         for (size_t j = 0; j < t.columns.size(); ++j)
