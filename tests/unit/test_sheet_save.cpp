@@ -535,6 +535,11 @@ std::vector<uint8_t> JournalBook() {
 void EditEverything(Workbook& book, Editor& ed) {
   CHECK(ed.SetCell(0, 0, 2, CellInput::Text("note & <more>")));
   CHECK(ed.SetCell(0, 3, 0, CellInput::Formula("SUM(A1:A3)")));
+  CellInput spill = CellInput::Formula("_xlfn.SEQUENCE(2)");  // a dynamic array: cm, xl/metadata.xml
+  spill.type = ValueType::Number, spill.number = 1;
+  spill.dynamic = true;
+  spill.arrayRange = Range{40, 0, 41, 0};
+  CHECK(ed.SetCell(0, 40, 0, spill));
   CHECK(ed.SetCells(0, {{CellAddr{4, 0}, CellInput::Number(1.5)}, {CellAddr{4, 1}, CellInput::Bool(true)},
                         {CellAddr{4, 2}, CellInput::Error(ErrorCode::NA)}}));
   Font bold = book.GetStyles().Fonts()[0];
