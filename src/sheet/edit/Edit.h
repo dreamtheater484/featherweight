@@ -325,6 +325,9 @@ class Editor {
   // before `sheet` and made the active sheet, named `name` (empty: "Chart1", "Chart2"...). Its
   // chart part stays; the sheet's drawing loses the object as Delete does.
   Result MoveChartToSheet(int sheet, uint32_t id, std::string name = {});
+  // Move Chart > Object in (journal 56): a chart sheet's chart onto worksheet `toSheet` at `at`
+  // (8 columns by 15 rows, as a new chart), and the chart sheet deleted.
+  Result MoveChartToObject(int chartSheet, int toSheet, CellAddr at);
 
   // ---- Charts (s3-charts)
   using ChartKind = edit::ChartKind;

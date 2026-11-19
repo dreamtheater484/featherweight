@@ -1210,6 +1210,22 @@ TEST(sheet_move_chart_to_sheet) {
   CheckClean(saved);
   CHECK(PartText(saved, "/xl/workbook.xml").find("Chart1") == std::string::npos);
   CHECK(PartText(saved, "/xl/drawings/drawing1.xml") == PartText(before, "/xl/drawings/drawing1.xml"));
+
+  // And back: Move Chart > Object in, after a save of the chart sheet.
+  CHECK(ed.Redo(1));
+  SaveBytes(*book, ed);
+  CHECK(!ed.MoveChartToObject(1, 0, CellAddr{1, 1}));  // not a chart sheet
+  CHECK(ed.MoveChartToObject(0, 1, CellAddr{5, 3}));
+  CHECK(book->SheetCount() == 2 && book->GetSheet(0).Kind() == SheetKind::Worksheet);
+  const std::string back = ed.PartBytes(ed.SheetDrawing(0, false));
+  CHECK(back.find("<xdr:from><xdr:col>3</xdr:col>") != std::string::npos && back.find("<c:chart ") != std::string::npos);
+  CHECK(ed.Undo(1));
+  CHECK(book->SheetCount() == 3 && book->GetSheet(0).Kind() == SheetKind::Chartsheet);
+  CHECK(ed.Redo(1));
+  saved = SaveBytes(*book, ed, "save-chart-sheet-back");  // a sheet removed: the save ends the undo history
+  CheckClean(saved);
+  CHECK(PartText(saved, "/xl/workbook.xml").find("Chart1") == std::string::npos);
+  CHECK(PartText(saved, "/xl/chartsheets/sheet1.xml").empty() && !PartText(saved, "/xl/charts/chart1.xml").empty());
 }
 
 TEST(sheet_insert_chart) {

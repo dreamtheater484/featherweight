@@ -4206,6 +4206,41 @@ Result Editor::MoveChartToSheet(int sheet, uint32_t id, std::string name) {
   }());
 }
 
+Result Editor::MoveChartToObject(int chartSheet, int toSheet, CellAddr at) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
+  if (Result no = guard.Check(toSheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::MoveChartToObject, [&](JournalRecord& w) { w.I(chartSheet).I(toSheet).A(at); });
+  return rec.Done([&]() -> Result {
+    const int n = static_cast<int>(book_.SheetCount());
+    if (chartSheet < 0 || chartSheet >= n || toSheet < 0 || toSheet >= n || toSheet == chartSheet) return NoSheet();
+    if (book_.GetSheet(static_cast<size_t>(chartSheet)).Kind() != SheetKind::Chartsheet)
+      return Result::Fail(u"This isn't a chart sheet.");
+    if (book_.GetSheet(static_cast<size_t>(toSheet)).Kind() != SheetKind::Worksheet)
+      return Result::Fail(u"A chart can go only on a worksheet.");
+    if (at.row >= kMaxRows || at.col >= kMaxCols) return BadRange();
+    std::string chart;
+    for (const drawing::Object& o : drawing::Objects(PartBytes(SheetDrawing(chartSheet, false))))
+      if (chart.empty()) chart = ChartPart(chartSheet, o.id);
+    if (chart.empty()) return Result::Fail(u"This chart sheet has no chart to move.");
+    if (!book_.LoadSheet(static_cast<size_t>(toSheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(toSheet));
+    if (s.PartName().empty() || !book_.GetPackage()->FindPart(s.PartName()))
+      return Result::Fail(u"Save the workbook as an Excel workbook first, then move the chart.");
+    return Run(*this, u"Move Chart", [&]() -> Result {
+      const std::string d = SheetDrawing(toSheet, true);
+      const std::string rel =
+          d.empty() ? d : AddRelationship(d, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart", chart);
+      const CellAddr to{std::min(at.row + 15, kMaxRows - 1), std::min(at.col + 8, kMaxCols - 1)};
+      if (rel.empty() || !AddAnchor(d, charts::ChartAnchor(at, to, rel, NextShapeId(d))))
+        return Result::Fail(u"The chart couldn't be added to this sheet.");
+      s_->Change(&s, kObjects, Range{at.row, at.col, to.row, to.col});
+      // The chart sheet goes; its chart part stays (the sheet's drawing uses it now).
+      return DeleteSheet(chartSheet);
+    });
+  }());
+}
+
 Result Editor::DeleteObjects(int sheet, const std::vector<uint32_t>& ids) {
   Guard guard(*this);
   if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;

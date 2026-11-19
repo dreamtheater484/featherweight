@@ -574,6 +574,13 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = MoveChartToSheet(sheet, id, std::move(name));
         break;
       }
+      case JournalOp::MoveChartToObject: {
+        const int chartSheet = f.Int();
+        const int toSheet = f.Int();
+        const CellAddr at = f.A();
+        if (f.Ok()) r = MoveChartToObject(chartSheet, toSheet, at);
+        break;
+      }
       case JournalOp::PasteObject: {
         const int sheet = f.Int();
         Editor::ObjectClip clip;
