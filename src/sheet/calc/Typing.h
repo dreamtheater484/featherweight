@@ -75,6 +75,24 @@ struct AutoSumProposal {
 // without a visible window, so not measured here.
 AutoSumProposal ProposeAutoSum(int32_t row, int32_t col, const std::function<SumCell(int32_t row, int32_t col)>& cellAt);
 
+// AutoSum with several cells selected (rows r1-r2, columns c1-c2; the sheet's last row and column
+// lastRow, lastCol), as Excel does it: the totals are entered at once, no cell is edited.
+// - Every cell empty: each gets its own proposal (ProposeAutoSum), so a row under a block or a
+//   column beside it gets its totals.
+// - An empty last row in the selection: it gets the totals of the columns above it; an empty last
+//   column, those of the rows left of it; both, and the corner gets the total of the row totals.
+// - Else one row: its total right of it, in the first empty cell; more rows: each column's total
+//   under it, in the first row below whose cells are all empty. Nothing is written over.
+// Totals go under the columns (beside the rows) that hold a number, or all of them when none does;
+// a line holding totals (SUM or SUBTOTAL formulas) sums those only, as ProposeAutoSum does.
+// Empty when there's nothing to enter: empty cells with no numbers near, or no room on the sheet.
+struct AutoSumCell {
+  int32_t row = 0, col = 0;
+  std::string formula;  // invariant, with "="
+};
+std::vector<AutoSumCell> ProposeAutoSums(int32_t r1, int32_t c1, int32_t r2, int32_t c2, int32_t lastRow,
+                                         int32_t lastCol, const std::function<SumCell(int32_t row, int32_t col)>& cellAt);
+
 // The formula of cell `from` as it reads in cell `to` (fill, copy and paste): relative references
 // move with it, absolute ones stay; a reference moved off the sheet becomes #REF!, as Excel makes
 // it. Invariant text in and out, with "=". Text that doesn't compile comes back unchanged.
