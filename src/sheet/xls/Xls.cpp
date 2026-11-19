@@ -14,6 +14,9 @@
 #include <string>
 #include <unordered_map>
 
+#include <pugixml.hpp>
+
+#include "pkg/Snapshot.h"
 #include "pkg/Zip.h"
 #include "sheet/model/Types.h"
 #include "sheet/xls/Internal.h"
@@ -198,6 +201,15 @@ void AttrNum(std::string& o, const char* name, double v) {
   o += "=\"";
   AppendNumber(o, v);
   o += '"';
+}
+
+// Whether an element has a child whose name (with any prefix) ends with `local`.
+bool HasChildEnding(pugi::xml_node n, std::string_view local) {
+  for (pugi::xml_node c = n.first_child(); c; c = c.next_sibling()) {
+    const std::string_view name = c.name();
+    if (name.size() >= local.size() && name.substr(name.size() - local.size()) == local) return true;
+  }
+  return false;
 }
 
 std::string CellRef(uint32_t row, uint32_t col) {
@@ -407,6 +419,10 @@ class Converter {
   uint16_t iterateCount_ = 100;
   double delta_ = 0.001;
   std::map<int, std::array<uint32_t, 4>> filterRanges_;  // by 1-based sheet: _FilterDatabase's area
+  std::vector<uint8_t> themeZip_;  // THEME: the workbook's theme as a package (.thmx)
+  bool theme2007_ = false;
+  std::string NotesParts(const std::vector<Note>& notes, size_t sheet, std::string& comments, std::string& vml);
+  std::string ThemeXml();
 };
 
 uint32_t Converter::AddSstText(std::string text) {
@@ -576,7 +592,7 @@ bool Converter::Globals(pkg::Status& status) {
       return false;
     }
   }
-  bool inSupBook = false;
+  bool inSupBook = false, inTheme = false;
   while (rs.Next(r)) {
     Bytes b(r.data);
     switch (r.type) {
@@ -702,6 +718,19 @@ bool Converter::Globals(pkg::Status& status) {
         }
         break;
       }
+    }
+    // THEME ([MS-XLS] 2.4.326): a custom theme's package, going on in CONTINUEFRT records.
+    if (r.type == 0x0896) {
+      b.Skip(12);
+      const uint32_t version = b.U32();
+      themeZip_.clear();
+      if (b.Ok() && version == 0) themeZip_.assign(r.data.begin() + 16, r.data.end());
+      theme2007_ = b.Ok() && version == 124226;  // Office 2007's default theme, which Excel then uses
+      inTheme = !themeZip_.empty();
+    } else if (r.type == 0x0812 && inTheme && r.data.size() > 12 && themeZip_.size() < (16u << 20)) {
+      themeZip_.insert(themeZip_.end(), r.data.begin() + 12, r.data.end());
+    } else {
+      inTheme = false;
     }
     if (r.type != 0x0023 && r.type != 0x01AE) inSupBook = false;
   }
@@ -2013,6 +2042,94 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
   return o;
 }
 
+// A sheet's notes: the comments part, and the VML drawing that places them (Excel's defaults: a
+// box to the right of the cell, hidden unless the note is shown).
+std::string Converter::NotesParts(const std::vector<Note>& notes, size_t sheet, std::string& comments, std::string& vml) {
+  std::vector<std::string> authors;
+  std::string list;
+  std::set<std::pair<uint32_t, uint32_t>> seen;
+  vml = "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" "
+        "xmlns:x=\"urn:schemas-microsoft-com:office:excel\">"
+        "<o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"" + std::to_string(sheet + 1) + "\"/></o:shapelayout>"
+        "<v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\">"
+        "<v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>";
+  uint32_t id = static_cast<uint32_t>((sheet + 1) * 1024 + 1);
+  for (const Note& n : notes) {
+    if (!seen.insert({n.row, n.col}).second) continue;
+    auto it = std::find(authors.begin(), authors.end(), n.author);
+    if (it == authors.end()) it = authors.insert(authors.end(), n.author);
+    const bool preserve = !n.text.empty() && (n.text.front() == ' ' || n.text.back() == ' ' || n.text.find('\n') != std::string::npos);
+    list += "<comment ref=\"" + CellRef(n.row, n.col) + "\" authorId=\"" + std::to_string(it - authors.begin()) + "\"><text><t" +
+            (preserve ? " xml:space=\"preserve\"" : "") + ">" + Esc(n.text) + "</t></text></comment>";
+    const uint32_t top = n.row > 0 ? n.row - 1 : 0;
+    vml += "<v:shape id=\"_x0000_s" + std::to_string(id++) +
+           "\" type=\"#_x0000_t202\" style=\"position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:108pt;height:59.25pt;z-index:" +
+           std::to_string(id - (sheet + 1) * 1024 - 1) + (n.shown ? ";visibility:visible" : ";visibility:hidden") +
+           "\" fillcolor=\"#ffffe1\" o:insetmode=\"auto\"><v:fill color2=\"#ffffe1\"/>"
+           "<v:shadow on=\"t\" color=\"black\" obscured=\"t\"/><v:path o:connecttype=\"none\"/>"
+           "<v:textbox style=\"mso-direction-alt:auto\"><div style=\"text-align:left\"></div></v:textbox>"
+           "<x:ClientData ObjectType=\"Note\"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>" +
+           std::to_string(n.col + 1) + ", 15, " + std::to_string(top) + ", 10, " + std::to_string(n.col + 3) + ", 15, " +
+           std::to_string(top + 4) + ", 4</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>" + std::to_string(n.row) +
+           "</x:Row><x:Column>" + std::to_string(n.col) + "</x:Column>" + (n.shown ? "<x:Visible/>" : "") +
+           "</x:ClientData></v:shape>";
+  }
+  vml += "</xml>";
+  comments = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+             "<comments xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><authors>";
+  for (const std::string& a : authors) comments += "<author>" + Esc(a) + "</author>";
+  comments += "</authors><commentList>" + list + "</commentList></comments>";
+  return {};
+}
+
+// The theme's part from THEME's package, when it is a well-formed theme; empty otherwise (Office's
+// theme then applies).
+std::string Converter::ThemeXml() {
+  if (themeZip_.empty() && theme2007_) {
+    // Office 2007's theme: its colors and fonts, with plain formats for shapes.
+    const std::string fills = "<a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill>";
+    std::string lines;
+    for (const char* w : {"9525", "25400", "38100"}) lines += std::string("<a:ln w=\"") + w + "\">" + fills + "</a:ln>";
+    auto color = [](const char* name, const char* rgb) {
+      return std::string("<a:") + name + "><a:srgbClr val=\"" + rgb + "\"/></a:" + name + ">";
+    };
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+           "<a:theme xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" name=\"Office Theme\"><a:themeElements>"
+           "<a:clrScheme name=\"Office\"><a:dk1><a:sysClr val=\"windowText\" lastClr=\"000000\"/></a:dk1>"
+           "<a:lt1><a:sysClr val=\"window\" lastClr=\"FFFFFF\"/></a:lt1>" +
+           color("dk2", "1F497D") + color("lt2", "EEECE1") + color("accent1", "4F81BD") + color("accent2", "C0504D") +
+           color("accent3", "9BBB59") + color("accent4", "8064A2") + color("accent5", "4BACC6") + color("accent6", "F79646") +
+           color("hlink", "0000FF") + color("folHlink", "800080") +
+           "</a:clrScheme><a:fontScheme name=\"Office\"><a:majorFont><a:latin typeface=\"Cambria\"/><a:ea typeface=\"\"/>"
+           "<a:cs typeface=\"\"/></a:majorFont><a:minorFont><a:latin typeface=\"Calibri\"/><a:ea typeface=\"\"/>"
+           "<a:cs typeface=\"\"/></a:minorFont></a:fontScheme><a:fmtScheme name=\"Office\"><a:fillStyleLst>" +
+           fills + fills + fills + "</a:fillStyleLst><a:lnStyleLst>" + lines +
+           "</a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/>"
+           "</a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst>" +
+           fills + fills + fills + "</a:bgFillStyleLst></a:fmtScheme></a:themeElements><a:objectDefaults/><a:extraStyleLst/></a:theme>";
+  }
+  if (themeZip_.size() < 22) return {};
+  auto snapshot = pkg::Snapshot::FromBytes(themeZip_);
+  pkg::ZipReader zip;
+  if (!snapshot || !zip.Open(*snapshot).Ok()) return {};
+  for (const pkg::ZipEntry& e : zip.Entries()) {
+    // theme/theme/theme1.xml (not themeManager.xml beside it).
+    constexpr std::string_view kPrefix = "theme/theme/theme";
+    if (e.name.rfind(kPrefix, 0) != 0 || e.name.size() <= kPrefix.size() + 4 || !std::isdigit(static_cast<unsigned char>(e.name[kPrefix.size()])) ||
+        e.name.substr(e.name.size() - 4) != ".xml")
+      continue;
+    std::vector<uint8_t> bytes;
+    if (!zip.Read(e, bytes).Ok() || bytes.size() > (8u << 20)) continue;
+    pugi::xml_document doc;
+    if (!doc.load_buffer(bytes.data(), bytes.size(), pugi::parse_default, pugi::encoding_utf8)) continue;
+    const std::string_view root = doc.document_element().name();
+    if (root.size() < 5 || root.substr(root.size() - 5) != "theme" || !HasChildEnding(doc.document_element(), "themeElements"))
+      continue;
+    return std::string(bytes.begin(), bytes.end());
+  }
+  return {};
+}
+
 std::vector<uint8_t> Converter::Convert(const StreamFn& streams, pkg::Status& status) {
   auto workbook = streams("Workbook");
   if (!workbook) {
@@ -2060,6 +2177,19 @@ std::vector<uint8_t> Converter::Convert(const StreamFn& streams, pkg::Status& st
     std::vector<Note> notes;
     std::string xml = SheetXml(s, s.out, rels, notes);
     const std::string n = std::to_string(s.out + 1);
+    if (!notes.empty()) {
+      std::string comments, vml;
+      NotesParts(notes, s.out, comments, vml);
+      xml += "<legacyDrawing r:id=\"rIdVml1\"/>";
+      rels += "<Relationship Id=\"rIdVml1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing\" "
+              "Target=\"../drawings/vmlDrawing" + n + ".vml\"/>"
+              "<Relationship Id=\"rIdNotes1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments\" "
+              "Target=\"../comments" + n + ".xml\"/>";
+      parts.push_back({"xl/comments" + n + ".xml", std::move(comments)});
+      parts.push_back({"xl/drawings/vmlDrawing" + n + ".vml", std::move(vml)});
+      types += "<Override PartName=\"/xl/comments" + n +
+               ".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml\"/>";
+    }
     xml += "</worksheet>";
     parts.push_back({"xl/worksheets/sheet" + n + ".xml", std::move(xml)});
     types += "<Override PartName=\"/xl/worksheets/sheet" + n +
@@ -2081,7 +2211,15 @@ std::vector<uint8_t> Converter::Convert(const StreamFn& streams, pkg::Status& st
   wbRels += "<Relationship Id=\"rId" + std::to_string(kept + 1) +
             "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>"
             "<Relationship Id=\"rId" + std::to_string(kept + 2) +
-            "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"sharedStrings.xml\"/>"
+            "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"sharedStrings.xml\"/>" +
+            [&] {
+              std::string theme = ThemeXml();
+              if (theme.empty()) return std::string();
+              parts.push_back({"xl/theme/theme1.xml", std::move(theme)});
+              types += "<Override PartName=\"/xl/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>";
+              return "<Relationship Id=\"rId" + std::to_string(kept + 3) +
+                     "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme\" Target=\"theme/theme1.xml\"/>";
+            }() +
             "</Relationships>";
   // The shared strings: the SST's, then the texts of LABEL records and formulas' values.
   std::string sst = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
