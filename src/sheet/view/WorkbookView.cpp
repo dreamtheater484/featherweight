@@ -157,7 +157,15 @@ OpenResult WorkbookView::Load(const std::wstring& password, std::wstring& error)
     // An OpenDocument spreadsheet is converted, and the tab is a copy that Save As saves as an
     // .xlsx: the file itself is never written to. A template (.ots) makes a new workbook.
     std::vector<uint8_t> xlsx;
-    st = ods::OdsToXlsx(snapshot->Bytes(), xlsx);
+    st = ods::OdsToXlsx(snapshot->Bytes(), xlsx, pkg::Limits::Default(), [](const std::string& family, double points) {
+      // The default font's widest digit as the grid measures it, so column widths come back as ODF's.
+      fw::text::Fonts fonts;
+      fw::sheet::view::FontMeasure measure(fonts);
+      fw::sheet::Font f;
+      f.name = family;
+      f.size = points;
+      return measure.Of(f, f).digit;
+    });
     if (!st.Ok()) {
       error = st.code == pkg::Status::Code::Damaged || st.code == pkg::Status::Code::Unsupported
                   ? name + L" couldn't be opened — it seems to be damaged or isn't an OpenDocument spreadsheet."

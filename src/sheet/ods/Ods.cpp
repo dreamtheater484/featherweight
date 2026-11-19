@@ -229,7 +229,9 @@ struct Sheet {
 
 class Converter {
  public:
-  Converter(const pkg::ZipReader& zip, const pkg::Limits& limits) : zip_(zip), limits_(limits) {}
+  Converter(const pkg::ZipReader& zip, const pkg::Limits& limits, const DigitWidth& digit) : zip_(zip), limits_(limits) {
+    st_.digit = digit;
+  }
   pkg::Status Run(std::vector<uint8_t>& xlsx);
 
  private:
@@ -895,11 +897,12 @@ pkg::Status Converter::Run(std::vector<uint8_t>& xlsx) {
 
 }  // namespace
 
-pkg::Status OdsToXlsx(std::span<const uint8_t> ods, std::vector<uint8_t>& xlsx, const pkg::Limits& limits) {
+pkg::Status OdsToXlsx(std::span<const uint8_t> ods, std::vector<uint8_t>& xlsx, const pkg::Limits& limits,
+                      const DigitWidth& digit) {
   auto snapshot = pkg::Snapshot::FromBytes(std::vector<uint8_t>(ods.begin(), ods.end()));
   pkg::ZipReader zip;
   if (pkg::Status st = zip.Open(*snapshot, limits); !st.Ok()) return st;
-  Converter c(zip, limits);
+  Converter c(zip, limits, digit);
   return c.Run(xlsx);
 }
 
