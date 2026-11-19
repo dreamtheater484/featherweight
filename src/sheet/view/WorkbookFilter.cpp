@@ -60,6 +60,7 @@ bool WorkbookView::SetTableButtons(size_t index, bool on) {
   Table t = Current().Tables()[index];
   if (t.autoFilter == on) return true;
   edit::EditGroup group(Ed(), u"Filter");
+  const std::vector<HeldSize> held = HeldSizes();  // pictures keep their size
   edit::Result r;
   if (!on && !t.criteria.empty()) {
     r = Ed().SetTableFilter(sheet, index, SheetFilter{});
@@ -69,6 +70,7 @@ bool WorkbookView::SetTableButtons(size_t index, bool on) {
   }
   t.autoFilter = on;
   if (r) r = Ed().SetTable(sheet, index, t);
+  if (r) r = KeepSizes(held);
   if (EditRefused(r)) return false;
   group.done = true;
   if (!on && filterTable_ == static_cast<int>(index) && filterPanel_ && host_.ViewShownPanel() == filterPanel_.get())
@@ -91,8 +93,10 @@ void WorkbookView::ToggleFilter() {
     const Range ref = f->ref;
     const bool any = !f->criteria.empty() || !f->other.empty();
     edit::EditGroup group(Ed(), u"Remove Filter");
+    const std::vector<HeldSize> held = HeldSizes();  // s3-data: pictures keep their size
     edit::Result r = Ed().SetFilter(sheet, std::nullopt);
     if (r && any && ref.lastRow > ref.firstRow) r = Ed().HideRows(sheet, ref.firstRow + 1, ref.lastRow, false);
+    if (r) r = KeepSizes(held);
     if (EditRefused(r)) return;
     group.done = true;
     if (filterPanel_ && host_.ViewShownPanel() == filterPanel_.get()) host_.ViewShowPanel(nullptr);
@@ -143,6 +147,7 @@ bool WorkbookView::ApplyFilter() {
             [](const FilterColumn& a, const FilterColumn& b) { return a.colId < b.colId; });
   const int sheet = static_cast<int>(sheet_);
   edit::EditGroup group(Ed(), u"Filter");
+  const std::vector<HeldSize> held = HeldSizes();  // s3-data: pictures keep their size
   edit::Result r = ofTable ? Ed().SetTableFilter(sheet, static_cast<size_t>(table), model) : Ed().SetFilter(sheet, model);
   // Runs of rows whose hidden state changes, each in one call.
   const uint32_t first = f->ref.firstRow + 1;
@@ -155,6 +160,7 @@ bool WorkbookView::ApplyFilter() {
     if (differs) r = Ed().HideRows(sheet, first + static_cast<uint32_t>(i), first + static_cast<uint32_t>(j - 1), hide);
     i = j;
   }
+  if (r) r = KeepSizes(held);
   if (EditRefused(r)) return false;
   group.done = true;
   host_.ViewInvalidate();

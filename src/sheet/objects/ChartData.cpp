@@ -28,6 +28,15 @@ bool WorkbookData::Cells(std::string_view ref, std::vector<std::string>& texts, 
   return Collect(ref, 0, texts, numbers, format);
 }
 
+bool WorkbookData::Numbers(std::string_view ref, std::vector<double>& numbers) {
+  std::vector<std::string> texts;
+  numbers.clear();
+  numbersOnly_ = true;
+  const bool ok = Collect(ref, 0, texts, numbers, nullptr);
+  numbersOnly_ = false;
+  return ok;
+}
+
 bool WorkbookData::Collect(std::string_view ref, int depth, std::vector<std::string>& texts,
                            std::vector<double>& numbers, std::string* format) {
   ref = Trim(ref);
@@ -102,6 +111,7 @@ bool WorkbookData::Area(std::string_view area, int depth, std::vector<std::strin
       switch (v.type) {
         case ValueType::Number:
           number = v.number;
+          if (numbersOnly_) break;
           shown.Clear();
           FormatOf(numFmt).Format(v.number, context, shown);
           text = WideToUtf8(shown.text);

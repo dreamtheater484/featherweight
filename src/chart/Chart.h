@@ -95,6 +95,7 @@ struct Chart {
   // write it): gridlines and axis lines it doesn't color black rather than gray, and a title the
   // chart's text size. Word draws such charts in Office 2010's look.
   bool legacy = false;
+  bool workbook = false;  // in a workbook (Read had a DataSource): Excel's denser value axis labels
 };
 
 // Where a chart in a workbook reads its data: the cells its references (c:f) name, as they show,
@@ -108,6 +109,11 @@ class DataSource {
   // null, the first cell's number format code. False when it can't be resolved: the cache is used.
   virtual bool Cells(std::string_view ref, std::vector<std::string>& texts, std::vector<double>& numbers,
                      std::string* format) = 0;
+  // Only the numbers (a series' values), which needn't be formatted as text: Cells' by default.
+  virtual bool Numbers(std::string_view ref, std::vector<double>& numbers) {
+    std::vector<std::string> texts;
+    return Cells(ref, texts, numbers, nullptr);
+  }
 };
 
 // The chart a c:chartSpace holds; false when it holds nothing Featherweight draws. Colors are

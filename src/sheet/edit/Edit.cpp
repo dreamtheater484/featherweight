@@ -24,6 +24,7 @@
 #include "sheet/edit/Notes.h"
 #include "sheet/edit/PageSetupXml.h"
 #include "sheet/edit/Refs.h"
+#include "sheet/model/TableStyles.h"
 #include "sheet/xlsx/Internal.h"
 #include "sheet/numfmt/NumFormat.h"
 #include "core/Strings.h"
@@ -1187,10 +1188,14 @@ struct Editor::State {
       if (CellSide* sd = SideOf(blk, index)) {
         sd->valueText = kNone;
         sd->inner = kNone;
-        DropSideAttrs(s, *sd, {"cm", "vm"});
+        // A type the reader kept as written (one it doesn't know) goes with the value: the new one
+        // writes its own t (two would make the sheet unreadable; fuzz_xlsx).
+        DropSideAttrs(s, *sd, {"cm", "vm", "t"});
       }
     }
     if (style) {
+      // A style index kept as written ("01") goes: the cell writes its new one.
+      if (CellSide* sd = SideOf(blk, index)) DropSideAttrs(s, *sd, {"s"});
       c.style = *style;
       if (*style) c.flags |= detail::kStylePresent;
       else c.flags = static_cast<uint8_t>(c.flags & ~detail::kStylePresent);
@@ -5231,17 +5236,125 @@ Result Editor::SetTable(int sheet, size_t index, const Table& t) {
       const Range all{std::min(before.ref.firstRow, now.ref.firstRow), std::min(before.ref.firstCol, now.ref.firstCol),
                       std::max(before.ref.lastRow, now.ref.lastRow), std::max(before.ref.lastCol, now.ref.lastCol)};
       st.Change(&s, kStyles | kRules | kTables, all);
+      // Renamed: formulas everywhere that name it follow (Table1[Qty] -> Orders[Qty]), as in Excel.
+      if (before.name != now.name) {
+        const std::string from = before.name, to = now.name;
+        RewriteSheetRefs(
+            -1, [&](std::string_view text, int) { return refs::RenameTable(text, from, to); },
+            [&](std::string_view text) { return Mentions(text, from); });
+      }
       return Result{};
     });
   }());
 }
 
-Result Editor::RemoveTable(int sheet, size_t index) {
+Result Editor::KeepTableLook(Sheet& s, const Table& t, BakedStyles& baked, bool given) {
+  State& st0 = *s_;
+  if (given) {
+    SheetSave& sv = st0.Save(s);
+    std::u16string why;
+    const size_t count = book_.GetStyles().CellXfs().size();
+    for (const auto& [a, x] : baked)
+      if (x < count && a.row <= t.ref.lastRow && a.col <= t.ref.lastCol && s.StyleAt(a.row, a.col) != x &&
+          !st0.Put(sv, a.row, a.col, nullptr, false, x, why))
+        return Result::Fail(why);
+    st0.Change(&s, kStyles, t.ref);
+    return {};
+  }
+  // As the grid paints a table under the cells' own formats (TableStyles.h): a fill where the cell
+  // has none, the style's font color where the cell's is the default font's, bold and italic added,
+  // a border on each side the cell leaves empty.
+  const Styles& styles = book_.GetStyles();
+  const TableStyle* style = FindTableStyle(styles, t.style.name);
+  if (!style) return {};
+  struct Made {
+    uint32_t old;
+    TableCellFormat look;
+    uint32_t xf;
+  };
+  std::vector<Made> made;
+  auto same = [](const TableCellFormat& a, const TableCellFormat& b) {
+    return a.fill == b.fill && a.fontColor == b.fontColor && a.bold == b.bold && a.italic == b.italic && a.left == b.left &&
+           a.top == b.top && a.bottom == b.bottom && a.right == b.right;
+  };
+  auto bake = [&](uint32_t old, const TableCellFormat& look) {
+    for (const Made& m : made)
+      if (m.old == old && same(m.look, look)) return m.xf;
+    const Styles& now = book_.GetStyles();  // Add* may grow its lists
+    Xf xf = old < now.CellXfs().size() ? now.CellXfs()[old] : Xf{};
+    Font font = now.FontOf(xf);
+    bool fontChanged = false;
+    if (look.bold && !font.bold) font.bold = fontChanged = true;
+    if (look.italic && !font.italic) font.italic = fontChanged = true;
+    const uint32_t def = now.Resolve(now.DefaultFont().color, 0xFF000000);
+    if (look.fontColor.IsSet() && (!font.color.IsSet() || now.Resolve(font.color, 0xFF000000) == def) && !(font.color == look.fontColor)) {
+      font.color = look.fontColor;
+      fontChanged = true;
+    }
+    if (fontChanged) {
+      xf.font = AddFont(font);
+      xf.applyFont = true;
+    }
+    const Fill own = xf.fill < now.Fills().size() ? now.Fills()[xf.fill] : Fill{};
+    const bool fillChanged =
+        own.pattern == PatternType::None && !own.gradient && (look.fill.pattern != PatternType::None || look.fill.gradient);
+    if (fillChanged) {
+      Fill fill = look.fill;
+      if (fill.pattern == PatternType::Solid && !fill.bg.IsSet()) fill.bg = fill.fg;  // as Excel writes it
+      xf.fill = AddFill(fill);
+      xf.applyFill = true;
+    }
+    Border border = xf.border < now.Borders().size() ? now.Borders()[xf.border] : Border{};
+    bool borderChanged = false;
+    for (auto [mine, theirs] : {std::pair<BorderSide*, const BorderSide*>{&border.left, &look.left}, {&border.top, &look.top},
+                                {&border.bottom, &look.bottom}, {&border.right, &look.right}})
+      if (mine->style == BorderStyle::None && theirs->style != BorderStyle::None) {
+        *mine = *theirs;
+        borderChanged = true;
+      }
+    if (borderChanged) {
+      xf.border = AddBorder(border);
+      xf.applyBorder = true;
+    }
+    const uint32_t x = fontChanged || fillChanged || borderChanged ? AddXf(xf) : old;
+    made.push_back({old, look, x});
+    return x;
+  };
+  State& st = *s_;
+  SheetSave& sv = st.Save(s);
+  std::u16string why;
+  for (uint32_t row = t.ref.firstRow; row <= t.ref.lastRow; ++row)
+    for (uint32_t col = t.ref.firstCol; col <= t.ref.lastCol; ++col) {
+      const TableCellFormat look = TableFormat(*style, t, row, col);
+      if (look.Empty()) continue;
+      const uint32_t old = s.StyleAt(row, col);
+      const uint32_t x = bake(old, look);
+      if (x == old) continue;
+      if (!st.Put(sv, row, col, nullptr, false, x, why)) return Result::Fail(why);
+      baked.push_back({CellAddr{row, col}, x});
+    }
+  st.Change(&s, kStyles, t.ref);
+  return {};
+}
+
+Result Editor::RemoveTable(int sheet, size_t index) { return RemoveTableAs(sheet, index, nullptr); }
+
+Result Editor::RemoveTableAs(int sheet, size_t index, const BakedStyles* given) {
   Guard guard(*this);
   if (sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount())
     if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   Rec rec(*this, JournalOp::RemoveTable, [&](JournalRecord& w) { w.I(sheet).U(index); });
-  return rec.Done([&]() -> Result {
+  BakedStyles baked = given ? *given : BakedStyles{};
+  // The look's formats follow in the record, so a replay puts the same ones (AddXf's record of a
+  // format may not give it back exactly).
+  auto withLook = [&](Result r) {
+    if (r && rec.on) {
+      rec.rec.U(baked.size());
+      for (const auto& [a, x] : baked) rec.rec.U(a.row).U(a.col).U(x);
+    }
+    return r;
+  };
+  return rec.Done(withLook([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
@@ -5249,6 +5362,7 @@ Result Editor::RemoveTable(int sheet, size_t index) {
     return Run(*this, u"Convert to Range", [&]() -> Result {
       State& st = *s_;
       const Table t = s.Tables()[index];
+      if (Result r = KeepTableLook(s, t, baked, given != nullptr); !r) return r;
       std::string relId;
       if (const pkg::RelationshipSet* set = book_.GetPackage()->RelationshipsOf(s.PartName()))
         for (const pkg::Relationship& r : set->items)
@@ -5262,7 +5376,7 @@ Result Editor::RemoveTable(int sheet, size_t index) {
       st.Change(&s, kStyles | kRules | kTables, t.ref);
       return Result{};
     });
-  }());
+  }()));
 }
 
 Result Editor::SetTableFilter(int sheet, size_t index, const SheetFilter& f) {
@@ -5875,15 +5989,26 @@ Result Editor::SetPageSetup(int sheet, PageSetup page, const HeaderFooter& hf, b
       if (!XmlSafe(*t)) return Result::Fail(u"The paper size can't be stored.");
     detail::PartText& t = A::Text(s);
     const std::string p = xlsx::SheetPrefix(t);
-    const std::pair<const char*, std::string> parts[] = {
+    std::pair<const char*, std::string> parts[] = {
         {"pageMargins", pagexml::Margins(m, xlsx::SheetElement(t, "pageMargins"), p)},
         {"pageSetup", pagexml::Setup(page, xlsx::SheetElement(t, "pageSetup"), p)},
         {"headerFooter", pagexml::HeadersFooters(hf, xlsx::SheetElement(t, "headerFooter"), p)},
         {"printOptions", chart ? std::string() : pagexml::PrintOptions(page, xlsx::SheetElement(t, "printOptions"), p)},
         {"sheetPr", chart ? xlsx::SheetElement(t, "sheetPr") : pagexml::SheetPrFit(xlsx::SheetElement(t, "sheetPr"), fitToPage, p)}};
-    bool same = s.Props().fitToPage == fitToPage;
-    for (const auto& [local, xml] : parts) same = same && xml == xlsx::SheetElement(t, local);
-    if (same) return Result{};
+    auto same = [&] {
+      bool all = s.Props().fitToPage == fitToPage;
+      for (const auto& [local, xml] : parts) all = all && xml == xlsx::SheetElement(t, local);
+      return all;
+    };
+    if (same()) return Result{};
+    // Excel writes the orientation with every page setup it writes (portrait when the printer's
+    // default was never changed); without it, Excel reads Orientation as 0 until it paginates.
+    // (The same setup again, now portrait, is still no step.)
+    if (!chart && page.orientation == Orientation::Default) {
+      page.orientation = Orientation::Portrait;
+      parts[1].second = pagexml::Setup(page, xlsx::SheetElement(t, "pageSetup"), p);
+      if (same()) return Result{};
+    }
     return Run(*this, u"Page Setup", [&]() -> Result {
       State& st = *s_;
       SheetSave& sv = st.Save(s);

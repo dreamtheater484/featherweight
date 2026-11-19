@@ -22,6 +22,7 @@ class WorkbookData final : public chart::DataSource {
   WorkbookData(Workbook& book, int sheet) : book_(book), sheet_(sheet) {}
   bool Cells(std::string_view ref, std::vector<std::string>& texts, std::vector<double>& numbers,
              std::string* format) override;
+  bool Numbers(std::string_view ref, std::vector<double>& numbers) override;
 
  private:
   bool Collect(std::string_view ref, int depth, std::vector<std::string>& texts, std::vector<double>& numbers,
@@ -32,6 +33,7 @@ class WorkbookData final : public chart::DataSource {
 
   Workbook& book_;
   int sheet_;
+  bool numbersOnly_ = false;  // Numbers: the cells' texts left empty, not formatted
   std::unordered_map<uint32_t, NumberFormat> formats_;
 };
 

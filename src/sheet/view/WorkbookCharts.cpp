@@ -149,8 +149,9 @@ void WorkbookView::ObjectMouseMove(float x, float y, UINT mods) {
     if (h >= 2 && h <= 4) r.right = std::max(r.right + dx, r.left + least);
     if (h <= 2) r.top = std::min(r.top + dy, r.bottom - least);
     if (h >= 4 && h <= 6) r.bottom = std::max(r.bottom + dy, r.top + least);
-    // Shift on a corner keeps the shape's proportions, from the opposite corner.
-    if ((mods & kModShift) && h % 2 == 0 && d.start.Width() > 0 && d.start.Height() > 0) {
+    // Shift on a corner keeps the shape's proportions, from the opposite corner; a picture's corner
+    // always does (its aspect ratio locked, as Excel inserts it: s3-data's AspectLocked).
+    if (((mods & kModShift) || AspectLocked(object_, d.start)) && h % 2 == 0 && d.start.Width() > 0 && d.start.Height() > 0) {
       const float s = std::max(r.Width() / d.start.Width(), r.Height() / d.start.Height());
       const float w = d.start.Width() * s, ht = d.start.Height() * s;
       if (h == 0 || h == 6) r.left = r.right - w;
@@ -281,9 +282,9 @@ bool WorkbookView::PasteObjectClip() {
 // ---- Commands
 
 bool WorkbookView::ChartsCommandState(int cmd, CommandState& s) {
-  if (cmd < CmdInsertChart || cmd > CmdMoveChart) return false;
-  static const wchar_t* const kNames[] = {L"Column chart", L"Bar chart",  L"Line chart",   L"Pie chart",
-                                          L"Doughnut chart", L"Area chart", L"Scatter chart"};
+  if (cmd < CmdInsertChart || cmd > CmdChartCombo) return false;
+  static const wchar_t* const kNames[] = {L"Column chart",   L"Bar chart",  L"Line chart",    L"Pie chart",
+                                          L"Doughnut chart", L"Area chart", L"Scatter chart", L"Combo chart"};
   s.enabled = Ready() && !preview_ && !ChartSheet() && !Current().PartName().empty();
   if (cmd == CmdMoveChart && ChartSheet()) {  // Move Chart > Object in
     s.label = L"Move chart onto a sheet";
@@ -304,7 +305,7 @@ bool WorkbookView::ChartsCommandState(int cmd, CommandState& s) {
     const std::optional<SheetObjects::Object> sel = SelectedObject();
     s.enabled = s.enabled && sel && sel->chart;
   } else {
-    s.label = kNames[cmd - CmdChartColumn];
+    s.label = kNames[cmd == CmdChartCombo ? 7 : cmd - CmdChartColumn];
   }
   return true;
 }
@@ -327,7 +328,7 @@ void WorkbookView::MoveChartToSheet(uint32_t id) {
 }
 
 bool WorkbookView::ChartsCommand(int cmd) {
-  if (cmd < CmdInsertChart || cmd > CmdMoveChart) return false;
+  if (cmd < CmdInsertChart || cmd > CmdChartCombo) return false;
   if (cmd == CmdMoveChart && ChartSheet() && Ready() && !preview_) {
     // Onto the first worksheet, at B2 (Excel's dialog defaults to the first sheet), which shows.
     const int to = FirstWorksheet();
@@ -355,7 +356,8 @@ bool WorkbookView::ChartsCommand(int cmd) {
   if (editor_.Active() && !CommitEdit(false)) return true;
   edit::Editor::NewChart c;
   c.kind = cmd >= CmdChartColumn && cmd <= CmdChartScatter ? static_cast<edit::Editor::ChartKind>(cmd - CmdChartColumn)
-                                                           : edit::Editor::ChartKind::Column;
+            : cmd == CmdChartCombo                          ? edit::Editor::ChartKind::Combo
+                                                            : edit::Editor::ChartKind::Column;
   // The selected cells, or the data around the active cell, as Excel takes them.
   const Range sel = Selected();
   c.data = sel.firstRow == sel.lastRow && sel.firstCol == sel.lastCol ? data::CurrentRegion(Current(), active_) : sel;
@@ -391,9 +393,10 @@ void WorkbookView::AddChartTools(ToolbarModel& m) {
   chart.priority = 3;
   chart.text = L"Chart";
   chart.tooltip = L"Insert a chart of the selected cells";
-  chart.choices = {L"Column (Alt+F1)", L"Bar", L"Line", L"Pie", L"Doughnut", L"Area", L"Scatter"};
+  chart.choices = {L"Column (Alt+F1)", L"Bar", L"Line", L"Pie", L"Doughnut", L"Area", L"Scatter", L"Combo"};
   chart.onChange = [this](const ToolValue& v) {
     if (v.index >= 0 && v.index < 7) ChartsCommand(CmdChartColumn + v.index);
+    if (v.index == 7) ChartsCommand(CmdChartCombo);
   };
   m.left.push_back(chart);
 }
@@ -403,7 +406,7 @@ void WorkbookView::AddChartTools(ToolbarModel& m) {
 
 namespace {
 
-const wchar_t* const kKinds[] = {L"Column", L"Bar", L"Line", L"Pie", L"Doughnut", L"Area", L"Scatter"};
+const wchar_t* const kKinds[] = {L"Column", L"Bar", L"Line", L"Pie", L"Doughnut", L"Area", L"Scatter", L"Combo"};
 const wchar_t* const kLegends[] = {L"None", L"Bottom", L"Right", L"Top", L"Left"};
 constexpr char kLegendPos[] = {0, 'b', 'r', 't', 'l'};
 const wchar_t* const kPalettes[] = {L"Colorful", L"Blue", L"Orange", L"Gray", L"Green"};

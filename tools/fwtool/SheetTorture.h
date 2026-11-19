@@ -56,9 +56,9 @@ enum class Op : uint8_t {
                 // bar, icons, clear (the rules there go)
   Validation,   // data validation on `range`, replacing what's there; arg: list, list-ref, whole,
                 // decimal, length, custom (text: the list or formula), clear
-  Chart,        // Insert > Chart of `range` at `to`'s cell; arg: column, bar, line, pie, doughnut, area, scatter
+  Chart,        // Insert > Chart of `range` at `to`'s cell; arg: column, bar, line, pie, doughnut, area, scatter, combo
   Object,       // the drawing's object with shape id `count`; arg: delete, move (to `range`'s first cell),
-                // copy (pasted at `range`'s first cell), type-line, type-bar, title (its chart edited),
+                // copy (pasted at `range`'s first cell), type-line, type-bar, type-combo, title (its chart edited),
                 // tosheet (Move Chart > New sheet), and the Format panel's (s3-data's): fill and
                 // outline (text: RRGGBB), nofill, text and alt (text: the shape's text, the alt text)
   PageSetup,    // Page Setup on `sheet`, one thing changed; arg: portrait, landscape, a4, letter,

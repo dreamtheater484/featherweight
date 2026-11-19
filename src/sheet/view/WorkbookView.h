@@ -520,6 +520,23 @@ class WorkbookView : public PagedView {
   bool ShapesCommand(int cmd);
   void AddShapeTools(ToolbarModel& m);
   bool ShapesScriptOp(const std::wstring& arg);
+  // Objects that move but don't size with cells (editAs="oneCell": pictures as Excel inserts them)
+  // keep their size when row heights or column widths change under them: their sizes before the
+  // change, then put back inside the change's group (shapes and charts size with their cells).
+  struct HeldSize {
+    uint32_t id = 0;
+    float width = 0, height = 0;
+  };
+  std::vector<HeldSize> HeldSizes();
+  edit::Result KeepSizes(const std::vector<HeldSize>& held);
+  // Whether object `id` locks its aspect ratio (noChangeAspect, as Excel inserts a picture): a
+  // corner dragged from `start` keeps its proportions without Shift. Read once per drag.
+  bool AspectLocked(uint32_t id, const draw::Rect& start);
+  struct AspectSeen {
+    uint32_t id = 0;
+    draw::Rect start{};
+    bool locked = false;
+  } aspectSeen_;
   int TableIndexAt(CellAddr at);  // the shown sheet's table holding the cell, or -1
   void ShowTablePanel();
   bool CreateTable(Range r, bool headers, const std::string& style);

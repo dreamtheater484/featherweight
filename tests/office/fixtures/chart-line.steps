@@ -1,0 +1,29 @@
+# S3 fixture ("created as Excel shows it", s3-charts): a line chart of two series over six months.
+# Built through Insert > Chart on the selection; Excel reads back the type and series.
+sheet-name "Line"
+enter A1 "Month"
+enter B1 "Visits"
+enter C1 "Orders"
+enter A2 "Jan"
+enter B2 "320"
+enter C2 "40"
+enter A3 "Feb"
+enter B3 "410"
+enter C3 "52"
+enter A4 "Mar"
+enter B4 "380"
+enter C4 "61"
+enter A5 "Apr"
+enter B5 "450"
+enter C5 "58"
+enter A6 "May"
+enter B6 "520"
+enter C6 "70"
+enter A7 "Jun"
+enter B7 "490"
+enter C7 "66"
+chart A1:C7 line
+save
+expect chart Line 1 type 4 series 2
+expect chart Line 1 series 1 =SERIES(Line!$B$1,Line!$A$2:$A$7,Line!$B$2:$B$7,1)
+expect chart Line 1 series 2 =SERIES(Line!$C$1,Line!$A$2:$A$7,Line!$C$2:$C$7,2)

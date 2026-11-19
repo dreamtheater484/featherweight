@@ -1,0 +1,17 @@
+# S3 fixture ("created as Excel shows it", s3-charts): a pie of one series, a slice per fruit.
+# Built through Insert > Chart on the selection; Excel reads back the type and series.
+sheet-name "Pie"
+enter A1 "Fruit"
+enter B1 "Share"
+enter A2 "Apples"
+enter B2 "35"
+enter A3 "Pears"
+enter B3 "20"
+enter A4 "Plums"
+enter B4 "15"
+enter A5 "Cherries"
+enter B5 "30"
+chart A1:B5 pie
+save
+expect chart Pie 1 type 5 series 1
+expect chart Pie 1 series 1 =SERIES(Pie!$B$1,Pie!$A$2:$A$5,Pie!$B$2:$B$5,1)
