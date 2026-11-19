@@ -323,7 +323,7 @@ void EditOnce(Editor& ed, const Workbook& book, Rng& rng, int& groups, bool hadS
     }
   };
   const Styles& styles = book.GetStyles();
-  const uint32_t pick = rng.Below(36);
+  const uint32_t pick = rng.Below(37);
   // FUZZ_XLSX_SKIP=n leaves out edit n (narrowing a finding down by hand).
   if (const char* skip = std::getenv("FUZZ_XLSX_SKIP"); skip && std::atoi(skip) == static_cast<int>(pick)) return;
   // FUZZ_XLSX_TRACE: each edit picked, and on which sheet.
@@ -639,6 +639,32 @@ void EditOnce(Editor& ed, const Workbook& book, Rng& rng, int& groups, bool hadS
           if (hf.differentFirst) hf.firstFooter = kCodes[rng.Below(static_cast<uint32_t>(std::size(kCodes)))];
       }
       ed.SetPageSetup(sheet, p, hf, rng.Chance(30));
+      break;
+    }
+    case 36: {  // PivotTables (s4-pivot): inserted over some cells, refreshed at a cell or all
+      switch (rng.Below(3)) {
+        case 0: {
+          Editor::NewPivotTable p;
+          p.sourceSheet = rng.Chance(80) ? sheet : static_cast<int>(rng.Below(static_cast<uint32_t>(sheets + 1)));
+          p.source = range();
+          p.source.lastRow = std::min<uint32_t>(p.source.firstRow + 1 + rng.Below(12), kMaxRows - 1);
+          p.sheet = sheet;
+          p.at = {row(), col()};
+          const uint32_t width = p.source.lastCol - p.source.firstCol + 1;
+          for (uint32_t c = 0; c < width; ++c) switch (rng.Below(6)) {
+              case 0: p.rows.push_back(c); break;
+              case 1: p.cols.push_back(c); break;
+              case 2: p.filters.push_back(c); break;
+              case 3: p.values.push_back({c, static_cast<uint8_t>(rng.Below(5))}); break;
+              default: break;
+            }
+          if (rng.Chance(10)) p.rows.push_back(rng.Below(width + 2));  // twice, or past the source
+          ed.InsertPivot(p);
+          break;
+        }
+        case 1: ed.RefreshPivots(Editor::PivotRefresh::AtCell, sheet, {row(), col()}); break;
+        default: ed.RefreshPivots(rng.Chance(80) ? Editor::PivotRefresh::All : Editor::PivotRefresh::OnLoad); break;
+      }
       break;
     }
     case 35: {  // page breaks, print area and titles (s3-print)

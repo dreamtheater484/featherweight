@@ -68,6 +68,9 @@ enum class Op : uint8_t {
   Shape,        // Insert > Pictures or Shapes at `range`'s first cell (s3-data's); arg: picture, picture2
                 // (two small PNGs; text: the alt text), rect, roundrect, oval, line, arrow, textbox (text:
                 // what's typed in it)
+  Pivot,        // PivotTables (s4-pivot): arg insert (one over `range`, its first column as rows, the last
+                // summed, at `range`'s first cell two columns right of it), refresh (the pivot at
+                // `range`'s first cell), refresh-all
 };
 
 // One edit, as reproducers keep it. Sheets are tab indexes at the moment the edit is applied (names

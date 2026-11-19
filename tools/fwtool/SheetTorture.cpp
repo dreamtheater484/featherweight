@@ -64,6 +64,7 @@ constexpr struct {
     {Op::Thread, "thread"},         {Op::Table, "table"},             {Op::Rule, "rule"},
     {Op::Validation, "validation"}, {Op::Chart, "chart"},             {Op::Object, "object"},
     {Op::PageSetup, "pagesetup"},   {Op::PageBreak, "pagebreak"},     {Op::Shape, "shape"},
+    {Op::Pivot, "pivot"},
 };
 
 // The S3 edits whose text goes after the arg, quoted.
@@ -225,6 +226,7 @@ std::string FormatEdit(const Edit& e) {
       break;
     case Op::PageSetup: s += " " + std::to_string(e.sheet) + " " + e.arg; break;
     case Op::PageBreak: s += at(e.sheet, e.range) + " " + e.arg; break;
+    case Op::Pivot: s += at(e.sheet, e.range) + " " + e.arg; break;
   }
   if (!e.target.empty()) s += "  # " + e.target;
   return s;
@@ -334,6 +336,10 @@ bool ParseEdit(std::string_view line, Edit& e) {
       e.arg = std::string(NextWord(s));
       return !e.arg.empty();
     case Op::PageBreak:
+      if (!sheetRange(e.sheet, e.range)) return false;
+      e.arg = std::string(NextWord(s));
+      return !e.arg.empty();
+    case Op::Pivot:
       if (!sheetRange(e.sheet, e.range)) return false;
       e.arg = std::string(NextWord(s));
       return !e.arg.empty();
@@ -677,6 +683,17 @@ class EditApiTarget : public SheetTarget {
         return Applied::Refused;
       }
       case Op::PageSetup: return PageSetup(s, e.arg, why);
+      case Op::Pivot: {
+        if (e.arg == "refresh") return done(ed_.RefreshPivots(sh::edit::Editor::PivotRefresh::AtCell, s, {r.firstRow, r.firstCol}));
+        if (e.arg == "refresh-all") return done(ed_.RefreshPivots(sh::edit::Editor::PivotRefresh::All));
+        sh::edit::Editor::NewPivotTable p;
+        p.sourceSheet = p.sheet = s;
+        p.source = r;
+        p.at = {r.firstRow, std::min<uint32_t>(r.lastCol + 2, 16383)};
+        p.rows = {0};
+        if (r.lastCol > r.firstCol) p.values = {{r.lastCol - r.firstCol, 0}};
+        return done(ed_.InsertPivot(p));
+      }
       case Op::PageBreak: {
         const sh::Sheet& sheet = book_->GetSheet(static_cast<size_t>(s));
         std::vector<sh::PageBreak> rows = sheet.RowBreaks(), cols = sheet.ColBreaks();
@@ -1591,7 +1608,7 @@ class Generator {
   }
 
   // Charts and the drawing's objects (s3-charts), pictures and shapes (s3-data), page setup and page
-  // breaks (s3-print). `roll`: 0-25.
+  // breaks (s3-print), PivotTables (s4-pivot). `roll`: 0-25.
   void ObjectEdit(const sh::Workbook& book, const sh::Sheet& sheet, const sh::Range& area, uint32_t roll, Edit& e) {
     static const char* kTexts[] = {"", "Torture", "line one\nline two", "<&> \"quoted\"", "D\xC3\xA9penses \xE6\x97\xA5\xE6\x9C\xAC"};
     if (roll < 8) {
@@ -1630,11 +1647,16 @@ class Generator {
       static const char* kWhat[] = {"portrait", "landscape", "a4", "letter", "scale=75", "fit=1,0", "fit=1,1", "nofit",
                                     "margins=narrow", "margins=wide", "center", "header", "gridlines", "headings", "order"};
       e.arg = rng_.Pick(kWhat);
-    } else {
+    } else if (roll < 25 || rng_.Chance(50)) {
       e.op = Op::PageBreak;
       e.range = Cell(area);
       const uint32_t k = rng_.Below(20);
       e.arg = k < 12 ? "insert" : k < 17 ? "remove" : "reset";
+    } else {
+      e.op = Op::Pivot;
+      e.range = area;
+      const uint32_t k = rng_.Below(10);
+      e.arg = k < 5 ? "insert" : k < 8 ? "refresh" : "refresh-all";
     }
   }
 
