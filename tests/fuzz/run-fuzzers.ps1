@@ -60,6 +60,8 @@ $all = [ordered]@{
   fuzz_chart   = @{ Seeds = @("$seeds\chart", "$regressions\chart"); MaxLen = 65536 }
   # OpenDocument text import (D5): every .odt converts to a document that opens and passes the check, or is refused.
   fuzz_odt     = @{ Seeds = @("$seeds\odt", "$regressions\odt"); MaxLen = 65536 }
+  # OpenDocument spreadsheet import (S4): every .ods converts to a workbook that opens, passes the check and is read, or is refused.
+  fuzz_ods     = @{ Seeds = @("$seeds\ods", "$regressions\ods"); MaxLen = 65536 }
   # Workbooks (S1): the model and its .xlsx reader; every part it writes back says what it said.
   fuzz_xlsx    = @{ Seeds = @("$seeds\xlsx", "$seeds\package", "$regressions\xlsx"); MaxLen = 65536 }
   # Number formats and value parsing (S1): spans stay inside the text; an exact parse shows as written.
