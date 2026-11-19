@@ -275,6 +275,29 @@ class Builder {
     if (!l.path.Empty()) l.width = std::max(0.0f, l.path.Bounds().right);
     return l;
   }
+  // Text no wider than `width`: what fits of it followed by "…" when the whole is wider. Only text
+  // far too long for its place is cut (a name of hundreds of characters, fuzz_chart); what fits is
+  // as Text makes it.
+  Label Fit(const std::wstring& s, float size, float width, bool bold = false, const std::wstring& font = {}) const {
+    Label l = Text(s, size, bold, font);
+    if (l.width <= width || s.size() <= 1) return l;
+    const std::wstring_view cut = std::wstring_view(s).substr(0, 255);  // what Text outlines
+    const size_t k = Fitting(cut, l.width, width, L"…", size, bold, font);
+    return Text(std::wstring(cut.substr(0, k)) + L"…", size, bold, font);
+  }
+  // How many of the first characters of `s` (at least one, never half a surrogate pair) fit in
+  // `width` with `tail` after them, `whole` being the width of all of `s`: a guess in proportion,
+  // then fewer until they fit (text outlines are slow, a search through all of them slower).
+  size_t Fitting(std::wstring_view s, float whole, float width, std::wstring_view tail, float size, bool bold,
+                 const std::wstring& font) const {
+    if (s.size() <= 1) return s.size();
+    const float guess = whole > 0 ? s.size() * std::max(0.0f, width) / whole : 1;
+    size_t k = static_cast<size_t>(std::clamp(guess, 1.0f, static_cast<float>(s.size() - 1)));
+    while (k > 1 && Text(std::wstring(s.substr(0, k)) + std::wstring(tail), size, bold, font).width > width)
+      k -= std::max<size_t>(1, k / 8);
+    if (s[k] >= 0xDC00 && s[k] < 0xE000) k = k > 1 ? k - 1 : k + 1;
+    return k;
+  }
   // A label's width only, from its glyphs' advances (no outline: Text makes it when it's drawn).
   Label Measure(const std::wstring& s, float size) const {
     Label l;
@@ -506,6 +529,48 @@ std::vector<Entry> Entries(const Chart& ch, const draw::ColorContext& colors) {
   return out;
 }
 
+// Text on lines as Excel wraps a title or legend entry wider than `width`: at spaces, and within a
+// word too wide for a line of its own; at most `most` lines (the rest isn't shown). Text that fits
+// stays on one line as it is.
+std::vector<Label> WrapLines(const Builder& b, std::wstring_view s, float size, bool bold, const std::wstring& font,
+                             float width, size_t most) {
+  s = s.substr(0, 255);
+  const auto text = [&](std::wstring_view t) { return b.Text(std::wstring(t), size, bold, font); };
+  if (Label all = text(s); all.width <= width) return {std::move(all)};
+  std::vector<Label> lines;
+  std::wstring line;
+  const auto flush = [&] {
+    if (!line.empty() && lines.size() < most) lines.push_back(text(line));
+    line.clear();
+  };
+  for (size_t at = 0; at < s.size() && lines.size() < most;) {
+    size_t end = s.find(L' ', at);
+    if (end == std::wstring_view::npos) end = s.size();
+    std::wstring word(s.substr(at, end - at));
+    at = end + 1;
+    if (word.empty()) continue;
+    if (!line.empty()) {
+      if (text(line + L' ' + word).width <= width) {
+        line += L' ' + word;
+        continue;
+      }
+      flush();
+    }
+    // Alone on its line: a word too wide even so is broken where it stops fitting (whole
+    // characters, at least one a line).
+    while (lines.size() < most && word.size() > 1) {
+      const float whole = text(word).width;
+      if (whole <= width) break;
+      const size_t k = b.Fitting(word, whole, width, {}, size, bold, font);
+      lines.push_back(text(std::wstring_view(word).substr(0, k)));
+      word.erase(0, k);
+    }
+    line = std::move(word);
+  }
+  flush();
+  return lines;
+}
+
 // The legend at its side of `r` (Excel's PDFs): entries a line and 6 points apart down a side, or in
 // centered rows, each key before its name. Returns the room left for the plot: all of `r` when the
 // legend overlays it.
@@ -529,48 +594,82 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
     }
   };
   constexpr float kInset = 3.55f;  // points: the entries inside the room's edge
+  // An entry wider than `width` wraps as Excel wraps it, to at most as many lines as `room` holds;
+  // its lines `lp` apart. `names[i]`: entry i's lines, `wide[i]` the widest.
+  const float lp = kLine * ts;
+  std::vector<std::vector<Label>> names(entries.size());
+  std::vector<float> wide(entries.size());
+  const auto wrap = [&](float width, float room) {
+    const size_t most = room >= lp ? static_cast<size_t>(std::min(room / lp, 1000.0f)) : 1;
+    for (size_t i = 0; i < entries.size(); ++i) {
+      if (labels[i].width <= width) names[i] = {labels[i]};
+      else names[i] = WrapLines(b, entries[i].name, ts, false, {}, std::max(1.0f, width), most);
+      if (names[i].empty()) names[i].emplace_back();
+      wide[i] = 0;
+      for (const Label& l : names[i]) wide[i] = std::max(wide[i], l.width);
+    }
+  };
   if (pos == LegendPos::Right || pos == LegendPos::Left) {
     const float w = std::min(lead + widest, (r.right - r.left) * 0.45f);
+    wrap(w - lead, r.bottom - r.top);
     const float x = pos == LegendPos::Right ? r.right - kInset - w : r.left + kInset;
     const float pitch = 1.21f * ts + 6, mid = (r.top + r.bottom) / 2;
+    // Each line past an entry's first moves the entries after it down a line, all centered.
+    float extra = 0, before = 0;
+    for (const auto& n : names) extra += (n.size() - 1) * lp;
     for (size_t i = 0; i < entries.size(); ++i) {
-      const float cy = mid + (static_cast<float>(i) - (entries.size() - 1) / 2.0f) * pitch;
+      const float own = (names[i].size() - 1) * lp;
+      const float cy = mid + (static_cast<float>(i) - (entries.size() - 1) / 2.0f) * pitch - extra / 2 + before + own / 2;
+      before += own;
       if (cy < r.top || cy > r.bottom) continue;
       key(entries[i], x, cy);
-      b.Place(labels[i], x + lead, cy + kMiddle * ts, 0, text);
+      for (size_t k = 0; k < names[i].size(); ++k) b.Place(names[i][k], x + lead, cy - own / 2 + k * lp + kMiddle * ts, 0, text);
     }
     if (!overlay) (pos == LegendPos::Right ? r.right : r.left) = pos == LegendPos::Right ? x - 11.2f : x + w + 11.2f;
     return r;
   }
-  // Top or bottom: rows of entries, centered.
+  // Top or bottom: rows of entries, centered; an entry at most about 90 % of the chart's width
+  // (Excel), a row as tall as its tallest entry.
   const float gap = 0.976f * ts;
-  std::vector<std::vector<size_t>> rows(1);
-  float rowW = 0;
   const float avail = r.right - r.left;
+  wrap(0.9f * (avail + 2 * kPad) - lead, (r.bottom - r.top) / 2);
+  std::vector<std::vector<size_t>> rows(1);
+  std::vector<float> extra(1);
+  float rowW = 0;
   for (size_t i = 0; i < entries.size(); ++i) {
-    const float w = lead + labels[i].width + gap;
+    const float w = lead + wide[i] + gap;
     if (!rows.back().empty() && rowW + w - gap > avail) {
       if (rows.size() == 4) break;
       rows.emplace_back();
+      extra.push_back(0);
       rowW = 0;
     }
     rows.back().push_back(i);
+    extra.back() = std::max(extra.back(), (names[i].size() - 1) * lp);
     rowW += w;
   }
   const float pitch = kLine * ts + 2;
-  float baseline = pos == LegendPos::Bottom ? r.bottom - kInset - kDescent * ts - (rows.size() - 1) * pitch
+  // Rows that don't fit in the room aren't shown (the first always is).
+  float extras = 0;
+  for (float e : extra) extras += e;
+  while (rows.size() > 1 && kInset + (rows.size() - 1) * pitch + extras + ts > r.bottom - r.top) {
+    extras -= extra.back();
+    rows.pop_back();
+    extra.pop_back();
+  }
+  float baseline = pos == LegendPos::Bottom ? r.bottom - kInset - kDescent * ts - (rows.size() - 1) * pitch - extras
                                             : r.top + kInset + kAscent * ts;
   const float first = baseline;
-  for (const auto& row : rows) {
+  for (size_t k = 0; k < rows.size(); ++k) {
     float total = -gap;
-    for (size_t i : row) total += lead + labels[i].width + gap;
+    for (size_t i : rows[k]) total += lead + wide[i] + gap;
     float x = (r.left + r.right) / 2 - total / 2;
-    for (size_t i : row) {
-      key(entries[i], x, baseline - kMiddle * ts);
-      b.Place(labels[i], x + lead, baseline, 0, text);
-      x += lead + labels[i].width + gap;
+    for (size_t i : rows[k]) {
+      key(entries[i], x, baseline - kMiddle * ts + (names[i].size() - 1) * lp / 2);
+      for (size_t j = 0; j < names[i].size(); ++j) b.Place(names[i][j], x + lead, baseline + j * lp, 0, text);
+      x += lead + wide[i] + gap;
     }
-    baseline += pitch;
+    baseline += pitch + extra[k];
   }
   if (!overlay) {
     if (pos == LegendPos::Bottom) r.bottom = first - kAscent * ts - kTitleGap;
@@ -613,13 +712,16 @@ bool ShowsKey(const Group& g, const Series& s) { return s.keys.value_or(g.keys);
 
 void DrawPending(Builder& b, const std::vector<Pending>& labels, float ts, Color text, float W, float H) {
   const float box = kKey * ts, pitch = kLine * ts;
+  // As many lines as the chart is high, each no wider than the chart.
+  const size_t most = static_cast<size_t>(std::clamp((H - 5.7f) / pitch, 1.0f, 16.0f));
   for (const Pending& p : labels) {
     std::vector<Label> lines;
     float wide = 0;
-    for (size_t at = 0; at <= p.text.size() && lines.size() < 16;) {
+    const float room = std::max(1.0f, W - 5.7f - (p.key ? box + 0.506f * ts : 0));
+    for (size_t at = 0; at <= p.text.size() && lines.size() < most;) {
       size_t end = p.text.find(L'\n', at);
       if (end == std::wstring::npos) end = p.text.size();
-      lines.push_back(b.Text(p.text.substr(at, end - at), ts));
+      lines.push_back(b.Fit(p.text.substr(at, end - at), ts, room));
       wide = std::max(wide, lines.back().width);
       at = end + 1;
     }
@@ -681,51 +783,6 @@ std::wstring Wrapped(Builder& b, const std::vector<std::wstring>& parts, float w
     line += part;
   }
   return out + line;
-}
-
-// A title on lines as Excel wraps one wider than `width`: at spaces, and within a word too wide for
-// a line of its own; at most `most` lines (the rest isn't shown). One that fits stays as it is.
-std::vector<Label> TitleLines(const Builder& b, std::wstring_view s, float size, bool bold, const std::wstring& font,
-                              float width, size_t most) {
-  s = s.substr(0, 255);
-  const auto text = [&](std::wstring_view t) { return b.Text(std::wstring(t), size, bold, font); };
-  if (Label all = text(s); all.width <= width) return {std::move(all)};
-  std::vector<Label> lines;
-  std::wstring line;
-  const auto flush = [&] {
-    if (!line.empty() && lines.size() < most) lines.push_back(text(line));
-    line.clear();
-  };
-  for (size_t at = 0; at < s.size() && lines.size() < most;) {
-    size_t end = s.find(L' ', at);
-    if (end == std::wstring_view::npos) end = s.size();
-    std::wstring word(s.substr(at, end - at));
-    at = end + 1;
-    if (word.empty()) continue;
-    if (!line.empty()) {
-      if (text(line + L' ' + word).width <= width) {
-        line += L' ' + word;
-        continue;
-      }
-      flush();
-    }
-    // Alone on its line: a word too wide even so is broken where it stops fitting (whole
-    // characters, at least one a line).
-    while (lines.size() < most && word.size() > 1 && text(word).width > width) {
-      size_t lo = 1, hi = word.size() - 1;
-      while (lo < hi) {
-        const size_t mid = (lo + hi + 1) / 2;
-        if (text(std::wstring_view(word).substr(0, mid)).width <= width) lo = mid;
-        else hi = mid - 1;
-      }
-      if (word[lo] >= 0xDC00 && word[lo] < 0xE000) lo = lo > 1 ? lo - 1 : lo + 1;  // not inside a surrogate pair
-      lines.push_back(text(std::wstring_view(word).substr(0, lo)));
-      word.erase(0, lo);
-    }
-    line = std::move(word);
-  }
-  flush();
-  return lines;
 }
 
 // A pie (its first series) or a doughnut (a ring a series, the first innermost), in the room `r`.
@@ -1051,22 +1108,28 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   const std::vector<double> vticks = Ticks(vs), sticks = secondary ? Ticks(ss) : std::vector<double>();
   std::vector<Label> vlabels, slabels, clabels;
   float vw = 0, sw = 0, cw = 0;
+  // Labels up a side no wider than the room the plot leaves them, across the bottom no wider than
+  // the chart (more is cut).
+  const float sideRoom = (r.right - r.left) * 0.4f, catRoom = bar ? sideRoom : W;
   const auto catName = [&](size_t i) { return i < names.size() ? names[i] : std::to_wstring(i + 1); };
   if (ch.value.shown)
-    for (double v : vticks) vlabels.push_back(b.Text(FormatNumber(v, vformat), ts)), vw = std::max(vw, vlabels.back().width);
+    for (double v : vticks) vlabels.push_back(b.Fit(FormatNumber(v, vformat), ts, bar ? W : sideRoom)), vw = std::max(vw, vlabels.back().width);
   if (secondary && ch.secondary.shown)
-    for (double v : sticks) slabels.push_back(b.Text(FormatNumber(v, ch.secondary.format), ts)), sw = std::max(sw, slabels.back().width);
+    for (double v : sticks) slabels.push_back(b.Fit(FormatNumber(v, ch.secondary.format), ts, sideRoom)), sw = std::max(sw, slabels.back().width);
   const std::vector<double> xticks = scatter ? Ticks(xscale) : std::vector<double>();
   if (ch.category.shown) {
     if (scatter)
-      for (double v : xticks) clabels.push_back(b.Text(FormatNumber(v, ch.category.format), ts)), cw = std::max(cw, clabels.back().width);
+      for (double v : xticks) clabels.push_back(b.Fit(FormatNumber(v, ch.category.format), ts, W)), cw = std::max(cw, clabels.back().width);
     else
       // Hundreds of categories, of which only every so many labels show: the others measured by
       // their advances, their outlines made only when they're drawn (a redraw stays within a
-      // keystroke). The first and last, which the plot's edges allow for, are outlined.
+      // keystroke). The first and last, which the plot's edges allow for, are outlined. Each no
+      // wider than `catRoom`: an outlined one cut now, a measured one counted as cut and cut
+      // when it's drawn.
       for (size_t i = 0, n = std::min<size_t>(cats.n, 4096); i < n; ++i) {
         const bool outline = n <= kOutlinedLabels || i == 0 || i + 1 == n;
-        clabels.push_back(outline ? b.Text(catName(i), ts) : b.Measure(catName(i), ts));
+        clabels.push_back(outline ? b.Fit(catName(i), ts, catRoom) : b.Measure(catName(i), ts));
+        if (!outline) clabels.back().width = std::min(clabels.back().width, catRoom);
         cw = std::max(cw, clabels.back().width);
       }
   }
@@ -1080,7 +1143,7 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   std::vector<Title> titles;
   const auto title = [&](const Axis& ax, int side) {
     if (ax.title.empty()) return;
-    titles.push_back({b.Text(ax.title, ts, true), side});
+    titles.push_back({b.Fit(ax.title, ts, side == 2 ? W : H, true), side});
     if (ax.titleOverlay) return;
     const float room = kAxisTitle + ts + kAxisTitleGap;
     (side == 0 ? r.left : side == 1 ? r.right : r.bottom) += side == 0 ? room : -room;
@@ -1192,7 +1255,7 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     const size_t every = room > 0 ? std::max<size_t>(1, static_cast<size_t>(std::ceil(need / room))) : 1;
     for (size_t i = 0; i < clabels.size(); i += every) {
       const Point at = p.At(cats.Center(i), 0);
-      const Label l = clabels[i].path.Empty() && clabels[i].width > 0 ? b.Text(catName(i), ts) : clabels[i];
+      const Label l = clabels[i].path.Empty() && clabels[i].width > 0 ? b.Fit(catName(i), ts, catRoom) : clabels[i];
       if (bar) b.Place(l, P.left - kValueGap * ts, at.y + kMiddle * ts, 2, text);
       else b.Place(l, at.x, below, 1, text);
     }
@@ -1227,7 +1290,8 @@ void DrawRadar(Builder& b, const Chart& ch, Rect r, float ts, Color text, const 
   std::vector<Label> cats;
   float widest = 0;
   if (ch.category.shown)
-    for (size_t i = 0; i < n; ++i) cats.push_back(b.Text(i < names.size() ? names[i] : std::to_wstring(i + 1), ts)), widest = std::max(widest, cats.back().width);
+    for (size_t i = 0; i < n; ++i)
+      cats.push_back(b.Fit(i < names.size() ? names[i] : std::to_wstring(i + 1), ts, r.right - r.left)), widest = std::max(widest, cats.back().width);
   const float gapV = cats.empty() ? 0.0f : 4.7f, gapH = cats.empty() ? 0.0f : 3.0f, lineH = cats.empty() ? 0.0f : ts;
   const float R = std::min(r.bottom - r.top - 2 * (lineH + gapV), r.right - r.left - 2 * (widest + gapH)) / 2;
   if (!(R >= 4)) return;
@@ -1271,7 +1335,8 @@ void DrawRadar(Builder& b, const Chart& ch, Rect r, float ts, Color text, const 
   }
   // The value labels up the first spoke, the category names past each spoke's end.
   if (ch.value.shown)
-    for (double v : ticks) b.Place(b.Text(FormatNumber(v, ch.value.format), ts), c.x - ts, at(0, Clamp01(sc.At(v))).y + kMiddle * ts, 2, text);
+    for (double v : ticks)
+      b.Place(b.Fit(FormatNumber(v, ch.value.format), ts, r.right - r.left), c.x - ts, at(0, Clamp01(sc.At(v))).y + kMiddle * ts, 2, text);
   for (size_t i = 0; i < cats.size(); ++i) {
     const Point v = at(i, 1);
     const float dx = v.x - c.x;
@@ -1318,7 +1383,7 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
     // height; each line after the first takes a line's room from the plot.
     const float pitch = kLine * tts;
     const size_t most = std::max<size_t>(1, static_cast<size_t>(H / 2 / pitch));
-    const std::vector<Label> lines = TitleLines(b, ch.title, tts, ch.titleBold, ch.titleFont, 0.8f * W, most);
+    const std::vector<Label> lines = WrapLines(b, ch.title, tts, ch.titleBold, ch.titleFont, 0.8f * W, most);
     for (size_t k = 0; k < lines.size(); ++k)
       b.Place(lines[k], W / 2, top + kAscent * tts + k * pitch, 1, ch.titleColor.value_or(kText));
     return top + tts + kTitleGap + (lines.empty() ? 0 : lines.size() - 1) * pitch;
