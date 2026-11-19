@@ -4652,8 +4652,12 @@ Result Editor::SetTable(int sheet, size_t index, const Table& t) {
       for (size_t i = 0; i < now.columns.size(); ++i)
         if (now.columns[i].id == 0) now.columns[i].id = ++maxId;
       std::string xml = PartBytes(before.part);
-      if (xml.empty() || !xlsx::UpdateTableXml(xml, now) || !WritePart(before.part, std::move(xml)))
-        return Result::Fail(u"The table's part couldn't be written.");
+      if (xml.empty() || !xlsx::UpdateTableXml(xml, now)) return Result::Fail(u"The table's part couldn't be written.");
+      SheetFilter kept;
+      now.criteria.clear();
+      if (now.autoFilter && xlsx::ReadTableFilter(xml, kept)) now.criteria = std::move(kept.columns);
+      now.filtered = !now.criteria.empty();
+      if (!WritePart(before.part, std::move(xml))) return Result::Fail(u"The table's part couldn't be written.");
       SheetSave& sv = st.Save(s);
       st.SaveTables(sv);
       A::Tables(s)[index] = now;
@@ -4689,6 +4693,39 @@ Result Editor::RemoveTable(int sheet, size_t index) {
       st.SaveTables(sv);
       A::Tables(s).erase(A::Tables(s).begin() + static_cast<ptrdiff_t>(index));
       st.Change(&s, kStyles | kRules, t.ref);
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::SetTableFilter(int sheet, size_t index, const SheetFilter& f) {
+  Guard guard(*this);
+  if (sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount())
+    if (Result no = guard.Check(sheet, ProtectAct::Filter); !no) return no;
+  Rec rec(*this, JournalOp::SetTableFilter, [&](JournalRecord& w) { w.I(sheet).U(index).Filter(f); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (index >= s.Tables().size()) return Result::Fail(u"There's no such table.");
+    const Table& t = s.Tables()[index];
+    if (!t.autoFilter || !t.headerRows) return Result::Fail(u"The table has no filter buttons.");
+    SheetFilter now = f;
+    now.ref = t.ref;
+    if (t.totalsRows && now.ref.lastRow > now.ref.firstRow) --now.ref.lastRow;
+    const uint32_t width = t.ref.lastCol - t.ref.firstCol + 1;
+    std::erase_if(now.columns, [&](const FilterColumn& c) { return c.colId >= width; });
+    now.filtered = !now.columns.empty();
+    return Run(*this, u"Filter", [&]() -> Result {
+      State& st = *s_;
+      std::string xml = PartBytes(t.part);
+      if (xml.empty() || !xlsx::PutTableFilter(xml, FilterXml(now, "")) || !WritePart(t.part, std::move(xml)))
+        return Result::Fail(u"The table's part couldn't be written.");
+      SheetSave& sv = st.Save(s);
+      st.SaveTables(sv);
+      A::Tables(s)[index].filtered = now.filtered;
+      A::Tables(s)[index].criteria = now.columns;
+      st.Change(&s, kSheetProps, now.ref);
       return Result{};
     });
   }());

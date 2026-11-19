@@ -1050,13 +1050,17 @@ class WorkbookView::TablePanel : public PanelContent {
       Open();
       return;
     }
+    if (i == 5) {
+      v_.SetTableButtons(static_cast<size_t>(index_), on);
+      Open();
+      return;
+    }
     Change([&](Table& t) {
       switch (i) {
         case 1: t.style.rowStripes = on; break;
         case 2: t.style.columnStripes = on; break;
         case 3: t.style.firstColumn = on; break;
-        case 4: t.style.lastColumn = on; break;
-        default: t.autoFilter = on; break;
+        default: t.style.lastColumn = on; break;
       }
     });
   }
@@ -1345,6 +1349,7 @@ bool WorkbookView::TableScriptOp(const std::wstring& arg) {
   if (a[0] == L"convert") return RulesCommand(CmdConvertToRange);
   if (a[0] == L"style") return ChangeTable(i, [&](Table& t) { t.style.name = WideToUtf8(a[1]); }, u"Table");
   if (a[0] == L"name") return TableNameOk(WideToUtf8(a[1])) && ChangeTable(i, [&](Table& t) { t.name = t.displayName = WideToUtf8(a[1]); }, u"Table");
+  if (a[0] == L"option" && a[1] == L"filter") return SetTableButtons(i, !Current().Tables()[i].autoFilter);
   if (a[0] == L"option")
     return ChangeTable(i, [&](Table& t) {
       if (a[1] == L"rows") t.style.rowStripes = !t.style.rowStripes;

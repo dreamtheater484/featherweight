@@ -428,9 +428,19 @@ class WorkbookView : public PagedView {
     std::vector<FilterColumn> other;  // from the file, not edited here (colors, icons, dates): kept
   };
   ViewFilter filter_;
-  // The shown sheet's filter, read again from the model (Sheet::Filter, so undo and redo show), or
-  // null. The panel changes its criteria, then ApplyFilter.
+  // The filter the panel works on: -1 the sheet's, else the shown sheet's table with that index
+  // (its header buttons; s3-data).
+  int filterTable_ = -1;
+  // That filter, read again from the model (Sheet::Filter or the table's criteria, so undo and redo
+  // show), or null. The panel changes its criteria, then ApplyFilter.
   ViewFilter* FilterOf();
+  // Filter `table` (-1 the sheet's) into `out`; false when it has no buttons. The filters with
+  // buttons on the shown sheet: -1 for the sheet's, then the tables'.
+  bool ReadFilter(int table, ViewFilter& out);
+  std::vector<int> FilterAreas();
+  // A table's filter buttons on or off (Ctrl+Shift+L in a table, Table Design's Filter Button):
+  // off shows the rows its criteria hid.
+  bool SetTableButtons(size_t index, bool on);
   void ToggleFilter();
   // filter_ into the model (Editor::SetFilter: the file's autoFilter), and the rows its criteria
   // leave out hidden, the others shown; one undo step.

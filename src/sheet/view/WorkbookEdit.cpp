@@ -753,7 +753,7 @@ void WorkbookView::SyncEngine(const std::vector<edit::Change>& changes) {
   bool structure = false, cells = false;
   for (const edit::Change& c : changes) {
     structure |= (c.what & (edit::kSheets | edit::kNames | edit::kShift)) != 0;
-    cells |= (c.what & (edit::kValues | edit::kFormulas)) != 0;
+    cells |= (c.what & (edit::kValues | edit::kFormulas | edit::kRowProps)) != 0;
   }
   if (!structure && !cells) return;
   calc::WorkbookCalc& calc = Calc();
@@ -762,8 +762,17 @@ void WorkbookView::SyncEngine(const std::vector<edit::Change>& changes) {
     calc.StructureEdited();
     return;
   }
-  for (const edit::Change& c : changes)
+  for (const edit::Change& c : changes) {
     if (c.what & (edit::kValues | edit::kFormulas)) calc.CellsEdited(c.sheet, c.cells);
+    // s3-data: rows hidden or shown (a filter, undo): SUBTOTAL and AGGREGATE over them again.
+    if ((c.what & edit::kRowProps) && c.sheet >= 0 && !calc.Opening()) {
+      calc::Area rows;
+      rows.r1 = static_cast<int32_t>(std::min<uint32_t>(c.cells.firstRow, kMaxRows - 1));
+      rows.r2 = static_cast<int32_t>(std::min<uint32_t>(c.cells.lastRow, kMaxRows - 1));
+      rows.c2 = static_cast<int16_t>(kMaxCols - 1);
+      calc.engine().Changed(c.sheet, rows);
+    }
+  }
 }
 
 void WorkbookView::MoveAfterEntry(int dRow, int dCol) {

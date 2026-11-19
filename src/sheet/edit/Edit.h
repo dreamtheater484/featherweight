@@ -235,6 +235,9 @@ class Editor {
   Result AddTable(int sheet, Table t);
   Result SetTable(int sheet, size_t index, const Table& t);
   Result RemoveTable(int sheet, size_t index);
+  // The criteria of table `index`'s filter buttons (its autoFilter; `f.ref` is the table's, without
+  // the total row). The rows it hides are the caller's (HideRows), in the same group.
+  Result SetTableFilter(int sheet, size_t index, const SheetFilter& f);
 
   // ---- Package parts, for edit operations (charts, pictures, notes, comments, tables...): call
   // them inside the operation's group (Run, or BeginGroup and EndGroup); undo and redo take them

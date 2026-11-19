@@ -450,6 +450,14 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = RemoveTable(sheet, static_cast<size_t>(index));
         break;
       }
+      case JournalOp::SetTableFilter: {
+        const int sheet = f.Int();
+        const uint64_t index = f.U();
+        const std::optional<SheetFilter> filter = f.Filter();
+        if (f.Ok() && filter) r = SetTableFilter(sheet, static_cast<size_t>(index), *filter);
+        else if (f.Ok()) return damaged;
+        break;
+      }
       case JournalOp::AddDxf: {
         Dxf x;
         if (!xlsx::ReadStyleItem(f.S(), x)) return damaged;
