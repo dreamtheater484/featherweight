@@ -51,6 +51,7 @@ enum ChangeFlag : uint32_t {
   kView = 1u << 10,       // selection, active sheet, top-left cell, zoom (not undo steps)
   kObjects = 1u << 11,    // the sheet's notes, links or drawings moved (a sort): load them again
   kRules = 1u << 12,      // the sheet's conditional formats or validations changed: read them again
+  kTables = 1u << 13,     // a table added, removed, resized or renamed: structured references' areas differ
 };
 
 // Cells inserted or deleted (kShift): along `axis`, `count` rows or columns at `at` (> 0 inserted

@@ -956,6 +956,18 @@ class WorkbookView::TablePanel : public PanelContent {
     }
     convert_.text = L"Convert to range";
     convert_.onInvoke = [this] { v_.RulesCommand(CmdConvertToRange); };
+    resize_.text = L"Resize";
+    resize_.onInvoke = [this] {
+      Range r;
+      const std::string sq = SqrefOf(range_.Text());
+      if (index_ < 0) return;
+      if (sq.empty() || !ParseRange(sq, r)) {
+        v_.host_.ViewMessage(BannerKind::Warning, L"Type the table's new cells, such as A1:D20.");
+        return;
+      }
+      v_.ResizeTable(static_cast<size_t>(index_), r);
+      Open();
+    };
   }
 
   std::wstring Title() const override { return index_ >= 0 ? L"Table design" : L"Create table"; }
@@ -967,6 +979,7 @@ class WorkbookView::TablePanel : public PanelContent {
     std::vector<Control*> out{&range_, &headers_, &create_, &name_, &style_};
     for (PanelButton& b : option_) out.push_back(&b);
     out.push_back(&convert_);
+    out.push_back(&resize_);
     return out;
   }
 
@@ -985,6 +998,7 @@ class WorkbookView::TablePanel : public PanelContent {
       const bool on[] = {t.totalsRows != 0, t.style.rowStripes, t.style.columnStripes, t.style.firstColumn,
                          t.style.lastColumn, t.autoFilter};
       for (int i = 0; i < 6; ++i) option_[i].checked = on[i];
+      range_.SetText(Utf8ToWide(RangeName(t.ref)));
     } else {
       const Range r = v_.DataRange();
       range_.SetText(Utf8ToWide(RangeName(r)));
@@ -1005,8 +1019,8 @@ class WorkbookView::TablePanel : public PanelContent {
       y += 20 * u;
     };
     const bool design = index_ >= 0;
-    range_.visible = headers_.visible = create_.visible = !design;
-    name_.visible = convert_.visible = design;
+    headers_.visible = create_.visible = !design;
+    name_.visible = convert_.visible = resize_.visible = design;
     for (PanelButton& b : option_) b.visible = design;
     if (!design) {
       label(L"Where is the data for your table?");
@@ -1032,6 +1046,10 @@ class WorkbookView::TablePanel : public PanelContent {
         if (i % 2) y += 36 * u;
       }
       y += 8 * u;
+      label(L"Resize table: the new range");
+      range_.rc = RectF(left, y, left + half, y + 30 * u);
+      resize_.rc = RectF(left + half + gap, y, right, y + 30 * u);
+      y += 42 * u;
       convert_.rc = RectF(left, y, left + half, y + 30 * u);
     }
     v_.host_.ViewInvalidate();
@@ -1072,6 +1090,7 @@ class WorkbookView::TablePanel : public PanelContent {
   std::vector<std::string> styles_;
   ComboBox range_, name_;
   Dropdown style_;
+  PanelButton resize_;
   PanelButton headers_, create_, option_[6], convert_;
   std::vector<std::pair<const wchar_t*, D2D1_RECT_F>> labels_;
 };
@@ -1149,6 +1168,87 @@ bool WorkbookView::ChangeTable(size_t index, const std::function<void(Table&)>& 
   change(t);
   edit::EditGroup group(Ed(), name);
   if (EditRefused(Ed().SetTable(static_cast<int>(sheet_), index, t))) return false;
+  group.done = true;
+  host_.ViewInvalidate();
+  return true;
+}
+
+// A column a table takes (resized, or grown by typing beside it): its header cell's text, a
+// number or TRUE/FALSE as text; taken (without case), with 2, 3... after it; none, Excel's first
+// free ColumnN (measured: not its position).
+static std::string NewColumnName(const Value& header, const std::function<bool(const std::string&)>& taken) {
+  std::string n;
+  if (header.type == ValueType::String) n = std::string(header.text);
+  else if (header.type == ValueType::Number) {
+    char buf[40];
+    std::snprintf(buf, sizeof buf, "%.15g", header.number);
+    n = buf;
+  } else if (header.type == ValueType::Bool) n = header.boolean ? "TRUE" : "FALSE";
+  if (n.empty()) {
+    for (int k = 1;; ++k)
+      if (!taken(n = "Column" + std::to_string(k))) return n;
+  }
+  const std::string base = n;
+  for (int k = 2; taken(n); ++k) n = base + std::to_string(k);
+  return n;
+}
+
+bool WorkbookView::ResizeTable(size_t index, Range r) {
+  if (!Ready() || index >= Current().Tables().size()) return false;
+  const int sheet = static_cast<int>(sheet_);
+  const Table t = Current().Tables()[index];
+  const Range old = t.ref;
+  const bool overlaps = !(r.lastRow < old.firstRow || r.firstRow > old.lastRow || r.lastCol < old.firstCol || r.firstCol > old.lastCol);
+  if (r.firstRow != old.firstRow || !overlaps) {
+    host_.ViewMessage(BannerKind::Warning, L"The headers must remain in the same row, and the resulting table range must overlap the original table range.");
+    return false;
+  }
+  // The total row: to the new last row; when that's above the old one, just below the range.
+  Range now = r;
+  if (t.totalsRows && r.lastRow < old.lastRow) now.lastRow = r.lastRow + 1;
+  if (now.lastRow < now.firstRow + t.headerRows + t.totalsRows || now.lastCol - now.firstCol >= 16384) {
+    host_.ViewMessage(BannerKind::Warning, L"A table needs a row of data below its headers.");
+    return false;
+  }
+  if (now == old) return true;
+  edit::EditGroup group(Ed(), u"Resize Table");
+  edit::Result res;
+  if (t.totalsRows && now.lastRow != old.lastRow) {
+    // The rows between the old and the new total row turn: the total row's cells to its new row,
+    // the others one row toward the old one (Excel moves them so).
+    const uint32_t from = std::min(old.lastRow, now.lastRow), to = std::max(old.lastRow, now.lastRow);
+    const uint32_t n = to - from + 1;
+    std::vector<uint32_t> order(n);
+    for (uint32_t i = 0; i < n; ++i) order[i] = now.lastRow > old.lastRow ? (i + 1) % n : (i + n - 1) % n;
+    res = Ed().SortRows(sheet, Range{from, old.firstCol, to, old.lastCol}, order);
+  }
+  // The columns: those kept as they are, new ones named by their header cell (unique without
+  // case) or Excel's first free ColumnN, written there.
+  Table next = t;
+  next.ref = now;
+  next.columns.clear();
+  std::vector<std::pair<CellAddr, edit::CellInput>> headers;
+  const Sheet& s = Current();
+  auto taken = [&](const std::string& n) {
+    for (uint32_t col = now.firstCol; col <= now.lastCol; ++col)
+      if (col >= old.firstCol && col <= old.lastCol && NameEqualsNoCase(t.columns[col - old.firstCol].name, n)) return true;
+    return std::any_of(next.columns.begin(), next.columns.end(), [&](const TableColumn& c) { return NameEqualsNoCase(c.name, n); });
+  };
+  for (uint32_t col = now.firstCol; res && col <= now.lastCol; ++col) {
+    if (col >= old.firstCol && col <= old.lastCol) {
+      next.columns.push_back(t.columns[col - old.firstCol]);
+      continue;
+    }
+    const std::string n = NewColumnName(t.headerRows ? s.GetValue(now.firstRow, col) : Value{}, taken);
+    if (t.headerRows) {
+      const Value v = s.GetValue(now.firstRow, col);
+      if (!(v.type == ValueType::String && std::string(v.text) == n)) headers.emplace_back(CellAddr{now.firstRow, col}, edit::CellInput::Text(n));
+    }
+    next.columns.push_back(TableColumn{0, n});
+  }
+  if (res && !headers.empty()) res = Ed().SetCells(sheet, headers);
+  if (res) res = Ed().SetTable(sheet, index, next);
+  if (EditRefused(res)) return false;
   group.done = true;
   host_.ViewInvalidate();
   return true;
@@ -1309,11 +1409,8 @@ void WorkbookView::AutoExpandTable(int sheet, CellAddr cell) {
     if (below) {
       ++t.ref.lastRow;
     } else {
-      std::string name;
-      const Value h = s.GetValue(t.ref.firstRow, cell.col);
-      if (t.headerRows && h.type == ValueType::String) name = std::string(h.text);
-      for (uint32_t n = static_cast<uint32_t>(t.columns.size()) + 1; name.empty() || t.FindColumn(name) >= 0; ++n)
-        name = "Column" + std::to_string(n);
+      const Value h = t.headerRows ? s.GetValue(t.ref.firstRow, cell.col) : Value{};
+      const std::string name = NewColumnName(h, [&](const std::string& n) { return t.FindColumn(n) >= 0; });
       if (t.headerRows && !(h.type == ValueType::String && std::string(h.text) == name) &&
           EditRefused(Ed().SetCell(sheet, t.ref.firstRow, cell.col, edit::CellInput::Text(name))))
         return;
@@ -1328,7 +1425,7 @@ void WorkbookView::AutoExpandTable(int sheet, CellAddr cell) {
 
 bool WorkbookView::TableScriptOp(const std::wstring& arg) {
   // table:create[,noheaders][,<style>]; table:total; table:style,<name>; table:option,<rows|cols|first|last|filter>;
-  // table:name,<name>; table:convert. On the active cell's table (create: the selection).
+  // table:name,<name>; table:convert; table:resize,<range>. On the active cell's table (create: the selection).
   std::vector<std::wstring> a;
   for (size_t i = 0;;) {
     const size_t e = arg.find(L',', i);
@@ -1347,6 +1444,10 @@ bool WorkbookView::TableScriptOp(const std::wstring& arg) {
   const size_t i = static_cast<size_t>(index);
   if (a[0] == L"total") return SetTotalRow(i, Current().Tables()[i].totalsRows == 0);
   if (a[0] == L"convert") return RulesCommand(CmdConvertToRange);
+  if (a[0] == L"resize") {
+    Range r;
+    return ParseRange(WideToUtf8(a[1]), r) && ResizeTable(i, r);
+  }
   if (a[0] == L"style") return ChangeTable(i, [&](Table& t) { t.style.name = WideToUtf8(a[1]); }, u"Table");
   if (a[0] == L"name") return TableNameOk(WideToUtf8(a[1])) && ChangeTable(i, [&](Table& t) { t.name = t.displayName = WideToUtf8(a[1]); }, u"Table");
   if (a[0] == L"option" && a[1] == L"filter") return SetTableButtons(i, !Current().Tables()[i].autoFilter);

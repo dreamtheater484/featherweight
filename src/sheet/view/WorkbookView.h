@@ -498,6 +498,10 @@ class WorkbookView : public PagedView {
   void ShowTablePanel();
   bool CreateTable(Range r, bool headers, const std::string& style);
   bool ChangeTable(size_t index, const std::function<void(Table&)>& change, const char16_t* name);
+  // Table Design > Resize Table, by Excel's rules (measured): the header row stays, the range
+  // overlaps the table's; new columns are named by their header cell or ColumnN, columns and rows
+  // left out keep their cells; the total row moves to the new last row (or, smaller, just below).
+  bool ResizeTable(size_t index, Range r);
   bool SetTotalRow(size_t index, bool on);
   bool ConvertToRange(size_t index);
   void AutoExpandTable(int sheet, CellAddr cell);  // a value typed just below or right of a table  // formulas that use the table refer to its cells instead

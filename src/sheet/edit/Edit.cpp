@@ -4614,7 +4614,7 @@ Result Editor::AddTable(int sheet, Table t) {
       xlsx::PutTablePart(A::Text(s), id, true);
       st.SaveTables(sv);
       A::Tables(s).push_back(t);
-      st.Change(&s, kStyles | kRules, t.ref);
+      st.Change(&s, kStyles | kRules | kTables, t.ref);
       return Result{};
     });
   }());
@@ -4663,7 +4663,7 @@ Result Editor::SetTable(int sheet, size_t index, const Table& t) {
       A::Tables(s)[index] = now;
       const Range all{std::min(before.ref.firstRow, now.ref.firstRow), std::min(before.ref.firstCol, now.ref.firstCol),
                       std::max(before.ref.lastRow, now.ref.lastRow), std::max(before.ref.lastCol, now.ref.lastCol)};
-      st.Change(&s, kStyles | kRules, all);
+      st.Change(&s, kStyles | kRules | kTables, all);
       return Result{};
     });
   }());
@@ -4692,7 +4692,7 @@ Result Editor::RemoveTable(int sheet, size_t index) {
       if (!relId.empty()) xlsx::PutTablePart(A::Text(s), relId, false);
       st.SaveTables(sv);
       A::Tables(s).erase(A::Tables(s).begin() + static_cast<ptrdiff_t>(index));
-      st.Change(&s, kStyles | kRules, t.ref);
+      st.Change(&s, kStyles | kRules | kTables, t.ref);
       return Result{};
     });
   }());
