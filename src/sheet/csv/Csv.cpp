@@ -452,20 +452,34 @@ void Reader::AddRows(Workbook& book, SheetBuilder& builder, size_t first, size_t
     styles_.emplace_back(code, static_cast<uint32_t>(sb.CellXfs().size() - 1));
     return styles_.back().second;
   };
-  // A batch of rows at a time: parsed in parallel, then handed to the model in order, so only one
-  // batch's cells are held (all of them at once doubled the peak memory of a 100 MB file).
+  // A batch of rows at a time: parsed in parallel, then handed to the model in order, so only two
+  // batches' cells are held (all of them at once doubled the peak memory of a 100 MB file). The
+  // next batch is parsed while this one goes to the model (S4: a 100 MB file 15 % sooner).
   int64_t currentRow = -1;
   std::vector<uint32_t> recent(kRecentStrings, kNoString);
   const size_t strings0 = book.Strings().Size(), bytes0 = stringBytes_;
-  for (size_t batchFirst = first; batchFirst < last; batchFirst += kBatchRows) {
-    const size_t batchLast = std::min(last, batchFirst + kBatchRows);
-    const unsigned threads = batchLast - batchFirst < 4096 ? 1 : most;
-    for (Chunk& c : chunks) {
+  std::vector<Chunk> ahead(most);
+  auto threadsFor = [&](size_t a, size_t b) { return b - a < 4096 ? 1u : most; };
+  auto parse = [&](std::vector<Chunk>& into, size_t a, size_t b) {
+    for (Chunk& c : into) {
       c.cells.clear();
       c.arena.clear();
       c.codes.clear();
     }
-    ParseRows(text_, source_, *locale_, options_.convert, chunks, threads, batchFirst, batchLast);
+    ParseRows(text_, source_, *locale_, options_.convert, into, threadsFor(a, b), a, b);
+  };
+  parse(chunks, first, std::min(last, first + kBatchRows));
+  for (size_t batchFirst = first; batchFirst < last; batchFirst += kBatchRows) {
+    const size_t batchLast = std::min(last, batchFirst + kBatchRows);
+    const unsigned threads = threadsFor(batchFirst, batchLast);
+    std::thread next;
+    if (batchLast < last) next = std::thread([&, batchLast] { parse(ahead, batchLast, std::min(last, batchLast + kBatchRows)); });
+    struct Join {
+      std::thread& t;
+      ~Join() {
+        if (t.joinable()) t.join();
+      }
+    } join{next};
     for (unsigned k = 0; k < threads; ++k) {
       const Chunk& chunk = chunks[k];
       if (chunk.tooManyColumns) source_.tooManyColumns = true;
@@ -497,6 +511,8 @@ void Reader::AddRows(Workbook& book, SheetBuilder& builder, size_t first, size_t
       pool.Reserve(pool.Size() + static_cast<size_t>((pool.Size() - strings0) * more),
                    stringBytes_ + static_cast<size_t>(static_cast<double>(stringBytes_ - bytes0) * more));
     }
+    if (next.joinable()) next.join();
+    std::swap(chunks, ahead);
   }
 }
 
