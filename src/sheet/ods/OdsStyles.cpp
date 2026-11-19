@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <iterator>
 #include <map>
 
 #include "pkg/Odf.h"
@@ -81,6 +83,21 @@ Kind KindOf(xml_node style) {
 
 // Literal text in a format code: bare where Excel shows the character as it is, otherwise
 // escaped or quoted.
+// number:transliteration-format ("١", "۱", "१", ...) -> the digit system byte of an Excel locale tag
+// ([$-3000401]: 03); 0 for ASCII digits.
+uint32_t DigitSystem(std::string_view format) {
+  if (format.size() < 2) return 0;
+  const auto* b = reinterpret_cast<const unsigned char*>(format.data());
+  uint32_t cp = 0;
+  if ((b[0] & 0xE0) == 0xC0) cp = (b[0] & 0x1Fu) << 6 | (b[1] & 0x3Fu);
+  else if ((b[0] & 0xF0) == 0xE0 && format.size() >= 3) cp = (b[0] & 0x0Fu) << 12 | (b[1] & 0x3Fu) << 6 | (b[2] & 0x3Fu);
+  static constexpr uint16_t kOnes[] = {0x0661, 0x06F1, 0x0967, 0x09E7, 0x0A67, 0x0AE7, 0x0B67, 0x0BE7, 0x0C67,
+                                       0x0CE7, 0x0D67, 0x0E51, 0x0ED1, 0x0F21, 0x1041, 0x1369, 0x17E1, 0x1811};
+  for (size_t k = 0; k < std::size(kOnes); ++k)
+    if (cp == kOnes[k]) return static_cast<uint32_t>(k + 2);  // 02 Arabic-Indic ... 13 Mongolian
+  return 0;
+}
+
 void Literal(std::string_view text, Kind kind, std::string& out) {
   const bool dates = kind == Kind::Date || kind == Kind::Time;
   std::string quoted;
@@ -362,7 +379,7 @@ std::string Styles::Section(xml_node style, bool& text) {
   const Kind kind = KindOf(style);
   std::string out, color;
   const bool elapsed = Attr(style, "number:truncate-on-overflow") == "false";
-  bool firstUnit = true;
+  bool firstUnit = true, era = false;  // era: Japan's eras (gengou) -> [$-411] g / e
   for (xml_node c : style.children()) {
     const std::string_view n = c.name();
     if (n == "style:text-properties") {
@@ -407,7 +424,11 @@ std::string Styles::Section(xml_node style, bool& text) {
       }
       out += std::string(IntAttr(c, "number:min-numerator-digits", 1, 1, 5), '?') + "/";
       const int den = IntAttr(c, "number:denominator-value", 0, 0, 99999);
-      out += den > 0 ? std::to_string(den) : std::string(IntAttr(c, "number:min-denominator-digits", 1, 1, 5), '?');
+      // Excel sizes the denominator by number:max-denominator-value (9999 -> ????).
+      const int maxDen = IntAttr(c, "number:max-denominator-value", 0, 0, 99999);
+      const int digits = std::max(IntAttr(c, "number:min-denominator-digits", 1, 1, 5),
+                                  static_cast<int>(std::to_string(std::max(maxDen, 1)).size()));
+      out += den > 0 ? std::to_string(den) : std::string(digits, '?');
     } else if (n == "number:text") {
       Literal(c.text().get(), kind, out);
     } else if (n == "number:text-content") {
@@ -426,7 +447,12 @@ std::string Styles::Section(xml_node style, bool& text) {
       const bool lng = Attr(c, "number:style") == "long";
       out += Attr(c, "number:textual") == "true" ? (lng ? "mmmm" : "mmm") : (lng ? "mm" : "m");
     } else if (n == "number:year") {
-      out += Attr(c, "number:style") == "long" ? "yyyy" : "yy";
+      const bool lng = Attr(c, "number:style") == "long";
+      if (Attr(c, "number:calendar") == "gengou") era = true;
+      out += Attr(c, "number:calendar") == "gengou" ? (lng ? "ee" : "e") : (lng ? "yyyy" : "yy");
+    } else if (n == "number:era") {
+      era = era || Attr(c, "number:calendar") == "gengou" || Attr(style, "number:language") == "ja";
+      out += Attr(c, "number:style") == "long" ? "ggg" : "g";
     } else if (n == "number:day-of-week") {
       out += Attr(c, "number:style") == "long" ? "dddd" : "ddd";
     } else if (n == "number:hours" || n == "number:minutes" || n == "number:seconds") {
@@ -440,6 +466,14 @@ std::string Styles::Section(xml_node style, bool& text) {
     } else if (n == "number:am-pm") {
       out += "AM/PM";
     }
+  }
+  if (era && !out.empty()) out = "[$-411]" + out;
+  if (const uint32_t digits = DigitSystem(Attr(style, "number:transliteration-format")); digits && !out.empty()) {
+    const std::string_view lang = Attr(style, "number:language");
+    const uint32_t lcid = lang == "ar" ? 0x401 : lang == "fa" ? 0x429 : 0;
+    char tag[24];
+    std::snprintf(tag, sizeof tag, "[$-%X]", static_cast<unsigned>(digits << 24 | lcid));
+    out = tag + out;
   }
   return color + out;  // empty: the section shows nothing
 }

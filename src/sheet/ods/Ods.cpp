@@ -147,7 +147,7 @@ bool IsError(std::string_view s) {
   return false;
 }
 
-// A cell's text: its paragraphs on lines of their own, spaces, tabs and line breaks as written.
+// A cell's text: its paragraphs on lines of their own, spaces and line breaks as written.
 void Inline(xml_node n, std::string& out, int depth, std::string* link) {
   for (xml_node c : n.children()) {
     if (c.type() == pugi::node_pcdata || c.type() == pugi::node_cdata) {
@@ -160,10 +160,11 @@ void Inline(xml_node n, std::string& out, int depth, std::string* link) {
       const int count = std::clamp(std::atoi(std::string(Attr(c, "text:c")).c_str()), 1, 1000);
       out.append(count, ' ');
     } else if (name == "text:tab") {
-      out += '\t';
+      out += ' ';  // Excel reads a tab in .ods cell text as a space
     } else if (name == "text:line-break") {
       out += '\n';
-    } else if (name == "office:annotation" || name == "text:note" || name == "draw:frame") {
+    } else if (name == "office:annotation" || name == "text:note" || name == "draw:frame" ||
+               name == "text:ruby-text") {  // phonetic guide: Excel shows only the base text
       continue;
     } else if (depth < kMaxDepth) {
       if (name == "text:a" && link && link->empty()) *link = Attr(c, "xlink:href");

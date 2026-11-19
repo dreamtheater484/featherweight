@@ -58,24 +58,31 @@ TEST(sheet_ods_converts_a_spreadsheet) {
       "xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" "
       "xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" "
       "xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" "
+      "xmlns:number=\"urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0\" "
       "xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\" "
       "xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><office:automatic-styles>"
       "<style:style style:name=\"cf1\" style:family=\"table-cell\"><style:text-properties fo:color=\"#FF0000\"/></style:style>"
       "<style:style style:name=\"ce1\" style:family=\"table-cell\"><style:map style:condition=\"of:cell-content()&gt;2\" "
       "style:apply-style-name=\"cf1\" style:base-cell-address=\"Data.B1\"/></style:style>"
+      "<number:date-style style:name=\"N1\"><number:era number:calendar=\"gengou\" number:style=\"long\"/>"
+      "<number:year number:calendar=\"gengou\"/><number:text>/</number:text><number:month/></number:date-style>"
+      "<style:style style:name=\"ce2\" style:family=\"table-cell\" style:data-style-name=\"N1\"/>"
       "</office:automatic-styles><office:body><office:spreadsheet>"
       "<table:table table:name=\"Data\"><table:table-column table:number-columns-repeated=\"3\"/>"
       "<table:table-row><table:table-cell office:value-type=\"string\"><text:p>Total_x0041_</text:p></table:table-cell>"
       "<table:table-cell table:style-name=\"ce1\" office:value-type=\"float\" office:value=\"2.5\"><text:p>2.5</text:p>"
       "</table:table-cell>"
-      "<table:table-cell office:value-type=\"date\" office:date-value=\"2000-01-01T12:00:00\"><text:p>x</text:p></table:table-cell>"
+      "<table:table-cell table:style-name=\"ce2\" office:value-type=\"date\" office:date-value=\"2000-01-01T12:00:00\">"
+      "<text:p>x</text:p></table:table-cell>"
       "</table:table-row>"
       "<table:table-row table:number-rows-repeated=\"2\"><table:table-cell office:value-type=\"float\" office:value=\"5\" "
       "table:formula=\"of:=[.B1]*2\"><text:p>5</text:p></table:table-cell>"
       "<table:table-cell table:number-columns-spanned=\"2\" office:value-type=\"boolean\" office:boolean-value=\"true\">"
       "<text:p>TRUE</text:p></table:table-cell><table:covered-table-cell/></table:table-row>"
       "<table:table-row><table:table-cell><office:annotation office:display=\"true\"><dc:creator>Roy</dc:creator>"
-      "<text:p>Check</text:p><text:p>this</text:p></office:annotation></table:table-cell></table:table-row>"
+      "<text:p>Check</text:p><text:p>this</text:p></office:annotation></table:table-cell>"
+      "<table:table-cell office:value-type=\"string\"><text:p><text:ruby><text:ruby-base>Tokyo</text:ruby-base>"
+      "<text:ruby-text>kana</text:ruby-text></text:ruby><text:tab/>x</text:p></table:table-cell></table:table-row>"
       "<table:table-row table:number-rows-repeated=\"1048572\"><table:table-cell table:number-columns-repeated=\"16384\"/>"
       "</table:table-row></table:table></office:spreadsheet></office:body></office:document-content>";
   fw::pkg::MemorySink sink;
@@ -105,6 +112,7 @@ TEST(sheet_ods_converts_a_spreadsheet) {
   CHECK(s.GetValue(1, 1).type == ValueType::Bool && s.GetValue(1, 1).boolean);
   CHECK(s.Merges().size() == 2);
   CHECK(s.GetValue(5, 0).type == ValueType::Empty);
+  CHECK(s.GetValue(3, 1).text == "Tokyo x");  // phonetic guide dropped, tab read as a space (as Excel does)
   // The condition on B1's style, and the note on A4.
   auto part = [&](const char* name) {
     std::vector<uint8_t> bytes;
@@ -115,6 +123,7 @@ TEST(sheet_ods_converts_a_spreadsheet) {
   CHECK(sheet.find("<conditionalFormatting sqref=\"B1\"><cfRule type=\"cellIs\" operator=\"greaterThan\" dxfId=\"0\"") !=
         std::string::npos);
   CHECK(sheet.find("<formula>2</formula>") != std::string::npos);
+  CHECK(styles.find("formatCode=\"[$-411]ggge/m\"") != std::string::npos);  // Japan's eras
   CHECK(styles.find("<dxfs count=\"1\"><dxf><font><color rgb=\"FFFF0000\"/></font></dxf></dxfs>") != std::string::npos);
   const std::string comments = part("/xl/comments1.xml");
   CHECK(comments.find("ref=\"A4\"") != std::string::npos && comments.find("Check") != std::string::npos &&
