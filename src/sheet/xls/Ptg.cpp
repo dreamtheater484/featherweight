@@ -1,6 +1,7 @@
 // BIFF8 parsed formulas ([MS-XLS] 2.5.198 Rgce, 2.5.98 Ptg) into Excel's invariant formula text,
 // as an .xlsx file stores it. Formulas are stored in reverse Polish order; this runs them on a stack
 // of texts. Anything it doesn't know fails the formula, whose cell then keeps its cached value.
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 
@@ -252,6 +253,16 @@ class Decompiler {
         static const char* const kOps[] = {"+", "-", "*", "/", "^", "&", "<", "<=", "=", ">=", ">", "<>", " ", ",", ":"};
         std::string r, l;
         if (!Pop(r) || !Pop(l)) return false;
+        if (base == 0x11) {
+          // "Name:Sheet!A1" would read as a range of sheets: Excel quotes the sheet ('Sheet'!A1).
+          const size_t bang = r.find('!');
+          if (bang != std::string::npos && bang > 0 && r[0] != '\'' &&
+              std::all_of(r.begin(), r.begin() + bang, [](char c) {
+                return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.' ||
+                       static_cast<unsigned char>(c) >= 0x80;
+              }))
+            r = "'" + r.substr(0, bang) + "'" + r.substr(bang);
+        }
         std::string op = pending_ + kOps[base - 0x03];
         pending_.clear();
         if (l.size() + r.size() + op.size() > kMaxText) return false;
