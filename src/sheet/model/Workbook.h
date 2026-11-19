@@ -158,6 +158,9 @@ class Workbook {
 
   // ---- Building (CSV, tests)
   Sheet& AddSheet(std::string name);
+  // A CSV file read again in full on a worker (S4: its first rows were shown meanwhile): the
+  // first sheet's cells, the strings and the styles become `other`'s, and `other` gets these.
+  void SwapCells(Workbook& other);
   void SetFormat(FileFormat f) { format_ = f; }
   void SetDate1904(bool b) { date1904_ = b; }
 

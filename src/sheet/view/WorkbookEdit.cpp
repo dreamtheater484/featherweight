@@ -361,7 +361,7 @@ void WorkbookView::DrawEditLine(Canvas& c, std::wstring_view line, int lineAt, f
 }
 
 edit::Editor& WorkbookView::Ed() {
-  CsvRest(0);  // a CSV file still being read: all of it first
+  if (csvLoad_) WorkDone();  // a CSV file still being read: all of it first
   if (!edit_) {
     edit_ = std::make_unique<edit::Editor>(*book_);
     edit_->OnChange([this](const std::vector<edit::Change>& changes) { Edited(changes); });

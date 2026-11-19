@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
@@ -74,24 +75,27 @@ WorkbookView::WorkbookView(ViewHost& host, std::wstring path)
   zoomMode_ = fw::ZoomMode::FitPage;
 }
 
-WorkbookView::~WorkbookView() = default;
+struct WorkbookView::CsvLoad {
+  std::unique_ptr<pkg::Snapshot> snapshot;  // the file's bytes, which the worker reads
+  Workbook book;                            // the whole file, once the worker is done
+  std::thread worker;
+};
 
-void WorkbookView::CsvRest(double deadlineMs) {
-  if (!csvReader_) return;
-  const size_t rows = csvReader_->RowCount();
-  {
-    SheetBuilder builder(book_->GetSheet(0));
-    do {
-      const size_t end = std::min(rows, csvNext_ + 16384);
-      csvReader_->AddRows(*book_, builder, csvNext_, end);
-      csvNext_ = end;
-    } while (csvNext_ < rows && (deadlineMs <= 0 || anim::Now() < deadlineMs));
-  }
-  if (csvNext_ < rows) return;  // the screen shows the first rows already: nothing to paint yet
-  csvReader_.reset();
-  csvSnapshot_.reset();
-  totals_ = Totals{};  // the status bar's sums may cover rows read now
-  host_.ViewStateChanged();  // the scroll bars reach the last row
+WorkbookView::~WorkbookView() {
+  if (csvLoad_ && csvLoad_->worker.joinable()) csvLoad_->worker.join();
+}
+
+// The worker read the whole CSV file: its cells take the place of the first rows shown (the same
+// values, so the screen stays as it is), at once; the scroll bars now reach the last row.
+void WorkbookView::WorkDone() {
+  if (!csvLoad_) return;
+  if (csvLoad_->worker.joinable()) csvLoad_->worker.join();
+  book_->SwapCells(csvLoad_->book);
+  csvLoad_.reset();
+  text_->Clear();
+  totals_ = Totals{};
+  host_.ViewStateChanged();
+  host_.ViewInvalidate();
 }
 
 std::unique_ptr<WorkbookView> WorkbookView::NewWorkbook(ViewHost& host, int number) {
@@ -143,25 +147,40 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     auto csvBook = std::make_unique<Workbook>();
     std::wstring sheetName = name.substr(0, name.rfind(L'.'));
     if (sheetName.size() > 31) sheetName.resize(31);
-    // The first screen's rows now, the rest at idle (CsvRest).
-    auto reader = std::make_unique<csv::Reader>(
-        std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), o);
-    Sheet& sheet = csv::NewSheet(*csvBook, WideToUtf8(sheetName));
-    constexpr size_t kFirstRows = 2000;
-    const size_t first = std::min(reader->RowCount(), kFirstRows);
-    {
-      SheetBuilder builder(sheet);
-      reader->AddRows(*csvBook, builder, 0, first);
+    const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    const std::string utf8Name = WideToUtf8(sheetName);
+    // A large file: the rows of its first megabyte now (the last, perhaps cut, left out), the whole
+    // file on a worker, which then takes their place (WorkDone).
+    constexpr size_t kLarge = 4u << 20, kPrefix = 1u << 20;
+    bool background = false;
+    if (text.size() > kLarge) {
+      csv::Reader first(text.substr(0, kPrefix), o);
+      if (first.RowCount() > 1) {
+        Sheet& sheet = csv::NewSheet(*csvBook, utf8Name);
+        SheetBuilder builder(sheet);
+        first.AddRows(*csvBook, builder, 0, first.RowCount() - 1);
+        background = true;
+      }
+    }
+    if (!background) {
+      csv::Source source;
+      csv::Read(text, utf8Name, o, *csvBook, source);
     }
     // Saving reads the file again to write it its own way (WorkbookFile).
     if (!fromBytes_) file_->Opened(path_, snapshot->GetStamp());
     file_->SetCsvOptions(o);
-    if (first < reader->RowCount()) {
-      csvReader_ = std::move(reader);
-      csvSnapshot_ = std::move(snapshot);
-      csvNext_ = first;
+    if (background) {
+      csvLoad_ = std::make_unique<CsvLoad>();
+      CsvLoad* load = csvLoad_.get();
+      load->snapshot = std::move(snapshot);
+      HWND hwnd = host_.ViewHwnd();
+      const LPARAM self = reinterpret_cast<LPARAM>(this);
+      load->worker = std::thread([load, text, o, utf8Name, hwnd, self] {
+        csv::Source source;
+        csv::Read(text, utf8Name, o, load->book, source);
+        PostMessageW(hwnd, kWorkDoneMessage, 0, self);
+      });
     } else {
-      reader.reset();
       snapshot.reset();  // the model has the values: the file's copy goes before the grid is built
     }
     return Opened(std::move(csvBook), error);

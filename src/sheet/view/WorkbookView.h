@@ -27,12 +27,6 @@
 #include "sheet/view/WorkbookFile.h"
 #include "text/Fonts.h"
 
-namespace fw::pkg {
-class Snapshot;
-}
-namespace fw::sheet::csv {
-class Reader;
-}
 
 namespace fw::sheet::calc {
 struct FunctionHelp;
@@ -823,12 +817,12 @@ class WorkbookView : public PagedView {
   condfmt::SheetRules* RulesFor(size_t index);
   std::unique_ptr<calc::WorkbookCalc> calc_;  // see Calc()
   bool recalc_ = false;  // a workbook (not CSV): recalculate what Excel would after opening
-  // A CSV file longer than a screen (S4, plan §11: 100 MB, first screen < 1 s): its first rows are
-  // shown at once, the rest read at idle; an edit or a save (Ed()) reads the rest first.
-  std::unique_ptr<pkg::Snapshot> csvSnapshot_;  // the file's bytes, which the reader reads
-  std::unique_ptr<csv::Reader> csvReader_;
-  size_t csvNext_ = 0;
-  void CsvRest(double deadlineMs);  // rows until the deadline (anim::Now() based), or all with 0
+  // A large CSV file (S4, plan §11: 100 MB, first screen < 1 s): the rows of its first megabyte are
+  // shown at once while a worker reads the whole file into a workbook of its own, whose cells then
+  // take their place (WorkDone). An edit or a save (Ed()) waits for it first.
+  struct CsvLoad;
+  std::unique_ptr<CsvLoad> csvLoad_;
+  void WorkDone() override;
   calc::WorkbookCalc& Calc();
   std::vector<std::unique_ptr<condfmt::SheetRules>> rules_;
   std::vector<bool> rulesRead_;

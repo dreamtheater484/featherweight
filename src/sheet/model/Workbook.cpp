@@ -134,6 +134,21 @@ pkg::Status Workbook::LoadAll() {
   return {};
 }
 
+void Workbook::SwapCells(Workbook& other) {
+  std::swap(styles_, other.styles_);
+  std::swap(strings_, other.strings_);
+  if (sheets_.empty() || other.sheets_.empty()) return;
+  Sheet& a = *sheets_[0];
+  Sheet& b = *other.sheets_[0];
+  std::swap(a.blocks_, b.blocks_);
+  std::swap(a.blockFirstRow_, b.blockFirstRow_);
+  std::swap(a.cellCount_, b.cellCount_);
+  std::swap(a.formulaCells_, b.formulaCells_);
+  std::swap(a.formulas_, b.formulas_);
+  std::swap(a.texts_, b.texts_);
+  std::swap(a.dimension_, b.dimension_);
+}
+
 Sheet& Workbook::AddSheet(std::string name) {
   sheets_.push_back(std::make_unique<Sheet>(*this, std::move(name)));
   sheets_.back()->loaded_ = true;
