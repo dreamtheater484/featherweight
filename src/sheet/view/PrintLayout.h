@@ -45,6 +45,7 @@ struct PrintInfo {
   SheetObjects* objects = nullptr;
   condfmt::SheetRules* rules = nullptr;  // the sheet's conditional formats; null: none
   const std::vector<pivot::Look>* pivots = nullptr;  // the sheet's PivotTables' styles; null: none
+  const Sparklines* sparklines = nullptr;  // the sheet's sparklines; null: none
   std::vector<Range> area;  // what prints instead of the print area (Print Selection); empty: none
 };
 

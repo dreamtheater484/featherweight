@@ -971,6 +971,7 @@ const PrintLayout* WorkbookView::BreakPages() {
     info.objects = breakPages_->objects.get();
     info.rules = RulesFor(sheet_);
     info.pivots = PivotLooksFor(sheet_);
+    info.sparklines = SparklinesFor(sheet_);
     breakPages_->layout = std::make_unique<PrintLayout>(*book_, Current(), sheet_, grid_, *text_, info);
   }
   return breakPages_->layout.get();

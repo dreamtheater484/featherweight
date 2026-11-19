@@ -361,6 +361,7 @@ void WorkbookView::DrawEditLine(Canvas& c, std::wstring_view line, int lineAt, f
 }
 
 edit::Editor& WorkbookView::Ed() {
+  if (bigLoad_) WorkDone();  // a large file still being read: all of it first
   if (!edit_) {
     edit_ = std::make_unique<edit::Editor>(*book_);
     edit_->OnChange([this](const std::vector<edit::Change>& changes) { Edited(changes); });

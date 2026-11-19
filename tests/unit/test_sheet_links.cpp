@@ -10,6 +10,7 @@
 #include "sheet/edit/Journal.h"
 #include "sheet/edit/Notes.h"
 #include "sheet/model/Workbook.h"
+#include "sheet/objects/SheetObjects.h"
 #include "sheet/xlsx/Xlsx.h"
 
 using namespace fw::sheet;
@@ -304,4 +305,72 @@ TEST(sheet_notes_vml_namespaces_and_strict) {
                 "<from><xdr:col>3</xdr:col><xdr:colOff>95250</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>114300</xdr:rowOff></from>"
                 "<to><xdr:col>5</xdr:col><xdr:colOff>190500</xdr:colOff><xdr:row>7</xdr:row><xdr:rowOff>161925</xdr:rowOff></to>") !=
         std::string::npos);
+}
+
+// ST_Xstring as Excel 2021 writes it (s4: a cell's CR showed as "_x000D_"): shared strings, rich runs,
+// inline strings, formulas and their text, names, notes and filter values read decoded; written again as Excel
+// does, a literal "_x0041_" as _x005F_x0041_, so both come back as they were.
+TEST(sheet_xstring_cells_names_notes) {
+  auto parts = WorkbookParts(
+      {"<sheetData><row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c></row><row r=\"2\"><c r=\"A2\" t=\"s\"><v>1</v></c></row>"
+       "<row r=\"3\"><c r=\"A3\" t=\"s\"><v>2</v></c></row><row r=\"4\"><c r=\"A4\" t=\"s\"><v>3</v></c></row>"
+       "<row r=\"5\"><c r=\"A5\" t=\"s\"><v>4</v></c></row><row r=\"6\"><c r=\"A6\" t=\"inlineStr\"><is><t>in_x000D_line</t></is></c></row>"
+       "<row r=\"7\"><c r=\"A7\" t=\"str\"><f>CHAR(13)&amp;\"z\"</f><v>_x000D_z</v></c></row>"
+       "<row r=\"8\"><c r=\"A8\" t=\"str\"><f>\"f_x005F_x0041_\"</f><v>f_x005F_x0041_</v></c></row></sheetData>"
+       "<autoFilter ref=\"A1:A7\"><filterColumn colId=\"0\"><filters><filter val=\"a_x000D_b\"/></filters></filterColumn></autoFilter>",
+       "<sheetData/>"});  // Sheet2: the parts' name Local is its
+  for (auto& [name, xml] : parts) {
+    if (name == "[Content_Types].xml")
+      xml.insert(xml.find("</Types>"), "<Override PartName=\"/xl/sharedStrings.xml\" "
+                                       "ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/>");
+    if (name == "xl/_rels/workbook.xml.rels")
+      xml.insert(xml.find("</Relationships>"), "<Relationship Id=\"rSS\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/"
+                                               "relationships/sharedStrings\" Target=\"sharedStrings.xml\"/>");
+    if (name == "xl/workbook.xml") xml.insert(xml.find("</definedNames>"), "<definedName name=\"Lit\">\"q_x005F_x0041_\"</definedName>");
+    if (name.find("worksheets/sheet") != std::string::npos)
+      xml.replace(xml.find("<worksheet "), 11, "<worksheet xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" ");
+  }
+  // Excel's own (excel_xstring.py): a CRLF as _x000D_ and a line break, a rich run starting with a CR.
+  parts.push_back({"xl/sharedStrings.xml", "<sst xmlns=\"" + std::string(kMain) +
+                                               "\" count=\"5\" uniqueCount=\"5\"><si><t>a_x000D_b</t></si><si><t>_x005F_x000D_</t></si>"
+                                               "<si><t>c_x0001_d</t></si><si><r><t>bold</t></r><r><rPr><b/></rPr><t>_x000D_plain</t></r></si>"
+                                               "<si><t>line1_x000D_\r\nline2</t></si></sst>"});
+  auto book = OpenZip(test::MakeZip(parts));
+  if (!book) return;
+  auto check = [](const Workbook& b) {
+    const Sheet& s = b.GetSheet(0);
+    CHECK(Text(s, 0, 0) == "a\rb" && Text(s, 1, 0) == "_x000D_" && Text(s, 2, 0) == "c\x01" "d");
+    CHECK(Text(s, 3, 0) == "bold\rplain" && Text(s, 4, 0) == "line1\r\nline2" && Text(s, 5, 0) == "in\rline" && Text(s, 6, 0) == "\rz");
+    CHECK(FormulaText(s, 7, 0) == "\"f_x0041_\"" && Text(s, 7, 0) == "f_x0041_");
+    CHECK(s.Filter() && s.Filter()->columns.size() == 1 && s.Filter()->columns[0].values == std::vector<std::string>{"a\rb"});
+    bool lit = false;
+    for (const DefinedName& n : b.Names()) lit = lit || (n.name == "Lit" && n.formula == "\"q_x0041_\"");
+    CHECK(lit);
+  };
+  check(*book);
+  // Typed: a literal _x0041_ and a CR; a note and a name with them.
+  Editor ed(*book);
+  CHECK(ed.SetCell(0, 0, 1, CellInput::Text("x_x0041_y")) && ed.SetCell(0, 1, 1, CellInput::Text("cr\rhere")));
+  CHECK(ed.SetNote(0, CellAddr{1, 1}, Editor::Note{"Ann_x0041_", "two\rlines _x0041_", false}));
+  CHECK(ed.SetName(DefinedName{"Two", -1, "\"r_x0041_\"", false}));
+  const std::vector<uint8_t> zip = SaveLinks(*book, ed);
+  wchar_t dir[MAX_PATH];  // for Excel to open (as test_sheet_save's files)
+  if (DWORD n = GetEnvironmentVariableW(L"FW_SAVE_OUT", dir, MAX_PATH); n && n < MAX_PATH)
+    CHECK(test::WriteFileBytes(std::wstring(dir) + L"\\xstring.xlsx", zip));
+  const std::string sst = Part(zip, "/xl/sharedStrings.xml"), sheet = Part(zip, "/xl/worksheets/sheet1.xml");
+  for (const char* t : {"<t>a_x000D_b</t>", "<t>_x005F_x000D_</t>", "<t>c_x0001_d</t>", "<t>x_x005F_x0041_y</t>", ">cr_x000D_here</t>"})
+    CHECK(sst.find(t) != std::string::npos);
+  CHECK(sheet.find("<is><t>in_x000D_line</t></is>") != std::string::npos && sheet.find("<v>_x000D_z</v>") != std::string::npos);
+  CHECK(sheet.find("<f>\"f_x005F_x0041_\"</f><v>f_x005F_x0041_</v>") != std::string::npos);
+  CHECK(sheet.find("<filter val=\"a_x000D_b\"/>") != std::string::npos);
+  const std::string comments = Part(zip, "/xl/comments1.xml"), workbook = Part(zip, "/xl/workbook.xml");
+  CHECK(comments.find("<author>Ann_x005F_x0041_</author>") != std::string::npos && comments.find("two_x000D_lines _x005F_x0041_") != std::string::npos);
+  CHECK(workbook.find("\"q_x005F_x0041_\"</definedName>") != std::string::npos && workbook.find("\"r_x005F_x0041_\"</definedName>") != std::string::npos);
+  auto again = OpenZip(zip);
+  if (!again) return;
+  check(*again);
+  CHECK(Text(again->GetSheet(0), 0, 1) == "x_x0041_y" && Text(again->GetSheet(0), 1, 1) == "cr\rhere");
+  auto objects = SheetObjects::Load(*again, 0);
+  const CellNote* note = objects ? objects->NoteAt(1, 1) : nullptr;
+  CHECK(note && note->author == L"Ann_x0041_" && note->text.find(L"two\rlines _x0041_") != std::wstring::npos);
 }

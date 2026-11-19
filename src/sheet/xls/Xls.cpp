@@ -19,6 +19,7 @@
 #include "pkg/Snapshot.h"
 #include "pkg/Zip.h"
 #include "sheet/model/Types.h"
+#include "sheet/xlsx/Internal.h"
 #include "sheet/xls/Internal.h"
 
 namespace fw::sheet::xls {
@@ -143,7 +144,7 @@ void Esc(std::string& o, std::string_view s) {
       case '"': o += "&quot;"; break;
       case '\t': o += "&#9;"; break;
       case '\n': o += "&#10;"; break;
-      case '\r': o += "_x000D_"; break;  // as Excel writes it (a character reference reads back as LF in some readers)
+      case '\r': o += "&#13;"; break;  // shared strings aren't read as ST_Xstring: a character reference keeps it
       case '_':
         if (i + 6 < s.size() && s[i + 1] == 'x' && s[i + 6] == '_' &&
             std::all_of(s.begin() + i + 2, s.begin() + i + 6, [](char h) { return std::isxdigit(static_cast<unsigned char>(h)); }))
@@ -171,6 +172,21 @@ void Esc(std::string& o, std::string_view s) {
 std::string Esc(std::string_view s) {
   std::string o;
   Esc(o, s);
+  return o;
+}
+
+// An ST_Xstring element's text (headers and footers), as Excel writes it: xlsx::EncodeXstring's
+// _xHHHH_ (a CR as _x000D_, which Excel keeps at the end of a header), then XML's own escapes.
+std::string EscXstring(std::string_view s) {
+  std::string o;
+  for (char c : xlsx::EncodeXstring(s)) {
+    switch (c) {
+      case '&': o += "&amp;"; break;
+      case '<': o += "&lt;"; break;
+      case '>': o += "&gt;"; break;
+      default: o += c;
+    }
+  }
   return o;
 }
 
@@ -419,6 +435,8 @@ class Converter {
   uint16_t iterateCount_ = 100;
   double delta_ = 0.001;
   std::map<int, std::array<uint32_t, 4>> filterRanges_;  // by 1-based sheet: _FilterDatabase's area
+  std::vector<std::string> dxfs_;  // conditional formats' differential formats, for styles.xml
+  std::string DxfXml(Bytes& b);
   std::vector<uint8_t> themeZip_;  // THEME: the workbook's theme as a package (.thmx)
   bool theme2007_ = false;
   std::string NotesParts(const std::vector<Note>& notes, size_t sheet, std::string& comments, std::string& vml);
@@ -1245,6 +1263,34 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
   ExtColor tab;
   int tabIcv = -1;
   bool autoFilter = false;
+  // Conditional formats (CONDFMT and its CF records) and validations (DV), as xlsx elements.
+  std::string condFormats, validations;
+  std::string condRange;      // the current CONDFMT's sqref
+  uint32_t condRow = 0, condCol = 0;  // its first range's top-left: relative references count from it
+  int condLeft = 0;           // CF records still to come for it
+  std::string condRules;      // its rules written so far
+  auto flushCond = [&] {
+    if (!condRange.empty() && !condRules.empty())
+      condFormats += "<conditionalFormatting sqref=\"" + condRange + "\">" + condRules + "</conditionalFormatting>";
+    condRange.clear();
+    condRules.clear();
+    condLeft = 0;
+  };
+  int priority = 0;
+  size_t validationCount = 0;
+  // A SqRefU (a count, then Ref8U ranges) as an sqref; the first range's top-left in (row, col).
+  auto readSqref = [](Bytes& b, uint32_t& row, uint32_t& col) {
+    const uint16_t n = b.U16();
+    std::string sq;
+    for (uint16_t i = 0; i < n && b.Left() >= 8; ++i) {
+      const uint32_t r1 = b.U16(), r2 = b.U16(), c1 = b.U16(), c2 = b.U16();
+      if (r1 > r2 || c1 > c2 || c2 > 255) continue;
+      if (sq.empty()) row = r1, col = c1;
+      else sq += ' ';
+      sq += RangeRef(r1, c1, r2, c2);
+    }
+    return sq;
+  };
 
   // Formula masters: (row << 8 | col) -> what PtgExp in other cells refers to.
   struct Master {
@@ -1652,6 +1698,84 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
       case 0x0063: objects = b.U16() != 0; break;
       case 0x00DD: scenarios = b.U16() != 0; break;
       case 0x009D: autoFilter = true; break;  // AUTOFILTERINFO
+      case 0x01B0: {  // CONDFMT: the ranges of the CF records that follow
+        const uint16_t count = b.U16();
+        b.Skip(2 + 8);  // nID, refBound
+        flushCond();
+        condRange = readSqref(b, condRow, condCol);
+        condLeft = condRange.empty() ? 0 : count;
+        break;
+      }
+      case 0x01B1: {  // CF: one rule
+        if (condLeft <= 0) break;
+        --condLeft;
+        const uint8_t ct = b.U8(), cp = b.U8();
+        const uint16_t cce1 = b.U16(), cce2 = b.U16();
+        std::string dxf = DxfXml(b);
+        if (!b.Ok() || (ct != 1 && ct != 2) || (ct == 1 && (cp < 1 || cp > 8))) break;
+        const auto rgce1 = b.Take(cce1), rgce2 = b.Take(cce2);
+        std::string f1, f2;
+        if (!b.Ok() || !detail::Decompile(ctx_, rgce1, {}, condRow, condCol, f1)) break;
+        if (cce2 && !detail::Decompile(ctx_, rgce2, {}, condRow, condCol, f2)) break;
+        static const char* const kOps[] = {"", "between", "notBetween", "equal", "notEqual", "greaterThan", "lessThan",
+                                           "greaterThanOrEqual", "lessThanOrEqual"};
+        condRules += "<cfRule type=\"" + std::string(ct == 1 ? "cellIs" : "expression") + "\" dxfId=\"" +
+                       std::to_string(dxfs_.size()) + "\" priority=\"" + std::to_string(++priority) + "\"";
+        if (ct == 1) condRules += std::string(" operator=\"") + kOps[cp] + "\"";
+        condRules += "><formula>" + Esc(f1) + "</formula>";
+        if (ct == 1 && (cp == 1 || cp == 2) && !f2.empty()) condRules += "<formula>" + Esc(f2) + "</formula>";
+        condRules += "</cfRule>";
+        dxfs_.push_back(std::move(dxf));
+        break;
+      }
+      case 0x01BE: {  // DV: a validation
+        const uint32_t flags = b.U32();
+        std::string text[4];  // prompt title, error title, prompt, error
+        for (auto& t : text) {
+          if (!detail::ReadString(b, t)) break;
+          if (t == std::string(1, '\0')) t.clear();
+        }
+        std::string formula[2];
+        std::span<const uint8_t> rgce[2];
+        for (auto& g : rgce) {
+          const uint16_t cce = b.U16();
+          b.Skip(2);
+          g = b.Take(cce);
+        }
+        uint32_t row = 0, col = 0;
+        const std::string sq = readSqref(b, row, col);
+        if (!b.Ok() || sq.empty() || validationCount >= 65534) break;
+        const uint32_t type = flags & 15, op = (flags >> 20) & 15;
+        if (type > 7) break;
+        bool ok = true;
+        for (int i = 0; i < 2 && ok; ++i)
+          if (!rgce[i].empty()) ok = detail::Decompile(ctx_, rgce[i], {}, row, col, formula[i]);
+        if (!ok) break;
+        if (type == 3) std::replace(formula[0].begin(), formula[0].end(), '\0', ',');  // an explicit list: "a\0b"
+        static const char* const kTypes[] = {"none", "whole", "decimal", "list", "date", "time", "textLength", "custom"};
+        static const char* const kStyles[] = {"stop", "warning", "information"};
+        static const char* const kOps[] = {"between", "notBetween", "equal", "notEqual", "greaterThan", "lessThan",
+                                           "greaterThanOrEqual", "lessThanOrEqual"};
+        std::string v = "<dataValidation";
+        if (type) v += std::string(" type=\"") + kTypes[type] + "\"";
+        const uint32_t style = (flags >> 4) & 7;
+        if (style == 1 || style == 2) v += std::string(" errorStyle=\"") + kStyles[style] + "\"";
+        if (op && op < 8 && type != 0 && type != 3 && type != 7) v += std::string(" operator=\"") + kOps[op] + "\"";
+        if (flags & 0x100) v += " allowBlank=\"1\"";
+        if (flags & 0x200) v += " showDropDown=\"1\"";  // xlsx's name for hiding the arrow
+        if (flags & 0x40000) v += " showInputMessage=\"1\"";
+        if (flags & 0x80000) v += " showErrorMessage=\"1\"";
+        if (!text[1].empty()) Attr(v, "errorTitle", text[1].substr(0, 32));
+        if (!text[3].empty()) Attr(v, "error", text[3].substr(0, 255));
+        if (!text[0].empty()) Attr(v, "promptTitle", text[0].substr(0, 32));
+        if (!text[2].empty()) Attr(v, "prompt", text[2].substr(0, 255));
+        v += " sqref=\"" + sq + "\">";
+        if (!formula[0].empty()) v += "<formula1>" + Esc(formula[0]) + "</formula1>";
+        if (!formula[1].empty()) v += "<formula2>" + Esc(formula[1]) + "</formula2>";
+        validations += v + "</dataValidation>";
+        ++validationCount;
+        break;
+      }
       case 0x0862: {                          // SHEETEXT: the tab's color
         b.Skip(12);
         const uint32_t cb = b.U32();
@@ -1952,6 +2076,9 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
     for (const auto& m : kept) o += "<mergeCell ref=\"" + RangeRef(m[0], m[1], m[2], m[3]) + "\"/>";
     o += "</mergeCells>";
   }
+  flushCond();
+  o += condFormats;
+  if (!validations.empty()) o += "<dataValidations count=\"" + std::to_string(validationCount) + "\">" + validations + "</dataValidations>";
   // Hyperlinks
   if (!links.empty()) {
     std::string hl;
@@ -2023,8 +2150,8 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
   }
   if (!header.empty() || !footer.empty()) {
     o += "<headerFooter>";
-    if (!header.empty()) o += "<oddHeader>" + Esc(header) + "</oddHeader>";
-    if (!footer.empty()) o += "<oddFooter>" + Esc(footer) + "</oddFooter>";
+    if (!header.empty()) o += "<oddHeader>" + EscXstring(header) + "</oddHeader>";
+    if (!footer.empty()) o += "<oddFooter>" + EscXstring(footer) + "</oddFooter>";
     o += "</headerFooter>";
   }
   auto breaks = [&](const char* tag, std::vector<uint32_t>& v, uint32_t max) {
@@ -2040,6 +2167,82 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
   breaks("colBreaks", colBreaks, 1048575);
   (void)outIndex;
   return o;
+}
+
+// A conditional format's differential format (DXFN, [MS-XLS] 2.5.86) as a dxf: its font (bold,
+// italic, strikeout, underline, color), borders and fill. Number formats, alignment and protection
+// are read past and left out. Reads `b` to the end of the DXFN.
+std::string Converter::DxfXml(Bytes& b) {
+  const uint32_t f1 = b.U32();
+  const uint16_t f2 = b.U16();
+  if (!b.Ok()) return {};
+  std::string font, border, fill;
+  if (f1 & (1u << 25)) {  // number format
+    if (f2 & 1) {
+      const uint16_t cb = b.U16();
+      b.Skip(cb >= 2 ? cb - 2 : 0);
+    } else {
+      b.Skip(2);
+    }
+  }
+  if (f1 & (1u << 26)) {  // DXFFntD: 118 bytes
+    Bytes d(b.Take(118));
+    if (d.Size() == 118) {
+      d.Seek(68);
+      const uint32_t ts = d.U32();
+      const uint16_t bls = d.U16();
+      d.U16();
+      const uint8_t uls = d.U8();
+      d.Seek(80);
+      const uint32_t icv = d.U32();
+      d.U32();
+      const uint32_t tsNinch = d.U32(), sssNinch = d.U32(), ulsNinch = d.U32(), blsNinch = d.U32();
+      (void)sssNinch;
+      if (!blsNinch && (bls == 700 || bls == 400)) font += bls == 700 ? "<b/>" : "<b val=\"0\"/>";
+      if (!(tsNinch & 2)) font += (ts & 2) ? "<i/>" : "<i val=\"0\"/>";
+      if (!(tsNinch & 0x80)) font += (ts & 0x80) ? "<strike/>" : "<strike val=\"0\"/>";
+      if (!ulsNinch) {
+        static const std::pair<uint8_t, const char*> kU[] = {{0, "none"}, {1, "single"}, {2, "double"}, {0x21, "singleAccounting"},
+                                                             {0x22, "doubleAccounting"}};
+        for (const auto& [code, name] : kU)
+          if (code == uls) font += std::string("<u val=\"") + name + "\"/>";
+      }
+      if (icv < 64) font += "<color" + palette_.Attrs(icv) + "/>";
+    }
+  }
+  if (f1 & (1u << 27)) b.Skip(8);  // alignment
+  if (f1 & (1u << 28)) {           // DXFBdr
+    const uint32_t a = b.U32(), c = b.U32();
+    static const char* const kStyles[] = {"", "thin", "medium", "dashed", "dotted", "thick", "double", "hair",
+                                          "mediumDashed", "dashDot", "mediumDashDot", "dashDotDot", "mediumDashDotDot",
+                                          "slantDashDot"};
+    auto side = [&](const char* tag, uint32_t style, uint32_t icv, bool ninch) {
+      if (ninch || style > 13) return std::string();
+      if (style == 0) return std::string("<") + tag + "/>";
+      const std::string col = palette_.Attrs(icv);
+      return std::string("<") + tag + " style=\"" + kStyles[style] + "\"><color" + (col.empty() ? " indexed=\"64\"" : col) +
+             "/></" + tag + ">";
+    };
+    border = side("left", a & 15, (a >> 16) & 0x7F, f1 & (1u << 10)) + side("right", (a >> 4) & 15, (a >> 23) & 0x7F, f1 & (1u << 11)) +
+             side("top", (a >> 8) & 15, c & 0x7F, f1 & (1u << 12)) + side("bottom", (a >> 12) & 15, (c >> 7) & 0x7F, f1 & (1u << 13));
+  }
+  if (f1 & (1u << 29)) {  // DXFPat
+    const uint16_t p = b.U16(), colors = b.U16();
+    const uint32_t fls = p >> 10, fore = colors & 0x7F, back = (colors >> 7) & 0x7F;
+    static const char* const kPatterns[] = {"none", "solid", "mediumGray", "darkGray", "lightGray", "darkHorizontal",
+                                            "darkVertical", "darkDown", "darkUp", "darkGrid", "darkTrellis",
+                                            "lightHorizontal", "lightVertical", "lightDown", "lightUp", "lightGrid",
+                                            "lightTrellis", "gray125", "gray0625"};
+    std::string pf;
+    if (!(f1 & (1u << 16)) && fls < 19 && fls != 1) pf += std::string(" patternType=\"") + kPatterns[fls] + "\"";
+    std::string inner;
+    if (!(f1 & (1u << 17)) && fls != 1 && fore < 64) inner += "<fgColor" + palette_.Attrs(fore) + "/>";
+    if (!(f1 & (1u << 18)) && back < 64) inner += "<bgColor" + palette_.Attrs(back) + "/>";
+    if (!pf.empty() || !inner.empty()) fill = "<fill><patternFill" + pf + (inner.empty() ? "/>" : ">" + inner + "</patternFill>") + "</fill>";
+  }
+  if (f1 & (1u << 30)) b.Skip(2);  // protection
+  return "<dxf>" + (font.empty() ? std::string() : "<font>" + font + "</font>") + fill +
+         (border.empty() ? std::string() : "<border>" + border + "</border>") + "</dxf>";
 }
 
 // A sheet's notes: the comments part, and the VML drawing that places them (Excel's defaults: a
@@ -2106,7 +2309,7 @@ std::string Converter::ThemeXml() {
            fills + fills + fills + "</a:fillStyleLst><a:lnStyleLst>" + lines +
            "</a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/>"
            "</a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst>" +
-           fills + fills + fills + "</a:bgFillStyleLst></a:fmtScheme></a:themeElements><a:objectDefaults/><a:extraStyleLst/></a:theme>";
+           fills + fills + fills + "</a:bgFillStyleLst></a:fmtScheme></a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/></a:theme>";
   }
   if (themeZip_.size() < 22) return {};
   auto snapshot = pkg::Snapshot::FromBytes(themeZip_);
@@ -2264,6 +2467,12 @@ std::vector<uint8_t> Converter::Convert(const StreamFn& streams, pkg::Status& st
                    "Target=\"xl/workbook.xml\"/></Relationships>"});
   parts.push_back({"xl/workbook.xml", WorkbookXml()});
   parts.push_back({"xl/_rels/workbook.xml.rels", wbRels});
+  if (!dxfs_.empty()) {  // the conditional formats' formats, which the sheets made after the styles
+    const std::string none = "<dxfs count=\"0\"/>";
+    std::string list = "<dxfs count=\"" + std::to_string(dxfs_.size()) + "\">";
+    for (const std::string& d : dxfs_) list += d;
+    if (const size_t at = styles.find(none); at != std::string::npos) styles.replace(at, none.size(), list + "</dxfs>");
+  }
   parts.push_back({"xl/styles.xml", std::move(styles)});
   parts.push_back({"xl/sharedStrings.xml", std::move(sst)});
 

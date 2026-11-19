@@ -97,6 +97,10 @@ std::string WriteNew(const Workbook& book, const Options& options);
 // shapes, notes or comments. Number formats aren't: the values are written as shown.
 bool Loses(const Workbook& book);
 
+// The sheet a CSV file is read into, as Read makes it: the workbook's format, default styles and
+// one sheet named `sheetName` (for reading in steps with Reader::AddRows).
+Sheet& NewSheet(Workbook& book, const std::string& sheetName);
+
 // The whole file as a workbook with one sheet named `sheetName` (format Csv).
 void Read(std::string_view bytes, const std::string& sheetName, const Options& options, Workbook& book,
           Source& source);

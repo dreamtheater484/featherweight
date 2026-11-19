@@ -2,7 +2,7 @@
 #  - fwsheetrender: headless drawing of cells and pages through draw::Painter (column widths and row
 #    heights as Excel has them, cell text, fills, borders, pagination). Tools and tests can use it.
 #  - fwsheetview: the workbook tab (a TabContent), on the app's shell; linked into the exe only.
-add_library(fwsheetrender STATIC Grid.cpp CellText.cpp CellPaint.cpp PrintLayout.cpp CellEditor.cpp)
+add_library(fwsheetrender STATIC Grid.cpp CellText.cpp CellPaint.cpp PrintLayout.cpp CellEditor.cpp Sparklines.cpp)
 target_link_libraries(fwsheetrender PUBLIC fwsheet fwsheetobjects fwtext fwdraw)
 target_compile_options(fwsheetrender PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
@@ -26,4 +26,6 @@ if(TARGET fw_tests)
   # Pasting HTML from Excel, Word and the web (the reader alone).
   target_sources(fw_tests PRIVATE ClipHtml.cpp "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_clip_html.cpp")
   target_link_libraries(fw_tests PRIVATE fwsheetrender)
+  # Sparklines (S4): the Excel-made fixture read and drawn.
+  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_sparklines.cpp")
 endif()

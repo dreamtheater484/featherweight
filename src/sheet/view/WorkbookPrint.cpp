@@ -39,6 +39,7 @@ PrintInfo WorkbookView::InfoFor(const Sheet& sheet) const {
 }
 
 void WorkbookView::Paginate() {
+  if (bigLoad_) WorkDone();  // a large file still being read: its pages are all of it
   prints_.clear();
   pageSizes_.clear();
   auto add = [&](size_t i, PrintInfo info) {
@@ -48,6 +49,7 @@ void WorkbookView::Paginate() {
     info.objects = ps.objects.get();
     info.rules = RulesFor(i);
     info.pivots = PivotLooksFor(i);
+    info.sparklines = SparklinesFor(i);
     if (i != sheet_) {
       ps.grid = std::make_unique<Grid>();
       ps.grid->Build(s, book_->GetStyles(), *measure_);
@@ -112,6 +114,7 @@ void WorkbookView::ForEachSheetLayout(const std::function<void(PrintLayout&)>& f
       info.objects = objects.get();
       info.rules = RulesFor(i);
       info.pivots = PivotLooksFor(i);
+      info.sparklines = SparklinesFor(i);
       Grid other;
       const bool shown = i == sheet_;
       if (!shown) other.Build(s, book_->GetStyles(), *measure_);
@@ -231,6 +234,7 @@ PrintOutcome WorkbookView::Print(HWND owner, const std::function<void(int, int)>
 PrintOutcome WorkbookView::PrintToFile(const std::wstring& path, std::wstring& message) {
   // Every sheet, as Excel exports a workbook (the reference renders).
   if (!Ready()) return PrintOutcome::Failed;
+  if (bigLoad_) WorkDone();
   ComPtr<IStream> stream;
   if (FAILED(SHCreateStreamOnFileEx(path.c_str(), STGM_CREATE | STGM_WRITE | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL,
                                     TRUE, nullptr, &stream))) {

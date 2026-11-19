@@ -24,8 +24,12 @@ constexpr std::string_view kChartNs = "http://schemas.openxmlformats.org/drawing
 constexpr std::string_view kRelNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
 std::string Esc(std::string_view s) {
+  // A cell's control characters (read from Excel's _x0001_) left out: XML can't hold them.
+  std::string kept;
+  for (char c : s)
+    if (static_cast<unsigned char>(c) >= 0x20 || c == '\t' || c == '\n' || c == '\r') kept += c;
   std::string out;
-  pkg::AppendEscapedText(out, s);
+  pkg::AppendEscapedText(out, kept);
   return out;
 }
 

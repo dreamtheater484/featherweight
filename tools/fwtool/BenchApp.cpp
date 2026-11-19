@@ -262,6 +262,10 @@ struct Run {
   // Read from the CPU cycles of its UI thread, which asking doesn't disturb. Other threads are
   // Windows' (the thread pool, the graphics driver) and stay busy, or retire, on their own clock.
   double readyMs = -1;
+  // The last burst of work in any of its threads (S4: a large file is read on a worker after its
+  // first screen shows): fully loaded. More than half a core busy for a while, which Windows' own
+  // threads don't keep up once the window is drawn.
+  double loadedMs = -1;
   // The window first looking the way it settles on screen. This includes Windows' own animation of
   // a window opening, which runs alongside the app's work.
   double onScreenMs = -1;
@@ -312,11 +316,19 @@ Run RunOnce(const std::filesystem::path& exe, const std::wstring& version, const
   HWINEVENTHOOK hook =
       SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, nullptr, OnShow, pi.dwProcessId, 0, WINEVENT_OUTOFCONTEXT);
   ResumeThread(pi.hThread);
-  ULONG64 cycles = 0, lastCycles = 0;
-  double busyUntil = 0;
+  ULONG64 cycles = 0, lastCycles = 0, all = 0, lastAll = 0;
+  double busyUntil = 0, loadedUntil = 0;
+  double lastLook = 0;
   auto watchCpu = [&] {
     if (QueryThreadCycleTime(pi.hThread, &cycles) && cycles - lastCycles > kBusyCycles) busyUntil = MsSince(t0);
     lastCycles = cycles;
+    // All threads: more than about half a core's worth of a millisecond per millisecond since the
+    // last look (one worker reading a large workbook, even on a busy PC).
+    const double now = MsSince(t0);
+    if (QueryProcessCycleTime(pi.hProcess, &all) && lastAll &&
+        static_cast<double>(all - lastAll) > 1.2 * kBusyCycles * std::max(1.0, now - lastLook))
+      loadedUntil = now;
+    lastAll = all, lastLook = now;
   };
   while (!g_shown && MsSince(t0) < 15000) {
     if (MsgWaitForMultipleObjects(1, &pi.hProcess, FALSE, 1, QS_ALLINPUT) == WAIT_OBJECT_0) break;
@@ -337,7 +349,8 @@ Run RunOnce(const std::filesystem::path& exe, const std::wstring& version, const
     std::vector<std::pair<double, Screen::Frame>> frames;
     Screen::Frame frame;
     double stableSince = MsSince(t0);
-    while (MsSince(t0) < 20000 && (MsSince(t0) - stableSince < 1000 || MsSince(t0) - busyUntil < 500)) {
+    while (MsSince(t0) < 20000 && (MsSince(t0) - stableSince < 1000 || MsSince(t0) - busyUntil < 500 ||
+                                   MsSince(t0) - loadedUntil < 500)) {
       Pump();
       watchCpu();
       double at = MsSince(t0);
@@ -348,6 +361,7 @@ Run RunOnce(const std::filesystem::path& exe, const std::wstring& version, const
       Sleep(1);
     }
     run.readyMs = busyUntil;
+    run.loadedMs = std::max(busyUntil, loadedUntil);
     // When it first looked (almost) the way it settled.
     for (const auto& [at, f] : frames) {
       if (Screen::Difference(f, frames.back().second) <= 0.005) {
@@ -436,12 +450,13 @@ int RunBenchApp(const Options& options) {
   const int runs = std::max(1, options.runs);
   std::printf("%s %s: the median of %d runs after a warm-up, each a fresh start, in ms from the launch.\n",
               Display(source).c_str(), fw::WideToUtf8(version).c_str(), runs);
-  std::printf("\"ready\" is the app's last work before it goes quiet; \"on screen\" includes Windows' animation of the\n"
+  std::printf("\"ready\" is the app's last work before it goes quiet (its UI thread); \"loaded\" the last burst of work\n"
+              "in any of its threads (a large CSV file is read on a worker); \"on screen\" includes Windows' animation of the\n"
               "window opening. Memory is the private working set once settled; idle is CPU time and thread wakeups\n"
               "in all, over %.0f s after that.\n\n",
               kIdleSeconds);
-  std::printf("%-24s %8s %8s %10s %9s %13s %9s %8s\n", "", "window", "ready", "on screen", "memory", "private bytes",
-              "idle CPU", "wakeups");
+  std::printf("%-24s %8s %8s %8s %10s %9s %13s %9s %8s\n", "", "window", "ready", "loaded", "on screen", "memory",
+              "private bytes", "idle CPU", "wakeups");
 
   std::string json = "{\n  \"format\": \"featherweight-app-bench\",\n  \"version\": 1,\n  \"exe\": " +
                      JsonString(fw::WideToUtf8(source.generic_wstring())) + ",\n  \"productVersion\": " +
@@ -456,11 +471,12 @@ int RunBenchApp(const Options& options) {
     std::vector<Run> results;
     for (int r = 0; r < runs; ++r) results.push_back(RunOnce(exe, version, file, r == 0));
     std::string error;
-    std::vector<double> window, ready, onScreen, memory, privateBytes;
+    std::vector<double> window, ready, loaded, onScreen, memory, privateBytes;
     for (const Run& r : results) {
       if (!r.error.empty()) error = r.error;
       window.push_back(r.windowMs);
       ready.push_back(r.readyMs);
+      loaded.push_back(r.loadedMs);
       onScreen.push_back(r.onScreenMs);
       memory.push_back(r.error.empty() ? r.memory.privateWorkingSetMB : -1);
       privateBytes.push_back(r.error.empty() ? r.memory.privateBytesMB : -1);
@@ -477,11 +493,13 @@ int RunBenchApp(const Options& options) {
     char idle[32] = "input, not measured";
     if (first.idleCpuMs >= 0)
       std::snprintf(idle, sizeof(idle), "%6s ms %8s", Num(first.idleCpuMs).c_str(), Num(first.idleWakeups, 0).c_str());
-    std::printf("%-24s %8s %8s %10s %6s MB %10s MB %18s\n", name.c_str(), Num(Median(window)).c_str(),
-                Num(Median(ready)).c_str(), Num(Median(onScreen)).c_str(), Num(Median(memory)).c_str(),
+    std::printf("%-24s %8s %8s %8s %10s %6s MB %10s MB %18s\n", name.c_str(), Num(Median(window)).c_str(),
+                Num(Median(ready)).c_str(), Num(Median(loaded)).c_str(), Num(Median(onScreen)).c_str(),
+                Num(Median(memory)).c_str(),
                 Num(Median(privateBytes)).c_str(), idle);
     json += std::string(s ? ",\n" : "\n") + "    {\"name\": " + JsonString(name) +
             ", \"windowMs\": " + Num(Median(window)) + ", \"readyMs\": " + Num(Median(ready)) +
+            ", \"loadedMs\": " + Num(Median(loaded)) +
             ", \"onScreenMs\": " + Num(Median(onScreen)) + ", \"memoryMB\": " + Num(Median(memory)) +
             ", \"privateBytesMB\": " + Num(Median(privateBytes)) + ", \"idleCpuMs\": " + Num(first.idleCpuMs) +
             ", \"idleWakeups\": " + Num(first.idleWakeups, 0) + "}";
