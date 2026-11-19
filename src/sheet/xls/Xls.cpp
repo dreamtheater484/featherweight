@@ -19,6 +19,7 @@
 #include "pkg/Snapshot.h"
 #include "pkg/Zip.h"
 #include "sheet/model/Types.h"
+#include "sheet/xlsx/Internal.h"
 #include "sheet/xls/Internal.h"
 
 namespace fw::sheet::xls {
@@ -143,7 +144,7 @@ void Esc(std::string& o, std::string_view s) {
       case '"': o += "&quot;"; break;
       case '\t': o += "&#9;"; break;
       case '\n': o += "&#10;"; break;
-      case '\r': o += "_x000D_"; break;  // as Excel writes it (a character reference reads back as LF in some readers)
+      case '\r': o += "&#13;"; break;  // shared strings aren't read as ST_Xstring: a character reference keeps it
       case '_':
         if (i + 6 < s.size() && s[i + 1] == 'x' && s[i + 6] == '_' &&
             std::all_of(s.begin() + i + 2, s.begin() + i + 6, [](char h) { return std::isxdigit(static_cast<unsigned char>(h)); }))
@@ -171,6 +172,21 @@ void Esc(std::string& o, std::string_view s) {
 std::string Esc(std::string_view s) {
   std::string o;
   Esc(o, s);
+  return o;
+}
+
+// An ST_Xstring element's text (headers and footers), as Excel writes it: xlsx::EncodeXstring's
+// _xHHHH_ (a CR as _x000D_, which Excel keeps at the end of a header), then XML's own escapes.
+std::string EscXstring(std::string_view s) {
+  std::string o;
+  for (char c : xlsx::EncodeXstring(s)) {
+    switch (c) {
+      case '&': o += "&amp;"; break;
+      case '<': o += "&lt;"; break;
+      case '>': o += "&gt;"; break;
+      default: o += c;
+    }
+  }
   return o;
 }
 
@@ -2023,8 +2039,8 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
   }
   if (!header.empty() || !footer.empty()) {
     o += "<headerFooter>";
-    if (!header.empty()) o += "<oddHeader>" + Esc(header) + "</oddHeader>";
-    if (!footer.empty()) o += "<oddFooter>" + Esc(footer) + "</oddFooter>";
+    if (!header.empty()) o += "<oddHeader>" + EscXstring(header) + "</oddHeader>";
+    if (!footer.empty()) o += "<oddFooter>" + EscXstring(footer) + "</oddFooter>";
     o += "</headerFooter>";
   }
   auto breaks = [&](const char* tag, std::vector<uint32_t>& v, uint32_t max) {
