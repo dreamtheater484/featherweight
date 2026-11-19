@@ -438,4 +438,5 @@ enum Cmd : int {
   // Pivot tables (S4, s4-pivot): 3040-3079.
   CmdPivotRefresh = 3040,  // Alt+F5: the PivotTable at the active cell
   CmdPivotRefreshAll,      // Ctrl+Alt+F5
+  CmdPivotTable,           // Insert > PivotTable: its panel
 };

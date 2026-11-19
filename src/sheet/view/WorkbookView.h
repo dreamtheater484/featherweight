@@ -14,6 +14,7 @@
 #include "sheet/data/Shapes.h"
 #include "sheet/data/Rules.h"
 #include "sheet/data/Sort.h"
+#include "sheet/pivot/Pivot.h"
 #include "sheet/calc/Bind.h"
 #include "sheet/calc/Entry.h"
 #include "sheet/edit/Edit.h"
@@ -483,6 +484,13 @@ class WorkbookView : public PagedView {
   bool PivotsCommand(int cmd);
   bool PivotsCommandState(int cmd, CommandState& s);
   void RefreshPivotsOnOpen();  // as Excel, for a cache with refreshOnLoad: an undo step
+  class PivotPanel;
+  std::shared_ptr<PanelContent> pivotPanel_;
+  void ShowPivotPanel();
+  // The sheets' PivotTable styles (their parts read when first painted, again after every edit).
+  std::vector<std::vector<pivot::Look>> pivotLooks_;
+  std::vector<bool> pivotLooksRead_;
+  const std::vector<pivot::Look>* PivotLooksFor(size_t sheet);
   void RulesEdited(const std::vector<edit::Change>& changes);  // rules read again after an edit
   void ShowRulesPanel(bool manage);
   bool ApplyCfRules(const std::vector<data::CfRule>& rules, const char16_t* name);
