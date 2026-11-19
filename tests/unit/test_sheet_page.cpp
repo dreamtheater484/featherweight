@@ -9,7 +9,12 @@
 #include "sheet/edit/Edit.h"
 #include "sheet/edit/Journal.h"
 #include "sheet/model/Workbook.h"
+#include "sheet/numfmt/NumLocale.h"
+#include "sheet/view/CellText.h"
+#include "sheet/view/Grid.h"
+#include "sheet/view/PrintLayout.h"
 #include "sheet/xlsx/Xlsx.h"
+#include "text/Fonts.h"
 
 using namespace fw::sheet;
 using edit::Editor;
@@ -141,4 +146,55 @@ TEST(sheet_page_setup_new_sheet_and_journal) {
   const std::string sheet2 = PartText(SavePage(*book, ed), "/xl/worksheets/sheet2.xml");
   CHECK(Has(sheet2, "<pageSetup scale=\"85\"/><headerFooter differentFirst=\"1\"><firstHeader>&amp;CFirst</firstHeader></headerFooter>"
                     "<rowBreaks count=\"1\" manualBreakCount=\"1\"><brk id=\"5\" max=\"16383\" man=\"1\"/></rowBreaks>"));
+}
+
+// Printed as Excel 2021 printed the same setup (s3-print's page_run.ps1): Fit to 1 page wide by
+// automatic keeps the manual row break, and page numbers start at the first page number.
+TEST(sheet_page_fit_width_keeps_row_breaks) {
+  std::string data = "<sheetData>";
+  for (int r = 1; r <= 60; ++r)
+    data += "<row r=\"" + std::to_string(r) + "\"><c r=\"A" + std::to_string(r) + "\"><v>" + std::to_string(r) +
+            "</v></c><c r=\"P" + std::to_string(r) + "\"><v>1</v></c></row>";
+  data += "</sheetData>";
+  auto book = OpenZip(test::MakeZip(WorkbookParts({data})));
+  if (!book) return;
+  Editor ed(*book);
+  PageSetup p;
+  p.fitToWidth = 1;
+  p.fitToHeight = 0;
+  p.useFirstPageNumber = true;
+  p.firstPageNumber = 3;
+  CHECK(ed.SetPageSetup(0, p, HeaderFooter{}, true));
+  CHECK(ed.SetPageBreaks(0, {PageBreak{10, 0, 16383, true, false}}, {}));
+  static fw::text::Fonts fonts;
+  view::FontMeasure measure(fonts);
+  NumLocale locale;
+  view::CellText text(*book, fonts, measure, locale);
+  const Sheet& s = book->GetSheet(0);
+  view::Grid grid;
+  grid.Build(s, book->GetStyles(), measure);
+  view::PrintLayout layout(*book, s, 0, grid, text, view::PrintInfo{});
+  CHECK(layout.PageCount() == 2);  // one page wide (A:P), the row break kept
+  if (layout.PageCount() == 2) {
+    CHECK(layout.Page(0).body.lastRow == 9 && layout.Page(1).body.firstRow == 10);
+    CHECK(layout.Page(0).body.lastCol == 15 && layout.Page(0).number == 3 && layout.Page(1).number == 4);
+  }
+  // Fit to 1 by 1: the break doesn't count, as in Excel.
+  p.fitToHeight = 1;
+  CHECK(ed.SetPageSetup(0, p, HeaderFooter{}, true));
+  view::PrintLayout fitted(*book, s, 0, grid, text, view::PrintInfo{});
+  CHECK(fitted.PageCount() == 1);
+}
+
+TEST(sheet_page_break_preview_saved) {
+  auto book = OpenZip(test::MakeZip(WorkbookParts({"<sheetViews><sheetView workbookViewId=\"0\"/></sheetViews><sheetData/>"})));
+  if (!book) return;
+  Editor ed(*book);
+  ed.SetViewMode(0, ViewMode::PageBreakPreview);
+  const std::vector<uint8_t> zip = SavePage(*book, ed);
+  CHECK(Has(PartText(zip, "/xl/worksheets/sheet1.xml"), "view=\"pageBreakPreview\""));
+  auto again = OpenZip(zip);
+  CHECK(again && again->GetSheet(0).Views()[0].view == ViewMode::PageBreakPreview);
+  ed.SetViewMode(0, ViewMode::Normal);
+  CHECK(PartText(SavePage(*book, ed), "/xl/worksheets/sheet1.xml").find("pageBreakPreview") == std::string::npos);
 }

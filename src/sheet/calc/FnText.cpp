@@ -564,7 +564,7 @@ void TextSplit(Call& c) {
     width = std::max(width, grid.back().size());
   }
   if (grid.empty() || width == 0) return c.Fail(Err::Calc);
-  if (grid.size() * width > 16'000'000) return c.Fail(Err::Num);
+  if (!c.m.Fits(static_cast<double>(grid.size()), static_cast<double>(width))) return c.Fail(Err::Num);
   Value pad = c.Has(5) ? c.arg(5) : Value::Error(Err::NA);
   Array* out = Array::Make(static_cast<int32_t>(grid.size()), static_cast<int32_t>(width));
   for (size_t i = 0; i < grid.size(); ++i)

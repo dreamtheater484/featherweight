@@ -74,6 +74,9 @@ class Host {
   }
   // Manual calculation (INFO("recalc")).
   virtual bool Manual() { return false; }
+  // The most cells an array a formula builds may have (a range read as one, an operator's or a
+  // function's result): a larger one is #NUM!, where Excel runs out of resources. Fuzzing lowers it.
+  virtual int64_t MaxArrayCells() const { return 16'000'000; }
   // Rows a filter hides: hidden, in an autoFilter range with criteria (every SUBTOTAL leaves them
   // out; AGGREGATE doesn't tell them from other hidden rows).
   virtual bool RowFiltered(int sheet, int32_t row) {
