@@ -179,10 +179,16 @@ bool WorkbookView::GridCommand(int cmd) {
     }
     case CmdClearContents: EditRefused(Ed().ClearContents(sheet, sel)); return true;
     case CmdHide:
-    case CmdUnhide:
-      EditRefused(rows ? Ed().HideRows(sheet, sel.firstRow, sel.lastRow, cmd == CmdHide)
-                       : Ed().HideColumns(sheet, sel.firstCol, sel.lastCol, cmd == CmdHide));
+    case CmdUnhide: {
+      const std::vector<HeldSize> held = HeldSizes();  // s3-data: pictures keep their size
+      std::optional<edit::EditGroup> group;
+      if (!held.empty()) group.emplace(Ed(), cmd == CmdHide ? (rows ? u"Hide Rows" : u"Hide Columns") : (rows ? u"Unhide Rows" : u"Unhide Columns"));
+      edit::Result r = rows ? Ed().HideRows(sheet, sel.firstRow, sel.lastRow, cmd == CmdHide)
+                            : Ed().HideColumns(sheet, sel.firstCol, sel.lastCol, cmd == CmdHide);
+      if (r) r = KeepSizes(held);
+      if (!EditRefused(r) && group) group->done = true;
       return true;
+    }
     case CmdRowHeight:
     case CmdColumnWidth: ShowSizePanel(cmd == CmdRowHeight); return true;
     case CmdInsertSheet:
