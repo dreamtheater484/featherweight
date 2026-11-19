@@ -104,6 +104,7 @@ function Get-Dump($xl, $wb) {
         size = [double]$cell.Font.Size; font = [string]$cell.Font.Name; color = [int]$cell.Font.Color
         fill = if ($cell.Interior.Pattern -eq -4142) { $null } else { [int]$cell.Interior.Color }
         align = [int]$cell.HorizontalAlignment; wrap = [bool]$cell.WrapText
+        spill = if ($formula) { try { [bool]$cell.HasSpill } catch { $false } } else { $false }  # a dynamic array's anchor
         top = "$($cell.Borders.Item(8).LineStyle)/$($cell.Borders.Item(8).Weight)"
         bottom = "$($cell.Borders.Item(9).LineStyle)/$($cell.Borders.Item(9).Weight)"
       }
@@ -130,6 +131,7 @@ function Get-Facts($wb, $sheets) {
       $at = "$($s.name)!$($c.ref)"
       "cell $at text $($c.text)"
       if ($c.formula -like "=*") { "cell $at formula $($c.formula)" }
+      if ($c.spill) { "cell $at spills" }  # a dynamic array (not a legacy Ctrl+Shift+Enter one)
       "cell $at numfmt $($c.numfmt)"
       "cell $at font $($c.font) $($c.size)$(if ($c.bold) { ' bold' })$(if ($c.italic) { ' italic' })$(if ($c.underline -ne -4142) { ' underline' })"
       if ($null -ne $c.fill) { "cell $at fill $(& $hex $c.fill)" }
