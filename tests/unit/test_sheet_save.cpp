@@ -977,13 +977,29 @@ TEST(sheet_insert_chart) {
   CHECK(ed.InsertChart(0, c));
   CHECK(ed.PartBytes("/xl/charts/chart2.xml").find("<c:pieChart>") != std::string::npos);
   CHECK(ed.PartBytes("/xl/drawings/drawing2.xml").empty());
+  // The drawing API pictures and shapes use (s3-data): a rectangle joins the drawing too.
+  const std::string drawing = ed.SheetDrawing(0, false);
+  CHECK_EQ(drawing, std::string("/xl/drawings/drawing1.xml"));
+  CHECK(ed.SheetDrawing(1, false).empty());
+  CHECK_EQ(ed.NextShapeId(drawing), 4u);
+  CHECK(!ed.AddAnchor(drawing, "<xdr:absoluteAnchor/>"));  // no group open
+  ed.BeginGroup(u"Insert Shape");
+  CHECK(ed.AddAnchor(drawing,
+                     "<xdr:twoCellAnchor xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" "
+                     "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff>"
+                     "<xdr:row>22</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff>"
+                     "<xdr:row>26</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr>"
+                     "<xdr:cNvPr id=\"4\" name=\"Rectangle 3\"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst=\"rect\">"
+                     "<a:avLst/></a:prstGeom></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>"));
+  ed.EndGroup();
+  CHECK_EQ(ed.NextShapeId(drawing), 5u);
 
   std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-insert-chart");
   CheckClean(saved);
   CHECK(PartText(saved, "/xl/worksheets/sheet1.xml").find("drawing") != std::string::npos);
   auto again = OpenZip(saved);
   if (!again) return;
-  CHECK(ed.Undo(2));
+  CHECK(ed.Undo(3));
   CHECK(ed.PartBytes("/xl/charts/chart1.xml").empty() && ed.PartBytes("/xl/drawings/drawing1.xml").empty());
   std::vector<uint8_t> undone = SaveBytes(*book, ed, "save-insert-chart-undone");
   CheckClean(undone);

@@ -253,6 +253,18 @@ class Editor {
   std::string NewPartName(std::string_view stem, std::string_view ext) const;
   std::string PartBytes(std::string_view name) const;  // empty when there's no such part
 
+  // ---- Drawings: charts, pictures and shapes sit in the sheet's drawing part. Changes go inside
+  // a group (Run, or BeginGroup/EndGroup).
+  // The sheet's drawing (/xl/drawings/drawingN.xml); when it has none and `create`, a new one with
+  // its relationship, content type and the sheet's <drawing r:id> element. Empty when it can't
+  // (no package, a sheet not saved yet; creating needs an open group).
+  std::string SheetDrawing(int sheet, bool create);
+  // A shape id (cNvPr id) the drawing doesn't use yet: one past the highest.
+  uint32_t NextShapeId(std::string_view drawing) const;
+  // Appends an anchor to a drawing: an xdr:twoCellAnchor, oneCellAnchor or absoluteAnchor that
+  // declares the xdr: and a: prefixes (and r: when it has relationships) on itself.
+  bool AddAnchor(std::string_view drawing, std::string_view anchorXml);
+
   // ---- Charts (s3-charts)
   enum class ChartKind : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter };
   struct NewChart {
