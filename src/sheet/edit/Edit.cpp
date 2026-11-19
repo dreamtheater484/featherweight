@@ -5231,6 +5231,13 @@ Result Editor::SetTable(int sheet, size_t index, const Table& t) {
       const Range all{std::min(before.ref.firstRow, now.ref.firstRow), std::min(before.ref.firstCol, now.ref.firstCol),
                       std::max(before.ref.lastRow, now.ref.lastRow), std::max(before.ref.lastCol, now.ref.lastCol)};
       st.Change(&s, kStyles | kRules | kTables, all);
+      // Renamed: formulas everywhere that name it follow (Table1[Qty] -> Orders[Qty]), as in Excel.
+      if (before.name != now.name) {
+        const std::string from = before.name, to = now.name;
+        RewriteSheetRefs(
+            -1, [&](std::string_view text, int) { return refs::RenameTable(text, from, to); },
+            [&](std::string_view text) { return Mentions(text, from); });
+      }
       return Result{};
     });
   }());
