@@ -7,13 +7,65 @@
 
 #include <pugixml.hpp>
 
+#include <cstdio>
+#include <vector>
+
+#include "SheetTestUtil.h"
+#include "pkg/Check.h"
 #include "sheet/data/Shapes.h"
+#include "sheet/edit/Edit.h"
+#include "sheet/edit/Journal.h"
+#include "sheet/model/Workbook.h"
+#include "sheet/xlsx/Xlsx.h"
 
 using namespace fw::sheet;
 using data::ObjectFormat;
 using data::ShapeKind;
+using edit::Editor;
+using namespace sheet_test;
 
 namespace {
+std::vector<uint8_t> SaveBook(Workbook& book, Editor& ed) {
+  ed.BeginSave();
+  xlsx::SavePlan plan;
+  fw::pkg::Status st = xlsx::PrepareSave(book, ed, plan, book.Format());
+  CHECK(st.Ok());
+  fw::pkg::MemorySink sink;
+  if (st.Ok()) st = xlsx::WriteSave(book, plan, sink);
+  CHECK(st.Ok());
+  if (st.Ok()) xlsx::CommitSave(book, ed, plan);
+  else ed.EndSave();
+  wchar_t dir[MAX_PATH];
+  DWORD n = GetEnvironmentVariableW(L"FW_SAVE_OUT", dir, MAX_PATH);
+  if (n && n < MAX_PATH) CHECK(test::WriteFileBytes(std::wstring(dir) + L"\\shapes.xlsx", sink.bytes));
+  return sink.bytes;
+}
+std::string PartOf(const std::vector<uint8_t>& zip, const std::string& part) {
+  fw::pkg::Status st;
+  auto pkg = test::OpenBytes(zip, st);
+  std::vector<uint8_t> out;
+  if (!pkg || !pkg->ReadPart(part, out).Ok()) return {};
+  return test::Text(out);
+}
+void CleanZip(const std::vector<uint8_t>& zip) {
+  fw::pkg::Status st;
+  auto pkg = test::OpenBytes(zip, st);
+  CHECK(pkg != nullptr);
+  if (!pkg) return;
+  fw::pkg::CheckReport report = fw::pkg::CheckPackage(*pkg);
+  for (const std::string& e : report.errors) std::printf("  check: %s\n", e.c_str());
+  CHECK(report.Ok());
+}
+size_t Count(const std::string& s, const std::string& what) {
+  size_t n = 0;
+  for (size_t at = s.find(what); at != std::string::npos; at = s.find(what, at + 1)) ++n;
+  return n;
+}
+// A 1 x 1 PNG.
+const std::string kPng(
+    "\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\rIDATx\x9c"
+    "c\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\0\0\0\0IEND\xae\x42\x60\x82",
+    67);
 bool Parses(const std::string& xml) {
   pugi::xml_document d;
   return d.load_buffer(xml.data(), xml.size());
@@ -120,4 +172,62 @@ TEST(SheetShapes_ExcelAnchor) {
   CHECK(Has(out, "<a16:creationId xmlns:a16=\"http://schemas.microsoft.com/office/drawing/2014/main\" id=\"{009EC9CB-304A-62D0-CC4B-827E2DF4120A}\"/>"));
   CHECK(out.substr(0, out.find("<xdr:txBody>")) == excel.substr(0, excel.find("<xdr:txBody>")));
   CHECK(data::FormatObject("<not xml", f, data::kFormatText).empty());
+}
+
+// Insert > Pictures and Shapes through the Editor: Excel's parts, a picture stored once, formats,
+// undo and the journal.
+TEST(SheetShapes_Insert) {
+  const char* data = "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>";
+  auto book = OpenParts({data, "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  edit::Journal journal;
+  ed.SetJournal(&journal);
+  edit::drawing::Place at;
+  at.from = {1, 1, 0, 0};
+  at.to = {3, 5, 0, 0};
+  at.x = 609600, at.y = 190500, at.cx = 1219200, at.cy = 762000;
+  uint32_t shape = 0, pic1 = 0, pic2 = 0;
+  CHECK(ed.InsertShape(0, ShapeKind::Rectangle, at, "Hello", &shape));
+  CHECK(ed.InsertPicture(0, kPng, at, "A dot", &pic1));
+  at.from.row = at.to.row = 9;
+  CHECK(ed.InsertPicture(0, kPng, at, "", &pic2));  // the same picture again
+  CHECK(shape == 2 && pic1 == 3 && pic2 == 4);
+  CHECK(!ed.InsertPicture(0, "not a picture", at, ""));
+  // Its format: a red fill.
+  const std::string d = ed.SheetDrawing(0, false);
+  std::string anchor = ed.AnchorXml(d, shape);
+  ObjectFormat f = data::ReadObjectFormat(anchor);
+  CHECK(f.name == "Rectangle 1" && f.text == "Hello");
+  f.fill = ObjectFormat::Paint::Solid;
+  f.fillRgb = 0xC00000;
+  CHECK(ed.SetObjectXml(0, shape, data::FormatObject(anchor, f, data::kFormatFill), u"Format Shape"));
+  CHECK(!ed.SetObjectXml(0, shape, data::FormatObject(ed.AnchorXml(d, pic1), f, data::kFormatFill), u"Format Shape"));  // another id
+  CHECK(!ed.SetObjectXml(0, shape, "<xdr:twoCellAnchor><xdr:sp><xdr:nvSpPr><xdr:cNvPr id=\"2\"/>", u"Format Shape"));
+  ed.SetJournal(nullptr);
+  CHECK(ed.AnchorXml(d, shape).find("<a:solidFill><a:srgbClr val=\"C00000\"/></a:solidFill>") != std::string::npos);
+  ed.Undo();
+  CHECK(ed.AnchorXml(d, shape).find("C00000") == std::string::npos);
+  ed.Redo();
+  std::vector<uint8_t> saved = SaveBook(*book, ed);
+  CleanZip(saved);
+  const std::string drawingXml = PartOf(saved, d);
+  CHECK(Count(drawingXml, "<xdr:twoCellAnchor") == 3 && Count(drawingXml, "editAs=\"oneCell\"") == 2);
+  CHECK(PartOf(saved, "/xl/media/image1.png") == kPng && PartOf(saved, "/xl/media/image2.png").empty());
+  const std::string rels = PartOf(saved, "/xl/drawings/_rels/drawing1.xml.rels");
+  CHECK(Count(rels, "relationships/image\"") == 1);
+  CHECK(drawingXml.find("descr=\"A dot\"") != std::string::npos);
+  // The journal makes the same drawing on the file as it was opened.
+  auto fresh = OpenParts({data, "<sheetData/>"});
+  if (fresh) {
+    Editor replay(*fresh);
+    CHECK(replay.Replay(journal.All()));
+    const std::string d2 = replay.SheetDrawing(0, false);
+    CHECK(!d2.empty() && replay.AnchorXml(d2, shape).find("C00000") != std::string::npos && !replay.AnchorXml(d2, pic2).empty());
+  }
+  // Deleting the pictures takes the image with the last one.
+  CHECK(ed.DeleteObjects(0, {pic1}));
+  CHECK(!ed.PartBytes("/xl/media/image1.png").empty());
+  CHECK(ed.DeleteObjects(0, {pic2}));
+  CHECK(ed.PartBytes("/xl/media/image1.png").empty());
 }
