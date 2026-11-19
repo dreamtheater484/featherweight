@@ -682,6 +682,7 @@ bool WorkbookView::CommitEdit(bool fill) {
 }
 
 void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
+  pivotLooksRead_.clear();  // s4-pivot: read the PivotTables' parts again when painting
   SyncEngine(changes);
   // The unsaved dot and the owner file; undoing back to what was saved makes the tab clean again.
   const bool wasDirty = file_->Dirty();

@@ -3,11 +3,16 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <vector>
 
 #include "draw/Painter.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/view/CellText.h"
 #include "sheet/view/Grid.h"
+
+namespace fw::sheet::pivot {
+struct Look;
+}
 
 namespace fw::sheet::condfmt {
 class SheetRules;
@@ -54,6 +59,7 @@ struct PaintOptions {
   // Conditional formats over the cells' own formats (null: none); table styles under them.
   condfmt::SheetRules* rules = nullptr;
   bool tables = true;
+  const std::vector<pivot::Look>* pivots = nullptr;  // the sheet's PivotTables' styles, like tables'
 };
 
 

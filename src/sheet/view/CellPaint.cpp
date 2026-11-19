@@ -7,6 +7,7 @@
 
 #include "sheet/condfmt/CondFormat.h"
 #include "sheet/model/TableStyles.h"
+#include "sheet/pivot/Pivot.h"
 
 namespace fw::sheet::view {
 
@@ -145,13 +146,16 @@ class Painting {
     bool cf = false;        // a conditional format holds:
     condfmt::Style st;      // over it
   };
-  bool Looks() const { return o_.rules || (o_.tables && !sheet_.Tables().empty()); }
+  bool Looks() const {
+    return o_.rules || (o_.tables && !sheet_.Tables().empty()) || (o_.pivots && !o_.pivots->empty());
+  }
   const Look& LookAt(uint32_t row, uint32_t col) {
     const uint64_t key = (uint64_t{row} << 15) | col;
     auto it = looks_.find(key);
     if (it != looks_.end()) return it->second;
     Look& lk = looks_[key];
     if (o_.tables && !sheet_.Tables().empty()) lk.table = TableFormatAt(styles_, sheet_, row, col);
+    if (o_.pivots && !o_.pivots->empty() && lk.table.Empty()) lk.table = pivot::LookFormatAt(*o_.pivots, row, col);
     if (o_.rules) lk.cf = o_.rules->At(row, col, lk.st);
     return lk;
   }

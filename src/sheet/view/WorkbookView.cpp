@@ -700,6 +700,7 @@ void WorkbookView::DrawGrid(Canvas& c, ID2D1DeviceContext* dc) {
   o.gridColor = gridColor_;
   o.showZeros = showZeros_;
   o.rules = RulesFor(sheet_);
+  o.pivots = PivotLooksFor(sheet_);  // s4-pivot
   const double k = K();
   const float mirror = cells_.left + cells_.right;
   for (const Pane& pane : Panes()) {

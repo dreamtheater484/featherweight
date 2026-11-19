@@ -1414,12 +1414,15 @@ void WorkbookView::AddFormatToolbar(ToolbarModel& m) {
   data.tooltip = L"Sort, filter and remove duplicates";
   data.choices = {L"Sort A to Z",        L"Sort Z to A",          L"Custom sort…",
                   L"Filter (Ctrl+Shift+L)", L"Remove duplicates…", L"Data validation…",
-                  L"Circle invalid data", L"Clear validation circles", L"Table… (Ctrl+T)"};
+                  L"Circle invalid data", L"Clear validation circles", L"Table… (Ctrl+T)",
+                  L"PivotTable…", L"Refresh PivotTable (Alt+F5)", L"Refresh all PivotTables"};
   data.onChange = [this](const ToolValue& v) {
     static constexpr int kCmds[] = {CmdSortAscending, CmdSortDescending,   CmdDataBox,       CmdFilter,
-                                    CmdRemoveDuplicates, CmdDataValidation, CmdCircleInvalid, CmdClearCircles, CmdCreateTable};
+                                    CmdRemoveDuplicates, CmdDataValidation, CmdCircleInvalid, CmdClearCircles, CmdCreateTable,
+                                    CmdPivotTable, CmdPivotRefresh, CmdPivotRefreshAll};
     if (v.index >= 0 && v.index < 5) DataCommand(kCmds[v.index]);
     else if (v.index >= 5 && v.index < 9) RulesCommand(kCmds[v.index]);
+    else if (v.index >= 9 && v.index < 12) PivotsCommand(kCmds[v.index]);  // s4-pivot
   };
   m.left.push_back(data);
   // Conditional formatting (WorkbookData.cpp).
