@@ -281,6 +281,10 @@ class Editor {
   // Deleted, with the parts nothing else uses any more (a chart and its own parts, a picture
   // used once); the drawing and the sheet's reference to it go with the last object.
   Result DeleteObjects(int sheet, const std::vector<uint32_t>& ids);
+  // The chart part of the object with shape id `id` on the sheet; empty when it isn't a chart.
+  std::string ChartPart(int sheet, uint32_t id) const;
+  // A chart's type, titles, legend, data labels, colors or series changed (Charts.h: ChartEdit).
+  Result EditChart(int sheet, uint32_t id, const ChartEdit& edit);
 
   // ---- Charts (s3-charts)
   using ChartKind = edit::ChartKind;

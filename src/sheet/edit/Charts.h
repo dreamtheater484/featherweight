@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,6 +19,41 @@ class Workbook;
 namespace fw::sheet::edit {
 
 enum class ChartKind : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter };
+
+// A chart's series as Select Data lists them: formulas as the file writes them ("Sheet1!$B$1",
+// "'My sheet'!$B$2:$B$5"; empty: none).
+struct ChartSeries {
+  std::string name, values, categories;
+};
+// A title: shown or not, its text (empty: Excel's own, "Chart Title", the series' name, "Axis Title").
+struct ChartText {
+  bool shown = true;
+  std::string text;
+};
+// A chart's own settings, as its panel shows them. `kind` is empty for kinds and combinations it
+// doesn't make.
+struct ChartInfo {
+  std::optional<ChartKind> kind;
+  ChartText title, xTitle, yTitle;  // the category (X) and value (Y) axes' titles
+  char legend = 0;                  // 'b', 'r', 't', 'l' or 0: none
+  bool labels = false;              // data labels showing values
+  std::vector<ChartSeries> series;
+};
+// A series' color (or one data point's, a pie's slice), 0xRRGGBB.
+struct ChartColor {
+  uint32_t series = 0;
+  int32_t point = -1;
+  uint32_t rgb = 0;
+};
+// What an edit changes (unset: left as it is).
+struct ChartEdit {
+  std::optional<ChartKind> kind;
+  std::optional<ChartText> title, xTitle, yTitle;
+  std::optional<char> legend;
+  std::optional<bool> labels;
+  std::vector<ChartColor> colors;
+  std::optional<std::vector<ChartSeries>> series;  // Select Data: the whole list, in order
+};
 
 namespace refs {
 struct CachePoint;
@@ -42,6 +78,14 @@ bool RefreshCaches(const Workbook& book, std::string& xml);
 // numbers as the cache writes them, text, TRUE/FALSE, errors as #N/A; hidden rows and columns left
 // out when `visibleOnly`. False when it isn't one loaded sheet's row or column.
 bool CachePoints(const Workbook& book, std::string_view formula, bool visibleOnly, std::vector<refs::CachePoint>& out);
+
+// A chart part's settings.
+ChartInfo Info(std::string_view xml);
+// The chart part with the edit made: what the edit doesn't change stays as it was (a new type or
+// series list writes the series anew in that type's look, each keeping its color). Empty when it
+// can't be made (a part it can't read; a type or series change on a chart whose prefixes aren't
+// Excel's c: and a:).
+std::string Edited(const Workbook& book, std::string_view xml, const ChartEdit& e);
 
 }  // namespace charts
 }  // namespace fw::sheet::edit
