@@ -292,3 +292,72 @@ TEST(Pivot_InsertPivot) {
   CHECK(ed.Undo().ok);
   CHECK(sheet_test::Text(book->GetSheet(static_cast<size_t>(data)), 1, 8).empty());
 }
+
+
+// The PivotTable styles in the grid against what Excel shows: every cell of the fixtures' styled
+// pivots (PivotStyleLight16, Light9, Medium2, Medium15, Medium9, Dark2), as Excel's DisplayFormat
+// gave it (pivots-refreshed-styles.json, from excel_pivots.py): the fill, bold, and which sides
+// have a line. Excel puts a line between two cells on one of them, so a side counts when either
+// cell has it.
+TEST(Pivot_StylesMatchExcel) {
+  auto book = sheet_test::OpenZip(sheet_test::TestFile("office/sheet/pivots/pivots-refreshed.xlsx"));
+  std::vector<uint8_t> json = sheet_test::TestFile("office/sheet/pivots/pivots-refreshed-styles.json");
+  if (!book || json.empty()) return;
+  const std::string text(json.begin(), json.end());
+  auto field = [&](size_t from, const char* key) {
+    const std::string k = std::string("\"") + key + "\":";
+    size_t at = text.find(k, from);
+    if (at == std::string::npos) return std::string();
+    at += k.size();
+    while (at < text.size() && text[at] == ' ') ++at;
+    size_t end = at;
+    if (text[at] == '"') end = text.find('"', ++at);
+    else
+      while (end < text.size() && text[end] != ',' && text[end] != '}' && text[end] != '\n') ++end;
+    return text.substr(at, end - at);
+  };
+  std::map<std::string, std::vector<pivot::Look>> looks;
+  int cells = 0, fills = 0, bolds = 0, sides = 0;
+  for (size_t at = text.find('{'); at != std::string::npos; at = text.find('{', at + 1)) {
+    const std::string sheet = field(at, "sheet"), cell = field(at, "cell"), want = field(at, "sides");
+    const long fill = std::strtol(field(at, "fill").c_str(), nullptr, 10);
+    const bool bold = field(at, "bold") == "true";
+    const int s = book->FindSheet(sheet);
+    CellAddr a;
+    if (s < 0 || !ParseA1(cell, a)) continue;
+    if (!looks.count(sheet)) looks[sheet] = pivot::SheetLooks(*book, static_cast<size_t>(s));
+    const std::vector<pivot::Look>& l = looks[sheet];
+    const TableCellFormat f = pivot::LookFormatAt(l, a.row, a.col);
+    ++cells;
+    const long mine = f.fill.pattern == PatternType::None ? -1
+                                                         : static_cast<long>(book->GetStyles().Resolve(f.fill.fg, 0) & 0xFFFFFF);
+    auto alike = [](long a, long b) {  // Excel's tints round a step differently
+      if (a < 0 || b < 0) return a == b;
+      for (int shift = 0; shift < 24; shift += 8)
+        if (std::abs(((a >> shift) & 255) - ((b >> shift) & 255)) > 2) return false;
+      return true;
+    };
+    if (alike(mine, fill)) ++fills;
+    else if (fills + 10 > cells) std::printf("  %s!%s fill %06lX, Excel's %06lX\n", sheet.c_str(), cell.c_str(), mine, fill);
+    if (f.bold == bold) ++bolds;
+    else if (bolds + 10 > cells) std::printf("  %s!%s bold %d, Excel's %d\n", sheet.c_str(), cell.c_str(), f.bold, bold);
+    // A side's line: this cell's, or its neighbor's on that side.
+    auto has = [&](char side) {
+      switch (side) {
+        case 'l': return f.left.style != BorderStyle::None || (a.col > 0 && pivot::LookFormatAt(l, a.row, a.col - 1).right.style != BorderStyle::None);
+        case 'r': return f.right.style != BorderStyle::None || pivot::LookFormatAt(l, a.row, a.col + 1).left.style != BorderStyle::None;
+        case 't': return f.top.style != BorderStyle::None || (a.row > 0 && pivot::LookFormatAt(l, a.row - 1, a.col).bottom.style != BorderStyle::None);
+        default: return f.bottom.style != BorderStyle::None || pivot::LookFormatAt(l, a.row + 1, a.col).top.style != BorderStyle::None;
+      }
+    };
+    bool same = true;
+    for (char side : std::string("ltbr")) same = same && has(side) == (want.find(side) != std::string::npos);
+    if (same) ++sides;
+    else if (sides + 10 > cells) std::printf("  %s!%s sides differ, Excel's '%s'\n", sheet.c_str(), cell.c_str(), want.c_str());
+  }
+  std::printf("  %d cells: fill %d, bold %d, lines %d the same as Excel's\n", cells, fills, bolds, sides);
+  CHECK(cells > 500);
+  CHECK(fills * 100 >= cells * 98);
+  CHECK(bolds * 100 >= cells * 98);
+  CHECK(sides * 100 >= cells * 90);
+}

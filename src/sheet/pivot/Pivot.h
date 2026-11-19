@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include "sheet/model/TableStyles.h"
 #include "sheet/model/Types.h"
 
 // Pivot tables (plan §7.2, decision 18; S4 s4-pivot). A workbook's pivot tables live in package
@@ -185,5 +186,23 @@ std::string NewCacheXml(const Cache& cache);
 std::string NewTableXml(const Table& table);
 // The table model for `spec` over `cache` (its fields read already).
 Table NewTable(const Cache& cache, const NewPivot& spec, std::string name, uint32_t cacheId, CellAddr at);
+
+// ---- The style in the grid (PivotStyles.cpp): a pivot's regions as its part lays it out, and the
+// format its PivotTable style (Excel's built-in ones) gives a cell, under the cell's own format as a
+// table's style is.
+struct Look {
+  enum : uint8_t { kData = 0, kHeading = 0x10, kSubtotal = 0x20, kGrand = 0x40 };  // | level 0-2
+  Range location, area;  // area: with the page fields
+  uint32_t firstHeaderRow = 0, firstDataRow = 0, firstDataCol = 0, pages = 0, colLevels = 0;
+  std::string style;
+  bool rowHeaders = true, colHeaders = true, rowStripes = false, colStripes = false;
+  std::vector<uint8_t> rowKind, colKind;  // per row and column line
+  std::vector<uint32_t> levelCol;  // per row field: its labels' column (compact fields share one)
+  std::vector<bool> levelTabular;  // per row field: tabular (its label on its first child's line)
+};
+bool ReadLook(std::string_view tableXml, Look& out);
+std::vector<Look> SheetLooks(const Workbook& book, size_t sheet);
+TableCellFormat LookFormat(const Look& look, uint32_t row, uint32_t col);
+TableCellFormat LookFormatAt(const std::vector<Look>& looks, uint32_t row, uint32_t col);
 
 }  // namespace fw::sheet::pivot
