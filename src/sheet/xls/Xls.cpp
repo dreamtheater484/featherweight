@@ -1741,18 +1741,50 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
         if (condLeft <= 0) break;
         --condLeft;
         b.Skip(12);  // FrtRefHeader
-        const uint8_t ct = b.U8();
-        b.U8();
+        const uint8_t ct = b.U8(), cp = b.U8();
         const uint16_t cce1 = b.U16(), cce2 = b.U16();
-        const uint32_t cbDxf = b.U32();
-        b.Skip(cbDxf ? cbDxf : 2);
-        b.Skip(cce1);
-        b.Skip(cce2);
+        const uint32_t cbDxf = b.U32();  // DXFN12: a DXFN and its XFExtNoFRT, or 2 reserved bytes
+        Bytes dxfBytes(cbDxf ? b.Take(cbDxf) : std::span<const uint8_t>());
+        if (!cbDxf) b.Skip(2);
+        const auto rgce1 = b.Take(cce1), rgce2 = b.Take(cce2);
         b.Skip(b.U16());  // fmlaActive
         b.Skip(1 + 2 + 2);  // flags, ipriority, icfTemplate
         b.U8();      // cbTemplateParm
         b.Skip(16);  // rgbTemplateParms, always 16 bytes
-        if (!b.Ok() || (ct != 3 && ct != 4 && ct != 6)) break;
+        if (!b.Ok()) break;
+        if (ct == 1 || ct == 2 || ct == 5) {
+          // A cell value or formula rule (the newer kinds, above average, text, dates, duplicates,
+          // come as ct 2 with the formula they stand for), or top/bottom N (CFFilter).
+          std::string dxf = cbDxf ? DxfXml(dxfBytes) : std::string("<dxf/>");
+          if (dxf.empty()) dxf = "<dxf/>";
+          std::string rule = "<cfRule";
+          if (ct == 5) {
+            // CFFilter as Excel writes it: cbFilter, a byte, then fTop and fPercent, and the rank.
+            const uint16_t cbFilter = b.U16();
+            if (cbFilter) b.U8();
+            const uint8_t flags = cbFilter ? b.U8() : 1;
+            const uint16_t rank = cbFilter ? b.U16() : 10;
+            if (!b.Ok() || rank == 0) break;
+            rule += " type=\"top10\" dxfId=\"" + std::to_string(dxfs_.size()) + "\" priority=\"" + std::to_string(++priority) +
+                    "\"" + ((flags & 2) ? " percent=\"1\"" : "") + ((flags & 1) ? "" : " bottom=\"1\"") + " rank=\"" +
+                    std::to_string(rank) + "\"/>";
+          } else {
+            static const char* const kOps[] = {"", "between", "notBetween", "equal", "notEqual", "greaterThan", "lessThan",
+                                               "greaterThanOrEqual", "lessThanOrEqual"};
+            std::string f1, f2;
+            if ((ct == 1 && (cp < 1 || cp > 8)) || !detail::Decompile(ctx_, rgce1, {}, condRow, condCol, f1)) break;
+            if (cce2 && !detail::Decompile(ctx_, rgce2, {}, condRow, condCol, f2)) break;
+            rule += " type=\"" + std::string(ct == 1 ? "cellIs" : "expression") + "\" dxfId=\"" + std::to_string(dxfs_.size()) +
+                    "\" priority=\"" + std::to_string(++priority) + "\"" +
+                    (ct == 1 ? std::string(" operator=\"") + kOps[cp] + "\"" : std::string()) + "><formula>" + Esc(f1) +
+                    "</formula>" + (ct == 1 && (cp == 1 || cp == 2) && !f2.empty() ? "<formula>" + Esc(f2) + "</formula>" : "") +
+                    "</cfRule>";
+          }
+          dxfs_.push_back(std::move(dxf));
+          condRules += rule;
+          break;
+        }
+        if (ct != 3 && ct != 4 && ct != 6) break;
         b.Skip(3);  // unused, reserved
         // A CFVO: its type, a formula, and a number when there's neither formula nor min/max.
         auto cfvo = [&](std::string& out) {
@@ -2289,13 +2321,43 @@ std::string Converter::DxfXml(Bytes& b) {
   const uint32_t f1 = b.U32();
   const uint16_t f2 = b.U16();
   if (!b.Ok()) return {};
-  std::string font, border, fill;
-  if (f1 & (1u << 25)) {  // number format
+  std::string font, border, fill, numFmt;
+  if (f1 & (1u << 25)) {  // number format: a code of its own (DXFNumUsr) or a format's index (DXFNumIfmt)
+    std::string code;
+    int id = -1;
     if (f2 & 1) {
       const uint16_t cb = b.U16();
-      b.Skip(cb >= 2 ? cb - 2 : 0);
+      Bytes s(b.Take(cb >= 2 ? cb - 2 : 0));
+      if (!detail::ReadString(s, code)) code.clear();
     } else {
-      b.Skip(2);
+      b.U8();
+      id = b.U8();
+      // The built-in codes that don't depend on the locale ([MS-XLS] 2.4.126); the others come from
+      // the file's FORMAT records.
+      static const std::pair<int, const char*> kBuiltin[] = {
+          {0, "General"}, {1, "0"}, {2, "0.00"}, {3, "#,##0"}, {4, "#,##0.00"}, {9, "0%"}, {10, "0.00%"},
+          {11, "0.00E+00"}, {12, "# ?/?"}, {13, "# ??/??"}, {14, "mm-dd-yy"}, {15, "d-mmm-yy"}, {16, "d-mmm"},
+          {17, "mmm-yy"}, {18, "h:mm AM/PM"}, {19, "h:mm:ss AM/PM"}, {20, "h:mm"}, {21, "h:mm:ss"},
+          {22, "m/d/yy h:mm"}, {37, "#,##0 ;(#,##0)"}, {38, "#,##0 ;[Red](#,##0)"}, {39, "#,##0.00;(#,##0.00)"},
+          {40, "#,##0.00;[Red](#,##0.00)"}, {45, "mm:ss"}, {46, "[h]:mm:ss"}, {47, "mmss.0"}, {48, "##0.0E+0"}, {49, "@"}};
+      for (const auto& [n, c] : formats_)
+        if (n == id) code = c;
+      for (const auto& [n, c] : kBuiltin)
+        if (n == id && code.empty()) code = c;
+    }
+    if (!code.empty()) {
+      if (id < 0) {
+        // A code of its own: the FORMAT record's id when the file has the same code, else an id
+        // past every format's.
+        for (const auto& [n, c] : formats_)
+          if (c == code) id = n;
+        if (id < 0) {
+          int next = 164;
+          for (const auto& [n, c] : formats_) next = std::max(next, n + 1);
+          id = next + static_cast<int>(dxfs_.size());
+        }
+      }
+      numFmt = "<numFmt numFmtId=\"" + std::to_string(id) + "\" formatCode=\"" + Esc(code) + "\"/>";
     }
   }
   if (f1 & (1u << 26)) {  // DXFFntD: 118 bytes
@@ -2354,7 +2416,7 @@ std::string Converter::DxfXml(Bytes& b) {
     if (!pf.empty() || !inner.empty()) fill = "<fill><patternFill" + pf + (inner.empty() ? "/>" : ">" + inner + "</patternFill>") + "</fill>";
   }
   if (f1 & (1u << 30)) b.Skip(2);  // protection
-  return "<dxf>" + (font.empty() ? std::string() : "<font>" + font + "</font>") + fill +
+  return "<dxf>" + (font.empty() ? std::string() : "<font>" + font + "</font>") + numFmt + fill +
          (border.empty() ? std::string() : "<border>" + border + "</border>") + "</dxf>";
 }
 
