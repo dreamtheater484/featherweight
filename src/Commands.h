@@ -388,6 +388,16 @@ enum Cmd : int {
   CmdTableDesign,
   CmdConvertToRange,
   CmdTableTotalRow,
+  // Pictures and shapes (S3, s3-data): 2880-2899.
+  CmdObjectsBox = 2880,   // the toolbar's Insert choices
+  CmdObjectPicture,       // Insert > Pictures: files
+  CmdObjectRectangle,     // Insert > Shapes, at the active cell
+  CmdObjectRoundRect,
+  CmdObjectOval,
+  CmdObjectLine,
+  CmdObjectArrow,
+  CmdObjectTextBox,
+  CmdFormatObject,        // the Format panel of the selected picture or shape
   // Protection, links, notes and comments (S3, s3-review): 2900-2939.
   CmdProtectSheet = 2900,  // Protect Sheet, or Unprotect Sheet on a protected one
   CmdProtectWorkbook,      // Protect Workbook (its structure), or Unprotect Workbook
@@ -397,6 +407,24 @@ enum Cmd : int {
   CmdShowAllNotes,
   CmdDeleteThread,  // Delete Thread (New Comment, Ctrl+Alt+M, is the app's CmdNewComment)
   // Links: the app's CmdInsertLink (Ctrl+K) and CmdRemoveLink.
+
+  // Page setup, print preview and Export PDF (S3, s3-print): 2940-2969.
+  // The Page Setup panel is the app's CmdPageSetup.
+  CmdSetPrintArea = 2940,  // the selection
+  CmdAddToPrintArea,
+  CmdClearPrintArea,
+  CmdPrintTitles,       // the panel's Sheet tab
+  CmdInsertPageBreak,   // above and left of the active cell
+  CmdRemovePageBreak,
+  CmdResetPageBreaks,
+  CmdPageBreakPreview,  // the sheet's pages over its cells (on and off)
+  CmdNoScaling,         // print preview's scaling shortcuts, in this order
+  CmdFitSheetOnePage,
+  CmdFitColumnsOnePage,
+  CmdFitRowsOnePage,
+  CmdPrintActiveSheet,  // what print preview shows, prints and exports, in this order
+  CmdPrintWorkbook,
+  CmdPrintSelection,
 
   // Defined names (S3, s3-calc): 2970-2999.
   CmdNameManager = 2970,  // Ctrl+F3

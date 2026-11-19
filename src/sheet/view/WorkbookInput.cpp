@@ -310,6 +310,7 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
   if (editor_.Active() && !CommitEdit(false)) return;
   if (button == 0 && ObjectMouseDown(fx, fy, doubleClick)) return;  // s3-charts: charts, pictures, shapes
   if (button == 0 && ValidationButtonAt(fx, fy)) return ShowValidationList();  // s3-data: a list's choices
+  if (button == 0 && BreakDragStart(fx, fy)) return;  // s3-print: a page break in Page Break Preview
   // A filter's button on its header row opens the column's filter.
   if (uint32_t column = 0; button == 0 && FilterButtonAt(fx, fy, &column)) {
     ShowFilterPanel(column);
@@ -455,6 +456,7 @@ void WorkbookView::OnMouseMove(int x, int y, UINT mods) {
     if (!ScrollDragMove(x, y)) UpdateScrollbarHover(x, y);
     return;
   }
+  if (BreakDragMove(x, y)) return;  // s3-print
   const float fx = static_cast<float>(x), fy = static_cast<float>(y);
   if (mouse_ == Mouse::Object) return ObjectMouseMove(fx, fy, mods);  // s3-charts
   const POINT was = hover_;
@@ -540,6 +542,7 @@ void WorkbookView::OnMouseUp(int x, int y, int button, UINT mods) {
     drag_ = Drag::None;
     return;
   }
+  if (BreakDragEnd(x, y)) return;  // s3-print
   if (mouse_ == Mouse::Object) return ObjectMouseUp();  // s3-charts
   if (mouse_ == Mouse::Fill) {
     mouse_ = Mouse::None;
@@ -587,6 +590,7 @@ HCURSOR WorkbookView::CursorAt(int x, int y) {
     if (gfx::Contains(FormulaBox(), fx, fy) || (EditGeometry(b) && gfx::Contains(b.rc, fx, fy)))
       return LoadCursorW(nullptr, IDC_IBEAM);
     if (FillHandleAt(fx, fy)) return LoadCursorW(nullptr, IDC_SIZEALL);
+    if (HCURSOR pb = BreakCursor(fx, fy)) return pb;  // s3-print
     if (mouse_ == Mouse::Size && sizing_) return LoadCursorW(nullptr, sizing_->rows ? IDC_SIZENS : IDC_SIZEWE);
     if (auto e = SizeEdgeAt(x, y)) return LoadCursorW(nullptr, e->rows ? IDC_SIZENS : IDC_SIZEWE);
     if (RefGrab g; RefHit(x, y, g))

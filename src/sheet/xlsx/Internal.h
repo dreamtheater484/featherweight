@@ -76,6 +76,11 @@ std::vector<XmlPiece> TopLevel(std::string_view xml);
 // schema puts it; and the prefix the sheet's elements are written with ("x:" or "").
 void PutSheetElement(detail::PartText& t, std::string_view local, const std::string& xml);
 std::string SheetPrefix(const detail::PartText& t);
+// The sheet's element `local` as its kept XML has it (empty: none).
+std::string SheetElement(const detail::PartText& t, std::string_view local);
+// The prefix the sheet's root gives the relationships namespace ("r"), declared on the root when
+// it has none (openpyxl and others write sheets without it).
+std::string RelPrefix(detail::PartText& t);
 // The sheet's conditional formats (`validations` false: every conditionalFormatting element and the
 // x14 extension {78C0D931-...}) or validations (the dataValidations element and the extension
 // {CCE6A557-...}), as written: `xml` the top-level elements, `ext` the extension element's content.
@@ -86,6 +91,11 @@ void PutSheetRules(detail::PartText& t, bool validations, const std::string& xml
 // name, size, rows, filter, columns and style set from `t`, the rest kept (false: not a table);
 // the sheet's tableParts with the relationship `relId` added or taken out.
 std::string TableXml(const Table& t);
+// A table's filter as its part has it (false: none), and the part with its autoFilter element
+// replaced by `autoFilter` (Editor's FilterXml); an autoFilter element (a sheet's or a table's) read.
+bool ReadTableFilter(std::string_view tableXml, SheetFilter& f);
+bool PutTableFilter(std::string& tableXml, const std::string& autoFilter);
+bool ReadAutoFilter(pugi::xml_node n, SheetFilter& f);
 bool UpdateTableXml(std::string& xml, const Table& t);
 void PutTablePart(detail::PartText& t, const std::string& relId, bool add);
 // A differential format (dxfs) as styles.xml has it, and read back.

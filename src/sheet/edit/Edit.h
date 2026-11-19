@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "sheet/edit/Charts.h"
+#include "sheet/data/Shapes.h"
 #include "sheet/edit/Drawing.h"
 #include "sheet/edit/Protection.h"
 #include "sheet/model/Workbook.h"
@@ -53,6 +54,7 @@ enum ChangeFlag : uint32_t {
   kView = 1u << 10,       // selection, active sheet, top-left cell, zoom (not undo steps)
   kObjects = 1u << 11,    // the sheet's notes, links or drawings moved (a sort): load them again
   kRules = 1u << 12,      // the sheet's conditional formats or validations changed: read them again
+  kTables = 1u << 13,     // a table added, removed, resized or renamed: structured references' areas differ
 };
 
 // Cells inserted or deleted (kShift): along `axis`, `count` rows or columns at `at` (> 0 inserted
@@ -237,6 +239,24 @@ class Editor {
   Result AddTable(int sheet, Table t);
   Result SetTable(int sheet, size_t index, const Table& t);
   Result RemoveTable(int sheet, size_t index);
+  // The criteria of table `index`'s filter buttons (its autoFilter; `f.ref` is the table's, without
+  // the total row). The rows it hides are the caller's (HideRows), in the same group.
+  Result SetTableFilter(int sheet, size_t index, const SheetFilter& f);
+
+  // ---- Pictures and shapes (Insert > Pictures, Shapes; s3-data). Their XML: sheet/data/Shapes.h;
+  // placed as drawing::Placed places them. Refused on a protected sheet without "Edit objects", in a
+  // workbook without a package (CSV) or on a sheet not saved yet.
+  // A picture (PNG, JPEG, GIF or BMP, the type read from its bytes) as Excel inserts it: moves but
+  // doesn't size with cells, its aspect ratio locked, with its alt text. Stored once: a picture the
+  // package has already with the same bytes is used again. `*id` gets its shape id.
+  Result InsertPicture(int sheet, const std::string& bytes, const drawing::Place& place, const std::string& altText,
+                       uint32_t* id = nullptr);
+  // A shape as Excel inserts it (data::ShapeAnchor), with `text` in it.
+  Result InsertShape(int sheet, data::ShapeKind kind, const drawing::Place& place, const std::string& text,
+                     uint32_t* id = nullptr);
+  // Object `id`'s bytes replaced by `xml` (its fill, outline, text or alt text: data::FormatObject),
+  // which must read and keep the object's id; the rest of the drawing as it is.
+  Result SetObjectXml(int sheet, uint32_t id, const std::string& xml, std::u16string stepName);
 
   // ---- Package parts, for edit operations (charts, pictures, notes, comments, tables...): call
   // them inside the operation's group (Run, or BeginGroup and EndGroup); undo and redo take them
@@ -363,11 +383,24 @@ class Editor {
   // The thread on `cell`, if it has one.
   std::optional<Thread> ThreadAt(int sheet, CellAddr cell) const;
 
+  // ---- Page setup (Page Setup, print preview's settings; S3 s3-print). The worksheet's page setup,
+  // headers and footers, and Fit to (`fitToPage`: scaled by fitToWidth and fitToHeight, else by
+  // `scale`), written as Excel writes them (sheet/edit/PageSetupXml.h). The print area and titles are
+  // names (_xlnm.Print_Area, _xlnm.Print_Titles: SetName). Allowed on a protected sheet, as in Excel.
+  // On a chart sheet: margins, paper, orientation, first page number, headers and footers (the rest
+  // is left out: a chart sheet prints its chart on one page).
+  Result SetPageSetup(int sheet, PageSetup page, const HeaderFooter& headerFooter, bool fitToPage);
+  // The worksheet's page breaks (Insert Page Break, Remove Page Break, Reset All Page Breaks, or
+  // dragged in Page Break Preview), rows and columns: each break's id is the first row or column on
+  // its new page.
+  Result SetPageBreaks(int sheet, const std::vector<PageBreak>& rows, const std::vector<PageBreak>& cols);
+
   // ---- View state: saved with the file, but not undo steps (as in Excel).
   void SetActiveSheet(int sheet);
   void SetSelection(int sheet, CellAddr active, const std::vector<Range>& ranges);
   void SetTopLeft(int sheet, CellAddr topLeft);
   void SetZoom(int sheet, uint32_t percent);
+  void SetViewMode(int sheet, ViewMode mode);  // Normal, Page Break Preview (s3-print)
 
   // ---- Defined names. Adds the name, or replaces the one with the same name and scope.
   Result SetName(const DefinedName& name);

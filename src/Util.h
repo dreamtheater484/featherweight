@@ -30,6 +30,7 @@ std::string GetClipboardBytes(const wchar_t* format);
 unsigned long ClipboardSequence();
 // Test runs (--snapshot) keep a clipboard of their own, so they never touch the user's.
 void UsePrivateClipboard();
+bool UsingPrivateClipboard();  // then pictures and other formats aren't read from the user's either
 
 int64_t UnixNow();
 

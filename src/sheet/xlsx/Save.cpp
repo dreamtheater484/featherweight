@@ -174,9 +174,15 @@ int OrderOf(std::string_view local) {
 }
 
 
+// Whether `local` goes before sheetData. A part read without one (a chart sheet's) keeps all it
+// has before.
+bool BeforeData(const PartText& t, std::string_view local) {
+  return OrderOf(local) < OrderOf("sheetData") || (!t.hasData && !t.rootStart.empty());
+}
+
 // The element `local` as the kept XML has it (empty when it has none).
 std::string_view FindElement(const PartText& t, std::string_view local) {
-  const std::string& seg = OrderOf(local) < OrderOf("sheetData") ? t.beforeData : t.afterData;
+  const std::string& seg = BeforeData(t, local) ? t.beforeData : t.afterData;
   for (const XmlPiece& p : TopLevel(seg))
     if (p.local == local) return std::string_view(seg).substr(p.begin, p.end - p.begin);
   return {};
@@ -185,7 +191,7 @@ std::string_view FindElement(const PartText& t, std::string_view local) {
 // Puts `xml` where element `local` is (empty `xml` removes it), or where the schema puts it.
 void PutElement(PartText& t, std::string_view local, const std::string& xml) {
   int order = OrderOf(local);
-  std::string& seg = order < OrderOf("sheetData") ? t.beforeData : t.afterData;
+  std::string& seg = BeforeData(t, local) ? t.beforeData : t.afterData;
   std::vector<XmlPiece> pieces = TopLevel(seg);
   for (const XmlPiece& p : pieces)
     if (p.local == local) {
@@ -333,6 +339,7 @@ std::string ViewsXml(const Sheet& s, const PartText& t, const std::string& p, bo
     const SheetView& m = model[i];
     pugi::xml_node v = i < nodes.size() ? nodes[i] : views.append_child((p + "sheetView").c_str());
     if (i == 0) SetAttr(v, "tabSelected", active ? "1" : "");
+    SetAttr(v, "view", m.view == ViewMode::PageBreakPreview ? "pageBreakPreview" : m.view == ViewMode::PageLayout ? "pageLayout" : "");
     SetAttr(v, "zoomScale", m.zoomScale != 100 ? std::to_string(m.zoomScale) : "");
     SetAttr(v, "topLeftCell", m.topLeft.row || m.topLeft.col ? CellName(m.topLeft.row, m.topLeft.col) : "");
     SetAttr(v, "workbookViewId", std::to_string(m.workbookViewId));
@@ -372,16 +379,16 @@ std::string ViewsXml(const Sheet& s, const PartText& t, const std::string& p, bo
 }
 
 // `ids`: each link's relationship id (NewLinkRels), else its own.
-std::string LinksXml(const Sheet& s, const PartText& t, const std::string& p, const std::vector<std::string>& ids) {
+std::string LinksXml(const Sheet& s, PartText& t, const std::string& p, const std::vector<std::string>& ids) {
   if (s.Hyperlinks().empty()) return {};
-  std::string r = DeclaredPrefix(t.rootStart, kRelNs);
-  if (r.empty()) r = DeclaredPrefix(t.rootStart, kRelNsStrict);
+  std::string r;  // declared on the root when a link needs it (s3-corpus: openpyxl's sheets)
   std::string out = "<" + p + "hyperlinks>";
   for (size_t i = 0; i < s.Hyperlinks().size(); ++i) {
     const Hyperlink& h = s.Hyperlinks()[i];
     const std::string& id = i < ids.size() ? ids[i] : h.relId;
     out += "<" + p + "hyperlink" + AttrXml("ref", RangeName(h.ref));
     if (!id.empty()) {
+      if (r.empty()) r = RelPrefix(t);
       if (r.empty()) return std::string(FindElement(t, "hyperlinks"));  // can't name the relationship: as it was
       out += AttrXml(r + ":id", id);
     }
@@ -450,6 +457,22 @@ bool NewLinkRels(const pkg::Package& pkg, const Sheet& s, const std::string& par
   }
   rels = Bytes(PrintDoc(doc));
   return true;
+}
+
+// A chart sheet's part: its kept text as the edits left it (page setup), its tab color, and its tab
+// selected when it's the active one (not ViewsXml: a chart sheet's view has no cells).
+PartText ChartSheetText(const Sheet& s, uint32_t pieces, bool active) {
+  PartText t = s.Text();
+  const std::string p = PrefixOf(t.rootStart);
+  if (pieces & edit::kPieceProps) PutElement(t, "sheetPr", SheetPrXml(s, t, p));
+  pugi::xml_document doc;
+  pugi::xml_node views = ElementDom(doc, t, "sheetViews", p);
+  pugi::xml_node v = Child(views, "sheetView");
+  if (v && BoolAttr(v, "tabSelected", false) != active) {
+    SetAttr(v, "tabSelected", active ? "1" : "");
+    PutElement(t, "sheetViews", Print(views));
+  }
+  return t;
 }
 
 // The sheet part's text around sheetData with what the edits changed written from the model.
@@ -828,6 +851,17 @@ std::set<std::string> Reachable(const pkg::Package& pkg, const std::set<std::str
 
 void PutSheetElement(PartText& t, std::string_view local, const std::string& xml) { PutElement(t, local, xml); }
 std::string SheetPrefix(const PartText& t) { return PrefixOf(t.rootStart); }
+std::string SheetElement(const PartText& t, std::string_view local) { return std::string(FindElement(t, local)); }
+std::string RelPrefix(PartText& t) {
+  std::string r = DeclaredPrefix(t.rootStart, kRelNs);
+  if (r.empty()) r = DeclaredPrefix(t.rootStart, kRelNsStrict);
+  if (!r.empty()) return r;
+  const size_t end = t.rootStart.rfind('>');
+  if (end == std::string::npos) return {};
+  const bool strict = t.rootStart.find(kMainNsStrict) != std::string::npos;
+  t.rootStart.insert(end, " xmlns:r=\"" + std::string(strict ? kRelNsStrict : kRelNs) + "\"");
+  return "r";
+}
 
 namespace {
 // Excel's extensions for x14 conditional formats and validations.
@@ -854,7 +888,9 @@ void ContentOf(std::string_view seg, const XmlPiece& p, size_t& from, size_t& to
     return;
   }
   from = j + 1;
-  to = seg.rfind("</", p.end);
+  // Its own closing tag: the last "</" that starts inside it (one at p.end is the next element's,
+  // as </extLst> after an ext).
+  to = seg.rfind("</", p.end - 1);
   if (to == std::string_view::npos || to < from) to = from;
 }
 
@@ -1159,6 +1195,12 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
       continue;
     }
     keptParts.push_back(s.PartName());
+    // A chart sheet whose page setup (or tab color) changed, or that an earlier save wrote: from its text.
+    if (s.Kind() == SheetKind::Chartsheet && s.Loaded() && !s.Text().rootStart.empty() &&
+        ((pieces & ~edit::kPieceViews) || ed.MustWrite(static_cast<int>(i)))) {
+      plan.sheets.push_back({&s, s.PartName(), s.RelId(), ChartSheetText(s, pieces, active), false});
+      continue;
+    }
     if (s.Kind() != SheetKind::Worksheet) {
       std::vector<uint8_t> out;
       if (ed.WorkbookDirty() && OtherSheetTab(*pkg, s, active, out)) put(s.PartName(), std::move(out));
@@ -1171,7 +1213,19 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
     std::vector<std::string> linkIds;
     std::vector<uint8_t> linkRels;
     if (NewLinkRels(*pkg, s, s.PartName(), linkIds, linkRels)) {
-      put(pkg::RelsPartFor(s.PartName()), std::move(linkRels));
+      // A package that lists each rels part instead of a Default for .rels (LibreOffice) gets this one too.
+      const std::string linkRelsPart = pkg::RelsPartFor(s.PartName());
+      bool typed = false;
+      for (pugi::xml_node c : typesRoot.children())
+        typed = typed || (Local(c) == "Default" && _stricmp(c.attribute("Extension").value(), "rels") == 0) ||
+                (Local(c) == "Override" && pkg::PartKey(c.attribute("PartName").value()) == pkg::PartKey(linkRelsPart));
+      if (!typed) {
+        pugi::xml_node o = typesRoot.append_child("Override");
+        o.append_attribute("PartName").set_value(linkRelsPart.c_str());
+        o.append_attribute("ContentType").set_value("application/vnd.openxmlformats-package.relationships+xml");
+        typesChanged = true;
+      }
+      put(linkRelsPart, std::move(linkRels));
       pieces |= edit::kPieceLinks;
     }
     plan.sheets.push_back({&s, s.PartName(), s.RelId(), EditedText(s, pieces, active, linkIds), false});

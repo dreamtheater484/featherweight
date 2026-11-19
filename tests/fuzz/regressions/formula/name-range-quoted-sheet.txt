@@ -1,0 +1,1 @@
+OFFSET(Kosten_1,,,COUNTIF(Kosten_1:'Kostentypen'!$E$21,"?*"))

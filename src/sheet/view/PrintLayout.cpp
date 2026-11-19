@@ -317,7 +317,7 @@ void PrintLayout::Paginate() {
   // A chart sheet prints its chart on one page.
   if (info_.objects && info_.objects->IsChartSheet()) {
     // Landscape, unless the sheet says otherwise.
-    if (paperW_ < paperH_ && sheet_.KeptXml().find("orientation=\"portrait\"") == std::string::npos)
+    if (paperW_ < paperH_ && ps.orientation != Orientation::Portrait)
       std::swap(paperW_, paperH_);
     PrintPage p;
     p.width = paperW_;
@@ -354,7 +354,8 @@ void PrintLayout::Paginate() {
   }
 
   // What prints: the print area, else the cells in use.
-  if (const DefinedName* n = book_.FindName("_xlnm.Print_Area", static_cast<int>(index_)); n && n->sheet == static_cast<int>(index_))
+  if (!info_.area.empty()) areas_ = info_.area;
+  else if (const DefinedName* n = book_.FindName("_xlnm.Print_Area", static_cast<int>(index_)); n && n->sheet == static_cast<int>(index_))
     areas_ = ParseAreas(n->formula);
   if (areas_.empty()) {
     std::optional<Range> used = sheet_.UsedRange();
@@ -454,8 +455,10 @@ void PrintLayout::Paginate() {
 
   int number = ps.useFirstPageNumber ? ps.firstPageNumber : 1;
   for (const Range& a : areas_) {
-    const auto colBands = bands(a.firstCol, a.lastCol, true, scale_, !fit);
-    const auto rowBands = bands(a.firstRow, a.lastRow, false, scale_, !fit);
+    // Fit to ignores manual breaks the way it fits (Excel keeps the row breaks under "1 page wide by
+    // automatic", measured: s3-print's page_run.ps1).
+    const auto colBands = bands(a.firstCol, a.lastCol, true, scale_, !fit || ps.fitToWidth == 0);
+    const auto rowBands = bands(a.firstRow, a.lastRow, false, scale_, !fit || ps.fitToHeight == 0);
     auto add = [&](const std::pair<uint32_t, uint32_t>& rb, const std::pair<uint32_t, uint32_t>& cb) {
       PrintPage p;
       p.width = paperW_;
@@ -589,15 +592,16 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   const float availH = paperH_ - static_cast<float>((m.top + m.bottom) * 72);
   if (page.chart) {
     if (info_.objects) {
-      // At its saved size from the top left margin, as Excel prints it (smaller to fit the page).
+      // At its saved size from the top left margin, cut off at the margins, as Excel prints it (its
+      // chart size "as on screen": a page set up smaller than the chart doesn't shrink it; measured,
+      // s3-print).
       float w = availW, h = availH;
       const draw::Size saved = info_.objects->ChartSheetSize();
-      if (saved.width > 1 && saved.height > 1) {
-        const float k = std::min({1.f, availW / saved.width, availH / saved.height});
-        w = saved.width * k;
-        h = saved.height * k;
-      }
+      if (saved.width > 1 && saved.height > 1) w = saved.width, h = saved.height;
+      p.Save();
+      p.ClipRect({left, top, left + availW, top + availH});
       info_.objects->DrawChartSheet(p, {left, top, left + w, top + h});
+      p.Restore();
     }
     PaintHeaderFooter(p, page, true);
     PaintHeaderFooter(p, page, false);
@@ -784,8 +788,8 @@ void PrintLayout::PaintHeaderFooter(draw::Painter& p, const PrintPage& page, boo
         break;
       case L'P': put(std::to_wstring(page.number)); break;
       case L'N':
-        put(std::to_wstring(info_.jobPages ? info_.jobPages
-                                           : pages + (sheet_.Page().useFirstPageNumber ? sheet_.Page().firstPageNumber - 1 : 0)));
+        // The number of pages, whatever the first one's number ("Page 3 of 4": Excel 2021, measured).
+        put(std::to_wstring(info_.jobPages ? info_.jobPages : pages));
         break;
       case L'D': put(info_.date); break;
       case L'T': put(info_.time); break;

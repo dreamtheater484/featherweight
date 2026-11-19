@@ -442,6 +442,7 @@ void MMult(Call& c) {
   std::vector<double> a, b;
   if (!Matrix(c, 0, ka, ar, ac, a) || !Matrix(c, 1, kb, br, bc, b)) return;
   if (ac != br) return c.Fail(Err::Value);
+  if (!c.m.Fits(ar, bc)) return c.Fail(Err::Num);  // a column times a row
   Array* out = Array::Make(ar, bc);
   for (int32_t i = 0; i < ar; ++i)
     for (int32_t j = 0; j < bc; ++j) {
@@ -457,6 +458,7 @@ void MUnit(Call& c) {
   if (!c.Integer(0, n)) return;
   if (n < 1 || n > 16384) return c.Fail(Err::Value);
   int32_t k = static_cast<int32_t>(n);
+  if (!c.m.Fits(k, k)) return c.Fail(Err::Num);
   Array* out = Array::Make(k, k);
   for (int32_t i = 0; i < k; ++i)
     for (int32_t j = 0; j < k; ++j) out->at(i, j) = Value::Number(i == j ? 1 : 0);

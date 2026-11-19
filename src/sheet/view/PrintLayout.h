@@ -44,6 +44,7 @@ struct PrintInfo {
   // caller's own for printing, which the layout places on its printed columns and rows. May be null.
   SheetObjects* objects = nullptr;
   condfmt::SheetRules* rules = nullptr;  // the sheet's conditional formats; null: none
+  std::vector<Range> area;  // what prints instead of the print area (Print Selection); empty: none
 };
 
 class PrintLayout {

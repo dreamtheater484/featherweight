@@ -1,0 +1,27 @@
+# S3 fixture ("created as Excel shows it"): charts through s3-charts' Insert > Chart (its commands
+# on the selection): a clustered column chart of two series with a header row and a first column of
+# text, and a pie of one series.
+sheet-name "Chart"
+enter A1 "Quarter"
+enter B1 "North"
+enter C1 "South"
+enter A2 "Q1"
+enter A3 "Q2"
+enter A4 "Q3"
+enter A5 "Q4"
+enter B2 "120"
+enter B3 "150"
+enter B4 "90"
+enter B5 "200"
+enter C2 "80"
+enter C3 "110"
+enter C4 "130"
+enter C5 "160"
+chart A1:C5 column
+chart A1:B5 pie
+save
+expect chart Chart 1 type 51 series 2
+expect chart Chart 1 series 1 =SERIES(Chart!$B$1,Chart!$A$2:$A$5,Chart!$B$2:$B$5,1)
+expect chart Chart 1 series 2 =SERIES(Chart!$C$1,Chart!$A$2:$A$5,Chart!$C$2:$C$5,2)
+expect chart Chart 2 type 5 series 1
+expect chart Chart 2 series 1 =SERIES(Chart!$B$1,Chart!$A$2:$A$5,Chart!$B$2:$B$5,1)

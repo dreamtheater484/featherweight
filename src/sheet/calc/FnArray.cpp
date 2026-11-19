@@ -15,7 +15,6 @@ namespace fw::sheet::calc::fn {
 namespace {
 
 constexpr int32_t kMaxRowsArg = 1048576, kMaxColsArg = 16384;
-constexpr int64_t kMaxCells = 16'000'000;  // as Machine::RefArray
 
 // An argument as an array: a reference's values (whole columns only as far as the workbook's cells
 // reach), a single value as 1 x 1. False (with `c.out` set) when it can't be read.
@@ -145,7 +144,7 @@ void Sequence(Call& c) {
   rows = std::trunc(rows), cols = std::trunc(cols);
   if (rows == 0 || cols == 0) return c.Fail(Err::Calc);
   if (rows > kMaxRowsArg || cols > kMaxColsArg) return c.Fail(Err::Value);
-  if (rows * cols > static_cast<double>(kMaxCells)) return c.Fail(Err::Num);
+  if (!c.m.Fits(rows, cols)) return c.Fail(Err::Num);
   int32_t nr = static_cast<int32_t>(rows), nc = static_cast<int32_t>(cols);
   Array* a = Array::Make(nr, nc);
   for (int32_t i = 0; i < nr; ++i)

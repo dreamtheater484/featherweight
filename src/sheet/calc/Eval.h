@@ -36,6 +36,9 @@ class Host {
   virtual void ForEachCell(int sheet, int32_t r1, int32_t c1, int32_t r2, int32_t c2, CellFn fn, void* context) = 0;
   // A formula's new value, after the engine calculated it (each cell of an array formula's range).
   virtual void Store(int sheet, int32_t row, int32_t col, const Value& v) { (void)sheet, (void)row, (void)col, (void)v; }
+  // A dynamic array at (row, col) spills over `out` now (calculated again; the cell alone when
+  // blocked), after its cells were stored.
+  virtual void SpillMoved(int sheet, int32_t row, int32_t col, const Area& out) { (void)sheet, (void)row, (void)col, (void)out; }
   // How far the sheet's cells reach: one past the last used row and column (0 when empty).
   virtual void Extent(int sheet, int32_t& rows, int32_t& cols) = 0;
   // Whether a merged cell or a table lies in `area` (a dynamic array can't spill there).
@@ -74,6 +77,9 @@ class Host {
   }
   // Manual calculation (INFO("recalc")).
   virtual bool Manual() { return false; }
+  // The most cells an array a formula builds may have (a range read as one, an operator's or a
+  // function's result): a larger one is #NUM!, where Excel runs out of resources. Fuzzing lowers it.
+  virtual int64_t MaxArrayCells() const { return 16'000'000; }
   // Rows a filter hides: hidden, in an autoFilter range with criteria (every SUBTOTAL leaves them
   // out; AGGREGATE doesn't tell them from other hidden rows).
   virtual bool RowFiltered(int sheet, int32_t row) {

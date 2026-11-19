@@ -58,6 +58,8 @@ struct Machine {
   Value Deref(const Value& v, bool arrayMode);
   void WorkbookExtent(int32_t& rows, int32_t& cols);
   int32_t extentRows_ = -1, extentCols_ = -1;
+  // Whether an array of rows x cols may be built (Host::MaxArrayCells); else the result is #NUM!.
+  bool Fits(double rows, double cols) const { return rows * cols <= static_cast<double>(host.MaxArrayCells()); }
 };
 
 // The view of a scalar Value as a cell's (text borrowed from the Value).

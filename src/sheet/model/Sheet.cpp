@@ -267,6 +267,24 @@ RowBlock& Sheet::MutableBlock(size_t index) {
   return *p;
 }
 
+void Sheet::SetSpillRef(uint32_t row, uint32_t col, const Range& ref) {
+  Found f;
+  if (!Find(row, col, f) || !(f.cell->flags & kHasFormula)) return;
+  const auto& list = f.block->formulas;
+  auto it = std::lower_bound(list.begin(), list.end(), f.cellIndex,
+                             [](const std::pair<uint32_t, uint32_t>& x, uint32_t v) { return x.first < v; });
+  if (it == list.end() || it->first != f.cellIndex || it->second >= formulas_.size()) return;
+  FormulaRec& rec = formulas_[it->second];
+  if (!rec.dynamic || !rec.hasRef || rec.text == kNone || rec.ref == ref) return;
+  rec.ref = ref;
+  // The f element's ref attribute, which the writer writes.
+  std::vector<pkg::XmlAttr> attrs = store_.Attributes(rec.attrs);
+  auto a = std::find_if(attrs.begin(), attrs.end(), [](const pkg::XmlAttr& x) { return x.nsUri.empty() && x.qname == "ref"; });
+  if (a != attrs.end()) a->value = RangeName(ref);
+  else attrs.push_back({"ref", "", RangeName(ref)});
+  rec.attrs = store_.Intern(std::move(attrs));
+}
+
 void Sheet::SetValue(uint32_t row, uint32_t col, const Value& v) {
   if (row >= kMaxRows || col >= kMaxCols) return;
   // Find or make the row.

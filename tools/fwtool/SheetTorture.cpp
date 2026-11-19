@@ -30,7 +30,11 @@
 #if __has_include("sheet/edit/Edit.h")
 #include <cstring>
 
+#include "sheet/data/Rules.h"
+#include "sheet/edit/Drawing.h"
 #include "sheet/edit/Edit.h"
+#include "sheet/edit/Protection.h"
+#include "sheet/objects/SheetObjects.h"
 #define FW_SHEET_EDIT 1
 #else
 #define FW_SHEET_EDIT 0
@@ -54,8 +58,24 @@ constexpr struct {
     {Op::MoveSheet, "move-sheet"},  {Op::DeleteSheet, "delete-sheet"}, {Op::Merge, "merge"},
     {Op::Unmerge, "unmerge"},       {Op::Sort, "sort"},               {Op::Filter, "filter"},
     {Op::Paste, "paste"},           {Op::Undo, "undo"},               {Op::Redo, "redo"},
-    {Op::Save, "save"},             {Op::Chart, "chart"},
+    {Op::Save, "save"},             {Op::Name, "name"},               {Op::Protect, "protect"},
+    {Op::ProtectBook, "protect-book"}, {Op::Link, "link"},           {Op::Note, "note"},
+    {Op::Thread, "thread"},         {Op::Table, "table"},             {Op::Rule, "rule"},
+    {Op::Validation, "validation"}, {Op::Chart, "chart"},             {Op::Object, "object"},
+    {Op::PageSetup, "pagesetup"},   {Op::PageBreak, "pagebreak"},
 };
+
+// The S3 edits whose text goes after the arg, quoted.
+bool TakesText(const Edit& e) {
+  switch (e.op) {
+    case Op::Link: return e.arg != "remove";
+    case Op::Note: return e.arg != "delete";
+    case Op::Thread: return e.arg == "comment";
+    case Op::Rule: return e.arg == "greater" || e.arg == "between" || e.arg == "expression" || e.arg == "contains";
+    case Op::Validation: return e.arg != "clear";
+    default: return false;
+  }
+}
 
 const char* OpName(Op op) {
   for (const auto& o : kOps)
@@ -165,7 +185,6 @@ std::string FormatEdit(const Edit& e) {
     case Op::DeleteCols: s += at(e.sheet, e.range); break;
     case Op::Format:
     case Op::InsertCells:
-    case Op::Chart:
     case Op::DeleteCells: s += at(e.sheet, e.range) + " " + e.arg; break;
     case Op::Sort: s += at(e.sheet, e.range) + " " + Quote(e.arg); break;
     case Op::Filter:
@@ -180,6 +199,25 @@ std::string FormatEdit(const Edit& e) {
     case Op::Undo:
     case Op::Redo: s += " " + std::to_string(e.count); break;
     case Op::Save: break;
+    case Op::Name:
+      s += " " + (e.sheetScope ? std::to_string(e.sheet) : std::string("book")) + " " + e.arg + " " +
+           (e.text.empty() ? std::string("-") : Quote(e.text));
+      break;
+    case Op::Protect: s += " " + std::to_string(e.sheet) + " " + e.arg; break;
+    case Op::ProtectBook: s += " " + e.arg; break;
+    case Op::Link:
+    case Op::Note:
+    case Op::Thread:
+    case Op::Table:
+    case Op::Rule:
+    case Op::Validation:
+      s += at(e.sheet, e.range) + " " + e.arg;
+      if (TakesText(e)) s += " " + Quote(e.text);
+      break;
+    case Op::Chart: s += at(e.sheet, e.range) + at(e.sheet, e.to) + " " + e.arg; break;
+    case Op::Object: s += at(e.sheet, e.range) + " " + std::to_string(e.count) + " " + e.arg; break;
+    case Op::PageSetup: s += " " + std::to_string(e.sheet) + " " + e.arg; break;
+    case Op::PageBreak: s += at(e.sheet, e.range) + " " + e.arg; break;
   }
   if (!e.target.empty()) s += "  # " + e.target;
   return s;
@@ -219,7 +257,6 @@ bool ParseEdit(std::string_view line, Edit& e) {
     case Op::DeleteCols: return sheetRange(e.sheet, e.range);
     case Op::Format:
     case Op::InsertCells:
-    case Op::Chart:
     case Op::DeleteCells:
       if (!sheetRange(e.sheet, e.range)) return false;
       e.arg = std::string(NextWord(s));
@@ -246,6 +283,51 @@ bool ParseEdit(std::string_view line, Edit& e) {
     case Op::Undo:
     case Op::Redo: return number(e.count);
     case Op::Save: return true;
+    case Op::Name: {
+      const std::string_view scope = NextWord(s);
+      if (scope.empty()) return false;
+      if (scope != "book") {
+        e.sheetScope = true;
+        e.sheet = static_cast<uint32_t>(std::strtoul(std::string(scope).c_str(), nullptr, 10));
+      }
+      e.arg = std::string(NextWord(s));
+      if (e.arg.empty()) return false;
+      if (s == "-") return true;
+      return Unquote(s, e.text);
+    }
+    case Op::Protect:
+      if (!number(e.sheet)) return false;
+      e.arg = std::string(NextWord(s));
+      return !e.arg.empty();
+    case Op::ProtectBook:
+      e.arg = std::string(NextWord(s));
+      return !e.arg.empty();
+    case Op::Link:
+    case Op::Note:
+    case Op::Thread:
+    case Op::Table:
+    case Op::Rule:
+    case Op::Validation:
+      if (!sheetRange(e.sheet, e.range)) return false;
+      e.arg = std::string(NextWord(s));
+      if (e.arg.empty()) return false;
+      return !TakesText(e) || Unquote(s, e.text);
+    case Op::Chart:
+      if (!sheetRange(e.sheet, e.range) || !sheetRange(e.toSheet, e.to)) return false;
+      e.arg = std::string(NextWord(s));
+      return !e.arg.empty();
+    case Op::Object:
+      if (!sheetRange(e.sheet, e.range) || !number(e.count)) return false;
+      e.arg = std::string(NextWord(s));
+      return !e.arg.empty();
+    case Op::PageSetup:
+      if (!number(e.sheet)) return false;
+      e.arg = std::string(NextWord(s));
+      return !e.arg.empty();
+    case Op::PageBreak:
+      if (!sheetRange(e.sheet, e.range)) return false;
+      e.arg = std::string(NextWord(s));
+      return !e.arg.empty();
   }
   return false;
 }
@@ -359,6 +441,23 @@ sh::edit::CellInput TypedInput(const std::string& typed, bool nl) {
 
 std::string Utf8(const std::u16string& s) { return fw::WideToUtf8(std::wstring(s.begin(), s.end())); }
 
+// A part related to `source` by a relationship whose type ends with `type` ("/drawing", "/chart"):
+// its bytes, and its name in `part`; empty when there's none.
+std::string RelatedPart(const sh::Workbook& book, std::string_view source, std::string_view type, std::string* part = nullptr,
+                        size_t nth = 0) {
+  const fw::pkg::Package* pkg = book.GetPackage();
+  const fw::pkg::RelationshipSet* rels = pkg && !source.empty() ? pkg->RelationshipsOf(source) : nullptr;
+  if (!rels) return {};
+  for (const fw::pkg::Relationship& r : rels->items)
+    if (!r.external && r.type.ends_with(type) && nth-- == 0) {
+      std::vector<uint8_t> b;
+      if (!pkg->ReadPart(r.targetPart, b).Ok()) return {};
+      if (part) *part = r.targetPart;
+      return std::string(b.begin(), b.end());
+    }
+  return {};
+}
+
 // ---- The target with the edit API: each edit as the grid's command runs it.
 
 class EditApiTarget : public SheetTarget {
@@ -374,7 +473,8 @@ class EditApiTarget : public SheetTarget {
       return Applied::Refused;
     };
     const int count = static_cast<int>(book_->SheetCount());
-    const bool needsSheet = e.op != Op::AddSheet && e.op != Op::Undo && e.op != Op::Redo && e.op != Op::Save;
+    const bool needsSheet = e.op != Op::AddSheet && e.op != Op::Undo && e.op != Op::Redo && e.op != Op::Save &&
+                            e.op != Op::ProtectBook && !(e.op == Op::Name && !e.sheetScope);
     if (needsSheet && static_cast<int>(e.sheet) >= count) {
       why = "no sheet " + std::to_string(e.sheet);
       return Applied::Refused;
@@ -418,7 +518,6 @@ class EditApiTarget : public SheetTarget {
         why = "sorting by a key comes with s2-format's command";
         return Applied::Refused;
       case Op::Filter: return Filter(s, r, e, why);
-      case Op::Chart: return Chart(s, r, e.arg, why);
       case Op::Paste:
         // Cut and paste moves the cells, on their sheet or to another, references following
         // (Editor::MoveCells).
@@ -433,6 +532,114 @@ class EditApiTarget : public SheetTarget {
       case Op::Undo: return done(ed_.Undo(e.count));
       case Op::Redo: return done(ed_.Redo(e.count));
       case Op::Save: return Applied::Done;
+      case Op::Name: {
+        const int scope = e.sheetScope ? s : -1;
+        if (e.text.empty()) return done(ed_.DeleteName(e.arg, scope));
+        return done(ed_.SetName(sh::DefinedName{e.arg, scope, e.text, false}));
+      }
+      case Op::Protect: {
+        if (e.arg == "off") return done(ed_.SetSheetProtection(s, std::nullopt));
+        sh::edit::SheetProtection p;
+        if (e.arg == "lax") p.formatCells = p.formatColumns = p.formatRows = p.insertRows = p.insertColumns = false;
+        if (e.arg == "pw") p.password = Password();
+        return done(ed_.SetSheetProtection(s, p));
+      }
+      case Op::ProtectBook: {
+        if (e.arg == "off") return done(ed_.SetWorkbookProtection(std::nullopt));
+        sh::edit::WorkbookProtection p;
+        if (e.arg == "pw") p.password = Password();
+        return done(ed_.SetWorkbookProtection(p));
+      }
+      case Op::Link: {
+        if (e.arg == "remove") return done(ed_.SetHyperlink(s, r, std::nullopt));
+        sh::Hyperlink h;
+        (e.arg == "place" ? h.location : h.target) = e.text;
+        if (e.arg == "tip") h.tooltip = "Go there";
+        return done(ed_.SetHyperlink(s, r, h));
+      }
+      case Op::Note: {
+        if (e.arg == "delete") return done(ed_.SetNote(s, {r.firstRow, r.firstCol}, std::nullopt));
+        sh::edit::Editor::Note n;
+        n.author = "Torture";
+        n.text = e.text;
+        n.shown = e.arg == "shown";
+        return done(ed_.SetNote(s, {r.firstRow, r.firstCol}, n));
+      }
+      case Op::Thread: {
+        const sh::CellAddr cell{r.firstRow, r.firstCol};
+        if (e.arg == "delete") return done(ed_.SetThread(s, cell, std::nullopt));
+        std::optional<sh::edit::Editor::Thread> t = ed_.ThreadAt(s, cell);
+        if (e.arg == "resolve") {
+          if (!t) {
+            why = "no thread there";
+            return Applied::Refused;
+          }
+          t->resolved = !t->resolved;
+        } else {
+          if (!t) t.emplace();
+          t->comments.push_back({t->comments.empty() ? "Torture" : "Replier", e.text, {}, {}});
+        }
+        return done(ed_.SetThread(s, cell, t));
+      }
+      case Op::Table: return Table(s, r, e.arg, why);
+      case Op::Rule: return Rule(s, r, e, why);
+      case Op::Validation: return Validation(s, r, e, why);
+      case Op::Chart: {
+        using K = sh::edit::Editor::ChartKind;
+        static const std::pair<const char*, K> kKinds[] = {{"column", K::Column}, {"bar", K::Bar},   {"line", K::Line},
+                                                           {"pie", K::Pie},       {"doughnut", K::Doughnut},
+                                                           {"area", K::Area},     {"scatter", K::Scatter}};
+        sh::edit::Editor::NewChart nc;
+        nc.data = r;
+        nc.at = {e.to.firstRow, e.to.firstCol};
+        bool known = false;
+        for (const auto& [name, kind] : kKinds)
+          if (e.arg == name) nc.kind = kind, known = true;
+        if (!known) {
+          why = "unknown chart " + e.arg;
+          return Applied::Refused;
+        }
+        return done(ed_.InsertChart(s, nc));
+      }
+      case Op::Object: {
+        if (e.arg == "delete") return done(ed_.DeleteObjects(s, {e.count}));
+        if (e.arg == "type-line" || e.arg == "type-bar" || e.arg == "title") {
+          sh::edit::ChartEdit edit;
+          if (e.arg == "title") edit.title = sh::edit::ChartText{true, "Torture"}, edit.legend = 'r', edit.labels = true;
+          else edit.kind = e.arg == "type-line" ? sh::edit::ChartKind::Line : sh::edit::ChartKind::Bar;
+          return done(ed_.EditChart(s, e.count, edit));
+        }
+        // Dragged so that its top left is at the cell: about five columns by twelve rows.
+        namespace dr = sh::edit::drawing;
+        constexpr int64_t kEmuPx = 9525;
+        dr::Place p;
+        p.from = dr::Marker{r.firstCol, r.firstRow, 0, 0};
+        p.to = dr::Marker{r.firstCol + 5, r.firstRow + 12, 0, 0};
+        p.x = static_cast<int64_t>(r.firstCol) * 64 * kEmuPx, p.y = static_cast<int64_t>(r.firstRow) * 20 * kEmuPx;
+        p.cx = 5 * 64 * kEmuPx, p.cy = 12 * 20 * kEmuPx;
+        if (e.arg == "copy") return done(ed_.PasteObject(s, ed_.CopyObject(s, e.count), p));
+        return done(ed_.MoveObject(s, e.count, p));
+      }
+      case Op::PageSetup: return PageSetup(s, e.arg, why);
+      case Op::PageBreak: {
+        const sh::Sheet& sheet = book_->GetSheet(static_cast<size_t>(s));
+        std::vector<sh::PageBreak> rows = sheet.RowBreaks(), cols = sheet.ColBreaks();
+        if (e.arg == "reset") {
+          rows.clear(), cols.clear();
+        } else {
+          // Insert Page Break: above and left of the active cell (only above in column A, only left
+          // in row 1); Remove Page Break: the ones there.
+          std::erase_if(rows, [&](const sh::PageBreak& b) { return b.id == r.firstRow; });
+          std::erase_if(cols, [&](const sh::PageBreak& b) { return b.id == r.firstCol; });
+          if (e.arg == "insert") {
+            if (r.firstRow > 0) rows.push_back(sh::PageBreak{r.firstRow, 0, 16383, true, false});
+            if (r.firstCol > 0) cols.push_back(sh::PageBreak{r.firstCol, 0, 1048575, true, false});
+          }
+          auto byId = [](const sh::PageBreak& a, const sh::PageBreak& b) { return a.id < b.id; };
+          std::sort(rows.begin(), rows.end(), byId), std::sort(cols.begin(), cols.end(), byId);
+        }
+        return done(ed_.SetPageBreaks(s, rows, cols));
+      }
     }
     return Applied::Refused;
   }
@@ -466,50 +673,6 @@ class EditApiTarget : public SheetTarget {
 
  private:
   // Format Cells as s2-format runs it: each cell's format with one thing changed.
-  // Charts and the drawing's objects (s3-charts): a new chart of the range, or the sheet's last
-  // object moved, deleted, copied, its chart retyped or titled.
-  Applied Chart(int s, const sh::Range& r, const std::string& what, std::string& why) {
-    namespace se = sh::edit;
-    auto done = [&](const se::Result& res) {
-      if (res.ok) return Applied::Done;
-      why = Utf8(res.message);
-      return Applied::Refused;
-    };
-    static const char* kKinds[] = {"column", "bar", "line", "pie", "doughnut", "area", "scatter"};
-    for (uint8_t k = 0; k < 7; ++k)
-      if (what == kKinds[k]) {
-        se::Editor::NewChart c;
-        c.kind = static_cast<se::ChartKind>(k);
-        c.data = r;
-        c.at = sh::CellAddr{r.firstRow, std::min<uint32_t>(r.lastCol + 2, 16370)};
-        return done(ed_.InsertChart(s, c));
-      }
-    const std::string drawing = ed_.SheetDrawing(s, false);
-    const std::vector<se::drawing::Object> objects = se::drawing::Objects(ed_.PartBytes(drawing));
-    if (objects.empty() || !objects.back().id) {
-      why = "no chart, picture or shape on the sheet";
-      return Applied::Refused;
-    }
-    const uint32_t id = objects.back().id;
-    se::drawing::Place place;
-    place.from = {r.firstCol, r.firstRow, 0, 0};
-    place.to = {std::min<uint32_t>(r.lastCol + 4, 16383), std::min<uint32_t>(r.lastRow + 10, 1048575), 0, 0};
-    place.cx = 4572000;
-    place.cy = 2743200;
-    if (what == "move") return done(ed_.MoveObject(s, id, place));
-    if (what == "delete") return done(ed_.DeleteObjects(s, {id}));
-    if (what == "copy") return done(ed_.PasteObject(s, ed_.CopyObject(s, id), place));
-    se::ChartEdit edit;
-    if (what == "type-line") edit.kind = se::ChartKind::Line;
-    else if (what == "type-bar") edit.kind = se::ChartKind::Bar;
-    else if (what == "title") edit.title = se::ChartText{true, "Torture"}, edit.legend = 'r', edit.labels = true;
-    else {
-      why = "unknown chart edit " + what;
-      return Applied::Refused;
-    }
-    return done(ed_.EditChart(s, id, edit));
-  }
-
   Applied Format(int sheet, const sh::Range& r, const std::string& what, std::string& why) {
     std::map<uint32_t, uint32_t> mapped;
     bool known = true;
@@ -663,6 +826,275 @@ class EditApiTarget : public SheetTarget {
     return Applied::Done;
   }
 
+  // Page Setup with one thing changed, as the panel sets it (Editor::SetPageSetup).
+  Applied PageSetup(int s, const std::string& w, std::string& why) {
+    const sh::Sheet& sheet = book_->GetSheet(static_cast<size_t>(s));
+    sh::PageSetup p = sheet.Page();
+    sh::HeaderFooter hf = sheet.HeadersFooters();
+    bool fit = sheet.Props().fitToPage;
+    if (w == "portrait") p.orientation = sh::Orientation::Portrait;
+    else if (w == "landscape") p.orientation = sh::Orientation::Landscape;
+    else if (w == "a4") p.paperSize = 9;
+    else if (w == "letter") p.paperSize = 1;
+    else if (w.starts_with("scale=")) p.scale = static_cast<uint32_t>(std::strtoul(w.c_str() + 6, nullptr, 10)), fit = false;
+    else if (w.starts_with("fit=")) {
+      p.fitToWidth = static_cast<uint32_t>(std::strtoul(w.c_str() + 4, nullptr, 10));
+      const size_t comma = w.find(',');
+      p.fitToHeight = comma == std::string::npos ? 1 : static_cast<uint32_t>(std::strtoul(w.c_str() + comma + 1, nullptr, 10));
+      fit = true;
+    } else if (w == "nofit") fit = false;
+    else if (w == "margins=narrow") p.margins = sh::PageMargins{0.25, 0.25, 0.75, 0.75, 0.3, 0.3};
+    else if (w == "margins=wide") p.margins = sh::PageMargins{1, 1, 1, 1, 0.5, 0.5};
+    else if (w == "center") p.horizontalCentered = !p.horizontalCentered;
+    else if (w == "header") hf.oddHeader = "&CPage &P of &N", hf.oddFooter = "&L&F&R&D";
+    else if (w == "gridlines") p.gridLines = !p.gridLines;
+    else if (w == "headings") p.headings = !p.headings;
+    else if (w == "order")
+      p.pageOrder = p.pageOrder == sh::PageOrder::DownThenOver ? sh::PageOrder::OverThenDown : sh::PageOrder::DownThenOver;
+    else {
+      why = "unknown page setup " + w;
+      return Applied::Refused;
+    }
+    sh::edit::Result res = ed_.SetPageSetup(s, p, hf, fit);
+    if (res.ok) return Applied::Done;
+    why = Utf8(res.message);
+    return Applied::Refused;
+  }
+
+  // A password as Protect Sheet hashes it: slow (100,000 rounds), so made once.
+  static sh::edit::ProtectionPassword Password() {
+    static const sh::edit::ProtectionPassword pw = sh::edit::ProtectionPassword::Make(L"pw");
+    return pw;
+  }
+
+  static bool Overlaps(const sh::Range& a, const sh::Range& b) {
+    return !(a.lastRow < b.firstRow || a.firstRow > b.lastRow || a.lastCol < b.firstCol || a.firstCol > b.lastCol);
+  }
+
+  static bool SameNoCase(std::string_view a, std::string_view b) {
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+             return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
+           });
+  }
+
+  // Format as Table, Total Row, the table's style and Convert to Range, as the app's table panel
+  // runs them (WorkbookView::CreateTable, SetTotalRow, ChangeTable, ConvertToRange).
+  Applied Table(int s, const sh::Range& r, const std::string& what, std::string& why) {
+    const sh::Sheet& sheet = book_->GetSheet(static_cast<size_t>(s));
+    auto refused = [&](const sh::edit::Result& res) {
+      why = Utf8(res.message);
+      return Applied::Refused;  // a group still open is cancelled: nothing changed
+    };
+    if (what == "add") {
+      sh::edit::EditGroup group(ed_, u"Create Table");
+      // The sheet's filter goes, as in Excel, its hidden rows shown.
+      if (const std::optional<sh::SheetFilter>& f = sheet.Filter(); f && Overlaps(f->ref, r)) {
+        const sh::Range fr = f->ref;
+        if (sh::edit::Result res = ed_.SetFilter(s, std::nullopt); !res.ok) return refused(res);
+        if (sh::edit::Result res = ed_.HideRows(s, fr.firstRow, fr.lastRow, false); !res.ok) return refused(res);
+      }
+      sh::Table t;
+      t.ref = r;
+      t.autoFilter = true;
+      t.totalsRowShown = false;
+      t.style = sh::TableStyleInfo{"TableStyleMedium2", false, false, true, false};
+      // The headers: text, unique without case, Excel's ColumnN for an empty one.
+      std::vector<std::string> names;
+      std::vector<std::pair<sh::CellAddr, sh::edit::CellInput>> cells;
+      for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
+        const sh::Value v = sheet.GetValue(r.firstRow, col);
+        std::string n;
+        if (v.type == sh::ValueType::String) n = std::string(v.text);
+        else if (v.type == sh::ValueType::Number) {
+          char buf[40];
+          std::snprintf(buf, sizeof buf, "%.15g", v.number);
+          n = buf;
+        } else if (v.type == sh::ValueType::Bool) n = v.boolean ? "TRUE" : "FALSE";
+        if (n.empty()) n = "Column" + std::to_string(col - r.firstCol + 1);
+        const std::string base = n;
+        for (int k = 2; std::any_of(names.begin(), names.end(), [&](const std::string& x) { return SameNoCase(x, n); }); ++k)
+          n = base + std::to_string(k);
+        names.push_back(n);
+        if (!(v.type == sh::ValueType::String && std::string(v.text) == n))
+          cells.emplace_back(sh::CellAddr{r.firstRow, col}, sh::edit::CellInput::Text(n));
+        t.columns.push_back(sh::TableColumn{0, n});
+      }
+      if (!cells.empty())
+        if (sh::edit::Result res = ed_.SetCells(s, cells); !res.ok) return refused(res);
+      if (sh::edit::Result res = ed_.AddTable(s, t); !res.ok) return refused(res);
+      group.done = true;
+      return Applied::Done;
+    }
+    size_t index = SIZE_MAX;
+    for (size_t i = 0; i < sheet.Tables().size(); ++i)
+      if (Overlaps(sheet.Tables()[i].ref, {r.firstRow, r.firstCol, r.firstRow, r.firstCol})) index = i;
+    if (index == SIZE_MAX) {
+      why = "no table there";
+      return Applied::Refused;
+    }
+    sh::Table t = sheet.Tables()[index];
+    if (what == "remove") {
+      // Convert to Range rewrites the formulas that refer to the table (the app's, through the
+      // calculation engine): left to the app's tests, so tables formulas use aren't removed here.
+      bool used = false;
+      for (size_t si = 0; si < book_->SheetCount() && !used; ++si) {
+        const sh::Sheet& x = book_->GetSheet(si);
+        const std::optional<sh::Range> all = x.Loaded() ? x.UsedRange() : std::nullopt;
+        if (!all || x.FormulaCount() == 0) continue;
+        x.ForEachCell(*all, [&](const sh::CellInfo& c) {
+          sh::FormulaInfo fi;
+          if (c.hasFormula && x.GetFormula(c.row, c.col, fi)) {
+            const std::string f(fi.text);
+            used = std::search(f.begin(), f.end(), t.name.begin(), t.name.end(), [](char a, char b) {
+                     return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+                   }) != f.end() ||
+                   (si == static_cast<size_t>(s) && f.find('[') != std::string::npos && Overlaps(t.ref, {c.row, c.col, c.row, c.col}));
+          }
+          return !used;
+        });
+      }
+      if (used) {
+        why = "formulas refer to the table (Convert to Range rewrites them: the app's)";
+        return Applied::Refused;
+      }
+      sh::edit::EditGroup group(ed_, u"Convert to Range");
+      if (sh::edit::Result res = ed_.RemoveTable(s, index); !res.ok) return refused(res);
+      group.done = true;
+      return Applied::Done;
+    }
+    if (what.starts_with("style=")) {
+      t.style.name = what.substr(6);
+      sh::edit::EditGroup group(ed_, u"Table Style");
+      if (sh::edit::Result res = ed_.SetTable(s, index, t); !res.ok) return refused(res);
+      group.done = true;
+      return Applied::Done;
+    }
+    if (what != "totals") {
+      why = "unknown table edit " + what;
+      return Applied::Refused;
+    }
+    sh::edit::EditGroup group(ed_, u"Total Row");
+    if (t.totalsRows) {
+      const uint32_t row = t.ref.lastRow;
+      t.ref.lastRow = row - 1;
+      t.totalsRows = 0;
+      if (sh::edit::Result res = ed_.SetTable(s, index, t); !res.ok) return refused(res);
+      if (sh::edit::Result res = ed_.ClearAll(s, sh::Range{row, t.ref.firstCol, row, t.ref.lastCol}); !res.ok) return refused(res);
+      group.done = true;
+      return Applied::Done;
+    }
+    const uint32_t row = t.ref.lastRow + 1;
+    if (row > 1048575) {
+      why = "no row below the table";
+      return Applied::Refused;
+    }
+    bool filled = false;
+    for (uint32_t col = t.ref.firstCol; col <= t.ref.lastCol && !filled; ++col)
+      filled = sheet.GetValue(row, col).type != sh::ValueType::Empty;
+    if (filled)  // the cells below move down to make room, as in Excel
+      if (sh::edit::Result res =
+              ed_.InsertCells(s, sh::Range{row, t.ref.firstCol, row, t.ref.lastCol}, sh::edit::Editor::Direction::DownOrUp);
+          !res.ok)
+        return refused(res);
+    // Excel's: "Total" in the first column, the last one's sum (a count when it isn't numbers).
+    const size_t last = t.columns.size() - 1;
+    bool numbers = false;
+    for (uint32_t rr = t.ref.firstRow + t.headerRows; rr <= t.ref.lastRow && !numbers; ++rr)
+      numbers = sheet.GetValue(rr, t.ref.lastCol).type == sh::ValueType::Number;
+    std::string quoted;
+    for (char c : t.columns[last].name) {
+      if (c == '[' || c == ']' || c == '#' || c == '\'') quoted += '\'';
+      quoted += c;
+    }
+    std::vector<std::pair<sh::CellAddr, sh::edit::CellInput>> cells;
+    if (last > 0) cells.emplace_back(sh::CellAddr{row, t.ref.firstCol}, sh::edit::CellInput::Text("Total"));
+    cells.emplace_back(sh::CellAddr{row, t.ref.lastCol},
+                       sh::edit::CellInput::Formula("SUBTOTAL(" + std::string(numbers ? "109" : "103") + "," + t.name + "[" + quoted + "])"));
+    if (sh::edit::Result res = ed_.SetCells(s, cells); !res.ok) return refused(res);
+    t = book_->GetSheet(static_cast<size_t>(s)).Tables()[index];  // the cells' bookkeeping may have touched the columns
+    t.ref.lastRow = row;
+    t.totalsRows = 1;
+    t.totalsRowShown = true;
+    if (last > 0) t.columns[0].totalsLabel = "Total";
+    t.columns[last].totalsFunction = numbers ? "sum" : "count";
+    t.columns[last].totalsFormula.clear();
+    if (sh::edit::Result res = ed_.SetTable(s, index, t); !res.ok) return refused(res);
+    group.done = true;
+    return Applied::Done;
+  }
+
+  // A conditional format as the Conditional formatting panel adds it (newest first), or Clear
+  // Rules from the cells (WorkbookView::ApplyCfRules).
+  Applied Rule(int s, const sh::Range& r, const Edit& e, std::string& why) {
+    namespace data = sh::data;
+    const sh::Sheet& sheet = book_->GetSheet(static_cast<size_t>(s));
+    std::vector<data::CfRule> rules = data::ReadCfRules(sheet.Text());
+    const std::string sq = sh::RangeName(r);
+    auto dxf = [&] { return ed_.AddDxf(data::CfPreset(static_cast<int>(rules.size() % std::size(data::kCfPresets)))); };
+    const std::string& k = e.arg;
+    if (k == "clear") {
+      data::ClearCfRules(rules, r);
+    } else {
+      data::CfRule rule;
+      if (k == "greater") rule = data::CellIsRule(sq, data::CfOp::Greater, e.text, {}, dxf());
+      else if (k == "between") rule = data::CellIsRule(sq, data::CfOp::Between, e.text, "100", dxf());
+      else if (k == "expression") rule = data::ExpressionRule(sq, e.text, dxf());
+      else if (k == "contains") rule = data::TextRule(sq, data::CfText::Contains, e.text, dxf());
+      else if (k == "duplicate") rule = data::DuplicateRule(sq, false, dxf());
+      else if (k == "top") rule = data::TopRule(sq, 3, false, false, dxf());
+      else if (k == "above") rule = data::AverageRule(sq, true, dxf());
+      else if (k == "scale") rule = data::ColorScaleRule(sq, 0);
+      else if (k == "bar") rule = data::DataBarRule(sq, 0);
+      else if (k == "icons") rule = data::IconSetRule(sq, 0);
+      else {
+        why = "unknown rule " + k;
+        return Applied::Refused;
+      }
+      rules.insert(rules.begin(), std::move(rule));
+    }
+    std::string xml, ext;
+    data::WriteCfRules(rules, sheet.Text(), xml, ext);
+    sh::edit::Result res =
+        ed_.SetSheetRules(s, sh::edit::Editor::RuleKind::ConditionalFormats, xml, ext, u"Conditional Formatting");
+    if (res.ok) return Applied::Done;
+    why = Utf8(res.message);
+    return Applied::Refused;
+  }
+
+  // Data Validation over the cells, in place of the rules there, or Clear All
+  // (WorkbookView::ApplyValidations).
+  Applied Validation(int s, const sh::Range& r, const Edit& e, std::string& why) {
+    namespace data = sh::data;
+    const sh::Sheet& sheet = book_->GetSheet(static_cast<size_t>(s));
+    std::vector<data::Validation> rules = data::ReadValidations(sheet.Text());
+    data::ClearValidations(rules, r);
+    const std::string& k = e.arg;
+    if (k != "clear") {
+      data::Validation v;
+      v.sqref = sh::RangeName(r);
+      v.f1 = e.text;
+      using T = data::Validation::Type;
+      if (k == "list" || k == "list-ref") v.type = T::List;
+      else if (k == "whole") v.type = T::Whole, v.op = data::CfOp::Between, v.f2 = "100";
+      else if (k == "decimal") v.type = T::Decimal, v.op = data::CfOp::Greater;
+      else if (k == "length") v.type = T::TextLength, v.op = data::CfOp::LessEqual;
+      else if (k == "custom") v.type = T::Custom;
+      else {
+        why = "unknown validation " + k;
+        return Applied::Refused;
+      }
+      v.promptTitle = "Torture";
+      v.prompt = "Type a value";
+      rules.push_back(std::move(v));
+    }
+    std::string xml, ext;
+    data::WriteValidations(rules, sheet.Text(), xml, ext);
+    sh::edit::Result res = ed_.SetSheetRules(s, sh::edit::Editor::RuleKind::Validations, xml, ext, u"Data Validation");
+    if (res.ok) return Applied::Done;
+    why = Utf8(res.message);
+    return Applied::Refused;
+  }
+
   std::unique_ptr<sh::Workbook> book_;
   sh::edit::Editor ed_;
 };
@@ -743,6 +1175,21 @@ class Generator {
     area.lastRow = std::min<uint32_t>(area.lastRow + 3, 1048575), area.lastCol = std::min<uint32_t>(area.lastCol + 2, 16383);
     const bool nl = rng_.Chance(50);
     e.arg = nl ? "nl" : "us";
+#if FW_SHEET_EDIT
+    // A protected sheet or workbook refuses most edits: unprotected again a few edits later.
+    if (sheet && sh::edit::SheetProtected(*sheet) && rng_.Chance(30)) {
+      e.op = Op::Protect, e.arg = "off";
+      return e;
+    }
+    if (sh::edit::StructureProtected(book) && rng_.Chance(30)) {
+      e.op = Op::ProtectBook, e.arg = "off";
+      return e;
+    }
+#endif
+    if (sheet && rng_.Chance(15)) {
+      S3Edit(book, *sheet, area, e);
+      return e;
+    }
     if (roll < 30) {
       e.op = Op::Value;
       e.range = Cell(area);
@@ -806,12 +1253,6 @@ class Generator {
           e.text = std::string(info.value.text);
         else e.text = "x";
       }
-    } else if (roll == 84) {
-      e.op = Op::Chart;
-      e.range = Block(area, 6, 3);
-      static const char* kCharts[] = {"column", "bar", "line", "pie", "doughnut", "area", "scatter",
-                                      "move",   "delete", "copy", "type-line", "type-bar", "title"};
-      e.arg = rng_.Pick(kCharts);
     } else if (roll < 85) {
       e.op = Op::Paste;
       e.range = Block(area, 3, 3);
@@ -872,25 +1313,27 @@ class Generator {
   std::string TypedFormula(const sh::Workbook& book, bool nl, const sh::Range& at) {
     const char* sep = nl ? ";" : ",";
     const char* dec = nl ? "," : ".";
-    auto near = [&](int dr, int dc) {
+    auto nearby = [&](int dr, int dc) {
       int64_t r = static_cast<int64_t>(at.firstRow) + dr, c = static_cast<int64_t>(at.firstCol) + dc;
       return sh::CellName(static_cast<uint32_t>(std::max<int64_t>(0, r)), static_cast<uint32_t>(std::max<int64_t>(0, c)));
     };
-    switch (rng_.Below(11)) {
-      case 0: return "=SUM(" + near(-5, 0) + ":" + near(-1, 0) + ")";
-      case 1: return "=ROUND(" + near(0, -1) + sep + "2)";
-      case 2: return "=IF(" + near(0, -1) + ">0" + sep + "\"yes\"" + sep + "\"no\")";
-      case 3: return "=" + near(0, -1) + "*1" + dec + "5";
-      case 4: return "=AVERAGE(" + near(-3, -2) + ":" + near(-1, -1) + sep + "10)";
+    switch (rng_.Below(13)) {
+      case 11: return "=" + nearby(0, -1) + "*Rate";  // names (S3), which may or may not be defined
+      case 12: return "=SUM(Net)";
+      case 0: return "=SUM(" + nearby(-5, 0) + ":" + nearby(-1, 0) + ")";
+      case 1: return "=ROUND(" + nearby(0, -1) + sep + "2)";
+      case 2: return "=IF(" + nearby(0, -1) + ">0" + sep + "\"yes\"" + sep + "\"no\")";
+      case 3: return "=" + nearby(0, -1) + "*1" + dec + "5";
+      case 4: return "=AVERAGE(" + nearby(-3, -2) + ":" + nearby(-1, -1) + sep + "10)";
       case 5: {
         const sh::Sheet& other = book.GetSheet(rng_.Below(static_cast<uint32_t>(book.SheetCount())));
         return "=" + SheetRef(other.Name()) + "!A1+1";
       }
-      case 6: return "=VLOOKUP(" + near(0, -1) + sep + "A1:B10" + sep + "2" + sep + "FALSE)";
+      case 6: return "=VLOOKUP(" + nearby(0, -1) + sep + "A1:B10" + sep + "2" + sep + "FALSE)";
       case 7: return "=SUM(A:A)";
       case 8: return "=1/0";
-      case 9: return "=CONCATENATE(\"a\"" + std::string(sep) + near(0, -1) + ")";
-      default: return "=COUNTIF(" + near(-10, 0) + ":" + near(-1, 0) + sep + "\">1" + dec + "5\")";
+      case 9: return "=CONCATENATE(\"a\"" + std::string(sep) + nearby(0, -1) + ")";
+      default: return "=COUNTIF(" + nearby(-10, 0) + ":" + nearby(-1, 0) + sep + "\">1" + dec + "5\")";
     }
   }
 
@@ -924,6 +1367,162 @@ class Generator {
         e.op = Op::DeleteSheet;
         e.sheet = rng_.Below(count);
         break;
+    }
+  }
+
+  static std::string Absolute(const sh::Range& r) {
+    auto cell = [](uint32_t row, uint32_t col) { return "$" + sh::ColumnName(col) + "$" + std::to_string(row + 1); };
+    std::string s = cell(r.firstRow, r.firstCol);
+    if (r.lastRow != r.firstRow || r.lastCol != r.firstCol) s += ":" + cell(r.lastRow, r.lastCol);
+    return s;
+  }
+
+  // S3's objects: names, protection, links, notes, threads, tables, conditional formats and data
+  // validation. Notes, threads and links go in a small corner, so that edits meet the ones there.
+  void S3Edit(const sh::Workbook& book, const sh::Sheet& sheet, const sh::Range& area, Edit& e) {
+    e.arg.clear();
+    sh::Range corner = area;
+    corner.lastRow = std::min(area.lastRow, area.firstRow + 4);
+    corner.lastCol = std::min(area.lastCol, area.firstCol + 3);
+    const uint32_t count = static_cast<uint32_t>(book.SheetCount());
+    const std::string other = SheetRef(book.GetSheet(rng_.Below(count)).Name());
+    const uint32_t roll = rng_.Below(120);
+    if (roll >= 100) {
+      ObjectEdit(book, sheet, area, roll - 100, e);
+      return;
+    }
+    if (roll < 15) {
+      e.op = Op::Name;
+      if (!book.Names().empty() && rng_.Chance(25)) {  // delete one that's there
+        const sh::DefinedName& n = book.Names()[rng_.Below(static_cast<uint32_t>(book.Names().size()))];
+        e.arg = n.name;
+        e.sheetScope = n.sheet >= 0;
+        if (e.sheetScope) e.sheet = static_cast<uint32_t>(n.sheet);
+        return;
+      }
+      static const char* kNames[] = {"Rate", "Net", "Tax_2027", "Sales.Q1", "Print_Area", "A1"};  // A1: refused
+      e.arg = rng_.Pick(kNames);
+      e.sheetScope = rng_.Chance(25);
+      const std::string here = SheetRef(sheet.Name()) + "!";
+      if (e.arg == "Print_Area") {
+        e.arg = "_xlnm.Print_Area", e.sheetScope = true;
+        e.text = here + Absolute(Block(area, 20, 6));
+        return;
+      }
+      switch (rng_.Below(6)) {
+        case 0: e.text = here + Absolute(Cell(area)); break;
+        case 1: e.text = here + Absolute(Block(area, 10, 3)); break;
+        case 2: e.text = "0.21"; break;
+        case 3: e.text = "SUM(" + other + "!$A$1:$A$9)"; break;
+        case 4: e.text = "#REF!"; break;
+        default: e.text = "\"text, with a comma\""; break;
+      }
+    } else if (roll < 22) {
+      e.op = Op::Protect;
+      static const char* kHow[] = {"on", "on", "lax", "pw"};
+      e.arg = rng_.Pick(kHow);
+    } else if (roll < 25) {
+      e.op = Op::ProtectBook;
+      static const char* kHow[] = {"on", "on", "pw"};
+      e.arg = rng_.Pick(kHow);
+    } else if (roll < 40) {
+      e.op = Op::Link;
+      e.range = Block(corner, 2, 2);
+      const uint32_t k = rng_.Below(10);
+      if (k < 2) {
+        e.arg = "remove";
+      } else if (k < 6) {
+        e.arg = k == 5 ? "tip" : "web";
+        static const std::string kAddresses[] = {"https://example.com/", "https://example.com/a?b=1&c=<2>",
+                                                 "mailto:someone@example.com?subject=Hi there",
+                                                 "..\\Other folder\\book.xlsx",
+                                                 "https://example.com/" + std::string(2080, 'a')};  // too long: refused
+        e.text = rng_.Pick(kAddresses);
+      } else {
+        e.arg = "place";
+        if (k == 9 && !book.Names().empty()) e.text = book.Names()[rng_.Below(static_cast<uint32_t>(book.Names().size()))].name;
+        else e.text = k == 8 ? "Nowhere!A1" : other + "!" + sh::CellName(rng_.Below(20), rng_.Below(5));
+      }
+    } else if (roll < 66) {
+      const bool note = roll < 53;
+      e.op = note ? Op::Note : Op::Thread;
+      e.range = Cell(corner);
+      const uint32_t k = rng_.Below(10);
+      e.arg = k < 2 ? "delete" : note ? (k < 4 ? "shown" : "set") : (k < 4 ? "resolve" : "comment");
+      static const char* kTexts[] = {"Check this", "line one\nline two", "D\xC3\xA9penses \xE6\x97\xA5\xE6\x9C\xAC",
+                                     "<&> \"quoted\" 'single'", "Total: 12,50"};
+      if (TakesText(e)) e.text = rng_.Chance(10) ? std::string(300, 'n') : rng_.Pick(kTexts);
+    } else if (roll < 78) {
+      e.op = Op::Table;
+      if (!sheet.Tables().empty() && rng_.Chance(60)) {
+        const sh::Table& t = sheet.Tables()[rng_.Below(static_cast<uint32_t>(sheet.Tables().size()))];
+        e.range = {t.ref.firstRow, t.ref.firstCol, t.ref.firstRow, t.ref.firstCol};
+        static const char* kWhat[] = {"remove", "totals", "totals", "style=TableStyleLight9", "style=TableStyleDark2", "style="};
+        e.arg = rng_.Pick(kWhat);
+      } else {
+        e.range = Block(area, 12, 5);
+        if (e.range.lastRow == e.range.firstRow) e.range.lastRow++;
+        e.arg = "add";
+      }
+    } else if (roll < 89) {
+      e.op = Op::Rule;
+      e.range = Block(area, 10, 4);
+      static const char* kKinds[] = {"greater", "between", "expression", "contains", "duplicate", "top",
+                                     "above",   "scale",   "bar",        "icons",    "clear",     "clear"};
+      e.arg = rng_.Pick(kKinds);
+      const std::string first = sh::CellName(e.range.firstRow, e.range.firstCol);
+      if (e.arg == "greater") e.text = rng_.Chance(70) ? "5" : "\"x\"";
+      else if (e.arg == "between") e.text = "1";
+      else if (e.arg == "expression") e.text = rng_.Chance(50) ? first + ">0" : "MOD(ROW(),2)=0";
+      else if (e.arg == "contains") e.text = rng_.Chance(70) ? "Total" : "a\"b";
+    } else {
+      e.op = Op::Validation;
+      e.range = Block(area, 10, 2);
+      static const char* kKinds[] = {"list", "list", "list-ref", "whole", "decimal", "length", "custom", "clear"};
+      e.arg = rng_.Pick(kKinds);
+      const std::string first = sh::CellName(e.range.firstRow, e.range.firstCol);
+      if (e.arg == "list") e.text = rng_.Chance(50) ? "\"a,b,c\"" : "\"Yes,No\"";
+      else if (e.arg == "list-ref") e.text = rng_.Chance(50) ? "$A$1:$A$5" : other + "!$A$1:$A$5";  // another sheet: x14
+      else if (e.arg == "whole") e.text = "1";
+      else if (e.arg == "decimal") e.text = "0.5";
+      else if (e.arg == "length") e.text = "10";
+      else if (e.arg == "custom") e.text = "ISNUMBER(" + first + ")";
+    }
+  }
+
+  // Charts and the drawing's objects (s3-charts), page setup and page breaks (s3-print). `roll`: 0-19.
+  void ObjectEdit(const sh::Workbook& book, const sh::Sheet& sheet, const sh::Range& area, uint32_t roll, Edit& e) {
+    if (roll < 8) {
+      e.op = Op::Chart;
+      e.range = Block(area, 12, 3);
+      e.toSheet = e.sheet;
+      e.to = Cell(area);
+      e.to.firstCol = e.to.lastCol = std::min<uint32_t>(e.range.lastCol + 2, 16380);
+      static const char* kKinds[] = {"column", "column", "bar", "line", "pie", "doughnut", "area", "scatter"};
+      e.arg = rng_.Pick(kKinds);
+    } else if (roll < 12) {
+      e.op = Op::Object;
+      e.range = Cell(area);
+      e.count = 1;
+#if FW_SHEET_EDIT
+      const std::vector<sh::edit::drawing::Object> objects =
+          sh::edit::drawing::Objects(RelatedPart(book, sheet.PartName(), "/drawing"));
+      if (!objects.empty()) e.count = objects[rng_.Below(static_cast<uint32_t>(objects.size()))].id;
+#else
+      (void)book;
+#endif
+      static const char* kObjectEdits[] = {"delete", "delete", "move", "move", "move", "copy", "type-line", "type-bar", "title"};
+      e.arg = rng_.Pick(kObjectEdits);
+    } else if (roll < 17) {
+      e.op = Op::PageSetup;
+      static const char* kWhat[] = {"portrait", "landscape", "a4", "letter", "scale=75", "fit=1,0", "fit=1,1", "nofit",
+                                    "margins=narrow", "margins=wide", "center", "header", "gridlines", "headings", "order"};
+      e.arg = rng_.Pick(kWhat);
+    } else {
+      e.op = Op::PageBreak;
+      e.range = Cell(area);
+      const uint32_t k = rng_.Below(20);
+      e.arg = k < 12 ? "insert" : k < 17 ? "remove" : "reset";
     }
   }
 
@@ -1027,12 +1626,104 @@ class StyleTexts {
   std::map<uint32_t, std::string> cache_;
 };
 
+// S3's objects on sheet `i`: protection, links, tables, conditional formats, data validation, and
+// notes and threads as the grid reads them.
+void ObjectLines(const sh::Workbook& book, size_t i, const std::string& at, std::vector<std::string>& out) {
+#if FW_SHEET_EDIT
+  const sh::Sheet& s = book.GetSheet(i);
+  if (const auto p = sh::edit::SheetProtectionOf(s)) {
+    std::string line = at + "protect";
+    for (bool flag : {p->sheet, p->objects, p->scenarios, p->formatCells, p->formatColumns, p->formatRows, p->insertColumns,
+                      p->insertRows, p->insertHyperlinks, p->deleteColumns, p->deleteRows, p->selectLockedCells, p->sort,
+                      p->autoFilter, p->pivotTables, p->selectUnlockedCells})
+      line += flag ? " 1" : " 0";
+    out.push_back(line + (p->password.Set() ? " password" : ""));
+  }
+  for (const sh::Hyperlink& h : s.Hyperlinks())
+    out.push_back(at + "link " + sh::RangeName(h.ref) + " target " + Quote(h.target) + " location " + Quote(h.location) +
+                  " display " + Quote(h.display) + " tip " + Quote(h.tooltip));
+  for (const sh::Table& t : s.Tables()) {
+    std::string line = at + "table " + t.name + " " + sh::RangeName(t.ref) + " headers " + std::to_string(t.headerRows) +
+                       " totals " + std::to_string(t.totalsRows) + (t.autoFilter ? " filter" : "") + " style " +
+                       Quote(t.style.name) + (t.style.rowStripes ? " rows" : "") + (t.style.columnStripes ? " cols" : "") +
+                       (t.style.firstColumn ? " first" : "") + (t.style.lastColumn ? " last" : "");
+    for (const sh::TableColumn& c : t.columns)
+      line += " [" + c.name + (c.totalsFunction.empty() ? "" : " " + c.totalsFunction) +
+              (c.totalsLabel.empty() ? "" : " " + Quote(c.totalsLabel)) +
+              (c.calculatedFormula.empty() ? "" : " =" + c.calculatedFormula) + "]";
+    out.push_back(std::move(line));
+  }
+  for (const sh::data::CfRule& r : sh::data::ReadCfRules(s.Text()))
+    out.push_back(at + "rule " + r.sqref + " " + r.type + (r.stopIfTrue ? " stop" : "") + " " + Quote(r.xml) +
+                  (r.ext.empty() ? "" : " ext " + Quote(r.ext)));
+  for (const sh::data::Validation& v : sh::data::ReadValidations(s.Text()))
+    out.push_back(at + "validation " + v.sqref + " type " + std::to_string(static_cast<int>(v.type)) + " op " +
+                  std::to_string(static_cast<int>(v.op)) + " " + Quote(v.f1) + " " + Quote(v.f2) +
+                  (v.allowBlank ? " blank" : "") + (v.dropDown ? " list" : "") + " " + Quote(v.prompt) + (v.x14 ? " x14" : ""));
+  // Page setup and breaks (s3-print's).
+  const sh::PageSetup& p = s.Page();
+  const sh::PageMargins& m = p.margins;
+  out.push_back(at + "page paper " + std::to_string(p.paperSize) + " scale " + std::to_string(p.scale) + " fit " +
+                std::to_string(p.fitToWidth) + "," + std::to_string(p.fitToHeight) + (s.Props().fitToPage ? " on" : " off") +
+                " orientation " + std::to_string(static_cast<int>(p.orientation)) + " order " +
+                std::to_string(static_cast<int>(p.pageOrder)) + (p.horizontalCentered ? " hcenter" : "") +
+                (p.verticalCentered ? " vcenter" : "") + (p.gridLines ? " gridlines" : "") + (p.headings ? " headings" : "") +
+                " margins " + Num(m.left) + " " + Num(m.right) + " " + Num(m.top) + " " + Num(m.bottom) + " " + Num(m.header) +
+                " " + Num(m.footer) + " header " + Quote(s.HeadersFooters().oddHeader) + " footer " +
+                Quote(s.HeadersFooters().oddFooter));
+  for (const auto* breaks : {&s.RowBreaks(), &s.ColBreaks()}) {
+    if (breaks->empty()) continue;
+    std::string line = at + (breaks == &s.RowBreaks() ? "row breaks" : "col breaks");
+    for (const sh::PageBreak& b : *breaks) line += " " + std::to_string(b.id) + (b.manual ? "m" : "");
+    out.push_back(std::move(line));
+  }
+  // The drawing's objects (by shape id) and its charts' series formulas (s3-charts').
+  std::string drawingPart;
+  const std::string drawing = RelatedPart(book, s.PartName(), "/drawing", &drawingPart);
+  if (!drawing.empty()) {
+    std::string line = at + "objects";
+    for (const sh::edit::drawing::Object& o : sh::edit::drawing::Objects(drawing)) line += " " + std::to_string(o.id);
+    out.push_back(std::move(line));
+    for (size_t n = 0;; ++n) {
+      std::string chartPart;
+      const std::string chart = RelatedPart(book, drawingPart, "/chart", &chartPart, n);
+      if (chart.empty()) break;
+      std::string line = at + "chart " + chartPart;
+      for (size_t i = chart.find("<c:f>"); i != std::string::npos; i = chart.find("<c:f>", i + 5)) {
+        const size_t end = chart.find("</c:f>", i);
+        if (end == std::string::npos) break;
+        line += " " + chart.substr(i + 5, end - i - 5);
+      }
+      out.push_back(std::move(line));
+    }
+  }
+  // Notes and threads: only on sheets whose part has them (reading a sheet's objects is slower).
+  const fw::pkg::Package* pkg = book.GetPackage();
+  const fw::pkg::RelationshipSet* rels = pkg && !s.PartName().empty() ? pkg->RelationshipsOf(s.PartName()) : nullptr;
+  const bool notes = rels && std::any_of(rels->items.begin(), rels->items.end(), [](const fw::pkg::Relationship& r) {
+                       return r.type.ends_with("/comments") || r.type.ends_with("/threadedComment");
+                     });
+  if (!notes) return;
+  auto objects = sh::SheetObjects::Load(const_cast<sh::Workbook&>(book), i);  // the sheet is loaded already
+  for (const sh::CellNote& n : objects->Notes())
+    out.push_back(at + (n.threaded ? "thread " : "note ") + sh::CellName(n.row, n.col) + (n.resolved ? " resolved" : "") +
+                  (n.shown ? " shown" : "") + " " + Quote(fw::WideToUtf8(n.author)) + " " + Quote(fw::WideToUtf8(n.text)));
+#else
+  (void)book, (void)i, (void)at, (void)out;
+#endif
+}
+
 std::vector<std::string> Digest(const sh::Workbook& book) {
   StyleTexts styleText(book);
   std::vector<std::string> out;
   out.push_back("sheets " + std::to_string(book.SheetCount()) + ", 1904 " + (book.Date1904() ? "yes" : "no"));
   for (const sh::DefinedName& n : book.Names())
     out.push_back("name " + n.name + " sheet " + std::to_string(n.sheet) + " = " + n.formula + (n.hidden ? " hidden" : ""));
+#if FW_SHEET_EDIT
+  if (const auto p = sh::edit::WorkbookProtectionOf(book))
+    out.push_back(std::string("protect-book structure ") + (p->lockStructure ? "1" : "0") + " windows " +
+                  (p->lockWindows ? "1" : "0") + (p->password.Set() ? " password" : ""));
+#endif
   for (size_t i = 0; i < book.SheetCount(); ++i) {
     const sh::Sheet& s = book.GetSheet(i);
     out.push_back("sheet " + std::to_string(i) + " " + Quote(s.Name()) + " kind " + std::to_string(static_cast<int>(s.Kind())) +
@@ -1054,6 +1745,7 @@ std::vector<std::string> Digest(const sh::Workbook& book) {
     for (const sh::ColumnInfo& c : s.Columns())
       out.push_back(at + "cols " + sh::ColumnName(c.first) + ":" + sh::ColumnName(c.last) + " width " + Num(c.width) +
                     " style " + styleText(c.style) + (c.hidden ? " hidden" : ""));
+    ObjectLines(book, i, at, out);
     if (auto used = s.UsedRange())
       s.ForEachRow(0, used->lastRow, [&](uint32_t row, const sh::RowInfo& r) {
         if (r.customHeight || r.hidden || r.customFormat || r.outlineLevel)
@@ -1179,7 +1871,14 @@ std::optional<Failure> CheckSave(Original& orig, SheetTarget& target, Round& r) 
     if (std::find(orig.damaged.begin(), orig.damaged.end(), part.name) != orig.damaged.end() ||
         std::find(orig.damaged.begin(), orig.damaged.end(), part.name.substr(1)) != orig.damaged.end())
       continue;
-    if (!again->ReadPart(part.name, b).Ok()) return Failure{"untouched", part.name + " is missing from the saved copy"};
+    if (!again->ReadPart(part.name, b).Ok()) {
+      // A part an edit removed (a note's comments, a table's part: Editor::RemovePart) is left out;
+      // WrittenParts doesn't list those.
+      const fw::pkg::Package* now = target.Book().GetPackage();
+      const fw::pkg::Part* kept = now ? now->FindPart(part.name) : nullptr;
+      if (now && (!kept || kept->deleted)) continue;
+      return Failure{"untouched", part.name + " is missing from the saved copy"};
+    }
     if (!orig.pkg->ReadPart(part.name, a).Ok() || a != b) return Failure{"untouched", part.name + " changed"};
   }
   for (const auto& part : again->Parts())
@@ -1350,7 +2049,8 @@ bool ReadReproducer(const fs::path& repro, fs::path& file, uint64_t& seed, std::
     return false;
   }
   std::string line;
-  while (std::getline(in, line)) {
+  for (bool first = true; std::getline(in, line); first = false) {
+    if (first && line.starts_with("\xEF\xBB\xBF")) line.erase(0, 3);  // a UTF-8 BOM (PowerShell 5.1 writes one)
     if (!line.empty() && line.back() == '\r') line.pop_back();
     if (line.empty() || line[0] == '#') continue;
     if (line.starts_with("file: ")) file = fs::path(fw::Utf8ToWide(line.substr(6)));

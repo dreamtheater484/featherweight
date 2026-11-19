@@ -49,6 +49,9 @@ class FuzzHost : public calc::Host {
   void Extent(int, int32_t& rows, int32_t& cols) override { rows = cols = 4; }
   double Now() override { return 45293.5; }
   double Random() override { return 0.5; }
+  // Arrays of millions of cells are right but slow under the sanitizers: one input built 19111 x 507
+  // for each of six operators. The paths are the same with fewer.
+  int64_t MaxArrayCells() const override { return 1 << 16; }
 };
 
 }  // namespace

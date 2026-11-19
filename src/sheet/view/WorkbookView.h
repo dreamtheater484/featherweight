@@ -11,6 +11,7 @@
 
 #include "PagedView.h"
 #include "sheet/data/Filter.h"
+#include "sheet/data/Shapes.h"
 #include "sheet/data/Rules.h"
 #include "sheet/data/Sort.h"
 #include "sheet/calc/Bind.h"
@@ -337,8 +338,17 @@ class WorkbookView : public PagedView {
 
   // Print preview and printing.
   bool preview_ = false;
-  std::unique_ptr<PrintLayout> print_;
-  std::unique_ptr<SheetObjects> printObjects_;  // print_'s, placed on the printed columns
+  // The preview's pages: a layout per sheet it prints (printWhat_: the active sheet, every sheet, or
+  // the selection), each with its objects (placed on its printed columns) and another sheet's grid.
+  struct PrintSheet {
+    std::unique_ptr<Grid> grid;
+    std::unique_ptr<SheetObjects> objects;
+    std::unique_ptr<PrintLayout> layout;
+    size_t first = 0;  // its first page among the preview's
+  };
+  std::vector<PrintSheet> prints_;
+  int printWhat_ = 0;  // 0 the active sheet, 1 the entire workbook, 2 the selection (s3-print)
+  PrintLayout* LayoutAt(int page, size_t& local) const;
   std::vector<fw::PageSizePt> pageSizes_;
 
   // Pictures, shapes, charts and notes (fwsheetobjects): each sheet's, read when first shown and
@@ -428,9 +438,19 @@ class WorkbookView : public PagedView {
     std::vector<FilterColumn> other;  // from the file, not edited here (colors, icons, dates): kept
   };
   ViewFilter filter_;
-  // The shown sheet's filter, read again from the model (Sheet::Filter, so undo and redo show), or
-  // null. The panel changes its criteria, then ApplyFilter.
+  // The filter the panel works on: -1 the sheet's, else the shown sheet's table with that index
+  // (its header buttons; s3-data).
+  int filterTable_ = -1;
+  // That filter, read again from the model (Sheet::Filter or the table's criteria, so undo and redo
+  // show), or null. The panel changes its criteria, then ApplyFilter.
   ViewFilter* FilterOf();
+  // Filter `table` (-1 the sheet's) into `out`; false when it has no buttons. The filters with
+  // buttons on the shown sheet: -1 for the sheet's, then the tables'.
+  bool ReadFilter(int table, ViewFilter& out);
+  std::vector<int> FilterAreas();
+  // A table's filter buttons on or off (Ctrl+Shift+L in a table, Table Design's Filter Button):
+  // off shows the rows its criteria hid.
+  bool SetTableButtons(size_t index, bool on);
   void ToggleFilter();
   // filter_ into the model (Editor::SetFilter: the file's autoFilter), and the rows its criteria
   // leave out hidden, the others shown; one undo step.
@@ -484,10 +504,30 @@ class WorkbookView : public PagedView {
   // SetTable and RemoveTable.
   class TablePanel;
   std::shared_ptr<PanelContent> tablePanel_;
+  // ---- Pictures and shapes (WorkbookShapes.cpp, s3-data): Insert > Pictures and Shapes, a picture
+  // pasted from the clipboard, the Format panel of the selected object.
+  class ShapePanel;
+  std::shared_ptr<PanelContent> shapePanel_;
+  draw::Rect NewObjectRect(double width, double height) const;  // sheet points, at the active cell
+  void SelectNewObject(uint32_t id);
+  bool InsertPictureBytes(const std::string& bytes, const std::string& altText);
+  bool InsertShapeOf(data::ShapeKind kind, const std::string& text);
+  bool InsertPictureFiles(const std::vector<std::wstring>& files);
+  void InsertPictureDialog();
+  bool PastePicture();  // true when the clipboard held a picture (and not cells or text)
+  void ShowShapePanel();
+  bool ShapesCommandState(int cmd, CommandState& s);
+  bool ShapesCommand(int cmd);
+  void AddShapeTools(ToolbarModel& m);
+  bool ShapesScriptOp(const std::wstring& arg);
   int TableIndexAt(CellAddr at);  // the shown sheet's table holding the cell, or -1
   void ShowTablePanel();
   bool CreateTable(Range r, bool headers, const std::string& style);
   bool ChangeTable(size_t index, const std::function<void(Table&)>& change, const char16_t* name);
+  // Table Design > Resize Table, by Excel's rules (measured): the header row stays, the range
+  // overlaps the table's; new columns are named by their header cell or ColumnN, columns and rows
+  // left out keep their cells; the total row moves to the new last row (or, smaller, just below).
+  bool ResizeTable(size_t index, Range r);
   bool SetTotalRow(size_t index, bool on);
   bool ConvertToRange(size_t index);
   void AutoExpandTable(int sheet, CellAddr cell);  // a value typed just below or right of a table  // formulas that use the table refer to its cells instead
@@ -555,6 +595,41 @@ class WorkbookView : public PagedView {
   std::unique_ptr<PanelContent> linkPanel_;     // a LinkPanel
   std::unique_ptr<PanelContent> notePanel_;     // a NotePanel
   class CommentPanel;
+  // ---- Page setup (S3, s3-print: WorkbookPageSetup.cpp): the Page Setup panel, the print area and
+  // titles, page breaks, what print preview prints, Page Break Preview.
+  class PageSetupPanel;
+  std::unique_ptr<PanelContent> pageSetupPanel_;
+  bool PageSetupCommandState(int cmd, CommandState& s);
+  bool PageSetupCommand(int cmd);
+  void AddPageSetupTabItems(HMENU m);
+  void AddPageSetupCellItems(HMENU m);
+  edit::Result ApplyPageSetup(const std::function<void(PageSetup&, HeaderFooter&, bool&)>& change);
+  void AfterPageChange();  // the preview and Page Break Preview paginate again
+  void RefreshPreview();
+  edit::Result SetPrintArea(const std::vector<Range>& areas);  // empty: cleared
+  std::optional<std::pair<uint32_t, uint32_t>> TitleRows() const;
+  std::optional<std::pair<uint32_t, uint32_t>> TitleCols() const;
+  edit::Result SetPrintTitles(std::optional<std::pair<uint32_t, uint32_t>> rows, std::optional<std::pair<uint32_t, uint32_t>> cols);
+  bool BreakHere(bool& row, bool& col) const;  // manual breaks above and left of the active cell
+  edit::Result ChangeBreaks(int cmd);
+  bool BreakPreviewOn() const;
+  void TogglePageBreakPreview();
+  void DrawPageBreakPreview(gfx::Canvas& c);
+  struct BreakDrag {
+    bool rows = false;
+    uint32_t from = 0, to = 0;  // the row or column the break is before
+    bool outer = false;         // the print area's edge: dragging it sets the print area
+  };
+  std::optional<BreakDrag> breakDrag_;
+  std::unique_ptr<PrintSheet> breakPages_;  // Page Break Preview's pages (`first`: their sheet)
+  const PrintLayout* BreakPages();
+  std::optional<Range> PrintedArea();  // Page Break Preview's printed cells, when one area
+  bool BreakEdgeAt(float x, float y, bool& rows, uint32_t& at, bool& outer);
+  bool BreakDragStart(float x, float y);
+  bool BreakDragMove(int x, int y);
+  bool BreakDragEnd(int x, int y);
+  HCURSOR BreakCursor(float x, float y);  // null: no break there
+  bool PageScriptOp(const std::wstring& arg);  // pagesetup:
   std::unique_ptr<PanelContent> commentPanel_;  // a CommentPanel
   // The active cell's note (not a threaded comment), its text without the author's line.
   const CellNote* NoteHere(std::wstring* text = nullptr) const;

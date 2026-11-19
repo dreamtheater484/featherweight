@@ -470,6 +470,10 @@ TEST(sheet_typing_sheets_changed) {
       CHECK_EQ(SheetsChanged(once, at2, left, t.second, -1), std::string(t.after[i]));
     }
   }
+  // A sheet after a name and ':' keeps its quotes (s3-corpus: else it reads as a 3-D reference).
+  CHECK_EQ(SheetsChanged("COUNTIF(Rate:'Kb'!$E$21,\"?*\")", at, sheets, 4, 0),
+           std::string("COUNTIF(Rate:'Kb'!$E$21,\"?*\")"));
+  CHECK_EQ(SheetsChanged("SUM(A1:'Kc'!B2)", at, sheets, 4, 0), std::string("SUM(A1:'Kc'!B2)"));
   // A reference that's #REF! already, relative references and names print back as they were.
   CHECK_EQ(SheetsChanged("Kc!B2:C3*Rate+B2", at, sheets, 2, -1), std::string("#REF!B2:C3*Rate+B2"));
   CHECK_EQ(SheetsChanged("SUM(Kb:Kc!A1)", at, sheets, 5, 0), std::string("SUM(Kb:Kc!A1)"));
@@ -647,6 +651,11 @@ TEST(sheet_typing_shift_keeps_text_as_written) {
       {0, true, 3, 1, 1, 3},  {0, false, 2, -1, 0, 4}, {1, true, 1, 2}, {0, true, 1048575, -1},
   };
   const CompileOptions cells[] = {{0, 4, 2}, {0, 0, 0}, {1, 6, 6}, {0, 20, 30}};
+  // A range whose two ends are gone reads back as it prints.
+  for (const char* t : {"#REF!:#REF!", "SUM(#REF!:#REF!)", "#REF!:B2"}) {
+    auto f = Compile(t, cells[0], names);
+    CHECK(f && Print(*f, cells[0], names) == t);
+  }
   int compared = 0;
   for (const std::string& f : formulas)
     for (const StructuralEdit& e : edits)
@@ -659,8 +668,9 @@ TEST(sheet_typing_shift_keeps_text_as_written) {
         const std::string fast = ShiftReferences(f, cell, e, names, &to);
         const std::string printed = ShiftReferences(f, typed, e, names, &toTyped);
         auto a = Compile(fast, to, names), b = Compile(printed, to, names);
-        if (!b) continue;  // #REF!:#REF! (A1:B2 with both gone) doesn't read back either way
-        CHECK(a != nullptr);
+        if (!b) std::printf("  %s at %d,%d,%d: %s doesn't read back\n", f.c_str(), cell.sheet, cell.row, cell.col, printed.c_str());
+        CHECK(a != nullptr && b != nullptr);
+        if (!b) continue;
         if (!a) continue;
         if (Print(*a, to, names) != Print(*b, to, names))
           std::printf("  %s at %d,%d,%d: %s vs %s\n", f.c_str(), cell.sheet, cell.row, cell.col, fast.c_str(), printed.c_str());

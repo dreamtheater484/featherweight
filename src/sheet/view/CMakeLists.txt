@@ -11,10 +11,13 @@ add_library(fwsheetview STATIC WorkbookView.cpp WorkbookInput.cpp WorkbookComman
             WorkbookEdit.cpp WorkbookFunctions.cpp
             WorkbookSheetOps.cpp WorkbookPanels.cpp WorkbookFill.cpp
             WorkbookClipboard.cpp WorkbookFile.cpp ClipHtml.cpp WorkbookFormat.cpp WorkbookFilter.cpp
-            WorkbookData.cpp WorkbookReview.cpp WorkbookNames.cpp WorkbookCharts.cpp)
+            WorkbookData.cpp WorkbookReview.cpp WorkbookNames.cpp
+            WorkbookPageSetup.cpp WorkbookCharts.cpp WorkbookShapes.cpp)
 target_include_directories(fwsheetview PRIVATE "${PROJECT_SOURCE_DIR}/src" "${CMAKE_BINARY_DIR}/generated")
 target_link_libraries(fwsheetview PUBLIC fwsheetrender)
 target_compile_options(fwsheetview PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
+# Panels and commands that run once per click: compiled for size (S3's page setup budget).
+set_source_files_properties(WorkbookPageSetup.cpp PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 # The grid's editing logic, and the workbook tab's file (S2 "Saving", built into the tests with
 # FileSession, which src/doc adds).
 if(TARGET fw_tests)
