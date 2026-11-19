@@ -44,6 +44,10 @@ class Styles {
   // Excel's width in characters for `points` of column width, with the default font's digit.
   double ColumnChars(double points);
   std::function<int(const std::string&, double)> digit;  // the grid's measure of it, if given
+  // A cell style with conditions (style:map children), or an empty node.
+  pugi::xml_node Conditional(std::string_view name) const;
+  // The differential format (dxfs) for the style a condition applies, or -1 when there is none.
+  int Dxf(std::string_view name);
   // styles.xml.
   std::string Xml() const;
 
@@ -60,6 +64,11 @@ class Styles {
   std::vector<Xf> xfs_;
   std::unordered_map<std::string, std::string> codes_;  // data style name -> code
   int digitPx_ = 0;
+  struct DxfSpec {
+    std::string font, fill, border, numFmt;
+  };
+  std::vector<DxfSpec> dxfs_;
+  std::unordered_map<std::string, int> dxfIndex_;
 };
 
 }  // namespace fw::sheet::ods::detail

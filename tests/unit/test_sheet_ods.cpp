@@ -56,17 +56,27 @@ TEST(sheet_ods_converts_a_spreadsheet) {
       "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
       "<office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" "
       "xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" "
-      "xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"><office:body><office:spreadsheet>"
+      "xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" "
+      "xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" "
+      "xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\" "
+      "xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><office:automatic-styles>"
+      "<style:style style:name=\"cf1\" style:family=\"table-cell\"><style:text-properties fo:color=\"#FF0000\"/></style:style>"
+      "<style:style style:name=\"ce1\" style:family=\"table-cell\"><style:map style:condition=\"of:cell-content()&gt;2\" "
+      "style:apply-style-name=\"cf1\" style:base-cell-address=\"Data.B1\"/></style:style>"
+      "</office:automatic-styles><office:body><office:spreadsheet>"
       "<table:table table:name=\"Data\"><table:table-column table:number-columns-repeated=\"3\"/>"
       "<table:table-row><table:table-cell office:value-type=\"string\"><text:p>Total_x0041_</text:p></table:table-cell>"
-      "<table:table-cell office:value-type=\"float\" office:value=\"2.5\"><text:p>2.5</text:p></table:table-cell>"
+      "<table:table-cell table:style-name=\"ce1\" office:value-type=\"float\" office:value=\"2.5\"><text:p>2.5</text:p>"
+      "</table:table-cell>"
       "<table:table-cell office:value-type=\"date\" office:date-value=\"2000-01-01T12:00:00\"><text:p>x</text:p></table:table-cell>"
       "</table:table-row>"
       "<table:table-row table:number-rows-repeated=\"2\"><table:table-cell office:value-type=\"float\" office:value=\"5\" "
       "table:formula=\"of:=[.B1]*2\"><text:p>5</text:p></table:table-cell>"
       "<table:table-cell table:number-columns-spanned=\"2\" office:value-type=\"boolean\" office:boolean-value=\"true\">"
       "<text:p>TRUE</text:p></table:table-cell><table:covered-table-cell/></table:table-row>"
-      "<table:table-row table:number-rows-repeated=\"1048573\"><table:table-cell table:number-columns-repeated=\"16384\"/>"
+      "<table:table-row><table:table-cell><office:annotation office:display=\"true\"><dc:creator>Roy</dc:creator>"
+      "<text:p>Check</text:p><text:p>this</text:p></office:annotation></table:table-cell></table:table-row>"
+      "<table:table-row table:number-rows-repeated=\"1048572\"><table:table-cell table:number-columns-repeated=\"16384\"/>"
       "</table:table-row></table:table></office:spreadsheet></office:body></office:document-content>";
   fw::pkg::MemorySink sink;
   fw::pkg::ZipWriter zip(sink);
@@ -95,4 +105,20 @@ TEST(sheet_ods_converts_a_spreadsheet) {
   CHECK(s.GetValue(1, 1).type == ValueType::Bool && s.GetValue(1, 1).boolean);
   CHECK(s.Merges().size() == 2);
   CHECK(s.GetValue(5, 0).type == ValueType::Empty);
+  // The condition on B1's style, and the note on A4.
+  auto part = [&](const char* name) {
+    std::vector<uint8_t> bytes;
+    book->GetPackage()->ReadPart(name, bytes);
+    return std::string(bytes.begin(), bytes.end());
+  };
+  const std::string sheet = part("/xl/worksheets/sheet1.xml"), styles = part("/xl/styles.xml");
+  CHECK(sheet.find("<conditionalFormatting sqref=\"B1\"><cfRule type=\"cellIs\" operator=\"greaterThan\" dxfId=\"0\"") !=
+        std::string::npos);
+  CHECK(sheet.find("<formula>2</formula>") != std::string::npos);
+  CHECK(styles.find("<dxfs count=\"1\"><dxf><font><color rgb=\"FFFF0000\"/></font></dxf></dxfs>") != std::string::npos);
+  const std::string comments = part("/xl/comments1.xml");
+  CHECK(comments.find("ref=\"A4\"") != std::string::npos && comments.find("Check") != std::string::npos &&
+        comments.find("this") != std::string::npos);
+  CHECK(sheet.find("<legacyDrawing r:id=\"rIdVml\"/>") != std::string::npos);
+  CHECK(!part("/xl/drawings/vmlDrawing1.vml").empty());
 }

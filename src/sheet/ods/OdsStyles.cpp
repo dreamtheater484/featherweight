@@ -286,6 +286,65 @@ int Styles::Resolve(std::string_view name) {
   return index;
 }
 
+pugi::xml_node Styles::Conditional(std::string_view name) const {
+  auto it = cell_.find(std::string(name));
+  return it != cell_.end() && it->second.child("style:map") ? it->second : xml_node();
+}
+
+int Styles::Dxf(std::string_view name) {
+  if (auto it = dxfIndex_.find(std::string(name)); it != dxfIndex_.end()) return it->second;
+  auto found = cell_.find(std::string(name));
+  if (found == cell_.end()) return -1;
+  // The style's own properties and its parents' up to "Default": what the condition changes.
+  std::vector<xml_node> chain;
+  for (xml_node s = found->second; s && chain.size() < 16; ) {
+    chain.push_back(s);
+    const std::string parent(Attr(s, "style:parent-style-name"));
+    auto p = cell_.find(parent);
+    if (parent.empty() || parent == "Default" || p == cell_.end() || std::find(chain.begin(), chain.end(), p->second) != chain.end())
+      break;
+    s = p->second;
+  }
+  DxfSpec d;
+  std::string font;
+  Line left, right, top, bottom;
+  bool lines = false;
+  std::string fill;
+  for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+    if (xml_node tp = it->child("style:text-properties")) {
+      if (auto w = Attr(tp, "fo:font-weight"); w == "bold" || std::atoi(std::string(w).c_str()) >= 600) font += "<b/>";
+      if (auto i = Attr(tp, "fo:font-style"); i == "italic" || i == "oblique") font += "<i/>";
+      if (auto s = Attr(tp, "style:text-line-through-style"); !s.empty() && s != "none") font += "<strike/>";
+      if (auto u = Attr(tp, "style:text-underline-style"); !u.empty() && u != "none") font += "<u/>";
+      if (auto c = pkg::odf::Color(Attr(tp, "fo:color")); !c.empty()) font += "<color rgb=\"FF" + c + "\"/>";
+    }
+    if (xml_node cp = it->child("style:table-cell-properties")) {
+      if (auto bg = pkg::odf::Color(Attr(cp, "fo:background-color")); !bg.empty()) fill = bg;
+      if (auto b = Attr(cp, "fo:border"); !b.empty()) left = right = top = bottom = BorderLine(b), lines = true;
+      if (auto b = Attr(cp, "fo:border-left"); !b.empty()) left = BorderLine(b), lines = true;
+      if (auto b = Attr(cp, "fo:border-right"); !b.empty()) right = BorderLine(b), lines = true;
+      if (auto b = Attr(cp, "fo:border-top"); !b.empty()) top = BorderLine(b), lines = true;
+      if (auto b = Attr(cp, "fo:border-bottom"); !b.empty()) bottom = BorderLine(b), lines = true;
+    }
+    if (auto ds = Attr(*it, "style:data-style-name"); !ds.empty())
+      if (auto n = data_.find(std::string(ds)); n != data_.end()) d.numFmt = NumberCode(n->second);
+  }
+  if (!font.empty()) d.font = "<font>" + font + "</font>";
+  if (!fill.empty()) d.fill = "<fill><patternFill patternType=\"solid\"><bgColor rgb=\"FF" + fill + "\"/></patternFill></fill>";
+  if (lines) {
+    auto line = [](const char* side, const Line& l) {
+      if (l.style.empty()) return std::string("<") + side + "/>";
+      return std::string("<") + side + " style=\"" + l.style + "\">" +
+             (l.color.empty() ? std::string("<color auto=\"1\"/>") : "<color rgb=\"FF" + l.color + "\"/>") + "</" + side + ">";
+    };
+    d.border = "<border>" + line("left", left) + line("right", right) + line("top", top) + line("bottom", bottom) + "</border>";
+  }
+  const int index = static_cast<int>(dxfs_.size());
+  dxfs_.push_back(std::move(d));
+  dxfIndex_[std::string(name)] = index;
+  return index;
+}
+
 double Styles::ColumnChars(double points) {
   if (digitPx_ == 0) {
     const Xf& d = Default();
@@ -510,6 +569,22 @@ std::string Styles::Xml() const {
     if (protection) xfs += std::string("<protection") + (x.locked ? "" : " locked=\"0\"") + (x.hidden ? " hidden=\"1\"" : "") + "/>";
     xfs += "</xf>";
   }
+  // Differential formats (conditional formats), with their number formats among the others.
+  std::string dxfs = "<dxfs count=\"" + std::to_string(dxfs_.size()) + "\">";
+  for (const DxfSpec& d : dxfs_) {
+    dxfs += "<dxf>" + d.font;
+    if (!d.numFmt.empty()) {
+      auto [it, added] = numFmtIds.emplace(d.numFmt, nextFmt);
+      if (added) {
+        numFmts += "<numFmt numFmtId=\"" + std::to_string(nextFmt) + "\" formatCode=\"" + Escape(d.numFmt) + "\"/>";
+        ++nextFmt;
+        ++customFmts;
+      }
+      dxfs += "<numFmt numFmtId=\"" + std::to_string(it->second) + "\" formatCode=\"" + Escape(d.numFmt) + "\"/>";
+    }
+    dxfs += d.fill + d.border + "</dxf>";
+  }
+  dxfs += "</dxfs>";
   std::string out = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n"
                     "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">";
   if (customFmts) out += "<numFmts count=\"" + std::to_string(customFmts) + "\">" + numFmts + "</numFmts>";
@@ -524,7 +599,7 @@ std::string Styles::Xml() const {
   out += "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>";
   out += "<cellXfs count=\"" + std::to_string(xfs_.size()) + "\">" + xfs + "</cellXfs>";
   out += "<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>"
-         "<dxfs count=\"0\"/><tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" "
+         + dxfs + "<tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" "
          "defaultPivotStyle=\"PivotStyleLight16\"/></styleSheet>";
   return out;
 }
