@@ -3608,6 +3608,180 @@ Result Editor::MoveObject(int sheet, uint32_t id, const drawing::Place& p) {
   }());
 }
 
+Editor::ObjectClip Editor::CopyObject(int sheet, uint32_t id) const {
+  ObjectClip clip;
+  const pkg::Package* package = book_.GetPackage();
+  if (!package || sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return clip;
+  const std::string sheetPart = book_.GetSheet(static_cast<size_t>(sheet)).PartName();
+  const pkg::RelationshipSet* rels = sheetPart.empty() ? nullptr : package->RelationshipsOf(sheetPart);
+  std::string drawingPart;
+  for (size_t i = 0; rels && i < rels->items.size() && clip.anchor.empty(); ++i)
+    if (!rels->items[i].external && EndsWith(rels->items[i].type, "/drawing")) {
+      clip.anchor = AnchorXml(rels->items[i].targetPart, id);
+      drawingPart = rels->items[i].targetPart;
+    }
+  if (clip.anchor.empty()) return clip;
+  clip.book = &book_;
+  // The prefixes the drawing declares on its root, on the anchor itself.
+  const std::string xml = PartBytes(drawingPart);
+  const std::vector<drawing::Object> objects = drawing::Objects(xml);
+  if (!objects.empty()) {
+    const size_t rootAt = xml.rfind('<', objects[0].begin - 1);
+    const std::string_view rootTag = std::string_view(xml).substr(rootAt, xml.find('>', rootAt) - rootAt);
+    const size_t tagEnd = clip.anchor.find_first_of(" />");
+    std::string decls;
+    for (size_t at = rootTag.find(" xmlns"); at != std::string_view::npos; at = rootTag.find(" xmlns", at + 1)) {
+      const size_t eq = rootTag.find('=', at), q = eq == std::string_view::npos ? eq : rootTag.find_first_of("\"'", eq);
+      const size_t qe = q == std::string_view::npos ? q : rootTag.find(rootTag[q], q + 1);
+      if (qe == std::string_view::npos) break;
+      const std::string name(rootTag.substr(at + 1, eq - at - 1));
+      if (clip.anchor.substr(0, clip.anchor.find('>')).find(" " + name + "=") == std::string::npos)
+        decls += " " + std::string(rootTag.substr(at + 1, qe - at));
+    }
+    if (tagEnd != std::string::npos) clip.anchor.insert(tagEnd, decls);
+  }
+  // Its parts, and theirs.
+  auto gather = [&](auto&& self, const std::string& source, const std::vector<std::string>& ids, std::vector<ObjectClip::Part>& out,
+                    int depth) -> void {
+    const pkg::RelationshipSet* set = depth > 4 ? nullptr : package->RelationshipsOf(source);
+    for (size_t i = 0; set && i < set->items.size(); ++i) {
+      const pkg::Relationship& r = set->items[i];
+      if (std::find(ids.begin(), ids.end(), r.id) == ids.end()) continue;
+      ObjectClip::Part p;
+      p.rel = r.id;
+      p.type = r.type;
+      p.external = r.external;
+      if (r.external) {
+        p.target = r.target;
+      } else {
+        p.name = r.targetPart;
+        p.contentType = std::string(package->ContentTypeOf(r.targetPart));
+        p.bytes = PartBytes(r.targetPart);
+        std::vector<std::string> own;
+        if (const pkg::RelationshipSet* o = package->RelationshipsOf(r.targetPart))
+          for (const pkg::Relationship& x : o->items) own.push_back(x.id);
+        self(self, r.targetPart, own, p.parts, depth + 1);
+      }
+      out.push_back(std::move(p));
+    }
+  };
+  gather(gather, drawingPart, drawing::RelIds(clip.anchor), clip.parts, 0);
+  return clip;
+}
+
+Result Editor::PasteObject(int sheet, const ObjectClip& clip, const drawing::Place& p) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::PasteObject, [&](JournalRecord& w) {
+    w.I(sheet).S(clip.anchor).B(clip.book == &book_);
+    auto parts = [&](auto&& self, const std::vector<ObjectClip::Part>& v) -> void {
+      w.U(v.size());
+      for (const ObjectClip::Part& x : v) {
+        w.S(x.rel).S(x.type).S(x.name).S(x.contentType).S(x.bytes).B(x.external).S(x.target);
+        self(self, x.parts);
+      }
+    };
+    parts(parts, clip.parts);
+    for (const drawing::Marker* m : {&p.from, &p.to}) w.U(m->col).U(m->row).I(m->colOff).I(m->rowOff);
+    w.I(p.x).I(p.y).I(p.cx).I(p.cy);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    pkg::Package* package = book_.GetPackage();
+    if (!package || s.PartName().empty() || !package->FindPart(s.PartName()))
+      return Result::Fail(u"Save the workbook as an Excel workbook first, then paste the object.");
+    std::string anchor = clip.anchor.empty() ? std::string() : drawing::Placed(clip.anchor, p);
+    if (anchor.empty()) return Result::Fail(u"This object can't be pasted here.");
+    return Run(*this, u"Paste", [&]() -> Result {
+      State& st = *s_;
+      const std::string d = SheetDrawing(sheet, true);
+      if (d.empty()) return Result::Fail(u"The object couldn't be added to this sheet.");
+      const bool same = clip.book == &book_;
+      // Relationship ids in `xml` from the old ones to the new (all at once: they may swap).
+      auto renumber = [](std::string& xml, const std::vector<std::pair<std::string, std::string>>& ids) {
+        for (size_t i = 0; i < ids.size(); ++i) {
+          const std::string from = "=\"" + ids[i].first + "\"", mark = "=\"\x01" + std::to_string(i) + "\x01\"";
+          for (size_t at = xml.find(from); at != std::string::npos; at = xml.find(from, at + mark.size())) xml.replace(at, from.size(), mark);
+        }
+        for (size_t i = 0; i < ids.size(); ++i) {
+          const std::string mark = "=\"\x01" + std::to_string(i) + "\x01\"", to = "=\"" + ids[i].second + "\"";
+          for (size_t at = xml.find(mark); at != std::string::npos; at = xml.find(mark, at + to.size())) xml.replace(at, mark.size(), to);
+        }
+      };
+      auto add = [&](auto&& self, const std::string& source, const ObjectClip::Part& part, int depth) -> std::string {
+        if (part.external) {
+          st.KeepRels(source);
+          pkg::RelationshipSet set;
+          if (const pkg::RelationshipSet* r = package->RelationshipsOf(source)) set = *r;
+          else set.source = source;
+          std::string id;
+          for (size_t n = set.items.size() + 1;; ++n) {
+            id = "rId" + std::to_string(n);
+            if (std::none_of(set.items.begin(), set.items.end(), [&](const pkg::Relationship& x) { return x.id == id; })) break;
+          }
+          pkg::Relationship rel;
+          rel.id = id;
+          rel.type = part.type;
+          rel.target = part.target;
+          rel.external = true;
+          set.items.push_back(std::move(rel));
+          package->SetRelationships(std::move(set));
+          return id;
+        }
+        std::string bytes = part.bytes;
+        if (!same && part.contentType == "application/vnd.openxmlformats-officedocument.drawingml.chart+xml") bytes = charts::Detached(bytes);
+        // A picture this workbook has stored already: used again.
+        if (part.contentType.rfind("image/", 0) == 0 && part.parts.empty())
+          for (const pkg::Part& x : package->Parts())
+            if (!x.deleted && package->ContentTypeOf(x.name) == part.contentType && PartBytes(x.name) == bytes)
+              return AddRelationship(source, part.type, x.name);
+        // Otherwise a new part, numbered as the old one's kind.
+        const size_t slash = part.name.rfind('/'), dot = part.name.rfind('.');
+        size_t digits = dot == std::string::npos || dot < slash ? part.name.size() : dot;
+        while (digits > slash + 1 && std::isdigit(static_cast<unsigned char>(part.name[digits - 1]))) --digits;
+        const std::string ext = dot == std::string::npos || dot < slash ? std::string() : part.name.substr(dot);
+        const std::string name = NewPartName(part.name.substr(0, digits), ext);
+        const std::string id = AddPart(source, part.type, name, part.contentType, bytes);
+        if (id.empty() || depth > 4) return id;
+        std::vector<std::pair<std::string, std::string>> ids;
+        for (const ObjectClip::Part& c : part.parts) ids.push_back({c.rel, self(self, name, c, depth + 1)});
+        std::string now = bytes;
+        renumber(now, ids);
+        if (now != bytes) WritePart(name, std::move(now));
+        return id;
+      };
+      std::vector<std::pair<std::string, std::string>> ids;
+      for (const ObjectClip::Part& c : clip.parts) {
+        const std::string id = add(add, d, c, 0);
+        if (id.empty()) return Result::Fail(u"The object couldn't be added to this sheet.");
+        ids.push_back({c.rel, id});
+      }
+      renumber(anchor, ids);
+      // A shape id the drawing doesn't use, in its first cNvPr.
+      if (const size_t at = anchor.find("cNvPr"); at != std::string::npos) {
+        const size_t q = anchor.find(" id=\"", at), close = anchor.find('>', at);
+        const size_t e = q == std::string::npos ? q : anchor.find('"', q + 5);
+        if (q != std::string::npos && q < close && e != std::string::npos) {
+          const uint32_t shape = NextShapeId(d);
+          anchor.replace(q + 5, e - q - 5, std::to_string(shape));
+          // Its name numbered anew as Excel numbers a copy ("Chart 1" pasted: "Chart 2").
+          const size_t n = anchor.find(" name=\"", at), ne = n == std::string::npos ? n : anchor.find('"', n + 7);
+          if (n != std::string::npos && ne != std::string::npos && n < anchor.find('>', at)) {
+            size_t digits = ne;
+            while (digits > n + 7 && std::isdigit(static_cast<unsigned char>(anchor[digits - 1]))) --digits;
+            if (digits < ne && digits > n + 8 && anchor[digits - 1] == ' ') anchor.replace(digits, ne - digits, std::to_string(shape - 1));
+          }
+        }
+      }
+      if (!AddAnchor(d, anchor)) return Result::Fail(u"The object couldn't be added to this sheet.");
+      st.Change(&s, kObjects, Range{p.from.row, p.from.col, p.to.row, p.to.col});
+      return Result{};
+    });
+  }());
+}
+
 std::string Editor::ChartPart(int sheet, uint32_t id) const {
   const pkg::Package* package = book_.GetPackage();
   if (!package || sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return {};

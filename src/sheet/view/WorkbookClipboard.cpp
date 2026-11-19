@@ -53,6 +53,7 @@ std::vector<std::vector<std::wstring>> ParseTsv(const std::wstring& text) {
 }  // namespace
 
 void WorkbookView::Cut() {
+  if (CopyObject(true)) return;  // s3-charts: a selected chart, picture or shape
   Copy();
   if (clip_) clip_->cut = true;
   host_.ViewInvalidate();
@@ -65,6 +66,7 @@ void WorkbookView::Paste(PasteMode mode, bool transpose) {
     host_.ViewMessage(BannerKind::Info, std::wstring(why.begin(), why.end()));
     return;
   }
+  if (mode == PasteMode::All && PasteObjectClip()) return;  // s3-charts: a chart, picture or shape copied
   const int sheet = static_cast<int>(sheet_);
   const Range sel = Selected();
   std::vector<std::pair<CellAddr, edit::CellInput>> cells;

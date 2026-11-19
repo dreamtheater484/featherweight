@@ -632,11 +632,16 @@ class WorkbookView : public PagedView {
   std::optional<SheetObjects::Object> SelectedObject() const;
   std::optional<draw::Point> SheetPointAt(float x, float y) const;  // client to sheet points
   edit::drawing::Place PlaceFor(const draw::Rect& r) const;
-  bool ObjectMouseDown(float x, float y);
+  bool ObjectMouseDown(float x, float y, bool doubleClick);
   void ObjectMouseMove(float x, float y, UINT mods);
   void ObjectMouseUp();
   bool ObjectKey(UINT vk, UINT mods);
   void DrawObjectSelection(draw::Painter& painter, float scale, float mirrorX);
+  bool CopyObject(bool cut);  // the selected object onto the clipboard (false: none selected)
+  bool PasteObjectClip();     // an object copied, while the clipboard still holds it
+  class ChartPanel;
+  std::unique_ptr<PanelContent> chartPanel_;
+  void ShowChartPanel();
   void AddReviewCellItems(HMENU m);  // the cell menu's
   bool ReviewCommandState(int cmd, CommandState& s);
   bool ReviewCommand(int cmd);

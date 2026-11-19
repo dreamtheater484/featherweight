@@ -957,6 +957,63 @@ TEST(sheet_edit_add_remove_part) {
   CHECK(ed.PartBytes(name) == xml && relTo() && p.ContentTypeOf(name) == type);
 }
 
+// Objects copied and pasted (s3-charts): a chart gets a part of its own, a picture is stored once,
+// a chart pasted into another workbook keeps its values but not its references; undone with the parts.
+TEST(sheet_copy_paste_object) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row><row r=\"2\"><c r=\"A2\"><v>2</v></c></row></sheetData>",
+                         "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Editor::NewChart c;
+  c.data = Range{0, 0, 1, 0};
+  CHECK(ed.InsertChart(0, c));
+  // A picture beside it.
+  static const unsigned char kPng[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+                                       0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+                                       0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+                                       0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+                                       0x42, 0x60, 0x82};
+  const std::string drawing = ed.SheetDrawing(0, false);
+  ed.BeginGroup(u"Insert Picture");
+  const std::string rel = ed.AddPart(drawing, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image", "/xl/media/image1.png",
+                                     "image/png", std::string(reinterpret_cast<const char*>(kPng), sizeof kPng));
+  CHECK(ed.AddAnchor(drawing,
+                     "<xdr:oneCellAnchor xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" "
+                     "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><xdr:from><xdr:col>9</xdr:col><xdr:colOff>0</xdr:colOff>"
+                     "<xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx=\"952500\" cy=\"952500\"/><xdr:pic><xdr:nvPicPr>"
+                     "<xdr:cNvPr id=\"3\" name=\"Picture 2\"/><xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr>"
+                     "<xdr:blipFill><a:blip xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:embed=\"" + rel +
+                     "\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"952500\" "
+                     "cy=\"952500\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>"));
+  ed.EndGroup();
+
+  const Editor::ObjectClip chart = ed.CopyObject(0, 2), picture = ed.CopyObject(0, 3);
+  CHECK(chart.parts.size() == 1 && chart.parts[0].name == "/xl/charts/chart1.xml" && picture.parts.size() == 1);
+  CHECK(ed.CopyObject(0, 9).anchor.empty());
+  edit::drawing::Place at;
+  at.from = {1, 20, 0, 0};
+  at.to = {9, 35, 0, 0};
+  at.cx = at.cy = 952500;
+  CHECK(ed.PasteObject(0, chart, at));
+  CHECK(!ed.PartBytes("/xl/charts/chart2.xml").empty() && ed.ChartPart(0, 4) == "/xl/charts/chart2.xml");
+  CHECK(ed.PasteObject(1, chart, at));  // another sheet: a drawing of its own
+  CHECK(ed.ChartPart(1, 2) == "/xl/charts/chart3.xml" && ed.SheetDrawing(1, false) == "/xl/drawings/drawing2.xml");
+  CHECK(ed.PasteObject(1, picture, at));
+  CHECK(ed.PartBytes("/xl/media/image2.png").empty());  // stored once
+  CHECK(ed.AnchorXml("/xl/drawings/drawing2.xml", 3).find("r:embed=\"rId2\"") != std::string::npos);
+  // From another workbook: its values, not its references.
+  Editor::ObjectClip other = chart;
+  other.book = nullptr;
+  CHECK(ed.PasteObject(0, other, at));
+  const std::string detached = ed.PartBytes("/xl/charts/chart4.xml");
+  CHECK(detached.find("<c:f>") == std::string::npos && detached.find("<c:numLit><c:formatCode>General</c:formatCode><c:ptCount val=\"2\"/>") != std::string::npos);
+
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-objects-pasted");
+  CheckClean(saved);
+  CHECK(ed.Undo(4));
+  CHECK(ed.PartBytes("/xl/charts/chart2.xml").empty() && ed.PartBytes("/xl/drawings/drawing2.xml").empty() && ed.SheetDrawing(1, false).empty());
+}
+
 // A chart edited (s3-charts): title, axis titles, legend, data labels, colors, type and Select Data,
 // each keeping what it doesn't change; undone to the bytes it had.
 TEST(sheet_edit_chart) {

@@ -72,6 +72,7 @@ enum class JournalOp : uint8_t {
   MoveObject = 51,
   DeleteObjects = 52,
   EditChart = 53,
+  PasteObject = 54,
   // s3-data's operations: 60-69.
   SetSheetRules = 60,
   AddDxf = 61,

@@ -539,6 +539,7 @@ void WorkbookView::BuildStatusBar(StatusBarModel& m) {
 
 void WorkbookView::Copy() {
   if (!Ready()) return;
+  if (CopyObject(false)) return;  // s3-charts: a selected chart, picture or shape
   Range sel = Selected();
   // Whole rows and columns: as far as the cells in use.
   if (auto used = Current().UsedRange()) {

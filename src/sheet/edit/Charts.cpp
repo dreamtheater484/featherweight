@@ -558,6 +558,43 @@ bool RefreshCaches(const Workbook& book, std::string& xml) {
   });
 }
 
+std::string Detached(std::string_view xml) {
+  pugi::xml_document d;
+  constexpr unsigned kParse = pugi::parse_default | pugi::parse_ws_pcdata_single | pugi::parse_declaration | pugi::parse_comments;
+  if (!d.load_buffer(xml.data(), xml.size(), kParse)) return std::string(xml);
+  std::vector<pugi::xml_node> refs;
+  auto walk = [&](auto&& self, pugi::xml_node n) -> void {
+    for (pugi::xml_node c = n.first_child(); c; c = c.next_sibling()) {
+      if (Is(c, {"numRef", "strRef"})) refs.push_back(c);
+      else if (c.type() == pugi::node_element) self(self, c);
+    }
+  };
+  walk(walk, d);
+  for (pugi::xml_node r : refs) {
+    const bool numbers = xlsx::Local(r) == "numRef";
+    pugi::xml_node cache = Kid(r, numbers ? "numCache" : "strCache");
+    std::string name = r.name();
+    name = name.substr(0, name.size() - 3) + "Lit";  // numRef -> numLit, with its prefix
+    r.set_name(name.c_str());
+    std::vector<pugi::xml_node> old;  // its formula, its cache, its extLst: the cache's points take their place
+    for (pugi::xml_node c = r.first_child(); c; c = c.next_sibling()) old.push_back(c);
+    for (pugi::xml_node c = cache.first_child(); c; c = c.next_sibling()) r.append_copy(c);
+    for (pugi::xml_node c : old) r.remove_child(c);
+  }
+  Writer w;
+  d.save(w, "", pugi::format_raw | pugi::format_no_declaration);
+  return std::move(w.out);
+}
+
+std::vector<ChartSeries> SeriesFor(const Sheet& s, const Range& data) {
+  const Plan plan = PlanSeries(s, data);
+  std::vector<ChartSeries> out;
+  for (const Plan::One& one : plan.series)
+    out.push_back({one.name ? AbsRef(s.Name(), *one.name) : std::string(), AbsRef(s.Name(), one.values),
+                   plan.categories ? AbsRef(s.Name(), *plan.categories) : std::string()});
+  return out;
+}
+
 ChartInfo Info(std::string_view xml) {
   ChartInfo info;
   pugi::xml_document d;
@@ -583,6 +620,10 @@ ChartInfo Info(std::string_view xml) {
     cs.values = FormulaIn(Kid(s, "val") ? Kid(s, "val") : Kid(s, "yVal"));
     cs.categories = FormulaIn(Kid(s, "cat") ? Kid(s, "cat") : Kid(s, "xVal"));
     info.series.push_back(std::move(cs));
+    info.points.push_back(static_cast<uint32_t>(PartsOf(s).points));
+    pugi::xml_node tx = Kid(s, "tx");
+    pugi::xml_node v = Kid(tx, "v") ? Kid(tx, "v") : Kid(Kid(Kid(Kid(tx, "strRef"), "strCache"), "pt"), "v");
+    info.names.push_back(xlsx::TextOf(v));
   }
   return info;
 }
