@@ -235,6 +235,34 @@ TEST(sheet_page_fit_width_keeps_row_breaks) {
   CHECK(fitted.PageCount() == 1);
 }
 
+// Rows at a scale as Excel 2021 prints them (the page-headers fixture): a default row is 72 dots at
+// 360 dpi rounded to whole dots, so at 90 % on Letter with 1" and 0.8" margins page 1 holds rows 1-50
+// (13.00 pt each; truncating the dots gave 12.8 pt and 51 rows).
+TEST(sheet_page_scaled_rows_as_excel) {
+  std::string data = "<sheetData>";
+  for (int r = 1; r <= 120; ++r)
+    data += "<row r=\"" + std::to_string(r) + "\"><c r=\"A" + std::to_string(r) + "\"><v>" + std::to_string(r) + "</v></c></row>";
+  data += "</sheetData>";
+  auto book = OpenZip(test::MakeZip(WorkbookParts({data})));
+  if (!book) return;
+  Editor ed(*book);
+  PageSetup p;
+  p.paperSize = 1;
+  p.scale = 90;
+  p.margins = {0.6, 0.6, 1, 0.8, 0.4, 0.3};
+  CHECK(ed.SetPageSetup(0, p, HeaderFooter{}, false));
+  static fw::text::Fonts fonts;
+  view::FontMeasure measure(fonts);
+  NumLocale locale;
+  view::CellText text(*book, fonts, measure, locale);
+  const Sheet& s = book->GetSheet(0);
+  view::Grid grid;
+  grid.Build(s, book->GetStyles(), measure);
+  view::PrintLayout layout(*book, s, 0, grid, text, view::PrintInfo{});
+  CHECK(layout.PageCount() == 3);
+  if (layout.PageCount() == 3) CHECK(layout.Page(0).body.lastRow == 49 && layout.Page(1).body.lastRow == 99);
+}
+
 // s3-corpus's findings: a page setup on a sheet added since opening, saved, then undone, saves again
 // (the undo takes its text back to before its first save); margins the edit didn't change keep
 // their value (Excel's 17 digits).
