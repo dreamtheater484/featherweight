@@ -310,6 +310,7 @@ OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& er
   rules_.clear();
   rules_.resize(book_->SheetCount());
   rulesRead_.assign(book_->SheetCount(), false);
+  pivotLooksRead_.clear();
   size_t first = book_->ActiveSheet();
   if (first >= book_->SheetCount() || !SheetShown(first)) first = NextShownSheet(book_->SheetCount() - 1, 1);
   if (book_->SheetCount() == 0 || first >= book_->SheetCount() || !SheetShown(first)) {
