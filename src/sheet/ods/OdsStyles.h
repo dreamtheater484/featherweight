@@ -4,6 +4,7 @@
 // fonts, fills, borders and number format codes (Ods.cpp writes the cells, OdsStyles.cpp these).
 #include <pugixml.hpp>
 
+#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -42,6 +43,7 @@ class Styles {
   const Xf& Default() { return xfs_[Resolve("")]; }
   // Excel's width in characters for `points` of column width, with the default font's digit.
   double ColumnChars(double points);
+  std::function<int(const std::string&, double)> digit;  // the grid's measure of it, if given
   // styles.xml.
   std::string Xml() const;
 
@@ -57,6 +59,7 @@ class Styles {
   std::unordered_map<std::string, int> xfIndex_;      // serialized Xf -> xf
   std::vector<Xf> xfs_;
   std::unordered_map<std::string, std::string> codes_;  // data style name -> code
+  int digitPx_ = 0;
 };
 
 }  // namespace fw::sheet::ods::detail

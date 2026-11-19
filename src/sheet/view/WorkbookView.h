@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "PagedView.h"
+#include "PasswordCard.h"
 #include "sheet/data/Filter.h"
 #include "sheet/data/Shapes.h"
 #include "sheet/data/Rules.h"
@@ -62,6 +63,8 @@ class WorkbookView : public PagedView {
   // ---- TabContent ----
   TabKind Kind() const override { return TabKind::Workbook; }
   OpenResult Load(const std::wstring& password, std::wstring& error) override;
+  bool NeedsPassword() const override { return needPassword_; }
+  TextBox* PasswordBox() override { return needPassword_ ? &pw_.Box() : nullptr; }
   bool Ready() const override { return book_ != nullptr; }
   const std::wstring& Path() const override { return path_; }
   std::wstring Title() const override;
@@ -394,7 +397,15 @@ class WorkbookView : public PagedView {
   std::unique_ptr<WorkbookFile> file_;
   // Where Load reads from: path_ (a template when newNumber_ is set), a new workbook, or bytes.
   int newNumber_ = 0;
-  std::wstring imported_;  // an OpenDocument spreadsheet read into the model: its file name (saved with Save As)
+  std::wstring imported_;  // an .xls or .ods read into the model: its file name (saved with Save As)
+  // A compound file (a password-protected .xlsx, an .xls) as read, until it opens; the password
+  // card shows while it needs one (S4).
+  OpenResult Unlock(const std::wstring& password, std::vector<uint8_t>& plain, std::wstring& error);
+  void SubmitPassword(const std::wstring& password);
+  PasswordCard pw_;
+  bool needPassword_ = false;
+  std::vector<uint8_t> protected_;
+  fw::pkg::Snapshot::Stamp protectedStamp_;
   bool newBook_ = false;
   std::vector<uint8_t> bytes_;
   bool fromBytes_ = false;

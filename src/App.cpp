@@ -14,6 +14,7 @@
 
 #include "Commands.h"
 #include "FileAssoc.h"
+#include "UserTemplates.h"
 #include "Util.h"
 #include "Version.h"
 #include "chart/Chart.h"
@@ -1314,6 +1315,17 @@ void App::Execute(int cmd) {
     if (fw::EditorShipped(fw::FileKind::Document)) NewDocument(cmd - CmdNewTemplate + 1);
     return;
   }
+  if (cmd >= CmdUserTemplate && cmd < CmdUserTemplate + kUserTemplateCount) {
+    // One of the user's templates: opening it makes a new document or workbook (CreateTab).
+    if (userTemplates_.empty()) userTemplates_ = usertemplates::List(kUserTemplateCount);  // a script, no menu yet
+    if (const size_t i = static_cast<size_t>(cmd - CmdUserTemplate); i < userTemplates_.size())
+      OpenFiles({userTemplates_[i]});
+    return;
+  }
+  if (cmd == CmdUserTemplatesFolder) {
+    OpenDialog(true);
+    return;
+  }
   if (const int act = cmd - CmdBannerAction; act >= kActMakeDefault && act < kActMakeDefault + fw::kFileKindCount) {
     MakeDefaultApp(static_cast<fw::FileKind>(act - kActMakeDefault));
     InvalidateRect(hwnd_, nullptr, FALSE);
@@ -1494,11 +1506,23 @@ static std::wstring NewLabel(const fw::FileKindInfo& k) {
   return L"New " + std::wstring(k.noun) + (k.kind == fw::FileKind::Document ? L"\tCtrl+N" : L"");
 }
 
-// "New from template": the built-in templates, once the Word editor ships.
-static void AppendTemplates(HMENU m) {
-  if (!fw::EditorShipped(fw::FileKind::Document)) return;
+// "New from template": the built-in templates, once the Word editor ships, and the user's own
+// (S4): the templates in their personal templates folder, and the Open dialog there for the rest.
+static void AppendTemplates(HMENU m, const std::vector<std::wstring>& mine) {
+  const bool docs = fw::EditorShipped(fw::FileKind::Document);
+  if (!docs && !fw::EditorShipped(fw::FileKind::Workbook)) return;
   HMENU sub = CreatePopupMenu();
-  for (int i = 0; i < EmptyState::kTemplateCount; ++i) AppendItem(sub, CmdNewTemplate + i, EmptyState::kTemplates[i]);
+  if (docs)
+    for (int i = 0; i < EmptyState::kTemplateCount; ++i) AppendItem(sub, CmdNewTemplate + i, EmptyState::kTemplates[i]);
+  if (docs && !mine.empty()) AppendSeparator(sub);
+  for (size_t i = 0; i < mine.size(); ++i) {
+    std::wstring name = fw::FileNameOf(mine[i]), shown;
+    name = name.substr(0, name.find_last_of(L'.'));
+    for (wchar_t c : name) shown += c == L'&' ? std::wstring(L"&&") : std::wstring(1, c);  // no accelerator
+    AppendItem(sub, CmdUserTemplate + static_cast<int>(i), shown);
+  }
+  AppendSeparator(sub);
+  AppendItem(sub, CmdUserTemplatesFolder, L"More templates\u2026");
   AppendSubmenu(m, sub, L"New from template");
 }
 
@@ -1511,7 +1535,8 @@ void App::ShowMenu(int which) {
     for (const fw::FileKindInfo& k : fw::FileKinds())
       if (fw::EditorShipped(k.kind))
         AppendItem(m, CmdNewFile + static_cast<int>(k.kind), NewLabel(k));
-    AppendTemplates(m);
+    userTemplates_ = usertemplates::List(kUserTemplateCount);
+    AppendTemplates(m, userTemplates_);
     AppendSeparator(m);
     AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
   } else if (which == CmdSaveMenu && ready) {
@@ -1521,7 +1546,8 @@ void App::ShowMenu(int which) {
     alignRight = true;
     for (const fw::FileKindInfo& k : fw::FileKinds())
       if (fw::EditorShipped(k.kind)) AppendItem(m, CmdNewFile + static_cast<int>(k.kind), NewLabel(k));
-    AppendTemplates(m);
+    userTemplates_ = usertemplates::List(kUserTemplateCount);
+    AppendTemplates(m, userTemplates_);
     AppendItem(m, CmdOpen, L"Open…\tCtrl+O");
     HMENU recent = CreatePopupMenu();
     for (int i = 0; i < static_cast<int>(settings_.recent.size()); ++i) {
@@ -1691,7 +1717,7 @@ void App::OpenFiles(const std::vector<std::wstring>& files) {
   InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-void App::OpenDialog() {
+void App::OpenDialog(bool templates) {
   ComPtr<IFileOpenDialog> dlg;
   if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return;
   // Everything the viewers open first, then each kind on its own.
@@ -1704,16 +1730,32 @@ void App::OpenDialog() {
       if (k.kind == fw::FileKind::Workbook) books += (books.empty() ? L"*" : L";*") + std::wstring(ext);
     }
   }
-  COMDLG_FILTERSPEC filters[] = {{L"Files Featherweight opens", all.c_str()},
+  // Templates (S4): those a shipped editor opens, as a new document or workbook.
+  std::wstring tmpl;
+  if (fw::EditorShipped(fw::FileKind::Document)) tmpl += L"*.dotx;*.dotm;*.ott";
+  if (fw::EditorShipped(fw::FileKind::Workbook)) tmpl += std::wstring(tmpl.empty() ? L"" : L";") + L"*.xltx;*.xltm;*.ots";
+  if (tmpl.empty()) templates = false;
+  COMDLG_FILTERSPEC filters[] = {{L"Templates", tmpl.c_str()},
+                                 {L"Files Featherweight opens", all.c_str()},
                                  {L"PDF documents", L"*.pdf"},
                                  {L"Word documents", docs.c_str()},
                                  {L"Excel workbooks", books.c_str()},
                                  {L"All files", L"*.*"}};
-  dlg->SetFileTypes(5, filters);
+  dlg->SetFileTypes(templates ? 6 : 5, templates ? filters : filters + 1);
   DWORD opts = 0;
   dlg->GetOptions(&opts);
   dlg->SetOptions(opts | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
-  if (TabContent* v = Active()) {
+  if (templates) {
+    // The personal templates folder: the first that exists (Office makes the default one when it
+    // first saves a template; Featherweight doesn't).
+    for (const std::wstring& f : usertemplates::Folders()) {
+      ComPtr<IShellItem> folder;
+      if (SUCCEEDED(SHCreateItemFromParsingName(f.c_str(), nullptr, IID_PPV_ARGS(&folder)))) {
+        dlg->SetFolder(folder.Get());
+        break;
+      }
+    }
+  } else if (TabContent* v = Active()) {
     ComPtr<IShellItem> folder;
     if (SUCCEEDED(SHCreateItemFromParsingName(fw::DirOf(v->Path()).c_str(), nullptr, IID_PPV_ARGS(&folder))))
       dlg->SetFolder(folder.Get());

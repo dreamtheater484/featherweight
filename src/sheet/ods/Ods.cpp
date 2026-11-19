@@ -229,7 +229,9 @@ struct Sheet {
 
 class Converter {
  public:
-  Converter(const pkg::ZipReader& zip, const pkg::Limits& limits) : zip_(zip), limits_(limits) {}
+  Converter(const pkg::ZipReader& zip, const pkg::Limits& limits, const DigitWidth& digit) : zip_(zip), limits_(limits) {
+    st_.digit = digit;
+  }
   pkg::Status Run(std::vector<uint8_t>& xlsx);
 
  private:
@@ -277,7 +279,10 @@ class Converter {
 
   // The sheet being written.
   std::vector<int> colXf_;
-  std::vector<std::string> merges_;
+  struct Merge {
+    int r1, c1, r2, c2;
+  };
+  std::vector<Merge> merges_;  // in the order the file has them
   std::vector<std::pair<std::string, std::string>> links_;  // cell, target
   double defaultHeight_ = 15;
   int headerRowFirst_ = -1, headerRowLast_ = -1;
@@ -540,24 +545,23 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
         ++cells_;
         minRow_ = std::min(minRow_, r), maxRow_ = std::max(maxRow_, r);
         minCol_ = std::min(minCol_, c), maxCol_ = std::max(maxCol_, c);
-        if (k == 0 && j == 0) {
+        if (j == 0) {  // each repeated row has its own merged area (one spanning rows: the first only)
           const int sc = std::min(Repeat(cell, "table:number-columns-spanned"), kMaxCol - c);
           const int sr = std::min(Repeat(cell, "table:number-rows-spanned"), kMaxRow - r);
-          if (sc > 1 || sr > 1) merges_.push_back(Ref(r, c) + ":" + Ref(r + sr - 1, c + sc - 1));
+          if ((sc > 1 || sr > 1) && (k == 0 || sr == 1)) merges_.push_back({r, c, r + sr - 1, c + sc - 1});
         }
         if (!link.empty() && links_.size() < 65530) links_.emplace_back(Ref(r, c), link);
       }
       if (!it.content) continue;
     }
     // Merged areas start on empty cells too.
-    if (k == 0)
-      for (const Item& it : items) {
-        if (it.content) continue;
-        const int sc = std::min(Repeat(it.node, "table:number-columns-spanned"), kMaxCol - it.col);
-        const int sr = std::min(Repeat(it.node, "table:number-rows-spanned"), kMaxRow - r);
-        if ((sc > 1 || sr > 1) && it.node.name() == std::string_view("table:table-cell"))
-          merges_.push_back(Ref(r, it.col) + ":" + Ref(r + sr - 1, it.col + sc - 1));
-      }
+    for (const Item& it : items) {
+      if (it.content || merges_.size() > 1000000) continue;
+      const int sc = std::min(Repeat(it.node, "table:number-columns-spanned"), kMaxCol - it.col);
+      const int sr = std::min(Repeat(it.node, "table:number-rows-spanned"), kMaxRow - r);
+      if ((sc > 1 || sr > 1) && (k == 0 || sr == 1) && it.node.name() == std::string_view("table:table-cell"))
+        merges_.push_back({r, it.col, r + sr - 1, it.col + sc - 1});
+    }
     if (cellsXml.empty() && !special) continue;
     rows.push_back({r, cellsXml.empty() ? xml + "/>" : xml + ">" + cellsXml + "</row>"});
   }
@@ -660,10 +664,21 @@ std::string Converter::WriteSheet(size_t index) {
   if (Attr(table, "table:protected") == "true") out += "<sheetProtection sheet=\"1\" objects=\"1\" scenarios=\"1\"/>";
   if (!sheet.autoFilter.empty()) out += "<autoFilter ref=\"" + sheet.autoFilter + "\"/>";
   if (!merges_.empty()) {
-    std::sort(merges_.begin(), merges_.end());
-    merges_.erase(std::unique(merges_.begin(), merges_.end()), merges_.end());
-    out += "<mergeCells count=\"" + std::to_string(merges_.size()) + "\">";
-    for (const std::string& m : merges_) out += "<mergeCell ref=\"" + m + "\"/>";
+    // Excel repairs a file whose merged areas overlap: the first one the file has is kept.
+    std::unordered_map<int, std::vector<std::pair<int, int>>> taken;  // row -> merged columns
+    std::vector<std::string> kept;
+    for (const Merge& m : merges_) {
+      const int last = std::min(m.r2, m.r1 + 1000);  // tall areas: their first 1,000 rows are checked
+      bool overlaps = false;
+      for (int r = m.r1; r <= last && !overlaps; ++r)
+        if (auto it = taken.find(r); it != taken.end())
+          for (const auto& [c1, c2] : it->second) overlaps |= m.c1 <= c2 && c1 <= m.c2;
+      if (overlaps) continue;
+      for (int r = m.r1; r <= last; ++r) taken[r].emplace_back(m.c1, m.c2);
+      kept.push_back(Ref(m.r1, m.c1) + ":" + Ref(m.r2, m.c2));
+    }
+    out += "<mergeCells count=\"" + std::to_string(kept.size()) + "\">";
+    for (const std::string& m : kept) out += "<mergeCell ref=\"" + m + "\"/>";
     out += "</mergeCells>";
   }
   if (!links_.empty()) {
@@ -882,11 +897,12 @@ pkg::Status Converter::Run(std::vector<uint8_t>& xlsx) {
 
 }  // namespace
 
-pkg::Status OdsToXlsx(std::span<const uint8_t> ods, std::vector<uint8_t>& xlsx, const pkg::Limits& limits) {
+pkg::Status OdsToXlsx(std::span<const uint8_t> ods, std::vector<uint8_t>& xlsx, const pkg::Limits& limits,
+                      const DigitWidth& digit) {
   auto snapshot = pkg::Snapshot::FromBytes(std::vector<uint8_t>(ods.begin(), ods.end()));
   pkg::ZipReader zip;
   if (pkg::Status st = zip.Open(*snapshot, limits); !st.Ok()) return st;
-  Converter c(zip, limits);
+  Converter c(zip, limits, digit);
   return c.Run(xlsx);
 }
 
