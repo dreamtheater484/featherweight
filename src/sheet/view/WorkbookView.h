@@ -395,6 +395,7 @@ class WorkbookView : public PagedView {
   std::unique_ptr<WorkbookFile> file_;
   // Where Load reads from: path_ (a template when newNumber_ is set), a new workbook, or bytes.
   int newNumber_ = 0;
+  std::wstring imported_;  // an OpenDocument spreadsheet read into the model: its file name (saved with Save As)
   bool newBook_ = false;
   std::vector<uint8_t> bytes_;
   bool fromBytes_ = false;
