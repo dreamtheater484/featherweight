@@ -500,12 +500,16 @@ void Reader::AddRows(Workbook& book, SheetBuilder& builder, size_t first, size_t
   }
 }
 
+Sheet& NewSheet(Workbook& book, const std::string& sheetName) {
+  book.SetFormat(FileFormat::Csv);
+  DefaultStyles(book);
+  return book.AddSheet(sheetName);
+}
+
 void Read(std::string_view bytes, const std::string& sheetName, const Options& options, Workbook& book,
           Source& source) {
   Reader reader(bytes, options);
-  book.SetFormat(FileFormat::Csv);
-  DefaultStyles(book);
-  Sheet& sheet = book.AddSheet(sheetName);
+  Sheet& sheet = NewSheet(book, sheetName);
   {
     SheetBuilder builder(sheet);
     reader.AddRows(book, builder, 0, reader.RowCount());

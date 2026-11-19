@@ -1079,6 +1079,7 @@ void WorkbookView::DescribeUia(uia::Tree& t, int parent) {
 
 bool WorkbookView::HasIdleWork() const {
   if (!Ready()) return false;
+  if (csvReader_) return true;
   if (!searchDone_) return true;
   for (size_t i = loadNext_; i < book_->SheetCount(); ++i)
     if (!book_->GetSheet(i).Loaded()) return true;
@@ -1088,6 +1089,10 @@ bool WorkbookView::HasIdleWork() const {
 
 bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   if (!Ready()) return false;
+  if (csvReader_) {  // the rest of a CSV file, before anything else; painted again once all is read
+    CsvRest(std::max(deadlineMs, anim::Now() + 1));
+    return !csvReader_;
+  }
   if (!searchDone_) {
     SearchIdle(deadlineMs);
     return true;
