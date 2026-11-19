@@ -317,7 +317,7 @@ void PrintLayout::Paginate() {
   // A chart sheet prints its chart on one page.
   if (info_.objects && info_.objects->IsChartSheet()) {
     // Landscape, unless the sheet says otherwise.
-    if (paperW_ < paperH_ && sheet_.KeptXml().find("orientation=\"portrait\"") == std::string::npos)
+    if (paperW_ < paperH_ && ps.orientation != Orientation::Portrait)
       std::swap(paperW_, paperH_);
     PrintPage p;
     p.width = paperW_;

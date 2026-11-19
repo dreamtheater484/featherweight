@@ -173,9 +173,15 @@ int OrderOf(std::string_view local) {
 }
 
 
+// Whether `local` goes before sheetData. A part read without one (a chart sheet's) keeps all it
+// has before.
+bool BeforeData(const PartText& t, std::string_view local) {
+  return OrderOf(local) < OrderOf("sheetData") || (!t.hasData && !t.rootStart.empty());
+}
+
 // The element `local` as the kept XML has it (empty when it has none).
 std::string_view FindElement(const PartText& t, std::string_view local) {
-  const std::string& seg = OrderOf(local) < OrderOf("sheetData") ? t.beforeData : t.afterData;
+  const std::string& seg = BeforeData(t, local) ? t.beforeData : t.afterData;
   for (const XmlPiece& p : TopLevel(seg))
     if (p.local == local) return std::string_view(seg).substr(p.begin, p.end - p.begin);
   return {};
@@ -184,7 +190,7 @@ std::string_view FindElement(const PartText& t, std::string_view local) {
 // Puts `xml` where element `local` is (empty `xml` removes it), or where the schema puts it.
 void PutElement(PartText& t, std::string_view local, const std::string& xml) {
   int order = OrderOf(local);
-  std::string& seg = order < OrderOf("sheetData") ? t.beforeData : t.afterData;
+  std::string& seg = BeforeData(t, local) ? t.beforeData : t.afterData;
   std::vector<XmlPiece> pieces = TopLevel(seg);
   for (const XmlPiece& p : pieces)
     if (p.local == local) {
@@ -450,6 +456,22 @@ bool NewLinkRels(const pkg::Package& pkg, const Sheet& s, const std::string& par
   }
   rels = Bytes(PrintDoc(doc));
   return true;
+}
+
+// A chart sheet's part: its kept text as the edits left it (page setup), its tab color, and its tab
+// selected when it's the active one (not ViewsXml: a chart sheet's view has no cells).
+PartText ChartSheetText(const Sheet& s, uint32_t pieces, bool active) {
+  PartText t = s.Text();
+  const std::string p = PrefixOf(t.rootStart);
+  if (pieces & edit::kPieceProps) PutElement(t, "sheetPr", SheetPrXml(s, t, p));
+  pugi::xml_document doc;
+  pugi::xml_node views = ElementDom(doc, t, "sheetViews", p);
+  pugi::xml_node v = Child(views, "sheetView");
+  if (v && BoolAttr(v, "tabSelected", false) != active) {
+    SetAttr(v, "tabSelected", active ? "1" : "");
+    PutElement(t, "sheetViews", Print(views));
+  }
+  return t;
 }
 
 // The sheet part's text around sheetData with what the edits changed written from the model.
@@ -1172,6 +1194,12 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
       continue;
     }
     keptParts.push_back(s.PartName());
+    // A chart sheet whose page setup (or tab color) changed, or that an earlier save wrote: from its text.
+    if (s.Kind() == SheetKind::Chartsheet && s.Loaded() && !s.Text().rootStart.empty() &&
+        ((pieces & ~edit::kPieceViews) || ed.MustWrite(static_cast<int>(i)))) {
+      plan.sheets.push_back({&s, s.PartName(), s.RelId(), ChartSheetText(s, pieces, active), false});
+      continue;
+    }
     if (s.Kind() != SheetKind::Worksheet) {
       std::vector<uint8_t> out;
       if (ed.WorkbookDirty() && OtherSheetTab(*pkg, s, active, out)) put(s.PartName(), std::move(out));
@@ -1185,18 +1213,18 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
     std::vector<uint8_t> linkRels;
     if (NewLinkRels(*pkg, s, s.PartName(), linkIds, linkRels)) {
       // A package that lists each rels part instead of a Default for .rels (LibreOffice) gets this one too.
-      const std::string relsPart = pkg::RelsPartFor(s.PartName());
+      const std::string linkRelsPart = pkg::RelsPartFor(s.PartName());
       bool typed = false;
       for (pugi::xml_node c : typesRoot.children())
         typed = typed || (Local(c) == "Default" && _stricmp(c.attribute("Extension").value(), "rels") == 0) ||
-                (Local(c) == "Override" && pkg::PartKey(c.attribute("PartName").value()) == pkg::PartKey(relsPart));
+                (Local(c) == "Override" && pkg::PartKey(c.attribute("PartName").value()) == pkg::PartKey(linkRelsPart));
       if (!typed) {
         pugi::xml_node o = typesRoot.append_child("Override");
-        o.append_attribute("PartName").set_value(relsPart.c_str());
+        o.append_attribute("PartName").set_value(linkRelsPart.c_str());
         o.append_attribute("ContentType").set_value("application/vnd.openxmlformats-package.relationships+xml");
         typesChanged = true;
       }
-      put(relsPart, std::move(linkRels));
+      put(linkRelsPart, std::move(linkRels));
       pieces |= edit::kPieceLinks;
     }
     plan.sheets.push_back({&s, s.PartName(), s.RelId(), EditedText(s, pieces, active, linkIds), false});

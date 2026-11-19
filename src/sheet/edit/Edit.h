@@ -351,7 +351,9 @@ class Editor {
   // headers and footers, and Fit to (`fitToPage`: scaled by fitToWidth and fitToHeight, else by
   // `scale`), written as Excel writes them (sheet/edit/PageSetupXml.h). The print area and titles are
   // names (_xlnm.Print_Area, _xlnm.Print_Titles: SetName). Allowed on a protected sheet, as in Excel.
-  Result SetPageSetup(int sheet, const PageSetup& page, const HeaderFooter& headerFooter, bool fitToPage);
+  // On a chart sheet: margins, paper, orientation, first page number, headers and footers (the rest
+  // is left out: a chart sheet prints its chart on one page).
+  Result SetPageSetup(int sheet, PageSetup page, const HeaderFooter& headerFooter, bool fitToPage);
   // The worksheet's page breaks (Insert Page Break, Remove Page Break, Reset All Page Breaks, or
   // dragged in Page Break Preview), rows and columns: each break's id is the first row or column on
   // its new page.

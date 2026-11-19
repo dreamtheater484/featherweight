@@ -364,10 +364,12 @@ class WorkbookView::PageSetupPanel : public PanelContent {
     const PageSetup& p = s.Page();
     const HeaderFooter& h = s.HeadersFooters();
     const bool fit = s.Props().fitToPage;
+    if (v_.ChartSheet() && tab_ == kTabSheet) tab_ = kTabPage;
     for (int i = 0; i < kTabs; ++i) tabs_[i].checked = i == tab_;
     what_.ReplaceText(what_.items[static_cast<size_t>(std::clamp(v_.printWhat_, 0, 2))]);
-    portrait_.checked = p.orientation != Orientation::Landscape;
-    landscape_.checked = p.orientation == Orientation::Landscape;
+    // A chart sheet prints landscape unless it says portrait; a worksheet the other way round.
+    portrait_.checked = v_.ChartSheet() ? p.orientation == Orientation::Portrait : p.orientation != Orientation::Landscape;
+    landscape_.checked = !portrait_.checked;
     const auto* paper = std::find_if(std::begin(kPapers), std::end(kPapers), [&](const Paper& x) { return x.code == p.paperSize; });
     paper_.ReplaceText(!p.paperWidth.empty() ? Utf8ToWide(p.paperWidth + " x " + p.paperHeight)
                        : paper != std::end(kPapers) ? paper->name
@@ -454,8 +456,12 @@ class WorkbookView::PageSetupPanel : public PanelContent {
       y += 18 * ui;
       full(what_);
     }
-    const float tabW = (right - left) / static_cast<float>(kTabs);
-    for (int i = 0; i < kTabs; ++i) {
+    // A chart sheet has no Sheet tab, scaling or centering: it prints its chart on one page.
+    const bool chart = v_.ChartSheet();
+    const int tabs = chart ? kTabSheet : kTabs;
+    if (chart && tab_ == kTabSheet) tab_ = kTabPage;
+    const float tabW = (right - left) / static_cast<float>(tabs);
+    for (int i = 0; i < tabs; ++i) {
       tabs_[i].rc = RectF(left + i * tabW, y, left + (i + 1) * tabW - 2 * ui, y + 28 * ui);
       tabs_[i].visible = true;
       out.push_back(&tabs_[i]);
@@ -470,6 +476,12 @@ class WorkbookView::PageSetupPanel : public PanelContent {
         label(L"Paper size");
         y += 18 * ui;
         full(paper_);
+        if (chart) {
+          label(L"First page number");
+          y += 18 * ui;
+          full(first_);
+          break;
+        }
         label(L"Scaling");
         y += 18 * ui;
         full(scaling_);
@@ -487,6 +499,7 @@ class WorkbookView::PageSetupPanel : public PanelContent {
           labelled(names[i] + unit, names[i + 1] + unit);
           pair(margin_[i], margin_[i + 1]);
         }
+        if (chart) break;
         label(L"Center on page");
         y += 18 * ui;
         pair(centerH_, centerV_);
@@ -723,7 +736,7 @@ bool WorkbookView::PageSetupCommandState(int cmd, CommandState& s) {
   const bool grid = sheet && !preview_;
   bool rowBreak = false, colBreak = false;
   switch (cmd) {
-    case CmdPageSetup: s.label = L"Page setup"; s.enabled = sheet; break;
+    case CmdPageSetup: s.label = L"Page setup"; s.enabled = Ready(); break;  // a chart sheet's too
     case CmdSetPrintArea: s.label = L"Set print area"; s.enabled = grid; break;
     case CmdAddToPrintArea:
       s.label = L"Add to print area";
