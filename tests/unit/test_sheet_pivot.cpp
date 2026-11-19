@@ -206,6 +206,13 @@ std::vector<uint8_t> SavePivotBook(Workbook& book, fw::sheet::edit::Editor& ed, 
   return sink.bytes;
 }
 
+// An edit's message for the log (ASCII; anything else as '?').
+std::string Ascii(const std::u16string& s) {
+  std::string out;
+  for (char16_t ch : s) out += ch < 0x80 ? static_cast<char>(ch) : '?';
+  return out;
+}
+
 }  // namespace
 
 // Refresh All through the editor: the cells Excel shows, one undo step that brings the stale ones
@@ -271,7 +278,7 @@ TEST(Pivot_InsertPivot) {
   p.filters = {3};
   p.values = {{4, 0}, {5, 1}, {5, 2}};
   auto r = ed.InsertPivot(p);
-  if (!r.ok) std::printf("  %s\n", std::string(r.message.begin(), r.message.end()).c_str());
+  if (!r.ok) std::printf("  %s\n", Ascii(r.message).c_str());
   CHECK(r.ok);
   if (!r.ok) return;
   CHECK(ed.UndoName() == u"PivotTable");
@@ -291,6 +298,64 @@ TEST(Pivot_InsertPivot) {
   if (again && copy) CHECK_EQ(CheckBook(*again, *copy, false), 0);
   CHECK(ed.Undo().ok);
   CHECK(sheet_test::Text(book->GetSheet(static_cast<size_t>(data)), 1, 8).empty());
+}
+
+// Insert > PivotTable on a new worksheet, as the panel does it: the sheet added in the same step
+// (it has no part until then), the pivot at A3 with its filter at A1; saved, the parts read and
+// lay out again; one undo takes both away.
+TEST(Pivot_InsertPivotOnNewSheet) {
+  auto book = sheet_test::OpenZip(sheet_test::TestFile("office/sheet/pivots/pivots-fresh.xlsx"));
+  if (!book) return;
+  fw::sheet::edit::Editor ed(*book);
+  const int data = book->FindSheet("Data");
+  CHECK(data >= 0);
+  if (data < 0) return;
+  const size_t sheets = book->SheetCount();
+  {
+    fw::sheet::edit::EditGroup group(ed, u"PivotTable");
+    auto added = ed.AddSheet(data);
+    CHECK(added.ok);
+    if (!added.ok) return;
+    fw::sheet::edit::Editor::NewPivotTable p;
+    p.sourceSheet = data + 1;  // moved right by the new sheet
+    p.source = {0, 0, 20, 5};  // A1:F21
+    p.sheet = data;
+    p.at = {0, 0};  // the filter at A1, the table at A3
+    p.rows = {0};
+    p.filters = {3};
+    p.values = {{4, 0}};
+    auto r = ed.InsertPivot(p);
+    if (!r.ok) std::printf("  %s\n", Ascii(r.message).c_str());
+    CHECK(r.ok);
+    if (!r.ok) return;
+    group.done = true;
+  }
+  CHECK(ed.UndoName() == u"PivotTable");
+  CHECK_EQ(book->SheetCount(), sheets + 1);
+  const Sheet& s = book->GetSheet(static_cast<size_t>(data));
+  CHECK(sheet_test::Text(s, 0, 0) == "Year");
+  CHECK(sheet_test::Text(s, 0, 1) == "(All)");
+  CHECK(sheet_test::Text(s, 2, 0) == "Row Labels");
+  CHECK(sheet_test::Text(s, 2, 1) == "Sum of Sales");
+  CHECK(sheet_test::Text(s, 3, 0) == "East");
+  CHECK(sheet_test::Text(s, 7, 0) == "Grand Total");
+  CHECK(std::fabs(s.GetValue(7, 1).number - 2513.79) < 1e-9);
+  const std::string name = s.Name();
+  std::vector<uint8_t> bytes = SavePivotBook(*book, ed, "pivots-newsheet");
+  auto again = sheet_test::OpenZip(bytes);
+  auto copy = sheet_test::OpenZip(bytes);
+  CHECK(again && copy);
+  if (again && copy) {
+    CHECK_EQ(CheckBook(*again, *copy, false), 0);
+    const int k = again->FindSheet(name);
+    CHECK(k >= 0);
+    if (k >= 0) {
+      const auto looks = pivot::SheetLooks(*again, static_cast<size_t>(k));
+      CHECK_EQ(looks.size(), size_t{1});
+    }
+  }
+  CHECK(ed.Undo().ok);
+  CHECK_EQ(book->SheetCount(), sheets);
 }
 
 
@@ -359,5 +424,5 @@ TEST(Pivot_StylesMatchExcel) {
   CHECK(cells > 500);
   CHECK(fills * 100 >= cells * 98);
   CHECK(bolds * 100 >= cells * 98);
-  CHECK(sides * 100 >= cells * 90);
+  CHECK(sides * 100 >= cells * 98);
 }

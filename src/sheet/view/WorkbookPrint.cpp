@@ -48,6 +48,7 @@ void WorkbookView::Paginate() {
     ps.objects = SheetObjects::Load(*book_, i);
     info.objects = ps.objects.get();
     info.rules = RulesFor(i);
+    info.pivots = PivotLooksFor(i);
     info.sparklines = SparklinesFor(i);
     if (i != sheet_) {
       ps.grid = std::make_unique<Grid>();
@@ -112,6 +113,7 @@ void WorkbookView::ForEachSheetLayout(const std::function<void(PrintLayout&)>& f
       std::unique_ptr<SheetObjects> objects = SheetObjects::Load(*book_, i);
       info.objects = objects.get();
       info.rules = RulesFor(i);
+      info.pivots = PivotLooksFor(i);
       info.sparklines = SparklinesFor(i);
       Grid other;
       const bool shown = i == sheet_;
