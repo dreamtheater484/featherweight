@@ -475,6 +475,59 @@ TEST(SheetTables_Unstructure) {
   CHECK(data::Unstructure("SUM(Sales[Amount])", t, "My Sheet", 0, false) == "SUM('My Sheet'!$B$2:$B$4)");
 }
 
+// Convert to Range keeps the table's look in the cells' own formats, as Excel 2021 did for
+// TableStyleMedium2 (ListObject.Unlist, measured): the header accent 1 with bold white text, the
+// first row stripe accent 1 at tint 0.8, thin lines at tint 0.4 between the rows and on the outer
+// sides; a cell's own fill stays. Undo puts the formats back.
+TEST(SheetTables_ConvertKeepsLook) {
+  const char* data =
+      "<sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Name</t></is></c><c r=\"B1\" t=\"inlineStr\"><is><t>Amount</t></is></c></row>"
+      "<row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>a</t></is></c><c r=\"B2\"><v>5</v></c></row>"
+      "<row r=\"3\"><c r=\"A3\" t=\"inlineStr\"><is><t>b</t></is></c><c r=\"B3\"><v>7</v></c></row></sheetData>";
+  auto book = OpenParts({data, "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Table t;
+  t.ref = Range{0, 0, 2, 1};
+  t.autoFilter = true;
+  t.style = TableStyleInfo{"TableStyleMedium2", false, false, true, false};
+  t.columns = {TableColumn{0, "Name"}, TableColumn{0, "Amount"}};
+  CHECK(ed.AddTable(0, t));
+  Fill yellow;
+  yellow.pattern = PatternType::Solid;
+  yellow.fg = Color{Color::Kind::Rgb, 0xFFFFFF00};
+  Xf own;
+  own.fill = ed.AddFill(yellow);
+  own.applyFill = true;
+  CHECK(ed.SetStyle(0, Range::Cell(2, 1), ed.AddXf(own)));
+  const Sheet& s = book->GetSheet(0);
+  const uint32_t before = s.StyleAt(0, 0);
+  CHECK(ed.RemoveTable(0, 0));
+  CHECK(s.Tables().empty());
+  const Styles& st = book->GetStyles();
+  auto fill = [&](uint32_t row, uint32_t col) {
+    const Fill& f = st.Fills()[st.CellXfs()[s.StyleAt(row, col)].fill];
+    return f.pattern == PatternType::None ? 0u : st.Resolve(f.fg, 0);
+  };
+  auto font = [&](uint32_t row, uint32_t col) { return st.FontOf(st.CellXfs()[s.StyleAt(row, col)]); };
+  auto border = [&](uint32_t row, uint32_t col) { return st.Borders()[st.CellXfs()[s.StyleAt(row, col)].border]; };
+  CHECK(fill(0, 0) == 0xFF4472C4 && fill(0, 1) == 0xFF4472C4);  // the header
+  CHECK(font(0, 0).bold && st.Resolve(font(0, 0).color, 0) == 0xFFFFFFFF);
+  // Theme colors with tints, as Excel stores them (theme 4 at 0.79998 and 0.39997).
+  auto accent = [](const Color& c, double tint) { return c.kind == Color::Kind::Theme && c.value == 4 && std::abs(c.tint - tint) < 0.001; };
+  const Fill& stripe = st.Fills()[st.CellXfs()[s.StyleAt(1, 0)].fill];
+  CHECK(stripe.pattern == PatternType::Solid && accent(stripe.fg, 0.8) && accent(stripe.bg, 0.8));  // the first row stripe
+  CHECK(s.StyleAt(1, 1) != before && fill(1, 1) == fill(1, 0));
+  CHECK(fill(2, 0) == 0 && !font(1, 0).bold);                     // the second: no fill
+  CHECK(fill(2, 1) == 0xFFFFFF00);                                // its own fill stays
+  const Border a2 = border(1, 0), b2 = border(1, 1);
+  CHECK(a2.left.style == BorderStyle::Thin && accent(a2.left.color, 0.4));
+  CHECK(a2.top.style == BorderStyle::Thin && a2.bottom.style == BorderStyle::Thin && a2.right.style == BorderStyle::None);
+  CHECK(b2.right.style == BorderStyle::Thin && b2.left.style == BorderStyle::None);
+  ed.Undo();
+  CHECK(s.Tables().size() == 1 && s.StyleAt(0, 0) == before);
+}
+
 // On a protected sheet Excel refuses tables and validations always, conditional formats unless
 // formatting cells is allowed.
 TEST(SheetRules_Protected) {

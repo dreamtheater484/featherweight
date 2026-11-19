@@ -1,0 +1,68 @@
+# S3 fixture ("created as Excel shows it"): tables through s3-data's Insert > Table and Table Design
+# (their script ops on the table at a cell), values typed in the en-NL region. A header typed beside
+# the table and a row typed below it make it grow; a formula typed once fills its column (a
+# calculated column); a total row sums the last column; a new style and banded columns; a rename that
+# the formula naming the table follows; a second table resized, its new column named as Excel names it;
+# a third converted to a range, keeping its look.
+sheet-name "Orders"
+enter A1 "Item"
+enter B1 "Qty"
+enter C1 "Price"
+enter A2 "Apples"
+enter B2 "4"
+enter C2 "3"
+enter A3 "Pears"
+enter B3 "6"
+enter C3 "2"
+enter A4 "Plums"
+enter B4 "10"
+enter C4 "1"
+table A1:C4
+enter D1 "Total"
+enter D2 "=PRODUCT([@Qty];[@Price])"
+enter A5 "Figs"
+enter B5 "3"
+enter C5 "5"
+enter F1 "=SUM(Table1[Total])"
+table-total A1
+table-style A1 TableStyleLight9
+table-option A1 cols
+enter H1 "Region"
+enter I1 "Count"
+enter H2 "North"
+enter I2 "7"
+enter H3 "South"
+enter I3 "9"
+table H1:I3
+table-resize H1 H1:J4
+table-name A1 Sales
+enter A10 "Code"
+enter B10 "Units"
+enter A11 "X1"
+enter B11 "5"
+enter A12 "X2"
+enter B12 "8"
+table A10:B12
+table-convert A10
+save
+expect table Sales Orders!A1:D6 style TableStyleLight9 totals True
+expect table Sales options headers True rows True cols True first False last False filter True
+expect table Sales column 1 Item total 0
+expect table Sales column 4 Total total 1
+expect cell Orders!D2 formula =PRODUCT([@Qty],[@Price])
+expect cell Orders!D4 formula =PRODUCT([@Qty],[@Price])
+expect cell Orders!D5 formula =PRODUCT([@Qty],[@Price])
+expect cell Orders!D5 text 15
+expect cell Orders!A6 text Total
+expect cell Orders!D6 formula =SUBTOTAL(109,[Total])
+expect cell Orders!D6 text 49
+expect cell Orders!F1 formula =SUM(Sales[Total])
+expect cell Orders!F1 text 49
+expect table Table2 Orders!H1:J4 style TableStyleMedium2 totals False
+expect table Table2 column 3 Column1
+expect cell Orders!J1 text Column1
+# Convert to Range keeps the look (TableStyleMedium2) as the cells' own formats, as Excel does.
+expect cell Orders!A10 fill 4472C4
+expect cell Orders!A10 font Calibri 11 bold
+expect cell Orders!B11 fill D9E1F2
+expect cell Orders!A10 bottom 1/2
