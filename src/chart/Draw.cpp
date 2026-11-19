@@ -227,7 +227,19 @@ class Builder {
   Builder(draw::Size size, std::wstring font) : font_(std::move(font)) { art_.size = size; }
 
   void Add(Path p, std::optional<Color> fill, std::optional<Color> line, float width, const Matrix& t = {}) {
-    if (art_.marks.size() >= kMaxMarks || p.Empty()) return;
+    if (p.Empty()) return;
+    // A run of untransformed shapes filled in one opaque color with no outline (a series' bars)
+    // is one mark, painted at once (a thousand bars: one shape, not a thousand).
+    if (fill && !line && fill->a >= 1 && Identity(t) && !art_.marks.empty()) {
+      draw::Art::Mark& last = art_.marks.back();
+      const Color& c = last.fill.color;
+      if (last.line.fill.kind == draw::Fill::Kind::None && last.fill.kind == draw::Fill::Kind::Solid && Identity(last.transform) &&
+          c.r == fill->r && c.g == fill->g && c.b == fill->b && c.a == fill->a && last.path.fillRule == p.fillRule) {
+        Append(last.path, p);
+        return;
+      }
+    }
+    if (art_.marks.size() >= kMaxMarks) return;
     draw::Art::Mark m;
     m.path = std::move(p);
     m.transform = t;
@@ -279,6 +291,20 @@ class Builder {
   draw::Art Take() { return std::move(art_); }
 
  private:
+  static bool Identity(const Matrix& t) { return t.m11 == 1 && t.m12 == 0 && t.m21 == 0 && t.m22 == 1 && t.dx == 0 && t.dy == 0; }
+  static void Append(Path& to, const Path& p) {
+    for (const Path::Segment& s : p.Segments()) {
+      switch (s.kind) {
+        case Path::Kind::Move: to.MoveTo(s.p[0]); break;
+        case Path::Kind::Line: to.LineTo(s.p[0]); break;
+        case Path::Kind::Quad: to.QuadTo(s.p[0], s.p[1]); break;
+        case Path::Kind::Cubic: to.CubicTo(s.p[0], s.p[1], s.p[2]); break;
+        case Path::Kind::Arc: to.ArcTo(s.p[0], s.rx, s.ry, s.rotation, s.largeArc, s.clockwise); break;
+        case Path::Kind::Close: to.Close(); break;
+      }
+    }
+  }
+
   draw::Art art_;
   std::wstring font_;
 };
@@ -869,27 +895,37 @@ void DrawGroup(Builder& b, const Group& g, size_t first, const Plot& p, const Ca
   if (g.type == Type::Column || g.type == Type::Bar) {
     const double band = c.Band(), gap = g.gap / 100, ov = g.overlap / 100;
     const double w = stacked ? band / (1 + gap) : band / (k - (k - 1) * ov + gap);
-    for (size_t i = 0; i < c.n; ++i)
-      for (size_t j = 0; j < k; ++j) {
-        double base;
-        const double top = valueAt(j, i, base);
-        if (!std::isfinite(top)) continue;
-        const double t0 = stacked ? c.Center(i) - w / 2 : c.Center(i) - (k * w - (k - 1) * ov * w) / 2 + j * w * (1 - ov);
-        const Point a = p.At(t0, Clamp01(sc.At(base))), z = p.At(t0 + w, Clamp01(sc.At(top)));
-        const Rect rect{std::min(a.x, z.x), std::min(a.y, z.y), std::max(a.x, z.x), std::max(a.y, z.y)};
-        const Series& s = g.series[j];
-        const Look* look = PointLook(s, i);
-        const Color fill = g.varyColors && k == 1 ? SeriesColor(i, colors) : SeriesColor(first + j, colors);
-        b.Mark(Path::FromRect(rect), look ? *look : s.look, fill, std::nullopt, 0.75f);
-        if (ShowsLabels(g, s)) {
-          const std::optional<Color> key = ShowsKey(g, s) ? std::optional<Color>((look ? *look : s.look).fill.value_or(fill)) : std::nullopt;
-          const float off = 0.95f * ts;  // outside the end: Excel's PDFs
-          const float cy = (rect.top + rect.bottom) / 2, cx = (rect.left + rect.right) / 2;
-          if (stacked) labels.push_back({text(s, i), {cx, cy}, 1, key});
-          else if (!p.bar) labels.push_back({text(s, i), {cx, top >= 0 ? rect.top - 3 - kLabelMiddle * ts : rect.bottom + 3 + kLabelMiddle * ts}, 1, key});
-          else labels.push_back({text(s, i), {top >= 0 ? rect.right + off : rect.left - off, cy}, top >= 0 ? 0 : 2, key});
+    // The bars a series at a time (a later series over an earlier one where they overlap, as in a
+    // category at a time; a series' bars in one color become one mark), then the labels a
+    // category at a time.
+    bool labelled = false;
+    for (const Series& s : g.series) labelled = labelled || ShowsLabels(g, s);
+    for (int pass = 0; pass < (labelled ? 2 : 1); ++pass)
+      for (size_t o = 0; o < (pass ? c.n : k); ++o)
+        for (size_t q = 0; q < (pass ? k : c.n); ++q) {
+          const size_t i = pass ? o : q, j = pass ? q : o;
+          double base;
+          const double top = valueAt(j, i, base);
+          if (!std::isfinite(top)) continue;
+          const double t0 = stacked ? c.Center(i) - w / 2 : c.Center(i) - (k * w - (k - 1) * ov * w) / 2 + j * w * (1 - ov);
+          const Point a = p.At(t0, Clamp01(sc.At(base))), z = p.At(t0 + w, Clamp01(sc.At(top)));
+          const Rect rect{std::min(a.x, z.x), std::min(a.y, z.y), std::max(a.x, z.x), std::max(a.y, z.y)};
+          const Series& s = g.series[j];
+          const Look* look = PointLook(s, i);
+          const Color fill = g.varyColors && k == 1 ? SeriesColor(i, colors) : SeriesColor(first + j, colors);
+          if (pass == 0) {
+            b.Mark(Path::FromRect(rect), look ? *look : s.look, fill, std::nullopt, 0.75f);
+            continue;
+          }
+          if (ShowsLabels(g, s)) {
+            const std::optional<Color> key = ShowsKey(g, s) ? std::optional<Color>((look ? *look : s.look).fill.value_or(fill)) : std::nullopt;
+            const float off = 0.95f * ts;  // outside the end: Excel's PDFs
+            const float cy = (rect.top + rect.bottom) / 2, cx = (rect.left + rect.right) / 2;
+            if (stacked) labels.push_back({text(s, i), {cx, cy}, 1, key});
+            else if (!p.bar) labels.push_back({text(s, i), {cx, top >= 0 ? rect.top - 3 - kLabelMiddle * ts : rect.bottom + 3 + kLabelMiddle * ts}, 1, key});
+            else labels.push_back({text(s, i), {top >= 0 ? rect.right + off : rect.left - off, cy}, top >= 0 ? 0 : 2, key});
+          }
         }
-      }
     return;
   }
   if (g.type == Type::Area) {
