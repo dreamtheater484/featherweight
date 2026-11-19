@@ -34,7 +34,7 @@ expect cell Sales!A6 text Total
 expect cell Sales!D6 formula =SUBTOTAL(103,[OK])
 expect cell Sales!D6 text 2
 expect rule Sales!B2:C5 type 1 operator 5
-expect rule Sales!C2:C5 type 4
+expect rule Sales!C2:C5 type 4 operator
 expect rule Sales!A2:A5 type 2 operator
 expect validation Sales!D2:D5 type 3 Yes;No
 expect validation Sales!B2:B5 type 1 0
