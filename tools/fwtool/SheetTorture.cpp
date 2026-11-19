@@ -54,7 +54,7 @@ constexpr struct {
     {Op::MoveSheet, "move-sheet"},  {Op::DeleteSheet, "delete-sheet"}, {Op::Merge, "merge"},
     {Op::Unmerge, "unmerge"},       {Op::Sort, "sort"},               {Op::Filter, "filter"},
     {Op::Paste, "paste"},           {Op::Undo, "undo"},               {Op::Redo, "redo"},
-    {Op::Save, "save"},
+    {Op::Save, "save"},             {Op::Chart, "chart"},
 };
 
 const char* OpName(Op op) {
@@ -165,6 +165,7 @@ std::string FormatEdit(const Edit& e) {
     case Op::DeleteCols: s += at(e.sheet, e.range); break;
     case Op::Format:
     case Op::InsertCells:
+    case Op::Chart:
     case Op::DeleteCells: s += at(e.sheet, e.range) + " " + e.arg; break;
     case Op::Sort: s += at(e.sheet, e.range) + " " + Quote(e.arg); break;
     case Op::Filter:
@@ -218,6 +219,7 @@ bool ParseEdit(std::string_view line, Edit& e) {
     case Op::DeleteCols: return sheetRange(e.sheet, e.range);
     case Op::Format:
     case Op::InsertCells:
+    case Op::Chart:
     case Op::DeleteCells:
       if (!sheetRange(e.sheet, e.range)) return false;
       e.arg = std::string(NextWord(s));
@@ -416,6 +418,7 @@ class EditApiTarget : public SheetTarget {
         why = "sorting by a key comes with s2-format's command";
         return Applied::Refused;
       case Op::Filter: return Filter(s, r, e, why);
+      case Op::Chart: return Chart(s, r, e.arg, why);
       case Op::Paste:
         // Cut and paste moves the cells, on their sheet or to another, references following
         // (Editor::MoveCells).
@@ -463,6 +466,50 @@ class EditApiTarget : public SheetTarget {
 
  private:
   // Format Cells as s2-format runs it: each cell's format with one thing changed.
+  // Charts and the drawing's objects (s3-charts): a new chart of the range, or the sheet's last
+  // object moved, deleted, copied, its chart retyped or titled.
+  Applied Chart(int s, const sh::Range& r, const std::string& what, std::string& why) {
+    namespace se = sh::edit;
+    auto done = [&](const se::Result& res) {
+      if (res.ok) return Applied::Done;
+      why = Utf8(res.message);
+      return Applied::Refused;
+    };
+    static const char* kKinds[] = {"column", "bar", "line", "pie", "doughnut", "area", "scatter"};
+    for (uint8_t k = 0; k < 7; ++k)
+      if (what == kKinds[k]) {
+        se::Editor::NewChart c;
+        c.kind = static_cast<se::ChartKind>(k);
+        c.data = r;
+        c.at = sh::CellAddr{r.firstRow, std::min<uint32_t>(r.lastCol + 2, 16370)};
+        return done(ed_.InsertChart(s, c));
+      }
+    const std::string drawing = ed_.SheetDrawing(s, false);
+    const std::vector<se::drawing::Object> objects = se::drawing::Objects(ed_.PartBytes(drawing));
+    if (objects.empty() || !objects.back().id) {
+      why = "no chart, picture or shape on the sheet";
+      return Applied::Refused;
+    }
+    const uint32_t id = objects.back().id;
+    se::drawing::Place place;
+    place.from = {r.firstCol, r.firstRow, 0, 0};
+    place.to = {std::min<uint32_t>(r.lastCol + 4, 16383), std::min<uint32_t>(r.lastRow + 10, 1048575), 0, 0};
+    place.cx = 4572000;
+    place.cy = 2743200;
+    if (what == "move") return done(ed_.MoveObject(s, id, place));
+    if (what == "delete") return done(ed_.DeleteObjects(s, {id}));
+    if (what == "copy") return done(ed_.PasteObject(s, ed_.CopyObject(s, id), place));
+    se::ChartEdit edit;
+    if (what == "type-line") edit.kind = se::ChartKind::Line;
+    else if (what == "type-bar") edit.kind = se::ChartKind::Bar;
+    else if (what == "title") edit.title = se::ChartText{true, "Torture"}, edit.legend = 'r', edit.labels = true;
+    else {
+      why = "unknown chart edit " + what;
+      return Applied::Refused;
+    }
+    return done(ed_.EditChart(s, id, edit));
+  }
+
   Applied Format(int sheet, const sh::Range& r, const std::string& what, std::string& why) {
     std::map<uint32_t, uint32_t> mapped;
     bool known = true;
@@ -759,6 +806,12 @@ class Generator {
           e.text = std::string(info.value.text);
         else e.text = "x";
       }
+    } else if (roll == 84) {
+      e.op = Op::Chart;
+      e.range = Block(area, 6, 3);
+      static const char* kCharts[] = {"column", "bar", "line", "pie", "doughnut", "area", "scatter",
+                                      "move",   "delete", "copy", "type-line", "type-bar", "title"};
+      e.arg = rng_.Pick(kCharts);
     } else if (roll < 85) {
       e.op = Op::Paste;
       e.range = Block(area, 3, 3);

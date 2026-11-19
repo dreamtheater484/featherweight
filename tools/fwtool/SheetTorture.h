@@ -38,6 +38,9 @@ enum class Op : uint8_t {
   Undo,         // count steps
   Redo,
   Save,         // a save in the middle: checked as the last one is, then the edits go on
+  Chart,        // s3-charts. arg: column, bar, line, pie, doughnut, area or scatter: a chart of `range`
+                // beside it; move (to `range`), delete, copy (pasted at `range`), type-line, type-bar,
+                // title: the sheet's last chart, picture or shape
 };
 
 // One edit, as reproducers keep it. Sheets are tab indexes at the moment the edit is applied (names
