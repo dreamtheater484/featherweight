@@ -1,0 +1,42 @@
+# S3 fixture ("created as Excel shows it"): data validation through s3-data's Data Validation (its
+# script op on the selection, as the panel sets it): whole numbers between, decimals greater than,
+# dates between, a text length, a list, times before, a custom formula. Values and dates typed in the
+# en-NL region; Excel gives a list's items with the region's separator, dates and times as this PC shows them.
+# The columns are apart: Excel's read-back joins validations side by side into one area.
+sheet-name "Entry"
+enter A1 "Qty"
+enter C1 "Price"
+enter E1 "Date"
+enter G1 "Code"
+enter I1 "Status"
+enter K1 "Start"
+enter M1 "Ref"
+width E 12
+validation A2:A20 whole between "1" "100"
+validation C2:C20 decimal greater "0"
+validation E2:E20 date between "1-1-2026" "31-12-2026"
+validation G2:G20 length lessequal "5"
+validation I2:I20 list "Open|Closed|On hold"
+validation K2:K20 time less "18:00"
+validation M2:M20 custom "=ISNUMBER(M2)"
+enter A2 "5"
+enter C2 "2,5"
+enter E2 "19-11-2026"
+enter G2 "AB12"
+enter I2 "Open"
+enter K2 "9:30"
+enter M2 "17"
+save
+expect validation Entry!A2:A20 type 1 1
+expect validation Entry!A2:A20 operator 1 100
+expect validation Entry!C2:C20 type 2 0
+expect validation Entry!C2:C20 operator 5
+expect validation Entry!E2:E20 type 4 01/01/2026
+expect validation Entry!E2:E20 operator 1 31/12/2026
+expect validation Entry!G2:G20 type 6 5
+expect validation Entry!G2:G20 operator 8
+expect validation Entry!I2:I20 type 3 Open;Closed;On hold
+expect validation Entry!K2:K20 type 5 18:00:00
+expect validation Entry!K2:K20 operator 6
+expect validation Entry!M2:M20 type 7 =ISNUMBER(M2)
+expect cell Entry!E2 text 19/11/2026

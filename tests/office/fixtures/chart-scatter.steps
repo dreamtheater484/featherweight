@@ -1,0 +1,19 @@
+# S3 fixture ("created as Excel shows it", s3-charts): a scatter of two numeric columns: the first the X values, as Excel takes them.
+# Built through Insert > Chart on the selection; Excel reads back the type and series.
+sheet-name "Scatter"
+enter A1 "Height"
+enter B1 "Weight"
+enter A2 "160"
+enter B2 "55"
+enter A3 "168"
+enter B3 "63"
+enter A4 "172"
+enter B4 "70"
+enter A5 "181"
+enter B5 "78"
+enter A6 "190"
+enter B6 "86"
+chart A1:B6 scatter
+save
+expect chart Scatter 1 type -4169 series 1
+expect chart Scatter 1 series 1 =SERIES(Scatter!$B$1,Scatter!$A$2:$A$6,Scatter!$B$2:$B$6,1)

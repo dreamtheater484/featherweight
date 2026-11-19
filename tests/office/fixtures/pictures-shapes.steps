@@ -1,0 +1,36 @@
+# S3 fixture ("created as Excel shows it"): pictures and shapes through s3-data's Insert > Pictures
+# and Shapes at a cell, and the Format panel on the object just put in (fill, outline, text, alt
+# text). A picture moves but doesn't size with cells, as Excel inserts it: a taller row under it
+# leaves its size; the shapes beside it, which size with cells, grow. Lines and arrows go in flat.
+# picture.png is 80 x 60 pixels at 96 dpi (60 x 45 points).
+sheet-name "Objects"
+enter A1 "Pictures and shapes"
+picture B2 "picture.png"
+object-alt "A blue box with a red band"
+shape E2 roundrect "Hello"
+object-fill FFC000
+object-outline C00000 2
+shape E9 textbox "A note"
+shape B10 line
+shape B12 arrow
+object-outline 00B050 1.5
+shape H2 oval
+object-fill none
+row-height B2 40
+save
+# Row 2 at 40 points is 53 pixels (39.75 points, as Excel keeps it): the shapes it crosses are
+# 72 + 24.75 points tall; the picture stays 60 x 45.
+expect shape Objects Picture 1 type 13 placement 2 at B2:C3 size 60x45
+expect shape Objects Picture 1 fill none
+expect shape Objects Picture 1 alt A blue box with a red band
+expect shape Objects Rounded Rectangle 2 type 1 placement 1 at E2:F6 size 72x96.75
+expect shape Objects Rounded Rectangle 2 fill FFC000
+expect shape Objects Rounded Rectangle 2 line C00000 2
+expect shape Objects Rounded Rectangle 2 text Hello
+expect shape Objects TextBox 3 type 17 placement 1 at E9:G10 size 108x28
+expect shape Objects TextBox 3 text A note
+expect shape Objects Straight Connector 4 type 9 placement 1 at B10:C10 size 72x0
+expect shape Objects Straight Arrow Connector 5 type 1 placement 1 at B12:C12 size 72x0
+expect shape Objects Straight Arrow Connector 5 line 00B050 1.5
+expect shape Objects Oval 6 type 1 placement 1 at H2:I6 size 72x96.75
+expect shape Objects Oval 6 fill none

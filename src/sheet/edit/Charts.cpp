@@ -193,6 +193,7 @@ std::string SeriesXml(ChartKind kind, size_t i, const SeriesParts& p) {
       s += "<c:spPr><a:ln w=\"25400\" cap=\"rnd\"><a:noFill/><a:round/></a:ln><a:effectLst/></c:spPr><c:marker><c:symbol val=\"circle\"/>"
            "<c:size val=\"5\"/><c:spPr>" + fill + "<a:ln w=\"9525\">" + fill + "</a:ln><a:effectLst/></c:spPr></c:marker>";
       break;
+    case K::Combo: break;  // GroupsXml writes a combo's series as columns and a line
     case K::Pie:
     case K::Doughnut:
       // A slice per value, each in its color with a white edge.
@@ -232,8 +233,22 @@ std::string GroupXml(ChartKind kind, const std::string& sers, bool labels, const
       return "<c:doughnutChart><c:varyColors val=\"1\"/>" + sers + dl + "<c:firstSliceAng val=\"0\"/><c:holeSize val=\"75\"/></c:doughnutChart>";
     case K::Scatter:
       return "<c:scatterChart><c:scatterStyle val=\"lineMarker\"/><c:varyColors val=\"0\"/>" + sers + dl + axIds + "</c:scatterChart>";
+    case K::Combo: break;
   }
   return {};
+}
+
+// The chart groups of `kind` holding the series `parts`: one group, or a combo's two (its columns,
+// then its last series as a line, on the same axes, as Excel writes "Clustered Column - Line").
+std::string GroupsXml(ChartKind kind, const std::vector<SeriesParts>& parts, bool labels, const std::string& x, const std::string& y) {
+  using K = ChartKind;
+  const bool combo = kind == K::Combo && parts.size() >= 2;
+  const K first = kind == K::Combo ? K::Column : kind;
+  std::string sers;
+  for (size_t i = 0; i + (combo ? 1 : 0) < parts.size(); ++i) sers += SeriesXml(first, i, parts[i]);
+  std::string out = GroupXml(first, sers, labels, x, y);
+  if (combo) out += GroupXml(K::Line, SeriesXml(K::Line, parts.size() - 1, parts.back()), labels, x, y);
+  return out;
 }
 
 // The axes a kind has (none for pies): their gridlines and line in the light gray, labels in 9 points.
@@ -272,7 +287,7 @@ std::string LegendXml(char pos) {
 std::string ChartXml(const Sheet& s, const Plan& plan, ChartKind kind, const std::string& title) {
   const std::string name = s.Name();
   const bool round = kind == ChartKind::Pie || kind == ChartKind::Doughnut;
-  std::string sers;
+  std::vector<SeriesParts> parts;
   for (size_t i = 0; i < plan.series.size(); ++i) {
     const Plan::One& one = plan.series[i];
     SeriesParts p;
@@ -284,13 +299,13 @@ std::string ChartXml(const Sheet& s, const Plan& plan, ChartKind kind, const std
     }
     p.val = "<c:numRef><c:f>" + Esc(AbsRef(name, one.values)) + "</c:f>" + Cache(s, one.values, true) + "</c:numRef>";
     p.points = static_cast<size_t>(one.values.lastRow - one.values.firstRow + 1) * (one.values.lastCol - one.values.firstCol + 1);
-    sers += SeriesXml(kind, i, p);
+    parts.push_back(std::move(p));
   }
   const std::string legend = plan.series.size() > 1 || round ? LegendXml('b') : std::string();
   return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<c:chartSpace xmlns:c=\"" + std::string(kChartNs) +
          "\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"" + std::string(kRelNs) +
          "\"><c:date1904 val=\"0\"/><c:roundedCorners val=\"0\"/><c:chart>" + TitleXml(title, 1400, "0") +
-         "<c:autoTitleDeleted val=\"0\"/><c:plotArea><c:layout/>" + GroupXml(kind, sers, false, "500000001", "500000002") +
+         "<c:autoTitleDeleted val=\"0\"/><c:plotArea><c:layout/>" + GroupsXml(kind, parts, false, "500000001", "500000002") +
          AxesXml(kind, "500000001", "500000002") + std::string(kNoShape) + "</c:plotArea>" + legend +
          "<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart>" +
          "<c:spPr><a:solidFill><a:schemeClr val=\"bg1\"/></a:solidFill>" + Line15() + "<a:effectLst/></c:spPr>"
@@ -356,8 +371,20 @@ std::vector<pugi::xml_node> SeriesOf(pugi::xml_node plot) {
       if (Is(c, {"ser"})) out.push_back(c);
   return out;
 }
+// A group's axis ids, in order.
+std::vector<std::string_view> AxisIds(pugi::xml_node group) {
+  std::vector<std::string_view> ids;
+  for (pugi::xml_node c = group.first_child(); c; c = c.next_sibling())
+    if (Is(c, {"axId"})) ids.push_back(xlsx::Attr(c, "val"));
+  return ids;
+}
 std::optional<ChartKind> KindOf(pugi::xml_node plot) {
   const std::vector<pugi::xml_node> groups = Groups(plot);
+  // A combo: clustered columns and a standard line, on the same axes (not a secondary axis).
+  if (groups.size() == 2 && xlsx::Local(groups[0]) == "barChart" && xlsx::Local(groups[1]) == "lineChart" &&
+      xlsx::Attr(Kid(groups[0], "barDir"), "val") == "col" && xlsx::Attr(Kid(groups[0], "grouping"), "val") == "clustered" &&
+      xlsx::Attr(Kid(groups[1], "grouping"), "val") == "standard" && AxisIds(groups[0]) == AxisIds(groups[1]))
+    return ChartKind::Combo;
   if (groups.size() != 1) return std::nullopt;
   const std::string_view l = xlsx::Local(groups[0]);
   if (l == "barChart") return xlsx::Attr(Kid(groups[0], "barDir"), "val") == "bar" ? ChartKind::Bar : ChartKind::Column;
@@ -509,7 +536,12 @@ bool RefXml(const Workbook& book, const std::string& f, bool numbers, std::strin
 }  // namespace
 
 std::string NewChartXml(const Sheet& s, const Range& data, ChartKind kind, const std::string& title) {
-  const Plan plan = PlanSeries(s, data);
+  Plan plan = PlanSeries(s, data);
+  // A scatter's X values: the first series when there are no category labels (Excel's guess).
+  if (kind == ChartKind::Scatter && !plan.categories && plan.series.size() >= 2) {
+    plan.categories = plan.series.front().values;
+    plan.series.erase(plan.series.begin());
+  }
   return plan.series.empty() ? std::string() : ChartXml(s, plan, kind, title);
 }
 
@@ -685,10 +717,8 @@ std::string Edited(const Workbook& book, std::string_view xml, const ChartEdit& 
       SetVal(x, "axPos", bar ? "l" : "b");
       SetVal(y, "axPos", bar ? "b" : "l");
     }
-    std::string sers;
-    for (size_t i = 0; i < parts.size(); ++i) sers += SeriesXml(kind, i, parts[i]);
     pugi::xml_node at = groups.empty() ? FirstOf(plot, {"catAx", "valAx", "dateAx", "serAx", "dTable", "spPr", "extLst"}) : groups[0];
-    if (!Put(plot, at, GroupXml(kind, sers, labels, xId, yId))) return {};
+    if (!Put(plot, at, GroupsXml(kind, parts, labels, xId, yId))) return {};
     for (pugi::xml_node g : groups) plot.remove_child(g);
     if (!keep) {
       std::vector<pugi::xml_node> axes;

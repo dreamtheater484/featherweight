@@ -1,0 +1,24 @@
+# S3 fixture ("created as Excel shows it", s3-charts): a chart sheet. A column chart inserted on
+# the data, then Move Chart > New sheet: the chart sheet comes before the data and shows.
+sheet-name "Data"
+enter A1 "Quarter"
+enter B1 "North"
+enter C1 "South"
+enter A2 "Q1"
+enter B2 "120"
+enter C2 "80"
+enter A3 "Q2"
+enter B3 "150"
+enter C3 "110"
+enter A4 "Q3"
+enter B4 "90"
+enter C4 "130"
+enter A5 "Q4"
+enter B5 "200"
+enter C5 "160"
+chart A1:C5 column
+move-chart
+save
+expect chartsheet Chart1 type 51 series 2
+expect chartsheet Chart1 series 1 =SERIES(Data!$B$1,Data!$A$2:$A$5,Data!$B$2:$B$5,1)
+expect chartsheet Chart1 series 2 =SERIES(Data!$C$1,Data!$A$2:$A$5,Data!$C$2:$C$5,2)

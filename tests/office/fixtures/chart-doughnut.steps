@@ -1,0 +1,17 @@
+# S3 fixture ("created as Excel shows it", s3-charts): a doughnut of one series.
+# Built through Insert > Chart on the selection; Excel reads back the type and series.
+sheet-name "Doughnut"
+enter A1 "Fruit"
+enter B1 "Share"
+enter A2 "Apples"
+enter B2 "35"
+enter A3 "Pears"
+enter B3 "20"
+enter A4 "Plums"
+enter B4 "15"
+enter A5 "Cherries"
+enter B5 "30"
+chart A1:B5 doughnut
+save
+expect chart Doughnut 1 type -4120 series 1
+expect chart Doughnut 1 series 1 =SERIES(Doughnut!$B$1,Doughnut!$A$2:$A$5,Doughnut!$B$2:$B$5,1)

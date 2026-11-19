@@ -18,7 +18,9 @@ class Workbook;
 // drawing. The edit layer's Editor ops put them into the package.
 namespace fw::sheet::edit {
 
-enum class ChartKind : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter };
+// Combo is Excel's "Clustered Column - Line": the last series a line, the others clustered columns,
+// on the same axes (one series: a column chart).
+enum class ChartKind : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter, Combo };
 
 // A chart's series as Select Data lists them: formulas as the file writes them ("Sheet1!$B$1",
 // "'My sheet'!$B$2:$B$5"; empty: none).

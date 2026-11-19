@@ -95,6 +95,7 @@ struct Chart {
   // write it): gridlines and axis lines it doesn't color black rather than gray, and a title the
   // chart's text size. Word draws such charts in Office 2010's look.
   bool legacy = false;
+  bool workbook = false;  // in a workbook (Read had a DataSource): Excel's denser value axis labels
 };
 
 // Where a chart in a workbook reads its data: the cells its references (c:f) name, as they show,

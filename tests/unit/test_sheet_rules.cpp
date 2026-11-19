@@ -13,6 +13,7 @@
 #include "sheet/data/Rules.h"
 #include "sheet/edit/Edit.h"
 #include "sheet/edit/Journal.h"
+#include "sheet/edit/Refs.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/xlsx/Xlsx.h"
 #include "sheet/xlsx/Internal.h"
@@ -300,6 +301,45 @@ TEST(SheetTables_AddSetRemove) {
   CHECK(s.Tables().size() == 1 && s.Text().afterData.find("tableParts") != std::string::npos);
 }
 
+// A table renamed (Table Design's name): formulas naming it follow, as Excel rewrites them; text in
+// strings and brackets, functions and longer names stay; undo puts the old name back.
+TEST(SheetTables_Rename) {
+  CHECK(edit::refs::RenameTable("SUM(Table1[Amount])+ROWS(table1)", "Table1", "Orders") == "SUM(Orders[Amount])+ROWS(Orders)");
+  CHECK(edit::refs::RenameTable("Table1[[#This Row],[Table1]]*2", "Table1", "Orders") == "Orders[[#This Row],[Table1]]*2");
+  CHECK(edit::refs::RenameTable("\"Table1[x]\"&Table10[a]&Table1(1)&'Table1'!A1&Table1!A1&My.Table1", "Table1", "Orders") ==
+        "\"Table1[x]\"&Table10[a]&Table1(1)&'Table1'!A1&Table1!A1&My.Table1");
+  CHECK(edit::refs::RenameTable("Table1[x'[1']]", "Table1", "T") == "T[x'[1']]");
+  const char* data =
+      "<sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Name</t></is></c><c r=\"B1\" t=\"inlineStr\"><is><t>Amount</t></is></c></row>"
+      "<row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>a</t></is></c><c r=\"B2\"><v>5</v></c></row>"
+      "<row r=\"3\"><c r=\"A3\" t=\"inlineStr\"><is><t>b</t></is></c><c r=\"B3\"><v>7</v></c></row></sheetData>";
+  auto book = OpenParts({data, "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Table t;
+  t.ref = Range{0, 0, 2, 1};
+  t.autoFilter = true;
+  t.style = TableStyleInfo{"TableStyleMedium2", false, false, true, false};
+  t.columns = {TableColumn{0, "Name"}, TableColumn{0, "Amount"}};
+  CHECK(ed.AddTable(0, t));
+  CHECK(ed.SetCell(0, 0, 3, edit::CellInput::Formula("SUM(Table1[Amount])")));
+  CHECK(ed.SetCell(1, 0, 0, edit::CellInput::Formula("ROWS(Table1)+\"Table1\"")));
+  CHECK(ed.SetName(DefinedName{"Amounts", -1, "Table1[Amount]"}));
+  Table renamed = book->GetSheet(0).Tables()[0];
+  renamed.name = renamed.displayName = "Orders";
+  CHECK(ed.SetTable(0, 0, renamed));
+  CHECK(book->GetSheet(0).Tables()[0].name == "Orders");
+  CHECK(FormulaText(book->GetSheet(0), 0, 3) == "SUM(Orders[Amount])");
+  CHECK(FormulaText(book->GetSheet(1), 0, 0) == "ROWS(Orders)+\"Table1\"");
+  bool named = false;
+  for (const DefinedName& n : book->Names()) named = named || (n.name == "Amounts" && n.formula == "Orders[Amount]");
+  CHECK(named);
+  ed.Undo();
+  CHECK(book->GetSheet(0).Tables()[0].name == "Table1");
+  CHECK(FormulaText(book->GetSheet(0), 0, 3) == "SUM(Table1[Amount])");
+  CHECK(FormulaText(book->GetSheet(1), 0, 0) == "ROWS(Table1)+\"Table1\"");
+}
+
 // A table's filter buttons: their criteria in the table's part (Excel's autoFilter there), the
 // model's, undo, a size change keeping them, and the journal.
 TEST(SheetTables_Filter) {
@@ -375,21 +415,18 @@ TEST(SheetTables_StrictPrefix) {
       "<worksheet xmlns=\"http://purl.oclc.org/ooxml/spreadsheetml/main\" "
       "xmlns:r=\"http://purl.oclc.org/ooxml/officeDocument/relationships\">";
   detail::PartText t;
-  t.hasData = true;  // a worksheet's part
   t.rootStart = strictRoot;
   t.hasData = true;  // a worksheet's part (one without sheetData is a chart sheet's)
   xlsx::PutTablePart(t, "rId5", true);
   CHECK(t.rootStart == strictRoot);
   CHECK(t.afterData.find("<tableParts count=\"1\"><tablePart r:id=\"rId5\"/></tableParts>") != std::string::npos);
   detail::PartText bare;
-  bare.hasData = true;  // a worksheet's part
   bare.rootStart = "<worksheet xmlns=\"http://purl.oclc.org/ooxml/spreadsheetml/main\">";
   bare.hasData = true;
   xlsx::PutTablePart(bare, "rId1", true);
   CHECK(bare.rootStart == "<worksheet xmlns=\"http://purl.oclc.org/ooxml/spreadsheetml/main\" "
                           "xmlns:r=\"http://purl.oclc.org/ooxml/officeDocument/relationships\">");
   detail::PartText other;
-  other.hasData = true;  // a worksheet's part
   other.rootStart = "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"urn:else\">";
   other.hasData = true;
   xlsx::PutTablePart(other, "rId2", true);
@@ -436,6 +473,59 @@ TEST(SheetTables_Unstructure) {
   CHECK(u("COUNTA(Sales[#Headers])", 4, false) == "COUNTA(Sheet1!$A$1:$C$1)");
   CHECK(u("\"Sales[Amount]\"&OtherSales[x]", 0, false) == "\"Sales[Amount]\"&OtherSales[x]");
   CHECK(data::Unstructure("SUM(Sales[Amount])", t, "My Sheet", 0, false) == "SUM('My Sheet'!$B$2:$B$4)");
+}
+
+// Convert to Range keeps the table's look in the cells' own formats, as Excel 2021 did for
+// TableStyleMedium2 (ListObject.Unlist, measured): the header accent 1 with bold white text, the
+// first row stripe accent 1 at tint 0.8, thin lines at tint 0.4 between the rows and on the outer
+// sides; a cell's own fill stays. Undo puts the formats back.
+TEST(SheetTables_ConvertKeepsLook) {
+  const char* data =
+      "<sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Name</t></is></c><c r=\"B1\" t=\"inlineStr\"><is><t>Amount</t></is></c></row>"
+      "<row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>a</t></is></c><c r=\"B2\"><v>5</v></c></row>"
+      "<row r=\"3\"><c r=\"A3\" t=\"inlineStr\"><is><t>b</t></is></c><c r=\"B3\"><v>7</v></c></row></sheetData>";
+  auto book = OpenParts({data, "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Table t;
+  t.ref = Range{0, 0, 2, 1};
+  t.autoFilter = true;
+  t.style = TableStyleInfo{"TableStyleMedium2", false, false, true, false};
+  t.columns = {TableColumn{0, "Name"}, TableColumn{0, "Amount"}};
+  CHECK(ed.AddTable(0, t));
+  Fill yellow;
+  yellow.pattern = PatternType::Solid;
+  yellow.fg = Color{Color::Kind::Rgb, 0xFFFFFF00};
+  Xf own;
+  own.fill = ed.AddFill(yellow);
+  own.applyFill = true;
+  CHECK(ed.SetStyle(0, Range::Cell(2, 1), ed.AddXf(own)));
+  const Sheet& s = book->GetSheet(0);
+  const uint32_t before = s.StyleAt(0, 0);
+  CHECK(ed.RemoveTable(0, 0));
+  CHECK(s.Tables().empty());
+  const Styles& st = book->GetStyles();
+  auto fill = [&](uint32_t row, uint32_t col) {
+    const Fill& f = st.Fills()[st.CellXfs()[s.StyleAt(row, col)].fill];
+    return f.pattern == PatternType::None ? 0u : st.Resolve(f.fg, 0);
+  };
+  auto font = [&](uint32_t row, uint32_t col) { return st.FontOf(st.CellXfs()[s.StyleAt(row, col)]); };
+  auto border = [&](uint32_t row, uint32_t col) { return st.Borders()[st.CellXfs()[s.StyleAt(row, col)].border]; };
+  CHECK(fill(0, 0) == 0xFF4472C4 && fill(0, 1) == 0xFF4472C4);  // the header
+  CHECK(font(0, 0).bold && st.Resolve(font(0, 0).color, 0) == 0xFFFFFFFF);
+  // Theme colors with tints, as Excel stores them (theme 4 at 0.79998 and 0.39997).
+  auto accent = [](const Color& c, double tint) { return c.kind == Color::Kind::Theme && c.value == 4 && std::abs(c.tint - tint) < 0.001; };
+  const Fill& stripe = st.Fills()[st.CellXfs()[s.StyleAt(1, 0)].fill];
+  CHECK(stripe.pattern == PatternType::Solid && accent(stripe.fg, 0.8) && accent(stripe.bg, 0.8));  // the first row stripe
+  CHECK(s.StyleAt(1, 1) != before && fill(1, 1) == fill(1, 0));
+  CHECK(fill(2, 0) == 0 && !font(1, 0).bold);                     // the second: no fill
+  CHECK(fill(2, 1) == 0xFFFFFF00);                                // its own fill stays
+  const Border a2 = border(1, 0), b2 = border(1, 1);
+  CHECK(a2.left.style == BorderStyle::Thin && accent(a2.left.color, 0.4));
+  CHECK(a2.top.style == BorderStyle::Thin && a2.bottom.style == BorderStyle::Thin && a2.right.style == BorderStyle::None);
+  CHECK(b2.right.style == BorderStyle::Thin && b2.left.style == BorderStyle::None);
+  ed.Undo();
+  CHECK(s.Tables().size() == 1 && s.StyleAt(0, 0) == before);
 }
 
 // On a protected sheet Excel refuses tables and validations always, conditional formats unless

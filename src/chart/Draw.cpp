@@ -215,6 +215,7 @@ constexpr float kLabelMiddle = 0.36f;  // the same for data labels
 constexpr float kTitleGap = 8.2f;    // points: the title's (or a legend's) line to the room below
 constexpr float kAxisTitle = 6.1f, kAxisTitleGap = 5.07f;  // points: an axis title from the room's edge; to its labels
 constexpr float kKey = 0.549f;       // a legend key's square
+constexpr size_t kOutlinedLabels = 64;  // a category axis whose labels are all outlined at once (more: when drawn)
 
 struct Label {
   Path path;
@@ -260,6 +261,12 @@ class Builder {
     if (s.empty() || !(size > 0)) return l;
     l.path = draw::TextOutline(s.substr(0, 255), font.empty() ? font_ : font, bold, false, size);
     if (!l.path.Empty()) l.width = std::max(0.0f, l.path.Bounds().right);
+    return l;
+  }
+  // A label's width only, from its glyphs' advances (no outline: Text makes it when it's drawn).
+  Label Measure(const std::wstring& s, float size) const {
+    Label l;
+    if (!s.empty() && size > 0) l.width = draw::TextAdvance(s.substr(0, 255), font_, false, false, size);
     return l;
   }
   // `align`: 0 starts at x, 1 centers on it, 2 ends at it; turned `degrees` about (x, baseline).
@@ -378,17 +385,19 @@ double NiceStep(double lo, double hi, int most) {
 }
 
 // Excel's automatic scale: from zero unless the values sit in a narrow band far from it, 5% of the
-// values' range past the extremes, round major units; the axis's own minimum and maximum win.
+// axis's range (from zero, when it starts there) past the extremes that aren't zero, round major
+// units; the axis's own minimum and maximum win. (Excel's PDFs: a scatter of 55..86 up to 100, of
+// 160..190 from 155; columns of 95..175 up to 200.)
 Scale MakeScale(double lo, double hi, const Axis& axis, bool zero, bool pad, int most = 10) {
   if (!std::isfinite(lo) || !std::isfinite(hi) || lo > hi) lo = 0, hi = 1;
-  const double spread = hi - lo;
+  const bool narrow = hi > lo;  // a band of values: its far side keeps its room, a single value doesn't
   if (lo > 0 && (zero || hi - lo >= hi / 6)) lo = 0;
   if (hi < 0 && (zero || hi - lo >= -lo / 6)) hi = 0;
   if (hi == lo) hi = lo + (lo == 0 ? 1 : std::fabs(lo) / 2);
   if (pad) {
-    const double room = (spread > 0 ? spread : hi - lo) * 0.05;
-    if (hi > 0) hi += room;
-    if (lo < 0) lo -= room;
+    const double room = (hi - lo) * 0.05;
+    if (hi > 0 || (hi < 0 && narrow)) hi += room;
+    if (lo < 0 || (lo > 0 && narrow)) lo -= room;
   }
   if (axis.min) lo = *axis.min;
   if (axis.max) hi = *axis.max;
@@ -646,6 +655,51 @@ std::wstring Wrapped(Builder& b, const std::vector<std::wstring>& parts, float w
     line += part;
   }
   return out + line;
+}
+
+// A title on lines as Excel wraps one wider than `width`: at spaces, and within a word too wide for
+// a line of its own; at most `most` lines (the rest isn't shown). One that fits stays as it is.
+std::vector<Label> TitleLines(const Builder& b, std::wstring_view s, float size, bool bold, const std::wstring& font,
+                              float width, size_t most) {
+  s = s.substr(0, 255);
+  const auto text = [&](std::wstring_view t) { return b.Text(std::wstring(t), size, bold, font); };
+  if (Label all = text(s); all.width <= width) return {std::move(all)};
+  std::vector<Label> lines;
+  std::wstring line;
+  const auto flush = [&] {
+    if (!line.empty() && lines.size() < most) lines.push_back(text(line));
+    line.clear();
+  };
+  for (size_t at = 0; at < s.size() && lines.size() < most;) {
+    size_t end = s.find(L' ', at);
+    if (end == std::wstring_view::npos) end = s.size();
+    std::wstring word(s.substr(at, end - at));
+    at = end + 1;
+    if (word.empty()) continue;
+    if (!line.empty()) {
+      if (text(line + L' ' + word).width <= width) {
+        line += L' ' + word;
+        continue;
+      }
+      flush();
+    }
+    // Alone on its line: a word too wide even so is broken where it stops fitting (whole
+    // characters, at least one a line).
+    while (lines.size() < most && word.size() > 1 && text(word).width > width) {
+      size_t lo = 1, hi = word.size() - 1;
+      while (lo < hi) {
+        const size_t mid = (lo + hi + 1) / 2;
+        if (text(std::wstring_view(word).substr(0, mid)).width <= width) lo = mid;
+        else hi = mid - 1;
+      }
+      if (word[lo] >= 0xDC00 && word[lo] < 0xE000) lo = lo > 1 ? lo - 1 : lo + 1;  // not inside a surrogate pair
+      lines.push_back(text(std::wstring_view(word).substr(0, lo)));
+      word.erase(0, lo);
+    }
+    line = std::move(word);
+  }
+  flush();
+  return lines;
 }
 
 // A pie (its first series) or a doughnut (a ring a series, the first innermost), in the room `r`.
@@ -949,8 +1003,9 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     cats.n = std::max(cats.n, n);
   }
   cats.n = std::max<size_t>(1, std::max(cats.n, names.size()));
-  // A value axis up the side has room for a label every 1.6 lines or so.
-  const int most = bar ? 10 : static_cast<int>((r.bottom - r.top - ts * 3) / (ts * 1.6f));
+  // A value axis up the side has room for a label every 1.6 lines or so in Word, 1.2 in Excel
+  // (Excel's PDFs: ten intervals on a 133-point plot of 9-point labels).
+  const int most = bar ? 10 : static_cast<int>((r.bottom - r.top - ts * 3) / (ts * (ch.workbook ? 1.2f : 1.6f)));
   const Scale vs = MakeScale(lo[0], hi[0], ch.value, zero[0] || percent, !percent, most);
   const Scale ss = MakeScale(lo[1], hi[1], ch.secondary, zero[1], true, most);
   const Scale xscale = MakeScale(xlo, xhi, ch.category, false, true);
@@ -960,6 +1015,7 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   const std::vector<double> vticks = Ticks(vs), sticks = secondary ? Ticks(ss) : std::vector<double>();
   std::vector<Label> vlabels, slabels, clabels;
   float vw = 0, sw = 0, cw = 0;
+  const auto catName = [&](size_t i) { return i < names.size() ? names[i] : std::to_wstring(i + 1); };
   if (ch.value.shown)
     for (double v : vticks) vlabels.push_back(b.Text(FormatNumber(v, vformat), ts)), vw = std::max(vw, vlabels.back().width);
   if (secondary && ch.secondary.shown)
@@ -969,8 +1025,14 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     if (scatter)
       for (double v : xticks) clabels.push_back(b.Text(FormatNumber(v, ch.category.format), ts)), cw = std::max(cw, clabels.back().width);
     else
-      for (size_t i = 0; i < cats.n && i < 4096; ++i)
-        clabels.push_back(b.Text(i < names.size() ? names[i] : std::to_wstring(i + 1), ts)), cw = std::max(cw, clabels.back().width);
+      // Hundreds of categories, of which only every so many labels show: the others measured by
+      // their advances, their outlines made only when they're drawn (a redraw stays within a
+      // keystroke). The first and last, which the plot's edges allow for, are outlined.
+      for (size_t i = 0, n = std::min<size_t>(cats.n, 4096); i < n; ++i) {
+        const bool outline = n <= kOutlinedLabels || i == 0 || i + 1 == n;
+        clabels.push_back(outline ? b.Text(catName(i), ts) : b.Measure(catName(i), ts));
+        cw = std::max(cw, clabels.back().width);
+      }
   }
 
   // Axis titles, bold, at the room's edges (up the sides, turned): they take their room unless
@@ -1094,8 +1156,9 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     const size_t every = room > 0 ? std::max<size_t>(1, static_cast<size_t>(std::ceil(need / room))) : 1;
     for (size_t i = 0; i < clabels.size(); i += every) {
       const Point at = p.At(cats.Center(i), 0);
-      if (bar) b.Place(clabels[i], P.left - kValueGap * ts, at.y + kMiddle * ts, 2, text);
-      else b.Place(clabels[i], at.x, below, 1, text);
+      const Label l = clabels[i].path.Empty() && clabels[i].width > 0 ? b.Text(catName(i), ts) : clabels[i];
+      if (bar) b.Place(l, P.left - kValueGap * ts, at.y + kMiddle * ts, 2, text);
+      else b.Place(l, at.x, below, 1, text);
     }
   }
   // The axis titles: up the sides centred on the plot, or under it.
@@ -1214,9 +1277,15 @@ draw::Art Draw(const Chart& ch, draw::Size size, const draw::ColorContext& color
   const Rect inner = r;
   // A title or legend over the plot is drawn after it, on top.
   const auto title = [&] {
-    const float top = kPad + 1 + 0.206f * tts;  // the top of the title's line (Excel's PDFs)
-    b.Place(b.Text(ch.title, tts, ch.titleBold, ch.titleFont), W / 2, top + kAscent * tts, 1, ch.titleColor.value_or(kText));
-    return top + tts + kTitleGap;
+    const float top = kPad + 1 + 0.206f * tts;  // the top of the title's first line (Excel's PDFs)
+    // Excel wraps a title wider than about 80 % of the chart, and keeps it to about half its
+    // height; each line after the first takes a line's room from the plot.
+    const float pitch = kLine * tts;
+    const size_t most = std::max<size_t>(1, static_cast<size_t>(H / 2 / pitch));
+    const std::vector<Label> lines = TitleLines(b, ch.title, tts, ch.titleBold, ch.titleFont, 0.8f * W, most);
+    for (size_t k = 0; k < lines.size(); ++k)
+      b.Place(lines[k], W / 2, top + kAscent * tts + k * pitch, 1, ch.titleColor.value_or(kText));
+    return top + tts + kTitleGap + (lines.empty() ? 0 : lines.size() - 1) * pitch;
   };
   if (!ch.title.empty() && !ch.titleOverlay) r.top = title();
   const std::vector<Entry> entries = ch.legend != LegendPos::None ? Entries(ch, colors) : std::vector<Entry>();
