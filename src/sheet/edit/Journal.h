@@ -69,6 +69,8 @@ enum class JournalOp : uint8_t {
   SetFilter = 40,
   MoveCells = 41,
   InsertChart = 50,  // s3-charts: 50-59
+  MoveObject = 51,
+  DeleteObjects = 52,
   // s3-data's operations: 60-69.
   SetSheetRules = 60,
   AddDxf = 61,
@@ -82,6 +84,9 @@ enum class JournalOp : uint8_t {
   SetHyperlink = 92,
   SetNote = 93,
   SetThread = 94,
+  SetPageSetup = 95,
+  SetPageBreaks = 96,
+  SetViewMode = 97,
 };
 
 // One record being written: its kind, then its fields in the order Replay reads them.

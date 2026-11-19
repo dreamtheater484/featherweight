@@ -1,0 +1,21 @@
+# S3 fixture ("created as Excel shows it"): a note, a comment, links and sheet protection, through
+# s3-review's panels as typed: New Note, New Comment, Insert link (an address; a place in the
+# workbook), Protect Sheet without a password.
+sheet-name "Review"
+enter A1 "Item"
+enter B1 "Amount"
+enter A2 "Desk"
+enter B2 "250"
+enter A3 "Chair"
+enter B3 "120"
+note B2 "Checked against the invoice"
+comment B3 "Is this the right price?"
+link A5 "https://example.com/"
+link-place A6 "Review!B2"
+protect
+save
+expect note Review!B2 *:\nChecked against the invoice
+expect note Review!B3 [[]Threaded comment]*Comment:\n    Is this the right price?
+expect link Review!A5 address https://example.com/ place  text https://example.com/
+expect link Review!A6 address  place Review!B2 text Review!B2
+expect protect Review contents formatcells False insertrows False

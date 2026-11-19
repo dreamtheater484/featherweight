@@ -10,6 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include "sheet/edit/Charts.h"
+#include "sheet/edit/Drawing.h"
 #include "sheet/edit/Protection.h"
 #include "sheet/model/Workbook.h"
 
@@ -271,9 +273,21 @@ class Editor {
   // Appends an anchor to a drawing: an xdr:twoCellAnchor, oneCellAnchor or absoluteAnchor that
   // declares the xdr: and a: prefixes (and r: when it has relationships) on itself.
   bool AddAnchor(std::string_view drawing, std::string_view anchorXml);
+  // The object with shape id `id` (its first cNvPr's): its bytes, an anchor or an
+  // mc:AlternateContent; empty when the drawing has none.
+  std::string AnchorXml(std::string_view drawing, uint32_t id) const;
+  // That object's bytes replaced by `xml` (empty removes it, leaving its parts). Inside a group.
+  bool ReplaceAnchor(std::string_view drawing, uint32_t id, std::string_view xml);
+
+  // ---- Objects in a sheet's drawing (charts, pictures, shapes), by shape id (s3-charts)
+  // Moved or resized: the anchor's cells and offsets, the shape's own position and size.
+  Result MoveObject(int sheet, uint32_t id, const drawing::Place& place);
+  // Deleted, with the parts nothing else uses any more (a chart and its own parts, a picture
+  // used once); the drawing and the sheet's reference to it go with the last object.
+  Result DeleteObjects(int sheet, const std::vector<uint32_t>& ids);
 
   // ---- Charts (s3-charts)
-  enum class ChartKind : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter };
+  using ChartKind = edit::ChartKind;
   struct NewChart {
     ChartKind kind = ChartKind::Column;
     Range data;              // the cells charted (the selection)
@@ -333,11 +347,22 @@ class Editor {
   // The thread on `cell`, if it has one.
   std::optional<Thread> ThreadAt(int sheet, CellAddr cell) const;
 
+  // ---- Page setup (Page Setup, print preview's settings; S3 s3-print). The worksheet's page setup,
+  // headers and footers, and Fit to (`fitToPage`: scaled by fitToWidth and fitToHeight, else by
+  // `scale`), written as Excel writes them (sheet/edit/PageSetupXml.h). The print area and titles are
+  // names (_xlnm.Print_Area, _xlnm.Print_Titles: SetName). Allowed on a protected sheet, as in Excel.
+  Result SetPageSetup(int sheet, const PageSetup& page, const HeaderFooter& headerFooter, bool fitToPage);
+  // The worksheet's page breaks (Insert Page Break, Remove Page Break, Reset All Page Breaks, or
+  // dragged in Page Break Preview), rows and columns: each break's id is the first row or column on
+  // its new page.
+  Result SetPageBreaks(int sheet, const std::vector<PageBreak>& rows, const std::vector<PageBreak>& cols);
+
   // ---- View state: saved with the file, but not undo steps (as in Excel).
   void SetActiveSheet(int sheet);
   void SetSelection(int sheet, CellAddr active, const std::vector<Range>& ranges);
   void SetTopLeft(int sheet, CellAddr topLeft);
   void SetZoom(int sheet, uint32_t percent);
+  void SetViewMode(int sheet, ViewMode mode);  // Normal, Page Break Preview (s3-print)
 
   // ---- Defined names. Adds the name, or replaces the one with the same name and scope.
   Result SetName(const DefinedName& name);

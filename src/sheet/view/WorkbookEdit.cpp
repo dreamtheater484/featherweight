@@ -697,6 +697,7 @@ void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
   if (sheets) SheetsChanged();
   else if (layout) Restructure();
   RulesEdited(changes);  // s3-data: conditional formats and validations read again
+  breakPages_.reset();    // s3-print: Page Break Preview paginates again
   // Notes and drawings that moved (inserted or deleted cells, a sort): read again, the shown
   // sheet's now and the others' when they are shown.
   if (!sheets)

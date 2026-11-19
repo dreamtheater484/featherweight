@@ -39,14 +39,58 @@ PrintInfo WorkbookView::InfoFor(const Sheet& sheet) const {
 }
 
 void WorkbookView::Paginate() {
-  printObjects_ = SheetObjects::Load(*book_, sheet_);
-  PrintInfo info = InfoFor(Current());
-  info.objects = printObjects_.get();
-  info.rules = RulesFor(sheet_);
-  print_ = std::make_unique<PrintLayout>(*book_, Current(), sheet_, grid_, *text_, info);
+  prints_.clear();
   pageSizes_.clear();
-  for (size_t i = 0; i < print_->PageCount(); ++i)
-    pageSizes_.push_back({print_->Page(i).width, print_->Page(i).height});
+  auto add = [&](size_t i, PrintInfo info) {
+    PrintSheet ps;
+    Sheet& s = book_->GetSheet(i);
+    ps.objects = SheetObjects::Load(*book_, i);
+    info.objects = ps.objects.get();
+    info.rules = RulesFor(i);
+    if (i != sheet_) {
+      ps.grid = std::make_unique<Grid>();
+      ps.grid->Build(s, book_->GetStyles(), *measure_);
+    }
+    ps.layout = std::make_unique<PrintLayout>(*book_, s, i, ps.grid ? *ps.grid : grid_, *text_, info);
+    ps.first = pageSizes_.size();
+    for (size_t k = 0; k < ps.layout->PageCount(); ++k)
+      pageSizes_.push_back({ps.layout->Page(k).width, ps.layout->Page(k).height});
+    prints_.push_back(std::move(ps));
+  };
+  if (printWhat_ != 1) {
+    PrintInfo info = InfoFor(Current());
+    if (printWhat_ == 2) info.area = {Selected()};
+    add(sheet_, info);
+    return;
+  }
+  // The entire workbook, as one job: the first sheet's paper for all, and &N the pages of all (so
+  // laid out twice, first to count them).
+  uint32_t paper = 0;
+  int total = 0;
+  for (int pass = 0; pass < 2; ++pass) {
+    prints_.clear();
+    pageSizes_.clear();
+    for (size_t i = 0; i < book_->SheetCount(); ++i) {
+      if (!SheetShown(i)) continue;
+      Sheet& s = book_->GetSheet(i);
+      if (!s.Loaded()) book_->LoadSheet(i);
+      if (!paper) paper = s.Page().paperSize ? s.Page().paperSize : 1;
+      PrintInfo info = InfoFor(s);
+      info.jobPaper = paper;
+      info.jobPages = total;
+      add(i, info);
+    }
+    total = static_cast<int>(pageSizes_.size());
+  }
+}
+
+PrintLayout* WorkbookView::LayoutAt(int page, size_t& local) const {
+  for (size_t i = prints_.size(); i-- > 0;)
+    if (page >= 0 && static_cast<size_t>(page) >= prints_[i].first) {
+      local = static_cast<size_t>(page) - prints_[i].first;
+      return local < prints_[i].layout->PageCount() ? prints_[i].layout.get() : nullptr;
+    }
+  return nullptr;
 }
 
 void WorkbookView::ForEachSheetLayout(const std::function<void(PrintLayout&)>& fn) {
@@ -103,7 +147,7 @@ void WorkbookView::TogglePreview() {
 void WorkbookView::DrawPreview(Canvas& c, ID2D1DeviceContext* dc) {
   const Palette& p = theme::P();
   c.Fill(RectF(vp_), p.docBg);
-  if (!print_) return;
+  if (prints_.empty()) return;
   StepScroll();
   int first, last;
   VisiblePages(first, last);
@@ -120,7 +164,8 @@ void WorkbookView::DrawPreview(Canvas& c, ID2D1DeviceContext* dc) {
       draw::D2DPainter painter(dc);
       const float s = static_cast<float>((r.right - r.left) / std::max(1.0, pageSizes_[i].w));
       painter.Transform(draw::Matrix::Scale(s, s) * draw::Matrix::Translate(static_cast<float>(r.left), static_cast<float>(r.top)));
-      print_->Paint(painter, static_cast<size_t>(i));
+      size_t local = 0;
+      if (PrintLayout* layout = LayoutAt(i, local)) layout->Paint(painter, local);
     }
     c.PopClip();
   }
@@ -129,8 +174,8 @@ void WorkbookView::DrawPreview(Canvas& c, ID2D1DeviceContext* dc) {
 
 PrintOutcome WorkbookView::Print(HWND owner, const std::function<void(int, int)>& progress, std::wstring& message) {
   if (!Ready()) return PrintOutcome::Failed;
-  if (!preview_ || !print_) Paginate();
-  const int pageCount = static_cast<int>(print_->PageCount());
+  if (!preview_ || prints_.empty()) Paginate();
+  const int pageCount = static_cast<int>(pageSizes_.size());
   if (pageCount == 0) {
     message = L"This sheet has nothing to print.";
     return PrintOutcome::Failed;
@@ -216,8 +261,9 @@ PrintOutcome WorkbookView::PrintPages(const std::wstring& printer, const DEVMODE
   int done = 0;
   for (size_t i = 0; SUCCEEDED(hr) && i < pages.size(); ++i) {
     if (progress) progress(done, static_cast<int>(pages.size()));
-    const PrintPage& page = print_->Page(static_cast<size_t>(pages[i]));
-    hr = job.AddPage(page.width, page.height, [&](draw::Painter& painter) { PaintPage(painter, pages[i]); });
+    const fw::PageSizePt& page = pageSizes_[static_cast<size_t>(pages[i])];
+    hr = job.AddPage(static_cast<float>(page.w), static_cast<float>(page.h),
+                     [&](draw::Painter& painter) { PaintPage(painter, pages[i]); });
     if (SUCCEEDED(hr)) ++done;
   }
   if (SUCCEEDED(hr)) hr = job.Finish();
@@ -237,22 +283,22 @@ PrintOutcome WorkbookView::PrintPages(const std::wstring& printer, const DEVMODE
 }
 
 void WorkbookView::PaintPage(draw::Painter& p, int page) {
-  if (print_) print_->Paint(p, static_cast<size_t>(page));
+  size_t local = 0;
+  if (PrintLayout* layout = LayoutAt(page, local)) layout->Paint(p, local);
 }
 
 bool WorkbookView::ExportPdf(const std::wstring& path, std::wstring& message) {
   if (!Ready()) return false;
-  if (!print_ || !preview_) Paginate();
-  const size_t count = print_->PageCount();
+  if (prints_.empty() || !preview_) Paginate();
+  const size_t count = pageSizes_.size();
   if (count == 0) {
     message = L"This sheet has nothing to export.";
     return false;
   }
   draw::PdfDocument pdf;
-  for (size_t i = 0; i < count; ++i) {
-    const PrintPage& page = print_->Page(i);
-    pdf.AddPage(page.width, page.height, [&](draw::Painter& painter) { print_->Paint(painter, i); });
-  }
+  for (size_t i = 0; i < count; ++i)
+    pdf.AddPage(static_cast<float>(pageSizes_[i].w), static_cast<float>(pageSizes_[i].h),
+                [&](draw::Painter& painter) { PaintPage(painter, static_cast<int>(i)); });
   std::wstring title = Title();
   if (const size_t dot = title.rfind(L'.'); dot != std::wstring::npos && dot > 0) title.resize(dot);
   pdf.SetInfo(std::u16string(title.begin(), title.end()), u"");

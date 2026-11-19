@@ -295,7 +295,7 @@ class WorkbookView : public PagedView {
   float tabScroll_ = 0;
 
   // Mouse.
-  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag, Fill, Size, TabDrag };
+  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag, Fill, Size, TabDrag, Object };
   // A sheet tab dragged to move the sheet: where it would go (before that sheet; SheetCount() for
   // the end), shown once the mouse has moved a few pixels.
   struct TabDrag {
@@ -337,8 +337,17 @@ class WorkbookView : public PagedView {
 
   // Print preview and printing.
   bool preview_ = false;
-  std::unique_ptr<PrintLayout> print_;
-  std::unique_ptr<SheetObjects> printObjects_;  // print_'s, placed on the printed columns
+  // The preview's pages: a layout per sheet it prints (printWhat_: the active sheet, every sheet, or
+  // the selection), each with its objects (placed on its printed columns) and another sheet's grid.
+  struct PrintSheet {
+    std::unique_ptr<Grid> grid;
+    std::unique_ptr<SheetObjects> objects;
+    std::unique_ptr<PrintLayout> layout;
+    size_t first = 0;  // its first page among the preview's
+  };
+  std::vector<PrintSheet> prints_;
+  int printWhat_ = 0;  // 0 the active sheet, 1 the entire workbook, 2 the selection (s3-print)
+  PrintLayout* LayoutAt(int page, size_t& local) const;
   std::vector<fw::PageSizePt> pageSizes_;
 
   // Pictures, shapes, charts and notes (fwsheetobjects): each sheet's, read when first shown and
@@ -569,10 +578,65 @@ class WorkbookView : public PagedView {
   std::unique_ptr<PanelContent> linkPanel_;     // a LinkPanel
   std::unique_ptr<PanelContent> notePanel_;     // a NotePanel
   class CommentPanel;
+  // ---- Page setup (S3, s3-print: WorkbookPageSetup.cpp): the Page Setup panel, the print area and
+  // titles, page breaks, what print preview prints, Page Break Preview.
+  class PageSetupPanel;
+  std::unique_ptr<PanelContent> pageSetupPanel_;
+  bool PageSetupCommandState(int cmd, CommandState& s);
+  bool PageSetupCommand(int cmd);
+  void AddPageSetupTabItems(HMENU m);
+  void AddPageSetupCellItems(HMENU m);
+  edit::Result ApplyPageSetup(const std::function<void(PageSetup&, HeaderFooter&, bool&)>& change);
+  void AfterPageChange();  // the preview and Page Break Preview paginate again
+  void RefreshPreview();
+  edit::Result SetPrintArea(const std::vector<Range>& areas);  // empty: cleared
+  std::optional<std::pair<uint32_t, uint32_t>> TitleRows() const;
+  std::optional<std::pair<uint32_t, uint32_t>> TitleCols() const;
+  edit::Result SetPrintTitles(std::optional<std::pair<uint32_t, uint32_t>> rows, std::optional<std::pair<uint32_t, uint32_t>> cols);
+  bool BreakHere(bool& row, bool& col) const;  // manual breaks above and left of the active cell
+  edit::Result ChangeBreaks(int cmd);
+  bool BreakPreviewOn() const;
+  void TogglePageBreakPreview();
+  void DrawPageBreakPreview(gfx::Canvas& c);
+  struct BreakDrag {
+    bool rows = false;
+    uint32_t from = 0, to = 0;  // the row or column the break is before
+  };
+  std::optional<BreakDrag> breakDrag_;
+  std::unique_ptr<PrintSheet> breakPages_;  // Page Break Preview's pages (`first`: their sheet)
+  const PrintLayout* BreakPages();
+  bool BreakEdgeAt(float x, float y, bool& rows, uint32_t& at);
+  bool BreakDragStart(float x, float y);
+  bool BreakDragMove(int x, int y);
+  bool BreakDragEnd(int x, int y);
+  HCURSOR BreakCursor(float x, float y);  // null: no break there
+  bool PageScriptOp(const std::wstring& arg);  // pagesetup:
   std::unique_ptr<PanelContent> commentPanel_;  // a CommentPanel
   // The active cell's note (not a threaded comment), its text without the author's line.
   const CellNote* NoteHere(std::wstring* text = nullptr) const;
   bool ThreadHere() const;  // whether the active cell has a threaded comment
+  // ---- Charts and the objects in the sheet's drawing (S3, s3-charts; WorkbookCharts.cpp): Insert
+  // Chart, and an object selected, dragged to move or by a handle to resize, deleted.
+  struct ObjectDrag {
+    int handle = -1;         // -1 moves it; 0-7 a handle, clockwise from the top left
+    draw::Rect start, now;   // sheet points
+    draw::Point from;        // where the mouse went down (sheet points)
+    bool moved = false;
+  };
+  uint32_t object_ = 0;      // the selected object's shape id (0: none)
+  size_t objectSheet_ = 0;   // on this sheet
+  ObjectDrag objectDrag_;
+  bool ChartsCommandState(int cmd, CommandState& s);
+  bool ChartsCommand(int cmd);
+  void AddChartTools(ToolbarModel& m);
+  std::optional<SheetObjects::Object> SelectedObject() const;
+  std::optional<draw::Point> SheetPointAt(float x, float y) const;  // client to sheet points
+  edit::drawing::Place PlaceFor(const draw::Rect& r) const;
+  bool ObjectMouseDown(float x, float y);
+  void ObjectMouseMove(float x, float y, UINT mods);
+  void ObjectMouseUp();
+  bool ObjectKey(UINT vk, UINT mods);
+  void DrawObjectSelection(draw::Painter& painter, float scale, float mirrorX);
   void AddReviewCellItems(HMENU m);  // the cell menu's
   bool ReviewCommandState(int cmd, CommandState& s);
   bool ReviewCommand(int cmd);

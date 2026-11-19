@@ -332,6 +332,7 @@ std::string ViewsXml(const Sheet& s, const PartText& t, const std::string& p, bo
     const SheetView& m = model[i];
     pugi::xml_node v = i < nodes.size() ? nodes[i] : views.append_child((p + "sheetView").c_str());
     if (i == 0) SetAttr(v, "tabSelected", active ? "1" : "");
+    SetAttr(v, "view", m.view == ViewMode::PageBreakPreview ? "pageBreakPreview" : m.view == ViewMode::PageLayout ? "pageLayout" : "");
     SetAttr(v, "zoomScale", m.zoomScale != 100 ? std::to_string(m.zoomScale) : "");
     SetAttr(v, "topLeftCell", m.topLeft.row || m.topLeft.col ? CellName(m.topLeft.row, m.topLeft.col) : "");
     SetAttr(v, "workbookViewId", std::to_string(m.workbookViewId));
@@ -827,6 +828,7 @@ std::set<std::string> Reachable(const pkg::Package& pkg, const std::set<std::str
 
 void PutSheetElement(PartText& t, std::string_view local, const std::string& xml) { PutElement(t, local, xml); }
 std::string SheetPrefix(const PartText& t) { return PrefixOf(t.rootStart); }
+std::string SheetElement(const PartText& t, std::string_view local) { return std::string(FindElement(t, local)); }
 
 namespace {
 // Excel's extensions for x14 conditional formats and validations.

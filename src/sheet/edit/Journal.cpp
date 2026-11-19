@@ -476,6 +476,30 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = InsertChart(sheet, c);
         break;
       }
+      case JournalOp::MoveObject: {
+        const int sheet = f.Int();
+        const uint32_t id = f.U32();
+        drawing::Place p;
+        for (drawing::Marker* m : {&p.from, &p.to}) {
+          m->col = f.U32();
+          m->row = f.U32();
+          m->colOff = f.I();
+          m->rowOff = f.I();
+        }
+        p.x = f.I();
+        p.y = f.I();
+        p.cx = f.I();
+        p.cy = f.I();
+        if (f.Ok()) r = MoveObject(sheet, id, p);
+        break;
+      }
+      case JournalOp::DeleteObjects: {
+        const int sheet = f.Int();
+        std::vector<uint32_t> ids(std::min<size_t>(f.U32(), f.Left()));
+        for (uint32_t& id : ids) id = f.U32();
+        if (f.Ok()) r = DeleteObjects(sheet, ids);
+        break;
+      }
       case JournalOp::SetFilter: {
         const int sheet = f.Int();
         const std::optional<SheetFilter> filter = f.Filter();
@@ -534,6 +558,36 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = SetThread(sheet, cell, thread);
         break;
       }
+      case JournalOp::SetPageSetup: {
+        const int sheet = f.Int();
+        PageSetup p;
+        HeaderFooter h;
+        p.paperSize = f.U32(), p.paperWidth = f.S(), p.paperHeight = f.S(), p.scale = f.U32(), p.fitToWidth = f.U32();
+        p.fitToHeight = f.U32(), p.firstPageNumber = static_cast<int>(f.Int()), p.useFirstPageNumber = f.B();
+        p.orientation = static_cast<Orientation>(f.U32()), p.pageOrder = static_cast<PageOrder>(f.U32());
+        p.blackAndWhite = f.B(), p.draft = f.B(), p.usePrinterDefaults = f.B();
+        p.cellComments = static_cast<CellComments>(f.U32()), p.errors = static_cast<PrintErrors>(f.U32());
+        p.horizontalDpi = f.U32(), p.verticalDpi = f.U32(), p.copies = f.U32(), p.horizontalCentered = f.B();
+        p.verticalCentered = f.B(), p.headings = f.B(), p.gridLines = f.B(), p.gridLinesSet = f.B();
+        PageMargins& m = p.margins;
+        m.left = f.D(), m.right = f.D(), m.top = f.D(), m.bottom = f.D(), m.header = f.D(), m.footer = f.D();
+        h.differentOddEven = f.B(), h.differentFirst = f.B(), h.scaleWithDoc = f.B(), h.alignWithMargins = f.B();
+        h.oddHeader = f.S(), h.oddFooter = f.S(), h.evenHeader = f.S(), h.evenFooter = f.S(), h.firstHeader = f.S();
+        h.firstFooter = f.S();
+        const bool fit = f.B();
+        if (f.Ok()) r = SetPageSetup(sheet, p, h, fit);
+        break;
+      }
+      case JournalOp::SetPageBreaks: {
+        const int sheet = f.Int();
+        std::vector<PageBreak> lists[2];
+        for (auto& list : lists) {
+          list.resize(f.Count());
+          for (PageBreak& b : list) b.id = f.U32(), b.min = f.U32(), b.max = f.U32(), b.manual = f.B(), b.pivot = f.B();
+        }
+        if (f.Ok()) r = SetPageBreaks(sheet, lists[0], lists[1]);
+        break;
+      }
       case JournalOp::FreezePanes: {
         const int sheet = f.Int();
         const uint32_t rows = f.U32(), cols = f.U32();
@@ -557,6 +611,12 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         const int sheet = f.Int();
         const CellAddr topLeft = f.A();
         if (f.Ok()) SetTopLeft(sheet, topLeft);
+        break;
+      }
+      case JournalOp::SetViewMode: {
+        const int sheet = f.Int();
+        const uint32_t mode = f.U32();
+        if (f.Ok() && mode <= static_cast<uint32_t>(ViewMode::PageLayout)) SetViewMode(sheet, static_cast<ViewMode>(mode));
         break;
       }
       case JournalOp::SetZoom: {
