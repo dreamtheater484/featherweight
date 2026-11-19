@@ -1166,6 +1166,68 @@ TEST(sheet_drawing_objects) {
 
 // Insert > Chart (s3-charts): series guessed from the selection as Excel guesses them, written as
 // Excel writes a new chart, undone with its parts.
+// Move Chart > New sheet (s3-charts): the chart on a chart sheet of its own, written as Excel writes
+// one; undo puts it back on its sheet.
+TEST(sheet_move_chart_to_sheet) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"B1\" t=\"inlineStr\"><is><t>Sales</t></is></c></row>"
+                         "<row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>Jan</t></is></c><c r=\"B2\"><v>10</v></c></row>"
+                         "<row r=\"3\"><c r=\"A3\" t=\"inlineStr\"><is><t>Feb</t></is></c><c r=\"B3\"><v>12</v></c></row>"
+                         "</sheetData>",
+                         "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Editor::NewChart c;
+  c.data = Range{0, 0, 2, 1};  // A1:B3
+  c.at = CellAddr{4, 1};
+  CHECK(ed.InsertChart(0, c));
+  const std::vector<uint8_t> before = SaveBytes(*book, ed, "save-chart-before-move");
+  CHECK(!ed.MoveChartToSheet(0, 99));  // no such object
+  CHECK(ed.MoveChartToSheet(0, 2));
+  CHECK_EQ(book->SheetCount(), size_t(3));
+  if (book->SheetCount() != 3) return;
+  CHECK(book->GetSheet(0).Name() == "Chart1" && book->GetSheet(0).Kind() == SheetKind::Chartsheet);
+  CHECK_EQ(book->ActiveSheet(), size_t(0));
+  CHECK(ed.SheetDrawing(1, false).empty());  // the data sheet's only object went
+  CHECK(ed.PartBytes("/xl/chartsheets/sheet1.xml").find("<drawing r:id=\"rId1\"/></chartsheet>") != std::string::npos);
+  const std::string drawing = ed.PartBytes("/xl/drawings/drawing2.xml");  // named while the sheet's drawing1 was there
+  CHECK(drawing.find("<xdr:absoluteAnchor><xdr:pos x=\"0\" y=\"0\"/>") != std::string::npos);
+  CHECK(drawing.find("r:id=\"rId1\"") != std::string::npos && drawing.find("name=\"Chart 1\"") != std::string::npos);
+  CHECK(!ed.PartBytes("/xl/charts/chart1.xml").empty());
+
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-chart-sheet");
+  CheckClean(saved);
+  const std::string wb = PartText(saved, "/xl/workbook.xml");
+  CHECK(InOrder(wb, {"<sheet name=\"Chart1\" sheetId=\"3\" r:id=\"rId", "name=\"Sheet1\"", "name=\"Sheet2\""}));
+  CHECK(PartText(saved, "/xl/_rels/workbook.xml.rels").find("relationships/chartsheet\" Target=\"chartsheets/sheet1.xml\"") != std::string::npos);
+  if (auto again = OpenZip(saved)) {
+    CHECK(again->SheetCount() == 3 && again->GetSheet(0).Kind() == SheetKind::Chartsheet && again->GetSheet(0).Name() == "Chart1");
+  }
+  // Undo: back on its sheet, the chart sheet gone.
+  CHECK(ed.Undo(1));
+  CHECK_EQ(book->SheetCount(), size_t(2));
+  CHECK(!ed.SheetDrawing(0, false).empty() && ed.PartBytes("/xl/chartsheets/sheet1.xml").empty());
+  saved = SaveBytes(*book, ed, "save-chart-sheet-undone");
+  CheckClean(saved);
+  CHECK(PartText(saved, "/xl/workbook.xml").find("Chart1") == std::string::npos);
+  CHECK(PartText(saved, "/xl/drawings/drawing1.xml") == PartText(before, "/xl/drawings/drawing1.xml"));
+
+  // And back: Move Chart > Object in, after a save of the chart sheet.
+  CHECK(ed.Redo(1));
+  SaveBytes(*book, ed);
+  CHECK(!ed.MoveChartToObject(1, 0, CellAddr{1, 1}));  // not a chart sheet
+  CHECK(ed.MoveChartToObject(0, 1, CellAddr{5, 3}));
+  CHECK(book->SheetCount() == 2 && book->GetSheet(0).Kind() == SheetKind::Worksheet);
+  const std::string back = ed.PartBytes(ed.SheetDrawing(0, false));
+  CHECK(back.find("<xdr:from><xdr:col>3</xdr:col>") != std::string::npos && back.find("<c:chart ") != std::string::npos);
+  CHECK(ed.Undo(1));
+  CHECK(book->SheetCount() == 3 && book->GetSheet(0).Kind() == SheetKind::Chartsheet);
+  CHECK(ed.Redo(1));
+  saved = SaveBytes(*book, ed, "save-chart-sheet-back");  // a sheet removed: the save ends the undo history
+  CheckClean(saved);
+  CHECK(PartText(saved, "/xl/workbook.xml").find("Chart1") == std::string::npos);
+  CHECK(PartText(saved, "/xl/chartsheets/sheet1.xml").empty() && !PartText(saved, "/xl/charts/chart1.xml").empty());
+}
+
 TEST(sheet_insert_chart) {
   auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"B1\" t=\"inlineStr\"><is><t>Sales</t></is></c>"
                          "<c r=\"C1\" t=\"inlineStr\"><is><t>Costs</t></is></c></row>"

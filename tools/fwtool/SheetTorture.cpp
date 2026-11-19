@@ -603,6 +603,7 @@ class EditApiTarget : public SheetTarget {
       }
       case Op::Object: {
         if (e.arg == "delete") return done(ed_.DeleteObjects(s, {e.count}));
+        if (e.arg == "tosheet") return done(ed_.MoveChartToSheet(s, e.count));
         if (e.arg == "type-line" || e.arg == "type-bar" || e.arg == "title") {
           sh::edit::ChartEdit edit;
           if (e.arg == "title") edit.title = sh::edit::ChartText{true, "Torture"}, edit.legend = 'r', edit.labels = true;
@@ -1511,7 +1512,7 @@ class Generator {
 #else
       (void)book;
 #endif
-      static const char* kObjectEdits[] = {"delete", "delete", "move", "move", "move", "copy", "type-line", "type-bar", "title"};
+      static const char* kObjectEdits[] = {"delete", "delete", "move", "move", "move", "copy", "type-line", "type-bar", "title", "tosheet"};
       e.arg = rng_.Pick(kObjectEdits);
     } else if (roll < 17) {
       e.op = Op::PageSetup;

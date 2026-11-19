@@ -1333,7 +1333,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
         e = sheets.append_child((p + "sheet").c_str());
         e.append_attribute("name");
         e.append_attribute("sheetId").set_value(std::to_string(s.SheetId()).c_str());
-        e.append_attribute(idName.c_str()).set_value(relId.c_str());
+        e.append_attribute(idName.c_str()).set_value((relId.empty() ? s.RelId() : relId).c_str());
       }
       SetAttr(e, "name", s.Name());
       SetAttr(e, "state", s.State() == SheetState::Hidden ? "hidden" : s.State() == SheetState::VeryHidden ? "veryHidden" : "");

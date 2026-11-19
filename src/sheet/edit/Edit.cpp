@@ -328,15 +328,31 @@ struct Step {
   // Once the step is done (Settle), the content types and relationships it changed, entry by entry
   // (before, after), so that undo and redo leave alone what changed since: a save adds content
   // types and relationships of its own (shared strings, links, sheets).
+  // `beforeAt`/`afterAt`: the entry's place in its list, so that one put back goes where it was
+  // (the part's bytes as they were).
   struct TypeDiff {
     bool isDefault = false;
     std::string key;  // the part name, or a default's extension
     std::optional<std::string> before, after;
+    size_t beforeAt = 0, afterAt = 0;
   };
   struct RelDiff {
     std::string source, id;
     std::optional<pkg::Relationship> before, after;
+    size_t beforeAt = 0, afterAt = 0;
   };
+  // An entry back the other way in its list, in its place.
+  template <class List, class Same, class Make>
+  static void Put(List& list, Same same, bool now, Make make, size_t at) {
+    auto it = std::find_if(list.begin(), list.end(), same);
+    if (!now) {
+      if (it != list.end()) list.erase(it);
+    } else if (it != list.end()) {
+      *it = make();
+    } else {
+      list.insert(list.begin() + static_cast<std::ptrdiff_t>(std::min(at, list.size())), make());
+    }
+  }
   std::vector<TypeDiff> typeDiffs;
   std::vector<RelDiff> relDiffs;
   uint64_t serial = 0;
@@ -352,9 +368,9 @@ struct Step {
       for (bool isDefault : {false, true}) {
         const auto& was = isDefault ? types->defaults : types->overrides;
         const auto& is = isDefault ? now.defaults : now.overrides;
-        auto find = [&](const auto& list, const std::string& key) -> std::optional<std::string> {
-          for (const auto& [k, v] : list)
-            if (NameEqualsNoCase(k, key)) return v;
+        auto find = [&](const auto& list, const std::string& key, size_t& at) -> std::optional<std::string> {
+          for (at = 0; at < list.size(); ++at)
+            if (NameEqualsNoCase(list[at].first, key)) return list[at].second;
           return std::nullopt;
         };
         std::vector<std::string> keys;
@@ -363,7 +379,9 @@ struct Step {
         for (const std::string& k : keys) {
           if (std::any_of(typeDiffs.begin(), typeDiffs.end(), [&](const TypeDiff& d) { return d.isDefault == isDefault && NameEqualsNoCase(d.key, k); }))
             continue;
-          TypeDiff d{isDefault, k, find(was, k), find(is, k)};
+          TypeDiff d{isDefault, k, std::nullopt, std::nullopt};
+          d.before = find(was, k, d.beforeAt);
+          d.after = find(is, k, d.afterAt);
           if (d.before != d.after) typeDiffs.push_back(std::move(d));
         }
       }
@@ -382,8 +400,16 @@ struct Step {
       for (const std::string& id : ids) {
         if (std::any_of(relDiffs.begin(), relDiffs.end(), [&](const RelDiff& d) { return d.source == source && d.id == id; })) continue;
         RelDiff d{source, id, std::nullopt, std::nullopt};
-        if (const pkg::Relationship* r = set ? set->Find(id) : nullptr) d.before = *r;
-        if (const pkg::Relationship* r = now ? now->Find(id) : nullptr) d.after = *r;
+        auto place = [&](const pkg::RelationshipSet* s, std::optional<pkg::Relationship>& out, size_t& at) {
+          if (!s) return;
+          for (at = 0; at < s->items.size(); ++at)
+            if (s->items[at].id == id) {
+              out = s->items[at];
+              return;
+            }
+        };
+        place(set ? &*set : nullptr, d.before, d.beforeAt);
+        place(now, d.after, d.afterAt);
         if (d.before.has_value() != d.after.has_value() || (d.before && !same(*d.before, *d.after))) relDiffs.push_back(std::move(d));
       }
     }
@@ -406,10 +432,10 @@ struct Step {
       else set.source = source;
       for (RelDiff& d : relDiffs) {
         if (d.source != source) continue;
-        auto& items = set.items;
-        items.erase(std::remove_if(items.begin(), items.end(), [&](const pkg::Relationship& r) { return r.id == d.id; }), items.end());
-        if (d.before) items.push_back(*d.before);
+        Put(set.items, [&](const pkg::Relationship& r) { return r.id == d.id; }, d.before.has_value(),
+            [&] { return *d.before; }, d.beforeAt);
         std::swap(d.before, d.after);
+        std::swap(d.beforeAt, d.afterAt);
       }
       const std::string relsPart = set.relsPart;
       const bool empty = set.items.empty();
@@ -420,9 +446,11 @@ struct Step {
       pkg::ContentTypes t = package->Types();
       for (TypeDiff& d : typeDiffs) {
         auto& list = d.isDefault ? t.defaults : t.overrides;
-        list.erase(std::remove_if(list.begin(), list.end(), [&](const auto& x) { return NameEqualsNoCase(x.first, d.key); }), list.end());
-        if (d.before) list.emplace_back(d.key, *d.before);
+        using Entry = typename std::remove_reference_t<decltype(list)>::value_type;
+        Put(list, [&](const Entry& x) { return NameEqualsNoCase(x.first, d.key); }, d.before.has_value(),
+            [&] { return Entry(d.key, *d.before); }, d.beforeAt);
         std::swap(d.before, d.after);
+        std::swap(d.beforeAt, d.afterAt);
       }
       package->SetContentTypes(std::move(t));
     }
@@ -4092,6 +4120,123 @@ Result Editor::EditChart(int sheet, uint32_t id, const ChartEdit& e) {
       if (!WritePart(part, std::move(xml))) return Result::Fail(u"This chart can't be changed that way.");
       s_->Change(&book_.GetSheet(static_cast<size_t>(sheet)), kObjects, Range{});
       return Result{};
+    });
+  }());
+}
+
+Result Editor::MoveChartToSheet(int sheet, uint32_t id, std::string name) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::MoveChartToSheet, [&](JournalRecord& w) { w.I(sheet).U(id).S(name); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    const std::string chart = ChartPart(sheet, id);
+    if (chart.empty()) return Result::Fail(u"Only a chart can move to a chart sheet.");
+    // Its graphic frame, declaring the prefixes the drawing declares (CopyObject puts them on the
+    // anchor).
+    const std::string anchor = CopyObject(sheet, id).anchor;
+    const size_t nameEnd = anchor.find_first_of(" />", 1);
+    const size_t colon = anchor.find(':');
+    const std::string p = colon != std::string::npos && colon < nameEnd ? anchor.substr(1, colon) : std::string();
+    const size_t begin = anchor.find("<" + p + "graphicFrame");
+    const std::string close = "</" + p + "graphicFrame>";
+    const size_t end = begin == std::string::npos ? begin : anchor.find(close, begin);
+    if (end == std::string::npos) return Result::Fail(u"Only a chart can move to a chart sheet.");
+    std::string frame = anchor.substr(begin, end + close.size() - begin);
+    const std::vector<std::string> rels = drawing::RelIds(frame);
+    if (rels.size() != 1) return Result::Fail(u"This chart can't move to a chart sheet.");
+    std::string decls;
+    const std::string_view tag = std::string_view(anchor).substr(0, anchor.find('>'));
+    for (size_t at = tag.find(" xmlns"); at != std::string_view::npos; at = tag.find(" xmlns", at + 1)) {
+      const size_t q = tag.find('"', at), q2 = q == std::string_view::npos ? q : tag.find('"', q + 1);
+      if (q2 == std::string_view::npos) break;
+      decls += tag.substr(at, q2 + 1 - at);
+    }
+    frame.insert(1 + p.size() + std::string_view("graphicFrame").size(), decls);
+    if (name.empty())
+      for (size_t n = 1;; ++n) {
+        name = "Chart" + std::to_string(n);
+        if (book_.FindSheet(name) < 0) break;
+      }
+    if (std::u16string why = CheckSheetName(name); !why.empty()) return Result::Fail(why);
+    return Run(*this, u"Move Chart", [&]() -> Result {
+      State& st = *s_;
+      const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+      const std::string part = NewPartName("/xl/chartsheets/sheet", ".xml");
+      const std::string relId = AddPart(book_.WorkbookPart(), rel + "chartsheet", part,
+                                        "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml", std::string());
+      const std::string d = NewPartName("/xl/drawings/drawing", ".xml");
+      const std::string drawingId =
+          relId.empty() ? relId : AddPart(part, rel + "drawing", d, "application/vnd.openxmlformats-officedocument.drawing+xml", std::string());
+      const std::string chartId = drawingId.empty() ? drawingId : AddRelationship(d, rel + "chart", chart);
+      if (chartId.empty()) return Result::Fail(u"The chart sheet can't be added to this workbook.");
+      if (const size_t at = frame.find("=\"" + rels[0] + "\""); at != std::string::npos) frame.replace(at + 2, rels[0].size(), chartId);
+      // As Excel writes a chart sheet: the chart filling the page (its size as Excel saves one).
+      WritePart(d, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<xdr:wsDr xmlns:xdr=\""
+                   "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/"
+                   "drawingml/2006/main\"><xdr:absoluteAnchor><xdr:pos x=\"0\" y=\"0\"/><xdr:ext cx=\"8666922\" cy=\"6293304\"/>" +
+                       frame + "<xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>");
+      WritePart(part, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<chartsheet xmlns=\""
+                      "http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"" + std::string(kRelNs) +
+                          "\"><sheetPr/><sheetViews><sheetView workbookViewId=\"0\" zoomToFit=\"1\"/></sheetViews><pageMargins "
+                          "left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/><drawing r:id=\"" +
+                          drawingId + "\"/></chartsheet>");
+      // The sheet, before the chart's, and active (Excel's).
+      st.SaveBook(true, true);
+      uint32_t sheetId = 0;
+      for (size_t i = 0; i < book_.SheetCount(); ++i) sheetId = std::max(sheetId, A::SheetId(book_.GetSheet(i)));
+      auto made = std::make_unique<Sheet>(book_, name);
+      WorkbookLoader::SetSheetInfo(*made, SheetKind::Chartsheet, SheetState::Visible, sheetId + 1, {}, {});
+      WorkbookLoader::MarkLoaded(*made, true);
+      A::Part(*made) = part;
+      A::RelId(*made) = relId;
+      Sheet* added = made.get();
+      auto& list = A::Sheets(book_);
+      std::vector<int> remap(list.size());
+      for (size_t i = 0; i < list.size(); ++i) remap[i] = static_cast<int>(i) + (static_cast<int>(i) >= sheet ? 1 : 0);
+      list.insert(list.begin() + sheet, std::move(made));
+      st.RemapNameSheets(remap);
+      A::Active(book_) = static_cast<uint32_t>(sheet);
+      st.Save(*added);
+      st.Change(added, kSheets, Range{});
+      // Gone from its sheet as Delete takes it; the chart part stays (the chart sheet uses it).
+      return DeleteObjects(sheet + 1, {id});
+    });
+  }());
+}
+
+Result Editor::MoveChartToObject(int chartSheet, int toSheet, CellAddr at) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
+  if (Result no = guard.Check(toSheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::MoveChartToObject, [&](JournalRecord& w) { w.I(chartSheet).I(toSheet).A(at); });
+  return rec.Done([&]() -> Result {
+    const int n = static_cast<int>(book_.SheetCount());
+    if (chartSheet < 0 || chartSheet >= n || toSheet < 0 || toSheet >= n || toSheet == chartSheet) return NoSheet();
+    if (book_.GetSheet(static_cast<size_t>(chartSheet)).Kind() != SheetKind::Chartsheet)
+      return Result::Fail(u"This isn't a chart sheet.");
+    if (book_.GetSheet(static_cast<size_t>(toSheet)).Kind() != SheetKind::Worksheet)
+      return Result::Fail(u"A chart can go only on a worksheet.");
+    if (at.row >= kMaxRows || at.col >= kMaxCols) return BadRange();
+    std::string chart;
+    for (const drawing::Object& o : drawing::Objects(PartBytes(SheetDrawing(chartSheet, false))))
+      if (chart.empty()) chart = ChartPart(chartSheet, o.id);
+    if (chart.empty()) return Result::Fail(u"This chart sheet has no chart to move.");
+    if (!book_.LoadSheet(static_cast<size_t>(toSheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(toSheet));
+    if (s.PartName().empty() || !book_.GetPackage()->FindPart(s.PartName()))
+      return Result::Fail(u"Save the workbook as an Excel workbook first, then move the chart.");
+    return Run(*this, u"Move Chart", [&]() -> Result {
+      const std::string d = SheetDrawing(toSheet, true);
+      const std::string rel =
+          d.empty() ? d : AddRelationship(d, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart", chart);
+      const CellAddr to{std::min(at.row + 15, kMaxRows - 1), std::min(at.col + 8, kMaxCols - 1)};
+      if (rel.empty() || !AddAnchor(d, charts::ChartAnchor(at, to, rel, NextShapeId(d))))
+        return Result::Fail(u"The chart couldn't be added to this sheet.");
+      s_->Change(&s, kObjects, Range{at.row, at.col, to.row, to.col});
+      // The chart sheet goes; its chart part stays (the sheet's drawing uses it now).
+      return DeleteSheet(chartSheet);
     });
   }());
 }
