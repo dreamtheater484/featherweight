@@ -480,6 +480,10 @@ class WorkbookView : public PagedView {
   std::shared_ptr<PanelContent> rulesPanel_, validationPanel_, listPanel_;
   bool RulesCommand(int cmd);
   bool RulesCommandState(int cmd, CommandState& s);
+  // Pivot tables (WorkbookPivots.cpp; s4-pivot).
+  bool PivotsCommand(int cmd);
+  bool PivotsCommandState(int cmd, CommandState& s);
+  void RefreshPivotsOnOpen();  // as Excel, for a cache with refreshOnLoad: an undo step
   void RulesEdited(const std::vector<edit::Change>& changes);  // rules read again after an edit
   void ShowRulesPanel(bool manage);
   bool ApplyCfRules(const std::vector<data::CfRule>& rules, const char16_t* name);
