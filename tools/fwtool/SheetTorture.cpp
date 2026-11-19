@@ -2041,7 +2041,8 @@ bool ReadReproducer(const fs::path& repro, fs::path& file, uint64_t& seed, std::
     return false;
   }
   std::string line;
-  while (std::getline(in, line)) {
+  for (bool first = true; std::getline(in, line); first = false) {
+    if (first && line.starts_with("\xEF\xBB\xBF")) line.erase(0, 3);  // a UTF-8 BOM (PowerShell 5.1 writes one)
     if (!line.empty() && line.back() == '\r') line.pop_back();
     if (line.empty() || line[0] == '#') continue;
     if (line.starts_with("file: ")) file = fs::path(fw::Utf8ToWide(line.substr(6)));

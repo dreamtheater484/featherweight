@@ -535,6 +535,11 @@ std::vector<uint8_t> JournalBook() {
 void EditEverything(Workbook& book, Editor& ed) {
   CHECK(ed.SetCell(0, 0, 2, CellInput::Text("note & <more>")));
   CHECK(ed.SetCell(0, 3, 0, CellInput::Formula("SUM(A1:A3)")));
+  CellInput spill = CellInput::Formula("_xlfn.SEQUENCE(2)");  // a dynamic array: cm, xl/metadata.xml
+  spill.type = ValueType::Number, spill.number = 1;
+  spill.dynamic = true;
+  spill.arrayRange = Range{40, 0, 41, 0};
+  CHECK(ed.SetCell(0, 40, 0, spill));
   CHECK(ed.SetCells(0, {{CellAddr{4, 0}, CellInput::Number(1.5)}, {CellAddr{4, 1}, CellInput::Bool(true)},
                         {CellAddr{4, 2}, CellInput::Error(ErrorCode::NA)}}));
   Font bold = book.GetStyles().Fonts()[0];
@@ -957,6 +962,63 @@ TEST(sheet_edit_add_remove_part) {
   CHECK(ed.PartBytes(name) == xml && relTo() && p.ContentTypeOf(name) == type);
 }
 
+// Objects copied and pasted (s3-charts): a chart gets a part of its own, a picture is stored once,
+// a chart pasted into another workbook keeps its values but not its references; undone with the parts.
+TEST(sheet_copy_paste_object) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row><row r=\"2\"><c r=\"A2\"><v>2</v></c></row></sheetData>",
+                         "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Editor::NewChart c;
+  c.data = Range{0, 0, 1, 0};
+  CHECK(ed.InsertChart(0, c));
+  // A picture beside it.
+  static const unsigned char kPng[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+                                       0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+                                       0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+                                       0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+                                       0x42, 0x60, 0x82};
+  const std::string drawing = ed.SheetDrawing(0, false);
+  ed.BeginGroup(u"Insert Picture");
+  const std::string rel = ed.AddPart(drawing, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image", "/xl/media/image1.png",
+                                     "image/png", std::string(reinterpret_cast<const char*>(kPng), sizeof kPng));
+  CHECK(ed.AddAnchor(drawing,
+                     "<xdr:oneCellAnchor xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" "
+                     "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><xdr:from><xdr:col>9</xdr:col><xdr:colOff>0</xdr:colOff>"
+                     "<xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx=\"952500\" cy=\"952500\"/><xdr:pic><xdr:nvPicPr>"
+                     "<xdr:cNvPr id=\"3\" name=\"Picture 2\"/><xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr>"
+                     "<xdr:blipFill><a:blip xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:embed=\"" + rel +
+                     "\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"952500\" "
+                     "cy=\"952500\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>"));
+  ed.EndGroup();
+
+  const Editor::ObjectClip chart = ed.CopyObject(0, 2), picture = ed.CopyObject(0, 3);
+  CHECK(chart.parts.size() == 1 && chart.parts[0].name == "/xl/charts/chart1.xml" && picture.parts.size() == 1);
+  CHECK(ed.CopyObject(0, 9).anchor.empty());
+  edit::drawing::Place at;
+  at.from = {1, 20, 0, 0};
+  at.to = {9, 35, 0, 0};
+  at.cx = at.cy = 952500;
+  CHECK(ed.PasteObject(0, chart, at));
+  CHECK(!ed.PartBytes("/xl/charts/chart2.xml").empty() && ed.ChartPart(0, 4) == "/xl/charts/chart2.xml");
+  CHECK(ed.PasteObject(1, chart, at));  // another sheet: a drawing of its own
+  CHECK(ed.ChartPart(1, 2) == "/xl/charts/chart3.xml" && ed.SheetDrawing(1, false) == "/xl/drawings/drawing2.xml");
+  CHECK(ed.PasteObject(1, picture, at));
+  CHECK(ed.PartBytes("/xl/media/image2.png").empty());  // stored once
+  CHECK(ed.AnchorXml("/xl/drawings/drawing2.xml", 3).find("r:embed=\"rId2\"") != std::string::npos);
+  // From another workbook: its values, not its references.
+  Editor::ObjectClip other = chart;
+  other.book = nullptr;
+  CHECK(ed.PasteObject(0, other, at));
+  const std::string detached = ed.PartBytes("/xl/charts/chart4.xml");
+  CHECK(detached.find("<c:f>") == std::string::npos && detached.find("<c:numLit><c:formatCode>General</c:formatCode><c:ptCount val=\"2\"/>") != std::string::npos);
+
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-objects-pasted");
+  CheckClean(saved);
+  CHECK(ed.Undo(4));
+  CHECK(ed.PartBytes("/xl/charts/chart2.xml").empty() && ed.PartBytes("/xl/drawings/drawing2.xml").empty() && ed.SheetDrawing(1, false).empty());
+}
+
 // A chart edited (s3-charts): title, axis titles, legend, data labels, colors, type and Select Data,
 // each keeping what it doesn't change; undone to the bytes it had.
 TEST(sheet_edit_chart) {
@@ -1180,4 +1242,95 @@ TEST(sheet_insert_chart) {
   std::vector<uint8_t> undone = SaveBytes(*book, ed, "save-insert-chart-undone");
   CheckClean(undone);
   CHECK(PartText(undone, "/xl/worksheets/sheet1.xml").find("drawing") == std::string::npos);
+}
+
+TEST(sheet_save_typed_dynamic_array) {
+  // A typed formula that spills saves as Excel 365 writes a dynamic array: the cell's cm names a
+  // cellMetadata block whose <rc> picks an XLDAPR block with fDynamic="1", in xl/metadata.xml
+  // (added when the workbook has none, extended when it has one without it). Without cm, Excel
+  // opens it as a legacy {=...} array.
+  const std::string meta = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata";
+  const std::string metaType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml";
+  auto type = [](Editor& ed, uint32_t col) {
+    CellInput in = CellInput::Formula("_xlfn.SEQUENCE(3)");
+    in.type = ValueType::Number, in.number = 1;
+    in.dynamic = true;
+    in.arrayRange = Range{0, col, 2, col};
+    return ed.SetCell(0, 0, col, in);
+  };
+  auto dynamicAt = [](Workbook& book, uint32_t col) {
+    FormulaInfo f;
+    return book.GetSheet(0).GetFormula(0, col, f) && f.kind == FormulaKind::Array && f.dynamic;
+  };
+  const size_t npos = std::string::npos;
+  {
+    auto book = OpenParts({"<sheetData/>", "<sheetData/>"});
+    if (!book) return;
+    Editor ed(*book);
+    CHECK(type(ed, 0) && type(ed, 2));  // the second uses the same block
+    std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-dynamic-array");
+    CheckClean(saved);
+    const std::string m = PartText(saved, "/xl/metadata.xml");
+    CHECK(m.find("<metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" "
+                 "merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" "
+                 "coerce=\"1\" cellMeta=\"1\"/>") != npos &&
+          m.find("fDynamic=\"1\"") != npos &&
+          m.find("<cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata>") != npos);
+    CHECK(PartText(saved, "/[Content_Types].xml").find(metaType) != npos);
+    const std::string rels = PartText(saved, "/xl/_rels/workbook.xml.rels");
+    CHECK(rels.find(meta) != npos && rels.find("Target=\"metadata.xml\"") != npos);
+    const std::string sheet = PartText(saved, "/xl/worksheets/sheet1.xml");
+    CHECK(sheet.find("<c r=\"A1\" cm=\"1\">") != npos && sheet.find("<c r=\"C1\" cm=\"1\">") != npos);
+    auto back = OpenZip(saved);
+    CHECK(back && dynamicAt(*back, 0) && dynamicAt(*back, 2));
+    CHECK(ed.Undo() && ed.Undo());
+    CHECK(ed.PartBytes("/xl/metadata.xml").empty());
+    std::vector<uint8_t> none = SaveBytes(*book, ed);
+    CHECK(PartText(none, "/xl/metadata.xml").empty() && PartText(none, "/xl/worksheets/sheet1.xml").find("cm=") == npos);
+  }
+  {
+    // A metadata part without XLDAPR (one that declares rich values only): the type, the block and
+    // the cell metadata are added after what's there.
+    Parts parts = WorkbookParts({"<sheetData/>", "<sheetData/>"});
+    AddPart(parts, "xl/metadata.xml",
+            "<metadata xmlns=\"" + std::string(kMain) +
+                "\"><metadataTypes count=\"1\"><metadataType name=\"XLRICHVALUE\" minSupportedVersion=\"120000\" "
+                "copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" "
+                "clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\"/></metadataTypes></metadata>",
+            metaType, "xl/workbook.xml", "rM", meta, "metadata.xml");
+    auto book = OpenZip(test::MakeZip(parts));
+    if (!book) return;
+    Editor ed(*book);
+    CHECK(type(ed, 1));
+    std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-dynamic-array-meta");
+    CheckClean(saved);
+    const std::string m = PartText(saved, "/xl/metadata.xml");
+    const size_t rich = m.find("<metadataType name=\"XLRICHVALUE\""), type2 = m.find("<metadataType name=\"XLDAPR\""),
+                 dap = m.find("</metadataTypes><futureMetadata name=\"XLDAPR\" count=\"1\"><bk>"),
+                 cells = m.find("</futureMetadata><cellMetadata count=\"1\"><bk><rc t=\"2\" v=\"0\"/></bk></cellMetadata></metadata>");
+    CHECK(m.find("<metadataTypes count=\"2\">") != npos && rich < type2 && type2 < dap && dap < cells && cells != npos);
+    CHECK(PartText(saved, "/xl/worksheets/sheet1.xml").find("<c r=\"B1\" cm=\"1\">") != npos);
+    auto back = OpenZip(saved);
+    CHECK(back && dynamicAt(*back, 1));
+  }
+  {
+    // Excel's own: its block is used, the part stays as it was.
+    const std::string xml =
+        "<metadata xmlns=\"" + std::string(kMain) +
+        "\" xmlns:xda=\"http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray\"><metadataTypes count=\"1\">"
+        "<metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" "
+        "merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\" "
+        "cellMeta=\"1\"/></metadataTypes><futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext "
+        "uri=\"{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/>"
+        "</ext></extLst></bk></futureMetadata><cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata></metadata>";
+    Parts parts = WorkbookParts({"<sheetData/>", "<sheetData/>"});
+    AddPart(parts, "xl/metadata.xml", xml, metaType, "xl/workbook.xml", "rM", meta, "metadata.xml");
+    auto book = OpenZip(test::MakeZip(parts));
+    if (!book) return;
+    Editor ed(*book);
+    CHECK(type(ed, 0));
+    CHECK(ed.PartBytes("/xl/metadata.xml") == xml);
+    std::vector<uint8_t> saved = SaveBytes(*book, ed);
+    CHECK(PartText(saved, "/xl/worksheets/sheet1.xml").find("<c r=\"A1\" cm=\"1\">") != npos);
+  }
 }

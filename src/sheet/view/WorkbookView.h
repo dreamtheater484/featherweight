@@ -618,11 +618,13 @@ class WorkbookView : public PagedView {
   struct BreakDrag {
     bool rows = false;
     uint32_t from = 0, to = 0;  // the row or column the break is before
+    bool outer = false;         // the print area's edge: dragging it sets the print area
   };
   std::optional<BreakDrag> breakDrag_;
   std::unique_ptr<PrintSheet> breakPages_;  // Page Break Preview's pages (`first`: their sheet)
   const PrintLayout* BreakPages();
-  bool BreakEdgeAt(float x, float y, bool& rows, uint32_t& at);
+  std::optional<Range> PrintedArea();  // Page Break Preview's printed cells, when one area
+  bool BreakEdgeAt(float x, float y, bool& rows, uint32_t& at, bool& outer);
   bool BreakDragStart(float x, float y);
   bool BreakDragMove(int x, int y);
   bool BreakDragEnd(int x, int y);
@@ -649,11 +651,16 @@ class WorkbookView : public PagedView {
   std::optional<SheetObjects::Object> SelectedObject() const;
   std::optional<draw::Point> SheetPointAt(float x, float y) const;  // client to sheet points
   edit::drawing::Place PlaceFor(const draw::Rect& r) const;
-  bool ObjectMouseDown(float x, float y);
+  bool ObjectMouseDown(float x, float y, bool doubleClick);
   void ObjectMouseMove(float x, float y, UINT mods);
   void ObjectMouseUp();
   bool ObjectKey(UINT vk, UINT mods);
   void DrawObjectSelection(draw::Painter& painter, float scale, float mirrorX);
+  bool CopyObject(bool cut);  // the selected object onto the clipboard (false: none selected)
+  bool PasteObjectClip();     // an object copied, while the clipboard still holds it
+  class ChartPanel;
+  std::unique_ptr<PanelContent> chartPanel_;
+  void ShowChartPanel();
   void AddReviewCellItems(HMENU m);  // the cell menu's
   bool ReviewCommandState(int cmd, CommandState& s);
   bool ReviewCommand(int cmd);

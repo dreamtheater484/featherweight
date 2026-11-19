@@ -14,6 +14,7 @@
 
 #include "pkg/Formula.h"
 #include "pkg/OfficeCrypto.h"
+#include "pkg/XmlDom.h"
 #include "pkg/XmlWriter.h"
 #include "sheet/calc/Formula.h"
 #include "sheet/calc/Typing.h"
@@ -826,6 +827,28 @@ struct Editor::State {
     if (keep.size() != store.Attributes(sd.attrs).size()) sd.attrs = store.Intern(std::move(keep));
   }
 
+  // One side attribute of a stored cell set (cm for a dynamic array).
+  void SetSideAttr(SheetSave& sv, uint32_t row, uint32_t col, std::string_view name, std::string_view value) {
+    Sheet& s = *sv.sheet;
+    Loc l = Find(s, row, col);
+    if (l.block == kNone) return;
+    RowBlock& blk = Writable(sv, l.block);
+    auto it = std::lower_bound(blk.sides.begin(), blk.sides.end(), l.cell,
+                               [](const CellSide& x, uint32_t v) { return x.cell < v; });
+    if (it == blk.sides.end() || it->cell != l.cell) {
+      CellSide sd;
+      sd.cell = l.cell;
+      it = blk.sides.insert(it, sd);
+    }
+    auto& store = A::Store(s);
+    std::vector<pkg::XmlAttr> attrs;
+    if (it->attrs)
+      for (const auto& a : store.Attributes(it->attrs))
+        if (a.qname != name) attrs.push_back(a);
+    attrs.push_back({std::string(name), "", std::string(value)});
+    it->attrs = store.Intern(std::move(attrs));
+  }
+
   uint32_t SharedString(std::string_view text) {
     StringTable& t = b.Strings();
     for (; stringsIndexed < t.Size(); ++stringsIndexed)
@@ -1380,6 +1403,153 @@ static Result CheckInput(const CellInput& in) {
   return {};
 }
 
+namespace {
+
+// xl/metadata.xml with a cell metadata block that makes an array formula a dynamic array, as Excel
+// writes it: cellMetadata's <bk><rc t v/></bk> picks block v of futureMetadata "XLDAPR", whose
+// xda:dynamicArrayProperties has fDynamic="1"; t is XLDAPR's place among the metadataTypes. Blocks
+// are only added, so the cm numbers cells have keep their meaning. Empty `xml`: a new part. `cm`:
+// the block's number (from 1). False when `xml` isn't metadata.
+bool DynamicArrayBlock(std::string& xml, uint32_t& cm) {
+  if (xml.empty())
+    xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<metadata "
+          "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"/>";
+  pkg::XmlDom dom;
+  if (!dom.Parse(xml).Ok()) return false;
+  pugi::xml_node root = dom.Root();
+  if (pkg::LocalNameOf(root) != "metadata") return false;
+  const std::string_view qname = root.name();
+  const std::string p(qname.substr(0, qname.size() - pkg::LocalNameOf(root).size()));  // "x:" or ""
+  bool changed = false;
+  auto named = [](pugi::xml_node n, std::string_view local) { return n.type() == pugi::node_element && pkg::LocalNameOf(n) == local; };
+  auto add = [&](pugi::xml_node parent, std::string_view local) {
+    changed = true;
+    return parent.append_child((p + std::string(local)).c_str());
+  };
+  auto count = [](pugi::xml_node n) {
+    uint32_t k = 0;
+    for (pugi::xml_node c : n.children()) k += c.type() == pugi::node_element;
+    (n.attribute("count") ? n.attribute("count") : n.append_attribute("count")).set_value(k);
+  };
+  // A section where the schema puts it: after the last one that comes before it (or is one).
+  auto section = [&](std::string_view local) {
+    static constexpr std::string_view kOrder[] = {"metadataTypes", "metadataStrings", "mdxMetadata", "futureMetadata",
+                                                  "cellMetadata", "valueMetadata", "extLst"};
+    auto rank = [](std::string_view s) { return std::find(std::begin(kOrder), std::end(kOrder), s) - std::begin(kOrder); };
+    pugi::xml_node after;
+    for (pugi::xml_node c : root.children())
+      if (c.type() == pugi::node_element && rank(pkg::LocalNameOf(c)) <= rank(local)) after = c;
+    changed = true;
+    pugi::xml_node n = after ? root.insert_child_after(pugi::node_element, after) : root.prepend_child(pugi::node_element);
+    n.set_name((p + std::string(local)).c_str());
+    return n;
+  };
+  auto child = [&](std::string_view local, std::string_view name = {}) {
+    for (pugi::xml_node c : root.children())
+      if (named(c, local) && (name.empty() || name == c.attribute("name").value())) return c;
+    return pugi::xml_node();
+  };
+  // The type.
+  pugi::xml_node types = child("metadataTypes");
+  if (!types) types = section("metadataTypes");
+  uint32_t t = 0, k = 0;
+  for (pugi::xml_node c : types.children())
+    if (named(c, "metadataType") && (++k, std::string_view(c.attribute("name").value()) == "XLDAPR")) t = k;
+  if (!t) {
+    pugi::xml_node n = add(types, "metadataType");
+    n.append_attribute("name").set_value("XLDAPR");
+    n.append_attribute("minSupportedVersion").set_value("120000");
+    for (const char* a : {"copy", "pasteAll", "pasteValues", "merge", "splitFirst", "rowColShift", "clearFormats",
+                          "clearComments", "assign", "coerce", "cellMeta"})
+      n.append_attribute(a).set_value("1");
+    t = k + 1;
+    count(types);
+  }
+  // The block that says "dynamic".
+  pugi::xml_node future = child("futureMetadata", "XLDAPR");
+  if (!future) {
+    future = section("futureMetadata");
+    future.append_attribute("name").set_value("XLDAPR");
+  }
+  uint32_t v = UINT32_MAX, b = 0;
+  for (pugi::xml_node bk : future.children()) {
+    if (!named(bk, "bk")) continue;
+    for (pugi::xml_node lst : bk.children()) {
+      if (!named(lst, "extLst")) continue;
+      for (pugi::xml_node ext : lst.children())
+        for (pugi::xml_node prop : ext.children()) {
+          const std::string_view on = prop.attribute("fDynamic").value();
+          if (named(prop, "dynamicArrayProperties") && v == UINT32_MAX && (on == "1" || on == "true")) v = b;
+        }
+    }
+    ++b;
+  }
+  if (v == UINT32_MAX) {
+    pugi::xml_node ext = add(add(add(future, "bk"), "extLst"), "ext");
+    ext.append_attribute("uri").set_value("{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}");
+    pugi::xml_node prop = ext.append_child("xda:dynamicArrayProperties");
+    prop.append_attribute("xmlns:xda").set_value("http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray");
+    prop.append_attribute("fDynamic").set_value("1");
+    prop.append_attribute("fCollapsed").set_value("0");
+    v = b;
+    count(future);
+  }
+  // The cell metadata block: <rc t v/> alone.
+  pugi::xml_node cells = child("cellMetadata");
+  if (!cells) cells = section("cellMetadata");
+  cm = 0;
+  uint32_t n = 0;
+  for (pugi::xml_node bk : cells.children()) {
+    if (!named(bk, "bk")) continue;
+    ++n;
+    pugi::xml_node rc = bk.find_child([&](pugi::xml_node c) { return named(c, "rc"); });
+    if (rc && !rc.next_sibling() && rc.attribute("t").as_uint() == t && rc.attribute("v").as_uint(UINT32_MAX) == v) {
+      cm = n;
+      break;
+    }
+  }
+  if (!cm) {
+    pugi::xml_node rc = add(add(cells, "bk"), "rc");
+    rc.append_attribute("t").set_value(t);
+    rc.append_attribute("v").set_value(v);
+    cm = n + 1;
+    count(cells);
+  }
+  if (changed) xml = dom.Serialize();
+  return true;
+}
+
+// The cm that makes a cell's array formula a dynamic array in this workbook (DynamicArrayBlock),
+// adding xl/metadata.xml, or blocks to it, in the open group. Empty when it can't (no package).
+std::string DynamicArrayCm(Editor& ed, const Workbook& book) {
+  const pkg::Package* package = book.GetPackage();
+  const std::string& wb = book.WorkbookPart();
+  if (!package || wb.empty() || !package->FindPart(wb)) return {};
+  std::string part;
+  if (const pkg::RelationshipSet* rels = package->RelationshipsOf(wb))
+    for (const pkg::Relationship& r : rels->items)
+      if (!r.external && r.type.ends_with("/sheetMetadata") && package->FindPart(r.targetPart)) {
+        part = r.targetPart;
+        break;
+      }
+  std::string xml = part.empty() ? std::string() : ed.PartBytes(part);
+  const std::string before = xml;
+  uint32_t cm = 0;
+  if (!DynamicArrayBlock(xml, cm)) return {};
+  if (part.empty()) {
+    part = package->FindPart("/xl/metadata.xml") ? ed.NewPartName("/xl/metadata", ".xml") : "/xl/metadata.xml";
+    if (ed.AddPart(wb, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata", part,
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml", xml)
+            .empty())
+      return {};
+  } else if (xml != before && !ed.WritePart(part, xml)) {
+    return {};
+  }
+  return std::to_string(cm);
+}
+
+}  // namespace
+
 Result Editor::SetCell(int sheet, uint32_t row, uint32_t col, const CellInput& in) {
   return SetCells(sheet, {{CellAddr{row, col}, in}});
 }
@@ -1455,8 +1625,14 @@ Result Editor::SetCells(int sheet, const std::vector<std::pair<CellAddr, CellInp
       }
       Range touched{kMaxRows, kMaxCols, 0, 0};
       bool formulas = false;
+      // A dynamic array's cell names the cell metadata that makes it one (cm), as Excel's do:
+      // without it Excel opens the formula as a legacy {=...} array.
+      std::string cm;
+      if (std::any_of(cells.begin(), cells.end(), [](const auto& c) { return c.second.dynamic && !c.second.formula.empty(); }))
+        cm = DynamicArrayCm(*this, book_);
       for (const auto& [at, in] : cells) {
         if (!st.Put(sv, at.row, at.col, &in, false, in.style, why)) return Result::Fail(why);
+        if (in.dynamic && !in.formula.empty() && !cm.empty()) st.SetSideAttr(sv, at.row, at.col, "cm", cm);
         touched.firstRow = std::min(touched.firstRow, at.row);
         touched.firstCol = std::min(touched.firstCol, at.col);
         touched.lastRow = std::max(touched.lastRow, at.row);
@@ -3608,6 +3784,180 @@ Result Editor::MoveObject(int sheet, uint32_t id, const drawing::Place& p) {
   }());
 }
 
+Editor::ObjectClip Editor::CopyObject(int sheet, uint32_t id) const {
+  ObjectClip clip;
+  const pkg::Package* package = book_.GetPackage();
+  if (!package || sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return clip;
+  const std::string sheetPart = book_.GetSheet(static_cast<size_t>(sheet)).PartName();
+  const pkg::RelationshipSet* rels = sheetPart.empty() ? nullptr : package->RelationshipsOf(sheetPart);
+  std::string drawingPart;
+  for (size_t i = 0; rels && i < rels->items.size() && clip.anchor.empty(); ++i)
+    if (!rels->items[i].external && EndsWith(rels->items[i].type, "/drawing")) {
+      clip.anchor = AnchorXml(rels->items[i].targetPart, id);
+      drawingPart = rels->items[i].targetPart;
+    }
+  if (clip.anchor.empty()) return clip;
+  clip.book = &book_;
+  // The prefixes the drawing declares on its root, on the anchor itself.
+  const std::string xml = PartBytes(drawingPart);
+  const std::vector<drawing::Object> objects = drawing::Objects(xml);
+  if (!objects.empty()) {
+    const size_t rootAt = xml.rfind('<', objects[0].begin - 1);
+    const std::string_view rootTag = std::string_view(xml).substr(rootAt, xml.find('>', rootAt) - rootAt);
+    const size_t tagEnd = clip.anchor.find_first_of(" />");
+    std::string decls;
+    for (size_t at = rootTag.find(" xmlns"); at != std::string_view::npos; at = rootTag.find(" xmlns", at + 1)) {
+      const size_t eq = rootTag.find('=', at), q = eq == std::string_view::npos ? eq : rootTag.find_first_of("\"'", eq);
+      const size_t qe = q == std::string_view::npos ? q : rootTag.find(rootTag[q], q + 1);
+      if (qe == std::string_view::npos) break;
+      const std::string name(rootTag.substr(at + 1, eq - at - 1));
+      if (clip.anchor.substr(0, clip.anchor.find('>')).find(" " + name + "=") == std::string::npos)
+        decls += " " + std::string(rootTag.substr(at + 1, qe - at));
+    }
+    if (tagEnd != std::string::npos) clip.anchor.insert(tagEnd, decls);
+  }
+  // Its parts, and theirs.
+  auto gather = [&](auto&& self, const std::string& source, const std::vector<std::string>& ids, std::vector<ObjectClip::Part>& out,
+                    int depth) -> void {
+    const pkg::RelationshipSet* set = depth > 4 ? nullptr : package->RelationshipsOf(source);
+    for (size_t i = 0; set && i < set->items.size(); ++i) {
+      const pkg::Relationship& r = set->items[i];
+      if (std::find(ids.begin(), ids.end(), r.id) == ids.end()) continue;
+      ObjectClip::Part p;
+      p.rel = r.id;
+      p.type = r.type;
+      p.external = r.external;
+      if (r.external) {
+        p.target = r.target;
+      } else {
+        p.name = r.targetPart;
+        p.contentType = std::string(package->ContentTypeOf(r.targetPart));
+        p.bytes = PartBytes(r.targetPart);
+        std::vector<std::string> own;
+        if (const pkg::RelationshipSet* o = package->RelationshipsOf(r.targetPart))
+          for (const pkg::Relationship& x : o->items) own.push_back(x.id);
+        self(self, r.targetPart, own, p.parts, depth + 1);
+      }
+      out.push_back(std::move(p));
+    }
+  };
+  gather(gather, drawingPart, drawing::RelIds(clip.anchor), clip.parts, 0);
+  return clip;
+}
+
+Result Editor::PasteObject(int sheet, const ObjectClip& clip, const drawing::Place& p) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::PasteObject, [&](JournalRecord& w) {
+    w.I(sheet).S(clip.anchor).B(clip.book == &book_);
+    auto parts = [&](auto&& self, const std::vector<ObjectClip::Part>& v) -> void {
+      w.U(v.size());
+      for (const ObjectClip::Part& x : v) {
+        w.S(x.rel).S(x.type).S(x.name).S(x.contentType).S(x.bytes).B(x.external).S(x.target);
+        self(self, x.parts);
+      }
+    };
+    parts(parts, clip.parts);
+    for (const drawing::Marker* m : {&p.from, &p.to}) w.U(m->col).U(m->row).I(m->colOff).I(m->rowOff);
+    w.I(p.x).I(p.y).I(p.cx).I(p.cy);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    pkg::Package* package = book_.GetPackage();
+    if (!package || s.PartName().empty() || !package->FindPart(s.PartName()))
+      return Result::Fail(u"Save the workbook as an Excel workbook first, then paste the object.");
+    std::string anchor = clip.anchor.empty() ? std::string() : drawing::Placed(clip.anchor, p);
+    if (anchor.empty()) return Result::Fail(u"This object can't be pasted here.");
+    return Run(*this, u"Paste", [&]() -> Result {
+      State& st = *s_;
+      const std::string d = SheetDrawing(sheet, true);
+      if (d.empty()) return Result::Fail(u"The object couldn't be added to this sheet.");
+      const bool same = clip.book == &book_;
+      // Relationship ids in `xml` from the old ones to the new (all at once: they may swap).
+      auto renumber = [](std::string& xml, const std::vector<std::pair<std::string, std::string>>& ids) {
+        for (size_t i = 0; i < ids.size(); ++i) {
+          const std::string from = "=\"" + ids[i].first + "\"", mark = "=\"\x01" + std::to_string(i) + "\x01\"";
+          for (size_t at = xml.find(from); at != std::string::npos; at = xml.find(from, at + mark.size())) xml.replace(at, from.size(), mark);
+        }
+        for (size_t i = 0; i < ids.size(); ++i) {
+          const std::string mark = "=\"\x01" + std::to_string(i) + "\x01\"", to = "=\"" + ids[i].second + "\"";
+          for (size_t at = xml.find(mark); at != std::string::npos; at = xml.find(mark, at + to.size())) xml.replace(at, mark.size(), to);
+        }
+      };
+      auto add = [&](auto&& self, const std::string& source, const ObjectClip::Part& part, int depth) -> std::string {
+        if (part.external) {
+          st.KeepRels(source);
+          pkg::RelationshipSet set;
+          if (const pkg::RelationshipSet* r = package->RelationshipsOf(source)) set = *r;
+          else set.source = source;
+          std::string id;
+          for (size_t n = set.items.size() + 1;; ++n) {
+            id = "rId" + std::to_string(n);
+            if (std::none_of(set.items.begin(), set.items.end(), [&](const pkg::Relationship& x) { return x.id == id; })) break;
+          }
+          pkg::Relationship rel;
+          rel.id = id;
+          rel.type = part.type;
+          rel.target = part.target;
+          rel.external = true;
+          set.items.push_back(std::move(rel));
+          package->SetRelationships(std::move(set));
+          return id;
+        }
+        std::string bytes = part.bytes;
+        if (!same && part.contentType == "application/vnd.openxmlformats-officedocument.drawingml.chart+xml") bytes = charts::Detached(bytes);
+        // A picture this workbook has stored already: used again.
+        if (part.contentType.rfind("image/", 0) == 0 && part.parts.empty())
+          for (const pkg::Part& x : package->Parts())
+            if (!x.deleted && package->ContentTypeOf(x.name) == part.contentType && PartBytes(x.name) == bytes)
+              return AddRelationship(source, part.type, x.name);
+        // Otherwise a new part, numbered as the old one's kind.
+        const size_t slash = part.name.rfind('/'), dot = part.name.rfind('.');
+        size_t digits = dot == std::string::npos || dot < slash ? part.name.size() : dot;
+        while (digits > slash + 1 && std::isdigit(static_cast<unsigned char>(part.name[digits - 1]))) --digits;
+        const std::string ext = dot == std::string::npos || dot < slash ? std::string() : part.name.substr(dot);
+        const std::string name = NewPartName(part.name.substr(0, digits), ext);
+        const std::string id = AddPart(source, part.type, name, part.contentType, bytes);
+        if (id.empty() || depth > 4) return id;
+        std::vector<std::pair<std::string, std::string>> ids;
+        for (const ObjectClip::Part& c : part.parts) ids.push_back({c.rel, self(self, name, c, depth + 1)});
+        std::string now = bytes;
+        renumber(now, ids);
+        if (now != bytes) WritePart(name, std::move(now));
+        return id;
+      };
+      std::vector<std::pair<std::string, std::string>> ids;
+      for (const ObjectClip::Part& c : clip.parts) {
+        const std::string id = add(add, d, c, 0);
+        if (id.empty()) return Result::Fail(u"The object couldn't be added to this sheet.");
+        ids.push_back({c.rel, id});
+      }
+      renumber(anchor, ids);
+      // A shape id the drawing doesn't use, in its first cNvPr.
+      if (const size_t at = anchor.find("cNvPr"); at != std::string::npos) {
+        const size_t q = anchor.find(" id=\"", at), close = anchor.find('>', at);
+        const size_t e = q == std::string::npos ? q : anchor.find('"', q + 5);
+        if (q != std::string::npos && q < close && e != std::string::npos) {
+          const uint32_t shape = NextShapeId(d);
+          anchor.replace(q + 5, e - q - 5, std::to_string(shape));
+          // Its name numbered anew as Excel numbers a copy ("Chart 1" pasted: "Chart 2").
+          const size_t n = anchor.find(" name=\"", at), ne = n == std::string::npos ? n : anchor.find('"', n + 7);
+          if (n != std::string::npos && ne != std::string::npos && n < anchor.find('>', at)) {
+            size_t digits = ne;
+            while (digits > n + 7 && std::isdigit(static_cast<unsigned char>(anchor[digits - 1]))) --digits;
+            if (digits < ne && digits > n + 8 && anchor[digits - 1] == ' ') anchor.replace(digits, ne - digits, std::to_string(shape - 1));
+          }
+        }
+      }
+      if (!AddAnchor(d, anchor)) return Result::Fail(u"The object couldn't be added to this sheet.");
+      st.Change(&s, kObjects, Range{p.from.row, p.from.col, p.to.row, p.to.col});
+      return Result{};
+    });
+  }());
+}
+
 std::string Editor::ChartPart(int sheet, uint32_t id) const {
   const pkg::Package* package = book_.GetPackage();
   if (!package || sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return {};
@@ -5244,7 +5594,7 @@ Result Editor::SetNote(int sheet, CellAddr cell, const std::optional<Note>& note
 
 // ---- Page setup
 
-Result Editor::SetPageSetup(int sheet, const PageSetup& page, const HeaderFooter& hf, bool fitToPage) {
+Result Editor::SetPageSetup(int sheet, PageSetup page, const HeaderFooter& hf, bool fitToPage) {
   Rec rec(*this, JournalOp::SetPageSetup, [&](JournalRecord& w) {
     w.I(sheet).U(page.paperSize).S(page.paperWidth).S(page.paperHeight).U(page.scale).U(page.fitToWidth);
     w.U(page.fitToHeight).I(page.firstPageNumber).B(page.useFirstPageNumber).U(static_cast<uint8_t>(page.orientation));
@@ -5261,7 +5611,18 @@ Result Editor::SetPageSetup(int sheet, const PageSetup& page, const HeaderFooter
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
     if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
     Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
-    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"A chart sheet's page setup can't be changed yet.");
+    const bool chart = s.Kind() == SheetKind::Chartsheet;
+    if (!chart && s.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet's page setup can't be changed.");
+    if (chart && A::Text(s).rootStart.empty()) return Result::Fail(u"This chart sheet couldn't be read.");
+    // A chart sheet prints its chart on one page: no scaling, page order, gridlines or headings
+    // (its part has no place for them).
+    if (chart) {
+      const PageSetup none;
+      page.scale = none.scale, page.fitToWidth = none.fitToWidth, page.fitToHeight = none.fitToHeight;
+      page.pageOrder = none.pageOrder, page.cellComments = none.cellComments, page.errors = none.errors;
+      page.horizontalCentered = page.verticalCentered = page.headings = page.gridLines = page.gridLinesSet = false;
+      fitToPage = false;
+    }
     // Excel's limits (its Page Setup refuses the rest).
     if (page.scale < 10 || page.scale > 400) return Result::Fail(u"The scale must be between 10 and 400 percent.");
     if (page.fitToWidth > 32767 || page.fitToHeight > 32767) return Result::Fail(u"Fit to: at most 32,767 pages.");
@@ -5279,11 +5640,11 @@ Result Editor::SetPageSetup(int sheet, const PageSetup& page, const HeaderFooter
     detail::PartText& t = A::Text(s);
     const std::string p = xlsx::SheetPrefix(t);
     const std::pair<const char*, std::string> parts[] = {
-        {"printOptions", pagexml::PrintOptions(page, xlsx::SheetElement(t, "printOptions"), p)},
         {"pageMargins", pagexml::Margins(m, p)},
         {"pageSetup", pagexml::Setup(page, xlsx::SheetElement(t, "pageSetup"), p)},
         {"headerFooter", pagexml::HeadersFooters(hf, xlsx::SheetElement(t, "headerFooter"), p)},
-        {"sheetPr", pagexml::SheetPrFit(xlsx::SheetElement(t, "sheetPr"), fitToPage, p)}};
+        {"printOptions", chart ? std::string() : pagexml::PrintOptions(page, xlsx::SheetElement(t, "printOptions"), p)},
+        {"sheetPr", chart ? xlsx::SheetElement(t, "sheetPr") : pagexml::SheetPrFit(xlsx::SheetElement(t, "sheetPr"), fitToPage, p)}};
     bool same = s.Props().fitToPage == fitToPage;
     for (const auto& [local, xml] : parts) same = same && xml == xlsx::SheetElement(t, local);
     if (same) return Result{};

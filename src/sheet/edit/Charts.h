@@ -38,6 +38,8 @@ struct ChartInfo {
   char legend = 0;                  // 'b', 'r', 't', 'l' or 0: none
   bool labels = false;              // data labels showing values
   std::vector<ChartSeries> series;
+  std::vector<uint32_t> points;     // each series' number of values (as cached)
+  std::vector<std::string> names;   // each series' name as it shows (its cache or its text)
 };
 // A series' color (or one data point's, a pie's slice), 0xRRGGBB.
 struct ChartColor {
@@ -79,6 +81,11 @@ bool RefreshCaches(const Workbook& book, std::string& xml);
 // out when `visibleOnly`. False when it isn't one loaded sheet's row or column.
 bool CachePoints(const Workbook& book, std::string_view formula, bool visibleOnly, std::vector<refs::CachePoint>& out);
 
+// The chart with its references dropped and its values kept (numLit and strLit): a chart pasted
+// into another workbook, whose cells these aren't.
+std::string Detached(std::string_view xml);
+// The series Excel guesses for a range of sheet `s` (as for a new chart), as Select Data lists them.
+std::vector<ChartSeries> SeriesFor(const Sheet& s, const Range& data);
 // A chart part's settings.
 ChartInfo Info(std::string_view xml);
 // The chart part with the edit made: what the edit doesn't change stays as it was (a new type or

@@ -420,6 +420,8 @@ class Sheet {
   // Sets a cell's value, keeping its format and formula: recalculated results (marked computed),
   // CSV values. Strings are copied into the sheet.
   void SetValue(uint32_t row, uint32_t col, const Value& v);
+  // A dynamic array's formula at (row, col) spills over `ref` now (recalculated, as SetValue).
+  void SetSpillRef(uint32_t row, uint32_t col, const Range& ref);
 
   // Memory the cells use (blocks, formulas, text), for the budgets.
   size_t ModelBytes() const;

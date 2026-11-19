@@ -317,7 +317,7 @@ void PrintLayout::Paginate() {
   // A chart sheet prints its chart on one page.
   if (info_.objects && info_.objects->IsChartSheet()) {
     // Landscape, unless the sheet says otherwise.
-    if (paperW_ < paperH_ && sheet_.KeptXml().find("orientation=\"portrait\"") == std::string::npos)
+    if (paperW_ < paperH_ && ps.orientation != Orientation::Portrait)
       std::swap(paperW_, paperH_);
     PrintPage p;
     p.width = paperW_;
@@ -592,15 +592,16 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   const float availH = paperH_ - static_cast<float>((m.top + m.bottom) * 72);
   if (page.chart) {
     if (info_.objects) {
-      // At its saved size from the top left margin, as Excel prints it (smaller to fit the page).
+      // At its saved size from the top left margin, cut off at the margins, as Excel prints it (its
+      // chart size "as on screen": a page set up smaller than the chart doesn't shrink it; measured,
+      // s3-print).
       float w = availW, h = availH;
       const draw::Size saved = info_.objects->ChartSheetSize();
-      if (saved.width > 1 && saved.height > 1) {
-        const float k = std::min({1.f, availW / saved.width, availH / saved.height});
-        w = saved.width * k;
-        h = saved.height * k;
-      }
+      if (saved.width > 1 && saved.height > 1) w = saved.width, h = saved.height;
+      p.Save();
+      p.ClipRect({left, top, left + availW, top + availH});
       info_.objects->DrawChartSheet(p, {left, top, left + w, top + h});
+      p.Restore();
     }
     PaintHeaderFooter(p, page, true);
     PaintHeaderFooter(p, page, false);
