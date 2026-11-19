@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -9,6 +10,10 @@
 #include <utility>
 #include <vector>
 
+#include "sheet/edit/Charts.h"
+#include "sheet/data/Shapes.h"
+#include "sheet/edit/Drawing.h"
+#include "sheet/edit/Protection.h"
 #include "sheet/model/Workbook.h"
 
 // Editing a workbook (plan §4.3 rules 4 and 5, §7.3; S2). Headless: no window, no recalculation.
@@ -44,10 +49,12 @@ enum ChangeFlag : uint32_t {
   kMerges = 1u << 5,      // merged ranges inside `cells`
   kShift = 1u << 6,       // cells moved: rows, columns or cells inserted or deleted (`shift`)
   kSheets = 1u << 7,      // sheets added, deleted, moved or renamed: sheet indexes may differ now
-  kSheetProps = 1u << 8,  // tab color, visibility, frozen panes
+  kSheetProps = 1u << 8,  // tab color, visibility, frozen panes, protection (sheet -1: the workbook's)
   kNames = 1u << 9,       // defined names
   kView = 1u << 10,       // selection, active sheet, top-left cell, zoom (not undo steps)
   kObjects = 1u << 11,    // the sheet's notes, links or drawings moved (a sort): load them again
+  kRules = 1u << 12,      // the sheet's conditional formats or validations changed: read them again
+  kTables = 1u << 13,     // a table added, removed, resized or renamed: structured references' areas differ
 };
 
 // Cells inserted or deleted (kShift): along `axis`, `count` rows or columns at `at` (> 0 inserted
@@ -88,6 +95,7 @@ struct CellInput {
   std::string text;                   // a String value
   std::string formula;                // empty: no formula
   bool array = false;                 // a Ctrl+Shift+Enter formula over `arrayRange` (anchor: the cell)
+  bool dynamic = false;               // a dynamic array (Excel 365's): spills over `arrayRange` now
   Range arrayRange;
   std::optional<uint32_t> style;      // a new format (a CellXfs() index); nullopt keeps the cell's
 
@@ -151,6 +159,7 @@ class Editor {
   uint32_t AddFill(const Fill& fill);
   uint32_t AddBorder(const Border& border);
   uint32_t AddNumFmt(std::string_view code);  // a custom format's id (164 on), or the built-in id
+  uint32_t AddDxf(const Dxf& dxf);  // a differential format (conditional formats): its dxfs index
 
   // ---- Rows and columns. first..last, both included.
   Result SetRowHeight(int sheet, uint32_t first, uint32_t last, double points);  // 0: the default
@@ -216,15 +225,189 @@ class Editor {
   // it (autoFilter, sheetPr filterMode while a column filters, the hidden name
   // _xlnm._FilterDatabase). The rows it hides are the caller's (HideRows, in the same group).
   Result SetFilter(int sheet, const std::optional<SheetFilter>& filter);
+  // The sheet's conditional formats or validations, as XML in Excel's form (sheet/data/Rules builds
+  // it): `xml` every top-level conditionalFormatting element (or the dataValidations element), `ext`
+  // the content of Excel's x14 extension for them; empty removes them. The rest of the part is kept.
+  enum class RuleKind : uint8_t { ConditionalFormats, Validations };
+  Result SetSheetRules(int sheet, RuleKind kind, const std::string& xml, const std::string& ext, std::u16string stepName);
+  // ---- Tables (Insert > Table, Ctrl+T; s3-data). AddTable: `t` over its ref, its id, name and part
+  // chosen when not given (unique in the workbook, Excel's "TableN"), written as Excel writes it and
+  // listed in the sheet's tableParts; the header cells are the caller's, in the same group. SetTable:
+  // the sheet's table `index` changed to `t` (name, size, header and total rows, filter buttons,
+  // style and its options, columns), its part updated with the rest kept. RemoveTable: Convert to
+  // Range (the cells stay).
+  Result AddTable(int sheet, Table t);
+  Result SetTable(int sheet, size_t index, const Table& t);
+  Result RemoveTable(int sheet, size_t index);
+  // The criteria of table `index`'s filter buttons (its autoFilter; `f.ref` is the table's, without
+  // the total row). The rows it hides are the caller's (HideRows), in the same group.
+  Result SetTableFilter(int sheet, size_t index, const SheetFilter& f);
+
+  // ---- Pictures and shapes (Insert > Pictures, Shapes; s3-data). Their XML: sheet/data/Shapes.h;
+  // placed as drawing::Placed places them. Refused on a protected sheet without "Edit objects", in a
+  // workbook without a package (CSV) or on a sheet not saved yet.
+  // A picture (PNG, JPEG, GIF or BMP, the type read from its bytes) as Excel inserts it: moves but
+  // doesn't size with cells, its aspect ratio locked, with its alt text. Stored once: a picture the
+  // package has already with the same bytes is used again. `*id` gets its shape id.
+  Result InsertPicture(int sheet, const std::string& bytes, const drawing::Place& place, const std::string& altText,
+                       uint32_t* id = nullptr);
+  // A shape as Excel inserts it (data::ShapeAnchor), with `text` in it.
+  Result InsertShape(int sheet, data::ShapeKind kind, const drawing::Place& place, const std::string& text,
+                     uint32_t* id = nullptr);
+  // Object `id`'s bytes replaced by `xml` (its fill, outline, text or alt text: data::FormatObject),
+  // which must read and keep the object's id; the rest of the drawing as it is.
+  Result SetObjectXml(int sheet, uint32_t id, const std::string& xml, std::u16string stepName);
+
+  // ---- Package parts, for edit operations (charts, pictures, notes, comments, tables...): call
+  // them inside the operation's group (Run, or BeginGroup and EndGroup); undo and redo take them
+  // back with its step. False or empty when they can't: no group open, a workbook without a
+  // package (opened from CSV, never saved as .xlsx), no such part.
+  // A new part with its content type, and a relationship of type `relType` to it from `source`
+  // ("/" the package, else a part: a sheet's PartName(), a drawing...): the relationship's id.
+  std::string AddPart(std::string_view source, std::string_view relType, std::string_view name,
+                      std::string_view contentType, std::string bytes);
+  // A part that exists written anew.
+  // A relationship from `source` to a part that exists already (a picture stored once, used
+  // again); returns its id, empty when it can't.
+  std::string AddRelationship(std::string_view source, std::string_view relType, std::string_view target);
+  bool WritePart(std::string_view name, std::string bytes);
+  // A part gone, with every relationship to it, its content type override and its own
+  // relationships (what those point to is the caller's to remove).
+  bool RemovePart(std::string_view name);
+  // The first name "<stem><n><ext>" no part has, n from 1: NewPartName("/xl/charts/chart", ".xml").
+  std::string NewPartName(std::string_view stem, std::string_view ext) const;
+  std::string PartBytes(std::string_view name) const;  // empty when there's no such part
+
+  // ---- Drawings: charts, pictures and shapes sit in the sheet's drawing part. Changes go inside
+  // a group (Run, or BeginGroup/EndGroup).
+  // The sheet's drawing (/xl/drawings/drawingN.xml); when it has none and `create`, a new one with
+  // its relationship, content type and the sheet's <drawing r:id> element. Empty when it can't
+  // (no package, a sheet not saved yet; creating needs an open group).
+  std::string SheetDrawing(int sheet, bool create);
+  // A shape id (cNvPr id) the drawing doesn't use yet: one past the highest.
+  uint32_t NextShapeId(std::string_view drawing) const;
+  // Appends an anchor to a drawing: an xdr:twoCellAnchor, oneCellAnchor or absoluteAnchor that
+  // declares the xdr: and a: prefixes (and r: when it has relationships) on itself.
+  bool AddAnchor(std::string_view drawing, std::string_view anchorXml);
+  // The object with shape id `id` (its first cNvPr's): its bytes, an anchor or an
+  // mc:AlternateContent; empty when the drawing has none.
+  std::string AnchorXml(std::string_view drawing, uint32_t id) const;
+  // That object's bytes replaced by `xml` (empty removes it, leaving its parts). Inside a group.
+  bool ReplaceAnchor(std::string_view drawing, uint32_t id, std::string_view xml);
+
+  // ---- Objects in a sheet's drawing (charts, pictures, shapes), by shape id (s3-charts)
+  // Moved or resized: the anchor's cells and offsets, the shape's own position and size.
+  Result MoveObject(int sheet, uint32_t id, const drawing::Place& place);
+  // Deleted, with the parts nothing else uses any more (a chart and its own parts, a picture
+  // used once); the drawing and the sheet's reference to it go with the last object.
+  Result DeleteObjects(int sheet, const std::vector<uint32_t>& ids);
+  // The clipboard's objects: one copied with every part it uses (its chart and the chart's own
+  // parts, its picture, an external link's target), pasted as a copy.
+  struct ObjectClip {
+    struct Part {
+      std::string rel, type, name, contentType, bytes, target;  // `target`: an external one's
+      bool external = false;
+      std::vector<Part> parts;  // its own
+    };
+    std::string anchor;  // its bytes, declaring the prefixes it uses
+    std::vector<Part> parts;
+    const void* book = nullptr;  // the workbook it came from
+  };
+  ObjectClip CopyObject(int sheet, uint32_t id) const;
+  // A copy at `place` (journal 54): new parts for a chart, a picture this workbook has stored
+  // used again; a chart from another workbook keeps its values, not its references.
+  Result PasteObject(int sheet, const ObjectClip& clip, const drawing::Place& place);
+  // The chart part of the object with shape id `id` on the sheet; empty when it isn't a chart.
+  std::string ChartPart(int sheet, uint32_t id) const;
+  // A chart's type, titles, legend, data labels, colors or series changed (Charts.h: ChartEdit).
+  Result EditChart(int sheet, uint32_t id, const ChartEdit& edit);
+  // Move Chart > New sheet (journal 55): the chart goes to a chart sheet of its own, inserted
+  // before `sheet` and made the active sheet, named `name` (empty: "Chart1", "Chart2"...). Its
+  // chart part stays; the sheet's drawing loses the object as Delete does.
+  Result MoveChartToSheet(int sheet, uint32_t id, std::string name = {});
+  // Move Chart > Object in (journal 56): a chart sheet's chart onto worksheet `toSheet` at `at`
+  // (8 columns by 15 rows, as a new chart), and the chart sheet deleted.
+  Result MoveChartToObject(int chartSheet, int toSheet, CellAddr at);
+
+  // ---- Charts (s3-charts)
+  using ChartKind = edit::ChartKind;
+  struct NewChart {
+    ChartKind kind = ChartKind::Column;
+    Range data;              // the cells charted (the selection)
+    CellAddr at;             // the chart's top-left cell
+    uint32_t cols = 8, rows = 15;  // its size in cells (Excel's default chart is about 8 x 15)
+    std::string title;       // empty: Excel's (a lone series' name, else none)
+  };
+  // Inserts a chart of `data` as Excel does (Insert > Chart, Alt+F1): series and categories guessed
+  // from the cells (a header row of text names the series, a first column of text the categories;
+  // series down the columns when there are at least as many rows as columns), written as Excel
+  // writes a new chart (its drawing, chart part, relationships and content types). Refused on a
+  // protected sheet without "Edit objects", in a workbook without a package (CSV) or on a sheet
+  // not saved yet.
+  Result InsertChart(int sheet, const NewChart& chart);
   // Excel's rules for a sheet name: 1-31 characters, none of : \ / ? * [ ], not starting or
   // ending with ', not "History", and no other sheet's name (without case). Empty when valid.
   std::u16string CheckSheetName(std::string_view name, int except = -1) const;
+
+  // ---- Protection (Protect Sheet, Protect Workbook: sheet/edit/Protection.h). Once a sheet or the
+  // workbook's structure is protected, the edits above are refused as Excel refuses them, with
+  // Excel's message (undo and redo aren't). The password is the caller's to check; these set what
+  // the file keeps. nullopt removes the protection.
+  Result SetSheetProtection(int sheet, const std::optional<SheetProtection>& protection);
+  Result SetWorkbookProtection(const std::optional<WorkbookProtection>& protection);
+
+  // ---- Links (Insert > Link, Ctrl+K). `link` over `r` (its ref becomes `r`), in place of the links
+  // that overlap `r`; nullopt removes those. A place in the workbook is `location` ("Sheet2!A1", a
+  // name); a web address, file or e-mail address is `target` ("mailto:..."), which saving writes as
+  // an external relationship (keep `relId` only with the link's own target, unchanged).
+  Result SetHyperlink(int sheet, const Range& r, const std::optional<Hyperlink>& link);
+
+  // ---- Notes (New Note, Shift+F2: Excel's older comments). The note on `cell`: its author's name,
+  // its text and whether it stays shown; nullopt deletes it. Written as Excel writes them
+  // (sheet/edit/Notes.h): the sheet's comments part and VML drawing, added when it has none.
+  struct Note {
+    std::string author, text;
+    bool shown = false;
+    // The box: `width` by `height` points at `anchor` (the VML anchor: column, x offset, row, y
+    // offset of its top left, then of its bottom right, offsets in pixels). Width 0 keeps the box
+    // the note has (a new note: Excel's, beside the cell).
+    double width = 0, height = 0;
+    std::array<uint32_t, 8> anchor{};
+  };
+  Result SetNote(int sheet, CellAddr cell, const std::optional<Note>& note);
+  // Threaded comments (New Comment: Excel 365's). The thread on `cell` as a whole: its first comment
+  // and the replies, each with its author's name and text (an id and time are made for new ones:
+  // leave them empty), and whether it's resolved; nullopt deletes it. Written as Excel 365 writes
+  // them, with the note older versions read (sheet/edit/Notes.h). A cell has a note or a thread.
+  struct ThreadComment {
+    std::string author, text, id, date;
+  };
+  struct Thread {
+    std::vector<ThreadComment> comments;
+    bool resolved = false;
+  };
+  Result SetThread(int sheet, CellAddr cell, const std::optional<Thread>& thread);
+  // The thread on `cell`, if it has one.
+  std::optional<Thread> ThreadAt(int sheet, CellAddr cell) const;
+
+  // ---- Page setup (Page Setup, print preview's settings; S3 s3-print). The worksheet's page setup,
+  // headers and footers, and Fit to (`fitToPage`: scaled by fitToWidth and fitToHeight, else by
+  // `scale`), written as Excel writes them (sheet/edit/PageSetupXml.h). The print area and titles are
+  // names (_xlnm.Print_Area, _xlnm.Print_Titles: SetName). Allowed on a protected sheet, as in Excel.
+  // On a chart sheet: margins, paper, orientation, first page number, headers and footers (the rest
+  // is left out: a chart sheet prints its chart on one page).
+  Result SetPageSetup(int sheet, PageSetup page, const HeaderFooter& headerFooter, bool fitToPage);
+  // The worksheet's page breaks (Insert Page Break, Remove Page Break, Reset All Page Breaks, or
+  // dragged in Page Break Preview), rows and columns: each break's id is the first row or column on
+  // its new page.
+  Result SetPageBreaks(int sheet, const std::vector<PageBreak>& rows, const std::vector<PageBreak>& cols);
 
   // ---- View state: saved with the file, but not undo steps (as in Excel).
   void SetActiveSheet(int sheet);
   void SetSelection(int sheet, CellAddr active, const std::vector<Range>& ranges);
   void SetTopLeft(int sheet, CellAddr topLeft);
   void SetZoom(int sheet, uint32_t percent);
+  void SetViewMode(int sheet, ViewMode mode);  // Normal, Page Break Preview (s3-print)
 
   // ---- Defined names. Adds the name, or replaces the one with the same name and scope.
   Result SetName(const DefinedName& name);
@@ -303,6 +486,10 @@ class Editor {
  private:
   struct State;
   struct Rec;  // records an edit in the journal (Edit.cpp)
+  // Excel's refusals on a protected sheet or workbook (Protection.h), checked by the outermost
+  // call only: what an allowed edit does inside it isn't checked again.
+  struct Guard;
+  int guarded_ = 0;
   void DropHistory();
   // Rows, columns or cells inserted or deleted (the public calls above build `shift`).
   Result ShiftCells(int sheet, const Shift& shift, std::u16string stepName);
@@ -314,6 +501,12 @@ class Editor {
   void RewriteSheetRefs(int skip, const std::function<std::string(std::string_view, int)>& rewrite,
                         const std::function<bool(std::string_view)>& touches, std::string_view from = {},
                         std::string_view to = {});
+  // Convert to Range (s3-data): table `t`'s style written into its cells' own formats, as Excel
+  // keeps the look; inside RemoveTable's step. `baked` gets each changed cell's new format; when
+  // `given`, those are put as they are (the journal's, so a replay doesn't compute them again).
+  using BakedStyles = std::vector<std::pair<CellAddr, uint32_t>>;
+  Result KeepTableLook(Sheet& s, const Table& t, BakedStyles& baked, bool given);
+  Result RemoveTableAs(int sheet, size_t index, const BakedStyles* given);
   // Header cells of tables among `cells`, after they were written: each holds its text as Excel
   // shows it (a number as formatted; cleared: "ColumnN"), unique in its table (Excel adds 2, 3...),
   // and its column takes that name, structured references everywhere following.

@@ -88,9 +88,12 @@ bool Same(const draw::Color& a, const draw::Color& b) {
   return std::abs(a.r - b.r) < 0.002f && std::abs(a.g - b.g) < 0.002f && std::abs(a.b - b.b) < 0.002f;
 }
 
+// The shapes filled in `c`: each mark's figures (a series' bars are one mark, a figure a bar).
 size_t Filled(const draw::Art& art, const draw::Color& c) {
   size_t n = 0;
-  for (const auto& m : art.marks) n += m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, c);
+  for (const auto& m : art.marks)
+    if (m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, c))
+      for (const draw::Path::Segment& s : m.path.Segments()) n += s.kind == draw::Path::Kind::Move;
   return n;
 }
 
@@ -254,10 +257,14 @@ TEST(Chart_LabelPartsKeysAndOverlay) {
   CHECK(!c.titleOverlay && !c.legendOverlay);
   const auto plotTop = [](const draw::Art& art) {
     float top = 1e9f;
-    for (const auto& m : art.marks)
-      if (m.fill.kind == draw::Fill::Kind::Solid && m.path.Bounds().right - m.path.Bounds().left > 10 &&
-          m.path.Bounds().bottom - m.path.Bounds().top > 20 && m.path.Bounds().right - m.path.Bounds().left < 100)
-        top = std::min(top, m.path.Bounds().top);  // the tallest bar
+    for (const auto& m : art.marks) {
+      if (m.fill.kind != draw::Fill::Kind::Solid) continue;
+      for (const draw::Path::Polygon& f : m.path.Flatten(0.25f)) {  // each bar of a series' mark
+        float l = 1e9f, t = 1e9f, r = -1e9f, b = -1e9f;
+        for (const draw::Point& pt : f.points) l = std::min(l, pt.x), t = std::min(t, pt.y), r = std::max(r, pt.x), b = std::max(b, pt.y);
+        if (r - l > 10 && b - t > 20 && r - l < 100) top = std::min(top, t);  // the tallest bar
+      }
+    }
     return top;
   };
   const float apart = plotTop(Draw(c, {360, 216}, Colors(), L"Calibri"));
@@ -272,6 +279,117 @@ TEST(Chart_LabelPartsKeysAndOverlay) {
   REQUIRE(Read(q.Root(), Colors(), c));
   CHECK(!c.groups[0].separator && c.groups[0].seriesNames);
   SetListSeparator(L',');
+}
+
+TEST(Chart_LongTitleWrapsAsExcelDoes) {
+  // Excel (a 355 x 211-point chart, 14-point title): a title wider than about 80 % of the chart
+  // wraps at spaces, a word too wide for a line alone is broken, each line after the first takes
+  // 1.22 times the size from the plot; a 92-point one keeps to one line. fuzz_chart found a title
+  // of 92 points drawn far outside a 60-point chart.
+  Parsed p(ColumnChart());
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  c.titleSize = 14;
+  const draw::Color red = draw::Rgb(0xFF0000);
+  c.titleColor = red;
+  // The title's lines (the marks in its color): left, baseline, right.
+  struct Line {
+    float left, baseline, right;
+  };
+  const auto lines = [&](draw::Size size) {
+    const draw::Art art = Draw(c, size, Colors(), L"Calibri");
+    std::vector<Line> out;
+    for (const draw::Art::Mark& m : art.marks) {
+      if (m.fill.kind != draw::Fill::Kind::Solid || !Same(m.fill.color, red)) continue;
+      const draw::Rect b = m.path.Bounds();
+      const draw::Point a = m.transform.Apply({b.left, b.top}), z = m.transform.Apply({b.right, b.bottom});
+      out.push_back({a.x, m.transform.Apply({0, 0}).y, z.x});
+    }
+    return out;
+  };
+  CHECK_EQ(lines({355, 211}).size(), 1u);  // "Sales"
+  c.title = L"Quarterly revenue by region for the fiscal year two thousand twenty six and beyond";
+  std::vector<Line> two = lines({355, 211});
+  REQUIRE(two.size() == 2u);
+  CHECK(std::abs(two[1].baseline - two[0].baseline - 1.22f * 14) < 0.01f);
+  for (const Line& l : two) CHECK(l.left >= 0.1f * 355 - 0.5f && l.right <= 0.9f * 355 + 0.5f);
+  c.title = L"Supercalifragilisticexpialidocious";
+  c.title += c.title + c.title;
+  CHECK_EQ(lines({355, 211}).size(), 3u);
+  c.title = L"Lines with markers";
+  CHECK_EQ(lines({55, 211}).size(), 4u);
+  c.titleSize = 92;
+  CHECK_EQ(lines({355, 211}).size(), 1u);
+  for (const draw::Size s : {draw::Size{60, 40}, draw::Size{1500, 8}}) {
+    const std::vector<Line> one = lines(s);
+    REQUIRE(one.size() == 1u);
+    CHECK(one[0].left > -s.width && one[0].right < 2 * s.width);
+  }
+}
+
+TEST(Chart_LongLegendEntryWrapsAsExcelDoes) {
+  // Excel: a series name of 110 characters in a bottom legend wraps to 3 lines in a 355-point
+  // chart, to 5 in a 195-point one; at the side it wraps too. fuzz_chart found such a name drawn
+  // far outside a small chart.
+  Parsed p(ColumnChart());
+  Chart c;
+  REQUIRE(Read(p.Root(), Colors(), c));
+  c.title.clear();
+  c.value.shown = c.category.shown = false;
+  const draw::Color red = draw::Rgb(0xFF0000);
+  c.textColor = red;  // the legend's text is all the text there is
+  c.groups[0].series[1].name = L"Series" + std::wstring(108, L'O') + L" 3";
+  const auto lines = [&](draw::Size size) {
+    const draw::Art art = Draw(c, size, Colors(), L"Calibri");
+    size_t n = 0;
+    for (const draw::Art::Mark& m : art.marks) {
+      const draw::Rect b = m.path.Bounds();
+      for (const draw::Point corner : {draw::Point{b.left, b.top}, draw::Point{b.right, b.bottom}}) {
+        const draw::Point at = m.transform.Apply(corner);
+        CHECK(at.x >= -0.5f && at.x <= size.width + 0.5f && at.y >= -0.5f && at.y <= size.height + 0.5f);
+      }
+      n += m.fill.kind == draw::Fill::Kind::Solid && Same(m.fill.color, red);
+    }
+    return n - 1;  // "North" is one line
+  };
+  CHECK_EQ(lines({355, 211}), 3u);
+  CHECK_EQ(lines({195, 211}), 5u);
+  c.legend = LegendPos::Right;
+  CHECK(lines({355, 211}) > 3u);
+  CHECK(lines({195, 211}) > 5u);
+}
+
+TEST(Chart_TextFarTooLongForItsPlaceIsCut) {
+  // Category names, axis titles and data labels hundreds of characters long are cut to their
+  // room, so nothing lands far outside the chart (fuzz_chart's check); bars stay where they were.
+  // With 100 categories most labels are only measured, and cut when they're drawn (a bar chart's
+  // labels up the side show every few).
+  const std::wstring longName(200, L'W');
+  for (const int kind : {0, 1, 2, 3}) {
+    const bool bar = kind % 2 == 1;
+    Parsed p(ColumnChart());
+    Chart c;
+    REQUIRE(Read(p.Root(), Colors(), c));
+    Group& g = c.groups[0];
+    if (bar) g.type = Type::Bar;
+    for (Series& s : g.series) {
+      if (kind >= 2) s.categories.assign(100, longName), s.values.assign(100, 1.0);
+      s.categories[1] = longName, s.name = longName;
+    }
+    g.seriesNames = true;
+    c.value.title = c.category.title = longName;
+    for (const draw::Size size : {draw::Size{432, 252}, draw::Size{120, 90}}) {
+      const draw::Art art = Draw(c, size, Colors(), L"Calibri");
+      if (size.width > 400) CHECK(Filled(art, *draw::SchemeColor("accent1", Colors())) >= 3u);  // the bars are still drawn
+      for (const draw::Art::Mark& m : art.marks) {
+        const draw::Rect b = m.path.Bounds();
+        for (const draw::Point corner : {draw::Point{b.left, b.top}, draw::Point{b.right, b.bottom}}) {
+          const draw::Point at = m.transform.Apply(corner);
+          CHECK(at.x > -size.width && at.x < 2 * size.width && at.y > -size.height && at.y < 2 * size.height);
+        }
+      }
+    }
+  }
 }
 
 TEST(Chart_NumbersAsTheirFormatCodesShowThem) {

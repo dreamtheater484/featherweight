@@ -499,6 +499,39 @@ Key::~Key() {
   Wipe(secret);
 }
 
+std::string ProtectionHash(std::string_view algorithm, std::string_view saltBase64, std::wstring_view password,
+                           uint32_t spins) {
+  std::string name;  // "SHA-512" -> "SHA512"
+  for (char c : algorithm)
+    if (c != '-') name += static_cast<char>(c >= 'a' && c <= 'z' ? c - 32 : c);
+  if (!HashId(name) || name == "MD5" || spins > kMaxSpins) return {};
+  const std::optional<Bytes> salt = FromBase64(std::string(saltBase64).c_str());
+  if (!salt) return {};
+  Hasher h(name);
+  Bytes value = h.Add(*salt).Add(PasswordBytes(password)).Finish();
+  for (uint32_t i = 0; i < spins && h.Ok(); ++i) {
+    const uint8_t it[4] = {uint8_t(i), uint8_t(i >> 8), uint8_t(i >> 16), uint8_t(i >> 24)};
+    value = h.Add(value).Add(it).Finish();
+  }
+  return h.Ok() ? ToBase64(value) : std::string();
+}
+
+std::string NewProtectionSalt() { return ToBase64(Random(16)); }
+
+std::string NewGuid() {
+  Bytes b = Random(16);
+  if (b.size() != 16) return {};
+  b[6] = static_cast<uint8_t>((b[6] & 0x0F) | 0x40);
+  b[8] = static_cast<uint8_t>((b[8] & 0x3F) | 0x80);
+  std::string s = "{";
+  for (size_t i = 0; i < 16; ++i) {
+    if (i == 4 || i == 6 || i == 8 || i == 10) s += '-';
+    s += "0123456789ABCDEF"[b[i] >> 4];
+    s += "0123456789ABCDEF"[b[i] & 15];
+  }
+  return s + "}";
+}
+
 bool IsEncryptedPackage(const CompoundFile& file) {
   const auto streams = file.Streams();
   auto has = [&](std::string_view name) {

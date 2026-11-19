@@ -2,6 +2,7 @@
 // functions and the dependency graph.
 
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -429,6 +430,18 @@ void Fixture(MapHost& h) {
   }
   Put(h, "J1", Value::Error(Err::Div0));
   Put(h, "J2", Value::Error(Err::NA));
+  // A database (K1:M7) and criteria ranges (N:O) for DSUM and friends.
+  const char* trees[] = {"Apple", "Pear", "Cherry", "Apple", "Pear", "Apple"};
+  const double sizes[][2] = {{18, 20}, {12, 12}, {13, 14}, {14, 15}, {9, 8}, {8, 9}};
+  Put(h, "K1", Value::Text("Tree")), Put(h, "L1", Value::Text("Height")), Put(h, "M1", Value::Text("Age"));
+  for (int i = 0; i < 6; ++i) {
+    h.Set(0, i + 1, 10, Value::Text(trees[i]));
+    h.Set(0, i + 1, 11, Value::Number(sizes[i][0]));
+    h.Set(0, i + 1, 12, Value::Number(sizes[i][1]));
+  }
+  const char* crit[][2] = {{"N1", "Tree"}, {"O1", "Height"}, {"N2", "Apple"}, {"O2", ">10"}, {"N4", "Tree"},
+                           {"N5", "Pear"}, {"N7", "tree"}, {"N8", "Apple"}, {"N9", "=Pear"}, {"O4", "Height"}};
+  for (auto& k : crit) Put(h, k[0], Value::Text(k[1]));
   Put(h, "Sheet2!A1", Value::Number(7));
   Put(h, "Sheet2!A2", Value::Number(8));
   Put(h, "Sheet2!B1", Value::Text("s2"));
@@ -492,7 +505,12 @@ TEST(sheet_calc_matches_excel) {
     if (v.IsEmpty()) v = Value::Number(0);
     bool ok = false;
     switch (k.type) {
-      case 'n': ok = v.IsNumber() && std::fabs(v.number() - k.num) <= 1e-12 * std::max(1.0, std::fabs(k.num)); break;
+      case 'n': {
+        // XIRR iterates to Excel's documented accuracy, 0.000001 %: its digits after that differ.
+        double tolerance = std::strstr(k.formula, "XIRR(") ? 1e-8 : 1e-12;
+        ok = v.IsNumber() && std::fabs(v.number() - k.num) <= tolerance * std::max(1.0, std::fabs(k.num));
+        break;
+      }
       case 's': ok = v.IsText() && v.text() == k.text; break;
       case 'b': ok = v.IsBool() && v.boolean() == (k.num != 0); break;
       case 'e': ok = v.IsError() && ErrText(v.error()) == k.text; break;
@@ -558,6 +576,29 @@ CalcSettings Full() {
 
 }  // namespace
 
+TEST(sheet_calc_array_cells_capped) {
+  // An array past Host::MaxArrayCells is #NUM! wherever it's built, not only a range read as one:
+  // a column times a row, a function run for each element, IF and CHOOSE element by element,
+  // MMULT, MUNIT (fuzz_formula: SS:G/1:1*19111:1 built 19111 x 507 for each operator after it).
+  struct Small : MapHost {
+    int64_t MaxArrayCells() const override { return 100; }
+  } h;
+  TestResolver res;
+  auto num = [](const Value& v) { return v.IsError() && v.error() == Err::Num; };
+  for (const char* text : {"A1:J11+0", "ROW(1:20)*COLUMN(A:J)", "ROUND(ROW(1:20),COLUMN(A:J))",
+                           "IF(ROW(1:20)>0,COLUMN(A:J))", "CHOOSE(ROW(1:20)^0,COLUMN(A:J))",
+                           "MMULT(ROW(1:20),COLUMN(A:J))", "MUNIT(11)", "_xlfn.SEQUENCE(11,10)",
+                           "_xlfn.CHOOSEROWS(COLUMN(A:J),_xlfn.SEQUENCE(11)^0)"})
+    if (!num(Run(h, res, text, {0, 0, 701}, true))) test::Fail(__FILE__, __LINE__, text);
+  for (const char* text : {"A1:J10+0", "ROW(1:10)*COLUMN(A:J)", "IF(ROW(1:10)>0,COLUMN(A:J))", "MUNIT(10)"}) {
+    Value v = Run(h, res, text, {0, 0, 701}, true);
+    if (!v.IsArray() || v.array().size() != 100) test::Fail(__FILE__, __LINE__, text);
+  }
+  // The workbook's limit, 16 million cells: 65536 x 1024 isn't allocated.
+  MapHost big;
+  CHECK(num(Run(big, res, "ROW(1:65536)*COLUMN(A:AMJ)", {0, 0, 701}, true)));
+}
+
 TEST(sheet_calc_engine_order_and_edits) {
   EngineFixture f;
   f.Number("A1", 1);
@@ -586,7 +627,7 @@ TEST(sheet_calc_engine_on_open) {
   f.Formula("B1", "A1+1", 0);                             // depends on a volatile one: recalculated
   f.Formula("C1", "5*2", 999);                            // cached: kept, as Excel keeps it
   f.Formula("D1", "C1*2", 0, false);                      // no cached value: calculated
-  f.Formula("E1", "_xlfn.TAKE(C1,1)+A1", 7);              // unsupported: keeps 7, stale
+  f.Formula("E1", "_xlfn.WEBSERVICE(C1)+A1", 7);          // unsupported: keeps 7, stale
   f.engine.Opened({});
   f.engine.Recalculate();
   CHECK_EQ(f.Num("A1"), 45293.0);
@@ -1214,6 +1255,60 @@ TEST(sheet_calc_new_circular_reference) {
   CHECK(!calc.CircularCell(s, r, c));
 }
 
+#include "sheet/calc/NameManager.h"
+#include "sheet/numfmt/NumLocale.h"
+
+TEST(sheet_calc_name_manager) {
+  // The Name Manager's list in en-NL, Excel's rules for a name, and a typed "Refers to".
+  auto book = OpenSheet("<row r=\"1\"><c r=\"A1\"><v>1</v></c><c r=\"B1\"><v>0.05</v></c></row>"
+                        "<row r=\"2\"><c r=\"A2\"><v>2</v></c></row><row r=\"3\"><c r=\"A3\"><v>3</v></c></row>",
+                        "<definedNames><definedName name=\"Rate\">S!$B$1</definedName>"
+                        "<definedName name=\"data\">S!$A$1:$A$3</definedName>"
+                        "<definedName name=\"Tax\" localSheetId=\"0\">0.21</definedName>"
+                        "<definedName name=\"_xlnm.Print_Area\" localSheetId=\"0\">S!$A$1:$B$3</definedName>"
+                        "<definedName name=\"Bad\">#REF!</definedName></definedNames>"
+                        "<calcPr calcId=\"191029\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  const FormulaLocale nl = MakeFormulaLocale(fw::sheet::EnNlLocale());
+  std::vector<NameRow> rows = ListNames(*book, calc, nl);
+  CHECK_EQ(rows.size(), size_t{5});
+  if (rows.size() == 5) {
+    CHECK_EQ(rows[0].name, std::string("Bad"));
+    CHECK_EQ(rows[0].value, std::string("#REF!"));
+    CHECK_EQ(rows[1].name, std::string("data"));
+    CHECK_EQ(rows[1].refersTo, std::string("=S!$A$1:$A$3"));
+    CHECK_EQ(rows[1].value, std::string("{1;2;3}"));
+    CHECK_EQ(rows[2].name, std::string("Print_Area"));
+    CHECK(rows[2].builtIn);
+    CHECK_EQ(rows[2].scope, 0);
+    CHECK_EQ(rows[3].name, std::string("Rate"));
+    CHECK_EQ(rows[3].value, std::string("0,05"));
+    CHECK_EQ(rows[4].name, std::string("Tax"));
+    CHECK_EQ(rows[4].refersTo, std::string("=0,21"));
+    CHECK_EQ(rows[4].value, std::string("0,21"));
+  }
+  for (const char* bad : {"A1", "xfd1048576", "R1C1", "r", "C", "RC", "R12", "1abc", "my name", "a-b", ""})
+    CHECK(!CheckName(*book, bad, -1).empty());
+  for (const char* good : {"XFE1", "ABCD1", "_x", "\\x", "Total.Q1", "Q?", "Tax"}) CHECK(CheckName(*book, good, -1).empty());
+  CHECK(!CheckName(*book, "RATE", -1).empty());  // already there, any case
+  CHECK(CheckName(*book, "RATE", -1, "Rate").empty());  // renaming it
+  CHECK(!CheckName(*book, "tax", 0).empty());
+  std::string formula, message;
+  CompileOptions at;
+  CHECK(ReadRefersTo("=SUM(S!$A$1:$A$3;2,5)", nl, at, calc.engine(), formula, message));
+  CHECK_EQ(formula, std::string("SUM(S!$A$1:$A$3,2.5)"));
+  CHECK(ReadRefersTo("12,5", nl, at, calc.engine(), formula, message));
+  CHECK_EQ(formula, std::string("12.5"));
+  CHECK(ReadRefersTo("say \"hi\"", nl, at, calc.engine(), formula, message));
+  CHECK_EQ(formula, std::string("\"say \"\"hi\"\"\""));
+  CHECK(!ReadRefersTo("=1+", nl, at, calc.engine(), formula, message));
+  CHECK(!message.empty());
+}
+
 TEST(sheet_calc_edit_budget) {
   // Plan §11: < 100 ms after one edit in a 100,000-formula workbook (typing a value, entering a
   // formula), the dependency graph kept.
@@ -1251,4 +1346,218 @@ TEST(sheet_calc_edit_budget) {
   std::printf("    one edit in 100,000 formulas: a value %.1f ms, a formula %.1f ms, its precedent %.1f ms\n", value,
               formula, again);
   CHECK(value < 100 && formula < 100 && again < 100);
+}
+
+TEST(sheet_calc_names_from_selection) {
+  // Excel 2021 (scratchpad names_probe.py): Range.CreateNames on labels in the top row, rows 2-3 below.
+  struct Label {
+    const char* text;  // null: a number
+    const char* name;  // null: none made
+  };
+  const Label labels[] = {
+      {"Sales 2024", nullptr}, {nullptr, nullptr},      {"Net-Profit", "Net_Profit"}, {"a.b", "a.b"},
+      {"R1C1", "_R1C1"},       {"A1", "A1_"},           {"Total ", "Total"},          {"Qtr#1", "Qtr_1"},
+      {"x", "x"},              {"C", "C_"},             {"R", "R_"},                  {"_ok", "_ok"},
+      {"  lead", "lead"},      {"Tab\tx", "Tab_x"},     {"Sales 2024", "Sales_2024"}, {"abc?", "abc?"},
+      {"\\back", "\\back"},    {"Sheet1!A1", "Sheet1_A1"}, {"LOG10", "LOG10_"},       {"$A", "A"},
+      {"a b  c", "a_b__c"},    {"ZZZ99999", "ZZZ99999"}, {"Name(1)", "Name_1"},       {"12abc", "_12abc"},
+      {"R2C", "_R2C"},         {"rc", "rc_"},           {"XFD1", "XFD1_"},            {"\xC3\xA9t\xC3\xA9", "\xC3\xA9t\xC3\xA9"},
+  };
+  const size_t n = sizeof labels / sizeof labels[0];
+  std::string data = "<row r=\"1\">";
+  for (size_t i = 0; i < n; ++i) {
+    const std::string ref = ColumnName(static_cast<int32_t>(i)) + "1";
+    data += labels[i].text ? "<c r=\"" + ref + "\" t=\"inlineStr\"><is><t xml:space=\"preserve\">" + std::string(labels[i].text) + "</t></is></c>"
+                           : "<c r=\"" + ref + "\"><v>2024</v></c>";
+  }
+  data += "</row><row r=\"2\"><c r=\"A2\"><v>1</v></c></row>"
+          "<row r=\"5\"><c r=\"A5\" t=\"inlineStr\"><is><t>Corner</t></is></c><c r=\"B5\" t=\"inlineStr\"><is><t>Jan</t></is></c>"
+          "<c r=\"C5\" t=\"inlineStr\"><is><t>Feb</t></is></c></row>"
+          "<row r=\"6\"><c r=\"A6\" t=\"inlineStr\"><is><t>East</t></is></c><c r=\"B6\"><v>1</v></c></row>"
+          "<row r=\"7\"><c r=\"A7\" t=\"inlineStr\"><is><t>West</t></is></c><c r=\"B7\"><v>2</v></c></row>";
+  auto book = OpenSheet(data, "<calcPr calcId=\"191029\"/>");
+  CHECK(book != nullptr);
+  if (!book) return;
+  std::vector<LabelName> made = NamesFromLabels(*book, 0, {0, 0, 2, static_cast<uint32_t>(n - 1)}, true, false, false, false);
+  for (size_t i = 0; i < n; ++i) {
+    if (!labels[i].name) continue;
+    const std::string want = "S!$" + ColumnName(static_cast<int32_t>(i)) + "$2:$" + ColumnName(static_cast<int32_t>(i)) + "$3";
+    bool found = false;
+    for (const LabelName& m : made)
+      if (m.name == labels[i].name) {
+        found = true;
+        CHECK_EQ(m.formula, want);
+      }
+    if (!found) std::printf("  missing %s\n", labels[i].name);
+    CHECK(found);
+  }
+  CHECK_EQ(made.size(), size_t{26});  // no number label, and "Sales 2024" once (the later)
+  // Top row and left column: the corner names the cells between.
+  made = NamesFromLabels(*book, 0, {4, 0, 6, 2}, true, true, false, false);
+  const std::pair<const char*, const char*> both[] = {{"Corner", "S!$B$6:$C$7"}, {"Jan", "S!$B$6:$B$7"},
+                                                      {"Feb", "S!$C$6:$C$7"},    {"East", "S!$B$6:$C$6"},
+                                                      {"West", "S!$B$7:$C$7"}};
+  CHECK_EQ(made.size(), size_t{5});
+  for (const auto& [name, formula] : both) {
+    bool found = false;
+    for (const LabelName& m : made) found = found || (m.name == name && m.formula == formula);
+    CHECK(found);
+  }
+  bool top = false, left = false;
+  GuessLabels(*book, 0, {4, 0, 6, 2}, top, left);
+  CHECK(top && left);
+  GuessLabels(*book, 0, {5, 1, 6, 1}, top, left);  // numbers only
+  CHECK(!top && !left);
+  CHECK_EQ(RangeFormula(*book, 0, {1, 2, 1, 2}), std::string("S!$C$2"));
+  CHECK_EQ(NameFromLabel("  "), std::string());
+}
+
+TEST(sheet_calc_typed_beyond_the_extent) {
+  // s3-corpus's fixture: data typed in a new sheet, then formulas over all of it. Values typed
+  // below the rows the engine had seen must be read (TEXTJOIN missed A5, lookups found nothing).
+  namespace edit = fw::sheet::edit;
+  auto book = OpenSheet("<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Region</t></is></c></row>",
+                        "<calcPr calcId=\"191029\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  edit::Editor ed(*book);
+  Follow(ed, calc);
+  auto settle = [&] {
+    while (!calc.CalcStep(8)) {
+    }
+  };
+  const char* regions[] = {"North", "South", "East", "West"};
+  for (uint32_t i = 0; i < 4; ++i) {
+    ed.SetCell(0, i + 1, 0, edit::CellInput::Text(regions[i]));
+    ed.SetCell(0, i + 1, 1, edit::CellInput::Number(100 + 25 * i));
+  }
+  settle();
+  ed.SetCell(0, 0, 4, edit::CellInput::Text("West"));
+  ed.SetCell(0, 1, 4, edit::CellInput::Formula("_xlfn.XLOOKUP(E1,A2:A5,B2:B5,\"none\")"));
+  ed.SetCell(0, 2, 4, edit::CellInput::Formula("_xlfn.TEXTJOIN(\", \",TRUE,A2:A5)"));
+  ed.SetCell(0, 3, 4, edit::CellInput::Formula("SUM(B:B)"));
+  settle();
+  CHECK_EQ(Number(*book, "E2"), 175.0);
+  fw::sheet::CellInfo c;
+  CHECK(book->GetSheet(0).GetCell(2, 4, c) && c.value.type == fw::sheet::ValueType::String &&
+        c.value.text == "North, South, East, West");
+  CHECK_EQ(Number(*book, "E4"), 550.0);
+  ed.SetCell(0, 9, 1, edit::CellInput::Number(1));  // B10, further down: the whole column sees it
+  settle();
+  CHECK_EQ(Number(*book, "E4"), 551.0);
+}
+
+TEST(sheet_calc_typed_dynamic_arrays) {
+  // A typed formula that gives an array spills from its cell (Excel 365's dynamic arrays): the
+  // grid asks SpillSize, the editor stores a dynamic array master over the cells, the engine spills.
+  namespace edit = fw::sheet::edit;
+  using fw::sheet::Range;
+  auto book = OpenSheet("<row r=\"5\"><c r=\"C5\"><v>9</v></c></row>", "<calcPr calcId=\"191029\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  edit::Editor ed(*book);
+  Follow(ed, calc);
+  auto settle = [&] {
+    while (!calc.CalcStep(8)) {
+    }
+  };
+  Range r;
+  CHECK(calc.SpillSize("_xlfn.SEQUENCE(3)", 0, 0, 0, r) && r == (Range{0, 0, 2, 0}));
+  CHECK(!calc.SpillSize("SUM(1,2)", 0, 0, 1, r));
+  CHECK(calc.SpillSize("_xlfn.SEQUENCE(1,3)", 0, 4, 0, r) && r == Range::Cell(4, 0));  // C5 is in the way
+  edit::CellInput in = edit::CellInput::Formula("_xlfn.SEQUENCE(3)");
+  in.dynamic = true;
+  in.arrayRange = Range{0, 0, 2, 0};
+  CHECK(ed.SetCell(0, 0, 0, in));
+  settle();
+  CHECK_EQ(Number(*book, "A2"), 2.0);
+  CHECK_EQ(Number(*book, "A3"), 3.0);
+  fw::sheet::FormulaInfo f;
+  CHECK(book->GetSheet(0).GetFormula(0, 0, f) && f.dynamic && f.kind == fw::sheet::FormulaKind::Array &&
+        f.ref == (Range{0, 0, 2, 0}));
+  // Blocked: #SPILL! in its cell alone.
+  in = edit::CellInput::Formula("_xlfn.SEQUENCE(1,3)");
+  in.dynamic = true;
+  in.arrayRange = Range::Cell(4, 0);
+  CHECK(ed.SetCell(0, 4, 0, in));
+  settle();
+  fw::sheet::CellInfo c;
+  CHECK(book->GetSheet(0).GetCell(4, 0, c) && c.value.type == fw::sheet::ValueType::Error &&
+        c.value.error == fw::sheet::ErrorCode::Spill);
+  CHECK(!book->GetSheet(0).GetCell(4, 1, c) || c.value.type == fw::sheet::ValueType::Empty);
+  // Undone: the spilled values go with it.
+  ed.Undo(2);
+  settle();
+  CHECK(!book->GetSheet(0).GetCell(1, 0, c) || c.value.type == fw::sheet::ValueType::Empty);
+
+  // Calculated again to a new size: the formula's ref follows (the file says how far it spills, or
+  // Excel takes the cells past its ref as typed values that block it). Blocked: the cell alone.
+  CHECK(ed.SetCell(0, 0, 3, edit::CellInput::Number(3)));  // D1
+  in = edit::CellInput::Formula("_xlfn.SEQUENCE(D1)");
+  in.dynamic = true;
+  in.arrayRange = Range{0, 5, 2, 5};  // F1:F3
+  CHECK(ed.SetCell(0, 0, 5, in));
+  settle();
+  CHECK(ed.SetCell(0, 0, 3, edit::CellInput::Number(5)));
+  settle();
+  CHECK_EQ(Number(*book, "F5"), 5.0);
+  CHECK(book->GetSheet(0).GetFormula(0, 5, f) && f.dynamic && f.ref == (Range{0, 5, 4, 5}));
+  std::string xml;
+  CHECK(fw::sheet::xlsx::WritePart(*book, book->GetSheet(0).PartName(), xml).Ok());
+  CHECK(xml.find("ref=\"F1:F5\"") != std::string::npos);
+  CHECK(ed.SetCell(0, 3, 5, edit::CellInput::Number(1)));  // F4: in the way
+  settle();
+  CHECK(book->GetSheet(0).GetFormula(0, 5, f) && f.ref == Range::Cell(0, 5));
+  CHECK(ed.SetCell(0, 3, 5, edit::CellInput::Empty()) && ed.SetCell(0, 0, 3, edit::CellInput::Number(2)));
+  settle();
+  CHECK(book->GetSheet(0).GetFormula(0, 5, f) && f.ref == (Range{0, 5, 1, 5}));
+  // Spilled text is written as Excel writes it, t="str" with <v> (s3-corpus: an inline string
+  // there reads as #VALUE! in Excel until it recalculates).
+  in = edit::CellInput::Formula("{\"a\";\"b\"}");
+  in.dynamic = true;
+  in.arrayRange = Range{0, 7, 1, 7};  // H1:H2
+  CHECK(ed.SetCell(0, 0, 7, in));
+  settle();
+  CHECK(fw::sheet::xlsx::WritePart(*book, book->GetSheet(0).PartName(), xml).Ok());
+  CHECK(xml.find("<c r=\"H2\" t=\"str\"><v>b</v></c>") != std::string::npos);
+}
+
+TEST(sheet_calc_spill_reasons) {
+  namespace edit = fw::sheet::edit;
+  using fw::sheet::Range;
+  auto book = OpenSheet("<row r=\"1\"><c r=\"B1\"><v>9</v></c></row>", "<calcPr calcId=\"191029\"/>" + Features());
+  CHECK(book != nullptr);
+  if (!book) return;
+  WorkbookCalc calc(*book);
+  while (!calc.OpenStep(8)) {
+  }
+  edit::Editor ed(*book);
+  Follow(ed, calc);
+  auto settle = [&] {
+    while (!calc.CalcStep(8)) {
+    }
+  };
+  auto put = [&](uint32_t row, uint32_t col, const char* formula) {
+    edit::CellInput in = edit::CellInput::Formula(formula);
+    in.dynamic = true;
+    Range r;
+    calc.SpillSize(formula, 0, row, col, r);
+    in.arrayRange = r;
+    CHECK(ed.SetCell(0, row, col, in));
+    settle();
+  };
+  put(0, 0, "_xlfn.SEQUENCE(1,3)");  // B1 holds 9
+  CHECK(calc.SpillReason(0, 0, 0) == L"Spill range isn't blank");
+  ed.Merge(0, Range{4, 4, 4, 5});  // E5:F5
+  settle();
+  put(4, 3, "_xlfn.SEQUENCE(1,3)");  // D5:F5 over the merged cells
+  CHECK(calc.SpillReason(0, 4, 3) == L"Spill range has merged cell");
+  put(20, 0, "_xlfn.SEQUENCE(2)");  // spills: no reason
+  CHECK(calc.SpillReason(0, 20, 0).empty());
 }

@@ -4,18 +4,27 @@
 #include <array>
 #include <cctype>
 #include <charconv>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <map>
 #include <new>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "pkg/Formula.h"
+#include "pkg/OfficeCrypto.h"
+#include "pkg/XmlDom.h"
 #include "pkg/XmlWriter.h"
 #include "sheet/calc/Formula.h"
 #include "sheet/calc/Typing.h"
+#include "sheet/edit/Charts.h"
+#include "sheet/edit/Drawing.h"
 #include "sheet/edit/Journal.h"
+#include "sheet/edit/Notes.h"
+#include "sheet/edit/PageSetupXml.h"
 #include "sheet/edit/Refs.h"
+#include "sheet/model/TableStyles.h"
 #include "sheet/xlsx/Internal.h"
 #include "sheet/numfmt/NumFormat.h"
 #include "core/Strings.h"
@@ -48,6 +57,8 @@ class Access {
   static std::vector<Table>& Tables(Sheet& s) { return s.tables_; }
   static std::optional<SheetFilter>& Filter(Sheet& s) { return s.filter_; }
   static std::vector<PageBreak>& Breaks(Sheet& s, bool rows) { return rows ? s.rowBreaks_ : s.colBreaks_; }
+  static PageSetup& Page(Sheet& s) { return s.page_; }
+  static HeaderFooter& HF(Sheet& s) { return s.headerFooter_; }
   static std::vector<detail::Kept>& Kept(Sheet& s) { return s.kept_; }
   static std::vector<std::pair<uint32_t, CellAddr>>& SharedMasters(Sheet& s) { return s.sharedMasters_; }
   static std::string& Name(Sheet& s) { return s.name_; }
@@ -62,6 +73,7 @@ class Access {
   static std::vector<DefinedName>& Names(Workbook& b) { return b.names_; }
   static uint32_t& Active(Workbook& b) { return b.activeSheet_; }
   static uint32_t& FirstTab(Workbook& b) { return b.firstTab_; }
+  static std::string& ProtectionXml(Workbook& b) { return b.protectionXml_; }
 };
 
 namespace {
@@ -87,6 +99,7 @@ enum SaveBit : uint32_t {
   kSaveBreaks = 1u << 12,   // row and column page breaks
   kSaveKept = 1u << 13,     // XML kept inside sheetData, and shared formulas' masters
   kSaveFormulas = 1u << 14, // every formula record (else `formulas` holds the ones changed in place)
+  kSavePage = 1u << 24,     // page setup and headers and footers (s3-print)
 };
 constexpr int kPieces = 7;  // SheetPiece bits
 
@@ -115,6 +128,8 @@ struct SheetSave {
   std::vector<Table> tables;
   std::optional<SheetFilter> filter;
   std::vector<PageBreak> rowBreaks, colBreaks;
+  PageSetup page;
+  HeaderFooter headerFooter;
   std::vector<detail::Kept> kept;
   std::vector<std::pair<uint32_t, CellAddr>> masters;
   std::vector<FormulaRec> allFormulas;
@@ -143,6 +158,10 @@ struct SheetSave {
     if (saved & kSaveKept) {
       std::swap(A::Kept(s), kept);
       std::swap(A::SharedMasters(s), masters);
+    }
+    if (saved & kSavePage) {
+      std::swap(A::Page(s), page);
+      std::swap(A::HF(s), headerFooter);
     }
     if (saved & kSaveCols) std::swap(A::Cols(s), cols);
     if (saved & kSaveMerges) {
@@ -219,6 +238,10 @@ struct SheetSave {
       kept = std::move(later.kept);
       masters = std::move(later.masters);
     }
+    if ((later.saved & kSavePage) && !(saved & kSavePage)) {
+      page = std::move(later.page);
+      headerFooter = std::move(later.headerFooter);
+    }
     saved |= later.saved;
     dirty |= later.dirty;
   }
@@ -226,11 +249,12 @@ struct SheetSave {
 
 // The workbook's own state as it was: the list of sheets, the names, the active tab.
 struct BookSave {
-  bool sheets = false, names = false, active = false;
+  bool sheets = false, names = false, active = false, protection = false;
   std::vector<Sheet*> order;
   std::vector<std::unique_ptr<Sheet>> held;  // sheets of `order` the workbook doesn't hold now
   std::vector<DefinedName> nameList;
   uint32_t activeSheet = 0, firstTab = 0;
+  std::string protectionXml;
 
   void Swap(Workbook& b) {
     if (sheets) {
@@ -256,6 +280,7 @@ struct BookSave {
       std::swap(A::Active(b), activeSheet);
       std::swap(A::FirstTab(b), firstTab);
     }
+    if (protection) std::swap(A::ProtectionXml(b), protectionXml);
   }
 
   void Absorb(BookSave&& later) {
@@ -273,6 +298,10 @@ struct BookSave {
       activeSheet = later.activeSheet;
       firstTab = later.firstTab;
     }
+    if (later.protection && !protection) {
+      protection = true;
+      protectionXml = std::move(later.protectionXml);
+    }
   }
 };
 
@@ -287,25 +316,237 @@ struct Step {
   BookSave book;
   bool bookDirty = false;
   std::vector<InChange> changes;
-  // Package parts a structural edit rewrote (drawings, charts, notes, tables, pivot caches), as they were.
-  std::vector<std::pair<std::string, std::vector<uint8_t>>> parts;
+  // Package parts the step rewrote, added or removed (drawings, charts, notes, tables...), as they
+  // were; the content types and the relationship sets (by source; none: it had none) likewise.
+  struct PartWas {
+    std::string name;
+    bool existed = false;
+    std::vector<uint8_t> bytes;
+  };
+  std::vector<PartWas> parts;
+  std::optional<pkg::ContentTypes> types;
+  std::vector<std::pair<std::string, std::optional<pkg::RelationshipSet>>> rels;
+  // Once the step is done (Settle), the content types and relationships it changed, entry by entry
+  // (before, after), so that undo and redo leave alone what changed since: a save adds content
+  // types and relationships of its own (shared strings, links, sheets).
+  // `beforeAt`/`afterAt`: the entry's place in its list, so that one put back goes where it was
+  // (the part's bytes as they were).
+  struct TypeDiff {
+    bool isDefault = false;
+    std::string key;  // the part name, or a default's extension
+    std::optional<std::string> before, after;
+    size_t beforeAt = 0, afterAt = 0;
+  };
+  struct RelDiff {
+    std::string source, id;
+    std::optional<pkg::Relationship> before, after;
+    size_t beforeAt = 0, afterAt = 0;
+  };
+  // An entry back the other way in its list, in its place.
+  template <class List, class Same, class Make>
+  static void Put(List& list, Same same, bool now, Make make, size_t at) {
+    auto it = std::find_if(list.begin(), list.end(), same);
+    if (!now) {
+      if (it != list.end()) list.erase(it);
+    } else if (it != list.end()) {
+      *it = make();
+    } else {
+      list.insert(list.begin() + static_cast<std::ptrdiff_t>(std::min(at, list.size())), make());
+    }
+  }
+  std::vector<TypeDiff> typeDiffs;
+  std::vector<RelDiff> relDiffs;
+  // A source's relationships part as the step found it and as it left it: its bytes, and what they
+  // list. Undo and redo put those bytes back when the relationships come back to either, so a
+  // file's own way of writing them stays (an attribute Serialize doesn't write, a relationship
+  // without an Id): fuzz_xlsx found an undone edit leaving them otherwise than a journal replay,
+  // which never made it.
+  struct RelBytes {
+    std::string source;
+    std::optional<std::vector<uint8_t>> before, after;
+    std::vector<pkg::Relationship> beforeItems, afterItems;
+  };
+  std::vector<RelBytes> relBytes;
+  // The content types part likewise (a type attribute misspelled: Serialize writes it empty).
+  struct TypeBytes {
+    std::optional<std::vector<uint8_t>> before, after;
+    pkg::ContentTypes beforeTypes, afterTypes;
+  };
+  std::optional<TypeBytes> typeBytes;
+  void PutTypeBytesBack(pkg::Package& package) const {
+    if (!typeBytes) return;
+    const pkg::ContentTypes& now = package.Types();
+    const auto same = [](const pkg::ContentTypes& a, const pkg::ContentTypes& b) {
+      return a.defaults == b.defaults && a.overrides == b.overrides;
+    };
+    const std::optional<std::vector<uint8_t>>& bytes = same(now, typeBytes->beforeTypes) ? typeBytes->before : typeBytes->after;
+    if (bytes && (same(now, typeBytes->beforeTypes) || same(now, typeBytes->afterTypes)))
+      package.SetPart(pkg::kContentTypesPart, *bytes);
+  }
+  static std::string RelsPartOf(const pkg::RelationshipSet& set) {
+    return set.relsPart.empty() ? pkg::RelsPartFor(set.source) : set.relsPart;
+  }
+  // The bytes the source's relationships part had when it listed what it lists now, if the step
+  // has them.
+  void PutRelBytesBack(pkg::Package& package, const std::string& source) const {
+    const pkg::RelationshipSet* now = package.RelationshipsOf(source);
+    if (!now || now->items.empty()) return;
+    const auto same = [](const std::vector<pkg::Relationship>& a, const std::vector<pkg::Relationship>& b) {
+      return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](const pkg::Relationship& x, const pkg::Relationship& y) {
+        return x.id == y.id && x.type == y.type && x.target == y.target && x.external == y.external;
+      });
+    };
+    for (const RelBytes& r : relBytes) {
+      if (r.source != source) continue;
+      const std::optional<std::vector<uint8_t>>& bytes = same(now->items, r.beforeItems) ? r.before : r.after;
+      if (bytes && (same(now->items, r.beforeItems) || same(now->items, r.afterItems))) package.SetPart(RelsPartOf(*now), *bytes);
+      return;
+    }
+  }
   uint64_t serial = 0;
 
   bool Empty() const {
-    return sheets.empty() && !book.sheets && !book.names && !book.active && changes.empty() && parts.empty();
+    return sheets.empty() && !book.sheets && !book.names && !book.active && changes.empty() && parts.empty() &&
+           !types && rels.empty();
+  }
+
+  void Settle(const pkg::Package& p) {
+    if (types) {
+      const pkg::ContentTypes& now = p.Types();
+      for (bool isDefault : {false, true}) {
+        const auto& was = isDefault ? types->defaults : types->overrides;
+        const auto& is = isDefault ? now.defaults : now.overrides;
+        auto find = [&](const auto& list, const std::string& key, size_t& at) -> std::optional<std::string> {
+          for (at = 0; at < list.size(); ++at)
+            if (NameEqualsNoCase(list[at].first, key)) return list[at].second;
+          return std::nullopt;
+        };
+        std::vector<std::string> keys;
+        for (const auto& [k, v] : was) keys.push_back(k);
+        for (const auto& [k, v] : is) keys.push_back(k);
+        for (const std::string& k : keys) {
+          if (std::any_of(typeDiffs.begin(), typeDiffs.end(), [&](const TypeDiff& d) { return d.isDefault == isDefault && NameEqualsNoCase(d.key, k); }))
+            continue;
+          TypeDiff d{isDefault, k, std::nullopt, std::nullopt};
+          d.before = find(was, k, d.beforeAt);
+          d.after = find(is, k, d.afterAt);
+          if (d.before != d.after) typeDiffs.push_back(std::move(d));
+        }
+      }
+      types.reset();
+      if (typeBytes) {
+        typeBytes->afterTypes = now;
+        typeBytes->after.reset();
+        std::vector<uint8_t> bytes;
+        if (p.ReadPart(pkg::kContentTypesPart, bytes).Ok()) typeBytes->after = std::move(bytes);
+      }
+    }
+    auto same = [](const pkg::Relationship& a, const pkg::Relationship& b) {
+      return a.type == b.type && a.target == b.target && a.external == b.external;
+    };
+    for (auto& [source, set] : rels) {
+      const pkg::RelationshipSet* now = p.RelationshipsOf(source);
+      std::vector<std::string> ids;
+      if (set)
+        for (const pkg::Relationship& r : set->items) ids.push_back(r.id);
+      if (now)
+        for (const pkg::Relationship& r : now->items) ids.push_back(r.id);
+      for (const std::string& id : ids) {
+        if (std::any_of(relDiffs.begin(), relDiffs.end(), [&](const RelDiff& d) { return d.source == source && d.id == id; })) continue;
+        RelDiff d{source, id, std::nullopt, std::nullopt};
+        auto place = [&](const pkg::RelationshipSet* s, std::optional<pkg::Relationship>& out, size_t& at) {
+          if (!s) return;
+          for (at = 0; at < s->items.size(); ++at)
+            if (s->items[at].id == id) {
+              out = s->items[at];
+              return;
+            }
+        };
+        place(set ? &*set : nullptr, d.before, d.beforeAt);
+        place(now, d.after, d.afterAt);
+        if (d.before.has_value() != d.after.has_value() || (d.before && !same(*d.before, *d.after))) relDiffs.push_back(std::move(d));
+      }
+      for (RelBytes& r : relBytes) {
+        if (r.source != source) continue;
+        r.after.reset();
+        r.afterItems.clear();
+        std::vector<uint8_t> bytes;
+        if (now && p.ReadPart(RelsPartOf(*now), bytes).Ok()) r.after = std::move(bytes), r.afterItems = now->items;
+      }
+    }
+    rels.clear();
   }
 
   // Undo or redo: everything back the other way.
   void Swap(Workbook& b) {
     for (auto it = sheets.rbegin(); it != sheets.rend(); ++it) it->Swap();
     book.Swap(b);
-    if (pkg::Package* package = b.GetPackage())
-      for (auto& [part, bytes] : parts) {
-        std::vector<uint8_t> now;
-        package->ReadPart(part, now);
-        package->SetPart(part, std::move(bytes));
-        bytes = std::move(now);
+    pkg::Package* package = b.GetPackage();
+    if (!package) return;
+    // A step done: its own entries of the relationships and content types, each back the other way.
+    std::vector<std::string> sources;
+    for (const RelDiff& d : relDiffs)
+      if (std::find(sources.begin(), sources.end(), d.source) == sources.end()) sources.push_back(d.source);
+    for (const std::string& source : sources) {
+      pkg::RelationshipSet set;
+      if (const pkg::RelationshipSet* r = package->RelationshipsOf(source)) set = *r;
+      else set.source = source;
+      for (RelDiff& d : relDiffs) {
+        if (d.source != source) continue;
+        Put(set.items, [&](const pkg::Relationship& r) { return r.id == d.id; }, d.before.has_value(),
+            [&] { return *d.before; }, d.beforeAt);
+        std::swap(d.before, d.after);
+        std::swap(d.beforeAt, d.afterAt);
       }
+      const std::string relsPart = set.relsPart;
+      const bool empty = set.items.empty();
+      package->SetRelationships(std::move(set));
+      if (empty && !relsPart.empty()) package->DeletePart(relsPart);
+      else PutRelBytesBack(*package, source);
+    }
+    if (!typeDiffs.empty()) {
+      pkg::ContentTypes t = package->Types();
+      for (TypeDiff& d : typeDiffs) {
+        auto& list = d.isDefault ? t.defaults : t.overrides;
+        using Entry = typename std::remove_reference_t<decltype(list)>::value_type;
+        Put(list, [&](const Entry& x) { return NameEqualsNoCase(x.first, d.key); }, d.before.has_value(),
+            [&] { return Entry(d.key, *d.before); }, d.beforeAt);
+        std::swap(d.before, d.after);
+        std::swap(d.beforeAt, d.afterAt);
+      }
+      package->SetContentTypes(std::move(t));
+      PutTypeBytesBack(*package);
+    }
+    // Relationships first: one put back may add its content type, which the types then settle.
+    for (auto& [source, set] : rels) {
+      std::optional<pkg::RelationshipSet> now;
+      if (const pkg::RelationshipSet* r = package->RelationshipsOf(source)) now = *r;
+      if (set) {
+        package->SetRelationships(*set);
+        PutRelBytesBack(*package, source);
+      } else if (now) {
+        pkg::RelationshipSet none = *now;
+        none.items.clear();
+        package->SetRelationships(none);
+        package->DeletePart(none.relsPart);
+      }
+      set = std::move(now);
+    }
+    if (types) {
+      pkg::ContentTypes now = package->Types();
+      package->SetContentTypes(std::move(*types));
+      PutTypeBytesBack(*package);
+      types = std::move(now);
+    }
+    for (PartWas& p : parts) {
+      const bool exists = package->FindPart(p.name) != nullptr;
+      std::vector<uint8_t> now;
+      if (exists) package->ReadPart(p.name, now);
+      if (p.existed) package->SetPart(p.name, std::move(p.bytes));
+      else if (exists) package->DeletePart(p.name);
+      p.existed = exists;
+      p.bytes = std::move(now);
+    }
   }
 
   void Absorb(Step&& later) {
@@ -318,8 +559,16 @@ struct Step {
     bookDirty = bookDirty || later.bookDirty;
     for (auto& c : later.changes) changes.push_back(std::move(c));
     for (auto& p : later.parts)
-      if (std::none_of(parts.begin(), parts.end(), [&](const auto& x) { return x.first == p.first; }))
+      if (std::none_of(parts.begin(), parts.end(), [&](const PartWas& x) { return x.name == p.name; }))
         parts.push_back(std::move(p));
+    if (!types) types = std::move(later.types);
+    for (auto& r : later.rels)
+      if (std::none_of(rels.begin(), rels.end(), [&](const auto& x) { return x.first == r.first; }))
+        rels.push_back(std::move(r));
+    if (!typeBytes) typeBytes = std::move(later.typeBytes);
+    for (auto& r : later.relBytes)
+      if (std::none_of(relBytes.begin(), relBytes.end(), [&](const RelBytes& x) { return x.source == r.source; }))
+        relBytes.push_back(std::move(r));
   }
 };
 
@@ -438,7 +687,7 @@ struct Editor::State {
     bordersAtSave = st.Borders().size();
     numFmtsAtSave = st.CustomFormats().size();
     stringsAtSave = b.Strings().Size();
-    cellStylesAtSave = st.CellStyleXfs().size() + st.CellStyles().size();
+    cellStylesAtSave = st.CellStyleXfs().size() + st.CellStyles().size() + st.Dxfs().size();
   }
 
   void ViewChanged(const Sheet* s) {
@@ -563,6 +812,10 @@ struct Editor::State {
     if (!(sv.saved & kSaveBreaks)) sv.colBreaks = A::Breaks(*sv.sheet, false);
     SaveList(sv, kSaveBreaks, kPieceOther, sv.rowBreaks, A::Breaks(*sv.sheet, true));
   }
+  void SavePage(SheetSave& sv) {
+    if (!(sv.saved & kSavePage)) sv.headerFooter = A::HF(*sv.sheet);
+    SaveList(sv, kSavePage, kPieceOther, sv.page, A::Page(*sv.sheet));
+  }
   void SaveKept(SheetSave& sv) {
     if (!(sv.saved & kSaveKept)) sv.masters = A::SharedMasters(*sv.sheet);
     SaveList(sv, kSaveKept, kPieceCells, sv.kept, A::Kept(*sv.sheet));
@@ -581,13 +834,42 @@ struct Editor::State {
   void SetPart(const std::string& name, std::string bytes) {
     pkg::Package* package = b.GetPackage();
     if (!package) return;
-    Step& st = Cur();
-    if (std::none_of(st.parts.begin(), st.parts.end(), [&](const auto& x) { return x.first == name; })) {
-      std::vector<uint8_t> old;
-      package->ReadPart(name, old);
-      st.parts.push_back({name, std::move(old)});
-    }
+    KeepPart(name);
     package->SetPart(name, std::vector<uint8_t>(bytes.begin(), bytes.end()));
+  }
+  // The step keeps a part (whether it was there, and its bytes), the content types, a source's
+  // relationships, as they were before its first change.
+  void KeepPart(const std::string& name) {
+    Step& st = Cur();
+    if (std::any_of(st.parts.begin(), st.parts.end(), [&](const Step::PartWas& x) { return x.name == name; })) return;
+    Step::PartWas was;
+    was.name = name;
+    was.existed = b.GetPackage()->FindPart(name) != nullptr;
+    if (was.existed) b.GetPackage()->ReadPart(name, was.bytes);
+    st.parts.push_back(std::move(was));
+  }
+  void KeepTypes() {
+    Step& st = Cur();
+    if (!st.types) st.types = b.GetPackage()->Types();
+    if (!st.typeBytes) {
+      st.typeBytes.emplace();
+      st.typeBytes->beforeTypes = *st.types;
+      std::vector<uint8_t> bytes;
+      if (b.GetPackage()->ReadPart(pkg::kContentTypesPart, bytes).Ok()) st.typeBytes->before = std::move(bytes);
+    }
+  }
+  void KeepRels(const std::string& source) {
+    Step& st = Cur();
+    if (std::any_of(st.rels.begin(), st.rels.end(), [&](const auto& x) { return x.first == source; })) return;
+    std::optional<pkg::RelationshipSet> was;
+    if (const pkg::RelationshipSet* r = b.GetPackage()->RelationshipsOf(source)) was = *r;
+    if (was && std::none_of(st.relBytes.begin(), st.relBytes.end(), [&](const Step::RelBytes& x) { return x.source == source; })) {
+      Step::RelBytes kept{source, std::nullopt, std::nullopt, was->items, {}};
+      std::vector<uint8_t> bytes;
+      if (b.GetPackage()->ReadPart(Step::RelsPartOf(*was), bytes).Ok()) kept.before = std::move(bytes);
+      st.relBytes.push_back(std::move(kept));
+    }
+    st.rels.push_back({source, std::move(was)});
   }
 
   void SaveBook(bool sheets, bool names) {
@@ -740,6 +1022,28 @@ struct Editor::State {
     for (const auto& a : store.Attributes(sd.attrs))
       if (std::find(names.begin(), names.end(), std::string_view(a.qname)) == names.end()) keep.push_back(a);
     if (keep.size() != store.Attributes(sd.attrs).size()) sd.attrs = store.Intern(std::move(keep));
+  }
+
+  // One side attribute of a stored cell set (cm for a dynamic array).
+  void SetSideAttr(SheetSave& sv, uint32_t row, uint32_t col, std::string_view name, std::string_view value) {
+    Sheet& s = *sv.sheet;
+    Loc l = Find(s, row, col);
+    if (l.block == kNone) return;
+    RowBlock& blk = Writable(sv, l.block);
+    auto it = std::lower_bound(blk.sides.begin(), blk.sides.end(), l.cell,
+                               [](const CellSide& x, uint32_t v) { return x.cell < v; });
+    if (it == blk.sides.end() || it->cell != l.cell) {
+      CellSide sd;
+      sd.cell = l.cell;
+      it = blk.sides.insert(it, sd);
+    }
+    auto& store = A::Store(s);
+    std::vector<pkg::XmlAttr> attrs;
+    if (it->attrs)
+      for (const auto& a : store.Attributes(it->attrs))
+        if (a.qname != name) attrs.push_back(a);
+    attrs.push_back({std::string(name), "", std::string(value)});
+    it->attrs = store.Intern(std::move(attrs));
   }
 
   uint32_t SharedString(std::string_view text) {
@@ -912,8 +1216,9 @@ struct Editor::State {
       if (formula) {
         FormulaRec rec;
         rec.text = A::Texts(s).Add(content->formula);
-        if (content->array) {
+        if (content->array || content->dynamic) {
           rec.kind = FormulaKind::Array;
+          rec.dynamic = content->dynamic;
           rec.hasRef = true;
           rec.ref = content->arrayRange;
           rec.attrs = A::Store(s).Intern({{"t", "", "array"}, {"ref", "", RangeName(content->arrayRange)}});
@@ -963,10 +1268,14 @@ struct Editor::State {
       if (CellSide* sd = SideOf(blk, index)) {
         sd->valueText = kNone;
         sd->inner = kNone;
-        DropSideAttrs(s, *sd, {"cm", "vm"});
+        // A type the reader kept as written (one it doesn't know) goes with the value: the new one
+        // writes its own t (two would make the sheet unreadable; fuzz_xlsx).
+        DropSideAttrs(s, *sd, {"cm", "vm", "t"});
       }
     }
     if (style) {
+      // A style index kept as written ("01") goes: the cell writes its new one.
+      if (CellSide* sd = SideOf(blk, index)) DropSideAttrs(s, *sd, {"s"});
       c.style = *style;
       if (*style) c.flags |= detail::kStylePresent;
       else c.flags = static_cast<uint8_t>(c.flags & ~detail::kStylePresent);
@@ -1176,6 +1485,32 @@ struct Editor::Rec {
   JournalRecord rec;
 };
 
+// Excel's refusals on a protected sheet or workbook, for an edit's outermost call: each public
+// edit makes one before it changes anything, and checks once it knows its sheet and cells.
+struct Editor::Guard {
+  explicit Guard(Editor& e) : ed(e) { ++ed.guarded_; }
+  ~Guard() { --ed.guarded_; }
+  Guard(const Guard&) = delete;
+  Guard& operator=(const Guard&) = delete;
+  Result Check(int sheet, ProtectAct act, const Range& r = {}) const {
+    if (ed.guarded_ > 1) return {};
+    if (sheet >= 0 && static_cast<size_t>(sheet) < ed.book_.SheetCount())
+      (void)ed.book_.LoadSheet(static_cast<size_t>(sheet));  // its part says whether it's protected
+    std::u16string why = ProtectionRefusal(ed.book_, sheet, act, r);
+    return why.empty() ? Result{} : Result::Fail(std::move(why));
+  }
+  // Content into these cells (typing, pasting): each one unlocked.
+  Result CheckCells(int sheet, const std::vector<std::pair<CellAddr, CellInput>>& cells) const {
+    if (ed.guarded_ > 1 || cells.empty() || sheet < 0 || static_cast<size_t>(sheet) >= ed.book_.SheetCount()) return {};
+    const Sheet& s = ed.book_.GetSheet(static_cast<size_t>(sheet));
+    if (!SheetProtected(s)) return {};
+    for (const auto& [at, in] : cells)
+      if (CellLocked(s, ed.book_.GetStyles(), at.row, at.col)) return Check(sheet, ProtectAct::Content, Range{at.row, at.col, at.row, at.col});
+    return {};
+  }
+  Editor& ed;
+};
+
 void Editor::DropHistory() {
   s_->undo.clear();
   s_->redo.clear();
@@ -1265,15 +1600,164 @@ static Result CheckInput(const CellInput& in) {
     if (Utf16Length(in.formula) > 8192) return Result::Fail(u"A formula can be at most 8,192 characters long.");
     if (!XmlSafe(in.formula)) return Result::Fail(u"The formula holds characters a workbook can't store.");
   }
-  if (in.array && !Valid(in.arrayRange)) return BadRange();
+  if ((in.array || in.dynamic) && !Valid(in.arrayRange)) return BadRange();
   return {};
 }
+
+namespace {
+
+// xl/metadata.xml with a cell metadata block that makes an array formula a dynamic array, as Excel
+// writes it: cellMetadata's <bk><rc t v/></bk> picks block v of futureMetadata "XLDAPR", whose
+// xda:dynamicArrayProperties has fDynamic="1"; t is XLDAPR's place among the metadataTypes. Blocks
+// are only added, so the cm numbers cells have keep their meaning. Empty `xml`: a new part. `cm`:
+// the block's number (from 1). False when `xml` isn't metadata.
+bool DynamicArrayBlock(std::string& xml, uint32_t& cm) {
+  if (xml.empty())
+    xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<metadata "
+          "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"/>";
+  pkg::XmlDom dom;
+  if (!dom.Parse(xml).Ok()) return false;
+  pugi::xml_node root = dom.Root();
+  if (pkg::LocalNameOf(root) != "metadata") return false;
+  const std::string_view qname = root.name();
+  const std::string p(qname.substr(0, qname.size() - pkg::LocalNameOf(root).size()));  // "x:" or ""
+  bool changed = false;
+  auto named = [](pugi::xml_node n, std::string_view local) { return n.type() == pugi::node_element && pkg::LocalNameOf(n) == local; };
+  auto add = [&](pugi::xml_node parent, std::string_view local) {
+    changed = true;
+    return parent.append_child((p + std::string(local)).c_str());
+  };
+  auto count = [](pugi::xml_node n) {
+    uint32_t k = 0;
+    for (pugi::xml_node c : n.children()) k += c.type() == pugi::node_element;
+    (n.attribute("count") ? n.attribute("count") : n.append_attribute("count")).set_value(k);
+  };
+  // A section where the schema puts it: after the last one that comes before it (or is one).
+  auto section = [&](std::string_view local) {
+    static constexpr std::string_view kOrder[] = {"metadataTypes", "metadataStrings", "mdxMetadata", "futureMetadata",
+                                                  "cellMetadata", "valueMetadata", "extLst"};
+    auto rank = [](std::string_view s) { return std::find(std::begin(kOrder), std::end(kOrder), s) - std::begin(kOrder); };
+    pugi::xml_node after;
+    for (pugi::xml_node c : root.children())
+      if (c.type() == pugi::node_element && rank(pkg::LocalNameOf(c)) <= rank(local)) after = c;
+    changed = true;
+    pugi::xml_node n = after ? root.insert_child_after(pugi::node_element, after) : root.prepend_child(pugi::node_element);
+    n.set_name((p + std::string(local)).c_str());
+    return n;
+  };
+  auto child = [&](std::string_view local, std::string_view name = {}) {
+    for (pugi::xml_node c : root.children())
+      if (named(c, local) && (name.empty() || name == c.attribute("name").value())) return c;
+    return pugi::xml_node();
+  };
+  // The type.
+  pugi::xml_node types = child("metadataTypes");
+  if (!types) types = section("metadataTypes");
+  uint32_t t = 0, k = 0;
+  for (pugi::xml_node c : types.children())
+    if (named(c, "metadataType") && (++k, std::string_view(c.attribute("name").value()) == "XLDAPR")) t = k;
+  if (!t) {
+    pugi::xml_node n = add(types, "metadataType");
+    n.append_attribute("name").set_value("XLDAPR");
+    n.append_attribute("minSupportedVersion").set_value("120000");
+    for (const char* a : {"copy", "pasteAll", "pasteValues", "merge", "splitFirst", "rowColShift", "clearFormats",
+                          "clearComments", "assign", "coerce", "cellMeta"})
+      n.append_attribute(a).set_value("1");
+    t = k + 1;
+    count(types);
+  }
+  // The block that says "dynamic".
+  pugi::xml_node future = child("futureMetadata", "XLDAPR");
+  if (!future) {
+    future = section("futureMetadata");
+    future.append_attribute("name").set_value("XLDAPR");
+  }
+  uint32_t v = UINT32_MAX, b = 0;
+  for (pugi::xml_node bk : future.children()) {
+    if (!named(bk, "bk")) continue;
+    for (pugi::xml_node lst : bk.children()) {
+      if (!named(lst, "extLst")) continue;
+      for (pugi::xml_node ext : lst.children())
+        for (pugi::xml_node prop : ext.children()) {
+          const std::string_view on = prop.attribute("fDynamic").value();
+          if (named(prop, "dynamicArrayProperties") && v == UINT32_MAX && (on == "1" || on == "true")) v = b;
+        }
+    }
+    ++b;
+  }
+  if (v == UINT32_MAX) {
+    pugi::xml_node ext = add(add(add(future, "bk"), "extLst"), "ext");
+    ext.append_attribute("uri").set_value("{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}");
+    pugi::xml_node prop = ext.append_child("xda:dynamicArrayProperties");
+    prop.append_attribute("xmlns:xda").set_value("http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray");
+    prop.append_attribute("fDynamic").set_value("1");
+    prop.append_attribute("fCollapsed").set_value("0");
+    v = b;
+    count(future);
+  }
+  // The cell metadata block: <rc t v/> alone.
+  pugi::xml_node cells = child("cellMetadata");
+  if (!cells) cells = section("cellMetadata");
+  cm = 0;
+  uint32_t n = 0;
+  for (pugi::xml_node bk : cells.children()) {
+    if (!named(bk, "bk")) continue;
+    ++n;
+    pugi::xml_node rc = bk.find_child([&](pugi::xml_node c) { return named(c, "rc"); });
+    if (rc && !rc.next_sibling() && rc.attribute("t").as_uint() == t && rc.attribute("v").as_uint(UINT32_MAX) == v) {
+      cm = n;
+      break;
+    }
+  }
+  if (!cm) {
+    pugi::xml_node rc = add(add(cells, "bk"), "rc");
+    rc.append_attribute("t").set_value(t);
+    rc.append_attribute("v").set_value(v);
+    cm = n + 1;
+    count(cells);
+  }
+  if (changed) xml = dom.Serialize();
+  return true;
+}
+
+// The cm that makes a cell's array formula a dynamic array in this workbook (DynamicArrayBlock),
+// adding xl/metadata.xml, or blocks to it, in the open group. Empty when it can't (no package).
+std::string DynamicArrayCm(Editor& ed, const Workbook& book) {
+  const pkg::Package* package = book.GetPackage();
+  const std::string& wb = book.WorkbookPart();
+  if (!package || wb.empty() || !package->FindPart(wb)) return {};
+  std::string part;
+  if (const pkg::RelationshipSet* rels = package->RelationshipsOf(wb))
+    for (const pkg::Relationship& r : rels->items)
+      if (!r.external && r.type.ends_with("/sheetMetadata") && package->FindPart(r.targetPart)) {
+        part = r.targetPart;
+        break;
+      }
+  std::string xml = part.empty() ? std::string() : ed.PartBytes(part);
+  const std::string before = xml;
+  uint32_t cm = 0;
+  if (!DynamicArrayBlock(xml, cm)) return {};
+  if (part.empty()) {
+    part = package->FindPart("/xl/metadata.xml") ? ed.NewPartName("/xl/metadata", ".xml") : "/xl/metadata.xml";
+    if (ed.AddPart(wb, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata", part,
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml", xml)
+            .empty())
+      return {};
+  } else if (xml != before && !ed.WritePart(part, xml)) {
+    return {};
+  }
+  return std::to_string(cm);
+}
+
+}  // namespace
 
 Result Editor::SetCell(int sheet, uint32_t row, uint32_t col, const CellInput& in) {
   return SetCells(sheet, {{CellAddr{row, col}, in}});
 }
 
 Result Editor::SetCells(int sheet, const std::vector<std::pair<CellAddr, CellInput>>& cells) {
+  Guard guard(*this);
+  if (Result no = guard.CheckCells(sheet, cells); !no) return no;
   Rec rec(*this, JournalOp::SetCells, [&](JournalRecord& w) { w.I(sheet).U(cells.size()); for (const auto& [a, in] : cells) w.A(a).Input(in); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1287,7 +1771,8 @@ Result Editor::SetCells(int sheet, const std::vector<std::pair<CellAddr, CellInp
       if (!in.formula.empty())
         if (!MissingSheet(book_, in.formula).empty())
           return Result::Fail(u"The formula names a sheet this workbook doesn't have.");
-      if (in.array && (in.arrayRange.firstRow != at.row || in.arrayRange.firstCol != at.col)) return BadRange();
+      if ((in.array || in.dynamic) && (in.arrayRange.firstRow != at.row || in.arrayRange.firstCol != at.col))
+        return BadRange();
       if (const Range* arr = State::ArrayAt(arrays, at.row, at.col); arr && !(in.array && in.arrayRange == *arr))
         return Result::Fail(u"You can't change part of an array.");
       // Excel turns a formula typed into a table's header into its value as text; its value isn't
@@ -1341,8 +1826,14 @@ Result Editor::SetCells(int sheet, const std::vector<std::pair<CellAddr, CellInp
       }
       Range touched{kMaxRows, kMaxCols, 0, 0};
       bool formulas = false;
+      // A dynamic array's cell names the cell metadata that makes it one (cm), as Excel's do:
+      // without it Excel opens the formula as a legacy {=...} array.
+      std::string cm;
+      if (std::any_of(cells.begin(), cells.end(), [](const auto& c) { return c.second.dynamic && !c.second.formula.empty(); }))
+        cm = DynamicArrayCm(*this, book_);
       for (const auto& [at, in] : cells) {
         if (!st.Put(sv, at.row, at.col, &in, false, in.style, why)) return Result::Fail(why);
+        if (in.dynamic && !in.formula.empty() && !cm.empty()) st.SetSideAttr(sv, at.row, at.col, "cm", cm);
         touched.firstRow = std::min(touched.firstRow, at.row);
         touched.firstCol = std::min(touched.firstCol, at.col);
         touched.lastRow = std::max(touched.lastRow, at.row);
@@ -1372,6 +1863,8 @@ Result Editor::SetCells(int sheet, const std::vector<std::pair<CellAddr, CellInp
 }
 
 Result Editor::ClearContents(int sheet, const Range& r) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Content, r); !no) return no;
   Rec rec(*this, JournalOp::ClearContents, [&](JournalRecord& w) { w.I(sheet).R(r); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1394,9 +1887,19 @@ Result Editor::ClearContents(int sheet, const Range& r) {
   }());
 }
 
-Result Editor::ClearFormats(int sheet, const Range& r) { return MapStyles(sheet, r, [](uint32_t) { return 0u; }); }
+Result Editor::ClearFormats(int sheet, const Range& r) {
+  // On a protected sheet, as clearing contents: unlocked cells only, whatever the permissions (Excel).
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Content, r); !no) return no;
+  // Recorded as itself: a replay of the MapStyles inside would be checked as Format Cells and
+  // refused on a sheet that doesn't allow that (fuzz_xlsx).
+  Rec rec(*this, JournalOp::ClearFormats, [&](JournalRecord& w) { w.I(sheet).R(r); });
+  return rec.Done(MapStyles(sheet, r, [](uint32_t) { return 0u; }));
+}
 
 Result Editor::ClearAll(int sheet, const Range& r) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Content, r); !no) return no;
   return Run(*this, u"Clear All", [&]() -> Result {
     if (Result x = ClearContents(sheet, r); !x) return x;
     return ClearFormats(sheet, r);
@@ -1408,6 +1911,8 @@ Result Editor::SetStyle(int sheet, const Range& r, uint32_t style) {
 }
 
 Result Editor::MapStyles(int sheet, const Range& r, const std::function<uint32_t(uint32_t)>& map) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::FormatCells, r); !no) return no;
   Rec rec(*this, JournalOp::MapStyles, [&](JournalRecord& w) { w.I(sheet).R(r); });
   std::map<uint32_t, uint32_t> seen;
   const Result result = [&]() -> Result {
@@ -1419,10 +1924,18 @@ Result Editor::MapStyles(int sheet, const Range& r, const std::function<uint32_t
       State& st = *s_;
       SheetSave& sv = st.Save(s);
       std::u16string why;
+      // On a protected sheet a format's Locked and Hidden stay (Excel refuses that whatever the
+      // permissions); clearing formats changes them (allowed on unlocked cells: ClearFormats).
+      const bool keepProtection = guarded_ == 1 && SheetProtected(s);
+      bool protectionChanged = false;
       auto mapped = [&](uint32_t old) {
         uint32_t x = map(old);
         if (rec.on) seen.emplace(old, x);
-        return x < book_.GetStyles().CellXfs().size() ? x : 0u;
+        const auto& xfs = book_.GetStyles().CellXfs();
+        x = x < xfs.size() ? x : 0u;
+        if (keepProtection && old < xfs.size() && x < xfs.size() && !(xfs[x].protection == xfs[old].protection))
+          protectionChanged = true;
+        return x;
       };
       if (WholeRows(r) && !WholeCols(r)) {
         st.EditRows(sv, r.firstRow, r.lastRow, [&](RowRec& row) {
@@ -1474,6 +1987,7 @@ Result Editor::MapStyles(int sheet, const Range& r, const std::function<uint32_t
             if (!st.Put(sv, row, col, nullptr, false, next, why)) return Result::Fail(why);
           }
       }
+      if (protectionChanged) return Result::Fail(LockedCellMessage());
       st.Change(&s, kStyles, r);
       return Result{};
     });
@@ -1590,9 +2104,27 @@ uint32_t Editor::AddNumFmt(std::string_view code) {
   return at;
 }
 
+uint32_t Editor::AddDxf(const Dxf& dxf) {
+  const std::string xml = xlsx::StyleItemXml(dxf);
+  Rec rec(*this, JournalOp::AddDxf, [&](JournalRecord& w) { w.S(xml); }, true);
+  const uint32_t at = [&]() -> uint32_t {
+    StylesBuilder sb(book_.GetStyles());
+    auto& v = sb.Dxfs();
+    for (size_t i = 0; i < v.size(); ++i)
+      if (xlsx::StyleItemXml(v[i]) == xml) return static_cast<uint32_t>(i);
+    v.push_back(dxf);
+    return static_cast<uint32_t>(v.size() - 1);
+  }();
+  rec.rec.U(at);
+  rec.commit = true;
+  return at;
+}
+
 // ---- Rows and columns
 
 Result Editor::SetRowHeight(int sheet, uint32_t first, uint32_t last, double points) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::FormatRows, Range{first, 0, std::max(first, last), kMaxCols - 1}); !no) return no;
   Rec rec(*this, JournalOp::SetRowHeight, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).D(points); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1624,6 +2156,8 @@ Result Editor::SetRowHeight(int sheet, uint32_t first, uint32_t last, double poi
 }
 
 Result Editor::HideRows(int sheet, uint32_t first, uint32_t last, bool hidden) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::FormatRows, Range{first, 0, std::max(first, last), kMaxCols - 1}); !no) return no;
   Rec rec(*this, JournalOp::HideRows, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).B(hidden); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1646,6 +2180,8 @@ Result Editor::HideRows(int sheet, uint32_t first, uint32_t last, bool hidden) {
 }
 
 Result Editor::SetRowOutline(int sheet, uint32_t first, uint32_t last, uint8_t level, bool collapsed) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   Rec rec(*this, JournalOp::SetRowOutline, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).U(level).B(collapsed); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1670,6 +2206,8 @@ Result Editor::SetRowOutline(int sheet, uint32_t first, uint32_t last, uint8_t l
 }
 
 Result Editor::SetColumnWidth(int sheet, uint32_t first, uint32_t last, double chars) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::FormatColumns, Range{0, first, kMaxRows - 1, std::max(first, last)}); !no) return no;
   Rec rec(*this, JournalOp::SetColumnWidth, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).D(chars); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1692,6 +2230,8 @@ Result Editor::SetColumnWidth(int sheet, uint32_t first, uint32_t last, double c
 }
 
 Result Editor::HideColumns(int sheet, uint32_t first, uint32_t last, bool hidden) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::FormatColumns, Range{0, first, kMaxRows - 1, std::max(first, last)}); !no) return no;
   Rec rec(*this, JournalOp::HideColumns, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).B(hidden); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1709,6 +2249,8 @@ Result Editor::HideColumns(int sheet, uint32_t first, uint32_t last, bool hidden
 }
 
 Result Editor::SetColumnOutline(int sheet, uint32_t first, uint32_t last, uint8_t level, bool collapsed) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   Rec rec(*this, JournalOp::SetColumnOutline, [&](JournalRecord& w) { w.I(sheet).U(first).U(last).U(level).B(collapsed); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -1876,20 +2418,30 @@ bool EndsWith(std::string_view s, std::string_view suffix) {
 }  // namespace
 
 Result Editor::InsertRows(int sheet, uint32_t at, uint32_t count) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::InsertRows); !no) return no;
   return ShiftCells(sheet, Shift{Shift::Axis::Rows, at, static_cast<int32_t>(count), Range::All()}, u"Insert Rows");
 }
 Result Editor::DeleteRows(int sheet, uint32_t first, uint32_t count) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::DeleteRows, Range{first, 0, count ? first + std::min(count, kMaxRows) - 1 : first, kMaxCols - 1}); !no) return no;
   return ShiftCells(sheet, Shift{Shift::Axis::Rows, first, -static_cast<int32_t>(count), Range::All()}, u"Delete Rows");
 }
 Result Editor::InsertColumns(int sheet, uint32_t at, uint32_t count) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::InsertColumns); !no) return no;
   return ShiftCells(sheet, Shift{Shift::Axis::Columns, at, static_cast<int32_t>(count), Range::All()},
                     u"Insert Columns");
 }
 Result Editor::DeleteColumns(int sheet, uint32_t first, uint32_t count) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::DeleteColumns, Range{0, first, kMaxRows - 1, count ? first + std::min(count, kMaxCols) - 1 : first}); !no) return no;
   return ShiftCells(sheet, Shift{Shift::Axis::Columns, first, -static_cast<int32_t>(count), Range::All()},
                     u"Delete Columns");
 }
 Result Editor::InsertCells(int sheet, const Range& r, Direction shift) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   if (!Valid(r)) return BadRange();
   if (shift == Direction::DownOrUp)
     return WholeRows(r) ? InsertRows(sheet, r.firstRow, r.lastRow - r.firstRow + 1)
@@ -1904,6 +2456,8 @@ Result Editor::InsertCells(int sheet, const Range& r, Direction shift) {
                                    u"Insert Cells");
 }
 Result Editor::DeleteCells(int sheet, const Range& r, Direction shift) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   if (!Valid(r)) return BadRange();
   if (shift == Direction::DownOrUp)
     return WholeRows(r) ? DeleteRows(sheet, r.firstRow, r.lastRow - r.firstRow + 1)
@@ -1932,6 +2486,28 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
     const bool whole = m.Across(0, rows ? kMaxCols - 1 : kMaxRows - 1) == 1;
     const std::string name = s.Name();
     pkg::Package* package = book_.GetPackage();
+
+    // ---- A table's data rows all deleted (its header kept): as Excel, the first stays, its table
+    // cells emptied, and the rows after it go (measured: Rows("12:14").Delete under a header in 11
+    // keeps 12, A table needs a data row, and Excel repairs one without).
+    if (rows && sh.count < 0) {
+      std::vector<Range> emptied;
+      for (const Table& t : s.Tables()) {
+        const uint32_t first = t.ref.firstRow + t.headerRows, last = t.ref.lastRow - t.totalsRows;
+        if (t.headerRows && first <= last && first == sh.at && last < sh.at + m.Deleted() &&
+            m.Across(t.ref.firstCol, t.ref.lastCol) == 1)
+          emptied.push_back(Range{first, t.ref.firstCol, first, t.ref.lastCol});
+      }
+      if (!emptied.empty())
+        return Run(*this, stepName, [&]() -> Result {
+          for (const Range& r : emptied)
+            if (Result x = ClearContents(sheet, r); !x) return x;
+          Shift rest = sh;
+          rest.at += 1;
+          rest.count += 1;
+          return rest.count < 0 ? ShiftCells(sheet, rest, stepName) : Result{};
+        });
+    }
 
     // ---- What Excel refuses, and what Featherweight can't move yet.
     auto cantYet = [](std::u16string_view what) {
@@ -2479,6 +3055,11 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
         for (Table& t : after) {
           Range x = t.ref;
           if (!m.Area(x)) continue;
+          // Its totals row deleted: the table has none any more (Excel).
+          if (rows && t.totalsRows && m.Line(t.ref.lastRow) == kNone && m.Across(t.ref.firstCol, t.ref.lastCol) == 1) {
+            t.totalsRows = 0;
+            t.totalsRowShown = false;
+          }
           if (!rows && Effect(m, t.ref) == 1) {
             if (sh.count > 0) {
               uint32_t nextId = 1, nextName = 1;
@@ -2571,35 +3152,7 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
           if (fn(xml)) st.SetPart(part, std::move(xml));
         };
         refs::CacheFn cache = [&](std::string_view f, bool visibleOnly, std::vector<refs::CachePoint>& out) {
-          size_t bang = f.rfind('!');
-          if (bang == std::string_view::npos) return false;
-          std::string sn(f.substr(0, bang));
-          if (sn.size() >= 2 && sn.front() == '\'' && sn.back() == '\'') {
-            std::string u;
-            for (size_t k = 1; k + 1 < sn.size(); ++k) {
-              u += sn[k];
-              if (sn[k] == '\'' && k + 2 < sn.size() && sn[k + 1] == '\'') ++k;
-            }
-            sn = std::move(u);
-          }
-          Range r;
-          int xi = book_.FindSheet(sn);
-          if (xi < 0 || !ParseRange(f.substr(bang + 1), r) || (r.firstRow != r.lastRow && r.firstCol != r.lastCol) ||
-              static_cast<uint64_t>(r.lastRow - r.firstRow) + (r.lastCol - r.firstCol) > 100000)
-            return false;
-          const Sheet& x = book_.GetSheet(static_cast<size_t>(xi));
-          for (uint32_t row = r.firstRow; row <= r.lastRow; ++row)
-            for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
-              if (visibleOnly && (x.Row(row).hidden || x.Column(col).hidden)) continue;
-              Value v = x.GetValue(row, col);
-              refs::CachePoint p;
-              if (v.type == ValueType::Number) p = {refs::CachePoint::Number, Number(v.number)};
-              else if (v.type == ValueType::String) p = {refs::CachePoint::Text, std::string(v.text)};
-              else if (v.type == ValueType::Bool) p = {refs::CachePoint::Text, v.boolean ? "TRUE" : "FALSE"};
-              else if (v.type == ValueType::Error) p = {refs::CachePoint::Text, "#N/A"};
-              out.push_back(std::move(p));
-            }
-          return true;
+          return charts::CachePoints(book_, f, visibleOnly, out);
         };
         for (size_t i = 0; i < book_.SheetCount(); ++i) {
           Sheet& x = book_.GetSheet(i);
@@ -2660,9 +3213,27 @@ void Editor::FixHeaders(Sheet& s, const std::vector<CellAddr>& cells) {
   std::vector<Renamed> renamed;
   std::u16string why;
   bool totals = false;
+  // A value as the cell shows it, as text (Excel's header names and totals-row labels).
+  auto shown = [&](const Value& v, uint32_t row, uint32_t col) {
+    if (v.type == ValueType::String) return std::string(v.text);
+    if (v.type == ValueType::Bool) return std::string(v.boolean ? "TRUE" : "FALSE");
+    if (v.type == ValueType::Error) return std::string(ErrorText(v.error));
+    if (v.type != ValueType::Number) return std::string();
+    const Styles& styles = book_.GetStyles();
+    const uint32_t fmt = styles.CellXf(s.StyleAt(row, col)).numFmt;
+    const std::string_view code = styles.FormatCode(fmt);
+    const NumLocale& loc = locale_ ? *locale_ : EnUsLocale();
+    NumberFormat nf = code.empty() ? NumberFormat::Builtin(static_cast<int>(fmt), loc) : NumberFormat(Utf8ToWide(code));
+    FormatContext context;
+    context.locale = &loc;
+    context.date1904 = book_.Date1904();
+    Formatted out;
+    nf.Format(v.number, context, out);
+    return WideToUtf8(out.text);
+  };
   for (Table& t : tables) {
-    // The totals row: a formula typed there is the column's custom total, text its label, as
-    // Excel writes them (a label beside a formula is repaired).
+    // The totals row: a formula typed there is the column's custom total, anything else its label,
+    // as text, as Excel writes them (a label beside a formula, or a number with neither, is repaired).
     if (t.totalsRows)
       for (const CellAddr& a : cells) {
         if (a.row != t.ref.lastRow || a.col < t.ref.firstCol || a.col > t.ref.lastCol) continue;
@@ -2678,7 +3249,11 @@ void Editor::FixHeaders(Sheet& s, const std::vector<CellAddr>& cells) {
           const Value v = s.GetValue(a.row, a.col);
           now.totalsFunction.clear();
           now.totalsFormula.clear();
-          now.totalsLabel = v.type == ValueType::String ? std::string(v.text) : std::string();
+          now.totalsLabel = shown(v, a.row, a.col);
+          if (v.type != ValueType::String && v.type != ValueType::Empty) {
+            CellInput in = CellInput::Text(now.totalsLabel);
+            st.Put(st.Save(s), a.row, a.col, &in, false, std::nullopt, why);
+          }
         }
         TableColumn& was = t.columns[k];
         if (now.totalsFunction != was.totalsFunction || now.totalsFormula != was.totalsFormula ||
@@ -2694,26 +3269,7 @@ void Editor::FixHeaders(Sheet& s, const std::vector<CellAddr>& cells) {
       if (k >= t.columns.size()) continue;
       // The header as Excel makes it: always text, the value as the cell shows it.
       Value v = s.GetValue(a.row, a.col);
-      std::string text;
-      if (v.type == ValueType::String) {
-        text = std::string(v.text);
-      } else if (v.type == ValueType::Bool) {
-        text = v.boolean ? "TRUE" : "FALSE";
-      } else if (v.type == ValueType::Error) {
-        text = std::string(ErrorText(v.error));
-      } else if (v.type == ValueType::Number) {
-        const Styles& styles = book_.GetStyles();
-        const uint32_t fmt = styles.CellXf(s.StyleAt(a.row, a.col)).numFmt;
-        const std::string_view code = styles.FormatCode(fmt);
-        const NumLocale& loc = locale_ ? *locale_ : EnUsLocale();
-        NumberFormat nf = code.empty() ? NumberFormat::Builtin(static_cast<int>(fmt), loc) : NumberFormat(Utf8ToWide(code));
-        FormatContext context;
-        context.locale = &loc;
-        context.date1904 = book_.Date1904();
-        Formatted shown;
-        nf.Format(v.number, context, shown);
-        text = WideToUtf8(shown.text);
-      }
+      std::string text = shown(v, a.row, a.col);
       // Unique in the table, ignoring case: an empty one is the next "ColumnN", a taken one gets 2, 3...
       auto taken = [&](std::string_view name) {
         for (size_t j = 0; j < t.columns.size(); ++j)
@@ -2810,10 +3366,14 @@ std::string SortedFormula(std::string_view text, int sheet, CellAddr from, CellA
 }  // namespace
 
 Result Editor::SortRows(int sheet, const Range& r, const std::vector<uint32_t>& order, const std::vector<SortKey>& keys) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Sort, r); !no) return no;
   return SortLines(sheet, r, order, keys, true);
 }
 Result Editor::SortColumns(int sheet, const Range& r, const std::vector<uint32_t>& order,
                            const std::vector<SortKey>& keys) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Sort, r); !no) return no;
   return SortLines(sheet, r, order, keys, false);
 }
 
@@ -3235,6 +3795,680 @@ void Editor::RewriteSheetRefs(int skip, const std::function<std::string(std::str
   }
 }
 
+// ---- Package parts
+
+namespace {
+
+// `target` as a relationship from `source` names it: relative to the source's folder, as Excel
+// writes them ("../drawings/drawing1.xml"); from the package ("/"), without the leading slash.
+std::string RelativeTarget(std::string_view source, std::string_view target) {
+  auto split = [](std::string_view s) {
+    std::vector<std::string_view> out;
+    for (size_t at = 0; at < s.size();) {
+      size_t slash = s.find('/', at);
+      if (slash == std::string_view::npos) slash = s.size();
+      if (slash > at) out.push_back(s.substr(at, slash - at));
+      at = slash + 1;
+    }
+    return out;
+  };
+  std::vector<std::string_view> from = split(source), to = split(target);
+  if (!from.empty()) from.pop_back();  // the source's own name
+  size_t common = 0;
+  while (common < from.size() && common + 1 < to.size() && from[common] == to[common]) ++common;
+  std::string out;
+  for (size_t i = common; i < from.size(); ++i) out += "../";
+  for (size_t i = common; i < to.size(); ++i) {
+    out += to[i];
+    if (i + 1 < to.size()) out += '/';
+  }
+  return out;
+}
+
+}  // namespace
+
+std::string Editor::AddPart(std::string_view source, std::string_view relType, std::string_view name,
+                            std::string_view contentType, std::string bytes) {
+  State& st = *s_;
+  pkg::Package* package = book_.GetPackage();
+  if (st.open.empty() || !package || name.empty() || name[0] != '/' || package->FindPart(name)) return {};
+  if (source != "/" && !package->FindPart(source)) return {};
+  const std::string part(name), from(source);
+  st.KeepPart(part);
+  st.KeepTypes();
+  package->SetPart(part, std::vector<uint8_t>(bytes.begin(), bytes.end()));
+  if (package->ContentTypeOf(part) != contentType) {
+    pkg::ContentTypes types = package->Types();
+    auto& o = types.overrides;
+    o.erase(std::remove_if(o.begin(), o.end(), [&](const auto& x) { return x.first == part; }), o.end());
+    o.emplace_back(part, std::string(contentType));
+    package->SetContentTypes(std::move(types));
+  }
+  return AddRelationship(from, relType, part);
+}
+
+std::string Editor::AddRelationship(std::string_view source, std::string_view relType, std::string_view target) {
+  State& st = *s_;
+  pkg::Package* package = book_.GetPackage();
+  if (st.open.empty() || !package || !package->FindPart(target)) return {};
+  if (source != "/" && !package->FindPart(source)) return {};
+  const std::string from(source);
+  st.KeepRels(from);
+  pkg::RelationshipSet set;
+  if (const pkg::RelationshipSet* r = package->RelationshipsOf(from)) set = *r;
+  else set.source = from;
+  std::string id;
+  for (size_t n = set.items.size() + 1;; ++n) {
+    id = "rId" + std::to_string(n);
+    if (std::none_of(set.items.begin(), set.items.end(), [&](const pkg::Relationship& x) { return x.id == id; })) break;
+  }
+  pkg::Relationship rel;
+  rel.id = id;
+  rel.type = std::string(relType);
+  rel.target = RelativeTarget(from, target);
+  set.items.push_back(std::move(rel));
+  package->SetRelationships(std::move(set));
+  return id;
+}
+
+bool Editor::WritePart(std::string_view name, std::string bytes) {
+  State& st = *s_;
+  pkg::Package* package = book_.GetPackage();
+  if (st.open.empty() || !package || !package->FindPart(name)) return false;
+  st.SetPart(std::string(name), std::move(bytes));
+  return true;
+}
+
+bool Editor::RemovePart(std::string_view name) {
+  State& st = *s_;
+  pkg::Package* package = book_.GetPackage();
+  if (st.open.empty() || !package || !package->FindPart(name)) return false;
+  const std::string part(name);
+  // Relationships to it, from anywhere.
+  std::vector<pkg::RelationshipSet> sets;
+  for (const pkg::RelationshipSet& set : package->Relationships())
+    if (std::any_of(set.items.begin(), set.items.end(),
+                    [&](const pkg::Relationship& r) { return !r.external && NameEqualsNoCase(r.targetPart, part); }))
+      sets.push_back(set);
+  for (pkg::RelationshipSet& set : sets) {
+    st.KeepRels(set.source);
+    auto& items = set.items;
+    items.erase(std::remove_if(items.begin(), items.end(),
+                               [&](const pkg::Relationship& r) { return !r.external && NameEqualsNoCase(r.targetPart, part); }),
+                items.end());
+    package->SetRelationships(std::move(set));
+  }
+  // Its own relationships.
+  if (const pkg::RelationshipSet* own = package->RelationshipsOf(part)) {
+    st.KeepRels(part);
+    pkg::RelationshipSet none = *own;
+    none.items.clear();
+    package->SetRelationships(none);
+    package->DeletePart(none.relsPart);
+  }
+  st.KeepTypes();
+  pkg::ContentTypes types = package->Types();
+  auto& o = types.overrides;
+  const size_t before = o.size();
+  o.erase(std::remove_if(o.begin(), o.end(), [&](const auto& x) { return NameEqualsNoCase(x.first, part); }), o.end());
+  if (o.size() != before) package->SetContentTypes(std::move(types));
+  st.KeepPart(part);
+  package->DeletePart(part);
+  return true;
+}
+
+std::string Editor::NewPartName(std::string_view stem, std::string_view ext) const {
+  const pkg::Package* package = book_.GetPackage();
+  for (size_t n = 1;; ++n) {
+    std::string name = std::string(stem) + std::to_string(n) + std::string(ext);
+    if (!package || !package->FindPart(name)) return name;
+  }
+}
+
+std::string Editor::PartBytes(std::string_view name) const {
+  const pkg::Package* package = book_.GetPackage();
+  std::vector<uint8_t> bytes;
+  if (!package || !package->ReadPart(name, bytes).Ok()) return {};
+  return std::string(bytes.begin(), bytes.end());
+}
+
+// ---- Drawings and charts
+
+namespace {
+
+constexpr std::string_view kRelNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+}  // namespace
+
+std::string Editor::SheetDrawing(int sheet, bool create) {
+  State& st = *s_;
+  pkg::Package* package = book_.GetPackage();
+  if (!package || sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return {};
+  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  const std::string sheetPart = s.PartName();
+  if (sheetPart.empty() || !package->FindPart(sheetPart)) return {};
+  const std::string type = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
+  if (const pkg::RelationshipSet* rels = package->RelationshipsOf(sheetPart))
+    for (const pkg::Relationship& r : rels->items)
+      if (!r.external && r.type == type && package->FindPart(r.targetPart)) return r.targetPart;
+  if (!create || st.open.empty()) return {};
+  const std::string drawing = NewPartName("/xl/drawings/drawing", ".xml");
+  const std::string id = AddPart(sheetPart, type, drawing, "application/vnd.openxmlformats-officedocument.drawing+xml",
+                                 "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<xdr:wsDr "
+                                 "xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" "
+                                 "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"></xdr:wsDr>");
+  if (id.empty()) return {};
+  SheetSave& sv = st.Save(s);
+  st.SaveText(sv);
+  detail::PartText& t = A::Text(s);
+  xlsx::PutSheetElement(t, "drawing", "<" + xlsx::SheetPrefix(t) + "drawing xmlns:r=\"" + std::string(kRelNs) + "\" r:id=\"" + id + "\"/>");
+  st.Change(&s, kObjects, Range{});
+  return drawing;
+}
+
+uint32_t Editor::NextShapeId(std::string_view drawing) const { return drawing::NextShapeId(PartBytes(drawing)); }
+
+bool Editor::AddAnchor(std::string_view drawing, std::string_view anchorXml) {
+  std::string xml = PartBytes(drawing);
+  const size_t end = xml.rfind("</");
+  if (xml.empty() || end == std::string::npos) return false;
+  xml.insert(end, anchorXml);
+  return WritePart(drawing, std::move(xml));
+}
+
+std::string Editor::AnchorXml(std::string_view drawing, uint32_t id) const {
+  const std::string xml = PartBytes(drawing);
+  const std::vector<drawing::Object> objects = drawing::Objects(xml);
+  const drawing::Object* o = drawing::Find(objects, id);
+  return o ? xml.substr(o->begin, o->end - o->begin) : std::string();
+}
+
+bool Editor::ReplaceAnchor(std::string_view drawing, uint32_t id, std::string_view anchorXml) {
+  std::string xml = PartBytes(drawing);
+  const std::vector<drawing::Object> objects = drawing::Objects(xml);
+  const drawing::Object* o = drawing::Find(objects, id);
+  if (!o) return false;
+  xml.replace(o->begin, o->end - o->begin, anchorXml);
+  return WritePart(drawing, std::move(xml));
+}
+
+Result Editor::MoveObject(int sheet, uint32_t id, const drawing::Place& p) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::MoveObject, [&](JournalRecord& w) {
+    w.I(sheet).U(id);
+    for (const drawing::Marker* m : {&p.from, &p.to}) w.U(m->col).U(m->row).I(m->colOff).I(m->rowOff);
+    w.I(p.x).I(p.y).I(p.cx).I(p.cy);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (p.from.col >= kMaxCols || p.to.col >= kMaxCols || p.from.row >= kMaxRows || p.to.row >= kMaxRows ||
+        p.to.col < p.from.col || p.to.row < p.from.row || p.cx < 0 || p.cy < 0)
+      return BadRange();
+    const std::string d = SheetDrawing(sheet, false);
+    const std::string anchor = d.empty() ? std::string() : AnchorXml(d, id);
+    if (anchor.empty()) return Result::Fail(u"The object isn't on this sheet any more.");
+    const std::string placed = drawing::Placed(anchor, p);
+    if (placed.empty()) return Result::Fail(u"This object can't be moved.");
+    return Run(*this, u"Move Object", [&]() -> Result {
+      if (!ReplaceAnchor(d, id, placed)) return Result::Fail(u"This object can't be moved.");
+      s_->Change(&book_.GetSheet(static_cast<size_t>(sheet)), kObjects, Range{p.from.row, p.from.col, p.to.row, p.to.col});
+      return Result{};
+    });
+  }());
+}
+
+Editor::ObjectClip Editor::CopyObject(int sheet, uint32_t id) const {
+  ObjectClip clip;
+  const pkg::Package* package = book_.GetPackage();
+  if (!package || sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return clip;
+  const std::string sheetPart = book_.GetSheet(static_cast<size_t>(sheet)).PartName();
+  const pkg::RelationshipSet* rels = sheetPart.empty() ? nullptr : package->RelationshipsOf(sheetPart);
+  std::string drawingPart;
+  for (size_t i = 0; rels && i < rels->items.size() && clip.anchor.empty(); ++i)
+    if (!rels->items[i].external && EndsWith(rels->items[i].type, "/drawing")) {
+      clip.anchor = AnchorXml(rels->items[i].targetPart, id);
+      drawingPart = rels->items[i].targetPart;
+    }
+  if (clip.anchor.empty()) return clip;
+  clip.book = &book_;
+  // The prefixes the drawing declares on its root, on the anchor itself.
+  const std::string xml = PartBytes(drawingPart);
+  const std::vector<drawing::Object> objects = drawing::Objects(xml);
+  if (!objects.empty()) {
+    const size_t rootAt = xml.rfind('<', objects[0].begin - 1);
+    const std::string_view rootTag = std::string_view(xml).substr(rootAt, xml.find('>', rootAt) - rootAt);
+    const size_t tagEnd = clip.anchor.find_first_of(" />");
+    std::string decls;
+    for (size_t at = rootTag.find(" xmlns"); at != std::string_view::npos; at = rootTag.find(" xmlns", at + 1)) {
+      const size_t eq = rootTag.find('=', at), q = eq == std::string_view::npos ? eq : rootTag.find_first_of("\"'", eq);
+      const size_t qe = q == std::string_view::npos ? q : rootTag.find(rootTag[q], q + 1);
+      if (qe == std::string_view::npos) break;
+      const std::string name(rootTag.substr(at + 1, eq - at - 1));
+      if (clip.anchor.substr(0, clip.anchor.find('>')).find(" " + name + "=") == std::string::npos)
+        decls += " " + std::string(rootTag.substr(at + 1, qe - at));
+    }
+    if (tagEnd != std::string::npos) clip.anchor.insert(tagEnd, decls);
+  }
+  // Its parts, and theirs.
+  auto gather = [&](auto&& self, const std::string& source, const std::vector<std::string>& ids, std::vector<ObjectClip::Part>& out,
+                    int depth) -> void {
+    const pkg::RelationshipSet* set = depth > 4 ? nullptr : package->RelationshipsOf(source);
+    for (size_t i = 0; set && i < set->items.size(); ++i) {
+      const pkg::Relationship& r = set->items[i];
+      if (std::find(ids.begin(), ids.end(), r.id) == ids.end()) continue;
+      ObjectClip::Part p;
+      p.rel = r.id;
+      p.type = r.type;
+      p.external = r.external;
+      if (r.external) {
+        p.target = r.target;
+      } else {
+        p.name = r.targetPart;
+        p.contentType = std::string(package->ContentTypeOf(r.targetPart));
+        p.bytes = PartBytes(r.targetPart);
+        std::vector<std::string> own;
+        if (const pkg::RelationshipSet* o = package->RelationshipsOf(r.targetPart))
+          for (const pkg::Relationship& x : o->items) own.push_back(x.id);
+        self(self, r.targetPart, own, p.parts, depth + 1);
+      }
+      out.push_back(std::move(p));
+    }
+  };
+  gather(gather, drawingPart, drawing::RelIds(clip.anchor), clip.parts, 0);
+  return clip;
+}
+
+Result Editor::PasteObject(int sheet, const ObjectClip& clip, const drawing::Place& p) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::PasteObject, [&](JournalRecord& w) {
+    w.I(sheet).S(clip.anchor).B(clip.book == &book_);
+    auto parts = [&](auto&& self, const std::vector<ObjectClip::Part>& v) -> void {
+      w.U(v.size());
+      for (const ObjectClip::Part& x : v) {
+        w.S(x.rel).S(x.type).S(x.name).S(x.contentType).S(x.bytes).B(x.external).S(x.target);
+        self(self, x.parts);
+      }
+    };
+    parts(parts, clip.parts);
+    for (const drawing::Marker* m : {&p.from, &p.to}) w.U(m->col).U(m->row).I(m->colOff).I(m->rowOff);
+    w.I(p.x).I(p.y).I(p.cx).I(p.cy);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    pkg::Package* package = book_.GetPackage();
+    if (!package || s.PartName().empty() || !package->FindPart(s.PartName()))
+      return Result::Fail(u"Save the workbook as an Excel workbook first, then paste the object.");
+    std::string anchor = clip.anchor.empty() ? std::string() : drawing::Placed(clip.anchor, p);
+    if (anchor.empty()) return Result::Fail(u"This object can't be pasted here.");
+    return Run(*this, u"Paste", [&]() -> Result {
+      State& st = *s_;
+      const std::string d = SheetDrawing(sheet, true);
+      if (d.empty()) return Result::Fail(u"The object couldn't be added to this sheet.");
+      const bool same = clip.book == &book_;
+      // Relationship ids in `xml` from the old ones to the new (all at once: they may swap).
+      auto renumber = [](std::string& xml, const std::vector<std::pair<std::string, std::string>>& ids) {
+        for (size_t i = 0; i < ids.size(); ++i) {
+          const std::string from = "=\"" + ids[i].first + "\"", mark = "=\"\x01" + std::to_string(i) + "\x01\"";
+          for (size_t at = xml.find(from); at != std::string::npos; at = xml.find(from, at + mark.size())) xml.replace(at, from.size(), mark);
+        }
+        for (size_t i = 0; i < ids.size(); ++i) {
+          const std::string mark = "=\"\x01" + std::to_string(i) + "\x01\"", to = "=\"" + ids[i].second + "\"";
+          for (size_t at = xml.find(mark); at != std::string::npos; at = xml.find(mark, at + to.size())) xml.replace(at, mark.size(), to);
+        }
+      };
+      auto add = [&](auto&& self, const std::string& source, const ObjectClip::Part& part, int depth) -> std::string {
+        if (part.external) {
+          st.KeepRels(source);
+          pkg::RelationshipSet set;
+          if (const pkg::RelationshipSet* r = package->RelationshipsOf(source)) set = *r;
+          else set.source = source;
+          std::string id;
+          for (size_t n = set.items.size() + 1;; ++n) {
+            id = "rId" + std::to_string(n);
+            if (std::none_of(set.items.begin(), set.items.end(), [&](const pkg::Relationship& x) { return x.id == id; })) break;
+          }
+          pkg::Relationship rel;
+          rel.id = id;
+          rel.type = part.type;
+          rel.target = part.target;
+          rel.external = true;
+          set.items.push_back(std::move(rel));
+          package->SetRelationships(std::move(set));
+          return id;
+        }
+        std::string bytes = part.bytes;
+        if (!same && part.contentType == "application/vnd.openxmlformats-officedocument.drawingml.chart+xml") bytes = charts::Detached(bytes);
+        // A picture this workbook has stored already: used again.
+        if (part.contentType.rfind("image/", 0) == 0 && part.parts.empty())
+          for (const pkg::Part& x : package->Parts())
+            if (!x.deleted && package->ContentTypeOf(x.name) == part.contentType && PartBytes(x.name) == bytes)
+              return AddRelationship(source, part.type, x.name);
+        // Otherwise a new part, numbered as the old one's kind.
+        const size_t slash = part.name.rfind('/'), dot = part.name.rfind('.');
+        size_t digits = dot == std::string::npos || dot < slash ? part.name.size() : dot;
+        while (digits > slash + 1 && std::isdigit(static_cast<unsigned char>(part.name[digits - 1]))) --digits;
+        const std::string ext = dot == std::string::npos || dot < slash ? std::string() : part.name.substr(dot);
+        const std::string name = NewPartName(part.name.substr(0, digits), ext);
+        const std::string id = AddPart(source, part.type, name, part.contentType, bytes);
+        if (id.empty() || depth > 4) return id;
+        std::vector<std::pair<std::string, std::string>> ids;
+        for (const ObjectClip::Part& c : part.parts) ids.push_back({c.rel, self(self, name, c, depth + 1)});
+        std::string now = bytes;
+        renumber(now, ids);
+        if (now != bytes) WritePart(name, std::move(now));
+        return id;
+      };
+      std::vector<std::pair<std::string, std::string>> ids;
+      for (const ObjectClip::Part& c : clip.parts) {
+        const std::string id = add(add, d, c, 0);
+        if (id.empty()) return Result::Fail(u"The object couldn't be added to this sheet.");
+        ids.push_back({c.rel, id});
+      }
+      renumber(anchor, ids);
+      // Shape ids the drawing doesn't use, in each cNvPr (a group has one per shape); the first
+      // names the object.
+      uint32_t next = NextShapeId(d);
+      for (size_t at = anchor.find("cNvPr"), first = at; at != std::string::npos; at = anchor.find("cNvPr", at + 5)) {
+        const size_t q = anchor.find(" id=\"", at), close = anchor.find('>', at);
+        const size_t e = q == std::string::npos ? q : anchor.find('"', q + 5);
+        if (q != std::string::npos && q < close && e != std::string::npos) {
+          const uint32_t shape = next++;
+          anchor.replace(q + 5, e - q - 5, std::to_string(shape));
+          if (at != first) continue;
+          // Its name numbered anew as Excel numbers a copy ("Chart 1" pasted: "Chart 2").
+          const size_t n = anchor.find(" name=\"", at), ne = n == std::string::npos ? n : anchor.find('"', n + 7);
+          if (n != std::string::npos && ne != std::string::npos && n < anchor.find('>', at)) {
+            size_t digits = ne;
+            while (digits > n + 7 && std::isdigit(static_cast<unsigned char>(anchor[digits - 1]))) --digits;
+            if (digits < ne && digits > n + 8 && anchor[digits - 1] == ' ') anchor.replace(digits, ne - digits, std::to_string(shape - 1));
+          }
+        }
+      }
+      if (!AddAnchor(d, anchor)) return Result::Fail(u"The object couldn't be added to this sheet.");
+      st.Change(&s, kObjects, Range{p.from.row, p.from.col, p.to.row, p.to.col});
+      return Result{};
+    });
+  }());
+}
+
+std::string Editor::ChartPart(int sheet, uint32_t id) const {
+  const pkg::Package* package = book_.GetPackage();
+  if (!package || sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return {};
+  const std::string sheetPart = book_.GetSheet(static_cast<size_t>(sheet)).PartName();
+  const pkg::RelationshipSet* rels = sheetPart.empty() ? nullptr : package->RelationshipsOf(sheetPart);
+  for (size_t i = 0; rels && i < rels->items.size(); ++i) {
+    const pkg::Relationship& r = rels->items[i];
+    if (r.external || !EndsWith(r.type, "/drawing")) continue;
+    const std::string anchor = AnchorXml(r.targetPart, id);
+    const pkg::RelationshipSet* own = anchor.empty() ? nullptr : package->RelationshipsOf(r.targetPart);
+    for (const std::string& rid : drawing::RelIds(anchor))
+      for (size_t k = 0; own && k < own->items.size(); ++k)
+        if (own->items[k].id == rid && !own->items[k].external &&
+            package->ContentTypeOf(own->items[k].targetPart) == "application/vnd.openxmlformats-officedocument.drawingml.chart+xml")
+          return own->items[k].targetPart;
+  }
+  return {};
+}
+
+Result Editor::EditChart(int sheet, uint32_t id, const ChartEdit& e) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::EditChart, [&](JournalRecord& w) {
+    w.I(sheet).U(id).B(e.kind.has_value()).U(e.kind ? static_cast<uint8_t>(*e.kind) : 0);
+    for (const std::optional<ChartText>* t : {&e.title, &e.xTitle, &e.yTitle})
+      w.B(t->has_value()).B(*t && (*t)->shown).S(*t ? (*t)->text : std::string());
+    w.B(e.legend.has_value()).U(e.legend ? static_cast<uint8_t>(*e.legend) : 0).B(e.labels.has_value()).B(e.labels.value_or(false));
+    w.U(e.colors.size());
+    for (const ChartColor& c : e.colors) w.U(c.series).I(c.point).U(c.rgb);
+    w.B(e.series.has_value()).U(e.series ? e.series->size() : 0);
+    if (e.series)
+      for (const ChartSeries& s : *e.series) w.S(s.name).S(s.values).S(s.categories);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    const std::string part = ChartPart(sheet, id);
+    if (part.empty()) return Result::Fail(u"That isn't a chart.");
+    std::string xml = charts::Edited(book_, PartBytes(part), e);
+    if (xml.empty()) return Result::Fail(u"This chart can't be changed that way. Check the references to the cells.");
+    return Run(*this, u"Chart", [&]() -> Result {
+      if (!WritePart(part, std::move(xml))) return Result::Fail(u"This chart can't be changed that way.");
+      s_->Change(&book_.GetSheet(static_cast<size_t>(sheet)), kObjects, Range{});
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::MoveChartToSheet(int sheet, uint32_t id, std::string name) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::MoveChartToSheet, [&](JournalRecord& w) { w.I(sheet).U(id).S(name); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    const std::string chart = ChartPart(sheet, id);
+    if (chart.empty()) return Result::Fail(u"Only a chart can move to a chart sheet.");
+    // Its graphic frame, declaring the prefixes the drawing declares (CopyObject puts them on the
+    // anchor).
+    const std::string anchor = CopyObject(sheet, id).anchor;
+    const size_t nameEnd = anchor.find_first_of(" />", 1);
+    const size_t colon = anchor.find(':');
+    const std::string p = colon != std::string::npos && colon < nameEnd ? anchor.substr(1, colon) : std::string();
+    const size_t begin = anchor.find("<" + p + "graphicFrame");
+    const std::string close = "</" + p + "graphicFrame>";
+    const size_t end = begin == std::string::npos ? begin : anchor.find(close, begin);
+    if (end == std::string::npos) return Result::Fail(u"Only a chart can move to a chart sheet.");
+    std::string frame = anchor.substr(begin, end + close.size() - begin);
+    const std::vector<std::string> rels = drawing::RelIds(frame);
+    if (rels.size() != 1) return Result::Fail(u"This chart can't move to a chart sheet.");
+    std::string decls;
+    const std::string_view tag = std::string_view(anchor).substr(0, anchor.find('>'));
+    for (size_t at = tag.find(" xmlns"); at != std::string_view::npos; at = tag.find(" xmlns", at + 1)) {
+      const size_t q = tag.find('"', at), q2 = q == std::string_view::npos ? q : tag.find('"', q + 1);
+      if (q2 == std::string_view::npos) break;
+      decls += tag.substr(at, q2 + 1 - at);
+    }
+    frame.insert(1 + p.size() + std::string_view("graphicFrame").size(), decls);
+    if (name.empty())
+      for (size_t n = 1;; ++n) {
+        name = "Chart" + std::to_string(n);
+        if (book_.FindSheet(name) < 0) break;
+      }
+    if (std::u16string why = CheckSheetName(name); !why.empty()) return Result::Fail(why);
+    return Run(*this, u"Move Chart", [&]() -> Result {
+      State& st = *s_;
+      const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+      const std::string part = NewPartName("/xl/chartsheets/sheet", ".xml");
+      const std::string relId = AddPart(book_.WorkbookPart(), rel + "chartsheet", part,
+                                        "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml", std::string());
+      const std::string d = NewPartName("/xl/drawings/drawing", ".xml");
+      const std::string drawingId =
+          relId.empty() ? relId : AddPart(part, rel + "drawing", d, "application/vnd.openxmlformats-officedocument.drawing+xml", std::string());
+      const std::string chartId = drawingId.empty() ? drawingId : AddRelationship(d, rel + "chart", chart);
+      if (chartId.empty()) return Result::Fail(u"The chart sheet can't be added to this workbook.");
+      if (const size_t at = frame.find("=\"" + rels[0] + "\""); at != std::string::npos) frame.replace(at + 2, rels[0].size(), chartId);
+      // As Excel writes a chart sheet: the chart filling the page (its size as Excel saves one).
+      WritePart(d, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<xdr:wsDr xmlns:xdr=\""
+                   "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/"
+                   "drawingml/2006/main\"><xdr:absoluteAnchor><xdr:pos x=\"0\" y=\"0\"/><xdr:ext cx=\"8666922\" cy=\"6293304\"/>" +
+                       frame + "<xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>");
+      WritePart(part, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<chartsheet xmlns=\""
+                      "http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"" + std::string(kRelNs) +
+                          "\"><sheetPr/><sheetViews><sheetView workbookViewId=\"0\" zoomToFit=\"1\"/></sheetViews><pageMargins "
+                          "left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/><drawing r:id=\"" +
+                          drawingId + "\"/></chartsheet>");
+      // The sheet, before the chart's, and active (Excel's).
+      st.SaveBook(true, true);
+      uint32_t sheetId = 0;
+      for (size_t i = 0; i < book_.SheetCount(); ++i) sheetId = std::max(sheetId, A::SheetId(book_.GetSheet(i)));
+      auto made = std::make_unique<Sheet>(book_, name);
+      WorkbookLoader::SetSheetInfo(*made, SheetKind::Chartsheet, SheetState::Visible, sheetId + 1, {}, {});
+      WorkbookLoader::MarkLoaded(*made, true);
+      A::Part(*made) = part;
+      A::RelId(*made) = relId;
+      Sheet* added = made.get();
+      auto& list = A::Sheets(book_);
+      std::vector<int> remap(list.size());
+      for (size_t i = 0; i < list.size(); ++i) remap[i] = static_cast<int>(i) + (static_cast<int>(i) >= sheet ? 1 : 0);
+      list.insert(list.begin() + sheet, std::move(made));
+      st.RemapNameSheets(remap);
+      A::Active(book_) = static_cast<uint32_t>(sheet);
+      st.Save(*added);
+      st.Change(added, kSheets, Range{});
+      // Gone from its sheet as Delete takes it; the chart part stays (the chart sheet uses it).
+      return DeleteObjects(sheet + 1, {id});
+    });
+  }());
+}
+
+Result Editor::MoveChartToObject(int chartSheet, int toSheet, CellAddr at) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
+  if (Result no = guard.Check(toSheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::MoveChartToObject, [&](JournalRecord& w) { w.I(chartSheet).I(toSheet).A(at); });
+  return rec.Done([&]() -> Result {
+    const int n = static_cast<int>(book_.SheetCount());
+    if (chartSheet < 0 || chartSheet >= n || toSheet < 0 || toSheet >= n || toSheet == chartSheet) return NoSheet();
+    if (book_.GetSheet(static_cast<size_t>(chartSheet)).Kind() != SheetKind::Chartsheet)
+      return Result::Fail(u"This isn't a chart sheet.");
+    if (book_.GetSheet(static_cast<size_t>(toSheet)).Kind() != SheetKind::Worksheet)
+      return Result::Fail(u"A chart can go only on a worksheet.");
+    if (at.row >= kMaxRows || at.col >= kMaxCols) return BadRange();
+    std::string chart;
+    for (const drawing::Object& o : drawing::Objects(PartBytes(SheetDrawing(chartSheet, false))))
+      if (chart.empty()) chart = ChartPart(chartSheet, o.id);
+    if (chart.empty()) return Result::Fail(u"This chart sheet has no chart to move.");
+    if (!book_.LoadSheet(static_cast<size_t>(toSheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(toSheet));
+    if (s.PartName().empty() || !book_.GetPackage()->FindPart(s.PartName()))
+      return Result::Fail(u"Save the workbook as an Excel workbook first, then move the chart.");
+    return Run(*this, u"Move Chart", [&]() -> Result {
+      const std::string d = SheetDrawing(toSheet, true);
+      const std::string rel =
+          d.empty() ? d : AddRelationship(d, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart", chart);
+      const CellAddr to{std::min(at.row + 15, kMaxRows - 1), std::min(at.col + 8, kMaxCols - 1)};
+      if (rel.empty() || !AddAnchor(d, charts::ChartAnchor(at, to, rel, NextShapeId(d))))
+        return Result::Fail(u"The chart couldn't be added to this sheet.");
+      s_->Change(&s, kObjects, Range{at.row, at.col, to.row, to.col});
+      // The chart sheet goes; its chart part stays (the sheet's drawing uses it now).
+      return DeleteSheet(chartSheet);
+    });
+  }());
+}
+
+Result Editor::DeleteObjects(int sheet, const std::vector<uint32_t>& ids) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::DeleteObjects, [&](JournalRecord& w) {
+    w.I(sheet).U(ids.size());
+    for (uint32_t id : ids) w.U(id);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    const std::string d = SheetDrawing(sheet, false);
+    std::string xml = d.empty() ? std::string() : PartBytes(d);
+    const std::vector<drawing::Object> objects = drawing::Objects(xml);
+    std::vector<const drawing::Object*> gone;
+    for (uint32_t id : ids)
+      if (const drawing::Object* o = drawing::Find(objects, id); o && std::find(gone.begin(), gone.end(), o) == gone.end()) gone.push_back(o);
+    if (gone.empty()) return Result::Fail(u"The object isn't on this sheet any more.");
+    return Run(*this, u"Delete", [&]() -> Result {
+      State& st = *s_;
+      pkg::Package& package = *book_.GetPackage();
+      Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+      std::vector<std::string> rels;
+      std::sort(gone.begin(), gone.end(), [](auto* a, auto* b) { return a->begin > b->begin; });
+      for (const drawing::Object* o : gone) {
+        for (std::string& r : drawing::RelIds(std::string_view(xml).substr(o->begin, o->end - o->begin))) rels.push_back(std::move(r));
+        xml.erase(o->begin, o->end - o->begin);
+      }
+      // A part nothing refers to any more goes, and then what only it referred to.
+      auto unused = [&](const std::string& part) {
+        for (const pkg::RelationshipSet& set : package.Relationships())
+          for (const pkg::Relationship& r : set.items)
+            if (!r.external && NameEqualsNoCase(r.targetPart, part)) return false;
+        return true;
+      };
+      auto ownTargets = [&](const std::string& part) {
+        std::vector<std::string> own;
+        if (const pkg::RelationshipSet* set = package.RelationshipsOf(part))
+          for (const pkg::Relationship& r : set->items)
+            if (!r.external) own.push_back(r.targetPart);
+        return own;
+      };
+      auto drop = [&](auto&& self, const std::string& part) -> void {
+        if (!package.FindPart(part) || !unused(part)) return;
+        const std::vector<std::string> own = ownTargets(part);
+        RemovePart(part);
+        for (const std::string& o : own) self(self, o);
+      };
+      if (drawing::Objects(xml).empty()) {
+        // The last object: the drawing goes, with the sheet's <drawing r:id>.
+        st.SaveText(st.Save(s));
+        xlsx::PutSheetElement(A::Text(s), "drawing", {});
+        const std::vector<std::string> own = ownTargets(d);
+        RemovePart(d);
+        for (const std::string& o : own) drop(drop, o);
+      } else {
+        WritePart(d, xml);
+        const std::vector<std::string> left = drawing::RelIds(xml);
+        if (const pkg::RelationshipSet* set = package.RelationshipsOf(d)) {
+          pkg::RelationshipSet kept = *set;
+          std::vector<std::string> targets;
+          auto& items = kept.items;
+          items.erase(std::remove_if(items.begin(), items.end(), [&](const pkg::Relationship& r) {
+                        const bool off = std::find(rels.begin(), rels.end(), r.id) != rels.end() &&
+                                         std::find(left.begin(), left.end(), r.id) == left.end();
+                        if (off && !r.external) targets.push_back(r.targetPart);
+                        return off;
+                      }), items.end());
+          if (items.size() != set->items.size()) {
+            st.KeepRels(d);
+            package.SetRelationships(std::move(kept));
+            for (const std::string& t : targets) drop(drop, t);
+          }
+        }
+      }
+      st.Change(&s, kObjects, Range{});
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::InsertChart(int sheet, const NewChart& c) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects, c.data); !no) return no;
+  Rec rec(*this, JournalOp::InsertChart, [&](JournalRecord& w) {
+    w.I(sheet).U(static_cast<uint8_t>(c.kind)).R(c.data).A(c.at).U(c.cols).U(c.rows).S(c.title);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!Valid(c.data) || c.at.row >= kMaxRows || c.at.col >= kMaxCols || !c.cols || !c.rows) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    pkg::Package* package = book_.GetPackage();
+    if (!package || s.PartName().empty() || !package->FindPart(s.PartName()))
+      return Result::Fail(u"Save the workbook as an Excel workbook first, then insert the chart.");
+    std::string xml = charts::NewChartXml(s, c.data, c.kind, c.title);
+    if (xml.empty()) return Result::Fail(u"Select the cells with the numbers to chart.");
+    return Run(*this, u"Insert Chart", [&]() -> Result {
+      const std::string drawing = SheetDrawing(sheet, true);
+      if (drawing.empty()) return Result::Fail(u"The chart couldn't be added to this sheet.");
+      const std::string chartPart = NewPartName("/xl/charts/chart", ".xml");
+      const std::string rel = AddPart(drawing, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart", chartPart,
+                                      "application/vnd.openxmlformats-officedocument.drawingml.chart+xml", std::move(xml));
+      const CellAddr to{std::min(c.at.row + c.rows, kMaxRows - 1), std::min(c.at.col + c.cols, kMaxCols - 1)};
+      if (rel.empty() || !AddAnchor(drawing, charts::ChartAnchor(c.at, to, rel, NextShapeId(drawing))))
+        return Result::Fail(u"The chart couldn't be added to this sheet.");
+      s_->Change(&s, kObjects, Range{c.at.row, c.at.col, c.at.row + c.rows, c.at.col + c.cols});
+      return Result{};
+    });
+  }());
+}
+
 // ---- Cut and paste
 
 namespace {
@@ -3364,6 +4598,13 @@ CellInput InputOf(const CellInfo& cell, const FormulaInfo* f, int sheet, calc::N
 }  // namespace
 
 Result Editor::MoveCells(int sheet, const Range& from, int toSheet, CellAddr to, std::u16string stepName) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Content, from); !no) return no;
+  if (from.lastRow >= from.firstRow && from.lastCol >= from.firstCol)
+    if (Result no = guard.Check(toSheet, ProtectAct::Content,
+                                Range{to.row, to.col, to.row + (from.lastRow - from.firstRow), to.col + (from.lastCol - from.firstCol)});
+        !no)
+      return no;
   Rec rec(*this, JournalOp::MoveCells, [&](JournalRecord& w) { w.I(sheet).R(from).A(to).S16(stepName).I(toSheet); });
   return rec.Done([&]() -> Result {
     const int n = static_cast<int>(book_.SheetCount());
@@ -3537,6 +4778,8 @@ Result Editor::MoveCells(int sheet, const Range& from, int toSheet, CellAddr to,
 // ---- Merged cells
 
 Result Editor::Merge(int sheet, const Range& r) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   Rec rec(*this, JournalOp::Merge, [&](JournalRecord& w) { w.I(sheet).R(r); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -3588,6 +4831,8 @@ Result Editor::Merge(int sheet, const Range& r) {
 }
 
 Result Editor::Unmerge(int sheet, const Range& r) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
   Rec rec(*this, JournalOp::Unmerge, [&](JournalRecord& w) { w.I(sheet).R(r); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -3629,6 +4874,8 @@ std::u16string Editor::CheckSheetName(std::string_view name, int except) const {
 }
 
 Result Editor::AddSheet(int at, std::string name) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
   Rec rec(*this, JournalOp::AddSheet, [&](JournalRecord& w) { w.I(at).S(name); });
   return rec.Done([&]() -> Result {
     if (at < 0 || static_cast<size_t>(at) > book_.SheetCount()) at = static_cast<int>(book_.SheetCount());
@@ -3665,6 +4912,8 @@ Result Editor::AddSheet(int at, std::string name) {
 }
 
 Result Editor::RenameSheet(int sheet, std::string name) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
   Rec rec(*this, JournalOp::RenameSheet, [&](JournalRecord& w) { w.I(sheet).S(name); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -3694,6 +4943,8 @@ Result Editor::RenameSheet(int sheet, std::string name) {
 }
 
 Result Editor::MoveSheet(int sheet, int to) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
   Rec rec(*this, JournalOp::MoveSheet, [&](JournalRecord& w) { w.I(sheet).I(to); });
   return rec.Done([&]() -> Result {
     int n = static_cast<int>(book_.SheetCount());
@@ -3733,6 +4984,8 @@ Result Editor::MoveSheet(int sheet, int to) {
 }
 
 Result Editor::DeleteSheet(int sheet) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
   Rec rec(*this, JournalOp::DeleteSheet, [&](JournalRecord& w) { w.I(sheet); });
   return rec.Done([&]() -> Result {
     int n = static_cast<int>(book_.SheetCount());
@@ -3893,6 +5146,11 @@ std::string FilterXml(const SheetFilter& f, const std::string& p) {
 }  // namespace
 
 Result Editor::SetFilter(int sheet, const std::optional<SheetFilter>& filter) {
+  Guard guard(*this);
+  if (sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount() && book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) {
+    const bool both = filter && book_.GetSheet(static_cast<size_t>(sheet)).Filter();
+    if (Result no = guard.Check(sheet, both ? ProtectAct::Filter : ProtectAct::Never); !no) return no;
+  }
   Rec rec(*this, JournalOp::SetFilter, [&](JournalRecord& w) { w.I(sheet).Filter(filter); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -3945,7 +5203,447 @@ Result Editor::SetFilter(int sheet, const std::optional<SheetFilter>& filter) {
   }());
 }
 
+Result Editor::SetSheetRules(int sheet, RuleKind kind, const std::string& xml, const std::string& ext,
+                             std::u16string stepName) {
+  Guard guard(*this);
+  if (sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount())
+    if (Result no = guard.Check(sheet, kind == RuleKind::Validations ? ProtectAct::Never : ProtectAct::FormatCells); !no) return no;
+  Rec rec(*this, JournalOp::SetSheetRules,
+          [&](JournalRecord& w) { w.I(sheet).U(static_cast<uint8_t>(kind)).S(xml).S(ext).S16(stepName); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (s.Kind() != SheetKind::Worksheet || s.PartName().empty())
+      return Result::Fail(u"Only a worksheet of an Excel workbook keeps these rules.");
+    const bool validations = kind == RuleKind::Validations;
+    std::string oldXml, oldExt;
+    xlsx::GetSheetRules(A::Text(s), validations, oldXml, oldExt);
+    if (oldXml == xml && oldExt == ext) return Result{};
+    return Run(*this, std::move(stepName), [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveText(sv);
+      xlsx::PutSheetRules(A::Text(s), validations, xml, ext);
+      st.Change(&s, kRules, Range{});
+      return Result{};
+    });
+  }());
+}
+
+namespace {
+constexpr std::string_view kTableRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
+constexpr std::string_view kTableRelStrict = "http://purl.oclc.org/ooxml/officeDocument/relationships/table";
+constexpr std::string_view kTableType = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
+
+// A table on the sheet that `ref` overlaps, other than `except`, as Excel's message names it.
+Result TableOverlap(const Sheet& s, const Range& ref, size_t except) {
+  for (size_t i = 0; i < s.Tables().size(); ++i)
+    if (i != except && Overlaps(s.Tables()[i].ref, ref)) return Result::Fail(u"A table can't overlap another table.");
+  for (const Range& m : s.Merges())
+    if (Overlaps(m, ref)) return Result::Fail(u"A table can't overlap a range that contains merged cells.");
+  if (s.Filter() && Overlaps(s.Filter()->ref, ref)) return Result::Fail(u"A table can't overlap the sheet's filter.");
+  return {};
+}
+
+Result TableShape(const Table& t) {
+  if (!Valid(t.ref)) return BadRange();
+  if (t.ref.lastRow < t.ref.firstRow + t.headerRows + t.totalsRows) return Result::Fail(u"A table needs a row of data.");
+  if (t.columns.size() != t.ref.lastCol - t.ref.firstCol + 1) return Result::Fail(u"A table needs a name for each column.");
+  return {};
+}
+}  // namespace
+
+Result Editor::AddTable(int sheet, Table t) {
+  Guard guard(*this);
+  if (sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount())
+    if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
+  Rec rec(*this, JournalOp::AddTable, [&](JournalRecord& w) { w.I(sheet).S(xlsx::TableXml(t)).S(t.part); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (s.Kind() != SheetKind::Worksheet || s.PartName().empty() || !book_.GetPackage())
+      return Result::Fail(u"Tables need an Excel workbook: save this one as .xlsx first.");
+    if (Result r = TableShape(t); !r) return r;
+    if (Result r = TableOverlap(s, t.ref, SIZE_MAX); !r) return r;
+    return Run(*this, u"Create Table", [&]() -> Result {
+      State& st = *s_;
+      // Ids and names unique in the workbook: Excel's "Table1", "Table2"...
+      uint32_t maxId = 0;
+      bool idTaken = false;
+      std::vector<std::string> names;
+      for (size_t i = 0; i < book_.SheetCount(); ++i)
+        for (const Table& x : book_.GetSheet(i).Tables()) {
+          maxId = std::max(maxId, x.id);
+          idTaken |= x.id == t.id;
+          names.push_back(x.name);
+        }
+      for (const DefinedName& n : book_.Names()) names.push_back(n.name);
+      auto taken = [&](const std::string& name) {
+        return std::any_of(names.begin(), names.end(), [&](const std::string& x) { return NameEqualsNoCase(x, name); });
+      };
+      if (t.id == 0 || idTaken) t.id = maxId + 1;
+      if (t.name.empty() || taken(t.name))
+        for (uint32_t n = 1;; ++n)
+          if (!taken(t.name = "Table" + std::to_string(n))) break;
+      t.displayName = t.name;
+      for (size_t i = 0; i < t.columns.size(); ++i)
+        if (t.columns[i].id == 0) t.columns[i].id = static_cast<uint32_t>(i + 1);
+      t.part = NewPartName("/xl/tables/table", ".xml");
+      const bool strict = A::Text(s).rootStart.find(xlsx::kStrictMainNs) != std::string::npos;
+      const std::string id = AddPart(s.PartName(), strict ? kTableRelStrict : kTableRel, t.part, kTableType, xlsx::TableXml(t, strict));
+      if (id.empty()) return Result::Fail(u"The table couldn't be added to the workbook.");
+      SheetSave& sv = st.Save(s);
+      st.SaveText(sv);
+      xlsx::PutTablePart(A::Text(s), id, true);
+      st.SaveTables(sv);
+      A::Tables(s).push_back(t);
+      st.Change(&s, kStyles | kRules | kTables, t.ref);
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::SetTable(int sheet, size_t index, const Table& t) {
+  Guard guard(*this);
+  if (sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount())
+    if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
+  Rec rec(*this, JournalOp::SetTable, [&](JournalRecord& w) { w.I(sheet).U(index).S(xlsx::TableXml(t)).S(t.part); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (index >= s.Tables().size()) return Result::Fail(u"There's no such table.");
+    if (Result r = TableShape(t); !r) return r;
+    if (Result r = TableOverlap(s, t.ref, index); !r) return r;
+    const Table before = s.Tables()[index];
+    if (!t.name.empty() && !NameEqualsNoCase(t.name, before.name)) {
+      for (size_t i = 0; i < book_.SheetCount(); ++i)
+        for (const Table& x : book_.GetSheet(i).Tables())
+          if (NameEqualsNoCase(x.name, t.name)) return Result::Fail(u"The name entered already exists. Enter a unique name.");
+      for (const DefinedName& n : book_.Names())
+        if (NameEqualsNoCase(n.name, t.name)) return Result::Fail(u"The name entered already exists. Enter a unique name.");
+    }
+    return Run(*this, u"Table", [&]() -> Result {
+      State& st = *s_;
+      Table now = t;
+      now.part = before.part;
+      now.id = before.id;
+      if (now.name.empty()) now.name = before.name;
+      now.displayName = now.name;
+      uint32_t maxId = 0;
+      for (const TableColumn& c : before.columns) maxId = std::max(maxId, c.id);
+      for (size_t i = 0; i < now.columns.size(); ++i)
+        if (now.columns[i].id == 0) now.columns[i].id = ++maxId;
+      std::string xml = PartBytes(before.part);
+      if (xml.empty() || !xlsx::UpdateTableXml(xml, now)) return Result::Fail(u"The table's part couldn't be written.");
+      SheetFilter kept;
+      now.criteria.clear();
+      if (now.autoFilter && xlsx::ReadTableFilter(xml, kept)) now.criteria = std::move(kept.columns);
+      now.filtered = !now.criteria.empty();
+      if (!WritePart(before.part, std::move(xml))) return Result::Fail(u"The table's part couldn't be written.");
+      SheetSave& sv = st.Save(s);
+      st.SaveTables(sv);
+      A::Tables(s)[index] = now;
+      const Range all{std::min(before.ref.firstRow, now.ref.firstRow), std::min(before.ref.firstCol, now.ref.firstCol),
+                      std::max(before.ref.lastRow, now.ref.lastRow), std::max(before.ref.lastCol, now.ref.lastCol)};
+      st.Change(&s, kStyles | kRules | kTables, all);
+      // Renamed: formulas everywhere that name it follow (Table1[Qty] -> Orders[Qty]), as in Excel.
+      if (before.name != now.name) {
+        const std::string from = before.name, to = now.name;
+        RewriteSheetRefs(
+            -1, [&](std::string_view text, int) { return refs::RenameTable(text, from, to); },
+            [&](std::string_view text) { return Mentions(text, from); });
+      }
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::KeepTableLook(Sheet& s, const Table& t, BakedStyles& baked, bool given) {
+  State& st0 = *s_;
+  if (given) {
+    SheetSave& sv = st0.Save(s);
+    std::u16string why;
+    const size_t count = book_.GetStyles().CellXfs().size();
+    for (const auto& [a, x] : baked)
+      if (x < count && a.row <= t.ref.lastRow && a.col <= t.ref.lastCol && s.StyleAt(a.row, a.col) != x &&
+          !st0.Put(sv, a.row, a.col, nullptr, false, x, why))
+        return Result::Fail(why);
+    st0.Change(&s, kStyles, t.ref);
+    return {};
+  }
+  // As the grid paints a table under the cells' own formats (TableStyles.h): a fill where the cell
+  // has none, the style's font color where the cell's is the default font's, bold and italic added,
+  // a border on each side the cell leaves empty.
+  const Styles& styles = book_.GetStyles();
+  const TableStyle* style = FindTableStyle(styles, t.style.name);
+  if (!style) return {};
+  struct Made {
+    uint32_t old;
+    TableCellFormat look;
+    uint32_t xf;
+  };
+  std::vector<Made> made;
+  auto same = [](const TableCellFormat& a, const TableCellFormat& b) {
+    return a.fill == b.fill && a.fontColor == b.fontColor && a.bold == b.bold && a.italic == b.italic && a.left == b.left &&
+           a.top == b.top && a.bottom == b.bottom && a.right == b.right;
+  };
+  auto bake = [&](uint32_t old, const TableCellFormat& look) {
+    for (const Made& m : made)
+      if (m.old == old && same(m.look, look)) return m.xf;
+    const Styles& now = book_.GetStyles();  // Add* may grow its lists
+    Xf xf = old < now.CellXfs().size() ? now.CellXfs()[old] : Xf{};
+    Font font = now.FontOf(xf);
+    bool fontChanged = false;
+    if (look.bold && !font.bold) font.bold = fontChanged = true;
+    if (look.italic && !font.italic) font.italic = fontChanged = true;
+    const uint32_t def = now.Resolve(now.DefaultFont().color, 0xFF000000);
+    if (look.fontColor.IsSet() && (!font.color.IsSet() || now.Resolve(font.color, 0xFF000000) == def) && !(font.color == look.fontColor)) {
+      font.color = look.fontColor;
+      fontChanged = true;
+    }
+    if (fontChanged) {
+      xf.font = AddFont(font);
+      xf.applyFont = true;
+    }
+    const Fill own = xf.fill < now.Fills().size() ? now.Fills()[xf.fill] : Fill{};
+    const bool fillChanged =
+        own.pattern == PatternType::None && !own.gradient && (look.fill.pattern != PatternType::None || look.fill.gradient);
+    if (fillChanged) {
+      Fill fill = look.fill;
+      if (fill.pattern == PatternType::Solid && !fill.bg.IsSet()) fill.bg = fill.fg;  // as Excel writes it
+      xf.fill = AddFill(fill);
+      xf.applyFill = true;
+    }
+    Border border = xf.border < now.Borders().size() ? now.Borders()[xf.border] : Border{};
+    bool borderChanged = false;
+    for (auto [mine, theirs] : {std::pair<BorderSide*, const BorderSide*>{&border.left, &look.left}, {&border.top, &look.top},
+                                {&border.bottom, &look.bottom}, {&border.right, &look.right}})
+      if (mine->style == BorderStyle::None && theirs->style != BorderStyle::None) {
+        *mine = *theirs;
+        borderChanged = true;
+      }
+    if (borderChanged) {
+      xf.border = AddBorder(border);
+      xf.applyBorder = true;
+    }
+    const uint32_t x = fontChanged || fillChanged || borderChanged ? AddXf(xf) : old;
+    made.push_back({old, look, x});
+    return x;
+  };
+  State& st = *s_;
+  SheetSave& sv = st.Save(s);
+  std::u16string why;
+  for (uint32_t row = t.ref.firstRow; row <= t.ref.lastRow; ++row)
+    for (uint32_t col = t.ref.firstCol; col <= t.ref.lastCol; ++col) {
+      const TableCellFormat look = TableFormat(*style, t, row, col);
+      if (look.Empty()) continue;
+      const uint32_t old = s.StyleAt(row, col);
+      const uint32_t x = bake(old, look);
+      if (x == old) continue;
+      if (!st.Put(sv, row, col, nullptr, false, x, why)) return Result::Fail(why);
+      baked.push_back({CellAddr{row, col}, x});
+    }
+  st.Change(&s, kStyles, t.ref);
+  return {};
+}
+
+Result Editor::RemoveTable(int sheet, size_t index) { return RemoveTableAs(sheet, index, nullptr); }
+
+Result Editor::RemoveTableAs(int sheet, size_t index, const BakedStyles* given) {
+  Guard guard(*this);
+  if (sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount())
+    if (Result no = guard.Check(sheet, ProtectAct::Never); !no) return no;
+  Rec rec(*this, JournalOp::RemoveTable, [&](JournalRecord& w) { w.I(sheet).U(index); });
+  BakedStyles baked = given ? *given : BakedStyles{};
+  // The look's formats follow in the record, so a replay puts the same ones (AddXf's record of a
+  // format may not give it back exactly).
+  auto withLook = [&](Result r) {
+    if (r && rec.on) {
+      rec.rec.U(baked.size());
+      for (const auto& [a, x] : baked) rec.rec.U(a.row).U(a.col).U(x);
+    }
+    return r;
+  };
+  return rec.Done(withLook([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (index >= s.Tables().size() || !book_.GetPackage()) return Result::Fail(u"There's no such table.");
+    return Run(*this, u"Convert to Range", [&]() -> Result {
+      State& st = *s_;
+      const Table t = s.Tables()[index];
+      if (Result r = KeepTableLook(s, t, baked, given != nullptr); !r) return r;
+      std::string relId;
+      if (const pkg::RelationshipSet* set = book_.GetPackage()->RelationshipsOf(s.PartName()))
+        for (const pkg::Relationship& r : set->items)
+          if (!r.external && NameEqualsNoCase(r.targetPart, t.part)) relId = r.id;
+      if (!RemovePart(t.part)) return Result::Fail(u"The table's part couldn't be removed.");
+      SheetSave& sv = st.Save(s);
+      st.SaveText(sv);
+      if (!relId.empty()) xlsx::PutTablePart(A::Text(s), relId, false);
+      st.SaveTables(sv);
+      A::Tables(s).erase(A::Tables(s).begin() + static_cast<ptrdiff_t>(index));
+      st.Change(&s, kStyles | kRules | kTables, t.ref);
+      return Result{};
+    });
+  }()));
+}
+
+Result Editor::SetTableFilter(int sheet, size_t index, const SheetFilter& f) {
+  Guard guard(*this);
+  if (sheet >= 0 && static_cast<size_t>(sheet) < book_.SheetCount())
+    if (Result no = guard.Check(sheet, ProtectAct::Filter); !no) return no;
+  Rec rec(*this, JournalOp::SetTableFilter, [&](JournalRecord& w) { w.I(sheet).U(index).Filter(f); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (index >= s.Tables().size()) return Result::Fail(u"There's no such table.");
+    const Table& t = s.Tables()[index];
+    if (!t.autoFilter || !t.headerRows) return Result::Fail(u"The table has no filter buttons.");
+    SheetFilter now = f;
+    now.ref = t.ref;
+    if (t.totalsRows && now.ref.lastRow > now.ref.firstRow) --now.ref.lastRow;
+    const uint32_t width = t.ref.lastCol - t.ref.firstCol + 1;
+    std::erase_if(now.columns, [&](const FilterColumn& c) { return c.colId >= width; });
+    now.filtered = !now.columns.empty();
+    return Run(*this, u"Filter", [&]() -> Result {
+      State& st = *s_;
+      std::string xml = PartBytes(t.part);
+      if (xml.empty() || !xlsx::PutTableFilter(xml, FilterXml(now, "")) || !WritePart(t.part, std::move(xml)))
+        return Result::Fail(u"The table's part couldn't be written.");
+      SheetSave& sv = st.Save(s);
+      st.SaveTables(sv);
+      A::Tables(s)[index].filtered = now.filtered;
+      A::Tables(s)[index].criteria = now.columns;
+      st.Change(&s, kSheetProps, now.ref);
+      return Result{};
+    });
+  }());
+}
+
+namespace {
+constexpr std::string_view kImageRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+
+void PutPlace(JournalRecord& w, const drawing::Place& p) {
+  for (const drawing::Marker* m : {&p.from, &p.to}) w.U(m->col).U(m->row).I(m->colOff).I(m->rowOff);
+  w.I(p.x).I(p.y).I(p.cx).I(p.cy);
+}
+
+bool PlaceOk(const drawing::Place& p) {
+  return p.from.col < kMaxCols && p.to.col < kMaxCols && p.from.row < kMaxRows && p.to.row < kMaxRows &&
+         p.to.col >= p.from.col && p.to.row >= p.from.row && p.cx >= 0 && p.cy >= 0;
+}
+}  // namespace
+
+Result Editor::InsertPicture(int sheet, const std::string& bytes, const drawing::Place& p, const std::string& altText,
+                             uint32_t* id) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::InsertPicture, [&](JournalRecord& w) {
+    w.I(sheet).S(bytes);
+    PutPlace(w, p);
+    w.S(altText);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!PlaceOk(p)) return BadRange();
+    std::string extension, type;
+    if (!data::PictureType(bytes, extension, type)) return Result::Fail(u"That isn't a picture Featherweight adds: PNG, JPEG, GIF or BMP.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    pkg::Package* package = book_.GetPackage();
+    if (!package || s.PartName().empty() || !package->FindPart(s.PartName()))
+      return Result::Fail(u"Save the workbook as an Excel workbook first, then insert the picture.");
+    return Run(*this, u"Insert Picture", [&]() -> Result {
+      const std::string d = SheetDrawing(sheet, true);
+      if (d.empty()) return Result::Fail(u"The picture couldn't be added to this sheet.");
+      // Stored once: a media part with the same bytes, and the drawing's own relationship to it.
+      std::string media;
+      for (const pkg::Part& part : package->Parts()) {
+        if (part.deleted || part.name.size() < 10 || !NameEqualsNoCase(std::string_view(part.name).substr(0, 10), "/xl/media/")) continue;
+        const uint64_t size = part.modified || part.entry == pkg::Part::kNoEntry
+                                  ? part.data.size()
+                                  : (part.entry < package->Zip().Entries().size() ? package->Zip().Entries()[part.entry].uncompressedSize : 0);
+        if (size == bytes.size() && PartBytes(part.name) == bytes) {
+          media = part.name;
+          break;
+        }
+      }
+      std::string rel;
+      if (!media.empty()) {
+        if (const pkg::RelationshipSet* set = package->RelationshipsOf(d))
+          for (const pkg::Relationship& r : set->items)
+            if (!r.external && r.type == kImageRel && NameEqualsNoCase(r.targetPart, media)) rel = r.id;
+        if (rel.empty()) rel = AddRelationship(d, kImageRel, media);
+      } else {
+        rel = AddPart(d, kImageRel, NewPartName("/xl/media/image", extension), type, bytes);
+      }
+      const uint32_t n = NextShapeId(d);
+      const std::string anchor = rel.empty() ? std::string() : drawing::Placed(data::PictureAnchor(n, rel, altText), p);
+      if (anchor.empty() || !AddAnchor(d, anchor)) return Result::Fail(u"The picture couldn't be added to this sheet.");
+      if (id) *id = n;
+      s_->Change(&s, kObjects, Range{p.from.row, p.from.col, p.to.row, p.to.col});
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::InsertShape(int sheet, data::ShapeKind kind, const drawing::Place& p, const std::string& text, uint32_t* id) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::InsertShape, [&](JournalRecord& w) {
+    w.I(sheet).U(static_cast<uint8_t>(kind)).S(text);
+    PutPlace(w, p);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!PlaceOk(p)) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    pkg::Package* package = book_.GetPackage();
+    if (!package || s.PartName().empty() || !package->FindPart(s.PartName()))
+      return Result::Fail(u"Save the workbook as an Excel workbook first, then insert the shape.");
+    return Run(*this, u"Insert Shape", [&]() -> Result {
+      const std::string d = SheetDrawing(sheet, true);
+      if (d.empty()) return Result::Fail(u"The shape couldn't be added to this sheet.");
+      const uint32_t n = NextShapeId(d);
+      const std::string anchor = drawing::Placed(data::ShapeAnchor(kind, n, text), p);
+      if (anchor.empty() || !AddAnchor(d, anchor)) return Result::Fail(u"The shape couldn't be added to this sheet.");
+      if (id) *id = n;
+      s_->Change(&s, kObjects, Range{p.from.row, p.from.col, p.to.row, p.to.col});
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::SetObjectXml(int sheet, uint32_t id, const std::string& xml, std::u16string stepName) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::SetObjectXml, [&](JournalRecord& w) { w.I(sheet).U(id).S(xml).S16(stepName); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    const std::string d = SheetDrawing(sheet, false);
+    if (d.empty() || AnchorXml(d, id).empty()) return Result::Fail(u"The object isn't on this sheet any more.");
+    // Never damage the drawing: the new bytes read, as one object with the same id.
+    const std::vector<drawing::Object> objects = drawing::Objects("<r>" + xml + "</r>");
+    pugi::xml_document parsed;
+    if (objects.size() != 1 || objects[0].id != id || !parsed.load_buffer(xml.data(), xml.size()))
+      return Result::Fail(u"The object's new format couldn't be written.");
+    return Run(*this, stepName, [&]() -> Result {
+      if (!ReplaceAnchor(d, id, xml)) return Result::Fail(u"The object's new format couldn't be written.");
+      s_->Change(&book_.GetSheet(static_cast<size_t>(sheet)), kObjects, Range{0, 0, kMaxRows - 1, kMaxCols - 1});
+      return Result{};
+    });
+  }());
+}
+
 Result Editor::SetTabColor(int sheet, const Color& color) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
   Rec rec(*this, JournalOp::SetTabColor, [&](JournalRecord& w) { w.I(sheet).C(color); });
   return rec.Done([&]() -> Result {
     if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
@@ -3963,6 +5661,8 @@ Result Editor::SetTabColor(int sheet, const Color& color) {
 }
 
 Result Editor::SetSheetState(int sheet, SheetState state) {
+  Guard guard(*this);
+  if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
   Rec rec(*this, JournalOp::SetSheetState, [&](JournalRecord& w) { w.I(sheet).U(static_cast<uint8_t>(state)); });
   return rec.Done([&]() -> Result {
     int n = static_cast<int>(book_.SheetCount());
@@ -4033,6 +5733,458 @@ Result Editor::FreezePanes(int sheet, uint32_t rows, uint32_t cols) {
   }());
 }
 
+// ---- Protection
+
+Result Editor::SetSheetProtection(int sheet, const std::optional<SheetProtection>& protection) {
+  const std::string xml = protection ? SheetProtectionXml(*protection) : std::string();
+  Rec rec(*this, JournalOp::SetSheetProtection, [&](JournalRecord& w) { w.I(sheet).S(xml); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (s.Kind() != SheetKind::Worksheet) return Result::Fail(u"Only worksheets can be protected here.");
+    const bool on = protection && protection->sheet;
+    return Run(*this, on ? u"Protect Sheet" : u"Unprotect Sheet", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveText(sv);
+      detail::PartText& t = A::Text(s);
+      xlsx::PutSheetElement(t, "sheetProtection", protection ? SheetProtectionXml(*protection, xlsx::SheetPrefix(t)) : std::string());
+      st.Change(&s, kSheetProps, Range{});
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::SetWorkbookProtection(const std::optional<WorkbookProtection>& protection) {
+  const std::string xml = protection ? WorkbookProtectionXml(*protection) : std::string();
+  Rec rec(*this, JournalOp::SetWorkbookProtection, [&](JournalRecord& w) { w.S(xml); });
+  return rec.Done([&]() -> Result {
+    if (book_.ProtectionXml() == xml) return Result{};
+    return Run(*this, protection && protection->lockStructure ? u"Protect Workbook" : u"Unprotect Workbook",
+               [&]() -> Result {
+                 State& st = *s_;
+                 st.SaveBook(false, false);
+                 Step& step = st.Cur();
+                 if (!step.book.protection) {
+                   step.book.protection = true;
+                   step.book.protectionXml = A::ProtectionXml(book_);
+                 }
+                 A::ProtectionXml(book_) = xml;
+                 st.Change(nullptr, kSheetProps, Range{});
+                 return Result{};
+               });
+  }());
+}
+
+// ---- Links
+
+Result Editor::SetHyperlink(int sheet, const Range& r, const std::optional<Hyperlink>& link) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::InsertLink, r); !no) return no;
+  Rec rec(*this, JournalOp::SetHyperlink, [&](JournalRecord& w) {
+    w.I(sheet).R(r).B(link.has_value());
+    if (link) w.S(link->target).S(link->location).S(link->display).S(link->tooltip).S(link->relId);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!Valid(r)) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (link) {
+      if (link->target.empty() && link->location.empty()) return Result::Fail(u"Type an address, or choose a place in this workbook.");
+      for (const std::string* text : {&link->target, &link->location, &link->display, &link->tooltip})
+        if (!XmlSafe(*text)) return Result::Fail(u"The link holds characters a workbook can't store.");
+      if (Utf16Length(link->target) > 2079) return Result::Fail(u"An address can be at most 2,079 characters long.");
+      if (Utf16Length(link->tooltip) > 255) return Result::Fail(u"A ScreenTip can be at most 255 characters long.");
+    }
+    return Run(*this, link ? u"Insert Hyperlink" : u"Remove Hyperlinks", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveLinks(sv);
+      auto& links = A::Links(s);
+      links.erase(std::remove_if(links.begin(), links.end(), [&](const Hyperlink& h) { return Overlaps(h.ref, r); }),
+                  links.end());
+      if (link) {
+        Hyperlink h = *link;
+        h.ref = r;
+        if (h.target.empty()) h.relId.clear();
+        links.push_back(std::move(h));
+      }
+      st.Change(&s, kObjects, r);
+      return Result{};
+    });
+  }());
+}
+
+// ---- Notes
+
+namespace {
+
+// The parts a sheet's notes and threads are in: its comments, its VML drawing (the
+// legacyDrawing's) and its threaded comments.
+struct NoteParts {
+  std::string comments, vml, threads;
+};
+
+NoteParts NotePartsOf(const pkg::Package& package, const Sheet& s) {
+  NoteParts p;
+  if (const pkg::RelationshipSet* set = package.RelationshipsOf(s.PartName()))
+    for (const pkg::Relationship& r : set->items) {
+      if (r.external) continue;
+      if (EndsWith(r.type, "/comments") && p.comments.empty()) p.comments = r.targetPart;
+      if (EndsWith(r.type, "/vmlDrawing") && (p.vml.empty() || r.id == s.LegacyDrawingRelId())) p.vml = r.targetPart;
+      if (EndsWith(r.type, "/threadedComment") && p.threads.empty()) p.threads = r.targetPart;
+    }
+  return p;
+}
+
+std::string PersonsPartOf(const pkg::Package& package, const std::string& workbookPart) {
+  if (const pkg::RelationshipSet* set = package.RelationshipsOf(workbookPart))
+    for (const pkg::Relationship& r : set->items)
+      if (!r.external && EndsWith(r.type, "/person")) return r.targetPart;
+  return {};
+}
+
+// Now in UTC as threaded comments keep their times: "2026-11-18T09:25:49.80".
+std::string ThreadTime() {
+  using namespace std::chrono;
+  const auto now = system_clock::now();
+  const auto day = floor<days>(now);
+  const year_month_day ymd{day};
+  const hh_mm_ss t{floor<milliseconds>(now - day)};
+  char buf[40];
+  std::snprintf(buf, sizeof buf, "%04d-%02u-%02uT%02d:%02d:%02d.%02d", static_cast<int>(ymd.year()),
+                static_cast<unsigned>(ymd.month()), static_cast<unsigned>(ymd.day()), static_cast<int>(t.hours().count()),
+                static_cast<int>(t.minutes().count()), static_cast<int>(t.seconds().count()),
+                static_cast<int>(t.subseconds().count() / 10));
+  return buf;
+}
+
+}  // namespace
+
+std::optional<Editor::Thread> Editor::ThreadAt(int sheet, CellAddr cell) const {
+  const pkg::Package* package = book_.GetPackage();
+  if (!package || sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return std::nullopt;
+  const Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  if (s.PartName().empty()) return std::nullopt;
+  const NoteParts parts = NotePartsOf(*package, s);
+  if (parts.threads.empty()) return std::nullopt;
+  const std::string persons = PersonsPartOf(*package, book_.WorkbookPart());
+  std::optional<notes::ThreadText> t =
+      notes::ReadThread(PartBytes(parts.threads), persons.empty() ? std::string() : PartBytes(persons), cell);
+  if (!t) return std::nullopt;
+  Thread out;
+  out.resolved = t->resolved;
+  for (notes::ThreadEntry& e : t->comments) out.comments.push_back({std::move(e.author), std::move(e.text), std::move(e.id), std::move(e.date)});
+  return out;
+}
+
+Result Editor::SetThread(int sheet, CellAddr cell, const std::optional<Thread>& in) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  // New comments get their id and time here, so the journal replays the same file.
+  std::optional<Thread> thread = in;
+  if (thread)
+    for (ThreadComment& c : thread->comments) {
+      if (c.id.empty()) c.id = pkg::crypto::NewGuid();
+      if (c.date.empty()) c.date = ThreadTime();
+    }
+  Rec rec(*this, JournalOp::SetThread, [&](JournalRecord& w) {
+    w.I(sheet).A(cell).B(thread.has_value());
+    if (thread) {
+      w.U(thread->comments.size());
+      for (const ThreadComment& c : thread->comments) w.S(c.author).S(c.text).S(c.id).S(c.date);
+      w.B(thread->resolved);
+    }
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (cell.row >= kMaxRows || cell.col >= kMaxCols) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    pkg::Package* package = book_.GetPackage();
+    if (!package || s.PartName().empty() || s.Kind() != SheetKind::Worksheet)
+      return Result::Fail(u"Comments can be added to this sheet once the workbook is saved.");
+    if (thread) {
+      if (thread->comments.empty()) return Result::Fail(u"A comment thread needs a comment.");
+      for (const ThreadComment& c : thread->comments) {
+        if (c.text.empty() || c.id.empty()) return Result::Fail(u"Type a comment first.");
+        for (const std::string* t : {&c.author, &c.text, &c.id, &c.date})
+          if (!XmlSafe(*t)) return Result::Fail(u"The comment holds characters a workbook can't store.");
+        if (Utf16Length(c.text) > 32767) return Result::Fail(u"A comment can hold at most 32,767 characters.");
+      }
+    }
+    const NoteParts parts = NotePartsOf(*package, s);
+    const std::string personsPart = PersonsPartOf(*package, book_.WorkbookPart());
+    notes::ThreadParts old, now;
+    old.threads = parts.threads.empty() ? std::string() : PartBytes(parts.threads);
+    old.persons = personsPart.empty() ? std::string() : PartBytes(personsPart);
+    old.comments = parts.comments.empty() ? std::string() : PartBytes(parts.comments);
+    old.vml = parts.vml.empty() ? std::string() : PartBytes(parts.vml);
+    const bool had = notes::ReadThread(old.threads, {}, cell).has_value();
+    if (!had && !thread) return Result{};
+    if (!had && notes::HasEntry(old.comments, cell))
+      return Result::Fail(u"This cell has a note. Edit or delete the note first.");
+    std::optional<notes::ThreadText> text;
+    if (thread) {
+      text.emplace();
+      text->resolved = thread->resolved;
+      for (const ThreadComment& c : thread->comments) text->comments.push_back({c.author, c.text, c.id, c.date});
+    }
+    if (!notes::EditThread(old, cell, text, now)) return Result::Fail(u"This sheet's comments couldn't be read.");
+    if (now.threads == old.threads && now.persons == old.persons && now.comments == old.comments && now.vml == old.vml)
+      return Result{};
+    return Run(*this, !thread ? u"Delete Comment" : had ? u"Edit Comment" : u"New Comment", [&]() -> Result {
+      const Result failed = Result::Fail(u"The comment couldn't be stored in the workbook.");
+      const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+      const std::string ms = "http://schemas.microsoft.com/office/2017/10/relationships/";
+      // A part written, added (from `source`) or removed as its new bytes say.
+      auto put = [&](const std::string& part, const std::string& was, const std::string& bytes, std::string_view source,
+                     const std::string& type, const std::string& name, std::string_view contentType) -> std::string {
+        if (bytes == was) return part.empty() ? std::string() : "same";
+        if (bytes.empty()) return part.empty() || RemovePart(part) ? "gone" : std::string();
+        if (!part.empty()) return WritePart(part, bytes) ? "written" : std::string();
+        return AddPart(source, type, name, contentType, bytes);
+      };
+      if (now.persons != old.persons &&
+          put(personsPart, old.persons, now.persons, book_.WorkbookPart(), ms + "person",
+              PartBytes("/xl/persons/person.xml").empty() ? "/xl/persons/person.xml" : NewPartName("/xl/persons/person", ".xml"),
+              "application/vnd.ms-excel.person+xml")
+              .empty())
+        return failed;
+      if (now.threads != old.threads &&
+          put(parts.threads, old.threads, now.threads, s.PartName(), ms + "threadedComment",
+              NewPartName("/xl/threadedComments/threadedComment", ".xml"), "application/vnd.ms-excel.threadedcomments+xml")
+              .empty())
+        return failed;
+      if (now.comments != old.comments &&
+          put(parts.comments, old.comments, now.comments, s.PartName(), rel + "comments", NewPartName("/xl/comments", ".xml"),
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml")
+              .empty())
+        return failed;
+      State& st = *s_;
+      if (now.vml != old.vml) {
+        if (now.vml.empty() || parts.vml.empty()) {
+          // The sheet's legacyDrawing names the VML drawing (or goes with it).
+          std::string id;
+          if (!now.vml.empty() &&
+              (id = AddPart(s.PartName(), rel + "vmlDrawing", NewPartName("/xl/drawings/vmlDrawing", ".vml"),
+                            "application/vnd.openxmlformats-officedocument.vmlDrawing", now.vml))
+                  .empty())
+            return failed;
+          if (now.vml.empty() && !parts.vml.empty() && !RemovePart(parts.vml)) return failed;
+          st.SaveText(st.Save(s));
+          detail::PartText& t = A::Text(s);
+          xlsx::PutSheetElement(t, "legacyDrawing",
+                                id.empty() ? std::string() : "<" + xlsx::SheetPrefix(t) + "legacyDrawing " + xlsx::RelPrefix(t) + ":id=\"" + id + "\"/>");
+        } else if (!WritePart(parts.vml, now.vml)) {
+          return failed;
+        }
+      }
+      st.Change(&s, kObjects, Range{cell.row, cell.col, cell.row, cell.col});
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::SetNote(int sheet, CellAddr cell, const std::optional<Note>& note) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::SetNote, [&](JournalRecord& w) {
+    w.I(sheet).A(cell).B(note.has_value());
+    if (note) {
+      w.S(note->author).S(note->text).B(note->shown).D(note->width).D(note->height);
+      for (uint32_t v : note->anchor) w.U(v);
+    }
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (cell.row >= kMaxRows || cell.col >= kMaxCols) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    pkg::Package* package = book_.GetPackage();
+    if (!package || s.PartName().empty() || s.Kind() != SheetKind::Worksheet)
+      return Result::Fail(u"Notes can be added to this sheet once the workbook is saved.");
+    if (note && (!XmlSafe(note->text) || !XmlSafe(note->author)))
+      return Result::Fail(u"The note holds characters a workbook can't store.");
+    if (note && Utf16Length(note->text) > 32767) return Result::Fail(u"A note can hold at most 32,767 characters.");
+    const NoteParts parts = NotePartsOf(*package, s);
+    const std::string &commentsPart = parts.comments, &vmlPart = parts.vml;
+    if (!parts.threads.empty() && notes::ReadThread(PartBytes(parts.threads), {}, cell))
+      return Result::Fail(u"This cell has a comment thread. Reply to it, or delete it first.");
+    const std::string comments = commentsPart.empty() ? std::string() : PartBytes(commentsPart);
+    const std::string vml = vmlPart.empty() ? std::string() : PartBytes(vmlPart);
+    std::string newComments, newVml;
+    std::optional<notes::NoteText> text;
+    if (note) text = notes::NoteText{note->author, note->text, note->shown, note->width, note->height, note->anchor};
+    if (!notes::Edit(comments, vml, cell, text, newComments, newVml)) return Result::Fail(u"This sheet's notes couldn't be read.");
+    if (newComments == comments && newVml == vml) return Result{};
+    return Run(*this, note ? u"Edit Note" : u"Delete Note", [&]() -> Result {
+      const Result failed = Result::Fail(u"The note couldn't be stored in the workbook.");
+      const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
+      if (newComments.empty()) {
+        if (!commentsPart.empty() && !RemovePart(commentsPart)) return failed;
+      } else if (commentsPart.empty()) {
+        if (AddPart(s.PartName(), rel + "comments", NewPartName("/xl/comments", ".xml"),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml", newComments)
+                .empty())
+          return failed;
+      } else if (!WritePart(commentsPart, newComments)) {
+        return failed;
+      }
+      State& st = *s_;
+      if (newVml.empty() || vmlPart.empty()) {
+        // The sheet's legacyDrawing names the VML drawing (or goes with it).
+        std::string id;
+        if (!newVml.empty() &&
+            (id = AddPart(s.PartName(), rel + "vmlDrawing", NewPartName("/xl/drawings/vmlDrawing", ".vml"),
+                          "application/vnd.openxmlformats-officedocument.vmlDrawing", newVml))
+                .empty())
+          return failed;
+        if (newVml.empty() && !vmlPart.empty() && !RemovePart(vmlPart)) return failed;
+        st.SaveText(st.Save(s));
+        detail::PartText& t = A::Text(s);
+        xlsx::PutSheetElement(t, "legacyDrawing", id.empty() ? std::string() : "<" + xlsx::SheetPrefix(t) + "legacyDrawing " + xlsx::RelPrefix(t) + ":id=\"" + id + "\"/>");
+      } else if (!WritePart(vmlPart, newVml)) {
+        return failed;
+      }
+      st.Change(&s, kObjects, Range{cell.row, cell.col, cell.row, cell.col});
+      return Result{};
+    });
+  }());
+}
+
+// ---- Page setup
+
+Result Editor::SetPageSetup(int sheet, PageSetup page, const HeaderFooter& hf, bool fitToPage) {
+  Rec rec(*this, JournalOp::SetPageSetup, [&](JournalRecord& w) {
+    w.I(sheet).U(page.paperSize).S(page.paperWidth).S(page.paperHeight).U(page.scale).U(page.fitToWidth);
+    w.U(page.fitToHeight).I(page.firstPageNumber).B(page.useFirstPageNumber).U(static_cast<uint8_t>(page.orientation));
+    w.U(static_cast<uint8_t>(page.pageOrder)).B(page.blackAndWhite).B(page.draft).B(page.usePrinterDefaults);
+    w.U(static_cast<uint8_t>(page.cellComments)).U(static_cast<uint8_t>(page.errors)).U(page.horizontalDpi);
+    w.U(page.verticalDpi).U(page.copies).B(page.horizontalCentered).B(page.verticalCentered).B(page.headings);
+    w.B(page.gridLines).B(page.gridLinesSet);
+    const PageMargins& m = page.margins;
+    w.D(m.left).D(m.right).D(m.top).D(m.bottom).D(m.header).D(m.footer);
+    w.B(hf.differentOddEven).B(hf.differentFirst).B(hf.scaleWithDoc).B(hf.alignWithMargins).S(hf.oddHeader);
+    w.S(hf.oddFooter).S(hf.evenHeader).S(hf.evenFooter).S(hf.firstHeader).S(hf.firstFooter).B(fitToPage);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    const bool chart = s.Kind() == SheetKind::Chartsheet;
+    if (!chart && s.Kind() != SheetKind::Worksheet) return Result::Fail(u"This sheet's page setup can't be changed.");
+    if (chart && A::Text(s).rootStart.empty()) return Result::Fail(u"This chart sheet couldn't be read.");
+    // A chart sheet prints its chart on one page: no scaling, page order, gridlines or headings
+    // (its part has no place for them).
+    if (chart) {
+      const PageSetup none;
+      page.scale = none.scale, page.fitToWidth = none.fitToWidth, page.fitToHeight = none.fitToHeight;
+      page.pageOrder = none.pageOrder, page.cellComments = none.cellComments, page.errors = none.errors;
+      page.horizontalCentered = page.verticalCentered = page.headings = page.gridLines = page.gridLinesSet = false;
+      fitToPage = false;
+    }
+    // Excel's limits (its Page Setup refuses the rest).
+    if (page.scale < 10 || page.scale > 400) return Result::Fail(u"The scale must be between 10 and 400 percent.");
+    if (page.fitToWidth > 32767 || page.fitToHeight > 32767) return Result::Fail(u"Fit to: at most 32,767 pages.");
+    const PageMargins& m = page.margins;
+    for (double v : {m.left, m.right, m.top, m.bottom, m.header, m.footer})
+      if (!(v >= 0 && v < 49)) return Result::Fail(u"Margins must be between 0 and 49 inches.");
+    if (page.firstPageNumber < -32765 || page.firstPageNumber > 32767) return Result::Fail(u"The first page number is too large.");
+    for (const std::string* t : {&hf.oddHeader, &hf.oddFooter, &hf.evenHeader, &hf.evenFooter, &hf.firstHeader, &hf.firstFooter}) {
+      if (!XmlSafe(*t)) return Result::Fail(u"The header or footer holds characters a workbook can't store.");
+      if (Utf16Length(*t) > 255)
+        return Result::Fail(u"The text string you entered is too long. Reduce the number of characters used.");
+    }
+    for (const std::string* t : {&page.paperWidth, &page.paperHeight})
+      if (!XmlSafe(*t)) return Result::Fail(u"The paper size can't be stored.");
+    detail::PartText& t = A::Text(s);
+    const std::string p = xlsx::SheetPrefix(t);
+    std::pair<const char*, std::string> parts[] = {
+        {"pageMargins", pagexml::Margins(m, xlsx::SheetElement(t, "pageMargins"), p)},
+        {"pageSetup", pagexml::Setup(page, xlsx::SheetElement(t, "pageSetup"), p)},
+        {"headerFooter", pagexml::HeadersFooters(hf, xlsx::SheetElement(t, "headerFooter"), p)},
+        {"printOptions", chart ? std::string() : pagexml::PrintOptions(page, xlsx::SheetElement(t, "printOptions"), p)},
+        {"sheetPr", chart ? xlsx::SheetElement(t, "sheetPr") : pagexml::SheetPrFit(xlsx::SheetElement(t, "sheetPr"), fitToPage, p)}};
+    auto same = [&] {
+      bool all = s.Props().fitToPage == fitToPage;
+      for (const auto& [local, xml] : parts) all = all && xml == xlsx::SheetElement(t, local);
+      return all;
+    };
+    if (same()) return Result{};
+    // Excel writes the orientation with every page setup it writes (portrait when the printer's
+    // default was never changed); without it, Excel reads Orientation as 0 until it paginates.
+    // (The same setup again, now portrait, is still no step.)
+    if (!chart && page.orientation == Orientation::Default) {
+      page.orientation = Orientation::Portrait;
+      parts[1].second = pagexml::Setup(page, xlsx::SheetElement(t, "pageSetup"), p);
+      if (same()) return Result{};
+    }
+    return Run(*this, u"Page Setup", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SavePage(sv);
+      st.SaveText(sv);
+      st.SaveProps(sv);
+      A::Page(s) = page;
+      A::HF(s) = hf;
+      A::Props(s).fitToPage = fitToPage;
+      for (const auto& [local, xml] : parts) xlsx::PutSheetElement(A::Text(s), local, xml);
+      st.Change(&s, kSheetProps, Range{});
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::SetPageBreaks(int sheet, const std::vector<PageBreak>& rowsIn, const std::vector<PageBreak>& colsIn) {
+  Rec rec(*this, JournalOp::SetPageBreaks, [&](JournalRecord& w) {
+    w.I(sheet);
+    for (const auto* list : {&rowsIn, &colsIn}) {
+      w.U(list->size());
+      for (const PageBreak& b : *list) w.U(b.id).U(b.min).U(b.max).B(b.manual).B(b.pivot);
+    }
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    if (s.Kind() != SheetKind::Worksheet) return NoSheet();
+    // In order, one per row or column, and only where a page can start (not before the first).
+    std::vector<PageBreak> rows = rowsIn, cols = colsIn;
+    for (auto* list : {&rows, &cols}) {
+      const uint32_t limit = list == &rows ? kMaxRows : kMaxCols;
+      std::sort(list->begin(), list->end(), [](const PageBreak& a, const PageBreak& b) { return a.id < b.id; });
+      list->erase(std::unique(list->begin(), list->end(), [](const PageBreak& a, const PageBreak& b) { return a.id == b.id; }),
+                  list->end());
+      for (const PageBreak& b : *list)
+        if (b.id == 0 || b.id >= limit) return BadRange();
+      if (list->size() > 1026) return Result::Fail(u"A sheet can have at most 1,026 page breaks each way.");
+    }
+    const auto same = [](const std::vector<PageBreak>& a, const std::vector<PageBreak>& b) {
+      return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](const PageBreak& x, const PageBreak& y) {
+        return x.id == y.id && x.min == y.min && x.max == y.max && x.manual == y.manual && x.pivot == y.pivot;
+      });
+    };
+    if (same(rows, s.RowBreaks()) && same(cols, s.ColBreaks())) return Result{};
+    return Run(*this, u"Page Breaks", [&]() -> Result {
+      State& st = *s_;
+      SheetSave& sv = st.Save(s);
+      st.SaveBreaks(sv);
+      st.SaveText(sv);
+      A::Breaks(s, true) = std::move(rows);
+      A::Breaks(s, false) = std::move(cols);
+      detail::PartText& t = A::Text(s);
+      const std::string p = xlsx::SheetPrefix(t);
+      xlsx::PutSheetElement(t, "rowBreaks", pagexml::Breaks(s.RowBreaks(), true, p));
+      xlsx::PutSheetElement(t, "colBreaks", pagexml::Breaks(s.ColBreaks(), false, p));
+      st.Change(&s, kSheetProps, Range{});
+      return Result{};
+    });
+  }());
+}
+
 // ---- View state
 
 void Editor::SetActiveSheet(int sheet) {
@@ -4091,6 +6243,15 @@ void Editor::SetZoom(int sheet, uint32_t percent) {
   if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return;
   Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
   FirstView(s).zoomScale = std::clamp(percent, 10u, 400u);
+  s_->ViewChanged(&s);
+}
+
+void Editor::SetViewMode(int sheet, ViewMode mode) {
+  Rec rec(*this, JournalOp::SetViewMode, [&](JournalRecord& w) { w.I(sheet).U(static_cast<uint8_t>(mode)).Key(sheet); });
+  rec.commit = true;
+  if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return;
+  Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  FirstView(s).view = mode;
   s_->ViewChanged(&s);
 }
 
@@ -4173,6 +6334,7 @@ void Editor::EndGroup() {
     return;
   }
   if (step.Empty()) return;
+  if (const pkg::Package* package = book_.GetPackage()) step.Settle(*package);
   step.serial = ++st.serial;
   st.Count(step, 1);
   std::vector<edit::Change> changes = st.Resolve(step, false);
@@ -4289,7 +6451,7 @@ void Editor::BeginSave() {
   st.bordersSaving = styles.Borders().size();
   st.numFmtsSaving = styles.CustomFormats().size();
   st.stringsSaving = book_.Strings().Size();
-  st.cellStylesSaving = styles.CellStyleXfs().size() + styles.CellStyles().size();
+  st.cellStylesSaving = styles.CellStyleXfs().size() + styles.CellStyles().size() + styles.Dxfs().size();
 }
 
 bool Editor::Saving() const { return s_->saving; }
@@ -4360,7 +6522,7 @@ bool Editor::StylesDirty() const {
   return st.CellXfs().size() != s_->xfsAtSave || st.Fonts().size() != s_->fontsAtSave ||
          st.Fills().size() != s_->fillsAtSave || st.Borders().size() != s_->bordersAtSave ||
          st.CustomFormats().size() != s_->numFmtsAtSave ||
-         st.CellStyleXfs().size() + st.CellStyles().size() != s_->cellStylesAtSave;
+         st.CellStyleXfs().size() + st.CellStyles().size() + st.Dxfs().size() != s_->cellStylesAtSave;
 }
 
 bool Editor::StringsDirty() const { return book_.Strings().Size() != s_->stringsAtSave; }

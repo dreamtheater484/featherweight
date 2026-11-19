@@ -70,6 +70,9 @@ class Engine : public Resolver, public Names {
   // A value cell changed (an edit): its dependents become dirty. Volatile formulas too, as Excel.
   void Changed(int sheet, const Area& cells);
   void MarkAllDirty();
+  // Tables resized, added or removed (s3-data): structured references cover other cells, so the
+  // graph is built again when needed.
+  void TablesChanged() { GraphChanged(); }
   // Calculates dirty formulas for at most `budgetMs` (UI time slices). True when nothing is left.
   bool Recalculate(double budgetMs = 1e300);
   // Builds the dependency graph about `budgetMs` at a time (the app, after opening): true once it
@@ -90,8 +93,11 @@ class Engine : public Resolver, public Names {
   Names& names() override { return *this; }
   const Formula* Name(uint32_t slot, int sheet) override;
   bool Spill(int sheet, int32_t row, int32_t col, Area& out) override;
+  // The cells a dynamic array spilled over, when (sheet, row, col) is one of them (its anchor too).
+  bool SpillRangeAt(int sheet, int32_t row, int32_t col, Area& out);
   bool Ready(const Area& a) override;
   bool Subtotal(int sheet, int32_t row, int32_t col) override;
+  bool FormulaText(int sheet, int32_t row, int32_t col, std::string& text) override;
   // Names
   int FindSheet(std::string_view name) const override;
   std::string SheetName(int sheet) const override;

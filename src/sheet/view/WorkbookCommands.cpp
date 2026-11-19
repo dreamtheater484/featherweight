@@ -168,6 +168,8 @@ std::string ShiftFormula(std::string_view f, int64_t dr, int64_t dc) {
 
 int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
+  // New Comment, as in Word (S3, s3-review).
+  if (ctrl && alt && !shift && vk == 'M') return editor_.Active() || preview_ ? 0 : CmdNewComment;
   if (ctrl && !alt && !shift) {
     switch (vk) {
       case VK_NEXT: return CmdNextSheet;
@@ -176,6 +178,7 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case '0':
       case VK_NUMPAD0: return CmdZoomActual;
       case VK_F2: return CmdPrintPreview;
+      case VK_F3: return editor_.Active() || preview_ ? 0 : CmdNameManager;
       // Undo and redo the workbook's edits (while a cell is typed in, the keys are the entry's).
       case 'Z': return editor_.Active() ? 0 : CmdUndo;
       case 'Y': return editor_.Active() ? 0 : CmdRedo;
@@ -185,10 +188,13 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case 'V': return editor_.Active() ? 0 : CmdPaste;
       case 'R': return editor_.Active() ? 0 : CmdFillRight;
       case '1': return editor_.Active() || preview_ ? 0 : CmdFormatCells;
+      case 'K': return editor_.Active() || preview_ ? 0 : CmdInsertLink;
       case 'B': return editor_.Active() || preview_ ? 0 : CmdBold;
       case 'I': return editor_.Active() || preview_ ? 0 : CmdItalic;
       case 'U': return editor_.Active() || preview_ ? 0 : CmdUnderline;
       case '5': return editor_.Active() || preview_ ? 0 : CmdStrikethrough;
+      case 'T':
+      case 'L': return editor_.Active() || preview_ ? 0 : CmdCreateTable;  // s3-data
     }
   }
   // Excel's number formats and borders by key (Ctrl+Shift+1..7, ~ and -).
@@ -203,10 +209,13 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
       case '6': return CmdNumScientific;
       case '7': return CmdBorderOutline;
       case 'L': return CmdFilter;
+      case VK_F3: return CmdCreateNames;
       case VK_OEM_MINUS: return CmdBorderRemove;
     }
   }
   if (alt && !ctrl && !shift && vk == VK_OEM_PLUS && !editor_.Active() && !preview_) return CmdAutoSum;
+  if (alt && !ctrl && !shift && vk == VK_DOWN && !editor_.Active() && !preview_) return CmdValidationList;  // s3-data
+  if (alt && !ctrl && !shift && vk == VK_F1 && !editor_.Active() && !preview_) return CmdInsertChart;  // s3-charts
   if (ctrl && alt && !shift && vk == VK_F9 && !editor_.Active()) return CmdCalculateFull;
   if (alt && shift && !ctrl && !editor_.Active() && !preview_ && (vk == VK_RIGHT || vk == VK_LEFT))
     return vk == VK_RIGHT ? CmdGroup : CmdUngroup;
@@ -219,12 +228,14 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
     if (vk == VK_F9 && !ctrl) return shift ? CmdCalculateSheet : CmdCalculateNow;
     if (!ctrl && !shift && vk == VK_F5) return CmdGoTo;
   }
+  if (!ctrl && !shift && !alt && vk == VK_F3 && !preview_) return CmdPasteNames;
   if (preview_ && vk == VK_ESCAPE) return CmdPrintPreview;
   return 0;
 }
 
 CommandState WorkbookView::QueryCommand(int cmd) {
   CommandState s;
+  if (PageSetupCommandState(cmd, s)) return s;  // s3-print (in print preview too)
   if (preview_ && (cmd == CmdNextPage || cmd == CmdPrevPage || cmd == CmdFirstPage || cmd == CmdLastPage ||
                    cmd == CmdZoomAuto || cmd == CmdZoomFitPage || cmd == CmdZoomFitWidth || cmd == CmdZoomActual ||
                    cmd == CmdViewSingle || cmd == CmdViewContinuous || cmd == CmdViewFacing ||
@@ -233,6 +244,10 @@ CommandState WorkbookView::QueryCommand(int cmd) {
   if (GridCommandState(cmd, s)) return s;
   if (FormatCommandState(cmd, s)) return s;
   if (DataCommandState(cmd, s)) return s;
+  if (RulesCommandState(cmd, s)) return s;
+  if (ShapesCommandState(cmd, s)) return s;  // s3-data: pictures and shapes
+  if (NamesCommandState(cmd, s)) return s;
+  if (ChartsCommandState(cmd, s)) return s;  // s3-charts
   const bool ready = Ready();
   size_t shown = 0;
   if (ready)
@@ -297,11 +312,20 @@ std::vector<int> WorkbookView::Commands() {
   for (const CommandName& n : kCommandNames) ids.push_back(n.cmd);
   // The grid's own (S2), found by their labels in command search.
   for (int cmd = CmdInsertCells; cmd <= CmdDeleteColumns; ++cmd) ids.push_back(cmd);
+  for (int cmd : {CmdProtectSheet, CmdProtectWorkbook, CmdInsertLink, CmdRemoveLink, CmdNewNote, CmdDeleteNote, CmdShowNote,
+                  CmdShowAllNotes, CmdNewComment, CmdDeleteThread})  // S3, s3-review
+    ids.push_back(cmd);
+  ids.push_back(CmdPageSetup);  // s3-print
+  for (int cmd = CmdSetPrintArea; cmd <= CmdPrintSelection; ++cmd) ids.push_back(cmd);
+  for (int cmd = CmdInsertChart; cmd <= CmdChartScatter; ++cmd) ids.push_back(cmd);  // s3-charts
+  ids.push_back(CmdChartCombo);
+  for (int cmd = CmdObjectPicture; cmd <= CmdFormatObject; ++cmd) ids.push_back(cmd);  // s3-data
   return ids;
 }
 
 bool WorkbookView::Execute(int cmd) {
   if (!Ready()) return false;
+  if (PageSetupCommand(cmd)) return true;  // s3-print (in print preview too)
   if (preview_ && cmd != CmdPrintPreview && cmd != CmdCopy && cmd != CmdNextSheet && cmd != CmdPrevSheet &&
       !(cmd >= CmdSheetPick && cmd <= CmdSheetPickLast))
     return PagedView::Execute(cmd);
@@ -319,6 +343,10 @@ bool WorkbookView::Execute(int cmd) {
   if (GridCommand(cmd)) return true;
   if (FormatCommand(cmd)) return true;
   if (DataCommand(cmd)) return true;
+  if (RulesCommand(cmd)) return true;
+  if (ShapesCommand(cmd)) return true;  // s3-data: pictures and shapes
+  if (NamesCommand(cmd)) return true;
+  if (ChartsCommand(cmd)) return true;  // s3-charts
   switch (cmd) {
     case CmdUndo:
     case CmdRedo:
@@ -386,6 +414,7 @@ void WorkbookView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) {
   preview.toggle = true;
   preview.checked = preview_;
   m.left = {print, preview};
+  if (preview_) m.left.push_back(item(CmdPageSetup, icon::Settings, L"Page setup"));  // s3-print
   AddUndoToolbar(m);    // s2-grid: Undo and Redo with their lists
   AddFormatToolbar(m);  // fonts, colors, borders, alignment, number formats (WorkbookFormat.cpp)
   m.pager = preview_;
@@ -484,6 +513,9 @@ void WorkbookView::BuildStatusBar(StatusBarModel& m) {
   }
   if (Stale(active_.row, active_.col))
     m.segments.push_back(L"Value possibly out of date: it uses a function Featherweight can't calculate yet");
+  if (calc_ && !calc_->Opening())  // a dynamic array that can't spill: why, as Excel's error menu says it
+    if (std::wstring why = calc_->SpillReason(static_cast<int>(sheet_), active_.row, active_.col); !why.empty())
+      m.segments.push_back(L"#SPILL!: " + why);
   if (totals_.count >= 2) {
     // Excel's order: average, count, sum; in the format of the first number.
     auto show = [&](double v) {
@@ -511,6 +543,7 @@ void WorkbookView::BuildStatusBar(StatusBarModel& m) {
 
 void WorkbookView::Copy() {
   if (!Ready()) return;
+  if (CopyObject(false)) return;  // s3-charts: a selected chart, picture or shape
   Range sel = Selected();
   // Whole rows and columns: as far as the cells in use.
   if (auto used = Current().UsedRange()) {
@@ -760,10 +793,15 @@ void WorkbookView::ShowMatch() {
 // ---------------------------------------------------------------------------
 // Formula bar
 
-std::wstring WorkbookView::ActiveName() const { return Ready() ? Utf8ToWide(CellName(active_.row, active_.col)) : L""; }
+std::wstring WorkbookView::ActiveName() const {
+  if (!Ready()) return L"";
+  if (std::wstring name = SelectionName(); !name.empty()) return name;
+  return Utf8ToWide(CellName(active_.row, active_.col));
+}
 
 std::wstring WorkbookView::FormulaBarText() const {
-  return Ready() ? EditTextAt(Current(), active_.row, active_.col) : std::wstring();
+  // A hidden cell on a protected sheet shows nothing there (Format cells > Protect > Hidden).
+  return Ready() && !FormulaBarHidden() ? EditTextAt(Current(), active_.row, active_.col) : std::wstring();
 }
 
 // A cell's content as typed (the formula bar's and F2's text).
@@ -780,7 +818,7 @@ std::wstring WorkbookView::EditTextAt(const Sheet& s, uint32_t row, uint32_t col
       }
       // In the region's form (en-NL: =SUM(1;2,5)), as Excel's formula bar shows it.
       const std::wstring w = L"=" + Utf8ToWide(calc::ToLocal(text, Region()));
-      return f.kind == FormulaKind::Array ? L"{" + w + L"}" : w;
+      return f.kind == FormulaKind::Array && !f.dynamic ? L"{" + w + L"}" : w;  // a dynamic array: no braces (Excel)
     }
   }
   const Xf& xf = book_->GetStyles().CellXf(cell.style);
@@ -1086,6 +1124,9 @@ bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   // Conditional formats see the new values (and, once done, sheets read after they were worked out).
   for (auto& r : rules_)
     if (r) r->Changed();
+  if (changed)  // and charts (any sheet's: a chart may show another sheet's cells)
+    for (auto& o : objects_)
+      if (o) o->ValuesChanged();
   return true;
 }
 

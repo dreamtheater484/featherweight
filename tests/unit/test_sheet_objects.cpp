@@ -16,6 +16,7 @@
 #include "PkgTestUtil.h"
 #include "chart/Chart.h"
 #include "draw/D2DPainter.h"
+#include "sheet/edit/Edit.h"
 #include "sheet/model/Workbook.h"
 #include "sheet/objects/ChartData.h"
 #include "sheet/objects/SheetObjects.h"
@@ -367,4 +368,52 @@ TEST(sheet_objects_excel) {
   for (const auto& o : placed) CHECK(o.prints);
   auto chartSheet = SheetObjects::Load(*book, static_cast<size_t>(charts));
   CHECK(chartSheet->IsChartSheet());
+}
+
+// Lines drawn straight across or down have no height or no width (cy="0", cx="0"): they're shown,
+// listed for the grid to select (s3-data's Insert > Shapes), and drawn.
+TEST(sheet_objects_flat_lines) {
+  auto book = OpenSheetFile("office/sheet/pictures-shapes.xlsx");
+  if (!book) return;
+  edit::Editor ed(*book);
+  const std::string drawing = ed.SheetDrawing(0, false);
+  CHECK(!drawing.empty());
+  auto line = [&](uint32_t id, int c0, int r0, int c1, int r1, int cx, int cy) {
+    auto n = [](int v) { return std::to_string(v); };
+    return "<xdr:twoCellAnchor xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" "
+           "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><xdr:from><xdr:col>" + n(c0) +
+           "</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>" + n(r0) + "</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>" +
+           n(c1) + "</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>" + n(r1) + "</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>"
+           "<xdr:cxnSp macro=\"\"><xdr:nvCxnSpPr><xdr:cNvPr id=\"" + n(static_cast<int>(id)) + "\" name=\"Straight Connector " + n(static_cast<int>(id)) +
+           "\"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr><xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"" + n(cx) + "\" cy=\"" + n(cy) +
+           "\"/></a:xfrm><a:prstGeom prst=\"line\"><a:avLst/></a:prstGeom><a:ln w=\"38100\"><a:solidFill><a:srgbClr val=\"FF0000\"/>"
+           "</a:solidFill></a:ln></xdr:spPr></xdr:cxnSp><xdr:clientData/></xdr:twoCellAnchor>";
+  };
+  ed.BeginGroup(u"Insert Shape");
+  const uint32_t across = ed.NextShapeId(drawing);
+  CHECK(ed.AddAnchor(drawing, line(across, 1, 20, 4, 20, 1828800, 0)));  // B21 to E21
+  const uint32_t down = ed.NextShapeId(drawing);
+  CHECK(ed.AddAnchor(drawing, line(down, 6, 20, 6, 26, 0, 1143000)));   // G21 to G27
+  ed.EndGroup();
+  auto objects = SheetObjects::Load(*book, 0);
+  DefaultLayout layout;
+  objects->Place(layout);
+  const auto placed = objects->Objects();
+  const SheetObjects::Object* h = nullptr;
+  const SheetObjects::Object* v = nullptr;
+  for (const auto& o : placed) {
+    if (o.id == across) h = &o;
+    if (o.id == down) v = &o;
+  }
+  CHECK(h && v);
+  if (!h || !v) return;
+  CHECK(Close(h->rect, 48, 300, 192, 300));
+  CHECK(Close(v->rect, 288, 300, 288, 390));
+  drawtest::Surface s(400, 420);
+  {
+    draw::D2DPainter p(s.dc.Get());
+    objects->Draw(p, {0, 0, 400, 420}, {});
+  }
+  CHECK(s.End());
+  CHECK(s.At(120, 300) != 0xFFFFFF && s.At(288, 340) != 0xFFFFFF);
 }

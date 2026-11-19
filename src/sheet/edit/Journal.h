@@ -68,6 +68,34 @@ enum class JournalOp : uint8_t {
   AddCellStyle = 39,
   SetFilter = 40,
   MoveCells = 41,
+  InsertChart = 50,  // s3-charts: 50-59
+  MoveObject = 51,
+  DeleteObjects = 52,
+  EditChart = 53,
+  PasteObject = 54,
+  MoveChartToSheet = 55,
+  MoveChartToObject = 56,
+  // s3-data's operations: 60-69.
+  SetSheetRules = 60,
+  AddDxf = 61,
+  AddTable = 62,
+  SetTable = 63,
+  RemoveTable = 64,
+  SetTableFilter = 65,
+  InsertPicture = 66,
+  InsertShape = 67,
+  SetObjectXml = 68,
+  // S3: each piece numbers its own (s3-review from 90), so branches don't clash.
+  SetSheetProtection = 90,
+  SetWorkbookProtection = 91,
+  SetHyperlink = 92,
+  SetNote = 93,
+  SetThread = 94,
+  SetPageSetup = 95,
+  SetPageBreaks = 96,
+  SetViewMode = 97,
+  // s3-calc from 100.
+  ClearFormats = 100,  // its own record: on a protected sheet it's allowed where MapStyles isn't
 };
 
 // One record being written: its kind, then its fields in the order Replay reads them.

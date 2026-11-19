@@ -20,6 +20,17 @@ class Face;
 // resolves General to, and the lines fwtext lays out, cached by cell.
 namespace fw::sheet::view {
 
+// A laid-out piece's glyphs with the characters they show (`text`: what was laid out), so a PDF's
+// text can be searched and copied. The screen ignores them.
+inline draw::GlyphRun ShownRun(const text::GlyphPiece& g, std::wstring_view text) {
+  draw::GlyphRun r = g.Run();
+  if (!g.hyphen && !g.leader && g.textStart < g.textEnd && g.textEnd <= text.size()) {
+    r.text = reinterpret_cast<const char16_t*>(text.data() + g.textStart);
+    r.textLength = g.textEnd - g.textStart;
+  }
+  return r;
+}
+
 // The text of a value as the cell shows it, without layout: copying, find and the status bar use it.
 // `widthPx` is the column's width in Excel's pixels (0: any width, as TEXT() and copying see it).
 struct Shown {
@@ -40,6 +51,7 @@ struct TextLook {
   int8_t bold = -1, italic = -1, strike = -1;  // -1: the cell's own
   int8_t underline = -1;       // an Underline; -1: the cell's own
   const NumberFormat* numFmt = nullptr;  // shown in this format instead
+  PrintErrors errors = PrintErrors::Displayed;  // printing: an error shown as Page Setup's "Cell errors as"
   bool operator==(const TextLook&) const = default;
 };
 
@@ -70,6 +82,7 @@ class CellText {
     HAlign align = HAlign::Left;  // resolved: never General
     std::vector<text::Line> lines;
     std::vector<Run> runs;
+    std::wstring text;     // what the lines lay out (their pieces' textStart and textEnd)
     float width = 0;       // the widest line, points
     float pitch = 15;      // from one line's baseline to the next, points
     float ascent = 10.5f, descent = 3;  // the first line's, as Excel places it (GDI pixels as points)

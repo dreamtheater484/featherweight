@@ -9,6 +9,7 @@
 #include "pkg/Check.h"
 #include "pkg/References.h"
 #include "pkg/XmlDom.h"
+#include "pkg/XmlWriter.h"
 #include "sheet/model/TableStyles.h"
 #include "sheet/xlsx/Internal.h"
 #include "sheet/xlsx/Xlsx.h"
@@ -123,6 +124,19 @@ std::string TextOf(pugi::xml_node n) {
   for (pugi::xml_node c = n.first_child(); c; c = c.next_sibling())
     if (c.type() == pugi::node_pcdata || c.type() == pugi::node_cdata) s += c.value();
   return s;
+}
+
+std::string EmptyElementXml(pugi::xml_node n) {
+  std::string s = "<";
+  s += n.name();
+  for (pugi::xml_attribute a : n.attributes()) {
+    s += ' ';
+    s += a.name();
+    s += "=\"";
+    pkg::AppendEscapedAttribute(s, a.value());
+    s += '"';
+  }
+  return s + "/>";
 }
 
 Color ReadColor(pugi::xml_node n) {
@@ -612,6 +626,7 @@ Status ReadTable(std::string_view xml, const pkg::Limits& limits, const std::str
   pugi::xml_node filter = Child(n, "autoFilter");
   t.autoFilter = static_cast<bool>(filter);
   t.filtered = static_cast<bool>(Child(filter, "filterColumn"));
+  if (SheetFilter f; filter && ReadAutoFilter(filter, f)) t.criteria = std::move(f.columns);
   if (pugi::xml_node cols = Child(n, "tableColumns"))
     for (pugi::xml_node c = cols.first_child(); c; c = c.next_sibling()) {
       if (c.type() != pugi::node_element || Local(c) != "tableColumn") continue;
@@ -825,6 +840,8 @@ std::unique_ptr<Workbook> Read(std::unique_ptr<pkg::Package> package, Status& st
     std::string_view k = Local(sec);
     if (k == "workbookPr") {
       book->SetDate1904(BoolAttr(sec, "date1904", false));
+    } else if (k == "workbookProtection") {
+      loader.ProtectionXml() = EmptyElementXml(sec);
     } else if (k == "bookViews") {
       if (pugi::xml_node v = Child(sec, "workbookView")) {
         activeTab = UIntAttr(v, "activeTab", 0);

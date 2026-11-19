@@ -49,7 +49,7 @@ JournalRecord& JournalRecord::C(const Color& c) { return U(static_cast<uint8_t>(
 
 JournalRecord& JournalRecord::Input(const CellInput& in) {
   U(static_cast<uint8_t>(in.type)).D(in.number).B(in.boolean).U(static_cast<uint8_t>(in.error)).S(in.text).S(in.formula);
-  B(in.array).R(in.arrayRange).B(in.style.has_value());
+  U(in.array ? 1 : in.dynamic ? 2 : 0).R(in.arrayRange).B(in.style.has_value());  // 2: dynamic (older: 0, 1)
   if (in.style) U(*in.style);
   return *this;
 }
@@ -176,7 +176,9 @@ class Fields {
     in.error = static_cast<ErrorCode>(U());
     in.text = S();
     in.formula = S();
-    in.array = B();
+    const uint64_t array = U();
+    in.array = array == 1;
+    in.dynamic = array == 2;
     in.arrayRange = R();
     if (B()) in.style = U32();
     return in;
@@ -262,6 +264,12 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         const int sheet = f.Int();
         const Range range = f.R();
         if (f.Ok()) r = ClearContents(sheet, range);
+        break;
+      }
+      case JournalOp::ClearFormats: {
+        const int sheet = f.Int();
+        const Range range = f.R();
+        if (f.Ok()) r = ClearFormats(sheet, range);
         break;
       }
       case JournalOp::MapStyles: {
@@ -420,10 +428,301 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = MoveCells(sheet, from, toSheet, to, std::move(name));
         break;
       }
+      case JournalOp::SetSheetRules: {
+        const int sheet = f.Int();
+        const uint32_t ruleKind = f.U32();
+        std::string xml(f.S()), ext(f.S());
+        std::u16string name = f.S16();
+        if (f.Ok()) r = SetSheetRules(sheet, ruleKind ? RuleKind::Validations : RuleKind::ConditionalFormats, xml, ext, std::move(name));
+        break;
+      }
+      case JournalOp::AddTable:
+      case JournalOp::SetTable: {
+        const int sheet = f.Int();
+        const uint64_t index = op == JournalOp::SetTable ? f.U() : 0;
+        Table t;
+        const std::string xml(f.S());
+        const std::string part(f.S());
+        // A new table's part is chosen when it's added: read it under a stand-in name.
+        if (!f.Ok() || !xlsx::ReadTable(xml, pkg::Limits::Default(), part.empty() ? "/xl/tables/new.xml" : part, t).Ok())
+          return damaged;
+        t.part = part;
+        r = op == JournalOp::AddTable ? AddTable(sheet, std::move(t)) : SetTable(sheet, static_cast<size_t>(index), t);
+        break;
+      }
+      case JournalOp::RemoveTable: {
+        const int sheet = f.Int();
+        const uint64_t index = f.U();
+        if (!f.Ok()) break;
+        // The look's formats the step put (Convert to Range), when the record has them.
+        BakedStyles baked;
+        const uint64_t n = f.U();
+        bool given = f.Ok();
+        for (uint64_t k = 0; given && k < n; ++k) {
+          const uint64_t row = f.U(), col = f.U(), xf = f.U();
+          given = f.Ok() && row < kMaxRows && col < kMaxCols && xf <= UINT32_MAX;
+          if (given) baked.push_back({CellAddr{static_cast<uint32_t>(row), static_cast<uint32_t>(col)}, static_cast<uint32_t>(xf)});
+        }
+        r = RemoveTableAs(sheet, static_cast<size_t>(index), given ? &baked : nullptr);
+        break;
+      }
+      case JournalOp::InsertPicture:
+      case JournalOp::InsertShape: {
+        const int sheet = f.Int();
+        const uint64_t shape = op == JournalOp::InsertShape ? f.U() : 0;
+        const std::string bytes = f.S();
+        drawing::Place p;
+        for (drawing::Marker* m : {&p.from, &p.to}) {
+          m->col = f.U32();
+          m->row = f.U32();
+          m->colOff = f.I();
+          m->rowOff = f.I();
+        }
+        p.x = f.I();
+        p.y = f.I();
+        p.cx = f.I();
+        p.cy = f.I();
+        if (!f.Ok() || shape > static_cast<uint64_t>(data::ShapeKind::TextBox)) return damaged;
+        r = op == JournalOp::InsertPicture ? InsertPicture(sheet, bytes, p, f.S())
+                                           : InsertShape(sheet, static_cast<data::ShapeKind>(shape), p, bytes);
+        break;
+      }
+      case JournalOp::SetObjectXml: {
+        const int sheet = f.Int();
+        const uint32_t id = f.U32();
+        const std::string xml = f.S();
+        const std::u16string name = f.S16();
+        if (f.Ok()) r = SetObjectXml(sheet, id, xml, name);
+        break;
+      }
+      case JournalOp::SetTableFilter: {
+        const int sheet = f.Int();
+        const uint64_t index = f.U();
+        const std::optional<SheetFilter> filter = f.Filter();
+        if (f.Ok() && filter) r = SetTableFilter(sheet, static_cast<size_t>(index), *filter);
+        else if (f.Ok()) return damaged;
+        break;
+      }
+      case JournalOp::AddDxf: {
+        Dxf x;
+        if (!xlsx::ReadStyleItem(f.S(), x)) return damaged;
+        r = same(AddDxf(x));
+        break;
+      }
+      case JournalOp::InsertChart: {
+        Editor::NewChart c;
+        const int sheet = f.Int();
+        c.kind = static_cast<Editor::ChartKind>(f.U());
+        c.data = f.R();
+        c.at = f.A();
+        c.cols = f.U32();
+        c.rows = f.U32();
+        c.title = f.S();
+        if (f.Ok()) r = InsertChart(sheet, c);
+        break;
+      }
+      case JournalOp::MoveObject: {
+        const int sheet = f.Int();
+        const uint32_t id = f.U32();
+        drawing::Place p;
+        for (drawing::Marker* m : {&p.from, &p.to}) {
+          m->col = f.U32();
+          m->row = f.U32();
+          m->colOff = f.I();
+          m->rowOff = f.I();
+        }
+        p.x = f.I();
+        p.y = f.I();
+        p.cx = f.I();
+        p.cy = f.I();
+        if (f.Ok()) r = MoveObject(sheet, id, p);
+        break;
+      }
+      case JournalOp::EditChart: {
+        const int sheet = f.Int();
+        const uint32_t id = f.U32();
+        ChartEdit e;
+        {
+          const bool has = f.U() != 0;
+          const uint64_t v = f.U();
+          if (has) e.kind = static_cast<ChartKind>(v);
+        }
+        for (std::optional<ChartText>* t : {&e.title, &e.xTitle, &e.yTitle}) {
+          const bool has = f.U() != 0;
+          ChartText x;
+          x.shown = f.U() != 0;
+          x.text = f.S();
+          if (has) *t = std::move(x);
+        }
+        {
+          const bool has = f.U() != 0;
+          const uint64_t v = f.U();
+          if (has) e.legend = static_cast<char>(v);
+        }
+        {
+          const bool has = f.U() != 0;
+          const uint64_t v = f.U();
+          if (has) e.labels = v != 0;
+        }
+        e.colors.resize(std::min<size_t>(f.U32(), f.Left()));
+        for (ChartColor& c : e.colors) {
+          c.series = f.U32();
+          c.point = static_cast<int32_t>(f.I());
+          c.rgb = f.U32();
+        }
+        {
+          const bool has = f.U() != 0;
+          std::vector<ChartSeries> list(std::min<size_t>(f.U32(), f.Left()));
+          for (ChartSeries& s : list) {
+            s.name = f.S();
+            s.values = f.S();
+            s.categories = f.S();
+          }
+          if (has) e.series = std::move(list);
+        }
+        if (f.Ok()) r = EditChart(sheet, id, e);
+        break;
+      }
+      case JournalOp::MoveChartToSheet: {
+        const int sheet = f.Int();
+        const uint32_t id = f.U32();
+        std::string name = f.S();
+        if (f.Ok()) r = MoveChartToSheet(sheet, id, std::move(name));
+        break;
+      }
+      case JournalOp::MoveChartToObject: {
+        const int chartSheet = f.Int();
+        const int toSheet = f.Int();
+        const CellAddr at = f.A();
+        if (f.Ok()) r = MoveChartToObject(chartSheet, toSheet, at);
+        break;
+      }
+      case JournalOp::PasteObject: {
+        const int sheet = f.Int();
+        Editor::ObjectClip clip;
+        clip.anchor = f.S();
+        clip.book = f.U() ? &book_ : nullptr;
+        auto parts = [&](auto&& self, std::vector<Editor::ObjectClip::Part>& out, int depth) -> void {
+          out.resize(depth > 4 ? 0 : std::min<size_t>(f.U32(), f.Left()));
+          for (Editor::ObjectClip::Part& p : out) {
+            p.rel = f.S();
+            p.type = f.S();
+            p.name = f.S();
+            p.contentType = f.S();
+            p.bytes = f.S();
+            p.external = f.U() != 0;
+            p.target = f.S();
+            self(self, p.parts, depth + 1);
+          }
+        };
+        parts(parts, clip.parts, 0);
+        drawing::Place p;
+        for (drawing::Marker* m : {&p.from, &p.to}) {
+          m->col = f.U32();
+          m->row = f.U32();
+          m->colOff = f.I();
+          m->rowOff = f.I();
+        }
+        p.x = f.I();
+        p.y = f.I();
+        p.cx = f.I();
+        p.cy = f.I();
+        if (f.Ok()) r = PasteObject(sheet, clip, p);
+        break;
+      }
+      case JournalOp::DeleteObjects: {
+        const int sheet = f.Int();
+        std::vector<uint32_t> ids(std::min<size_t>(f.U32(), f.Left()));
+        for (uint32_t& id : ids) id = f.U32();
+        if (f.Ok()) r = DeleteObjects(sheet, ids);
+        break;
+      }
       case JournalOp::SetFilter: {
         const int sheet = f.Int();
         const std::optional<SheetFilter> filter = f.Filter();
         if (f.Ok()) r = SetFilter(sheet, filter);
+        break;
+      }
+      case JournalOp::SetSheetProtection: {
+        const int sheet = f.Int();
+        const std::string xml = f.S();
+        const std::optional<SheetProtection> p = ReadSheetProtection(xml);
+        if (f.Ok() && (xml.empty() || p)) r = SetSheetProtection(sheet, p);
+        else if (f.Ok()) return damaged;
+        break;
+      }
+      case JournalOp::SetWorkbookProtection: {
+        const std::string xml = f.S();
+        const std::optional<WorkbookProtection> p = ReadWorkbookProtection(xml);
+        if (f.Ok() && (xml.empty() || p)) r = SetWorkbookProtection(p);
+        else if (f.Ok()) return damaged;
+        break;
+      }
+      case JournalOp::SetHyperlink: {
+        const int sheet = f.Int();
+        const Range at = f.R();
+        std::optional<Hyperlink> link;
+        if (f.B()) {
+          link.emplace();
+          link->target = f.S(), link->location = f.S(), link->display = f.S(), link->tooltip = f.S(), link->relId = f.S();
+        }
+        if (f.Ok()) r = SetHyperlink(sheet, at, link);
+        break;
+      }
+      case JournalOp::SetNote: {
+        const int sheet = f.Int();
+        const CellAddr cell = f.A();
+        std::optional<Note> note;
+        if (f.B()) {
+          note.emplace();
+          note->author = f.S(), note->text = f.S(), note->shown = f.B();
+          note->width = f.D(), note->height = f.D();
+          for (uint32_t& v : note->anchor) v = f.U32();
+        }
+        if (f.Ok()) r = SetNote(sheet, cell, note);
+        break;
+      }
+      case JournalOp::SetThread: {
+        const int sheet = f.Int();
+        const CellAddr cell = f.A();
+        std::optional<Thread> thread;
+        if (f.B()) {
+          thread.emplace();
+          thread->comments.resize(f.Count());
+          for (ThreadComment& c : thread->comments) c.author = f.S(), c.text = f.S(), c.id = f.S(), c.date = f.S();
+          thread->resolved = f.B();
+        }
+        if (f.Ok()) r = SetThread(sheet, cell, thread);
+        break;
+      }
+      case JournalOp::SetPageSetup: {
+        const int sheet = f.Int();
+        PageSetup p;
+        HeaderFooter h;
+        p.paperSize = f.U32(), p.paperWidth = f.S(), p.paperHeight = f.S(), p.scale = f.U32(), p.fitToWidth = f.U32();
+        p.fitToHeight = f.U32(), p.firstPageNumber = static_cast<int>(f.Int()), p.useFirstPageNumber = f.B();
+        p.orientation = static_cast<Orientation>(f.U32()), p.pageOrder = static_cast<PageOrder>(f.U32());
+        p.blackAndWhite = f.B(), p.draft = f.B(), p.usePrinterDefaults = f.B();
+        p.cellComments = static_cast<CellComments>(f.U32()), p.errors = static_cast<PrintErrors>(f.U32());
+        p.horizontalDpi = f.U32(), p.verticalDpi = f.U32(), p.copies = f.U32(), p.horizontalCentered = f.B();
+        p.verticalCentered = f.B(), p.headings = f.B(), p.gridLines = f.B(), p.gridLinesSet = f.B();
+        PageMargins& m = p.margins;
+        m.left = f.D(), m.right = f.D(), m.top = f.D(), m.bottom = f.D(), m.header = f.D(), m.footer = f.D();
+        h.differentOddEven = f.B(), h.differentFirst = f.B(), h.scaleWithDoc = f.B(), h.alignWithMargins = f.B();
+        h.oddHeader = f.S(), h.oddFooter = f.S(), h.evenHeader = f.S(), h.evenFooter = f.S(), h.firstHeader = f.S();
+        h.firstFooter = f.S();
+        const bool fit = f.B();
+        if (f.Ok()) r = SetPageSetup(sheet, p, h, fit);
+        break;
+      }
+      case JournalOp::SetPageBreaks: {
+        const int sheet = f.Int();
+        std::vector<PageBreak> lists[2];
+        for (auto& list : lists) {
+          list.resize(f.Count());
+          for (PageBreak& b : list) b.id = f.U32(), b.min = f.U32(), b.max = f.U32(), b.manual = f.B(), b.pivot = f.B();
+        }
+        if (f.Ok()) r = SetPageBreaks(sheet, lists[0], lists[1]);
         break;
       }
       case JournalOp::FreezePanes: {
@@ -449,6 +748,12 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         const int sheet = f.Int();
         const CellAddr topLeft = f.A();
         if (f.Ok()) SetTopLeft(sheet, topLeft);
+        break;
+      }
+      case JournalOp::SetViewMode: {
+        const int sheet = f.Int();
+        const uint32_t mode = f.U32();
+        if (f.Ok() && mode <= static_cast<uint32_t>(ViewMode::PageLayout)) SetViewMode(sheet, static_cast<ViewMode>(mode));
         break;
       }
       case JournalOp::SetZoom: {

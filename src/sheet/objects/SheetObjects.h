@@ -32,6 +32,7 @@ struct CellNote {
   // A thread's note for older Excel versions ("[Threaded comment]", a notice, "Comment:" and
   // "Reply:" lines), as Excel 2021 prints the thread at the end of the sheet; empty when there's none.
   std::wstring legacyText;
+  float width = 0, height = 0;  // a note's box in points, from its drawing (0: none)
 };
 
 // What sits on a sheet above its cells (plan §7.2): pictures, shapes, text boxes, groups and
@@ -77,6 +78,7 @@ class SheetObjects {
     draw::Rect rect;
     bool chart = false;
     bool prints = true;  // false: set not to print (xdr:clientData fPrintsWithSheet="0")
+    uint32_t id = 0;     // its shape id (the anchor's first cNvPr id), which edits name it by
   };
   std::vector<Object> Objects() const;
 
@@ -91,6 +93,8 @@ class SheetObjects {
 
   // ---- A chart sheet
   bool IsChartSheet() const;
+  // Cell values changed (an edit, a recalculation): charts read their data again when next drawn.
+  void ValuesChanged();
   // Its chart, filling `rect` (the window, or the printed page's area).
   void DrawChartSheet(draw::Painter& painter, const draw::Rect& rect);
   // The chart's size as saved (its absolute anchor), which Excel prints it at; empty when none.

@@ -319,7 +319,13 @@ void Package::SetPart(std::string_view name, std::vector<uint8_t> data) {
 }
 
 void Package::DeletePart(std::string_view name) {
-  if (Part* p = FindPartMutable(name)) p->deleted = true;
+  Part* p = FindPartMutable(name);
+  if (!p) return;
+  p->deleted = true;
+  // A relationships part gone: its source has none (a part made later under that name starts
+  // without the old one's).
+  if (std::string source = SourceOfRelsPart(name); !source.empty())
+    if (auto it = relsIndex_.find(PartKey(source)); it != relsIndex_.end()) rels_[it->second].items.clear();
 }
 
 void Package::SetContentTypes(ContentTypes types) {

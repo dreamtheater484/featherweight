@@ -136,6 +136,9 @@ class Workbook {
   bool Date1904() const { return date1904_; }
   const CalcProps& Calc() const { return calc_; }
   const std::vector<DefinedName>& Names() const { return names_; }
+  // Protect Workbook: the workbookProtection element as the file has it or an edit made it (without
+  // children); empty when there's none. sheet/edit/Protection.h reads it.
+  const std::string& ProtectionXml() const { return protectionXml_; }
   // A defined name for a sheet (sheet -1: the workbook's), without case; null when there is none.
   // A sheet's own name hides the workbook's of the same name.
   const DefinedName* FindName(std::string_view name, int sheet = -1) const;
@@ -178,6 +181,7 @@ class Workbook {
   bool date1904_ = false;
   CalcProps calc_;
   std::vector<DefinedName> names_;
+  std::string protectionXml_;
   std::vector<uint8_t> valueErrors_;  // by vm - 1: an ErrorCode, or 0xFF
   std::vector<uint8_t> dynamicArrays_;  // by cm - 1: 1 for a dynamic array
   Styles styles_;
@@ -200,6 +204,7 @@ class WorkbookLoader {
   void SetActive(uint32_t active, uint32_t first) { b_.activeSheet_ = active, b_.firstTab_ = first; }
   CalcProps& Calc() { return b_.calc_; }
   std::vector<DefinedName>& Names() { return b_.names_; }
+  std::string& ProtectionXml() { return b_.protectionXml_; }
   std::vector<uint8_t>& ValueErrors() { return b_.valueErrors_; }
   std::vector<uint8_t>& DynamicArrays() { return b_.dynamicArrays_; }
   void SetLoader(std::function<pkg::Status(Workbook&, size_t)> f) { b_.loader_ = std::move(f); }

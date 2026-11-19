@@ -629,6 +629,13 @@ bool Engine::Spill(int sheet, int32_t row, int32_t col, Area& out) {
   return true;
 }
 
+bool Engine::SpillRangeAt(int sheet, int32_t row, int32_t col, Area& out) {
+  const uint32_t id = NodeAt(sheet, row, col);
+  if (id == UINT32_MAX || !(nodes_[id].flags & kDynamicArray)) return false;
+  out = nodes_[id].out;
+  return out.r2 > out.r1 || out.c2 > out.c1;
+}
+
 bool Engine::Subtotal(int sheet, int32_t row, int32_t col) {
   uint32_t id = NodeAt(sheet, row, col);
   return id != UINT32_MAX && (nodes_[id].f->flags & Formula::kSubtotal);
@@ -690,6 +697,7 @@ void Engine::StoreSpill(uint32_t id, Value v) {
           break;
         }
       }
+    if (!blocked && (want.r2 > want.r1 || want.c2 > want.c1)) blocked = host_.SpillBlocked(want);
   }
   if (blocked) {
     want.r2 = want.r1, want.c2 = want.c1;
@@ -720,6 +728,7 @@ void Engine::StoreSpill(uint32_t id, Value v) {
       host_.Store(s, r, c, x);
     }
   if (moved) {
+    host_.SpillMoved(s, n.at.row, n.at.col, want);
     Area u = want;
     u.r1 = std::min(old.r1, want.r1), u.r2 = std::max(old.r2, want.r2);
     u.c1 = std::min(old.c1, want.c1), u.c2 = std::max(old.c2, want.c2);
@@ -916,6 +925,21 @@ void Engine::CalculateCell(const Cell& at) {
     n.flags |= kStale;
   }
   if (n.state != kClean) Clean(id);
+}
+
+bool Engine::FormulaText(int sheet, int32_t row, int32_t col, std::string& text) {
+  uint32_t id = NodeAt(sheet, row, col);
+  if (id == UINT32_MAX) return false;
+  const Node& n = nodes_[id];
+  if (n.flags & kFree) return false;
+  const bool anchor = n.at.sheet == sheet && n.at.row == row && n.at.col == col;
+  if (!anchor && (n.flags & kDynamicArray)) return false;
+  CompileOptions o;
+  o.sheet = n.at.sheet, o.row = n.at.row, o.col = n.at.col;
+  o.array = (n.f->flags & Formula::kArray) != 0;
+  text = "=" + Print(*n.f, o, *this);
+  if (o.array && !(n.flags & kDynamicArray)) text = "{" + text + "}";
+  return true;
 }
 
 bool Engine::Stale(int sheet, int32_t row, int32_t col) const {

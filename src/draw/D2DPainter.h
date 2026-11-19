@@ -94,6 +94,7 @@ class D2DPainter : public Painter {
   // The last stroke style, reused while pens keep the same caps, join and dashes.
   Pen strokeKey_;
   Microsoft::WRL::ComPtr<ID2D1StrokeStyle> stroke_;
+  std::vector<D2D1_RECT_F> rects_;  // FillPath's rectangles (a chart series' bars), reused
   bool shadowsOnly_ = false;
 };
 

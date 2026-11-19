@@ -3,7 +3,9 @@
 // writer, which must give back what it read. Then edits through the edit API (S2), undo, redo, the
 // crash-recovery journal replayed, and a save that must open again. Also what sits above the cells (src/sheet/objects):
 // drawings, charts with their data references, notes and threaded comments, read, placed and
-// drawn; and the table styles' formats.
+// drawn; and the table styles' formats. The edits (S3) include tables, conditional formats and
+// validation, pictures and shapes, links, notes and threaded comments, protection, page setup,
+// page breaks and the print area and titles, each through the Editor call its panel makes.
 // Seeds: tests/fuzz/seeds/xlsx (a small workbook with every structure the model reads) and
 // tests/fuzz/seeds/package (corpus files as text).
 //
@@ -30,10 +32,13 @@
 #include "pkg/Zip.h"
 #include "chart/Chart.h"
 #include "draw/D2DPainter.h"
+#include "sheet/data/Rules.h"
+#include "sheet/data/Shapes.h"
 #include "sheet/edit/Edit.h"
 #include "sheet/edit/Journal.h"
 #include "sheet/model/TableStyles.h"
 #include "sheet/objects/SheetObjects.h"
+#include "sheet/xlsx/Internal.h"
 #include "sheet/xlsx/Xlsx.h"
 
 using namespace fw::pkg;
@@ -73,9 +78,13 @@ std::vector<uint8_t> ZipFromText(std::string_view text) {
   return std::move(sink.bytes);
 }
 
-void Check(bool ok) {
-  if (!ok) std::abort();
+void CheckAt(bool ok, int line) {
+  if (!ok) {
+    std::fprintf(stderr, "fuzz_xlsx.cpp:%d: check failed\n", line);
+    std::abort();
+  }
 }
+#define Check(ok) CheckAt((ok), __LINE__)
 
 // What the grid, the number formats and the formula engine read.
 void ReadEverything(const Workbook& book) {
@@ -193,6 +202,60 @@ void DrawObjects(Workbook& book) {
   }
 }
 
+// What the conditional formatting, validation, table and Format panels read (s3-data): every
+// sheet's rules and validations, written back as the panels write them; each table's filter from
+// its part; each drawing object's format, written back with every part changed; each picture
+// part's type.
+void ReadRulesAndObjects(const Workbook& book) {
+  const Package* package = book.GetPackage();
+  std::vector<uint8_t> bytes;
+  for (size_t i = 0; i < book.SheetCount(); ++i) {
+    const Sheet& s = book.GetSheet(i);
+    std::string xml, ext;
+    const std::vector<data::CfRule> rules = data::ReadCfRules(s.Text());
+    for (const data::CfRule& r : rules) data::ParseAreas(r.sqref);
+    data::WriteCfRules(rules, s.Text(), xml, ext);
+    const std::vector<data::Validation> valid = data::ReadValidations(s.Text());
+    for (const data::Validation& v : valid) {
+      data::ListItems(v);
+      data::ParseAreas(v.sqref);
+    }
+    data::ValidationAt(valid, 1, 1);
+    data::WriteValidations(valid, s.Text(), xml, ext);
+    for (const Table& t : s.Tables()) {
+      SheetFilter f;
+      if (package && !t.part.empty() && package->ReadPart(t.part, bytes).Ok())
+        xlsx::ReadTableFilter(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), f);
+    }
+  }
+  if (!package) return;
+  for (const auto& part : package->Parts()) {
+    if (part.deleted || !package->ReadPart(part.name, bytes).Ok()) continue;
+    const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    if (part.name.starts_with("/xl/media/")) {
+      std::string extension, type;
+      data::PictureType(text, extension, type);
+    } else if (part.name.starts_with("/xl/drawings/") && part.name.ends_with(".xml") && part.name.find("/_rels/") == std::string::npos) {
+      for (const edit::drawing::Object& o : edit::drawing::Objects(text)) {
+        const std::string_view anchor = text.substr(o.begin, o.end - o.begin);
+        data::ObjectFormat f = data::ReadObjectFormat(anchor);
+        f.fill = data::ObjectFormat::Paint::Solid;
+        f.fillRgb = 0x123456;
+        f.line = data::ObjectFormat::Paint::None;
+        f.lineWidth = 1.5;
+        f.text = "a\nb & <c>";
+        f.altText = "alt \"x\"";
+        data::FormatObject(anchor, f, data::kFormatFill | data::kFormatLine | data::kFormatText | data::kFormatAltText);
+      }
+    }
+  }
+}
+
+// A 1 x 1 PNG, for Insert > Pictures.
+const uint8_t kPng[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00,
+                        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00,
+                        0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01,
+                        0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
 
 // ---- Edits (S2): a program a hash of the input picks, made through the edit API as the app makes
 // them, undo and redo among them. The journal replayed on the workbook read again must make every
@@ -260,7 +323,339 @@ void EditOnce(Editor& ed, const Workbook& book, Rng& rng, int& groups, bool hadS
     }
   };
   const Styles& styles = book.GetStyles();
-  switch (rng.Below(26)) {
+  const uint32_t pick = rng.Below(36);
+  // FUZZ_XLSX_SKIP=n leaves out edit n (narrowing a finding down by hand).
+  if (const char* skip = std::getenv("FUZZ_XLSX_SKIP"); skip && std::atoi(skip) == static_cast<int>(pick)) return;
+  // FUZZ_XLSX_TRACE: each edit picked, and on which sheet.
+  if (std::getenv("FUZZ_XLSX_TRACE")) std::fprintf(stderr, "edit %u on sheet %d of %d\n", pick, sheet, sheets);
+  switch (pick) {
+    case 28: {  // a table (s3-data): added over a range, renamed, a total row, resized, filtered, converted
+      static const std::vector<Table> none;
+      const std::vector<Table>& tables = sheet < sheets ? book.GetSheet(static_cast<size_t>(sheet)).Tables() : none;
+      if (tables.empty() || rng.Chance(30)) {
+        Table t;
+        t.ref = range();
+        t.autoFilter = rng.Chance(80);
+        t.style = TableStyleInfo{rng.Chance(50) ? "TableStyleMedium2" : "TableStyleLight9", false, false, true, rng.Chance(30)};
+        for (uint32_t c = t.ref.firstCol; c <= t.ref.lastCol; ++c) t.columns.push_back(TableColumn{0, "C" + std::to_string(c - t.ref.firstCol + 1)});
+        ed.AddTable(sheet, t);
+        break;
+      }
+      const size_t i = rng.Below(static_cast<uint32_t>(tables.size()));
+      Table t = tables[i];
+      const uint32_t op = rng.Below(5);
+      if (const char* skip = std::getenv("FUZZ_XLSX_SKIP_TABLE"); skip && std::atoi(skip) == static_cast<int>(op)) break;
+      switch (op) {
+        case 0: t.name = t.displayName = "T" + std::to_string(rng.Below(5)); ed.SetTable(sheet, i, t); break;
+        case 1:
+          if (t.totalsRows) {
+            t.totalsRows = 0;
+            if (t.ref.lastRow > t.ref.firstRow + 1) --t.ref.lastRow;
+          } else if (t.ref.lastRow + 1 < kMaxRows && !t.columns.empty()) {
+            t.totalsRows = 1;
+            ++t.ref.lastRow;
+            t.columns.front().totalsLabel = "Total";
+            t.columns.back().totalsFunction = rng.Chance(50) ? "sum" : "count";
+          }
+          ed.SetTable(sheet, i, t);
+          break;
+        case 2:
+          t.ref.lastRow = std::min<uint32_t>(t.ref.firstRow + 1 + rng.Below(8), kMaxRows - 1);
+          if (rng.Chance(50) && t.ref.lastCol + 1 < kMaxCols) {
+            ++t.ref.lastCol;
+            t.columns.push_back(TableColumn{0, "N" + std::to_string(rng.Below(9))});
+          } else if (t.columns.size() > 1) {
+            --t.ref.lastCol;
+            t.columns.pop_back();
+          }
+          ed.SetTable(sheet, i, t);
+          break;
+        case 3: {
+          SheetFilter f;
+          f.ref = t.ref;
+          if (rng.Chance(70) && !t.columns.empty()) {
+            FilterColumn c;
+            c.colId = rng.Below(static_cast<uint32_t>(t.columns.size()));
+            c.kind = static_cast<FilterColumn::Kind>(rng.Below(5));
+            c.values = {"t" + std::to_string(rng.Below(9))};
+            c.conditions = {{"greaterThan", std::to_string(rng.Below(100))}};
+            c.count = 1 + rng.Below(20);
+            f.columns.push_back(std::move(c));
+          }
+          ed.SetTableFilter(sheet, i, f);
+          break;
+        }
+        default: ed.RemoveTable(sheet, i); break;
+      }
+      break;
+    }
+    case 29: {  // conditional formats and validation (s3-data), as the panels write them
+      if (sheet >= sheets) break;
+      const Sheet& s = book.GetSheet(static_cast<size_t>(sheet));
+      const Range r = range();
+      const std::string sq = data::JoinAreas({r});
+      std::string xml, ext;
+      if (rng.Chance(60)) {
+        std::vector<data::CfRule> rules = data::ReadCfRules(s.Text());
+        if (!rules.empty() && rng.Chance(30)) {
+          data::ClearCfRules(rules, r);
+        } else {
+          const uint32_t dxf = ed.AddDxf(data::CfPreset(static_cast<int>(rng.Below(6))));
+          const std::string id = "{00000000-0000-0000-0000-00000000000" + std::to_string(rng.Below(10)) + "}";
+          data::CfRule n;
+          switch (rng.Below(9)) {
+            case 0: n = data::CellIsRule(sq, static_cast<data::CfOp>(rng.Below(8)), "5", "10", dxf); break;
+            case 1: n = data::ExpressionRule(sq, kFormulas[rng.Below(kFormulaCount)], dxf); break;
+            case 2: n = data::TextRule(sq, static_cast<data::CfText>(rng.Below(4)), "t1", dxf); break;
+            case 3: n = data::TopRule(sq, 1 + rng.Below(10), rng.Chance(50), rng.Chance(50), dxf); break;
+            case 4: n = data::DuplicateRule(sq, rng.Chance(50), dxf); break;
+            case 5: n = data::DateRule(sq, static_cast<int>(rng.Below(10)), dxf); break;
+            case 6: n = data::DataBarRule(sq, static_cast<int>(rng.Below(12)), id); break;
+            case 7: n = data::IconSetRule(sq, static_cast<int>(rng.Below(20)), id); break;
+            default: n = data::ColorScaleRule(sq, static_cast<int>(rng.Below(12))); break;
+          }
+          rules.insert(rules.begin(), std::move(n));
+        }
+        data::WriteCfRules(rules, s.Text(), xml, ext);
+        ed.SetSheetRules(sheet, Editor::RuleKind::ConditionalFormats, xml, ext, u"New Rule");
+      } else {
+        std::vector<data::Validation> rules = data::ReadValidations(s.Text());
+        data::ClearValidations(rules, r);
+        if (rng.Chance(70)) {
+          data::Validation v;
+          v.type = static_cast<data::Validation::Type>(rng.Below(8));
+          v.op = static_cast<data::CfOp>(rng.Below(8));
+          v.f1 = v.type == data::Validation::Type::List ? (rng.Chance(50) ? "\"a,b,c\"" : "Sheet2!$A$1:$A$3")
+                 : v.type == data::Validation::Type::Custom ? kFormulas[rng.Below(kFormulaCount)]
+                                                            : "1";
+          v.f2 = "9";
+          v.alert = static_cast<data::Validation::Alert>(rng.Below(3));
+          v.prompt = rng.Chance(50) ? "Enter <a> & b" : "";
+          v.sqref = sq;
+          rules.push_back(std::move(v));
+        }
+        data::WriteValidations(rules, s.Text(), xml, ext);
+        ed.SetSheetRules(sheet, Editor::RuleKind::Validations, xml, ext, u"Data Validation");
+      }
+      break;
+    }
+    case 30: {  // pictures and shapes (s3-data): inserted, formatted
+      edit::drawing::Place p;
+      p.from = {col(), row(), 0, 0};
+      p.to = {p.from.col + 1 + rng.Below(4), p.from.row + rng.Below(6), static_cast<int64_t>(rng.Below(50000)), 0};
+      p.cx = 914400;
+      p.cy = rng.Chance(30) ? 0 : 685800;
+      switch (rng.Below(3)) {
+        case 0: ed.InsertPicture(sheet, std::string(reinterpret_cast<const char*>(kPng), sizeof kPng), p, rng.Chance(50) ? "alt & <x>" : ""); break;
+        case 1: ed.InsertShape(sheet, static_cast<data::ShapeKind>(rng.Below(6)), p, rng.Chance(50) ? "t & <x>" : ""); break;
+        default: {
+          const std::string drawing = ed.SheetDrawing(sheet, false);
+          if (drawing.empty()) break;
+          const std::vector<edit::drawing::Object> objects = edit::drawing::Objects(ed.PartBytes(drawing));
+          if (objects.empty()) break;
+          const uint32_t id = objects[rng.Below(static_cast<uint32_t>(objects.size()))].id;
+          const std::string anchor = ed.AnchorXml(drawing, id);
+          data::ObjectFormat f = data::ReadObjectFormat(anchor);
+          f.fill = static_cast<data::ObjectFormat::Paint>(rng.Below(3));
+          f.fillRgb = rng.Below(0xFFFFFF);
+          f.line = static_cast<data::ObjectFormat::Paint>(rng.Below(3));
+          f.lineRgb = rng.Below(0xFFFFFF);
+          f.lineWidth = rng.Below(8);
+          f.text = rng.Chance(50) ? "x\ny & <z>" : "";
+          f.altText = "a \"b\"";
+          const std::string xml = data::FormatObject(anchor, f, 1u + rng.Below(15));
+          if (!xml.empty()) ed.SetObjectXml(sheet, id, xml, u"Format Object");
+        }
+      }
+      break;
+    }
+    case 26: {  // a chart (s3-charts)
+      Editor::NewChart c;
+      c.kind = static_cast<edit::ChartKind>(rng.Below(7));
+      c.data = range();
+      c.at = CellAddr{row(), col()};
+      ed.InsertChart(sheet, c);
+      break;
+    }
+    case 27: {  // the sheet's last chart, picture or shape: moved, deleted, copied, edited
+      const std::vector<edit::drawing::Object> objects = edit::drawing::Objects(ed.PartBytes(ed.SheetDrawing(sheet, false)));
+      if (objects.empty()) break;
+      const uint32_t id = objects.back().id;
+      edit::drawing::Place p;
+      p.from = {col(), row(), static_cast<int64_t>(rng.Below(50000)), 0};
+      p.to = {p.from.col + rng.Below(8), p.from.row + rng.Below(15), 0, static_cast<int64_t>(rng.Below(50000))};
+      switch (rng.Below(4)) {
+        case 0: ed.MoveObject(sheet, id, p); break;
+        case 1: ed.DeleteObjects(sheet, {id}); break;
+        case 2: ed.PasteObject(sheet, ed.CopyObject(sheet, id), p); break;
+        default: {
+          edit::ChartEdit e;
+          if (rng.Chance(50)) e.kind = static_cast<edit::ChartKind>(rng.Below(7));
+          if (rng.Chance(50)) e.title = edit::ChartText{rng.Chance(80), rng.Chance(50) ? "T & <t>" : ""};
+          if (rng.Chance(50)) e.xTitle = edit::ChartText{rng.Chance(80), "x"};
+          if (rng.Chance(50)) e.legend = " brtl"[rng.Below(5)];
+          if (rng.Chance(50)) e.labels = rng.Chance(50);
+          if (rng.Chance(30)) e.colors = {{rng.Below(3), rng.Chance(50) ? -1 : static_cast<int32_t>(rng.Below(4)), rng.Below(0xFFFFFF)}};
+          ed.EditChart(sheet, id, e);
+        }
+      }
+      break;
+    }
+    case 31: {  // links (Insert > Link, Ctrl+K; s3-review): a place, a web or mail address, or removed
+      if (rng.Chance(25)) {
+        ed.SetHyperlink(sheet, range(), std::nullopt);
+        break;
+      }
+      Hyperlink link;
+      switch (rng.Below(4)) {
+        case 0: link.location = rng.Chance(50) ? "Sheet2!A1" : "N" + std::to_string(rng.Below(4)); break;
+        case 1: link.target = "https://example.com/a?b=1&c=<d>#e"; break;
+        case 2: link.target = "mailto:someone@example.com?subject=a%20b"; break;
+        default: link.target = rng.Chance(50) ? "..\\files\\a b.xlsx" : "file:///C:/x/\"y\".txt"; break;
+      }
+      if (rng.Chance(50)) link.display = "Go & <see>";
+      if (rng.Chance(30)) link.tooltip = "tip \"t\"";
+      ed.SetHyperlink(sheet, range(), link);
+      break;
+    }
+    case 32: {  // notes and threaded comments (New Note, New Comment; s3-review): added, replied to, resolved, deleted
+      const CellAddr at{row(), col()};
+      if (rng.Chance(50)) {
+        if (rng.Chance(25)) {
+          ed.SetNote(sheet, at, std::nullopt);
+          break;
+        }
+        Editor::Note n;
+        n.author = rng.Chance(50) ? "Roy" : "";
+        n.text = rng.Chance(50) ? "Note & <b>\nline 2" : std::string(rng.Below(300), 'n');
+        n.shown = rng.Chance(30);
+        if (rng.Chance(40)) {
+          n.width = rng.Below(400);
+          n.height = rng.Below(300);
+          for (uint32_t& a : n.anchor) a = rng.Below(rng.Chance(10) ? 20000 : 30);
+        }
+        ed.SetNote(sheet, at, n);
+        break;
+      }
+      std::optional<Editor::Thread> t = sheet < sheets ? ed.ThreadAt(sheet, at) : std::nullopt;
+      if (t && rng.Chance(25)) {
+        ed.SetThread(sheet, at, std::nullopt);
+        break;
+      }
+      if (!t || rng.Chance(30)) t = Editor::Thread{};
+      if (rng.Chance(30)) t->resolved = !t->resolved;
+      if (t->comments.empty() || rng.Chance(70)) t->comments.push_back({rng.Chance(50) ? "A & B" : "C", "Reply <" + std::to_string(rng.Below(9)) + ">", "", ""});
+      ed.SetThread(sheet, at, t);
+      break;
+    }
+    case 33: {  // protection (Protect Sheet, Protect Workbook, Format Cells > Protection; s3-review)
+      edit::ProtectionPassword pw;
+      if (rng.Chance(30)) pw.legacy = "CC1A";
+      else if (rng.Chance(20)) pw = edit::ProtectionPassword{"SHA-512", "aGFzaA==", "c2FsdA==", 100000, ""};  // not made here: hashing is slow
+      switch (rng.Below(4)) {
+        case 0: {
+          if (rng.Chance(30)) {
+            ed.SetSheetProtection(sheet, std::nullopt);
+            break;
+          }
+          edit::SheetProtection p;
+          p.objects = rng.Chance(50);
+          p.formatCells = rng.Chance(50);
+          p.insertRows = rng.Chance(50);
+          p.deleteColumns = rng.Chance(50);
+          p.sort = rng.Chance(50);
+          p.autoFilter = rng.Chance(50);
+          p.selectLockedCells = rng.Chance(20);
+          p.password = pw;
+          ed.SetSheetProtection(sheet, p);
+          break;
+        }
+        case 1: {
+          if (rng.Chance(40)) {
+            ed.SetWorkbookProtection(std::nullopt);
+            break;
+          }
+          edit::WorkbookProtection p;
+          p.lockWindows = rng.Chance(30);
+          p.password = pw;
+          ed.SetWorkbookProtection(p);
+          break;
+        }
+        default: {
+          const bool locked = rng.Chance(30), hidden = rng.Chance(30);
+          ed.MapStyles(sheet, range(), [&](uint32_t s) {
+            Xf x = book.GetStyles().CellXf(s);
+            x.protection.locked = locked;
+            x.protection.hidden = hidden;
+            x.applyProtection = true;
+            return ed.AddXf(x);
+          });
+        }
+      }
+      break;
+    }
+    case 34: {  // page setup (Page Setup, print preview; s3-print)
+      if (sheet >= sheets) break;
+      const Sheet& s = book.GetSheet(static_cast<size_t>(sheet));
+      PageSetup p = s.Page();
+      HeaderFooter hf = s.HeadersFooters();
+      static const char* const kCodes[] = {"", "&L&\"Arial,Bold\"&12Page &P of &N", "&C&A & &F", "&R&D &T", "&L<x> & \"y\"",
+                                           "&C&G", "&&&", "&L&K00FF00green&R&B&I&U&S&Xa&Yb"};
+      switch (rng.Below(4)) {
+        case 0:
+          p.orientation = static_cast<Orientation>(rng.Below(3));
+          p.paperSize = rng.Chance(80) ? 1 + rng.Below(10) : rng.Below(200);
+          p.scale = rng.Chance(80) ? 10 + rng.Below(391) : rng.Below(1000);
+          p.fitToWidth = rng.Below(4);
+          p.fitToHeight = rng.Below(4);
+          p.firstPageNumber = static_cast<int>(rng.Below(20)) - 5;
+          p.useFirstPageNumber = rng.Chance(50);
+          p.pageOrder = static_cast<PageOrder>(rng.Below(2));
+          p.blackAndWhite = rng.Chance(30);
+          p.draft = rng.Chance(20);
+          p.cellComments = static_cast<CellComments>(rng.Below(3));
+          p.errors = static_cast<PrintErrors>(rng.Below(4));
+          break;
+        case 1:
+          p.margins.left = rng.Below(30) / 10.0;
+          p.margins.right = rng.Below(30) / 10.0;
+          p.margins.top = rng.Below(30) / 10.0;
+          p.margins.bottom = rng.Below(30) / 10.0;
+          p.margins.header = rng.Below(20) / 10.0;
+          p.margins.footer = rng.Below(20) / 10.0;
+          p.horizontalCentered = rng.Chance(50);
+          p.verticalCentered = rng.Chance(50);
+          p.headings = rng.Chance(50);
+          p.gridLines = rng.Chance(50);
+          break;
+        default:
+          hf.differentOddEven = rng.Chance(30);
+          hf.differentFirst = rng.Chance(30);
+          hf.scaleWithDoc = rng.Chance(70);
+          hf.alignWithMargins = rng.Chance(70);
+          hf.oddHeader = kCodes[rng.Below(static_cast<uint32_t>(std::size(kCodes)))];
+          hf.oddFooter = kCodes[rng.Below(static_cast<uint32_t>(std::size(kCodes)))];
+          if (hf.differentOddEven) hf.evenHeader = kCodes[rng.Below(static_cast<uint32_t>(std::size(kCodes)))];
+          if (hf.differentFirst) hf.firstFooter = kCodes[rng.Below(static_cast<uint32_t>(std::size(kCodes)))];
+      }
+      ed.SetPageSetup(sheet, p, hf, rng.Chance(30));
+      break;
+    }
+    case 35: {  // page breaks, print area and titles (s3-print)
+      if (rng.Chance(60)) {
+        std::vector<PageBreak> rows, cols;
+        for (uint32_t n = rng.Below(4); n > 0; --n) rows.push_back(PageBreak{1 + row() % (kMaxRows - 1), 0, kMaxCols - 1, true, false});
+        for (uint32_t n = rng.Below(3); n > 0; --n) cols.push_back(PageBreak{1 + col() % (kMaxCols - 1), 0, kMaxRows - 1, true, false});
+        ed.SetPageBreaks(sheet, rows, cols);
+        break;
+      }
+      static const char* const kAreas[] = {"Sheet1!$A$1:$C$9", "'Sheet 1'!$B$2:$D$4,'Sheet 1'!$F$1:$F$3", "Sheet1!$1:$2",
+                                           "Sheet1!$A:$B,Sheet1!$1:$1", "#REF!"};
+      const bool area = rng.Chance(50);
+      if (rng.Chance(25)) ed.DeleteName(area ? "_xlnm.Print_Area" : "_xlnm.Print_Titles", sheet);
+      else ed.SetName(DefinedName{area ? "_xlnm.Print_Area" : "_xlnm.Print_Titles", sheet, kAreas[rng.Below(static_cast<uint32_t>(std::size(kAreas)))], false});
+      break;
+    }
     case 24: {  // cut and paste
       const Range from = range();
       ed.MoveCells(sheet, from, CellAddr{row(), col()});
@@ -460,7 +855,9 @@ void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t
   ed.SetJournal(&journal);
   Rng rng{seed};
   int groups = 0;
-  const uint32_t steps = 8 + rng.Below(24);
+  uint32_t steps = 8 + rng.Below(24);
+  // FUZZ_XLSX_STEPS=n: only the first n edits (the same ones), to find the one a finding needs.
+  if (const char* most = std::getenv("FUZZ_XLSX_STEPS")) steps = std::min<uint32_t>(steps, static_cast<uint32_t>(std::atoi(most)));
   const bool hadSheets = book->SheetCount() > 0;
   for (uint32_t i = 0; i < steps; ++i) EditOnce(ed, *book, rng, groups, hadSheets);
   for (; groups > 0; --groups) ed.EndGroup();
@@ -469,15 +866,63 @@ void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t
   Editor replayed(*again);
   size_t applied = 0;
   edit::Result r = replayed.Replay(journal.All(), &applied);
-  if (!r) std::fprintf(stderr, "replay stopped after %zu records\n", applied);
+  if (std::getenv("FUZZ_XLSX_TRACE")) {  // what protects each sheet, edited and replayed
+    for (const Workbook* w : {book.get(), again.get()})
+      for (size_t i = 0; i < w->SheetCount(); ++i) {
+        const auto p = edit::SheetProtectionOf(w->GetSheet(i));
+        std::fprintf(stderr, "%s sheet %zu: %s\n", w == book.get() ? "edited" : "replayed", i, p ? edit::SheetProtectionXml(*p).c_str() : "-");
+        std::string cols;
+        for (const ColumnInfo& c : w->GetSheet(i).Columns())
+          cols += " " + std::to_string(c.first) + "-" + std::to_string(c.last) + ":" + std::to_string(c.style);
+        std::fprintf(stderr, "  columns%s\n", cols.c_str());
+      }
+  }
+  if (!r) {
+    std::string why;
+    for (char16_t c : r.message) why += c < 0x80 ? static_cast<char>(c) : '?';
+    std::fprintf(stderr, "replay stopped after %zu records: %s\n", applied, why.c_str());
+  }
   Check(r.ok);
-  Check(CellsOf(*again) == CellsOf(*book));
+  const std::string edited = CellsOf(*book), remade = CellsOf(*again);
+  if (edited != remade) {
+    size_t at = 0;
+    while (at < edited.size() && at < remade.size() && edited[at] == remade[at]) ++at;
+    const size_t from = edited.rfind('\n', at) == std::string::npos ? 0 : edited.rfind('\n', at) + 1;
+    std::fprintf(stderr, "the journal remade other cells:\n  edited: %s\n  remade: %s\n", edited.substr(from, 120).c_str(),
+                 remade.substr(from, 120).c_str());
+  }
+  Check(edited == remade);
 
   const size_t history = ed.UndoNames().size();
   const std::vector<uint8_t> saved = Save(*book, ed), savedAgain = Save(*again, replayed);
   Check(saved.empty() == savedAgain.empty());
   if (!saved.empty()) {
-    Check(PartsOf(saved, limits) == PartsOf(savedAgain, limits));
+    const auto parts = PartsOf(saved, limits), partsAgain = PartsOf(savedAgain, limits);
+    for (size_t i = 0; i < std::max(parts.size(), partsAgain.size()) && parts != partsAgain; ++i) {
+      if (i < parts.size() && i < partsAgain.size() && parts[i] == partsAgain[i]) continue;
+      if (i >= parts.size() || i >= partsAgain.size() || parts[i].first != partsAgain[i].first) {
+        std::fprintf(stderr, "the replay's save has other parts: %s / %s\n", i < parts.size() ? parts[i].first.c_str() : "-",
+                     i < partsAgain.size() ? partsAgain[i].first.c_str() : "-");
+        break;
+      }
+      const std::string& x = parts[i].second;
+      const std::string& y = partsAgain[i].second;
+      size_t at = 0;
+      while (at < x.size() && at < y.size() && x[at] == y[at]) ++at;
+      const size_t from = at > 120 ? at - 120 : 0;
+      std::fprintf(stderr, "the replay saves %s otherwise at %zu:\n  edited:   %s\n  replayed: %s\n", parts[i].first.c_str(), at,
+                   x.substr(from, 240).c_str(), y.substr(from, 240).c_str());
+      break;
+    }
+    if (parts != partsAgain && std::getenv("FUZZ_XLSX_DUMP")) {  // both saves, the replay's with ".replayed" added
+      for (const auto& [bytes, suffix] : {std::pair{&saved, ""}, std::pair{&savedAgain, ".replayed"}}) {
+        if (FILE* f = std::fopen((std::string(std::getenv("FUZZ_XLSX_DUMP")) + suffix).c_str(), "wb")) {
+          std::fwrite(bytes->data(), 1, bytes->size(), f);
+          std::fclose(f);
+        }
+      }
+    }
+    Check(parts == partsAgain);
     Status st;
     auto pkg = Package::Open(Snapshot::FromBytes(std::vector<uint8_t>(saved)), limits, st);
     Check(pkg != nullptr);
@@ -488,7 +933,17 @@ void EditAndSave(const std::vector<uint8_t>& zip, const Limits& limits, uint64_t
       for (const std::string& e : report.errors) std::fprintf(stderr, "saved file: %s\n", e.c_str());
       Check(report.Ok());
     }
-    Check(xlsx::Read(std::move(pkg), st, {.loadAll = true}) != nullptr);
+    const bool reads = xlsx::Read(std::move(pkg), st, {.loadAll = true}) != nullptr;
+    if (!reads) {
+      std::fprintf(stderr, "the save doesn't read: %s\n", st.message.c_str());
+      if (std::getenv("FUZZ_XLSX_DUMP")) {
+        if (FILE* f = std::fopen(std::getenv("FUZZ_XLSX_DUMP"), "wb")) {
+          std::fwrite(saved.data(), 1, saved.size(), f);
+          std::fclose(f);
+        }
+      }
+    }
+    Check(reads);
   }
 
   // Undoing everything gives the cells back (unless a save that removed sheets ended the history).
@@ -514,6 +969,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   if (!book) return 0;
   ReadEverything(*book);
   DrawObjects(*book);
+  ReadRulesAndObjects(*book);
 
   // The never-damage bar: every part the model writes, written back, says what it said.
   std::vector<uint8_t> bytes;

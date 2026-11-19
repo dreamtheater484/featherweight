@@ -24,8 +24,11 @@
 #include "draw/D2DPainter.h"
 #include "pkg/Zip.h"
 #include "sheet/calc/Bind.h"
+#include "sheet/condfmt/CondFormat.h"
+#include "sheet/data/Rules.h"
 #include "sheet/edit/Edit.h"
 #include "sheet/model/Sheet.h"
+#include "sheet/objects/SheetObjects.h"
 #include "sheet/numfmt/NumLocale.h"
 #include "sheet/view/CellEditor.h"
 #include "sheet/view/CellPaint.h"
@@ -183,6 +186,176 @@ class Screen {
   Microsoft::WRL::ComPtr<ID2D1Bitmap1> target_;
 };
 
+// Sheet points to the screen's pixels, as the tab places objects (100 %, 96 dpi).
+class ScreenLayout : public sh::SheetLayout {
+ public:
+  explicit ScreenLayout(const sh::view::Grid& grid) : grid_(grid) {}
+  double ColumnLeft(uint32_t col) const override { return grid_.ColLeft(col) * 0.75; }
+  double RowTop(uint32_t row) const override { return grid_.RowTop(row) * 0.75; }
+
+ private:
+  const sh::view::Grid& grid_;
+};
+
+// S3's budgets (docs/s3-plan.md): creating a table, a conditional format and a chart from a
+// selection (1,000 rows of four columns) to screen, < 100 ms each; and a chart drawn again after an
+// edit to its data, within the keystroke budget (< 16 ms typical, < 50 ms worst). Each creation is
+// undone before the next. "To screen": the edit, what the tab reads again (the rules, the sheet's
+// objects) and the cells of a 1400 x 900 window painted, with the objects over them.
+int S3Timings(const fs::path& tmpl, int runs, std::string& json, int& over) {
+  fw::pkg::Status st;
+  auto book = ReadWorkbook(tmpl, st, true);
+  if (!book) return std::fprintf(stderr, "Can't read the template %s: %s\n", Display(tmpl).c_str(), st.message.c_str()), 1;
+  sh::edit::Editor ed(*book);
+  const uint32_t rows = 1000;
+  {
+    std::vector<std::pair<sh::CellAddr, sh::edit::CellInput>> cells;
+    const char* heads[] = {"Region", "Q1", "Q2", "Q3"};
+    for (uint32_t c = 0; c < 4; ++c) cells.push_back({{0, c}, sh::edit::CellInput::Text(heads[c])});
+    for (uint32_t r = 1; r <= rows; ++r) {
+      cells.push_back({{r, 0}, sh::edit::CellInput::Text("Region " + std::to_string(r % 12))});
+      for (uint32_t c = 1; c < 4; ++c) cells.push_back({{r, c}, sh::edit::CellInput::Number(static_cast<double>((r * 37 + c * 101) % 1000))});
+    }
+    if (!ed.SetCells(0, cells)) return std::fprintf(stderr, "Can't fill the S3 workbook.\n"), 1;
+    std::vector<uint8_t> bytes;  // saved once, so the sheet has its part (charts need it)
+    if (!(st = SaveBook(*book, ed, bytes)).Ok()) return std::fprintf(stderr, "saving: %s\n", st.message.c_str()), 1;
+  }
+  sh::calc::WorkbookCalc calc(*book);
+  calc.Load();
+  calc.engine().Opened(calc.Settings());
+  calc.engine().Recalculate();
+  Screen screen;
+  if (!screen.Init(1400, 900)) return std::fprintf(stderr, "Can't paint: no Direct2D device.\n"), 1;
+  static fw::text::Fonts fonts;
+  sh::view::FontMeasure measure(fonts);
+  sh::view::CellText text(*book, fonts, measure, sh::UserLocale());
+  const sh::Sheet& sheet = book->GetSheet(0);
+  sh::view::Grid grid;
+  grid.Build(sheet, book->GetStyles(), measure);
+  const ScreenCells geometry(grid, 31, 141);
+  const ScreenLayout layout(grid);
+  const sh::Range area{0, 0, 44, 19};
+  std::unique_ptr<sh::condfmt::SheetRules> rules;
+  std::unique_ptr<sh::SheetObjects> objects;
+  auto paint = [&] {
+    sh::view::PaintOptions o;
+    o.rules = rules.get();
+    screen.Paint([&](draw::Painter& p) {
+      sh::view::PaintCells(p, sheet, text, grid, geometry, area, o);
+      if (objects) {
+        p.Save();
+        p.Transform(draw::Matrix::Scale(4.f / 3, 4.f / 3) * draw::Matrix::Translate(31, 141));
+        objects->Draw(p, {0, 0, 1369 * 0.75f, 759 * 0.75f}, {});
+        p.Restore();
+      }
+    });
+  };
+  auto readRules = [&] {
+    sh::condfmt::Options o;
+    o.locale = &text.Locale();
+    o.calc = &calc;
+    rules = std::make_unique<sh::condfmt::SheetRules>(*book, 0, o);
+    if (rules->Empty()) rules.reset();
+  };
+  auto readObjects = [&] {
+    objects = sh::SheetObjects::Load(*book, 0);
+    objects->Place(layout);
+  };
+  paint();
+  const sh::Range data{0, 0, rows, 3};
+  std::vector<double> table, rule, chart, redraw;
+  std::string refused;
+  auto failed = [&](const char* what, const sh::edit::Result& r) {
+    refused = std::string(what) + ": " + fw::WideToUtf8(std::wstring(r.message.begin(), r.message.end()));
+  };
+  for (int i = 0; i < runs && refused.empty(); ++i) {
+    // Insert > Table over the selection (its first row the headers, text already).
+    auto t = Clock::now();
+    {
+      sh::Table tb;
+      tb.ref = data;
+      tb.autoFilter = true;
+      tb.totalsRowShown = false;
+      tb.style = sh::TableStyleInfo{"TableStyleMedium2", false, false, true, false};
+      for (uint32_t c = 0; c < 4; ++c) tb.columns.push_back(sh::TableColumn{0, std::string(sheet.GetValue(0, c).text)});
+      sh::edit::EditGroup group(ed, u"Create Table");
+      if (sh::edit::Result r = ed.AddTable(0, tb); !r.ok) {
+        failed("a table", r);
+        break;
+      }
+      group.done = true;
+    }
+    text.Clear();
+    paint();
+    table.push_back(Since(t));
+    if (sheet.Tables().size() != 1) return std::fprintf(stderr, "The table timed isn't on the sheet.\n"), 1;
+    ed.Undo(1);
+    text.Clear();
+
+    // A conditional format over the selection: values over 500 in Light Red Fill with Dark Red Text.
+    t = Clock::now();
+    {
+      std::vector<sh::data::CfRule> list = sh::data::ReadCfRules(sheet.Text());
+      list.insert(list.begin(), sh::data::CellIsRule(sh::RangeName({1, 1, rows, 3}), sh::data::CfOp::Greater, "500", {},
+                                                     ed.AddDxf(sh::data::CfPreset(0))));
+      std::string xml, ext;
+      sh::data::WriteCfRules(list, sheet.Text(), xml, ext);
+      if (sh::edit::Result r = ed.SetSheetRules(0, sh::edit::Editor::RuleKind::ConditionalFormats, xml, ext, u"New Rule"); !r.ok) {
+        failed("a rule", r);
+        break;
+      }
+    }
+    readRules();
+    text.Clear();
+    paint();
+    rule.push_back(Since(t));
+    if (!rules || rules->RuleCount() != 1) return std::fprintf(stderr, "The rule timed isn't on the sheet.\n"), 1;
+    ed.Undo(1);
+    readRules();
+    text.Clear();
+
+    // Insert > Chart (a column chart) of the selection, beside it.
+    t = Clock::now();
+    sh::edit::Editor::NewChart nc;
+    nc.data = data;
+    nc.at = {1, 5};
+    if (sh::edit::Result r = ed.InsertChart(0, nc); !r.ok) {
+      failed("a chart", r);
+      break;
+    }
+    readObjects();
+    paint();
+    chart.push_back(Since(t));
+    if (const auto placed = objects->Objects(); placed.size() != 1 || !placed[0].chart)
+      return std::fprintf(stderr, "The chart timed isn't on the sheet.\n"), 1;
+    // The chart drawn again after an edit to its data: the tab paints its cells and the objects;
+    // the chart reads the cells again when it draws (marked stale as the tab marks it, SyncEngine).
+    for (int k = 0; k < 4; ++k) {
+      t = Clock::now();
+      ed.SetCell(0, 1 + static_cast<uint32_t>(k), 1, sh::edit::CellInput::Number(900.0 - k * 50 - i));
+      objects->ValuesChanged();
+      calc.CellsEdited(0, {1u + static_cast<uint32_t>(k), 1, 1u + static_cast<uint32_t>(k), 1});
+      while (!calc.CalcStep(1e9)) {}
+      text.Clear();
+      paint();
+      redraw.push_back(Since(t));
+    }
+    ed.Undo(5);
+    objects.reset();
+    readObjects();
+    text.Clear();
+  }
+  if (!refused.empty()) {
+    std::printf("  %-52s not measured: %s\n", "S3: creating a table, rule and chart", refused.c_str());
+    return 0;
+  }
+  Line(json, "createTable", "S3: a table from 1,000 rows, to screen", table, 100, over);
+  Line(json, "createRule", "S3: a conditional format over them, to screen", rule, 100, over);
+  Line(json, "createChart", "S3: a chart of them, to screen", chart, 100, over);
+  Line(json, "chartRedraw", "S3: the chart drawn again after a data edit", redraw, 16, over, 50);
+  return 0;
+}
+
 }  // namespace
 
 int RunSheetEditBench(const Options& options) {
@@ -313,6 +486,7 @@ int RunSheetEditBench(const Options& options) {
     Line(json, "saveUi", "saving it: the UI thread (prepare, commit)", ui, 100, over);
     Line(json, "saveWorker", "saving it: the worker (writing the file)", worker, 0, over);
   }
+  if (int r = S3Timings(tmpl, runs, json, over)) return r;
   std::printf("\n%d over budget.\n", over);
   if (!options.jsonOut.empty()) std::ofstream(options.jsonOut, std::ios::trunc) << "{\n" << json << "\n}\n";
   return options.budgets && over ? 1 : 0;

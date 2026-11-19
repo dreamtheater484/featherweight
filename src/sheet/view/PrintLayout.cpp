@@ -154,20 +154,23 @@ double PrintLayout::PrintDigit(int pct) {
   return it->second;
 }
 
-// Known difference, scaled pages: a default column prints in Excel 42.40 pt at 84 % (this gives
-// 42.54), 38.41 at 75 % (38.16) and 25.01 at 49 % (25.07). Neither proportional widths (43.0, 38.4,
-// 25.1, which would make the fit-to-width page 83 %) nor a scale rounded down to 1/64 or 1/256 fits
-// all three; the scaled font's digit is the closest found. Centered, Excel's page also sits 1.0 pt
-// further left and 0.72 pt higher (75 %), as if the block were 2 pt wider and 1.44 pt taller.
-// print-settings pages 5-7, 9 and 10 fail on these (SSIM 0.80-0.93); the rows match.
+// Scaled, a column prints its width at 100 % times the scale, rounded to whole dots of the 360-dpi
+// page Excel lays out (0.2 pt): a default column is 256 dots at 100 %, 230 at 90 %, 215 at 84 %, 125
+// at 49 %; 20 characters 580, 522, 487 (Excel 2021 at every scale from 30 to 100 %, s3-print's
+// col_scale.py). Fit to page: Excel's own scale isn't the whole percent it reports (a default
+// column printed 42.40 pt at "84 %"), so fitted pages can still differ a little.
 float PrintLayout::PxPt(double px, float scale) {
-  const int pct = static_cast<int>(std::lround(scale * 100));
-  const double digit = PrintDigit(pct), mdw = grid_.MaxDigit(), pad = Grid::kPrintPad * pct / 100;
+  const double digit = PrintDigit(100), mdw = grid_.MaxDigit();
   // In proportion to the screen's pixels, at what a default column (8.43 digits) prints at: 426.7
   // dots for 64 pixels of Calibri 11, 1213.5 for 182.
   const double px0 = mdw * 59 / 7 + 5;
-  const double dots = px * ((px0 - 5) / mdw * digit + pad) / px0;
-  return static_cast<float>(dots * Grid::kPrintDotPt * 100 / pct);
+  const double pt = px * ((px0 - 5) / mdw * digit + Grid::kPrintPad) / px0 * Grid::kPrintDotPt;
+  const int pct = static_cast<int>(std::lround(scale * 100));
+  if (pct == 100 || pct <= 0) return static_cast<float>(pt);
+  // (The 100 % width in whole dots first, before the 0.025 % stretch: 256 dots at 83 % are 212, as
+  // Excel prints them.)
+  const double k = pct / 100.0, dots = std::round(pt / Grid::kPrintStretch * 5);
+  return static_cast<float>(std::round(dots * k) / 5 / k);
 }
 
 float PrintLayout::HeadingsWidth(uint32_t lastRow, float scale) {
@@ -185,7 +188,9 @@ float PrintLayout::HeadingsHeight(float k) const {
 float PrintLayout::RowK(float scale) {
   const int pct = static_cast<int>(std::lround(scale * 100));
   if (pct == 100 || pct <= 0) return 1;
-  return static_cast<float>(std::floor(72.0 * pct / 100 + 1e-9) / (72.0 * pct / 100));
+  // A default row is 72 printer dots (360 dpi) at 100 %; Excel rounds it to whole dots at the scale:
+  // 13.00 pt at 90 % (65 dots), 12.0 at 84 % (60), 7.0 at 49 % (35).
+  return static_cast<float>(std::round(72.0 * pct / 100) / (72.0 * pct / 100));
 }
 
 float PrintLayout::ColsAt(uint32_t first, uint32_t last, float scale) {
@@ -317,7 +322,7 @@ void PrintLayout::Paginate() {
   // A chart sheet prints its chart on one page.
   if (info_.objects && info_.objects->IsChartSheet()) {
     // Landscape, unless the sheet says otherwise.
-    if (paperW_ < paperH_ && sheet_.KeptXml().find("orientation=\"portrait\"") == std::string::npos)
+    if (paperW_ < paperH_ && ps.orientation != Orientation::Portrait)
       std::swap(paperW_, paperH_);
     PrintPage p;
     p.width = paperW_;
@@ -354,7 +359,8 @@ void PrintLayout::Paginate() {
   }
 
   // What prints: the print area, else the cells in use.
-  if (const DefinedName* n = book_.FindName("_xlnm.Print_Area", static_cast<int>(index_)); n && n->sheet == static_cast<int>(index_))
+  if (!info_.area.empty()) areas_ = info_.area;
+  else if (const DefinedName* n = book_.FindName("_xlnm.Print_Area", static_cast<int>(index_)); n && n->sheet == static_cast<int>(index_))
     areas_ = ParseAreas(n->formula);
   if (areas_.empty()) {
     std::optional<Range> used = sheet_.UsedRange();
@@ -454,8 +460,10 @@ void PrintLayout::Paginate() {
 
   int number = ps.useFirstPageNumber ? ps.firstPageNumber : 1;
   for (const Range& a : areas_) {
-    const auto colBands = bands(a.firstCol, a.lastCol, true, scale_, !fit);
-    const auto rowBands = bands(a.firstRow, a.lastRow, false, scale_, !fit);
+    // Fit to ignores manual breaks the way it fits (Excel keeps the row breaks under "1 page wide by
+    // automatic", measured: s3-print's page_run.ps1).
+    const auto colBands = bands(a.firstCol, a.lastCol, true, scale_, !fit || ps.fitToWidth == 0);
+    const auto rowBands = bands(a.firstRow, a.lastRow, false, scale_, !fit || ps.fitToHeight == 0);
     auto add = [&](const std::pair<uint32_t, uint32_t>& rb, const std::pair<uint32_t, uint32_t>& cb) {
       PrintPage p;
       p.width = paperW_;
@@ -540,7 +548,7 @@ float PrintLayout::PaintNote(draw::Painter* p, const CellNote& note, float x, fl
       if (p) {
         const float dx = right ? left + w - ln.contentRight : left;
         const float baseline = top + pitch - sink;
-        for (const text::GlyphPiece& g : ln.pieces) p->DrawGlyphs({dx + g.OriginX(), baseline - g.rise}, g.Run(), ink);
+        for (const text::GlyphPiece& g : ln.pieces) p->DrawGlyphs({dx + g.OriginX(), baseline - g.rise}, ShownRun(g, s), ink);
       }
       top += pitch;
     }
@@ -589,15 +597,16 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   const float availH = paperH_ - static_cast<float>((m.top + m.bottom) * 72);
   if (page.chart) {
     if (info_.objects) {
-      // At its saved size from the top left margin, as Excel prints it (smaller to fit the page).
+      // At its saved size from the top left margin, cut off at the margins, as Excel prints it (its
+      // chart size "as on screen": a page set up smaller than the chart doesn't shrink it; measured,
+      // s3-print).
       float w = availW, h = availH;
       const draw::Size saved = info_.objects->ChartSheetSize();
-      if (saved.width > 1 && saved.height > 1) {
-        const float k = std::min({1.f, availW / saved.width, availH / saved.height});
-        w = saved.width * k;
-        h = saved.height * k;
-      }
+      if (saved.width > 1 && saved.height > 1) w = saved.width, h = saved.height;
+      p.Save();
+      p.ClipRect({left, top, left + availW, top + availH});
       info_.objects->DrawChartSheet(p, {left, top, left + w, top + h});
+      p.Restore();
     }
     PaintHeaderFooter(p, page, true);
     PaintHeaderFooter(p, page, false);
@@ -629,19 +638,22 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
   // right margin. Everything below is placed left to right and mirrored about the width.
   const bool rtl = !sheet_.Views().empty() && sheet_.Views().front().rightToLeft;
   const float width = headW + tW + bodyW;
+  // Centered, Excel's block sits as if it were 1.4 pt wider and 1.85 pt taller (boxed blocks at 50-100 %,
+  // s3-print's center_probe.py): 0.7 pt left of and 0.92 pt above the middle.
   float ox = left, oy = top;
-  if (ps.horizontalCentered) ox += std::max(0.f, (availW - totalW) / 2);
+  if (ps.horizontalCentered) ox += std::max(0.f, (availW - totalW - 1.4f) / 2);
   else if (rtl) ox += std::max(0.f, availW - totalW);
-  if (ps.verticalCentered) oy += std::max(0.f, (availH - totalH) / 2);
+  if (ps.verticalCentered) oy += std::max(0.f, (availH - totalH - 1.85f) / 2);
 
   PaintOptions o;
-  o.gridlines = ps.gridLines;
+  o.gridlines = ps.gridLines && !ps.draft;  // Draft quality: no gridlines and no graphics, as in Excel
   o.gridColor = 0xFF000000;
   o.errors = ps.errors;
+  o.blackAndWhite = ps.blackAndWhite;
   o.rules = info_.rules;
 
   // Text wraps and shows "####" in the printed columns: wider than the screen's by the digit.
-  const float widthScale = static_cast<float>(digits_[static_cast<int>(std::lround(scale_ * 100))] * Grid::kPrintDotPt /
+  const float widthScale = static_cast<float>(PrintDigit(static_cast<int>(std::lround(scale_ * 100))) * Grid::kPrintDotPt /
                                               scale_ / grid_.MaxDigit() / kPtPerPx);
   p.Save();
   p.Transform(draw::Matrix::Scale(scale_, scale_) * draw::Matrix::Translate(ox, oy));
@@ -654,7 +666,7 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
     p.ClipRect({cl - 2, y - 2, cl + w + 2, y + h + 2});
     const Range area{r0, c0, r1, c1};
     PaintCells(p, sheet_, text_, grid_, g, area, o);
-    if (info_.objects) {
+    if (info_.objects && !ps.draft) {
       // Pictures, shapes and charts over the cells, in the block's place.
       const draw::Rect cells = SheetRect(area);
       p.Transform(draw::Matrix::Translate(x - cells.left, y - cells.top));
@@ -705,7 +717,7 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
       const float w = ln.contentRight - ln.contentLeft;
       const float baseline = b - descent;
       for (const text::GlyphPiece& g : ln.pieces)
-        p.DrawGlyphs({(l + r - w) / 2 + g.OriginX() - ln.contentLeft, baseline - g.rise}, g.Run(), ink);
+        p.DrawGlyphs({(l + r - w) / 2 + g.OriginX() - ln.contentLeft, baseline - g.rise}, ShownRun(g, s), ink);
     };
     auto cols = [&](uint32_t c0, uint32_t c1, float x) {
       for (uint32_t c = c0; c <= c1; ++c) {
@@ -735,8 +747,12 @@ void PrintLayout::Paint(draw::Painter& p, size_t index) {
 
 void PrintLayout::PaintHeaderFooter(draw::Painter& p, const PrintPage& page, bool header) {
   const HeaderFooter& hf = sheet_.HeadersFooters();
-  const bool first = hf.differentFirst && &page == &pages_.front() && page.number == 1;
-  const bool even = hf.differentOddEven && page.number % 2 == 0;
+  // By the page's place in the sheet's printout, not its number: Excel prints the first page's header
+  // on the first page whatever number it starts from, and the even pages' on the second, fourth...
+  // (measured, s3-print: first page number 2 prints FIRST 2, EVEN 3, ODD 4, EVEN 5).
+  const size_t at = static_cast<size_t>(&page - pages_.data());
+  const bool first = hf.differentFirst && at == 0;
+  const bool even = hf.differentOddEven && at % 2 == 1;
   const std::string& code = first ? (header ? hf.firstHeader : hf.firstFooter)
                             : even ? (header ? hf.evenHeader : hf.evenFooter)
                                    : (header ? hf.oddHeader : hf.oddFooter);
@@ -784,8 +800,8 @@ void PrintLayout::PaintHeaderFooter(draw::Painter& p, const PrintPage& page, boo
         break;
       case L'P': put(std::to_wstring(page.number)); break;
       case L'N':
-        put(std::to_wstring(info_.jobPages ? info_.jobPages
-                                           : pages + (sheet_.Page().useFirstPageNumber ? sheet_.Page().firstPageNumber - 1 : 0)));
+        // The number of pages, whatever the first one's number ("Page 3 of 4": Excel 2021, measured).
+        put(std::to_wstring(info_.jobPages ? info_.jobPages : pages));
         break;
       case L'D': put(info_.date); break;
       case L'T': put(info_.time); break;
@@ -848,7 +864,9 @@ void PrintLayout::PaintHeaderFooter(draw::Painter& p, const PrintPage& page, boo
     std::wstring all;
     std::vector<text::TextStyle> styles;
     for (HfRun& run : sections[sec]) {
-      run.style.size *= docScale;
+      // Scaled with the sheet, in whole printer dots (360 dpi), half up: 11 pt prints 10.0 at 90 %,
+      // 5.6 at 50 % (Excel 2021, s3-print's hf_place.py).
+      if (docScale != 1) run.style.size = std::floor(run.style.size * docScale * 5 + 0.5f + 1e-4f) / 5;
       styles.push_back(run.style);
       all += run.text;
     }
@@ -864,15 +882,19 @@ void PrintLayout::PaintHeaderFooter(draw::Painter& p, const PrintPage& page, boo
     const std::vector<text::Line> lines = text::Layout(fonts, para, std::max(width, 10.f));
     float height = 0;
     for (const text::Line& ln : lines) height += ln.ascent + ln.descent + ln.lineGap;
-    float y = header ? static_cast<float>(m.header * 72) : page.height - static_cast<float>(m.footer * 72) - height;
+    // Where Excel 2021 prints them (hf_place.py: sizes 5.6-36 pt, margins 0.3-0.8", 50-100 %): the
+    // header's first baseline 1 pt below the header margin plus the ascent, the footer's last 1.8 pt
+    // above the footer margin plus the descent; the left section 1 pt in, the right 0.8 pt in.
+    float y = header ? static_cast<float>(m.header * 72) + 1 : page.height - static_cast<float>(m.footer * 72) - height - 1.8f;
+    const float x = l + (sec == 0 ? 1 : sec == 2 ? -0.8f : 0);
     for (const text::Line& ln : lines) {
       const float baseline = y + ln.ascent;
       for (const text::GlyphPiece& g : ln.pieces) {
         const HfRun& run = sections[sec][std::min<size_t>(g.run, sections[sec].size() - 1)];
         const draw::Brush brush = draw::Brush::Solid(ToColor(run.color));
-        p.DrawGlyphs({l + g.OriginX(), baseline - g.rise}, g.Run(), brush);
-        if (run.underline) p.FillRect({l + g.x, baseline + 1.5f, l + g.x + g.width, baseline + 2.1f}, brush);
-        if (run.strike) p.FillRect({l + g.x, baseline - g.emSize * 0.3f, l + g.x + g.width, baseline - g.emSize * 0.3f + 0.6f}, brush);
+        p.DrawGlyphs({x + g.OriginX(), baseline - g.rise}, ShownRun(g, all), brush);
+        if (run.underline) p.FillRect({x + g.x, baseline + 1.5f, x + g.x + g.width, baseline + 2.1f}, brush);
+        if (run.strike) p.FillRect({x + g.x, baseline - g.emSize * 0.3f, x + g.x + g.width, baseline - g.emSize * 0.3f + 0.6f}, brush);
       }
       y += ln.ascent + ln.descent + ln.lineGap;
     }

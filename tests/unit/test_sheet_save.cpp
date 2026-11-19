@@ -16,6 +16,7 @@
 #include "sheet/edit/Edit.h"
 #include "sheet/edit/Journal.h"
 #include "sheet/model/Workbook.h"
+#include "sheet/xlsx/Internal.h"
 #include "sheet/xlsx/Xlsx.h"
 
 using namespace fw::sheet;
@@ -535,6 +536,11 @@ std::vector<uint8_t> JournalBook() {
 void EditEverything(Workbook& book, Editor& ed) {
   CHECK(ed.SetCell(0, 0, 2, CellInput::Text("note & <more>")));
   CHECK(ed.SetCell(0, 3, 0, CellInput::Formula("SUM(A1:A3)")));
+  CellInput spill = CellInput::Formula("_xlfn.SEQUENCE(2)");  // a dynamic array: cm, xl/metadata.xml
+  spill.type = ValueType::Number, spill.number = 1;
+  spill.dynamic = true;
+  spill.arrayRange = Range{40, 0, 41, 0};
+  CHECK(ed.SetCell(0, 40, 0, spill));
   CHECK(ed.SetCells(0, {{CellAddr{4, 0}, CellInput::Number(1.5)}, {CellAddr{4, 1}, CellInput::Bool(true)},
                         {CellAddr{4, 2}, CellInput::Error(ErrorCode::NA)}}));
   Font bold = book.GetStyles().Fonts()[0];
@@ -895,4 +901,522 @@ TEST(sheet_save_registry_findings) {
   CHECK_EQ(FormulaText(s, 7, 2), std::string("$A$2+1"));  // C6, moved down twice, its own now
   CHECK_EQ(FormulaText(s, 6, 3), std::string("$A$2+1"));
   CHECK_EQ(FormulaText(again->GetSheet(1), 0, 0), std::string("IF(B1=\"Sheet1\", B2, B3)"));
+}
+
+// Parts an edit adds and removes, with their relationship and content type, undone with its step
+// (S3: charts, pictures, notes and tables add parts).
+TEST(sheet_edit_add_remove_part) {
+  auto book = OpenParts({"<sheetData/>", "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  const std::string sheetPart = book->GetSheet(0).PartName();
+  const std::string type = "application/vnd.openxmlformats-officedocument.drawing+xml";
+  const std::string rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
+  const std::string xml = "<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\"/>";
+  CHECK(ed.AddPart(sheetPart, rel, "/xl/drawings/drawing1.xml", type, xml).empty());  // no group open
+  const std::string name = ed.NewPartName("/xl/drawings/drawing", ".xml");
+  CHECK_EQ(name, std::string("/xl/drawings/drawing1.xml"));
+  ed.BeginGroup(u"Insert");
+  const std::string id = ed.AddPart(sheetPart, rel, name, type, xml);
+  ed.EndGroup();
+  CHECK(!id.empty());
+  const fw::pkg::Package& p = *book->GetPackage();
+  auto relTo = [&]() -> const fw::pkg::Relationship* {
+    if (const fw::pkg::RelationshipSet* set = p.RelationshipsOf(sheetPart))
+      for (const fw::pkg::Relationship& r : set->items)
+        if (r.id == id) return &r;
+    return nullptr;
+  };
+  CHECK(ed.PartBytes(name) == xml && p.ContentTypeOf(name) == type);
+  CHECK(relTo() && relTo()->target == "../drawings/drawing1.xml" && relTo()->type == rel);
+  CHECK(ed.NewPartName("/xl/drawings/drawing", ".xml") == "/xl/drawings/drawing2.xml");
+  // A second relationship to the same part, from the other sheet.
+  ed.BeginGroup(u"Reuse");
+  const std::string sheet2 = book->GetSheet(1).PartName();
+  const std::string again = ed.AddRelationship(sheet2, rel, name);
+  CHECK(ed.AddRelationship(sheet2, rel, "/xl/drawings/nothing.xml").empty());
+  ed.EndGroup();
+  CHECK(!again.empty() && p.RelationshipsOf(sheet2) && p.RelationshipsOf(sheet2)->items.back().targetPart == name);
+  CHECK(ed.Undo());
+  CHECK(!p.RelationshipsOf(sheet2) || p.RelationshipsOf(sheet2)->items.empty() || p.RelationshipsOf(sheet2)->items.back().targetPart != name);
+
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-part-added");
+  CheckClean(saved);
+  CHECK(PartText(saved, name) == xml);
+  CHECK(PartText(saved, "/[Content_Types].xml").find("PartName=\"/xl/drawings/drawing1.xml\"") != std::string::npos);
+  CHECK(PartText(saved, "/xl/worksheets/_rels/sheet1.xml.rels").find("Target=\"../drawings/drawing1.xml\"") != std::string::npos);
+
+  CHECK(ed.Undo());
+  CHECK(ed.PartBytes(name).empty() && p.ContentTypeOf(name) != type && !relTo());
+  CHECK(ed.Redo());
+  CHECK(ed.PartBytes(name) == xml && relTo() && p.ContentTypeOf(name) == type);
+
+  ed.BeginGroup(u"Delete");
+  CHECK(ed.RemovePart(name));
+  ed.EndGroup();
+  CHECK(ed.PartBytes(name).empty() && !relTo() && p.ContentTypeOf(name) != type);
+  std::vector<uint8_t> removed = SaveBytes(*book, ed, "save-part-removed");
+  CheckClean(removed);
+  CHECK(PartText(removed, name).empty());
+  CHECK(PartText(removed, "/[Content_Types].xml").find("drawing1.xml") == std::string::npos);
+  CHECK(ed.Undo());
+  CHECK(ed.PartBytes(name) == xml && relTo() && p.ContentTypeOf(name) == type);
+}
+
+// Objects copied and pasted (s3-charts): a chart gets a part of its own, a picture is stored once,
+// a chart pasted into another workbook keeps its values but not its references; undone with the parts.
+TEST(sheet_copy_paste_object) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row><row r=\"2\"><c r=\"A2\"><v>2</v></c></row></sheetData>",
+                         "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Editor::NewChart c;
+  c.data = Range{0, 0, 1, 0};
+  CHECK(ed.InsertChart(0, c));
+  // A picture beside it.
+  static const unsigned char kPng[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+                                       0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+                                       0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+                                       0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+                                       0x42, 0x60, 0x82};
+  const std::string drawing = ed.SheetDrawing(0, false);
+  ed.BeginGroup(u"Insert Picture");
+  const std::string rel = ed.AddPart(drawing, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image", "/xl/media/image1.png",
+                                     "image/png", std::string(reinterpret_cast<const char*>(kPng), sizeof kPng));
+  CHECK(ed.AddAnchor(drawing,
+                     "<xdr:oneCellAnchor xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" "
+                     "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><xdr:from><xdr:col>9</xdr:col><xdr:colOff>0</xdr:colOff>"
+                     "<xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx=\"952500\" cy=\"952500\"/><xdr:pic><xdr:nvPicPr>"
+                     "<xdr:cNvPr id=\"3\" name=\"Picture 2\"/><xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr>"
+                     "<xdr:blipFill><a:blip xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:embed=\"" + rel +
+                     "\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"952500\" "
+                     "cy=\"952500\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>"));
+  ed.EndGroup();
+
+  const Editor::ObjectClip chart = ed.CopyObject(0, 2), picture = ed.CopyObject(0, 3);
+  CHECK(chart.parts.size() == 1 && chart.parts[0].name == "/xl/charts/chart1.xml" && picture.parts.size() == 1);
+  CHECK(ed.CopyObject(0, 9).anchor.empty());
+  edit::drawing::Place at;
+  at.from = {1, 20, 0, 0};
+  at.to = {9, 35, 0, 0};
+  at.cx = at.cy = 952500;
+  CHECK(ed.PasteObject(0, chart, at));
+  CHECK(!ed.PartBytes("/xl/charts/chart2.xml").empty() && ed.ChartPart(0, 4) == "/xl/charts/chart2.xml");
+  CHECK(ed.PasteObject(1, chart, at));  // another sheet: a drawing of its own
+  CHECK(ed.ChartPart(1, 2) == "/xl/charts/chart3.xml" && ed.SheetDrawing(1, false) == "/xl/drawings/drawing2.xml");
+  CHECK(ed.PasteObject(1, picture, at));
+  CHECK(ed.PartBytes("/xl/media/image2.png").empty());  // stored once
+  CHECK(ed.AnchorXml("/xl/drawings/drawing2.xml", 3).find("r:embed=\"rId2\"") != std::string::npos);
+  // From another workbook: its values, not its references.
+  Editor::ObjectClip other = chart;
+  other.book = nullptr;
+  CHECK(ed.PasteObject(0, other, at));
+  const std::string detached = ed.PartBytes("/xl/charts/chart4.xml");
+  CHECK(detached.find("<c:f>") == std::string::npos && detached.find("<c:numLit><c:formatCode>General</c:formatCode><c:ptCount val=\"2\"/>") != std::string::npos);
+
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-objects-pasted");
+  CheckClean(saved);
+  CHECK(ed.Undo(4));
+  CHECK(ed.PartBytes("/xl/charts/chart2.xml").empty() && ed.PartBytes("/xl/drawings/drawing2.xml").empty() && ed.SheetDrawing(1, false).empty());
+}
+
+// A chart edited (s3-charts): title, axis titles, legend, data labels, colors, type and Select Data,
+// each keeping what it doesn't change; undone to the bytes it had.
+TEST(sheet_edit_chart) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"B1\" t=\"inlineStr\"><is><t>Sales</t></is></c>"
+                         "<c r=\"C1\" t=\"inlineStr\"><is><t>Costs</t></is></c></row>"
+                         "<row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>Jan</t></is></c><c r=\"B2\"><v>10</v></c><c r=\"C2\"><v>7</v></c></row>"
+                         "<row r=\"3\"><c r=\"A3\" t=\"inlineStr\"><is><t>Feb</t></is></c><c r=\"B3\"><v>12</v></c><c r=\"C3\"><v>8</v></c></row>"
+                         "<row r=\"4\"><c r=\"A4\" t=\"inlineStr\"><is><t>Mar</t></is></c><c r=\"B4\"><v>15</v></c><c r=\"C4\"><v>9.5</v></c></row>"
+                         "</sheetData>",
+                         "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Editor::NewChart c;
+  c.data = Range{0, 0, 3, 2};
+  CHECK(ed.InsertChart(0, c));
+  const std::string part = ed.ChartPart(0, 2);
+  CHECK_EQ(part, std::string("/xl/charts/chart1.xml"));
+  CHECK(ed.ChartPart(0, 3).empty() && ed.ChartPart(1, 2).empty());
+  const std::string original = ed.PartBytes(part);
+  edit::ChartInfo info = edit::charts::Info(original);
+  CHECK(info.kind == edit::ChartKind::Column && info.title.shown && info.title.text.empty() && info.legend == 'b' && !info.labels);
+  CHECK(!info.xTitle.shown && info.series.size() == 2);
+  if (info.series.size() == 2)
+    CHECK(info.series[1].name == "Sheet1!$C$1" && info.series[1].values == "Sheet1!$C$2:$C$4" && info.series[1].categories == "Sheet1!$A$2:$A$4");
+
+  edit::ChartEdit e;
+  e.title = edit::ChartText{true, "Sales & costs"};
+  e.xTitle = edit::ChartText{true, "Month"};
+  e.yTitle = edit::ChartText{true, "Euro"};
+  e.legend = 'r';
+  e.labels = true;
+  e.colors = {{1, -1, 0xFF0000}, {0, 2, 0x00B050}};
+  CHECK(ed.EditChart(0, 2, e));
+  std::string xml = ed.PartBytes(part);
+  info = edit::charts::Info(xml);
+  CHECK(info.title.text == "Sales & costs" && info.xTitle.text == "Month" && info.yTitle.text == "Euro" && info.legend == 'r' && info.labels);
+  CHECK(xml.find("<a:srgbClr val=\"FF0000\"/>") != std::string::npos && xml.find("<c:dPt><c:idx val=\"2\"/>") != std::string::npos);
+  CHECK(xml.find("rot=\"-5400000\"") != std::string::npos);  // the vertical axis's title
+  CHECK(InOrder(xml, {"Sales &amp; costs</a:t>", "<c:autoTitleDeleted val=\"0\"/>", "<c:plotArea>", "<c:catAx>", "Month</a:t>",
+                      "<c:valAx>", "Euro</a:t>", "<c:legend>"}));
+  CheckClean(SaveBytes(*book, ed, "save-chart-titles"));
+
+  // A line: the axes, titles and colors stay.
+  e = {};
+  e.kind = edit::ChartKind::Line;
+  CHECK(ed.EditChart(0, 2, e));
+  xml = ed.PartBytes(part);
+  info = edit::charts::Info(xml);
+  CHECK(info.kind == edit::ChartKind::Line && info.xTitle.text == "Month" && info.labels && info.series.size() == 2);
+  CHECK(xml.find("<c:barChart>") == std::string::npos && xml.find("<a:ln w=\"28575\" cap=\"rnd\"><a:solidFill><a:srgbClr val=\"FF0000\"/>") != std::string::npos);
+  CheckClean(SaveBytes(*book, ed, "save-chart-line"));
+  // A combo: the first series as columns, the last as a line, on the same axes; titles and colors stay.
+  e.kind = edit::ChartKind::Combo;
+  CHECK(ed.EditChart(0, 2, e));
+  xml = ed.PartBytes(part);
+  info = edit::charts::Info(xml);
+  CHECK(info.kind == edit::ChartKind::Combo && info.xTitle.text == "Month" && info.labels && info.series.size() == 2);
+  CHECK(InOrder(xml, {"<c:barChart>", "Sheet1!$B$1", "<c:axId val=\"", "</c:barChart>", "<c:lineChart>", "Sheet1!$C$1",
+                      "</c:lineChart>", "<c:catAx>", "<c:valAx>"}));
+  CHECK(xml.find("<a:ln w=\"28575\" cap=\"rnd\"><a:solidFill><a:srgbClr val=\"FF0000\"/>") != std::string::npos);
+  CheckClean(SaveBytes(*book, ed, "save-chart-combo"));
+  // A pie: no axes.
+  e.kind = edit::ChartKind::Pie;
+  CHECK(ed.EditChart(0, 2, e));
+  xml = ed.PartBytes(part);
+  CHECK(xml.find("<c:pieChart>") != std::string::npos && xml.find("Ax>") == std::string::npos);
+  CHECK(!edit::charts::Info(xml).xTitle.shown);
+  // Select Data: one series, a name typed as text.
+  e = {};
+  e.series = std::vector<edit::ChartSeries>{{"=\"Costs only\"", "=Sheet1!$C$2:$C$4", "Sheet1!$A$2:$A$4"}};
+  CHECK(ed.EditChart(0, 2, e));
+  info = edit::charts::Info(ed.PartBytes(part));
+  CHECK(info.series.size() == 1 && info.series[0].name == "=\"Costs only\"" && info.series[0].values == "Sheet1!$C$2:$C$4");
+  CHECK(ed.PartBytes(part).find("<c:v>9.5</c:v>") != std::string::npos);
+  e.series = std::vector<edit::ChartSeries>{{"", "Nowhere!$C$2:$C$4", ""}};
+  CHECK(!ed.EditChart(0, 2, e));
+  // No title.
+  e = {};
+  e.title = edit::ChartText{false, ""};
+  e.legend = 0;
+  CHECK(ed.EditChart(0, 2, e));
+  info = edit::charts::Info(ed.PartBytes(part));
+  CHECK(!info.title.shown && info.legend == 0 && ed.PartBytes(part).find("<c:autoTitleDeleted val=\"1\"/>") != std::string::npos);
+
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-chart-edited");
+  CheckClean(saved);
+  CHECK(ed.Undo(6));
+  CHECK(ed.PartBytes(part) == original);
+}
+
+// Charts' caches follow the cells at a save (s3-charts); a chart whose cells hold what it caches
+// is saved byte for byte.
+TEST(sheet_chart_caches_follow_cells) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c><c r=\"B1\"><v>5</v></c></row>"
+                         "<row r=\"2\"><c r=\"A2\"><v>2</v></c><c r=\"B2\"><v>6</v></c></row></sheetData>",
+                         "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Editor::NewChart c;
+  c.data = Range{0, 0, 1, 0};  // A1:A2
+  CHECK(ed.InsertChart(0, c));
+  c.data = Range{0, 1, 1, 1};  // B1:B2
+  CHECK(ed.InsertChart(0, c));
+  const std::string other = ed.PartBytes("/xl/charts/chart2.xml");
+  CHECK(ed.SetCell(0, 1, 0, CellInput::Number(0.25)));
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-chart-caches");
+  CheckClean(saved);
+  const std::string chart = PartText(saved, "/xl/charts/chart1.xml");
+  CHECK(chart.find("<c:pt idx=\"1\"><c:v>0.25</c:v></c:pt>") != std::string::npos && chart.find("<c:v>2</c:v>") == std::string::npos);
+  CHECK(PartText(saved, "/xl/charts/chart2.xml") == other);
+  CHECK(ed.PartBytes("/xl/charts/chart1.xml").find("<c:v>0.25</c:v>") != std::string::npos);  // the package keeps what it wrote
+}
+
+// A drawing part's objects (s3-charts): found by shape id with their bytes, placed, and the
+// relationships they use.
+TEST(sheet_drawing_objects) {
+  namespace dr = edit::drawing;
+  const std::string xml =
+      "<?xml version=\"1.0\"?>\r\n<xdr:wsDr xmlns:xdr=\"x\" xmlns:a=\"a\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+      "<!-- <xdr:twoCellAnchor> -->"
+      "<xdr:twoCellAnchor editAs=\"oneCell\"><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>"
+      "<xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>"
+      "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"7\" name=\"a &gt; b\"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm>"
+      "<a:off x=\"1\" y=\"2\"/><a:ext cx=\"3\" cy=\"4\"/></a:xfrm></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>"
+      "<mc:AlternateContent xmlns:mc=\"m\"><mc:Choice Requires=\"a14\"><xdr:twoCellAnchor><xdr:sp><xdr:nvSpPr><xdr:cNvPr id=\"12\" name=\"x\"/>"
+      "</xdr:nvSpPr></xdr:sp></xdr:twoCellAnchor></mc:Choice></mc:AlternateContent>"
+      "<xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>"
+      "<xdr:ext cx=\"10\" cy=\"20\"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"9\" name=\"p\"/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"rId4\"/>"
+      "</xdr:blipFill></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>";
+  const std::vector<dr::Object> objects = dr::Objects(xml);
+  CHECK_EQ(objects.size(), size_t(3));
+  if (objects.size() != 3) return;
+  CHECK(objects[0].id == 7 && objects[1].id == 12 && objects[1].alternate && objects[2].id == 9);
+  CHECK(xml.compare(objects[0].begin, 30, "<xdr:twoCellAnchor editAs=\"one") == 0);
+  CHECK(xml.compare(objects[2].end - 20, 20, "</xdr:oneCellAnchor>") == 0);
+  CHECK_EQ(dr::NextShapeId(xml), 13u);
+  CHECK(dr::Find(objects, 9) == &objects[2] && !dr::Find(objects, 8) && !dr::Find(objects, 0));
+  CHECK(dr::Objects("<a><b>").empty() && dr::Objects("<a/><b/>").empty());
+
+  dr::Place p;
+  p.from = {5, 6, 100, 200};
+  p.to = {7, 8, 0, 0};
+  p.x = 1000, p.y = 2000, p.cx = 3000, p.cy = 4000;
+  const std::string two = dr::Placed(std::string_view(xml).substr(objects[0].begin, objects[0].end - objects[0].begin), p);
+  CHECK(two.find("<xdr:from><xdr:col>5</xdr:col><xdr:colOff>100</xdr:colOff><xdr:row>6</xdr:row><xdr:rowOff>200</xdr:rowOff></xdr:from>") != std::string::npos);
+  CHECK(two.find("<xdr:to><xdr:col>7</xdr:col>") != std::string::npos && two.find("<a:off x=\"1000\" y=\"2000\"/><a:ext cx=\"3000\" cy=\"4000\"/>") != std::string::npos);
+  CHECK(two.find("name=\"a > b\"") != std::string::npos);  // pugixml escapes only & and < there
+  const std::string one = dr::Placed(std::string_view(xml).substr(objects[2].begin, objects[2].end - objects[2].begin), p);
+  CHECK(one.find("<xdr:ext cx=\"3000\" cy=\"4000\"/>") != std::string::npos && one.find("<xdr:col>5</xdr:col>") != std::string::npos);
+  CHECK(dr::Placed(std::string_view(xml).substr(objects[1].begin, objects[1].end - objects[1].begin), p).empty());
+  const std::vector<std::string> rels = dr::RelIds(std::string_view(xml).substr(objects[2].begin, objects[2].end - objects[2].begin));
+  CHECK(rels.size() == 1 && rels[0] == "rId4");
+  CHECK(dr::RelIds(xml).size() == 1);
+}
+
+// Insert > Chart (s3-charts): series guessed from the selection as Excel guesses them, written as
+// Excel writes a new chart, undone with its parts.
+// Move Chart > New sheet (s3-charts): the chart on a chart sheet of its own, written as Excel writes
+// one; undo puts it back on its sheet.
+TEST(sheet_move_chart_to_sheet) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"B1\" t=\"inlineStr\"><is><t>Sales</t></is></c></row>"
+                         "<row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>Jan</t></is></c><c r=\"B2\"><v>10</v></c></row>"
+                         "<row r=\"3\"><c r=\"A3\" t=\"inlineStr\"><is><t>Feb</t></is></c><c r=\"B3\"><v>12</v></c></row>"
+                         "</sheetData>",
+                         "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Editor::NewChart c;
+  c.data = Range{0, 0, 2, 1};  // A1:B3
+  c.at = CellAddr{4, 1};
+  CHECK(ed.InsertChart(0, c));
+  const std::vector<uint8_t> before = SaveBytes(*book, ed, "save-chart-before-move");
+  CHECK(!ed.MoveChartToSheet(0, 99));  // no such object
+  CHECK(ed.MoveChartToSheet(0, 2));
+  CHECK_EQ(book->SheetCount(), size_t(3));
+  if (book->SheetCount() != 3) return;
+  CHECK(book->GetSheet(0).Name() == "Chart1" && book->GetSheet(0).Kind() == SheetKind::Chartsheet);
+  CHECK_EQ(book->ActiveSheet(), size_t(0));
+  CHECK(ed.SheetDrawing(1, false).empty());  // the data sheet's only object went
+  CHECK(ed.PartBytes("/xl/chartsheets/sheet1.xml").find("<drawing r:id=\"rId1\"/></chartsheet>") != std::string::npos);
+  const std::string drawing = ed.PartBytes("/xl/drawings/drawing2.xml");  // named while the sheet's drawing1 was there
+  CHECK(drawing.find("<xdr:absoluteAnchor><xdr:pos x=\"0\" y=\"0\"/>") != std::string::npos);
+  CHECK(drawing.find("r:id=\"rId1\"") != std::string::npos && drawing.find("name=\"Chart 1\"") != std::string::npos);
+  CHECK(!ed.PartBytes("/xl/charts/chart1.xml").empty());
+
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-chart-sheet");
+  CheckClean(saved);
+  const std::string wb = PartText(saved, "/xl/workbook.xml");
+  CHECK(InOrder(wb, {"<sheet name=\"Chart1\" sheetId=\"3\" r:id=\"rId", "name=\"Sheet1\"", "name=\"Sheet2\""}));
+  CHECK(PartText(saved, "/xl/_rels/workbook.xml.rels").find("relationships/chartsheet\" Target=\"chartsheets/sheet1.xml\"") != std::string::npos);
+  if (auto again = OpenZip(saved)) {
+    CHECK(again->SheetCount() == 3 && again->GetSheet(0).Kind() == SheetKind::Chartsheet && again->GetSheet(0).Name() == "Chart1");
+  }
+  // Undo: back on its sheet, the chart sheet gone.
+  CHECK(ed.Undo(1));
+  CHECK_EQ(book->SheetCount(), size_t(2));
+  CHECK(!ed.SheetDrawing(0, false).empty() && ed.PartBytes("/xl/chartsheets/sheet1.xml").empty());
+  saved = SaveBytes(*book, ed, "save-chart-sheet-undone");
+  CheckClean(saved);
+  CHECK(PartText(saved, "/xl/workbook.xml").find("Chart1") == std::string::npos);
+  CHECK(PartText(saved, "/xl/drawings/drawing1.xml") == PartText(before, "/xl/drawings/drawing1.xml"));
+
+  // And back: Move Chart > Object in, after a save of the chart sheet.
+  CHECK(ed.Redo(1));
+  SaveBytes(*book, ed);
+  CHECK(!ed.MoveChartToObject(1, 0, CellAddr{1, 1}));  // not a chart sheet
+  CHECK(ed.MoveChartToObject(0, 1, CellAddr{5, 3}));
+  CHECK(book->SheetCount() == 2 && book->GetSheet(0).Kind() == SheetKind::Worksheet);
+  const std::string back = ed.PartBytes(ed.SheetDrawing(0, false));
+  CHECK(back.find("<xdr:from><xdr:col>3</xdr:col>") != std::string::npos && back.find("<c:chart ") != std::string::npos);
+  CHECK(ed.Undo(1));
+  CHECK(book->SheetCount() == 3 && book->GetSheet(0).Kind() == SheetKind::Chartsheet);
+  CHECK(ed.Redo(1));
+  saved = SaveBytes(*book, ed, "save-chart-sheet-back");  // a sheet removed: the save ends the undo history
+  CheckClean(saved);
+  CHECK(PartText(saved, "/xl/workbook.xml").find("Chart1") == std::string::npos);
+  CHECK(PartText(saved, "/xl/chartsheets/sheet1.xml").empty() && !PartText(saved, "/xl/charts/chart1.xml").empty());
+}
+
+TEST(sheet_insert_chart) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"B1\" t=\"inlineStr\"><is><t>Sales</t></is></c>"
+                         "<c r=\"C1\" t=\"inlineStr\"><is><t>Costs</t></is></c></row>"
+                         "<row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>Jan</t></is></c><c r=\"B2\"><v>10</v></c><c r=\"C2\"><v>7</v></c></row>"
+                         "<row r=\"3\"><c r=\"A3\" t=\"inlineStr\"><is><t>Feb</t></is></c><c r=\"B3\"><v>12</v></c><c r=\"C3\"><v>8</v></c></row>"
+                         "<row r=\"4\"><c r=\"A4\" t=\"inlineStr\"><is><t>Mar</t></is></c><c r=\"B4\"><v>15</v></c><c r=\"C4\"><v>9.5</v></c></row>"
+                         "</sheetData>",
+                         "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Editor::NewChart c;
+  c.data = Range{0, 0, 3, 2};  // A1:C4
+  c.at = CellAddr{5, 1};
+  CHECK(ed.InsertChart(0, c));
+  const std::string chart = ed.PartBytes("/xl/charts/chart1.xml");
+  CHECK(chart.find("<c:barDir val=\"col\"/>") != std::string::npos);
+  CHECK(InOrder(chart, {"<c:f>Sheet1!$B$1</c:f>", "<c:f>Sheet1!$A$2:$A$4</c:f>", "<c:f>Sheet1!$B$2:$B$4</c:f>",
+                        "<c:f>Sheet1!$C$1</c:f>", "<c:f>Sheet1!$C$2:$C$4</c:f>", "<c:legendPos val=\"b\"/>"}));
+  CHECK(chart.find("<c:pt idx=\"2\"><c:v>9.5</c:v></c:pt>") != std::string::npos && chart.find("<c:v>Mar</c:v>") != std::string::npos);
+  CHECK(ed.PartBytes("/xl/drawings/drawing1.xml").find("<xdr:row>5</xdr:row>") != std::string::npos);
+  // A second chart joins the same drawing.
+  c.kind = Editor::ChartKind::Pie;
+  c.data = Range{0, 0, 3, 1};
+  c.at = CellAddr{5, 10};
+  CHECK(ed.InsertChart(0, c));
+  CHECK(ed.PartBytes("/xl/charts/chart2.xml").find("<c:pieChart>") != std::string::npos);
+  CHECK(ed.PartBytes("/xl/drawings/drawing2.xml").empty());
+  // The drawing API pictures and shapes use (s3-data): a rectangle joins the drawing too.
+  const std::string drawing = ed.SheetDrawing(0, false);
+  CHECK_EQ(drawing, std::string("/xl/drawings/drawing1.xml"));
+  CHECK(ed.SheetDrawing(1, false).empty());
+  CHECK_EQ(ed.NextShapeId(drawing), 4u);
+  CHECK(!ed.AddAnchor(drawing, "<xdr:absoluteAnchor/>"));  // no group open
+  ed.BeginGroup(u"Insert Shape");
+  CHECK(ed.AddAnchor(drawing,
+                     "<xdr:twoCellAnchor xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" "
+                     "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff>"
+                     "<xdr:row>22</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff>"
+                     "<xdr:row>26</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr>"
+                     "<xdr:cNvPr id=\"4\" name=\"Rectangle 3\"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst=\"rect\">"
+                     "<a:avLst/></a:prstGeom></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>"));
+  ed.EndGroup();
+  CHECK_EQ(ed.NextShapeId(drawing), 5u);
+
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-insert-chart");
+  CheckClean(saved);
+  CHECK(PartText(saved, "/xl/worksheets/sheet1.xml").find("drawing") != std::string::npos);
+  auto again = OpenZip(saved);
+  if (!again) return;
+  // Moved and resized, then the pie deleted with its part.
+  edit::drawing::Place place;
+  place.from = {2, 30, 12700, 0};
+  place.to = {9, 44, 0, 25400};
+  CHECK(ed.MoveObject(0, 2, place));
+  CHECK(ed.AnchorXml(drawing, 2).find("<xdr:row>30</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>") != std::string::npos);
+  CHECK(ed.AnchorXml(drawing, 2).find("<xdr:colOff>12700</xdr:colOff>") != std::string::npos);
+  CHECK(!ed.MoveObject(0, 99, place));
+  CHECK(ed.DeleteObjects(0, {3}));
+  CHECK(ed.PartBytes("/xl/charts/chart2.xml").empty() && ed.AnchorXml(drawing, 3).empty());
+  CHECK(!ed.AnchorXml(drawing, 2).empty() && !ed.PartBytes("/xl/charts/chart1.xml").empty());
+  CHECK(PartText(SaveBytes(*book, ed, "save-chart-moved"), "/xl/drawings/_rels/drawing1.xml.rels").find("chart2") == std::string::npos);
+  // The last ones: the drawing goes too.
+  CHECK(ed.DeleteObjects(0, {2, 4}));
+  CHECK(ed.PartBytes(drawing).empty() && ed.PartBytes("/xl/charts/chart1.xml").empty() && ed.SheetDrawing(0, false).empty());
+  std::vector<uint8_t> none = SaveBytes(*book, ed, "save-chart-deleted");
+  CheckClean(none);
+  CHECK(PartText(none, "/xl/worksheets/sheet1.xml").find("drawing") == std::string::npos);
+  CHECK(PartText(none, "/[Content_Types].xml").find("chart") == std::string::npos);
+  CHECK(ed.Undo(2));
+  CHECK(ed.AnchorXml(drawing, 3).find("<c:chart") != std::string::npos && !ed.PartBytes("/xl/charts/chart2.xml").empty());
+
+  CHECK(ed.Undo(4));
+  CHECK(ed.PartBytes("/xl/charts/chart1.xml").empty() && ed.PartBytes("/xl/drawings/drawing1.xml").empty());
+  std::vector<uint8_t> undone = SaveBytes(*book, ed, "save-insert-chart-undone");
+  CheckClean(undone);
+  CHECK(PartText(undone, "/xl/worksheets/sheet1.xml").find("drawing") == std::string::npos);
+}
+
+TEST(sheet_save_typed_dynamic_array) {
+  // A typed formula that spills saves as Excel 365 writes a dynamic array: the cell's cm names a
+  // cellMetadata block whose <rc> picks an XLDAPR block with fDynamic="1", in xl/metadata.xml
+  // (added when the workbook has none, extended when it has one without it). Without cm, Excel
+  // opens it as a legacy {=...} array.
+  const std::string meta = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata";
+  const std::string metaType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml";
+  auto type = [](Editor& ed, uint32_t col) {
+    CellInput in = CellInput::Formula("_xlfn.SEQUENCE(3)");
+    in.type = ValueType::Number, in.number = 1;
+    in.dynamic = true;
+    in.arrayRange = Range{0, col, 2, col};
+    return ed.SetCell(0, 0, col, in);
+  };
+  auto dynamicAt = [](Workbook& book, uint32_t col) {
+    FormulaInfo f;
+    return book.GetSheet(0).GetFormula(0, col, f) && f.kind == FormulaKind::Array && f.dynamic;
+  };
+  const size_t npos = std::string::npos;
+  {
+    auto book = OpenParts({"<sheetData/>", "<sheetData/>"});
+    if (!book) return;
+    Editor ed(*book);
+    CHECK(type(ed, 0) && type(ed, 2));  // the second uses the same block
+    std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-dynamic-array");
+    CheckClean(saved);
+    const std::string m = PartText(saved, "/xl/metadata.xml");
+    CHECK(m.find("<metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" "
+                 "merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" "
+                 "coerce=\"1\" cellMeta=\"1\"/>") != npos &&
+          m.find("fDynamic=\"1\"") != npos &&
+          m.find("<cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata>") != npos);
+    CHECK(PartText(saved, "/[Content_Types].xml").find(metaType) != npos);
+    const std::string rels = PartText(saved, "/xl/_rels/workbook.xml.rels");
+    CHECK(rels.find(meta) != npos && rels.find("Target=\"metadata.xml\"") != npos);
+    const std::string sheet = PartText(saved, "/xl/worksheets/sheet1.xml");
+    CHECK(sheet.find("<c r=\"A1\" cm=\"1\">") != npos && sheet.find("<c r=\"C1\" cm=\"1\">") != npos);
+    auto back = OpenZip(saved);
+    CHECK(back && dynamicAt(*back, 0) && dynamicAt(*back, 2));
+    CHECK(ed.Undo() && ed.Undo());
+    CHECK(ed.PartBytes("/xl/metadata.xml").empty());
+    std::vector<uint8_t> none = SaveBytes(*book, ed);
+    CHECK(PartText(none, "/xl/metadata.xml").empty() && PartText(none, "/xl/worksheets/sheet1.xml").find("cm=") == npos);
+  }
+  {
+    // A metadata part without XLDAPR (one that declares rich values only): the type, the block and
+    // the cell metadata are added after what's there.
+    Parts parts = WorkbookParts({"<sheetData/>", "<sheetData/>"});
+    AddPart(parts, "xl/metadata.xml",
+            "<metadata xmlns=\"" + std::string(kMain) +
+                "\"><metadataTypes count=\"1\"><metadataType name=\"XLRICHVALUE\" minSupportedVersion=\"120000\" "
+                "copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" "
+                "clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\"/></metadataTypes></metadata>",
+            metaType, "xl/workbook.xml", "rM", meta, "metadata.xml");
+    auto book = OpenZip(test::MakeZip(parts));
+    if (!book) return;
+    Editor ed(*book);
+    CHECK(type(ed, 1));
+    std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-dynamic-array-meta");
+    CheckClean(saved);
+    const std::string m = PartText(saved, "/xl/metadata.xml");
+    const size_t rich = m.find("<metadataType name=\"XLRICHVALUE\""), type2 = m.find("<metadataType name=\"XLDAPR\""),
+                 dap = m.find("</metadataTypes><futureMetadata name=\"XLDAPR\" count=\"1\"><bk>"),
+                 cells = m.find("</futureMetadata><cellMetadata count=\"1\"><bk><rc t=\"2\" v=\"0\"/></bk></cellMetadata></metadata>");
+    CHECK(m.find("<metadataTypes count=\"2\">") != npos && rich < type2 && type2 < dap && dap < cells && cells != npos);
+    CHECK(PartText(saved, "/xl/worksheets/sheet1.xml").find("<c r=\"B1\" cm=\"1\">") != npos);
+    auto back = OpenZip(saved);
+    CHECK(back && dynamicAt(*back, 1));
+  }
+  {
+    // Excel's own: its block is used, the part stays as it was.
+    const std::string xml =
+        "<metadata xmlns=\"" + std::string(kMain) +
+        "\" xmlns:xda=\"http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray\"><metadataTypes count=\"1\">"
+        "<metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" "
+        "merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\" "
+        "cellMeta=\"1\"/></metadataTypes><futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext "
+        "uri=\"{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/>"
+        "</ext></extLst></bk></futureMetadata><cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata></metadata>";
+    Parts parts = WorkbookParts({"<sheetData/>", "<sheetData/>"});
+    AddPart(parts, "xl/metadata.xml", xml, metaType, "xl/workbook.xml", "rM", meta, "metadata.xml");
+    auto book = OpenZip(test::MakeZip(parts));
+    if (!book) return;
+    Editor ed(*book);
+    CHECK(type(ed, 0));
+    CHECK(ed.PartBytes("/xl/metadata.xml") == xml);
+    std::vector<uint8_t> saved = SaveBytes(*book, ed);
+    CHECK(PartText(saved, "/xl/worksheets/sheet1.xml").find("<c r=\"A1\" cm=\"1\">") != npos);
+  }
+}
+
+// A file whose worksheet binds "r" to something else: the relationships' prefix is another one, not
+// "r" declared twice (an attribute twice: the save wouldn't open; fuzz_xlsx).
+TEST(sheet_save_rel_prefix_taken) {
+  detail::PartText t;
+  t.rootStart = "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"urn:other\" xmlns:r1=\"urn:x\">";
+  CHECK(xlsx::RelPrefix(t) == "r2");
+  CHECK(t.rootStart.find(" xmlns:r2=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">") != std::string::npos);
+  CHECK(xlsx::RelPrefix(t) == "r2");  // declared now
+  detail::PartText plain;
+  plain.rootStart = "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">";
+  CHECK(xlsx::RelPrefix(plain) == "r");
 }

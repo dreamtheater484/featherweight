@@ -162,6 +162,7 @@ class Painting {
   }
   TextLook TextLookAt(uint32_t row, uint32_t col, const Xf& xf) {
     TextLook t;
+    t.errors = o_.errors;
     if (!Looks()) return t;
     const Look& lk = LookAt(row, col);
     if (!lk.table.Empty()) {
@@ -189,6 +190,7 @@ class Painting {
   }
   // A cell's fill: a conditional format's, else its own, else its table's.
   void FillCell(const draw::Rect& r, uint32_t row, uint32_t col, const Fill& own) {
+    if (o_.blackAndWhite) return;  // Excel's Black and white prints no fills
     const bool has = own.pattern != PatternType::None || own.gradient;
     if (Looks()) {
       const Look& lk = LookAt(row, col);
@@ -721,8 +723,8 @@ class Painting {
         if (piece.glyphs.empty()) continue;
         const CellText::Run* run = piece.run < l.runs.size() ? &l.runs[piece.run] : nullptr;
         if (run && run->hidden) continue;
-        const draw::Brush brush = draw::Brush::Solid(ToColor(run ? run->color : 0xFF000000));
-        const draw::GlyphRun gr = piece.Run();
+        const draw::Brush brush = draw::Brush::Solid(ToColor(run && !o_.blackAndWhite ? run->color : 0xFF000000));
+        const draw::GlyphRun gr = ShownRun(piece, l.text);
         if (piece.scale != 1) {
           p_.Save();
           p_.Transform(draw::Matrix::Translate(-piece.OriginX(), 0) * draw::Matrix::Scale(piece.scale, 1) *
@@ -948,7 +950,7 @@ class Painting {
     for (const auto& [r, d] : diagonals) {
       const LineKind k = KindOf(d.first.diagonal.style);
       draw::Pen pen;
-      pen.brush = draw::Brush::Solid(ToColor(d.second));
+      pen.brush = draw::Brush::Solid(ToColor(o_.blackAndWhite ? 0xFF000000 : d.second));
       pen.width = g_.centered ? k.width * g_.pt : std::max(g_.line, k.width * g_.px);
       if (d.first.diagonalDown) {
         draw::Path path;
@@ -969,7 +971,7 @@ class Painting {
     const LineKind k = KindOf(s.style);
     if (k.width <= 0) return;
     const float L = g_.line;
-    const draw::Color c = ToColor(s.color);
+    const draw::Color c = ToColor(o_.blackAndWhite ? 0xFF000000 : s.color);
     std::vector<std::pair<float, float>> bands;
     float a0 = s.a0, a1 = s.a1;
     std::vector<int> dashes = k.dashes;

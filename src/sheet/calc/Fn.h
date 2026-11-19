@@ -3,6 +3,7 @@
 // Internal to the formula engine: the machine that runs bytecode, the helpers functions use to
 // read their arguments, and the function implementations (Fn*.cpp).
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <string_view>
@@ -57,6 +58,8 @@ struct Machine {
   Value Deref(const Value& v, bool arrayMode);
   void WorkbookExtent(int32_t& rows, int32_t& cols);
   int32_t extentRows_ = -1, extentCols_ = -1;
+  // Whether an array of rows x cols may be built (Host::MaxArrayCells); else the result is #NUM!.
+  bool Fits(double rows, double cols) const { return rows * cols <= static_cast<double>(host.MaxArrayCells()); }
 };
 
 // The view of a scalar Value as a cell's (text borrowed from the Value).
@@ -185,6 +188,112 @@ bool EachItem(Machine& m, const Value& v, F&& fn) {
 // --- the functions ---
 
 namespace fn {
+// An argument as an array: a reference's values (whole columns as far as the workbook's cells
+// reach), a single value as 1 x 1. False (with c.out set) when it can't be read.
+bool ArgArray(Call& c, int i, Value& out);
+
+// SUM's rules for its arguments [from, to): numbers in references and arrays (text, booleans and
+// blanks there are skipped); values given directly count, booleans as 1 and 0, text converted.
+// The first error ends it, in c.out.
+template <class F>
+bool EachNumber(Call& c, int from, int to, F&& fn) {
+  for (int i = from; i < to; ++i) {
+    if (c.arg(i).IsMissing()) continue;
+    bool ok = EachItem(c.m, c.arg(i), [&](const CellView& v, From from) {
+      if (v.type == Type::Error) {
+        c.Fail(v.err);
+        return false;
+      }
+      if (v.type == Type::Number) {
+        fn(v.num);
+        return true;
+      }
+      if (from != From::kDirect) return true;
+      double d;
+      Err e = Err::None;
+      if (!ToNumber(c.m, v, d, e)) {
+        c.Fail(e);
+        return false;
+      }
+      fn(d);
+      return true;
+    });
+    if (!ok) {
+      if (c.m.stop || !c.out.IsError()) c.Fail(Err::Value);
+      return false;
+    }
+  }
+  return true;
+}
+
+// The "A" functions' rules: in references, text counts as 0 and booleans as 1 or 0.
+template <class F>
+bool EachNumberA(Call& c, int from, int to, F&& fn) {
+  for (int i = from; i < to; ++i) {
+    if (c.arg(i).IsMissing()) continue;
+    bool ok = EachItem(c.m, c.arg(i), [&](const CellView& v, From from) {
+      if (v.type == Type::Error) {
+        c.Fail(v.err);
+        return false;
+      }
+      if (v.type == Type::Number || v.type == Type::Bool) {
+        fn(v.num);
+        return true;
+      }
+      if (v.type == Type::Text) {
+        double d;
+        Err e = Err::None;
+        if (from != From::kDirect) {
+          fn(0);
+          return true;
+        }
+        if (!ToNumber(c.m, v, d, e)) {
+          c.Fail(e);
+          return false;
+        }
+        fn(d);
+      }
+      return true;
+    });
+    if (!ok) {
+      if (!c.out.IsError()) c.Fail(Err::Value);
+      return false;
+    }
+  }
+  return true;
+}
+
+inline bool Numbers(Call& c, int from, int to, std::vector<double>& out) {
+  return EachNumber(c, from, to, [&](double d) { out.push_back(d); });
+}
+
+// Adds as Excel's SUM does: a total that cancels to a rounding error becomes 0.
+struct Summer {
+  double sum = 0;
+  void Add(double d) {
+    double r = sum + d;
+    if (r != 0 && std::fabs(r) <= std::max(std::fabs(sum), std::fabs(d)) * 8.8817841970012523e-16) r = 0;
+    sum = r;
+  }
+};
+
+inline double Mean(const std::vector<double>& v) {
+  Summer s;
+  for (double d : v) s.Add(d);
+  return s.sum / static_cast<double>(v.size());
+}
+
+inline double SquaredDeviations(const std::vector<double>& v) {
+  double m = Mean(v), s = 0;
+  for (double d : v) s += (d - m) * (d - m);
+  return s;
+}
+
+// YEARFRAC's year fraction between two serials (any order) by day-count basis 0-4.
+double YearFracOf(double a, double b, int basis, bool date1904);
+// A serial argument: numbers, or text read as a date; negative or past 9999 is #NUM!.
+bool SerialArg(Call& c, int i, double& s);
+
 #define FW_FN(name) void name(Call& c);
 FW_FN(Abs) FW_FN(Address) FW_FN(Aggregate) FW_FN(And) FW_FN(Average) FW_FN(AverageA) FW_FN(AverageIf) FW_FN(AverageIfs)
 FW_FN(Ceiling) FW_FN(CeilingMath) FW_FN(Char) FW_FN(Clean) FW_FN(Code) FW_FN(Column) FW_FN(Columns)
@@ -206,6 +315,31 @@ FW_FN(SumProduct) FW_FN(SumSq) FW_FN(T) FW_FN(Text) FW_FN(TextJoin) FW_FN(Time) 
 FW_FN(Transpose) FW_FN(Trim) FW_FN(True) FW_FN(Trunc) FW_FN(TypeFn) FW_FN(Unique) FW_FN(Upper) FW_FN(ValueFn) FW_FN(Var)
 FW_FN(VarP) FW_FN(VLookup) FW_FN(Weekday) FW_FN(WeekNum) FW_FN(Workday) FW_FN(WorkdayIntl) FW_FN(XLookup)
 FW_FN(XMatch) FW_FN(Xor) FW_FN(Year) FW_FN(YearFrac)
+FW_FN(VStack) FW_FN(HStack) FW_FN(Take) FW_FN(Drop) FW_FN(ChooseRows) FW_FN(ChooseCols) FW_FN(ToCol) FW_FN(ToRow)
+FW_FN(WrapRows) FW_FN(WrapCols) FW_FN(Expand) FW_FN(RandArray) FW_FN(TextSplit) FW_FN(TextBefore) FW_FN(TextAfter)
+FW_FN(ValueToText) FW_FN(ArrayToText) FW_FN(UniChar) FW_FN(Unicode) FW_FN(IsFormula) FW_FN(FormulaText)
+FW_FN(Sheet) FW_FN(Sheets) FW_FN(Areas) FW_FN(CellInfo)
+FW_FN(CumIpmt) FW_FN(CumPrinc) FW_FN(Days360) FW_FN(Db) FW_FN(Ddb) FW_FN(Disc) FW_FN(DollarDe)
+FW_FN(DollarFr) FW_FN(Effect) FW_FN(FvSchedule) FW_FN(IntRate) FW_FN(Ipmt) FW_FN(Irr) FW_FN(IsPmt)
+FW_FN(Mirr) FW_FN(Nominal) FW_FN(PDuration) FW_FN(Ppmt) FW_FN(PriceDisc) FW_FN(Received) FW_FN(Rri)
+FW_FN(Sln) FW_FN(Syd) FW_FN(TBillEq) FW_FN(TBillPrice) FW_FN(TBillYield) FW_FN(Vdb) FW_FN(Xirr) FW_FN(Xnpv)
+FW_FN(YieldDisc)
+FW_FN(Acos) FW_FN(Acosh) FW_FN(Acot) FW_FN(Acoth) FW_FN(Arabic) FW_FN(Asin) FW_FN(Asinh) FW_FN(Atan)
+FW_FN(Atan2) FW_FN(Atanh) FW_FN(Base) FW_FN(CombinA) FW_FN(CombinFn) FW_FN(Cos) FW_FN(Cosh) FW_FN(Cot)
+FW_FN(Coth) FW_FN(Csc) FW_FN(Csch) FW_FN(Decimal) FW_FN(Degrees) FW_FN(Fact) FW_FN(FactDouble) FW_FN(GcdFn)
+FW_FN(Lcm) FW_FN(MDeterm) FW_FN(MInverse) FW_FN(MMult) FW_FN(MUnit) FW_FN(Multinomial) FW_FN(Permut)
+FW_FN(PermutationA) FW_FN(Radians) FW_FN(Roman) FW_FN(Sec) FW_FN(Sech) FW_FN(SeriesSum) FW_FN(Sin)
+FW_FN(Sinh) FW_FN(SqrtPi) FW_FN(SumX2mY2) FW_FN(SumX2pY2) FW_FN(SumXmY2) FW_FN(Tan) FW_FN(Tanh)
+FW_FN(AveDev) FW_FN(Correl) FW_FN(CovarP) FW_FN(CovarS) FW_FN(DevSq) FW_FN(Fisher) FW_FN(FisherInv)
+FW_FN(Forecast) FW_FN(Frequency) FW_FN(GeoMean) FW_FN(Growth) FW_FN(HarMean) FW_FN(Intercept) FW_FN(Kurt)
+FW_FN(Linest) FW_FN(Logest) FW_FN(ModeMult) FW_FN(PercentRankExc) FW_FN(PercentRankInc) FW_FN(Prob)
+FW_FN(Rsq) FW_FN(Skew) FW_FN(SkewP) FW_FN(Slope) FW_FN(StDevA) FW_FN(StDevPA) FW_FN(Standardize) FW_FN(SteYX)
+FW_FN(Trend) FW_FN(TrimMean) FW_FN(VarA) FW_FN(VarPA)
+FW_FN(Bin2Dec) FW_FN(Bin2Hex) FW_FN(Bin2Oct) FW_FN(BitAnd) FW_FN(BitLShift) FW_FN(BitOr) FW_FN(BitRShift)
+FW_FN(BitXor) FW_FN(DAverage) FW_FN(DCount) FW_FN(DCountA) FW_FN(DGet) FW_FN(DMax) FW_FN(DMin)
+FW_FN(DProduct) FW_FN(DStDev) FW_FN(DStDevP) FW_FN(DSum) FW_FN(DVar) FW_FN(DVarP) FW_FN(Dec2Bin)
+FW_FN(Dec2Hex) FW_FN(Dec2Oct) FW_FN(Delta) FW_FN(Erf) FW_FN(ErfPrecise) FW_FN(Erfc) FW_FN(GeStep)
+FW_FN(Hex2Bin) FW_FN(Hex2Dec) FW_FN(Hex2Oct) FW_FN(Oct2Bin) FW_FN(Oct2Dec) FW_FN(Oct2Hex)
 #undef FW_FN
 }  // namespace fn
 

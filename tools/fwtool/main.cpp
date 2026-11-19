@@ -81,6 +81,8 @@ constexpr const char* kUsage =
     "  fwtool bench --sheet-edits [--runs N] [--out DIR] [--json FILE] [--budgets] <template.xlsx>\n"
     "      S2's editing budgets on workbooks made from the template in DIR: recalculation after\n"
     "      one edit (100,000 formulas), inserting a row and undoing it, and saving (1,000,000 cells).\n"
+    "      S3's: a table, a conditional format and a chart from a 1,000-row selection to screen,\n"
+    "      and the chart drawn again after an edit to its data.\n"
     "  fwtool bench [--runs N] [--json FILE] [--budgets] [--typing | --scrolling] <file or folder>...\n"
     "      Times opening each Word document, stage by stage, against the opening budgets\n"
     "      (plan §11). With --budgets, a missed budget fails. With --typing, times keystrokes\n"
@@ -98,6 +100,9 @@ constexpr const char* kUsage =
     "  fwtool pdf-check --pngs DIR <exported.pdf>\n"
     "      The same for a PDF the app exported (script ops exportpdf: and pagepngs:), against the\n"
     "      pages in DIR; lists its links, bookmarks, title and author.\n"
+    "  fwtool pdf-compare [--out DIR] [--json FILE] <reference.pdf> <ours.pdf>\n"
+    "      Pixels (S3, plan §10): both PDFs rendered at 100 dpi, page origins aligned, each page compared\n"
+    "      by SSIM; a page passes at >= 0.95. --out writes failing pages side by side with the difference.\n"
     "  fwtool paste-check [--samples DIR] [--out DIR] <file or folder>...\n"
     "      Copies each Word document's main story as RTF and HTML and pastes it back (the HTML\n"
     "      over the story, the RTF at its end), and pastes each clipboard sample in --samples at\n"
@@ -141,7 +146,10 @@ constexpr const char* kUsage =
     "      each document for the validator and Word (scripts/torture.ps1).\n"
     "      Workbooks (S2): seeded edits through the edit API (values and formulas typed in en-NL\n"
     "      and en-US, formats, rows, columns, cells and sheets inserted, deleted, renamed and\n"
-    "      moved, merges, sort, filter, paste, undo, redo), then save: the saved file must open,\n"
+    "      moved, merges, sort, filter, paste, undo, redo; S3: names, sheet and workbook\n"
+    "      protection, links, notes, comment threads, tables, conditional formats, data\n"
+    "      validation, charts, pictures and shapes (inserted, moved, copied, formatted, deleted),\n"
+    "      page setup and page breaks), then save: the saved file must open,\n"
     "      pass check and the model's checks with no new errors, read back as the edited workbook,\n"
     "      and keep every part the save didn't write byte for byte. Without the edit API in the\n"
     "      build, every edit is refused and the save writes the model's parts. --workbooks: only\n"
@@ -343,6 +351,7 @@ int wmain(int argc, wchar_t** argv) {
   if (command == L"cfb") return fwtool::RunCfb(options);
   if (command == L"csv") return fwtool::RunCsv(options);
   if (command == L"pdf-check") return fwtool::RunPdfCheck(options);
+  if (command == L"pdf-compare") return fwtool::RunPdfCompare(options);
   std::fprintf(stderr, "Unknown command %s\n\n%s", fw::WideToUtf8(command).c_str(), fwtool::kUsage);
   return 2;
 }

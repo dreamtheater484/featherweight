@@ -15,29 +15,88 @@ using namespace gfx;
 
 namespace fw::sheet::view {
 
-WorkbookView::ViewFilter* WorkbookView::FilterOf() {
-  if (!Ready()) return nullptr;
-  const std::optional<SheetFilter>& f = Current().Filter();
-  if (!f) return nullptr;
-  filter_ = ViewFilter{f->ref, {}, {}};
-  for (const FilterColumn& col : f->columns) {
-    data::FilterCriteria c;
-    if (data::FromFilterColumn(col, c)) filter_.criteria.push_back(std::move(c));
-    else filter_.other.push_back(col);
+bool WorkbookView::ReadFilter(int table, ViewFilter& out) {
+  if (!Ready()) return false;
+  const Sheet& s = Current();
+  const std::vector<FilterColumn>* columns = nullptr;
+  if (table < 0) {
+    if (!s.Filter()) return false;
+    out = ViewFilter{s.Filter()->ref, {}, {}};
+    columns = &s.Filter()->columns;
+  } else {
+    if (static_cast<size_t>(table) >= s.Tables().size()) return false;
+    const Table& t = s.Tables()[static_cast<size_t>(table)];
+    if (!t.autoFilter || !t.headerRows) return false;
+    Range ref = t.ref;
+    if (t.totalsRows && ref.lastRow > ref.firstRow) --ref.lastRow;
+    out = ViewFilter{ref, {}, {}};
+    columns = &t.criteria;
   }
-  return &filter_;
+  for (const FilterColumn& col : *columns) {
+    data::FilterCriteria c;
+    if (data::FromFilterColumn(col, c)) out.criteria.push_back(std::move(c));
+    else out.other.push_back(col);
+  }
+  return true;
+}
+
+std::vector<int> WorkbookView::FilterAreas() {
+  std::vector<int> out;
+  if (!Ready()) return out;
+  if (Current().Filter()) out.push_back(-1);
+  const std::vector<Table>& tables = Current().Tables();
+  for (size_t i = 0; i < tables.size(); ++i)
+    if (tables[i].autoFilter && tables[i].headerRows) out.push_back(static_cast<int>(i));
+  return out;
+}
+
+WorkbookView::ViewFilter* WorkbookView::FilterOf() {
+  return ReadFilter(filterTable_, filter_) ? &filter_ : nullptr;
+}
+
+bool WorkbookView::SetTableButtons(size_t index, bool on) {
+  if (!Ready() || index >= Current().Tables().size()) return false;
+  const int sheet = static_cast<int>(sheet_);
+  Table t = Current().Tables()[index];
+  if (t.autoFilter == on) return true;
+  edit::EditGroup group(Ed(), u"Filter");
+  const std::vector<HeldSize> held = HeldSizes();  // pictures keep their size
+  edit::Result r;
+  if (!on && !t.criteria.empty()) {
+    r = Ed().SetTableFilter(sheet, index, SheetFilter{});
+    const Range data = t.Data();
+    if (r && data.firstRow <= data.lastRow) r = Ed().HideRows(sheet, data.firstRow, data.lastRow, false);
+    if (r) t = Current().Tables()[index];
+  }
+  t.autoFilter = on;
+  if (r) r = Ed().SetTable(sheet, index, t);
+  if (r) r = KeepSizes(held);
+  if (EditRefused(r)) return false;
+  group.done = true;
+  if (!on && filterTable_ == static_cast<int>(index) && filterPanel_ && host_.ViewShownPanel() == filterPanel_.get())
+    host_.ViewShowPanel(nullptr);
+  host_.ViewInvalidate();
+  return true;
 }
 
 void WorkbookView::ToggleFilter() {
   if (!Ready() || preview_ || ChartSheet()) return;
   const int sheet = static_cast<int>(sheet_);
+  // In a table: its own buttons, as Excel does.
+  if (const int i = TableIndexAt(active_); i >= 0) {
+    SetTableButtons(static_cast<size_t>(i), !Current().Tables()[static_cast<size_t>(i)].autoFilter);
+    return;
+  }
+  filterTable_ = -1;
   if (ViewFilter* f = FilterOf()) {
     // Off: every row it hid shows again.
     const Range ref = f->ref;
     const bool any = !f->criteria.empty() || !f->other.empty();
     edit::EditGroup group(Ed(), u"Remove Filter");
+    const std::vector<HeldSize> held = HeldSizes();  // s3-data: pictures keep their size
     edit::Result r = Ed().SetFilter(sheet, std::nullopt);
     if (r && any && ref.lastRow > ref.firstRow) r = Ed().HideRows(sheet, ref.firstRow + 1, ref.lastRow, false);
+    if (r) r = KeepSizes(held);
     if (EditRefused(r)) return;
     group.done = true;
     if (filterPanel_ && host_.ViewShownPanel() == filterPanel_.get()) host_.ViewShowPanel(nullptr);
@@ -58,16 +117,21 @@ void WorkbookView::ToggleFilter() {
 
 bool WorkbookView::ApplyFilter() {
   // filter_ as the panel left it (FilterOf would read the model's again).
-  if (!Ready() || !Current().Filter()) return false;
+  if (!Ready()) return false;
+  const Sheet& s = Current();
+  const int table = filterTable_;
+  const bool ofTable = table >= 0 && static_cast<size_t>(table) < s.Tables().size();
+  if (table >= 0 && !ofTable) return false;
+  if (!ofTable && !s.Filter()) return false;
+  const std::vector<FilterColumn>& had = ofTable ? s.Tables()[static_cast<size_t>(table)].criteria : s.Filter()->columns;
   ViewFilter* f = &filter_;
   if (f->ref.lastRow <= f->ref.firstRow) return false;
-  const Sheet& s = Current();
   std::vector<bool> keep = data::FilterRows(*book_, s, f->ref, f->criteria, text_->Locale());
   if (!f->other.empty()) {
     // Rows a kept column from the file hides (a color, a date filter) stay hidden: those the
     // model's criteria let through and that are hidden all the same.
     std::vector<data::FilterCriteria> before;
-    for (const FilterColumn& col : s.Filter()->columns) {
+    for (const FilterColumn& col : had) {
       data::FilterCriteria c;
       if (data::FromFilterColumn(col, c)) before.push_back(std::move(c));
     }
@@ -83,7 +147,8 @@ bool WorkbookView::ApplyFilter() {
             [](const FilterColumn& a, const FilterColumn& b) { return a.colId < b.colId; });
   const int sheet = static_cast<int>(sheet_);
   edit::EditGroup group(Ed(), u"Filter");
-  edit::Result r = Ed().SetFilter(sheet, model);
+  const std::vector<HeldSize> held = HeldSizes();  // s3-data: pictures keep their size
+  edit::Result r = ofTable ? Ed().SetTableFilter(sheet, static_cast<size_t>(table), model) : Ed().SetFilter(sheet, model);
   // Runs of rows whose hidden state changes, each in one call.
   const uint32_t first = f->ref.firstRow + 1;
   for (size_t i = 0; r && i < keep.size();) {
@@ -95,6 +160,7 @@ bool WorkbookView::ApplyFilter() {
     if (differs) r = Ed().HideRows(sheet, first + static_cast<uint32_t>(i), first + static_cast<uint32_t>(j - 1), hide);
     i = j;
   }
+  if (r) r = KeepSizes(held);
   if (EditRefused(r)) return false;
   group.done = true;
   host_.ViewInvalidate();
@@ -102,19 +168,24 @@ bool WorkbookView::ApplyFilter() {
 }
 
 bool WorkbookView::FilterButtonAt(float x, float y, uint32_t* column, D2D1_RECT_F* rc) {
-  ViewFilter* f = FilterOf();
-  if (!f || preview_) return false;
-  for (const Pane& p : Panes()) {
-    if (!gfx::Contains(RectF(p.rc), x, y) && rc == nullptr) continue;
-    for (uint32_t col = f->ref.firstCol; col <= f->ref.lastCol; ++col) {
-      const D2D1_RECT_F cell = CellRect(p, f->ref.firstRow, col, f->ref.firstRow, col);
-      const float s = std::min(cell.bottom - cell.top - 2, std::round(16 * ui_));
-      if (s < 6) continue;
-      const D2D1_RECT_F b = RectF(cell.right - s - 1, cell.bottom - s - 1, cell.right - 1, cell.bottom - 1);
-      if (gfx::Contains(b, x, y) && gfx::Contains(RectF(p.rc), x, y)) {
-        if (column) *column = col - f->ref.firstCol;
-        if (rc) *rc = b;
-        return true;
+  if (preview_) return false;
+  ViewFilter area;
+  for (const int which : FilterAreas()) {
+    if (!ReadFilter(which, area)) continue;
+    const ViewFilter* f = &area;
+    for (const Pane& p : Panes()) {
+      if (!gfx::Contains(RectF(p.rc), x, y) && rc == nullptr) continue;
+      for (uint32_t col = f->ref.firstCol; col <= f->ref.lastCol; ++col) {
+        const D2D1_RECT_F cell = CellRect(p, f->ref.firstRow, col, f->ref.firstRow, col);
+        const float s = std::min(cell.bottom - cell.top - 2, std::round(16 * ui_));
+        if (s < 6) continue;
+        const D2D1_RECT_F b = RectF(cell.right - s - 1, cell.bottom - s - 1, cell.right - 1, cell.bottom - 1);
+        if (gfx::Contains(b, x, y) && gfx::Contains(RectF(p.rc), x, y)) {
+          if (column) *column = col - f->ref.firstCol;
+          if (rc) *rc = b;
+          filterTable_ = which;  // the panel's filter
+          return true;
+        }
       }
     }
   }
@@ -122,9 +193,12 @@ bool WorkbookView::FilterButtonAt(float x, float y, uint32_t* column, D2D1_RECT_
 }
 
 void WorkbookView::DrawFilterButtons(Canvas& c) {
-  ViewFilter* f = FilterOf();
-  if (!f || preview_) return;
+  if (preview_) return;
   const Palette& p = theme::P();
+  ViewFilter area;
+  for (const int which : FilterAreas()) {
+  if (!ReadFilter(which, area)) continue;
+  const ViewFilter* f = &area;
   for (const Pane& pane : Panes()) {
     c.PushClip(RectF(pane.rc));
     for (uint32_t col = f->ref.firstCol; col <= f->ref.lastCol; ++col) {
@@ -139,6 +213,7 @@ void WorkbookView::DrawFilterButtons(Canvas& c) {
       c.Icon(icon::ChevronDown, b, active ? p.accent : Rgb(0x404040), std::round(s * 0.6f));
     }
     c.PopClip();
+  }
   }
 }
 
@@ -174,8 +249,12 @@ bool WorkbookView::SortRange(const Range& range, bool header, const std::vector<
   // SortRows' order: the row at rows.firstRow + order[i] goes to rows.firstRow + i. Under a filter,
   // the rows it hides stay where they are and the shown rows are sorted among themselves (Excel).
   std::vector<uint32_t> order(sorted.size());
-  const ViewFilter* f = FilterOf();
-  const bool filtered = f && !f->criteria.empty() && f->ref.firstRow < rows.lastRow && f->ref.lastRow >= rows.firstRow;
+  // Under a filter (the sheet's or a table's) whose criteria hide rows in the range.
+  bool filtered = false;
+  ViewFilter area;
+  for (const int which : FilterAreas())
+    filtered |= ReadFilter(which, area) && !area.criteria.empty() && area.ref.firstRow < rows.lastRow &&
+                area.ref.lastRow >= rows.firstRow;
   if (filtered) {
     std::vector<uint32_t> shown;
     for (const uint32_t row : sorted)
@@ -238,7 +317,8 @@ bool WorkbookView::DataCommandState(int cmd, CommandState& s) {
       s.label = L"Filter";
       s.shortcut = L"Ctrl+Shift+L";
       s.enabled = cells;
-      s.checked = cells && FilterOf() != nullptr;
+      if (const int i = cells ? TableIndexAt(active_) : -1; i >= 0) s.checked = Current().Tables()[static_cast<size_t>(i)].autoFilter;
+      else s.checked = cells && Current().Filter().has_value();
       return true;
     case CmdDataBox: s.label = L"Sort and filter"; s.enabled = cells; return true;
     case CmdSortAscending: s.label = L"Sort A to Z"; s.enabled = cells; return true;

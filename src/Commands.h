@@ -362,4 +362,76 @@ enum Cmd : int {
   CmdSortAscending,
   CmdSortDescending,
   CmdRemoveDuplicates,
+  // Charts and the objects in a sheet's drawing (S3, s3-charts): 2800-2849.
+  CmdInsertChart = 2800,  // Alt+F1: the default chart (clustered column) of the selection
+  CmdChartColumn,         // Insert > Chart by type, in ChartKind's order
+  CmdChartBar,
+  CmdChartLine,
+  CmdChartPie,
+  CmdChartDoughnut,
+  CmdChartArea,
+  CmdChartScatter,
+  CmdChartBox,            // the toolbar's chart choices
+  CmdDeleteObject,        // the selected chart, picture or shape
+  CmdChartPanel,          // the selected chart's panel (double-click, Ctrl+1)
+  CmdMoveChart,           // Move Chart > New sheet: the selected chart on a chart sheet of its own;
+                          // on a chart sheet, its chart back onto the first worksheet
+  CmdChartCombo,          // Insert > Chart > Combo (clustered column and line)
+  // Conditional formatting and data validation (S3, s3-data): 2850-2899.
+  CmdCondFormat = 2850,   // the Conditional formatting panel: a new rule
+  CmdCfManage,            // its list of the sheet's rules
+  CmdCfClearSelection,
+  CmdCfClearSheet,
+  CmdCondFormatBox,       // the toolbar's conditional formatting choices
+  CmdDataValidation,      // Data > Data validation
+  CmdCircleInvalid,
+  CmdClearCircles,
+  CmdValidationList,      // Alt+Down on a cell with a list: its choices
+  CmdCreateTable,         // Ctrl+T, Ctrl+L
+  CmdTableDesign,
+  CmdConvertToRange,
+  CmdTableTotalRow,
+  // Pictures and shapes (S3, s3-data): 2880-2899.
+  CmdObjectsBox = 2880,   // the toolbar's Insert choices
+  CmdObjectPicture,       // Insert > Pictures: files
+  CmdObjectRectangle,     // Insert > Shapes, at the active cell
+  CmdObjectRoundRect,
+  CmdObjectOval,
+  CmdObjectLine,
+  CmdObjectArrow,
+  CmdObjectTextBox,
+  CmdFormatObject,        // the Format panel of the selected picture or shape
+  // Protection, links, notes and comments (S3, s3-review): 2900-2939.
+  CmdProtectSheet = 2900,  // Protect Sheet, or Unprotect Sheet on a protected one
+  CmdProtectWorkbook,      // Protect Workbook (its structure), or Unprotect Workbook
+  CmdNewNote,              // Shift+F2: New Note, or Edit Note on a cell with one
+  CmdDeleteNote,
+  CmdShowNote,             // Show/Hide Note
+  CmdShowAllNotes,
+  CmdDeleteThread,  // Delete Thread (New Comment, Ctrl+Alt+M, is the app's CmdNewComment)
+  // Links: the app's CmdInsertLink (Ctrl+K) and CmdRemoveLink.
+
+  // Page setup, print preview and Export PDF (S3, s3-print): 2940-2969.
+  // The Page Setup panel is the app's CmdPageSetup.
+  CmdSetPrintArea = 2940,  // the selection
+  CmdAddToPrintArea,
+  CmdClearPrintArea,
+  CmdPrintTitles,       // the panel's Sheet tab
+  CmdInsertPageBreak,   // above and left of the active cell
+  CmdRemovePageBreak,
+  CmdResetPageBreaks,
+  CmdPageBreakPreview,  // the sheet's pages over its cells (on and off)
+  CmdNoScaling,         // print preview's scaling shortcuts, in this order
+  CmdFitSheetOnePage,
+  CmdFitColumnsOnePage,
+  CmdFitRowsOnePage,
+  CmdPrintActiveSheet,  // what print preview shows, prints and exports, in this order
+  CmdPrintWorkbook,
+  CmdPrintSelection,
+
+  // Defined names (S3, s3-calc): 2970-2999.
+  CmdNameManager = 2970,  // Ctrl+F3
+  CmdDefineName,
+  CmdCreateNames,         // Ctrl+Shift+F3
+  CmdPasteNames,          // F3
 };

@@ -83,6 +83,9 @@ struct CachePoint {
 };
 using CacheFn = std::function<bool(std::string_view formula, bool visibleOnly, std::vector<CachePoint>& out)>;
 bool MoveChart(std::string& xml, int index, const Context& c, const CacheFn& cache);
+//  - a chart's caches, read again by `cache` where its cells no longer hold what they hold (a save:
+//    caches follow the cells); false when none differs, so the part stays byte for byte.
+bool RefreshChart(std::string& xml, const CacheFn& cache);
 //  - the edited sheet's notes (comments part), threaded comments, and its VML: notes on deleted
 //    cells go (with their shapes), the rest move; form controls' links follow.
 bool MoveComments(std::string& xml, const Context& c);
@@ -103,6 +106,10 @@ std::string DropTableColumns(std::string_view formula, std::string_view table, c
 // A formula after column `from` of table `table` was renamed `to` (its header typed over):
 // structured references to it follow, escaped as Excel writes them (Table1[x'[1']]).
 std::string RenameTableColumn(std::string_view formula, std::string_view table, std::string_view from, std::string_view to);
+// A formula after table `from` was renamed `to` (s3-data, Table Design's name): its name in
+// structured references and on its own (ROWS(Table1)) follows, as Excel rewrites it; strings,
+// quoted names and what's inside brackets as they are.
+std::string RenameTable(std::string_view formula, std::string_view from, std::string_view to);
 bool MovePivotTable(std::string& xml, const Context& c);
 
 }  // namespace fw::sheet::edit::refs

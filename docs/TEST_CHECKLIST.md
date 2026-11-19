@@ -267,3 +267,119 @@ Featherweight edits workbooks. Check it next to Excel on the same file, keystrok
 ### Editing speed (record the numbers)
 
 - [ ] `million-cells.xlsx`: typing in a cell feels instant (measured 3.75 ms a key, 31 ms at worst; plan: under 16 and 50). Inserting a row ___ ms (measured 23–28 ms; plan: under 100 ms), and undoing it as quick.
+
+## Protection, links and notes (S3)
+
+Check next to Excel on copies of your own workbooks. Every change is one undo step.
+
+### Protecting
+
+- [ ] Right-click a sheet tab, **Protect sheet…**: a password (optional) typed twice, and the list of what everyone may still do (Excel's: select locked and unlocked cells, format cells, columns and rows, insert and delete columns and rows, links, sort, AutoFilter, PivotTables, objects, scenarios). Two different passwords: Excel's "Confirmation password is not identical." Clicking a permission (or Space on it) turns it on and off once per press; the ones turned on are what Excel's Protect Sheet shows ticked for the saved file.
+- [ ] On the protected sheet, typing into a locked cell (every cell is, until Format cells › Protect › Locked is cleared) shows Excel's message at once; unlocked cells take typing, pasting and Delete. Merging, inserting cells, grouping and turning the filter on are refused with Excel's other message; formatting, column widths, row heights, inserting and deleting rows and columns, links, notes and sorting work only when allowed (deleting rows and sorting only over unlocked cells).
+- [ ] A cell marked Hidden (Format cells › Protect) shows nothing in the formula bar while the sheet is protected. Tab goes to the next unlocked cell. Without "Select locked cells", the cursor stays off them.
+- [ ] **Unprotect sheet…** asks for the password; a wrong one gives Excel's "The password you supplied is not correct…". Without a password it unprotects at once.
+- [ ] **Protect workbook…** (password twice): sheets can't be added, deleted, moved, renamed, hidden or recolored until it's unprotected. Saved, the file opens in Excel protected the same way, and the same passwords unprotect it there; a file protected in Excel is protected here too.
+
+### Links
+
+- [ ] Ctrl+K on an empty cell: type `www.example.com` (or an e-mail address, or pick a place like `Sheet2!A1`), Enter. The cell shows the text, blue and underlined. Clicking a web or e-mail link opens it; a place in the workbook goes there; other kinds aren't opened.
+- [ ] Ctrl+K on a link edits it (Update) or removes it (Remove link); the cell menu has Insert/Edit link and Remove link. Saved, Excel opens the file without a repair and follows the same links.
+
+### Notes
+
+- [ ] Shift+F2 adds a note to the cell (with your Windows user name in bold, as Excel shows it); the red corner appears; hovering shows the note. Shift+F2 on it edits the text; Delete note removes it; Show note / Show all notes keep them shown, and so does the panel's **Keep shown** (one press turns it on). A ¶ in the box is a line break.
+- [ ] Saved, Excel opens the file without a repair and shows the same notes, in the same place, shown or hidden as set here.
+- [ ] The note panel's width and height (points) resize the box: it moves beside the cell at the new size, here and in Excel. Editing the text of a note made or resized in Excel keeps its box where it was.
+
+### Threaded comments
+
+- [ ] Ctrl+Alt+M (or New comment in the cell menu) on a cell: type, Enter. The purple corner appears; hovering shows "Name: text". Ctrl+Alt+M again (or Shift+F2) opens the thread: type a reply and Enter; pick a comment in the list to edit it (Save) or delete it (Delete reply; the first one deletes the thread); Resolve and Reopen. A cell with a note offers no New comment, and a cell with a thread no New note.
+- [ ] Saved, the file opens in Excel without a repair. Excel 365 shows the thread with its replies and authors, resolved as set here; Excel 2021 shows it as a note starting "[Threaded comment]", as for a file Excel 365 saved.
+
+## Page setup, print preview and Export PDF (S3)
+
+Check next to Excel on copies of your own workbooks, with sheets long and wide enough for several pages.
+
+- [ ] Right-click a sheet tab, **Page setup…** (or the gear in print preview): the Page tab (portrait or landscape, paper size, no scaling or fit sheet, all columns or all rows on one page, adjust to %, fit to pages wide by tall, first page number), Margins (Normal, Wide, Narrow, or each margin in your units, centered horizontally and vertically), Header (Excel's presets, or left, center and right with &[Page], &[Pages], &[Date], &[File], &[Tab]; different odd and even, different first page) and Sheet (print area, rows and columns to repeat, gridlines, headings, page order). Each change shows at once in print preview beside it; each is one undo step.
+- [ ] In print preview, Print: Active sheet, Entire workbook (one job: page numbers and &[Pages] through all sheets) or Selection; printing and Export PDF follow the choice and the setup.
+- [ ] Set print area, Add to print area, Clear print area (cell menu and command search); Insert page break above and left of the active cell, Remove page break, Reset all page breaks.
+- [ ] Page break preview (sheet tab menu): what doesn't print is grey, each page shows "Page N", automatic breaks are dashed blue lines and manual ones solid; dragging a break moves it (it becomes manual). Saved, Excel opens in Page Break Preview with the same pages.
+- [ ] In Page break preview, dragging the blue edge of the printed area sets the print area to the cells inside it (Sheet tab shows it; Undo names Set Print Area).
+- [ ] Header tab with Different first page and/or Different odd and even pages on: "Header and footer for" picks the odd (other), even or first page's header and footer, each typed or picked from the presets; printed and exported, the first printed page gets the first page's (even with a first page number other than 1) and the 2nd, 4th... pages the even ones, as Excel prints them.
+- [ ] On a chart sheet, Page setup (sheet tab menu, print preview) has Page (orientation, paper, first page number), Margins and Header only; printed and exported, the chart keeps its size from the top left margin (cut off at the margins when the page is smaller, as Excel prints it). Saved, Excel shows the same setup.
+- [ ] Export PDF: the PDF's text (cells, headers and footers, headings, notes) can be searched and copied in a PDF reader.
+- [ ] Sheet tab: Black and white prints no fills and black text and borders; Draft quality prints no gridlines, pictures or charts; Notes (none, at end of sheet, as displayed); Cell errors as displayed, blank, "--" or "#N/A" (centered), as Excel prints them. Saved, Excel shows the same.
+- [ ] Saved, Excel opens the file without a repair and shows the same page setup (File › Print, Page Setup), print area, print titles and breaks; its PDF export has the same pages as Featherweight's Export PDF (on this PC Excel exports on Letter even for A4 sheets).
+
+## Tables, conditional formatting, data validation and names (S3)
+
+Check next to Excel on copies of your own workbooks, in your region (`1,5`, `;` between arguments). Every change is one undo step; after each block, save, open the file in Excel (no repair prompt) and compare.
+
+### Tables
+
+- [ ] Select a block of data with a header row and press Ctrl+T (or Data › **Table…**): "Where is the data for your table?" shows the selection; with **My table has headers** on, **Create table** makes it in the chosen style. Without headers, a row of Column1, Column2… goes in above the data, as in Excel.
+- [ ] **Table design…** (on a cell of the table): rename it (a name with a space is refused), pick another style, and turn on and off Total row, Banded rows, Banded columns, First column, Last column and Filter button. The total row shows "Total" and the last column's SUBTOTAL (a sum of numbers, a count of text), as Excel adds it.
+- [ ] Type in the row just below the table, or the column just right of it: the table grows. A formula typed in an empty column of the table fills down the column (a calculated column).
+- [ ] A formula outside the table using `=SUM(Table1[Q1])` (with the table's own name) gives the column's total; inside, `[@Q1]` uses the row's value.
+- [ ] **Convert to range**: the table goes, its cells stay, and formulas that used `Table1[Q1]` now refer to the cells.
+- [ ] Saved, Excel shows the same table (name, range, style, options, total row) and its formulas give the same results.
+
+### Conditional formatting
+
+- [ ] Select numbers, toolbar **Conditional › New rule…**: try each of "Format cells that are": Greater than, Less than, Between, Equal to (with a value or a cell), Text that contains, A date occurring, Duplicate values, Top N items, Above average, each with a format from the list ("Light Red Fill with Dark Red Text"…). The cells change at once, as Excel colors them.
+- [ ] Data bars, Color scales and Icon sets, a few presets each: the bars, colors and icons look like Excel's on the same values.
+- [ ] Use a formula: `=$C2>100` over A2:D20 colors whole rows; typed in your region's form (`=AND($B2>0;$C2<5)`).
+- [ ] **Manage rules…**: the list shows each rule and where it applies; Move up and Move down change which applies first; Stop if true; Delete; change "Applies to". Clear rules from the selected cells, and from the sheet.
+- [ ] Change a value the rules look at: the colors follow at once. Saved, Excel shows the same colors, bars and icons, and lists the same rules in its Manage Rules.
+
+### Data validation
+
+- [ ] Data › **Data validation…** on a range: Allow a list (`Yes;No` in your region, or a range such as `=$F$1:$F$5`, also on another sheet): the cell shows its arrow; Alt+Down opens the choices. Whole number between 1 and 10, decimal, date, time, text length and a custom formula each refuse what they should.
+- [ ] Input message (Title and Input message) shows beside the selected cell. The error alert: Stop refuses the typed value with your message; Warning and Information ask and let you keep it. Pasting works as in Excel: the copied cells' rules come along in place of the cells' own, and pasted values aren't checked.
+- [ ] **Circle invalid data** circles cells that break the rule (typed before it was set); Clear circles removes them. Clear all removes the rule from the selection.
+- [ ] Saved, Excel shows the same rules (its Data Validation dialog), dropdowns and messages, and refuses the same values.
+
+### Names
+
+- [ ] Ctrl+F3 (**Name Manager**): New: a Name, a Scope (the workbook or one sheet) and what it Refers to (`=Sheet1!$B$2`, in your region's form); Save; Delete. The list shows each name's value and where it refers.
+- [ ] Type a new name in the Name Box with cells selected: it's defined. Ctrl+Shift+F3 (**Create names from selection**) with a header row: each column gets its header's name. F3 pastes a name into a formula; Paste list writes them all out.
+- [ ] Formulas using names (`=B4*(1+Rate)`, `=SUM(Net)`) calculate; a deleted name gives #NAME?. Saved, Excel's Name Manager shows the same names, scopes and references.
+- [ ] In the Name Manager, the filter (All names, Scoped to the workbook, Scoped to this sheet, Names with errors, Names without errors) narrows the list. Typing `=Ra` in a cell offers `Rate` in AutoComplete beside the functions.
+
+### Dynamic arrays and S3's functions
+
+- [ ] Type `=SORT(UNIQUE(A2:A20))` beside a column with repeats: the sorted list spills down from the cell, with a thin blue border around the spill range while a cell in it is selected. A spilled cell shows the first cell's formula greyed in the formula bar.
+- [ ] Type something into a cell the array would spill into: the first cell shows #SPILL!, and selecting it shows why in the status bar ("Spill range isn't blank", as Excel's error menu says it). Clear the cell: the array spills again. A merged cell in the way, or the sheet's edge, gives #SPILL! too.
+- [ ] `=SEQUENCE(5;3)`, `=FILTER(A2:B20;B2:B20>3)` and `=XLOOKUP(…)` in your region's form; `=SUM(D2#)` and `=ROWS(D2#)` use the whole spill range and follow it when it grows or shrinks.
+- [ ] Saved, Excel 365 opens the file without a repair, shows the same arrays spilled (not as {curly-bracket} array formulas) and gives the same results; Excel 2021 too.
+- [ ] Spot-check functions your own workbooks use (`TEXTJOIN`, `IFS`, `XLOOKUP`, `LET`, `TEXTSPLIT`, date and financial ones): the same results as Excel, in your region's form.
+
+## Charts and objects (S3)
+
+Check next to Excel on copies of your own workbooks.
+
+- [ ] Select a block with a header row and a first column of text, Alt+F1: a clustered column chart of it appears in the middle of the window, as Excel puts it, its series named by the headers and its categories from the first column, as Excel guesses them (series down the columns when there are at least as many rows as columns). The toolbar's **Chart** list makes a column, bar, line, pie, doughnut, area, scatter or combo chart instead. A combo shows the last series as a line over the others' columns; a scatter of two numeric columns takes the first as the X values. Cells with no numbers: "Those cells have no numbers to chart."
+- [ ] Double-click a chart (or Ctrl+1 on it) for **Format chart**: Chart type; Colors (Colorful, or Blue, Orange, Gray or Green shades, as Excel's palettes); Chart title and Axis titles on or off with their text (Apply); Legend (None, Bottom, Right, Top, Left); Data labels. Each change shows at once and is one undo step.
+- [ ] In the same panel, the data: type another **Chart data range** (`A1:C9` or `Sheet1!A1:C9`) and **Use range**; pick a series to change its name, values, categories and color; **Add** and **Remove** series and move them up and down. Saved, Excel's Select Data shows the same series in the same order.
+- [ ] Click a chart, picture or shape to select it: drag it to move it; drag its handles to resize it (Shift keeps a corner's proportions); the arrow keys nudge it; Delete removes it; Ctrl+X, Ctrl+C and Ctrl+V cut, copy and paste it (a pasted chart refers to the same cells). Each is one undo step.
+- [ ] Change a value the chart shows: the chart follows at once. Insert or delete rows above it: it moves with its cells; insert rows inside its data: the chart takes them in.
+- [ ] **Move chart to a new sheet** (the chart's menu): the chart gets a chart sheet of its own (Chart1), before the sheet it was on; on the chart sheet, **Move chart onto a sheet** puts it back on a worksheet. Saved, Excel shows the chart sheet the same way, and its Page Setup as set here.
+- [ ] Saved, Excel opens the file without a repair and shows the same charts, in the same place and size, with the same series (Select Data) and look.
+
+### Pictures and shapes
+
+- [ ] The toolbar's **Insert** list, **Pictures…**: a PNG, JPEG, GIF or BMP file goes in at the active cell at its own size; another kind of file gets "That isn't a picture Featherweight adds: PNG, JPEG, GIF or BMP." Copy a picture in another program (Paint, a browser) and Ctrl+V in a cell: it's pasted there. The same picture inserted twice is stored once (the saved file is no bigger by a second copy).
+- [ ] **Insert** › Rectangle, Rounded rectangle, Oval, Line, Arrow and Text box: each goes in at the active cell in Excel's default look (blue fill, darker outline; a text box white with a grey outline).
+- [ ] Ctrl+1 on a selected picture or shape (**Format object…**): Fill (a color, No fill, Automatic), Outline (a color, No line) and its weight, the shape's Text, and Alt text. Each is one undo step; typing in a shape shows the text centred in it.
+- [ ] Pictures and shapes move, resize, nudge, cut, copy, paste and delete like charts, and move with their cells when rows and columns are inserted or deleted above or left of them.
+- [ ] Saved, Excel opens the file without a repair and shows the same pictures and shapes in the same place and size, with the same fill, outline, text and alt text (Excel's Format Shape and Alt Text panes).
+
+## S3's gate (record the numbers)
+
+- [ ] `scripts\build-from-scratch.ps1 -Fixtures -Featherweight build\Release\Featherweight.exe` passes: every fixture in `tests\office\fixtures` (formatted cells, S3's functions, names, dynamic arrays, tables and rules, notes, comments, links and protection, every chart kind and a chart sheet, pictures and shapes, page setup) is built through the app's commands, Excel reads back every expected object, gives the same results when it recalculates, its PDF matches Featherweight's (SSIM ≥ 0.95), and opens the file without a repair.
+- [ ] `scripts\sheet-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus`: the 246 workbooks, with S3's edits (names, protection, links, notes, comments, tables, rules, validation, charts, pictures and shapes, page setup and breaks) mixed in: ___ failures (target 0), ___ new validator errors (target 0), ___ Excel repairs (target 0).
+- [ ] `fwtool bench --sheet-edits --runs 12 tests\office\generated\simple.xlsx`: a table, a rule and a chart from 1,000 rows each to screen in ___ / ___ / ___ ms (target < 100); the chart drawn again after an edit to its data in ___ ms typical, ___ ms worst (target < 16 and < 50). S2's lines all "met".
+- [ ] `fwtool bench-app build\Release\Featherweight.exe build\budgets\million-cells.xlsx build\budgets\100mb.csv` on a quiet PC: million-cells ready in ___ ms (< 1,500), 100mb.csv ready in ___ ms (< 1,000); nothing runs when idle (idle CPU 0 ms, no wake-ups).
+- [ ] The shipped exe (`scripts\budgets.ps1` on `build-release`, see `tests\budgets\README.md`): ___ MB, at most 1.35 MB more than S2's 7.91 MB (so ≤ 9.26 MB).
+- [ ] `fuzz_xlsx` (with S3's edits, undo, redo and save) and `fuzz_formula` 60 s each: no findings.
+- [ ] Make a workbook with a table, a chart, a few rules, a list validation, a note, a comment, a link, a name and a protected sheet; save it; open it in Excel: no repair, and everything is there and looks the same.

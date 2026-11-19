@@ -450,7 +450,9 @@ void DrawArt(Painter& p, const Art& art, const Rect& box) {
       p.Save();
       p.Transform(m.transform);
     }
-    const Rect b = m.path.Bounds();
+    // The bounds only place gradients and patterns: solid colors don't flatten the path for them.
+    const auto plain = [](const Fill& f) { return f.kind == Fill::Kind::None || f.kind == Fill::Kind::Solid; };
+    const Rect b = plain(m.fill) && plain(m.line.fill) ? Rect{} : m.path.Bounds();
     if (m.fill.kind != Fill::Kind::None) FillArea(p, m.path, m.fill, b, 0, Geometry::PathFill::Normal);
     if (m.line.fill.kind != Fill::Kind::None) p.StrokePath(m.path, MakePen(p, m.line, b, 0));
     if (moved) p.Restore();
@@ -838,16 +840,33 @@ ComPtr<IDWriteFontFace> FindFace(IDWriteFactory* dw, const std::wstring& family,
 
 }  // namespace
 
-Path TextOutline(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size) {
-  Path path;
+namespace {
+
+// `text`'s glyphs in `font` and their advances at `size` (the face found once per font on each
+// thread: a chart's thousand category labels share one). False when there's no such face or text.
+bool Glyphs(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size,
+              ComPtr<IDWriteFontFace>& face, std::vector<UINT16>& glyphs, std::vector<float>& advances) {
   static std::once_flag once;
   static ComPtr<IDWriteFactory> dw;
   std::call_once(once, [] {
     DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(dw.GetAddressOf()));
   });
-  if (!dw || text.empty() || text.size() > 4096) return path;
-  ComPtr<IDWriteFontFace> face = FindFace(dw.Get(), font, bold, italic);
-  if (!face) return path;
+  if (!dw || text.empty() || text.size() > 4096) return false;
+  struct Found {
+    std::wstring font;
+    bool bold, italic;
+    ComPtr<IDWriteFontFace> face;
+  };
+  thread_local std::vector<Found> found;
+  face.Reset();
+  for (const Found& f : found)
+    if (f.bold == bold && f.italic == italic && f.font == font) face = f.face;
+  if (!face) {
+    face = FindFace(dw.Get(), font, bold, italic);
+    if (!face) return false;
+    if (found.size() >= 16) found.erase(found.begin());
+    found.push_back({font, bold, italic, face});
+  }
   std::vector<UINT32> cps;
   for (size_t i = 0; i < text.size(); ++i) {
     UINT32 c = text[i];
@@ -856,21 +875,42 @@ Path TextOutline(const std::wstring& text, const std::wstring& font, bool bold, 
     }
     cps.push_back(c);
   }
-  std::vector<UINT16> glyphs(cps.size());
+  glyphs.assign(cps.size(), 0);
   std::vector<DWRITE_GLYPH_METRICS> metrics(cps.size());
   DWRITE_FONT_METRICS fm{};
   face->GetMetrics(&fm);
   if (FAILED(face->GetGlyphIndices(cps.data(), static_cast<UINT32>(cps.size()), glyphs.data())) ||
       FAILED(face->GetDesignGlyphMetrics(glyphs.data(), static_cast<UINT32>(glyphs.size()), metrics.data(), FALSE)) ||
       fm.designUnitsPerEm == 0) {
-    return path;
+    return false;
   }
-  std::vector<float> advances;
+  advances.clear();
   for (const auto& m : metrics) advances.push_back(m.advanceWidth * size / fm.designUnitsPerEm);
+  return true;
+}
+
+}  // namespace
+
+Path TextOutline(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size) {
+  Path path;
+  ComPtr<IDWriteFontFace> face;
+  std::vector<UINT16> glyphs;
+  std::vector<float> advances;
+  if (!Glyphs(text, font, bold, italic, size, face, glyphs, advances)) return path;
   PathSink sink(path);
   face->GetGlyphRunOutline(size, glyphs.data(), advances.data(), nullptr, static_cast<UINT32>(glyphs.size()), FALSE,
                            FALSE, &sink);
   return path;
+}
+
+float TextAdvance(const std::wstring& text, const std::wstring& font, bool bold, bool italic, float size) {
+  ComPtr<IDWriteFontFace> face;
+  std::vector<UINT16> glyphs;
+  std::vector<float> advances;
+  if (!Glyphs(text, font, bold, italic, size, face, glyphs, advances)) return 0;
+  float w = 0;
+  for (float a : advances) w += a;
+  return w;
 }
 
 }  // namespace draw

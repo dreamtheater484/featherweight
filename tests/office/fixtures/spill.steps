@@ -1,0 +1,33 @@
+# S3 fixture ("created as Excel shows it"): dynamic arrays typed in the grid (s3-calc): formulas that
+# spill (SORT, UNIQUE, SEQUENCE, FILTER), a spill range referenced as D1#, typed in the en-NL region.
+sheet-name "Spill"
+enter A1 "Fruit"
+enter A2 "pear"
+enter A3 "apple"
+enter A4 "fig"
+enter A5 "apple"
+enter A6 "kiwi"
+enter B1 "Qty"
+enter B2 "4"
+enter B3 "7"
+enter B4 "2"
+enter B5 "3"
+enter B6 "9"
+enter D1 "=SORT(UNIQUE(A2:A6))"
+enter E1 "=SUMIF(A2:A6;D1#;B2:B6)"
+enter G1 "=SEQUENCE(3;2)"
+enter J1 "=FILTER(A2:A6;B2:B6>3)"
+enter L1 "=ROWS(D1#)"
+save
+expect cell Spill!D1 text apple
+expect cell Spill!D1 spills
+expect cell Spill!J1 spills
+expect cell Spill!G1 spills
+expect cell Spill!D2 text fig
+expect cell Spill!D4 text pear
+expect cell Spill!E1 text 10
+expect cell Spill!E4 text 4
+expect cell Spill!H3 text 6
+expect cell Spill!J1 text pear
+expect cell Spill!J3 text kiwi
+expect cell Spill!L1 text 4

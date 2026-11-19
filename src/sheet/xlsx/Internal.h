@@ -62,6 +62,9 @@ bool NumberStyle(std::string_view text, double v, uint8_t& style);
 bool ParseSlice(pugi::xml_document& doc, std::string_view xml);
 // The text of an element: its text and CDATA children, joined.
 std::string TextOf(pugi::xml_node n);
+// An element without its children, with its attributes as they are: "<name a="v"/>" (the workbook
+// keeps workbookProtection so, and saving compares it with the file's).
+std::string EmptyElementXml(pugi::xml_node n);
 // The top-level elements of kept XML (a part's text around sheetData): where each is and its local
 // name; comments, processing instructions and whitespace between them skipped.
 struct XmlPiece {
@@ -73,6 +76,32 @@ std::vector<XmlPiece> TopLevel(std::string_view xml);
 // schema puts it; and the prefix the sheet's elements are written with ("x:" or "").
 void PutSheetElement(detail::PartText& t, std::string_view local, const std::string& xml);
 std::string SheetPrefix(const detail::PartText& t);
+// The sheet's element `local` as its kept XML has it (empty: none).
+std::string SheetElement(const detail::PartText& t, std::string_view local);
+// The prefix the sheet's root gives the relationships namespace ("r"), declared on the root when
+// it has none (openpyxl and others write sheets without it).
+std::string RelPrefix(detail::PartText& t);
+// The sheet's conditional formats (`validations` false: every conditionalFormatting element and the
+// x14 extension {78C0D931-...}) or validations (the dataValidations element and the extension
+// {CCE6A557-...}), as written: `xml` the top-level elements, `ext` the extension element's content.
+// Put replaces them (empty removes them; an extLst left empty goes too).
+void GetSheetRules(const detail::PartText& t, bool validations, std::string& xml, std::string& ext);
+void PutSheetRules(detail::PartText& t, bool validations, const std::string& xml, const std::string& ext);
+// Tables (TableWrite.cpp): a new table's part as Excel writes it; an existing part with the table's
+// name, size, rows, filter, columns and style set from `t`, the rest kept (false: not a table);
+// the sheet's tableParts with the relationship `relId` added or taken out.
+// `strict`: in Strict Open XML's namespace (a Strict workbook's new table).
+std::string TableXml(const Table& t, bool strict = false);
+// A table's filter as its part has it (false: none), and the part with its autoFilter element
+// replaced by `autoFilter` (Editor's FilterXml); an autoFilter element (a sheet's or a table's) read.
+bool ReadTableFilter(std::string_view tableXml, SheetFilter& f);
+bool PutTableFilter(std::string& tableXml, const std::string& autoFilter);
+bool ReadAutoFilter(pugi::xml_node n, SheetFilter& f);
+bool UpdateTableXml(std::string& xml, const Table& t);
+void PutTablePart(detail::PartText& t, const std::string& relId, bool add);
+// A differential format (dxfs) as styles.xml has it, and read back.
+std::string StyleItemXml(const Dxf& d);
+bool ReadStyleItem(std::string_view xml, Dxf& out);
 // One font, fill, border or cell format as styles.xml has it, and read back from that (the edit
 // journal records the formats added this way, as faithful as saving them).
 std::string StyleItemXml(const Font& f);

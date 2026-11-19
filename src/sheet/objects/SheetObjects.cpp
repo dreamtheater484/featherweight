@@ -88,6 +88,8 @@ bool Meets(const draw::Rect& a, const draw::Rect& b) {
   return a.left <= b.right && b.left <= a.right && a.top <= b.bottom && b.top <= a.bottom;
 }
 bool Empty(const draw::Rect& r) { return !(r.Width() > 0 && r.Height() > 0); }
+// A shape needs one side: a horizontal or vertical line has no height or no width.
+bool Flat(const draw::Rect& r) { return !(r.Width() >= 0 && r.Height() >= 0 && (r.Width() > 0 || r.Height() > 0)); }
 
 // A right-to-left sheet's place for a rect (DrawOptions::mirrorX).
 draw::Rect Mirror(const draw::Rect& r, float mirrorX) {
@@ -177,10 +179,13 @@ struct SheetObjects::Impl {
     std::unique_ptr<draw::Drawing> drawing;
     std::unique_ptr<chart::Chart> chart;
     std::shared_ptr<const draw::Art> art;  // the chart laid out at `rect`'s size
+    pugi::xml_node space;  // the chart's part (c:chartSpace), to read its data again
+    bool stale = false;    // cells changed since its data was read (ValuesChanged)
     std::vector<std::vector<RichParagraph>> texts;  // the text boxes' text, read when first drawn
     draw::Rect rect;
     bool prints = true;
     std::string name;
+    uint32_t id = 0;
   };
   struct Note {
     std::vector<RichParagraph> text;
@@ -254,12 +259,16 @@ void SheetObjects::Impl::ReadDrawing(const pkg::Package& package, const std::str
       return true;
     });
     if (!it.node) return true;
+    it.id = a.find_node([](pugi::xml_node n) { return LocalNameOf(n) == "cNvPr"; }).attribute("id").as_uint();
     if (LocalNameOf(it.node) == "graphicFrame") {
       it.name = Child(Child(it.node, kXdr, "nvGraphicFramePr"), kXdr, "cNvPr").attribute("name").value();
       pugi::xml_node c = Child(A(A(it.node, "graphic"), "graphicData"), kChart, "chart");
       if (pugi::xml_node space = c ? resources->GetPartXml(RelId(c, "id")) : pugi::xml_node()) {
         auto ch = std::make_unique<chart::Chart>();
-        if (chart::Read(space, colors, *ch, data.get())) it.chart = std::move(ch);
+        if (chart::Read(space, colors, *ch, data.get())) {
+          it.chart = std::move(ch);
+          it.space = space;
+        }
       }
     }
     if (!it.chart) {
@@ -273,12 +282,21 @@ void SheetObjects::Impl::ReadDrawing(const pkg::Package& package, const std::str
 }
 
 void SheetObjects::Impl::Fit(Item& it) {
-  if (!it.drawing || Empty(it.rect) || Near(it.drawing->Bounds(), it.rect)) return;
+  if (!it.drawing || Flat(it.rect) || Near(it.drawing->Bounds(), it.rect)) return;
   SetXfrm(it.node, it.rect);
   if (auto d = draw::Drawing::FromShapeTree(it.node, *resources)) it.drawing = std::move(d);
 }
 
 void SheetObjects::Impl::DrawChart(draw::Painter& painter, Item& it, const draw::Rect& rect) {
+  // Its series from the cells as they are now, after an edit or a recalculation changed them.
+  if (it.stale && it.space && data) {
+    auto ch = std::make_unique<chart::Chart>();
+    if (chart::Read(it.space, Colors(), *ch, data.get())) {
+      it.chart = std::move(ch);
+      it.art.reset();
+    }
+  }
+  it.stale = false;
   const draw::Size size{rect.Width(), rect.Height()};
   if (!it.art || std::fabs(it.art->size.width - size.width) > 0.01f || std::fabs(it.art->size.height - size.height) > 0.01f)
     it.art = std::make_shared<draw::Art>(chart::Draw(*it.chart, size, Colors(), chartFont));
@@ -357,7 +375,7 @@ void SheetObjects::Draw(draw::Painter& painter, const draw::Rect& visible, const
   Impl& m = *impl_;
   if (m.chartSheet) return;
   for (Impl::Item& it : m.items) {
-    if ((options.printing && !it.prints) || Empty(it.rect)) continue;
+    if ((options.printing && !it.prints) || (it.chart ? Empty(it.rect) : Flat(it.rect))) continue;
     const draw::Rect rect = Mirror(it.rect, options.mirrorX);
     // Room for outlines and shadows past the box.
     const draw::Rect reach{rect.left - 20, rect.top - 20, rect.right + 20, rect.bottom + 20};
@@ -375,11 +393,17 @@ void SheetObjects::Draw(draw::Painter& painter, const draw::Rect& visible, const
 std::vector<SheetObjects::Object> SheetObjects::Objects() const {
   std::vector<Object> out;
   for (const Impl::Item& it : impl_->items)
-    if (!Empty(it.rect) && !(it.drawing && it.drawing->IsHidden())) out.push_back({it.name, it.rect, it.chart != nullptr, it.prints});
+    if (!(it.chart ? Empty(it.rect) : Flat(it.rect)) && !(it.drawing && it.drawing->IsHidden()))
+      out.push_back({it.name, it.rect, it.chart != nullptr, it.prints, it.id});
   return out;
 }
 
 bool SheetObjects::IsChartSheet() const { return impl_->chartSheet; }
+
+void SheetObjects::ValuesChanged() {
+  for (Impl::Item& it : impl_->items)
+    if (it.chart) it.stale = true;
+}
 
 draw::Size SheetObjects::ChartSheetSize() const {
   for (const Impl::Item& it : impl_->items)
@@ -640,6 +664,7 @@ void SheetObjects::ReadNotes() {
         Prepare(b->second.shape);
         d.box = draw::Drawing::FromVml(b->second.shape, *m.vmlResources);
         if (d.box) d.styleRect = d.box->Bounds();
+        if (d.box) n.width = d.styleRect.Width(), n.height = d.styleRect.Height();
       }
       if (!add(std::move(n), std::move(d)) && notes_.size() >= kMaxNotes) break;
     }

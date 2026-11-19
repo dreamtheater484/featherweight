@@ -391,6 +391,7 @@ void WorkbookView::BeginEdit(CellEditor::Mode mode, const std::wstring& text) {
     host_.ViewMessage(BannerKind::Info, std::wstring(why.begin(), why.end()));
     return;
   }
+  if (LockedForTyping()) return;  // a protected sheet's locked cell: Excel's message at once
   editCell_ = active_;
   editSheet_ = sheet_;
   editInBar_ = false;
@@ -561,6 +562,12 @@ bool WorkbookView::InputFor(const std::wstring& text, int sheet, CellAddr cell, 
     }
     formula = e.text;
     in = edit::CellInput::Formula(e.text.substr(1));
+    // One that gives an array spills from the cell, as in Excel 365 (a dynamic array).
+    Range spill;
+    if (Calc().SpillSize(in.formula, sheet, cell.row, cell.col, spill)) {
+      in.dynamic = true;
+      in.arrayRange = spill;
+    }
     return true;
   }
   if (textFormat) {
@@ -636,6 +643,7 @@ bool WorkbookView::CommitEdit(bool fill) {
     host_.ViewInvalidate();
     return false;
   }
+  if (!ValidateEntry(sheet, editCell_, in)) return false;  // s3-data: the cell's data validation
   edit::Result r;
   if (fill) {
     // Ctrl+Enter: every selected cell (whole rows or columns up to the used cells, not a million),
@@ -668,6 +676,7 @@ bool WorkbookView::CommitEdit(bool fill) {
     r = Ed().SetCell(sheet, editCell_.row, editCell_.col, in);
   }
   if (EditRefused(r)) return false;
+  if (!fill) AutoExpandTable(sheet, editCell_);  // s3-data: the table grows, as in Excel
   finish();
   return true;
 }
@@ -687,6 +696,8 @@ void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
   }
   if (sheets) SheetsChanged();
   else if (layout) Restructure();
+  RulesEdited(changes);  // s3-data: conditional formats and validations read again
+  breakPages_.reset();    // s3-print: Page Break Preview paginates again
   // Notes and drawings that moved (inserted or deleted cells, a sort): read again, the shown
   // sheet's now and the others' when they are shown.
   if (!sheets)
@@ -743,17 +754,38 @@ void WorkbookView::SyncEngine(const std::vector<edit::Change>& changes) {
   bool structure = false, cells = false;
   for (const edit::Change& c : changes) {
     structure |= (c.what & (edit::kSheets | edit::kNames | edit::kShift)) != 0;
-    cells |= (c.what & (edit::kValues | edit::kFormulas)) != 0;
+    cells |= (c.what & (edit::kValues | edit::kFormulas | edit::kRowProps | edit::kTables)) != 0;
   }
   if (!structure && !cells) return;
+  for (auto& o : objects_)  // charts read typed values again (a recalculation may change nothing)
+    if (o) o->ValuesChanged();
   calc::WorkbookCalc& calc = Calc();
   recalc_ = true;
   if (structure) {
     calc.StructureEdited();
     return;
   }
-  for (const edit::Change& c : changes)
+  for (const edit::Change& c : changes) {
     if (c.what & (edit::kValues | edit::kFormulas)) calc.CellsEdited(c.sheet, c.cells);
+    // s3-data: rows hidden or shown (a filter, undo): SUBTOTAL and AGGREGATE over them again.
+    if ((c.what & edit::kRowProps) && c.sheet >= 0 && !calc.Opening()) {
+      calc::Area rows;
+      rows.r1 = static_cast<int32_t>(std::min<uint32_t>(c.cells.firstRow, kMaxRows - 1));
+      rows.r2 = static_cast<int32_t>(std::min<uint32_t>(c.cells.lastRow, kMaxRows - 1));
+      rows.c2 = static_cast<int16_t>(kMaxCols - 1);
+      calc.engine().Changed(c.sheet, rows);
+    }
+    // s3-data: a table resized, added or removed: what refers to it, over its old and new cells.
+    if ((c.what & edit::kTables) && c.sheet >= 0 && !calc.Opening()) {
+      calc::Area t;
+      t.r1 = static_cast<int32_t>(std::min<uint32_t>(c.cells.firstRow, kMaxRows - 1));
+      t.r2 = static_cast<int32_t>(std::min<uint32_t>(c.cells.lastRow, kMaxRows - 1));
+      t.c1 = static_cast<int16_t>(std::min<uint32_t>(c.cells.firstCol, kMaxCols - 1));
+      t.c2 = static_cast<int16_t>(std::min<uint32_t>(c.cells.lastCol, kMaxCols - 1));
+      calc.engine().TablesChanged();
+      calc.engine().Changed(c.sheet, t);
+    }
+  }
 }
 
 void WorkbookView::MoveAfterEntry(int dRow, int dCol) {
@@ -876,8 +908,15 @@ void WorkbookView::DrawBarText(Canvas& c) {
   c.PushClip(box);
   if (!editor_.Active() || renaming_ >= 0) {
     std::wstring text = FormulaBarText();
+    bool spilled = false;  // a cell a dynamic array spilled into: its anchor's formula, greyed (Excel)
+    if (calc::Area a; calc_ && calc_->engine().SpillRangeAt(static_cast<int>(sheet_), static_cast<int32_t>(active_.row),
+                                                          static_cast<int32_t>(active_.col), a) &&
+                      !(static_cast<uint32_t>(a.r1) == active_.row && static_cast<uint32_t>(a.c1) == active_.col)) {
+      text = EditTextAt(Current(), static_cast<uint32_t>(a.r1), static_cast<uint32_t>(a.c1));
+      spilled = true;
+    }
     if (const size_t nl = text.find_first_of(L"\r\n"); nl != std::wstring::npos) text = text.substr(0, nl) + L" …";
-    c.Text(text, box, p.text, size);
+    c.Text(text, box, spilled ? p.textSecondary : p.text, size);
     c.PopClip();
     return;
   }

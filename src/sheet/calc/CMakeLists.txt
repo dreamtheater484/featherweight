@@ -9,17 +9,24 @@ target_sources(fwsheet PRIVATE
   FnDate.cpp
   FnLookup.cpp
   FnMath.cpp
+  FnEngineering.cpp
+  FnFinance.cpp
+  FnShape.cpp
+  FnStat.cpp
+  FnTrig.cpp
   FnText.cpp
   Functions.cpp
   Parser.cpp
   Print.cpp
   Typing.cpp
   FunctionHelp.cpp
+  NameManager.cpp
   Value.cpp
 )
 if(FW_BUILD_TESTS)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_calc.cpp"
-    "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_entry.cpp")
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_entry.cpp"
+    "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_functions.cpp")
   target_link_libraries(fw_tests PRIVATE fwsheet)
   # Every formula of the Excel-saved test workbooks recalculated and compared with Excel's values
   # (this PC's Excel is en-NL: a decimal comma and day-first dates).

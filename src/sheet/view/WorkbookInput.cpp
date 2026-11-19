@@ -171,6 +171,7 @@ bool WorkbookView::OnKeyDown(UINT vk, UINT mods) {
     return NavigationKey(vk, mods);
   }
   if (editor_.Active()) return EditKey(vk, mods);
+  if (ObjectKey(vk, mods)) return true;  // s3-charts: a selected chart, picture or shape
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   // Enter after Tabs returns to the Tabs' first column; any other key forgets it.
   if (vk != VK_TAB && vk != VK_RETURN && vk != VK_SHIFT && vk != VK_CONTROL && vk != VK_MENU) tabStartCol_ = UINT32_MAX;
@@ -193,14 +194,19 @@ bool WorkbookView::OnKeyDown(UINT vk, UINT mods) {
   // In a right-to-left sheet column A is at the right: the arrows go where they point.
   const int left = rtl_ ? 1 : -1;
   switch (vk) {
-    case VK_LEFT: MoveActive(0, left, shift, ctrl); return true;
-    case VK_RIGHT: MoveActive(0, -left, shift, ctrl); return true;
-    case VK_UP: MoveActive(-1, 0, shift, ctrl); return true;
-    case VK_DOWN: MoveActive(1, 0, shift, ctrl); return true;
+    case VK_LEFT:
+    case VK_RIGHT:
+    case VK_UP:
+    case VK_DOWN: {
+      const int dr = vk == VK_UP ? -1 : vk == VK_DOWN ? 1 : 0, dc = vk == VK_LEFT ? left : vk == VK_RIGHT ? -left : 0;
+      if (!ProtectedMove(dr, dc)) MoveActive(dr, dc, shift, ctrl);  // a protected sheet may keep it off locked cells
+      return true;
+    }
     case VK_PRIOR:
     case VK_NEXT: PageMove(vk == VK_NEXT ? 1 : -1, alt, shift); return true;
     case VK_TAB:
       if (ctrl || alt) return false;
+      if (TabToUnlocked(shift)) return true;  // a protected sheet: the next unlocked cell
       if (!shift && tabStartCol_ == UINT32_MAX) tabStartCol_ = active_.col;
       MoveActive(0, shift ? -1 : 1, false, false);
       return true;
@@ -210,6 +216,7 @@ bool WorkbookView::OnKeyDown(UINT vk, UINT mods) {
       MoveAfterEntry(shift ? -1 : 1, 0);
       return true;
     case VK_F2:
+      if (shift && !ctrl && !alt) return ReviewCommand(CmdNewNote);  // New Note, or Edit Note
       if (ctrl || shift || alt) return false;
       BeginEdit(CellEditor::Mode::Edit, FormulaBarText());
       return true;
@@ -301,6 +308,9 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
   }
   if (button == 0 && gfx::Contains(cells_, fx, fy) && PointClick(x, y)) return;
   if (editor_.Active() && !CommitEdit(false)) return;
+  if (button == 0 && ObjectMouseDown(fx, fy, doubleClick)) return;  // s3-charts: charts, pictures, shapes
+  if (button == 0 && ValidationButtonAt(fx, fy)) return ShowValidationList();  // s3-data: a list's choices
+  if (button == 0 && BreakDragStart(fx, fy)) return;  // s3-print: a page break in Page Break Preview
   // A filter's button on its header row opens the column's filter.
   if (uint32_t column = 0; button == 0 && FilterButtonAt(fx, fy, &column)) {
     ShowFilterPanel(column);
@@ -319,7 +329,7 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
   tabStartCol_ = UINT32_MAX;
   // Double-clicking a cell edits it there (Edit mode).
   if (doubleClick && button == 0 && gfx::Contains(cells_, fx, fy) && !ChartSheet()) {
-    if (auto cell = CellAt(x, y)) {
+    if (auto cell = CellAt(x, y); cell && !SelectionBlocked(*cell)) {
       Select(*cell, *cell);
       BeginEdit(CellEditor::Mode::Edit, FormulaBarText());
       return;
@@ -425,6 +435,7 @@ void WorkbookView::OnMouseDown(int x, int y, int button, UINT mods, bool doubleC
   if (!gfx::Contains(cells_, fx, fy)) return;
   auto cell = CellAt(x, y);
   if (!cell) return;
+  if (SelectionBlocked(*cell)) return;  // a protected sheet's cell that can't be selected
   if (button != 0) {
     // A right click outside the selection selects the cell, as in Excel.
     if (!Selected().Contains(cell->row, cell->col)) Select(*cell, *cell, false);
@@ -445,7 +456,9 @@ void WorkbookView::OnMouseMove(int x, int y, UINT mods) {
     if (!ScrollDragMove(x, y)) UpdateScrollbarHover(x, y);
     return;
   }
+  if (BreakDragMove(x, y)) return;  // s3-print
   const float fx = static_cast<float>(x), fy = static_cast<float>(y);
+  if (mouse_ == Mouse::Object) return ObjectMouseMove(fx, fy, mods);  // s3-charts
   const POINT was = hover_;
   hover_ = {x, y};
   int tab = -1;
@@ -529,6 +542,8 @@ void WorkbookView::OnMouseUp(int x, int y, int button, UINT mods) {
     drag_ = Drag::None;
     return;
   }
+  if (BreakDragEnd(x, y)) return;  // s3-print
+  if (mouse_ == Mouse::Object) return ObjectMouseUp();  // s3-charts
   if (mouse_ == Mouse::Fill) {
     mouse_ = Mouse::None;
     FinishFill();
@@ -575,6 +590,7 @@ HCURSOR WorkbookView::CursorAt(int x, int y) {
     if (gfx::Contains(FormulaBox(), fx, fy) || (EditGeometry(b) && gfx::Contains(b.rc, fx, fy)))
       return LoadCursorW(nullptr, IDC_IBEAM);
     if (FillHandleAt(fx, fy)) return LoadCursorW(nullptr, IDC_SIZEALL);
+    if (HCURSOR pb = BreakCursor(fx, fy)) return pb;  // s3-print
     if (mouse_ == Mouse::Size && sizing_) return LoadCursorW(nullptr, sizing_->rows ? IDC_SIZENS : IDC_SIZEWE);
     if (auto e = SizeEdgeAt(x, y)) return LoadCursorW(nullptr, e->rows ? IDC_SIZENS : IDC_SIZEWE);
     if (RefGrab g; RefHit(x, y, g))

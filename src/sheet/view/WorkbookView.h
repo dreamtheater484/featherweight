@@ -11,6 +11,8 @@
 
 #include "PagedView.h"
 #include "sheet/data/Filter.h"
+#include "sheet/data/Shapes.h"
+#include "sheet/data/Rules.h"
 #include "sheet/data/Sort.h"
 #include "sheet/calc/Bind.h"
 #include "sheet/calc/Entry.h"
@@ -294,7 +296,7 @@ class WorkbookView : public PagedView {
   float tabScroll_ = 0;
 
   // Mouse.
-  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag, Fill, Size, TabDrag };
+  enum class Mouse { None, Cells, RowHeaders, ColHeaders, ThumbV, ThumbH, EditText, Point, RefDrag, Fill, Size, TabDrag, Object };
   // A sheet tab dragged to move the sheet: where it would go (before that sheet; SheetCount() for
   // the end), shown once the mouse has moved a few pixels.
   struct TabDrag {
@@ -336,8 +338,17 @@ class WorkbookView : public PagedView {
 
   // Print preview and printing.
   bool preview_ = false;
-  std::unique_ptr<PrintLayout> print_;
-  std::unique_ptr<SheetObjects> printObjects_;  // print_'s, placed on the printed columns
+  // The preview's pages: a layout per sheet it prints (printWhat_: the active sheet, every sheet, or
+  // the selection), each with its objects (placed on its printed columns) and another sheet's grid.
+  struct PrintSheet {
+    std::unique_ptr<Grid> grid;
+    std::unique_ptr<SheetObjects> objects;
+    std::unique_ptr<PrintLayout> layout;
+    size_t first = 0;  // its first page among the preview's
+  };
+  std::vector<PrintSheet> prints_;
+  int printWhat_ = 0;  // 0 the active sheet, 1 the entire workbook, 2 the selection (s3-print)
+  PrintLayout* LayoutAt(int page, size_t& local) const;
   std::vector<fw::PageSizePt> pageSizes_;
 
   // Pictures, shapes, charts and notes (fwsheetobjects): each sheet's, read when first shown and
@@ -427,9 +438,19 @@ class WorkbookView : public PagedView {
     std::vector<FilterColumn> other;  // from the file, not edited here (colors, icons, dates): kept
   };
   ViewFilter filter_;
-  // The shown sheet's filter, read again from the model (Sheet::Filter, so undo and redo show), or
-  // null. The panel changes its criteria, then ApplyFilter.
+  // The filter the panel works on: -1 the sheet's, else the shown sheet's table with that index
+  // (its header buttons; s3-data).
+  int filterTable_ = -1;
+  // That filter, read again from the model (Sheet::Filter or the table's criteria, so undo and redo
+  // show), or null. The panel changes its criteria, then ApplyFilter.
   ViewFilter* FilterOf();
+  // Filter `table` (-1 the sheet's) into `out`; false when it has no buttons. The filters with
+  // buttons on the shown sheet: -1 for the sheet's, then the tables'.
+  bool ReadFilter(int table, ViewFilter& out);
+  std::vector<int> FilterAreas();
+  // A table's filter buttons on or off (Ctrl+Shift+L in a table, Table Design's Filter Button):
+  // off shows the rows its criteria hid.
+  bool SetTableButtons(size_t index, bool on);
   void ToggleFilter();
   // filter_ into the model (Editor::SetFilter: the file's autoFilter), and the rows its criteria
   // leave out hidden, the others shown; one undo step.
@@ -451,6 +472,92 @@ class WorkbookView : public PagedView {
   class DataPanel;
   std::unique_ptr<DataPanel> dataPanel_;
   void ShowDataPanel(bool sort);
+  // ---- Conditional formatting and data validation (s3-data, WorkbookData.cpp).
+  class RulesPanel;
+  class ValidationPanel;
+  class ListPanel;
+  std::shared_ptr<PanelContent> rulesPanel_, validationPanel_, listPanel_;
+  bool RulesCommand(int cmd);
+  bool RulesCommandState(int cmd, CommandState& s);
+  void RulesEdited(const std::vector<edit::Change>& changes);  // rules read again after an edit
+  void ShowRulesPanel(bool manage);
+  bool ApplyCfRules(const std::vector<data::CfRule>& rules, const char16_t* name);
+  bool ApplyValidations(const std::vector<data::Validation>& rules, const char16_t* name);
+  const std::vector<data::Validation>& Validations();  // the shown sheet's
+  std::vector<data::Validation> validations_;
+  int validationsSheet_ = -1;
+  // A value typed into a cell with a validation: Excel's alert (stop, warning, information); false
+  // when the value isn't entered.
+  bool ValidateEntry(int sheet, CellAddr cell, const edit::CellInput& in);
+  // Whether the rule allows the value (`typed`: as typed, so an emptied cell is allowed).
+  bool ValidateValue(const data::Validation& v, int sheet, CellAddr cell, const edit::CellInput& in, bool typed);
+  std::vector<CellAddr> circles_;  // Circle Invalid Data, on the shown sheet
+  void DrawValidation(gfx::Canvas& c);  // the input message, the list's button, the circles
+  bool ValidationButtonAt(float x, float y);
+  void ShowValidationList();
+  bool DataRulesScriptOp(const std::wstring& op, const std::wstring& arg);  // rule: and valid:
+  // Pasting copied cells (all, or formats): the pasted cells take the source's conditional formats
+  // (and with `validations` its validations) in place of their own, as in Excel; `pasted` holds
+  // whole copies of `src`.
+  edit::Result PasteRules(int fromSheet, const Range& src, int sheet, const Range& pasted, bool validations);
+  // Tables (WorkbookData.cpp): Insert > Table and the table's design, through Editor::AddTable,
+  // SetTable and RemoveTable.
+  class TablePanel;
+  std::shared_ptr<PanelContent> tablePanel_;
+  // ---- Pictures and shapes (WorkbookShapes.cpp, s3-data): Insert > Pictures and Shapes, a picture
+  // pasted from the clipboard, the Format panel of the selected object.
+  class ShapePanel;
+  std::shared_ptr<PanelContent> shapePanel_;
+  draw::Rect NewObjectRect(double width, double height) const;  // sheet points, at the active cell
+  void SelectNewObject(uint32_t id);
+  bool InsertPictureBytes(const std::string& bytes, const std::string& altText);
+  bool InsertShapeOf(data::ShapeKind kind, const std::string& text);
+  bool InsertPictureFiles(const std::vector<std::wstring>& files);
+  void InsertPictureDialog();
+  bool PastePicture();  // true when the clipboard held a picture (and not cells or text)
+  void ShowShapePanel();
+  bool ShapesCommandState(int cmd, CommandState& s);
+  bool ShapesCommand(int cmd);
+  void AddShapeTools(ToolbarModel& m);
+  bool ShapesScriptOp(const std::wstring& arg);
+  // Objects that move but don't size with cells (editAs="oneCell": pictures as Excel inserts them)
+  // keep their size when row heights or column widths change under them: their sizes before the
+  // change, then put back inside the change's group (shapes and charts size with their cells).
+  struct HeldSize {
+    uint32_t id = 0;
+    float width = 0, height = 0;
+  };
+  std::vector<HeldSize> HeldSizes();
+  edit::Result KeepSizes(const std::vector<HeldSize>& held);
+  // Whether object `id` locks its aspect ratio (noChangeAspect, as Excel inserts a picture): a
+  // corner dragged from `start` keeps its proportions without Shift. Read once per drag.
+  bool AspectLocked(uint32_t id, const draw::Rect& start);
+  struct AspectSeen {
+    uint32_t id = 0;
+    draw::Rect start{};
+    bool locked = false;
+  } aspectSeen_;
+  int TableIndexAt(CellAddr at);  // the shown sheet's table holding the cell, or -1
+  void ShowTablePanel();
+  bool CreateTable(Range r, bool headers, const std::string& style);
+  bool ChangeTable(size_t index, const std::function<void(Table&)>& change, const char16_t* name);
+  // Table Design > Resize Table, by Excel's rules (measured): the header row stays, the range
+  // overlaps the table's; new columns are named by their header cell or ColumnN, columns and rows
+  // left out keep their cells; the total row moves to the new last row (or, smaller, just below).
+  bool ResizeTable(size_t index, Range r);
+  bool SetTotalRow(size_t index, bool on);
+  bool ConvertToRange(size_t index);
+  void AutoExpandTable(int sheet, CellAddr cell);  // a value typed just below or right of a table  // formulas that use the table refer to its cells instead
+  bool TableScriptOp(const std::wstring& arg);  // table:
+  // ---- Defined names (WorkbookNames.cpp): the Name Manager, Create from Selection, Paste Names.
+  bool NamesCommand(int cmd);
+  bool NamesCommandState(int cmd, CommandState& s);
+  class NamesPanel;
+  std::unique_ptr<NamesPanel> namesPanel_;
+  void ShowNamesPanel(int mode, bool define);
+  bool NamesScriptOp(const std::wstring& op, const std::wstring& arg);  // name:, names:
+  bool DefineFromNameBox(const std::wstring& name);  // a new name typed in the Name Box
+  std::wstring SelectionName() const;  // the name that refers to exactly the selection, if any
   // ---- Rows, columns, cells and sheets (WorkbookSheetOps.cpp, WorkbookPanels.cpp).
   bool GridCommand(int cmd);
   bool GridCommandState(int cmd, CommandState& s);
@@ -497,6 +604,95 @@ class WorkbookView : public PagedView {
   double CurrentSize(bool rows) const;  // the active row's height (points) or column's width (characters)
   void SetSizes(bool rows, double value);
   bool GoTo(const std::wstring& text);  // a cell, a range, Sheet2!A1 or a defined name
+  // ---- Review (S3, s3-review: WorkbookReview.cpp): Protect Sheet and Protect Workbook, links.
+  class ProtectPanel;
+  class LinkPanel;
+  class NotePanel;
+  std::unique_ptr<PanelContent> protectPanel_;  // a ProtectPanel
+  std::unique_ptr<PanelContent> linkPanel_;     // a LinkPanel
+  std::unique_ptr<PanelContent> notePanel_;     // a NotePanel
+  class CommentPanel;
+  // ---- Page setup (S3, s3-print: WorkbookPageSetup.cpp): the Page Setup panel, the print area and
+  // titles, page breaks, what print preview prints, Page Break Preview.
+  class PageSetupPanel;
+  std::unique_ptr<PanelContent> pageSetupPanel_;
+  bool PageSetupCommandState(int cmd, CommandState& s);
+  bool PageSetupCommand(int cmd);
+  void AddPageSetupTabItems(HMENU m);
+  void AddPageSetupCellItems(HMENU m);
+  edit::Result ApplyPageSetup(const std::function<void(PageSetup&, HeaderFooter&, bool&)>& change);
+  void AfterPageChange();  // the preview and Page Break Preview paginate again
+  void RefreshPreview();
+  edit::Result SetPrintArea(const std::vector<Range>& areas);  // empty: cleared
+  std::optional<std::pair<uint32_t, uint32_t>> TitleRows() const;
+  std::optional<std::pair<uint32_t, uint32_t>> TitleCols() const;
+  edit::Result SetPrintTitles(std::optional<std::pair<uint32_t, uint32_t>> rows, std::optional<std::pair<uint32_t, uint32_t>> cols);
+  bool BreakHere(bool& row, bool& col) const;  // manual breaks above and left of the active cell
+  edit::Result ChangeBreaks(int cmd);
+  bool BreakPreviewOn() const;
+  void TogglePageBreakPreview();
+  void DrawPageBreakPreview(gfx::Canvas& c);
+  struct BreakDrag {
+    bool rows = false;
+    uint32_t from = 0, to = 0;  // the row or column the break is before
+    bool outer = false;         // the print area's edge: dragging it sets the print area
+  };
+  std::optional<BreakDrag> breakDrag_;
+  std::unique_ptr<PrintSheet> breakPages_;  // Page Break Preview's pages (`first`: their sheet)
+  const PrintLayout* BreakPages();
+  std::optional<Range> PrintedArea();  // Page Break Preview's printed cells, when one area
+  bool BreakEdgeAt(float x, float y, bool& rows, uint32_t& at, bool& outer);
+  bool BreakDragStart(float x, float y);
+  bool BreakDragMove(int x, int y);
+  bool BreakDragEnd(int x, int y);
+  HCURSOR BreakCursor(float x, float y);  // null: no break there
+  bool PageScriptOp(const std::wstring& arg);  // pagesetup:
+  std::unique_ptr<PanelContent> commentPanel_;  // a CommentPanel
+  // The active cell's note (not a threaded comment), its text without the author's line.
+  const CellNote* NoteHere(std::wstring* text = nullptr) const;
+  bool ThreadHere() const;  // whether the active cell has a threaded comment
+  // ---- Charts and the objects in the sheet's drawing (S3, s3-charts; WorkbookCharts.cpp): Insert
+  // Chart, and an object selected, dragged to move or by a handle to resize, deleted.
+  struct ObjectDrag {
+    int handle = -1;         // -1 moves it; 0-7 a handle, clockwise from the top left
+    draw::Rect start, now;   // sheet points
+    draw::Point from;        // where the mouse went down (sheet points)
+    bool moved = false;
+  };
+  uint32_t object_ = 0;      // the selected object's shape id (0: none)
+  size_t objectSheet_ = 0;   // on this sheet
+  ObjectDrag objectDrag_;
+  bool ChartsCommandState(int cmd, CommandState& s);
+  bool ChartsCommand(int cmd);
+  void AddChartTools(ToolbarModel& m);
+  std::optional<SheetObjects::Object> SelectedObject() const;
+  std::optional<draw::Point> SheetPointAt(float x, float y) const;  // client to sheet points
+  edit::drawing::Place PlaceFor(const draw::Rect& r) const;
+  bool ObjectMouseDown(float x, float y, bool doubleClick);
+  void ObjectMouseMove(float x, float y, UINT mods);
+  void ObjectMouseUp();
+  bool ObjectKey(UINT vk, UINT mods);
+  void DrawObjectSelection(draw::Painter& painter, float scale, float mirrorX);
+  bool CopyObject(bool cut);  // the selected object onto the clipboard (false: none selected)
+  bool PasteObjectClip();     // an object copied, while the clipboard still holds it
+  void MoveChartToSheet(uint32_t id);  // the chart with shape id `id` on this sheet
+  int FirstWorksheet() const;
+  class ChartPanel;
+  std::unique_ptr<PanelContent> chartPanel_;
+  void ShowChartPanel();
+  void AddReviewCellItems(HMENU m);  // the cell menu's
+  bool ReviewCommandState(int cmd, CommandState& s);
+  bool ReviewCommand(int cmd);
+  void AddReviewTabItems(HMENU m);  // the sheet tab menu's
+  edit::Result UnprotectSheet();     // keeping the selection settings, as Excel does
+  // On a protected sheet, as Excel: typing into a locked cell is refused with Excel's message (true
+  // when it was), a hidden cell's content stays out of the formula bar, Tab goes to the next
+  // unlocked cell, and the cursor goes only where the protection lets it (true: handled).
+  bool LockedForTyping();
+  bool FormulaBarHidden() const;
+  bool TabToUnlocked(bool back);
+  bool ProtectedMove(int dr, int dc);
+  bool SelectionBlocked(CellAddr at) const;
   // ---- The fill handle, Ctrl+D and Ctrl+R (WorkbookFill.cpp). `dir`: 0 down, 1 up, 2 right, 3 left.
   bool FillCells(const Range& source, const Range& target, int dir, bool series, std::u16string name);
   void FillDown(bool right);
@@ -597,6 +793,9 @@ class WorkbookView : public PagedView {
   // Alt+=: s2-calc's proposed SUM in the cell, its range pointed at, as Excel's AutoSum.
   void AutoSum();
   std::vector<const calc::FunctionHelp*> fnList_;
+  // Defined names in the list (args null: inserted without "("); their texts live in nameTexts_.
+  std::vector<calc::FunctionHelp> nameHelp_;
+  std::vector<std::string> nameTexts_;
   size_t fnSel_ = 0, fnTop_ = 0;
   int fnFrom_ = -1;          // where the name being typed starts
   bool fnClosed_ = false;    // Esc closed the list: closed until the next character

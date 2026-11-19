@@ -36,8 +36,13 @@ class Host {
   virtual void ForEachCell(int sheet, int32_t r1, int32_t c1, int32_t r2, int32_t c2, CellFn fn, void* context) = 0;
   // A formula's new value, after the engine calculated it (each cell of an array formula's range).
   virtual void Store(int sheet, int32_t row, int32_t col, const Value& v) { (void)sheet, (void)row, (void)col, (void)v; }
+  // A dynamic array at (row, col) spills over `out` now (calculated again; the cell alone when
+  // blocked), after its cells were stored.
+  virtual void SpillMoved(int sheet, int32_t row, int32_t col, const Area& out) { (void)sheet, (void)row, (void)col, (void)out; }
   // How far the sheet's cells reach: one past the last used row and column (0 when empty).
   virtual void Extent(int sheet, int32_t& rows, int32_t& cols) = 0;
+  // Whether a merged cell or a table lies in `area` (a dynamic array can't spill there).
+  virtual bool SpillBlocked(const Area& area) { (void)area; return false; }
   // The workbook's date system (date1904).
   virtual bool Date1904() const { return false; }
   // A structured reference: table `name` (or, when empty, the table holding the cell), with the
@@ -72,6 +77,9 @@ class Host {
   }
   // Manual calculation (INFO("recalc")).
   virtual bool Manual() { return false; }
+  // The most cells an array a formula builds may have (a range read as one, an operator's or a
+  // function's result): a larger one is #NUM!, where Excel runs out of resources. Fuzzing lowers it.
+  virtual int64_t MaxArrayCells() const { return 16'000'000; }
   // Rows a filter hides: hidden, in an autoFilter range with criteria (every SUBTOTAL leaves them
   // out; AGGREGATE doesn't tell them from other hidden rows).
   virtual bool RowFiltered(int sheet, int32_t row) {
@@ -92,6 +100,12 @@ class Resolver {
   virtual bool Spill(int sheet, int32_t row, int32_t col, Area& out) = 0;
   // False when a cell in `a` must be calculated first: evaluation stops and is retried later.
   virtual bool Ready(const Area& a) = 0;
+  // The formula of a cell ("=A1+1", "{=...}" for a legacy array formula's cells), invariant; false
+  // when it holds none (a dynamic array's spilled cells hold none). ISFORMULA, FORMULATEXT.
+  virtual bool FormulaText(int sheet, int32_t row, int32_t col, std::string& text) {
+    (void)sheet, (void)row, (void)col, (void)text;
+    return false;
+  }
   // Whether the cell holds a SUBTOTAL formula (SUBTOTAL leaves those out).
   virtual bool Subtotal(int sheet, int32_t row, int32_t col) {
     (void)sheet, (void)row, (void)col;

@@ -155,56 +155,6 @@ struct PageBreak {
   bool manual = false, pivot = false;
 };
 
-// A table (ListObject, xl/tables/tableN.xml): a range with a header row, columns with names that
-// structured references use (Table1[Amount]), an optional total row, and a table style.
-struct TableColumn {
-  uint32_t id = 0;
-  std::string name;             // as the header cell shows it (the part's _xHHHH_ escapes undone)
-  std::string totalsFunction;  // totalsRowFunction: sum, average, count, countNums, max, min, stdDev, var, custom; empty: none
-  std::string totalsLabel;     // totalsRowLabel
-  std::string calculatedFormula, totalsFormula;  // calculatedColumnFormula, totalsRowFormula (invariant form)
-  int dataDxf = -1, headerDxf = -1, totalsDxf = -1;  // differential formats (Styles::Dxfs)
-};
-
-struct TableStyleInfo {
-  std::string name;  // TableStyleMedium2, a custom style's name, or empty: none
-  bool firstColumn = false, lastColumn = false, rowStripes = false, columnStripes = false;
-};
-
-struct Table {
-  uint32_t id = 0;
-  std::string name, displayName;  // structured references use displayName
-  std::string part;               // "/xl/tables/table1.xml"
-  Range ref;                      // the whole table, header and total rows included
-  uint32_t headerRows = 1, totalsRows = 0;
-  bool totalsRowShown = true;     // a total row was ever shown (totalsRowShown)
-  bool autoFilter = false;        // has filter buttons
-  bool filtered = false;          // its autoFilter has a filterColumn (criteria): Excel's SUBTOTAL
-                                  // leaves out the rows it hides. Read only.
-  std::vector<TableColumn> columns;  // left to right, one per column of `ref`
-  TableStyleInfo style;
-  int headerDxf = -1, dataDxf = -1, totalsDxf = -1;
-  // Structured references' areas (Table1[#All], [#Data], [#Headers], [#Totals]): `ref`; the data
-  // rows, without the header and total rows (empty when firstRow > lastRow); the header and the
-  // total row, nothing when the table hides it.
-  Range All() const { return ref; }
-  Range Data() const {
-    return {ref.firstRow + headerRows, ref.firstCol, ref.lastRow >= totalsRows ? ref.lastRow - totalsRows : 0, ref.lastCol};
-  }
-  std::optional<Range> Headers() const {
-    if (!headerRows) return std::nullopt;
-    return Range{ref.firstRow, ref.firstCol, ref.firstRow, ref.lastCol};
-  }
-  std::optional<Range> Totals() const {
-    if (!totalsRows) return std::nullopt;
-    return Range{ref.lastRow, ref.firstCol, ref.lastRow, ref.lastCol};
-  }
-  // A column by its name, without case (Table1[amount]), the name as the header shows it (the
-  // formula's ' escapes undone by the caller): its index in `columns`, which is its offset from
-  // ref.firstCol; -1 when there's none.
-  int FindColumn(std::string_view columnName) const;
-};
-
 // The sheet's own autoFilter (a table's is in its Table): its range, and whether it has a
 // filterColumn (criteria), so that the rows it hides are filtered out rather than hidden by hand.
 // Read only.
@@ -231,6 +181,57 @@ struct SheetFilter {
   Range ref;
   bool filtered = false;  // a column has criteria
   std::vector<FilterColumn> columns;
+};
+
+// A table (ListObject, xl/tables/tableN.xml): a range with a header row, columns with names that
+// structured references use (Table1[Amount]), an optional total row, and a table style.
+struct TableColumn {
+  uint32_t id = 0;
+  std::string name;             // as the header cell shows it (the part's _xHHHH_ escapes undone)
+  std::string totalsFunction;  // totalsRowFunction: sum, average, count, countNums, max, min, stdDev, var, custom; empty: none
+  std::string totalsLabel;     // totalsRowLabel
+  std::string calculatedFormula, totalsFormula;  // calculatedColumnFormula, totalsRowFormula (invariant form)
+  int dataDxf = -1, headerDxf = -1, totalsDxf = -1;  // differential formats (Styles::Dxfs)
+};
+
+struct TableStyleInfo {
+  std::string name;  // TableStyleMedium2, a custom style's name, or empty: none
+  bool firstColumn = false, lastColumn = false, rowStripes = false, columnStripes = false;
+};
+
+struct Table {
+  uint32_t id = 0;
+  std::string name, displayName;  // structured references use displayName
+  std::string part;               // "/xl/tables/table1.xml"
+  Range ref;                      // the whole table, header and total rows included
+  uint32_t headerRows = 1, totalsRows = 0;
+  bool totalsRowShown = true;     // a total row was ever shown (totalsRowShown)
+  bool autoFilter = false;        // has filter buttons
+  bool filtered = false;          // its autoFilter has a filterColumn (criteria): Excel's SUBTOTAL
+                                  // leaves out the rows it hides. Read only.
+  std::vector<FilterColumn> criteria;  // its autoFilter's columns (Editor::SetTableFilter)
+  std::vector<TableColumn> columns;  // left to right, one per column of `ref`
+  TableStyleInfo style;
+  int headerDxf = -1, dataDxf = -1, totalsDxf = -1;
+  // Structured references' areas (Table1[#All], [#Data], [#Headers], [#Totals]): `ref`; the data
+  // rows, without the header and total rows (empty when firstRow > lastRow); the header and the
+  // total row, nothing when the table hides it.
+  Range All() const { return ref; }
+  Range Data() const {
+    return {ref.firstRow + headerRows, ref.firstCol, ref.lastRow >= totalsRows ? ref.lastRow - totalsRows : 0, ref.lastCol};
+  }
+  std::optional<Range> Headers() const {
+    if (!headerRows) return std::nullopt;
+    return Range{ref.firstRow, ref.firstCol, ref.firstRow, ref.lastCol};
+  }
+  std::optional<Range> Totals() const {
+    if (!totalsRows) return std::nullopt;
+    return Range{ref.lastRow, ref.firstCol, ref.lastRow, ref.lastCol};
+  }
+  // A column by its name, without case (Table1[amount]), the name as the header shows it (the
+  // formula's ' escapes undone by the caller): its index in `columns`, which is its offset from
+  // ref.firstCol; -1 when there's none.
+  int FindColumn(std::string_view columnName) const;
 };
 
 // sheetPr, and sheetCalcPr's fullCalcOnLoad.
@@ -418,7 +419,11 @@ class Sheet {
   // ---- Changes
   // Sets a cell's value, keeping its format and formula: recalculated results (marked computed),
   // CSV values. Strings are copied into the sheet.
-  void SetValue(uint32_t row, uint32_t col, const Value& v);
+  // `result`: a formula's, in its cell or spilled from a dynamic array: text is written t="str"
+  // with <v>, as Excel writes it (an inline string there reads as #VALUE! until recalculated).
+  void SetValue(uint32_t row, uint32_t col, const Value& v, bool result = false);
+  // A dynamic array's formula at (row, col) spills over `ref` now (recalculated, as SetValue).
+  void SetSpillRef(uint32_t row, uint32_t col, const Range& ref);
 
   // Memory the cells use (blocks, formulas, text), for the budgets.
   size_t ModelBytes() const;

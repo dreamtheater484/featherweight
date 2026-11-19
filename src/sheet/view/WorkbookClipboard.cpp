@@ -53,6 +53,7 @@ std::vector<std::vector<std::wstring>> ParseTsv(const std::wstring& text) {
 }  // namespace
 
 void WorkbookView::Cut() {
+  if (CopyObject(true)) return;  // s3-charts: a selected chart, picture or shape
   Copy();
   if (clip_) clip_->cut = true;
   host_.ViewInvalidate();
@@ -65,6 +66,8 @@ void WorkbookView::Paste(PasteMode mode, bool transpose) {
     host_.ViewMessage(BannerKind::Info, std::wstring(why.begin(), why.end()));
     return;
   }
+  if (mode == PasteMode::All && PasteObjectClip()) return;  // s3-charts: a chart, picture or shape copied
+  if (mode == PasteMode::All && !transpose && PastePicture()) return;  // s3-data: a picture on the clipboard
   const int sheet = static_cast<int>(sheet_);
   const Range sel = Selected();
   std::vector<std::pair<CellAddr, edit::CellInput>> cells;
@@ -283,6 +286,9 @@ void WorkbookView::Paste(PasteMode mode, bool transpose) {
     if (r) r = Ed().SetStyle(sheet, Range::Cell(at.row, at.col), style);
   for (const Range& m : merges)
     if (r) r = Ed().Merge(sheet, m);
+  if (r && from && !cut && !transpose && (mode == PasteMode::All || mode == PasteMode::Formats))  // s3-data
+    r = PasteRules(static_cast<int>(std::find(sheetOrder_.begin(), sheetOrder_.end(), from) - sheetOrder_.begin()),
+                   clip_->range, sheet, pasted, mode == PasteMode::All);
   pasting_ = false;
   if (EditRefused(r)) return;
   group.done = true;

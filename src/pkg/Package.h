@@ -79,7 +79,7 @@ class Package {
 
   // Edits. Each changed part is written anew on save; everything else is copied raw.
   void SetPart(std::string_view name, std::vector<uint8_t> data);
-  void DeletePart(std::string_view name);
+  void DeletePart(std::string_view name);  // a relationships part: its source's set empties too
   void SetContentTypes(ContentTypes types);
   void SetRelationships(RelationshipSet set);
 

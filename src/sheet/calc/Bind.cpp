@@ -82,9 +82,33 @@ void WorkbookCalc::Store(int sheet, int32_t row, int32_t col, const Value& v) {
   if (old.type != m.type || old.number != m.number || old.boolean != m.boolean || old.error != m.error ||
       (m.type == ValueType::String && old.text != m.text))
     ++changes_;
-  s.SetValue(static_cast<uint32_t>(row), static_cast<uint32_t>(col), m);
+  s.SetValue(static_cast<uint32_t>(row), static_cast<uint32_t>(col), m, true);
   auto& e = extents_[static_cast<size_t>(sheet)];
   e.first = std::max(e.first, row + 1), e.second = std::max(e.second, col + 1);
+}
+
+// The file says how far a dynamic array spills (its formula's ref): else Excel takes the cells it
+// spilled past that as typed values, which block it.
+void WorkbookCalc::SpillMoved(int sheet, int32_t row, int32_t col, const Area& out) {
+  if (sheet < 0 || sheet >= SheetCount()) return;
+  book_.GetSheet(static_cast<size_t>(sheet))
+      .SetSpillRef(static_cast<uint32_t>(row), static_cast<uint32_t>(col),
+                   Range{static_cast<uint32_t>(out.r1), static_cast<uint32_t>(out.c1), static_cast<uint32_t>(out.r2),
+                         static_cast<uint32_t>(out.c2)});
+}
+
+bool WorkbookCalc::SpillBlocked(const Area& a) {
+  if (a.s1 >= book_.SheetCount()) return false;
+  const Sheet& s = book_.GetSheet(a.s1);
+  auto overlaps = [&](const Range& r) {
+    return static_cast<int64_t>(r.firstRow) <= a.r2 && static_cast<int64_t>(r.lastRow) >= a.r1 &&
+           static_cast<int64_t>(r.firstCol) <= a.c2 && static_cast<int64_t>(r.lastCol) >= a.c1;
+  };
+  for (const Range& m : s.Merges())
+    if (overlaps(m)) return true;
+  for (const auto& t : s.Tables())
+    if (overlaps(t.ref)) return true;
+  return false;
 }
 
 void WorkbookCalc::Extent(int sheet, int32_t& rows, int32_t& cols) {
@@ -180,7 +204,14 @@ void WorkbookCalc::CellsEdited(int sheet, const Range& cells) {
   const Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
   std::vector<calc::Cell> entered;
   shared_.clear();
+  // Ranges are read as far as the sheet's extent: cells typed beyond it widen it (else =SUM(A2:A5)
+  // wouldn't see a value just typed in A5).
+  std::pair<int32_t, int32_t>* extent = static_cast<size_t>(sheet) < extents_.size() ? &extents_[static_cast<size_t>(sheet)] : nullptr;
   s.ForEachCell(cells, [&](const CellInfo& c) {
+    if (extent && (c.hasFormula || c.value.type != ValueType::Empty)) {
+      extent->first = std::max(extent->first, static_cast<int32_t>(c.row) + 1);
+      extent->second = std::max(extent->second, static_cast<int32_t>(c.col) + 1);
+    }
     if (!c.hasFormula) return true;
     AddFormula(s, static_cast<size_t>(sheet), c);
     calc::Cell at{sheet, static_cast<int32_t>(c.row), static_cast<int32_t>(c.col)};
@@ -192,6 +223,65 @@ void WorkbookCalc::CellsEdited(int sheet, const Range& cells) {
   engine_->Changed(sheet, a);
   if (ManualCalc())
     for (const calc::Cell& at : entered) engine_->CalculateCell(at);
+}
+
+bool WorkbookCalc::SpillSize(std::string_view formula, int sheet, uint32_t row, uint32_t col, Range& spill) {
+  while (Opening()) OpenStep(1e9);
+  const calc::Cell at{sheet, static_cast<int32_t>(row), static_cast<int32_t>(col)};
+  auto f = engine_->CompileAt(formula, at, true);
+  if (!f) return false;
+  Evaluator ev(*this, engine_.get());
+  Value v;
+  ev.Evaluate(*f, at, v);
+  if (!v.IsArray() || (v.array().rows() <= 1 && v.array().cols() <= 1)) return false;
+  const uint64_t lastRow = uint64_t{row} + static_cast<uint64_t>(v.array().rows()) - 1;
+  const uint64_t lastCol = uint64_t{col} + static_cast<uint64_t>(v.array().cols()) - 1;
+  spill = Range::Cell(row, col);
+  if (lastRow > 1048575 || lastCol > 16383) return true;  // off the sheet
+  const Range want{row, col, static_cast<uint32_t>(lastRow), static_cast<uint32_t>(lastCol)};
+  // Blocked by something in the way: a value or formula, a merged cell, a table.
+  const Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  bool blocked = false;
+  s.ForEachCell(want, [&](const CellInfo& c) {
+    blocked = !(c.row == row && c.col == col) && (c.hasFormula || c.value.type != ValueType::Empty);
+    return !blocked;
+  });
+  auto overlaps = [&](const Range& r) {
+    return r.firstRow <= want.lastRow && r.lastRow >= want.firstRow && r.firstCol <= want.lastCol && r.lastCol >= want.firstCol;
+  };
+  for (const Range& m : s.Merges()) blocked = blocked || overlaps(m);
+  for (const auto& t : s.Tables()) blocked = blocked || overlaps(t.ref);
+  if (!blocked) spill = want;
+  return true;
+}
+
+std::wstring WorkbookCalc::SpillReason(int sheet, uint32_t row, uint32_t col) {
+  if (sheet < 0 || sheet >= SheetCount()) return {};
+  const Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+  CellInfo c;
+  FormulaInfo fi;
+  if (!s.GetCell(row, col, c) || c.value.type != ValueType::Error || c.value.error != ErrorCode::Spill ||
+      !s.GetFormula(row, col, fi) || !fi.dynamic)
+    return {};
+  const calc::Cell at{sheet, static_cast<int32_t>(row), static_cast<int32_t>(col)};
+  auto f = engine_->CompileAt(fi.text, at, true);
+  if (!f) return {};
+  Evaluator ev(*this, engine_.get());
+  Value v;
+  ev.Evaluate(*f, at, v);
+  if (!v.IsArray()) return L"Spill range is unknown";
+  const uint64_t lastRow = uint64_t{row} + static_cast<uint64_t>(v.array().rows()) - 1;
+  const uint64_t lastCol = uint64_t{col} + static_cast<uint64_t>(v.array().cols()) - 1;
+  if (lastRow > 1048575 || lastCol > 16383) return L"Spill range is too big";
+  const Range want{row, col, static_cast<uint32_t>(lastRow), static_cast<uint32_t>(lastCol)};
+  auto overlaps = [&](const Range& r) {
+    return r.firstRow <= want.lastRow && r.lastRow >= want.firstRow && r.firstCol <= want.lastCol && r.lastCol >= want.firstCol;
+  };
+  for (const auto& t : s.Tables())
+    if (overlaps(t.ref)) return L"Spill range in table";
+  for (const Range& m : s.Merges())
+    if (overlaps(m)) return L"Spill range has merged cell";
+  return L"Spill range isn't blank";
 }
 
 void WorkbookCalc::StructureEdited() {

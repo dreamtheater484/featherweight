@@ -68,7 +68,7 @@ void WorkbookView::SizePanel::Open(bool rows) {
 
 WorkbookView::GoToPanel::GoToPanel(WorkbookView& view) : v_(view) {
   ref_.label = L"Reference";
-  ref_.tooltip = L"A cell (B12), a range (A1:C5), another sheet's (Sheet2!A1) or a name";
+  ref_.tooltip = L"A cell (B12), a range (A1:C5), another sheet's (Sheet2!A1) or a name; a new name names the selection";
   ref_.onEnter = [this] {
     if (v_.GoTo(ref_.Text())) {
       note_.clear();
@@ -154,10 +154,12 @@ double WorkbookView::CurrentSize(bool rows) const {
 void WorkbookView::ApplySize(bool rows, uint32_t first, uint32_t last, double value, const char16_t* name) {
   const int sheet = static_cast<int>(sheet_);
   edit::EditGroup group(Ed(), name);
+  const std::vector<HeldSize> held = HeldSizes();  // s3-data: pictures keep their size
   // 0 hides them, as in Excel; another size shows them again.
   edit::Result r = rows ? Ed().HideRows(sheet, first, last, value <= 0) : Ed().HideColumns(sheet, first, last, value <= 0);
   if (r && value > 0)
     r = rows ? Ed().SetRowHeight(sheet, first, last, value) : Ed().SetColumnWidth(sheet, first, last, value);
+  if (r) r = KeepSizes(held);
   if (EditRefused(r)) return;
   group.done = true;
 }
@@ -282,6 +284,7 @@ void WorkbookView::AutoFit(bool rows, uint32_t first, uint32_t last, const Range
   text_->Clear();  // laid out at other widths
   const int sheet = static_cast<int>(sheet_);
   edit::EditGroup group(Ed(), rows ? u"AutoFit Row Height" : u"AutoFit Column Width");
+  const std::vector<HeldSize> held = HeldSizes();  // s3-data: pictures keep their size
   edit::Result res;
   for (uint32_t i = first; i <= last && res; ++i) {
     const double n = need[i - first];
@@ -300,6 +303,7 @@ void WorkbookView::AutoFit(bool rows, uint32_t first, uint32_t last, const Range
       if (res) res = Ed().SetColumnWidth(sheet, i, i, FileWidth(display));
     }
   }
+  if (res) res = KeepSizes(held);
   if (EditRefused(res)) return;
   group.done = true;
 }
@@ -346,7 +350,7 @@ bool WorkbookView::GoTo(const std::wstring& typed) {
     }
   const std::wstring f = L"=" + text;
   const std::vector<calc::RefSpan> spans = calc::ReferenceSpans(f, Region());
-  if (spans.size() != 1 || spans[0].begin != 1 || spans[0].end != f.size()) return false;
+  if (spans.size() != 1 || spans[0].begin != 1 || spans[0].end != f.size()) return DefineFromNameBox(text);
   const calc::RefSpan& s = spans[0];
   size_t target = sheet_;
   if (!s.sheet.empty()) {

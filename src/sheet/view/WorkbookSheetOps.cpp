@@ -53,6 +53,7 @@ bool WorkbookView::GridCommandState(int cmd, CommandState& s) {
   size_t shown = 0;
   if (Ready())
     for (size_t i = 0; i < book_->SheetCount(); ++i) shown += SheetShown(i);
+  if (ReviewCommandState(cmd, s)) return true;
   if (cmd >= CmdTabColor && cmd <= CmdTabColor + static_cast<int>(std::size(kTabColors))) {
     s.enabled = grid;
     return true;
@@ -129,6 +130,7 @@ bool WorkbookView::GridCommand(int cmd) {
   if (!state.enabled) return true;
   // A command ends the entry being typed first (unless it can't be written).
   if (editor_.Active() && !CommitEdit(false)) return true;
+  if (ReviewCommand(cmd)) return true;
   const int sheet = static_cast<int>(sheet_);
   const Range sel = Selected();
   const bool rows = WholeRows(), cols = WholeColumns();
@@ -177,10 +179,16 @@ bool WorkbookView::GridCommand(int cmd) {
     }
     case CmdClearContents: EditRefused(Ed().ClearContents(sheet, sel)); return true;
     case CmdHide:
-    case CmdUnhide:
-      EditRefused(rows ? Ed().HideRows(sheet, sel.firstRow, sel.lastRow, cmd == CmdHide)
-                       : Ed().HideColumns(sheet, sel.firstCol, sel.lastCol, cmd == CmdHide));
+    case CmdUnhide: {
+      const std::vector<HeldSize> held = HeldSizes();  // s3-data: pictures keep their size
+      std::optional<edit::EditGroup> group;
+      if (!held.empty()) group.emplace(Ed(), cmd == CmdHide ? (rows ? u"Hide Rows" : u"Hide Columns") : (rows ? u"Unhide Rows" : u"Unhide Columns"));
+      edit::Result r = rows ? Ed().HideRows(sheet, sel.firstRow, sel.lastRow, cmd == CmdHide)
+                            : Ed().HideColumns(sheet, sel.firstCol, sel.lastCol, cmd == CmdHide);
+      if (r) r = KeepSizes(held);
+      if (!EditRefused(r) && group) group->done = true;
       return true;
+    }
     case CmdRowHeight:
     case CmdColumnWidth: ShowSizePanel(cmd == CmdRowHeight); return true;
     case CmdInsertSheet:
@@ -279,6 +287,8 @@ void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
         anyHidden = true;
       }
     AppendSubmenu(m, hidden, L"Unhide", anyHidden);
+    AddReviewTabItems(m);
+    AddPageSetupTabItems(m);  // s3-print
     AppendSeparator(m);
     for (size_t i = 0; i < book_->SheetCount() && CmdSheetPick + static_cast<int>(i) <= CmdSheetPickLast; ++i)
       if (SheetShown(i))
@@ -296,6 +306,8 @@ void WorkbookView::FillContextMenu(HMENU m, int x, int y) {
     item(special, CmdPasteFormats, L"Formats");
     item(special, CmdPasteTranspose, L"Transposed");
     AppendSubmenu(m, special, L"Paste special");
+    AddReviewCellItems(m);
+    AddPageSetupCellItems(m);  // s3-print
     AppendSeparator(m);
     if (rows || cols) {
       item(m, CmdInsertCells, rows ? L"Insert rows\tCtrl++" : L"Insert columns\tCtrl++");
