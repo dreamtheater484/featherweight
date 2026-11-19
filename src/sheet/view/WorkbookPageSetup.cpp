@@ -950,11 +950,13 @@ void WorkbookView::DrawPageBreakPreview(Canvas& c) {
 }
 
 // A break between two pages under (x, y): which way it runs and the row or column it is before.
-bool WorkbookView::BreakEdgeAt(float x, float y, bool& rows, uint32_t& at) {
+bool WorkbookView::BreakEdgeAt(float x, float y, bool& rows, uint32_t& at, bool& outer) {
+  outer = false;
   if (preview_ || !BreakPreviewOn() || !gfx::Contains(cells_, x, y)) return false;
   const PrintLayout* pages = BreakPages();
   if (!pages) return false;
   const float slop = 4 * static_cast<float>(ui_);
+  std::optional<Range> area = PrintedArea();
   for (const Pane& p : Panes()) {
     if (!gfx::Contains(RectF(p.rc), x, y)) continue;
     for (size_t i = 0; i < pages->PageCount(); ++i) {
@@ -976,15 +978,46 @@ bool WorkbookView::BreakEdgeAt(float x, float y, bool& rows, uint32_t& at) {
         }
       }
     }
+    // The print area's own edges (one area).
+    if (!area) continue;
+    D2D1_RECT_F r = CellRect(p, area->firstRow, area->firstCol, area->lastRow, area->lastCol);
+    if (r.left > r.right) std::swap(r.left, r.right);
+    const float l = rtl_ ? r.right : r.left, rt = rtl_ ? r.left : r.right;
+    outer = true;
+    if (x >= r.left - slop && x <= r.right + slop) {
+      if (std::abs(y - r.top) <= slop) return rows = true, at = area->firstRow, true;
+      if (std::abs(y - r.bottom) <= slop) return rows = true, at = area->lastRow + 1, true;
+    }
+    if (y >= r.top - slop && y <= r.bottom + slop) {
+      if (std::abs(x - l) <= slop) return rows = false, at = area->firstCol, true;
+      if (std::abs(x - rt) <= slop) return rows = false, at = area->lastCol + 1, true;
+    }
+    outer = false;
   }
   return false;
 }
 
+// What prints, when it's one area: the pages' cells together.
+std::optional<Range> WorkbookView::PrintedArea() {
+  const PrintLayout* pages = BreakPages();
+  std::optional<Range> out;
+  if (const DefinedName* n = NameOf(*book_, "_xlnm.Print_Area", sheet_); n && PrintLayout::ParseAreas(n->formula).size() > 1)
+    return std::nullopt;
+  for (size_t i = 0; pages && i < pages->PageCount(); ++i) {
+    const PrintPage& page = pages->Page(i);
+    if (page.notes || page.chart) continue;
+    if (!out) out = page.body;
+    out->firstRow = std::min(out->firstRow, page.body.firstRow), out->firstCol = std::min(out->firstCol, page.body.firstCol);
+    out->lastRow = std::max(out->lastRow, page.body.lastRow), out->lastCol = std::max(out->lastCol, page.body.lastCol);
+  }
+  return out;
+}
+
 bool WorkbookView::BreakDragStart(float x, float y) {
-  bool rows = false;
+  bool rows = false, outer = false;
   uint32_t at = 0;
-  if (!BreakEdgeAt(x, y, rows, at)) return false;
-  breakDrag_ = BreakDrag{rows, at, at};
+  if (!BreakEdgeAt(x, y, rows, at, outer)) return false;
+  breakDrag_ = BreakDrag{rows, at, at, outer};
   return true;
 }
 
@@ -999,7 +1032,7 @@ bool WorkbookView::BreakDragMove(int x, int y) {
       const bool beyond = breakDrag_->rows ? y - r.top > r.bottom - y : (std::abs(x - (rtl_ ? r.right : r.left)) > std::abs(x - (rtl_ ? r.left : r.right)));
       if (beyond) ++to;
     }
-    to = std::max<uint32_t>(1, to);
+    to = std::max<uint32_t>(breakDrag_->outer ? 0 : 1, to);
     if (to != breakDrag_->to) {
       breakDrag_->to = to;
       host_.ViewInvalidate();
@@ -1014,6 +1047,19 @@ bool WorkbookView::BreakDragEnd(int, int) {
   breakDrag_.reset();
   host_.ViewInvalidate();
   if (d.to == d.from) return true;
+  if (d.outer) {
+    // The print area's edge moved: the print area is the cells inside it now.
+    std::optional<Range> area = PrintedArea();
+    if (!area) return true;
+    Range r = *area;
+    uint32_t& first = d.rows ? r.firstRow : r.firstCol;
+    uint32_t& last = d.rows ? r.lastRow : r.lastCol;
+    if (d.from == first) first = std::min(d.to, last);
+    else last = std::max(d.to, first + 1) - 1;
+    edit::EditGroup group(Ed(), u"Set Print Area");
+    if (!EditRefused(SetPrintArea({r}))) group.done = true;
+    return true;
+  }
   const Sheet& s = Current();
   std::vector<PageBreak> rows = s.RowBreaks(), cols = s.ColBreaks();
   std::vector<PageBreak>& list = d.rows ? rows : cols;
@@ -1029,10 +1075,10 @@ bool WorkbookView::BreakDragEnd(int, int) {
 }
 
 HCURSOR WorkbookView::BreakCursor(float x, float y) {
-  bool rows = false;
+  bool rows = false, outer = false;
   uint32_t at = 0;
   if (breakDrag_) return LoadCursorW(nullptr, breakDrag_->rows ? IDC_SIZENS : IDC_SIZEWE);
-  if (BreakEdgeAt(x, y, rows, at)) return LoadCursorW(nullptr, rows ? IDC_SIZENS : IDC_SIZEWE);
+  if (BreakEdgeAt(x, y, rows, at, outer)) return LoadCursorW(nullptr, rows ? IDC_SIZENS : IDC_SIZEWE);
   return nullptr;
 }
 
