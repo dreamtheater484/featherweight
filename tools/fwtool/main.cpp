@@ -81,6 +81,8 @@ constexpr const char* kUsage =
     "  fwtool bench --sheet-edits [--runs N] [--out DIR] [--json FILE] [--budgets] <template.xlsx>\n"
     "      S2's editing budgets on workbooks made from the template in DIR: recalculation after\n"
     "      one edit (100,000 formulas), inserting a row and undoing it, and saving (1,000,000 cells).\n"
+    "      S3's: a table, a conditional format and a chart from a 1,000-row selection to screen,\n"
+    "      and the chart drawn again after an edit to its data.\n"
     "  fwtool bench [--runs N] [--json FILE] [--budgets] [--typing | --scrolling] <file or folder>...\n"
     "      Times opening each Word document, stage by stage, against the opening budgets\n"
     "      (plan §11). With --budgets, a missed budget fails. With --typing, times keystrokes\n"

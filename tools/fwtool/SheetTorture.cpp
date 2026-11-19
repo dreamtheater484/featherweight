@@ -31,6 +31,7 @@
 #include <cstring>
 
 #include "sheet/data/Rules.h"
+#include "sheet/edit/Drawing.h"
 #include "sheet/edit/Edit.h"
 #include "sheet/edit/Protection.h"
 #include "sheet/objects/SheetObjects.h"
@@ -60,7 +61,8 @@ constexpr struct {
     {Op::Save, "save"},             {Op::Name, "name"},               {Op::Protect, "protect"},
     {Op::ProtectBook, "protect-book"}, {Op::Link, "link"},           {Op::Note, "note"},
     {Op::Thread, "thread"},         {Op::Table, "table"},             {Op::Rule, "rule"},
-    {Op::Validation, "validation"},
+    {Op::Validation, "validation"}, {Op::Chart, "chart"},             {Op::Object, "object"},
+    {Op::PageSetup, "pagesetup"},   {Op::PageBreak, "pagebreak"},
 };
 
 // The S3 edits whose text goes after the arg, quoted.
@@ -212,6 +214,10 @@ std::string FormatEdit(const Edit& e) {
       s += at(e.sheet, e.range) + " " + e.arg;
       if (TakesText(e)) s += " " + Quote(e.text);
       break;
+    case Op::Chart: s += at(e.sheet, e.range) + at(e.sheet, e.to) + " " + e.arg; break;
+    case Op::Object: s += at(e.sheet, e.range) + " " + std::to_string(e.count) + " " + e.arg; break;
+    case Op::PageSetup: s += " " + std::to_string(e.sheet) + " " + e.arg; break;
+    case Op::PageBreak: s += at(e.sheet, e.range) + " " + e.arg; break;
   }
   if (!e.target.empty()) s += "  # " + e.target;
   return s;
@@ -306,6 +312,22 @@ bool ParseEdit(std::string_view line, Edit& e) {
       e.arg = std::string(NextWord(s));
       if (e.arg.empty()) return false;
       return !TakesText(e) || Unquote(s, e.text);
+    case Op::Chart:
+      if (!sheetRange(e.sheet, e.range) || !sheetRange(e.toSheet, e.to)) return false;
+      e.arg = std::string(NextWord(s));
+      return !e.arg.empty();
+    case Op::Object:
+      if (!sheetRange(e.sheet, e.range) || !number(e.count)) return false;
+      e.arg = std::string(NextWord(s));
+      return !e.arg.empty();
+    case Op::PageSetup:
+      if (!number(e.sheet)) return false;
+      e.arg = std::string(NextWord(s));
+      return !e.arg.empty();
+    case Op::PageBreak:
+      if (!sheetRange(e.sheet, e.range)) return false;
+      e.arg = std::string(NextWord(s));
+      return !e.arg.empty();
   }
   return false;
 }
@@ -418,6 +440,23 @@ sh::edit::CellInput TypedInput(const std::string& typed, bool nl) {
 }
 
 std::string Utf8(const std::u16string& s) { return fw::WideToUtf8(std::wstring(s.begin(), s.end())); }
+
+// A part related to `source` by a relationship whose type ends with `type` ("/drawing", "/chart"):
+// its bytes, and its name in `part`; empty when there's none.
+std::string RelatedPart(const sh::Workbook& book, std::string_view source, std::string_view type, std::string* part = nullptr,
+                        size_t nth = 0) {
+  const fw::pkg::Package* pkg = book.GetPackage();
+  const fw::pkg::RelationshipSet* rels = pkg && !source.empty() ? pkg->RelationshipsOf(source) : nullptr;
+  if (!rels) return {};
+  for (const fw::pkg::Relationship& r : rels->items)
+    if (!r.external && r.type.ends_with(type) && nth-- == 0) {
+      std::vector<uint8_t> b;
+      if (!pkg->ReadPart(r.targetPart, b).Ok()) return {};
+      if (part) *part = r.targetPart;
+      return std::string(b.begin(), b.end());
+    }
+  return {};
+}
 
 // ---- The target with the edit API: each edit as the grid's command runs it.
 
@@ -545,6 +584,55 @@ class EditApiTarget : public SheetTarget {
       case Op::Table: return Table(s, r, e.arg, why);
       case Op::Rule: return Rule(s, r, e, why);
       case Op::Validation: return Validation(s, r, e, why);
+      case Op::Chart: {
+        using K = sh::edit::Editor::ChartKind;
+        static const std::pair<const char*, K> kKinds[] = {{"column", K::Column}, {"bar", K::Bar},   {"line", K::Line},
+                                                           {"pie", K::Pie},       {"doughnut", K::Doughnut},
+                                                           {"area", K::Area},     {"scatter", K::Scatter}};
+        sh::edit::Editor::NewChart nc;
+        nc.data = r;
+        nc.at = {e.to.firstRow, e.to.firstCol};
+        bool known = false;
+        for (const auto& [name, kind] : kKinds)
+          if (e.arg == name) nc.kind = kind, known = true;
+        if (!known) {
+          why = "unknown chart " + e.arg;
+          return Applied::Refused;
+        }
+        return done(ed_.InsertChart(s, nc));
+      }
+      case Op::Object: {
+        if (e.arg == "delete") return done(ed_.DeleteObjects(s, {e.count}));
+        // Dragged so that its top left is at the cell: about five columns by twelve rows.
+        namespace dr = sh::edit::drawing;
+        constexpr int64_t kEmuPx = 9525;
+        dr::Place p;
+        p.from = dr::Marker{r.firstCol, r.firstRow, 0, 0};
+        p.to = dr::Marker{r.firstCol + 5, r.firstRow + 12, 0, 0};
+        p.x = static_cast<int64_t>(r.firstCol) * 64 * kEmuPx, p.y = static_cast<int64_t>(r.firstRow) * 20 * kEmuPx;
+        p.cx = 5 * 64 * kEmuPx, p.cy = 12 * 20 * kEmuPx;
+        return done(ed_.MoveObject(s, e.count, p));
+      }
+      case Op::PageSetup: return PageSetup(s, e.arg, why);
+      case Op::PageBreak: {
+        const sh::Sheet& sheet = book_->GetSheet(static_cast<size_t>(s));
+        std::vector<sh::PageBreak> rows = sheet.RowBreaks(), cols = sheet.ColBreaks();
+        if (e.arg == "reset") {
+          rows.clear(), cols.clear();
+        } else {
+          // Insert Page Break: above and left of the active cell (only above in column A, only left
+          // in row 1); Remove Page Break: the ones there.
+          std::erase_if(rows, [&](const sh::PageBreak& b) { return b.id == r.firstRow; });
+          std::erase_if(cols, [&](const sh::PageBreak& b) { return b.id == r.firstCol; });
+          if (e.arg == "insert") {
+            if (r.firstRow > 0) rows.push_back(sh::PageBreak{r.firstRow, 0, 16383, true, false});
+            if (r.firstCol > 0) cols.push_back(sh::PageBreak{r.firstCol, 0, 1048575, true, false});
+          }
+          auto byId = [](const sh::PageBreak& a, const sh::PageBreak& b) { return a.id < b.id; };
+          std::sort(rows.begin(), rows.end(), byId), std::sort(cols.begin(), cols.end(), byId);
+        }
+        return done(ed_.SetPageBreaks(s, rows, cols));
+      }
     }
     return Applied::Refused;
   }
@@ -729,6 +817,41 @@ class EditApiTarget : public SheetTarget {
       }
     group.done = true;
     return Applied::Done;
+  }
+
+  // Page Setup with one thing changed, as the panel sets it (Editor::SetPageSetup).
+  Applied PageSetup(int s, const std::string& w, std::string& why) {
+    const sh::Sheet& sheet = book_->GetSheet(static_cast<size_t>(s));
+    sh::PageSetup p = sheet.Page();
+    sh::HeaderFooter hf = sheet.HeadersFooters();
+    bool fit = sheet.Props().fitToPage;
+    if (w == "portrait") p.orientation = sh::Orientation::Portrait;
+    else if (w == "landscape") p.orientation = sh::Orientation::Landscape;
+    else if (w == "a4") p.paperSize = 9;
+    else if (w == "letter") p.paperSize = 1;
+    else if (w.starts_with("scale=")) p.scale = static_cast<uint32_t>(std::strtoul(w.c_str() + 6, nullptr, 10)), fit = false;
+    else if (w.starts_with("fit=")) {
+      p.fitToWidth = static_cast<uint32_t>(std::strtoul(w.c_str() + 4, nullptr, 10));
+      const size_t comma = w.find(',');
+      p.fitToHeight = comma == std::string::npos ? 1 : static_cast<uint32_t>(std::strtoul(w.c_str() + comma + 1, nullptr, 10));
+      fit = true;
+    } else if (w == "nofit") fit = false;
+    else if (w == "margins=narrow") p.margins = sh::PageMargins{0.25, 0.25, 0.75, 0.75, 0.3, 0.3};
+    else if (w == "margins=wide") p.margins = sh::PageMargins{1, 1, 1, 1, 0.5, 0.5};
+    else if (w == "center") p.horizontalCentered = !p.horizontalCentered;
+    else if (w == "header") hf.oddHeader = "&CPage &P of &N", hf.oddFooter = "&L&F&R&D";
+    else if (w == "gridlines") p.gridLines = !p.gridLines;
+    else if (w == "headings") p.headings = !p.headings;
+    else if (w == "order")
+      p.pageOrder = p.pageOrder == sh::PageOrder::DownThenOver ? sh::PageOrder::OverThenDown : sh::PageOrder::DownThenOver;
+    else {
+      why = "unknown page setup " + w;
+      return Applied::Refused;
+    }
+    sh::edit::Result res = ed_.SetPageSetup(s, p, hf, fit);
+    if (res.ok) return Applied::Done;
+    why = Utf8(res.message);
+    return Applied::Refused;
   }
 
   // A password as Protect Sheet hashes it: slow (100,000 rounds), so made once.
@@ -1256,7 +1379,11 @@ class Generator {
     corner.lastCol = std::min(area.lastCol, area.firstCol + 3);
     const uint32_t count = static_cast<uint32_t>(book.SheetCount());
     const std::string other = SheetRef(book.GetSheet(rng_.Below(count)).Name());
-    const uint32_t roll = rng_.Below(100);
+    const uint32_t roll = rng_.Below(120);
+    if (roll >= 100) {
+      ObjectEdit(book, sheet, area, roll - 100, e);
+      return;
+    }
     if (roll < 15) {
       e.op = Op::Name;
       if (!book.Names().empty() && rng_.Chance(25)) {  // delete one that's there
@@ -1353,6 +1480,41 @@ class Generator {
       else if (e.arg == "decimal") e.text = "0.5";
       else if (e.arg == "length") e.text = "10";
       else if (e.arg == "custom") e.text = "ISNUMBER(" + first + ")";
+    }
+  }
+
+  // Charts and the drawing's objects (s3-charts), page setup and page breaks (s3-print). `roll`: 0-19.
+  void ObjectEdit(const sh::Workbook& book, const sh::Sheet& sheet, const sh::Range& area, uint32_t roll, Edit& e) {
+    if (roll < 8) {
+      e.op = Op::Chart;
+      e.range = Block(area, 12, 3);
+      e.toSheet = e.sheet;
+      e.to = Cell(area);
+      e.to.firstCol = e.to.lastCol = std::min<uint32_t>(e.range.lastCol + 2, 16380);
+      static const char* kKinds[] = {"column", "column", "bar", "line", "pie", "doughnut", "area", "scatter"};
+      e.arg = rng_.Pick(kKinds);
+    } else if (roll < 12) {
+      e.op = Op::Object;
+      e.range = Cell(area);
+      e.count = 1;
+#if FW_SHEET_EDIT
+      const std::vector<sh::edit::drawing::Object> objects =
+          sh::edit::drawing::Objects(RelatedPart(book, sheet.PartName(), "/drawing"));
+      if (!objects.empty()) e.count = objects[rng_.Below(static_cast<uint32_t>(objects.size()))].id;
+#else
+      (void)book;
+#endif
+      e.arg = rng_.Chance(40) ? "delete" : "move";
+    } else if (roll < 17) {
+      e.op = Op::PageSetup;
+      static const char* kWhat[] = {"portrait", "landscape", "a4", "letter", "scale=75", "fit=1,0", "fit=1,1", "nofit",
+                                    "margins=narrow", "margins=wide", "center", "header", "gridlines", "headings", "order"};
+      e.arg = rng_.Pick(kWhat);
+    } else {
+      e.op = Op::PageBreak;
+      e.range = Cell(area);
+      const uint32_t k = rng_.Below(20);
+      e.arg = k < 12 ? "insert" : k < 17 ? "remove" : "reset";
     }
   }
 
@@ -1490,6 +1652,43 @@ void ObjectLines(const sh::Workbook& book, size_t i, const std::string& at, std:
     out.push_back(at + "validation " + v.sqref + " type " + std::to_string(static_cast<int>(v.type)) + " op " +
                   std::to_string(static_cast<int>(v.op)) + " " + Quote(v.f1) + " " + Quote(v.f2) +
                   (v.allowBlank ? " blank" : "") + (v.dropDown ? " list" : "") + " " + Quote(v.prompt) + (v.x14 ? " x14" : ""));
+  // Page setup and breaks (s3-print's).
+  const sh::PageSetup& p = s.Page();
+  const sh::PageMargins& m = p.margins;
+  out.push_back(at + "page paper " + std::to_string(p.paperSize) + " scale " + std::to_string(p.scale) + " fit " +
+                std::to_string(p.fitToWidth) + "," + std::to_string(p.fitToHeight) + (s.Props().fitToPage ? " on" : " off") +
+                " orientation " + std::to_string(static_cast<int>(p.orientation)) + " order " +
+                std::to_string(static_cast<int>(p.pageOrder)) + (p.horizontalCentered ? " hcenter" : "") +
+                (p.verticalCentered ? " vcenter" : "") + (p.gridLines ? " gridlines" : "") + (p.headings ? " headings" : "") +
+                " margins " + Num(m.left) + " " + Num(m.right) + " " + Num(m.top) + " " + Num(m.bottom) + " " + Num(m.header) +
+                " " + Num(m.footer) + " header " + Quote(s.HeadersFooters().oddHeader) + " footer " +
+                Quote(s.HeadersFooters().oddFooter));
+  for (const auto* breaks : {&s.RowBreaks(), &s.ColBreaks()}) {
+    if (breaks->empty()) continue;
+    std::string line = at + (breaks == &s.RowBreaks() ? "row breaks" : "col breaks");
+    for (const sh::PageBreak& b : *breaks) line += " " + std::to_string(b.id) + (b.manual ? "m" : "");
+    out.push_back(std::move(line));
+  }
+  // The drawing's objects (by shape id) and its charts' series formulas (s3-charts').
+  std::string drawingPart;
+  const std::string drawing = RelatedPart(book, s.PartName(), "/drawing", &drawingPart);
+  if (!drawing.empty()) {
+    std::string line = at + "objects";
+    for (const sh::edit::drawing::Object& o : sh::edit::drawing::Objects(drawing)) line += " " + std::to_string(o.id);
+    out.push_back(std::move(line));
+    for (size_t n = 0;; ++n) {
+      std::string chartPart;
+      const std::string chart = RelatedPart(book, drawingPart, "/chart", &chartPart, n);
+      if (chart.empty()) break;
+      std::string line = at + "chart " + chartPart;
+      for (size_t i = chart.find("<c:f>"); i != std::string::npos; i = chart.find("<c:f>", i + 5)) {
+        const size_t end = chart.find("</c:f>", i);
+        if (end == std::string::npos) break;
+        line += " " + chart.substr(i + 5, end - i - 5);
+      }
+      out.push_back(std::move(line));
+    }
+  }
   // Notes and threads: only on sheets whose part has them (reading a sheet's objects is slower).
   const fw::pkg::Package* pkg = book.GetPackage();
   const fw::pkg::RelationshipSet* rels = pkg && !s.PartName().empty() ? pkg->RelationshipsOf(s.PartName()) : nullptr;

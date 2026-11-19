@@ -71,6 +71,7 @@ enum class JournalOp : uint8_t {
   InsertChart = 50,  // s3-charts: 50-59
   MoveObject = 51,
   DeleteObjects = 52,
+  EditChart = 53,
   // s3-data's operations: 60-69.
   SetSheetRules = 60,
   AddDxf = 61,
@@ -78,6 +79,9 @@ enum class JournalOp : uint8_t {
   SetTable = 63,
   RemoveTable = 64,
   SetTableFilter = 65,
+  InsertPicture = 66,
+  InsertShape = 67,
+  SetObjectXml = 68,
   // S3: each piece numbers its own (s3-review from 90), so branches don't clash.
   SetSheetProtection = 90,
   SetWorkbookProtection = 91,

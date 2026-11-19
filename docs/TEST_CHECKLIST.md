@@ -305,3 +305,45 @@ Check next to Excel on copies of your own workbooks, with sheets long and wide e
 - [ ] Set print area, Add to print area, Clear print area (cell menu and command search); Insert page break above and left of the active cell, Remove page break, Reset all page breaks.
 - [ ] Page break preview (sheet tab menu): what doesn't print is grey, each page shows "Page N", automatic breaks are dashed blue lines and manual ones solid; dragging a break moves it (it becomes manual). Saved, Excel opens in Page Break Preview with the same pages.
 - [ ] Saved, Excel opens the file without a repair and shows the same page setup (File › Print, Page Setup), print area, print titles and breaks; its PDF export has the same pages as Featherweight's Export PDF (on this PC Excel exports on Letter even for A4 sheets).
+
+## Tables, conditional formatting, data validation and names (S3)
+
+Check next to Excel on copies of your own workbooks, in your region (`1,5`, `;` between arguments). Every change is one undo step; after each block, save, open the file in Excel (no repair prompt) and compare.
+
+### Tables
+
+- [ ] Select a block of data with a header row and press Ctrl+T (or Data › **Table…**): "Where is the data for your table?" shows the selection; with **My table has headers** on, **Create table** makes it in the chosen style. Without headers, a row of Column1, Column2… goes in above the data, as in Excel.
+- [ ] **Table design…** (on a cell of the table): rename it (a name with a space is refused), pick another style, and turn on and off Total row, Banded rows, Banded columns, First column, Last column and Filter button. The total row shows "Total" and the last column's SUBTOTAL (a sum of numbers, a count of text), as Excel adds it.
+- [ ] Type in the row just below the table, or the column just right of it: the table grows. A formula typed in an empty column of the table fills down the column (a calculated column).
+- [ ] A formula outside the table using `=SUM(Table1[Q1])` (with the table's own name) gives the column's total; inside, `[@Q1]` uses the row's value.
+- [ ] **Convert to range**: the table goes, its cells stay, and formulas that used `Table1[Q1]` now refer to the cells.
+- [ ] Saved, Excel shows the same table (name, range, style, options, total row) and its formulas give the same results.
+
+### Conditional formatting
+
+- [ ] Select numbers, toolbar **Conditional › New rule…**: try each of "Format cells that are": Greater than, Less than, Between, Equal to (with a value or a cell), Text that contains, A date occurring, Duplicate values, Top N items, Above average, each with a format from the list ("Light Red Fill with Dark Red Text"…). The cells change at once, as Excel colors them.
+- [ ] Data bars, Color scales and Icon sets, a few presets each: the bars, colors and icons look like Excel's on the same values.
+- [ ] Use a formula: `=$C2>100` over A2:D20 colors whole rows; typed in your region's form (`=AND($B2>0;$C2<5)`).
+- [ ] **Manage rules…**: the list shows each rule and where it applies; Move up and Move down change which applies first; Stop if true; Delete; change "Applies to". Clear rules from the selected cells, and from the sheet.
+- [ ] Change a value the rules look at: the colors follow at once. Saved, Excel shows the same colors, bars and icons, and lists the same rules in its Manage Rules.
+
+### Data validation
+
+- [ ] Data › **Data validation…** on a range: Allow a list (`Yes;No` in your region, or a range such as `=$F$1:$F$5`, also on another sheet): the cell shows its arrow; Alt+Down opens the choices. Whole number between 1 and 10, decimal, date, time, text length and a custom formula each refuse what they should.
+- [ ] Input message (Title and Input message) shows beside the selected cell. The error alert: Stop refuses the typed value with your message; Warning and Information ask and let you keep it. Pasting works as in Excel: the copied cells' rules come along in place of the cells' own, and pasted values aren't checked.
+- [ ] **Circle invalid data** circles cells that break the rule (typed before it was set); Clear circles removes them. Clear all removes the rule from the selection.
+- [ ] Saved, Excel shows the same rules (its Data Validation dialog), dropdowns and messages, and refuses the same values.
+
+### Names
+
+- [ ] Ctrl+F3 (**Name Manager**): New: a Name, a Scope (the workbook or one sheet) and what it Refers to (`=Sheet1!$B$2`, in your region's form); Save; Delete. The list shows each name's value and where it refers.
+- [ ] Type a new name in the Name Box with cells selected: it's defined. Ctrl+Shift+F3 (**Create names from selection**) with a header row: each column gets its header's name. F3 pastes a name into a formula; Paste list writes them all out.
+- [ ] Formulas using names (`=B4*(1+Rate)`, `=SUM(Net)`) calculate; a deleted name gives #NAME?. Saved, Excel's Name Manager shows the same names, scopes and references.
+
+## S3's gate (record the numbers)
+
+- [ ] `scripts\build-from-scratch.ps1 -Fixtures -Featherweight build\Release\Featherweight.exe` passes: every fixture in `tests\office\fixtures` (formatted cells, S3's functions, names, tables and rules, notes, comments, links and protection) is built through the app's commands, Excel reads back every expected object, gives the same results when it recalculates, its PDF matches Featherweight's (SSIM ≥ 0.95), and opens the file without a repair.
+- [ ] `scripts\sheet-torture.ps1 -Corpus D:\Documents\Codex\FeatherweightCorpus`: the 246 workbooks, with S3's edits (names, protection, links, notes, comments, tables, rules, validation) mixed in: ___ failures (target 0), ___ new validator errors (target 0), ___ Excel repairs (target 0).
+- [ ] `fwtool bench --sheet-edits --runs 12 tests\office\generated\simple.xlsx`: a table, a rule and a chart from 1,000 rows each to screen in ___ / ___ / ___ ms (target < 100); the chart drawn again after an edit to its data in ___ ms typical, ___ ms worst (target < 16 and < 50). S2's lines all "met".
+- [ ] `fwtool bench-app build\Release\Featherweight.exe build\budgets\million-cells.xlsx build\budgets\100mb.csv` on a quiet PC: million-cells ready in ___ ms (< 1,500), 100mb.csv ready in ___ ms (< 1,000).
+- [ ] Make a workbook with a table, a chart, a few rules, a list validation, a note, a comment, a link, a name and a protected sheet; save it; open it in Excel: no repair, and everything is there and looks the same.

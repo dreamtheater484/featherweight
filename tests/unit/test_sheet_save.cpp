@@ -1053,6 +1053,109 @@ TEST(sheet_save_typed_dynamic_array) {
   }
 }
 
+// A chart edited (s3-charts): title, axis titles, legend, data labels, colors, type and Select Data,
+// each keeping what it doesn't change; undone to the bytes it had.
+TEST(sheet_edit_chart) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"B1\" t=\"inlineStr\"><is><t>Sales</t></is></c>"
+                         "<c r=\"C1\" t=\"inlineStr\"><is><t>Costs</t></is></c></row>"
+                         "<row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>Jan</t></is></c><c r=\"B2\"><v>10</v></c><c r=\"C2\"><v>7</v></c></row>"
+                         "<row r=\"3\"><c r=\"A3\" t=\"inlineStr\"><is><t>Feb</t></is></c><c r=\"B3\"><v>12</v></c><c r=\"C3\"><v>8</v></c></row>"
+                         "<row r=\"4\"><c r=\"A4\" t=\"inlineStr\"><is><t>Mar</t></is></c><c r=\"B4\"><v>15</v></c><c r=\"C4\"><v>9.5</v></c></row>"
+                         "</sheetData>",
+                         "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Editor::NewChart c;
+  c.data = Range{0, 0, 3, 2};
+  CHECK(ed.InsertChart(0, c));
+  const std::string part = ed.ChartPart(0, 2);
+  CHECK_EQ(part, std::string("/xl/charts/chart1.xml"));
+  CHECK(ed.ChartPart(0, 3).empty() && ed.ChartPart(1, 2).empty());
+  const std::string original = ed.PartBytes(part);
+  edit::ChartInfo info = edit::charts::Info(original);
+  CHECK(info.kind == edit::ChartKind::Column && info.title.shown && info.title.text.empty() && info.legend == 'b' && !info.labels);
+  CHECK(!info.xTitle.shown && info.series.size() == 2);
+  if (info.series.size() == 2)
+    CHECK(info.series[1].name == "Sheet1!$C$1" && info.series[1].values == "Sheet1!$C$2:$C$4" && info.series[1].categories == "Sheet1!$A$2:$A$4");
+
+  edit::ChartEdit e;
+  e.title = edit::ChartText{true, "Sales & costs"};
+  e.xTitle = edit::ChartText{true, "Month"};
+  e.yTitle = edit::ChartText{true, "Euro"};
+  e.legend = 'r';
+  e.labels = true;
+  e.colors = {{1, -1, 0xFF0000}, {0, 2, 0x00B050}};
+  CHECK(ed.EditChart(0, 2, e));
+  std::string xml = ed.PartBytes(part);
+  info = edit::charts::Info(xml);
+  CHECK(info.title.text == "Sales & costs" && info.xTitle.text == "Month" && info.yTitle.text == "Euro" && info.legend == 'r' && info.labels);
+  CHECK(xml.find("<a:srgbClr val=\"FF0000\"/>") != std::string::npos && xml.find("<c:dPt><c:idx val=\"2\"/>") != std::string::npos);
+  CHECK(xml.find("rot=\"-5400000\"") != std::string::npos);  // the vertical axis's title
+  CHECK(InOrder(xml, {"Sales &amp; costs</a:t>", "<c:autoTitleDeleted val=\"0\"/>", "<c:plotArea>", "<c:catAx>", "Month</a:t>",
+                      "<c:valAx>", "Euro</a:t>", "<c:legend>"}));
+  CheckClean(SaveBytes(*book, ed, "save-chart-titles"));
+
+  // A line: the axes, titles and colors stay.
+  e = {};
+  e.kind = edit::ChartKind::Line;
+  CHECK(ed.EditChart(0, 2, e));
+  xml = ed.PartBytes(part);
+  info = edit::charts::Info(xml);
+  CHECK(info.kind == edit::ChartKind::Line && info.xTitle.text == "Month" && info.labels && info.series.size() == 2);
+  CHECK(xml.find("<c:barChart>") == std::string::npos && xml.find("<a:ln w=\"28575\" cap=\"rnd\"><a:solidFill><a:srgbClr val=\"FF0000\"/>") != std::string::npos);
+  CheckClean(SaveBytes(*book, ed, "save-chart-line"));
+  // A pie: no axes.
+  e.kind = edit::ChartKind::Pie;
+  CHECK(ed.EditChart(0, 2, e));
+  xml = ed.PartBytes(part);
+  CHECK(xml.find("<c:pieChart>") != std::string::npos && xml.find("Ax>") == std::string::npos);
+  CHECK(!edit::charts::Info(xml).xTitle.shown);
+  // Select Data: one series, a name typed as text.
+  e = {};
+  e.series = std::vector<edit::ChartSeries>{{"=\"Costs only\"", "=Sheet1!$C$2:$C$4", "Sheet1!$A$2:$A$4"}};
+  CHECK(ed.EditChart(0, 2, e));
+  info = edit::charts::Info(ed.PartBytes(part));
+  CHECK(info.series.size() == 1 && info.series[0].name == "=\"Costs only\"" && info.series[0].values == "Sheet1!$C$2:$C$4");
+  CHECK(ed.PartBytes(part).find("<c:v>9.5</c:v>") != std::string::npos);
+  e.series = std::vector<edit::ChartSeries>{{"", "Nowhere!$C$2:$C$4", ""}};
+  CHECK(!ed.EditChart(0, 2, e));
+  // No title.
+  e = {};
+  e.title = edit::ChartText{false, ""};
+  e.legend = 0;
+  CHECK(ed.EditChart(0, 2, e));
+  info = edit::charts::Info(ed.PartBytes(part));
+  CHECK(!info.title.shown && info.legend == 0 && ed.PartBytes(part).find("<c:autoTitleDeleted val=\"1\"/>") != std::string::npos);
+
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-chart-edited");
+  CheckClean(saved);
+  CHECK(ed.Undo(5));
+  CHECK(ed.PartBytes(part) == original);
+}
+
+// Charts' caches follow the cells at a save (s3-charts); a chart whose cells hold what it caches
+// is saved byte for byte.
+TEST(sheet_chart_caches_follow_cells) {
+  auto book = OpenParts({"<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c><c r=\"B1\"><v>5</v></c></row>"
+                         "<row r=\"2\"><c r=\"A2\"><v>2</v></c><c r=\"B2\"><v>6</v></c></row></sheetData>",
+                         "<sheetData/>"});
+  if (!book) return;
+  Editor ed(*book);
+  Editor::NewChart c;
+  c.data = Range{0, 0, 1, 0};  // A1:A2
+  CHECK(ed.InsertChart(0, c));
+  c.data = Range{0, 1, 1, 1};  // B1:B2
+  CHECK(ed.InsertChart(0, c));
+  const std::string other = ed.PartBytes("/xl/charts/chart2.xml");
+  CHECK(ed.SetCell(0, 1, 0, CellInput::Number(0.25)));
+  std::vector<uint8_t> saved = SaveBytes(*book, ed, "save-chart-caches");
+  CheckClean(saved);
+  const std::string chart = PartText(saved, "/xl/charts/chart1.xml");
+  CHECK(chart.find("<c:pt idx=\"1\"><c:v>0.25</c:v></c:pt>") != std::string::npos && chart.find("<c:v>2</c:v>") == std::string::npos);
+  CHECK(PartText(saved, "/xl/charts/chart2.xml") == other);
+  CHECK(ed.PartBytes("/xl/charts/chart1.xml").find("<c:v>2</c:v>") != std::string::npos);  // the package keeps the file's
+}
+
 // A drawing part's objects (s3-charts): found by shape id with their bytes, placed, and the
 // relationships they use.
 TEST(sheet_drawing_objects) {

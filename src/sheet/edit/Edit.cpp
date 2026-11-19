@@ -2921,35 +2921,7 @@ Result Editor::ShiftCells(int sheet, const Shift& sh, std::u16string stepName) {
           if (fn(xml)) st.SetPart(part, std::move(xml));
         };
         refs::CacheFn cache = [&](std::string_view f, bool visibleOnly, std::vector<refs::CachePoint>& out) {
-          size_t bang = f.rfind('!');
-          if (bang == std::string_view::npos) return false;
-          std::string sn(f.substr(0, bang));
-          if (sn.size() >= 2 && sn.front() == '\'' && sn.back() == '\'') {
-            std::string u;
-            for (size_t k = 1; k + 1 < sn.size(); ++k) {
-              u += sn[k];
-              if (sn[k] == '\'' && k + 2 < sn.size() && sn[k + 1] == '\'') ++k;
-            }
-            sn = std::move(u);
-          }
-          Range r;
-          int xi = book_.FindSheet(sn);
-          if (xi < 0 || !ParseRange(f.substr(bang + 1), r) || (r.firstRow != r.lastRow && r.firstCol != r.lastCol) ||
-              static_cast<uint64_t>(r.lastRow - r.firstRow) + (r.lastCol - r.firstCol) > 100000)
-            return false;
-          const Sheet& x = book_.GetSheet(static_cast<size_t>(xi));
-          for (uint32_t row = r.firstRow; row <= r.lastRow; ++row)
-            for (uint32_t col = r.firstCol; col <= r.lastCol; ++col) {
-              if (visibleOnly && (x.Row(row).hidden || x.Column(col).hidden)) continue;
-              Value v = x.GetValue(row, col);
-              refs::CachePoint p;
-              if (v.type == ValueType::Number) p = {refs::CachePoint::Number, Number(v.number)};
-              else if (v.type == ValueType::String) p = {refs::CachePoint::Text, std::string(v.text)};
-              else if (v.type == ValueType::Bool) p = {refs::CachePoint::Text, v.boolean ? "TRUE" : "FALSE"};
-              else if (v.type == ValueType::Error) p = {refs::CachePoint::Text, "#N/A"};
-              out.push_back(std::move(p));
-            }
-          return true;
+          return charts::CachePoints(book_, f, visibleOnly, out);
         };
         for (size_t i = 0; i < book_.SheetCount(); ++i) {
           Sheet& x = book_.GetSheet(i);
@@ -3807,6 +3779,53 @@ Result Editor::MoveObject(int sheet, uint32_t id, const drawing::Place& p) {
     return Run(*this, u"Move Object", [&]() -> Result {
       if (!ReplaceAnchor(d, id, placed)) return Result::Fail(u"This object can't be moved.");
       s_->Change(&book_.GetSheet(static_cast<size_t>(sheet)), kObjects, Range{p.from.row, p.from.col, p.to.row, p.to.col});
+      return Result{};
+    });
+  }());
+}
+
+std::string Editor::ChartPart(int sheet, uint32_t id) const {
+  const pkg::Package* package = book_.GetPackage();
+  if (!package || sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return {};
+  const std::string sheetPart = book_.GetSheet(static_cast<size_t>(sheet)).PartName();
+  const pkg::RelationshipSet* rels = sheetPart.empty() ? nullptr : package->RelationshipsOf(sheetPart);
+  for (size_t i = 0; rels && i < rels->items.size(); ++i) {
+    const pkg::Relationship& r = rels->items[i];
+    if (r.external || !EndsWith(r.type, "/drawing")) continue;
+    const std::string anchor = AnchorXml(r.targetPart, id);
+    const pkg::RelationshipSet* own = anchor.empty() ? nullptr : package->RelationshipsOf(r.targetPart);
+    for (const std::string& rid : drawing::RelIds(anchor))
+      for (size_t k = 0; own && k < own->items.size(); ++k)
+        if (own->items[k].id == rid && !own->items[k].external &&
+            package->ContentTypeOf(own->items[k].targetPart) == "application/vnd.openxmlformats-officedocument.drawingml.chart+xml")
+          return own->items[k].targetPart;
+  }
+  return {};
+}
+
+Result Editor::EditChart(int sheet, uint32_t id, const ChartEdit& e) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::EditChart, [&](JournalRecord& w) {
+    w.I(sheet).U(id).B(e.kind.has_value()).U(e.kind ? static_cast<uint8_t>(*e.kind) : 0);
+    for (const std::optional<ChartText>* t : {&e.title, &e.xTitle, &e.yTitle})
+      w.B(t->has_value()).B(*t && (*t)->shown).S(*t ? (*t)->text : std::string());
+    w.B(e.legend.has_value()).U(e.legend ? static_cast<uint8_t>(*e.legend) : 0).B(e.labels.has_value()).B(e.labels.value_or(false));
+    w.U(e.colors.size());
+    for (const ChartColor& c : e.colors) w.U(c.series).I(c.point).U(c.rgb);
+    w.B(e.series.has_value()).U(e.series ? e.series->size() : 0);
+    if (e.series)
+      for (const ChartSeries& s : *e.series) w.S(s.name).S(s.values).S(s.categories);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    const std::string part = ChartPart(sheet, id);
+    if (part.empty()) return Result::Fail(u"That isn't a chart.");
+    std::string xml = charts::Edited(book_, PartBytes(part), e);
+    if (xml.empty()) return Result::Fail(u"This chart can't be changed that way. Check the references to the cells.");
+    return Run(*this, u"Chart", [&]() -> Result {
+      if (!WritePart(part, std::move(xml))) return Result::Fail(u"This chart can't be changed that way.");
+      s_->Change(&book_.GetSheet(static_cast<size_t>(sheet)), kObjects, Range{});
       return Result{};
     });
   }());
@@ -4867,6 +4886,122 @@ Result Editor::SetTableFilter(int sheet, size_t index, const SheetFilter& f) {
   }());
 }
 
+namespace {
+constexpr std::string_view kImageRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+
+void PutPlace(JournalRecord& w, const drawing::Place& p) {
+  for (const drawing::Marker* m : {&p.from, &p.to}) w.U(m->col).U(m->row).I(m->colOff).I(m->rowOff);
+  w.I(p.x).I(p.y).I(p.cx).I(p.cy);
+}
+
+bool PlaceOk(const drawing::Place& p) {
+  return p.from.col < kMaxCols && p.to.col < kMaxCols && p.from.row < kMaxRows && p.to.row < kMaxRows &&
+         p.to.col >= p.from.col && p.to.row >= p.from.row && p.cx >= 0 && p.cy >= 0;
+}
+}  // namespace
+
+Result Editor::InsertPicture(int sheet, const std::string& bytes, const drawing::Place& p, const std::string& altText,
+                             uint32_t* id) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::InsertPicture, [&](JournalRecord& w) {
+    w.I(sheet).S(bytes);
+    PutPlace(w, p);
+    w.S(altText);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!PlaceOk(p)) return BadRange();
+    std::string extension, type;
+    if (!data::PictureType(bytes, extension, type)) return Result::Fail(u"That isn't a picture Featherweight adds: PNG, JPEG, GIF or BMP.");
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    pkg::Package* package = book_.GetPackage();
+    if (!package || s.PartName().empty() || !package->FindPart(s.PartName()))
+      return Result::Fail(u"Save the workbook as an Excel workbook first, then insert the picture.");
+    return Run(*this, u"Insert Picture", [&]() -> Result {
+      const std::string d = SheetDrawing(sheet, true);
+      if (d.empty()) return Result::Fail(u"The picture couldn't be added to this sheet.");
+      // Stored once: a media part with the same bytes, and the drawing's own relationship to it.
+      std::string media;
+      for (const pkg::Part& part : package->Parts()) {
+        if (part.deleted || part.name.size() < 10 || !NameEqualsNoCase(std::string_view(part.name).substr(0, 10), "/xl/media/")) continue;
+        const uint64_t size = part.modified || part.entry == pkg::Part::kNoEntry
+                                  ? part.data.size()
+                                  : (part.entry < package->Zip().Entries().size() ? package->Zip().Entries()[part.entry].uncompressedSize : 0);
+        if (size == bytes.size() && PartBytes(part.name) == bytes) {
+          media = part.name;
+          break;
+        }
+      }
+      std::string rel;
+      if (!media.empty()) {
+        if (const pkg::RelationshipSet* set = package->RelationshipsOf(d))
+          for (const pkg::Relationship& r : set->items)
+            if (!r.external && r.type == kImageRel && NameEqualsNoCase(r.targetPart, media)) rel = r.id;
+        if (rel.empty()) rel = AddRelationship(d, kImageRel, media);
+      } else {
+        rel = AddPart(d, kImageRel, NewPartName("/xl/media/image", extension), type, bytes);
+      }
+      const uint32_t n = NextShapeId(d);
+      const std::string anchor = rel.empty() ? std::string() : drawing::Placed(data::PictureAnchor(n, rel, altText), p);
+      if (anchor.empty() || !AddAnchor(d, anchor)) return Result::Fail(u"The picture couldn't be added to this sheet.");
+      if (id) *id = n;
+      s_->Change(&s, kObjects, Range{p.from.row, p.from.col, p.to.row, p.to.col});
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::InsertShape(int sheet, data::ShapeKind kind, const drawing::Place& p, const std::string& text, uint32_t* id) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::InsertShape, [&](JournalRecord& w) {
+    w.I(sheet).U(static_cast<uint8_t>(kind)).S(text);
+    PutPlace(w, p);
+  });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    if (!PlaceOk(p)) return BadRange();
+    if (!book_.LoadSheet(static_cast<size_t>(sheet)).Ok()) return Result::Fail(u"This sheet couldn't be read.");
+    Sheet& s = book_.GetSheet(static_cast<size_t>(sheet));
+    pkg::Package* package = book_.GetPackage();
+    if (!package || s.PartName().empty() || !package->FindPart(s.PartName()))
+      return Result::Fail(u"Save the workbook as an Excel workbook first, then insert the shape.");
+    return Run(*this, u"Insert Shape", [&]() -> Result {
+      const std::string d = SheetDrawing(sheet, true);
+      if (d.empty()) return Result::Fail(u"The shape couldn't be added to this sheet.");
+      const uint32_t n = NextShapeId(d);
+      const std::string anchor = drawing::Placed(data::ShapeAnchor(kind, n, text), p);
+      if (anchor.empty() || !AddAnchor(d, anchor)) return Result::Fail(u"The shape couldn't be added to this sheet.");
+      if (id) *id = n;
+      s_->Change(&s, kObjects, Range{p.from.row, p.from.col, p.to.row, p.to.col});
+      return Result{};
+    });
+  }());
+}
+
+Result Editor::SetObjectXml(int sheet, uint32_t id, const std::string& xml, std::u16string stepName) {
+  Guard guard(*this);
+  if (Result no = guard.Check(sheet, ProtectAct::Objects); !no) return no;
+  Rec rec(*this, JournalOp::SetObjectXml, [&](JournalRecord& w) { w.I(sheet).U(id).S(xml).S16(stepName); });
+  return rec.Done([&]() -> Result {
+    if (sheet < 0 || static_cast<size_t>(sheet) >= book_.SheetCount()) return NoSheet();
+    const std::string d = SheetDrawing(sheet, false);
+    if (d.empty() || AnchorXml(d, id).empty()) return Result::Fail(u"The object isn't on this sheet any more.");
+    // Never damage the drawing: the new bytes read, as one object with the same id.
+    const std::vector<drawing::Object> objects = drawing::Objects("<r>" + xml + "</r>");
+    pugi::xml_document parsed;
+    if (objects.size() != 1 || objects[0].id != id || !parsed.load_buffer(xml.data(), xml.size()))
+      return Result::Fail(u"The object's new format couldn't be written.");
+    return Run(*this, stepName, [&]() -> Result {
+      if (!ReplaceAnchor(d, id, xml)) return Result::Fail(u"The object's new format couldn't be written.");
+      s_->Change(&book_.GetSheet(static_cast<size_t>(sheet)), kObjects, Range{0, 0, kMaxRows - 1, kMaxCols - 1});
+      return Result{};
+    });
+  }());
+}
+
 Result Editor::SetTabColor(int sheet, const Color& color) {
   Guard guard(*this);
   if (Result no = guard.Check(-1, ProtectAct::Structure); !no) return no;
@@ -5203,7 +5338,7 @@ Result Editor::SetThread(int sheet, CellAddr cell, const std::optional<Thread>& 
           st.SaveText(st.Save(s));
           detail::PartText& t = A::Text(s);
           xlsx::PutSheetElement(t, "legacyDrawing",
-                                id.empty() ? std::string() : "<" + xlsx::SheetPrefix(t) + "legacyDrawing r:id=\"" + id + "\"/>");
+                                id.empty() ? std::string() : "<" + xlsx::SheetPrefix(t) + "legacyDrawing " + xlsx::RelPrefix(t) + ":id=\"" + id + "\"/>");
         } else if (!WritePart(parts.vml, now.vml)) {
           return failed;
         }
@@ -5271,7 +5406,7 @@ Result Editor::SetNote(int sheet, CellAddr cell, const std::optional<Note>& note
         if (newVml.empty() && !vmlPart.empty() && !RemovePart(vmlPart)) return failed;
         st.SaveText(st.Save(s));
         detail::PartText& t = A::Text(s);
-        xlsx::PutSheetElement(t, "legacyDrawing", id.empty() ? std::string() : "<" + xlsx::SheetPrefix(t) + "legacyDrawing r:id=\"" + id + "\"/>");
+        xlsx::PutSheetElement(t, "legacyDrawing", id.empty() ? std::string() : "<" + xlsx::SheetPrefix(t) + "legacyDrawing " + xlsx::RelPrefix(t) + ":id=\"" + id + "\"/>");
       } else if (!WritePart(vmlPart, newVml)) {
         return failed;
       }

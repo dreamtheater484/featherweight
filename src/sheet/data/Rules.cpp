@@ -73,8 +73,6 @@ std::vector<std::string_view> Children(std::string_view inner, std::string_view 
   return out;
 }
 
-std::string XmlChars(std::string_view s);
-
 // Sets (or, with `remove`, takes out) an attribute in an element's start tag.
 void SetAttr(std::string& el, std::string_view name, std::string_view value, bool remove = false) {
   const size_t end = StartTagEnd(el);
@@ -128,8 +126,8 @@ std::string Prefixed(std::string_view xml, const std::string& p) {
   return out;
 }
 
-// Text without what XML 1.0 can't hold (control characters, broken UTF-8, U+FFFE and U+FFFF), so a
-// rule always reads back and Excel never has to repair the part.
+}  // namespace
+
 std::string XmlChars(std::string_view s) {
   std::string out;
   out.reserve(s.size());
@@ -154,6 +152,8 @@ std::string XmlChars(std::string_view s) {
   }
   return out;
 }
+
+namespace {
 
 std::string Esc(std::string_view s) {
   std::string out;
