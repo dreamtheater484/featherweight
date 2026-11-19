@@ -1495,6 +1495,28 @@ TEST(sheet_calc_typed_dynamic_arrays) {
   ed.Undo(2);
   settle();
   CHECK(!book->GetSheet(0).GetCell(1, 0, c) || c.value.type == fw::sheet::ValueType::Empty);
+
+  // Calculated again to a new size: the formula's ref follows (the file says how far it spills, or
+  // Excel takes the cells past its ref as typed values that block it). Blocked: the cell alone.
+  CHECK(ed.SetCell(0, 0, 3, edit::CellInput::Number(3)));  // D1
+  in = edit::CellInput::Formula("_xlfn.SEQUENCE(D1)");
+  in.dynamic = true;
+  in.arrayRange = Range{0, 5, 2, 5};  // F1:F3
+  CHECK(ed.SetCell(0, 0, 5, in));
+  settle();
+  CHECK(ed.SetCell(0, 0, 3, edit::CellInput::Number(5)));
+  settle();
+  CHECK_EQ(Number(*book, "F5"), 5.0);
+  CHECK(book->GetSheet(0).GetFormula(0, 5, f) && f.dynamic && f.ref == (Range{0, 5, 4, 5}));
+  std::string xml;
+  CHECK(fw::sheet::xlsx::WritePart(*book, book->GetSheet(0).PartName(), xml).Ok());
+  CHECK(xml.find("ref=\"F1:F5\"") != std::string::npos);
+  CHECK(ed.SetCell(0, 3, 5, edit::CellInput::Number(1)));  // F4: in the way
+  settle();
+  CHECK(book->GetSheet(0).GetFormula(0, 5, f) && f.ref == Range::Cell(0, 5));
+  CHECK(ed.SetCell(0, 3, 5, edit::CellInput::Empty()) && ed.SetCell(0, 0, 3, edit::CellInput::Number(2)));
+  settle();
+  CHECK(book->GetSheet(0).GetFormula(0, 5, f) && f.ref == (Range{0, 5, 1, 5}));
 }
 
 TEST(sheet_calc_spill_reasons) {

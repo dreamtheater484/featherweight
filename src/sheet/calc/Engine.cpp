@@ -728,6 +728,7 @@ void Engine::StoreSpill(uint32_t id, Value v) {
       host_.Store(s, r, c, x);
     }
   if (moved) {
+    host_.SpillMoved(s, n.at.row, n.at.col, want);
     Area u = want;
     u.r1 = std::min(old.r1, want.r1), u.r2 = std::max(old.r2, want.r2);
     u.c1 = std::min(old.c1, want.c1), u.c2 = std::max(old.c2, want.c2);

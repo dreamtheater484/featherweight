@@ -87,6 +87,16 @@ void WorkbookCalc::Store(int sheet, int32_t row, int32_t col, const Value& v) {
   e.first = std::max(e.first, row + 1), e.second = std::max(e.second, col + 1);
 }
 
+// The file says how far a dynamic array spills (its formula's ref): else Excel takes the cells it
+// spilled past that as typed values, which block it.
+void WorkbookCalc::SpillMoved(int sheet, int32_t row, int32_t col, const Area& out) {
+  if (sheet < 0 || sheet >= SheetCount()) return;
+  book_.GetSheet(static_cast<size_t>(sheet))
+      .SetSpillRef(static_cast<uint32_t>(row), static_cast<uint32_t>(col),
+                   Range{static_cast<uint32_t>(out.r1), static_cast<uint32_t>(out.c1), static_cast<uint32_t>(out.r2),
+                         static_cast<uint32_t>(out.c2)});
+}
+
 bool WorkbookCalc::SpillBlocked(const Area& a) {
   if (a.s1 >= book_.SheetCount()) return false;
   const Sheet& s = book_.GetSheet(a.s1);
