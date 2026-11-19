@@ -378,17 +378,19 @@ double NiceStep(double lo, double hi, int most) {
 }
 
 // Excel's automatic scale: from zero unless the values sit in a narrow band far from it, 5% of the
-// values' range past the extremes, round major units; the axis's own minimum and maximum win.
+// axis's range (from zero, when it starts there) past the extremes that aren't zero, round major
+// units; the axis's own minimum and maximum win. (Excel's PDFs: a scatter of 55..86 up to 100, of
+// 160..190 from 155; columns of 95..175 up to 200.)
 Scale MakeScale(double lo, double hi, const Axis& axis, bool zero, bool pad, int most = 10) {
   if (!std::isfinite(lo) || !std::isfinite(hi) || lo > hi) lo = 0, hi = 1;
-  const double spread = hi - lo;
+  const bool narrow = hi > lo;  // a band of values: its far side keeps its room, a single value doesn't
   if (lo > 0 && (zero || hi - lo >= hi / 6)) lo = 0;
   if (hi < 0 && (zero || hi - lo >= -lo / 6)) hi = 0;
   if (hi == lo) hi = lo + (lo == 0 ? 1 : std::fabs(lo) / 2);
   if (pad) {
-    const double room = (spread > 0 ? spread : hi - lo) * 0.05;
-    if (hi > 0) hi += room;
-    if (lo < 0) lo -= room;
+    const double room = (hi - lo) * 0.05;
+    if (hi > 0 || (hi < 0 && narrow)) hi += room;
+    if (lo < 0 || (lo > 0 && narrow)) lo -= room;
   }
   if (axis.min) lo = *axis.min;
   if (axis.max) hi = *axis.max;
@@ -949,8 +951,9 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
     cats.n = std::max(cats.n, n);
   }
   cats.n = std::max<size_t>(1, std::max(cats.n, names.size()));
-  // A value axis up the side has room for a label every 1.6 lines or so.
-  const int most = bar ? 10 : static_cast<int>((r.bottom - r.top - ts * 3) / (ts * 1.6f));
+  // A value axis up the side has room for a label every 1.6 lines or so in Word, 1.2 in Excel
+  // (Excel's PDFs: ten intervals on a 133-point plot of 9-point labels).
+  const int most = bar ? 10 : static_cast<int>((r.bottom - r.top - ts * 3) / (ts * (ch.workbook ? 1.2f : 1.6f)));
   const Scale vs = MakeScale(lo[0], hi[0], ch.value, zero[0] || percent, !percent, most);
   const Scale ss = MakeScale(lo[1], hi[1], ch.secondary, zero[1], true, most);
   const Scale xscale = MakeScale(xlo, xhi, ch.category, false, true);
