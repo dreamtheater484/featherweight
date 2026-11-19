@@ -59,11 +59,15 @@ enum class Op : uint8_t {
   Chart,        // Insert > Chart of `range` at `to`'s cell; arg: column, bar, line, pie, doughnut, area, scatter
   Object,       // the drawing's object with shape id `count`; arg: delete, move (to `range`'s first cell),
                 // copy (pasted at `range`'s first cell), type-line, type-bar, title (its chart edited),
-                // tosheet (Move Chart > New sheet)
+                // tosheet (Move Chart > New sheet), and the Format panel's (s3-data's): fill and
+                // outline (text: RRGGBB), nofill, text and alt (text: the shape's text, the alt text)
   PageSetup,    // Page Setup on `sheet`, one thing changed; arg: portrait, landscape, a4, letter,
                 // scale=<percent>, fit=<wide>,<tall>, nofit, margins=narrow|wide, center, header,
                 // gridlines, headings, order
   PageBreak,    // arg: insert (above and left of `range`'s first cell), remove (there), reset (all)
+  Shape,        // Insert > Pictures or Shapes at `range`'s first cell (s3-data's); arg: picture, picture2
+                // (two small PNGs; text: the alt text), rect, roundrect, oval, line, arrow, textbox (text:
+                // what's typed in it)
 };
 
 // One edit, as reproducers keep it. Sheets are tab indexes at the moment the edit is applied (names
@@ -92,7 +96,8 @@ struct Edit {
 //   note 0!B2 set "text" / note 0!B2 delete / thread 0!B2 comment "text" / thread 0!B2 resolve /
 //   table 0!A1:D9 add / table 0!A1 style=TableStyleLight9 / rule 0!A1:C5 greater "5" /
 //   rule 0!A1:C5 clear / validation 0!A1:A5 list "\"a,b,c\"" / chart 0!A1:C9 0!F2 column /
-//   object 0!H5 3 move / object 0!A1 3 delete / pagesetup 0 landscape / pagebreak 0!A20 insert,
+//   object 0!H5 3 move / object 0!A1 3 delete / object 0!A1 3 fill "C00000" / pagesetup 0 landscape /
+//   pagebreak 0!A20 insert / shape 0!B2 picture "alt text" / shape 0!B2 rect "text",
 //   each optionally followed by "# target".
 std::string FormatEdit(const Edit& edit);
 bool ParseEdit(std::string_view line, Edit& edit);

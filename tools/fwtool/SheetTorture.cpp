@@ -31,6 +31,7 @@
 #include <cstring>
 
 #include "sheet/data/Rules.h"
+#include "sheet/data/Shapes.h"
 #include "sheet/edit/Drawing.h"
 #include "sheet/edit/Edit.h"
 #include "sheet/edit/Protection.h"
@@ -62,7 +63,7 @@ constexpr struct {
     {Op::ProtectBook, "protect-book"}, {Op::Link, "link"},           {Op::Note, "note"},
     {Op::Thread, "thread"},         {Op::Table, "table"},             {Op::Rule, "rule"},
     {Op::Validation, "validation"}, {Op::Chart, "chart"},             {Op::Object, "object"},
-    {Op::PageSetup, "pagesetup"},   {Op::PageBreak, "pagebreak"},
+    {Op::PageSetup, "pagesetup"},   {Op::PageBreak, "pagebreak"},     {Op::Shape, "shape"},
 };
 
 // The S3 edits whose text goes after the arg, quoted.
@@ -73,6 +74,8 @@ bool TakesText(const Edit& e) {
     case Op::Thread: return e.arg == "comment";
     case Op::Rule: return e.arg == "greater" || e.arg == "between" || e.arg == "expression" || e.arg == "contains";
     case Op::Validation: return e.arg != "clear";
+    case Op::Object: return e.arg == "fill" || e.arg == "outline" || e.arg == "text" || e.arg == "alt";
+    case Op::Shape: return true;
     default: return false;
   }
 }
@@ -211,11 +214,15 @@ std::string FormatEdit(const Edit& e) {
     case Op::Table:
     case Op::Rule:
     case Op::Validation:
+    case Op::Shape:
       s += at(e.sheet, e.range) + " " + e.arg;
       if (TakesText(e)) s += " " + Quote(e.text);
       break;
     case Op::Chart: s += at(e.sheet, e.range) + at(e.sheet, e.to) + " " + e.arg; break;
-    case Op::Object: s += at(e.sheet, e.range) + " " + std::to_string(e.count) + " " + e.arg; break;
+    case Op::Object:
+      s += at(e.sheet, e.range) + " " + std::to_string(e.count) + " " + e.arg;
+      if (TakesText(e)) s += " " + Quote(e.text);
+      break;
     case Op::PageSetup: s += " " + std::to_string(e.sheet) + " " + e.arg; break;
     case Op::PageBreak: s += at(e.sheet, e.range) + " " + e.arg; break;
   }
@@ -308,6 +315,7 @@ bool ParseEdit(std::string_view line, Edit& e) {
     case Op::Table:
     case Op::Rule:
     case Op::Validation:
+    case Op::Shape:
       if (!sheetRange(e.sheet, e.range)) return false;
       e.arg = std::string(NextWord(s));
       if (e.arg.empty()) return false;
@@ -319,7 +327,8 @@ bool ParseEdit(std::string_view line, Edit& e) {
     case Op::Object:
       if (!sheetRange(e.sheet, e.range) || !number(e.count)) return false;
       e.arg = std::string(NextWord(s));
-      return !e.arg.empty();
+      if (e.arg.empty()) return false;
+      return !TakesText(e) || Unquote(s, e.text);
     case Op::PageSetup:
       if (!number(e.sheet)) return false;
       e.arg = std::string(NextWord(s));
@@ -457,6 +466,37 @@ std::string RelatedPart(const sh::Workbook& book, std::string_view source, std::
     }
   return {};
 }
+
+// A drawing place whose top left is at `r`'s first cell, `cols` default columns wide and `rows`
+// default rows high, as a drag there makes it.
+sh::edit::drawing::Place PlaceAt(const sh::Range& r, uint32_t cols, uint32_t rows) {
+  namespace dr = sh::edit::drawing;
+  constexpr int64_t kEmuPx = 9525;
+  dr::Place p;
+  p.from = dr::Marker{r.firstCol, r.firstRow, 0, 0};
+  p.to = dr::Marker{r.firstCol + cols, r.firstRow + rows, 0, 0};
+  p.x = static_cast<int64_t>(r.firstCol) * 64 * kEmuPx, p.y = static_cast<int64_t>(r.firstRow) * 20 * kEmuPx;
+  p.cx = static_cast<int64_t>(cols) * 64 * kEmuPx, p.cy = static_cast<int64_t>(rows) * 20 * kEmuPx;
+  return p;
+}
+
+// The pictures torture inserts: two small PNGs, so a picture goes in both new and stored already.
+// 4x3, red.
+constexpr unsigned char kRedPng[] = {
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x03, 0x08, 0x02, 0x00, 0x00, 0x00, 0x3B, 0x96, 0x39,
+    0x91, 0x00, 0x00, 0x00, 0x10, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x38, 0x60, 0x60, 0x00,
+    0x47, 0x0C, 0x38, 0x39, 0x00, 0x0E, 0x36, 0x0D, 0x81, 0x6E, 0x98, 0xE4, 0x10, 0x00, 0x00, 0x00,
+    0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+};
+// 8x8, blue.
+constexpr unsigned char kBluePng[] = {
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x08, 0x08, 0x02, 0x00, 0x00, 0x00, 0x4B, 0x6D, 0x29,
+    0xDC, 0x00, 0x00, 0x00, 0x11, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x70, 0x29, 0x3A, 0x82,
+    0x15, 0x31, 0x0C, 0x2D, 0x09, 0x00, 0xCC, 0xE4, 0x5E, 0x81, 0xC5, 0xA3, 0x27, 0x33, 0x00, 0x00,
+    0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+};
 
 // ---- The target with the edit API: each edit as the grid's command runs it.
 
@@ -610,16 +650,28 @@ class EditApiTarget : public SheetTarget {
           else edit.kind = e.arg == "type-line" ? sh::edit::ChartKind::Line : sh::edit::ChartKind::Bar;
           return done(ed_.EditChart(s, e.count, edit));
         }
+        if (e.arg == "fill" || e.arg == "nofill" || e.arg == "outline" || e.arg == "text" || e.arg == "alt")
+          return FormatObject(s, e, why);
         // Dragged so that its top left is at the cell: about five columns by twelve rows.
-        namespace dr = sh::edit::drawing;
-        constexpr int64_t kEmuPx = 9525;
-        dr::Place p;
-        p.from = dr::Marker{r.firstCol, r.firstRow, 0, 0};
-        p.to = dr::Marker{r.firstCol + 5, r.firstRow + 12, 0, 0};
-        p.x = static_cast<int64_t>(r.firstCol) * 64 * kEmuPx, p.y = static_cast<int64_t>(r.firstRow) * 20 * kEmuPx;
-        p.cx = 5 * 64 * kEmuPx, p.cy = 12 * 20 * kEmuPx;
+        const sh::edit::drawing::Place p = PlaceAt(r, 5, 12);
         if (e.arg == "copy") return done(ed_.PasteObject(s, ed_.CopyObject(s, e.count), p));
         return done(ed_.MoveObject(s, e.count, p));
+      }
+      case Op::Shape: {
+        namespace data = sh::data;
+        if (e.arg == "picture" || e.arg == "picture2") {
+          const std::string bytes = e.arg == "picture" ? std::string(reinterpret_cast<const char*>(kRedPng), sizeof kRedPng)
+                                                       : std::string(reinterpret_cast<const char*>(kBluePng), sizeof kBluePng);
+          return done(ed_.InsertPicture(s, bytes, PlaceAt(r, 2, 3), e.text));
+        }
+        static const std::pair<const char*, data::ShapeKind> kKinds[] = {
+            {"rect", data::ShapeKind::Rectangle}, {"roundrect", data::ShapeKind::RoundedRectangle},
+            {"oval", data::ShapeKind::Oval},      {"line", data::ShapeKind::Line},
+            {"arrow", data::ShapeKind::Arrow},    {"textbox", data::ShapeKind::TextBox}};
+        for (const auto& [name, kind] : kKinds)
+          if (e.arg == name) return done(ed_.InsertShape(s, kind, PlaceAt(r, 2, 4), e.text));
+        why = "unknown shape " + e.arg;
+        return Applied::Refused;
       }
       case Op::PageSetup: return PageSetup(s, e.arg, why);
       case Op::PageBreak: {
@@ -880,6 +932,50 @@ class EditApiTarget : public SheetTarget {
 
   // Format as Table, Total Row, the table's style and Convert to Range, as the app's table panel
   // runs them (WorkbookView::CreateTable, SetTotalRow, ChangeTable, ConvertToRange).
+  // The Format panel on object `e.count` (s3-data's WorkbookShapes.cpp): only what it offers for the
+  // object's kind (a fill for shapes, an outline for shapes, lines and pictures, text in shapes that
+  // hold it, alt text on all).
+  Applied FormatObject(int s, const Edit& e, std::string& why) {
+    namespace data = sh::data;
+    using Kind = data::ObjectFormat::Kind;
+    using Paint = data::ObjectFormat::Paint;
+    const std::string drawing = ed_.SheetDrawing(s, false);
+    const std::string anchor = drawing.empty() ? std::string() : ed_.AnchorXml(drawing, e.count);
+    if (anchor.empty()) {
+      why = "no object " + std::to_string(e.count);
+      return Applied::Refused;
+    }
+    data::ObjectFormat f = data::ReadObjectFormat(anchor);
+    const uint32_t rgb = static_cast<uint32_t>(std::strtoul(e.text.c_str(), nullptr, 16)) & 0xFFFFFF;
+    uint32_t what = data::kFormatAltText;
+    bool offered = true;
+    if (e.arg == "fill" || e.arg == "nofill") {
+      what = data::kFormatFill, offered = f.kind == Kind::Shape;
+      f.fill = e.arg == "nofill" ? Paint::None : Paint::Solid, f.fillRgb = rgb;
+    } else if (e.arg == "outline") {
+      what = data::kFormatLine, offered = f.kind != Kind::Other;
+      f.line = Paint::Solid, f.lineRgb = rgb, f.lineWidth = 2;
+    } else if (e.arg == "text") {
+      what = data::kFormatText, offered = f.hasText;
+      f.text = e.text;
+    } else {
+      f.altText = e.text;
+    }
+    if (!offered) {
+      why = "the Format panel doesn't offer " + e.arg + " for that object";
+      return Applied::Refused;
+    }
+    const std::string xml = data::FormatObject(anchor, f, what);
+    if (xml.empty()) {
+      why = "the object's anchor doesn't read";
+      return Applied::Refused;
+    }
+    const sh::edit::Result res = ed_.SetObjectXml(s, e.count, xml, what == data::kFormatAltText ? u"Alt Text" : u"Format Object");
+    if (res.ok) return Applied::Done;
+    why = Utf8(res.message);
+    return Applied::Refused;
+  }
+
   Applied Table(int s, const sh::Range& r, const std::string& what, std::string& why) {
     const sh::Sheet& sheet = book_->GetSheet(static_cast<size_t>(s));
     auto refused = [&](const sh::edit::Result& res) {
@@ -1387,7 +1483,7 @@ class Generator {
     corner.lastCol = std::min(area.lastCol, area.firstCol + 3);
     const uint32_t count = static_cast<uint32_t>(book.SheetCount());
     const std::string other = SheetRef(book.GetSheet(rng_.Below(count)).Name());
-    const uint32_t roll = rng_.Below(120);
+    const uint32_t roll = rng_.Below(126);
     if (roll >= 100) {
       ObjectEdit(book, sheet, area, roll - 100, e);
       return;
@@ -1491,8 +1587,10 @@ class Generator {
     }
   }
 
-  // Charts and the drawing's objects (s3-charts), page setup and page breaks (s3-print). `roll`: 0-19.
+  // Charts and the drawing's objects (s3-charts), pictures and shapes (s3-data), page setup and page
+  // breaks (s3-print). `roll`: 0-25.
   void ObjectEdit(const sh::Workbook& book, const sh::Sheet& sheet, const sh::Range& area, uint32_t roll, Edit& e) {
+    static const char* kTexts[] = {"", "Torture", "line one\nline two", "<&> \"quoted\"", "D\xC3\xA9penses \xE6\x97\xA5\xE6\x9C\xAC"};
     if (roll < 8) {
       e.op = Op::Chart;
       e.range = Block(area, 12, 3);
@@ -1501,7 +1599,7 @@ class Generator {
       e.to.firstCol = e.to.lastCol = std::min<uint32_t>(e.range.lastCol + 2, 16380);
       static const char* kKinds[] = {"column", "column", "bar", "line", "pie", "doughnut", "area", "scatter"};
       e.arg = rng_.Pick(kKinds);
-    } else if (roll < 12) {
+    } else if (roll < 14) {
       e.op = Op::Object;
       e.range = Cell(area);
       e.count = 1;
@@ -1512,9 +1610,19 @@ class Generator {
 #else
       (void)book;
 #endif
-      static const char* kObjectEdits[] = {"delete", "delete", "move", "move", "move", "copy", "type-line", "type-bar", "title", "tosheet"};
+      static const char* kObjectEdits[] = {"delete", "delete", "move",  "move",    "move", "copy", "type-line", "type-bar",
+                                           "title",  "tosheet", "fill", "nofill", "outline", "text", "alt"};
       e.arg = rng_.Pick(kObjectEdits);
-    } else if (roll < 17) {
+      static const char* kColors[] = {"C00000", "4472C4", "000000", "FFFFFF"};
+      if (e.arg == "fill" || e.arg == "outline") e.text = rng_.Pick(kColors);
+      else if (TakesText(e)) e.text = rng_.Pick(kTexts);
+    } else if (roll < 19) {
+      e.op = Op::Shape;
+      e.range = Cell(area);
+      static const char* kShapes[] = {"picture", "picture", "picture2", "rect", "roundrect", "oval", "line", "arrow", "textbox"};
+      e.arg = rng_.Pick(kShapes);
+      e.text = e.arg == "line" || e.arg == "arrow" ? "" : rng_.Pick(kTexts);
+    } else if (roll < 23) {
       e.op = Op::PageSetup;
       static const char* kWhat[] = {"portrait", "landscape", "a4", "letter", "scale=75", "fit=1,0", "fit=1,1", "nofit",
                                     "margins=narrow", "margins=wide", "center", "header", "gridlines", "headings", "order"};
