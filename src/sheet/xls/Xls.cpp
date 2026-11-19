@@ -40,9 +40,12 @@ struct Record {
 class Records {
  public:
   explicit Records(std::span<const uint8_t> s, size_t at = 0) : s_(s), pos_(at) {}
+  // Where the record Next gave last starts in the stream.
+  size_t Start() const { return start_; }
   // The next record with its CONTINUE records joined; false at the end or when it's cut short.
   bool Next(Record& r) {
     if (pos_ + 4 > s_.size()) return false;
+    start_ = pos_;
     r.type = static_cast<uint16_t>(s_[pos_] | s_[pos_ + 1] << 8);
     size_t len = s_[pos_ + 2] | s_[pos_ + 3] << 8;
     pos_ += 4;
@@ -62,7 +65,7 @@ class Records {
 
  private:
   std::span<const uint8_t> s_;
-  size_t pos_;
+  size_t pos_, start_ = 0;
 };
 
 // Reads strings that may run across CONTINUE records: where character data crosses into the next
@@ -356,6 +359,9 @@ struct Note {
 class Converter {
  public:
   std::vector<uint8_t> Convert(const StreamFn& streams, pkg::Status& status);
+  std::wstring password;
+  bool stopAtFilepass = false;  // NeedsPassword: only check the password
+  bool needsPassword = false;
 
  private:
   bool Globals(pkg::Status& status);
@@ -575,10 +581,24 @@ bool Converter::Globals(pkg::Status& status) {
     Bytes b(r.data);
     switch (r.type) {
       case 0x000A: goto done;  // EOF
-      case 0x002F:             // FILEPASS
-        status = pkg::Status::Fail(pkg::Status::Code::Unsupported,
-                                   "it is protected with a password, which Excel 97-2003 workbooks don't support yet.");
-        return false;
+      case 0x002F: {  // FILEPASS: the rest of the stream is encrypted
+        const std::wstring_view pw = password.empty() ? std::wstring_view(L"VelvetSweatshop") : std::wstring_view(password);
+        const detail::CryptResult cr = detail::DecryptWorkbook(stream_, rs.Start(), stopAtFilepass ? std::wstring_view(L"VelvetSweatshop") : pw);
+        if (cr == detail::CryptResult::WrongPassword) {
+          needsPassword = true;
+          status = pkg::Status::Fail(pkg::Status::Code::Rejected, password.empty() ? "it is protected with a password."
+                                                                                  : "the password is wrong.");
+          return false;
+        }
+        if (cr != detail::CryptResult::Ok) {
+          status = pkg::Status::Fail(cr == detail::CryptResult::Damaged ? pkg::Status::Code::Damaged : pkg::Status::Code::Unsupported,
+                                     cr == detail::CryptResult::Damaged ? "it seems to be damaged."
+                                                                        : "it is protected in a way Featherweight doesn't support.");
+          return false;
+        }
+        if (stopAtFilepass) return false;
+        break;
+      }
       case 0x0022: date1904_ = b.U16() == 1; break;
       case 0x000E: fullPrecision_ = b.U16() != 0; break;
       case 0x0012: wbProtect_ = b.U16() != 0; break;
@@ -1192,7 +1212,7 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
   };
   std::vector<Sel> sels;
   bool protect = false, objects = false, scenarios = false;
-  uint16_t password = 0;
+  uint16_t sheetPassword = 0;
   ExtColor tab;
   int tabIcv = -1;
   bool autoFilter = false;
@@ -1599,7 +1619,7 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
         break;
       }
       case 0x0012: protect = b.U16() != 0; break;
-      case 0x0013: password = b.U16(); break;
+      case 0x0013: sheetPassword = b.U16(); break;
       case 0x0063: objects = b.U16() != 0; break;
       case 0x00DD: scenarios = b.U16() != 0; break;
       case 0x009D: autoFilter = true; break;  // AUTOFILTERINFO
@@ -1866,9 +1886,9 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
   o += "</sheetData>";
   if (protect) {
     o += "<sheetProtection";
-    if (password) {
+    if (sheetPassword) {
       char buf[8];
-      std::snprintf(buf, sizeof buf, "%04X", password);
+      std::snprintf(buf, sizeof buf, "%04X", sheetPassword);
       Attr(o, "password", buf);
     }
     o += " sheet=\"1\"";
@@ -2125,10 +2145,19 @@ std::vector<uint8_t> Converter::Convert(const StreamFn& streams, pkg::Status& st
 
 }  // namespace
 
-std::vector<uint8_t> ToXlsx(const StreamFn& streams, pkg::Status& status) {
+std::vector<uint8_t> ToXlsx(const StreamFn& streams, pkg::Status& status, std::wstring_view password) {
   status = {};
   Converter c;
+  c.password = password;
   return c.Convert(streams, status);
+}
+
+bool NeedsPassword(const StreamFn& streams) {
+  pkg::Status status;
+  Converter c;
+  c.stopAtFilepass = true;
+  c.Convert(streams, status);
+  return c.needsPassword;
 }
 
 bool IsWorkbook(const StreamFn& streams) { return streams("Workbook").has_value() || streams("Book").has_value(); }

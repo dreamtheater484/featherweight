@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -24,9 +25,18 @@ using StreamFn = std::function<std::optional<std::vector<uint8_t>>(std::string_v
 // understand is left out (a formula it can't write keeps its value); damaged input never crashes or
 // hangs. The workbook is then edited and saved as an .xlsx; the .xls itself is never written.
 //
-// Fails with a plain message for Excel 5.0/95 and older files and for password-protected files
-// (Status::Unsupported), and for files that aren't Excel workbooks or are damaged (Damaged).
-std::vector<uint8_t> ToXlsx(const StreamFn& streams, pkg::Status& status);
+// An encrypted workbook (RC4 or RC4 CryptoAPI) is decrypted with `password`, or with Excel's default
+// one ("VelvetSweatshop", which Excel uses when only the workbook's structure is protected) when it
+// is empty. The .xlsx made isn't encrypted.
+//
+// Fails with a plain message for Excel 5.0/95 and older files and for encryption it can't read
+// (Status::Unsupported), for a missing or wrong password (Status::Rejected: NeedsPassword says
+// which files ask for one), and for files that aren't Excel workbooks or are damaged (Damaged).
+std::vector<uint8_t> ToXlsx(const StreamFn& streams, pkg::Status& status, std::wstring_view password = {});
+
+// Whether the workbook is encrypted with a password of its own (not Excel's default one), which
+// the user must give.
+bool NeedsPassword(const StreamFn& streams);
 
 // Whether a compound file's streams look like an Excel workbook: it has a "Workbook" (BIFF8) or
 // "Book" (BIFF5, refused by ToXlsx with a message) stream.

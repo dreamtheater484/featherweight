@@ -115,6 +115,11 @@ struct FormulaContext {
 bool Decompile(const FormulaContext& ctx, std::span<const uint8_t> rgce, std::span<const uint8_t> rgcb, uint32_t row,
                uint32_t col, std::string& out);
 
+// Decrypts an encrypted Workbook stream in place: every record after the FILEPASS record that
+// starts at `filepassAt` (Crypt.cpp).
+enum class CryptResult { Ok, WrongPassword, Unsupported, Damaged };
+CryptResult DecryptWorkbook(std::vector<uint8_t>& stream, size_t filepassAt, std::wstring_view password);
+
 // Cell names: "A1", "$A$1" (rows and columns 0-based).
 void AppendCol(std::string& out, uint32_t col);
 // A sheet name as formulas write it: quoted when it must be.
