@@ -170,6 +170,8 @@ int WorkbookView::ShortcutFor(UINT vk, UINT mods) const {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
   // New Comment, as in Word (S3, s3-review).
   if (ctrl && alt && !shift && vk == 'M') return editor_.Active() || preview_ ? 0 : CmdNewComment;
+  // Refresh and Refresh All, as Excel (S4, s4-pivot).
+  if (alt && !shift && vk == VK_F5) return editor_.Active() || preview_ ? 0 : ctrl ? CmdPivotRefreshAll : CmdPivotRefresh;
   if (ctrl && !alt && !shift) {
     switch (vk) {
       case VK_NEXT: return CmdNextSheet;
@@ -245,6 +247,7 @@ CommandState WorkbookView::QueryCommand(int cmd) {
   if (FormatCommandState(cmd, s)) return s;
   if (DataCommandState(cmd, s)) return s;
   if (RulesCommandState(cmd, s)) return s;
+  if (PivotsCommandState(cmd, s)) return s;  // s4-pivot
   if (ShapesCommandState(cmd, s)) return s;  // s3-data: pictures and shapes
   if (NamesCommandState(cmd, s)) return s;
   if (ChartsCommandState(cmd, s)) return s;  // s3-charts
@@ -344,6 +347,7 @@ bool WorkbookView::Execute(int cmd) {
   if (FormatCommand(cmd)) return true;
   if (DataCommand(cmd)) return true;
   if (RulesCommand(cmd)) return true;
+  if (PivotsCommand(cmd)) return true;  // s4-pivot
   if (ShapesCommand(cmd)) return true;  // s3-data: pictures and shapes
   if (NamesCommand(cmd)) return true;
   if (ChartsCommand(cmd)) return true;  // s3-charts

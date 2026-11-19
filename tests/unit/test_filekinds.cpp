@@ -68,7 +68,8 @@ TEST(FileKinds_ThePdfReaderTheDocumentEditorAndTheSpreadsheetViewerHaveShipped) 
   CHECK(!Opens(L"notes.txt") && !Opens(L"letter.rtf") && Opens(L"old.doc"));  // .doc is imported (D5)
   CHECK(Opens(L"Budget.xlsx") && Opens(L"export.CSV") && Opens(L"data.tsv"));  // S1
   CHECK(Opens(L"old.XLS"));  // .xls is imported (S4)
-  CHECK(!Opens(L"sheet.ods") && !Opens(L"Deck.pptx") && !Opens(L"photo.png"));
+  CHECK(Opens(L"sheet.ods") && Opens(L"Form.OTS"));  // .ods is imported (S4)
+  CHECK(!Opens(L"Deck.pptx") && !Opens(L"photo.png"));
 }
 
 TEST(FileKinds_EditorsForTesting) {

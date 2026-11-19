@@ -10,6 +10,7 @@
 #include "core/Strings.h"
 #include "doc/msdoc/MsDoc.h"
 #include "pkg/CompoundFile.h"
+#include "sheet/ods/Ods.h"
 #include "sheet/xls/Xls.h"
 
 namespace fwtool {
@@ -181,7 +182,7 @@ std::vector<std::filesystem::path> CollectSorted(const std::filesystem::path& di
        it.increment(ec)) {
     if (!it->is_regular_file(ec)) continue;
     std::wstring ext = fw::ToLower(it->path().extension().wstring());
-    for (const wchar_t* known : {L".docx", L".docm", L".dotx", L".dotm", L".doc", L".xlsx", L".xlsm", L".xltx", L".xltm", L".xls",
+    for (const wchar_t* known : {L".docx", L".docm", L".dotx", L".dotm", L".doc", L".xlsx", L".xlsm", L".xltx", L".xltm", L".xls", L".ods", L".ots",
                                  L".pptx", L".pptm", L".potx", L".potm", L".ppsx", L".ppsm"})
       if (ext == known) files.push_back(it->path());
   }
@@ -243,6 +244,13 @@ std::unique_ptr<fw::pkg::Package> OpenPackage(const std::filesystem::path& file,
     std::vector<uint8_t> docx = ConvertDoc(file, status);
     if (docx.empty()) return nullptr;
     return fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(docx)), fw::pkg::Limits::Default(), status);
+  }
+  if (const std::wstring ext = fw::ToLower(file.extension().wstring()); ext == L".ods" || ext == L".ots") {
+    // S4: an OpenDocument spreadsheet, converted as the app converts it.
+    auto source = fw::pkg::Snapshot::Open(file.wstring(), {}, status);
+    std::vector<uint8_t> xlsx;
+    if (!source || !(status = fw::sheet::ods::OdsToXlsx(source->Bytes(), xlsx)).Ok()) return nullptr;
+    return fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(xlsx)), fw::pkg::Limits::Default(), status);
   }
   fw::pkg::Snapshot::Options options;
   std::error_code ec;

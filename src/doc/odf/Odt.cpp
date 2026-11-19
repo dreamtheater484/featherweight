@@ -12,6 +12,7 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "pkg/Odf.h"
 #include "pkg/Snapshot.h"
 #include "pkg/XmlDom.h"
 #include "pkg/Zip.h"
@@ -32,44 +33,12 @@ constexpr std::string_view kWml = "application/vnd.openxmlformats-officedocument
 constexpr std::string_view kRel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
 constexpr int kMaxDepth = 64;  // nested lists, tables, spans: deeper content is written flat
 
-std::string Esc(std::string_view s) {
-  std::string out;
-  out.reserve(s.size());
-  for (char c : s) {
-    switch (c) {
-      case '&': out += "&amp;"; break;
-      case '<': out += "&lt;"; break;
-      case '>': out += "&gt;"; break;
-      case '"': out += "&quot;"; break;
-      default: out += c;
-    }
-  }
-  return out;
-}
+std::string Esc(std::string_view s) { return pkg::odf::Escape(s); }
 
 std::string_view Attr(xml_node n, const char* name) { return n.attribute(name).value(); }
 
-// ODF lengths ("2.5cm", "0.5in", "12pt") in points.
-std::optional<double> Points(std::string_view v) {
-  size_t i = 0;
-  while (i < v.size() && (std::isdigit(static_cast<unsigned char>(v[i])) || v[i] == '.' || v[i] == '-' || v[i] == '+')) ++i;
-  if (i == 0) return std::nullopt;
-  double n = 0;
-  try {
-    n = std::stod(std::string(v.substr(0, i)));
-  } catch (...) {
-    return std::nullopt;
-  }
-  if (!std::isfinite(n) || std::abs(n) > 1e6) return std::nullopt;
-  const std::string_view unit = v.substr(i);
-  if (unit == "pt") return n;
-  if (unit == "cm") return n * 72 / 2.54;
-  if (unit == "mm") return n * 72 / 25.4;
-  if (unit == "in" || unit == "inch") return n * 72;
-  if (unit == "pc") return n * 12;
-  if (unit == "px") return n * 0.75;
-  return std::nullopt;
-}
+using pkg::odf::Color;
+using pkg::odf::Points;
 std::optional<int> Twips(std::string_view v) {
   auto p = Points(v);
   if (!p) return std::nullopt;
@@ -79,33 +48,7 @@ int64_t Emu(std::string_view v, int64_t fallback) {
   auto p = Points(v);
   return p && *p > 0 ? static_cast<int64_t>(*p * 12700) : fallback;
 }
-// "#1f4e79" as "1F4E79"; empty for "transparent" or anything else.
-std::string Color(std::string_view v) {
-  if (v.size() != 7 || v[0] != '#') return {};
-  std::string out;
-  for (char c : v.substr(1)) {
-    if (!std::isxdigit(static_cast<unsigned char>(c))) return {};
-    out += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-  }
-  return out;
-}
-// An encoded ODF name as people read it: "_20_" is a space.
-std::string Display(std::string_view name) {
-  std::string out;
-  for (size_t i = 0; i < name.size(); ++i) {
-    if (name[i] == '_' && i + 3 < name.size() && name[i + 3] == '_' && std::isxdigit(static_cast<unsigned char>(name[i + 1])) &&
-        std::isxdigit(static_cast<unsigned char>(name[i + 2]))) {
-      const int c = std::stoi(std::string(name.substr(i + 1, 2)), nullptr, 16);
-      if (c >= 0x20 && c < 0x7F) {
-        out += static_cast<char>(c);
-        i += 3;
-        continue;
-      }
-    }
-    out += name[i];
-  }
-  return out;
-}
+std::string Display(std::string_view name) { return pkg::odf::DisplayName(name); }
 
 // A style name as Word's style id: letters and digits ("Text_20_body" is "Textbody").
 std::string StyleId(std::string_view name) {
@@ -298,24 +241,13 @@ struct ParaProps {
 
 // ODF's borders ("0.5pt solid #000000") as WordprocessingML's.
 std::string Border(const char* side, std::string_view v) {
-  if (v.empty()) return {};
+  const auto b = pkg::odf::ParseBorder(v);
+  if (!b) return {};
   if (v == "none") return std::string("<w:") + side + " w:val=\"nil\"/>";
-  std::string width, style = "single", color = "auto";
-  size_t at = 0;
-  while (at < v.size()) {
-    size_t end = v.find(' ', at);
-    if (end == std::string_view::npos) end = v.size();
-    const std::string_view word = v.substr(at, end - at);
-    if (auto c = Color(word); !c.empty()) color = c;
-    else if (Points(word)) width = std::string(word);
-    else if (word == "double") style = "double";
-    else if (word == "dashed") style = "dashed";
-    else if (word == "dotted") style = "dotted";
-    at = end + 1;
-  }
-  const int eighths = std::clamp(static_cast<int>(std::lround(Points(width).value_or(0.5) * 8)), 2, 96);
+  const std::string style = b->style == "double" || b->style == "dashed" || b->style == "dotted" ? b->style : "single";
+  const int eighths = std::clamp(static_cast<int>(std::lround(b->width * 8)), 2, 96);
   return std::string("<w:") + side + " w:val=\"" + style + "\" w:sz=\"" + std::to_string(eighths) +
-         "\" w:space=\"0\" w:color=\"" + color + "\"/>";
+         "\" w:space=\"0\" w:color=\"" + (b->color.empty() ? std::string("auto") : b->color) + "\"/>";
 }
 
 // ---------- The converter ----------
@@ -415,55 +347,7 @@ class Converter {
 };
 
 pkg::Status Converter::Load(const char* name, pkg::XmlDom& dom, bool required) {
-  const pkg::ZipEntry* e = zip_.Find(name);
-  if (!e) {
-    return required ? pkg::Status::Fail(pkg::Status::Code::Damaged, "This isn't an OpenDocument text document.")
-                    : pkg::Status{};
-  }
-  std::vector<uint8_t> bytes;
-  if (pkg::Status st = zip_.Read(*e, bytes); !st.Ok()) return st;
-  if (pkg::Status st = dom.Parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), limits_, name);
-      !st.Ok())
-    return st;
-  // ODF's usual prefixes, whatever the file declares (pugixml keeps names as written).
-  static const std::pair<std::string_view, std::string_view> kCanon[] = {
-      {"urn:oasis:names:tc:opendocument:xmlns:office:1.0", "office"},
-      {"urn:oasis:names:tc:opendocument:xmlns:style:1.0", "style"},
-      {"urn:oasis:names:tc:opendocument:xmlns:text:1.0", "text"},
-      {"urn:oasis:names:tc:opendocument:xmlns:table:1.0", "table"},
-      {"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0", "draw"},
-      {"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0", "fo"},
-      {"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0", "svg"},
-      {"http://www.w3.org/1999/xlink", "xlink"}};
-  std::map<std::string, std::string> renames;
-  for (pugi::xml_attribute a : dom.Root().attributes()) {
-    const std::string_view n = a.name();
-    if (!n.starts_with("xmlns:")) continue;
-    for (const auto& [uri, prefix] : kCanon)
-      if (uri == a.value() && n.substr(6) != prefix) renames[std::string(n.substr(6))] = std::string(prefix);
-  }
-  if (renames.empty()) return {};
-  auto rename = [&](auto&& item) {
-    const std::string_view n = item.name();
-    const size_t colon = n.find(':');
-    if (colon == std::string_view::npos || n.starts_with("xmlns")) return;
-    if (auto it = renames.find(std::string(n.substr(0, colon))); it != renames.end())
-      item.set_name((it->second + std::string(n.substr(colon))).c_str());
-  };
-  for (xml_node n = dom.Root(); n;) {
-    if (n.type() == pugi::node_element) {
-      rename(n);
-      for (pugi::xml_attribute a : n.attributes()) rename(a);
-    }
-    if (n.first_child()) {
-      n = n.first_child();
-      continue;
-    }
-    while (n && !n.next_sibling() && n != dom.Root()) n = n.parent();
-    if (!n || n == dom.Root()) break;
-    n = n.next_sibling();
-  }
-  return {};
+  return pkg::odf::LoadPart(zip_, name, dom, limits_, required, "This isn't an OpenDocument text document.");
 }
 
 void Converter::ReadStyles(xml_node root, int scope) {
@@ -1370,14 +1254,8 @@ std::string Converter::SectPr() {
 }
 
 pkg::Status Converter::Run(std::vector<uint8_t>& docx) {
-  if (const pkg::ZipEntry* m = zip_.Find("mimetype")) {
-    std::vector<uint8_t> type;
-    if (zip_.Read(*m, type).Ok()) {
-      const std::string_view t(reinterpret_cast<const char*>(type.data()), type.size());
-      if (!t.starts_with("application/vnd.oasis.opendocument.text"))
-        return pkg::Status::Fail(pkg::Status::Code::Unsupported, "This OpenDocument file isn't a text document.");
-    }
-  }
+  if (const std::string t = pkg::odf::MimeType(zip_); !t.empty() && !t.starts_with("application/vnd.oasis.opendocument.text"))
+    return pkg::Status::Fail(pkg::Status::Code::Unsupported, "This OpenDocument file isn't a text document.");
   if (pkg::Status st = Load("content.xml", content_, true); !st.Ok()) return st;
   if (pkg::Status st = Load("styles.xml", styles_, false); !st.Ok()) return st;
   ReadStyles(styles_.Root(), 1);

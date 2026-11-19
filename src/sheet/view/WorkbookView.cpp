@@ -10,6 +10,7 @@
 #include "pkg/Snapshot.h"
 #include "sheet/csv/Csv.h"
 #include "sheet/numfmt/NumLocale.h"
+#include "sheet/ods/Ods.h"
 #include "sheet/view/WorkbookFilter.h"
 #include "sheet/view/WorkbookFormat.h"
 #include "sheet/view/WorkbookPanels.h"
@@ -133,6 +134,24 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     snapshot.reset();  // the model has the values: the file's copy goes before the grid is built
     return Opened(std::move(csvBook), error);
   }
+  // An OpenDocument spreadsheet is converted, and the tab is a copy that Save As saves as an .xlsx:
+  // the file itself is never written to. A template (.ots) makes a new workbook.
+  if (!fromBytes_ && snapshot && (EndsWithNoCase(path_, L".ods") || EndsWithNoCase(path_, L".ots"))) {
+    std::vector<uint8_t> xlsx;
+    st = ods::OdsToXlsx(snapshot->Bytes(), xlsx);
+    if (!st.Ok()) {
+      error = st.code == pkg::Status::Code::Damaged || st.code == pkg::Status::Code::Unsupported
+                  ? name + L" couldn't be opened — it seems to be damaged or isn't an OpenDocument spreadsheet."
+                  : OpenError(name, st);
+      return OpenResult::Failed;
+    }
+    snapshot = pkg::Snapshot::FromBytes(std::move(xlsx));
+    if (newNumber_ == 0) {
+      file_->Copy(name, path_.substr(0, path_.size() - 4) + L".xlsx", false);
+      imported_ = name;
+      path_.clear();
+    }
+  }
   // An Excel 97-2003 workbook (.xls): read into an .xlsx in memory, and the tab is a copy that Save
   // As saves as an .xlsx beside it; the .xls is never written (plan §7.1).
   std::wstring imported;
@@ -176,13 +195,16 @@ OpenResult WorkbookView::Load(const std::wstring&, std::wstring& error) {
     // A template: a new workbook from it, saved with Save As.
     file_->OpenedTemplate(path_, newNumber_);
     path_.clear();
-  } else if (!fromBytes_) {
+  } else if (!fromBytes_ && imported_.empty()) {
     file_->Opened(path_, book->GetPackage()->GetSnapshot().GetStamp());
   }
   const OpenResult r = Opened(std::move(book), error);
   // Someone else has it open in Excel: changes can only be saved as a copy.
   if (r == OpenResult::Ok)
     if (std::wstring inUse = file_->InUseMessage(); !inUse.empty()) host_.ViewMessage(BannerKind::Warning, inUse);
+  if (r == OpenResult::Ok && !imported_.empty())
+    host_.ViewMessage(BannerKind::Info, imported_ + L" is an OpenDocument spreadsheet. Saving makes a new " +
+                                            imported_.substr(0, imported_.size() - 4) + L".xlsx and leaves it as it is.");
   return r;
 }
 
@@ -209,6 +231,7 @@ OpenResult WorkbookView::Opened(std::unique_ptr<Workbook> book, std::wstring& er
   }
   sheet_ = first;
   ShowSheet(first);
+  RefreshPivotsOnOpen();  // s4-pivot: the caches whose file asks for it (refreshOnLoad)
   return OpenResult::Ok;
 }
 

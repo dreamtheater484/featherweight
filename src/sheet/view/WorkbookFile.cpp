@@ -35,7 +35,7 @@ WorkbookFile::~WorkbookFile() {
 }
 
 bool WorkbookFile::IsTemplate(const std::wstring& path) {
-  return fw::EndsWithNoCase(path, L".xltx") || fw::EndsWithNoCase(path, L".xltm");
+  return fw::EndsWithNoCase(path, L".xltx") || fw::EndsWithNoCase(path, L".xltm") || fw::EndsWithNoCase(path, L".ots");
 }
 
 void WorkbookFile::OpenedTemplate(const std::wstring& path, int number) {
