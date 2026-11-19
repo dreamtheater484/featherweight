@@ -285,7 +285,7 @@ void Sheet::SetSpillRef(uint32_t row, uint32_t col, const Range& ref) {
   rec.attrs = store_.Intern(std::move(attrs));
 }
 
-void Sheet::SetValue(uint32_t row, uint32_t col, const Value& v) {
+void Sheet::SetValue(uint32_t row, uint32_t col, const Value& v, bool result) {
   if (row >= kMaxRows || col >= kMaxCols) return;
   // Find or make the row.
   auto it = std::upper_bound(blockFirstRow_.begin(), blockFirstRow_.end(), row);
@@ -342,7 +342,7 @@ void Sheet::SetValue(uint32_t row, uint32_t col, const Value& v) {
       cell.flags |= kHasValue;
       break;
     case ValueType::String:
-      cell.type = (cell.flags & kHasFormula) ? XmlType::Str : XmlType::InlineStr;
+      cell.type = (result || (cell.flags & kHasFormula)) ? XmlType::Str : XmlType::InlineStr;
       cell.v.index = texts_.Add(v.text);
       cell.flags |= kHasValue;
       break;

@@ -419,7 +419,9 @@ class Sheet {
   // ---- Changes
   // Sets a cell's value, keeping its format and formula: recalculated results (marked computed),
   // CSV values. Strings are copied into the sheet.
-  void SetValue(uint32_t row, uint32_t col, const Value& v);
+  // `result`: a formula's, in its cell or spilled from a dynamic array: text is written t="str"
+  // with <v>, as Excel writes it (an inline string there reads as #VALUE! until recalculated).
+  void SetValue(uint32_t row, uint32_t col, const Value& v, bool result = false);
   // A dynamic array's formula at (row, col) spills over `ref` now (recalculated, as SetValue).
   void SetSpillRef(uint32_t row, uint32_t col, const Range& ref);
 

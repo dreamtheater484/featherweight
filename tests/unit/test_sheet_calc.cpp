@@ -1517,6 +1517,15 @@ TEST(sheet_calc_typed_dynamic_arrays) {
   CHECK(ed.SetCell(0, 3, 5, edit::CellInput::Empty()) && ed.SetCell(0, 0, 3, edit::CellInput::Number(2)));
   settle();
   CHECK(book->GetSheet(0).GetFormula(0, 5, f) && f.ref == (Range{0, 5, 1, 5}));
+  // Spilled text is written as Excel writes it, t="str" with <v> (s3-corpus: an inline string
+  // there reads as #VALUE! in Excel until it recalculates).
+  in = edit::CellInput::Formula("{\"a\";\"b\"}");
+  in.dynamic = true;
+  in.arrayRange = Range{0, 7, 1, 7};  // H1:H2
+  CHECK(ed.SetCell(0, 0, 7, in));
+  settle();
+  CHECK(fw::sheet::xlsx::WritePart(*book, book->GetSheet(0).PartName(), xml).Ok());
+  CHECK(xml.find("<c r=\"H2\" t=\"str\"><v>b</v></c>") != std::string::npos);
 }
 
 TEST(sheet_calc_spill_reasons) {
