@@ -367,6 +367,22 @@ struct Step {
     std::vector<pkg::Relationship> beforeItems, afterItems;
   };
   std::vector<RelBytes> relBytes;
+  // The content types part likewise (a type attribute misspelled: Serialize writes it empty).
+  struct TypeBytes {
+    std::optional<std::vector<uint8_t>> before, after;
+    pkg::ContentTypes beforeTypes, afterTypes;
+  };
+  std::optional<TypeBytes> typeBytes;
+  void PutTypeBytesBack(pkg::Package& package) const {
+    if (!typeBytes) return;
+    const pkg::ContentTypes& now = package.Types();
+    const auto same = [](const pkg::ContentTypes& a, const pkg::ContentTypes& b) {
+      return a.defaults == b.defaults && a.overrides == b.overrides;
+    };
+    const std::optional<std::vector<uint8_t>>& bytes = same(now, typeBytes->beforeTypes) ? typeBytes->before : typeBytes->after;
+    if (bytes && (same(now, typeBytes->beforeTypes) || same(now, typeBytes->afterTypes)))
+      package.SetPart(pkg::kContentTypesPart, *bytes);
+  }
   static std::string RelsPartOf(const pkg::RelationshipSet& set) {
     return set.relsPart.empty() ? pkg::RelsPartFor(set.source) : set.relsPart;
   }
@@ -418,6 +434,12 @@ struct Step {
         }
       }
       types.reset();
+      if (typeBytes) {
+        typeBytes->afterTypes = now;
+        typeBytes->after.reset();
+        std::vector<uint8_t> bytes;
+        if (p.ReadPart(pkg::kContentTypesPart, bytes).Ok()) typeBytes->after = std::move(bytes);
+      }
     }
     auto same = [](const pkg::Relationship& a, const pkg::Relationship& b) {
       return a.type == b.type && a.target == b.target && a.external == b.external;
@@ -493,6 +515,7 @@ struct Step {
         std::swap(d.beforeAt, d.afterAt);
       }
       package->SetContentTypes(std::move(t));
+      PutTypeBytesBack(*package);
     }
     // Relationships first: one put back may add its content type, which the types then settle.
     for (auto& [source, set] : rels) {
@@ -512,6 +535,7 @@ struct Step {
     if (types) {
       pkg::ContentTypes now = package->Types();
       package->SetContentTypes(std::move(*types));
+      PutTypeBytesBack(*package);
       types = std::move(now);
     }
     for (PartWas& p : parts) {
@@ -541,6 +565,7 @@ struct Step {
     for (auto& r : later.rels)
       if (std::none_of(rels.begin(), rels.end(), [&](const auto& x) { return x.first == r.first; }))
         rels.push_back(std::move(r));
+    if (!typeBytes) typeBytes = std::move(later.typeBytes);
     for (auto& r : later.relBytes)
       if (std::none_of(relBytes.begin(), relBytes.end(), [&](const RelBytes& x) { return x.source == r.source; }))
         relBytes.push_back(std::move(r));
@@ -826,6 +851,12 @@ struct Editor::State {
   void KeepTypes() {
     Step& st = Cur();
     if (!st.types) st.types = b.GetPackage()->Types();
+    if (!st.typeBytes) {
+      st.typeBytes.emplace();
+      st.typeBytes->beforeTypes = *st.types;
+      std::vector<uint8_t> bytes;
+      if (b.GetPackage()->ReadPart(pkg::kContentTypesPart, bytes).Ok()) st.typeBytes->before = std::move(bytes);
+    }
   }
   void KeepRels(const std::string& source) {
     Step& st = Cur();
