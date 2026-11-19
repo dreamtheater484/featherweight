@@ -1008,7 +1008,7 @@ void SheetLoader::ReadTop(std::string_view local, std::string_view xml) {
                         : k == "firstHeader" ? &h.firstHeader
                         : k == "firstFooter" ? &h.firstFooter
                                              : nullptr;
-      if (to) *to = TextOf(c);
+      if (to) *to = DecodeXstring(TextOf(c));  // Excel writes a CR as _x000D_
     }
   } else if (local == "rowBreaks") {
     ReadBreaks(n, s_.rowBreaks_);

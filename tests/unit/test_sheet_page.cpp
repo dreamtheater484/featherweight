@@ -13,6 +13,7 @@
 #include "sheet/view/CellText.h"
 #include "sheet/view/Grid.h"
 #include "sheet/view/PrintLayout.h"
+#include "sheet/xlsx/Internal.h"
 #include "sheet/xlsx/Xlsx.h"
 #include "text/Fonts.h"
 
@@ -315,6 +316,36 @@ TEST(sheet_page_setup_print_quality_notes_errors) {
   if (!again) return;
   const PageSetup& q = again->GetSheet(0).Page();
   CHECK(q.blackAndWhite && q.draft && q.cellComments == CellComments::AtEnd && q.errors == PrintErrors::Dash);
+}
+
+// A header's or footer's CR, control characters and a literal "_xHHHH_" as Excel writes them
+// (ST_Xstring: _x000D_, _x0001_, _x005F_x0041_), read back as they were (s4-corpus: a CR written raw
+// read back as a line feed; Excel's own _x000D_ was read as text).
+TEST(sheet_page_header_xstring) {
+  CHECK(xlsx::EncodeXstring("a\r\nb\x01\t_x0041_ _x00ZZ_ _x12_ \xEF\xBF\xBE") ==
+        "a_x000D_\nb_x0001_\t_x005F_x0041_ _x00ZZ_ _x12_ _xFFFE_");
+  for (const char* s : {"a\r\nb\x01\t_x0041_ _x005F_ _x00ZZ_ _x", "_x000d_", "\xEF\xBF\xBF\xEF\xBF\xBE end"})
+    CHECK(xlsx::DecodeXstring(xlsx::EncodeXstring(s)) == s);
+  // Excel's own: decoded as read, and written again as it was by a setup that leaves the text alone.
+  const std::string excel = "<headerFooter><oddHeader>&amp;CA_x000D_\nB</oddHeader><oddFooter>&amp;L_x005F_x0041_</oddFooter></headerFooter>";
+  auto book = OpenParts({"<sheetData/><pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/>" + excel});
+  if (!book) return;
+  CHECK(book->GetSheet(0).HeadersFooters().oddHeader == "&CA\r\nB" && book->GetSheet(0).HeadersFooters().oddFooter == "&L_x0041_");
+  Editor ed(*book);
+  PageSetup p = book->GetSheet(0).Page();
+  p.orientation = Orientation::Landscape;
+  CHECK(ed.SetPageSetup(0, p, book->GetSheet(0).HeadersFooters(), false));
+  CHECK(Has(PartText(SavePage(*book, ed), "/xl/worksheets/sheet1.xml"), excel));
+  // Set in the dialog: written as Excel would, read back as set.
+  HeaderFooter h;
+  h.oddHeader = "&CTop\rLine";
+  h.oddFooter = "&L_x0041_ and _x00ZZ_ \x01";
+  CHECK(ed.SetPageSetup(0, p, h, false));
+  const std::vector<uint8_t> zip = SavePage(*book, ed);
+  CHECK(Has(PartText(zip, "/xl/worksheets/sheet1.xml"),
+            "<headerFooter><oddHeader>&amp;CTop_x000D_Line</oddHeader><oddFooter>&amp;L_x005F_x0041_ and _x00ZZ_ _x0001_</oddFooter></headerFooter>"));
+  auto again = OpenZip(zip);
+  if (again) CHECK(again->GetSheet(0).HeadersFooters().oddHeader == h.oddHeader && again->GetSheet(0).HeadersFooters().oddFooter == h.oddFooter);
 }
 
 // Printed and exported text can be searched and copied: each glyph run says what it shows, for the
