@@ -161,8 +161,14 @@ function Get-Facts($wb, $sheets) {
       $i++
       $ch = $co.Chart
       "chart $sn $i type $($ch.ChartType) series $($ch.SeriesCollection().Count)"
+      "chart $sn $i title $(if ($ch.HasTitle) { $ch.ChartTitle.Text } else { '-' }) legend $(if ($ch.HasLegend) { $ch.Legend.Position } else { '-' })"
       $j = 0
-      foreach ($se in $ch.SeriesCollection()) { $j++; "chart $sn $i series $j $($se.Formula)"; "chart $sn $i series $j type $($se.ChartType)" }
+      foreach ($se in $ch.SeriesCollection()) {
+        $j++
+        "chart $sn $i series $j $($se.Formula)"
+        "chart $sn $i series $j type $($se.ChartType)"
+        if ($se.HasDataLabels) { "chart $sn $i series $j labels" }
+      }
     }
     foreach ($lo in $ws.ListObjects) {
       $style = try { $lo.TableStyle.Name } catch { "" }
@@ -193,6 +199,17 @@ function Get-Facts($wb, $sheets) {
     $threads = try { $ws.CommentsThreaded } catch { $null }
     if ($threads) { foreach ($t in $threads) { "comment $sn!$($t.Parent.Address($false, $false)) $(& $line $t.Text()) replies $($t.Replies.Count)" } }
     foreach ($h in $ws.Hyperlinks) { "link $sn!$($h.Range.Address($false, $false)) address $($h.Address) place $($h.SubAddress) text $($h.TextToDisplay)".TrimEnd() }
+    # Pictures and shapes (msoShapeType: 1 a shape, 9 a line, 13 a picture, 17 a text box), not
+    # charts (3, above) or notes (4): where, fill, outline and its weight, text, alt text.
+    foreach ($sp in $ws.Shapes) {
+      $type = $sp.Type
+      if ($type -eq 3 -or $type -eq 4) { continue }
+      $fill = try { if ($sp.Fill.Visible) { & $hex $sp.Fill.ForeColor.RGB } else { "none" } } catch { "-" }
+      $outline = try { if ($sp.Line.Visible) { "$(& $hex $sp.Line.ForeColor.RGB) $($sp.Line.Weight)" } else { "none" } } catch { "-" }
+      $text = try { if ($sp.TextFrame2.HasText) { & $line $sp.TextFrame2.TextRange.Text } else { "" } } catch { "" }
+      $kind = try { $sp.AutoShapeType } catch { "-" }
+      "shape $sn $($sp.Name) type $type autoshape $kind at $($sp.TopLeftCell.Address($false, $false)) fill $fill line $outline text $text alt $(& $line $sp.AlternativeText)".TrimEnd()
+    }
     if ($ws.ProtectContents) { "protect $sn contents formatcells $($ws.Protection.AllowFormattingCells) insertrows $($ws.Protection.AllowInsertingRows)" }
     $ps = $ws.PageSetup
     "pagesetup $sn orientation $($ps.Orientation) zoom $($ps.Zoom) wide $($ps.FitToPagesWide) tall $($ps.FitToPagesTall) titlerows $($ps.PrintTitleRows) titlecols $($ps.PrintTitleColumns) area $($ps.PrintArea)"
@@ -525,6 +542,14 @@ function ConvertTo-AppScript([string]$stepsPath, [string]$target, [string]$pdf) 
       "move-chart" { $ops.Add("cmd:2811") }  # Move Chart > New sheet: the selected chart on a chart sheet, which shows
       # Page setup: s3-print's script op (WorkbookPageSetup.cpp), key=value as it takes them.
       "pagesetup" { $ops.Add("pagesetup:" + ($rest.Trim() -replace ';', '\;')) }
+      # Anything else through the app's script (App::RunScript): Go to a range, typing, a key, a
+      # command id (src\Commands.h), or a raw script op as the app takes it (`app object:rect`;
+      # a ';' inside written "\;"). A new object is selected after it's inserted.
+      "select" { Select-Ref $first }
+      "type" { Add-Typed $quoted }
+      "key" { $ops.Add("key:" + $rest.Trim()) }
+      "cmd" { $ops.Add("cmd:$first") }
+      "app" { $ops.Add($rest.Trim()) }
       "save" { $ops.Add("saveas:$target") }
       "expect" { }  # a fixture's fact, checked in Excel's read-back
       default { throw "line ${n}: unknown step '$op'" }
