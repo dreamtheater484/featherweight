@@ -725,6 +725,10 @@ LRESULT App::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       for (auto& t : tabs_)
         if (reinterpret_cast<LPARAM>(t.get()) == lp) t->SaveDone();
       return 0;
+    case kWorkDoneMessage:
+      for (auto& t : tabs_)
+        if (reinterpret_cast<LPARAM>(t.get()) == lp) t->WorkDone();
+      return 0;
     case WM_COMMAND:
       if (HIWORD(wp) == 0 && lp == 0) {
         Execute(LOWORD(wp));

@@ -164,7 +164,7 @@ class SheetWriter {
     WriteAttrs(out_, s_.Attributes(formula.attrs));
     if (formula.text != kNone && !texts.Get(formula.text).empty()) {
       out_ += '>';
-      pkg::AppendEscapedText(out_, texts.Get(formula.text));
+      AppendXstringText(out_, texts.Get(formula.text));  // ST_Formula: Excel writes "_x0041_" as "_x005F_x0041_"
       Close("f");
     } else {
       out_ += "/>";
@@ -301,7 +301,7 @@ class SheetWriter {
             break;
           case XmlType::Str:
           case XmlType::InlineStr:
-            pkg::AppendEscapedText(out_, texts.Get(c.v.index));
+            AppendXstringText(out_, texts.Get(c.v.index));  // a CR as _x000D_, as Excel
             break;
           case XmlType::B:
             out_ += c.v.index ? '1' : '0';
@@ -323,7 +323,7 @@ class SheetWriter {
       Open("t");
       if (c.flags & kPreserve) out_ += " xml:space=\"preserve\"";
       out_ += '>';
-      pkg::AppendEscapedText(out_, texts.Get(c.v.index));
+      AppendXstringText(out_, texts.Get(c.v.index));
       Close("t");
       Close("is");
     }
@@ -366,7 +366,7 @@ void WriteStrings(const StringTable& table, std::string& out) {
     out += '<' + p + "si><" + p + 't';
     if (table.Flags(id) & StringTable::kPreserve) out += " xml:space=\"preserve\"";
     out += '>';
-    pkg::AppendEscapedText(out, table.Text(id));
+    AppendXstringText(out, table.Text(id));  // a CR as _x000D_, "_x0041_" as _x005F_x0041_
     out += "</" + p + "t></" + p + "si>";
   }
   while (k < part.kept.size()) out += part.kept[k++].second;

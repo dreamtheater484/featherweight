@@ -370,3 +370,64 @@ TEST(WorkbookFile_AutosaveJournalsTheEdits) {
   WorkbookFile other;
   CHECK(other.JournalFor(packageless) == nullptr);
 }
+
+// A CSV tab's autosave is its values as CSV until it holds more than CSV keeps (a chart, as s4's
+// W7 allows): then it's the workbook, as an .xlsx tab's autosave is, and recovery opens it as an
+// unsaved .xlsx named after the file, Save As beside it, with the chart and the edits. The tab is
+// still the CSV file: saved, the file's rows are as they were and the edited one is new.
+TEST(WorkbookFile_CsvAutosaveKeepsAChartAsAWorkbook) {
+  Folder f;
+  const std::wstring path = f.path + L"\\Prices.csv";
+  CHECK(test::WriteFileBytes(path, Bytes("Item,Price\r\nTea,2.5\r\nCoffee,3\r\n")));
+  csv::Options o;
+  o.locale = &EnUsLocale();
+  fw::pkg::Snapshot::Stamp stamp;
+  auto book = OpenCsv(path, o, stamp);
+  if (!book) return;
+  Editor ed(*book);
+  WorkbookFile file;
+  file.Opened(path, stamp);
+  file.SetCsvOptions(o);
+  CHECK(file.JournalFor(*book) == nullptr);
+  ed.OnChange([&](const std::vector<edit::Change>&) { file.Changed(ed.Modified(), {}); });
+  fw::pkg::recovery::Entry entry;
+  std::vector<uint8_t> bytes;
+  auto autosaved = [&]() {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((WorkbookFile::Config().recovery + L"\\*.fwr").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    FindClose(h);
+    return fw::pkg::recovery::Read(WorkbookFile::Config().recovery + L"\\" + fd.cFileName, entry, bytes);
+  };
+  // Values only: CSV, recovered as the CSV file it is.
+  CHECK(ed.SetCell(0, 2, 0, CellInput::Text("Cocoa")));
+  file.Autosave(*book, ed);
+  CHECK(autosaved() && entry.title == L"Prices.csv" && entry.originalPath == path);
+  const std::string text(bytes.begin(), bytes.end());
+  CHECK(text.find("Cocoa") != std::string::npos && text.find("xl/workbook.") == std::string::npos);
+  std::wstring name = entry.title, suggested = entry.originalPath;
+  CHECK(!WorkbookFile::RecoveredAsWorkbook(bytes, name, suggested) && name == L"Prices.csv" && suggested == path);
+  // A chart: the workbook, the tab unchanged.
+  Editor::NewChart c;
+  c.data = Range{0, 0, 2, 1};
+  CHECK(ed.InsertChart(0, c));
+  CHECK(file.AutosaveDue());
+  file.Autosave(*book, ed);
+  CHECK(!file.AutosaveDue() && file.Dirty() && ed.Modified() && !ed.Saving() && book->Format() == FileFormat::Csv);
+  CHECK(autosaved() && entry.title == L"Prices.csv");
+  CHECK(WorkbookFile::RecoveredAsWorkbook(bytes, name, suggested));
+  CHECK(name == L"Prices.xlsx" && suggested == f.path + L"\\Prices.xlsx");
+  fw::pkg::Status st;
+  auto pkg = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(std::move(bytes)), fw::pkg::Limits::Default(), st);
+  auto recovered = pkg ? xlsx::Read(std::move(pkg), st, {.loadAll = true}) : nullptr;
+  CHECK(recovered != nullptr);
+  if (recovered) {
+    CHECK_EQ(sheet_test::Text(recovered->GetSheet(0), 2, 0), std::string("Cocoa"));
+    CHECK(recovered->GetPackage()->FindPart("/xl/charts/chart1.xml") != nullptr);
+  }
+  // Saved as the CSV file (the banner's "Save as CSV"): its rows as they were, the edited one anew.
+  std::wstring error;
+  CHECK(file.Save(*book, ed, path, error));
+  CHECK(ReadAll(path) == "Item,Price\r\nTea,2.5\r\nCocoa,3\r\n");
+  WorkbookFile::RecoverySession().End();
+}

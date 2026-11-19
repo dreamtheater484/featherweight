@@ -134,6 +134,54 @@ pkg::Status Workbook::LoadAll() {
   return {};
 }
 
+void Workbook::SwapCells(Workbook& other) {
+  std::swap(styles_, other.styles_);
+  std::swap(strings_, other.strings_);
+  if (sheets_.empty() || other.sheets_.empty()) return;
+  Sheet& a = *sheets_[0];
+  Sheet& b = *other.sheets_[0];
+  std::swap(a.blocks_, b.blocks_);
+  std::swap(a.blockFirstRow_, b.blockFirstRow_);
+  std::swap(a.cellCount_, b.cellCount_);
+  std::swap(a.formulaCells_, b.formulaCells_);
+  std::swap(a.formulas_, b.formulas_);
+  std::swap(a.texts_, b.texts_);
+  std::swap(a.dimension_, b.dimension_);
+}
+
+void Workbook::SwapSheet(size_t index, Workbook& other) {
+  if (index >= sheets_.size() || index >= other.sheets_.size()) return;
+  Sheet& a = *sheets_[index];
+  Sheet& b = *other.sheets_[index];
+  std::swap(a.blocks_, b.blocks_);
+  std::swap(a.blockFirstRow_, b.blockFirstRow_);
+  std::swap(a.cellCount_, b.cellCount_);
+  std::swap(a.formulaCells_, b.formulaCells_);
+  std::swap(a.formulas_, b.formulas_);
+  std::swap(a.sharedMasters_, b.sharedMasters_);
+  std::swap(a.texts_, b.texts_);
+  std::swap(a.store_, b.store_);
+  std::swap(a.kept_, b.kept_);
+  std::swap(a.text_, b.text_);
+  std::swap(a.dimension_, b.dimension_);
+  std::swap(a.cols_, b.cols_);
+  std::swap(a.format_, b.format_);
+  std::swap(a.merges_, b.merges_);
+  std::swap(a.mergeMaxHeight_, b.mergeMaxHeight_);
+  std::swap(a.views_, b.views_);
+  std::swap(a.props_, b.props_);
+  std::swap(a.filter_, b.filter_);
+  std::swap(a.links_, b.links_);
+  std::swap(a.page_, b.page_);
+  std::swap(a.headerFooter_, b.headerFooter_);
+  std::swap(a.rowBreaks_, b.rowBreaks_);
+  std::swap(a.colBreaks_, b.colBreaks_);
+  std::swap(a.drawingRel_, b.drawingRel_);
+  std::swap(a.legacyDrawingRel_, b.legacyDrawingRel_);
+  std::swap(a.tableRels_, b.tableRels_);
+  std::swap(a.tables_, b.tables_);
+}
+
 Sheet& Workbook::AddSheet(std::string name) {
   sheets_.push_back(std::make_unique<Sheet>(*this, std::move(name)));
   sheets_.back()->loaded_ = true;

@@ -55,7 +55,7 @@ void AddRun(pugi::xml_node text, const std::string& p, bool bold, const std::str
   pugi::xml_node t = r.append_child((p + "t").c_str());
   if (!s.empty() && (s.front() == ' ' || s.front() == '\n' || s.back() == ' ' || s.find('\n') != std::string::npos))
     t.append_attribute("xml:space").set_value("preserve");
-  t.text().set(s.c_str());
+  t.text().set(xlsx::EncodeXstring(s).c_str());  // a CR as _x000D_, as Excel writes it
 }
 
 bool ParseRef(std::string_view ref, CellAddr& a) {
@@ -175,11 +175,11 @@ bool EditComments(std::string_view in, CellAddr cell, const Entry* note, std::st
     int authorId = -1, n = 0;
     for (pugi::xml_node a = authors.first_child(); a; a = a.next_sibling()) {
       if (a.type() != pugi::node_element || xlsx::Local(a) != "author") continue;
-      if (authorId < 0 && note->author == a.text().get()) authorId = n;
+      if (authorId < 0 && note->author == xlsx::DecodeXstring(a.text().get())) authorId = n;
       ++n;
     }
     if (authorId < 0) {
-      authors.append_child((p + "author").c_str()).text().set(note->author.c_str());
+      authors.append_child((p + "author").c_str()).text().set(xlsx::EncodeXstring(note->author).c_str());
       authorId = n;
     }
     pugi::xml_node c = before ? list.insert_child_before((p + "comment").c_str(), before) : list.append_child((p + "comment").c_str());
@@ -195,7 +195,7 @@ bool EditComments(std::string_view in, CellAddr cell, const Entry* note, std::st
     if (!note->uid.empty()) {
       pugi::xml_node t = text.append_child((p + "t").c_str());
       if (!note->text.empty() && note->text.back() == ' ') t.append_attribute("xml:space").set_value("preserve");
-      t.text().set(note->text.c_str());
+      t.text().set(xlsx::EncodeXstring(note->text).c_str());
     } else if (!note->author.empty()) {
       AddRun(text, p, true, note->author + ":");
       AddRun(text, p, false, "\n" + note->text);

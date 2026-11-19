@@ -43,6 +43,9 @@ struct ToolItem {
   int priority = 9;        // lower is dropped first when space is tight (left items only below 9)
   // Its name in the overflow menu, when the window is too narrow for it (else the tooltip's name).
   std::wstring menuLabel;
+  // A dropdown that shows a fixed label (Conditional, Chart): as wide as the label needs at the
+  // window's scale, `width` the least.
+  bool fitText = false;
 
   // The other kinds. Dropdowns, combo boxes and split buttons list `choices`, and `choice` is
   // the chosen one; `text` is what a combo box shows (or a dropdown, with nothing chosen).
@@ -141,6 +144,8 @@ class Toolbar {
   Button& ItemButton(const ToolItem& item);
   // The same for the other kinds of item.
   Control& ItemControl(const ToolItem& item);
+  // An item's width in DIPs: its own, or what its label needs (fitText).
+  float WidthOf(const ToolItem& item);
 
   RECT rc_{};
   float ui_ = 1;
@@ -166,5 +171,7 @@ class Toolbar {
   TextBox pageBox_;
   D2D1_RECT_F pageLabel_{};
   std::vector<D2D1_RECT_F> separators_;
+  std::map<std::wstring, float> textWidths_;  // fitText labels in DIPs, at textUi_
+  float textUi_ = 0;
   std::wstring pageLabelText_;
 };

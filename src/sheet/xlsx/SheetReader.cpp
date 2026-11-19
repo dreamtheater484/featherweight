@@ -497,11 +497,13 @@ bool SheetLoader::ReadInline(std::string& out, bool& preserve, bool& odd) {
             else odd = true;
           }
           if (!ReadText(piece, odd)) return false;
+          xlsx::DecodeXstringIn(piece);
           out += piece;
         } else if (main && local == "r" && pull.Depth() == depth + 1) {
           odd = true;  // runs: read their text, keep them as written
         } else if (main && local == "t" && pull.Depth() == depth + 2) {
           if (!ReadText(piece, odd)) return false;
+          xlsx::DecodeXstringIn(piece);
           out += piece;
         } else {
           odd = true;
@@ -651,6 +653,7 @@ bool SheetLoader::ReadCell(size_t before, uint32_t row, uint32_t rowOrd, uint32_
             }
             fSet = Intern(attrs_);
             if (!ReadText(fText_, odd)) return false;
+            xlsx::DecodeXstringIn(fText_);  // ST_Formula: Excel writes the text _x0041_ as _x005F_x0041_
           } else if (main && local == "v" && order < 2) {
             order = 2;
             hasV = true;
@@ -688,10 +691,11 @@ bool SheetLoader::ReadCell(size_t before, uint32_t row, uint32_t rowOrd, uint32_
   auto keepText = [&](std::string_view t) { b_->Side().valueText = texts.Add(t); };
   if (type == XmlType::InlineStr) {
     if (hasIs) {
-      c->v.index = texts.Add(isText_);
+      c->v.index = texts.Add(isText_);  // decoded by ReadInline
       c->flags |= kHasValue;
       if (preserve) c->flags |= kPreserve;
     } else if (hasV) {
+      xlsx::DecodeXstringIn(vText_);
       c->v.index = texts.Add(vText_);
       c->flags |= kHasValue;
     }
@@ -717,8 +721,9 @@ bool SheetLoader::ReadCell(size_t before, uint32_t row, uint32_t rowOrd, uint32_
         if (!canonical || !(c->flags & kHasValue)) keepText(vText_);
         break;
       }
-      case XmlType::Str:
-        c->v.index = texts.Add(vText_);
+      case XmlType::Str:  // a formula's text: Excel writes a CR as _x000D_
+        xlsx::DecodeXstringIn(vText_);
+      c->v.index = texts.Add(vText_);
         c->flags |= kHasValue;
         break;
       case XmlType::B:
@@ -1042,14 +1047,14 @@ bool ReadAutoFilter(pugi::xml_node n, SheetFilter& f) {
     if (plain && kind == "filters" && !Child(k, "dateGroupItem")) {
       col.blank = BoolAttr(k, "blank", false);
       for (pugi::xml_node v = k.first_child(); v; v = v.next_sibling())
-        if (v.type() == pugi::node_element && Local(v) == "filter") col.values.emplace_back(Attr(v, "val"));
+        if (v.type() == pugi::node_element && Local(v) == "filter") col.values.emplace_back(DecodeXstring(Attr(v, "val")));
     } else if (plain && kind == "customFilters") {
       col.kind = FilterColumn::Kind::Custom;
       col.both = BoolAttr(k, "and", false);
       for (pugi::xml_node v = k.first_child(); v; v = v.next_sibling())
         if (v.type() == pugi::node_element && Local(v) == "customFilter") {
           std::string_view op = Attr(v, "operator");
-          col.conditions.push_back({op.empty() ? std::string("equal") : std::string(op), std::string(Attr(v, "val"))});
+          col.conditions.push_back({op.empty() ? std::string("equal") : std::string(op), DecodeXstring(Attr(v, "val"))});
         }
     } else if (plain && kind == "top10") {
       col.kind = FilterColumn::Kind::Top10;
@@ -1087,6 +1092,45 @@ Status LoadSheetPart(Workbook& book, size_t index) {
   SheetLoader loader(book, sheet);
   st = loader.Load(xml, pkg->GetLimits(), sheet.PartName().substr(1));
   WorkbookLoader::MarkLoaded(sheet, st.Ok());
+  return st;
+}
+
+Status LoadSheetStart(Workbook& book, size_t index, size_t bytes, bool& cut) {
+  cut = false;
+  Sheet& sheet = book.GetSheet(index);
+  const pkg::Package* pkg = book.GetPackage();
+  if (sheet.Loaded() || !pkg || sheet.PartName().empty()) return {};
+  std::vector<uint8_t> data;
+  Status st = pkg->ReadPartPrefix(sheet.PartName(), bytes, data);
+  if (!st.Ok()) return st;
+  if (data.size() < bytes) return LoadSheetPart(book, index);  // it fits: read whole
+  std::string_view xml(reinterpret_cast<const char*>(data.data()), data.size());
+  // The root's and sheetData's names as written (a prefix, x:sheetData, is kept), to close them
+  // after the last whole row.
+  size_t at = 0;
+  while ((at = xml.find('<', at)) != std::string_view::npos && at + 1 < xml.size() &&
+         (xml[at + 1] == '?' || xml[at + 1] == '!'))
+    ++at;
+  if (at == std::string_view::npos) return LoadSheetPart(book, index);
+  const size_t rootEnd = xml.find_first_of(" \t\r\n/>", at + 1);
+  const size_t data0 = xml.find("sheetData", at);
+  if (rootEnd == std::string_view::npos || data0 == std::string_view::npos) return LoadSheetPart(book, index);
+  const size_t dataLt = xml.rfind('<', data0);
+  const std::string root(xml.substr(at + 1, rootEnd - at - 1));
+  const std::string prefix(xml.substr(dataLt + 1, data0 - dataLt - 1));
+  const std::string rowEnd = "</" + prefix + "row>";
+  const size_t last = xml.rfind(rowEnd);
+  // A comment or CDATA section could hide a "</row>", and the cut would land inside it: read whole.
+  if (last == std::string_view::npos || last < data0 || prefix.find_first_of("/ ") != std::string::npos ||
+      xml.find("<!--", data0) != std::string_view::npos || xml.find("<![CDATA[", data0) != std::string_view::npos)
+    return LoadSheetPart(book, index);
+  std::string closed(xml.substr(0, last + rowEnd.size()));
+  closed += "</" + prefix + "sheetData></" + root + ">";
+  std::vector<uint8_t>().swap(data);
+  SheetLoader loader(book, sheet);
+  st = loader.Load(closed, pkg->GetLimits(), sheet.PartName().substr(1));
+  WorkbookLoader::MarkLoaded(sheet, st.Ok());
+  cut = st.Ok();
   return st;
 }
 

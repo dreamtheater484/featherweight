@@ -1,5 +1,7 @@
 #include "sheet/view/CellPaint.h"
 
+#include "sheet/view/Sparklines.h"
+
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
@@ -135,6 +137,7 @@ class Painting {
     if (o_.gridlines) Gridlines();
     Fills();
     BarsAndIcons();
+    DrawSparklines();
     Borders();
     DrawText();
   }
@@ -232,6 +235,13 @@ class Painting {
     side(b.top, lk.table.top, lk.st.top);
     side(b.bottom, lk.table.bottom, lk.st.bottom);
     return b;
+  }
+
+  // ---- Sparklines (S4): over the fills and data bars, under the borders and text.
+  void DrawSparklines() {
+    if (!o_.sparklines) return;
+    for (const RowData& rd : rows_)
+      for (uint32_t col : cols_) o_.sparklines->Draw(p_, g_, rd.row, col, Outer(rd.row, col, rd.row, col));
   }
 
   // ---- Data bars and icons (conditional formats): over the fills, under the borders and text.

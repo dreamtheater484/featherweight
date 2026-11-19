@@ -18,6 +18,7 @@
 #include "pkg/Zip.h"
 #include "sheet/edit/Notes.h"
 #include "sheet/ods/OdsStyles.h"
+#include "sheet/xlsx/Internal.h"
 
 namespace fw::sheet::ods {
 namespace {
@@ -540,8 +541,8 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
             const int mr = std::min(Repeat(cell, "table:number-matrix-rows-spanned"), kMaxRow - r);
             const bool matrix = !cell.attribute("table:number-matrix-columns-spanned").empty();
             formula = matrix ? "<f t=\"array\" ref=\"" + Ref(r, c) + (mc > 1 || mr > 1 ? ":" + Ref(r + mr - 1, c + mc - 1) : "") +
-                                   "\">" + Escape(formula) + "</f>"
-                             : "<f>" + Escape(formula) + "</f>";
+                                   "\">" + Escape(xlsx::EncodeXstring(formula)) + "</f>"
+                             : "<f>" + Escape(xlsx::EncodeXstring(formula)) + "</f>";
           } else {
             formula.clear();
           }
@@ -575,7 +576,7 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
         }
         if (!t.empty()) attrs += " t=\"" + t + "\"";
         cellsXml += "<c" + attrs + ">" + formula;
-        if (!v.empty() || t == "str") cellsXml += "<v>" + Escape(v) + "</v>";
+        if (!v.empty() || t == "str") cellsXml += "<v>" + Escape(xlsx::EncodeXstring(v)) + "</v>";
         cellsXml += "</c>";
         ++cells_;
         minRow_ = std::min(minRow_, r), maxRow_ = std::max(maxRow_, r);
@@ -1019,7 +1020,7 @@ pkg::Status Converter::Run(std::vector<uint8_t>& xlsx) {
       workbook += "<definedName name=\"" + Escape(n.name) + "\"";
       if (n.sheet >= 0) workbook += " localSheetId=\"" + std::to_string(n.sheet) + "\"";
       if (n.hidden) workbook += " hidden=\"1\"";
-      workbook += ">" + Escape(n.value) + "</definedName>";
+      workbook += ">" + Escape(xlsx::EncodeXstring(n.value)) + "</definedName>";
     }
     workbook += "</definedNames>";
   }
@@ -1029,7 +1030,7 @@ pkg::Status Converter::Run(std::vector<uint8_t>& xlsx) {
   for (const std::string& s : strings_) {
     const bool keep = !s.empty() && (s.front() == ' ' || s.back() == ' ' || s.find('\n') != std::string::npos || s.find('\t') != std::string::npos);
     sst += keep ? "<si><t xml:space=\"preserve\">" : "<si><t>";
-    sst += Escape(s) + "</t></si>";
+    sst += Escape(xlsx::EncodeXstring(s)) + "</t></si>";  // ST_Xstring: the text _x0041_ as _x005F_x0041_
   }
   sst += "</sst>";
   if (vml) types += "<Default Extension=\"vml\" ContentType=\"application/vnd.openxmlformats-officedocument.vmlDrawing\"/>";

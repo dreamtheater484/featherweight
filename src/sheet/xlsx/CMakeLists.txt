@@ -7,6 +7,7 @@ set_source_files_properties(Save.cpp TARGET_DIRECTORY fwsheet PROPERTIES COMPILE
 # canonicalization, and the saved copy must pass check. Every folder of tests/office but the
 # malicious, protected and reference ones (broken files are read, but fail check on purpose).
 if(FW_BUILD_TESTS)
+  target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_sheet_firstrows.cpp")
   set(_fw_office "${PROJECT_SOURCE_DIR}/tests/office")
   file(GLOB _fw_office_dirs LIST_DIRECTORIES true "${_fw_office}/*")
   set(_fw_workbook_dirs)

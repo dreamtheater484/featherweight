@@ -53,6 +53,9 @@ class ZipReader {
 
   // Decompresses an entry, checking its size and CRC-32.
   Status Read(const ZipEntry& entry, std::vector<uint8_t>& out) const;
+  // The entry's first `max` bytes, decompressed (S4: a large sheet's first rows). Not checked
+  // against the CRC-32 unless they are the whole entry (Read).
+  Status ReadPrefix(const ZipEntry& entry, size_t max, std::vector<uint8_t>& out) const;
   // The local header, compressed data and data descriptor, exactly as stored.
   Status ReadRecord(const ZipEntry& entry, std::vector<uint8_t>& out) const;
 
