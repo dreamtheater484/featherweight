@@ -450,7 +450,9 @@ void DrawArt(Painter& p, const Art& art, const Rect& box) {
       p.Save();
       p.Transform(m.transform);
     }
-    const Rect b = m.path.Bounds();
+    // The bounds only place gradients and patterns: solid colors don't flatten the path for them.
+    const auto plain = [](const Fill& f) { return f.kind == Fill::Kind::None || f.kind == Fill::Kind::Solid; };
+    const Rect b = plain(m.fill) && plain(m.line.fill) ? Rect{} : m.path.Bounds();
     if (m.fill.kind != Fill::Kind::None) FillArea(p, m.path, m.fill, b, 0, Geometry::PathFill::Normal);
     if (m.line.fill.kind != Fill::Kind::None) p.StrokePath(m.path, MakePen(p, m.line, b, 0));
     if (moved) p.Restore();

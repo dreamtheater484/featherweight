@@ -48,6 +48,23 @@ bool SameStroke(const Pen& a, const Pen& b) {
          a.dashOffset == b.dashOffset;
 }
 
+// The path's figures as rectangles when each is one, as Path::FromRect makes them: a move, three
+// lines along the axes and a close.
+bool Rectangles(const Path& p, std::vector<D2D1_RECT_F>& out) {
+  const std::vector<Path::Segment>& s = p.Segments();
+  out.clear();
+  if (s.size() % 5 != 0) return false;
+  for (size_t i = 0; i < s.size(); i += 5) {
+    if (s[i].kind != Path::Kind::Move || s[i + 1].kind != Path::Kind::Line || s[i + 2].kind != Path::Kind::Line ||
+        s[i + 3].kind != Path::Kind::Line || s[i + 4].kind != Path::Kind::Close)
+      return false;
+    const Point a = s[i].p[0], b = s[i + 1].p[0], c = s[i + 2].p[0], d = s[i + 3].p[0];
+    if (a.y != b.y || b.x != c.x || c.y != d.y || d.x != a.x) return false;
+    out.push_back({std::min(a.x, c.x), std::min(a.y, c.y), std::max(a.x, c.x), std::max(a.y, c.y)});
+  }
+  return true;
+}
+
 }  // namespace
 
 ID2D1Bitmap* D2DBitmapCache::Get(ID2D1DeviceContext* dc, const Bitmap& bitmap) {
@@ -345,6 +362,14 @@ ID2D1StrokeStyle* D2DPainter::MakeStrokeStyle(const Pen& pen) {
 
 void D2DPainter::FillPath(const Path& p, const Brush& b) {
   if (p.Empty()) return;
+  // Several axis-aligned rectangles in one opaque color (a chart series' bars, Path::FromRect's
+  // figures): a rectangle at a time, which Direct2D draws far faster than one geometry of them.
+  if (b.kind == Brush::Kind::Solid && b.color.a >= 1 && p.fillRule == Path::FillRule::Winding && Rectangles(p, rects_) &&
+      rects_.size() >= 2) {
+    if (ID2D1Brush* brush = MakeBrush(b))
+      for (const D2D1_RECT_F& r : rects_) dc_->FillRectangle(r, brush);
+    return;
+  }
   ComPtr<ID2D1PathGeometry> g = MakeGeometry(p);
   ID2D1Brush* brush = MakeBrush(b);
   if (g && brush) dc_->FillGeometry(g.Get(), brush);
