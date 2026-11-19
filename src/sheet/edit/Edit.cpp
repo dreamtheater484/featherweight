@@ -5221,7 +5221,7 @@ Result Editor::SetThread(int sheet, CellAddr cell, const std::optional<Thread>& 
           st.SaveText(st.Save(s));
           detail::PartText& t = A::Text(s);
           xlsx::PutSheetElement(t, "legacyDrawing",
-                                id.empty() ? std::string() : "<" + xlsx::SheetPrefix(t) + "legacyDrawing r:id=\"" + id + "\"/>");
+                                id.empty() ? std::string() : "<" + xlsx::SheetPrefix(t) + "legacyDrawing " + xlsx::RelPrefix(t) + ":id=\"" + id + "\"/>");
         } else if (!WritePart(parts.vml, now.vml)) {
           return failed;
         }
@@ -5289,7 +5289,7 @@ Result Editor::SetNote(int sheet, CellAddr cell, const std::optional<Note>& note
         if (newVml.empty() && !vmlPart.empty() && !RemovePart(vmlPart)) return failed;
         st.SaveText(st.Save(s));
         detail::PartText& t = A::Text(s);
-        xlsx::PutSheetElement(t, "legacyDrawing", id.empty() ? std::string() : "<" + xlsx::SheetPrefix(t) + "legacyDrawing r:id=\"" + id + "\"/>");
+        xlsx::PutSheetElement(t, "legacyDrawing", id.empty() ? std::string() : "<" + xlsx::SheetPrefix(t) + "legacyDrawing " + xlsx::RelPrefix(t) + ":id=\"" + id + "\"/>");
       } else if (!WritePart(vmlPart, newVml)) {
         return failed;
       }

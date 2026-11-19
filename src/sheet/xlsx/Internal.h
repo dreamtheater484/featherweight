@@ -78,6 +78,9 @@ void PutSheetElement(detail::PartText& t, std::string_view local, const std::str
 std::string SheetPrefix(const detail::PartText& t);
 // The sheet's element `local` as its kept XML has it (empty: none).
 std::string SheetElement(const detail::PartText& t, std::string_view local);
+// The prefix the sheet's root gives the relationships namespace ("r"), declared on the root when
+// it has none (openpyxl and others write sheets without it).
+std::string RelPrefix(detail::PartText& t);
 // The sheet's conditional formats (`validations` false: every conditionalFormatting element and the
 // x14 extension {78C0D931-...}) or validations (the dataValidations element and the extension
 // {CCE6A557-...}), as written: `xml` the top-level elements, `ext` the extension element's content.
