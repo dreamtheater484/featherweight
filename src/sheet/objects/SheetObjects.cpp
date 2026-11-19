@@ -395,22 +395,6 @@ std::vector<SheetObjects::Object> SheetObjects::Objects() const {
   return out;
 }
 
-bool SheetObjects::RefreshCharts() {
-  Impl& m = *impl_;
-  bool any = false;
-  for (Impl::Item& it : m.items) {
-    if (!it.chart || !m.resources) continue;
-    pugi::xml_node c = Child(A(A(it.node, "graphic"), "graphicData"), kChart, "chart");
-    pugi::xml_node space = c ? m.resources->GetPartXml(RelId(c, "id")) : pugi::xml_node();
-    auto ch = std::make_unique<chart::Chart>();
-    if (!space || !chart::Read(space, m.Colors(), *ch, m.data.get())) continue;
-    it.chart = std::move(ch);
-    it.art.reset();
-    any = true;
-  }
-  return any;
-}
-
 bool SheetObjects::IsChartSheet() const { return impl_->chartSheet; }
 
 void SheetObjects::ValuesChanged() {

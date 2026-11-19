@@ -1117,7 +1117,6 @@ bool WorkbookView::IdleWork(ID2D1DeviceContext*, double deadlineMs) {
   if (!changed && !done) return false;
   if (changed) {
     text_->Clear();  // keyed by cell: it wouldn't see the new values
-    if (SheetObjects* o = Objects()) o->RefreshCharts();  // s3-charts: charts show the new values
     totals_ = Totals{};
     host_.ViewStateChanged();
   }
