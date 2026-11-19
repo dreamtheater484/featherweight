@@ -374,6 +374,7 @@ enum Cmd : int {
   CmdChartBox,            // the toolbar's chart choices
   CmdDeleteObject,        // the selected chart, picture or shape
   CmdChartPanel,          // the selected chart's panel (double-click, Ctrl+1)
+  CmdMoveChart,           // Move Chart > New sheet: the selected chart on a chart sheet of its own
   // Conditional formatting and data validation (S3, s3-data): 2850-2899.
   CmdCondFormat = 2850,   // the Conditional formatting panel: a new rule
   CmdCfManage,            // its list of the sheet's rules

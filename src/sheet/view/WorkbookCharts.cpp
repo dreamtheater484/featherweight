@@ -281,7 +281,7 @@ bool WorkbookView::PasteObjectClip() {
 // ---- Commands
 
 bool WorkbookView::ChartsCommandState(int cmd, CommandState& s) {
-  if (cmd < CmdInsertChart || cmd > CmdChartPanel) return false;
+  if (cmd < CmdInsertChart || cmd > CmdMoveChart) return false;
   static const wchar_t* const kNames[] = {L"Column chart", L"Bar chart",  L"Line chart",   L"Pie chart",
                                           L"Doughnut chart", L"Area chart", L"Scatter chart"};
   s.enabled = Ready() && !preview_ && !ChartSheet() && !Current().PartName().empty();
@@ -293,9 +293,9 @@ bool WorkbookView::ChartsCommandState(int cmd, CommandState& s) {
   } else if (cmd == CmdDeleteObject) {
     s.label = L"Delete object";
     s.enabled = s.enabled && SelectedObject().has_value();
-  } else if (cmd == CmdChartPanel) {
-    s.label = L"Format chart";
-    s.shortcut = L"Ctrl+1";
+  } else if (cmd == CmdChartPanel || cmd == CmdMoveChart) {
+    s.label = cmd == CmdChartPanel ? L"Format chart" : L"Move chart to a new sheet";
+    if (cmd == CmdChartPanel) s.shortcut = L"Ctrl+1";
     const std::optional<SheetObjects::Object> sel = SelectedObject();
     s.enabled = s.enabled && sel && sel->chart;
   } else {
@@ -304,11 +304,25 @@ bool WorkbookView::ChartsCommandState(int cmd, CommandState& s) {
   return true;
 }
 
+// Move Chart > New sheet: the chart on a chart sheet before this one, which shows (Excel's).
+void WorkbookView::MoveChartToSheet(uint32_t id) {
+  const size_t at = sheet_;
+  if (EditRefused(Ed().MoveChartToSheet(static_cast<int>(at), id))) return;
+  object_ = 0;
+  host_.ViewShowPanel(nullptr);
+  ShowSheet(at);
+}
+
 bool WorkbookView::ChartsCommand(int cmd) {
-  if (cmd < CmdInsertChart || cmd > CmdChartPanel) return false;
+  if (cmd < CmdInsertChart || cmd > CmdMoveChart) return false;
   if (!Ready() || preview_ || ChartSheet()) return true;
   if (cmd == CmdChartPanel) {
     ShowChartPanel();
+    return true;
+  }
+  if (cmd == CmdMoveChart) {
+    const std::optional<SheetObjects::Object> sel = SelectedObject();
+    if (sel && sel->chart) MoveChartToSheet(sel->id);
     return true;
   }
   if (cmd == CmdDeleteObject) {
@@ -463,7 +477,9 @@ class WorkbookView::ChartPanel : public PanelContent {
     delete_.onInvoke = [this] {
       if (!v_.EditRefused(v_.Ed().DeleteObjects(static_cast<int>(sheet_), {id_}))) v_.host_.ViewShowPanel(nullptr);
     };
-    for (PanelButton* b : {&use_, &add_, &remove_, &up_, &down_, &delete_}) b->textSize = 12;
+    move_.text = L"Move to a new sheet";
+    move_.onInvoke = [this] { v_.MoveChartToSheet(id_); };
+    for (PanelButton* b : {&use_, &add_, &remove_, &up_, &down_, &delete_, &move_}) b->textSize = 12;
   }
 
   std::wstring Title() const override { return L"Chart"; }
@@ -473,7 +489,7 @@ class WorkbookView::ChartPanel : public PanelContent {
     ui_ = ui;
     Place();
     return {&kind_, &palette_, &title_, &titleText_, &axes_, &xText_, &yText_, &legend_, &labels_, &range_, &use_,
-            &series_, &color_, &name_, &values_, &cats_, &add_, &remove_, &up_, &down_, &apply_, &delete_};
+            &series_, &color_, &name_, &values_, &cats_, &add_, &remove_, &up_, &down_, &apply_, &delete_, &move_};
   }
 
   void Draw(Canvas& c) override {
@@ -560,6 +576,8 @@ class WorkbookView::ChartPanel : public PanelContent {
     y += 40 * u;
     apply_.rc = RectF(left, y, left + half, y + 30 * u);
     delete_.rc = RectF(left + half + gap, y, right, y + 30 * u);
+    y += 38 * u;
+    move_.rc = RectF(left, y, right, y + 30 * u);
     v_.host_.ViewInvalidate();
   }
 
@@ -666,7 +684,7 @@ class WorkbookView::ChartPanel : public PanelContent {
   Dropdown kind_, palette_, legend_, series_;
   ColorPicker color_;
   ComboBox titleText_, xText_, yText_, range_, name_, values_, cats_;
-  PanelButton title_, axes_, labels_, use_, add_, remove_, up_, down_, apply_, delete_;
+  PanelButton title_, axes_, labels_, use_, add_, remove_, up_, down_, apply_, delete_, move_;
   std::vector<std::pair<const wchar_t*, D2D1_RECT_F>> labelsText_;
 };
 
