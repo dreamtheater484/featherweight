@@ -1728,6 +1728,119 @@ std::string Converter::SheetXml(const SheetEntry& entry, size_t outIndex, std::s
         dxfs_.push_back(std::move(dxf));
         break;
       }
+      case 0x0879: {  // CONDFMT12: the ranges of the CF12 records that follow
+        b.Skip(12);     // FrtRefHeaderU
+        const uint16_t count = b.U16();
+        b.Skip(2 + 8);
+        flushCond();
+        condRange = readSqref(b, condRow, condCol);
+        condLeft = condRange.empty() ? 0 : count;
+        break;
+      }
+      case 0x087A: {  // CF12: color scales, data bars and icon sets (other kinds come as CF records too)
+        if (condLeft <= 0) break;
+        --condLeft;
+        b.Skip(12);  // FrtRefHeader
+        const uint8_t ct = b.U8();
+        b.U8();
+        const uint16_t cce1 = b.U16(), cce2 = b.U16();
+        const uint32_t cbDxf = b.U32();
+        b.Skip(cbDxf ? cbDxf : 2);
+        b.Skip(cce1);
+        b.Skip(cce2);
+        b.Skip(b.U16());  // fmlaActive
+        b.Skip(1 + 2 + 2);  // flags, ipriority, icfTemplate
+        b.U8();      // cbTemplateParm
+        b.Skip(16);  // rgbTemplateParms, always 16 bytes
+        if (!b.Ok() || (ct != 3 && ct != 4 && ct != 6)) break;
+        b.Skip(3);  // unused, reserved
+        // A CFVO: its type, a formula, and a number when there's neither formula nor min/max.
+        auto cfvo = [&](std::string& out) {
+          static const char* const kTypes[] = {"", "num", "min", "max", "percent", "percentile", "", "formula"};
+          const uint8_t type = b.U8();
+          const uint16_t cce = b.U16();
+          const auto rgce = b.Take(cce);
+          if (type == 0 || type == 6 || type > 7) return false;
+          out = std::string("<cfvo type=\"") + kTypes[type] + "\"";
+          if (cce) {
+            std::string f;
+            if (!detail::Decompile(ctx_, rgce, {}, condRow, condCol, f)) return false;
+            out += " val=\"" + Esc(f) + "\"";
+          } else if (type != 2 && type != 3) {
+            const double v = b.F64();
+            if (!std::isfinite(v)) return false;
+            out += " val=\"";
+            AppendNumber(out, v);
+            out += "\"";
+          }
+          out += "/>";
+          return b.Ok();
+        };
+        // A CFColor: kind, value, tint.
+        auto cfColor = [&]() {
+          const uint32_t kind = b.U32(), value = b.U32();
+          const double tint = b.F64();
+          ExtColor c;
+          if (kind == 2) c.kind = ExtColor::Rgb, c.value = (value & 0xFF) << 16 | (value & 0xFF00) | (value >> 16 & 0xFF);
+          if (kind == 3) c.kind = ExtColor::Theme, c.value = value, c.tint = std::isfinite(tint) ? tint : 0;
+          std::string a = palette_.Attrs(kind == 1 ? value : 0x7FFF, &c);
+          return "<color" + (a.empty() ? std::string(" rgb=\"FF000000\"") : a) + "/>";
+        };
+        std::string rule;
+        if (ct == 3) {  // CFGradient
+          const uint8_t interp = b.U8(), curves = b.U8();
+          b.U8();
+          if (interp < 2 || interp > 3 || curves != interp) break;
+          std::string v, colors;
+          bool ok = true;
+          for (uint8_t i = 0; i < interp && ok; ++i) {
+            std::string one;
+            ok = cfvo(one);
+            b.Skip(8);  // numDomain
+            v += one;
+          }
+          for (uint8_t i = 0; i < curves && ok; ++i) {
+            b.Skip(8);  // numGrange
+            colors += cfColor();
+          }
+          if (!ok || !b.Ok()) break;
+          rule = "<cfRule type=\"colorScale\" priority=\"" + std::to_string(++priority) + "\"><colorScale>" + v + colors +
+                 "</colorScale></cfRule>";
+        } else if (ct == 4) {  // CFDatabar
+          const uint8_t flags = b.U8(), minLength = b.U8(), maxLength = b.U8();
+          const std::string color = cfColor();
+          std::string lo, hi;
+          if (!cfvo(lo) || !cfvo(hi) || !b.Ok()) break;
+          rule = "<cfRule type=\"dataBar\" priority=\"" + std::to_string(++priority) + "\"><dataBar";
+          if (flags & 2) rule += " showValue=\"0\"";  // Excel writes 0 for values shown
+          if (minLength != 10 && minLength <= 100) rule += " minLength=\"" + std::to_string(minLength) + "\"";
+          if (maxLength != 90 && maxLength <= 100) rule += " maxLength=\"" + std::to_string(maxLength) + "\"";
+          rule += ">" + lo + hi + color + "</dataBar></cfRule>";
+        } else {  // CFMultistate
+          static const char* const kSets[] = {"3Arrows", "3ArrowsGray", "3Flags", "3TrafficLights1", "3TrafficLights2",
+                                              "3Signs", "3Symbols", "3Symbols2", "4Arrows", "4ArrowsGray", "4RedToBlack",
+                                              "4Rating", "4TrafficLights", "5Arrows", "5ArrowsGray", "5Rating", "5Quarters"};
+          const uint8_t states = b.U8(), set = b.U8(), flags = b.U8();
+          if (set > 16 || states < 3 || states > 5 || states != kSets[set][0] - '0') break;
+          std::string v;
+          bool ok = true;
+          for (uint8_t i = 0; i < states && ok; ++i) {
+            std::string one;
+            ok = cfvo(one);
+            const uint8_t equal = b.U8();
+            b.Skip(4);
+            if (ok && !equal) one.insert(one.size() - 2, " gte=\"0\"");
+            v += one;
+          }
+          if (!ok || !b.Ok()) break;
+          rule = "<cfRule type=\"iconSet\" priority=\"" + std::to_string(++priority) + "\"><iconSet iconSet=\"" + kSets[set] + "\"";
+          if (flags & 1) rule += " showValue=\"0\"";
+          if (flags & 4) rule += " reverse=\"1\"";
+          rule += ">" + v + "</iconSet></cfRule>";
+        }
+        condRules += rule;
+        break;
+      }
       case 0x01BE: {  // DV: a validation
         const uint32_t flags = b.U32();
         std::string text[4];  // prompt title, error title, prompt, error
