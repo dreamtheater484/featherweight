@@ -83,7 +83,7 @@ public static class FwCopyExcel {
     $result.printer = [string]$xl.ActivePrinter
     foreach ($t in $Targets -split '\|') {
       $format, $dest = $t -split '>', 2
-      $entry = [ordered]@{ format = $format; path = $dest; error = $null }
+      $entry = [ordered]@{ format = $format; path = $dest; error = $null; note = $null }
       $wb = $null
       try {
         # Never update links; read-only; a dummy password: a protected file fails instead of prompting.
@@ -92,7 +92,24 @@ public static class FwCopyExcel {
         $wb.CheckCompatibility = $false  # no compatibility checker dialog on saving as .xls
         New-Item -ItemType Directory -Force (Split-Path -Parent $dest) | Out-Null
         if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest }
-        $wb.SaveAs($dest, $fileFormats[$format])
+        try { $wb.SaveAs($dest, $fileFormats[$format]) }
+        catch {
+          # Excel saves no protected sheet or workbook as .ods. Protection without a password is
+          # lifted in this in-memory copy (the source is never saved) and the copy says so; with a
+          # password it stays an error.
+          if ($format -ne "ods" -or $_.Exception.Message -notmatch 'protected') { throw }
+          $lifted = @()
+          foreach ($ws in $wb.Worksheets) {
+            if ($ws.ProtectContents -or $ws.ProtectDrawingObjects -or $ws.ProtectScenarios) {
+              try { $ws.Unprotect(""); $lifted += "sheet '$($ws.Name)'" } catch { throw "sheet '$($ws.Name)' is protected with a password; Excel saves no protected sheet as .ods" }
+            }
+          }
+          if ($wb.ProtectStructure -or $wb.ProtectWindows) {
+            try { $wb.Unprotect(""); $lifted += "the workbook's structure" } catch { throw "the workbook is protected with a password; Excel saves no protected workbook as .ods" }
+          }
+          $wb.SaveAs($dest, $fileFormats[$format])
+          $entry.note = "protection lifted (Excel saves none to .ods): " + ($lifted -join ", ")
+        }
       } catch {
         $entry.error = $_.Exception.Message
       } finally {
@@ -219,6 +236,7 @@ foreach ($src in $sources) {
     if (-not $err -and (Test-Path -LiteralPath $t.Dest)) {
       $entry.sha256 = Get-Sha $t.Dest
       $entry.bytes = (Get-Item -LiteralPath $t.Dest).Length
+      if ($res -and $res.note) { $entry.note = $res.note }
       $made++
     } else {
       $entry.error = $(if ($err) { $err } else { "Excel saved nothing" })
