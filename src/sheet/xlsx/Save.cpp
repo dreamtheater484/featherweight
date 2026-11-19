@@ -7,6 +7,7 @@
 #include <set>
 
 #include "pkg/XmlWriter.h"
+#include "sheet/edit/Charts.h"
 #include "sheet/edit/Edit.h"
 #include "sheet/xlsx/Internal.h"
 #include "sheet/xlsx/Xlsx.h"
@@ -1407,6 +1408,17 @@ Status WriteSave(const Workbook& book, SavePlan& plan, pkg::ByteSink& sink) {
     plan.changes.replace.push_back({job.part, Bytes(xml)});
   }
   if (plan.strings) plan.changes.replace.push_back({plan.stringsPart, Bytes(StringsXml(book.Strings(), plan.strict))});
+  // Charts' caches follow the cells (s3-charts); a chart whose cells hold what it caches is copied.
+  for (const pkg::Part& part : pkg->Parts()) {
+    if (part.deleted || pkg->ContentTypeOf(part.name) != "application/vnd.openxmlformats-officedocument.drawingml.chart+xml") continue;
+    if (std::any_of(plan.changes.replace.begin(), plan.changes.replace.end(), [&](const auto& r) { return r.first == part.name; }) ||
+        std::find(plan.changes.leaveOut.begin(), plan.changes.leaveOut.end(), part.name) != plan.changes.leaveOut.end())
+      continue;
+    std::vector<uint8_t> bytes;
+    if (!pkg->ReadPart(part.name, bytes).Ok()) continue;
+    std::string xml(bytes.begin(), bytes.end());
+    if (edit::charts::RefreshCaches(book, xml)) plan.changes.replace.push_back({part.name, Bytes(xml)});
+  }
   Status st = pkg->Save(sink, plan.changes);
   plan.changes.replace.resize(small);
   return st;

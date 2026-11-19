@@ -853,6 +853,71 @@ bool MoveDrawing(std::string& xml, int index, const Context& c) {
   return changed;
 }
 
+// A numRef's or strRef's cache, written anew with `points` (only when they differ from what it holds,
+// numbers compared as numbers, when `ifDifferent`); whether it changed.
+bool PutCache(pugi::xml_node ref, const std::vector<CachePoint>& points, bool ifDifferent) {
+  const bool numbers = Local(ref) == "numRef";
+  pugi::xml_node held = ChildNamed(ref, numbers ? "numCache" : "strCache");
+  if (!held) return false;
+  if (ifDifferent) {
+    std::vector<std::pair<uint32_t, std::string>> was;
+    uint32_t count = kNone;
+    for (pugi::xml_node x = held.first_child(); x; x = x.next_sibling())
+      if (Local(x) == "ptCount") count = ToUInt(xlsx::Attr(x, "val"), kNone);
+      else if (Local(x) == "pt") was.emplace_back(ToUInt(xlsx::Attr(x, "idx"), kNone), xlsx::TextOf(ChildNamed(x, "v")));
+    std::vector<std::pair<uint32_t, std::string>> now;
+    for (size_t i = 0; i < points.size(); ++i)
+      if (points[i].kind != CachePoint::Empty && (!numbers || points[i].kind == CachePoint::Number))
+        now.emplace_back(static_cast<uint32_t>(i), points[i].text);
+    auto same = [&](const std::string& a, const std::string& b) {
+      if (a == b) return true;
+      double x = 0, y = 0;
+      return numbers && xlsx::ParseDouble(a, x) && xlsx::ParseDouble(b, y) && x == y;
+    };
+    bool equal = count == points.size() && was.size() == now.size();
+    for (size_t i = 0; equal && i < was.size(); ++i) equal = was[i].first == now[i].first && same(was[i].second, now[i].second);
+    if (equal) return false;
+  }
+  std::string p(held.name());
+  p = p.find(':') == std::string::npos ? std::string() : p.substr(0, p.find(':') + 1);
+  for (pugi::xml_node x = held.first_child(); x;) {
+    pugi::xml_node next = x.next_sibling();
+    if (Local(x) == "ptCount" || Local(x) == "pt") held.remove_child(x);
+    x = next;
+  }
+  pugi::xml_node before = ChildNamed(held, "extLst");
+  auto add = [&](const char* name) {
+    return before ? held.insert_child_before((p + name).c_str(), before) : held.append_child((p + name).c_str());
+  };
+  add("ptCount").append_attribute("val").set_value(std::to_string(points.size()).c_str());
+  for (size_t i = 0; i < points.size(); ++i) {
+    const CachePoint& pt = points[i];
+    if (pt.kind == CachePoint::Empty || (numbers && pt.kind != CachePoint::Number)) continue;
+    pugi::xml_node x = add("pt");
+    x.append_attribute("idx").set_value(std::to_string(i).c_str());
+    x.append_child((p + "v").c_str()).text().set(pt.text.c_str());
+  }
+  return true;
+}
+
+bool RefreshChart(std::string& xml, const CacheFn& cache) {
+  if (xml.find("Cache") == std::string::npos) return false;
+  pugi::xml_document d;
+  if (!LoadDoc(d, xml)) return false;
+  bool changed = false, visibleOnly = true;
+  pugi::xml_node root = d.document_element();
+  Each(root, "plotVisOnly", [&](pugi::xml_node p) { visibleOnly = xlsx::BoolAttr(p, "val", true); });
+  Each(root, "f", [&](pugi::xml_node f) {
+    pugi::xml_node ref = f.parent();
+    const std::string_view kind = Local(ref);
+    std::vector<CachePoint> points;
+    if ((kind == "numRef" || kind == "strRef") && cache(xlsx::TextOf(f), visibleOnly, points))
+      changed = PutCache(ref, points, true) || changed;
+  });
+  if (changed) xml = SaveDoc(d);
+  return changed;
+}
+
 bool MoveChart(std::string& xml, int index, const Context& c, const CacheFn& cache) {
   pugi::xml_document d;
   if (!LoadDoc(d, xml)) return false;
@@ -871,28 +936,8 @@ bool MoveChart(std::string& xml, int index, const Context& c, const CacheFn& cac
     pugi::xml_node ref = f.parent();
     std::string_view kind = Local(ref);
     if ((kind != "numRef" && kind != "strRef") || now.find("#REF!") != std::string::npos || !cache) return;
-    pugi::xml_node held = ChildNamed(ref, kind == "numRef" ? "numCache" : "strCache");
     std::vector<CachePoint> points;
-    if (!held || !cache(now, visibleOnly, points)) return;
-    std::string p(held.name());
-    p = p.find(':') == std::string::npos ? std::string() : p.substr(0, p.find(':') + 1);
-    for (pugi::xml_node x = held.first_child(); x;) {
-      pugi::xml_node next = x.next_sibling();
-      if (Local(x) == "ptCount" || Local(x) == "pt") held.remove_child(x);
-      x = next;
-    }
-    pugi::xml_node before = ChildNamed(held, "extLst");
-    auto add = [&](const char* name) {
-      return before ? held.insert_child_before((p + name).c_str(), before) : held.append_child((p + name).c_str());
-    };
-    add("ptCount").append_attribute("val").set_value(std::to_string(points.size()).c_str());
-    for (size_t i = 0; i < points.size(); ++i) {
-      const CachePoint& pt = points[i];
-      if (pt.kind == CachePoint::Empty || (kind == "numRef" && pt.kind != CachePoint::Number)) continue;
-      pugi::xml_node x = add("pt");
-      x.append_attribute("idx").set_value(std::to_string(i).c_str());
-      x.append_child((p + "v").c_str()).text().set(pt.text.c_str());
-    }
+    if (cache(now, visibleOnly, points)) PutCache(ref, points, false);
   });
   if (changed) xml = SaveDoc(d);
   return changed;

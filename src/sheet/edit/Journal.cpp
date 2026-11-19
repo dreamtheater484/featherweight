@@ -493,6 +493,51 @@ Result Editor::Replay(std::string_view records, size_t* applied) {
         if (f.Ok()) r = MoveObject(sheet, id, p);
         break;
       }
+      case JournalOp::EditChart: {
+        const int sheet = f.Int();
+        const uint32_t id = f.U32();
+        ChartEdit e;
+        {
+          const bool has = f.U() != 0;
+          const uint64_t v = f.U();
+          if (has) e.kind = static_cast<ChartKind>(v);
+        }
+        for (std::optional<ChartText>* t : {&e.title, &e.xTitle, &e.yTitle}) {
+          const bool has = f.U() != 0;
+          ChartText x;
+          x.shown = f.U() != 0;
+          x.text = f.S();
+          if (has) *t = std::move(x);
+        }
+        {
+          const bool has = f.U() != 0;
+          const uint64_t v = f.U();
+          if (has) e.legend = static_cast<char>(v);
+        }
+        {
+          const bool has = f.U() != 0;
+          const uint64_t v = f.U();
+          if (has) e.labels = v != 0;
+        }
+        e.colors.resize(std::min<size_t>(f.U32(), f.Left()));
+        for (ChartColor& c : e.colors) {
+          c.series = f.U32();
+          c.point = static_cast<int32_t>(f.I());
+          c.rgb = f.U32();
+        }
+        {
+          const bool has = f.U() != 0;
+          std::vector<ChartSeries> list(std::min<size_t>(f.U32(), f.Left()));
+          for (ChartSeries& s : list) {
+            s.name = f.S();
+            s.values = f.S();
+            s.categories = f.S();
+          }
+          if (has) e.series = std::move(list);
+        }
+        if (f.Ok()) r = EditChart(sheet, id, e);
+        break;
+      }
       case JournalOp::DeleteObjects: {
         const int sheet = f.Int();
         std::vector<uint32_t> ids(std::min<size_t>(f.U32(), f.Left()));
