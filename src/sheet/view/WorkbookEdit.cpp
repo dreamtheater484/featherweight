@@ -710,6 +710,9 @@ void WorkbookView::Edited(const std::vector<edit::Change>& changes) {
         PlaceObjects();
       }
     }
+  // Charts show their cells' new values (s3-charts).
+  if (!sheets && std::any_of(changes.begin(), changes.end(), [](const edit::Change& c) { return c.what & (edit::kValues | edit::kFormulas); }))
+    if (SheetObjects* o = Objects()) o->RefreshCharts();
   // Frozen panes (Freeze panes, or undoing it): the view follows the file's.
   for (const edit::Change& c : changes)
     if ((c.what & edit::kSheetProps) && c.sheet == static_cast<int>(sheet_) && !sheets) {

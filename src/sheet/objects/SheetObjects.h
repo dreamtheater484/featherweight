@@ -81,6 +81,9 @@ class SheetObjects {
     uint32_t id = 0;     // its shape id (the anchor's first cNvPr id), which edits name it by
   };
   std::vector<Object> Objects() const;
+  // Charts read their cells again (after the cells changed, or were recalculated); false when the
+  // sheet has none.
+  bool RefreshCharts();
 
   // ---- Notes and threaded comments
   const std::vector<CellNote>& Notes() const { return notes_; }
