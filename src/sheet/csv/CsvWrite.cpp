@@ -144,6 +144,13 @@ bool Loses(const Workbook& book) {
   if (book.SheetCount() != 1) return book.SheetCount() > 1;
   const Sheet& sheet = book.GetSheet(0);
   if (sheet.FormulaCount() || !sheet.Merges().empty() || !sheet.Hyperlinks().empty() || sheet.Filter()) return true;
+  // Tables, conditional formats and validations, drawings (charts, pictures, shapes), notes and
+  // comments: what edits put around the cells (s4 friction W7: they work in a workbook read from
+  // CSV, and saving it as CSV asks first).
+  if (!sheet.Tables().empty()) return true;
+  for (const std::string* around : {&sheet.Text().beforeData, &sheet.Text().afterData})
+    for (std::string_view what : {"conditionalFormatting", "dataValidations", "drawing", "Drawing", "tableParts"})
+      if (around->find(what) != std::string::npos) return true;
   for (const ColumnInfo& c : sheet.Columns())
     if (c.customWidth || c.hidden || c.outlineLevel || c.style) return true;
   // Formats that show more than a number format does, by style index (most CSV books have none).

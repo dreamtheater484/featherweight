@@ -1913,9 +1913,11 @@ bool App::SaveActiveTo(std::wstring path, bool saveAs, bool wait) {
     const size_t dot = path.rfind(L'.');
     std::wstring ext = dot == std::wstring::npos ? std::wstring() : path.substr(dot + 1);
     for (wchar_t& c : ext) c = static_cast<wchar_t>(towupper(c));
+    // A CSV file: keep the workbook (Save As .xlsx), or write the data only (s4 friction W7).
+    const bool data = ext == L"CSV" || ext == L"TSV";
     banner_.Show(BannerKind::Warning, loss,
-                 {{kActSaveAs, std::wstring(L"Save as .") + v->SaveAsFormat().ext, true},
-                  {kActKeepFormat, ext.empty() ? L"Keep it" : L"Keep " + ext}});
+                 {{kActSaveAs, std::wstring(data ? L"Keep as ." : L"Save as .") + v->SaveAsFormat().ext, true},
+                  {kActKeepFormat, data ? L"Save as " + ext : ext.empty() ? L"Keep it" : L"Keep " + ext}});
     InvalidateRect(hwnd_, nullptr, FALSE);
     return false;
   }

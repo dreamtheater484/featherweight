@@ -790,7 +790,7 @@ void WorkbookView::ShowRulesPanel(bool manage) {
 }
 
 bool WorkbookView::RulesCommandState(int cmd, CommandState& s) {
-  const bool cells = Ready() && !preview_ && !ChartSheet() && !Current().PartName().empty();
+  const bool cells = Ready() && !preview_ && !ChartSheet() && Current().Kind() == SheetKind::Worksheet;
   switch (cmd) {
     case CmdCondFormat: s.label = L"New rule…"; break;
     case CmdCfManage: s.label = L"Manage rules…"; break;
@@ -1501,7 +1501,8 @@ bool SameRules(const std::vector<data::CfRule>& a, const std::vector<data::CfRul
 }  // namespace
 
 edit::Result WorkbookView::PasteRules(int fromSheet, const Range& src, int sheet, const Range& pasted, bool validations) {
-  if (fromSheet < 0 || static_cast<size_t>(fromSheet) >= book_->SheetCount() || book_->GetSheet(static_cast<size_t>(sheet)).PartName().empty())
+  if (fromSheet < 0 || static_cast<size_t>(fromSheet) >= book_->SheetCount() ||
+      book_->GetSheet(static_cast<size_t>(sheet)).Kind() != SheetKind::Worksheet)
     return {};
   const Sheet& fs = book_->GetSheet(static_cast<size_t>(fromSheet));
   const Sheet& ds = book_->GetSheet(static_cast<size_t>(sheet));

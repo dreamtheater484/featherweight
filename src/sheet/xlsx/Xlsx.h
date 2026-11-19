@@ -93,4 +93,10 @@ std::unique_ptr<Workbook> NewWorkbook(pkg::Status& status);
 // that has a package keeps it.
 pkg::Status GiveBasePackage(Workbook& book);
 
+// The text a save gives a worksheet that has no part yet (one read from CSV, or added since the
+// workbook was opened) around its cells. Editor::SheetPart gives such a sheet its part with it when
+// an edit needs one (a chart, a table, a note), as a save would. `strict`: the workbook is Strict
+// Open XML.
+detail::PartText NewSheetPartText(const Sheet& s, bool strict);
+
 }  // namespace fw::sheet::xlsx
