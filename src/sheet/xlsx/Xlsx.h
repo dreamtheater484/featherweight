@@ -58,6 +58,7 @@ struct SavePlan {
   bool sheetsRemoved = false;
   FileFormat format = FileFormat::Xlsx;
   std::vector<std::string> edited;  // parts the package holds as edits changed them (written as they are)
+  bool charts = false;  // cells changed: charts' caches are read again (WriteSave), and kept
 };
 
 // A save, in three steps so that the writing runs on a worker thread (plan §4.3):

@@ -1177,6 +1177,7 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
     plan.sheets.push_back({&s, s.PartName(), s.RelId(), EditedText(s, pieces, active, linkIds), false});
   }
   const bool added = std::any_of(plan.sheets.begin(), plan.sheets.end(), [](const auto& j) { return j.added; });
+  plan.charts = anyCells || added;
   // Sheets the file has that the workbook doesn't any more go, and so does the calculation chain
   // once cells or sheets changed: it lists formula cells by sheet, and Excel rebuilds it (§7.3).
   // A macro-free format leaves out the VBA project (and its signatures, which only it uses).
@@ -1387,26 +1388,23 @@ Status PrepareSave(const Workbook& book, const edit::Editor& ed, SavePlan& plan,
   if (relsChanged) put(relsPart, Bytes(PrintDoc(rels)));
   if (typesChanged) put("/[Content_Types].xml", Bytes(PrintDoc(types)));
   // Parts edits rewrote in the package (structural edits: drawings, charts, notes, tables...),
-  // written as the package holds them.
-  for (const pkg::Part& part : pkg->Parts())
+  // written as the package holds them. Parts edits removed (an undo can remove one an earlier save
+  // wrote) are left out, and the plan says so (WrittenParts).
+  for (const pkg::Part& part : pkg->Parts()) {
     if (part.modified && !part.deleted) plan.edited.push_back(part.name);
+    else if (part.deleted && std::find(plan.changes.leaveOut.begin(), plan.changes.leaveOut.end(), part.name) == plan.changes.leaveOut.end())
+      plan.changes.leaveOut.push_back(part.name);
+  }
   return {};
 }
 
 Status WriteSave(const Workbook& book, SavePlan& plan, pkg::ByteSink& sink) {
   const pkg::Package* pkg = book.GetPackage();
   if (!pkg) return Status::Fail(Status::Code::Unsupported, "This workbook has no file to save into.");
-  // The sheets and the shared strings join the list for this write only: the plan doesn't keep them.
-  const size_t small = plan.changes.replace.size();
-  for (const SavePlan::SheetJob& job : plan.sheets) {
-    std::string xml;
-    WriteSheet(*job.sheet, job.text, xml);
-    plan.changes.replace.push_back({job.part, Bytes(xml)});
-  }
-  if (plan.strings) plan.changes.replace.push_back({plan.stringsPart, Bytes(StringsXml(book.Strings(), plan.strict))});
-  // Charts' caches follow the cells (s3-charts); a chart whose cells hold what it caches is copied.
+  // Charts' caches follow the cells (s3-charts): a chart whose cells hold what it caches is copied;
+  // one read again is written and kept, as the small parts are.
   for (const pkg::Part& part : pkg->Parts()) {
-    if (part.deleted || pkg->ContentTypeOf(part.name) != "application/vnd.openxmlformats-officedocument.drawingml.chart+xml") continue;
+    if (!plan.charts || part.deleted || pkg->ContentTypeOf(part.name) != "application/vnd.openxmlformats-officedocument.drawingml.chart+xml") continue;
     if (std::any_of(plan.changes.replace.begin(), plan.changes.replace.end(), [&](const auto& r) { return r.first == part.name; }) ||
         std::find(plan.changes.leaveOut.begin(), plan.changes.leaveOut.end(), part.name) != plan.changes.leaveOut.end())
       continue;
@@ -1415,6 +1413,15 @@ Status WriteSave(const Workbook& book, SavePlan& plan, pkg::ByteSink& sink) {
     std::string xml(bytes.begin(), bytes.end());
     if (edit::charts::RefreshCaches(book, xml)) plan.changes.replace.push_back({part.name, Bytes(xml)});
   }
+  plan.charts = false;  // done: a second write of the same plan has them
+  // The sheets and the shared strings join the list for this write only: the plan doesn't keep them.
+  const size_t small = plan.changes.replace.size();
+  for (const SavePlan::SheetJob& job : plan.sheets) {
+    std::string xml;
+    WriteSheet(*job.sheet, job.text, xml);
+    plan.changes.replace.push_back({job.part, Bytes(xml)});
+  }
+  if (plan.strings) plan.changes.replace.push_back({plan.stringsPart, Bytes(StringsXml(book.Strings(), plan.strict))});
   Status st = pkg->Save(sink, plan.changes);
   plan.changes.replace.resize(small);
   return st;

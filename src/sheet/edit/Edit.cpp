@@ -310,11 +310,69 @@ struct Step {
   std::vector<PartWas> parts;
   std::optional<pkg::ContentTypes> types;
   std::vector<std::pair<std::string, std::optional<pkg::RelationshipSet>>> rels;
+  // Once the step is done (Settle), the content types and relationships it changed, entry by entry
+  // (before, after), so that undo and redo leave alone what changed since: a save adds content
+  // types and relationships of its own (shared strings, links, sheets).
+  struct TypeDiff {
+    bool isDefault = false;
+    std::string key;  // the part name, or a default's extension
+    std::optional<std::string> before, after;
+  };
+  struct RelDiff {
+    std::string source, id;
+    std::optional<pkg::Relationship> before, after;
+  };
+  std::vector<TypeDiff> typeDiffs;
+  std::vector<RelDiff> relDiffs;
   uint64_t serial = 0;
 
   bool Empty() const {
     return sheets.empty() && !book.sheets && !book.names && !book.active && changes.empty() && parts.empty() &&
            !types && rels.empty();
+  }
+
+  void Settle(const pkg::Package& p) {
+    if (types) {
+      const pkg::ContentTypes& now = p.Types();
+      for (bool isDefault : {false, true}) {
+        const auto& was = isDefault ? types->defaults : types->overrides;
+        const auto& is = isDefault ? now.defaults : now.overrides;
+        auto find = [&](const auto& list, const std::string& key) -> std::optional<std::string> {
+          for (const auto& [k, v] : list)
+            if (NameEqualsNoCase(k, key)) return v;
+          return std::nullopt;
+        };
+        std::vector<std::string> keys;
+        for (const auto& [k, v] : was) keys.push_back(k);
+        for (const auto& [k, v] : is) keys.push_back(k);
+        for (const std::string& k : keys) {
+          if (std::any_of(typeDiffs.begin(), typeDiffs.end(), [&](const TypeDiff& d) { return d.isDefault == isDefault && NameEqualsNoCase(d.key, k); }))
+            continue;
+          TypeDiff d{isDefault, k, find(was, k), find(is, k)};
+          if (d.before != d.after) typeDiffs.push_back(std::move(d));
+        }
+      }
+      types.reset();
+    }
+    auto same = [](const pkg::Relationship& a, const pkg::Relationship& b) {
+      return a.type == b.type && a.target == b.target && a.external == b.external;
+    };
+    for (auto& [source, set] : rels) {
+      const pkg::RelationshipSet* now = p.RelationshipsOf(source);
+      std::vector<std::string> ids;
+      if (set)
+        for (const pkg::Relationship& r : set->items) ids.push_back(r.id);
+      if (now)
+        for (const pkg::Relationship& r : now->items) ids.push_back(r.id);
+      for (const std::string& id : ids) {
+        if (std::any_of(relDiffs.begin(), relDiffs.end(), [&](const RelDiff& d) { return d.source == source && d.id == id; })) continue;
+        RelDiff d{source, id, std::nullopt, std::nullopt};
+        if (const pkg::Relationship* r = set ? set->Find(id) : nullptr) d.before = *r;
+        if (const pkg::Relationship* r = now ? now->Find(id) : nullptr) d.after = *r;
+        if (d.before.has_value() != d.after.has_value() || (d.before && !same(*d.before, *d.after))) relDiffs.push_back(std::move(d));
+      }
+    }
+    rels.clear();
   }
 
   // Undo or redo: everything back the other way.
@@ -323,6 +381,36 @@ struct Step {
     book.Swap(b);
     pkg::Package* package = b.GetPackage();
     if (!package) return;
+    // A step done: its own entries of the relationships and content types, each back the other way.
+    std::vector<std::string> sources;
+    for (const RelDiff& d : relDiffs)
+      if (std::find(sources.begin(), sources.end(), d.source) == sources.end()) sources.push_back(d.source);
+    for (const std::string& source : sources) {
+      pkg::RelationshipSet set;
+      if (const pkg::RelationshipSet* r = package->RelationshipsOf(source)) set = *r;
+      else set.source = source;
+      for (RelDiff& d : relDiffs) {
+        if (d.source != source) continue;
+        auto& items = set.items;
+        items.erase(std::remove_if(items.begin(), items.end(), [&](const pkg::Relationship& r) { return r.id == d.id; }), items.end());
+        if (d.before) items.push_back(*d.before);
+        std::swap(d.before, d.after);
+      }
+      const std::string relsPart = set.relsPart;
+      const bool empty = set.items.empty();
+      package->SetRelationships(std::move(set));
+      if (empty && !relsPart.empty()) package->DeletePart(relsPart);
+    }
+    if (!typeDiffs.empty()) {
+      pkg::ContentTypes t = package->Types();
+      for (TypeDiff& d : typeDiffs) {
+        auto& list = d.isDefault ? t.defaults : t.overrides;
+        list.erase(std::remove_if(list.begin(), list.end(), [&](const auto& x) { return NameEqualsNoCase(x.first, d.key); }), list.end());
+        if (d.before) list.emplace_back(d.key, *d.before);
+        std::swap(d.before, d.after);
+      }
+      package->SetContentTypes(std::move(t));
+    }
     // Relationships first: one put back may add its content type, which the types then settle.
     for (auto& [source, set] : rels) {
       std::optional<pkg::RelationshipSet> now;
@@ -3741,13 +3829,16 @@ Result Editor::PasteObject(int sheet, const ObjectClip& clip, const drawing::Pla
         ids.push_back({c.rel, id});
       }
       renumber(anchor, ids);
-      // A shape id the drawing doesn't use, in its first cNvPr.
-      if (const size_t at = anchor.find("cNvPr"); at != std::string::npos) {
+      // Shape ids the drawing doesn't use, in each cNvPr (a group has one per shape); the first
+      // names the object.
+      uint32_t next = NextShapeId(d);
+      for (size_t at = anchor.find("cNvPr"), first = at; at != std::string::npos; at = anchor.find("cNvPr", at + 5)) {
         const size_t q = anchor.find(" id=\"", at), close = anchor.find('>', at);
         const size_t e = q == std::string::npos ? q : anchor.find('"', q + 5);
         if (q != std::string::npos && q < close && e != std::string::npos) {
-          const uint32_t shape = NextShapeId(d);
+          const uint32_t shape = next++;
           anchor.replace(q + 5, e - q - 5, std::to_string(shape));
+          if (at != first) continue;
           // Its name numbered anew as Excel numbers a copy ("Chart 1" pasted: "Chart 2").
           const size_t n = anchor.find(" name=\"", at), ne = n == std::string::npos ? n : anchor.find('"', n + 7);
           if (n != std::string::npos && ne != std::string::npos && n < anchor.find('>', at)) {
@@ -5383,6 +5474,7 @@ void Editor::EndGroup() {
     return;
   }
   if (step.Empty()) return;
+  if (const pkg::Package* package = book_.GetPackage()) step.Settle(*package);
   step.serial = ++st.serial;
   st.Count(step, 1);
   std::vector<edit::Change> changes = st.Resolve(step, false);
