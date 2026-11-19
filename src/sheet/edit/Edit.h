@@ -249,6 +249,9 @@ class Editor {
   std::string AddPart(std::string_view source, std::string_view relType, std::string_view name,
                       std::string_view contentType, std::string bytes);
   // A part that exists written anew.
+  // A relationship from `source` to a part that exists already (a picture stored once, used
+  // again); returns its id, empty when it can't.
+  std::string AddRelationship(std::string_view source, std::string_view relType, std::string_view target);
   bool WritePart(std::string_view name, std::string bytes);
   // A part gone, with every relationship to it, its content type override and its own
   // relationships (what those point to is the caller's to remove).
@@ -256,6 +259,18 @@ class Editor {
   // The first name "<stem><n><ext>" no part has, n from 1: NewPartName("/xl/charts/chart", ".xml").
   std::string NewPartName(std::string_view stem, std::string_view ext) const;
   std::string PartBytes(std::string_view name) const;  // empty when there's no such part
+
+  // ---- Drawings: charts, pictures and shapes sit in the sheet's drawing part. Changes go inside
+  // a group (Run, or BeginGroup/EndGroup).
+  // The sheet's drawing (/xl/drawings/drawingN.xml); when it has none and `create`, a new one with
+  // its relationship, content type and the sheet's <drawing r:id> element. Empty when it can't
+  // (no package, a sheet not saved yet; creating needs an open group).
+  std::string SheetDrawing(int sheet, bool create);
+  // A shape id (cNvPr id) the drawing doesn't use yet: one past the highest.
+  uint32_t NextShapeId(std::string_view drawing) const;
+  // Appends an anchor to a drawing: an xdr:twoCellAnchor, oneCellAnchor or absoluteAnchor that
+  // declares the xdr: and a: prefixes (and r: when it has relationships) on itself.
+  bool AddAnchor(std::string_view drawing, std::string_view anchorXml);
 
   // ---- Charts (s3-charts)
   enum class ChartKind : uint8_t { Column, Bar, Line, Pie, Doughnut, Area, Scatter };
