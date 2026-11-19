@@ -72,6 +72,9 @@ enum Cmd : int {
   CmdBannerAction = 600,
   CmdNewFile = 700,     // + fw::FileKind, once that kind's editor ships
   CmdNewTemplate = 720, // + index into EmptyState::kTemplates (D5): a new document from a template
+  // s4-ods (3020-3039): the user's own templates (UserTemplates.h).
+  CmdUserTemplate = 3020,         // + index (up to kUserTemplateCount): a new document or workbook from one
+  CmdUserTemplatesFolder = 3036,  // "More templates...": the Open dialog in the personal templates folder
 
   // Documents: formatting (D2). The toolbar's boxes have ids too.
   CmdBold = 1000,
