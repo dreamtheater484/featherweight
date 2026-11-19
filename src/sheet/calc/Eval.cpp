@@ -431,7 +431,7 @@ Value Machine::RefArray(const Value& ref) {
     if (a.Rows() > 65536) a.r2 = std::max(a.r1, std::min(a.r2, er - 1));
     if (a.Cols() > 1024) a.c2 = static_cast<int16_t>(std::max<int32_t>(a.c1, std::min<int32_t>(a.c2, ec - 1)));
   }
-  if (static_cast<int64_t>(a.Rows()) * a.Cols() > 16'000'000) return Value::Error(Err::Num);
+  if (!Fits(a.Rows(), a.Cols())) return Value::Error(Err::Num);
   Array* arr = Array::Make(a.Rows(), a.Cols());
   struct Fill {
     Array* arr;
@@ -782,6 +782,7 @@ void Machine::Binary(uint8_t code, bool final) {
     int32_t rows = 1, cols = 1;
     Shape(x, rows, cols);
     Shape(y, rows, cols);
+    if (!Fits(rows, cols)) return stack.push_back(Value::Error(Err::Num));  // a column times a row
     Array* r = Array::Make(rows, cols);
     for (int32_t i = 0; i < rows; ++i)
       for (int32_t j = 0; j < cols; ++j) r->at(i, j) = BinaryScalar(*this, op, Element(x, i, j), Element(y, i, j), final);
@@ -809,18 +810,21 @@ void Machine::CallFn(int id, int argc, bool arrayMode) {
     if (args[i].IsRef()) args[i] = Deref(args[i], arrayMode);
     if (args[i].IsArray()) lift = true;
   }
+  int32_t rows = 1, cols = 1;
+  if (lift)
+    for (int i = 0; i < argc; ++i)
+      if (ParamClass(f, i) == 'V') Shape(args[i], rows, cols);
   Value result;
   if (stop) {
     result = Value::Error(Err::Value);
+  } else if (!Fits(rows, cols)) {
+    result = Value::Error(Err::Num);
   } else if (!lift) {
     Call c{*this, args, argc, arrayMode, Value()};
     f.impl(c);
     result = std::move(c.out);
   } else {
     // A 'V' argument given an array: the function runs for each element.
-    int32_t rows = 1, cols = 1;
-    for (int i = 0; i < argc; ++i)
-      if (ParamClass(f, i) == 'V') Shape(args[i], rows, cols);
     Array* r = Array::Make(rows, cols);
     std::vector<Value> one(args, args + argc);
     for (int32_t i = 0; i < rows && !stop; ++i)
@@ -866,6 +870,10 @@ const uint8_t* Machine::Lazy(const uint8_t* p) {
       Shape(cond, rows, cols);
       Shape(a, rows, cols);
       Shape(b, rows, cols);
+      if (!Fits(rows, cols)) {
+        stack.push_back(Value::Error(Err::Num));
+        return q;
+      }
       Array* r = Array::Make(rows, cols);
       for (int32_t i = 0; i < rows; ++i)
         for (int32_t j = 0; j < cols; ++j) {
@@ -918,6 +926,10 @@ const uint8_t* Machine::Lazy(const uint8_t* p) {
       const Array& src = i.array();
       int32_t rows = src.rows(), cols = src.cols();
       for (const Value& c : choices) Shape(c, rows, cols);
+      if (!Fits(rows, cols)) {
+        stack.push_back(Value::Error(Err::Num));
+        return q;
+      }
       Array* r = Array::Make(rows, cols);
       for (int32_t y = 0; y < rows; ++y)
         for (int32_t x = 0; x < cols; ++x) {
