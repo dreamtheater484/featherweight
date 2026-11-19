@@ -1,8 +1,8 @@
 # The edit layer (plan §4.3 rules 4 and 5, S2): operations with inverses on the copy-on-write row
 # blocks, transactions, undo and redo. The only code that changes a loaded workbook model.
-target_sources(fwsheet PRIVATE Edit.cpp Journal.cpp Refs.cpp Protection.cpp Notes.cpp Drawing.cpp PageSetupXml.cpp Charts.cpp)
+target_sources(fwsheet PRIVATE Edit.cpp Journal.cpp Refs.cpp Protection.cpp Notes.cpp Drawing.cpp PageSetupXml.cpp Charts.cpp Pivots.cpp PivotInsert.cpp)
 # Run once per edit or save, never per cell: compiled for size (the S2 size budget).
-set_source_files_properties(Edit.cpp Journal.cpp Refs.cpp Protection.cpp Notes.cpp Drawing.cpp PageSetupXml.cpp Charts.cpp TARGET_DIRECTORY fwsheet PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
+set_source_files_properties(Edit.cpp Journal.cpp Refs.cpp Protection.cpp Notes.cpp Drawing.cpp PageSetupXml.cpp Charts.cpp Pivots.cpp PivotInsert.cpp TARGET_DIRECTORY fwsheet PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release,MinSizeRel>:/O1>")
 # Edit.cpp's sections pass COFF's 65,279 in the instrumented fuzz build.
 set_property(SOURCE Edit.cpp TARGET_DIRECTORY fwsheet APPEND PROPERTY COMPILE_OPTIONS /bigobj)
 if(TARGET fw_tests)

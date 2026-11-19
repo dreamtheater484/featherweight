@@ -402,6 +402,36 @@ class Editor {
   // its new page.
   Result SetPageBreaks(int sheet, const std::vector<PageBreak>& rows, const std::vector<PageBreak>& cols);
 
+  // ---- Pivot tables (S4 s4-pivot; sheet/pivot/Pivot.h). Refresh (journal 110): the caches read
+  // again from their source cells and every pivot table on them laid out again, as Excel does it:
+  // the cells (the old ones cleared), the cache, its records and the table's part. `which`: the
+  // pivot at `cell` of `sheet` (Refresh), every pivot (Refresh All), or the caches whose file asks
+  // for it (refreshOnLoad, after opening). Refused, nothing changed, for a pivot with features
+  // Featherweight keeps but doesn't refresh, a source it can't use, a pivot that would cover other
+  // cells, or a protected sheet.
+  enum class PivotRefresh : uint8_t { AtCell, All, OnLoad };
+  Result RefreshPivots(PivotRefresh which, int sheet = -1, CellAddr cell = {});
+  // Insert > PivotTable (journal 111): a pivot of `source` (its first row the header) on worksheet
+  // `sheet` at `at` (its page fields there, the table below them), written as Excel writes a new one
+  // (the cache with its records, the table, workbook.xml's pivotCaches) and laid out as a refresh
+  // does. Columns are the source's (0 its first); values' `func`: 0 sum, 1 count, 2 average, 3 max,
+  // 4 min. The sheet must be in the file already (a sheet added since opening has no part until
+  // it's saved); refused like Excel over cells that aren't empty.
+  struct NewPivotTable {
+    int sourceSheet = 0;
+    Range source;
+    std::string table;  // instead: a table's name (the pivot then follows the table's size)
+    int sheet = 0;
+    CellAddr at;
+    std::vector<uint32_t> rows, cols, filters;
+    struct Value {
+      uint32_t column = 0;
+      uint8_t func = 0;
+    };
+    std::vector<Value> values;
+  };
+  Result InsertPivot(const NewPivotTable& p);
+
   // ---- View state: saved with the file, but not undo steps (as in Excel).
   void SetActiveSheet(int sheet);
   void SetSelection(int sheet, CellAddr active, const std::vector<Range>& ranges);

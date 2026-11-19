@@ -236,7 +236,9 @@ int RunPdfCompare(const Options& options) {
   for (FPDF_DOCUMENT d : docs) FPDF_CloseDocument(d);
   std::printf("%d of %d pages at SSIM >= %.2f (%d pages in the reference, %d in ours)\n", passing, pages, kMinSsim, counts[0], counts[1]);
   if (!options.jsonOut.empty())
-    std::ofstream(options.jsonOut, std::ios::trunc) << "{\n  \"minSsim\": " << kMinSsim << ",\n  \"pages\": [\n" << json << "\n  ]\n}\n";
+    std::ofstream(options.jsonOut, std::ios::trunc) << "{\n  \"minSsim\": " << kMinSsim << ", \"passing\": " << passing
+                                                    << ", \"referencePages\": " << counts[0] << ", \"oursPages\": " << counts[1]
+                                                    << ",\n  \"pages\": [\n" << json << "\n  ]\n}\n";
   return passing == pages && pages > 0 ? 0 : 1;
 }
 

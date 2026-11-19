@@ -403,10 +403,18 @@ int RunCellCompare(const Options& options) {
 
   Counts total;
   std::vector<WorkbookResult> results;
+  // --folders: the top folders measured ("xls,ods"); empty: all.
+  std::vector<std::string> only;
+  for (size_t at = 0; at < options.folders.size();) {
+    const size_t comma = std::min(options.folders.find(',', at), options.folders.size());
+    if (comma > at) only.push_back(options.folders.substr(at, comma - at));
+    at = comma + 1;
+  }
   for (const JsonValue& e : files->array) {
     std::string cellsRel = e.StringOr("cells");
     if (cellsRel.empty()) continue;
     std::string source = e.StringOr("source");
+    if (!only.empty() && std::find(only.begin(), only.end(), source.substr(0, source.find('/'))) == only.end()) continue;
     std::string cellsText;
     std::optional<JsonValue> cells;
     if (ReadText(folder / fw::Utf8ToWide(cellsRel), cellsText)) cells = fw::ParseJson(cellsText);

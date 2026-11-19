@@ -434,4 +434,8 @@ enum Cmd : int {
   CmdDefineName,
   CmdCreateNames,         // Ctrl+Shift+F3
   CmdPasteNames,          // F3
+
+  // Pivot tables (S4, s4-pivot): 3040-3079.
+  CmdPivotRefresh = 3040,  // Alt+F5: the PivotTable at the active cell
+  CmdPivotRefreshAll,      // Ctrl+Alt+F5
 };
