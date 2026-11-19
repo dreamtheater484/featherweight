@@ -3,7 +3,9 @@
 // writer, which must give back what it read. Then edits through the edit API (S2), undo, redo, the
 // crash-recovery journal replayed, and a save that must open again. Also what sits above the cells (src/sheet/objects):
 // drawings, charts with their data references, notes and threaded comments, read, placed and
-// drawn; and the table styles' formats.
+// drawn; and the table styles' formats. The edits (S3) include tables, conditional formats and
+// validation, pictures and shapes, links, notes and threaded comments, protection, page setup,
+// page breaks and the print area and titles, each through the Editor call its panel makes.
 // Seeds: tests/fuzz/seeds/xlsx (a small workbook with every structure the model reads) and
 // tests/fuzz/seeds/package (corpus files as text).
 //
