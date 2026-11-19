@@ -32,13 +32,15 @@ The S2 sessions carry on (renamed), each with the piece closest to what it built
 
 | Piece | Session | Weight | Size budget |
 |---|---|---|---|
-| Charts created and edited; pictures and shapes inserted | s3-charts (was s2-model) | 24 % | 400 KB |
+| Charts created and edited; pictures and shapes inserted | s3-charts (was s2-model); pictures and shapes s3-data (2026-11-19) | 24 % | 400 KB |
 | Tables, conditional formatting, data validation | s3-data (was s2-format) | 22 % | 350 KB |
 | Notes and comments written, hyperlinks, protection | s3-review (was s2-grid) | 14 % | 200 KB |
-| Page setup, print preview, Export PDF | s3-calc, after its own piece | 12 % | 150 KB |
+| Page setup, print preview, Export PDF | s3-review, after its own piece (2026-11-19; was s3-calc) | 12 % | 150 KB |
 | Functions, dynamic arrays while editing, names | s3-calc (was s2-calc) | 10 % (about 7 % done) | 250 KB (170.5 KB used) |
 | Torture gate extended, "created as Excel shows it", budgets, checklist | s3-corpus (was s2-corpus) | 13 % | 0 (tools only) |
 | Final gate | coordinator | 5 % | 0 |
+
+2026-11-19: s3-review finished its piece first and takes page setup (it built S1's printing); s3-data takes pictures and shapes after its tables, on s3-charts' drawing part, so charts, the largest piece, finishes sooner. s3-calc keeps the recalculation of what depends on formulas and long fuzz runs.
 
 The size budgets add up to 1.35 MB; each piece measures with the linker-map method and records it in `tests/budgets/ledger.json` with a reason.
 
