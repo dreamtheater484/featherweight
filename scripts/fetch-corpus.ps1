@@ -3,13 +3,25 @@
   Builds the real-world corpus (plan section 10) of Word documents, workbooks and CSV files from
   tests\office\real-world.json: downloads every file, checks its hash and screens it, so anyone
   can rebuild the corpus exactly. The files are never committed (their licences vary); only the
-  manifest is. An entry's format follows its "file" (docx/, xlsx/, csv/), or for a candidate its
-  "format" or its URL's extension: .docx; .xlsx or .xltx; .csv, .tsv or .txt.
+  manifest is. An entry's format follows its "file" (docx/, xlsx/, csv/, pptx/), or for a candidate
+  its "format" or its URL's extension: .docx; .xlsx or .xltx; .csv, .tsv or .txt; .pptx, .ppsx or .potx.
+
+  Decks (P1) get the same screen (steps 1, 2, 4 and 5) with their own content rules (step 3): a plain
+  (macro-free) presentation, show or template; no VBA, ActiveX, OLE objects or embedded packages
+  (nothing in ppt/embeddings/ but a chart's own workbook, screened inside), web extensions or ribbon
+  customizations; no external relationship but an http, https or mailto hyperlink (linked pictures,
+  sounds and videos would reach out during the show); and no click or hover action that leaves the
+  show (ppaction://program, macro, ole, hlinkfile, hlinkpres): only slide jumps, show jumps (next,
+  previous, first, last, end) and custom shows. The facts recorded: the producer, the slides, hidden
+  slides, the slide size, and tags (pictures, photo-heavy, charts, tables, smartart, groups, wordart,
+  3d, autofit, svg, transitions, animations, sounds, video, audio, hyperlinks, notes, comments,
+  sections, custom-shows, embedded-fonts, ink, rtl, east-asian, hidden-slides).
 
   Corpus layout (point FW_CORPUS at the folder):
     docx\<category>\<id>.docx           the documents that passed the screen
     xlsx\<category>\<id>.xlsx           the workbooks (and .xltx templates) that passed it
     csv\<category>\<id>.csv             the CSV and TSV files that passed it
+    pptx\<category>\<id>.pptx           the decks (and .ppsx shows, .potx templates) that passed it
     reference\docx\<category>\<id>.docx.pdf, reference\xlsx\...\<id>.xlsx.pdf and .cells.json,
     reference\manifest.json             Office's PDFs (scripts\reference-renders.ps1 -Corpus)
     screen.json                         this run's results: every file, passed or rejected, and why
@@ -192,6 +204,7 @@ function Get-Download([string]$url, [string]$dest, [string]$format = "docx") {
       $bad = switch ($format) {
         "xlsx" { '(?i)\.(xlsm|xltm|xlsb|xls|xlam|ods|csv|docx|doc|zip|7z|rar|exe|pdf|htm|html)$' }
         "csv" { '(?i)\.(xlsx|xlsm|xls|xlsb|ods|docx|doc|zip|gz|7z|rar|exe|pdf|htm|html|json|xml)$' }
+        "pptx" { '(?i)\.(pptm|potm|ppsm|ppt|pps|pot|odp|key|docx|xlsx|zip|7z|rar|exe|pdf|htm|html)$' }
         default { '(?i)\.(docm|dotx|dotm|doc|rtf|odt|zip|7z|rar|exe|pdf|htm|html)$' }
       }
       if ($name -match $bad) { throw "served as $name, not a .$format" }
@@ -984,16 +997,233 @@ function Test-Csv([string]$path) {
   @{ reasons = @($reasons); facts = $facts }
 }
 
-# The format of a manifest entry or candidate: docx, xlsx or csv.
+# ---------------------------------------------------------------- Decks (P1)
+
+$pptMainTypes = @{
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml" = ".pptx"
+  "application/vnd.openxmlformats-officedocument.presentationml.slideshow.main+xml" = ".ppsx"
+  "application/vnd.openxmlformats-officedocument.presentationml.template.main+xml" = ".potx"
+}
+# Parts a plain deck never has: VBA, ActiveX, OLE objects and packages (everything in
+# ppt/embeddings/ but a chart's own workbook), web extensions, ribbon customizations, add-ins' data.
+$badPptPath = '(?i)(^|/)vbaProject\.bin$|vbaProjectSignature|vbaData\.xml$|^ppt/activeX/|^ppt/embeddings/|webextension|taskpanes|^customUI/'
+$pptChartBook = '(?i)^ppt/embeddings/[^/]+\.xlsx$'
+$pptChartRels = '(?i)^ppt/charts/_rels/chart(ex)?\d*\.xml\.rels$'
+$badPptType = '(?i)macroEnabled|vbaProject|vbaData|activeX|oleObject|webextension|taskpane|addin'
+$badPptRel = @("vbaProject", "oleObject", "package", "control", "activeXControl", "activeXControlBinary", "webextension",
+  "webextensiontaskpanes", "extensibility", "attachedTemplate")
+# Click and hover actions: these jump within the show or play a custom show; the rest start a program,
+# run a macro, open a file, another presentation or an OLE verb, and are refused.
+$plainAction = '^(?i)ppaction://(hlinksldjump|hlinkshowjump\?jump=\w+|customshow\?|noaction|media)'
+
+# Screens one deck. Returns @{ reasons = @(...); facts = @{...} }; no reasons means it passed.
+function Test-Pptx([string]$path) {
+  $reasons = New-Object Collections.Generic.List[string]
+  $facts = [ordered]@{}
+  $fi = Get-Item -LiteralPath $path
+  if (@(".pptx", ".ppsx", ".potx") -notcontains $fi.Extension.ToLowerInvariant()) { $reasons.Add("not a .pptx, .ppsx or .potx file"); return @{ reasons = $reasons; facts = $facts } }
+  if ($fi.Length -ge $MaxBytes) { $reasons.Add("20 MB or larger"); return @{ reasons = $reasons; facts = $facts } }
+  $head = New-Object byte[] 4
+  $fs = [IO.File]::OpenRead($path); [void]$fs.Read($head, 0, 4); $fs.Dispose()
+  if ($head[0] -ne 0x50 -or $head[1] -ne 0x4B -or $head[2] -ne 3 -or $head[3] -ne 4) {
+    $why = if ($head[0] -eq 0xD0 -and $head[1] -eq 0xCF) { "an OLE file (a .ppt, or an encrypted deck)" } else { "not a zip (a web page or another format)" }
+    $reasons.Add($why); return @{ reasons = $reasons; facts = $facts }
+  }
+  $zip = $null
+  $part = $null
+  try {
+    $zip = [IO.Compression.ZipFile]::OpenRead($path)
+    $entries = @($zip.Entries)
+    if ($entries.Count -gt 5000) { throw "more than 5000 parts" }
+    $names = @{}
+    foreach ($e in $entries) {
+      $n = $e.FullName.TrimStart('/')
+      if ($names.ContainsKey($n.ToLowerInvariant())) { throw "duplicate part name $n" }
+      $names[$n.ToLowerInvariant()] = $e
+      if ($n -match $badPptPath -and $n -notmatch $pptChartBook) { $reasons.Add("forbidden part $n") }
+    }
+    $budget = [long]$TotalCap
+    $ct = $names["[content_types].xml"]
+    if (-not $ct) { throw "no [Content_Types].xml" }
+    $defaults = @{}; $overrides = @{}
+    $r = New-XmlReader (Read-Part $ct ([ref]$budget))
+    while ($r.Read()) {
+      if ($r.NodeType -ne [Xml.XmlNodeType]::Element) { continue }
+      $type = $r.GetAttribute("ContentType")
+      if ($r.LocalName -eq "Default") { $defaults[$r.GetAttribute("Extension").ToLowerInvariant()] = $type }
+      elseif ($r.LocalName -eq "Override") { $overrides[$r.GetAttribute("PartName").TrimStart('/').ToLowerInvariant()] = $type }
+      if ($type -and $type -match $badPptType -and ($r.LocalName -eq "Override" -or $type -match '(?i)macroEnabled|vba')) { $reasons.Add("forbidden content type $type") }
+    }
+    $r.Dispose()
+    function Get-PartType([string]$n) {
+      $k = $n.ToLowerInvariant()
+      if ($overrides.ContainsKey($k)) { return $overrides[$k] }
+      $ext = [IO.Path]::GetExtension($k).TrimStart('.')
+      if ($defaults.ContainsKey($ext)) { return $defaults[$ext] }
+      $null
+    }
+    $count = @{}
+    function Add-Count([string]$k, [int]$n = 1) { $count[$k] = $n + [int]$count[$k] }
+    # Relationships: the main part, refused types and external targets, and the chart workbooks.
+    $main = $null
+    $books = @{}
+    foreach ($e in $entries) {
+      $n = $e.FullName.TrimStart('/')
+      if ($n -notmatch '(?i)\.rels$') { continue }
+      $part = $n
+      $r = New-XmlReader (Read-Part $e ([ref]$budget))
+      while ($r.Read()) {
+        if ($r.NodeType -ne [Xml.XmlNodeType]::Element -or $r.LocalName -ne "Relationship") { continue }
+        $target = $r.GetAttribute("Target"); $mode = $r.GetAttribute("TargetMode")
+        $short = ($r.GetAttribute("Type") -split '/')[-1]
+        if ($short -eq "package" -and $n -match $pptChartRels -and $mode -ne "External" -and (Resolve-PartName $n $target) -match $pptChartBook) {
+          $books[(Resolve-PartName $n $target).ToLowerInvariant()] = $true
+        } elseif ($badPptRel -contains $short) { $reasons.Add("forbidden relationship $short ($n)") }
+        if ($n -ieq "_rels/.rels" -and $short -eq "officeDocument") { $main = $target.TrimStart('/') }
+        if ($mode -eq "External") {
+          # Linked pictures, sounds and videos reach out when the deck is shown: only hyperlinks may be external.
+          if ($short -ne "hyperlink") { $reasons.Add("external $short relationship to $(Format-Target $target) ($n)") }
+          elseif ($target -notmatch $plainLink) { $reasons.Add("hyperlink that isn't http, https or mailto: $(Format-Target $target) ($n)") }
+        }
+        switch ($short) { "video" { Add-Count "video" } "audio" { Add-Count "audio" } "media" { Add-Count "media" } "font" { Add-Count "embedded-fonts" }
+          "comments" { Add-Count "comments" } "diagramData" { Add-Count "smartart" } "notesSlide" { Add-Count "notes" } }
+      }
+      $r.Dispose()
+    }
+    if (-not $main) { throw "no main document relationship" }
+    $mainType = Get-PartType $main
+    if (-not $pptMainTypes.ContainsKey([string]$mainType)) { $reasons.Add("main part isn't a plain (macro-free) presentation, show or template ($mainType)") }
+    else { $facts.kind = $pptMainTypes[$mainType] }
+    foreach ($e in $entries) {
+      $t = Get-PartType $e.FullName.TrimStart('/')
+      if ($t -and $t -match $badPptType) { $reasons.Add("forbidden part type $t ($($e.FullName))") }
+    }
+    foreach ($k in @($names.Keys)) {
+      if ($k -notmatch $pptChartBook) { continue }
+      $n = $names[$k].FullName.TrimStart('/')
+      if (-not $books[$k]) { $reasons.Add("forbidden part $n (no chart refers to it)"); continue }
+      $t = Get-PartType $n
+      if ($t -ne $xlsxType) { $reasons.Add("chart workbook $n isn't a plain .xlsx ($t)"); continue }
+      foreach ($why in (Test-Workbook $names[$k] ([ref]$budget))) { $reasons.Add("chart workbook $($n): $why") }
+    }
+
+    # Every XML part: forbidden strings and elements, click actions, and the facts.
+    $slides = 0; $hidden = 0; $cjk = 0
+    foreach ($e in $entries) {
+      $n = $e.FullName.TrimStart('/')
+      $t = Get-PartType $n
+      if ($n -notmatch '(?i)\.(xml|rels|vml)$' -and -not ($t -and $t -match '(?i)[+/]xml$')) { continue }
+      $bytes = Read-Part $e ([ref]$budget)
+      $text = Get-XmlText $bytes
+      $m = [regex]::Match($text, $badString)
+      if ($m.Success) { $reasons.Add("contains '$($m.Value)' ($n)") }
+      if ($n -match '(?i)\.rels$') { continue }
+      $isSlide = $n -match '(?i)^ppt/slides/slide\d+\.xml$'
+      if ($isSlide) {
+        $slides++
+        foreach ($tm in [regex]::Matches($text, '<a:t>([^<]+)</a:t>')) { $cjk += [regex]::Matches($tm.Groups[1].Value, $cjkClass).Count }
+      }
+      $part = "$n ($t)"
+      $r = New-XmlReader $bytes
+      while ($r.Read()) {
+        if ($r.NodeType -ne [Xml.XmlNodeType]::Element) { continue }
+        $ln = $r.LocalName
+        switch -CaseSensitive ($ln) {
+          "sld" { if ($isSlide -and $r.GetAttribute("show") -in "0", "false") { $hidden++ } }
+          { $_ -in "oleObj", "control", "embed" } { if ($r.NamespaceURI -match 'presentationml') { $reasons.Add("$ln ($n)") } }
+          { $_ -in "hlinkClick", "hlinkHover", "hlinkMouseOver" } {
+            $action = $r.GetAttribute("action")
+            if ($action -and $action -notmatch $plainAction) {
+              $what = if ($action -match '^(?i)ppaction://([a-z]+)') { $Matches[1] } else { "an action" }
+              $reasons.Add("a click action that leaves the show ($what) ($n)")
+            }
+            if ($isSlide -or $n -match '(?i)^ppt/slide(Layout|Master)s/') { Add-Count "hyperlinks" }
+          }
+          "snd" { if ($r.NamespaceURI -match 'presentationml') { Add-Count "sounds" } }
+          "pic" { if ($isSlide) { Add-Count "pictures" } }
+          "tbl" { if ($isSlide) { Add-Count "tables" } }
+          "chart" { if ($r.NamespaceURI -match 'drawingml/2006/chart' -and $isSlide) { Add-Count "charts" } }
+          "grpSp" { if ($isSlide) { Add-Count "groups" } }
+          "transition" { if ($isSlide) { Add-Count "transitions" } }
+          "timing" { if ($isSlide) { Add-Count "animations" } }
+          "prstTxWarp" { if ($isSlide -and $r.GetAttribute("prst") -ne "textNoShape") { Add-Count "wordart" } }
+          "sp3d" { if ($isSlide) { Add-Count "3d" } }
+          "normAutofit" { if ($isSlide -and $r.GetAttribute("fontScale")) { Add-Count "autofit" } }
+          "sectionLst" { Add-Count "sections" }
+          "custShow" { Add-Count "custom-shows" }
+          "embeddedFont" { Add-Count "embedded-fonts" }
+          "oMath" { Add-Count "equations" }
+          "svgBlip" { Add-Count "svg" }
+          "contentPart" { if ($isSlide) { Add-Count "ink" } }
+          "sldSz" {
+            $cx = [double]$r.GetAttribute("cx"); $cy = [double]$r.GetAttribute("cy")
+            if ($cy -gt 0) { $facts.slideSize = if ([Math]::Abs($cx / $cy - 16 / 9) -lt 0.01) { "16:9" } elseif ([Math]::Abs($cx / $cy - 4 / 3) -lt 0.01) { "4:3" } elseif ([Math]::Abs($cx / $cy - 16 / 10) -lt 0.01) { "16:10" } elseif ($cy -gt $cx) { "portrait" } else { "other" } }
+          }
+          "pPr" { if ($isSlide -and $r.GetAttribute("rtl") -eq "1") { Add-Count "rtl" } }
+        }
+      }
+      $r.Dispose()
+    }
+    if ($cjk -ge 10) { Add-Count "east-asian" $cjk }
+    $facts.slides = $slides
+    if ($hidden) { $facts.hiddenSlides = $hidden }
+    # Photo-heavy: many pictures for the slides (a picture or more on every slide, on average).
+    if ($slides -gt 0 -and [int]$count["pictures"] -ge $slides) { Add-Count "photo-heavy" }
+
+    # Facts for the manifest.
+    $app = $names["docprops/app.xml"]
+    if ($app) {
+      $r = New-XmlReader (Read-Part $app ([ref]$budget))
+      while ($r.Read()) {
+        if ($r.NodeType -ne [Xml.XmlNodeType]::Element) { continue }
+        switch ($r.LocalName) {
+          "Application" { $facts.producer = $r.ReadElementContentAsString() }
+          "AppVersion" { $facts.appVersion = $r.ReadElementContentAsString() }
+        }
+      }
+      $r.Dispose()
+    }
+    $core = $names["docprops/core.xml"]
+    if ($core) {
+      $r = New-XmlReader (Read-Part $core ([ref]$budget))
+      while ($r.Read()) {
+        if ($r.NodeType -eq [Xml.XmlNodeType]::Element -and $r.LocalName -eq "modified") { $v = $r.ReadElementContentAsString(); if ($v.Length -ge 10) { $facts.modified = $v.Substring(0, 10) } }
+      }
+      $r.Dispose()
+    }
+    if (-not $facts.Contains("producer")) {
+      $facts.producer = if (-not $names["docprops/core.xml"] -and $entries[$entries.Count - 1].FullName -eq "[Content_Types].xml") { "Google Slides (inferred: no docProps, [Content_Types].xml last)" } else { "unknown (no docProps/app.xml)" }
+    }
+    $tags = New-Object Collections.Generic.List[string]
+    foreach ($k in "pictures", "photo-heavy", "charts", "tables", "smartart", "groups", "wordart", "3d", "autofit", "svg", "equations",
+                   "transitions", "animations", "sounds", "video", "audio", "hyperlinks", "notes", "comments", "sections", "custom-shows",
+                   "embedded-fonts", "ink", "rtl", "east-asian") {
+      if ($count[$k]) { $tags.Add($k) }
+    }
+    if ($hidden) { $tags.Add("hidden-slides") }
+    $facts.tags = @($tags)
+    $facts.counts = [ordered]@{}
+    foreach ($k in @($count.Keys | Sort-Object)) { $facts.counts[$k] = $count[$k] }
+  } catch {
+    $where = if ($part) { " in $part" } else { "" }
+    $reasons.Add("malformed$($where): $($_.Exception.Message)")
+  } finally {
+    if ($zip) { $zip.Dispose() }
+  }
+  @{ reasons = @($reasons | Select-Object -Unique); facts = $facts }
+}
+
+# The format of a manifest entry or candidate: docx, xlsx, csv or pptx.
 function Get-Format($e) {
   $ext = if ($e.file) { [IO.Path]::GetExtension($e.file) } elseif ($e.format) { "." + $e.format } else { [IO.Path]::GetExtension(([Uri]$e.url).AbsolutePath) }
-  switch -Regex ($ext.ToLowerInvariant()) { '^\.(xlsx|xltx)$' { "xlsx" } '^\.(csv|tsv|txt)$' { "csv" } default { "docx" } }
+  switch -Regex ($ext.ToLowerInvariant()) { '^\.(xlsx|xltx)$' { "xlsx" } '^\.(csv|tsv|txt)$' { "csv" } '^\.(pptx|ppsx|potx)$' { "pptx" } default { "docx" } }
 }
 # The file extension a format's file is kept with.
 function Get-Extension($e, [string]$format) {
   if ($e.file) { return [IO.Path]::GetExtension($e.file).ToLowerInvariant() }
   $ext = [IO.Path]::GetExtension(([Uri]$e.url).AbsolutePath).ToLowerInvariant()
-  switch ($format) { "xlsx" { if ($ext -eq ".xltx") { ".xltx" } else { ".xlsx" } } "csv" { if ($ext -eq ".tsv") { ".tsv" } else { ".csv" } } default { ".docx" } }
+  switch ($format) { "xlsx" { if ($ext -eq ".xltx") { ".xltx" } else { ".xlsx" } } "csv" { if ($ext -eq ".tsv") { ".tsv" } else { ".csv" } }
+    "pptx" { if (@(".ppsx", ".potx") -contains $ext) { $ext } else { ".pptx" } } default { ".docx" } }
 }
 
 # fwtool check refuses malformed packages and zip bombs, and checks every reference.
@@ -1017,7 +1247,7 @@ function Test-Defender([string]$folder) {
 
 # Screens one file by its format; fwtool check for the packages.
 function Test-File([string]$path, [string]$format) {
-  $t = switch ($format) { "xlsx" { Test-Xlsx $path } "csv" { Test-Csv $path } default { Test-Docx $path } }
+  $t = switch ($format) { "xlsx" { Test-Xlsx $path } "csv" { Test-Csv $path } "pptx" { Test-Pptx $path } default { Test-Docx $path } }
   $reasons = @($t.reasons)
   if (-not $reasons.Count -and $format -ne "csv") { $fw = Test-Fwtool $path; if ($fw) { $reasons = @($fw) } }
   @{ reasons = $reasons; facts = $t.facts }
@@ -1152,6 +1382,14 @@ function Set-Facts($entry, $facts, [string]$format) {
         sheets = $facts.sheets; cells = $facts.cells; formulas = $facts.formulas
         tags = $facts.tags
         functions = @($facts.functions.Keys)
+      }
+    }
+    "pptx" {
+      [ordered]@{
+        modified = $facts.modified
+        producer = (@($facts.producer, $facts.appVersion) | Where-Object { $_ }) -join " "
+        slides = $facts.slides; hiddenSlides = $facts.hiddenSlides; slideSize = $facts.slideSize
+        tags = $facts.tags
       }
     }
     "csv" {
