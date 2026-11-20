@@ -16,6 +16,8 @@
 #include "pkg/Snapshot.h"
 #include "pkg/XmlDom.h"
 #include "pkg/Zip.h"
+#include "sheet/data/Shapes.h"
+#include "sheet/edit/Drawing.h"
 #include "sheet/edit/Notes.h"
 #include "sheet/ods/OdsStyles.h"
 #include "sheet/xlsx/Internal.h"
@@ -192,6 +194,54 @@ std::string CellText(xml_node cell, std::string* link) {
   return out;
 }
 
+// A cell's text as rich text runs (a shared string's <r>s) where text:spans change its font: the
+// same text as CellText. False when no span does.
+struct Run {
+  std::string props, text;
+};
+void Runs(xml_node n, const std::string& props, detail::Styles& st, int xf, std::vector<Run>& runs, int depth) {
+  auto add = [&](std::string_view s) {
+    if (runs.empty() || runs.back().props != props) runs.push_back({props, {}});
+    runs.back().text += s;
+  };
+  for (xml_node c : n.children()) {
+    if (c.type() == pugi::node_pcdata || c.type() == pugi::node_cdata) {
+      add(c.value());
+      continue;
+    }
+    const std::string_view name = c.name();
+    if (name == "text:s") add(std::string(std::clamp(std::atoi(std::string(Attr(c, "text:c")).c_str()), 1, 1000), ' '));
+    else if (name == "text:tab") add(" ");
+    else if (name == "text:line-break") add("\n");
+    else if (name == "office:annotation" || name == "text:note" || name == "draw:frame" || name == "text:ruby-text") continue;
+    else if (depth < kMaxDepth)
+      Runs(c, name == "text:span" ? st.RunProps(Attr(c, "text:style-name"), xf) : props, st, xf, runs, depth + 1);
+  }
+}
+
+bool RichText(xml_node cell, detail::Styles& st, int xf, std::string& si) {
+  bool spans = false;
+  for (xml_node p : cell.children("text:p")) spans |= static_cast<bool>(p.child("text:span"));
+  if (!spans) return false;
+  std::vector<Run> runs;
+  for (xml_node p : cell.children()) {
+    if (p.name() != std::string_view("text:p") && p.name() != std::string_view("text:h")) continue;
+    if (p.previous_sibling("text:p") || p.previous_sibling("text:h")) {
+      if (runs.empty()) runs.push_back({{}, {}});
+      runs.back().text += '\n';
+    }
+    Runs(p, {}, st, xf, runs, 0);
+  }
+  if (runs.size() < 2 && (runs.empty() || runs[0].props.empty())) return false;
+  size_t length = 0;
+  for (const Run& r : runs) {
+    length += r.text.size();
+    if (length > 32767 || r.text.empty()) return false;
+    si += "<r>" + r.props + "<t xml:space=\"preserve\">" + Escape(xlsx::EncodeXstring(r.text)) + "</t></r>";
+  }
+  return true;
+}
+
 // A header or footer region's paragraphs as Excel's codes: fields as &A &P &N &D &T &F, & doubled.
 void HeaderText(xml_node n, std::string& out, int depth) {
   for (xml_node c : n.children()) {
@@ -339,6 +389,14 @@ class Converter {
   // Excel writes for them (edit::notes, as the grid makes notes).
   std::vector<std::pair<CellAddr, edit::notes::NoteText>> notes_;
   std::string comments_, vml_;
+  // Pictures (draw:frame with a draw:image) on the sheet: the drawing part's anchors and its rels;
+  // the media they use, shared by the sheets (ODF name -> media part name; parts; content types).
+  // Charts (draw:object) aren't read in 3.0: the file opens without them.
+  void Objects(xml_node parent, int row, int col, int depth);
+  std::string drawing_, drawingRels_;
+  uint32_t pictures_ = 0;
+  std::map<std::string, std::string> media_, mediaTypes_;
+  std::vector<std::pair<std::string, std::vector<uint8_t>>> mediaParts_;
   std::string ConditionalFormats();
   std::string PageSetup(xml_node table, bool& fit);
   std::vector<int> rowBreaks_, colBreaks_;  // manual page breaks: before these rows and columns
@@ -526,7 +584,7 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
       for (int k = 0; k < sc && (sc > 1 || sr > 1); ++k, ++work_) span_[col + k] = {index + sr - 1, xf >= 0 ? xf : colXf_[col]};
     }
     const bool has = !c.attribute("office:value-type").empty() || !c.attribute("table:formula").empty() ||
-                     c.child("text:p") || c.child("text:h") || c.child("office:annotation");
+                     c.child("text:p") || c.child("text:h") || c.child("office:annotation") || c.child("draw:frame") || c.child("draw:g");
     if (!has && xf >= 0 && col + count >= kMaxCol && count > 256) rowFormat = xf;
     else items.push_back({c, col, count, xf, has, false});
     content |= has;
@@ -557,6 +615,7 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
     if (level > 0) xml += " outlineLevel=\"" + std::to_string(std::min(level, 7)) + "\"";
     std::string cellsXml;
     for (const Item& it : items) {
+      if (k == 0 && (it.node.child("draw:frame") || it.node.child("draw:g"))) Objects(it.node, r, it.col, 0);
       // A note on the cell (written once, on the first of repeated cells).
       if (k == 0 && notes_.size() < 10000)
         if (xml_node a = it.node.child("office:annotation")) {
@@ -627,7 +686,10 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
           const std::string_view b = Attr(cell, "office:boolean-value");
           t = "b", v = b == "true" || b == "1" ? "1" : "0";
         } else if (formula.empty()) {
-          if (!text.empty() || type == "string") t = "s", v = std::to_string(Shared(text));
+          // Rich text (spans changing the font) as runs: marked "\x01", which XML text can't hold.
+          std::string si = "\x01";
+          if (!text.empty() || type == "string")
+            t = "s", v = std::to_string(Shared(RichText(cell, st_, xf, si) ? si : text.starts_with('\x01') ? text.substr(1) : text));
         } else {
           std::string s = cell.attribute("office:string-value").empty() ? text : std::string(Attr(cell, "office:string-value"));
           if (IsError(s)) t = "e", v = s;
@@ -668,6 +730,57 @@ void Converter::WriteRow(xml_node row, int index, int repeat, int level, size_t,
 
 // ODF's conditions on cell styles (style:map: the first that holds applies its style) as Excel's
 // conditional formats over the cells with that style, each stopping the others when it holds.
+// The pictures in a cell (or table:shapes, or a group): each as Excel's picture anchor from that
+// cell, svg:x and svg:y in from its top left, at its size (a oneCellAnchor). The first image of a
+// frame in a format the package takes (a frame may hold an SVG and a PNG of it).
+void Converter::Objects(xml_node parent, int row, int col, int depth) {
+  for (xml_node f : parent.children()) {
+    const std::string_view name = f.name();
+    if (name == "draw:g" && depth < 4) Objects(f, row, col, depth + 1);
+    if (name != "draw:frame" || pictures_ >= 1000) continue;
+    for (xml_node img : f.children("draw:image")) {
+      std::string href(Attr(img, "xlink:href"));
+      if (href.starts_with("./")) href.erase(0, 2);
+      auto it = media_.find(href);
+      if (it == media_.end()) {
+        const pkg::ZipEntry* e = href.empty() || href.find("://") != std::string::npos ? nullptr : zip_.Find(href);
+        std::vector<uint8_t> bytes;
+        std::string ext, type;
+        if (!e || !zip_.Read(*e, bytes).Ok()) continue;
+        const std::string_view head(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        if (data::PictureType(head, ext, type)) {
+        } else if (head.size() >= 44 && head.substr(40, 4) == " EMF") {
+          ext = ".emf", type = "image/x-emf";
+        } else if (head.starts_with(std::string_view("\xD7\xCD\xC6\x9A", 4))) {
+          ext = ".wmf", type = "image/x-wmf";
+        } else {
+          continue;
+        }
+        it = media_.emplace(href, "image" + std::to_string(media_.size() + 1) + ext).first;
+        mediaTypes_[ext.substr(1)] = type;
+        mediaParts_.emplace_back("xl/media/" + it->second, std::move(bytes));
+      }
+      const std::string rel = "rIdPic" + std::to_string(++pictures_);
+      drawingRels_ += "<Relationship Id=\"" + rel + "\" Type=\"" + std::string(kRelType) + "image\" Target=\"../media/" +
+                      it->second + "\"/>";
+      // Excel's twoCellAnchor as a oneCellAnchor: its namespaces and from, a size, its picture.
+      std::string a = data::PictureAnchor(pictures_ + 1, rel, f.child("svg:desc").text().get());
+      const size_t ns = a.find(" xmlns"), to = a.find("<xdr:to>"), pic = a.find("<xdr:pic>"), close = a.rfind("</xdr:");
+      if (ns == std::string::npos || to == std::string::npos || pic == std::string::npos || close < pic) break;
+      a = "<xdr:oneCellAnchor" + a.substr(ns, to - ns) + "<xdr:ext cx=\"0\" cy=\"0\"/>" + a.substr(pic, close - pic) +
+          "</xdr:oneCellAnchor>";
+      auto emu = [&](const char* n) {
+        return static_cast<int64_t>(std::clamp(pkg::odf::Points(Attr(f, n)).value_or(0), 0.0, 1e6) * 12700);
+      };
+      edit::drawing::Place p;
+      p.from = {static_cast<uint32_t>(col), static_cast<uint32_t>(row), emu("svg:x"), emu("svg:y")};
+      p.x = p.from.colOff, p.y = p.from.rowOff, p.cx = emu("svg:width"), p.cy = emu("svg:height");
+      drawing_ += edit::drawing::Placed(a, p);
+      break;
+    }
+  }
+}
+
 // The table's master page and its page layout as Excel reads them: printOptions, pageMargins,
 // pageSetup, headerFooter and the manual breaks. `fit`: fit to pages (sheetPr's pageSetUpPr).
 std::string Converter::PageSetup(xml_node table, bool& fit) {
@@ -853,6 +966,10 @@ std::string Converter::WriteSheet(size_t index) {
   rowBreaks_.clear();
   colBreaks_.clear();
   span_.assign(kMaxCol, {-1, 0});
+  drawing_.clear();
+  drawingRels_.clear();
+  pictures_ = 0;
+  Objects(table.child("table:shapes"), 0, 0, 0);  // on the page: from the sheet's top left
   headerRowFirst_ = headerRowLast_ = -1;
   minRow_ = kMaxRow, maxRow_ = -1, minCol_ = kMaxCol, maxCol_ = -1;
   hiddenFrom_ = -1;
@@ -988,6 +1105,7 @@ std::string Converter::WriteSheet(size_t index) {
     std::string comments, vml;
     if (edit::notes::Edit(comments_, vml_, cell, note, comments, vml)) comments_.swap(comments), vml_.swap(vml);
   }
+  if (!drawing_.empty()) out += "<drawing r:id=\"rIdDrawing\"/>";
   if (!comments_.empty() && !vml_.empty()) out += "<legacyDrawing r:id=\"rIdVml\"/>";
   else comments_.clear(), vml_.clear();
   out += "</worksheet>";
@@ -1146,6 +1264,15 @@ pkg::Status Converter::Run(std::vector<uint8_t>& xlsx) {
                ".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml\"/>";
       vml = true;
     }
+    if (!drawing_.empty()) {
+      put("xl/drawings/drawing" + n + ".xml", std::string(kDecl) + "<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/"
+                                              "2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/"
+                                              "2006/main\">" + drawing_ + "</xdr:wsDr>");
+      put("xl/drawings/_rels/drawing" + n + ".xml.rels", relStart + drawingRels_ + "</Relationships>");
+      rels += "<Relationship Id=\"rIdDrawing\" Type=\"" + std::string(kRelType) + "drawing\" Target=\"../drawings/drawing" + n + ".xml\"/>";
+      types += "<Override PartName=\"/xl/drawings/drawing" + n +
+               ".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.drawing+xml\"/>";
+    }
     if (!rels.empty()) put("xl/worksheets/_rels/sheet" + n + ".xml.rels", relStart + rels + "</Relationships>");
     types += "<Override PartName=\"/xl/worksheets/sheet" + n + ".xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>";
     bookRels += "<Relationship Id=\"rId" + n + "\" Type=\"" + std::string(kRelType) + "worksheet\" Target=\"worksheets/sheet" + n + ".xml\"/>";
@@ -1183,12 +1310,19 @@ pkg::Status Converter::Run(std::vector<uint8_t>& xlsx) {
   std::string sst = std::string(kDecl) + "<sst xmlns=\"" + std::string(kMain) + "\" count=\"" + std::to_string(strings_.size()) +
                     "\" uniqueCount=\"" + std::to_string(strings_.size()) + "\">";
   for (const std::string& s : strings_) {
+    if (s.starts_with('\x01')) {  // rich text runs
+      sst += "<si>" + s.substr(1) + "</si>";
+      continue;
+    }
     const bool keep = !s.empty() && (s.front() == ' ' || s.back() == ' ' || s.find('\n') != std::string::npos || s.find('\t') != std::string::npos);
     sst += keep ? "<si><t xml:space=\"preserve\">" : "<si><t>";
     sst += Escape(xlsx::EncodeXstring(s)) + "</t></si>";  // ST_Xstring: the text _x0041_ as _x005F_x0041_
   }
   sst += "</sst>";
   if (vml) types += "<Default Extension=\"vml\" ContentType=\"application/vnd.openxmlformats-officedocument.vmlDrawing\"/>";
+  for (const auto& [ext, type] : mediaTypes_) types += "<Default Extension=\"" + ext + "\" ContentType=\"" + type + "\"/>";
+  for (const auto& [part, bytes] : mediaParts_)
+    if (pkg::Status s = zip.Add(part, std::span(bytes.data(), bytes.size())); !s.Ok()) return s;
   types += "</Types>";
   put("[Content_Types].xml", types);
   put("_rels/.rels", relStart + "<Relationship Id=\"rId1\" Type=\"" + std::string(kRelType) +

@@ -48,10 +48,14 @@ class Styles {
   pugi::xml_node Conditional(std::string_view name) const;
   // The differential format (dxfs) for the style a condition applies, or -1 when there is none.
   int Dxf(std::string_view name);
+  // A text style (a text:span's) over the cell format `xf` as a rich text run's <rPr>, "" when it
+  // changes nothing.
+  std::string RunProps(std::string_view textStyle, int xf);
   // styles.xml.
   std::string Xml() const;
 
  private:
+  static std::string FontXml(const Xf& x, const char* tag, const char* name);
   void Apply(pugi::xml_node style, Xf& xf);
   std::string NumberCode(pugi::xml_node style);
   std::string Section(pugi::xml_node style, bool& text);

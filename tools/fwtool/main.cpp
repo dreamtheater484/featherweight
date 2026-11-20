@@ -253,7 +253,7 @@ std::unique_ptr<fw::pkg::Package> OpenPackage(const std::filesystem::path& file,
     std::vector<uint8_t> xlsx;
     const fw::sheet::ods::DigitWidth digit = [](const std::string& family, double points) {
     // The default font's widest digit as the grid measures it, so column widths come back as ODF's.
-    fw::text::Fonts fonts;
+    fw::text::Fonts fonts(fw::sheet::view::ExcelFontSubstitute);  // as the app's grid
     fw::sheet::view::FontMeasure measure(fonts);
     fw::sheet::Font f;
     f.name = family;
