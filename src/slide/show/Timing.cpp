@@ -954,7 +954,7 @@ void Animator::Settle(const Step& step) {
 
 void Animator::StartStep(const Step* step, double now) { runs_.push_back({step, now}); }
 
-void Animator::Start(double now) {
+void Animator::Start(double now, bool begin) {
   settled_.clear();
   history_.clear();
   historyNext_.clear();
@@ -967,9 +967,14 @@ void Animator::Start(double now) {
       p.visible = false;
       settled_.emplace_back(k, p);
     }
-    if (!timing_->main.steps.empty() && timing_->main.steps[0].start != StepStart::Click)
-      StartStep(&timing_->main.steps[mainNext_++], now);
   }
+  if (begin) BeginAuto(now);
+  else Update(now);
+}
+
+void Animator::BeginAuto(double now) {
+  if (timing_ && mainNext_ == 0 && !timing_->main.steps.empty() && timing_->main.steps[0].start != StepStart::Click)
+    StartStep(&timing_->main.steps[mainNext_++], now);
   Update(now);
 }
 

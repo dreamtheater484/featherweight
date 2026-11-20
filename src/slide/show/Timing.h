@@ -196,8 +196,10 @@ class Animator {
   Animator() = default;
   Animator(const Timing* timing, BoxFn box, void* ctx) : timing_(timing), box_(box), ctx_(ctx) {}
 
-  // Back to the slide's start (every step undone); steps that start with the slide begin.
-  void Start(double now);
+  // Back to the slide's start (every step undone). With `begin`, steps that start with the slide
+  // begin now; else BeginAuto starts them (the show: once the slide's transition is done).
+  void Start(double now, bool begin = true);
+  void BeginAuto(double now);
   // Ends the running steps at once, at their end poses.
   void Finish();
 

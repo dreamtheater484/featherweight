@@ -7,6 +7,10 @@ target_include_directories(fwslideshow PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(fwslideshow PUBLIC fwpkg fwcore)
 target_compile_options(fwslideshow PRIVATE ${FW_COMPILE_OPTIONS} $<$<CONFIG:Release,MinSizeRel>:/GL /Gy>)
 
+# The window, built against the app's shell (src/ui) and linked into the exe only.
+target_sources(Featherweight PRIVATE SlideShow.cpp PlainRenderer.cpp)
+target_link_libraries(Featherweight PRIVATE fwslideshow fwslide)
+
 if(TARGET fw_tests)
   target_sources(fw_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests/unit/test_slideshow.cpp")
   target_link_libraries(fw_tests PRIVATE fwslideshow)

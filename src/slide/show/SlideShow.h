@@ -1,0 +1,56 @@
+#pragma once
+
+#include <windows.h>
+
+#include <cstddef>
+#include <functional>
+#include <string>
+#include <vector>
+
+namespace fw::slide {
+class Presentation;
+}
+
+// The slide show (plan §8.2, §8.3): full screen on the chosen monitor, the next slide drawn ahead,
+// transitions and animations at the display's refresh rate on the shared Direct3D 11 device, the
+// keys and clicks PowerPoint has, hyperlinks and actions. One show at a time.
+//
+// The presentation tab starts it with F5 (CmdSlideShowFromStart) or Shift+F5
+// (CmdSlideShowFromCurrent); a .ppsx starts in it. Esc ends it back in the tab.
+namespace fw::slide::show {
+
+class SlideRenderer;
+
+struct ShowOptions {
+  size_t first = 0;      // the slide to start on (a hidden one too, when it's the current slide)
+  HWND owner = nullptr;  // the main window: the show is its owned window
+  int monitor = -1;      // into Monitors(); -1: the owner's monitor
+  std::wstring deckPath;  // links to files are relative to its folder
+  // The show ended on this slide (index), or at the end (the last slide shown).
+  std::function<void(size_t)> ended;
+  // A link names a file: open it in Featherweight (after the show ends). False when it can't.
+  std::function<bool(const std::wstring&)> openFile;
+  // Measuring (--show-bench): every slide and step plays by itself, and the frame timings go to this
+  // JSON file when the show ends.
+  std::wstring benchReport;
+  // Checking (--show-capture): no window on screen; every transition and animation step is drawn at
+  // its middle and end, on a clock of its own, into PNG files in this folder.
+  std::wstring captureDir;
+};
+
+// Starts a show of `deck` drawn by `renderer` (both outlive it). False when a show runs already or
+// no graphics device can be used.
+bool Start(Presentation& deck, SlideRenderer& renderer, const ShowOptions& options);
+bool Running();
+void Stop();
+
+// The monitors a show can use, as "1: 2560 × 1440 (main)".
+std::vector<std::wstring> Monitors();
+
+// `Featherweight.exe --show <deck> [--show-bench <report.json>] [--show-capture <folder>]`: the deck
+// straight into a show, without the app's window: trying the show, the frame-rate bench, and the
+// pictures that check every transition and animation. Returns the exit code: 0, 1 when the deck
+// can't be opened, 2 when the bench dropped frames.
+int RunStandalone(const std::wstring& path, const std::wstring& benchReport, const std::wstring& captureDir = {});
+
+}  // namespace fw::slide::show

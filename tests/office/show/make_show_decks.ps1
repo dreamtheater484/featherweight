@@ -20,7 +20,7 @@ $made = New-Object System.Collections.ArrayList
 function New-Deck {
   $p = $app.Presentations.Add($false_)  # no window
   [void]$made.Add($p)
-  $p.PageSetup.SlideSize = 15           # 16:9
+  # PowerPoint's default size: widescreen 16:9, 13.33 × 7.5 in (960 × 540 pt)
   return $p
 }
 
