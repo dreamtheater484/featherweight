@@ -46,6 +46,9 @@ param(
   [string[]]$Folders = @("tests\office\generated", "tests\office\edge", "tests\office\layout"),
   [string]$Out = "tests\office\reference",
   [string]$Corpus,
+  # With -Corpus: only these of its folders (for example pptx, so only PowerPoint runs); the other
+  # folders' manifest entries are kept as they are.
+  [string[]]$CorpusFolders,
   [switch]$Force,
   [int]$TimeoutSeconds = 120,
   # Workbooks take longer: two opens, and each non-empty cell's text is read one by one.
@@ -657,8 +660,18 @@ if ($Corpus) {
   # docx, xlsx, pptx: screened downloads; doc, odt, dotx, protected: Word's copies of them (D5,
   # scripts\make-test-files.ps1); xls, ods: Excel's copies of the workbooks (S4,
   # scripts\make-sheet-copies.ps1).
-  $screened = @("docx", "xlsx", "pptx", "doc", "odt", "dotx", "protected", "xls", "ods") | ForEach-Object { Join-Path $corpusRoot $_ } | Where-Object { Test-Path $_ }
-  if (-not $screened) { throw "$corpusRoot has no docx, xlsx or pptx folder (see scripts\fetch-corpus.ps1)." }
+  $corpusNames = @("docx", "xlsx", "pptx", "doc", "odt", "dotx", "protected", "xls", "ods")
+  $CorpusFolders = @($CorpusFolders | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+  if ($CorpusFolders.Count) {
+    foreach ($c in $CorpusFolders) { if ($corpusNames -notcontains $c) { throw "-CorpusFolders: $c isn't one of $($corpusNames -join ', ')." } }
+    $corpusNames = $CorpusFolders
+    # The other folders' entries stay as they are.
+    $prior = if (Test-Path $manifestPath) { @((Get-Content $manifestPath -Raw | ConvertFrom-Json).files) } else { @() }
+    $kept = @($prior | Where-Object { $CorpusFolders -notcontains ($_.source -split '/')[0] })
+    $old = @($old | Where-Object { $CorpusFolders -contains ($_.source -split '/')[0] })
+  }
+  $screened = $corpusNames | ForEach-Object { Join-Path $corpusRoot $_ } | Where-Object { Test-Path $_ }
+  if (-not $screened) { throw "$corpusRoot has no $($corpusNames -join ', ') folder (see scripts\fetch-corpus.ps1)." }
   foreach ($f in $screened | ForEach-Object { Get-ChildItem $_ -File -Recurse } | Sort-Object FullName) {
     if ((Test-Inside $f.FullName $outRoot) -or -not (Get-Kind $f.Extension)) { continue }
     $rel = $f.FullName.Substring($corpusRoot.Length + 1) -replace '\\', '/'
