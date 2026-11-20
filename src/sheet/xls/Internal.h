@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -119,6 +120,32 @@ bool Decompile(const FormulaContext& ctx, std::span<const uint8_t> rgce, std::sp
 // starts at `filepassAt` (Crypt.cpp).
 enum class CryptResult { Ok, WrongPassword, Unsupported, Damaged };
 CryptResult DecryptWorkbook(std::vector<uint8_t>& stream, size_t filepassAt, std::wstring_view password);
+
+// Drawings (Drawing.cpp): a sheet's OfficeArt shapes, from its MSODRAWING records with the OBJ and
+// TXO records that follow them, as a DrawingML drawing part. Pictures, text boxes and simple shapes;
+// a group's shapes are placed on their own; notes, charts and controls are left out.
+struct DrawingSheet {
+  std::vector<uint8_t> dg;     // the MSODRAWING records' data, joined
+  std::vector<uint16_t> objs;  // each OBJ record's kind (ftCmo's ot; 0xFFFF without one), in order
+  struct Text {
+    uint16_t grbit = 0;  // TXO's alignment
+    std::vector<uint16_t> chars;
+    std::vector<std::pair<uint16_t, uint16_t>> runs;  // (first character, font index)
+  };
+  std::vector<Text> texts;  // TXO records, in order
+};
+struct DrawingEnv {
+  std::vector<double> colPx;                         // the 256 columns' widths in pixels
+  std::function<double(uint32_t)> rowPt;             // a row's height in points
+  std::function<uint32_t(uint32_t)> icvRgb;          // a palette index as 0xRRGGBB
+  std::function<std::string(uint16_t)> runProps;     // a font index as an a:rPr element
+  std::function<std::string(uint32_t)> image;        // a BLIP (1-based) as its part's target; empty: none
+};
+// The drawing part (empty when nothing is drawn), and its relationships' elements in `rels`.
+std::string DrawingXml(const DrawingSheet& in, const DrawingEnv& env, std::string& rels);
+// The picture at `pib` (1-based) in the BLIP store of the workbook's MSODRAWINGGROUP data: its file
+// extension and bytes (metafiles inflated, a DIB as a .bmp). False when it isn't there or can't be shown.
+bool BlipPicture(std::span<const uint8_t> dgg, uint32_t pib, std::string& ext, std::vector<uint8_t>& out);
 
 // Cell names: "A1", "$A$1" (rows and columns 0-based).
 void AppendCol(std::string& out, uint32_t col);
