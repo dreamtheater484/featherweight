@@ -7,6 +7,7 @@ add_library(fwdraw STATIC
   D2DPainter.cpp
   Drawing.cpp
   DrawingML.cpp
+  Eot.cpp
   Geometry.cpp
   Images.cpp
   Painter.cpp
