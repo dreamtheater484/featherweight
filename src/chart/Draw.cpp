@@ -608,6 +608,7 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
     }
   };
   constexpr float kInset = 3.55f;  // points: the entries inside the room's edge
+  const float beyond = std::max(0.0f, ts - 10);  // the text size past 10 points
   // An entry wider than `width` wraps as Excel wraps it, to at most as many lines as `room` holds;
   // its lines `lp` apart. `names[i]`: entry i's lines, `wide[i]` the widest.
   const float lp = kLine * ts;
@@ -626,7 +627,9 @@ Rect DrawLegend(Builder& b, LegendPos pos, bool overlay, const std::vector<Entry
   if (pos == LegendPos::Right || pos == LegendPos::Left) {
     const float w = std::min(lead + widest, (r.right - r.left) * 0.45f);
     wrap(w - lead, r.bottom - r.top);
-    const float x = pos == LegendPos::Right ? r.right - kInset - w : r.left + kInset;
+    // At the side, a little further in past 10-point text (PowerPoint's PDFs: 5.2 points at 18).
+    const float inset = kInset + 0.2f * beyond;
+    const float x = pos == LegendPos::Right ? r.right - inset - w : r.left + inset;
     const float pitch = 1.21f * ts + 6, mid = (r.top + r.bottom) / 2;
     // Each line past an entry's first moves the entries after it down a line, all centered.
     float extra = 0, before = 0;
@@ -806,7 +809,7 @@ std::wstring Wrapped(Builder& b, const std::vector<std::wstring>& parts, float w
 // `plain`: slices in the accents themselves (SliceColor).
 void DrawPie(Builder& b, const Group& g, Rect r, float ts, Color text, const draw::ColorContext& colors, float W, float H,
              bool plain) {
-  const float m = kMargin * ts;
+  const float m = std::min(kMargin * ts, kMargin * 10);  // as DrawAxes' sides (PowerPoint's PDFs)
   r = {r.left + m, r.top + m, r.right - m, r.bottom - m};
   const bool doughnut = g.type == Type::Doughnut;
   const size_t rings = doughnut ? std::min<size_t>(g.series.size(), 16) : 1;
@@ -1235,12 +1238,15 @@ void DrawAxes(Builder& b, const Chart& ch, Rect r, float ts, Color text, const d
   p.bar = bar;
   p.reversed = ch.category.reversed;
   // The margin at the sides stops growing with the text past 10 points (PowerPoint's PDFs: 4.6
-  // points with 18-point text).
+  // points with 18-point text), but on a legend's side (8.3 points there).
   const float margin = kMargin * ts, side = std::min(margin, kMargin * 10), maxSide = (r.right - r.left) * 0.4f;
+  const bool beside = !ch.legendOverlay && (ch.legend == LegendPos::Right || ch.legend == LegendPos::Left);
+  const float leftSide = beside && ch.legend == LegendPos::Left ? margin : side;
+  const float rightSide = beside && ch.legend == LegendPos::Right ? margin : side;
   const float sideW = bar ? cw : vw;  // labels up the left side
   const bool across = bar ? !vlabels.empty() : !clabels.empty();  // labels across the bottom
-  p.r.left = r.left + (sideW > 0 ? std::min(sideW, maxSide) + kValueGap * ts : side);
-  p.r.right = r.right - (sw > 0 ? std::min(sw, maxSide) + kValueGap * ts : side);
+  p.r.left = r.left + (sideW > 0 ? std::min(sideW, maxSide) + kValueGap * ts : leftSide);
+  p.r.right = r.right - (sw > 0 ? std::min(sw, maxSide) + kValueGap * ts : rightSide);
   p.r.top = r.top + margin;
   p.r.bottom = r.bottom - (across ? (kAscent + kDescent + kLabelGap) * ts : margin);
   // Labels centred on the plot's left and right edges (values across the bottom, categories on the
