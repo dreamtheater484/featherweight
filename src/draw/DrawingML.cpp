@@ -452,6 +452,8 @@ class Reader {
       if (kind == "wsp") s.name.clear();  // Word names the drawing in wp:docPr
       ReadStyle(Part(el, "style"), s);
       ReadShapeProperties(Part(el, "spPr"), s, groupFill);
+      // Filled with the slide's background (PowerPoint): the caller draws that under the shape.
+      if (Bool(el, "useBgFill", false)) s.fill = Fill{};
       ReadTextBody(el, s);
       return true;
     }

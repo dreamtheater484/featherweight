@@ -36,6 +36,7 @@ struct SlideRender::Impl {
     std::unique_ptr<draw::Drawing> drawing;
     std::vector<TextBlock> texts;  // one per drawing text box
     std::unique_ptr<TableRender> table;
+    bool backgroundFill = false;  // p:sp useBgFill
     draw::Rect frame;  // a table's graphic frame, slide points
   };
   std::vector<Item> items;
@@ -119,6 +120,7 @@ struct Builder {
     item.shape = &s;
     item.resources = deck.Resources(*di.owner, slide);
     item.drawing = draw::Drawing::FromShapeTree(s.drawNode, *item.resources);
+    item.backgroundFill = draw::xml::Bool(s.node, "useBgFill", false);
     if (!item.drawing || item.drawing->IsHidden()) return;
     for (const draw::TextBox& box : item.drawing->TextBoxes()) {
       // The model's shapes' text, and SmartArt's (a text box's, with its style's font reference).
@@ -200,6 +202,7 @@ void SlideRender::Draw(draw::Painter& p, const draw::Rect& frame, DrawFilter* fi
   p.ClipRect({0, 0, size_.width, size_.height});
   if (impl_->items.empty() || !impl_->items.front().background)
     if (!filter || filter->Background()) p.FillRect({0, 0, size_.width, size_.height}, draw::Brush::Solid({1, 1, 1, 1}));
+  const draw::Drawing* background = !impl_->items.empty() && impl_->items.front().background ? impl_->items.front().drawing.get() : nullptr;
   for (const Impl::Item& item : impl_->items) {
     if (item.background) {
       if (!filter || filter->Background()) item.drawing->Draw(p, item.drawing->Bounds());
@@ -213,6 +216,23 @@ void SlideRender::Draw(draw::Painter& p, const draw::Rect& frame, DrawFilter* fi
       item.table->Draw(p, filter, id);
       p.Restore();
       continue;
+    }
+    // A shape filled with the slide's background (useBgFill): the background, inside its outline.
+    if (item.backgroundFill && background && (!filter || filter->Shape(item.inherited ? 0 : item.id))) {
+      draw::Path outline;
+      const draw::Rect b = item.drawing->Bounds();
+      for (const draw::Path::Polygon& poly : item.drawing->WrapOutline()) {
+        for (size_t i = 0; i < poly.points.size(); ++i) {
+          const draw::Point q{poly.points[i].x + b.left, poly.points[i].y + b.top};
+          if (i == 0) outline.MoveTo(q);
+          else outline.LineTo(q);
+        }
+        outline.Close();
+      }
+      p.Save();
+      p.ClipPath(outline);
+      background->Draw(p, background->Bounds());
+      p.Restore();
     }
     Hooks hooks(item, filter);
     item.drawing->Draw(p, item.drawing->Bounds(), hooks);
