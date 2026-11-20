@@ -14,6 +14,12 @@
 # Writes pivots-colonly.xlsx from the folder's pivots-fresh.xlsx (which it leaves as it is): five more
 # pivots, on sheets of their own, with column fields and no row fields (one value, two, none; two
 # column fields) and two values alone: where Excel keeps a label column and where it doesn't.
+#
+#   python tests/sheet/excel_pivots.py --pageonly <out folder>
+#
+# Writes pivots-pageonly.xlsx the same way: filter fields over a one-column table (a value; none;
+# two filters), a pivot with no fields at all and row fields with no values: the filter's value
+# column right of the table, and the one-cell location of a pivot with nothing to show.
 # Excel runs in a new instance of its own (DispatchEx), alerts, events and macros off, and only that
 # instance is ended; one Office automation at a time (the mutex of scripts\reference-renders.ps1).
 import json, os, re, sys, zipfile
@@ -204,21 +210,32 @@ def scrub_pivot_user(path):
     os.replace(tmp, path)
 
 
-def make_colonly(xl, path_fresh, path_out):
+COLONLY = [("ColOne", "A3", [("Region", xlColumnField)], [("Sales", xlSum)]),
+           ("ColTwo", "A3", [("Region", xlColumnField)], [("Sales", xlSum), ("Units", xlCount)]),
+           ("ColNone", "A3", [("Region", xlColumnField)], []),
+           ("ColDeep", "A3", [("Region", xlColumnField), ("Quarter", xlColumnField)], [("Sales", xlSum)]),
+           ("ValuesTwo", "A3", [], [("Sales", xlSum), ("Units", xlCount)])]
+PAGEONLY = [("PageValue", "A5", [("Year", xlPageField)], [("Sales", xlSum)]),
+            ("PageOnly", "A5", [("Year", xlPageField)], []),
+            ("PageTwo", "A5", [("Year", xlPageField), ("Region", xlPageField)], [("Sales", xlSum)]),
+            ("Empty", "A3", [], []),
+            ("RowsNone", "A3", [("Region", xlRowField)], [])]
+
+
+def make_extra(xl, path_fresh, path_out, cases):
+    """Pivots on sheets of their own after the fresh file's: (name, cell, [(field, orientation)], values)."""
     wb = xl.Workbooks.Open(os.path.abspath(path_fresh), 0, True)
     src = "Data!R1C1:R%dC%d" % (len(ROWS) + 1, len(HEAD))
-    cases = [("ColOne", ["Region"], [("Sales", xlSum)]),
-             ("ColTwo", ["Region"], [("Sales", xlSum), ("Units", xlCount)]),
-             ("ColNone", ["Region"], []),
-             ("ColDeep", ["Region", "Quarter"], [("Sales", xlSum)]),
-             ("ValuesTwo", [], [("Sales", xlSum), ("Units", xlCount)])]
-    for name, cols, values in cases:
+    for name, at, fields, values in cases:
         ws = wb.Worksheets.Add(After=wb.Worksheets(wb.Worksheets.Count))
         ws.Name = name
-        pt = wb.PivotCaches().Create(xlDatabase, src, 6).CreatePivotTable(ws.Range("A3"), name, True, 6)
-        for i, f in enumerate(cols):
-            pt.PivotFields(f).Orientation = xlColumnField
-            pt.PivotFields(f).Position = i + 1
+        pt = wb.PivotCaches().Create(xlDatabase, src, 6).CreatePivotTable(ws.Range(at), name, True, 6)
+        placed = {}
+        for f, orientation in fields:
+            pt.PivotFields(f).Orientation = orientation
+            if orientation != xlPageField:
+                placed[orientation] = placed.get(orientation, 0) + 1
+                pt.PivotFields(f).Position = placed[orientation]
         for f, func in values:
             pt.AddDataField(pt.PivotFields(f), "%s of %s" % ({xlSum: "Sum", xlCount: "Count"}[func], f), func)
         pt.RefreshTable()
@@ -226,10 +243,10 @@ def make_colonly(xl, path_fresh, path_out):
     wb.Close(False)
 
 
-def main(out, colonly=False):
+def main(out, extra=None):
     os.makedirs(out, exist_ok=True)
     paths = [os.path.join(out, n) for n in ("pivots-fresh.xlsx", "pivots-stale.xlsx", "pivots-refreshed.xlsx")]
-    written = [os.path.join(out, "pivots-colonly.xlsx")] if colonly else paths
+    written = [os.path.join(out, "pivots-%s.xlsx" % extra)] if extra else paths
     mutex = win32event.CreateMutex(None, False, "Global\\FeatherweightOfficeAutomation")
     win32event.WaitForSingleObject(mutex, win32event.INFINITE)
     pythoncom.CoInitialize()
@@ -245,8 +262,8 @@ def main(out, colonly=False):
         xl.EnableEvents = False
         xl.AutomationSecurity = 3
         xl.AskToUpdateLinks = False
-        if colonly:
-            make_colonly(xl, paths[0], written[0])
+        if extra:
+            make_extra(xl, paths[0], written[0], {"colonly": COLONLY, "pageonly": PAGEONLY}[extra])
         else:
             make(xl, *paths)
     finally:
@@ -269,7 +286,7 @@ def main(out, colonly=False):
 
 
 if __name__ == "__main__":
-    if sys.argv[1] == "--colonly":
-        main(sys.argv[2], colonly=True)
+    if sys.argv[1] in ("--colonly", "--pageonly"):
+        main(sys.argv[2], extra=sys.argv[1][2:])
     else:
         main(sys.argv[1])

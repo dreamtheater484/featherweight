@@ -96,9 +96,8 @@ bool ReadLook(std::string_view xml, Look& out) {
   if (!ReadTable(xml, t)) return false;
   Look l;
   l.location = t.location;
-  l.area = t.location;
   l.pages = static_cast<uint32_t>(t.pageFields.size());
-  if (l.pages && t.location.firstRow > l.pages) l.area.firstRow = t.location.firstRow - l.pages - 1;
+  l.area = AreaOf(t.location, l.pages);
   l.firstHeaderRow = t.firstHeaderRow;
   l.firstDataRow = t.firstDataRow;
   l.firstDataCol = t.firstDataCol;
