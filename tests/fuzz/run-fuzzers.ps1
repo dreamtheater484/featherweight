@@ -73,6 +73,8 @@ $all = [ordered]@{
   # Excel 97-2003 workbooks (S4): every .xls converts to an .xlsx that opens, passes the check and reads, or is refused.
   fuzz_xls     = @{ Seeds = @("$seeds\xls", "$regressions\xls"); MaxLen = 131072 }
   fuzz_pivot = @{ Seeds = @("$seeds\pivot", "$regressions\pivot"); MaxLen = 262144 }
+  # Presentations (P1): the .pptx reader, every slide's inheritance resolved, read by fwdraw.
+  fuzz_pptx    = @{ Seeds = @("$seeds\pptx", "$seeds\package", "$regressions\pptx"); MaxLen = 131072 }
 }
 if ($Targets.Count -eq 0) { $Targets = @($all.Keys) }
 
