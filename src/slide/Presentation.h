@@ -174,29 +174,46 @@ struct Slide : SlideBase {
   std::wstring NotesText() const;
 };
 
+// A table cell's or table's fill, resolved.
+struct CellFill {
+  enum class Kind : uint8_t { None, Solid, Other };
+  Kind kind = Kind::None;
+  draw::Color color;     // Solid; Other: its first color
+  pugi::xml_node node;   // Other: the gradFill, blipFill or pattFill element (blip r:embeds are the
+                         // slide's), its colors against Table::colors
+};
+
+// One edge of a cell, resolved.
+struct CellBorder {
+  bool visible = false;
+  float width = 1;       // points
+  draw::Color color;
+  std::string dash;      // a:prstDash ("dash", "sysDot"…); empty: solid
+  pugi::xml_node line;   // the a:ln as written, for compound lines and line ends; null from a theme line
+};
+
 // One cell of a table, with the table style applied.
 struct TableCell {
+  enum Edge { Left, Right, Top, Bottom, TopLeftToBottomRight, BottomLeftToTopRight };
   pugi::xml_node node;  // a:tc
   int row = 0, column = 0;
   int rowSpan = 1, columnSpan = 1;
   bool covered = false;  // part of another cell's span (hMerge, vMerge): not drawn
-  const TextBody* text = nullptr;
+  const TextBody* text = nullptr;  // null when the cell has no text body
   float marginLeft = 7.2f, marginRight = 7.2f, marginTop = 3.6f, marginBottom = 3.6f;  // points
   BodyProps::Anchor anchor = BodyProps::Anchor::Top;
   BodyProps::Vertical vertical = BodyProps::Vertical::Horizontal;
-  // The fill in effect (the cell's own, else the table style's): an element to read with the
-  // table's colors (solidFill, gradFill, blipFill, pattFill, noFill), or null for none.
-  pugi::xml_node fill;
-  // Borders in effect: left, right, top, bottom, top-left to bottom-right, bottom-left to top-right;
-  // a:ln elements (or a table style's a:ln), null for none.
-  std::array<pugi::xml_node, 6> borders{};
+  CellFill fill;                       // the cell's own, else the table style's
+  std::array<CellBorder, 6> borders;   // by Edge
 };
 
 struct Table {
   std::vector<float> columns, rows;  // widths and heights, points
   std::vector<TableCell> cells;      // row by row, every grid cell
-  draw::ColorContext colors;         // what the fills' and borders' colors resolve against
+  CellFill background;               // the table style's tblBg, under every cell
+  draw::ColorContext colors;         // what fills' and borders' colors resolve against
   pugi::xml_node node;               // a:tbl
+  bool rtl = false;                  // columns run right to left
   const TableCell* Cell(int row, int column) const;
 };
 
@@ -328,6 +345,9 @@ class Presentation {
   // Resolved text and tables, by (txBody or a:tbl, the part shown on).
   std::map<std::pair<const void*, const void*>, std::unique_ptr<TextBody>> texts_;
   std::map<std::pair<const void*, const void*>, std::unique_ptr<Table>> tables_;
+  bool tableStylesRead_ = false;
+  std::unique_ptr<pkg::XmlDom> tableStyles_;  // ppt/tableStyles.xml
+  std::unique_ptr<pugi::xml_document> builtInStyles_;  // the built-in styles decks name without defining
   std::vector<std::unique_ptr<TextBody>> cellTexts_;
   mutable std::recursive_mutex mutex_;
   std::vector<std::string> problems_;

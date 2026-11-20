@@ -404,3 +404,65 @@ TEST(SlideDamagedPartsAreSkipped) {
   auto none = Modified({{"ppt/presentation.xml", "<x/>"}}, &st);
   CHECK(none == nullptr && !st.Ok());
 }
+
+TEST(SlideTableStyleApplied) {
+  // shapes-table-chart.pptx names Medium Style 2 - Accent 1 without defining it, with a header row
+  // and banded rows.
+  auto deck = OpenGenerated("shapes-table-chart.pptx");
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const Slide* s = deck->GetSlide(1);
+  const Table* t = deck->GetTable(s->shapes[0], *s);
+  CHECK(t != nullptr);
+  if (!t) return;
+  CHECK_EQ(t->rows.size(), size_t{4});
+  CHECK_EQ(t->columns.size(), size_t{3});
+  CHECK_NEAR(t->columns[0], 144.f, 0.01f);
+  CHECK_NEAR(t->rows[0], 36.f, 0.01f);
+  const TableCell* head = t->Cell(0, 1);
+  CHECK(head && head->fill.kind == CellFill::Kind::Solid && Near(head->fill.color, 0x4F / 255.f, 0x81 / 255.f, 0xBD / 255.f));
+  CHECK(head && head->text && head->text->paragraphs[0].runs[0].props.bold);
+  CHECK(head && Near(head->text->paragraphs[0].runs[0].props.color, 1, 1, 1));
+  CHECK(head && head->borders[TableCell::Bottom].visible && std::fabs(head->borders[TableCell::Bottom].width - 3.f) < 0.01f);
+  CHECK(head && head->borders[TableCell::Left].visible && std::fabs(head->borders[TableCell::Left].width - 1.f) < 0.01f);
+  const TableCell* band1 = t->Cell(1, 0);
+  const TableCell* band2 = t->Cell(2, 0);
+  CHECK(band1 && band2 && band1->fill.kind == CellFill::Kind::Solid && band2->fill.kind == CellFill::Kind::Solid);
+  // Band 1 is the 40 % tint, the others the table's 20 %: lighter.
+  CHECK(band1 && band2 && band2->fill.color.r > band1->fill.color.r && band1->fill.color.r > 0x4F / 255.f);
+  CHECK(band1 && band1->text && !band1->text->paragraphs[0].runs[0].props.bold);
+  CHECK(band1 && Near(band1->text->paragraphs[0].runs[0].props.color, 0, 0, 0));
+  CHECK(band1 && band1->text->paragraphs[0].runs[0].text == L"R2C1");
+  CHECK(deck->GetTable(deck->GetSlide(0)->shapes[0], *s) == nullptr);  // not a table
+}
+
+TEST(SlideTableSpansAndOwnProperties) {
+  std::string frame =
+      "<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"4\" name=\"T\"/><p:cNvGraphicFramePr/><p:nvPr/>"
+      "</p:nvGraphicFramePr><p:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"254000\" cy=\"254000\"/></p:xfrm><a:graphic>"
+      "<a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/table\"><a:tbl><a:tblPr/><a:tblGrid>"
+      "<a:gridCol w=\"127000\"/><a:gridCol w=\"127000\"/></a:tblGrid>"
+      "<a:tr h=\"127000\"><a:tc gridSpan=\"2\"><a:txBody><a:bodyPr/><a:p><a:r><a:t>wide</a:t></a:r></a:p></a:txBody>"
+      "<a:tcPr marL=\"0\" anchor=\"ctr\"><a:lnB w=\"25400\"><a:solidFill><a:srgbClr val=\"00FF00\"/></a:solidFill>"
+      "<a:prstDash val=\"dash\"/></a:lnB><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill></a:tcPr></a:tc>"
+      "<a:tc hMerge=\"1\"><a:txBody><a:bodyPr/><a:p/></a:txBody><a:tcPr/></a:tc></a:tr>"
+      "<a:tr h=\"127000\"><a:tc><a:txBody><a:bodyPr/><a:p/></a:txBody><a:tcPr/></a:tc></a:tr>"
+      "</a:tbl></a:graphicData></a:graphic></p:graphicFrame>";
+  auto deck = Modified({{"ppt/slides/slide1.xml", SlideXml(frame)}, {"ppt/slides/_rels/slide1.xml.rels", kSlideRels}});
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const Slide* s = deck->GetSlide(0);
+  const Table* t = deck->GetTable(*s->FindShape(4), *s);
+  CHECK(t && t->cells.size() == 4);
+  if (!t || t->cells.size() != 4) return;
+  const TableCell* wide = t->Cell(0, 0);
+  CHECK(wide->columnSpan == 2 && !wide->covered && t->Cell(0, 1)->covered);
+  CHECK(wide->fill.kind == CellFill::Kind::Solid && Near(wide->fill.color, 1, 0, 0));
+  CHECK(wide->borders[TableCell::Bottom].visible && wide->borders[TableCell::Bottom].dash == "dash");
+  CHECK_NEAR(wide->borders[TableCell::Bottom].width, 2.f, 0.01f);
+  CHECK_NEAR(wide->marginLeft, 0.f, 0.001f);
+  CHECK(wide->anchor == BodyProps::Anchor::Middle);
+  CHECK(!wide->borders[TableCell::Top].visible);  // no style: no borders
+  CHECK(t->Cell(1, 1) && !t->Cell(1, 1)->node);   // a missing cell is an empty one
+  CHECK(wide->text && wide->text->paragraphs[0].runs[0].text == L"wide");
+}

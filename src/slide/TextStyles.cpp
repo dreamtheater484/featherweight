@@ -434,7 +434,7 @@ std::unique_ptr<TextBody> ResolveText(const Presentation& deck, const Shape& sha
 }
 
 std::unique_ptr<TextBody> ResolvePlainText(const Presentation& deck, pugi::xml_node txBody, const SlideBase& owner,
-                                           const SlideBase& shownOn, pugi::xml_node tcTxStyle) {
+                                           const SlideBase& shownOn, const std::vector<pugi::xml_node>& tcTxStyles) {
   auto out = std::make_unique<TextBody>();
   out->node = txBody;
   out->body = ReadBody(A(txBody, "bodyPr"));
@@ -444,16 +444,29 @@ std::unique_ptr<TextBody> ResolvePlainText(const Presentation& deck, pugi::xml_n
   Levels lv = Defaults(c);
   ApplyListStyle(deck.DefaultTextStyle(), lv, c, owner);
   if (const Master* m = MasterOf(owner); m && m->kind == PartKind::Master) ApplyListStyle(m->otherStyle, lv, c, *m);
-  if (tcTxStyle) {
+  for (pugi::xml_node tcTxStyle : tcTxStyles) {
     std::string_view b = tcTxStyle.attribute("b").value(), i = tcTxStyle.attribute("i").value();
     ApplyFontRef(tcTxStyle, lv, c);
+    std::wstring latin, ea, cs;
+    if (pugi::xml_node font = A(tcTxStyle, "font")) {
+      latin = Typeface(A(font, "latin").attribute("typeface").value(), c.theme);
+      ea = Typeface(A(font, "ea").attribute("typeface").value(), c.theme);
+      cs = Typeface(A(font, "cs").attribute("typeface").value(), c.theme);
+    }
     std::optional<draw::Color> color = draw::ReadColor(tcTxStyle, c.colors);
     for (Level& l : lv) {
       if (b == "on") l.run.bold = true;
       if (b == "off") l.run.bold = false;
       if (i == "on") l.run.italic = true;
       if (i == "off") l.run.italic = false;
-      if (color) l.run.color = *color;
+      if (!latin.empty()) l.run.latin = latin;
+      if (!ea.empty()) l.run.eastAsian = ea;
+      if (!cs.empty()) l.run.complexScript = cs;
+      if (color) {
+        l.run.color = *color;
+        l.run.noFill = false;
+        l.run.fill = {};
+      }
     }
   }
   ApplyListStyle(A(txBody, "lstStyle"), lv, c, owner);
