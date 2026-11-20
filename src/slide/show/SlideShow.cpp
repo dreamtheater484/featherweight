@@ -1564,7 +1564,7 @@ int RunStandalone(const std::wstring& path, const std::wstring& benchReport, con
     MessageBoxW(nullptr, (L"Featherweight couldn’t open " + path + L".").c_str(), L"Featherweight", MB_ICONERROR);
     return 1;
   }
-  std::unique_ptr<SlideRenderer> renderer = MakePlainRenderer(*deck);
+  std::unique_ptr<SlideRenderer> renderer = MakeRenderer(*deck);
   ShowOptions o;
   o.deckPath = path;
   o.benchReport = benchReport;

@@ -14,13 +14,13 @@ namespace fw::slide {
 class Presentation;
 }
 
-// What the slide show draws slides with (plan §8.3): p1-render's slide renderer behind it, or the
-// plain one below until that lands. The show draws a slide whole, or in parts for its animation
-// layers and sprites, so drawing takes a filter.
+// What the slide show draws slides with (plan §8.3): p1-render's slides (slide/render) behind it. The
+// show draws a slide whole, or in parts for its animation layers and sprites, so drawing takes a
+// filter.
 namespace fw::slide::show {
 
-// What a draw leaves out. Items are the slide's draw list: its master's and layout's shapes, then its
-// own, bottom to top (Presentation::DrawList), by index.
+// What a draw leaves out. Items are the slide's shapes bottom to top, by index: item 0 is its master's
+// and layout's shapes together (they never animate), then the slide's own top-level shapes.
 class DrawFilter {
  public:
   virtual ~DrawFilter() = default;
@@ -58,8 +58,8 @@ class SlideRenderer {
   virtual void ReleaseDevice() {}
 };
 
-// Draws with fwdraw (shapes, pictures, backgrounds) and plain DirectWrite text: the show's own until
-// p1-render's renderer is there. The presentation must outlive it.
-std::unique_ptr<SlideRenderer> MakePlainRenderer(Presentation& deck);
+// The slides as p1-render draws them (slide/render/SlideRender.h), a few prepared at a time; the
+// master's and layout's shapes are item 0. The presentation must outlive it.
+std::unique_ptr<SlideRenderer> MakeRenderer(Presentation& deck);
 
 }  // namespace fw::slide::show
