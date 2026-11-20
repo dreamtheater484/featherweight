@@ -947,7 +947,8 @@ void DrawGroup(Builder& b, const Group& g, size_t first, const Plot& p, const Ca
     return base + v;
   };
   const auto text = [&](const Series& s, size_t i) {
-    return Joined(LabelParts(g, s, i, FormatNumber(Value(s, i), percent ? std::string() : format), {}));
+    const std::string& own = !s.labelFormat.empty() ? s.labelFormat : g.labelFormat;
+    return Joined(LabelParts(g, s, i, FormatNumber(Value(s, i), percent ? std::string() : own.empty() ? format : own), {}));
   };
   if (g.type == Type::Column || g.type == Type::Bar) {
     const double band = c.Band(), gap = g.gap / 100, ov = g.overlap / 100;
@@ -1047,7 +1048,8 @@ void DrawScatter(Builder& b, const Group& g, size_t first, const Rect& r, const 
       runs.back().push_back(pt);
       points.push_back(pt);
       if (ShowsLabels(g, s))
-        labels.push_back({Joined(LabelParts(g, s, i, FormatNumber(y, format), {})), {pt.x, pt.y - 5 - kLabelMiddle * ts}, 1, std::nullopt});
+        labels.push_back({Joined(LabelParts(g, s, i, FormatNumber(y, !s.labelFormat.empty() ? s.labelFormat : !g.labelFormat.empty() ? g.labelFormat : format), {})),
+                          {pt.x, pt.y - 5 - kLabelMiddle * ts}, 1, std::nullopt});
     }
     const Color line = s.look.line.value_or(color);
     if (g.lines && !s.look.noLine) b.Add(Polyline(runs, s.smooth), std::nullopt, line, s.look.lineWidth >= 0 ? s.look.lineWidth : 1.5f);
@@ -1352,10 +1354,7 @@ void DrawRadar(Builder& b, const Chart& ch, Rect r, float ts, Color text, const 
 bool ReadChart(pugi::xml_node space, draw::Size extent, draw::ReadContext& ctx, draw::Shape& out) {
   if (!(extent.width >= 1 && extent.height >= 1 && extent.width < 20000 && extent.height < 20000)) return false;
   Chart chart;
-  if (!Read(space, ctx.colors, chart)) return false;
-  // PowerPoint keeps Office 2007's look for a chart without c14:style, as Excel does.
-  chart.presentation = ctx.resources.InPresentation();
-  if (chart.presentation && !chart.styled) chart.legacy = true;
+  if (!Read(space, ctx.colors, chart, nullptr, ctx.resources.InPresentation())) return false;
   std::wstring font;
   if (ctx.theme) font = fw::Utf8ToWide(ctx.theme->MinorFont().latin);
   if (font.empty()) font = L"Calibri";

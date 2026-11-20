@@ -44,6 +44,7 @@ struct Series {
   // group has it), and the text between them.
   std::optional<bool> labels, percent, categoryLabels, seriesNames, keys;
   std::optional<std::wstring> separator;
+  std::string labelFormat;  // c:dLbls/c:numFmt not linked to the source; empty: the group's
 };
 
 struct Group {
@@ -58,6 +59,7 @@ struct Group {
   bool filled = false;            // radar: filled shapes rather than lines (c:radarStyle filled)
   bool labels = false, percent = false, categoryLabels = false, seriesNames = false, keys = false;
   std::optional<std::wstring> separator;  // nullopt: the user's list separator and a space
+  std::string labelFormat;  // c:dLbls/c:numFmt not linked to the source; empty: the value axis's
   bool secondary = false;  // on the secondary value axis
   std::vector<Series> series;
 };
@@ -123,7 +125,9 @@ class DataSource {
 // The chart a c:chartSpace holds; false when it holds nothing Featherweight draws. Colors are
 // resolved with `colors` (the document's theme); `data`, when given, supplies the series' values,
 // and says the chart is in a workbook, which Excel draws as it does (Chart::legacy, corners).
-bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& out, DataSource* data = nullptr);
+// `presentation`: in a PowerPoint deck, which keeps Office 2007's look as Excel does.
+bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& out, DataSource* data = nullptr,
+          bool presentation = false);
 // A number as an Excel format code shows it (the first section: decimals, thousands separators,
 // percent, literal text, dates); "General" or empty: up to 10 significant digits.
 std::wstring FormatNumber(double v, std::string_view code);

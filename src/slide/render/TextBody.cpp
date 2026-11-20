@@ -139,7 +139,8 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     s.family = r.latin.empty() ? std::wstring(L"Calibri") : r.latin;
     s.eastAsiaFamily = r.eastAsian;
     s.complexFamily = r.complexScript;
-    float size = r.size * fontScale;
+    // PowerPoint rounds a shrunk size to whole points (32 pt at 55 % is drawn at 18).
+    float size = fontScale < 1 ? std::max(1.f, std::round(r.size * fontScale)) : r.size;
     if (r.baseline != 0) {
       s.baselineShift = r.baseline * size;
       size *= 2.f / 3;
@@ -305,13 +306,16 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
     if (!first) y += spacing(pp.spaceBefore);
     const float lineFactor = pp.lineSpacing.percent ? std::max(0.f, pp.lineSpacing.value - lineReduction) : 0.f;
     for (const text::Line& line : para.lines) {
-      const float natural = line.ascent + line.descent + line.lineGap;
+      // PowerPoint's single line is 1.2 times the line's largest font size, whatever the font
+      // (its PDFs: 21.6 pt for Calibri 18, whose own ascent and descent make 21.97), with the
+      // baseline at the font's ascent's share of it.
+      float size = 0;
+      for (const text::GlyphPiece& g : line.pieces) size = std::max(size, g.emSize);
+      for (const text::InlineObject& o : line.objects) size = std::max(size, o.ascent + o.descent);
+      if (size <= 0) size = para.mark.size;
+      const float natural = 1.2f * size;
       const float pitch = pp.lineSpacing.percent ? natural * lineFactor : pp.lineSpacing.value * fontScale;
-      const float above = natural > 0 ? pitch * (line.ascent + line.lineGap) / natural : 0;
-      if (column + 1 < columns && y + pitch > boxH + 0.01f && y > 0) {
-        ++column;
-        y = 0;
-      }
+      const float above = line.ascent + line.descent > 0 ? pitch * line.ascent / (line.ascent + line.descent) : 0;
       float shift = 0;
       if (!box.wrap) {
         // Lines that don't wrap are aligned in the box as wide as they are.
@@ -319,7 +323,7 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
         if (a == Alignment::Center) shift = (left + right) / 2 - (line.contentLeft + line.contentRight) / 2;
         else if (a == Alignment::End) shift = right - line.contentRight;
       }
-      para.origins.push_back({column * (colW + colGap) + shift, y + above});
+      para.origins.push_back({shift, y + above});
       para.rows.emplace_back(y, y + pitch);
       y += pitch;
       maxBottom = std::max(maxBottom, y);
@@ -329,6 +333,25 @@ void TextBlock::Build(text::Fonts& fonts, const draw::TextBox& box, const fw::sl
   }
   // The block's height: down to the last line (the last paragraph's space after doesn't count).
   m.height = maxBottom;
+  // Columns: lines go down a column as far as the box, then on to the next; text too long for
+  // them all is shared out evenly, as PowerPoint does.
+  if (columns > 1 && maxBottom > 0) {
+    const float room = maxBottom > boxH * columns ? maxBottom / columns : boxH;
+    float start = 0, height = 0;
+    for (Impl::Para& p : m.paras)
+      for (size_t i = 0; i < p.rows.size(); ++i) {
+        if (column + 1 < columns && p.rows[i].second - start > room + 0.01f && p.rows[i].first > start) {
+          ++column;
+          start = p.rows[i].first;
+        }
+        p.origins[i].x += column * (colW + colGap);
+        p.origins[i].y -= start;
+        p.rows[i].first -= start;
+        p.rows[i].second -= start;
+        height = std::max(height, p.rows[i].second);
+      }
+    m.height = height;
+  }
 
   // Anchoring, then text coordinates (x along the lines from the text area's top left) to the box's.
   float dy = 0;
@@ -463,72 +486,6 @@ std::wstring TextBlock::PlainText() const {
     const size_t from = p.bullet && p.runStart.size() > 1 ? p.runStart[1] : 0;
     for (size_t i = from; i < p.text.size(); ++i) out += p.text[i] == L'\u000B' ? L'\n' : p.text[i];
   }
-  return out;
-}
-
-// ---- Text no model shape owns ----
-
-std::unique_ptr<fw::slide::TextBody> PlainTextBody(pugi::xml_node txBody, const draw::TextBox& box, const draw::ColorContext& colors) {
-  auto out = std::make_unique<fw::slide::TextBody>();
-  out->node = txBody;
-  auto face = [&](std::string_view t) -> std::wstring {
-    if ((t.starts_with("+mn-") || t.starts_with("+mj-")) && colors.theme) {
-      const draw::ThemeFont& f = t.starts_with("+mj") ? colors.theme->MajorFont() : colors.theme->MinorFont();
-      return Utf8ToWide(t.ends_with("-ea") ? f.eastAsian : t.ends_with("-cs") ? f.complexScript : f.latin);
-    }
-    return Utf8ToWide(t);
-  };
-  fw::slide::RunProps base;
-  base.latin = face(box.fontFace.empty() ? "+mn-lt" : box.fontFace);
-  if (box.fontColor) base.color = *box.fontColor;
-  else if (auto c = draw::SchemeColor("tx1", colors)) base.color = *c;
-  auto run = [&](pugi::xml_node rPr, fw::slide::RunProps& r) {
-    if (!rPr) return;
-    if (rPr.attribute("sz")) r.size = std::clamp(static_cast<float>(Number(rPr, "sz", 1800) / 100), 1.f, 4000.f);
-    if (rPr.attribute("b")) r.bold = Bool(rPr, "b", false);
-    if (rPr.attribute("i")) r.italic = Bool(rPr, "i", false);
-    if (rPr.attribute("u")) r.underline = std::string_view(rPr.attribute("u").value()) == "none" ? fw::slide::Underline::None : fw::slide::Underline::Single;
-    if (rPr.attribute("baseline")) r.baseline = static_cast<float>(Number(rPr, "baseline", 0) / 100000);
-    if (pugi::xml_node f = A(rPr, "solidFill"))
-      if (auto c = draw::ReadColor(f, colors)) r.color = *c;
-    if (A(rPr, "noFill")) r.noFill = true;
-    if (pugi::xml_node l = A(rPr, "latin")) r.latin = face(l.attribute("typeface").value());
-    if (rPr.attribute("lang")) r.lang = rPr.attribute("lang").value();
-  };
-  run(A(A(A(txBody, "lstStyle"), "lvl1pPr"), "defRPr"), base);
-  ForEachChild(txBody, [&](pugi::xml_node p) {
-    if (!Is(p, kA, "p")) return true;
-    fw::slide::Paragraph& para = out->paragraphs.emplace_back();
-    para.node = p;
-    pugi::xml_node pPr = A(p, "pPr");
-    std::string_view algn = pPr.attribute("algn").value();
-    para.props.align = algn == "ctr" ? fw::slide::TextAlign::Center : algn == "r" ? fw::slide::TextAlign::Right
-                       : algn == "just"                                        ? fw::slide::TextAlign::Justify
-                                                                               : fw::slide::TextAlign::Left;
-    para.props.marginLeft = EmuToPt(Number(pPr, "marL", 0));
-    para.props.indent = EmuToPt(Number(pPr, "indent", 0));
-    if (pugi::xml_node pct = A(A(pPr, "lnSpc"), "spcPct")) para.props.lineSpacing = {true, static_cast<float>(Number(pct, "val", 100000) / 100000)};
-    if (pugi::xml_node pct = A(A(pPr, "spcBef"), "spcPct")) para.props.spaceBefore = {true, static_cast<float>(Number(pct, "val", 0) / 100000)};
-    if (pugi::xml_node pts = A(A(pPr, "spcBef"), "spcPts")) para.props.spaceBefore = {false, static_cast<float>(Number(pts, "val", 0) / 100)};
-    if (pugi::xml_node pct = A(A(pPr, "spcAft"), "spcPct")) para.props.spaceAfter = {true, static_cast<float>(Number(pct, "val", 0) / 100000)};
-    if (pugi::xml_node pts = A(A(pPr, "spcAft"), "spcPts")) para.props.spaceAfter = {false, static_cast<float>(Number(pts, "val", 0) / 100)};
-    para.endProps = base;
-    ForEachChild(p, [&](pugi::xml_node r) {
-      const std::string_view k = LocalNameOf(r);
-      if (k == "r" || k == "fld" || k == "br") {
-        fw::slide::TextRun& tr = para.runs.emplace_back();
-        tr.node = r;
-        tr.kind = k == "br" ? fw::slide::TextRun::Kind::Break : k == "fld" ? fw::slide::TextRun::Kind::Field : fw::slide::TextRun::Kind::Text;
-        tr.props = base;
-        run(A(r, "rPr"), tr.props);
-        if (k != "br") tr.text = Utf8ToWide(A(r, "t").text().get());
-      } else if (k == "endParaRPr") {
-        run(r, para.endProps);
-      }
-      return para.runs.size() < 10000;
-    });
-    return out->paragraphs.size() < 5000;
-  });
   return out;
 }
 
