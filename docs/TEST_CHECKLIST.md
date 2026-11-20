@@ -402,7 +402,7 @@ Check next to Excel. Test files: `tests\fuzz\seeds\xls` (Excel's `.xls` copies o
 ### .xls and .ods
 
 - [ ] Open an `.xls` and an `.ods` from Explorer, by dragging and with Ctrl+O. Each opens in a workbook tab as a copy, with the banner "… is an Excel 97–2003 workbook. Saving makes a new ….xlsx and leaves it as it is." (for `.ods`, "… is an OpenDocument spreadsheet."). Ctrl+S asks where to save the `.xlsx`.
-- [ ] Open a few `.xls` from `tests\fuzz\seeds\xls` next to their `.xlsx` originals in `tests\office\excel`, and a few corpus `.xls` and `.ods` next to Excel: values, number formats, fonts, fills, borders, merged cells, widths and heights, frozen panes, hidden rows and sheets, conditional formats, notes and print preview look the same.
+- [ ] Open a few `.xls` from `tests\fuzz\seeds\xls` next to their `.xlsx` originals in `tests\office\excel`, and a few corpus `.xls` and `.ods` next to Excel: values, number formats, fonts (a font that isn't installed shows in Arial, as in Excel), text with several formats in one cell, fills, borders, merged cells, widths and heights, frozen panes, hidden rows and sheets, conditional formats, pictures, notes and print preview look the same.
 - [ ] Edit an `.xls` and an `.ods` (a value, a formula, a format), save them as `.xlsx`, and open the result in Excel: no repair, and the edits are there. The original `.xls` or `.ods` is unchanged.
 - [ ] An `.ots` (OpenDocument template) opens as a new workbook.
 - [ ] A damaged file (rename a `.txt` to `.ods`) says it "seems to be damaged or isn't an OpenDocument spreadsheet" and nothing else happens.
