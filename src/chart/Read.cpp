@@ -427,8 +427,8 @@ bool Read(pugi::xml_node chartSpace, const draw::ColorContext& colors, Chart& ou
       // 2007's look: 18-point Arial, not bold (Excel).
       pugi::xml_node p = A(rich, "p");
       if (out.legacy && !A(p, "pPr") && !A(A(p, "r"), "rPr")) {
-        // PowerPoint: the chart's text size times 1.2, not bold, in the chart's font (its PDFs).
-        out.titleSize = presentation ? (spaceSize > 0 ? spaceSize : 10) * 1.2f : 18;
+        // PowerPoint: the chart's text size times 1.1, not bold, in the chart's font (its PDFs).
+        out.titleSize = presentation ? (spaceSize > 0 ? spaceSize : 10) * 1.1f : 18;
         out.titleBold = false;
         if (!presentation) out.titleFont = L"Arial";
       }

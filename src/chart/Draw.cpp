@@ -187,7 +187,12 @@ std::wstring FormatNumber(double v, std::string_view code) {
   if (!digits) return before.empty() ? General(v) : Wide(before);
   const double x = percent ? v * 100 : v;
   char buf[64];
-  std::snprintf(buf, sizeof buf, "%.*f", std::clamp(decimals, 0, 10), std::fabs(x));
+  // Halves round away from zero, as Excel rounds (9.25 shows as 9.3 at one decimal, where printf
+  // gives the even 9.2).
+  const int places = std::clamp(decimals, 0, 10);
+  const double scale = std::pow(10.0, places);
+  const double rounded = std::fabs(x) * scale < 1e15 ? std::floor(std::fabs(x) * scale + 0.5 + 1e-9) / scale : std::fabs(x);
+  std::snprintf(buf, sizeof buf, "%.*f", places, rounded);
   std::string number = buf;
   if (number.size() > 40) return General(v);
   if (group) {
