@@ -17,6 +17,11 @@
   when memory after launch or launch time is over its budget, or when anything runs while idle.
   -TrackTimings measures and reports without failing: CI's runners are too noisy to gate on.
 
+  Large files, with -Large: the very large files of plan section 11, which
+  tests\office\make_budget_files.py makes in build\budgets: the 1-million-cell workbook ready in
+  under 1.5 s, the 100 MB CSV ready in under 1 s and fully loaded in under 5 s, the 50 MB workbook
+  on screen in under 1.5 s, and nothing running once each is open. Not recorded in the ledger.
+
   -Record "why" adds this build's sizes (and timings, with -Timings) to the ledger with the reason,
   making them the new baseline. Commit the ledger with the change that needed it.
 
@@ -26,11 +31,14 @@
   powershell -ExecutionPolicy Bypass -File scripts\budgets.ps1 -Timings
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\budgets.ps1 -Timings -Record "D1: the docx layout engine"
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File scripts\budgets.ps1 -Large
 #>
 param(
   [string]$Build = "build-release",
   [switch]$Timings,
   [switch]$TrackTimings,
+  [switch]$Large,
   [int]$Runs = 5,
   [string]$Record,
   [string]$Json,
@@ -57,6 +65,12 @@ $slower = 0.10             # more than this over the baseline fails...
 $floorMs = 5; $floorMB = 2 # ...when it is also more than this: smaller changes are noise
 $idleCpuLimit = 5          # ms over bench-app's idle window, and thread wakeups:
 $idleWakeupLimit = 2       # a timer firing once a second wakes the app 3 times
+# -Large: section 11's very large files, in build\budgets (tests\office\make_budget_files.py).
+$largeFiles = [ordered]@{
+  "million-cells.xlsx" = @{ key = "readyMs"; label = "ready"; budget = 1500 }
+  "100mb.csv"          = @{ key = "readyMs"; label = "ready"; budget = 1000; loaded = 5000 }
+  "fifty-mb.xlsx"      = @{ key = "onScreenMs"; label = "on screen"; budget = 1500 }  # the 1-million-cell line (S4)
+}
 # Opening fixed files of each kind. Add the office formats as they open.
 $fixedFiles = @("tests\pdfs\text.pdf", "tests\pdfs\big-600-pages.pdf", "tests\pdfs\form.pdf", "tests\office\layout\report.docx")
 # A 300-page Word document, made by tests\office\make_long_docs.py when Python is there: "ready"
@@ -307,6 +321,45 @@ if (($Timings -or $TrackTimings) -and $exe) {
     foreach ($f in $timingFailures) { Write-Host "Tracked, not gated: $f" -ForegroundColor Yellow }
   } else {
     foreach ($f in $timingFailures) { $failures.Add($f) }
+  }
+}
+
+# ---------------------------------------------------------------- Large files
+if ($Large -and $exe) {
+  if (-not $Fwtool) { $Fwtool = Join-Path $Build "tools\fwtool\Release\fwtool.exe" }
+  if (-not (Test-Path $Fwtool)) { throw "$Fwtool doesn't exist (-Fwtool names another)." }
+  $dir = Join-Path $root "build\budgets"
+  $paths = @($largeFiles.Keys | ForEach-Object { Join-Path $dir $_ })
+  $missing = @($paths | Where-Object { -not (Test-Path $_) })
+  if ($missing.Count) { throw "Make the large files first: python tests\office\make_budget_files.py (missing: $($missing -join ', '))" }
+  $largeJson = Join-Path ([IO.Path]::GetTempPath()) "fw-budgets-large-$PID.json"
+  ""
+  & $Fwtool bench-app --runs $Runs --json $largeJson $exe @paths | Out-Host
+  $largeFailed = $LASTEXITCODE -ne 0
+  $largeBench = if (Test-Path $largeJson) { Get-Content $largeJson -Raw | ConvertFrom-Json } else { $null }
+  Remove-Item $largeJson -ErrorAction SilentlyContinue
+  $largeFailures = New-Object Collections.Generic.List[string]
+  if ($largeFailed -or -not $largeBench) { $largeFailures.Add("fwtool bench-app didn't measure every large file.") }
+  foreach ($s in @($largeBench.scenarios)) {
+    $b = $largeFiles[$s.name]
+    if ($s.error -or -not $b) { continue }
+    if ([double]$s.($b.key) -ge $b.budget) {
+      $largeFailures.Add(("{0}: {1} in {2:N0} ms, over its budget of {3:N0} ms." -f $s.name, $b.label, [double]$s.($b.key), $b.budget))
+    }
+    if ($b.loaded -and [double]$s.loadedMs -ge $b.loaded) {
+      $largeFailures.Add(("{0}: fully loaded in {1:N0} ms, over its budget of {2:N0} ms." -f $s.name, [double]$s.loadedMs, $b.loaded))
+    }
+    if ($null -eq $s.idleCpuMs) {
+      $largeFailures.Add("$($s.name): idle wasn't measured: the mouse or keyboard was used each time. Run it again without touching them.")
+    } elseif ([double]$s.idleCpuMs -gt $idleCpuLimit -or [double]$s.idleWakeups -gt $idleWakeupLimit) {
+      $largeFailures.Add(("{0}: not idle once open: {1:N1} ms of CPU and {2} wakeups in {3} s." -f $s.name, [double]$s.idleCpuMs, $s.idleWakeups, $largeBench.idleSeconds))
+    }
+  }
+  $report.large = [ordered]@{ runs = $Runs; bench = $largeBench; failures = @($largeFailures) }
+  if ($TrackTimings) {
+    foreach ($f in $largeFailures) { Write-Host "Tracked, not gated: $f" -ForegroundColor Yellow }
+  } else {
+    foreach ($f in $largeFailures) { $failures.Add($f) }
   }
 }
 

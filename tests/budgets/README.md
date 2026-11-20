@@ -16,6 +16,7 @@ Then, in Windows PowerShell, which compresses the zip the way `release.ps1` does
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\budgets.ps1             # the size
 powershell -ExecutionPolicy Bypass -File scripts\budgets.ps1 -Timings    # the size and the timings
+powershell -ExecutionPolicy Bypass -File scripts\budgets.ps1 -Large      # the size and the very large files
 ```
 
 The timings take about a minute and need the desktop: close Featherweight first, and leave the mouse and keyboard alone while it runs. `-Runs N` sets the runs per scenario (5), `-Json FILE` writes the results, and `-Build DIR` measures another build.
@@ -34,7 +35,9 @@ The timings take about a minute and need the desktop: close Featherweight first,
 | ready | The app's UI thread is done: the window drawn and, with a file, its first page shown. It's read from the thread's CPU cycles, which watching doesn't disturb. Launch to window (300 ms budget) and opening a file use this. |
 | on screen | The window first looks the way it settles. This includes Windows' own animation of a window opening (about 200 ms), so it's reported but not gated. |
 | memory | The private working set once settled (Task Manager's Memory column), and the private bytes. |
-| idle | CPU time and thread wakeups in the 3 s after settling. Nothing should run: a timer firing once a second already shows 3 wakeups. |
+| idle | CPU time and thread wakeups in the 3 s after settling. Nothing should run: a timer firing once a second already shows 3 wakeups. Settling waits until no thread of the app has woken for a second, so what Windows and the graphics driver do on their own clock (AMD's driver starts a thread about 5 s after launch), or a worker the PC slowed down, isn't counted as idle; a timer still is (`fwtool bench-app --idle-threads` lists what woke, thread by thread). |
+
+**Large files**, with `-Large`: section 11's very large files, made by `tests/office/make_budget_files.py` in `build/budgets` (about 160 MB): `million-cells.xlsx` ready in under 1.5 s, `100mb.csv` ready in under 1 s and fully loaded (**loaded**, the last burst of work in any thread) in under 5 s, `fifty-mb.xlsx` on screen in under 1.5 s (its first rows; the rest is read on a worker), and nothing running once each is open. These aren't recorded in the ledger.
 
 **Typing:** `fwtool bench --typing` types in the 300-page document through the editor, at its start, middle and end and in a table cell: 44 letters, 10 Backspaces, and an Enter joined again. Each keystroke is timed from the edit to the page on screen painted again on the graphics adapter: the edit, laying out again what it moves on screen, placing the caret, and painting. The rest is laid out again untimed, as in idle time. **typing** is the median of letters and Backspaces; **worst key** is the slowest of all, Enter included.
 
@@ -63,6 +66,7 @@ The timings take about a minute and need the desktop: close Featherweight first,
   - paginating the 300-page document taking 3 s or more (its "ready" includes the background pagination);
   - typing in it of 16 ms or more, or a worst key of 50 ms or more, or either more than 10 % slower (and over 1 ms more);
   - anything running while idle (over 5 ms of CPU or 2 wakeups).
+- **Large files, with `-Large`.** Their budgets above, and nothing running while idle, on any computer.
 - **Smaller decreases.** These need no entry. The baseline stays where it was recorded, so a later increase is measured from there.
 
 **Recording an increase.** When it's worth it, say why, and commit the ledger with the change:

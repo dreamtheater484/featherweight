@@ -142,7 +142,7 @@ constexpr const char* kUsage =
     "      Reads each compound file (.doc, protected Office files): every stream must read, and\n"
     "      writing them and reading them back must give the same bytes. --all lists the streams,\n"
     "      with small ones in hex.\n"
-    "  fwtool bench-app [--runs N] [--json FILE] <Featherweight.exe> [<file>...]\n"
+    "  fwtool bench-app [--runs N] [--json FILE] [--idle-threads] <Featherweight.exe> [<file>...]\n"
     "      Starts a private copy of Featherweight, alone and with each file, and measures launch\n"
     "      to window, to the first frame (the start screen or the first page), memory once\n"
     "      settled, and CPU and wakeups while idle (plan §11). Works with any build, 0.9.4\n"
@@ -335,6 +335,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     else if (arg == L"--min-match" && i + 1 < argc) options.minMatch = _wtof(argv[++i]);
     else if (arg == L"--threads") options.threads = true;
+    else if (arg == L"--idle-threads") options.idleThreads = true;
     else if (arg == L"--min-pages" && i + 1 < argc) options.minPages = _wtof(argv[++i]);
     else if (arg == L"--min-lines" && i + 1 < argc) options.minLines = _wtof(argv[++i]);
     else if (arg == L"--self-test") options.selfTest = true;
