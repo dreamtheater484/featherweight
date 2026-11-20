@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "core/Strings.h"
+#include "draw/Sfnt.h"
 #include "slide/Internal.h"
 
 namespace fw::slide {
@@ -535,9 +536,44 @@ const TextBody* Presentation::Text(const Shape& shape, const SlideBase& shownOn)
   return it->second.get();
 }
 
+const TextBody* Presentation::TextOf(pugi::xml_node txBody, const SlideBase& owner, const SlideBase& shownOn) {
+  if (!txBody) return nullptr;
+  if (const Shape* s = owner.ShapeOfText(txBody)) return Text(*s, shownOn);
+  std::lock_guard lock(mutex_);
+  auto key = std::make_pair(static_cast<const void*>(txBody.internal_object()), static_cast<const void*>(&shownOn));
+  auto it = texts_.find(key);
+  if (it == texts_.end()) {
+    Shape standIn;
+    standIn.node = standIn.drawNode = txBody.parent();
+    standIn.textNode = txBody;
+    standIn.owner = &owner;
+    it = texts_.emplace(key, ResolveText(*this, standIn, owner, shownOn)).first;
+  }
+  return it->second.get();
+}
+
 const std::vector<EmbeddedFont>& Presentation::EmbeddedFonts() {
   std::lock_guard lock(mutex_);
+  if (fontsDecoded_) return fonts_;
   fontsDecoded_ = true;
+  // Embedded OpenType (.fntdata), each style that decodes.
+  for (const auto& [typeface, parts] : fontParts_) {
+    for (int i = 0; i < 4; ++i) {
+      if (parts[i].empty()) continue;
+      std::vector<uint8_t> bytes;
+      if (!package_->ReadPart(parts[i], bytes).Ok()) continue;
+      EmbeddedFont f;
+      f.typeface = typeface;
+      f.bold = i == 1 || i == 3;
+      f.italic = i == 2 || i == 3;
+      f.sfnt = draw::sfnt::DecodeEot(bytes);
+      if (f.sfnt.empty()) {
+        problems_.push_back(parts[i] + ": an embedded font Featherweight can't read");
+        continue;
+      }
+      fonts_.push_back(std::move(f));
+    }
+  }
   return fonts_;
 }
 

@@ -108,6 +108,11 @@ struct TextPath {
 struct TextBody {
   pugi::xml_node content, properties;
   Rect insets{7.2f, 3.6f, 7.2f, 3.6f};
+  // SmartArt's dsp:txXfrm: where the text goes, in the shape's parent's coordinates, and its
+  // rotation, when it isn't the shape's own text rectangle.
+  bool hasTextXfrm = false;
+  Rect textXfrm;
+  float textXfrmRotation = 0;
   TextBox box;  // the flags; rect and transform are filled in later
 };
 
@@ -127,6 +132,7 @@ struct Art {
 struct Shape {
   enum class Kind : uint8_t { Shape, Picture, Group, Placeholder };
   Kind kind = Kind::Shape;
+  uint32_t id = 0;  // cNvPr id; 0 when it has none (VML)
   std::string name, description;
   Rect bounds;  // in the parent's coordinates, points
   float rotation = 0;  // degrees clockwise
@@ -152,6 +158,10 @@ Matrix ShapeTransform(const Shape& s);
 Rect ChildToGroup(const Shape& group, const Rect& child);
 // Draws a shape in its parent's coordinates.
 void DrawShape(Painter& p, const Shape& s);
+// The same through hooks; `textIndex` counts the text boxes, in CollectTextBoxes' order.
+void DrawShape(Painter& p, const Shape& s, DrawHooks& hooks, size_t& textIndex);
+// Each visible shape's id, size and transform to the drawing (Drawing::Parts).
+void CollectParts(const Shape& s, const Matrix& toDrawing, std::vector<Drawing::Part>& out);
 // The flattened outlines of every visible shape (`toDrawing`: parent coordinates → the drawing's).
 void CollectOutlines(const Shape& s, const Matrix& toDrawing, std::vector<Path::Polygon>& out);
 // The text boxes, in drawing order.

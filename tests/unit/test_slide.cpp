@@ -404,3 +404,160 @@ TEST(SlideDamagedPartsAreSkipped) {
   auto none = Modified({{"ppt/presentation.xml", "<x/>"}}, &st);
   CHECK(none == nullptr && !st.Ok());
 }
+
+TEST(SlideTableStyleApplied) {
+  // shapes-table-chart.pptx names Medium Style 2 - Accent 1 without defining it, with a header row
+  // and banded rows.
+  auto deck = OpenGenerated("shapes-table-chart.pptx");
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const Slide* s = deck->GetSlide(1);
+  const Table* t = deck->GetTable(s->shapes[0], *s);
+  CHECK(t != nullptr);
+  if (!t) return;
+  CHECK_EQ(t->rows.size(), size_t{4});
+  CHECK_EQ(t->columns.size(), size_t{3});
+  CHECK_NEAR(t->columns[0], 144.f, 0.01f);
+  CHECK_NEAR(t->rows[0], 36.f, 0.01f);
+  const TableCell* head = t->Cell(0, 1);
+  CHECK(head && head->fill.kind == CellFill::Kind::Solid && Near(head->fill.color, 0x4F / 255.f, 0x81 / 255.f, 0xBD / 255.f));
+  CHECK(head && head->text && head->text->paragraphs[0].runs[0].props.bold);
+  CHECK(head && Near(head->text->paragraphs[0].runs[0].props.color, 1, 1, 1));
+  CHECK(head && head->borders[TableCell::Bottom].visible && std::fabs(head->borders[TableCell::Bottom].width - 3.f) < 0.01f);
+  CHECK(head && head->borders[TableCell::Left].visible && std::fabs(head->borders[TableCell::Left].width - 1.f) < 0.01f);
+  const TableCell* band1 = t->Cell(1, 0);
+  const TableCell* band2 = t->Cell(2, 0);
+  CHECK(band1 && band2 && band1->fill.kind == CellFill::Kind::Solid && band2->fill.kind == CellFill::Kind::Solid);
+  // Band 1 is the 40 % tint, the others the table's 20 %: lighter.
+  CHECK(band1 && band2 && band2->fill.color.r > band1->fill.color.r && band1->fill.color.r > 0x4F / 255.f);
+  CHECK(band1 && band1->text && !band1->text->paragraphs[0].runs[0].props.bold);
+  CHECK(band1 && Near(band1->text->paragraphs[0].runs[0].props.color, 0, 0, 0));
+  CHECK(band1 && band1->text->paragraphs[0].runs[0].text == L"R2C1");
+  CHECK(deck->GetTable(deck->GetSlide(0)->shapes[0], *s) == nullptr);  // not a table
+}
+
+TEST(SlideTableSpansAndOwnProperties) {
+  std::string frame =
+      "<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"4\" name=\"T\"/><p:cNvGraphicFramePr/><p:nvPr/>"
+      "</p:nvGraphicFramePr><p:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"254000\" cy=\"254000\"/></p:xfrm><a:graphic>"
+      "<a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/table\"><a:tbl><a:tblPr/><a:tblGrid>"
+      "<a:gridCol w=\"127000\"/><a:gridCol w=\"127000\"/></a:tblGrid>"
+      "<a:tr h=\"127000\"><a:tc gridSpan=\"2\"><a:txBody><a:bodyPr/><a:p><a:r><a:t>wide</a:t></a:r></a:p></a:txBody>"
+      "<a:tcPr marL=\"0\" anchor=\"ctr\"><a:lnB w=\"25400\"><a:solidFill><a:srgbClr val=\"00FF00\"/></a:solidFill>"
+      "<a:prstDash val=\"dash\"/></a:lnB><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill></a:tcPr></a:tc>"
+      "<a:tc hMerge=\"1\"><a:txBody><a:bodyPr/><a:p/></a:txBody><a:tcPr/></a:tc></a:tr>"
+      "<a:tr h=\"127000\"><a:tc><a:txBody><a:bodyPr/><a:p/></a:txBody><a:tcPr/></a:tc></a:tr>"
+      "</a:tbl></a:graphicData></a:graphic></p:graphicFrame>";
+  auto deck = Modified({{"ppt/slides/slide1.xml", SlideXml(frame)}, {"ppt/slides/_rels/slide1.xml.rels", kSlideRels}});
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const Slide* s = deck->GetSlide(0);
+  const Table* t = deck->GetTable(*s->FindShape(4), *s);
+  CHECK(t && t->cells.size() == 4);
+  if (!t || t->cells.size() != 4) return;
+  const TableCell* wide = t->Cell(0, 0);
+  CHECK(wide->columnSpan == 2 && !wide->covered && t->Cell(0, 1)->covered);
+  CHECK(wide->fill.kind == CellFill::Kind::Solid && Near(wide->fill.color, 1, 0, 0));
+  CHECK(wide->borders[TableCell::Bottom].visible && wide->borders[TableCell::Bottom].dash == "dash");
+  CHECK_NEAR(wide->borders[TableCell::Bottom].width, 2.f, 0.01f);
+  CHECK_NEAR(wide->marginLeft, 0.f, 0.001f);
+  CHECK(wide->anchor == BodyProps::Anchor::Middle);
+  CHECK(!wide->borders[TableCell::Top].visible);  // no style: no borders
+  CHECK(t->Cell(1, 1) && !t->Cell(1, 1)->node);   // a missing cell is an empty one
+  CHECK(wide->text && wide->text->paragraphs[0].runs[0].text == L"wide");
+}
+
+namespace {
+
+std::string PartText(const char* deck, const char* part) {
+  fw::pkg::Status st;
+  auto pk = fw::pkg::Package::Open(fw::pkg::Snapshot::FromBytes(FileBytes(Generated() / deck)), fw::pkg::Limits::Default(), st);
+  std::vector<uint8_t> b;
+  if (pk) pk->ReadPart(part, b);
+  return test::Text(b);
+}
+
+void ReplaceBetween(std::string& s, const std::string& open, const std::string& close, const std::string& with) {
+  size_t a = s.find(open), b = s.find(close, a);
+  if (a != std::string::npos && b != std::string::npos) s.replace(a, b + close.size() - a, with);
+}
+
+}  // namespace
+
+TEST(SlideBaseStylesAsPowerPointUsesThem) {
+  // What PowerPoint 2021 showed for this deck (2026-11-20): text boxes and shapes start from the
+  // default text style (22 pt green), never the master's other style (40 pt red); table cells take
+  // the other style's size but tx1, or their table style's color.
+  std::string master = PartText("simple.pptx", "/ppt/slideMasters/slideMaster1.xml");
+  ReplaceBetween(master, "<p:otherStyle>", "</p:otherStyle>",
+                 "<p:otherStyle><a:lvl1pPr marL=\"0\"><a:defRPr sz=\"4000\"><a:solidFill><a:srgbClr val=\"FF0000\"/>"
+                 "</a:solidFill></a:defRPr></a:lvl1pPr></p:otherStyle>");
+  std::string pres = PartText("simple.pptx", "/ppt/presentation.xml");
+  ReplaceBetween(pres, "<a:lvl1pPr marL=\"0\"", "</a:lvl1pPr>",
+                 "<a:lvl1pPr marL=\"0\"><a:defRPr sz=\"2200\"><a:solidFill><a:srgbClr val=\"00FF00\"/></a:solidFill>"
+                 "</a:defRPr></a:lvl1pPr>");
+  std::string styles = std::string("<a:tblStyleLst xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" "
+                                   "def=\"{11111111-0000-0000-0000-000000000001}\"><a:tblStyle "
+                                   "styleId=\"{11111111-0000-0000-0000-000000000001}\" styleName=\"Blue\"><a:wholeTbl>"
+                                   "<a:tcTxStyle><a:srgbClr val=\"0000FF\"/></a:tcTxStyle><a:tcStyle><a:tcBdr/></a:tcStyle>"
+                                   "</a:wholeTbl></a:tblStyle></a:tblStyleLst>");
+  auto table = [](int id, const char* styleId) {
+    std::string pr = styleId ? std::string("<a:tblPr><a:tableStyleId>") + styleId + "</a:tableStyleId></a:tblPr>" : "<a:tblPr/>";
+    return "<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"" + std::to_string(id) +
+           "\" name=\"T\"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x=\"0\" y=\"0\"/><a:ext "
+           "cx=\"100\" cy=\"100\"/></p:xfrm><a:graphic><a:graphicData "
+           "uri=\"http://schemas.openxmlformats.org/drawingml/2006/table\"><a:tbl>" + pr +
+           "<a:tblGrid><a:gridCol w=\"100\"/></a:tblGrid><a:tr h=\"100\"><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r>"
+           "<a:t>Cell</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>";
+  };
+  std::string box =
+      "<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Box\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody>"
+      "<a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Box</a:t></a:r></a:p></p:txBody></p:sp>";
+  auto deck = Modified({{"ppt/slideMasters/slideMaster1.xml", master},
+                        {"ppt/presentation.xml", pres},
+                        {"ppt/tableStyles.xml", styles},
+                        {"ppt/slides/slide1.xml", SlideXml(box + table(3, nullptr) + table(4, "{11111111-0000-0000-0000-000000000001}"))},
+                        {"ppt/slides/_rels/slide1.xml.rels", kSlideRels}});
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const Slide* s = deck->GetSlide(0);
+  const TextBody* b = TextOf(*deck, *s, 2);
+  CHECK(b && std::fabs(b->paragraphs[0].runs[0].props.size - 22.f) < 0.01f);
+  CHECK(b && Near(b->paragraphs[0].runs[0].props.color, 0, 1, 0));
+  const Table* plain = deck->GetTable(*s->FindShape(3), *s);
+  CHECK(plain && plain->Cell(0, 0)->text);
+  if (plain && plain->Cell(0, 0)->text) {
+    const RunProps& r = plain->Cell(0, 0)->text->paragraphs[0].runs[0].props;
+    CHECK_NEAR(r.size, 40.f, 0.01f);
+    CHECK(Near(r.color, 0, 0, 0));
+  }
+  const Table* blue = deck->GetTable(*s->FindShape(4), *s);
+  CHECK(blue && blue->Cell(0, 0)->text && Near(blue->Cell(0, 0)->text->paragraphs[0].runs[0].props.color, 0, 0, 1));
+}
+
+TEST(SlideTextOfFreeBodies) {
+  // SmartArt's drawing (dsp:sp) isn't in the model: its text resolves as a text box's, with its
+  // dsp:style's fontRef.
+  auto deck = OpenGenerated("shapes-table-chart.pptx");
+  CHECK(deck != nullptr);
+  if (!deck) return;
+  const Slide* s = deck->GetSlide(0);
+  pugi::xml_document doc;
+  const char* xml =
+      "<dsp:sp xmlns:dsp=\"http://schemas.microsoft.com/office/drawing/2008/diagram\" "
+      "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><dsp:style><a:lnRef idx=\"2\"/>"
+      "<a:fillRef idx=\"1\"/><a:effectRef idx=\"0\"/><a:fontRef idx=\"minor\"><a:schemeClr val=\"lt1\"/></a:fontRef>"
+      "</dsp:style><dsp:txBody><a:bodyPr anchor=\"ctr\"/><a:lstStyle/><a:p><a:r><a:rPr sz=\"2600\"/><a:t>Step</a:t></a:r>"
+      "</a:p></dsp:txBody></dsp:sp>";
+  CHECK(doc.load_string(xml));
+  pugi::xml_node body = doc.document_element().child("dsp:txBody");
+  const TextBody* t = deck->TextOf(body, *s, *s);
+  CHECK(t && t->paragraphs.size() == 1 && t->paragraphs[0].runs[0].text == L"Step");
+  CHECK(t && Near(t->paragraphs[0].runs[0].props.color, 1, 1, 1));
+  CHECK(t && std::fabs(t->paragraphs[0].runs[0].props.size - 26.f) < 0.01f);
+  CHECK(t && t->body.anchor == BodyProps::Anchor::Middle);
+  CHECK(deck->TextOf(body, *s, *s) == t);
+  // A body the model knows maps to its shape's text.
+  CHECK(deck->TextOf(s->shapes[0].textNode, *s, *s) == deck->Text(s->shapes[0], *s));
+  CHECK(deck->TextOf(pugi::xml_node(), *s, *s) == nullptr);
+}

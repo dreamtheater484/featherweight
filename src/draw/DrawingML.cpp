@@ -59,6 +59,11 @@ std::vector<float> PresetDash(std::string_view v) {
   return {};
 }
 
+void ClearIds(Shape& s) {
+  s.id = 0;
+  for (Shape& c : s.children) ClearIds(c);
+}
+
 class Reader {
  public:
   explicit Reader(ReadContext& ctx) : ctx_(ctx) {}
@@ -372,6 +377,7 @@ class Reader {
 
   void ReadNames(pugi::xml_node nv, Shape& s) {
     pugi::xml_node c = Part(nv, "cNvPr");
+    s.id = static_cast<uint32_t>(std::clamp(Number(c, "id", 0), 0.0, 4294967295.0));
     s.name = c.attribute("name").value();
     s.description = c.attribute("descr").value();
     s.hidden = Bool(c, "hidden", false);
@@ -415,6 +421,18 @@ class Reader {
     b.upright = Bool(props, "upright", false);
     b.columns = std::clamp(static_cast<int>(Number(props, "numCol", 1)), 1, 16);
     b.columnSpacing = Emu(props, "spcCol");
+    if (pugi::xml_node x = Child(el, kDsp, "txXfrm")) {
+      Shape tx;
+      ReadXfrm(x, tx);
+      t->hasTextXfrm = tx.bounds.Width() > 0 && tx.bounds.Height() > 0;
+      t->textXfrm = tx.bounds;
+      t->textXfrmRotation = tx.rotation;
+    }
+    if (pugi::xml_node font = A(Part(el, "style"), "fontRef")) {
+      b.fontColor = ReadColor(font, ctx_.colors);
+      std::string_view idx = font.attribute("idx").value();
+      b.fontFace = idx == "major" ? "+mj-lt" : idx == "minor" ? "+mn-lt" : "";
+    }
     if (pugi::xml_node fit = A(props, "normAutofit")) {
       b.autofit = TextBox::Autofit::ShrinkText;
       b.fontScale = std::clamp(Percent(fit, "fontScale", 100000), 0.01f, 1.f);
@@ -483,6 +501,7 @@ class Reader {
       const Size size{s.bounds.Width(), s.bounds.Height()};
       if (ReadGraphicData(A(A(el, "graphic"), "graphicData"), size, ctx_, inner)) {
         inner.bounds = s.bounds;
+        inner.id = s.id;
         inner.rotation = s.rotation;
         inner.flipH = s.flipH;
         inner.flipV = s.flipV;
@@ -550,6 +569,8 @@ class Reader {
       Shape child;
       std::string_view k = LocalNameOf(c);
       if ((k == "sp" || k == "grpSp" || k == "pic" || k == "cxnSp") && ReadShape(c, child, nullptr)) {
+        // Its shapes' ids are the drawing part's own: the graphic frame's is the one that counts.
+        ClearIds(child);
         s.children.push_back(std::move(child));
       }
       return ctx_.shapes <= ReadContext::kMaxShapes;
