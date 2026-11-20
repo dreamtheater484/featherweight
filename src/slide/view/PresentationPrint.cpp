@@ -6,6 +6,7 @@
 #include <objbase.h>
 #include <commdlg.h>
 #include <shlwapi.h>
+#include <winspool.h>
 #include <wincodec.h>
 
 #include <algorithm>
@@ -42,11 +43,25 @@ draw::Size PaperOf(const std::wstring& printer, const DEVMODEW* devmode) {
 
 // The printer's settings with the orientation PowerPoint picks for the layout: slides as wide as
 // the deck's (landscape for a landscape deck), handouts and notes pages portrait.
-std::vector<uint8_t> Oriented(const DEVMODEW* devmode, bool landscape) {
+std::vector<uint8_t> Oriented(const std::wstring& printer, const DEVMODEW* devmode, bool landscape) {
   std::vector<uint8_t> copy;
-  if (!devmode) return copy;
-  copy.resize(devmode->dmSize + devmode->dmDriverExtra);
-  std::memcpy(copy.data(), devmode, copy.size());
+  if (devmode) {
+    copy.resize(devmode->dmSize + devmode->dmDriverExtra);
+    std::memcpy(copy.data(), devmode, copy.size());
+  } else {
+    // No settings from a dialog: the printer's defaults.
+    HANDLE h = nullptr;
+    if (!OpenPrinterW(const_cast<wchar_t*>(printer.c_str()), &h, nullptr)) return copy;
+    const LONG size = DocumentPropertiesW(nullptr, h, const_cast<wchar_t*>(printer.c_str()), nullptr, nullptr, 0);
+    if (size > 0) {
+      copy.resize(static_cast<size_t>(size));
+      if (DocumentPropertiesW(nullptr, h, const_cast<wchar_t*>(printer.c_str()), reinterpret_cast<DEVMODEW*>(copy.data()),
+                              nullptr, DM_OUT_BUFFER) != IDOK)
+        copy.clear();
+    }
+    ClosePrinter(h);
+    if (copy.empty()) return copy;
+  }
   auto* dm = reinterpret_cast<DEVMODEW*>(copy.data());
   dm->dmFields |= DM_ORIENTATION;
   dm->dmOrientation = landscape ? DMORIENT_LANDSCAPE : DMORIENT_PORTRAIT;
@@ -124,6 +139,17 @@ PrintOutcome PresentationView::Print(HWND owner, const std::function<void(int, i
   return outcome;
 }
 
+PrintOutcome PresentationView::PrintToFile(const std::wstring& path, std::wstring& message) {
+  if (!CanPrint()) return PrintOutcome::Failed;
+  ComPtr<IStream> stream;
+  if (FAILED(SHCreateStreamOnFileEx(path.c_str(), STGM_CREATE | STGM_WRITE | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL,
+                                    TRUE, nullptr, &stream))) {
+    message = L"Couldn't create " + path;
+    return PrintOutcome::Failed;
+  }
+  return PrintTo(L"Microsoft Print to PDF", nullptr, {-1}, stream.Get(), {}, message);
+}
+
 PrintOutcome PresentationView::PrintTo(const std::wstring& printer, const DEVMODEW* devmode, const std::vector<int>& chosen,
                                        IStream* output, const std::function<void(int, int)>& progress,
                                        std::wstring& message) {
@@ -141,7 +167,7 @@ PrintOutcome PresentationView::PrintTo(const std::wstring& printer, const DEVMOD
   }
   const draw::Size slide = deck_->SlideSize();
   const bool landscape = print_.what == PrintWhat::Slides && slide.width > slide.height;
-  const std::vector<uint8_t> oriented = Oriented(devmode, landscape);
+  const std::vector<uint8_t> oriented = Oriented(printer, devmode, landscape);
   const DEVMODEW* dm = oriented.empty() ? devmode : reinterpret_cast<const DEVMODEW*>(oriented.data());
   draw::Size paper = PaperOf(printer, dm);
   // A driver that ignored the orientation: turn the page ourselves.

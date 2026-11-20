@@ -2653,6 +2653,10 @@ void App::RunScript(const std::wstring& script) {
         std::wstring message;
         if (static_cast<fw::sheet::view::WorkbookView*>(v)->PrintToFile(arg, message) != PrintOutcome::Printed)
           fwprintf(stderr, L"print failed: %s\n", message.c_str());
+      } else if (v && v->Kind() == TabKind::Presentation && v->Ready()) {
+        std::wstring message;
+        if (static_cast<fw::slide::view::PresentationView*>(v)->PrintToFile(arg, message) != PrintOutcome::Printed)
+          fwprintf(stderr, L"print failed: %s\n", message.c_str());
       }
     } else if (op == L"exportpdf") {
       // exportpdf:out.pdf is File > Export PDF without the dialog.

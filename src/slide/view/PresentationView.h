@@ -99,6 +99,8 @@ class PresentationView : public TabContent {
   void SetPrinting(const PrintSettings& s) { print_ = s; }
 
   // ---- Tests and tools ----
+  // The pages, laid out as chosen, to Microsoft Print to PDF with no dialog (the visual checks).
+  PrintOutcome PrintToFile(const std::wstring& path, std::wstring& message);
   // The pages as they print and export, each a PNG (page-1.png...) in `dir` at `dpi`.
   int RenderPagesForTesting(const std::wstring& dir, float dpi);
   // The slide fitted in the view, client pixels (for tests and the snapshot scripts).
