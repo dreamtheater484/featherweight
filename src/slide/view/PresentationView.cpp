@@ -11,6 +11,8 @@
 #include "Util.h"
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
+#include "slide/show/SlideRenderer.h"
+#include "slide/show/SlideShow.h"
 #include "slide/view/ModelDeck.h"
 #include "text/Fonts.h"
 #include "ui/Anim.h"
@@ -56,7 +58,10 @@ PresentationView::PresentationView(ViewHost& host, std::wstring path, std::uniqu
   if (deck_) thumbCache_.resize(deck_->SlideCount());
 }
 
-PresentationView::~PresentationView() = default;
+PresentationView::~PresentationView() {
+  // The show draws this tab's deck: it ends before the deck goes.
+  if (showing_ && fw::slide::show::Running()) fw::slide::show::Stop();
+}
 
 OpenResult PresentationView::Load(const std::wstring& /*password*/, std::wstring& error) {
   if (deck_) return OpenResult::Ok;
@@ -252,7 +257,7 @@ void PresentationView::Draw(Canvas& c, ID2D1DeviceContext* dc) {
   if (showPending_) {
     // After the first frame, so the tab is there to come back to.
     showPending_ = false;
-    PostMessageW(host_.ViewHwnd(), WM_COMMAND, CmdPresentation, 0);
+    PostMessageW(host_.ViewHwnd(), WM_COMMAND, CmdSlideShowFromStart, 0);
   }
 }
 
@@ -399,6 +404,8 @@ void PresentationView::DrawNotes(Canvas& c) {
 // Idle work: the thumbnails near what's shown, the visible ones first.
 
 bool PresentationView::HasIdleWork() const {
+  // Nothing competes with the show's frames.
+  if (fw::slide::show::Running()) return false;
   if (!deck_ || thumbW_ == 0 || Width(thumbs_) <= 0) return false;
   const std::vector<ThumbRow> rows = Rows();
   const float ahead = Height(thumbs_);

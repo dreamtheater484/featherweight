@@ -12,6 +12,8 @@
 #include "core/Layout.h"
 #include "core/Strings.h"
 #include "draw/D2DPainter.h"
+#include "slide/show/SlideRenderer.h"
+#include "slide/show/SlideShow.h"
 #include "slide/view/PresentationView.h"
 #include "ui/Icons.h"
 #include "ui/Menu.h"
@@ -34,7 +36,8 @@ struct CommandName {
 
 constexpr CommandName kNames[] = {
     {CmdPresentation, L"Present from the beginning", L"F5"},
-    {CmdPresentFromCurrent, L"Present from the current slide", L"Shift+F5"},
+    {CmdSlideShowFromStart, L"Present from the beginning", L"F5"},
+    {CmdSlideShowFromCurrent, L"Present from the current slide", L"Shift+F5"},
     {CmdNextPage, L"Next slide", L"Page Down"},
     {CmdPrevPage, L"Previous slide", L"Page Up"},
     {CmdFirstPage, L"First slide", L"Home"},
@@ -103,7 +106,7 @@ void PutClipboard(UINT format, const void* data, size_t size) {
 
 int PresentationView::ShortcutFor(UINT vk, UINT mods) const {
   const bool ctrl = (mods & kModCtrl) != 0, shift = (mods & kModShift) != 0, alt = (mods & kModAlt) != 0;
-  if (vk == VK_F5 && !ctrl && !alt) return shift ? CmdPresentFromCurrent : CmdPresentation;
+  if (vk == VK_F5 && !ctrl && !alt) return shift ? CmdSlideShowFromCurrent : CmdSlideShowFromStart;
   if (ctrl && !alt) {
     switch (vk) {
       case VK_OEM_PLUS:
@@ -132,7 +135,8 @@ CommandState PresentationView::QueryCommand(int cmd) {
   switch (cmd) {
     case CmdSave: s.enabled = false; break;  // read-only until P2
     case CmdPresentation:
-    case CmdPresentFromCurrent:
+    case CmdSlideShowFromStart:
+    case CmdSlideShowFromCurrent:
     case CmdZoomIn:
     case CmdZoomOut:
     case CmdZoomFitPage:
@@ -187,8 +191,9 @@ bool PresentationView::Execute(int cmd) {
   if (!Ready()) return false;
   const size_t n = SlideCount();
   switch (cmd) {
-    case CmdPresentation: StartShow(false); return true;
-    case CmdPresentFromCurrent: StartShow(true); return true;
+    case CmdPresentation:
+    case CmdSlideShowFromStart: StartShow(false); return true;
+    case CmdSlideShowFromCurrent: StartShow(true); return true;
     case CmdNextPage:
       if (current_ + 1 < n) GoToSlide(current_ + 1);
       return true;
@@ -241,6 +246,10 @@ bool PresentationView::Execute(int cmd) {
     case CmdPrintHidden: print_.includeHidden = !print_.includeHidden; return true;
     case CmdPrintFrame: print_.frame = !print_.frame; return true;
     default:
+      if (cmd >= CmdSlideShowMonitor && cmd < CmdSlideShowMonitor + 16) {
+        showMonitor_ = cmd - CmdSlideShowMonitor;
+        return true;
+      }
       for (const LayoutChoice& l : kLayouts)
         if (l.cmd == cmd) {
           print_.what = l.what;
@@ -283,12 +292,18 @@ void PresentationView::BuildToolbar(ToolbarModel& m, const ToolbarContext& ctx) 
   present.glyph = icon::Slideshow;
   present.tooltip = L"Present from the beginning (F5)";
   present.choices = {L"From the beginning\tF5", L"From the current slide\tShift+F5"};
+  // With two monitors or more, where the show goes (p1-show's Monitors()).
+  const std::vector<std::wstring> monitors = fw::slide::show::Monitors();
+  if (monitors.size() >= 2)
+    for (size_t i = 0; i < monitors.size(); ++i)
+      present.choices.push_back((static_cast<int>(i) == showMonitor_ ? L"✓ Present on " : L"Present on ") + monitors[i]);
   present.enabled = Ready() && SlideCount() > 0;
   present.priority = 9;
   present.sepBefore = true;
   present.onChange = [this](const ToolValue& v) {
     if (v.index == 0) StartShow(false);
     else if (v.index == 1) StartShow(true);
+    else if (v.index >= 2) showMonitor_ = v.index - 2;
   };
   ToolItem notes = item(CmdNotesPane, icon::TextDocument, L"Speaker notes");
   notes.toggle = true;
@@ -329,7 +344,7 @@ void PresentationView::FillContextMenu(HMENU m, int x, int y) {
   AppendItem(m, CmdCopyNotes, L"Copy speaker notes", any && !deck_->Notes(current_).empty());
   AppendSeparator(m);
   AppendItem(m, CmdPresentation, L"Present from the beginning\tF5", any);
-  AppendItem(m, CmdPresentFromCurrent, L"Present from this slide\tShift+F5", any);
+  AppendItem(m, CmdSlideShowFromCurrent, L"Present from this slide\tShift+F5", any);
   AppendSeparator(m);
   AppendItem(m, CmdZoomFitPage, L"Fit slide to window\tCtrl+0", any, zoom_ == 0);
   AppendItem(m, CmdNotesPane, L"Speaker notes", true, notesShown_);
@@ -555,10 +570,25 @@ void PresentationView::FollowLink(const SlideLink& link) {
 // The slide show and the banner
 
 void PresentationView::StartShow(bool fromCurrent) {
-  if (!Ready() || SlideCount() == 0) return;
-  // p1-show's full-screen show plugs in here (src/slide/show); until it lands, say so.
-  (void)fromCurrent;
-  host_.ViewMessage(BannerKind::Info, L"The slide show isn't in this build yet.");
+  if (!Ready() || SlideCount() == 0 || fw::slide::show::Running()) return;
+  Presentation* model = deck_->Model();
+  if (!model) return;
+  // p1-show's renderer for the show (the plain one until p1-render's adapter is in).
+  if (!showRenderer_) showRenderer_ = fw::slide::show::MakePlainRenderer(*model);
+  fw::slide::show::ShowOptions o;
+  o.first = fromCurrent ? current_ : 0;
+  o.owner = host_.ViewHwnd();
+  o.monitor = showMonitor_ < static_cast<int>(fw::slide::show::Monitors().size()) ? showMonitor_ : -1;
+  o.deckPath = path_;
+  // The show ends on a slide: the tab shows it, as PowerPoint's normal view does.
+  o.ended = [this](size_t slide) {
+    showing_ = false;
+    GoToSlide(slide);
+    host_.ViewInvalidate();
+  };
+  o.openFile = [](const std::wstring&) { return false; };  // links to files aren't followed from the show in P1
+  showing_ = fw::slide::show::Start(*model, *showRenderer_, o);
+  if (!showing_) host_.ViewMessage(BannerKind::Warning, L"The slide show couldn't start.");
 }
 
 void PresentationView::ReadOnlyBanner() {

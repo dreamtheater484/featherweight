@@ -26,6 +26,7 @@
 #include "ui/Theme.h"
 #include "pkg/Backups.h"
 #include "sheet/view/WorkbookView.h"
+#include "slide/show/SlideShow.h"
 #include "slide/view/PresentationView.h"
 #include "word/DocView.h"
 
@@ -78,6 +79,7 @@ int App::Run(const AppOptions& opts) {
     settings_.invert = opts.snapshotInvert;
   }
   theme::Init(themeSetting);
+  if (!opts.showPath.empty()) return fw::slide::show::RunStandalone(opts.showPath, opts.showBench, opts.showCapture);
   if (!snapshot_ && !sandbox_) Updater::CleanupOldFiles();
 
   if (!CreateMainWindow(opts)) return 1;
@@ -193,6 +195,11 @@ void App::MessageLoop() {
       if (msg.message == WM_QUIT) return;
       TranslateMessage(&msg);
       DispatchMessageW(&msg);
+    }
+    // The slide show's frames come first: it waits for the display, not for messages.
+    if (anim::FrameSource* frames = anim::ActiveFrameSource(); frames && frames->Animating()) {
+      frames->Frame();
+      continue;
     }
     if (Idle()) continue;
     DWORD timeout = INFINITE;

@@ -16,6 +16,9 @@
 namespace fw::text {
 class Fonts;
 }
+namespace fw::slide::show {
+class SlideRenderer;
+}
 
 namespace fw::slide::view {
 
@@ -146,6 +149,11 @@ class PresentationView : public TabContent {
   ViewHost& host_;
   std::wstring path_;
   std::unique_ptr<Deck> deck_;
+  // The slide show (p1-show): its renderer, the monitor chosen (-1: the window's), and whether a
+  // show this tab started is running (the tab outlives it, or stops it when closed).
+  std::unique_ptr<fw::slide::show::SlideRenderer> showRenderer_;
+  int showMonitor_ = -1;
+  bool showing_ = false;
   std::unique_ptr<text::Fonts> fonts_;  // printing's and Export PDF's text (page numbers, notes)
   size_t current_ = 0;
   bool showPending_ = false;  // a .ppsx: the show starts once the tab is drawn

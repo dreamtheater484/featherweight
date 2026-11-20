@@ -75,6 +75,10 @@ enum Cmd : int {
   // s4-ods (3020-3039): the user's own templates (UserTemplates.h).
   CmdUserTemplate = 3020,         // + index (up to kUserTemplateCount): a new document or workbook from one
   CmdUserTemplatesFolder = 3036,  // "More templates...": the Open dialog in the personal templates folder
+  // p1-show (3300-3349): the slide show (src/slide/show/SlideShow.h).
+  CmdSlideShowFromStart = 3300,    // F5
+  CmdSlideShowFromCurrent = 3301,  // Shift+F5
+  CmdSlideShowMonitor = 3310,      // + index into fw::slide::show::Monitors(): where the show goes
 
   // Documents: formatting (D2). The toolbar's boxes have ids too.
   CmdBold = 1000,
@@ -446,10 +450,10 @@ enum Cmd : int {
   // The toolbar in a narrow window (S4, s4-friction): 3100-3119.
   CmdToolbarOverflow = 3100,  // the menu of the items that don't fit
 
-  // Presentations (P1, p1-view): 3240-3299. F5 is CmdPresentation; the slides use CmdNextPage,
+  // Presentations (P1, p1-view): 3240-3299. F5 and Shift+F5 are p1-show's CmdSlideShowFromStart and
+  // CmdSlideShowFromCurrent (the window's Present runs the first); the slides use CmdNextPage,
   // CmdPrevPage, CmdFirstPage, CmdLastPage and the zoom commands.
-  CmdPresentFromCurrent = 3240,  // Shift+F5
-  CmdNotesPane,                  // the speaker notes below the slide, shown or hidden
+  CmdNotesPane = 3240,           // the speaker notes below the slide, shown or hidden
   CmdCopySlideText,
   CmdCopySlidePicture,
   CmdCopyNotes,

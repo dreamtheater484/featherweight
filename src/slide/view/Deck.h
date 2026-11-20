@@ -7,6 +7,10 @@
 
 #include "draw/Painter.h"
 
+namespace fw::slide {
+class Presentation;
+}
+
 // What the presentation tab reads from a deck (P1, plan §8): the slides' sizes, text, notes and
 // links, and a painter call for each slide. It's p1-model's presentation and p1-render's renderer
 // behind one small interface, so the tab, printing and Export PDF stay the same whichever draws
@@ -60,6 +64,8 @@ class Deck {
                                             size_t /*length*/) {
     return {};
   }
+  // p1-model's presentation behind the deck, for the slide show; null for a deck without one (tests).
+  virtual Presentation* Model() { return nullptr; }
   // Bytes the deck keeps (model, caches), for the memory budget.
   virtual size_t MemoryUse() const { return 0; }
 };

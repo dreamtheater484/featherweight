@@ -47,6 +47,9 @@ struct AppOptions {
   // there's no update check, notice or registration, and files are never handed to or taken
   // from another running Featherweight.
   bool sandbox = false;
+  // --show <deck> [--show-bench <report.json>]: the deck straight into a slide show, without the
+  // app's window (trying the show, and the frame-rate bench).
+  std::wstring showPath, showBench, showCapture;
 };
 
 class App : public PdfHost, public DropHost {
