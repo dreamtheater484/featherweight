@@ -1,6 +1,8 @@
 // Text style inheritance (plan §8.3): a shape's paragraphs and runs resolved from the
 // presentation's default text style, the master's text styles, the placeholder chain's list
 // styles, the shape's style reference and list style, and the paragraph's and run's own properties.
+#include <windows.h>
+
 #include <algorithm>
 #include <array>
 #include <string>
@@ -313,6 +315,56 @@ BodyProps ReadBody(pugi::xml_node bodyPr) {
   return b;
 }
 
+// PowerPoint's date and time fields (datetime1-13) show the date and time now, in the run's
+// language, as PowerPoint updates them when it shows or exports a slide. Empty for other types.
+std::wstring DateField(std::string_view type, const std::string& lang) {
+  struct Format {
+    const wchar_t* date;  // a GetDateFormatEx picture; nullptr: the locale's short or long date
+    bool longDate;
+    const wchar_t* time;  // a GetTimeFormatEx picture, or nullptr
+  };
+  static constexpr Format kFormats[] = {
+      {nullptr, false, nullptr},                   // datetime1: 11/20/2026
+      {nullptr, true, nullptr},                    // datetime2: Friday, November 20, 2026
+      {L"d MMMM yyyy", false, nullptr},            // datetime3
+      {L"MMMM d, yyyy", false, nullptr},           // datetime4
+      {L"d-MMM-yy", false, nullptr},               // datetime5
+      {L"MMMM yy", false, nullptr},                // datetime6
+      {L"MMM-yy", false, nullptr},                 // datetime7
+      {nullptr, false, L"h:mm tt"},                // datetime8: date and time
+      {nullptr, false, L"h:mm:ss tt"},             // datetime9
+      {L"", false, L"H:mm"},                       // datetime10: time only
+      {L"", false, L"H:mm:ss"},                    // datetime11
+      {L"", false, L"h:mm tt"},                    // datetime12
+      {L"", false, L"h:mm:ss tt"},                 // datetime13
+  };
+  std::string_view n = type.substr(8);
+  int i = 0;
+  for (char ch : n) {
+    if (ch < '0' || ch > '9' || i > 13) return {};
+    i = i * 10 + (ch - '0');
+  }
+  if (n.empty()) i = 1;
+  if (i < 1 || i > 13) return {};
+  const Format& f = kFormats[i - 1];
+  std::wstring locale = fw::Utf8ToWide(lang);
+  if (!locale.empty() && !IsValidLocaleName(locale.c_str())) locale.clear();
+  const wchar_t* name = locale.empty() ? LOCALE_NAME_USER_DEFAULT : locale.c_str();
+  SYSTEMTIME now;
+  GetLocalTime(&now);
+  wchar_t buf[128];
+  std::wstring out;
+  if (!f.date || *f.date) {
+    DWORD flags = f.date ? 0 : f.longDate ? DATE_LONGDATE : DATE_SHORTDATE;
+    if (GetDateFormatEx(name, flags, &now, f.date, buf, 128, nullptr) > 0) out = buf;
+  }
+  if (f.time && GetTimeFormatEx(name, 0, &now, f.time, buf, 128) > 0) {
+    if (!out.empty()) out += L' ';
+    out += buf;
+  }
+  return out;
+}
+
 // The paragraphs of a text body, over the resolved levels.
 void ReadParagraphs(pugi::xml_node txBody, const Levels& lv, const Ctx& c, TextBody& out) {
   struct Counter {
@@ -347,6 +399,10 @@ void ReadParagraphs(pugi::xml_node txBody, const Levels& lv, const Ctx& c, TextB
         if (k == "fld") {
           run.fieldType = n.attribute("type").value();
           if (run.fieldType == "slidenum" && slideNumber >= 0 && !c.owner.part.empty()) run.text = std::to_wstring(slideNumber);
+          if (run.fieldType.starts_with("datetime")) {
+            std::wstring now = DateField(run.fieldType, run.props.lang);
+            if (!now.empty()) run.text = std::move(now);
+          }
         }
         para.runs.push_back(std::move(run));
         ++runs;

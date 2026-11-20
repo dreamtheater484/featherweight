@@ -69,7 +69,7 @@ foreach ($e in $entries) {
   $json = Join-Path $decks "$name.compare.json"
   $folder = ($e.source -replace '/[^/]+$', '')
   $row = [ordered]@{ source = $e.source; folder = $folder; slides = [int]$e.pages; ourSlides = 0; passing = 0; inkPassing = 0; hidden = @($e.hidden); ssim = @(); inkSsim = @(); error = $null }
-  $first = if ($Through -eq "app") { Join-Path $pngs "page-1.png" } else { Join-Path $pngs "slides.pdf" }
+  $first = if ($Through -eq "app") { Join-Path $pngs "page-1.png" } else { Join-Path $pngs "$name.pdf" }  # its name names the failing slides' pictures
   $kept = $Reuse -and (Test-Path $first) -and (Test-Path $json) -and (Get-Item $json).LastWriteTime -ge (Get-Item $first).LastWriteTime
   if (-not $kept) {
     if (Test-Path $pngs) { Remove-Item -Recurse -Force $pngs }
