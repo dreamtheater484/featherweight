@@ -1050,7 +1050,9 @@ class Painting {
 
 void PaintCells(draw::Painter& p, const Sheet& sheet, CellText& text, const Grid& grid, const Geometry& g,
                 const Range& area, const PaintOptions& options) {
+  text.Hold(true);  // the paint keeps the layouts it places until it draws them
   Painting(p, sheet, text, grid, g, area, options).Run();
+  text.Hold(false);
 }
 
 }  // namespace fw::sheet::view

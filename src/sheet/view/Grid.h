@@ -22,6 +22,11 @@ namespace fw::sheet::view {
 
 inline constexpr double kPtPerPx = 0.75;
 
+// The family Excel shows a font Windows doesn't have in: text::Fonts' look-alike (Aptos: Segoe
+// UI...), else Arial (Word's last resort, Times New Roman, isn't Excel's). For the grid's
+// text::Fonts (its SubstituteFn).
+std::wstring ExcelFontSubstitute(std::wstring_view family);
+
 // Fonts measured as Excel measures them: with GDI's metrics at 96 dpi, in whole pixels at a whole
 // pixel size (11 pt is 15 px). The widest digit sets column widths; a line's height sets the rows
 // Excel fits to their content; text widths decide "####" and overflow.

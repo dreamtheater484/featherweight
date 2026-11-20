@@ -292,9 +292,14 @@ bool PrintLayout::Blank(const Range& body) {
           o.rect.bottom > page.top)
         return false;
   }
-  for (const Range& r : sparklines_)
-    if (r.firstRow <= body.lastRow && r.lastRow >= body.firstRow && r.firstCol <= body.lastCol && r.lastCol >= body.firstCol)
-      return false;
+  // Merged cells keep a page, empty and unformatted as they may be (Excel 2021: A1 "x" and A200:B200
+  // merged print 5 pages; a number format, font, alignment or row height there prints 1).
+  auto meets = [&](const std::vector<Range>& list) {
+    return std::any_of(list.begin(), list.end(), [&](const Range& r) {
+      return r.firstRow <= body.lastRow && r.lastRow >= body.firstRow && r.firstCol <= body.lastCol && r.lastCol >= body.firstCol;
+    });
+  };
+  if (meets(sparklines_) || meets(sheet_.Merges())) return false;
   bool ink = false;
   sheet_.ForEachCell(body, [&](const CellInfo& c) {
     const Xf& xf = styles.CellXf(c.style);
@@ -365,7 +370,9 @@ void PrintLayout::Paginate() {
   if (areas_.empty()) {
     std::optional<Range> used = sheet_.UsedRange();
     if (used) used->lastCol = SpillEnd(Range{0, 0, used->lastRow, used->lastCol});
-    for (const Range& r : sparklines_) {
+    std::vector<Range> extend = sparklines_;  // merged cells too, stored or not (Excel's used range has them)
+    extend.insert(extend.end(), sheet_.Merges().begin(), sheet_.Merges().end());
+    for (const Range& r : extend) {
       if (!used) used = r;
       used->lastRow = std::max(used->lastRow, r.lastRow);
       used->lastCol = std::max(used->lastCol, r.lastCol);

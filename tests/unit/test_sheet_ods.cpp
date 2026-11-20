@@ -56,17 +56,45 @@ TEST(sheet_ods_converts_a_spreadsheet) {
       "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
       "<office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" "
       "xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" "
-      "xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"><office:body><office:spreadsheet>"
-      "<table:table table:name=\"Data\"><table:table-column table:number-columns-repeated=\"3\"/>"
+      "xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" "
+      "xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" "
+      "xmlns:number=\"urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0\" "
+      "xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\" "
+      "xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" "
+      "xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
+      "xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><office:automatic-styles>"
+      "<style:style style:name=\"cf1\" style:family=\"table-cell\"><style:text-properties fo:color=\"#FF0000\"/></style:style>"
+      "<style:style style:name=\"ce1\" style:family=\"table-cell\"><style:map style:condition=\"of:cell-content()&gt;2\" "
+      "style:apply-style-name=\"cf1\" style:base-cell-address=\"Data.B1\"/></style:style>"
+      "<number:date-style style:name=\"N1\"><number:era number:calendar=\"gengou\" number:style=\"long\"/>"
+      "<number:year number:calendar=\"gengou\"/><number:text>/</number:text><number:month/></number:date-style>"
+      "<style:style style:name=\"ce2\" style:family=\"table-cell\" style:data-style-name=\"N1\"/>"
+      "<style:style style:name=\"ta1\" style:family=\"table\" style:master-page-name=\"mp1\"/>"
+      "<style:style style:name=\"T1\" style:family=\"text\"><style:text-properties fo:font-weight=\"bold\"/></style:style>"
+      "<style:page-layout style:name=\"pm1\"><style:page-layout-properties fo:page-width=\"29.7cm\" fo:page-height=\"21cm\" "
+      "style:print-orientation=\"landscape\" style:scale-to-X=\"1\" style:table-centering=\"horizontal\"/></style:page-layout>"
+      "</office:automatic-styles><office:master-styles><style:master-page style:name=\"mp1\" style:page-layout-name=\"pm1\">"
+      "<style:footer><text:p>Page <text:page-number>1</text:page-number> of <text:page-count>2</text:page-count> &amp; more"
+      "</text:p></style:footer></style:master-page></office:master-styles><office:body><office:spreadsheet>"
+      "<table:table table:name=\"Data\" table:style-name=\"ta1\"><table:table-column table:number-columns-repeated=\"3\"/>"
       "<table:table-row><table:table-cell office:value-type=\"string\"><text:p>Total_x0041_</text:p></table:table-cell>"
-      "<table:table-cell office:value-type=\"float\" office:value=\"2.5\"><text:p>2.5</text:p></table:table-cell>"
-      "<table:table-cell office:value-type=\"date\" office:date-value=\"2000-01-01T12:00:00\"><text:p>x</text:p></table:table-cell>"
+      "<table:table-cell table:style-name=\"ce1\" office:value-type=\"float\" office:value=\"2.5\"><text:p>2.5</text:p>"
+      "</table:table-cell>"
+      "<table:table-cell table:style-name=\"ce2\" office:value-type=\"date\" office:date-value=\"2000-01-01T12:00:00\">"
+      "<text:p>x</text:p></table:table-cell>"
       "</table:table-row>"
       "<table:table-row table:number-rows-repeated=\"2\"><table:table-cell office:value-type=\"float\" office:value=\"5\" "
       "table:formula=\"of:=[.B1]*2\"><text:p>5</text:p></table:table-cell>"
       "<table:table-cell table:number-columns-spanned=\"2\" office:value-type=\"boolean\" office:boolean-value=\"true\">"
       "<text:p>TRUE</text:p></table:table-cell><table:covered-table-cell/></table:table-row>"
-      "<table:table-row table:number-rows-repeated=\"1048573\"><table:table-cell table:number-columns-repeated=\"16384\"/>"
+      "<table:table-row><table:table-cell><office:annotation office:display=\"true\"><dc:creator>Roy</dc:creator>"
+      "<text:p>Check</text:p><text:p>this</text:p></office:annotation></table:table-cell>"
+      "<table:table-cell office:value-type=\"string\"><text:p><text:ruby><text:ruby-base>Tokyo</text:ruby-base>"
+      "<text:ruby-text>kana</text:ruby-text></text:ruby><text:tab/>x</text:p></table:table-cell>"
+      "<table:table-cell office:value-type=\"string\"><text:p>a<text:span text:style-name=\"T1\">b</text:span></text:p>"
+      "</table:table-cell><table:table-cell><draw:frame svg:x=\"1pt\" svg:y=\"2pt\" svg:width=\"30pt\" svg:height=\"20pt\">"
+      "<draw:image xlink:href=\"Pictures/p.png\"/></draw:frame></table:table-cell></table:table-row>"
+      "<table:table-row table:number-rows-repeated=\"1048572\"><table:table-cell table:number-columns-repeated=\"16384\"/>"
       "</table:table-row></table:table></office:spreadsheet></office:body></office:document-content>";
   fw::pkg::MemorySink sink;
   fw::pkg::ZipWriter zip(sink);
@@ -74,6 +102,8 @@ TEST(sheet_ods_converts_a_spreadsheet) {
   zip.Add("mimetype", std::span(reinterpret_cast<const uint8_t*>(mime.data()), mime.size()), nullptr,
           fw::pkg::ZipWriter::Compression::Store);
   zip.Add("content.xml", std::span(reinterpret_cast<const uint8_t*>(content.data()), content.size()));
+  const std::string png("\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\1\0\0\0\1\x08\x06\0\0\0", 29);  // a picture's header
+  zip.Add("Pictures/p.png", std::span(reinterpret_cast<const uint8_t*>(png.data()), png.size()));
   zip.Finish();
 
   std::vector<uint8_t> xlsx;
@@ -95,4 +125,35 @@ TEST(sheet_ods_converts_a_spreadsheet) {
   CHECK(s.GetValue(1, 1).type == ValueType::Bool && s.GetValue(1, 1).boolean);
   CHECK(s.Merges().size() == 2);
   CHECK(s.GetValue(5, 0).type == ValueType::Empty);
+  CHECK(s.GetValue(3, 1).text == "Tokyo x");  // phonetic guide dropped, tab read as a space (as Excel does)
+  CHECK(s.GetValue(3, 2).text == "ab");        // rich text: a, then b in bold
+  // The condition on B1's style, and the note on A4.
+  auto part = [&](const char* name) {
+    std::vector<uint8_t> bytes;
+    book->GetPackage()->ReadPart(name, bytes);
+    return std::string(bytes.begin(), bytes.end());
+  };
+  const std::string sheet = part("/xl/worksheets/sheet1.xml"), styles = part("/xl/styles.xml");
+  CHECK(sheet.find("<conditionalFormatting sqref=\"B1\"><cfRule type=\"cellIs\" operator=\"greaterThan\" dxfId=\"0\"") !=
+        std::string::npos);
+  CHECK(sheet.find("<formula>2</formula>") != std::string::npos);
+  // The page setup from the table's master page.
+  CHECK(sheet.find("<sheetPr><pageSetUpPr fitToPage=\"1\"/></sheetPr>") != std::string::npos);
+  CHECK(sheet.find("<printOptions horizontalCentered=\"1\"/>") != std::string::npos);
+  CHECK(sheet.find("<pageSetup paperSize=\"9\" fitToWidth=\"1\" fitToHeight=\"0\" orientation=\"landscape\"/>") !=
+        std::string::npos);
+  CHECK(sheet.find("<oddFooter>&amp;CPage &amp;P of &amp;N &amp;&amp; more</oddFooter>") != std::string::npos);
+  CHECK(styles.find("formatCode=\"[$-411]ggge/m\"") != std::string::npos);  // Japan's eras
+  CHECK(part("/xl/sharedStrings.xml").find("<si><r><t xml:space=\"preserve\">a</t></r><r><rPr><b/>") != std::string::npos);
+  CHECK(styles.find("<dxfs count=\"1\"><dxf><font><color rgb=\"FFFF0000\"/></font></dxf></dxfs>") != std::string::npos);
+  const std::string comments = part("/xl/comments1.xml");
+  CHECK(comments.find("ref=\"A4\"") != std::string::npos && comments.find("Check") != std::string::npos &&
+        comments.find("this") != std::string::npos);
+  CHECK(sheet.find("<drawing r:id=\"rIdDrawing\"/><legacyDrawing r:id=\"rIdVml\"/>") != std::string::npos);
+  // The picture in D4: from that cell, 1 pt and 2 pt in, 30 by 20 pt.
+  const std::string drawing = part("/xl/drawings/drawing1.xml");
+  CHECK(drawing.find("<xdr:oneCellAnchor") != std::string::npos && drawing.find("<xdr:col>3</xdr:col>") != std::string::npos &&
+        drawing.find("<xdr:colOff>12700</xdr:colOff>") != std::string::npos && drawing.find("cx=\"381000\"") != std::string::npos);
+  CHECK(part("/xl/media/image1.png").size() == png.size());
+  CHECK(!part("/xl/drawings/vmlDrawing1.vml").empty());
 }

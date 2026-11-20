@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <iterator>
 #include <map>
 
 #include "pkg/Odf.h"
@@ -81,6 +83,21 @@ Kind KindOf(xml_node style) {
 
 // Literal text in a format code: bare where Excel shows the character as it is, otherwise
 // escaped or quoted.
+// number:transliteration-format ("١", "۱", "१", ...) -> the digit system byte of an Excel locale tag
+// ([$-3000401]: 03); 0 for ASCII digits.
+uint32_t DigitSystem(std::string_view format) {
+  if (format.size() < 2) return 0;
+  const auto* b = reinterpret_cast<const unsigned char*>(format.data());
+  uint32_t cp = 0;
+  if ((b[0] & 0xE0) == 0xC0) cp = (b[0] & 0x1Fu) << 6 | (b[1] & 0x3Fu);
+  else if ((b[0] & 0xF0) == 0xE0 && format.size() >= 3) cp = (b[0] & 0x0Fu) << 12 | (b[1] & 0x3Fu) << 6 | (b[2] & 0x3Fu);
+  static constexpr uint16_t kOnes[] = {0x0661, 0x06F1, 0x0967, 0x09E7, 0x0A67, 0x0AE7, 0x0B67, 0x0BE7, 0x0C67,
+                                       0x0CE7, 0x0D67, 0x0E51, 0x0ED1, 0x0F21, 0x1041, 0x1369, 0x17E1, 0x1811};
+  for (size_t k = 0; k < std::size(kOnes); ++k)
+    if (cp == kOnes[k]) return static_cast<uint32_t>(k + 2);  // 02 Arabic-Indic ... 13 Mongolian
+  return 0;
+}
+
 void Literal(std::string_view text, Kind kind, std::string& out) {
   const bool dates = kind == Kind::Date || kind == Kind::Time;
   std::string quoted;
@@ -157,7 +174,7 @@ void Styles::Read(xml_node stylesRoot, xml_node contentRoot) {
       if (family.empty()) family = Attr(f, "style:name");
       faces_[std::string(Attr(f, "style:name"))] = family;
     }
-    for (const char* group : {"office:styles", "office:automatic-styles"}) {
+    for (const char* group : {"office:styles", "office:automatic-styles", "office:master-styles"}) {
       for (xml_node s : root.child(group).children()) {
         const std::string_view n = s.name();
         const std::string name(Attr(s, "style:name"));
@@ -168,6 +185,8 @@ void Styles::Read(xml_node stylesRoot, xml_node contentRoot) {
           else other_[std::string(Attr(s, "style:family")) + "\x1f" + name] = s;
         } else if (n.starts_with("number:") && n.ends_with("-style")) {
           data_[name] = s;
+        } else if (n == "style:page-layout" || n == "style:master-page") {  // Find("page-layout" / "master-page")
+          other_[std::string(n.substr(6)) + "\x1f" + name] = s;
         }
       }
     }
@@ -286,6 +305,65 @@ int Styles::Resolve(std::string_view name) {
   return index;
 }
 
+pugi::xml_node Styles::Conditional(std::string_view name) const {
+  auto it = cell_.find(std::string(name));
+  return it != cell_.end() && it->second.child("style:map") ? it->second : xml_node();
+}
+
+int Styles::Dxf(std::string_view name) {
+  if (auto it = dxfIndex_.find(std::string(name)); it != dxfIndex_.end()) return it->second;
+  auto found = cell_.find(std::string(name));
+  if (found == cell_.end()) return -1;
+  // The style's own properties and its parents' up to "Default": what the condition changes.
+  std::vector<xml_node> chain;
+  for (xml_node s = found->second; s && chain.size() < 16; ) {
+    chain.push_back(s);
+    const std::string parent(Attr(s, "style:parent-style-name"));
+    auto p = cell_.find(parent);
+    if (parent.empty() || parent == "Default" || p == cell_.end() || std::find(chain.begin(), chain.end(), p->second) != chain.end())
+      break;
+    s = p->second;
+  }
+  DxfSpec d;
+  std::string font;
+  Line left, right, top, bottom;
+  bool lines = false;
+  std::string fill;
+  for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+    if (xml_node tp = it->child("style:text-properties")) {
+      if (auto w = Attr(tp, "fo:font-weight"); w == "bold" || std::atoi(std::string(w).c_str()) >= 600) font += "<b/>";
+      if (auto i = Attr(tp, "fo:font-style"); i == "italic" || i == "oblique") font += "<i/>";
+      if (auto s = Attr(tp, "style:text-line-through-style"); !s.empty() && s != "none") font += "<strike/>";
+      if (auto u = Attr(tp, "style:text-underline-style"); !u.empty() && u != "none") font += "<u/>";
+      if (auto c = pkg::odf::Color(Attr(tp, "fo:color")); !c.empty()) font += "<color rgb=\"FF" + c + "\"/>";
+    }
+    if (xml_node cp = it->child("style:table-cell-properties")) {
+      if (auto bg = pkg::odf::Color(Attr(cp, "fo:background-color")); !bg.empty()) fill = bg;
+      if (auto b = Attr(cp, "fo:border"); !b.empty()) left = right = top = bottom = BorderLine(b), lines = true;
+      if (auto b = Attr(cp, "fo:border-left"); !b.empty()) left = BorderLine(b), lines = true;
+      if (auto b = Attr(cp, "fo:border-right"); !b.empty()) right = BorderLine(b), lines = true;
+      if (auto b = Attr(cp, "fo:border-top"); !b.empty()) top = BorderLine(b), lines = true;
+      if (auto b = Attr(cp, "fo:border-bottom"); !b.empty()) bottom = BorderLine(b), lines = true;
+    }
+    if (auto ds = Attr(*it, "style:data-style-name"); !ds.empty())
+      if (auto n = data_.find(std::string(ds)); n != data_.end()) d.numFmt = NumberCode(n->second);
+  }
+  if (!font.empty()) d.font = "<font>" + font + "</font>";
+  if (!fill.empty()) d.fill = "<fill><patternFill patternType=\"solid\"><bgColor rgb=\"FF" + fill + "\"/></patternFill></fill>";
+  if (lines) {
+    auto line = [](const char* side, const Line& l) {
+      if (l.style.empty()) return std::string("<") + side + "/>";
+      return std::string("<") + side + " style=\"" + l.style + "\">" +
+             (l.color.empty() ? std::string("<color auto=\"1\"/>") : "<color rgb=\"FF" + l.color + "\"/>") + "</" + side + ">";
+    };
+    d.border = "<border>" + line("left", left) + line("right", right) + line("top", top) + line("bottom", bottom) + "</border>";
+  }
+  const int index = static_cast<int>(dxfs_.size());
+  dxfs_.push_back(std::move(d));
+  dxfIndex_[std::string(name)] = index;
+  return index;
+}
+
 double Styles::ColumnChars(double points) {
   if (digitPx_ == 0) {
     const Xf& d = Default();
@@ -303,7 +381,7 @@ std::string Styles::Section(xml_node style, bool& text) {
   const Kind kind = KindOf(style);
   std::string out, color;
   const bool elapsed = Attr(style, "number:truncate-on-overflow") == "false";
-  bool firstUnit = true;
+  bool firstUnit = true, era = false;  // era: Japan's eras (gengou) -> [$-411] g / e
   for (xml_node c : style.children()) {
     const std::string_view n = c.name();
     if (n == "style:text-properties") {
@@ -348,7 +426,11 @@ std::string Styles::Section(xml_node style, bool& text) {
       }
       out += std::string(IntAttr(c, "number:min-numerator-digits", 1, 1, 5), '?') + "/";
       const int den = IntAttr(c, "number:denominator-value", 0, 0, 99999);
-      out += den > 0 ? std::to_string(den) : std::string(IntAttr(c, "number:min-denominator-digits", 1, 1, 5), '?');
+      // Excel sizes the denominator by number:max-denominator-value (9999 -> ????).
+      const int maxDen = IntAttr(c, "number:max-denominator-value", 0, 0, 99999);
+      const int digits = std::max(IntAttr(c, "number:min-denominator-digits", 1, 1, 5),
+                                  static_cast<int>(std::to_string(std::max(maxDen, 1)).size()));
+      out += den > 0 ? std::to_string(den) : std::string(digits, '?');
     } else if (n == "number:text") {
       Literal(c.text().get(), kind, out);
     } else if (n == "number:text-content") {
@@ -367,7 +449,12 @@ std::string Styles::Section(xml_node style, bool& text) {
       const bool lng = Attr(c, "number:style") == "long";
       out += Attr(c, "number:textual") == "true" ? (lng ? "mmmm" : "mmm") : (lng ? "mm" : "m");
     } else if (n == "number:year") {
-      out += Attr(c, "number:style") == "long" ? "yyyy" : "yy";
+      const bool lng = Attr(c, "number:style") == "long";
+      if (Attr(c, "number:calendar") == "gengou") era = true;
+      out += Attr(c, "number:calendar") == "gengou" ? (lng ? "ee" : "e") : (lng ? "yyyy" : "yy");
+    } else if (n == "number:era") {
+      era = era || Attr(c, "number:calendar") == "gengou" || Attr(style, "number:language") == "ja";
+      out += Attr(c, "number:style") == "long" ? "ggg" : "g";
     } else if (n == "number:day-of-week") {
       out += Attr(c, "number:style") == "long" ? "dddd" : "ddd";
     } else if (n == "number:hours" || n == "number:minutes" || n == "number:seconds") {
@@ -381,6 +468,14 @@ std::string Styles::Section(xml_node style, bool& text) {
     } else if (n == "number:am-pm") {
       out += "AM/PM";
     }
+  }
+  if (era && !out.empty()) out = "[$-411]" + out;
+  if (const uint32_t digits = DigitSystem(Attr(style, "number:transliteration-format")); digits && !out.empty()) {
+    const std::string_view lang = Attr(style, "number:language");
+    const uint32_t lcid = lang == "ar" ? 0x401 : lang == "fa" ? 0x429 : 0;
+    char tag[24];
+    std::snprintf(tag, sizeof tag, "[$-%X]", static_cast<unsigned>(digits << 24 | lcid));
+    out = tag + out;
   }
   return color + out;  // empty: the section shows nothing
 }
@@ -433,6 +528,28 @@ std::string Styles::NumberCode(xml_node style) {
 
 // ---------- styles.xml ----------
 
+// A font as styles.xml's <font> (name: "name") or a rich text run's <rPr> ("rFont").
+std::string Styles::FontXml(const Xf& x, const char* tag, const char* name) {
+  std::string font = std::string("<") + tag + ">";
+  if (x.bold) font += "<b/>";
+  if (x.italic) font += "<i/>";
+  if (x.strike) font += "<strike/>";
+  if (x.underline) font += x.underline == 2 ? "<u val=\"double\"/>" : "<u/>";
+  if (x.position) font += x.position == 1 ? "<vertAlign val=\"superscript\"/>" : "<vertAlign val=\"subscript\"/>";
+  font += "<sz val=\"" + Number(x.size) + "\"/>";
+  if (!x.color.empty()) font += "<color rgb=\"FF" + x.color + "\"/>";
+  return font + "<" + name + " val=\"" + Escape(x.font) + "\"/><family val=\"2\"/></" + tag + ">";
+}
+
+std::string Styles::RunProps(std::string_view textStyle, int xf) {
+  const xml_node s = Find("text", textStyle);
+  if (!s || xf < 0 || xf >= static_cast<int>(xfs_.size())) return {};
+  Xf x = xfs_[xf];
+  Apply(s, x);
+  std::string run = FontXml(x, "rPr", "rFont");
+  return run == FontXml(xfs_[xf], "rPr", "rFont") ? std::string() : run;
+}
+
 std::string Styles::Xml() const {
   std::vector<std::string> fonts, fills = {"<fill><patternFill patternType=\"none\"/></fill>",
                                            "<fill><patternFill patternType=\"gray125\"/></fill>"},
@@ -456,16 +573,7 @@ std::string Styles::Xml() const {
   };
   std::string xfs;
   for (const Xf& x : xfs_) {
-    std::string font = "<font>";
-    if (x.bold) font += "<b/>";
-    if (x.italic) font += "<i/>";
-    if (x.strike) font += "<strike/>";
-    if (x.underline) font += x.underline == 2 ? "<u val=\"double\"/>" : "<u/>";
-    if (x.position) font += x.position == 1 ? "<vertAlign val=\"superscript\"/>" : "<vertAlign val=\"subscript\"/>";
-    font += "<sz val=\"" + Number(x.size) + "\"/>";
-    if (!x.color.empty()) font += "<color rgb=\"FF" + x.color + "\"/>";
-    font += "<name val=\"" + Escape(x.font) + "\"/><family val=\"2\"/></font>";
-    const int fontId = id(fontIds, fonts, font);
+    const int fontId = id(fontIds, fonts, FontXml(x, "font", "name"));
     const int fillId = x.fill.empty() ? 0
                                       : id(fillIds, fills, "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF" + x.fill +
                                                                "\"/><bgColor indexed=\"64\"/></patternFill></fill>");
@@ -510,6 +618,22 @@ std::string Styles::Xml() const {
     if (protection) xfs += std::string("<protection") + (x.locked ? "" : " locked=\"0\"") + (x.hidden ? " hidden=\"1\"" : "") + "/>";
     xfs += "</xf>";
   }
+  // Differential formats (conditional formats), with their number formats among the others.
+  std::string dxfs = "<dxfs count=\"" + std::to_string(dxfs_.size()) + "\">";
+  for (const DxfSpec& d : dxfs_) {
+    dxfs += "<dxf>" + d.font;
+    if (!d.numFmt.empty()) {
+      auto [it, added] = numFmtIds.emplace(d.numFmt, nextFmt);
+      if (added) {
+        numFmts += "<numFmt numFmtId=\"" + std::to_string(nextFmt) + "\" formatCode=\"" + Escape(d.numFmt) + "\"/>";
+        ++nextFmt;
+        ++customFmts;
+      }
+      dxfs += "<numFmt numFmtId=\"" + std::to_string(it->second) + "\" formatCode=\"" + Escape(d.numFmt) + "\"/>";
+    }
+    dxfs += d.fill + d.border + "</dxf>";
+  }
+  dxfs += "</dxfs>";
   std::string out = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n"
                     "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">";
   if (customFmts) out += "<numFmts count=\"" + std::to_string(customFmts) + "\">" + numFmts + "</numFmts>";
@@ -524,7 +648,7 @@ std::string Styles::Xml() const {
   out += "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>";
   out += "<cellXfs count=\"" + std::to_string(xfs_.size()) + "\">" + xfs + "</cellXfs>";
   out += "<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>"
-         "<dxfs count=\"0\"/><tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" "
+         + dxfs + "<tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" "
          "defaultPivotStyle=\"PivotStyleLight16\"/></styleSheet>";
   return out;
 }
