@@ -63,7 +63,7 @@ foreach ($e in $entries) {
   $pngs = Join-Path $decks $name
   $json = Join-Path $decks "$name.compare.json"
   $folder = ($e.source -replace '/[^/]+$', '')
-  $row = [ordered]@{ source = $e.source; folder = $folder; slides = [int]$e.pages; ourSlides = 0; passing = 0; hidden = @($e.hidden); ssim = @(); error = $null }
+  $row = [ordered]@{ source = $e.source; folder = $folder; slides = [int]$e.pages; ourSlides = 0; passing = 0; inkPassing = 0; hidden = @($e.hidden); ssim = @(); inkSsim = @(); error = $null }
   $first = Join-Path $pngs "page-1.png"
   $kept = $Reuse -and (Test-Path $first) -and (Test-Path $json) -and (Get-Item $json).LastWriteTime -ge (Get-Item $first).LastWriteTime
   if (-not $kept) {
@@ -95,6 +95,8 @@ foreach ($e in $entries) {
       $row.passing = [int]$c.passing
       if ($c.referencePages) { $row.slides = [int]$c.referencePages }
       $row.ssim = @($c.pages | ForEach-Object { [Math]::Round([double]$_.ssim, 4) })
+      $row.inkSsim = @($c.pages | ForEach-Object { [Math]::Round([double]$_.inkSsim, 4) })
+      $row.inkPassing = @($row.inkSsim | Where-Object { $_ -ge 0.95 }).Count
     } else {
       $row.error = "pdf-compare wrote nothing"
     }
@@ -105,19 +107,22 @@ foreach ($e in $entries) {
 
 function Get-Pct($pass, $all) { if ($all) { [Math]::Round(100.0 * $pass / $all, 2) } else { 0 } }
 $md = @("# Slides against PowerPoint's", "", "Reference: $refRoot. Folders: $($Folders -join ', '). $(Get-Date -Format 'yyyy-MM-dd HH:mm').", "",
-        "| Folder | Decks | Not drawn | PowerPoint's slides | Passing (SSIM >= 0.95) | % |", "|---|---|---|---|---|---|")
+        "| Folder | Decks | Not drawn | PowerPoint's slides | Passing (SSIM >= 0.95) | % | Inside the ink >= 0.95 (information) |", "|---|---|---|---|---|---|---|")
 $groups = @($rows | Group-Object folder | Sort-Object Name)
 foreach ($g in $groups) {
   $slides = ($g.Group | Measure-Object slides -Sum).Sum
   $pass = ($g.Group | Measure-Object passing -Sum).Sum
-  $md += "| $($g.Name) | $($g.Count) | $(@($g.Group | Where-Object error).Count) | $slides | $pass | $(Get-Pct $pass $slides) |"
+  $ink = ($g.Group | Measure-Object inkPassing -Sum).Sum
+  $md += "| $($g.Name) | $($g.Count) | $(@($g.Group | Where-Object error).Count) | $slides | $pass | $(Get-Pct $pass $slides) | $(Get-Pct $ink $slides) % |"
 }
 # A deck we couldn't draw counts as no slide passing.
 $total = ($rows | Measure-Object slides -Sum).Sum
 $passing = ($rows | Measure-Object passing -Sum).Sum
 $pct = Get-Pct $passing $total
-if ($groups.Count -gt 1) { $md += "| **All** | $($rows.Count) | $(@($rows | Where-Object error).Count) | $total | $passing | **$pct** |" }
-$md += "", "Criterion: >= $MinSlides % of the slides pass (P1, plan section 10): $(if ($pct -ge $MinSlides) { 'met' } else { 'not met' }) ($pct %).", ""
+$inkAll = ($rows | Measure-Object inkPassing -Sum).Sum
+if ($groups.Count -gt 1) { $md += "| **All** | $($rows.Count) | $(@($rows | Where-Object error).Count) | $total | $passing | **$pct** | $(Get-Pct $inkAll $total) % |" }
+$md += "", "Criterion: >= $MinSlides % of the slides pass (P1, plan section 10): $(if ($pct -ge $MinSlides) { 'met' } else { 'not met' }) ($pct %).",
+       "Inside the ink: SSIM over the box both slides' ink fills, for information. Whole-slide SSIM is lenient on sparse slides: a blank render of a slide with two lines of text scores 0.947 (embedded-fonts.pptx, 2026-11-20).", ""
 $bad = @($rows | Where-Object { $_.error })
 if ($bad.Count) { $md += "## Not drawn", ""; $md += @($bad | ForEach-Object { "- $($_.source): $($_.error)" }); $md += "" }
 $worst = @($rows | Where-Object { -not $_.error -and $_.slides -gt 0 -and $_.passing -lt $_.slides } | Sort-Object { $_.passing / $_.slides }, source | Select-Object -First 20)
